@@ -57,6 +57,8 @@ alertForm =
     , notifyAfter = Nothing
     , stopAfterCheck = Nothing
     , stopAfter = Nothing
+    , environment = Just "production"
+    , service = Just "checkout"
     }
 
 
@@ -81,6 +83,8 @@ spec = sequential $ aroundAll withTestResources do
           alert.warningThreshold `shouldBe` Nothing
           alert.alertThreshold `shouldBe` 1
           alert.id `shouldBe` QueryMonitorId alertId
+          alert.environment `shouldBe` Just "production"
+          alert.service `shouldBe` Just "checkout"
         _ -> expectationFailure "expected exactly one monitor"
     it "should get single alert" \tr -> do
       (_, pg) <-
@@ -113,6 +117,7 @@ spec = sequential $ aroundAll withTestResources do
       (_, page) <- testServant tr $ Alerts.unifiedMonitorOverviewH testPid (UUID.toText alertId)
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
       html `shouldSatisfy` T.isInfixOf "Normal"
+      html `shouldContainAll` ["Environment: production", "Service: checkout"]
       html `shouldSatisfy` T.isInfixOf "badge-success"
 
     -- A bulk action authenticates the session against `pid`, then mutates monitors by

@@ -225,6 +225,8 @@ onboardingTests =
               , notifyAfter = Nothing
               , stopAfterCheck = Nothing
               , stopAfter = Nothing
+              , environment = Nothing
+              , service = Nothing
               }
       runTestBg frozenTime tr
         $ Hasql.interpExecute_

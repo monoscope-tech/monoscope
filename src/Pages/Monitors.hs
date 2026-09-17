@@ -804,6 +804,8 @@ unifiedOverviewPage pid alert currTime teams slackDataM discordDataM = do
     div_ [class_ "flex flex-wrap gap-2 items-center"] do
       metadataChip_ "shield-halved" $ "Severity: " <> alert.alertConfig.severity
       metadataChip_ "clock" $ "Every " <> show alert.checkIntervalMins <> " min"
+      whenJust alert.environment $ metadataChip_ "layer-group" . ("Environment: " <>)
+      whenJust alert.service $ metadataChip_ "cube" . ("Service: " <>)
       span_ [class_ "max-md:hidden"] $ metadataChip_ "calendar" $ "Created " <> toText (prettyTimeAuto currTime alert.createdAt)
       whenJust (mfilter (> currTime) alert.mutedUntil) \until' ->
         span_ [class_ "badge badge-sm badge-warning gap-1"] do
