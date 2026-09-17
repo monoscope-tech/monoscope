@@ -205,9 +205,9 @@ apiMonitorGet pid mid = ownedOr "Monitor not found" pid =<< Monitors.queryMonito
 -- monitor from the stored row, so it updated @log_query@ and inherited the previous
 -- @log_query_as_sql@ — the monitor kept alerting on its old query. Falls back to
 -- @prev@ when the query doesn't parse, so a bad edit cannot blank the compiled SQL.
-compileAlertSql :: Projects.ProjectId -> Int -> Text -> Text -> Text
-compileAlertSql pid windowMins q prev =
-  let cfg = (Parser.defSqlQueryCfg pid Parser.fixedUTCTime Nothing Nothing){Parser.alertLookbackMins = windowMins}
+compileAlertSql :: Projects.ProjectId -> Int -> Maybe Text -> Maybe Text -> Text -> Text -> Text
+compileAlertSql pid windowMins environment service q prev =
+  let cfg = (Parser.defSqlQueryCfg pid Parser.fixedUTCTime Nothing Nothing){Parser.alertLookbackMins = windowMins, Parser.environment, Parser.service}
    in fromMaybe prev $ (.finalAlertQuery) . snd =<< rightToMaybe (Parser.parseQueryToComponents cfg q)
 
 
@@ -223,7 +223,7 @@ monitorFromInput pid now mid existingM inp =
     , alertThreshold = inp.alertThreshold
     , warningThreshold = inp.warningThreshold
     , logQuery = inp.query
-    , logQueryAsSql = compileAlertSql pid inp.timeWindowMins inp.query (foldMap (.logQueryAsSql) existingM)
+    , logQueryAsSql = compileAlertSql pid inp.timeWindowMins inp.environment inp.service inp.query (foldMap (.logQueryAsSql) existingM)
     , lastEvaluated = Just now
     , warningLastTriggered = existingM >>= (.warningLastTriggered)
     , alertLastTriggered = existingM >>= (.alertLastTriggered)
@@ -255,6 +255,8 @@ monitorFromInput pid now mid existingM inp =
     , stopAfterCount = inp.stopAfterCount
     , notificationCount = maybe 0 (.notificationCount) existingM
     , timeWindowMins = inp.timeWindowMins
+    , environment = inp.environment
+    , service = inp.service
     }
 
 
@@ -317,6 +319,8 @@ apiMonitorYaml pid mid = do
       , alertRecoveryThreshold = m.alertRecoveryThreshold
       , warningRecoveryThreshold = m.warningRecoveryThreshold
       , active = Just (isNothing m.deactivatedAt)
+      , environment = m.environment
+      , service = m.service
       }
 
 
@@ -351,6 +355,8 @@ apiMonitorPatch pid mid patch = do
                 compileAlertSql
                   pid
                   (fromMaybe existing.timeWindowMins patch.timeWindowMins)
+                  (patch.environment <|> existing.environment)
+                  (patch.service <|> existing.service)
                   (fromMaybe existing.logQuery patch.query)
                   existing.logQueryAsSql
             , Monitors.alertThreshold = fromMaybe existing.alertThreshold patch.alertThreshold
@@ -366,6 +372,8 @@ apiMonitorPatch pid mid patch = do
             , Monitors.visualizationType = fromMaybe existing.visualizationType patch.visualizationType
             , Monitors.alertRecoveryThreshold = patch.alertRecoveryThreshold <|> existing.alertRecoveryThreshold
             , Monitors.warningRecoveryThreshold = patch.warningRecoveryThreshold <|> existing.warningRecoveryThreshold
+            , Monitors.environment = patch.environment <|> existing.environment
+            , Monitors.service = patch.service <|> existing.service
             }
   merged <$ Monitors.queryMonitorUpsert merged
 

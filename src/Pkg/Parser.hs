@@ -53,7 +53,7 @@ data NormalizedQuery = NormalizedQuery
   , nqWhere :: Text -- "TRUE" or "(conditions)"
   , nqDateRange :: Text -- Date range clause
   , nqProjectId :: Text
-  , nqEnvironment :: Text -- "" or the deployment-environment predicate
+  , nqScopeFilters :: [Text] -- deployment-environment and service predicates
   , nqGroupBy :: Text -- "" or "GROUP BY x, y"
   , nqHaving :: Text -- "" or "HAVING (...)"
   , nqOrderBy :: Text -- "" or "ORDER BY x DESC"
@@ -177,6 +177,12 @@ buildEnvFilter :: SqlQueryCfg -> Text
 buildEnvFilter cfg = maybe "" (\e -> "resource___deployment___environment___name = " <> sqlStringLit e) cfg.environment
 
 
+-- | Saved monitors may need a service boundary too. Keep it outside customer KQL,
+-- just like the environment predicate, so every generated query shape is scoped.
+buildServiceFilter :: SqlQueryCfg -> Text
+buildServiceFilter cfg = maybe "" (\s -> "resource___service___name = " <> sqlStringLit s) cfg.service
+
+
 -- | Normalize QueryComponents into NormalizedQuery for SQL generation
 normalizeQuery :: SqlQueryCfg -> QueryComponents -> NormalizedQuery
 normalizeQuery cfg qc =
@@ -190,7 +196,7 @@ normalizeQuery cfg qc =
         , nqWhere = buildWhereCondition qc.whereClause
         , nqDateRange = buildDateRange cfg
         , nqProjectId = cfg.pid.toText
-        , nqEnvironment = buildEnvFilter cfg
+        , nqScopeFilters = filter (not . T.null) [buildEnvFilter cfg, buildServiceFilter cfg]
         , nqGroupBy = buildGroupBy qc.extendedColumns qc.groupByClause
         , nqHaving = buildHaving qc
         , nqOrderBy = case cfg.cursorM of Just (PageCursor PageNewer _) -> "ORDER BY " <> timestampCol <> " asc"; _ -> buildOrderBy qc
@@ -300,6 +306,8 @@ data SqlQueryCfg = SqlQueryCfg
     -- every generated query rather than spliced into the user's KQL, so the query box keeps
     -- showing what the user typed. 'Nothing' is every environment.
     environment :: Maybe Text
+  , -- Optional service scope, applied by the compiler rather than pasted into KQL.
+    service :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default)
@@ -361,7 +369,7 @@ sqlFromQueryComponents sqlCfg qc =
     whereCondition = nq.nqWhere
 
     -- Build complete WHERE clause for data queries
-    buildWhere = T.intercalate " and " $ filter (not . T.null) ["project_id='" <> nq.nqProjectId <> "'", nq.nqDateRange, nq.nqEnvironment, "(" <> whereCondition <> ")"]
+    buildWhere = T.intercalate " and " $ filter (not . T.null) (["project_id='" <> nq.nqProjectId <> "'", nq.nqDateRange] <> nq.nqScopeFilters <> ["(" <> whereCondition <> ")"])
 
     -- count(*) OVER() goes inside the array as the LAST element when
     -- hasCountOver = True; 'selectLogTable' peels it back off via dropLast.
@@ -484,10 +492,13 @@ sqlFromQueryComponents sqlCfg qc =
     -- recency filter; without it time_bucket groups across all history and max
     -- returns the all-time peak bucket.
     alertTimeFilter = timestampCol <> " >= NOW() - INTERVAL '" <> show sqlCfg.alertLookbackMins <> " minutes'"
-    -- The alert query is built by hand rather than through 'buildWhere', so the environment
-    -- has to be spliced here too — a monitor scoped to staging that silently alerts on prod
-    -- is worse than one that never fires.
-    alertEnvFilter = if T.null nq.nqEnvironment then "" else "AND " <> nq.nqEnvironment
+    -- The alert query is built by hand rather than through 'buildWhere', so every
+    -- persisted scope predicate has to be included here too. A monitor scoped to
+    -- staging or checkout that silently alerts on another scope is worse than one
+    -- that never fires.
+    alertScopeFilters = case nq.nqScopeFilters of
+      [] -> ""
+      filters -> "AND " <> T.intercalate " AND " filters
     -- One reading over the window the monitor was configured with ("include rows
     -- from the last N minutes", already applied by 'alertTimeFilter'). The chart's
     -- time bucket is deliberately dropped: it exists to draw a series, and taking
@@ -512,7 +523,7 @@ sqlFromQueryComponents sqlCfg qc =
     alertQuery =
       [fmt|
           SELECT {alertAggregate} FROM {fromTable}
-          WHERE project_id='{sqlCfg.pid.toText}' AND {alertTimeFilter} {alertEnvFilter} AND ({whereCondition})
+          WHERE project_id='{sqlCfg.pid.toText}' AND {alertTimeFilter} {alertScopeFilters} AND ({whereCondition})
           {alertTail}
         |]
    in
@@ -709,6 +720,7 @@ defSqlQueryCfg pid currentTime source spanT =
     , defaultSelect = defaultSelectSqlQuery source
     , alertLookbackMins = 60
     , environment = Nothing
+    , service = Nothing
     }
 
 

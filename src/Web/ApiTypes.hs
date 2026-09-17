@@ -106,6 +106,8 @@ data MonitorInput = MonitorInput
   , alertRecoveryThreshold :: Maybe Double
   , warningRecoveryThreshold :: Maybe Double
   , active :: Maybe Bool
+  , environment :: Maybe Text
+  , service :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default)
@@ -118,6 +120,8 @@ data MonitorPatch = MonitorPatch
   { unit :: Maybe Text
   , title :: Maybe Text
   , query :: Maybe Text
+  , environment :: Maybe Text
+  , service :: Maybe Text
   , severity :: Maybe Text
   , subject :: Maybe Text
   , message :: Maybe Text

@@ -1077,7 +1077,7 @@ syncWidgetAlert pid widgetId widget = do
   whenJust existingMonitor \monitor -> do
     let newQuery = fromMaybe "" widget.query
     when (monitor.logQuery /= newQuery) do
-      let sqlQueryCfg = (defSqlQueryCfg pid fixedUTCTime Nothing Nothing){alertLookbackMins = monitor.timeWindowMins}
+      let sqlQueryCfg = (defSqlQueryCfg pid fixedUTCTime Nothing Nothing){alertLookbackMins = monitor.timeWindowMins, environment = monitor.environment, service = monitor.service}
           newSqlQuery = case parseQueryToComponents sqlQueryCfg newQuery of
             Right (_, qc) -> fromMaybe "" qc.finalAlertQuery
             Left _ -> monitor.logQueryAsSql -- Keep previous SQL on parse failure

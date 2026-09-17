@@ -157,6 +157,8 @@ data QueryMonitor = QueryMonitor
   , stopAfterCount :: Maybe Int
   , notificationCount :: Int
   , timeWindowMins :: Int
+  , environment :: Maybe Text
+  , service :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, HI.DecodeRow, NFData)
@@ -176,8 +178,8 @@ queryMonitorUpsert qm = do
                   log_query_as_sql, last_evaluated, warning_last_triggered, alert_last_triggered, trigger_less_than,
                   threshold_sustained_for_mins, alert_config, check_interval_mins, visualization_type, teams,
                   widget_id, dashboard_id, alert_recovery_threshold, warning_recovery_threshold,
-                  renotify_interval_mins, stop_after_count, time_window_mins, deactivated_at)
-    VALUES (#{qm.id},#{qm.projectId},#{qm.alertThreshold},#{qm.warningThreshold},#{qm.logQuery},#{qm.logQueryAsSql},#{qm.lastEvaluated},#{qm.warningLastTriggered},#{qm.alertLastTriggered},#{qm.triggerLessThan},#{qm.thresholdSustainedForMins},#{qm.alertConfig},#{qm.checkIntervalMins},#{qm.visualizationType},#{qm.teams}::uuid[],#{qm.widgetId},#{qm.dashboardId},#{qm.alertRecoveryThreshold},#{qm.warningRecoveryThreshold},#{qm.renotifyIntervalMins},#{qm.stopAfterCount},#{qm.timeWindowMins},#{qm.deactivatedAt})
+                  renotify_interval_mins, stop_after_count, time_window_mins, deactivated_at, environment, service)
+    VALUES (#{qm.id},#{qm.projectId},#{qm.alertThreshold},#{qm.warningThreshold},#{qm.logQuery},#{qm.logQueryAsSql},#{qm.lastEvaluated},#{qm.warningLastTriggered},#{qm.alertLastTriggered},#{qm.triggerLessThan},#{qm.thresholdSustainedForMins},#{qm.alertConfig},#{qm.checkIntervalMins},#{qm.visualizationType},#{qm.teams}::uuid[],#{qm.widgetId},#{qm.dashboardId},#{qm.alertRecoveryThreshold},#{qm.warningRecoveryThreshold},#{qm.renotifyIntervalMins},#{qm.stopAfterCount},#{qm.timeWindowMins},#{qm.deactivatedAt},#{qm.environment},#{qm.service})
     ON CONFLICT (id) DO UPDATE SET
                   alert_threshold=EXCLUDED.alert_threshold,
                   warning_threshold=EXCLUDED.warning_threshold,
@@ -199,7 +201,9 @@ queryMonitorUpsert qm = do
                   renotify_interval_mins=EXCLUDED.renotify_interval_mins,
                   stop_after_count=EXCLUDED.stop_after_count,
                   time_window_mins=EXCLUDED.time_window_mins,
-                  deactivated_at=EXCLUDED.deactivated_at
+                  deactivated_at=EXCLUDED.deactivated_at,
+                  environment=EXCLUDED.environment,
+                  service=EXCLUDED.service
       |]
   Activation.recordActivationMilestone qm.projectId Activation.MonitorCreated
   pure updated

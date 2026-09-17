@@ -4993,7 +4993,7 @@ evaluateQueryMonitor monitor startWall = do
       lookbackMins = monitor.timeWindowMins
       -- Re-parse on every evaluation so parser fixes apply to existing monitors
       -- without needing a DB migration of cached SQL.
-      parseCfg = (defSqlQueryCfg monitor.projectId fixedUTCTime Nothing Nothing){alertLookbackMins = lookbackMins, metricJsonAsVariant = tfEnabled}
+      parseCfg = (defSqlQueryCfg monitor.projectId fixedUTCTime Nothing Nothing){alertLookbackMins = lookbackMins, metricJsonAsVariant = tfEnabled, environment = monitor.environment, service = monitor.service}
   freshSql <- case parseQueryToComponents parseCfg monitor.logQuery of
     Right (_, qc) -> maybe (throwIO $ CE.ErrorCall "monitor query produced no alert SQL") pure qc.finalAlertQuery
     Left err -> throwIO $ CE.ErrorCall $ "monitor KQL parse failed: " <> toString err

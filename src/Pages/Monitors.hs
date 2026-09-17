@@ -170,6 +170,8 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
         , stopAfterCount = stopCount
         , notificationCount = 0
         , timeWindowMins
+        , environment = Nothing
+        , service = Nothing
         }
 
 
@@ -243,24 +245,29 @@ instance ToHtml Alert where
 alertSingleComp :: Projects.ProjectId -> Maybe Monitors.QueryMonitor -> Html ()
 alertSingleComp pid monitor = do
   div_ [class_ "p-3 flex flex-col gap-3"] do
-    a_ [ class_ "text-sm text-textWeak hover:text-textStrong cursor-pointer"
-       , hxGet_ $ "/p/" <> pid.toText <> "/monitors/alerts"
-       , hxTarget_ "#alertsListContainer"
-       ] "‹ Back to alerts list"
+    a_
+      [ class_ "text-sm text-textWeak hover:text-textStrong cursor-pointer"
+      , hxGet_ $ "/p/" <> pid.toText <> "/monitors/alerts"
+      , hxTarget_ "#alertsListContainer"
+      ]
+      "‹ Back to alerts list"
     case monitor of
       Nothing -> div_ [class_ "text-sm text-textWeak"] "Monitor not found"
       Just alert -> do
-        h2_ [class_ "text-base font-semibold text-textStrong"] $
-          toHtml $ bool alert.alertConfig.title "Untitled monitor" (T.null alert.alertConfig.title)
+        h2_ [class_ "text-base font-semibold text-textStrong"]
+          $ toHtml
+          $ bool alert.alertConfig.title "Untitled monitor" (T.null alert.alertConfig.title)
         div_ [class_ "flex items-center gap-2 text-sm text-textWeak"] do
           span_ $ toHtml $ "Current value: " <> formatWithCommas alert.currentValue
           span_ "·"
           span_ $ toHtml $ "Threshold: " <> formatWithCommas alert.alertThreshold
-        pre_ [class_ "max-h-24 overflow-auto rounded border border-strokeWeak bg-fillWeaker p-2 text-xs text-textWeak whitespace-pre-wrap"] $
-          toHtml alert.logQuery
-        a_ [ href_ $ "/p/" <> pid.toText <> "/monitors/" <> alert.id.toText <> "/overview"
-           , class_ "btn btn-primary btn-sm self-start"
-           ] "Open monitor overview"
+        pre_ [class_ "max-h-24 overflow-auto rounded border border-strokeWeak bg-fillWeaker p-2 text-xs text-textWeak whitespace-pre-wrap"]
+          $ toHtml alert.logQuery
+        a_
+          [ href_ $ "/p/" <> pid.toText <> "/monitors/" <> alert.id.toText <> "/overview"
+          , class_ "btn btn-primary btn-sm self-start"
+          ]
+          "Open monitor overview"
 
 
 alertTeamDeleteH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ManageMembers.TeamId -> ATAuthCtx (RespHeaders Alert)

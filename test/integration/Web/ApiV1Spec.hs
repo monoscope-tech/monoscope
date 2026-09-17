@@ -283,6 +283,28 @@ spec = around withTestResources do
         fmap (.logQuery) compiledAfter `shouldBe` Just "status_code == 500"
         fmap (.logQueryAsSql) compiledAfter `shouldSatisfy` maybe False (T.isInfixOf "500")
 
+      it "persists monitor environment and service scope outside customer KQL" $ \tr -> do
+        let runB :: ATBaseCtx a -> IO a
+            runB k = runAsBase tr k
+            input =
+              (def :: ApiT.MonitorInput)
+                { ApiT.title = "scoped-monitor"
+                , ApiT.query = "status_code >= 500 | summarize count()"
+                , ApiT.alertThreshold = 1
+                , ApiT.checkIntervalMins = 5
+                , ApiT.timeWindowMins = 15
+                , ApiT.environment = Just "production"
+                , ApiT.service = Just "checkout"
+                }
+        created <- runB $ ApiH.apiMonitorCreate testPid input
+        created.logQuery `shouldBe` input.query
+        created.environment `shouldBe` Just "production"
+        created.service `shouldBe` Just "checkout"
+        created.logQueryAsSql `shouldContainAll` ["resource___deployment___environment___name = 'production'", "resource___service___name = 'checkout'"]
+        exported <- runB $ ApiH.apiMonitorYaml testPid created.id
+        exported.environment `shouldBe` Just "production"
+        exported.service `shouldBe` Just "checkout"
+
       it "bulk delete marks monitors as deleted" $ \tr -> do
         let runB :: ATBaseCtx a -> IO a
             runB k = runAsBase tr k
