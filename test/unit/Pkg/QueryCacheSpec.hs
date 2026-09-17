@@ -4,12 +4,12 @@ import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Vector qualified as V
 import Pages.Charts.Charts (MetricsData (..), convertTimestampsToMs)
-import Pkg.Parser (RangeEnd (..), defPid, defSqlQueryCfg, fixedUTCTime)
+import Pkg.Parser (RangeEnd (..), SqlQueryCfg (..), defPid, defSqlQueryCfg, fixedUTCTime)
 import Pkg.Parser.Expr (Subject (..))
 import Pkg.Parser.Stats (BinFunction (..), ByClauseItem (..), Section (..), SummarizeByClause (..))
 import Pkg.QueryCache (CacheKey (..), bucketStart, chartChunks, generateCacheKey, hasSummarizeWithBin, mergeTimeseriesData, trimOldData, trimToRange)
 import Relude
-import Test.Hspec (Spec, describe, it, shouldBe)
+import Test.Hspec (Spec, describe, it, shouldBe, shouldNotBe)
 
 
 mkTime :: Int -> UTCTime
@@ -105,6 +105,13 @@ spec = do
       let sections = [SummarizeCommand [] (Just $ SummarizeByClause [ByBinFunc $ Bin timestampSubject "10m"])]
       let key = generateCacheKey defPid Nothing sections cfg
       key.binInterval `shouldBe` "10m"
+
+    it "separates cache entries for distinct environment scopes" do
+      let sections = [SummarizeCommand [] (Just $ SummarizeByClause [ByBinFunc $ Bin timestampSubject "10m"])]
+          cfg = defSqlQueryCfg defPid fixedUTCTime Nothing Nothing
+          prodKey = generateCacheKey defPid Nothing sections cfg{environment = Just "production"}
+          stagingKey = generateCacheKey defPid Nothing sections cfg{environment = Just "staging"}
+      prodKey.queryHash `shouldNotBe` stagingKey.queryHash
 
   describe "mergeTimeseriesData" do
     it "merges empty cached with new data" do

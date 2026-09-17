@@ -1252,13 +1252,28 @@ guardClientPostgresSql dbSource pidM querySqlM =
 
 
 chartsDataGetH :: Maybe Text -> Maybe Charts.DataType -> Maybe Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Parser.BinDensity -> [(Text, Maybe Text)] -> ATAuthCtx Charts.MetricsData
-chartsDataGetH dbSource dt pid q qSql since fromD toD src density params =
-  guardClientPostgresSql dbSource pid qSql >> Charts.queryMetrics dbSource dt pid q qSql since fromD toD src density params
+chartsDataGetH dbSource dt pid q qSql since fromD toD src density params = do
+  guardClientPostgresSql dbSource pid qSql
+  scopedParams <- chartScopeParams pid params
+  Charts.queryMetrics dbSource dt pid q qSql since fromD toD src density scopedParams
 
 
 chartsDataStreamGetH :: Maybe Text -> Maybe Charts.DataType -> Maybe Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Parser.BinDensity -> [(Text, Maybe Text)] -> ATAuthCtx (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceIO AE.Value))
-chartsDataStreamGetH dbSource dt pid q qSql since fromD toD src density params =
-  guardClientPostgresSql dbSource pid qSql >> Charts.queryMetricsStream dbSource dt pid q qSql since fromD toD src density params
+chartsDataStreamGetH dbSource dt pid q qSql since fromD toD src density params = do
+  guardClientPostgresSql dbSource pid qSql
+  scopedParams <- chartScopeParams pid params
+  Charts.queryMetricsStream dbSource dt pid q qSql since fromD toD src density scopedParams
+
+
+-- | The environment cookie is an authenticated, sticky project selection. Do not accept an
+-- @environment@ supplied in the chart URL: a stale shared URL must not override the reader's
+-- active scope, and an arbitrary value would let the client choose a different cache entry.
+chartScopeParams :: Maybe Projects.ProjectId -> [(Text, Maybe Text)] -> ATAuthCtx [(Text, Maybe Text)]
+chartScopeParams pid params = case pid of
+  Nothing -> pure params
+  Just projectId -> do
+    (session, _) <- Projects.sessionAndProject projectId
+    pure $ ("environment", session.environment) : filter ((/= "environment") . fst) params
 
 
 -- Widget GET handler that accepts dashboard parameters

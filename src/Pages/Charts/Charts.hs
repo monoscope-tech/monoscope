@@ -150,6 +150,10 @@ queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (Utils.nonEmptyT -> q
   pid <- maybe (throwError err400{errBody = "project_id is required"}) pure pidM
   let (fromD, toD, _currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
   let density = fromMaybe def binDensityM
+      -- The chart routes bind this to the authenticated session instead of trusting a
+      -- browser query parameter. Other callers may leave it absent for deliberately
+      -- cross-environment exports and background work.
+      environment = join (lookup "environment" allParams) >>= Utils.nonEmptyT
   let mappngSQL = variablePresets density pid.toText fromD toD allParams now
       mappngKQL = variablePresetsKQL density pid.toText fromD toD allParams now
   let source = parseMaybe pSource =<< sourceM
@@ -173,6 +177,7 @@ runQueryAST authCtx dbSource respDataType pid source binDensity queryAST queryM 
           { dateRange = (fromD, toD)
           , binDensity
           , metricJsonAsVariant = usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource
+          , environment
           }
 
   case querySQLM of
@@ -655,10 +660,11 @@ queryMetricsStream dbSource dataTypeM pidM queryM querySQLM sinceM fromM toM sou
       (fromD, toD, _) = Components.parseTimeRange now (Components.TimePicker (Utils.nonEmptyT sinceM) (Utils.nonEmptyT fromM) (Utils.nonEmptyT toM))
       density = fromMaybe def densityM
       source = parseMaybe pSource =<< Utils.nonEmptyT sourceM
+      environment = join (lookup "environment" allParams) >>= Utils.nonEmptyT
       mapping = variablePresets density pid.toText fromD toD allParams now
       mappingKQL = variablePresetsKQL density pid.toText fromD toD allParams now
       parsed = first (.message) $ parseQueryDiagnosed source $ replacePlaceholders mappingKQL $ maybeToMonoid $ Utils.nonEmptyT queryM
-      cfg = (defSqlQueryCfg pid now source Nothing){dateRange = (fromD, toD), binDensity = density, metricJsonAsVariant = usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource}
+      cfg = (defSqlQueryCfg pid now source Nothing){dateRange = (fromD, toD), binDensity = density, metricJsonAsVariant = usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource, environment}
       run emit = case parsed of
         Left message -> pure $ Left message
         Right ast -> do
