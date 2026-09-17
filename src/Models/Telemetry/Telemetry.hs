@@ -1644,7 +1644,7 @@ insertAndHandOff tfPgTypes target worker caches records
 redactJSON :: V.Vector Text -> AE.Value -> AE.Value
 redactJSON paths0 = go [fromMaybe path (T.stripPrefix "." path) | path <- V.toList paths0]
   where
-    go [] = \value -> value
+    go [] = Relude.id
     go paths = \case
       AE.Object fields -> AE.Object $ KEM.mapWithKey (\key -> go $ mapMaybe (matchKey $ AEK.toText key) paths) fields
       AE.Array values

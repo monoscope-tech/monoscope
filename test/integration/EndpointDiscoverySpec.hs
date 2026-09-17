@@ -2,6 +2,7 @@ module EndpointDiscoverySpec (spec) where
 
 import BackgroundJobs qualified
 import Data.Aeson qualified as AE
+import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
 import Data.UUID qualified as UUID
@@ -9,6 +10,7 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..))
+import Database.PostgreSQL.Simple qualified as SimplePG
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..))
@@ -17,6 +19,7 @@ import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
 import Test.Hspec (Spec, around, describe, it, shouldBe, shouldReturn, shouldSatisfy)
 import Text.Printf (printf)
+import UnliftIO.Exception (bracket)
 import Utils (toXXHash)
 
 
@@ -515,4 +518,22 @@ spec = around withTestResources do
         pinIssueAtFrozen tr h False
 
         runTestBg frozenTime tr $ BackgroundJobs.autoAckProvenEndpoints pid
+        queryIssueAcked tr h `shouldReturn` False
+
+      it "defers without scanning when another replica owns the evidence lease" \tr -> do
+        clearTestEndpoints tr
+        key <- createTestAPIKey tr pid "auto-ack-lease-busy-key"
+        let path = "/v1/lease-busy"
+        seedTraffic tr key path "200" 20 2
+        drainExtractionWorker tr{trATCtx = tr.trATCtx{env = tr.trATCtx.env{enableTimefusionReads = True}, config = tr.trATCtx.config{enableTimefusionWrites = True}}}
+        void $ runAllBackgroundJobs frozenTime tr.trATCtx
+        h <- endpointHashFor tr path
+        pinIssueAtFrozen tr h True
+
+        withResource tr.trPool \conn ->
+          bracket
+            (SimplePG.query conn [sql|SELECT pg_advisory_lock(hashtext(?))|] (Only BackgroundJobs.endpointAutoAckLockName) :: IO [Only ()])
+            (\_ -> void (SimplePG.query conn [sql|SELECT pg_advisory_unlock(hashtext(?))|] (Only BackgroundJobs.endpointAutoAckLockName) :: IO [Only Bool]))
+            (const $ runTestBg frozenTime tr $ BackgroundJobs.autoAckProvenEndpoints pid)
+
         queryIssueAcked tr h `shouldReturn` False

@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), errorTrendChartUrl) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, endpointAutoAckLockName, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), errorTrendChartUrl) where
 
 import BackgroundJobs.Types (BgJobs (..))
 import BackgroundJobs.Types qualified as Jobs
@@ -128,6 +128,7 @@ import System.Config qualified as Config
 import System.Logging qualified as Log
 import System.Tracing (SpanStatus (..), Tracing, addEvent, forkWithCtx, setStatus, withSpan, withSpan_)
 import System.Types (ATBackgroundCtx, ATBackgroundEffects, DB, runBackground)
+import UnliftIO (withRunInIO)
 import UnliftIO.Exception (bracket, catch, throwIO, try, tryAny)
 import Utils (calculateCycleStartDate, formatUTC, formatUTCMicros, freeTierDailyMaxEvents, hostPath, toXXHash, usageWindowStart)
 
@@ -193,7 +194,7 @@ enqueueAt ctx at jobs = liftIO $ withResource ctx.jobsPool \conn -> traverse_ (\
 
 -- | Seed @count@ ticks of a self-chaining job, spaced @step@ seconds from @from@.
 seedJobs :: SimplePG.Connection -> UTCTime -> Int -> Int -> (UTCTime -> BgJobs) -> IO ()
-seedJobs conn from count step mkJob = forM_ [0 .. count - 1] \i -> do
+seedJobs conn from count step mkJob = forM_ ([0 .. count - 1] :: [Int]) \i -> do
   let at = addUTCTime (fromIntegral @Int $ i * step) from
   void $ scheduleJob conn "background_jobs" (mkJob at) at
 
@@ -808,7 +809,7 @@ runDailyJobScheduling authCtx =
               $ createJob conn "background_jobs" Jobs.CleanupDemoProject
             -- Each handler re-enqueues itself; the daily loop seeds a full day's
             -- ticks so a single restart can't leave a gap when the chain broke.
-            forM_ [0 .. 23 :: Int] \i -> do
+            forM_ ([0 .. 23] :: [Int]) \i -> do
               let at = addUTCTime (fromIntegral @Int $ i * 3600) currentTime
               void $ scheduleJob conn "background_jobs" (Jobs.HourlyJob at i) at
             seedJobs conn currentTime 24 3600 Jobs.ProcessIssuesEnhancement
@@ -3287,7 +3288,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes =
       -- API changes (endpoint, shape, format) group into a single issue per
       -- endpoint, so multiple related changes don't spam notifications.
       -- Runtime exceptions get individual issues; unknown types are ignored.
-      when (anomalyType `elem` [ApiChanges.ATEndpoint, ApiChanges.ATShape, ApiChanges.ATFormat])
+      when (anomalyType `elem` ([ApiChanges.ATEndpoint, ApiChanges.ATShape, ApiChanges.ATFormat] :: [ApiChanges.AnomalyTypes]))
         $ processAPIChangeAnomalies pid targetHashes
 
 
@@ -3633,33 +3634,20 @@ autoAckProvenEndpoints pid = do
              ORDER BY i.created_at ASC
              LIMIT 200 |]
   unless (null candidates) do
+    slicesStarted <- liftIO $ newIORef (0 :: Int)
+    slicesCompleted <- liftIO $ newIORef (0 :: Int)
+    startedAt <- liftIO $ getTime Monotonic
     let hashes = V.fromList $ ordNub [h | (_, h, _) <- candidates]
-    -- Endpoint hashes are stamped onto every span at ingest, so the evidence is
-    -- an array-overlap on the stamped hash rather than a route/path match —
-    -- telemetry carries concrete paths while apis.endpoints stores templates,
-    -- and reconciling those two is the very thing discovery exists to do.
-    -- Follows the deployment's authoritative store, as the endpoints page does.
-    -- It matters which: the Postgres mirror of this table is being retired and
-    -- reads empty where TimeFusion is on, so pinning this to PG would make every
-    -- endpoint look unproven forever and quietly disable the whole sweep.
-    -- A single seven-day UNNEST/GROUP scan exceeded TimeFusion's 90-second
-    -- statement deadline in production. Read the same non-overlapping range as seven
-    -- one-day statements instead. This keeps each scan bounded while preserving
-    -- one shared scan for every candidate; issuing one seven-day query per hash
-    -- multiplies the expensive false-candidate case by up to 200.
-    --
-    -- The newest slice intentionally has no upper bound. The old query had none
-    -- either, and retaining that detail keeps replayed/future-dated telemetry and
-    -- the integration fixtures semantically identical.
-    let day = 86400
+        day = 86400
         windows =
           [ ( addUTCTime (fromIntegral (-n) * day) now
             , if n == (1 :: Int) then Nothing else Just $ addUTCTime (fromIntegral (1 - n) * day) now
             )
           | n <- [1 .. provenEndpointWindowDays]
           ]
-        readWindow (lower, upper) =
-          Hasql.withHasqlTimefusion authCtx.env.enableTimefusionReads case upper of
+        readWindow (lower, upper) = do
+          liftIO $ modifyIORef' slicesStarted (+ 1)
+          rows <- Hasql.withHasqlTimefusion authCtx.env.enableTimefusionReads case upper of
             Nothing ->
               Hasql.interp
                 [HI.sql|
@@ -3695,39 +3683,105 @@ autoAckProvenEndpoints pid = do
                   FROM served
                   WHERE hash = ANY(#{hashes}::text[])
                   GROUP BY hash, hour_bucket |]
-    buckets :: [(Text, Int64, Int64)] <- concat <$> traverse readWindow windows
-    let byHash = Map.fromListWith (Map.unionWith (+)) [(h, one (b, c)) | (h, b, c) <- buckets]
-        -- Traffic from the issue's own hour onwards: the endpoint having been
-        -- hit before we noticed it is not evidence that it is real. Whole hours,
-        -- so up to the creating hour's leading minutes can slip in — immaterial
-        -- against a 20-request floor, and the alternative (strictly later hours)
-        -- would throw away most of a real endpoint's first hour of traffic.
-        issueHour createdAt = floor (utcTimeToPOSIXSeconds createdAt) `div` 3600
-        provenSince createdAt h =
-          let after = Map.filterWithKey (\b _ -> b >= issueHour createdAt) $ Map.findWithDefault Map.empty h byHash
-           in (sum after, fromIntegral $ Map.size after)
-        proven =
-          [ (iid, total, hrs)
-          | (iid, h, createdAt) <- candidates
-          , let (total, hrs) = provenSince createdAt h
-          , total >= provenEndpointMinRequests
-          , hrs >= provenEndpointMinHours
-          ]
-    unless (null proven) do
-      -- Indefinite, not timed: the endpoint does not stop being real. A genuine
-      -- change to it raises its own issue rather than resurfacing this one.
-      let ackedIds = V.fromList [iid | (iid, _, _) <- proven]
-      Hasql.interpExecute_
-        [HI.sql| UPDATE apis.issues
-               SET acknowledged_at = #{now}, acknowledged_by = NULL, acknowledged_until = #{Issues.indefiniteUntil}
-               WHERE id = ANY(#{ackedIds}::uuid[]) AND acknowledged_at IS NULL AND archived_at IS NULL |]
-      -- Without the trail a system ack reads as a bug the first time someone
-      -- opens the issue and finds nobody acked it.
-      forM_ proven \(iid, total, hrs) ->
-        Issues.logIssueActivity iid Issues.IEAcknowledged Nothing
-          $ Just
-          $ AE.object ["reason" AE..= ("endpoint_proven_by_traffic" :: Text), "requests" AE..= total, "hours_seen" AE..= hrs]
-      Log.logInfo "Auto-acknowledged endpoint issues proven by traffic" ("project_id", pid.toText, "acked", length proven, "candidates", length candidates)
+          liftIO $ modifyIORef' slicesCompleted (+ 1)
+          pure rows
+        scanBuckets :: ATBackgroundCtx [(Text, Int64, Int64)]
+        scanBuckets = concat <$> traverse readWindow windows
+        ackBuckets buckets = do
+          let byHash = Map.fromListWith (Map.unionWith (+)) [(h, one (b, c)) | (h, b, c) <- buckets]
+              issueHour createdAt = floor (utcTimeToPOSIXSeconds createdAt) `div` 3600
+              provenSince createdAt h =
+                let after = Map.filterWithKey (\b _ -> b >= issueHour createdAt) $ Map.findWithDefault Map.empty h byHash
+                 in (sum after, fromIntegral $ Map.size after)
+              proven =
+                [ (iid, total, hrs)
+                | (iid, h, createdAt) <- candidates
+                , let (total, hrs) = provenSince createdAt h
+                , total >= provenEndpointMinRequests
+                , hrs >= provenEndpointMinHours
+                ]
+          if null proven
+            then pure 0
+            else do
+              let provenIds = V.fromList [iid | (iid, _, _) <- proven]
+              ackedIds :: V.Vector Issues.IssueId <-
+                Hasql.interp
+                  [HI.sql| UPDATE apis.issues
+                     SET acknowledged_at = #{now}, acknowledged_by = NULL, acknowledged_until = #{Issues.indefiniteUntil}
+                     WHERE id = ANY(#{provenIds}::uuid[]) AND acknowledged_at IS NULL AND archived_at IS NULL
+                     RETURNING id |]
+              let ackedSet = HashSet.fromList $ V.toList ackedIds
+              forM_ (filter (\(iid, _, _) -> HashSet.member iid ackedSet) proven) \(iid, total, hrs) ->
+                Issues.logIssueActivity iid Issues.IEAcknowledged Nothing
+                  $ Just
+                  $ AE.object ["reason" AE..= ("endpoint_proven_by_traffic" :: Text), "requests" AE..= total, "hours_seen" AE..= hrs]
+              Log.logInfo "Auto-acknowledged endpoint issues proven by traffic" ("project_id", pid.toText, "acked", V.length ackedIds, "candidates", length candidates)
+              pure $ V.length ackedIds
+        fields outcome failure acked = do
+          finishedAt <- liftIO $ getTime Monotonic
+          started <- liftIO $ readIORef slicesStarted
+          completed <- liftIO $ readIORef slicesCompleted
+          let elapsedMs = toNanoSecs (finishedAt `diffTimeSpec` startedAt) `div` 1_000_000
+          pure
+            $ AE.object
+              [ "project_id" AE..= pid
+              , "candidate_count" AE..= length candidates
+              , "slices_started" AE..= started
+              , "slices_completed" AE..= completed
+              , "elapsed_ms" AE..= elapsedMs
+              , "acked_count" AE..= acked
+              , "outcome" AE..= outcome
+              , "failure_class" AE..= failure
+              ]
+        runSweep = do
+          scanResult <- tryAny scanBuckets
+          case scanResult of
+            Left err
+              | Hasql.isQueryCanceledException err || Hasql.isTransientException err -> do
+                  eventFields <- fields ("query_deferred" :: Text) (Just $ bool "transient_resource" "query_canceled" $ Hasql.isQueryCanceledException err) (0 :: Int)
+                  Log.logAttention "Endpoint auto-ack sweep deferred after query failure" eventFields
+              | otherwise -> do
+                  eventFields <- fields ("query_failed" :: Text) (Just ("nontransient_query" :: Text)) (0 :: Int)
+                  Log.logAttention "Endpoint auto-ack sweep failed" eventFields
+                  throwIO err
+            Right buckets -> do
+              ackResult <- tryAny $ ackBuckets buckets
+              case ackResult of
+                Left err -> do
+                  eventFields <- fields ("ack_failed" :: Text) (Just ("postgres_mutation" :: Text)) (0 :: Int)
+                  Log.logAttention "Endpoint auto-ack acknowledgement failed" eventFields
+                  throwIO err
+                Right acked -> do
+                  eventFields <- fields ("completed" :: Text) (Nothing :: Maybe Text) acked
+                  Log.logInfo "Endpoint auto-ack sweep completed" eventFields
+    leaseResult <- withEndpointAutoAckLease authCtx runSweep
+    when (isNothing leaseResult) do
+      eventFields <- fields ("lease_busy" :: Text) (Nothing :: Maybe Text) (0 :: Int)
+      Log.logInfo "Endpoint auto-ack sweep deferred" eventFields
+
+
+-- The session that owns this lock stays checked out for the whole TimeFusion
+-- traversal. Acquiring and releasing through the Hasql effect could use two
+-- pooled sessions and strand a session-level advisory lock.
+withEndpointAutoAckLease :: Config.AuthContext -> ATBackgroundCtx a -> ATBackgroundCtx (Maybe a)
+withEndpointAutoAckLease authCtx action = withRunInIO \run ->
+  withResource authCtx.pool \conn ->
+    bracket
+      (acquire conn)
+      (release conn)
+      (\acquired -> if acquired then Just <$> run action else pure Nothing)
+  where
+    acquire conn = do
+      [SimplePG.Only acquired] <- SimplePG.query conn [sql|SELECT pg_try_advisory_lock(hashtext(?))|] (SimplePG.Only endpointAutoAckLockName)
+      pure acquired
+    release _ False = pass
+    release conn True = do
+      [SimplePG.Only released] <- SimplePG.query conn [sql|SELECT pg_advisory_unlock(hashtext(?))|] (SimplePG.Only endpointAutoAckLockName)
+      unless released $ throwIO $ CE.ErrorCall "endpoint auto-ack advisory lock was not held by its session"
+
+
+endpointAutoAckLockName :: Text
+endpointAutoAckLockName = "endpoint_auto_ack_evidence_scan"
 
 
 -- | Group anomalies by endpoint hash
