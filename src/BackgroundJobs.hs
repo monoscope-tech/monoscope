@@ -48,7 +48,8 @@ import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types
 import Effectful (Eff, IOE, (:>))
-import Effectful.Concurrent.Async (concurrently_, forConcurrently, forConcurrently_)
+import Effectful.Concurrent qualified as EC
+import Effectful.Concurrent.Async (concurrently_, forConcurrently, forConcurrently_, race)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
@@ -921,8 +922,18 @@ tryStepIO logger ctx label action =
 -- health — and posts a single consolidated Discord alert if either flags a
 -- problem. Never throws: each check's failure becomes alert text, so a broker
 -- blip or TF outage surfaces rather than crashing the job.
+-- Bounded: the parity check runs up to 30 sequential TimeFusion aggregates, and
+-- a slow one held a worker for 25+ minutes on 2026-09-16 — six of them at once
+-- starved every other job for two hours. A watchdog that cannot finish within
+-- the hour it reports on has nothing useful left to say.
 runInfraHealthCheck :: Config.AuthContext -> ATBackgroundCtx ()
 runInfraHealthCheck authCtx = do
+  outcome <- race (EC.threadDelay $ 5 * 60 * 1_000_000) (infraHealthCheck authCtx)
+  whenLeft_ outcome \_ -> Log.logAttention "InfraHealthCheck exceeded its budget and was abandoned" ("budget_seconds" :: Text, 300 :: Int)
+
+
+infraHealthCheck :: Config.AuthContext -> ATBackgroundCtx ()
+infraHealthCheck authCtx = do
   now <- Time.currentTime
   -- Last fully-elapsed clock hour: settled past the ~10-min TF flush, fresh
   -- enough to catch a loss within the hour it starts.
