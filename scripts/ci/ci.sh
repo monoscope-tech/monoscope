@@ -59,9 +59,9 @@ sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -d' ' -
 PATHSET_hs='app src shared cli test tests config proto static/migrations static/public/dashboards static/i18n static/public/assets/svgs/fa-sprites package.yaml cabal.project cabal.project.freeze hpack-includes monoscope.cabal shared/monoscope-shared.cabal cli/monoscope-cli.cabal'
 PATHSET_fe='web-components/src web-components/test web-components/package.json web-components/package-lock.json web-components/vite.config.mjs web-components/tsconfig.json web-components/vitest.config.ts web-components/index.html package.json package-lock.json config/tailwind.config.js static/public/assets/css/tailwind.css'
 # What the frontend checks read outside web-components: the hyperscript guard parses every
-# [__|…|] in src/, tailwind scans src/**/*.hs, two specs load the vendored htmx builds.
+# [__|…|] and interpolated attributes in src/, tailwind scans src/**/*.hs, two specs load the vendored htmx builds.
 # Without these a Haskell-only change reuses a stale pass and those guards never run.
-PATHSET_uisrc='src static/public/assets/deps'
+PATHSET_uisrc='src static/public/assets/deps static/public/assets/js/thirdparty'
 # The CLI package links only monoscope-shared, so its tests cannot observe src/.
 PATHSET_cli='cli shared cabal.project cabal.project.freeze'
 # Prepended to every check: changing what a check DOES, or the environment it
@@ -69,7 +69,7 @@ PATHSET_cli='cli shared cabal.project cabal.project.freeze'
 # — an edit to the Claude review or CLI release workflow says nothing about the
 # test suite, and invalidating a 40-minute suite over it would train people to
 # distrust the cache.
-PATHSET_meta='ci/checks.tsv ci/compose.yml scripts/ci .github/workflows/pullrequest.yml .github/workflows/haskell.yml'
+PATHSET_meta='Makefile ci/checks.tsv ci/compose.yml scripts/ci .github/workflows/pullrequest.yml .github/workflows/haskell.yml'
 
 pathset() { eval "printf '%s' \"\${PATHSET_$1:-}\""; }
 
@@ -121,11 +121,11 @@ worktree_tree() {
 # src/ in place — and recomputing afterwards would attest a fingerprint the gate
 # never looked up, so nothing would ever be reused.
 pin_fingerprints() { # <check...>
-  local c
-  mkdir -p .ci
-  : > .ci/fingerprints.tsv
-  for c in "$@"; do printf '%s\t%s\n' "$c" "$(fingerprint "$c")" >> .ci/fingerprints.tsv; done
-  export CI_FINGERPRINTS=.ci/fingerprints.tsv
+  local c destination=${CI_FINGERPRINTS_PATH:-.ci/fingerprints.tsv}
+  mkdir -p "$(dirname "$destination")"
+  : > "$destination"
+  for c in "$@"; do printf '%s\t%s\n' "$c" "$(fingerprint "$c")" >> "$destination"; done
+  export CI_FINGERPRINTS="$destination"
 }
 
 fingerprint() { # <check>
@@ -142,6 +142,11 @@ fingerprint() { # <check>
     # shellcheck disable=SC2086
     git ls-tree -r --full-tree "$tree" -- $paths | sort
   } | sha256
+}
+
+# A concurrent edit or a tool rewriting an input makes the pinned result unprovable.
+inputs_unchanged() {
+  [ "$(fingerprint "$1")" = "$(unset CI_FINGERPRINTS; WORKTREE_TREE=''; fingerprint "$1")" ]
 }
 
 # ---------------------------------------------------------------- capabilities
@@ -433,6 +438,11 @@ cmd_run() {
     fi
     note "running $c"
     if run_body "$c"; then
+      if ! inputs_unchanged "$c"; then
+        note "PASSED $c, but inputs changed during the run — NOT attested; rerun required"
+        rc=1
+        continue
+      fi
       # A green check stays green even if we cannot record it. Publishing touches
       # the network and the object store; neither is part of what the check proved.
       case " $degraded " in *" $c "*) ;; *) [ "${CI_NO_ATTEST:-}" = "true" ] \
@@ -851,6 +861,11 @@ cmd_selftest() {
   : > "web-components/src/$probe"; WORKTREE_TREE=''; after=$(fingerprint hlint); rm -f "web-components/src/$probe"
   assert "unrelated change keeps fp" same "$([ "$before" = "$after" ] && echo same)"
 
+  WORKTREE_TREE=''
+  before=$(fingerprint ui-tests)
+  : > "static/public/assets/js/thirdparty/$probe"; WORKTREE_TREE=''; after=$(fingerprint ui-tests); rm -f "static/public/assets/js/thirdparty/$probe"
+  assert "vendored parser change moves UI fp" changed "$([ "$before" != "$after" ] && echo changed)"
+
   # The two ways this job silently loses ~35 minutes. Both are one-line edits
   # elsewhere in the repo that nothing else would catch.
   #
@@ -879,9 +894,14 @@ cmd_selftest() {
   # Pinning is what survives a step that rewrites the tree mid-run.
   WORKTREE_TREE=''
   before=$(fingerprint hlint)
+  local CI_FINGERPRINTS_PATH
+  CI_FINGERPRINTS_PATH=$(mktemp -t ci-selftest-fingerprints.XXXXXX)
   pin_fingerprints hlint
-  : > "src/$probe"; WORKTREE_TREE=''; after=$(fingerprint hlint); rm -f "src/$probe"
-  unset CI_FINGERPRINTS; rm -rf .ci
+  assert "unchanged inputs can be attested" yes "$(inputs_unchanged hlint && echo yes)"
+  : > "src/$probe"; WORKTREE_TREE=''; after=$(fingerprint hlint)
+  assert "changed inputs cannot be attested" no "$(inputs_unchanged hlint && echo yes || echo no)"
+  rm -f "src/$probe"
+  unset CI_FINGERPRINTS; rm -f "$CI_FINGERPRINTS_PATH"
   assert "pinned fp survives tree change" "$before" "$after"
 
   assert "ref roundtrip caps" 'ghc pg' \

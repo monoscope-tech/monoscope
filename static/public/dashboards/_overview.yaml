@@ -185,26 +185,33 @@ tabs:
           navigate_to_tab: 'Service'
         columns:
           - field: service_name
+            sortable: true
             title: Service
           - field: apdex
+            sortable: true
             title: Apdex
             columnType: number
           - field: throughput
+            sortable: true
             title: Throughput
             columnType: number
             unit: req/min
             progress: column_percent
           - field: error_rate
+            sortable: true
             title: Errors
             unit: '%'
             progress: value_percent
             progress_variant: error
           - field: p95_latency
+            sortable: true
             title: P95
             columnType: duration
             unit: ms
             progress: column_percent
-        sql: "SELECT resource___service___name as service_name, ROUND((SUM(CASE WHEN duration <= 500000000 THEN 1.0 WHEN duration <= 2000000000 THEN 0.5 ELSE 0 END)) / GREATEST(1, COUNT(*))::numeric, 2)::text as apdex, ROUND((COUNT(*)::numeric / GREATEST(1, EXTRACT(EPOCH FROM (MAX(timestamp) - MIN(timestamp))) / 60)), 2)::text as throughput, ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR' OR COALESCE(attributes___http___response___status_code, 0) >= 500) * 100.0 / GREATEST(1, COUNT(*))::numeric), 2)::text as error_rate, ROUND((approx_percentile(0.95, percentile_agg(duration))::numeric / 1000000), 2)::text as p95_latency FROM otel_logs_and_spans WHERE project_id='{{project_id}}' AND resource___service___name IS NOT NULL AND kind = 'server' AND duration IS NOT NULL {{time_filter}} GROUP BY resource___service___name ORDER BY COUNT(*)::numeric / GREATEST(1, EXTRACT(EPOCH FROM (MAX(timestamp) - MIN(timestamp))) / 60) DESC LIMIT 50"
+        sql: |
+          SELECT resource___service___name as service_name, ROUND((SUM(CASE WHEN duration <= 500000000 THEN 1.0 WHEN duration <= 2000000000 THEN 0.5 ELSE 0 END)) / GREATEST(1, COUNT(*))::numeric, 2) as apdex, ROUND((COUNT(*)::numeric / GREATEST(1, EXTRACT(EPOCH FROM (MAX(timestamp) - MIN(timestamp))) / 60)), 2) as throughput, ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR' OR COALESCE(attributes___http___response___status_code, 0) >= 500) * 100.0 / GREATEST(1, COUNT(*))::numeric), 2) as error_rate, ROUND((approx_percentile(0.95, percentile_agg(duration))::numeric / 1000000), 2) as p95_latency FROM otel_logs_and_spans WHERE project_id='{{project_id}}' AND resource___service___name IS NOT NULL AND kind = 'server' AND duration IS NOT NULL {{time_filter}} GROUP BY resource___service___name ORDER BY {{table_sort}} LIMIT 50
+        default_sort: "COUNT(*)::numeric / GREATEST(1, EXTRACT(EPOCH FROM (MAX(timestamp) - MIN(timestamp))) / 60) DESC"
 
       # Anomalies/Issues widget
       - type: anomalies
@@ -293,16 +300,20 @@ tabs:
           navigate_to_tab: 'Databases'
         columns:
           - field: db_system
+            sortable: true
             title: Database
           - field: queries
+            sortable: true
             title: Queries
             columnType: number
             progress: column_percent
           - field: avg_ms
+            sortable: true
             title: Avg
             columnType: duration
             unit: ms
           - field: error_rate
+            sortable: true
             title: Errors
             unit: '%'
             progress: value_percent
@@ -310,16 +321,17 @@ tabs:
         sql: |
           SELECT
             attributes___db___system___name as db_system,
-            COUNT(*)::text as queries,
-            ROUND((AVG(duration) / 1e6)::numeric, 2)::text as avg_ms,
-            ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*)))::numeric, 2)::text as error_rate
+            COUNT(*) as queries,
+            ROUND((AVG(duration) / 1e6)::numeric, 2) as avg_ms,
+            ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*)))::numeric, 2) as error_rate
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
             AND attributes___db___system___name IS NOT NULL
             AND duration IS NOT NULL
             {{time_filter}}
           GROUP BY db_system
-          ORDER BY COUNT(*) DESC
+          ORDER BY {{table_sort}}
+        default_sort: "COUNT(*) DESC"
 
       # Requests by Endpoint
       - type: 'timeseries'
@@ -512,38 +524,44 @@ tabs:
           value: '{{row.resource_name}}'
         columns:
           - field: resource_name
+            sortable: true
             title: Resource Name
           - field: requests
+            sortable: true
             title: Requests
             columnType: number
             progress: column_percent
           - field: total_time
+            sortable: true
             title: Total Time
             columnType: duration
             unit: s
             progress: column_percent
           - field: p95_latency
+            sortable: true
             title: P95 Latency
             columnType: duration
             unit: ms
             progress: column_percent
           - field: errors
+            sortable: true
             title: Errors
             columnType: number
             progress: column_percent
             progress_variant: error
           - field: error_rate
+            sortable: true
             title: Error Rate (%)
             progress: value_percent
             progress_variant: error
         sql: |
           SELECT
             name as resource_name,
-            COUNT(*)::text as requests,
-            ROUND((SUM(duration) / 1e9)::numeric, 2)::text as total_time,
-            ROUND((approx_percentile(0.95, percentile_agg(duration))::numeric / 1e6), 2)::text as p95_latency,
-            COUNT(*) FILTER (WHERE status_code = 'ERROR' OR COALESCE(attributes___http___response___status_code, 0) >= 400)::text as errors,
-            ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR' OR COALESCE(attributes___http___response___status_code, 0) >= 400) * 100.0 / GREATEST(1, COUNT(*)))::numeric, 2)::text as error_rate
+            COUNT(*) as requests,
+            ROUND((SUM(duration) / 1e9)::numeric, 2) as total_time,
+            ROUND((approx_percentile(0.95, percentile_agg(duration))::numeric / 1e6), 2) as p95_latency,
+            COUNT(*) FILTER (WHERE status_code = 'ERROR' OR COALESCE(attributes___http___response___status_code, 0) >= 400) as errors,
+            ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR' OR COALESCE(attributes___http___response___status_code, 0) >= 400) * 100.0 / GREATEST(1, COUNT(*)))::numeric, 2) as error_rate
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
             AND name IS NOT NULL
@@ -551,8 +569,9 @@ tabs:
             AND resource___service___name = '{{var-service}}'
             {{time_filter}}
           GROUP BY name
-          ORDER BY COUNT(*) DESC
+          ORDER BY {{table_sort}}
           LIMIT 100
+        default_sort: "COUNT(*) DESC"
 
       # 5. Traces
       - type: 'timeseries'
@@ -589,30 +608,36 @@ tabs:
         unit: ns
         layout: { w: 12, h: 4 }
 
-      - type: traces
+      - type: logs
         title: 'Recent Traces'
+        query: '(parent_id=="" or parent_id==null) and resource.service.name=="{{var-service}}" and duration != null'
+        layout: { w: 12, h: 5 }
+
+      - type: table
+        title: 'Root Operation Summary'
         layout: { w: 12, h: 5 }
         columns:
           - field: resource_name
+            sortable: true
             title: Resource
           - field: span_name
+            sortable: true
             title: Span
-            columnType: number
-          - field: total_time
+          - field: avg_duration
+            sortable: true
             title: Avg Duration
             columnType: duration
+            unit: ms
           - field: span_count
+            sortable: true
             title: Trace Count
             columnType: number
-          - field: latency_breakdown
-            title: Latency breakdown
         sql: |
           SELECT
-            COALESCE(resource___service___name,'Unknown'),
-            name,
-            ROUND(AVG(duration/1000000), 2)::text AS avg_duration,
-            COUNT(*)::text AS span_count,
-            MIN(context___trace_id) AS trace_id
+            COALESCE(resource___service___name,'Unknown') AS resource_name,
+            name AS span_name,
+            ROUND(AVG(duration / 1000000.0), 2) AS avg_duration,
+            COUNT(*) AS span_count
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
             AND (parent_id = '' OR parent_id IS NULL)
@@ -620,9 +645,10 @@ tabs:
             AND duration IS NOT NULL
             AND resource___service___name = '{{var-service}}'
             {{time_filter}}
-          GROUP BY  resource___service___name, name
-          ORDER BY avg_duration DESC
+          GROUP BY resource___service___name, name
+          ORDER BY {{table_sort}}
           LIMIT 20
+        default_sort: "avg_duration DESC"
 
       # 6. Operations breakdown
       - type: table
@@ -631,22 +657,27 @@ tabs:
         layout: { w: 12, h: 6 }
         columns:
           - field: operation_name
+            sortable: true
             title: Operation
           - field: count
+            sortable: true
             title: Count
             columnType: number
             progress: column_percent
           - field: error_rate
+            sortable: true
             title: Error Rate
             unit: '%'
             progress: value_percent
             progress_variant: error
           - field: avg_duration
+            sortable: true
             title: Avg Duration
             columnType: duration
             unit: ms
             progress: column_percent
           - field: p95_duration
+            sortable: true
             title: P95 Duration
             columnType: duration
             unit: ms
@@ -654,10 +685,10 @@ tabs:
         sql: |
           SELECT
             name as operation_name,
-            COUNT(*)::text as count,
-            ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR' OR COALESCE(attributes___http___response___status_code, 0) >= 400) * 100.0 / GREATEST(1, COUNT(*)))::numeric, 2)::text as error_rate,
-            ROUND((AVG(duration) / 1e6)::numeric, 2)::text as avg_duration,
-            ROUND((approx_percentile(0.95, percentile_agg(duration))::numeric / 1e6), 2)::text as p95_duration
+            COUNT(*) as count,
+            ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR' OR COALESCE(attributes___http___response___status_code, 0) >= 400) * 100.0 / GREATEST(1, COUNT(*)))::numeric, 2) as error_rate,
+            ROUND((AVG(duration) / 1e6)::numeric, 2) as avg_duration,
+            ROUND((approx_percentile(0.95, percentile_agg(duration))::numeric / 1e6), 2) as p95_duration
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
             AND resource___service___name = '{{var-service}}'
@@ -665,8 +696,9 @@ tabs:
             AND duration IS NOT NULL
             {{time_filter}}
           GROUP BY name
-          ORDER BY COUNT(*) DESC
+          ORDER BY {{table_sort}}
           LIMIT 100
+        default_sort: "COUNT(*) DESC"
 
   - name: Logs
     icon: file-text
@@ -824,25 +856,31 @@ tabs:
         layout: { w: 12, h: 7 }
         columns:
           - field: query_pattern
+            sortable: true
             title: Query Pattern
           - field: count
+            sortable: true
             title: Count
             columnType: number
             progress: column_percent
           - field: avg_ms
+            sortable: true
             title: Avg
             columnType: duration
             unit: ms
           - field: p95_ms
+            sortable: true
             title: P95
             columnType: duration
             unit: ms
           - field: total_time
+            sortable: true
             title: Total Time
             columnType: duration
             unit: s
             progress: column_percent
           - field: error_rate
+            sortable: true
             title: Errors
             unit: '%'
             progress: value_percent
@@ -855,11 +893,11 @@ tabs:
               CASE WHEN attributes___db___system___name = 'redis' THEN SPLIT_PART(name, ' ', 1)
                    ELSE name END
             ), 2000) as query_pattern,
-            COUNT(*)::text as count,
-            ROUND((AVG(duration) / 1e6)::numeric, 2)::text as avg_ms,
-            ROUND((approx_percentile(0.95, percentile_agg(duration)) / 1e6)::numeric, 2)::text as p95_ms,
-            ROUND((SUM(duration) / 1e9)::numeric, 2)::text as total_time,
-            ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*)))::numeric, 2)::text as error_rate
+            COUNT(*) as count,
+            ROUND((AVG(duration) / 1e6)::numeric, 2) as avg_ms,
+            ROUND((approx_percentile(0.95, percentile_agg(duration)) / 1e6)::numeric, 2) as p95_ms,
+            ROUND((SUM(duration) / 1e9)::numeric, 2) as total_time,
+            ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*)))::numeric, 2) as error_rate
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
             AND attributes___db___system___name IS NOT NULL
@@ -867,8 +905,9 @@ tabs:
             AND attributes___db___system___name = '{{var-database}}'
             {{time_filter}}
           GROUP BY query_pattern
-          ORDER BY SUM(duration) DESC
+          ORDER BY {{table_sort}}
           LIMIT 30
+        default_sort: "SUM(duration) DESC"
 
       # Database Systems Overview
       - type: table
@@ -880,16 +919,20 @@ tabs:
           value: '{{row.db_system}}'
         columns:
           - field: db_system
+            sortable: true
             title: Database
           - field: operations
+            sortable: true
             title: Count
             columnType: number
             progress: column_percent
           - field: avg_duration
+            sortable: true
             title: Avg
             columnType: duration
             unit: ms
           - field: error_rate
+            sortable: true
             title: Errors
             unit: '%'
             progress: value_percent
@@ -897,16 +940,17 @@ tabs:
         sql: |
           SELECT
             attributes___db___system___name as db_system,
-            COUNT(*)::text as operations,
-            ROUND((AVG(duration) / 1e6)::numeric, 2)::text as avg_duration,
-            ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*)))::numeric, 2)::text as error_rate
+            COUNT(*) as operations,
+            ROUND((AVG(duration) / 1e6)::numeric, 2) as avg_duration,
+            ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*)))::numeric, 2) as error_rate
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
             AND attributes___db___system___name IS NOT NULL
             AND duration IS NOT NULL
             {{time_filter}}
           GROUP BY db_system
-          ORDER BY COUNT(*) DESC
+          ORDER BY {{table_sort}}
+        default_sort: "COUNT(*) DESC"
 
       # Queries by Operation Type
       - type: table
@@ -914,16 +958,20 @@ tabs:
         layout: { w: 6, h: 5 }
         columns:
           - field: operation
+            sortable: true
             title: Operation
           - field: count
+            sortable: true
             title: Count
             columnType: number
             progress: column_percent
           - field: avg_ms
+            sortable: true
             title: Avg
             columnType: duration
             unit: ms
           - field: error_rate
+            sortable: true
             title: Errors
             unit: '%'
             progress: value_percent
@@ -931,9 +979,9 @@ tabs:
         sql: |
           SELECT
             UPPER(COALESCE(attributes___db___operation___name, SPLIT_PART(name, ' ', 1), 'UNKNOWN')) as operation,
-            COUNT(*)::text as count,
-            ROUND((AVG(duration) / 1e6)::numeric, 2)::text as avg_ms,
-            ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*)))::numeric, 2)::text as error_rate
+            COUNT(*) as count,
+            ROUND((AVG(duration) / 1e6)::numeric, 2) as avg_ms,
+            ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*)))::numeric, 2) as error_rate
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
             AND attributes___db___system___name IS NOT NULL
@@ -941,8 +989,9 @@ tabs:
             AND attributes___db___system___name = '{{var-database}}'
             {{time_filter}}
           GROUP BY operation
-          ORDER BY COUNT(*) DESC
+          ORDER BY {{table_sort}}
           LIMIT 10
+        default_sort: "COUNT(*) DESC"
 
       # Query Latency Over Time
       - type: 'timeseries_line'
@@ -974,21 +1023,26 @@ tabs:
         layout: { w: 12, h: 5 }
         columns:
           - field: query_pattern
+            sortable: true
             title: Query Pattern
           - field: count
+            sortable: true
             title: Count
             columnType: number
             progress: column_percent
           - field: max_ms
+            sortable: true
             title: Peak
             columnType: duration
             unit: ms
             progress: column_percent
           - field: avg_ms
+            sortable: true
             title: Avg
             columnType: duration
             unit: ms
           - field: last_seen
+            sortable: true
             title: Last Seen
         sql: |
           -- Two-stage to keep aggregation cheap: top-500 slowest individual
@@ -996,9 +1050,9 @@ tabs:
           -- so GROUP BY cardinality is bounded.
           SELECT
             query_pattern,
-            COUNT(*)::text as count,
-            ROUND((MAX(duration) / 1e6)::numeric, 2)::text as max_ms,
-            ROUND((AVG(duration) / 1e6)::numeric, 2)::text as avg_ms,
+            COUNT(*) as count,
+            ROUND((MAX(duration) / 1e6)::numeric, 2) as max_ms,
+            ROUND((AVG(duration) / 1e6)::numeric, 2) as avg_ms,
             MAX(timestamp)::text as last_seen
           FROM (
             SELECT
@@ -1018,8 +1072,9 @@ tabs:
             LIMIT 500
           ) top_slow
           GROUP BY query_pattern
-          ORDER BY MAX(duration) DESC
+          ORDER BY {{table_sort}}
           LIMIT 30
+        default_sort: "MAX(duration) DESC"
 
       # Database Errors
       - type: 'timeseries'
@@ -1137,26 +1192,32 @@ tabs:
         layout: { w: 12, h: 6 }
         columns:
           - field: service
+            sortable: true
             title: Service/Container
           - field: cpu_avg
+            sortable: true
             title: CPU Avg
             unit: '%'
             progress: value_percent
           - field: cpu_max
+            sortable: true
             title: CPU Max
             unit: '%'
             progress: value_percent
             progress_variant: warning
           - field: mem_avg
+            sortable: true
             title: Mem Avg
             unit: '%'
             progress: value_percent
           - field: mem_max
+            sortable: true
             title: Mem Max
             unit: '%'
             progress: value_percent
             progress_variant: warning
           - field: data_points
+            sortable: true
             title: Samples
             columnType: number
         sql: |
@@ -1180,16 +1241,17 @@ tabs:
           )
           SELECT
             COALESCE(c.service, m.service) as service,
-            ROUND(AVG(c.value)::numeric, 1)::text as cpu_avg,
-            ROUND(MAX(c.value)::numeric, 1)::text as cpu_max,
-            ROUND(AVG(m.value)::numeric, 1)::text as mem_avg,
-            ROUND(MAX(m.value)::numeric, 1)::text as mem_max,
-            (COUNT(c.*) + COUNT(m.*))::text as data_points
+            ROUND(AVG(c.value)::numeric, 1) as cpu_avg,
+            ROUND(MAX(c.value)::numeric, 1) as cpu_max,
+            ROUND(AVG(m.value)::numeric, 1) as mem_avg,
+            ROUND(MAX(m.value)::numeric, 1) as mem_max,
+            (COUNT(c.*) + COUNT(m.*)) as data_points
           FROM cpu_metrics c
           FULL OUTER JOIN mem_metrics m ON c.service = m.service
           GROUP BY COALESCE(c.service, m.service)
-          ORDER BY AVG(c.value) DESC NULLS LAST
+          ORDER BY {{table_sort}}
           LIMIT 20
+        default_sort: "AVG(c.value) DESC NULLS LAST"
 
       # Kafka Consumer Metrics (if available)
       - type: 'timeseries'
@@ -1256,19 +1318,22 @@ tabs:
           - field: metric_name
             title: Metric
           - field: data_points
+            sortable: true
             title: Data Points
             columnType: number
             progress: column_percent
           - field: unit
+            sortable: true
             title: Unit
         sql: |
           SELECT
             metric_name,
-            COUNT(*)::text as data_points,
+            COUNT(*) as data_points,
             COALESCE(MAX(metric_unit), '-') as unit
           FROM otel_metrics
           WHERE project_id='{{project_id}}'
             {{time_filter}}
           GROUP BY metric_name
-          ORDER BY COUNT(*) DESC
+          ORDER BY {{table_sort}}
           LIMIT 20
+        default_sort: "COUNT(*) DESC"

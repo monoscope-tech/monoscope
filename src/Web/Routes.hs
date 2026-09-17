@@ -71,7 +71,6 @@ import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
-import Pkg.Parser (PageDirection)
 import Pkg.Parser qualified as Parser
 import Pkg.Parser.Expr qualified as ParserExpr
 import UnliftIO.Exception (handle, throwIO)
@@ -143,7 +142,6 @@ type QPT a = QueryParam a Text
 
 type QPU a = QueryParam a UTCTime
 type QPI a = QueryParam a Int
-type QPD a = QueryParam a PageDirection
 type QPUUId a = QueryParam a UUID.UUID
 
 

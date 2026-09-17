@@ -23,14 +23,15 @@ beforeAll(() => {
   new Function(code).call(window);
   const hs = (window as any)._hyperscript;
   expect(hs, 'vendored _hyperscript did not publish window._hyperscript').toBeTruthy();
-  // `hs.parse` collects failures into `errors` rather than throwing, and — unlike
-  // `processNode`, the path the browser takes — it does not execute `init` features.
-  // That matters: running them evaluates real DOM/network code against jsdom.
-  //
+  // Select the browser's whole-program grammar. hs.parse treats a leading `js`
+  // as a command and stops before later features; parsing never executes init.
   parseErrors = (src: string) => {
     try {
-      const result = hs.parse(src) as { errors?: Array<{ message?: string }> };
-      return (result?.errors ?? []).map(e => e?.message ?? String(e));
+      const parser = hs.internals.createParser(hs.internals.tokenizer.tokenize(src));
+      const program = parser.requireElement('hyperscript');
+      const errors = program.collectErrors().map((e: { message: string }) => e.message);
+      if (parser.hasMore()) errors.push(`Unexpected Token : ${parser.currentToken().value}`);
+      return errors;
     } catch (e) {
       return [String(e)];
     }
@@ -60,19 +61,23 @@ const extractSnippets = (file: string): Snippet[] => {
 
 const extractSource = (text: string, file = 'fixture.hs'): Snippet[] => {
   const out: Snippet[] = [];
-  // Both spellings of the same attribute: the `[__|…|]` quasiquoter, and the `_=`
-  // attribute written by hand as `term "_" [text|…|]` — which is what every snippet
-  // carrying Haskell interpolation uses, and was unguarded until 2026-09-16.
-  for (const re of [/\[__\|([\s\S]*?)\|\]/g, /term\s+"_"\s*(?:\$\s*)?\[text\|([\s\S]*?)\|\]/g]) {
-    for (let m = re.exec(text); m !== null; m = re.exec(text)) {
-      out.push({
-        file,
-        line: text.slice(0, m.index).split('\n').length,
-        // Both NeatInterpolation spellings: `${x}` and the bare `$x` that `[text|…|]`
-        // snippets use inside selectors (`#$targetPr-sidebar`).
-        body: m[1].replace(/\$\{[^}]*\}|\$[A-Za-z_][A-Za-z0-9_']*/g, 'interpolated'),
-      });
-    }
+  const add = (index: number, body: string) => out.push({
+    file, line: text.slice(0, index).split('\n').length,
+    body: body.replace(/\$\{[^}]*\}|\$[A-Za-z_][A-Za-z0-9_']*/g, 'interpolated'),
+  });
+  for (const match of text.matchAll(/\[__\|([\s\S]*?)\|\]/g)) add(match.index!, match[1]);
+  for (const match of text.matchAll(/term\s+"_"\s*(?:\$\s*)?/g)) {
+    const rest = text.slice(match.index! + match[0].length);
+    const quasi = /^\[text\|([\s\S]*?)\|\]/.exec(rest);
+    const literal = /^"(?:\\.|[^"\\])*"/.exec(rest);
+    const variable = /^([a-zA-Z_][\w']*)/.exec(rest);
+    if (quasi) add(match.index!, quasi[1]);
+    else if (literal && !/^\s*<>/.test(rest.slice(literal[0].length))) add(match.index!, JSON.parse(literal[0]));
+    else if (variable) {
+      const bindings = [...text.matchAll(new RegExp(`\\b${variable[1]}\\s*=\\s*\\[text\\|([\\s\\S]*?)\\|\\]`, 'g'))];
+      if (bindings.length !== 1) throw new Error(`${file}: cannot resolve hyperscript binding ${variable[1]}`);
+      add(match.index!, bindings[0][1]);
+    } else throw new Error(`${file}: unguarded hyperscript attribute at line ${text.slice(0, match.index).split('\n').length}`);
   }
   return out;
 };
@@ -88,10 +93,20 @@ describe('hyperscript literals in src/ parse', () => {
     expect(parseErrors('on change send "tab-visible" to #water_fall')).toEqual([]);
     expect(parseErrors('on click add .foo end on change send tab-visible to #x')).not.toEqual([]);
     expect(parseErrors('on click add .foo end on change send "tab-visible" to #x')).toEqual([]);
+    expect(parseErrors('js return {} end on click send tab-visible to #x')).not.toEqual([]);
+    expect(parseErrors('js return {} end on click send "tab-visible" to #x')).toEqual([]);
+    expect(parseErrors('init throw "must not execute" end')).toEqual([]);
   });
 
   it.each(['[__|on click add .foo|]', 'term "_" [text|on click add .foo|]', 'term "_" $ [text|on click add .foo|]'])('extracts %s', source => {
     expect(extractSource(source).map(s => s.body)).toEqual(['on click add .foo']);
+  });
+
+  it('covers strings and bound interpolations, and rejects untracked constructions', () => {
+    expect(extractSource('term "_" "on click halt"')[0].body).toBe('on click halt');
+    expect(extractSource('handler = [text|on click halt|]\nterm "_" handler')[0].body).toBe('on click halt');
+    expect(() => extractSource('term "_" unknown')).toThrow('cannot resolve');
+    expect(() => extractSource('term "_" "on click " <> command')).toThrow('unguarded');
   });
 
   it('every [__|…|] quasiquote in src/ parses', () => {

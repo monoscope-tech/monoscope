@@ -498,10 +498,8 @@ spec = sequential $ aroundAll withTestResources do
       original <- fetch Nothing
       sorted <- fetch (Just "-duration")
       rejected <- fetch (Just "-duration; DROP TABLE users")
-      V.head original.dataText `shouldBe` V.singleton "1"
-      V.last original.dataText `shouldBe` V.singleton "20"
-      V.head sorted.dataText `shouldBe` V.singleton "25"
-      V.last sorted.dataText `shouldBe` V.singleton "6"
+      original.dataText `shouldBe` V.fromList [V.singleton $ show @Text n | n <- [1 .. 20 :: Int]]
+      sorted.dataText `shouldBe` V.fromList [V.singleton $ show @Text n | n <- [25, 24 .. 6 :: Int]]
       rejected.dataText `shouldBe` original.dataText
 
   describe "Widget fetch URL size" do

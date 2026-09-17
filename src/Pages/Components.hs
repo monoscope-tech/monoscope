@@ -201,7 +201,7 @@ drawer_ drawerId startOpen urlM content trigger = div_ [class_ "drawer drawer-en
             [ type_ "button"
             , Aria.label_ "Close drawer"
             , class_ "btn btn-sm btn-circle btn-ghost mr-3 text-iconNeutral hover:bg-fillWeak hover:text-iconBrand max-sm:size-11"
-            , term "_" $ "on click set #" <> drawerId <> ".checked to false then trigger change on #" <> drawerId
+            , term "_" [text|on click set #${drawerId}.checked to false then trigger change on #${drawerId}|]
             ]
           $ faSprite_ "xmark" "regular" "h-3.5 w-3.5"
         div_
@@ -949,7 +949,7 @@ copyButton_ cls iconCls src attrs =
   button_
     ( [ type_ "button"
       , class_ cls
-      , term "_" $ "on click call navigator.clipboard.writeText(" <> src <> ") then put 'Copied!' into the first <span/> in me then wait 2s then put 'Copy' into the first <span/> in me"
+      , term "_" [text|on click call navigator.clipboard.writeText($src) then put 'Copied!' into the first <span/> in me then wait 2s then put 'Copy' into the first <span/> in me|]
       ]
         <> attrs
     )

@@ -524,7 +524,7 @@ integrationsBody IntegrationsConfig{..} = do
               ( [id_ "include-user-identity-in-alerts", name_ "includeUserIdentityInAlerts", type_ "checkbox", class_ "toggle toggle-sm toggle-primary mt-0.5"]
                   <> [checked_ | includeUserIdentityInAlerts]
               )
-            label_ [for_ "include-user-identity-in-alerts", class_ "cursor-pointer"] do
+            label_ [Lucid.for_ "include-user-identity-in-alerts", class_ "cursor-pointer"] do
               span_ [class_ "block text-sm font-medium text-textStrong"] "Include affected user identity in alerts"
               span_ [class_ "block mt-1 text-xs text-textWeak"] "Includes the telemetry user name and email in Slack error alerts. Enabled by default; turn it off if alerts for this project must not contain PII. Tenant or project context is always included."
 

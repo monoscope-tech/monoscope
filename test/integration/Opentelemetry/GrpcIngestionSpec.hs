@@ -7,6 +7,7 @@ import Control.Lens ((.~))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key (fromText)
 import Data.Aeson.KeyMap qualified as KM
+import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
 import Data.List (isInfixOf)
@@ -70,7 +71,7 @@ parseNumArray = mapMaybe (readMaybe . toString) . filter (not . T.null) . T.spli
 queryLogs :: TestResources -> Maybe Text -> IO Log.LogResult
 queryLogs tr queryM = do
   let (timeFrom, timeTo) = testTimeRange
-  snd <$> toServantResponse tr (Log.logExplorerDataH pid queryM Nothing Nothing Nothing Nothing (Just timeFrom) (Just timeTo) Nothing Nothing Nothing)
+  snd <$> toServantResponse tr (Log.logExplorerDataH pid def{Log.query = queryM, Log.from = Just timeFrom, Log.to = Just timeTo})
 
 
 -- | Helper to query the sessions viz endpoint (returns SessionsView).

@@ -1355,7 +1355,7 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
                 -- build and the waterfall re-render until their panel is shown.
                 let traceTab (tabId, panelId, lbl, isActive) =
                       label_ [class_ "a-tab cursor-pointer text-sm px-3 py-1.5 border-b-2 border-b-transparent whitespace-nowrap shrink-0 has-[:checked]:font-bold has-[:checked]:border-strokeBrand-strong has-[:checked]:text-textBrand"] do
-                        input_ $ [type_ "radio", name_ "trace-tabs", id_ tabId, class_ "sr-only", term "_" $ "on change send \"tab-visible\" to " <> panelId] <> [checked_ | isActive]
+                        input_ $ [type_ "radio", name_ "trace-tabs", id_ tabId, class_ "sr-only", term "_" [text|on change send "tab-visible" to $panelId|]] <> [checked_ | isActive]
                         toHtml lbl
                  in forM_
                       ( [ ("tab-waterfall", "#water_fall", "Waterfall", True)

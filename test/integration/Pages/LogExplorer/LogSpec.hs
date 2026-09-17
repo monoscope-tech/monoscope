@@ -3,6 +3,7 @@ module Pages.LogExplorer.LogSpec (spec) where
 import Control.Concurrent (threadDelay)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
+import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HashMap
 import Data.Map.Strict qualified as Map
@@ -77,7 +78,7 @@ fetchDataIn tr pid q cols cur since from to = fetchDataDirIn tr pid q cols cur N
 
 
 fetchDataDirIn :: TestResources -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Parser.PageDirection -> Maybe Text -> Maybe Text -> Maybe Text -> IO Log.LogResult
-fetchDataDirIn tr pid q cols cur dir since from to = snd <$> testServant tr (Log.logExplorerDataH pid q cols cur dir since from to Nothing Nothing Nothing)
+fetchDataDirIn tr pid q cols cur dir since from to = snd <$> testServant tr (Log.logExplorerDataH pid def{Log.query = q, Log.cols = cols, Log.cursor = cur, Log.direction = dir, Log.since = since, Log.from = from, Log.to = to})
 
 
 -- | Re-run @act@ until @ok@ holds, then return the last result (which the caller

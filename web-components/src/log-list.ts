@@ -3759,7 +3759,9 @@ export class LogList extends LitElement {
           ? html`<div role="cell" class=${`${cellBg} group-hover:bg-inherit pl-2 shrink-0 col-latency_breakdown`}>
               ${this.logItemCol(rowData, 'latency_breakdown')}
             </div>`
-          : html`<td class=${`sticky right-0 max-md:static z-10 ${cellBg} group-hover:bg-inherit pl-2 shrink-0`}>
+          : html`<td class=${`sticky right-0 max-md:static z-10 ${cellBg} group-hover:bg-inherit pl-2 shrink-0 ${
+              this.isNarrow ? '' : 'col-latency_breakdown'
+            }`}>
               ${this.logItemCol(rowData, 'latency_breakdown')}
             </td>`
         : nothing;

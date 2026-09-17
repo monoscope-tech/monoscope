@@ -107,7 +107,7 @@ fetchProjectSpec tr = snd <$> testServant tr (ApiCatalog.apiSpecJsonH pid Nothin
 
 spec :: Spec
 spec = sequential $ aroundAll withTestResources $ describe "API catalog – learned OpenAPI" do
-  it "preserves all observed examples and formats, including shape variants" do
+  it "preserves all observed examples and formats, including shape variants" \_ -> do
     let stringField formats = Catalog.FieldStruct (HS.singleton Catalog.FTString) formats Catalog.FCRequestBody False
         evidence fs values = (fs, Just (Catalog.Examples $ V.fromList values), Nothing)
         schema =

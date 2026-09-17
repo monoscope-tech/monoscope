@@ -1459,7 +1459,7 @@ sessionsTable_ workspace now links query sessionFilter selectedSession sessions 
               { Table.attrs = [class_ "w-[38%] px-2 py-2"]
               , Table.headerExtra = Just $ span_ [class_ "md:hidden"] "Session"
               }
-          , ( Table.col "Last page" \session -> do
+          , ( Table.col "Landing page" \session -> do
                 -- Display the distinguishing path; keep the full URL available on hover.
                 span_ [class_ $ "block text-sm text-textStrong" <> bool "" " truncate" (isJust session.lastPage), title_ $ fromMaybe "" session.lastPage]
                   $ toHtml

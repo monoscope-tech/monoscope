@@ -1,5 +1,6 @@
 module CLI.CLISpec (spec) where
 
+import Data.Default (def)
 import Relude hiding (get, put)
 
 import Control.Lens ((.~), (^.))
@@ -116,7 +117,7 @@ spec = around withTestResources do
 
       (_, pg) <-
         testServant tr $
-          Log.logExplorerDataH testPid Nothing Nothing Nothing Nothing Nothing (Just $ timeAt (-3600)) (Just $ timeAt 3600) Nothing Nothing Nothing
+          Log.logExplorerDataH testPid def{Log.from = Just $ timeAt (-3600), Log.to = Just $ timeAt 3600}
       checkJsonValue (AE.toJSON pg) $ \obj ->
         shouldHaveKeys obj ["cols", "logsData", "count", "serviceColors", "hasMore"]
 

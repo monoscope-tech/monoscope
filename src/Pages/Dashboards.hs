@@ -956,7 +956,7 @@ widgetMetrics pid (sinceStr, fromDStr, toDStr) allParams widget =
   Charts.queryMetrics widget.dbSource (Just dataType) (Just pid) query sql sinceStr fromDStr toDStr Nothing (Just $ binDensityFor $ Just $ Widget.mapWidgetTypeToChartType widget.wType) allParams
   where
     (chartQuery, dataType) = Widget.chartQuery widget
-    (query, sql) = if widget.wType == Widget.WTTable then Widget.tableQuery widget (find ((== "table-sort") . fst) allParams >>= snd) else (chartQuery, widget.sql)
+    (query, sql) = if widget.wType == Widget.WTTable then Widget.tableQuery widget (join $ lookup "table-sort" allParams) else (chartQuery, widget.sql)
 
 
 -- | Fetch widget data based on widget type (for stat and chart widgets)

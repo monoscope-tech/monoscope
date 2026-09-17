@@ -100,7 +100,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.IO.Error (userError)
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent, useTfReads)
-import Utils (LoadingSize (..), LoadingType (..), checkFreeTierStatus, countNoun, faSprite_, formatOffset, formatUTC, formatWithCommas, hostPath, htmxOverlayIndicator_, isoT, loadingIndicator_, lookupValueText, renderMarkdown, timeScopedUrl, toUriStr)
+import Utils (LoadingSize (..), LoadingType (..), checkFreeTierStatus, countNoun, faSprite_, formatOffset, formatUTC, formatWithCommas, hostPath, isoT, loadingIndicator_, lookupValueText, renderMarkdown, timeScopedUrl, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData)
 

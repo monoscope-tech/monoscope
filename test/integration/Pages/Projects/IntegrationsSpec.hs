@@ -228,13 +228,13 @@ spec = sequential $ aroundAll withTestResources $ do
 
     describe "alert identity privacy" $ do
       it "defaults to including user identity and persists an explicit opt-out" \tr -> do
-        Projects.includeAlertUserIdentity testPid `shouldReturn` True
+        runQueryEffect tr (Projects.includeAlertUserIdentity testPid) `shouldReturn` True
         void $ testServant tr $ Pages.updateNotificationsChannel testPid (Pages.NotifListForm [] [] [] [] (Just False))
-        Projects.includeAlertUserIdentity testPid `shouldReturn` False
+        runQueryEffect tr (Projects.includeAlertUserIdentity testPid) `shouldReturn` False
         void $ testServant tr $ Pages.updateNotificationsChannel testPid (Pages.NotifListForm [] [] [] [] Nothing)
-        Projects.includeAlertUserIdentity testPid `shouldReturn` False
+        runQueryEffect tr (Projects.includeAlertUserIdentity testPid) `shouldReturn` False
         void $ testServant tr $ Pages.updateNotificationsChannel testPid (Pages.NotifListForm [] [] [] [] (Just True))
-        Projects.includeAlertUserIdentity testPid `shouldReturn` True
+        runQueryEffect tr (Projects.includeAlertUserIdentity testPid) `shouldReturn` True
 
 
 -- Helper functions

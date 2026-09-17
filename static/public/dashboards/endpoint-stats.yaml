@@ -116,15 +116,19 @@ tabs:
         layout: { w: 6, h: 4 }
         columns:
           - field: status_code
+            sortable: true
             title: Status Code
           - field: count
+            sortable: true
             title: Count
             columnType: number
             progress: column_percent
           - field: pct
+            sortable: true
             title: '% of Total'
             progress: value_percent
           - field: avg_latency
+            sortable: true
             title: Avg Latency
             columnType: duration
             unit: ms
@@ -132,16 +136,17 @@ tabs:
         sql: |
           SELECT
             COALESCE(attributes___http___response___status_code::text, 'unknown') as status_code,
-            COUNT(*)::text as count,
-            ROUND((COUNT(*)::float * 100.0 / GREATEST(1, SUM(COUNT(*)) OVER ())::float)::numeric, 1)::float::text as pct,
-            ROUND((AVG(duration) / 1e6)::numeric, 2)::text as avg_latency
+            COUNT(*) as count,
+            ROUND((COUNT(*)::float * 100.0 / GREATEST(1, SUM(COUNT(*)) OVER ())::float)::numeric, 1)::float as pct,
+            ROUND((AVG(duration) / 1e6)::numeric, 2) as avg_latency
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
             AND hashes @> ARRAY['{{var-endpointHash}}']
             {{time_filter}}
           GROUP BY attributes___http___response___status_code
-          ORDER BY COUNT(*) DESC
+          ORDER BY {{table_sort}}
           LIMIT 20
+        default_sort: "COUNT(*) DESC"
 
       # Downstream dependencies table
       - type: table
@@ -150,17 +155,21 @@ tabs:
         layout: { w: 6, h: 4 }
         columns:
           - field: operation
+            sortable: true
             title: Operation
           - field: calls
+            sortable: true
             title: Calls
             columnType: number
             progress: column_percent
           - field: avg_latency
+            sortable: true
             title: Avg Latency
             columnType: duration
             unit: ms
             progress: column_percent
           - field: error_rate
+            sortable: true
             title: Error Rate
             unit: '%'
             progress: value_percent
@@ -175,9 +184,9 @@ tabs:
           )
           SELECT
             o.name as operation,
-            COUNT(*)::text as calls,
-            ROUND((AVG(o.duration) / 1e6)::numeric, 2)::text as avg_latency,
-            ROUND((COUNT(*) FILTER (WHERE o.status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*)))::numeric, 2)::text as error_rate
+            COUNT(*) as calls,
+            ROUND((AVG(o.duration) / 1e6)::numeric, 2) as avg_latency,
+            ROUND((COUNT(*) FILTER (WHERE o.status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*)))::numeric, 2) as error_rate
           FROM otel_logs_and_spans o
           INNER JOIN endpoint_spans es ON o.context___trace_id = es.trace_id
           WHERE o.project_id='{{project_id}}'
@@ -186,8 +195,9 @@ tabs:
             AND o.duration IS NOT NULL
             {{time_filter}}
           GROUP BY o.name
-          ORDER BY COUNT(*) DESC
+          ORDER BY {{table_sort}}
           LIMIT 20
+        default_sort: "COUNT(*) DESC"
 
       # Traces — the log explorer's own list, so rows expand into their span tree
       # and click through to the full detail panel.

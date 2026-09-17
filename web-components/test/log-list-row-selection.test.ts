@@ -129,3 +129,15 @@ describe('the request it issues', () => {
     expect(new URLSearchParams(window.location.search).get('target_event')).toContain('evt-9');
   });
 });
+
+test.each([false, true])('Issues panel keeps fractional inline sizing; drawer=%s', async (drawer) => {
+  const panel = document.querySelector<HTMLElement>('#log_details_container')!;
+  panel.dataset.inlineWidth = '33.333333%';
+  panel.style.width = '0px';
+  document.body.insertAdjacentHTML('beforeend', `<input type="checkbox" id="details-open"><input type="checkbox" id="details-drawer-mode" ${drawer ? 'checked' : ''}>`);
+  const el = await mountList();
+  const rows = buildRows(1);
+  clickRow(el, rows[0].tr, 'r0');
+  expect(document.querySelector<HTMLInputElement>('#details-open')!.checked).toBe(true);
+  await vi.waitFor(() => expect(panel.style.width).toBe(drawer ? '0px' : '33.333333%'));
+});

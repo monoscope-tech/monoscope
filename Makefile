@@ -176,7 +176,7 @@ test-unit:
 	cabal test unit-tests -j --ghc-options="-O0"  --test-show-details=direct --test-options='--color --jobs=$(NCPUS)'
 
 test-doctests:
-	cabal test doctests -j --ghc-options="-O0" --test-show-details=direct
+	cabal test doctests -f-devtest -j --ghc-options="-O0" --test-show-details=direct
 
 # USE_EXTERNAL_DB=true is load-bearing on every target below that touches the DB: it selects
 # the TimescaleDB container. Drop it and the harness boots tmp-postgres from the homebrew

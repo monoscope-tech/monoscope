@@ -6,6 +6,7 @@ import Data.Aeson.KeyMap qualified as KM
 import Data.ByteArray qualified as BA
 import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Lazy qualified as BL
+import Data.Default (def)
 import Data.Pool (Pool, withResource)
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
@@ -174,7 +175,7 @@ onboardingTests =
 
       let from = toText $ iso8601Show $ addUTCTime (-60) eventTime
           to = toText $ iso8601Show $ addUTCTime 60 eventTime
-      (_, events) <- testServant tr $ Log.logExplorerDataH testPid (Just "span_name == \"onboarding-first-span\"") Nothing Nothing Nothing Nothing (Just from) (Just to) Nothing Nothing Nothing
+      (_, events) <- testServant tr $ Log.logExplorerDataH testPid def{Log.query = Just "span_name == \"onboarding-first-span\"", Log.from = Just from, Log.to = Just to}
       V.length events.logsData `shouldBe` 1
 
 

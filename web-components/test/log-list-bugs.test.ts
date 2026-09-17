@@ -186,6 +186,19 @@ describe('LogList — LOWER', () => {
     expect(header.querySelector('button')).toBeNull();
   });
 
+  test('desktop latency cells use the same fixed trailing column as their header', async () => {
+    const el = await mountList();
+    (el as any).logsColumns = ['id', 'timestamp', 'service', 'summary', 'latency_breakdown'];
+    (el as any).colIdxMap = { id: 0, timestamp: 1, service: 2, summary: 3 };
+    const body = document.createElement('tbody');
+    document.body.appendChild(document.createElement('table')).appendChild(body);
+
+    render((el as any).logItemRow({ ...row('latency-row'), data: ['latency-row', '2026-09-16T21:32:31.495Z', 'frontend', []] }), body);
+
+    const latency = body.querySelector('td.sticky.right-0');
+    expect(latency?.classList).toContain('col-latency_breakdown');
+  });
+
   // FlowLayout defaults to 100px before its first measurement, but logs are fixed
   // at 28px. The inflated estimate caused oversized scroll gaps.
   test('virtualizer starts with the dense log-row height and bounded overhang', () => {

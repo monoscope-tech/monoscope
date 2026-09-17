@@ -131,6 +131,7 @@ import Lucid.Htmx (hxBoost_, hxGet_, hxIndicator_, hxSelect_, hxSwap_, hxTarget_
 import Lucid.Hyperscript (__)
 import Lucid.Svg qualified as Svg
 import Models.Projects.Projects qualified as Projects
+import NeatInterpolation (text)
 import Network.HTTP.Types (urlEncode)
 import Network.URI (escapeURIString, isUnescapedInURI)
 import Numeric (showFFloat, showHex)
@@ -308,10 +309,13 @@ fieldContextMenuItems_ ctx = traverse_ \case
     -- reaching an enclosing <label for> (facet-section collapse header).
     copyItem_ label tip expr =
       menuItem_ "copy" label tip
-        $ term "_"
-        $ "on click if 'clipboard' in window.navigator then\n  call navigator.clipboard.writeText("
-        <> expr
-        <> ")\n  send successToast(value:['Copied to Clipboard']) to <body/>\n  halt\nend"
+        $ term
+          "_"
+          [text|on click if 'clipboard' in window.navigator then
+            call navigator.clipboard.writeText($expr)
+            send successToast(value:['Copied to Clipboard']) to <body/>
+            halt
+          end|]
     -- w-full so the item fills the fixed-width menu; the label then shrinks
     -- (min-w-0) and truncates instead of widening the menu / scrolling it.
     -- @tip@ (full key/value) becomes a native `title` tooltip so the truncated text

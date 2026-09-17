@@ -175,12 +175,21 @@ pngExportSize profile = case fromMaybe PngStandard profile of
 -- a declared column plus a closed direction.
 newtype SqlOrder = SqlOrder {unSqlOrder :: Text}
   deriving stock (Eq, Generic, Show, THS.Lift)
-  deriving newtype (AE.FromJSON, AE.ToJSON)
-  deriving anyclass (NFData)
+  deriving newtype (AE.ToJSON, NFData)
 
 
+-- | Construct a non-empty SQL ordering expression.
+--
+-- >>> isJust $ mkSqlOrder "duration ASC"
+-- True
+-- >>> mkSqlOrder "   "
+-- Nothing
 mkSqlOrder :: Text -> Maybe SqlOrder
 mkSqlOrder = fmap SqlOrder . nonEmptyT . Just . T.strip
+
+
+instance AE.FromJSON SqlOrder where
+  parseJSON = AE.withText "SqlOrder" $ maybe (fail "SQL order must not be empty") pure . mkSqlOrder
 
 
 instance FromHttpApiData SqlOrder where
@@ -902,6 +911,12 @@ sortableColumn :: Widget -> TableColumn -> Bool
 sortableColumn widget col = maybe (col.sortable /= Just False) (\sql -> col.sortable == Just True && isJust widget.defaultSort && "{{table_sort}}" `T.isInfixOf` sql) widget.sql
 
 
+data SortDirection = SortAscending | SortDescending
+
+
+data TableSort = TableSort Text SortDirection
+
+
 -- | Resolve only a declared field; quote it as an identifier, never as SQL syntax.
 --
 -- >>> tableQuery (def & #query ?~ "foo") (Just "-unknown")
@@ -911,15 +926,16 @@ sortableColumn widget col = maybe (col.sortable /= Just False) (\sql -> col.sort
 tableQuery :: Widget -> Maybe Text -> (Maybe Text, Maybe Text)
 tableQuery widget sortParam = (query, sql)
   where
-    renderTableSort (name, descending) =
-      "\"" <> T.replace "\"" "\"\"" name <> "\" " <> if descending then "DESC NULLS LAST" else "ASC NULLS LAST"
-    renderKqlSort (name, descending) = name <> if descending then " desc" else " asc"
+    renderDirection SortAscending = "ASC"
+    renderDirection SortDescending = "DESC"
+    renderTableSort (TableSort name direction) = "\"" <> T.replace "\"" "\"\"" name <> "\" " <> renderDirection direction <> " NULLS LAST"
+    renderKqlSort (TableSort name direction) = name <> " " <> T.toLower (renderDirection direction)
     selected = do
       raw <- sortParam
       (sign, name) <- T.uncons raw
       guard (sign == '+' || sign == '-')
       col <- find (\c -> c.field == name && sortableColumn widget c) (fold widget.columns)
-      pure (col.field, sign == '-')
+      pure $ TableSort col.field $ if sign == '-' then SortDescending else SortAscending
     order = renderTableSort <$> selected <|> ((.unSqlOrder) <$> widget.defaultSort)
     sql =
       widget.sql >>= \rawSql ->

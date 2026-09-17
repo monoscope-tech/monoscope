@@ -1814,7 +1814,6 @@ code, pre, .code, .monospace {
   }
 
   /* Hide close/collapse buttons in investigation panel context */
-  .investigation-details .detail-close-btn,
   .investigation-content .trace-collapse-btn {
     display: none !important;
   }
