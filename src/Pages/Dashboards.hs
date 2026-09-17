@@ -1556,6 +1556,8 @@ widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = do
               , notifyAfter = Nothing
               , stopAfterCheck = Nothing
               , stopAfter = Nothing
+              , environment = Nothing
+              , service = Nothing
               }
 
       let queryMonitor = Alerts.convertToQueryMonitor pid now queryMonitorId alertForm

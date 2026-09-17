@@ -1076,10 +1076,10 @@ logSessionsH pid queryM' sinceM fromM toM skipM sortByM = do
 -- hot path — the shell no longer forks a teams query or renders this every load.
 alertFormH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 alertFormH pid alertM = do
-  (_, project) <- Projects.sessionAndProject pid
+  (session, project) <- Projects.sessionAndProject pid
   alertDM <- lookupAlert alertM
   teams <- V.fromList <$> ManageMembers.getTeams pid
-  addRespHeaders $ alertConfigurationForm_ project alertDM teams
+  addRespHeaders $ alertConfigurationForm_ project session.environment alertDM teams
 
 
 -- | Queue facet generation for a project whose summary hasn't been built yet.
@@ -1937,9 +1937,11 @@ curateCols addCols removeCols = sortOn rank . filter keep
 
 
 -- | Render alert configuration form for creating log-based alerts
-alertConfigurationForm_ :: Projects.Project -> Maybe Monitors.QueryMonitor -> V.Vector ManageMembers.Team -> Html ()
-alertConfigurationForm_ project alertM teams = do
+alertConfigurationForm_ :: Projects.Project -> Maybe Text -> Maybe Monitors.QueryMonitor -> V.Vector ManageMembers.Team -> Html ()
+alertConfigurationForm_ project selectedEnvironment alertM teams = do
   let pid = project.id
+      monitorEnvironment = maybe selectedEnvironment (.environment) alertM
+      monitorService = alertM >>= (.service)
   div_ [class_ "surface-raised h-full flex flex-col group/alt"] do
     div_ [class_ "flex items-center justify-between px-4 py-2.5"] do
       div_ [class_ "flex items-center gap-2.5"] do
@@ -1970,6 +1972,13 @@ alertConfigurationForm_ project alertM teams = do
           AlertUI.monitorScheduleSection_ project.paymentPlan defaultFrequency 5 conditionType
 
           AlertUI.thresholdsSection_ (alertM >>= (.alertConfig.unit)) Nothing (fmap (.alertThreshold) alertM) ((.warningThreshold) =<< alertM) (maybe False (.triggerLessThan) alertM) ((.alertRecoveryThreshold) =<< alertM) ((.warningRecoveryThreshold) =<< alertM)
+
+          div_ [class_ "border-y border-strokeWeak py-3"] do
+            p_ [class_ "text-sm font-medium text-textStrong"] "Scope"
+            p_ [class_ "mb-2 text-xs text-textWeak"] "Evaluate this monitor only for this environment or service. Leave a field empty to include all."
+            div_ [class_ "flex gap-2 max-sm:flex-col"] do
+              div_ [class_ "flex-1"] $ formField_ FieldSm def{value = fromMaybe "" monitorEnvironment, placeholder = "e.g. production"} "Environment" "environment" False Nothing
+              div_ [class_ "flex-1"] $ formField_ FieldSm def{value = fromMaybe "" monitorService, placeholder = "e.g. checkout"} "Service" "service" False Nothing
 
           let selectedTeamIds = maybe V.empty (.teams) alertM
           AlertUI.notificationSettingsSection_ ((.alertConfig.severity) <$> alertM) ((.alertConfig.subject) <$> alertM) ((.alertConfig.message) <$> alertM) (maybe True (.alertConfig.emailAll) alertM) teams selectedTeamIds "alert-form" alertM

@@ -106,7 +106,12 @@ spec = sequential $ aroundAll withTestResources do
                 , notifyAfter = Nothing
                 , stopAfterCheck = Nothing
                 , stopAfter = Nothing
+                , environment = Just "production"
+                , service = Just "checkout"
                 }
+      queryMonitor.environment `shouldBe` Just "production"
+      queryMonitor.service `shouldBe` Just "checkout"
+      queryMonitor.logQueryAsSql `shouldContainAll` ["resource___deployment___environment___name = 'production'", "resource___service___name = 'checkout'"]
       respC <- runTestBg frozenTime tr $ Monitors.queryMonitorUpsert queryMonitor
       respC `shouldBe` 1
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
@@ -303,6 +308,8 @@ spec = sequential $ aroundAll withTestResources do
                 , notifyAfter = Nothing
                 , stopAfterCheck = Nothing
                 , stopAfter = Nothing
+                , environment = Nothing
+                , service = Nothing
                 }
       -- Insert the monitor
       _ <- runTestBg frozenTime tr $ Monitors.queryMonitorUpsert queryMonitor

@@ -1010,7 +1010,9 @@ spec = around withTestResources do
   describe "Alert form endpoint (alertFormH)" do
     it "renders the create-monitor form" \tr -> do
       (_, html) <- testServant tr $ Log.alertFormH testPid Nothing
-      LT.toStrict (Lucid.renderText html) `shouldSatisfy` T.isInfixOf "Create monitor"
+      let rendered = LT.toStrict $ Lucid.renderText html
+      rendered `shouldSatisfy` T.isInfixOf "Create monitor"
+      rendered `shouldContainAll` ["Scope", "name=\"environment\"", "name=\"service\""]
 
   describe "Log item detail (expandAPIlogItemH)" do
     it "trace-timefusion-read loads a span and decodes legacy NULL hashes on PG" \tr -> do

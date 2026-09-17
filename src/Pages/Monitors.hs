@@ -105,6 +105,8 @@ data AlertUpsertForm = AlertUpsertForm
   , notifyAfter :: Maybe Text
   , stopAfterCheck :: Maybe Bool
   , stopAfter :: Maybe Int
+  , environment :: Maybe Text
+  , service :: Maybe Text
   }
   deriving stock (Generic, Show)
   -- The alert editor posts @teams@ through the same @getTagValues@ hx-vals as the
@@ -114,7 +116,9 @@ data AlertUpsertForm = AlertUpsertForm
 
 convertToQueryMonitor :: Projects.ProjectId -> UTCTime -> Monitors.QueryMonitorId -> AlertUpsertForm -> Monitors.QueryMonitor
 convertToQueryMonitor projectId now queryMonitorId alertForm =
-  let sqlQueryCfg = (defSqlQueryCfg projectId fixedUTCTime Nothing Nothing){alertLookbackMins = timeWindowMins}
+  let environment = mfilter (not . T.null) $ T.strip <$> alertForm.environment
+      service = mfilter (not . T.null) $ T.strip <$> alertForm.service
+      sqlQueryCfg = (defSqlQueryCfg projectId fixedUTCTime Nothing Nothing){alertLookbackMins = timeWindowMins, environment, service}
       (_, qc) = fromRight' $ parseQueryToComponents sqlQueryCfg alertForm.query
       warningThresholdD = readMaybe . toString =<< alertForm.warningThreshold
 
@@ -170,8 +174,8 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
         , stopAfterCount = stopCount
         , notificationCount = 0
         , timeWindowMins
-        , environment = Nothing
-        , service = Nothing
+        , environment
+        , service
         }
 
 
@@ -206,7 +210,7 @@ alertUpsertPostH pid form = do
       -- deactivatedAt to Nothing — so carry the stored value or editing a deactivated
       -- monitor here would silently re-activate it.
       withStoredState m = maybe m (\e -> m{Monitors.deactivatedAt = e.deactivatedAt}) existingMonitor
-      queryMonitor = withStoredState $ maybe baseMonitor (\e -> baseMonitor{Monitors.logQuery = e.logQuery, Monitors.logQueryAsSql = e.logQueryAsSql}) $ mfilter (isJust . (.widgetId)) existingMonitor
+      queryMonitor = withStoredState $ maybe baseMonitor (\e -> baseMonitor{Monitors.logQuery = e.logQuery, Monitors.logQueryAsSql = e.logQueryAsSql, Monitors.environment = e.environment, Monitors.service = e.service}) $ mfilter (isJust . (.widgetId)) existingMonitor
 
   _ <- Monitors.queryMonitorUpsert queryMonitor
   when (isNothing alertId)
