@@ -64,6 +64,8 @@ module Models.Telemetry.Telemetry (
   SilentUnderPersistError (..),
   unaccountedRows,
   retryHasqlWrite,
+  maxPgWriteAttempts,
+  maxTfWriteAttempts,
   maxReadAttempts,
   handOffBatches,
   mintOtelLogIds,
@@ -1454,15 +1456,16 @@ writeFailureDlqHeaders wf =
         ]
 
 
--- | Cap on retry attempts per store inside 'retryHasqlWrite'. ~25s of wall
--- time at the exponential backoff used here. Both PG and TF call sites pass
--- this so a future tuning change moves both in lock-step.
-maxWriteAttempts :: Int
-maxWriteAttempts = 10
+-- | PostgreSQL keeps the established retry budget. TimeFusion gets four more
+-- attempts because its measured deployment handoff took 38.47s from the first
+-- client-visible refusal to PGWire readiness. Its 13 sleeps total 41.3s before
+-- the final attempt; statement and connection time are additional.
+maxPgWriteAttempts, maxTfWriteAttempts :: Int
+(maxPgWriteAttempts, maxTfWriteAttempts) = (10, 14)
 
 
 -- | Retry a Hasql write up to @n@ times on transient errors with exponential
--- backoff (100ms → 5s cap; ~25s total at n=10). Non-transient errors return
+-- backoff (100ms → 5s cap). Non-transient errors return
 -- 'Left' immediately. TimeFusion's PGWire "TuplesOk" wire-mismatch is treated
 -- as success (rows landed; only the wire tag is wrong) — retrying would
 -- duplicate rows. PG never produces "TuplesOk" so the swallow is a no-op there.
@@ -1560,12 +1563,12 @@ dualWrite
   -> Eff es (Either WriteFailure (), Bool)
 dualWrite submitted target writePg writeTf = case target of
   WriteBoth -> Ki.scoped \scope -> do
-    pgThread <- forkWithCtx scope $ retryHasqlWrite maxWriteAttempts "pg" writePg
-    tfThread <- forkWithCtx scope $ retryHasqlWrite maxWriteAttempts "tf" writeTf
+    pgThread <- forkWithCtx scope $ retryHasqlWrite maxPgWriteAttempts "pg" writePg
+    tfThread <- forkWithCtx scope $ retryHasqlWrite maxTfWriteAttempts "tf" writeTf
     (pgRes, tfRes) <- Ki.atomically $ (,) <$> Ki.await pgThread <*> Ki.await tfThread
     (,fullyPersisted pgRes || fullyPersisted tfRes) <$> classify pgRes tfRes
-  WritePgOnly -> singleLeg "pg" This (,0) =<< retryHasqlWrite maxWriteAttempts "pg" writePg
-  WriteTfOnly -> singleLeg "tf" That (0,) =<< retryHasqlWrite maxWriteAttempts "tf" writeTf
+  WritePgOnly -> singleLeg "pg" This (,0) =<< retryHasqlWrite maxPgWriteAttempts "pg" writePg
+  WriteTfOnly -> singleLeg "tf" That (0,) =<< retryHasqlWrite maxTfWriteAttempts "tf" writeTf
   where
     lostOf = unaccountedRows submitted
     fullyPersisted = either (const False) ((== 0) . lostOf)

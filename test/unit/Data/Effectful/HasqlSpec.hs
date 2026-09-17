@@ -4,6 +4,7 @@ import Data.Effectful.Hasql qualified as EHasql
 import Data.Text qualified as T
 import Hasql.Errors qualified as HE
 import Hasql.Pool qualified as HP
+import Models.Telemetry.Telemetry qualified as Telemetry
 import Relude
 import Test.Hspec
 
@@ -56,6 +57,21 @@ spec = describe "isTransientException" $ do
     $ EHasql.isTransientException (asExc emptyScriptError)
     `shouldBe` True
 
+  it "retries TimeFusion's deployment handoff responses"
+    $ for_ handoffErrors
+    $ \err ->
+      EHasql.isTransientException (asExc err) `shouldBe` True
+
+  it "keeps unrelated and near-match XX000 server failures non-transient"
+    $ for_ nonHandoffInternalErrors
+    $ \err ->
+      EHasql.isTransientException (asExc err) `shouldBe` False
+
+  it "keeps PostgreSQL's retry budget and gives TimeFusion 41.3s before its last attempt" $ do
+    Telemetry.maxPgWriteAttempts `shouldBe` 10
+    Telemetry.maxTfWriteAttempts `shouldBe` 14
+    sum (EHasql.transientBackoffMicros <$> [1 .. Telemetry.maxTfWriteAttempts - 1]) `shouldBe` 41300000
+
   -- Regression for the 2026-07-06 wedged-node incident: session-backfill's
   -- lock_timeout (55P03) is an expected, self-healing skip. It must be
   -- classified so callers can swallow it as a no-op instead of surfacing it
@@ -91,6 +107,18 @@ spec = describe "isTransientException" $ do
       HP.SessionUsageError (HE.StatementSessionError 1 0 "insert into otel_logs_and_spans ..." [] True (HE.ServerStatementError (HE.ServerError "23505" "duplicate key value violates unique constraint" Nothing Nothing Nothing)))
     emptyScriptError =
       HP.SessionUsageError (HE.ScriptSessionError "vacuum analyze" (HE.ServerError "" "Server error" Nothing Nothing Nothing))
+    handoffErrors =
+      [ serverError "57P03" "the database system is starting up"
+      , scriptServerError "57P03" "the database system is starting up"
+      , serverError "XX000" "TimeFusion is draining for deployment; retry on the replacement"
+      ]
+    nonHandoffInternalErrors =
+      [ serverError "XX000" "Arrow error: invalid UTF-8"
+      , serverError "XX000" "TimeFusion is draining; retry on the replacement"
+      ]
+    serverError code message =
+      HP.SessionUsageError (HE.StatementSessionError 1 0 "insert into otel_logs_and_spans ..." [] True (HE.ServerStatementError (HE.ServerError code message Nothing Nothing Nothing)))
+    scriptServerError code message = HP.SessionUsageError (HE.ScriptSessionError "insert batch" (HE.ServerError code message Nothing Nothing Nothing))
     lockTimeoutError =
       HP.SessionUsageError (HE.StatementSessionError 1 0 "update otel_logs_and_spans ..." [] False (HE.ServerStatementError (HE.ServerError "55P03" "canceling statement due to lock timeout" Nothing Nothing Nothing)))
     deadlockError =
