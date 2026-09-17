@@ -213,8 +213,11 @@ extra-source-files:
     static/migrations/0181_projects_subscribed_not_deactivated.sql
     static/migrations/0182_drop_anomaly_ack_mirror.sql
     static/migrations/0183_threadless_slack_roots.sql
+    static/migrations/0184_endpoint_dependency_edges.sql
     static/migrations/0184_retire_traces_widget.sql
     static/migrations/0185_alert_identity_privacy.sql
+    static/migrations/0186_activation_milestones.sql
+    static/migrations/0187_monitor_scope.sql
 
 source-repository head
   type: git
@@ -255,8 +258,8 @@ library
       Models.Apis.PrometheusScrapeConfigs
       Models.Apis.SchemaCatalog
       Models.Apis.ShareEvents
-      Models.Projects.CodeContext
       Models.Projects.Activation
+      Models.Projects.CodeContext
       Models.Projects.Dashboards
       Models.Projects.DashboardTemplates
       Models.Projects.GitSync
@@ -877,8 +880,8 @@ test-suite test-dev
       Models.Apis.PrometheusScrapeConfigs
       Models.Apis.SchemaCatalog
       Models.Apis.ShareEvents
-      Models.Projects.CodeContext
       Models.Projects.Activation
+      Models.Projects.CodeContext
       Models.Projects.Dashboards
       Models.Projects.DashboardTemplates
       Models.Projects.GitSync
