@@ -7,6 +7,7 @@ import Data.ByteArray qualified as BA
 import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Lazy qualified as BL
 import Data.Default (def)
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Pool (Pool, withResource)
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
@@ -19,16 +20,20 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (Connection, Only (..))
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Hasql.Interpolate qualified as HI
 import Lucid (renderText)
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
+import Pages.Dashboards qualified as Dashboards
 import Pages.LogExplorer.Log qualified as Log
+import Pages.Monitors qualified as Monitors
 import Pages.Onboarding qualified as Onboarding
 import Pages.Projects qualified as CreateProject
 import Pages.Projects qualified as ManageMembers
 import Pages.Replay qualified as Replay
 import Pages.Settings qualified as LemonSqueezy
 import Pages.Settings qualified as S3
+import Pages.Settings qualified as Settings
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils hiding (testPid)
 import Relude
@@ -177,6 +182,64 @@ onboardingTests =
           to = toText $ iso8601Show $ addUTCTime 60 eventTime
       (_, events) <- testServant tr $ Log.logExplorerDataH testPid def{Log.query = Just "span_name == \"onboarding-first-span\"", Log.from = Just from, Log.to = Just to}
       V.length events.logsData `shouldBe` 1
+
+      -- This is the customer journey the activation funnel measures. Use the public
+      -- handlers, then inspect only the four privacy-safe project milestones.
+      _ <-
+        testServant tr
+          $ Dashboards.dashboardsPostH
+            testPid
+            Dashboards.DashboardForm{file = "", teams = [], title = "First dashboard", fileDir = Nothing}
+      _ <-
+        testServant tr
+          $ Monitors.alertUpsertPostH
+            testPid
+            Monitors.AlertUpsertForm
+              { unit = Nothing
+              , alertId = Nothing
+              , alertThreshold = 1
+              , warningThreshold = Nothing
+              , recipientEmails = []
+              , recipientSlacks = []
+              , recipientEmailAll = Nothing
+              , direction = "above"
+              , title = "First monitor"
+              , severity = "Warning"
+              , subject = "First monitor"
+              , message = "First monitor"
+              , query = "kind == \"server\" | summarize count()"
+              , since = "1h"
+              , from = ""
+              , to = ""
+              , frequency = Nothing
+              , timeWindow = Just "1h"
+              , conditionType = Just "threshold_exceeded"
+              , source = Nothing
+              , vizType = Nothing
+              , teams = []
+              , alertRecoveryThreshold = Nothing
+              , warningRecoveryThreshold = Nothing
+              , widgetId = Nothing
+              , dashboardId = Nothing
+              , notifyAfterCheck = Nothing
+              , notifyAfter = Nothing
+              , stopAfterCheck = Nothing
+              , stopAfter = Nothing
+              }
+      runTestBg frozenTime tr
+        $ Hasql.interpExecute_
+          [HI.sql|UPDATE projects.teams SET notify_emails = ARRAY['activation@example.com']
+              WHERE project_id = #{testPid} AND is_everyone = TRUE AND deleted_at IS NULL|]
+      (testNotifications, _) <-
+        testServantWithNotifications tr
+          $ Settings.notificationsTestPostH
+            testPid
+            Settings.TestForm{Settings.issueType = "runtime_exception", Settings.channel = Settings.TCEmail, Settings.teamId = Nothing}
+      testNotifications `shouldSatisfy` (not . null)
+      milestones :: [Text] <-
+        runQueryEffect tr
+          $ Hasql.interp [HI.sql|SELECT milestone FROM projects.activation_milestones WHERE project_id = #{testPid} ORDER BY milestone|]
+      milestones `shouldBe` ["dashboard_created", "ingest_verified", "monitor_created", "notification_test_sent"]
 
 
 -- | Settings Page Tests - Verify project settings created during onboarding

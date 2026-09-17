@@ -876,6 +876,7 @@ test-suite test-dev
       Models.Apis.SchemaCatalog
       Models.Apis.ShareEvents
       Models.Projects.CodeContext
+      Models.Projects.Activation
       Models.Projects.Dashboards
       Models.Projects.DashboardTemplates
       Models.Projects.GitSync
