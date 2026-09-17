@@ -182,6 +182,9 @@ runQueryAST authCtx dbSource respDataType pid source binDensity environment quer
           }
 
   case querySQLM of
+    Just querySQL
+      | Just message <- rawSqlScopeError environment querySQL ->
+          pure (emptyMetricsFor now fromD toD){error = Just message}
     Just querySQL -> do
       let (_, qc) = queryASTToComponents sqlQueryCfg queryAST
       let mappngSQL' = mappngSQL <> M.fromList [("query_ast_filters", maybe "" (" AND " <>) qc.whereClause)]
@@ -203,6 +206,16 @@ runQueryAST authCtx dbSource respDataType pid source binDensity environment quer
        in convertTimestampsToMs
             . coerceBinnedScalar respDataType actualDataType
             <$> queryMetricsWithCache authCtx dbSource actualDataType pid source queryAST sqlQueryCfg queryM now fromD toD
+
+
+-- | A raw template cannot be safely amended at an arbitrary position. When the
+-- authenticated route selected an environment, make scope an explicit template
+-- contract instead of silently showing every environment. The generated AST
+-- predicate also includes project and time constraints.
+rawSqlScopeError :: Maybe Text -> Text -> Maybe Text
+rawSqlScopeError environment template
+  | isNothing environment || "{{query_ast_filters}}" `T.isInfixOf` template = Nothing
+  | otherwise = Just "This raw SQL widget must include {{query_ast_filters}} to respect the selected environment."
 
 
 -- | Pick the result decoder when the caller didn't. @DTMetric@ pivots on a
@@ -664,13 +677,17 @@ queryMetricsStream dbSource dataTypeM pidM queryM querySQLM sinceM fromM toM sou
       environment = Utils.nonEmptyT $ join $ lookup "environment" allParams
       mapping = variablePresets density pid.toText fromD toD allParams now
       mappingKQL = variablePresetsKQL density pid.toText fromD toD allParams now
-      parsed = first (.message) $ parseQueryDiagnosed source $ replacePlaceholders mappingKQL $ maybeToMonoid $ Utils.nonEmptyT queryM
+      raw = Utils.nonEmptyT querySQLM
+      parsed =
+        maybe
+          (first (.message) $ parseQueryDiagnosed source $ replacePlaceholders mappingKQL $ maybeToMonoid $ Utils.nonEmptyT queryM)
+          Left
+          (raw >>= rawSqlScopeError environment)
       cfg = (defSqlQueryCfg pid now source Nothing){dateRange = (fromD, toD), binDensity = density, metricJsonAsVariant = usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource, environment}
       run emit = case parsed of
         Left message -> pure $ Left message
         Right ast -> do
           let (_, components) = queryASTToComponents cfg ast
-              raw = Utils.nonEmptyT querySQLM
               actual = if isJust raw then requested else decoderFor requested ast
               sql = case raw of
                 Just template -> replacePlaceholders (mapping <> M.fromList [("query_ast_filters", maybe "" (" AND " <>) components.whereClause)]) template

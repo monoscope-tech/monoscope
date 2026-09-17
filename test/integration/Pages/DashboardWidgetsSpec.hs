@@ -417,6 +417,21 @@ spec = sequential $ aroundAll withTestResources do
       md.error `shouldBe` Nothing
       md.dataText `shouldBe` V.singleton (V.fromList ["", "after"])
 
+    -- Raw SQL has no general-purpose safe insertion point. Under the sticky
+    -- environment selector, a template must explicitly reserve the generated
+    -- AST predicate instead of silently returning every environment.
+    it "rejects an unscoped raw-SQL template when an environment is selected" \tr -> do
+      let sql = "SELECT 1::int4 AS n"
+          scoped = [("environment", Just "production")]
+          message = "This raw SQL widget must include {{query_ast_filters}} to respect the selected environment."
+      complete <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTText) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing scoped
+      complete.error `shouldBe` Just message
+      response <- runQueryEffect tr $ Charts.queryMetricsStream Nothing (Just Charts.DTText) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing scoped
+      frames <- runExceptT $ Source.runSourceT $ Servant.getResponse response
+      frames `shouldSatisfy` \case
+        Right values -> any (\case AE.Object obj -> KM.lookup "error" obj == Just (AE.String message); _ -> False) values
+        Left _ -> False
+
     -- The same trap one decoder over: a plotted widget's SQL runs as DTMetric, whose leading
     -- column the pivot reads as an epoch number. `time_bucket('1m', timestamp) AS timestamp`
     -- — the obvious way to bucket by hand, and what the KQL builder writes before wrapping it
