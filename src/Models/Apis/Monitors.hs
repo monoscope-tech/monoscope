@@ -46,6 +46,7 @@ import GHC.Records (HasField (getField))
 import Hasql.Interpolate qualified as HI
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
+import Models.Projects.Activation qualified as Activation
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (SnakeSchema (..), WrappedEnumSC (..), selectFrom)
@@ -167,9 +168,10 @@ data QueryMonitor = QueryMonitor
 
 
 queryMonitorUpsert :: DB es => QueryMonitor -> Eff es Int64
-queryMonitorUpsert qm =
-  Hasql.interpExecute
-    [HI.sql|
+queryMonitorUpsert qm = do
+  updated <-
+    Hasql.interpExecute
+      [HI.sql|
     INSERT INTO monitors.query_monitors (id, project_id, alert_threshold, warning_threshold, log_query,
                   log_query_as_sql, last_evaluated, warning_last_triggered, alert_last_triggered, trigger_less_than,
                   threshold_sustained_for_mins, alert_config, check_interval_mins, visualization_type, teams,
@@ -198,7 +200,9 @@ queryMonitorUpsert qm =
                   stop_after_count=EXCLUDED.stop_after_count,
                   time_window_mins=EXCLUDED.time_window_mins,
                   deactivated_at=EXCLUDED.deactivated_at
-    |]
+      |]
+  Activation.recordActivationMilestone qm.projectId Activation.MonitorCreated
+  pure updated
 
 
 queryMonitorById :: DB es => QueryMonitorId -> Eff es (Maybe QueryMonitor)

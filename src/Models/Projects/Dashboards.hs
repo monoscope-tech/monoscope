@@ -58,6 +58,7 @@ import Effectful.Error.Static (Error, throwError)
 import Hasql.Interpolate qualified as HI
 import Language.Haskell.TH (Exp, Q, runIO)
 import Language.Haskell.TH.Syntax qualified as THS
+import Models.Projects.Activation qualified as Activation
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Pkg.Components.TimePicker qualified as TimePicker
@@ -179,10 +180,13 @@ mkDashboardVM did pid now uid = DashboardVM{id = did, projectId = pid, createdAt
 
 
 insert :: DB es => DashboardVM -> Eff es Int64
-insert d =
-  Hasql.interpExecute
-    [HI.sql| INSERT INTO projects.dashboards (id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams, file_path, file_sha)
-           VALUES (#{d.id}, #{d.projectId}, #{d.createdAt}, #{d.updatedAt}, #{d.createdBy}, #{d.baseTemplate}, #{d.schema}, #{d.starredSince}, #{d.homepageSince}, #{d.tags}, #{d.title}, #{d.teams}::uuid[], #{d.filePath}, #{d.fileSha}) |]
+insert d = do
+  inserted <-
+    Hasql.interpExecute
+      [HI.sql| INSERT INTO projects.dashboards (id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams, file_path, file_sha)
+             VALUES (#{d.id}, #{d.projectId}, #{d.createdAt}, #{d.updatedAt}, #{d.createdBy}, #{d.baseTemplate}, #{d.schema}, #{d.starredSince}, #{d.homepageSince}, #{d.tags}, #{d.title}, #{d.teams}::uuid[], #{d.filePath}, #{d.fileSha}) |]
+  Activation.recordActivationMilestone d.projectId Activation.DashboardCreated
+  pure inserted
 
 
 yamlFiles :: FilePath -> IO [FilePath]

@@ -36,6 +36,7 @@ import Lucid.Aria qualified as Aria
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Apis.Integrations (getDiscordDataByProjectId, getProjectSlackData)
+import Models.Projects.Activation qualified as Activation
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
@@ -239,6 +240,7 @@ checkIntegrationGet pid languageM = do
     Nothing -> addErrorToast "No events found yet" Nothing >> addRespHeaders ""
     Just _ -> do
       markStepCompleted pid "Integration"
+      Activation.recordActivationMilestone pid Activation.IngestVerified
       if isJust languageM
         then addRespHeaders $ div_ [class_ "flex items-center gap-2 text-textSuccess"] do
           span_ "verified"

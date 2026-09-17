@@ -93,6 +93,7 @@ import Lucid.Htmx (hxConfirm_, hxDelete_, hxGet_, hxIndicator_, hxPatch_, hxPost
 import Lucid.Hyperscript (__)
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
+import Models.Projects.Activation qualified as Activation
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers (Team (..), getTeamsById, resolveTeamEmails)
 import Models.Projects.ProjectMembers qualified as ProjectMembers
@@ -924,6 +925,8 @@ notificationsTestPostH pid TestForm{..} = do
   void
     $ Hasql.interpExecute
       [HI.sql|INSERT INTO apis.notification_test_history (project_id, issue_type, channel, target, status, error) VALUES (#{pid}, #{issueType}, #{channel}, #{("" :: Text)}, #{status}, #{err})|]
+
+  when (status == TSSent) $ Activation.recordActivationMilestone pid Activation.NotificationTestSent
 
   Log.logTrace "Test notification complete" (channel, pid, status, attempts)
   case status of
