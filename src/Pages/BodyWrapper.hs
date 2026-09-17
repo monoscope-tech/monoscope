@@ -2,6 +2,7 @@ module Pages.BodyWrapper (bodyWrapper, BWConfig (..), PageCtx (..), mkPageCtx, w
 
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default, def)
+import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
 import Data.List (lookup)
 import Data.Text qualified as T
@@ -9,6 +10,7 @@ import Data.Tuple.Extra (fst3, uncurry3)
 import Data.Vector qualified as V
 import Effectful.Reader.Static qualified as EffReader
 import Effectful.Time qualified as Time
+import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
@@ -39,11 +41,40 @@ mkPageCtx pid = do
   -- sidebar renders, so the picker offers exactly the environments this project has
   -- reported. getFacetSummary ignores the time range.
   facetsM <- SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" now now
+  activationProgressM <-
+    if V.elem "checklist_dismissed" project.onboardingStepsCompleted
+      then pure Nothing
+      else Just <$> activationProgress pid (V.elem "Integration" project.onboardingStepsCompleted)
   let envOptions = maybe V.empty (envValues . (.facetJson)) facetsM
-  pure (sess, project, def{sessM = Just sess, currProject = Just project, config = appCtx.config, facetSummaryM = facetsM, envOptions, needsTagify = True})
+  pure (sess, project, def{sessM = Just sess, currProject = Just project, config = appCtx.config, facetSummaryM = facetsM, activationProgressM, envOptions, needsTagify = True})
   where
     envValues (SchemaCatalog.FacetData m) =
       V.fromList $ sort [v.value | v <- HM.findWithDefault [] "resource.deployment.environment.name" m, not (T.null v.value)]
+
+
+-- | The checklist is a statement of customer value, not of which links someone clicked.
+-- Ingestion is verified by the existing Integration step, which is recorded only after an
+-- event query succeeds. The remaining milestones are live facts so deleting a dashboard,
+-- monitor, or test record cannot leave the shell claiming a project is activated.
+data ActivationProgress = ActivationProgress
+  { ingestionVerified :: Bool
+  , hasDashboard :: Bool
+  , hasMonitor :: Bool
+  , hasTestNotification :: Bool
+  }
+
+
+activationProgress :: (Hasql.Hasql :> es, IOE :> es) => Projects.ProjectId -> Bool -> Eff es ActivationProgress
+activationProgress pid ingestionVerified = do
+  [(hasDashboard, hasMonitor, hasTestNotification)] <-
+    Hasql.interp
+      [HI.sql|
+        SELECT
+          EXISTS (SELECT 1 FROM projects.dashboards WHERE project_id = #{pid}),
+          EXISTS (SELECT 1 FROM monitors.query_monitors WHERE project_id = #{pid} AND deleted_at IS NULL),
+          EXISTS (SELECT 1 FROM apis.notification_test_history WHERE project_id = #{pid} AND status = 'sent')
+      |]
+  pure ActivationProgress{..}
 
 
 -- | Shortcut for settings sub-pages: sets pageTitle + isSettingsPage = True.
@@ -76,15 +107,14 @@ menu lang pid =
 
 
 -- | Onboarding checklist widget for the sidenav
-onboardingChecklist_ :: Projects.Project -> Html ()
-onboardingChecklist_ project = do
+onboardingChecklist_ :: Projects.Project -> ActivationProgress -> Html ()
+onboardingChecklist_ project progressState = do
   let pid = project.id.toText
-      has = (`V.elem` project.onboardingStepsCompleted)
       items =
-        [ (has "Integration" || has "has_events", ("Send first event", "/p/" <> pid <> "/onboarding?step=Integration", "paper-plane"))
-        , (has "explored_logs", ("Explore logs", "/p/" <> pid <> "/log_explorer", "magnifying-glass"))
-        , (has "created_monitor", ("Create a monitor", "/p/" <> pid <> "/monitors", "bell"))
-        , (has "NotifChannel", ("Set up notifications", "/p/" <> pid <> "/settings/integrations", "envelope"))
+        [ (progressState.ingestionVerified, ("Verify ingestion", "/p/" <> pid <> "/onboarding?step=Integration", "paper-plane"))
+        , (progressState.hasDashboard, ("Create a dashboard", "/p/" <> pid <> "/dashboards", "dashboard"))
+        , (progressState.hasMonitor, ("Create a monitor", "/p/" <> pid <> "/monitors", "bell"))
+        , (progressState.hasTestNotification, ("Send a test notification", "/p/" <> pid <> "/settings/integrations", "envelope"))
         ]
           :: [(Bool, (Text, Text, Text))]
       doneCount = length $ filter fst items
@@ -391,7 +421,7 @@ bodyWrapper bcfg child = do
           when (isJust bcfg.currProject)
             $ input_ [type_ "checkbox", class_ "hidden", id_ "mobile-nav-toggle", [__|on load if window.innerWidth < 768 then set #sidenav-toggle.checked to true|]]
           section_ [class_ "flex flex-row grow-0 h-screen overflow-hidden"] do
-            foldMap (\project -> sideNav sess project (fromMaybe bcfg.pageTitle bcfg.prePageTitle) (if bcfg.isSettingsPage then Just "Settings" else bcfg.menuItem)) bcfg.currProject
+            foldMap (\project -> sideNav sess project (fromMaybe bcfg.pageTitle bcfg.prePageTitle) (if bcfg.isSettingsPage then Just "Settings" else bcfg.menuItem) bcfg.activationProgressM) bcfg.currProject
             section_ [class_ "h-full overflow-y-hidden grow flex flex-col"] do
               when (sess.persistentSession.user.getUser.email == "hello@monoscope.tech") loginBanner
               -- Empty navbar anchor so OOB morph can remove non-settings navbar
@@ -571,8 +601,8 @@ projectsDropDown currProject projects = do
           $ actionLink [hxGet_ [text| /p/$pidTxt/manage_subscription |]] "dollar-sign" "Manage billing"
 
 
-sideNav :: Projects.Session -> Projects.Project -> Text -> Maybe Text -> Html ()
-sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker max-md:bg-bgBase text-sm max-md:fixed max-md:z-50 max-md:w-60 max-md:h-full max-md:-translate-x-full max-md:transition-transform group-has-[#mobile-nav-toggle:checked]/pg:max-md:translate-x-0 md:min-w-13 md:w-13 md:shrink-0 group-has-[#sidenav-toggle:checked]/pg:md:w-60 h-screen md:transition-[width] duration-200 ease-out flex flex-col justify-between", id_ "side-nav-menu"] do
+sideNav :: Projects.Session -> Projects.Project -> Text -> Maybe Text -> Maybe ActivationProgress -> Html ()
+sideNav sess project pageTitle menuItem activationProgressM = aside_ [class_ "relative bg-fillWeaker max-md:bg-bgBase text-sm max-md:fixed max-md:z-50 max-md:w-60 max-md:h-full max-md:-translate-x-full max-md:transition-transform group-has-[#mobile-nav-toggle:checked]/pg:max-md:translate-x-0 md:min-w-13 md:w-13 md:shrink-0 group-has-[#sidenav-toggle:checked]/pg:md:w-60 h-screen md:transition-[width] duration-200 ease-out flex flex-col justify-between", id_ "side-nav-menu"] do
   -- Right border resize handle (desktop only)
   label_ [term "for" "sidenav-toggle", class_ "max-md:hidden absolute right-0 top-0 bottom-0 w-1 border-r border-strokeWeak cursor-e-resize group-has-[#sidenav-toggle:checked]/pg:cursor-w-resize hover:border-strokeBrand-strong hover:w-1 transition-colors z-10", Aria.label_ "Toggle sidebar"] ""
   div_ [class_ "px-1 group-has-[#sidenav-toggle:checked]/pg:px-2"] do
@@ -669,7 +699,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
       mapM_ (uncurry3 renderNavItem) primary
       div_ [class_ "border-t border-strokeWeak/50 my-1.5 mx-2"] ""
       mapM_ (uncurry3 renderNavItem) secondary
-      onboardingChecklist_ project
+      whenJust activationProgressM $ onboardingChecklist_ project
       div_ [class_ "border-t border-strokeWeak my-2"] ""
       renderNavItem "Settings" ("/p/" <> pidTxt <> "/settings") "gear"
       a_
