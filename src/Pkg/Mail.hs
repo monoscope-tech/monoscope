@@ -380,7 +380,7 @@ impactContext impact = ["Project " <> slackEscape impact.projectName] <> maybe [
 
 impactedUser :: AlertImpact -> [Text]
 impactedUser impact = case (slackEscape <$> impact.userName, slackEscape <$> impact.userEmail) of
-  (Just name, Just email) -> ["User " <> name <> " <" <> email <> ">"]
+  (Just name, Just email) -> ["User " <> name <> " &lt;" <> email <> "&gt;"]
   (Just name, Nothing) -> ["User " <> name]
   (Nothing, Just email) -> ["User " <> email]
   (Nothing, Nothing) -> []

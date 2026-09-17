@@ -291,7 +291,7 @@ mergeExamples incoming (Examples existing)
   | otherwise =
       let bounded = V.map boundExampleValue incoming
           seen = HS.fromList (V.toList existing)
-          fresh = V.filter (\v -> not (HS.member v seen)) bounded
+          fresh = V.fromList $ ordNub [v | v <- V.toList bounded, not (HS.member v seen)]
           merged = existing V.++ V.take (examplesCap - V.length existing) fresh
        in Examples merged
 

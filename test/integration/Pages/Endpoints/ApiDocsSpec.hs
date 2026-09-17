@@ -115,8 +115,9 @@ spec = sequential $ aroundAll withTestResources $ describe "API catalog – lear
             [ ("metadata", evidence (stringField $ HS.singleton "{uuid}") [AE.String "legacy-id"])
             , ("metadata.state", evidence (stringField $ HS.fromList ["text", "{uuid}"]) [AE.String "ready", AE.String "550e8400-e29b-41d4-a716-446655440000"])
             ]
-        alternatives = fromMaybe V.empty $ schema ^? key "anyOf" . _Array
-        stateSchema = fromMaybe AE.Null $ schema ^? key "anyOf" . _Array >>= find (isJust . (^? key "properties"))
+        metadataSchema = fromMaybe AE.Null $ schema ^? key "properties" . key "metadata"
+        alternatives = fromMaybe V.empty $ metadataSchema ^? key "anyOf" . _Array
+        stateSchema = fromMaybe AE.Null $ metadataSchema ^? key "anyOf" . _Array >>= find (isJust . (^? key "properties"))
     -- A primitive-to-object evolution is a union, not a silently discarded
     -- primitive field. This is common while clients roll out independently.
     alternatives `shouldSatisfy` any (\v -> v ^? key "type" . _String == Just "string")
