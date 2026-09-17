@@ -312,7 +312,14 @@ run_body() { # <check>
       (cd web-components && npm ci --prefer-offline --no-audit && NODE_ENV=production npx vite build --mode production --sourcemap false)
       ;;
     build)      cabal build all -j $CABAL_FLAGS "$CABAL_OPTS" ;;
-    doctests)   cabal test doctests $CABAL_FLAGS "$CABAL_OPTS" --test-show-details=direct ;;
+    # doctest shells out to GHC with `-package` for each local library.  A fresh
+    # runner can legitimately reuse the separate build attestation, but then
+    # those libraries are absent from its package database.  Build them here so
+    # this check remains independently reproducible when build is skipped.
+    doctests)
+      cabal build monoscope:lib:monoscope monoscope-shared:lib:monoscope-shared monoscope-cli:lib:monoscope-cli -j $CABAL_FLAGS "$CABAL_OPTS"
+      cabal test doctests $CABAL_FLAGS "$CABAL_OPTS" --test-show-details=direct
+      ;;
     unit-tests) cabal test unit-tests $CABAL_FLAGS "$CABAL_OPTS" --test-show-details=direct ;;
     cli-tests)  cabal test monoscope-cli:cli-tests $CABAL_FLAGS "$CABAL_OPTS" --test-show-details=direct ;;
     weeder)

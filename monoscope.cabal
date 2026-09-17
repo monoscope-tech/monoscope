@@ -213,6 +213,8 @@ extra-source-files:
     static/migrations/0181_projects_subscribed_not_deactivated.sql
     static/migrations/0182_drop_anomaly_ack_mirror.sql
     static/migrations/0183_threadless_slack_roots.sql
+    static/migrations/0184_retire_traces_widget.sql
+    static/migrations/0185_alert_identity_privacy.sql
 
 source-repository head
   type: git
