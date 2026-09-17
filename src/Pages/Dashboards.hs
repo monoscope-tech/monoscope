@@ -1197,9 +1197,10 @@ dashboardBWConf bw pid paymentPlan dashId title tabM currentRange freeTierStatus
 dashboardGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (PageCtx DashboardGet))
 dashboardGetH pid dashId fileM fromDStr toDStr sinceStr hxRequest allParams = do
   let prefill = prefillFor hxRequest
-  (_, project, bw) <- mkPageCtx pid
+  (session, project, bw) <- mkPageCtx pid
   now <- Time.currentTime
   let (_fromD, _toD, currentRange) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
+      scopedParams = dashboardScopedParams session.environment allParams
 
   (dashVM, dash) <- getDashAndVM pid dashId fileM
 
@@ -1212,7 +1213,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr hxRequest allParams = do
     Nothing -> do
       -- No tabs - render the dashboard normally (existing behavior for non-tabbed dashboards)
       let timeParams = (sinceStr, fromDStr, toDStr)
-      (dash', allParamsWithConstants) <- resolveDashboardParams pid now timeParams allParams dash
+      (dash', allParamsWithConstants) <- resolveDashboardParams pid now timeParams scopedParams dash
       dash'' <-
         if isJust $ findVarToPrompt Nothing (fold dash'.variables)
           then pure dash'
@@ -2403,9 +2404,10 @@ processDashWidgets prefill pid dashId now timeParams paramsWithConstants widgets
 dashboardTabGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (PageCtx DashboardGet))
 dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr hxRequest allParams = do
   let prefill = prefillFor hxRequest
-  (_, project, bw) <- mkPageCtx pid
+  (session, project, bw) <- mkPageCtx pid
   now <- Time.currentTime
   let (_fromD, _toD, currentRange) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
+      scopedParams = dashboardScopedParams session.environment allParams
 
   (dashVM, dash) <- getDashAndVM pid dashId fileM
 
@@ -2415,7 +2417,7 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr hxRequest all
       activeTabName = fmap ((.name) . snd) activeTabInfo
       timeParams = (sinceStr, fromDStr, toDStr)
 
-  (dash', allParamsWithConstants) <- resolveDashboardParams pid now timeParams allParams dash
+  (dash', allParamsWithConstants) <- resolveDashboardParams pid now timeParams scopedParams dash
 
   -- Only process widgets for the ACTIVE tab (lazy loading - other tabs load via htmx).
   -- Note: We don't process dash.widgets here since this is a tab-based dashboard
@@ -2433,6 +2435,13 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr hxRequest all
   -- Including constants allows HTMX tab switches to skip re-executing constant queries
   let paramsWithTab = (activeTabSlugKey, Just tabSlug) : allParamsWithConstants
   addRespHeaders $ PageCtx bwconf $ DashboardGet pid dashId dash'' dashVM paramsWithTab
+
+
+-- | Dashboard URLs carry variables and time, not a second environment authority. Internal
+-- prefill reads use the sticky session scope, matching @/chart_data@, and discard a stale
+-- @environment@ query parameter before it can affect generated KQL or a cache key.
+dashboardScopedParams :: Maybe Text -> [(Text, Maybe Text)] -> [(Text, Maybe Text)]
+dashboardScopedParams environment params = ("environment", environment) : filter ((/= "environment") . fst) params
 
 
 -- | Render a single tab content panel.
