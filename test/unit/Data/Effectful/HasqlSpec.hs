@@ -80,6 +80,10 @@ spec = describe "isTransientException" $ do
     EHasql.isLockTimeout (EHasql.HasqlException lockTimeoutError) `shouldBe` True
     EHasql.isLockTimeout (EHasql.HasqlException realSqlStateError) `shouldBe` False -- 23505
     EHasql.isLockTimeout (EHasql.HasqlException deadlockError) `shouldBe` False -- 40P01
+  it "classifies statement timeout by SQLSTATE" $ do
+    let timeout = EHasql.HasqlException statementTimeoutError
+    EHasql.isStatementTimeoutException (toException timeout) `shouldBe` True
+    EHasql.isStatementTimeoutException (asExc lockTimeoutError) `shouldBe` False
   it "keeps database diagnostics without serializing ingestion parameters" do
     let payload = T.replicate 100000 "private-batch-value"
         err =
@@ -121,5 +125,7 @@ spec = describe "isTransientException" $ do
     scriptServerError code message = HP.SessionUsageError (HE.ScriptSessionError "insert batch" (HE.ServerError code message Nothing Nothing Nothing))
     lockTimeoutError =
       HP.SessionUsageError (HE.StatementSessionError 1 0 "update otel_logs_and_spans ..." [] False (HE.ServerStatementError (HE.ServerError "55P03" "canceling statement due to lock timeout" Nothing Nothing Nothing)))
+    statementTimeoutError =
+      HP.SessionUsageError (HE.StatementSessionError 1 0 "select from otel_logs_and_spans ..." [] False (HE.ServerStatementError (HE.ServerError "57014" "canceling statement due to statement timeout" Nothing Nothing Nothing)))
     deadlockError =
       HP.SessionUsageError (HE.StatementSessionError 1 0 "update otel_logs_and_spans ..." [] False (HE.ServerStatementError (HE.ServerError "40P01" "deadlock detected" Nothing Nothing Nothing)))

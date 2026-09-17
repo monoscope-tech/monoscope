@@ -2,6 +2,7 @@ module EndpointDiscoverySpec (spec) where
 
 import BackgroundJobs qualified
 import Data.Aeson qualified as AE
+import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
 import Data.UUID qualified as UUID
@@ -9,6 +10,7 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..))
+import Database.PostgreSQL.Simple qualified as SimplePG
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..))
@@ -17,6 +19,7 @@ import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
 import Test.Hspec (Spec, around, describe, it, shouldBe, shouldReturn, shouldSatisfy)
 import Text.Printf (printf)
+import UnliftIO.Exception (bracket)
 import Utils (toXXHash)
 
 
@@ -515,4 +518,24 @@ spec = around withTestResources do
         pinIssueAtFrozen tr h False
 
         runTestBg frozenTime tr $ BackgroundJobs.autoAckProvenEndpoints pid
+        queryIssueAcked tr h `shouldReturn` False
+
+      it "defers without scanning when another replica owns the evidence lease" \tr -> do
+        clearTestEndpoints tr
+        let h = "lease-busy-endpoint"
+        insertOpenIssue tr h
+        void
+          $ withPool tr.trPool
+          $ DBT.execute
+            [sql| UPDATE apis.issues
+                  SET created_at = ?, last_notified_at = ?
+                  WHERE project_id = ? AND endpoint_hash = ? |]
+            (frozenTime, Just frozenTime, pid, h)
+
+        withResource tr.trPool \conn ->
+          bracket
+            (SimplePG.query conn [sql|SELECT pg_advisory_lock(hashtext(?))|] (Only BackgroundJobs.endpointAutoAckLockName) :: IO [Only ()])
+            (\_ -> void (SimplePG.query conn [sql|SELECT pg_advisory_unlock(hashtext(?))|] (Only BackgroundJobs.endpointAutoAckLockName) :: IO [Only Bool]))
+            (const $ runTestBg frozenTime tr $ BackgroundJobs.autoAckProvenEndpoints pid)
+
         queryIssueAcked tr h `shouldReturn` False
