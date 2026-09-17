@@ -18,6 +18,7 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Hasql.Interpolate qualified as HI
 import Lucid (ToHtml, renderText, toHtml)
 import Models.Apis.ApiChanges qualified as ApiChanges
+import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects (Session (..))
 import Models.Projects.Projects qualified as Projects
@@ -537,6 +538,39 @@ spec = sequential $ aroundAll withTestResources do
       -- ends of the window: an unbounded fallback would carry neither.
       html `shouldSatisfy` T.isInfixOf "&amp;from="
       html `shouldSatisfy` T.isInfixOf "&amp;to="
+
+    -- A recovery is an episode fact, while acknowledgement is a user action.
+    -- They must meet in the issue timeline so an on-call reader can distinguish
+    -- “we stopped notifications” from “the system became healthy again.”
+    it "issue timeline shows both acknowledgement and monitor recovery" \tr -> do
+      issueId <- withResource tr.trPool \conn ->
+        maybe (fail "INSERT ... RETURNING id returned no row") (pure . fromOnly)
+          . listToMaybe
+          =<< PGS.query
+            conn
+            [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, created_at, updated_at)
+                  VALUES (?, 'query_alert', 'checkout recovery', ?, ?, ?) RETURNING id |]
+            (testPid, "checkout-recovery" :: Text, frozenTime, frozenTime)
+      _ <- testServant tr $ IssuesPage.acknowledgeIssueGetH testPid True (UUIDId issueId) Nothing
+      Just payload <- pure $ Incidents.slackPayload $ AE.object ["text" AE..= ("checkout alert" :: Text)]
+      let update at change =
+            Incidents.IncidentUpdate
+              { projectId = testPid
+              , source = Incidents.IssueIncident (UUIDId issueId)
+              , observedAt = at
+              , change
+              , delivery = Incidents.PublishIncident
+              , issueId = Just $ UUIDId issueId
+              , rootPayload = payload
+              , replyPayload = payload
+              , destinations = []
+              }
+      void $ runTestBg frozenTime tr $ Incidents.recordIncidentEvent $ update frozenTime Incidents.IncidentAlert
+      void $ runTestBg frozenTime tr $ Incidents.recordIncidentEvent $ update (addUTCTime 60 frozenTime) Incidents.IncidentRecovered
+      (_, timeline) <- testServant tr $ IssuesPage.issueActivityGetH testPid (UUIDId issueId) Nothing Nothing
+      let html = TL.toStrict $ renderText timeline
+      html `shouldSatisfy` T.isInfixOf "Acknowledged"
+      html `shouldSatisfy` T.isInfixOf "Recovered"
 
     -- Regression: the /impeccable critique found the heading outline inverted — h1 was
     -- the breadcrumb number, the issue title an h3, and on three of four types the only
