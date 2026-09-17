@@ -165,13 +165,13 @@ queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (Utils.nonEmptyT -> q
   -- otel_logs_and_spans rejects the metrics table's own columns (`metric_name`, `value`).
   case first (.message) $ parseQueryDiagnosed source $ replacePlaceholders mappngKQL $ maybeToMonoid queryM of
     Left err -> pure (emptyMetricsFor now fromD toD){error = Just err}
-    Right queryAST -> runQueryAST authCtx dbSource respDataType pid source density queryAST (maybeToMonoid queryM) querySQLM mappngSQL now fromD toD
+    Right queryAST -> runQueryAST authCtx dbSource respDataType pid source density environment queryAST (maybeToMonoid queryM) querySQLM mappngSQL now fromD toD
 
 
 -- | Run a parsed chart query, either through the caller's raw SQL template or
 -- the KQL-generated query.
-runQueryAST :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AuthContext -> Maybe Text -> DataType -> Projects.ProjectId -> Maybe Sources -> BinDensity -> [Section] -> Text -> Maybe Text -> M.Map Text Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> Eff es MetricsData
-runQueryAST authCtx dbSource respDataType pid source binDensity queryAST queryM querySQLM mappngSQL now fromD toD = do
+runQueryAST :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AuthContext -> Maybe Text -> DataType -> Projects.ProjectId -> Maybe Sources -> BinDensity -> Maybe Text -> [Section] -> Text -> Maybe Text -> M.Map Text Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> Eff es MetricsData
+runQueryAST authCtx dbSource respDataType pid source binDensity environment queryAST queryM querySQLM mappngSQL now fromD toD = do
   let sqlQueryCfg =
         (defSqlQueryCfg pid now source Nothing)
           { dateRange = (fromD, toD)
