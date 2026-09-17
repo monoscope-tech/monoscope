@@ -384,6 +384,10 @@ spec = around withTestResources do
         (json ^? key "logsData" . _Array) `shouldSatisfy` isJust
         (json ^? key "count" . _Number) `shouldSatisfy` isJust
 
+      it "includes optional environment scope in the EventsQuery schema" $ \_tr -> do
+        let bodyProperties = specJson ^? key "components" . key "schemas" . key "EventsQuery" . key "properties" . _Object
+        bodyProperties `shouldSatisfy` maybe False (AEK.member "environment")
+
       it "includes attributes only when requested" $ \tr -> do
         result <-
           toBaseServantResponse tr
