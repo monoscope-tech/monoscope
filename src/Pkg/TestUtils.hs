@@ -1615,7 +1615,7 @@ routeApiV1Get tr rest params = case T.splitOn "/" rest of
   ["metrics"] -> do
     result <-
       runQueryEffect tr
-        $ Charts.queryMetrics Nothing Nothing (Just testPid) (lookupParam "query" params) Nothing (lookupParam "since" params) (lookupParam "from" params) (lookupParam "to" params) (lookupParam "source" params) Nothing [("environment", lookupParam "environment" params)]
+        $ Charts.queryMetrics Nothing Nothing (Just testPid) (lookupParam "query" params) Nothing (lookupParam "since" params) (lookupParam "from" params) (lookupParam "to" params) (lookupParam "source" params) Nothing [("environment", lookupParam "environment" params), ("service", lookupParam "service" params)]
     pure $ mockResponse $ AE.encode result
   ["monitors"] -> jsonRoute tr (ApiH.apiMonitorsList testPid)
   ["monitors", mid] -> jsonRoute tr (ApiH.apiMonitorGet testPid (monitorId mid))

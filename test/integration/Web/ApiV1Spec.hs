@@ -63,12 +63,13 @@ spec = around withTestResources do
           Just arr -> not (null arr)
           Nothing -> False
 
-      it "makes metrics and events environment scope explicit optional parameters" $ \_tr -> do
+      it "makes metrics environment/service and event environment scope explicit optional parameters" $ \_tr -> do
         let metricParameters = specJson ^? key "paths" . key "/metrics" . key "get" . key "parameters" . _Array
             eventParameters = specJson ^? key "paths" . key "/events" . key "get" . key "parameters" . _Array
-            hasEnvironment = maybe False (any $ \parameter -> parameter ^? key "name" . _String == Just "environment")
-        metricParameters `shouldSatisfy` hasEnvironment
-        eventParameters `shouldSatisfy` hasEnvironment
+            hasParameter name = maybe False (any $ \parameter -> parameter ^? key "name" . _String == Just name)
+        metricParameters `shouldSatisfy` hasParameter "environment"
+        metricParameters `shouldSatisfy` hasParameter "service"
+        eventParameters `shouldSatisfy` hasParameter "environment"
 
       -- This list doubles as the CLI contract: every path the CLI constructs
       -- (without the /api/v1 prefix the Servant base already provides) must
