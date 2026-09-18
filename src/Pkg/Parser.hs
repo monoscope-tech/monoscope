@@ -437,9 +437,10 @@ sqlFromQueryComponents sqlCfg qc =
     -- groups (or aggregates the whole set, where a bare HAVING is still valid).
     havingClause = nq.nqHaving
     sortOrder = nq.nqOrderBy
-    groupedAggregateCols = map (resolveExtendedColumn (Map.fromList nq.nqExtendedColumns)) qc.groupByClause <> qc.aggregations
+    resolvedGroupCols = map (resolveExtendedColumn (Map.fromList nq.nqExtendedColumns)) qc.groupByClause
+    groupedAggregateCols = resolvedGroupCols <> qc.aggregations
     tableColumns = case qc.finalSummarizeQuery of
-      Just _ -> "timestamp" : filter (not . T.isInfixOf "time_bucket") (if null qc.aggregations then qc.select else qc.aggregations)
+      Just _ -> "timestamp" : filter (not . T.isInfixOf "time_bucket") (if null qc.aggregations then qc.select else groupedAggregateCols)
       Nothing -> if null qc.aggregations then nq.nqSelectCols else groupedAggregateCols
     aggregateSortOrder = if null qc.groupByClause && isNothing qc.sortFields then "" else sortOrder
     limitClause = nq.nqLimit
@@ -472,14 +473,15 @@ sqlFromQueryComponents sqlCfg qc =
             let bucketExpr = timeBucketExpr binInterval
                 -- jsonb_build_array(...) args cannot carry @AS alias@, so strip
                 -- trailing aliases from aggregations / projected cols here.
-                cols = colsNoAsClause $ if null qc.aggregations then qc.select else qc.aggregations
+                cols = colsNoAsClause $ if null qc.aggregations then qc.select else groupedAggregateCols
                 selectCols = T.intercalate "," $ filter (not . T.isInfixOf "time_bucket") cols
                 selectPart = if T.null selectCols then "" else selectCols <> ", "
                 args = "extract(epoch from " <> bucketExpr <> ")::integer, " <> selectPart <> countOver
+                bucketGroupBy = T.intercalate ", " $ bucketExpr : resolvedGroupCols
              in ( [fmt|SELECT {wrap args}
                    FROM {fromTable}
                    WHERE {buildWhere}
-                   GROUP BY {bucketExpr} {havingClause}
+                   GROUP BY {bucketGroupBy} {havingClause}
                    ORDER BY {bucketExpr} DESC
                    {limitClause} |]
                 , True

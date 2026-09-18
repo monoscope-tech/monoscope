@@ -1,22 +1,31 @@
 module Pages.Bots.AgenticSpec (spec) where
 
-import Control.Lens ((^?))
+import BackgroundJobs qualified
+import Control.Concurrent (threadDelay)
+import Control.Lens ((^..), (^?))
 import Data.Aeson qualified as AE
-import Data.Aeson.Lens (key, _Array)
+import Data.Aeson.Lens (key, values, _Array, _String)
 import Data.Default (def)
+import Data.Effectful.Hasql qualified as Hasql
+import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Text qualified as T
+import Data.Time (UTCTime, addUTCTime)
+import Data.UUID qualified as UUID
 import Effectful qualified as Eff
 import Effectful.Time qualified as Time
+import Hasql.Interpolate qualified as HI
+import Models.Apis.Issues qualified as Issues
 import Pages.Bots.BotTestHelpers (assertJsonGolden, getOpenAIKey, getOpenAIModel)
 import Pages.Bots.SeedTestData (cleanupTelemetryData, seedTelemetryData)
 import Pages.Bots.Utils (processAIQuery)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget qualified as Widget
+import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Logging
-import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldContain, shouldNotContain, shouldSatisfy)
 
 
 spec :: Spec
@@ -83,6 +92,75 @@ spec = around withTestResources do
         let body = AE.toJSON params
         isJust (body ^? key "tools" . _Array) `shouldBe` True
         (body ^? key "reasoning_effort") `shouldBe` Just (AE.String "none")
+
+      it "exposes integration actions only to action-enabled conversations" \_ -> do
+        let toolNames config = do
+              (_, _, params) <- Eff.runEff $ Time.runTime $ AI.agenticSetup config "any query" "model"
+              pure $ AE.toJSON params ^.. key "tools" . values . key "function" . key "name" . _String
+        readonly <- toolNames $ AI.defaultAgenticConfig testPid
+        actionable <- toolNames (AI.defaultAgenticConfig testPid){AI.invocationMode = AI.InteractiveWithActions}
+        readonly `shouldNotContain` ["send_to_slack"]
+        actionable `shouldContain` ["send_to_slack"]
+
+    describe "Web conversation persistence" do
+      it "lists titled threads and schedules and pauses their routine" \tr -> do
+        let convId = UUIDId UUID.nil
+        (needsTitle, summary, listed, scheduled, paused) <- runTestBg frozenTime tr do
+          void $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTWeb})|]
+          needsTitle <- Issues.conversationNeedsTitle testPid convId
+          Issues.insertChatMessage testPid convId Issues.ChatUser "Send a daily reliability brief to Slack" Nothing Nothing
+          Issues.setConversationTitle testPid convId "Daily reliability brief"
+          summary <- Issues.getConversation testPid convId
+          listed <- Issues.listConversations testPid
+          scheduled <- Issues.upsertRoutine testPid convId $ fromRightShow $ Issues.mkRoutineInterval 15
+          Issues.pauseRoutine testPid convId
+          paused <- Issues.getConversation testPid convId
+          pure (needsTitle, summary, listed, scheduled, paused)
+        needsTitle `shouldBe` True
+        (.title) <$> summary `shouldBe` Just "Daily reliability brief"
+        map (.conversationId) listed `shouldContain` [convId]
+        (.scheduledAt) <$> scheduled `shouldBe` Just (addUTCTime 900 frozenTime)
+        ((.routineActive) <$> paused, (.routineNextRunAt) =<< paused) `shouldBe` (Just False, Nothing)
+
+      it "runs a routine once, completes its lease, and keeps the synthetic prompt out of history" \tr -> do
+        executions <- newIORef ([] :: [AI.InvocationMode])
+        successors <- newIORef ([] :: [(UUIDId "ai_routine", UTCTime)])
+        let convId = UUIDId UUID.nil
+            interval = fromRightShow $ Issues.mkRoutineInterval 15
+            execute config = do
+              Eff.liftIO $ modifyIORef' executions (<> [config.invocationMode])
+              pure $ Right AI.AgenticChatResult{AI.response = "{\"explanation\":\"Routine completed\",\"widgets\":[]}", AI.toolCalls = []}
+            enqueueNext routineId at = Eff.liftIO $ modifyIORef' successors (<> [(routineId, at)])
+        (history, routine) <- runTestBg frozenTime tr do
+          void $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTWeb})|]
+          Issues.insertChatMessage testPid convId Issues.ChatUser "Send a daily reliability brief to Slack" Nothing Nothing
+          scheduled <- Issues.upsertRoutine testPid convId interval >>= maybe (throwIO $ userError "routine was not scheduled") pure
+          BackgroundJobs.runAIRoutineWith 1_000_000 execute enqueueNext tr.trATCtx scheduled.id scheduled.scheduledAt
+          -- A duplicate delivery for the completed scheduled instant must be a no-op.
+          BackgroundJobs.runAIRoutineWith 1_000_000 execute enqueueNext tr.trATCtx scheduled.id scheduled.scheduledAt
+          (,) <$> Issues.selectChatHistory testPid convId <*> Issues.getConversation testPid convId
+        readIORef executions >>= (`shouldBe` [AI.ScheduledRoutine])
+        readIORef successors >>= (\items -> length items `shouldBe` 1)
+        map (\message -> (message.role, message.content)) history
+          `shouldBe` [(Issues.ChatUser, "Send a daily reliability brief to Slack"), (Issues.ChatAssistant, "Routine completed")]
+        ((.routineRunningSince) =<< routine) `shouldBe` Nothing
+        ((.routineNextRunAt) =<< routine) `shouldSatisfy` isJust
+
+      it "records a timeout as an execution event and completes the lease" \tr -> do
+        successors <- newIORef ([] :: [UTCTime])
+        let convId = UUIDId UUID.nil
+            interval = fromRightShow $ Issues.mkRoutineInterval 15
+            execute _ = Eff.liftIO (threadDelay 50_000) $> Right AI.AgenticChatResult{AI.response = "late", AI.toolCalls = []}
+            enqueueNext _ at = Eff.liftIO $ modifyIORef' successors (<> [at])
+        (history, routine) <- runTestBg frozenTime tr do
+          void $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTWeb})|]
+          scheduled <- Issues.upsertRoutine testPid convId interval >>= maybe (throwIO $ userError "routine was not scheduled") pure
+          BackgroundJobs.runAIRoutineWith 1_000 execute enqueueNext tr.trATCtx scheduled.id scheduled.scheduledAt
+          (,) <$> Issues.selectChatHistory testPid convId <*> Issues.getConversation testPid convId
+        map (.role) history `shouldBe` [Issues.ChatExecutionEvent]
+        all (isNothing . AI.dbMessageToLLMMessage) history `shouldBe` True
+        ((.routineRunningSince) =<< routine) `shouldBe` Nothing
+        readIORef successors >>= (\items -> length items `shouldBe` 1)
 
     describe "Live API calls (uses golden files)" do
       it "processes error trend query and saves golden response" \tr -> do

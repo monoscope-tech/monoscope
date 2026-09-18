@@ -642,6 +642,23 @@ spec = sequential $ aroundAll withTestResources do
       sorted.dataText `shouldBe` V.fromList [V.singleton $ show @Text n | n <- [25, 24 .. 6 :: Int]]
       rejected.dataText `shouldBe` original.dataText
 
+    it "resolves table sorting in the eager widget endpoint" \tr -> do
+      let widget =
+            (def :: Widget.Widget)
+              { Widget.wType = Widget.WTTable
+              , Widget.dbSource = Just "postgres"
+              , Widget.columns = Just [def{Widget.field = "duration", Widget.title = "Duration", Widget.sortable = Just True}]
+              , Widget.sql = Just "SELECT n AS duration FROM generate_series(1, 25) n ORDER BY {{table_sort}} LIMIT 20"
+              , Widget.defaultSort = Widget.mkSqlOrder "duration ASC"
+              }
+          fetch params = testServant tr $ Routes.widgetGetH testPid (Just $ Utils.encodeText widget) Nothing Nothing Nothing Nothing params
+      (_, initial) <- fetch []
+      (_, descending) <- fetch [("table-sort", Just "-duration")]
+      (initial.html, descending.html)
+        `shouldSatisfy` \case
+          (Just ascHtml, Just descHtml) -> T.isInfixOf ">1<" (toStrict ascHtml) && T.isInfixOf ">25<" (toStrict descHtml)
+          _ -> False
+
   describe "Widget fetch URL size" do
     let bigSqlWidget =
           (def :: Widget.Widget)
@@ -748,6 +765,23 @@ spec = sequential $ aroundAll withTestResources do
       ws `shouldSatisfy` not . null
       map (fromMaybe "<untitled>" . (.title)) (filter prefilled ws) `shouldBe` []
       toStrict (renderText $ toHtml gated) `shouldSatisfy` T.isInfixOf "var-picker"
+
+    it "successive required pickers stay inside the dashboard fragment" \tr -> do
+      dashId <- newDashboard tr "endpoint-stats.yaml" "Successive variable pickers"
+      let open params = snd <$> testServant tr (Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") (Just "true") params)
+          partialHtml = \case
+            NavigationPartial _ fragment -> pure $ toStrict $ renderText fragment
+            NavigationFull _ -> expectationFailure "htmx picker navigation returned a full document" $> ""
+
+      firstHtml <- partialHtml =<< open []
+      firstHtml `shouldSatisfy` T.isInfixOf "Select Domain"
+      for_ ["hx-target=\"#dashboard-tabs-content\"", "hx-swap=\"outerMorph\"", "hx-push-url=\"true\""] \attr ->
+        firstHtml `shouldSatisfy` T.isInfixOf attr
+      firstHtml `shouldNotSatisfy` T.isInfixOf "hx-select=\"#main-content\""
+
+      secondHtml <- partialHtml =<< open [("var-host", Just "dellyman.com")]
+      secondHtml `shouldSatisfy` T.isInfixOf "Select Endpoint"
+      secondHtml `shouldSatisfy` T.isInfixOf "id=\"dashboard-tabs-content\""
 
   -- Picking a second domain left the Endpoint dropdown listing the first domain's
   -- endpoints. The input carries its own statement so the client can re-fetch options

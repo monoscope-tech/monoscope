@@ -123,7 +123,7 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', c
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "name==\"GET\" | summarize sum(attributes.client) by attributes.client, bin(timestamp, 60)"
       let expected =
             [text|
-      SELECT jsonb_build_array(extract(epoch from time_bucket('60 seconds', timestamp))::integer, sum((attributes->>'client')::float), count(*) OVER()) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((name = 'GET')) GROUP BY time_bucket('60 seconds', timestamp) ORDER BY time_bucket('60 seconds', timestamp) DESC |]
+      SELECT jsonb_build_array(extract(epoch from time_bucket('60 seconds', timestamp))::integer, attributes->>'client',sum((attributes->>'client')::float), count(*) OVER()) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((name = 'GET')) GROUP BY time_bucket('60 seconds', timestamp), attributes->>'client' ORDER BY time_bucket('60 seconds', timestamp) DESC |]
       normT query `shouldBe` normT expected
     it "summarize with named aggregation" do
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "timestamp >= ago(7d) | summarize TotalCount = count() by kind"
@@ -136,7 +136,7 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', c
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "name==\"GET\" | summarize sum(attributes.client) by attributes.client, bin(timestamp, 60) | sort by parent_id asc | take 1000"
       let expected =
             [text|
-      SELECT jsonb_build_array(extract(epoch from time_bucket('60 seconds', timestamp))::integer, sum((attributes->>'client')::float), count(*) OVER()) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((name = 'GET')) GROUP BY time_bucket('60 seconds', timestamp) ORDER BY time_bucket('60 seconds', timestamp) DESC limit 1000 |]
+      SELECT jsonb_build_array(extract(epoch from time_bucket('60 seconds', timestamp))::integer, attributes->>'client',sum((attributes->>'client')::float), count(*) OVER()) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((name = 'GET')) GROUP BY time_bucket('60 seconds', timestamp), attributes->>'client' ORDER BY time_bucket('60 seconds', timestamp) DESC limit 1000 |]
       normT query `shouldBe` normT expected
 
     it "summarize with bin_auto()" do
@@ -145,6 +145,12 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', c
             [text|
       SELECT jsonb_build_array(extract(epoch from time_bucket('2 hours', timestamp))::integer, count(*)::float, count(*) OVER()) FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('2 hours', timestamp) ORDER BY time_bucket('2 hours', timestamp) DESC |]
       normT query `shouldBe` normT expected
+
+    it "keeps non-time groups in binned table results" do
+      let (query, components) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize count() by bin_auto(timestamp), level"
+      query `shouldSatisfy` T.isInfixOf "jsonb_build_array(extract(epoch from time_bucket('2 hours', timestamp))::integer, level,count(*)::float"
+      query `shouldSatisfy` T.isInfixOf "GROUP BY time_bucket('2 hours', timestamp), level"
+      components.toColNames `shouldBe` ["timestamp", "level", "count_"]
 
     -- The ladder is bin_auto's business alone: an explicit bin() is the user's own
     -- choice of resolution and must survive any time range, in both directions.
@@ -197,7 +203,7 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', c
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "metrics | where metric_name == \"app_recommendations_counter\" | summarize count(*) by bin_auto(timestamp),attributes"
       let expected =
             [text|
-      SELECT jsonb_build_array(extract(epoch from time_bucket('2 hours', timestamp))::integer, count(*)::float, count(*) OVER()) FROM otel_metrics WHERE project_id='00000000-0000-0000-0000-000000000000' and ((metric_name = 'app_recommendations_counter')) GROUP BY time_bucket('2 hours', timestamp) ORDER BY time_bucket('2 hours', timestamp) DESC |]
+      SELECT jsonb_build_array(extract(epoch from time_bucket('2 hours', timestamp))::integer, attributes,count(*)::float, count(*) OVER()) FROM otel_metrics WHERE project_id='00000000-0000-0000-0000-000000000000' and ((metric_name = 'app_recommendations_counter')) GROUP BY time_bucket('2 hours', timestamp), attributes ORDER BY time_bucket('2 hours', timestamp) DESC |]
       normT query `shouldBe` normT expected
 
     it "PostgreSQL metrics source uses native JSONB dimensions" do

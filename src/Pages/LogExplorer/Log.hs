@@ -949,7 +949,11 @@ logExplorerDataH pid LogDataQuery{query = queryM', cols = cols', cursor = cursor
   -- Carry a sanitized failure message alongside the (empty) table so the client
   -- can show an error state instead of a misleading "no events" list.
   (errM, tableData) <- case parseQueryToAST (maybeToMonoid queryM') of
-    Left err -> Log.logInfo "Log explorer data: rejected invalid KQL query" err $> (Just err, emptyTable)
+    Left err ->
+      Log.logInfo
+        "Log explorer data: rejected invalid KQL query"
+        (AE.object ["query" AE..= T.take 2000 (fromMaybe "" queryM'), "error" AE..= err])
+        $> (Just err, emptyTable)
     Right (withSortSection sortM -> queryAST) -> do
       resultE <-
         LogQueries.selectLogTable authCtx.env.enableTimefusionReads pid queryAST (toQText queryAST) cursor (fromD, toD) addCols (parseMaybe pSource =<< sourceM) targetSpansM envM serviceM

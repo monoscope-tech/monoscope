@@ -1,11 +1,13 @@
-module Pages.BodyWrapper (bodyWrapper, BWConfig (..), PageCtx (..), NavigationResponse (..), navigationResponse, mkPageCtx, withSettingsPage, settingsContentTarget, navTabAttrs) where
+module Pages.BodyWrapper (bodyWrapper, BWConfig (..), PageCtx (..), NavigationResponse (..), navigationResponse, mkPageCtx, mkAIPageCtx, withSettingsPage, settingsContentTarget, navTabAttrs) where
 
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default, def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
-import Data.List (lookup)
+import Data.List (lookup, partition)
 import Data.Text qualified as T
+import Data.Time (UTCTime, diffDays, diffUTCTime, utctDay)
+import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.Tuple.Extra (fst3, uncurry3)
 import Data.Vector qualified as V
 import Effectful (Eff, IOE, (:>))
@@ -14,14 +16,16 @@ import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Aria qualified as Aria
-import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
+import Lucid.Base (makeElement)
+import Lucid.Htmx (hxConfirm_, hxDelete_, hxGet_, hxIndicator_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
+import Models.Apis.Issues qualified as Issues
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pages.CommandPalette qualified as CommandPalette
 import Pages.Components qualified as Components
-import Pkg.DeriveUtils (assetUrl, viteAssetFile)
+import Pkg.DeriveUtils (UUIDId, assetUrl, viteAssetFile)
 import PyF
 import Relude hiding (ask)
 import System.Config (AuthContext (..), DeploymentEnv (Dev), EnvConfig (..))
@@ -46,11 +50,24 @@ mkPageCtx pid = do
     if V.elem "checklist_dismissed" project.onboardingStepsCompleted
       then pure Nothing
       else Just <$> activationProgress pid (V.elem "Integration" project.onboardingStepsCompleted)
+  conversations <- Issues.listConversations pid
   let envOptions = maybe V.empty (facetValues "resource.deployment.environment.name" . (.facetJson)) facetsM
       serviceOptions = maybe V.empty (facetValues "resource.service.name" . (.facetJson)) facetsM
-  pure (sess, project, def{sessM = Just sess, currProject = Just project, config = appCtx.config, facetSummaryM = facetsM, activationProgressM, envOptions, serviceOptions, needsTagify = True})
+  pure (sess, project, def{sessM = Just sess, currProject = Just project, config = appCtx.config, facetSummaryM = facetsM, activationProgressM, conversations, envOptions, serviceOptions, needsTagify = True, shellNow = now})
   where
     facetValues field (SchemaCatalog.FacetData m) = V.fromList $ sort [v.value | v <- HM.findWithDefault [] field m, not (T.null v.value)]
+
+
+-- | Minimal authenticated shell for AI threads. The AI execution path loads its own
+-- facet context when a prompt is submitted; rendering an existing conversation does
+-- not need to transfer and decode that document or query onboarding progress.
+-- Conversation navigation is loaded alongside the selected thread by the page handler.
+mkAIPageCtx :: Projects.ProjectId -> ATAuthCtx (Projects.Session, Projects.Project, BWConfig)
+mkAIPageCtx pid = do
+  (sess, project) <- Projects.sessionAndProject pid
+  appCtx <- EffReader.ask @AuthContext
+  now <- Time.currentTime
+  pure (sess, project, def{sessM = Just sess, currProject = Just project, config = appCtx.config, shellNow = now})
 
 
 -- | The checklist is a statement of customer value, not of which links someone clicked.
@@ -146,7 +163,7 @@ onboardingChecklist_ project progressState = do
               ]
               $ faSprite_ "xmark" "regular" "w-2.5 h-2.5"
         div_ [class_ "h-0.5 w-full bg-strokeWeak rounded-full overflow-hidden mb-2"]
-          $ div_ [class_ "h-full bg-strokeBrand-strong rounded-full transition-all", style_ $ "width:" <> show (doneCount * 100 `div` totalCount) <> "%"] ""
+          $ div_ [class_ "h-full bg-strokeBrand-strong rounded-full transition-[width]", style_ $ "width:" <> show (doneCount * 100 `div` totalCount) <> "%"] ""
         div_ [class_ "flex flex-col gap-0.5"] do
           forM_ (sortWith (Down . fst) items) \(done, (label, link, icon)) ->
             a_
@@ -228,6 +245,9 @@ data BWConfig = BWConfig
   -- Explorer's facet sidebar offers and it costs one indexed row read.
   , serviceOptions :: V.Vector Text
   , activationProgressM :: Maybe ActivationProgress
+  , conversations :: [Issues.ConversationSummary]
+  , activeConversationId :: Maybe (UUIDId "conversation")
+  , shellNow :: UTCTime
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default)
@@ -446,12 +466,12 @@ bodyWrapper bcfg child = do
             $ section_ [class_ "flex-1 overflow-y-auto"] child
         Just sess -> do
           -- Command palette (shell rendered inline, dynamic items lazy-loaded)
-          whenJust bcfg.currProject \p -> CommandPalette.paletteShell_ p.id
+          whenJust bcfg.currProject \p -> CommandPalette.paletteShell_ p.id >> aiComposerShell_ p.id >> aiThreadRenameShell_
           -- Mobile nav toggle (CSS-only sidebar control, only rendered when sidebar exists)
           when (isJust bcfg.currProject)
             $ input_ [type_ "checkbox", class_ "hidden", id_ "mobile-nav-toggle", [__|on load if window.innerWidth < 768 then set #sidenav-toggle.checked to true|]]
           section_ [class_ "flex flex-row grow-0 h-screen overflow-hidden"] do
-            foldMap (\project -> sideNav sess project (fromMaybe bcfg.pageTitle bcfg.prePageTitle) (if bcfg.isSettingsPage then Just "Settings" else bcfg.menuItem) bcfg.activationProgressM) bcfg.currProject
+            foldMap (\project -> sideNav sess project bcfg) bcfg.currProject
             section_ [class_ "h-full overflow-y-hidden grow flex flex-col"] do
               when (sess.persistentSession.user.getUser.email == "hello@monoscope.tech") loginBanner
               -- Empty navbar anchor so OOB morph can remove non-settings navbar
@@ -591,6 +611,89 @@ bodyWrapper bcfg child = do
                     });
                   });
               |]
+  where
+    dialog_ :: [Attribute] -> Html () -> Html ()
+    dialog_ = with (makeElement "dialog")
+
+    -- Focused prompt capture shared by the sidebar's chat and routine launchers.
+    -- A conversation is created only after submission, so abandoned drafts never pollute
+    -- the thread list. The resulting page uses the same history renderer as issue chat.
+    aiComposerShell_ :: Projects.ProjectId -> Html ()
+    aiComposerShell_ pid =
+      dialog_ [id_ "ai-composer-modal", class_ "modal !items-start px-4 pt-[15vh]", term "aria-labelledby" "ai-composer-title"] do
+        form_ [method_ "dialog", class_ "modal-backdrop backdrop-blur-sm"] $ button_ [Aria.label_ "Close composer"] "close"
+        form_
+          [ id_ "ai-composer-panel"
+          , hxPost_ $ "/p/" <> pid.toText <> "/ai"
+          , hxSwap_ "none"
+          , term "hx-disabled-elt" "find button[type='submit']"
+          , class_ "modal-box group/composer !w-full !max-w-lg !overflow-visible !rounded-none !border-0 !bg-transparent !p-0 !shadow-none flex flex-col"
+          ]
+          do
+            div_ [class_ "mb-2 flex items-center justify-between px-3"] do
+              h2_ [id_ "ai-composer-title", class_ "text-xs font-medium uppercase tracking-wider text-white"] do
+                span_ [class_ "group-has-[#ai-composer-routine:checked]/composer:hidden"] "New chat"
+                span_ [class_ "hidden group-has-[#ai-composer-routine:checked]/composer:inline"] "New routine"
+              button_ [type_ "button", Aria.label_ "Close composer", class_ "inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-white/70 hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-white active:scale-[0.96] transition-[color,background-color,scale]", onclick_ "this.closest('dialog').close()"]
+                $ faSprite_ "xmark" "regular" "h-3.5 w-3.5"
+            div_ [class_ "w-full overflow-hidden rounded-lg border border-base-300 bg-bgBase shadow-2xl"] do
+              fieldset_ [class_ "m-2 grid w-fit grid-cols-2 rounded-lg bg-fillWeak p-0.5 text-xs", Aria.label_ "Conversation type"] do
+                input_ [type_ "radio", name_ "mode", value_ "chat", id_ "ai-composer-chat", class_ "sr-only peer/chat", checked_]
+                label_ [Lucid.for_ "ai-composer-chat", class_ "cursor-pointer rounded-md px-3 py-1.5 text-center font-medium text-textWeak peer-checked/chat:bg-bgRaised peer-checked/chat:text-textStrong peer-checked/chat:shadow-xs peer-focus-visible/chat:outline-2 peer-focus-visible/chat:outline-offset-2 transition-[color,background-color,box-shadow] duration-100"] "Chat"
+                input_ [type_ "radio", name_ "mode", value_ "routine", id_ "ai-composer-routine", class_ "sr-only peer/routine"]
+                label_ [Lucid.for_ "ai-composer-routine", class_ "cursor-pointer rounded-md px-3 py-1.5 text-center font-medium text-textWeak peer-checked/routine:bg-bgRaised peer-checked/routine:text-textStrong peer-checked/routine:shadow-xs peer-focus-visible/routine:outline-2 peer-focus-visible/routine:outline-offset-2 transition-[color,background-color,box-shadow] duration-100"] "Routine"
+              div_ [class_ "border-b border-base-300 px-3"] do
+                textarea_
+                  [ id_ "ai-composer-input"
+                  , name_ "query"
+                  , rows_ "3"
+                  , maxlength_ "4000"
+                  , required_ "required"
+                  , autofocus_
+                  , placeholder_ "Describe what you want Monoscope to investigate…"
+                  , Aria.label_ "Instructions"
+                  , class_ "no-focus-ring min-h-24 w-full resize-none bg-transparent py-3 text-sm leading-5 text-textStrong outline-none placeholder:text-textDisabled"
+                  , [__|on keydown[key=='Enter' and (metaKey or ctrlKey)] halt the event then call my form.requestSubmit()|]
+                  ]
+                  ""
+              div_ [class_ "hidden group-has-[#ai-composer-routine:checked]/composer:flex items-center justify-between gap-3 border-b border-base-300 px-4 py-3"] do
+                label_ [Lucid.for_ "ai-routine-interval", class_ "text-xs font-medium text-textStrong"] "Run every"
+                select_ [id_ "ai-routine-interval", name_ "intervalMinutes", class_ "select select-sm h-8 min-h-8 border-strokeWeak bg-bgRaised text-xs text-textStrong"] do
+                  option_ [value_ "60", class_ "bg-bgRaised text-textStrong"] "Hour"
+                  option_ [value_ "1440", selected_ "selected", class_ "bg-bgRaised text-textStrong"] "Day"
+                  option_ [value_ "10080", class_ "bg-bgRaised text-textStrong"] "Week"
+              div_ [class_ "flex justify-end gap-1.5 p-2"] do
+                button_ [type_ "button", class_ "btn btn-sm btn-ghost cursor-pointer shadow-none active:scale-[0.96] transition-transform", onclick_ "this.closest('dialog').close()"] "Cancel"
+                button_ [type_ "submit", class_ "btn btn-sm btn-primary cursor-pointer gap-1.5 shadow-none active:scale-[0.96] transition-transform"] do
+                  span_ [class_ "group-has-[#ai-composer-routine:checked]/composer:hidden"] "Start chat"
+                  span_ [class_ "hidden group-has-[#ai-composer-routine:checked]/composer:inline"] "Start routine"
+                  faSprite_ "arrow-right" "regular" "h-3 w-3"
+            div_ [class_ "cmd-palette-hints mt-3 flex items-center justify-center gap-6 text-xs text-white drop-shadow dark:text-white/80"] do
+              div_ [class_ "flex items-center gap-1.5"] do
+                "Start"
+                kbd_ [class_ "kbd kbd-xs"] "⌘/Ctrl"
+                kbd_ [class_ "kbd kbd-xs"] "↵"
+              div_ [class_ "flex items-center gap-1.5"] do
+                "Close"
+                kbd_ [class_ "kbd kbd-xs"] "esc"
+
+    aiThreadRenameShell_ :: Html ()
+    aiThreadRenameShell_ =
+      dialog_ [id_ "ai-thread-rename-modal", class_ "modal !items-start px-4 pt-[15vh]", term "aria-labelledby" "ai-thread-rename-title"] do
+        form_ [method_ "dialog", class_ "modal-backdrop backdrop-blur-sm"] $ button_ [Aria.label_ "Close rename dialog"] "close"
+        form_ [id_ "ai-thread-rename-form", hxPost_ "#", hxSwap_ "none", class_ "modal-box !w-full !max-w-lg !overflow-visible !rounded-none !border-0 !bg-transparent !p-0 !shadow-none flex flex-col"] do
+          div_ [class_ "mb-2 flex items-center justify-between px-3"] do
+            h2_ [id_ "ai-thread-rename-title", class_ "text-xs font-medium uppercase tracking-wider text-white"] "Rename chat"
+            button_ [type_ "button", Aria.label_ "Close rename dialog", class_ "inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-white/70 hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-white active:scale-[0.96] transition-[color,background-color,scale]", onclick_ "this.closest('dialog').close()"]
+              $ faSprite_ "xmark" "regular" "h-3.5 w-3.5"
+          div_ [class_ "w-full overflow-hidden rounded-lg border border-base-300 bg-bgBase shadow-2xl"] do
+            div_ [class_ "border-b border-base-300 px-4 py-3"]
+              $ label_ [Lucid.for_ "ai-thread-rename-input", class_ "flex flex-col gap-1.5 text-xs font-medium text-textStrong"] do
+                span_ "Chat title"
+                input_ [id_ "ai-thread-rename-input", name_ "title", maxlength_ "100", required_ "required", autofocus_, autocomplete_ "off", class_ "no-focus-ring w-full bg-transparent py-2 text-sm font-normal outline-none placeholder:text-textDisabled", placeholder_ "Production changes today"]
+            div_ [class_ "flex justify-end gap-1.5 p-2"] do
+              button_ [type_ "button", class_ "btn btn-sm btn-ghost cursor-pointer shadow-none active:scale-[0.96] transition-transform", onclick_ "this.closest('dialog').close()"] "Cancel"
+              button_ [type_ "submit", class_ "btn btn-sm btn-primary cursor-pointer shadow-none active:scale-[0.96] transition-transform"] "Save"
 
 
 projectsDropDown :: Projects.Project -> V.Vector Projects.Project -> Html ()
@@ -631,18 +734,19 @@ projectsDropDown currProject projects = do
           $ actionLink [hxGet_ [text| /p/$pidTxt/manage_subscription |]] "dollar-sign" "Manage billing"
 
 
-sideNav :: Projects.Session -> Projects.Project -> Text -> Maybe Text -> Maybe ActivationProgress -> Html ()
-sideNav sess project pageTitle menuItem activationProgressM = aside_ [class_ "relative bg-fillWeaker max-md:bg-bgBase text-sm max-md:fixed max-md:z-50 max-md:w-60 max-md:h-full max-md:-translate-x-full max-md:transition-transform group-has-[#mobile-nav-toggle:checked]/pg:max-md:translate-x-0 md:min-w-13 md:w-13 md:shrink-0 group-has-[#sidenav-toggle:checked]/pg:md:w-60 h-screen md:transition-[width] duration-200 ease-out flex flex-col justify-between", id_ "side-nav-menu"] do
+sideNav :: Projects.Session -> Projects.Project -> BWConfig -> Html ()
+sideNav sess project bcfg = aside_ [class_ "group/nav relative bg-fillWeaker max-md:bg-bgBase text-sm max-md:fixed max-md:z-50 max-md:w-60 max-md:h-full max-md:-translate-x-full max-md:transition-transform group-has-[#mobile-nav-toggle:checked]/pg:max-md:translate-x-0 md:min-w-13 md:w-13 md:shrink-0 group-has-[#sidenav-toggle:checked]/pg:md:w-60 h-screen md:transition-[width] duration-200 ease-out flex flex-col justify-between", id_ "side-nav-menu"] do
+  span_ [Aria.hidden_ "true", class_ "pointer-events-none absolute inset-x-0 bottom-0 h-64 bg-gradient-to-t from-fillBrand-weak/30 via-fillBrand-weak/10 to-transparent"] ""
   -- Right border resize handle (desktop only)
   label_ [term "for" "sidenav-toggle", class_ "max-md:hidden absolute right-0 top-0 bottom-0 w-1 border-r border-strokeWeak cursor-e-resize group-has-[#sidenav-toggle:checked]/pg:cursor-w-resize hover:border-strokeBrand-strong hover:w-1 transition-colors z-10", Aria.label_ "Toggle sidebar"] ""
-  div_ [class_ "px-1 group-has-[#sidenav-toggle:checked]/pg:px-2"] do
+  div_ [class_ "relative z-[1] px-1 group-has-[#sidenav-toggle:checked]/pg:px-2 flex flex-col grow min-h-0 overflow-hidden"] do
     input_ ([type_ "checkbox", class_ "hidden", id_ "sidenav-toggle", [__|on change call setCookie("isSidebarClosed", `${me.checked}`) then send "toggle-sidebar" to <body/>|]] <> [checked_ | sess.isSidebarClosed])
     -- Project picker + Toggle (context + sidebar control)
     div_ [class_ "pt-2 flex flex-col group-has-[#sidenav-toggle:checked]/pg:flex-row items-center gap-1 group-has-[#sidenav-toggle:checked]/pg:gap-2 group/ctx"] do
       div_ [class_ "block group-has-[#sidenav-toggle:checked]/pg:flex-1 group-has-[#sidenav-toggle:checked]/pg:min-w-0"] do
         button_
           ( [ type_ "button"
-            , class_ "flex flex-row w-full text-textStrong hover:bg-fillWeak gap-2 items-center rounded-lg cursor-pointer py-1 justify-center group-has-[#sidenav-toggle:checked]/pg:px-2 group-has-[#sidenav-toggle:checked]/pg:border group-has-[#sidenav-toggle:checked]/pg:border-strokeWeak group-has-[#sidenav-toggle:checked]/pg:bg-fillWeaker transition-colors duration-100"
+            , class_ "flex flex-row w-full text-textStrong hover:bg-fillHover gap-2 items-center rounded-lg cursor-pointer py-1 justify-center group-has-[#sidenav-toggle:checked]/pg:px-2 group-has-[#sidenav-toggle:checked]/pg:bg-fillWeak transition-colors duration-100"
             , Aria.haspopup_ "dialog"
             , Aria.label_ $ "Switch project, current: " <> project.title
             ]
@@ -682,16 +786,22 @@ sideNav sess project pageTitle menuItem activationProgressM = aside_ [class_ "re
       label_ [term "for" "mobile-nav-toggle", role_ "button", tabindex_ "0", class_ "md:!hidden max-md:flex cursor-pointer text-strokeStrong min-w-6 min-h-6 items-center focus-visible:outline-2 focus-visible:outline-offset-2", Aria.label_ "Close menu", Components.keyboardActivateAttr_] $ faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 pointer-events-none"
     -- Search
     let searchScript = [__|on click send paletteToggle to #cmd-palette-global|]
-    div_ [class_ "mt-3 pb-3 flex items-center justify-center"] do
+    div_ [class_ "mt-3 pb-2 flex items-center justify-center"] do
       -- Expanded: search input trigger
-      button_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex items-center gap-2 px-3 py-1.5 flex-1 rounded-lg border border-strokeWeak text-textWeak text-sm hover:border-strokeStrong hover:bg-fillWeak transition-colors cursor-pointer", searchScript] do
-        faSprite_ "magnifying-glass" "regular" "w-3.5 h-3.5 shrink-0"
+      button_ [class_ "border border-strokeWeak hidden group-has-[#sidenav-toggle:checked]/pg:flex items-center gap-2 px-2 py-1 flex-1 rounded-md text-textWeak text-sm hover:bg-fillHover hover:text-textStrong transition-colors duration-100 cursor-pointer", searchScript] do
+        faSprite_ "sidebar-search" "regular" "w-3.5 h-3.5 shrink-0"
         span_ [class_ "flex-1 text-left"] "Search..."
         kbd_ [class_ "kbd kbd-xs"] "\x2318K"
       -- Collapsed: search icon
-      button_ ([class_ "group-has-[#sidenav-toggle:checked]/pg:hidden flex items-center justify-center p-2 rounded-lg border border-strokeWeak hover:border-strokeStrong hover:bg-fillWeak text-textWeak cursor-pointer transition-colors", searchScript, Aria.label_ "Search"] <> tippyRight_ "Search (\x2318K)") do
-        faSprite_ "magnifying-glass" "regular" "w-4 h-4"
-    nav_ [id_ "main-sidenav", class_ "mt-2 flex flex-col gap-1 text-textWeak [&_.main-nav-link.active]:bg-fillBrand-weak [&_.main-nav-link.active]:text-textStrong [&_.main-nav-link.active]:font-medium [&_.main-nav-link.active]:border-l-strokeBrand-strong [&_.main-nav-link.active]:border-y-transparent [&_.main-nav-link.active]:border-r-transparent [&_.main-nav-link.active_.nav-icon]:text-textBrand", [__|on click set #mobile-nav-toggle.checked to false end|]] do
+      button_ ([class_ "group-has-[#sidenav-toggle:checked]/pg:hidden flex items-center justify-center p-2 rounded-lg hover:bg-fillHover text-textWeak hover:text-textStrong cursor-pointer transition-colors duration-100", searchScript, Aria.label_ "Search"] <> tippyRight_ "Search (\x2318K)") do
+        faSprite_ "sidebar-search" "regular" "w-4 h-4"
+    fieldset_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:grid grid-cols-2 rounded-lg bg-fillWeak p-0.5 text-xs"] do
+      legend_ [class_ "sr-only"] "Sidebar view"
+      input_ ([type_ "radio", name_ "nav-view", id_ "nav-view-menu", class_ "sr-only peer/menu"] <> [checked_ | menuItem /= Just "AI"])
+      label_ [term "for" "nav-view-menu", class_ "cursor-pointer rounded-md px-2 py-1 text-center text-textWeak peer-checked/menu:bg-bgRaised peer-checked/menu:text-textStrong peer-checked/menu:shadow-xs peer-focus-visible/menu:outline-2 peer-focus-visible/menu:outline-offset-2 transition-[color,background-color,box-shadow] duration-100"] "Navigate"
+      input_ ([type_ "radio", name_ "nav-view", id_ "nav-view-ai", class_ "sr-only peer/ai"] <> [checked_ | menuItem == Just "AI"])
+      label_ [term "for" "nav-view-ai", class_ "cursor-pointer rounded-md px-2 py-1 text-center text-textWeak peer-checked/ai:bg-bgRaised peer-checked/ai:text-textStrong peer-checked/ai:shadow-xs peer-focus-visible/ai:outline-2 peer-focus-visible/ai:outline-offset-2 transition-[color,background-color,box-shadow] duration-100"] "Assistant"
+    nav_ [id_ "main-sidenav", class_ "mt-2 min-h-0 overflow-x-hidden overflow-y-auto flex flex-col gap-1 text-textWeak group-has-[#nav-view-ai:checked]/nav:hidden [&_.main-nav-link.active]:bg-fillBrand-weak [&_.main-nav-link.active]:text-textStrong [&_.main-nav-link.active]:font-medium [&_.main-nav-link.active]:border-l-strokeBrand-strong [&_.main-nav-link.active]:border-y-transparent [&_.main-nav-link.active]:border-r-transparent [&_.main-nav-link.active_.nav-icon]:text-textBrand", [__|on click set #mobile-nav-toggle.checked to false end|]] do
       let pidTxt = project.id.toText
           flyoutLink (linkText, link) =
             a_ ([href_ link, class_ "flex gap-2.5 items-center px-3 py-2 text-sm text-textWeak hover:bg-fillWeak hover:text-textStrong whitespace-nowrap"] <> navTabAttrs)
@@ -703,26 +813,41 @@ sideNav sess project pageTitle menuItem activationProgressM = aside_ [class_ "re
                 activeCls = bool "" " active" isActive
                 flyoutItems = navFlyoutItems pidTxt sectionTitle
                 hasFlyout = not (null flyoutItems)
-            (if hasFlyout then div_ [class_ "relative group/flyout"] else id) do
-              a_
-                ( -- The visible label is display:none while the rail is collapsed, which
-                  -- takes it out of the accessibility tree too — without this the whole
-                  -- sidenav is a column of unnamed links. Same string, so it never
-                  -- disagrees with the label shown when expanded.
-                  [ href_ mUrl
-                  , Aria.label_ mTitle
-                  , class_ $ "main-nav-link relative group-has-[#sidenav-toggle:checked]/pg:px-4 gap-3 py-2 flex no-wrap shrink-0 justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start items-center rounded-lg overflow-x-hidden overflow-y-hidden hover:bg-fillWeak hover:text-textStrong transition-colors duration-100" <> activeCls
-                  ]
-                    <> [term "aria-current" "page" | isActive]
-                    <> if hasFlyout then [] else tippyRight_ mTitle <> navTabAttrs
-                )
-                do
-                  faSprite_ fIcon "regular" "nav-icon w-4 h-4 shrink-0"
-                  span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block whitespace-nowrap truncate"] $ toHtml mTitle
-                  when hasFlyout $ span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block ml-auto text-textWeak"] $ faSprite_ "chevron-right" "regular" "w-3 h-3"
-              when hasFlyout
-                $ div_ [class_ "invisible opacity-0 group-hover/flyout:visible group-hover/flyout:opacity-100 absolute left-full top-0 ml-1 z-50 min-w-44 bg-bgRaised border border-strokeWeak rounded-lg shadow-md py-1.5 transition-all duration-150"]
-                $ mapM_ flyoutLink flyoutItems
+            ( if hasFlyout
+                then
+                  div_
+                    [ class_ "relative group/flyout"
+                    , [__|on mouseenter
+                        set flyout to my.querySelector('.nav-flyout')
+                        set sidebarBounds to my.closest('aside').getBoundingClientRect()
+                        set flyoutLeft to Math.max(8, Math.min(sidebarBounds.right + 4, window.innerWidth - flyout.offsetWidth - 8))
+                        set flyoutTop to Math.max(8, Math.min(my.getBoundingClientRect().top, window.innerHeight - flyout.offsetHeight - 8))
+                        set flyout.style.left to `${flyoutLeft}px`
+                        set flyout.style.top to `${flyoutTop}px`
+                      end|]
+                    ]
+                else id
+              )
+              do
+                a_
+                  ( -- The visible label is display:none while the rail is collapsed, which
+                    -- takes it out of the accessibility tree too — without this the whole
+                    -- sidenav is a column of unnamed links. Same string, so it never
+                    -- disagrees with the label shown when expanded.
+                    [ href_ mUrl
+                    , Aria.label_ mTitle
+                    , class_ $ "main-nav-link relative group-has-[#sidenav-toggle:checked]/pg:px-4 gap-3 py-2 flex no-wrap shrink-0 justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start items-center rounded-lg overflow-x-hidden overflow-y-hidden hover:bg-fillWeak hover:text-textStrong transition-colors duration-100" <> activeCls
+                    ]
+                      <> [term "aria-current" "page" | isActive]
+                      <> if hasFlyout then [] else tippyRight_ mTitle <> navTabAttrs
+                  )
+                  do
+                    faSprite_ fIcon "regular" "nav-icon w-4 h-4 shrink-0"
+                    span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block whitespace-nowrap truncate"] $ toHtml mTitle
+                    when hasFlyout $ span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block ml-auto text-textWeak"] $ faSprite_ "chevron-right" "regular" "w-3 h-3"
+                when hasFlyout
+                  $ div_ [class_ "nav-flyout max-md:hidden invisible opacity-0 group-hover/flyout:visible group-hover/flyout:opacity-100 fixed top-0 left-0 z-50 min-w-44 bg-bgRaised border border-strokeWeak rounded-lg shadow-md py-1.5 transition-[opacity,visibility] duration-100"]
+                  $ mapM_ flyoutLink flyoutItems
       -- Three, not two: the split is positional, so moving Issues up into the first
       -- group without widening it would have put it at the top of the second one.
       let (primary, secondary) = splitAt 3 $ menu sess.lang project.id
@@ -745,21 +870,159 @@ sideNav sess project pageTitle menuItem activationProgressM = aside_ [class_ "re
           span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex items-center gap-1.5 whitespace-nowrap truncate"] do
             "Docs"
             faSprite_ "arrow-up-right" "regular" "w-3 h-3 text-textWeak"
+    nav_ [id_ "ai-conversation-nav", Aria.label_ "AI conversations", class_ "hidden group-has-[#nav-view-ai:checked]/nav:flex mt-1.5 min-h-0 overflow-y-auto flex-col gap-px text-textWeak"] do
+      let newAIAction mode icon label = button_
+            ([type_ "button", Aria.label_ label, class_ $ "w-full group-has-[#sidenav-toggle:checked]/pg:px-2.5 gap-2 py-1.5 flex items-center justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start rounded-md text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 active:scale-[0.96] transition-[color,background-color,scale] duration-100 cursor-pointer" <> bool " text-textStrong hover:bg-fillWeak" " text-textBrand hover:bg-fillBrand-weak" (mode == "chat"), term "_" $ "on click set #ai-composer-input.value to '' then set #ai-composer-" <> mode <> ".checked to true then call #ai-composer-modal.showModal()"] <> tippyRight_ label)
+            do
+              faSprite_ icon "regular" $ bool "w-3 h-3 shrink-0" "w-3.5 h-3.5 shrink-0" (mode == "chat")
+              span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] $ toHtml label
+      div_ [class_ "flex flex-col gap-px group-has-[#sidenav-toggle:checked]/pg:px-1"] do
+        newAIAction "chat" "plus" "New chat"
+        newAIAction "routine" "clock-rotate-left" "New routine"
+      div_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block border-t border-strokeWeak/40 my-1 mx-2"] ""
+      when (length conversations > 15) $ div_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block px-1 pb-1"] do
+        div_ [class_ "relative"] do
+          span_ [class_ "pointer-events-none absolute inset-y-0 start-2 flex items-center text-textWeak"] $ faSprite_ "sidebar-search" "regular" "h-3 w-3"
+          input_
+            [ type_ "search"
+            , Aria.label_ "Filter conversations"
+            , placeholder_ "Filter conversations…"
+            , class_ "h-7 w-full rounded-md border border-strokeWeak bg-bgBase ps-7 pe-2 text-xs placeholder:text-textWeak focus:border-strokeFocus focus:outline-none"
+            , [__|on input
+                show .ai-thread-item in #ai-conversation-nav when its dataset.threadTitle.toLowerCase() contains my value.toLowerCase()
+                then set visibleCount to #ai-conversation-nav.querySelectorAll('.ai-thread-item:not([style*="display: none"])').length
+                if visibleCount == 0 remove .hidden from #ai-thread-empty
+                else add .hidden to #ai-thread-empty end|]
+            ]
+        p_ [id_ "ai-thread-empty", class_ "hidden px-2 py-2 text-xs text-textWeak"] "No matching conversations"
+      let (routines, chats) = partition (isJust . (.routineInterval)) conversations
+          conversationHref c = "/p/" <> project.id.toText <> "/ai/" <> c.conversationId.toText
+          scheduleLabel c
+            | isJust c.routineRunningSince = "Running now"
+            | not c.routineActive = "Paused"
+            | otherwise = maybe "Waiting to be scheduled" (\t -> "Next " <> toText (formatTime defaultTimeLocale "%-d %b, %H:%M UTC" t)) c.routineNextRunAt
+          relativeTime t =
+            let seconds = max 0 $ floor (diffUTCTime now t) :: Int
+             in if
+                  | seconds < 60 -> "now"
+                  | seconds < 3600 -> show (seconds `div` 60) <> "m"
+                  | seconds < 86400 -> show (seconds `div` 3600) <> "h"
+                  | seconds < 604800 -> show (seconds `div` 86400) <> "d"
+                  | otherwise -> toText $ formatTime defaultTimeLocale "%-d %b" t
+          sectionLabel :: Text -> Int -> Html ()
+          sectionLabel label count = div_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex items-center justify-between px-2 pt-2 pb-1 text-[0.6875rem] font-medium text-textWeak"] do
+            span_ [] $ toHtml label
+            span_ [class_ "text-[0.625rem] tabular-nums text-textDisabled"] $ toHtml $ show count
+          timeGroupLabel label = div_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block px-2 pb-0.5 pt-1 text-[0.625rem] font-medium text-textDisabled"] $ toHtml label
+          threadLink c =
+            let isActive = activeConversationId == Just c.conversationId
+                href = conversationHref c
+                actionsId = "ai-thread-actions-" <> c.conversationId.toText
+             in div_ [data_ "thread-title" c.title, class_ $ "ai-thread-item group/thread relative flex min-w-0 items-center rounded-sm text-textWeak/80 hover:bg-fillWeak/70 hover:text-textStrong transition-[color,background-color] duration-100" <> bool "" " text-textStrong font-medium" isActive] do
+                  a_ ([href_ href, Aria.label_ c.title, class_ "flex min-w-0 flex-1 items-center justify-center py-1 group-has-[#sidenav-toggle:checked]/pg:justify-start group-has-[#sidenav-toggle:checked]/pg:ps-2 group-has-[#sidenav-toggle:checked]/pg:pe-1 focus-visible:outline-2 focus-visible:outline-offset-2"] <> [term "aria-current" "page" | isActive] <> tippyRight_ c.title) do
+                    faSprite_ "message" "regular" "group-has-[#sidenav-toggle:checked]/pg:hidden w-3.5 h-3.5 shrink-0"
+                    span_ [class_ $ "hidden group-has-[#sidenav-toggle:checked]/pg:block me-2 h-1 w-1 shrink-0 rounded-full " <> bool "bg-transparent" "bg-fillBrand-strong" isActive, Aria.hidden_ "true"] ""
+                    span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block min-w-0 flex-1 truncate leading-5"] $ toHtml c.title
+                  span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block shrink-0 pe-2 text-[0.625rem] tabular-nums text-textDisabled group-hover/thread:opacity-0 group-focus-within/thread:opacity-0 transition-opacity duration-100", title_ $ toText $ formatTime defaultTimeLocale "%e %b %Y, %H:%M UTC" c.updatedAt] $ toHtml $ relativeTime c.updatedAt
+                  button_
+                    ( [ type_ "button"
+                      , Aria.label_ $ "Actions for " <> c.title
+                      , class_ "absolute end-0.5 hidden h-6 w-6 items-center justify-center rounded text-textWeak opacity-0 hover:bg-fillHover hover:text-textStrong group-has-[#sidenav-toggle:checked]/pg:flex group-hover/thread:opacity-100 group-focus-within/thread:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-1 transition-[color,background-color,opacity] duration-100"
+                      ]
+                        <> popoverTrigger_ actionsId
+                    )
+                    $ faSprite_ "ellipsis" "regular" "h-3.5 w-3.5"
+                  ul_ ([class_ "dropdown dropdown-end menu menu-sm z-50 w-44 rounded-lg border border-strokeWeak bg-bgRaised p-1 shadow-lg", [__|on click call me.hidePopover()|]] <> popoverPanel_ actionsId) do
+                    li_ [] $ a_ [href_ href] "Open chat"
+                    li_ []
+                      $ button_
+                        [ type_ "button"
+                        , data_ "thread-title" c.title
+                        , data_ "thread-url" href
+                        , [__|on click
+                            set #ai-thread-rename-input.value to my.dataset.threadTitle
+                            set the @hx-post of #ai-thread-rename-form to `${my.dataset.threadUrl}/title`
+                            call #ai-thread-rename-modal.showModal()|]
+                        ]
+                        "Rename"
+                    when (c.conversationType == Issues.CTWeb && isNothing c.routineInterval) $ li_ [] $ form_ [class_ "w-full", hxPost_ $ href <> "/routine", hxSwap_ "none", hxConfirm_ "Turn this chat into a daily routine?"] do
+                      input_ [type_ "hidden", name_ "intervalMinutes", value_ "1440"]
+                      button_ [type_ "submit", class_ "w-full text-start"] "Make daily routine"
+                    li_ [] $ button_ [type_ "button", class_ "text-textError", hxDelete_ href, hxSwap_ "none", hxConfirm_ "Delete this chat and its message history? This cannot be undone."] "Delete chat"
+          routineCard c = do
+            let isActive = activeConversationId == Just c.conversationId
+                cadenceLabel = foldMap Issues.routineCadence c.routineInterval
+                statusLabel = scheduleLabel c
+                stateLabel
+                  | isJust c.routineRunningSince = "Running"
+                  | c.routineActive = "Active"
+                  | otherwise = "Paused"
+                nextRunLabel =
+                  c.routineNextRunAt <&> \t ->
+                    if utctDay t == utctDay now
+                      then toText $ formatTime defaultTimeLocale "%H:%M" t
+                      else toText $ formatTime defaultTimeLocale "%-d %b" t
+                href = conversationHref c
+            a_
+              ( [ href_ href
+                , Aria.label_ $ c.title <> ", " <> cadenceLabel
+                , data_ "thread-title" c.title
+                , class_ "ai-thread-item group-has-[#sidenav-toggle:checked]/pg:hidden flex items-center justify-center rounded-md py-1.5 text-textBrand hover:bg-fillBrand-weak focus-visible:outline-2 focus-visible:outline-offset-2 transition-colors duration-100"
+                ]
+                  <> tippyRight_ (c.title <> " — " <> cadenceLabel)
+              )
+              $ faSprite_ "clock" "regular" "h-3.5 w-3.5"
+            a_
+              ( [ href_ href
+                , data_ "thread-title" c.title
+                , Aria.label_ $ c.title <> ", " <> stateLabel <> ", " <> cadenceLabel
+                , class_ $ "ai-thread-item hidden min-w-0 items-center rounded-md px-2 py-1.5 hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-2 group-has-[#sidenav-toggle:checked]/pg:flex " <> bool "" "bg-fillWeak" isActive
+                ]
+                  <> [term "aria-current" "page" | isActive]
+              )
+              do
+                span_ [class_ "min-w-0 flex-1"] do
+                  span_ [class_ "block truncate font-medium text-textStrong"] $ toHtml c.title
+                  span_ [class_ "flex min-w-0 items-center gap-1 text-[0.6875rem] font-normal leading-4 text-textWeak"] do
+                    span_
+                      [ class_
+                          $ "h-1.5 w-1.5 shrink-0 rounded-full "
+                          <> if
+                            | isJust c.routineRunningSince -> "bg-fillBrand-strong"
+                            | c.routineActive -> "bg-fillSuccess-strong"
+                            | otherwise -> "bg-fillWeak border border-strokeWeak"
+                      , Aria.hidden_ "true"
+                      ]
+                      ""
+                    span_ [] $ toHtml stateLabel
+                    span_ [Aria.hidden_ "true"] "·"
+                    span_ [class_ "truncate"] $ toHtml cadenceLabel
+                    whenJust nextRunLabel \nextRun -> span_ [class_ "ms-auto shrink-0 tabular-nums text-textDisabled", title_ statusLabel] $ toHtml nextRun
+      unless (null routines) do
+        sectionLabel "Routines" (length routines)
+        div_ [class_ "flex flex-col gap-px px-0.5 group-has-[#sidenav-toggle:not(:checked)]/pg:px-0"] $ mapM_ routineCard routines
+      unless (null chats) do
+        let ageInDays c = diffDays (utctDay now) (utctDay c.updatedAt)
+            (today, beforeToday) = partition ((<= 0) . ageInDays) chats
+            (thisWeek, older) = partition ((<= 7) . ageInDays) beforeToday
+            renderTimeGroup label threads = unless (null threads) do
+              timeGroupLabel label
+              mapM_ threadLink threads
+        sectionLabel "Recent" (length chats)
+        renderTimeGroup "Today" today
+        renderTimeGroup "This week" thisWeek
+        renderTimeGroup "Older" older
 
-  div_ [class_ "py-2.5 px-2 group-has-[#sidenav-toggle:checked]/pg:px-3 border-t border-strokeWeak flex flex-col gap-1"] do
+  div_ [class_ "relative z-[1] py-2.5 px-2 group-has-[#sidenav-toggle:checked]/pg:px-3 border-t border-strokeWeak flex flex-col gap-1"] do
     let currUser = sess.persistentSession.user.getUser
         userIdentifier = bool (CI.original currUser.email) (currUser.firstName <> " " <> currUser.lastName) (currUser.firstName /= "" || currUser.lastName /= "")
-    -- Dark mode toggle
-    -- Expanded: sun + toggle + moon
-    label_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex cursor-pointer gap-2 items-center px-2 py-2 rounded-lg hover:bg-fillWeak transition-colors duration-100", Aria.label_ "Toggle dark mode"] do
-      faSprite_ "sun-bright" "regular" "h-4 w-4 text-textWeak"
-      input_ [type_ "checkbox", class_ "toggle toggle-sm theme-controller", id_ "dark-mode-toggle", Aria.label_ "Toggle dark mode", onclick_ "toggleDarkMode()"]
-      faSprite_ "moon-stars" "regular" "h-4 w-4 text-textWeak"
-    -- Collapsed: centered icon button
+    label_ [class_ "flex group-has-[#sidenav-toggle:not(:checked)]/pg:hidden cursor-pointer gap-2 items-center px-2 py-2 rounded-lg hover:bg-fillWeak transition-colors duration-100", Aria.label_ "Toggle dark mode"] do
+      faSprite_ "sun-bright" "regular" "h-4 w-4 shrink-0 text-textWeak"
+      input_ [type_ "checkbox", class_ "toggle toggle-sm theme-controller", id_ "dark-mode-toggle", Aria.label_ "Use dark appearance", onclick_ "toggleDarkMode()"]
+      faSprite_ "moon-stars" "regular" "h-4 w-4 shrink-0 text-textWeak"
     button_ ([type_ "button", class_ "group-has-[#sidenav-toggle:checked]/pg:hidden flex justify-center items-center py-2 rounded-lg hover:bg-fillWeak cursor-pointer transition-colors duration-100", Aria.label_ "Toggle dark mode", onclick_ "toggleDarkMode()"] <> tippyRight_ "Toggle dark mode") do
       span_ [class_ "dark:hidden"] $ faSprite_ "sun-bright" "regular" "h-4 w-4 text-textWeak"
       span_ [class_ "hidden dark:inline-flex"] $ faSprite_ "moon-stars" "regular" "h-4 w-4 text-textWeak"
-
     -- User avatar popover
     div_ [class_ "block group/user"] do
       button_
@@ -771,7 +1034,7 @@ sideNav sess project pageTitle menuItem activationProgressM = aside_ [class_ "re
             <> popoverTrigger_ "user-menu-pop"
         )
         do
-          img_ ([class_ "w-8 h-8 rounded-full bg-fillPress shrink-0", src_ $ "/api/avatar/" <> currUser.id.toText, alt_ userIdentifier] <> tippyRight_ userIdentifier)
+          img_ ([class_ "w-8 h-8 rounded-full bg-fillPress shrink-0 outline outline-1 outline-black/10 dark:outline-white/10", src_ $ "/api/avatar/" <> currUser.id.toText, alt_ userIdentifier] <> tippyRight_ userIdentifier)
           span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex items-center gap-1 overflow-hidden flex-1"] do
             span_ [class_ "truncate text-sm"] $ toHtml userIdentifier
             faSprite_ "chevron-down" "regular" "w-3 h-3 text-textWeak shrink-0 ml-auto transition-transform duration-150 rotate-180 group-focus-within/user:rotate-0"
@@ -797,6 +1060,13 @@ sideNav sess project pageTitle menuItem activationProgressM = aside_ [class_ "re
         li_ [] $ a_ [href_ "/logout", class_ "flex items-center gap-2 text-textError", [__| on click js posthog.reset(); end |]] do
           faSprite_ "arrow-right-from-bracket" "regular" "w-4 h-4"
           toHtml $ I18n.t sess.lang "nav.logout"
+  where
+    pageTitle = fromMaybe bcfg.pageTitle bcfg.prePageTitle
+    menuItem = if bcfg.isSettingsPage then Just "Settings" else bcfg.menuItem
+    activationProgressM = bcfg.activationProgressM
+    conversations = bcfg.conversations
+    activeConversationId = bcfg.activeConversationId
+    now = bcfg.shellNow
 
 
 navbar :: BWConfig -> [(Text, Text, Text)] -> Html ()

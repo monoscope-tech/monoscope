@@ -83,6 +83,7 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.CodeContext qualified as CodeContext
+import Pages.AIThreads qualified as AIThreads
 import Pages.BodyWrapper (NavigationResponse, PageCtx (..))
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as Slack
@@ -573,6 +574,14 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , -- Command palette
     commandPaletteGet :: mode :- "p" :> ProjectId :> "command-palette" :> Get '[HTML] (RespHeaders (Html ())) -- dynamic items only
   , commandPaletteRecentPost :: mode :- "p" :> ProjectId :> "command-palette" :> "recents" :> ReqBody '[FormUrlEncoded] CommandPalette.RecentForm :> Post '[HTML] (RespHeaders NoContent)
+  , aiThreadsGet :: mode :- "p" :> ProjectId :> "ai" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
+  , aiThreadGet :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
+  , aiThreadsPost :: mode :- "p" :> ProjectId :> "ai" :> ReqBody '[FormUrlEncoded] AIThreads.AIChatForm :> Post '[HTML] (RespHeaders (Html ()))
+  , aiThreadPost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> ReqBody '[FormUrlEncoded] AIThreads.AIChatForm :> Post '[HTML] (RespHeaders (Html ()))
+  , aiThreadTitlePost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "title" :> ReqBody '[FormUrlEncoded] AIThreads.TitleForm :> Post '[HTML] (RespHeaders (Html ()))
+  , aiThreadDelete :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> Delete '[HTML] (RespHeaders (Html ()))
+  , aiRoutinePost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> ReqBody '[FormUrlEncoded] AIThreads.RoutineForm :> Post '[HTML] (RespHeaders (Html ()))
+  , aiRoutinePausePost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "pause" :> Post '[HTML] (RespHeaders (Html ()))
   , -- Device auth
     deviceApprove :: mode :- "device" :> QPT "code" :> QPT "action" :> Get '[HTML] (RespHeaders (Html ()))
   , -- Sub-route groups
@@ -1026,6 +1035,14 @@ cookieProtectedServer =
     , -- Command palette
       commandPaletteGet = CommandPalette.commandPaletteItemsH
     , commandPaletteRecentPost = CommandPalette.commandPaletteRecentPostH
+    , aiThreadsGet = AIThreads.threadsGetH
+    , aiThreadGet = AIThreads.threadGetH
+    , aiThreadsPost = AIThreads.startThreadPostH
+    , aiThreadPost = AIThreads.threadPostH
+    , aiThreadTitlePost = AIThreads.threadTitlePostH
+    , aiThreadDelete = AIThreads.threadDeleteH
+    , aiRoutinePost = AIThreads.routinePostH
+    , aiRoutinePausePost = AIThreads.routinePausePostH
     , -- Device auth
       deviceApprove = Auth.deviceApproveH
     , -- Sub-route handlers

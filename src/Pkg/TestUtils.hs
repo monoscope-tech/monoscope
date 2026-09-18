@@ -129,6 +129,7 @@ import Effectful.Log (Log)
 import Effectful.Reader.Static qualified
 import Effectful.Time (Time, runTime)
 import Effectful.Time qualified as EffTime
+import Effectful.Timeout qualified as Timeout
 import Log qualified
 import Log.Data (showLogMessage)
 import Log.Logger (mkBulkLogger)
@@ -586,6 +587,7 @@ runTestBackgroundWithHTTP http clock logger appCtx process = do
       & ELLM.runLLMGolden "./tests/golden/"
       & runConcurrent
       & Ki.runStructuredConcurrency
+      & Timeout.runTimeout
       & Effectful.runEff
   notifications <- reverse <$> readIORef notifRef
   pure (notifications, result)
@@ -935,7 +937,7 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
       , trTestClock = testClock
       }
     -- finally over mapM_ releases every pool even if an earlier release throws
-    `finally` mapM_ OHasql.release [hasqlMain, hasqlJobs, hasqlTf]
+    `finally` mapM_ OHasql.release ([hasqlMain, hasqlJobs, hasqlTf] :: [OHasql.TracedPool])
 
 
 toServantResponse :: TestResources -> ATAuthCtx (RespHeaders a) -> IO (RespHeaders a, a)
@@ -1262,7 +1264,7 @@ createTestSpans TestResources{..} projectId numRequestsPerEndpoint = do
 
   currentTime <- getCurrentTime
   forM_ endpoints $ \(path, _, method, host, hash) -> do
-    forM_ [1 .. numRequestsPerEndpoint] $ \(_ :: Int) -> do
+    forM_ ([1 .. numRequestsPerEndpoint] :: [Int]) $ \_ -> do
       spanId <- nextRandom
       traceIdVal <- nextRandom
       let attributes =

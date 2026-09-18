@@ -1,4 +1,4 @@
-module Pages.Bots.Utils (BotType (..), BotReply (..), botReplyPayload, BotResponse (..), Channel (..), authHeader, contentTypeHeader, mrkdwn, plainTxt, textBlock, imageBlock, dcContainer, dcText, dcGallery, dcLinkButton, processAIQuery, verifyWidgetSignature, QueryIntent (..), detectReportIntent, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, runBotQuery, withBotThread, withDashboardTemplate, parseInstallState, installedResponse) where
+module Pages.Bots.Utils (BotType (..), BotReply (..), botReplyPayload, BotResponse (..), Channel (..), authHeader, contentTypeHeader, mrkdwn, plainTxt, textBlock, imageBlock, dcContainer, dcText, dcGallery, dcLinkButton, processAIQuery, processActionableAIQuery, storeAgenticResponse, verifyWidgetSignature, QueryIntent (..), detectReportIntent, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, runBotQuery, withBotThread, withDashboardTemplate, parseInstallState, installedResponse) where
 
 import Control.Lens ((.~), (^?))
 import Data.Aeson qualified as AE
@@ -292,7 +292,15 @@ data Channel = Channel
 
 
 processAIQuery :: (DB es, ELLM.LLM :> es, HTTP :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Maybe EnvConfig -> Bool -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe (UUIDId "conversation") -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
-processAIQuery sourceConfig useTf access pid userQuery conversationId model apiKey = do
+processAIQuery sourceConfig useTf = processAIQueryWithMode sourceConfig useTf AI.InteractiveReadOnly
+
+
+processActionableAIQuery :: (DB es, ELLM.LLM :> es, HTTP :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Maybe EnvConfig -> Bool -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe (UUIDId "conversation") -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
+processActionableAIQuery sourceConfig useTf = processAIQueryWithMode sourceConfig useTf AI.InteractiveWithActions
+
+
+processAIQueryWithMode :: (DB es, ELLM.LLM :> es, HTTP :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Maybe EnvConfig -> Bool -> AI.InvocationMode -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe (UUIDId "conversation") -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
+processAIQueryWithMode sourceConfig useTf invocationMode access pid userQuery conversationId model apiKey = do
   AI.requireAgentAccess access pid
   now <- Time.currentTime
   let dayAgo = addUTCTime (-86400) now
@@ -305,19 +313,38 @@ processAIQuery sourceConfig useTf access pid userQuery conversationId model apiK
           , AI.useTimefusion = useTf
           , AI.access = access
           , AI.sourceConfig = sourceConfig
+          , AI.invocationMode = invocationMode
           , AI.maxIterations = case access of
               AI.SlackInvestigationAccess{} -> 12
               _ -> defaults.maxIterations
           }
   rawResult <- AI.runAgenticChatWithHistory config userQuery model apiKey
-  whenRight_ rawResult \answer -> whenJust conversationId \convId -> do
-    AI.requireAgentAccess access pid
-    case access of
-      AI.SlackInvestigationAccess{} -> pass -- Saved atomically with the replayable answer.
-      _ -> Issues.insertChatMessage pid convId Issues.ChatAssistant answer.response Nothing Nothing
-  let result = rawResult >>= AI.parseLLMResponse . (.response)
+  result <- case rawResult of
+    Left err -> pure $ Left err
+    Right answer -> do
+      parsed <- case (access, conversationId) of
+        (AI.SlackInvestigationAccess{}, _) -> pure $ AI.parseAgenticResponse answer -- Saved atomically with the replayable answer.
+        (_, Nothing) -> pure $ AI.parseAgenticResponse answer
+        (_, Just convId) -> AI.requireAgentAccess access pid >> storeAgenticResponse pid convId answer
+      whenJust conversationId \convId ->
+        AI.ensureConversationTitle pid convId userQuery answer.response (maybe model (.openaiSmallModel) sourceConfig) apiKey
+      pure parsed
   whenLeft_ result \err -> Log.logAttention "processAIQuery failed" $ AE.object ["error" AE..= err, "userQuery" AE..= userQuery, "projectId" AE..= pid.toText]
   pure result
+
+
+-- | Persist the normalized answer shape consumed by issue chat and the global thread
+-- view. Keeping this here prevents routines and interactive chats from drifting.
+storeAgenticResponse :: DB es => Projects.ProjectId -> UUIDId "conversation" -> AI.AgenticChatResult -> Eff es (Either Text AI.LLMResponse)
+storeAgenticResponse pid convId answer = do
+  let parsed = AI.parseAgenticResponse answer
+  case parsed of
+    Left _ -> Issues.insertChatMessage pid convId Issues.ChatAssistant answer.response Nothing (Just $ AE.toJSON answer.toolCalls)
+    Right response -> do
+      let widgets = guarded (not . null) $ take 10 $ AI.responseWidgets response
+          explanation = fromMaybe (bool answer.response "Here are the requested visualizations:" $ isJust widgets) $ mfilter (not . T.null) response.explanation
+      Issues.insertChatMessage pid convId Issues.ChatAssistant explanation (AE.toJSON <$> widgets) (Just $ AE.toJSON answer.toolCalls)
+  pure parsed
 
 
 verifyWidgetSignature :: Text -> Projects.ProjectId -> Text -> Maybe Text -> Either LBS.ByteString ()
@@ -571,7 +598,7 @@ withBotThread
   -> UUIDId "conversation"
   -> Issues.ConversationType
   -> AE.Value
-  -> Eff es (Maybe [(Issues.ChatRole, Text)])
+  -> Eff es (Maybe [(Issues.ChatMessageKind, Text)])
   -> Eff es (UUIDId "conversation")
 withBotThread target pid convId convType meta backfill = do
   _ <- Issues.getOrCreateConversation pid convId convType meta

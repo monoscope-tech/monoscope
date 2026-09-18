@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, endpointAutoAckLockName, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), errorTrendChartUrl) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, enqueueAIRoutine, runAIRoutineWith, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, endpointAutoAckLockName, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), errorTrendChartUrl) where
 
 import BackgroundJobs.Types (BgJobs (..))
 import BackgroundJobs.Types qualified as Jobs
@@ -55,6 +55,7 @@ import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
+import Effectful.Timeout qualified as Timeout
 import Hasql.Interpolate qualified as HI
 import Hasql.Session qualified as Session
 import Hasql.TH (resultlessStatement, singletonStatement)
@@ -100,8 +101,10 @@ import OddJobs.Job (ConcurrencyControl (..), Config (cfgJobOrdering), Job (..), 
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
 import Pages.Bots.Slack qualified as Slack
+import Pages.Bots.Utils qualified as Bots
 import Pages.Replay qualified as Replay
 import Pages.Reports qualified as RP
+import Pkg.AI qualified as AI
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (BaselineState (..), UUIDId (..), WrappedEnumSC (..), rawSql)
 import Pkg.Drain qualified as Drain
@@ -194,6 +197,10 @@ enqueueAt :: MonadIO m => Config.AuthContext -> UTCTime -> [BgJobs] -> m ()
 enqueueAt ctx at jobs = liftIO $ withResource ctx.jobsPool \conn -> traverse_ (\j -> void $ scheduleJob conn "background_jobs" j at) jobs
 
 
+enqueueAIRoutine :: MonadIO m => Config.AuthContext -> UUIDId "ai_routine" -> UTCTime -> m ()
+enqueueAIRoutine ctx routineId at = enqueueAt ctx at [Jobs.AIRoutineRun routineId at]
+
+
 -- | Seed @count@ ticks of a self-chaining job, spaced @step@ seconds from @from@.
 seedJobs :: SimplePG.Connection -> UTCTime -> Int -> Int -> (UTCTime -> BgJobs) -> IO ()
 seedJobs conn from count step mkJob = forM_ ([0 .. count - 1] :: [Int]) \i -> do
@@ -279,6 +286,7 @@ processBackgroundJob authCtx bgJob =
     SlackNotification pid message -> sendSlackMessage pid message
     ProcessSlackEvent eventId -> Slack.processSlackEvent eventId
     RefreshSlackProgress publicationId -> Slack.refreshSlackProgress publicationId
+    AIRoutineRun routineId scheduledAt -> runAIRoutine authCtx routineId scheduledAt
     ResetSlackSession pid uid receiptId -> Slack.resetSlackSession pid uid receiptId
     EnhanceIssuesWithLLM pid issueIds -> enhanceIssuesWithLLM pid issueIds
     ProcessIssuesEnhancement scheduledTime -> unlessStale "ProcessIssuesEnhancement" scheduledTime (2 * 3600) $ processIssuesEnhancement scheduledTime
@@ -330,6 +338,48 @@ processBackgroundJob authCtx bgJob =
       when (moved >= cap) $ Time.currentTime >>= rescheduleSelf authCtx (const (Jobs.ReplayParkedMessages cap))
     MonoscopeAdminDaily -> runMonoscopeAdminDaily authCtx
     UsageAuditReport -> runUsageAuditReport authCtx
+
+
+runAIRoutine :: Config.AuthContext -> UUIDId "ai_routine" -> UTCTime -> ATBackgroundCtx ()
+runAIRoutine authCtx =
+  runAIRoutineWith
+    routineRunTimeoutMicros
+    (\config -> AI.runAgenticChatWithHistory config routinePrompt authCtx.config.openaiModel authCtx.config.openaiApiKey)
+    (enqueueAIRoutine authCtx)
+    authCtx
+  where
+    routinePrompt = "Run the recurring task defined in this conversation now. Report what you did and the result."
+    -- Stay comfortably inside the database lease, so recovery cannot execute the
+    -- same routine while a legitimate worker is still running.
+    routineRunTimeoutMicros = 20 * 60 * 1_000_000
+
+
+-- The injected executor keeps lease and timeout behavior deterministic in integration tests.
+runAIRoutineWith
+  :: Int
+  -> (AI.AgenticConfig -> ATBackgroundCtx (Either Text AI.AgenticChatResult))
+  -> (UUIDId "ai_routine" -> UTCTime -> ATBackgroundCtx ())
+  -> Config.AuthContext
+  -> UUIDId "ai_routine"
+  -> UTCTime
+  -> ATBackgroundCtx ()
+runAIRoutineWith timeoutMicros execute enqueueNext authCtx routineId scheduledAt = whenJustM (Issues.claimRoutine routineId scheduledAt) \routine -> do
+  conversationM <- Issues.getConversation routine.projectId routine.conversationId
+  let conversationType = maybe Issues.CTWeb (.conversationType) conversationM
+      config = (AI.defaultAgenticConfig routine.projectId){AI.conversationId = Just routine.conversationId, AI.conversationType = Just conversationType, AI.sourceConfig = Just authCtx.config, AI.useTimefusion = authCtx.env.enableTimefusionReads, AI.invocationMode = AI.ScheduledRoutine}
+  outcome <- Timeout.timeout timeoutMicros $ tryAny do
+    execute config >>= \case
+      Left err -> Issues.insertChatMessage routine.projectId routine.conversationId Issues.ChatExecutionEvent ("Routine failed: " <> err) Nothing Nothing
+      Right answer -> void $ Bots.storeAgenticResponse routine.projectId routine.conversationId answer
+  case outcome of
+    Nothing -> do
+      Log.logAttention "AI routine run timed out" $ AE.object ["routine_id" AE..= routineId, "timeout_micros" AE..= timeoutMicros]
+      void $ tryAny $ Issues.insertChatMessage routine.projectId routine.conversationId Issues.ChatExecutionEvent "Routine timed out. It will run again at the next interval." Nothing Nothing
+    Just (Left err) -> do
+      Log.logAttention "AI routine run failed" $ AE.object ["routine_id" AE..= routineId, "error" AE..= show @Text err]
+      void $ tryAny $ Issues.insertChatMessage routine.projectId routine.conversationId Issues.ChatExecutionEvent "Routine failed unexpectedly. It will run again at the next interval." Nothing Nothing
+    Just (Right ()) -> pass
+  whenJustM (Issues.completeRoutine routineId scheduledAt routine.claimedAt) $ enqueueNext routineId
 
 
 -- | Post the daily internal admin digest (usage, new projects, issues, alerts, job health) to Discord.
@@ -1285,6 +1335,7 @@ retryOnDeadlock label = go 2
 runHourlyJob :: UTCTime -> Int -> ATBackgroundCtx ()
 runHourlyJob scheduledTime hour = do
   ctx <- ask @Config.AuthContext
+  tryStep "ai-routine-recovery" $ Issues.listDueRoutines 100 >>= traverse_ (\routine -> enqueueAIRoutine ctx routine.id routine.scheduledAt)
   tryStep "metric-catalog-flush" $ Telemetry.flushMetricCatalog ctx.metricCatalogBuffer
   tryStep "metric-catalog-reconcile" Telemetry.reconcileMetricCatalog
   tryStep "endpoint-shape-report" reportUnwrittenIdRules

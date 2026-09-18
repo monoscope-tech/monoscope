@@ -29,6 +29,7 @@ module Pages.Issues (
   errorUnmergePostH,
   -- Shared rendering helpers
   issueCardCompact_,
+  aiChatHistoryView_,
 )
 where
 
@@ -1459,11 +1460,13 @@ aiChatPostH pid issueId form
         (handleChatResult (Just fullSystemPrompt) convId)
         result
 
-    handleChatResult systemPromptM convId chatResult =
+    handleChatResult systemPromptM convId chatResult = do
+      appCtx <- ask @AuthContext
+      AI.ensureConversationTitle pid convId form.query chatResult.response appCtx.config.openaiSmallModel appCtx.config.openaiApiKey
       either
         (\_ -> respond systemPromptM convId chatResult.response Nothing (Just chatResult.toolCalls) False)
         ( \aiResp ->
-            let ws = guarded (not . null) $ take 10 aiResp.widgets
+            let ws = guarded (not . null) $ take 10 $ AI.responseWidgets aiResp
                 txt = fromMaybe (bool chatResult.response "Here are the requested visualizations:" $ isJust ws) $ mfilter (not . T.null) aiResp.explanation
              in respond systemPromptM convId txt ws (Just chatResult.toolCalls) False
         )
@@ -1736,20 +1739,30 @@ unparsablePayload_ :: Html ()
 unparsablePayload_ = span_ [class_ "text-xs italic text-textWeak"] "details unavailable"
 
 
--- | Render chat history using forM_ over paired messages
+-- | Render model turns and operational execution events. Events remain visible
+-- to people without being presented to the model as assistant output.
 aiChatHistoryView_ :: Projects.ProjectId -> [Issues.AIChatMessage] -> Html ()
-aiChatHistoryView_ pid msgs = forM_ (pairUserAssistant msgs) \(u, a) -> do
-  let (explanation, widgets) = parseStoredContent a.content a.widgets
-  aiChatResponse_ pid u.content explanation widgets (parseStoredJSON @[AI.ToolCallInfo] a.metadata) Nothing
+aiChatHistoryView_ pid = render
   where
-    -- Pair user messages with their following assistant responses, skipping unpaired.
-    pairUserAssistant :: [Issues.AIChatMessage] -> [(Issues.AIChatMessage, Issues.AIChatMessage)]
-    pairUserAssistant (u : a : rest) | u.role == Issues.ChatUser && a.role == Issues.ChatAssistant = (u, a) : pairUserAssistant rest
-    pairUserAssistant (_ : rest) = pairUserAssistant rest
-    pairUserAssistant [] = []
+    render (u : a : rest) | u.role == Issues.ChatUser && a.role == Issues.ChatAssistant = do
+      let (explanation, widgets) = parseStoredContent a.content a.widgets
+      aiChatResponse_ pid u.content explanation widgets (parseStoredJSON @[AI.ToolCallInfo] a.metadata) Nothing
+      render rest
+    render (event : rest) | event.role == Issues.ChatExecutionEvent = do
+      div_ [class_ "my-3 rounded-lg border border-strokeWeak bg-fillWeak px-3 py-2 text-xs text-textWeak"] do
+        faSprite_ "circle-info" "regular" "mr-1.5 inline-block h-3.5 w-3.5"
+        toHtml event.content
+      render rest
+    render (_ : rest) = render rest
+    render [] = pass
     -- Stored content is JSON (code blocks stripped) where the LLM produced it, plain text otherwise.
     parseStoredContent content storedWidgets = case AI.parseLLMResponse content of
-      Right aiResp -> (fromMaybe "" aiResp.explanation, guarded (not . null) aiResp.widgets)
+      Right aiResp ->
+        let widgets = AI.responseWidgets aiResp
+            structured = isJust aiResp.query || isJust aiResp.visualization || not (null widgets)
+         in ( fromMaybe (bool content "Here are the requested visualizations:" structured) aiResp.explanation
+            , guarded (not . null) widgets <|> parseStoredJSON @[Widget.Widget] storedWidgets
+            )
       Left _ -> (content, parseStoredJSON @[Widget.Widget] storedWidgets)
 
 
