@@ -134,12 +134,12 @@ test.describe("Query editor", () => {
   test("moves from a popular query into the library", async ({ page }) => {
     const chips = page.locator("#popular-search-chips");
     await expect(chips.getByText("Show errors")).toBeVisible();
-    await expect(chips.getByText("HTTP 5xx responses")).toBeVisible();
+    await expect(chips.getByText("Show 5xx responses")).toBeVisible();
     await chips.getByText("Show errors").click();
     await expect.poll(() => page.locator("#filterElement").evaluate((el: any) => el.getValue())).toContain('level == "ERROR"');
 
     await page.keyboard.press("Escape");
-    await page.getByRole("button", { name: "Library" }).click();
+    await page.getByRole("button", { name: "Query library" }).click();
     const library = page.locator("#queryLibraryPopover");
     await expect(library).toBeVisible();
     for (const tab of ["Popular", "Saved", "Recent"])

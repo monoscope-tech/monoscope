@@ -482,7 +482,7 @@ refreshIntervalSelect_ targetPr =
     , id_ $ targetPr <> "-live-refresh-interval"
     , data_ "refresh-select" ""
     , Aria.label_ "Refresh results interval"
-    , term "hx-live" "host.value = closest('[data-time-transport]').data.interval"
+    , term "hx-live" "this.value = closest('[data-time-transport]').data.interval"
     , [__|on change call window.setTimeRefreshInterval(me.closest('[data-time-transport]'), Number(my.value))|]
     ]
     $ forM_ refreshOptions \(_, title, ms) -> option_ [value_ ms] $ toHtml $ bool title "Off" (ms == "0")
