@@ -38,11 +38,12 @@ test.describe('server-rendered sidebar', () => {
 test('Explorer stays highlighted through tab navigation and browser history', async ({ page }) => {
   await page.goto(project + '/metrics');
   const explorer = page.locator(`#main-sidenav .main-nav-link[href="${project}/log_explorer"]`);
+  const explorerViews = page.getByRole('navigation', { name: 'Explorer views' });
   await expect(explorer).toHaveAttribute('aria-current', 'page');
-  await page.locator('#main-navbar').getByRole('tab', { name: 'Live Tail', exact: true }).click();
+  await explorerViews.getByRole('link', { name: 'Live Tail', exact: true }).click();
   await expect(page).toHaveURL(/\/live_tail(?:\?|$)/);
   await expect(explorer).toHaveAttribute('aria-current', 'page');
-  await page.locator('#main-navbar').getByRole('tab', { name: 'Service Map', exact: true }).click();
+  await explorerViews.getByRole('link', { name: 'Service Map', exact: true }).click();
   await expect(page).toHaveURL(/\/service_map(?:\?|$)/);
   await expect(explorer).toHaveAttribute('aria-current', 'page');
   await page.goBack();

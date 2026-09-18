@@ -168,12 +168,12 @@ test.describe("Live Tail", () => {
     await expect(row.locator("[data-message]")).not.toContainText("attributes.private.token");
   });
 
-  test("the Explorer tab strip leads with Live Tail but still lands on Events", async ({ page }) => {
-    // Ordering is a product decision ("what is happening" is opt-in, "what happened" is the
-    // default), and it is the kind of thing a nav refactor silently reverses.
+  test("the Explorer navigation leads with and lands on Events", async ({ page }) => {
+    // Ordering is a product decision: investigating what happened is primary, while watching
+    // a stream is opt-in. It is the kind of thing a navigation refactor silently reverses.
     await page.goto(`/p/${DEMO_PROJECT}/log_explorer`, { waitUntil: "domcontentloaded" });
-    const tabs = page.getByRole("tablist").first();
-    await expect(tabs.getByRole("tab").first()).toHaveText(/live tail/i);
-    await expect(tabs.getByRole("tab", { name: /^Events$/i })).toHaveAttribute("aria-selected", "true");
+    const navigation = page.getByRole("navigation", { name: "Explorer views" });
+    await expect(navigation.getByRole("link").first()).toHaveText(/^Events$/i);
+    await expect(navigation.getByRole("link", { name: /^Events$/i })).toHaveAttribute("aria-current", "page");
   });
 });

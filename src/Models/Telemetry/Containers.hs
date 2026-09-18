@@ -68,9 +68,9 @@ import System.Types (DB)
 -- Kubernetes
 -- >>> runtimeOf (emptyRow "c")
 -- Docker
--- >>> runtimeOf (emptyRow "node-1") {scope = ScopeHost}
+-- >>> runtimeOf (row "node-1" ScopeHost Nothing)
 -- Host
--- >>> runtimeOf (emptyRow "web-0") {scope = ScopePod}
+-- >>> runtimeOf (row "web-0" ScopePod Nothing)
 -- Kubernetes
 runtimeOf :: ContainerRow -> Runtime
 runtimeOf r = case r.scope of
@@ -249,8 +249,8 @@ swarmService name = case reverse (T.splitOn "." name) of
 --
 -- Shadowing is by pod name, not by workload: two pods of one Deployment are two rows.
 --
--- >>> let ctr n p = (emptyRow n) {scope = ScopeContainer, podName = Just p}
--- >>> let pod p = (emptyRow p) {scope = ScopePod, podName = Just p}
+-- >>> let ctr n p = row n ScopeContainer (Just p)
+-- >>> let pod p = row p ScopePod (Just p)
 -- >>> map (.containerName) $ dropShadowed [ctr "app" "web-0", pod "web-0", pod "db-0"]
 -- ["app","db-0"]
 -- >>> map (.containerName) $ dropShadowed [pod "web-0"]
@@ -547,4 +547,5 @@ containersWithLimit limitM useTimefusion pid fromTime' toTime =
 
 -- $setup
 -- >>> :set -XOverloadedStrings -XOverloadedRecordDot
--- >>> let emptyRow n = ContainerRow n ScopeContainer Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+-- >>> let row :: Text -> Scope -> Maybe Text -> ContainerRow; row n s p = ContainerRow n s p Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+-- >>> let emptyRow :: Text -> ContainerRow; emptyRow n = row n ScopeContainer Nothing
