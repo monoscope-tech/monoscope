@@ -166,12 +166,12 @@ buildWhereCondition = maybe "TRUE" \w -> if T.null w then "TRUE" else "(" <> w <
 -- >>> buildEnvFilter (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing)
 -- ""
 --
--- >>> buildEnvFilter (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing){environment = Just "prod"}
+-- >>> buildEnvFilter $ applyScopedQuery (mkScopedQuery defPid (Nothing, Nothing) (Just "prod") Nothing) (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing)
 -- "resource___deployment___environment___name = 'prod'"
 --
 -- Values reach this from a cookie and a query param, so they are escaped, not trusted:
 --
--- >>> buildEnvFilter (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing){environment = Just "o'brien"}
+-- >>> buildEnvFilter $ applyScopedQuery (mkScopedQuery defPid (Nothing, Nothing) (Just "o'brien") Nothing) (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing)
 -- "resource___deployment___environment___name = 'o''brien'"
 buildEnvFilter :: SqlQueryCfg -> Text
 buildEnvFilter cfg = maybe "" (\e -> "resource___deployment___environment___name = " <> sqlStringLit e) cfg.environment
