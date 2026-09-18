@@ -2355,19 +2355,21 @@ code, pre, .code, .monospace {
   /* Tagify replaces the text input after first paint. Reserve the final
      control box so that replacement cannot resize the sticky toolbar. Longer
      legends can still expand the fieldset naturally. */
-  @apply box-border h-9 min-w-32;
+  box-sizing: border-box;
+  height: 2.25rem;
+  min-width: 7.75rem;
 }
 
-.dash-variable input.dash-variable-input {
+.dash-variable > input.dash-variable-input {
   /* Match Tagify's input minimum width before it initializes. Otherwise the
      wider native text input can make the toolbar wrap for a single frame. */
-  @apply w-28;
+  width: 110px;
 }
 
 .dash-variable .tagify {
   --tags-border-color: transparent;
   --tag-text-color: var(--color-textStrong);
-  @apply h-6 w-full min-w-28 border-0 bg-transparent py-0 pl-2 pr-7 text-xs;
+  padding: 0;
 }
 
 .dash-variable legend {
@@ -2376,27 +2378,17 @@ code, pre, .code, .monospace {
 }
 
 .dash-variable .tagify--select {
-  @apply cursor-pointer;
+  cursor: pointer;
 }
 
 .dash-variable .tagify__tag {
-  @apply m-0 min-w-0 max-w-full p-0;
-}
-
-.dash-variable .tagify__tag > div {
-  @apply max-w-full p-0;
+  min-width: 100%;
+  margin-inline-end: 0.5em;
+  padding-right: 1em;
 }
 
 .dash-variable .tagify__tag-text {
-  @apply block truncate font-medium;
-}
-
-.dash-variable .tagify__input {
-  @apply m-0 min-w-0 px-0 py-1 text-xs text-textWeak;
-}
-
-.dash-variable .tagify--select::after {
-  display: none;
+  text-wrap-mode: nowrap !important;
 }
 
 /* Group widget collapsed state - header fills the item. The header checkbox

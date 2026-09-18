@@ -320,8 +320,8 @@ dashboardPage_ pid dashId dash dashVM allParams = do
         faSprite_ "filter" "regular" "w-3 h-3"
         "Hide Filters"
       div_ [class_ $ "max-md:hidden max-md:peer-checked/vars:flex flex gap-2 flex-wrap max-md:w-full max-md:pt-1 " <> if isJust dash.tabs then "ml-auto max-md:ml-0" else ""] do
-        forM_ variables \var -> fieldset_ [class_ "group/dash-var relative box-border h-9 min-w-32 rounded-lg border border-strokeWeak bg-bgBase p-0 text-sm transition-[border-color,box-shadow,background-color] duration-150 hover:border-strokeStrong hover:bg-fillWeaker focus-within:border-strokeBrand-strong focus-within:ring-2 focus-within:ring-strokeBrand-weak dash-variable"] do
-          legend_ [class_ "ml-2 max-w-48 truncate px-1 text-xs font-medium text-textWeak transition-colors duration-150 group-focus-within/dash-var:text-textBrand"] $ toHtml $ fromMaybe var.key var.title <> memptyIfFalse (var.required == Just True) " *"
+        forM_ variables \var -> fieldset_ [class_ "border border-strokeStrong bg-fillWeaker p-0 inline-block rounded-lg dash-variable text-sm"] do
+          legend_ [class_ "px-1 ml-2 text-xs"] $ toHtml $ fromMaybe var.key var.title <> memptyIfFalse (var.required == Just True) " *"
           let whitelist =
                 maybe
                   "[]"
@@ -334,33 +334,28 @@ dashboardPage_ pid dashId dash dashVM allParams = do
                   )
                   var.options
 
-          div_ [class_ "relative flex h-6 items-center"] do
-            input_
-              $ [ type_ "text"
-                , name_ var.key
-                , class_ "dash-variable-input w-28 bg-transparent px-2 pr-7 text-xs text-textStrong outline-none placeholder:text-textWeak"
-                , placeholder_ "All"
-                , Aria.label_ $ "Filter by " <> fromMaybe var.key var.title
-                , data_ "project-id" pidText
-                , data_ "dashboard-id" dashIdText
-                , data_ "tagify" ""
-                , data_ "tagify-whitelist" whitelist
-                , data_ "tagify-enforce-whitelist" ""
-                , data_ "tagify-text-prop" "name"
-                , data_ "tagify-query-sql" $ maybeToMonoid $ (.statement) <$> var.sql
-                , -- Which store the statement belongs to. Without it the client-side
-                  -- refresh below re-runs a postgres-only statement (apis.endpoints)
-                  -- against TimeFusion and the variable silently stops updating.
-                  data_ "tagify-db-source" $ foldMap (Data.Effectful.Hasql.sqlSourceParam . (.source)) var.sql
-                , data_ "tagify-query" $ maybeToMonoid var.query
-                , data_ "tagify-reload-on-change" $ maybe "false" (T.toLower . show) var.reloadOnChange
-                , value_ $ maybeToMonoid var.value
-                ]
-              -- Multi vars must carry NO tagify-mode attr (main.ts only sets options.mode
-              -- when present); a second data_ attr would be (<>)-merged by Lucid.
-              <> memptyIfFalse (var.multi /= Just True) [data_ "tagify-mode" "select"]
-            span_ [class_ "pointer-events-none absolute right-2 top-1/2 z-10 -translate-y-1/2 text-iconNeutral transition-colors duration-150 group-hover/dash-var:text-textStrong group-focus-within/dash-var:text-iconBrand"]
-              $ faSprite_ "chevron-down" "regular" "h-2.5 w-2.5"
+          input_
+            $ [ type_ "text"
+              , name_ var.key
+              , class_ "dash-variable-input"
+              , data_ "project-id" pidText
+              , data_ "dashboard-id" dashIdText
+              , data_ "tagify" ""
+              , data_ "tagify-whitelist" whitelist
+              , data_ "tagify-enforce-whitelist" ""
+              , data_ "tagify-text-prop" "name"
+              , data_ "tagify-query-sql" $ maybeToMonoid $ (.statement) <$> var.sql
+              , -- Which store the statement belongs to. Without it the client-side
+                -- refresh below re-runs a postgres-only statement (apis.endpoints)
+                -- against TimeFusion and the variable silently stops updating.
+                data_ "tagify-db-source" $ foldMap (Data.Effectful.Hasql.sqlSourceParam . (.source)) var.sql
+              , data_ "tagify-query" $ maybeToMonoid var.query
+              , data_ "tagify-reload-on-change" $ maybe "false" (T.toLower . show) var.reloadOnChange
+              , value_ $ maybeToMonoid var.value
+              ]
+            -- Multi vars must carry NO tagify-mode attr (main.ts only sets options.mode
+            -- when present); a second data_ attr would be (<>)-merged by Lucid.
+            <> memptyIfFalse (var.multi /= Just True) [data_ "tagify-mode" "select"]
   let widgetOrderUrl = "/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/widgets_order" <> maybe "" ("?tab=" <>) renderTabSlug
       constantsJson = encodeText $ HM.fromList [(k, fromMaybe "" v) | (k, v) <- allParams, "const-" `T.isPrefixOf` k]
 
