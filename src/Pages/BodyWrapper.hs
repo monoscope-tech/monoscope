@@ -242,8 +242,9 @@ bodyWrapper bcfg child = do
       browserMonitoring = isProd && bcfg.config.enableBrowserMonitoring && bcfg.config.telemetryApiKey /= ""
       initialTheme = maybe "dark" (.theme) bcfg.sessM
       themeColor = bool "#fbfcfd" "#060708" (initialTheme == "dark")
+      projectTimeZone = mfilter (not . T.null) $ (.timeZone) <$> bcfg.currProject
   doctype_
-  html_ [lang_ "en"] do
+  html_ ([lang_ "en"] <> [data_ "timezone" tz | tz <- maybeToList projectTimeZone]) do
     head_ do
       title_ $ toHtml bcfg.pageTitle
       meta_ [charset_ "UTF-8"]
@@ -800,35 +801,72 @@ sideNav sess project pageTitle menuItem activationProgressM = aside_ [class_ "re
 
 navbar :: BWConfig -> [(Text, Text, Text)] -> Html ()
 navbar bcfg menuL =
-  nav_ [id_ "main-navbar", class_ "w-full max-md:px-2 max-md:py-1 px-4 py-1 flex flex-row flex-wrap border-b border-strokeWeak items-center"] do
-    div_ [class_ "flex-1 flex items-center text-textStrong gap-1 min-w-0 overflow-hidden"] do
-      when (isJust bcfg.currProject) do
-        label_ [term "for" "mobile-nav-toggle", role_ "button", tabindex_ "0", class_ "md:!hidden max-md:flex group-has-[#mobile-nav-toggle:checked]/pg:max-md:!hidden cursor-pointer text-strokeStrong p-2 -m-2 items-center justify-center focus-visible:outline-2 focus-visible:outline-offset-2", Aria.label_ "Open menu", Components.keyboardActivateAttr_] $ faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 rotate-180 pointer-events-none"
-        div_ [class_ "md:!hidden max-md:block group-has-[#mobile-nav-toggle:checked]/pg:max-md:!hidden w-px h-5 bg-strokeWeak ml-2"] ""
-      whenJust bcfg.prePageTitle \pt -> whenJust (find ((== pt) . fst3) menuL) \(_, url, icon) -> do
-        a_ ([class_ "max-md:hidden p-1 hover:bg-fillWeak inline-flex items-center justify-center gap-1 rounded-md text-sm", href_ url] <> navTabAttrs) do
-          faSprite_ icon "regular" "w-4 h-4 text-strokeStrong"
-          toHtml pt
-        faSprite_ "chevron-right" "regular" "w-3 h-3 max-md:hidden"
-      h1_ [class_ $ "flex min-w-0 items-center text-textStrong" <> bool "" " max-md:hidden" (isJust bcfg.pageActions)] do
-        let targetPageM = Components.getTargetPage bcfg.pageTitle <* bcfg.pageTitleSuffix
-        case targetPageM of
-          Just targetPage -> whenJust bcfg.currProject \p -> a_ ([class_ "font-semibold text-xl max-md:text-base p-1 py-2 rounded-md leading-none truncate text-textStrong hover:bg-fillWeak", href_ $ "/p/" <> p.id.toText <> targetPage, id_ "pageTitleText"] <> navTabAttrs) $ toHtml bcfg.pageTitle
-          Nothing -> case bcfg.pageTitleModalId of
-            Just modalId -> label_ [class_ "font-semibold text-xl max-md:text-base p-1 py-2 rounded-md leading-none truncate text-textStrong cursor-pointer hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-2", Lucid.for_ modalId, id_ "pageTitleText", role_ "button", tabindex_ "0", Aria.label_ $ "Rename " <> bcfg.pageTitle, Components.keyboardActivateAttr_] $ toHtml bcfg.pageTitle
-            Nothing -> span_ [class_ "font-semibold text-xl max-md:text-base p-1 py-2 rounded-md leading-none truncate text-textStrong", id_ "pageTitleText"] $ toHtml bcfg.pageTitle
-        -- Show tab/suffix in breadcrumbs if present (with ID for htmx out-of-band updates)
-        span_ [id_ "pageTitleSuffix", class_ "max-md:hidden flex items-center gap-1"] $ whenJust bcfg.pageTitleSuffix \suffix -> do
-          faSprite_ "chevron-right" "regular" "w-3 h-3"
-          case bcfg.pageTitleSuffixModalId of
-            Just modalId -> label_ [class_ "font-medium text-xl p-1 leading-none text-textWeak cursor-pointer hover:bg-fillWeak rounded-md focus-visible:outline-2 focus-visible:outline-offset-2", Lucid.for_ modalId, id_ "pageTitleSuffixText", role_ "button", tabindex_ "0", Aria.label_ $ "Rename " <> suffix, Components.keyboardActivateAttr_] $ toHtml suffix
-            Nothing -> span_ [class_ "font-medium text-xl p-1 leading-none text-textWeak", id_ "pageTitleSuffixText"] $ toHtml suffix
-      whenJust bcfg.docsLink \link -> a_ ([class_ "max-md:hidden text-iconBrand -mt-1", href_ link, term "hx-preload" "false", target_ "_blank", rel_ "noopener", Aria.label_ "Open Documentation"] <> tippyRight_ "Open Documentation") $ faSprite_ "circle-question" "regular" "w-4 h-4"
-    whenJust bcfg.navTabs $ div_ [class_ $ bool "" "max-md:order-last max-md:w-full max-md:pt-1" (isJust bcfg.pageActions)]
-    div_ [class_ $ "flex-1 flex items-center justify-end gap-2 text-sm" <> bool " max-md:hidden" "" (isJust bcfg.pageActions)] do
-      envPicker_ (bcfg.sessM >>= (.environment)) bcfg.envOptions
-      servicePicker_ (bcfg.sessM >>= (.service)) bcfg.serviceOptions
-      fold bcfg.pageActions
+  nav_ [id_ "main-navbar", class_ "grid w-full grid-cols-[minmax(0,1fr)_auto] items-center border-b border-strokeWeak px-4 py-1 max-md:px-2 max-md:py-1"] do
+    -- The bar has two intentional anchors: orientation and sibling navigation lead;
+    -- scope and time trail. The flexible first column owns all compression so the
+    -- operational context never wanders into the middle of a wide viewport.
+    div_ [class_ "flex min-w-0 items-center gap-0 overflow-hidden"] do
+      div_ [class_ "flex min-w-0 shrink items-center gap-1 overflow-hidden text-textStrong"] do
+        when (isJust bcfg.currProject) do
+          label_ [term "for" "mobile-nav-toggle", role_ "button", tabindex_ "0", class_ "md:!hidden max-md:flex group-has-[#mobile-nav-toggle:checked]/pg:max-md:!hidden cursor-pointer text-strokeStrong p-2 -m-2 items-center justify-center focus-visible:outline-2 focus-visible:outline-offset-2", Aria.label_ "Open menu", Components.keyboardActivateAttr_] $ faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 rotate-180 pointer-events-none"
+          div_ [class_ "md:!hidden max-md:block group-has-[#mobile-nav-toggle:checked]/pg:max-md:!hidden w-px h-5 bg-strokeWeak ms-2"] ""
+        whenJust bcfg.prePageTitle \pt -> whenJust (find ((== pt) . fst3) menuL) \(_, url, icon) -> do
+          a_ ([class_ "max-md:hidden p-1 hover:bg-fillWeak inline-flex items-center justify-center gap-1 rounded-md text-sm", href_ url] <> navTabAttrs) do
+            faSprite_ icon "regular" "w-4 h-4 text-strokeStrong"
+            toHtml pt
+          faSprite_ "chevron-right" "regular" "w-3 h-3 max-md:hidden"
+        h1_ [class_ "flex min-w-0 items-center text-textStrong"] do
+          let targetPageM = Components.getTargetPage bcfg.pageTitle <* bcfg.pageTitleSuffix
+          case targetPageM of
+            Just targetPage -> whenJust bcfg.currProject \p -> a_ ([class_ "max-w-48 truncate rounded-md p-1 py-2 text-xl font-semibold leading-none text-textStrong hover:bg-fillWeak max-md:max-w-24 max-md:text-sm", href_ $ "/p/" <> p.id.toText <> targetPage, id_ "pageTitleText"] <> navTabAttrs) $ toHtml bcfg.pageTitle
+            Nothing -> case bcfg.pageTitleModalId of
+              Just modalId -> label_ [class_ "max-w-48 truncate rounded-md p-1 py-2 text-xl font-semibold leading-none text-textStrong cursor-pointer hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-2 max-md:max-w-24 max-md:text-sm", Lucid.for_ modalId, id_ "pageTitleText", role_ "button", tabindex_ "0", Aria.label_ $ "Rename " <> bcfg.pageTitle, Components.keyboardActivateAttr_] $ toHtml bcfg.pageTitle
+              Nothing -> span_ [class_ "max-w-48 truncate p-1 py-2 text-xl font-semibold leading-none text-textStrong max-md:max-w-24 max-md:text-sm", id_ "pageTitleText"] $ toHtml bcfg.pageTitle
+          -- Show tab/suffix in breadcrumbs if present (with ID for htmx out-of-band updates)
+          span_ [id_ "pageTitleSuffix", class_ "max-md:hidden flex items-center gap-1"] $ whenJust bcfg.pageTitleSuffix \suffix -> do
+            faSprite_ "chevron-right" "regular" "w-3 h-3"
+            case bcfg.pageTitleSuffixModalId of
+              Just modalId -> label_ [class_ "font-medium text-xl p-1 leading-none text-textWeak cursor-pointer hover:bg-fillWeak rounded-md focus-visible:outline-2 focus-visible:outline-offset-2", Lucid.for_ modalId, id_ "pageTitleSuffixText", role_ "button", tabindex_ "0", Aria.label_ $ "Rename " <> suffix, Components.keyboardActivateAttr_] $ toHtml suffix
+              Nothing -> span_ [class_ "font-medium text-xl p-1 leading-none text-textWeak", id_ "pageTitleSuffixText"] $ toHtml suffix
+        whenJust bcfg.docsLink \link -> a_ ([class_ "-ms-0.5 max-md:hidden inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-iconBrand hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-2", href_ link, term "hx-preload" "false", target_ "_blank", rel_ "noopener", Aria.label_ "Open documentation for this page"] <> tippyRight_ "Open documentation for this page") $ faSprite_ "circle-question" "regular" "w-4 h-4"
+      when (isJust bcfg.navTabs) headerDivider_
+      whenJust bcfg.navTabs $ div_ [class_ "min-w-0 max-w-full overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden data-[overflowing=true]:[mask-image:linear-gradient(to_right,transparent,black_1rem,black_calc(100%-1rem),transparent)]", data_ "nav-tab-strip" ""]
+    div_ [class_ $ "ms-auto flex shrink-0 items-center justify-end gap-0 text-sm" <> bool " max-md:hidden" "" (isJust bcfg.pageActions)] do
+      unless (V.null bcfg.envOptions && V.null bcfg.serviceOptions) $ div_ [class_ "flex items-center gap-2", data_ "header-scope" "", role_ "group", Aria.label_ "Global telemetry scope"] do
+        envPicker_ (bcfg.sessM >>= (.environment)) bcfg.envOptions
+        servicePicker_ (bcfg.sessM >>= (.service)) bcfg.serviceOptions
+      when
+        (not (V.null bcfg.envOptions && V.null bcfg.serviceOptions) && isJust bcfg.pageActions)
+        headerDivider_
+      whenJust bcfg.pageActions $ div_ [class_ "flex items-center", data_ "header-actions" ""]
+    script_
+      [text|
+      (() => {
+        const navbar = document.currentScript?.closest('#main-navbar');
+        const strip = navbar?.querySelector('[data-nav-tab-strip]');
+        const restoreScopeFocus = () => {
+          const focusId = sessionStorage.getItem('focusAfterScopeChange');
+          if (!focusId) return;
+          sessionStorage.removeItem('focusAfterScopeChange');
+          document.getElementById(focusId)?.focus();
+        };
+        requestAnimationFrame(restoreScopeFocus);
+        if (!strip) return;
+        const sync = () => {
+          strip.dataset.overflowing = String(strip.scrollWidth > strip.clientWidth + 1);
+        };
+        requestAnimationFrame(() => {
+          strip.querySelector('[aria-current="page"]')?.scrollIntoView({block: 'nearest', inline: 'nearest'});
+          sync();
+        });
+        if (window.ResizeObserver) new ResizeObserver(sync).observe(strip);
+      })();
+    |]
+  where
+    -- A single divider treatment keeps the title/tabs and scope/actions boundaries
+    -- optically consistent. Spacing belongs to the divider so either neighbour can
+    -- disappear without leaving a stray gap behind.
+    headerDivider_ = div_ [class_ "mx-4 hidden h-4 w-px shrink-0 bg-strokeWeak opacity-70 md:block", Aria.hidden_ "true"] ""
 
 
 -- | The app-wide environment selector, in the shape Datadog puts in its top bar: pick prod
@@ -843,18 +881,21 @@ navbar bcfg menuL =
 -- option is "All" is furniture, not a control.
 envPicker_ :: Maybe Text -> V.Vector Text -> Html ()
 envPicker_ selected options =
-  unless (V.null options) $ div_ [class_ "relative"] do
+  unless (V.null options) $ div_ [class_ "relative", data_ "scope-picker" ""] do
+    let current = fromMaybe "All environments" selected
     button_
-      ( [ class_ "inline-flex items-center gap-1.5 rounded-lg border border-strokeWeak px-2 py-1 hover:bg-fillWeak cursor-pointer"
+      ( [ class_ "group inline-flex h-8 items-center gap-1.5 rounded-lg border border-strokeWeak bg-bgRaised px-2.5 shadow-xs hover:border-strokeStrong hover:bg-fillWeak focus-visible:border-strokeFocus cursor-pointer aria-busy:opacity-60"
         , type_ "button"
-        , Aria.label_ "Deployment environment"
-        , term "data-tippy-content" "Scope every page to one deployment environment"
+        , id_ "env-picker-trigger"
+        , Aria.label_ $ "Deployment environment: " <> current
+        , term "data-tippy-content" "Global scope: apply this deployment environment to every telemetry page"
         ]
           <> popoverTrigger_ "env-picker"
       )
       do
-        faSprite_ "layer-group" "regular" "w-3.5 h-3.5 text-iconNeutral"
-        span_ [class_ "font-medium"] $ toHtml $ fromMaybe "All envs" selected
+        span_ [class_ "group-aria-busy:hidden"] $ faSprite_ "layer-group" "regular" "w-3.5 h-3.5 text-iconNeutral"
+        span_ [class_ "hidden group-aria-busy:block"] $ faSprite_ "spinner" "regular" "w-3.5 h-3.5 animate-spin text-iconBrand"
+        span_ [class_ "max-w-32 truncate font-normal text-textWeak max-md:hidden", id_ "env-picker-label"] $ toHtml $ fromMaybe "All envs" selected
         faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral"
     ul_ (popoverPanel_ "env-picker" <> [class_ "dropdown menu flex flex-col bg-bgBase border border-strokeWeak w-56 p-1 text-sm rounded-lg shadow"])
       -- Nothing is "all environments" and is always offered: an environment that has gone
@@ -868,7 +909,7 @@ envPicker_ selected options =
             , term "aria-pressed" (bool "false" "true" (opt == selected))
             , -- A cookie write plus a reload: genuinely imperative, and the whole point is
               -- that it applies to the server-rendered query on the *next* request.
-              term "_" [text|on click set document.cookie to 'env=${cookieVal};path=/;max-age=31536000;samesite=lax' then call location.reload()|]
+              term "_" [text|on click put my.innerText into #env-picker-label then set #env-picker-trigger's @aria-busy to 'true' then set #env-picker-trigger's @disabled to 'disabled' then call sessionStorage.setItem('focusAfterScopeChange', 'env-picker-trigger') then set document.cookie to 'env=${cookieVal};path=/;max-age=31536000;samesite=lax' then call location.reload()|]
             ]
           $ toHtml
           $ fromMaybe "All environments" opt
@@ -876,15 +917,17 @@ envPicker_ selected options =
 
 servicePicker_ :: Maybe Text -> V.Vector Text -> Html ()
 servicePicker_ selected options =
-  unless (V.null options) $ div_ [class_ "relative"] do
-    button_ ([class_ "inline-flex items-center gap-1.5 rounded-lg border border-strokeWeak px-2 py-1 hover:bg-fillWeak cursor-pointer", type_ "button", Aria.label_ "Service", term "data-tippy-content" "Scope every page to one service"] <> popoverTrigger_ "service-picker") do
-      faSprite_ "cube" "regular" "w-3.5 h-3.5 text-iconNeutral"
-      span_ [class_ "font-medium"] $ toHtml $ fromMaybe "All services" selected
+  unless (V.null options) $ div_ [class_ "relative", data_ "scope-picker" ""] do
+    let current = fromMaybe "All services" selected
+    button_ ([class_ "group inline-flex h-8 items-center gap-1.5 rounded-lg border border-strokeWeak bg-bgRaised px-2.5 shadow-xs hover:border-strokeStrong hover:bg-fillWeak focus-visible:border-strokeFocus cursor-pointer aria-busy:opacity-60", type_ "button", id_ "service-picker-trigger", Aria.label_ $ "Global service scope: " <> current, term "data-tippy-content" "Global scope: apply this service to every telemetry page"] <> popoverTrigger_ "service-picker") do
+      span_ [class_ "group-aria-busy:hidden"] $ faSprite_ "cube" "regular" "w-3.5 h-3.5 text-iconNeutral"
+      span_ [class_ "hidden group-aria-busy:block"] $ faSprite_ "spinner" "regular" "w-3.5 h-3.5 animate-spin text-iconBrand"
+      span_ [class_ "max-w-32 truncate font-normal text-textWeak max-md:hidden", id_ "service-picker-label"] $ toHtml current
       faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral"
     ul_ (popoverPanel_ "service-picker" <> [class_ "dropdown menu flex flex-col bg-bgBase border border-strokeWeak w-56 p-1 text-sm rounded-lg shadow"])
       $ forM_ (Nothing : (Just <$> V.toList options)) \opt -> do
         let cookieVal = fromMaybe "" opt
-        li_ $ button_ [class_ $ "w-full text-left cursor-pointer rounded-md px-2 py-1 hover:bg-fillWeak " <> bool "" "font-semibold text-textBrand" (opt == selected), type_ "button", term "aria-pressed" (bool "false" "true" (opt == selected)), term "_" [text|on click set document.cookie to 'service=${cookieVal};path=/;max-age=31536000;samesite=lax' then call location.reload()|]] $ toHtml $ fromMaybe "All services" opt
+        li_ $ button_ [class_ $ "w-full text-left cursor-pointer rounded-md px-2 py-1 hover:bg-fillWeak " <> bool "" "font-semibold text-textBrand" (opt == selected), type_ "button", term "aria-pressed" (bool "false" "true" (opt == selected)), term "_" [text|on click put my.innerText into #service-picker-label then set #service-picker-trigger's @aria-busy to 'true' then set #service-picker-trigger's @disabled to 'disabled' then call sessionStorage.setItem('focusAfterScopeChange', 'service-picker-trigger') then set document.cookie to 'service=${cookieVal};path=/;max-age=31536000;samesite=lax' then call location.reload()|]] $ toHtml $ fromMaybe "All services" opt
 
 
 globalTemplates_ :: Html ()

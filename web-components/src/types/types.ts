@@ -8,8 +8,11 @@ declare global {
     dashboardRefreshInterval: number;
     dashboardRefreshTimer: ReturnType<typeof setInterval> | null;
     initTimeTransport: (transport: HTMLElement) => void;
+    destroyTimeTransport: (transport: HTMLElement) => void;
+    syncTimeTransports: () => void;
     setTimeRefreshInterval: (transport: HTMLElement | null, interval: number) => void;
     toggleLiveRefresh: (transport: HTMLElement | null) => void;
+    toggleLiveData: (liveData: HTMLElement | null, transport: HTMLElement | null) => void;
     shiftTimeRange: (direction: -1 | 1, transport?: HTMLElement | null) => void;
     exportTableCsv: (selector: string, filename: string) => void;
     bindFunctionsToObjects: (rootObj: any, obj: any) => any;
@@ -25,6 +28,7 @@ declare global {
     getTimeRange: () => { from: string; to: string; since: string } | undefined;
     formatNumber: (num: number | null | undefined) => string;
     getUTCOffset: () => string;
+    formatTimeRange: (start: string, end: string, timeZone?: string) => string;
     createTagify: (selectorOrElement: string | Element, options?: any) => any;
     tagifyTemplateFunc: (this: TagifyTemplateContext, tagData: TagifyTagData) => string;
     getTagValues: (selector: string) => string[];

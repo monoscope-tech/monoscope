@@ -740,7 +740,7 @@ spec = around withTestResources do
   -- user reloads. Deleting the attribute reintroduces that with every JS test still green.
   describe "Detail panel request sync" do
     it "logExplorerH_detailsContainer_replacesTheInFlightRequest" \tr -> do
-      (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       let html = toText $ Lucid.renderText $ Lucid.toHtml page
       -- Scoped to the container's own tag, not the page: `lazyLoad_` and the widget loader
       -- already carry the same attribute, so a page-wide search passes with this one deleted.
@@ -754,7 +754,7 @@ spec = around withTestResources do
   -- an AI answer selected — never redrew.
   describe "Visualization type switching" do
     it "apiLogH_widgetContainerReadsItsTypeFromMutableWidgetJSON" \tr -> do
-      (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "timeseries_line") Nothing Nothing
+      (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "timeseries_line") Nothing Nothing Nothing
       let html = toText $ Lucid.renderText $ Lucid.toHtml page
       html `shouldSatisfy` T.isInfixOf "var widgetJSON = {"
       html `shouldSatisfy` T.isInfixOf "\"type\":\"timeseries_line\""
@@ -763,14 +763,14 @@ spec = around withTestResources do
 
   describe "Trace fullscreen scrolling" do
     it "apiLogH_traceOverlayDoesNotCreateAScrollContainer" \tr -> do
-      (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       let html = toText $ Lucid.renderText $ Lucid.toHtml page
       find (T.isInfixOf "id=\"trace_expanded_view\"") (T.splitOn "<" html)
         `shouldSatisfy` maybe False (T.isInfixOf "overflow-hidden")
 
   describe "Query editor skeleton" do
     it "apiLogH_rendersAnEmptyQueryAsANativePlaceholder" \tr -> do
-      (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       let html = toText $ Lucid.renderText $ Lucid.toHtml page
       let input = find (T.isInfixOf "data-query-input") (T.splitOn "<" html)
       input `shouldSatisfy` maybe False (T.isPrefixOf "textarea ")
@@ -917,7 +917,7 @@ spec = around withTestResources do
   describe "Log Explorer page shell" do
     it "renders Common facets with the page and leaves other groups lazy" \tr -> do
       seedFacetSummary tr
-      (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
           eagerUrl = "hx-get=\"/p/" <> testPid.toText <> "/log_explorer/facets\""
       html `shouldSatisfy` T.isInfixOf "data-field=\"resource.service.name\""
@@ -927,7 +927,7 @@ spec = around withTestResources do
       html `shouldNotSatisfy` T.isInfixOf eagerUrl
 
     it "queryEditor_keepsRestingBoundariesQuietUntilFocus" \tr -> do
-      (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
       html `shouldSatisfy` T.isInfixOf "bg-bgRaised rounded-lg border border-strokeWeak focus-within:ring-2"
       html `shouldSatisfy` T.isInfixOf "focus-within:ring-2 focus-within:ring-strokeBrand-weak"
@@ -938,7 +938,7 @@ spec = around withTestResources do
       html `shouldSatisfy` T.isInfixOf "hx-live:aria-disabled"
 
     it "timeTransport_disabledNextButton_hasSingleDivider" \tr -> do
-      (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       let html = toText $ Lucid.renderText $ Lucid.toHtml page
       find (T.isInfixOf "aria-label=\"Next time window\"") (T.splitOn "<" html)
         `shouldSatisfy` maybe False (T.isInfixOf "disabled:-ms-px")
@@ -947,7 +947,7 @@ spec = around withTestResources do
     -- was discarded when arriving from another page. The table then raced its
     -- fallback worker fetch against chart requests and could render an empty list.
     it "keeps the initial log-data preload inside the HTMX swap target" \tr -> do
-      (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
           indexOf needle = T.length $ fst $ T.breakOn needle html
       html `shouldSatisfy` T.isInfixOf "id=\"main-content\""
@@ -963,7 +963,7 @@ spec = around withTestResources do
     -- spinner. Both paths must now use the same trace-shaped loading state.
     it "renders a reusable trace skeleton for shared and in-app trace loads" \tr -> do
       let traceRef = "774115aaa715abf80d93fc629c2269a4/?timestamp=2026-07-15T18:59:16.952128Z"
-      (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just traceRef) Nothing Nothing Nothing
+      (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just traceRef) Nothing Nothing Nothing Nothing
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
       html `shouldSatisfy` T.isInfixOf "trace-loading-skeleton"
       html `shouldSatisfy` T.isInfixOf "Loading trace"

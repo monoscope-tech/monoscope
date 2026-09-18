@@ -142,7 +142,6 @@ data RumQueryResult
   | SessionDetailResult (Maybe RumSession)
   | VitalSamplesResult [VitalSample]
   | VitalsDetailResult [VitalTrendPoint] [PageVitalPoint]
-  | ServicesResult [Text]
   | BreakdownResult [RumBreakdown]
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
@@ -158,7 +157,6 @@ data RumQuery
   | SessionDetailQuery Text
   | VitalSamplesQuery
   | VitalsDetailQuery RumBucket
-  | ServicesQuery
   | BreakdownQuery
   deriving stock (Eq, Generic, Ord, Show)
   deriving anyclass (Hashable)

@@ -854,6 +854,7 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "mi
         let onDashboard = isJust widget._dashboardId
             dashId = maybeToMonoid widget._dashboardId
             pid = projectIdText widget
+            dashboardScope = foldMap ("&dashboard_id=" <>) widget._dashboardId
         menuItem_
           (bool "Add this widget to a dashboard" "Copy this widget to another dashboard" onDashboard)
           [ id_ $ wId <> "_copy_link"
@@ -881,7 +882,7 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "mi
               set widgetData to JSON.parse(widgetEl.dataset.widget)
               set txt to widgetData.sql
               if not txt and widgetData.query then
-                fetch ('/p/${pid}/widget/sql-text?query=' + encodeURIComponent(widgetData.query)) as text
+                fetch ('/p/${pid}/widget/sql-text?query=' + encodeURIComponent(widgetData.query) + '${dashboardScope}') as text
                 set txt to it
               end
               if not txt then set txt to 'No SQL available' end
@@ -1229,6 +1230,7 @@ renderChart widget = do
                 timeToJS = encodeText widget.timeTo
                 highlightFromJS = encodeText widget.highlightFrom
                 highlightToJS = encodeText widget.highlightTo
+                dashboardIdJS = encodeText widget._dashboardId
             script_
               [type_ "text/javascript", data_ "chart-init" chartId]
               [text|
@@ -1258,7 +1260,8 @@ renderChart widget = do
                   timeFrom: ${timeFromJS},
                   timeTo: ${timeToJS},
                   highlightFrom: ${highlightFromJS},
-                  highlightTo: ${highlightToJS}
+                  highlightTo: ${highlightToJS},
+                  dashboardId: ${dashboardIdJS}
                 };
 
                 // Start the data request during HTML parse rather than after echarts,

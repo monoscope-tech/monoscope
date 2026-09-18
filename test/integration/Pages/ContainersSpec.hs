@@ -210,10 +210,12 @@ spec = sequential $ aroundAll withTestResources do
       rows <- runTestBg frozenTime tr $ containersInWindow False testPid (addUTCTime (-900) frozenTime) frozenTime
       V.toList rows `shouldBe` []
 
-      (_, page) <- testServant tr $ containersPage noContainerFilters
+      (_, page@(Containers.ContainersPage (PageCtx containersBW _))) <- testServant tr $ containersPage noContainerFilters
+      V.null containersBW.serviceOptions `shouldBe` True
       let Containers.ContainersPage (PageCtx conf body) = page
       table <- deferredBody body
-      conf.pageTitle `shouldBe` "Containers"
+      conf.pageTitle `shouldBe` "Infrastructure"
+      conf.prePageTitle `shouldBe` Nothing
       V.length table.rows `shouldBe` 0
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
       html `shouldContainAll` ["No containers reporting"]
@@ -383,10 +385,13 @@ spec = sequential $ aroundAll withTestResources do
                            ]
 
     it "infrastructureViews_projectTheSameTelemetryIntoHostsImagesKubernetesAndMap" \tr -> do
-      (_, hosts) <- testServant tr $ Infrastructure.hostsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "1")
+      (_, hosts@(Infrastructure.HostsPage (PageCtx hostsBW _))) <- testServant tr $ Infrastructure.hostsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "1")
+      V.null hostsBW.serviceOptions `shouldBe` True
+      hostsBW.pageTitle `shouldBe` "Infrastructure"
+      hostsBW.prePageTitle `shouldBe` Nothing
       let hostsHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml hosts
       hostsHtml
-        `shouldContainAll` ["<h1", "Infrastructure", "Hosts", "vps-bare-01", "Kubernetes", "Docker", "Storage", "Load (1m)", "Group by", "Customize", "LIVE", "Last 5 mins", "Previous time window", "Pause live updates", "Export", "Showing 3 of 3 hosts", "flex shrink-0 items-center gap-2 whitespace-nowrap", "/infrastructure/hosts/detail?since=5M"]
+        `shouldContainAll` ["<h1", "Infrastructure", "Hosts", "vps-bare-01", "Kubernetes", "Docker", "Storage", "Load (1m)", "Group by", "Customize", "LIVE", "Last 5 mins", "Previous time window", "Pause live updates", "Export", "Showing 3 of 3 hosts", "flex shrink-0 items-center gap-2 whitespace-nowrap", "grid w-full grid-cols-[minmax(0,1fr)_auto]", "data-nav-tab-strip", "data-header-actions", "/infrastructure/hosts/detail?since=5M"]
       -- The in-cluster agent's system.* series (host.name = its own pod, node only in
       -- k8s.node.name) attributes to the node it measures — 0.5 busy cores of 2 is 25% —
       -- and never forms a host row named after the agent pod.

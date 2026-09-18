@@ -527,8 +527,8 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , chartsDataStreamGet :: mode :- "chart_data" :> "stream" :> QPT "db_source" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QueryParam "chart_type" Parser.BinDensity :> AllQueryParams :> StreamGet NewlineFraming Charts.ChartStream (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceIO AE.Value))
   , widgetPost :: mode :- "p" :> ProjectId :> "widget" :> QPT "since" :> QPT "from" :> QPT "to" :> ReqBody '[JSON, FormUrlEncoded] Widget.Widget :> Post '[HTML] (RespHeaders Widget.Widget)
   , widgetGet :: mode :- "p" :> ProjectId :> "widget" :> QPT "widgetJSON" :> QPT "widgetZ" :> QPT "since" :> QPT "from" :> QPT "to" :> AllQueryParams :> Get '[HTML] (RespHeaders Widget.Widget)
-  , widgetSqlPreview :: mode :- "p" :> ProjectId :> "widget" :> "sql-preview" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders (Html ()))
-  , widgetSqlText :: mode :- "p" :> ProjectId :> "widget" :> "sql-text" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[PlainText] (RespHeaders Text)
+  , widgetSqlPreview :: mode :- "p" :> ProjectId :> "widget" :> "sql-preview" :> QPT "query" :> QPT "dashboard_id" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders (Html ()))
+  , widgetSqlText :: mode :- "p" :> ProjectId :> "widget" :> "sql-text" :> QPT "query" :> QPT "dashboard_id" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[PlainText] (RespHeaders Text)
   , -- Endpoints and fields
     endpointListGet :: mode :- "p" :> ProjectId :> "endpoints" :> QPT "page" :> QPT "per_page" :> QPT "layout" :> QPT "filter" :> QPT "host" :> QPT "request_type" :> QPT "sort" :> QPT "period" :> HXRequest :> HXBoosted :> HXCurrentURL :> QPT "load_more" :> QPT "search" :> QPT "stats" :> Get '[HTML] (RespHeaders ApiCatalog.EndpointRequestStatsVM)
   , apiCatalogGet :: mode :- "p" :> ProjectId :> "api_catalog" :> QPT "sort" :> QPT "since" :> QPT "request_type" :> QPT "period" :> QPI "skip" :> QPT "filter" :> QPT "stats" :> Get '[HTML] (RespHeaders ApiCatalog.CatalogList)
@@ -591,7 +591,7 @@ type LogExplorerRoutes = NamedRoutes LogExplorerRoutes'
 
 type LogExplorerRoutes' :: Type -> Type
 data LogExplorerRoutes' mode = LogExplorerRoutes'
-  { logExplorerGet :: mode :- "log_explorer" :> QPT "query" :> QPT "cols" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QPT "target-spans" :> QPT "target_event" :> QPT "showTrace" :> QPT "viz_type" :> QPT "alert" :> QPT "pattern_target" :> Get '[HTML, JSON] (RespHeaders Log.LogsGet)
+  { logExplorerGet :: mode :- "log_explorer" :> QPT "query" :> QPT "cols" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QPT "target-spans" :> QPT "target_event" :> QPT "showTrace" :> QPT "viz_type" :> QPT "alert" :> QPT "pattern_target" :> QPT "sort_by" :> Get '[HTML, JSON] (RespHeaders Log.LogsGet)
   , logExplorerDataGet :: mode :- "log_explorer" :> "data" :> RecordParam LogDataFieldExp Log.LogDataQuery :> Get '[JSON] (RespHeaders Log.LogResult)
   , logExplorerPatternsGet :: mode :- "log_explorer" :> "patterns" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QPT "pattern_target" :> QPI "aggregate_skip" :> Get '[JSON] (RespHeaders Log.PatternsView)
   , logExplorerSessionsGet :: mode :- "log_explorer" :> "sessions" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> QPI "aggregate_skip" :> QPT "sort_by" :> Get '[JSON] (RespHeaders Log.SessionsView)
@@ -659,7 +659,7 @@ type TelemetryRoutes = NamedRoutes TelemetryRoutes'
 type TelemetryRoutes' :: Type -> Type
 data TelemetryRoutes' mode = TelemetryRoutes'
   { tracesGet :: mode :- "traces" :> Capture "trace_id" Text :> QPU "timestamp" :> QPT "span_id" :> QPT "nav" :> QPT "embed" :> QueryParam "spans" Int :> Get '[HTML] (RespHeaders Trace.TraceDetailsGet)
-  , rumGetH :: mode :- "rum" :> QPT "tab" :> QPT "q" :> QPT "filter" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "session" :> QPT "service" :> QPT "panel" :> QPT "deferred" :> QPT "refresh" :> Get '[HTML] (RespHeaders RUM.RumGet)
+  , rumGetH :: mode :- "rum" :> QPT "tab" :> QPT "q" :> QPT "filter" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "session" :> QPT "service" :> QPT "panel" :> QPT "deferred" :> QPT "refresh" :> QPT "environment" :> Get '[HTML] (RespHeaders RUM.RumGet)
   , metricsOVGetH :: mode :- "metrics" :> QPT "tab" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> QPT "metric_prefix" :> QPI "cursor" :> QPT "expand" :> QPT "label" :> QPT "q" :> QueryParam "append" Bool :> Get '[HTML] (RespHeaders Metrics.MetricsOverViewGet)
   , dataPointCountsGetH :: mode :- "metrics" :> "datapoints" :> "counts" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders (Html ()))
   , metricDetailsGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> QPT "label" :> Get '[HTML] (RespHeaders (Html ()))
@@ -1095,7 +1095,7 @@ telemetryServer :: Projects.ProjectId -> Servant.ServerT TelemetryRoutes ATAuthC
 telemetryServer pid =
   TelemetryRoutes'
     { tracesGet = Trace.traceH pid
-    , rumGetH = RUM.rumGetH pid
+    , rumGetH = RUM.rumGetScopedH pid
     , metricsOVGetH = Metrics.metricsOverViewGetH pid
     , dataPointCountsGetH = Metrics.dataPointCountsGetH pid
     , metricDetailsGetH = Metrics.metricDetailsGetH pid
@@ -1274,15 +1274,15 @@ chartsDataStreamGetH dbSource dt pid q qSql since fromD toD src density params =
   Charts.queryMetricsStream dbSource dt pid q qSql since fromD toD src density scopedParams
 
 
--- | The environment cookie is an authenticated, sticky project selection. Do not accept an
--- @environment@ supplied in the chart URL: a stale shared URL must not override the reader's
--- active scope, and an arbitrary value would let the client choose a different cache entry.
+-- | The environment cookie is an authenticated, sticky project selection. Service is sticky
+-- on ordinary telemetry pages, but dashboards opt out: dashboards that need it declare a
+-- variable and must not inherit an invisible selector from the page the reader visited first.
 chartScopeParams :: Maybe Projects.ProjectId -> [(Text, Maybe Text)] -> ATAuthCtx [(Text, Maybe Text)]
 chartScopeParams pid params = case pid of
   Nothing -> pure params
   Just projectId -> do
     (session, _) <- Projects.sessionAndProject projectId
-    pure $ [("environment", session.environment), ("service", session.service)] <> filter (\(k, _) -> k /= "environment" && k /= "service") params
+    pure $ [("environment", session.environment)] <> [("service", session.service) | isNothing $ join $ L.lookup "dashboard_id" params] <> filter (\(k, _) -> k `notElem` ["environment", "service", "dashboard_id"]) params
 
 
 -- Widget GET handler that accepts dashboard parameters
@@ -1295,7 +1295,8 @@ widgetGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr allParams = do
     AE.eitherDecode (encodeUtf8 $ fromMaybe "" widgetJson)
       & either (const $ Error.throwError err400{errBody = "Invalid or missing widgetJSON parameter"}) pure
   now <- Time.currentTime
-  scopedParams <- chartScopeParams (Just pid) allParams
+  let scopeMarker = ("dashboard_id",) . Just <$> widget._dashboardId
+  scopedParams <- chartScopeParams (Just pid) $ maybeToList scopeMarker <> allParams
   let widgetWithPid = widget & #_projectId ?~ pid
       isEager = widgetWithPid.eager == Just True || widgetWithPid.wType `elem` [Widget.WTTable, Widget.WTStat, Widget.WTAnomalies]
   processedWidget <-

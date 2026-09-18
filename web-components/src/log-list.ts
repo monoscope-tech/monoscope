@@ -397,6 +397,9 @@ export class LogList extends LitElement {
   // Named (not anonymous) so they can be removed on disconnect — see setupEventListeners.
   private handleLiveToggle = (e: Event) => {
     if ((e.target as HTMLInputElement).checked) {
+      const liveData = this.liveBtn?.closest<HTMLElement>('[data-live-data]');
+      const transport = liveData?.querySelector<HTMLElement>('[data-time-transport]');
+      if (liveData && transport?.dataset.live !== 'true') window.toggleLiveData(liveData, transport ?? null);
       this.isLiveStreaming = true;
       if (!this.liveStream?.isRunning) void this.startLiveStream();
     } else {
@@ -412,6 +415,7 @@ export class LogList extends LitElement {
     this.liveStreamKey = null;
     this.isLiveStreaming = false;
     if (this.liveBtn) this.liveBtn.checked = false;
+    this.liveBtn?.dispatchEvent(new CustomEvent('live-data-state-change', { bubbles: true }));
     if (message) this.showErrorToast(message);
     this.requestUpdate();
   }
@@ -1825,7 +1829,7 @@ export class LogList extends LitElement {
         // keep trusting meta; a quiet live-tail tick simply stays at the newest edge.
         if (isLoadMore) this.hasMore = false;
         else if (isRecentFetch) this.hasNewer = false;
-        else this.hasMore = meta.hasMore || false;
+        else this.hasMore = false;
         // A quiet live-tail tick (no new rows) isn't "history exhausted" — don't flash
         // the "Show earlier events" button on every empty 5s recent fetch.
         if (!isRecentFetch) this.expandTimeRange = !this.hasMore;
@@ -2913,7 +2917,7 @@ export class LogList extends LitElement {
                 </tbody>
               `}
         </table>
-        ${!isInitialLoading && !this.fetchError && this.virtualListItems.length === 0
+        ${!isInitialLoading && !this.fetchError && this.spanListTree.length === 0
           ? html`<div class="flex flex-col items-center justify-center py-12 px-4 text-center gap-2">
               ${faSprite('inbox-full', 'regular', 'w-6 h-6 text-iconNeutral')}
               <span class="text-sm text-textWeak">No events match in the selected time range.</span>
@@ -3142,7 +3146,7 @@ export class LogList extends LitElement {
             <span class="col-span-1 h-5 rounded-sm flex w-1 bg-strokeBrand-weak"></span>
           </div>`;
         }
-        const { statusCode: status, hasErrors: errCount, className: errClass } = getErrorClassification(dataArr, colIdxMap);
+        const { statusCode: status, hasErrors: errCount, className: errClass } = getErrorClassification(dataArr, colIdxMap, childErrors);
         const isExpanded = expanded || rowData.parentIds?.some((pid: string) => this.expandedTraces[pid]);
         // Session roots get a wider bar so a red "this session errored" signal is
         // scannable down the rail rather than a 1px hairline you must hover to read.
@@ -3154,7 +3158,9 @@ export class LogList extends LitElement {
         const errTip =
           this.mode === 'sessions'
             ? `${errCount || 0} error${errCount === 1 ? '' : 's'} in this session`
-            : `${errCount} errors attached; status ${status}`;
+            : childErrors && !errCount
+              ? 'A child event errored'
+              : `${errCount} errors attached; status ${status}`;
         return html`
           <div class="flex items-center justify-between w-3">
             <span class="col-span-1 h-5 rounded-sm flex"> ${renderIconWithTooltip(indicatorClass, errTip, html``)} </span>

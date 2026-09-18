@@ -202,11 +202,12 @@ window.updateTimePicker = function (
 ): string {
   const tp = opts?.targetPr || 'n';
   const rangeEl = document.getElementById(tp + '-currentRange');
+  const picker = rangeEl?.closest<HTMLElement>('[data-live-range]');
   const inputEl = document.getElementById(tp + '-custom_range_input') as HTMLInputElement | null;
-  const formatLocal = (d: string) => new Date(d).toLocaleString();
   let displayLabel = '';
 
   if (timeRange.since) {
+    if (picker) picker.dataset.liveRange = 'true';
     if (inputEl) inputEl.value = timeRange.since;
     if (!opts?.skipSetParams) window.setParams({ since: timeRange.since, from: '', to: '' });
     if (opts?.label) {
@@ -218,12 +219,20 @@ window.updateTimePicker = function (
     }
     if (rangeEl) rangeEl.innerText = displayLabel;
   } else if (timeRange.from && timeRange.to) {
+    if (picker) picker.dataset.liveRange = 'false';
     if (inputEl) inputEl.value = timeRange.from + '/' + timeRange.to;
     if (!opts?.skipSetParams) window.setParams({ from: timeRange.from, to: timeRange.to, since: '' });
-    displayLabel = opts?.label ?? formatLocal(timeRange.from) + ' - ' + formatLocal(timeRange.to);
+    displayLabel = opts?.label ?? window.formatTimeRange(timeRange.from, timeRange.to);
     if (rangeEl) rangeEl.innerText = displayLabel;
   } else {
     console.warn('updateTimePicker: malformed timeRange — expected "since" or "from"+"to"', timeRange);
+    return displayLabel;
+  }
+  const transport = picker?.parentElement?.querySelector<HTMLElement>('[data-time-transport]');
+  if (transport) {
+    transport.dataset.live = String(Boolean(timeRange.since));
+    if (!timeRange.since && window.dashboardRefreshInterval > 0) window.setTimeRefreshInterval(transport, 0);
+    else syncTimeTransports();
   }
   return displayLabel;
 };
@@ -231,27 +240,31 @@ window.updateTimePicker = function (
 window.dashboardRefreshInterval = 0;
 window.dashboardRefreshTimer = null;
 
+const timeTransports = new Set<HTMLElement>();
+
 const syncTimeTransports = () => {
   const running = window.dashboardRefreshInterval > 0;
-  document.querySelectorAll<HTMLElement>('[data-time-transport]').forEach((transport) => {
-    const liveRange = transport.dataset.live === 'true';
-    transport.querySelector<HTMLElement>('[data-pause-icon]')?.classList.toggle('hidden', !running);
-    transport.querySelector<HTMLElement>('[data-play-icon]')?.classList.toggle('hidden', running);
-    const toggle = transport.querySelector<HTMLButtonElement>('[data-live-toggle]');
-    if (toggle) {
-      toggle.ariaLabel = running ? 'Pause live updates' : liveRange ? 'Resume live updates' : 'Return to live';
-      toggle.dataset.tippyContent = toggle.ariaLabel;
-      toggle.ariaPressed = String(running);
+  timeTransports.forEach((transport) => {
+    if (!transport.isConnected) {
+      timeTransports.delete(transport);
+      return;
     }
-    const next = transport.querySelector<HTMLButtonElement>('[data-next-window]');
-    if (next) next.disabled = liveRange;
-  });
-  document.querySelectorAll<HTMLElement>('[data-live-badge]').forEach((badge) => {
-    badge.textContent = running ? 'LIVE' : 'PAUSED';
-    badge.classList.toggle('bg-fillSuccess-strong', running);
-    badge.classList.toggle('bg-fillWarning-strong', !running);
+    const liveRange = transport.dataset.live === 'true';
+    const liveData = transport.closest<HTMLElement>('[data-live-data]');
+    const rowToggle = liveData?.querySelector<HTMLInputElement>('[data-row-stream-toggle]');
+    const rowsAvailable = Boolean(rowToggle && !rowToggle.disabled);
+    const rowsRunning = !rowsAvailable || Boolean(rowToggle?.checked);
+    const allLive = liveRange && running && rowsRunning;
+    const transportRunning = liveData ? allLive : running;
+    const state = !liveRange ? 'historical' : transportRunning ? 'live' : 'paused';
+    transport.dataset.state = state;
+    transport.dataset.interval = String(window.dashboardRefreshInterval);
+    const picker = transport.parentElement?.querySelector<HTMLElement>('[data-live-range]');
+    if (picker) picker.dataset.state = state;
+    if (liveData) liveData.dataset.state = !liveRange ? 'historical' : allLive ? 'live' : !running && rowsAvailable && !rowsRunning ? 'paused' : !running ? 'refresh-paused' : 'stream-paused';
   });
 };
+window.syncTimeTransports = syncTimeTransports;
 
 window.setTimeRefreshInterval = (_transport, interval) => {
   if (window.dashboardRefreshTimer) clearInterval(window.dashboardRefreshTimer);
@@ -263,12 +276,8 @@ window.setTimeRefreshInterval = (_transport, interval) => {
   syncTimeTransports();
 };
 
-document.addEventListener('htmx:after:swap', () => {
-  if (!document.querySelector('[data-time-transport]')) window.setTimeRefreshInterval(null, 0);
-  else adoptTimeTransports();
-});
-
 window.initTimeTransport = (transport) => {
+  timeTransports.add(transport);
   const live = transport.parentElement?.querySelector('[data-live-range="true"]') != null;
   transport.dataset.live = String(live);
   if (!live) window.setTimeRefreshInterval(transport, 0);
@@ -276,19 +285,11 @@ window.initTimeTransport = (transport) => {
   else syncTimeTransports();
 };
 
-// This bundle is a deferred module, so a transport rendered above it can fire
-// its `on load` hook before the assignment above exists — that is the
-// "'window.initTimeTransport' is null" critical, and a swap that re-renders the
-// transport without re-running the hook leaves it dead the same way. Adopt any
-// transport that missed it. `dataset.live` is the marker initTimeTransport
-// itself sets, so one that DID reach the hook is never initialised twice.
-const adoptTimeTransports = () =>
-  document.querySelectorAll<HTMLElement>('[data-time-transport]').forEach((transport) => {
-    if (transport.dataset.live === undefined) window.initTimeTransport(transport);
-  });
-
-if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', adoptTimeTransports);
-else adoptTimeTransports();
+window.destroyTimeTransport = (transport) => {
+  timeTransports.delete(transport);
+  if (timeTransports.size === 0 && window.dashboardRefreshInterval > 0) window.setTimeRefreshInterval(null, 0);
+};
+window.dispatchEvent(new CustomEvent('monoscope:time-transport-ready'));
 
 const defaultTimeWindow = (transport?: HTMLElement | null) =>
   transport?.closest<HTMLElement>('[data-default-window]')?.dataset.defaultWindow || '15M';
@@ -300,6 +301,31 @@ window.toggleLiveRefresh = (transport) => {
     return;
   }
   window.setTimeRefreshInterval(transport, window.dashboardRefreshInterval > 0 ? 0 : 15000);
+};
+
+window.toggleLiveData = (liveData, transport) => {
+  if (!liveData || liveData.dataset.liveMode === 'refresh-only') {
+    window.toggleLiveRefresh(transport);
+    return;
+  }
+  const rowToggle = liveData.querySelector<HTMLInputElement>('[data-row-stream-toggle]');
+  const rowsAvailable = Boolean(rowToggle && !rowToggle.disabled);
+  const rowsRunning = !rowsAvailable || Boolean(rowToggle?.checked);
+  const allLive = transport?.dataset.live === 'true' && window.dashboardRefreshInterval > 0 && rowsRunning;
+  if (allLive) {
+    if (rowsAvailable && rowToggle?.checked) {
+      rowToggle.checked = false;
+      rowToggle.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    window.setTimeRefreshInterval(transport, 0);
+    return;
+  }
+  if (rowsAvailable && rowToggle && !rowToggle.checked) {
+    rowToggle.checked = true;
+    rowToggle.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  if (transport?.dataset.live !== 'true') window.applyTimeRange({ since: defaultTimeWindow(transport) });
+  window.setTimeRefreshInterval(transport, 15000);
 };
 
 window.shiftTimeRange = (direction, transport) => {
@@ -589,6 +615,7 @@ function reloadVarWhitelist(input: HTMLElement, background = false): Promise<voi
     query_sql: querySql,
     data_type: 'text',
   });
+  if (input.dataset.dashboardId) params.set('dashboard_id', input.dataset.dashboardId);
   // The statement belongs to one store. Omitting this routed postgres-only variable
   // queries (apis.endpoints) at TimeFusion, which answers "table not found".
   const dbSource = input.getAttribute('data-tagify-db-source');

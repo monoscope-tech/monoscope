@@ -483,6 +483,46 @@ spec = sequential $ aroundAll (\f -> withTestResources \tr -> createTestProject 
       length all3 `shouldBe` 12
       length (ordNub all3) `shouldBe` 12 -- pages are disjoint
 
+    it "service scope hides zero-traffic hosts and endpoints before pagination" \(tr, testPid) -> do
+      let alphaService = "catalog-scope-alpha"
+          alphaHost = "scope-alpha.example"
+          betaHost = "scope-beta.example"
+          mkEp host path service =
+            (def :: Endpoints.Endpoint)
+              { Endpoints.projectId = testPid
+              , Endpoints.urlPath = path
+              , Endpoints.urlParams = AE.object []
+              , Endpoints.method = "GET"
+              , Endpoints.host = host
+              , Endpoints.hash = toXXHash (testPid.toText <> host <> "GET" <> path)
+              , Endpoints.outgoing = False
+              , Endpoints.serviceName = Just service
+              }
+          alpha = mkEp alphaHost "/alpha" alphaService
+          beta = mkEp betaHost "/beta" "catalog-scope-beta"
+      runQueryEffect tr $ Endpoints.bulkInsertEndpoints $ V.fromList [alpha, beta]
+      withPool tr.trPool
+        $ for_ [(alpha, alphaService), (beta, "catalog-scope-beta")] \(endpoint, service) ->
+          void
+            $ DBT.execute
+              [sql| INSERT INTO otel_logs_and_spans
+                    (id, project_id, timestamp, start_time,
+                     attributes___http___request___method, attributes___url___path,
+                     attributes___server___address, resource___service___name,
+                     hashes, context, kind, status_code, summary)
+                  VALUES (gen_random_uuid(), ?, ?::timestamptz, ?::timestamptz,
+                          'GET', ?, ?, ?, ARRAY[?], '{}'::jsonb, 'server', '200', '{}') |]
+              (testPid, frozenTime, frozenTime, endpoint.urlPath, endpoint.host, service, endpoint.hash)
+
+      let endpointQuery = Endpoints.EndpointQuery{direction = Endpoints.Incoming, archived = False, host = Nothing, search = Nothing, sort = Endpoints.SortName, page = 0, perPage = 1, period = Endpoints.Window24h, service = Just alphaService}
+      (endpointRows, endpointTotal) <- runTestBg frozenTime tr $ Endpoints.endpointRequestStatsPageByProject Endpoints.WithStats False testPid endpointQuery
+      endpointTotal `shouldBe` 1
+      map (.urlPath) (V.toList endpointRows) `shouldBe` ["/alpha"]
+
+      let hostQuery = Endpoints.HostQuery{direction = Just Endpoints.Incoming, archived = False, sort = Endpoints.SortName, skip = 0, since = Endpoints.Since24h, period = Endpoints.Window24h, service = Just alphaService}
+      hostRows <- runTestBg frozenTime tr $ Endpoints.dependenciesAndEventsCount Endpoints.WithStats False testPid hostQuery
+      map (.host) hostRows `shouldBe` [alphaHost]
+
     -- Regression: "Alphabetical" was a silent no-op. Pages/Endpoints.hs sends
     -- sort="name" (and "events"), but the model only matched "first_seen"/"last_seen"
     -- and fell through to traffic order -- so picking Alphabetical changed nothing.
@@ -514,7 +554,7 @@ spec = sequential $ aroundAll (\f -> withTestResources \tr -> createTestProject 
                           'GET', ?, ARRAY[?], '{}'::jsonb, 'SERVER', '200', '{}') |]
               (testPid, frozenTime, frozenTime, path, (mkEp path).hash)
       -- /zebra has 9x the traffic, so traffic order would put it first.
-      let q srt = Endpoints.EndpointQuery{direction = Endpoints.Incoming, archived = False, host = Just hostName, search = Nothing, sort = srt, page = 0, perPage = 10, period = Endpoints.Window7d}
+      let q srt = Endpoints.EndpointQuery{direction = Endpoints.Incoming, archived = False, host = Just hostName, search = Nothing, sort = srt, page = 0, perPage = 10, period = Endpoints.Window7d, service = Nothing}
       byTraffic <- runTestBg frozenTime tr $ Endpoints.endpointRequestStatsByProject Endpoints.WithStats False testPid (q Endpoints.SortEvents)
       map (.urlPath) (V.toList byTraffic) `shouldBe` ["/zebra", "/alpha"]
       byName <- runTestBg frozenTime tr $ Endpoints.endpointRequestStatsByProject Endpoints.WithStats False testPid (q Endpoints.SortName)
@@ -551,7 +591,7 @@ spec = sequential $ aroundAll (\f -> withTestResources \tr -> createTestProject 
                   (testPid, frozenTime, offsetMins, frozenTime, offsetMins, path, (mkEp path).hash)
         insertSpan "/old" 5
         insertSpan "/new" 120
-      stats <- runTestBg frozenTime tr $ Endpoints.endpointRequestStatsByProject Endpoints.WithStats False testPid Endpoints.EndpointQuery{direction = Endpoints.Incoming, archived = False, host = Just hostName, search = Nothing, sort = Endpoints.SortLastSeen, page = 0, perPage = 10, period = Endpoints.Window7d}
+      stats <- runTestBg frozenTime tr $ Endpoints.endpointRequestStatsByProject Endpoints.WithStats False testPid Endpoints.EndpointQuery{direction = Endpoints.Incoming, archived = False, host = Just hostName, search = Nothing, sort = Endpoints.SortLastSeen, page = 0, perPage = 10, period = Endpoints.Window7d, service = Nothing}
       map (.urlPath) (V.toList stats) `shouldBe` ["/old", "/new"]
 
     it "hostRetentionSweep_systemArchivesIdle_wakesOnTraffic_withEmailDigest" \(tr, testPid) -> do

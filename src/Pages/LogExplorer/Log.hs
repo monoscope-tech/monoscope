@@ -86,7 +86,7 @@ import Data.UUID qualified as UUID
 import Models.Apis.Monitors (MonitorAlertConfig (..))
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.ProjectMembers qualified as ManageMembers
-import Pages.Components (FieldCfg (..), FieldSize (..), facetOption_, facetRail_, facetSection_, formField_, localTimeFmt_, resetFormOnSuccessAttr_, resizer_)
+import Pages.Components (FieldCfg (..), FieldSize (..), facetOption_, facetRail_, facetSection_, formField_, keyboardActivateAttr_, localTimeFmt_, resetFormOnSuccessAttr_, resizer_)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Monitors qualified as AlertUI
 import Pkg.AI qualified as AI
@@ -786,8 +786,8 @@ extractMissingColumn t = tfMatch <|> pgMatch
 -- | Log Explorer page shell. Renders chrome only (query box, facets, widgets,
 -- session header). Log rows are fetched separately by the log-list web component
 -- from 'logExplorerDataH' and the sibling patterns/sessions/query-library/alert-form endpoints.
-apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
-apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM showTraceM vizTypeM alertM pTargetM = do
+apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
+apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM showTraceM vizTypeM alertM pTargetM sortByM = do
   let source = fromMaybe "spans" sourceM
   (sess, project, bw) <- mkPageCtx pid
   let queryInput = maybeToMonoid queryM'
@@ -843,7 +843,7 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
           , docsLink = Just "https://monoscope.tech/docs/dashboard/dashboard-pages/api-log-explorer/"
           , freeTierStatus = freeTierStatus
           , headContent = Nothing
-          , pageActions = Just $ logExplorerActions_ currentRange
+          , pageActions = Just $ logExplorerActions_ currentRange (effectiveVizType /= Just "sessions" && effectiveVizType /= Just "patterns")
           , navTabs = Just $ explorerNavTabs_ pid "Events"
           , needsTagify = False
           }
@@ -864,11 +864,18 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
           , chartWidget
           , latencyWidget
           , queryResultCount = 0
+          , sessionSort = fromMaybe LogQueries.SortLastSeen $ rightToMaybe . parseUrlPiece =<< sortByM
           , parseError = parseErrorMsg
           , preloadUrl
           , facetSummary = bw.facetSummaryM
           }
   addRespHeaders $ LogPage $ PageCtx bwconf page
+  where
+    -- One trustworthy freshness control for the two mechanisms that keep Explorer current:
+    -- row streaming and periodic query refresh. Their independent switches stay available in
+    -- the popover, while the resting label reports whichever mechanism is paused.
+    logExplorerActions_ currentRange supportsStreaming =
+      Components.liveDataControls_ (Just "log_explorer_form") currentRange Nothing (Components.RowStreaming supportsStreaming)
 
 
 -- | Fire-and-forget on page load: mark the @explored_logs@ onboarding step done
@@ -878,20 +885,6 @@ recordExploration pid uid stepsDone queryAST = do
   unless (V.elem "explored_logs" stepsDone)
     $ void (Projects.completeOnboardingStep pid "explored_logs")
   Projects.queryLibInsert Projects.QLTHistory pid uid (toQText queryAST) queryAST Nothing
-
-
--- | Log Explorer header controls: live-stream toggle, time picker, refresh.
-logExplorerActions_ :: Maybe (Text, Text) -> Html ()
-logExplorerActions_ currentRange = div_ [class_ "flex gap-2 max-md:gap-1 items-center"] do
-  -- sr-only, not hidden: `display:none` drops the checkbox out of the tab order, so the
-  -- label could advertise role=switch while being unreachable by keyboard. The ring on
-  -- the label is what makes that focus visible, since the input itself has no box.
-  label_ [class_ "cursor-pointer border border-strokeWeak rounded-lg flex shadow-xs has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-strokeBrand-strong", role_ "switch", Aria.label_ "Stream live data", term "hx-live:aria-checked" "q('#streamLiveData').checked", term "aria-checked" "false"] do
-    input_ [type_ "checkbox", id_ "streamLiveData", class_ "sr-only"]
-    span_ [class_ "group-has-[#streamLiveData:checked]/pg:flex hidden py-1 px-2 items-center", data_ "tippy-content" "Pause live stream"] $ faSprite_ "pause" "solid" "h-4 w-4 text-iconNeutral"
-    span_ [class_ "group-has-[#streamLiveData:checked]/pg:hidden flex py-1 px-2 items-center", data_ "tippy-content" "Stream live data"] $ faSprite_ "play" "regular" "h-4 w-4 text-iconNeutral"
-  Components.timepicker_ (Just "log_explorer_form") currentRange Nothing
-  Components.refreshButton_
 
 
 -- | Shared prologue for the log-data endpoints: auth-gate the request, grab the
@@ -1171,7 +1164,7 @@ sessionsSummarySkeleton_ =
 chartSummarySkeleton_ :: Html ()
 chartSummarySkeleton_ =
   div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full min-h-36 max-md:min-h-28 aspect-[10/1] max-md:aspect-auto max-md:flex-col", role_ "status", Aria.label_ "Loading chart"] do
-    div_ [class_ "flex-[3] min-w-0 rounded-2xl skeleton-shimmer"] ""
+    div_ [class_ "flex-1 min-w-0 rounded-2xl skeleton-shimmer"] ""
     div_ [class_ "flex-1 min-w-0 max-md:hidden rounded-2xl skeleton-shimmer"] ""
 
 
@@ -1470,6 +1463,7 @@ data ApiLogsPageData = ApiLogsPageData
   , chartWidget :: Widget.Widget
   , latencyWidget :: Widget.Widget
   , queryResultCount :: Int
+  , sessionSort :: LogQueries.SessionSort
   , parseError :: Maybe Text
   , preloadUrl :: Text
   , facetSummary :: Maybe FacetSummary
@@ -1613,8 +1607,11 @@ apiLogsPage page = do
     -- copy doubled the page payload and re-ran the facet-enrich + JSON encode.
 
     pidTxt = page.pid.toText
-    countText = prettyPrintCount page.queryResultCount
-    suffixText = if page.queryResultCount >= page.resultCount then " rows" else "+ rows"
+    -- The page response is intentionally shell-only; the client updates this count after
+    -- the preloaded data request resolves. Rendering "0 rows" here describes neither the
+    -- request nor its result and makes a normal load look like a completed empty query.
+    countText = "Loading"
+    suffixText = " events…"
 
     -- Show/hide-filters label; @attrs@ must not carry a class_ (Lucid concatenates
     -- duplicate class attributes with no separator).
@@ -1664,6 +1661,7 @@ apiLogsPage page = do
           , updateUrl = True
           , targetWidgetPreview = Nothing
           , alert = isJust page.alert
+          , sessionSort = page.sessionSort
           , patternSelected = page.targetPattern
           , mobileExtra = Just do
               filtersLabel_ [Lucid.for_ "toggle-filters"] pass
@@ -1681,7 +1679,7 @@ apiLogsPage page = do
         $ if page.vizType == Just "sessions" || page.vizType == Just "patterns"
           then sessionsSummarySkeleton_
           else div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full min-h-36 max-md:min-h-28 aspect-[10/1] max-md:aspect-auto max-md:flex-col"] do
-            Widget.widget_ page.chartWidget
+            div_ [class_ "flex-1 min-w-0 h-full"] $ Widget.widget_ page.chartWidget
             div_ [class_ "flex-1 min-w-0 max-md:hidden"] $ Widget.widget_ page.latencyWidget
 
       -- Skeletons cloned by swapSessionsRegionIfNeeded during the (multi-second)
@@ -1951,8 +1949,14 @@ alertConfigurationForm_ project selectedEnvironment alertM teams = do
           h3_ [class_ "text-base font-semibold text-textStrong"] "Create monitor"
           p_ [class_ "text-xs text-textWeak hidden sm:block"] "Get notified when your query matches specific conditions"
       label_
-        [Lucid.for_ "create-alert-toggle", class_ "p-1 rounded-lg hover:bg-fillWeak transition-colors"]
-        $ faSprite_ "xmark" "regular" "w-3 h-3 text-iconNeutral"
+        [ Lucid.for_ "create-alert-toggle"
+        , class_ "inline-flex h-8 w-8 items-center justify-center rounded-lg text-iconNeutral hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-1"
+        , Aria.label_ "Close monitor editor"
+        , role_ "button"
+        , tabindex_ "0"
+        , keyboardActivateAttr_
+        ]
+        $ faSprite_ "xmark" "regular" "w-3.5 h-3.5"
 
     div_ [class_ "p-4 pt-3 flex-1 overflow-y-auto c-scroll"] do
       form_
@@ -1984,7 +1988,14 @@ alertConfigurationForm_ project selectedEnvironment alertM teams = do
           AlertUI.notificationSettingsSection_ ((.alertConfig.severity) <$> alertM) ((.alertConfig.subject) <$> alertM) ((.alertConfig.message) <$> alertM) (maybe True (.alertConfig.emailAll) alertM) teams selectedTeamIds "alert-form" alertM
 
           div_ [class_ "flex items-center justify-end gap-2 pt-4 pb-20 mt-4 border-t border-strokeWeak"] do
-            label_ [Lucid.for_ "create-alert-toggle", class_ "btn btn-sm"] "Cancel"
+            label_
+              [ Lucid.for_ "create-alert-toggle"
+              , class_ "btn btn-sm"
+              , role_ "button"
+              , tabindex_ "0"
+              , keyboardActivateAttr_
+              ]
+              "Cancel"
             button_
               [type_ "submit", class_ "btn btn-primary btn-sm"]
               (faSprite_ "plus" "regular" "w-3.5 h-3.5" >> if isJust alertM then "Update monitor" else "Create monitor")

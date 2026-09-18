@@ -1,5 +1,5 @@
 -- Parser implemented with help and code from: https://markkarpov.com/tutorial/megaparsec.html
-module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, PageDirection (..), PageCursor (..), SqlQueryCfg (..), RangeEnd (..), QueryComponents (..), NormalizedQuery (..), normalizeQuery, buildDateRange, buildGroupBy, buildOrderBy, buildLimit, buildWhereCondition, buildEnvFilter, buildServiceFilter, listToColNames, colsNoAsClause, defaultSelectSqlQuery, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth, autoBinWidth, BinDensity (..), binDensityFor, replacePlaceholders, variablePresets, variablePresetsKQL, constantToSQLList, constantToKQLList, defaultQueryLimit) where
+module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, PageDirection (..), PageCursor (..), ScopedQuery (..), mkScopedQuery, applyScopedQuery, applyScopedKqlContext, SqlQueryCfg (..), RangeEnd (..), QueryComponents (..), NormalizedQuery (..), normalizeQuery, buildDateRange, buildGroupBy, buildOrderBy, buildLimit, buildWhereCondition, buildEnvFilter, buildServiceFilter, listToColNames, colsNoAsClause, defaultSelectSqlQuery, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth, autoBinWidth, BinDensity (..), binDensityFor, replacePlaceholders, variablePresets, variablePresetsKQL, constantToSQLList, constantToKQLList, defaultQueryLimit) where
 
 import Control.Error (hush)
 import Data.Char (isAlphaNum)
@@ -18,7 +18,7 @@ import PyF (fmt)
 import Relude
 import Relude.Extra.Foldable1 (minimumOn1)
 import Text.Megaparsec (parse)
-import Utils (formatUTC)
+import Utils (formatUTC, kqlQuoted)
 import Web.HttpApiData (FromHttpApiData (..))
 
 
@@ -287,6 +287,25 @@ instance Default RangeEnd where
   def = InclusiveEnd
 
 
+-- | The context an operator carries while investigating. It is deliberately independent
+-- of the customer KQL: callers apply it at query construction, which prevents a shared
+-- URL or drill-down from silently widening the project, time, environment, or service.
+-- A trace id is evidence selection rather than a global predicate, but travels with the
+-- same value so a trace hand-off can stay exact.
+data ScopedQuery = ScopedQuery
+  { projectId :: Projects.ProjectId
+  , timeRange :: (Maybe UTCTime, Maybe UTCTime)
+  , environment :: Maybe Text
+  , service :: Maybe Text
+  , traceId :: Maybe Text
+  }
+  deriving stock (Eq, Generic, Show)
+
+
+mkScopedQuery :: Projects.ProjectId -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Text -> Maybe Text -> ScopedQuery
+mkScopedQuery projectId timeRange environment service = ScopedQuery{projectId, timeRange, environment, service, traceId = Nothing}
+
+
 data SqlQueryCfg = SqlQueryCfg
   { pid :: Projects.ProjectId
   , binDensity :: BinDensity
@@ -311,6 +330,64 @@ data SqlQueryCfg = SqlQueryCfg
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default)
+
+
+-- | Apply the shared investigation boundary to a compiler configuration. Keep the
+-- remaining configuration (source, cursor, visualization, and alert lookback) owned by
+-- the surface that knows it.
+--
+-- >>> let scope = ScopedQuery defPid (Nothing, Nothing) (Just "production") (Just "checkout") (Just "trace-1")
+-- >>> let cfg = applyScopedQuery scope (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing)
+-- >>> (cfg.environment, cfg.service, scope.traceId)
+-- (Just "production",Just "checkout",Just "trace-1")
+applyScopedQuery :: ScopedQuery -> SqlQueryCfg -> SqlQueryCfg
+applyScopedQuery scope cfg =
+  cfg
+    { pid = scope.projectId
+    , dateRange = scope.timeRange
+    , environment = scope.environment
+    , service = scope.service
+    }
+
+
+-- | Add the scope predicates that belong in a user-visible KQL hand-off. Time is
+-- transported as URL parameters, and trace selection stays caller-owned: it is
+-- evidence, not a predicate that should accidentally constrain unrelated views.
+--
+-- >>> let scope = ScopedQuery defPid (Nothing, Nothing) (Just "production") (Just "checkout") (Just "trace-1")
+-- >>> applyScopedKqlContext scope "kind==\"log\" | summarize count()"
+-- "kind==\"log\" AND service==\"checkout\" AND resource.deployment.environment.name==\"production\" | summarize count()"
+-- >>> applyScopedKqlContext scope "message==\"a|b\" | summarize count()"
+-- "message==\"a|b\" AND service==\"checkout\" AND resource.deployment.environment.name==\"production\" | summarize count()"
+-- >>> applyScopedKqlContext scope "| summarize count()"
+-- "service==\"checkout\" AND resource.deployment.environment.name==\"production\" | summarize count()"
+applyScopedKqlContext :: ScopedQuery -> Text -> Text
+applyScopedKqlContext scope query =
+  case predicates of
+    [] -> query
+    _ ->
+      let context = T.intercalate " AND " predicates
+          (beforePipe, pipeline) = splitKqlPipeline query
+          scopedBeforePipe
+            | T.null $ T.strip beforePipe = context
+            | otherwise = T.stripEnd beforePipe <> " AND " <> context
+       in scopedBeforePipe <> if T.null pipeline then "" else " " <> pipeline
+  where
+    nonBlank = mfilter (not . T.null . T.strip)
+    predicates =
+      catMaybes
+        [ ("service==" <>) . kqlQuoted <$> nonBlank scope.service
+        , ("resource.deployment.environment.name==" <>) . kqlQuoted <$> nonBlank scope.environment
+        ]
+    -- Split on the first pipeline operator, not a pipe within a quoted KQL value.
+    splitKqlPipeline = go False False [] . T.unpack
+    go _ _ seen [] = (T.pack $ reverse seen, "")
+    go quoted escaped seen remaining@(c : rest)
+      | escaped = go quoted False (c : seen) rest
+      | quoted && c == '\\' = go quoted True (c : seen) rest
+      | c == '"' = go (not quoted) False (c : seen) rest
+      | c == '|' && not quoted = (T.pack $ reverse seen, T.pack remaining)
+      | otherwise = go quoted False (c : seen) rest
 
 
 normalizeKeyPath :: Text -> Text

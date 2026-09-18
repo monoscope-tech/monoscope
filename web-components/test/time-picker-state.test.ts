@@ -22,6 +22,8 @@ const mountPicker = (prefix = 'n') => {
 };
 
 beforeEach(() => {
+  window.setTimeRefreshInterval(null, 0);
+  window.formatTimeRange = (from, to) => `${from} – ${to}`;
   document.body.innerHTML = '';
   window.history.replaceState({}, '', '/p/proj/log_explorer');
 });
@@ -131,6 +133,49 @@ describe('URL state', () => {
 });
 
 describe('time-window transport', () => {
+  test('states whether the current window is live, paused, or historical', () => {
+    const group = document.createElement('div');
+    const picker = document.createElement('button');
+    picker.dataset.liveRange = 'true';
+    const badge = document.createElement('span');
+    badge.dataset.liveBadge = '';
+    const label = document.createElement('span');
+    label.id = 'n-currentRange';
+    picker.append(badge, label);
+
+    const input = document.createElement('input');
+    input.id = 'n-custom_range_input';
+    const transport = document.createElement('div');
+    transport.dataset.timeTransport = '';
+    transport.dataset.live = 'true';
+    const toggle = document.createElement('button');
+    toggle.dataset.liveToggle = '';
+    const pause = document.createElement('span');
+    pause.dataset.pauseIcon = '';
+    const play = document.createElement('span');
+    play.dataset.playIcon = '';
+    const refreshLabel = document.createElement('span');
+    refreshLabel.dataset.refreshLabel = '';
+    toggle.append(pause, play, refreshLabel);
+    transport.append(toggle);
+    group.append(picker, input, transport);
+    document.body.append(group);
+
+    window.initTimeTransport(transport);
+    window.setTimeRefreshInterval(transport, 30000);
+    expect(transport.dataset.state).toBe('live');
+    expect(transport.dataset.interval).toBe('30000');
+    expect(picker.dataset.state).toBe('live');
+
+    window.toggleLiveRefresh(transport);
+    expect(transport.dataset.state).toBe('paused');
+    expect(picker.dataset.state).toBe('paused');
+
+    updateTimePicker({ from: '2024-01-01T00:00:00Z', to: '2024-01-02T00:00:00Z' });
+    expect(transport.dataset.state).toBe('historical');
+    expect(picker.dataset.state).toBe('historical');
+  });
+
   test('previous converts the live range to the preceding absolute window', () => {
     window.history.replaceState({}, '', '/p/proj/infrastructure/hosts?since=15M&provider=aws');
     const setParams = vi.spyOn(window, 'setParams').mockImplementation(() => undefined);

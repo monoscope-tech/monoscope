@@ -378,16 +378,10 @@ instance Var LogLevel where
 
 -- Rename to AppContext
 
--- | Everything that changes the api_catalog stats result: project, tab, sort, window,
--- period, page offset. A tuple rather than a joined string so a new dimension is a type
--- error at every construction site instead of a silently colliding cache key.
-type HostStatsKey = (Projects.ProjectId, Text, Endpoints.EndpointSort, Endpoints.Since, Endpoints.Period, Int)
+type HostStatsKey = (Projects.ProjectId, Endpoints.HostQuery)
 
 
--- | Everything that changes the endpoints-list stats result: (project, direction tab,
--- host, sort) and (search, page, per_page, period). Nested pairs because Hashable
--- stops at 7-tuples. Same rationale as 'HostStatsKey'.
-type EndpointStatsKey = ((Projects.ProjectId, Text, Text, Text), (Text, Int, Int, Endpoints.Period))
+type EndpointStatsKey = (Projects.ProjectId, Endpoints.EndpointQuery)
 
 
 -- | Identifies a source blob: @(owner, repo, ref, path)@. Deliberately NOT project-scoped —
@@ -417,7 +411,7 @@ data AuthContext = AuthContext
   -- ^ api_catalog per-host traffic stats. The underlying telemetry aggregate scans a
   -- full window of spans (tens of seconds), so tab and period toggles must not re-run
   -- it; a few minutes of staleness is invisible on a rolling 24h count.
-  , endpointStatsCache :: Cache EndpointStatsKey (V.Vector Endpoints.EndpointRequestStats)
+  , endpointStatsCache :: Cache EndpointStatsKey (V.Vector Endpoints.EndpointRequestStats, Int)
   -- ^ endpoints-list per-endpoint traffic stats; same deal as 'hostStatsCache'.
   , infrastructureCache :: Cache Containers.ContainerSnapshotKey (V.Vector Containers.ContainerRow)
   -- ^ One expensive metrics pivot feeds every infrastructure tab and detail drawer.

@@ -1270,15 +1270,6 @@ body, :host {
     min-height: 100%;
   }
 
-  /* Widget drawer sticky header - shadow only, no size change to avoid jitter */
-  .widget-drawer-sticky {
-    transition: box-shadow 150ms ease-out;
-  }
-  .widget-drawer-stuck.widget-drawer-sticky {
-    box-shadow: var(--shadow-xs);
-    padding-top: 1rem;
-  }
-
   /*
     Log explorer latency bar hover card.
 
@@ -1987,7 +1978,7 @@ code, pre, .code, .monospace {
     --color-bgBase: oklch(12.5% 0.004 260);
     --color-bgInverse: rgb(255 255 255);
     --color-bgOverlay: oklch(22% 0.004 260);
-    --color-bgRaised: oklch(18% 0.004 260);
+    --color-bgRaised: oklch(20% 0.004 260);
     --color-bgSunken: oklch(8% 0.003 260);
     --color-bgBrand: oklch(64% 0.18 261);
 
@@ -2020,7 +2011,7 @@ code, pre, .code, .monospace {
     --color-fillWarning-strong: oklch(79.5% 0.106 92);
     --color-fillWarning-weak: rgba(224 190 112 / 0.08);
     --color-fillWeak: rgba(255 255 255 / 0.06);
-    --color-fillWeaker: rgba(255 255 255 / 0.03);
+    --color-fillWeaker: rgba(255 255 255 / 0.05);
     --color-fillWhite: rgb(255 255 255);
     --color-fillYellow: oklch(85.8% 0.179 92);
 
@@ -2054,7 +2045,7 @@ code, pre, .code, .monospace {
     --color-strokeSuccess-weak: rgba(134 239 172 / 0.15);
     --color-strokeWarning-strong: rgba(251 191 36 / 0.5);
     --color-strokeWarning-weak: rgba(251 191 36 / 0.15);
-    --color-strokeWeak: rgba(255 255 255 / 0.05);
+    --color-strokeWeak: rgba(255 255 255 / 0.09);
 
     /* Text colors — dark theme */
     --color-textBrand: oklch(72% 0.15 261);
@@ -2067,7 +2058,7 @@ code, pre, .code, .monospace {
     --color-textStrong: oklch(90% 0.005 260);
     --color-textSuccess: oklch(78% 0.088 162);
     --color-textWarning: oklch(79.5% 0.106 92);
-    --color-textWeak: oklch(67% 0.005 260);
+    --color-textWeak: oklch(72% 0.005 260);
 
     /* Dark mode shadow scale — deeper for contrast on dark surfaces */
     --shadow-xs: 0 1px 2px -1px rgba(0 0 0 / 0.2);
@@ -2078,7 +2069,7 @@ code, pre, .code, .monospace {
 
     /* Update fallback colors for dark mode */
     --fallback-b2: rgba(255 255 255 / 0.06);
-    --tab-color: oklch(67% 0.005 260);
+    --tab-color: oklch(72% 0.005 260);
     --fallback-pc: oklch(92% 0.005 260);
     --fallback-bc: rgba(255 255 255 / 0.55);
   }

@@ -533,4 +533,30 @@ describe('Live Tail follows the edge only while the reader is at it', () => {
     await scrollTo(el, list, GEOM.scrollHeight - GEOM.clientHeight - 41);
     expect(el.stickToBottom).toBe(false);
   });
+
+  test('jumping to live preserves the selected service without restarting or navigating', async () => {
+    const el = await mount();
+    await settle();
+    const service = el.querySelector('select[aria-label="Service"]') as HTMLSelectElement;
+    service.value = 'checkout';
+    service.dispatchEvent(new Event('change'));
+    await settle();
+    await el.updateComplete;
+
+    const registrations = posted.length;
+    const url = window.location.href;
+    const list = withScroller(el);
+    await scrollTo(el, list, 1000);
+    const jump = el.querySelector<HTMLButtonElement>('[data-jump-to-live]');
+    expect(jump).toBeTruthy();
+
+    jump!.click();
+    await el.updateComplete;
+
+    expect(el.service).toBe('checkout');
+    expect((el.querySelector('select[aria-label="Service"]') as HTMLSelectElement).value).toBe('checkout');
+    expect(window.location.href).toBe(url);
+    expect(posted).toHaveLength(registrations);
+    expect(list.scrollTop).toBe(GEOM.scrollHeight);
+  });
 });

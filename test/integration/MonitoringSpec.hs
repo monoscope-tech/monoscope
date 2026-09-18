@@ -68,8 +68,11 @@ spec = sequential $ aroundAll withTestResources do
       rootText `shouldSatisfy` T.isInfixOf "Ada Lovelace &lt;ada@example.com&gt;"
       rootText `shouldSatisfy` T.isInfixOf "https://example.com/error-trend.png"
       withoutTrendText `shouldSatisfy` T.isInfixOf "Trend unavailable yet"
+      withoutTrendText `shouldNotSatisfy` T.isInfixOf "image_url"
       rootText `shouldSatisfy` not . T.isInfixOf err.message
       replyText `shouldSatisfy` T.isInfixOf "Open issue"
+      slackPayloadViolations (AE.toJSON root) `shouldBe` []
+      slackPayloadViolations (AE.toJSON reply) `shouldBe` []
 
     it "should create monitor with no triggers" $ \tr -> do
       currentTime <- getCurrentTime
@@ -390,6 +393,7 @@ spec = sequential $ aroundAll withTestResources do
           unavailable = Mail.monitorDataUnavailableMessage configured Monitors.NoMeasurements t0 (Just (earlier, 84)) "https://example.com/incident" "https://example.com/monitor"
       decodeUtf8 @Text (toStrict $ AE.encode root) `shouldSatisfy` T.isInfixOf "100.0 s"
       decodeUtf8 @Text (toStrict $ AE.encode root) `shouldSatisfy` T.isInfixOf "60.0 s"
+      decodeUtf8 @Text (toStrict $ AE.encode root) `shouldSatisfy` T.isInfixOf "Chart unavailable."
       decodeUtf8 @Text (toStrict $ AE.encode unavailable) `shouldSatisfy` T.isInfixOf "84.0 s"
       widget.pngProfile `shouldBe` Just Widget.PngSlack
       Widget.pngExportSize widget.pngProfile `shouldBe` (960, 320)

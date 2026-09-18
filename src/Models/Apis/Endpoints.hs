@@ -20,6 +20,7 @@ module Models.Apis.Endpoints (
   hostTrafficSince,
   hostRetentionSweep,
   endpointRequestStatsByProject,
+  endpointRequestStatsPageByProject,
   listEndpointsPaged,
   getEndpointById,
   -- Endpoint template discovery
@@ -208,6 +209,7 @@ data EndpointMetaRow = EndpointMetaRow
 -- Left "Invalid  value: Archived"
 data Direction = Incoming | Outgoing
   deriving stock (Eq, Generic, Read, Show)
+  deriving anyclass (Hashable)
   deriving (AE.ToJSON, Display, FromHttpApiData) via WrappedEnumSC 'Nothing "" Direction
 
 
@@ -298,7 +300,10 @@ data EndpointQuery = EndpointQuery
   , page :: Int
   , perPage :: Int
   , period :: Period
+  , service :: Maybe Text
   }
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (Hashable)
 
 
 -- | Row filters for one read of the host catalog. @direction = Nothing@ returns
@@ -310,7 +315,10 @@ data HostQuery = HostQuery
   , skip :: Int
   , since :: Since
   , period :: Period
+  , service :: Maybe Text
   }
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (Hashable)
 
 
 -- | Row filters shared by 'endpointRequestStatsByProject' and 'countEndpointsForHost'
@@ -329,7 +337,14 @@ endpointFiltersSql q =
 -- 'ShellOnly' skips the telemetry aggregate entirely: the page renders skeleton stat
 -- cells and defers the (seconds-long) stats fetch, mirroring 'dependenciesAndEventsCount'.
 endpointRequestStatsByProject :: (DB es, Labeled "timefusion" Hasql :> es, Time :> es) => StatsMode -> Bool -> Projects.ProjectId -> EndpointQuery -> Eff es (V.Vector EndpointRequestStats)
-endpointRequestStatsByProject statsMode useTf pid q = do
+endpointRequestStatsByProject statsMode useTf pid q = fst <$> endpointRequestStatsPageByProject statsMode useTf pid q
+
+
+-- | A page of endpoint traffic plus the total after applying telemetry-backed filters.
+-- Service scope cannot be counted from @apis.endpoints@: one endpoint can receive traffic
+-- from several services, so the same aggregate that builds the rows must also paginate them.
+endpointRequestStatsPageByProject :: (DB es, Labeled "timefusion" Hasql :> es, Time :> es) => StatsMode -> Bool -> Projects.ProjectId -> EndpointQuery -> Eff es (V.Vector EndpointRequestStats, Int)
+endpointRequestStatsPageByProject statsMode useTf pid q = do
   now <- Time.currentTime
   let isOutgoing = q.direction == Outgoing
       (start, numBuckets, width) = periodWindow q.period now
@@ -362,6 +377,7 @@ endpointRequestStatsByProject statsMode useTf pid q = do
                 WHERE project_id = #{pid}::text
                   AND attributes___http___request___method IS NOT NULL
                   AND hashes && #{endpointHashes}::text[]
+                  AND (#{q.service}::text IS NULL OR resource___service___name = #{q.service})
                   AND timestamp >= ^{tsLit start}
               )
               SELECT hash, service, bucket_idx, COUNT(*)::bigint AS cnt, MAX(timestamp) AS last_seen
@@ -383,13 +399,17 @@ endpointRequestStatsByProject statsMode useTf pid q = do
                 , services = V.fromList $ ordNub $ mapMaybe (.service) rs
                 }
             )
-      rows = map mk metas
+      -- Without a service filter the catalogue keeps every discovered endpoint; with one,
+      -- suppress entries that have no traffic in that service. The shell response has no
+      -- statistics yet, so it must retain the stable catalogue until the stats swap arrives.
+      rows = filter (\(_, stats) -> isNothing q.service || statsMode == ShellOnly || stats.totalRequests > 0) $ map mk metas
       ordered = case q.sort of
         SortFirstSeen -> sortOn (zonedTimeToUTC . (.createdAt) . fst) rows
         SortLastSeen -> sortOn (Down . fmap zonedTimeToUTC . (.lastSeen) . snd) rows
         SortName -> sortOn (\(m, _) -> m.urlPath) rows
         SortEvents -> sortOn (\(m, s) -> (Down s.totalRequests, m.urlPath)) rows
-  pure $ V.fromList $ map snd $ take q.perPage $ drop (q.page * q.perPage) ordered
+      total = length ordered
+  pure (V.fromList $ map snd $ take q.perPage $ drop (q.page * q.perPage) ordered, total)
 
 
 data HostEvents = HostEvents
@@ -463,6 +483,7 @@ dependenciesAndEventsCount statsMode useTf pid q = do
             WHERE s.project_id = #{pid}::text
               AND s.timestamp > ^{windowStartSql}
               AND s.attributes___http___request___method IS NOT NULL
+              AND (#{q.service}::text IS NULL OR s.resource___service___name = #{q.service})
           )
           SELECT host, outgoing, service, bucket_idx, COUNT(*)::bigint AS cnt, MAX(ts) AS last_seen, MIN(ts) AS first_seen
           FROM filtered GROUP BY host, outgoing, service, bucket_idx|]
@@ -478,7 +499,7 @@ dependenciesAndEventsCount statsMode useTf pid q = do
               , activityBuckets = denseBuckets numBuckets [(r.bucketIdx, r.cnt) | r <- rs]
               , services = V.fromList $ filter (/= h) $ ordNub $ mapMaybe (.service) rs
               }
-      rows = map mk hosts
+      rows = filter (\events -> isNothing q.service || statsMode == ShellOnly || events.eventCount > 0) $ map mk hosts
       -- Shell rows carry no counts, so the traffic sorts would be arbitrary; order by
       -- host instead to keep the placeholder stable until the stats swap arrives.
       ordered = case (statsMode, q.sort) of

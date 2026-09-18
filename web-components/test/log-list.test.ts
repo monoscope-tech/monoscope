@@ -63,6 +63,16 @@ describe('LogList load-more', () => {
     expect(ids(el)).toEqual(['1', '2', '3']);
   });
 
+  test('empty initial result ignores an inconsistent pagination flag and renders the empty state', async () => {
+    el.transport = fakeTransport({ tree: [], meta: { hasMore: true, count: 0 } });
+
+    await el.fetchData('initial', false, false, false);
+    await el.updateComplete;
+
+    expect((el as any).hasMore).toBe(false);
+    expect(el.textContent).toContain('No events match');
+  });
+
   // Regression: with rows on screen, running a new query (refresh) that returns
   // nothing must clear the list and show the empty state — not leave the previous
   // query's results persisted, which reads as "these are results for the new query".
@@ -414,6 +424,23 @@ describe('mobile latency summary', () => {
 });
 
 describe('trace expansion control', () => {
+  test('an errored descendant paints the parent row indicator red', () => {
+    const el = new LogList();
+    Object.assign(el as any, { colIdxMap: { errors: 0, http_attributes: 1, status: 2 } });
+    const host = document.createElement('div');
+    render(
+      (el as any).logItemCol(
+        { ...row('parent', [null, { status_code: 404 }, '']), childErrors: true, type: 'span' },
+        'id'
+      ),
+      host
+    );
+
+    const indicator = host.querySelector('.bg-strokeError-strong')!;
+    expect(indicator).not.toBeNull();
+    expect(indicator.getAttribute('data-tip')).toBe('A child event errored');
+  });
+
   test('a non-error extender keeps the explicitly weak boundary', () => {
     const el = new LogList();
     Object.assign(el as any, { view: 'tree', colIdxMap: { summary: 0 } });

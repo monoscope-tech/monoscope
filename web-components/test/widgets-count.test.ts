@@ -13,7 +13,6 @@ describe('chartDataUrl', () => {
 
     expect(url.searchParams.get('since')).toBe('5M');
   });
-
   test('preserves a SQL widget\'s declared database source', () => {
     const url = new URL(
       chartDataUrl({ query: '', querySQL: 'SELECT 1', pid: 'proj', chartType: 'timeseries', dbSource: 'postgres' }),
@@ -21,6 +20,17 @@ describe('chartDataUrl', () => {
     );
 
     expect(url.searchParams.get('db_source')).toBe('postgres');
+  });
+
+  test('marks dashboard requests so service scope comes from dashboard variables', () => {
+    window.history.replaceState({}, '', '/p/proj/dashboards/overview?var-service=checkout');
+    const url = new URL(
+      chartDataUrl({ query: 'metrics', querySQL: '', pid: 'proj', chartType: 'timeseries', dashboardId: 'overview' }),
+      window.location.origin
+    );
+
+    expect(url.searchParams.get('dashboard_id')).toBe('overview');
+    expect(url.searchParams.get('var-service')).toBe('checkout');
   });
 });
 

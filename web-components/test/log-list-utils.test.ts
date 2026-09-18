@@ -148,6 +148,10 @@ describe('getErrorClassification', () => {
     expect(classify(null, 200, 'ERROR').className).toContain('bg-strokeError-strong');
   });
 
+  test('a row with an errored child gets the error indicator', () => {
+    expect(getErrorClassification([null, { status_code: 404 }, ''], cols, true).className).toContain('bg-strokeError-strong');
+  });
+
   test('a 4xx/5xx without recorded errors is a warning, not an error', () => {
     for (const code of [400, 404, 500, 503]) {
       const { className } = classify(null, code);

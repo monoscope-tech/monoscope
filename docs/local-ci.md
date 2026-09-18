@@ -19,6 +19,19 @@ make ci CHECKS="doctests unit-tests"   # just these
 make ci-down        # stop the containers (build caches kept)
 ```
 
+### Host runtime for direct frontend checks
+
+CI and `Dockerfile.deps` use Node 22. Use Node 22 for host-level commands in
+`web-components/`, such as `bun run test` and `bun run typecheck`. The current
+Vitest/Vite dependency set requires Node 20.19 or newer; older Node 20 releases
+can fail before tests start because `node:util.styleText` is absent. `make ci`
+remains the preferred parity path because it runs checks in the pinned
+dependency image.
+
+The repository includes `.nvmrc`; with nvm installed, run `nvm use` from the
+repository root before running a host-level frontend command. This selects the
+same Node 22 major version as CI.
+
 `make ci` publishes an attestation for every check that passes. Push, and the
 gate job finds them.
 
@@ -113,6 +126,17 @@ a Mac:
 Postgres-as-TimeFusion fallback. That is genuinely useful feedback and it is
 **not** attested — the dual-write TF leg is exactly what that check exists to
 exercise.
+
+For one focused integration run against the local TimeFusion source checkout,
+run:
+
+```bash
+make test-integration-tf
+```
+
+This command starts local MinIO and TimeFusion. It stops TimeFusion after the
+test run. Use it to investigate the real PGWire write and read path without a
+full containerized CI run.
 
 TF's image is distroless, so it has no shell for a compose healthcheck; `ci.sh`
 waits for its pgwire port from the runner container instead. A TF container that

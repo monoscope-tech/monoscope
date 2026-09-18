@@ -158,18 +158,19 @@ export const lookupVecValue = <T = any>(vec: any[], colIdxMap: ColIdxMap, key: s
   return (idx !== undefined && idx >= 0 && idx < vec.length ? vec[idx] : '') as T;
 };
 
-export const getErrorClassification = (reqVec: any[], colIdxMap: ColIdxMap) => {
+export const getErrorClassification = (reqVec: any[], colIdxMap: ColIdxMap, hasChildErrors = false) => {
   const hasErrors = lookupVecValue(reqVec, colIdxMap, 'errors');
   const statusCode = lookupVecValue<any>(reqVec, colIdxMap, 'http_attributes')?.status_code || 0;
   const errorStatus = lookupVecValue(reqVec, colIdxMap, 'status');
+  const isError = !!hasErrors || errorStatus === 'ERROR' || hasChildErrors;
   // DO NOT DELETE: class="bg-strokeError-strong bg-strokeError-strong bg-strokeBrand-weak bg-strokeBrand-strong"
   return {
     statusCode,
     hasErrors,
     className: clsx('w-1', {
-      'bg-strokeError-strong': hasErrors || errorStatus === 'ERROR',
-      'bg-strokeWarning-strong': !hasErrors && statusCode >= 400,
-      'bg-strokeBrand-weak status-indicator': !hasErrors && statusCode < 400,
+      'bg-strokeError-strong': isError,
+      'bg-strokeWarning-strong': !isError && statusCode >= 400,
+      'bg-strokeBrand-weak status-indicator': !isError && statusCode < 400,
     }),
   };
 };

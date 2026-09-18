@@ -261,7 +261,7 @@ slackErrorAlert alertType err project channelId projectUrl chartUrlM occTextM fi
   slackAttachment channelId msgs.color
     $ [slackSection title, slackSection body]
     <> maybeToList (slackContext . pure <$> inlineMeta)
-    <> maybeToList (slackImage "Error trend" Nothing <$> chartUrlM)
+    <> [chartBlock]
     <> [slackActions buttons]
   where
     targetUrl = projectUrl <> "/issues/by_hash/" <> err.hash
@@ -277,6 +277,11 @@ slackErrorAlert alertType err project channelId projectUrl chartUrlM occTextM fi
     firstSeen = fromMaybe (errFirstSeen err) firstSeenM
     tidM = err.traceId >>= guarded (not . T.null)
     inlineMeta = errorMetaLine err occTextM ("First seen " <> firstSeen)
+    chartBlock =
+      maybe
+        (slackContext ["Trend unavailable · <" <> targetUrl <> "|Open issue>"])
+        (slackImage "Error trend" Nothing)
+        chartUrlM
     buttons =
       slackButton "Open issue" (Just "primary") targetUrl
         : maybeToList (tidM <&> \tid -> slackButton "View trace" Nothing (traceExplorerUrl projectUrl tid err.when))
@@ -304,8 +309,14 @@ slackMonitorAlert :: Text -> Text -> Maybe Text -> Text -> AE.Value
 slackMonitorAlert monitorTitle monitorUrl chartUrlM channelId =
   slackAttachment channelId "#ef4444"
     $ [slackSection ("🚨 *Monitor alerting:* <" <> monitorUrl <> "|" <> monitorTitle <> ">")]
-    <> maybeToList (slackImage "Monitor trend" Nothing <$> chartUrlM)
+    <> [chartBlock]
     <> [slackActions [slackButton "🔍 View monitor" (Just "primary") monitorUrl]]
+  where
+    chartBlock =
+      maybe
+        (slackContext ["Trend unavailable · <" <> monitorUrl <> "|Open monitor>"])
+        (slackImage "Monitor trend" Nothing)
+        chartUrlM
 
 
 -- | A lifecycle message uses the same Block Kit components as other alerts.

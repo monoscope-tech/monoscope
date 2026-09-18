@@ -272,7 +272,9 @@ validateSqlQuery query =
 selectLogTable :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Bool -> Projects.ProjectId -> [Section] -> Text -> Maybe PageCursor -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Maybe Text -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))
 selectLogTable useTimefusion pid queryAST queryText cursorM dateRange projectedColsByUser source targetSpansM environment service = do
   now <- Time.currentTime
-  let (q, queryComponents) = queryASTToComponents ((defSqlQueryCfg pid now source targetSpansM){cursorM, dateRange, projectedColsByUser, source, targetSpansM, environment, service, metricJsonAsVariant = useTimefusion}) queryAST
+  let scope = mkScopedQuery pid dateRange environment service
+      cfg = (applyScopedQuery scope $ defSqlQueryCfg pid now source targetSpansM){cursorM, projectedColsByUser, metricJsonAsVariant = useTimefusion}
+      (q, queryComponents) = queryASTToComponents cfg queryAST
       canonicalOrder = case cursorM of Just (PageCursor PageNewer _) -> V.reverse; _ -> identity
 
   Log.logTrace
@@ -571,11 +573,11 @@ scopedWhere pidTxt mUser dateClause envClause =
 -- | Parse @queryAST@ against a fresh 'defSqlQueryCfg' and build its scoped WHERE
 -- clause in one step. Shared by 'fetchLogPatterns', 'fetchSessions', and
 -- 'fetchEventExamples', which all otherwise repeat this three-line dance.
-scopedQueryWhere :: Projects.ProjectId -> UTCTime -> Maybe Sources -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Text -> Maybe Text -> [Section] -> Text
-scopedQueryWhere pid now source dateRange environment service queryAST =
-  let sqlCfg = (defSqlQueryCfg pid now source Nothing){dateRange, environment, service}
+scopedQueryWhere :: UTCTime -> Maybe Sources -> ScopedQuery -> [Section] -> Text
+scopedQueryWhere now source scope queryAST =
+  let sqlCfg = applyScopedQuery scope $ defSqlQueryCfg scope.projectId now source Nothing
       (_, qc) = queryASTToComponents sqlCfg queryAST
-   in scopedWhere pid.toText qc.whereClause (buildDateRange sqlCfg) $ T.intercalate " AND " $ filter (not . T.null) [buildEnvFilter sqlCfg, buildServiceFilter sqlCfg]
+   in scopedWhere scope.projectId.toText qc.whereClause (buildDateRange sqlCfg) $ T.intercalate " AND " $ filter (not . T.null) [buildEnvFilter sqlCfg, buildServiceFilter sqlCfg]
 
 
 -- | One row of the precomputed patterns query in 'fetchLogPatterns' (persisted
@@ -612,7 +614,8 @@ fetchLogPatterns
 fetchLogPatterns enableTfReads pid queryAST dateRange sourceM targetM environment service skip = do
   now <- Time.currentTime
   let pidTxt = pid.toText
-      fullWhere = scopedQueryWhere pid now sourceM dateRange environment service queryAST
+      scope = mkScopedQuery pid dateRange environment service
+      fullWhere = scopedQueryWhere now sourceM scope queryAST
       target = fromMaybe "summary" targetM
   Log.logTrace "fetchLogPatterns: start"
     $ AE.object
@@ -737,8 +740,8 @@ data SessionSort = SortLastSeen | SortFirstSeen | SortDuration | SortErrors | So
 
 -- | The column each ordering sorts on. Exhaustive by construction.
 --
--- >>> map sessionSortColumn [SortLastSeen, SortDuration, SortErrors, SortEvents]
--- ["last_seen","duration_ns","error_count","event_count"]
+-- >>> map sessionSortColumn [minBound .. maxBound]
+-- ["last_seen","first_seen","duration_ns","error_count","event_count"]
 sessionSortColumn :: SessionSort -> Text
 sessionSortColumn = \case
   SortLastSeen -> "last_seen"
@@ -762,18 +765,16 @@ sessionSortParam = toText . encodeEnumSC @"Sort"
 -- >>> map sessionSortLabel [minBound .. maxBound]
 -- ["Last seen","First seen","Duration","Errors","Events"]
 sessionSortLabel :: SessionSort -> Text
-sessionSortLabel = \case
-  SortLastSeen -> "Last seen"
-  SortFirstSeen -> "First seen"
-  SortDuration -> "Duration"
-  SortErrors -> "Errors"
-  SortEvents -> "Events"
+sessionSortLabel ordering = T.toUpper (T.take 1 label) <> T.drop 1 label
+  where
+    label = T.replace "_" " " $ sessionSortParam ordering
 
 
 fetchSessions :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Bool -> Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Text -> Maybe Text -> Maybe SessionSort -> Int -> Eff es (SessionSummary, Int, [SessionRow])
 fetchSessions enableTfReads pid queryAST dateRange environment service sortByM skip = do
   now <- Time.currentTime
-  let fullWhere = scopedQueryWhere pid now (Just SSpans) dateRange environment service queryAST
+  let scope = mkScopedQuery pid dateRange environment service
+      fullWhere = scopedQueryWhere now (Just SSpans) scope queryAST
       bucketW = bucketWidthSecs dateRange now
       sortCol = sessionSortColumn $ fromMaybe SortLastSeen sortByM
   Log.logTrace "fetchSessions: start"
@@ -982,7 +983,8 @@ fetchEventExamples
   -> Eff es (V.Vector (V.Vector AE.Value), [Text])
 fetchEventExamples enableTfReads pid queryAST dateRange expandKind skip limitN = do
   now <- Time.currentTime
-  let fullWhereSql = rawSql $ scopedQueryWhere pid now (Just SSpans) dateRange Nothing Nothing queryAST
+  let scope = mkScopedQuery pid dateRange Nothing Nothing
+      fullWhereSql = rawSql $ scopedQueryWhere now (Just SSpans) scope queryAST
       expandFilter = case expandKind of
         ExpandSession sid -> [HI.sql| AND |] <> rawSql sessionKeyExpr <> [HI.sql| = #{sid}|]
         -- Prefer tag match: the key is a comma-joined list of pat:<hash> tags

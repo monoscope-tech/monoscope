@@ -1,6 +1,6 @@
 -- | The Live Tail tab: page, subscription routes, and the SSE stream itself.
 --
--- Live Tail is the Explorer's first tab but not its landing page — Events stays the default,
+-- Live Tail is an opt-in sibling of the default Events view,
 -- because "what happened" is the question people arrive with and "what is happening" is the
 -- one they choose.
 --
@@ -331,8 +331,8 @@ liveTailGetH pid = do
   appCtx <- Reader.ask @AuthContext
   let bwconf =
         bw
-          { prePageTitle = Just "Explorer"
-          , pageTitle = "Live Tail"
+          { prePageTitle = Nothing
+          , pageTitle = "Explorer"
           , menuItem = Just "Explorer"
           , navTabs = Just $ explorerNavTabs_ pid "Live Tail"
           }

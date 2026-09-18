@@ -1712,15 +1712,13 @@ navTabAttrs =
 -- added in one place. @active@ is the label of the current page.
 explorerNavTabs_ :: Projects.ProjectId -> Text -> Html ()
 explorerNavTabs_ pid active =
-  div_ [class_ "tabs tabs-box tabs-outline items-center", role_ "tablist"]
+  nav_ [class_ "tabs tabs-box tabs-outline flex-nowrap items-center bg-fillWeaker", Aria.label_ "Explorer views", term "hx-preload" "mouseover"]
     $ forM_ explorerTabs
     $ \(label, path) ->
       let isActive = label == active
        in a_
             ( [ href_ $ "/p/" <> pid.toText <> path
-              , role_ "tab"
-              , class_ $ "tab h-auto!" <> bool "" " tab-active text-textStrong" isActive
-              , term "aria-selected" (bool "false" "true" isActive)
+              , class_ $ "tab h-auto! whitespace-nowrap" <> bool "" " tab-active font-semibold text-textStrong" isActive
               ]
                 <> [term "aria-current" "page" | isActive]
                 -- The href picks up the page's current from/to/since before it is followed; the
@@ -1734,22 +1732,22 @@ explorerNavTabs_ pid active =
 
 -- | Single source of truth for the Explorer section, used by both the tab strip and the
 -- sidebar flyout so the two can't drift.
--- Live Tail leads the strip but Events remains the section's landing route: arriving at
--- Explorer should answer "what happened", and watching a stream is a thing you opt into.
+-- Events is both the section landing route and the first tab: the visual order should
+-- reinforce that investigating what happened is primary, while watching a stream is opt-in.
 explorerTabs :: [(Text, Text)]
-explorerTabs = [("Live Tail", "/live_tail"), ("Events", "/log_explorer"), ("Metrics", "/metrics"), ("Service Map", "/service_map")]
+explorerTabs = [("Events", "/log_explorer"), ("Live Tail", "/live_tail"), ("Metrics", "/metrics"), ("Service Map", "/service_map")]
 
 
 -- | Infrastructure is one inventory with sibling views. Keeping this list shared by the
 -- page tabs and sidebar flyout prevents Containers drifting back into Explorer.
 infrastructureNavTabs_ :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Html ()
 infrastructureNavTabs_ pid active fromM toM sinceM =
-  nav_ [class_ "tabs tabs-box tabs-outline items-center max-md:overflow-x-auto max-md:flex-nowrap", Aria.label_ "Infrastructure views", term "hx-preload" "mouseover"]
+  nav_ [class_ "tabs tabs-box tabs-outline flex-nowrap items-center", Aria.label_ "Infrastructure views", term "hx-preload" "mouseover"]
     $ forM_ infrastructureTabs
     $ \(label, path) ->
       a_
         ( [ href_ $ timeScopedUrl ("/p/" <> pid.toText <> path) [] fromM toM sinceM
-          , class_ $ "tab h-auto! whitespace-nowrap" <> bool "" " tab-active text-textStrong" (label == active)
+          , class_ $ "tab h-auto! whitespace-nowrap" <> bool "" " tab-active font-semibold text-textStrong" (label == active)
           , term "aria-current" $ bool "false" "page" (label == active)
           ]
             <> navTabAttrs

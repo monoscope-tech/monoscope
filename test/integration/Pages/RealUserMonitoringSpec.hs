@@ -8,6 +8,7 @@ import Data.UUID qualified as UUID
 import Data.UUID.Quasi (uuid)
 import Database.PostgreSQL.Simple qualified as PG
 import Lucid qualified
+import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.RUM qualified as RUMData
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Components (Deferred (..))
@@ -71,13 +72,14 @@ renderPage tr tab query sessionFilterM selected = renderScoped tr tab query sess
 -- than about which request delivered it.
 renderScoped :: TestResources -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> IO Text
 renderScoped tr tab query sessionFilterM selected service =
-  fmap fold . forM ["services", "pulse", "pages", "vitals", "errors", "sessions", "audience"] $ \panel ->
+  fmap fold . forM ["pulse", "pages", "vitals", "errors", "sessions", "audience"] $ \panel ->
     renderPanel tr tab query sessionFilterM selected service (Just panel)
 
 
 renderPanel :: TestResources -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> IO Text
 renderPanel tr tab query sessionFilterM selected service panel = do
-  (_, page) <- testServant tr $ RUM.rumGetH testPid tab query sessionFilterM Nothing Nothing (Just "24H") selected service panel (Just "1") Nothing
+  let scoped = tr{trSessAndHeader = fmap (\session -> session{Projects.service = service}) tr.trSessAndHeader}
+  (_, page) <- testServant scoped $ RUM.rumGetH testPid tab query sessionFilterM Nothing Nothing (Just "24H") selected Nothing panel (Just "1") Nothing
   pure $ toStrict $ Lucid.renderText $ Lucid.toHtml page
 
 
@@ -134,12 +136,7 @@ spec = sequential $ aroundAll withTestResources do
       -- The LIVE badge is only honest if something listens for the time transport's tick, and
       -- the panels hold every number on this page. Each re-fetches itself in place.
       overview `shouldContainAll` ["hx-trigger=\"update-query from:window\"", "hx-sync=\"this:replace\""]
-      -- All of them except the service picker: it is an option list, not data, and swapping it
-      -- under an open dropdown would take the viewer's selection with it.
-      picker <- renderPanel tr Nothing Nothing Nothing Nothing Nothing (Just "services")
-      T.isInfixOf "update-query from:window" picker `shouldBe` False
-
-      -- The tab strip and time picker must not wait on seven 24-hour scans: the request that
+      -- The tab strip and time picker must not wait on six 24-hour scans: the request that
       -- paints the page answers with a skeleton that fetches the panels itself. Panel data
       -- appearing here again would mean a tab click is back to seconds of blank page.
       (_, shellPage) <- testServant tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing Nothing Nothing
@@ -187,14 +184,17 @@ spec = sequential $ aroundAll withTestResources do
       browserSpan apiKey "30000000000000000000000000000003" "3000000000000001" [("url.path", "/admin/users")] "Pageview · /admin/users" (UUID.toText mergedReplayUuid) Nothing "admin-console" tr
 
       unscoped <- renderPage tr Nothing Nothing Nothing Nothing
-      unscoped `shouldContainAll` ["All services", ">storefront<", ">admin-console<", "/admin/users", "/checkout"]
+      unscoped `shouldContainAll` ["All services", "/admin/users", "/checkout"]
 
       scoped <- renderScoped tr Nothing Nothing Nothing Nothing (Just "admin-console")
-      scoped `shouldContainAll` ["Every panel below is scoped to admin-console.", "/admin/users"]
+      scoped `shouldContainAll` ["admin-console", "/admin/users"]
       -- The other team's pages are the whole point: if they survive the filter it does nothing.
       T.isInfixOf "/checkout" scoped `shouldBe` False
-      -- The scope has to ride every self-link, or one click puts the user back on all services.
-      scoped `shouldContainAll` ["service=admin-console", "resource.service.name%20%3D%3D%20%22admin-console%22"]
+      -- Explorer receives the same global scope predicate as the SQL-backed panels.
+      -- The compact KQL spelling is intentional: it is parsed and URL-encoded only once.
+      scoped `shouldContainAll` ["service%3D%3D%22admin-console%22"]
+      T.isInfixOf "&amp;service=admin-console" scoped `shouldBe` False
+      T.isInfixOf "?service=admin-console" scoped `shouldBe` False
       -- A recording carries no service, so it can only be trusted where a span already places
       -- the session in this service — attached to that row, never added as a row of its own.
       scoped `shouldContainAll` ["Replay"]
@@ -203,8 +203,28 @@ spec = sequential $ aroundAll withTestResources do
       -- A stale selection still resolves: the picker keeps offering it, and an empty result
       -- must read as "this filter matched nothing", never as "you never installed the SDK".
       ghost <- renderScoped tr Nothing Nothing Nothing Nothing (Just "ghost-service")
-      ghost `shouldContainAll` ["No browser telemetry for ghost-service in this range", "Show all services", "All services", ">ghost-service<"]
+      ghost `shouldContainAll` ["No browser telemetry for ghost-service in this range", "global scope picker"]
       T.isInfixOf "Install the browser SDK" ghost `shouldBe` False
+
+    it "sharedRumLinks_keepTheirEnvironmentInsteadOfUsingTheRecipientDefault" \tr -> do
+      -- An alert recipient may have a different sticky environment selected. A RUM link is
+      -- investigation evidence, so its explicit environment has to win and remain present on
+      -- the deferred request and every self-link it renders.
+      purgeRumCaches tr
+      (_, scopedPage) <- testServant tr $ RUM.rumGetScopedH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing (Just "admin-console") Nothing (Just "1") Nothing (Just "missing-environment")
+      let scopedHtml = toStrict $ Lucid.renderText $ Lucid.toHtml scopedPage
+      scopedHtml `shouldContainAll` ["environment=missing-environment"]
+      T.isInfixOf "&amp;service=admin-console" scopedHtml `shouldBe` False
+      T.isInfixOf "?service=admin-console" scopedHtml `shouldBe` False
+
+      (_, RUM.RumGet (PageCtx _ pulseBody)) <- testServant tr $ RUM.rumGetScopedH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing (Just "admin-console") (Just "pulse") (Just "1") Nothing (Just "missing-environment")
+      pulse <- case pulseBody of
+        DeferredBody loaded -> pure loaded
+        DeferredShell{} -> fail "RUM answered with the deferred shell when asked for the panel"
+      -- The project has browser telemetry from the preceding examples. It must not leak into
+      -- a link scoped to another environment merely because this test session's default is
+      -- unscoped.
+      pulse.hasTelemetry `shouldBe` False
 
     it "browserSdkWithoutSdkLanguage_isStillSeenAndPickable" \tr -> do
       -- The OpenTelemetry browser SDKs leave telemetry.sdk.language unset, and RUM used to
@@ -219,7 +239,7 @@ spec = sequential $ aroundAll withTestResources do
 
       -- And it is narrowable, which is the whole point of the picker.
       scoped <- renderScoped tr Nothing Nothing Nothing Nothing (Just "checkout-web")
-      scoped `shouldContainAll` ["Every panel below is scoped to checkout-web.", "https://shop.example/cart"]
+      scoped `shouldContainAll` ["checkout-web", "https://shop.example/cart"]
       T.isInfixOf "/admin/users" scoped `shouldBe` False
 
     it "sessionLastPage_isTheLatestPageView_notALexicographicResourceUrl" \tr -> do

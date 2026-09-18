@@ -104,7 +104,15 @@ test.describe("adding widgets to a dashboard", () => {
 
     const tabs = page.locator("#visualizationTabs label[data-value]");
     await expect(tabs.first()).toBeVisible();
-    await expect(page.locator("#page-data-drawer-panel").locator('[aria-label="Close drawer"]')).toHaveCount(1);
+    const drawer = page.locator("#page-data-drawer-panel");
+    await expect(drawer.locator('[aria-label="Close drawer"]:visible')).toHaveCount(1);
+
+    const drawerBox = await drawer.boundingBox();
+    expect(drawerBox, "the widget drawer must have a rendered box").not.toBeNull();
+    expect(
+      Math.abs((drawerBox?.x ?? 0) + (drawerBox?.width ?? 0) - page.viewportSize()!.width),
+      "the widget drawer must be anchored to the right viewport edge",
+    ).toBeLessThanOrEqual(1);
 
     // A dashboard widget is a chart. Logs is a full log table — the most expensive thing
     // on a dashboard and the wrong thing to offer first — so it must not lead the strip.
@@ -164,8 +172,7 @@ test.describe("adding widgets to a dashboard", () => {
     await openWidgetDrawer(page);
 
     // Switching to Logs re-renders the preview as a log table. It has no natural height,
-    // so it used to spill out of the fixed-aspect preview frame and sit on top of the
-    // "Configure Query" step underneath it.
+    // so it used to spill out of the bounded preview frame and cover the editor.
     await page.locator('#visualizationTabs label[data-value="logs"]').click();
     const frame = page.locator(".widget-preview-container");
     await expect(frame).toBeVisible();
@@ -292,15 +299,34 @@ test.describe("adding widgets to a dashboard", () => {
         (r) => r.request().method() === "PUT" && r.url().includes(source.id) && r.status() < 400,
         { timeout: 20000 },
       ),
-      page.getByRole("button", { name: "Save changes" }).first().click(),
+      page.getByRole("button", { name: "Add widget" }).first().click(),
     ]);
 
-    await page.reload();
-    await page.waitForSelector(`${ROOT_GRID}.grid-stack-initialized`, { timeout: 20000 });
-    const saved = page.locator(ROOT_ITEMS).filter({ hasText: widgetTitle }).first();
-    await expect(saved, "the drawer's Save changes did not persist the widget").toBeVisible({
+    // The PUT returns a complete grid item. It must be adopted directly rather than
+    // inserted as another item's content; the latter leaves a visibly collapsed card
+    // until refresh even though persistence succeeded.
+    let saved = page.locator(ROOT_ITEMS).filter({ hasText: widgetTitle }).first();
+    await expect(saved, "the drawer's Add widget action did not persist the widget").toBeVisible({
       timeout: 20000,
     });
+    const inserted = await saved.evaluate((el) => {
+      const gridItem = el as HTMLElement & { gridstackNode?: { h?: number } };
+      return {
+        height: gridItem.getBoundingClientRect().height,
+        rows: gridItem.gridstackNode?.h,
+        nestedItems: gridItem.querySelectorAll(":scope > .grid-stack-item-content > .grid-stack-item").length,
+      };
+    });
+    expect(inserted.rows).toBe(3);
+    expect(inserted.height, "the newly inserted widget is collapsed").toBeGreaterThan(150);
+    expect(inserted.nestedItems, "the response was nested inside a second grid item").toBe(0);
+
+    // A reload still proves the same widget was persisted, rather than only inserted in
+    // the live grid by the response handler.
+    await page.reload();
+    await page.waitForSelector(`${ROOT_GRID}.grid-stack-initialized`, { timeout: 20000 });
+    saved = page.locator(ROOT_ITEMS).filter({ hasText: widgetTitle }).first();
+    await expect(saved).toBeVisible({ timeout: 20000 });
 
     // Now copy it across. This widget *is* on a dashboard, so the menu offers "Copy".
     await saved.locator('button[aria-label="Widget menu"]').first().click();

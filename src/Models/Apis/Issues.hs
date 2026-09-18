@@ -51,6 +51,7 @@ module Models.Apis.Issues (
   IssueFilters (..),
   NullFilter (..),
   defIssueFilters,
+  applyIssueScope,
   updateIssueWithNewAnomaly,
   updateIssueEnhancement,
   updateIssueCriticality,
@@ -165,6 +166,7 @@ import Models.Apis.LogPatterns (RateChangeDirection (..))
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), decodeEnumSC, rawSql, selectFrom)
+import Pkg.Parser (ScopedQuery (..))
 import Relude hiding (id)
 import Servant (FromHttpApiData (..), ServerError, err500, errBody)
 import System.Logging (logAttention)
@@ -594,6 +596,28 @@ defIssueFilters =
     , hideLowSeverity = False
     , limit = 50
     , offset = 0
+    }
+
+
+-- | Adapt the app-wide investigation boundary to the issue store's filter shape.
+-- A selected service is authoritative over a stale URL's repeated @service@ values;
+-- an absent service intentionally leaves the list's explicit multi-service filter alone.
+-- Issues have no trace column, so trace selection remains available to the subsequent
+-- evidence hand-off rather than broadening this list query.
+--
+-- >>> let t = UTCTime (ModifiedJulianDay 0) 0
+-- >>> let scope = ScopedQuery (UUIDId $ UUID5.generateNamed UUID5.namespaceOID []) (Just t, Just t) (Just "production") (Just "checkout") (Just "trace-1")
+-- >>> let filtered = applyIssueScope scope defIssueFilters{services = ["catalog"], environment = Just "staging"}
+-- >>> (filtered.services, filtered.environment, filtered.timeRange == Just (t, t))
+-- (["checkout"],Just "production",True)
+applyIssueScope :: ScopedQuery -> IssueFilters -> IssueFilters
+applyIssueScope scope filters =
+  filters
+    { services = maybe filters.services pure scope.service
+    , environment = scope.environment
+    , timeRange = case scope.timeRange of
+        (Just fromTime, Just toTime) -> Just (fromTime, toTime)
+        _ -> filters.timeRange
     }
 
 

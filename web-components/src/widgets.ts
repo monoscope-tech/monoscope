@@ -454,9 +454,11 @@ export const chartDataUrl = ({
   dbSource,
   timeFrom,
   timeTo,
-}: Pick<WidGetData, 'query' | 'querySQL' | 'pid' | 'chartType' | 'dbSource' | 'timeFrom' | 'timeTo'>): string => {
+  dashboardId,
+}: Pick<WidGetData, 'query' | 'querySQL' | 'pid' | 'chartType' | 'dbSource' | 'timeFrom' | 'timeTo' | 'dashboardId'>): string => {
   const params = new URLSearchParams(window.location.search);
   params.set('pid', pid);
+  if (dashboardId) params.set('dashboard_id', dashboardId);
   // A widget carrying its own window is about that window, not the page's. `since`
   // has to go with them: the server prefers it over from/to, so leaving it behind
   // would silently widen the request back to the page range.
@@ -749,6 +751,7 @@ type WidGetData = {
   timeTo?: string | null;
   highlightFrom?: string | null;
   highlightTo?: string | null;
+  dashboardId?: string | null;
 };
 
 /**

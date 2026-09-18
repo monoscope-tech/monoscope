@@ -22,7 +22,8 @@ import Database.PostgreSQL.Simple.SqlQQ qualified as SqlQQ
 import Lucid (renderText, toHtml)
 import Models.Projects.Dashboards (DashboardVM (..))
 import Models.Projects.Dashboards qualified as DashboardModel
-import Pages.BodyWrapper (NavigationResponse (..), PageCtx (..))
+import Models.Projects.Projects (Session (..))
+import Pages.BodyWrapper (BWConfig (..), NavigationResponse (..), PageCtx (..))
 import Pages.Charts.Charts qualified as Charts
 import Pages.Dashboards (DashboardFilters (..))
 import Pages.Dashboards qualified as Dashboards
@@ -31,12 +32,14 @@ import Pkg.TestUtils
 import Relude
 import Servant qualified
 import Servant.Types.SourceT qualified as Source
+import System.Config qualified as Config
 import System.IO.Error (userError)
 import System.Timeout (timeout)
 import System.Types (addRespHeaders)
 import Test.Hspec
 import Text.Slugify (slugify)
 import Utils qualified
+import Web.Auth qualified as Auth
 import Web.Routes qualified as Routes
 
 
@@ -328,6 +331,11 @@ spec = sequential $ aroundAll withTestResources do
   -- bundle fails to load, e.g. a stale asset manifest after a deploy), and nothing in the
   -- app listened for either.
   describe "Saving the canvas layout" do
+    it "dashboard pages omit the global service selector" \tr -> do
+      dashId <- newDashboard tr "overview.yaml" "Dashboard Scope"
+      (_, PageCtx bw _) <- testServant tr $ Dashboards.dashboardGetH testPid dashId Nothing Nothing Nothing Nothing Nothing []
+      V.null bw.serviceOptions `shouldBe` True
+
     it "the widget-order form reports a failed save instead of losing it silently" \tr -> do
       dashId <- newDashboard tr "overview.yaml" "Save Failure Signal"
       (_, pg) <- testServant tr $ Dashboards.dashboardGetH testPid dashId Nothing Nothing Nothing Nothing Nothing []
@@ -381,19 +389,43 @@ spec = sequential $ aroundAll withTestResources do
       copySqlBlock `shouldNotSatisfy` T.isInfixOf "widgetData.sql or widgetData.query"
 
     it "translates a KQL query into real SQL, not an echo of the input" \tr -> do
-      (_, sql) <- testServant tr $ Dashboards.widgetSqlTextGetH testPid (Just "status_code == \"ERROR\"") Nothing Nothing Nothing
+      (_, sql) <- testServant tr $ Dashboards.widgetSqlTextGetH testPid (Just "status_code == \"ERROR\"") Nothing Nothing Nothing Nothing
       T.toUpper sql `shouldSatisfy` T.isInfixOf "SELECT"
       sql `shouldNotBe` "status_code == \"ERROR\""
 
+    it "copies SQL scoped to the authenticated environment and service" \tr -> do
+      let session = Servant.getResponse tr.trSessAndHeader
+      scopedSession <-
+        fromRightShow
+          <$> runTestEffect
+            tr.trPool
+            (Config.hasqlPool tr.trATCtx)
+            tr.trLogger
+            tr.trTracerProvider
+            (Auth.sessionByID (Just session.sessionId) session.requestID session.isSidebarClosed session.theme session.lang (Just "production") (Just "checkout") Nothing Auth.ChallengeRedirect)
+      let sqlFor dashboardIdM =
+            Servant.getResponse
+              <$> runAsBase
+                tr
+                ( atAuthToBase scopedSession
+                    $ Dashboards.widgetSqlTextGetH testPid (Just "status_code == \"ERROR\"") dashboardIdM Nothing Nothing Nothing
+                )
+      sql <- sqlFor Nothing
+      sql `shouldContainAll` ["resource___deployment___environment___name = 'production'", "resource___service___name = 'checkout'"]
+
+      dashboardSql <- sqlFor $ Just "overview"
+      dashboardSql `shouldSatisfy` T.isInfixOf "resource___deployment___environment___name = 'production'"
+      dashboardSql `shouldNotSatisfy` T.isInfixOf "resource___service___name"
+
     it "copies the chart query with its category grouping" \tr -> do
-      (_, sql) <- testServant tr $ Dashboards.widgetSqlTextGetH testPid (Just "summarize count(*) by bin_auto(timestamp), coalesce(status_code, level)") Nothing Nothing Nothing
+      (_, sql) <- testServant tr $ Dashboards.widgetSqlTextGetH testPid (Just "summarize count(*) by bin_auto(timestamp), coalesce(status_code, level)") Nothing Nothing Nothing Nothing
       sql `shouldNotSatisfy` T.isInfixOf "jsonb_build_array"
       let groupBy = snd $ T.breakOn "GROUP BY" sql
       groupBy `shouldSatisfy` T.isInfixOf "status_code"
       groupBy `shouldSatisfy` T.isInfixOf "level"
 
     it "reports a clear message instead of blank/failing when no query is given" \tr -> do
-      (_, sql) <- testServant tr $ Dashboards.widgetSqlTextGetH testPid Nothing Nothing Nothing Nothing
+      (_, sql) <- testServant tr $ Dashboards.widgetSqlTextGetH testPid Nothing Nothing Nothing Nothing Nothing
       sql `shouldBe` "No query provided"
 
   -- A raw-SQL widget renders whatever its query selects, so the text decoder must accept
@@ -460,6 +492,70 @@ spec = sequential $ aroundAll withTestResources do
       scoped <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTText) (Just testPid) Nothing (Just raw) (Just "24H") Nothing Nothing Nothing Nothing scope
       scoped.error `shouldBe` Nothing
       scoped.dataText `shouldBe` V.singleton (V.singleton "checkout")
+
+    -- A dashboard supplies its own service variable, while non-dashboard charts still use
+    -- the sticky selector. Both keep the authenticated environment boundary.
+    it "uses sticky service scope outside dashboards but not inside them" \tr -> do
+      apiKey <- createTestAPIKey tr testPid "chart-route-scope"
+      let ingest env service traceIdValue spanId =
+            ingestSpanReq tr
+              $ mkSpanRequest
+                traceIdValue
+                spanId
+                Nothing
+                ("GET /chart-scope/" <> service)
+                []
+                Nothing
+                []
+                (mkResource apiKey [mkAttr "deployment.environment.name" env, mkAttr "service.name" service])
+                frozenTime
+          raw = "SELECT resource___service___name FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND name LIKE 'GET /chart-scope/%' ORDER BY 1"
+          session = Servant.getResponse tr.trSessAndHeader
+      ingest "production" "checkout" "40000000000000000000000000000004" "4000000000000004"
+      ingest "staging" "catalog" "50000000000000000000000000000005" "5000000000000005"
+      ingest "production" "catalog" "60000000000000000000000000000006" "6000000000000006"
+      scopedSession <-
+        fromRightShow
+          <$> runTestEffect
+            tr.trPool
+            (Config.hasqlPool tr.trATCtx)
+            tr.trLogger
+            tr.trTracerProvider
+            (Auth.sessionByID (Just session.sessionId) session.requestID session.isSidebarClosed session.theme session.lang (Just "production") (Just "checkout") Nothing Auth.ChallengeRedirect)
+      result <-
+        runAsBase tr
+          $ atAuthToBase scopedSession
+          $ Routes.chartsDataGetH
+            Nothing
+            (Just Charts.DTText)
+            (Just testPid)
+            Nothing
+            (Just raw)
+            (Just "24H")
+            Nothing
+            Nothing
+            Nothing
+            Nothing
+            [("environment", Just "staging"), ("service", Just "catalog")]
+      result.error `shouldBe` Nothing
+      result.dataText `shouldBe` V.singleton (V.singleton "checkout")
+      dashboardResult <-
+        runAsBase tr
+          $ atAuthToBase scopedSession
+          $ Routes.chartsDataGetH
+            Nothing
+            (Just Charts.DTText)
+            (Just testPid)
+            Nothing
+            (Just raw)
+            (Just "24H")
+            Nothing
+            Nothing
+            Nothing
+            Nothing
+            [("dashboard_id", Just "overview"), ("environment", Just "staging"), ("service", Just "catalog")]
+      dashboardResult.error `shouldBe` Nothing
+      dashboardResult.dataText `shouldBe` V.fromList [V.singleton "catalog", V.singleton "checkout"]
 
     -- The same trap one decoder over: a plotted widget's SQL runs as DTMetric, whose leading
     -- column the pivot reads as an epoch number. `time_bucket('1m', timestamp) AS timestamp`

@@ -11,16 +11,40 @@ const selectInterval = (interval: unknown) => window.dispatchEvent(new CustomEve
 const mountTransport = (live: boolean, defaultWindow?: string) => {
   document.body.innerHTML = `
     <div ${defaultWindow ? `data-default-window="${defaultWindow}"` : ''}>
-      ${live ? '<span data-live-range="true"></span>' : ''}
+      <button data-live-range="${live}"><span data-live-badge></span></button>
       <div data-time-transport>
         <button data-live-toggle></button>
         <button data-next-window></button>
         <span data-pause-icon></span>
         <span data-play-icon></span>
+        <span data-refresh-label></span>
       </div>
-      <span data-live-badge></span>
     </div>`;
   return document.querySelector<HTMLElement>('[data-time-transport]')!;
+};
+
+const mountCoordinatedLiveData = () => {
+  document.body.innerHTML = `
+    <div data-live-data>
+      <button data-live-data-trigger><span data-live-data-indicator></span><span data-live-data-label></span><span data-live-data-label-short></span><span data-live-data-announcer></span></button>
+      <span data-row-stream-status></span>
+      <input type="checkbox" data-row-stream-toggle>
+      <button data-query-refresh-toggle><span data-query-refresh-status></span><span data-query-refresh-state></span></button>
+      <button data-live-range="true"><span data-live-badge></span></button>
+      <div data-time-transport>
+        <button data-live-toggle><span data-pause-icon></span><span data-play-icon></span><span data-refresh-label></span></button>
+        <button data-next-window></button>
+        <button data-refresh-option data-value="0"></button>
+        <button data-refresh-option data-value="15000"></button>
+        <select data-refresh-select><option value="0">Off</option><option value="15000">15 seconds</option></select>
+      </div>
+    </div>`;
+  const liveData = document.querySelector<HTMLElement>('[data-live-data]')!;
+  return {
+    liveData,
+    transport: liveData.querySelector<HTMLElement>('[data-time-transport]')!,
+    rows: liveData.querySelector<HTMLInputElement>('[data-row-stream-toggle]')!,
+  };
 };
 
 let refreshes: number;
@@ -41,6 +65,52 @@ afterEach(() => {
 });
 
 describe('auto-refresh interval', () => {
+  test('coordinates row streaming and query refresh behind one trustworthy status', () => {
+    const control = mountCoordinatedLiveData();
+    window.initTimeTransport(control.transport);
+
+    expect(control.liveData.dataset.state).toBe('stream-paused');
+    expect(control.transport.dataset.state).toBe('paused');
+    expect(control.transport.dataset.interval).toBe('15000');
+
+    window.toggleLiveData(control.liveData, control.transport);
+    expect(control.rows.checked).toBe(true);
+    expect(control.liveData.dataset.state).toBe('live');
+    expect(control.transport.dataset.state).toBe('live');
+
+    window.toggleLiveData(control.liveData, control.transport);
+    expect(control.rows.checked).toBe(false);
+    expect(window.dashboardRefreshInterval).toBe(0);
+    expect(control.liveData.dataset.state).toBe('paused');
+    expect(control.transport.dataset.interval).toBe('0');
+  });
+
+  test('names the independently paused mechanism', () => {
+    const control = mountCoordinatedLiveData();
+    control.rows.checked = true;
+    window.initTimeTransport(control.transport);
+
+    window.toggleLiveRefresh(control.transport);
+    expect(control.liveData.dataset.state).toBe('refresh-paused');
+
+    window.toggleLiveRefresh(control.transport);
+    control.rows.checked = false;
+    window.syncTimeTransports();
+    expect(control.liveData.dataset.state).toBe('stream-paused');
+  });
+
+  test('resyncs the unified status when row streaming stops outside the toggle', () => {
+    const control = mountCoordinatedLiveData();
+    control.rows.checked = true;
+    window.initTimeTransport(control.transport);
+    expect(control.liveData.dataset.state).toBe('live');
+
+    control.rows.checked = false;
+    window.syncTimeTransports();
+
+    expect(control.liveData.dataset.state).toBe('stream-paused');
+  });
+
   test('choosing an interval refreshes the dashboard on that cadence', () => {
     selectInterval(30_000);
 
@@ -84,9 +154,11 @@ describe('auto-refresh interval', () => {
   });
 
   test('leaving a timed page stops its global refresh timer', () => {
-    selectInterval(10_000);
+    const transport = mountTransport(true);
+    window.initTimeTransport(transport);
+    window.setTimeRefreshInterval(transport, 10_000);
+    window.destroyTimeTransport(transport);
     document.body.innerHTML = '';
-    document.dispatchEvent(new CustomEvent('htmx:after:swap'));
 
     vi.advanceTimersByTime(30_000);
 
@@ -122,22 +194,14 @@ describe('auto-refresh interval', () => {
     expect(window.dashboardRefreshTimer).toBeNull();
   });
 
-  // The bundle is deferred, so a transport rendered above it fires `on load`
-  // before window.initTimeTransport exists — three "'window.initTimeTransport'
-  // is null" criticals on 2026-08-28, each one a dashboard that then never
-  // refreshed. Adoption is what makes the missed hook harmless.
-  test('a transport whose on-load hook never ran is adopted, and one that ran is not re-initialised', () => {
-    const transport = mountTransport(true); // mounted WITHOUT calling initTimeTransport
-    expect(transport.dataset.live).toBeUndefined();
-
-    document.dispatchEvent(new CustomEvent('htmx:after:swap'));
-
+  test('local transport initialization is idempotent', () => {
+    const transport = mountTransport(true);
+    window.initTimeTransport(transport);
     expect(transport.dataset.live).toBe('true');
     vi.advanceTimersByTime(15_000);
     expect(refreshes).toBe(1);
 
-    // Already initialised: a second swap must not restart or double the timer.
-    document.dispatchEvent(new CustomEvent('htmx:after:swap'));
+    window.initTimeTransport(transport);
     vi.advanceTimersByTime(15_000);
     expect(refreshes).toBe(2);
   });
@@ -154,9 +218,8 @@ describe('auto-refresh interval', () => {
     expect(refreshes).toBe(1);
     expect(window.dashboardRefreshInterval).toBe(0);
     expect(window.dashboardRefreshTimer).toBeNull();
-    expect(historical.querySelector<HTMLButtonElement>('[data-live-toggle]')!.ariaLabel).toBe('Return to live');
-    expect(historical.querySelector<HTMLButtonElement>('[data-next-window]')!.disabled).toBe(false);
-    expect(document.querySelector<HTMLElement>('[data-live-badge]')!.textContent).toBe('PAUSED');
+    expect(historical.dataset.state).toBe('historical');
+    expect(historical.dataset.interval).toBe('0');
   });
 
   test('pause and resume keep a live range on the selected cadence', () => {
@@ -165,12 +228,29 @@ describe('auto-refresh interval', () => {
 
     window.toggleLiveRefresh(transport);
     expect(window.dashboardRefreshInterval).toBe(0);
-    expect(transport.querySelector<HTMLButtonElement>('[data-live-toggle]')!.ariaLabel).toBe('Resume live updates');
+    expect(transport.dataset.state).toBe('paused');
 
     window.toggleLiveRefresh(transport);
     vi.advanceTimersByTime(30_000);
     expect(window.dashboardRefreshInterval).toBe(15_000);
     expect(refreshes).toBe(2);
+  });
+
+  test('the dashboard live-data wrapper routes Resume through refresh-only behavior', () => {
+    const transport = mountTransport(true);
+    const wrapper = transport.parentElement!;
+    wrapper.dataset.liveData = '';
+    wrapper.dataset.liveMode = 'refresh-only';
+    const toggle = vi.spyOn(window, 'toggleLiveRefresh');
+    window.initTimeTransport(transport);
+
+    window.toggleLiveData(wrapper, transport);
+
+    expect(toggle).toHaveBeenCalledOnce();
+    expect(toggle).toHaveBeenCalledWith(transport);
+    expect(window.dashboardRefreshInterval).toBe(0);
+    expect(transport.dataset.state).toBe('paused');
+    toggle.mockRestore();
   });
 
   test('return to live replaces the absolute range without dropping other URL state', () => {

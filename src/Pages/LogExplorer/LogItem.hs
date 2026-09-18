@@ -192,13 +192,16 @@ detailsPanel_ pid targetEventM layout = div_ [class_ $ "contents group/details "
         ]
       else [checked_]
   input_ $ [type_ "checkbox", class_ "hidden peer/open", id_ "details-open"] <> memptyIfFalse (isJust targetEventM) [checked_]
-  -- Click-anywhere-else dismissal, drawer mode only. Nested rather than stacked
-  -- variants: one element per condition, so each stays a single peer selector.
+  -- Small screens keep modal, click-outside dismissal because the panel takes over
+  -- the viewport. On desktop the backdrop is visual/structural only: it must not dim
+  -- or intercept the log list, so another row can replace the open detail in one click.
+  -- Nested rather than stacked variants: one element per condition, so each stays a
+  -- single peer selector.
   div_ [class_ "hidden peer-checked/drawer:contents"]
     $ label_
       [ Lucid.for_ "details-open"
       , Aria.label_ "Close item details"
-      , class_ "fixed inset-0 z-40 bg-black/40 hidden group-has-[#details-open:checked]/details:block"
+      , class_ "fixed inset-0 z-40 bg-transparent pointer-events-none max-md:bg-black/40 max-md:pointer-events-auto hidden group-has-[#details-open:checked]/details:block"
       ]
       ""
   div_

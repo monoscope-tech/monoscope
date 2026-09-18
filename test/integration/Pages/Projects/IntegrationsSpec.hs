@@ -1,12 +1,14 @@
 module Pages.Projects.IntegrationsSpec (spec) where
 
 import Data.Aeson qualified as AE
+import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Notify (Notification (..))
 import Data.Effectful.Notify qualified as Notify
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Hasql.Interpolate qualified as HI
+import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Integrations qualified as ApisInt
 import Models.Projects.ProjectMembers qualified as PM
 import Models.Projects.Projects qualified as Projects
@@ -14,6 +16,7 @@ import Pages.Bots.BotTestHelpers (setupSlackData)
 import Pages.Projects qualified as Pages
 import Pages.Settings (TestChannel (..), TestForm (..), TestStatus (..))
 import Pages.Settings qualified as Integrations
+import Pkg.Mail qualified as Mail
 import Pkg.TestUtils
 import Relude
 import Servant qualified
@@ -49,6 +52,36 @@ spec = sequential $ aroundAll withTestResources $ do
             runQueryEffect tr
               $ Hasql.interp [HI.sql|SELECT status, issue_type, channel FROM apis.notification_test_history WHERE project_id = #{testPid} AND channel = #{channel} ORDER BY created_at DESC LIMIT 1|]
           history `shouldBe` [(TSSent, issueType, channel)]
+
+      it "keeps an unavailable runtime trend explicit and Slack-valid" \tr -> do
+        setupSlackData tr testPid "T_TREND_FALLBACK"
+        let err :: ErrorPatterns.ATError
+            err =
+              def
+                { ErrorPatterns.hash = "slack-trend-fallback"
+                , ErrorPatterns.errorType = "UpstreamTimeout"
+                , ErrorPatterns.message = "The upstream request timed out"
+                }
+            alert =
+              Mail.RuntimeErrorAlert
+                { Mail.issueId = "issue-trend-fallback"
+                , Mail.issueTitle = "Upstream timeout"
+                , Mail.errorData = err
+                , Mail.runtimeAlertType = Mail.NewRuntimeError
+                , Mail.chartUrl = Nothing
+                , Mail.occurrenceText = Nothing
+                , Mail.firstSeenText = Nothing
+                , Mail.ongoingFor = Nothing
+                }
+        (notifs, _) <- captureNotifs tr $ Mail.sendSlackAlert alert testPid "Notifications" (Just "C_NOTIF_CHANNEL")
+        let payloads = [d.payload | SlackNotification d <- notifs]
+        payloads `shouldSatisfy` \case
+          [payload] ->
+            T.isInfixOf "Trend unavailable" (payloadText payload)
+              && T.isInfixOf "Open issue" (payloadText payload)
+              && not (T.isInfixOf "image_url" (payloadText payload))
+              && null (slackPayloadViolations payload)
+          _ -> False
 
     describe "Team-Level Tests" $ do
       it "creates a team, routes Slack and PagerDuty to it, then deletes it" \tr -> do

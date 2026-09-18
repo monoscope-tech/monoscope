@@ -6,6 +6,13 @@
 ARG GHC_VERSION=9.12.2
 FROM haskell:${GHC_VERSION}
 
+# The upstream image installs the pinned compiler under /opt/ghc but does not
+# guarantee that directory is on PATH. Cabal's project file deliberately names
+# ghc-${GHC_VERSION}; make that executable available to both GitHub container
+# jobs and the local Compose runner.
+ARG GHC_VERSION
+ENV PATH="/opt/ghc/${GHC_VERSION}/bin:${PATH}"
+
 # Install system dependencies (combined into single layer)
 RUN apt-get update && apt-get install -y \
   curl ca-certificates lsb-release gnupg \

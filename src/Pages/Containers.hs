@@ -143,13 +143,13 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
         }
   let bwconf =
         bw
-          { prePageTitle = Just "Infrastructure"
-          , pageTitle = "Containers"
+          { prePageTitle = Nothing
+          , pageTitle = "Infrastructure"
           , menuItem = Just "Infrastructure"
           , navTabs = Just $ infrastructureNavTabs_ pid "Containers" window.fromQuery window.toQuery window.sinceQuery
           , pageActions = Just $ div_ [class_ "inline-flex items-center gap-2", data_ "default-window" "5M"] do
-              TimePicker.timepicker_ Nothing window.currentRange Nothing
-              TimePicker.refreshButton_
+              TimePicker.liveDataControls_ Nothing window.currentRange Nothing TimePicker.RefreshOnly
+          , serviceOptions = V.empty
           , needsGridStack = True
           }
   addRespHeaders $ ContainersPage $ PageCtx bwconf body

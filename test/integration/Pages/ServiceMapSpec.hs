@@ -381,7 +381,8 @@ spec = around withTestResources do
       (_, page) <- testServant tr $ ServiceMap.serviceMapGetH testPid Nothing Nothing (Just "1H") Nothing Nothing
       let ServiceMap.ServiceMapPage (PageCtx conf pd) = page
           html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
-      conf.pageTitle `shouldBe` "Service Map"
+      conf.pageTitle `shouldBe` "Explorer"
+      conf.prePageTitle `shouldBe` Nothing
 
       -- Every hop the fixture produced is reachable from the handler's own payload...
       edgePairs pd.graph

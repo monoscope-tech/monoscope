@@ -560,7 +560,11 @@ export class LiveTail extends LitElement {
     this.stickToBottom = atBottom(list, 40);
   };
 
-  private jumpToLive() {
+  private jumpToLive(event: MouseEvent) {
+    // Live Tail can be embedded in pages with delegated click handlers. Keep this
+    // local viewport action from being interpreted as navigation or a scope change.
+    event.preventDefault();
+    event.stopPropagation();
     this.stickToBottom = true;
     const list = this.querySelector<HTMLElement>('[data-rows]');
     if (list) list.scrollTop = list.scrollHeight;
@@ -610,8 +614,9 @@ export class LiveTail extends LitElement {
           ${dropped > 0 ? html`<span class="text-textWarning">${dropped.toLocaleString()} dropped — narrow your filter</span>` : nothing}
           ${this.statusMessage ? html`<span class="text-textError">${this.statusMessage}</span>` : nothing}
           ${!this.stickToBottom
-            ? html`<button
+              ? html`<button
                 type="button"
+                data-jump-to-live
                 class="ml-auto inline-flex items-center gap-1.5 min-h-7 px-2 rounded-field bg-bgRaised border border-strokeWeak text-textBrand hover:bg-fillWeaker focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-strokeBrand-strong"
                 @click=${this.jumpToLive}
               >
@@ -657,37 +662,38 @@ export class LiveTail extends LitElement {
         <select
           class="select select-sm w-48 max-md:flex-1 cursor-pointer"
           aria-label="Service"
+          .value=${this.service}
           @change=${(event: Event) => {
             this.service = (event.target as HTMLSelectElement).value;
             this.restart();
           }}
         >
-          <option value="" ?selected=${!this.service}>All services</option>
-          ${this.services.map((service) => html`<option value=${service} ?selected=${service === this.service}>${service}</option>`)}
+          <option value="">All services</option>
+          ${this.services.map((service) => html`<option value=${service}>${service}</option>`)}
         </select>
         <select
           class="select select-sm w-40 max-md:flex-1 cursor-pointer"
           aria-label="Environment"
+          .value=${this.environment}
           @change=${(event: Event) => {
             this.environment = (event.target as HTMLSelectElement).value;
             this.restart();
           }}
         >
-          <option value="" ?selected=${!this.environment}>All environments</option>
-          ${this.environments.map(
-            (environment) => html`<option value=${environment} ?selected=${environment === this.environment}>${environment}</option>`
-          )}
+          <option value="">All environments</option>
+          ${this.environments.map((environment) => html`<option value=${environment}>${environment}</option>`)}
         </select>
         <select
           class="select select-sm w-36 max-md:flex-1 cursor-pointer"
           aria-label="Signal kind"
+          .value=${this.kind}
           @change=${(event: Event) => {
             this.kind = (event.target as HTMLSelectElement).value;
             this.selectedFields = this.fieldsForKind();
             this.restart();
           }}
         >
-          ${KINDS.map(([value, label]) => html`<option value=${value} ?selected=${value === this.kind}>${label}</option>`)}
+          ${KINDS.map(([value, label]) => html`<option value=${value}>${label}</option>`)}
         </select>
         <div class="flex-1 basis-72 min-w-64 max-md:order-last max-md:basis-full">
           <query-editor

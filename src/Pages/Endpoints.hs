@@ -8,7 +8,6 @@ import Data.Text.Display (display)
 import Data.Time (UTCTime)
 import Data.Time.LocalTime (ZonedTime, zonedTimeToUTC)
 import Data.Vector qualified as V
-import Effectful.Concurrent.Async (concurrently)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Log (logAttention)
@@ -33,7 +32,7 @@ import Web.HttpApiData (FromHttpApiData, parseUrlPiece)
 
 apiCatalogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders CatalogList)
 apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM statsM = do
-  (_, project, bw) <- mkPageCtx pid
+  (session, project, bw) <- mkPageCtx pid
 
   -- Legacy request_type=… kept alongside the unified ?filter=… for shared links.
   let currentTab = fromMaybe TabIncoming $ asum $ map (>>= parseTabM) [filterTabM, currentTabM]
@@ -55,8 +54,8 @@ apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM statsM = d
   -- toggles — and every other viewer of the project — read it for free.
   let statsMode = if statsM == Just "true" then Endpoints.WithStats else Endpoints.ShellOnly
       skip = fromMaybe 0 skipM
-      cacheKey = (pid, currentTabT, sortV, filterV, period, skip)
-      hostQuery = Endpoints.HostQuery{direction = outgoingM, archived = showArchived, sort = sortV, skip, since = filterV, period}
+      hostQuery = Endpoints.HostQuery{direction = outgoingM, archived = showArchived, sort = sortV, skip, since = filterV, period, service = session.service}
+      cacheKey = (pid, hostQuery)
       fetch mode = Endpoints.dependenciesAndEventsCount mode appCtx.env.enableTimefusionReads pid hostQuery
   hostsAndEvents <- case statsMode of
     Endpoints.ShellOnly -> fetch Endpoints.ShellOnly
@@ -285,7 +284,7 @@ endpointListGetH
   -> Maybe Text
   -> ATAuthCtx (RespHeaders EndpointRequestStatsVM)
 endpointListGetH pid pageM perPageM _layoutM filterTM hostM currentTabM sortM periodM _hxRequestM _hxBoostedM _hxCurrentURL loadMoreM searchM statsM = do
-  (_, project, bw) <- mkPageCtx pid
+  (session, project, bw) <- mkPageCtx pid
   let archived = filterTM == Just "Archived"
       currentFilterTab = bool "Endpoints" "Archived" archived
       hostParam = guarded (/= "") =<< hostM
@@ -303,21 +302,18 @@ endpointListGetH pid pageM perPageM _layoutM filterTM hostM currentTabM sortM pe
       sortV = bool Endpoints.SortEvents Endpoints.SortName (currentSort `elem` ["-name", "+name"])
   appCtx <- ask @AuthContext
   let useTf = appCtx.env.enableTimefusionReads
-      endpointQuery = Endpoints.EndpointQuery{direction, archived, host = hostParam, search = searchM, sort = sortV, page, perPage, period}
+      endpointQuery = Endpoints.EndpointQuery{direction, archived, host = hostParam, search = searchM, sort = sortV, page, perPage, period, service = session.service}
       -- Same shell/deferred/memoise dance as apiCatalogH: the telemetry aggregate takes
       -- seconds, so the first paint renders skeletons and HTMX re-fetches with stats=true.
       -- Row-only responses (load-more, search) can't defer, so they always carry stats.
       statsMode = if statsM == Just "true" || isJust loadMoreM || isJust searchM then Endpoints.WithStats else Endpoints.ShellOnly
-      cacheKey = ((pid, currentTabT, host, currentSort), (fromMaybe "" searchM, page, perPage, period))
-      fetchStats mode = Endpoints.endpointRequestStatsByProject mode useTf pid endpointQuery
+      cacheKey = (pid, endpointQuery)
+      fetchStats mode = Endpoints.endpointRequestStatsPageByProject mode useTf pid endpointQuery
       fetchStatsCached = case statsMode of
         Endpoints.ShellOnly -> fetchStats Endpoints.ShellOnly
         Endpoints.WithStats -> Cache.fetchWithCache appCtx.endpointStatsCache cacheKey \_ ->
           RUMData.withSharedCache ("endpointStats:" <> show cacheKey) 300 (fetchStats Endpoints.WithStats)
-  (endpointStats, totalCount) <-
-    concurrently
-      fetchStatsCached
-      (Endpoints.countEndpointsForHost pid endpointQuery)
+  (endpointStats, totalCount) <- fetchStatsCached
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
 
   let baseUrl = [PyF.fmt|/p/{pid.toText}/endpoints?filter={currentFilterTab}&request_type={currentTabT}&host={host}&sort={currentSort}&period={periodT}|]

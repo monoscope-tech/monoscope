@@ -8,7 +8,9 @@ import Pkg.Parser (
   PageCursor (..),
   PageDirection (..),
   QueryComponents (finalAlertQuery, finalSummarizeQuery, percentilesInfo),
+  ScopedQuery (..),
   SqlQueryCfg (..),
+  applyScopedQuery,
   defPid,
   defSqlQueryCfg,
   fixedUTCTime,
@@ -34,6 +36,15 @@ shouldFailWith (Right _) _ = fail "Expected parse error"
 
 spec :: Spec
 spec = do
+  describe "shared query scope" do
+    it "overrides only the investigation boundary" do
+      let fromTime = addUTCTime (-3600) fixedUTCTime
+          scope = ScopedQuery defPid (Just fromTime, Just fixedUTCTime) (Just "production") (Just "checkout") (Just "trace-1")
+          cfg = (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing){alertLookbackMins = 15, cursorM = Just $ PageCursor PageNewer fixedUTCTime}
+          scoped = applyScopedQuery scope cfg
+      (scoped.pid, scoped.dateRange, scoped.environment, scoped.service) `shouldBe` (defPid, (Just fromTime, Just fixedUTCTime), Just "production", Just "checkout")
+      (scoped.alertLookbackMins, scoped.cursorM, scope.traceId) `shouldBe` (15, Just (PageCursor PageNewer fixedUTCTime), Just "trace-1")
+
   describe "incomplete comparison guidance" do
     forM_ ["==", "!=", ">=", "<=", ">", "<"] \op ->
       it ("explains a missing value after " <> toString op) do

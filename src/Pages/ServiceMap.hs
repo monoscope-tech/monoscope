@@ -56,13 +56,11 @@ serviceMapGetH pid fromM toM sinceM envM endpointHashM = do
     EndpointServiceMap endpoint -> endpointDependencyGraphForRange pid endpoint lo hi
   let bwconf =
         bw
-          { prePageTitle = Just "Explorer"
-          , pageTitle = case scope of GlobalServiceMap{} -> "Service Map"; EndpointServiceMap{} -> "Endpoint Dependency Map"
+          { prePageTitle = case scope of GlobalServiceMap{} -> Nothing; EndpointServiceMap{} -> Just "Explorer"
+          , pageTitle = case scope of GlobalServiceMap{} -> "Explorer"; EndpointServiceMap{} -> "Endpoint Dependency Map"
           , menuItem = Just "Explorer"
           , navTabs = Just $ explorerNavTabs_ pid "Service Map"
-          , pageActions = Just $ div_ [class_ "inline-flex gap-2"] do
-              TimePicker.timepicker_ Nothing currentRange Nothing
-              TimePicker.refreshButton_
+          , pageActions = Just $ TimePicker.liveDataControls_ Nothing currentRange Nothing TimePicker.RefreshOnly
           }
   addRespHeaders $ ServiceMapPage $ PageCtx bwconf $ ServiceMapPageData pid graph scope
 

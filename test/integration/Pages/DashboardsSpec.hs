@@ -16,7 +16,7 @@ import Models.Projects.Dashboards (DashboardVM (..))
 import Models.Projects.Dashboards qualified as DashboardModel
 import Models.Projects.ProjectMembers (TeamVM (..))
 import Models.Projects.Projects qualified as Projects
-import Pages.BodyWrapper (PageCtx (..))
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Charts.Types (MetricsData (..))
 import Pages.Dashboards (DashboardFilters (..))
 import Pages.Dashboards qualified as Dashboards
@@ -307,6 +307,12 @@ spec = sequential $ aroundAll withTestResources do
       html `shouldSatisfy` T.isInfixOf "No dashboards yet"
       html `shouldSatisfy` T.isInfixOf "for=\"newDashboardMdl\""
       html `shouldSatisfy` (not . T.isInfixOf "href=\"newDashboardMdl\"")
+
+    it "dashboard list omits the global service selector" \tr -> do
+      (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters
+      case pg of
+        Dashboards.DashboardsGet (PageCtx bw _) -> V.null bw.serviceOptions `shouldBe` True
+        _ -> fail "Expected full dashboard list response"
 
     it "Should update a dashboard" \tr -> do
       (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters

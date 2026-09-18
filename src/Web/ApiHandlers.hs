@@ -207,7 +207,8 @@ apiMonitorGet pid mid = ownedOr "Monitor not found" pid =<< Monitors.queryMonito
 -- @prev@ when the query doesn't parse, so a bad edit cannot blank the compiled SQL.
 compileAlertSql :: Projects.ProjectId -> Int -> Maybe Text -> Maybe Text -> Text -> Text -> Text
 compileAlertSql pid windowMins environment service q prev =
-  let cfg = (Parser.defSqlQueryCfg pid Parser.fixedUTCTime Nothing Nothing){Parser.alertLookbackMins = windowMins, Parser.environment, Parser.service}
+  let scope = Parser.mkScopedQuery pid (Nothing, Nothing) environment service
+      cfg = (Parser.applyScopedQuery scope $ Parser.defSqlQueryCfg pid Parser.fixedUTCTime Nothing Nothing){Parser.alertLookbackMins = windowMins}
    in fromMaybe prev $ (.finalAlertQuery) . snd =<< rightToMaybe (Parser.parseQueryToComponents cfg q)
 
 

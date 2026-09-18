@@ -114,7 +114,7 @@ import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), assetUrl, bulkActionSlug)
 import Pkg.Metrics qualified as Metrics
-import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), binDensityFor, constantToKQLList, constantToSQLList, defSqlQueryCfg, fixedUTCTime, parseQueryToComponents, replacePlaceholders, variablePresetsKQL)
+import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), applyScopedQuery, binDensityFor, constantToKQLList, constantToSQLList, defSqlQueryCfg, fixedUTCTime, mkScopedQuery, parseQueryToComponents, replacePlaceholders, variablePresetsKQL)
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Relude hiding (ask)
 import Servant (NoContent (..), ServerError, err302, err400, err404, errBody, errHeaders)
@@ -238,6 +238,25 @@ dashboardSettledPostH pid dashId sample = do
   pure NoContent
 
 
+actionPickerHeader_ :: Text -> Text -> Html ()
+actionPickerHeader_ modalId title = div_ [class_ "mb-2 flex items-center justify-between px-3"] do
+  h2_ [class_ "text-xs font-medium uppercase tracking-wider text-white"] $ toHtml title
+  label_ [Lucid.for_ modalId, Aria.label_ "Close modal", class_ "inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-white/70 hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-white active:scale-[0.96] transition-[color,background-color,scale]"]
+    $ faSprite_ "xmark" "regular" "h-3.5 w-3.5"
+
+
+actionPickerField_ :: Text -> Text -> Text -> Text -> Html ()
+actionPickerField_ label name placeholder value = label_ [Lucid.for_ name, class_ "flex flex-col gap-1.5 text-xs font-medium text-textStrong"] do
+  toHtml label
+  input_ [class_ "no-focus-ring h-10 w-full rounded-md border border-base-300 bg-transparent px-3 text-sm font-normal outline-none transition-[border-color,box-shadow] duration-150 placeholder:text-textDisabled focus:border-strokeBrand-strong focus:ring-2 focus:ring-strokeBrand-weak", id_ name, name_ name, placeholder_ placeholder, value_ value]
+
+
+actionPickerActions_ :: Text -> Html ()
+actionPickerActions_ modalId = div_ [class_ "flex justify-end gap-1.5 border-t border-strokeWeak p-2"] do
+  label_ [Lucid.for_ modalId, class_ "btn btn-sm btn-ghost cursor-pointer shadow-none active:scale-[0.96] transition-transform"] "Cancel"
+  button_ [type_ "submit", class_ "btn btn-sm btn-primary shadow-none active:scale-[0.96] transition-transform"] "Save changes"
+
+
 dashboardPage_ :: Projects.ProjectId -> Dashboards.DashboardId -> Dashboards.Dashboard -> Dashboards.DashboardVM -> [(Text, Maybe Text)] -> Html ()
 dashboardPage_ pid dashId dash dashVM allParams = do
   let pidText = pid.toText
@@ -250,31 +269,37 @@ dashboardPage_ pid dashId dash dashVM allParams = do
       renderTabSlug = dash.tabs *> (activeTabSlug <|> (slugify . (.name) <$> listToMaybe allTabs))
       renderTab = renderTabSlug >>= findTabBySlug allTabs <&> snd
   -- Modal for renaming dashboard
-  Components.modal_ "pageTitleModalId" ""
+  Components.modalWith_ "pageTitleModalId" def{boxClass = "!w-full !max-w-lg !overflow-visible !rounded-none !border-0 !bg-transparent !p-0 !shadow-none", wrapperClass = "!items-start pt-[15vh] px-4 [&_.modal-backdrop]:backdrop-blur-sm", hideClose = True} Nothing
     $ form_
-      [ class_ "flex flex-col p-3 gap-3"
+      [ class_ "flex flex-col"
       , hxPatch_ ("/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/rename")
       , hxSwap_ "innerHTML"
       , hxTrigger_ "submit"
       , hxTarget_ "#pageTitleText"
       ]
     $ do
-      formField_ FieldSm def{value = dashTitle dashVM.title, placeholder = "Insert new title"} "Dashboard Title" "title" False Nothing
-      formField_ FieldSm def{value = folderFromPath dashVM.filePath, placeholder = "reports/"} "Folder" "fileDir" False Nothing
-      Components.formActionsModal_ "pageTitleModalId" $ button_ [type_ "submit", class_ "btn btn-primary"] "Save"
+      actionPickerHeader_ "pageTitleModalId" "Rename dashboard"
+      div_ [class_ "w-full overflow-hidden rounded-lg border border-base-300 bg-bgBase shadow-2xl"] do
+        div_ [class_ "flex flex-col gap-3 p-3"] do
+          actionPickerField_ "Dashboard title" "title" "Insert new title" (dashTitle dashVM.title)
+          actionPickerField_ "Folder" "fileDir" "reports/" (folderFromPath dashVM.filePath)
+        actionPickerActions_ "pageTitleModalId"
 
   -- Modal for renaming tab (only shown for dashboards with tabs)
   when (isJust dash.tabs)
-    $ Components.modal_ "tabRenameModalId" ""
+    $ Components.modalWith_ "tabRenameModalId" def{boxClass = "!w-full !max-w-lg !overflow-visible !rounded-none !border-0 !bg-transparent !p-0 !shadow-none", wrapperClass = "!items-start pt-[15vh] px-4 [&_.modal-backdrop]:backdrop-blur-sm", hideClose = True} Nothing
     $ form_
-      [ class_ "flex flex-col p-3 gap-3"
+      [ class_ "flex flex-col"
       , hxPatch_ ("/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/tab/" <> fromMaybe "" activeTabSlug <> "/rename")
       , hxSwap_ "none"
       , hxTrigger_ "submit"
       ]
     $ do
-      formField_ FieldSm def{value = maybe "" ((.name) . snd) activeTabInfo, placeholder = "Enter tab name"} "Tab Name" "newName" False Nothing
-      Components.formActionsModal_ "tabRenameModalId" $ button_ [type_ "submit", class_ "btn btn-primary"] "Save"
+      actionPickerHeader_ "tabRenameModalId" "Rename tab"
+      div_ [class_ "w-full overflow-hidden rounded-lg border border-base-300 bg-bgBase shadow-2xl"] do
+        div_ [class_ "p-3"]
+          $ actionPickerField_ "Tab name" "newName" "Enter tab name" (maybe "" ((.name) . snd) activeTabInfo)
+        actionPickerActions_ "tabRenameModalId"
 
   -- Render variables and tabs in the same container
   when (isJust dash.variables || isJust dash.tabs) $ div_ [class_ "flex bg-bgRaised backdrop-blur-xs max-md:px-2 px-4 py-1 max-md:py-0.5 gap-4 max-md:gap-2 items-center flex-wrap sticky top-0 z-10"] do
@@ -314,6 +339,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
               , name_ var.key
               , class_ "dash-variable-input"
               , data_ "project-id" pidText
+              , data_ "dashboard-id" dashIdText
               , data_ "tagify" ""
               , data_ "tagify-whitelist" whitelist
               , data_ "tagify-enforce-whitelist" ""
@@ -419,6 +445,33 @@ dashboardPage_ pid dashId dash dashVM allParams = do
             if (oldScript.textContent) {newScript.textContent = oldScript.textContent}
             oldScript.parentNode.replaceChild(newScript, oldScript);
           });
+        };
+
+        // Widget PUTs return the same complete .grid-stack-item markup used by a full
+        // dashboard render. Passing that markup to addWidget({content}) creates a second
+        // grid item around it; the nested item's auto-height content then appears as a
+        // collapsed card until the next page load. Adopt the returned item itself and
+        // let GridStack read its gs-* attributes, exactly as it does on initial load.
+        window.adoptDashboardWidget = function(html, existingEl) {
+          const template = document.createElement('template');
+          template.innerHTML = html.trim();
+          const widgetEl = template.content.querySelector('.grid-stack-item');
+          const grid = window.gridStackInstance;
+          if (!(widgetEl instanceof HTMLElement) || !grid) return null;
+
+          // An edit is the same server-rendered replacement, but it must retain the
+          // position GridStack currently owns in case the saved YAML had not caught up
+          // with a drag. Suppress grid events: the PUT already persisted this change.
+          const position = existingEl?.gridstackNode
+            ? (({x, y, w, h}) => ({x, y, w, h}))(existingEl.gridstackNode)
+            : null;
+          if (existingEl) grid.removeWidget(existingEl, true, false);
+          grid.el.appendChild(widgetEl);
+          grid.makeWidget(widgetEl);
+          if (position) grid.update(widgetEl, position);
+          htmx.process(widgetEl);
+          window.evalScriptsFromContent(widgetEl);
+          return widgetEl;
         };
 
         function initializeGrids() {
@@ -1160,7 +1213,8 @@ syncWidgetAlert pid widgetId widget = do
   whenJust existingMonitor \monitor -> do
     let newQuery = fromMaybe "" widget.query
     when (monitor.logQuery /= newQuery) do
-      let sqlQueryCfg = (defSqlQueryCfg pid fixedUTCTime Nothing Nothing){alertLookbackMins = monitor.timeWindowMins}
+      let scope = mkScopedQuery pid (Nothing, Nothing) monitor.environment monitor.service
+          sqlQueryCfg = (applyScopedQuery scope $ defSqlQueryCfg pid fixedUTCTime Nothing Nothing){alertLookbackMins = monitor.timeWindowMins}
           newSqlQuery = case parseQueryToComponents sqlQueryCfg newQuery of
             Right (_, qc) -> fromMaybe "" qc.finalAlertQuery
             Left _ -> monitor.logQueryAsSql -- Keep previous SQL on parse failure
@@ -1269,9 +1323,9 @@ dashboardBWConf bw pid paymentPlan dashId title tabM currentRange freeTierStatus
     , freeTierStatus = freeTierStatus
     , headContent = Just dashboardHeadContent_
     , needsGridStack = True
+    , serviceOptions = V.empty
     , pageActions = Just $ div_ [class_ "flex gap-3 max-md:gap-1 items-center"] do
-        TimePicker.timepicker_ Nothing currentRange Nothing
-        TimePicker.refreshButton_
+        TimePicker.liveDataControls_ Nothing currentRange Nothing TimePicker.RefreshOnly
         dashboardActions_ pid paymentPlan dashId (fst <$> tabM) currentRange
     , docsLink = Just "https://monoscope.tech/docs/dashboard/dashboard-pages/dashboard/"
     }
@@ -1286,7 +1340,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr hxRequest allParams = do
       (session, project, bw) <- mkPageCtx pid
       now <- Time.currentTime
       let (_fromD, _toD, currentRange) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
-          scopedParams = dashboardScopedParams session.environment session.service allParams
+          scopedParams = dashboardScopedParams session.environment allParams
 
       (dashVM, dash) <- getDashAndVM pid dashId fileM
 
@@ -1310,15 +1364,15 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr hxRequest allParams = do
 
 
 numberedStep_ :: Int -> Text -> Html () -> Html ()
-numberedStep_ n title content = div_ [class_ "space-y-4"] do
-  div_ [class_ "flex items-start gap-3"] do
-    span_ [class_ "flex-shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-full bg-fillWeak text-sm font-medium tabular-nums"] $ toHtml (show n)
-    strong_ [class_ "text-base font-semibold text-textStrong"] $ toHtml title
-  div_ [class_ "pl-10"] content
+numberedStep_ n title content = section_ [class_ "space-y-2.5"] do
+  div_ [class_ "flex items-center gap-3"] do
+    span_ [class_ "inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-fillWeak text-xs font-semibold tabular-nums text-textStrong"] $ toHtml (show n)
+    strong_ [class_ "text-sm font-semibold text-textStrong"] $ toHtml title
+  content
 
 
 widgetViewerEditor_ :: Projects.ProjectId -> Text -> Maybe Dashboards.DashboardId -> Maybe Text -> Maybe (Text, Text) -> Maybe Widget.Widget -> Text -> Html ()
-widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingWidgetM activeTab = div_ [class_ "group/wgtexp"] do
+widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingWidgetM activeTab = div_ [class_ "widget-editor group/wgtexp min-h-full"] do
   let isNewWidget = isNothing existingWidgetM
       effectiveActiveTab = if isNewWidget then "edit" else activeTab
       defaultWidget =
@@ -1345,8 +1399,6 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
       widgetPreviewId = widPrefix <> "-widget-preview"
       widgetTitleInputId = widPrefix <> "-widget-title-input"
       drawerStateCheckbox = if isJust existingWidgetM then "global-data-drawer" else "page-data-drawer"
-      stickySentinelId = widPrefix <> "-sticky-sentinel"
-      stickyContainerId = widPrefix <> "-sticky-container"
       widgetJSON = encodeText widgetToUse
       formAction = flip foldMap dashboardIdM \dashId ->
         let params = catMaybes [("widget_id=" <>) . maybeToMonoid . (.id) <$> existingWidgetM, ("tab=" <>) <$> tabSlugM]
@@ -1373,31 +1425,27 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
             call event.preventDefault() then
             set #${drawerStateCheckbox}.checked to false then
             if @data-formMode == "edit"
-              call gridStackInstance.update(#{'${sourceWid}_widgetEl'}, {content: event.detail.ctx.text})
+              call window.adoptDashboardWidget(event.detail.ctx.text, #{'${sourceWid}_widgetEl'})
             else
-              call gridStackInstance.addWidget({w: 3, h: 3, content: event.detail.ctx.text})
+              call window.adoptDashboardWidget(event.detail.ctx.text, null)
             end
         |]
     ]
     ""
 
-  -- Sentinel for sticky header detection
-  div_ [id_ stickySentinelId, class_ "h-px w-full", Aria.hidden_ "true"] ""
-
-  -- Sticky container for header + preview
+  -- Keep the task controls available while the editor scrolls. The preview belongs to
+  -- the workspace below rather than this toolbar, so its height is independent of the
+  -- drawer width.
   let widgetTypeAttr = case widgetToUse.wType of
         Widget.WTTable -> "table"
         Widget.WTStat -> "stat"
         Widget.WTTimeseriesStat -> "stat"
         _ -> "chart"
   div_
-    [ id_ stickyContainerId
-    , class_ "sticky top-0 z-20 -mx-8 px-8 pb-2 bg-bgRaised widget-drawer-sticky"
-    , term "_" [text|on load js(me) { window.setupStickyObserver('${stickySentinelId}', '${stickyContainerId}') } end|]
-    ]
+    [class_ "sticky top-0 z-20 -mx-8 border-b border-strokeWeak bg-bgRaised px-8 py-2.5 shadow-xs max-lg:-mx-6 max-lg:px-6 max-md:-mx-4 max-md:px-4 [@media(max-height:48rem)]:py-2"]
     do
-      div_ [class_ "flex justify-between items-center mb-4 pr-12"] do
-        div_ [class_ "flex justify-between"] do
+      div_ [class_ "flex min-h-8 items-center justify-between gap-4"] do
+        div_ [class_ "min-w-0"] do
           unless isNewWidget
             $ div_ [class_ "tabs tabs-box tabs-outline"] do
               let mkTab tabName isActive = label_ [role_ "tab", class_ "tab has-[:checked]:tab-active"] do
@@ -1412,20 +1460,92 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
               mkTab "Overview" (effectiveActiveTab `notElem` ["edit", "alerts"])
               mkTab "Edit" (effectiveActiveTab == "edit")
               mkTab "Monitors" (effectiveActiveTab == "alerts")
-          when isNewWidget $ h3_ [class_ "text-lg font-semibold text-textStrong"] "Add a new widget"
+          when isNewWidget do
+            h2_ [class_ "truncate text-base font-semibold text-textStrong"] "Add widget"
+            p_ [class_ "mt-0.5 text-xs text-textWeak max-lg:hidden [@media(max-height:48rem)]:hidden"] "Configure the query and check the preview before adding it."
 
-        div_ [class_ "flex items-center gap-3"] do
-          TimePicker.timepicker_ Nothing currentRange (Just "widget")
-          TimePicker.refreshButton_
-          div_ [class_ "w-px h-5 bg-strokeWeak"] ""
-          button_ [class_ $ "btn btn-primary btn-sm shadow-sm" <> memptyIfFalse (not isNewWidget) " hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block", type_ "submit", form_ widgetFormId] "Save changes"
+        div_ [class_ "flex shrink-0 items-center gap-3"] do
+          TimePicker.liveDataControls_ Nothing currentRange (Just "widget") TimePicker.RefreshOnly
+          div_ [class_ "h-5 w-px bg-strokeWeak"] ""
+          button_
+            [ class_ $ "btn btn-primary btn-sm shadow-sm transition-transform active:scale-[0.96]" <> memptyIfFalse (not isNewWidget) " hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:inline-flex"
+            , type_ "submit"
+            , form_ widgetFormId
+            ]
+            $ if isNewWidget then "Add widget" else "Save changes"
+          button_
+            [ type_ "button"
+            , Aria.label_ "Close drawer"
+            , data_ "drawer-close-primary" ""
+            , class_ "btn btn-sm btn-square btn-ghost text-iconNeutral transition-[color,background-color,scale] hover:bg-fillWeak hover:text-iconBrand active:scale-[0.96]"
+            , term "_" [text|on click set #${drawerStateCheckbox}.checked to false then trigger change on #${drawerStateCheckbox}|]
+            ]
+            $ faSprite_ "xmark" "regular" "size-3.5"
 
-      -- 4:1 is a chart's shape. A log table is a header plus rows and wants roughly twice
-      -- that height, so it gets its own aspect off the checked viz radio (both live under
-      -- group/wgtexp). overflow-hidden is the guarantee rather than the styling: without
-      -- it the preview is free to paint over the numbered steps below, which is what the
-      -- logs preview did — it renders about 540px of table into a 280px box.
-      div_ [class_ "w-full aspect-4/1 group-has-[#viz-logs:checked]/wgtexp:aspect-[2/1] overflow-hidden p-4 rounded-xl bg-fillWeaker border border-strokeWeak widget-preview-container", data_ "widget-type" widgetTypeAttr] do
+  div_ [class_ "mt-4 grid items-start gap-4 pb-4 [@media(max-height:48rem)]:mt-3 [@media(max-height:48rem)]:gap-3"] do
+    div_
+      [ class_
+          $ "rounded-xl border border-strokeWeak bg-bgRaised p-4 [@media(max-height:48rem)]:p-3"
+          <> if isNewWidget
+            then " block"
+            else " hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block"
+      ]
+      do
+        div_ [class_ "space-y-5 [@media(max-height:48rem)]:space-y-4"] do
+          numberedStep_ 1 "Configure query" $ div_ [class_ "flex min-w-0 flex-col gap-3"] do
+            logQueryBox_
+              LogQueryBoxConfig
+                { pid = pid
+                , currentRange = Nothing
+                , source = Nothing
+                , targetSpan = Nothing
+                , query = widgetToUse.rawQuery <|> widgetToUse.query
+                , vizType = Just $ case widgetToUse.wType of
+                    Widget.WTTimeseriesLine -> "timeseries_line"
+                    Widget.WTLogs -> "logs"
+                    _ -> "timeseries"
+                , updateUrl = False
+                , targetWidgetPreview = Just widgetPreviewId
+                , alert = False
+                , sessionSort = LogQueries.SortLastSeen
+                , patternSelected = Nothing
+                , mobileExtra = Nothing
+                , parseError = Nothing
+                }
+            details_ [class_ "text-xs text-textWeak"] do
+              summary_ [class_ "cursor-pointer select-none transition-colors hover:text-textStrong"] "Show generated SQL"
+              div_
+                [ id_ $ widPrefix <> "-sql-preview"
+                , hxGet_ $ "/p/" <> pid.toText <> "/widget/sql-preview" <> foldMap ("?dashboard_id=" <>) (dashboardIdM <&> (.toText))
+                , hxVals_ "js:{query: widgetJSON.raw_query || widgetJSON.query}"
+                , hxTrigger_ "toggle from:closest details"
+                , hxSwap_ "innerHTML"
+                ]
+                $ loadingIndicator_ LdXS LdSpinner
+
+          numberedStep_ 2 "Name your widget"
+            $ input_
+              [ class_ "input input-bordered w-full"
+              , id_ widgetTitleInputId
+              , Aria.label_ "Widget title"
+              , placeholder_ "Throughput"
+              , required_ "required"
+              , value_ $ fromMaybe "" widgetToUse.title
+              , term
+                  "_"
+                  [text| on change
+                       set widgetJSON.title to my value then
+                       trigger 'update-widget' on #{'${widgetPreviewId}'}
+                     |]
+              ]
+
+    section_ [class_ "min-w-0 rounded-xl border border-strokeWeak bg-bgRaised p-4 [@media(max-height:48rem)]:p-3"] do
+      div_ [class_ "flex min-h-7 items-center justify-between gap-4"] do
+        h3_ [class_ "text-sm font-semibold text-textStrong"] "Preview"
+        span_ [class_ "text-xs text-textWeak"] "Updates as you edit"
+      -- Budget the preview from the remaining viewport height. The lower bound keeps
+      -- charts legible on short screens; the panel can still scroll when logs need more.
+      div_ [class_ "widget-preview-container mt-2.5 h-[clamp(10rem,calc(100dvh-32rem),18rem)] group-has-[#viz-logs:checked]/wgtexp:h-[clamp(14rem,calc(100dvh-28rem),23rem)] w-full overflow-hidden rounded-lg border border-strokeWeak bg-fillWeaker p-3 [@media(max-height:48rem)]:mt-2 [@media(max-height:48rem)]:p-2", data_ "widget-type" widgetTypeAttr] do
         div_
           [ id_ widgetPreviewId
           , class_ "h-full w-full overflow-hidden"
@@ -1448,53 +1568,6 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
         script_
           [text| var widgetJSON = ${widgetJSON};
                  widgetJSON.type = document.getElementById('${widgetPreviewId}')?.closest('[class~="group/wgtexp"]')?.querySelector('#visualizationTabs input:checked')?.value || widgetJSON.type; |]
-
-  div_ [class_ $ if isNewWidget then "block mt-6" else "hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block mt-6"] do
-    div_ [class_ "space-y-8"] do
-      numberedStep_ 1 "Configure Query" $ div_ [class_ "flex flex-col gap-3"] do
-        logQueryBox_
-          LogQueryBoxConfig
-            { pid = pid
-            , currentRange = Nothing
-            , source = Nothing
-            , targetSpan = Nothing
-            , query = widgetToUse.rawQuery <|> widgetToUse.query
-            , vizType = Just $ case widgetToUse.wType of
-                Widget.WTTimeseriesLine -> "timeseries_line"
-                Widget.WTLogs -> "logs"
-                _ -> "timeseries"
-            , updateUrl = False
-            , targetWidgetPreview = Just widgetPreviewId
-            , alert = False
-            , patternSelected = Nothing
-            , mobileExtra = Nothing
-            , parseError = Nothing
-            }
-        details_ [class_ "text-xs text-textWeak"] do
-          summary_ [class_ "cursor-pointer hover:text-textStrong select-none transition-colors"] "Show generated SQL"
-          div_
-            [ id_ $ widPrefix <> "-sql-preview"
-            , hxGet_ $ "/p/" <> pid.toText <> "/widget/sql-preview"
-            , hxVals_ "js:{query: widgetJSON.raw_query || widgetJSON.query}"
-            , hxTrigger_ "toggle from:closest details"
-            , hxSwap_ "innerHTML"
-            ]
-            $ loadingIndicator_ LdXS LdSpinner
-
-      numberedStep_ 2 "Give your graph a title"
-        $ input_
-          [ class_ "input input-bordered w-full"
-          , id_ widgetTitleInputId
-          , placeholder_ "Throughput"
-          , required_ "required"
-          , value_ $ fromMaybe "" widgetToUse.title
-          , term
-              "_"
-              [text| on change
-                 set widgetJSON.title to my value then
-                 trigger 'update-widget' on #{'${widgetPreviewId}'}
-               |]
-          ]
 
   -- Alerts tab content
   unless isNewWidget do
@@ -1938,6 +2011,7 @@ dashboardsGetH pid sortM embeddedM teamIdM copyWidgetIdM sourceDashIdM newM filt
               { pageTitle = "Dashboards"
               , freeTierStatus = freeTierStatus
               , headContent = Just dashboardHeadContent_
+              , serviceOptions = V.empty
               , pageActions = Just $ label_ [Lucid.for_ "newDashboardMdl", class_ "btn btn-sm btn-primary gap-2"] do
                   faSprite_ "plus" "regular" "h-4 w-4"
                   "New Dashboard"
@@ -2280,32 +2354,36 @@ dashboardWidgetNewGetH pid dashId tabSlugM rangeStartM rangeEndM = do
   addRespHeaders $ widgetViewerEditor_ pid project.paymentPlan (Just dashId) tabSlugM currentRange Nothing "edit"
 
 
--- | SqlQueryCfg for a project/time-range window, shared by the SQL preview and copy-SQL endpoints.
-widgetSqlCfg :: Projects.ProjectId -> UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> SqlQueryCfg
-widgetSqlCfg pid now sinceStr fromDStr toDStr = defSqlQueryCfg pid now Nothing Nothing & #dateRange .~ dateRange
+-- | Query scope shared by SQL preview and copy: dashboards own service filtering through
+-- variables, while other surfaces inherit the sticky service selection.
+widgetSqlCfg :: Projects.ProjectId -> UTCTime -> TimePicker.TimePicker -> Projects.Session -> Maybe Text -> SqlQueryCfg
+widgetSqlCfg pid now timePicker session dashboardIdM =
+  applyScopedQuery scope $ defSqlQueryCfg pid now Nothing Nothing
   where
-    (fromD, toD, _) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
-    dateRange = (fromD, toD)
+    (fromD, toD, _) = TimePicker.parseTimeRange now timePicker
+    scope = mkScopedQuery pid (fromD, toD) session.environment (session.service <* guard (isNothing dashboardIdM))
 
 
 -- | Plain-text SQL for the widget menu's "Copy SQL" action on KQL-backed widgets
 -- (raw-SQL widgets already carry their SQL in @Widget.sql@ and never call this).
-widgetSqlTextGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders Text)
-widgetSqlTextGetH pid queryM sinceStr fromDStr toDStr = do
-  _ <- Projects.sessionAndProject pid
+widgetSqlTextGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders Text)
+widgetSqlTextGetH pid queryM dashboardIdM sinceStr fromDStr toDStr = do
+  (session, _) <- Projects.sessionAndProject pid
   now <- Time.currentTime
-  let generatedSql query = (\(_, qc) -> fromMaybe qc.finalSqlQuery qc.finalSummarizeQuery) <$> parseQueryToComponents (widgetSqlCfg pid now sinceStr fromDStr toDStr) query
+  let cfg = widgetSqlCfg pid now (TimePicker.TimePicker sinceStr fromDStr toDStr) session dashboardIdM
+      generatedSql query = (\(_, qc) -> fromMaybe qc.finalSqlQuery qc.finalSummarizeQuery) <$> parseQueryToComponents cfg query
   addRespHeaders $ either id id $ generatedSql =<< maybeToRight "No query provided" queryM
 
 
 -- | SQL preview endpoint for debugging KQL queries (shows generated SQL)
-widgetSqlPreviewGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
-widgetSqlPreviewGetH pid queryM sinceStr fromDStr toDStr = do
-  _ <- Projects.sessionAndProject pid
+widgetSqlPreviewGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+widgetSqlPreviewGetH pid queryM dashboardIdM sinceStr fromDStr toDStr = do
+  (session, _) <- Projects.sessionAndProject pid
   now <- Time.currentTime
+  let cfg = widgetSqlCfg pid now (TimePicker.TimePicker sinceStr fromDStr toDStr) session dashboardIdM
   addRespHeaders case queryM of
     Nothing -> emptyState_ def{size = ESCompact} "No query provided" ""
-    Just query -> case parseQueryToComponents (widgetSqlCfg pid now sinceStr fromDStr toDStr) query of
+    Just query -> case parseQueryToComponents cfg query of
       Left err -> div_ [class_ "p-3 space-y-2"] do
         div_ [class_ "text-textError text-xs font-medium"] "Parse Error"
         pre_ [class_ "whitespace-pre-wrap break-all bg-fillError/10 p-2 rounded text-xs overflow-x-auto"] $ toHtml err
@@ -2498,7 +2576,7 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr hxRequest all
       (session, project, bw) <- mkPageCtx pid
       now <- Time.currentTime
       let (_fromD, _toD, currentRange) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
-          scopedParams = dashboardScopedParams session.environment session.service allParams
+          scopedParams = dashboardScopedParams session.environment allParams
 
       (dashVM, dash) <- getDashAndVM pid dashId fileM
 
@@ -2539,11 +2617,11 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr hxRequest all
       addRespHeaders $ navigationResponse hxRequest page fragment
 
 
--- | Dashboard URLs carry variables and time, not a second environment authority. Internal
--- prefill reads use the sticky session scope, matching @/chart_data@, and discard a stale
--- @environment@ query parameter before it can affect generated KQL or a cache key.
-dashboardScopedParams :: Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> [(Text, Maybe Text)]
-dashboardScopedParams environment service params = [("environment", environment), ("service", service)] <> filter (\(k, _) -> k /= "environment" && k /= "service") params
+-- | Dashboard URLs carry variables and time, not a second global scope authority. Internal
+-- prefill reads keep the sticky environment but deliberately omit the sticky service: a
+-- dashboard that needs service filtering declares a dashboard variable for it.
+dashboardScopedParams :: Maybe Text -> [(Text, Maybe Text)] -> [(Text, Maybe Text)]
+dashboardScopedParams environment params = [("environment", environment)] <> filter (\(k, _) -> k /= "environment" && k /= "service") params
 
 
 -- | The tab strip is rendered both in the full page and as an OOB replacement in a

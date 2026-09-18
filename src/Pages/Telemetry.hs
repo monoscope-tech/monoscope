@@ -321,14 +321,12 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM expandM la
       (_, _, currentRange) = parseTime fromM toM sinceOrDefault now
       bwconf =
         bw
-          { prePageTitle = Just "Explorer"
-          , pageTitle = "Metrics"
+          { prePageTitle = Nothing
+          , pageTitle = "Explorer"
           , menuItem = Just "Explorer"
           , navTabs = Just $ explorerNavTabs_ pid "Metrics"
           , docsLink = Just "https://monoscope.tech/docs/dashboard/dashboard-pages/metrics/"
-          , pageActions = Just $ div_ [class_ "inline-flex gap-2"] do
-              TimePicker.timepicker_ Nothing currentRange Nothing
-              TimePicker.refreshButton_
+          , pageActions = Just $ TimePicker.liveDataControls_ Nothing currentRange Nothing TimePicker.RefreshOnly
           }
   groups <- if appendM == Just True then pure [] else Telemetry.getMetricGroups pid
   let filters =
@@ -1096,8 +1094,7 @@ metricsDetailsPage pid allDashboards allMonitors source labelM currentRange metr
               do
                 option_ ([selected_ "all" | "all" == source] <> [value_ "all"]) "All sources"
                 forM_ sources $ \s -> option_ ([selected_ s | s == source] <> [value_ s]) $ toHtml s
-            TimePicker.timepicker_ (Just refreshId) currentRange (Just "metric-details")
-            TimePicker.refreshButton_
+            TimePicker.liveDataControls_ (Just refreshId) currentRange (Just "metric-details") TimePicker.RefreshOnly
             label_ [class_ "btn btn-ghost btn-circle btn-sm cursor-pointer tap-target text-iconNeutral hover:text-iconBrand", Aria.label_ "Close metric detail", data_ "tippy-content" "Close metric detail", Lucid.for_ "global-data-drawer"] $ faSprite_ "xmark" "regular" "w-3 h-3"
         div_ [id_ refreshId, class_ "hidden", [__|on submit trigger 'update-query' on window|]] ""
       metricDetailChart pid metric source selected

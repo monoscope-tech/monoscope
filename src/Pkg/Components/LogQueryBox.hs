@@ -1,6 +1,7 @@
 module Pkg.Components.LogQueryBox (logQueryBox_, VizType (..), visTypes, queryLibraryContent_, enrichSchemaWithFacets, LogQueryBoxConfig (..)) where
 
 import Data.Aeson qualified as AE
+import Data.Default (def)
 import Data.HashMap.Strict qualified as HM
 import Data.Map qualified as Map
 import Data.Text qualified as T
@@ -15,10 +16,10 @@ import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import NeatInterpolation (text)
-import Pages.Components (filterInputAttr_, keyboardActivateAttr_, modal_, options_)
+import Pages.Components (ModalCfg (..), filterInputAttr_, keyboardActivateAttr_, modalWith_, options_)
 import Pkg.SchemaLearning.Catalog (FacetData (..), FacetValue (..))
 import Relude
-import Utils (displayTimestamp, faSprite_, formatUTC, onpointerdown_, popoverPanel_, popoverTrigger_)
+import Utils (displayTimestamp, faSprite_, formatUTC, onpointerdown_)
 
 
 -- | Configuration record for the log query box component
@@ -32,6 +33,7 @@ data LogQueryBoxConfig = LogQueryBoxConfig
   , updateUrl :: Bool
   -- ^ Whether to update the URL when the query changes
   , alert :: Bool
+  , sessionSort :: LogQueries.SessionSort
   , patternSelected :: Maybe Text
   , targetWidgetPreview :: Maybe Text
   -- ^ ID of the widget preview element to update when the query changes
@@ -47,21 +49,40 @@ data LogQueryBoxConfig = LogQueryBoxConfig
 -- This component provides a unified interface for querying logs and visualizing data
 logQueryBox_ :: LogQueryBoxConfig -> Html ()
 logQueryBox_ config = do
-  modal_ "saveQueryMdl" "" $ form_
-    [ class_ "flex flex-col p-3 gap-3"
+  modalWith_ "saveQueryMdl" def{boxClass = "!w-full !max-w-lg !overflow-visible !rounded-none !border-0 !bg-transparent !p-0 !shadow-none", wrapperClass = "!items-start pt-[15vh] px-4 [&_.modal-backdrop]:backdrop-blur-sm", hideClose = True} Nothing $ form_
+    [ class_ "flex flex-col"
     , id_ "saveQueryForm"
     , hxPost_ $ "/p/" <> config.pid.toText <> "/log_explorer/queries"
     , hxVals_ "js:{query: document.getElementById('saveQueryMdl').dataset.pendingQuery || window.getQueryFromEditor()}"
     , hxTarget_ "#queryLibraryPopover"
     , hxSwap_ "innerHTML"
     , hxPushUrl_ "false"
-    , [__|on htmx:after:request set #saveQueryMdl.dataset.pendingQuery to null|]
+    , [__|on htmx:after:request
+        set :status to event.detail.ctx.response.status
+        if :status >= 200 and :status < 300
+          set #saveQueryMdl.dataset.pendingQuery to null
+          set #saveQueryMdl.checked to false
+          trigger change on #saveQueryMdl
+          set #query-title.value to ''
+          set #queryLibId.value to ''
+          send successToast(value:['Query saved to library']) to <body/>
+        end
+      |]
     ]
     do
-      strong_ "Name your query"
-      input_ [type_ "hidden", value_ "", name_ "queryLibId", id_ "queryLibId"]
-      input_ [class_ "input input-md", placeholder_ "query title", name_ "queryTitle"]
-      button_ [type_ "submit", class_ "btn btn-primary cursor-pointer"] "Save"
+      div_ [class_ "mb-2 flex items-center justify-between px-3"] do
+        h2_ [class_ "text-xs font-medium uppercase tracking-wider text-white"] "Save query"
+        label_ [Lucid.for_ "saveQueryMdl", Aria.label_ "Close modal", class_ "inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-white/70 hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-white active:scale-[0.96] transition-[color,background-color,scale]"]
+          $ faSprite_ "xmark" "regular" "h-3.5 w-3.5"
+      div_ [class_ "w-full overflow-hidden rounded-lg border border-base-300 bg-bgBase shadow-2xl"] do
+        input_ [type_ "hidden", value_ "", name_ "queryLibId", id_ "queryLibId"]
+        div_ [class_ "border-b border-base-300 px-4 py-3"]
+          $ label_ [Lucid.for_ "query-title", class_ "flex flex-col gap-1.5 text-xs font-medium text-textStrong"] do
+            span_ "Query name"
+            input_ [class_ "no-focus-ring w-full bg-transparent py-2 text-sm font-normal outline-none placeholder:text-textDisabled", id_ "query-title", placeholder_ "Checkout errors", name_ "queryTitle", autocomplete_ "off"]
+        div_ [class_ "flex justify-end gap-1.5 p-2"] do
+          label_ [Lucid.for_ "saveQueryMdl", class_ "btn btn-sm btn-ghost cursor-pointer shadow-none active:scale-[0.96] transition-transform"] "Cancel"
+          button_ [type_ "submit", class_ "btn btn-sm btn-primary cursor-pointer shadow-none active:scale-[0.96] transition-transform"] "Save query"
   form_
     [ id_ "log_explorer_form"
     , class_ "flex flex-col gap-1 w-full max-w-full"
@@ -105,15 +126,16 @@ logQueryBox_ config = do
           whenNothing_ config.targetWidgetPreview
             $ script_ "{const p=localStorage.getItem('aiSearchExpanded'),c=document.getElementById('ai-search-chkbox');if(p!==null&&c)c.checked=p==='true';}"
           div_ [class_ "w-full gap-2 items-center px-2 hidden group-has-[.ai-search:checked]/fltr:flex"] do
-            span_ [class_ "text-2xs font-semibold text-textBrand bg-fillBrand-weak px-1.5 py-0.5 rounded shrink-0"] "AI"
+            label_ [Lucid.for_ "ai-search-input", class_ "text-2xs font-semibold text-textBrand bg-fillBrand-weak px-1.5 py-0.5 rounded shrink-0"] "Ask AI"
             input_
               [ class_ "border-0 w-full flex-1 p-0.5 no-focus-ring"
-              , placeholder_ "Ask in plain English — e.g. \"errors in payment service last hour\""
+              , placeholder_ "e.g., errors from checkout in the last hour"
               , id_ "ai-search-input"
               , name_ "input"
+              , Aria.label_ "Describe the events to find"
               , hxPost_ $ "/p/" <> config.pid.toText <> "/log_explorer/ai_search"
               , -- `htmx:trigger` is not special-cased by htmx; it only fires a request because
-                -- it is listed here. Enter and the Submit button both dispatch it to skip the debounce.
+                -- it is listed here. Enter and the Generate query button both dispatch it to skip the debounce.
                 hxTrigger_ "input[this.value.trim().length > 0] changed delay:1s, htmx:trigger"
               , hxSwap_ "none"
               , hxExt_ "json-enc"
@@ -134,17 +156,26 @@ logQueryBox_ config = do
             button_
               [ type_ "button"
               , id_ "ai-search-submit"
+              , Aria.label_ "Generate query"
               , Aria.disabled_ "true"
+              , data_ "tippy-content" "Generate query"
               , -- Disabled follows the prompt box reactively (hx-live re-runs on every
                 -- input event), replacing hand-rolled attribute flipping in hyperscript.
                 term "hx-live:aria-disabled" "!q('#ai-search-input').value.trim()"
-              , class_ "px-3 py-0.5 inline-flex gap-2 items-center border rounded-sm shadow-strokeBrand-weak aria-disabled:cursor-not-allowed aria-disabled:text-textDisabled aria-disabled:border-strokeWeak aria-[disabled=false]:cursor-pointer aria-[disabled=false]:text-textBrand aria-[disabled=false]:border-strokeBrand-strong aria-[disabled=false]:shadow-md"
+              , class_ "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-iconNeutral aria-disabled:cursor-not-allowed aria-disabled:text-textDisabled aria-[disabled=false]:cursor-pointer aria-[disabled=false]:text-iconBrand aria-[disabled=false]:hover:bg-fillBrand-weak aria-[disabled=false]:active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-offset-1 transition-transform"
               , onclick_ "if(this.getAttribute('aria-disabled')!=='true') htmx.trigger('#ai-search-input', 'htmx:trigger')"
               ]
-              do
-                faSprite_ "arrow-right" "regular" "h-4 w-4"
-                "Submit"
-            label_ [Lucid.for_ "ai-search-chkbox", role_ "button", tabindex_ "0", Aria.label_ "Collapse AI search", class_ "cursor-pointer p-1 focus-visible:outline-2 focus-visible:outline-offset-2", data_ "tippy-content" "Collapse AI search", keyboardActivateAttr_] $ faSprite_ "arrows-minimize" "regular" "h-4 w-4 inline-block text-iconBrand"
+              $ faSprite_ "arrow-right" "regular" "h-4 w-4"
+            label_
+              [ Lucid.for_ "ai-search-chkbox"
+              , role_ "button"
+              , tabindex_ "0"
+              , Aria.label_ "Hide AI input"
+              , class_ "inline-flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-iconNeutral hover:bg-fillWeak hover:text-iconBrand focus-visible:outline-2 focus-visible:outline-offset-2 active:scale-[0.96] transition-transform"
+              , data_ "tippy-content" "Hide AI input"
+              , keyboardActivateAttr_
+              ]
+              $ faSprite_ "chevron-up" "regular" "h-3.5 w-3.5"
 
           -- Above the editor, not below it: the suggestions dropdown opens downward
           -- over that space and hid the message while the user was typing the query
@@ -183,21 +214,27 @@ logQueryBox_ config = do
                     "Ask AI"
 
             whenNothing_ config.targetWidgetPreview $ do
-              div_ [class_ "gap-[2px] flex items-center max-md:hidden"] do
-                span_ [class_ "text-textWeak"] "in"
+              div_ [class_ "flex items-center max-md:hidden"] do
                 select_
-                  [ class_ "ml-1 select select-sm w-full max-w-xs h-8 bg-bgBase border-strokeStrong"
+                  [ class_ "select select-sm h-8 w-full max-w-xs bg-bgBase"
                   , name_ "target-spans"
                   , id_ "spans-toggle"
-                  , Aria.label_ "Target span type"
+                  , Aria.label_ "Search scope"
                   , onchange_ "this.form.dispatchEvent(new Event('submit', {bubbles: true}))"
                   ]
-                  $ options_ (Just $ fromMaybe "all-spans" config.targetSpan) [("all-spans", "All spans"), ("root-spans", "Trace Root Spans"), ("service-entry-spans", "Service Entry Spans")]
+                  $ options_ (Just $ fromMaybe "all-spans" config.targetSpan) [("all-spans", "All spans"), ("root-spans", "Root spans"), ("service-entry-spans", "Service entry spans")]
 
-              div_ [class_ "inline-block max-md:hidden"] do
-                button_ ([type_ "button", class_ "rounded-lg px-3 py-1 text-textStrong inline-flex items-center border border-strokeWeak hover:border-strokeStrong h-8 cursor-pointer", Aria.label_ "Save query"] <> popoverTrigger_ "save-query-pop") $ faSprite_ "floppy-disk" "regular" "h-5 w-5 text-iconNeutral"
-                ul_ ([class_ "dropdown dropdown-end border border-strokeWeak menu bg-bgRaised rounded-box w-60 p-2 shadow-lg"] <> popoverPanel_ "save-query-pop") do
-                  li_ $ label_ [Lucid.for_ "saveQueryMdl", onclick_ "document.getElementById('saveQueryMdl').dataset.pendingQuery = null;"] "Save query to Query Library"
+              label_
+                [ Lucid.for_ "saveQueryMdl"
+                , class_ "hidden h-8 w-8 items-center justify-center rounded-lg text-iconNeutral hover:bg-fillWeak hover:text-iconBrand focus-visible:outline-2 focus-visible:outline-offset-1 active:scale-[0.96] transition-transform md:inline-flex"
+                , Aria.label_ "Save query"
+                , data_ "tippy-content" "Save query"
+                , role_ "button"
+                , tabindex_ "0"
+                , keyboardActivateAttr_
+                , [__|on click set #saveQueryMdl.dataset.pendingQuery to null then call #saveQueryForm.reset()|]
+                ]
+                $ faSprite_ "floppy-disk" "regular" "h-4 w-4"
             button_
               [ type_ "submit"
               , class_ "leading-none rounded-lg px-3 py-1 cursor-pointer !h-8 btn btn-primary"
@@ -208,67 +245,68 @@ logQueryBox_ config = do
                 faSprite_ "magnifying-glass" "regular" "h-4 w-4 inline-block"
 
       div_ [class_ "flex justify-between max-md:flex-wrap max-md:gap-0.5"] do
-        div_ [class_ "flex items-center gap-2 max-md:gap-1 max-md:w-full"] do
-          visualizationTabs_
-          div_ [class_ "hidden group-has-[#viz-sessions:checked]/pg:flex items-center gap-1"] do
-            span_ [class_ "text-textWeak text-xs"] "Sort:"
-            select_
-              [ class_ "select select-sm max-w-[130px]"
-              , id_ "session-sort-select"
-              , Aria.label_ "Sort sessions by"
-              , onchange_ "window.setQueryParamAndReload('sort_by', this.value)"
-              ]
-              $ options_ Nothing [(LogQueries.sessionSortParam s, LogQueries.sessionSortLabel s) | s <- [minBound .. maxBound]]
-            script_ "document.getElementById('session-sort-select').value = new URLSearchParams(window.location.search).get('sort_by') || 'last_seen';"
-          div_ [class_ "hidden group-has-[#viz-patterns:checked]/pg:flex items-center gap-1"] do
-            let isCustom = any (`notElem` map fst knownPatternFields) config.patternSelected
-            select_
-              [ class_ "select select-sm max-w-[140px]"
-              , id_ "pattern-target-select"
-              , [__|on change
-                    if my value is '__custom__'
-                      add .hidden to me
-                      remove .hidden from #pattern-target-input
-                      call #pattern-target-input.focus()
-                    else
+        div_ [class_ "flex min-w-0 items-center gap-0 max-md:w-full"] do
+          div_ [class_ "flex items-center gap-2 max-md:gap-1"] do
+            visualizationTabs_
+            div_ [class_ "hidden group-has-[#viz-sessions:checked]/pg:flex items-center gap-1"] do
+              span_ [class_ "text-textWeak text-xs"] "Sort:"
+              select_
+                [ class_ "select select-sm max-w-[130px]"
+                , id_ "session-sort-select"
+                , name_ "sort_by"
+                , Aria.label_ "Sort sessions by"
+                , [__|on change call window.setQueryParamAndReload('sort_by', my value)|]
+                ]
+                $ options_ (Just $ LogQueries.sessionSortParam config.sessionSort) [(LogQueries.sessionSortParam s, LogQueries.sessionSortLabel s) | s <- [minBound .. maxBound]]
+            div_ [class_ "hidden group-has-[#viz-patterns:checked]/pg:flex items-center gap-1"] do
+              let isCustom = any (`notElem` map fst knownPatternFields) config.patternSelected
+              select_
+                [ class_ "select select-sm max-w-[140px]"
+                , id_ "pattern-target-select"
+                , [__|on change
+                      if my value is '__custom__'
+                        add .hidden to me
+                        remove .hidden from #pattern-target-input
+                        call #pattern-target-input.focus()
+                      else
+                        call window.setQueryParamAndReload('pattern_target', my value)
+                      end|]
+                ]
+                $ options_ (Just $ bool (fromMaybe "summary" config.patternSelected) "__custom__" isCustom) (knownPatternFields <> [("__custom__", "Other field...")])
+              input_
+                [ class_ $ "input input-sm max-w-[200px]" <> bool " hidden" "" isCustom
+                , id_ "pattern-target-input"
+                , list_ "pattern-field-list"
+                , placeholder_ "e.g. attributes.url.path"
+                , value_ $ bool "" (fromMaybe "" config.patternSelected) isCustom
+                , [__|on keydown[key is 'Enter']
                       call window.setQueryParamAndReload('pattern_target', my value)
-                    end|]
-              ]
-              $ options_ (Just $ bool (fromMaybe "summary" config.patternSelected) "__custom__" isCustom) (knownPatternFields <> [("__custom__", "Other field...")])
-            input_
-              [ class_ $ "input input-sm max-w-[200px]" <> bool " hidden" "" isCustom
-              , id_ "pattern-target-input"
-              , list_ "pattern-field-list"
-              , placeholder_ "e.g. attributes.url.path"
-              , value_ $ bool "" (fromMaybe "" config.patternSelected) isCustom
-              , [__|on keydown[key is 'Enter']
-                    call window.setQueryParamAndReload('pattern_target', my value)
-                  end
-                  on blur
-                    if my value is not ''
-                      call window.setQueryParamAndReload('pattern_target', my value)
-                    else
-                      add .hidden to me
-                      remove .hidden from #pattern-target-select
-                      set #pattern-target-select.value to 'summary'
-                    end|]
-              ]
-            datalist_ [id_ "pattern-field-list"] $ options_ Nothing $ map (,"") $ Map.keys Schema.telemetrySchema.fields
-          span_ [class_ "text-textDisabled mx-2 text-xs max-md:hidden", Aria.hidden_ "true"] "|"
-          termRaw "query-builder" [term "query-editor-selector" "#filterElement"] ("" :: Text)
-          whenNothing_ config.targetWidgetPreview popularSearchChips_
-          -- Mobile-only hide timeline, inside the viz tabs row so it stays on the same line
-          fieldset_ [class_ "fieldset md:hidden ml-auto"] $ label_ [class_ "label text-textWeak space-x-1 min-h-6 items-center group-has-[.default-chart:checked]/pg:flex"] do
-            input_ [type_ "checkbox", class_ "checkbox checkbox-xs rounded-sm toggle-chart", [__|init if window.innerWidth < 768 set my.checked to true|]]
-              >> span_ [class_ "text-xs"] "Hide timeline"
+                    end
+                    on blur
+                      if my value is not ''
+                        call window.setQueryParamAndReload('pattern_target', my value)
+                      else
+                        add .hidden to me
+                        remove .hidden from #pattern-target-select
+                        set #pattern-target-select.value to 'summary'
+                      end|]
+                ]
+              datalist_ [id_ "pattern-field-list"] $ options_ Nothing $ map (,"") $ Map.keys Schema.telemetrySchema.fields
+          span_ [class_ "mx-3 hidden h-4 w-px shrink-0 bg-strokeWeak opacity-70 md:block", Aria.hidden_ "true"] ""
+          div_ [class_ "flex min-w-0 items-center gap-2"] do
+            termRaw "query-builder" [term "query-editor-selector" "#filterElement"] ("" :: Text)
+            whenNothing_ config.targetWidgetPreview popularSearchChips_
 
         whenJust config.mobileExtra
           $ div_ [class_ "md:hidden flex items-center gap-2 text-sm w-full"]
 
-        div_ [class_ "flex justify-end gap-2 max-md:hidden"] do
-          fieldset_ [class_ "fieldset"] $ label_ [class_ "label text-textWeak space-x-1 hidden group-has-[.default-chart:checked]/pg:block"] do
-            input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart"] >> span_ "Hide timeline"
-          fieldset_ [class_ "fieldset"] $ label_ [class_ "label text-textWeak space-x-1 group-has-[#viz-patterns:checked]/pg:hidden group-has-[#viz-sessions:checked]/pg:hidden"] do
+        -- One shared control group across breakpoints: duplicate mobile/desktop
+        -- Timeline controls can both become visible when conditional variants win.
+        div_ [class_ "flex items-center justify-end gap-3 max-md:w-full"] do
+          label_ [class_ "flex min-h-8 cursor-pointer items-center gap-1.5 text-xs text-textWeak hover:text-textStrong"] do
+            input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart", [__|init if window.innerWidth < 768 set my.checked to true|]]
+            span_ "Hide timeline"
+          label_ [class_ "flex min-h-8 cursor-pointer items-center gap-1.5 text-xs text-textWeak hover:text-textStrong group-has-[#viz-patterns:checked]/pg:hidden group-has-[#viz-sessions:checked]/pg:hidden"] do
             input_
               $ [ type_ "checkbox"
                 , id_ "create-alert-toggle"
@@ -393,7 +431,7 @@ logQueryBox_ config = do
                   $ toHtml l
         button_
           [ type_ "button"
-          , class_ "px-1.5 py-0.5 text-textBrand hover:underline cursor-pointer inline-flex items-center gap-1"
+          , class_ "inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-md bg-fillWeaker px-2 text-textWeak hover:bg-fillWeak hover:text-textStrong focus-visible:outline-2 focus-visible:outline-offset-2 active:scale-[0.96] transition-[color,background-color,scale]"
           , term "popovertarget" "queryLibraryPopover"
           , style_ "anchor-name: --querylib-anchor"
           , hxGet_ $ "/p/" <> config.pid.toText <> "/log_explorer/queries"
@@ -403,12 +441,12 @@ logQueryBox_ config = do
           , hxIndicator_ "#queryLibraryLoader"
           ]
           do
-            "Library"
-            faSprite_ "chevron-down" "regular" "w-2.5 h-2.5"
+            "Query library"
+            faSprite_ "chevron-down" "regular" "h-2.5 w-2.5"
         div_
           [ id_ "queryLibraryPopover"
           , term "popover" "auto"
-          , class_ "bg-bgBase rounded-xl border-2 border-strokeStrong shadow-lg w-[480px] max-w-[90vw] min-h-16 overflow-hidden z-50 mt-1"
+          , class_ "bg-bgRaised rounded-lg border border-strokeWeak shadow-sm w-[480px] max-w-[calc(100vw-2rem)] min-h-16 overflow-hidden z-50 mt-1"
           , style_ "inset: unset; top: anchor(bottom); right: anchor(right); position-try-fallbacks: flip-block, flip-inline; position-anchor: --querylib-anchor"
           ]
           $ div_ [id_ "queryLibraryLoader", class_ "htmx-indicator h-16 flex items-center justify-center"]
@@ -418,28 +456,34 @@ logQueryBox_ config = do
 -- | Shared dropdown content for the query library (Popular + Saved + Recent tabs)
 queryLibraryContent_ :: V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
 queryLibraryContent_ queryLibSaved queryLibRecent =
-  div_ [id_ "queryLibraryContent"]
-    $ div_ [class_ "tabs tabs-box tabs-sm tabs-outline items-center p-0 h-full", role_ "tablist", id_ "queryLibraryTabListEl"] do
+  div_ [id_ "queryLibraryContent"] do
+    div_ [class_ "flex items-center justify-between border-b border-strokeWeak px-3 py-2.5"] do
+      div_ do
+        h2_ [class_ "text-sm font-semibold text-textStrong"] "Query library"
+        p_ [class_ "text-2xs text-textWeak"] "Run a saved query or start from a common search."
+      button_ [type_ "button", Aria.label_ "Close query library", class_ "tap-target inline-flex h-8 w-8 items-center justify-center rounded-lg text-iconNeutral hover:bg-fillWeak hover:text-textStrong focus-visible:outline-2 focus-visible:outline-offset-2 active:scale-[0.96] transition-[color,background-color,scale]", onclick_ hidePopoverJS]
+        $ faSprite_ "xmark" "regular" "h-3.5 w-3.5"
+    div_ [class_ "tabs tabs-sm items-center p-1.5 h-full", role_ "tablist", id_ "queryLibraryTabListEl"] do
       tabPanel_ "Popular" True popularQueriesContent_
       tabPanel_ "Saved" False (queryLibraryItems_ "Saved" queryLibSaved)
       tabPanel_ "Recent" False (queryLibraryItems_ "Recent" queryLibRecent)
   where
     tabPanel_ :: Text -> Bool -> Html () -> Html ()
     tabPanel_ label isDefault content = do
-      input_ $ [type_ "radio", name_ "querylib", role_ "tab", class_ "tab", Aria.label_ label] <> [checked_ | isDefault]
-      div_ [role_ "tabpanel", class_ "tab-content max-h-[60dvh] overflow-y-auto"] content
+      input_ $ [type_ "radio", name_ "querylib", role_ "tab", class_ "tab h-8 rounded-md px-3 text-xs font-medium", Aria.label_ label] <> [checked_ | isDefault]
+      div_ [role_ "tabpanel", class_ "tab-content col-span-full mt-1 max-h-[60dvh] overflow-y-auto border-t border-strokeWeak"] content
 
     queryLibraryItems_ :: Text -> V.Vector Projects.QueryLibItem -> Html ()
     queryLibraryItems_ label items = do
       searchBar_ label
-      div_ [class_ $ "divide-y divide-strokeWeak dataLibContent" <> label] $ V.forM_ items (queryLibItem_ (label == "Recent"))
+      div_ [class_ $ "dataLibContent" <> label <> " p-1"] $ V.forM_ items (queryLibItem_ (label == "Recent"))
 
     popularQueriesContent_ :: Html ()
     popularQueriesContent_ =
-      div_ [class_ "divide-y divide-strokeWeak"]
+      div_ [class_ "p-1"]
         $ forM_ popularQueries \(query, label, desc) ->
           div_
-            [ class_ "query-item px-3 py-2 hover:bg-fillWeak cursor-pointer transition-colors"
+            [ class_ "query-item rounded-md px-3 py-2.5 hover:bg-fillWeak cursor-pointer transition-colors"
             , onclick_ $ applyQueryJS query <> "; " <> hidePopoverJS
             ]
             do
@@ -448,13 +492,14 @@ queryLibraryContent_ queryLibSaved queryLibRecent =
               whenJust desc $ small_ [class_ "text-xs text-textDisabled mt-0.5 block"] . toHtml
 
     searchBar_ :: Text -> Html ()
-    searchBar_ label = div_ [class_ "flex gap-2 sticky top-0 px-3 py-2 bg-bgBase border-b border-strokeWeak z-20"] do
-      label_ [class_ "input input-sm flex items-center gap-2 flex-1"] do
+    searchBar_ label = div_ [class_ "flex gap-2 sticky top-0 px-2 py-2 bg-bgRaised border-b border-strokeWeak z-20"] do
+      label_ [class_ "flex h-9 flex-1 items-center gap-2 rounded-md bg-fillWeaker px-3 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-strokeBrand-weak"] do
         faSprite_ "magnifying-glass" "regular" "h-3.5 w-3.5 opacity-70"
         input_
           [ type_ "search"
-          , class_ "grow"
+          , class_ "min-w-0 grow bg-transparent text-sm outline-none"
           , placeholder_ "Search"
+          , Aria.label_ $ "Search " <> T.toLower label <> " queries"
           , filterInputAttr_ $ ".query-item in .dataLibContent" <> label
           ]
       when (label == "Saved")
@@ -466,7 +511,7 @@ queryLibraryContent_ queryLibSaved queryLibRecent =
     queryLibItem_ :: Bool -> Projects.QueryLibItem -> Html ()
     queryLibItem_ isRecent qli =
       div_
-        [ class_ $ "query-item px-3 py-2 hover:bg-fillWeak cursor-pointer group relative transition-colors " <> bool "hidden group-has-[#queryLibraryGroup:checked]/pg:block" "" qli.byMe
+        [ class_ $ "query-item rounded-md px-3 py-2.5 hover:bg-fillWeak cursor-pointer group relative transition-colors " <> bool "hidden group-has-[#queryLibraryGroup:checked]/pg:block" "" qli.byMe
         , data_ "query" qli.queryText
         ]
         do
@@ -478,7 +523,7 @@ queryLibraryContent_ queryLibSaved queryLibRecent =
                 >> when qli.byMe " • by me"
             code_ [class_ "queryText text-xs block whitespace-pre-wrap break-words opacity-75"] $ toHtml qli.queryText
 
-          div_ [class_ "query-actions absolute top-0 right-3 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100 flex gap-1"] do
+          div_ [class_ "query-actions absolute right-2 top-2 flex gap-1 rounded-md bg-bgRaised/95 p-0.5 opacity-0 shadow-sm group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100 transition-opacity"] do
             actionBtn_ "Run this query" "play" [onclick_ $ "event.preventDefault(); window.queryEditorCall('handleAddQuery', this.closest('.query-item').dataset.query, true); " <> hidePopoverJS]
             actionBtn_ "Copy query to clipboard" "copy" [onclick_ "event.preventDefault(); navigator.clipboard.writeText(this.closest('.query-item').dataset.query).then(() => { document.body.dispatchEvent(new CustomEvent('successToast', {detail: {value: ['Query copied to clipboard']}})); })"]
             when qli.byMe
@@ -504,7 +549,7 @@ queryLibraryContent_ queryLibSaved queryLibRecent =
 
     actionBtn_ :: Text -> Text -> [Attribute] -> Html ()
     actionBtn_ tip icon attrs =
-      button_ ([type_ "button", Aria.label_ tip, class_ "inline-flex items-center justify-center min-w-6 min-h-6 hover:bg-fillWeak rounded cursor-pointer", data_ "tippy-content" tip] <> attrs)
+      button_ ([type_ "button", Aria.label_ tip, class_ "inline-flex min-h-7 min-w-7 cursor-pointer items-center justify-center rounded-md text-iconNeutral hover:bg-fillWeak hover:text-textStrong focus-visible:outline-2 active:scale-[0.96] transition-[color,background-color,scale]", data_ "tippy-content" tip] <> attrs)
         $ faSprite_ icon "regular" "h-3 w-3"
 
     hidePopoverJS :: Text
@@ -518,8 +563,8 @@ applyQueryJS q = "window.applyQuery(" <> decodeUtf8 (AE.encode q) <> ")"
 popularQueries :: [(Text, Text, Maybe Text)]
 popularQueries =
   [ ("level == \"ERROR\"", "Show errors", Nothing)
-  , ("attributes.http.response.status_code >= 500", "HTTP 5xx responses", Nothing)
-  , ("duration > 1000000000", "Slow requests (>1s)", Nothing)
+  , ("attributes.http.response.status_code >= 500", "Show 5xx responses", Nothing)
+  , ("duration > 1000000000", "Show slow requests (>1s)", Nothing)
   , ("attributes.exception.type != null", "Exceptions", Nothing)
   , ("attributes.error.type != null", "Error types", Nothing)
   , ("kind != \"log\" and duration > 5000000000", "Slow spans (>5s)", Nothing)

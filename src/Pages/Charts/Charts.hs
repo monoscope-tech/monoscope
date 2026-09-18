@@ -43,7 +43,7 @@ import Pages.Charts.Types (DataType (..), MetricsData (..), MetricsStats (..))
 import Pkg.Components.TimePicker qualified as Components
 import Pkg.DeriveUtils (DB)
 import Pkg.Metrics qualified as Metrics
-import Pkg.Parser (BinDensity, QueryComponents (finalSummarizeQuery, whereClause), RangeEnd (..), SqlQueryCfg (..), buildDateRange, buildEnvFilter, buildServiceFilter, defSqlQueryCfg, pSource, queryASTToComponents, replacePlaceholders, variablePresets, variablePresetsKQL)
+import Pkg.Parser (BinDensity, QueryComponents (finalSummarizeQuery, whereClause), RangeEnd (..), SqlQueryCfg (..), applyScopedQuery, buildDateRange, buildEnvFilter, buildServiceFilter, defSqlQueryCfg, mkScopedQuery, pSource, queryASTToComponents, replacePlaceholders, variablePresets, variablePresetsKQL)
 import Pkg.Parser.Expr (Subject (..))
 import Pkg.Parser.Stats (BinFunction (..), ByClauseItem (..), QueryError (..), Section (..), Sources (..), SummarizeByClause (..), parseQueryDiagnosed)
 import Pkg.QueryCache qualified as QC
@@ -174,14 +174,14 @@ queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (Utils.nonEmptyT -> q
 -- the KQL-generated query.
 runQueryAST :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AuthContext -> Maybe Text -> DataType -> Projects.ProjectId -> Maybe Sources -> BinDensity -> Maybe Text -> Maybe Text -> [Section] -> Text -> Maybe Text -> M.Map Text Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> Eff es MetricsData
 runQueryAST authCtx dbSource respDataType pid source binDensity environment service queryAST queryM querySQLM mappngSQL now fromD toD = do
-  let sqlQueryCfg =
-        (defSqlQueryCfg pid now source Nothing)
-          { dateRange = (fromD, toD)
-          , binDensity
-          , metricJsonAsVariant = usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource
-          , environment
-          , service
-          }
+  let scope = mkScopedQuery pid (fromD, toD) environment service
+      sqlQueryCfg =
+        applyScopedQuery
+          scope
+          (defSqlQueryCfg pid now source Nothing)
+            { binDensity
+            , metricJsonAsVariant = usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource
+            }
 
   case querySQLM of
     Just querySQL
@@ -712,7 +712,8 @@ queryMetricsStream dbSource dataTypeM pidM queryM querySQLM sinceM fromM toM sou
           (first (.message) $ parseQueryDiagnosed source $ replacePlaceholders mappingKQL $ maybeToMonoid $ Utils.nonEmptyT queryM)
           Left
           (raw >>= rawSqlScopeError environment service)
-      cfg = (defSqlQueryCfg pid now source Nothing){dateRange = (fromD, toD), binDensity = density, metricJsonAsVariant = usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource, environment, service}
+      scope = mkScopedQuery pid (fromD, toD) environment service
+      cfg = (applyScopedQuery scope $ defSqlQueryCfg pid now source Nothing){binDensity = density, metricJsonAsVariant = usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource}
       run emit = case parsed of
         Left message -> pure $ Left message
         Right ast -> do

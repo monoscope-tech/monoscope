@@ -93,6 +93,7 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), assetUrl, bulkActionSlug)
 import Pkg.ErrorFingerprint qualified as EF
 import Pkg.Mail qualified as Mail
+import Pkg.Parser (ScopedQuery (..), applyScopedKqlContext, mkScopedQuery)
 import Pkg.SchemaLearning.Catalog (FacetData (..), FacetSummary (..), FacetValue (..))
 import PyF (fmt)
 import Relude hiding (ask)
@@ -100,7 +101,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.IO.Error (userError)
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent, useTfReads)
-import Utils (LoadingSize (..), LoadingType (..), checkFreeTierStatus, countNoun, faSprite_, formatOffset, formatUTC, formatWithCommas, hostPath, isoT, kqlQuoted, loadingIndicator_, lookupValueText, renderMarkdown, timeScopedUrl, toUriStr)
+import Utils (LoadingSize (..), LoadingType (..), checkFreeTierStatus, countNoun, faSprite_, formatOffset, formatUTC, formatWithCommas, hostPath, isoT, loadingIndicator_, lookupValueText, renderMarkdown, timeScopedUrl, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData)
 
@@ -892,8 +893,7 @@ issueChartCard_ IssueView{..} chartTitle heightCls thresholdM chartQuery = do
         span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] "Events"
         Widget.widgetValueSlotAs_ "text-2xl font-semibold text-textStrong tabular-nums leading-none" chartId Nothing
       picker = div_ [class_ "flex flex-wrap items-center justify-end gap-2 [&>button]:max-md:basis-full"] do
-        TimePicker.timepicker_ (Just refreshId) currentRange Nothing
-        TimePicker.refreshButton_
+        TimePicker.liveDataControls_ (Just refreshId) currentRange (Just $ "issue-" <> chartId) TimePicker.RefreshOnly
   div_ [id_ refreshId, class_ "hidden", [__|on submit trigger 'update-query' on window|]] ""
   detailCard_ Nothing def{headCls = Just "px-4 py-2 flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-strokeWeak", trailing = Just (total <> div_ [class_ "ml-auto max-md:w-full"] picker)} chartTitle
     $ div_ [class_ heightCls]
@@ -970,9 +970,10 @@ issueEvidence_ v@IssueView{..} = case Issues.issuePayload issue of
   Just (Issues.QueryAlertP d) -> do
     let below = d.thresholdType == Issues.Below
         meetsThreshold = if below then d.actualValue <= d.thresholdValue else d.actualValue >= d.thresholdValue
-        -- Hands the Explorer the alert's own query and the page's window.
+        scope = mkScopedQuery pid (Nothing, Nothing) issue.environment issue.service
+        -- Hands the Explorer the alert's own query, its issue boundary, and the page's window.
         queryExplorerLink = a_
-          [ href_ $ timeScopedUrl ("/p/" <> pid.toText <> "/log_explorer") [("query", d.queryExpression)] tp.from tp.to tp.since
+          [ href_ $ timeScopedUrl ("/p/" <> pid.toText <> "/log_explorer") [("query", applyScopedKqlContext scope d.queryExpression)] tp.from tp.to tp.since
           , data_ "preserve-time-range" ""
           , class_ "ml-auto text-xs text-textBrand hover:underline flex items-center gap-1"
           ]
@@ -1164,16 +1165,13 @@ investigationPanel_ IssueView{..} = unless (issue.issueType == Issues.QueryAlert
               -- timestamp the window needs.
               -- An issue is a record of an occurrence, so its own service and
               -- environment are stronger context than whatever the reader last
-              -- selected globally. Quote each value: issue fields are telemetry
-              -- inputs, not trusted KQL fragments.
-              issueScope =
-                foldMap (\s -> " AND service==" <> kqlQuoted s) (nonBlank issue.service)
-                  <> foldMap (\e -> " AND resource.deployment.environment.name==" <> kqlQuoted e) (nonBlank issue.environment)
-              nonBlank = mfilter (not . T.null . T.strip)
-              scoped query = query <> issueScope
+              -- selected globally. The shared helper quotes telemetry values and
+              -- keeps this KQL hand-off aligned with SQL-backed investigation views.
+              scope = ScopedQuery pid (Nothing, Nothing) issue.environment issue.service (fst <$> traceRef)
+              scoped = applyScopedKqlContext scope
               (logsQuery, logsParams) = case (Issues.hashPrefix issue.issueType, traceRef) of
                 (Just prefix, _) | isLogPatternIssue -> (scoped $ "hashes[*]==\"" <> prefix <> issue.targetHash <> "\"", TimePicker.rangeQuery tp)
-                (_, Just (tId, tTs)) -> ("kind==\"log\" AND context___trace_id==\"" <> tId <> "\"", around tTs)
+                (_, Just (tId, tTs)) -> (scoped $ "kind==\"log\" AND context___trace_id==\"" <> tId <> "\"", around tTs)
                 -- ~24% of error patterns never captured a trace id (log records carry
                 -- no trace context; spans always do). The old empty-string fallback
                 -- rendered `context___trace_id==""`, which filters nothing and dumped
@@ -1838,10 +1836,20 @@ issueListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM service
       pageInt = fromMaybe 0 $ readMaybe . toString =<< pageM
       perPage = fromMaybe 25 $ readMaybe . toString =<< perPageM
       currentSort = fromMaybe "-created_at" sortM
-      -- The authenticated, sticky service scope wins over a stale shared URL just as
-      -- the environment scope does. The page filter remains useful only in All-services.
-      scopedServices = maybe serviceFilters pure session.service
       period = fromMaybe "24h" periodM
+      scope = mkScopedQuery pid (Nothing, Nothing) session.environment session.service
+      issueFilters =
+        Issues.applyIssueScope
+          scope
+          tabFilters
+            { Issues.limit = perPage
+            , Issues.offset = pageInt * perPage
+            , Issues.order = Just currentSort
+            , Issues.period = period
+            , Issues.services = serviceFilters
+            , Issues.types = typeFilters
+            }
+      scopedServices = issueFilters.services
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
   currTime <- Time.currentTime
   ((issues, totalCount), (availableServices, availableTypes)) <-
@@ -1849,15 +1857,7 @@ issueListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM service
       ( Issues.selectIssues
           pid
           Issues.PIssueL
-          tabFilters
-            { Issues.limit = perPage
-            , Issues.offset = pageInt * perPage
-            , Issues.order = Just currentSort
-            , Issues.period = period
-            , Issues.services = scopedServices
-            , Issues.environment = session.environment
-            , Issues.types = typeFilters
-            }
+          issueFilters
       )
       ( concurrently
           (Hasql.interp [HI.sql| SELECT DISTINCT service FROM apis.issues WHERE project_id = #{pid} AND service IS NOT NULL AND (#{session.environment}::text IS NULL OR environment = #{session.environment}) AND (#{session.service}::text IS NULL OR service = #{session.service}) |])

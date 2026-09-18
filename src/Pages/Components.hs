@@ -158,8 +158,12 @@ el_ n = with (makeElement n)
 -- >>> checks True == checks False + 1
 -- True
 -- >>> let h = toStrict $ renderText $ drawer_ "d" False Nothing Nothing ""
--- >>> "drawer-side top-0 left-0 w-full h-full flex z-10000 overflow-y-scroll overflow-x-hidden" `T.isInfixOf` h
+-- >>> "drawer-side top-0 left-0 w-full h-full flex justify-end z-10000 overflow-y-scroll overflow-x-hidden" `T.isInfixOf` h
 -- True
+-- >>> "pointer-events-none max-md:pointer-events-auto" `T.isInfixOf` h
+-- True
+-- >>> "aria-modal" `T.isInfixOf` h
+-- False
 drawer_ :: Text -> Bool -> Maybe Text -> Maybe (Html ()) -> Html () -> Html ()
 drawer_ drawerId startOpen urlM content trigger = div_ [class_ "drawer drawer-end inline-block w-auto"] do
   input_
@@ -171,32 +175,45 @@ drawer_ drawerId startOpen urlM content trigger = div_ [class_ "drawer drawer-en
         <> [checked_ | startOpen]
         <> [ [__|on change
             if my.checked then
-              add .overflow-hidden to <body/>
-              set my._focusTrapCleanup to window.createFocusTrap(my.closest('.drawer').querySelector('.drawer-side > [role=dialog]'))
-              set :closeBtn to my.closest('.drawer').querySelector('button[aria-label="Close drawer"]')
-              if :closeBtn then call :closeBtn.focus() end
+              if window.matchMedia('(max-width: 767px)').matches then
+                add .overflow-hidden to <body/>
+                set my._focusTrapCleanup to window.createFocusTrap(my.closest('.drawer').querySelector('.drawer-side > [role=dialog]'))
+                set :closeBtn to my.closest('.drawer').querySelector('[data-drawer-close-primary]')
+                if not :closeBtn
+                  set :closeBtn to my.closest('.drawer').querySelector('button[aria-label="Close drawer"]')
+                end
+                if :closeBtn then call :closeBtn.focus() end
+              end
             else
               remove .overflow-hidden from <body/>
-              if my._focusTrapCleanup then call my._focusTrapCleanup() end
+              if my._focusTrapCleanup then
+                call my._focusTrapCleanup()
+                set my._focusTrapCleanup to null
+              end
             end
+          on keydown[key == 'Escape' and my.checked and not (the event's target matches <input, textarea, select, [contenteditable]/>) and no <[popover]:popover-open/> and no <dialog[open]/>] from window
+            set my.checked to false
+            trigger change on me
+          end
       |]
            ]
     )
   label_ [Lucid.for_ drawerId, class_ "drawer-button inline-block", Aria.label_ "Open drawer"] trigger
   -- The closed panel is translated beyond the viewport. Clip it here rather than letting
   -- its transformed width create a page-level horizontal scroll range.
-  div_ [class_ "drawer-side top-0 left-0 w-full h-full flex z-10000 overflow-y-scroll overflow-x-hidden"] do
-    label_ [Lucid.for_ drawerId, Aria.label_ "Close drawer", class_ "w-full drawer-overlay grow flex-1"] ""
+  -- Desktop drawers are non-modal workbench panels: the page remains interactive so
+  -- list rows and charts can load their next selection straight into the open drawer.
+  -- Mobile keeps the ordinary modal overlay because the panel occupies the viewport.
+  div_ [class_ "drawer-side top-0 left-0 w-full h-full flex justify-end z-10000 overflow-y-scroll overflow-x-hidden pointer-events-none max-md:pointer-events-auto"] do
+    label_ [Lucid.for_ drawerId, Aria.label_ "Close drawer", class_ "hidden max-md:flex w-full drawer-overlay grow flex-1"] ""
     div_
       [ id_ $ drawerId <> "-panel"
-      , style_ "width: min(90vw, 1200px)"
-      , class_ "bg-bgRaised fixed right-0 top-0 h-full overflow-y-auto overscroll-contain overflow-x-hidden w-full max-sm:w-screen! relative"
+      , class_ "pointer-events-auto fixed right-0 top-0 h-dvh w-[min(90vw,75rem)] max-sm:w-screen! overflow-y-auto overscroll-contain overflow-x-hidden bg-bgRaised border-s border-strokeWeak shadow-2xl relative [&:has(.widget-editor)>.drawer-floating-close]:hidden"
       , role_ "dialog"
-      , term "aria-modal" "true"
       , Aria.label_ "Details"
       ]
       do
-        div_ [class_ "sticky top-3 z-30 h-0 flex justify-end"]
+        div_ [class_ "drawer-floating-close sticky top-3 z-30 h-0 flex justify-end"]
           $ button_
             [ type_ "button"
             , Aria.label_ "Close drawer"
@@ -206,7 +223,7 @@ drawer_ drawerId startOpen urlM content trigger = div_ [class_ "drawer drawer-en
           $ faSprite_ "xmark" "regular" "h-3.5 w-3.5"
         div_
           [ id_ $ drawerId <> "-content"
-          , class_ "pb-4 px-8 h-full flex flex-col gap-8"
+          , class_ "h-full flex flex-col gap-8 px-8 pb-4 max-lg:px-6 max-md:px-4"
           , term "hx-on::after:swap" "window.evalScriptsFromContent(this); window.labelDrawer(this.closest('[role=dialog]'))"
           ]
           -- hx-swap sits on the requester rather than being inherited from the wrapper:
@@ -469,7 +486,13 @@ modal_ modalId btnTrigger = modalWith_ modalId def (Just btnTrigger)
 
 
 modalCloseButton_ :: Monad m => Text -> HtmlT m ()
-modalCloseButton_ modalId = label_ [Lucid.for_ modalId, Aria.label_ "Close modal", class_ "btn btn-sm btn-circle btn-ghost !absolute right-2 top-2 tap-target"] "✕"
+modalCloseButton_ modalId =
+  label_
+    [ Lucid.for_ modalId
+    , Aria.label_ "Close modal"
+    , class_ "tap-target !absolute right-3 top-3 z-10 inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-iconNeutral hover:bg-fillWeak hover:text-textStrong focus-visible:outline-2 focus-visible:outline-offset-2 active:scale-[0.96] transition-[color,background-color,scale]"
+    ]
+    $ faSprite_ "xmark" "regular" "h-3.5 w-3.5"
 
 
 primaryButton_ :: Monad m => [Attribute] -> HtmlT m () -> HtmlT m ()
@@ -873,9 +896,9 @@ modalWith_ modalId cfg triggerM contentHtml = do
     , role_ "dialog"
     , Aria.label_ "Modal dialog"
     , style_ "--color-base-100: var(--color-fillWeaker)"
-    , [__|on keydown[key=='Enter' and target.tagName=='INPUT' and target.type!='textarea'] from .modal-box
+    , [__|on keydown[key=='Enter' and target.tagName=='INPUT' and target.type!='textarea']
         set :form to target.closest('form') then
-        if :form then call :form.requestSubmit() then halt end
+        if :form then halt the event then call :form.requestSubmit() end
       |]
     ]
     do

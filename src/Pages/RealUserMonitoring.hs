@@ -3,6 +3,7 @@
 -- owns the user/session workflow that a dashboard cannot express.
 module Pages.RealUserMonitoring (
   rumGetH,
+  rumGetScopedH,
   RumGet (..),
   RumData (..),
   RumSession (..),
@@ -49,6 +50,7 @@ import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (DB, decodeEnumSC, encodeEnumSC)
 import Pkg.ErrorFingerprint (normalizeMessage)
+import Pkg.Parser (ScopedQuery (..), applyScopedKqlContext, mkScopedQuery)
 import Relude
 import Relude.Extra.Foldable1 (maximum1)
 import System.Clock (TimeSpec (..))
@@ -197,11 +199,7 @@ weightedPercentile percentile points = do
 -- whose own numbers disagree — the summary counting a service the table below it excludes.
 data RumScope = RumScope
   { useTf :: Bool
-  , pid :: Projects.ProjectId
-  , fromTime :: UTCTime
-  , toTime :: UTCTime
-  , environment :: Maybe Text
-  , service :: Maybe Text
+  , queryScope :: ScopedQuery
   }
 
 
@@ -209,11 +207,10 @@ data RumScope = RumScope
 -- everything, so clearing one is just dropping the query parameter.
 scopePredicate :: RumScope -> HI.Sql
 scopePredicate scope =
-  let projectId = scope.pid.toText
-      fromTime = scope.fromTime
-      toTime = scope.toTime
-      environment = scope.environment
-      service = scope.service
+  let projectId = scope.queryScope.projectId.toText
+      (fromTime, toTime) = scope.queryScope.timeRange
+      environment = scope.queryScope.environment
+      service = scope.queryScope.service
    in [HI.sql|project_id = #{projectId}
         AND timestamp >= #{fromTime} AND timestamp <= #{toTime}
         AND (#{environment}::text IS NULL OR resource___deployment___environment___name = #{environment})
@@ -262,23 +259,6 @@ pageViewPredicate = [HI.sql|(name LIKE 'Pageview %' OR name = 'documentLoad')|]
 -- summary, the trend, the error list and the per-session counts must agree.
 errorPredicate :: HI.Sql
 errorPredicate = [HI.sql|(status_code = 'ERROR' OR lower(COALESCE(level, '')) = 'error' OR attributes___exception___type IS NOT NULL)|]
-
-
--- | Services that actually emit browser telemetry in this window, busiest first. Deliberately
--- not the project's whole service list: offering a backend service in a RUM picker scopes the
--- page to something that can never have a page view, and the user cannot tell why it is empty.
-rumServices :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> Eff es [Text]
-rumServices scope =
-  Hasql.withHasqlTimefusion scope.useTf
-    $ map HI.getOneColumn
-    <$> Hasql.interp
-      ( [HI.sql|SELECT resource___service___name FROM otel_logs_and_spans WHERE |]
-          -- Unscoped by service on purpose: a picker filtered by its own selection can only
-          -- ever offer the value already chosen, so you could never switch away from it.
-          <> browserScope scope{service = Nothing}
-          <> [HI.sql| AND resource___service___name IS NOT NULL AND resource___service___name <> ''
-               GROUP BY 1 ORDER BY COUNT(*) DESC LIMIT 100|]
-      )
 
 
 -- | Whether any browser telemetry exists in the window. One probe row decides between the
@@ -514,9 +494,8 @@ classifyUserAgent ua = (browser, os, device)
 
 replaySessionRows :: DB es => RumScope -> SessionMatch -> Eff es [ReplaySession]
 replaySessionRows scope match =
-  let projectId = scope.pid
-      fromTime = scope.fromTime
-      toTime = scope.toTime
+  let projectId = scope.queryScope.projectId
+      (fromTime, toTime) = scope.queryScope.timeRange
    in Hasql.interp
         ( [HI.sql|
           SELECT session_id, created_at, last_event_at, user_id, user_name, user_email
@@ -556,14 +535,14 @@ searchSessions scope query sessionFilter = do
       newSpanIds = filter (`notElem` recordingIds) spanIds
   extraSpans <- if null newRecordingIds then pure [] else otelSessionRows scope (SessionIds newRecordingIds) sessionFilter
   extraRecordings <- if null newSpanIds then pure [] else replaySessionRows scope (SessionIds newSpanIds)
-  pure $ take 200 $ filterSessions sessionFilter $ mergeSessions scope.service (extraSpans <> spans) (recordings <> extraRecordings)
+  pure $ take 200 $ filterSessions sessionFilter $ mergeSessions scope.queryScope.service (extraSpans <> spans) (recordings <> extraRecordings)
 
 
 sessionDetail :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> Text -> Eff es (Maybe RumSession)
 sessionDetail scope sid = do
   spans <- otelSessionRows scope (SessionIds [sid]) AllSessionRows
   recordings <- replaySessionRows scope (SessionIds [sid])
-  pure $ listToMaybe $ mergeSessions scope.service spans recordings
+  pure $ listToMaybe $ mergeSessions scope.queryScope.service spans recordings
 
 
 -- A recent 2,000-point sample keeps field-vital navigation bounded. Returning the previous
@@ -630,9 +609,8 @@ mergeSessions serviceScope otel replays = sortWith (Down . (.endedAt)) $ M.elems
 -- you were looking at. Passed as one value so a new scope dimension cannot be added to the
 -- handler and silently forgotten by half the links.
 data RumLinks = RumLinks
-  { pid :: Projects.ProjectId
+  { queryScope :: ScopedQuery
   , window :: TimePicker.TimeWindow
-  , service :: Maybe Text
   }
 
 
@@ -640,7 +618,7 @@ data RumLinks = RumLinks
 -- window, costing 0.5–4s on its own, and the panels together contend badly enough that six
 -- concurrently take 10–28s. Loading them as one unit made the whole page wait for the
 -- slowest; each panel now fetches itself, so a panel appears as soon as /its/ query lands.
-data RumPanel = PanelServices | PanelPulse | PanelPages | PanelVitals | PanelVitalTrend | PanelErrors | PanelSessions | PanelAudience
+data RumPanel = PanelPulse | PanelPages | PanelVitals | PanelVitalTrend | PanelErrors | PanelSessions | PanelAudience
   deriving stock (Eq, Read, Show)
 
 
@@ -678,7 +656,6 @@ data RumData = RumData
   , pageVitals :: [PageVitalPoint]
   , breakdown :: [RumBreakdown]
   , query :: Maybe Text
-  , services :: [Text]
   , sessionFilter :: SessionFilter
   , selectedSession :: Maybe Text
   , selectedSessionData :: Maybe RumSession
@@ -702,7 +679,6 @@ cacheableRumResult = \case
   SessionDetailResult row -> isJust row
   VitalSamplesResult rows -> not $ null rows
   VitalsDetailResult trend byPage -> not (null trend) || not (null byPage)
-  ServicesResult names -> not $ null names
   BreakdownResult rows -> not $ null rows
 
 
@@ -727,22 +703,33 @@ rumSkeleton_ _ = div_ [class_ "min-h-full space-y-5 bg-bgBase p-4", role_ "statu
   div_ [class_ "rounded-lg border border-strokeWeak surface-raised"] $ Components.tableSkeleton_ 6
 
 
+-- | Backwards-compatible programmatic entry point. Browser routes call
+-- 'rumGetScopedH' so a shared link can name its environment, while existing internal
+-- callers retain the authenticated session as their environment default.
 rumGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders RumGet)
-rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM serviceM panelM deferredM refreshM = do
+rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM serviceM panelM deferredM refreshM =
+  rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM serviceM panelM deferredM refreshM Nothing
+
+
+-- | Route entry point with an explicit environment carried by a shared URL.
+rumGetScopedH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders RumGet)
+rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _serviceM panelM deferredM refreshM environmentM = do
   (session, _, bw) <- mkPageCtx pid
   appCtx <- Reader.ask @AuthContext
   now <- Time.currentTime
   let tab = parseTab tabM
       panel = panelM >>= parsePanel
       sessionFilter = parseSessionFilter sessionFilterM
-      searchQuery = queryM >>= \q -> guard (not $ T.null $ T.strip q) $> T.strip q
+      searchQuery = mfilter (not . T.null) $ T.strip <$> queryM
       since = sinceM <|> Just "24H"
       window = TimePicker.mkTimeWindow now fromM toM since
-      environment = session.environment
-      -- An empty select option clears the filter, and "" is not a service name.
-      serviceFilter = session.service <|> find (not . T.null) serviceM
-      scope = RumScope{useTf = appCtx.env.enableTimefusionReads, pid, fromTime = window.fromTime, toTime = window.toTime, environment, service = serviceFilter}
-      links = RumLinks{pid, window, service = serviceFilter}
+      -- A shared investigation link names its environment explicitly. The sticky selection
+      -- remains the default for a hand-entered RUM URL, but must not silently rewrite a link
+      -- that an on-call engineer opened from an alert or issue.
+      environment = mfilter (not . T.null) environmentM <|> session.environment
+      serviceFilter = session.service
+      scope = RumScope{useTf = appCtx.env.enableTimefusionReads, queryScope = mkScopedQuery pid (Just window.fromTime, Just window.toTime) environment serviceFilter}
+      links = RumLinks{queryScope = scope.queryScope, window}
       bucket
         | diffUTCTime window.toTime window.fromTime <= 6 * 3600 = FiveMinutes
         | diffUTCTime window.toTime window.fromTime <= 3 * 86400 = OneHour
@@ -761,12 +748,6 @@ rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM serviceM panel
       -- P75s move on deploys, not by the minute.
       vitalsDetailQ = ("web vitals detail" :: Text, cacheKey $ VitalsDetailQuery bucket, max panelTtl (TimeSpec 900 0), uncurry VitalsDetailResult <$> rumVitalsDetail scope bucket)
       breakdownQ = ("audience" :: Text, cacheKey BreakdownQuery, panelTtl, BreakdownResult <$> rumBreakdown scope)
-      -- The picker is on every tab, so its options are read on every tab.
-      -- Keyed unscoped, matching the query: the option list is the same whichever service is
-      -- selected, so scoping the key would cache one identical list per service.
-      -- Held for 15 minutes rather than the panel TTL: which services emit browser telemetry
-      -- changes on deploys, not by the minute, and this scan is one of the most expensive.
-      servicesQ = ("services" :: Text, RumCacheKey pid ServicesQuery environment Nothing fromM toM since, max panelTtl (TimeSpec 900 0), ServicesResult <$> rumServices scope)
       -- Only the requested panel's queries run. The skeleton request runs none at all, so the
       -- page chrome is free and each panel pays only for itself.
       --
@@ -776,7 +757,6 @@ rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM serviceM panel
       -- waited for the slowest. Per-panel fetching trades that for a first paint at the cost
       -- of one panel.
       panelQueries = case panel of
-        Just PanelServices -> [servicesQ]
         Just PanelPulse -> [pulseQ]
         Just PanelPages -> [pagesQ]
         Just PanelVitals -> [vitalsQ]
@@ -828,7 +808,7 @@ rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM serviceM panel
       deferredUrl =
         TimePicker.windowUrl
           ("/p/" <> pid.toText <> "/rum")
-          ([(key, value) | (key, Just value) <- [("tab", tabM), ("q", queryM), ("filter", sessionFilterM), ("session", selectedM), ("service", serviceFilter)]] <> [("deferred", "1")])
+          ([(key, value) | (key, Just value) <- [("tab", tabM), ("q", queryM), ("filter", sessionFilterM), ("session", selectedM), ("environment", environment)]] <> [("deferred", "1")])
           window
   body <- withDeferredBody deferredM "rum-page" deferredUrl (rumSkeleton_ tab) do
     outcomes <- pooledForConcurrently panelQueries runQuery
@@ -843,9 +823,8 @@ rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM serviceM panel
         vitals = vitalsFromSamples $ fold [value | VitalSamplesResult value <- results]
         vitalTrend = fold [value | VitalsDetailResult value _ <- results]
         pageVitals = fold [value | VitalsDetailResult _ value <- results]
-        services = fold [value | ServicesResult value <- results]
         breakdown = fold [value | BreakdownResult value <- results]
-    pure RumData{links, tab, panel, servedStale, now, hasTelemetry, pages, errors, sessions, vitals, vitalTrend, pageVitals, services, breakdown, query = queryM, sessionFilter, selectedSession = selectedM, selectedSessionData, degradedPanels}
+    pure RumData{links, tab, panel, servedStale, now, hasTelemetry, pages, errors, sessions, vitals, vitalTrend, pageVitals, breakdown, query = queryM, sessionFilter, selectedSession = selectedM, selectedSessionData, degradedPanels}
   let conf =
         bw
           { pageTitle = "Real User Monitoring"
@@ -858,7 +837,7 @@ rumGetH pid tabM queryM sessionFilterM fromM toM sinceM selectedM serviceM panel
 
 
 rumNavTabs_ :: RumLinks -> RumTab -> Html ()
-rumNavTabs_ links active = nav_ [class_ "tabs tabs-box tabs-outline items-center max-md:overflow-x-auto max-md:flex-nowrap", Aria.label_ "Real User Monitoring views", term "hx-preload" "mouseover"] do
+rumNavTabs_ links active = nav_ [class_ "tabs tabs-box tabs-outline flex-nowrap items-center", Aria.label_ "Real User Monitoring views", term "hx-preload" "mouseover"] do
   forM_ [minBound .. maxBound] \tab -> do
     let url = rumUrl links [("tab", tabParam tab)]
     a_
@@ -874,11 +853,10 @@ rumNavTabs_ links active = nav_ [class_ "tabs tabs-box tabs-outline items-center
 
 rumActions_ :: RumLinks -> Html ()
 rumActions_ links = div_ [class_ "inline-flex items-center gap-2", data_ "default-window" "24H"] do
-  a_ [href_ $ "/p/" <> links.pid.toText <> "/rum/dashboard", class_ "btn btn-sm gap-1.5 max-md:hidden"] do
+  a_ [href_ $ "/p/" <> links.queryScope.projectId.toText <> "/rum/dashboard", class_ "btn btn-sm gap-1.5 max-md:hidden"] do
     faSprite_ "chart-line" "regular" "h-3.5 w-3.5"
     "Open RUM dashboard"
-  TimePicker.timepicker_ Nothing links.window.currentRange Nothing
-  TimePicker.refreshButton_
+  TimePicker.liveDataControls_ Nothing links.window.currentRange Nothing TimePicker.RefreshOnly
 
 
 instance ToHtml RumData where
@@ -920,11 +898,8 @@ slot_ page panel skeleton content
   where
     -- One panel's worth of work per tick, swapped in place: the page chrome, the scroll
     -- position and any open replay stay exactly as they were, and a tick that lands inside
-    -- the panel's cache TTL costs a cache read. The service picker is excluded — it is an
-    -- option list, not data, and re-rendering it under an open dropdown would take the
-    -- viewer's selection with it.
+    -- the panel's cache TTL costs a cache read.
     liveAttrs
-      | panel == PanelServices = []
       -- A tick arriving while the previous one is still in flight replaces it rather than
       -- queueing behind it: the newer window is the one being looked at.
       | otherwise = swapAttrs panelUrl "update-query from:window" [term "hx-sync" "this:replace"]
@@ -945,49 +920,11 @@ slot_ page panel skeleton content
 rumPage_ :: RumData -> Html ()
 rumPage_ page = div_ [id_ "rum-page", class_ $ "bg-bgBase " <> if page.tab == Sessions then "flex flex-col xl:h-full xl:min-h-0 [&>#rum-panel-sessions]:flex-1 [&>#rum-panel-sessions]:min-h-0" else "min-h-full"] do
   unless (null page.degradedPanels) $ degradedBanner_ page.degradedPanels
-  div_ [class_ "flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-strokeWeak px-4 py-1 max-md:px-3 [&>#rum-panel-services]:w-auto [&>#rum-panel-services]:max-w-full"] do
-    slot_ page PanelServices mempty $ servicePicker_ page
-    when (page.tab == Sessions) $ sessionSearch_ page
+  when (page.tab == Sessions) $ div_ [class_ "flex shrink-0 items-center border-b border-strokeWeak px-4 py-1 max-md:px-3"] $ sessionSearch_ page
   case page.tab of
     Overview -> overview_ page
     Sessions -> sessions_ page
     Performance -> performance_ page
-
-
--- | Scopes every panel to one browser service. A project with several teams reports several
--- services into one project, and without this the page averages them together — a checkout
--- regression hidden by a healthy marketing site.
---
--- Rendered even when scoped to a service with no data, because that is exactly when the user
--- needs the control that got them there in order to get back out.
-servicePicker_ :: RumData -> Html ()
-servicePicker_ page
-  | null page.services && isNothing page.links.service = mempty
-  | otherwise = form_
-      [ method_ "get"
-      , action_ $ "/p/" <> page.links.pid.toText <> "/rum"
-      , class_ "flex max-w-full flex-wrap items-center gap-2"
-      ]
-      do
-        input_ [type_ "hidden", name_ "tab", value_ $ tabParam page.tab]
-        TimePicker.timeHiddenInputs_ page.links.window.fromQuery page.links.window.toQuery page.links.window.sinceQuery
-        when (page.tab == Sessions) $ input_ [type_ "hidden", name_ "q", value_ $ fromMaybe "" page.query]
-        forM_ (sessionFilterParam page.sessionFilter) $ \f -> input_ [type_ "hidden", name_ "filter", value_ f]
-        label_ [Lucid.for_ "rum-service", class_ "text-xs text-textWeak"] "Service"
-        select_
-          [ id_ "rum-service"
-          , name_ "service"
-          , class_ "select select-sm w-56 max-w-full cursor-pointer border-strokeWeak bg-bgBase text-sm text-textStrong max-sm:h-11"
-          , onchange_ "const search = document.getElementById('rum-session-search'); if (search) this.form.elements.q.value = search.value; this.form.requestSubmit()"
-          ]
-          do
-            option_ ([value_ ""] <> [selected_ "" | isNothing page.links.service]) "All services"
-            -- A service selected before its telemetry aged out of the window is still offered,
-            -- so the select cannot silently jump the user back to "All services".
-            forM_ (ordNub $ page.services <> maybeToList page.links.service) \name ->
-              option_ ([value_ name] <> [selected_ "" | page.links.service == Just name]) $ toHtml name
-        whenJust (guard (page.tab /= Sessions) *> page.links.service) \name ->
-          span_ [class_ "text-xs text-textWeak"] $ toHtml $ "Every panel below is scoped to " <> name <> "."
 
 
 -- | Keep search outside the scrolling list. HTMX replaces only the list, so typing
@@ -1010,7 +947,7 @@ sessionSearch_ page = form_
     input_ [type_ "hidden", name_ "tab", value_ "sessions"]
     input_ [type_ "hidden", name_ "session", value_ $ fromMaybe "" page.selectedSession]
     TimePicker.timeHiddenInputs_ page.links.window.fromQuery page.links.window.toQuery page.links.window.sinceQuery
-    forM_ page.links.service $ \service -> input_ [type_ "hidden", name_ "service", value_ service]
+    forM_ page.links.queryScope.environment $ \environment -> input_ [type_ "hidden", name_ "environment", value_ environment]
     input_ [id_ "rum-session-filter", type_ "hidden", name_ "filter", value_ $ fromMaybe "" $ sessionFilterParam page.sessionFilter]
     label_ [class_ "input input-sm flex min-w-0 flex-1 items-center gap-2 border-strokeWeak bg-bgBase shadow-none max-sm:h-11"] do
       faSprite_ "magnifying-glass" "regular" "h-4 w-4 shrink-0 text-textWeak"
@@ -1030,7 +967,7 @@ sessionSearch_ page = form_
         kbd_ [class_ "kbd kbd-xs"] "/"
         "to focus"
   where
-    route = "/p/" <> page.links.pid.toText <> "/rum"
+    route = "/p/" <> page.links.queryScope.projectId.toText <> "/rum"
 
 
 -- | A service filter that matched nothing is not an uninstrumented project. The unscoped
@@ -1038,12 +975,12 @@ sessionSearch_ page = form_
 -- telemetry to re-instrument a working app. The way out is to widen the scope, so that is
 -- what this offers.
 scopedEmptyState_ :: RumLinks -> Text -> Html ()
-scopedEmptyState_ links name =
+scopedEmptyState_ _links name =
   div_ [class_ "mx-auto flex min-h-[40vh] max-w-2xl flex-col justify-center px-6 py-12"]
     $ Components.emptyState_
-      def{icon = Just "web", action = ESLink (rumUrl links{service = Nothing} []) "Show all services"}
+      def{icon = Just "web", action = ESNone}
       ("No browser telemetry for " <> name <> " in this range")
-      "This service reported no page views, errors or Web Vitals in the selected window. Widen the time range, or choose another service."
+      "This service reported no page views, errors or Web Vitals in the selected window. Widen the time range, or choose another service from the global scope picker."
 
 
 rumEmptyState_ :: Projects.ProjectId -> Html ()
@@ -1100,7 +1037,7 @@ pulseOrEmpty_ page
         , term "hx-preload" "false"
         ]
         mempty
-  | otherwise = maybe (rumEmptyState_ page.links.pid) (scopedEmptyState_ page.links) page.links.service
+  | otherwise = maybe (rumEmptyState_ page.links.queryScope.projectId) (scopedEmptyState_ page.links) page.links.queryScope.service
 
 
 pulseSkeleton_ :: Html ()
@@ -1155,7 +1092,7 @@ rumStatWidgets_ links = div_ [class_ "grid grid-cols-4 gap-3 max-md:grid-cols-2"
         , Widget.unit = Just unit
         , Widget.query = Just query
         , Widget.summarizeBy = Just Widget.SBSum
-        , Widget._projectId = Just links.pid
+        , Widget._projectId = Just links.queryScope.projectId
         , Widget.standalone = Just True
         , Widget.hideSubtitle = Just True
         }
@@ -1170,7 +1107,7 @@ rumActivityWidget_ links =
         , Widget.id = Just "rum-activity"
         , Widget.title = Just "Page views and errors"
         , Widget.query = Just $ scopedKql links (browserKql <> " and (" <> pageViewKql <> " or " <> errorKql <> ")") <> " | summarize count() by bin_auto(timestamp), iff(" <> errorKql <> ", \"Errors\", \"Page views\")"
-        , Widget._projectId = Just links.pid
+        , Widget._projectId = Just links.queryScope.projectId
         , Widget.standalone = Just True
         , Widget.hideSubtitle = Just True
         , Widget.legendPosition = Just "top-right"
@@ -1362,7 +1299,7 @@ audienceColumn_ title hueM rows = div_ [class_ "min-w-0 px-3 py-2.5"] do
   ul_ [class_ "mt-2 space-y-2"] $ forM_ (take 5 rows) \row -> li_ [class_ "min-w-0"] do
     div_ [class_ "flex items-baseline justify-between gap-2 text-sm"] do
       span_ [class_ "flex min-w-0 items-center gap-1.5"] do
-        forM_ hueM \hue -> span_ [class_ "rum-chip flex h-4 w-4 shrink-0 items-center justify-center rounded text-[0.5625rem] font-bold", style_ $ "--hue:" <> show (hue row.name), Aria.hidden_ "true"] $ toHtml $ T.take 1 row.name
+        forM_ hueM \hue -> span_ [class_ "rum-chip flex h-4 w-4 shrink-0 items-center justify-center rounded text-2xs font-bold", style_ $ "--hue:" <> show (hue row.name), Aria.hidden_ "true"] $ toHtml $ T.take 1 row.name
         span_ [class_ "truncate font-medium text-textStrong"] $ toHtml row.name
       span_ [class_ "shrink-0 text-xs tabular-nums text-textWeak"] do
         when (row.errors > 0) do
@@ -1521,7 +1458,7 @@ sessionsTable_ workspace now links query sessionFilter selectedSession sessions 
                           filterValue = fromMaybe "" $ sessionFilterParam value
                       a_
                         [ href_ url
-                        , hxGet_ $ "/p/" <> links.pid.toText <> "/rum"
+                        , hxGet_ $ "/p/" <> links.queryScope.projectId.toText <> "/rum"
                         , term "hx-include" "#rum-session-search-form"
                         , term "hx-vals" $ "{\"panel\":\"sessions\",\"deferred\":\"1\",\"filter\":\"" <> filterValue <> "\"}"
                         , hxTarget_ "#rum-sessions-list"
@@ -1584,7 +1521,7 @@ replayWorkspace_ links = \case
       a_ [href_ $ sessionLogsUrl links session.id, class_ "btn btn-sm gap-1.5"] do
         faSprite_ "magnifying-glass-chart" "regular" "h-3.5 w-3.5"
         "Inspect telemetry"
-    termRaw "session-replay" [id_ "rumSessionReplay", term "initialSession" session.id, term "consoleOpen" "true", term "fullWidth" "true", class_ "block min-h-[34rem] w-full", term "projectId" links.pid.toText, term "containerId" "rum-replay-workspace"] ("" :: Text)
+    termRaw "session-replay" [id_ "rumSessionReplay", term "initialSession" session.id, term "consoleOpen" "true", term "fullWidth" "true", class_ "block min-h-[34rem] w-full", term "projectId" links.queryScope.projectId.toText, term "containerId" "rum-replay-workspace"] ("" :: Text)
   Just session -> replayPrompt_ "No recording for this session" "Open its correlated OpenTelemetry events to inspect navigation, network, and error spans." $ Just ("Inspect telemetry", sessionLogsUrl links session.id)
   Nothing -> replayPrompt_ "Select a session" "Choose a row with Replay to watch the user's experience beside its errors and OpenTelemetry context." Nothing
 
@@ -1851,7 +1788,7 @@ browserHue = \case
 
 
 envChip_ :: Text -> Html ()
-envChip_ browser = span_ [class_ "rum-chip flex h-4 w-4 shrink-0 items-center justify-center rounded text-[0.5625rem] font-bold", style_ $ "--hue:" <> show (browserHue browser), title_ browser] $ toHtml $ T.take 1 browser
+envChip_ browser = span_ [class_ "rum-chip flex h-4 w-4 shrink-0 items-center justify-center rounded text-2xs font-bold", style_ $ "--hue:" <> show (browserHue browser), title_ browser] $ toHtml $ T.take 1 browser
 
 
 deviceIcon :: Text -> Text
@@ -1899,10 +1836,11 @@ errorKql :: Text
 errorKql = "(status_code == \"ERROR\" or attributes.exception.type != null)"
 
 
--- | A first-stage KQL filter carrying the page's service scope. The scope has to land in
--- the filter stage — before any pipe — or a piped query would append it to the summarize.
+-- | A first-stage KQL filter carrying the page's investigation boundary. The scope has to
+-- land before any pipe — or a piped query would append it to the summarize — and must retain
+-- both the selected environment and service when the reader opens the Explorer.
 scopedKql :: RumLinks -> Text -> Text
-scopedKql links q = q <> foldMap (\value -> " and resource.service.name == " <> kqlValue value) links.service
+scopedKql links = applyScopedKqlContext links.queryScope
 
 
 -- | KQL string literal: backslashes first, then quotes, so a value can't break out of the literal.
@@ -1914,7 +1852,13 @@ kqlValue value = "\"" <> T.replace "\"" "\\\"" (T.replace "\\" "\\\\" value) <> 
 -- value, so nothing here may encode first: a pre-encoded KQL query arrives at the Log
 -- Explorer double-escaped (@%2520@ for a space) and parses as one meaningless token.
 rumUrl :: RumLinks -> [(Text, Text)] -> Text
-rumUrl links extras = TimePicker.windowUrl ("/p/" <> links.pid.toText <> "/rum") (extras <> [("service", s) | s <- maybeToList links.service]) links.window
+rumUrl links extras =
+  TimePicker.windowUrl
+    ("/p/" <> links.queryScope.projectId.toText <> "/rum")
+    ( extras
+        <> [("environment", environment) | environment <- maybeToList links.queryScope.environment]
+    )
+    links.window
 
 
 -- | Log Explorer link for a browser query. The service scope is appended to the KQL rather
@@ -1922,7 +1866,7 @@ rumUrl links extras = TimePicker.windowUrl ("/p/" <> links.pid.toText <> "/rum")
 logsUrl :: RumLinks -> Text -> Text
 logsUrl links query =
   TimePicker.windowUrl
-    ("/p/" <> links.pid.toText <> "/log_explorer")
+    ("/p/" <> links.queryScope.projectId.toText <> "/log_explorer")
     [("query", scopedKql links query)]
     links.window
 

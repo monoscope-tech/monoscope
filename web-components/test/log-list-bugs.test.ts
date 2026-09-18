@@ -714,6 +714,48 @@ describe('shouldBufferRecent', () => {
 });
 
 describe('LogList — lifecycle cleanup (no leaks across disconnect / remount)', () => {
+  test('enabling rows from a historical window returns the coordinated control to live first', async () => {
+    const wrapper = document.createElement('div');
+    wrapper.dataset.liveData = '';
+    wrapper.innerHTML = '<input type="checkbox" id="streamLiveData"><div data-time-transport data-live="false"></div>';
+    document.body.appendChild(wrapper);
+    const btn = wrapper.querySelector<HTMLInputElement>('#streamLiveData')!;
+    const transport = wrapper.querySelector<HTMLElement>('[data-time-transport]')!;
+    const toggleLiveData = vi.fn();
+    const originalToggle = window.toggleLiveData;
+    window.toggleLiveData = toggleLiveData;
+    const live = fakeLiveTransport();
+    try {
+      const el = await mountList();
+      btn.checked = true;
+      btn.dispatchEvent(new Event('change'));
+      expect(toggleLiveData).toHaveBeenCalledWith(wrapper, transport);
+      el.remove();
+    } finally {
+      window.toggleLiveData = originalToggle;
+      live.restore();
+      wrapper.remove();
+    }
+  });
+
+  test('automatic stream shutdown announces a freshness-state change', async () => {
+    const btn = document.createElement('input');
+    btn.type = 'checkbox'; btn.id = 'streamLiveData'; btn.checked = true;
+    document.body.appendChild(btn);
+    const changed = vi.fn();
+    document.addEventListener('live-data-state-change', changed);
+    try {
+      const el = await mountList();
+      (el as any).stopLiveStream();
+      expect(btn.checked).toBe(false);
+      expect(changed).toHaveBeenCalledOnce();
+      el.remove();
+    } finally {
+      document.removeEventListener('live-data-state-change', changed);
+      btn.remove();
+    }
+  });
+
   // Bug: the #streamLiveData change listener + pagehide were added in the
   // CONSTRUCTOR and never removed → after an HTMX-morph remount, the old
   // (disconnected) instance's closure still fires on the shared global checkbox,

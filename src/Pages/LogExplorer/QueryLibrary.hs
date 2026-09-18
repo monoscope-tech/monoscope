@@ -48,9 +48,8 @@ saveQueryH pid form = do
   let uid = sess.persistentSession.userId
       queryAST = fromRight [] $ parseQueryToAST (maybeToMonoid form.query)
   case (,) <$> nonEmptyT form.queryLibId <*> nonEmptyT form.queryTitle of
-    Just (qId, title) -> Projects.queryLibTitleEdit pid uid qId title >> addSuccessToast "Edited Query title successfully" Nothing
-    Nothing -> Projects.queryLibInsert Projects.QLTSaved pid uid (toQText queryAST) queryAST form.queryTitle >> addSuccessToast "Saved to Query Library successfully" Nothing
-  addTriggerEvent "closeModal" ""
+    Just (qId, title) -> Projects.queryLibTitleEdit pid uid qId title
+    Nothing -> Projects.queryLibInsert Projects.QLTSaved pid uid (toQText queryAST) queryAST form.queryTitle
   queryLibraryFragment pid uid
 
 

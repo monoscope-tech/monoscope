@@ -60,7 +60,7 @@ import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (bulkActionSlug)
-import Pkg.Parser (SqlQueryCfg (..), defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToAST, parseQueryToComponents)
+import Pkg.Parser (SqlQueryCfg (..), applyScopedQuery, defSqlQueryCfg, finalAlertQuery, fixedUTCTime, mkScopedQuery, parseQueryToAST, parseQueryToComponents)
 import Pkg.Parser.Expr (ToQueryText (..))
 import Pkg.QueryCache (rewriteBinAutoToFixed)
 import Relude hiding (ask)
@@ -118,7 +118,8 @@ convertToQueryMonitor :: Projects.ProjectId -> UTCTime -> Monitors.QueryMonitorI
 convertToQueryMonitor projectId now queryMonitorId alertForm =
   let environment = mfilter (not . T.null) $ T.strip <$> alertForm.environment
       service = mfilter (not . T.null) $ T.strip <$> alertForm.service
-      sqlQueryCfg = (defSqlQueryCfg projectId fixedUTCTime Nothing Nothing){alertLookbackMins = timeWindowMins, environment, service}
+      scope = mkScopedQuery projectId (Nothing, Nothing) environment service
+      sqlQueryCfg = (applyScopedQuery scope $ defSqlQueryCfg projectId fixedUTCTime Nothing Nothing){alertLookbackMins = timeWindowMins}
       (_, qc) = fromRight' $ parseQueryToComponents sqlQueryCfg alertForm.query
       warningThresholdD = readMaybe . toString =<< alertForm.warningThreshold
 
@@ -816,8 +817,7 @@ unifiedOverviewPage pid alert currTime teams slackDataM discordDataM = do
       div_ [class_ "md:hidden"] $ alertSidebar_ display alert currTime
       div_ [class_ "flex-1 min-w-0 flex flex-col gap-3"] do
         div_ [class_ "flex items-center gap-2 flex-wrap"] do
-          TimePicker.timepicker_ Nothing Nothing Nothing
-          TimePicker.refreshButton_
+          TimePicker.liveDataControls_ Nothing Nothing (Just "monitor-details") TimePicker.RefreshOnly
         div_ [class_ "border border-strokeWeak rounded-lg max-md:p-2 p-3 h-48 md:h-80 overflow-hidden"] do
           Widget.widget_
             $ (def :: Widget)
