@@ -184,7 +184,7 @@ spec = sequential $ aroundAll withTestResources do
       browserSpan apiKey "30000000000000000000000000000003" "3000000000000001" [("url.path", "/admin/users")] "Pageview · /admin/users" (UUID.toText mergedReplayUuid) Nothing "admin-console" tr
 
       unscoped <- renderPage tr Nothing Nothing Nothing Nothing
-      unscoped `shouldContainAll` ["All services", "/admin/users", "/checkout"]
+      unscoped `shouldContainAll` ["/admin/users", "/checkout"]
 
       scoped <- renderScoped tr Nothing Nothing Nothing Nothing (Just "admin-console")
       scoped `shouldContainAll` ["admin-console", "/admin/users"]
@@ -200,8 +200,8 @@ spec = sequential $ aroundAll withTestResources do
       scoped `shouldContainAll` ["Replay"]
       T.isInfixOf "No recording" scoped `shouldBe` False
 
-      -- A stale selection still resolves: the picker keeps offering it, and an empty result
-      -- must read as "this filter matched nothing", never as "you never installed the SDK".
+      -- A stale global selection still resolves, and an empty result must read as "this filter
+      -- matched nothing", never as "you never installed the SDK".
       ghost <- renderScoped tr Nothing Nothing Nothing Nothing (Just "ghost-service")
       ghost `shouldContainAll` ["No browser telemetry for ghost-service in this range", "global scope picker"]
       T.isInfixOf "Install the browser SDK" ghost `shouldBe` False
@@ -226,18 +226,18 @@ spec = sequential $ aroundAll withTestResources do
       -- unscoped.
       pulse.hasTelemetry `shouldBe` False
 
-    it "browserSdkWithoutSdkLanguage_isStillSeenAndPickable" \tr -> do
+    it "browserSdkWithoutSdkLanguage_isStillSeenAndGloballyScopeable" \tr -> do
       -- The OpenTelemetry browser SDKs leave telemetry.sdk.language unset, and RUM used to
       -- filter on that alone. Every browser application in production was therefore invisible:
-      -- no page views, no sessions, and an empty service picker with nothing to narrow to.
+      -- no page views, no sessions, and nothing for the global scope to narrow to.
       purgeRumCaches tr
       apiKey <- createTestAPIKey tr testPid "rum-otel-browser-key"
       otelBrowserSpan apiKey "40000000000000000000000000000004" "4000000000000001" "session-otel" "checkout-web" tr
 
       page <- renderPage tr Nothing Nothing Nothing Nothing
-      page `shouldContainAll` [">checkout-web<", "https://shop.example/cart"]
+      page `shouldContainAll` ["https://shop.example/cart"]
 
-      -- And it is narrowable, which is the whole point of the picker.
+      -- And the global scope can narrow to it.
       scoped <- renderScoped tr Nothing Nothing Nothing Nothing (Just "checkout-web")
       scoped `shouldContainAll` ["checkout-web", "https://shop.example/cart"]
       T.isInfixOf "/admin/users" scoped `shouldBe` False

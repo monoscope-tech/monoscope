@@ -931,17 +931,18 @@ spec = around withTestResources do
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
       html `shouldSatisfy` T.isInfixOf "bg-bgRaised rounded-lg border border-strokeWeak focus-within:ring-2"
       html `shouldSatisfy` T.isInfixOf "focus-within:ring-2 focus-within:ring-strokeBrand-weak"
-      html `shouldSatisfy` T.isInfixOf "aria-disabled:border-strokeWeak"
-      html `shouldSatisfy` T.isInfixOf "border border-strokeWeak hover:border-strokeStrong h-8"
+      html `shouldSatisfy` T.isInfixOf "aria-disabled:text-textDisabled aria-[disabled=false]:cursor-pointer"
+      html `shouldSatisfy` T.isInfixOf "aria-label=\"Save query\" data-tippy-content=\"Save query\""
       html `shouldSatisfy` T.isInfixOf "id=\"ai-search-submit\""
       html `shouldSatisfy` T.isInfixOf "aria-disabled=\"true\""
       html `shouldSatisfy` T.isInfixOf "hx-live:aria-disabled"
 
-    it "timeTransport_disabledNextButton_hasSingleDivider" \tr -> do
+    it "timeTransport_usesExplicitDividersAroundNextButton" \tr -> do
       (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       let html = toText $ Lucid.renderText $ Lucid.toHtml page
-      find (T.isInfixOf "aria-label=\"Next time window\"") (T.splitOn "<" html)
-        `shouldSatisfy` maybe False (T.isInfixOf "disabled:-ms-px")
+      find (T.isInfixOf "data-next-window") (T.splitOn "<" html)
+        `shouldSatisfy` maybe False (T.isInfixOf "disabled:bg-transparent disabled:text-textDisabled")
+      html `shouldSatisfy` T.isInfixOf "h-4 w-px shrink-0 bg-strokeWeak opacity-60\" aria-hidden=\"true\""
 
     -- Regression: HTMX swaps only #main-content, so a preload script in <head>
     -- was discarded when arriving from another page. The table then raced its

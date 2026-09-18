@@ -329,7 +329,7 @@ spec = sequential $ aroundAll withTestResources do
       cached <- Cache.lookup tr.trATCtx.infrastructureCache cacheKey :: IO (Maybe (V.Vector ContainerRow))
       V.length <$> cached `shouldBe` Just 8
       -- Both runtimes in one table, with the facet menus the filter dropdown is built from.
-      html `shouldContainAll` ["checkout", "srv-captain--redpanda-0.1.tt13bkp5", "kube-system", "namespace=", "runtime=", "cluster=", "otel-demo", "vps-bare-01", "Search containers", "CPU limit used", "Memory limit used", "text-xs font-semibold leading-none", "&quot;hide_value&quot;:true", "data-component=\"facet-rail\"", "data-component=\"facet-section\"", "data-component=\"facet-option\"", "Last 5 mins", "bg-bgAlternate sticky", "container-usage-chart bg-bgRaised px-2 pt-2", "bg-fillWarning-strong", "hidden max-md:inline-flex", "flex min-w-0 items-center text-textStrong max-md:hidden", "text-textWeak widget-subtitle", "/infrastructure/containers/detail?since=5M"]
+      html `shouldContainAll` ["checkout", "srv-captain--redpanda-0.1.tt13bkp5", "kube-system", "namespace=", "runtime=", "cluster=", "otel-demo", "vps-bare-01", "Search containers", "CPU limit used", "Memory limit used", "data-live-mode=\"refresh-only\"", "&quot;hide_value&quot;:true", "data-component=\"facet-rail\"", "data-component=\"facet-section\"", "data-component=\"facet-option\"", "Last 5 mins", "bg-bgAlternate sticky", "container-usage-chart bg-bgRaised px-2 pt-2", "bg-fillWarning-strong", "hidden max-md:inline-flex", "data-header-actions", "text-textWeak widget-subtitle", "/infrastructure/containers/detail?since=5M"]
       T.isInfixOf "group/summary" html `shouldBe` False
       T.isInfixOf "Usage over time" html `shouldBe` False
       T.isInfixOf "min-height:" html `shouldBe` False
@@ -391,7 +391,7 @@ spec = sequential $ aroundAll withTestResources do
       hostsBW.prePageTitle `shouldBe` Nothing
       let hostsHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml hosts
       hostsHtml
-        `shouldContainAll` ["<h1", "Infrastructure", "Hosts", "vps-bare-01", "Kubernetes", "Docker", "Storage", "Load (1m)", "Group by", "Customize", "LIVE", "Last 5 mins", "Previous time window", "Pause live updates", "Export", "Showing 3 of 3 hosts", "flex shrink-0 items-center gap-2 whitespace-nowrap", "grid w-full grid-cols-[minmax(0,1fr)_auto]", "data-nav-tab-strip", "data-header-actions", "/infrastructure/hosts/detail?since=5M"]
+        `shouldContainAll` ["<h1", "Infrastructure", "Hosts", "vps-bare-01", "Kubernetes", "Docker", "Storage", "Load (1m)", "Group by", "Customize", "data-live-mode=\"refresh-only\"", "Last 5 mins", "Previous time window", "Pause live updates", "Export", "Showing 3 of 3 hosts", "flex shrink-0 items-center gap-2 whitespace-nowrap", "grid w-full grid-cols-[minmax(0,1fr)_auto]", "data-nav-tab-strip", "data-header-actions", "/infrastructure/hosts/detail?since=5M"]
       -- The in-cluster agent's system.* series (host.name = its own pod, node only in
       -- k8s.node.name) attributes to the node it measures — 0.5 busy cores of 2 is 25% —
       -- and never forms a host row named after the agent pod.
