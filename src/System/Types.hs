@@ -213,6 +213,7 @@ type ATBackgroundEffects =
    , ELLM.LLM
    , Concurrent
    , Ki.StructuredConcurrency
+   , Timeout
    , Effectful.IOE
    ]
 
@@ -236,6 +237,7 @@ runBackground logger appCtx tp process =
     & ELLM.runLLMReal
     & runConcurrent
     & Ki.runStructuredConcurrency
+    & runTimeout
     & Effectful.runEff
 
 

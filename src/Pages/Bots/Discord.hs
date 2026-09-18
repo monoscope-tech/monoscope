@@ -327,6 +327,7 @@ registerDiscordCommands appId botToken guildId =
   for_ commands
     $ discordJsonPost botToken ("https://discord.com/api/v10/applications/" <> appId <> "/guilds/" <> guildId <> "/commands")
   where
+    commands :: [AE.Value]
     commands =
       [ AE.object
           [ "name" AE..= ("monoscope" :: Text)

@@ -182,7 +182,7 @@ liveDataControls_ submitForm currentRange targetIdM liveDataMode =
     do
       div_ [class_ "flex items-center gap-2", data_ "header-time" ""] do
         timepickerRangeOnly_ submitForm currentRange targetIdM
-        refreshButtonWithPopover_ popoverId "Live data settings" liveDataPanel
+        refreshButtonWithPopover_ popoverId (maybe "Refresh interval" (const "Live data settings") streamingSupport) liveDataPanel
   where
     targetPr = fromMaybe "n" targetIdM
     popoverId = targetPr <> "-live-data-pop"
@@ -191,29 +191,36 @@ liveDataControls_ submitForm currentRange targetIdM liveDataMode =
         ( popoverPanel_ popoverId
             <> [ class_ "dropdown dropdown-end mt-2 w-72 rounded-xl border border-strokeWeak bg-bgRaised p-2 text-sm shadow-lg"
                , role_ "dialog"
-               , Aria.label_ "Live data controls"
+               , Aria.label_ $ maybe "Refresh interval" (const "Live data controls") streamingSupport
                ]
         )
-        do
-          div_ [class_ "px-2 pb-2 pt-1"] do
-            div_ [class_ "font-semibold text-textStrong"] "Live updates"
-            p_ [class_ "mt-0.5 text-xs text-textWeak"] "Choose how this view receives new data."
-          forM_ streamingSupport \supportsStreaming ->
-            label_ [class_ $ "flex min-h-11 items-center gap-3 rounded-lg px-2 py-2 hover:bg-fillWeak" <> bool " opacity-60 cursor-not-allowed" " cursor-pointer" supportsStreaming] do
-              div_ [class_ "min-w-0 flex-1"] do
-                div_ [class_ "font-medium text-textStrong"] "Stream new events"
-                span_
-                  [ class_ "text-xs text-textWeak"
-                  , data_ "row-stream-status" ""
-                  , term "hx-live:text" "closest('[data-live-data]').q('[data-row-stream-toggle]').disabled ? 'Unavailable in this view' : closest('[data-live-data]').q('[data-row-stream-toggle]').checked ? 'On' : 'Paused'"
-                  ]
-                  $ if supportsStreaming then "Paused" else "Unavailable in this view"
-              input_ $ [type_ "checkbox", id_ "streamLiveData", class_ "toggle toggle-sm", term "aria-label" "Stream new events", data_ "row-stream-toggle" ""] <> [disabled_ "" | not supportsStreaming]
-          div_ [class_ "space-y-2 px-2 py-2"] do
-            label_ [class_ "block", Lucid.for_ $ targetPr <> "-live-refresh-interval"] do
-              div_ [class_ "font-medium text-textStrong"] "Refresh results"
-              span_ [class_ "text-xs text-textWeak"] "Re-run charts, counts, and the query."
-            refreshIntervalSelect_ targetPr
+        $ do
+          case streamingSupport of
+            Nothing -> do
+              div_ [class_ "px-2 pb-2 pt-1"] do
+                div_ [class_ "font-semibold text-textStrong"] "Refresh interval"
+                p_ [class_ "mt-0.5 text-xs text-textWeak"] "Choose how often charts, counts, and the query refresh."
+              div_ [class_ "grid grid-cols-2 gap-1", role_ "group", Aria.label_ "Refresh interval", data_ "refresh-interval-menu" ""]
+                $ forM_ refreshOptions refreshIntervalOption_
+            Just supportsStreaming -> do
+              div_ [class_ "px-2 pb-2 pt-1"] do
+                div_ [class_ "font-semibold text-textStrong"] "Live updates"
+                p_ [class_ "mt-0.5 text-xs text-textWeak"] "Choose how this view receives new data."
+              label_ [class_ $ "flex min-h-11 items-center gap-3 rounded-lg px-2 py-2 hover:bg-fillWeak" <> bool " opacity-60 cursor-not-allowed" " cursor-pointer" supportsStreaming] do
+                div_ [class_ "min-w-0 flex-1"] do
+                  div_ [class_ "font-medium text-textStrong"] "Stream new events"
+                  span_
+                    [ class_ "text-xs text-textWeak"
+                    , data_ "row-stream-status" ""
+                    , term "hx-live:text" "closest('[data-live-data]').q('[data-row-stream-toggle]').disabled ? 'Unavailable in this view' : closest('[data-live-data]').q('[data-row-stream-toggle]').checked ? 'On' : 'Paused'"
+                    ]
+                    $ if supportsStreaming then "Paused" else "Unavailable in this view"
+                input_ $ [type_ "checkbox", id_ "streamLiveData", class_ "toggle toggle-sm", term "aria-label" "Stream new events", data_ "row-stream-toggle" ""] <> [disabled_ "" | not supportsStreaming]
+              div_ [class_ "space-y-2 px-2 py-2"] do
+                label_ [class_ "block", Lucid.for_ $ targetPr <> "-live-refresh-interval"] do
+                  div_ [class_ "font-medium text-textStrong"] "Refresh results"
+                  span_ [class_ "text-xs text-textWeak"] "Re-run charts, counts, and the query."
+                refreshIntervalSelect_ targetPr
           span_
             [ class_ "sr-only"
             , data_ "live-data-announcer" ""
@@ -328,20 +335,7 @@ timepickerWithStatus_ showLiveStatus submitForm currentRange targetIdM = do
               ]
               $ faSprite_ "chevron-right" "regular" "h-4 w-4 text-iconNeutral"
           li_ [class_ "menu-title md:hidden"] "Refresh interval"
-          forM_ refreshOptions \(label, title, ms) ->
-            li_ [class_ "md:hidden"]
-              $ button_
-                [ type_ "button"
-                , class_ "flex min-h-11 w-full items-center justify-between rounded-lg px-3 py-2 text-start hover:bg-fillWeak data-[selected=true]:bg-fillWeak data-[selected=true]:font-semibold"
-                , data_ "value" ms
-                , data_ "refresh-option" ""
-                , term "aria-pressed" "false"
-                , term "hx-live:aria-pressed" "closest('[data-time-picker-root]').parentElement.q('[data-time-transport]').data.interval == data.value"
-                , term "hx-live:data-selected" "closest('[data-time-picker-root]').parentElement.q('[data-time-transport]').data.interval == data.value"
-                , [__|on click call window.setTimeRefreshInterval(me.closest('[data-time-picker-root]').parentElement.querySelector('[data-time-transport]'), Number(my.dataset.value)) then call me.closest('[popover]').hidePopover()|]
-                ]
-              $ span_ (toHtml title)
-              >> span_ [class_ "text-xs text-textWeak"] (toHtml label)
+          li_ [class_ "md:hidden"] $ div_ [class_ "space-y-1", role_ "group", Aria.label_ "Refresh interval"] $ forM_ refreshOptions refreshIntervalOption_
 
         let submitAction = submitVia "window.dispatchQueryUpdate()"
             -- Self-hosted: easepick injects this into the picker's shadow root, so a
@@ -459,7 +453,7 @@ timeHiddenInputs_ fromM toM sinceM = forM_ ([("from", fromM), ("to", toM), ("sin
 
 refreshOptions :: [(Text, Text, Text)]
 refreshOptions =
-  [ ("Paused", "Pause live updates", "0")
+  [ ("Off", "Turn off automatic refresh", "0")
   , ("15s", "15 seconds", "15000")
   , ("30s", "30 seconds", "30000")
   , ("1m", "1 minute", "60000")
@@ -470,6 +464,24 @@ refreshOptions =
   , ("2h", "2 hours", "7200000")
   , ("1d", "1 day", "86400000")
   ]
+
+
+refreshIntervalOption_ :: (Text, Text, Text) -> Html ()
+refreshIntervalOption_ (label, title, ms) =
+  button_
+    [ type_ "button"
+    , class_ "group/refresh-option flex min-h-11 w-full items-center justify-between rounded-lg px-3 py-2 text-start text-sm hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-1 data-[selected=true]:bg-fillWeak data-[selected=true]:font-semibold"
+    , Aria.label_ title
+    , data_ "value" ms
+    , data_ "refresh-option" ""
+    , term "aria-pressed" "false"
+    , term "hx-live:aria-pressed" "closest('[data-live-data]').q('[data-time-transport]').data.interval == data.value"
+    , term "hx-live:data-selected" "closest('[data-live-data]').q('[data-time-transport]').data.interval == data.value"
+    , [__|on click call window.setTimeRefreshInterval(me.closest('[data-live-data]').q('[data-time-transport]'), Number(my.dataset.value)) then call me.closest('[popover]').hidePopover()|]
+    ]
+    do
+      span_ $ toHtml label
+      span_ [class_ "opacity-0 group-data-[selected=true]/refresh-option:opacity-100", Aria.hidden_ "true"] $ faSprite_ "check" "regular" "h-3 w-3 text-iconBrand"
 
 
 -- | Compact cadence picker for richer live-data panels. Keeping it beside the

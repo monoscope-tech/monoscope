@@ -1,6 +1,6 @@
 cabal-version: 2.2
 
--- This file has been generated from package.yaml by hpack version 0.39.5.
+-- This file has been generated from package.yaml by hpack version 0.39.6.
 --
 -- see: https://github.com/sol/hpack
 
@@ -218,6 +218,9 @@ extra-source-files:
     static/migrations/0185_alert_identity_privacy.sql
     static/migrations/0186_activation_milestones.sql
     static/migrations/0187_monitor_scope.sql
+    static/migrations/0188_ai_threads_and_routines.sql
+    static/migrations/0189_ai_routine_run_lease.sql
+    static/migrations/0190_ai_thread_read_indexes.sql
 
 source-repository head
   type: git
@@ -274,6 +277,7 @@ library
       Models.Telemetry.ServiceGraph
       Models.Telemetry.Telemetry
       Opentelemetry.OtlpServer
+      Pages.AIThreads
       Pages.BodyWrapper
       Pages.Bots.Discord
       Pages.Bots.Slack
@@ -896,6 +900,7 @@ test-suite test-dev
       Models.Telemetry.ServiceGraph
       Models.Telemetry.Telemetry
       Opentelemetry.OtlpServer
+      Pages.AIThreads
       Pages.BodyWrapper
       Pages.Bots.Discord
       Pages.Bots.Slack

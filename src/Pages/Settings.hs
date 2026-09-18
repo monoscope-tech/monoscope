@@ -115,7 +115,7 @@ import System.Config
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Text.Printf (printf)
 import UnliftIO.Exception (throwIO, try, tryAny)
-import Utils (LoadingSize (..), calculateCycleStartDate, faSprite_, fmtDate, formatBytes, formatUTC, htmxIndicator_)
+import Utils (LoadingSize (..), calculateCycleStartDate, faSprite_, fmtDate, formatBytes, htmxIndicator_)
 import Web.FormUrlEncoded (FromForm)
 import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC

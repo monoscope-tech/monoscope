@@ -35,7 +35,7 @@ module Models.Apis.Issues (
   RuntimeExceptionData (..),
   QueryAlertData (..),
   ThresholdDirection (..),
-  ChatRole (..),
+  ChatMessageKind (..),
   IssueSeverity (..),
   LogPatternRateChangeData (..),
   LogPatternData (..),
@@ -95,8 +95,27 @@ module Models.Apis.Issues (
   -- * AI Conversations
   AIConversation (..),
   AIChatMessage (..),
+  ConversationSummary (..),
+  RoutineInterval,
+  routineIntervalMinutes,
+  routineCadence,
+  mkRoutineInterval,
+  ScheduledRoutine (..),
+  ClaimedRoutine (..),
   ConversationType (..),
   getOrCreateConversation,
+  listConversations,
+  getConversation,
+  conversationIssueId,
+  conversationNeedsTitle,
+  setConversationTitle,
+  renameConversation,
+  deleteConversation,
+  upsertRoutine,
+  claimRoutine,
+  completeRoutine,
+  listDueRoutines,
+  pauseRoutine,
   insertChatMessage,
   selectChatHistory,
   prepareSlackTurn,
@@ -214,7 +233,7 @@ defaultRecommendedAction = "Review the changes and update your integration accor
 -- >>> isBoilerplateAction "Roll back the shipping service to 1.4.2."
 -- False
 isBoilerplateAction :: Text -> Bool
-isBoilerplateAction a = a `elem` [defaultRecommendedAction, queryAlertRecommendedAction]
+isBoilerplateAction a = a `elem` ([defaultRecommendedAction, queryAlertRecommendedAction] :: [Text])
 
 
 queryAlertRecommendedAction :: Text
@@ -266,7 +285,7 @@ serviceLabel = fromMaybe "unknown-service"
 
 isNewEndpointOnly :: Issue -> Bool
 isNewEndpointOnly issue = case issuePayload issue of
-  Just (ApiChangeP d) -> all V.null [d.newFields, d.deletedFields, d.modifiedFields]
+  Just (ApiChangeP d) -> all V.null ([d.newFields, d.deletedFields, d.modifiedFields] :: [V.Vector Text])
   _ -> False
 
 
@@ -1060,7 +1079,7 @@ createQueryAlertIssue projectId queryId queryName queryExpr threshold actual thr
 
 
 -- | Conversation type for AI chats
-data ConversationType = CTAnomaly | CTTrace | CTLogExplorer | CTDashboard | CTSlackThread | CTDiscordThread
+data ConversationType = CTAnomaly | CTTrace | CTLogExplorer | CTDashboard | CTSlackThread | CTDiscordThread | CTWeb
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (Default) -- required by Default AIConversation; first constructor = CTAnomaly
   deriving (Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "CT" ConversationType
@@ -1072,6 +1091,7 @@ data AIConversation = AIConversation
   , projectId :: Projects.ProjectId
   , conversationId :: UUIDId "conversation" -- The contextual ID (issue_id, trace_id, etc.)
   , conversationType :: ConversationType
+  , title :: Maybe Text
   , context :: Maybe (Aeson AE.Value) -- Initial context for the AI
   , createdAt :: UTCTime
   , updatedAt :: UTCTime
@@ -1080,19 +1100,19 @@ data AIConversation = AIConversation
   deriving anyclass (Default, FromRow, HI.DecodeRow, ToRow)
 
 
--- | Author of a stored AI chat message. Encodes to "user"/"assistant"/"system"
--- (byte-identical to the previous free-text column).
-data ChatRole = ChatUser | ChatAssistant | ChatSystem
+-- | What a stored conversation entry represents. Execution events are rendered in
+-- the transcript, but are deliberately not part of the language-model history.
+data ChatMessageKind = ChatUser | ChatAssistant | ChatSystem | ChatExecutionEvent
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
   deriving anyclass (Default, NFData)
-  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "Chat" ChatRole
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "Chat" ChatMessageKind
 
 
 data AIChatMessage = AIChatMessage
   { id :: UUIDId "ai_chat"
   , projectId :: Projects.ProjectId
   , conversationId :: UUIDId "conversation"
-  , role :: ChatRole
+  , role :: ChatMessageKind
   , content :: Text
   , widgets :: Maybe (Aeson AE.Value) -- Array of widget configs
   , metadata :: Maybe (Aeson AE.Value) -- Additional metadata
@@ -1102,6 +1122,70 @@ data AIChatMessage = AIChatMessage
   deriving anyclass (Default, FromRow, HI.DecodeRow, ToRow)
 
 
+data ConversationSummary = ConversationSummary
+  { conversationId :: UUIDId "conversation"
+  , title :: Text
+  , conversationType :: ConversationType
+  , updatedAt :: UTCTime
+  , routineActive :: Bool
+  , routineInterval :: Maybe RoutineInterval
+  , routineNextRunAt :: Maybe UTCTime
+  , routineRunningSince :: Maybe UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (FromRow, HI.DecodeRow)
+
+
+newtype RoutineInterval = RoutineInterval Int
+  deriving stock (Eq, Generic, Show)
+  deriving newtype (FromField, HI.DecodeValue, HI.EncodeValue, ToField)
+
+
+routineIntervalMinutes :: RoutineInterval -> Int
+routineIntervalMinutes (RoutineInterval minutes) = minutes
+
+
+routineCadence :: RoutineInterval -> Text
+routineCadence interval
+  | minutes `mod` 10080 == 0 = frequency (minutes `div` 10080) "week"
+  | minutes `mod` 1440 == 0 = frequency (minutes `div` 1440) "day"
+  | minutes `mod` 60 == 0 = frequency (minutes `div` 60) "hour"
+  | otherwise = frequency minutes "minute"
+  where
+    minutes = routineIntervalMinutes interval
+    frequency 1 unit = "Every " <> unit
+    frequency count unit = "Every " <> show count <> " " <> unit <> "s"
+
+
+mkRoutineInterval :: Int -> Either Text RoutineInterval
+mkRoutineInterval minutes
+  | minutes < 5 = Left "Routine interval must be at least 5 minutes."
+  | minutes > 10080 = Left "Routine interval must not exceed 10,080 minutes."
+  | otherwise = Right $ RoutineInterval minutes
+
+
+instance FromHttpApiData RoutineInterval where
+  parseUrlPiece value =
+    maybe (Left "Routine interval must be a whole number of minutes.") mkRoutineInterval $ readMaybe $ toString value
+
+
+data ScheduledRoutine = ScheduledRoutine
+  { id :: UUIDId "ai_routine"
+  , scheduledAt :: UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+data ClaimedRoutine = ClaimedRoutine
+  { projectId :: Projects.ProjectId
+  , conversationId :: UUIDId "conversation"
+  , claimedAt :: UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
 -- | Get or create a conversation (race-condition safe via ON CONFLICT + RETURNING)
 getOrCreateConversation :: (DB es, Error ServerError :> es, Time :> es) => Projects.ProjectId -> UUIDId "conversation" -> ConversationType -> AE.Value -> Eff es AIConversation
 getOrCreateConversation pid convId convType ctx = do
@@ -1109,20 +1193,159 @@ getOrCreateConversation pid convId convType ctx = do
   Hasql.interpOne
     [HI.sql| INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type, context)
               VALUES (#{pid}, #{convId}, #{convType}, #{Aeson ctx}) ON CONFLICT (project_id, conversation_id) DO UPDATE SET updated_at = #{now}
-              RETURNING id, project_id, conversation_id, conversation_type, context, created_at, updated_at |]
+              RETURNING id, project_id, conversation_id, conversation_type, title, context, created_at, updated_at |]
     >>= (`whenNothing` throwError err500{errBody = "getOrCreateConversation: RETURNING clause must return a row"})
 
 
+listConversations :: DB es => Projects.ProjectId -> Eff es [ConversationSummary]
+listConversations pid =
+  Hasql.interp
+    [HI.sql|SELECT c.conversation_id,
+      COALESCE(NULLIF(c.title, ''), NULLIF(i.title, ''), NULLIF(first_message.content, ''), 'AI conversation'),
+      c.conversation_type, c.updated_at,
+      COALESCE(r.active, FALSE), r.interval_minutes, r.next_run_at, r.running_since
+      FROM apis.ai_conversations c
+      LEFT JOIN apis.issues i ON i.project_id = c.project_id AND i.id = c.conversation_id
+      LEFT JOIN apis.ai_routines r ON r.project_id = c.project_id AND r.conversation_id = c.conversation_id
+      LEFT JOIN LATERAL (
+        SELECT LEFT(m.content, 100) AS content FROM apis.ai_chat_messages m
+        WHERE m.project_id = c.project_id AND m.conversation_id = c.conversation_id AND m.role = 'user'
+        ORDER BY m.created_at LIMIT 1
+      ) first_message ON TRUE
+      WHERE c.project_id = #{pid}
+      ORDER BY (r.id IS NOT NULL) DESC, c.updated_at DESC|]
+
+
+getConversation :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Eff es (Maybe ConversationSummary)
+getConversation pid convId =
+  Hasql.interpOne
+    [HI.sql|SELECT c.conversation_id,
+      COALESCE(NULLIF(c.title, ''), NULLIF(i.title, ''), NULLIF(first_message.content, ''), 'New chat'),
+      c.conversation_type, c.updated_at,
+      COALESCE(r.active, FALSE), r.interval_minutes, r.next_run_at, r.running_since
+      FROM apis.ai_conversations c
+      LEFT JOIN apis.issues i ON i.project_id = c.project_id AND i.id = c.conversation_id
+      LEFT JOIN apis.ai_routines r ON r.project_id = c.project_id AND r.conversation_id = c.conversation_id
+      LEFT JOIN LATERAL (
+        SELECT LEFT(m.content, 100) AS content FROM apis.ai_chat_messages m
+        WHERE m.project_id = c.project_id AND m.conversation_id = c.conversation_id AND m.role = 'user'
+        ORDER BY m.created_at LIMIT 1
+      ) first_message ON TRUE
+      WHERE c.project_id = #{pid} AND c.conversation_id = #{convId}|]
+
+
+-- | Recover the typed anomaly subject at the persistence boundary. Other
+-- conversation kinds cannot be accidentally passed to issue handlers.
+conversationIssueId :: ConversationSummary -> Maybe IssueId
+conversationIssueId conversation = case conversation.conversationType of
+  CTAnomaly -> Just $ UUIDId conversation.conversationId.unUUIDId
+  _ -> Nothing
+
+
+conversationNeedsTitle :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Eff es Bool
+conversationNeedsTitle pid convId =
+  fromMaybe False <$> Hasql.interpOne [HI.sql|SELECT EXISTS (SELECT 1 FROM apis.ai_conversations WHERE project_id = #{pid} AND conversation_id = #{convId} AND title IS NULL)::boolean|]
+
+
+setConversationTitle :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Text -> Eff es ()
+setConversationTitle pid convId title =
+  void
+    $ Hasql.interpExecute
+      [HI.sql|UPDATE apis.ai_conversations SET title = #{T.take 100 $ T.strip title}
+      WHERE project_id = #{pid} AND conversation_id = #{convId} AND title IS NULL|]
+
+
+renameConversation :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Text -> Eff es ()
+renameConversation pid convId title =
+  Hasql.interpExecute_
+    [HI.sql|UPDATE apis.ai_conversations SET title = #{T.take 100 $ T.strip title}
+      WHERE project_id = #{pid} AND conversation_id = #{convId}|]
+
+
+deleteConversation :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Eff es ()
+deleteConversation pid convId =
+  Hasql.interpExecute_
+    [HI.sql|WITH deleted_messages AS (
+        DELETE FROM apis.ai_chat_messages
+        WHERE project_id = #{pid} AND conversation_id = #{convId}
+      )
+      DELETE FROM apis.ai_conversations
+      WHERE project_id = #{pid} AND conversation_id = #{convId}|]
+
+
+upsertRoutine :: (DB es, Time :> es) => Projects.ProjectId -> UUIDId "conversation" -> RoutineInterval -> Eff es (Maybe ScheduledRoutine)
+upsertRoutine pid convId interval = do
+  now <- Time.currentTime
+  let intervalMinutes = routineIntervalMinutes interval
+  Hasql.interpOne
+    [HI.sql|INSERT INTO apis.ai_routines AS routine (project_id, conversation_id, interval_minutes, next_run_at)
+      SELECT #{pid}, #{convId}, #{intervalMinutes}, #{addUTCTime (fromIntegral $ intervalMinutes * 60) now}
+      FROM apis.ai_conversations WHERE project_id = #{pid} AND conversation_id = #{convId}
+      ON CONFLICT (project_id, conversation_id) DO UPDATE SET
+        interval_minutes = EXCLUDED.interval_minutes, active = TRUE,
+        next_run_at = CASE WHEN routine.running_since IS NULL THEN EXCLUDED.next_run_at ELSE routine.next_run_at END
+      RETURNING id, next_run_at|]
+
+
+-- | Lease a scheduled instant before any integration action runs. A stale lease can be
+-- recovered after thirty minutes; ordinary duplicate jobs cannot overlap it.
+claimRoutine :: DB es => UUIDId "ai_routine" -> UTCTime -> Eff es (Maybe ClaimedRoutine)
+claimRoutine routineId scheduledAt =
+  Hasql.interpOne
+    [HI.sql|UPDATE apis.ai_routines SET running_since = now()
+      WHERE id = #{routineId} AND active AND next_run_at = #{scheduledAt}
+        AND (running_since IS NULL OR running_since < now() - interval '30 minutes')
+      RETURNING project_id, conversation_id, running_since|]
+
+
+-- | Finish only the lease this worker owns, then schedule from completion time so a
+-- slow run never overlaps its successor or triggers a catch-up burst. Pausing keeps
+-- the lease until this cleanup, but suppresses the successor.
+completeRoutine :: DB es => UUIDId "ai_routine" -> UTCTime -> UTCTime -> Eff es (Maybe UTCTime)
+completeRoutine routineId scheduledAt claimedAt =
+  join
+    <$> Hasql.interpOne
+      [HI.sql|UPDATE apis.ai_routines SET last_run_at = now(), running_since = NULL,
+        next_run_at = CASE WHEN active THEN now() + make_interval(mins => interval_minutes::int) END
+        WHERE id = #{routineId} AND next_run_at = #{scheduledAt} AND running_since = #{claimedAt}
+        RETURNING CASE WHEN active THEN next_run_at END|]
+
+
+-- | Recovery source for a queue insertion lost to a crash. Duplicate enqueues are safe:
+-- 'claimRoutine' admits exactly one worker for each scheduled instant.
+listDueRoutines :: DB es => Int -> Eff es [ScheduledRoutine]
+listDueRoutines limit =
+  Hasql.interp
+    [HI.sql|SELECT id, next_run_at
+      FROM apis.ai_routines WHERE active AND next_run_at <= now()
+        AND (running_since IS NULL OR running_since < now() - interval '30 minutes')
+      ORDER BY next_run_at LIMIT #{max 1 limit}|]
+
+
+pauseRoutine :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Eff es ()
+pauseRoutine pid convId =
+  void
+    $ Hasql.interpExecute
+      [HI.sql|UPDATE apis.ai_routines SET active = FALSE,
+        next_run_at = CASE WHEN running_since IS NULL THEN NULL ELSE next_run_at END
+        WHERE project_id = #{pid} AND conversation_id = #{convId}|]
+
+
 -- | Insert a new chat message
-insertChatMessage :: DB es => Projects.ProjectId -> UUIDId "conversation" -> ChatRole -> Text -> Maybe AE.Value -> Maybe AE.Value -> Eff es ()
+insertChatMessage :: DB es => Projects.ProjectId -> UUIDId "conversation" -> ChatMessageKind -> Text -> Maybe AE.Value -> Maybe AE.Value -> Eff es ()
 insertChatMessage pid convId chatRole chatContent widgetsM metadataM =
   Hasql.interpExecute_ $ insertChatMessageSql pid convId chatRole chatContent widgetsM metadataM
 
 
-insertChatMessageSql :: Projects.ProjectId -> UUIDId "conversation" -> ChatRole -> Text -> Maybe AE.Value -> Maybe AE.Value -> HI.Sql
+insertChatMessageSql :: Projects.ProjectId -> UUIDId "conversation" -> ChatMessageKind -> Text -> Maybe AE.Value -> Maybe AE.Value -> HI.Sql
 insertChatMessageSql pid convId chatRole chatContent widgetsM metadataM =
-  [HI.sql| INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content, widgets, metadata, created_at)
-            VALUES (#{pid}, #{convId}, #{chatRole}, #{chatContent}, #{Aeson <$> widgetsM}, #{Aeson <$> metadataM}, clock_timestamp()) |]
+  [HI.sql| WITH inserted AS (
+              INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content, widgets, metadata, created_at)
+              VALUES (#{pid}, #{convId}, #{chatRole}, #{chatContent}, #{Aeson <$> widgetsM}, #{Aeson <$> metadataM}, clock_timestamp())
+              RETURNING 1
+            )
+            UPDATE apis.ai_conversations SET updated_at = clock_timestamp()
+            WHERE project_id = #{pid} AND conversation_id = #{convId} AND EXISTS (SELECT 1 FROM inserted) |]
 
 
 -- | Persist a Slack question once, and exclude that turn from the history passed
@@ -1169,7 +1392,7 @@ slackScopedConversationId pid teamId channelId threadTs =
 
 -- | Serialize first-contact history insertion on one connection. Failed fetches
 -- never enter this transaction; concurrent successful fetches seed at most once.
-seedChatHistory :: DB es => Projects.ProjectId -> UUIDId "conversation" -> [(ChatRole, Text)] -> Eff es ()
+seedChatHistory :: DB es => Projects.ProjectId -> UUIDId "conversation" -> [(ChatMessageKind, Text)] -> Eff es ()
 seedChatHistory pid convId messages = Hasql.transaction TxS.ReadCommitted TxS.Write do
   locked <-
     Hasql.queryTx @[UUIDId "conversation"]

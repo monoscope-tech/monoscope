@@ -55,7 +55,6 @@ module Pages.Dashboards (
 
 import Control.Lens
 import Data.Aeson qualified as AE
-import Data.Aeson.Key qualified as AEKey
 import Data.Default
 import Data.Effectful.Hasql qualified
 import Data.Effectful.UUID qualified as UUID
@@ -73,7 +72,7 @@ import Data.Vector qualified as V
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, IOE, (:>))
 import Effectful.Concurrent (Concurrent)
-import Effectful.Concurrent.Async (concurrently, pooledForConcurrently)
+import Effectful.Concurrent.Async (pooledForConcurrently)
 import Effectful.Error.Static (Error, throwError)
 import Effectful.Labeled qualified
 import Effectful.Log (Log)
@@ -93,7 +92,6 @@ import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ProjectMembers qualified as ManageMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.ServiceGraph (ServiceGraph (..), ServiceNode (..), endpointDependencyGraphForRange)
-import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation
 import Network.HTTP.Types.URI qualified as URI
 import OpenTelemetry.Attributes qualified as OA
@@ -103,7 +101,6 @@ import Pages.Components (EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..),
 import Pages.Components qualified as Components
 import Pages.GitSync qualified as GitSyncPage
 import Pages.Issues qualified as IssuesPage
-import Pages.LogExplorer.LogItem (getServiceName)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Monitors qualified as Alerts
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_, visTypes)
@@ -903,6 +900,7 @@ variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
               let optVal = maybeToMonoid (opt !!? 0)
                   optLbl = fromMaybe optVal (opt !!? 1)
                   isCurrent = var.value == Just optVal
+                  optUrl = urlPrefix <> optVal
               -- Boosted, not a plain href: a full navigation paints nothing for the seconds
               -- this render takes. '.htmx-request' on the anchor drives the states above.
               a_
@@ -910,9 +908,9 @@ variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
                       $ "var-opt flex items-center gap-2 px-3 py-2 rounded text-sm cursor-pointer transition-colors"
                       <> bool "" " active" (idx == 0)
                       <> bool "" " var-opt-current" isCurrent
-                  , href_ $ urlPrefix <> optVal
+                  , href_ optUrl
                   ]
-                    <> navTabAttrs
+                    <> maybe navTabAttrs (const $ dashboardContentNavAttrs optUrl) activeTabSlug
                 )
                 do
                   span_ [class_ "truncate flex-1"] $ toHtml optLbl
@@ -1093,8 +1091,10 @@ processEagerWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widg
         ?~ renderText
           (div_ [class_ "flex flex-col gap-3 h-full w-full overflow-hidden"] $ forM_ issues $ IssuesPage.issueCardCompact_ pid now)
   Widget.WTTable -> do
+    let sortParam = find ((== "table-sort") . fst) allParams >>= snd
+        (query, sql) = Widget.tableQuery widget sortParam
     -- Fetch table data
-    tableData <- Charts.queryMetrics widget.dbSource (Just Charts.DTText) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing Nothing allParams
+    tableData <- Charts.queryMetrics widget.dbSource (Just Charts.DTText) (Just pid) query sql sinceStr fromDStr toDStr Nothing Nothing allParams
     -- Render the table with data server-side
     pure
       $ widget
@@ -2640,20 +2640,27 @@ dashboardTabStrip_ pidText dashIdText activeTabIdx tabs queryStr extraAttrs =
     $ forM_ (zip [0 ..] tabs) \(idx, tab) -> do
       let tabUrl = "/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/tab/" <> slugify tab.name <> queryStr
       a_
-        [ role_ "tab"
-        , href_ tabUrl
-        , class_ $ "tab group/tab flex items-center gap-2 max-md:whitespace-nowrap" <> memptyIfFalse (idx == activeTabIdx) " tab-active"
-        , hxGet_ tabUrl
-        , hxTarget_ "#dashboard-tabs-content"
-        , hxSwap_ "outerMorph"
-        , hxPushUrl_ "true"
-        , [__|on click set my.preloadState to 'DONE'|]
-        ]
+        ( [ role_ "tab"
+          , href_ tabUrl
+          , class_ $ "tab group/tab flex items-center gap-2 max-md:whitespace-nowrap" <> memptyIfFalse (idx == activeTabIdx) " tab-active"
+          ]
+            <> dashboardContentNavAttrs tabUrl
+        )
         do
           -- The icon becomes the spinner in place, so the strip doesn't reflow mid-swap.
           whenJust tab.icon \icon -> faSprite_ icon "regular" "w-4 h-4 group-[.htmx-request]/tab:hidden"
           span_ [class_ "hidden group-[.htmx-request]/tab:inline-flex", role_ "status", Aria.label_ "Loading"] reloadSpinner_
           toHtml tab.name
+
+
+dashboardContentNavAttrs :: Text -> [Attribute]
+dashboardContentNavAttrs url =
+  [ hxGet_ url
+  , hxTarget_ "#dashboard-tabs-content"
+  , hxSwap_ "outerMorph"
+  , hxPushUrl_ "true"
+  , [__|on click set my.preloadState to 'DONE'|]
+  ]
 
 
 -- | Render a single tab content panel.

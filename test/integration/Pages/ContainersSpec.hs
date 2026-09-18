@@ -391,7 +391,8 @@ spec = sequential $ aroundAll withTestResources do
       hostsBW.prePageTitle `shouldBe` Nothing
       let hostsHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml hosts
       hostsHtml
-        `shouldContainAll` ["<h1", "Infrastructure", "Hosts", "vps-bare-01", "Kubernetes", "Docker", "Storage", "Load (1m)", "Group by", "Customize", "LIVE", "Last 5 mins", "Previous time window", "Pause live updates", "Export", "Showing 3 of 3 hosts", "flex shrink-0 items-center gap-2 whitespace-nowrap", "grid w-full grid-cols-[minmax(0,1fr)_auto]", "data-nav-tab-strip", "data-header-actions", "/infrastructure/hosts/detail?since=5M"]
+        `shouldContainAll` ["<h1", "Infrastructure", "Hosts", "vps-bare-01", "Kubernetes", "Docker", "Storage", "Load (1m)", "Group by", "Customize", "LIVE", "Last 5 mins", "Previous time window", "Pause live updates", "Refresh interval", "data-refresh-interval-menu", "aria-label=\"Turn off automatic refresh\"", "Export", "Showing 3 of 3 hosts", "flex shrink-0 items-center gap-2 whitespace-nowrap", "grid w-full grid-cols-[minmax(0,1fr)_auto]", "data-nav-tab-strip", "data-header-actions", "/infrastructure/hosts/detail?since=5M"]
+      hostsHtml `shouldNotSatisfy` T.isInfixOf "Choose how this view receives new data."
       -- The in-cluster agent's system.* series (host.name = its own pod, node only in
       -- k8s.node.name) attributes to the node it measures — 0.5 busy cores of 2 is 25% —
       -- and never forms a host row named after the agent pod.
