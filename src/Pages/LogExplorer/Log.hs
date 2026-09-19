@@ -829,7 +829,7 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
         Just "sessions" -> LogQueries.Sessions
         Just "patterns" -> LogQueries.Patterns
         _ -> LogQueries.Data
-      preloadUrl = T.replace "\"" "%22" $ LogQueries.logExplorerUrlPath pid dataEndpoint queryM' cols' Nothing sinceM fromM toM Nothing sourceM False
+      preloadUrl = T.replace "\"" "%22" $ withTelemetryScope sess.environment sess.service $ LogQueries.logExplorerUrlPath pid dataEndpoint queryM' cols' Nothing sinceM fromM toM Nothing sourceM False
 
   let stampPng base = do
         url <- Widget.widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid base sinceM fromM toM
@@ -889,10 +889,8 @@ recordExploration pid uid stepsDone queryAST = do
 
 -- | Shared prologue for the log-data endpoints: auth-gate the request, grab the
 -- app config + clock, and resolve the time range once.
--- The sticky deployment-environment selection travels with the session (it is read from
--- the @env@ cookie at auth time), so every data endpoint that already resolves the session
--- gets it here rather than declaring a query parameter it would have to be handed on every
--- link in the app.
+-- Global telemetry scope is parsed from the request URL into the authenticated session, so
+-- every data endpoint that already resolves the session gets the same environment/service.
 logDataEnv :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (AuthContext, UTCTime, Maybe UTCTime, Maybe UTCTime, Maybe Text, Maybe Text)
 logDataEnv pid sinceM fromM toM = do
   (sess, _) <- Projects.sessionAndProject pid
@@ -968,10 +966,17 @@ logExplorerDataH pid LogDataQuery{query = queryM', cols = cols', cursor = cursor
   addRespHeaders
     (lr :: LogResult)
       { error = errM
-      , nextUrl = LogQueries.logExplorerUrlPath pid LogQueries.Data queryM' cols' lastFM sinceM fromM toM (Just "loadmore") sourceM False
-      , resetLogsUrl = LogQueries.logExplorerUrlPath pid LogQueries.Data queryM' cols' Nothing Nothing Nothing Nothing Nothing sourceM False
-      , recentUrl = LogQueries.logExplorerUrlPath pid LogQueries.Data queryM' cols' Nothing sinceM fromM toM (Just "loadmore") sourceM True
+      , nextUrl = withTelemetryScope envM serviceM $ LogQueries.logExplorerUrlPath pid LogQueries.Data queryM' cols' lastFM sinceM fromM toM (Just "loadmore") sourceM False
+      , resetLogsUrl = withTelemetryScope envM serviceM $ LogQueries.logExplorerUrlPath pid LogQueries.Data queryM' cols' Nothing Nothing Nothing Nothing Nothing sourceM False
+      , recentUrl = withTelemetryScope envM serviceM $ LogQueries.logExplorerUrlPath pid LogQueries.Data queryM' cols' Nothing sinceM fromM toM (Just "loadmore") sourceM True
       }
+
+
+-- | Keep generated data URLs in the same global telemetry scope as their page request.
+withTelemetryScope :: Maybe Text -> Maybe Text -> Text -> Text
+withTelemetryScope environment service url = url <> foldMap param ([("environment", environment), ("service_scope", service)] :: [(Text, Maybe Text)])
+  where
+    param (key, value) = foldMap (\v -> "&" <> key <> "=" <> toUriStr v) value
 
 
 -- | Lazy facet fragments for collapsed groups and per-field overflow values.

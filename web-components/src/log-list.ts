@@ -50,7 +50,7 @@ import {
   deviceIconName,
   middleTruncatePath,
 } from './log-list-utils';
-import { expandSince, expandFromToRange, parseChartZoom, copyParams, TIME_PARAMS } from './time-range-utils';
+import { expandSince, expandFromToRange, parseChartZoom, copyParams, PAGE_CONTEXT_PARAMS, SCOPE_PARAMS, TIME_PARAMS } from './time-range-utils';
 import { toEChartsColor } from './widgets';
 import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 import { keyed } from 'lit/directives/keyed.js';
@@ -704,9 +704,9 @@ export class LogList extends LitElement {
     if (this.initialFetchUrl) {
       const url = new URL(this.initialFetchUrl, window.location.origin);
       url.searchParams.set('json', 'true');
-      // Merge time params from page URL so dashboard time picker changes apply
+      // An embedded list owns its query, but inherits the page's time and telemetry scope.
       const pageParams = new URLSearchParams(window.location.search);
-      for (const key of ['since', 'from', 'to']) {
+      for (const key of PAGE_CONTEXT_PARAMS) {
         if (pageParams.has(key)) url.searchParams.set(key, pageParams.get(key)!);
       }
       if (this.sortSpec) url.searchParams.set('sort', this.sortSpec);
@@ -731,9 +731,9 @@ export class LogList extends LitElement {
   private liveSubscriptionBody() {
     const url = new URL(window.location.href);
     return {
-      // No service gate on Events: it streams whatever the query says, bounded by the
-      // server's per-connection queue rather than refused up front.
       all_signals: true,
+      service: url.searchParams.get('service_scope') || url.searchParams.get('service') || null,
+      environment: url.searchParams.get('environment') || null,
       query: url.searchParams.get('query') || null,
       columns: Object.keys(this.colIdxMap ?? {}),
     };
@@ -900,6 +900,7 @@ export class LogList extends LitElement {
     // Start with nextFetchUrl if available, otherwise current URL
     const baseUrl = this.nextFetchUrl || window.location.href;
     const url = new URL(baseUrl, window.location.origin + window.location.pathname);
+    copyParams(new URLSearchParams(window.location.search), url.searchParams, SCOPE_PARAMS);
     url.searchParams.set('json', 'true');
     url.searchParams.set('cursor', cursor); // preserves from/to/since filters already on the base URL
     url.searchParams.set('direction', 'older');
@@ -1550,7 +1551,7 @@ export class LogList extends LitElement {
     url.searchParams.set('kind', this.mode === 'sessions' ? 'session' : 'pattern');
     url.searchParams.set('key', key);
     url.searchParams.set('skip', String(skip));
-    copyParams(pageParams, url.searchParams, ['query', ...TIME_PARAMS]);
+    copyParams(pageParams, url.searchParams, ['query', ...PAGE_CONTEXT_PARAMS]);
     return url.toString();
   }
 
@@ -2710,7 +2711,6 @@ export class LogList extends LitElement {
 
         .animate-fadeBg {
           animation: fadeBg 1.5s ease-out;
-          will-change: background-color;
         }
 
         @keyframes pulseIndicator {
@@ -2725,7 +2725,6 @@ export class LogList extends LitElement {
 
         .animate-fadeBg .status-indicator {
           animation: pulseIndicator 4s ease-out forwards;
-          will-change: background-color;
         }
 
         /*
@@ -3245,13 +3244,7 @@ export class LogList extends LitElement {
             const badgeStyle = getStyleClass(style);
 
             if (field === 'session') {
-              // In tree mode, the play button only renders on tree roots
-              // (depth 0 or rows with children). Leaf children inherit the
-              // session from their parent — repeating the button on every
-              // resource row turns the whole right rail into noise.
-              if (depth === 0 || (children && children > 0)) {
-                sessionActions.push(this.createSessionButton(value, !!hasErrors));
-              }
+              sessionActions.push(this.createSessionButton(value, !!hasErrors));
             } else if (field === 'user email') {
               userEmail = value;
               userBadgeStyle = badgeStyle;
@@ -3806,7 +3799,7 @@ export class LogList extends LitElement {
         }`}
       >
         <button
-          class="font-medium text-base py-1 cursor-pointer"
+          class="group font-medium text-base py-1 cursor-pointer"
           data-tippy-content=${title}
           aria-label="${title.split('•').reverse()[0]} column options"
           aria-haspopup="true"
@@ -3819,7 +3812,7 @@ export class LogList extends LitElement {
                 >${faSprite(this.sortDirFor(column) === 'asc' ? 'arrow-up' : 'arrow-down', 'regular', 'w-3 h-3 inline-block')}</span
               >`
             : nothing}
-          <span class="ml-1 p-0.5 border border-strokeWeak rounded-sm inline-flex">
+          <span class="ml-1 p-0.5 rounded-sm inline-flex bg-transparent group-hover:bg-fillWeak transition-colors duration-150">
             ${faSprite('chevron-down', 'regular', 'w-3 h-3')}
           </span>
         </button>
@@ -3947,18 +3940,15 @@ export class LogList extends LitElement {
     return html` <div class=${clsx('flex items-center gap-1.5 min-w-0 w-full overflow-hidden', isBot && 'opacity-60')}>${parts}</div> `;
   }
 
-  // Error sessions reuse the neutral pill but swap the border to strokeError
-  // as a quiet severity signal — no filled CTA, no scale change.
   createSessionButton = (sessionId: string, hasErrors: boolean = false) => html`
     <button
       class=${clsx(
         'inline-flex items-center justify-center shrink-0 self-center rounded-md cursor-pointer tooltip tooltip-left',
-        'h-6 px-2 gap-1 shadow-sm transition-transform duration-150 ease-out hover:scale-105 active:scale-100',
-        'motion-reduce:transition-none motion-reduce:hover:scale-100 text-textInverse-strong fill-textInverse-strong hover:brightness-110',
-        // Primary action: solid fill, always visible, so replay reads as the thing to do.
-        // One verb for both states; the error fill + tooltip carry the "this one broke" signal
-        // so the action label stays a stable, non-ambiguous constant.
-        hasErrors ? 'bg-fillError-strong' : 'bg-fillBrand-strong'
+        'h-6 px-2 gap-1 border bg-bgBase shadow-xs transition-[background-color,border-color,transform] duration-150 ease-out active:scale-[0.96]',
+        'motion-reduce:transition-none motion-reduce:active:scale-100',
+        hasErrors
+          ? 'border-strokeError-weak fill-iconError hover:border-strokeError-strong hover:bg-bgBase'
+          : 'border-strokeWeak fill-iconBrand hover:border-strokeBrand-strong hover:bg-bgBase'
       )}
       data-tip=${hasErrors ? 'Replay — errors in this session' : 'Replay recording'}
       aria-label=${hasErrors ? 'Replay session with errors' : 'Replay session recording'}
@@ -4001,7 +3991,7 @@ export class LogList extends LitElement {
         @click=${() => this.changeView(view)}
         aria-pressed=${this.view === view}
         aria-label="${label} view"
-        class=${`flex items-center cursor-pointer justify-center gap-1 px-2 py-1 text-xs rounded ${
+        class=${`flex items-center cursor-pointer justify-center gap-1 px-2 py-1 text-xs rounded transition-transform duration-150 ease-out active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100 ${
           this.view === view ? 'bg-fillWeak text-textStrong' : 'text-textWeak hover:bg-fillWeaker'
         }`}
       >
@@ -4106,7 +4096,7 @@ export class LogList extends LitElement {
             role="button"
             aria-label="Log display options"
             aria-haspopup="true"
-            class=${`flex cursor-pointer items-center justify-center gap-1 px-2 min-h-6 min-w-6 text-xs rounded text-textWeak hover:text-textStrong focus-visible:outline focus-visible:outline-2 focus-visible:outline-strokeBrand-strong`}
+            class=${`flex cursor-pointer items-center justify-center gap-1 px-2 min-h-6 min-w-6 text-xs rounded text-textWeak hover:text-textStrong transition-transform duration-150 ease-out active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-strokeBrand-strong`}
           >
             ${faSprite('gear', 'regular', `h-3 w-3`)}
             <span class="sm:inline hidden">Options</span>

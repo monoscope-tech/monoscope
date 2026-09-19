@@ -278,7 +278,7 @@ describe('updateUrlState', () => {
 describe('links that preserve the time range', () => {
   test('replaces stale range modes while retaining the query and an initial fallback', () => {
     const link = document.createElement('a');
-    link.dataset.preserveTimeRange = '';
+    link.dataset.preservePageContext = '';
     link.href = '/p/proj/log_explorer?query=count()&since=7D';
     document.body.append(link);
     for (const [search, expected] of [
@@ -293,5 +293,20 @@ describe('links that preserve the time range', () => {
       expect(['since', 'from', 'to'].map((key) => target.get(key))).toEqual(expected);
       expect(target.get('query')).toBe('count()');
     }
+  });
+
+  test('carries the global telemetry scope between pages', () => {
+    const link = document.createElement('a');
+    link.dataset.preservePageContext = '';
+    link.href = '/p/proj/log_explorer?query=count()';
+    document.body.append(link);
+    window.history.replaceState({}, '', '/p/proj/issues?service=checkout&service=catalog&service_scope=frontend&environment=production');
+
+    link.dispatchEvent(new Event('pointerover', { bubbles: true }));
+
+    const target = new URL(link.href).searchParams;
+    expect(target.get('service_scope')).toBe('frontend');
+    expect(target.has('service')).toBe(false);
+    expect(target.get('environment')).toBe('production');
   });
 });

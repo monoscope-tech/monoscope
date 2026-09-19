@@ -1,6 +1,7 @@
 import { format, isValid } from 'date-fns';
 import clsx from 'clsx';
 import { html, svg, TemplateResult } from 'lit';
+import { ifDefined } from 'lit/directives/if-defined.js';
 import { minBy, maxBy } from 'lodash';
 import { ColIdxMap, EventLine } from './types/types';
 import { AnsiUp } from 'ansi-up';
@@ -180,10 +181,9 @@ export { faSprite };
 
 export const renderBadge = (classes: string, title: string, tooltip?: string): TemplateResult =>
   html`<span
-    class=${clsx(classes, 'relative transition-all duration-200 hover:shadow-sm', {
-      'tooltip tooltip-left': !!tooltip,
-    })}
-    data-tip=${tooltip ?? ''}
+    class=${clsx(classes, 'relative transition-shadow duration-150 hover:shadow-sm')}
+    data-tippy-content=${ifDefined(tooltip)}
+    data-tippy-placement=${ifDefined(tooltip ? 'top' : undefined)}
     >${title}</span
   >`;
 

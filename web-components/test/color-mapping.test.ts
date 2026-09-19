@@ -154,6 +154,10 @@ describe('light-mode design token contract', () => {
     expect(css).toMatch(/\.surface-table\s*{[^}]*bg-bgRaised/s);
   });
 
+  test('database tags use an opaque surface behind their colored border', () => {
+    expect(css).toMatch(/\.badge-postgres[\s\S]*?{[^}]*@apply bg-bgRaised text-textStrong border;/);
+  });
+
   test('selected and semantic weak fills are visible in light mode', () => {
     expect(token('fillBrand-weak')).toMatch(/\/ 0\.1[02]\)$/);
     for (const role of ['fillError-weak', 'fillInformation-weak', 'fillSuccess-weak', 'fillWarning-weak']) {

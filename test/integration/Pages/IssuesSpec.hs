@@ -716,7 +716,7 @@ spec = sequential $ aroundAll withTestResources do
       html `shouldSatisfy` not . T.isInfixOf "No trace data available"
       html `shouldSatisfy` not . T.isInfixOf Issues.queryAlertRecommendedAction
       html `shouldSatisfy` T.isInfixOf "Open query in Explorer"
-      html `shouldSatisfy` T.isInfixOf "data-preserve-time-range"
+      html `shouldSatisfy` T.isInfixOf "data-preserve-page-context"
       html `shouldSatisfy` T.isInfixOf "query=resource.service.name"
       for_ ([(Issues.Below, 5, False), (Issues.Below, 10, True), (Issues.Above, 5, False), (Issues.Above, 3, True)] :: [(Issues.ThresholdDirection, Double, Bool)]) \(direction, value :: Double, mismatch) -> do
         void $ withResource tr.trPool \conn ->
@@ -930,10 +930,11 @@ spec = sequential $ aroundAll withTestResources do
           $ Issues.selectIssues testPid Issues.PIssueL Issues.defIssueFilters{Issues.period = "24h", Issues.limit = 100}
       whenJust (find (\r -> r.base.id == iid) after) \row ->
         V.sum row.activityBuckets `shouldBe` 0 -- absent entirely is also acceptable
-    it "selectIssues environment scope excludes issues from another deployment" \tr -> do
+    it "issue list intersects global environment/service scope with local service filters" \tr -> do
       prodId <- UUIDId <$> UUID.nextRandom
+      prodCatalogId <- UUIDId <$> UUID.nextRandom
       stagingId <- UUIDId <$> UUID.nextRandom
-      let insertIssue iid environment target =
+      let insertIssue iid service environment target =
             withResource tr.trPool \conn ->
               void
                 $ PGS.execute
@@ -941,16 +942,23 @@ spec = sequential $ aroundAll withTestResources do
                   [sql| INSERT INTO apis.issues
                         (id, project_id, issue_type, target_hash, endpoint_hash, title, service, environment,
                          severity, critical, affected_requests, affected_clients, issue_data, created_at, updated_at)
-                      VALUES (?, ?, 'runtime_exception', ?, ?, ?, 'scope-test', ?,
+                      VALUES (?, ?, 'runtime_exception', ?, ?, ?, ?, ?,
                               'warning', false, 1, 1, '{}'::jsonb, ?, ?) |]
-                  (iid, testPid, target, target, target, environment, frozenTime, frozenTime)
-      insertIssue prodId "production" "issue-scope-production"
-      insertIssue stagingId "staging" "issue-scope-staging"
+                  (iid, testPid, target, target, target, service, environment, frozenTime, frozenTime)
+      insertIssue prodId "scope-checkout" "production" "issue-scope-production"
+      insertIssue prodCatalogId "scope-catalog" "production" "issue-scope-production-catalog"
+      insertIssue stagingId "scope-checkout" "staging" "issue-scope-staging"
       (prod, _) <-
         runHasqlEffect tr
-          $ Issues.selectIssues testPid Issues.PIssue Issues.defIssueFilters{Issues.services = ["scope-test"], Issues.environment = Just "production", Issues.limit = 100}
+          $ Issues.selectIssues testPid Issues.PIssue Issues.defIssueFilters{Issues.service = Just "scope-checkout", Issues.environment = Just "production", Issues.limit = 100}
       map (.id) prod `shouldBe` [prodId]
       map (.environment) prod `shouldBe` [Just "production"]
+
+      let scoped = tr{trSessAndHeader = fmap (\session -> session{Projects.service = Just "scope-checkout", Projects.environment = Just "production"}) tr.trSessAndHeader}
+      (_, response) <- testServant scoped $ IssuesPage.issueListGetH testPid (Just "Inbox") Nothing Nothing Nothing (Just "100") Nothing (Just "24h") ["scope-catalog"] []
+      case response of
+        IssuesPage.ALPage (PageCtx _ table) -> table.rows `shouldSatisfy` V.null
+        _ -> expectationFailure "expected a full scoped issue-list page"
 
     -- Read-side sibling of errorUnmerge_doesNotTouchAnotherProjectsPattern, in the
     -- adjacent handler. `errorGroupMembersGetH` checks the caller may access `pid`, then

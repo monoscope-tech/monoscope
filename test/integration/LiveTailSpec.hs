@@ -194,7 +194,7 @@ spec = do
     it "delivers spans, which a logs-only subscription must never see" do
       -- The whole reason Events needs its own scope. One project can have both open at once,
       -- and the same span has to reach one and not the other.
-      let events = mkSubScoped 20 LT.AllSignals ["kind", "name"] Nothing ""
+      let events = mkSubScoped 20 (LT.AllSignals Nothing) ["kind", "name"] Nothing ""
           liveTail = mkSub 21 "checkout" Nothing ""
       hub <- LT.newHub
       eventsConn <- LT.newConn 100
@@ -208,8 +208,8 @@ spec = do
       -- The logs-only queue never received it, so it is still empty.
       atomically (isEmptyTBQueue logsConn.queue) `shouldReturn` True
 
-    it "matches across services, since Events has no service gate" do
-      let sub = mkSubScoped 22 LT.AllSignals ["service"] Nothing ""
+    it "matches across services when Events has no service gate" do
+      let sub = mkSubScoped 22 (LT.AllSignals Nothing) ["service"] Nothing ""
       (conn, rt) <- fixture [sub]
       _ <-
         LT.publishMatches rt pid
@@ -217,11 +217,20 @@ spec = do
       (rows, _) <- LT.takeBatch conn
       length rows `shouldBe` 2
 
+    it "matches only the service selected by the Events page" do
+      let sub = mkSubScoped 25 (LT.AllSignals (Just "checkout")) ["service"] Nothing ""
+      (conn, rt) <- fixture [sub]
+      _ <-
+        LT.publishMatches rt pid
+          $ V.fromList [logRecord "checkout" "prod" "info" "a", logRecord "billing" "prod" "info" "b"]
+      (rows, _) <- LT.takeBatch conn
+      length rows `shouldBe` 1
+
     it "projects the browser's columns, flattening ___ back to a path" do
       -- The column list arrives in the query layer's spelling; resolving it has to agree with
       -- how the same field is matched, or a row could filter in and render blank.
       let cols = ["timestamp", "kind", "resource___service___name", "attributes___http___request___method"]
-          sub = mkSubScoped 23 LT.AllSignals cols Nothing ""
+          sub = mkSubScoped 23 (LT.AllSignals Nothing) cols Nothing ""
       (conn, rt) <- fixture [sub]
       _ <- LT.publishMatches rt pid (V.fromList [httpLogRecord "checkout" "prod" "GET"])
       (rows, _) <- LT.takeBatch conn
@@ -235,7 +244,7 @@ spec = do
     it "omits a column the in-memory record cannot answer rather than guessing" do
       -- Aggregates and SQL expressions have no in-memory equivalent. Leaving the key out lets
       -- the client render an empty cell until the durable read supplies the real value.
-      let sub = mkSubScoped 24 LT.AllSignals ["kind", "count_"] Nothing ""
+      let sub = mkSubScoped 24 (LT.AllSignals Nothing) ["kind", "count_"] Nothing ""
       (conn, rt) <- fixture [sub]
       _ <- LT.publishMatches rt pid (V.fromList [logRecord "checkout" "prod" "info" "a"])
       (rows, _) <- LT.takeBatch conn
@@ -265,7 +274,7 @@ spec = do
       -- The per-field cap bounds one value; it does not bound their sum, and the broker
       -- measures the sum. A wide Events row over records with large attributes reaches it.
       let cols = ["attributes___k" <> show n | n <- [0 :: Int .. 127]]
-          sub = mkSubScoped 61 LT.AllSignals cols Nothing ""
+          sub = mkSubScoped 61 (LT.AllSignals Nothing) cols Nothing ""
       (conn, rt) <- fixture [sub]
       stats <- LT.publishMatches rt pid (V.fromList [wideRecord "checkout" "prod"])
       getSum stats.matched `shouldBe` 1
@@ -325,7 +334,7 @@ spec = do
       -- tail that silently delivers nothing. Both surfaces share the envelope, so both are
       -- pinned here rather than only the one that happened to be written first.
       let logEnv = LT.LiveEnvelope LT.envelopeVersion (mkSub 30 "checkout" Nothing "").id (LT.toLiveRow (LT.LogTail (Just "checkout") LT.SKLogs) [] (logRecord "checkout" "prod" "error" "boom"))
-          tableEnv = LT.LiveEnvelope LT.envelopeVersion (mkSub 31 "checkout" Nothing "").id (LT.toLiveRow LT.AllSignals ["kind"] (logRecord "checkout" "prod" "error" "boom"))
+          tableEnv = LT.LiveEnvelope LT.envelopeVersion (mkSub 31 "checkout" Nothing "").id (LT.toLiveRow (LT.AllSignals Nothing) ["kind"] (logRecord "checkout" "prod" "error" "boom"))
       forM_ [logEnv, tableEnv] \env ->
         AE.eitherDecode (AE.encode env) `shouldSatisfy` \case
           Right (decoded :: LT.LiveEnvelope) -> decoded.v == env.v && decoded.subscriptionId == env.subscriptionId

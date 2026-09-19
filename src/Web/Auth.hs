@@ -68,7 +68,7 @@ import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects (craftSessionCookie, emptySessionCookie)
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (RequestHeaders, hAuthorization, hCookie, urlEncode)
-import Network.Wai (Request (rawPathInfo, rawQueryString, requestHeaders))
+import Network.Wai (Request (queryString, rawPathInfo, rawQueryString, requestHeaders))
 import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, responseBody)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pkg.Mail (addConvertKitUser)
@@ -80,7 +80,7 @@ import Servant.Server.Experimental.Auth (AuthHandler, mkAuthHandler)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Logging
 import System.Types (ATAuthCtx, ATBaseCtx, DB, RespHeaders, addRespHeaders)
-import Utils (escapedQueryPartial, hostPath)
+import Utils (escapedQueryPartial, hostPath, nonEmptyT)
 import Web.Cookie (Cookies, SetCookie, parseCookies)
 import Web.I18n qualified as I18n
 import Web.Wire (DeviceCodeResponse (..), DeviceTokenResponse (..), ProjectInfo (..))
@@ -150,7 +150,7 @@ authHandler logger env =
               sessId <- case existing of
                 Just ps | ps.user.getUser.email == CI.mk basicEmail -> pure ps.id
                 _ -> authorizeUserAndPersist Nothing "Basic" "Auth" "" basicEmail
-              sessionByID (Just sessId) requestID (sidebarClosedFromCookie cookies) (themeFromCookie cookies) (I18n.languageFromCookies cookies) (envFromCookie cookies) (serviceFromCookie cookies) Nothing (challengeFor env.config.basicAuthEnabled (requestHeaders req))
+              sessionByID (Just sessId) requestID (sidebarClosedFromCookie cookies) (themeFromCookie cookies) (I18n.languageFromCookies cookies) (scopeFromRequest "environment" req) (scopeFromRequest "service_scope" req) Nothing (challengeFor env.config.basicAuthEnabled (requestHeaders req))
             Nothing -> do
               -- When basic auth is enabled, check if we have a valid cookie session
               -- If not, we should require basic auth instead of redirecting to Auth0
@@ -174,7 +174,7 @@ authHandler logger env =
             pure $ Projects.PersistentSessionId uuid
       let cookies = getCookies req
       requestID <- liftIO $ getRequestID req
-      sessionByID (mbBearerSessionId <|> getSessionId cookies) requestID (sidebarClosedFromCookie cookies) (themeFromCookie cookies) (I18n.languageFromCookies cookies) (envFromCookie cookies) (serviceFromCookie cookies) (Just $ getRequestUrl req) (challengeFor env.config.basicAuthEnabled (requestHeaders req))
+      sessionByID (mbBearerSessionId <|> getSessionId cookies) requestID (sidebarClosedFromCookie cookies) (themeFromCookie cookies) (I18n.languageFromCookies cookies) (scopeFromRequest "environment" req) (scopeFromRequest "service_scope" req) (Just $ getRequestUrl req) (challengeFor env.config.basicAuthEnabled (requestHeaders req))
 
 
 -- | How to tell an unauthenticated request to authenticate.
@@ -316,21 +316,8 @@ sidebarClosedFromCookie cookies = case L.lookup "isSidebarClosed" cookies of
   Nothing -> False
 
 
--- | The sticky environment selection. Empty is normalised to 'Nothing' so clearing the
--- picker ("All environments") and never having chosen one are the same state — otherwise an
--- empty cookie would filter every query to rows whose environment is literally @""@.
-envFromCookie :: Cookies -> Maybe Text
-envFromCookie cookies = do
-  raw <- L.lookup "env" cookies
-  guard (raw /= "")
-  pure (decodeUtf8 raw)
-
-
-serviceFromCookie :: Cookies -> Maybe Text
-serviceFromCookie cookies = do
-  raw <- L.lookup "service" cookies
-  guard (raw /= "")
-  pure (decodeUtf8 raw)
+scopeFromRequest :: ByteString -> Request -> Maybe Text
+scopeFromRequest scopeKey req = nonEmptyT $ decodeUtf8 <$> join (L.lookup scopeKey req.queryString)
 
 
 themeFromCookie :: Cookies -> Text

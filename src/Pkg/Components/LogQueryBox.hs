@@ -190,9 +190,9 @@ logQueryBox_ config = do
             do
               faSprite_ "triangle-exclamation" "regular" "h-3 w-3 shrink-0"
               span_ [id_ "query-parse-error-msg"] $ toHtml $ fromMaybe "" config.parseError
-          div_ [class_ "w-full flex flex-1 gap-2 justify-between items-stretch min-w-0 max-md:flex-wrap"] do
+          div_ [class_ "w-full flex flex-1 gap-3 justify-between items-stretch min-w-0 max-md:flex-wrap"] do
             div_ [id_ "queryBuilder", class_ "w-full flex-1 flex items-center min-w-0 min-h-8"] do
-              div_ [class_ "relative w-full min-h-8 pl-2 flex border rounded-md border-strokeStrong bg-bgRaised focus-within:border-strokeBrand-strong focus-within:outline-2"] do
+              div_ [class_ "relative w-full min-h-8 pl-2 flex border rounded-md border-strokeWeak bg-bgRaised focus-within:border-strokeBrand-strong focus-within:outline-2"] do
                 term
                   "query-editor"
                   -- No height of its own: the bordered box above owns it (min-h-8,
@@ -209,40 +209,40 @@ logQueryBox_ config = do
                   )
                   queryEditorSkeleton_
                 whenNothing_ config.targetWidgetPreview
-                  $ label_ [Lucid.for_ "ai-search-chkbox", class_ "absolute top-1/2 right-1 -translate-y-1/2 px-2 py-0.5 inline-flex gap-1.5 items-center cursor-pointer rounded-sm text-textWeak hover:bg-fillWeak hover:text-textBrand group-has-[.ai-search:checked]/fltr:hidden", data_ "tippy-content" "Ask AI in plain English"] do
-                    faSprite_ "sparkles" "regular" "inline-block icon h-4 w-4 text-iconNeutral"
+                  $ label_ [Lucid.for_ "ai-search-chkbox", class_ "absolute top-1/2 right-1 -translate-y-1/2 px-2 py-1 inline-flex gap-1 items-center cursor-pointer rounded-sm text-xs font-medium leading-none text-textWeak hover:bg-fillWeak hover:text-textBrand group-has-[.ai-search:checked]/fltr:hidden", data_ "tippy-content" "Ask AI in plain English"] do
+                    faSprite_ "sparkles" "regular" "h-4 w-4 shrink-0"
                     "Ask AI"
 
-            whenNothing_ config.targetWidgetPreview $ do
-              div_ [class_ "flex items-center max-md:hidden"] do
-                select_
-                  [ class_ "select select-sm h-8 w-full max-w-xs bg-bgBase"
-                  , name_ "target-spans"
-                  , id_ "spans-toggle"
-                  , Aria.label_ "Search scope"
-                  , onchange_ "this.form.dispatchEvent(new Event('submit', {bubbles: true}))"
-                  ]
-                  $ options_ (Just $ fromMaybe "all-spans" config.targetSpan) [("all-spans", "All spans"), ("root-spans", "Root spans"), ("service-entry-spans", "Service entry spans")]
+            div_ [class_ "flex shrink-0 items-center gap-1"] do
+              whenNothing_ config.targetWidgetPreview $ do
+                div_ [class_ "flex items-center max-md:hidden"] do
+                  select_
+                    [ class_ "select select-sm h-8 w-full max-w-xs bg-bgBase !border-strokeWeak"
+                    , name_ "target-spans"
+                    , id_ "spans-toggle"
+                    , Aria.label_ "Search scope"
+                    , onchange_ "this.form.dispatchEvent(new Event('submit', {bubbles: true}))"
+                    ]
+                    $ options_ (Just $ fromMaybe "all-spans" config.targetSpan) [("all-spans", "All spans"), ("root-spans", "Root spans"), ("service-entry-spans", "Service entry spans")]
 
-              label_
-                [ Lucid.for_ "saveQueryMdl"
-                , class_ "hidden h-8 w-8 items-center justify-center rounded-lg text-iconNeutral hover:bg-fillWeak hover:text-iconBrand focus-visible:outline-2 focus-visible:outline-offset-1 active:scale-[0.96] transition-transform md:inline-flex"
-                , Aria.label_ "Save query"
-                , data_ "tippy-content" "Save query"
-                , role_ "button"
-                , tabindex_ "0"
-                , keyboardActivateAttr_
-                , [__|on click set #saveQueryMdl.dataset.pendingQuery to null then call #saveQueryForm.reset()|]
+                label_
+                  [ Lucid.for_ "saveQueryMdl"
+                  , class_ "hidden h-8 w-8 items-center justify-center rounded-md text-iconNeutral hover:bg-fillWeak hover:text-iconBrand focus-visible:outline-2 focus-visible:outline-offset-1 active:scale-[0.96] transition-transform md:inline-flex"
+                  , Aria.label_ "Save query"
+                  , data_ "tippy-content" "Save query"
+                  , role_ "button"
+                  , tabindex_ "0"
+                  , keyboardActivateAttr_
+                  , [__|on click set #saveQueryMdl.dataset.pendingQuery to null then call #saveQueryForm.reset()|]
+                  ]
+                  $ faSprite_ "floppy-disk" "regular" "h-4 w-4"
+              button_
+                [ type_ "submit"
+                , class_ "btn btn-primary !h-8 !min-h-8 w-9 cursor-pointer rounded-md p-0 leading-none active:scale-[0.96] transition-transform"
+                , Aria.label_ "Run query"
+                , onpointerdown_ "this.form.dispatchEvent(new Event('submit', {bubbles: true}))"
                 ]
-                $ faSprite_ "floppy-disk" "regular" "h-4 w-4"
-            button_
-              [ type_ "submit"
-              , class_ "leading-none rounded-lg px-3 py-1 cursor-pointer !h-8 btn btn-primary"
-              , Aria.label_ "Run query"
-              , onpointerdown_ "this.form.dispatchEvent(new Event('submit', {bubbles: true}))"
-              ]
-              do
-                faSprite_ "magnifying-glass" "regular" "h-4 w-4 inline-block"
+                $ faSprite_ "magnifying-glass" "regular" "h-4 w-4"
 
       div_ [class_ "flex justify-between max-md:flex-wrap max-md:gap-0.5"] do
         div_ [class_ "flex min-w-0 items-center gap-0 max-md:w-full"] do
@@ -423,9 +423,9 @@ logQueryBox_ config = do
               forM_ (take 3 popularQueries) \(q, l, _) ->
                 button_
                   [ type_ "button"
-                  , -- py-1, not py-0.5: these chips were 22px tall, under the 24px WCAG 2.5.8
-                    -- minimum pointer target.
-                    class_ "px-2 py-1 rounded-md bg-fillWeaker border border-strokeWeak hover:border-strokeBrand-weak hover:bg-fillBrand-weak text-textWeak hover:text-textBrand cursor-pointer transition-colors"
+                  , -- Keep the quiet, borderless treatment without shrinking the
+                    -- pointer target below the 24px WCAG 2.5.8 minimum.
+                    class_ "inline-flex h-7 items-center rounded-md bg-transparent px-2 text-textWeak hover:bg-fillWeak hover:text-textStrong focus-visible:outline-2 focus-visible:outline-offset-1 cursor-pointer transition-[color,background-color]"
                   , onclick_ $ applyQueryJS q
                   ]
                   $ toHtml l

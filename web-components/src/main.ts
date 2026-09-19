@@ -4,7 +4,7 @@
 // lives at `detail.ctx.request`, NOT `detail.request`; reading the wrong one silently no-ops.
 // Registration is global — v4 dropped hx-ext as the activation mechanism — so each hook gates
 // itself on the hx-ext marker attribute the call sites already carry.
-import { copyParams, TIME_PARAMS } from './time-range-utils';
+import { copyParams, SCOPE_PARAMS, TIME_PARAMS } from './time-range-utils';
 
 const htmx4 = (window as any).htmx;
 
@@ -67,6 +67,22 @@ htmx4.registerExtension('forward-page-params', {
   },
 });
 
+// Global scope lives in the document URL, so every fragment request must inherit it even
+// when the rendered hx-get/hx-post URL knows nothing about the page shell.
+htmx4.registerExtension('global-scope', {
+  htmx_config_request: function (_elt: Element, detail: any) {
+    const req = detail.ctx.request;
+    const url = new URL(req.action, window.location.origin);
+    const page = new URLSearchParams(window.location.search);
+    for (const key of SCOPE_PARAMS) {
+      const value = page.get(key);
+      if (value) url.searchParams.set(key, value);
+      else url.searchParams.delete(key);
+    }
+    req.action = url.origin === window.location.origin ? url.pathname + url.search : url.href;
+  },
+});
+
 // htmx 4 has no json-enc extension and its hx-encoding only chooses multipart vs urlencoded,
 // so the JSON body these endpoints expect is ported here. It must hook before:request, not
 // config:request: after config:request htmx unconditionally does
@@ -103,7 +119,8 @@ const INVALIDATED_BY: Record<string, readonly string[]> = {
 
 window.setQueryParamAndReload = (key: string, value: string) => {
   const url = new URL(window.location.href);
-  url.searchParams.set(key, value);
+  if (value) url.searchParams.set(key, value);
+  else url.searchParams.delete(key);
   for (const stale of INVALIDATED_BY[key] ?? []) url.searchParams.delete(stale);
   window.location.href = url.toString();
 };
@@ -346,11 +363,10 @@ window.shiftTimeRange = (direction, transport) => {
   else window.applyTimeRange({ from: new Date(shiftedFrom).toISOString(), to: new Date(shiftedTo).toISOString() });
 };
 
-// Carry the page's time range onto a nav link before it is followed. Delegated and rewritten
-// just-in-time rather than at render: the range changes without a reload, so an href baked in
-// at render time goes stale the moment someone moves the time picker.
-function preserveTimeRange(target: EventTarget | null) {
-  const link = (target as Element | null)?.closest?.('a[data-preserve-time-range]') as HTMLAnchorElement | null;
+// Carry the page's time range and telemetry scope onto a nav link before it is followed.
+// Rewrite just-in-time because either context can change after the link rendered.
+function preservePageContext(target: EventTarget | null) {
+  const link = (target as Element | null)?.closest?.('a[data-preserve-page-context]') as HTMLAnchorElement | null;
   if (!link) return;
   const next = new URL(link.href);
   const source = new URLSearchParams(window.location.search);
@@ -358,16 +374,17 @@ function preserveTimeRange(target: EventTarget | null) {
     for (const key of TIME_PARAMS) next.searchParams.delete(key);
     copyParams(source, next.searchParams);
   }
+  copyParams(source, next.searchParams, SCOPE_PARAMS);
   link.href = next.toString();
 }
 
 for (const type of ['pointerover', 'focusin', 'pointerdown'] as const) {
-  document.addEventListener(type, (e) => preserveTimeRange(e.target), { capture: true });
+  document.addEventListener(type, (e) => preservePageContext(e.target), { capture: true });
 }
 document.addEventListener(
   'keydown',
   (e) => {
-    if (e.key === 'Enter' || e.key === ' ') preserveTimeRange(e.target);
+    if (e.key === 'Enter' || e.key === ' ') preservePageContext(e.target);
   },
   { capture: true }
 );

@@ -3,6 +3,12 @@
 /** The params that carry the page's time window. The server prefers `since` over from/to. */
 export const TIME_PARAMS = ['since', 'from', 'to'] as const;
 
+/** Global telemetry scope carried by the page URL. */
+export const SCOPE_PARAMS = ['service_scope', 'environment'] as const;
+
+/** Context an embedded telemetry view must inherit from its containing page. */
+export const PAGE_CONTEXT_PARAMS = [...TIME_PARAMS, ...SCOPE_PARAMS] as const;
+
 /**
  * Carry `keys` from the page's params onto a request/nav URL. Skips empty values: a key
  * that is absent and a key set to '' both mean "this URL says nothing about it", and
