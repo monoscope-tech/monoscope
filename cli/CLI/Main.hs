@@ -48,6 +48,7 @@ data Command
   | MeCmd
   | ProjectCmd ProjectCommand
   | IssuesCmd IssuesCommand
+  | IncidentsCmd IncidentsCommand
   | EndpointsCmd EndpointsCommand
   | LogPatternsCmd LogPatternsCommand
   | TeamsCmd TeamsCommand
@@ -77,6 +78,12 @@ data IssuesCommand
   | IssueArchive Text
   | IssueUnarchive Text
   | IssueBulk Text [Text] (Maybe Int)
+  deriving stock (Show)
+
+
+data IncidentsCommand
+  = IncidentList {phase :: Maybe Text, limit :: Maybe Int}
+  | IncidentGet Text
   deriving stock (Show)
 
 
@@ -267,6 +274,7 @@ commandParser =
           , command "me" (info (pure MeCmd) (progDesc "Show current project identity"))
           , command "project" (info (ProjectCmd <$> projectParser <**> helper) (progDesc "Show or patch the current project"))
           , command "issues" (info (IssuesCmd <$> issuesParser <**> helper) (progDesc "List and triage issues"))
+          , command "incidents" (info (IncidentsCmd <$> incidentsParser <**> helper) (progDesc "Browse incident episodes"))
           , command "endpoints" (info (EndpointsCmd <$> endpointsParser <**> helper) (progDesc "Browse the API endpoint catalog"))
           , command "log-patterns" (info (LogPatternsCmd <$> logPatternsParser <**> helper) (progDesc "Triage log patterns"))
           , command "teams" (info (TeamsCmd <$> teamsParser <**> helper) (progDesc "Manage teams"))
@@ -768,6 +776,20 @@ issuesParser =
       ]
 
 
+incidentsParser :: Parser IncidentsCommand
+incidentsParser =
+  subparser
+    $ mconcat
+      [ command
+          "list"
+          ( info
+              (IncidentList <$> optional (strOption (long "phase" <> metavar "PHASE" <> help "active|recovered|resolved")) <*> optional (option auto (long "limit" <> short 'n' <> metavar "N" <> help "Maximum incidents (default: 20)")) <**> helper)
+              (progDesc "List recent incidents")
+          )
+      , command "get" (info (IncidentGet <$> idArg <**> helper) (progDesc "Get incident by ID"))
+      ]
+
+
 endpointsParser :: Parser EndpointsCommand
 endpointsParser =
   subparser
@@ -1052,6 +1074,9 @@ run version global = \case
     IssueUnarchive i -> Resource.runLifecycle cfg Resource.Issues i "unarchive" [] mode
     IssueBulk act ids minsM ->
       Resource.writeJson cfg Resource.POST "/api/v1/issues/bulk" [] (AE.object ["action" AE..= act, "ids" AE..= ids, "duration_minutes" AE..= minsM]) mode
+  IncidentsCmd sub -> withCfgMode global $ \cfg mode -> case sub of
+    IncidentList{..} -> Resource.runList cfg Resource.Incidents (catMaybes [("phase",) <$> phase, ("limit",) . show <$> limit]) mode
+    IncidentGet i -> Resource.runGet cfg Resource.Incidents i mode
   EndpointsCmd sub -> withCfgMode global $ \cfg mode -> case sub of
     EndList{..} ->
       Resource.runList cfg Resource.Endpoints (catMaybes [("search",) <$> search, ("outgoing",) . bool "false" "true" <$> outgoing] <> pageParams page perPage) mode

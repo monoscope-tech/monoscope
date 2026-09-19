@@ -620,8 +620,8 @@ bodyWrapper bcfg child = do
     -- the thread list. The resulting page uses the same history renderer as issue chat.
     aiComposerShell_ :: Projects.ProjectId -> Html ()
     aiComposerShell_ pid =
-      dialog_ [id_ "ai-composer-modal", class_ "modal !items-start px-4 pt-[15vh]", term "aria-labelledby" "ai-composer-title"] do
-        form_ [method_ "dialog", class_ "modal-backdrop backdrop-blur-sm"] $ button_ [Aria.label_ "Close composer"] "close"
+      dialog_ [id_ "ai-composer-modal", class_ "modal !items-start px-4 pt-[15vh] backdrop:backdrop-blur-sm", term "aria-labelledby" "ai-composer-title"] do
+        form_ [method_ "dialog", class_ "modal-backdrop"] $ button_ [Aria.label_ "Close composer"] "close"
         form_
           [ id_ "ai-composer-panel"
           , hxPost_ $ "/p/" <> pid.toText <> "/ai"
@@ -679,8 +679,8 @@ bodyWrapper bcfg child = do
 
     aiThreadRenameShell_ :: Html ()
     aiThreadRenameShell_ =
-      dialog_ [id_ "ai-thread-rename-modal", class_ "modal !items-start px-4 pt-[15vh]", term "aria-labelledby" "ai-thread-rename-title"] do
-        form_ [method_ "dialog", class_ "modal-backdrop backdrop-blur-sm"] $ button_ [Aria.label_ "Close rename dialog"] "close"
+      dialog_ [id_ "ai-thread-rename-modal", class_ "modal !items-start px-4 pt-[15vh] backdrop:backdrop-blur-sm", term "aria-labelledby" "ai-thread-rename-title"] do
+        form_ [method_ "dialog", class_ "modal-backdrop"] $ button_ [Aria.label_ "Close rename dialog"] "close"
         form_ [id_ "ai-thread-rename-form", hxPost_ "#", hxSwap_ "none", class_ "modal-box !w-full !max-w-lg !overflow-visible !rounded-none !border-0 !bg-transparent !p-0 !shadow-none flex flex-col"] do
           div_ [class_ "mb-2 flex items-center justify-between px-3"] do
             h2_ [id_ "ai-thread-rename-title", class_ "text-xs font-medium uppercase tracking-wider text-white"] "Rename chat"
@@ -797,9 +797,9 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
         faSprite_ "sidebar-search" "regular" "w-4 h-4"
     fieldset_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:grid grid-cols-2 rounded-lg bg-fillWeak p-0.5 text-xs"] do
       legend_ [class_ "sr-only"] "Sidebar view"
-      input_ ([type_ "radio", name_ "nav-view", id_ "nav-view-menu", class_ "sr-only peer/menu"] <> [checked_ | menuItem /= Just "AI"])
+      input_ [type_ "radio", name_ "nav-view", id_ "nav-view-menu", class_ "sr-only peer/menu", checked_]
       label_ [term "for" "nav-view-menu", class_ "cursor-pointer rounded-md px-2 py-1 text-center text-textWeak peer-checked/menu:bg-bgRaised peer-checked/menu:text-textStrong peer-checked/menu:shadow-xs peer-focus-visible/menu:outline-2 peer-focus-visible/menu:outline-offset-2 transition-[color,background-color,box-shadow] duration-100"] "Navigate"
-      input_ ([type_ "radio", name_ "nav-view", id_ "nav-view-ai", class_ "sr-only peer/ai"] <> [checked_ | menuItem == Just "AI"])
+      input_ [type_ "radio", name_ "nav-view", id_ "nav-view-ai", class_ "sr-only peer/ai"]
       label_ [term "for" "nav-view-ai", class_ "cursor-pointer rounded-md px-2 py-1 text-center text-textWeak peer-checked/ai:bg-bgRaised peer-checked/ai:text-textStrong peer-checked/ai:shadow-xs peer-focus-visible/ai:outline-2 peer-focus-visible/ai:outline-offset-2 transition-[color,background-color,box-shadow] duration-100"] "Assistant"
     nav_ [id_ "main-sidenav", class_ "mt-2 min-h-0 overflow-x-hidden overflow-y-auto flex flex-col gap-1 text-textWeak group-has-[#nav-view-ai:checked]/nav:hidden [&_.main-nav-link.active]:bg-fillBrand-weak [&_.main-nav-link.active]:text-textStrong [&_.main-nav-link.active]:font-medium [&_.main-nav-link.active]:border-l-strokeBrand-strong [&_.main-nav-link.active]:border-y-transparent [&_.main-nav-link.active]:border-r-transparent [&_.main-nav-link.active_.nav-icon]:text-textBrand", [__|on click set #mobile-nav-toggle.checked to false end|]] do
       let pidTxt = project.id.toText
@@ -871,14 +871,14 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
             "Docs"
             faSprite_ "arrow-up-right" "regular" "w-3 h-3 text-textWeak"
     nav_ [id_ "ai-conversation-nav", Aria.label_ "AI conversations", class_ "hidden group-has-[#nav-view-ai:checked]/nav:flex mt-1.5 min-h-0 overflow-y-auto flex-col gap-px text-textWeak"] do
-      let newAIAction mode icon label = button_
-            ([type_ "button", Aria.label_ label, class_ $ "w-full group-has-[#sidenav-toggle:checked]/pg:px-2.5 gap-2 py-1.5 flex items-center justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start rounded-md text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 active:scale-[0.96] transition-[color,background-color,scale] duration-100 cursor-pointer" <> bool " text-textStrong hover:bg-fillWeak" " text-textBrand hover:bg-fillBrand-weak" (mode == "chat"), term "_" $ "on click set #ai-composer-input.value to '' then set #ai-composer-" <> mode <> ".checked to true then call #ai-composer-modal.showModal()"] <> tippyRight_ label)
+      let newAIAction active icon label action = button_
+            ([type_ "button", Aria.label_ label, class_ $ "w-full group-has-[#sidenav-toggle:checked]/pg:px-2.5 gap-2 py-1.5 flex items-center justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start rounded-md text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 active:scale-[0.96] transition-[color,background-color,scale] duration-100 cursor-pointer" <> bool " text-textStrong hover:bg-fillWeak" " text-textBrand hover:bg-fillBrand-weak" active, action] <> tippyRight_ label)
             do
-              faSprite_ icon "regular" $ bool "w-3 h-3 shrink-0" "w-3.5 h-3.5 shrink-0" (mode == "chat")
+              faSprite_ icon "regular" $ bool "w-3 h-3 shrink-0" "w-3.5 h-3.5 shrink-0" active
               span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] $ toHtml label
       div_ [class_ "flex flex-col gap-px group-has-[#sidenav-toggle:checked]/pg:px-1"] do
-        newAIAction "chat" "plus" "New chat"
-        newAIAction "routine" "clock-rotate-left" "New routine"
+        newAIAction True "plus" "New chat" [__|on click set #ai-composer-input.value to '' then set #ai-composer-chat.checked to true then call #ai-composer-modal.showModal()|]
+        newAIAction False "clock-rotate-left" "New routine" [__|on click set #ai-composer-input.value to '' then set #ai-composer-routine.checked to true then call #ai-composer-modal.showModal()|]
       div_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block border-t border-strokeWeak/40 my-1 mx-2"] ""
       when (length conversations > 15) $ div_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block px-1 pb-1"] do
         div_ [class_ "relative"] do
@@ -909,21 +909,21 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
                   | seconds < 86400 -> show (seconds `div` 3600) <> "h"
                   | seconds < 604800 -> show (seconds `div` 86400) <> "d"
                   | otherwise -> toText $ formatTime defaultTimeLocale "%-d %b" t
-          sectionLabel :: Text -> Int -> Html ()
-          sectionLabel label count = div_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex items-center justify-between px-2 pt-2 pb-1 text-[0.6875rem] font-medium text-textWeak"] do
+          sectionLink :: Text -> Text -> Int -> Html ()
+          sectionLink href label count = a_ [href_ href, class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex items-center justify-between rounded-md px-2 py-1.5 text-2xs font-medium text-textWeak hover:bg-fillWeak hover:text-textStrong focus-visible:outline-2 focus-visible:outline-offset-1 transition-colors"] do
             span_ [] $ toHtml label
-            span_ [class_ "text-[0.625rem] tabular-nums text-textDisabled"] $ toHtml $ show count
-          timeGroupLabel label = div_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block px-2 pb-0.5 pt-1 text-[0.625rem] font-medium text-textDisabled"] $ toHtml label
+            span_ [class_ "text-2xs tabular-nums text-textDisabled"] $ toHtml $ show count
+          timeGroupLabel label = div_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block px-2 pb-0.5 pt-1 text-2xs font-medium text-textDisabled"] $ toHtml label
           threadLink c =
             let isActive = activeConversationId == Just c.conversationId
                 href = conversationHref c
                 actionsId = "ai-thread-actions-" <> c.conversationId.toText
-             in div_ [data_ "thread-title" c.title, class_ $ "ai-thread-item group/thread relative flex min-w-0 items-center rounded-sm text-textWeak/80 hover:bg-fillWeak/70 hover:text-textStrong transition-[color,background-color] duration-100" <> bool "" " text-textStrong font-medium" isActive] do
+             in div_ [data_ "thread-title" c.title, class_ $ "ai-thread-item group/thread relative flex min-w-0 items-center rounded-md text-textWeak/80 hover:bg-fillWeak/70 hover:text-textStrong transition-[color,background-color] duration-100" <> bool "" " text-textStrong font-medium" isActive] do
                   a_ ([href_ href, Aria.label_ c.title, class_ "flex min-w-0 flex-1 items-center justify-center py-1 group-has-[#sidenav-toggle:checked]/pg:justify-start group-has-[#sidenav-toggle:checked]/pg:ps-2 group-has-[#sidenav-toggle:checked]/pg:pe-1 focus-visible:outline-2 focus-visible:outline-offset-2"] <> [term "aria-current" "page" | isActive] <> tippyRight_ c.title) do
                     faSprite_ "message" "regular" "group-has-[#sidenav-toggle:checked]/pg:hidden w-3.5 h-3.5 shrink-0"
                     span_ [class_ $ "hidden group-has-[#sidenav-toggle:checked]/pg:block me-2 h-1 w-1 shrink-0 rounded-full " <> bool "bg-transparent" "bg-fillBrand-strong" isActive, Aria.hidden_ "true"] ""
                     span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block min-w-0 flex-1 truncate leading-5"] $ toHtml c.title
-                  span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block shrink-0 pe-2 text-[0.625rem] tabular-nums text-textDisabled group-hover/thread:opacity-0 group-focus-within/thread:opacity-0 transition-opacity duration-100", title_ $ toText $ formatTime defaultTimeLocale "%e %b %Y, %H:%M UTC" c.updatedAt] $ toHtml $ relativeTime c.updatedAt
+                  span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block shrink-0 pe-2 text-2xs tabular-nums text-textDisabled group-hover/thread:opacity-0 group-focus-within/thread:opacity-0 transition-opacity duration-100", title_ $ toText $ formatTime defaultTimeLocale "%e %b %Y, %H:%M UTC" c.updatedAt] $ toHtml $ relativeTime c.updatedAt
                   button_
                     ( [ type_ "button"
                       , Aria.label_ $ "Actions for " <> c.title
@@ -983,7 +983,7 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
               do
                 span_ [class_ "min-w-0 flex-1"] do
                   span_ [class_ "block truncate font-medium text-textStrong"] $ toHtml c.title
-                  span_ [class_ "flex min-w-0 items-center gap-1 text-[0.6875rem] font-normal leading-4 text-textWeak"] do
+                  span_ [class_ "flex min-w-0 items-center gap-1 text-2xs font-normal leading-4 text-textWeak"] do
                     span_
                       [ class_
                           $ "h-1.5 w-1.5 shrink-0 rounded-full "
@@ -997,10 +997,10 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
                     span_ [] $ toHtml stateLabel
                     span_ [Aria.hidden_ "true"] "·"
                     span_ [class_ "truncate"] $ toHtml cadenceLabel
-                    whenJust nextRunLabel \nextRun -> span_ [class_ "ms-auto shrink-0 tabular-nums text-textDisabled", title_ statusLabel] $ toHtml nextRun
-      unless (null routines) do
-        sectionLabel "Routines" (length routines)
-        div_ [class_ "flex flex-col gap-px px-0.5 group-has-[#sidenav-toggle:not(:checked)]/pg:px-0"] $ mapM_ routineCard routines
+                    whenJust nextRunLabel $ span_ [class_ "ms-auto shrink-0 tabular-nums text-textDisabled", title_ statusLabel] . toHtml
+      sectionLink ("/p/" <> project.id.toText <> "/ai/routines") "Routines" (length routines)
+      unless (null routines) $ div_ [class_ "flex flex-col gap-px px-0.5 group-has-[#sidenav-toggle:not(:checked)]/pg:px-0"] $ mapM_ routineCard routines
+      sectionLink ("/p/" <> project.id.toText <> "/ai") "Conversations" (length chats)
       unless (null chats) do
         let ageInDays c = diffDays (utctDay now) (utctDay c.updatedAt)
             (today, beforeToday) = partition ((<= 0) . ageInDays) chats
@@ -1008,7 +1008,6 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
             renderTimeGroup label threads = unless (null threads) do
               timeGroupLabel label
               mapM_ threadLink threads
-        sectionLabel "Recent" (length chats)
         renderTimeGroup "Today" today
         renderTimeGroup "This week" thisWeek
         renderTimeGroup "Older" older

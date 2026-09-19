@@ -51,10 +51,10 @@ data ResourceKind
   | ApiKeys
   | Teams
   | Members
-  | -- | Listing-only kinds; used by 'renderListPayload' / 'runListVia' to pick
-    -- a column set for resources whose CRUD lives outside this module
-    -- (issues, endpoints, log-patterns). They don't appear in 'resourcePath'.
+  | -- | Listing-oriented kinds whose command dispatch lives in @CLI.Main@.
+    -- They use this type for paths and table columns.
     Issues
+  | Incidents
   | Endpoints
   | LogPatterns
   deriving stock (Eq, Show)
@@ -68,9 +68,7 @@ data WriteVerb = POST | PUT | PATCH
 
 
 -- | URL prefix for a given kind under /api/v1.
--- Issues / Endpoints / LogPatterns are list-only here (the call sites in
--- Main.hs hit their own URLs); 'resourcePath' returns "" for them so a stray
--- lookup is harmless rather than crashing the CLI.
+-- Listing-oriented resources use the same path helpers as CRUD resources.
 resourcePath :: ResourceKind -> Text
 resourcePath =
   ("/api/v1" <>) . \case
@@ -80,6 +78,7 @@ resourcePath =
     Teams -> "/teams"
     Members -> "/members"
     Issues -> "/issues"
+    Incidents -> "/incidents"
     Endpoints -> "/endpoints"
     LogPatterns -> "/log_patterns"
 
@@ -219,6 +218,16 @@ buildResourceTable kind items = case kind of
         , numeric (lookupText o "event_count")
         , muted (firstNonEmpty [lookupText o "last_seen", lookupText o "updated_at"])
         , plain (firstNonEmpty [lookupText o "title", lookupText o "issue_type"])
+        ]
+      | AE.Object o <- items
+      ]
+    )
+  Incidents ->
+    ( ["phase", "started", "last_event", "id"]
+    , [ [ pickLevelCell o ["phase"]
+        , muted (lookupText o "started_at")
+        , muted (lookupText o "last_event_at")
+        , brand (lookupText o "id")
         ]
       | AE.Object o <- items
       ]

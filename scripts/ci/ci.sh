@@ -324,7 +324,7 @@ run_body() { # <check>
     cli-tests)  cabal test monoscope-cli:cli-tests $CABAL_FLAGS "$CABAL_OPTS" --test-show-details=direct ;;
     weeder)
       command -v weeder >/dev/null 2>&1 || cabal install weeder --install-method=copy --installdir=/usr/local/bin --overwrite-policy=always
-      weeder --config config/weeder.toml --hie-directory dist-newstyle
+      weeder --config weeder.toml --hie-directory dist-newstyle
       ;;
     hlint)   hlint src/ shared/src cli ;;
     ui-tests) (cd web-components && npm ci --prefer-online --no-audit && npm test) ;;

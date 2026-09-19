@@ -80,6 +80,7 @@ import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
 -- Page imports
 
 import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.CodeContext qualified as CodeContext
@@ -400,6 +401,8 @@ data ApiV1Routes mode = ApiV1Routes
   , issueArchive :: mode :- "issues" :> Capture "issue_id" Issues.IssueId :> "archive" :> Post '[JSON] ApiT.IssueApiFull
   , issueUnarchive :: mode :- "issues" :> Capture "issue_id" Issues.IssueId :> "unarchive" :> Post '[JSON] ApiT.IssueApiFull
   , issuesBulk :: mode :- "issues" :> "bulk" :> ReqBody '[JSON] (ApiT.BulkAction Issues.IssueId) :> Post '[JSON] (ApiT.BulkResult Issues.IssueId)
+  , incidentsList :: mode :- "incidents" :> QueryParam "phase" Incidents.EpisodePhase :> QueryParam "limit" Int :> Get '[JSON] [ApiT.IncidentSummary]
+  , incidentGet :: mode :- "incidents" :> Capture "incident_id" Incidents.EpisodeId :> Get '[JSON] ApiT.IncidentSummary
   , -- Teams (B3) + Members (B4)
     teamsList :: mode :- "teams" :> Get '[JSON] [ApiT.TeamSummary]
   , teamGet :: mode :- "teams" :> Capture "team_id" ApiT.TeamId :> Get '[JSON] ApiT.TeamFull
@@ -574,6 +577,8 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , -- Command palette
     commandPaletteGet :: mode :- "p" :> ProjectId :> "command-palette" :> Get '[HTML] (RespHeaders (Html ())) -- dynamic items only
   , commandPaletteRecentPost :: mode :- "p" :> ProjectId :> "command-palette" :> "recents" :> ReqBody '[FormUrlEncoded] CommandPalette.RecentForm :> Post '[HTML] (RespHeaders NoContent)
+  , aiRoutinesGet :: mode :- "p" :> ProjectId :> "ai" :> "routines" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
+  , aiRoutineInstallPost :: mode :- "p" :> ProjectId :> "ai" :> "routines" :> "install" :> ReqBody '[FormUrlEncoded] AIThreads.RoutineTemplateForm :> Post '[HTML] (RespHeaders (Html ()))
   , aiThreadsGet :: mode :- "p" :> ProjectId :> "ai" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   , aiThreadGet :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   , aiThreadsPost :: mode :- "p" :> ProjectId :> "ai" :> ReqBody '[FormUrlEncoded] AIThreads.AIChatForm :> Post '[HTML] (RespHeaders (Html ()))
@@ -582,6 +587,10 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , aiThreadDelete :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> Delete '[HTML] (RespHeaders (Html ()))
   , aiRoutinePost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> ReqBody '[FormUrlEncoded] AIThreads.RoutineForm :> Post '[HTML] (RespHeaders (Html ()))
   , aiRoutinePausePost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "pause" :> Post '[HTML] (RespHeaders (Html ()))
+  , aiRoutineCancelPost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "cancel" :> Post '[HTML] (RespHeaders (Html ()))
+  , aiRoutineResumePost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "resume" :> Post '[HTML] (RespHeaders (Html ()))
+  , aiRoutineDestinationPost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "destination" :> ReqBody '[FormUrlEncoded] AIThreads.RoutineDestinationForm :> Post '[HTML] (RespHeaders (Html ()))
+  , aiRoutineDelete :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> Delete '[HTML] (RespHeaders (Html ()))
   , -- Device auth
     deviceApprove :: mode :- "device" :> QPT "code" :> QPT "action" :> Get '[HTML] (RespHeaders (Html ()))
   , -- Sub-route groups
@@ -912,6 +921,8 @@ apiV1Server logger env tp pid =
     , issueArchive = ApiH.apiIssueArchive pid
     , issueUnarchive = ApiH.apiIssueUnarchive pid
     , issuesBulk = ApiH.apiIssuesBulk pid
+    , incidentsList = ApiH.apiIncidentsList pid
+    , incidentGet = ApiH.apiIncidentGet pid
     , -- Teams + Members
       teamsList = ApiH.apiTeamsList pid
     , teamGet = ApiH.apiTeamGet pid
@@ -1035,6 +1046,8 @@ cookieProtectedServer =
     , -- Command palette
       commandPaletteGet = CommandPalette.commandPaletteItemsH
     , commandPaletteRecentPost = CommandPalette.commandPaletteRecentPostH
+    , aiRoutinesGet = AIThreads.routinesGetH
+    , aiRoutineInstallPost = AIThreads.routineInstallPostH
     , aiThreadsGet = AIThreads.threadsGetH
     , aiThreadGet = AIThreads.threadGetH
     , aiThreadsPost = AIThreads.startThreadPostH
@@ -1043,6 +1056,10 @@ cookieProtectedServer =
     , aiThreadDelete = AIThreads.threadDeleteH
     , aiRoutinePost = AIThreads.routinePostH
     , aiRoutinePausePost = AIThreads.routinePausePostH
+    , aiRoutineCancelPost = AIThreads.routineCancelPostH
+    , aiRoutineResumePost = AIThreads.routineResumePostH
+    , aiRoutineDestinationPost = AIThreads.routineDestinationPostH
+    , aiRoutineDelete = AIThreads.routineDeleteH
     , -- Device auth
       deviceApprove = Auth.deviceApproveH
     , -- Sub-route handlers

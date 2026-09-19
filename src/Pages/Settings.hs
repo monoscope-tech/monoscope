@@ -1121,6 +1121,11 @@ data BillingData = BillingData
   { pid :: Projects.ProjectId
   , totalReqs :: Int64
   , totalBytes :: Int64
+  , aiInputTokens :: Int64
+  , aiOutputTokens :: Int64
+  , aiCostMicrousd :: Int64
+  , aiInputRate :: AIPrice
+  , aiOutputRate :: AIPrice
   , lastReported :: Text
   , lemonUrl :: Text
   , critical :: Text
@@ -1150,6 +1155,7 @@ data BillingCycle = BillingCycle
   -- ^ Exclusive.
   , requests :: Int64
   , bytes :: Int64
+  , aiCostMicrousd :: Int64
   , invoice :: Maybe BJ.StripeInvoice
   }
 
@@ -1190,28 +1196,32 @@ manageBillingGetH pid = do
   allDaily <- Projects.getDailyUsageBreakdown pid fetchStart
   let breakdownDay = utctDay breakdownStart
       dailyUsage = filter ((>= breakdownDay) . (.day)) allDaily
-      usageIn s e = let rows = filter (\u -> u.day >= s && u.day < e) allDaily in (sum (map (.requests) rows), sum [u.eventBytes + u.metricBytes | u <- rows], not (null rows))
+      usageIn s e = let rows = filter (\u -> u.day >= s && u.day < e) allDaily in (sum (map (.requests) rows), sum [u.eventBytes + u.metricBytes | u <- rows], sum (map (.aiCostMicrousd) rows), not (null rows))
       -- Stripe's invoice periods define the cycles when we have them: an estimate
       -- computed over a window Stripe never billed is a number the customer's
       -- invoice will never match. Otherwise pair each locally-derived cycle's
       -- start with the next-newer boundary (pastBoundaries is newest-first).
       pastCycles = case stripeM of
         Just _ ->
-          [ BillingCycle{start, end, requests, bytes, invoice = Just inv}
+          [ BillingCycle{start, end, requests, bytes, aiCostMicrousd = pastAICost, invoice = Just inv}
           | inv <- billed
           , let start = epochDay inv.periodStart
                 end = epochDay inv.periodEnd
-                (requests, bytes, _) = usageIn start end
+                (requests, bytes, pastAICost, _) = usageIn start end
           ]
         Nothing ->
-          [ BillingCycle{start, end, requests, bytes, invoice = Nothing}
+          [ BillingCycle{start, end, requests, bytes, aiCostMicrousd = pastAICost, invoice = Nothing}
           | (cEnd, cStart) <- zip pastBoundaries (drop 1 pastBoundaries)
           , let start = utctDay cStart
                 end = utctDay cEnd
-                (requests, bytes, hasRows) = usageIn start end
+                (requests, bytes, pastAICost, hasRows) = usageIn start end
           , hasRows
           ]
       currentInvoice = find (\i -> i.status /= "void" && epochDay i.periodEnd > utctDay cycleStart) $ foldMap (.invoices) stripeM
+      cycleRows = filter ((>= utctDay cycleStart) . (.day)) allDaily
+      aiInputTokens = sum $ map (.aiInputTokens) cycleRows
+      aiOutputTokens = sum $ map (.aiOutputTokens) cycleRows
+      aiCostMicrousd = sum $ map (.aiCostMicrousd) cycleRows
   let lastReported = fmtDate "%b %-d" project.usageLastReported
       bwconf = bw{pageTitle = "Billing", isSettingsPage = True}
       lemonUrl = envCfg.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
@@ -1219,7 +1229,7 @@ manageBillingGetH pid = do
       -- Free-tier display shows no provider even for a historically-paid-then-downgraded project
       -- (which keeps its stored provider so trial-reminder/auto-migration logic still works).
       provider = bool (Projects.projectProvider project) Projects.NoBillingProvider (Projects.isFreeTier project.paymentPlan)
-  addRespHeaders $ BillingGet $ PageCtx bwconf BillingData{pid, totalReqs = totalRequests, totalBytes, lastReported, lemonUrl, critical, paymentPlan = project.paymentPlan, enableFreetier = envCfg.enableFreetier, basicAuthEnabled = envCfg.basicAuthEnabled, provider, dailyUsage, cycleStart = utctDay cycleStart, cycleEnd, currentInvoice, pastCycles}
+  addRespHeaders $ BillingGet $ PageCtx bwconf BillingData{pid, totalReqs = totalRequests, totalBytes, aiInputTokens, aiOutputTokens, aiCostMicrousd, aiInputRate = envCfg.aiInputMicrousdPerMillionTokens, aiOutputRate = envCfg.aiOutputMicrousdPerMillionTokens, lastReported, lemonUrl, critical, paymentPlan = project.paymentPlan, enableFreetier = envCfg.enableFreetier, basicAuthEnabled = envCfg.basicAuthEnabled, provider, dailyUsage, cycleStart = utctDay cycleStart, cycleEnd, currentInvoice, pastCycles}
   where
     epochDay :: Int -> Day
     epochDay = utctDay . posixSecondsToUTCTime . fromIntegral
@@ -1268,12 +1278,13 @@ billingPage d = div_ [] do
       planPrice = show basePriceNum
       overageNum = overageReqs reqs
       overageCost = fromIntegral overageNum / 1_000_000 :: Double
+      aiCost = fromIntegral d.aiCostMicrousd / 1_000_000 :: Double
       -- Once Stripe has cut the invoice for this cycle, its total is the charge —
       -- quote it instead of re-deriving a number that can only disagree.
       estCost = case (isFree, d.currentInvoice) of
         (True, _) -> "$0"
         (_, Just inv) -> usdCents inv.total
-        _ -> usd (fromIntegral basePriceNum + overageCost)
+        _ -> usd (fromIntegral basePriceNum + overageCost + aiCost)
       cycleStartText = fmtDate "%b %-d" d.cycleStart
   settingsSection_ do
     settingsH2_ "Billing"
@@ -1296,10 +1307,16 @@ billingPage d = div_ [] do
         div_ [class_ "text-sm text-textWeak mt-0.5"] $ maybe "Estimated this cycle" (const "Stripe's current invoice total") d.currentInvoice
         let bytesSuffix = bool "" (" · " <> formatBytes d.totalBytes) (d.totalBytes > 0)
             usageLine =
-              if isFree || overageNum <= 0
-                then fmt (commaizeF reqs) <> " requests" <> bytesSuffix
-                else "$" <> planPrice <> " plan + " <> usd overageCost <> " usage (" <> fmt (commaizeF reqs) <> " requests" <> bytesSuffix <> ")"
+              fmt (commaizeF reqs)
+                <> " requests"
+                <> bytesSuffix
+                <> bool "" (" · " <> fmt (commaizeF $ d.aiInputTokens + d.aiOutputTokens) <> " estimated AI tokens") (d.aiInputTokens + d.aiOutputTokens > 0)
         div_ [class_ "text-xs text-textWeak mt-1 tabular-nums"] $ toHtml usageLine
+        when (d.aiInputTokens + d.aiOutputTokens > 0) $ div_ [class_ "mt-3 grid grid-cols-2 gap-x-6 gap-y-1 max-w-md text-xs"] do
+          span_ [class_ "text-textWeak"] "AI input / output"
+          span_ [class_ "text-right text-textStrong tabular-nums"] $ toHtml $ fmt (commaizeF d.aiInputTokens) <> " / " <> fmt (commaizeF d.aiOutputTokens)
+          span_ [class_ "text-textWeak"] "AI usage charge"
+          span_ [class_ "text-right text-textStrong tabular-nums"] $ toHtml $ bool (usd aiCost) "$0.00 on Free" isFree
       unless (T.null d.lastReported)
         $ div_ [class_ "text-xs text-textWeak"]
         $ toHtml ("Last reported " <> d.lastReported)
@@ -1311,7 +1328,7 @@ billingPage d = div_ [] do
         $ a_ [class_ "btn btn-sm btn-ghost text-textBrand", hxGet_ $ "/p/" <> d.pid.toText <> "/manage_subscription"] "Manage subscription"
 
     -- Daily breakdown
-    dailyUsageBreakdown_ isFree d.cycleStart d.dailyUsage
+    dailyUsageBreakdown_ isFree d.cycleStart d.aiInputRate d.aiOutputRate d.dailyUsage
 
     -- Past cycles
     pastCyclesSection_ isFree basePriceNum d.pastCycles
@@ -1345,15 +1362,16 @@ stickyTh_ cls = th_ [class_ ("font-medium px-3 py-2 sticky top-0 z-10 bg-fillWea
 -- | Per-day usage table for the last 30 days. Cost shown is the marginal
 -- contribution past the 20M-included tier ($1 per 1M), assuming chronological
 -- accumulation across the cycle. Days entirely below the threshold show "—".
-dailyUsageBreakdown_ :: Bool -> Day -> [Projects.DailyUsage] -> Html ()
-dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-strokeWeak pt-6 space-y-3"] do
+dailyUsageBreakdown_ :: Bool -> Day -> AIPrice -> AIPrice -> [Projects.DailyUsage] -> Html ()
+dailyUsageBreakdown_ isFree cycleStartDay inputRate outputRate rows = div_ [class_ "border-t border-strokeWeak pt-6 space-y-3"] do
   -- Header total is scoped to current cycle so it matches the headline
   -- "Estimated this cycle" figure. Pre-cycle rows are still rendered (dimmed)
   -- below for context, but excluded from the totals.
   let cycleRows = filter ((>= cycleStartDay) . (.day)) rows
       totalReqs = sum (map (.requests) cycleRows)
       totalBytes = sum [u.eventBytes + u.metricBytes | u <- cycleRows]
-      summaryRight = fmt (commaizeF totalReqs) <> " rows" <> bool "" (" · " <> formatBytes totalBytes) (totalBytes > 0)
+      totalAITokens = sum [u.aiInputTokens + u.aiOutputTokens | u <- cycleRows]
+      summaryRight = fmt (commaizeF totalReqs) <> " rows" <> bool "" (" · " <> formatBytes totalBytes) (totalBytes > 0) <> bool "" (" · " <> fmt (commaizeF totalAITokens) <> " AI tokens") (totalAITokens > 0)
   div_ [class_ "flex items-baseline justify-between"] do
     sectionLabel_ "Daily breakdown"
     span_ [class_ "text-xs text-textWeak tabular-nums"] $ toHtml @Text summaryRight
@@ -1361,6 +1379,7 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
     then emptyState_ def{size = ESCompact} "No usage recorded yet this cycle." ""
     else do
       let activeDays = length rows
+          cycleStartText = fmtDate "%b %-d" cycleStartDay
           maxDay = foldr (max . (.requests)) 1 rows
           hasMetrics = any ((> 0) . (.metrics)) rows
           ascending = sortWith (.day) rows
@@ -1376,11 +1395,6 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
                 )
                 ([], 0 :: Int64)
                 ascending
-          dayCostText prev cur
-            | isFree || dayOverage <= 0 = "—"
-            | otherwise = usd (fromIntegral dayOverage / 1_000_000)
-            where
-              dayOverage = overageReqs cur - overageReqs prev
       unless hasMetrics
         $ div_ [class_ "flex items-center gap-2 text-xs text-textWeak bg-fillWeak/40 border border-strokeWeak rounded-md px-3 py-2"] do
           span_ [class_ "text-textStrong"] "No metric ingestion this cycle."
@@ -1394,6 +1408,7 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
               stickyTh_ "text-left" "Date"
               stickyTh_ "text-right" "Events"
               stickyTh_ "text-right" "Metrics"
+              stickyTh_ "text-right" "AI tokens"
               stickyTh_ "text-left w-1/4" ""
               stickyTh_ "text-right" "Est. cost"
           let countCell :: Int64 -> Int64 -> Bool -> Html ()
@@ -1408,15 +1423,16 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
             forM_ withRunning \(u, prev, cur) -> do
               let pct = max 1 $ min 100 $ (u.requests * 100) `div` maxDay
                   preCycle = u.day < cycleStartDay
+                  dayOverage = overageReqs cur - overageReqs prev
               tr_ [class_ $ "border-t border-strokeWeak align-top" <> bool "" " opacity-50" preCycle, title_ $ bool "" "Previous cycle — shown for context" preCycle] do
                 td_ [class_ $ "px-3 py-2 " <> bool "text-textStrong" "text-textWeak" preCycle] $ toHtml $ fmtDate "%a %b %e" u.day
                 countCell u.eventBytes (max 0 (u.requests - u.metrics)) True
                 countCell u.metricBytes u.metrics False
+                countCell 0 (u.aiInputTokens + u.aiOutputTokens) False
                 td_ [class_ "px-3 py-2"] do
                   div_ [class_ "h-1.5 bg-fillWeak rounded-full overflow-hidden"] do
                     div_ [class_ "h-full bg-fillBrand-strong", style_ ("width: " <> show pct <> "%")] mempty
-                td_ [class_ "px-3 py-2 text-right text-textWeak"] $ toHtml $ dayCostText prev cur
-      let cycleStartText = fmtDate "%b %-d" cycleStartDay
+                td_ [class_ "px-3 py-2 text-right text-textWeak"] $ toHtml $ if isFree then "—" else usd (fromIntegral dayOverage / 1_000_000 + fromIntegral u.aiCostMicrousd / 1_000_000)
       when (activeDays < 30)
         $ div_ [class_ "text-xs text-textWeak"]
         $ toHtml
@@ -1437,6 +1453,12 @@ dailyUsageBreakdown_ isFree cycleStartDay rows = div_ [class_ "border-t border-s
               <> cycleStartText
               <> ". First 20M requests are included in the $29 plan price. Overage is $1 per 1M requests. "
               <> "Also included: 20M metric datapoints (then $1 per 10M) and 2,000 session replays (then $1 per 1,000)."
+              <> aiRateCopy
+  where
+    aiRateCopy
+      | aiPriceMicrousd inputRate == 0 && aiPriceMicrousd outputRate == 0 = " AI usage is tracked and currently included at no extra charge."
+      | otherwise = " AI is billed at " <> rate inputRate <> " per 1M estimated input tokens and " <> rate outputRate <> " per 1M estimated output tokens."
+    rate = usd . (/ 1_000_000) . fromIntegral . aiPriceMicrousd
 
 
 -- | Past billing cycles, newest first. A Stripe-billed cycle shows what Stripe
@@ -1474,7 +1496,7 @@ pastCyclesSection_ isFree basePrice cycles = div_ [class_ "border-t border-strok
               Just inv ->
                 let amount = toHtml (usdCents inv.total)
                  in maybe amount (\u -> a_ [class_ "link text-textBrand inline-flex items-center gap-1", href_ u, target_ "_blank", rel_ "noopener", title_ $ maybe "View this invoice on Stripe" ("Stripe invoice " <>) inv.number] $ amount <> faSprite_ "arrow-up-right-from-square" "regular" "w-3 h-3") inv.hostedUrl
-              Nothing -> toHtml $ bool (usd (fromIntegral basePrice + fromIntegral overage / 1_000_000)) "—" isFree
+              Nothing -> toHtml $ bool (usd (fromIntegral basePrice + fromIntegral overage / 1_000_000 + fromIntegral c.aiCostMicrousd / 1_000_000)) "—" isFree
   unless isFree
     $ div_ [class_ "text-xs text-textWeak"]
     $ bool

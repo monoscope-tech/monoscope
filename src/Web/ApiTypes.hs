@@ -42,6 +42,8 @@ module Web.ApiTypes (
   IssueApiSummary (..),
   IssueApiFull (..),
   IssueStatus (..),
+  -- Incidents
+  IncidentSummary (..),
   -- Teams
   TeamId,
   TeamSummary (..),
@@ -63,6 +65,7 @@ import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Projects.Dashboards qualified as Dashboards
@@ -534,6 +537,20 @@ data IssueApiFull = IssueApiFull
   deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake IssueApiFull
   deriving (ToSchema) via JsonValueSchema IssueApiFull
+
+
+data IncidentSummary = IncidentSummary
+  { id :: Incidents.EpisodeId
+  , projectId :: Projects.ProjectId
+  , issueId :: Maybe Issues.IssueId
+  , phase :: Incidents.EpisodePhase
+  , startedAt :: UTCTime
+  , lastEventAt :: UTCTime
+  , closedAt :: Maybe UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake IncidentSummary
+  deriving (ToSchema) via SnakeSchema IncidentSummary
 
 
 -- =============================================================================

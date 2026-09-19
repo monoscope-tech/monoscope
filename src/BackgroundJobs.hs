@@ -348,7 +348,7 @@ runAIRoutine authCtx =
     (enqueueAIRoutine authCtx)
     authCtx
   where
-    routinePrompt = "Run the recurring task defined in this conversation now. Report what you did and the result."
+    routinePrompt = "Run the recurring task defined in this conversation now. Return JSON with has_findings set to true only when the task found something worth reporting, plus the usual explanation and widgets."
     -- Stay comfortably inside the database lease, so recovery cannot execute the
     -- same routine while a legitimate worker is still running.
     routineRunTimeoutMicros = 20 * 60 * 1_000_000
@@ -366,20 +366,45 @@ runAIRoutineWith
 runAIRoutineWith timeoutMicros execute enqueueNext authCtx routineId scheduledAt = whenJustM (Issues.claimRoutine routineId scheduledAt) \routine -> do
   conversationM <- Issues.getConversation routine.projectId routine.conversationId
   let conversationType = maybe Issues.CTWeb (.conversationType) conversationM
-      config = (AI.defaultAgenticConfig routine.projectId){AI.conversationId = Just routine.conversationId, AI.conversationType = Just conversationType, AI.sourceConfig = Just authCtx.config, AI.useTimefusion = authCtx.env.enableTimefusionReads, AI.invocationMode = AI.ScheduledRoutine}
+      deliveryContext = case routine.destination of
+        Issues.DestinationSlack -> Just "\nROUTINE DELIVERY\nSend a concise copy of reportable findings to the project's configured Slack channel. Do not send a message when there are no findings.\n"
+        Issues.DestinationConversation -> Nothing
+      config = (AI.defaultAgenticConfig routine.projectId){AI.conversationId = Just routine.conversationId, AI.conversationType = Just conversationType, AI.sourceConfig = Just authCtx.config, AI.customContext = deliveryContext, AI.useTimefusion = authCtx.env.enableTimefusionReads, AI.invocationMode = AI.ScheduledRoutine routineId routine.allowActions}
   outcome <- Timeout.timeout timeoutMicros $ tryAny do
-    execute config >>= \case
-      Left err -> Issues.insertChatMessage routine.projectId routine.conversationId Issues.ChatExecutionEvent ("Routine failed: " <> err) Nothing Nothing
-      Right answer -> void $ Bots.storeAgenticResponse routine.projectId routine.conversationId answer
+    result <- execute config
+    Issues.routineRunCancelled routineId routine.claimedAt >>= \case
+      True -> pure (Issues.CompletedCancelled, Nothing, Nothing, Nothing)
+      False -> case result of
+        Left err -> do
+          Issues.insertChatMessage routine.projectId routine.conversationId Issues.ChatExecutionEvent ("Routine failed: " <> err) Nothing Nothing
+          pure (Issues.CompletedFailed, Nothing, Nothing, Just err)
+        Right answer
+          | routine.reportWhen == Issues.ReportFindings && not (AI.agenticResponseHasFindings answer) ->
+              pure (Issues.CompletedNoFindings, Nothing, Just $ AE.toJSON answer.toolCalls, Nothing)
+          | otherwise -> do
+              void $ Bots.storeAgenticResponse routine.projectId routine.conversationId answer
+              pure (Issues.CompletedSucceeded, Just $ AE.toJSON answer, Just $ AE.toJSON answer.toolCalls, Nothing)
   case outcome of
     Nothing -> do
-      Log.logAttention "AI routine run timed out" $ AE.object ["routine_id" AE..= routineId, "timeout_micros" AE..= timeoutMicros]
-      void $ tryAny $ Issues.insertChatMessage routine.projectId routine.conversationId Issues.ChatExecutionEvent "Routine timed out. It will run again at the next interval." Nothing Nothing
+      ifM
+        (Issues.routineRunCancelled routineId routine.claimedAt)
+        (recordRun routine Issues.CompletedCancelled Nothing Nothing Nothing)
+        do
+          Log.logAttention "AI routine run timed out" $ AE.object ["routine_id" AE..= routineId, "timeout_micros" AE..= timeoutMicros]
+          recorded <- tryAny $ Issues.insertChatMessage routine.projectId routine.conversationId Issues.ChatExecutionEvent "Routine timed out. It will run again at the next interval." Nothing Nothing
+          whenLeft_ recorded \err -> Log.logAttention "AI routine timeout event was not recorded" $ AE.object ["error" AE..= show @Text err]
+          recordRun routine Issues.CompletedTimedOut Nothing Nothing (Just "Routine execution timed out")
     Just (Left err) -> do
       Log.logAttention "AI routine run failed" $ AE.object ["routine_id" AE..= routineId, "error" AE..= show @Text err]
-      void $ tryAny $ Issues.insertChatMessage routine.projectId routine.conversationId Issues.ChatExecutionEvent "Routine failed unexpectedly. It will run again at the next interval." Nothing Nothing
-    Just (Right ()) -> pass
+      recorded <- tryAny $ Issues.insertChatMessage routine.projectId routine.conversationId Issues.ChatExecutionEvent "Routine failed unexpectedly. It will run again at the next interval." Nothing Nothing
+      whenLeft_ recorded \insertErr -> Log.logAttention "AI routine failure event was not recorded" $ AE.object ["error" AE..= show @Text insertErr]
+      recordRun routine Issues.CompletedFailed Nothing Nothing (Just $ show @Text err)
+    Just (Right (status, findings, actions, err)) -> recordRun routine status findings actions err
   whenJustM (Issues.completeRoutine routineId scheduledAt routine.claimedAt) $ enqueueNext routineId
+  where
+    recordRun routine status findings actions err = do
+      recorded <- tryAny $ Issues.finishRoutineRun routine.runId routine.claimedAt status findings actions err
+      whenLeft_ recorded \recordErr -> Log.logAttention "AI routine run result was not recorded" $ AE.object ["routine_id" AE..= routineId, "error" AE..= show @Text recordErr]
 
 
 -- | Post the daily internal admin digest (usage, new projects, issues, alerts, job health) to Discord.
@@ -735,7 +760,7 @@ reportProjectUsage authCtx pid =
                   Projects.LemonSqueezyMeter _ -> qty
                   Projects.StripeMeter _ _ -> qty
                 Left _ -> pure $ Projects.splitUsageIntoChunks kind qty
-          Log.logInfo "Usage to report" ("project_id", pid.toText, "events", totals.events, "event_bytes", totals.eventBytes, "metrics", totals.metrics, "metric_bytes", totals.metricBytes, "replays", totals.replays, "chunks", length chunks)
+          Log.logInfo "Usage to report" $ AE.object ["project_id" AE..= pid.toText, "events" AE..= totals.events, "event_bytes" AE..= totals.eventBytes, "metrics" AE..= totals.metrics, "metric_bytes" AE..= totals.metricBytes, "replays" AE..= totals.replays, "ai_input_tokens" AE..= totals.aiInputTokens, "ai_output_tokens" AE..= totals.aiOutputTokens, "ai_cost_microusd" AE..= totals.aiCostMicrousd, "chunks" AE..= length chunks]
           Projects.recordUsageWindow pid wStart nowU totals chunks
 
           -- 2) Drain any pending/failed chunks (new + backlog from previous runs).

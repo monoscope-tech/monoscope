@@ -327,7 +327,7 @@ processAIQueryWithMode sourceConfig useTf invocationMode access pid userQuery co
         (_, Nothing) -> pure $ AI.parseAgenticResponse answer
         (_, Just convId) -> AI.requireAgentAccess access pid >> storeAgenticResponse pid convId answer
       whenJust conversationId \convId ->
-        AI.ensureConversationTitle pid convId userQuery answer.response (maybe model (.openaiSmallModel) sourceConfig) apiKey
+        AI.ensureConversationTitle sourceConfig pid convId userQuery answer.response (maybe model (.openaiSmallModel) sourceConfig) apiKey
       pure parsed
   whenLeft_ result \err -> Log.logAttention "processAIQuery failed" $ AE.object ["error" AE..= err, "userQuery" AE..= userQuery, "projectId" AE..= pid.toText]
   pure result

@@ -213,6 +213,9 @@ toolNameOverrides =
     , (("POST", "/issues/{issue_id}/archive"), "archive_issue")
     , (("POST", "/issues/{issue_id}/unarchive"), "unarchive_issue")
     , (("POST", "/issues/bulk"), "bulk_issues")
+    , -- Incidents
+      (("GET", "/incidents"), "list_incidents")
+    , (("GET", "/incidents/{incident_id}"), "get_incident")
     , -- Teams
       (("GET", "/teams"), "list_teams")
     , (("POST", "/teams"), "create_team")
@@ -508,7 +511,7 @@ searchEventsNL =
         | T.null inputT -> pure $ toolError "input must be non-empty"
         | otherwise -> do
             authCtx <- Reader.ask @AuthContext
-            AI.runNlSearch pid authCtx.env.enableTimefusionReads (textArg "timezone" args) inputT authCtx.env.openaiModel authCtx.env.openaiApiKey
+            AI.runNlSearch pid authCtx.env (textArg "timezone" args) inputT
               <&> either (\err -> toolError ("AI translation failed: " <> err)) okResult
 
 

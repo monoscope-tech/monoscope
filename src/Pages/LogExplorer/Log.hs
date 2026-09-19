@@ -1895,7 +1895,7 @@ aiSearchH pid requestBody = do
     addErrorToast "Please enter a search query" Nothing
     throwError Servant.err400{Servant.errBody = "Empty input"}
 
-  AI.runNlSearch pid envCfg.enableTimefusionReads timezoneM inputText envCfg.openaiModel envCfg.openaiApiKey >>= \case
+  AI.runNlSearch pid envCfg timezoneM inputText >>= \case
     Left errMsg -> do
       addErrorToast "AI search failed" (Just errMsg)
       throwError Servant.err502{Servant.errBody = encodeUtf8 errMsg}
