@@ -1700,7 +1700,7 @@ code, pre, .code, .monospace {
 .badge-postgres, .badge-mysql, .badge-redis, .badge-mongo, .badge-mongodb,
 .badge-elastic, .badge-elasticsearch, .badge-cassandra, .badge-dynamodb,
 .badge-memcached, .badge-sqlite, .badge-clickhouse {
-  @apply bg-fillWeak text-textStrong border;
+  @apply bg-bgRaised text-textStrong border;
   border-color: var(--db-color, var(--color-strokeStrong));
 }
 .badge-postgres, .badge-dynamodb, .badge-memcached { --db-color: var(--color-strokeBrand-strong); }
