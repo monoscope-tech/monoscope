@@ -690,7 +690,7 @@ bodyWrapper bcfg child = do
             div_ [class_ "border-b border-base-300 px-4 py-3"]
               $ label_ [Lucid.for_ "ai-thread-rename-input", class_ "flex flex-col gap-1.5 text-xs font-medium text-textStrong"] do
                 span_ "Chat title"
-                input_ [id_ "ai-thread-rename-input", name_ "title", maxlength_ "100", required_ "required", autofocus_, autocomplete_ "off", class_ "no-focus-ring w-full bg-transparent py-2 text-sm font-normal outline-none placeholder:text-textDisabled", placeholder_ "Production changes today"]
+                input_ [id_ "ai-thread-rename-input", name_ "conversationTitle", maxlength_ "100", required_ "required", autofocus_, autocomplete_ "off", class_ "no-focus-ring w-full bg-transparent py-2 text-sm font-normal outline-none placeholder:text-textDisabled", placeholder_ "Production changes today"]
             div_ [class_ "flex justify-end gap-1.5 p-2"] do
               button_ [type_ "button", class_ "btn btn-sm btn-ghost cursor-pointer shadow-none active:scale-[0.96] transition-transform", onclick_ "this.closest('dialog').close()"] "Cancel"
               button_ [type_ "submit", class_ "btn btn-sm btn-primary cursor-pointer shadow-none active:scale-[0.96] transition-transform"] "Save"
