@@ -6,33 +6,6 @@
         "since": "2H",
         "to": null
     },
-    "tool_calls": [
-        {
-            "args": {
-                "limit": 20,
-                "query": "level == \"ERROR\" | summarize count() by bin_auto(timestamp)"
-            },
-            "name": "run_query",
-            "raw_data": {
-                "count": 2,
-                "data": [
-                    [
-                        1735689600,
-                        1
-                    ],
-                    [
-                        1735686000,
-                        1
-                    ]
-                ],
-                "headers": [
-                    "timestamp",
-                    "count_"
-                ]
-            },
-            "result_preview": "Results (2 rows):\n  1.7356896e9 | 1.0\n  1.735686e9 | 1.0"
-        }
-    ],
     "visualization": "timeseries",
     "widgets": [
         {
