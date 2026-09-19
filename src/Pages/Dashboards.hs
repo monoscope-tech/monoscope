@@ -1803,7 +1803,7 @@ dashboardsGet_ :: DashboardsGetD -> Html ()
 dashboardsGet_ dg = do
   unless dg.embedded $ Components.modalWith_ "newDashboardMdl" def{autoOpen = dg.showNew} Nothing $ form_
     [ class_ "flex  h-[90vh] gap-4 group/md"
-    , hxPost_ ""
+    , hxPost_ $ "/p/" <> dg.projectId.toText <> "/dashboards"
     , hxVals_ "js:{ teams: window.getTagValues('#teamHandlesInput') }"
     ]
     do
