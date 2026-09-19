@@ -6,12 +6,14 @@ import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.Lens (key, _Array, _Number, _Object, _String)
 import Data.Default (def)
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Map qualified as Map
 import Data.OpenApi (OpenApi, info, title, version)
 import Data.Text qualified as T
 import Data.Time (addUTCTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
+import Hasql.Interpolate qualified as HI
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.ProjectMembers qualified as PM
 import Models.Projects.Projects qualified as Projects
@@ -19,6 +21,7 @@ import Models.Telemetry.Schema qualified as Schema
 import Pages.Charts.Charts qualified as Charts
 import Pages.Charts.Types (MetricsData (..))
 import Pages.LogExplorer.Log qualified as Log
+import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Parser.Expr qualified as ParserExpr
 import Pkg.TestUtils
 import Relude
@@ -116,6 +119,8 @@ spec = around withTestResources do
               , "/issues/{issue_id}/archive"
               , "/issues/{issue_id}/unarchive"
               , "/issues/bulk"
+              , "/incidents"
+              , "/incidents/{incident_id}"
               , "/endpoints"
               , "/endpoints/{endpoint_id}"
               , "/log_patterns"
@@ -497,6 +502,23 @@ spec = around withTestResources do
         res <- runAsBase tr (ApiH.apiLogPatternsBulk testPid ApiT.BulkAction{ApiT.action = "acknowledge", ApiT.ids = [], ApiT.durationMinutes = Nothing})
         res.succeeded `shouldBe` []
 
+      it "incidents list and get stay inside the authorized project" $ \tr -> do
+        otherPid <- createTestProject tr "Other incident API project"
+        ownId <- UUIDId <$> UUIDV4.nextRandom
+        foreignId <- UUIDId <$> UUIDV4.nextRandom
+        sourceId <- UUIDV4.nextRandom
+        runAsBase tr
+          $ Hasql.interpExecute_
+            [HI.sql|INSERT INTO apis.incident_episodes
+              (id, project_id, source_kind, source_id, phase, started_at, last_event_at)
+              VALUES (#{ownId}, #{testPid}, 'issue', #{sourceId}, 'active', #{frozenTime}, #{frozenTime}),
+                     (#{foreignId}, #{otherPid}, 'issue', #{sourceId}, 'active', #{frozenTime}, #{frozenTime})|]
+        listed <- runAsBase tr $ ApiH.apiIncidentsList testPid Nothing Nothing
+        map (.id) listed `shouldBe` [ownId]
+        (.id) <$> runAsBase tr (ApiH.apiIncidentGet testPid ownId) `shouldReturn` ownId
+        (runAsBase tr (ApiH.apiIncidentGet testPid foreignId) >>= evaluateWHNF_)
+          `shouldThrow` anyException
+
     describe "Plan B — teams CRUD" do
       it "create → get → patch → delete round-trip" $ \tr -> do
         let runB :: ATBaseCtx a -> IO a
@@ -643,6 +665,8 @@ spec = around withTestResources do
         Map.member "get_dashboard_yaml" reg `shouldBe` True
         Map.member "get_schema" reg `shouldBe` True
         Map.member "whoami" reg `shouldBe` True
+        Map.member "list_incidents" reg `shouldBe` True
+        Map.member "get_incident" reg `shouldBe` True
 
       it "does not expose the MCP endpoint as its own tool" $ \_tr -> do
         Map.member "post_mcp" reg `shouldBe` False

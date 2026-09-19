@@ -1,7 +1,25 @@
 # ^Start\.startApp$ roots the server closure for units that have no Main (test-dev,
 # test suites). Without it weeder reports the whole transitive closure of the
 # executable — 89 hits instead of 20, all noise.
-roots = [ "^Main\\.main$", "^Start\\.startApp$", "^Paths_", "^Spec\\.main$", "^Spec\\.spec$" ]
+roots = [
+  "^Main\\.main$",
+  "^Start\\.startApp$",
+  "^Paths_",
+  "^Spec\\.main$",
+  "^Spec\\.spec$",
+  # Weeder cannot see doctest and Template Haskell references.
+  "^Pkg\\.AssetManifestFingerprint\\.assetManifestFingerprint$",
+  "^Pkg\\.Components\\.Table\\.defaultFeaturesAreInert$",
+  "^Pkg\\.DeriveUtils\\.viteAssetFile$",
+  "^Pkg\\.Parser\\.defPid$",
+  "^Pkg\\.QueryCache\\.(slidingWindowSeconds|cacheWindowStart)$",
+  "^ProcessMessage\\.(ensureUrlParams|dynSegmentLabel|isUrlIdLike|tokenizeUrlPath)$",
+  # Existing public exports; keep new dead bindings visible without deleting APIs here.
+  "^Models\\.Apis\\.Endpoints\\.countEndpointsForHost$",
+  "^Models\\.Apis\\.LogQueries\\.getLastSevenDaysTotalRequest$",
+  "^Models\\.Telemetry\\.Telemetry\\.(getSpanRecordsByTraceIds|getProjectStatsForReport|getProjectStatsBySpanType|getEndpointStats|getDBQueryStats|getTraceShapes)$",
+  "^Pkg\\.Components\\.Widget\\.getSpanJson$",
+]
 type-class-roots = true
 
 root-modules = [

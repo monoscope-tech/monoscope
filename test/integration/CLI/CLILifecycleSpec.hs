@@ -75,6 +75,11 @@ spec = around withTestResources do
       v <- jsonOut out
       v `shouldHaveKeys` ["project", "project_id"]
 
+    it "incidents list is available through the real parser and API route" \tr -> do
+      (ec, out) <- runCLILifecycle tr ["--json", "incidents", "list"]
+      ec `shouldBe` ExitSuccess
+      jsonOut out >>= (`shouldHaveKeys` ["data", "pagination"])
+
   describe "monitors-as-code lifecycle" do
     it "apply is idempotent by title; mute/unmute/delete round-trip" \tr -> do
       let yamlPath = "/tmp/monoscope-lifecycle-monitor.yaml"

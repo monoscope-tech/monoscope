@@ -1,4 +1,4 @@
-module System.Config (EnvConfig (..), TwilioContentSid, mkTwilioContentSid, twilioContentSidText, AuthContext (..), CodeBlobKey, getAppContext, configToEnv, DeploymentEnv (..), runPendingMigrations) where
+module System.Config (EnvConfig (..), AIPrice, aiPriceMicrousd, TwilioContentSid, mkTwilioContentSid, twilioContentSidText, AuthContext (..), CodeBlobKey, getAppContext, configToEnv, DeploymentEnv (..), runPendingMigrations) where
 
 import Colourista.IO (blueMessage)
 import Control.Exception.Safe qualified as Safe
@@ -145,6 +145,8 @@ data EnvConfig = EnvConfig
     enableErrorMaskPromotion :: Bool
   , openaiSmallModel :: Text
   , openaiBaseUrl :: Text
+  , aiInputMicrousdPerMillionTokens :: AIPrice
+  , aiOutputMicrousdPerMillionTokens :: AIPrice
   , hostUrl :: Text
   , monoscopePusherServiceAccountB64 :: Text
   , twilioAccountSid :: Text
@@ -306,6 +308,8 @@ instance DefConfig EnvConfig where
       , enableErrorGroupAutoApply = False
       , enableErrorMaskPromotion = False
       , openaiSmallModel = "gpt-5.6-luna#low"
+      , aiInputMicrousdPerMillionTokens = AIPrice 0
+      , aiOutputMicrousdPerMillionTokens = AIPrice 0
       , kafkaGroupConcurrency = 4
       , enableKafkaDeadLetterService = True
       , enableOtlpGrpcService = True
@@ -342,6 +346,21 @@ instance DefConfig EnvConfig where
 instance Var [Text] where
   fromVar = Just . T.splitOn "," . toText
   toVar = toString . T.intercalate ","
+
+
+newtype AIPrice = AIPrice {aiPriceMicrousd :: Int}
+  deriving stock (Eq, Generic, Show)
+
+
+instance Default AIPrice where
+  def = AIPrice 0
+
+
+instance Var AIPrice where
+  fromVar value = do
+    amount <- readMaybe value
+    AIPrice amount <$ guard (amount >= 0)
+  toVar = show . aiPriceMicrousd
 
 
 -- | A validated Twilio Content Template SID: "HX" followed by 32 hexadecimal digits.

@@ -17,6 +17,7 @@ module Models.Apis.Incidents (
   recordIncidentEvent,
   recordIncidentEventTx,
   getEpisode,
+  listEpisodes,
   threadConversationId,
   InvestigationContext (..),
   slackInvestigationContext,
@@ -51,6 +52,7 @@ import Data.Aeson.KeyMap qualified as KM
 import Data.Char (isDigit)
 import Data.Effectful.Hasql (executeTx, oneTx, queryTx)
 import Data.Effectful.Hasql qualified as Hasql
+import Data.OpenApi (ToParamSchema, ToSchema)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
 import Data.UUID qualified as UUID
@@ -66,6 +68,7 @@ import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Relude
+import Servant (FromHttpApiData)
 import System.Types (DB)
 import UnliftIO.Exception (throwIO)
 
@@ -91,8 +94,8 @@ data IncidentDelivery = PublishIncident | RefreshIncident
 
 
 data EpisodePhase = EpisodeActive | EpisodeRecovered | EpisodeResolved
-  deriving stock (Eq, Generic, Read, Show)
-  deriving (AE.ToJSON, HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "Episode" EpisodePhase
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving (AE.FromJSON, AE.ToJSON, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToParamSchema, ToSchema) via WrappedEnumSC 'Nothing "Episode" EpisodePhase
 
 
 data Episode = Episode
@@ -105,7 +108,7 @@ data Episode = Episode
   , closedAt :: Maybe UTCTime
   }
   deriving stock (Eq, Generic, Show)
-  deriving anyclass (HI.DecodeRow)
+  deriving anyclass (AE.ToJSON, HI.DecodeRow)
 
 
 data SlackDestination = SlackDestination {teamId :: Text, channelId :: Text}
@@ -219,6 +222,16 @@ noEarlierUnsettledDelivery =
 
 getEpisode :: DB es => Projects.ProjectId -> EpisodeId -> Eff es (Maybe Episode)
 getEpisode pid eid = Hasql.interpOne (episodeSelect <> [HI.sql|WHERE project_id = #{pid} AND id = #{eid}|])
+
+
+-- | Recent incident episodes in one project. A missing phase includes all phases.
+listEpisodes :: DB es => Projects.ProjectId -> Maybe EpisodePhase -> Int -> Eff es [Episode]
+listEpisodes pid phase limit =
+  Hasql.interp
+    $ episodeSelect
+    <> [HI.sql|WHERE project_id = #{pid}|]
+    <> foldMap (\p -> [HI.sql| AND phase = #{p}|]) phase
+    <> [HI.sql| ORDER BY started_at DESC, id DESC LIMIT #{max 1 $ min 100 limit}|]
 
 
 -- | The conversation a Slack thread belongs to.

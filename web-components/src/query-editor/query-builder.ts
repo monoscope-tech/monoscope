@@ -40,7 +40,7 @@ export class QueryBuilderComponent extends LitElement {
   @state() private filteredGroupByFields: FieldOption[] = [];
   @state() private enableBinning: boolean = false;
   @state() private enableAutoBin: boolean = false;
-  @state() private binValue: number = 5;
+  @state() private binValue: string = '5m';
 
   // Available aggregation functions
   private readonly aggFunctions = ['count', 'sum', 'avg', 'min', 'max', 'median', 'stdev', 'range', 'p50', 'p75', 'p90', 'p95', 'p99'];
@@ -1178,18 +1178,18 @@ export class QueryBuilderComponent extends LitElement {
                             <select
                               class="select select-xs bg-fillWeaker border-none p-0 mx-1 focus:outline-none"
                               @change="${(e: Event) => {
-                                this.binValue = parseInt((e.target as HTMLSelectElement).value) || 5;
+                                this.binValue = (e.target as HTMLSelectElement).value || '5m';
                               }}"
                             >
-                              <option value="5">5</option>
-                              <option value="10">10</option>
-                              <option value="20">20</option>
-                              <option value="30">30</option>
-                              <option value="60">1h</option>
-                              <option value="120">2h</option>
-                              <option value="360">6h</option>
-                              <option value="720">12h</option>
-                              <option value="1440">1d</option></select
+                              <option value="5m">5m</option>
+                              <option value="10m">10m</option>
+                              <option value="20m">20m</option>
+                              <option value="30m">30m</option>
+                              <option value="1h">1h</option>
+                              <option value="2h">2h</option>
+                              <option value="6h">6h</option>
+                              <option value="12h">12h</option>
+                              <option value="1d">1d</option></select
                             >)</span
                           >
                         </label>

@@ -1358,7 +1358,7 @@ spec = around withTestResources do
             [body] -> T.isInfixOf "poolSize = 5" body `shouldBe` False
             _ -> fail "Expected one source tool response"
 
-      it "pages linked runbook documents at a pinned commit and refuses mutable refs, traversal paths and unauthorized callers" \tr -> do
+      it "pages linked runbook documents at a pinned commit and refuses mutable refs and traversal paths" \tr -> do
         setupLinkedSlackData tr testPid "T_RUNBOOK"
         let cfg = tr.trATCtx.config
             revision = T.replicate 40 "c"
@@ -1376,6 +1376,7 @@ spec = around withTestResources do
                   | suffix == "/git/trees/" <> revision <> "?recursive=1" -> Just $ tree names
                   | suffix == "/commits/" <> revision -> Just $ AE.encode $ AE.object ["sha" AE..= revision]
                   | suffix == "/contents/" <> runbookPath <> "?ref=" <> revision -> Just $ AE.encode $ AE.object ["content" AE..= extractBase64 (B64.encodeBase64 (encodeUtf8 document))]
+                  | suffix == "/contents/checkout.py?ref=" <> revision -> Just $ AE.encode $ AE.object ["content" AE..= extractBase64 (B64.encodeBase64 ("poolSize = 5\n" :: ByteString))]
                 _ -> Nothing
         Just credential <- runQueryEffect tr $ GitSync.upsertGitHubCredential (encodeUtf8 cfg.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing "acme" Nothing (Just "ghp_runbook_fixture")
         runQueryEffect tr $ CodeContext.insertCodeMapping testPid credential.id (Git.RepoRef "acme" "checkout-service" "main") (Just "checkout") "/srv/app/" ""
@@ -1430,22 +1431,71 @@ spec = around withTestResources do
         writeIORef listing ["docs/runbooks/service-" <> show n <> ".md" | n <- [1 .. 21 :: Int]]
         (_, capped) <- runTestBgRecordingHTTP frozenTime tr $ transport $ CodeContext.listRunbooks cfg testPid (CodeContext.RunbookQuery mappingId revision)
         rightToMaybe (fmap (\page -> (length page.entries, page.limitReached)) capped) `shouldBe` Just (20, True)
-        refused <- newIORef []
-        let unauthorized = interpose @ELLM.LLM \_ -> \case
+        serviceEvidence <- newIORef []
+        let serviceConversation = interpose @ELLM.LLM \_ -> \case
               ELLM.CallAgenticChat history _ _ -> do
                 let results = [Chat.content message | message <- toList history, Chat.role message == Chat.Tool]
-                writeIORef refused results
-                pure
-                  $ Right
-                  $ if null results
-                    then Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "runbook" "function" (Chat.ToolFunction "read_runbook" $ fromList [("mapping_id", AE.toJSON mappingId), ("revision", AE.String revision), ("path", AE.String runbookPath)])]}
-                    else Chat.Message Chat.Assistant "The runbook was not read." Chat.defaultMessageData
+                writeIORef serviceEvidence results
+                pure $ Right $ case results of
+                  [] -> Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "runbook" "function" (Chat.ToolFunction "read_runbook" $ fromList [("mapping_id", AE.toJSON mappingId), ("revision", AE.String revision), ("path", AE.String runbookPath)])]}
+                  [_] -> Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "source" "function" (Chat.ToolFunction "get_code_context" $ fromList [("path", AE.String "/srv/app/checkout.py"), ("revision", AE.String revision), ("service", AE.String "checkout")])]}
+                  _ -> Chat.Message Chat.Assistant "The runbook and source were read." Chat.defaultMessageData
               ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
               ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
-        (denied, outcome) <- runTestBgRecordingHTTP frozenTime tr $ transport $ unauthorized $ AI.runAgenticChatWithHistory (AI.defaultAgenticConfig testPid){AI.sourceConfig = Just cfg} "Read the checkout runbook." "model" "key"
+        (serviceRequests, outcome) <- runTestBgRecordingHTTP frozenTime tr $ transport $ serviceConversation $ AI.runAgenticChatWithHistory (AI.defaultAgenticConfig testPid){AI.sourceConfig = Just cfg} "Read the checkout runbook." "model" "key"
         outcome `shouldSatisfy` isRight
-        denied `shouldBe` []
-        readIORef refused >>= (`shouldBe` ["Runbook reads require an authorized Slack investigation, a repository mapping ID, full commit hash and document path."])
+        map fst serviceRequests `shouldBe` map ("https://api.github.com/repos/acme/checkout-service/contents/" <>) [runbookPath <> "?ref=" <> revision, "checkout.py?ref=" <> revision]
+        readIORef serviceEvidence >>= (`shouldSatisfy` \case [runbook, source] -> T.isInfixOf "step 100" runbook && T.isInfixOf "poolSize = 5" source && not (T.isInfixOf "ghp_runbook_fixture" $ runbook <> source); _ -> False)
+
+      it "reads project issues and incidents without accepting a caller-supplied project scope" \tr -> do
+        otherPid <- createTestProject tr "Other agent tools project"
+        let createIssue pid title = withResource tr.trPool \conn -> do
+              [PGS.Only iid] <-
+                PGS.query
+                  conn
+                  [sql|INSERT INTO apis.issues (project_id, issue_type, target_hash, title, service, environment)
+                    VALUES (?, 'runtime_exception', gen_random_uuid()::text, ?, 'checkout', 'production') RETURNING id|]
+                  (pid, title :: Text)
+              pure iid
+            record pid iid = do
+              payload <- maybe (fail "Expected object Slack payload") pure $ Incidents.slackPayload $ AE.object ["text" AE..= ("Observed checkout failures" :: Text)]
+              runTestBgNoReset tr
+                $ Incidents.recordIncidentEvent
+                  Incidents.IncidentUpdate
+                    { projectId = pid
+                    , source = Incidents.IssueIncident iid
+                    , observedAt = frozenTime
+                    , change = Incidents.IncidentAlert
+                    , delivery = Incidents.PublishIncident
+                    , issueId = Just iid
+                    , rootPayload = payload
+                    , replyPayload = payload
+                    , destinations = []
+                    }
+        ownIssue <- createIssue testPid "Checkout failure"
+        foreignIssue <- createIssue otherPid "Foreign project failure"
+        Incidents.Recorded ownIncident _ <- record testPid ownIssue
+        void $ record otherPid foreignIssue
+        observed <- newIORef ([] :: [Text])
+        let provider = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat history _ _ -> do
+                let results = [Chat.content message | message <- toList history, Chat.role message == Chat.Tool]
+                writeIORef observed results
+                pure $ Right $ case length results of
+                  0 -> Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "issues" "function" (Chat.ToolFunction "list_issues" $ one ("project_id", AE.toJSON otherPid))]}
+                  1 -> Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "incidents" "function" (Chat.ToolFunction "list_incidents" $ one ("project_id", AE.toJSON otherPid))]}
+                  2 -> Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "issue" "function" (Chat.ToolFunction "get_issue" $ one ("issue_id", AE.toJSON ownIssue))]}
+                  3 -> Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "incident" "function" (Chat.ToolFunction "get_incident" $ one ("incident_id", AE.toJSON ownIncident.id))]}
+                  _ -> Chat.Message Chat.Assistant "Project operations reviewed." Chat.defaultMessageData
+              ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
+              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+        result <- runTestBg frozenTime tr $ provider $ AI.runAgenticChatWithHistory (AI.defaultAgenticConfig testPid) "Review project operations" "model" "key"
+        result `shouldSatisfy` isRight
+        outputs <- readIORef observed
+        length outputs `shouldBe` 4
+        outputs `shouldSatisfy` all (not . T.isInfixOf "Foreign project failure")
+        outputs `shouldSatisfy` any (T.isInfixOf "Checkout failure")
+        outputs `shouldSatisfy` any (T.isInfixOf ownIncident.id.toText)
 
       it "finds earlier related episodes with explicit match evidence and recorded outcomes inside the authorized project" \tr -> do
         setupLinkedSlackData tr testPid "T_RELATED"

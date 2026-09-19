@@ -85,6 +85,15 @@ dailyUsage tr pid = withResource tr.trPool \conn ->
     (PGS.Only pid)
 
 
+dailyAIUsage :: TestResources -> Projects.ProjectId -> IO [(Int, Int, Int)]
+dailyAIUsage tr pid = withResource tr.trPool \conn ->
+  PGS.query
+    conn
+    [sql| SELECT total_ai_input_tokens::INT, total_ai_output_tokens::INT, total_ai_cost_microusd::INT
+            FROM apis.daily_usage WHERE project_id = ? ORDER BY window_end |]
+    (PGS.Only pid)
+
+
 -- | Stripe meter events are addressed by customer + meter event name, so a
 -- project without a customer id is unaddressable however many meters are on.
 setStripeCustomer :: TestResources -> Projects.ProjectId -> Maybe Text -> IO ()
@@ -227,10 +236,10 @@ spec = around (\f -> withTestResources \tr -> createTestProject tr "report-usage
       -- double-submits chunks that already succeeded.
       lastReportedOf tr pid >>= \t -> t `shouldSatisfy` (<= frozenTime)
 
-  -- Pricing v2: events, metric datapoints and session replays are metered and
+  -- Events, metric datapoints, session replays and AI usage are metered and
   -- priced separately. Each is counted always; each submits only once its meter
   -- is confirmed to exist provider-side.
-  describe "ReportUsage / three metered dimensions" do
+  describe "ReportUsage / metered dimensions" do
     -- Paid Stripe project that is fully addressable: chunks reach the drain's
     -- success branch (against the recording HTTP interpreter, never the network).
     let paid tr pid = do
@@ -313,6 +322,21 @@ spec = around (\f -> withTestResources \tr -> createTestProject tr "report-usage
 
       dailyUsage tr pid >>= (`shouldBe` [(0, 0, 2)])
       meteredSubmissions tr pid >>= (`shouldBe` [("session_replays", 2, "submitted")])
+
+    it "records tokens and bills AI-only usage in micro-dollar units" \(tr0, pid) -> do
+      let tr = tr0
+      runTestBg frozenTime tr $ Projects.recordAIUsage pid "test-model" Projects.UsageRoutine $ Projects.AIUsageTotals 1200 300 37
+      paid tr pid
+
+      reqs <- runReportRecording tr pid
+
+      dailyAIUsage tr pid >>= (`shouldBe` [(1200, 300, 37)])
+      meteredSubmissions tr pid >>= (`shouldBe` [("ai_usage", 37, "submitted")])
+      case T.replace "%5B" "[" . T.replace "%5D" "]" <$> postsTo "stripe.com" reqs of
+        [body] -> do
+          body `shouldSatisfy` T.isInfixOf "event_name=ai_usage_microusd"
+          body `shouldSatisfy` T.isInfixOf "payload[value]=37"
+        other -> fail $ "expected exactly one Stripe AI usage event, got " <> show (length other)
 
     -- Dormancy must be a decision not to submit, not a backlog that fires all at
     -- once the day a meter becomes billable. With no enable list, the remaining

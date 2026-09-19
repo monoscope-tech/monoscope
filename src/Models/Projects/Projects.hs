@@ -79,6 +79,10 @@ module Models.Projects.Projects (
   getTotalUsage,
   getDailyUsageBreakdown,
   DailyUsage (..),
+  AIUsageTotals (..),
+  AIUsageSource (..),
+  recordAIUsage,
+  getAIUsageTotals,
   -- Usage report submissions (chunked provider submissions)
   UsageSubmission (..),
   UsageSubmissionId,
@@ -904,6 +908,9 @@ data DailyUsage = DailyUsage
   , metrics :: Int64
   , eventBytes :: Int64
   , metricBytes :: Int64
+  , aiInputTokens :: Int64
+  , aiOutputTokens :: Int64
+  , aiCostMicrousd :: Int64
   }
   deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow)
@@ -919,12 +926,52 @@ getDailyUsageBreakdown pid start =
              SUM(total_requests)::bigint,
              SUM(total_metrics)::bigint,
              SUM(total_event_bytes)::bigint,
-             SUM(total_metric_bytes)::bigint
+             SUM(total_metric_bytes)::bigint,
+             SUM(total_ai_input_tokens)::bigint,
+             SUM(total_ai_output_tokens)::bigint,
+             SUM(total_ai_cost_microusd)::bigint
       FROM apis.daily_usage
       WHERE project_id = #{pid} AND window_start >= #{start}
       GROUP BY day
       ORDER BY day DESC
     |]
+
+
+data AIUsageTotals = AIUsageTotals
+  { inputTokens :: Int
+  , outputTokens :: Int
+  , costMicrousd :: Int
+  }
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+data AIUsageSource = UsageInteractive | UsageRoutine | UsageSlackInvestigation | UsageConversationTitle
+  deriving stock (Eq, Generic, Read, Show)
+  deriving (AE.FromJSON, AE.ToJSON, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "Usage" AIUsageSource
+
+
+recordAIUsage :: (DB es, Time :> es) => ProjectId -> Text -> AIUsageSource -> AIUsageTotals -> Eff es ()
+recordAIUsage pid model source usage = do
+  at <- currentTime
+  EHasql.interpExecute_
+    [HI.sql|
+      INSERT INTO projects.ai_usage (project_id, model, source, input_tokens, output_tokens, cost_microusd, created_at)
+      VALUES (#{pid}, #{model}, #{source}, #{usage.inputTokens}, #{usage.outputTokens}, #{usage.costMicrousd}, #{at})
+    |]
+
+
+getAIUsageTotals :: DB es => ProjectId -> UTCTime -> UTCTime -> Eff es AIUsageTotals
+getAIUsageTotals pid start end =
+  fromMaybe (AIUsageTotals 0 0 0)
+    <$> EHasql.interpOne
+      [HI.sql|
+        SELECT COALESCE(SUM(input_tokens), 0)::bigint,
+               COALESCE(SUM(output_tokens), 0)::bigint,
+               COALESCE(SUM(cost_microusd), 0)::bigint
+        FROM projects.ai_usage
+        WHERE project_id = #{pid} AND created_at > #{start} AND created_at <= #{end}
+      |]
 
 
 -- | Quantity of events in one submission chunk. Invariant: 0 < n <= 900_000
@@ -1027,24 +1074,28 @@ data UsageTotals = UsageTotals
   , metrics :: Int
   , metricBytes :: Int64
   , replays :: Int
+  , aiInputTokens :: Int
+  , aiOutputTokens :: Int
+  , aiCostMicrousd :: Int
   }
   deriving stock (Eq, Generic, Show)
 
 
 instance Default UsageTotals where
-  def = UsageTotals 0 0 0 0 0
+  def = UsageTotals 0 0 0 0 0 0 0 0
 
 
 -- | The billable count for one dimension. Single mapping from meter to number,
 -- so a dimension cannot silently read the wrong column at one of several sites.
 --
--- >>> map (`meterQuantity` def{events = 3, metrics = 7, replays = 2}) [minBound .. maxBound]
--- [3,7,2]
+-- >>> map (`meterQuantity` def{events = 3, metrics = 7, replays = 2, aiCostMicrousd = 11}) [minBound .. maxBound]
+-- [3,7,2,11]
 meterQuantity :: MeterKind -> UsageTotals -> Int
 meterQuantity = \case
   Events -> (.events)
   MetricDatapoints -> (.metrics)
   SessionReplays -> (.replays)
+  AiUsage -> (.aiCostMicrousd)
 
 
 recordUsageWindow
@@ -1070,8 +1121,8 @@ recordUsageWindow pid wStart wEnd totals chunks = do
     exec [HI.sql| UPDATE projects.projects SET usage_last_reported = #{wEnd} WHERE id = #{pid} |]
     when anyUsage do
       exec
-        [HI.sql| INSERT INTO apis.daily_usage (project_id, total_requests, total_metrics, total_replays, total_event_bytes, total_metric_bytes, window_start, window_end)
-                       VALUES (#{pid}, #{totalUsage}, #{totals.metrics}, #{totals.replays}, #{totals.eventBytes}, #{totals.metricBytes}, #{wStart}, #{wEnd}) |]
+        [HI.sql| INSERT INTO apis.daily_usage (project_id, total_requests, total_metrics, total_replays, total_event_bytes, total_metric_bytes, total_ai_input_tokens, total_ai_output_tokens, total_ai_cost_microusd, window_start, window_end)
+                       VALUES (#{pid}, #{totalUsage}, #{totals.metrics}, #{totals.replays}, #{totals.eventBytes}, #{totals.metricBytes}, #{totals.aiInputTokens}, #{totals.aiOutputTokens}, #{totals.aiCostMicrousd}, #{wStart}, #{wEnd}) |]
       for_ chunkRows \(cid, UsageChunk meter (ChunkQuantity qty)) ->
         exec
           [HI.sql| INSERT INTO projects.usage_report_submissions (id, project_id, window_start, window_end, quantity, meter_kind)
@@ -1197,7 +1248,7 @@ projectProvider p = case p.billingProvider of
 --
 -- Rates are provider-side; we only ever submit raw counts:
 -- 'Events' $1/1M, 'MetricDatapoints' $1/10M, 'SessionReplays' $1/1k.
-data MeterKind = Events | MetricDatapoints | SessionReplays
+data MeterKind = Events | MetricDatapoints | SessionReplays | AiUsage
   deriving stock (Bounded, Enum, Eq, Generic, Ord, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON, FromField, HI.DecodeValue, HI.EncodeValue, ToField, Var) via WrappedEnumSC 'Nothing "" MeterKind
@@ -1214,12 +1265,13 @@ data MeterKind = Events | MetricDatapoints | SessionReplays
 --     meter would have meant a second product and a second price saying the same thing.
 --
 -- >>> map stripeMeterEventName [minBound .. maxBound]
--- ["events_usage","metrics_usage","session_replays_usage"]
+-- ["events_usage","metrics_usage","session_replays_usage","ai_usage_microusd"]
 stripeMeterEventName :: MeterKind -> Text
 stripeMeterEventName = \case
   Events -> "events_usage"
   MetricDatapoints -> "metrics_usage"
   SessionReplays -> "session_replays_usage"
+  AiUsage -> "ai_usage_microusd"
 
 
 -- | Restate a dimension's raw count in units of the **events** meter.
@@ -1237,7 +1289,7 @@ stripeMeterEventName = \case
 -- counts and this function is never reached.
 --
 -- >>> map (\k -> lemonSqueezyEventsEquivalent k 10_000_000) [minBound .. maxBound]
--- [10000000,1000000,10000000000]
+-- [10000000,1000000,10000000000,10000000]
 --
 -- Division floors, so a partial ten of datapoints is dropped rather than rounded
 -- up — at \$1 per 10M that is worth a ten-millionth of a dollar, and erring
@@ -1250,6 +1302,7 @@ lemonSqueezyEventsEquivalent = \case
   Events -> Relude.id
   MetricDatapoints -> (`div` 10)
   SessionReplays -> (* 1000)
+  AiUsage -> Relude.id
 
 
 -- | Where one meter's usage is submitted. The two providers address a meter

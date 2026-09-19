@@ -1133,7 +1133,8 @@ getUsageTotals useTimefusion pid wStart wEnd = do
     fromMaybe 0
       <$> Hasql.interpOne
         [HI.sql| SELECT count(*)::bigint FROM projects.replay_sessions WHERE project_id = #{pid} AND created_at > #{wStart} AND created_at <= #{wEnd} |]
-  pure Projects.UsageTotals{events = eC, eventBytes = eB, metrics = mC, metricBytes = mB, replays = rC}
+  ai <- Projects.getAIUsageTotals pid wStart wEnd
+  pure Projects.UsageTotals{events = eC, eventBytes = eB, metrics = mC, metricBytes = mB, replays = rC, aiInputTokens = ai.inputTokens, aiOutputTokens = ai.outputTokens, aiCostMicrousd = ai.costMicrousd}
 
 
 -- | The catalogue aggregate: one row per metric name with its de-duplicated label union.

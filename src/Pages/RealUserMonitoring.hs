@@ -969,10 +969,9 @@ slot_ page panel skeleton content
     -- One panel's worth of work per tick, swapped in place: the page chrome, the scroll
     -- position and any open replay stay exactly as they were, and a tick that lands inside
     -- the panel's cache TTL costs a cache read.
-    liveAttrs
-      -- A tick arriving while the previous one is still in flight replaces it rather than
-      -- queueing behind it: the newer window is the one being looked at.
-      | otherwise = swapAttrs panelUrl "update-query from:window" [term "hx-sync" "this:replace"]
+    -- A tick arriving while the previous one is still in flight replaces it rather than
+    -- queueing behind it: the newer window is the one being looked at.
+    liveAttrs = swapAttrs panelUrl "update-query from:window" [term "hx-sync" "this:replace"]
     -- On the Sessions tab the panel also carries the replay workspace; swapping the whole
     -- panel would restart a replay the viewer just opened. Only the list is re-fetched
     -- there — a selection made while the refresh is in flight survives.

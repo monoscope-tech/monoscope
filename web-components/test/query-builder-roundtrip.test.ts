@@ -5,6 +5,8 @@
 // hand. The round-trip — parse, change nothing, re-serialize — must be the identity, and
 // editing one clause must not disturb the others. None of it was tested.
 import { describe, test, expect, beforeEach } from 'vitest';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import '../src/query-editor/query-builder';
 
 // The builder talks to the editor through `document.querySelector(selector).editor`,
@@ -165,5 +167,23 @@ describe('editing one clause leaves the rest of the query alone', () => {
     const out = q.read();
     expect(out).not.toMatch(/\|\s*\|/);
     expect(out.trim()).not.toMatch(/\|\s*$/);
+  });
+});
+
+// `bin(timestamp, 60)` means SIXTY SECONDS: a unitless KQL width is seconds
+// (shared/src/Pkg/Parser/Expr.hs, `parseBareSeconds`). The dropdown used to
+// carry minutes — `value="60"` labelled "1h", `value="1440"` labelled "1d" —
+// so every pick bucketed 60x finer than it read, and "1d" drew 24-minute bars.
+describe('the bin width dropdown', () => {
+  const source = readFileSync(join(__dirname, '../src/query-editor/query-builder.ts'), 'utf8');
+  // Every `<option>` this component renders is a bin width.
+  const options = [...source.matchAll(/<option value="([^"]+)">([^<]+)<\/option>/g)];
+
+  test('emits a width that means what its label says', () => {
+    expect(options.length).toBeGreaterThan(0);
+    for (const [, value, label] of options) {
+      expect(value, `option labelled ${label} must carry its unit`).toMatch(/^\d+(ms|s|m|h|d|w)$/);
+      expect(value, 'the value and the label must not disagree').toBe(label);
+    }
   });
 });

@@ -97,11 +97,22 @@ module Models.Apis.Issues (
   AIChatMessage (..),
   ConversationSummary (..),
   RoutineInterval,
+  RoutineCategory (..),
+  RoutineTemplate (..),
+  RoutineSchedule,
+  RoutineReport (..),
+  RoutineDestination (..),
+  RoutineRunStatus (..),
+  RoutineRunCompletion (..),
+  routineTemplates,
   routineIntervalMinutes,
   routineCadence,
+  routineCategoryLabel,
+  routineScheduleLabel,
   mkRoutineInterval,
   ScheduledRoutine (..),
   ClaimedRoutine (..),
+  RoutineRun (..),
   ConversationType (..),
   getOrCreateConversation,
   listConversations,
@@ -112,10 +123,19 @@ module Models.Apis.Issues (
   renameConversation,
   deleteConversation,
   upsertRoutine,
+  installRoutineTemplate,
   claimRoutine,
+  finishRoutineRun,
+  listRoutineRuns,
   completeRoutine,
   listDueRoutines,
   pauseRoutine,
+  cancelRoutineRun,
+  resumeRoutine,
+  deleteRoutine,
+  setRoutineDestination,
+  routineCanAct,
+  routineRunCancelled,
   insertChatMessage,
   selectChatHistory,
   prepareSlackTurn,
@@ -158,8 +178,11 @@ import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.OpenApi (ToSchema)
 import Data.Text qualified as T
 import Data.Text.Display (Display, display)
-import Data.Time (Day (ModifiedJulianDay), UTCTime (..), addDays, addUTCTime)
-import Data.Time.LocalTime (ZonedTime, utc, utcToZonedTime, zonedTimeToUTC)
+import Data.Time (Day (ModifiedJulianDay), DayOfWeek (..), UTCTime (..), addDays, addUTCTime, dayOfWeek, diffUTCTime)
+import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
+import Data.Time.LocalTime (LocalTime (..), TimeOfDay (..), ZonedTime, utc, utcToZonedTime, zonedTimeToUTC)
+import Data.Time.Zones (utcTZ, utcToLocalTimeTZ)
+import Data.Time.Zones.All qualified as TZ
 import Data.UUID.V5 qualified as UUID5
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
@@ -1130,10 +1153,12 @@ data ConversationSummary = ConversationSummary
   , title :: Text
   , conversationType :: ConversationType
   , updatedAt :: UTCTime
+  , templateKey :: Maybe Text
   , routineActive :: Bool
   , routineInterval :: Maybe RoutineInterval
   , routineNextRunAt :: Maybe UTCTime
   , routineRunningSince :: Maybe UTCTime
+  , routineDestination :: Maybe RoutineDestination
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, HI.DecodeRow)
@@ -1172,6 +1197,109 @@ instance FromHttpApiData RoutineInterval where
     maybe (Left "Routine interval must be a whole number of minutes.") mkRoutineInterval $ readMaybe $ toString value
 
 
+data RoutineSchedule
+  = Every RoutineInterval
+  | Daily TimeOfDay
+  | Weekdays TimeOfDay
+  | Weekly DayOfWeek TimeOfDay
+  deriving stock (Eq, Generic, Show)
+
+
+data RoutineScheduleKind = ScheduleInterval | ScheduleDaily | ScheduleWeekdays | ScheduleWeekly
+  deriving stock (Eq, Generic, Read, Show)
+  deriving (FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "Schedule" RoutineScheduleKind
+
+
+data RoutineReport = ReportAlways | ReportFindings
+  deriving stock (Eq, Generic, Read, Show)
+  deriving (FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "Report" RoutineReport
+
+
+data RoutineDestination = DestinationConversation | DestinationSlack
+  deriving stock (Eq, Generic, Read, Show)
+  deriving (FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "Destination" RoutineDestination
+
+
+instance FromHttpApiData RoutineDestination where
+  parseUrlPiece = \case
+    "conversation" -> Right DestinationConversation
+    "slack" -> Right DestinationSlack
+    _ -> Left "Routine destination must be conversation or slack."
+
+
+data RoutineRunStatus = RunRunning | RunSucceeded | RunNoFindings | RunFailed | RunTimedOut | RunCancelled
+  deriving stock (Eq, Generic, Read, Show)
+  deriving (FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "Run" RoutineRunStatus
+
+
+data RoutineRunCompletion = CompletedSucceeded | CompletedNoFindings | CompletedFailed | CompletedTimedOut | CompletedCancelled
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving (HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "Completed" RoutineRunCompletion
+
+
+data RoutineCategory = CategoryReliability | CategoryTelemetryQuality | CategoryDelivery | CategoryIncidents | CategoryCost | CategorySecurity
+  deriving stock (Bounded, Enum, Eq, Generic, Ord, Show)
+
+
+routineCategoryLabel :: RoutineCategory -> Text
+routineCategoryLabel = \case
+  CategoryReliability -> "Reliability"
+  CategoryTelemetryQuality -> "Telemetry quality"
+  CategoryDelivery -> "Delivery"
+  CategoryIncidents -> "Incidents"
+  CategoryCost -> "Cost"
+  CategorySecurity -> "Security"
+
+
+data RoutineTemplate = RoutineTemplate
+  { key :: Text
+  , version :: Int
+  , category :: RoutineCategory
+  , title :: Text
+  , description :: Text
+  , prompt :: Text
+  , schedule :: RoutineSchedule
+  , reportWhen :: RoutineReport
+  , requirements :: [Text]
+  }
+  deriving stock (Eq, Generic, Show)
+
+
+routineTemplates :: [RoutineTemplate]
+routineTemplates =
+  [ template "daily-operations-briefing" CategoryReliability "Daily operations briefing" "Start the day with overnight incidents, regressions, slow endpoints, traffic anomalies, and unresolved issues." "Review this project's telemetry, issues, incidents, and endpoints since the previous business day. Rank only observed operational changes by impact, cite the supporting queries or records, and state the next useful check." (Weekdays $ TimeOfDay 9 0 0) ReportAlways ["Logs or traces", "Issues"]
+  , template "weekly-reliability-review" CategoryReliability "Weekly reliability review" "Prioritize recurring failures, latency regressions, and reliability work from the last seven days." "Compare this project's last seven days with the preceding seven days. Report reliability changes, recurring failures, latency regressions, and three evidence-backed priorities." (Weekly Monday $ TimeOfDay 9 0 0) ReportAlways ["Logs or traces"]
+  , template "error-regression-radar" CategoryReliability "Error regression radar" "Find error groups that returned or materially increased after a quiet period." "Find error patterns that returned after a quiet period or increased materially against their recent baseline. Cite counts, services, and example evidence. If none qualify, say so briefly." (Every $ RoutineInterval 60) ReportFindings ["Logs"]
+  , template "slow-endpoint-watch" CategoryReliability "Slow endpoint watch" "Find endpoints whose tail latency became materially worse than their recent baseline." "Compare endpoint p95 and p99 latency in the latest hour with a representative recent baseline. Report only material degradations with enough traffic to be credible. If none qualify, say so briefly." (Every $ RoutineInterval 60) ReportFindings ["Traces"]
+  , template "telemetry-gap-detector" CategoryTelemetryQuality "Telemetry gap detector" "Find active services that unexpectedly stopped sending logs, traces, or metrics." "Find services that were active recently but unexpectedly stopped sending one or more telemetry signals. Distinguish missing evidence from healthy behavior. If no credible gaps exist, say so briefly." (Every $ RoutineInterval 60) ReportFindings ["Logs, traces, or metrics"]
+  , template "telemetry-quality-check" CategoryTelemetryQuality "Telemetry quality check" "Find missing or inconsistent service, environment, version, and trace attributes." "Audit recent telemetry for missing or inconsistent service names, environments, versions, trace correlation, and unstable high-cardinality attributes. Rank actionable instrumentation fixes. If no actionable defect exists, say so briefly." (Daily $ TimeOfDay 10 0 0) ReportFindings ["Logs or traces"]
+  , template "traffic-drop-watch" CategoryReliability "Traffic drop watch" "Detect services and endpoints whose request volume unexpectedly falls or disappears." "Compare traffic during the latest 30 minutes with matching recent periods. Report only credible service or endpoint drops, accounting for ordinary low-volume variation and time-of-day patterns." (Every $ RoutineInterval 30) ReportFindings ["Logs or traces"]
+  , template "dependency-degradation-digest" CategoryReliability "Dependency degradation digest" "Find downstream dependencies associated with new latency or error regressions." "Review outgoing spans and related errors from the latest hour. Report downstream dependencies with a material latency or error regression against their recent baseline, and name the affected callers." (Every $ RoutineInterval 60) ReportFindings ["Traces"]
+  , template "new-service-endpoint-digest" CategoryDelivery "New service and endpoint digest" "Summarize newly observed services, routes, operations, and environments." "Find services and endpoints first observed since the previous run. Separate confirmed endpoint records from names inferred only from telemetry, and report the owning service and environment when known." (Daily $ TimeOfDay 10 0 0) ReportFindings ["Traces", "Endpoints"]
+  , template "on-call-handoff" CategoryIncidents "On-call handoff" "Prepare a concise handoff of active issues, recoveries, regressions, and watch items." "Prepare an on-call handoff from this project's active issues, recent incident episodes, current telemetry regressions, and unresolved watch items. Cite records and evidence, and separate observed facts from recommended follow-up." (Weekdays $ TimeOfDay 17 0 0) ReportAlways ["Issues", "Incidents", "Logs or traces"]
+  , template "incident-follow-up-ledger" CategoryIncidents "Incident follow-up ledger" "Track recent incident follow-ups and verify whether production evidence improved." "Review recent incident episodes and their related issues. Report unresolved follow-up work, repeated symptoms, and cases where production telemetry has not demonstrably returned to its prior baseline." (Daily $ TimeOfDay 11 0 0) ReportFindings ["Incidents", "Issues"]
+  , template "alert-quality-review" CategoryIncidents "Alert quality review" "Find noisy, stale, duplicate, or unactionable monitors and missed symptoms." "Compare recent monitors, issues, and incident episodes. Identify noisy or duplicate alerts, monitors aimed at stale services or fields, and important incident symptoms that no monitor described. Support each recommendation with observed records." (Weekly Monday $ TimeOfDay 11 0 0) ReportFindings ["Monitors", "Issues", "Incidents"]
+  , template "deployment-regression-review" CategoryDelivery "Deployment regression review" "Find reliability changes associated with newly observed service versions." "Compare recent service-version changes with errors, latency, and incident timing. Report only evidence-backed regressions, state when deployment evidence is unavailable, and never treat temporal proximity alone as causation." (Daily $ TimeOfDay 14 0 0) ReportFindings ["Logs or traces", "Service versions"]
+  , template "noisy-log-sources" CategoryCost "Noisy log sources" "Find services and message patterns producing disproportionate log volume." "Rank services and recurring message shapes by recent log volume and estimated avoidable noise. Exclude high-volume signals that carry clear operational value, and recommend concrete sampling or log-level changes." (Daily $ TimeOfDay 12 0 0) ReportFindings ["Logs"]
+  , template "trace-correlation-audit" CategoryTelemetryQuality "Trace correlation audit" "Find logs and spans that cannot be joined because trace context is missing or inconsistent." "Audit recent logs and spans for missing trace identifiers, broken parent relationships, and inconsistent service identity. Rank fixes by the amount of investigation context they would restore." (Weekly Monday $ TimeOfDay 10 0 0) ReportFindings ["Logs", "Traces"]
+  , template "telemetry-cost-watch" CategoryCost "Telemetry cost watch" "Detect sudden volume and cardinality growth before it becomes an ingestion surprise." "Compare telemetry volume, attribute cardinality, and the noisiest sources with recent baselines. Report material cost-risk changes and identify the services, fields, or patterns responsible." (Daily $ TimeOfDay 13 0 0) ReportFindings ["Logs, traces, or metrics"]
+  , template "authentication-failure-digest" CategorySecurity "Authentication failure digest" "Summarize unusual authentication and authorization failures without replacing security alerting." "Review authentication failures, authorization denials, and administrative actions in recent telemetry. Report unusual changes with service, environment, source, and supporting counts. Do not claim compromise from failures alone." (Every $ RoutineInterval 60) ReportFindings ["Security logs"]
+  , template "weekly-slo-review" CategoryReliability "Weekly SLO review" "Review user-visible reliability signals and the work most likely to improve them." "Compare the last seven days of user-visible errors and latency with the preceding period. Summarize burn-like trends from available telemetry, clearly state when a formal SLO is unavailable, and recommend evidence-backed reliability priorities." (Weekly Monday $ TimeOfDay 9 30 0) ReportAlways ["Logs, traces, or metrics"]
+  ]
+  where
+    template key category title description prompt schedule reportWhen requirements = RoutineTemplate{key, version = 1, category, title, description, prompt, schedule, reportWhen, requirements}
+
+
+routineScheduleLabel :: RoutineSchedule -> Text
+routineScheduleLabel = \case
+  Every interval -> routineCadence interval
+  Daily time -> "Daily at " <> clock time
+  Weekdays time -> "Weekdays at " <> clock time
+  Weekly weekday time -> "Every " <> show weekday <> " at " <> clock time
+  where
+    clock time = T.justifyRight 2 '0' (show time.todHour) <> ":" <> T.justifyRight 2 '0' (show time.todMin) <> " project time"
+
+
 data ScheduledRoutine = ScheduledRoutine
   { id :: UUIDId "ai_routine"
   , scheduledAt :: UTCTime
@@ -1181,9 +1309,27 @@ data ScheduledRoutine = ScheduledRoutine
 
 
 data ClaimedRoutine = ClaimedRoutine
-  { projectId :: Projects.ProjectId
+  { runId :: UUIDId "ai_routine_run"
+  , projectId :: Projects.ProjectId
   , conversationId :: UUIDId "conversation"
   , claimedAt :: UTCTime
+  , allowActions :: Bool
+  , reportWhen :: RoutineReport
+  , destination :: RoutineDestination
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+data RoutineRun = RoutineRun
+  { id :: UUIDId "ai_routine_run"
+  , conversationId :: UUIDId "conversation"
+  , title :: Maybe Text
+  , scheduledAt :: UTCTime
+  , startedAt :: UTCTime
+  , finishedAt :: Maybe UTCTime
+  , status :: RoutineRunStatus
+  , error :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow)
@@ -1205,8 +1351,8 @@ listConversations pid =
   Hasql.interp
     [HI.sql|SELECT c.conversation_id,
       COALESCE(NULLIF(c.title, ''), NULLIF(i.title, ''), NULLIF(first_message.content, ''), 'AI conversation'),
-      c.conversation_type, c.updated_at,
-      COALESCE(r.active, FALSE), r.interval_minutes, r.next_run_at, r.running_since
+      c.conversation_type, c.updated_at, r.template_key,
+      COALESCE(r.active, FALSE), r.interval_minutes, r.next_run_at, r.running_since, r.destination
       FROM apis.ai_conversations c
       LEFT JOIN apis.issues i ON i.project_id = c.project_id AND i.id = c.conversation_id
       LEFT JOIN apis.ai_routines r ON r.project_id = c.project_id AND r.conversation_id = c.conversation_id
@@ -1224,8 +1370,8 @@ getConversation pid convId =
   Hasql.interpOne
     [HI.sql|SELECT c.conversation_id,
       COALESCE(NULLIF(c.title, ''), NULLIF(i.title, ''), NULLIF(first_message.content, ''), 'New chat'),
-      c.conversation_type, c.updated_at,
-      COALESCE(r.active, FALSE), r.interval_minutes, r.next_run_at, r.running_since
+      c.conversation_type, c.updated_at, r.template_key,
+      COALESCE(r.active, FALSE), r.interval_minutes, r.next_run_at, r.running_since, r.destination
       FROM apis.ai_conversations c
       LEFT JOIN apis.issues i ON i.project_id = c.project_id AND i.id = c.conversation_id
       LEFT JOIN apis.ai_routines r ON r.project_id = c.project_id AND r.conversation_id = c.conversation_id
@@ -1281,13 +1427,72 @@ upsertRoutine pid convId interval = do
   now <- Time.currentTime
   let intervalMinutes = routineIntervalMinutes interval
   Hasql.interpOne
-    [HI.sql|INSERT INTO apis.ai_routines AS routine (project_id, conversation_id, interval_minutes, next_run_at)
-      SELECT #{pid}, #{convId}, #{intervalMinutes}, #{addUTCTime (fromIntegral $ intervalMinutes * 60) now}
+    [HI.sql|WITH saved AS (
+        INSERT INTO apis.ai_routines AS routine (project_id, conversation_id, interval_minutes, next_run_at, allow_actions)
+        SELECT #{pid}, #{convId}, #{intervalMinutes}, #{addUTCTime (fromIntegral $ intervalMinutes * 60) now}, TRUE
+        FROM apis.ai_conversations WHERE project_id = #{pid} AND conversation_id = #{convId}
+        ON CONFLICT (project_id, conversation_id) DO UPDATE SET
+          interval_minutes = EXCLUDED.interval_minutes, active = TRUE,
+          next_run_at = CASE WHEN routine.running_since IS NULL THEN EXCLUDED.next_run_at ELSE routine.next_run_at END,
+          schedule_kind = #{ScheduleInterval}, schedule_hour = NULL, schedule_minute = NULL, schedule_weekday = NULL,
+          allow_actions = TRUE, cancelled_at = NULL
+        RETURNING id, next_run_at, running_since
+      ) SELECT id, next_run_at FROM saved WHERE running_since IS NULL|]
+
+
+installRoutineTemplate :: (DB es, Time :> es) => Projects.ProjectId -> UUIDId "conversation" -> Text -> RoutineTemplate -> Eff es (Maybe ScheduledRoutine)
+installRoutineTemplate pid convId timezone template = do
+  now <- Time.currentTime
+  let (kind, intervalMinutes, hour, minute, weekday) = scheduleColumns template.schedule
+      zone = if isJust (TZ.tzByName $ encodeUtf8 timezone) then timezone else "UTC"
+      nextRunAt = nextRoutineAt template.schedule zone now now
+  Hasql.interpOne
+    [HI.sql|INSERT INTO apis.ai_routines AS routine
+      (project_id, conversation_id, interval_minutes, timezone, next_run_at, template_key, template_version,
+       schedule_kind, schedule_hour, schedule_minute, schedule_weekday, report_when, destination, allow_actions)
+      SELECT #{pid}, #{convId}, #{intervalMinutes}, #{zone}, #{nextRunAt}, #{template.key}, #{template.version},
+             #{kind}, #{hour}, #{minute}, #{weekday}, #{template.reportWhen}, #{DestinationConversation}, FALSE
       FROM apis.ai_conversations WHERE project_id = #{pid} AND conversation_id = #{convId}
       ON CONFLICT (project_id, conversation_id) DO UPDATE SET
-        interval_minutes = EXCLUDED.interval_minutes, active = TRUE,
-        next_run_at = CASE WHEN routine.running_since IS NULL THEN EXCLUDED.next_run_at ELSE routine.next_run_at END
+        interval_minutes = EXCLUDED.interval_minutes, timezone = EXCLUDED.timezone, active = TRUE,
+        next_run_at = EXCLUDED.next_run_at, template_key = EXCLUDED.template_key,
+        template_version = EXCLUDED.template_version, schedule_kind = EXCLUDED.schedule_kind,
+        schedule_hour = EXCLUDED.schedule_hour, schedule_minute = EXCLUDED.schedule_minute,
+        schedule_weekday = EXCLUDED.schedule_weekday, report_when = EXCLUDED.report_when,
+        destination = EXCLUDED.destination, allow_actions = FALSE, cancelled_at = NULL
       RETURNING id, next_run_at|]
+  where
+    scheduleColumns :: RoutineSchedule -> (RoutineScheduleKind, Int, Maybe Int, Maybe Int, Maybe Int)
+    scheduleColumns = \case
+      Every interval -> (ScheduleInterval, routineIntervalMinutes interval, Nothing, Nothing, Nothing)
+      Daily time -> (ScheduleDaily, 1440, Just time.todHour, Just time.todMin, Nothing)
+      Weekdays time -> (ScheduleWeekdays, 1440, Just time.todHour, Just time.todMin, Nothing)
+      Weekly weekday time -> (ScheduleWeekly, 10080, Just time.todHour, Just time.todMin, Just $ isoWeekday weekday)
+
+    isoWeekday :: DayOfWeek -> Int
+    isoWeekday = \case Monday -> 1; Tuesday -> 2; Wednesday -> 3; Thursday -> 4; Friday -> 5; Saturday -> 6; Sunday -> 7
+
+
+nextRoutineAt :: RoutineSchedule -> Text -> UTCTime -> UTCTime -> UTCTime
+nextRoutineAt schedule timezone scheduledAt now = case schedule of
+  Every interval -> addUTCTime (fromIntegral missed * seconds) firstCandidate
+    where
+      seconds = fromIntegral $ routineIntervalMinutes interval * 60
+      firstCandidate = addUTCTime seconds scheduledAt
+      missed = max 0 $ floor (diffUTCTime now firstCandidate / seconds) + 1
+  _ -> fromMaybe (addUTCTime 604800 now) $ find matches [addUTCTime (fromIntegral n * 60) nextMinute | n <- [0 .. 10079]]
+  where
+    nextMinute = posixSecondsToUTCTime $ fromIntegral (((floor (utcTimeToPOSIXSeconds now) :: Integer) `div` 60 + 1) * 60)
+    tz = fromMaybe utcTZ $ TZ.tzByName $ encodeUtf8 timezone
+    matches instant =
+      let LocalTime day (TimeOfDay hour minute _) = utcToLocalTimeTZ tz instant
+       in hour == scheduledTime.todHour && minute == scheduledTime.todMin && case schedule of
+            Daily{} -> True
+            Weekdays{} -> dayOfWeek day `elem` ([Monday, Tuesday, Wednesday, Thursday, Friday] :: [DayOfWeek])
+            Weekly weekday _ -> dayOfWeek day == weekday
+            Every{} -> False
+    scheduledTime = case schedule of Every{} -> midnight; Daily time -> time; Weekdays time -> time; Weekly _ time -> time
+    midnight = TimeOfDay 0 0 0
 
 
 -- | Lease a scheduled instant before any integration action runs. A stale lease can be
@@ -1295,21 +1500,55 @@ upsertRoutine pid convId interval = do
 claimRoutine :: DB es => UUIDId "ai_routine" -> UTCTime -> Eff es (Maybe ClaimedRoutine)
 claimRoutine routineId scheduledAt =
   Hasql.interpOne
-    [HI.sql|UPDATE apis.ai_routines SET running_since = now()
-      WHERE id = #{routineId} AND active AND next_run_at = #{scheduledAt}
-        AND (running_since IS NULL OR running_since < now() - interval '30 minutes')
-      RETURNING project_id, conversation_id, running_since|]
+    [HI.sql|WITH claimed AS (
+        UPDATE apis.ai_routines SET running_since = now()
+        WHERE id = #{routineId} AND active AND next_run_at = #{scheduledAt}
+          AND (running_since IS NULL OR running_since < now() - interval '30 minutes')
+        RETURNING project_id, conversation_id, running_since, allow_actions, report_when, destination
+      ), run AS (
+        INSERT INTO apis.ai_routine_runs (routine_id, project_id, conversation_id, scheduled_at, started_at, status)
+        SELECT #{routineId}, project_id, conversation_id, #{scheduledAt}, running_since, 'running' FROM claimed
+        ON CONFLICT (routine_id, scheduled_at) DO UPDATE SET
+          started_at = EXCLUDED.started_at, finished_at = NULL, status = 'running', findings = NULL, actions = NULL, error = NULL
+          WHERE apis.ai_routine_runs.status = 'running'
+        RETURNING id
+      )
+      SELECT run.id, claimed.project_id, claimed.conversation_id, claimed.running_since, claimed.allow_actions, claimed.report_when, claimed.destination
+      FROM claimed CROSS JOIN run|]
 
 
--- | Finish only the lease this worker owns, then schedule from completion time so a
+finishRoutineRun :: DB es => UUIDId "ai_routine_run" -> UTCTime -> RoutineRunCompletion -> Maybe AE.Value -> Maybe AE.Value -> Maybe Text -> Eff es ()
+finishRoutineRun runId startedAt status findings actions err =
+  Hasql.interpExecute_
+    [HI.sql|UPDATE apis.ai_routine_runs
+      SET finished_at = now(), status = #{status}, findings = #{Aeson <$> findings}, actions = #{Aeson <$> actions}, error = #{err}
+      WHERE id = #{runId} AND started_at = #{startedAt} AND status = 'running'|]
+
+
+listRoutineRuns :: DB es => Projects.ProjectId -> Int -> Eff es [RoutineRun]
+listRoutineRuns pid limit =
+  Hasql.interp
+    [HI.sql|SELECT run.id, run.conversation_id, conversation.title, run.scheduled_at,
+      run.started_at, run.finished_at, run.status, run.error
+      FROM apis.ai_routine_runs run
+      LEFT JOIN apis.ai_conversations conversation
+        ON conversation.project_id = run.project_id AND conversation.conversation_id = run.conversation_id
+      WHERE run.project_id = #{pid}
+      ORDER BY run.scheduled_at DESC LIMIT #{max 1 $ min 100 limit}|]
+
+
+-- | Finish only the lease this worker owns, then schedule from its intended time so a
 -- slow run never overlaps its successor or triggers a catch-up burst. Pausing keeps
 -- the lease until this cleanup, but suppresses the successor.
-completeRoutine :: DB es => UUIDId "ai_routine" -> UTCTime -> UTCTime -> Eff es (Maybe UTCTime)
-completeRoutine routineId scheduledAt claimedAt =
+completeRoutine :: (DB es, Time :> es) => UUIDId "ai_routine" -> UTCTime -> UTCTime -> Eff es (Maybe UTCTime)
+completeRoutine routineId scheduledAt claimedAt = do
+  now <- Time.currentTime
+  timing <- routineTiming [HI.sql|id = #{routineId}|]
+  let nextRunAt = timing <&> \(schedule, timezone) -> nextRoutineAt schedule timezone scheduledAt now
   join
     <$> Hasql.interpOne
-      [HI.sql|UPDATE apis.ai_routines SET last_run_at = now(), running_since = NULL,
-        next_run_at = CASE WHEN active THEN now() + make_interval(mins => interval_minutes::int) END
+      [HI.sql|UPDATE apis.ai_routines SET last_run_at = #{now}, running_since = NULL, cancelled_at = NULL,
+        next_run_at = CASE WHEN active THEN #{nextRunAt} END
         WHERE id = #{routineId} AND next_run_at = #{scheduledAt} AND running_since = #{claimedAt}
         RETURNING CASE WHEN active THEN next_run_at END|]
 
@@ -1332,6 +1571,76 @@ pauseRoutine pid convId =
       [HI.sql|UPDATE apis.ai_routines SET active = FALSE,
         next_run_at = CASE WHEN running_since IS NULL THEN NULL ELSE next_run_at END
         WHERE project_id = #{pid} AND conversation_id = #{convId}|]
+
+
+cancelRoutineRun :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Eff es ()
+cancelRoutineRun pid convId =
+  Hasql.interpExecute_
+    [HI.sql|UPDATE apis.ai_routines SET cancelled_at = clock_timestamp()
+      WHERE project_id = #{pid} AND conversation_id = #{convId} AND running_since IS NOT NULL|]
+
+
+resumeRoutine :: (DB es, Time :> es) => Projects.ProjectId -> UUIDId "conversation" -> Eff es (Maybe ScheduledRoutine)
+resumeRoutine pid convId = do
+  now <- Time.currentTime
+  routineTiming [HI.sql|project_id = #{pid} AND conversation_id = #{convId}|] >>= \case
+    Nothing -> pure Nothing
+    Just (schedule, timezone) -> do
+      let nextRunAt = nextRoutineAt schedule timezone now now
+      Hasql.interpOne
+        [HI.sql|WITH resumed AS (
+            UPDATE apis.ai_routines SET active = TRUE, cancelled_at = NULL,
+              next_run_at = CASE WHEN running_since IS NULL THEN #{nextRunAt} ELSE next_run_at END
+            WHERE project_id = #{pid} AND conversation_id = #{convId}
+            RETURNING id, next_run_at, running_since
+          ) SELECT id, next_run_at FROM resumed WHERE running_since IS NULL|]
+
+
+deleteRoutine :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Eff es ()
+deleteRoutine pid convId =
+  Hasql.interpExecute_
+    [HI.sql|DELETE FROM apis.ai_routines WHERE project_id = #{pid} AND conversation_id = #{convId}|]
+
+
+setRoutineDestination :: DB es => Projects.ProjectId -> UUIDId "conversation" -> RoutineDestination -> Eff es ()
+setRoutineDestination pid convId destination =
+  Hasql.interpExecute_
+    [HI.sql|UPDATE apis.ai_routines
+      SET destination = #{destination}, allow_actions = #{destination == DestinationSlack}
+      WHERE project_id = #{pid} AND conversation_id = #{convId}|]
+
+
+routineCanAct :: DB es => UUIDId "ai_routine" -> Eff es Bool
+routineCanAct routineId =
+  fromMaybe False
+    <$> Hasql.interpOne
+      [HI.sql|SELECT active AND allow_actions AND cancelled_at IS NULL
+        FROM apis.ai_routines WHERE id = #{routineId}|]
+
+
+routineRunCancelled :: DB es => UUIDId "ai_routine" -> UTCTime -> Eff es Bool
+routineRunCancelled routineId claimedAt =
+  fromMaybe False
+    <$> Hasql.interpOne
+      [HI.sql|SELECT COALESCE(cancelled_at >= #{claimedAt}, FALSE)
+        FROM apis.ai_routines WHERE id = #{routineId}|]
+
+
+routineTiming :: DB es => HI.Sql -> Eff es (Maybe (RoutineSchedule, Text))
+routineTiming predicate =
+  (decode =<<)
+    <$> Hasql.interpOne
+      ([HI.sql|SELECT schedule_kind, interval_minutes, timezone, schedule_hour::bigint, schedule_minute::bigint, schedule_weekday::bigint FROM apis.ai_routines WHERE |] <> predicate)
+  where
+    decode (kind :: RoutineScheduleKind, interval :: RoutineInterval, timezone :: Text, hour :: Maybe Int, minute :: Maybe Int, weekday :: Maybe Int) = do
+      schedule <- case kind of
+        ScheduleInterval -> Just $ Every interval
+        ScheduleDaily -> Daily <$> timeOfDay hour minute
+        ScheduleWeekdays -> Weekdays <$> timeOfDay hour minute
+        ScheduleWeekly -> Weekly <$> (weekday >>= dayFromISO) <*> timeOfDay hour minute
+      pure (schedule, timezone)
+    timeOfDay hour minute = TimeOfDay <$> hour <*> minute <*> pure 0
+    dayFromISO = \case 1 -> Just Monday; 2 -> Just Tuesday; 3 -> Just Wednesday; 4 -> Just Thursday; 5 -> Just Friday; 6 -> Just Saturday; 7 -> Just Sunday; _ -> Nothing
 
 
 -- | Insert a new chat message

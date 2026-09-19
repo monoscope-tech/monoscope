@@ -180,7 +180,7 @@ describe('light-mode design token contract', () => {
   });
 
   test('dark decorative strokes recede behind controls and data', () => {
-    expect(css).toMatch(/\[data-theme="dark"\][\s\S]*--color-strokeWeak:\s*rgba\(255 255 255 \/ 0\.05\)/);
+    expect(css).toMatch(/\[data-theme="dark"\][\s\S]*--color-strokeWeak:\s*rgba\(255 255 255 \/ 0\.09\)/);
   });
 
   test('an explicit weak button boundary is not promoted to the strong control stroke', () => {

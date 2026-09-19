@@ -1604,6 +1604,8 @@ routeApiV1Get :: TestResources -> Text -> [(Text, Text)] -> IO (Response LBS.Byt
 routeApiV1Get tr rest params = case T.splitOn "/" rest of
   ["issues"] -> jsonRoute tr (ApiH.apiIssuesList testPid Nothing Nothing Nothing (pInt "page" params) (pInt "per_page" params))
   ["issues", iid] -> jsonRoute tr (ApiH.apiIssueGet testPid (parseUUIDId iid))
+  ["incidents"] -> jsonRoute tr (ApiH.apiIncidentsList testPid Nothing (pInt "limit" params))
+  ["incidents", iid] -> jsonRoute tr (ApiH.apiIncidentGet testPid (parseUUIDId iid))
   ["endpoints"] -> jsonRoute tr (ApiH.apiEndpointsList testPid (lookupParam "search" params) (pBool "outgoing" params) (pInt "page" params) (pInt "per_page" params))
   ["endpoints", eid] -> jsonRoute tr (ApiH.apiEndpointGet testPid (parseUUIDId eid))
   ["log_patterns"] -> jsonRoute tr (ApiH.apiLogPatternsList testPid (pInt "page" params) (pInt "per_page" params))

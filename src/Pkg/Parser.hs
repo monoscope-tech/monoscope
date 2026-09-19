@@ -380,13 +380,13 @@ applyScopedKqlContext scope query =
         , ("resource.deployment.environment.name==" <>) . kqlQuoted <$> nonBlank scope.environment
         ]
     -- Split on the first pipeline operator, not a pipe within a quoted KQL value.
-    splitKqlPipeline = go False False [] . T.unpack
-    go _ _ seen [] = (T.pack $ reverse seen, "")
+    splitKqlPipeline = go False False [] . toString
+    go _ _ seen [] = (toText $ reverse seen, "")
     go quoted escaped seen remaining@(c : rest)
       | escaped = go quoted False (c : seen) rest
       | quoted && c == '\\' = go quoted True (c : seen) rest
       | c == '"' = go (not quoted) False (c : seen) rest
-      | c == '|' && not quoted = (T.pack $ reverse seen, T.pack remaining)
+      | c == '|' && not quoted = (toText $ reverse seen, toText remaining)
       | otherwise = go quoted False (c : seen) rest
 
 

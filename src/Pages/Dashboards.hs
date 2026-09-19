@@ -1516,7 +1516,7 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
               summary_ [class_ "cursor-pointer select-none transition-colors hover:text-textStrong"] "Show generated SQL"
               div_
                 [ id_ $ widPrefix <> "-sql-preview"
-                , hxGet_ $ "/p/" <> pid.toText <> "/widget/sql-preview" <> foldMap ("?dashboard_id=" <>) (dashboardIdM <&> (.toText))
+                , hxGet_ $ "/p/" <> pid.toText <> "/widget/sql-preview" <> foldMap (("?dashboard_id=" <>) . (.toText)) dashboardIdM
                 , hxVals_ "js:{query: widgetJSON.raw_query || widgetJSON.query}"
                 , hxTrigger_ "toggle from:closest details"
                 , hxSwap_ "innerHTML"

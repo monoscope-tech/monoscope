@@ -68,6 +68,8 @@ module Web.ApiHandlers (
   apiIssueArchive,
   apiIssueUnarchive,
   apiIssuesBulk,
+  apiIncidentsList,
+  apiIncidentGet,
   -- Teams (B3)
   apiTeamsList,
   apiTeamGet,
@@ -116,6 +118,7 @@ import Effectful.Time qualified as Time
 import GHC.Records (HasField)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
+import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.Monitors qualified as Monitors
@@ -937,6 +940,27 @@ apiIssuesList pid statusM typeM svcM pageM perPageM = paged pageM perPageM 200 $
             , Issues.limit = perPage
             , Issues.offset = offset
             }
+
+
+incidentToSummary :: Incidents.Episode -> IncidentSummary
+incidentToSummary incident =
+  IncidentSummary
+    { id = incident.id
+    , projectId = incident.projectId
+    , issueId = incident.issueId
+    , phase = incident.phase
+    , startedAt = incident.startedAt
+    , lastEventAt = incident.lastEventAt
+    , closedAt = incident.closedAt
+    }
+
+
+apiIncidentsList :: Projects.ProjectId -> Maybe Incidents.EpisodePhase -> Maybe Int -> ATBaseCtx [IncidentSummary]
+apiIncidentsList pid phase limit = map incidentToSummary <$> Incidents.listEpisodes pid phase (fromMaybe 20 limit)
+
+
+apiIncidentGet :: Projects.ProjectId -> Incidents.EpisodeId -> ATBaseCtx IncidentSummary
+apiIncidentGet pid eid = incidentToSummary <$> (notFoundOr "Incident not found" =<< Incidents.getEpisode pid eid)
 
 
 fetchIssue :: Projects.ProjectId -> Issues.IssueId -> ATBaseCtx Issues.Issue

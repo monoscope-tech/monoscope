@@ -2,6 +2,7 @@ module Models.Apis.Monitors (
   queryMonitorsAll,
   queryMonitorByTitle,
   queryMonitorById,
+  queryMonitorByProjectId,
   queryMonitorUpsert,
   monitorToggleActiveById,
   MonitorBulkAction (..),
@@ -211,6 +212,10 @@ queryMonitorUpsert qm = do
 
 queryMonitorById :: DB es => QueryMonitorId -> Eff es (Maybe QueryMonitor)
 queryMonitorById mid = Hasql.interpOne (selectFrom @QueryMonitor <> [HI.sql| WHERE id = #{mid} |])
+
+
+queryMonitorByProjectId :: DB es => Projects.ProjectId -> QueryMonitorId -> Eff es (Maybe QueryMonitor)
+queryMonitorByProjectId pid mid = Hasql.interpOne (selectFrom @QueryMonitor <> [HI.sql| WHERE project_id = #{pid} AND id = #{mid} |])
 
 
 -- | Flip a monitor between active and deactivated.

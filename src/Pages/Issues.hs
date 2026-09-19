@@ -1453,7 +1453,7 @@ aiChatPostH pid issueId form
 
     processIssue appCtx now convId issue = do
       fullSystemPrompt <- buildSystemPromptForIssue pid issue now
-      let config = (AI.defaultAgenticConfig pid){AI.facetContext = Nothing, AI.customContext = Just fullSystemPrompt, AI.conversationId = Just convId, AI.conversationType = Just Issues.CTAnomaly, AI.systemPromptOverride = Just $ issueSystemPrompt now, AI.useTimefusion = appCtx.env.enableTimefusionReads}
+      let config = (AI.defaultAgenticConfig pid){AI.facetContext = Nothing, AI.customContext = Just fullSystemPrompt, AI.conversationId = Just convId, AI.conversationType = Just Issues.CTAnomaly, AI.systemPromptOverride = Just $ issueSystemPrompt now, AI.sourceConfig = Just appCtx.config, AI.useTimefusion = appCtx.env.enableTimefusionReads}
       result <- AI.runAgenticChatWithHistory config form.query appCtx.config.openaiModel appCtx.config.openaiApiKey
       either
         (\err -> respond (Just fullSystemPrompt) convId ("I encountered an error while analyzing this issue: " <> err) Nothing Nothing False)
@@ -1462,7 +1462,7 @@ aiChatPostH pid issueId form
 
     handleChatResult systemPromptM convId chatResult = do
       appCtx <- ask @AuthContext
-      AI.ensureConversationTitle pid convId form.query chatResult.response appCtx.config.openaiSmallModel appCtx.config.openaiApiKey
+      AI.ensureConversationTitle (Just appCtx.config) pid convId form.query chatResult.response appCtx.config.openaiSmallModel appCtx.config.openaiApiKey
       either
         (\_ -> respond systemPromptM convId chatResult.response Nothing (Just chatResult.toolCalls) False)
         ( \aiResp ->
