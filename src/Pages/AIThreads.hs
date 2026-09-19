@@ -64,7 +64,7 @@ instance FromHttpApiData ComposerMode where
 data NewThread = NewChat Text | NewRoutine Text Issues.RoutineInterval
 
 
-newtype TitleForm = TitleForm {title :: Text}
+newtype TitleForm = TitleForm {conversationTitle :: Text}
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)
 
@@ -392,7 +392,7 @@ threadPostH pid convId form = do
 threadTitlePostH :: Projects.ProjectId -> UUIDId "conversation" -> TitleForm -> ATAuthCtx (RespHeaders (Html ()))
 threadTitlePostH pid convId form = do
   authorizeProject pid
-  let title = T.strip form.title
+  let title = T.strip form.conversationTitle
   if T.null title
     then reject "Enter a title."
     else Issues.renameConversation pid convId title >> redirectToThread pid convId
