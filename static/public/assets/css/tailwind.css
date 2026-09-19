@@ -100,7 +100,7 @@
 
   /* Chart colors */
   --color-chart-default: oklch(56.7% 0.239 261);
-  --color-chartBg: oklch(94.5% 0.014 261 / 0.55);
+  --color-chartBg: oklch(94.5% 0.014 261 / 0.04);
   --color-chartMask: oklch(100% 0 0 / 0.8);
 
   /* Fill colors */
@@ -1983,7 +1983,7 @@ code, pre, .code, .monospace {
     --color-bgBrand: oklch(64% 0.18 261);
 
     /* Chart colors — dark theme */
-    --color-chartBg: oklch(22% 0.015 260 / 0.18);
+    --color-chartBg: oklch(22% 0.015 260 / 0.04);
     --color-chartMask: oklch(15% 0.01 260 / 0.85);
 
     /* Fill colors — dark theme */

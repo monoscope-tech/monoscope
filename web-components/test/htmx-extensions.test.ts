@@ -75,4 +75,13 @@ describe('htmx 4 extension port', () => {
     expect(q.get('from')).toBe('abc'); // from the page URL
     expect(q.get('env')).toBe('prod'); // from data-constants
   });
+
+  test('every htmx subrequest inherits global scope without consuming local service filters', () => {
+    window.history.replaceState({}, '', '/p/pid/issues?service=checkout&service=catalog&service_scope=frontend&environment=production');
+    const req = fire('global-scope.htmx_config_request', '<button id="el"></button>', requestCtx('/p/pid/issues?service=catalog', 'get'));
+    const q = new URL(req.action, location.origin).searchParams;
+    expect(q.getAll('service')).toEqual(['catalog']);
+    expect(q.get('service_scope')).toBe('frontend');
+    expect(q.get('environment')).toBe('production');
+  });
 });

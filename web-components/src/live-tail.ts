@@ -243,8 +243,8 @@ export class LiveTail extends LitElement {
     this.projectId = this.dataset.projectId ?? '';
     this.leaseSecs = Number(this.dataset.leaseSecs ?? '45');
     const params = new URLSearchParams(location.search);
-    this.service = params.get('service') ?? '';
-    this.environment = params.get('env') ?? '';
+    this.service = params.get('service') ?? params.get('service_scope') ?? '';
+    this.environment = params.get('environment') ?? params.get('env') ?? '';
     const kind = params.get('kind') ?? '';
     this.kind = KINDS.some(([value]) => value === kind) ? kind : 'logs';
     this.query = params.get('query') ?? '';
@@ -352,10 +352,11 @@ export class LiveTail extends LitElement {
     const url = new URL(location.href);
     const inUrl: Array<[string, string]> = [
       ['service', this.service],
-      ['env', this.environment],
+      ['environment', this.environment],
       ['kind', this.kind === 'logs' ? '' : this.kind],
       ['query', this.query],
     ];
+    url.searchParams.delete('env');
     inUrl.forEach(([key, value]) => (value ? url.searchParams.set(key, value) : url.searchParams.delete(key)));
     history.replaceState({}, '', url);
     this.stream = new LiveStream({

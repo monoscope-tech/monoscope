@@ -586,6 +586,7 @@ data IssueFilters = IssueFilters
   { ack :: NullFilter
   , archive :: NullFilter
   , services :: [Text]
+  , service :: Maybe Text
   , environment :: Maybe Text
   , types :: [Text]
   , timeRange :: Maybe (UTCTime, UTCTime)
@@ -607,6 +608,7 @@ defIssueFilters =
     { ack = AnyValue
     , archive = AnyValue
     , services = []
+    , service = Nothing
     , environment = Nothing
     , types = []
     , timeRange = Nothing
@@ -619,20 +621,20 @@ defIssueFilters =
 
 
 -- | Adapt the app-wide investigation boundary to the issue store's filter shape.
--- A selected service is authoritative over a stale URL's repeated @service@ values;
--- an absent service intentionally leaves the list's explicit multi-service filter alone.
+-- Global and page-local service filters remain independent, so their intersection is
+-- applied rather than one silently replacing the other.
 -- Issues have no trace column, so trace selection remains available to the subsequent
 -- evidence hand-off rather than broadening this list query.
 --
 -- >>> let t = UTCTime (ModifiedJulianDay 0) 0
 -- >>> let scope = ScopedQuery (UUIDId $ UUID5.generateNamed UUID5.namespaceOID []) (Just t, Just t) (Just "production") (Just "checkout") (Just "trace-1")
 -- >>> let filtered = applyIssueScope scope defIssueFilters{services = ["catalog"], environment = Just "staging"}
--- >>> (filtered.services, filtered.environment, filtered.timeRange == Just (t, t))
--- (["checkout"],Just "production",True)
+-- >>> (filtered.services, filtered.service, filtered.environment, filtered.timeRange == Just (t, t))
+-- (["catalog"],Just "checkout",Just "production",True)
 applyIssueScope :: ScopedQuery -> IssueFilters -> IssueFilters
 applyIssueScope scope filters =
   filters
-    { services = maybe filters.services pure scope.service
+    { service = scope.service
     , environment = scope.environment
     , timeRange = case scope.timeRange of
         (Just fromTime, Just toTime) -> Just (fromTime, toTime)
@@ -658,6 +660,7 @@ selectIssues pid projection f = do
           <> sqlNullFilter pfx [HI.sql|archived_at|] f.archive
           <> bool mempty [HI.sql| AND (^{pfx}severity IS NULL OR ^{pfx}severity != 'low')|] f.hideLowSeverity
           <> arrF pfx [HI.sql|service|] f.services
+          <> foldMap (\service -> [HI.sql| AND ^{pfx}service = #{service}|]) f.service
           <> foldMap (\environment -> [HI.sql| AND ^{pfx}environment = #{environment}|]) f.environment
           <> arrF pfx [HI.sql|issue_type::text|] f.types
       iFilters = mkFilters [HI.sql|i.|]

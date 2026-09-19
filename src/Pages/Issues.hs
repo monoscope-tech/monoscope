@@ -892,7 +892,7 @@ issueChartCard_ IssueView{..} chartTitle heightCls thresholdM chartQuery = do
       chartId = issue.id.toText <> "-pattern-volume"
       total = div_ [class_ "flex flex-col gap-0.5 leading-none"] do
         span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] "Events"
-        Widget.widgetValueSlotAs_ "text-2xl font-semibold text-textStrong tabular-nums leading-none" chartId Nothing
+        Widget.widgetValueSlotAs_ chartId Nothing
       picker = div_ [class_ "flex flex-wrap items-center justify-end gap-2 [&>button]:max-md:basis-full"] do
         TimePicker.liveDataControls_ (Just refreshId) currentRange (Just $ "issue-" <> chartId) TimePicker.RefreshOnly
   div_ [id_ refreshId, class_ "hidden", [__|on submit trigger 'update-query' on window|]] ""
@@ -975,7 +975,7 @@ issueEvidence_ v@IssueView{..} = case Issues.issuePayload issue of
         -- Hands the Explorer the alert's own query, its issue boundary, and the page's window.
         queryExplorerLink = a_
           [ href_ $ timeScopedUrl ("/p/" <> pid.toText <> "/log_explorer") [("query", applyScopedKqlContext scope d.queryExpression)] tp.from tp.to tp.since
-          , data_ "preserve-time-range" ""
+          , data_ "preserve-page-context" ""
           , class_ "ml-auto text-xs text-textBrand hover:underline flex items-center gap-1"
           ]
           do
@@ -1862,7 +1862,6 @@ issueListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM service
             , Issues.services = serviceFilters
             , Issues.types = typeFilters
             }
-      scopedServices = issueFilters.services
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
   currTime <- Time.currentTime
   ((issues, totalCount), (availableServices, availableTypes)) <-
@@ -1877,7 +1876,7 @@ issueListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM service
           (Hasql.interp [HI.sql| SELECT DISTINCT issue_type::text FROM apis.issues WHERE project_id = #{pid} |])
       )
 
-  let filterParams = foldMap ("&service=" <>) scopedServices <> foldMap ("&type=" <>) typeFilters
+  let filterParams = foldMap ("&service=" <>) serviceFilters <> foldMap ("&type=" <>) typeFilters
       baseUrl = "/p/" <> pid.toText <> "/issues?filter=" <> currentFilterTab <> "&sort=" <> currentSort <> "&period=" <> period <> filterParams
       paginationConfig =
         Pagination

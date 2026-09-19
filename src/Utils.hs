@@ -1704,6 +1704,9 @@ navTabAttrs =
   , hxSelect_ "#main-content"
   , term "hx-select-oob" "#main-sidenav:outerMorph,#main-navbar:outerMorph"
   , hxSwap_ "outerMorph"
+  , -- Rewritten just before navigation so the destination inherits the current time and
+    -- telemetry scope from the URL, including scope changes made after this link rendered.
+    data_ "preserve-page-context" ""
   , [__|on click set my.preloadState to 'DONE'|]
   ]
 
@@ -1722,9 +1725,8 @@ explorerNavTabs_ pid active =
               ]
                 <> [term "aria-current" "page" | isActive]
                 -- The href picks up the page's current from/to/since before it is followed; the
-                -- rewrite lives in the bundle (@preserve-time-range@ in main.ts) — real imperative
+                -- rewrite lives in the bundle (@preserve-page-context@ in main.ts) — real imperative
                 -- URL work, and inlining it re-serialized 200 chars of JS onto every nav link.
-                <> [data_ "preserve-time-range" ""]
                 <> navTabAttrs
             )
             (toHtml label)

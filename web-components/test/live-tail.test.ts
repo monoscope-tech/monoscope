@@ -190,6 +190,14 @@ describe('Live Tail reconnection', () => {
 // incident, so "is this still receiving?" has to be answerable from the screen — a stream
 // that stopped while showing its last rows is indistinguishable from a quiet service.
 describe('Live Tail connection state', () => {
+  test('initializes the stream from the canonical global environment key', async () => {
+    window.history.replaceState({}, '', '/p/p1/live_tail?environment=production&service_scope=checkout');
+    const el = await mount();
+    expect(el.environment).toBe('production');
+    expect(el.service).toBe('checkout');
+    expect((el as any).stream.opts.body()).toMatchObject({ service: 'checkout', environment: 'production' });
+  });
+
   test('only connecting, live and reconnecting count as running', async () => {
     const el = await mount();
     for (const [state, isRunning] of [
@@ -428,7 +436,7 @@ describe('Live Tail restart', () => {
     el.environment = 'prod';
     el.kind = 'spans';
     el.restart();
-    expect([param('service'), param('env'), param('kind')]).toEqual(['checkout', 'prod', 'spans']);
+    expect([param('service'), param('environment'), param('env'), param('kind')]).toEqual(['checkout', 'prod', null, 'spans']);
 
     // Cleared filters are removed rather than left as empty keys, and `logs` is the
     // default kind so it never appears — a plain /live_tail link stays plain.
@@ -436,7 +444,7 @@ describe('Live Tail restart', () => {
     el.environment = '';
     el.kind = 'logs';
     el.restart();
-    expect([param('service'), param('env'), param('kind')]).toEqual([null, null, null]);
+    expect([param('service'), param('environment'), param('env'), param('kind')]).toEqual([null, null, null, null]);
   });
 
   test('the registration body carries the chosen filters', async () => {

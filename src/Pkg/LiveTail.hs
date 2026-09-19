@@ -188,9 +188,9 @@ logKind = "log"
 -- per-connection queue, which drops the oldest rows and reports the count.
 data Scope
   = -- | Live Tail's log list: an optional service, and which signal kinds to show.
-    LogTail (Maybe Text) SignalKind
+    LogTail {service :: Maybe Text, kind :: SignalKind}
   | -- | The Events tab's live toggle: every signal, projected into the table's columns.
-    AllSignals
+    AllSignals {service :: Maybe Text}
   deriving stock (Eq, Generic, Show)
 
 
@@ -198,22 +198,22 @@ data Scope
 scopeToText :: Scope -> (Text, Maybe Text, SignalKind)
 scopeToText = \case
   LogTail svc kind -> ("logs_only", svc, kind)
-  AllSignals -> ("all_signals", Nothing, SKAny)
+  AllSignals svc -> ("all_signals", svc, SKAny)
 
 
 -- | Rebuild a 'Scope' from its stored parts.
 --
 -- >>> scopeFromRow "logs_only" (Just "checkout") SKSpans
--- Just (LogTail (Just "checkout") SKSpans)
+-- Just (LogTail {service = Just "checkout", kind = SKSpans})
 -- >>> scopeFromRow "logs_only" Nothing SKLogs
--- Just (LogTail Nothing SKLogs)
+-- Just (LogTail {service = Nothing, kind = SKLogs})
 -- >>> scopeFromRow "all_signals" Nothing SKAny
--- Just AllSignals
+-- Just (AllSignals {service = Nothing})
 -- >>> scopeFromRow "nonsense" Nothing SKAny
 -- Nothing
 scopeFromRow :: Text -> Maybe Text -> SignalKind -> Maybe Scope
 scopeFromRow "logs_only" svc kind = Just (LogTail svc kind)
-scopeFromRow "all_signals" _ _ = Just AllSignals
+scopeFromRow "all_signals" svc _ = Just (AllSignals svc)
 scopeFromRow _ _ _ = Nothing
 
 
@@ -260,15 +260,17 @@ data NewSubscription = NewSubscription
 -- | Resolve the browser's requested scope.
 --
 -- >>> scopeFor (NewSubscription (Just " checkout ") Nothing Nothing Nothing Nothing Nothing)
--- LogTail (Just "checkout") SKLogs
+-- LogTail {service = Just "checkout", kind = SKLogs}
 -- >>> scopeFor (NewSubscription (Just "") Nothing Nothing Nothing (Just SKSpans) Nothing)
--- LogTail Nothing SKSpans
+-- LogTail {service = Nothing, kind = SKSpans}
 -- >>> scopeFor (NewSubscription Nothing Nothing Nothing (Just True) Nothing Nothing)
--- AllSignals
+-- AllSignals {service = Nothing}
 scopeFor :: NewSubscription -> Scope
 scopeFor ns
-  | ns.allSignals == Just True = AllSignals
-  | otherwise = LogTail (mfilter (not . T.null) (T.strip <$> ns.service)) (fromMaybe SKLogs ns.kind)
+  | ns.allSignals == Just True = AllSignals service
+  | otherwise = LogTail service (fromMaybe SKLogs ns.kind)
+  where
+    service = mfilter (not . T.null) (T.strip <$> ns.service)
 
 
 -- | Why a registration was refused. Typed rather than stringly so the handler maps each case
@@ -439,12 +441,7 @@ effectiveFilter cs row
   | not (maybe True (matches envSubject) cs.sub.environment) = Right False
   | otherwise = maybe (Right True) (evalExpr resolver) cs.userFilter
   where
-    -- The Events tab has no service to narrow by, and a Live Tail that named none is asking
-    -- for the whole project. Matched exhaustively rather than read out of a nullable field a
-    -- caller could forget to check.
-    serviceOk = case cs.sub.scope of
-      LogTail svc _ -> maybe True (matches serviceSubject) svc
-      AllSignals -> True
+    serviceOk = maybe True (matches serviceSubject) cs.sub.scope.service
     resolver :: Resolver
     resolver = resolveIn row
     matches subj expected = any ((== expected) . valueText) (resolver subj)
@@ -485,7 +482,7 @@ matchesFor subs rec = partitionEithers (mapMaybe decide subs)
     -- Matched exhaustively rather than by guard + `otherwise`, so a further Scope or
     -- SignalKind inherits no answer silently — it fails to compile until decided.
     decide cs = bool Nothing (verdict cs) case cs.sub.scope of
-      AllSignals -> True
+      AllSignals _ -> True
       LogTail _ SKAny -> True
       LogTail _ SKLogs -> isLog
       LogTail _ SKSpans -> isSpan
@@ -997,7 +994,7 @@ envelopeFromValue value = case AET.parseMaybe (AE.withObject "LiveEnvelope" (AE.
 toLiveRow :: Scope -> [Text] -> Telemetry.OtelLogsAndSpans -> LiveRow
 toLiveRow scope cols r = case scope of
   LogTail _ _ -> LogRow (toLogRowFields cols r)
-  AllSignals -> TableRow (toTableCols cols r)
+  AllSignals _ -> TableRow (toTableCols cols r)
 
 
 -- | Resolve each column the browser is rendering against the in-memory record.

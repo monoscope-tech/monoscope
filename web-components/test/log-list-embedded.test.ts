@@ -42,6 +42,17 @@ describe('embedded log widget: fetch URL', () => {
     expect(url.searchParams.get('other')).toBeNull(); // only time params are adopted
   });
 
+  test('adopts the dashboard telemetry scope from the page URL', async () => {
+    setPageUrl('?service_scope=frontend&environment=production&other=ignored');
+    const el = await embedded();
+
+    const url = new URL((el as any).buildJsonUrl());
+
+    expect(url.searchParams.get('service_scope')).toBe('frontend');
+    expect(url.searchParams.get('environment')).toBe('production');
+    expect(url.searchParams.get('other')).toBeNull();
+  });
+
   test('an absolute dashboard range overrides the widget default', async () => {
     setPageUrl('?from=2024-01-01T00:00:00Z&to=2024-01-02T00:00:00Z');
     const el = await embedded();
@@ -57,6 +68,28 @@ describe('embedded log widget: fetch URL', () => {
     const el = await mountList({ projectId: 'proj-1', mode: 'patterns' } as any);
 
     expect((el as any).buildJsonUrl()).toContain('/p/proj-1/log_explorer/patterns');
+  });
+});
+
+describe('log list: scoped follow-up requests', () => {
+  test('keeps telemetry scope while expanding an aggregate row', async () => {
+    setPageUrl('?service_scope=frontend&environment=production&query=kind%20%3D%3D%20server');
+    const el = await mountList({ projectId: 'proj-1', mode: 'sessions' } as any);
+
+    const url = new URL((el as any).buildExpandUrl('session-1', 0));
+
+    expect(url.searchParams.get('service_scope')).toBe('frontend');
+    expect(url.searchParams.get('environment')).toBe('production');
+  });
+
+  test('keeps telemetry scope in live Events subscriptions', async () => {
+    setPageUrl('?service_scope=frontend&environment=production');
+    const el = await mountList({ projectId: 'proj-1' } as any);
+
+    expect((el as any).liveSubscriptionBody()).toMatchObject({
+      service: 'frontend',
+      environment: 'production',
+    });
   });
 });
 

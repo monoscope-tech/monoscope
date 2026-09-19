@@ -163,18 +163,23 @@ describe('LogList — LOWER', () => {
     const sid = 'a4c885f5-215c-44ee-891e-d87bb63daa48';
     const summaryCell = [`session;right-badge-neutral\u21d2${sid}`];
 
-    const cellFor = async (mode?: string) => {
+    const cellFor = async (mode?: string, depth = 0, children = 0) => {
       const el = await mountList(mode ? ({ mode } as any) : {});
       (el as any).colIdxMap = { id: 0, summary: 1 };
-      const rowData = { ...row('r1'), data: ['r1', summaryCell], depth: 0, children: 0 };
+      const rowData = { ...row('r1'), data: ['r1', summaryCell], depth, children };
       const host = document.createElement('div');
       render((el as any).logItemCol(rowData, 'latency_breakdown'), host);
       return host;
     };
 
-    expect((await cellFor()).querySelector('button[aria-label*="Replay session"]')).not.toBeNull();
+    const root = await cellFor();
+    expect(root.querySelector('button[aria-label*="Replay session"]')).not.toBeNull();
+    expect(root.querySelector('use')?.getAttribute('href')).toContain('#play');
     // The sessions tab must keep it too — this is a both-modes contract.
     expect((await cellFor('sessions')).querySelector('button[aria-label*="Replay session"]')).not.toBeNull();
+    // Every row carrying a recording id remains a replay entry point.
+    expect((await cellFor(undefined, 1, 3)).querySelector('button[aria-label*="Replay session"]')).not.toBeNull();
+    expect((await cellFor(undefined, 1, 0)).querySelector('button[aria-label*="Replay session"]')).not.toBeNull();
   });
 
   test('sessions reserve only a replay action, not a latency column', async () => {

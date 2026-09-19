@@ -771,16 +771,20 @@ formatStatValue value unit
 -- for widgets that own their header; it is exported so a caller supplying its own
 -- header around a @naked@ chart shows the same number the widget would have,
 -- rather than computing a second total that could disagree with the chart.
-widgetValueSlot_ :: Text -> Text -> Maybe Text -> Html ()
-widgetValueSlot_ extraCls = widgetValueSlotAs_ ("bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl leading-none text-textWeak whitespace-nowrap " <> extraCls)
-
-
--- | 'widgetValueSlot_' with the styling chosen by the caller, for headers that want
--- the number to read as the headline rather than as a badge beside the title.
-widgetValueSlotAs_ :: Text -> Text -> Maybe Text -> Html ()
-widgetValueSlotAs_ cls wid valueM =
+widgetValueSlot_ :: Text -> Maybe Text -> Html ()
+widgetValueSlot_ wid valueM =
   span_
-    [ class_ $ cls <> bool " hidden" "" (isJust valueM)
+    [ class_ $ "bg-fillWeak text-sm font-medium px-2 py-1 rounded-lg leading-none text-textWeak whitespace-nowrap max-md:hidden" <> bool " hidden" "" (isJust valueM)
+    , id_ $ wid <> "Value"
+    ]
+    $ whenJust valueM toHtml
+
+
+-- | 'widgetValueSlot_' styled as a headline rather than as a badge beside the title.
+widgetValueSlotAs_ :: Text -> Maybe Text -> Html ()
+widgetValueSlotAs_ wid valueM =
+  span_
+    [ class_ $ "text-2xl font-semibold text-textStrong tabular-nums leading-none" <> bool " hidden" "" (isJust valueM)
     , id_ $ wid <> "Value"
     ]
     $ whenJust valueM toHtml
@@ -795,7 +799,7 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "mi
       whenJust widget.icon \icon -> span_ [] $ Utils.faSprite_ icon "regular" "w-4 h-4"
       span_ ([class_ "flex min-w-0 overflow-hidden", title_ $ maybeToMonoid widget.title] <> varTemplateAttr widget.title) $ renderDottedTitle $ maybeToMonoid widget.title
       descIcon_ widget.description ""
-    widgetValueSlot_ "max-md:hidden " wId (bool valueM Nothing (isTrue widget.hideValue))
+    widgetValueSlot_ wId (bool valueM Nothing (isTrue widget.hideValue))
     span_ ([class_ $ "text-textWeak widget-subtitle text-sm max-md:hidden " <> bool "" "hidden" (isTrue widget.hideSubtitle), id_ $ wId <> "Subtitle"] <> varTemplateAttr subValueM) $ toHtml $ maybeToMonoid subValueM
     -- Add hidden loader with specific ID that can be toggled from JS
     span_ [class_ "hidden", id_ $ wId <> "_loader"] Utils.reloadSpinner_

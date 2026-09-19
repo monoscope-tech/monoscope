@@ -5,6 +5,7 @@
 // wrong answer to hide: a mis-parsed summary renders as plain text, a mis-classified
 // error renders the wrong severity colour, and both look plausible.
 import { describe, test, expect } from 'vitest';
+import { render } from 'lit';
 import {
   parseSummaryElement,
   unescapeJsonString,
@@ -23,7 +24,20 @@ import {
   classifyLevel,
   evictOldest,
   atBottom,
+  renderBadge,
 } from '../src/log-list-utils';
+
+describe('renderBadge', () => {
+  test('uses a top-placed delegated tooltip without covering adjacent row text', () => {
+    const host = document.createElement('div');
+    render(renderBadge('cbadge-sm badge-neutral', 'Demo shopper', 'Demo shopper — id abc'), host);
+
+    const badge = host.querySelector('span')!;
+    expect(badge.classList).not.toContain('tooltip-left');
+    expect(badge.dataset.tippyContent).toBe('Demo shopper — id abc');
+    expect(badge.dataset.tippyPlacement).toBe('top');
+  });
+});
 
 describe('parseSummaryElement', () => {
   test('splits the field;style⇒value form the server emits', () => {

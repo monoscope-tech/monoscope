@@ -91,9 +91,10 @@ spec = aroundAll withTestResources do
     let creds = "dGVzdGVyOnMzY3JldA==" -- base64 of "tester:s3cret"
         basicCtx tr = tr.trATCtx{Config.config = tr.trATCtx.config{Config.basicAuthEnabled = True, Config.basicAuthUsername = "tester", Config.basicAuthPassword = "s3cret"}}
         reqWith hdrs = Wai.defaultRequest{Wai.requestHeaders = hdrs}
+        callAuthRequest tr req =
+          Servant.runHandler $ unAuthHandler (Auth.authHandler tr.trLogger (basicCtx tr)) req
         callAuth :: TestResources -> RequestHeaders -> IO (Either ServerError (Headers '[Header "Set-Cookie" SetCookie] Projects.Session))
-        callAuth tr hdrs =
-          liftIO $ Servant.runHandler $ unAuthHandler (Auth.authHandler tr.trLogger (basicCtx tr)) (reqWith hdrs)
+        callAuth tr hdrs = callAuthRequest tr (reqWith hdrs)
         basicRows tr = do
           rows :: V.Vector Int <-
             runQueryEffect tr
@@ -113,6 +114,16 @@ spec = aroundAll withTestResources do
       Right _ <- callAuth tr (authHdr <> cookieHdr)
       -- Under the old code each repeat minted a fresh id: one more row every time.
       basicRows tr >>= \n -> n `shouldBe` 1
+
+    it "uses namespaced URL parameters as the global telemetry scope" \tr -> do
+      let request =
+            (reqWith [(hAuthorization, "Basic " <> creds)])
+              { Wai.queryString = [("service", Just "checkout"), ("service", Just "catalog"), ("service_scope", Just "frontend-proxy"), ("environment", Just "production")]
+              }
+      Right response <- callAuthRequest tr request
+      let session = getResponse response
+      session.service `shouldBe` Just "frontend-proxy"
+      session.environment `shouldBe` Just "production"
 
   describe "loginH" do
     -- Invite emails link to /login?screen_hint=signup&login_hint=<email> so

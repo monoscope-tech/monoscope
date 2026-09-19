@@ -735,7 +735,7 @@ projectsDropDown currProject projects = do
 
 
 sideNav :: Projects.Session -> Projects.Project -> BWConfig -> Html ()
-sideNav sess project bcfg = aside_ [class_ "group/nav relative bg-fillWeaker max-md:bg-bgBase text-sm max-md:fixed max-md:z-50 max-md:w-60 max-md:h-full max-md:-translate-x-full max-md:transition-transform group-has-[#mobile-nav-toggle:checked]/pg:max-md:translate-x-0 md:min-w-13 md:w-13 md:shrink-0 group-has-[#sidenav-toggle:checked]/pg:md:w-60 h-screen md:transition-[width] duration-200 ease-out flex flex-col justify-between", id_ "side-nav-menu"] do
+sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeaker max-md:bg-bgBase text-sm max-md:fixed max-md:z-50 max-md:w-60 max-md:h-full max-md:-translate-x-full max-md:transition-transform group-has-[#mobile-nav-toggle:checked]/pg:max-md:translate-x-0 md:min-w-13 md:w-13 md:shrink-0 group-has-[#sidenav-toggle:checked]/pg:md:w-60 h-screen md:transition-[width] duration-200 ease-out flex flex-col justify-between", id_ "side-nav-menu"] do
   span_ [Aria.hidden_ "true", class_ "pointer-events-none absolute inset-x-0 bottom-0 h-64 bg-gradient-to-t from-fillBrand-weak/30 via-fillBrand-weak/10 to-transparent"] ""
   -- Right border resize handle (desktop only)
   label_ [term "for" "sidenav-toggle", class_ "max-md:hidden absolute right-0 top-0 bottom-0 w-1 border-r border-strokeWeak cursor-e-resize group-has-[#sidenav-toggle:checked]/pg:cursor-w-resize hover:border-strokeBrand-strong hover:w-1 transition-colors z-10", Aria.label_ "Toggle sidebar"] ""
@@ -1114,13 +1114,6 @@ navbar bcfg menuL =
       (() => {
         const navbar = document.currentScript?.closest('#main-navbar');
         const strip = navbar?.querySelector('[data-nav-tab-strip]');
-        const restoreScopeFocus = () => {
-          const focusId = sessionStorage.getItem('focusAfterScopeChange');
-          if (!focusId) return;
-          sessionStorage.removeItem('focusAfterScopeChange');
-          document.getElementById(focusId)?.focus();
-        };
-        requestAnimationFrame(restoreScopeFocus);
         if (!strip) return;
         const sync = () => {
           strip.dataset.overflowing = String(strip.scrollWidth > strip.clientWidth + 1);
@@ -1142,10 +1135,7 @@ navbar bcfg menuL =
 -- | The app-wide environment selector, in the shape Datadog puts in its top bar: pick prod
 -- or staging once and every telemetry surface stays scoped to it until you change it.
 --
--- The selection is a cookie, not a query parameter. It has to survive navigation to pages
--- that never declared an @?env=@ parameter — which is all of them — so a link-based control
--- would need the parameter threaded through every route to be sticky at all. The cost is
--- that a shared link does not carry the environment; the query it links to does.
+-- The selection lives in the URL so navigation and shared links preserve the active scope.
 --
 -- Hidden entirely when the project has never reported an environment: a picker whose only
 -- option is "All" is furniture, not a control.
@@ -1170,19 +1160,8 @@ envPicker_ selected options =
     ul_ (popoverPanel_ "env-picker" <> [class_ "dropdown menu flex flex-col bg-bgBase border border-strokeWeak w-56 p-1 text-sm rounded-lg shadow"])
       -- Nothing is "all environments" and is always offered: an environment that has gone
       -- quiet must not be able to strand a reader in a view with no data and no way out.
-      $ forM_ (Nothing : (Just <$> V.toList options)) \opt -> do
-        let cookieVal = fromMaybe "" opt
-        li_
-          $ button_
-            [ class_ $ "w-full text-left cursor-pointer rounded-md px-2 py-1 hover:bg-fillWeak " <> bool "" "font-semibold text-textBrand" (opt == selected)
-            , type_ "button"
-            , term "aria-pressed" (bool "false" "true" (opt == selected))
-            , -- A cookie write plus a reload: genuinely imperative, and the whole point is
-              -- that it applies to the server-rendered query on the *next* request.
-              term "_" [text|on click put my.innerText into #env-picker-label then set #env-picker-trigger's @aria-busy to 'true' then set #env-picker-trigger's @disabled to 'disabled' then call sessionStorage.setItem('focusAfterScopeChange', 'env-picker-trigger') then set document.cookie to 'env=${cookieVal};path=/;max-age=31536000;samesite=lax' then call location.reload()|]
-            ]
-          $ toHtml
-          $ fromMaybe "All environments" opt
+      $ forM_ (Nothing : (Just <$> V.toList options))
+      $ scopeOption_ "environment" "All environments" selected
 
 
 servicePicker_ :: Maybe Text -> V.Vector Text -> Html ()
@@ -1195,9 +1174,25 @@ servicePicker_ selected options =
       span_ [class_ "max-w-32 truncate font-normal text-textWeak max-md:hidden", id_ "service-picker-label"] $ toHtml current
       faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral"
     ul_ (popoverPanel_ "service-picker" <> [class_ "dropdown menu flex flex-col bg-bgBase border border-strokeWeak w-56 p-1 text-sm rounded-lg shadow"])
-      $ forM_ (Nothing : (Just <$> V.toList options)) \opt -> do
-        let cookieVal = fromMaybe "" opt
-        li_ $ button_ [class_ $ "w-full text-left cursor-pointer rounded-md px-2 py-1 hover:bg-fillWeak " <> bool "" "font-semibold text-textBrand" (opt == selected), type_ "button", term "aria-pressed" (bool "false" "true" (opt == selected)), term "_" [text|on click put my.innerText into #service-picker-label then set #service-picker-trigger's @aria-busy to 'true' then set #service-picker-trigger's @disabled to 'disabled' then call sessionStorage.setItem('focusAfterScopeChange', 'service-picker-trigger') then set document.cookie to 'service=${cookieVal};path=/;max-age=31536000;samesite=lax' then call location.reload()|]] $ toHtml $ fromMaybe "All services" opt
+      $ forM_ (Nothing : (Just <$> V.toList options))
+      $ scopeOption_ "service_scope" "All services" selected
+
+
+-- The URL is the scope store. The dataset carries arbitrary service/environment names
+-- without embedding them in executable text; the one-line handler preserves every other
+-- query parameter through the shared URL helper.
+scopeOption_ :: Text -> Text -> Maybe Text -> Maybe Text -> Html ()
+scopeOption_ scope fallback selected option =
+  li_ []
+    $ button_
+      [ class_ $ "w-full text-left cursor-pointer rounded-md px-2 py-1 hover:bg-fillWeak " <> bool "" "font-semibold text-textBrand" (option == selected)
+      , type_ "button"
+      , term "aria-pressed" (bool "false" "true" (option == selected))
+      , data_ "scope-key" scope
+      , data_ "scope-value" (fromMaybe "" option)
+      , [__|on click call window.setQueryParamAndReload(my.dataset.scopeKey, my.dataset.scopeValue)|]
+      ]
+    $ toHtml (fromMaybe fallback option)
 
 
 globalTemplates_ :: Html ()

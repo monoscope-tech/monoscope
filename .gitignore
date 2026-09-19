@@ -63,6 +63,7 @@ e2e/playwright-report/
 scripts/local/
 .impeccable.md
 .local/
+.codex/
 
 # stray root-level screenshots (Playwright/manual)
 /*.png
