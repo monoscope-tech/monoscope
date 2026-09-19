@@ -6,29 +6,6 @@
         "since": "2H",
         "to": null
     },
-    "tool_calls": [
-        {
-            "args": {
-                "limit": 20,
-                "query": "level == \"ERROR\" | summarize count() by resource.service.name"
-            },
-            "name": "run_query",
-            "raw_data": {
-                "count": 1,
-                "data": [
-                    [
-                        "api-service",
-                        2
-                    ]
-                ],
-                "headers": [
-                    "resource___service___name",
-                    "count_"
-                ]
-            },
-            "result_preview": "Results (1 rows):\n  api-service | 2.0"
-        }
-    ],
     "visualization": "distribution",
     "widgets": []
 }
