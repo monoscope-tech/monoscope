@@ -254,6 +254,54 @@ actionPickerActions_ modalId = div_ [class_ "flex justify-end gap-1.5 border-t b
   button_ [type_ "submit", class_ "btn btn-sm btn-primary shadow-none active:scale-[0.96] transition-transform"] "Save changes"
 
 
+dashboardVariables_ :: Projects.ProjectId -> Dashboards.DashboardId -> Bool -> [Dashboards.Variable] -> [Attribute] -> Html ()
+dashboardVariables_ pid dashId hasTabs variables extraAttrs = div_ ([id_ "dashboard-variables", class_ "contents"] <> extraAttrs) do
+  input_ [type_ "checkbox", class_ "hidden peer/vars", id_ "dash-vars-toggle"]
+  label_ [Lucid.for_ "dash-vars-toggle", class_ "md:hidden cursor-pointer text-xs text-textWeak bg-fillWeaker border border-strokeWeak rounded-lg px-2 py-1 flex items-center gap-1 peer-checked/vars:hidden"] do
+    faSprite_ "filter" "regular" "w-3 h-3"
+    "Filters"
+  label_ [Lucid.for_ "dash-vars-toggle", class_ "md:hidden cursor-pointer text-xs text-textWeak bg-fillWeak border border-strokeWeak rounded-lg px-2 py-1 hidden peer-checked/vars:flex items-center gap-1"] do
+    faSprite_ "filter" "regular" "w-3 h-3"
+    "Hide Filters"
+  div_ [class_ $ "max-md:hidden max-md:peer-checked/vars:flex flex gap-2 flex-wrap max-md:w-full max-md:pt-1 " <> if hasTabs then "ml-auto max-md:ml-0" else ""] do
+    forM_ variables \var -> fieldset_ [class_ "border border-strokeStrong bg-fillWeaker p-0 inline-block rounded-lg dash-variable text-sm"] do
+      legend_ [class_ "px-1 ml-2 text-xs"] $ toHtml $ fromMaybe var.key var.title <> memptyIfFalse (var.required == Just True) " *"
+      let whitelist =
+            maybe
+              "[]"
+              ( decodeUtf8
+                  . fromLazy
+                  . AE.encode
+                  . map \opt ->
+                    let v = maybeToMonoid (opt !!? 0)
+                     in AE.object ["value" AE..= v, "name" AE..= fromMaybe v (opt !!? 1)]
+              )
+              var.options
+
+      input_
+        $ [ type_ "text"
+          , name_ var.key
+          , class_ "dash-variable-input"
+          , data_ "project-id" pid.toText
+          , data_ "dashboard-id" dashId.toText
+          , data_ "tagify" ""
+          , data_ "tagify-whitelist" whitelist
+          , data_ "tagify-enforce-whitelist" ""
+          , data_ "tagify-text-prop" "name"
+          , data_ "tagify-query-sql" $ maybeToMonoid $ (.statement) <$> var.sql
+          , -- Which store the statement belongs to. Without it the client-side
+            -- refresh below re-runs a postgres-only statement (apis.endpoints)
+            -- against TimeFusion and the variable silently stops updating.
+            data_ "tagify-db-source" $ foldMap (Data.Effectful.Hasql.sqlSourceParam . (.source)) var.sql
+          , data_ "tagify-query" $ maybeToMonoid var.query
+          , data_ "tagify-reload-on-change" $ maybe "false" (T.toLower . show) var.reloadOnChange
+          , value_ $ maybeToMonoid var.value
+          ]
+        -- Multi vars must carry NO tagify-mode attr (main.ts only sets options.mode
+        -- when present); a second data_ attr would be (<>)-merged by Lucid.
+        <> memptyIfFalse (var.multi /= Just True) [data_ "tagify-mode" "select"]
+
+
 dashboardPage_ :: Projects.ProjectId -> Dashboards.DashboardId -> Dashboards.Dashboard -> Dashboards.DashboardVM -> [(Text, Maybe Text)] -> Html ()
 dashboardPage_ pid dashId dash dashVM allParams = do
   let pidText = pid.toText
@@ -307,52 +355,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
       dashboardTabStrip_ pidText dashIdText activeTabIdx tabs queryStr []
 
     -- Variables section (pushed to the right, collapsible on mobile)
-    whenJust dash.variables \variables -> do
-      -- Mobile toggle button
-      input_ [type_ "checkbox", class_ "hidden peer/vars", id_ "dash-vars-toggle"]
-      label_ [Lucid.for_ "dash-vars-toggle", class_ "md:hidden cursor-pointer text-xs text-textWeak bg-fillWeaker border border-strokeWeak rounded-lg px-2 py-1 flex items-center gap-1 peer-checked/vars:hidden"] do
-        faSprite_ "filter" "regular" "w-3 h-3"
-        "Filters"
-      label_ [Lucid.for_ "dash-vars-toggle", class_ "md:hidden cursor-pointer text-xs text-textWeak bg-fillWeak border border-strokeWeak rounded-lg px-2 py-1 hidden peer-checked/vars:flex items-center gap-1"] do
-        faSprite_ "filter" "regular" "w-3 h-3"
-        "Hide Filters"
-      div_ [class_ $ "max-md:hidden max-md:peer-checked/vars:flex flex gap-2 flex-wrap max-md:w-full max-md:pt-1 " <> if isJust dash.tabs then "ml-auto max-md:ml-0" else ""] do
-        forM_ variables \var -> fieldset_ [class_ "border border-strokeStrong bg-fillWeaker p-0 inline-block rounded-lg dash-variable text-sm"] do
-          legend_ [class_ "px-1 ml-2 text-xs"] $ toHtml $ fromMaybe var.key var.title <> memptyIfFalse (var.required == Just True) " *"
-          let whitelist =
-                maybe
-                  "[]"
-                  ( decodeUtf8
-                      . fromLazy
-                      . AE.encode
-                      . map \opt ->
-                        let v = maybeToMonoid (opt !!? 0)
-                         in AE.object ["value" AE..= v, "name" AE..= fromMaybe v (opt !!? 1)]
-                  )
-                  var.options
-
-          input_
-            $ [ type_ "text"
-              , name_ var.key
-              , class_ "dash-variable-input"
-              , data_ "project-id" pidText
-              , data_ "dashboard-id" dashIdText
-              , data_ "tagify" ""
-              , data_ "tagify-whitelist" whitelist
-              , data_ "tagify-enforce-whitelist" ""
-              , data_ "tagify-text-prop" "name"
-              , data_ "tagify-query-sql" $ maybeToMonoid $ (.statement) <$> var.sql
-              , -- Which store the statement belongs to. Without it the client-side
-                -- refresh below re-runs a postgres-only statement (apis.endpoints)
-                -- against TimeFusion and the variable silently stops updating.
-                data_ "tagify-db-source" $ foldMap (Data.Effectful.Hasql.sqlSourceParam . (.source)) var.sql
-              , data_ "tagify-query" $ maybeToMonoid var.query
-              , data_ "tagify-reload-on-change" $ maybe "false" (T.toLower . show) var.reloadOnChange
-              , value_ $ maybeToMonoid var.value
-              ]
-            -- Multi vars must carry NO tagify-mode attr (main.ts only sets options.mode
-            -- when present); a second data_ attr would be (<>)-merged by Lucid.
-            <> memptyIfFalse (var.multi /= Just True) [data_ "tagify-mode" "select"]
+    whenJust dash.variables \variables -> dashboardVariables_ pid dashId (isJust dash.tabs) variables []
   let widgetOrderUrl = "/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/widgets_order" <> maybe "" ("?tab=" <>) renderTabSlug
       constantsJson = encodeText $ HM.fromList [(k, fromMaybe "" v) | (k, v) <- allParams, "const-" `T.isPrefixOf` k]
 
@@ -909,6 +912,7 @@ variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
                       <> bool "" " active" (idx == 0)
                       <> bool "" " var-opt-current" isCurrent
                   , href_ optUrl
+                  , name_ "dashboard-variable-option"
                   ]
                     <> maybe navTabAttrs (const $ dashboardContentNavAttrs optUrl) activeTabSlug
                 )
@@ -2567,8 +2571,8 @@ processDashWidgets prefill pid dashId now timeParams paramsWithConstants widgets
 
 -- | Handler for dashboard with tab in path: /p/{pid}/dashboards/{dash_id}/tab/{tab_slug}
 -- This renders the full page with the specified tab active
-dashboardTabGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (NavigationResponse DashboardGet))
-dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr hxRequest allParams =
+dashboardTabGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (NavigationResponse DashboardGet))
+dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr hxRequest hxTriggerName allParams =
   Metrics.timed Metrics.dashboardShellDuration [("navigation", OA.toAttribute $ if isJust hxRequest then ("tab" :: Text) else "initial")]
     $ withSpan_ "dashboard.tab.render" [("monoscope.dashboard.navigation", OA.toAttribute $ if isJust hxRequest then ("tab" :: Text) else "initial")]
     $ do
@@ -2607,6 +2611,8 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr hxRequest all
           queryStr = queryStringFrom $ filter (\(k, _) -> k `notElem` [activeTabSlugKey, "expand"]) paramsWithTab
           fragment = do
             dashboardTabStrip_ pid.toText dashId.toText activeTabIdx (fold dash''.tabs) queryStr [hxSwapOob_ "outerMorph"]
+            when (hxTriggerName == Just "dashboard-variable-option")
+              $ whenJust dash''.variables \variables -> dashboardVariables_ pid dashId True variables [hxSwapOob_ "true"]
             div_ [class_ "dashboard-tabs-container", id_ "dashboard-tabs-content"]
               $ case findVarToPrompt (snd <$> activeTabInfo) (fold dash''.variables) of
                 Just v -> do

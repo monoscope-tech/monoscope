@@ -745,7 +745,9 @@ if (document.readyState === 'loading') {
   });
 }
 document.addEventListener('htmx:after:swap', (e: any) => {
-  initAllTagifyInputs(e.detail?.elt || document);
+  // Out-of-band fragments (such as dashboard variables) sit outside the main
+  // swap target in e.detail.elt, so include them in the post-swap scan.
+  initAllTagifyInputs();
   (window as any).interpolateVarTemplates();
   syncFacetCheckboxes(e.detail?.elt || document);
 });

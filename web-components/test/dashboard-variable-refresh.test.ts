@@ -24,6 +24,25 @@ afterEach(() => {
   history.replaceState({}, '', '/');
 });
 
+test('an HTMX swap initializes out-of-band dashboard variables outside the main target', () => {
+  document.body.innerHTML = '<main id="dashboard-tabs-content"></main><div id="dashboard-variables"><input class="dash-variable-input" data-tagify data-tagify-mode="select"></div>';
+  const input = document.querySelector<HTMLInputElement>('[data-tagify]')!;
+  const tagify = {
+    settings: { mode: 'select', dropdown: {} },
+    DOM: { scope: document.createElement('div') },
+    on: vi.fn(),
+  };
+  const Tagify = vi.fn(function () { return tagify; });
+  const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+  vi.stubGlobal('Tagify', Tagify);
+
+  document.dispatchEvent(new CustomEvent('htmx:after:swap', { detail: { elt: document.getElementById('dashboard-tabs-content') } }));
+
+  expect(Tagify).toHaveBeenCalledWith(input, expect.any(Object));
+  expect((input as any)._tagifyInstance).toBe(tagify);
+  expect(error).not.toHaveBeenCalled();
+});
+
 test('ticks keep options and selection usable, coalesce requests and append only new values', async () => {
   const { input, tagify } = mount();
   const pending = Promise.withResolvers<Response>();
