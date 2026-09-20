@@ -779,7 +779,7 @@ spec = sequential $ aroundAll withTestResources do
         firstHtml `shouldSatisfy` T.isInfixOf attr
       firstHtml `shouldNotSatisfy` T.isInfixOf "hx-select=\"#main-content\""
 
-      secondHtml <- partialHtml =<< open [("var-host", Just "dellyman.com")]
+      secondHtml <- partialHtml =<< open [("var-endpointHash", Just ""), ("var-host", Just "dellyman.com")]
       secondHtml `shouldSatisfy` T.isInfixOf "Select Endpoint"
       secondHtml `shouldSatisfy` T.isInfixOf "id=\"dashboard-tabs-content\""
 
