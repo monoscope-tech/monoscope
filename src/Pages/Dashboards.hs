@@ -762,7 +762,7 @@ processVariable pid now (sinceStr, fromDStr, toDStr) allParams variableBase = do
   let (fromD, toD, _) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
       paramsMap = Map.fromList allParams
       variable' = Dashboards.replaceDashboardVariables pid fromD toD allParams now variableBase
-      variable = variable'{Dashboards.value = join (Map.lookup ("var-" <> variable'.key) paramsMap) <|> variable'.value}
+      variable = variable'{Dashboards.value = maybe variable'.value nonEmptyT $ Map.lookup ("var-" <> variable'.key) paramsMap}
       withTemplateStatement v = v & #sql .~ variableBase.sql & #query .~ variableBase.query
 
   -- Prefer the precomputed facet catalog (a single indexed jsonb read) over a
