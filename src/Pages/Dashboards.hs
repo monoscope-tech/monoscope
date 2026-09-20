@@ -365,7 +365,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
     unless (null emptyConstants) $ div_ [class_ "alert alert-warning text-sm"] do
       faSprite_ "circle-exclamation" "regular" "w-4 h-4"
       span_ $ toHtml $ "Constants with no data: " <> T.intercalate ", " emptyConstants
-    div_ [class_ "dashboard-grid-wrapper relative min-h-[400px]"] do
+    div_ [class_ "dashboard-grid-wrapper relative isolate z-0 min-h-[400px]"] do
       case dash.tabs of
         Just tabs ->
           -- Tab system with htmx lazy loading - only render active tab content.

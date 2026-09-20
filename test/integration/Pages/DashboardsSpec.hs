@@ -55,7 +55,7 @@ spec = sequential $ aroundAll withTestResources do
     -- variables; Lucid merges duplicate attrs with (<>), so multi-select vars
     -- silently rendered as single-select ("" <> "select"). Multi vars must carry
     -- NO tagify-mode attr (main.ts only sets options.mode when it is present).
-    it "renders data-tagify-mode=select only for single-select variables" \_ -> do
+    it "dashboardVariables_renderCorrectlyAboveWidgetLayers" \_ -> do
       let mkVar k m =
             DashboardModel.Variable
               { key = k
@@ -72,7 +72,8 @@ spec = sequential $ aroundAll withTestResources do
               , value = Nothing
               , dependsOn = Nothing
               }
-          dash = (def :: DashboardModel.Dashboard){DashboardModel.variables = Just [mkVar "single" Nothing, mkVar "multi" (Just True)]}
+          chart = (def :: Widget.Widget){Widget.wType = Widget.WTTimeseriesLine}
+          dash = (def :: DashboardModel.Dashboard){DashboardModel.variables = Just [mkVar "single" Nothing, mkVar "multi" (Just True)], DashboardModel.widgets = [chart]}
           vm =
             DashboardVM
               { id = UUIDId UUID.nil
@@ -93,6 +94,7 @@ spec = sequential $ aroundAll withTestResources do
           html = TL.toStrict $ renderText $ toHtml $ Dashboards.DashboardGet testPid (UUIDId UUID.nil) dash vm []
       T.count "data-tagify-mode" html `shouldBe` 1
       html `shouldSatisfy` T.isInfixOf "data-tagify-mode=\"select\""
+      html `shouldContainAll` ["sticky top-0 z-10", "dashboard-grid-wrapper relative isolate z-0", ".dashboard-grid-wrapper"]
 
     -- The canonical tab URL stays a normal full-document URL, but its htmx response is
     -- supplied by the shared BodyWrapper navigation contract.  There is no synthetic

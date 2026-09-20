@@ -1283,6 +1283,7 @@ renderChart widget = do
                   });
                   const chartEl = document.getElementById(config.chartId);
                   if (!chartEl) return;
+                  echartOpt.tooltip.appendTo = chartEl.closest('.dashboard-grid-wrapper') || 'body';
                   const existing = window.echarts && window.echarts.getInstanceByDom(chartEl);
                   if (existing) existing.dispose();
                   window.bindFunctionsToObjects(echartOpt, echartOpt);
@@ -1379,7 +1380,6 @@ widgetToECharts widget =
             AE..= AE.object
               [ "show" AE..= fromMaybe True widget.showTooltip
               , "trigger" AE..= ("axis" :: Text)
-              , "appendToBody" AE..= True
               , "axisPointer"
                   AE..= AE.object
                     ["type" AE..= ("shadow" :: Text)]
