@@ -92,8 +92,8 @@ const _ensureBadgeClasses = html`
 
 const noopRef: RefOrCallback = () => {};
 
-// The `--col-<name>-width` custom properties a table or a row declares. The width lookup is
-// a parameter because the table and its rows deliberately size from different maps.
+// The `--col-<name>-width` custom properties declared by the table and inherited by its rows.
+// Aggregate child rows declare their own because their columns can differ from the parent.
 const columnWidthVars = (columns: string[], width: (column: string) => number | undefined): string =>
   columns
     .map((column) => [column, width(column)] as const)
@@ -964,6 +964,27 @@ export class LogList extends LitElement {
     this.fetchData(this.buildJsonUrl(), true);
   }
 
+  private clearEmptyQuery = () => {
+    if (this.initialFetchUrl) {
+      const url = new URL(this.initialFetchUrl, window.location.origin);
+      url.searchParams.delete('query');
+      url.searchParams.delete('queryAST');
+      this.initialFetchUrl = url.toString();
+      void this.fetchData(this.buildJsonUrl(), true);
+      return;
+    }
+
+    const queryEditorCall = (window as any).queryEditorCall;
+    if (queryEditorCall) void queryEditorCall('handleAddQuery', '', true);
+    else {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('query');
+      url.searchParams.delete('queryAST');
+      window.history.replaceState({}, '', url);
+      void this.fetchData(this.buildJsonUrl(), true);
+    }
+  };
+
   debouncedRefetchLogs = debounce(async () => {
     this.refetchLogs();
   }, 50);
@@ -1310,7 +1331,7 @@ export class LogList extends LitElement {
       requestAnimationFrame(() => this.scrollToBottom());
     }
 
-    // Reset isNew flag after animation. Keyed on new rows actually being PRESENT in
+    // Clear the static new-row marker after it has been visible long enough to notice. Keyed on new rows actually being PRESENT in
     // spanListTree (not on fetchedNew), so rows that arrive via the buffer→"N new"
     // concatenation path still get cleared — fetchedNew may already be false by then.
     if (changedProperties.has('spanListTree') && this.spanListTree.some((s) => s.isNew)) {
@@ -1321,8 +1342,8 @@ export class LogList extends LitElement {
         });
         this.fetchedNew = false;
         this.isNewResetTimer = null;
-        this.requestUpdate();
-      }, 4000); // Match the animation duration
+        this.updateVisibleItems();
+      }, 4000);
     }
   }
 
@@ -2697,36 +2718,10 @@ export class LogList extends LitElement {
     const isInitialLoading = this.isLoading && this.spanListTree.length === 0;
     const isPatterns = this.mode === 'patterns';
     const isAggregate = isPatterns;
+    const activeQuery = new URL(this.initialFetchUrl || window.location.href, window.location.origin).searchParams.get('query')?.trim();
 
     return html`
       <style>
-        @keyframes fadeBg {
-          0% {
-            background-color: var(--color-strokeBrand-weak);
-          }
-          100% {
-            background-color: transparent;
-          }
-        }
-
-        .animate-fadeBg {
-          animation: fadeBg 1.5s ease-out;
-        }
-
-        @keyframes pulseIndicator {
-          0%,
-          90% {
-            background-color: var(--color-fillBrand-strong);
-          }
-          100% {
-            background-color: transparent;
-          }
-        }
-
-        .animate-fadeBg .status-indicator {
-          animation: pulseIndicator 4s ease-out forwards;
-        }
-
         /*
           Layout and style containment, deliberately without paint.
 
@@ -2761,9 +2756,12 @@ export class LogList extends LitElement {
           table-layout: fixed;
         }
 
-        /* Prevent clicks on closed popovers */
-        [popover]:not(:popover-open) {
-          pointer-events: none;
+        .column-popover:not(:popover-open) {
+          display: none;
+        }
+
+        .column-popover:popover-open {
+          display: flex;
         }
 
         .results-toolbar {
@@ -2880,7 +2878,9 @@ export class LogList extends LitElement {
                         ? 'sticky right-0 max-md:static z-10'
                         : getColumnWidth(column);
                     return html`
-                      <td
+                      <th
+                        scope="col"
+                        role="columnheader"
                         class=${`p-0 m-0 whitespace-nowrap relative flex justify-between items-center pl-2.5 pr-2 text-sm font-normal bg-bgBase ${widthClass}`}
                       >
                         ${isId
@@ -2888,7 +2888,7 @@ export class LogList extends LitElement {
                           : html`<div class="relative overflow-hidden">
                               <div class="h-4 rounded skeleton-shimmer w-16" style="animation-delay: ${idx * 0.1}s"></div>
                             </div>`}
-                      </td>
+                      </th>
                     `;
                   })
                 : html`
@@ -2919,10 +2919,13 @@ export class LogList extends LitElement {
         ${!isInitialLoading && !this.fetchError && this.spanListTree.length === 0
           ? html`<div class="flex flex-col items-center justify-center py-12 px-4 text-center gap-2">
               ${faSprite('inbox-full', 'regular', 'w-6 h-6 text-iconNeutral')}
-              <span class="text-sm text-textWeak">No events match in the selected time range.</span>
-              <span class="text-xs text-textWeak">
-                ${this.initialFetchUrl ? 'Open in Explorer to adjust the time range.' : 'Try expanding the time picker above.'}
-              </span>
+              ${activeQuery
+                ? html`<span class="text-sm text-textWeak">No events match this query.</span>
+                    <button class="btn btn-sm btn-ghost" @click=${this.clearEmptyQuery}>Clear query</button>`
+                : html`<span class="text-sm text-textWeak">No events in this time range.</span>
+                    <button class="btn btn-sm btn-ghost" @click=${() => void this.fetchData(this.expandTimeRangeUrl(), true)}>
+                      Choose a wider time range
+                    </button>`}
             </div>`
           : nothing}
         ${!isAggregate && !this.shouldScrollToBottom && this.flipDirection
@@ -3176,7 +3179,7 @@ export class LogList extends LitElement {
           >
           ${rowTraceId && rowKind !== 'log' && this.mode !== 'sessions'
             ? html`<button
-                class="absolute inset-y-0 left-0 z-30 hidden group-hover:flex items-center cursor-pointer group/btn"
+                class="absolute inset-y-0 left-0 z-30 flex items-center cursor-pointer group/btn opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto"
                 data-tippy-content="Open trace fullscreen"
                 @pointerdown=${(e: Event) => e.stopPropagation()}
                 @click=${(e: Event) => {
@@ -3622,9 +3625,9 @@ export class LogList extends LitElement {
   }
 
   logTableHeading(column: string) {
-    if (column === 'id') return html`<td class="p-0 m-0 whitespace-nowrap col-id pl-2.5"></td>`;
+    if (column === 'id') return html`<th scope="col" role="columnheader" class="p-0 m-0 whitespace-nowrap col-id pl-2.5"></th>`;
     if (column === 'latency_breakdown' && this.mode === 'sessions') {
-      return html`<td aria-hidden="true" class="p-0 m-0 sticky right-0 max-md:static shrink-0 col-latency_breakdown"></td>`;
+      return html`<th scope="col" role="columnheader" aria-hidden="true" class="p-0 m-0 sticky right-0 max-md:static shrink-0 col-latency_breakdown"></th>`;
     }
 
     const width = this.columnWidth(column);
@@ -3716,10 +3719,9 @@ export class LogList extends LitElement {
         // Stacked rows size to their content; a 28px cap would clip the wrapped summary.
         this.isNarrow && 'h-auto',
         isSynthetic && 'italic text-textWeak border-l-2 border-dashed border-strokeWeak',
-        isNew && 'animate-fadeBg'
+        isNew && 'border-l-2 border-strokeBrand-strong'
       );
-      // Deliberately NOT this.columnWidth: that one narrows the sessions latency column and
-      // drops every width on a phone, and the row cells are sized from the raw maps.
+      // Aggregate children can use a different column set from the parent table.
       const rowStyle = columnWidthVars(effectiveLogsColumns, (column) => this.columnMaxWidthMap[column] || this.fixedColumnWidths[column]);
       const rowClick = isAggregate
         ? (event: Event) => {
@@ -3774,7 +3776,7 @@ export class LogList extends LitElement {
         ? html`<div role="row" id=${rowId} data-row-id=${rowData.id} class=${rowClass} style=${rowStyle} @click=${rowClick}>
             ${cells}${latencyCell}
           </div>`
-        : html`<tr id=${rowId} data-row-id=${rowData.id} class=${rowClass} style=${rowStyle} @click=${rowClick}>
+        : html`<tr id=${rowId} data-row-id=${rowData.id} class=${rowClass} @click=${rowClick}>
             ${cells}${latencyCell}
           </tr>`;
       return rowHtml;
@@ -3793,7 +3795,9 @@ export class LogList extends LitElement {
     }
 
     return html`
-      <td
+      <th
+        scope="col"
+        role="columnheader"
         class=${`cursor-pointer p-0 m-0 whitespace-nowrap relative flex justify-between items-center pl-2.5 pr-2 text-sm font-normal bg-bgBase ${classes} ${
           finalWidth ? `col-${column}` : ''
         }`}
@@ -3820,7 +3824,7 @@ export class LogList extends LitElement {
           popover
           id=${`col-dropdown-${column}`}
           style=${`position-anchor: --col-dropdown-${column}`}
-          class="dropdown menu flex flex-col font-normal bg-bgBase border w-64 border-strokeWeak p-2 text-sm rounded shadow"
+          class="column-popover dropdown menu flex flex-col font-normal bg-bgBase border w-64 border-strokeWeak p-2 text-sm rounded shadow"
         >
           ${LogList.UNSORTABLE.has(column)
             ? nothing
@@ -3875,7 +3879,7 @@ export class LogList extends LitElement {
         >
           |
         </div>
-      </td>
+      </th>
     `;
   }
 
@@ -3992,7 +3996,7 @@ export class LogList extends LitElement {
         aria-pressed=${this.view === view}
         aria-label="${label} view"
         class=${`flex items-center cursor-pointer justify-center gap-1 px-2 py-1 text-xs rounded transition-transform duration-150 ease-out active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100 ${
-          this.view === view ? 'bg-fillWeak text-textStrong' : 'text-textWeak hover:bg-fillWeaker'
+          this.view === view ? 'bg-fillWeak text-textStrong ring-1 ring-inset ring-strokeStrong' : 'text-textWeak hover:bg-fillWeaker'
         }`}
       >
         ${faSprite(icon, 'regular', 'h-4 w-4')}
@@ -4086,7 +4090,7 @@ export class LogList extends LitElement {
               </div>
             </div>`
           : html`<span class="flex-1"></span>`}
-        <div class="tabs tabs-box tabs-md p-0 tabs-outline items-center border">
+        <div class="tabs tabs-box tabs-md p-0 tabs-outline items-center border border-strokeStrong">
           ${viewButton('tree', 'tree', 'Tree')} ${viewButton('list', 'list-view', 'List')}
         </div>
 
