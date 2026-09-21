@@ -94,7 +94,7 @@ logQueryBox_ config = do
         -- and the message row below both derive from it in CSS, so JS sets one
         -- attribute instead of toggling classes on three elements across two
         -- files (which had drifted to two different border colours).
-        div_ [class_ "group/qbox px-1 py-0.5 flex-1 flex flex-col gap-0.5 bg-bgRaised rounded-lg border border-strokeStrong focus-within:ring-2 focus-within:ring-strokeBrand-weak data-[query-state=error]:border-strokeError-strong has-[.ai-search:focus-visible]:ring-2 has-[.ai-search:focus-visible]:ring-strokeBrand-strong", id_ "queryBox", data_ "query-state" (bool "ok" "error" (isJust config.parseError))] do
+        div_ [class_ "group/qbox px-1 py-0.5 flex-1 flex flex-col gap-0.5 bg-bgRaised rounded-lg border border-strokeWeak focus-within:ring-2 focus-within:ring-strokeBrand-weak data-[query-state=error]:border-strokeError-strong has-[.ai-search:focus-visible]:ring-2 has-[.ai-search:focus-visible]:ring-strokeBrand-strong", id_ "queryBox", data_ "query-state" (bool "ok" "error" (isJust config.parseError))] do
           input_
             $ [ class_ "sr-only ai-search"
               , type_ "checkbox"
@@ -192,7 +192,7 @@ logQueryBox_ config = do
               span_ [id_ "query-parse-error-msg"] $ toHtml $ fromMaybe "" config.parseError
           div_ [class_ "w-full flex flex-1 gap-3 justify-between items-stretch min-w-0 max-md:flex-wrap"] do
             div_ [id_ "queryBuilder", class_ "w-full flex-1 flex items-center min-w-0 min-h-8"] do
-              div_ [class_ "relative w-full min-h-8 pl-2 flex border rounded-md border-strokeStrong bg-bgRaised focus-within:border-strokeBrand-strong focus-within:outline-2"] do
+              div_ [class_ "relative w-full min-h-8 pl-2 flex border rounded-md border-strokeWeak bg-bgRaised focus-within:border-strokeBrand-strong focus-within:outline-2"] do
                 term
                   "query-editor"
                   -- No height of its own: the bordered box above owns it (min-h-8,
@@ -217,7 +217,7 @@ logQueryBox_ config = do
               whenNothing_ config.targetWidgetPreview $ do
                 div_ [class_ "flex items-center max-md:hidden"] do
                   select_
-                    [ class_ "select select-sm h-8 w-full max-w-xs bg-bgBase !border-strokeStrong"
+                    [ class_ "select select-sm h-8 w-full max-w-xs bg-bgBase !border-strokeWeak"
                     , name_ "target-spans"
                     , id_ "spans-toggle"
                     , Aria.label_ "Search scope"
