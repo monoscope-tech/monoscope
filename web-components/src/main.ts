@@ -514,6 +514,7 @@ function initTagifyElement(el: HTMLElement) {
     (el as any)._tagifyInstance = null;
   }
   try {
+    const hasInitialValue = Boolean((el as HTMLInputElement).value);
     const options: any = {};
     const wl = el.getAttribute('data-tagify-whitelist');
     if (wl) {
@@ -545,20 +546,24 @@ function initTagifyElement(el: HTMLElement) {
     }
 
     // Lazy dashboard variables: options aren't server-rendered (scoped/dependent
-    // vars skip the render-time scan). Fetch the whitelist the first time the
-    // dropdown opens, so opening the picker is what pays the query cost, not the
-    // page load. Guarded so it only fetches once per instance.
+    // vars skip the render-time scan). Resolve a selected raw value immediately;
+    // otherwise defer the query until the dropdown opens. Coalesce the first request,
+    // retain a populated result, and let an empty or failed result retry on open.
     if (
       el.classList.contains('dash-variable-input') &&
       !options.whitelist?.length &&
       (el.getAttribute('data-tagify-query-sql') || el.getAttribute('data-tagify-query'))
     ) {
       let fetched = false;
-      tagify.on('dropdown:show', () => {
+      const fetchOptions = () => {
         if (fetched) return;
         fetched = true;
-        (window as any).reloadVarWhitelist(el);
-      });
+        (window as any).reloadVarWhitelist(el).finally(() => {
+          if (!tagify.settings.whitelist?.length) fetched = false;
+        });
+      };
+      if (hasInitialValue) fetchOptions();
+      tagify.on('dropdown:show', fetchOptions);
     }
 
     // Dashboard variable: sync tagify changes to URL params and fire update-query
@@ -671,19 +676,21 @@ function reloadVarWhitelist(input: HTMLElement, background = false): Promise<voi
         // left e.g. the Endpoint picker offering the *old* domain's endpoints.
         const options = dedupe(fetched);
         tgfy.settings.whitelist = options;
-        // The held selection belongs to the old scope too. Leaving it makes every widget
-        // query an endpoint that isn't on this domain; clearing it alone makes them all
-        // query '' and report "no data" — a lie about the data. Fall to the first option.
-        const held = tgfy.value?.[0]?.value;
-        if (held !== undefined && !options.some((o: any) => valueOf(o) === String(held))) {
+        // Replace an invalid selection, or rebuild a valid raw value so newly fetched
+        // display fields (such as an endpoint's method and path) become visible.
+        const selected = tgfy.value?.[0];
+        const held = selected?.value;
+        const matching = options.find((o: any) => valueOf(o) === String(held));
+        if (held !== undefined && (!matching || Object.entries(matching).some(([key, value]) => selected[key] !== value))) {
+          const replacement = matching ?? options[0];
           suppressVarChange.add(input);
           try {
             tgfy.removeAllTags();
-            if (options.length) tgfy.addTags([options[0]]);
+            if (replacement) tgfy.addTags([replacement]);
           } finally {
             suppressVarChange.delete(input);
           }
-          publishVarValue(input, options.length ? valueOf(options[0]) : '');
+          if (!matching) publishVarValue(input, replacement ? valueOf(replacement) : '');
         }
         if (tgfy.state?.dropdown?.visible) tgfy.dropdown.show(tgfy.state.inputText || '');
       }

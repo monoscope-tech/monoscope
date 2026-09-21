@@ -43,6 +43,29 @@ test('an HTMX swap initializes out-of-band dashboard variables outside the main 
   expect(error).not.toHaveBeenCalled();
 });
 
+test('initializing a selected variable without options immediately resolves its label', async () => {
+  document.body.innerHTML = '<input name="endpointHash" value="api-endpoint" class="dash-variable-input" data-tagify data-tagify-mode="select" data-tagify-text-prop="name" data-tagify-whitelist="[]" data-tagify-query-sql="select hash, path from apis.endpoints">';
+  const input = document.querySelector<HTMLInputElement>('[data-tagify]')!;
+  const tagify = {
+    settings: { whitelist: [], tagTextProp: 'name', mode: 'select', dropdown: {} },
+    value: [{ value: 'api-endpoint' }],
+    DOM: { scope: input },
+    on: vi.fn(),
+    removeAllTags: vi.fn(function (this: any) { this.value = []; }),
+    addTags: vi.fn(function (this: any, tags: any[]) { this.value = tags; }),
+  };
+  vi.stubGlobal('Tagify', vi.fn(function () { return tagify; }));
+  const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(response([['api-endpoint', 'GET /v1/orders']]));
+  vi.stubGlobal('fetch', fetch);
+  history.replaceState({}, '', '/?var-endpointHash=api-endpoint');
+
+  document.dispatchEvent(new CustomEvent('htmx:after:swap', { detail: { elt: input } }));
+  await vi.waitFor(() => expect(tagify.addTags).toHaveBeenCalledWith([{ value: 'api-endpoint', name: 'GET /v1/orders' }]));
+
+  expect(fetch).toHaveBeenCalledOnce();
+  expect(new URL(location.href).searchParams.get('var-endpointHash')).toBe('api-endpoint');
+});
+
 test('ticks keep options and selection usable, coalesce requests and append only new values', async () => {
   const { input, tagify } = mount();
   const pending = Promise.withResolvers<Response>();
