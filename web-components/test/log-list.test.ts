@@ -70,7 +70,7 @@ describe('LogList load-more', () => {
     await el.updateComplete;
 
     expect((el as any).hasMore).toBe(false);
-    expect(el.textContent).toContain('No events match');
+    expect(el.textContent).toContain('No events in this time range');
   });
 
   // Regression: with rows on screen, running a new query (refresh) that returns

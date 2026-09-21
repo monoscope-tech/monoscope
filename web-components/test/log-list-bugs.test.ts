@@ -204,6 +204,18 @@ describe('LogList — LOWER', () => {
     expect(latency?.classList).toContain('col-latency_breakdown');
   });
 
+  test('mounted virtual rows inherit live column widths from the table', async () => {
+    const el = await mountList();
+    (el as any).logsColumns = ['id', 'service', 'summary'];
+    (el as any).colIdxMap = { id: 0, service: 1, summary: 2 };
+    const body = document.createElement('tbody');
+    document.body.appendChild(document.createElement('table')).appendChild(body);
+
+    render((el as any).logItemRow({ ...row('resize-row'), data: ['resize-row', 'frontend', []] }), body);
+
+    expect(body.querySelector('[data-row-id="resize-row"]')?.getAttribute('style') ?? '').not.toContain('--col-service-width');
+  });
+
   // FlowLayout defaults to 100px before its first measurement, but logs are fixed
   // at 28px. The inflated estimate caused oversized scroll gaps.
   test('virtualizer starts with the dense log-row height and bounded overhang', () => {
@@ -547,10 +559,13 @@ describe('LogList — MED correctness', () => {
       const el = await mountList();
       const n1 = { ...row('n1'), isNew: true };
       (el as any).spanListTree = [n1, row('o1')];
+      (el as any).updateVisibleItems();
+      const renderedItems = (el as any).virtualListItems;
       (el as any).fetchedNew = false; // the broken precondition
       (el as any).updated(new Map([['spanListTree', []]])); // lifecycle fires on the merge
       vi.advanceTimersByTime(4000);
       expect((el as any).spanListTree.find((r: any) => r.id === 'n1').isNew).toBe(false);
+      expect((el as any).virtualListItems).not.toBe(renderedItems);
     } finally {
       vi.useRealTimers();
     }

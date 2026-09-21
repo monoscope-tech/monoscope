@@ -75,7 +75,7 @@ emptyState_ cfg title subTxt =
 facetRail_ :: Maybe Text -> Text -> Text -> Maybe (Html ()) -> Html () -> Html ()
 facetRail_ elemId extraClass searchLabel actions content =
   div_ ([class_ $ "facet-rail flex flex-col gap-2 " <> extraClass, data_ "component" "facet-rail"] <> [id_ x | x <- maybeToList elemId]) do
-    label_ [class_ "input input-sm sticky top-0 z-10 flex h-9 w-[calc(100%-1rem)] mx-2 items-center gap-2 border-strokeWeak bg-bgBase"] do
+    label_ [class_ "input input-sm sticky top-0 z-10 flex h-9 w-[calc(100%-1rem)] mx-2 items-center gap-2 border-strokeStrong bg-bgBase"] do
       faSprite_ "magnifying-glass" "regular" "h-3.5 w-3.5 text-iconNeutral"
       input_
         [ type_ "search"
@@ -503,12 +503,23 @@ headerRow_ :: Monad m => [Attribute] -> HtmlT m () -> HtmlT m ()
 headerRow_ attrs = div_ (class_ " flex items-center justify-between " : attrs)
 
 
+-- | Pointer and keyboard-operable panel separator.
+--
+-- >>> let html = toStrict $ renderText $ resizer_ "facets-container" "facets_width" True
+-- >>> all (`T.isInfixOf` html) ["tabindex=\"0\"", "aria-orientation=\"vertical\"", "aria-valuenow", "ArrowLeft", "ArrowRight"]
+-- True
 resizer_ :: Text -> Text -> Bool -> Html ()
 resizer_ targetId urlParam increasingDirection =
   div_
     [ class_ "group px-r relative shrink-0 h-full flex items-center justify-center cursor-ew-resize overflow-visible select-none touch-none"
     , role_ "separator"
     , Aria.label_ "Resize panel"
+    , tabindex_ "0"
+    , term "aria-orientation" "vertical"
+    , term "aria-valuemin" "0"
+    , term "aria-valuemax" "0"
+    , term "aria-valuenow" "0"
+    , term "aria-controls" targetId
     , term "data-resize-target" targetId
     , term "data-resize-direction" (if increasingDirection then "increase" else "decrease")
     , term "data-url-param" urlParam
@@ -517,8 +528,13 @@ resizer_ targetId urlParam increasingDirection =
           let rafId = null;
           let currentWidth = null;
           
-          function applyMove(el, newWidth){
+          function applyMove(el, newWidth, separator){
+            const maxWidth = el.parentElement?.clientWidth || newWidth;
+            newWidth = Math.max(0, Math.min(newWidth, maxWidth));
             currentWidth = newWidth;
+            separator.setAttribute('aria-valuemax', Math.round(maxWidth));
+            separator.setAttribute('aria-valuenow', Math.round(newWidth));
+            separator.setAttribute('aria-valuetext', Math.round(newWidth) + ' pixels');
             if (rafId) cancelAnimationFrame(rafId);
             rafId = requestAnimationFrame(() => {
               el.style.width = newWidth + 'px';
@@ -526,6 +542,10 @@ resizer_ targetId urlParam increasingDirection =
             });
           }
           return {applyMove}
+        end
+        init
+          set :target to #{@data-resize-target} then
+          call applyMove(:target, :target.offsetWidth, me)
         end
         on pointerdown
           add .select-none to body then
@@ -545,8 +565,9 @@ resizer_ targetId urlParam increasingDirection =
                 then set newWidth to :startWidth - deltaX
                 else set newWidth to :startWidth + deltaX end
                 if newWidth < 0 set newWidth to 0 end
+                if newWidth > :target.parentElement.clientWidth set newWidth to :target.parentElement.clientWidth end
                 set :lastWidth to newWidth then
-                call applyMove(:target, newWidth)
+                call applyMove(:target, newWidth, me)
                 then send "loglist-resize" to <body/>
             end
         end
@@ -560,6 +581,21 @@ resizer_ targetId urlParam increasingDirection =
             call localStorage.setItem('resizer-'+:urlParam, finalWidth + 'px') then
             set :startX to null
           end
+        end
+
+        on keydown[key=='ArrowLeft' or key=='ArrowRight']
+          halt the event then
+          set target to #{@data-resize-target} then
+          set delta to 10 then
+          if event.key == 'ArrowLeft' set delta to -10 end then
+          if @data-resize-direction == 'decrease' set delta to delta * -1 end then
+          set newWidth to target.offsetWidth + delta then
+          if newWidth < 0 set newWidth to 0 end then
+          if newWidth > target.parentElement.clientWidth set newWidth to target.parentElement.clientWidth end then
+          call applyMove(target, newWidth, me) then
+          send "loglist-resize" to <body/> then
+          call updateUrlState(@data-url-param, newWidth) then
+          call localStorage.setItem('resizer-'+@data-url-param, newWidth + 'px')
         end
       |]
     ]
