@@ -926,10 +926,10 @@ spec = around withTestResources do
       html `shouldSatisfy` T.isInfixOf "facets?group=http"
       html `shouldNotSatisfy` T.isInfixOf eagerUrl
 
-    it "queryEditor_keepsClearRestingBoundariesAndFocusRing" \tr -> do
+    it "queryEditor_keepsRestingBoundariesQuietUntilFocus" \tr -> do
       (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml page
-      html `shouldSatisfy` T.isInfixOf "bg-bgRaised rounded-lg border border-strokeStrong focus-within:ring-2"
+      html `shouldSatisfy` T.isInfixOf "bg-bgRaised rounded-lg border border-strokeWeak focus-within:ring-2"
       html `shouldSatisfy` T.isInfixOf "focus-within:ring-2 focus-within:ring-strokeBrand-weak"
       html `shouldSatisfy` T.isInfixOf "aria-disabled:text-textDisabled aria-[disabled=false]:cursor-pointer"
       html `shouldSatisfy` T.isInfixOf "aria-label=\"Save query\" data-tippy-content=\"Save query\""
