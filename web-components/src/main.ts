@@ -505,7 +505,10 @@ function initTagifyElement(el: HTMLElement) {
   // textarea itself is reused, leaving a live instance bound to detached DOM: the
   // field still accepts typing but shows no suggestions. Re-init when that happens.
   if (existing) {
-    if (existing.DOM?.scope?.isConnected) return;
+    if (existing.DOM?.scope?.isConnected) {
+      if (el.classList.contains('dash-variable-input')) reconcileVariableTag(el, existing);
+      return;
+    }
     try {
       existing.destroy();
     } catch {
@@ -611,6 +614,22 @@ let _cachedSearch = '',
 // tagify mutation — removeAllTags + addTags would otherwise send every widget on a
 // round trip for the empty value first.
 const suppressVarChange = new WeakSet<HTMLElement>();
+function reconcileVariableTag(input: HTMLElement, tagify: any) {
+  const name = input.getAttribute('name');
+  if (!name) return;
+  const expected = new URL(location.href).searchParams.get(`var-${name}`) || '';
+  const selected = tagify.value?.[0];
+  if (String(selected?.value ?? '') === expected && (!expected || tagify.DOM.scope.querySelector('tag'))) return;
+  const replacement = tagify.settings.whitelist?.find((option: any) => String(typeof option === 'object' ? option.value : option) === expected) ?? { value: expected, name: expected };
+  suppressVarChange.add(input);
+  try {
+    tagify.removeAllTags();
+    if (expected) tagify.addTags([replacement]);
+  } finally {
+    suppressVarChange.delete(input);
+  }
+}
+
 function publishVarValue(input: HTMLElement, value: string) {
   const url = new URL(window.location.href);
   const key = 'var-' + input.getAttribute('name');

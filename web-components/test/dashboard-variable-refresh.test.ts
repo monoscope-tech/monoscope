@@ -43,6 +43,27 @@ test('an HTMX swap initializes out-of-band dashboard variables outside the main 
   expect(error).not.toHaveBeenCalled();
 });
 
+test('an HTMX swap restores a selected variable whose rendered tag was removed', () => {
+  document.body.innerHTML = '<input name="host" class="dash-variable-input" data-tagify>';
+  const input = document.querySelector<HTMLInputElement>('[data-tagify]')!;
+  const scope = document.createElement('div');
+  document.body.append(scope);
+  const tagify = {
+    settings: { whitelist: [{ value: 'api.example.com', name: 'api.example.com' }] },
+    value: [{ value: 'api.example.com', name: 'api.example.com' }],
+    DOM: { scope },
+    removeAllTags: vi.fn(function (this: any) { this.value = []; }),
+    addTags: vi.fn(function (this: any, tags: any[]) { this.value = tags; }),
+  };
+  (input as any)._tagifyInstance = tagify;
+  history.replaceState({}, '', '/?var-host=api.example.com');
+
+  document.dispatchEvent(new CustomEvent('htmx:after:swap', { detail: { elt: document.body } }));
+
+  expect(tagify.removeAllTags).toHaveBeenCalledOnce();
+  expect(tagify.addTags).toHaveBeenCalledWith([{ value: 'api.example.com', name: 'api.example.com' }]);
+});
+
 test('initializing a selected variable without options immediately resolves its label', async () => {
   document.body.innerHTML = '<input name="endpointHash" value="api-endpoint" class="dash-variable-input" data-tagify data-tagify-mode="select" data-tagify-text-prop="name" data-tagify-whitelist="[]" data-tagify-query-sql="select hash, path from apis.endpoints">';
   const input = document.querySelector<HTMLInputElement>('[data-tagify]')!;
