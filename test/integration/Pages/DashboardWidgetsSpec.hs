@@ -20,6 +20,7 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PG
 import Database.PostgreSQL.Simple.SqlQQ qualified as SqlQQ
 import Lucid (renderText, toHtml)
+import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Dashboards (DashboardVM (..))
 import Models.Projects.Dashboards qualified as DashboardModel
 import Models.Projects.Projects (Session (..))
@@ -732,6 +733,7 @@ spec = sequential $ aroundAll withTestResources do
                 Nothing
                 (Just "24H")
                 Nothing
+                Nothing
                 [ ("var-host", Just "dellyman.com")
                 , ("var-endpointHash", Just "endpoint / hash")
                 ]
@@ -754,7 +756,7 @@ spec = sequential $ aroundAll withTestResources do
       prefilled :: Widget.Widget -> Bool
       prefilled w = isJust w.html || isJust w.dataset
       openTab tr dashId params = do
-        (tabDashboard . snd) <$> testServant tr (Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") Nothing params)
+        (tabDashboard . snd) <$> testServant tr (Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") Nothing Nothing params)
 
     it "skips the widget phase whose results the picker would discard" \tr -> do
       dashId <- newDashboard tr "endpoint-stats.yaml" "Endpoint Analytics"
@@ -768,20 +770,54 @@ spec = sequential $ aroundAll withTestResources do
 
     it "successive required pickers stay inside the dashboard fragment" \tr -> do
       dashId <- newDashboard tr "endpoint-stats.yaml" "Successive variable pickers"
-      let open params = snd <$> testServant tr (Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") (Just "true") params)
+      runQueryEffect tr
+        $ Endpoints.bulkInsertEndpoints
+        $ V.singleton
+        $ (def :: Endpoints.Endpoint)
+          { Endpoints.projectId = testPid
+          , Endpoints.urlPath = "/orders"
+          , Endpoints.method = "GET"
+          , Endpoints.host = "dellyman.com"
+          , Endpoints.hash = "ba3431d5"
+          }
+      let open params = snd <$> testServant tr (Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") (Just "true") Nothing params)
           partialHtml = \case
             NavigationPartial _ fragment -> pure $ toStrict $ renderText fragment
             NavigationFull _ -> expectationFailure "htmx picker navigation returned a full document" $> ""
 
       firstHtml <- partialHtml =<< open []
       firstHtml `shouldSatisfy` T.isInfixOf "Select Domain"
-      for_ ["hx-target=\"#dashboard-tabs-content\"", "hx-swap=\"outerMorph\"", "hx-push-url=\"true\""] \attr ->
+      for_ ["hx-target=\"#dashboard-tabs-content\"", "hx-swap=\"outerMorph\"", "hx-push-url=\"true\"", "name=\"dashboard-variable-option\""] \attr ->
         firstHtml `shouldSatisfy` T.isInfixOf attr
       firstHtml `shouldNotSatisfy` T.isInfixOf "hx-select=\"#main-content\""
 
       secondHtml <- partialHtml =<< open [("var-endpointHash", Just ""), ("var-host", Just "dellyman.com")]
       secondHtml `shouldSatisfy` T.isInfixOf "Select Endpoint"
       secondHtml `shouldSatisfy` T.isInfixOf "id=\"dashboard-tabs-content\""
+
+    it "dashboardTab_variableControlsReflectURLValues" \tr -> do
+      dashId <- newDashboard tr "endpoint-stats.yaml" "Tab variable controls"
+      (_, response) <-
+        testServant tr
+          $ Dashboards.dashboardTabGetH
+            testPid
+            dashId
+            "errors"
+            Nothing
+            Nothing
+            Nothing
+            (Just "24H")
+            (Just "true")
+            (Just "dashboard-variable-option")
+            [("var-host", Just "dellyman.com"), ("var-endpointHash", Just "ba3431d5")]
+      case response of
+        NavigationFull _ -> expectationFailure "htmx tab navigation returned a full document"
+        NavigationPartial _ fragment -> do
+          let html = toStrict $ renderText fragment
+          html `shouldSatisfy` T.isInfixOf "id=\"dashboard-variables\""
+          html `shouldSatisfy` T.isInfixOf "hx-swap-oob=\"true\""
+          html `shouldSatisfy` T.isInfixOf "value=\"dellyman.com\""
+          html `shouldSatisfy` T.isInfixOf "value=\"ba3431d5\""
 
   -- Picking a second domain left the Endpoint dropdown listing the first domain's
   -- endpoints. The input carries its own statement so the client can re-fetch options
@@ -790,7 +826,7 @@ spec = sequential $ aroundAll withTestResources do
   describe "Dependent variable keeps a live template" do
     it "endpointHash_parentHostChanges_dropdownRefetchesForNewHost" \tr -> do
       dashId <- newDashboard tr "endpoint-stats.yaml" "Dependent Vars"
-      dg <- (tabDashboard . snd) <$> testServant tr (Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") Nothing [("var-host", Just "dellyman.com")])
+      dg <- (tabDashboard . snd) <$> testServant tr (Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") Nothing Nothing [("var-host", Just "dellyman.com")])
       let html = toStrict $ renderText $ toHtml (dg :: Dashboards.DashboardGet)
       html `shouldSatisfy` T.isInfixOf "{{var-host}}"
       html `shouldNotSatisfy` T.isInfixOf "host=&#39;dellyman.com&#39;"
@@ -799,7 +835,7 @@ spec = sequential $ aroundAll withTestResources do
   -- themselves rather than blocking on the widget phase (measured 4.9s -> 1.2s).
   describe "Prefill on a full load, skeletons on a swap" do
     let openTab tr dashId hx = do
-          (tabDashboard . snd) <$> testServant tr (Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") hx [("var-host", Just "dellyman.com"), ("var-endpointHash", Just "ba3431d5")])
+          (tabDashboard . snd) <$> testServant tr (Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") hx Nothing [("var-host", Just "dellyman.com"), ("var-endpointHash", Just "ba3431d5")])
         eagerOnes = filter (\w -> w.eager == Just True || isJust w.html || isJust w.dataset)
 
     it "keeps the server-side prefill for a full page load" \tr -> do
@@ -829,6 +865,7 @@ spec = sequential $ aroundAll withTestResources do
             Nothing
             (Just "24H")
             (Just "true")
+            Nothing
             [ ("var-host", Just "dellyman.com")
             , ("var-endpointHash", Just "ba3431d5")
             ]
@@ -839,6 +876,7 @@ spec = sequential $ aroundAll withTestResources do
           html `shouldSatisfy` T.isInfixOf "id=\"dashboard-tabs-content\""
           html `shouldSatisfy` T.isInfixOf "id=\"dashboard-tabs-container\""
           html `shouldSatisfy` T.isInfixOf "hx-swap-oob=\"outerMorph\""
+          html `shouldNotSatisfy` T.isInfixOf "id=\"dashboard-variables\""
           html `shouldSatisfy` T.isInfixOf "tab-active"
           html `shouldSatisfy` T.isInfixOf "hx-push-url=\"true\""
           html `shouldNotSatisfy` T.isInfixOf "<html"
