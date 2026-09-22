@@ -1077,6 +1077,10 @@ body, :host {
     transform-origin: top center;
     @apply border;
   }
+  /* DaisyUI display utilities otherwise override the browser's closed-popover rule. */
+  [popover]:not(:popover-open) {
+    display: none;
+  }
   .modal-box {
     background-color: var(--color-bgOverlay);
   }
@@ -2048,7 +2052,7 @@ code, pre, .code, .monospace {
     --color-strokeWeak: rgba(255 255 255 / 0.09);
 
     /* Text colors — dark theme */
-    --color-textBrand: oklch(72% 0.15 261);
+    --color-textBrand: oklch(78% 0.15 261);
     --color-textDisabled: rgba(255 255 255 / 0.35);
     --color-textError: oklch(77.2% 0.126 21);
     --color-textInformation: oklch(78% 0.095 261);
@@ -2058,7 +2062,7 @@ code, pre, .code, .monospace {
     --color-textStrong: oklch(90% 0.005 260);
     --color-textSuccess: oklch(78% 0.088 162);
     --color-textWarning: oklch(79.5% 0.106 92);
-    --color-textWeak: oklch(72% 0.005 260);
+    --color-textWeak: oklch(85% 0.005 260);
 
     /* Dark mode shadow scale — deeper for contrast on dark surfaces */
     --shadow-xs: 0 1px 2px -1px rgba(0 0 0 / 0.2);

@@ -1066,15 +1066,14 @@ sortableTableHead_ widget selected =
 
 
 renderTable :: Widget -> Html ()
-renderTable widget = renderTableShell widget (rowClickTableAttrs widget)
+renderTable = renderTableShell
 
 
 -- | Shared eager-fetch shell for renderTable: HTMX-loaded
 -- card whose body is either the already-rendered @widget.html@ or a loading
--- table whose @thead@ uses the given column headers (+ optional extra @table@
--- attrs, e.g. row-click data attributes).
-renderTableShell :: Widget -> [Attribute] -> Html ()
-renderTableShell widget tableAttrs = do
+-- placeholder that is replaced by the rendered table.
+renderTableShell :: Widget -> Html ()
+renderTableShell widget = do
   let tableId = maybeToMonoid widget.id
       eagerWidget = widget & #eager ?~ True & #pngUrl .~ Nothing & #html .~ Nothing & #dataset .~ Nothing
   withCardFrame True widget Nothing
@@ -1092,12 +1091,7 @@ renderTableShell widget tableAttrs = do
       ]
     $ case widget.html of
       Just html -> toHtmlRaw html
-      Nothing -> table_ ([class_ "table table-zebra table-sm w-full relative", id_ tableId] <> tableAttrs) do
-        sortableTableHead_ widget Nothing
-        tbody_ []
-          $ tr_ []
-          $ td_ [colspan_ "100", class_ "text-center py-8"]
-          $ loadingIndicator_ LdSM LdSpinner
+      Nothing -> div_ [class_ "flex h-full min-h-32 items-center justify-center", id_ tableId] $ loadingIndicator_ LdSM LdSpinner
 
 
 -- | Render stat widget content with HTMX lazy loading support

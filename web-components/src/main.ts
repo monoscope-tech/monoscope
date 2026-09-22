@@ -505,7 +505,10 @@ function initTagifyElement(el: HTMLElement) {
   // textarea itself is reused, leaving a live instance bound to detached DOM: the
   // field still accepts typing but shows no suggestions. Re-init when that happens.
   if (existing) {
-    if (existing.DOM?.scope?.isConnected) return;
+    if (existing.DOM?.scope?.isConnected) {
+      if (el.classList.contains('dash-variable-input')) reconcileVariableTag(el, existing);
+      return;
+    }
     try {
       existing.destroy();
     } catch {
@@ -514,6 +517,7 @@ function initTagifyElement(el: HTMLElement) {
     (el as any)._tagifyInstance = null;
   }
   try {
+    const hasInitialValue = Boolean((el as HTMLInputElement).value);
     const options: any = {};
     const wl = el.getAttribute('data-tagify-whitelist');
     if (wl) {
@@ -545,20 +549,24 @@ function initTagifyElement(el: HTMLElement) {
     }
 
     // Lazy dashboard variables: options aren't server-rendered (scoped/dependent
-    // vars skip the render-time scan). Fetch the whitelist the first time the
-    // dropdown opens, so opening the picker is what pays the query cost, not the
-    // page load. Guarded so it only fetches once per instance.
+    // vars skip the render-time scan). Resolve a selected raw value immediately;
+    // otherwise defer the query until the dropdown opens. Coalesce the first request,
+    // retain a populated result, and let an empty or failed result retry on open.
     if (
       el.classList.contains('dash-variable-input') &&
       !options.whitelist?.length &&
       (el.getAttribute('data-tagify-query-sql') || el.getAttribute('data-tagify-query'))
     ) {
       let fetched = false;
-      tagify.on('dropdown:show', () => {
+      const fetchOptions = () => {
         if (fetched) return;
         fetched = true;
-        (window as any).reloadVarWhitelist(el);
-      });
+        (window as any).reloadVarWhitelist(el).finally(() => {
+          if (!tagify.settings.whitelist?.length) fetched = false;
+        });
+      };
+      if (hasInitialValue) fetchOptions();
+      tagify.on('dropdown:show', fetchOptions);
     }
 
     // Dashboard variable: sync tagify changes to URL params and fire update-query
@@ -606,6 +614,22 @@ let _cachedSearch = '',
 // tagify mutation — removeAllTags + addTags would otherwise send every widget on a
 // round trip for the empty value first.
 const suppressVarChange = new WeakSet<HTMLElement>();
+function reconcileVariableTag(input: HTMLElement, tagify: any) {
+  const name = input.getAttribute('name');
+  if (!name) return;
+  const expected = new URL(location.href).searchParams.get(`var-${name}`) || '';
+  const selected = tagify.value?.[0];
+  if (String(selected?.value ?? '') === expected && (!expected || tagify.DOM.scope.querySelector('tag'))) return;
+  const replacement = tagify.settings.whitelist?.find((option: any) => String(typeof option === 'object' ? option.value : option) === expected) ?? { value: expected, name: expected };
+  suppressVarChange.add(input);
+  try {
+    tagify.removeAllTags();
+    if (expected) tagify.addTags([replacement]);
+  } finally {
+    suppressVarChange.delete(input);
+  }
+}
+
 function publishVarValue(input: HTMLElement, value: string) {
   const url = new URL(window.location.href);
   const key = 'var-' + input.getAttribute('name');
@@ -671,19 +695,21 @@ function reloadVarWhitelist(input: HTMLElement, background = false): Promise<voi
         // left e.g. the Endpoint picker offering the *old* domain's endpoints.
         const options = dedupe(fetched);
         tgfy.settings.whitelist = options;
-        // The held selection belongs to the old scope too. Leaving it makes every widget
-        // query an endpoint that isn't on this domain; clearing it alone makes them all
-        // query '' and report "no data" — a lie about the data. Fall to the first option.
-        const held = tgfy.value?.[0]?.value;
-        if (held !== undefined && !options.some((o: any) => valueOf(o) === String(held))) {
+        // Replace an invalid selection, or rebuild a valid raw value so newly fetched
+        // display fields (such as an endpoint's method and path) become visible.
+        const selected = tgfy.value?.[0];
+        const held = selected?.value;
+        const matching = options.find((o: any) => valueOf(o) === String(held));
+        if (held !== undefined && (!matching || Object.entries(matching).some(([key, value]) => selected[key] !== value))) {
+          const replacement = matching ?? options[0];
           suppressVarChange.add(input);
           try {
             tgfy.removeAllTags();
-            if (options.length) tgfy.addTags([options[0]]);
+            if (replacement) tgfy.addTags([replacement]);
           } finally {
             suppressVarChange.delete(input);
           }
-          publishVarValue(input, options.length ? valueOf(options[0]) : '');
+          if (!matching) publishVarValue(input, replacement ? valueOf(replacement) : '');
         }
         if (tgfy.state?.dropdown?.visible) tgfy.dropdown.show(tgfy.state.inputText || '');
       }
@@ -745,7 +771,9 @@ if (document.readyState === 'loading') {
   });
 }
 document.addEventListener('htmx:after:swap', (e: any) => {
-  initAllTagifyInputs(e.detail?.elt || document);
+  // Out-of-band fragments (such as dashboard variables) sit outside the main
+  // swap target in e.detail.elt, so include them in the post-swap scan.
+  initAllTagifyInputs();
   (window as any).interpolateVarTemplates();
   syncFacetCheckboxes(e.detail?.elt || document);
 });

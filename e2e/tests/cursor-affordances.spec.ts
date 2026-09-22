@@ -48,3 +48,37 @@ test("visible controls use a pointer cursor across the app", async ({ page }) =>
 
   expect(failures).toEqual([]);
 });
+
+test("closed global scope menus cannot intercept log row actions", async ({ page }) => {
+  await page.goto(`/p/${DEMO_PROJECT}/log_explorer`, { waitUntil: "domcontentloaded" });
+
+  await page.evaluate(() => {
+    const menu = document.createElement("ul");
+    menu.id = "closed-scope-menu-fixture";
+    menu.popover = "auto";
+    menu.className = "dropdown menu flex flex-col";
+    menu.innerHTML = "<li><button>checkout</button></li>";
+    document.body.append(menu);
+  });
+  const serviceMenu = page.locator("#closed-scope-menu-fixture");
+  await expect(serviceMenu).toBeHidden();
+});
+
+test("log query controls use the quiet resting border", async ({ page }) => {
+  await page.goto(`/p/${DEMO_PROJECT}/log_explorer`, { waitUntil: "domcontentloaded" });
+
+  const colors = await page.evaluate(() => {
+    const probe = document.body.appendChild(document.createElement("span"));
+    probe.style.color = "var(--color-strokeWeak)";
+    const weak = getComputedStyle(probe).color;
+    probe.remove();
+    return {
+      weak,
+      actual: ["#queryBox", "#queryBuilder > div", "#spans-toggle"].map(selector =>
+        getComputedStyle(document.querySelector(selector)!).borderTopColor
+      ),
+    };
+  });
+
+  expect(colors.actual).toEqual([colors.weak, colors.weak, colors.weak]);
+});

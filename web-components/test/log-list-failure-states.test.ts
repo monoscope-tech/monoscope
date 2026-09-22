@@ -69,7 +69,7 @@ describe('a query the server rejects', () => {
 
     el.transport = serverTransport(logPage([], { hasMore: false }));
     (el.querySelector('[role="alert"] button') as HTMLButtonElement).click();
-    await vi.waitFor(() => expect(el.textContent).toContain('No events match'));
+    await vi.waitFor(() => expect(el.textContent).toContain('No events in this time range'));
     expect(el.textContent).not.toContain('Could not load events');
   });
 });
@@ -173,6 +173,33 @@ describe('a superseded request', () => {
 });
 
 describe('an empty result', () => {
+  test('offers clearing an active query', async () => {
+    history.replaceState({}, '', '/?query=level%20%3D%3D%20%22ERROR%22');
+    const queryEditorCall = vi.fn();
+    (window as any).queryEditorCall = queryEditorCall;
+    const el = await mountList();
+
+    expect(el.textContent).toContain('No events match this query');
+    const clear = [...el.querySelectorAll('button')].find((button) => button.textContent?.trim() === 'Clear query') as HTMLButtonElement;
+    clear.click();
+
+    expect(queryEditorCall).toHaveBeenCalledWith('handleAddQuery', '', true);
+    delete (window as any).queryEditorCall;
+  });
+
+  test('offers a wider time range when no query is active', async () => {
+    history.replaceState({}, '', '/?since=1H');
+    const el = await mountList();
+    const fetchData = vi.spyOn(el, 'fetchData').mockResolvedValue();
+
+    expect(el.textContent).toContain('No events in this time range');
+    const widen = [...el.querySelectorAll('button')].find((button) => button.textContent?.trim() === 'Choose a wider time range') as HTMLButtonElement;
+    widen.click();
+
+    expect(fetchData).toHaveBeenCalledOnce();
+    expect(fetchData.mock.calls[0][0]).toContain('since=3H');
+  });
+
   test('clears the previous query rather than leaving its rows on screen', async () => {
     const el = await loaded();
     el.transport = serverTransport(logPage([], { hasMore: false }));

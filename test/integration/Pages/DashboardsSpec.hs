@@ -96,6 +96,17 @@ spec = sequential $ aroundAll withTestResources do
       html `shouldSatisfy` T.isInfixOf "data-tagify-mode=\"select\""
       html `shouldContainAll` ["sticky top-0 z-10", "dashboard-grid-wrapper relative isolate z-0", ".dashboard-grid-wrapper"]
 
+    it "table widget loading shell defers headings until data arrives" \_ -> do
+      let column field title = (def :: Widget.TableColumn){Widget.field = field, Widget.title = title}
+          widget =
+            (def :: Widget.Widget)
+              { Widget.wType = Widget.WTTable
+              , Widget.title = Just "Status Code Breakdown"
+              , Widget.columns = Just [column "status_code" "Status Code", column "count" "Count", column "avg_latency" "Avg Latency"]
+              }
+          html = TL.toStrict $ renderText $ Widget.widget_ widget
+      html `shouldSatisfy` (not . T.isInfixOf "<thead")
+
     -- The canonical tab URL stays a normal full-document URL, but its htmx response is
     -- supplied by the shared BodyWrapper navigation contract.  There is no synthetic
     -- /content route or imperative active-tab mutation.
