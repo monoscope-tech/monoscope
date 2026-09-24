@@ -246,8 +246,8 @@ validateDashboard dashboard = case violations of
     violations =
       [ fromMaybe "<untitled>" widget.title
       | widget <- widgets
-      , Just sql <- [widget.sql]
       , any ((== Just True) . (.sortable)) $ fromMaybe [] widget.columns
+      , Just sql <- [widget.sql]
       , isNothing widget.defaultSort || not ("{{table_sort}}" `T.isInfixOf` sql)
       ]
 
