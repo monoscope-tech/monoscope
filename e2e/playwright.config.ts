@@ -3,6 +3,10 @@ import { defineConfig, devices } from "@playwright/test";
 export default defineConfig({
   testDir: "./tests",
   fullyParallel: true,
+  // Real dashboards exercise layout, rendering, and latency budgets. Keep the
+  // default independent of host CPU count so browsers do not starve each other.
+  // Developers can still opt into concurrency with --workers.
+  workers: 1,
   forbidOnly: !!process.env.CI,
   retries: 0,
   use: {

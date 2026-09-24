@@ -2,17 +2,21 @@ module Pkg.QueryCacheSpec (spec) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (mapConcurrently, replicateConcurrently)
+import Control.Exception qualified as E
 import Data.Effectful.Hasql (SqlSource (..))
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
+import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Pages.Charts.Charts (DataType (..), MetricsData (..), convertTimestampsToMs)
+import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Parser (RangeEnd (..), SqlQueryCfg (..), defPid, defSqlQueryCfg, fixedUTCTime)
 import Pkg.Parser.Expr (Subject (..))
 import Pkg.Parser.Stats (BinFunction (..), ByClauseItem (..), Section (..), SummarizeByClause (..))
 import Pkg.QueryCache (CacheKey (..), RawCacheKey (..), bucketStart, chartChunks, coalesceRawQuery, generateCacheKey, hasSummarizeWithBin, mergeTimeseriesData, newRawQueryFlights, trimOldData, trimToRange)
 import Relude
-import Test.Hspec (Spec, describe, it, shouldBe, shouldNotBe, shouldReturn)
+import System.IO.Error (userError)
+import Test.Hspec (Spec, describe, it, shouldBe, shouldNotBe, shouldReturn, shouldSatisfy)
 
 
 mkTime :: Int -> UTCTime
@@ -60,13 +64,39 @@ spec = do
       length (filter fst results) `shouldBe` 1
       map ((.rowsCount) . snd) results `shouldBe` replicate 12 0
 
+    it "wakes every follower on failure and permits a later retry" do
+      flights <- newRawQueryFlights
+      let key = rawKey "failure" Nothing "5 minutes"
+          failed = threadDelay 100000 >> E.throwIO (userError "backend failed")
+      results <- replicateConcurrently 12 $ E.try @E.IOException $ coalesceRawQuery flights key failed
+      results `shouldSatisfy` all isLeft
+      retried <- coalesceRawQuery flights key (pure emptyMetrics)
+      fst retried `shouldBe` True
+      (snd retried).rowsCount `shouldBe` 0
+
     it "does not coalesce requests when an explicit key dimension changes" do
       flights <- newRawQueryFlights
       calls <- newIORef (0 :: Int)
-      let key = rawKey
+      let key = rawKey "endpoint-a" Nothing "5 minutes"
           keys :: [RawCacheKey]
-          keys = [key "endpoint-a" Nothing "5 minutes", key "endpoint-b" Nothing "5 minutes", key "endpoint-a" (Just "production") "5 minutes", key "endpoint-a" Nothing "1 hour"]
-          fetch = atomicModifyIORef' calls (\n -> (n + 1, ())) $> emptyMetrics
+          keys =
+            [ key
+            , key{projectId = UUIDId $ UUID.fromWords 0 0 0 1} :: RawCacheKey
+            , key{endpointHash = "endpoint-b"} :: RawCacheKey
+            , key{environment = Just "production"} :: RawCacheKey
+            , key{service = Just "checkout"} :: RawCacheKey
+            , key{from = mkTime 11} :: RawCacheKey
+            , key{to = mkTime 21} :: RawCacheKey
+            , key{sqlQuery = "SELECT 2"} :: RawCacheKey
+            , key{kqlQuery = "name == foo"} :: RawCacheKey
+            , key{rollupInterval = "1 hour"} :: RawCacheKey
+            , key{backend = SqlPostgres} :: RawCacheKey
+            , key{decoder = DTFloat} :: RawCacheKey
+            ]
+          fetch = do
+            atomicModifyIORef' calls (\n -> (n + 1, ()))
+            threadDelay 100000
+            pure emptyMetrics
       void $ mapConcurrently (\k -> coalesceRawQuery flights k fetch) keys
       readIORef calls `shouldReturn` length keys
 

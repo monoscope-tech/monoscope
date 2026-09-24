@@ -180,3 +180,34 @@ errors from that work required a record-dot access and an unused fixture argumen
   investigation fixture means the full visual/resizing browser matrix, along
   with production cache-latency targets, remains post-deployment acceptance
   work.
+
+
+## Endpoint cache completion (2026-09-24)
+
+- Rebased the unfinished branch onto `f6699ef3d` before completing the cache.
+- Reproduced four regressions before applying fixes: streaming bypass, expired
+  fixed windows, default live ranges, and concurrent requests during persistence.
+- JSON and streaming now share lookup, query execution, and persistence. Live
+  bounds align to 15 seconds. Results expire after 60 seconds, and payloads above
+  1 MiB are not stored. Cache failures fall back to query execution.
+- Added bounded metric labels for hit rate, result size, avoided backend queries,
+  cold and cached latency, storage failures, and oversized results.
+- The controlled benchmark executed three backend queries for 33 requests.
+  Each result was 95,073 bytes. Cold requests took 122–131 ms; cached medians
+  were 2.91–5.87 ms. These are synthetic PostgreSQL results, not production
+  TimeFusion measurements. Full results are in
+  `docs/endpoint-analytics-query-plans.md`.
+- `CI_KEEP_GOING=true make ci-signoff` passed and published frontend, build,
+  doctest (1,636), unit (334), CLI (16), integration (1,001 examples; 24 pending),
+  Weeder, and UI (978 tests) results. These suites had zero failures.
+- HLint is unavailable in the container. No HLint result was published.
+- The initial browser run exposed test-driver latency in the tab-switch timer
+  and an uninitialized scroll anchor. The tests now measure the browser's
+  actual click-to-visible transition and await the initial visible row.
+  Their original performance and row-preservation assertions remain in place.
+- Six isolated repeats passed. The tab transitions measured 116–164 ms.
+  The browser suite now defaults to one worker to avoid CPU contention between
+  real dashboards; `--workers` remains available for explicit parallel runs.
+- A separate checkout was running CI with the same Docker project and cache
+  volumes. Subsequent browser verification uses `monoscope-endpoint-cache-ci`
+  through a local Docker command wrapper, with separate services and caches.

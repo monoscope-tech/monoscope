@@ -47,6 +47,12 @@ module Pkg.Metrics (
   dashboardTimeToSettled,
   dashboardSettlementBudgetExceeded,
   dashboardLegacyTraceSchemas,
+  endpointCacheDuration,
+  endpointCacheResultBytes,
+  endpointCacheBackendQueries,
+  endpointCacheAvoidedQueries,
+  endpointCacheErrors,
+  endpointCacheOversized,
 ) where
 
 import Effectful (Eff, IOE, (:>))
@@ -54,6 +60,7 @@ import Effectful.Exception (bracket)
 import GHC.Clock (getMonotonicTime)
 import OpenTelemetry.Attributes (Attribute, Attributes, emptyAttributes, unsafeAttributesFromListIgnoringLimits)
 import OpenTelemetry.Metric.Core (
+  AdvisoryParameters (..),
   Counter (..),
   Histogram (..),
   Meter (..),
@@ -348,3 +355,29 @@ dashboardQueryCacheOutcomes = mkCounter "monoscope.dashboard.query.cache_outcome
 dashboardSettlementBudgetExceeded :: Counter Int64
 dashboardSettlementBudgetExceeded = mkCounter "monoscope.dashboard.time_to_settled.budget_exceeded" Nothing
 {-# NOINLINE dashboardSettlementBudgetExceeded #-}
+
+
+-- | Endpoint SQL cache instruments use only backend/outcome/operation labels.
+endpointCacheDuration, endpointCacheResultBytes :: Histogram
+endpointCacheDuration = mkHist "monoscope.dashboard.endpoint_cache.duration" (Just "ms")
+endpointCacheResultBytes =
+  unsafePerformIO
+    $ meterCreateHistogram
+      monoscopeMeter
+      "monoscope.dashboard.endpoint_cache.result_size"
+      (Just "By")
+      Nothing
+      defaultAdvisoryParameters{advisoryExplicitBucketBoundaries = Just [1024, 4096, 16384, 65536, 262144, 524288, 1048576, 4194304, 16777216]}
+{-# NOINLINE endpointCacheDuration #-}
+{-# NOINLINE endpointCacheResultBytes #-}
+
+
+endpointCacheBackendQueries, endpointCacheAvoidedQueries, endpointCacheErrors, endpointCacheOversized :: Counter Int64
+endpointCacheBackendQueries = mkCounter "monoscope.dashboard.endpoint_cache.backend_queries" Nothing
+endpointCacheAvoidedQueries = mkCounter "monoscope.dashboard.endpoint_cache.avoided_queries" Nothing
+endpointCacheErrors = mkCounter "monoscope.dashboard.endpoint_cache.errors" Nothing
+endpointCacheOversized = mkCounter "monoscope.dashboard.endpoint_cache.oversized" Nothing
+{-# NOINLINE endpointCacheBackendQueries #-}
+{-# NOINLINE endpointCacheAvoidedQueries #-}
+{-# NOINLINE endpointCacheErrors #-}
+{-# NOINLINE endpointCacheOversized #-}

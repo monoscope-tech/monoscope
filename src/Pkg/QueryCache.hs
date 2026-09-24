@@ -7,6 +7,7 @@ module Pkg.QueryCache (
   RawQueryFlights,
   newRawQueryFlights,
   coalesceRawQuery,
+  cachedRawQuery,
   lookupRawCache,
   updateRawCache,
   generateCacheKey,
@@ -28,10 +29,11 @@ module Pkg.QueryCache (
   replaceTimeseriesRange,
 ) where
 
-import Control.Concurrent.MVar qualified as MVar
 import Control.Concurrent.STM qualified as STM
 import Control.Exception qualified as E
+import Control.Exception.Annotated qualified as Ann
 import Data.Aeson qualified as AE
+import Data.ByteString.Lazy qualified as LBS
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.List (lookup)
@@ -45,17 +47,22 @@ import Data.Vector qualified as V
 -- occurrence, and the delta is appended after the cached rows, so stability is
 -- what makes "fresh data wins on an overlapping bin" true rather than arbitrary.
 import Data.Vector.Algorithms.Merge qualified as VA
-import Effectful (Eff, type (:>))
+import Effectful (Eff, IOE, type (:>))
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
+import GHC.Clock (getMonotonicTime)
 import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
+import OpenTelemetry.Attributes qualified as OA
 import Pages.Charts.Types (DataType, MetricsData (..), MetricsStats (..))
 import Pkg.DeriveUtils (AesonText (..), DB)
+import Pkg.Metrics qualified as Metrics
 import Pkg.Parser (RangeEnd (..), SqlQueryCfg (..), autoBinWidth)
 import Pkg.Parser.Expr (ToQueryText (..), kqlTimespanToTimeBucket)
 import Pkg.Parser.Stats (BinFunction (..), ByClauseItem (..), Section (..), Sources (..), SummarizeByClause (..), defaultBinSize)
 import Relude
+import UnliftIO (withRunInIO)
+import UnliftIO.Exception (onException)
 import Utils (encodeText, toXXHash)
 
 
@@ -121,80 +128,130 @@ data RawCacheResult = RawCacheHit MetricsData | RawCacheMiss
 -- | Per-process request coalescer. The durable result cache is shared through
 -- PostgreSQL; this small registry prevents one web process from issuing the same
 -- expensive TimeFusion query many times while the shared entry is still absent.
-newtype RawQueryFlights = RawQueryFlights (MVar.MVar (M.Map RawCacheKey (STM.TMVar (Either E.SomeException MetricsData))))
+newtype RawQueryFlights = RawQueryFlights (STM.TVar (M.Map RawCacheKey (STM.TMVar (Either E.SomeException MetricsData))))
 
 
 newRawQueryFlights :: IO RawQueryFlights
-newRawQueryFlights = RawQueryFlights <$> MVar.newMVar M.empty
+newRawQueryFlights = RawQueryFlights <$> STM.newTVarIO M.empty
 
 
--- | Run the first request for a key and make concurrent followers await its
--- result. Exceptions are published too, so followers neither hang nor launch a
--- replacement query while the leader is unwinding. The Bool is True for the
--- leader, which alone should persist the completed result.
+-- | The action includes cache lookup, execution and persistence. Publication and
+-- removal are atomic, including when a leader is cancelled; followers cannot hang.
 coalesceRawQuery :: RawQueryFlights -> RawCacheKey -> IO MetricsData -> IO (Bool, MetricsData)
 coalesceRawQuery (RawQueryFlights flights) key action = E.mask \restore -> do
-  (leader, resultVar) <-
-    MVar.modifyMVar flights \running -> case M.lookup key running of
-      Just existing -> pure (running, (False, existing))
+  (leader, resultVar) <- STM.atomically do
+    running <- STM.readTVar flights
+    case M.lookup key running of
+      Just existing -> pure (False, existing)
       Nothing -> do
-        created <- STM.atomically STM.newEmptyTMVar
-        pure (M.insert key created running, (True, created))
+        created <- STM.newEmptyTMVar
+        STM.writeTVar flights $ M.insert key created running
+        pure (True, created)
   if leader
     then do
       result <- E.try @E.SomeException $ restore action
-      STM.atomically $ STM.putTMVar resultVar result
-      MVar.modifyMVar_ flights $ pure . M.delete key
+      STM.atomically do
+        STM.putTMVar resultVar result
+        STM.modifyTVar' flights $ M.delete key
       either E.throwIO (pure . (True,)) result
     else do
       result <- restore $ STM.atomically $ STM.readTMVar resultVar
       either E.throwIO (pure . (False,)) result
 
 
+-- | Every leader looks up the durable cache inside its flight and stores before
+-- releasing it. Cache failures fall through to the backend, never to stale data.
+cachedRawQuery :: DB es => RawQueryFlights -> UTCTime -> RawCacheKey -> Eff es MetricsData -> Eff es MetricsData
+cachedRawQuery flights now key fetch = do
+  started <- liftIO getMonotonicTime
+  let backend = [("backend", OA.toAttribute $ Hasql.sqlSourceParam key.backend)]
+      finish outcome value = do
+        ended <- liftIO getMonotonicTime
+        let attrs = ("outcome", OA.toAttribute outcome) : backend
+        Metrics.bump Metrics.dashboardQueryCacheOutcomes attrs
+        Metrics.recordMs Metrics.endpointCacheDuration ((ended - started) * 1000) attrs
+        Metrics.recordMs Metrics.endpointCacheResultBytes (fromIntegral $ LBS.length $ AE.encode value) attrs
+        pure value
+      cacheFailure :: IOE :> es' => Text -> a -> Hasql.HasqlException -> Eff es' a
+      cacheFailure operation fallback _ = do
+        Metrics.bump Metrics.endpointCacheErrors (("operation", OA.toAttribute (operation :: Text)) : backend)
+        pure fallback
+      action = do
+        cached <- lookupRawCache now key `Ann.catch` cacheFailure "lookup" RawCacheMiss
+        case cached of
+          RawCacheHit value -> do
+            Metrics.bump Metrics.endpointCacheAvoidedQueries backend
+            finish ("raw-hit" :: Text) value
+          RawCacheMiss -> do
+            Metrics.bump Metrics.endpointCacheBackendQueries backend
+            value <- fetch
+            updateRawCache now key value `Ann.catch` cacheFailure "store" ()
+            finish "raw-miss" value
+      run = do
+        (leader, value) <- withRunInIO $ \unlift -> coalesceRawQuery flights key (unlift action)
+        if leader
+          then pure value
+          else do
+            Metrics.bump Metrics.endpointCacheAvoidedQueries backend
+            finish "raw-coalesced" value
+  run `onException` do
+    ended <- liftIO getMonotonicTime
+    let attrs = ("outcome", OA.toAttribute ("raw-error" :: Text)) : backend
+    Metrics.bump Metrics.dashboardQueryCacheOutcomes attrs
+    Metrics.recordMs Metrics.endpointCacheDuration ((ended - started) * 1000) attrs
+
+
 rawCacheHash :: RawCacheKey -> Text
-rawCacheHash = toXXHash . encodeText
+rawCacheHash = toXXHash . ("v2:" <>) . encodeText
 
 
-lookupRawCache :: DB es => RawCacheKey -> Eff es RawCacheResult
-lookupRawCache key = do
+lookupRawCache :: DB es => UTCTime -> RawCacheKey -> Eff es RawCacheResult
+lookupRawCache now key = do
   let (kPid, kHash, kBin) = (key.projectId, rawCacheHash key, key.rollupInterval)
       kSource = "raw-sql" :: Text
-  rows :: [(AesonText MetricsData, Int)] <-
+  rows :: [HI.OneColumn (AesonText MetricsData)] <-
     Hasql.interp
       [HI.sql|
-      SELECT cached_data, hit_count::bigint
+      SELECT cached_data
       FROM query_cache
       WHERE project_id = #{kPid} AND source = #{kSource}
         AND query_hash = #{kHash} AND bin_interval = #{kBin}
         AND cached_from = #{key.from} AND cached_to = #{key.to}
+        AND updated_at > #{now}::timestamptz - interval '60 seconds'
+        AND updated_at <= #{now}
       LIMIT 1
     |]
   pure case rows of
-    ((AesonText value, _) : _) | isNothing value.error -> RawCacheHit value
+    (HI.OneColumn (AesonText value) : _) | isNothing value.error -> RawCacheHit value
     _ -> RawCacheMiss
 
 
-updateRawCache :: (DB es, Time :> es) => RawCacheKey -> MetricsData -> Eff es ()
-updateRawCache key value = do
-  now <- Time.currentTime
-  let (kPid, kHash, kBin) = (key.projectId, rawCacheHash key, key.rollupInterval)
-      kSource = "raw-sql" :: Text
-      cached = AesonText value
-  Hasql.interpExecute_
-    [HI.sql|
-      INSERT INTO query_cache
-        (project_id, source, query_hash, bin_interval, original_query,
-         cached_from, cached_to, cached_data, hit_count, last_accessed_at)
-      VALUES
-        (#{kPid}, #{kSource}, #{kHash}, #{kBin}, #{key.sqlQuery},
-         #{key.from}, #{key.to}, #{cached}, 1, #{now})
-      ON CONFLICT (project_id, source, query_hash, bin_interval)
-      DO UPDATE SET cached_data = EXCLUDED.cached_data,
-        original_query = EXCLUDED.original_query,
-        hit_count = query_cache.hit_count + 1,
-        last_accessed_at = EXCLUDED.last_accessed_at,
-        updated_at = EXCLUDED.last_accessed_at
-    |]
+-- | Bound both staleness and entry size. The timestamp is the query snapshot,
+-- not completion time, so a slow query cannot renew old data for another minute.
+updateRawCache :: DB es => UTCTime -> RawCacheKey -> MetricsData -> Eff es ()
+updateRawCache now key value
+  | isJust value.error = pass
+  | LBS.length (AE.encode value) > 1048576 = Metrics.bump Metrics.endpointCacheOversized []
+  | otherwise = do
+      let (kPid, kHash, kBin) = (key.projectId, rawCacheHash key, key.rollupInterval)
+          kSource = "raw-sql" :: Text
+          cached = AesonText value
+      Hasql.interpExecute_
+        [HI.sql|
+          INSERT INTO query_cache
+            (project_id, source, query_hash, bin_interval, original_query,
+             cached_from, cached_to, cached_data, hit_count, last_accessed_at, updated_at)
+          VALUES
+            (#{kPid}, #{kSource}, #{kHash}, #{kBin}, #{key.sqlQuery},
+             #{key.from}, #{key.to}, #{cached}, 1, #{now}, #{now})
+          ON CONFLICT (project_id, source, query_hash, bin_interval)
+          DO UPDATE SET cached_data = EXCLUDED.cached_data,
+            original_query = EXCLUDED.original_query,
+            hit_count = query_cache.hit_count + 1,
+            last_accessed_at = EXCLUDED.last_accessed_at,
+            updated_at = EXCLUDED.updated_at
+          WHERE query_cache.updated_at <= EXCLUDED.updated_at
+        |]
 
 
 -- | Check if query has a summarize command with time binning (bin or bin_auto)
@@ -524,6 +581,7 @@ cleanupExpiredCache = do
       WITH deleted AS (
         DELETE FROM query_cache
         WHERE last_accessed_at < #{now}::timestamptz - interval '4 hours'
+           OR (source = 'raw-sql' AND updated_at < #{now}::timestamptz - interval '10 minutes')
         RETURNING id
       )
       SELECT COUNT(*)::bigint FROM deleted

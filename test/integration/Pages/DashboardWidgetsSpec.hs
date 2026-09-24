@@ -8,10 +8,12 @@
 -- suite by existing rather than by someone remembering to add it.
 module Pages.DashboardWidgetsSpec (spec) where
 
+import Control.Concurrent (threadDelay)
 import Control.Exception qualified as E
 import Control.Monad.Trans.Except (runExceptT)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
+import Data.ByteString.Lazy qualified as LBS
 import Data.Default (def)
 import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
@@ -19,6 +21,7 @@ import Data.Text qualified as T
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PG
 import Database.PostgreSQL.Simple.SqlQQ qualified as SqlQQ
+import GHC.Clock (getMonotonicTime)
 import Lucid (renderText, toHtml)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Dashboards (DashboardVM (..))
@@ -29,6 +32,8 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.Dashboards (DashboardFilters (..))
 import Pages.Dashboards qualified as Dashboards
 import Pkg.Components.Widget qualified as Widget
+import Pkg.QueryCache qualified as QueryCache
+import Pkg.TestClock (getTestTime, setTestTime)
 import Pkg.TestUtils
 import Relude
 import Servant qualified
@@ -39,6 +44,7 @@ import System.Timeout (timeout)
 import System.Types (addRespHeaders)
 import Test.Hspec
 import Text.Slugify (slugify)
+import UnliftIO.Async (wait, withAsync)
 import Utils qualified
 import Web.Auth qualified as Auth
 import Web.Routes qualified as Routes
@@ -791,6 +797,121 @@ spec = sequential $ aroundAll withTestResources do
       initial.dataFloat `shouldBe` Just 0
       repeated.dataFloat `shouldBe` initial.dataFloat
       otherEndpoint.dataFloat `shouldBe` Just 1
+
+    it "shares complete results between streaming and JSON requests" \tr -> do
+      withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'"
+      let sql = "SELECT count(*)::double precision FROM query_cache WHERE source = 'raw-sql'"
+          params = [("var-endpointHash", Just "stream-cache")]
+          fetch = runQueryEffect tr $ Charts.queryMetrics (Just "postgres") (Just Charts.DTFloat) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing params
+          stream = do
+            response <- runQueryEffect tr $ Charts.queryMetricsStream (Just "postgres") (Just Charts.DTFloat) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing params
+            frames <- runExceptT (Source.runSourceT $ Servant.getResponse response) >>= either fail pure
+            case [v | AE.Object frame <- frames, KM.lookup "type" frame == Just (AE.String "complete"), Just v <- [KM.lookup "data" frame]] of
+              [value] -> case AE.fromJSON value of
+                AE.Success metrics -> pure (metrics :: Charts.MetricsData)
+                AE.Error err -> fail err
+              _ -> expectationFailure (show frames) >> fail "missing completion"
+      initialStream <- stream
+      cachedJson <- fetch
+      repeatedStream <- stream
+      map (.dataFloat) [initialStream, cachedJson, repeatedStream] `shouldBe` replicate 3 (Just 0)
+      rows <- withResource tr.trPool \conn -> PG.query_ conn "SELECT count(*)::bigint FROM query_cache WHERE source = 'raw-sql'" :: IO [PG.Only Int]
+      rows `shouldBe` [PG.Only 1]
+
+    it "expires fixed-window results so late telemetry can replace a cached result" \tr -> E.bracket (getTestTime tr.trTestClock) (setTestTime tr.trTestClock) \_ -> do
+      withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'"
+      let fetch = runQueryEffect tr $ Charts.queryMetrics (Just "postgres") (Just Charts.DTFloat) (Just testPid) Nothing (Just "SELECT count(*)::double precision FROM query_cache WHERE source = 'raw-sql'") Nothing (Just "2025-01-01T00:00:00Z") (Just "2025-01-02T00:00:00Z") Nothing Nothing [("var-endpointHash", Just "expiry")]
+      initial <- fetch
+      advanceTestTime tr 59
+      fresh <- fetch
+      advanceTestTime tr 2
+      expired <- fetch
+      map (.dataFloat) [initial, fresh, expired] `shouldBe` [Just 0, Just 0, Just 1]
+      advanceTestTime tr 601
+      runQueryEffect tr QueryCache.cleanupExpiredCache `shouldReturn` 1
+
+    it "reuses the default live range when time parameters are omitted" \tr -> E.bracket (getTestTime tr.trTestClock) (setTestTime tr.trTestClock) \_ -> do
+      withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'"
+      let fetch = runQueryEffect tr $ Charts.queryMetrics (Just "postgres") (Just Charts.DTFloat) (Just testPid) Nothing (Just "SELECT count(*)::double precision FROM query_cache WHERE source = 'raw-sql'") Nothing Nothing Nothing Nothing Nothing [("var-endpointHash", Just "default-range")]
+      -- Both snapshots are within the same fifteen-second cache boundary.
+      initial <- fetch
+      advanceTestTime tr 0.001
+      repeated <- fetch
+      repeated.dataFloat `shouldBe` initial.dataFloat
+
+    it "shares a query until its cache write finishes" \tr -> do
+      let setup = withResource tr.trPool \conn -> do
+            void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'; CREATE SEQUENCE cache_race_calls"
+            void $ PG.execute_ conn "CREATE FUNCTION slow_cache_write() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(0.5); RETURN NEW; END $$; CREATE TRIGGER slow_cache_write BEFORE INSERT ON query_cache FOR EACH ROW EXECUTE FUNCTION slow_cache_write()"
+          cleanup = withResource tr.trPool \conn -> void $ PG.execute_ conn "DROP TRIGGER slow_cache_write ON query_cache; DROP FUNCTION slow_cache_write(); DROP SEQUENCE cache_race_calls"
+          fetch = runQueryEffect tr $ Charts.queryMetrics (Just "postgres") (Just Charts.DTFloat) (Just testPid) Nothing (Just "SELECT nextval('cache_race_calls')::double precision") (Just "24H") Nothing Nothing Nothing Nothing [("var-endpointHash", Just "write-race")]
+          waitForWrite = do
+            sleeping <- withResource tr.trPool \conn -> PG.query_ conn "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event = 'PgSleep')" :: IO [PG.Only Bool]
+            unless (sleeping == [PG.Only True]) $ threadDelay 10000 >> waitForWrite
+      E.bracket_ setup cleanup $ withAsync fetch \leader -> do
+        timeout 5000000 waitForWrite `shouldReturn` Just ()
+        follower <- fetch
+        original <- wait leader
+        map (.dataFloat) [original, follower] `shouldBe` [Just 1, Just 1]
+
+    it "returns results when the cache is unavailable and excludes oversized entries" \tr -> do
+      let fetch sql = runQueryEffect tr $ Charts.queryMetrics (Just "postgres") (Just Charts.DTText) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing [("var-endpointHash", Just "cache-fallback")]
+          rename sql = withResource tr.trPool \conn -> void $ PG.execute_ conn sql
+      E.bracket_ (rename "ALTER TABLE query_cache RENAME TO unavailable_query_cache") (rename "ALTER TABLE unavailable_query_cache RENAME TO query_cache") do
+        result <- fetch "SELECT 'still available'::text"
+        result.error `shouldBe` Nothing
+        result.dataText `shouldBe` V.singleton (V.singleton "still available")
+      rename "DELETE FROM query_cache WHERE source = 'raw-sql'"
+      large <- fetch "SELECT repeat('x', 1048576)"
+      large.error `shouldBe` Nothing
+      V.map (V.map T.length) large.dataText `shouldBe` V.singleton (V.singleton 1048576)
+      rows <- withResource tr.trPool \conn -> PG.query_ conn "SELECT count(*)::bigint FROM query_cache WHERE source = 'raw-sql'" :: IO [PG.Only Int]
+      rows `shouldBe` [PG.Only 0]
+
+    it "measures cold and cached requests with one backend execution per window" \tr -> do
+      let execute statement = withResource tr.trPool \conn -> void $ PG.execute_ conn statement
+          sql = "SELECT q.call::text, n::text, repeat('x', 80) FROM (SELECT nextval('cache_benchmark_calls') AS call, pg_sleep(0.1)) q CROSS JOIN generate_series(1, 1000) n"
+          params = [("var-endpointHash", Just "benchmark")]
+          fetch window streaming =
+            if streaming
+              then do
+                response <- runQueryEffect tr $ Charts.queryMetricsStream (Just "postgres") (Just Charts.DTText) (Just testPid) Nothing (Just sql) (Just window) Nothing Nothing Nothing Nothing params
+                frames <- runExceptT (Source.runSourceT $ Servant.getResponse response) >>= either fail pure
+                case [v | AE.Object frame <- frames, KM.lookup "type" frame == Just (AE.String "complete"), Just v <- [KM.lookup "data" frame]] of
+                  [value] -> case AE.fromJSON value of
+                    AE.Success metrics -> pure (metrics :: Charts.MetricsData)
+                    AE.Error err -> fail err
+                  _ -> fail "missing stream completion"
+              else runQueryEffect tr $ Charts.queryMetrics (Just "postgres") (Just Charts.DTText) (Just testPid) Nothing (Just sql) (Just window) Nothing Nothing Nothing Nothing params
+          measured action = do
+            start <- getMonotonicTime
+            result <- action
+            end <- getMonotonicTime
+            pure ((end - start) * 1000, result)
+      E.bracket_ (execute "CREATE SEQUENCE cache_benchmark_calls") (execute "DROP SEQUENCE cache_benchmark_calls")
+        $ forM_ ["24H", "3D", "7D"] \window -> do
+          execute "DELETE FROM query_cache WHERE source = 'raw-sql'; ALTER SEQUENCE cache_benchmark_calls RESTART WITH 1"
+          (coldMs, cold) <- measured $ fetch window True
+          cold.error `shouldBe` Nothing
+          V.length cold.dataText `shouldBe` 1000
+          warm <- traverse (measured . fetch window . even) [1 .. 10 :: Int]
+          forM_ warm $ \(_, result) -> result.dataText `shouldBe` cold.dataText
+          calls <- withResource tr.trPool (\conn -> PG.query_ conn "SELECT last_value FROM cache_benchmark_calls") :: IO [PG.Only Int]
+          calls `shouldBe` [PG.Only 1]
+          putTextLn
+            $ "endpoint_cache_benchmark "
+            <> Utils.encodeText
+              ( AE.object
+                  [ "window" AE..= window
+                  , "requests" AE..= (11 :: Int)
+                  , "backend_queries" AE..= (1 :: Int)
+                  , "avoided_queries" AE..= (10 :: Int)
+                  , "hit_rate" AE..= (10 / 11 :: Double)
+                  , "result_bytes" AE..= LBS.length (AE.encode cold)
+                  , "cold_ms" AE..= coldMs
+                  , "cached_ms" AE..= map fst warm
+                  ]
+              )
 
     it "never stores failed endpoint SQL" \tr -> do
       withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'"

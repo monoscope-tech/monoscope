@@ -102,6 +102,11 @@ test("deep paging and live delivery preserve the row under the reader", async ({
     container.scrollTop = container.scrollHeight;
     container.dispatchEvent(new Event("scroll"));
     await settle();
+    // Virtualizer layout completion can precede the visible range being painted.
+    // Establish a real initial anchor before checking whether paging preserves it.
+    const initialDeadline = performance.now() + 5_000;
+    while (!topRow() && performance.now() < initialDeadline) await settle();
+    if (!topRow()) throw new Error("The initial scrolled viewport did not render a row");
 
     const anchors: Array<{ before?: string; after?: string; scrollTop: number }> = [];
     const calls: string[] = [];
