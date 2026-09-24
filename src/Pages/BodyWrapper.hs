@@ -1199,14 +1199,16 @@ globalTemplates_ = do
   template_ [id_ "log-item-context-menu-tmpl"] do
     ul_ [class_ "log-item-cloned-menu dropdown-content z-50 menu p-2 shadow-sm bg-bgRaised rounded-box w-96 max-w-[92vw] absolute", tabindex_ "0"] do
       fieldContextMenuItems_ DynamicField fieldMenuActions
-  let toastTmpl tmplId variant icon fallback =
+  let toastTmpl :: Text -> Bool -> Text -> Html () -> Html ()
+      toastTmpl tmplId isError icon fallback =
         template_ [id_ tmplId]
-          $ div_ [role_ "alert", class_ $ "alert " <> variant <> " max-md:w-full md:w-96 cursor-pointer toast-animate", [__|init wait for click or 30s then transition my opacity to 0 then remove me|]] do
+          $ div_ ([class_ $ "alert " <> bool "alert-success" "alert-error" isError <> " max-md:w-full md:w-96 toast-animate"] <> if isError then [role_ "alert"] else [[__|init wait 8s then remove me|]]) do
             faSprite_ icon "solid" "stroke-current shrink-0 w-6 h-6"
-            span_ [class_ "title"] fallback
-  toastTmpl "successToastTmpl" "alert-success" "circle-check" "Something succeeded"
-  toastTmpl "errorToastTmpl" "alert-error" "circle-exclamation" "Something failed"
-  section_ [class_ "fixed top-0 right-0 z-50 pt-14 pr-5 max-md:left-0 max-md:px-4 space-y-3 pointer-events-none [&>*]:pointer-events-auto", id_ "toastsParent"] ""
+            span_ [class_ "title min-w-0 break-words"] fallback
+            button_ [type_ "button", Aria.label_ "Dismiss notification", class_ "btn btn-ghost btn-sm btn-square ml-auto", [__|on click remove closest .alert|]] $ faSprite_ "xmark" "regular" "w-4 h-4"
+  toastTmpl "successToastTmpl" False "circle-check" "Something succeeded"
+  toastTmpl "errorToastTmpl" True "circle-exclamation" "Something failed"
+  section_ [class_ "fixed bottom-0 right-0 z-50 p-4 max-md:left-0 space-y-3 pointer-events-none [&>*]:pointer-events-auto", id_ "toastsParent", Aria.live_ "polite", term "aria-relevant" "additions"] ""
   script_
     [type_ "text/javascript"]
     [text|

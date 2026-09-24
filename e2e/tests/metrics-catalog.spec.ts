@@ -1,15 +1,7 @@
 import { test, expect } from '@playwright/test';
-import { execFileSync } from 'node:child_process';
-import { DEMO_PROJECT } from './helpers';
+import { DEMO_PROJECT, sql } from './helpers';
 
 const url = `/p/${DEMO_PROJECT}/metrics`;
-// These fixtures only use the disposable database owned by scripts/e2e.sh.
-function sql(query: string) {
-  execFileSync('psql', ['-h', process.env.E2E_PGHOST ?? process.env.DB_HOST ?? 'localhost',
-    '-p', process.env.E2E_PGPORT ?? process.env.DB_PORT ?? '5432', '-U', 'postgres',
-    '-d', process.env.E2E_DB ?? 'monoscope_e2e', '-v', 'ON_ERROR_STOP=1', '-c', query],
-  { env: { ...process.env, PGPASSWORD: process.env.E2E_PGPASSWORD ?? 'postgres' }, stdio: 'pipe' });
-}
 const cleanup = `DELETE FROM otel_metrics WHERE project_id='${DEMO_PROJECT}' AND metric_name LIKE 'uxcatalog%';
 DELETE FROM otel_metrics_meta WHERE project_id='${DEMO_PROJECT}' AND metric_name LIKE 'uxcatalog%';`;
 

@@ -161,9 +161,9 @@ onboardingTests =
           _ -> fail "Expected NotifChannelStep"
 
       (emptyHeaders, _) <- testServant tr $ Onboarding.checkIntegrationGet testPid Nothing
-      case lookupResponseHeader @"HX-Trigger-After-Settle" emptyHeaders of
+      case lookupResponseHeader @"HX-Trigger" emptyHeaders of
         Header triggerHeader -> triggerHeader `shouldSatisfy` T.isInfixOf "No events found yet"
-        _ -> fail "Expected HX-Trigger-After-Settle header with error toast"
+        _ -> fail "Expected HX-Trigger header with error toast"
 
       apiKey <- createTestAPIKey tr testPid "integration-test-key"
       eventTime <- getCurrentTime

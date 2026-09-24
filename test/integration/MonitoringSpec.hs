@@ -182,6 +182,10 @@ spec = sequential $ aroundAll withTestResources do
               , subject = Just "Checkout errors"
               , message = Just "A checkout request failed"
               , recipientEmailAll = Nothing
+              , notifyAfterCheck = Nothing
+              , notifyAfter = Nothing
+              , stopAfterCheck = Nothing
+              , stopAfter = Nothing
               , teams = []
               }
       setupSlackData tr testPid "T_MONITOR_SIM"
@@ -198,14 +202,14 @@ spec = sequential $ aroundAll withTestResources do
                 WHERE project_id = ? AND handle = 'everyone'|]
           (PGS.Only testPid)
       void $ testServant tr $ Dashboards.widgetAlertUpsertH testPid widgetId (Just $ unUUIDId dashboardId) alertForm
-      isNothing <$> runTestBgNoReset tr (Monitors.queryMonitorByWidgetId otherPid widgetId) `shouldReturn` True
+      isNothing <$> runTestBgNoReset tr (Monitors.queryMonitorByWidgetId otherPid (Just $ unUUIDId dashboardId) widgetId) `shouldReturn` True
 
       apiKey <- createTestAPIKey tr testPid "widget-monitor"
       ingestionTime <- getCurrentTime
       ingestTrace tr apiKey "checkout" ingestionTime
       advanceMinutes tr 1
       fired <- fst <$> captureNotifs tr checkTriggeredQueryMonitors
-      firedMonitor <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId testPid widgetId
+      firedMonitor <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId testPid (Just $ unUUIDId dashboardId) widgetId
       (firedMonitor >>= (.alertConfig.unit)) `shouldBe` Just "events"
       ((\m -> (m.currentStatus, m.currentValue, m.notificationCount)) <$> firedMonitor) `shouldBe` Just (Monitors.MSAlerting, 1, 1)
       deliverySummary fired
@@ -233,7 +237,7 @@ spec = sequential $ aroundAll withTestResources do
       let recoveryQuery = "name == \"search\""
           updatedWidget = savedWidget{Widget.query = Just recoveryQuery}
       void $ testServant tr $ Dashboards.dashboardWidgetPutH testPid dashboardId (Just widgetId) Nothing updatedWidget
-      synced <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId testPid widgetId
+      synced <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId testPid (Just $ unUUIDId dashboardId) widgetId
       (.logQuery) <$> synced `shouldBe` Just recoveryQuery
 
       advanceMinutes tr 1
@@ -269,10 +273,10 @@ spec = sequential $ aroundAll withTestResources do
       void $ runTestBgNoReset tr $ Monitors.queryMonitorUpsert otherMonitor
 
       void $ testServant tr $ Dashboards.dashboardWidgetReorderPatchH testPid dashboardId Nothing Map.empty
-      isNothing <$> runTestBgNoReset tr (Monitors.queryMonitorByWidgetId testPid widgetId) `shouldReturn` True
-      otherAfterDelete <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId otherPid widgetId
+      isNothing <$> runTestBgNoReset tr (Monitors.queryMonitorByWidgetId testPid (Just $ unUUIDId dashboardId) widgetId) `shouldReturn` True
+      otherAfterDelete <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId otherPid (Just $ unUUIDId dashboardId) widgetId
       (.id) <$> otherAfterDelete `shouldBe` Just otherMonitorId
-      void $ runTestBgNoReset tr $ Monitors.deleteMonitorsByWidgetIds otherPid [widgetId]
+      void $ runTestBgNoReset tr $ Monitors.deleteMonitorsByWidgetIds otherPid (Just $ unUUIDId dashboardId) [widgetId]
 
   describe "Monitor Hysteresis Integration" do
     it "should store and retrieve monitors with recovery thresholds" \tr -> do
