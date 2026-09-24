@@ -72,15 +72,21 @@ test.describe('metrics catalog', () => {
     const servicePicker = page.locator('#metric-service-picker summary');
     await servicePicker.focus();
     await page.keyboard.press('Enter');
-    await page.getByRole('searchbox', { name: 'Search services', exact: true }).fill('ux-checkout');
     const radio = page.getByRole('radio', { name: 'ux-checkout', exact: true });
     await expect(radio).toBeVisible();
-    // The search input refreshes the option list 200ms after the last keystroke, and a
-    // refresh landing after Space re-renders the radios with the pre-selection state —
-    // the intermittent metric_source=all CI failure. Let the refresh settle first.
-    await page.waitForLoadState('networkidle');
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    await page.route('**/metrics/services?**', async route => {
+      const response = await route.fetch();
+      await gate;
+      await route.fulfill({ response });
+    });
+    await page.getByRole('searchbox', { name: 'Search services', exact: true }).fill('ux-checkout');
+    await expect(page.getByRole('searchbox', { name: 'Search services', exact: true })).toHaveClass(/htmx-request/);
     await radio.focus();
     await page.keyboard.press('Space');
+    release();
+    await page.waitForLoadState('networkidle');
     await expect(radio).toBeChecked();
     await servicePicker.focus();
     await page.keyboard.press('Enter');

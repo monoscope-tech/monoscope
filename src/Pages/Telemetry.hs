@@ -736,7 +736,7 @@ servicePicker_ pid current =
 -- until it is opened. The wrapper is part of the contract: it is what the picker's
 -- @hx-swap outerHTML@ replaces.
 serviceOptions_ :: Text -> [Text] -> Html ()
-serviceOptions_ current services = div_ [id_ "metric-service-options", class_ "max-h-72 overflow-y-auto"] do
+serviceOptions_ current services = div_ [id_ "metric-service-options", class_ "max-h-72 overflow-y-auto", [__|on change send htmx:abort to <#metric-service-picker input[type=search]/>|]] do
   forM_ (ordNub $ "all" : [current | current /= "all"] <> services) \service ->
     label_ [class_ "flex items-center gap-2 px-2 py-2 text-sm cursor-pointer hover:bg-fillWeak"] do
       input_ ([type_ "radio", name_ "metric_source", value_ service, class_ "radio radio-xs"] <> [checked_ | service == current])

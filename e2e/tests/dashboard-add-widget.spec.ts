@@ -430,6 +430,7 @@ async function openWidgetMonitor(page: Page, dash: Dash) {
 }
 
 test("widget monitors persist independently across dashboards and reopen with saved settings", async ({ page }) => {
+  test.slow(); // Two dashboard lifecycles, including repeated navigation to verify persistence.
   const dashboards: Dash[] = [];
   for (const suffix of ["A", "B"]) {
     const title = `E2E Widget Monitor ${Date.now()} ${suffix}`;
