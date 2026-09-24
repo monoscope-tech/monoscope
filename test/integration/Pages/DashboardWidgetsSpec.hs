@@ -660,6 +660,41 @@ spec = sequential $ aroundAll withTestResources do
           (Just ascHtml, Just descHtml) -> T.isInfixOf ">1<" (toStrict ascHtml) && T.isInfixOf ">25<" (toStrict descHtml)
           _ -> False
 
+    it "exercises ascending and descending server sorts for every built-in sortable table column" \tr -> do
+      templates <- DashboardModel.readDashboardsFromDisk "static/public/dashboards"
+      let flatten w = w : maybe [] (concatMap flatten) w.children
+          widgets d = concatMap flatten $ d.widgets <> maybe [] (concatMap (.widgets)) d.tabs
+          cases =
+            [ col
+            | d <- templates
+            , w <- widgets d
+            , w.wType == Widget.WTTable
+            , col <- fromMaybe [] w.columns
+            , col.sortable == Just True
+            ]
+          fetch widget sortParam = runQueryEffect tr do
+            let (query, sql) = Widget.tableQuery widget sortParam
+            Charts.queryMetrics (Just "postgres") (Just Charts.DTText) (Just testPid) query sql Nothing Nothing Nothing Nothing Nothing []
+      cases `shouldSatisfy` not . null
+      forM_ cases \col -> do
+        let quoted = "\"" <> T.replace "\"" "\"\"" col.field <> "\""
+            widget =
+              (def :: Widget.Widget)
+                { Widget.wType = Widget.WTTable
+                , Widget.columns = Just [col]
+                , Widget.sql = Just $ "SELECT n AS " <> quoted <> " FROM generate_series(1, 25) n ORDER BY {{table_sort}} LIMIT 20"
+                , Widget.defaultSort = Widget.mkSqlOrder "abs(n - 13) ASC"
+                }
+        original <- fetch widget Nothing
+        ascending <- fetch widget (Just $ "+" <> col.field)
+        descending <- fetch widget (Just $ "-" <> col.field)
+        V.length ascending.dataText `shouldBe` 20
+        V.length descending.dataText `shouldBe` 20
+        ascending.dataText `shouldBe` V.fromList [V.singleton $ show @Text n | n <- [1 .. 20 :: Int]]
+        descending.dataText `shouldBe` V.fromList [V.singleton $ show @Text n | n <- [25, 24 .. 6 :: Int]]
+        V.any (`notElem` original.dataText) ascending.dataText `shouldBe` True
+        V.any (`notElem` original.dataText) descending.dataText `shouldBe` True
+
   describe "Widget fetch URL size" do
     let bigSqlWidget =
           (def :: Widget.Widget)
@@ -742,6 +777,29 @@ spec = sequential $ aroundAll withTestResources do
       (mapWidget >>= (.cta) <&> (.title)) `shouldBe` Just "Open Service Map"
       (mapWidget >>= (.cta) <&> (.url)) `shouldBe` Just ("/p/" <> testPid.toText <> "/service_map?endpoint_hash=endpoint%20%2F%20hash&since=24H")
       (mapWidget >>= (.html)) `shouldSatisfy` maybe False (T.isInfixOf "No direct dependencies in this range" . toStrict)
+
+  describe "Endpoint Analytics complete-result SQL cache" do
+    it "reuses a successful complete result and isolates endpoint keys" \tr -> do
+      withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'"
+      let sql = "SELECT count(*)::double precision FROM query_cache WHERE source = 'raw-sql'"
+          fetch endpoint =
+            runQueryEffect tr
+              $ Charts.queryMetrics (Just "postgres") (Just Charts.DTFloat) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing [("var-endpointHash", Just endpoint)]
+      initial <- fetch "endpoint-a"
+      repeated <- fetch "endpoint-a"
+      otherEndpoint <- fetch "endpoint-b"
+      initial.dataFloat `shouldBe` Just 0
+      repeated.dataFloat `shouldBe` initial.dataFloat
+      otherEndpoint.dataFloat `shouldBe` Just 1
+
+    it "never stores failed endpoint SQL" \tr -> do
+      withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'"
+      failed <-
+        runQueryEffect tr
+          $ Charts.queryMetrics (Just "postgres") (Just Charts.DTFloat) (Just testPid) Nothing (Just "SELECT missing_cache_column::double precision") (Just "24H") Nothing Nothing Nothing Nothing [("var-endpointHash", Just "endpoint-failure")]
+      failed.error `shouldSatisfy` isJust
+      rows <- withResource tr.trPool \conn -> PG.query_ conn "SELECT count(*)::bigint FROM query_cache WHERE source = 'raw-sql'" :: IO [PG.Only Int]
+      rows `shouldBe` [PG.Only 0]
 
   -- The variable picker replaces the tab's content, so every widget the render produced
   -- was thrown away. The gate lived in the view, so the handler ran the whole widget
@@ -842,6 +900,7 @@ spec = sequential $ aroundAll withTestResources do
       dashId <- newDashboard tr "endpoint-stats.yaml" "Prefill Full"
       full <- openTab tr dashId Nothing
       eagerOnes (renderedWidgets full) `shouldSatisfy` not . null
+      T.count "id=\"log_details_container\"" (toStrict $ renderText $ toHtml full) `shouldBe` 1
 
     it "hands a swap the same widgets with nothing prefilled" \tr -> do
       dashId <- newDashboard tr "endpoint-stats.yaml" "Prefill Swap"

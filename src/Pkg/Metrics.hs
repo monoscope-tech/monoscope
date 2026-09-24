@@ -46,6 +46,7 @@ module Pkg.Metrics (
   dashboardResponseBytes,
   dashboardTimeToSettled,
   dashboardSettlementBudgetExceeded,
+  dashboardLegacyTraceSchemas,
 ) where
 
 import Effectful (Eff, IOE, (:>))
@@ -312,6 +313,14 @@ drainPatternsPersisted = mkCounter "monoscope.drain.patterns.persisted" Nothing
 widgetSqlErrors :: Counter Int64
 widgetSqlErrors = mkCounter "monoscope.dashboard.widget.sql_errors" Nothing
 {-# NOINLINE widgetSqlErrors #-}
+
+
+-- | Saved dashboard schemas that still contain a retired @type: traces@ widget
+-- after migrations. Recorded once per starting replica; any non-zero increase
+-- means a schema shape escaped the recursive migration and needs inspection.
+dashboardLegacyTraceSchemas :: Counter Int64
+dashboardLegacyTraceSchemas = mkCounter "monoscope.dashboard.legacy_trace_schemas" Nothing
+{-# NOINLINE dashboardLegacyTraceSchemas #-}
 
 
 -- Dashboard dimensions are deliberately closed vocabularies. Dashboard and project ids

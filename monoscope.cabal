@@ -835,6 +835,7 @@ test-suite integration-tests
     , safe-exceptions
     , servant
     , servant-htmx
+    , servant-queryparam-core
     , servant-server
     , silently
     , slugify

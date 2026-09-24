@@ -139,3 +139,44 @@ are lazy, so it does not solve their scan cost.
 Concurrent work committed part of this implementation while execution continued.
 Other changes in the workspace were retained. Two subsequent test compilation
 errors from that work required a record-dot access and an unused fixture argument.
+
+## Follow-up validation (2026-09-18)
+
+- Added complete-result caching and in-process singleflight for endpoint-scoped
+  raw SQL. Live ranges execute against the same rollup-aligned bounds used in
+  cache identity; explicit ranges remain exact. Failed queries are not stored.
+- Captured fixed-window TimeFusion physical plans for Apdex, status breakdown,
+  and downstream operations at 24 hours and 3 days. TimeFusion rejects
+  `EXPLAIN (ANALYZE, BUFFERS)`, so actual row/buffer counters are unavailable;
+  the evidence and optimization decision are in
+  `docs/endpoint-analytics-query-plans.md`.
+- Unit suite: 328 examples, 0 failures. This includes all built-in sortable SQL
+  contracts and concurrent raw-query coalescing.
+- Route decoding: 2 examples, 0 failures, including `target-spans` and malformed
+  cursor/direction rejection.
+- Details-panel component regressions: 14 examples, 0 failures under Node 22.
+- Migration 0184 ran against a clean PostgreSQL 16 instance. Nested trace
+  widgets converted recursively, the retired latency column was removed,
+  missing columns received defaults, and customized columns/titles survived.
+- `make ci-signoff CHECKS="build doctests unit-tests ui-tests weeder hlint"`
+  passed and published build, doctest (1,617 examples), unit (328 examples), and
+  UI (947 examples) attestations. Weeder reached the repository's existing
+  dead-code inventory and failed; HLint did not run after that failure.
+- The host HLint is too old to parse `MultilineStrings`, while the local CI
+  runner does not provide the `hlint` capability. HLint remains outstanding.
+- A full container integration sign-off compiled but was killed with exit 137
+  by the local Docker memory limit, both with normal and single-job builds. No
+  integration attestation was published. Against the same real PostgreSQL 16,
+  Timescale Toolkit, MinIO, and native TimeFusion services, the seven changed
+  integration areas passed as separate processes: 10 examples, 0 failures.
+  These cover route decoding, migration 0184 snapshots, raw-result cache reuse
+  and failure isolation, every built-in sortable column in both directions,
+  and exactly one details container on Issues, Log Explorer, and dashboards.
+- Separate frontend and end-to-end sign-offs passed and published attestations:
+  the production Tailwind/Vite build completed, and Playwright passed 72 browser
+  tests with 5 fixture-dependent skips. `make ci-status` leaves integration,
+  Weeder, and HLint for GitHub. Frontend, build, doctests, unit tests, CLI tests,
+  UI tests, and end-to-end tests have reusable attestations. The skipped issue
+  investigation fixture means the full visual/resizing browser matrix, along
+  with production cache-latency targets, remains post-deployment acceptance
+  work.

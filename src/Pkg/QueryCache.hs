@@ -2,6 +2,13 @@ module Pkg.QueryCache (
   CacheKey (..),
   CacheEntry (..),
   CacheResult (..),
+  RawCacheKey (..),
+  RawCacheResult (..),
+  RawQueryFlights,
+  newRawQueryFlights,
+  coalesceRawQuery,
+  lookupRawCache,
+  updateRawCache,
   generateCacheKey,
   lookupCache,
   updateCache,
@@ -21,6 +28,10 @@ module Pkg.QueryCache (
   replaceTimeseriesRange,
 ) where
 
+import Control.Concurrent.MVar qualified as MVar
+import Control.Concurrent.STM qualified as STM
+import Control.Exception qualified as E
+import Data.Aeson qualified as AE
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.List (lookup)
@@ -39,13 +50,13 @@ import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
-import Pages.Charts.Types (MetricsData (..), MetricsStats (..))
+import Pages.Charts.Types (DataType, MetricsData (..), MetricsStats (..))
 import Pkg.DeriveUtils (AesonText (..), DB)
 import Pkg.Parser (RangeEnd (..), SqlQueryCfg (..), autoBinWidth)
 import Pkg.Parser.Expr (ToQueryText (..), kqlTimespanToTimeBucket)
 import Pkg.Parser.Stats (BinFunction (..), ByClauseItem (..), Section (..), Sources (..), SummarizeByClause (..), defaultBinSize)
 import Relude
-import Utils (toXXHash)
+import Utils (encodeText, toXXHash)
 
 
 -- $setup
@@ -79,6 +90,111 @@ data CacheEntry = CacheEntry
 
 data CacheResult = CacheHit CacheEntry | PartialHit CacheEntry | CacheMiss | CacheBypassed Text
   deriving stock (Show)
+
+
+-- | Identity of one complete endpoint-widget SQL result. Unlike the incremental
+-- timeseries cache above, every dimension is exact: a result is reusable only for
+-- the same endpoint, requested window, scope, query templates and rollup width.
+-- Backend and decoder are additional safety dimensions because identical SQL can
+-- legitimately produce different wire values on PostgreSQL and TimeFusion.
+data RawCacheKey = RawCacheKey
+  { projectId :: Projects.ProjectId
+  , endpointHash :: Text
+  , from :: UTCTime
+  , to :: UTCTime
+  , environment :: Maybe Text
+  , service :: Maybe Text
+  , sqlQuery :: Text
+  , kqlQuery :: Text
+  , rollupInterval :: Text
+  , backend :: Hasql.SqlSource
+  , decoder :: DataType
+  }
+  deriving stock (Eq, Generic, Ord, Show)
+  deriving anyclass (AE.ToJSON)
+
+
+data RawCacheResult = RawCacheHit MetricsData | RawCacheMiss
+  deriving stock (Show)
+
+
+-- | Per-process request coalescer. The durable result cache is shared through
+-- PostgreSQL; this small registry prevents one web process from issuing the same
+-- expensive TimeFusion query many times while the shared entry is still absent.
+newtype RawQueryFlights = RawQueryFlights (MVar.MVar (M.Map RawCacheKey (STM.TMVar (Either E.SomeException MetricsData))))
+
+
+newRawQueryFlights :: IO RawQueryFlights
+newRawQueryFlights = RawQueryFlights <$> MVar.newMVar M.empty
+
+
+-- | Run the first request for a key and make concurrent followers await its
+-- result. Exceptions are published too, so followers neither hang nor launch a
+-- replacement query while the leader is unwinding. The Bool is True for the
+-- leader, which alone should persist the completed result.
+coalesceRawQuery :: RawQueryFlights -> RawCacheKey -> IO MetricsData -> IO (Bool, MetricsData)
+coalesceRawQuery (RawQueryFlights flights) key action = E.mask \restore -> do
+  (leader, resultVar) <-
+    MVar.modifyMVar flights \running -> case M.lookup key running of
+      Just existing -> pure (running, (False, existing))
+      Nothing -> do
+        created <- STM.atomically STM.newEmptyTMVar
+        pure (M.insert key created running, (True, created))
+  if leader
+    then do
+      result <- E.try @E.SomeException $ restore action
+      STM.atomically $ STM.putTMVar resultVar result
+      MVar.modifyMVar_ flights $ pure . M.delete key
+      either E.throwIO (pure . (True,)) result
+    else do
+      result <- restore $ STM.atomically $ STM.readTMVar resultVar
+      either E.throwIO (pure . (False,)) result
+
+
+rawCacheHash :: RawCacheKey -> Text
+rawCacheHash = toXXHash . encodeText
+
+
+lookupRawCache :: DB es => RawCacheKey -> Eff es RawCacheResult
+lookupRawCache key = do
+  let (kPid, kHash, kBin) = (key.projectId, rawCacheHash key, key.rollupInterval)
+      kSource = "raw-sql" :: Text
+  rows :: [(AesonText MetricsData, Int)] <-
+    Hasql.interp
+      [HI.sql|
+      SELECT cached_data, hit_count::bigint
+      FROM query_cache
+      WHERE project_id = #{kPid} AND source = #{kSource}
+        AND query_hash = #{kHash} AND bin_interval = #{kBin}
+        AND cached_from = #{key.from} AND cached_to = #{key.to}
+      LIMIT 1
+    |]
+  pure case rows of
+    ((AesonText value, _) : _) | isNothing value.error -> RawCacheHit value
+    _ -> RawCacheMiss
+
+
+updateRawCache :: (DB es, Time :> es) => RawCacheKey -> MetricsData -> Eff es ()
+updateRawCache key value = do
+  now <- Time.currentTime
+  let (kPid, kHash, kBin) = (key.projectId, rawCacheHash key, key.rollupInterval)
+      kSource = "raw-sql" :: Text
+      cached = AesonText value
+  Hasql.interpExecute_
+    [HI.sql|
+      INSERT INTO query_cache
+        (project_id, source, query_hash, bin_interval, original_query,
+         cached_from, cached_to, cached_data, hit_count, last_accessed_at)
+      VALUES
+        (#{kPid}, #{kSource}, #{kHash}, #{kBin}, #{key.sqlQuery},
+         #{key.from}, #{key.to}, #{cached}, 1, #{now})
+      ON CONFLICT (project_id, source, query_hash, bin_interval)
+      DO UPDATE SET cached_data = EXCLUDED.cached_data,
+        original_query = EXCLUDED.original_query,
+        hit_count = query_cache.hit_count + 1,
+        last_accessed_at = EXCLUDED.last_accessed_at,
+        updated_at = EXCLUDED.last_accessed_at
+    |]
 
 
 -- | Check if query has a summarize command with time binning (bin or bin_auto)

@@ -1,15 +1,18 @@
 module Pkg.QueryCacheSpec (spec) where
 
+import Control.Concurrent (threadDelay)
+import Control.Concurrent.Async (mapConcurrently, replicateConcurrently)
+import Data.Effectful.Hasql (SqlSource (..))
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Vector qualified as V
-import Pages.Charts.Charts (MetricsData (..), convertTimestampsToMs)
+import Pages.Charts.Charts (DataType (..), MetricsData (..), convertTimestampsToMs)
 import Pkg.Parser (RangeEnd (..), SqlQueryCfg (..), defPid, defSqlQueryCfg, fixedUTCTime)
 import Pkg.Parser.Expr (Subject (..))
 import Pkg.Parser.Stats (BinFunction (..), ByClauseItem (..), Section (..), SummarizeByClause (..))
-import Pkg.QueryCache (CacheKey (..), bucketStart, chartChunks, generateCacheKey, hasSummarizeWithBin, mergeTimeseriesData, trimOldData, trimToRange)
+import Pkg.QueryCache (CacheKey (..), RawCacheKey (..), bucketStart, chartChunks, coalesceRawQuery, generateCacheKey, hasSummarizeWithBin, mergeTimeseriesData, newRawQueryFlights, trimOldData, trimToRange)
 import Relude
-import Test.Hspec (Spec, describe, it, shouldBe, shouldNotBe)
+import Test.Hspec (Spec, describe, it, shouldBe, shouldNotBe, shouldReturn)
 
 
 mkTime :: Int -> UTCTime
@@ -43,6 +46,30 @@ timestampSubject = Subject "timestamp" "timestamp" []
 
 spec :: Spec
 spec = do
+  describe "raw SQL request coalescing" do
+    it "runs one leader for concurrent requests with the complete endpoint key" do
+      flights <- newRawQueryFlights
+      calls <- newIORef (0 :: Int)
+      let key = rawKey "endpoint-a" (Just "production") "5 minutes"
+          fetch = do
+            atomicModifyIORef' calls $ \n -> (n + 1, ())
+            threadDelay 100_000
+            pure emptyMetrics
+      results <- replicateConcurrently 12 $ coalesceRawQuery flights key fetch
+      readIORef calls `shouldReturn` 1
+      length (filter fst results) `shouldBe` 1
+      map ((.rowsCount) . snd) results `shouldBe` replicate 12 0
+
+    it "does not coalesce requests when an explicit key dimension changes" do
+      flights <- newRawQueryFlights
+      calls <- newIORef (0 :: Int)
+      let key = rawKey
+          keys :: [RawCacheKey]
+          keys = [key "endpoint-a" Nothing "5 minutes", key "endpoint-b" Nothing "5 minutes", key "endpoint-a" (Just "production") "5 minutes", key "endpoint-a" Nothing "1 hour"]
+          fetch = atomicModifyIORef' calls (\n -> (n + 1, ())) $> emptyMetrics
+      void $ mapConcurrently (\k -> coalesceRawQuery flights k fetch) keys
+      readIORef calls `shouldReturn` length keys
+
   describe "chart response event rate" do
     it "uses event totals and the selected interval for fresh, merged and trimmed data" do
       let fresh = (mkMetrics [(86400, 103680000)]){from = Just 0, to = Just 2592000, rowsCount = 103680000, rowsPerMin = Just 0.01}
@@ -159,3 +186,20 @@ spec = do
       let result = trimOldData (mkTime 2000) metrics
       V.length result.dataset `shouldBe` 2
       (join $ V.headM $ V.head result.dataset) `shouldBe` Just 2000
+
+
+rawKey :: Text -> Maybe Text -> Text -> RawCacheKey
+rawKey endpointHash environment rollupInterval =
+  RawCacheKey
+    { projectId = defPid
+    , endpointHash
+    , from = mkTime 10
+    , to = mkTime 20
+    , environment
+    , service = Nothing
+    , sqlQuery = "SELECT 1"
+    , kqlQuery = ""
+    , rollupInterval
+    , backend = SqlTimefusion
+    , decoder = DTText
+    }

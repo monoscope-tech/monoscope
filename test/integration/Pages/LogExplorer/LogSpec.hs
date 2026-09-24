@@ -27,6 +27,9 @@ import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.GRPC.Common.Protobuf (Proto (..))
+import Network.HTTP.Types qualified as H
+import Network.Wai qualified as Wai
+import Network.Wai.Test qualified as WT
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.LogExplorer.Log qualified as Log
 import Pages.LogExplorer.LogItem qualified as LogItem
@@ -42,9 +45,12 @@ import ProcessMessage (processMessages)
 import ProcessMessage qualified
 import Relude
 import Relude.Unsafe qualified as Unsafe
+import Servant qualified
+import Servant.QueryParam.Record (RecordParam)
 import System.Config (AuthContext (..), EnvConfig (..))
 import Test.Hspec
 import Utils qualified
+import Web.Routes qualified as Routes
 import "base64" Data.Base64.Types qualified as B64T
 import "base64" Data.ByteString.Base64 qualified as B64
 
@@ -129,7 +135,46 @@ seedFacetSummary tr = do
 
 
 spec :: Spec
-spec = around withTestResources do
+spec = routeSpec >> around withTestResources databaseSpec
+
+
+routeSpec :: Spec
+routeSpec = do
+  describe "LogDataQuery route decoding" do
+    let decodeApp =
+          Servant.serve
+            (Proxy @("decode" Servant.:> RecordParam Routes.LogDataFieldExp Log.LogDataQuery Servant.:> Servant.Get '[Servant.JSON] AE.Value))
+            ( \q ->
+                pure
+                  $ AE.object
+                    [ "query" AE..= q.query
+                    , "cols" AE..= q.cols
+                    , "cursor" AE..= q.cursor
+                    , "direction" AE..= (show <$> q.direction)
+                    , "since" AE..= q.since
+                    , "from" AE..= q.from
+                    , "to" AE..= q.to
+                    , "source" AE..= q.source
+                    , "targetSpans" AE..= q.targetSpans
+                    , "sort" AE..= q.sort
+                    ]
+            )
+        request path = WT.runSession (WT.srequest $ WT.SRequest (WT.setPath Wai.defaultRequest path) "") decodeApp
+
+    it "decodes every public parameter and maps target-spans by name" \_ -> do
+      response <- request "/decode?query=name%3D%3D%22checkout%22&cols=name%2Cduration&cursor=2026-09-18T10%3A20%3A30Z&direction=newer&since=24H&from=2026-09-17T10%3A20%3A30Z&to=2026-09-18T10%3A20%3A30Z&source=spans&target-spans=span-a%2Cspan-b&sort=-duration"
+      H.statusCode response.simpleStatus `shouldBe` 200
+      (AE.eitherDecode response.simpleBody :: Either String AE.Value)
+        `shouldBe` Right (AE.object ["query" AE..= Just @Text "name==\"checkout\"", "cols" AE..= Just @Text "name,duration", "cursor" AE..= Just @Text "2026-09-18T10:20:30Z", "direction" AE..= Just @Text "PageNewer", "since" AE..= Just @Text "24H", "from" AE..= Just @Text "2026-09-17T10:20:30Z", "to" AE..= Just @Text "2026-09-18T10:20:30Z", "source" AE..= Just @Text "spans", "targetSpans" AE..= Just @Text "span-a,span-b", "sort" AE..= Just @Text "-duration"])
+
+    it "rejects malformed cursor and direction values at the route boundary" \_ -> do
+      forM_ ["/decode?cursor=not-a-time", "/decode?direction=sideways"] \path -> do
+        response <- request path
+        H.statusCode response.simpleStatus `shouldBe` 400
+
+
+databaseSpec :: SpecWith TestResources
+databaseSpec = do
   describe "Log data endpoint (logExplorerDataH)" do
     it "should return an empty list" \tr -> do
       pid <- createTestProject tr "log-explorer-empty"
@@ -745,6 +790,7 @@ spec = around withTestResources do
       -- Scoped to the container's own tag, not the page: `lazyLoad_` and the widget loader
       -- already carry the same attribute, so a page-wide search passes with this one deleted.
       -- Splitting on '<' makes it independent of attribute order within the tag.
+      T.count "id=\"log_details_container\"" html `shouldBe` 1
       find (T.isInfixOf "id=\"log_details_container\"") (T.splitOn "<" html)
         `shouldSatisfy` maybe False (T.isInfixOf "hx-sync=\"this:replace\"")
 

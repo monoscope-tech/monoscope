@@ -85,6 +85,7 @@ import Jose.Jwa (JwsAlg (RS256))
 import Jose.Jws qualified as Jws
 import Jose.Jwt (Jwt (..))
 import Models.Projects.Dashboards (Dashboard, DashboardId)
+import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectApiKeys (decryptAPIKey, encryptAPIKey)
 import Models.Projects.Projects (ProjectId)
 import Pkg.DeriveUtils (DB, UUIDId (..), selectFrom)
@@ -438,7 +439,7 @@ dashboardToYaml = Yaml.encode
 
 
 yamlToDashboard :: ByteString -> Either Text Dashboard
-yamlToDashboard = first (toText . show) . Yaml.decodeEither'
+yamlToDashboard bytes = first (toText . show) (Yaml.decodeEither' bytes) >>= Dashboards.validateDashboard
 
 
 -- | Convert dashboard title to a kebab-case file path.

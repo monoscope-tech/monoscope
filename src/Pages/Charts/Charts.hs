@@ -11,12 +11,12 @@ import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
 import Data.ByteString qualified as BS
 import Data.Default
-import Data.Effectful.Hasql (runHasqlPool)
+import Data.Effectful.Hasql (SqlSource (..), runHasqlPool)
 import Data.List (lookup)
 import Data.Map.Strict qualified as M
 import Data.Pool (Pool, destroyAllResources, withResource)
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime)
+import Data.Time (UTCTime, addUTCTime, diffUTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Tuple.Extra (fst3, snd3, thd3)
 import Data.Vector qualified as V
@@ -167,13 +167,13 @@ queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (Utils.nonEmptyT -> q
   -- otel_logs_and_spans rejects the metrics table's own columns (`metric_name`, `value`).
   case first (.message) $ parseQueryDiagnosed source $ replacePlaceholders mappngKQL $ maybeToMonoid queryM of
     Left err -> pure (emptyMetricsFor now fromD toD){error = Just err}
-    Right queryAST -> runQueryAST authCtx dbSource respDataType pid source density environment service queryAST (maybeToMonoid queryM) querySQLM mappngSQL now fromD toD
+    Right queryAST -> runQueryAST authCtx dbSource respDataType pid source density environment service (isJust sinceM) queryAST (maybeToMonoid queryM) querySQLM mappngSQL now fromD toD
 
 
 -- | Run a parsed chart query, either through the caller's raw SQL template or
 -- the KQL-generated query.
-runQueryAST :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AuthContext -> Maybe Text -> DataType -> Projects.ProjectId -> Maybe Sources -> BinDensity -> Maybe Text -> Maybe Text -> [Section] -> Text -> Maybe Text -> M.Map Text Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> Eff es MetricsData
-runQueryAST authCtx dbSource respDataType pid source binDensity environment service queryAST queryM querySQLM mappngSQL now fromD toD = do
+runQueryAST :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AuthContext -> Maybe Text -> DataType -> Projects.ProjectId -> Maybe Sources -> BinDensity -> Maybe Text -> Maybe Text -> Bool -> [Section] -> Text -> Maybe Text -> M.Map Text Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> Eff es MetricsData
+runQueryAST authCtx dbSource respDataType pid source binDensity environment service liveRange queryAST queryM querySQLM mappngSQL now fromD toD = do
   let scope = mkScopedQuery pid (fromD, toD) environment service
       sqlQueryCfg =
         applyScopedQuery
@@ -190,24 +190,64 @@ runQueryAST authCtx dbSource respDataType pid source binDensity environment serv
     Just querySQL -> do
       let (_, qc) = queryASTToComponents sqlQueryCfg queryAST
       let mappngSQL' = mappngSQL <> M.fromList [("query_ast_filters", rawAstFilters sqlQueryCfg qc)]
-      let sqlQuery = replacePlaceholders mappngSQL' querySQL
       let tbl = sourceTable source
-      convertTimestampsToMs
-        <$> withChartSpan
-          tbl
-          ( chartSpanAttrs tbl sqlQuery respDataType pid.toText
-              <> [ ("monoscope.kql.query", OA.toAttribute queryM)
-                 , ("monoscope.kql.mode", OA.toAttribute ("sql" :: Text))
-                 ]
-          )
-          sqlQuery
-          (emptyMetricsFor now fromD toD)
-          (runFetchMetrics respDataType sqlQuery now fromD toD authCtx dbSource)
+      result <- case (Utils.nonEmptyT $ M.lookup "var-endpointHash" mappngSQL', fromD, toD) of
+        (Just endpointHash, Just rangeFrom, Just rangeTo) -> do
+          let rollupInterval = M.findWithDefault "" "rollup_interval" mappngSQL'
+              keyTo = bool rangeTo (QC.bucketStart rollupInterval rangeTo) liveRange
+              keyFrom = bool rangeFrom (addUTCTime (diffUTCTime rangeFrom rangeTo) keyTo) liveRange
+              cacheCfg = sqlQueryCfg{dateRange = (Just keyFrom, Just keyTo)}
+              cacheMapping =
+                M.fromList [("query_ast_filters", rawAstFilters cacheCfg qc)]
+                  <> variablePresets binDensity pid.toText (Just keyFrom) (Just keyTo) [] now
+                  <> mappngSQL'
+              cachedSql = replacePlaceholders cacheMapping querySQL
+              attrs = rawSqlSpanAttrs tbl cachedSql
+              backend = bool SqlPostgres SqlTimefusion $ usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource
+              key =
+                QC.RawCacheKey
+                  { projectId = pid
+                  , endpointHash
+                  , from = keyFrom
+                  , to = keyTo
+                  , environment
+                  , service
+                  , sqlQuery = cachedSql
+                  , kqlQuery = queryM
+                  , rollupInterval
+                  , backend
+                  , decoder = respDataType
+                  }
+          QC.lookupRawCache key >>= \case
+            QC.RawCacheHit cached -> do
+              Metrics.bump Metrics.dashboardQueryCacheOutcomes [("outcome", OA.toAttribute ("raw-hit" :: Text))]
+              pure cached
+            QC.RawCacheMiss -> do
+              Metrics.bump Metrics.dashboardQueryCacheOutcomes [("outcome", OA.toAttribute ("raw-miss" :: Text))]
+              leaderRef <- liftIO $ newIORef False
+              value <-
+                withChartSpan tbl attrs cachedSql (emptyMetricsFor now (Just keyFrom) (Just keyTo))
+                  $ liftIO
+                  $ QC.coalesceRawQuery authCtx.rawQueryFlights key (fetchMetricsData respDataType cachedSql now (Just keyFrom) (Just keyTo) authCtx dbSource >>= either throwIO pure)
+                  >>= \(leader, result) -> writeIORef leaderRef leader $> result
+              leader <- liftIO $ readIORef leaderRef
+              when (leader && isNothing value.error) $ QC.updateRawCache key value
+              pure value
+        _ -> do
+          let sqlQuery' = replacePlaceholders mappngSQL' querySQL
+          withChartSpan tbl (rawSqlSpanAttrs tbl sqlQuery') sqlQuery' (emptyMetricsFor now fromD toD) $ runFetchMetrics respDataType sqlQuery' now fromD toD authCtx dbSource
+      pure $ convertTimestampsToMs result
     Nothing ->
       let actualDataType = decoderFor respDataType queryAST
        in convertTimestampsToMs
             . coerceBinnedScalar respDataType actualDataType
             <$> queryMetricsWithCache authCtx dbSource actualDataType pid source queryAST sqlQueryCfg queryM now fromD toD
+  where
+    rawSqlSpanAttrs table statement =
+      chartSpanAttrs table statement respDataType pid.toText
+        <> [ ("monoscope.kql.query", OA.toAttribute queryM)
+           , ("monoscope.kql.mode", OA.toAttribute ("sql" :: Text))
+           ]
 
 
 -- | A raw template cannot be safely amended at an arbitrary position. When the

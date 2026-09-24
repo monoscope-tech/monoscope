@@ -10,13 +10,16 @@ module System.MigrationRunnerSpec (spec) where
 -- These run against a scratch directory rather than static/migrations, so they can edit an
 -- "applied" file — the thing nobody may do to the real ones.
 
+import Data.Aeson qualified as AE
+import Data.Aeson.Types (Pair)
 import Data.Pool (withResource)
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.Migration qualified as Migrations
+import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Pkg.TestUtils
 import Relude
 import System.Config (runPendingMigrations)
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec (Spec, anyException, around, describe, it, shouldBe, shouldSatisfy, shouldThrow)
 
@@ -103,3 +106,50 @@ spec = around withTestResources do
         writeMigration dir "9001_broken.sql" "THIS IS NOT SQL;"
 
         run tr dir `shouldThrow` anyException
+
+  describe "0184 trace-widget migration" do
+    it "preserves nested, missing-column, and customized saved schemas in before/after snapshots" \tr -> do
+      let ids = ["01840000-0000-0000-0000-000000000001", "01840000-0000-0000-0000-000000000002", "01840000-0000-0000-0000-000000000003"] :: [Text]
+          values :: [AE.Value] -> [AE.Value]
+          values = identity
+          column :: Text -> [Pair] -> AE.Value
+          column field pairs = AE.object $ ("field" AE..= field) : pairs
+          customColumns = values [column "name" ["title" AE..= ("Operation" :: Text)], column "duration" ["title" AE..= ("Custom duration" :: Text)]]
+          nestedTrace = AE.object ["type" AE..= ("traces" :: Text), "columns" AE..= values [column "service" [], column "latency_breakdown" [], column "custom" []]]
+          nestedTable = AE.object ["type" AE..= ("table" :: Text), "columns" AE..= values [column "service" [], column "custom" []]]
+          inGroup child = AE.object ["type" AE..= ("group" :: Text), "children" AE..= values [child]]
+          inTab child = AE.object ["widgets" AE..= values [inGroup child]]
+          before =
+            values
+              [ AE.object ["tabs" AE..= values [inTab nestedTrace]]
+              , AE.object ["widgets" AE..= values [AE.object ["type" AE..= ("traces" :: Text), "title" AE..= ("Missing columns" :: Text)]]]
+              , AE.object ["widgets" AE..= values [AE.object ["type" AE..= ("traces" :: Text), "columns" AE..= customColumns]]]
+              ]
+          defaultColumns =
+            values
+              [ column "resource_name" ["title" AE..= ("Resource" :: Text)]
+              , column "span_name" ["title" AE..= ("Span name" :: Text)]
+              , column "total_time" ["title" AE..= ("Duration" :: Text), "column_type" AE..= ("duration" :: Text), "unit" AE..= ("ms" :: Text)]
+              ]
+          after =
+            values
+              [ AE.object ["tabs" AE..= values [inTab nestedTable]]
+              , AE.object ["widgets" AE..= values [AE.object ["type" AE..= ("table" :: Text), "title" AE..= ("Missing columns" :: Text), "columns" AE..= defaultColumns]]]
+              , AE.object ["widgets" AE..= values [AE.object ["type" AE..= ("table" :: Text), "columns" AE..= customColumns]]]
+              ]
+      withResource tr.trPool \conn -> do
+        forM_ (zip ids before) \(did, schema) ->
+          let encodedSchema = decodeUtf8 (toStrict $ AE.encode schema) :: Text
+           in void
+                $ PGS.execute
+                  conn
+                  "INSERT INTO projects.dashboards (id, project_id, created_by, title, schema) VALUES (?::uuid, ?, (SELECT id FROM users.users LIMIT 1), 'trace migration fixture', ?::jsonb)"
+                  (did, testPid, encodedSchema)
+        snapshotsBefore <- mapMaybe (AE.decodeStrict . encodeUtf8 . PGS.fromOnly) <$> (PGS.query conn "SELECT schema::text FROM projects.dashboards WHERE id::text = ANY(?::text[]) ORDER BY id" (PGS.Only $ PGArray ids) :: IO [PGS.Only Text])
+        snapshotsBefore `shouldBe` before
+        migrationBytes <- readFileBS "static/migrations/0184_retire_traces_widget.sql"
+        let migration = decodeUtf8 migrationBytes :: Text
+        void $ PGS.execute_ conn (fromString $ toString migration)
+        snapshotsAfter <- mapMaybe (AE.decodeStrict . encodeUtf8 . PGS.fromOnly) <$> (PGS.query conn "SELECT schema::text FROM projects.dashboards WHERE id::text = ANY(?::text[]) ORDER BY id" (PGS.Only $ PGArray ids) :: IO [PGS.Only Text])
+        snapshotsAfter `shouldBe` after
+        void $ PGS.execute conn "DELETE FROM projects.dashboards WHERE id::text = ANY(?::text[])" (PGS.Only $ PGArray ids)
