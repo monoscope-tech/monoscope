@@ -200,6 +200,12 @@ default 48g) because that host is often also serving something. Nothing requires
 a builder: with none configured the build falls back to the emulated local one,
 and a stale `MONOSCOPE_BUILDER` name falls back too rather than failing a deploy.
 
+The production Dockerfile locks its application compiler cache during each build
+step. A separate cache namespace excludes artifacts from older unlocked builds.
+Concurrent builds using this Dockerfile wait before writing compiler outputs.
+The first build in the new namespace recompiles application code; later builds
+reuse it. Dependency caches remain available.
+
 ### Credentials
 
 Deploying needs three values, read from the environment or `.env` (gitignored):

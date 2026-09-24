@@ -79,7 +79,7 @@ are not metric labels.
 | `monoscope.dashboard.query.cache_outcomes` | `backend`, `outcome` | Raw request outcomes: `raw-hit`, `raw-miss`, `raw-coalesced`, `raw-error` |
 | `monoscope.dashboard.endpoint_cache.duration` | `backend`, `outcome` | Cache operation duration in milliseconds, including lookup, wait, query, and persistence |
 | `monoscope.dashboard.endpoint_cache.result_size` | `backend`, `outcome` | Serialized cache payload size in bytes |
-| `monoscope.dashboard.endpoint_cache.backend_queries` | `backend` | Backend query attempts, including failures |
+| `monoscope.dashboard.endpoint_cache.backend_queries` | `backend` | Logical backend fetches, including failures; internal retries are excluded |
 | `monoscope.dashboard.endpoint_cache.avoided_queries` | `backend` | Successful cache hits and shared results that avoid another backend query |
 | `monoscope.dashboard.endpoint_cache.errors` | `backend`, `operation` | Cache failures during `lookup` or `store` |
 | `monoscope.dashboard.endpoint_cache.oversized` | none | Complete results excluded from PostgreSQL because they exceed 1 MiB |
@@ -155,3 +155,6 @@ Its intermittent failures did not reflect the browser transition alone.
 The scroll regression now waits for its initial visible row before checking
 that subsequent page loads preserve that row. All six repeated browser cases
 passed after these test fixes.
+
+The final GitHub browser run passed 74 tests with five existing skips.
+The endpoint tab transition took 121.3 milliseconds.

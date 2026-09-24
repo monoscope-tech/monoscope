@@ -211,3 +211,12 @@ errors from that work required a record-dot access and an unused fixture argumen
 - A separate checkout was running CI with the same Docker project and cache
   volumes. Subsequent browser verification uses `monoscope-endpoint-cache-ci`
   through a local Docker command wrapper, with separate services and caches.
+- Final GitHub validation passed 1,636 doctests, 334 unit tests, 1,001
+  integration examples (24 pending), and 74 browser tests (five existing skips).
+  HLint, formatting, CodeQL, frontend, and UI checks passed.
+- A focused local Weeder run passed against the complete test build and published
+  its result. All ten checks have matching passing attestations.
+- Artifact review found overlapping native builds using the same mutable GHC
+  cache. The first image was withheld from deployment, and its attestation was
+  revoked. The Dockerfile now uses a fresh cache namespace with an exclusive
+  lock through compilation and executable copying. A clean rebuild is required.
