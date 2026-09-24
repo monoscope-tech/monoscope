@@ -68,7 +68,7 @@ import UnliftIO qualified
 
 
 data SqlSource = SqlPostgres | SqlTimefusion
-  deriving stock (Eq, Generic, Read, Show, THS.Lift)
+  deriving stock (Eq, Generic, Ord, Read, Show, THS.Lift)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "Sql", DAE.CamelToSnake]] SqlSource
 

@@ -139,3 +139,84 @@ are lazy, so it does not solve their scan cost.
 Concurrent work committed part of this implementation while execution continued.
 Other changes in the workspace were retained. Two subsequent test compilation
 errors from that work required a record-dot access and an unused fixture argument.
+
+## Follow-up validation (2026-09-18)
+
+- Added complete-result caching and in-process singleflight for endpoint-scoped
+  raw SQL. Live ranges execute against the same rollup-aligned bounds used in
+  cache identity; explicit ranges remain exact. Failed queries are not stored.
+- Captured fixed-window TimeFusion physical plans for Apdex, status breakdown,
+  and downstream operations at 24 hours and 3 days. TimeFusion rejects
+  `EXPLAIN (ANALYZE, BUFFERS)`, so actual row/buffer counters are unavailable;
+  the evidence and optimization decision are in
+  `docs/endpoint-analytics-query-plans.md`.
+- Unit suite: 328 examples, 0 failures. This includes all built-in sortable SQL
+  contracts and concurrent raw-query coalescing.
+- Route decoding: 2 examples, 0 failures, including `target-spans` and malformed
+  cursor/direction rejection.
+- Details-panel component regressions: 14 examples, 0 failures under Node 22.
+- Migration 0184 ran against a clean PostgreSQL 16 instance. Nested trace
+  widgets converted recursively, the retired latency column was removed,
+  missing columns received defaults, and customized columns/titles survived.
+- `make ci-signoff CHECKS="build doctests unit-tests ui-tests weeder hlint"`
+  passed and published build, doctest (1,617 examples), unit (328 examples), and
+  UI (947 examples) attestations. Weeder reached the repository's existing
+  dead-code inventory and failed; HLint did not run after that failure.
+- The host HLint is too old to parse `MultilineStrings`, while the local CI
+  runner does not provide the `hlint` capability. HLint remains outstanding.
+- A full container integration sign-off compiled but was killed with exit 137
+  by the local Docker memory limit, both with normal and single-job builds. No
+  integration attestation was published. Against the same real PostgreSQL 16,
+  Timescale Toolkit, MinIO, and native TimeFusion services, the seven changed
+  integration areas passed as separate processes: 10 examples, 0 failures.
+  These cover route decoding, migration 0184 snapshots, raw-result cache reuse
+  and failure isolation, every built-in sortable column in both directions,
+  and exactly one details container on Issues, Log Explorer, and dashboards.
+- Separate frontend and end-to-end sign-offs passed and published attestations:
+  the production Tailwind/Vite build completed, and Playwright passed 72 browser
+  tests with 5 fixture-dependent skips. `make ci-status` leaves integration,
+  Weeder, and HLint for GitHub. Frontend, build, doctests, unit tests, CLI tests,
+  UI tests, and end-to-end tests have reusable attestations. The skipped issue
+  investigation fixture means the full visual/resizing browser matrix, along
+  with production cache-latency targets, remains post-deployment acceptance
+  work.
+
+
+## Endpoint cache completion (2026-09-24)
+
+- Rebased the unfinished branch onto `f6699ef3d` before completing the cache.
+- Reproduced four regressions before applying fixes: streaming bypass, expired
+  fixed windows, default live ranges, and concurrent requests during persistence.
+- JSON and streaming now share lookup, query execution, and persistence. Live
+  bounds align to 15 seconds. Results expire after 60 seconds, and payloads above
+  1 MiB are not stored. Cache failures fall back to query execution.
+- Added bounded metric labels for hit rate, result size, avoided backend queries,
+  cold and cached latency, storage failures, and oversized results.
+- The controlled benchmark executed three backend queries for 33 requests.
+  Each result was 95,073 bytes. Cold requests took 122–131 ms; cached medians
+  were 2.91–5.87 ms. These are synthetic PostgreSQL results, not production
+  TimeFusion measurements. Full results are in
+  `docs/endpoint-analytics-query-plans.md`.
+- `CI_KEEP_GOING=true make ci-signoff` passed and published frontend, build,
+  doctest (1,636), unit (334), CLI (16), integration (1,001 examples; 24 pending),
+  Weeder, and UI (978 tests) results. These suites had zero failures.
+- HLint is unavailable in the container. No HLint result was published.
+- The initial browser run exposed test-driver latency in the tab-switch timer
+  and an uninitialized scroll anchor. The tests now measure the browser's
+  actual click-to-visible transition and await the initial visible row.
+  Their original performance and row-preservation assertions remain in place.
+- Six isolated repeats passed. The tab transitions measured 116–164 ms.
+  The browser suite now defaults to one worker to avoid CPU contention between
+  real dashboards; `--workers` remains available for explicit parallel runs.
+- A separate checkout was running CI with the same Docker project and cache
+  volumes. Subsequent browser verification uses `monoscope-endpoint-cache-ci`
+  through a local Docker command wrapper, with separate services and caches.
+- Final GitHub validation passed 1,636 doctests, 334 unit tests, 1,001
+  integration examples (24 pending), and 74 browser tests (five existing skips).
+  HLint, formatting, CodeQL, frontend, and UI checks passed.
+- A focused local Weeder run passed against the complete test build and published
+  its result. All ten checks have matching passing attestations.
+- Artifact review found overlapping native builds using the same mutable GHC
+  cache. The first image was withheld from deployment, and its attestation was
+  revoked. The Dockerfile now uses a fresh cache namespace with an exclusive
+  lock through compilation and executable copying. A clean rebuild is required.

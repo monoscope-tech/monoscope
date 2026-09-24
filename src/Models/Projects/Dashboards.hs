@@ -16,6 +16,7 @@ module Models.Projects.Dashboards (
   getDashboardByFilePath,
   readDashboardsFromDirectory,
   readDashboardEndpoint,
+  validateDashboard,
   replaceDashboardVariables,
   deleteDashboardsByIds,
   addTeamsToDashboards,
@@ -205,7 +206,13 @@ readDashboardsFromDirectory dir = do
 readDashboardFile :: FilePath -> FilePath -> IO (Maybe Dashboard)
 readDashboardFile dir file = do
   raw <- try @SomeException $ readFileBS path
-  let parsed = first (("read error: " <>) . show) raw >>= first (("YAML error: " <>) . show) . Yml.decodeEither' :: Either String Dashboard
+  let parsed =
+        first (("read error: " <>) . show) raw
+          >>= first (("YAML error: " <>) . show)
+          . Yml.decodeEither'
+          >>= first toString
+          . validateDashboard
+          :: Either String Dashboard
   parsed
     & either
       (\e -> Nothing <$ putStrLn ("Error loading dashboard " <> path <> ": " <> e))
@@ -222,7 +229,27 @@ readDashboardEndpoint :: (Error ServerError :> es, HTTP :> es) => Text -> Eff es
 readDashboardEndpoint uri = do
   fileResp <- W.get (toString uri)
   either (\e -> throwError err404{errBody = "Error decoding dashboard: " <> show e}) pure
-    $ Yml.decodeEither' (toStrict $ fileResp ^. W.responseBody)
+    $ first (toText . show) (Yml.decodeEither' $ toStrict $ fileResp ^. W.responseBody)
+    >>= validateDashboard
+
+
+-- | Reject handwritten sortable SQL unless it exposes the trusted sort slot
+-- and a fallback order. Without both, the browser can display a sortable header
+-- while the database still limits the original order, which is a false control.
+validateDashboard :: Dashboard -> Either Text Dashboard
+validateDashboard dashboard = case violations of
+  [] -> Right dashboard
+  xs -> Left $ "sortable SQL widgets require {{table_sort}} and default_sort: " <> T.intercalate ", " xs
+  where
+    widgets = concatMap flatten $ dashboard.widgets <> maybe [] (concatMap (.widgets)) dashboard.tabs
+    flatten widget = widget : maybe [] (concatMap flatten) widget.children
+    violations =
+      [ fromMaybe "<untitled>" widget.title
+      | widget <- widgets
+      , any ((== Just True) . (.sortable)) $ fromMaybe [] widget.columns
+      , Just sql <- [widget.sql]
+      , isNothing widget.defaultSort || not ("{{table_sort}}" `T.isInfixOf` sql)
+      ]
 
 
 -- | Substitute the dashboard variable presets into whichever of @sql@ / @query@ a

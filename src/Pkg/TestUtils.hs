@@ -159,6 +159,7 @@ import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), mkHasqlPool)
 import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.IngestBudget qualified as IngestBudget
 import Pkg.LiveTail qualified as LiveTail
+import Pkg.QueryCache qualified as QueryCache
 import Pkg.SchemaLearning.Worker qualified as SchemaWorker
 import Pkg.TestClock (TestClock, advanceTime, getTestTime, newTestClock, runHasqlPoolSynced, runMutableTime, setTestTime)
 import Pkg.TraceSessionCache qualified as TSC
@@ -791,6 +792,7 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
   logsPatternCache <- newCache (Just $ TimeSpec (30 * 60) 0) -- Cache for log patterns, 30 minutes TTL
   hostStatsCache <- newCache (Just $ TimeSpec 300 0)
   endpointStatsCache <- newCache (Just $ TimeSpec 300 0)
+  rawQueryFlights <- QueryCache.newRawQueryFlights
   infrastructureCache <- newCache (Just $ TimeSpec 15 0)
   rumCache <- newCache (Just $ TimeSpec 15 0)
   codeBlobCache <- newCache (Just $ TimeSpec (15 * 60) 0)
@@ -869,6 +871,7 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
           logsPatternCache
           hostStatsCache
           endpointStatsCache
+          rawQueryFlights
           infrastructureCache
           rumCache
           codeBlobCache

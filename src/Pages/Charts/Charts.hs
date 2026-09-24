@@ -11,12 +11,12 @@ import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
 import Data.ByteString qualified as BS
 import Data.Default
-import Data.Effectful.Hasql (runHasqlPool)
+import Data.Effectful.Hasql (SqlSource (..), runHasqlPool)
 import Data.List (lookup)
 import Data.Map.Strict qualified as M
 import Data.Pool (Pool, destroyAllResources, withResource)
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime)
+import Data.Time (UTCTime, addUTCTime, diffUTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Tuple.Extra (fst3, snd3, thd3)
 import Data.Vector qualified as V
@@ -149,7 +149,7 @@ queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (Utils.nonEmptyT -> q
   -- project_id is required for every query path; a missing one is a malformed request,
   -- not a 500 (this used to be `Unsafe.fromJust pidM`, which crashed the handler).
   pid <- maybe (throwError err400{errBody = "project_id is required"}) pure pidM
-  let (fromD, toD, _currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
+  let (fromD, toD, currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
   let density = fromMaybe def binDensityM
       -- The chart routes bind this to the authenticated session instead of trusting a
       -- browser query parameter. Other callers may leave it absent for deliberately
@@ -167,13 +167,13 @@ queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (Utils.nonEmptyT -> q
   -- otel_logs_and_spans rejects the metrics table's own columns (`metric_name`, `value`).
   case first (.message) $ parseQueryDiagnosed source $ replacePlaceholders mappngKQL $ maybeToMonoid queryM of
     Left err -> pure (emptyMetricsFor now fromD toD){error = Just err}
-    Right queryAST -> runQueryAST authCtx dbSource respDataType pid source density environment service queryAST (maybeToMonoid queryM) querySQLM mappngSQL now fromD toD
+    Right queryAST -> runQueryAST authCtx dbSource respDataType pid source density environment service (maybe False (T.null . snd) currentRange) queryAST (maybeToMonoid queryM) querySQLM mappngSQL now fromD toD
 
 
 -- | Run a parsed chart query, either through the caller's raw SQL template or
 -- the KQL-generated query.
-runQueryAST :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AuthContext -> Maybe Text -> DataType -> Projects.ProjectId -> Maybe Sources -> BinDensity -> Maybe Text -> Maybe Text -> [Section] -> Text -> Maybe Text -> M.Map Text Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> Eff es MetricsData
-runQueryAST authCtx dbSource respDataType pid source binDensity environment service queryAST queryM querySQLM mappngSQL now fromD toD = do
+runQueryAST :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AuthContext -> Maybe Text -> DataType -> Projects.ProjectId -> Maybe Sources -> BinDensity -> Maybe Text -> Maybe Text -> Bool -> [Section] -> Text -> Maybe Text -> M.Map Text Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> Eff es MetricsData
+runQueryAST authCtx dbSource respDataType pid source binDensity environment service liveRange queryAST queryM querySQLM mappngSQL now fromD toD = do
   let scope = mkScopedQuery pid (fromD, toD) environment service
       sqlQueryCfg =
         applyScopedQuery
@@ -188,26 +188,67 @@ runQueryAST authCtx dbSource respDataType pid source binDensity environment serv
       | Just message <- rawSqlScopeError environment service querySQL ->
           pure (emptyMetricsFor now fromD toD){error = Just message}
     Just querySQL -> do
-      let (_, qc) = queryASTToComponents sqlQueryCfg queryAST
-      let mappngSQL' = mappngSQL <> M.fromList [("query_ast_filters", rawAstFilters sqlQueryCfg qc)]
-      let sqlQuery = replacePlaceholders mappngSQL' querySQL
       let tbl = sourceTable source
+          sqlQuery = replacePlaceholders mappngSQL querySQL
       convertTimestampsToMs
         <$> withChartSpan
           tbl
-          ( chartSpanAttrs tbl sqlQuery respDataType pid.toText
-              <> [ ("monoscope.kql.query", OA.toAttribute queryM)
-                 , ("monoscope.kql.mode", OA.toAttribute ("sql" :: Text))
-                 ]
-          )
+          (rawSqlSpanAttrs tbl sqlQuery)
           sqlQuery
           (emptyMetricsFor now fromD toD)
-          (runFetchMetrics respDataType sqlQuery now fromD toD authCtx dbSource)
+          (runRawQuery authCtx dbSource respDataType sqlQueryCfg queryAST queryM querySQL mappngSQL liveRange Nothing)
     Nothing ->
       let actualDataType = decoderFor respDataType queryAST
        in convertTimestampsToMs
             . coerceBinnedScalar respDataType actualDataType
             <$> queryMetricsWithCache authCtx dbSource actualDataType pid source queryAST sqlQueryCfg queryM now fromD toD
+  where
+    rawSqlSpanAttrs table statement =
+      chartSpanAttrs table statement respDataType pid.toText
+        <> [ ("monoscope.kql.query", OA.toAttribute queryM)
+           , ("monoscope.kql.mode", OA.toAttribute ("sql" :: Text))
+           ]
+
+
+-- | Both JSON and streaming raw SQL use exactly the same bounds and cache key.
+-- Only the leader emits partial rows; followers receive the complete shared result.
+runRawQuery :: DB es => AuthContext -> Maybe Text -> DataType -> SqlQueryCfg -> [Section] -> Text -> Text -> M.Map Text Text -> Bool -> Maybe (MetricsData -> IO ()) -> Eff es MetricsData
+runRawQuery authCtx dbSource decoder cfg ast kql template mapping liveRange progress = do
+  let endpoint = Utils.nonEmptyT $ M.lookup "var-endpointHash" mapping
+      bounds = case (endpoint, liveRange, cfg.dateRange) of
+        (Just _, True, (Just rangeFrom, Just rangeTo)) ->
+          let end = QC.bucketStart "15 seconds" rangeTo
+           in (Just $ addUTCTime (diffUTCTime rangeFrom rangeTo) end, Just end)
+        _ -> cfg.dateRange
+      cacheCfg = cfg{dateRange = bounds}
+      (_, components) = queryASTToComponents cacheCfg ast
+      (from, to) = bounds
+      canonical =
+        M.fromList [("query_ast_filters", rawAstFilters cacheCfg components)]
+          <> variablePresets cfg.binDensity cfg.pid.toText from to [] cfg.currentTime
+          <> mapping
+      sql = replacePlaceholders canonical template
+      fetch = liftIO $ fetchMetricsDataWithProgress progress decoder sql cfg.currentTime from to authCtx dbSource >>= either throwIO pure
+  case (endpoint, from, to) of
+    (Just endpointHash, Just start, Just end) ->
+      QC.cachedRawQuery
+        authCtx.rawQueryFlights
+        cfg.currentTime
+        QC.RawCacheKey
+          { projectId = cfg.pid
+          , endpointHash
+          , from = start
+          , to = end
+          , environment = cfg.environment
+          , service = cfg.service
+          , sqlQuery = sql
+          , kqlQuery = kql
+          , rollupInterval = M.findWithDefault "" "rollup_interval" canonical
+          , backend = bool SqlPostgres SqlTimefusion $ usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource
+          , decoder
+          }
+        fetch
+    _ -> fetch
 
 
 -- | A raw template cannot be safely amended at an arbitrary position. When the
@@ -699,7 +740,7 @@ queryMetricsStream dbSource dataTypeM pidM queryM querySQLM sinceM fromM toM sou
   now <- Time.currentTime
   pid <- maybe (throwError err400{errBody = "project_id is required"}) pure pidM
   let requested = maybeToMonoid dataTypeM
-      (fromD, toD, _) = Components.parseTimeRange now (Components.TimePicker (Utils.nonEmptyT sinceM) (Utils.nonEmptyT fromM) (Utils.nonEmptyT toM))
+      (fromD, toD, currentRange) = Components.parseTimeRange now (Components.TimePicker (Utils.nonEmptyT sinceM) (Utils.nonEmptyT fromM) (Utils.nonEmptyT toM))
       density = fromMaybe def densityM
       source = parseMaybe pSource =<< Utils.nonEmptyT sourceM
       environment = Utils.nonEmptyT $ join $ lookup "environment" allParams
@@ -717,11 +758,7 @@ queryMetricsStream dbSource dataTypeM pidM queryM querySQLM sinceM fromM toM sou
       run emit = case parsed of
         Left message -> pure $ Left message
         Right ast -> do
-          let (_, components) = queryASTToComponents cfg ast
-              actual = if isJust raw then requested else decoderFor requested ast
-              sql = case raw of
-                Just template -> replacePlaceholders (mapping <> M.fromList [("query_ast_filters", rawAstFilters cfg components)]) template
-                Nothing -> maybeToMonoid components.finalSummarizeQuery
+          let actual = if isJust raw then requested else decoderFor requested ast
               convert = convertTimestampsToMs . coerceBinnedScalar requested actual
           let fetch cfg' ast' progress = do
                 let (_, parts) = queryASTToComponents cfg' ast'
@@ -760,7 +797,10 @@ queryMetricsStream dbSource dataTypeM pidM queryM querySQLM sinceM fromM toM sou
                     result <- readMetrics progress (maybeToMonoid parts.finalSummarizeQuery) start end
                     either throwIO pure result
           result <- tryAny $ case raw of
-            Just _ -> fetchMetricsDataWithProgress (Just $ emit . convert) actual sql now fromD toD authCtx dbSource >>= either throwIO pure
+            Just template ->
+              runEff
+                $ runHasqlPool authCtx.hasqlPool
+                $ runRawQuery authCtx dbSource actual cfg ast (maybeToMonoid $ Utils.nonEmptyT queryM) template mapping (maybe False (T.null . snd) currentRange) (Just $ emit . convert)
             Nothing ->
               runEff
                 $ Time.runTime

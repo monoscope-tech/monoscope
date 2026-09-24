@@ -528,6 +528,7 @@ spec = sequential $ aroundAll withTestResources do
             (testPid, noTraceHash, frozenTime, frozenTime)
       (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing
       let html = renderPage page
+      T.count "id=\"log_details_container\"" html `shouldBe` 1
       -- The closed global-data drawer remains mounted on an issue page. Its transformed panel
       -- must be clipped by the drawer, or it creates a page-level horizontal scroll range.
       html `shouldSatisfy` T.isInfixOf "drawer-side top-0 left-0 w-full h-full flex justify-end z-10000 overflow-y-scroll overflow-x-hidden"

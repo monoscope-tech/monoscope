@@ -26,13 +26,35 @@ test("Endpoint Analytics exposes real-user impact and direct dependency investig
 
   // The tab remains a normal document URL, but HTMX must use the shared fragment
   // response, update the active tab, and preserve the browser's investigation history.
-  const switchStartedAt = performance.now();
+  // Measure the actual click-to-visible transition in the browser. Driver
+  // scheduling and assertion polling can otherwise dominate this budget.
+  await page.getByRole("tab", { name: "Dependencies" }).evaluate(tab => {
+    tab.addEventListener("click", () => {
+      const start = performance.now();
+      const recordWhenVisible = () => {
+        const active = document.querySelector("#dashboard-tabs-container .tab-active");
+        const visible = ["downstream-health_widgetEl", "dependency-regressions_widgetEl"].every(id => {
+          const element = document.getElementById(id);
+          return element && element.getClientRects().length > 0 && getComputedStyle(element).visibility === "visible";
+        });
+        if (active?.textContent?.includes("Dependencies") && visible) {
+          performance.measure("endpoint-tab-switch", { start, end: performance.now() });
+        } else {
+          requestAnimationFrame(recordWhenVisible);
+        }
+      };
+      requestAnimationFrame(recordWhenVisible);
+    }, { once: true });
+  });
   await page.getByRole("tab", { name: "Dependencies" }).click();
   await expect(page.getByText("Downstream health", { exact: true })).toBeVisible();
   await expect(page.getByText("Dependency Regressions", { exact: true })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Dependencies" })).toHaveClass(/tab-active/);
   expect(page.url()).toMatch(/\/tab\/dependencies/);
-  expect(performance.now() - switchStartedAt).toBeLessThan(1_500);
+  await expect.poll(() => page.evaluate(() => performance.getEntriesByName("endpoint-tab-switch").length)).toBe(1);
+  const switchMs = await page.evaluate(() => performance.getEntriesByName("endpoint-tab-switch")[0].duration);
+  console.info("endpoint_tab_switch_ms", switchMs);
+  expect(switchMs).toBeLessThan(1_500);
 
   // Dependency rollups live in Postgres. This widget is lazy, so scroll it into
   // view and pin its actual browser request: losing db_source here silently

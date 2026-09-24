@@ -34,7 +34,9 @@ import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.Git qualified as Git
 import Pkg.IngestBudget qualified as IngestBudget
 import Pkg.LiveTail qualified as LiveTail
+import Pkg.Metrics qualified as Metrics
 import Pkg.Parser.Expr qualified as ParserExpr
+import Pkg.QueryCache qualified as QueryCache
 import Pkg.TraceSessionCache qualified as TraceSessionCache
 import Relude
 import System.Clock (TimeSpec (TimeSpec))
@@ -432,6 +434,9 @@ data AuthContext = AuthContext
   -- it; a few minutes of staleness is invisible on a rolling 24h count.
   , endpointStatsCache :: Cache EndpointStatsKey (V.Vector Endpoints.EndpointRequestStats, Int)
   -- ^ endpoints-list per-endpoint traffic stats; same deal as 'hostStatsCache'.
+  , rawQueryFlights :: QueryCache.RawQueryFlights
+  -- ^ Coalesces identical endpoint-widget SQL misses within this web process.
+  -- Completed results live in PostgreSQL's query_cache and are shared by replicas.
   , infrastructureCache :: Cache Containers.ContainerSnapshotKey (V.Vector Containers.ContainerRow)
   -- ^ One expensive metrics pivot feeds every infrastructure tab and detail drawer.
   , rumCache :: Cache RUM.RumCacheKey RUM.RumQueryResult
@@ -511,6 +516,15 @@ configToEnv config = do
              \If you edited an already-applied migration, add a new \
              \follow-up file instead of editing in place."
       _ -> pass
+    remainingTraceSchemas <-
+      fromMaybe 0
+        . viaNonEmpty head
+        . map PG.fromOnly
+        <$> PG.query_
+          conn
+          "SELECT count(*)::bigint FROM projects.dashboards WHERE schema IS NOT NULL AND jsonb_path_exists(schema, 'strict $.** ? (@.type == \"traces\")')"
+    Metrics.count Metrics.dashboardLegacyTraceSchemas remainingTraceSchemas []
+    PG.close conn
   pool <- liftIO $ Pool.newPool (Pool.defaultPoolConfig createPgConnIO PG.close 30 20 & setNumStripes (Just 4))
   jobsPool <- liftIO $ Pool.newPool (Pool.defaultPoolConfig createPgConnIO PG.close 30 10 & setNumStripes (Just 2))
   -- Keep bursty chart connections reusable, but retire idle handles before the
@@ -542,6 +556,7 @@ configToEnv config = do
   logsPatternCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0)
   hostStatsCache <- liftIO $ newCache (Just $ TimeSpec 300 0)
   endpointStatsCache <- liftIO $ newCache (Just $ TimeSpec 300 0)
+  rawQueryFlights <- liftIO QueryCache.newRawQueryFlights
   infrastructureCache <- liftIO $ newCache (Just $ TimeSpec 15 0)
   -- 15s was shorter than the queries it caches: a RUM panel set takes ~28s over a 24h
   -- window, so every entry expired before the next request could reach it and the cache
@@ -601,6 +616,7 @@ configToEnv config = do
       , logsPatternCache
       , hostStatsCache
       , endpointStatsCache
+      , rawQueryFlights
       , infrastructureCache
       , rumCache
       , codeBlobCache

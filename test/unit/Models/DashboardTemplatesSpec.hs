@@ -3,6 +3,7 @@ module Models.DashboardTemplatesSpec (spec) where
 import Data.List qualified as L (isSuffixOf)
 import Data.Text qualified as T
 import Models.Projects.Dashboards qualified as Dashboards
+import Models.Projects.GitSync qualified as GitSync
 import Pkg.Components.Widget qualified as Widget
 import Pkg.Parser (parseQueryToAST)
 import Relude
@@ -50,6 +51,21 @@ spec = describe "dashboard templates" do
           , Left _ <- [parseQueryToAST (stripPlaceholders q)]
           ]
     unless (null broken) $ expectationFailure $ "unparseable widget queries: " <> show broken
+
+  it "every handwritten sortable SQL widget declares table_sort and default_sort" do
+    let broken =
+          [ (d.file, w.title)
+          | d <- templates
+          , w <- allWidgets d
+          , Just sql <- [w.sql]
+          , any ((== Just True) . (.sortable)) $ fromMaybe [] w.columns
+          , not ("{{table_sort}}" `T.isInfixOf` sql) || isNothing w.defaultSort
+          ]
+    broken `shouldBe` []
+
+  it "rejects uploaded YAML that advertises sortable SQL without the server sort contract" do
+    let invalid = "title: Broken\nwidgets:\n  - type: table\n    columns:\n      - field: duration\n        title: Duration\n        sortable: true\n    sql: SELECT duration FROM spans LIMIT 20\n"
+    GitSync.yamlToDashboard invalid `shouldSatisfy` isLeft
 
   it "integration templates declare discovery_metrics and query the metrics source" do
     forM_ autoProvisionable \file ->
