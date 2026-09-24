@@ -44,6 +44,7 @@ test("an API key can be created, copied, revoked, and reactivated", async ({ pag
   await expect(row.locator('[id^="key-value-"]')).toBeVisible();
   await page.getByRole("button", { name: `Copy ${title}`, exact: true }).click();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(key);
+  await expect(page.locator("#toastsParent").getByText("Value copied to the Clipboard", { exact: true })).toBeVisible();
   page.on("dialog", dialog => dialog.accept());
   for (const [action, tab] of [["Revoke", "Archived keys"], ["Activate", "Active keys"], ["Revoke", "Archived keys"]]) {
     await page.getByRole("button", { name: `${action} ${title}`, exact: true }).click();

@@ -152,27 +152,6 @@ onReady(function(){
             }
           });
 
-          // Notyf and tippy are vendor globals loaded by separate script tags. This module
-          // is bundled and can execute before them, and a missing global must not take the
-          // rest of the page chrome (tooltips, progress bar, shortcuts) down with it.
-          const Notyf = (window as any).Notyf;
-          var notyf = Notyf ? new Notyf({
-              duration: 5000,
-              position: {x: 'right', y: 'top'},
-          }) : { success: (_: string) => {}, error: (_: string) => {} };
-          const toastAnnouncer = document.getElementById('toast-announcer');
-          document.body.addEventListener("successToast", (e: any)=> {
-            e.detail.value.map((v: string) => {
-              notyf.success(v);
-              if (toastAnnouncer) toastAnnouncer.textContent = v;
-            });
-          });
-          document.body.addEventListener("errorToast", (e: any)=> {
-            e.detail.value.map((v: string) => {
-              notyf.error(v);
-              if (toastAnnouncer) toastAnnouncer.textContent = 'Error: ' + v;
-            });
-          });
         });
         
     function filterByField(event: Event, operation: string) {
