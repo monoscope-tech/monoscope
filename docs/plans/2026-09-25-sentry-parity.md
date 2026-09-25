@@ -20,7 +20,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (commit).
 
 ## B. Issue page
 
-- [ ] B1 Context panels — User (geo, IP), Browser, OS, Device, Runtime, Trace details.
+- [x] B1 Context panels — User (geo, IP), Browser, OS, Device, Runtime, Trace details.
 - [ ] B2 Tags — event attribute table (All / Custom / Application / Client / Other) + distribution
       drawer backed by a per-issue rollup (a live GROUP BY measured 48s).
 - [ ] B3 HTTP Request — `http.request.method`, `url.full`/`url.path`, `url.query`,

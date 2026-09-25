@@ -618,7 +618,7 @@ spec = sequential $ aroundAll withTestResources do
       -- no trace was captured, so there is no Trace section to jump to.
       html `shouldSatisfy` T.isInfixOf "id=\"issue-event-nav\" class=\"sticky top-0"
       let nav = fst $ T.breakOn "</nav>" $ snd $ T.breakOn "id=\"issue-event-nav\"" html
-      T.takeWhile (/= '"') <$> drop 1 (T.splitOn "href=\"#" nav) `shouldBe` ["issue-highlights", "issue-stack", "issue-logs"]
+      T.takeWhile (/= '"') <$> drop 1 (T.splitOn "href=\"#" nav) `shouldBe` ["issue-highlights", "issue-contexts", "issue-stack", "issue-logs"]
       -- The range total is labelled and rendered at headline weight, not as a grey pill.
       html `shouldSatisfy` T.isInfixOf "Events"
       html `shouldSatisfy` T.isInfixOf "text-2xl font-semibold text-textStrong tabular-nums"

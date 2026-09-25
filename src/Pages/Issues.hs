@@ -1045,46 +1045,61 @@ eventCard_ IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflow-cli
         let trimmedStack = T.strip d.stackTrace
             hasStack = not $ T.null trimmedStack
             runtimeM = errM >>= (.base.errorData.runtime)
-            ed = (.base.errorData) <$> errM
+            field :: (ErrorPatterns.ATError -> Maybe a) -> Maybe a
+            field f = errM >>= f . (.base.errorData)
+            present = mapMaybe \(k, v) -> (k,) <$> mfilter (not . T.null . T.strip) v
+            kvRows_ :: Text -> [(Text, Text)] -> Html ()
+            kvRows_ cls rows = dl_ [class_ $ "grid gap-y-0.5 font-mono text-xs " <> cls] $ forM_ rows \(k, val) -> div_ [class_ "flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0"] do
+              dt_ [class_ "w-28 shrink-0 text-textWeak"] $ toHtml k
+              dd_ [class_ "min-w-0 break-all text-textStrong"] $ toHtml val
             highlights =
-              mapMaybe
-                (\(k, v) -> (k,) <$> mfilter (not . T.null . T.strip) v)
-                [ ("error.type", Just d.errorType)
+              present
+                [ ("handled", bool "no" "yes" <$> field (.handled))
+                , ("level", field (.level))
                 , ("transaction", (\m p -> m <> " " <> p) <$> d.requestMethod <*> d.requestPath)
-                , ("service", (ed >>= (.serviceName)) <|> issue.service)
-                , ("environment", (ed >>= (.environment)) <|> issue.environment)
-                , ("runtime", runtimeM)
-                , ("user", ed >>= \e -> e.userEmail <|> e.userName <|> e.userId)
-                , ("user.ip", ed >>= (.userIp))
-                , ("session.id", ed >>= (.sessionId))
+                , ("environment", field (.environment) <|> issue.environment)
+                , ("release", field (.release))
                 , ("trace.id", fst <$> traceRef)
-                , ("span.id", ed >>= (.spanId))
                 ]
-         in [ section "issue-highlights" "list-tree" "Highlights"
-                $ dl_ [class_ "max-md:px-3 px-4 grid md:grid-cols-2 gap-x-6 gap-y-0.5 font-mono text-xs"]
-                $ forM_ highlights \(k, val) -> div_ [class_ "flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0"] do
-                  dt_ [class_ "w-28 shrink-0 text-textWeak"] $ toHtml k
-                  dd_ [class_ "min-w-0 break-all text-textStrong"] $ toHtml val
-            , IssueSection Nothing [detailsClosedBelowAttr_ 768] "issue-stack" "code" (if hasStack then "Stack trace" else "Error details") do
-                -- The title truncates and the reader expanded to read this in full,
-                -- so it shows whether or not there is a stack trace.
-                unless (T.null d.errorMessage) $ div_ [class_ "max-md:px-3 px-4 pb-3 border-b border-strokeWeak"] do
-                  span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide block mb-1"] "Error message"
-                  pre_ [class_ "text-sm leading-relaxed text-fillError-strong whitespace-pre-wrap break-words font-mono"] $ toHtml d.errorMessage
-                if hasStack
-                  then stackTrace_ pid ((errM >>= (.base.errorData.serviceName)) <|> issue.service) runtimeM trimmedStack
-                  else
-                    -- OTel's exception event carries `message` and `type` but no
-                    -- `exception.stacktrace` unless the SDK opts in, which most do not
-                    -- (151 of 151 demo exceptions land here). Name the runtime that
-                    -- stayed silent and point at the evidence this page does have.
-                    div_ [class_ "px-4 py-3 text-sm text-textWeak space-y-2"] do
-                      p_ do
-                        "No stack trace in this event. "
-                        toHtml $ maybe "The SDK" (\r -> "The " <> r <> " SDK") runtimeM <> " reported this exception without frames."
-                      let (target, lbl) = bool ("#issue-logs", "Inspect the related logs") ("#issue-trace", "Inspect the trace and service calls") (isJust traceRef)
-                      a_ [href_ target, class_ "text-textBrand underline underline-offset-2 hover:no-underline"] lbl
-            ]
+            -- Sentry's context cards, each from the OTel namespace it is named after.
+            -- A card with no values is omitted rather than rendered empty.
+            contexts =
+              filter
+                (not . null . snd)
+                [ ("User", present [("id", field (.userId)), ("email", field (.userEmail)), ("name", field (.userName)), ("location", place), ("ip", field (.userIp)), ("tenant", field (.tenantName))])
+                , ("Client", present [("browser", field (.browser)), ("os", field (.os)), ("device", field (.device)), ("user_agent", field (.userAgent))])
+                , ("Runtime", present [("runtime", runtimeM), ("service", field (.serviceName) <|> issue.service), ("release", field (.release)), ("thread", field (.threadName) <|> field (.threadId)), ("mechanism", display <$> field (.mechanism))])
+                , ("Trace", present [("trace.id", fst <$> traceRef), ("span.id", field (.spanId)), ("parent_span.id", field (.parentSpanId)), ("session.id", field (.sessionId))])
+                ]
+            place = viaNonEmpty (T.intercalate ", " . toList) (catMaybes [field (.geoCity), field (.geoRegion), field (.geoCountry)])
+         in [section "issue-highlights" "list-tree" "Highlights" $ kvRows_ "max-md:px-3 px-4 md:grid-cols-2 gap-x-6" highlights | not (null highlights)]
+              <> [ section "issue-contexts" "user" "Contexts"
+                     $ div_ [class_ "max-md:px-3 px-4 grid md:grid-cols-2 gap-3 items-start"]
+                     $ forM_ contexts \(title, rows) -> div_ [class_ "rounded-lg border border-strokeWeak p-2"] do
+                       h4_ [class_ "px-2 pb-1 text-xs font-semibold text-textStrong"] $ toHtml title
+                       kvRows_ "" rows
+                 | not (null contexts)
+                 ]
+              <> [ IssueSection Nothing [detailsClosedBelowAttr_ 768] "issue-stack" "code" (if hasStack then "Stack trace" else "Error details") do
+                     -- The title truncates and the reader expanded to read this in full,
+                     -- so it shows whether or not there is a stack trace.
+                     unless (T.null d.errorMessage) $ div_ [class_ "max-md:px-3 px-4 pb-3 border-b border-strokeWeak"] do
+                       span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide block mb-1"] "Error message"
+                       pre_ [class_ "text-sm leading-relaxed text-fillError-strong whitespace-pre-wrap break-words font-mono"] $ toHtml d.errorMessage
+                     if hasStack
+                       then stackTrace_ pid ((errM >>= (.base.errorData.serviceName)) <|> issue.service) runtimeM trimmedStack
+                       else
+                         -- OTel's exception event carries `message` and `type` but no
+                         -- `exception.stacktrace` unless the SDK opts in, which most do not
+                         -- (151 of 151 demo exceptions land here). Name the runtime that
+                         -- stayed silent and point at the evidence this page does have.
+                         div_ [class_ "px-4 py-3 text-sm text-textWeak space-y-2"] do
+                           p_ do
+                             "No stack trace in this event. "
+                             toHtml $ maybe "The SDK" (\r -> "The " <> r <> " SDK") runtimeM <> " reported this exception without frames."
+                           let (target, lbl) = bool ("#issue-logs", "Inspect the related logs") ("#issue-trace", "Inspect the trace and service calls") (isJust traceRef)
+                           a_ [href_ target, class_ "text-textBrand underline underline-offset-2 hover:no-underline"] lbl
+                 ]
       Just (Issues.QueryAlertP d) ->
         let scope = mkScopedQuery pid (Nothing, Nothing) issue.environment issue.service
             -- Hands the Explorer the alert's own query, its issue boundary, and the page's window.

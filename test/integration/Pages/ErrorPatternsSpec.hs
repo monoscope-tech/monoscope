@@ -112,6 +112,10 @@ spec = sequential $ aroundAll withTestResources do
       (e.release, e.environment, e.handled, e.mechanism) `shouldBe` (Just "26.3.1", Just "production", Just False, Just ErrorPatterns.CMExceptionEvent)
       (e.browser, e.os, e.device, e.userAgent) `shouldBe` (Just "Chrome", Just "Windows", Just "Desktop", Just ua)
       (e.geoCountry, e.geoCity, e.threadName) `shouldBe` (Just "US", Just "Santa Clara", Just "main")
+      -- ...and the issue page renders them in its Highlights and Contexts sections.
+      issue <- runTestBg frozenTime tr (Issues.selectIssueByHash pid e.hash Issues.AnyIssue) >>= maybe (fail "no ContextError issue") pure
+      (_, page) <- testServant tr $ Pages.Issues.issueDetailGetH pid issue.id Nothing Nothing Nothing Nothing
+      TL.toStrict (renderText $ toHtml page) `shouldContainAll` ["id=\"issue-contexts\"", "Santa Clara, US", "26.3.1", "Chrome", "exception_event"]
 
     it "1b. ERROR-severity records produce error patterns — OTel exception.* (backend log) and error.* (Monoscope browser SDK)" \tr -> do
       -- OTLP log records never carry span events; internal browser spans often
