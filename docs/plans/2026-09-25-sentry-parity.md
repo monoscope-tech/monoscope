@@ -23,7 +23,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (commit).
 - [x] B1 Context panels — User (geo, IP), Browser, OS, Device, Runtime, Trace details.
 - [ ] B2 Tags — event attribute table (All / Custom / Application / Client / Other) + distribution
       drawer backed by a per-issue rollup (a live GROUP BY measured 48s).
-- [ ] B3 HTTP Request — `http.request.method`, `url.full`/`url.path`, `url.query`,
+- [x] B3 HTTP Request — `http.request.method`, `url.full`/`url.path`, `url.query`,
       `http.request.header.*`, curl view.
 - [ ] B4 Events — ‹ › stepping, "Recommended" sample, per-issue events table.
 - [ ] B5 Copy as JSON / Markdown + grouping explanation (which hash, which frames).

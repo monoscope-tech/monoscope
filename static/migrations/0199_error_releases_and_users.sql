@@ -3,6 +3,7 @@
 ALTER TABLE apis.error_patterns
   ADD COLUMN IF NOT EXISTS first_release TEXT,
   ADD COLUMN IF NOT EXISTS last_release TEXT,
+  ADD COLUMN IF NOT EXISTS last_release_at TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS resolved_in_release TEXT,
   ADD COLUMN IF NOT EXISTS users_count BIGINT NOT NULL DEFAULT 0;
 

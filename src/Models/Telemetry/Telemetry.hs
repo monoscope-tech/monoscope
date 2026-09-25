@@ -2296,6 +2296,13 @@ atErrorFrom spanObj mechanism handled typ msg stack =
         , geoCity = attr "geo.locality.name"
         , threadId = attr "thread.id"
         , threadName = attr "thread.name"
+        , urlFull = attr "url.full"
+        , urlQuery = attr "url.query"
+        , requestHeaders =
+            -- `http.request.header.<name>` (semconv, string[] values) or the legacy `.headers`.
+            mfilter (not . Map.null)
+              . fmap (Map.mapMaybe \case AE.Array vs -> nonEmptyT $ Just $ T.intercalate ", " $ mapMaybe valText $ V.toList vs; v -> valText v)
+              $ asum [jsonToMap =<< getNestedValue (T.splitOn "." k) =<< attrs | k <- ["http.request.header", "http.request.headers"]]
         }
 
 

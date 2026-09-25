@@ -83,7 +83,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Charts.Charts qualified as Charts
-import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), agoText, colorChip_, detailsClosedBelowAttr_, durationMenu_, durationQuery, emptyState_, metadataChip_, periodToggle_, resizer_, sectionLabel_, sparkline_, untilLabel)
+import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), agoText, colorChip_, copyButton_, detailsClosedBelowAttr_, durationMenu_, durationQuery, emptyState_, metadataChip_, periodToggle_, resizer_, sectionLabel_, sparkline_, untilLabel)
 import Pages.LogExplorer.Log (virtualTable)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Telemetry (traceFragmentUrl)
@@ -1109,6 +1109,26 @@ eventCard_ IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflow-cli
                              toHtml $ maybe "The SDK" (\r -> "The " <> r <> " SDK") runtimeM <> " reported this exception without frames."
                            let (target, lbl) = bool ("#issue-logs", "Inspect the related logs") ("#issue-trace", "Inspect the trace and service calls") (isJust traceRef)
                            a_ [href_ target, class_ "text-textBrand underline underline-offset-2 hover:no-underline"] lbl
+                 ]
+              <> [ section "issue-http" "globe" "HTTP request" do
+                     let headers = maybe [] Map.toList (field (.requestHeaders))
+                         query = [(k, T.drop 1 v) | kv <- maybe [] (T.splitOn "&") (field (.urlQuery)), let (k, v) = T.breakOn "=" kv, not (T.null k)]
+                         curl = unwords $ ["curl", "-X", method, shellQuote url] <> concat [["-H", shellQuote (k <> ": " <> v)] | (k, v) <- headers]
+                         shellQuote t = "'" <> T.replace "'" "'\\''" t <> "'"
+                     div_ [class_ "max-md:px-3 px-4 space-y-3"] do
+                       div_ [class_ "flex items-center gap-2 min-w-0"] do
+                         span_ [class_ $ "cbadge-sm badge-" <> method] $ toHtml method
+                         span_ [class_ "font-mono text-sm text-textStrong break-all"] $ toHtml url
+                       forM_ ([("Query string", query), ("Headers", headers)] :: [(Text, [(Text, Text)])]) \(lbl, rows) -> unless (null rows) do
+                         div_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide mb-1"] $ toHtml lbl
+                         kvRows_ "" rows
+                       details_ [class_ "group/curl"] do
+                         summary_ [class_ "text-xs text-textBrand cursor-pointer list-none [&::-webkit-details-marker]:hidden"] "Show as curl"
+                         div_ [class_ "mt-2 flex items-start gap-2"] do
+                           pre_ [id_ "issue-curl", class_ "flex-1 min-w-0 text-xs font-mono bg-fillWeaker rounded px-2 py-1.5 whitespace-pre-wrap break-all"] $ toHtml curl
+                           copyButton_ "btn btn-xs btn-ghost" "w-3 h-3" "#issue-curl's innerText" []
+                 | Just method <- [d.requestMethod <|> field (.requestMethod)]
+                 , Just url <- [field (.urlFull) <|> d.requestPath <|> field (.requestPath)]
                  ]
       Just (Issues.QueryAlertP d) ->
         let scope = mkScopedQuery pid (Nothing, Nothing) issue.environment issue.service

@@ -96,7 +96,7 @@ spec = sequential $ aroundAll withTestResources do
       ingestTraceWithExceptionAttrs
         tr
         apiKey
-        ( [("user_agent.original", ua), ("geo.country.iso_code", "US"), ("geo.locality.name", "Santa Clara"), ("thread.name", "main")]
+        ( [("user_agent.original", ua), ("geo.country.iso_code", "US"), ("geo.locality.name", "Santa Clara"), ("thread.name", "main"), ("http.request.method", "GET"), ("url.full", "https://shop.example.com/api/context?cart=7&coupon=x"), ("url.query", "cart=7&coupon=x"), ("http.request.header.x-request-id", "req-42")]
         , [("service.version", "26.3.1"), ("deployment.environment.name", "production")]
         , [("exception.escaped", "true")]
         )
@@ -115,7 +115,7 @@ spec = sequential $ aroundAll withTestResources do
       -- ...and the issue page renders them in its Highlights and Contexts sections.
       issue <- runTestBg frozenTime tr (Issues.selectIssueByHash pid e.hash Issues.AnyIssue) >>= maybe (fail "no ContextError issue") pure
       (_, page) <- testServant tr $ Pages.Issues.issueDetailGetH pid issue.id Nothing Nothing Nothing Nothing
-      TL.toStrict (renderText $ toHtml page) `shouldContainAll` ["id=\"issue-contexts\"", "Santa Clara, US", "26.3.1", "Chrome", "exception_event"]
+      TL.toStrict (renderText $ toHtml page) `shouldContainAll` ["id=\"issue-contexts\"", "Santa Clara, US", "26.3.1", "Chrome", "exception_event", "id=\"issue-http\"", "https://shop.example.com/api/context?cart=7&amp;coupon=x", "coupon", "x-request-id", "curl -X GET"]
 
     it "1c. releases and distinct users are tracked, and resolve-in-next-release holds until a new release" \tr -> do
       apiKey <- createTestAPIKey tr pid "release-key"

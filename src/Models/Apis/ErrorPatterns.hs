@@ -222,6 +222,9 @@ data ATError = ATError
   , geoCity :: Maybe Text
   , threadId :: Maybe Text
   , threadName :: Maybe Text
+  , urlFull :: Maybe Text
+  , urlQuery :: Maybe Text
+  , requestHeaders :: Maybe (Map Text Text)
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, NFData)
@@ -504,11 +507,11 @@ batchUpsertErrorPatterns pid errors now =
     <$> Hasql.interp
       [HI.sql| INSERT INTO apis.error_patterns (
             project_id, error_type, message, stacktrace, hash, parent_hash, shape_hash, is_framework,
-            environment, service, runtime, error_data, first_release, last_release,
+            environment, service, runtime, error_data, first_release, last_release, last_release_at,
             first_trace_id, first_trace_at, recent_trace_id, recent_trace_at,
             occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h)
           SELECT #{pid}, u.error_type, u.message, u.stacktrace, u.hash, u.parent_hash, u.shape_hash, u.is_framework,
-                 u.environment, u.service, u.runtime, u.error_data, u.release, u.release,
+                 u.environment, u.service, u.runtime, u.error_data, u.release, u.release, CASE WHEN u.release IS NOT NULL THEN u.event_at END,
                  u.trace_id, CASE WHEN u.trace_id IS NOT NULL THEN u.event_at END,
                  u.trace_id, CASE WHEN u.trace_id IS NOT NULL THEN u.event_at END, u.cnt, u.cnt, u.cnt, u.cnt
           FROM (SELECT unnest(#{errorTypes}::text[]) AS error_type, unnest(#{messages}::text[]) AS message,
@@ -521,7 +524,9 @@ batchUpsertErrorPatterns pid errors now =
           ON CONFLICT (project_id, hash) DO UPDATE SET
             updated_at = #{now},
             first_release = COALESCE(apis.error_patterns.first_release, EXCLUDED.first_release),
-            last_release = COALESCE(EXCLUDED.last_release, apis.error_patterns.last_release),
+            -- Only a newer event moves the last release: batches arrive late and out of order.
+            last_release = CASE WHEN ^{newerRelease} THEN EXCLUDED.last_release ELSE apis.error_patterns.last_release END,
+            last_release_at = CASE WHEN ^{newerRelease} THEN EXCLUDED.last_release_at ELSE apis.error_patterns.last_release_at END,
             resolved_in_release = CASE WHEN ^{regresses} THEN NULL ELSE apis.error_patterns.resolved_in_release END,
             -- Toastable columns (message, error_data, parent_hash) are content-derived from hash
             -- and refreshed only on regression to avoid pg_toast bloat from per-occurrence rewrites.
@@ -574,10 +579,11 @@ batchUpsertErrorPatterns pid errors now =
             WHEN state = 'regressed' AND regressed_at = #{now} THEN 'regressed'
             ELSE 'unchanged' END::text |]
   where
-    -- Group by hash: keep last occurrence + sum count (avoids ON CONFLICT duplicate-row error).
+    -- Group by hash: keep the latest occurrence (by event time, not batch order — a batch
+    -- is not time-ordered) + sum count (avoids ON CONFLICT duplicate-row error).
     -- The bang keeps the running count forced: a hot hash otherwise accumulates one thunk per occurrence.
     (errs, counts) =
-      V.unzip $ V.fromList $ HM.elems $ HM.fromListWith (\(a, n) (_, !k) -> (a, n + k)) [(e.hash, (e, 1 :: Int)) | e <- V.toList errors]
+      V.unzip $ V.fromList $ HM.elems $ HM.fromListWith (\(a, n) (b, !k) -> (bool b a (a.when >= b.when), n + k)) [(e.hash, (e, 1 :: Int)) | e <- V.toList errors]
     errorTypes = V.map (.errorType) errs
     messages = V.map (.message) errs
     stacktraces = V.map (.stackTrace) errs
@@ -596,6 +602,7 @@ batchUpsertErrorPatterns pid errors now =
     releases = V.map (.release) errs
     -- A resolved pattern regresses on its next occurrence, unless it was resolved "in
     -- next release" and the occurrence still reports that release.
+    newerRelease = [HI.sql| EXCLUDED.last_release IS NOT NULL AND (apis.error_patterns.last_release_at IS NULL OR EXCLUDED.last_release_at >= apis.error_patterns.last_release_at) |]
     regresses =
       [HI.sql| apis.error_patterns.state = 'resolved'
                AND (apis.error_patterns.resolved_in_release IS NULL
