@@ -507,8 +507,11 @@ spec = sequential $ aroundAll withTestResources do
       (_, otherProjectSample) <- testServant tr $ IssuesPage.issueSampleGetH otherPid (UUIDId issueId) Nothing (Just from) (Just to)
       TL.toStrict (renderText otherProjectSample) `shouldSatisfy` not . T.isInfixOf "occurrence"
       html `shouldSatisfy` not . T.isInfixOf "first_occurrence=true"
-      html `shouldSatisfy` not . T.isInfixOf "class=\"sr-only err-tab-trace\""
-      html `shouldSatisfy` T.isInfixOf "class=\"sr-only err-tab-logs\" checked"
+      -- A log pattern has no trace, so its event card offers the pattern, sample and
+      -- logs sections and no Trace section.
+      html `shouldSatisfy` not . T.isInfixOf "id=\"issue-trace\""
+      forM_ ["issue-pattern", "issue-sample-section", "issue-logs"] \anchor ->
+        html `shouldSatisfy` T.isInfixOf ("href=\"#" <> anchor <> "\"")
 
     -- Regression: an issue that never captured a trace id used to render the logs tab as
     -- `context___trace_id==""`, a predicate that filters nothing — so the tab fetched the
@@ -606,9 +609,16 @@ spec = sequential $ aroundAll withTestResources do
       html `shouldSatisfy` T.isInfixOf "heading order issue"
       -- An empty state announces a condition; it must not open a section.
       html `shouldSatisfy` not . T.isInfixOf "<h2 class=\"text-2xl"
-      -- The shared fact row carries service and environment for every type.
-      html `shouldSatisfy` T.isInfixOf "Service:"
+      -- The rail's fact block carries service and environment for every type.
+      html `shouldSatisfy` T.isInfixOf "<dt class=\"text-textWeak\">Service</dt>"
       html `shouldSatisfy` T.isInfixOf "staging"
+      -- The workflow bar moved from the shell into the page, under the title.
+      fst (T.breakOn "Acknowledge issue" html) `shouldSatisfy` T.isInfixOf "heading order issue"
+      -- The pinned navigator links every section the card renders and nothing else:
+      -- no trace was captured, so there is no Trace section to jump to.
+      html `shouldSatisfy` T.isInfixOf "id=\"issue-event-nav\" class=\"sticky top-0"
+      let nav = fst $ T.breakOn "</nav>" $ snd $ T.breakOn "id=\"issue-event-nav\"" html
+      T.takeWhile (/= '"') <$> drop 1 (T.splitOn "href=\"#" nav) `shouldBe` ["issue-highlights", "issue-stack", "issue-logs"]
       -- The range total is labelled and rendered at headline weight, not as a grey pill.
       html `shouldSatisfy` T.isInfixOf "Events"
       html `shouldSatisfy` T.isInfixOf "text-2xl font-semibold text-textStrong tabular-nums"

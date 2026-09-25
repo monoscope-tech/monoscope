@@ -60,7 +60,7 @@ test("an API key can be created, copied, revoked, and reactivated", async ({ pag
   await expect(row).toBeVisible();
 });
 
-test("issue investigation tabs swap between trace and logs", async ({ page }) => {
+test("issue event card pins its navigator and jumps between trace and logs", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", e => errors.push(e.message));
 
@@ -84,15 +84,19 @@ test("issue investigation tabs swap between trace and logs", async ({ page }) =>
   try {
     await page.goto(`/p/${DEMO_PROJECT}/issues?type=runtime_exception`);
     await page.getByRole("link").filter({ hasText: "E2E investigation failure" }).first().click();
-    const trace = page.locator("#span-content");
-    const logs = page.locator("#log-content");
-    await expect(trace).toBeVisible();
-    await expect(logs).toBeHidden();
-    await page.locator("label:has(.err-tab-logs)").click();
-    await expect(logs).toBeVisible();
-    await expect(trace).toBeHidden();
-    await page.locator("label:has(.err-tab-trace)").click();
-    await expect(trace).toBeVisible();
+    const nav = page.locator("#issue-event-nav");
+    await expect(page.locator("#span-content")).toBeVisible();
+    await expect(page.locator("#log-content")).toBeVisible();
+    await nav.getByRole("link", { name: "Logs" }).click();
+    await expect(page.locator("#issue-logs")).toBeInViewport();
+    // Sticky: the navigator stays at the top of the scroller while its sections scroll under it.
+    const [navTop, scrollerTop] = await Promise.all([
+      nav.evaluate(el => el.getBoundingClientRect().top),
+      nav.evaluate(el => el.closest(".overflow-y-auto")!.getBoundingClientRect().top),
+    ]);
+    expect(Math.abs(navTop - scrollerTop)).toBeLessThan(2);
+    await nav.getByRole("link", { name: "Trace" }).click();
+    await expect(page.locator("#issue-trace")).toBeInViewport();
     expect(errors.join("\n")).not.toMatch(/is not defined|is not a function/i);
   } finally { sql(cleanup); }
 });

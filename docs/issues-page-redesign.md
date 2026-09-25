@@ -1262,3 +1262,93 @@ The recovered payment traces and their preceding events are now available for in
 
 Final artifacts: `/private/tmp/issue-final-ruler-release-sweep.log`, `/private/tmp/issue-details-deployed.json`,
 `/private/tmp/issue-ruler-production-browser.log`, and `/private/tmp/trace-ruler-production-390.png`.
+
+
+## 25. Sentry parity audit — 2026-09-25
+
+Source: the live Sentry sandbox, driven in Playwright. Pages: an error (`SPRING-BOOT-1S`), a mobile crash
+(`ANDROID-NH`), N+1 Query, Slow DB Query, Rage Click, an uptime downtime issue, the Tags drawer, the per-issue
+events table, and the issue stream with its category views. Sticky elements probed with `getComputedStyle`:
+the page header (breadcrumb + Ask), the **"Events in this issue" navigator**, and the **event header with
+`Jump to:`** — nothing else pins. The right rail scrolls with the page.
+
+Status key: **✓** have · **◐** partial · **✗** missing. Size: S < 1 day, M ≈ days, L = new subsystem.
+
+### 25a. Issue detail — layout
+
+| Sentry surface | Monoscope | Status |
+|---|---|---|
+| Title = type, message line, culprit/state line (`Unhandled · Ongoing · GET /**`) | `issueHeader_` title, chip row | ◐ → restructured in this change |
+| Events / Users as the page's largest numbers, top right | Events via the chart's value slot, inside the chart card | ◐ Events hoisted in this change; Users ✗ |
+| Workflow bar under the title: `Resolve ▾` `Archive ▾` 🔔 share `⋯` │ `Priority ▾` `Assignee ▾` | Ack/Archive/Resolve/notify in the shell's `pageActions` | ◐ moved under the title in this change |
+| Filter row: env ▾, period ▾, "Filter events…" | time picker in the chart header | ◐ picker moved to the filter row; env + event search ✗ |
+| Aggregate band: histogram + top-4 tag % bars + "View all tags" | chart + a type-specific context card | ◐ tag bars ✗ (§9-B: 48s, needs a per-issue rollup) |
+| **Sticky** event navigator: `‹ ›` First · Latest · Recommended · View more events · Copy as | First / Recent inside the Investigation header | ◐ made sticky in this change; ‹ › stepping, Recommended, events table, Copy as ✗ |
+| **Sticky** event header: id, age, JSON, `Jump to:` section links | none | ✓ jump-to added in this change; event id/JSON ✗ |
+| Context chips: user, browser, OS, release, environment | fact row: service, env, first/last seen | ◐ |
+| Collapsible sections with h3 headers, in one column | mixed cards and tabs (Trace │ Logs share one card) | ✓ sections in this change |
+| Right rail: Last/First seen (+release), AI root cause, external links, Activity + comment, Similar, Merged, People | Activity column; similar patterns inline; AI in a drawer | ◐ rail restructured in this change |
+
+### 25b. Issue detail — features
+
+| Feature | Monoscope | Status | Size |
+|---|---|---|---|
+| Priority (High/Med/Low) editable inline | `severity` shown as a badge, not editable | ◐ | S |
+| Assignee on every issue | only on error patterns (`assignErrorPostH`) | ◐ | M |
+| Resolve on every issue; `Resolve ▾` in next release / in commit / until… | only on error patterns; no release concept | ◐ | M (L with releases) |
+| `Archive ▾` until escalating / for N hours / until N occurrences | archive forever + ack durations | ◐ | S |
+| Substatus words New / Ongoing / Escalating / Regressed | `issueStateBadge_` (regressed/escalated/resolved only) | ◐ | S |
+| Users affected (distinct users) | ✗ (ATError carries `userId/userEmail/userIp`) | ✗ | M (cost like §9-B) |
+| Highlights: handled, level, transaction, url, trace id — editable set | ✗ | ◐ fixed set added for exceptions in this change | S |
+| Stack trace: in-app/full toggle, source context, mechanism/handled chips, Copy as | ✓ in-app/runtime fold, on-demand source via `/code_context`, Raw | ◐ Copy as, newest-first, threads ✗ | S |
+| Breadcrumbs: search, sort, copy, "View N more" | User journey inside the trace fragment | ◐ | S |
+| Trace preview + View full trace | full waterfall inline | ✓ | — |
+| Logs for the event, "Open in Explore" | Logs table + Open in Explorer | ✓ | — |
+| HTTP Request: method, url, query string, headers, curl toggle | ✗ (`request_payloads` stored, never rendered) | ✗ | S |
+| Tags table: All / Custom / Application / Client / Other | ✗ (span attributes live in the waterfall's details panel) | ✗ | M |
+| Contexts cards: User (geo, IP), Browser, OS, Runtime, Trace details | ✗ | ✗ | M |
+| Tags & feature-flags drawer with distributions | ✗ | ✗ | L (needs a rollup, §9-B) |
+| Per-issue events table (event id, time, title, transaction, release, env) | ✗ | ✗ | M |
+| Event stepping ‹ › and "Recommended" sample | First / Recent only | ◐ | M |
+| Copy as JSON / Markdown | ✗ | ✗ | S |
+| AI root cause + plan + code changes, in the rail | AI chat drawer; `root_cause` column on error patterns | ◐ | M |
+| External issue links (GitHub / Jira / Linear) | ✗ | ✗ | M |
+| Comments in Activity | ✗ (activity is lifecycle + episodes) | ✗ | S |
+| People: participants / viewers | ✗ | ✗ | S |
+| Similar issues / Merged issues | group members + unmerge | ◐ | S |
+| Replays count + Attachments / screenshots in the header | replay section when a recording exists | ◐ | S |
+| Releases: first/last seen *in release*, release markers on the chart, "resolve in next release" | ✗ | ✗ | L |
+| Event grouping information (why these events grouped) | ✗ (fingerprint is computed, `Pkg.ErrorFingerprint`) | ✗ | S |
+
+### 25c. Issue categories
+
+| Sentry category / type | Evidence Sentry shows | Monoscope | Size |
+|---|---|---|---|
+| Errors & Outages — exceptions, crashes | above | `RuntimeException` | — |
+| Mobile crash (threads, device, attachments, screenshot) | thread list with state, device/OS tags | ✗ | M |
+| **Performance: N+1 Query** | Span Evidence: transaction, parent span, preceding span, repeating spans ×N; mini-waterfall with FCP/LCP; Detector Settings | ✗ — the spans are in TF | M |
+| **Performance: Slow / Inefficient DB Query** | duration impact, query, "More samples" | ✗ | M |
+| Frontend: Rage / Dead click | clicked element, selector path, session replay | ✗ — browser SDK emits clicks | M |
+| Uptime: Downtime detected | uptime bar, downtime duration, reason, status code, assertions, monitor link | ✗ (no uptime checks) | L |
+| Cron monitor missed / failed check-ins | check-in timeline | ✗ | L |
+| Breached Metrics (metric alerts) | threshold chart | `QueryAlert` | — |
+| Warnings (db_query, http_client, frontend) | as perf | `LogPattern`, `LogPatternRateChange`, `ApiChange` cover different ground | — |
+| User Feedback: inbox / resolved / spam, AI summary, linked issue | ✗ | ✗ | L |
+
+### 25d. Issue list
+
+| Feature | Monoscope | Status |
+|---|---|---|
+| Category views (Feed, Errors & Outages, Breached Metrics, Warnings, Feedback) + saved views ("Save as") | Inbox / Acknowledged / Archived tabs; `type` and `service` filters | ◐ |
+| Search DSL with removable token chips (`is:unresolved`) | ✗ | ✗ |
+| Sort ▾ (Recommended, last seen, first seen, events, users) | fixed order | ✗ |
+| Columns: Last seen, Age, Trend (24h/14d toggle) + substatus word, Events, Users, Priority, Assignee | Events, Last seen, sparkline + period toggle | ◐ Age, Users, inline Priority/Assignee ✗ |
+| Row metadata: short id, handled, culprit, replay count, "Quick fix" | type chip, service, preview | ◐ |
+| Bulk resolve / assign / merge / priority | bulk ack / archive | ◐ |
+
+### 25e. Built in this change
+
+Layout only, reusing existing data: title block with hoisted Events count and state line, workflow bar under
+the title, filter row, aggregate band, sticky event navigator with `Jump to:` links, one collapsible section per
+evidence (Highlights, Stack trace, Trace, Logs, Replay, Similar), and a Sentry-shaped right rail.
+Everything else in 25b–25d is the backlog, in roughly the order listed.

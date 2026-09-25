@@ -1720,6 +1720,7 @@ code, pre, .code, .monospace {
   }
 
   .investigation-fullscreen {
+    --event-nav-h: 0px;
     position: fixed !important;
     inset: 0 !important;
     z-index: 9999 !important;
@@ -1729,7 +1730,7 @@ code, pre, .code, .monospace {
     background: var(--color-bgBase) !important;
   }
   .investigation-fullscreen .investigation-content {
-    min-height: calc(100vh - 44px) !important;
+    min-height: calc(100vh - 2.5rem) !important;
     max-height: none !important;
     flex: 1;
   }
@@ -1737,14 +1738,13 @@ code, pre, .code, .monospace {
     height: 100%;
     flex: 1;
   }
-  .investigation-fullscreen #log_details_container,
   .investigation-fullscreen #trace_details_container {
     max-height: calc(100vh - 120px) !important;
   }
 
-  /* Issue-page Investigation embeds the shared tracePage fragment, whose own
+  /* The issue page's Trace section embeds the shared tracePage fragment, whose own
      scroll containers (left column, waterfall) assume a bounded panel like the
-     log explorer's. On the issue page the trace tab has no fixed height — the
+     log explorer's. On the issue page the section has no fixed height — the
      document scroll carries everything — so those inner scrollers are
      neutralized here (clip, not hidden: hidden creates a scroll container that
      would trap the sticky elements below). Fullscreen mode re-bounds the card
@@ -1757,21 +1757,20 @@ code, pre, .code, .monospace {
     overflow-x: clip;
     overflow-y: visible;
   }
-  /* The page scroller's pt-8 is added to every sticky offset inside it, which
-     pinned these 32px below the issue action bar; the negative tops cancel it so
-     the waterfall ruler and span-details panel sit flush under the sticky chrome. */
+  /* The issue page's event navigator stays pinned above the Trace section, so the
+     waterfall ruler and span-details panel pin directly under it. */
   .investigation-content [id^='waterfall-container-'] > .sticky {
-    top: -2rem;
+    top: var(--event-nav-h, 0px);
   }
   /* The span-details panel follows the reader down a tall waterfall instead of
      sitting at the row top; below md it stays the fixed full-screen overlay. */
   @media (min-width: 768px) {
     .investigation-content #trace_details_container {
       position: sticky;
-      top: -2rem;
+      top: var(--event-nav-h, 0px);
       align-self: flex-start;
-      /* Viewport minus the topbar + issue bar above the scrollport (~5.5rem). */
-      max-height: calc(100vh - 5.5rem);
+      /* Viewport minus the topbar above the scrollport and the event navigator. */
+      max-height: calc(100vh - 5.5rem - var(--event-nav-h, 0px));
     }
   }
 
