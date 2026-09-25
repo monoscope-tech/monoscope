@@ -87,7 +87,7 @@ test("issue event card pins its navigator and jumps between trace and logs", asy
     const nav = page.locator("#issue-event-nav");
     await expect(page.locator("#span-content")).toBeVisible();
     await expect(page.locator("#log-content")).toBeVisible();
-    await nav.getByRole("link", { name: "Logs" }).click();
+    await nav.getByRole("link", { name: "Logs", exact: true }).click();
     await expect(page.locator("#issue-logs")).toBeInViewport();
     // Sticky: the navigator stays at the top of the scroller while its sections scroll under it.
     const [navTop, scrollerTop] = await Promise.all([
@@ -95,7 +95,7 @@ test("issue event card pins its navigator and jumps between trace and logs", asy
       nav.evaluate(el => el.closest(".overflow-y-auto")!.getBoundingClientRect().top),
     ]);
     expect(Math.abs(navTop - scrollerTop)).toBeLessThan(2);
-    await nav.getByRole("link", { name: "Trace" }).click();
+    await nav.getByRole("link", { name: "Trace", exact: true }).click();
     await expect(page.locator("#issue-trace")).toBeInViewport();
     expect(errors.join("\n")).not.toMatch(/is not defined|is not a function/i);
   } finally { sql(cleanup); }
