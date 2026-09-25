@@ -154,7 +154,7 @@ import System.IO (hPutStrLn)
 import System.Logging qualified as Log
 import System.Tracing (forkWithCtx)
 import UnliftIO (throwIO, tryAny)
-import Utils (encodeText, extractMessageFromLog, formatBytes, getDurationNSMS, jsonToMap, lookupValueText, nonEmptyT, scrubNulText, scrubNulValue)
+import Utils (classifyUserAgent, encodeText, extractMessageFromLog, formatBytes, getDurationNSMS, jsonToMap, lookupValueText, nonEmptyT, scrubNulText, scrubNulValue)
 
 
 -- $setup
@@ -2202,7 +2202,9 @@ extractATError spanObj (AE.Object o) = do
   -- Strings-only, no NUL-scrub: these feed computeErrorHashes, so widening the
   -- accepted values (or scrubbing) would re-key existing error patterns.
   let getTextOrEmpty k = fromMaybe "" $ asTextRaw =<< KEM.lookup k attrs
-  pure $ atErrorFrom spanObj (getTextOrEmpty "type") (getTextOrEmpty "message") (getTextOrEmpty "stacktrace")
+      -- `exception.escaped` is deprecated but still the only OTel handled/unhandled signal.
+      escaped = KEM.lookup "escaped" attrs >>= \case AE.Bool b -> Just b; AE.String t -> readMaybe (toString $ T.toTitle t); _ -> Nothing
+  pure $ atErrorFrom spanObj ErrorPatterns.CMExceptionEvent (not <$> escaped) (getTextOrEmpty "type") (getTextOrEmpty "message") (getTextOrEmpty "stacktrace")
 extractATError _ _ = Nothing
 
 
@@ -2223,13 +2225,13 @@ extractATErrorFromRecord spanObj =
       stack = fromMaybe "" (excAttr "stacktrace")
    in if T.null msg && T.null stack
         then Nothing
-        else Just (atErrorFrom spanObj typ msg stack)
+        else Just (atErrorFrom spanObj (bool ErrorPatterns.CMSpanStatus ErrorPatterns.CMLogRecord (isJust spanObj.severity || spanObj.kind == Just "log")) Nothing typ msg stack)
 
 
 -- | Build an 'ErrorPatterns.ATError' from a span/log plus the extracted
 -- @(errorType, message, stackTrace)@ triple. Hash-driven dedup groups similar errors.
-atErrorFrom :: OtelLogsAndSpans -> Text -> Text -> Text -> ErrorPatterns.ATError
-atErrorFrom spanObj typ msg stack =
+atErrorFrom :: OtelLogsAndSpans -> ErrorPatterns.CaptureMechanism -> Maybe Bool -> Text -> Text -> Text -> ErrorPatterns.ATError
+atErrorFrom spanObj mechanism handled typ msg stack =
   let attrs = unAesonTextMaybe spanObj.attributes
       resc = unAesonTextMaybe spanObj.resource
       getSpanAttr k = attrs >>= Map.lookup k >>= valText
@@ -2243,6 +2245,13 @@ atErrorFrom spanObj typ msg stack =
       -- An unrecognised/absent SDK language parses to the generic frame parser,
       -- which is what the old empty-string default selected too.
       rt = EF.parseRuntime $ fromMaybe "" tech
+      -- Span attribute first, resource second: browser SDKs put user_agent/geo on the
+      -- span, mobile SDKs put os/device on the resource.
+      attr k = atMapText k attrs <|> atMapText k resc
+      withVersion n v = n <&> \n' -> maybe n' (\v' -> n' <> " " <> v') v
+      ua = attr "user_agent.original"
+      (uaBrowser, uaOs, uaDevice) = maybe (Nothing, Nothing, Nothing) ((\(b, o, d) -> (known b, known o, Just d)) . classifyUserAgent) ua
+      known v = v <$ guard (v /= "Other")
       hashes = EF.computeErrorHashes spanObj.project_id serviceName spanObj.name rt typ msg stack
    in ErrorPatterns.ATError
         { projectId = UUIDId <$> UUID.fromText spanObj.project_id
@@ -2265,13 +2274,26 @@ atErrorFrom spanObj typ msg stack =
         , runtime = tech
         , parentSpanId = spanObj.parent_id
         , endpointHash = Nothing
-        , environment = Nothing
+        , environment = attr "deployment.environment.name" <|> attr "deployment.environment"
         , userId = getIdentityAttrM "id" ["user", "enduser"]
         , userEmail = getIdentityAttrM "email" ["user", "enduser"]
         , userName = getIdentityAttrM "name" ["user", "enduser"]
         , userIp = getSpanAttr "client.address"
         , sessionId = getUserAttrM "id" "session"
         , tenantName = getSpanAttr "tenant.name" <|> getIdentityAttrM "name" ["tenant", "organization"]
+        , release = attr "service.version"
+        , handled
+        , mechanism = Just mechanism
+        , level = spanObj.level <|> (toText . encodeEnumSC @"SL" <$> ((.severity_text) =<< spanObj.severity)) <|> ("error" <$ guard (spanObj.status_code == Just "ERROR"))
+        , userAgent = ua
+        , browser = withVersion (attr "user_agent.name") (attr "user_agent.version") <|> uaBrowser
+        , os = withVersion (attr "os.name" <|> attr "user_agent.os.name") (attr "os.version" <|> attr "user_agent.os.version") <|> uaOs
+        , device = attr "device.model.name" <|> attr "device.model.identifier" <|> uaDevice
+        , geoCountry = attr "geo.country.iso_code"
+        , geoRegion = attr "geo.region.iso_code"
+        , geoCity = attr "geo.locality.name"
+        , threadId = attr "thread.id"
+        , threadName = attr "thread.name"
         }
 
 

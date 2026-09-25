@@ -1,4 +1,5 @@
 module Utils (
+  classifyUserAgent,
   sinceWindows,
   onpointerdown_,
   jsonValueToHtmlTree,
@@ -2165,3 +2166,46 @@ scrubNulValue = \case
             [(AEK.fromText (scrubNulText (AEK.toText k)), scrubNulValue v) | (k, v) <- AEKM.toList o]
     | otherwise -> AE.Object (fmap scrubNulValue o)
   v -> v
+
+
+-- | Browser, operating system and device class of a user agent string. Deliberately a
+-- coarse family classifier, not a full UA parser: RUM breakdowns answer "is this
+-- Safari-only?" and "is mobile worse?", for which families are exactly enough.
+--
+-- Order matters everywhere: Edge and Opera embed "Chrome", Chrome embeds "Safari",
+-- Android embeds "Linux", and iPads identify as tablets while iPhones are mobile.
+--
+-- >>> classifyUserAgent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36 Edg/151.0"
+-- ("Edge","Windows","Desktop")
+-- >>> classifyUserAgent "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
+-- ("Safari","iOS","Mobile")
+-- >>> classifyUserAgent "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/130.0.0.0 Safari/537.36"
+-- ("Chrome","Linux","Desktop")
+-- >>> classifyUserAgent "Mozilla/5.0 (Linux; Android 14; SM-S921B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Mobile Safari/537.36"
+-- ("Chrome","Android","Mobile")
+-- >>> classifyUserAgent "curl/8.6.0"
+-- ("Other","Other","Desktop")
+classifyUserAgent :: Text -> (Text, Text, Text)
+classifyUserAgent ua = (browser, os, device)
+  where
+    has needle = needle `T.isInfixOf` ua
+    browser
+      | has "Edg/" || has "Edge/" = "Edge"
+      | has "OPR/" || has "Opera" = "Opera"
+      | has "SamsungBrowser" = "Samsung Internet"
+      | has "Firefox/" = "Firefox"
+      | has "Chrome/" || has "CriOS/" || has "HeadlessChrome" = "Chrome"
+      | has "Safari/" = "Safari"
+      | otherwise = "Other"
+    os
+      | has "Windows" = "Windows"
+      | has "iPhone" || has "iPad" || has "iPod" = "iOS"
+      | has "Mac OS X" || has "Macintosh" = "macOS"
+      | has "Android" = "Android"
+      | has "CrOS" = "ChromeOS"
+      | has "Linux" || has "X11" = "Linux"
+      | otherwise = "Other"
+    device
+      | has "iPad" || (has "Android" && not (has "Mobile")) = "Tablet"
+      | has "Mobile" || has "iPhone" = "Mobile"
+      | otherwise = "Desktop"

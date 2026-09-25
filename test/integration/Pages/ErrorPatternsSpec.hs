@@ -90,6 +90,29 @@ spec = sequential $ aroundAll withTestResources do
         p.message `shouldSatisfy` (/= "")
         p.stacktrace `shouldSatisfy` (/= "")
 
+    it "1a. an error snapshot carries release, handled, environment, client and geo from OTel attributes" \tr -> do
+      apiKey <- createTestAPIKey tr pid "error-context-key"
+      let ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
+      ingestTraceWithExceptionAttrs
+        tr
+        apiKey
+        ( [("user_agent.original", ua), ("geo.country.iso_code", "US"), ("geo.locality.name", "Santa Clara"), ("thread.name", "main")]
+        , [("service.version", "26.3.1"), ("deployment.environment.name", "production")]
+        , [("exception.escaped", "true")]
+        )
+        "GET /api/context"
+        "ContextError"
+        "context probe"
+        "ContextError: context probe\n    at probe (/app/src/probe.js:1:1)"
+        (addUTCTime (-15) frozenTime)
+      drainExtractionWorker tr
+      void $ runAllBackgroundJobs frozenTime tr.trATCtx
+      patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 50 0
+      e <- maybe (fail "no ContextError pattern") (pure . (.errorData)) $ find ((== "ContextError") . (.errorType)) patterns
+      (e.release, e.environment, e.handled, e.mechanism) `shouldBe` (Just "26.3.1", Just "production", Just False, Just ErrorPatterns.CMExceptionEvent)
+      (e.browser, e.os, e.device, e.userAgent) `shouldBe` (Just "Chrome", Just "Windows", Just "Desktop", Just ua)
+      (e.geoCountry, e.geoCity, e.threadName) `shouldBe` (Just "US", Just "Santa Clara", Just "main")
+
     it "1b. ERROR-severity records produce error patterns — OTel exception.* (backend log) and error.* (Monoscope browser SDK)" \tr -> do
       -- OTLP log records never carry span events; internal browser spans often
       -- carry status_code=ERROR but no exception event. Both cases rely on the

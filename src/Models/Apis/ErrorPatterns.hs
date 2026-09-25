@@ -3,6 +3,7 @@ module Models.Apis.ErrorPatterns (
   ErrorPatternId (..),
   ErrorState (..),
   ATError (..),
+  CaptureMechanism (..),
   ErrorPatternL (..),
   -- Queries
   getErrorPatterns,
@@ -35,6 +36,7 @@ import Data.Default
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
+import Data.Text.Display (Display)
 import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -155,6 +157,21 @@ instance HI.DecodeRow ErrorPatternL where
   decodeRow = ErrorPatternL <$> HI.decodeRow <*> HI.decodeRow <*> HI.decodeRow <*> HI.decodeRow
 
 
+-- | How the error reached us. OTel has no "mechanism" attribute, so this is the
+-- signal the error was extracted from rather than the SDK's capture hook.
+data CaptureMechanism = CMExceptionEvent | CMLogRecord | CMSpanStatus
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON, Display) via WrappedEnumSC 'Nothing "CM" CaptureMechanism
+
+
+-- | The error's stored snapshot. Rows written before a field existed still decode:
+--
+-- >>> :set -XOverloadedStrings
+-- >>> isRight (AE.eitherDecode @ATError "{\"when\":\"2026-01-01T00:00:00Z\",\"error_type\":\"E\",\"root_error_type\":\"E\",\"message\":\"m\",\"root_error_message\":\"m\",\"stack_trace\":\"\",\"hash\":\"h\",\"is_framework\":false}")
+-- True
+-- >>> AE.encode CMExceptionEvent
+-- "\"exception_event\""
 data ATError = ATError
   { projectId :: Maybe Projects.ProjectId
   , when :: UTCTime
@@ -183,6 +200,21 @@ data ATError = ATError
   , userIp :: Maybe Text
   , sessionId :: Maybe Text
   , tenantName :: Maybe Text
+  , -- Everything below is read from OTel semantic-convention attributes, and absent
+    -- from rows stored before it existed (the codec defaults a missing field to Nothing).
+    release :: Maybe Text
+  , handled :: Maybe Bool
+  , mechanism :: Maybe CaptureMechanism
+  , level :: Maybe Text
+  , userAgent :: Maybe Text
+  , browser :: Maybe Text
+  , os :: Maybe Text
+  , device :: Maybe Text
+  , geoCountry :: Maybe Text
+  , geoRegion :: Maybe Text
+  , geoCity :: Maybe Text
+  , threadId :: Maybe Text
+  , threadName :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, NFData)

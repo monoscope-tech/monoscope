@@ -59,6 +59,7 @@ module Pkg.TestUtils (
   ingestTraceWithHeader,
   ingestMetricWithHeader,
   ingestTraceWithException,
+  ingestTraceWithExceptionAttrs,
   ingestSessionEvent,
   -- CLI test helpers
   runHTTPtoServant,
@@ -1436,8 +1437,13 @@ ingestTraceWithHeader tr apiKey spanName timestamp = do
 
 
 ingestTraceWithException :: TestResources -> Text -> Text -> Text -> Text -> Text -> UTCTime -> IO ()
-ingestTraceWithException tr apiKey spanName excType excMessage excStacktrace timestamp = do
-  req <- createOtelTraceWithExceptionAtTime apiKey spanName excType excMessage excStacktrace timestamp
+ingestTraceWithException tr apiKey = ingestTraceWithExceptionAttrs tr apiKey ([], [], [])
+
+
+-- | 'ingestTraceWithException' with extra (span, resource, exception-event) attributes.
+ingestTraceWithExceptionAttrs :: TestResources -> Text -> ([(Text, Text)], [(Text, Text)], [(Text, Text)]) -> Text -> Text -> Text -> Text -> UTCTime -> IO ()
+ingestTraceWithExceptionAttrs tr apiKey extra spanName excType excMessage excStacktrace timestamp = do
+  req <- createOtelTraceWithExceptionAtTime apiKey extra spanName excType excMessage excStacktrace timestamp
   void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto req)
 
 
@@ -1783,8 +1789,8 @@ createGaugeMetricAtTime apiKey resAttrs dpAttrs metricName value timestamp =
    in defMessage & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ mkResource apiKey resAttrs & PMF.scopeMetrics .~ [scopeMetric]]
 
 
-createOtelTraceWithExceptionAtTime :: Text -> Text -> Text -> Text -> Text -> UTCTime -> IO TS.ExportTraceServiceRequest
-createOtelTraceWithExceptionAtTime apiKey spanName excType excMessage excStacktrace timestamp = do
+createOtelTraceWithExceptionAtTime :: Text -> ([(Text, Text)], [(Text, Text)], [(Text, Text)]) -> Text -> Text -> Text -> Text -> UTCTime -> IO TS.ExportTraceServiceRequest
+createOtelTraceWithExceptionAtTime apiKey (spanExtra, resExtra, eventExtra) spanName excType excMessage excStacktrace timestamp = do
   trIdText <- UUID.toText <$> nextRandom
   spanIdText <- UUID.toText <$> nextRandom
   let exceptionEvent =
@@ -1792,11 +1798,11 @@ createOtelTraceWithExceptionAtTime apiKey spanName excType excMessage excStacktr
           .~ "exception" & PTF.timeUnixNano
           .~ toNanos timestamp
             & PTF.attributes
-          .~ [mkAttr "exception.type" excType, mkAttr "exception.message" excMessage, mkAttr "exception.stacktrace" excStacktrace]
+          .~ ([mkAttr "exception.type" excType, mkAttr "exception.message" excMessage, mkAttr "exception.stacktrace" excStacktrace] <> map (uncurry mkAttr) eventExtra)
       spanStatus = defMessage & PTF.code .~ PT.Status'STATUS_CODE_ERROR & PTF.message .~ excMessage
-      resource = mkResource apiKey [mkAttr "telemetry.sdk.language" "nodejs"]
+      resource = mkResource apiKey (mkAttr "telemetry.sdk.language" "nodejs" : map (uncurry mkAttr) resExtra)
       -- No http.request.method: exception spans shouldn't match the HTTP span filter (attributes___http___request___method IS NOT NULL)
-      attrs = [mkAttr "http.route" "/api/users/:id", mkAttr "http.response.status_code" "500"]
+      attrs = [mkAttr "http.route" "/api/users/:id", mkAttr "http.response.status_code" "500"] <> map (uncurry mkAttr) spanExtra
   pure $ mkSpanRequest trIdText spanIdText Nothing spanName [exceptionEvent] (Just spanStatus) attrs resource timestamp
 
 
