@@ -484,36 +484,42 @@ test("dashboard team requests show progress and retain choices after failures", 
 });
 
 test("dashboard team selection has names, counts, and searchable choices", async ({ page }) => {
-  await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
-  const checkboxes = page.locator(".bulkactionItemCheckbox");
-  for (const row of await page.getByRole("row").filter({ has: checkboxes }).all()) {
-    const title = await row.getByRole("link").first().innerText();
-    await expect(row.getByRole("checkbox")).toHaveAccessibleName(`Select ${title}`);
+  const dashboards: Dash[] = [];
+  try {
+    for (const suffix of ["A", "B"]) dashboards.push(await makeDashboard(page, `E2E Team Selection ${Date.now()} ${suffix}`));
+    await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
+    const checkboxes = page.locator(".bulkactionItemCheckbox");
+    for (const row of await page.getByRole("row").filter({ has: checkboxes }).all()) {
+      const title = await row.getByRole("link").first().innerText();
+      await expect(row.getByRole("checkbox")).toHaveAccessibleName(`Select ${title}`);
+    }
+    await checkboxes.nth(0).check();
+    await checkboxes.nth(1).check();
+    await expect(page.getByText("2 selected", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Manage teams", exact: true }).click();
+    const picker = page.locator("#dashboard-teams");
+    await expect(picker.getByRole("heading", { name: "Teams for 2 dashboards", exact: true })).toBeVisible();
+    const search = picker.getByRole("searchbox", { name: "Find a team", exact: true });
+    await search.fill("  EVERYONE  ");
+    await expect(picker.getByRole("checkbox")).toHaveCount(1);
+    await picker.getByRole("checkbox", { name: "@everyone", exact: true }).check();
+    await search.fill("no-such-team");
+    await expect(picker.getByText("No teams match your search.", { exact: true })).toBeVisible();
+    await search.fill("");
+    await expect(picker.getByRole("checkbox").first()).toBeChecked();
+    await page.keyboard.press("Escape");
+    await checkboxes.nth(1).uncheck();
+    await expect(page.getByText("1 selected", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Manage teams", exact: true }).click();
+    await expect(picker.getByRole("heading", { name: "Teams for 1 dashboard", exact: true })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await page.getByRole("checkbox", { name: "Select All", exact: true }).check();
+    await expect(page.getByText(`${await checkboxes.count()} selected`, { exact: true })).toBeVisible();
+    await page.getByRole("checkbox", { name: "Select All", exact: true }).uncheck();
+    await expect(page.getByRole("button", { name: "Manage teams", exact: true })).toBeHidden();
+  } finally {
+    for (const dashboard of dashboards) await deleteDashboard(page, dashboard);
   }
-  await checkboxes.nth(0).check();
-  await checkboxes.nth(1).check();
-  await expect(page.getByText("2 selected", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Manage teams", exact: true }).click();
-  const picker = page.locator("#dashboard-teams");
-  await expect(picker.getByRole("heading", { name: "Teams for 2 dashboards", exact: true })).toBeVisible();
-  const search = picker.getByRole("searchbox", { name: "Find a team", exact: true });
-  await search.fill("  EVERYONE  ");
-  await expect(picker.getByRole("checkbox")).toHaveCount(1);
-  await picker.getByRole("checkbox", { name: "@everyone", exact: true }).check();
-  await search.fill("no-such-team");
-  await expect(picker.getByText("No teams match your search.", { exact: true })).toBeVisible();
-  await search.fill("");
-  await expect(picker.getByRole("checkbox").first()).toBeChecked();
-  await page.keyboard.press("Escape");
-  await checkboxes.nth(1).uncheck();
-  await expect(page.getByText("1 selected", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Manage teams", exact: true }).click();
-  await expect(picker.getByRole("heading", { name: "Teams for 1 dashboard", exact: true })).toBeVisible();
-  await page.keyboard.press("Escape");
-  await page.getByRole("checkbox", { name: "Select All", exact: true }).check();
-  await expect(page.getByText(`${await checkboxes.count()} selected`, { exact: true })).toBeVisible();
-  await page.getByRole("checkbox", { name: "Select All", exact: true }).uncheck();
-  await expect(page.getByRole("button", { name: "Manage teams", exact: true })).toBeHidden();
 });
 
 test("dashboard team actions remain reachable on mobile", async ({ page }) => {
