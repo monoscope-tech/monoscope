@@ -19,6 +19,8 @@ test("deep paging and live delivery preserve the row under the reader", async ({
     );
     await page.goto(LOG_EXPLORER_URL, { waitUntil: "domcontentloaded" });
     await expect(page.locator("log-list")).toBeVisible();
+    // Finish the initial fetch before installing the pagination fixture.
+    await expect(page.locator("log-list").getByText("No events in this time range.", { exact: true })).toBeVisible();
   }
 
   const result = await page.evaluate(async () => {

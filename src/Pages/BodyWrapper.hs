@@ -319,11 +319,7 @@ bodyWrapper bcfg child = do
           gridStackScript src = do
             void $ script_ "window.gridStackReady = new Promise(resolve => { window.__resolveGridStack = resolve; });"
             script_ [src_ src, defer_ "true", onload_ "window.__resolveGridStack?.(window.GridStack)"] ("" :: Text)
-      mapM_
-        deferredCss
-        [ assetUrl "/public/assets/css/thirdparty/notyf3.min.css"
-        , assetUrl "/public/assets/css/thirdparty/rrweb.css"
-        ]
+      deferredCss $ assetUrl "/public/assets/css/thirdparty/rrweb.css"
       mapM_ css
         $ [assetUrl "/public/assets/css/thirdparty/tagify.min.css" | bcfg.needsTagify]
         <> [assetUrl "/public/assets/deps/gridstack/gridstack.min.css" | bcfg.needsGridStack]
@@ -354,7 +350,6 @@ bodyWrapper bcfg child = do
             assetUrl "/public/assets/js/thirdparty/_hyperscript_web0_9_93.min.js"
           ]
         <> [assetUrl "/public/assets/deps/tagify/tagify.min.js" | bcfg.needsTagify]
-        <> [assetUrl "/public/assets/js/thirdparty/notyf3.min.js"]
       script_ [src_ (assetUrl "/public/assets/deps/lit/lit-html.js"), type_ "module", defer_ "true"] ("" :: Text)
       when bcfg.needsGridStack $ gridStackScript $ assetUrl "/public/assets/deps/gridstack/gridstack-all.js"
       mapM_
@@ -456,8 +451,6 @@ bodyWrapper bcfg child = do
     body_ [class_ "h-full w-full bg-bgBase text-textStrong group/pg", term "data-theme" initialTheme, term "hx-preload:inherited" "mouseover"] do
       -- Skip to main content link for keyboard users (accessibility)
       a_ [class_ "sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100000] focus:bg-bgRaised focus:px-4 focus:py-2 focus:rounded-lg focus:text-textBrand focus:shadow-lg focus:ring-2 focus:ring-strokeFocus", href_ "#main-content"] "Skip to main content"
-      -- ARIA live region for toast announcements (screen reader accessibility)
-      div_ [id_ "toast-announcer", Aria.live_ "polite", Aria.atomic_ "true", class_ "sr-only"] ""
       -- HTMX progress bar for long operations
       div_ [id_ "htmx-progress", class_ "htmx-progress"] ""
       case bcfg.sessM of
@@ -1199,27 +1192,32 @@ globalTemplates_ = do
   template_ [id_ "log-item-context-menu-tmpl"] do
     ul_ [class_ "log-item-cloned-menu dropdown-content z-50 menu p-2 shadow-sm bg-bgRaised rounded-box w-96 max-w-[92vw] absolute", tabindex_ "0"] do
       fieldContextMenuItems_ DynamicField fieldMenuActions
-  let toastTmpl tmplId variant icon fallback =
+  let toastTmpl :: Text -> Bool -> Text -> Html () -> Html ()
+      toastTmpl tmplId isError icon fallback =
         template_ [id_ tmplId]
-          $ div_ [role_ "alert", class_ $ "alert " <> variant <> " max-md:w-full md:w-96 cursor-pointer toast-animate", [__|init wait for click or 30s then transition my opacity to 0 then remove me|]] do
-            faSprite_ icon "solid" "stroke-current shrink-0 w-6 h-6"
-            span_ [class_ "title"] fallback
-  toastTmpl "successToastTmpl" "alert-success" "circle-check" "Something succeeded"
-  toastTmpl "errorToastTmpl" "alert-error" "circle-exclamation" "Something failed"
-  section_ [class_ "fixed top-0 right-0 z-50 pt-14 pr-5 max-md:left-0 max-md:px-4 space-y-3 pointer-events-none [&>*]:pointer-events-auto", id_ "toastsParent"] ""
+          $ div_ ([class_ "toast-animate flex items-center gap-3 p-2 ps-4 rounded-box bg-bgRaised text-textStrong shadow-toast max-md:w-full md:w-96"] <> if isError then [role_ "alert"] else [[__|init wait 8s then remove me|]]) do
+            span_ [Aria.hidden_ "true", class_ $ "grid size-8 shrink-0 place-items-center rounded-full " <> bool "bg-fillSuccess-weak text-textSuccess" "bg-fillError-weak text-textError" isError] $ faSprite_ icon "regular" "size-4"
+            span_ [class_ "title min-w-0 flex-1 break-words text-pretty text-sm leading-normal"] fallback
+            button_ [type_ "button", Aria.label_ "Dismiss notification", class_ "grid size-10 max-md:size-11 shrink-0 place-items-center rounded-lg text-iconNeutral hover:bg-fillHover hover:text-textStrong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-textBrand transition-colors", [__|on click remove closest .toast-animate|]] $ faSprite_ "xmark" "regular" "size-3"
+  toastTmpl "successToastTmpl" False "circle-check" "Something succeeded"
+  toastTmpl "errorToastTmpl" True "circle-exclamation" "Something failed"
+  section_ [class_ "fixed bottom-0 right-0 z-50 p-4 max-md:left-0 space-y-2 pointer-events-none [&>*]:pointer-events-auto", id_ "toastsParent", Aria.live_ "polite", term "aria-relevant" "additions"] ""
   script_
     [type_ "text/javascript"]
     [text|
     document.addEventListener('DOMContentLoaded', function(){
-      document.body.addEventListener('triggerToast', function(e){
-          e.detail.value.forEach(function(toastEvent){
+      for (const [eventName, type] of [['triggerToast', null], ['successToast', 'success'], ['errorToast', 'error']]) {
+        document.body.addEventListener(eventName, function(e){
+          const toasts = type ? e.detail.value.map(message => [type, message]) : e.detail.value;
+          toasts.forEach(function(toastEvent){
             const template = document.getElementById(toastEvent[0].toLowerCase()+'ToastTmpl');
             const clone = document.importNode(template.content, true);
             clone.querySelector('.title').textContent = toastEvent[1];
             document.getElementById("toastsParent").appendChild(clone);
             _hyperscript.processNode(document.querySelector("#toastsParent"));
-         })
-      })
+          })
+        })
+      }
     })
   |]
 

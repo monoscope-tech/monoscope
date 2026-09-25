@@ -80,7 +80,7 @@
   --shadow-sm: 0 2px 8px -2px rgba(0 0 0 / 0.08), 0 4px 12px -4px rgba(0 0 0 / 0.04);
   --shadow-md: 0 4px 12px -2px rgba(0 0 0 / 0.12), 0 8px 20px -4px rgba(0 0 0 / 0.08);
   --shadow-lg: 0 8px 25px -5px rgba(0 0 0 / 0.1), 0 4px 10px -5px rgba(0 0 0 / 0.04);
-  --shadow-toast: 0 4px 12px rgba(0 0 0 / 0.12);
+  --shadow-toast: 0 0 0 1px var(--color-strokeWeak), 0 4px 8px -4px rgba(0 0 0 / 0.12), 0 12px 32px -8px rgba(0 0 0 / 0.16);
 
   /* Simple colors */
   --color-gray-25: oklch(99.1% 0.002 247);
@@ -428,30 +428,12 @@
     color: var(--color-textError);
   }
 
-  /* Toast/Notification animations - entrance and exit */
   @keyframes toastIn {
-    from { opacity: 0; transform: translateX(100%) scale(0.95); }
-    to { opacity: 1; transform: translateX(0) scale(1); }
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
   }
-  @keyframes toastOut {
-    from { opacity: 1; transform: translateX(0) scale(1); }
-    to { opacity: 0; transform: translateX(100%) scale(0.95); }
-  }
-  .toast-animate {
-    animation: toastIn 250ms var(--ease-out-expo);
-  }
-  .toast-exit {
-    animation: toastOut 200ms ease-in forwards;
-  }
-
-  /* Notyf toast enhancements */
-  .notyf__toast {
-    animation: toastIn 250ms var(--ease-out-expo);
-    border-radius: 8px;
-    box-shadow: var(--shadow-toast);
-  }
-  .notyf__toast--disappear {
-    animation: toastOut 200ms ease-in forwards;
+  @media (prefers-reduced-motion: no-preference) {
+    .toast-animate { animation: toastIn 180ms ease-out; }
   }
 
   /* Skeleton wave timing variations for visual interest */
@@ -1117,21 +1099,6 @@ body, :host {
     --color-warning: rgba(224 190 112 / 0.2);
     --color-info: rgba(126 192 229 / 0.2);
   }
-
-  /* Floating toasts overlay other content, so they must be fully opaque and
-     legible. The translucent .alert tint above is only safe for inline banners
-     sitting on the page background. Second signal beyond color = the icon. */
-  .alert.toast-animate {
-    background-color: var(--color-bgRaised);
-    color: var(--color-textStrong);
-    border: 1px solid var(--color-strokeWeak);
-    box-shadow: var(--shadow-toast);
-  }
-  .alert.alert-error.toast-animate { border-color: var(--color-strokeError-strong); }
-  .alert.alert-error.toast-animate svg { color: var(--color-textError); }
-  .alert.alert-success.toast-animate { border-color: var(--color-strokeSuccess-strong); }
-  .alert.alert-success.toast-animate svg { color: var(--color-textSuccess); }
-
 
   /* Skeleton loader styles */
   .skeleton-shimmer {
@@ -2069,7 +2036,7 @@ code, pre, .code, .monospace {
     --shadow-sm: 0 2px 8px -2px rgba(0 0 0 / 0.55), 0 4px 16px -4px rgba(0 0 0 / 0.4);
     --shadow-md: 0 4px 12px -2px rgba(0 0 0 / 0.6), 0 8px 24px -4px rgba(0 0 0 / 0.45);
     --shadow-lg: 0 8px 30px -5px rgba(0 0 0 / 0.6), 0 4px 12px -5px rgba(0 0 0 / 0.35);
-    --shadow-toast: 0 4px 12px rgba(0 0 0 / 0.4);
+    --shadow-toast: 0 0 0 1px var(--color-strokeWeak), 0 4px 8px -4px rgba(0 0 0 / 0.4), 0 12px 32px -8px rgba(0 0 0 / 0.5);
 
     /* Update fallback colors for dark mode */
     --fallback-b2: rgba(255 255 255 / 0.06);

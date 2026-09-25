@@ -55,7 +55,7 @@ import Pkg.TestClock (TestClock, runMutableTime)
 import Relude
 import Servant (AuthProtect, Header, Headers, ServerError, addHeader, noHeader)
 import Servant qualified
-import Servant.Htmx (HXRedirect, HXTriggerAfterSettle)
+import Servant.Htmx (HXRedirect, HXTrigger)
 import Servant.Server.Experimental.Auth (AuthServerData)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Logging
@@ -251,7 +251,7 @@ type instance AuthServerData (AuthProtect "api-key-auth") = Sessions.ProjectId
 
 type RespHeaders =
   Headers
-    '[ HXTriggerAfterSettle
+    '[ HXTrigger
      , HXRedirect
      , Header "X-Widget-JSON" Text
      , Header "HX-Reswap" Text
@@ -264,8 +264,9 @@ addRespHeaders resp = do
   redirectDest <- State.get @HXRedirectDest
   widgetJSON <- State.get @XWidgetJSON
   reswap <- State.get @HXReswap
+  -- HTMX 4 passes object payloads through unchanged, including arrays.
   pure
-    $ addHeader (decodeUtf8 $ AE.encode triggerEvents)
+    $ addHeader (decodeUtf8 $ AE.encode $ Map.map (\values -> AE.object ["value" AE..= values]) triggerEvents)
     $ maybe noHeader addHeader redirectDest
     $ maybe noHeader (\w -> addHeader w.unWidgetJSON) widgetJSON
     $ maybe noHeader addHeader reswap resp

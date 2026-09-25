@@ -1,5 +1,10 @@
 import { test, expect } from "@playwright/test";
-import { DEMO_PROJECT } from "./helpers";
+import { DEMO_PROJECT, sql } from "./helpers";
+
+const cleanup = `DELETE FROM apis.endpoints WHERE project_id='${DEMO_PROJECT}' AND hash='e2e-browser-endpoint';`;
+test.beforeAll(() => sql(cleanup + `INSERT INTO apis.endpoints (project_id,url_path,url_params,method,host,hash,outgoing)
+  VALUES ('${DEMO_PROJECT}','/e2e-browser','{}','GET','browser.example','e2e-browser-endpoint',false);`));
+test.afterAll(() => sql(cleanup));
 
 // Endpoint Analytics is a template-backed redirect, not a fixed dashboard id. Supplying
 // its required variables is important: otherwise the intentional variable picker replaces

@@ -308,13 +308,13 @@ getActiveQueryMonitors =
     )
 
 
-queryMonitorByWidgetId :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe QueryMonitor)
-queryMonitorByWidgetId pid wId = Hasql.interpOne (selectFrom @QueryMonitor <> [HI.sql| WHERE project_id = #{pid} AND widget_id = #{wId} AND deleted_at IS NULL |])
+queryMonitorByWidgetId :: DB es => Projects.ProjectId -> Maybe UUID.UUID -> Text -> Eff es (Maybe QueryMonitor)
+queryMonitorByWidgetId pid dashboardId wId = Hasql.interpOne (selectFrom @QueryMonitor <> [HI.sql| WHERE project_id = #{pid} AND dashboard_id IS NOT DISTINCT FROM #{dashboardId}::uuid AND widget_id = #{wId} AND deleted_at IS NULL |])
 
 
-deleteMonitorsByWidgetIds :: DB es => Projects.ProjectId -> [Text] -> Eff es Int64
-deleteMonitorsByWidgetIds pid widgetIds =
-  Hasql.interpExecute [HI.sql|DELETE FROM monitors.query_monitors WHERE project_id = #{pid} AND widget_id = ANY(#{widgetIds}::text[])|]
+deleteMonitorsByWidgetIds :: DB es => Projects.ProjectId -> Maybe UUID.UUID -> [Text] -> Eff es Int64
+deleteMonitorsByWidgetIds pid dashboardId widgetIds =
+  Hasql.interpExecute [HI.sql|DELETE FROM monitors.query_monitors WHERE project_id = #{pid} AND dashboard_id IS NOT DISTINCT FROM #{dashboardId}::uuid AND widget_id = ANY(#{widgetIds}::text[])|]
 
 
 data WidgetAlertStatus = WidgetAlertStatus
@@ -331,8 +331,8 @@ data WidgetAlertStatus = WidgetAlertStatus
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake WidgetAlertStatus
 
 
-getWidgetAlertStatuses :: DB es => V.Vector Text -> Eff es [WidgetAlertStatus]
-getWidgetAlertStatuses widgetIds
+getWidgetAlertStatuses :: DB es => Projects.ProjectId -> UUID.UUID -> V.Vector Text -> Eff es [WidgetAlertStatus]
+getWidgetAlertStatuses pid dashboardId widgetIds
   | V.null widgetIds = pure []
   | otherwise =
       Hasql.interp
@@ -346,7 +346,7 @@ getWidgetAlertStatuses widgetIds
         warning_threshold,
         GREATEST(alert_last_triggered, warning_last_triggered)
       FROM monitors.query_monitors
-      WHERE widget_id = ANY(#{widgetIds}::text[])
+      WHERE project_id = #{pid} AND dashboard_id = #{dashboardId} AND widget_id = ANY(#{widgetIds}::text[])
         AND deleted_at IS NULL
         AND deactivated_at IS NULL
     |]

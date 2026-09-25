@@ -265,6 +265,7 @@ window.createFocusTrap = (container) => {
   const drawerSide = container.closest('.drawer-side')
 
   window.labelDrawer(container)
+  container.setAttribute('aria-modal', 'true')
   for (let node = drawerSide; node && node !== document.body; node = node.parentElement) {
     const parent = node.parentElement
     if (!parent) break
@@ -301,6 +302,7 @@ window.createFocusTrap = (container) => {
 
   container.addEventListener('keydown', handleKeydown)
   return () => {
+    container.removeAttribute('aria-modal')
     container.removeEventListener('keydown', handleKeydown)
     inerted.forEach(element => { element.inert = false })
     if (previousFocus?.isConnected) previousFocus.focus()

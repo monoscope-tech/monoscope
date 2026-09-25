@@ -1,15 +1,7 @@
 import { test, expect } from '@playwright/test';
-import { execFileSync } from 'node:child_process';
-import { DEMO_PROJECT } from './helpers';
+import { DEMO_PROJECT, sql } from './helpers';
 
 const url = `/p/${DEMO_PROJECT}/metrics`;
-// These fixtures only use the disposable database owned by scripts/e2e.sh.
-function sql(query: string) {
-  execFileSync('psql', ['-h', process.env.E2E_PGHOST ?? process.env.DB_HOST ?? 'localhost',
-    '-p', process.env.E2E_PGPORT ?? process.env.DB_PORT ?? '5432', '-U', 'postgres',
-    '-d', process.env.E2E_DB ?? 'monoscope_e2e', '-v', 'ON_ERROR_STOP=1', '-c', query],
-  { env: { ...process.env, PGPASSWORD: process.env.E2E_PGPASSWORD ?? 'postgres' }, stdio: 'pipe' });
-}
 const cleanup = `DELETE FROM otel_metrics WHERE project_id='${DEMO_PROJECT}' AND metric_name LIKE 'uxcatalog%';
 DELETE FROM otel_metrics_meta WHERE project_id='${DEMO_PROJECT}' AND metric_name LIKE 'uxcatalog%';`;
 
@@ -80,15 +72,21 @@ test.describe('metrics catalog', () => {
     const servicePicker = page.locator('#metric-service-picker summary');
     await servicePicker.focus();
     await page.keyboard.press('Enter');
-    await page.getByRole('searchbox', { name: 'Search services', exact: true }).fill('ux-checkout');
     const radio = page.getByRole('radio', { name: 'ux-checkout', exact: true });
     await expect(radio).toBeVisible();
-    // The search input refreshes the option list 200ms after the last keystroke, and a
-    // refresh landing after Space re-renders the radios with the pre-selection state —
-    // the intermittent metric_source=all CI failure. Let the refresh settle first.
-    await page.waitForLoadState('networkidle');
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    await page.route('**/metrics/services?**', async route => {
+      const response = await route.fetch();
+      await gate;
+      await route.fulfill({ response });
+    });
+    await page.getByRole('searchbox', { name: 'Search services', exact: true }).fill('ux-checkout');
+    await expect(page.getByRole('searchbox', { name: 'Search services', exact: true })).toHaveClass(/htmx-request/);
     await radio.focus();
     await page.keyboard.press('Space');
+    release();
+    await page.waitForLoadState('networkidle');
     await expect(radio).toBeChecked();
     await servicePicker.focus();
     await page.keyboard.press('Enter');

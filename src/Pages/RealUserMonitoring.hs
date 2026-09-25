@@ -350,11 +350,11 @@ otelSessionRowsRaw scope match sessionFilter =
           <> [HI.sql|)::bigint,
           MAX(attributes___user___id), MAX(attributes___user___full_name), MAX(attributes___user___email),
           MAX(resource___service___name),
-          first_value(|]
+          (ARRAY_AGG(|]
           <> pagePath
-          <> [HI.sql| ORDER BY timestamp DESC) FILTER (WHERE |]
+          <> [HI.sql| ORDER BY timestamp DESC, id DESC) FILTER (WHERE |]
           <> pageViewPredicate
-          <> [HI.sql|),
+          <> [HI.sql|))[1],
           MAX(COALESCE(NULLIF(attributes___user_agent___original, ''), resource___user_agent___original)),
           false
         FROM otel_logs_and_spans
@@ -411,11 +411,11 @@ enrichSessionRows scope rows = do
       $ Hasql.interp
         ( [HI.sql|
           SELECT attributes___session___id,
-            first_value(|]
+            (ARRAY_AGG(|]
             <> pagePath
             <> [HI.sql| ORDER BY timestamp DESC, id DESC) FILTER (WHERE |]
             <> pageViewPredicate
-            <> [HI.sql|),
+            <> [HI.sql|))[1],
             MAX(COALESCE(NULLIF(attributes___user_agent___original, ''), resource___user_agent___original))
           FROM otel_logs_and_spans
           WHERE |]
