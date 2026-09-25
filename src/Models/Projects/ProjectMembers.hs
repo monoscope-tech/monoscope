@@ -357,7 +357,7 @@ data Team = Team
 getTeams :: DB es => Projects.ProjectId -> Eff es [Team]
 getTeams pid =
   Hasql.interp
-    (selectFrom @Team <> [HI.sql| WHERE project_id = #{pid} AND deleted_at IS NULL |])
+    (selectFrom @Team <> [HI.sql| WHERE project_id = #{pid} AND deleted_at IS NULL ORDER BY is_everyone DESC, created_at ASC |])
 
 
 -- | The one 'TeamVM' projection (teams + their member objects); the caller only
