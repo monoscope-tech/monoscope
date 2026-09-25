@@ -117,6 +117,29 @@ spec = sequential $ aroundAll withTestResources do
       (_, page) <- testServant tr $ Pages.Issues.issueDetailGetH pid issue.id Nothing Nothing Nothing Nothing
       TL.toStrict (renderText $ toHtml page) `shouldContainAll` ["id=\"issue-contexts\"", "Santa Clara, US", "26.3.1", "Chrome", "exception_event"]
 
+    it "1c. releases and distinct users are tracked, and resolve-in-next-release holds until a new release" \tr -> do
+      apiKey <- createTestAPIKey tr pid "release-key"
+      let stack = "ReleaseError: probe\n    at probe (/app/src/release.js:1:1)"
+          emit rel extra at = do
+            ingestTraceWithExceptionAttrs tr apiKey (extra, [("service.version", rel)], []) "GET /api/release" "ReleaseError" "release probe" stack (addUTCTime at frozenTime)
+            drainExtractionWorker tr
+            void $ runAllBackgroundJobs frozenTime tr.trATCtx
+          current = runTestBg frozenTime tr (ErrorPatterns.getErrorPatterns pid Nothing 100 0) >>= maybe (fail "no ReleaseError") pure . find ((== "ReleaseError") . (.errorType))
+      emit "1.0" [("user.id", "u-1")] (-50)
+      emit "1.0" [("client.address", "10.0.0.9")] (-45)
+      emit "1.0" [("user.id", "u-1")] (-40)
+      p0 <- current
+      (p0.firstRelease, p0.lastRelease, p0.usersCount) `shouldBe` (Just "1.0", Just "1.0", 2)
+      issue <- runTestBg frozenTime tr (Issues.selectIssueByHash pid p0.hash Issues.AnyIssue) >>= maybe (fail "no ReleaseError issue") pure
+      (_, page) <- testServant tr $ Pages.Issues.issueDetailGetH pid issue.id Nothing Nothing Nothing Nothing
+      TL.toStrict (renderText $ toHtml page) `shouldContainAll` ["Distinct users affected", ">2<", "Last release", "next_release=true", "Resolve in the release after 1.0"]
+      void $ testServant tr $ Pages.Issues.resolveErrorPostH pid p0.id.unErrorPatternId True
+      emit "1.0" [] (-35)
+      (((.state) &&& (.resolvedInRelease)) <$> current) `shouldReturn` (ESResolved, Just "1.0")
+      emit "1.1" [] (-30)
+      p2 <- current
+      (p2.state, p2.lastRelease, p2.resolvedInRelease) `shouldBe` (ESRegressed, Just "1.1", Nothing)
+
     it "1b. ERROR-severity records produce error patterns — OTel exception.* (backend log) and error.* (Monoscope browser SDK)" \tr -> do
       -- OTLP log records never carry span events; internal browser spans often
       -- carry status_code=ERROR but no exception event. Both cases rely on the
@@ -528,7 +551,7 @@ spec = sequential $ aroundAll withTestResources do
 
           -- Resolve after the prior spike evaluations, not before their incident events.
           advanceMinutes tr 241
-          void $ testServant tr $ Pages.Issues.resolveErrorPostH pid errUuid
+          void $ testServant tr $ Pages.Issues.resolveErrorPostH pid errUuid False
           resolvedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
           fmap (.state) resolvedPat `shouldBe` Just ESResolved
           issue <- maybe (fail "resolved error has no customer issue") pure =<< runTestBg frozenTime tr (Issues.selectIssueByHash pid pat.hash Issues.AnyIssue)

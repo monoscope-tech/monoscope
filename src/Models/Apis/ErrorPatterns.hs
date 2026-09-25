@@ -26,6 +26,9 @@ module Models.Apis.ErrorPatterns (
   updateErrorPatternAnalysis,
   -- Error spike detection
   ErrorPatternWithCurrentRate (..),
+  upsertErrorPatternUsers,
+  userKey,
+  setResolvedInRelease,
   getErrorPatternsWithCurrentRates,
   findCanonicalMatch,
 )
@@ -132,6 +135,10 @@ data ErrorPattern = ErrorPattern
   , parentHash :: Maybe Text
   , isFramework :: Bool
   , resolvedBy :: Maybe Projects.UserId
+  , firstRelease :: Maybe Text
+  , lastRelease :: Maybe Text
+  , resolvedInRelease :: Maybe Text
+  , usersCount :: Int
   }
   deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow, NFData)
@@ -497,11 +504,11 @@ batchUpsertErrorPatterns pid errors now =
     <$> Hasql.interp
       [HI.sql| INSERT INTO apis.error_patterns (
             project_id, error_type, message, stacktrace, hash, parent_hash, shape_hash, is_framework,
-            environment, service, runtime, error_data,
+            environment, service, runtime, error_data, first_release, last_release,
             first_trace_id, first_trace_at, recent_trace_id, recent_trace_at,
             occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h)
           SELECT #{pid}, u.error_type, u.message, u.stacktrace, u.hash, u.parent_hash, u.shape_hash, u.is_framework,
-                 u.environment, u.service, u.runtime, u.error_data,
+                 u.environment, u.service, u.runtime, u.error_data, u.release, u.release,
                  u.trace_id, CASE WHEN u.trace_id IS NOT NULL THEN u.event_at END,
                  u.trace_id, CASE WHEN u.trace_id IS NOT NULL THEN u.event_at END, u.cnt, u.cnt, u.cnt, u.cnt
           FROM (SELECT unnest(#{errorTypes}::text[]) AS error_type, unnest(#{messages}::text[]) AS message,
@@ -509,15 +516,18 @@ batchUpsertErrorPatterns pid errors now =
                        unnest(#{parentHashes}::text[]) AS parent_hash, unnest(#{shapeHashes}::text[]) AS shape_hash,
                        unnest(#{isFrameworks}::bool[]) AS is_framework,
                        unnest(#{environments}::text[]) AS environment, unnest(#{services}::text[]) AS service,
-                       unnest(#{runtimes}::text[]) AS runtime, unnest(#{errorDatas}::jsonb[]) AS error_data,
+                       unnest(#{runtimes}::text[]) AS runtime, unnest(#{errorDatas}::jsonb[]) AS error_data, unnest(#{releases}::text[]) AS release,
                        unnest(#{traceIds}::text[]) AS trace_id, unnest(#{eventTimes}::timestamptz[]) AS event_at, unnest(#{counts}::bigint[]) AS cnt) u
           ON CONFLICT (project_id, hash) DO UPDATE SET
             updated_at = #{now},
+            first_release = COALESCE(apis.error_patterns.first_release, EXCLUDED.first_release),
+            last_release = COALESCE(EXCLUDED.last_release, apis.error_patterns.last_release),
+            resolved_in_release = CASE WHEN ^{regresses} THEN NULL ELSE apis.error_patterns.resolved_in_release END,
             -- Toastable columns (message, error_data, parent_hash) are content-derived from hash
             -- and refreshed only on regression to avoid pg_toast bloat from per-occurrence rewrites.
-            message = CASE WHEN apis.error_patterns.state = 'resolved' THEN EXCLUDED.message ELSE apis.error_patterns.message END,
-            error_data = CASE WHEN apis.error_patterns.state = 'resolved' THEN EXCLUDED.error_data ELSE apis.error_patterns.error_data END,
-            parent_hash = CASE WHEN apis.error_patterns.state = 'resolved' THEN EXCLUDED.parent_hash ELSE apis.error_patterns.parent_hash END,
+            message = CASE WHEN ^{regresses} THEN EXCLUDED.message ELSE apis.error_patterns.message END,
+            error_data = CASE WHEN ^{regresses} THEN EXCLUDED.error_data ELSE apis.error_patterns.error_data END,
+            parent_hash = CASE WHEN ^{regresses} THEN EXCLUDED.parent_hash ELSE apis.error_patterns.parent_hash END,
             -- Write-once, which is how the 23,372 rows that predate the column acquire
             -- one: a row takes its shape the next time it occurs and never pays a
             -- rewrite after that. Unconditional assignment here would rewrite a column
@@ -552,11 +562,11 @@ batchUpsertErrorPatterns pid errors now =
             occurrences_5m = apis.error_patterns.occurrences_5m + EXCLUDED.occurrences_1m,
             occurrences_1h = apis.error_patterns.occurrences_1h + EXCLUDED.occurrences_1m,
             occurrences_24h = apis.error_patterns.occurrences_24h + EXCLUDED.occurrences_1m,
-            quiet_minutes = CASE WHEN apis.error_patterns.state = 'resolved' THEN 0 ELSE apis.error_patterns.quiet_minutes END,
-            state = CASE WHEN apis.error_patterns.state = 'resolved' THEN 'regressed' ELSE apis.error_patterns.state END,
+            quiet_minutes = CASE WHEN ^{regresses} THEN 0 ELSE apis.error_patterns.quiet_minutes END,
+            state = CASE WHEN ^{regresses} THEN 'regressed' ELSE apis.error_patterns.state END,
             resolved_by = NULL,
-            regressed_at = CASE WHEN apis.error_patterns.state = 'resolved' THEN #{now} ELSE apis.error_patterns.regressed_at END,
-            regression_count = CASE WHEN apis.error_patterns.state = 'resolved'
+            regressed_at = CASE WHEN ^{regresses} THEN #{now} ELSE apis.error_patterns.regressed_at END,
+            regression_count = CASE WHEN ^{regresses}
                                     THEN apis.error_patterns.regression_count + 1
                                     ELSE apis.error_patterns.regression_count END
           RETURNING hash, CASE
@@ -583,6 +593,55 @@ batchUpsertErrorPatterns pid errors now =
     -- page off to fetch "trace ''" — every trace-less row in the window.
     traceIds = V.map (mfilter (not . T.null) . (.traceId)) errs
     eventTimes = V.map (.when) errs
+    releases = V.map (.release) errs
+    -- A resolved pattern regresses on its next occurrence, unless it was resolved "in
+    -- next release" and the occurrence still reports that release.
+    regresses =
+      [HI.sql| apis.error_patterns.state = 'resolved'
+               AND (apis.error_patterns.resolved_in_release IS NULL
+                    OR EXCLUDED.last_release IS DISTINCT FROM apis.error_patterns.resolved_in_release) |]
+
+
+-- | Record each error's affected users and bump @users_count@ by the ones not seen
+-- before, in one statement. A user is keyed by the most specific OTel identity the
+-- event carries: @user.id@, then @user.email@, then @client.address@.
+upsertErrorPatternUsers :: DB es => Projects.ProjectId -> V.Vector ATError -> Eff es Int64
+upsertErrorPatternUsers pid errs
+  | V.null keyed = pure 0
+  | otherwise =
+      Hasql.interpExecute
+        [HI.sql|
+          WITH ins AS (
+            INSERT INTO apis.error_pattern_users (project_id, error_id, user_key)
+            SELECT DISTINCT e.project_id, e.id, u.user_key
+            FROM (SELECT unnest(#{hashes}::text[]) AS hash, unnest(#{keys}::text[]) AS user_key) u
+            JOIN apis.error_patterns e ON e.project_id = #{pid} AND e.hash = u.hash
+            ON CONFLICT DO NOTHING
+            RETURNING error_id)
+          UPDATE apis.error_patterns p SET users_count = p.users_count + c.n
+          FROM (SELECT error_id, count(*) AS n FROM ins GROUP BY error_id) c
+          WHERE p.id = c.error_id |]
+  where
+    keyed = V.mapMaybe (\e -> (e.hash,) <$> userKey e) errs
+    (hashes, keys) = V.unzip keyed
+
+
+-- | The identity 'upsertErrorPatternUsers' counts a user by.
+--
+-- >>> userKey (def{userEmail = Just "a@b.c", userIp = Just "1.2.3.4"} :: ATError)
+-- Just "email:a@b.c"
+-- >>> userKey (def :: ATError)
+-- Nothing
+userKey :: ATError -> Maybe Text
+userKey e = asum [("id:" <>) <$> e.userId, ("email:" <>) <$> e.userEmail, ("ip:" <>) <$> e.userIp]
+
+
+-- | "Resolve in next release" pins the release the pattern is resolved in, so
+-- occurrences still reporting it do not regress it; a plain resolve clears it.
+setResolvedInRelease :: DB es => ErrorPatternId -> Bool -> Eff es Int64
+setResolvedInRelease eid inNextRelease =
+  Hasql.interpExecute
+    [HI.sql| UPDATE apis.error_patterns SET resolved_in_release = CASE WHEN #{inNextRelease} THEN last_release END WHERE id = #{eid} |]
 
 
 -- | Batch upsert hourly rollup stats. Takes (hash, event_count, user_count) triples and

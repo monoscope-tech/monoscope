@@ -734,8 +734,8 @@ railSection_ title body = section_ [class_ "py-4 border-b border-strokeWeak last
 --
 -- Absent cells are omitted, not rendered as "Unknown service": an issue with no
 -- environment set is not an issue in an environment called Unknown.
-issueFactRow_ :: UTCTime -> Issues.Issue -> (UTCTime, UTCTime) -> Html ()
-issueFactRow_ now issue (firstSeen, lastSeen) =
+issueFactRow_ :: UTCTime -> Issues.Issue -> Maybe ErrorPatterns.ErrorPattern -> (UTCTime, UTCTime) -> Html ()
+issueFactRow_ now issue errM (firstSeen, lastSeen) =
   railSection_ "Seen"
     $ dl_ [class_ "grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-sm"]
     $ forM_ facts \(lbl, value, tip) -> do
@@ -745,7 +745,12 @@ issueFactRow_ now issue (firstSeen, lastSeen) =
     nonBlank = mfilter (not . T.null . T.strip)
     facts =
       [("Last seen", agoText now lastSeen, formatUTC lastSeen), ("First seen", agoText now firstSeen, formatUTC firstSeen)]
-        <> catMaybes [(\sv -> ("Service", sv, sv)) <$> nonBlank issue.service, (\e -> ("Environment", e, e)) <$> nonBlank issue.environment]
+        <> catMaybes
+          [ (\r -> ("First release", r, r)) <$> (errM >>= (.firstRelease))
+          , (\r -> ("Last release", r, r)) <$> (errM >>= (.lastRelease))
+          , (\sv -> ("Service", sv, sv)) <$> nonBlank issue.service
+          , (\e -> ("Environment", e, e)) <$> nonBlank issue.environment
+          ]
 
 
 -- | Banner stating, in words, what the issue's current state means for
@@ -821,7 +826,7 @@ issueDetailPage v@IssueView{..} = div_ [class_ "flex h-full overflow-hidden rela
         issueAggregate_ v
         eventCard_ v
       aside_ [class_ "min-w-0 max-md:px-3 px-4 xl:border-l max-xl:border-t border-strokeWeak"] do
-        issueFactRow_ now issue
+        issueFactRow_ now issue ((.base) <$> errM)
           $ maybe
             (zonedTimeToUTC issue.createdAt, zonedTimeToUTC issue.updatedAt)
             (\errL -> (zonedTimeToUTC errL.base.createdAt, zonedTimeToUTC errL.base.updatedAt))
@@ -879,15 +884,20 @@ issueHeader_ IssueView{..} = header_ [class_ "max-md:px-3 px-4 max-md:pt-4 pt-6 
           Nothing -> unparsablePayload_
     -- The chart's own total, hoisted: `naked` suppresses the widget's value slot, so
     -- this is the only place it renders and it cannot disagree with the chart.
-    when (isJust $ Issues.hashPrefix issue.issueType)
-      $ div_ [class_ "shrink-0 flex flex-col items-end gap-1 leading-none", term "data-tippy-content" "Events in the selected range"] do
-        span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] "Events"
-        Widget.widgetValueSlotAs_ (issueChartId issue) Nothing
+    div_ [class_ "shrink-0 flex gap-6"] do
+      when (isJust $ Issues.hashPrefix issue.issueType)
+        $ div_ [class_ "flex flex-col items-end gap-1 leading-none", term "data-tippy-content" "Events in the selected range"] do
+          span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] "Events"
+          Widget.widgetValueSlotAs_ (issueChartId issue) Nothing
+      -- Distinct users by user.id / user.email / client.address, all time.
+      whenJust errM \errL -> div_ [class_ "flex flex-col items-end gap-1 leading-none", term "data-tippy-content" "Distinct users affected, all time"] do
+        span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] "Users"
+        span_ [class_ "text-2xl font-semibold text-textStrong tabular-nums leading-none"] $ toHtml $ formatWithCommas (fromIntegral errL.base.usersCount :: Double)
   div_ [class_ "flex flex-wrap items-center gap-2"] do
     issueAcknowledgeButton pid issue.id now (zonedTimeToUTC <$> issue.acknowledgedUntil <* issue.acknowledgedAt)
     issueArchiveButton pid issue.id (isJust issue.archivedAt)
     whenJust errM \errL -> do
-      errorResolveAction pid errL.base.id errL.base.state canResolve
+      errorResolveAction pid errL.base errL.base.state canResolve
       errorSubscriptionAction pid errL.base
 
 
@@ -1280,25 +1290,22 @@ aiSidePanel_ pid issueId = do
     anomalyAIChatBody_ pid issueId
 
 
-errorResolveAction :: Projects.ProjectId -> ErrorPatterns.ErrorPatternId -> ErrorPatterns.ErrorState -> Bool -> Html ()
-errorResolveAction pid errId errState canResolve =
+-- | Resolve control; @errState@ is passed separately because the handler renders the
+-- post-resolve state before the pattern is re-read.
+errorResolveAction :: Projects.ProjectId -> ErrorPatterns.ErrorPattern -> ErrorPatterns.ErrorState -> Bool -> Html ()
+errorResolveAction pid err errState canResolve =
   when canResolve do
-    let actionUrl = "/p/" <> pid.toText <> "/issues/errors/" <> UUID.toText errId.unErrorPatternId <> "/resolve"
-    div_ [id_ "error-resolve-action"] do
+    let actionUrl = "/p/" <> pid.toText <> "/issues/errors/" <> UUID.toText err.id.unErrorPatternId <> "/resolve"
+        resolveBtn url lbl tip = button_ [class_ "btn btn-sm btn-ghost join-item gap-1.5 text-textSuccess hover:bg-fillSuccess-weak", Aria.label_ tip, term "data-tippy-content" tip, hxPost_ url, hxTarget_ "#error-resolve-action", hxSwap_ "outerHTML"] lbl
+    div_ [id_ "error-resolve-action", class_ "join"] do
       if errState == ErrorPatterns.ESResolved
         then button_ [class_ "btn btn-sm btn-ghost text-textWeak", disabled_ "true"] do
           faSprite_ "circle-check" "regular" "w-4 h-4"
-          span_ [class_ "max-md:hidden"] "Resolved"
-        else button_
-          [ class_ "btn btn-sm btn-ghost gap-1.5 text-textSuccess hover:bg-fillSuccess-weak"
-          , Aria.label_ "Resolve issue"
-          , hxPost_ actionUrl
-          , hxTarget_ "#error-resolve-action"
-          , hxSwap_ "outerHTML"
-          ]
-          do
-            faSprite_ "circle-check" "regular" "w-4 h-4"
-            span_ [class_ "max-md:hidden"] "Resolve"
+          span_ [class_ "max-md:hidden"] $ toHtml $ maybe "Resolved" ("Resolved after " <>) err.resolvedInRelease
+        else do
+          resolveBtn actionUrl (faSprite_ "circle-check" "regular" "w-4 h-4" >> span_ [class_ "max-md:hidden"] "Resolve") "Resolve issue"
+          -- Occurrences still reporting this release will not reopen it; a newer one will.
+          whenJust err.lastRelease \rel -> resolveBtn (actionUrl <> "?next_release=true") (span_ [class_ "text-xs"] "in next release") ("Resolve in the release after " <> rel)
 
 
 errorSubscriptionAction :: Projects.ProjectId -> ErrorPatterns.ErrorPattern -> Html ()
@@ -1383,8 +1390,8 @@ assignErrorPostH pid errUuid form = do
                     $ bool (fullName <> " (" <> emailText <> ")") emailText (T.null fullName)
 
 
-resolveErrorPostH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (Html ()))
-resolveErrorPostH pid errUuid = do
+resolveErrorPostH :: Projects.ProjectId -> UUID.UUID -> Bool -> ATAuthCtx (RespHeaders (Html ()))
+resolveErrorPostH pid errUuid inNextRelease = do
   (sess, _project) <- Projects.sessionAndProject pid
   errM <- ErrorPatterns.getErrorPatternById (ErrorPatterns.ErrorPatternId errUuid)
   userPermission <- ProjectMembers.getUserPermission pid sess.user.id
@@ -1395,23 +1402,24 @@ resolveErrorPostH pid errUuid = do
       | err.projectId /= pid -> addErrorToast "Error not found for this project" Nothing >> addRespHeaders mempty
       | not (canResolve err) -> do
           addErrorToast "You do not have permission to resolve this error" Nothing
-          addRespHeaders $ errorResolveAction pid err.id err.state False
+          addRespHeaders $ errorResolveAction pid err err.state False
       | otherwise -> do
           now <- Time.currentTime
           ctx <- ask @AuthContext
           let projectUrl = hostPath ctx.env.hostUrl $ "p/" <> pid.toText
               message iid = Mail.resolvedErrorMessage err sess.user now projectUrl (((projectUrl <> "/issues/") <>) . (.toText) <$> iid)
               resolved = do
-                addSuccessToast "Error resolved" Nothing
-                addRespHeaders $ errorResolveAction pid err.id ErrorPatterns.ESResolved True
+                void $ ErrorPatterns.setResolvedInRelease err.id inNextRelease
+                addSuccessToast (maybe "Error resolved" ("Resolved in the release after " <>) (err.lastRelease <* guard inNextRelease)) Nothing
+                addRespHeaders $ errorResolveAction pid err ErrorPatterns.ESResolved True
           Incidents.resolveErrorIncident pid err.id sess.user.id now message >>= \case
             Incidents.ErrorResolutionDenied -> do
               addErrorToast "You do not have permission to resolve this error" Nothing
-              addRespHeaders $ errorResolveAction pid err.id err.state False
+              addRespHeaders $ errorResolveAction pid err err.state False
             Incidents.ErrorResolutionConflict conflict -> do
               Log.logAttention "Error resolution could not commit incident updates" (pid, err.id, show @Text conflict)
               addErrorToast "The incident changed. Refresh and try resolving again." Nothing
-              addRespHeaders $ errorResolveAction pid err.id err.state False
+              addRespHeaders $ errorResolveAction pid err err.state False
             Incidents.ErrorResolved -> resolved
             Incidents.ErrorAlreadyResolved -> resolved
 

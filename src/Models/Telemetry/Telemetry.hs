@@ -2234,9 +2234,11 @@ atErrorFrom :: OtelLogsAndSpans -> ErrorPatterns.CaptureMechanism -> Maybe Bool 
 atErrorFrom spanObj mechanism handled typ msg stack =
   let attrs = unAesonTextMaybe spanObj.attributes
       resc = unAesonTextMaybe spanObj.resource
-      getSpanAttr k = attrs >>= Map.lookup k >>= valText
+      -- Attributes arrive both flat ("client.address") and nested by ingest's dot-notation
+      -- expansion ({client: {address}}), so each key is tried both ways.
+      getSpanAttr k = (attrs >>= Map.lookup k >>= valText) <|> atMapText k attrs
       getUserAttrM k v = valText =<< Map.lookup k =<< jsonToMap =<< Map.lookup v =<< resc
-      getIdentityAttrM k namespaces = asum [getUserAttrM k namespace | namespace <- namespaces]
+      getIdentityAttrM k namespaces = asum [getSpanAttr (namespace <> "." <> k) <|> getUserAttrM k namespace | namespace <- namespaces]
       method = getSpanAttr "http.request.method"
       urlPath = getSpanAttr "http.route" <|> getSpanAttr "http.target"
       -- TODO: parse telemetry.sdk.name to SDKTypes
@@ -2247,7 +2249,7 @@ atErrorFrom spanObj mechanism handled typ msg stack =
       rt = EF.parseRuntime $ fromMaybe "" tech
       -- Span attribute first, resource second: browser SDKs put user_agent/geo on the
       -- span, mobile SDKs put os/device on the resource.
-      attr k = atMapText k attrs <|> atMapText k resc
+      attr k = getSpanAttr k <|> atMapText k resc
       withVersion n v = n <&> \n' -> maybe n' (\v' -> n' <> " " <> v') v
       ua = attr "user_agent.original"
       (uaBrowser, uaOs, uaDevice) = maybe (Nothing, Nothing, Nothing) ((\(b, o, d) -> (known b, known o, Just d)) . classifyUserAgent) ua

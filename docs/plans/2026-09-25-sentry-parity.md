@@ -10,7 +10,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (commit).
       (MaxMind GeoLite2 `.mmdb`, path from env, optional).
 - [~] A2 Releases — `service.version` (resource). First/last seen release on the pattern, release
       markers on the chart, "resolve in next release".
-- [ ] A3 Users affected — distinct `enduser.id` / `user.id` / `client.address` per issue.
+- [x] A3 Users affected — distinct `enduser.id` / `user.id` / `client.address` per issue.
 - [x] A4 Error details — handled = not `exception.escaped`; mechanism = the signal it came from
       (exception event / log record / span status); level = `severity_text` / span status.
 - [x] A5 Browser / OS / device on errors — `user_agent.original` (parsed), `browser.*`, `os.*`,
@@ -59,6 +59,11 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (commit).
   signal), mechanism = the signal the error came from (exception event / log record / span status).
 - A1 so far reads `geo.*` when the SDK or a collector processor sets it; GeoIP from `client.address`
   still needs a provider decision (below).
+- A2 done: first/last release columns, "resolve in next release" (`resolved_in_release`; any other
+  `service.version` counts as newer, Sentry's non-semver rule). Still open: release markers on the chart.
+- A3: `apis.error_pattern_users` + `users_count`, keyed `id:`/`email:`/`ip:` in that order.
+- Found while doing A3: span attributes arrive nested, so flat lookups of `client.address`,
+  `http.request.method` and `http.route` had silently never matched; `getSpanAttr` now tries both.
 - A6 so far captures `thread.id`/`thread.name`; attachments need a storage decision.
 
 ## Decisions needed

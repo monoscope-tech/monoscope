@@ -23,9 +23,9 @@ import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import Network.Wreq qualified as Wreq
-import Pages.Issues qualified as IssuesPage
 import Pages.Bots.BotTestHelpers (receiveSlackEvent, setupSlackData, slackRootEvent, withHTTPResponses)
 import Pages.Bots.Slack qualified as SlackPage
+import Pages.Issues qualified as IssuesPage
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
@@ -106,7 +106,7 @@ spec = around withTestResources do
       advanceMinutes tr 1
       (silenced, _) <- captureNotifs tr $ notifyErrorSubscriptions testPid [sample.hash]
       messages silenced `shouldBe` []
-      void $ testServant tr $ IssuesPage.resolveErrorPostH testPid notified.id.unErrorPatternId
+      void $ testServant tr $ IssuesPage.resolveErrorPostH testPid notified.id.unErrorPatternId False
       (closed, _) <- captureNotifs tr $ replicateM_ 2 runSlackIncidentDeliveries
       length (messages closed) `shouldBe` 4
       for_ (messages closed) \sd -> AE.encode sd.payload `shouldSatisfy` (T.isInfixOf "RESOLVED" . decodeUtf8 . toStrict)
@@ -156,7 +156,7 @@ spec = around withTestResources do
       (ongoing.id, ongoing.issueId) `shouldBe` (episode.id, Just issue.id)
       void $ captureNotifs tr $ replicateM_ 2 runSlackIncidentDeliveries
       advanceMinutes tr 1
-      void $ testServant tr $ IssuesPage.resolveErrorPostH testPid err.id.unErrorPatternId
+      void $ testServant tr $ IssuesPage.resolveErrorPostH testPid err.id.unErrorPatternId False
       fmap (.phase) <$> runTestBgNoReset tr (I.getEpisode testPid episode.id) `shouldReturn` Just I.EpisodeResolved
       (resolution, _) <- captureNotifs tr $ replicateM_ 2 runSlackIncidentDeliveries
       let messages = [sd | Notify.SlackNotification sd <- resolution]
@@ -183,7 +183,7 @@ spec = around withTestResources do
       void $ captureNotifs tr runSlackIncidentDeliveries
       void $ withResource tr.trPool \conn -> PGS.execute conn [sql|DELETE FROM apis.issues WHERE id = ?|] (PGS.Only nextIssue.id)
       advanceMinutes tr 1
-      void $ testServant tr $ IssuesPage.resolveErrorPostH testPid err.id.unErrorPatternId
+      void $ testServant tr $ IssuesPage.resolveErrorPostH testPid err.id.unErrorPatternId False
       fmap (.phase) <$> runTestBgNoReset tr (I.getEpisode testPid recurring.id) `shouldReturn` Just I.EpisodeResolved
       (orphaned, _) <- captureNotifs tr $ replicateM_ 2 runSlackIncidentDeliveries
       let orphanedMessages = [sd | Notify.SlackNotification sd <- orphaned]
@@ -208,7 +208,7 @@ spec = around withTestResources do
       void $ captureNotifs tr runSlackIncidentDeliveries
       advanceMinutes tr 1
       void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = ? AND user_id = ?|] (testPid, actor.id)
-      void $ testServant tr $ IssuesPage.resolveErrorPostH testPid err.id.unErrorPatternId
+      void $ testServant tr $ IssuesPage.resolveErrorPostH testPid err.id.unErrorPatternId False
       Just denied <- runTestBgNoReset tr $ Errors.getErrorPatternById err.id
       denied.state `shouldBe` Errors.ESNew
       let resolve pid = runTestBgNoReset tr $ I.resolveErrorIncident pid err.id actor.id (addUTCTime 60 frozenTime) (const update.rootPayload)
@@ -222,7 +222,7 @@ spec = around withTestResources do
       withResource tr.trPool \conn -> do
         void $ PGS.execute conn [sql|UPDATE projects.project_members SET active = true WHERE project_id = ? AND user_id = ?|] (testPid, actor.id)
         void $ PGS.execute_ conn [sql|ALTER TABLE apis.slack_incident_deliveries ADD CONSTRAINT reject_resolution CHECK (false) NOT VALID|]
-      testServant tr (IssuesPage.resolveErrorPostH testPid err.id.unErrorPatternId) `shouldThrow` anyException
+      testServant tr (IssuesPage.resolveErrorPostH testPid err.id.unErrorPatternId False) `shouldThrow` anyException
       Just rolledBack <- runTestBgNoReset tr $ Errors.getErrorPatternById err.id
       (rolledBack.state, rolledBack.resolvedAt, rolledBack.resolvedBy) `shouldBe` (Errors.ESNew, Nothing, Nothing)
       activityBefore <- runTestBgNoReset tr $ Issues.selectIssueActivity testPid issue.id
@@ -230,10 +230,10 @@ spec = around withTestResources do
       void $ withResource tr.trPool \conn -> PGS.execute_ conn [sql|ALTER TABLE apis.slack_incident_deliveries DROP CONSTRAINT reject_resolution|]
       void
         $ concurrently
-          (testServant tr $ IssuesPage.resolveErrorPostH testPid err.id.unErrorPatternId)
-          (testServant tr $ IssuesPage.resolveErrorPostH testPid err.id.unErrorPatternId)
+          (testServant tr $ IssuesPage.resolveErrorPostH testPid err.id.unErrorPatternId False)
+          (testServant tr $ IssuesPage.resolveErrorPostH testPid err.id.unErrorPatternId False)
       fmap (.phase) <$> runTestBgNoReset tr (I.getEpisode testPid episode.id) `shouldReturn` Just I.EpisodeResolved
-      void $ testServant tr $ IssuesPage.resolveErrorPostH testPid err.id.unErrorPatternId
+      void $ testServant tr $ IssuesPage.resolveErrorPostH testPid err.id.unErrorPatternId False
       events <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT event_kind, actor_id FROM apis.incident_events WHERE episode_id = ? AND event_kind <> 'alert'|] (PGS.Only episode.id)
       events `shouldBe` [("resolved" :: Text, Just actor.id)]
       activity <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT event, created_by FROM apis.issue_activity_log WHERE issue_id = ? AND event IN ('resolved', 'auto_resolved')|] (PGS.Only issue.id)
@@ -278,7 +278,7 @@ spec = around withTestResources do
       void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE projects.project_members SET permission = 'edit' WHERE project_id = ? AND user_id = ?|] (testPid, actor.id)
       let deliveryCount = withResource tr.trPool \conn -> PGS.query_ conn [sql|SELECT count(*) FROM apis.slack_incident_deliveries|] :: IO [PGS.Only Int64]
       beforeLegacy <- deliveryCount
-      void $ testServant tr $ IssuesPage.resolveErrorPostH testPid legacyErr.id.unErrorPatternId
+      void $ testServant tr $ IssuesPage.resolveErrorPostH testPid legacyErr.id.unErrorPatternId False
       deliveryCount `shouldReturn` beforeLegacy
       Just legacyResolved <- runTestBgNoReset tr $ Errors.getErrorPatternById legacyErr.id
       (legacyResolved.state, legacyResolved.resolvedBy) `shouldBe` (Errors.ESResolved, Just actor.id)
