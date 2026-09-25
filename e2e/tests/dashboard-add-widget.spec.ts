@@ -397,7 +397,7 @@ test("a dashboard needing a variable asks for it instead of covering itself", as
 });
 
 
-test("dashboard bulk assignment asks for a team before saving", async ({ page }) => {
+test("dashboard teams default to @everyone and support bulk add and removal", async ({ page }) => {
   const title = `E2E Teams ${Date.now()}`;
   for (const suffix of ["A", "B"]) await makeDashboard(page, `${title} ${suffix}`);
   const team = `e2e-team-${Date.now()}`;
@@ -410,16 +410,124 @@ test("dashboard bulk assignment asks for a team before saving", async ({ page })
   await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
   const rows = page.getByRole("row").filter({ has: page.getByRole("link", { name: title }) });
   await expect(rows).toHaveCount(2);
+  for (const row of await rows.all()) await expect(row.getByText("@everyone", { exact: true }).filter({ visible: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Manage teams", exact: true })).toBeHidden();
   for (const checkbox of await rows.getByRole("checkbox").all()) await checkbox.check();
-  await page.getByRole("button", { name: "Add teams", exact: true }).click();
+  page.once("dialog", dialog => dialog.dismiss());
+  await page.getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(rows).toHaveCount(2);
   const picker = page.getByRole("group", { name: "Teams", exact: true });
-  await page.getByRole("button", { name: "Apply teams", exact: true }).click();
-  await expect(page.getByText("Select at least one team", { exact: true })).toBeVisible();
-  await picker.getByRole("checkbox", { name: team, exact: true }).check();
-  await page.getByRole("button", { name: "Apply teams", exact: true }).click();
-  for (const row of await rows.all()) await expect(row.getByText(team, { exact: true }).filter({ visible: true })).toBeVisible();
-  await page.reload();
-  for (const row of await rows.all()) await expect(row.getByText(team, { exact: true }).filter({ visible: true })).toBeVisible();
+  const operations: [string, string, string[]][] = [
+    ["Add teams", `@${team}`, ["@everyone", `@${team}`]],
+    ["Add teams", `@${team}`, ["@everyone", `@${team}`]],
+    ["Remove teams", "@everyone", [`@${team}`]],
+    ["Remove teams", `@${team}`, []],
+    ["Add teams", "@everyone", ["@everyone"]],
+  ];
+  for (const [action, handle, expected] of operations) {
+    for (const checkbox of await rows.getByRole("checkbox").all()) await checkbox.check();
+    await page.getByRole("button", { name: "Manage teams", exact: true }).press("Enter");
+    await expect(picker.getByRole("checkbox").first()).toHaveAccessibleName("@everyone");
+    await expect(picker.getByRole("checkbox").first()).toBeInViewport();
+    await page.getByRole("button", { name: action, exact: true }).click();
+    await expect(page.getByText("Select at least one team", { exact: true })).toBeVisible();
+    await picker.getByRole("checkbox", { name: handle, exact: true }).check();
+    await page.getByRole("button", { name: action, exact: true }).click();
+    await expect(picker).toBeHidden();
+    await page.reload();
+    for (const row of await rows.all()) {
+      for (const handle of ["@everyone", `@${team}`]) {
+        await expect(row.getByText(handle, { exact: true }).filter({ visible: true })).toHaveCount(expected.includes(handle) ? 1 : 0);
+      }
+    }
+  }
+  for (const checkbox of await rows.getByRole("checkbox").all()) await checkbox.check();
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("button", { name: "Delete", exact: true }).click();
+  await expect(rows).toHaveCount(0);
+});
+
+test("dashboard team requests show progress and retain choices after failures", async ({ page }) => {
+  await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
+  await page.locator(".bulkactionItemCheckbox").first().check();
+  await page.getByRole("button", { name: "Manage teams", exact: true }).click();
+  const picker = page.locator("#dashboard-teams");
+  const everyone = picker.getByRole("checkbox", { name: "@everyone", exact: true });
+  await everyone.check();
+  for (const [action, pending] of [["Add teams", "Adding…"], ["Remove teams", "Removing…"]]) {
+    for (const failure of ["server", "network"]) {
+      let release!: () => void;
+      const held = new Promise<void>(resolve => { release = resolve; });
+      await page.route("**/bulk_action/*", async route => {
+        await held;
+        if (failure === "server") await route.fulfill({ status: 500, body: "Unavailable" });
+        else await route.abort("failed");
+      });
+      try {
+        await picker.getByRole("button", { name: action, exact: true }).click();
+        await expect(picker.getByRole("button", { name: pending, exact: true })).toBeDisabled();
+        for (const button of await picker.getByRole("button").all()) await expect(button).toBeDisabled();
+        await expect(picker.getByRole("alert")).toBeHidden();
+      } finally {
+        release();
+      }
+      await expect(picker.getByRole("alert")).toContainText("Try again");
+      await expect(everyone).toBeChecked();
+      for (const button of await picker.getByRole("button").all()) await expect(button).toBeEnabled();
+      await page.unroute("**/bulk_action/*");
+    }
+  }
+  await page.route("**/bulk_action/*", route => route.fulfill({ status: 204 }));
+  await picker.getByRole("button", { name: "Add teams", exact: true }).click();
+  await expect(picker.getByRole("alert")).toBeHidden();
+  await expect(picker.getByRole("button", { name: "Add teams", exact: true })).toBeEnabled();
+});
+
+test("dashboard team selection has names, counts, and searchable choices", async ({ page }) => {
+  await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
+  const checkboxes = page.locator(".bulkactionItemCheckbox");
+  for (const row of await page.getByRole("row").filter({ has: checkboxes }).all()) {
+    const title = await row.getByRole("link").first().innerText();
+    await expect(row.getByRole("checkbox")).toHaveAccessibleName(`Select ${title}`);
+  }
+  await checkboxes.nth(0).check();
+  await checkboxes.nth(1).check();
+  await expect(page.getByText("2 selected", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Manage teams", exact: true }).click();
+  const picker = page.locator("#dashboard-teams");
+  await expect(picker.getByRole("heading", { name: "Teams for 2 dashboards", exact: true })).toBeVisible();
+  const search = picker.getByRole("searchbox", { name: "Find a team", exact: true });
+  await search.fill("  EVERYONE  ");
+  await expect(picker.getByRole("checkbox")).toHaveCount(1);
+  await picker.getByRole("checkbox", { name: "@everyone", exact: true }).check();
+  await search.fill("no-such-team");
+  await expect(picker.getByText("No teams match your search.", { exact: true })).toBeVisible();
+  await search.fill("");
+  await expect(picker.getByRole("checkbox").first()).toBeChecked();
+  await page.keyboard.press("Escape");
+  await checkboxes.nth(1).uncheck();
+  await expect(page.getByText("1 selected", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Manage teams", exact: true }).click();
+  await expect(picker.getByRole("heading", { name: "Teams for 1 dashboard", exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.getByRole("checkbox", { name: "Select All", exact: true }).check();
+  await expect(page.getByText(`${await checkboxes.count()} selected`, { exact: true })).toBeVisible();
+  await page.getByRole("checkbox", { name: "Select All", exact: true }).uncheck();
+  await expect(page.getByRole("button", { name: "Manage teams", exact: true })).toBeHidden();
+});
+
+test("dashboard team actions remain reachable on mobile", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
+  await page.locator(".bulkactionItemCheckbox").first().check();
+  await page.getByRole("button", { name: "Manage teams", exact: true }).click();
+  await expect(page.locator("#dashboard-teams")).toBeInViewport({ ratio: 1 });
+  await expect(page.getByRole("button", { name: "Remove teams", exact: true })).toBeInViewport({ ratio: 1 });
+  for (const target of await page.locator("#dashboard-teams button, #dashboard-teams label").all()) {
+    expect(await target.evaluate(el => (el as HTMLElement).offsetHeight)).toBeGreaterThanOrEqual(44);
+  }
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#dashboard-teams")).toBeHidden();
 });
 
 async function openWidgetMonitor(page: Page, dash: Dash) {

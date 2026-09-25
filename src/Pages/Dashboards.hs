@@ -104,7 +104,7 @@ import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Monitors qualified as Alerts
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_, visTypes)
 import Pkg.Components.ServiceMap (endpointDependencyMapPanel_)
-import Pkg.Components.Table (BulkAction (..), Table (..))
+import Pkg.Components.Table (Table (..))
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
@@ -1803,8 +1803,8 @@ dashboardsGet_ dg = do
         div_ [class_ "flex items-end gap-2"] do
           div_ [class_ "flex w-full gap-2"] do
             formField_ FieldSm def{placeholder = "Dashboard Title"} "Dashboard name" "title" True Nothing
-            let teamList = encodeText $ (\x -> AE.object ["name" AE..= x.handle, "value" AE..= x.id]) <$> dg.teams
-            formField_ FieldSm def{placeholder = "Add teams"} "Teams" "teamHandlesInput" False $ Just $ tagInput_ "teamHandlesInput" "Add teams" [data_ "tagify-text-prop" "name", data_ "tagify-whitelist" teamList]
+            let teamList = encodeText $ (\x -> AE.object ["name" AE..= ("@" <> x.handle), "value" AE..= x.id]) <$> dg.teams
+            formField_ FieldSm def{placeholder = "Add teams"} "Teams" "teamHandlesInput" False $ Just $ tagInput_ "teamHandlesInput" "Add teams" [data_ "tagify-text-prop" "name", data_ "tagify-whitelist" teamList, data_ "tagify-resolve" "", data_ "tagify-initial" $ encodeText $ V.map (.id) $ V.filter (.is_everyone) dg.teams]
             formField_ FieldSm def{placeholder = "reports/"} "Folder" "fileDir" False Nothing
           div_ [class_ "shrink"] $ primaryButton_ [type_ "submit"] "Create"
         div_ [class_ "py-2 border-b border-b-strokeWeak"] do
@@ -1836,11 +1836,11 @@ dashboardsGet_ dg = do
             unless inCopyMode $ starButton_ dg.projectId dash.id (isJust dash.starredSince)
           div_ [class_ "hidden max-md:flex items-center gap-2 mt-1 text-xs text-textWeak flex-wrap"] do
             span_ [class_ "tabular-nums"] $ toHtml $ toText $ formatTime defaultTimeLocale "%b %-e" dash.updatedAt
-            forM_ (getTeams dash) \team -> span_ [class_ "badge badge-sm badge-neutral"] $ toHtml team.handle
+            forM_ (getTeams dash) \team -> span_ [class_ "badge badge-sm badge-neutral"] $ toHtml $ "@" <> team.handle
             forM_ (V.toList dash.tags) $ span_ [class_ "badge badge-sm badge-neutral"] . toHtml
 
         renderModifiedCol dash = span_ [class_ "text-xs text-textWeak tabular-nums", data_ "tippy-content" "Last modified date"] $ Components.localTimeFmt_ "MMM d, h:mm aaa" dash.updatedAt
-        renderTeamsCol dash = forM_ (getTeams dash) \team -> span_ [class_ "badge badge-sm badge-neutral mr-1"] $ toHtml team.handle
+        renderTeamsCol dash = forM_ (getTeams dash) \team -> span_ [class_ "badge badge-sm badge-neutral mr-1"] $ toHtml $ "@" <> team.handle
         renderTagsCol dash = forM_ (V.toList dash.tags) \tag ->
           if inCopyMode
             then span_ [class_ "badge badge-sm badge-neutral mr-1"] $ toHtml tag
@@ -1857,21 +1857,43 @@ dashboardsGet_ dg = do
             & Table.withAttrs [class_ "min-w-0"]
             & Table.withColHeaderExtra
               ( unless noBulkActions do
-                  button_ ([type_ "button", class_ "btn btn-xs btn-disabled group-has-[.bulkactionItemCheckbox:checked]/grid:text-white group-has-[.bulkactionItemCheckbox:checked]/grid:bg-fillBrand-strong group-has-[.bulkactionItemCheckbox:checked]/grid:pointer-events-auto!"] <> Utils.popoverTrigger_ "dashboard-teams") do
-                    faSprite_ "plus" "regular" "h-3 w-3"
-                    "Add teams"
-                  div_ ([class_ "dropdown dropdown-start z-50 w-64 rounded-lg border border-strokeWeak bg-bgRaised p-3 shadow-lg text-sm font-normal normal-case"] <> Utils.popoverPanel_ "dashboard-teams") do
+                  span_ [class_ "hidden group-has-[.bulkactionItemCheckbox:checked]/grid:inline text-xs font-normal normal-case text-textWeak", role_ "status", term "hx-live:text" "closest('form').q('.bulkactionItemCheckbox:checked').count + ' selected'"] ""
+                  button_ ([type_ "button", class_ "btn btn-xs hidden group-has-[.bulkactionItemCheckbox:checked]/grid:inline-flex"] <> Utils.popoverTrigger_ "dashboard-teams") do
+                    faSprite_ "users" "regular" "h-3 w-3"
+                    "Manage teams"
+                  div_ ([class_ "dropdown dropdown-start z-50 w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-strokeWeak bg-bgRaised p-3 shadow-lg text-sm font-normal normal-case whitespace-normal"] <> Utils.popoverPanel_ "dashboard-teams") do
                     if V.null dg.teams
                       then do
                         p_ [class_ "text-textWeak mb-3"] "Create a team before assigning dashboards."
                         a_ [href_ $ "/p/" <> dg.projectId.toText <> "/manage_teams", class_ "btn btn-sm"] "Manage teams"
                       else do
+                        h3_ [class_ "font-medium mb-1", term "hx-live:text" "'Teams for ' + closest('form').q('.bulkactionItemCheckbox:checked').count + (closest('form').q('.bulkactionItemCheckbox:checked').count === 1 ? ' dashboard' : ' dashboards')"] "Teams for selected dashboards"
+                        p_ [class_ "text-xs text-textWeak mb-3"] "Choose teams to add or remove."
+                        input_ [type_ "search", id_ "dashboard-team-search", term "aria-label" "Find a team", placeholder_ "Find a team…", class_ "input input-sm w-full mb-3 max-md:min-h-11 max-md:text-base"]
                         fieldset_ [class_ "max-h-60 overflow-y-auto"] do
-                          legend_ [class_ "font-medium mb-2"] "Teams"
-                          forM_ dg.teams \team -> label_ [class_ "flex items-center gap-2 rounded px-2 py-2 hover:bg-fillWeak cursor-pointer"] do
+                          legend_ [class_ "sr-only"] "Teams"
+                          forM_ dg.teams \team -> label_ [class_ "flex items-center gap-2 rounded px-2 py-2 max-md:min-h-11 hover:bg-fillWeak cursor-pointer [&[hidden]]:hidden", term "hx-live:hidden" "!this.textContent.toLowerCase().includes(q('#dashboard-team-search').value.trim().toLowerCase())"] do
                             input_ [type_ "checkbox", name_ "teamIds", value_ team.id.toText, class_ "checkbox checkbox-sm"]
-                            toHtml team.handle
-                        button_ [type_ "button", class_ "btn btn-primary btn-sm mt-3 w-full", hxPost_ $ baseUrl <> "/bulk_action/" <> bulkActionSlug BAAddTeams, hxSwap_ "none"] "Apply teams"
+                            toHtml $ "@" <> team.handle
+                          p_ [class_ "py-2 text-textWeak", term "hx-live:hidden" "q('#dashboard-teams label:not([hidden])').count > 0"] "No teams match your search."
+                        p_ [class_ "text-xs text-textWeak mt-3"] "Removing all teams leaves dashboards unassigned."
+                        p_
+                          [ role_ "alert"
+                          , hidden_ ""
+                          , class_ "text-xs text-textError mt-3"
+                          , [__|on htmx:before:request from #dashboard-teams set my.hidden to true
+                                on htmx:response:error from #dashboard-teams set my.hidden to false
+                                on htmx:error from #dashboard-teams set my.hidden to false|]
+                          ]
+                          "Couldn’t update teams. Your choices are still selected. Try again."
+                        div_ [class_ "flex gap-2 mt-3"] do
+                          forM_ ([(BARemoveTeams, "Remove teams", "Removing…"), (BAAddTeams, "Add teams", "Adding…")] :: [(DashboardBulkAction, Text, Text)]) \(action, label, pending) ->
+                            button_ [type_ "button", class_ $ "btn btn-sm flex-1 max-md:min-h-11 group/team-action motion-reduce:after:animate-none" <> bool "" " btn-primary" (action == BAAddTeams), hxPost_ $ baseUrl <> "/bulk_action/" <> bulkActionSlug action, hxSwap_ "none", term "hx-disable" "#dashboard-teams button", term "hx-sync" "#dashboard-teams:drop"] do
+                              span_ [class_ "group-[.htmx-request]/team-action:hidden"] $ toHtml label
+                              span_ [class_ "hidden group-[.htmx-request]/team-action:inline"] $ toHtml pending
+                  button_ [type_ "button", class_ "btn btn-ghost btn-xs text-textError hidden group-has-[.bulkactionItemCheckbox:checked]/grid:inline-flex", hxPost_ $ baseUrl <> "/bulk_action/" <> bulkActionSlug BADelete, hxSwap_ "none", hxConfirm_ "Delete the selected dashboards? This cannot be undone."] do
+                    faSprite_ "trash" "regular" "h-3 w-3"
+                    "Delete"
               )
         tableCols =
           [if inCopyMode then nameCol else nameCol & Table.withSort "title"]
@@ -1889,6 +1911,7 @@ dashboardsGet_ dg = do
             , features =
                 def
                   { Table.rowId = if noBulkActions then Nothing else Just \dash -> dash.id.toText
+                  , Table.rowLabel = Just (.title)
                   , Table.rowAttrs = Just $ \dash -> case dg.copyMode of
                       Just (widgetId, sourceDashIdM) ->
                         [ class_ "cursor-pointer hover:bg-fillWeak tap-target"
@@ -1911,10 +1934,6 @@ dashboardsGet_ dg = do
                               , hxVals_ "js:{...JSON.parse(document.getElementById('dashboards-modal-widget-json').value || '{}')}"
                               ]
                       Nothing -> [class_ "group/row"]
-                  , Table.bulkActions =
-                      [ Table.BulkAction{icon = Just "trash", title = "Delete", uri = "/p/" <> dg.projectId.toText <> "/dashboards/bulk_action/" <> bulkActionSlug BADelete}
-                      | not noBulkActions
-                      ]
                   , Table.search = if noBulkActions then Nothing else Just Table.ClientSide
                   , Table.tableHeaderActions = dg.tableActions
                   , Table.header = if dg.embedded || null dg.filters.tag || inCopyMode then Nothing else Just $ activeFilters_ dg.projectId baseUrl dg.filters
@@ -1922,7 +1941,7 @@ dashboardsGet_ dg = do
                   }
             }
 
-    div_ [class_ "w-full", id_ "dashboardsTableContainer"] do
+    div_ [class_ "w-full [&_th:first-child]:table-cell! [&_td:first-child]:table-cell! [&_th>span]:flex-wrap", id_ "dashboardsTableContainer"] do
       when inCopyMode $ div_ [class_ "mb-4 p-3 bg-fillWeak rounded-lg text-sm text-textStrong"] do
         faSprite_ "circle-info" "regular" "w-4 h-4 inline mr-2"
         toHtml $ case dg.copyMode of
@@ -2209,8 +2228,8 @@ data DashboardBulkActionForm = DashboardBulkActionForm
 -- | The slugs are the existing wire spellings, so live URLs are unchanged:
 --
 -- >>> map bulkActionSlug [minBound .. maxBound :: DashboardBulkAction]
--- ["delete","add_teams"]
-data DashboardBulkAction = BADelete | BAAddTeams
+-- ["delete","add_teams","remove_teams"]
+data DashboardBulkAction = BADelete | BAAddTeams | BARemoveTeams
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
   deriving (FromHttpApiData) via WrappedEnumSC 'Nothing "BA" DashboardBulkAction
 
@@ -2222,18 +2241,23 @@ dashboardBulkActionPostH pid action DashboardBulkActionForm{..} = do
     BADelete -> do
       _ <- Dashboards.deleteDashboardsByIds pid $ V.fromList itemId
       addSuccessToast "Selected dashboards were deleted successfully" Nothing
-    BAAddTeams | null teamIds -> addErrorToast "Select at least one team" Nothing
-    BAAddTeams -> do
-      teams <- V.fromList <$> ManageMembers.getTeamsById pid (V.fromList teamIds)
-      if V.length teams /= length teamIds
-        then addErrorToast "Some teams not found or don't belong to this project" Nothing
-        else
-          Dashboards.addTeamsToDashboards pid (V.fromList itemId) (V.fromList teamIds) >>= \case
-            n | n > 0 -> do
-              addSuccessToast "Teams added to selected dashboards successfully" Nothing
-              redirectCS $ "/p/" <> pid.toText <> "/dashboards"
-            _ -> addErrorToast "No dashboards were updated" Nothing
+      redirectCS $ "/p/" <> pid.toText <> "/dashboards"
+    BAAddTeams -> updateTeams Dashboards.addTeamsToDashboards "Teams added to selected dashboards"
+    BARemoveTeams -> updateTeams Dashboards.removeTeamsFromDashboards "Teams removed from selected dashboards"
   addRespHeaders NoContent
+  where
+    updateTeams update message
+      | null teamIds = addErrorToast "Select at least one team" Nothing
+      | otherwise = do
+          teams <- V.fromList <$> ManageMembers.getTeamsById pid (V.fromList teamIds)
+          if V.length teams /= length teamIds
+            then addErrorToast "Some teams not found or don't belong to this project" Nothing
+            else
+              update pid (V.fromList itemId) (V.fromList teamIds) >>= \case
+                n | n > 0 -> do
+                  addSuccessToast message Nothing
+                  redirectCS $ "/p/" <> pid.toText <> "/dashboards"
+                _ -> addErrorToast "No dashboards were updated" Nothing
 
 
 -- | Form data for moving a widget between dashboards

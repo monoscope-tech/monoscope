@@ -397,7 +397,7 @@ spec = sequential $ aroundAll withTestResources do
                   length dd.dashboards `shouldBe` 3
                   forM_ dd.dashboards $ \db -> do
                     if db.title == "Updated Dashboard (Copy)"
-                      then length db.teams `shouldBe` 0
+                      then length db.teams `shouldBe` 1
                       else do
                         -- Should have 3 teams: hello, hii, and @everyone
                         length db.teams `shouldBe` 3

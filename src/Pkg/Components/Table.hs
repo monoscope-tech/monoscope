@@ -105,6 +105,7 @@ data SearchMode = ClientSide | ServerSide Text
 data Features a = Features
   { rowLink :: Maybe (a -> Text)
   , rowId :: Maybe (a -> Text)
+  , rowLabel :: Maybe (a -> Text)
   , rowAttrs :: Maybe (a -> [Attribute])
   , selectRow :: Maybe (a -> Bool)
   , bulkActions :: [BulkAction]
@@ -416,13 +417,6 @@ selectAllCheckbox_ :: Html ()
 selectAllCheckbox_ = input_ [term "aria-label" "Select All", type_ "checkbox", class_ "checkbox h-6 w-6 checked:checkbox-primary", [__| on click set .bulkactionItemCheckbox.checked to my.checked |]]
 
 
-selectRowCheckbox_ :: Bool -> Text -> Html ()
-selectRowCheckbox_ selected rid =
-  input_
-    $ [term "aria-label" "Select Item", class_ "bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "itemId", value_ rid]
-    <> [checked_ | selected]
-
-
 -- | One row of a sort dropdown; @linkAttrs@ carries either an href or the htmx swap attrs.
 sortOption_ :: Bool -> [Attribute] -> Text -> Text -> Html ()
 sortOption_ isActive linkAttrs title desc =
@@ -473,7 +467,7 @@ renderTable tbl =
         -- resolves against exactly what it did before (verified in-browser).
         div_ [class_ $ "grid overflow-x-auto overflow-y-hidden my-0 group/grid" <> if tbl.config.noSurface then "" else " surface-table", id_ $ tbl.config.elemID <> "_grid"] do
           let divCls = if tbl.config.noDividers then "" else " divide-y"
-          form_ [class_ $ "flex flex-col w-full" <> divCls, id_ tbl.config.elemID, onkeydown_ "return event.key != 'Enter';"] do
+          form_ [class_ $ "flex flex-col w-full" <> divCls, id_ tbl.config.elemID, onkeydown_ "return event.key != 'Enter' || event.target.tagName != 'INPUT';"] do
             when ((isJust tbl.features.rowId || isJust tbl.features.sort) && isNothing tbl.config.bulkActionsInHeader) $ renderToolbar tbl
             when isEmpty $ whenJust tbl.features.zeroState \zs ->
               emptyState_ def{icon = Just zs.icon, action = zs.action} zs.title zs.description
@@ -582,7 +576,10 @@ renderTableRow :: Table a -> a -> Html ()
 renderTableRow tbl row =
   tr_ ([class_ $ "hover:bg-fillWeak transition-colors duration-75 itemsListItem" <> bool "" " cursor-pointer" (isTreeGroup || isJust tbl.features.rowLink)] <> treeAttrs <> rowAttrs <> linkHandler) do
     whenJust tbl.features.rowId \getId ->
-      td_ [class_ "w-8 align-top pt-4 max-md:hidden"] $ selectRowCheckbox_ (maybe False ($ row) tbl.features.selectRow) (getId row)
+      td_ [class_ "w-8 align-top pt-4 max-md:hidden"]
+        $ input_
+        $ [term "aria-label" $ "Select " <> maybe "Item" ($ row) tbl.features.rowLabel, class_ "bulkactionItemCheckbox checkbox checkbox-md checked:checkbox-primary", type_ "checkbox", name_ "itemId", value_ $ getId row]
+        <> [checked_ | maybe False ($ row) tbl.features.selectRow]
     forM_ (zip [0 :: Int ..] tbl.columns) \(idx, c) -> td_ (c.attrs <> (class_ <$> maybeToList c.align) <> [data_ "column-index" $ show idx]) $ c.render row
   where
     rowAttrs = maybe [] ($ row) tbl.features.rowAttrs

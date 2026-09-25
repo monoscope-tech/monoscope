@@ -541,7 +541,7 @@ insertDashboard pid uid now did title tags teams filePath schema = do
           , Dashboards.teams = V.fromList (fromMaybe [] teams)
           , Dashboards.filePath = filePath
           }
-  toFull d <$ Dashboards.insert d
+  toFull <$> Dashboards.insert d
 
 
 apiDashboardCreate :: Projects.ProjectId -> DashboardInput -> ATBaseCtx DashboardFull

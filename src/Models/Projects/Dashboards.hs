@@ -20,6 +20,7 @@ module Models.Projects.Dashboards (
   replaceDashboardVariables,
   deleteDashboardsByIds,
   addTeamsToDashboards,
+  removeTeamsFromDashboards,
   insert,
   selectDashboardsByTeam,
   selectDashboardsSortedBy,
@@ -180,14 +181,19 @@ mkDashboardVM :: DashboardId -> Projects.ProjectId -> UTCTime -> Projects.UserId
 mkDashboardVM did pid now uid = DashboardVM{id = did, projectId = pid, createdAt = now, updatedAt = now, createdBy = uid, baseTemplate = Nothing, schema = Nothing, starredSince = Nothing, homepageSince = Nothing, tags = V.empty, title = "", teams = V.empty, filePath = Nothing, fileSha = Nothing}
 
 
-insert :: DB es => DashboardVM -> Eff es Int64
+insert :: DB es => DashboardVM -> Eff es DashboardVM
 insert d = do
-  inserted <-
-    Hasql.interpExecute
+  HI.OneColumn teams <-
+    Hasql.interpOneOrThrow
+      "Dashboard insert"
       [HI.sql| INSERT INTO projects.dashboards (id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams, file_path, file_sha)
-             VALUES (#{d.id}, #{d.projectId}, #{d.createdAt}, #{d.updatedAt}, #{d.createdBy}, #{d.baseTemplate}, #{d.schema}, #{d.starredSince}, #{d.homepageSince}, #{d.tags}, #{d.title}, #{d.teams}::uuid[], #{d.filePath}, #{d.fileSha}) |]
+             VALUES (#{d.id}, #{d.projectId}, #{d.createdAt}, #{d.updatedAt}, #{d.createdBy}, #{d.baseTemplate}, #{d.schema}, #{d.starredSince}, #{d.homepageSince}, #{d.tags}, #{d.title},
+               CASE WHEN cardinality(#{d.teams}::uuid[]) = 0
+                 THEN ARRAY(SELECT id FROM projects.teams WHERE project_id = #{d.projectId} AND is_everyone AND deleted_at IS NULL)
+                 ELSE #{d.teams}::uuid[] END,
+               #{d.filePath}, #{d.fileSha}) RETURNING teams |]
   Activation.recordActivationMilestone d.projectId Activation.DashboardCreated
-  pure inserted
+  pure (d :: DashboardVM){teams}
 
 
 yamlFiles :: FilePath -> IO [FilePath]
@@ -296,8 +302,16 @@ deleteDashboardsByIds pid dids = Hasql.interpExecute [HI.sql| DELETE FROM projec
 addTeamsToDashboards :: DB es => Projects.ProjectId -> V.Vector DashboardId -> V.Vector ProjectMembers.TeamId -> Eff es Int64
 addTeamsToDashboards pid dids teamIds =
   Hasql.interpExecute
-    [HI.sql| UPDATE projects.dashboards SET teams = teams || #{teamIds}::uuid[]
+    [HI.sql| UPDATE projects.dashboards SET teams = ARRAY(SELECT DISTINCT unnest(teams || #{teamIds}::uuid[]))
            WHERE project_id = #{pid} AND id = ANY(#{dids}::uuid[]) |]
+
+
+removeTeamsFromDashboards :: DB es => Projects.ProjectId -> V.Vector DashboardId -> V.Vector ProjectMembers.TeamId -> Eff es Int64
+removeTeamsFromDashboards pid dids teamIds =
+  Hasql.interpExecute
+    [HI.sql| UPDATE projects.dashboards d
+             SET teams = ARRAY(SELECT unnest(d.teams) EXCEPT SELECT unnest(#{teamIds}::uuid[]))
+             WHERE d.project_id = #{pid} AND d.id = ANY(#{dids}::uuid[]) |]
 
 
 selectDashboardsByTeam :: DB es => Projects.ProjectId -> ProjectMembers.TeamId -> Eff es [DashboardVM]

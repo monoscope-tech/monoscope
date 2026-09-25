@@ -371,6 +371,9 @@ spec = around withTestResources do
             input = ApiT.DashboardInput{ApiT.title = "d1", ApiT.tags = Just ["a"], ApiT.teams = Nothing, ApiT.filePath = Nothing, ApiT.schema = Nothing}
         created <- runB $ ApiH.apiDashboardCreate testPid input
         created.summary.title `shouldBe` "d1"
+        everyone <- runB $ PM.getEveryoneTeam testPid
+        V.length created.summary.teams `shouldBe` 1
+        created.summary.teams `shouldBe` V.fromList (map (.id) $ maybeToList everyone)
         starred <- runB $ ApiH.apiDashboardStar testPid created.summary.id
         starred.summary.starred `shouldBe` True
         NoContent <- runB $ ApiH.apiDashboardUnstar testPid created.summary.id
