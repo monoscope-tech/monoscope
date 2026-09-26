@@ -1,12 +1,18 @@
 module Pages.PrometheusSpec (spec) where
 
+import BackgroundJobs qualified
 import Data.Aeson qualified as AE
+import Data.Text qualified as T
+import Data.Text.Lazy qualified as TL
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Lucid (renderText)
+import Models.Apis.Issues qualified as Issues
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
+import Pages.Monitors qualified as Monitors
 import Pages.Settings (PrometheusForm (..), PrometheusMut (..), prometheusPostH)
 import Pkg.TestUtils
 import Relude
@@ -31,7 +37,7 @@ spec = around withTestResources do
   describe "Prometheus scrape configs" do
     it "ingests a scraped exposition body as metrics, dropping non-finite samples" \tr -> do
       void $ runQueryEffect tr $ PromCfg.insertConfig testPid "api-gw" "http://svc:9090/metrics" 60 Nothing (AE.object ["env" AE..= ("prod" :: Text)])
-      (cfg : _) <- V.toList <$> runQueryEffect tr (PromCfg.configsByProjectId testPid)
+      (cfg : _) <- V.toList <$> runQueryEffect tr (PromCfg.configsByProjectId testPid PromCfg.CKPrometheus)
       n <- runTestBg frozenTime tr $ PromCfg.ingestScrapedBody cfg frozenTime promBody
       n `shouldBe` 3 -- 2 counter series + 1 gauge; +Inf dropped
       rows <-
@@ -43,6 +49,31 @@ spec = around withTestResources do
       V.length rows `shouldBe` 3
       sort (V.toList rows) `shouldBe` [("http_requests_total", "SUM", Just "CUMULATIVE"), ("http_requests_total", "SUM", Just "CUMULATIVE"), ("temperature_celsius", "GAUGE", Nothing)]
 
+    it "uptime checks: a public URL is added, two failures open a downtime issue, a success resolves it" \tr -> do
+      (_, rejected) <- testServant tr $ Monitors.uptimeCheckPostH testPid (Monitors.UptimeForm "internal" "http://10.0.0.1/health" (Just 60) (Just 200))
+      renderText rejected `shouldSatisfy` (not . ("10.0.0.1" `TL.isInfixOf`))
+      (_, added) <- testServant tr $ Monitors.uptimeCheckPostH testPid (Monitors.UptimeForm "Shop" "https://shop.example.com/health" (Just 60) (Just 200))
+      renderText added `shouldSatisfy` ("https://shop.example.com/health" `TL.isInfixOf`)
+      (c : _) <- V.toList <$> runQueryEffect tr (PromCfg.configsByProjectId testPid PromCfg.CKUptime)
+      let probe res = runTestBg frozenTime tr $ BackgroundJobs.applyUptimeResult c frozenTime 120 res
+          issues = runQueryEffect tr (Issues.selectIssueByHash testPid (Issues.uptimeTargetHash c.id.toText) Issues.AnyIssue)
+      probe (Right 503)
+      (isNothing <$> issues) `shouldReturn` True -- one failure is a blip
+      probe (Left "connection refused")
+      opened <- issues >>= maybe (fail "no downtime issue after two failures") pure
+      (opened.title, isNothing opened.archivedAt) `shouldBe` ("Downtime detected for https://shop.example.com/health", True)
+      probe (Right 200)
+      resolved <- issues >>= maybe (fail "issue vanished") pure
+      isJust resolved.archivedAt `shouldBe` True
+      runTestBg frozenTime tr (Issues.selectLatestStateEvent resolved.id) `shouldReturn` Just Issues.IEResolved
+
+    it "an uptime probe through the worker records a refused connection as a failure" \tr -> do
+      void $ runQueryEffect tr $ PromCfg.insertUptimeCheck testPid "refused" "http://127.0.0.1:1/health" 60 200
+      (c : _) <- V.toList <$> runQueryEffect tr (PromCfg.configsByProjectId testPid PromCfg.CKUptime)
+      runTestBg frozenTime tr $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.PrometheusScrapeOne c.id)
+      Just probed <- runQueryEffect tr (PromCfg.getConfig c.id)
+      (probed.consecutiveFailures, fmap ("request failed" `T.isPrefixOf`) probed.lastStatus) `shouldBe` (1, Just True)
+
     it "claims each due target once and leases it (multi-node safe), skipping disabled" \tr -> do
       void $ runQueryEffect tr $ PromCfg.insertConfig testPid "svc-a" "http://a/metrics" 3600 Nothing (AE.object [])
       void $ runQueryEffect tr $ PromCfg.insertConfig testPid "svc-b" "http://b/metrics" 3600 Nothing (AE.object [])
@@ -52,7 +83,7 @@ spec = around withTestResources do
       length claimed2 `shouldBe` 0 -- leased within interval ⇒ a second node's claim gets nothing
       -- a disabled target is never claimed even though its interval has elapsed
       void $ runQueryEffect tr $ PromCfg.insertConfig testPid "svc-c" "http://c/metrics" 1 Nothing (AE.object [])
-      (c : _) <- V.toList . V.filter ((== "svc-c") . (.name)) <$> runQueryEffect tr (PromCfg.configsByProjectId testPid)
+      (c : _) <- V.toList . V.filter ((== "svc-c") . (.name)) <$> runQueryEffect tr (PromCfg.configsByProjectId testPid PromCfg.CKPrometheus)
       void $ runQueryEffect tr $ PromCfg.setEnabled testPid c.id False
       claimed3 <- runQueryEffect tr (PromCfg.claimDueConfigs 50)
       length claimed3 `shouldBe` 0

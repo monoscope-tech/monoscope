@@ -174,6 +174,12 @@ buildTitlePrompt issue =
             Element: {d.element}
             Page: {fromMaybe "unknown" d.pageUrl}
             Clicks in the burst: {d.clickCount}|]
+      Issues.Uptime ->
+        withIssueData @Issues.UptimeData issue ("Generate a concise title for this downtime. Title: " <> issue.title) \d ->
+          [fmtTrim|Generate a concise title for this failing uptime check.
+            Check: {d.name}
+            URL: {d.url}
+            Failure: {d.reason}|]
 
 
 buildDescriptionPrompt :: Issues.Issue -> Text
@@ -279,6 +285,14 @@ buildDescriptionPrompt issue =
             Selector: {fromMaybe "unknown" d.selector}
             Page: {fromMaybe "unknown" d.pageUrl}
             Clicks in the burst: {d.clickCount}|]
+      Issues.Uptime ->
+        withIssueData @Issues.UptimeData issue ("Describe this downtime. Title: " <> issue.title) \d ->
+          [fmtTrim|Describe this failing uptime check and the likely causes to look at first.
+            Check: {d.name}
+            URL: {d.url}
+            Expected status: {d.expectedStatus}
+            Failure: {d.reason}
+            Response time: {d.durationMs} ms|]
 
 
 -- | Classify issue as critical/safe and count breaking/incremental changes
@@ -343,6 +357,7 @@ buildCriticalityPrompt issue =
       Issues.LogPatternRateChange -> "Log pattern rate change: " <> issue.title
       Issues.Performance -> "Performance issue: " <> issue.title
       Issues.Frontend -> "Frontend issue: " <> issue.title
+      Issues.Uptime -> "Downtime: " <> issue.title
 
 
 updateIssueClassification :: DB es => Issues.IssueId -> Bool -> Int -> Eff es ()

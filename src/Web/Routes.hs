@@ -729,6 +729,10 @@ data MonitorsRoutes' mode = MonitorsRoutes'
   , alertDeleteRoute :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> Delete '[HTML] (RespHeaders (Html ()))
   , teamAlertsGetH :: mode :- "alerts" :> "team" :> Capture "team_id" ApiT.TeamId :> Get '[HTML] (RespHeaders (Table.TableRows Testing.UnifiedMonitorItem))
   , alertTeamDeleteH :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "teams" :> Capture "team_id" ApiT.TeamId :> Delete '[HTML] (RespHeaders Alerts.Alert)
+  , uptimeGet :: mode :- "uptime" :> Get '[HTML] (RespHeaders Testing.UptimeChecks)
+  , uptimePost :: mode :- "uptime" :> ReqBody '[FormUrlEncoded] Testing.UptimeForm :> Post '[HTML] (RespHeaders (Html ()))
+  , uptimeToggle :: mode :- "uptime" :> Capture "check_id" PromCfg.PrometheusScrapeConfigId :> "toggle" :> Post '[HTML] (RespHeaders (Html ()))
+  , uptimeDelete :: mode :- "uptime" :> Capture "check_id" PromCfg.PrometheusScrapeConfigId :> "delete" :> Post '[HTML] (RespHeaders (Html ()))
   , alertBulkAction :: mode :- "alerts" :> "bulk_action" :> Capture "action" Testing.MonitorBulkAction :> ReqBody '[FormUrlEncoded] ManageMembers.TBulkActionForm :> Post '[HTML] (RespHeaders (PageCtx (Table.Table Testing.UnifiedMonitorItem)))
   }
   deriving stock (Generic)
@@ -1173,6 +1177,10 @@ monitorsServer pid =
   MonitorsRoutes'
     { listGet = Testing.unifiedMonitorsGetH pid
     , overviewGet = Testing.unifiedMonitorOverviewH pid
+    , uptimeGet = Testing.uptimeChecksGetH pid
+    , uptimePost = Testing.uptimeCheckPostH pid
+    , uptimeToggle = Testing.uptimeCheckToggleH pid
+    , uptimeDelete = Testing.uptimeCheckDeleteH pid
     , alertUpsertPost = Alerts.alertUpsertPostH pid
     , alertSingleGet = Alerts.alertSingleGetH pid
     , alertSingleToggleActive = Alerts.alertSingleToggleActiveH pid

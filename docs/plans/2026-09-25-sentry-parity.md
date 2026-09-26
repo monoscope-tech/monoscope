@@ -39,7 +39,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (commit).
       (duration over threshold), inefficient query; span evidence (parent, preceding, repeating,
       duration impact).
 - [x] C2 Frontend — rage click / dead click from browser SDK click events; selector + replay.
-- [ ] C3 Uptime — HTTP checks → downtime issues with status code, reason, duration.
+- [x] C3 Uptime — HTTP checks → downtime issues with status code, reason, duration.
 - [ ] C4 Cron monitors — check-ins (span/log with `monitor.slug`); missed/failed issues.
 - [-] C5 User feedback — descoped by the user (2026-09-26).
 
@@ -83,6 +83,10 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (commit).
 - C2: rage clicks from click spans (3+ on one element in one session within 2s); dead clicks from
   `dead_click` spans the browser SDK now emits (monoscope-web branch `dead-click-spans`, commit a5e0494:
   a button/link click with no DOM mutation or navigation within 7s), 2+ per element per hour.
+
+- C3: uptime checks are scrape targets of kind `uptime` (migration 0204) sharing the lease/dispatch;
+  managed at /monitors/uptime; two failed probes open an `uptime` issue, the next success resolves it.
+  No per-probe history yet (Sentry's uptime bar): only the last status and the issue carry it.
 
 ## Decisions (asked 2026-09-26)
 

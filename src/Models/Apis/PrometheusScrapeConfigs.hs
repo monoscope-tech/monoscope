@@ -4,6 +4,9 @@ module Models.Apis.PrometheusScrapeConfigs (
   insertConfig,
   updateConfig,
   configsByProjectId,
+  CheckKind (..),
+  insertUptimeCheck,
+  recordUptime,
   getConfig,
   getConfigByProject,
   deleteConfig,
@@ -40,7 +43,7 @@ import Network.HTTP.Client (managerResponseTimeout, responseTimeoutMicro)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.Wreq (defaults, header)
 import Network.Wreq qualified as Wreq
-import Pkg.DeriveUtils (UUIDId, unUUIDId)
+import Pkg.DeriveUtils (UUIDId, WrappedEnumSC (..), unUUIDId)
 import Pkg.Prometheus qualified as Prom
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
@@ -49,6 +52,14 @@ import UnliftIO (throwIO)
 
 
 type PrometheusScrapeConfigId = UUIDId "prometheus_scrape_config"
+
+
+-- | What a target is polled for: Prometheus metrics to ingest, or an uptime check whose
+-- response status is compared to @expectedStatus@.
+data CheckKind = CKPrometheus | CKUptime
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving anyclass (NFData)
+  deriving (HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "CK" CheckKind
 
 
 data PrometheusScrapeConfig = PrometheusScrapeConfig
@@ -64,13 +75,16 @@ data PrometheusScrapeConfig = PrometheusScrapeConfig
   , enabled :: Bool
   , lastScrapedAt :: Maybe UTCTime
   , lastStatus :: Maybe Text
+  , kind :: CheckKind
+  , expectedStatus :: Maybe Int
+  , consecutiveFailures :: Int
   }
   deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow, NFData)
 
 
 selectCols :: HI.Sql
-selectCols = [HI.sql|id, project_id, created_at, updated_at, name, url, scrape_interval_seconds, auth_header, extra_labels, enabled, last_scraped_at, last_status|]
+selectCols = [HI.sql|id, project_id, created_at, updated_at, name, url, scrape_interval_seconds, auth_header, extra_labels, enabled, last_scraped_at, last_status, kind, expected_status::bigint, consecutive_failures::bigint|]
 
 
 selectFrom :: HI.Sql
@@ -93,8 +107,28 @@ updateConfig pid cid name url interval authHeader extraLabels =
             WHERE id = #{cid} AND project_id = #{pid}|]
 
 
-configsByProjectId :: DB es => Projects.ProjectId -> Eff es (V.Vector PrometheusScrapeConfig)
-configsByProjectId pid = V.fromList <$> Hasql.interp (selectFrom <> [HI.sql|WHERE project_id = #{pid} ORDER BY created_at DESC|])
+configsByProjectId :: DB es => Projects.ProjectId -> CheckKind -> Eff es (V.Vector PrometheusScrapeConfig)
+configsByProjectId pid kind = V.fromList <$> Hasql.interp (selectFrom <> [HI.sql|WHERE project_id = #{pid} AND kind = #{kind} ORDER BY created_at DESC|])
+
+
+insertUptimeCheck :: DB es => Projects.ProjectId -> Text -> Text -> Int -> Int -> Eff es Int64
+insertUptimeCheck pid name url interval expected =
+  Hasql.interpExecute
+    [HI.sql|INSERT INTO apis.prometheus_scrape_configs (project_id, name, url, scrape_interval_seconds, extra_labels, kind, expected_status)
+            VALUES (#{pid}, #{name}, #{url}, #{interval}, '{}'::jsonb, #{CKUptime}, #{expected})|]
+
+
+-- | Record an uptime probe and return the failure streak (before, after) it moved.
+recordUptime :: DB es => PrometheusScrapeConfigId -> Bool -> Text -> Eff es (Int, Int)
+recordUptime cid ok status =
+  fromMaybe (0, 0)
+    <$> Hasql.interpOne
+      [HI.sql|WITH prev AS (SELECT consecutive_failures FROM apis.prometheus_scrape_configs WHERE id = #{cid} FOR UPDATE)
+              UPDATE apis.prometheus_scrape_configs c
+              SET last_scraped_at = now(), last_status = #{status},
+                  consecutive_failures = CASE WHEN #{ok} THEN 0 ELSE c.consecutive_failures + 1 END
+              FROM prev WHERE c.id = #{cid}
+              RETURNING prev.consecutive_failures::bigint, c.consecutive_failures::bigint|]
 
 
 -- | Unscoped lookup — only for trusted internal callers that already hold a claimed id

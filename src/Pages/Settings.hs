@@ -473,7 +473,7 @@ instance ToHtml PrometheusMut where
 prometheusGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders PrometheusGet)
 prometheusGetH pid = do
   (_, _, bw) <- mkPageCtx pid
-  cfgs <- PromCfg.configsByProjectId pid
+  cfgs <- PromCfg.configsByProjectId pid PromCfg.CKPrometheus
   addRespHeaders $ PrometheusGet $ PageCtx bw{pageTitle = "Prometheus", isSettingsPage = True} (pid, cfgs)
 
 
@@ -647,7 +647,7 @@ prometheusToggleH pid cid = do
 
 prometheusMut :: Projects.ProjectId -> ATAuthCtx (RespHeaders PrometheusMut)
 prometheusMut pid = do
-  cfgs <- PromCfg.configsByProjectId pid
+  cfgs <- PromCfg.configsByProjectId pid PromCfg.CKPrometheus
   addRespHeaders $ PrometheusMut (pid, cfgs)
 
 

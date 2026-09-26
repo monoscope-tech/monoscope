@@ -13,6 +13,12 @@ module Pages.Monitors (
   -- Unified monitors (formerly Testing)
   UnifiedMonitorItem (..),
   unifiedMonitorsGetH,
+  UptimeChecks (..),
+  UptimeForm (..),
+  uptimeChecksGetH,
+  uptimeCheckPostH,
+  uptimeCheckToggleH,
+  uptimeCheckDeleteH,
   unifiedMonitorOverviewH,
   teamAlertsGetH,
   alertBulkActionH,
@@ -30,6 +36,7 @@ import Data.Default (def)
 import Data.Either.Extra (fromRight')
 import Data.List (partition)
 import Data.Map.Strict qualified as Map
+import Data.Ord (clamp)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
@@ -42,9 +49,11 @@ import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx
+import Lucid.Hyperscript (__)
 import Models.Apis.Integrations qualified as Slack
 import Models.Apis.Monitors (MonitorBulkAction (..))
 import Models.Apis.Monitors qualified as Monitors
+import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
 import Models.Projects.ProjectMembers (Team (discord_channels, slack_channels))
 import Models.Projects.ProjectMembers qualified as ManageMembers
 import Models.Projects.Projects qualified as Projects
@@ -53,8 +62,9 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as Slack
 import Pages.Bots.Utils (Channel (channelId, channelName))
-import Pages.Components (FieldCfg (..), FieldSize (..), PanelCfg (..), detailTab_, durationMenu_, durationQuery, emptyState_, formCheckbox_, formField_, formSelectField_, metadataChip_, options_, panel_, tagInput_, untilLabel)
+import Pages.Components (EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), PanelCfg (..), detailTab_, durationMenu_, durationQuery, emptyState_, formCheckbox_, formField_, formSelectField_, metadataChip_, options_, panel_, tagInput_, untilLabel)
 import Pages.Projects (TBulkActionForm (..))
+import Pages.Settings (safeScrapeUrl)
 import Pkg.Components.Table (BulkAction (..), Config (..), EmptyStateAction (..), Features (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, withAttrs)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget (Widget (..))
@@ -502,6 +512,9 @@ unifiedMonitorsGetH pid filterTM _sinceM = do
           , docsLink = Just "https://monoscope.tech/docs/monitors/"
           , freeTierStatus = freeTierStatus
           , pageActions = Just $ div_ [class_ "flex gap-2"] do
+              a_ [class_ "btn btn-sm btn-ghost gap-2", href_ $ "/p/" <> pid.toText <> "/monitors/uptime"] do
+                faSprite_ "heart-pulse" "regular" "h-4 w-4"
+                span_ [class_ "max-md:hidden"] "Uptime checks"
               a_ [class_ "btn btn-sm btn-primary gap-2", href_ $ "/p/" <> pid.toText <> "/log_explorer#create-alert-toggle"] do
                 faSprite_ "bell" "regular" "h-4 w-4 max-md:hidden"
                 faSprite_ "plus" "regular" "h-4 w-4 md:hidden"
@@ -935,3 +948,79 @@ alertNotificationsTab_ alert teams = do
         div_ [class_ "flex flex-col gap-1"] do
           span_ [class_ "text-sm font-medium text-textStrong"] "Message"
           p_ [class_ "text-sm text-textWeak mt-1"] $ toHtml alert.alertConfig.message
+
+
+-- | Uptime checks: URLs Monoscope probes on a schedule. They share the scrape-target
+-- table and dispatcher (kind 'uptime'); two failed probes in a row open an uptime issue.
+newtype UptimeChecks = UptimeChecks (PageCtx (Projects.ProjectId, V.Vector PromCfg.PrometheusScrapeConfig))
+
+
+instance ToHtml UptimeChecks where
+  toHtml (UptimeChecks (PageCtx bw (pid, checks))) = toHtml $ PageCtx bw page
+    where
+      page :: Html ()
+      page = div_ [class_ "p-4 max-w-5xl space-y-4"] do
+        p_ [class_ "text-sm text-textWeak"] "Monoscope requests each URL on its interval. Two failed checks in a row open a downtime issue; the next success resolves it."
+        form_ [class_ "surface-raised rounded-xl p-4 grid md:grid-cols-[1fr_2fr_auto_auto_auto] gap-2 items-end", hxPost_ ("/p/" <> pid.toText <> "/monitors/uptime"), hxTarget_ "#uptime-checks", hxSwap_ "outerHTML", [__|on htmx:afterRequest call me.reset()|]] do
+          label_ [class_ "flex flex-col gap-1 text-xs text-textWeak"] $ "Name" >> input_ [name_ "name", required_ "", placeholder_ "Checkout API", class_ "input input-sm"]
+          label_ [class_ "flex flex-col gap-1 text-xs text-textWeak"] $ "URL" >> input_ [type_ "url", name_ "url", required_ "", placeholder_ "https://shop.example.com/health", class_ "input input-sm"]
+          label_ [class_ "flex flex-col gap-1 text-xs text-textWeak"] do
+            "Every"
+            select_ [name_ "interval", class_ "select select-sm"] $ forM_ ([(60, "1 min"), (300, "5 min"), (900, "15 min"), (3600, "1 hour")] :: [(Int, Text)]) \(v, l) -> option_ [value_ (show v)] (toHtml l)
+          label_ [class_ "flex flex-col gap-1 text-xs text-textWeak"] $ "Expect" >> input_ [type_ "number", name_ "expectedStatus", value_ "200", min_ "100", max_ "599", class_ "input input-sm w-20"]
+          button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Add check"
+        uptimeChecksList_ pid checks
+  toHtmlRaw = toHtml
+
+
+uptimeChecksList_ :: Projects.ProjectId -> V.Vector PromCfg.PrometheusScrapeConfig -> Html ()
+uptimeChecksList_ pid checks = div_ [id_ "uptime-checks", class_ "surface-raised rounded-xl divide-y divide-strokeWeak"] do
+  when (V.null checks) $ emptyState_ def{size = ESCompact} "No uptime checks yet" "Add a URL above to start checking it."
+  forM_ checks \c -> do
+    let up = maybe False ("ok" `T.isPrefixOf`) c.lastStatus
+        base = "/p/" <> pid.toText <> "/monitors/uptime/" <> c.id.toText
+    div_ [class_ "flex items-center gap-3 px-4 py-3 text-sm"] do
+      span_ [class_ $ "w-2 h-2 rounded-full shrink-0 " <> if not c.enabled then "bg-fillWeak" else bool "bg-fillError-strong" "bg-fillSuccess-strong" up, term "data-tippy-content" $ bool "Paused" (bool "Down or not yet checked" "Up" up) c.enabled] ""
+      div_ [class_ "min-w-0 flex-1"] do
+        div_ [class_ "font-medium text-textStrong truncate"] $ toHtml c.name
+        div_ [class_ "text-xs text-textWeak truncate"] $ toHtml $ c.url <> " \x00b7 expects " <> show (fromMaybe 200 c.expectedStatus) <> " \x00b7 every " <> show (c.scrapeIntervalSeconds `div` 60) <> " min"
+      span_ [class_ "text-xs text-textWeak truncate max-w-64"] $ toHtml $ fromMaybe "Not checked yet" c.lastStatus
+      button_ [type_ "button", class_ "btn btn-xs btn-ghost", hxPost_ (base <> "/toggle"), hxTarget_ "#uptime-checks", hxSwap_ "outerHTML"] $ bool "Resume" "Pause" c.enabled
+      button_ [type_ "button", class_ "btn btn-xs btn-ghost text-textError", hxPost_ (base <> "/delete"), hxTarget_ "#uptime-checks", hxSwap_ "outerHTML", hxConfirm_ ("Delete the check for " <> c.url <> "?")] "Delete"
+
+
+data UptimeForm = UptimeForm {name :: Text, url :: Text, interval :: Maybe Int, expectedStatus :: Maybe Int}
+  deriving stock (Generic, Show)
+  deriving anyclass (FromForm)
+
+
+uptimeChecksGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders UptimeChecks)
+uptimeChecksGetH pid = do
+  (_, _, bw) <- mkPageCtx pid
+  checks <- PromCfg.configsByProjectId pid PromCfg.CKUptime
+  addRespHeaders $ UptimeChecks $ PageCtx bw{pageTitle = "Uptime checks", menuItem = Just "Monitors"} (pid, checks)
+
+
+uptimeCheckPostH :: Projects.ProjectId -> UptimeForm -> ATAuthCtx (RespHeaders (Html ()))
+uptimeCheckPostH pid form = do
+  _ <- Projects.sessionAndProject pid
+  let url = T.strip form.url
+  if
+    | T.null (T.strip form.name) -> addErrorToast "Name the check" Nothing
+    | not (safeScrapeUrl url) -> addErrorToast "URL must be a public http:// or https:// endpoint" Nothing
+    | otherwise -> do
+        void $ PromCfg.insertUptimeCheck pid (T.strip form.name) url (max 60 $ fromMaybe 60 form.interval) (clamp (100, 599) $ fromMaybe 200 form.expectedStatus)
+        addSuccessToast "Uptime check added" Nothing
+  uptimeListResp pid
+
+
+uptimeCheckToggleH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> ATAuthCtx (RespHeaders (Html ()))
+uptimeCheckToggleH pid cid = Projects.sessionAndProject pid >> PromCfg.toggleEnabled pid cid >> uptimeListResp pid
+
+
+uptimeCheckDeleteH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> ATAuthCtx (RespHeaders (Html ()))
+uptimeCheckDeleteH pid cid = Projects.sessionAndProject pid >> PromCfg.deleteConfig pid cid >> uptimeListResp pid
+
+
+uptimeListResp :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
+uptimeListResp pid = addRespHeaders . uptimeChecksList_ pid =<< PromCfg.configsByProjectId pid PromCfg.CKUptime

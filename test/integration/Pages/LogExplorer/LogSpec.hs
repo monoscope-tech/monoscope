@@ -203,6 +203,10 @@ databaseSpec = do
       V.length r.logsData `shouldBe` 202
       r.count `shouldSatisfy` (>= 202)
       r.cols `shouldBe` ["id", "timestamp", "service", "summary", "latency_breakdown"]
+      -- The detail and trace routes capture this cell as UTCTime; TF once echoed the
+      -- to_char format string instead, blanking the column and 400ing both.
+      let tsIdx = fromMaybe (error "timestamp not projected") $ HashMap.lookup "timestamp" r.colIdxMap
+      V.filter (\row -> isNothing $ (row V.!? tsIdx) >>= \case AE.String t -> iso8601ParseM @Maybe @UTCTime (toString t); _ -> Nothing) r.logsData `shouldBe` V.empty
       -- URLs are stamped by the data endpoint and consumed by the web component.
       r.nextUrl `shouldNotBe` ""
       r.resetLogsUrl `shouldNotBe` ""

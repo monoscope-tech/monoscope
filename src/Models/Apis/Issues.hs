@@ -71,6 +71,9 @@ module Models.Apis.Issues (
   SavedView (..),
   PerfKind (..),
   FrontendKind (..),
+  UptimeData (..),
+  createUptimeIssue,
+  uptimeTargetHash,
   FrontendData (..),
   createFrontendIssue,
   PerformanceData (..),
@@ -245,9 +248,26 @@ data IssueType
   | LogPatternRateChange
   | Performance
   | Frontend
+  | Uptime
   deriving stock (Bounded, Enum, Eq, Generic, Ord, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC ('Just "apis.issue_type") "" IssueType
+
+
+-- | A failed uptime check: what was probed, what came back, and since when.
+data UptimeData = UptimeData
+  { checkId :: Text
+  , name :: Text
+  , url :: Text
+  , expectedStatus :: Int
+  , statusCode :: Maybe Int
+  , reason :: Text
+  , durationMs :: Int
+  , downSince :: UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake UptimeData
 
 
 -- | A frontend issue's shape, detected over the browser SDK's interaction spans.
@@ -309,6 +329,7 @@ hashPrefix = \case
   QueryAlert -> Nothing
   Performance -> Nothing -- detected over span shapes; spans carry no issue hash
   Frontend -> Nothing
+  Uptime -> Nothing
 
 
 defaultRecommendedAction :: Text
@@ -2060,6 +2081,7 @@ data IssuePayload
   | LogPatternRateChangeP LogPatternRateChangeData
   | PerformanceP PerformanceData
   | FrontendP FrontendData
+  | UptimeP UptimeData
   deriving stock (Generic, Show)
 
 
@@ -2074,6 +2096,7 @@ payloadType = \case
   LogPatternRateChangeP{} -> LogPatternRateChange
   PerformanceP{} -> Performance
   FrontendP{} -> Frontend
+  UptimeP{} -> Uptime
 
 
 -- | The @issue_data@ column's value: the *bare* per-type object, exactly as before
@@ -2094,6 +2117,7 @@ payloadJson = \case
   LogPatternRateChangeP d -> AE.toJSON d
   PerformanceP d -> AE.toJSON d
   FrontendP d -> AE.toJSON d
+  UptimeP d -> AE.toJSON d
 
 
 -- | Pair a stored @issue_type@ with its @issue_data@. 'Nothing' means the two
@@ -2120,6 +2144,7 @@ parsePayload t v = case t of
   LogPatternRateChange -> wrap LogPatternRateChangeP
   Performance -> wrap PerformanceP
   Frontend -> wrap FrontendP
+  Uptime -> wrap UptimeP
   where
     wrap :: AE.FromJSON a => (a -> IssuePayload) -> Maybe IssuePayload
     wrap f = case AE.fromJSON v of
@@ -2442,6 +2467,31 @@ createPerformanceIssue projectId service d =
       , timestamp = Nothing
       , payload = PerformanceP d
       }
+
+
+-- | One downtime issue per check: the target hash is the check id, so a check that
+-- stays down folds every failed probe into the open issue.
+createUptimeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> UptimeData -> Eff es Issue
+createUptimeIssue projectId d =
+  mkIssue
+    MkIssueOpts
+      { projectId
+      , targetHash = uptimeTargetHash d.checkId
+      , parentHash = Nothing
+      , isFramework = False
+      , service = Just d.name
+      , critical = True
+      , severity = Critical
+      , title = "Downtime detected for " <> d.url
+      , recommendedAction = "The check at " <> d.url <> " is failing: " <> d.reason <> "."
+      , migrationComplexity = "n/a"
+      , timestamp = Nothing
+      , payload = UptimeP d
+      }
+
+
+uptimeTargetHash :: Text -> Text
+uptimeTargetHash = ("uptime:" <>)
 
 
 -- | One frontend issue per (kind, page path, element).

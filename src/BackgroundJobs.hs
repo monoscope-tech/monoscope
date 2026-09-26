@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, enqueueAIRoutine, runAIRoutineWith, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, detectPerformanceIssues, detectFrontendIssues, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, endpointAutoAckLockName, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), errorTrendChartUrl) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, enqueueAIRoutine, runAIRoutineWith, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, detectPerformanceIssues, detectFrontendIssues, applyUptimeResult, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, endpointAutoAckLockName, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), errorTrendChartUrl) where
 
 import BackgroundJobs.Types (BgJobs (..))
 import BackgroundJobs.Types qualified as Jobs
@@ -8,7 +8,7 @@ import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
 import Control.Concurrent.STM.TBQueue (isFullTBQueue, readTBQueue, writeTBQueue)
 import Control.Exception qualified as CE
-import Control.Lens (view, (.~), (^.), (^..), (^?), _1, _3)
+import Control.Lens (view, (.~), (?~), (^.), (^..), (^?), _1, _3)
 import Control.Monad.Extra (whileM)
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens qualified as AL
@@ -4991,7 +4991,48 @@ dispatchPrometheusScrapes authCtx = do
 -- at claim time already prevents re-firing before the next interval, so a broken endpoint
 -- backs off instead of retry-storming, and one bad target never fails sibling work.
 scrapePrometheusTarget :: PromCfg.PrometheusScrapeConfigId -> ATBackgroundCtx ()
-scrapePrometheusTarget cid = whenJustM (PromCfg.getConfig cid) \cfg -> when cfg.enabled do
+scrapePrometheusTarget cid = whenJustM (PromCfg.getConfig cid) \cfg -> when cfg.enabled case cfg.kind of
+  PromCfg.CKUptime -> do
+    t0 <- Time.currentTime
+    -- Any status is an answer here: the probe compares it, so a 5xx must not throw.
+    res <- tryAny $ W.getWith (PromCfg.prometheusScrapeOpts Nothing & Wreq.checkResponse ?~ \_ _ -> pass) (toString cfg.url)
+    t1 <- Time.currentTime
+    applyUptimeResult cfg t1 (round (realToFrac (diffUTCTime t1 t0) * 1000 :: Double)) (bimap (toText . displayException) (^. Wreq.responseStatus . Wreq.statusCode) res)
+  PromCfg.CKPrometheus -> scrapeMetrics cfg
+
+
+-- | Record an uptime probe. Two failures in a row confirm downtime and open (or fold
+-- into) the check's issue; the first success after that resolves it. One failed probe
+-- alone is a blip, not an outage.
+applyUptimeResult :: PromCfg.PrometheusScrapeConfig -> UTCTime -> Int -> Either Text Int -> ATBackgroundCtx ()
+applyUptimeResult cfg now ms res = do
+  let expected = fromMaybe 200 cfg.expectedStatus
+      ok = res == Right expected
+      reason = either ("request failed: " <>) (\c -> bool ("status " <> show c <> ", expected " <> show expected) "ok" ok) res
+  (before, after) <- PromCfg.recordUptime cfg.id ok (reason <> " · " <> show ms <> "ms")
+  when (not ok && after == 2) do
+    issue <-
+      Issues.createUptimeIssue cfg.projectId
+        $ Issues.UptimeData
+          { checkId = cfg.id.toText
+          , name = cfg.name
+          , url = cfg.url
+          , expectedStatus = expected
+          , statusCode = rightToMaybe res
+          , reason
+          , durationMs = ms
+          , downSince = addUTCTime (negate $ fromIntegral cfg.scrapeIntervalSeconds) now
+          }
+    Issues.insertIssue issue
+  when (ok && before >= 2)
+    $ Issues.selectIssueByHash cfg.projectId (Issues.uptimeTargetHash cfg.id.toText) (Issues.OpenOfType Issues.Uptime)
+    >>= traverse_ \i -> do
+      void $ Issues.setArchiveState cfg.projectId [i.id] (Just (now, Issues.ArchiveIndefinite))
+      Issues.logIssueActivity i.id Issues.IEResolved Nothing (Just $ AE.object ["recovered_at" AE..= now, "after_failures" AE..= before])
+
+
+scrapeMetrics :: PromCfg.PrometheusScrapeConfig -> ATBackgroundCtx ()
+scrapeMetrics cfg = do
   result <- tryAny do
     resp <- W.getWith (PromCfg.prometheusScrapeOpts cfg.authHeader) (toString cfg.url)
     -- Capture the fallback metricTime *after* the response arrives: a slow endpoint would
