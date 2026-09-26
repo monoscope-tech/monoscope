@@ -607,10 +607,11 @@ configToEnv config = do
   -- so the server still boots.
   liftIO $ introspectAndCacheOtelColumns pool
   -- A missing or corrupt GeoIP file must not stop the server booting; errors just go unplaced.
-  geoDb <- liftIO $ fmap join $ forM (guarded (not . T.null) config.geoipDbPath) \path ->
-    Safe.try (GeoIP2.openGeoDB (toString path)) >>= \case
-      Right db -> pure (Just db)
-      Left (e :: SomeException) -> Nothing <$ blueMessage ("GeoIP disabled, cannot open " <> path <> ": " <> show e)
+  geoDb <-
+    liftIO $ join <$> forM (guarded (not . T.null) config.geoipDbPath) \path ->
+      Safe.try (GeoIP2.openGeoDB (toString path)) >>= \case
+        Right db -> pure (Just db)
+        Left (e :: SomeException) -> Nothing <$ blueMessage ("GeoIP disabled, cannot open " <> path <> ": " <> show e)
   pure
     AuthContext
       { pool
