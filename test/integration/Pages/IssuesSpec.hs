@@ -758,6 +758,28 @@ spec = sequential $ aroundAll withTestResources do
         (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId iid) Nothing Nothing Nothing Nothing Nothing
         renderPage page `shouldContainAll` ["Span evidence", "repeating query (\x00d7" <> "6)", "ProductController.index", "GET /products", "120 ms", "id=\"issue-trace\"", "Performance"]
 
+    it "frontend detection turns a burst of clicks on one element into a rage-click issue" \tr -> do
+      let click :: PGS.Connection -> (Text, Text, NominalDiffTime) -> IO ()
+          click conn (sid, label, dt) =
+            void
+              $ PGS.execute
+                conn
+                [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, kind, name, summary, context___trace_id, context___span_id, attributes___session___id, attributes, context)
+                      VALUES (gen_random_uuid(), ?, ?, ?, 'internal', 'click', ARRAY['click'], 'rage-trace', gen_random_uuid()::text, ?,
+                              jsonb_build_object('session', jsonb_build_object('id', ?::text), 'page', jsonb_build_object('url', 'https://shop.example.com/checkout'),
+                                                 'monoscope', jsonb_build_object('display', jsonb_build_object('label', ?::text)), 'target', jsonb_build_object('tag_name', 'button', 'id', 'place-order')),
+                              jsonb_build_object('trace_id', 'rage-trace')) |]
+                (testPid, addUTCTime dt frozenTime, addUTCTime dt frozenTime, sid, sid, label)
+      withResource tr.trPool \conn -> do
+        forM_ [0, 0.4, 0.9, 1.4] \dt -> click conn ("sess-rage", "Place order", -120 + dt)
+        click conn ("sess-rage", "Continue shopping", -100)
+      runTestBg frozenTime tr $ BackgroundJobs.detectFrontendIssues testPid
+      rows <- withResource tr.trPool \conn -> PGS.query conn [sql| SELECT id, title FROM apis.issues WHERE project_id = ? AND issue_type = 'frontend' |] (Only testPid) :: IO [(DataUUID.UUID, Text)]
+      map snd rows `shouldBe` ["Rage Click: Place order"]
+      forM_ rows \(iid, _) -> do
+        (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId iid) Nothing Nothing Nothing Nothing Nothing
+        renderPage page `shouldContainAll` ["Rage click", "button#place-order", "https://shop.example.com/checkout", "4 within 2s", "sess-rage"]
+
     -- Sentry's stack trace earns its slot by separating the code you wrote from the
     -- runtime's, and this page had the parser (Pkg.ErrorFingerprint, which the issue
     -- fingerprint is already computed from) but rendered a raw <pre> blob. No demo

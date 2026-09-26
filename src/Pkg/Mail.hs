@@ -802,6 +802,7 @@ sampleAlert = \case
   LogPattern -> const $ MonitorsAlert "🧪 TEST: New Log Pattern" "https://example.com/test" Nothing
   LogPatternRateChange -> const $ MonitorsAlert "🧪 TEST: Log Pattern Rate Change" "https://example.com/test" Nothing
   Performance -> const $ MonitorsAlert "🧪 TEST: N+1 Query" "https://example.com/test" Nothing
+  Frontend -> const $ MonitorsAlert "🧪 TEST: Rage Click" "https://example.com/test" Nothing
 
 
 sampleRuntimeAlert :: RuntimeAlertType -> Text -> NotificationAlerts

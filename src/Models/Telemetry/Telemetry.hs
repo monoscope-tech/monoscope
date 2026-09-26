@@ -12,6 +12,8 @@ module Models.Telemetry.Telemetry (
   PerfCandidate (..),
   selectPerfCandidates,
   spanAndRootNames,
+  selectClickSpans,
+  bursts,
   isErrorRecord,
   getProjectStatsForReport,
   Trace (..),
@@ -122,7 +124,7 @@ import Data.Text.Display (Display)
 import Data.These (These (..))
 import Data.These qualified as These
 import Data.Time (UTCTime (..))
-import Data.Time.Clock (addUTCTime, diffTimeToPicoseconds, diffUTCTime, nominalDay, picosecondsToDiffTime)
+import Data.Time.Clock (NominalDiffTime, addUTCTime, diffTimeToPicoseconds, diffUTCTime, nominalDay, picosecondsToDiffTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
 import Data.UUID.Quasi (uuid)
@@ -867,6 +869,29 @@ spanAndRootNames pid tid spanIdM at = do
     ( asum [n | isJust spanIdM, (sid, _, n) <- rows, sid == spanIdM]
     , asum [n | (_, par, n) <- rows, maybe True T.null par]
     )
+
+
+-- | The browser SDK's click spans (@name = click@, carrying @session.id@) in @[from, to)@.
+selectClickSpans :: DB es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [OtelLogsAndSpans]
+selectClickSpans pid from to =
+  Hasql.interp $ selectOtelSpans pid.toText from to [HI.sql| AND name = 'click' AND attributes___session___id IS NOT NULL ORDER BY timestamp LIMIT 20000 |]
+
+
+-- | The largest burst per key: at least @minCount@ events within @window@ seconds.
+-- Rage clicks are bursts of clicks on one element in one session.
+--
+-- >>> import Data.Time (UTCTime (..), fromGregorian)
+-- >>> let t s = UTCTime (fromGregorian 2026 1 1) s
+-- >>> map (fmap length) $ bursts 3 2 [("save", t 0), ("save", t 0.5), ("save", t 1.2), ("save", t 9), ("nav", t 0), ("nav", t 5)]
+-- [("save",3)]
+bursts :: Ord k => Int -> NominalDiffTime -> [(k, UTCTime)] -> [(k, NonEmpty UTCTime)]
+bursts minCount window evs =
+  [ (k, best)
+  | (k, ts) <- Map.toList $ Map.fromListWith (<>) [(k, [t]) | (k, t) <- evs]
+  , Just best <- [listToMaybe $ sortOn (Down . length) [w | w <- windows (sort ts), length w >= minCount]]
+  ]
+  where
+    windows ts = [start :| takeWhile (\t -> diffUTCTime t start <= window) rest | (start : rest) <- tails ts]
 
 
 -- | The traced event carrying @hashKey@ nearest to @from@ in one direction, within a

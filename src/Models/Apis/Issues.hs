@@ -70,6 +70,9 @@ module Models.Apis.Issues (
   setIssuePriority,
   SavedView (..),
   PerfKind (..),
+  FrontendKind (..),
+  FrontendData (..),
+  createFrontendIssue,
   PerformanceData (..),
   createPerformanceIssue,
   selectIssueViews,
@@ -241,9 +244,34 @@ data IssueType
   | LogPattern
   | LogPatternRateChange
   | Performance
+  | Frontend
   deriving stock (Bounded, Enum, Eq, Generic, Ord, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC ('Just "apis.issue_type") "" IssueType
+
+
+-- | A frontend issue's shape, detected over the browser SDK's interaction spans.
+data FrontendKind = FKRageClick | FKDeadClick
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON, Display) via WrappedEnumSC 'Nothing "FK" FrontendKind
+
+
+-- | The clicked element (@monoscope.display.label@, @target.*@), the page it was on
+-- (@page.url@), and one sample session and trace.
+data FrontendData = FrontendData
+  { kind :: FrontendKind
+  , element :: Text
+  , selector :: Maybe Text
+  , pageUrl :: Maybe Text
+  , clickCount :: Int
+  , sessionId :: Text
+  , traceId :: Text
+  , observedAt :: UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake FrontendData
 
 
 -- | A performance issue's shape, detected over completed traces' database spans.
@@ -280,6 +308,7 @@ hashPrefix = \case
   ApiChange -> Just "" -- endpoint hash is stored unprefixed on span hashes
   QueryAlert -> Nothing
   Performance -> Nothing -- detected over span shapes; spans carry no issue hash
+  Frontend -> Nothing
 
 
 defaultRecommendedAction :: Text
@@ -2030,6 +2059,7 @@ data IssuePayload
   | LogPatternP LogPatternData
   | LogPatternRateChangeP LogPatternRateChangeData
   | PerformanceP PerformanceData
+  | FrontendP FrontendData
   deriving stock (Generic, Show)
 
 
@@ -2043,6 +2073,7 @@ payloadType = \case
   LogPatternP{} -> LogPattern
   LogPatternRateChangeP{} -> LogPatternRateChange
   PerformanceP{} -> Performance
+  FrontendP{} -> Frontend
 
 
 -- | The @issue_data@ column's value: the *bare* per-type object, exactly as before
@@ -2062,6 +2093,7 @@ payloadJson = \case
   LogPatternP d -> AE.toJSON d
   LogPatternRateChangeP d -> AE.toJSON d
   PerformanceP d -> AE.toJSON d
+  FrontendP d -> AE.toJSON d
 
 
 -- | Pair a stored @issue_type@ with its @issue_data@. 'Nothing' means the two
@@ -2087,6 +2119,7 @@ parsePayload t v = case t of
   LogPattern -> wrap LogPatternP
   LogPatternRateChange -> wrap LogPatternRateChangeP
   Performance -> wrap PerformanceP
+  Frontend -> wrap FrontendP
   where
     wrap :: AE.FromJSON a => (a -> IssuePayload) -> Maybe IssuePayload
     wrap f = case AE.fromJSON v of
@@ -2408,6 +2441,28 @@ createPerformanceIssue projectId service d =
       , migrationComplexity = "n/a"
       , timestamp = Nothing
       , payload = PerformanceP d
+      }
+
+
+-- | One frontend issue per (kind, page path, element).
+createFrontendIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Maybe Text -> FrontendData -> Eff es Issue
+createFrontendIssue projectId service d =
+  mkIssue
+    MkIssueOpts
+      { projectId
+      , targetHash = toXXHash $ T.intercalate "|" [display d.kind, maybe "" (T.takeWhile (/= '?')) d.pageUrl, d.element, fromMaybe "" d.selector]
+      , parentHash = Nothing
+      , isFramework = False
+      , service
+      , critical = False
+      , severity = Warning
+      , title = bool "Dead Click: " "Rage Click: " (d.kind == FKRageClick) <> T.take 100 d.element
+      , recommendedAction = case d.kind of
+          FKRageClick -> "Users clicked this repeatedly: check it responds, shows progress, and is not disabled without saying why."
+          FKDeadClick -> "Clicking this changed nothing on the page: wire up its handler or stop it looking clickable."
+      , migrationComplexity = "n/a"
+      , timestamp = Nothing
+      , payload = FrontendP d
       }
 
 

@@ -38,7 +38,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (commit).
 - [x] C1 Performance — N+1 query (`db.query.text` repeated under one parent), slow DB query
       (duration over threshold), inefficient query; span evidence (parent, preceding, repeating,
       duration impact).
-- [ ] C2 Frontend — rage click / dead click from browser SDK click events; selector + replay.
+- [~] C2 Frontend — rage click / dead click from browser SDK click events; selector + replay.
 - [ ] C3 Uptime — HTTP checks → downtime issues with status code, reason, duration.
 - [ ] C4 Cron monitors — check-ins (span/log with `monitor.slug`); missed/failed issues.
 - [-] C5 User feedback — descoped by the user (2026-09-26).

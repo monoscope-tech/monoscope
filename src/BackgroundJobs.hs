@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, enqueueAIRoutine, runAIRoutineWith, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, detectPerformanceIssues, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, endpointAutoAckLockName, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), errorTrendChartUrl) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, enqueueAIRoutine, runAIRoutineWith, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, detectPerformanceIssues, detectFrontendIssues, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, endpointAutoAckLockName, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), errorTrendChartUrl) where
 
 import BackgroundJobs.Types (BgJobs (..))
 import BackgroundJobs.Types qualified as Jobs
@@ -106,7 +106,7 @@ import Pages.Replay qualified as Replay
 import Pages.Reports qualified as RP
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (BaselineState (..), UUIDId (..), WrappedEnumSC (..), rawSql)
+import Pkg.DeriveUtils (BaselineState (..), UUIDId (..), WrappedEnumSC (..), rawSql, unAesonTextMaybe)
 import Pkg.Drain qualified as Drain
 import Pkg.EmailTemplates qualified as ET
 import Pkg.ErrorFingerprint qualified as EF
@@ -308,6 +308,7 @@ processBackgroundJob authCtx bgJob =
     ErrorBaselineCalculation pid -> calculateErrorBaselines pid
     ErrorSpikeDetection pid -> detectErrorSpikes pid
     PerformanceIssueDetection pid -> detectPerformanceIssues pid
+    FrontendIssueDetection pid -> detectFrontendIssues pid
     PatternEmbeddingAndMerge scheduledTime pid -> unlessStale "PatternEmbeddingAndMerge" scheduledTime (15 * 60) $ patternEmbeddingAndMerge pid
     ErrorGroupReview scheduledTime pid -> unlessStale "ErrorGroupReview" scheduledTime (15 * 60) $ reviewErrorGroups pid
     EndpointTemplateDiscovery scheduledTime pid -> unlessStale "EndpointTemplateDiscovery" scheduledTime 900 $ endpointTemplateDiscovery pid
@@ -1378,7 +1379,7 @@ runHourlyJob scheduledTime hour = do
 
   enqueueJobs ctx
     $ map (\batch -> Jobs.GenerateOtelFacetsBatch (V.fromList batch) scheduledTime) projectBatches
-    <> concatMap (\pid -> [Jobs.ReportUsage pid, ErrorBaselineCalculation pid, ErrorSpikeDetection pid, PerformanceIssueDetection pid]) activeProjects
+    <> concatMap (\pid -> [Jobs.ReportUsage pid, ErrorBaselineCalculation pid, ErrorSpikeDetection pid, PerformanceIssueDetection pid, FrontendIssueDetection pid]) activeProjects
 
   -- Cleanup expired query cache entries
   tryStep "monitor-evaluation-retention" $ Monitors.pruneEvaluations (addUTCTime (-(7 * 86400)) scheduledTime)
@@ -5658,6 +5659,36 @@ detectPerformanceIssues pid = do
           , observedAt = c.at
           }
     Issues.insertIssue issue
+
+
+-- | Open (or fold into the open) rage-click issues for the last hour's click spans:
+-- three or more clicks on one element in one session within two seconds.
+detectFrontendIssues :: Projects.ProjectId -> ATBackgroundCtx ()
+detectFrontendIssues pid = do
+  now <- Time.currentTime
+  authCtx <- ask @Config.AuthContext
+  clicks <- withHasqlTimefusion authCtx.env.enableTimefusionReads $ Telemetry.selectClickSpans pid (addUTCTime (-3600) now) now
+  let attrs c = unAesonTextMaybe c.attributes
+      attr k c = Telemetry.atMapText k (attrs c)
+      element c = attr "monoscope.display.label" c <|> attr "target.id" c <|> attr "target.tag_name" c
+      selector c = (\tag -> tag <> foldMap ("#" <>) (attr "target.id" c)) <$> attr "target.tag_name" c
+      keyed = [((sid, attr "page.url" c, el), (c.timestamp, c)) | c <- clicks, Just sid <- [attr "session.id" c], Just el <- [element c]]
+      byKey = Map.fromListWith (<>) [(k, [v]) | (k, v) <- keyed]
+  forM_ (Telemetry.bursts 3 2 [(k, t) | (k, (t, _)) <- keyed]) \((sid, pageUrl, el), ts) ->
+    whenJust (find ((== head ts) . fst) =<< Map.lookup (sid, pageUrl, el) byKey) \(_, sample) -> do
+      issue <-
+        Issues.createFrontendIssue pid (Telemetry.spanServiceName sample)
+          $ Issues.FrontendData
+            { kind = Issues.FKRageClick
+            , element = el
+            , selector = selector sample
+            , pageUrl
+            , clickCount = length ts
+            , sessionId = sid
+            , traceId = fromMaybe "" (sample.context >>= (.trace_id))
+            , observedAt = head ts
+            }
+      Issues.insertIssue issue
 
 
 -- | How many shape groups one review run may ask about. Mirrors

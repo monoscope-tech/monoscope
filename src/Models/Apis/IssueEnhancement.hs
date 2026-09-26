@@ -167,6 +167,13 @@ buildTitlePrompt issue =
             Repeats: {d.repeatCount}
             Duration impact: {impact} ms
             Service: {Issues.serviceLabel issue.service}|]
+      Issues.Frontend ->
+        withIssueData @Issues.FrontendData issue ("Generate a concise title for this frontend issue. Title: " <> issue.title) \d ->
+          let kind = display d.kind
+           in [fmtTrim|Generate a concise title for this {kind} on a web page.
+            Element: {d.element}
+            Page: {fromMaybe "unknown" d.pageUrl}
+            Clicks in the burst: {d.clickCount}|]
 
 
 buildDescriptionPrompt :: Issues.Issue -> Text
@@ -264,6 +271,14 @@ buildDescriptionPrompt issue =
             Repeats in one trace: {d.repeatCount}
             Duration impact: {impact} ms
             Service: {Issues.serviceLabel issue.service}|]
+      Issues.Frontend ->
+        withIssueData @Issues.FrontendData issue ("Describe this frontend issue. Title: " <> issue.title) \d ->
+          let kind = display d.kind
+           in [fmtTrim|Describe this {kind}: what the user was likely trying to do and why the page did not respond.
+            Element: {d.element}
+            Selector: {fromMaybe "unknown" d.selector}
+            Page: {fromMaybe "unknown" d.pageUrl}
+            Clicks in the burst: {d.clickCount}|]
 
 
 -- | Classify issue as critical/safe and count breaking/incremental changes
@@ -327,6 +342,7 @@ buildCriticalityPrompt issue =
       Issues.LogPattern -> "Log pattern: " <> issue.title
       Issues.LogPatternRateChange -> "Log pattern rate change: " <> issue.title
       Issues.Performance -> "Performance issue: " <> issue.title
+      Issues.Frontend -> "Frontend issue: " <> issue.title
 
 
 updateIssueClassification :: DB es => Issues.IssueId -> Bool -> Int -> Eff es ()
