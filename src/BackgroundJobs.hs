@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, enqueueAIRoutine, runAIRoutineWith, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, detectPerformanceIssues, detectFrontendIssues, applyUptimeResult, evaluateCronMonitor, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, endpointAutoAckLockName, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), errorTrendChartUrl) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, enqueueAIRoutine, runAIRoutineWith, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, detectPerformanceIssues, detectFrontendIssues, detectFeedback, applyUptimeResult, evaluateCronMonitor, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, endpointAutoAckLockName, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), errorTrendChartUrl) where
 
 import BackgroundJobs.Types (BgJobs (..))
 import BackgroundJobs.Types qualified as Jobs
@@ -309,6 +309,7 @@ processBackgroundJob authCtx bgJob =
     ErrorSpikeDetection pid -> detectErrorSpikes pid
     PerformanceIssueDetection pid -> detectPerformanceIssues pid
     FrontendIssueDetection pid -> detectFrontendIssues pid
+    FeedbackDetection pid -> detectFeedback pid
     PatternEmbeddingAndMerge scheduledTime pid -> unlessStale "PatternEmbeddingAndMerge" scheduledTime (15 * 60) $ patternEmbeddingAndMerge pid
     ErrorGroupReview scheduledTime pid -> unlessStale "ErrorGroupReview" scheduledTime (15 * 60) $ reviewErrorGroups pid
     EndpointTemplateDiscovery scheduledTime pid -> unlessStale "EndpointTemplateDiscovery" scheduledTime 900 $ endpointTemplateDiscovery pid
@@ -1379,7 +1380,7 @@ runHourlyJob scheduledTime hour = do
 
   enqueueJobs ctx
     $ map (\batch -> Jobs.GenerateOtelFacetsBatch (V.fromList batch) scheduledTime) projectBatches
-    <> concatMap (\pid -> [Jobs.ReportUsage pid, ErrorBaselineCalculation pid, ErrorSpikeDetection pid, PerformanceIssueDetection pid, FrontendIssueDetection pid]) activeProjects
+    <> concatMap (\pid -> [Jobs.ReportUsage pid, ErrorBaselineCalculation pid, ErrorSpikeDetection pid, PerformanceIssueDetection pid, FrontendIssueDetection pid, FeedbackDetection pid]) activeProjects
 
   -- Cleanup expired query cache entries
   tryStep "monitor-evaluation-retention" $ Monitors.pruneEvaluations (addUTCTime (-(7 * 86400)) scheduledTime)
@@ -5018,7 +5019,7 @@ evaluateCronMonitor :: UTCTime -> Monitors.CronMonitor -> ATBackgroundCtx ()
 evaluateCronMonitor now m = do
   authCtx <- ask @Config.AuthContext
   let since = max (addUTCTime (-86400) now) (fromMaybe m.createdAt m.lastCheckinAt)
-  spans <- withHasqlTimefusion authCtx.env.enableTimefusionReads $ Telemetry.selectCheckins m.projectId since now
+  spans <- withHasqlTimefusion authCtx.env.enableTimefusionReads $ Telemetry.selectNamedRecords m.projectId "cron.checkin" since now
   let attr k c = Telemetry.atMapText k (unAesonTextMaybe c.attributes)
       newer = sortWith fst [(c.timestamp, fromMaybe "ok" (attr "monitor.status" c)) | c <- spans, attr "monitor.slug" c == Just m.slug, maybe True (c.timestamp >) m.lastCheckinAt]
       lastSeen = (fst <$> viaNonEmpty last newer) <|> m.lastCheckinAt
@@ -5735,6 +5736,37 @@ detectPerformanceIssues pid = do
           , observedAt = c.at
           }
     Issues.insertIssue issue
+
+
+-- | One feedback issue per @user.feedback@ span or log in the last hour (plus a margin the
+-- record-id key makes safe to rescan), linked to the error issue sharing its trace.
+detectFeedback :: Projects.ProjectId -> ATBackgroundCtx ()
+detectFeedback pid = do
+  now <- Time.currentTime
+  authCtx <- ask @Config.AuthContext
+  records <- withHasqlTimefusion authCtx.env.enableTimefusionReads $ Telemetry.selectNamedRecords pid "user.feedback" (addUTCTime (-3900) now) now
+  forM_ records \r -> do
+    let attr k = Telemetry.atMapText k (unAesonTextMaybe r.attributes)
+        bodyText = unAesonTextMaybe r.body >>= \case AE.String t -> Just t; _ -> Nothing
+        tidM = mfilter (not . T.null) (r.context >>= (.trace_id))
+    whenJust (mfilter (not . T.null . T.strip) (attr "feedback.message" <|> bodyText)) \message ->
+      whenNothingM_ (Issues.selectIssueByHash pid ("feedback:" <> r.id) Issues.AnyIssue) do
+        related <- join <$> forM tidM \tid -> withHasqlTimefusion authCtx.env.enableTimefusionReads (Telemetry.traceErrorHash pid tid r.timestamp)
+        Issues.insertIssue
+          =<< Issues.createFeedbackIssue
+            pid
+            (Telemetry.spanServiceName r)
+            r.id
+            Issues.FeedbackData
+              { message
+              , contactEmail = attr "feedback.contact_email" <|> attr "user.email"
+              , userName = attr "user.name" <|> attr "user.full_name"
+              , pageUrl = attr "url.full" <|> attr "page.url"
+              , sessionId = attr "session.id"
+              , traceId = tidM
+              , relatedErrorHash = T.stripPrefix "err:" =<< related
+              , observedAt = r.timestamp
+              }
 
 
 -- | Open (or fold into the open) rage-click issues for the last hour's click spans:

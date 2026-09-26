@@ -185,6 +185,11 @@ buildTitlePrompt issue =
           let failure = display d.failure
            in [fmtTrim|Generate a concise title for a scheduled job that {failure}.
             Job: {d.name} ({d.slug})|]
+      Issues.Feedback ->
+        withIssueData @Issues.FeedbackData issue ("Generate a concise title for this user feedback. Title: " <> issue.title) \d ->
+          [fmtTrim|Summarise this user feedback as a short title naming the problem or request.
+            Feedback: {d.message}
+            Page: {fromMaybe "unknown" d.pageUrl}|]
 
 
 buildDescriptionPrompt :: Issues.Issue -> Text
@@ -307,6 +312,13 @@ buildDescriptionPrompt issue =
             Job: {d.name} ({d.slug})
             Expected a check-in by: {expected}
             Last check-in: {lastRun}|]
+      Issues.Feedback ->
+        withIssueData @Issues.FeedbackData issue ("Summarise this user feedback. Title: " <> issue.title) \d ->
+          let related = bool "no" "yes" (isJust d.relatedErrorHash)
+           in [fmtTrim|Summarise this user feedback in two sentences: what the user hit, and what to check first.
+            Feedback: {d.message}
+            Page: {fromMaybe "unknown" d.pageUrl}
+            An error occurred in the same trace: {related}|]
 
 
 -- | Classify issue as critical/safe and count breaking/incremental changes
@@ -373,6 +385,7 @@ buildCriticalityPrompt issue =
       Issues.Frontend -> "Frontend issue: " <> issue.title
       Issues.Uptime -> "Downtime: " <> issue.title
       Issues.Cron -> "Cron monitor: " <> issue.title
+      Issues.Feedback -> "User feedback: " <> issue.title
 
 
 updateIssueClassification :: DB es => Issues.IssueId -> Bool -> Int -> Eff es ()

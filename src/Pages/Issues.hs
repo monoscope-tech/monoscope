@@ -259,8 +259,8 @@ instance ToHtml IssueAction where
 -- The slugs are the existing wire spellings, so live URLs are unchanged:
 --
 -- >>> map bulkActionSlug [minBound .. maxBound :: IssueBulkAction]
--- ["acknowledge","unacknowledge","archive","unarchive","resolve","priority","assign","merge"]
-data IssueBulkAction = BAAcknowledge | BAUnacknowledge | BAArchive | BAUnarchive | BAResolve | BAPriority | BAAssign | BAMerge
+-- ["acknowledge","unacknowledge","archive","unarchive","resolve","priority","assign","merge","spam","unspam"]
+data IssueBulkAction = BAAcknowledge | BAUnacknowledge | BAArchive | BAUnarchive | BAResolve | BAPriority | BAAssign | BAMerge | BASpam | BAUnspam
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
   deriving (FromHttpApiData) via WrappedEnumSC 'Nothing "BA" IssueBulkAction
 
@@ -318,6 +318,8 @@ issueBulkActionsPostH pid action durationM valueM items = do
               void $ Issues.setArchiveState pid (fst <$> rest) (Just (now, Issues.ArchiveIndefinite))
               pure (fst <$> rest, Just Issues.IEMerged, "Merged " <> show (length rest) <> " into " <> canon.errorType)
             _ -> pure ([], Nothing, "Select two or more errors to merge")
+        BASpam -> Issues.setSpamState pid issueIds (Just now) $> (issueIds, Just Issues.IESpam, "Marked as spam")
+        BAUnspam -> Issues.setSpamState pid issueIds Nothing $> (issueIds, Just Issues.IEUnarchived, "Back in the Inbox")
       forM_ eventM \ev -> forM_ logIds \u -> Issues.logIssueActivity u ev (Just sess.user.id) Nothing
       addSuccessToast msg Nothing
       addTriggerEvent "issuesListChanged" AE.Null
@@ -452,6 +454,7 @@ issueDetailCore pid firstM eventM requestedRange fetchIssue = do
             Just (Issues.FrontendP d) -> pure $ (,d.observedAt) <$> guarded (not . T.null) d.traceId
             Just (Issues.UptimeP _) -> pure Nothing
             Just (Issues.CronP _) -> pure Nothing
+            Just (Issues.FeedbackP d) -> pure $ (,d.observedAt) <$> d.traceId
             Nothing -> pure Nothing
       mTraceRef <- maybe defaultTraceRef (\ev -> pure $ Just (ev.traceId, ev.at)) eventM
       -- The trace is supporting evidence, not the page. It used to be fetched here
@@ -475,7 +478,7 @@ issueDetailCore pid firstM eventM requestedRange fetchIssue = do
       -- only once a recording exists. A non-UUID session key (backend SDKs
       -- without setSession, where the session is derived from user identity)
       -- can never have one, so it never reaches the lookup.
-      let sessionM = tracedSession <|> listToMaybe [d.sessionId | Just (Issues.FrontendP d) <- [Issues.issuePayload issue]]
+      let sessionM = tracedSession <|> listToMaybe ([d.sessionId | Just (Issues.FrontendP d) <- [Issues.issuePayload issue]] <> [sid | Just (Issues.FeedbackP d) <- [Issues.issuePayload issue], Just sid <- [d.sessionId]])
       replaySession <- enriching "replay_recording" $ flip foldMapM (UUID.fromText =<< sessionM) \sid ->
         listToMaybe @Text
           <$> Hasql.interp [HI.sql| SELECT session_id::text FROM projects.replay_sessions WHERE project_id = #{pid} AND session_id = #{sid} LIMIT 1 |]
@@ -1072,6 +1075,7 @@ issueHeader_ IssueView{..} = header_ [class_ "max-md:px-3 px-4 max-md:pt-4 pt-6 
           Just (Issues.QueryAlertP _) -> pass
           Just (Issues.ApiChangeP _) -> pass
           Just (Issues.CronP d) -> metadataChip_ "clock" $ bool "Failed run" "Missed check-in" (d.failure == Issues.CFMissed)
+          Just (Issues.FeedbackP d) -> metadataChip_ "comment" $ fromMaybe "Anonymous" (d.userName <|> d.contactEmail)
           Just (Issues.UptimeP d) -> metadataChip_ "clock" $ "Down since " <> agoText now d.downSince
           Just (Issues.FrontendP d) -> metadataChip_ "arrow-pointer" $ bool "Dead click" "Rage click" (d.kind == Issues.FKRageClick)
           Just (Issues.PerformanceP d) -> metadataChip_ "database" $ unwords $ catMaybes [Just (bool "Slow query" "N+1 query" (d.kind == Issues.PKNPlusOne)), d.dbSystem]
@@ -1175,6 +1179,10 @@ issueAggregate_ v@IssueView{..} = do
         forM_ ([("Duration", show @Text (round d.durationImpactMs :: Int) <> " ms"), ("Queries", show d.repeatCount), ("Database", fromMaybe "\x2014" d.dbSystem)] :: [(Text, Text)]) \(lbl, val) -> div_ [class_ "flex flex-col gap-1"] do
           span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] $ toHtml lbl
           span_ [class_ "text-2xl font-semibold text-textStrong tabular-nums leading-none"] $ toHtml val
+    Just (Issues.FeedbackP d) ->
+      contextCard_ "p-4 flex flex-col gap-3" "What the user said" do
+        p_ [class_ "text-sm text-textStrong whitespace-pre-wrap"] $ toHtml d.message
+        whenJust d.relatedErrorHash \h -> a_ [href_ $ "/p/" <> pid.toText <> "/issues/by_hash/" <> h, class_ "text-xs text-textBrand hover:underline"] "Open the error from this user's trace"
     Just (Issues.CronP d) ->
       contextCard_ "p-4 flex flex-col gap-2" "Schedule" do
         detailRow_ [("clock", "text-fillError-strong", "Expected by", agoText now d.expectedBy)]
@@ -1241,7 +1249,7 @@ eventCard_ :: IssueView -> Html ()
 eventCard_ IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflow-clip [--event-nav-h:77px]"] do
   let occurrenceUrl useFirst = "/p/" <> pid.toText <> "/issues/" <> issue.id.toText <> "?" <> T.drop 1 (mconcat ["&first_occurrence=true" | useFirst] <> TimePicker.rangeQuery tp)
       -- A performance issue carries one sample trace, not a stream of occurrences.
-      hasOccurrences = issue.issueType `notElem` [Issues.QueryAlert, Issues.Performance, Issues.Frontend, Issues.Uptime, Issues.Cron] && not isLogPatternIssue
+      hasOccurrences = issue.issueType `notElem` [Issues.QueryAlert, Issues.Performance, Issues.Frontend, Issues.Uptime, Issues.Cron, Issues.Feedback] && not isLogPatternIssue
   nav_ [id_ "issue-event-nav", class_ "sticky top-0 z-20 bg-bgRaised border-b border-strokeWeak", Aria.label_ "Issue evidence"] do
     div_ [class_ "max-md:px-3 px-4 h-10 flex items-center gap-3 overflow-x-auto whitespace-nowrap"] do
       span_ [class_ "text-sm font-semibold text-textStrong"] $ bool "Evidence" "Event" hasOccurrences
@@ -1420,6 +1428,17 @@ eventCard_ IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflow-cli
                            else toHtml u
                  | Just urls <- [field (.attachments)]
                  ]
+      Just (Issues.FeedbackP d) ->
+        [ section "issue-feedback-evidence" "comment" "Submission"
+            $ kvRows_ "max-md:px-3 px-4"
+            $ present
+              [ ("name", d.userName)
+              , ("contact email", d.contactEmail)
+              , ("page", d.pageUrl)
+              , ("session.id", d.sessionId)
+              , ("submitted", Just $ formatUTC d.observedAt)
+              ]
+        ]
       Just (Issues.CronP d) ->
         [ section "issue-cron-evidence" "clock" "Evidence"
             $ kvRows_ "max-md:px-3 px-4"
@@ -2372,7 +2391,7 @@ issueListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM service
               span_ [class_ "w-px h-4 bg-strokeWeak mx-1"] ""
               let listUrl types = "/p/" <> pid.toText <> "/issues?filter=" <> currentFilterTab <> "&sort=" <> currentSort <> "&period=" <> period <> foldMap ("&service=" <>) serviceFilters <> foldMap ("&type=" <>) types
                   viewLink active href lbl = a_ [href_ href, class_ $ "px-2 py-1 rounded text-xs whitespace-nowrap " <> bool "text-textWeak hover:text-textStrong hover:bg-fillWeaker" "bg-fillBrand-weak text-textBrand font-medium" active] $ toHtml lbl
-              forM_ ([("All", []), ("Errors", ["runtime_exception"]), ("Alerts", ["query_alert"]), ("Log patterns", ["log_pattern", "log_pattern_rate_change"]), ("API changes", ["api_change"])] :: [(Text, [Text])]) \(lbl, types) ->
+              forM_ ([("All", []), ("Errors", ["runtime_exception"]), ("Alerts", ["query_alert"]), ("Log patterns", ["log_pattern", "log_pattern_rate_change"]), ("API changes", ["api_change"]), ("Feedback", ["feedback"])] :: [(Text, [Text])]) \(lbl, types) ->
                 viewLink (sortNub typeFilters == sortNub types) (listUrl types) lbl
               forM_ savedViews \v -> span_ [class_ "inline-flex items-center"] do
                 viewLink (T.drop 1 (snd $ T.breakOn "?" baseUrl) == v.query) ("/p/" <> pid.toText <> "/issues?" <> v.query) v.name
@@ -2402,8 +2421,8 @@ issueListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM service
 -- already carry (@?filter=Acknowledged@); 'tabParam' is the single source of it.
 --
 -- >>> map tabParam [minBound .. maxBound]
--- ["Inbox","Acknowledged","Archived"]
-data IssueTab = TabInbox | TabAcknowledged | TabArchived
+-- ["Inbox","Acknowledged","Archived","Spam"]
+data IssueTab = TabInbox | TabAcknowledged | TabArchived | TabSpam
   deriving stock (Bounded, Enum, Eq, Ord, Show)
 
 
@@ -2413,13 +2432,14 @@ tabParam = \case
   TabInbox -> "Inbox"
   TabAcknowledged -> "Acknowledged"
   TabArchived -> "Archived"
+  TabSpam -> "Spam"
 
 
 -- | An absent or unrecognised @filter@ lands on Inbox: the tab is a navigation
 -- affordance, so a stale bookmark should show something useful rather than fail.
 --
--- >>> map parseTab [Just "Archived", Just "Acknowledged", Just "nonsense", Nothing]
--- [TabArchived,TabAcknowledged,TabInbox,TabInbox]
+-- >>> map parseTab [Just "Archived", Just "Acknowledged", Just "Spam", Just "nonsense", Nothing]
+-- [TabArchived,TabAcknowledged,TabSpam,TabInbox,TabInbox]
 parseTab :: Maybe Text -> IssueTab
 parseTab = fromMaybe TabInbox . (inverseMap tabParam =<<)
 
@@ -2427,9 +2447,10 @@ parseTab = fromMaybe TabInbox . (inverseMap tabParam =<<)
 -- | Inbox additionally hides severity='low' so demoted silent drops don't clutter it.
 tabIssueFilters :: IssueTab -> Issues.IssueFilters
 tabIssueFilters = \case
-  TabAcknowledged -> Issues.defIssueFilters{Issues.ack = Issues.IsNotNull}
-  TabArchived -> Issues.defIssueFilters{Issues.archive = Issues.IsNotNull}
-  TabInbox -> Issues.defIssueFilters{Issues.ack = Issues.IsNull, Issues.archive = Issues.IsNull, Issues.hideLowSeverity = True}
+  TabAcknowledged -> Issues.defIssueFilters{Issues.ack = Issues.IsNotNull, Issues.spam = Issues.IsNull}
+  TabArchived -> Issues.defIssueFilters{Issues.archive = Issues.IsNotNull, Issues.spam = Issues.IsNull}
+  TabInbox -> Issues.defIssueFilters{Issues.ack = Issues.IsNull, Issues.archive = Issues.IsNull, Issues.spam = Issues.IsNull, Issues.hideLowSeverity = True}
+  TabSpam -> Issues.defIssueFilters{Issues.spam = Issues.IsNotNull}
 
 
 -- | One line under the tab strip saying what the tab *means*.
@@ -2438,6 +2459,7 @@ tabBlurb = \case
   TabAcknowledged -> "Someone owns these. Notifications are paused until the acknowledgement expires or the issue regresses."
   TabArchived -> "Not actionable. Hidden and never notified — unarchive to bring one back."
   TabInbox -> "Needs triage. Acknowledge to pause notifications, or archive if it isn't actionable."
+  TabSpam -> "Marked as spam, mostly user feedback. Hidden from the Inbox and never notified."
 
 
 -- | Bulk actions offered on each tab: only transitions that make sense from the
@@ -2448,6 +2470,7 @@ issueBulkActions pid tab members =
   | (i, t, a, cs) <- case tab of
       TabAcknowledged -> [("arrow-rotate-left", "Unacknowledge", BAUnacknowledge, []), ("archive", "Archive", BAArchive, [])] <> triage
       TabArchived -> [("arrow-rotate-left", "Unarchive", BAUnarchive, [])]
+      TabSpam -> [("arrow-rotate-left", "Not spam", BAUnspam, [])]
       TabInbox -> [("check", "Acknowledge", BAAcknowledge, []), ("archive", "Archive", BAArchive, [])] <> triage
   ]
   where
@@ -2458,6 +2481,7 @@ issueBulkActions pid tab members =
       , ("flag", "Priority", BAPriority, [(T.toTitle (display sev), withValue BAPriority (display sev)) | sev <- [minBound .. maxBound :: Issues.IssueSeverity]])
       , ("user", "Assign", BAAssign, ("Unassigned", url BAAssign) : [(memberLabel m, withValue BAAssign m.userId.toText) | m <- members])
       , ("code-merge", "Merge", BAMerge, [])
+      , ("ban", "Spam", BASpam, [])
       ]
 
 
@@ -2465,6 +2489,8 @@ issueZeroState :: Projects.ProjectId -> IssueTab -> ZeroState
 issueZeroState pid = \case
   TabAcknowledged ->
     ZeroState "circle-check" "Nothing acknowledged" "Acknowledge an issue to pause its notifications while you work on it." (ESLink inboxUrl "Go to Inbox")
+  TabSpam ->
+    ZeroState "ban" "No spam" "Feedback or issues marked as spam land here, out of the Inbox." (ESLink inboxUrl "Go to Inbox")
   TabArchived ->
     ZeroState "archive" "Nothing archived" "Archive the issues that aren't worth acting on. They stay hidden and never notify." (ESLink inboxUrl "Go to Inbox")
   TabInbox ->
@@ -2710,6 +2736,7 @@ issuePreview_ Issues.IssueL{base} = div_ [class_ "flex items-center gap-2 min-w-
       Just (Issues.LogPatternRateChangeP d) -> logPatternPreview d.logPattern d.sampleMessage
       Just (Issues.PerformanceP d) -> previewSnippet d.query
       Just (Issues.CronP d) -> previewSnippet $ d.slug <> " \x2014 " <> display d.failure
+      Just (Issues.FeedbackP d) -> previewSnippet d.message
       Just (Issues.UptimeP d) -> previewSnippet $ d.url <> " \x2014 " <> d.reason
       Just (Issues.FrontendP d) -> previewSnippet $ d.element <> foldMap (" on " <>) d.pageUrl
       Just (Issues.ApiChangeP d) ->
@@ -2810,6 +2837,7 @@ issueTypeChip_ compact issueType critical =
       Issues.Frontend -> ("text-fillWarning-strong", "arrow-pointer", "Frontend")
       Issues.Uptime -> ("text-fillError-strong", "heart-pulse", "Uptime")
       Issues.Cron -> ("text-fillError-strong", "clock", "Cron")
+      Issues.Feedback -> ("text-fillBrand-strong", "comment", "Feedback")
       Issues.ApiChange | critical -> ("text-fillError-strong", "exclamation-triangle", "Breaking")
       Issues.ApiChange -> ("text-fillInformation-strong", "info", "Incremental")
     shortTxt = case issueType of
@@ -2940,6 +2968,7 @@ issueActivityTimeline_ userMap now activities
       Issues.Lifecycle Issues.IEViewed -> ("eye", "bg-fillWeaker text-textWeak", "Viewed")
       Issues.Lifecycle Issues.IELinked -> ("link", "bg-fillBrand-weak text-fillBrand-strong", "Linked an external issue")
       Issues.Lifecycle Issues.IEMerged -> ("code-merge", "bg-fillWeaker text-textWeak", "Merged into another issue")
+      Issues.Lifecycle Issues.IESpam -> ("ban", "bg-fillWeaker text-textWeak", "Marked as spam")
 
 
 data SaveViewForm = SaveViewForm {name :: Text, query :: Text}

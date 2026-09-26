@@ -14,7 +14,8 @@ module Models.Telemetry.Telemetry (
   selectPerfCandidates,
   spanAndRootNames,
   selectClickSpans,
-  selectCheckins,
+  selectNamedRecords,
+  traceErrorHash,
   bursts,
   isErrorRecord,
   getProjectStatsForReport,
@@ -880,9 +881,18 @@ selectClickSpans pid from to =
   Hasql.interp $ selectOtelSpans pid.toText from to [HI.sql| AND name IN ('click', 'dead_click') AND attributes___session___id IS NOT NULL ORDER BY timestamp LIMIT 20000 |]
 
 
--- | Cron check-ins: spans or logs named @cron.checkin@ in @[from, to)@.
-selectCheckins :: DB es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [OtelLogsAndSpans]
-selectCheckins pid from to = Hasql.interp $ selectOtelSpans pid.toText from to [HI.sql| AND name = 'cron.checkin' ORDER BY timestamp LIMIT 5000 |]
+-- | Spans or logs with this name in @[from, to)@: cron check-ins (@cron.checkin@), user feedback (@user.feedback@).
+selectNamedRecords :: DB es => Projects.ProjectId -> Text -> UTCTime -> UTCTime -> Eff es [OtelLogsAndSpans]
+selectNamedRecords pid name from to = Hasql.interp $ selectOtelSpans pid.toText from to [HI.sql| AND name = #{name} ORDER BY timestamp LIMIT 5000 |]
+
+
+-- | The first error hash (@err:…@) carried by any record of this trace within an hour of @at@.
+traceErrorHash :: DB es => Projects.ProjectId -> Text -> UTCTime -> Eff es (Maybe Text)
+traceErrorHash pid tid at =
+  Hasql.interpOne
+    [HI.sql| SELECT h FROM (SELECT unnest(hashes) AS h FROM otel_logs_and_spans
+               WHERE project_id = #{pid.toText} AND context___trace_id = #{tid} AND timestamp BETWEEN #{addUTCTime (-3600) at} AND #{addUTCTime 3600 at}) t
+             WHERE h LIKE 'err:%' LIMIT 1 |]
 
 
 -- | The largest burst per key: at least @minCount@ events within @window@ seconds.

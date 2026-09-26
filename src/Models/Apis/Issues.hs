@@ -79,6 +79,9 @@ module Models.Apis.Issues (
   createUptimeIssue,
   uptimeTargetHash,
   FrontendData (..),
+  FeedbackData (..),
+  createFeedbackIssue,
+  setSpamState,
   createFrontendIssue,
   PerformanceData (..),
   createPerformanceIssue,
@@ -254,6 +257,7 @@ data IssueType
   | Frontend
   | Uptime
   | Cron
+  | Feedback
   deriving stock (Bounded, Enum, Eq, Generic, Ord, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC ('Just "apis.issue_type") "" IssueType
@@ -264,6 +268,24 @@ data CronFailure = CFMissed | CFFailed
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON, Display) via WrappedEnumSC 'Nothing "CF" CronFailure
+
+
+-- | What a user wrote (@feedback.message@), who they are (@user.*@ / @feedback.contact_email@),
+-- where (@url.full@ / @page.url@), and the error issue sharing its trace, if any.
+data FeedbackData = FeedbackData
+  { message :: Text
+  , contactEmail :: Maybe Text
+  , userName :: Maybe Text
+  , pageUrl :: Maybe Text
+  , sessionId :: Maybe Text
+  , traceId :: Maybe Text
+  , relatedErrorHash :: Maybe Text
+  -- ^ The error issue's target hash (no @err:@ prefix), for @/issues/by_hash/…@.
+  , observedAt :: UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake FeedbackData
 
 
 -- | A cron monitor that missed its window or checked in with @monitor.status = error@.
@@ -357,6 +379,7 @@ hashPrefix = \case
   Frontend -> Nothing
   Uptime -> Nothing
   Cron -> Nothing
+  Feedback -> Nothing
 
 
 defaultRecommendedAction :: Text
@@ -731,6 +754,7 @@ data IssueProjection r where
 data IssueFilters = IssueFilters
   { ack :: NullFilter
   , archive :: NullFilter
+  , spam :: NullFilter
   , services :: [Text]
   , service :: Maybe Text
   , environment :: Maybe Text
@@ -753,6 +777,7 @@ defIssueFilters =
   IssueFilters
     { ack = AnyValue
     , archive = AnyValue
+    , spam = AnyValue
     , services = []
     , service = Nothing
     , environment = Nothing
@@ -806,6 +831,7 @@ selectIssues pid projection f = do
         foldMap (\(s, e) -> [HI.sql| AND ^{pfx}created_at >= #{s} AND ^{pfx}created_at <= #{e}|]) f.timeRange
           <> sqlNullFilter pfx [HI.sql|acknowledged_at|] f.ack
           <> sqlNullFilter pfx [HI.sql|archived_at|] f.archive
+          <> sqlNullFilter pfx [HI.sql|spam_at|] f.spam
           <> bool mempty [HI.sql| AND (^{pfx}severity IS NULL OR ^{pfx}severity != 'low')|] f.hideLowSeverity
           <> arrF pfx [HI.sql|service|] f.services
           <> foldMap (\service -> [HI.sql| AND ^{pfx}service = #{service}|]) f.service
@@ -1145,6 +1171,12 @@ instance FromHttpApiData ArchiveWindow where
     "escalating" -> Right ArchiveUntilEscalating
     t | Just n <- readMaybe (toString t), n > 0 -> Right (ArchiveFor n)
     _ -> Left "archive window: minutes or 'escalating'"
+
+
+-- | Spam leaves the Inbox with the archive and is listed only under the Spam tab; clearing it restores both.
+setSpamState :: DB es => Projects.ProjectId -> [IssueId] -> Maybe UTCTime -> Eff es Int64
+setSpamState pid iids at =
+  Hasql.interpExecute [HI.sql| UPDATE apis.issues SET spam_at = #{at}, archived_at = #{at}, updated_at = COALESCE(#{at}, updated_at) WHERE project_id = #{pid} AND id = ANY(#{iids}::uuid[]) |]
 
 
 setArchiveState :: DB es => Projects.ProjectId -> [IssueId] -> Maybe (UTCTime, ArchiveWindow) -> Eff es Int64
@@ -2108,6 +2140,7 @@ data IssuePayload
   | LogPatternRateChangeP LogPatternRateChangeData
   | PerformanceP PerformanceData
   | FrontendP FrontendData
+  | FeedbackP FeedbackData
   | UptimeP UptimeData
   | CronP CronData
   deriving stock (Generic, Show)
@@ -2124,6 +2157,7 @@ payloadType = \case
   LogPatternRateChangeP{} -> LogPatternRateChange
   PerformanceP{} -> Performance
   FrontendP{} -> Frontend
+  FeedbackP{} -> Feedback
   UptimeP{} -> Uptime
   CronP{} -> Cron
 
@@ -2146,6 +2180,7 @@ payloadJson = \case
   LogPatternRateChangeP d -> AE.toJSON d
   PerformanceP d -> AE.toJSON d
   FrontendP d -> AE.toJSON d
+  FeedbackP d -> AE.toJSON d
   UptimeP d -> AE.toJSON d
   CronP d -> AE.toJSON d
 
@@ -2174,6 +2209,7 @@ parsePayload t v = case t of
   LogPatternRateChange -> wrap LogPatternRateChangeP
   Performance -> wrap PerformanceP
   Frontend -> wrap FrontendP
+  Feedback -> wrap FeedbackP
   Uptime -> wrap UptimeP
   Cron -> wrap CronP
   where
@@ -2268,6 +2304,7 @@ data IssueEvent
   | IEViewed
   | IELinked
   | IEMerged
+  | IESpam
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC 'Nothing "IE" IssueEvent
@@ -2550,6 +2587,26 @@ createCronIssue projectId d =
 
 cronTargetHash :: Text -> Text
 cronTargetHash = ("cron:" <>)
+
+
+-- | One issue per feedback submission, keyed by its record id so a rescan cannot duplicate it.
+createFeedbackIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Maybe Text -> Text -> FeedbackData -> Eff es Issue
+createFeedbackIssue projectId service recordId d =
+  mkIssue
+    MkIssueOpts
+      { projectId
+      , targetHash = "feedback:" <> recordId
+      , parentHash = Nothing
+      , isFramework = False
+      , service
+      , critical = False
+      , severity = Info
+      , title = "Feedback: " <> T.take 100 d.message
+      , recommendedAction = "Reply to the user, or mark it as spam."
+      , migrationComplexity = "n/a"
+      , timestamp = Just (utcToZonedTime utc d.observedAt)
+      , payload = FeedbackP d
+      }
 
 
 -- | One frontend issue per (kind, page path, element).

@@ -784,6 +784,36 @@ spec = sequential $ aroundAll withTestResources do
         (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId iid) Nothing Nothing Nothing Nothing Nothing
         renderPage page `shouldContainAll` ["Rage click", "button#place-order", "https://shop.example.com/checkout", "4 within 2s", "sess-rage"]
 
+    it "user.feedback records become feedback issues linked to their trace's error, and spam leaves the Inbox" \tr -> do
+      withResource tr.trPool \conn -> do
+        void
+          $ PGS.execute
+            conn
+            [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, kind, name, summary, hashes, context___trace_id, context)
+                                     VALUES (gen_random_uuid(), ?, ?, ?, 'server', 'POST /cart', ARRAY['boom'], ARRAY['err:fbprobe'], 'fb-trace', jsonb_build_object('trace_id', 'fb-trace')) |]
+            (testPid, addUTCTime (-70) frozenTime, addUTCTime (-70) frozenTime)
+        forM_ ([("fb-trace", "The cart button does nothing"), ("", "   ")] :: [(Text, Text)]) \(tid, msg) ->
+          void
+            $ PGS.execute
+              conn
+              [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, kind, name, summary, context___trace_id, attributes, context)
+                                       VALUES (gen_random_uuid(), ?, ?, ?, 'log', 'user.feedback', ARRAY['feedback'], NULLIF(?, ''),
+                                               jsonb_build_object('feedback', jsonb_build_object('message', ?::text, 'contact_email', 'ada@example.com'), 'user', jsonb_build_object('name', 'Ada'), 'url', jsonb_build_object('full', 'https://shop.example.com/cart')),
+                                               jsonb_build_object('trace_id', NULLIF(?, ''))) |]
+              (testPid, addUTCTime (-60) frozenTime, addUTCTime (-60) frozenTime, tid, msg, tid)
+      -- A second pass over the same window must not duplicate the submission.
+      replicateM_ 2 $ runTestBg frozenTime tr $ BackgroundJobs.detectFeedback testPid
+      rows <- withResource tr.trPool \conn -> PGS.query conn [sql| SELECT id, title FROM apis.issues WHERE project_id = ? AND issue_type = 'feedback' |] (Only testPid) :: IO [(DataUUID.UUID, Text)]
+      map snd rows `shouldBe` ["Feedback: The cart button does nothing"]
+      iid <- maybe (fail "no feedback issue") (pure . UUIDId . fst) (listToMaybe rows)
+      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid iid Nothing Nothing Nothing Nothing Nothing
+      renderPage page `shouldContainAll` ["The cart button does nothing", "Ada", "ada@example.com", "https://shop.example.com/cart", "/issues/by_hash/fbprobe", "Feedback"]
+      let list tab = renderPage . snd <$> testServant tr (IssuesPage.issueListGetH testPid (Just tab) Nothing Nothing Nothing Nothing Nothing (Just "24h") [] ["feedback"])
+      list "Inbox" >>= (`shouldContainAll` ["The cart button does nothing", "bulk_actions/spam"])
+      void $ testServant tr $ IssuesPage.issueBulkActionsPostH testPid IssuesPage.BASpam Nothing Nothing IssuesPage.IssueBulk{itemId = [DataUUID.toText iid.unUUIDId]}
+      list "Inbox" >>= (`shouldSatisfy` not . T.isInfixOf "The cart button does nothing")
+      list "Spam" >>= (`shouldContainAll` ["The cart button does nothing", "bulk_actions/unspam"])
+
     -- Sentry's stack trace earns its slot by separating the code you wrote from the
     -- runtime's, and this page had the parser (Pkg.ErrorFingerprint, which the issue
     -- fingerprint is already computed from) but rendered a raw <pre> blob. No demo
