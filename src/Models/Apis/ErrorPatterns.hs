@@ -145,6 +145,7 @@ data ErrorPattern = ErrorPattern
   , resolvedBy :: Maybe Projects.UserId
   , firstRelease :: Maybe Text
   , lastRelease :: Maybe Text
+  , lastReleaseSince :: Maybe ZonedTime
   , resolvedInRelease :: Maybe Text
   , usersCount :: Int
   }
@@ -548,11 +549,11 @@ batchUpsertErrorPatterns pid errors now =
     <$> Hasql.interp
       [HI.sql| INSERT INTO apis.error_patterns (
             project_id, error_type, message, stacktrace, hash, parent_hash, shape_hash, is_framework,
-            environment, service, runtime, error_data, first_release, last_release, last_release_at,
+            environment, service, runtime, error_data, first_release, last_release, last_release_at, last_release_since,
             first_trace_id, first_trace_at, recent_trace_id, recent_trace_at,
             occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h)
           SELECT #{pid}, u.error_type, u.message, u.stacktrace, u.hash, u.parent_hash, u.shape_hash, u.is_framework,
-                 u.environment, u.service, u.runtime, u.error_data, u.release, u.release, CASE WHEN u.release IS NOT NULL THEN u.event_at END,
+                 u.environment, u.service, u.runtime, u.error_data, u.release, u.release, CASE WHEN u.release IS NOT NULL THEN u.event_at END, CASE WHEN u.release IS NOT NULL THEN u.event_at END,
                  u.trace_id, CASE WHEN u.trace_id IS NOT NULL THEN u.event_at END,
                  u.trace_id, CASE WHEN u.trace_id IS NOT NULL THEN u.event_at END, u.cnt, u.cnt, u.cnt, u.cnt
           FROM (SELECT unnest(#{errorTypes}::text[]) AS error_type, unnest(#{messages}::text[]) AS message,
@@ -568,6 +569,7 @@ batchUpsertErrorPatterns pid errors now =
             -- Only a newer event moves the last release: batches arrive late and out of order.
             last_release = CASE WHEN ^{newerRelease} THEN EXCLUDED.last_release ELSE apis.error_patterns.last_release END,
             last_release_at = CASE WHEN ^{newerRelease} THEN EXCLUDED.last_release_at ELSE apis.error_patterns.last_release_at END,
+            last_release_since = CASE WHEN ^{newerRelease} AND EXCLUDED.last_release IS DISTINCT FROM apis.error_patterns.last_release THEN EXCLUDED.last_release_at ELSE apis.error_patterns.last_release_since END,
             resolved_in_release = CASE WHEN ^{regresses} THEN NULL ELSE apis.error_patterns.resolved_in_release END,
             -- Toastable columns (message, error_data, parent_hash) are content-derived from hash
             -- and refreshed only on regression to avoid pg_toast bloat from per-occurrence rewrites.

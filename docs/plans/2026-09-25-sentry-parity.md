@@ -8,7 +8,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (commit).
 
 - [x] A1 Geography — `client.geo.*` / `geo.*` when the SDK sends them; else GeoIP from `client.address`
       (MaxMind GeoLite2 `.mmdb`, path from env, optional).
-- [~] A2 Releases — `service.version` (resource). First/last seen release on the pattern, release
+- [x] A2 Releases — `service.version` (resource). First/last seen release on the pattern, release
       markers on the chart, "resolve in next release".
 - [x] A3 Users affected — distinct `enduser.id` / `user.id` / `client.address` per issue.
 - [x] A4 Error details — handled = not `exception.escaped`; mechanism = the signal it came from
@@ -61,7 +61,9 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (commit).
   format `.mmdb`; `geoip2` package). Both MaxMind and IPinfo layouts are read, so the IPinfo city
   database drops in for today's free country one. Only the field parsing is tested (doctest).
 - A2 done: first/last release columns, "resolve in next release" (`resolved_in_release`; any other
-  `service.version` counts as newer, Sentry's non-semver rule). Still open: release markers on the chart.
+  `service.version` counts as newer, Sentry's non-semver rule). Release markers: the shared Widget takes
+  `markers` (label + instant, dotted x-axis lines); the issue chart marks the first release at first seen and
+  the last release at `last_release_since` (migration 0207; `last_release_at` keeps ordering late batches).
 - A3: `apis.error_pattern_users` + `users_count`, keyed `id:`/`email:`/`ip:` in that order.
 - Found while doing A3: span attributes arrive nested, so flat lookups of `client.address`,
   `http.request.method` and `http.route` had silently never matched; `getSpanAttr` now tries both.

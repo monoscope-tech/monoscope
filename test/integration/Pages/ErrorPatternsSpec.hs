@@ -7,7 +7,7 @@ import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
-import Data.Time (addUTCTime)
+import Data.Time (addUTCTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
@@ -141,6 +141,11 @@ spec = sequential $ aroundAll withTestResources do
       emit "1.1" [] (-30)
       p2 <- current
       (p2.state, p2.lastRelease, p2.resolvedInRelease) `shouldBe` (ESRegressed, Just "1.1", Nothing)
+      -- The chart marks where each release began; a later event of the same release must not move it.
+      emit "1.1" [] (-25)
+      (fmap zonedTimeToUTC . (.lastReleaseSince) <$> current) `shouldReturn` Just (addUTCTime (-30) frozenTime)
+      (_, page') <- testServant tr $ Pages.Issues.issueDetailGetH pid issue.id Nothing Nothing Nothing Nothing Nothing
+      TL.toStrict (renderText $ toHtml page') `shouldContainAll` ["markers: [{\"label\":\"1.0\",\"at\":", "\"label\":\"1.1\""]
 
     it "1b. ERROR-severity records produce error patterns — OTel exception.* (backend log) and error.* (Monoscope browser SDK)" \tr -> do
       -- OTLP log records never carry span events; internal browser spans often
