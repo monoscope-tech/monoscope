@@ -45,8 +45,8 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (commit).
 
 ## D. Issue list
 
-- [ ] D1 Views — category views + saved views.
-- [~] D2 Search chips (`is:unresolved`, …) + sort (recommended, events, users, age).
+- [x] D1 Views — category views + saved views.
+- [x] D2 Search chips (`is:unresolved`, …) + sort (recommended, events, users, age).
 - [x] D3 Columns — Age, Users, inline priority + assignee.
 - [~] D4 Bulk actions — resolve, assign, merge, set priority.
 
@@ -66,7 +66,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (commit).
   `http.request.method` and `http.route` had silently never matched; `getSpanAttr` now tries both.
 - B4: ‹ › stepping (`/issues/:id/step`, `?event=trace@time`) and an All events table done; a distinct
   "Recommended" sample needs a per-event context score we don't store yet.
-- D2: sort by most events / most users added; search chips still open.
+- D2: sort by most events / most users; active filters render as removable chips in the shared Table.
 - D3: Priority and Assignee show in the row; they are edited from the detail header or in bulk.
 - D4: bulk resolve, priority and assign done (`BulkAction` gained `choices`); bulk merge still open.
 - A6 so far captures `thread.id`/`thread.name`; attachments need a storage decision.

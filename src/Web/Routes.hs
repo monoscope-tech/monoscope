@@ -654,6 +654,8 @@ data IssuesRoutes' mode = IssuesRoutes'
   , archiveGet :: mode :- Capture "issueID" Issues.IssueId :> "archive" :> QueryParam "window" Issues.ArchiveWindow :> Get '[HTML] (RespHeaders IssuesPage.IssueAction)
   , resolveGet :: mode :- Capture "issueID" Issues.IssueId :> "resolve" :> Get '[HTML] (RespHeaders IssuesPage.IssueAction)
   , triagePost :: mode :- Capture "issueID" Issues.IssueId :> "triage" :> ReqBody '[FormUrlEncoded] IssuesPage.TriageForm :> Post '[HTML] (RespHeaders (Html ()))
+  , viewSavePost :: mode :- "views" :> ReqBody '[FormUrlEncoded] IssuesPage.SaveViewForm :> Post '[HTML] (RespHeaders (Html ()))
+  , viewDeletePost :: mode :- "views" :> Capture "viewID" UUID.UUID :> "delete" :> Post '[HTML] (RespHeaders (Html ()))
   , commentPost :: mode :- Capture "issueID" Issues.IssueId :> "comment" :> ReqBody '[FormUrlEncoded] IssuesPage.CommentForm :> Post '[HTML] (RespHeaders (Html ()))
   , linkPost :: mode :- Capture "issueID" Issues.IssueId :> "link" :> ReqBody '[FormUrlEncoded] IssuesPage.LinkForm :> Post '[HTML] (RespHeaders (Html ()))
   , unarchiveGet :: mode :- Capture "issueID" Issues.IssueId :> "unarchive" :> Get '[HTML] (RespHeaders IssuesPage.IssueAction)
@@ -1115,6 +1117,8 @@ issuesServer pid =
     , resolveGet = IssuesPage.resolveIssueGetH pid
     , triagePost = IssuesPage.triagePostH pid
     , commentPost = IssuesPage.commentPostH pid
+    , viewSavePost = IssuesPage.saveViewPostH pid
+    , viewDeletePost = IssuesPage.deleteViewPostH pid
     , linkPost = IssuesPage.linkPostH pid
     , unarchiveGet = \iid -> IssuesPage.archiveIssueGetH pid iid Nothing
     , bulkActionsPost = IssuesPage.issueBulkActionsPostH pid

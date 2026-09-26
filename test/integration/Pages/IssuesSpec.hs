@@ -723,6 +723,17 @@ spec = sequential $ aroundAll withTestResources do
       (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid iid Nothing Nothing Nothing Nothing (Just $ IssuesPage.EventRef "step-trace-b" (at (-300)))
       renderPage page `shouldContainAll` ["step-trace-b", "id=\"issue-events\"", "/step?dir=prev", "hashes%5B%2A%5D%3D%3D%22err%3Astepprobe%22"]
 
+    it "category views, filter chips and saved views on the issue list" \tr -> do
+      let list types = renderPage . snd <$> testServant tr (IssuesPage.issueListGetH testPid (Just "Inbox") Nothing Nothing Nothing Nothing Nothing (Just "24h") [] types)
+      html <- list ["runtime_exception"]
+      html `shouldContainAll` ["&amp;type=log_pattern&amp;type=log_pattern_rate_change", "Remove filter Type: runtime_exception", "Save view"]
+      _ <- testServant tr $ IssuesPage.saveViewPostH testPid (IssuesPage.SaveViewForm "My errors" "filter=Inbox&type=runtime_exception")
+      views <- runTestBg frozenTime tr (Issues.selectIssueViews testPid)
+      map (.name) views `shouldBe` ["My errors"]
+      (`shouldContainAll` ["My errors", "issues?filter=Inbox&amp;type=runtime_exception"]) =<< list []
+      forM_ views \v -> testServant tr $ IssuesPage.deleteViewPostH testPid v.id
+      (null <$> runTestBg frozenTime tr (Issues.selectIssueViews testPid)) `shouldReturn` True
+
     -- Sentry's stack trace earns its slot by separating the code you wrote from the
     -- runtime's, and this page had the parser (Pkg.ErrorFingerprint, which the issue
     -- fingerprint is already computed from) but rendered a raw <pre> blob. No demo

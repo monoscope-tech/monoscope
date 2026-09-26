@@ -8,6 +8,9 @@ module Pages.Issues (
   TriageForm (..),
   memberLabel,
   CommentForm (..),
+  SaveViewForm (..),
+  saveViewPostH,
+  deleteViewPostH,
   LinkForm (..),
   commentPostH,
   linkPostH,
@@ -2162,6 +2165,7 @@ issueListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM service
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
   currTime <- Time.currentTime
   members <- ProjectMembers.selectActiveProjectMembers pid
+  savedViews <- Issues.selectIssueViews pid
   let names = Map.fromList [(m.userId, memberLabel m) | m <- members]
   ((issues, totalCount), (availableServices, availableTypes)) <-
     concurrently
@@ -2247,6 +2251,21 @@ issueListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM service
               -- from being a mystery.
               span_ [class_ "tooltip tooltip-bottom", data_ "tip" (tabBlurb tab)]
                 $ faSprite_ "circle-info" "regular" "h-4 w-4 text-iconNeutral"
+              -- Category views are presets of the type filter; saved views are stored query strings.
+              span_ [class_ "w-px h-4 bg-strokeWeak mx-1"] ""
+              let listUrl types = "/p/" <> pid.toText <> "/issues?filter=" <> currentFilterTab <> "&sort=" <> currentSort <> "&period=" <> period <> foldMap ("&service=" <>) serviceFilters <> foldMap ("&type=" <>) types
+                  viewLink active href lbl = a_ [href_ href, class_ $ "px-2 py-1 rounded text-xs whitespace-nowrap " <> bool "text-textWeak hover:text-textStrong hover:bg-fillWeaker" "bg-fillBrand-weak text-textBrand font-medium" active] $ toHtml lbl
+              forM_ ([("All", []), ("Errors", ["runtime_exception"]), ("Alerts", ["query_alert"]), ("Log patterns", ["log_pattern", "log_pattern_rate_change"]), ("API changes", ["api_change"])] :: [(Text, [Text])]) \(lbl, types) ->
+                viewLink (sortNub typeFilters == sortNub types) (listUrl types) lbl
+              forM_ savedViews \v -> span_ [class_ "inline-flex items-center"] do
+                viewLink (T.drop 1 (snd $ T.breakOn "?" baseUrl) == v.query) ("/p/" <> pid.toText <> "/issues?" <> v.query) v.name
+                button_ [type_ "button", class_ "p-0.5 rounded text-textWeak hover:text-textStrong", Aria.label_ ("Delete view " <> v.name), hxPost_ ("/p/" <> pid.toText <> "/issues/views/" <> UUID.toText v.id <> "/delete"), hxSwap_ "none", [__|on htmx:afterRequest call window.location.reload()|]]
+                  $ faSprite_ "xmark" "regular" "w-2.5 h-2.5"
+              button_ [type_ "button", class_ "px-2 py-1 rounded text-xs text-textBrand hover:bg-fillWeaker whitespace-nowrap", term "popovertarget" "save-view-pop", style_ "anchor-name: --anchor-save-view-pop"] "Save view"
+              form_ [id_ "save-view-pop", term "popover" "auto", class_ "bg-bgRaised p-3 border border-strokeWeak rounded-md shadow-lg flex gap-2", style_ "position-anchor: --anchor-save-view-pop; top: anchor(bottom); left: anchor(left)", hxPost_ ("/p/" <> pid.toText <> "/issues/views"), hxSwap_ "none", [__|on htmx:afterRequest call window.location.reload()|]] do
+                input_ [type_ "hidden", name_ "query", value_ $ T.drop 1 $ snd $ T.breakOn "?" baseUrl]
+                input_ [type_ "text", name_ "name", required_ "", placeholder_ "View name", Aria.label_ "View name", class_ "input input-sm w-44"]
+                button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save"
           }
   addRespHeaders
     $ if loadM == Just "true"
@@ -2794,6 +2813,27 @@ issueActivityTimeline_ userMap now activities
       Issues.Lifecycle Issues.IECommented -> ("comment", "bg-fillBrand-weak text-fillBrand-strong", "Commented")
       Issues.Lifecycle Issues.IEViewed -> ("eye", "bg-fillWeaker text-textWeak", "Viewed")
       Issues.Lifecycle Issues.IELinked -> ("link", "bg-fillBrand-weak text-fillBrand-strong", "Linked an external issue")
+
+
+data SaveViewForm = SaveViewForm {name :: Text, query :: Text}
+  deriving stock (Generic, Show)
+  deriving anyclass (FromForm)
+
+
+saveViewPostH :: Projects.ProjectId -> SaveViewForm -> ATAuthCtx (RespHeaders (Html ()))
+saveViewPostH pid form = do
+  (sess, _) <- Projects.sessionAndProject pid
+  if T.null (T.strip form.name)
+    then addErrorToast "Name the view" Nothing
+    else Issues.saveIssueView pid sess.user.id (T.strip form.name) form.query >> addSuccessToast "View saved" Nothing
+  addRespHeaders mempty
+
+
+deleteViewPostH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (Html ()))
+deleteViewPostH pid vid = do
+  _ <- Projects.sessionAndProject pid
+  void $ Issues.deleteIssueView pid vid
+  addRespHeaders mempty
 
 
 -- | The tracker an external issue URL points at, by host.

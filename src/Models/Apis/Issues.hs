@@ -68,6 +68,10 @@ module Models.Apis.Issues (
   expireArchives,
   wakeOnEscalation,
   setIssuePriority,
+  SavedView (..),
+  selectIssueViews,
+  saveIssueView,
+  deleteIssueView,
   setIssueAssignee,
   autoArchiveStaleDiscoveryIssues,
   selectIssueByHash,
@@ -189,6 +193,7 @@ import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.Time.LocalTime (LocalTime (..), TimeOfDay (..), ZonedTime, utc, utcToZonedTime, zonedTimeToUTC)
 import Data.Time.Zones (utcTZ, utcToLocalTimeTZ)
 import Data.Time.Zones.All qualified as TZ
+import Data.UUID qualified as UUID
 import Data.UUID.V5 qualified as UUID5
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
@@ -1074,6 +1079,24 @@ expireArchives now = liftArchives [HI.sql| i.archived_until <= #{now} |]
 -- | Runtime-exception issues archived "until escalating" for an error that just escalated.
 wakeOnEscalation :: DB es => Projects.ProjectId -> Text -> Eff es [IssueId]
 wakeOnEscalation pid errHash = liftArchives [HI.sql| i.archive_until_escalating AND i.project_id = #{pid} AND i.target_hash = #{errHash} AND i.issue_type = 'runtime_exception' |]
+
+
+-- | A saved issue-list view: a name for a query string of list parameters.
+data SavedView = SavedView {id :: UUID.UUID, name :: Text, query :: Text}
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+selectIssueViews :: DB es => Projects.ProjectId -> Eff es [SavedView]
+selectIssueViews pid = Hasql.interp [HI.sql| SELECT id, name, query FROM apis.issue_views WHERE project_id = #{pid} ORDER BY created_at |]
+
+
+saveIssueView :: DB es => Projects.ProjectId -> Projects.UserId -> Text -> Text -> Eff es Int64
+saveIssueView pid uid name q = Hasql.interpExecute [HI.sql| INSERT INTO apis.issue_views (project_id, name, query, created_by) VALUES (#{pid}, #{name}, #{q}, #{uid}) |]
+
+
+deleteIssueView :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es Int64
+deleteIssueView pid vid = Hasql.interpExecute [HI.sql| DELETE FROM apis.issue_views WHERE project_id = #{pid} AND id = #{vid} |]
 
 
 -- | Priority is the issue's severity, set by hand.
