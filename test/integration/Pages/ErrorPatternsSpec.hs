@@ -116,7 +116,7 @@ spec = sequential $ aroundAll withTestResources do
       (e.geoCountry, e.geoCity, e.threadName) `shouldBe` (Just "US", Just "Santa Clara", Just "main")
       -- ...and the issue page renders them in its Highlights and Contexts sections.
       issue <- runTestBg frozenTime tr (Issues.selectIssueByHash pid e.hash Issues.AnyIssue) >>= maybe (fail "no ContextError issue") pure
-      (_, page) <- testServant tr $ Pages.Issues.issueDetailGetH pid issue.id Nothing Nothing Nothing Nothing
+      (_, page) <- testServant tr $ Pages.Issues.issueDetailGetH pid issue.id Nothing Nothing Nothing Nothing Nothing
       TL.toStrict (renderText $ toHtml page) `shouldContainAll` ["id=\"issue-contexts\"", "Santa Clara, US", "26.3.1", "Chrome", "exception_event", "id=\"issue-http\"", "https://shop.example.com/api/context?cart=7&amp;coupon=x", "coupon", "x-request-id", "curl -X GET", "id=\"issue-copy-json\"", "&quot;release&quot;:&quot;26.3.1&quot;", "## ", "id=\"issue-grouping\"", "context probe", "Root cause", "The cart line has no price", "Plan a fix"]
 
     it "1c. releases and distinct users are tracked, and resolve-in-next-release holds until a new release" \tr -> do
@@ -133,7 +133,7 @@ spec = sequential $ aroundAll withTestResources do
       p0 <- current
       (p0.firstRelease, p0.lastRelease, p0.usersCount) `shouldBe` (Just "1.0", Just "1.0", 2)
       issue <- runTestBg frozenTime tr (Issues.selectIssueByHash pid p0.hash Issues.AnyIssue) >>= maybe (fail "no ReleaseError issue") pure
-      (_, page) <- testServant tr $ Pages.Issues.issueDetailGetH pid issue.id Nothing Nothing Nothing Nothing
+      (_, page) <- testServant tr $ Pages.Issues.issueDetailGetH pid issue.id Nothing Nothing Nothing Nothing Nothing
       TL.toStrict (renderText $ toHtml page) `shouldContainAll` ["Distinct users affected", ">2<", "Last release", "next_release=true", "Resolve in the release after 1.0"]
       void $ testServant tr $ Pages.Issues.resolveErrorPostH pid p0.id.unErrorPatternId True
       emit "1.0" [] (-35)
@@ -196,14 +196,14 @@ spec = sequential $ aroundAll withTestResources do
       patternWithTrace <- maybe (fail "the ingested exception has no trace") pure $ find (isJust . (.firstTraceId)) patterns
       traceIdText <- maybe (fail "the ingested exception has no trace") pure patternWithTrace.firstTraceId
       issue <- maybe (fail "the runtime issue was not listed") pure $ find ((== patternWithTrace.hash) . (.targetHash)) issues
-      (_, page) <- testServant tr $ Pages.Issues.issueDetailGetH pid issue.id Nothing Nothing Nothing Nothing
+      (_, page) <- testServant tr $ Pages.Issues.issueDetailGetH pid issue.id Nothing Nothing Nothing Nothing Nothing
       let html = TL.toStrict $ renderText $ toHtml page
       html `shouldSatisfy` T.isInfixOf issue.title
       html `shouldSatisfy` T.isInfixOf ("/traces/" <> traceIdText)
       html `shouldSatisfy` T.isInfixOf "timestamp="
 
       let otherPid = UUIDId $ UUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef0
-      (_, otherPage) <- testServant tr $ Pages.Issues.issueDetailGetH otherPid issue.id Nothing Nothing Nothing Nothing
+      (_, otherPage) <- testServant tr $ Pages.Issues.issueDetailGetH otherPid issue.id Nothing Nothing Nothing Nothing Nothing
       let otherHtml = TL.toStrict $ renderText $ toHtml otherPage
       otherHtml `shouldSatisfy` T.isInfixOf "Issue not found"
       otherHtml `shouldSatisfy` not . T.isInfixOf issue.title

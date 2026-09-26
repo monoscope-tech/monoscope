@@ -8,6 +8,7 @@ module Models.Telemetry.Telemetry (
   getUsageTotals,
   SpanRecord (..),
   getAllATErrors,
+  adjacentHashEvent,
   isErrorRecord,
   getProjectStatsForReport,
   Trace (..),
@@ -805,6 +806,19 @@ getTraceRowsWith select spanIdOf parentIdOf useTf pid trId tme now limitM = Hasq
 -- "First" and "Recent" page loads. We UNION ALL two index-friendly subqueries (one per
 -- url-path source) instead of OR'ing them in a single WHERE, so each side can hit its own
 -- expression index and avoid a 7d seq scan on otel_logs_and_spans.
+-- | The traced event carrying @hashKey@ nearest to @from@ in one direction, within a
+-- day of it: the hash test is an unindexed array scan, so the window bounds its cost.
+adjacentHashEvent :: DB es => Projects.ProjectId -> Text -> Bool -> UTCTime -> Eff es (Maybe (Text, UTCTime))
+adjacentHashEvent pid hashKey older from =
+  Hasql.interpOne
+    [HI.sql| SELECT context___trace_id, timestamp FROM otel_logs_and_spans
+             WHERE project_id = #{pid.toText} AND timestamp BETWEEN #{lo} AND #{hi} AND timestamp <> #{from}
+               AND #{hashKey} = ANY(hashes) AND context___trace_id IS NOT NULL AND context___trace_id <> ''
+             ORDER BY abs(extract(epoch FROM timestamp - #{from}::timestamptz)) LIMIT 1 |]
+  where
+    (lo, hi) = bool (from, addUTCTime 86400 from) (addUTCTime (-86400) from, from) older
+
+
 getEndpointTraceId :: DB es => Projects.ProjectId -> Text -> Text -> Bool -> UTCTime -> Eff es (Maybe (Text, UTCTime))
 getEndpointTraceId pid method urlPath isFirst now =
   Hasql.interpOne

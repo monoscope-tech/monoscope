@@ -659,8 +659,9 @@ data IssuesRoutes' mode = IssuesRoutes'
   , unarchiveGet :: mode :- Capture "issueID" Issues.IssueId :> "unarchive" :> Get '[HTML] (RespHeaders IssuesPage.IssueAction)
   , bulkActionsPost :: mode :- "bulk_actions" :> Capture "action" IssuesPage.IssueBulkAction :> QueryParam "duration" Int :> QueryParam "value" Text :> ReqBody '[FormUrlEncoded] IssuesPage.IssueBulkForm :> Post '[HTML] (RespHeaders IssuesPage.IssueAction)
   , listGet :: mode :- QPT "filter" :> QPT "sort" :> QPT "since" :> QPT "page" :> QPT "per_page" :> QPT "load_more" :> QPT "period" :> QueryParams "service" Text :> QueryParams "type" Text :> Get '[HTML] (RespHeaders IssuesPage.IssueListGet)
-  , detailGet :: mode :- Capture "issueID" Issues.IssueId :> QPT "first_occurrence" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
-  , detailHashGet :: mode :- "by_hash" :> Capture "issueHash" Text :> QPT "first_occurrence" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
+  , stepGet :: mode :- Capture "issueID" Issues.IssueId :> "step" :> QPT "dir" :> QueryParam "from" UTCTime :> LocationRedirect NoContent
+  , detailGet :: mode :- Capture "issueID" Issues.IssueId :> QPT "first_occurrence" :> QPT "since" :> QPT "from" :> QPT "to" :> QueryParam "event" IssuesPage.EventRef :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
+  , detailHashGet :: mode :- "by_hash" :> Capture "issueHash" Text :> QPT "first_occurrence" :> QPT "since" :> QPT "from" :> QPT "to" :> QueryParam "event" IssuesPage.EventRef :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   , assignErrorPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "assign" :> ReqBody '[FormUrlEncoded] IssuesPage.AssignErrorForm :> Post '[HTML] (RespHeaders (Html ()))
   , resolveErrorPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "resolve" :> QueryFlag "next_release" :> Post '[HTML] (RespHeaders (Html ()))
   , errorSubscriptionPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "subscribe" :> ReqBody '[FormUrlEncoded] IssuesPage.ErrorSubscriptionForm :> Post '[HTML] (RespHeaders (Html ()))
@@ -1119,6 +1120,7 @@ issuesServer pid =
     , bulkActionsPost = IssuesPage.issueBulkActionsPostH pid
     , listGet = IssuesPage.issueListGetH pid
     , detailGet = IssuesPage.issueDetailGetH pid
+    , stepGet = IssuesPage.issueStepGetH pid
     , detailHashGet = IssuesPage.issueDetailHashGetH pid
     , assignErrorPost = IssuesPage.assignErrorPostH pid
     , resolveErrorPost = IssuesPage.resolveErrorPostH pid

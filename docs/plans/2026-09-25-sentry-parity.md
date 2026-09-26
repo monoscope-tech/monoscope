@@ -25,7 +25,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (commit).
       drawer backed by a per-issue rollup (a live GROUP BY measured 48s).
 - [x] B3 HTTP Request — `http.request.method`, `url.full`/`url.path`, `url.query`,
       `http.request.header.*`, curl view.
-- [ ] B4 Events — ‹ › stepping, "Recommended" sample, per-issue events table.
+- [~] B4 Events — ‹ › stepping, "Recommended" sample, per-issue events table.
 - [x] B5 Copy as JSON / Markdown + grouping explanation (which hash, which frames).
 - [x] B6 Breadcrumbs — search, sort, copy.
 - [x] B7 Triage — editable priority, assignee + resolve on every issue type, archive until
@@ -64,6 +64,8 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (commit).
 - A3: `apis.error_pattern_users` + `users_count`, keyed `id:`/`email:`/`ip:` in that order.
 - Found while doing A3: span attributes arrive nested, so flat lookups of `client.address`,
   `http.request.method` and `http.route` had silently never matched; `getSpanAttr` now tries both.
+- B4: ‹ › stepping (`/issues/:id/step`, `?event=trace@time`) and an All events table done; a distinct
+  "Recommended" sample needs a per-event context score we don't store yet.
 - D2: sort by most events / most users added; search chips still open.
 - D3: Priority and Assignee show in the row; they are edited from the detail header or in bulk.
 - D4: bulk resolve, priority and assign done (`BulkAction` gained `choices`); bulk merge still open.

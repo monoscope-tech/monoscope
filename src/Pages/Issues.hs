@@ -18,6 +18,8 @@ module Pages.Issues (
   issueAcknowledgeButton,
   issueArchiveButton,
   issueDetailHashGetH,
+  EventRef (..),
+  issueStepGetH,
   IssueAction (..),
   IssueVM (..),
   AssignErrorForm (..),
@@ -107,6 +109,7 @@ import Pkg.Parser (ScopedQuery (..), applyScopedKqlContext, mkScopedQuery)
 import Pkg.SchemaLearning.Catalog (FacetData (..), FacetSummary (..), FacetValue (..))
 import PyF (fmt)
 import Relude hiding (ask)
+import Servant (Header, Headers, NoContent (..), addHeader)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.IO.Error (userError)
 import System.Logging qualified as Log
@@ -306,16 +309,37 @@ issueBulkActionsPostH pid action durationM valueM items = do
       addRespHeaders Bulk
 
 
-issueDetailGetH :: Projects.ProjectId -> Issues.IssueId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
-issueDetailGetH pid issueId firstM sinceM fromM toM = issueDetailCore pid firstM (TimePicker.TimePicker sinceM fromM toM) $ Issues.selectIssueById pid issueId
+issueDetailGetH :: Projects.ProjectId -> Issues.IssueId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe EventRef -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
+issueDetailGetH pid issueId firstM sinceM fromM toM eventM = issueDetailCore pid firstM eventM (TimePicker.TimePicker sinceM fromM toM) $ Issues.selectIssueById pid issueId
 
 
-issueDetailHashGetH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
-issueDetailHashGetH pid issueId firstM sinceM fromM toM = issueDetailCore pid firstM (TimePicker.TimePicker sinceM fromM toM) $ Issues.selectIssueByHash pid issueId Issues.AnyIssue
+issueDetailHashGetH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe EventRef -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
+issueDetailHashGetH pid issueId firstM sinceM fromM toM eventM = issueDetailCore pid firstM eventM (TimePicker.TimePicker sinceM fromM toM) $ Issues.selectIssueByHash pid issueId Issues.AnyIssue
 
 
-issueDetailCore :: Projects.ProjectId -> Maybe Text -> TimePicker.TimePicker -> ATAuthCtx (Maybe Issues.Issue) -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
-issueDetailCore pid firstM requestedRange fetchIssue = do
+-- | One event of an issue, as the page links to it: its trace and when it happened.
+--
+-- >>> :set -XOverloadedStrings
+-- >>> parseQueryParam @EventRef "4bf92f3577b34da6@2026-09-25T10:00:00Z"
+-- Right (EventRef {traceId = "4bf92f3577b34da6", at = 2026-09-25 10:00:00 UTC})
+-- >>> isLeft (parseQueryParam @EventRef "no-timestamp")
+-- True
+data EventRef = EventRef {traceId :: Text, at :: UTCTime}
+  deriving stock (Eq, Show)
+
+
+instance FromHttpApiData EventRef where
+  parseQueryParam t = case T.breakOnEnd "@" t of
+    (tid, ts) | Just tid' <- T.stripSuffix "@" tid, not (T.null tid'), Right at <- parseQueryParam ts -> Right (EventRef tid' at)
+    _ -> Left "event: <trace_id>@<iso-8601 timestamp>"
+
+
+eventParam :: Text -> UTCTime -> Text
+eventParam tid at = "&event=" <> toUriStr (tid <> "@" <> isoT at)
+
+
+issueDetailCore :: Projects.ProjectId -> Maybe Text -> Maybe EventRef -> TimePicker.TimePicker -> ATAuthCtx (Maybe Issues.Issue) -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
+issueDetailCore pid firstM eventM requestedRange fetchIssue = do
   (sess, project, bw) <- mkPageCtx pid
   issueM <- fetchIssue
   now <- Time.currentTime
@@ -388,26 +412,28 @@ issueDetailCore pid firstM requestedRange fetchIssue = do
       -- happened, so the query stays a ±5min window instead of a multi-day
       -- trace_id scan (a full-table scan on TF; see 2026-07-21 crash).
       let isFirst = isJust firstM
-      mTraceRef <- case Issues.issuePayload issue of
-        Just (Issues.RuntimeExceptionP _) -> case errorM of
-          Nothing -> pure Nothing
-          Just errL -> do
-            refs <- enriching "trace_references" $ ErrorPatterns.selectErrorTraceRefs pid issue.targetHash
-            let base = errL.base
-                (selectedTraceId, capturedAt) = case refs of
-                  Just r -> if isFirst then (r.firstTraceId, r.firstTraceAt) else (r.recentTraceId, r.recentTraceAt)
-                  Nothing -> (if isFirst then base.firstTraceId else base.recentTraceId, Nothing)
-                -- Historical rows can recover an exact time only when stored error
-                -- data describes the selected trace. Otherwise retain the bounded
-                -- legacy approximation; do not turn an unknown time into a broad scan.
-                recordedAt = guard (isJust selectedTraceId && selectedTraceId == base.errorData.traceId) $> base.errorData.when
-                approximateAt = zonedTimeToUTC $ if isFirst || selectedTraceId == base.firstTraceId then base.createdAt else base.updatedAt
-            pure $ (,fromMaybe approximateAt (recordedAt <|> capturedAt)) <$> selectedTraceId
-        Just (Issues.ApiChangeP d) -> Telemetry.getEndpointTraceId pid d.endpointMethod d.endpointPath isFirst now
-        Just (Issues.QueryAlertP _) -> pure Nothing
-        Just (Issues.LogPatternP _) -> pure Nothing
-        Just (Issues.LogPatternRateChangeP _) -> pure Nothing
-        Nothing -> pure Nothing
+      -- An explicitly selected event (‹ › stepping, the events table) wins over First/Recent.
+      let defaultTraceRef = case Issues.issuePayload issue of
+            Just (Issues.RuntimeExceptionP _) -> case errorM of
+              Nothing -> pure Nothing
+              Just errL -> do
+                refs <- enriching "trace_references" $ ErrorPatterns.selectErrorTraceRefs pid issue.targetHash
+                let base = errL.base
+                    (selectedTraceId, capturedAt) = case refs of
+                      Just r -> if isFirst then (r.firstTraceId, r.firstTraceAt) else (r.recentTraceId, r.recentTraceAt)
+                      Nothing -> (if isFirst then base.firstTraceId else base.recentTraceId, Nothing)
+                    -- Historical rows can recover an exact time only when stored error
+                    -- data describes the selected trace. Otherwise retain the bounded
+                    -- legacy approximation; do not turn an unknown time into a broad scan.
+                    recordedAt = guard (isJust selectedTraceId && selectedTraceId == base.errorData.traceId) $> base.errorData.when
+                    approximateAt = zonedTimeToUTC $ if isFirst || selectedTraceId == base.firstTraceId then base.createdAt else base.updatedAt
+                pure $ (,fromMaybe approximateAt (recordedAt <|> capturedAt)) <$> selectedTraceId
+            Just (Issues.ApiChangeP d) -> Telemetry.getEndpointTraceId pid d.endpointMethod d.endpointPath isFirst now
+            Just (Issues.QueryAlertP _) -> pure Nothing
+            Just (Issues.LogPatternP _) -> pure Nothing
+            Just (Issues.LogPatternRateChangeP _) -> pure Nothing
+            Nothing -> pure Nothing
+      mTraceRef <- maybe defaultTraceRef (\ev -> pure $ Just (ev.traceId, ev.at)) eventM
       -- The trace is supporting evidence, not the page. It used to be fetched here
       -- and a cold read of a multi-thousand-span trace took >56s, so the gateway
       -- 504'd the whole issue. The Trace section now pulls it as its own
@@ -436,6 +462,26 @@ issueDetailCore pid firstM requestedRange fetchIssue = do
         $ PageCtx bwconf
         $ issueDetailPage
           IssueView{pid = pid, issue = issue, traceRef = mTraceRef, replaySession = replaySession, errM = errorM, now = now, isFirst = isFirst, tp = tp, stateEvent = stateEvent, canResolve = canResolve, members = members}
+
+
+-- | ‹ › stepping: the event before or after @from@ that carries the issue's hash, within
+-- a day of it (the hash predicate is an unindexed array scan, so the window is the cost
+-- bound), opened on the issue page. With none, back to the page as it was.
+issueStepGetH :: Projects.ProjectId -> Issues.IssueId -> Maybe Text -> Maybe UTCTime -> ATAuthCtx (Headers '[Header "Location" Text] NoContent)
+issueStepGetH pid issueId dirM fromM = do
+  _ <- Projects.sessionAndProject pid
+  useTf <- useTfReads
+  issueM <- Issues.selectIssueById pid issueId
+  let pageUrl = "/p/" <> pid.toText <> "/issues/" <> issueId.toText <> "?"
+      older = dirM /= Just "next"
+  nextM <-
+    join <$> forM ((,,) <$> issueM <*> (Issues.hashPrefix . (.issueType) =<< issueM) <*> fromM) \(issue, prefix, from) ->
+      let key = prefix <> issue.targetHash
+       in tryWithin (Just 5_000_000) "ISSUE_STEP" ["issue_id" AE..= issueId]
+            $ Hasql.withHasqlTimefusion useTf
+            $ Telemetry.adjacentHashEvent pid key older from
+  when (isNothing (join nextM)) $ addErrorToast (bool "No later event within a day" "No earlier event within a day" older) Nothing
+  pure $ addHeader (pageUrl <> maybe "" (uncurry eventParam) (join nextM)) NoContent
 
 
 -- The snapshot is available immediately; telemetry never holds up the page shell.
@@ -1156,6 +1202,9 @@ eventCard_ IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflow-cli
       -- links: one picks which occurrence, the others where to look in it.
       div_ [class_ "ml-auto flex items-center gap-1 text-xs"] do
         when hasOccurrences do
+          whenJust (snd <$> traceRef) \at -> forM_ ([("prev", "chevron-left", "Earlier event"), ("next", "chevron-right", "Later event")] :: [(Text, Text, Text)]) \(dir, icon, tip) ->
+            a_ [href_ $ "/p/" <> pid.toText <> "/issues/" <> issue.id.toText <> "/step?dir=" <> dir <> "&from=" <> toUriStr (isoT at), class_ "px-1.5 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker", Aria.label_ tip, term "data-tippy-content" tip]
+              $ faSprite_ icon "regular" "w-3 h-3"
           span_ [class_ "text-textWeak mr-1 max-md:hidden"] "Occurrence"
           forM_ ([(True, isFirst, "Show the first occurrence", "First"), (False, not isFirst, "Show the most recent occurrence", "Recent")] :: [(Bool, Bool, Text, Text)]) \(useFirst, active, tip, lbl) ->
             a_ [href_ $ occurrenceUrl useFirst, class_ $ "px-2 py-1 rounded " <> bool "text-textWeak hover:text-textStrong hover:bg-fillWeaker" "bg-fillBrand-weak text-textBrand font-medium" active, term "data-tippy-content" tip] $ toHtml lbl
@@ -1190,7 +1239,16 @@ eventCard_ IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflow-cli
         <> foldMap (\errL -> let e = errL.base.errorData in ["- Release: " <> r | Just r <- [e.release]] <> ["", "```", e.errorType <> ": " <> e.message, errL.base.stacktrace, "```"]) errM
     -- The type's own evidence, then trace, logs and replay when the issue has them.
     -- A section with nothing to show is left out rather than rendered as an empty state.
-    sections = typeSections <> traceSection <> logsSection <> replaySection
+    sections = typeSections <> traceSection <> logsSection <> eventsSection <> replaySection
+    -- Every event of the issue in the page's range, from its own hash; picking one's
+    -- trace re-opens the page on that event.
+    eventsSection =
+      [ section "issue-events" "list-check" "All events"
+          $ div_ [class_ "max-md:px-1 px-2 h-[50vh]"]
+          $ virtualTable pid (Just ("/p/" <> pid.toText <> "/log_explorer/data?json=true&query=" <> toUriStr ("hashes[*]==\"" <> prefix <> issue.targetHash <> "\"") <> TimePicker.rangeQuery tp)) Nothing
+      | not isLogPatternIssue
+      , Just prefix <- [Issues.hashPrefix issue.issueType]
+      ]
     section = IssueSection Nothing []
     isLogPatternIssue = issue.issueType `elem` [Issues.LogPattern, Issues.LogPatternRateChange]
     typeSections = case Issues.issuePayload issue of

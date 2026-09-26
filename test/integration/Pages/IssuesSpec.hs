@@ -23,6 +23,7 @@ import Models.Apis.Issues qualified as Issues
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects (Session (..))
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Issues qualified as IssuesPage
 import Pages.Telemetry qualified as Trace
@@ -432,13 +433,13 @@ spec = sequential $ aroundAll withTestResources do
                       'SERVER', '200', '{}') |]
             (testPid, frozenTime, frozenTime, traceIdText, spanIdText, traceIdText, spanIdText)
 
-      (_, pageById) <- testServant tr $ IssuesPage.issueDetailGetH testPid issueId Nothing Nothing Nothing Nothing
+      (_, pageById) <- testServant tr $ IssuesPage.issueDetailGetH testPid issueId Nothing Nothing Nothing Nothing Nothing
       -- The trace id should be embedded somewhere in the rendered investigation panel.
       renderPage pageById `shouldSatisfy` (traceIdText `T.isInfixOf`)
 
       issue <- runTestBg frozenTime tr $ Issues.selectIssueById testPid issueId
       let targetHash = maybe (error "Expected API change issue") (.targetHash) issue
-      (_, pageByHash) <- testServant tr $ IssuesPage.issueDetailHashGetH testPid targetHash Nothing (Just "14D") Nothing Nothing
+      (_, pageByHash) <- testServant tr $ IssuesPage.issueDetailHashGetH testPid targetHash Nothing (Just "14D") Nothing Nothing Nothing
       -- The reader's chosen range still drives the page: it seeds the URL the charts
       -- read and it is the time picker's selected value. It is deliberately no longer
       -- in the Logs tab's own URL — a trace-scoped query is about the trace's instant,
@@ -452,8 +453,8 @@ spec = sequential $ aroundAll withTestResources do
       let from = "2026-09-02T06:04:43Z"
           to = "2026-09-02T10:04:43Z"
       forM_
-        [ IssuesPage.issueDetailGetH testPid issueId Nothing Nothing (Just from) (Just to)
-        , IssuesPage.issueDetailHashGetH testPid targetHash Nothing Nothing (Just from) (Just to)
+        [ IssuesPage.issueDetailGetH testPid issueId Nothing Nothing (Just from) (Just to) Nothing
+        , IssuesPage.issueDetailHashGetH testPid targetHash Nothing Nothing (Just from) (Just to) Nothing
         ]
         \handler -> do
           (_, absolutePage) <- testServant tr handler
@@ -487,7 +488,7 @@ spec = sequential $ aroundAll withTestResources do
             [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, service, issue_data, created_at, updated_at)
                   VALUES (?, 'log_pattern', 'payment pattern', ?, 'checkout', ?::jsonb, ?, ?) RETURNING id |]
             (testPid, patternHash, AE.encode payload, selectedAt, frozenTime)
-      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId issueId) Nothing Nothing (Just from) (Just to)
+      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId issueId) Nothing Nothing (Just from) (Just to) Nothing
       let html = renderPage page
       html `shouldSatisfy` not . T.isInfixOf "selected occurrence"
       html `shouldSatisfy` T.isInfixOf "id=\"issue-sample\""
@@ -530,7 +531,7 @@ spec = sequential $ aroundAll withTestResources do
             [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, service, environment, created_at, updated_at)
                   VALUES (?, 'runtime_exception', 'no-trace issue', ?, 'checkout', 'production', ?, ?) RETURNING id |]
             (testPid, noTraceHash, frozenTime, frozenTime)
-      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing
+      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing Nothing
       let html = renderPage page
       T.count "id=\"log_details_container\"" html `shouldBe` 1
       -- The closed global-data drawer remains mounted on an issue page. Its transformed panel
@@ -599,7 +600,7 @@ spec = sequential $ aroundAll withTestResources do
             , frozenTime
             , frozenTime
             )
-      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing
+      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing Nothing
       let html = renderPage page
           headings = [T.toLower t | t <- ["H1", "H2", "H3"], ("<" <> t) `T.isInfixOf` T.toUpper html]
       -- Exactly one h1, and it is not the issue title (the page shell owns it).
@@ -619,7 +620,7 @@ spec = sequential $ aroundAll withTestResources do
       -- no trace was captured, so there is no Trace section to jump to.
       html `shouldSatisfy` T.isInfixOf "id=\"issue-event-nav\" class=\"sticky top-0"
       let nav = fst $ T.breakOn "</nav>" $ snd $ T.breakOn "id=\"issue-event-nav\"" html
-      T.takeWhile (/= '"') <$> drop 1 (T.splitOn "href=\"#" nav) `shouldBe` ["issue-highlights", "issue-contexts", "issue-stack", "issue-logs"]
+      T.takeWhile (/= '"') <$> drop 1 (T.splitOn "href=\"#" nav) `shouldBe` ["issue-highlights", "issue-contexts", "issue-stack", "issue-logs", "issue-events"]
       -- The range total is labelled and rendered at headline weight, not as a grey pill.
       html `shouldSatisfy` T.isInfixOf "Events"
       html `shouldSatisfy` T.isInfixOf "text-2xl font-semibold text-textStrong tabular-nums"
@@ -694,8 +695,8 @@ spec = sequential $ aroundAll withTestResources do
         maybe (fail "no row") (pure . UUIDId . fromOnly)
           . listToMaybe
           =<< PGS.query conn [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, created_at, updated_at) VALUES (?, 'log_pattern', 'collab probe', 'collab-probe', ?, ?) RETURNING id |] (testPid, frozenTime, frozenTime)
-      _ <- testServant tr $ IssuesPage.issueDetailGetH testPid iid Nothing Nothing Nothing Nothing
-      _ <- testServant tr $ IssuesPage.issueDetailGetH testPid iid Nothing Nothing Nothing Nothing
+      _ <- testServant tr $ IssuesPage.issueDetailGetH testPid iid Nothing Nothing Nothing Nothing Nothing
+      _ <- testServant tr $ IssuesPage.issueDetailGetH testPid iid Nothing Nothing Nothing Nothing Nothing
       _ <- testServant tr $ IssuesPage.commentPostH testPid iid (IssuesPage.CommentForm "Rolled back the cart service")
       _ <- testServant tr $ IssuesPage.linkPostH testPid iid (IssuesPage.LinkForm "https://github.com/acme/shop/issues/42" (Just "Cart crash"))
       _ <- testServant tr $ IssuesPage.linkPostH testPid iid (IssuesPage.LinkForm "javascript:alert(1)" Nothing)
@@ -705,6 +706,22 @@ spec = sequential $ aroundAll withTestResources do
       html `shouldSatisfy` not . T.isInfixOf "javascript:alert"
       -- Two page loads in a day record one view, and views stay off the timeline.
       withResource tr.trPool (\conn -> PGS.query conn [sql| SELECT count(*)::int FROM apis.issue_activity_log WHERE issue_id = ? AND event = 'viewed' |] (Only iid)) `shouldReturn` [Only (1 :: Int)]
+
+    it "events step to their neighbours and the page opens on a chosen event" \tr -> do
+      let at dt = addUTCTime dt frozenTime
+          traces = [("step-trace-a", at (-600)), ("step-trace-b", at (-300)), ("step-trace-c", at 0)] :: [(Text, UTCTime)]
+      iid <- withResource tr.trPool \conn -> do
+        forM_ traces \(tid, ts) ->
+          void $ PGS.execute conn [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, kind, hashes, summary, context___trace_id) VALUES (gen_random_uuid(), ?, ?, ?, 'server', ARRAY['err:stepprobe'], ARRAY['boom'], ?) |] (testPid, ts, ts, tid)
+        maybe (fail "no row") (pure . UUIDId . fromOnly)
+          . listToMaybe
+          =<< PGS.query conn [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, created_at, updated_at) VALUES (?, 'runtime_exception', 'step probe', 'stepprobe', ?, ?) RETURNING id |] (testPid, frozenTime, frozenTime)
+      let step older from = runTestBg frozenTime tr (Telemetry.adjacentHashEvent testPid "err:stepprobe" older from)
+      step True (at 0) `shouldReturn` Just ("step-trace-b", at (-300))
+      step False (at (-600)) `shouldReturn` Just ("step-trace-b", at (-300))
+      step True (at (-600)) `shouldReturn` Nothing
+      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid iid Nothing Nothing Nothing Nothing (Just $ IssuesPage.EventRef "step-trace-b" (at (-300)))
+      renderPage page `shouldContainAll` ["step-trace-b", "id=\"issue-events\"", "/step?dir=prev", "hashes%5B%2A%5D%3D%3D%22err%3Astepprobe%22"]
 
     -- Sentry's stack trace earns its slot by separating the code you wrote from the
     -- runtime's, and this page had the parser (Pkg.ErrorFingerprint, which the issue
@@ -745,7 +762,7 @@ spec = sequential $ aroundAll withTestResources do
             , frozenTime
             , frozenTime
             )
-      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing
+      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing Nothing
       let html = renderPage page
       -- Your frame is shown by function and file:line.
       html `shouldSatisfy` T.isInfixOf "doWork"
@@ -795,7 +812,7 @@ spec = sequential $ aroundAll withTestResources do
             , frozenTime
             , frozenTime
             )
-      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing
+      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing Nothing
       let html = renderPage page
       -- The two numbers that were compared, and the direction, are all on the page.
       html `shouldSatisfy` T.isInfixOf ">checkout throughput</h2>"
@@ -815,7 +832,7 @@ spec = sequential $ aroundAll withTestResources do
       for_ ([(Issues.Below, 5, False), (Issues.Below, 10, True), (Issues.Above, 5, False), (Issues.Above, 3, True)] :: [(Issues.ThresholdDirection, Double, Bool)]) \(direction, value :: Double, mismatch) -> do
         void $ withResource tr.trPool \conn ->
           PGS.execute conn [sql|UPDATE apis.issues SET issue_data = issue_data || jsonb_build_object('actual_value', ?::float8, 'threshold_type', ?::text) WHERE id = ?|] (value, display direction, issueId)
-        (_, evaluated) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing
+        (_, evaluated) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing Nothing
         T.isInfixOf "does not meet the recorded threshold" (renderPage evaluated) `shouldBe` mismatch
 
     -- Regression: a 1300-span trace read cold from TimeFusion took 56s, so the whole
@@ -865,7 +882,7 @@ spec = sequential $ aroundAll withTestResources do
 
       -- The page ships a shell that fetches the waterfall itself — no span read
       -- inline, so a slow trace can no longer delay (or 504) the issue.
-      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId issueId) (Just "true") Nothing Nothing Nothing
+      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId issueId) (Just "true") Nothing Nothing Nothing Nothing
       let html = renderPage page
       html `shouldSatisfy` T.isInfixOf ("/traces/" <> traceIdText)
       -- Losing the timestamp turns the fragment's +/-5min window into a 3-day scan.
@@ -937,7 +954,7 @@ spec = sequential $ aroundAll withTestResources do
             , frozenTime
             , frozenTime
             )
-      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing
+      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing Nothing
       let html = renderPage page
       html `shouldSatisfy` T.isInfixOf "No stack trace in this event"
       html `shouldSatisfy` T.isInfixOf "The go SDK reported this exception without frames."
