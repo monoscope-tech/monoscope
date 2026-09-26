@@ -4,6 +4,9 @@ module Pages.Issues (
   IssueBulkAction (..),
   acknowledgeIssueGetH,
   archiveIssueGetH,
+  resolveIssueGetH,
+  TriageForm (..),
+  triagePostH,
   issueDetailGetH,
   IssueBulkForm (..),
   IssueListGet (..),
@@ -144,15 +147,83 @@ acknowledgeIssueGetH pid enable issueId durationM = do
 
 
 -- | Archive (on=True) or un-archive (on=False) an issue.
-archiveIssueGetH :: Projects.ProjectId -> Bool -> Issues.IssueId -> ATAuthCtx (RespHeaders IssueAction)
-archiveIssueGetH pid enable issueId = do
+-- | Archive (Just window) or un-archive (Nothing) an issue. A timed or "until
+-- escalating" archive lifts itself; see 'Issues.ArchiveWindow'.
+archiveIssueGetH :: Projects.ProjectId -> Issues.IssueId -> Maybe Issues.ArchiveWindow -> ATAuthCtx (RespHeaders IssueAction)
+archiveIssueGetH pid issueId windowM = do
   (sess, _) <- Projects.sessionAndProject pid
-  archivedAt <- if enable then Just <$> Time.currentTime else pure Nothing
-  void $ Issues.setArchiveState pid [issueId] archivedAt
-  Issues.logIssueActivity issueId (if enable then Issues.IEArchived else Issues.IEUnarchived) (Just sess.user.id) Nothing
-  addSuccessToast (bool "Restored to the Inbox" "Archived \x2014 notifications stopped" enable) Nothing
+  now <- Time.currentTime
+  void $ Issues.setArchiveState pid [issueId] ((now,) <$> windowM)
+  Issues.logIssueActivity issueId (bool Issues.IEUnarchived Issues.IEArchived (isJust windowM)) (Just sess.user.id) Nothing
+  addSuccessToast (maybe "Restored to the Inbox" archivedToast windowM) Nothing
   addTriggerEvent "issuesListChanged" AE.Null
-  addRespHeaders $ Archive pid issueId enable
+  addRespHeaders $ Archive pid issueId (isJust windowM)
+  where
+    archivedToast = \case
+      Issues.ArchiveIndefinite -> "Archived \x2014 notifications stopped"
+      Issues.ArchiveFor mins -> "Archived for " <> show mins <> " min \x2014 it returns to the Inbox after that"
+      Issues.ArchiveUntilEscalating -> "Archived until the error escalates"
+
+
+-- | Resolve an issue that has no error pattern behind it: the fix is done, so it
+-- leaves the Inbox, and the timeline says resolved rather than archived.
+resolveIssueGetH :: Projects.ProjectId -> Issues.IssueId -> ATAuthCtx (RespHeaders IssueAction)
+resolveIssueGetH pid issueId = do
+  (sess, _) <- Projects.sessionAndProject pid
+  now <- Time.currentTime
+  void $ Issues.setArchiveState pid [issueId] (Just (now, Issues.ArchiveIndefinite))
+  Issues.logIssueActivity issueId Issues.IEResolved (Just sess.user.id) Nothing
+  addSuccessToast "Resolved" Nothing
+  addTriggerEvent "issuesListChanged" AE.Null
+  addRespHeaders $ Archive pid issueId True
+
+
+data TriageForm = TriageForm {severity :: Maybe Issues.IssueSeverity, assigneeId :: Maybe Text}
+  deriving stock (Generic, Show)
+  deriving anyclass (FromForm)
+
+
+-- | Priority and assignee, set from the issue header on any issue type. A runtime
+-- exception's assignee is mirrored onto its error pattern, whose assignment email
+-- and resolve permission read it.
+triagePostH :: Projects.ProjectId -> Issues.IssueId -> TriageForm -> ATAuthCtx (RespHeaders (Html ()))
+triagePostH pid issueId form = do
+  (sess, _) <- Projects.sessionAndProject pid
+  now <- Time.currentTime
+  issueM <- Issues.selectIssueById pid issueId
+  members <- ProjectMembers.selectActiveProjectMembers pid
+  let assigneeM = form.assigneeId >>= UUID.fromText <&> Projects.UserId
+  case issueM of
+    Nothing -> addErrorToast "Issue not found" Nothing >> addRespHeaders mempty
+    Just issue -> do
+      whenJust form.severity $ void . Issues.setIssuePriority pid [issueId]
+      when (assigneeM /= issue.assigneeId) do
+        void $ Issues.setIssueAssignee pid [issueId] assigneeM
+        Issues.logIssueActivity issueId (maybe Issues.IEUnassigned (const Issues.IEAssigned) assigneeM) (Just sess.user.id) Nothing
+        when (issue.issueType == Issues.RuntimeException)
+          $ ErrorPatterns.getErrorPatternByHash pid issue.targetHash
+          >>= traverse_ \err -> ErrorPatterns.setErrorPatternAssignee err.id assigneeM now
+      addTriggerEvent "issuesListChanged" AE.Null
+      addRespHeaders $ issueTriage_ pid issue{Issues.severity = fromMaybe issue.severity form.severity, Issues.assigneeId = assigneeM} members
+
+
+-- | The header's Priority and Assignee selects; one form, re-rendered on change.
+issueTriage_ :: Projects.ProjectId -> Issues.Issue -> [ProjectMembers.ProjectMemberVM] -> Html ()
+issueTriage_ pid issue members =
+  form_ [id_ "issue-triage", class_ "ml-auto flex items-center gap-3 text-xs text-textWeak", hxPost_ $ "/p/" <> pid.toText <> "/issues/" <> issue.id.toText <> "/triage", hxTrigger_ "change", hxSwap_ "outerHTML"] do
+    label_ [class_ "flex items-center gap-1.5"] do
+      "Priority"
+      select_ [class_ "select select-sm w-28", name_ "severity", Aria.label_ "Priority"]
+        $ forM_ [minBound .. maxBound :: Issues.IssueSeverity] \sev -> option_ ([value_ (display sev)] <> [selected_ "true" | sev == issue.severity]) $ toHtml (T.toTitle $ display sev)
+    label_ [class_ "flex items-center gap-1.5"] do
+      "Assignee"
+      select_ [class_ "select select-sm w-44", name_ "assigneeId", Aria.label_ "Assignee"] do
+        option_ ([value_ ""] <> [selected_ "true" | isNothing issue.assigneeId]) "Unassigned"
+        forM_ members \m -> option_ ([value_ m.userId.toText] <> [selected_ "true" | issue.assigneeId == Just m.userId]) $ toHtml $ memberLabel m
+
+
+memberLabel :: ProjectMembers.ProjectMemberVM -> Text
+memberLabel m = let n = T.strip (m.first_name <> " " <> m.last_name) in bool n (CI.original m.email) (T.null n)
 
 
 data IssueAction
@@ -202,7 +273,7 @@ issueBulkActionsPostH pid action durationM items = do
           void $ Issues.setAckState pid issueIds Nothing
           pure (issueIds, Issues.IEUnacknowledged, "Back in the Inbox \x2014 notifications resumed")
         BAArchive -> do
-          void $ Issues.setArchiveState pid issueIds (Just now)
+          void $ Issues.setArchiveState pid issueIds (Just (now, Issues.ArchiveIndefinite))
           pure (issueIds, Issues.IEArchived, "Archived \x2014 notifications stopped")
         BAUnarchive -> do
           void $ Issues.setArchiveState pid issueIds Nothing
@@ -283,6 +354,7 @@ issueDetailCore pid firstM requestedRange fetchIssue = do
         Just errL -> do
           userPermission <- ProjectMembers.getUserPermission pid sess.user.id
           pure $ userPermission >= Just ProjectMembers.PEdit || errL.base.assigneeId == Just sess.user.id
+      members <- ProjectMembers.selectActiveProjectMembers pid
       let bwconf =
             baseBwconf
               { prePageTitle = Just "Issues"
@@ -340,7 +412,7 @@ issueDetailCore pid firstM requestedRange fetchIssue = do
       addRespHeaders
         $ PageCtx bwconf
         $ issueDetailPage
-          IssueView{pid = pid, issue = issue, traceRef = mTraceRef, replaySession = replaySession, errM = errorM, now = now, isFirst = isFirst, tp = tp, stateEvent = stateEvent, canResolve = canResolve}
+          IssueView{pid = pid, issue = issue, traceRef = mTraceRef, replaySession = replaySession, errM = errorM, now = now, isFirst = isFirst, tp = tp, stateEvent = stateEvent, canResolve = canResolve, members = members}
 
 
 -- The snapshot is available immediately; telemetry never holds up the page shell.
@@ -793,6 +865,7 @@ data IssueView = IssueView
   , tp :: TimePicker.TimePicker
   , stateEvent :: Maybe Issues.IssueEvent
   , canResolve :: Bool
+  , members :: [ProjectMembers.ProjectMemberVM]
   }
 
 
@@ -896,9 +969,16 @@ issueHeader_ IssueView{..} = header_ [class_ "max-md:px-3 px-4 max-md:pt-4 pt-6 
   div_ [class_ "flex flex-wrap items-center gap-2"] do
     issueAcknowledgeButton pid issue.id now (zonedTimeToUTC <$> issue.acknowledgedUntil <* issue.acknowledgedAt)
     issueArchiveButton pid issue.id (isJust issue.archivedAt)
-    whenJust errM \errL -> do
-      errorResolveAction pid errL.base errL.base.state canResolve
-      errorSubscriptionAction pid errL.base
+    case errM of
+      Just errL -> do
+        errorResolveAction pid errL.base errL.base.state canResolve
+        errorSubscriptionAction pid errL.base
+      Nothing ->
+        unless (isJust issue.archivedAt)
+          $ button_ [type_ "button", class_ "btn btn-sm btn-ghost gap-1.5 text-textSuccess hover:bg-fillSuccess-weak", term "hx-preload" "false", hxGet_ $ "/p/" <> pid.toText <> "/issues/" <> issue.id.toText <> "/resolve", hxTarget_ $ "#archive-ctl-" <> issue.id.toText, hxSwap_ "outerHTML", Aria.label_ "Resolve issue", [__|on htmx:afterRequest remove me|]] do
+            faSprite_ "circle-check" "regular" "w-4 h-4"
+            span_ [class_ "max-md:hidden"] "Resolve"
+    issueTriage_ pid issue members
 
 
 issueChartId :: Issues.Issue -> Text
@@ -2255,7 +2335,7 @@ renderIssueMainCol pid (IssueVM currTime period issue) = do
       div_ [class_ "shrink-0 flex gap-1 items-center opacity-0 group-hover/row:opacity-100 has-[:focus-within]:opacity-100 transition-opacity max-md:hidden"] do
         inlineBtn (bool "Acknowledge \x2014 pause notifications" "Unacknowledge \x2014 resume notifications" isAcknowledged) (bool "check" "arrow-rotate-left" isAcknowledged) (hxGet_ $ issueUrl <> bool "/acknowledge" "/unacknowledge" isAcknowledged) []
         unless isAcknowledged
-          $ durationMenu_ ("ack-pop-" <> b.id.toText) "Acknowledge for\x2026" (\q -> [hxGet_ $ issueUrl <> "/acknowledge" <> durationQuery "duration" q, hxSwap_ "none"]) \popId ->
+          $ durationMenu_ ("ack-pop-" <> b.id.toText) "Acknowledge for\x2026" [] (\q -> [hxGet_ $ issueUrl <> "/acknowledge" <> durationQuery "duration" q, hxSwap_ "none"]) \popId ->
             inlineBtn "Acknowledge for a set time" "clock" (term "popovertarget" popId) [style_ $ "anchor-name: --anchor-" <> popId]
         inlineBtn (bool "Archive \x2014 hide it and stop notifying" "Unarchive \x2014 move back to the Inbox" isArchived) "archive" (hxGet_ $ issueUrl <> bool "/archive" "/unarchive" isArchived) []
     div_ [class_ "hidden max-md:flex items-center gap-1.5 flex-wrap"] stateBadges
@@ -2379,7 +2459,7 @@ issueAcknowledgeButton pid aid now untilM = div_ [id_ ctlId, class_ "inline-flex
       do
         faSprite_ "check" "regular" "w-4 h-4"
         span_ [class_ "max-md:hidden"] "Acknowledge"
-    durationMenu_ (ctlId <> "-menu") "Acknowledge for\x2026" (\q -> req $ "/acknowledge" <> durationQuery "duration" q) \popId ->
+    durationMenu_ (ctlId <> "-menu") "Acknowledge for\x2026" [] (\q -> req $ "/acknowledge" <> durationQuery "duration" q) \popId ->
       button_ [type_ "button", class_ "btn btn-sm btn-primary join-item px-2", term "popovertarget" popId, style_ $ "anchor-name: --anchor-" <> popId, Aria.label_ "Acknowledge for a set time"]
         $ faSprite_ "chevron-down" "regular" "w-3 h-3"
   where
@@ -2388,19 +2468,21 @@ issueAcknowledgeButton pid aid now untilM = div_ [id_ ctlId, class_ "inline-flex
 
 
 issueArchiveButton :: Projects.ProjectId -> Issues.IssueId -> Bool -> Html ()
-issueArchiveButton pid aid archived =
-  button_
-    [ type_ "button"
-    , class_ $ "btn btn-sm gap-1.5 tooltip tooltip-bottom btn-ghost" <> bool "" " bg-fillWarning-weak text-textWarning border-strokeWarning-weak" archived
-    , data_ "tip" $ bool "Not actionable \x2014 hide it and stop notifying" "Move back to the Inbox" archived
-    , Aria.label_ $ bool "Archive issue" "Unarchive issue" archived
-    , term "hx-preload" "false"
-    , hxGet_ $ "/p/" <> pid.toText <> "/issues/" <> aid.toText <> bool "/archive" "/unarchive" archived
-    , hxSwap_ "outerHTML"
-    ]
-    do
+issueArchiveButton pid aid archived = div_ [id_ ctlId, class_ "inline-flex"] do
+  if archived
+    then button_ ([type_ "button", class_ "btn btn-sm gap-1.5 tooltip tooltip-bottom btn-ghost bg-fillWarning-weak text-textWarning border-strokeWarning-weak", data_ "tip" "Move back to the Inbox", Aria.label_ "Unarchive issue"] <> req "/unarchive") do
       faSprite_ "archive" "regular" "w-4 h-4"
-      span_ [class_ "max-md:hidden"] $ toHtml $ bool @Text "Archive" "Unarchive" archived
+      span_ [class_ "max-md:hidden"] "Unarchive"
+    else div_ [class_ "join"] do
+      button_ ([type_ "button", class_ "btn btn-sm btn-ghost join-item gap-1.5 tooltip tooltip-bottom", data_ "tip" "Not actionable \x2014 hide it and stop notifying", Aria.label_ "Archive issue"] <> req "/archive") do
+        faSprite_ "archive" "regular" "w-4 h-4"
+        span_ [class_ "max-md:hidden"] "Archive"
+      durationMenu_ (ctlId <> "-menu") "Archive for\x2026" [("Until it escalates", "escalating")] (\q -> req $ "/archive" <> durationQuery "window" q) \popId ->
+        button_ [type_ "button", class_ "btn btn-sm btn-ghost join-item px-2", term "popovertarget" popId, style_ $ "anchor-name: --anchor-" <> popId, Aria.label_ "Archive for a set time"]
+          $ faSprite_ "chevron-down" "regular" "w-3 h-3"
+  where
+    ctlId = "archive-ctl-" <> aid.toText
+    req path = [term "hx-preload" "false", hxGet_ $ "/p/" <> pid.toText <> "/issues/" <> aid.toText <> path, hxTarget_ ("#" <> ctlId), hxSwap_ "outerHTML"]
 
 
 -- | The issue's type as icon + label. @compact@ is the list\'s chip: tighter,

@@ -535,7 +535,7 @@ renderNameCol item = do
         inlineBtn (bool "Activate" "Deactivate" isActive) (bool "play" "pause" isActive) (hxPost_ $ alertBase <> "/toggle_active") []
         if isJust item.mutedUntil
           then inlineBtn "Unmute" "bell" (hxPost_ $ alertBase <> "/unmute") []
-          else durationMenu_ ("mute-pop-" <> item.monitorId <> suffix) "Mute for…" (\q -> [hxPost_ $ alertBase <> "/mute" <> durationQuery "duration" q, hxSwap_ "none"]) \popId ->
+          else durationMenu_ ("mute-pop-" <> item.monitorId <> suffix) "Mute for…" [] (\q -> [hxPost_ $ alertBase <> "/mute" <> durationQuery "duration" q, hxSwap_ "none"]) \popId ->
             inlineBtn "Mute" "bell-slash" (term "popovertarget" popId) [style_ $ "anchor-name: --anchor-" <> popId]
         when (item.currentStatus /= Monitors.MSNormal) $ inlineBtn "Resolve" "check" (hxPost_ $ alertBase <> "/resolve") []
         inlineBtn "Delete" "trash" (hxDelete_ alertBase) [hxConfirm_ "Are you sure you want to delete this monitor?"]
@@ -765,7 +765,7 @@ unifiedMonitorOverviewH pid monitorId = do
                   div_ [class_ "max-md:hidden flex items-center gap-2"] do
                     case alert.mutedUntil of
                       Just _ -> actionBtn_ "bell" "Unmute" "Resume notifications for this monitor" "/unmute"
-                      Nothing -> durationMenu_ ("mute-btn-pop-" <> alert.id.toText) "Mute for\x2026" (\q -> [hxPost_ $ muteBase <> "/mute" <> durationQuery "duration" q, hxSwap_ "none"]) \popId ->
+                      Nothing -> durationMenu_ ("mute-btn-pop-" <> alert.id.toText) "Mute for\x2026" [] (\q -> [hxPost_ $ muteBase <> "/mute" <> durationQuery "duration" q, hxSwap_ "none"]) \popId ->
                         button_ [type_ "button", class_ "btn btn-sm btn-ghost border border-strokeWeak tooltip tooltip-bottom", Aria.label_ "Mute", data_ "tip" "Silence notifications for a period", term "popovertarget" popId, style_ $ "anchor-name: --anchor-" <> popId] do
                           faSprite_ "bell-slash" "regular" "h-4 w-4"
                           span_ [class_ "max-md:hidden"] "Mute"

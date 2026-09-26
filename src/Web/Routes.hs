@@ -651,7 +651,9 @@ type IssuesRoutes' :: Type -> Type
 data IssuesRoutes' mode = IssuesRoutes'
   { acknowledgeGet :: mode :- Capture "issueID" Issues.IssueId :> "acknowledge" :> QueryParam "duration" Int :> Get '[HTML] (RespHeaders IssuesPage.IssueAction)
   , unAcknowledgeGet :: mode :- Capture "issueID" Issues.IssueId :> "unacknowledge" :> Get '[HTML] (RespHeaders IssuesPage.IssueAction)
-  , archiveGet :: mode :- Capture "issueID" Issues.IssueId :> "archive" :> Get '[HTML] (RespHeaders IssuesPage.IssueAction)
+  , archiveGet :: mode :- Capture "issueID" Issues.IssueId :> "archive" :> QueryParam "window" Issues.ArchiveWindow :> Get '[HTML] (RespHeaders IssuesPage.IssueAction)
+  , resolveGet :: mode :- Capture "issueID" Issues.IssueId :> "resolve" :> Get '[HTML] (RespHeaders IssuesPage.IssueAction)
+  , triagePost :: mode :- Capture "issueID" Issues.IssueId :> "triage" :> ReqBody '[FormUrlEncoded] IssuesPage.TriageForm :> Post '[HTML] (RespHeaders (Html ()))
   , unarchiveGet :: mode :- Capture "issueID" Issues.IssueId :> "unarchive" :> Get '[HTML] (RespHeaders IssuesPage.IssueAction)
   , bulkActionsPost :: mode :- "bulk_actions" :> Capture "action" IssuesPage.IssueBulkAction :> QueryParam "duration" Int :> ReqBody '[FormUrlEncoded] IssuesPage.IssueBulkForm :> Post '[HTML] (RespHeaders IssuesPage.IssueAction)
   , listGet :: mode :- QPT "filter" :> QPT "sort" :> QPT "since" :> QPT "page" :> QPT "per_page" :> QPT "load_more" :> QPT "period" :> QueryParams "service" Text :> QueryParams "type" Text :> Get '[HTML] (RespHeaders IssuesPage.IssueListGet)
@@ -1106,8 +1108,10 @@ issuesServer pid =
   IssuesRoutes'
     { acknowledgeGet = IssuesPage.acknowledgeIssueGetH pid True
     , unAcknowledgeGet = \aid -> IssuesPage.acknowledgeIssueGetH pid False aid Nothing
-    , archiveGet = IssuesPage.archiveIssueGetH pid True
-    , unarchiveGet = IssuesPage.archiveIssueGetH pid False
+    , archiveGet = \iid -> IssuesPage.archiveIssueGetH pid iid . Just . fromMaybe Issues.ArchiveIndefinite
+    , resolveGet = IssuesPage.resolveIssueGetH pid
+    , triagePost = IssuesPage.triagePostH pid
+    , unarchiveGet = \iid -> IssuesPage.archiveIssueGetH pid iid Nothing
     , bulkActionsPost = IssuesPage.issueBulkActionsPostH pid
     , listGet = IssuesPage.issueListGetH pid
     , detailGet = IssuesPage.issueDetailGetH pid

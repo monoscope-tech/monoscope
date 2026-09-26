@@ -1796,10 +1796,14 @@ runNotificationSweep _scheduledTime = do
 -- ack window exists to remove.
 expireLapsedAcks :: ATBackgroundCtx ()
 expireLapsedAcks = do
-  expired <- Issues.expireAcks =<< Time.currentTime
+  now <- Time.currentTime
+  expired <- Issues.expireAcks now
   unless (null expired) do
     forM_ expired \iid -> Issues.logIssueActivity iid Issues.IEAckExpired Nothing Nothing
     Log.logInfo "issue_acks_expired" (AE.object ["count" AE..= length expired])
+  -- "Archive for N hours" ends the same way.
+  unarchived <- Issues.expireArchives now
+  forM_ unarchived \iid -> Issues.logIssueActivity iid Issues.IEUnarchived Nothing Nothing
 
 
 -- | Flush the digest queue once per hour. Groups pending rows by project and
@@ -5611,6 +5615,8 @@ detectErrorSpikes pid = do
             Log.logInfo "Error spike detected" (errRate.errorId, errRate.errorType, spike.currentRate, mean, spike.zScore)
             unless alreadyEscalating do
               void $ ErrorPatterns.updateErrorPatternState errRate.errorId ErrorPatterns.ESEscalating now
+              woken <- Issues.wakeOnEscalation pid errRate.hash
+              forM_ woken \iid -> Issues.logIssueActivity iid Issues.IEEscalated Nothing Nothing
               issue <- Issues.createErrorSpikeIssue pid errRate spike.currentRate mean spike.zScore
               Issues.insertIssue issue
               ctx <- ask @Config.AuthContext

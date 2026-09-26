@@ -1036,7 +1036,7 @@ apiIssueUnack pid iid = issueMutate pid iid $ \ids -> Issues.setAckState pid ids
 apiIssueArchive :: Projects.ProjectId -> Issues.IssueId -> ATBaseCtx IssueApiFull
 apiIssueArchive pid iid = do
   now <- Time.currentTime
-  issueMutate pid iid $ \ids -> Issues.setArchiveState pid ids (Just now)
+  issueMutate pid iid $ \ids -> Issues.setArchiveState pid ids (Just (now, Issues.ArchiveIndefinite))
 
 
 apiIssueUnarchive :: Projects.ProjectId -> Issues.IssueId -> ATBaseCtx IssueApiFull
@@ -1049,7 +1049,7 @@ apiIssuesBulk pid ba = do
   ackSet <- mkAckSet ba.durationMinutes
   let ack = count $ Issues.setAckState pid ba.ids (Just ackSet)
       unack = count $ Issues.setAckState pid ba.ids Nothing
-      archive = count $ Issues.setArchiveState pid ba.ids (Just now)
+      archive = count $ Issues.setArchiveState pid ba.ids (Just (now, Issues.ArchiveIndefinite))
       unarchive = count $ Issues.setArchiveState pid ba.ids Nothing
   bulkExec
     ba

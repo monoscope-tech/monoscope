@@ -20,6 +20,7 @@ import Lucid (ToHtml, renderText, toHtml)
 import Models.Apis.ApiChanges qualified as ApiChanges
 import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Issues qualified as Issues
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects (Session (..))
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
@@ -32,7 +33,7 @@ import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
-import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, sequential, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, sequential, shouldBe, shouldReturn, shouldSatisfy)
 
 
 spec :: Spec
@@ -341,7 +342,7 @@ spec = sequential $ aroundAll withTestResources do
         insertIssue conn otherIid otherPid
 
       -- Both ids submitted together, exactly as a tampered bulk form would.
-      void $ runTestBg frozenTime tr $ Issues.setArchiveState testPid [ownIid, otherIid] (Just frozenTime)
+      void $ runTestBg frozenTime tr $ Issues.setArchiveState testPid [ownIid, otherIid] (Just (frozenTime, Issues.ArchiveIndefinite))
 
       let archivedIssue iid = countQ tr [sql| SELECT COUNT(*)::INT FROM apis.issues WHERE id=? AND archived_at IS NOT NULL |] (Only iid)
       archivedIssue ownIid >>= (`shouldBe` 1)
@@ -622,6 +623,36 @@ spec = sequential $ aroundAll withTestResources do
       -- The range total is labelled and rendered at headline weight, not as a grey pill.
       html `shouldSatisfy` T.isInfixOf "Events"
       html `shouldSatisfy` T.isInfixOf "text-2xl font-semibold text-textStrong tabular-nums"
+
+    it "triage: priority, assignee, timed and until-escalating archives, and resolve work on any issue type" \tr -> do
+      let mkIssue ty h =
+            withResource tr.trPool \conn ->
+              maybe (fail "INSERT ... RETURNING id returned no row") (pure . UUIDId . fromOnly)
+                . listToMaybe
+                =<< PGS.query conn [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, created_at, updated_at) VALUES (?, ?::apis.issue_type, 'triage probe', ?, ?, ?) RETURNING id |] (testPid, ty :: Text, h :: Text, frozenTime, frozenTime)
+          reload iid = runTestBg frozenTime tr (Issues.selectIssueById testPid iid) >>= maybe (fail "issue vanished") pure
+      logIid <- mkIssue "log_pattern" "triage-log"
+      member <- runTestBg frozenTime tr (ProjectMembers.selectActiveProjectMembers testPid) >>= maybe (fail "no member") pure . listToMaybe
+      (_, triage) <- testServant tr $ IssuesPage.triagePostH testPid logIid (IssuesPage.TriageForm (Just Issues.Warning) (Just member.userId.toText))
+      TL.toStrict (renderText triage) `shouldSatisfy` T.isInfixOf "value=\"warning\" selected=\"true\""
+      i1 <- reload logIid
+      (i1.severity, i1.assigneeId) `shouldBe` (Issues.Warning, Just member.userId)
+      withResource tr.trPool (\conn -> PGS.query conn [sql| SELECT event::text FROM apis.issue_activity_log WHERE issue_id = ? |] (Only logIid)) `shouldReturn` [Only ("assigned" :: Text)]
+
+      _ <- testServant tr $ IssuesPage.archiveIssueGetH testPid logIid (Just (Issues.ArchiveFor 60))
+      (isJust . (.archivedAt) <$> reload logIid) `shouldReturn` True
+      runTestBg frozenTime tr (Issues.expireArchives (addUTCTime 1800 frozenTime)) `shouldReturn` []
+      runTestBg frozenTime tr (Issues.expireArchives (addUTCTime 7200 frozenTime)) `shouldReturn` [logIid]
+      (isNothing . (.archivedAt) <$> reload logIid) `shouldReturn` True
+
+      errIid <- mkIssue "runtime_exception" "triage-err"
+      _ <- testServant tr $ IssuesPage.archiveIssueGetH testPid errIid (Just Issues.ArchiveUntilEscalating)
+      runTestBg frozenTime tr (Issues.expireArchives (addUTCTime 86400 frozenTime)) `shouldReturn` []
+      runTestBg frozenTime tr (Issues.wakeOnEscalation testPid "triage-err") `shouldReturn` [errIid]
+
+      _ <- testServant tr $ IssuesPage.resolveIssueGetH testPid logIid
+      (isJust . (.archivedAt) <$> reload logIid) `shouldReturn` True
+      runTestBg frozenTime tr (Issues.selectLatestStateEvent logIid) `shouldReturn` Just Issues.IEResolved
 
     -- Sentry's stack trace earns its slot by separating the code you wrote from the
     -- runtime's, and this page had the parser (Pkg.ErrorFingerprint, which the issue

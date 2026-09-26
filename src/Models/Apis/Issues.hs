@@ -64,6 +64,11 @@ module Models.Apis.Issues (
   ackCascade,
   expireAcks,
   setArchiveState,
+  ArchiveWindow (..),
+  expireArchives,
+  wakeOnEscalation,
+  setIssuePriority,
+  setIssueAssignee,
   autoArchiveStaleDiscoveryIssues,
   selectIssueByHash,
   IssueScope (..),
@@ -273,7 +278,7 @@ parseIssueType = rightToMaybe . parseUrlPiece
 data IssueSeverity = Critical | Warning | Info | Low
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "" IssueSeverity
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "" IssueSeverity
 
 
 data IssueSummary = IssueSummary
@@ -412,6 +417,9 @@ data Issue = Issue
   , acknowledgedUntil :: Maybe ZonedTime
   -- ^ End of the acknowledgement window (0125). Always set alongside
   -- @acknowledged_at@; 'indefiniteUntil' for an indefinite ack.
+  , assigneeId :: Maybe Projects.UserId
+  , archivedUntil :: Maybe ZonedTime
+  , archiveUntilEscalating :: Bool
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, HI.DecodeRow, NFData)
@@ -704,7 +712,7 @@ selectIssues pid projection f = do
           i.affected_requests::bigint, i.affected_clients::bigint, NULL::double precision,
           i.recommended_action, i.migration_complexity, i.issue_data, i.request_payloads, i.response_payloads,
           NULL::timestamp with time zone, NULL::bigint,
-          i.target_hash, i.environment, i.seq_num::bigint, i.parent_hash, i.is_framework, i.cooldown_until, i.last_notified_at, i.acknowledged_until,
+          i.target_hash, i.environment, i.seq_num::bigint, i.parent_hash, i.is_framework, i.cooldown_until, i.last_notified_at, i.acknowledged_until, i.assignee_id, i.archived_until, i.archive_until_escalating,
           CASE
             WHEN i.issue_type = 'runtime_exception' THEN COALESCE(err_ev.cnt, 0)
             WHEN i.issue_type IN ('log_pattern', 'log_pattern_rate_change') THEN COALESCE(lp_ev.cnt, 0)
@@ -1002,15 +1010,74 @@ isSilenced pid tgt ty now =
 
 
 -- | Set archive state on a batch of issues. @Just now@ archives, @Nothing@ unarchives.
-setArchiveState :: DB es => Projects.ProjectId -> [IssueId] -> Maybe UTCTime -> Eff es Int64
-setArchiveState pid iids mTs
+-- | How long an archive holds. Sentry's "archive for N hours" and "until escalating":
+-- a timed archive is lifted by 'expireArchives', an escalating one by 'wakeOnEscalation'.
+data ArchiveWindow = ArchiveIndefinite | ArchiveFor Int | ArchiveUntilEscalating
+  deriving stock (Eq, Show)
+
+
+-- | The @window@ query value: minutes, or @escalating@.
+--
+-- >>> :set -XOverloadedStrings
+-- >>> import Servant (parseQueryParam)
+-- >>> map (parseQueryParam @ArchiveWindow) ["240", "escalating", "soon", "-5"]
+-- [Right (ArchiveFor 240),Right ArchiveUntilEscalating,Left "archive window: minutes or 'escalating'",Left "archive window: minutes or 'escalating'"]
+instance FromHttpApiData ArchiveWindow where
+  parseQueryParam = \case
+    "escalating" -> Right ArchiveUntilEscalating
+    t | Just n <- readMaybe (toString t), n > 0 -> Right (ArchiveFor n)
+    _ -> Left "archive window: minutes or 'escalating'"
+
+
+setArchiveState :: DB es => Projects.ProjectId -> [IssueId] -> Maybe (UTCTime, ArchiveWindow) -> Eff es Int64
+setArchiveState pid iids archiveM
   | null iids = pure 0
   | otherwise =
       Hasql.interpExecute
         [HI.sql|
           UPDATE apis.issues
-          SET archived_at = #{mTs}, updated_at = COALESCE(#{mTs}, updated_at)
+          SET archived_at = #{mTs}, updated_at = COALESCE(#{mTs}, updated_at),
+              archived_until = #{untilM}, archive_until_escalating = #{escalating}
           WHERE project_id = #{pid} AND id = ANY(#{iids}::uuid[]) |]
+  where
+    mTs = fst <$> archiveM
+    untilM = archiveM >>= \case (t, ArchiveFor mins) -> Just (addUTCTime (fromIntegral mins * 60) t); _ -> Nothing
+    escalating = (snd <$> archiveM) == Just ArchiveUntilEscalating
+
+
+-- | Lift archives, returning the reopened ids. A reopen must not collide with an
+-- already-open recurrence of the same signal (the open-issue partial unique index),
+-- so such rows stay archived.
+liftArchives :: DB es => HI.Sql -> Eff es [IssueId]
+liftArchives cond =
+  Hasql.interp
+    [HI.sql|
+      UPDATE apis.issues i
+      SET archived_at = NULL, archived_until = NULL, archive_until_escalating = false
+      WHERE i.archived_at IS NOT NULL AND ^{cond}
+        AND NOT EXISTS (SELECT 1 FROM apis.issues o
+                        WHERE o.project_id = i.project_id AND o.target_hash = i.target_hash AND o.issue_type = i.issue_type
+                          AND o.id <> i.id AND o.archived_at IS NULL AND o.acknowledged_at IS NULL)
+      RETURNING i.id |]
+
+
+-- | Timed archives whose window has closed.
+expireArchives :: DB es => UTCTime -> Eff es [IssueId]
+expireArchives now = liftArchives [HI.sql| i.archived_until <= #{now} |]
+
+
+-- | Runtime-exception issues archived "until escalating" for an error that just escalated.
+wakeOnEscalation :: DB es => Projects.ProjectId -> Text -> Eff es [IssueId]
+wakeOnEscalation pid errHash = liftArchives [HI.sql| i.archive_until_escalating AND i.project_id = #{pid} AND i.target_hash = #{errHash} AND i.issue_type = 'runtime_exception' |]
+
+
+-- | Priority is the issue's severity, set by hand.
+setIssuePriority :: DB es => Projects.ProjectId -> [IssueId] -> IssueSeverity -> Eff es Int64
+setIssuePriority pid iids sev = Hasql.interpExecute [HI.sql| UPDATE apis.issues SET severity = #{sev} WHERE project_id = #{pid} AND id = ANY(#{iids}::uuid[]) |]
+
+
+setIssueAssignee :: DB es => Projects.ProjectId -> [IssueId] -> Maybe Projects.UserId -> Eff es Int64
+setIssueAssignee pid iids uid = Hasql.interpExecute [HI.sql| UPDATE apis.issues SET assignee_id = #{uid} WHERE project_id = #{pid} AND id = ANY(#{iids}::uuid[]) |]
 
 
 -- | Auto-archive open discovery-type issues (log_pattern, log_pattern_rate_change,
@@ -2023,6 +2090,9 @@ mkIssue opts = do
       , cooldownUntil = Nothing
       , lastNotifiedAt = Nothing
       , acknowledgedUntil = Nothing
+      , assigneeId = Nothing
+      , archivedUntil = Nothing
+      , archiveUntilEscalating = False
       }
 
 

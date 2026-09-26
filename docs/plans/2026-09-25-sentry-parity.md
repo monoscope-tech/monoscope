@@ -28,7 +28,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (commit).
 - [ ] B4 Events — ‹ › stepping, "Recommended" sample, per-issue events table.
 - [ ] B5 Copy as JSON / Markdown + grouping explanation (which hash, which frames).
 - [ ] B6 Breadcrumbs — search, sort, copy.
-- [ ] B7 Triage — editable priority, assignee + resolve on every issue type, archive until
+- [x] B7 Triage — editable priority, assignee + resolve on every issue type, archive until
       escalating / for N hours.
 - [ ] B8 Collaboration — comments in Activity, people viewing, external links (GitHub/Jira/Linear).
 - [ ] B9 AI in the rail — root cause, plan, code changes rendered on the page.

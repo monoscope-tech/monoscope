@@ -1137,8 +1137,8 @@ agoText now = compactTimeAgo . toText . prettyTimeAuto now
 -- answered the same way everywhere. @req@ turns the chosen duration in minutes
 -- (empty for indefinite) into the htmx attributes that submit it, leaving each
 -- caller its own verb and swap semantics.
-durationMenu_ :: Text -> Text -> (Text -> [Attribute]) -> (Text -> Html ()) -> Html ()
-durationMenu_ popId heading req trigger = div_ [class_ "inline-block"] do
+durationMenu_ :: Text -> Text -> [(Text, Text)] -> (Text -> [Attribute]) -> (Text -> Html ()) -> Html ()
+durationMenu_ popId heading extras req trigger = div_ [class_ "inline-block"] do
   trigger popId
   -- The options read as bare durations ("4 hours") once focus lands inside, so
   -- the heading has to be the group's accessible name, not just visible text.
@@ -1146,6 +1146,7 @@ durationMenu_ popId heading req trigger = div_ [class_ "inline-block"] do
     span_ [class_ "px-3 py-1 text-xs font-medium text-textWeak", Aria.hidden_ "true"] $ toHtml heading
     forM_ @[] @_ @(Int, Text) [(60, "1 hour"), (240, "4 hours"), (480, "8 hours"), (1440, "1 day"), (4320, "3 days"), (10080, "1 week")] \(mins, label) ->
       button_ ([type_ "button", class_ "px-3 py-1.5 text-sm text-left hover:bg-fillWeaker rounded cursor-pointer w-full"] <> req (show mins)) $ toHtml label
+    forM_ extras \(label, q) -> button_ ([type_ "button", class_ "px-3 py-1.5 text-sm text-left hover:bg-fillWeaker rounded cursor-pointer w-full border-t border-strokeWeak"] <> req q) $ toHtml label
     button_ ([type_ "button", class_ "px-3 py-1.5 text-sm text-left hover:bg-fillWeaker rounded cursor-pointer w-full border-t border-strokeWeak"] <> req "") "Indefinitely"
 
 
