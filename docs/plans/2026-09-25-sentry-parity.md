@@ -26,8 +26,8 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (commit).
 - [x] B3 HTTP Request — `http.request.method`, `url.full`/`url.path`, `url.query`,
       `http.request.header.*`, curl view.
 - [ ] B4 Events — ‹ › stepping, "Recommended" sample, per-issue events table.
-- [ ] B5 Copy as JSON / Markdown + grouping explanation (which hash, which frames).
-- [ ] B6 Breadcrumbs — search, sort, copy.
+- [x] B5 Copy as JSON / Markdown + grouping explanation (which hash, which frames).
+- [x] B6 Breadcrumbs — search, sort, copy.
 - [x] B7 Triage — editable priority, assignee + resolve on every issue type, archive until
       escalating / for N hours.
 - [ ] B8 Collaboration — comments in Activity, people viewing, external links (GitHub/Jira/Linear).

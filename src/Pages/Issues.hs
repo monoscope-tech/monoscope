@@ -87,7 +87,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Charts.Charts qualified as Charts
-import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), agoText, colorChip_, copyButton_, detailsClosedBelowAttr_, durationMenu_, durationQuery, emptyState_, metadataChip_, periodToggle_, resizer_, sectionLabel_, sparkline_, untilLabel)
+import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), agoText, colorChip_, copyButton_, detailsClosedBelowAttr_, durationMenu_, durationQuery, emptyState_, filterInputAttr_, metadataChip_, periodToggle_, resizer_, sectionLabel_, sparkline_, untilLabel)
 import Pages.LogExplorer.Log (virtualTable)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Telemetry (traceFragmentUrl)
@@ -677,7 +677,7 @@ userJourneySection_ spans = whenJust (extractBreadcrumbs spans) \crumbs -> do
             timeLabel
               | idx == 0 = toText $ formatTime defaultTimeLocale "%b %-e, %H:%M:%S" $ POSIX.posixSecondsToUTCTime $ realToFrac (fromIntegral bc.timestamp / 1000 :: Double)
               | otherwise = formatOffset base bc.timestamp
-        div_ [class_ $ bool "relative flex gap-2.5 px-4 py-2 border-l-2 border-transparent hover:bg-fillWeaker" "relative flex gap-2.5 px-4 py-2 border-l-2 border-strokeError-strong bg-fillError-weak" isTerminal] do
+        div_ [class_ $ bool "crumb relative flex gap-2.5 px-4 py-2 border-l-2 border-transparent hover:bg-fillWeaker" "crumb relative flex gap-2.5 px-4 py-2 border-l-2 border-strokeError-strong bg-fillError-weak" isTerminal] do
           div_ [class_ "flex flex-col items-center pt-0.5 shrink-0"] do
             faSprite_ icn "regular" $ "w-3 h-3 " <> iconColor
             unless isTerminal $ div_ [class_ "w-px flex-1 bg-strokeWeak mt-1"] ""
@@ -696,12 +696,19 @@ userJourneySection_ spans = whenJust (extractBreadcrumbs spans) \crumbs -> do
               $ expandable "text-sm text-textStrong line-clamp-3 break-words whitespace-pre-wrap"
             whenJust (bc.payload >>= breadcrumbDataSummary)
               $ expandable "font-mono text-xs text-textWeak line-clamp-2 break-all"
-  div_ [class_ "border-t border-strokeWeak"] do
-    div_ [class_ "px-4 py-2 flex items-center gap-2 bg-fillWeaker/40"] do
+  div_ [id_ "issue-journey", class_ "border-t border-strokeWeak group/journey"] do
+    div_ [class_ "px-4 py-2 flex flex-wrap items-center gap-2 bg-fillWeaker/40"] do
       faSprite_ "route" "regular" "w-3 h-3 text-textWeak"
       span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] "User journey"
       span_ [class_ "text-2xs text-textWeak"] $ toHtml $ countNoun total "event" <> " before error"
-    div_ [class_ "py-1"]
+      div_ [class_ "ml-auto flex items-center gap-2"] do
+        input_ [type_ "search", placeholder_ "Search", Aria.label_ "Search the user journey", class_ "input input-xs w-32", filterInputAttr_ ".crumb in #issue-journey"]
+        label_ [class_ "btn btn-xs btn-ghost gap-1 has-[:checked]:text-textBrand", term "data-tippy-content" "Newest first"] do
+          input_ [type_ "checkbox", class_ "crumb-rev sr-only"]
+          faSprite_ "arrows-up-down" "regular" "w-3 h-3"
+        copyButton_ "btn btn-xs btn-ghost" "w-3 h-3" "#issue-journey-text's textContent" []
+        pre_ [id_ "issue-journey-text", class_ "hidden"] $ toHtml $ unlines [unwords $ catMaybes [Just bc.kind, bc.message] | bc <- crumbList]
+    div_ [class_ "py-1 flex flex-col group-has-[.crumb-rev:checked]/journey:flex-col-reverse"]
       $ traverse_ (uncurry renderCrumb) (zip [0 :: Int ..] crumbList)
   where
     -- Every breadcrumb the trace can yield, deduped across overlapping
@@ -1123,10 +1130,22 @@ eventCard_ IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflow-cli
       span_ [class_ "text-sm font-semibold text-textStrong"] $ bool "Evidence" "Event" hasOccurrences
       -- Labelled, because "First | Recent" otherwise reads as a peer of the section
       -- links: one picks which occurrence, the others where to look in it.
-      when hasOccurrences $ div_ [class_ "ml-auto flex items-center gap-1 text-xs"] do
-        span_ [class_ "text-textWeak mr-1 max-md:hidden"] "Occurrence"
-        forM_ ([(True, isFirst, "Show the first occurrence", "First"), (False, not isFirst, "Show the most recent occurrence", "Recent")] :: [(Bool, Bool, Text, Text)]) \(useFirst, active, tip, lbl) ->
-          a_ [href_ $ occurrenceUrl useFirst, class_ $ "px-2 py-1 rounded " <> bool "text-textWeak hover:text-textStrong hover:bg-fillWeaker" "bg-fillBrand-weak text-textBrand font-medium" active, term "data-tippy-content" tip] $ toHtml lbl
+      div_ [class_ "ml-auto flex items-center gap-1 text-xs"] do
+        when hasOccurrences do
+          span_ [class_ "text-textWeak mr-1 max-md:hidden"] "Occurrence"
+          forM_ ([(True, isFirst, "Show the first occurrence", "First"), (False, not isFirst, "Show the most recent occurrence", "Recent")] :: [(Bool, Bool, Text, Text)]) \(useFirst, active, tip, lbl) ->
+            a_ [href_ $ occurrenceUrl useFirst, class_ $ "px-2 py-1 rounded " <> bool "text-textWeak hover:text-textStrong hover:bg-fillWeaker" "bg-fillBrand-weak text-textBrand font-medium" active, term "data-tippy-content" tip] $ toHtml lbl
+          span_ [class_ "w-px h-4 bg-strokeWeak mx-1"] ""
+        -- A popover, not a dropdown: this row scrolls horizontally and would clip one.
+        button_ [type_ "button", class_ "px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker flex items-center gap-1", term "popovertarget" "issue-copy-pop", style_ "anchor-name: --anchor-issue-copy-pop"] do
+          faSprite_ "copy" "regular" "w-3 h-3"
+          "Copy as"
+        div_ [id_ "issue-copy-pop", term "popover" "auto", class_ "menu bg-bgRaised p-2 text-sm border border-strokeWeak rounded-md shadow-lg space-y-1", style_ "position-try: flip-block; position-anchor: --anchor-issue-copy-pop; top: anchor(bottom); right: anchor(right)"] do
+          forM_ ([("JSON", "issue-copy-json"), ("Markdown", "issue-copy-md")] :: [(Text, Text)]) \(lbl, src) -> div_ [class_ "flex items-center justify-between gap-6"] do
+            span_ [class_ "text-textStrong"] $ toHtml lbl
+            copyButton_ "btn btn-xs btn-ghost" "w-3 h-3" ("#" <> src <> "'s textContent") []
+          pre_ [id_ "issue-copy-json", class_ "hidden"] $ toHtml $ decodeUtf8 @Text $ AE.encode $ maybe (getAeson issue.issueData) (AE.toJSON . (.base.errorData)) errM
+          pre_ [id_ "issue-copy-md", class_ "hidden"] $ toHtml issueMarkdown
     div_ [class_ "max-md:px-3 px-4 h-9 flex items-center gap-1 overflow-x-auto whitespace-nowrap border-t border-strokeWeak text-xs"] do
       span_ [class_ "text-textWeak mr-1"] "Jump to:"
       forM_ sections \s -> a_ [href_ $ "#" <> s.anchor, class_ "px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker"] $ toHtml s.heading
@@ -1139,6 +1158,12 @@ eventCard_ IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflow-cli
         whenJust s.controls $ div_ [class_ "ml-auto flex items-center gap-2"]
       div_ [class_ "pb-3"] s.content
   where
+    issueMarkdown =
+      unlines
+        $ ["## " <> issue.title, "", "- Type: " <> display issue.issueType, "- Severity: " <> display issue.severity]
+        <> ["- Service: " <> sv | Just sv <- [issue.service]]
+        <> ["- Environment: " <> e | Just e <- [issue.environment]]
+        <> foldMap (\errL -> let e = errL.base.errorData in ["- Release: " <> r | Just r <- [e.release]] <> ["", "```", e.errorType <> ": " <> e.message, errL.base.stacktrace, "```"]) errM
     -- The type's own evidence, then trace, logs and replay when the issue has them.
     -- A section with nothing to show is left out rather than rendered as an empty state.
     sections = typeSections <> traceSection <> logsSection <> replaySection
@@ -1206,6 +1231,18 @@ eventCard_ IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflow-cli
                              toHtml $ maybe "The SDK" (\r -> "The " <> r <> " SDK") runtimeM <> " reported this exception without frames."
                            let (target, lbl) = bool ("#issue-logs", "Inspect the related logs") ("#issue-trace", "Inspect the trace and service calls") (isJust traceRef)
                            a_ [href_ target, class_ "text-textBrand underline underline-offset-2 hover:no-underline"] lbl
+                 ]
+              <> [ section "issue-grouping" "layer-group" "Event grouping"
+                     $ div_ [class_ "max-md:px-3 px-4 space-y-2 text-xs text-textWeak"] do
+                       p_ "Events join this issue when their fingerprint matches: the error type, the message with volatile parts (ids, numbers, hex) replaced, the service, the span name, and the in-app frames."
+                       kvRows_ ""
+                         $ present
+                           [ ("normalized", Just $ EF.normalizeMessage d.errorMessage)
+                           , ("fingerprint", (.base.hash) <$> errM)
+                           , ("across routes", errM >>= (.base.parentHash))
+                           , ("same shape", field (.shapeHash))
+                           ]
+                 | isJust errM
                  ]
               <> [ section "issue-http" "globe" "HTTP request" do
                      let headers = maybe [] Map.toList (field (.requestHeaders))

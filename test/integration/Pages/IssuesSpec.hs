@@ -673,6 +673,21 @@ spec = sequential $ aroundAll withTestResources do
       all (isJust . (.archivedAt)) <$> issues `shouldReturn` True
       forM iids (runTestBg frozenTime tr . Issues.selectLatestStateEvent . UUIDId) `shouldReturn` replicate 2 (Just Issues.IEResolved)
 
+    it "the user journey offers search, newest-first ordering and copy" \tr -> do
+      traceIdText <- T.replace "-" "" . DataUUID.toText <$> UUID.nextRandom
+      issueId <- withResource tr.trPool \conn -> do
+        forM_ ([(-2, "SERVER", "GET /cart", "s1"), (-1, "log", "cart item missing price", "s2"), (0, "SERVER", "POST /checkout", "s3")] :: [(Integer, Text, Text, Text)]) \(dt, kind, name, sid) ->
+          void
+            $ PGS.execute
+              conn
+              [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, kind, name, summary, context___trace_id, context___span_id, context)
+                    VALUES (gen_random_uuid(), ?, ?, ?, ?, ?, ARRAY[?], ?, ?, jsonb_build_object('trace_id', ?::text, 'span_id', ?::text)) |]
+              (testPid, addUTCTime (fromInteger dt) frozenTime, addUTCTime (fromInteger dt) frozenTime, kind, name, name, traceIdText, sid, traceIdText, sid)
+        maybe (fail "no row") (pure . UUIDId . fromOnly) . listToMaybe
+          =<< PGS.query conn [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, created_at, updated_at) VALUES (?, 'runtime_exception', 'journey probe', 'journey-probe', ?, ?) RETURNING id |] (testPid, frozenTime, frozenTime)
+      (_, activity) <- testServant tr $ IssuesPage.issueActivityGetH testPid issueId (Just traceIdText) (Just frozenTime)
+      TL.toStrict (renderText activity) `shouldContainAll` ["id=\"issue-journey\"", "Search the user journey", "crumb-rev", "issue-journey-text", "cart item missing price"]
+
     -- Sentry's stack trace earns its slot by separating the code you wrote from the
     -- runtime's, and this page had the parser (Pkg.ErrorFingerprint, which the issue
     -- fingerprint is already computed from) but rendered a raw <pre> blob. No demo
