@@ -255,7 +255,6 @@ enrichGeo db e
 -- (@country.iso_code@, @subdivisions[0].iso_code@, @city.names.en@); IPinfo's are flat
 -- (@country_code@, @region@, @city@) — reading both lets a city database drop in later.
 --
--- >>> import Data.Map qualified as Map
 -- >>> let m = GeoIP2.DataMap . Map.fromList . map (\(k, v) -> (GeoIP2.DataString k, v)); s = GeoIP2.DataString
 -- >>> geoFields (m [("country", m [("iso_code", s "US")]), ("city", m [("names", m [("en", s "Santa Clara")])]), ("subdivisions", GeoIP2.DataArray [m [("iso_code", s "CA")]])])
 -- (Just "US",Just "CA",Just "Santa Clara")
