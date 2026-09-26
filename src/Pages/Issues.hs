@@ -435,6 +435,7 @@ issueDetailCore pid firstM eventM requestedRange fetchIssue = do
             Just (Issues.QueryAlertP _) -> pure Nothing
             Just (Issues.LogPatternP _) -> pure Nothing
             Just (Issues.LogPatternRateChangeP _) -> pure Nothing
+            Just (Issues.PerformanceP d) -> pure $ Just (d.traceId, d.observedAt)
             Nothing -> pure Nothing
       mTraceRef <- maybe defaultTraceRef (\ev -> pure $ Just (ev.traceId, ev.at)) eventM
       -- The trace is supporting evidence, not the page. It used to be fetched here
@@ -1051,6 +1052,7 @@ issueHeader_ IssueView{..} = header_ [class_ "max-md:px-3 px-4 max-md:pt-4 pt-6 
             whenJust ((\m p -> m <> " " <> p) <$> d.requestMethod <*> d.requestPath) $ span_ [class_ "text-xs font-mono text-textWeak break-all"] . toHtml
           Just (Issues.QueryAlertP _) -> pass
           Just (Issues.ApiChangeP _) -> pass
+          Just (Issues.PerformanceP d) -> metadataChip_ "database" $ unwords $ catMaybes [Just (bool "Slow query" "N+1 query" (d.kind == Issues.PKNPlusOne)), d.dbSystem]
           Nothing -> unparsablePayload_
     -- The chart's own total, hoisted: `naked` suppresses the widget's value slot, so
     -- this is the only place it renders and it cannot disagree with the chart.
@@ -1145,6 +1147,11 @@ issueAggregate_ v@IssueView{..} = do
     Nothing -> unparsablePayload_
     Just (Issues.LogPatternP _) -> issueVolumeChart_ v "Pattern Volume"
     Just (Issues.LogPatternRateChangeP _) -> issueVolumeChart_ v "Pattern Volume"
+    Just (Issues.PerformanceP d) ->
+      contextCard_ "p-4 flex items-start gap-8" "Impact in the sample trace" do
+        forM_ ([("Duration", show @Text (round d.durationImpactMs :: Int) <> " ms"), ("Queries", show d.repeatCount), ("Database", fromMaybe "\x2014" d.dbSystem)] :: [(Text, Text)]) \(lbl, val) -> div_ [class_ "flex flex-col gap-1"] do
+          span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] $ toHtml lbl
+          span_ [class_ "text-2xl font-semibold text-textStrong tabular-nums leading-none"] $ toHtml val
     Just (Issues.RuntimeExceptionP d) ->
       sideBySide_ (issueVolumeChart_ v "Error Frequency")
         $ whenJust ((,) <$> d.requestMethod <*> d.requestPath) \(method, path) ->
@@ -1197,7 +1204,8 @@ eventCard_ :: IssueView -> Html ()
 -- waterfall's sticky rows and the jump-link landing offset read it.
 eventCard_ IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflow-clip [--event-nav-h:77px]"] do
   let occurrenceUrl useFirst = "/p/" <> pid.toText <> "/issues/" <> issue.id.toText <> "?" <> T.drop 1 (mconcat ["&first_occurrence=true" | useFirst] <> TimePicker.rangeQuery tp)
-      hasOccurrences = issue.issueType /= Issues.QueryAlert && not isLogPatternIssue
+      -- A performance issue carries one sample trace, not a stream of occurrences.
+      hasOccurrences = issue.issueType `notElem` [Issues.QueryAlert, Issues.Performance] && not isLogPatternIssue
   nav_ [id_ "issue-event-nav", class_ "sticky top-0 z-20 bg-bgRaised border-b border-strokeWeak", Aria.label_ "Issue evidence"] do
     div_ [class_ "max-md:px-3 px-4 h-10 flex items-center gap-3 overflow-x-auto whitespace-nowrap"] do
       span_ [class_ "text-sm font-semibold text-textStrong"] $ bool "Evidence" "Event" hasOccurrences
@@ -1253,6 +1261,11 @@ eventCard_ IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflow-cli
       , Just prefix <- [Issues.hashPrefix issue.issueType]
       ]
     section = IssueSection Nothing []
+    present = mapMaybe \(k, v) -> (k,) <$> mfilter (not . T.null . T.strip) v
+    kvRows_ :: Text -> [(Text, Text)] -> Html ()
+    kvRows_ cls rows = dl_ [class_ $ "grid gap-y-0.5 font-mono text-xs " <> cls] $ forM_ rows \(k, val) -> div_ [class_ "flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0"] do
+      dt_ [class_ "w-28 shrink-0 text-textWeak"] $ toHtml k
+      dd_ [class_ "min-w-0 break-all text-textStrong"] $ toHtml val
     isLogPatternIssue = issue.issueType `elem` [Issues.LogPattern, Issues.LogPatternRateChange]
     typeSections = case Issues.issuePayload issue of
       Nothing -> []
@@ -1264,11 +1277,6 @@ eventCard_ IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflow-cli
             runtimeM = errM >>= (.base.errorData.runtime)
             field :: (ErrorPatterns.ATError -> Maybe a) -> Maybe a
             field f = errM >>= f . (.base.errorData)
-            present = mapMaybe \(k, v) -> (k,) <$> mfilter (not . T.null . T.strip) v
-            kvRows_ :: Text -> [(Text, Text)] -> Html ()
-            kvRows_ cls rows = dl_ [class_ $ "grid gap-y-0.5 font-mono text-xs " <> cls] $ forM_ rows \(k, val) -> div_ [class_ "flex gap-3 px-2 py-1 rounded odd:bg-fillWeaker min-w-0"] do
-              dt_ [class_ "w-28 shrink-0 text-textWeak"] $ toHtml k
-              dd_ [class_ "min-w-0 break-all text-textStrong"] $ toHtml val
             highlights =
               present
                 [ ("handled", bool "no" "yes" <$> field (.handled))
@@ -1349,6 +1357,18 @@ eventCard_ IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflow-cli
                  | Just method <- [d.requestMethod <|> field (.requestMethod)]
                  , Just url <- [field (.urlFull) <|> d.requestPath <|> field (.requestPath)]
                  ]
+      Just (Issues.PerformanceP d) ->
+        [ section "issue-span-evidence" "database" "Span evidence"
+            $ kvRows_ "max-md:px-3 px-4"
+            $ present
+              [ ("transaction", d.transaction)
+              , ("parent span", d.parentSpan)
+              , (bool "slow query" ("repeating query (\x00d7" <> show d.repeatCount <> ")") (d.kind == Issues.PKNPlusOne), Just d.query)
+              , ("database", d.dbSystem)
+              , ("duration impact", Just $ show @Text (round d.durationImpactMs :: Int) <> " ms")
+              , ("trace.id", Just d.traceId)
+              ]
+        ]
       Just (Issues.QueryAlertP d) ->
         let scope = mkScopedQuery pid (Nothing, Nothing) issue.environment issue.service
             -- Hands the Explorer the alert's own query, its issue boundary, and the page's window.
@@ -2590,6 +2610,7 @@ issuePreview_ Issues.IssueL{base} = div_ [class_ "flex items-center gap-2 min-w-
       Just (Issues.QueryAlertP d) -> previewSnippet d.queryExpression
       Just (Issues.LogPatternP d) -> logPatternPreview d.logPattern d.sampleMessage
       Just (Issues.LogPatternRateChangeP d) -> logPatternPreview d.logPattern d.sampleMessage
+      Just (Issues.PerformanceP d) -> previewSnippet d.query
       Just (Issues.ApiChangeP d) ->
         previewSnippet $ d.endpointMethod <> " " <> d.endpointPath <> if T.null d.endpointHost then "" else " on " <> d.endpointHost
       Nothing -> unparsablePayload_
@@ -2684,6 +2705,7 @@ issueTypeChip_ compact issueType critical =
       Issues.QueryAlert -> ("text-fillWarning-strong", "zap", "Alert")
       Issues.LogPattern -> ("text-fillInformation-strong", "file-text", "Log Pattern")
       Issues.LogPatternRateChange -> ("text-fillWarning-strong", "activity", "Rate Change")
+      Issues.Performance -> ("text-fillWarning-strong", "gauge-high", "Performance")
       Issues.ApiChange | critical -> ("text-fillError-strong", "exclamation-triangle", "Breaking")
       Issues.ApiChange -> ("text-fillInformation-strong", "info", "Incremental")
     shortTxt = case issueType of

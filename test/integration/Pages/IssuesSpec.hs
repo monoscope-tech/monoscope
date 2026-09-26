@@ -8,7 +8,7 @@ import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Text.Display (display)
 import Data.Text.Lazy qualified as TL
-import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, getCurrentTime)
+import Data.Time (NominalDiffTime, UTCTime, addUTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as DataUUID
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
@@ -733,6 +733,30 @@ spec = sequential $ aroundAll withTestResources do
       (`shouldContainAll` ["My errors", "issues?filter=Inbox&amp;type=runtime_exception"]) =<< list []
       forM_ views \v -> testServant tr $ IssuesPage.deleteViewPostH testPid v.id
       (null <$> runTestBg frozenTime tr (Issues.selectIssueViews testPid)) `shouldReturn` True
+
+    it "performance detection opens N+1 and slow-query issues with span evidence" \tr -> do
+      let tid = "perf0000000000000000000000000001"
+          at dt = addUTCTime dt frozenTime
+          span' :: PGS.Connection -> (Text, Maybe Text, Text, Maybe Text, Int64, NominalDiffTime) -> IO ()
+          span' conn (sid, parent, name, q, durNs, dt) =
+            void
+              $ PGS.execute
+                conn
+                [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, kind, name, summary, context___trace_id, context___span_id, parent_id, duration, attributes___db___query___text, attributes___db___system___name, resource___service___name, context)
+                      VALUES (gen_random_uuid(), ?, ?, ?, 'client', ?, ARRAY[?], ?, ?, ?, ?, ?, 'postgresql', 'catalog', jsonb_build_object('trace_id', ?::text, 'span_id', ?::text)) |]
+                (testPid, at dt, at dt, name, name, tid, sid, parent, durNs, q, tid, sid)
+      withResource tr.trPool \conn -> do
+        span' conn ("root", Nothing, "GET /products", Nothing, 900_000_000, -60)
+        span' conn ("ctl", Just "root", "ProductController.index", Nothing, 800_000_000, -59)
+        forM_ [1 .. 6 :: Integer] \i -> span' conn ("q" <> show i, Just "ctl", "SELECT reviews", Just ("SELECT * FROM reviews WHERE product_id = " <> show i), 20_000_000, fromIntegral (-58 + i))
+        span' conn ("slow", Just "root", "SELECT promotions", Just "SELECT * FROM promotions WHERE active", 1_500_000_000, -40)
+      runTestBg frozenTime tr $ BackgroundJobs.detectPerformanceIssues testPid
+      runTestBg frozenTime tr $ BackgroundJobs.detectPerformanceIssues testPid -- repeat detections fold into the same issues
+      perf <- withResource tr.trPool \conn -> PGS.query conn [sql| SELECT id, title FROM apis.issues WHERE project_id = ? AND issue_type = 'performance' ORDER BY title |] (Only testPid) :: IO [(DataUUID.UUID, Text)]
+      map snd perf `shouldSatisfy` \ts -> length ts == 2 && any ("N+1 Query: SELECT * FROM reviews WHERE product_id =" `T.isPrefixOf`) ts && any ("Slow DB Query: SELECT * FROM promotions" `T.isPrefixOf`) ts
+      forM_ perf \(iid, title) -> when ("N+1" `T.isPrefixOf` title) do
+        (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId iid) Nothing Nothing Nothing Nothing Nothing
+        renderPage page `shouldContainAll` ["Span evidence", "repeating query (\x00d7" <> "6)", "ProductController.index", "GET /products", "120 ms", "id=\"issue-trace\"", "Performance"]
 
     -- Sentry's stack trace earns its slot by separating the code you wrote from the
     -- runtime's, and this page had the parser (Pkg.ErrorFingerprint, which the issue

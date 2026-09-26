@@ -157,6 +157,16 @@ buildTitlePrompt issue =
             Baseline: {Issues.showRate d.baselineMean}
             Change: {Issues.showPct d.changePercent}
             Service: {Issues.serviceLabel d.serviceName}|]
+      Issues.Performance ->
+        withIssueData @Issues.PerformanceData issue ("Generate a concise title for this performance issue. Title: " <> issue.title) \d ->
+          let kind = display d.kind
+              impact = show @Text (round d.durationImpactMs :: Int)
+           in [fmtTrim|Generate a concise title for this {kind} performance issue.
+            Query: {T.take 200 d.query}
+            Transaction: {fromMaybe "unknown" d.transaction}
+            Repeats: {d.repeatCount}
+            Duration impact: {impact} ms
+            Service: {Issues.serviceLabel issue.service}|]
 
 
 buildDescriptionPrompt :: Issues.Issue -> Text
@@ -242,6 +252,18 @@ buildDescriptionPrompt issue =
             Change: {Issues.showPct d.changePercent}
             Service: {Issues.serviceLabel d.serviceName}
             Log level: {fromMaybe "unknown" d.logLevel}|]
+      Issues.Performance ->
+        withIssueData @Issues.PerformanceData issue ("Describe this performance issue. Title: " <> issue.title) \d ->
+          let kind = display d.kind
+              impact = show @Text (round d.durationImpactMs :: Int)
+           in [fmtTrim|Describe this {kind} performance issue, why it is slow, and how to fix it.
+            Query: {d.query}
+            Database: {fromMaybe "unknown" d.dbSystem}
+            Transaction: {fromMaybe "unknown" d.transaction}
+            Parent span: {fromMaybe "unknown" d.parentSpan}
+            Repeats in one trace: {d.repeatCount}
+            Duration impact: {impact} ms
+            Service: {Issues.serviceLabel issue.service}|]
 
 
 -- | Classify issue as critical/safe and count breaking/incremental changes
@@ -304,6 +326,7 @@ buildCriticalityPrompt issue =
       Issues.QueryAlert -> "Query alert: " <> issue.title
       Issues.LogPattern -> "Log pattern: " <> issue.title
       Issues.LogPatternRateChange -> "Log pattern rate change: " <> issue.title
+      Issues.Performance -> "Performance issue: " <> issue.title
 
 
 updateIssueClassification :: DB es => Issues.IssueId -> Bool -> Int -> Eff es ()

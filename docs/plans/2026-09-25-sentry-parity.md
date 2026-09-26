@@ -35,7 +35,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (commit).
 
 ## C. Issue types (detectors over spans)
 
-- [ ] C1 Performance — N+1 query (`db.query.text` repeated under one parent), slow DB query
+- [x] C1 Performance — N+1 query (`db.query.text` repeated under one parent), slow DB query
       (duration over threshold), inefficient query; span evidence (parent, preceding, repeating,
       duration impact).
 - [ ] C2 Frontend — rage click / dead click from browser SDK click events; selector + replay.
@@ -74,6 +74,11 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (commit).
 - Latent, pre-existing: `handleRegression` calls `reopenIssue` with no guard against another open issue
   for the same signal, so it can hit `idx_issues_project_target_type_open` (23505) when the newest issue is
   closed and an older one is open. Seen only from contrived test state so far.
+
+- C1: hourly `PerformanceIssueDetection` job over the last hour's db spans (TF when enabled):
+  N+1 = same normalised query ≥5× under one parent in one trace, ≥50ms total; slow = one query >1s.
+  Queries group by literals replaced with `?`. Only the Postgres path is exercised locally; the
+  `regexp_replace(..., 'g')` form is DataFusion-compatible but unverified against TimeFusion.
 
 ## Decisions (asked 2026-09-26)
 

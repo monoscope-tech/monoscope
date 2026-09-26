@@ -69,6 +69,9 @@ module Models.Apis.Issues (
   wakeOnEscalation,
   setIssuePriority,
   SavedView (..),
+  PerfKind (..),
+  PerformanceData (..),
+  createPerformanceIssue,
   selectIssueViews,
   saveIssueView,
   deleteIssueView,
@@ -224,6 +227,7 @@ import Relude hiding (id)
 import Servant (FromHttpApiData (..), ServerError, err500, errBody)
 import System.Logging (logAttention)
 import System.Types (DB)
+import Utils (toXXHash)
 
 
 type IssueId = UUIDId "issue"
@@ -236,9 +240,35 @@ data IssueType
   | QueryAlert
   | LogPattern
   | LogPatternRateChange
+  | Performance
   deriving stock (Bounded, Enum, Eq, Generic, Ord, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC ('Just "apis.issue_type") "" IssueType
+
+
+-- | A performance issue's shape, detected over completed traces' database spans.
+data PerfKind = PKNPlusOne | PKSlowQuery
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON, Display) via WrappedEnumSC 'Nothing "PK" PerfKind
+
+
+-- | Span evidence for a performance issue: the query (@db.query.summary@ or a
+-- normalised @db.query.text@), where it ran, and what it cost in one sample trace.
+data PerformanceData = PerformanceData
+  { kind :: PerfKind
+  , transaction :: Maybe Text
+  , parentSpan :: Maybe Text
+  , query :: Text
+  , dbSystem :: Maybe Text
+  , repeatCount :: Int
+  , durationImpactMs :: Double
+  , traceId :: Text
+  , observedAt :: UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake PerformanceData
 
 
 -- | Hash prefix used in otel_logs_and_spans hashes column
@@ -249,6 +279,7 @@ hashPrefix = \case
   RuntimeException -> Just "err:"
   ApiChange -> Just "" -- endpoint hash is stored unprefixed on span hashes
   QueryAlert -> Nothing
+  Performance -> Nothing -- detected over span shapes; spans carry no issue hash
 
 
 defaultRecommendedAction :: Text
@@ -1998,6 +2029,7 @@ data IssuePayload
   | QueryAlertP QueryAlertData
   | LogPatternP LogPatternData
   | LogPatternRateChangeP LogPatternRateChangeData
+  | PerformanceP PerformanceData
   deriving stock (Generic, Show)
 
 
@@ -2010,6 +2042,7 @@ payloadType = \case
   QueryAlertP{} -> QueryAlert
   LogPatternP{} -> LogPattern
   LogPatternRateChangeP{} -> LogPatternRateChange
+  PerformanceP{} -> Performance
 
 
 -- | The @issue_data@ column's value: the *bare* per-type object, exactly as before
@@ -2028,6 +2061,7 @@ payloadJson = \case
   QueryAlertP d -> AE.toJSON d
   LogPatternP d -> AE.toJSON d
   LogPatternRateChangeP d -> AE.toJSON d
+  PerformanceP d -> AE.toJSON d
 
 
 -- | Pair a stored @issue_type@ with its @issue_data@. 'Nothing' means the two
@@ -2052,6 +2086,7 @@ parsePayload t v = case t of
   QueryAlert -> wrap QueryAlertP
   LogPattern -> wrap LogPatternP
   LogPatternRateChange -> wrap LogPatternRateChangeP
+  Performance -> wrap PerformanceP
   where
     wrap :: AE.FromJSON a => (a -> IssuePayload) -> Maybe IssuePayload
     wrap f = case AE.fromJSON v of
@@ -2351,6 +2386,31 @@ type ErrorLike p =
 -- the (project_id, target_hash, issue_type) ON CONFLICT index; app errors — and
 -- framework errors with no parent hash — keep their narrow per-route identity. The
 -- parent hash is always stored for UI rollup, and @mkTitle@ is told which hash won.
+-- | One performance issue per (kind, service, transaction, query): the target hash is
+-- that key, so the open-issue upsert folds repeat detections into one issue.
+createPerformanceIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Maybe Text -> PerformanceData -> Eff es Issue
+createPerformanceIssue projectId service d =
+  mkIssue
+    MkIssueOpts
+      { projectId
+      , targetHash = toXXHash $ T.intercalate "|" [display d.kind, fromMaybe "" service, fromMaybe "" d.transaction, d.query]
+      , parentHash = Nothing
+      , isFramework = False
+      , service
+      , critical = False
+      , severity = Warning
+      , title = case d.kind of
+          PKNPlusOne -> "N+1 Query: " <> T.take 100 d.query
+          PKSlowQuery -> "Slow DB Query: " <> T.take 100 d.query
+      , recommendedAction = case d.kind of
+          PKNPlusOne -> "Batch these queries: load the rows in one query (a join or an IN list) instead of one per item."
+          PKSlowQuery -> "Check the query plan: add an index for its filter, or narrow what it reads."
+      , migrationComplexity = "n/a"
+      , timestamp = Nothing
+      , payload = PerformanceP d
+      }
+
+
 mkErrorIssue :: (ErrorLike p, Time :> es, UUIDEff :> es) => Projects.ProjectId -> p -> Int -> (Bool -> Text) -> Text -> Eff es Issue
 mkErrorIssue projectId p occurrences mkTitle recommendedAction = do
   now <- Time.currentTime

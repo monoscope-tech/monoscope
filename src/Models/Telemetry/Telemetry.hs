@@ -9,6 +9,9 @@ module Models.Telemetry.Telemetry (
   SpanRecord (..),
   getAllATErrors,
   adjacentHashEvent,
+  PerfCandidate (..),
+  selectPerfCandidates,
+  spanAndRootNames,
   isErrorRecord,
   getProjectStatsForReport,
   Trace (..),
@@ -806,6 +809,66 @@ getTraceRowsWith select spanIdOf parentIdOf useTf pid trId tme now limitM = Hasq
 -- "First" and "Recent" page loads. We UNION ALL two index-friendly subqueries (one per
 -- url-path source) instead of OR'ing them in a single WHERE, so each side can hit its own
 -- expression index and avoid a 7d seq scan on otel_logs_and_spans.
+-- | A database-span pattern worth a performance issue, as found in one trace.
+data PerfCandidate = PerfCandidate
+  { traceId :: Text
+  , parentId :: Maybe Text
+  , query :: Text
+  , occurrences :: Int
+  , durationNs :: Int64
+  , at :: UTCTime
+  , service :: Maybe Text
+  , dbSystem :: Maybe Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+-- | N+1 candidates: the same query run at least 5 times under one parent span in one
+-- trace, costing 50ms or more together. Slow candidates: single queries over 1s.
+-- Both read database spans (@db.query.text@) in @[from, to)@ and return the costliest.
+selectPerfCandidates :: DB es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es ([PerfCandidate], [PerfCandidate])
+selectPerfCandidates pid from to = do
+  nPlusOne <-
+    Hasql.interp
+      [HI.sql| SELECT context___trace_id, parent_id, ^{normalizedQuery},
+                      count(*)::bigint, sum(duration)::bigint, min(timestamp), max(resource___service___name), max(attributes___db___system___name)
+               FROM otel_logs_and_spans
+               WHERE project_id = #{pid.toText} AND timestamp >= #{from} AND timestamp < #{to}
+                 AND attributes___db___query___text IS NOT NULL AND parent_id IS NOT NULL AND context___trace_id IS NOT NULL
+               GROUP BY context___trace_id, parent_id, ^{normalizedQuery}
+               HAVING count(*) >= 5 AND sum(duration) >= 50000000
+               ORDER BY sum(duration) DESC LIMIT 50 |]
+  slow <-
+    Hasql.interp
+      [HI.sql| SELECT context___trace_id, parent_id, ^{normalizedQuery},
+                      1::bigint, duration, timestamp, resource___service___name, attributes___db___system___name
+               FROM otel_logs_and_spans
+               WHERE project_id = #{pid.toText} AND timestamp >= #{from} AND timestamp < #{to}
+                 AND attributes___db___query___text IS NOT NULL AND duration > 1000000000 AND context___trace_id IS NOT NULL
+               ORDER BY duration DESC LIMIT 50 |]
+  pure (nPlusOne, slow)
+  where
+    -- Literals out, so `WHERE id = 1` and `WHERE id = 2` group as one query. Both engines
+    -- (Postgres, DataFusion) accept this regexp_replace form.
+    normalizedQuery = [HI.sql|regexp_replace(regexp_replace(COALESCE(attributes___db___query___summary, attributes___db___query___text), '''[^'']*''', '?', 'g'), '[0-9]+', '?', 'g')|]
+
+
+-- | Name of a span in a trace, and the trace's root span name, near @at@.
+spanAndRootNames :: DB es => Projects.ProjectId -> Text -> Maybe Text -> UTCTime -> Eff es (Maybe Text, Maybe Text)
+spanAndRootNames pid tid spanIdM at = do
+  rows <-
+    Hasql.interp @[(Maybe Text, Maybe Text, Maybe Text)]
+      [HI.sql| SELECT context___span_id, parent_id, name FROM otel_logs_and_spans
+               WHERE project_id = #{pid.toText} AND context___trace_id = #{tid}
+                 AND timestamp BETWEEN #{addUTCTime (-300) at} AND #{addUTCTime 300 at}
+                 AND (context___span_id = #{spanIdM} OR parent_id IS NULL OR parent_id = '') LIMIT 20 |]
+  pure
+    ( asum [n | isJust spanIdM, (sid, _, n) <- rows, sid == spanIdM]
+    , asum [n | (_, par, n) <- rows, maybe True T.null par]
+    )
+
+
 -- | The traced event carrying @hashKey@ nearest to @from@ in one direction, within a
 -- day of it: the hash test is an unindexed array scan, so the window bounds its cost.
 adjacentHashEvent :: DB es => Projects.ProjectId -> Text -> Bool -> UTCTime -> Eff es (Maybe (Text, UTCTime))
