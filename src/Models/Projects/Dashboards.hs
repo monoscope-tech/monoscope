@@ -206,7 +206,7 @@ getOrInsertByBaseTemplate d = do
 
 insertSql :: DashboardVM -> HI.Sql
 insertSql d =
-      [HI.sql| INSERT INTO projects.dashboards (id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams, file_path, file_sha)
+  [HI.sql| INSERT INTO projects.dashboards (id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams, file_path, file_sha)
              VALUES (#{d.id}, #{d.projectId}, #{d.createdAt}, #{d.updatedAt}, #{d.createdBy}, #{d.baseTemplate}, #{d.schema}, #{d.starredSince}, #{d.homepageSince}, #{d.tags}, #{d.title},
                CASE WHEN cardinality(#{d.teams}::uuid[]) = 0
                  THEN ARRAY(SELECT id FROM projects.teams WHERE project_id = #{d.projectId} AND is_everyone AND deleted_at IS NULL)
