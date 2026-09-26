@@ -2212,6 +2212,7 @@ processProjectErrors pid rawErrors now = do
             errorRollupStats = V.fromList [(h, cnt, users) | (h, (cnt, users)) <- errorRollupGroups]
         void $ ErrorPatterns.upsertErrorPatternHourlyStats pid now errorRollupStats
         void $ ErrorPatterns.upsertErrorPatternUsers pid errors
+        void $ ErrorPatterns.upsertErrorTagCounts pid errors
       authCtx <- ask @Config.AuthContext
       forM_ newOrRegressed \(errorHash, outcome) -> do
         errM <- ErrorPatterns.getErrorPatternByHash pid errorHash

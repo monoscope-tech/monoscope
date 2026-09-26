@@ -21,7 +21,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (commit).
 ## B. Issue page
 
 - [x] B1 Context panels — User (geo, IP), Browser, OS, Device, Runtime, Trace details.
-- [ ] B2 Tags — event attribute table (All / Custom / Application / Client / Other) + distribution
+- [x] B2 Tags — event attribute table (All / Custom / Application / Client / Other) + distribution
       drawer backed by a per-issue rollup (a live GROUP BY measured 48s).
 - [x] B3 HTTP Request — `http.request.method`, `url.full`/`url.path`, `url.query`,
       `http.request.header.*`, curl view.
@@ -92,6 +92,10 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (commit).
 - C4: `apis.cron_monitors` (migration 0205), managed at /monitors/cron; check-ins are spans/logs named
   `cron.checkin` with `monitor.slug` + `monitor.status`; evaluated on the per-minute tick under a
   SKIP LOCKED lease. Interval schedules only (no cron expressions yet).
+
+- B2: `apis.error_tag_counts` rollup (migration 0206) over a fixed tag set, written with the users
+  rollup; the page shows top values per tag. The per-event attribute table is the Trace section's span
+  details plus Highlights/Contexts rather than a separate All/Custom/Application/Client table.
 
 ## Decisions (asked 2026-09-26)
 

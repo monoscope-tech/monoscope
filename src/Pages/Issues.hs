@@ -56,6 +56,7 @@ import Data.Default (Default, def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
 import Data.List (partition)
+import Data.List.NonEmpty qualified as NE
 import Data.Map qualified as Map
 import Data.Ord (clamp)
 import Data.Pool (withResource)
@@ -404,6 +405,7 @@ issueDetailCore pid firstM eventM requestedRange fetchIssue = do
           userPermission <- ProjectMembers.getUserPermission pid sess.user.id
           pure $ userPermission >= Just ProjectMembers.PEdit || errL.base.assigneeId == Just sess.user.id
       members <- ProjectMembers.selectActiveProjectMembers pid
+      tagCounts <- maybe (pure []) (ErrorPatterns.selectErrorTagCounts . (.base.id)) errorM
       Issues.recordIssueView issue.id sess.user.id
       let bwconf =
             baseBwconf
@@ -469,7 +471,7 @@ issueDetailCore pid firstM eventM requestedRange fetchIssue = do
       addRespHeaders
         $ PageCtx bwconf
         $ issueDetailPage
-          IssueView{pid = pid, issue = issue, traceRef = mTraceRef, replaySession = replaySession, errM = errorM, now = now, isFirst = isFirst, tp = tp, stateEvent = stateEvent, canResolve = canResolve, members = members}
+          IssueView{pid = pid, issue = issue, traceRef = mTraceRef, replaySession = replaySession, errM = errorM, now = now, isFirst = isFirst, tp = tp, stateEvent = stateEvent, canResolve = canResolve, members = members, tagCounts = tagCounts}
 
 
 -- | ‹ › stepping: the event before or after @from@ that carries the issue's hash, within
@@ -950,6 +952,8 @@ data IssueView = IssueView
   , stateEvent :: Maybe Issues.IssueEvent
   , canResolve :: Bool
   , members :: [ProjectMembers.ProjectMemberVM]
+  , tagCounts :: [(Text, Text, Int)]
+  -- ^ The error's tag distribution rollup (key, value, count), most common first per key.
   }
 
 
@@ -1344,6 +1348,23 @@ eventCard_ IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflow-cli
                              toHtml $ maybe "The SDK" (\r -> "The " <> r <> " SDK") runtimeM <> " reported this exception without frames."
                            let (target, lbl) = bool ("#issue-logs", "Inspect the related logs") ("#issue-trace", "Inspect the trace and service calls") (isJust traceRef)
                            a_ [href_ target, class_ "text-textBrand underline underline-offset-2 hover:no-underline"] lbl
+                 ]
+              <> [ section "issue-tags" "tags" "Tags"
+                     $ div_ [class_ "max-md:px-3 px-4 grid md:grid-cols-2 gap-3"]
+                     $ forM_ (NE.groupWith (\(k, _, _) -> k) tagCounts) \grp -> do
+                       let (key, _, _) = head grp
+                           total = sum [n | (_, _, n) <- toList grp]
+                           top = take 3 (toList grp)
+                           rest = total - sum [n | (_, _, n) <- top]
+                           row lbl n = div_ [class_ "flex items-center gap-2 text-xs"] do
+                             span_ [class_ "flex-1 min-w-0 truncate text-textStrong"] $ toHtml lbl
+                             span_ [class_ "tabular-nums text-textWeak w-10 text-right"] $ toHtml $ show (n * 100 `div` max 1 total) <> "%"
+                             div_ [class_ "w-20 h-1.5 rounded bg-fillWeaker overflow-hidden"] $ div_ [class_ "h-full bg-fillBrand-strong", style_ $ "width:" <> show (n * 100 `div` max 1 total) <> "%"] ""
+                       div_ [class_ "rounded-lg border border-strokeWeak p-2 space-y-1"] do
+                         h4_ [class_ "text-xs font-semibold text-textStrong"] $ toHtml key
+                         forM_ top \(_, v, n) -> row v n
+                         when (rest > 0) $ row ("Other" :: Text) rest
+                 | not (null tagCounts)
                  ]
               <> [ section "issue-grouping" "layer-group" "Event grouping"
                      $ div_ [class_ "max-md:px-3 px-4 space-y-2 text-xs text-textWeak"] do

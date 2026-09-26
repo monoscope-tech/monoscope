@@ -30,6 +30,9 @@ module Models.Apis.ErrorPatterns (
   ErrorPatternWithCurrentRate (..),
   upsertErrorPatternUsers,
   userKey,
+  errorTags,
+  upsertErrorTagCounts,
+  selectErrorTagCounts,
   setResolvedInRelease,
   getErrorPatternsWithCurrentRates,
   findCanonicalMatch,
@@ -669,6 +672,49 @@ upsertErrorPatternUsers pid errs
   where
     keyed = V.mapMaybe (\e -> (e.hash,) <$> userKey e) errs
     (hashes, keys) = V.unzip keyed
+
+
+-- | The tags an error's distribution is rolled up over: a fixed set, so the rollup's
+-- write cost is bounded per event.
+--
+-- >>> errorTags (def{browser = Just "Chrome", release = Just "1.0", handled = Just False} :: ATError)
+-- [("browser","Chrome"),("release","1.0"),("handled","no")]
+errorTags :: ATError -> [(Text, Text)]
+errorTags e =
+  [ (k, v)
+  | (k, Just v) <-
+      [ ("browser", e.browser)
+      , ("os", e.os)
+      , ("device", e.device)
+      , ("release", e.release)
+      , ("environment", e.environment)
+      , ("country", e.geoCountry)
+      , ("service", e.serviceName)
+      , ("handled", bool "no" "yes" <$> e.handled)
+      ]
+  , not (T.null v)
+  ]
+
+
+-- | Add a batch's tag counts to the per-error rollup.
+upsertErrorTagCounts :: DB es => Projects.ProjectId -> V.Vector ATError -> Eff es Int64
+upsertErrorTagCounts pid errs
+  | null counts = pure 0
+  | otherwise =
+      Hasql.interpExecute
+        [HI.sql| INSERT INTO apis.error_tag_counts (project_id, error_id, tag_key, tag_value, count)
+                 SELECT e.project_id, e.id, u.k, u.v, u.n
+                 FROM (SELECT unnest(#{hashes}::text[]) AS hash, unnest(#{keys}::text[]) AS k, unnest(#{vals}::text[]) AS v, unnest(#{ns}::bigint[]) AS n) u
+                 JOIN apis.error_patterns e ON e.project_id = #{pid} AND e.hash = u.hash
+                 ON CONFLICT (project_id, error_id, tag_key, tag_value) DO UPDATE SET count = apis.error_tag_counts.count + EXCLUDED.count |]
+  where
+    counts = HM.toList $ HM.fromListWith (+) [((e.hash, k, v), 1 :: Int) | e <- V.toList errs, (k, v) <- errorTags e]
+    (hashes, keys, vals, ns) = (V.fromList [h | ((h, _, _), _) <- counts], V.fromList [k | ((_, k, _), _) <- counts], V.fromList [v | ((_, _, v), _) <- counts], V.fromList [n | (_, n) <- counts])
+
+
+-- | An error's tag distribution: per key, values by count, most common first.
+selectErrorTagCounts :: DB es => ErrorPatternId -> Eff es [(Text, Text, Int)]
+selectErrorTagCounts eid = Hasql.interp [HI.sql| SELECT tag_key, tag_value, count FROM apis.error_tag_counts WHERE error_id = #{eid} ORDER BY tag_key, count DESC |]
 
 
 -- | The identity 'upsertErrorPatternUsers' counts a user by.

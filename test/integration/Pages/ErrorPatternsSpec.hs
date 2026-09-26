@@ -117,7 +117,7 @@ spec = sequential $ aroundAll withTestResources do
       -- ...and the issue page renders them in its Highlights and Contexts sections.
       issue <- runTestBg frozenTime tr (Issues.selectIssueByHash pid e.hash Issues.AnyIssue) >>= maybe (fail "no ContextError issue") pure
       (_, page) <- testServant tr $ Pages.Issues.issueDetailGetH pid issue.id Nothing Nothing Nothing Nothing Nothing
-      TL.toStrict (renderText $ toHtml page) `shouldContainAll` ["id=\"issue-contexts\"", "Santa Clara, US", "26.3.1", "Chrome", "exception_event", "id=\"issue-http\"", "https://shop.example.com/api/context?cart=7&amp;coupon=x", "coupon", "x-request-id", "curl -X GET", "id=\"issue-copy-json\"", "&quot;release&quot;:&quot;26.3.1&quot;", "## ", "id=\"issue-grouping\"", "context probe", "Root cause", "The cart line has no price", "Plan a fix"]
+      TL.toStrict (renderText $ toHtml page) `shouldContainAll` ["id=\"issue-contexts\"", "Santa Clara, US", "26.3.1", "Chrome", "exception_event", "id=\"issue-http\"", "https://shop.example.com/api/context?cart=7&amp;coupon=x", "coupon", "x-request-id", "curl -X GET", "id=\"issue-copy-json\"", "&quot;release&quot;:&quot;26.3.1&quot;", "## ", "id=\"issue-grouping\"", "context probe", "Root cause", "The cart line has no price", "Plan a fix", "id=\"issue-tags\"", ">release</h4>", ">26.3.1</span>", "100%"]
 
     it "1c. releases and distinct users are tracked, and resolve-in-next-release holds until a new release" \tr -> do
       apiKey <- createTestAPIKey tr pid "release-key"
