@@ -7,6 +7,10 @@ module Pages.Issues (
   resolveIssueGetH,
   TriageForm (..),
   memberLabel,
+  CommentForm (..),
+  LinkForm (..),
+  commentPostH,
+  linkPostH,
   triagePostH,
   issueDetailGetH,
   IssueBulkForm (..),
@@ -46,6 +50,7 @@ import Data.Char (isHexDigit)
 import Data.Default (Default, def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
+import Data.List (partition)
 import Data.Map qualified as Map
 import Data.Ord (clamp)
 import Data.Pool (withResource)
@@ -372,6 +377,7 @@ issueDetailCore pid firstM requestedRange fetchIssue = do
           userPermission <- ProjectMembers.getUserPermission pid sess.user.id
           pure $ userPermission >= Just ProjectMembers.PEdit || errL.base.assigneeId == Just sess.user.id
       members <- ProjectMembers.selectActiveProjectMembers pid
+      Issues.recordIssueView issue.id sess.user.id
       let bwconf =
             baseBwconf
               { prePageTitle = Just "Issues"
@@ -776,7 +782,7 @@ activityPanel_ pid issueId traceRef = do
           <> "/activity"
           <> foldMap (\(tId, tTs) -> "?trace_id=" <> toUriStr tId <> "&trace_ts=" <> toUriStr (formatUTC tTs)) traceRef
   railSection_ "Activity"
-    $ div_ [id_ "issue-activity", class_ "-mx-4", hxGet_ activityUrl, hxTrigger_ "intersect once", hxSwap_ "innerHTML"]
+    $ div_ [id_ "issue-activity", class_ "-mx-4", hxGet_ activityUrl, hxTrigger_ "intersect once, issueActivityChanged from:body", hxSwap_ "innerHTML"]
     $ div_ [class_ "p-4 flex justify-center"]
     $ loadingIndicator_ LdSM LdDots
 
@@ -2637,12 +2643,38 @@ issueActivityGetH pid issueId traceIdM traceTsM = do
   -- Issue events first: it is the short, high-signal section (often a single
   -- "Created" row) and was buried under a journey scrollbox. The journey renders
   -- last at natural height so the page scroll carries it instead of a nested box.
+  let isView a = a.event == Issues.Lifecycle Issues.IEViewed
+      (views, timeline) = partition isView activities
+      name uid = maybe "Someone" (\u -> bool (u.firstName <> " " <> u.lastName) (CI.original u.email) (T.null u.firstName)) (Map.lookup uid userMap)
+      participants = ordNub $ mapMaybe (.createdBy) timeline
+      viewers = filter (`notElem` participants) $ ordNub $ mapMaybe (.createdBy) views
+      links = [(url, fromMaybe url (lookupValueText m "title")) | a <- timeline, a.event == Issues.Lifecycle Issues.IELinked, Just m <- [a.metadata], Just url <- [lookupValueText m "url"]]
+      issueUrl = "/p/" <> pid.toText <> "/issues/" <> issueId.toText
   addRespHeaders do
+    form_ [class_ "px-4 pb-3 flex flex-col gap-2", hxPost_ $ issueUrl <> "/comment", hxSwap_ "none", [__|on htmx:afterRequest call me.reset()|]] do
+      textarea_ [name_ "body", required_ "", rows_ "2", placeholder_ "Add a comment\x2026", Aria.label_ "Comment", class_ "textarea textarea-sm w-full"] ""
+      button_ [type_ "submit", class_ "btn btn-xs btn-primary self-end"] "Comment"
+    unless (null links) $ div_ [class_ "px-4 pb-3 space-y-1"] do
+      h4_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] "External links"
+      forM_ links \(url, title) -> a_ [href_ url, target_ "_blank", rel_ "noopener", class_ "flex items-center gap-1.5 text-sm text-textBrand hover:underline truncate"] do
+        faSprite_ "link" "regular" "w-3 h-3 shrink-0"
+        span_ [class_ "text-xs text-textWeak shrink-0"] $ toHtml $ linkProvider url
+        span_ [class_ "truncate"] $ toHtml title
+    details_ [class_ "px-4 pb-3"] do
+      summary_ [class_ "text-xs text-textBrand cursor-pointer list-none [&::-webkit-details-marker]:hidden"] "+ Link issue"
+      form_ [class_ "mt-2 flex flex-col gap-2", hxPost_ $ issueUrl <> "/link", hxSwap_ "none", [__|on htmx:afterRequest call me.reset()|]] do
+        input_ [type_ "url", name_ "url", required_ "", placeholder_ "https://github.com/org/repo/issues/42", Aria.label_ "Issue URL", class_ "input input-sm w-full"]
+        input_ [type_ "text", name_ "title", placeholder_ "Title (optional)", Aria.label_ "Link title", class_ "input input-sm w-full"]
+        button_ [type_ "submit", class_ "btn btn-xs self-end"] "Link"
+    unless (null participants && null viewers) $ div_ [class_ "px-4 pb-3 space-y-1 text-xs text-textWeak"] do
+      h4_ [class_ "text-2xs font-semibold uppercase tracking-wide"] "People"
+      unless (null participants) $ p_ $ toHtml $ "Participating: " <> T.intercalate ", " (name <$> participants)
+      unless (null viewers) $ p_ $ toHtml $ "Viewed: " <> T.intercalate ", " (name <$> viewers)
     div_ [class_ "border-t border-strokeWeak"] do
       div_ [class_ "px-4 py-2 flex items-center gap-2 bg-fillWeaker/40"] do
         faSprite_ "circle-info" "regular" "w-3 h-3 text-textWeak"
         span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] "Timeline"
-    issueActivityTimeline_ userMap now activities
+    issueActivityTimeline_ userMap now timeline
     userJourneySection_ journeySpans
 
 
@@ -2657,6 +2689,7 @@ issueActivityTimeline_ userMap now activities
           $ faSprite_ icon "regular" "w-2.5 h-2.5"
         div_ [class_ "flex flex-col gap-0.5 min-w-0"] do
           span_ [class_ "text-sm text-textStrong"] $ toHtml $ label <> actorText
+          whenJust (a.metadata >>= (`lookupValueText` "body")) $ p_ [class_ "text-sm text-textStrong whitespace-pre-wrap break-words bg-fillWeaker rounded px-2 py-1"] . toHtml
           span_ [class_ "text-xs text-textWeak"] $ toHtml $ agoText now a.createdAt
   where
     -- Icon, badge colour, and label for one timeline row. Episode rows read as the
@@ -2682,6 +2715,51 @@ issueActivityTimeline_ userMap now activities
       Issues.Lifecycle Issues.IEUnassigned -> ("user-minus", "bg-fillWeaker text-textWeak", "Unassigned")
       Issues.Lifecycle Issues.IEAutoResolved -> ("wand-magic-sparkles", "bg-fillSuccess-weak text-fillSuccess-strong", "Auto-resolved")
       Issues.Lifecycle Issues.IEEscalated -> ("arrow-up", "bg-fillError-weak text-fillError-strong", "Escalated")
+      Issues.Lifecycle Issues.IECommented -> ("comment", "bg-fillBrand-weak text-fillBrand-strong", "Commented")
+      Issues.Lifecycle Issues.IEViewed -> ("eye", "bg-fillWeaker text-textWeak", "Viewed")
+      Issues.Lifecycle Issues.IELinked -> ("link", "bg-fillBrand-weak text-fillBrand-strong", "Linked an external issue")
+
+
+-- | The tracker an external issue URL points at, by host.
+--
+-- >>> map linkProvider ["https://github.com/o/r/issues/1", "https://acme.atlassian.net/browse/X-1", "https://linear.app/a/issue/B-2", "https://x.io/1"]
+-- ["GitHub","Jira","Linear","Link"]
+linkProvider :: Text -> Text
+linkProvider url = maybe "Link" snd $ find ((`T.isInfixOf` url) . fst) ([("github.com", "GitHub"), ("gitlab.", "GitLab"), ("atlassian.net", "Jira"), ("linear.app", "Linear")] :: [(Text, Text)])
+
+
+newtype CommentForm = CommentForm {body :: Text}
+  deriving stock (Generic, Show)
+  deriving anyclass (FromForm)
+
+
+data LinkForm = LinkForm {url :: Text, title :: Maybe Text}
+  deriving stock (Generic, Show)
+  deriving anyclass (FromForm)
+
+
+-- | A comment on the issue's timeline.
+commentPostH :: Projects.ProjectId -> Issues.IssueId -> CommentForm -> ATAuthCtx (RespHeaders (Html ()))
+commentPostH pid issueId form = do
+  (sess, _) <- Projects.sessionAndProject pid
+  issueM <- Issues.selectIssueById pid issueId
+  let body = T.strip form.body
+  if isNothing issueM || T.null body
+    then addErrorToast "Write a comment first" Nothing
+    else Issues.logIssueActivity issueId Issues.IECommented (Just sess.user.id) (Just $ AE.object ["body" AE..= body]) >> addTriggerEvent "issueActivityChanged" AE.Null
+  addRespHeaders mempty
+
+
+-- | Attach an external issue (GitHub, Jira, Linear, ...) by URL.
+linkPostH :: Projects.ProjectId -> Issues.IssueId -> LinkForm -> ATAuthCtx (RespHeaders (Html ()))
+linkPostH pid issueId form = do
+  (sess, _) <- Projects.sessionAndProject pid
+  issueM <- Issues.selectIssueById pid issueId
+  let url = T.strip form.url
+  if isNothing issueM || not (any (`T.isPrefixOf` url) ["https://", "http://"])
+    then addErrorToast "Enter an http(s) link to the external issue" Nothing
+    else Issues.logIssueActivity issueId Issues.IELinked (Just sess.user.id) (Just $ AE.object ["url" AE..= url, "title" AE..= mfilter (not . T.null) (T.strip <$> form.title)]) >> addTriggerEvent "issueActivityChanged" AE.Null
+  addRespHeaders mempty
 
 
 errorGroupMembersGetH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (Html ()))

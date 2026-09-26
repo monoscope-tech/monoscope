@@ -158,6 +158,7 @@ module Models.Apis.Issues (
   parseActivityEvent,
   IssueActivity (..),
   logIssueActivity,
+  recordIssueView,
   selectLatestStateEvent,
   selectIssueActivity,
 
@@ -2116,6 +2117,9 @@ data IssueEvent
   | IEAutoResolved
   | IEEscalated
   | IEAckExpired
+  | IECommented
+  | IEViewed
+  | IELinked
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC 'Nothing "IE" IssueEvent
@@ -2158,6 +2162,8 @@ data IssueActivity = IssueActivity
   { event :: ActivityEvent
   , createdBy :: Maybe Projects.UserId
   , createdAt :: UTCTime
+  , metadata :: Maybe AE.Value
+  -- ^ A comment's @body@, a link's @url@/@title@; the lifecycle's own details otherwise.
   }
   deriving stock (Generic, Show)
   deriving anyclass (NFData)
@@ -2199,13 +2205,13 @@ logIssueActivity issueId event createdBy metadataM = do
 selectIssueActivity :: (DB es, Log :> es) => Projects.ProjectId -> IssueId -> Eff es [IssueActivity]
 selectIssueActivity pid issueId = do
   rows <-
-    Hasql.interp @[(Text, Maybe Projects.UserId, UTCTime)]
-      [HI.sql| SELECT a.event::text, a.created_by, a.created_at
+    Hasql.interp @[(Text, Maybe Projects.UserId, UTCTime, Maybe (HI.AsJsonb AE.Value))]
+      [HI.sql| SELECT a.event::text, a.created_by, a.created_at, a.metadata
         FROM apis.issue_activity_log a
         JOIN apis.issues i ON i.id = a.issue_id
         WHERE a.issue_id = #{issueId} AND i.project_id = #{pid}
         UNION ALL
-        SELECT 'episode:' || ev.event_kind, ev.actor_id, ev.observed_at
+        SELECT 'episode:' || ev.event_kind, ev.actor_id, ev.observed_at, NULL::jsonb
         FROM apis.incident_events ev
         JOIN apis.incident_episodes ep ON ep.id = ev.episode_id
         WHERE ep.issue_id = #{issueId} AND ep.project_id = #{pid}
@@ -2217,7 +2223,19 @@ selectIssueActivity pid issueId = do
     $ logAttention "ISSUE_TIMELINE_UNKNOWN_EVENT" (AE.object ["issue_id" AE..= issueId, "events" AE..= ordNub unparsable])
   pure activities
   where
-    toActivity (raw, by, at) = maybe (Left raw) (\e -> Right $ IssueActivity e by at) (parseActivityEvent raw)
+    toActivity (raw, by, at, meta) = maybe (Left raw) (\e -> Right $ IssueActivity e by at ((\(HI.AsJsonb v) -> v) <$> meta)) (parseActivityEvent raw)
+
+
+-- | Log that a user opened the issue, at most once a day, for the page's People list.
+recordIssueView :: (DB es, Time :> es) => IssueId -> Projects.UserId -> Eff es ()
+recordIssueView issueId uid = do
+  now <- Time.currentTime
+  Hasql.interpExecute_
+    [HI.sql| INSERT INTO apis.issue_activity_log (issue_id, event, created_by, created_at)
+             SELECT #{issueId}, 'viewed', #{uid}, #{now}
+             WHERE NOT EXISTS (SELECT 1 FROM apis.issue_activity_log
+                               WHERE issue_id = #{issueId} AND created_by = #{uid} AND event = 'viewed'
+                                 AND created_at > #{now}::timestamptz - INTERVAL '1 day') |]
 
 
 -- Reports

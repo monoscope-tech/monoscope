@@ -683,10 +683,28 @@ spec = sequential $ aroundAll withTestResources do
               [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, kind, name, summary, context___trace_id, context___span_id, context)
                     VALUES (gen_random_uuid(), ?, ?, ?, ?, ?, ARRAY[?], ?, ?, jsonb_build_object('trace_id', ?::text, 'span_id', ?::text)) |]
               (testPid, addUTCTime (fromInteger dt) frozenTime, addUTCTime (fromInteger dt) frozenTime, kind, name, name, traceIdText, sid, traceIdText, sid)
-        maybe (fail "no row") (pure . UUIDId . fromOnly) . listToMaybe
+        maybe (fail "no row") (pure . UUIDId . fromOnly)
+          . listToMaybe
           =<< PGS.query conn [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, created_at, updated_at) VALUES (?, 'runtime_exception', 'journey probe', 'journey-probe', ?, ?) RETURNING id |] (testPid, frozenTime, frozenTime)
       (_, activity) <- testServant tr $ IssuesPage.issueActivityGetH testPid issueId (Just traceIdText) (Just frozenTime)
       TL.toStrict (renderText activity) `shouldContainAll` ["id=\"issue-journey\"", "Search the user journey", "crumb-rev", "issue-journey-text", "cart item missing price"]
+
+    it "comments, external links and viewers show in the issue's activity" \tr -> do
+      iid <- withResource tr.trPool \conn ->
+        maybe (fail "no row") (pure . UUIDId . fromOnly)
+          . listToMaybe
+          =<< PGS.query conn [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, created_at, updated_at) VALUES (?, 'log_pattern', 'collab probe', 'collab-probe', ?, ?) RETURNING id |] (testPid, frozenTime, frozenTime)
+      _ <- testServant tr $ IssuesPage.issueDetailGetH testPid iid Nothing Nothing Nothing Nothing
+      _ <- testServant tr $ IssuesPage.issueDetailGetH testPid iid Nothing Nothing Nothing Nothing
+      _ <- testServant tr $ IssuesPage.commentPostH testPid iid (IssuesPage.CommentForm "Rolled back the cart service")
+      _ <- testServant tr $ IssuesPage.linkPostH testPid iid (IssuesPage.LinkForm "https://github.com/acme/shop/issues/42" (Just "Cart crash"))
+      _ <- testServant tr $ IssuesPage.linkPostH testPid iid (IssuesPage.LinkForm "javascript:alert(1)" Nothing)
+      (_, activity) <- testServant tr $ IssuesPage.issueActivityGetH testPid iid Nothing Nothing
+      let html = TL.toStrict (renderText activity)
+      html `shouldContainAll` ["Rolled back the cart service", "External links", "GitHub", "Cart crash", "Participating:", "name=\"body\""]
+      html `shouldSatisfy` not . T.isInfixOf "javascript:alert"
+      -- Two page loads in a day record one view, and views stay off the timeline.
+      withResource tr.trPool (\conn -> PGS.query conn [sql| SELECT count(*)::int FROM apis.issue_activity_log WHERE issue_id = ? AND event = 'viewed' |] (Only iid)) `shouldReturn` [Only (1 :: Int)]
 
     -- Sentry's stack trace earns its slot by separating the code you wrote from the
     -- runtime's, and this page had the parser (Pkg.ErrorFingerprint, which the issue
