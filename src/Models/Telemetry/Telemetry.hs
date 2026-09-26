@@ -871,10 +871,10 @@ spanAndRootNames pid tid spanIdM at = do
     )
 
 
--- | The browser SDK's click spans (@name = click@, carrying @session.id@) in @[from, to)@.
+-- | The browser SDK's click and dead-click spans (carrying @session.id@) in @[from, to)@.
 selectClickSpans :: DB es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [OtelLogsAndSpans]
 selectClickSpans pid from to =
-  Hasql.interp $ selectOtelSpans pid.toText from to [HI.sql| AND name = 'click' AND attributes___session___id IS NOT NULL ORDER BY timestamp LIMIT 20000 |]
+  Hasql.interp $ selectOtelSpans pid.toText from to [HI.sql| AND name IN ('click', 'dead_click') AND attributes___session___id IS NOT NULL ORDER BY timestamp LIMIT 20000 |]
 
 
 -- | The largest burst per key: at least @minCount@ events within @window@ seconds.

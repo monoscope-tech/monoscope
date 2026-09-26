@@ -759,24 +759,25 @@ spec = sequential $ aroundAll withTestResources do
         renderPage page `shouldContainAll` ["Span evidence", "repeating query (\x00d7" <> "6)", "ProductController.index", "GET /products", "120 ms", "id=\"issue-trace\"", "Performance"]
 
     it "frontend detection turns a burst of clicks on one element into a rage-click issue" \tr -> do
-      let click :: PGS.Connection -> (Text, Text, NominalDiffTime) -> IO ()
-          click conn (sid, label, dt) =
+      let click :: PGS.Connection -> (Text, Text, Text, NominalDiffTime) -> IO ()
+          click conn (name, sid, label, dt) =
             void
               $ PGS.execute
                 conn
                 [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, kind, name, summary, context___trace_id, context___span_id, attributes___session___id, attributes, context)
-                      VALUES (gen_random_uuid(), ?, ?, ?, 'internal', 'click', ARRAY['click'], 'rage-trace', gen_random_uuid()::text, ?,
+                      VALUES (gen_random_uuid(), ?, ?, ?, 'internal', ?, ARRAY['click'], 'rage-trace', gen_random_uuid()::text, ?,
                               jsonb_build_object('session', jsonb_build_object('id', ?::text), 'page', jsonb_build_object('url', 'https://shop.example.com/checkout'),
                                                  'monoscope', jsonb_build_object('display', jsonb_build_object('label', ?::text)), 'target', jsonb_build_object('tag_name', 'button', 'id', 'place-order')),
                               jsonb_build_object('trace_id', 'rage-trace')) |]
-                (testPid, addUTCTime dt frozenTime, addUTCTime dt frozenTime, sid, sid, label)
+                (testPid, addUTCTime dt frozenTime, addUTCTime dt frozenTime, name, sid, sid, label)
       withResource tr.trPool \conn -> do
-        forM_ [0, 0.4, 0.9, 1.4] \dt -> click conn ("sess-rage", "Place order", -120 + dt)
-        click conn ("sess-rage", "Continue shopping", -100)
+        forM_ [0, 0.4, 0.9, 1.4] \dt -> click conn ("click", "sess-rage", "Place order", -120 + dt)
+        click conn ("click", "sess-rage", "Continue shopping", -100)
+        forM_ ([("sess-a", -90), ("sess-b", -80)] :: [(Text, NominalDiffTime)]) \(sid, dt) -> click conn ("dead_click", sid, "Apply coupon", dt)
       runTestBg frozenTime tr $ BackgroundJobs.detectFrontendIssues testPid
-      rows <- withResource tr.trPool \conn -> PGS.query conn [sql| SELECT id, title FROM apis.issues WHERE project_id = ? AND issue_type = 'frontend' |] (Only testPid) :: IO [(DataUUID.UUID, Text)]
-      map snd rows `shouldBe` ["Rage Click: Place order"]
-      forM_ rows \(iid, _) -> do
+      rows <- withResource tr.trPool \conn -> PGS.query conn [sql| SELECT id, title FROM apis.issues WHERE project_id = ? AND issue_type = 'frontend' ORDER BY title |] (Only testPid) :: IO [(DataUUID.UUID, Text)]
+      map snd rows `shouldBe` ["Dead Click: Apply coupon", "Rage Click: Place order"]
+      forM_ (filter (("Rage" `T.isPrefixOf`) . snd) rows) \(iid, _) -> do
         (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId iid) Nothing Nothing Nothing Nothing Nothing
         renderPage page `shouldContainAll` ["Rage click", "button#place-order", "https://shop.example.com/checkout", "4 within 2s", "sess-rage"]
 

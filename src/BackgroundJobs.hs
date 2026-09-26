@@ -5672,23 +5672,29 @@ detectFrontendIssues pid = do
       attr k c = Telemetry.atMapText k (attrs c)
       element c = attr "monoscope.display.label" c <|> attr "target.id" c <|> attr "target.tag_name" c
       selector c = (\tag -> tag <> foldMap ("#" <>) (attr "target.id" c)) <$> attr "target.tag_name" c
-      keyed = [((sid, attr "page.url" c, el), (c.timestamp, c)) | c <- clicks, Just sid <- [attr "session.id" c], Just el <- [element c]]
+      (deadSpans, clickSpans) = partition ((== Just "dead_click") . (.name)) clicks
+      keyed = [((sid, attr "page.url" c, el), (c.timestamp, c)) | c <- clickSpans, Just sid <- [attr "session.id" c], Just el <- [element c]]
       byKey = Map.fromListWith (<>) [(k, [v]) | (k, v) <- keyed]
-  forM_ (Telemetry.bursts 3 2 [(k, t) | (k, (t, _)) <- keyed]) \((sid, pageUrl, el), ts) ->
-    whenJust (find ((== head ts) . fst) =<< Map.lookup (sid, pageUrl, el) byKey) \(_, sample) -> do
-      issue <-
-        Issues.createFrontendIssue pid (Telemetry.spanServiceName sample)
-          $ Issues.FrontendData
-            { kind = Issues.FKRageClick
-            , element = el
-            , selector = selector sample
-            , pageUrl
-            , clickCount = length ts
-            , sessionId = sid
-            , traceId = fromMaybe "" (sample.context >>= (.trace_id))
-            , observedAt = head ts
-            }
-      Issues.insertIssue issue
+      open kind el pageUrl n sample = do
+        issue <-
+          Issues.createFrontendIssue pid (Telemetry.spanServiceName sample)
+            $ Issues.FrontendData
+              { kind
+              , element = el
+              , selector = selector sample
+              , pageUrl
+              , clickCount = n
+              , sessionId = fromMaybe "" (attr "session.id" sample)
+              , traceId = fromMaybe "" (sample.context >>= (.trace_id))
+              , observedAt = sample.timestamp
+              }
+        Issues.insertIssue issue
+  forM_ (Telemetry.bursts 3 2 [(k, t) | (k, (t, _)) <- keyed]) \(k@(_, pageUrl, el), ts) ->
+    whenJust (find ((== head ts) . fst) =<< Map.lookup k byKey) \(_, sample) -> open Issues.FKRageClick el pageUrl (length ts) sample
+  -- Dead clicks: the SDK already decided nothing happened; two on one element in the
+  -- hour (any sessions) is enough to not be a one-off.
+  forM_ (Map.toList $ Map.fromListWith (<>) [((attr "page.url" c, el), c :| []) | c <- deadSpans, Just el <- [element c]]) \((pageUrl, el), cs) ->
+    when (length cs >= 2) $ open Issues.FKDeadClick el pageUrl (length cs) (head cs)
 
 
 -- | How many shape groups one review run may ask about. Mirrors
