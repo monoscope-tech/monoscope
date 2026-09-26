@@ -236,6 +236,9 @@ extra-source-files:
     static/migrations/0203_frontend_issue_type.sql
     static/migrations/0204_uptime_checks.sql
     static/migrations/0205_cron_monitors.sql
+    static/migrations/0206_error_tag_counts.sql
+    static/migrations/0207_error_last_release_since.sql
+    static/migrations/0208_user_feedback.sql
 
 source-repository head
   type: git
