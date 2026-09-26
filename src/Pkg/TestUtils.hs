@@ -1,5 +1,6 @@
 module Pkg.TestUtils (
   shouldContainAll,
+  eventually,
   withSetup,
   withTestResources,
   fromRightShow,
@@ -72,6 +73,7 @@ module Pkg.TestUtils (
   createOtelTraceWithExceptionAtTime,
   createGaugeMetricAtTime,
   mkSpanRequest,
+  mkSpanEvent,
   mergeSpanRequests,
   mkResource,
   mkAttr,
@@ -1763,6 +1765,22 @@ mkSpanRequest trId spanId parentSpanIdM spanName events statusM attrs resource t
    in defMessage & TSF.resourceSpans .~ [defMessage & PTF.resource .~ resource & PTF.scopeSpans .~ [scopeSpan]]
 
 
+mkSpanEvent :: Text -> [(Text, Text)] -> UTCTime -> Span'Event
+mkSpanEvent name attrs ts = defMessage & PTF.name .~ name & PTF.timeUnixNano .~ toNanos ts & PTF.attributes .~ map (uncurry mkAttr) attrs
+
+
+-- | Re-run @act@ until @ok@ holds, then return the last result (which the caller
+-- asserts on, so a persistent failure still reports the real value). TimeFusion is
+-- an asynchronous store: a row is durable when the write returns but not
+-- necessarily readable in the same instant, so a single read is a race.
+eventually :: IO a -> (a -> Bool) -> IO a
+eventually act ok = go (40 :: Int)
+  where
+    go n = do
+      a <- act
+      if ok a || n <= 0 then pure a else threadDelay 250_000 >> go (n - 1)
+
+
 createOtelSpanAtTime :: Text -> Text -> Text -> Maybe Text -> Text -> UTCTime -> TS.ExportTraceServiceRequest
 createOtelSpanAtTime apiKey trId spanId parentSpanIdM spanName =
   let (method, path) = case words spanName of
@@ -1794,12 +1812,7 @@ createOtelTraceWithExceptionAtTime :: Text -> ([(Text, Text)], [(Text, Text)], [
 createOtelTraceWithExceptionAtTime apiKey (spanExtra, resExtra, eventExtra) spanName excType excMessage excStacktrace timestamp = do
   trIdText <- UUID.toText <$> nextRandom
   spanIdText <- UUID.toText <$> nextRandom
-  let exceptionEvent =
-        defMessage & PTF.name
-          .~ "exception" & PTF.timeUnixNano
-          .~ toNanos timestamp
-            & PTF.attributes
-          .~ ([mkAttr "exception.type" excType, mkAttr "exception.message" excMessage, mkAttr "exception.stacktrace" excStacktrace] <> map (uncurry mkAttr) eventExtra)
+  let exceptionEvent = mkSpanEvent "exception" ([("exception.type", excType), ("exception.message", excMessage), ("exception.stacktrace", excStacktrace)] <> eventExtra) timestamp
       spanStatus = defMessage & PTF.code .~ PT.Status'STATUS_CODE_ERROR & PTF.message .~ excMessage
       resource = mkResource apiKey (mkAttr "telemetry.sdk.language" "nodejs" : map (uncurry mkAttr) resExtra)
       -- No http.request.method: exception spans shouldn't match the HTTP span filter (attributes___http___request___method IS NOT NULL)

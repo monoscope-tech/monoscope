@@ -87,18 +87,6 @@ fetchDataDirIn :: TestResources -> Projects.ProjectId -> Maybe Text -> Maybe Tex
 fetchDataDirIn tr pid q cols cur dir since from to = snd <$> testServant tr (Log.logExplorerDataH pid def{Log.query = q, Log.cols = cols, Log.cursor = cur, Log.direction = dir, Log.since = since, Log.from = from, Log.to = to})
 
 
--- | Re-run @act@ until @ok@ holds, then return the last result (which the caller
--- asserts on, so a persistent failure still reports the real value). TimeFusion is
--- an asynchronous store: a row is durable when the write returns but not
--- necessarily readable in the same instant, so a single read is a race.
-eventually :: IO a -> (a -> Bool) -> IO a
-eventually act ok = go (40 :: Int)
-  where
-    go n = do
-      a <- act
-      if ok a || n <= 0 then pure a else threadDelay 250_000 >> go (n - 1)
-
-
 -- | A legacy SDK message re-pointed at @pid@ and given its own @msg_id@.
 --
 -- Both matter under TimeFusion. The project id keeps the rows out of the shared

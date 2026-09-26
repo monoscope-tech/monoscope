@@ -673,22 +673,18 @@ spec = sequential $ aroundAll withTestResources do
 
     it "the user journey offers search, newest-first ordering and copy, and skips contentless events" \tr -> do
       traceIdText <- T.replace "-" "" . DataUUID.toText <$> UUID.nextRandom
-      -- gRPC instrumentation emits a bare `message` event per RPC message; 35 of them
-      -- once filled the journey with rows reading only "message".
-      let ev name attrs = AE.object ["event_name" AE..= (name :: Text), "event_time" AE..= frozenTime, "event_attributes" AE..= AE.object attrs, "event_dropped_attributes_count" AE..= (0 :: Int)]
-          checkoutEvents = AE.toJSON ([ev "message" ["rpc.message.type" AE..= ("SENT" :: Text)], ev "exception" ["exception.message" AE..= ("checkout declined" :: Text)]] :: [AE.Value])
-      withResource tr.trPool \conn ->
-        forM_ ([(-2, "SERVER", "GET /cart", "s1", AE.Null), (-1, "log", "cart item missing price", "s2", AE.Null), (0, "SERVER", "POST /checkout", "s3", checkoutEvents)] :: [(Integer, Text, Text, Text, AE.Value)]) \(dt, kind, name, sid, events) ->
-          void
-            $ PGS.execute
-              conn
-              [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, kind, name, summary, context___trace_id, context___span_id, context, events)
-                    VALUES (gen_random_uuid(), ?, ?, ?, ?, ?, ARRAY[?], ?, ?, jsonb_build_object('trace_id', ?::text, 'span_id', ?::text), ?) |]
-              ((testPid, addUTCTime (fromInteger dt) frozenTime, addUTCTime (fromInteger dt) frozenTime, kind, name, name, traceIdText, sid, traceIdText, sid) PGS.:. PGS.Only events)
+      -- Ingested, not INSERTed: CI reads the trace from TimeFusion, where a raw INSERT
+      -- never lands. gRPC instrumentation emits a bare `message` event per RPC message;
+      -- 35 of them once filled the journey with rows reading only "message".
+      apiKey <- createTestAPIKey tr testPid "journey-key"
+      let at dt = addUTCTime dt frozenTime
+          checkoutEvents = [mkSpanEvent "message" [("rpc.message.type", "SENT")] (at 0), mkSpanEvent "log" [("message", "checkout declined")] (at 0)]
+      forM_ @[] [(-2, "a1", "GET /cart", []), (-1, "a2", "cart item missing price", []), (0, "a3", "POST /checkout", checkoutEvents)] \(dt, sid, name, evs) ->
+        ingestSpanReq tr $ mkSpanRequest traceIdText sid Nothing name evs Nothing [] (mkResource apiKey []) (at dt)
       issueId <- seedIssue tr Issues.RuntimeException "journey probe" "journey-probe"
-      (_, activity) <- testServant tr $ IssuesPage.issueActivityGetH testPid issueId (Just traceIdText) (Just frozenTime)
-      renderPage activity `shouldContainAll` ["id=\"issue-journey\"", "Search the user journey", "crumb-rev", "issue-journey-text", "cart item missing price", "checkout declined"]
-      renderPage activity `shouldNotSatisfy` T.isInfixOf ">message</span>"
+      html <- eventually (renderPage . snd <$> testServant tr (IssuesPage.issueActivityGetH testPid issueId (Just traceIdText) (Just frozenTime))) (T.isInfixOf "checkout declined")
+      html `shouldContainAll` ["id=\"issue-journey\"", "Search the user journey", "crumb-rev", "issue-journey-text", "cart item missing price", "checkout declined"]
+      html `shouldNotSatisfy` T.isInfixOf ">message</span>"
 
     it "comments, external links and viewers show in the issue's activity" \tr -> do
       iid <- seedIssue tr Issues.LogPattern "collab probe" "collab-probe"
