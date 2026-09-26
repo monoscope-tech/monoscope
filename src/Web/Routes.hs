@@ -592,7 +592,8 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , aiRoutineDestinationPost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "destination" :> ReqBody '[FormUrlEncoded] AIThreads.RoutineDestinationForm :> Post '[HTML] (RespHeaders (Html ()))
   , aiRoutineDelete :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> Delete '[HTML] (RespHeaders (Html ()))
   , -- Device auth
-    deviceApprove :: mode :- "device" :> QPT "code" :> QPT "action" :> Get '[HTML] (RespHeaders (Html ()))
+    deviceApprove :: mode :- "device" :> QPT "code" :> Get '[HTML] (RespHeaders (Html ()))
+  , deviceApprovePost :: mode :- "device" :> QPT "code" :> Post '[HTML] (RespHeaders (Html ()))
   , -- Sub-route groups
     projects :: mode :- ProjectsRoutes
   , issues :: mode :- "p" :> ProjectId :> "issues" :> IssuesRoutes
@@ -649,16 +650,17 @@ type IssuesRoutes = NamedRoutes IssuesRoutes'
 
 type IssuesRoutes' :: Type -> Type
 data IssuesRoutes' mode = IssuesRoutes'
-  { acknowledgeGet :: mode :- Capture "issueID" Issues.IssueId :> "acknowledge" :> QueryParam "duration" Int :> Get '[HTML] (RespHeaders IssuesPage.IssueAction)
-  , unAcknowledgeGet :: mode :- Capture "issueID" Issues.IssueId :> "unacknowledge" :> Get '[HTML] (RespHeaders IssuesPage.IssueAction)
-  , archiveGet :: mode :- Capture "issueID" Issues.IssueId :> "archive" :> QueryParam "window" Issues.ArchiveWindow :> Get '[HTML] (RespHeaders IssuesPage.IssueAction)
-  , resolveGet :: mode :- Capture "issueID" Issues.IssueId :> "resolve" :> Get '[HTML] (RespHeaders IssuesPage.IssueAction)
+  { acknowledgeGet :: mode :- Capture "issueID" Issues.IssueId :> "acknowledge" :> QueryParam "duration" Int :> Post '[HTML] (RespHeaders IssuesPage.IssueAction)
+  , unAcknowledgeGet :: mode :- Capture "issueID" Issues.IssueId :> "unacknowledge" :> Post '[HTML] (RespHeaders IssuesPage.IssueAction)
+  , archiveGet :: mode :- Capture "issueID" Issues.IssueId :> "archive" :> QueryParam "window" Issues.ArchiveWindow :> Post '[HTML] (RespHeaders IssuesPage.IssueAction)
+  , resolveGet :: mode :- Capture "issueID" Issues.IssueId :> "resolve" :> Post '[HTML] (RespHeaders IssuesPage.IssueAction)
   , triagePost :: mode :- Capture "issueID" Issues.IssueId :> "triage" :> ReqBody '[FormUrlEncoded] IssuesPage.TriageForm :> Post '[HTML] (RespHeaders (Html ()))
   , viewSavePost :: mode :- "views" :> ReqBody '[FormUrlEncoded] IssuesPage.SaveViewForm :> Post '[HTML] (RespHeaders (Html ()))
   , viewDeletePost :: mode :- "views" :> Capture "viewID" UUID.UUID :> "delete" :> Post '[HTML] (RespHeaders (Html ()))
+  , viewedPost :: mode :- Capture "issueID" Issues.IssueId :> "viewed" :> Post '[HTML] (RespHeaders (Html ()))
   , commentPost :: mode :- Capture "issueID" Issues.IssueId :> "comment" :> ReqBody '[FormUrlEncoded] IssuesPage.CommentForm :> Post '[HTML] (RespHeaders (Html ()))
   , linkPost :: mode :- Capture "issueID" Issues.IssueId :> "link" :> ReqBody '[FormUrlEncoded] IssuesPage.LinkForm :> Post '[HTML] (RespHeaders (Html ()))
-  , unarchiveGet :: mode :- Capture "issueID" Issues.IssueId :> "unarchive" :> Get '[HTML] (RespHeaders IssuesPage.IssueAction)
+  , unarchiveGet :: mode :- Capture "issueID" Issues.IssueId :> "unarchive" :> Post '[HTML] (RespHeaders IssuesPage.IssueAction)
   , bulkActionsPost :: mode :- "bulk_actions" :> Capture "action" IssuesPage.IssueBulkAction :> QueryParam "duration" Int :> QueryParam "value" Text :> ReqBody '[FormUrlEncoded] IssuesPage.IssueBulkForm :> Post '[HTML] (RespHeaders IssuesPage.IssueAction)
   , listGet :: mode :- QPT "filter" :> QPT "sort" :> QPT "since" :> QPT "page" :> QPT "per_page" :> QPT "load_more" :> QPT "period" :> QueryParams "service" Text :> QueryParams "type" Text :> Get '[HTML] (RespHeaders IssuesPage.IssueListGet)
   , stepGet :: mode :- Capture "issueID" Issues.IssueId :> "step" :> QueryParam "dir" Telemetry.EventStep :> QueryParam "from" UTCTime :> LocationRedirect NoContent
@@ -1075,7 +1077,8 @@ cookieProtectedServer =
     , aiRoutineDestinationPost = AIThreads.routineDestinationPostH
     , aiRoutineDelete = AIThreads.routineDeleteH
     , -- Device auth
-      deviceApprove = Auth.deviceApproveH
+      deviceApprove = Auth.deviceApproveH False
+    , deviceApprovePost = Auth.deviceApproveH True
     , -- Sub-route handlers
       projects = projectsServer
     , logExplorer = logExplorerServer
@@ -1124,6 +1127,7 @@ issuesServer pid =
     , resolveGet = IssuesPage.resolveIssueGetH pid
     , triagePost = IssuesPage.triagePostH pid
     , commentPost = IssuesPage.commentPostH pid
+    , viewedPost = IssuesPage.issueViewedPostH pid
     , viewSavePost = IssuesPage.saveViewPostH pid
     , viewDeletePost = IssuesPage.deleteViewPostH pid
     , linkPost = IssuesPage.linkPostH pid

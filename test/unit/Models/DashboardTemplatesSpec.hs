@@ -30,7 +30,7 @@ stripPlaceholders t = case T.splitOn "{{" t of
 
 -- | Templates whose integration is detected from ingested metric names.
 autoProvisionable :: [Text]
-autoProvisionable = ["postgresql.yaml", "mysql.yaml", "redis.yaml", "docker.yaml", "kubernetes.yaml", "host-prometheus.yaml"]
+autoProvisionable = ["postgresql.yaml", "mysql.yaml", "redis.yaml", "docker.yaml", "kubernetes.yaml", "host-prometheus.yaml", "timefusion.yaml"]
 
 
 spec :: Spec

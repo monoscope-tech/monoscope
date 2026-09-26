@@ -2105,22 +2105,22 @@ entrypointRedirectGetH baseTemplate title tags pid qparams = do
   now <- Time.currentTime
   let mkPath p d = "/p/" <> pid.toText <> p <> d <> queryStringFrom qparams
       shouldBeStarred = baseTemplate `elem` ["_overview.yaml", "endpoint-stats.yaml"]
-      newDashboard = do
+      getOrCreate = do
         did <- UUIDId <$> UUID.genUUID
-        _ <-
-          Dashboards.insert
+        (dashId, created) <-
+          Dashboards.getOrInsertByBaseTemplate
             (Dashboards.mkDashboardVM did pid now sess.user.id)
               { Dashboards.baseTemplate = Just baseTemplate
               , Dashboards.starredSince = if shouldBeStarred then Just now else Nothing
               , Dashboards.tags = V.fromList tags
               , Dashboards.title = title
               }
-        syncDashboardAndQueuePush pid did
-        pure did.toText
+        when created $ syncDashboardAndQueuePush pid dashId
+        pure dashId.toText
   redirectTo <-
     if Projects.isOnboarding project.paymentPlan
       then pure $ mkPath "/onboarding" ""
-      else mkPath "/dashboards/" <$> (maybe newDashboard (pure . (.toText)) =<< Dashboards.getDashboardByBaseTemplate pid baseTemplate)
+      else mkPath "/dashboards/" <$> getOrCreate
   pure $ addHeader redirectTo NoContent
 
 

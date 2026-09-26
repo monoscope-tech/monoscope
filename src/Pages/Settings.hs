@@ -553,7 +553,7 @@ safeScrapeUrl u = case parseURI (toString (T.strip u)) of
 
 
 prometheusPostH :: Projects.ProjectId -> PrometheusForm -> ATAuthCtx (RespHeaders PrometheusMut)
-prometheusPostH pid form = promSave pid form "Added" \t -> PromCfg.insertConfig pid t.name t.url t.interval t.authHeader t.labels
+prometheusPostH pid form = promSave pid form "Added" \t -> PromCfg.insertConfig pid PromCfg.CKPrometheus t.name t.url t.interval t.authHeader t.labels Nothing
 
 
 prometheusUpdateH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> PrometheusForm -> ATAuthCtx (RespHeaders PrometheusMut)
@@ -1325,7 +1325,7 @@ billingPage d = div_ [] do
     div_ [class_ "border-t border-strokeWeak pt-6 flex items-center gap-3"] do
       label_ [Lucid.for_ "pricing-modal", class_ "btn btn-sm btn-primary cursor-pointer"] "Change plan"
       unless isFree
-        $ a_ [class_ "btn btn-sm btn-ghost text-textBrand", hxGet_ $ "/p/" <> d.pid.toText <> "/manage_subscription"] "Manage subscription"
+        $ a_ [class_ "btn btn-sm btn-ghost text-textBrand", term "hx-preload" "false", hxGet_ $ "/p/" <> d.pid.toText <> "/manage_subscription"] "Manage subscription"
 
     -- Daily breakdown
     dailyUsageBreakdown_ isFree d.cycleStart d.aiInputRate d.aiOutputRate d.dailyUsage

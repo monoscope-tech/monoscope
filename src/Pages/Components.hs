@@ -1146,8 +1146,7 @@ durationMenu_ popId heading extras req trigger = div_ [class_ "inline-block"] do
     span_ [class_ "px-3 py-1 text-xs font-medium text-textWeak", Aria.hidden_ "true"] $ toHtml heading
     forM_ @[] @_ @(Int, Text) [(60, "1 hour"), (240, "4 hours"), (480, "8 hours"), (1440, "1 day"), (4320, "3 days"), (10080, "1 week")] \(mins, label) ->
       button_ ([type_ "button", class_ "px-3 py-1.5 text-sm text-left hover:bg-fillWeaker rounded cursor-pointer w-full"] <> req (show mins)) $ toHtml label
-    forM_ extras \(label, q) -> button_ ([type_ "button", class_ "px-3 py-1.5 text-sm text-left hover:bg-fillWeaker rounded cursor-pointer w-full border-t border-strokeWeak"] <> req q) $ toHtml label
-    button_ ([type_ "button", class_ "px-3 py-1.5 text-sm text-left hover:bg-fillWeaker rounded cursor-pointer w-full border-t border-strokeWeak"] <> req "") "Indefinitely"
+    forM_ (extras <> [("Indefinitely", "")]) \(label, q) -> button_ ([type_ "button", class_ "px-3 py-1.5 text-sm text-left hover:bg-fillWeaker rounded cursor-pointer w-full border-t border-strokeWeak"] <> req q) $ toHtml label
 
 
 -- | Query suffix for a 'durationMenu_' choice: @?param=minutes@, or nothing at
@@ -1205,7 +1204,7 @@ periodToggle_ baseUrl targetId currentPeriod =
 
 sparkline_ :: [Int] -> Html ()
 sparkline_ buckets
-  | null buckets || all (== 0) buckets = span_ [class_ "text-textWeak text-xs"] "-"
+  | null buckets || all (== 0) buckets = span_ [class_ "text-textWeak text-xs"] "\x2014"
   | otherwise = do
       let peakVal = foldr max 1 buckets
           peak = fromIntegral @Int @Double peakVal

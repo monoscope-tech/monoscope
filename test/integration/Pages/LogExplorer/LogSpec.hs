@@ -176,6 +176,22 @@ routeSpec = do
 databaseSpec :: SpecWith TestResources
 databaseSpec = do
   describe "Log data endpoint (logExplorerDataH)" do
+    -- Regression: the body preloads links on hover, so the page shell GET ran for pages
+    -- nobody opened and wrote query history + the onboarding step. Only the rows request,
+    -- made once the page is displayed, records them — once per query, not per page.
+    it "records query history and onboarding from the rows request, not the page shell" \tr -> do
+      pid <- createTestProject tr "log-explorer-history"
+      let q = Just "status_code == \"500\""
+          recorded = withPool tr.trPool do
+            [Only n] <- DBT.query [sql| SELECT count(*)::int FROM projects.query_library WHERE project_id = ? AND query_type = 'history' |] (Only pid)
+            [Only steps] <- DBT.query [sql| SELECT 'explored_logs' = ANY(onboarding_steps_completed) FROM projects.projects WHERE id = ? |] (Only pid)
+            pure (n :: Int, steps :: Bool)
+      _ <- testServant tr $ Log.apiLogH pid q Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      recorded `shouldReturn` (0, False)
+      replicateM_ 2 $ fetchDataIn tr pid q Nothing Nothing Nothing Nothing Nothing
+      _ <- fetchDataIn tr pid q Nothing (Just frozenTime) Nothing Nothing Nothing
+      recorded `shouldReturn` (1, True)
+
     it "should return an empty list" \tr -> do
       pid <- createTestProject tr "log-explorer-empty"
       r <- fetchDataIn tr pid Nothing Nothing Nothing Nothing Nothing Nothing
@@ -1233,6 +1249,8 @@ databaseSpec = do
           traceHtml `shouldSatisfy` T.isInfixOf "GET /api/orders"
           traceHtml `shouldNotSatisfy` T.isInfixOf "monoscope.http"
           traceHtml `shouldSatisfy` T.isInfixOf "timeline.addEventListener('tab-visible'"
+          -- Rows were click-only divs: keyboard users could not open a span's details.
+          traceHtml `shouldSatisfy` T.isInfixOf "tabindex=\"0\" role=\"button\" aria-label=\"Show span details: "
         _ -> expectationFailure "expected trace details"
 
     it "flags ERROR-severity logs in the trace-view 'errors' column" \tr -> do

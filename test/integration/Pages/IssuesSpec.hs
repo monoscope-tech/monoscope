@@ -34,7 +34,7 @@ import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
-import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, sequential, shouldBe, shouldReturn, shouldSatisfy)
+import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, sequential, shouldBe, shouldNotSatisfy, shouldReturn, shouldSatisfy)
 
 
 spec :: Spec
@@ -47,15 +47,15 @@ spec = sequential $ aroundAll withTestResources do
       rows <- listAnomalies tr Nothing
       length rows `shouldBe` 0
 
-    -- Preloading a lifecycle action would fire it on hover. Assert the invariant
-    -- rather than a count, so adding a duration option can't silently arm one.
+    -- The body preloads every hx-get on mouseover, so a GET lifecycle action fires on
+    -- hover. They are POSTs, which preload never fetches; no control may regress to GET.
     it "does not preload issue acknowledge or archive actions" \_ -> do
       issueId <- UUIDId <$> UUID.nextRandom
       let html = TL.toStrict $ renderText do
             IssuesPage.issueAcknowledgeButton testPid issueId frozenTime Nothing
             IssuesPage.issueArchiveButton testPid issueId False
-      T.count "hx-get=" html `shouldSatisfy` (> 2) -- ack, its duration options, archive
-      T.count "preload=\"false\"" html `shouldBe` T.count "hx-get=" html
+      T.count "hx-post=" html `shouldSatisfy` (> 2) -- ack, its duration options, archive
+      T.count "hx-get=" html `shouldBe` 0
 
     it "should create endpoint anomalies (not visible in anomaly list)" \tr -> do
       nowTxt <- nowText
@@ -234,6 +234,8 @@ spec = sequential $ aroundAll withTestResources do
       containsIssue archived `shouldBe` True
       countQ tr [sql| SELECT COUNT(*)::INT FROM apis.issues WHERE id=? AND archived_at IS NOT NULL |] (Only issueId)
         >>= (`shouldBe` 1)
+      _ <- testServant tr $ IssuesPage.issueBulkActionsPostH testPid IssuesPage.BAUnarchive Nothing Nothing IssuesPage.IssueBulk{itemId = [DataUUID.toText issueId.unUUIDId]}
+      containsIssue <$> listAnomalies tr Nothing `shouldReturn` True
 
     -- Regression: the issues UPDATE in the cascade used target_hash=ANY() with
     -- %-suffixed prefixes, so the legacy-hash sweep never matched any issue row.
@@ -614,7 +616,7 @@ spec = sequential $ aroundAll withTestResources do
       -- The rail's fact block carries service and environment for every type.
       html `shouldSatisfy` T.isInfixOf "<dt class=\"text-textWeak\">Service</dt>"
       html `shouldSatisfy` T.isInfixOf "staging"
-      -- The workflow bar moved from the shell into the page, under the title.
+      -- The workflow bar sits under the title.
       fst (T.breakOn "Acknowledge issue" html) `shouldSatisfy` T.isInfixOf "heading order issue"
       -- The pinned navigator links every section the card renders and nothing else:
       -- no trace was captured, so there is no Trace section to jump to.
@@ -626,16 +628,11 @@ spec = sequential $ aroundAll withTestResources do
       html `shouldSatisfy` T.isInfixOf "text-2xl font-semibold text-textStrong tabular-nums"
 
     it "triage: priority, assignee, timed and until-escalating archives, and resolve work on any issue type" \tr -> do
-      let mkIssue ty h =
-            withResource tr.trPool \conn ->
-              maybe (fail "INSERT ... RETURNING id returned no row") (pure . UUIDId . fromOnly)
-                . listToMaybe
-                =<< PGS.query conn [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, created_at, updated_at) VALUES (?, ?::apis.issue_type, 'triage probe', ?, ?, ?) RETURNING id |] (testPid, ty :: Text, h :: Text, frozenTime, frozenTime)
-          reload iid = runTestBg frozenTime tr (Issues.selectIssueById testPid iid) >>= maybe (fail "issue vanished") pure
-      logIid <- mkIssue "log_pattern" "triage-log"
-      member <- runTestBg frozenTime tr (ProjectMembers.selectActiveProjectMembers testPid) >>= maybe (fail "no member") pure . listToMaybe
+      let reload iid = runTestBg frozenTime tr (Issues.selectIssueById testPid iid) >>= maybe (fail "issue vanished") pure
+      logIid <- seedIssue tr Issues.LogPattern "triage probe" "triage-log"
+      (member : _) <- runTestBg frozenTime tr (ProjectMembers.selectActiveProjectMembers testPid)
       (_, triage) <- testServant tr $ IssuesPage.triagePostH testPid logIid (IssuesPage.TriageForm (Just Issues.Warning) (Just member.userId.toText))
-      TL.toStrict (renderText triage) `shouldSatisfy` T.isInfixOf "value=\"warning\" selected=\"true\""
+      renderPage triage `shouldSatisfy` T.isInfixOf "value=\"warning\" selected=\"true\""
       i1 <- reload logIid
       (i1.severity, i1.assigneeId) `shouldBe` (Issues.Warning, Just member.userId)
       withResource tr.trPool (\conn -> PGS.query conn [sql| SELECT event::text FROM apis.issue_activity_log WHERE issue_id = ? |] (Only logIid)) `shouldReturn` [Only ("assigned" :: Text)]
@@ -646,7 +643,7 @@ spec = sequential $ aroundAll withTestResources do
       runTestBg frozenTime tr (Issues.expireArchives (addUTCTime 7200 frozenTime)) `shouldReturn` [logIid]
       (isNothing . (.archivedAt) <$> reload logIid) `shouldReturn` True
 
-      errIid <- mkIssue "runtime_exception" "triage-err"
+      errIid <- seedIssue tr Issues.RuntimeException "triage probe" "triage-err"
       _ <- testServant tr $ IssuesPage.archiveIssueGetH testPid errIid (Just Issues.ArchiveUntilEscalating)
       runTestBg frozenTime tr (Issues.expireArchives (addUTCTime 86400 frozenTime)) `shouldReturn` []
       runTestBg frozenTime tr (Issues.wakeOnEscalation testPid "triage-err") `shouldReturn` [errIid]
@@ -655,69 +652,68 @@ spec = sequential $ aroundAll withTestResources do
       (isJust . (.archivedAt) <$> reload logIid) `shouldReturn` True
       runTestBg frozenTime tr (Issues.selectLatestStateEvent logIid) `shouldReturn` Just Issues.IEResolved
 
-    it "bulk priority, assign and resolve apply to every selected issue; the list shows priority, assignee and users" \tr -> do
-      iids <- forM ["bulk-a", "bulk-b"] \h ->
-        withResource tr.trPool \conn ->
-          maybe (fail "no row") (pure . fromOnly)
-            . listToMaybe
-            =<< PGS.query conn [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, created_at, updated_at) VALUES (?, 'log_pattern', ?, ?, ?, ?) RETURNING id |] (testPid, "bulk " <> h, h, frozenTime, frozenTime)
-      member <- runTestBg frozenTime tr (ProjectMembers.selectActiveProjectMembers testPid) >>= maybe (fail "no member") pure . listToMaybe
-      let sel = IssuesPage.IssueBulk{itemId = DataUUID.toText <$> iids}
+    it "bulk priority, assign and resolve apply to every selected issue; the list shows severity, assignee and users" \tr -> do
+      iids <- forM ["bulk-a", "bulk-b"] \h -> seedIssue tr Issues.LogPattern ("bulk " <> h) h
+      (member : _) <- runTestBg frozenTime tr (ProjectMembers.selectActiveProjectMembers testPid)
+      let sel = IssuesPage.IssueBulk{itemId = (.toText) <$> iids}
           bulk a v = void $ testServant tr $ IssuesPage.issueBulkActionsPostH testPid a Nothing v sel
-          issues = catMaybes <$> forM iids (runTestBg frozenTime tr . Issues.selectIssueById testPid . UUIDId)
+          issues = catMaybes <$> forM iids (runTestBg frozenTime tr . Issues.selectIssueById testPid)
       bulk IssuesPage.BAPriority (Just "warning")
       bulk IssuesPage.BAAssign (Just member.userId.toText)
       map ((.severity) &&& (.assigneeId)) <$> issues `shouldReturn` replicate 2 (Issues.Warning, Just member.userId)
       (_, page) <- testServant tr $ IssuesPage.issueListGetH testPid (Just "Inbox") (Just "-users_count") Nothing Nothing (Just "100") Nothing (Just "24h") [] []
-      renderPage page `shouldContainAll` ["Priority", "Assignee", "Age", "Most users", IssuesPage.memberLabel member, "bulk_actions/priority?value=critical"]
+      renderPage page `shouldContainAll` [">Warning</span>", "First seen", "Most users", IssuesPage.memberLabel member, "bulk_actions/priority?value=critical", "bulk_actions/spam"]
+      -- Regression: list rows' archive/acknowledge were hx-get, so hovering one fired it.
+      let rowActions = ["/p/" <> testPid.toText <> "/issues/" <> i.toText <> v | i <- iids, v <- ["/archive", "/acknowledge"]]
+      renderPage page `shouldContainAll` map (\u -> "hx-post=\"" <> u <> "\"") rowActions
+      renderPage page `shouldNotSatisfy` \h -> any (\u -> ("hx-get=\"" <> u) `T.isInfixOf` h) rowActions
       bulk IssuesPage.BAResolve Nothing
       all (isJust . (.archivedAt)) <$> issues `shouldReturn` True
-      forM iids (runTestBg frozenTime tr . Issues.selectLatestStateEvent . UUIDId) `shouldReturn` replicate 2 (Just Issues.IEResolved)
+      forM iids (runTestBg frozenTime tr . Issues.selectLatestStateEvent) `shouldReturn` replicate 2 (Just Issues.IEResolved)
 
-    it "the user journey offers search, newest-first ordering and copy" \tr -> do
+    it "the user journey offers search, newest-first ordering and copy, and skips contentless events" \tr -> do
       traceIdText <- T.replace "-" "" . DataUUID.toText <$> UUID.nextRandom
-      issueId <- withResource tr.trPool \conn -> do
-        forM_ ([(-2, "SERVER", "GET /cart", "s1"), (-1, "log", "cart item missing price", "s2"), (0, "SERVER", "POST /checkout", "s3")] :: [(Integer, Text, Text, Text)]) \(dt, kind, name, sid) ->
+      -- gRPC instrumentation emits a bare `message` event per RPC message; 35 of them
+      -- once filled the journey with rows reading only "message".
+      let ev name attrs = AE.object ["event_name" AE..= (name :: Text), "event_time" AE..= frozenTime, "event_attributes" AE..= AE.object attrs, "event_dropped_attributes_count" AE..= (0 :: Int)]
+          checkoutEvents = AE.toJSON ([ev "message" ["rpc.message.type" AE..= ("SENT" :: Text)], ev "exception" ["exception.message" AE..= ("checkout declined" :: Text)]] :: [AE.Value])
+      withResource tr.trPool \conn ->
+        forM_ ([(-2, "SERVER", "GET /cart", "s1", AE.Null), (-1, "log", "cart item missing price", "s2", AE.Null), (0, "SERVER", "POST /checkout", "s3", checkoutEvents)] :: [(Integer, Text, Text, Text, AE.Value)]) \(dt, kind, name, sid, events) ->
           void
             $ PGS.execute
               conn
-              [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, kind, name, summary, context___trace_id, context___span_id, context)
-                    VALUES (gen_random_uuid(), ?, ?, ?, ?, ?, ARRAY[?], ?, ?, jsonb_build_object('trace_id', ?::text, 'span_id', ?::text)) |]
-              (testPid, addUTCTime (fromInteger dt) frozenTime, addUTCTime (fromInteger dt) frozenTime, kind, name, name, traceIdText, sid, traceIdText, sid)
-        maybe (fail "no row") (pure . UUIDId . fromOnly)
-          . listToMaybe
-          =<< PGS.query conn [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, created_at, updated_at) VALUES (?, 'runtime_exception', 'journey probe', 'journey-probe', ?, ?) RETURNING id |] (testPid, frozenTime, frozenTime)
+              [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, kind, name, summary, context___trace_id, context___span_id, context, events)
+                    VALUES (gen_random_uuid(), ?, ?, ?, ?, ?, ARRAY[?], ?, ?, jsonb_build_object('trace_id', ?::text, 'span_id', ?::text), ?) |]
+              ((testPid, addUTCTime (fromInteger dt) frozenTime, addUTCTime (fromInteger dt) frozenTime, kind, name, name, traceIdText, sid, traceIdText, sid) PGS.:. PGS.Only events)
+      issueId <- seedIssue tr Issues.RuntimeException "journey probe" "journey-probe"
       (_, activity) <- testServant tr $ IssuesPage.issueActivityGetH testPid issueId (Just traceIdText) (Just frozenTime)
-      TL.toStrict (renderText activity) `shouldContainAll` ["id=\"issue-journey\"", "Search the user journey", "crumb-rev", "issue-journey-text", "cart item missing price"]
+      renderPage activity `shouldContainAll` ["id=\"issue-journey\"", "Search the user journey", "crumb-rev", "issue-journey-text", "cart item missing price", "checkout declined"]
+      renderPage activity `shouldNotSatisfy` T.isInfixOf ">message</span>"
 
     it "comments, external links and viewers show in the issue's activity" \tr -> do
-      iid <- withResource tr.trPool \conn ->
-        maybe (fail "no row") (pure . UUIDId . fromOnly)
-          . listToMaybe
-          =<< PGS.query conn [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, created_at, updated_at) VALUES (?, 'log_pattern', 'collab probe', 'collab-probe', ?, ?) RETURNING id |] (testPid, frozenTime, frozenTime)
-      _ <- testServant tr $ IssuesPage.issueDetailGetH testPid iid Nothing Nothing Nothing Nothing Nothing
-      _ <- testServant tr $ IssuesPage.issueDetailGetH testPid iid Nothing Nothing Nothing Nothing Nothing
+      iid <- seedIssue tr Issues.LogPattern "collab probe" "collab-probe"
+      -- The page GET records nothing (hover preloads it); the page posts the view once shown.
+      issuePage tr iid >>= (`shouldContainAll` ["/issues/" <> iid.toText <> "/viewed"])
+      replicateM_ 2 $ testServant tr $ IssuesPage.issueViewedPostH testPid iid
       _ <- testServant tr $ IssuesPage.commentPostH testPid iid (IssuesPage.CommentForm "Rolled back the cart service")
       _ <- testServant tr $ IssuesPage.linkPostH testPid iid (IssuesPage.LinkForm "https://github.com/acme/shop/issues/42" (Just "Cart crash"))
       _ <- testServant tr $ IssuesPage.linkPostH testPid iid (IssuesPage.LinkForm "javascript:alert(1)" Nothing)
       (_, activity) <- testServant tr $ IssuesPage.issueActivityGetH testPid iid Nothing Nothing
-      let html = TL.toStrict (renderText activity)
+      let html = renderPage activity
       html `shouldContainAll` ["Rolled back the cart service", "External links", "GitHub", "Cart crash", "Participating:", "name=\"body\""]
       html `shouldSatisfy` not . T.isInfixOf "javascript:alert"
-      -- Two page loads in a day record one view, and views stay off the timeline.
+      -- Two views in a day record one, and views stay off the timeline.
       withResource tr.trPool (\conn -> PGS.query conn [sql| SELECT count(*)::int FROM apis.issue_activity_log WHERE issue_id = ? AND event = 'viewed' |] (Only iid)) `shouldReturn` [Only (1 :: Int)]
 
     it "events step to their neighbours and the page opens on a chosen event" \tr -> do
       let at dt = addUTCTime dt frozenTime
           traces = [("step-trace-a", at (-600)), ("step-trace-b", at (-300)), ("step-trace-c", at 0)] :: [(Text, UTCTime)]
-      iid <- withResource tr.trPool \conn -> do
+      withResource tr.trPool \conn -> do
         forM_ traces \(tid, ts) ->
           void $ PGS.execute conn [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, kind, hashes, summary, context___trace_id) VALUES (gen_random_uuid(), ?, ?, ?, 'server', ARRAY['err:stepprobe'], ARRAY['boom'], ?) |] (testPid, ts, ts, tid)
         -- The oldest event carries a replay session and a user, so it is the Recommended one.
         void $ PGS.execute conn [sql| UPDATE otel_logs_and_spans SET attributes___session___id = 'sess-1', attributes___user___id = 'u-1' WHERE context___trace_id = 'step-trace-a' |] ()
-        maybe (fail "no row") (pure . UUIDId . fromOnly)
-          . listToMaybe
-          =<< PGS.query conn [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, created_at, updated_at) VALUES (?, 'runtime_exception', 'step probe', 'stepprobe', ?, ?) RETURNING id |] (testPid, frozenTime, frozenTime)
+      iid <- seedIssue tr Issues.RuntimeException "step probe" "stepprobe"
       let step dir from = runTestBg frozenTime tr (Telemetry.adjacentHashEvent testPid "err:stepprobe" dir from)
       step Telemetry.Older (at 0) `shouldReturn` Just ("step-trace-b", at (-300))
       step Telemetry.Newer (at (-600)) `shouldReturn` Just ("step-trace-b", at (-300))
@@ -753,13 +749,12 @@ spec = sequential $ aroundAll withTestResources do
         span' conn ("ctl", Just "root", "ProductController.index", Nothing, 800_000_000, -59)
         forM_ [1 .. 6 :: Integer] \i -> span' conn ("q" <> show i, Just "ctl", "SELECT reviews", Just ("SELECT * FROM reviews WHERE product_id = " <> show i), 20_000_000, fromIntegral (-58 + i))
         span' conn ("slow", Just "root", "SELECT promotions", Just "SELECT * FROM promotions WHERE active", 1_500_000_000, -40)
-      runTestBg frozenTime tr $ BackgroundJobs.detectPerformanceIssues testPid
-      runTestBg frozenTime tr $ BackgroundJobs.detectPerformanceIssues testPid -- repeat detections fold into the same issues
-      perf <- withResource tr.trPool \conn -> PGS.query conn [sql| SELECT id, title FROM apis.issues WHERE project_id = ? AND issue_type = 'performance' ORDER BY title |] (Only testPid) :: IO [(DataUUID.UUID, Text)]
-      map snd perf `shouldSatisfy` \ts -> length ts == 2 && any ("N+1 Query: SELECT * FROM reviews WHERE product_id =" `T.isPrefixOf`) ts && any ("Slow DB Query: SELECT * FROM promotions" `T.isPrefixOf`) ts
-      forM_ perf \(iid, title) -> when ("N+1" `T.isPrefixOf` title) do
-        (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId iid) Nothing Nothing Nothing Nothing Nothing
-        renderPage page `shouldContainAll` ["Span evidence", "repeating query (\x00d7" <> "6)", "ProductController.index", "GET /products", "120 ms", "id=\"issue-trace\"", "Performance"]
+      -- Repeat detections fold into the same issues.
+      replicateM_ 2 $ runTestBg frozenTime tr $ BackgroundJobs.detectPerformanceIssues testPid
+      [(n1, n1Title), (_, slowTitle)] <- issuesOfType tr Issues.Performance
+      n1Title `shouldSatisfy` T.isPrefixOf "N+1 Query: SELECT * FROM reviews WHERE product_id ="
+      slowTitle `shouldSatisfy` T.isPrefixOf "Slow DB Query: SELECT * FROM promotions"
+      issuePage tr n1 >>= (`shouldContainAll` ["Span evidence", "repeating query (\x00d7" <> "6)", "ProductController.index", "GET /products", "120 ms", "id=\"issue-trace\"", "Performance"])
 
     it "frontend detection turns a burst of clicks on one element into a rage-click issue" \tr -> do
       let click :: PGS.Connection -> (Text, Text, Text, NominalDiffTime) -> IO ()
@@ -778,11 +773,9 @@ spec = sequential $ aroundAll withTestResources do
         click conn ("click", "sess-rage", "Continue shopping", -100)
         forM_ ([("sess-a", -90), ("sess-b", -80)] :: [(Text, NominalDiffTime)]) \(sid, dt) -> click conn ("dead_click", sid, "Apply coupon", dt)
       runTestBg frozenTime tr $ BackgroundJobs.detectFrontendIssues testPid
-      rows <- withResource tr.trPool \conn -> PGS.query conn [sql| SELECT id, title FROM apis.issues WHERE project_id = ? AND issue_type = 'frontend' ORDER BY title |] (Only testPid) :: IO [(DataUUID.UUID, Text)]
-      map snd rows `shouldBe` ["Dead Click: Apply coupon", "Rage Click: Place order"]
-      forM_ (filter (("Rage" `T.isPrefixOf`) . snd) rows) \(iid, _) -> do
-        (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId iid) Nothing Nothing Nothing Nothing Nothing
-        renderPage page `shouldContainAll` ["Rage click", "button#place-order", "https://shop.example.com/checkout", "4 within 2s", "sess-rage"]
+      [(_, deadTitle), (rage, rageTitle)] <- issuesOfType tr Issues.Frontend
+      (deadTitle, rageTitle) `shouldBe` ("Dead Click: Apply coupon", "Rage Click: Place order")
+      issuePage tr rage >>= (`shouldContainAll` ["Rage click", "button#place-order", "https://shop.example.com/checkout", "4 within 2s", "sess-rage"])
 
     it "user.feedback records become feedback issues linked to their trace's error, and spam leaves the Inbox" \tr -> do
       withResource tr.trPool \conn -> do
@@ -803,16 +796,17 @@ spec = sequential $ aroundAll withTestResources do
               (testPid, addUTCTime (-60) frozenTime, addUTCTime (-60) frozenTime, tid, msg, tid)
       -- A second pass over the same window must not duplicate the submission.
       replicateM_ 2 $ runTestBg frozenTime tr $ BackgroundJobs.detectFeedback testPid
-      rows <- withResource tr.trPool \conn -> PGS.query conn [sql| SELECT id, title FROM apis.issues WHERE project_id = ? AND issue_type = 'feedback' |] (Only testPid) :: IO [(DataUUID.UUID, Text)]
+      rows <- issuesOfType tr Issues.Feedback
       map snd rows `shouldBe` ["Feedback: The cart button does nothing"]
-      iid <- maybe (fail "no feedback issue") (pure . UUIDId . fst) (listToMaybe rows)
-      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid iid Nothing Nothing Nothing Nothing Nothing
-      renderPage page `shouldContainAll` ["The cart button does nothing", "Ada", "ada@example.com", "https://shop.example.com/cart", "/issues/by_hash/fbprobe", "Feedback"]
+      [(iid, _)] <- pure rows
+      issuePage tr iid >>= (`shouldContainAll` ["The cart button does nothing", "Ada", "ada@example.com", "https://shop.example.com/cart", "/issues/by_hash/fbprobe", "Feedback"])
       let list tab = renderPage . snd <$> testServant tr (IssuesPage.issueListGetH testPid (Just tab) Nothing Nothing Nothing Nothing Nothing (Just "24h") [] ["feedback"])
       list "Inbox" >>= (`shouldContainAll` ["The cart button does nothing", "bulk_actions/spam"])
-      void $ testServant tr $ IssuesPage.issueBulkActionsPostH testPid IssuesPage.BASpam Nothing Nothing IssuesPage.IssueBulk{itemId = [DataUUID.toText iid.unUUIDId]}
+      void $ testServant tr $ IssuesPage.issueBulkActionsPostH testPid IssuesPage.BASpam Nothing Nothing IssuesPage.IssueBulk{itemId = [iid.toText]}
       list "Inbox" >>= (`shouldSatisfy` not . T.isInfixOf "The cart button does nothing")
       list "Spam" >>= (`shouldContainAll` ["The cart button does nothing", "bulk_actions/unspam"])
+      void $ testServant tr $ IssuesPage.issueBulkActionsPostH testPid IssuesPage.BAUnspam Nothing Nothing IssuesPage.IssueBulk{itemId = [iid.toText]}
+      list "Inbox" >>= (`shouldContainAll` ["The cart button does nothing"])
 
     -- Sentry's stack trace earns its slot by separating the code you wrote from the
     -- runtime's, and this page had the parser (Pkg.ErrorFingerprint, which the issue
@@ -1291,6 +1285,22 @@ listAnomalies tr filterT = do
 
 renderPage :: ToHtml a => a -> Text
 renderPage = TL.toStrict . renderText . toHtml
+
+
+seedIssue :: TestResources -> Issues.IssueType -> Text -> Text -> IO Issues.IssueId
+seedIssue tr ty title h =
+  withResource tr.trPool \conn ->
+    maybe (fail "INSERT ... RETURNING id returned no row") (pure . UUIDId . fromOnly)
+      . listToMaybe
+      =<< PGS.query conn [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) RETURNING id |] (testPid, ty, title, h, frozenTime, frozenTime)
+
+
+issuePage :: TestResources -> Issues.IssueId -> IO Text
+issuePage tr iid = renderPage . snd <$> testServant tr (IssuesPage.issueDetailGetH testPid iid Nothing Nothing Nothing Nothing Nothing)
+
+
+issuesOfType :: TestResources -> Issues.IssueType -> IO [(Issues.IssueId, Text)]
+issuesOfType tr ty = withResource tr.trPool \conn -> PGS.query conn [sql| SELECT id, title FROM apis.issues WHERE project_id = ? AND issue_type = ? ORDER BY title |] (testPid, ty)
 
 
 countQ :: PGS.ToRow q => TestResources -> PGS.Query -> q -> IO Int

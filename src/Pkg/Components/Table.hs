@@ -521,7 +521,7 @@ renderRows tbl
                     sortAttrs = foldMap (\(field, cfg) -> swapTarget_ cfg.targetId (toggleSortUrl cfg field)) sortable
                     sortOrder = sortable >>= \(field, cfg) -> lookup cfg.currentSort [("-" <> field, Desc), ("+" <> field, Asc)]
                 th_ (c.attrs <> thAttrs <> sortAttrs <> [data_ "column-index" $ show idx]) do
-                  span_ [class_ "flex items-center gap-2 min-w-0"] do
+                  span_ [class_ $ "flex items-center gap-2 min-w-0" <> bool "" " flex-wrap" (tbl.config.bulkActionsInHeader == Just idx)] do
                     span_ [class_ $ bool "max-md:hidden" "" (idx > 0)] $ toHtml c.name
                     sequence_ c.headerExtra
                     whenJust sortOrder \case
@@ -529,10 +529,12 @@ renderRows tbl
                       Desc -> faSprite_ "arrow-down" "regular" "w-3 h-3"
                     when (isJust sortable && isNothing sortOrder) $ faSprite_ "arrows-up-down" "regular" "w-3 h-3 opacity-30"
                     when (tbl.config.bulkActionsInHeader == Just idx) do
-                      span_ [class_ "inline-flex gap-2 ml-2 max-md:hidden"] $ forM_ tbl.features.bulkActions $ bulkActionBtn_ "btn-xs" "h-3 w-3"
-                      whenJust tbl.features.tableHeaderActions \ha -> do
-                        unless (null tbl.features.bulkActions) $ span_ [class_ "w-px h-5 bg-strokeWeak mx-1"] ""
-                        renderHeaderTableActions ha
+                      -- Selection actions replace nothing and appear only once a row is checked.
+                      span_ [class_ "hidden group-has-[.bulkactionItemCheckbox:checked]/grid:md:inline-flex gap-2 ml-2 items-center"] do
+                        forM_ tbl.features.bulkActions $ bulkActionBtn_ "btn-xs" "h-3 w-3"
+                        unless (null tbl.features.bulkActions || isNothing tbl.features.tableHeaderActions) $ span_ [class_ "w-px h-5 bg-strokeWeak mx-1"] ""
+                      -- Sort/filter give way to the selection actions so the header stays one line.
+                      whenJust tbl.features.tableHeaderActions $ span_ [class_ $ bool "group-has-[.bulkactionItemCheckbox:checked]/grid:md:hidden" "" (null tbl.features.bulkActions)] . renderHeaderTableActions
         renderBody [id_ $ tbl.config.elemID <> "_tbody"] tbl
   | otherwise = renderBody [] tbl
 
@@ -595,13 +597,15 @@ renderTableRow tbl row =
 -- | Bulk action button: enabled (via CSS) only while some row checkbox is checked.
 bulkActionBtn_ :: Text -> Text -> BulkAction -> Html ()
 bulkActionBtn_ btnSize iconSize blkA
-  | null blkA.choices = button_ [class_ $ "btn " <> btnSize <> " " <> armed, hxPost_ blkA.uri, hxSwap_ "none"] label
-  | otherwise = details_ [class_ "dropdown"] do
-      summary_ [class_ $ "btn " <> btnSize <> " " <> armed <> " list-none [&::-webkit-details-marker]:hidden"] label
-      ul_ [class_ "dropdown-content menu z-50 min-w-40 rounded-md border border-strokeWeak bg-bgRaised p-1 text-sm shadow-lg"]
-        $ forM_ blkA.choices \(lbl, uri) -> li_ $ button_ [type_ "button", hxPost_ uri, hxSwap_ "none", [__|on click remove @open from closest <details/>|]] $ toHtml lbl
+  | null blkA.choices = button_ [class_ $ "btn " <> btnSize <> " normal-case btn-disabled group-has-[.bulkactionItemCheckbox:checked]/grid:text-textStrong group-has-[.bulkactionItemCheckbox:checked]/grid:bg-bgRaised group-has-[.bulkactionItemCheckbox:checked]/grid:border-strokeStrong group-has-[.bulkactionItemCheckbox:checked]/grid:pointer-events-auto!", hxPost_ blkA.uri, hxSwap_ "none"] label
+  -- A top-layer popover: a nested dropdown is clipped by the header cell's overflow. It stays
+  -- inside the form, so each choice still posts the checked rows.
+  | otherwise = do
+      button_ ([type_ "button", class_ $ "btn " <> btnSize <> " normal-case btn-disabled group-has-[.bulkactionItemCheckbox:checked]/grid:text-textStrong group-has-[.bulkactionItemCheckbox:checked]/grid:bg-bgRaised group-has-[.bulkactionItemCheckbox:checked]/grid:border-strokeStrong group-has-[.bulkactionItemCheckbox:checked]/grid:pointer-events-auto!"] <> popoverTrigger_ popId) label
+      div_ (popoverPanel_ popId <> [class_ "dropdown dropdown-start menu z-50 min-w-40 mt-1 rounded-md border border-strokeWeak bg-bgRaised p-1 text-sm normal-case font-normal shadow-lg", [__|on click call me.hidePopover()|]])
+        $ forM_ blkA.choices \(lbl, uri) -> button_ [type_ "button", class_ "w-full cursor-pointer rounded px-3 py-1.5 text-left text-textStrong hover:bg-fillWeaker", hxPost_ uri, hxSwap_ "none"] $ toHtml lbl
   where
-    armed = "btn-disabled group-has-[.bulkactionItemCheckbox:checked]/grid:text-white group-has-[.bulkactionItemCheckbox:checked]/grid:bg-fillBrand-strong group-has-[.bulkactionItemCheckbox:checked]/grid:pointer-events-auto!"
+    popId = "bulk-" <> T.intercalate "-" (words $ T.toLower blkA.title)
     label = do
       whenJust blkA.icon \icon -> faSprite_ icon "regular" $ iconSize <> " inline-block"
       span_ [class_ "ml-1"] $ toHtml blkA.title

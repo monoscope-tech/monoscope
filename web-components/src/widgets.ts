@@ -380,6 +380,9 @@ const updateChartConfiguration = (widgetData: WidGetData, opt: any, data: any) =
 
   const source = collapseLongTail(data);
   opt.dataset = { ...opt.dataset, source };
+  // Counts must not get fractional ticks (0.2, 0.6) when the peak is small.
+  if (opt.yAxis && !Array.isArray(opt.yAxis))
+    opt.yAxis.minInterval = source.slice(1).every((r: ChartCell[]) => r.slice(1).every((v) => v == null || Number.isInteger(v))) ? 1 : undefined;
 
   // Avoid unnecessary updates if data structure hasn't changed
   const cols = source[0]?.slice(1);

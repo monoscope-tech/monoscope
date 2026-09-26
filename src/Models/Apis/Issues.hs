@@ -110,6 +110,7 @@ module Models.Apis.Issues (
   hashPrefix,
   defaultRecommendedAction,
   isBoilerplateAction,
+  newErrorRecommendedAction,
   queryAlertRecommendedAction,
   serviceLabel,
   showRounded,
@@ -240,7 +241,7 @@ import Relude hiding (id)
 import Servant (FromHttpApiData (..), ServerError, err500, errBody)
 import System.Logging (logAttention)
 import System.Types (DB)
-import Utils (toXXHash)
+import Utils (toXXHash, truncateMiddle)
 
 
 type IssueId = UUIDId "issue"
@@ -395,14 +396,17 @@ defaultRecommendedAction = "Review the changes and update your integration accor
 -- True
 -- >>> isBoilerplateAction "Review the query results and take appropriate action."
 -- True
+-- >>> isBoilerplateAction "Investigate the new error and implement a fix."
+-- True
 -- >>> isBoilerplateAction "Roll back the shipping service to 1.4.2."
 -- False
 isBoilerplateAction :: Text -> Bool
-isBoilerplateAction a = a `elem` ([defaultRecommendedAction, queryAlertRecommendedAction] :: [Text])
+isBoilerplateAction a = a `elem` ([defaultRecommendedAction, queryAlertRecommendedAction, newErrorRecommendedAction] :: [Text])
 
 
-queryAlertRecommendedAction :: Text
+queryAlertRecommendedAction, newErrorRecommendedAction :: Text
 queryAlertRecommendedAction = "Review the query results and take appropriate action."
+newErrorRecommendedAction = "Investigate the new error and implement a fix."
 
 
 parseIssueType :: Text -> Maybe IssueType
@@ -1153,7 +1157,6 @@ isSilenced pid tgt ty now =
         LIMIT 1 |]
 
 
--- | Set archive state on a batch of issues. @Just now@ archives, @Nothing@ unarchives.
 -- | How long an archive holds. Sentry's "archive for N hours" and "until escalating":
 -- a timed archive is lifted by 'expireArchives', an escalating one by 'wakeOnEscalation'.
 data ArchiveWindow = ArchiveIndefinite | ArchiveFor Int | ArchiveUntilEscalating
@@ -1173,26 +1176,28 @@ instance FromHttpApiData ArchiveWindow where
     _ -> Left "archive window: minutes or 'escalating'"
 
 
+-- | Apply a @SET@ clause to a batch of one project's issues.
+updateIssues :: DB es => Projects.ProjectId -> [IssueId] -> HI.Sql -> Eff es Int64
+updateIssues pid iids set = Hasql.interpExecute [HI.sql| UPDATE apis.issues SET ^{set} WHERE project_id = #{pid} AND id = ANY(#{iids}::uuid[]) |]
+
+
 -- | Spam leaves the Inbox with the archive and is listed only under the Spam tab; clearing it restores both.
 setSpamState :: DB es => Projects.ProjectId -> [IssueId] -> Maybe UTCTime -> Eff es Int64
-setSpamState pid iids at =
-  Hasql.interpExecute [HI.sql| UPDATE apis.issues SET spam_at = #{at}, archived_at = #{at}, updated_at = COALESCE(#{at}, updated_at) WHERE project_id = #{pid} AND id = ANY(#{iids}::uuid[]) |]
+setSpamState pid iids at = updateIssues pid iids [HI.sql| spam_at = #{at}, archived_at = #{at}, updated_at = COALESCE(#{at}, updated_at) |]
 
 
+-- | Set archive state on a batch of issues. @Just (now, window)@ archives, @Nothing@ unarchives.
 setArchiveState :: DB es => Projects.ProjectId -> [IssueId] -> Maybe (UTCTime, ArchiveWindow) -> Eff es Int64
 setArchiveState pid iids archiveM
   | null iids = pure 0
-  | otherwise =
-      Hasql.interpExecute
-        [HI.sql|
-          UPDATE apis.issues
-          SET archived_at = #{mTs}, updated_at = COALESCE(#{mTs}, updated_at),
-              archived_until = #{untilM}, archive_until_escalating = #{escalating}
-          WHERE project_id = #{pid} AND id = ANY(#{iids}::uuid[]) |]
+  | otherwise = updateIssues pid iids [HI.sql| archived_at = #{mTs}, updated_at = COALESCE(#{mTs}, updated_at), archived_until = #{untilM}, archive_until_escalating = #{escalating} |]
   where
     mTs = fst <$> archiveM
-    untilM = archiveM >>= \case (t, ArchiveFor mins) -> Just (addUTCTime (fromIntegral mins * 60) t); _ -> Nothing
-    escalating = (snd <$> archiveM) == Just ArchiveUntilEscalating
+    (untilM, escalating) = maybe (Nothing, False) window archiveM
+    window (t, w) = case w of
+      ArchiveIndefinite -> (Nothing, False)
+      ArchiveFor mins -> (Just (addUTCTime (fromIntegral mins * 60) t), False)
+      ArchiveUntilEscalating -> (Nothing, True)
 
 
 -- | Lift archives, returning the reopened ids. A reopen must not collide with an
@@ -1241,11 +1246,11 @@ deleteIssueView pid vid = Hasql.interpExecute [HI.sql| DELETE FROM apis.issue_vi
 
 -- | Priority is the issue's severity, set by hand.
 setIssuePriority :: DB es => Projects.ProjectId -> [IssueId] -> IssueSeverity -> Eff es Int64
-setIssuePriority pid iids sev = Hasql.interpExecute [HI.sql| UPDATE apis.issues SET severity = #{sev} WHERE project_id = #{pid} AND id = ANY(#{iids}::uuid[]) |]
+setIssuePriority pid iids sev = updateIssues pid iids [HI.sql| severity = #{sev} |]
 
 
 setIssueAssignee :: DB es => Projects.ProjectId -> [IssueId] -> Maybe Projects.UserId -> Eff es Int64
-setIssueAssignee pid iids uid = Hasql.interpExecute [HI.sql| UPDATE apis.issues SET assignee_id = #{uid} WHERE project_id = #{pid} AND id = ANY(#{iids}::uuid[]) |]
+setIssueAssignee pid iids uid = updateIssues pid iids [HI.sql| assignee_id = #{uid} |]
 
 
 -- | Auto-archive open discovery-type issues (log_pattern, log_pattern_rate_change,
@@ -2417,9 +2422,9 @@ recordIssueView issueId uid = do
   now <- Time.currentTime
   Hasql.interpExecute_
     [HI.sql| INSERT INTO apis.issue_activity_log (issue_id, event, created_by, created_at)
-             SELECT #{issueId}, 'viewed', #{uid}, #{now}
+             SELECT #{issueId}, #{IEViewed}, #{uid}, #{now}
              WHERE NOT EXISTS (SELECT 1 FROM apis.issue_activity_log
-                               WHERE issue_id = #{issueId} AND created_by = #{uid} AND event = 'viewed'
+                               WHERE issue_id = #{issueId} AND created_by = #{uid} AND event = #{IEViewed}
                                  AND created_at > #{now}::timestamptz - INTERVAL '1 day') |]
 
 
@@ -2492,8 +2497,8 @@ createNewErrorIssue projectId err =
     projectId
     err
     1
-    (\isFw -> (if isFw then "Framework Error: " else "New Error: ") <> err.errorType <> " - " <> T.take 80 err.message)
-    "Investigate the new error and implement a fix."
+    (\isFw -> bool "" "Framework: " isFw <> err.errorType <> ": " <> truncateMiddle 200 err.message)
+    newErrorRecommendedAction
 
 
 -- | Fields shared by 'ErrorPatterns.ErrorPattern' and 'ErrorPatterns.ErrorPatternWithCurrentRate'.
@@ -2508,55 +2513,28 @@ type ErrorLike p =
   )
 
 
--- | Build a RuntimeException issue from an error pattern. Framework/transport errors
--- key on the *parent* (broad) hash so per-route variants collapse into one issue via
--- the (project_id, target_hash, issue_type) ON CONFLICT index; app errors — and
--- framework errors with no parent hash — keep their narrow per-route identity. The
--- parent hash is always stored for UI rollup, and @mkTitle@ is told which hash won.
+-- | An issue detected from a signal rather than an error pattern: no parent-hash rollup, critical iff 'Critical'.
+signalIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Maybe Text -> Text -> IssueSeverity -> (Text, Text) -> Maybe ZonedTime -> IssuePayload -> Eff es Issue
+signalIssue projectId service targetHash severity (title, recommendedAction) timestamp payload =
+  mkIssue MkIssueOpts{projectId, targetHash, parentHash = Nothing, isFramework = False, service, critical = severity == Critical, severity, title, recommendedAction, migrationComplexity = "n/a", timestamp, payload}
+
+
 -- | One performance issue per (kind, service, transaction, query): the target hash is
 -- that key, so the open-issue upsert folds repeat detections into one issue.
 createPerformanceIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Maybe Text -> PerformanceData -> Eff es Issue
 createPerformanceIssue projectId service d =
-  mkIssue
-    MkIssueOpts
-      { projectId
-      , targetHash = toXXHash $ T.intercalate "|" [display d.kind, fromMaybe "" service, fromMaybe "" d.transaction, d.query]
-      , parentHash = Nothing
-      , isFramework = False
-      , service
-      , critical = False
-      , severity = Warning
-      , title = case d.kind of
-          PKNPlusOne -> "N+1 Query: " <> T.take 100 d.query
-          PKSlowQuery -> "Slow DB Query: " <> T.take 100 d.query
-      , recommendedAction = case d.kind of
-          PKNPlusOne -> "Batch these queries: load the rows in one query (a join or an IN list) instead of one per item."
-          PKSlowQuery -> "Check the query plan: add an index for its filter, or narrow what it reads."
-      , migrationComplexity = "n/a"
-      , timestamp = Nothing
-      , payload = PerformanceP d
-      }
+  signalIssue projectId service (toXXHash $ T.intercalate "|" [display d.kind, fromMaybe "" service, fromMaybe "" d.transaction, d.query]) Warning text Nothing (PerformanceP d)
+  where
+    text = case d.kind of
+      PKNPlusOne -> ("N+1 Query: " <> T.take 100 d.query, "Batch these queries: load the rows in one query (a join or an IN list) instead of one per item.")
+      PKSlowQuery -> ("Slow DB Query: " <> T.take 100 d.query, "Check the query plan: add an index for its filter, or narrow what it reads.")
 
 
 -- | One downtime issue per check: the target hash is the check id, so a check that
 -- stays down folds every failed probe into the open issue.
 createUptimeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> UptimeData -> Eff es Issue
 createUptimeIssue projectId d =
-  mkIssue
-    MkIssueOpts
-      { projectId
-      , targetHash = uptimeTargetHash d.checkId
-      , parentHash = Nothing
-      , isFramework = False
-      , service = Just d.name
-      , critical = True
-      , severity = Critical
-      , title = "Downtime detected for " <> d.url
-      , recommendedAction = "The check at " <> d.url <> " is failing: " <> d.reason <> "."
-      , migrationComplexity = "n/a"
-      , timestamp = Nothing
-      , payload = UptimeP d
-      }
+  signalIssue projectId (Just d.name) (uptimeTargetHash d.checkId) Critical ("Downtime detected for " <> d.url, "The check at " <> d.url <> " is failing: " <> d.reason <> ".") Nothing (UptimeP d)
 
 
 uptimeTargetHash :: Text -> Text
@@ -2565,24 +2543,11 @@ uptimeTargetHash = ("uptime:" <>)
 
 -- | One open issue per cron monitor, missed or failed.
 createCronIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> CronData -> Eff es Issue
-createCronIssue projectId d =
-  mkIssue
-    MkIssueOpts
-      { projectId
-      , targetHash = cronTargetHash d.monitorId
-      , parentHash = Nothing
-      , isFramework = False
-      , service = Nothing
-      , critical = True
-      , severity = Critical
-      , title = bool "Cron failed: " "Cron missed: " (d.failure == CFMissed) <> d.name
-      , recommendedAction = case d.failure of
-          CFMissed -> "No check-in from " <> d.slug <> " in its window: check the job ran and can reach Monoscope."
-          CFFailed -> "The job " <> d.slug <> " reported monitor.status = error on its last run."
-      , migrationComplexity = "n/a"
-      , timestamp = Nothing
-      , payload = CronP d
-      }
+createCronIssue projectId d = signalIssue projectId Nothing (cronTargetHash d.monitorId) Critical text Nothing (CronP d)
+  where
+    text = case d.failure of
+      CFMissed -> ("Cron missed: " <> d.name, "No check-in from " <> d.slug <> " in its window: check the job ran and can reach Monoscope.")
+      CFFailed -> ("Cron failed: " <> d.name, "The job " <> d.slug <> " reported monitor.status = error on its last run.")
 
 
 cronTargetHash :: Text -> Text
@@ -2592,45 +2557,24 @@ cronTargetHash = ("cron:" <>)
 -- | One issue per feedback submission, keyed by its record id so a rescan cannot duplicate it.
 createFeedbackIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Maybe Text -> Text -> FeedbackData -> Eff es Issue
 createFeedbackIssue projectId service recordId d =
-  mkIssue
-    MkIssueOpts
-      { projectId
-      , targetHash = "feedback:" <> recordId
-      , parentHash = Nothing
-      , isFramework = False
-      , service
-      , critical = False
-      , severity = Info
-      , title = "Feedback: " <> T.take 100 d.message
-      , recommendedAction = "Reply to the user, or mark it as spam."
-      , migrationComplexity = "n/a"
-      , timestamp = Just (utcToZonedTime utc d.observedAt)
-      , payload = FeedbackP d
-      }
+  signalIssue projectId service ("feedback:" <> recordId) Info ("Feedback: " <> T.take 100 d.message, "Reply to the user, or mark it as spam.") (Just (utcToZonedTime utc d.observedAt)) (FeedbackP d)
 
 
 -- | One frontend issue per (kind, page path, element).
 createFrontendIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Maybe Text -> FrontendData -> Eff es Issue
 createFrontendIssue projectId service d =
-  mkIssue
-    MkIssueOpts
-      { projectId
-      , targetHash = toXXHash $ T.intercalate "|" [display d.kind, maybe "" (T.takeWhile (/= '?')) d.pageUrl, d.element, fromMaybe "" d.selector]
-      , parentHash = Nothing
-      , isFramework = False
-      , service
-      , critical = False
-      , severity = Warning
-      , title = bool "Dead Click: " "Rage Click: " (d.kind == FKRageClick) <> T.take 100 d.element
-      , recommendedAction = case d.kind of
-          FKRageClick -> "Users clicked this repeatedly: check it responds, shows progress, and is not disabled without saying why."
-          FKDeadClick -> "Clicking this changed nothing on the page: wire up its handler or stop it looking clickable."
-      , migrationComplexity = "n/a"
-      , timestamp = Nothing
-      , payload = FrontendP d
-      }
+  signalIssue projectId service (toXXHash $ T.intercalate "|" [display d.kind, maybe "" (T.takeWhile (/= '?')) d.pageUrl, d.element, fromMaybe "" d.selector]) Warning text Nothing (FrontendP d)
+  where
+    text = case d.kind of
+      FKRageClick -> ("Rage Click: " <> T.take 100 d.element, "Users clicked this repeatedly: check it responds, shows progress, and is not disabled without saying why.")
+      FKDeadClick -> ("Dead Click: " <> T.take 100 d.element, "Clicking this changed nothing on the page: wire up its handler or stop it looking clickable.")
 
 
+-- | Build a RuntimeException issue from an error pattern. Framework/transport errors
+-- key on the *parent* (broad) hash so per-route variants collapse into one issue via
+-- the (project_id, target_hash, issue_type) ON CONFLICT index; app errors — and
+-- framework errors with no parent hash — keep their narrow per-route identity. The
+-- parent hash is always stored for UI rollup, and @mkTitle@ is told which hash won.
 mkErrorIssue :: (ErrorLike p, Time :> es, UUIDEff :> es) => Projects.ProjectId -> p -> Int -> (Bool -> Text) -> Text -> Eff es Issue
 mkErrorIssue projectId p occurrences mkTitle recommendedAction = do
   now <- Time.currentTime

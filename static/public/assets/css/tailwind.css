@@ -460,14 +460,6 @@
     transform: rotate(180deg);
   }
 
-  /* Table row hover with subtle translate */
-  tr.group\/row {
-    transition: background-color 100ms ease-out, transform 100ms ease-out;
-  }
-  tr.group\/row:hover {
-    transform: translateX(2px);
-  }
-
   /* Content fade-in for lazy loaded content */
   .animate-fadeIn {
     animation: fadeSlideIn 200ms var(--ease-out-expo) forwards;
@@ -815,7 +807,6 @@
 
     /* Disable hover states that cause sticky on touch */
     .card-lift:hover { transform: none; box-shadow: inherit; }
-    tr.group\/row:hover { transform: none; }
   }
 
   /* Active/pressed states for touch */

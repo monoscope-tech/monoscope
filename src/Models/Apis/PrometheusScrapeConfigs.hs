@@ -5,7 +5,6 @@ module Models.Apis.PrometheusScrapeConfigs (
   updateConfig,
   configsByProjectId,
   CheckKind (..),
-  insertUptimeCheck,
   recordUptime,
   getConfig,
   getConfigByProject,
@@ -91,11 +90,11 @@ selectFrom :: HI.Sql
 selectFrom = [HI.sql|SELECT |] <> selectCols <> [HI.sql| FROM apis.prometheus_scrape_configs |]
 
 
-insertConfig :: DB es => Projects.ProjectId -> Text -> Text -> Int -> Maybe Text -> AE.Value -> Eff es Int64
-insertConfig pid name url interval authHeader extraLabels =
+insertConfig :: DB es => Projects.ProjectId -> CheckKind -> Text -> Text -> Int -> Maybe Text -> AE.Value -> Maybe Int -> Eff es Int64
+insertConfig pid kind name url interval authHeader extraLabels expected =
   Hasql.interpExecute
-    [HI.sql|INSERT INTO apis.prometheus_scrape_configs (project_id, name, url, scrape_interval_seconds, auth_header, extra_labels)
-            VALUES (#{pid}, #{name}, #{url}, #{interval}, #{authHeader}, #{extraLabels})|]
+    [HI.sql|INSERT INTO apis.prometheus_scrape_configs (project_id, kind, name, url, scrape_interval_seconds, auth_header, extra_labels, expected_status)
+            VALUES (#{pid}, #{kind}, #{name}, #{url}, #{interval}, #{authHeader}, #{extraLabels}, #{expected})|]
 
 
 -- | Edit a target in place (preserves id + scrape history). Scoped by project_id.
@@ -109,13 +108,6 @@ updateConfig pid cid name url interval authHeader extraLabels =
 
 configsByProjectId :: DB es => Projects.ProjectId -> CheckKind -> Eff es (V.Vector PrometheusScrapeConfig)
 configsByProjectId pid kind = V.fromList <$> Hasql.interp (selectFrom <> [HI.sql|WHERE project_id = #{pid} AND kind = #{kind} ORDER BY created_at DESC|])
-
-
-insertUptimeCheck :: DB es => Projects.ProjectId -> Text -> Text -> Int -> Int -> Eff es Int64
-insertUptimeCheck pid name url interval expected =
-  Hasql.interpExecute
-    [HI.sql|INSERT INTO apis.prometheus_scrape_configs (project_id, name, url, scrape_interval_seconds, extra_labels, kind, expected_status)
-            VALUES (#{pid}, #{name}, #{url}, #{interval}, '{}'::jsonb, #{CKUptime}, #{expected})|]
 
 
 -- | Record an uptime probe and return the failure streak (before, after) it moved.

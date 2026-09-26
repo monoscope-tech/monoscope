@@ -33,6 +33,18 @@ pid :: Projects.ProjectId
 pid = UUIDId UUID.nil
 
 
+patternOf :: TestResources -> Text -> IO ErrorPatterns.ErrorPattern
+patternOf tr ty = runTestBg frozenTime tr (ErrorPatterns.getErrorPatterns pid Nothing 200 0) >>= maybe (fail $ "no " <> toString ty) pure . find ((== ty) . (.errorType))
+
+
+issueOf :: TestResources -> Text -> IO Issues.Issue
+issueOf tr h = runTestBg frozenTime tr (Issues.selectIssueByHash pid h Issues.AnyIssue) >>= maybe (fail "no issue") pure
+
+
+issuePageText :: TestResources -> Issues.IssueId -> IO Text
+issuePageText tr iid = TL.toStrict . renderText . toHtml . snd <$> testServant tr (Pages.Issues.issueDetailGetH pid iid Nothing Nothing Nothing Nothing Nothing)
+
+
 countIssues :: TestResources -> Issues.IssueType -> IO Int
 countIssues tr issueType = withResource tr.trPool \conn -> do
   [PGS.Only n] <-
@@ -107,17 +119,14 @@ spec = sequential $ aroundAll withTestResources do
         (addUTCTime (-15) frozenTime)
       drainExtractionWorker tr
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
-      patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 50 0
-      ctxPattern <- maybe (fail "no ContextError pattern") pure $ find ((== "ContextError") . (.errorType)) patterns
+      ctxPattern <- patternOf tr "ContextError"
       let e = ctxPattern.errorData
       void $ runTestBg frozenTime tr $ ErrorPatterns.updateErrorPatternAnalysis ctxPattern.id "The cart line has no price" "data"
       (e.release, e.environment, e.handled, e.mechanism) `shouldBe` (Just "26.3.1", Just "production", Just False, Just ErrorPatterns.CMExceptionEvent)
       (e.browser, e.os, e.device, e.userAgent) `shouldBe` (Just "Chrome", Just "Windows", Just "Desktop", Just ua)
       (e.geoCountry, e.geoCity, e.threadName, e.attachments) `shouldBe` (Just "US", Just "Santa Clara", Just "main", Just ["https://cdn.example.com/shot.png"])
-      -- ...and the issue page renders them in its Highlights and Contexts sections.
-      issue <- runTestBg frozenTime tr (Issues.selectIssueByHash pid e.hash Issues.AnyIssue) >>= maybe (fail "no ContextError issue") pure
-      (_, page) <- testServant tr $ Pages.Issues.issueDetailGetH pid issue.id Nothing Nothing Nothing Nothing Nothing
-      TL.toStrict (renderText $ toHtml page) `shouldContainAll` ["id=\"issue-contexts\"", "Santa Clara, US", "26.3.1", "Chrome", "exception_event", "id=\"issue-http\"", "https://shop.example.com/api/context?cart=7&amp;coupon=x", "coupon", "x-request-id", "curl -X GET", "id=\"issue-copy-json\"", "&quot;release&quot;:&quot;26.3.1&quot;", "## ", "id=\"issue-grouping\"", "context probe", "Root cause", "The cart line has no price", "Plan a fix", "id=\"issue-tags\"", ">release</h4>", ">26.3.1</span>", "100%", "id=\"issue-attachments\"", "src=\"https://cdn.example.com/shot.png\""]
+      issue <- issueOf tr e.hash
+      issuePageText tr issue.id >>= (`shouldContainAll` ["id=\"issue-contexts\"", "Santa Clara, US", "26.3.1", "Chrome", "exception_event", "id=\"issue-http\"", "https://shop.example.com/api/context?cart=7&amp;coupon=x", "coupon", "x-request-id", "curl -X GET", "id=\"issue-copy-json\"", "&quot;release&quot;:&quot;26.3.1&quot;", "## ", "id=\"issue-grouping\"", "context probe", "Root cause", "The cart line has no price", "Plan a fix", "id=\"issue-tags\"", ">release</h4>", ">26.3.1</span>", "100%", "id=\"issue-attachments\"", "src=\"https://cdn.example.com/shot.png\""])
 
     it "1c. releases and distinct users are tracked, and resolve-in-next-release holds until a new release" \tr -> do
       apiKey <- createTestAPIKey tr pid "release-key"
@@ -126,15 +135,14 @@ spec = sequential $ aroundAll withTestResources do
             ingestTraceWithExceptionAttrs tr apiKey (extra, [("service.version", rel)], []) "GET /api/release" "ReleaseError" "release probe" stack (addUTCTime at frozenTime)
             drainExtractionWorker tr
             void $ runAllBackgroundJobs frozenTime tr.trATCtx
-          current = runTestBg frozenTime tr (ErrorPatterns.getErrorPatterns pid Nothing 100 0) >>= maybe (fail "no ReleaseError") pure . find ((== "ReleaseError") . (.errorType))
+          current = patternOf tr "ReleaseError"
       emit "1.0" [("user.id", "u-1")] (-50)
       emit "1.0" [("client.address", "10.0.0.9")] (-45)
       emit "1.0" [("user.id", "u-1")] (-40)
       p0 <- current
       (p0.firstRelease, p0.lastRelease, p0.usersCount) `shouldBe` (Just "1.0", Just "1.0", 2)
-      issue <- runTestBg frozenTime tr (Issues.selectIssueByHash pid p0.hash Issues.AnyIssue) >>= maybe (fail "no ReleaseError issue") pure
-      (_, page) <- testServant tr $ Pages.Issues.issueDetailGetH pid issue.id Nothing Nothing Nothing Nothing Nothing
-      TL.toStrict (renderText $ toHtml page) `shouldContainAll` ["Distinct users affected", ">2<", "Last release", "next_release=true", "Resolve in the release after 1.0"]
+      issue <- issueOf tr p0.hash
+      issuePageText tr issue.id >>= (`shouldContainAll` ["Distinct users affected", ">2<", "Last release", "next_release=true", "Resolve in the release after 1.0"])
       void $ testServant tr $ Pages.Issues.resolveErrorPostH pid p0.id.unErrorPatternId True
       emit "1.0" [] (-35)
       (((.state) &&& (.resolvedInRelease)) <$> current) `shouldReturn` (ESResolved, Just "1.0")
@@ -144,18 +152,16 @@ spec = sequential $ aroundAll withTestResources do
       -- The chart marks where each release began; a later event of the same release must not move it.
       emit "1.1" [] (-25)
       (fmap zonedTimeToUTC . (.lastReleaseSince) <$> current) `shouldReturn` Just (addUTCTime (-30) frozenTime)
-      (_, page') <- testServant tr $ Pages.Issues.issueDetailGetH pid issue.id Nothing Nothing Nothing Nothing Nothing
-      TL.toStrict (renderText $ toHtml page') `shouldContainAll` ["markers: [{\"label\":\"1.0\",\"at\":", "\"label\":\"1.1\""]
+      issuePageText tr issue.id >>= (`shouldContainAll` ["markers: [{\"label\":\"1.0\",\"at\":", "\"label\":\"1.1\""])
 
     it "1d. bulk merge folds the newer errors into the oldest and archives their issues" \tr -> do
       apiKey <- createTestAPIKey tr pid "merge-key"
       forM_ ([("MergeAError", -50), ("MergeBError", -40)] :: [(Text, NominalDiffTime)]) \(ty, at) ->
-        ingestTraceWithExceptionAttrs tr apiKey ([], [], []) "GET /api/merge" ty "merge probe" (ty <> ": merge probe\n    at probe (/app/src/" <> ty <> ".js:1:1)") (addUTCTime at frozenTime)
+        ingestTraceWithException tr apiKey "GET /api/merge" ty "merge probe" (ty <> ": merge probe\n    at probe (/app/src/" <> ty <> ".js:1:1)") (addUTCTime at frozenTime)
       drainExtractionWorker tr
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
-      pats <- runTestBg frozenTime tr (ErrorPatterns.getErrorPatterns pid Nothing 200 0)
-      [a, b] <- forM ["MergeAError", "MergeBError"] \ty -> maybe (fail $ "no " <> toString ty) pure $ find ((== ty) . (.errorType)) pats
-      [ia, ib] <- forM [a, b] \e -> runTestBg frozenTime tr (Issues.selectIssueByHash pid e.hash Issues.AnyIssue) >>= maybe (fail "no issue") pure
+      [a, b] <- forM ["MergeAError", "MergeBError"] (patternOf tr)
+      [ia, ib] <- forM [a, b] (issueOf tr . (.hash))
       void $ testServant tr $ Pages.Issues.issueBulkActionsPostH pid Pages.Issues.BAMerge Nothing Nothing Pages.Issues.IssueBulk{itemId = UUID.toText . (.id.unUUIDId) <$> [ib, ia]}
       b' <- runTestBg frozenTime tr (ErrorPatterns.getErrorPatternById b.id) >>= maybe (fail "no b") pure
       (b'.canonicalId, b'.mergeOverride) `shouldBe` (Just a.id, True)
@@ -220,6 +226,12 @@ spec = sequential $ aroundAll withTestResources do
       (_, page) <- testServant tr $ Pages.Issues.issueDetailGetH pid issue.id Nothing Nothing Nothing Nothing Nothing
       let html = TL.toStrict $ renderText $ toHtml page
       html `shouldSatisfy` T.isInfixOf issue.title
+      -- The header once read "New Error: Error - <message cut at 80 chars>", under a
+      -- canned "Investigate the new error…" line, with severity shown twice.
+      fresh <- runTestBg frozenTime tr $ Issues.createNewErrorIssue pid patternWithTrace
+      fresh.title `shouldBe` patternWithTrace.errorType <> ": " <> patternWithTrace.message
+      forM_ [Issues.newErrorRecommendedAction, ">Critical</span>"] \t -> html `shouldSatisfy` not . T.isInfixOf t
+      html `shouldSatisfy` T.isInfixOf "Every 10 min"
       html `shouldSatisfy` T.isInfixOf ("/traces/" <> traceIdText)
       html `shouldSatisfy` T.isInfixOf "timestamp="
 
@@ -451,10 +463,7 @@ spec = sequential $ aroundAll withTestResources do
       case find (\r -> r.state == ESOngoing && r.baselineState == BSEstablished && maybe False (> 0) r.baselineStddev) errRates of
         Nothing -> expectationFailure "No de-escalated pattern left by 5b"
         Just errRate -> do
-          iid <- withResource tr.trPool \conn ->
-            maybe (fail "no issue for the pattern") (pure . UUIDId . PGS.fromOnly)
-              . listToMaybe
-              =<< PGS.query conn [sql| SELECT id FROM apis.issues WHERE project_id = ? AND target_hash = ? AND issue_type = 'runtime_exception' AND acknowledged_at IS NULL AND archived_at IS NULL LIMIT 1 |] (pid, errRate.hash)
+          iid <- (.id) <$> (runTestBg frozenTime tr (Issues.selectIssueByHash pid errRate.hash (Issues.OpenOfType Issues.RuntimeException)) >>= maybe (fail "no issue for the pattern") pure)
           void $ runTestBg frozenTime tr $ Issues.setArchiveState pid [iid] (Just (frozenTime, Issues.ArchiveUntilEscalating))
           let spikeTime = addUTCTime 7200 frozenTime
               spikeCount = ceiling (fromMaybe 0 errRate.baselineMean + 3 * fromMaybe 0 errRate.baselineStddev + 50) :: Int

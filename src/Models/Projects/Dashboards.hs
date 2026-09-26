@@ -22,6 +22,7 @@ module Models.Projects.Dashboards (
   addTeamsToDashboards,
   removeTeamsFromDashboards,
   insert,
+  getOrInsertByBaseTemplate,
   selectDashboardsByTeam,
   selectDashboardsSortedBy,
   updateSchema,
@@ -58,6 +59,7 @@ import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 import Effectful.Error.Static (Error, throwError)
 import Hasql.Interpolate qualified as HI
+import Hasql.Transaction.Sessions qualified as TxS
 import Language.Haskell.TH (Exp, Q, runIO)
 import Language.Haskell.TH.Syntax qualified as THS
 import Models.Projects.Activation qualified as Activation
@@ -183,17 +185,33 @@ mkDashboardVM did pid now uid = DashboardVM{id = did, projectId = pid, createdAt
 
 insert :: DB es => DashboardVM -> Eff es DashboardVM
 insert d = do
-  HI.OneColumn teams <-
-    Hasql.interpOneOrThrow
-      "Dashboard insert"
+  HI.OneColumn teams <- Hasql.interpOneOrThrow "Dashboard insert" (insertSql d)
+  Activation.recordActivationMilestone d.projectId Activation.DashboardCreated
+  pure (d :: DashboardVM){teams}
+
+
+-- | The project's dashboard for @d@'s base template, inserting @d@ when there is none;
+-- 'True' when it was created. The lock serialises concurrent first visits, which each
+-- saw no dashboard and each inserted one.
+getOrInsertByBaseTemplate :: DB es => DashboardVM -> Eff es (DashboardId, Bool)
+getOrInsertByBaseTemplate d = do
+  r <- Hasql.transaction TxS.ReadCommitted TxS.Write do
+    void $ Hasql.queryTx @[Text] [HI.sql| SELECT pg_advisory_xact_lock(hashtextextended(concat_ws('/', 'dashboard', #{d.projectId}::text, #{d.baseTemplate}), 0))::text |]
+    Hasql.queryTx [HI.sql| SELECT id FROM projects.dashboards WHERE project_id = #{d.projectId} AND base_template = #{d.baseTemplate} LIMIT 1 |] >>= \case
+      did : _ -> pure (did, False)
+      [] -> Hasql.queryTx @[HI.OneColumn (V.Vector ProjectMembers.TeamId)] (insertSql d) $> (d.id, True)
+  when (snd r) $ Activation.recordActivationMilestone d.projectId Activation.DashboardCreated
+  pure r
+
+
+insertSql :: DashboardVM -> HI.Sql
+insertSql d =
       [HI.sql| INSERT INTO projects.dashboards (id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams, file_path, file_sha)
              VALUES (#{d.id}, #{d.projectId}, #{d.createdAt}, #{d.updatedAt}, #{d.createdBy}, #{d.baseTemplate}, #{d.schema}, #{d.starredSince}, #{d.homepageSince}, #{d.tags}, #{d.title},
                CASE WHEN cardinality(#{d.teams}::uuid[]) = 0
                  THEN ARRAY(SELECT id FROM projects.teams WHERE project_id = #{d.projectId} AND is_everyone AND deleted_at IS NULL)
                  ELSE #{d.teams}::uuid[] END,
                #{d.filePath}, #{d.fileSha}) RETURNING teams |]
-  Activation.recordActivationMilestone d.projectId Activation.DashboardCreated
-  pure (d :: DashboardVM){teams}
 
 
 yamlFiles :: FilePath -> IO [FilePath]

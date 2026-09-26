@@ -798,14 +798,16 @@ sampleAlert = \case
         (Just "4/hr")
         (Just "just now")
         Nothing
-  QueryAlert -> const $ MonitorsAlert "🧪 TEST: High Error Rate" "https://example.com/test" Nothing
-  LogPattern -> const $ MonitorsAlert "🧪 TEST: New Log Pattern" "https://example.com/test" Nothing
-  LogPatternRateChange -> const $ MonitorsAlert "🧪 TEST: Log Pattern Rate Change" "https://example.com/test" Nothing
-  Performance -> const $ MonitorsAlert "🧪 TEST: N+1 Query" "https://example.com/test" Nothing
-  Frontend -> const $ MonitorsAlert "🧪 TEST: Rage Click" "https://example.com/test" Nothing
-  Uptime -> const $ MonitorsAlert "🧪 TEST: Downtime detected" "https://example.com/test" Nothing
-  Cron -> const $ MonitorsAlert "🧪 TEST: Cron missed" "https://example.com/test" Nothing
-  Feedback -> const $ MonitorsAlert "🧪 TEST: User feedback" "https://example.com/test" Nothing
+  QueryAlert -> testMonitor "High Error Rate"
+  LogPattern -> testMonitor "New Log Pattern"
+  LogPatternRateChange -> testMonitor "Log Pattern Rate Change"
+  Performance -> testMonitor "N+1 Query"
+  Frontend -> testMonitor "Rage Click"
+  Uptime -> testMonitor "Downtime detected"
+  Cron -> testMonitor "Cron missed"
+  Feedback -> testMonitor "User feedback"
+  where
+    testMonitor t = const $ MonitorsAlert ("🧪 TEST: " <> t) "https://example.com/test" Nothing
 
 
 sampleRuntimeAlert :: RuntimeAlertType -> Text -> NotificationAlerts

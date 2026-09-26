@@ -3,6 +3,7 @@ module Utils (
   sinceWindows,
   onpointerdown_,
   jsonValueToHtmlTree,
+  truncateMiddle,
   freeTierDailyMaxEvents,
   JSONHttpApiData (..),
   parseTime,
@@ -532,7 +533,7 @@ jsonValueToHtmlTree val pathM = do
     , [__|install FieldMenuDelegate|]
     ]
     do
-      div_ [class_ "w-full flex items-center gap-4 text-xs mb-2"] do
+      div_ [class_ "w-full flex flex-wrap items-center gap-x-4 gap-y-1 whitespace-nowrap text-xs mb-2"] do
         -- One toggle button: collapse state (checked = collapsed) is bulk-written to every
         -- node's .tree-toggle — imperative by nature (CSS can't write another element's
         -- checked state). The label is CSS: both spans render, .collapsed picks one.

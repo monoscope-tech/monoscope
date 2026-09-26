@@ -135,7 +135,7 @@ import System.Types (ATBackgroundCtx, ATBackgroundEffects, DB, runBackground)
 import UnliftIO (withRunInIO)
 import UnliftIO qualified as UIO
 import UnliftIO.Exception (bracket, catch, finally, throwIO, try, tryAny)
-import Utils (calculateCycleStartDate, formatUTC, formatUTCMicros, freeTierDailyMaxEvents, hostPath, toXXHash, usageWindowStart)
+import Utils (calculateCycleStartDate, formatUTC, formatUTCMicros, freeTierDailyMaxEvents, hostPath, nonEmptyT, toXXHash, usageWindowStart)
 
 
 sendMessageToDiscord :: Text -> Text -> ATBackgroundCtx ()
@@ -2192,8 +2192,9 @@ notifyIssue issue project users cooldownHours digestReason alert alertUrl subj h
 -- Creates issues synchronously for new/regressed errors. Reopens existing issues on regression.
 processProjectErrors :: Projects.ProjectId -> V.Vector ErrorPatterns.ATError -> UTCTime -> ATBackgroundCtx ()
 processProjectErrors pid rawErrors now = do
+  authCtx <- ask @Config.AuthContext
   -- GeoIP only fills errors the SDK did not already place with geo.*.
-  errors <- maybe rawErrors (\db -> V.map (ErrorPatterns.enrichGeo db) rawErrors) . (.geoDb) <$> ask @Config.AuthContext
+  let errors = maybe id (V.map . ErrorPatterns.enrichGeo) authCtx.geoDb rawErrors
   tryAny (ErrorPatterns.batchUpsertErrorPatterns pid errors now) >>= \case
     Left e ->
       Log.logAttention "ERR_BATCH_UPSERT_FAILED"
@@ -2214,7 +2215,6 @@ processProjectErrors pid rawErrors now = do
         void $ ErrorPatterns.upsertErrorPatternHourlyStats pid now errorRollupStats
         void $ ErrorPatterns.upsertErrorPatternUsers pid errors
         void $ ErrorPatterns.upsertErrorTagCounts pid errors
-      authCtx <- ask @Config.AuthContext
       forM_ newOrRegressed \(errorHash, outcome) -> do
         errM <- ErrorPatterns.getErrorPatternByHash pid errorHash
         -- A merged pattern is silent on every path, including this one. The
@@ -5017,22 +5017,18 @@ evaluateCronMonitors = do
 -- @interval + grace@, opens a missed issue. Re-evaluating an open miss folds into it.
 evaluateCronMonitor :: UTCTime -> Monitors.CronMonitor -> ATBackgroundCtx ()
 evaluateCronMonitor now m = do
-  authCtx <- ask @Config.AuthContext
   let since = max (addUTCTime (-86400) now) (fromMaybe m.createdAt m.lastCheckinAt)
-  spans <- withHasqlTimefusion authCtx.env.enableTimefusionReads $ Telemetry.selectNamedRecords m.projectId "cron.checkin" since now
-  let attr k c = Telemetry.atMapText k (unAesonTextMaybe c.attributes)
-      newer = sortWith fst [(c.timestamp, fromMaybe "ok" (attr "monitor.status" c)) | c <- spans, attr "monitor.slug" c == Just m.slug, maybe True (c.timestamp >) m.lastCheckinAt]
-      lastSeen = (fst <$> viaNonEmpty last newer) <|> m.lastCheckinAt
+  spans <- tfRead $ Telemetry.selectNamedRecords m.projectId "cron.checkin" since now
+  let attr = Telemetry.spanAttr
+      latest = viaNonEmpty last $ sortWith fst [(c.timestamp, fromMaybe "ok" (attr "monitor.status" c)) | c <- spans, attr "monitor.slug" c == Just m.slug, maybe True (c.timestamp >) m.lastCheckinAt]
+      lastSeen = (fst <$> latest) <|> m.lastCheckinAt
       expectedBy = addUTCTime (fromIntegral $ m.intervalSecs + m.graceSecs) (fromMaybe m.createdAt lastSeen)
       open failure =
         Issues.insertIssue
           =<< Issues.createCronIssue m.projectId Issues.CronData{monitorId = UUID.toText m.id, slug = m.slug, name = m.name, failure, expectedBy, lastCheckinAt = lastSeen}
-  whenJust (viaNonEmpty last newer) \(at, status) -> void $ Monitors.recordCronCheckin m.id at status
-  case viaNonEmpty last newer of
-    Just (_, "ok") ->
-      Issues.selectIssueByHash m.projectId (Issues.cronTargetHash (UUID.toText m.id)) (Issues.OpenOfType Issues.Cron) >>= traverse_ \i -> do
-        void $ Issues.setArchiveState m.projectId [i.id] (Just (now, Issues.ArchiveIndefinite))
-        Issues.logIssueActivity i.id Issues.IEResolved Nothing (Just $ AE.object ["recovered_at" AE..= now])
+  whenJust latest \(at, status) -> void $ Monitors.recordCronCheckin m.id at status
+  case latest of
+    Just (_, "ok") -> resolveOpenIssue m.projectId (Issues.cronTargetHash (UUID.toText m.id)) Issues.Cron now []
     Just _ -> open Issues.CFFailed
     Nothing -> when (now > expectedBy) $ open Issues.CFMissed
 
@@ -5046,25 +5042,34 @@ applyUptimeResult cfg now ms res = do
       ok = res == Right expected
       reason = either ("request failed: " <>) (\c -> bool ("status " <> show c <> ", expected " <> show expected) "ok" ok) res
   (before, after) <- PromCfg.recordUptime cfg.id ok (reason <> " · " <> show ms <> "ms")
-  when (not ok && after == 2) do
-    issue <-
-      Issues.createUptimeIssue cfg.projectId
-        $ Issues.UptimeData
-          { checkId = cfg.id.toText
-          , name = cfg.name
-          , url = cfg.url
-          , expectedStatus = expected
-          , statusCode = rightToMaybe res
-          , reason
-          , durationMs = ms
-          , downSince = addUTCTime (negate $ fromIntegral cfg.scrapeIntervalSeconds) now
-          }
-    Issues.insertIssue issue
-  when (ok && before >= 2)
-    $ Issues.selectIssueByHash cfg.projectId (Issues.uptimeTargetHash cfg.id.toText) (Issues.OpenOfType Issues.Uptime)
-    >>= traverse_ \i -> do
-      void $ Issues.setArchiveState cfg.projectId [i.id] (Just (now, Issues.ArchiveIndefinite))
-      Issues.logIssueActivity i.id Issues.IEResolved Nothing (Just $ AE.object ["recovered_at" AE..= now, "after_failures" AE..= before])
+  when (not ok && after == 2)
+    $ Issues.insertIssue
+    =<< Issues.createUptimeIssue
+      cfg.projectId
+      Issues.UptimeData
+        { checkId = cfg.id.toText
+        , name = cfg.name
+        , url = cfg.url
+        , expectedStatus = expected
+        , statusCode = rightToMaybe res
+        , reason
+        , durationMs = ms
+        , downSince = addUTCTime (negate $ fromIntegral cfg.scrapeIntervalSeconds) now
+        }
+  when (ok && before >= 2) $ resolveOpenIssue cfg.projectId (Issues.uptimeTargetHash cfg.id.toText) Issues.Uptime now ["after_failures" AE..= before]
+
+
+-- | Archive a recovered signal's open issue and log it as resolved.
+resolveOpenIssue :: Projects.ProjectId -> Text -> Issues.IssueType -> UTCTime -> [(AE.Key, AE.Value)] -> ATBackgroundCtx ()
+resolveOpenIssue pid hash ty now extra =
+  Issues.selectIssueByHash pid hash (Issues.OpenOfType ty) >>= traverse_ \i -> do
+    void $ Issues.setArchiveState pid [i.id] (Just (now, Issues.ArchiveIndefinite))
+    Issues.logIssueActivity i.id Issues.IEResolved Nothing (Just $ AE.object (("recovered_at" AE..= now) : extra))
+
+
+-- | A read against TimeFusion when the project's reads are switched to it.
+tfRead :: Eff (Hasql ': ATBackgroundEffects) a -> ATBackgroundCtx a
+tfRead q = ask @Config.AuthContext >>= \c -> withHasqlTimefusion c.env.enableTimefusionReads q
 
 
 scrapeMetrics :: PromCfg.PrometheusScrapeConfig -> ATBackgroundCtx ()
@@ -5717,25 +5722,25 @@ detectErrorSpikes pid = do
 detectPerformanceIssues :: Projects.ProjectId -> ATBackgroundCtx ()
 detectPerformanceIssues pid = do
   now <- Time.currentTime
-  authCtx <- ask @Config.AuthContext
-  (nPlusOne, slow) <- withHasqlTimefusion authCtx.env.enableTimefusionReads $ Telemetry.selectPerfCandidates pid (addUTCTime (-3600) now) now
-  let costliest kind cs = [(kind, c) | c <- HM.elems $ HM.fromListWith (\a b -> bool b a (a.durationNs >= b.durationNs)) [((c.service, EF.normalizeMessage c.query), c) | c <- cs]]
-  forM_ (costliest Issues.PKNPlusOne nPlusOne <> costliest Issues.PKSlowQuery slow) \(kind, c) -> do
-    (parentName, rootName) <- withHasqlTimefusion authCtx.env.enableTimefusionReads $ Telemetry.spanAndRootNames pid c.traceId c.parentId c.at
-    issue <-
-      Issues.createPerformanceIssue pid c.service
-        $ Issues.PerformanceData
+  (nPlusOne, slow) <- tfRead $ Telemetry.selectPerfCandidates pid (addUTCTime (-3600) now) now
+  let costliest kind cs = [(kind, q, c) | ((_, q), c) <- HM.toList $ HM.fromListWith (\a b -> bool b a (a.durationNs >= b.durationNs)) [((c.service, EF.normalizeMessage c.query), c) | c <- cs]]
+  forM_ (costliest Issues.PKNPlusOne nPlusOne <> costliest Issues.PKSlowQuery slow) \(kind, query, c) -> do
+    (parentName, rootName) <- tfRead $ Telemetry.spanAndRootNames pid c.traceId c.parentId c.at
+    Issues.insertIssue
+      =<< Issues.createPerformanceIssue
+        pid
+        c.service
+        Issues.PerformanceData
           { kind
           , transaction = rootName
           , parentSpan = parentName
-          , query = EF.normalizeMessage c.query
+          , query
           , dbSystem = c.dbSystem
           , repeatCount = c.occurrences
           , durationImpactMs = fromIntegral c.durationNs / 1e6
           , traceId = c.traceId
           , observedAt = c.at
           }
-    Issues.insertIssue issue
 
 
 -- | One feedback issue per @user.feedback@ span or log in the last hour (plus a margin the
@@ -5743,15 +5748,14 @@ detectPerformanceIssues pid = do
 detectFeedback :: Projects.ProjectId -> ATBackgroundCtx ()
 detectFeedback pid = do
   now <- Time.currentTime
-  authCtx <- ask @Config.AuthContext
-  records <- withHasqlTimefusion authCtx.env.enableTimefusionReads $ Telemetry.selectNamedRecords pid "user.feedback" (addUTCTime (-3900) now) now
+  records <- tfRead $ Telemetry.selectNamedRecords pid "user.feedback" (addUTCTime (-3900) now) now
   forM_ records \r -> do
-    let attr k = Telemetry.atMapText k (unAesonTextMaybe r.attributes)
-        bodyText = unAesonTextMaybe r.body >>= \case AE.String t -> Just t; _ -> Nothing
-        tidM = mfilter (not . T.null) (r.context >>= (.trace_id))
+    let attr k = Telemetry.spanAttr k r
+        bodyText = (^? AL._String) =<< unAesonTextMaybe r.body
+        tidM = nonEmptyT (r.context >>= (.trace_id))
     whenJust (mfilter (not . T.null . T.strip) (attr "feedback.message" <|> bodyText)) \message ->
       whenNothingM_ (Issues.selectIssueByHash pid ("feedback:" <> r.id) Issues.AnyIssue) do
-        related <- join <$> forM tidM \tid -> withHasqlTimefusion authCtx.env.enableTimefusionReads (Telemetry.traceErrorHash pid tid r.timestamp)
+        related <- join <$> forM tidM \tid -> tfRead (Telemetry.traceErrorHash pid tid r.timestamp)
         Issues.insertIssue
           =<< Issues.createFeedbackIssue
             pid
@@ -5774,19 +5778,18 @@ detectFeedback pid = do
 detectFrontendIssues :: Projects.ProjectId -> ATBackgroundCtx ()
 detectFrontendIssues pid = do
   now <- Time.currentTime
-  authCtx <- ask @Config.AuthContext
-  clicks <- withHasqlTimefusion authCtx.env.enableTimefusionReads $ Telemetry.selectClickSpans pid (addUTCTime (-3600) now) now
-  let attrs c = unAesonTextMaybe c.attributes
-      attr k c = Telemetry.atMapText k (attrs c)
+  clicks <- tfRead $ Telemetry.selectClickSpans pid (addUTCTime (-3600) now) now
+  let attr = Telemetry.spanAttr
       element c = attr "monoscope.display.label" c <|> attr "target.id" c <|> attr "target.tag_name" c
       selector c = (\tag -> tag <> foldMap ("#" <>) (attr "target.id" c)) <$> attr "target.tag_name" c
       (deadSpans, clickSpans) = partition ((== Just "dead_click") . (.name)) clicks
-      keyed = [((sid, attr "page.url" c, el), (c.timestamp, c)) | c <- clickSpans, Just sid <- [attr "session.id" c], Just el <- [element c]]
-      byKey = Map.fromListWith (<>) [(k, [v]) | (k, v) <- keyed]
-      open kind el pageUrl n sample = do
-        issue <-
-          Issues.createFrontendIssue pid (Telemetry.spanServiceName sample)
-            $ Issues.FrontendData
+      keyed = [((sid, attr "page.url" c, el), c) | c <- clickSpans, Just sid <- [attr "session.id" c], Just el <- [element c]]
+      open kind el pageUrl n sample =
+        Issues.insertIssue
+          =<< Issues.createFrontendIssue
+            pid
+            (Telemetry.spanServiceName sample)
+            Issues.FrontendData
               { kind
               , element = el
               , selector = selector sample
@@ -5796,9 +5799,7 @@ detectFrontendIssues pid = do
               , traceId = fromMaybe "" (sample.context >>= (.trace_id))
               , observedAt = sample.timestamp
               }
-        Issues.insertIssue issue
-  forM_ (Telemetry.bursts 3 2 [(k, t) | (k, (t, _)) <- keyed]) \(k@(_, pageUrl, el), ts) ->
-    whenJust (find ((== head ts) . fst) =<< Map.lookup k byKey) \(_, sample) -> open Issues.FKRageClick el pageUrl (length ts) sample
+  forM_ (Telemetry.bursts (.timestamp) 3 2 keyed) \((_, pageUrl, el), cs) -> open Issues.FKRageClick el pageUrl (length cs) (head cs)
   -- Dead clicks: the SDK already decided nothing happened; two on one element in the
   -- hour (any sessions) is enough to not be a one-off.
   forM_ (Map.toList $ Map.fromListWith (<>) [((attr "page.url" c, el), c :| []) | c <- deadSpans, Just el <- [element c]]) \((pageUrl, el), cs) ->

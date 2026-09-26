@@ -94,6 +94,7 @@ module Models.Telemetry.Telemetry (
   atMapText,
   atMapInt,
   spanServiceName,
+  spanAttr,
   getProjectStatsBySpanType,
   getEndpointStats,
   getDBQueryStats,
@@ -233,6 +234,10 @@ atMapInt key maybeMap =
 
 spanServiceName :: OtelLogsAndSpans -> Maybe Text
 spanServiceName = resourceServiceName . unAesonTextMaybe . (.resource)
+
+
+spanAttr :: Text -> OtelLogsAndSpans -> Maybe Text
+spanAttr k = atMapText k . unAesonTextMaybe . (.attributes)
 
 
 -- | 'atMapText' already tries the flat @"service.name"@ key before descending.
@@ -810,11 +815,6 @@ getTraceRowsWith select spanIdOf parentIdOf useTf pid trId tme now limitM = Hasq
     else (,False) <$> resolveTraceOrphans pid trId resolveHop spanIdOf parentIdOf initial
 
 
--- | First/recent trace_id for a (project, method, url_path). Window kept tight (7d) since
--- endpoint-anomaly issues are minutes-to-hours old; tie-broken by id for stable nav between
--- "First" and "Recent" page loads. We UNION ALL two index-friendly subqueries (one per
--- url-path source) instead of OR'ing them in a single WHERE, so each side can hit its own
--- expression index and avoid a 7d seq scan on otel_logs_and_spans.
 -- | A database-span pattern worth a performance issue, as found in one trace.
 data PerfCandidate = PerfCandidate
   { traceId :: Text
@@ -834,27 +834,22 @@ data PerfCandidate = PerfCandidate
 -- trace, costing 50ms or more together. Slow candidates: single queries over 1s.
 -- Both read database spans (@db.query.text@) in @[from, to)@ and return the costliest.
 selectPerfCandidates :: DB es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es ([PerfCandidate], [PerfCandidate])
-selectPerfCandidates pid from to = do
-  nPlusOne <-
-    Hasql.interp
+selectPerfCandidates pid from to =
+  (,)
+    <$> Hasql.interp
       [HI.sql| SELECT context___trace_id, parent_id, ^{normalizedQuery},
                       count(*)::bigint, sum(duration)::bigint, min(timestamp), max(resource___service___name), max(attributes___db___system___name)
-               FROM otel_logs_and_spans
-               WHERE project_id = #{pid.toText} AND timestamp >= #{from} AND timestamp < #{to}
-                 AND attributes___db___query___text IS NOT NULL AND parent_id IS NOT NULL AND context___trace_id IS NOT NULL
+               ^{dbSpans} AND parent_id IS NOT NULL
                GROUP BY context___trace_id, parent_id, ^{normalizedQuery}
                HAVING count(*) >= 5 AND sum(duration) >= 50000000
                ORDER BY sum(duration) DESC LIMIT 50 |]
-  slow <-
-    Hasql.interp
+    <*> Hasql.interp
       [HI.sql| SELECT context___trace_id, parent_id, ^{normalizedQuery},
                       1::bigint, duration, timestamp, resource___service___name, attributes___db___system___name
-               FROM otel_logs_and_spans
-               WHERE project_id = #{pid.toText} AND timestamp >= #{from} AND timestamp < #{to}
-                 AND attributes___db___query___text IS NOT NULL AND duration > 1000000000 AND context___trace_id IS NOT NULL
+               ^{dbSpans} AND duration > 1000000000
                ORDER BY duration DESC LIMIT 50 |]
-  pure (nPlusOne, slow)
   where
+    dbSpans = [HI.sql| FROM otel_logs_and_spans WHERE project_id = #{pid.toText} AND timestamp >= #{from} AND timestamp < #{to} AND attributes___db___query___text IS NOT NULL AND context___trace_id IS NOT NULL |]
     -- Literals out, so `WHERE id = 1` and `WHERE id = 2` group as one query. Both engines
     -- (Postgres, DataFusion) accept this regexp_replace form.
     normalizedQuery = [HI.sql|regexp_replace(regexp_replace(COALESCE(attributes___db___query___summary, attributes___db___query___text), '''[^'']*''', '?', 'g'), '[0-9]+', '?', 'g')|]
@@ -900,20 +895,18 @@ traceErrorHash pid tid at =
 --
 -- >>> import Data.Time (UTCTime (..), fromGregorian)
 -- >>> let t s = UTCTime (fromGregorian 2026 1 1) s
--- >>> map (fmap length) $ bursts 3 2 [("save", t 0), ("save", t 0.5), ("save", t 1.2), ("save", t 9), ("nav", t 0), ("nav", t 5)]
+-- >>> map (fmap length) $ bursts (\t -> t) 3 2 [("save", t 0), ("save", t 0.5), ("save", t 1.2), ("save", t 9), ("nav", t 0), ("nav", t 5)]
 -- [("save",3)]
-bursts :: Ord k => Int -> NominalDiffTime -> [(k, UTCTime)] -> [(k, NonEmpty UTCTime)]
-bursts minCount window evs =
+bursts :: Ord k => (a -> UTCTime) -> Int -> NominalDiffTime -> [(k, a)] -> [(k, NonEmpty a)]
+bursts at minCount window evs =
   [ (k, best)
-  | (k, ts) <- Map.toList $ Map.fromListWith (<>) [(k, [t]) | (k, t) <- evs]
-  , Just best <- [listToMaybe $ sortOn (Down . length) [w | w <- windows (sort ts), length w >= minCount]]
+  | (k, xs) <- Map.toList $ Map.fromListWith (flip (<>)) [(k, [x]) | (k, x) <- evs]
+  , Just best <- [listToMaybe $ sortOn (Down . length) [w | w <- windows (sortOn at xs), length w >= minCount]]
   ]
   where
-    windows ts = [start :| takeWhile (\t -> diffUTCTime t start <= window) rest | (start : rest) <- tails ts]
+    windows xs = [s :| takeWhile (\x -> diffUTCTime (at x) (at s) <= window) rest | (s : rest) <- tails xs]
 
 
--- | The traced event carrying @hashKey@ nearest to @from@ in one direction, within a
--- day of it: the hash test is an unindexed array scan, so the window bounds its cost.
 -- | Which event to open from @from@: the nearest older or newer one, or the richest of the day before
 -- (Sentry's "Recommended": a replay session, then a user, then a URL, newest first).
 data EventStep = Older | Newer | Recommended
@@ -921,6 +914,8 @@ data EventStep = Older | Newer | Recommended
   deriving (FromHttpApiData) via WrappedEnumSC 'Nothing "" EventStep
 
 
+-- | The traced event carrying @hashKey@ nearest to @from@ in one direction, within a
+-- day of it: the hash test is an unindexed array scan, so the window bounds its cost.
 adjacentHashEvent :: DB es => Projects.ProjectId -> Text -> EventStep -> UTCTime -> Eff es (Maybe (Text, UTCTime))
 adjacentHashEvent pid hashKey step from =
   Hasql.interpOne
@@ -929,16 +924,23 @@ adjacentHashEvent pid hashKey step from =
                AND #{hashKey} = ANY(hashes) AND context___trace_id IS NOT NULL AND context___trace_id <> ''
              ORDER BY ^{order} LIMIT 1 |]
   where
-    (lo, hi) = if step == Newer then (from, addUTCTime 86400 from) else (addUTCTime (-86400) from, from)
-    order = case step of
+    (lo, hi, order) = case step of
+      Older -> (addUTCTime (-86400) from, from, nearest)
+      Newer -> (from, addUTCTime 86400 from, nearest)
       Recommended ->
-        [HI.sql| (CASE WHEN attributes___session___id <> '' THEN 4 ELSE 0 END) + (CASE WHEN attributes___user___id <> '' OR attributes___user___email <> '' THEN 2 ELSE 0 END)
+        ( addUTCTime (-86400) from
+        , from
+        , [HI.sql| (CASE WHEN attributes___session___id <> '' THEN 4 ELSE 0 END) + (CASE WHEN attributes___user___id <> '' OR attributes___user___email <> '' THEN 2 ELSE 0 END)
                  + (CASE WHEN attributes___url___full <> '' OR attributes___url___path <> '' THEN 1 ELSE 0 END) DESC, timestamp DESC |]
-      Older -> nearest
-      Newer -> nearest
+        )
     nearest = [HI.sql| abs(extract(epoch FROM timestamp - #{from}::timestamptz)) |]
 
 
+-- | First/recent trace_id for a (project, method, url_path). Window kept tight (7d) since
+-- endpoint-anomaly issues are minutes-to-hours old; tie-broken by id for stable nav between
+-- "First" and "Recent" page loads. We UNION ALL two index-friendly subqueries (one per
+-- url-path source) instead of OR'ing them in a single WHERE, so each side can hit its own
+-- expression index and avoid a 7d seq scan on otel_logs_and_spans.
 getEndpointTraceId :: DB es => Projects.ProjectId -> Text -> Text -> Bool -> UTCTime -> Eff es (Maybe (Text, UTCTime))
 getEndpointTraceId pid method urlPath isFirst now =
   Hasql.interpOne

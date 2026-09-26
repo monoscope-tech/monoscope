@@ -969,32 +969,33 @@ instance ToHtml UptimeChecks where
       page :: Html ()
       page = div_ [class_ "p-4 max-w-5xl space-y-4"] do
         p_ [class_ "text-sm text-textWeak"] "Monoscope requests each URL on its interval. Two failed checks in a row open a downtime issue; the next success resolves it."
-        form_ [class_ "surface-raised rounded-xl p-4 grid md:grid-cols-[1fr_2fr_auto_auto_auto] gap-2 items-end", hxPost_ ("/p/" <> pid.toText <> "/monitors/uptime"), hxTarget_ "#uptime-checks", hxSwap_ "outerHTML", [__|on htmx:afterRequest call me.reset()|]] do
-          label_ [class_ "flex flex-col gap-1 text-xs text-textWeak"] $ "Name" >> input_ [name_ "name", required_ "", placeholder_ "Checkout API", class_ "input input-sm"]
-          label_ [class_ "flex flex-col gap-1 text-xs text-textWeak"] $ "URL" >> input_ [type_ "url", name_ "url", required_ "", placeholder_ "https://shop.example.com/health", class_ "input input-sm"]
-          label_ [class_ "flex flex-col gap-1 text-xs text-textWeak"] do
-            "Every"
-            select_ [name_ "interval", class_ "select select-sm"] $ forM_ ([(60, "1 min"), (300, "5 min"), (900, "15 min"), (3600, "1 hour")] :: [(Int, Text)]) \(v, l) -> option_ [value_ (show v)] (toHtml l)
-          label_ [class_ "flex flex-col gap-1 text-xs text-textWeak"] $ "Expect" >> input_ [type_ "number", name_ "expectedStatus", value_ "200", min_ "100", max_ "599", class_ "input input-sm w-20"]
-          button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Add check"
         uptimeChecksList_ pid checks
   toHtmlRaw = toHtml
 
 
+-- | The add form and the list, swapped together: a successful add returns the form blank,
+-- a rejected one swaps nothing so the form keeps what was typed.
 uptimeChecksList_ :: Projects.ProjectId -> V.Vector PromCfg.PrometheusScrapeConfig -> Html ()
-uptimeChecksList_ pid checks = div_ [id_ "uptime-checks", class_ "surface-raised rounded-xl divide-y divide-strokeWeak"] do
-  when (V.null checks) $ emptyState_ def{size = ESCompact} "No uptime checks yet" "Add a URL above to start checking it."
-  forM_ checks \c -> do
-    let up = maybe False ("ok" `T.isPrefixOf`) c.lastStatus
-        base = "/p/" <> pid.toText <> "/monitors/uptime/" <> c.id.toText
-    div_ [class_ "flex items-center gap-3 px-4 py-3 text-sm"] do
-      span_ [class_ $ "w-2 h-2 rounded-full shrink-0 " <> if not c.enabled then "bg-fillWeak" else bool "bg-fillError-strong" "bg-fillSuccess-strong" up, term "data-tippy-content" $ bool "Paused" (bool "Down or not yet checked" "Up" up) c.enabled] ""
-      div_ [class_ "min-w-0 flex-1"] do
-        div_ [class_ "font-medium text-textStrong truncate"] $ toHtml c.name
-        div_ [class_ "text-xs text-textWeak truncate"] $ toHtml $ c.url <> " \x00b7 expects " <> show (fromMaybe 200 c.expectedStatus) <> " \x00b7 every " <> show (c.scrapeIntervalSeconds `div` 60) <> " min"
-      span_ [class_ "text-xs text-textWeak truncate max-w-64"] $ toHtml $ fromMaybe "Not checked yet" c.lastStatus
-      button_ [type_ "button", class_ "btn btn-xs btn-ghost", hxPost_ (base <> "/toggle"), hxTarget_ "#uptime-checks", hxSwap_ "outerHTML"] $ bool "Resume" "Pause" c.enabled
-      button_ [type_ "button", class_ "btn btn-xs btn-ghost text-textError", hxPost_ (base <> "/delete"), hxTarget_ "#uptime-checks", hxSwap_ "outerHTML", hxConfirm_ ("Delete the check for " <> c.url <> "?")] "Delete"
+uptimeChecksList_ pid checks = div_ [id_ "uptime-checks", class_ "space-y-4"] do
+  form_ [class_ "surface-raised rounded-xl p-4 grid md:grid-cols-[1fr_2fr_auto_auto_auto] gap-2 items-end", hxPost_ ("/p/" <> pid.toText <> "/monitors/uptime"), hxTarget_ "#uptime-checks", hxSwap_ "outerHTML"] do
+    formField_ FieldSm def{placeholder = "Checkout API"} "Name" "name" True Nothing
+    formField_ FieldSm def{inputType = "url", placeholder = "https://shop.example.com/health"} "URL" "url" True Nothing
+    formSelectField_ FieldSm "Every" "interval" False $ options_ Nothing [("60", "1 min"), ("300", "5 min"), ("900", "15 min"), ("3600", "1 hour")]
+    formField_ FieldSm def{inputType = "number", value = "200", extraAttrs = [min_ "100", max_ "599"]} "Expect" "expectedStatus" False Nothing
+    button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Add check"
+  div_ [class_ "surface-raised rounded-xl divide-y divide-strokeWeak"] do
+    when (V.null checks) $ emptyState_ def{size = ESCompact} "No uptime checks yet" "Add a URL above to start checking it."
+    forM_ checks \c -> do
+      let up = maybe False ("ok" `T.isPrefixOf`) c.lastStatus
+          base = "/p/" <> pid.toText <> "/monitors/uptime/" <> c.id.toText
+      div_ [class_ "flex items-center gap-3 px-4 py-3 text-sm"] do
+        span_ [class_ $ "w-2 h-2 rounded-full shrink-0 " <> if not c.enabled then "bg-fillWeak" else bool "bg-fillError-strong" "bg-fillSuccess-strong" up, term "data-tippy-content" $ bool "Paused" (bool "Down or not yet checked" "Up" up) c.enabled] ""
+        div_ [class_ "min-w-0 flex-1"] do
+          div_ [class_ "font-medium text-textStrong truncate"] $ toHtml c.name
+          div_ [class_ "text-xs text-textWeak truncate"] $ toHtml $ c.url <> " \x00b7 expects " <> show (fromMaybe 200 c.expectedStatus) <> " \x00b7 every " <> show (c.scrapeIntervalSeconds `div` 60) <> " min"
+        span_ [class_ "text-xs text-textWeak truncate max-w-64"] $ toHtml $ fromMaybe "Not checked yet" c.lastStatus
+        button_ [type_ "button", class_ "btn btn-xs btn-ghost", hxPost_ (base <> "/toggle"), hxTarget_ "#uptime-checks", hxSwap_ "outerHTML"] $ bool "Resume" "Pause" c.enabled
+        button_ [type_ "button", class_ "btn btn-xs btn-ghost text-textError", hxPost_ (base <> "/delete"), hxTarget_ "#uptime-checks", hxSwap_ "outerHTML", hxConfirm_ ("Delete the check for " <> c.url <> "?")] "Delete"
 
 
 data UptimeForm = UptimeForm {name :: Text, url :: Text, interval :: Maybe Int, expectedStatus :: Maybe Int}
@@ -1013,11 +1014,12 @@ uptimeCheckPostH :: Projects.ProjectId -> UptimeForm -> ATAuthCtx (RespHeaders (
 uptimeCheckPostH pid form = do
   _ <- Projects.sessionAndProject pid
   let url = T.strip form.url
+      name = T.strip form.name
   if
-    | T.null (T.strip form.name) -> addErrorToast "Name the check" Nothing
-    | not (safeScrapeUrl url) -> addErrorToast "URL must be a public http:// or https:// endpoint" Nothing
+    | T.null name -> rejected "Name the check"
+    | not (safeScrapeUrl url) -> rejected "URL must be a public http:// or https:// endpoint"
     | otherwise -> do
-        void $ PromCfg.insertUptimeCheck pid (T.strip form.name) url (max 60 $ fromMaybe 60 form.interval) (clamp (100, 599) $ fromMaybe 200 form.expectedStatus)
+        void $ PromCfg.insertConfig pid PromCfg.CKUptime name url (max 60 $ fromMaybe 60 form.interval) Nothing (AE.object []) (Just $ clamp (100, 599) $ fromMaybe 200 form.expectedStatus)
         addSuccessToast "Uptime check added" Nothing
   uptimeListResp pid
 
@@ -1051,30 +1053,27 @@ instance ToHtml CronMonitors where
           " and "
           code_ "monitor.status"
           " (ok or error). A missed window or an error run opens a cron issue."
-        form_ [class_ "surface-raised rounded-xl p-4 grid md:grid-cols-[1fr_1fr_auto_auto_auto] gap-2 items-end", hxPost_ ("/p/" <> pid.toText <> "/monitors/cron"), hxTarget_ "#cron-monitors", hxSwap_ "outerHTML", [__|on htmx:afterRequest call me.reset()|]] do
-          label_ [class_ "flex flex-col gap-1 text-xs text-textWeak"] $ "Slug" >> input_ [name_ "slug", required_ "", pattern_ "[a-z0-9-_.]+", placeholder_ "nightly-billing", class_ "input input-sm"]
-          label_ [class_ "flex flex-col gap-1 text-xs text-textWeak"] $ "Name" >> input_ [name_ "name", required_ "", placeholder_ "Nightly billing run", class_ "input input-sm"]
-          label_ [class_ "flex flex-col gap-1 text-xs text-textWeak"] do
-            "Runs every"
-            select_ [name_ "interval", class_ "select select-sm"] $ forM_ ([(300, "5 min"), (900, "15 min"), (3600, "1 hour"), (21600, "6 hours"), (86400, "1 day"), (604800, "1 week")] :: [(Int, Text)]) \(v, l) -> option_ [value_ (show v)] (toHtml l)
-          label_ [class_ "flex flex-col gap-1 text-xs text-textWeak"] do
-            "Grace"
-            select_ [name_ "grace", class_ "select select-sm"] $ forM_ ([(300, "5 min"), (900, "15 min"), (3600, "1 hour")] :: [(Int, Text)]) \(v, l) -> option_ [value_ (show v)] (toHtml l)
-          button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Add monitor"
         cronMonitorsList_ pid mons
   toHtmlRaw = toHtml
 
 
 cronMonitorsList_ :: Projects.ProjectId -> [Monitors.CronMonitor] -> Html ()
-cronMonitorsList_ pid mons = div_ [id_ "cron-monitors", class_ "surface-raised rounded-xl divide-y divide-strokeWeak"] do
-  when (null mons) $ emptyState_ def{size = ESCompact} "No cron monitors yet" "Add one above, then send a check-in from the job."
-  forM_ mons \m -> div_ [class_ "flex items-center gap-3 px-4 py-3 text-sm"] do
-    span_ [class_ $ "w-2 h-2 rounded-full shrink-0 " <> case m.lastStatus of { Just "ok" -> "bg-fillSuccess-strong"; Just _ -> "bg-fillError-strong"; Nothing -> "bg-fillWeak" }] ""
-    div_ [class_ "min-w-0 flex-1"] do
-      div_ [class_ "font-medium text-textStrong truncate"] $ toHtml m.name
-      div_ [class_ "text-xs text-textWeak truncate font-mono"] $ toHtml $ m.slug <> " \x00b7 every " <> show (m.intervalSecs `div` 60) <> " min"
-    span_ [class_ "text-xs text-textWeak"] $ toHtml $ maybe "No check-in yet" (("Last: " <>) . toText . formatTime defaultTimeLocale "%F %R UTC") m.lastCheckinAt
-    button_ [type_ "button", class_ "btn btn-xs btn-ghost text-textError", hxPost_ ("/p/" <> pid.toText <> "/monitors/cron/" <> UUID.toText m.id <> "/delete"), hxTarget_ "#cron-monitors", hxSwap_ "outerHTML", hxConfirm_ ("Delete the monitor " <> m.slug <> "?")] "Delete"
+cronMonitorsList_ pid mons = div_ [id_ "cron-monitors", class_ "space-y-4"] do
+  form_ [class_ "surface-raised rounded-xl p-4 grid md:grid-cols-[1fr_1fr_auto_auto_auto] gap-2 items-end", hxPost_ ("/p/" <> pid.toText <> "/monitors/cron"), hxTarget_ "#cron-monitors", hxSwap_ "outerHTML"] do
+    formField_ FieldSm def{placeholder = "nightly-billing", extraAttrs = [pattern_ "[a-z0-9-_.]+"]} "Slug" "slug" True Nothing
+    formField_ FieldSm def{placeholder = "Nightly billing run"} "Name" "name" True Nothing
+    formSelectField_ FieldSm "Runs every" "interval" False $ options_ Nothing [("300", "5 min"), ("900", "15 min"), ("3600", "1 hour"), ("21600", "6 hours"), ("86400", "1 day"), ("604800", "1 week")]
+    formSelectField_ FieldSm "Grace" "grace" False $ options_ Nothing [("300", "5 min"), ("900", "15 min"), ("3600", "1 hour")]
+    button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Add monitor"
+  div_ [class_ "surface-raised rounded-xl divide-y divide-strokeWeak"] do
+    when (null mons) $ emptyState_ def{size = ESCompact} "No cron monitors yet" "Add one above, then send a check-in from the job."
+    forM_ mons \m -> div_ [class_ "flex items-center gap-3 px-4 py-3 text-sm"] do
+      span_ [class_ $ "w-2 h-2 rounded-full shrink-0 " <> case m.lastStatus of { Just "ok" -> "bg-fillSuccess-strong"; Just _ -> "bg-fillError-strong"; Nothing -> "bg-fillWeak" }] ""
+      div_ [class_ "min-w-0 flex-1"] do
+        div_ [class_ "font-medium text-textStrong truncate"] $ toHtml m.name
+        div_ [class_ "text-xs text-textWeak truncate font-mono"] $ toHtml $ m.slug <> " \x00b7 every " <> show (m.intervalSecs `div` 60) <> " min"
+      span_ [class_ "text-xs text-textWeak"] $ toHtml $ maybe "No check-in yet" (("Last: " <>) . toText . formatTime defaultTimeLocale "%F %R UTC") m.lastCheckinAt
+      button_ [type_ "button", class_ "btn btn-xs btn-ghost text-textError", hxPost_ ("/p/" <> pid.toText <> "/monitors/cron/" <> UUID.toText m.id <> "/delete"), hxTarget_ "#cron-monitors", hxSwap_ "outerHTML", hxConfirm_ ("Delete the monitor " <> m.slug <> "?")] "Delete"
 
 
 data CronForm = CronForm {slug :: Text, name :: Text, interval :: Int, grace :: Int}
@@ -1093,17 +1092,24 @@ cronMonitorPostH :: Projects.ProjectId -> CronForm -> ATAuthCtx (RespHeaders (Ht
 cronMonitorPostH pid form = do
   _ <- Projects.sessionAndProject pid
   let slug = T.toLower (T.strip form.slug)
-  if T.null slug || T.null (T.strip form.name)
-    then addErrorToast "Slug and name are required" Nothing
+      name = T.strip form.name
+  if T.null slug || T.null name
+    then rejected "Slug and name are required"
     else
-      (Monitors.insertCronMonitor pid slug (T.strip form.name) (max 60 form.interval) (max 60 form.grace) =<< Time.currentTime) >>= \case
-        0 -> addErrorToast ("A monitor with slug " <> slug <> " already exists") Nothing
+      (Monitors.insertCronMonitor pid slug name (max 60 form.interval) (max 60 form.grace) =<< Time.currentTime) >>= \case
+        0 -> rejected ("A monitor with slug " <> slug <> " already exists")
         _ -> addSuccessToast "Cron monitor added" Nothing
-  addRespHeaders . cronMonitorsList_ pid =<< Monitors.cronMonitorsByProject pid
+  cronListResp pid
 
 
 cronMonitorDeleteH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (Html ()))
-cronMonitorDeleteH pid mid = do
-  _ <- Projects.sessionAndProject pid
-  void $ Monitors.deleteCronMonitor pid mid
-  addRespHeaders . cronMonitorsList_ pid =<< Monitors.cronMonitorsByProject pid
+cronMonitorDeleteH pid mid = Projects.sessionAndProject pid >> Monitors.deleteCronMonitor pid mid >> cronListResp pid
+
+
+-- | Toast a rejected submission and swap nothing, so the form keeps what was typed.
+rejected :: Text -> ATAuthCtx ()
+rejected msg = addErrorToast msg Nothing >> addReswap "none"
+
+
+cronListResp :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
+cronListResp pid = addRespHeaders . cronMonitorsList_ pid =<< Monitors.cronMonitorsByProject pid

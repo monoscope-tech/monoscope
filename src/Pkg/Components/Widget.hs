@@ -211,7 +211,6 @@ data WidgetMarker = WidgetMarker {label :: Text, at :: Text}
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake WidgetMarker
-  deriving (FromHttpApiData) via JSONHttpApiData WidgetMarker
 
 
 -- when processing widgets we'll do them async, so eager queries are loaded upfront
@@ -1237,7 +1236,7 @@ renderChart widget = do
                 timeToJS = encodeText widget.timeTo
                 highlightFromJS = encodeText widget.highlightFrom
                 highlightToJS = encodeText widget.highlightTo
-                markersJS = decodeUtf8 @Text (AE.encode widget.markers)
+                markersJS = encodeText widget.markers
                 dashboardIdJS = encodeText widget._dashboardId
             script_
               [type_ "text/javascript", data_ "chart-init" chartId]

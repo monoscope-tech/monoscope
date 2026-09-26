@@ -159,9 +159,8 @@ buildTitlePrompt issue =
             Service: {Issues.serviceLabel d.serviceName}|]
       Issues.Performance ->
         withIssueData @Issues.PerformanceData issue ("Generate a concise title for this performance issue. Title: " <> issue.title) \d ->
-          let kind = display d.kind
-              impact = show @Text (round d.durationImpactMs :: Int)
-           in [fmtTrim|Generate a concise title for this {kind} performance issue.
+          let impact = show @Text (round d.durationImpactMs :: Int)
+           in [fmtTrim|Generate a concise title for this {display d.kind} performance issue.
             Query: {T.take 200 d.query}
             Transaction: {fromMaybe "unknown" d.transaction}
             Repeats: {d.repeatCount}
@@ -169,8 +168,7 @@ buildTitlePrompt issue =
             Service: {Issues.serviceLabel issue.service}|]
       Issues.Frontend ->
         withIssueData @Issues.FrontendData issue ("Generate a concise title for this frontend issue. Title: " <> issue.title) \d ->
-          let kind = display d.kind
-           in [fmtTrim|Generate a concise title for this {kind} on a web page.
+          [fmtTrim|Generate a concise title for this {display d.kind} on a web page.
             Element: {d.element}
             Page: {fromMaybe "unknown" d.pageUrl}
             Clicks in the burst: {d.clickCount}|]
@@ -182,8 +180,7 @@ buildTitlePrompt issue =
             Failure: {d.reason}|]
       Issues.Cron ->
         withIssueData @Issues.CronData issue ("Generate a concise title for this cron monitor issue. Title: " <> issue.title) \d ->
-          let failure = display d.failure
-           in [fmtTrim|Generate a concise title for a scheduled job that {failure}.
+          [fmtTrim|Generate a concise title for a scheduled job that {display d.failure}.
             Job: {d.name} ({d.slug})|]
       Issues.Feedback ->
         withIssueData @Issues.FeedbackData issue ("Generate a concise title for this user feedback. Title: " <> issue.title) \d ->
@@ -277,9 +274,8 @@ buildDescriptionPrompt issue =
             Log level: {fromMaybe "unknown" d.logLevel}|]
       Issues.Performance ->
         withIssueData @Issues.PerformanceData issue ("Describe this performance issue. Title: " <> issue.title) \d ->
-          let kind = display d.kind
-              impact = show @Text (round d.durationImpactMs :: Int)
-           in [fmtTrim|Describe this {kind} performance issue, why it is slow, and how to fix it.
+          let impact = show @Text (round d.durationImpactMs :: Int)
+           in [fmtTrim|Describe this {display d.kind} performance issue, why it is slow, and how to fix it.
             Query: {d.query}
             Database: {fromMaybe "unknown" d.dbSystem}
             Transaction: {fromMaybe "unknown" d.transaction}
@@ -289,8 +285,7 @@ buildDescriptionPrompt issue =
             Service: {Issues.serviceLabel issue.service}|]
       Issues.Frontend ->
         withIssueData @Issues.FrontendData issue ("Describe this frontend issue. Title: " <> issue.title) \d ->
-          let kind = display d.kind
-           in [fmtTrim|Describe this {kind}: what the user was likely trying to do and why the page did not respond.
+          [fmtTrim|Describe this {display d.kind}: what the user was likely trying to do and why the page did not respond.
             Element: {d.element}
             Selector: {fromMaybe "unknown" d.selector}
             Page: {fromMaybe "unknown" d.pageUrl}
@@ -305,12 +300,10 @@ buildDescriptionPrompt issue =
             Response time: {d.durationMs} ms|]
       Issues.Cron ->
         withIssueData @Issues.CronData issue ("Describe this cron monitor issue. Title: " <> issue.title) \d ->
-          let failure = display d.failure
-              expected = show @Text d.expectedBy
-              lastRun = maybe "never" (show @Text) d.lastCheckinAt
-           in [fmtTrim|Describe this scheduled job issue ({failure}) and what to check first.
+          let lastRun = maybe "never" (show @Text) d.lastCheckinAt
+           in [fmtTrim|Describe this scheduled job issue ({display d.failure}) and what to check first.
             Job: {d.name} ({d.slug})
-            Expected a check-in by: {expected}
+            Expected a check-in by: {show @Text d.expectedBy}
             Last check-in: {lastRun}|]
       Issues.Feedback ->
         withIssueData @Issues.FeedbackData issue ("Summarise this user feedback. Title: " <> issue.title) \d ->

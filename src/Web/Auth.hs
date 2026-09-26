@@ -80,7 +80,7 @@ import Servant.Server.Experimental.Auth (AuthHandler, mkAuthHandler)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Logging
 import System.Types (ATAuthCtx, ATBaseCtx, DB, RespHeaders, addRespHeaders)
-import Utils (escapedQueryPartial, hostPath, nonEmptyT)
+import Utils (escapedQueryPartial, hostPath, nonEmptyT, toUriStr)
 import Web.Cookie (Cookies, SetCookie, parseCookies)
 import Web.I18n qualified as I18n
 import Web.Wire (DeviceCodeResponse (..), DeviceTokenResponse (..), ProjectInfo (..))
@@ -635,13 +635,16 @@ deviceTokenH mCode = do
               pure $ DeviceTokenResponse (Just $ UUID.toText sessUuid) projectInfos Nothing
 
 
-deviceApproveH :: Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
-deviceApproveH codeM actionM = do
+-- | GET shows the confirmation; only the POST approves. A GET that approved let any
+-- link bind an attacker's CLI device code to whoever clicked it (the Lax session
+-- cookie rides top-level GETs, not cross-site POSTs).
+deviceApproveH :: Bool -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+deviceApproveH approve codeM = do
   sess <- Projects.getSession
   result <- runExceptT $ do
     userCode <- hoistEither $ note "Invalid request: no code provided" codeM
-    case actionM of
-      Just "approve" -> do
+    if approve
+      then do
         persistentSessId <- lift Projects.newPersistentSessionId
         lift $ Projects.insertSession persistentSessId sess.user.id (Projects.SessionData Map.empty)
         let sessUuid = persistentSessId.getPersistentSessionId
@@ -652,7 +655,7 @@ deviceApproveH codeM actionM = do
                 WHERE user_code = #{userCode} AND session_id IS NULL AND expires_at > now() |]
         when (updated == 0) $ hoistEither $ Left "Invalid, expired, or already used code."
         pure True
-      _ -> pure False
+      else pure False
   addRespHeaders $ case result of
     Left err -> approvePageHtml False (Just err)
     Right approved -> approvePageHtml approved Nothing
@@ -670,7 +673,5 @@ deviceApproveH codeM actionM = do
           Nothing -> do
             whenJust codeM \code -> do
               p_ [style_ "font-size:1.2rem"] $ "Confirm CLI login with code: " <> toHtml code
-              form_ [method_ "GET", action_ "/device"] $ do
-                input_ [type_ "hidden", name_ "code", value_ code]
-                input_ [type_ "hidden", name_ "action", value_ "approve"]
+              form_ [method_ "POST", action_ $ "/device?code=" <> toUriStr code] $ do
                 button_ [type_ "submit", style_ "padding:12px 32px;font-size:1rem;cursor:pointer;background:#2563eb;color:white;border:none;border-radius:6px"] "Approve"

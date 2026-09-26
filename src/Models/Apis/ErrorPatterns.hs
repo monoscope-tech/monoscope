@@ -267,15 +267,13 @@ enrichGeo db e
 -- >>> geoFields (m [("asn", s "AS1")])
 -- (Nothing,Nothing,Nothing)
 geoFields :: GeoIP2.GeoField -> (Maybe Text, Maybe Text, Maybe Text)
-geoFields f = (at ["country", "iso_code"] <|> at ["country_code"], subdivision <|> at ["region"], at ["city", "names", "en"] <|> at ["city"])
+geoFields f = (at ["country", "iso_code"] <|> at ["country_code"], at ["subdivisions", "iso_code"] <|> at ["subdivisions", "names", "en"] <|> at ["region"], at ["city", "names", "en"] <|> at ["city"])
   where
     at = (`walk` f)
     walk [] (GeoIP2.DataString t) = Just t
     walk (k : ks) (GeoIP2.DataMap m) = walk ks =<< Map.lookup (GeoIP2.DataString k) m
+    walk ks (GeoIP2.DataArray (x : _)) = walk ks x
     walk _ _ = Nothing
-    subdivision = case f of
-      GeoIP2.DataMap m | Just (GeoIP2.DataArray (sub1 : _)) <- Map.lookup (GeoIP2.DataString "subdivisions") m -> walk ["iso_code"] sub1 <|> walk ["names", "en"] sub1
-      _ -> Nothing
 
 
 -- | Get error patterns for a project with optional state filter (excludes merged patterns)
@@ -714,7 +712,7 @@ upsertErrorTagCounts pid errs
                  ON CONFLICT (project_id, error_id, tag_key, tag_value) DO UPDATE SET count = apis.error_tag_counts.count + EXCLUDED.count |]
   where
     counts = HM.toList $ HM.fromListWith (+) [((e.hash, k, v), 1 :: Int) | e <- V.toList errs, (k, v) <- errorTags e]
-    (hashes, keys, vals, ns) = (V.fromList [h | ((h, _, _), _) <- counts], V.fromList [k | ((_, k, _), _) <- counts], V.fromList [v | ((_, _, v), _) <- counts], V.fromList [n | (_, n) <- counts])
+    (hashes, keys, vals, ns) = V.unzip4 $ V.fromList [(h, k, v, n) | ((h, k, v), n) <- counts]
 
 
 -- | An error's tag distribution: per key, values by count, most common first.

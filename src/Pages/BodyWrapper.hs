@@ -724,7 +724,7 @@ projectsDropDown currProject projects = do
         actionLink [href_ "/"] "grid" "All projects"
         actionLink [href_ "/p/new"] "plus" "New project"
         when (currProject.paymentPlan `elem` ["UsageBased", "GraduatedPricing"])
-          $ actionLink [hxGet_ [text| /p/$pidTxt/manage_subscription |]] "dollar-sign" "Manage billing"
+          $ actionLink [term "hx-preload" "false", hxGet_ [text| /p/$pidTxt/manage_subscription |]] "dollar-sign" "Manage billing"
 
 
 sideNav :: Projects.Session -> Projects.Project -> BWConfig -> Html ()
