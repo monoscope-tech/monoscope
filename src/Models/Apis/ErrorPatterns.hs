@@ -254,12 +254,14 @@ enrichGeo db e
 
 
 -- | (country, region, city) from one MaxMind-format record. MaxMind databases nest
--- (@country.iso_code@, @subdivisions[0].iso_code@, @city.names.en@); IPinfo's are flat
--- (@country_code@, @region@, @city@) — reading both lets a city database drop in later.
+-- (@country.iso_code@, @subdivisions[0].iso_code@, @city.names.en@; DB-IP names the subdivision
+-- without an iso_code); IPinfo's are flat (@country_code@, @region@, @city@).
 --
 -- >>> let m = GeoIP2.DataMap . Map.fromList . map (\(k, v) -> (GeoIP2.DataString k, v)); s = GeoIP2.DataString
 -- >>> geoFields (m [("country", m [("iso_code", s "US")]), ("city", m [("names", m [("en", s "Santa Clara")])]), ("subdivisions", GeoIP2.DataArray [m [("iso_code", s "CA")]])])
 -- (Just "US",Just "CA",Just "Santa Clara")
+-- >>> geoFields (m [("country", m [("iso_code", s "US")]), ("subdivisions", GeoIP2.DataArray [m [("names", m [("en", s "California")])]])])
+-- (Just "US",Just "California",Nothing)
 -- >>> geoFields (m [("country_code", s "NG"), ("region", s "Lagos"), ("city", s "Ikeja")])
 -- (Just "NG",Just "Lagos",Just "Ikeja")
 -- >>> geoFields (m [("asn", s "AS1")])
@@ -272,7 +274,7 @@ geoFields f = (at ["country", "iso_code"] <|> at ["country_code"], subdivision <
     walk (k : ks) (GeoIP2.DataMap m) = walk ks =<< Map.lookup (GeoIP2.DataString k) m
     walk _ _ = Nothing
     subdivision = case f of
-      GeoIP2.DataMap m | Just (GeoIP2.DataArray (sub1 : _)) <- Map.lookup (GeoIP2.DataString "subdivisions") m -> walk ["iso_code"] sub1
+      GeoIP2.DataMap m | Just (GeoIP2.DataArray (sub1 : _)) <- Map.lookup (GeoIP2.DataString "subdivisions") m -> walk ["iso_code"] sub1 <|> walk ["names", "en"] sub1
       _ -> Nothing
 
 

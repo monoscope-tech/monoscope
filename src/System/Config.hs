@@ -179,7 +179,7 @@ data EnvConfig = EnvConfig
   -- OOM-killed it before, so it gets a staged rollout rather than shipping on.
   , enableTimefusionWrites :: Bool
   , geoipDbPath :: Text
-  -- ^ A MaxMind-format @.mmdb@ (IPinfo Lite/Core, MaxMind GeoLite2) used to place errors'
+  -- ^ A MaxMind-format @.mmdb@ (DB-IP City Lite in prod, IPinfo, MaxMind GeoLite2) used to place errors'
   -- @client.address@ when the SDK sent no @geo.*@. Empty disables the lookup.
   , enablePostgresTelemetryWrites :: Bool
   -- ^ Dual-write to the legacy Postgres @otel_logs_and_spans@ store. Defaults
@@ -606,7 +606,11 @@ configToEnv config = do
   -- during partial migration falls back to 'flattenedOtelAttributesBuiltin'
   -- so the server still boots.
   liftIO $ introspectAndCacheOtelColumns pool
-  geoDb <- liftIO $ traverse (GeoIP2.openGeoDB . toString) (mfilter (not . T.null) (Just config.geoipDbPath))
+  -- A missing or corrupt GeoIP file must not stop the server booting; errors just go unplaced.
+  geoDb <- liftIO $ fmap join $ forM (mfilter (not . T.null) (Just config.geoipDbPath)) \path ->
+    Safe.try (GeoIP2.openGeoDB (toString path)) >>= \case
+      Right db -> pure (Just db)
+      Left (e :: SomeException) -> Nothing <$ blueMessage ("GeoIP disabled, cannot open " <> path <> ": " <> show e)
   pure
     AuthContext
       { pool
