@@ -2,15 +2,20 @@ module Pages.PrometheusSpec (spec) where
 
 import BackgroundJobs qualified
 import Data.Aeson qualified as AE
+import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
+import Data.Time (addUTCTime)
+import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..))
+import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Lucid (renderText)
 import Models.Apis.Issues qualified as Issues
+import Models.Apis.Monitors qualified as MonitorsM
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
 import Pages.Monitors qualified as Monitors
 import Pages.Settings (PrometheusForm (..), PrometheusMut (..), prometheusPostH)
@@ -73,6 +78,36 @@ spec = around withTestResources do
       runTestBg frozenTime tr $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.PrometheusScrapeOne c.id)
       Just probed <- runQueryEffect tr (PromCfg.getConfig c.id)
       (probed.consecutiveFailures, fmap ("request failed" `T.isPrefixOf`) probed.lastStatus) `shouldBe` (1, Just True)
+
+    it "cron monitors: a check-in keeps it healthy, a missed window and an error run open issues, a later check-in resolves" \tr -> do
+      _ <- testServant tr $ Monitors.cronMonitorPostH testPid (Monitors.CronForm "nightly-billing" "Nightly billing" 3600 300)
+      [m] <- runQueryEffect tr (MonitorsM.cronMonitorsByProject testPid)
+      let at dt = addUTCTime dt frozenTime
+          checkin status dt =
+            withResource tr.trPool \conn ->
+              void
+                $ PGS.execute
+                  conn
+                  [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, kind, name, summary, attributes)
+                        VALUES (gen_random_uuid(), ?, ?, ?, 'internal', 'cron.checkin', ARRAY['cron.checkin'], jsonb_build_object('monitor', jsonb_build_object('slug', 'nightly-billing', 'status', ?::text))) |]
+                  (testPid, at dt, at dt, status :: Text)
+          evaluate dt = do
+            fresh <- runQueryEffect tr (MonitorsM.cronMonitorsByProject testPid) >>= maybe (fail "monitor gone") pure . listToMaybe
+            runTestBg (at dt) tr $ BackgroundJobs.evaluateCronMonitor (at dt) fresh
+          issue = runQueryEffect tr (Issues.selectIssueByHash testPid (Issues.cronTargetHash (UUID.toText m.id)) Issues.AnyIssue)
+      checkin "ok" 0
+      evaluate 60
+      (isNothing <$> issue) `shouldReturn` True
+      evaluate (3600 + 300 + 120) -- past interval + grace with no newer check-in
+      missed <- issue >>= maybe (fail "no missed issue") pure
+      (missed.title, isNothing missed.archivedAt) `shouldBe` ("Cron missed: Nightly billing", True)
+      checkin "ok" 4200
+      evaluate 4260
+      (fmap (isJust . (.archivedAt)) <$> issue) `shouldReturn` Just True
+      checkin "error" 8000
+      evaluate 8060
+      failed <- runQueryEffect tr (Issues.selectIssueByHash testPid (Issues.cronTargetHash (UUID.toText m.id)) (Issues.OpenOfType Issues.Cron)) >>= maybe (fail "no failed issue") pure
+      failed.title `shouldBe` "Cron failed: Nightly billing"
 
     it "claims each due target once and leases it (multi-node safe), skipping disabled" \tr -> do
       void $ runQueryEffect tr $ PromCfg.insertConfig testPid "svc-a" "http://a/metrics" 3600 Nothing (AE.object [])

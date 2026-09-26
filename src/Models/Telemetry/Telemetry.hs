@@ -13,6 +13,7 @@ module Models.Telemetry.Telemetry (
   selectPerfCandidates,
   spanAndRootNames,
   selectClickSpans,
+  selectCheckins,
   bursts,
   isErrorRecord,
   getProjectStatsForReport,
@@ -875,6 +876,11 @@ spanAndRootNames pid tid spanIdM at = do
 selectClickSpans :: DB es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [OtelLogsAndSpans]
 selectClickSpans pid from to =
   Hasql.interp $ selectOtelSpans pid.toText from to [HI.sql| AND name IN ('click', 'dead_click') AND attributes___session___id IS NOT NULL ORDER BY timestamp LIMIT 20000 |]
+
+
+-- | Cron check-ins: spans or logs named @cron.checkin@ in @[from, to)@.
+selectCheckins :: DB es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [OtelLogsAndSpans]
+selectCheckins pid from to = Hasql.interp $ selectOtelSpans pid.toText from to [HI.sql| AND name = 'cron.checkin' ORDER BY timestamp LIMIT 5000 |]
 
 
 -- | The largest burst per key: at least @minCount@ events within @window@ seconds.

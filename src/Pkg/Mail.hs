@@ -804,6 +804,7 @@ sampleAlert = \case
   Performance -> const $ MonitorsAlert "🧪 TEST: N+1 Query" "https://example.com/test" Nothing
   Frontend -> const $ MonitorsAlert "🧪 TEST: Rage Click" "https://example.com/test" Nothing
   Uptime -> const $ MonitorsAlert "🧪 TEST: Downtime detected" "https://example.com/test" Nothing
+  Cron -> const $ MonitorsAlert "🧪 TEST: Cron missed" "https://example.com/test" Nothing
 
 
 sampleRuntimeAlert :: RuntimeAlertType -> Text -> NotificationAlerts

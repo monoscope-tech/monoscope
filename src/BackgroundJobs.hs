@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, enqueueAIRoutine, runAIRoutineWith, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, detectPerformanceIssues, detectFrontendIssues, applyUptimeResult, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, endpointAutoAckLockName, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), errorTrendChartUrl) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, enqueueAIRoutine, runAIRoutineWith, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, detectPerformanceIssues, detectFrontendIssues, applyUptimeResult, evaluateCronMonitor, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, endpointAutoAckLockName, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), errorTrendChartUrl) where
 
 import BackgroundJobs.Types (BgJobs (..))
 import BackgroundJobs.Types qualified as Jobs
@@ -294,7 +294,7 @@ processBackgroundJob authCtx bgJob =
     GitSyncPushDashboard pid dashboardId -> gitSyncPushDashboard pid (UUIDId dashboardId)
     GitSyncPushAllDashboards pid -> gitSyncPushAllDashboards pid
     QueryMonitorsCheck -> checkTriggeredQueryMonitors
-    PrometheusScrapeTick _ -> dispatchPrometheusScrapes authCtx
+    PrometheusScrapeTick _ -> dispatchPrometheusScrapes authCtx >> evaluateCronMonitors
     PrometheusScrapeOne cid -> scrapePrometheusTarget cid
     ServiceMapRollupTick t -> dispatchServiceMapRollups authCtx t
     ServiceMapRollup pid bucket -> rollUpServiceMap authCtx pid bucket
@@ -4999,6 +4999,38 @@ scrapePrometheusTarget cid = whenJustM (PromCfg.getConfig cid) \cfg -> when cfg.
     t1 <- Time.currentTime
     applyUptimeResult cfg t1 (round (realToFrac (diffUTCTime t1 t0) * 1000 :: Double)) (bimap (toText . displayException) (^. Wreq.responseStatus . Wreq.statusCode) res)
   PromCfg.CKPrometheus -> scrapeMetrics cfg
+
+
+-- | Per-minute: evaluate the cron monitors whose lease has lapsed.
+evaluateCronMonitors :: ATBackgroundCtx ()
+evaluateCronMonitors = do
+  now <- Time.currentTime
+  Monitors.claimDueCronMonitors 200 >>= traverse_ (evaluateCronMonitor now)
+
+
+-- | Act on the check-ins newer than the last one recorded: a newer @ok@ records it and
+-- resolves an open issue; a newer @error@ opens a failed issue; none, past
+-- @interval + grace@, opens a missed issue. Re-evaluating an open miss folds into it.
+evaluateCronMonitor :: UTCTime -> Monitors.CronMonitor -> ATBackgroundCtx ()
+evaluateCronMonitor now m = do
+  authCtx <- ask @Config.AuthContext
+  let since = max (addUTCTime (-86400) now) (fromMaybe m.createdAt m.lastCheckinAt)
+  spans <- withHasqlTimefusion authCtx.env.enableTimefusionReads $ Telemetry.selectCheckins m.projectId since now
+  let attr k c = Telemetry.atMapText k (unAesonTextMaybe c.attributes)
+      newer = sortWith fst [(c.timestamp, fromMaybe "ok" (attr "monitor.status" c)) | c <- spans, attr "monitor.slug" c == Just m.slug, maybe True (c.timestamp >) m.lastCheckinAt]
+      lastSeen = (fst <$> viaNonEmpty last newer) <|> m.lastCheckinAt
+      expectedBy = addUTCTime (fromIntegral $ m.intervalSecs + m.graceSecs) (fromMaybe m.createdAt lastSeen)
+      open failure =
+        Issues.insertIssue
+          =<< Issues.createCronIssue m.projectId Issues.CronData{monitorId = UUID.toText m.id, slug = m.slug, name = m.name, failure, expectedBy, lastCheckinAt = lastSeen}
+  whenJust (viaNonEmpty last newer) \(at, status) -> void $ Monitors.recordCronCheckin m.id at status
+  case viaNonEmpty last newer of
+    Just (_, "ok") ->
+      Issues.selectIssueByHash m.projectId (Issues.cronTargetHash (UUID.toText m.id)) (Issues.OpenOfType Issues.Cron) >>= traverse_ \i -> do
+        void $ Issues.setArchiveState m.projectId [i.id] (Just (now, Issues.ArchiveIndefinite))
+        Issues.logIssueActivity i.id Issues.IEResolved Nothing (Just $ AE.object ["recovered_at" AE..= now])
+    Just _ -> open Issues.CFFailed
+    Nothing -> when (now > expectedBy) $ open Issues.CFMissed
 
 
 -- | Record an uptime probe. Two failures in a row confirm downtime and open (or fold

@@ -19,6 +19,11 @@ module Pages.Monitors (
   uptimeCheckPostH,
   uptimeCheckToggleH,
   uptimeCheckDeleteH,
+  CronMonitors (..),
+  CronForm (..),
+  cronMonitorsGetH,
+  cronMonitorPostH,
+  cronMonitorDeleteH,
   unifiedMonitorOverviewH,
   teamAlertsGetH,
   alertBulkActionH,
@@ -38,7 +43,7 @@ import Data.List (partition)
 import Data.Map.Strict qualified as Map
 import Data.Ord (clamp)
 import Data.Text qualified as T
-import Data.Time (UTCTime)
+import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
@@ -512,6 +517,9 @@ unifiedMonitorsGetH pid filterTM _sinceM = do
           , docsLink = Just "https://monoscope.tech/docs/monitors/"
           , freeTierStatus = freeTierStatus
           , pageActions = Just $ div_ [class_ "flex gap-2"] do
+              a_ [class_ "btn btn-sm btn-ghost gap-2", href_ $ "/p/" <> pid.toText <> "/monitors/cron"] do
+                faSprite_ "clock" "regular" "h-4 w-4"
+                span_ [class_ "max-md:hidden"] "Cron monitors"
               a_ [class_ "btn btn-sm btn-ghost gap-2", href_ $ "/p/" <> pid.toText <> "/monitors/uptime"] do
                 faSprite_ "heart-pulse" "regular" "h-4 w-4"
                 span_ [class_ "max-md:hidden"] "Uptime checks"
@@ -1024,3 +1032,78 @@ uptimeCheckDeleteH pid cid = Projects.sessionAndProject pid >> PromCfg.deleteCon
 
 uptimeListResp :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 uptimeListResp pid = addRespHeaders . uptimeChecksList_ pid =<< PromCfg.configsByProjectId pid PromCfg.CKUptime
+
+
+-- | Cron monitors: jobs that check in with a @cron.checkin@ span or log.
+newtype CronMonitors = CronMonitors (PageCtx (Projects.ProjectId, [Monitors.CronMonitor]))
+
+
+instance ToHtml CronMonitors where
+  toHtml (CronMonitors (PageCtx bw (pid, mons))) = toHtml $ PageCtx bw page
+    where
+      page :: Html ()
+      page = div_ [class_ "p-4 max-w-5xl space-y-4"] do
+        p_ [class_ "text-sm text-textWeak"] do
+          "Each run of the job sends a span or log named "
+          code_ "cron.checkin"
+          " with attributes "
+          code_ "monitor.slug"
+          " and "
+          code_ "monitor.status"
+          " (ok or error). A missed window or an error run opens a cron issue."
+        form_ [class_ "surface-raised rounded-xl p-4 grid md:grid-cols-[1fr_1fr_auto_auto_auto] gap-2 items-end", hxPost_ ("/p/" <> pid.toText <> "/monitors/cron"), hxTarget_ "#cron-monitors", hxSwap_ "outerHTML", [__|on htmx:afterRequest call me.reset()|]] do
+          label_ [class_ "flex flex-col gap-1 text-xs text-textWeak"] $ "Slug" >> input_ [name_ "slug", required_ "", pattern_ "[a-z0-9-_.]+", placeholder_ "nightly-billing", class_ "input input-sm"]
+          label_ [class_ "flex flex-col gap-1 text-xs text-textWeak"] $ "Name" >> input_ [name_ "name", required_ "", placeholder_ "Nightly billing run", class_ "input input-sm"]
+          label_ [class_ "flex flex-col gap-1 text-xs text-textWeak"] do
+            "Runs every"
+            select_ [name_ "interval", class_ "select select-sm"] $ forM_ ([(300, "5 min"), (900, "15 min"), (3600, "1 hour"), (21600, "6 hours"), (86400, "1 day"), (604800, "1 week")] :: [(Int, Text)]) \(v, l) -> option_ [value_ (show v)] (toHtml l)
+          label_ [class_ "flex flex-col gap-1 text-xs text-textWeak"] do
+            "Grace"
+            select_ [name_ "grace", class_ "select select-sm"] $ forM_ ([(300, "5 min"), (900, "15 min"), (3600, "1 hour")] :: [(Int, Text)]) \(v, l) -> option_ [value_ (show v)] (toHtml l)
+          button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Add monitor"
+        cronMonitorsList_ pid mons
+  toHtmlRaw = toHtml
+
+
+cronMonitorsList_ :: Projects.ProjectId -> [Monitors.CronMonitor] -> Html ()
+cronMonitorsList_ pid mons = div_ [id_ "cron-monitors", class_ "surface-raised rounded-xl divide-y divide-strokeWeak"] do
+  when (null mons) $ emptyState_ def{size = ESCompact} "No cron monitors yet" "Add one above, then send a check-in from the job."
+  forM_ mons \m -> div_ [class_ "flex items-center gap-3 px-4 py-3 text-sm"] do
+    span_ [class_ $ "w-2 h-2 rounded-full shrink-0 " <> case m.lastStatus of { Just "ok" -> "bg-fillSuccess-strong"; Just _ -> "bg-fillError-strong"; Nothing -> "bg-fillWeak" }] ""
+    div_ [class_ "min-w-0 flex-1"] do
+      div_ [class_ "font-medium text-textStrong truncate"] $ toHtml m.name
+      div_ [class_ "text-xs text-textWeak truncate font-mono"] $ toHtml $ m.slug <> " \x00b7 every " <> show (m.intervalSecs `div` 60) <> " min"
+    span_ [class_ "text-xs text-textWeak"] $ toHtml $ maybe "No check-in yet" (("Last: " <>) . toText . formatTime defaultTimeLocale "%F %R UTC") m.lastCheckinAt
+    button_ [type_ "button", class_ "btn btn-xs btn-ghost text-textError", hxPost_ ("/p/" <> pid.toText <> "/monitors/cron/" <> UUID.toText m.id <> "/delete"), hxTarget_ "#cron-monitors", hxSwap_ "outerHTML", hxConfirm_ ("Delete the monitor " <> m.slug <> "?")] "Delete"
+
+
+data CronForm = CronForm {slug :: Text, name :: Text, interval :: Int, grace :: Int}
+  deriving stock (Generic, Show)
+  deriving anyclass (FromForm)
+
+
+cronMonitorsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders CronMonitors)
+cronMonitorsGetH pid = do
+  (_, _, bw) <- mkPageCtx pid
+  mons <- Monitors.cronMonitorsByProject pid
+  addRespHeaders $ CronMonitors $ PageCtx bw{pageTitle = "Cron monitors", menuItem = Just "Monitors"} (pid, mons)
+
+
+cronMonitorPostH :: Projects.ProjectId -> CronForm -> ATAuthCtx (RespHeaders (Html ()))
+cronMonitorPostH pid form = do
+  _ <- Projects.sessionAndProject pid
+  let slug = T.toLower (T.strip form.slug)
+  if T.null slug || T.null (T.strip form.name)
+    then addErrorToast "Slug and name are required" Nothing
+    else
+      (Monitors.insertCronMonitor pid slug (T.strip form.name) (max 60 form.interval) (max 60 form.grace) =<< Time.currentTime) >>= \case
+        0 -> addErrorToast ("A monitor with slug " <> slug <> " already exists") Nothing
+        _ -> addSuccessToast "Cron monitor added" Nothing
+  addRespHeaders . cronMonitorsList_ pid =<< Monitors.cronMonitorsByProject pid
+
+
+cronMonitorDeleteH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (Html ()))
+cronMonitorDeleteH pid mid = do
+  _ <- Projects.sessionAndProject pid
+  void $ Monitors.deleteCronMonitor pid mid
+  addRespHeaders . cronMonitorsList_ pid =<< Monitors.cronMonitorsByProject pid

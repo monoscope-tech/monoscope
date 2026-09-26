@@ -438,6 +438,7 @@ issueDetailCore pid firstM eventM requestedRange fetchIssue = do
             Just (Issues.PerformanceP d) -> pure $ Just (d.traceId, d.observedAt)
             Just (Issues.FrontendP d) -> pure $ (,d.observedAt) <$> guarded (not . T.null) d.traceId
             Just (Issues.UptimeP _) -> pure Nothing
+            Just (Issues.CronP _) -> pure Nothing
             Nothing -> pure Nothing
       mTraceRef <- maybe defaultTraceRef (\ev -> pure $ Just (ev.traceId, ev.at)) eventM
       -- The trace is supporting evidence, not the page. It used to be fetched here
@@ -1055,6 +1056,7 @@ issueHeader_ IssueView{..} = header_ [class_ "max-md:px-3 px-4 max-md:pt-4 pt-6 
             whenJust ((\m p -> m <> " " <> p) <$> d.requestMethod <*> d.requestPath) $ span_ [class_ "text-xs font-mono text-textWeak break-all"] . toHtml
           Just (Issues.QueryAlertP _) -> pass
           Just (Issues.ApiChangeP _) -> pass
+          Just (Issues.CronP d) -> metadataChip_ "clock" $ bool "Failed run" "Missed check-in" (d.failure == Issues.CFMissed)
           Just (Issues.UptimeP d) -> metadataChip_ "clock" $ "Down since " <> agoText now d.downSince
           Just (Issues.FrontendP d) -> metadataChip_ "arrow-pointer" $ bool "Dead click" "Rage click" (d.kind == Issues.FKRageClick)
           Just (Issues.PerformanceP d) -> metadataChip_ "database" $ unwords $ catMaybes [Just (bool "Slow query" "N+1 query" (d.kind == Issues.PKNPlusOne)), d.dbSystem]
@@ -1157,6 +1159,10 @@ issueAggregate_ v@IssueView{..} = do
         forM_ ([("Duration", show @Text (round d.durationImpactMs :: Int) <> " ms"), ("Queries", show d.repeatCount), ("Database", fromMaybe "\x2014" d.dbSystem)] :: [(Text, Text)]) \(lbl, val) -> div_ [class_ "flex flex-col gap-1"] do
           span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] $ toHtml lbl
           span_ [class_ "text-2xl font-semibold text-textStrong tabular-nums leading-none"] $ toHtml val
+    Just (Issues.CronP d) ->
+      contextCard_ "p-4 flex flex-col gap-2" "Schedule" do
+        detailRow_ [("clock", "text-fillError-strong", "Expected by", agoText now d.expectedBy)]
+        detailRow_ [("check", "text-textWeak", "Last check-in", maybe "never" (agoText now) d.lastCheckinAt)]
     Just (Issues.UptimeP d) ->
       contextCard_ "p-4 flex items-start gap-8" "Failing check" do
         forM_ ([("Status", maybe "\x2014" show d.statusCode), ("Expected", show d.expectedStatus), ("Response", show d.durationMs <> " ms")] :: [(Text, Text)]) \(lbl, val) -> div_ [class_ "flex flex-col gap-1"] do
@@ -1219,7 +1225,7 @@ eventCard_ :: IssueView -> Html ()
 eventCard_ IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflow-clip [--event-nav-h:77px]"] do
   let occurrenceUrl useFirst = "/p/" <> pid.toText <> "/issues/" <> issue.id.toText <> "?" <> T.drop 1 (mconcat ["&first_occurrence=true" | useFirst] <> TimePicker.rangeQuery tp)
       -- A performance issue carries one sample trace, not a stream of occurrences.
-      hasOccurrences = issue.issueType `notElem` [Issues.QueryAlert, Issues.Performance, Issues.Frontend, Issues.Uptime] && not isLogPatternIssue
+      hasOccurrences = issue.issueType `notElem` [Issues.QueryAlert, Issues.Performance, Issues.Frontend, Issues.Uptime, Issues.Cron] && not isLogPatternIssue
   nav_ [id_ "issue-event-nav", class_ "sticky top-0 z-20 bg-bgRaised border-b border-strokeWeak", Aria.label_ "Issue evidence"] do
     div_ [class_ "max-md:px-3 px-4 h-10 flex items-center gap-3 overflow-x-auto whitespace-nowrap"] do
       span_ [class_ "text-sm font-semibold text-textStrong"] $ bool "Evidence" "Event" hasOccurrences
@@ -1371,6 +1377,17 @@ eventCard_ IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflow-cli
                  | Just method <- [d.requestMethod <|> field (.requestMethod)]
                  , Just url <- [field (.urlFull) <|> d.requestPath <|> field (.requestPath)]
                  ]
+      Just (Issues.CronP d) ->
+        [ section "issue-cron-evidence" "clock" "Evidence"
+            $ kvRows_ "max-md:px-3 px-4"
+            $ present
+              [ ("monitor", Just d.name)
+              , ("monitor.slug", Just d.slug)
+              , ("failure", Just $ display d.failure)
+              , ("expected by", Just $ formatUTC d.expectedBy)
+              , ("last check-in", formatUTC <$> d.lastCheckinAt)
+              ]
+        ]
       Just (Issues.UptimeP d) ->
         [ section "issue-uptime-evidence" "heart-pulse" "Evidence"
             $ kvRows_ "max-md:px-3 px-4"
@@ -2648,6 +2665,7 @@ issuePreview_ Issues.IssueL{base} = div_ [class_ "flex items-center gap-2 min-w-
       Just (Issues.LogPatternP d) -> logPatternPreview d.logPattern d.sampleMessage
       Just (Issues.LogPatternRateChangeP d) -> logPatternPreview d.logPattern d.sampleMessage
       Just (Issues.PerformanceP d) -> previewSnippet d.query
+      Just (Issues.CronP d) -> previewSnippet $ d.slug <> " \x2014 " <> display d.failure
       Just (Issues.UptimeP d) -> previewSnippet $ d.url <> " \x2014 " <> d.reason
       Just (Issues.FrontendP d) -> previewSnippet $ d.element <> foldMap (" on " <>) d.pageUrl
       Just (Issues.ApiChangeP d) ->
@@ -2747,6 +2765,7 @@ issueTypeChip_ compact issueType critical =
       Issues.Performance -> ("text-fillWarning-strong", "gauge-high", "Performance")
       Issues.Frontend -> ("text-fillWarning-strong", "arrow-pointer", "Frontend")
       Issues.Uptime -> ("text-fillError-strong", "heart-pulse", "Uptime")
+      Issues.Cron -> ("text-fillError-strong", "clock", "Cron")
       Issues.ApiChange | critical -> ("text-fillError-strong", "exclamation-triangle", "Breaking")
       Issues.ApiChange -> ("text-fillInformation-strong", "info", "Incremental")
     shortTxt = case issueType of

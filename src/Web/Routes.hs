@@ -729,6 +729,9 @@ data MonitorsRoutes' mode = MonitorsRoutes'
   , alertDeleteRoute :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> Delete '[HTML] (RespHeaders (Html ()))
   , teamAlertsGetH :: mode :- "alerts" :> "team" :> Capture "team_id" ApiT.TeamId :> Get '[HTML] (RespHeaders (Table.TableRows Testing.UnifiedMonitorItem))
   , alertTeamDeleteH :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "teams" :> Capture "team_id" ApiT.TeamId :> Delete '[HTML] (RespHeaders Alerts.Alert)
+  , cronGet :: mode :- "cron" :> Get '[HTML] (RespHeaders Testing.CronMonitors)
+  , cronPost :: mode :- "cron" :> ReqBody '[FormUrlEncoded] Testing.CronForm :> Post '[HTML] (RespHeaders (Html ()))
+  , cronDelete :: mode :- "cron" :> Capture "monitor_id" UUID.UUID :> "delete" :> Post '[HTML] (RespHeaders (Html ()))
   , uptimeGet :: mode :- "uptime" :> Get '[HTML] (RespHeaders Testing.UptimeChecks)
   , uptimePost :: mode :- "uptime" :> ReqBody '[FormUrlEncoded] Testing.UptimeForm :> Post '[HTML] (RespHeaders (Html ()))
   , uptimeToggle :: mode :- "uptime" :> Capture "check_id" PromCfg.PrometheusScrapeConfigId :> "toggle" :> Post '[HTML] (RespHeaders (Html ()))
@@ -1177,6 +1180,9 @@ monitorsServer pid =
   MonitorsRoutes'
     { listGet = Testing.unifiedMonitorsGetH pid
     , overviewGet = Testing.unifiedMonitorOverviewH pid
+    , cronGet = Testing.cronMonitorsGetH pid
+    , cronPost = Testing.cronMonitorPostH pid
+    , cronDelete = Testing.cronMonitorDeleteH pid
     , uptimeGet = Testing.uptimeChecksGetH pid
     , uptimePost = Testing.uptimeCheckPostH pid
     , uptimeToggle = Testing.uptimeCheckToggleH pid

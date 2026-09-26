@@ -72,6 +72,10 @@ module Models.Apis.Issues (
   PerfKind (..),
   FrontendKind (..),
   UptimeData (..),
+  CronFailure (..),
+  CronData (..),
+  createCronIssue,
+  cronTargetHash,
   createUptimeIssue,
   uptimeTargetHash,
   FrontendData (..),
@@ -249,9 +253,31 @@ data IssueType
   | Performance
   | Frontend
   | Uptime
+  | Cron
   deriving stock (Bounded, Enum, Eq, Generic, Ord, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC ('Just "apis.issue_type") "" IssueType
+
+
+-- | Why a cron monitor opened an issue.
+data CronFailure = CFMissed | CFFailed
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON, Display) via WrappedEnumSC 'Nothing "CF" CronFailure
+
+
+-- | A cron monitor that missed its window or checked in with @monitor.status = error@.
+data CronData = CronData
+  { monitorId :: Text
+  , slug :: Text
+  , name :: Text
+  , failure :: CronFailure
+  , expectedBy :: UTCTime
+  , lastCheckinAt :: Maybe UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake CronData
 
 
 -- | A failed uptime check: what was probed, what came back, and since when.
@@ -330,6 +356,7 @@ hashPrefix = \case
   Performance -> Nothing -- detected over span shapes; spans carry no issue hash
   Frontend -> Nothing
   Uptime -> Nothing
+  Cron -> Nothing
 
 
 defaultRecommendedAction :: Text
@@ -2082,6 +2109,7 @@ data IssuePayload
   | PerformanceP PerformanceData
   | FrontendP FrontendData
   | UptimeP UptimeData
+  | CronP CronData
   deriving stock (Generic, Show)
 
 
@@ -2097,6 +2125,7 @@ payloadType = \case
   PerformanceP{} -> Performance
   FrontendP{} -> Frontend
   UptimeP{} -> Uptime
+  CronP{} -> Cron
 
 
 -- | The @issue_data@ column's value: the *bare* per-type object, exactly as before
@@ -2118,6 +2147,7 @@ payloadJson = \case
   PerformanceP d -> AE.toJSON d
   FrontendP d -> AE.toJSON d
   UptimeP d -> AE.toJSON d
+  CronP d -> AE.toJSON d
 
 
 -- | Pair a stored @issue_type@ with its @issue_data@. 'Nothing' means the two
@@ -2145,6 +2175,7 @@ parsePayload t v = case t of
   Performance -> wrap PerformanceP
   Frontend -> wrap FrontendP
   Uptime -> wrap UptimeP
+  Cron -> wrap CronP
   where
     wrap :: AE.FromJSON a => (a -> IssuePayload) -> Maybe IssuePayload
     wrap f = case AE.fromJSON v of
@@ -2492,6 +2523,32 @@ createUptimeIssue projectId d =
 
 uptimeTargetHash :: Text -> Text
 uptimeTargetHash = ("uptime:" <>)
+
+
+-- | One open issue per cron monitor, missed or failed.
+createCronIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> CronData -> Eff es Issue
+createCronIssue projectId d =
+  mkIssue
+    MkIssueOpts
+      { projectId
+      , targetHash = cronTargetHash d.monitorId
+      , parentHash = Nothing
+      , isFramework = False
+      , service = Nothing
+      , critical = True
+      , severity = Critical
+      , title = bool "Cron failed: " "Cron missed: " (d.failure == CFMissed) <> d.name
+      , recommendedAction = case d.failure of
+          CFMissed -> "No check-in from " <> d.slug <> " in its window: check the job ran and can reach Monoscope."
+          CFFailed -> "The job " <> d.slug <> " reported monitor.status = error on its last run."
+      , migrationComplexity = "n/a"
+      , timestamp = Nothing
+      , payload = CronP d
+      }
+
+
+cronTargetHash :: Text -> Text
+cronTargetHash = ("cron:" <>)
 
 
 -- | One frontend issue per (kind, page path, element).

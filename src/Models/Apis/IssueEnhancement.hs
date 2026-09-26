@@ -180,6 +180,11 @@ buildTitlePrompt issue =
             Check: {d.name}
             URL: {d.url}
             Failure: {d.reason}|]
+      Issues.Cron ->
+        withIssueData @Issues.CronData issue ("Generate a concise title for this cron monitor issue. Title: " <> issue.title) \d ->
+          let failure = display d.failure
+           in [fmtTrim|Generate a concise title for a scheduled job that {failure}.
+            Job: {d.name} ({d.slug})|]
 
 
 buildDescriptionPrompt :: Issues.Issue -> Text
@@ -293,6 +298,15 @@ buildDescriptionPrompt issue =
             Expected status: {d.expectedStatus}
             Failure: {d.reason}
             Response time: {d.durationMs} ms|]
+      Issues.Cron ->
+        withIssueData @Issues.CronData issue ("Describe this cron monitor issue. Title: " <> issue.title) \d ->
+          let failure = display d.failure
+              expected = show @Text d.expectedBy
+              lastRun = maybe "never" (show @Text) d.lastCheckinAt
+           in [fmtTrim|Describe this scheduled job issue ({failure}) and what to check first.
+            Job: {d.name} ({d.slug})
+            Expected a check-in by: {expected}
+            Last check-in: {lastRun}|]
 
 
 -- | Classify issue as critical/safe and count breaking/incremental changes
@@ -358,6 +372,7 @@ buildCriticalityPrompt issue =
       Issues.Performance -> "Performance issue: " <> issue.title
       Issues.Frontend -> "Frontend issue: " <> issue.title
       Issues.Uptime -> "Downtime: " <> issue.title
+      Issues.Cron -> "Cron monitor: " <> issue.title
 
 
 updateIssueClassification :: DB es => Issues.IssueId -> Bool -> Int -> Eff es ()
