@@ -592,7 +592,8 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , aiRoutineDestinationPost :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> "destination" :> ReqBody '[FormUrlEncoded] AIThreads.RoutineDestinationForm :> Post '[HTML] (RespHeaders (Html ()))
   , aiRoutineDelete :: mode :- "p" :> ProjectId :> "ai" :> Capture "conversation_id" (UUIDId "conversation") :> "routine" :> Delete '[HTML] (RespHeaders (Html ()))
   , -- Device auth
-    deviceApprove :: mode :- "device" :> QPT "code" :> QPT "action" :> Get '[HTML] (RespHeaders (Html ()))
+    deviceApprove :: mode :- "device" :> QPT "code" :> Get '[HTML] (RespHeaders (Html ()))
+  , deviceApprovePost :: mode :- "device" :> QPT "code" :> Post '[HTML] (RespHeaders (Html ()))
   , -- Sub-route groups
     projects :: mode :- ProjectsRoutes
   , issues :: mode :- "p" :> ProjectId :> "issues" :> IssuesRoutes
@@ -649,16 +650,24 @@ type IssuesRoutes = NamedRoutes IssuesRoutes'
 
 type IssuesRoutes' :: Type -> Type
 data IssuesRoutes' mode = IssuesRoutes'
-  { acknowledgeGet :: mode :- Capture "issueID" Issues.IssueId :> "acknowledge" :> QueryParam "duration" Int :> Get '[HTML] (RespHeaders IssuesPage.IssueAction)
-  , unAcknowledgeGet :: mode :- Capture "issueID" Issues.IssueId :> "unacknowledge" :> Get '[HTML] (RespHeaders IssuesPage.IssueAction)
-  , archiveGet :: mode :- Capture "issueID" Issues.IssueId :> "archive" :> Get '[HTML] (RespHeaders IssuesPage.IssueAction)
-  , unarchiveGet :: mode :- Capture "issueID" Issues.IssueId :> "unarchive" :> Get '[HTML] (RespHeaders IssuesPage.IssueAction)
-  , bulkActionsPost :: mode :- "bulk_actions" :> Capture "action" IssuesPage.IssueBulkAction :> QueryParam "duration" Int :> ReqBody '[FormUrlEncoded] IssuesPage.IssueBulkForm :> Post '[HTML] (RespHeaders IssuesPage.IssueAction)
+  { acknowledgeGet :: mode :- Capture "issueID" Issues.IssueId :> "acknowledge" :> QueryParam "duration" Int :> Post '[HTML] (RespHeaders IssuesPage.IssueAction)
+  , unAcknowledgeGet :: mode :- Capture "issueID" Issues.IssueId :> "unacknowledge" :> Post '[HTML] (RespHeaders IssuesPage.IssueAction)
+  , archiveGet :: mode :- Capture "issueID" Issues.IssueId :> "archive" :> QueryParam "window" Issues.ArchiveWindow :> Post '[HTML] (RespHeaders IssuesPage.IssueAction)
+  , resolveGet :: mode :- Capture "issueID" Issues.IssueId :> "resolve" :> Post '[HTML] (RespHeaders IssuesPage.IssueAction)
+  , triagePost :: mode :- Capture "issueID" Issues.IssueId :> "triage" :> ReqBody '[FormUrlEncoded] IssuesPage.TriageForm :> Post '[HTML] (RespHeaders (Html ()))
+  , viewSavePost :: mode :- "views" :> ReqBody '[FormUrlEncoded] IssuesPage.SaveViewForm :> Post '[HTML] (RespHeaders (Html ()))
+  , viewDeletePost :: mode :- "views" :> Capture "viewID" UUID.UUID :> "delete" :> Post '[HTML] (RespHeaders (Html ()))
+  , viewedPost :: mode :- Capture "issueID" Issues.IssueId :> "viewed" :> Post '[HTML] (RespHeaders (Html ()))
+  , commentPost :: mode :- Capture "issueID" Issues.IssueId :> "comment" :> ReqBody '[FormUrlEncoded] IssuesPage.CommentForm :> Post '[HTML] (RespHeaders (Html ()))
+  , linkPost :: mode :- Capture "issueID" Issues.IssueId :> "link" :> ReqBody '[FormUrlEncoded] IssuesPage.LinkForm :> Post '[HTML] (RespHeaders (Html ()))
+  , unarchiveGet :: mode :- Capture "issueID" Issues.IssueId :> "unarchive" :> Post '[HTML] (RespHeaders IssuesPage.IssueAction)
+  , bulkActionsPost :: mode :- "bulk_actions" :> Capture "action" IssuesPage.IssueBulkAction :> QueryParam "duration" Int :> QueryParam "value" Text :> ReqBody '[FormUrlEncoded] IssuesPage.IssueBulkForm :> Post '[HTML] (RespHeaders IssuesPage.IssueAction)
   , listGet :: mode :- QPT "filter" :> QPT "sort" :> QPT "since" :> QPT "page" :> QPT "per_page" :> QPT "load_more" :> QPT "period" :> QueryParams "service" Text :> QueryParams "type" Text :> Get '[HTML] (RespHeaders IssuesPage.IssueListGet)
-  , detailGet :: mode :- Capture "issueID" Issues.IssueId :> QPT "first_occurrence" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
-  , detailHashGet :: mode :- "by_hash" :> Capture "issueHash" Text :> QPT "first_occurrence" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
+  , stepGet :: mode :- Capture "issueID" Issues.IssueId :> "step" :> QueryParam "dir" Telemetry.EventStep :> QueryParam "from" UTCTime :> LocationRedirect NoContent
+  , detailGet :: mode :- Capture "issueID" Issues.IssueId :> QPT "first_occurrence" :> QPT "since" :> QPT "from" :> QPT "to" :> QueryParam "event" IssuesPage.EventRef :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
+  , detailHashGet :: mode :- "by_hash" :> Capture "issueHash" Text :> QPT "first_occurrence" :> QPT "since" :> QPT "from" :> QPT "to" :> QueryParam "event" IssuesPage.EventRef :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   , assignErrorPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "assign" :> ReqBody '[FormUrlEncoded] IssuesPage.AssignErrorForm :> Post '[HTML] (RespHeaders (Html ()))
-  , resolveErrorPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "resolve" :> Post '[HTML] (RespHeaders (Html ()))
+  , resolveErrorPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "resolve" :> QueryFlag "next_release" :> Post '[HTML] (RespHeaders (Html ()))
   , errorSubscriptionPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "subscribe" :> ReqBody '[FormUrlEncoded] IssuesPage.ErrorSubscriptionForm :> Post '[HTML] (RespHeaders (Html ()))
   , aiChatPost :: mode :- Capture "issueID" Issues.IssueId :> "ai_chat" :> ReqBody '[FormUrlEncoded] IssuesPage.AIChatForm :> Post '[HTML] (RespHeaders (Html ()))
   , aiChatHistoryGet :: mode :- Capture "issueID" Issues.IssueId :> "ai_chat" :> "history" :> Get '[HTML] (RespHeaders (Html ()))
@@ -722,6 +731,13 @@ data MonitorsRoutes' mode = MonitorsRoutes'
   , alertDeleteRoute :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> Delete '[HTML] (RespHeaders (Html ()))
   , teamAlertsGetH :: mode :- "alerts" :> "team" :> Capture "team_id" ApiT.TeamId :> Get '[HTML] (RespHeaders (Table.TableRows Testing.UnifiedMonitorItem))
   , alertTeamDeleteH :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "teams" :> Capture "team_id" ApiT.TeamId :> Delete '[HTML] (RespHeaders Alerts.Alert)
+  , cronGet :: mode :- "cron" :> Get '[HTML] (RespHeaders Testing.CronMonitors)
+  , cronPost :: mode :- "cron" :> ReqBody '[FormUrlEncoded] Testing.CronForm :> Post '[HTML] (RespHeaders (Html ()))
+  , cronDelete :: mode :- "cron" :> Capture "monitor_id" UUID.UUID :> "delete" :> Post '[HTML] (RespHeaders (Html ()))
+  , uptimeGet :: mode :- "uptime" :> Get '[HTML] (RespHeaders Testing.UptimeChecks)
+  , uptimePost :: mode :- "uptime" :> ReqBody '[FormUrlEncoded] Testing.UptimeForm :> Post '[HTML] (RespHeaders (Html ()))
+  , uptimeToggle :: mode :- "uptime" :> Capture "check_id" PromCfg.PrometheusScrapeConfigId :> "toggle" :> Post '[HTML] (RespHeaders (Html ()))
+  , uptimeDelete :: mode :- "uptime" :> Capture "check_id" PromCfg.PrometheusScrapeConfigId :> "delete" :> Post '[HTML] (RespHeaders (Html ()))
   , alertBulkAction :: mode :- "alerts" :> "bulk_action" :> Capture "action" Testing.MonitorBulkAction :> ReqBody '[FormUrlEncoded] ManageMembers.TBulkActionForm :> Post '[HTML] (RespHeaders (PageCtx (Table.Table Testing.UnifiedMonitorItem)))
   }
   deriving stock (Generic)
@@ -1061,7 +1077,8 @@ cookieProtectedServer =
     , aiRoutineDestinationPost = AIThreads.routineDestinationPostH
     , aiRoutineDelete = AIThreads.routineDeleteH
     , -- Device auth
-      deviceApprove = Auth.deviceApproveH
+      deviceApprove = Auth.deviceApproveH False
+    , deviceApprovePost = Auth.deviceApproveH True
     , -- Sub-route handlers
       projects = projectsServer
     , logExplorer = logExplorerServer
@@ -1106,11 +1123,19 @@ issuesServer pid =
   IssuesRoutes'
     { acknowledgeGet = IssuesPage.acknowledgeIssueGetH pid True
     , unAcknowledgeGet = \aid -> IssuesPage.acknowledgeIssueGetH pid False aid Nothing
-    , archiveGet = IssuesPage.archiveIssueGetH pid True
-    , unarchiveGet = IssuesPage.archiveIssueGetH pid False
+    , archiveGet = \iid -> IssuesPage.archiveIssueGetH pid iid . Just . fromMaybe Issues.ArchiveIndefinite
+    , resolveGet = IssuesPage.resolveIssueGetH pid
+    , triagePost = IssuesPage.triagePostH pid
+    , commentPost = IssuesPage.commentPostH pid
+    , viewedPost = IssuesPage.issueViewedPostH pid
+    , viewSavePost = IssuesPage.saveViewPostH pid
+    , viewDeletePost = IssuesPage.deleteViewPostH pid
+    , linkPost = IssuesPage.linkPostH pid
+    , unarchiveGet = \iid -> IssuesPage.archiveIssueGetH pid iid Nothing
     , bulkActionsPost = IssuesPage.issueBulkActionsPostH pid
     , listGet = IssuesPage.issueListGetH pid
     , detailGet = IssuesPage.issueDetailGetH pid
+    , stepGet = IssuesPage.issueStepGetH pid
     , detailHashGet = IssuesPage.issueDetailHashGetH pid
     , assignErrorPost = IssuesPage.assignErrorPostH pid
     , resolveErrorPost = IssuesPage.resolveErrorPostH pid
@@ -1159,6 +1184,13 @@ monitorsServer pid =
   MonitorsRoutes'
     { listGet = Testing.unifiedMonitorsGetH pid
     , overviewGet = Testing.unifiedMonitorOverviewH pid
+    , cronGet = Testing.cronMonitorsGetH pid
+    , cronPost = Testing.cronMonitorPostH pid
+    , cronDelete = Testing.cronMonitorDeleteH pid
+    , uptimeGet = Testing.uptimeChecksGetH pid
+    , uptimePost = Testing.uptimeCheckPostH pid
+    , uptimeToggle = Testing.uptimeCheckToggleH pid
+    , uptimeDelete = Testing.uptimeCheckDeleteH pid
     , alertUpsertPost = Alerts.alertUpsertPostH pid
     , alertSingleGet = Alerts.alertSingleGetH pid
     , alertSingleToggleActive = Alerts.alertSingleToggleActiveH pid

@@ -64,6 +64,31 @@ module Models.Apis.Issues (
   ackCascade,
   expireAcks,
   setArchiveState,
+  ArchiveWindow (..),
+  expireArchives,
+  wakeOnEscalation,
+  setIssuePriority,
+  SavedView (..),
+  PerfKind (..),
+  FrontendKind (..),
+  UptimeData (..),
+  CronFailure (..),
+  CronData (..),
+  createCronIssue,
+  cronTargetHash,
+  createUptimeIssue,
+  uptimeTargetHash,
+  FrontendData (..),
+  FeedbackData (..),
+  createFeedbackIssue,
+  setSpamState,
+  createFrontendIssue,
+  PerformanceData (..),
+  createPerformanceIssue,
+  selectIssueViews,
+  saveIssueView,
+  deleteIssueView,
+  setIssueAssignee,
   autoArchiveStaleDiscoveryIssues,
   selectIssueByHash,
   IssueScope (..),
@@ -85,6 +110,7 @@ module Models.Apis.Issues (
   hashPrefix,
   defaultRecommendedAction,
   isBoilerplateAction,
+  newErrorRecommendedAction,
   queryAlertRecommendedAction,
   serviceLabel,
   showRounded,
@@ -153,6 +179,7 @@ module Models.Apis.Issues (
   parseActivityEvent,
   IssueActivity (..),
   logIssueActivity,
+  recordIssueView,
   selectLatestStateEvent,
   selectIssueActivity,
 
@@ -183,6 +210,7 @@ import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.Time.LocalTime (LocalTime (..), TimeOfDay (..), ZonedTime, utc, utcToZonedTime, zonedTimeToUTC)
 import Data.Time.Zones (utcTZ, utcToLocalTimeTZ)
 import Data.Time.Zones.All qualified as TZ
+import Data.UUID qualified as UUID
 import Data.UUID.V5 qualified as UUID5
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
@@ -213,6 +241,7 @@ import Relude hiding (id)
 import Servant (FromHttpApiData (..), ServerError, err500, errBody)
 import System.Logging (logAttention)
 import System.Types (DB)
+import Utils (toXXHash, truncateMiddle)
 
 
 type IssueId = UUIDId "issue"
@@ -225,9 +254,118 @@ data IssueType
   | QueryAlert
   | LogPattern
   | LogPatternRateChange
+  | Performance
+  | Frontend
+  | Uptime
+  | Cron
+  | Feedback
   deriving stock (Bounded, Enum, Eq, Generic, Ord, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC ('Just "apis.issue_type") "" IssueType
+
+
+-- | Why a cron monitor opened an issue.
+data CronFailure = CFMissed | CFFailed
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON, Display) via WrappedEnumSC 'Nothing "CF" CronFailure
+
+
+-- | What a user wrote (@feedback.message@), who they are (@user.*@ / @feedback.contact_email@),
+-- where (@url.full@ / @page.url@), and the error issue sharing its trace, if any.
+data FeedbackData = FeedbackData
+  { message :: Text
+  , contactEmail :: Maybe Text
+  , userName :: Maybe Text
+  , pageUrl :: Maybe Text
+  , sessionId :: Maybe Text
+  , traceId :: Maybe Text
+  , relatedErrorHash :: Maybe Text
+  -- ^ The error issue's target hash (no @err:@ prefix), for @/issues/by_hash/…@.
+  , observedAt :: UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake FeedbackData
+
+
+-- | A cron monitor that missed its window or checked in with @monitor.status = error@.
+data CronData = CronData
+  { monitorId :: Text
+  , slug :: Text
+  , name :: Text
+  , failure :: CronFailure
+  , expectedBy :: UTCTime
+  , lastCheckinAt :: Maybe UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake CronData
+
+
+-- | A failed uptime check: what was probed, what came back, and since when.
+data UptimeData = UptimeData
+  { checkId :: Text
+  , name :: Text
+  , url :: Text
+  , expectedStatus :: Int
+  , statusCode :: Maybe Int
+  , reason :: Text
+  , durationMs :: Int
+  , downSince :: UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake UptimeData
+
+
+-- | A frontend issue's shape, detected over the browser SDK's interaction spans.
+data FrontendKind = FKRageClick | FKDeadClick
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON, Display) via WrappedEnumSC 'Nothing "FK" FrontendKind
+
+
+-- | The clicked element (@monoscope.display.label@, @target.*@), the page it was on
+-- (@page.url@), and one sample session and trace.
+data FrontendData = FrontendData
+  { kind :: FrontendKind
+  , element :: Text
+  , selector :: Maybe Text
+  , pageUrl :: Maybe Text
+  , clickCount :: Int
+  , sessionId :: Text
+  , traceId :: Text
+  , observedAt :: UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake FrontendData
+
+
+-- | A performance issue's shape, detected over completed traces' database spans.
+data PerfKind = PKNPlusOne | PKSlowQuery
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON, Display) via WrappedEnumSC 'Nothing "PK" PerfKind
+
+
+-- | Span evidence for a performance issue: the query (@db.query.summary@ or a
+-- normalised @db.query.text@), where it ran, and what it cost in one sample trace.
+data PerformanceData = PerformanceData
+  { kind :: PerfKind
+  , transaction :: Maybe Text
+  , parentSpan :: Maybe Text
+  , query :: Text
+  , dbSystem :: Maybe Text
+  , repeatCount :: Int
+  , durationImpactMs :: Double
+  , traceId :: Text
+  , observedAt :: UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake PerformanceData
 
 
 -- | Hash prefix used in otel_logs_and_spans hashes column
@@ -238,6 +376,11 @@ hashPrefix = \case
   RuntimeException -> Just "err:"
   ApiChange -> Just "" -- endpoint hash is stored unprefixed on span hashes
   QueryAlert -> Nothing
+  Performance -> Nothing -- detected over span shapes; spans carry no issue hash
+  Frontend -> Nothing
+  Uptime -> Nothing
+  Cron -> Nothing
+  Feedback -> Nothing
 
 
 defaultRecommendedAction :: Text
@@ -253,14 +396,17 @@ defaultRecommendedAction = "Review the changes and update your integration accor
 -- True
 -- >>> isBoilerplateAction "Review the query results and take appropriate action."
 -- True
+-- >>> isBoilerplateAction "Investigate the new error and implement a fix."
+-- True
 -- >>> isBoilerplateAction "Roll back the shipping service to 1.4.2."
 -- False
 isBoilerplateAction :: Text -> Bool
-isBoilerplateAction a = a `elem` ([defaultRecommendedAction, queryAlertRecommendedAction] :: [Text])
+isBoilerplateAction a = a `elem` ([defaultRecommendedAction, queryAlertRecommendedAction, newErrorRecommendedAction] :: [Text])
 
 
-queryAlertRecommendedAction :: Text
+queryAlertRecommendedAction, newErrorRecommendedAction :: Text
 queryAlertRecommendedAction = "Review the query results and take appropriate action."
+newErrorRecommendedAction = "Investigate the new error and implement a fix."
 
 
 parseIssueType :: Text -> Maybe IssueType
@@ -273,7 +419,7 @@ parseIssueType = rightToMaybe . parseUrlPiece
 data IssueSeverity = Critical | Warning | Info | Low
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "" IssueSeverity
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "" IssueSeverity
 
 
 data IssueSummary = IssueSummary
@@ -412,6 +558,9 @@ data Issue = Issue
   , acknowledgedUntil :: Maybe ZonedTime
   -- ^ End of the acknowledgement window (0125). Always set alongside
   -- @acknowledged_at@; 'indefiniteUntil' for an indefinite ack.
+  , assigneeId :: Maybe Projects.UserId
+  , archivedUntil :: Maybe ZonedTime
+  , archiveUntilEscalating :: Bool
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, HI.DecodeRow, NFData)
@@ -426,6 +575,7 @@ data IssueL = IssueL
   , lastSeen :: UTCTime
   , latestStateEvent :: Maybe IssueEvent
   , activityBuckets :: V.Vector Int
+  , usersCount :: Int
   }
   deriving stock (Generic, Show)
   deriving anyclass (NFData)
@@ -433,7 +583,7 @@ data IssueL = IssueL
 
 -- Generic HI.DecodeRow can't derive this: Issue has DecodeRow but not DecodeValue.
 instance HI.DecodeRow IssueL where
-  decodeRow = IssueL <$> HI.decodeRow <*> HI.decodeRow <*> HI.decodeRow <*> HI.decodeRow <*> HI.decodeRow
+  decodeRow = IssueL <$> HI.decodeRow <*> HI.decodeRow <*> HI.decodeRow <*> HI.decodeRow <*> HI.decodeRow <*> HI.decodeRow
 
 
 -- | Insert a single issue
@@ -608,6 +758,7 @@ data IssueProjection r where
 data IssueFilters = IssueFilters
   { ack :: NullFilter
   , archive :: NullFilter
+  , spam :: NullFilter
   , services :: [Text]
   , service :: Maybe Text
   , environment :: Maybe Text
@@ -630,6 +781,7 @@ defIssueFilters =
   IssueFilters
     { ack = AnyValue
     , archive = AnyValue
+    , spam = AnyValue
     , services = []
     , service = Nothing
     , environment = Nothing
@@ -675,12 +827,15 @@ selectIssues pid projection f = do
         _ -> (UTCTime (addDays (-6) (utctDay now)) 0, [HI.sql|interval '1 day'|])
       orderBy pfx = rawSql case T.uncons =<< f.order of
         Just (s, c) | s == '-' || s == '+', c `elem` ["created_at", "updated_at", "title"] -> pfx <> c <> bool " ASC" " DESC" (s == '-')
+        -- Output aliases of the IssueL projection; only that query (prefix "i.") has them.
+        Just (s, c) | s == '-' || s == '+', pfx == "i.", c `elem` ["event_count", "users_count"] -> c <> bool " ASC" " DESC" (s == '-') <> ", i.created_at DESC"
         _ -> pfx <> "critical DESC, " <> pfx <> "created_at DESC"
       arrF pfx col xs = if null xs then mempty else [HI.sql| AND ^{pfx}^{col} = ANY(#{xs}::text[])|]
       mkFilters pfx =
         foldMap (\(s, e) -> [HI.sql| AND ^{pfx}created_at >= #{s} AND ^{pfx}created_at <= #{e}|]) f.timeRange
           <> sqlNullFilter pfx [HI.sql|acknowledged_at|] f.ack
           <> sqlNullFilter pfx [HI.sql|archived_at|] f.archive
+          <> sqlNullFilter pfx [HI.sql|spam_at|] f.spam
           <> bool mempty [HI.sql| AND (^{pfx}severity IS NULL OR ^{pfx}severity != 'low')|] f.hideLowSeverity
           <> arrF pfx [HI.sql|service|] f.services
           <> foldMap (\service -> [HI.sql| AND ^{pfx}service = #{service}|]) f.service
@@ -704,18 +859,19 @@ selectIssues pid projection f = do
           i.affected_requests::bigint, i.affected_clients::bigint, NULL::double precision,
           i.recommended_action, i.migration_complexity, i.issue_data, i.request_payloads, i.response_payloads,
           NULL::timestamp with time zone, NULL::bigint,
-          i.target_hash, i.environment, i.seq_num::bigint, i.parent_hash, i.is_framework, i.cooldown_until, i.last_notified_at, i.acknowledged_until,
+          i.target_hash, i.environment, i.seq_num::bigint, i.parent_hash, i.is_framework, i.cooldown_until, i.last_notified_at, i.acknowledged_until, i.assignee_id, i.archived_until, i.archive_until_escalating,
           CASE
             WHEN i.issue_type = 'runtime_exception' THEN COALESCE(err_ev.cnt, 0)
             WHEN i.issue_type IN ('log_pattern', 'log_pattern_rate_change') THEN COALESCE(lp_ev.cnt, 0)
             ELSE i.affected_requests
-          END::bigint,
+          END::bigint AS event_count,
           i.updated_at, lat.event,
           CASE
             WHEN i.issue_type = 'runtime_exception' THEN COALESCE(err_ev.buckets, '{}'::bigint[])
             WHEN i.issue_type IN ('log_pattern', 'log_pattern_rate_change') THEN COALESCE(lp_ev.buckets, '{}'::bigint[])
             ELSE '{}'::bigint[]
-          END
+          END,
+          COALESCE((SELECT ep.users_count FROM apis.error_patterns ep WHERE ep.project_id = i.project_id AND ep.hash = i.target_hash), 0)::bigint AS users_count
         FROM apis.issues i
         LEFT JOIN LATERAL (
           SELECT SUM(day_cnt)::bigint AS cnt, array_agg(day_cnt ORDER BY day) AS buckets FROM (
@@ -1001,16 +1157,100 @@ isSilenced pid tgt ty now =
         LIMIT 1 |]
 
 
--- | Set archive state on a batch of issues. @Just now@ archives, @Nothing@ unarchives.
-setArchiveState :: DB es => Projects.ProjectId -> [IssueId] -> Maybe UTCTime -> Eff es Int64
-setArchiveState pid iids mTs
+-- | How long an archive holds. Sentry's "archive for N hours" and "until escalating":
+-- a timed archive is lifted by 'expireArchives', an escalating one by 'wakeOnEscalation'.
+data ArchiveWindow = ArchiveIndefinite | ArchiveFor Int | ArchiveUntilEscalating
+  deriving stock (Eq, Show)
+
+
+-- | The @window@ query value: minutes, or @escalating@.
+--
+-- >>> :set -XOverloadedStrings
+-- >>> import Servant (parseQueryParam)
+-- >>> map (parseQueryParam @ArchiveWindow) ["240", "escalating", "soon", "-5"]
+-- [Right (ArchiveFor 240),Right ArchiveUntilEscalating,Left "archive window: minutes or 'escalating'",Left "archive window: minutes or 'escalating'"]
+instance FromHttpApiData ArchiveWindow where
+  parseQueryParam = \case
+    "escalating" -> Right ArchiveUntilEscalating
+    t | Just n <- readMaybe (toString t), n > 0 -> Right (ArchiveFor n)
+    _ -> Left "archive window: minutes or 'escalating'"
+
+
+-- | Apply a @SET@ clause to a batch of one project's issues.
+updateIssues :: DB es => Projects.ProjectId -> [IssueId] -> HI.Sql -> Eff es Int64
+updateIssues pid iids set = Hasql.interpExecute [HI.sql| UPDATE apis.issues SET ^{set} WHERE project_id = #{pid} AND id = ANY(#{iids}::uuid[]) |]
+
+
+-- | Spam leaves the Inbox with the archive and is listed only under the Spam tab; clearing it restores both.
+setSpamState :: DB es => Projects.ProjectId -> [IssueId] -> Maybe UTCTime -> Eff es Int64
+setSpamState pid iids at = updateIssues pid iids [HI.sql| spam_at = #{at}, archived_at = #{at}, updated_at = COALESCE(#{at}, updated_at) |]
+
+
+-- | Set archive state on a batch of issues. @Just (now, window)@ archives, @Nothing@ unarchives.
+setArchiveState :: DB es => Projects.ProjectId -> [IssueId] -> Maybe (UTCTime, ArchiveWindow) -> Eff es Int64
+setArchiveState pid iids archiveM
   | null iids = pure 0
-  | otherwise =
-      Hasql.interpExecute
-        [HI.sql|
-          UPDATE apis.issues
-          SET archived_at = #{mTs}, updated_at = COALESCE(#{mTs}, updated_at)
-          WHERE project_id = #{pid} AND id = ANY(#{iids}::uuid[]) |]
+  | otherwise = updateIssues pid iids [HI.sql| archived_at = #{mTs}, updated_at = COALESCE(#{mTs}, updated_at), archived_until = #{untilM}, archive_until_escalating = #{escalating} |]
+  where
+    mTs = fst <$> archiveM
+    (untilM, escalating) = maybe (Nothing, False) window archiveM
+    window (t, w) = case w of
+      ArchiveIndefinite -> (Nothing, False)
+      ArchiveFor mins -> (Just (addUTCTime (fromIntegral mins * 60) t), False)
+      ArchiveUntilEscalating -> (Nothing, True)
+
+
+-- | Lift archives, returning the reopened ids. A reopen must not collide with an
+-- already-open recurrence of the same signal (the open-issue partial unique index),
+-- so such rows stay archived.
+liftArchives :: DB es => HI.Sql -> Eff es [IssueId]
+liftArchives cond =
+  Hasql.interp
+    [HI.sql|
+      UPDATE apis.issues i
+      SET archived_at = NULL, archived_until = NULL, archive_until_escalating = false
+      WHERE i.archived_at IS NOT NULL AND ^{cond}
+        AND NOT EXISTS (SELECT 1 FROM apis.issues o
+                        WHERE o.project_id = i.project_id AND o.target_hash = i.target_hash AND o.issue_type = i.issue_type
+                          AND o.id <> i.id AND o.archived_at IS NULL AND o.acknowledged_at IS NULL)
+      RETURNING i.id |]
+
+
+-- | Timed archives whose window has closed.
+expireArchives :: DB es => UTCTime -> Eff es [IssueId]
+expireArchives now = liftArchives [HI.sql| i.archived_until <= #{now} |]
+
+
+-- | Runtime-exception issues archived "until escalating" for an error that just escalated.
+wakeOnEscalation :: DB es => Projects.ProjectId -> Text -> Eff es [IssueId]
+wakeOnEscalation pid errHash = liftArchives [HI.sql| i.archive_until_escalating AND i.project_id = #{pid} AND i.target_hash = #{errHash} AND i.issue_type = 'runtime_exception' |]
+
+
+-- | A saved issue-list view: a name for a query string of list parameters.
+data SavedView = SavedView {id :: UUID.UUID, name :: Text, query :: Text}
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+selectIssueViews :: DB es => Projects.ProjectId -> Eff es [SavedView]
+selectIssueViews pid = Hasql.interp [HI.sql| SELECT id, name, query FROM apis.issue_views WHERE project_id = #{pid} ORDER BY created_at |]
+
+
+saveIssueView :: DB es => Projects.ProjectId -> Projects.UserId -> Text -> Text -> Eff es Int64
+saveIssueView pid uid name q = Hasql.interpExecute [HI.sql| INSERT INTO apis.issue_views (project_id, name, query, created_by) VALUES (#{pid}, #{name}, #{q}, #{uid}) |]
+
+
+deleteIssueView :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es Int64
+deleteIssueView pid vid = Hasql.interpExecute [HI.sql| DELETE FROM apis.issue_views WHERE project_id = #{pid} AND id = #{vid} |]
+
+
+-- | Priority is the issue's severity, set by hand.
+setIssuePriority :: DB es => Projects.ProjectId -> [IssueId] -> IssueSeverity -> Eff es Int64
+setIssuePriority pid iids sev = updateIssues pid iids [HI.sql| severity = #{sev} |]
+
+
+setIssueAssignee :: DB es => Projects.ProjectId -> [IssueId] -> Maybe Projects.UserId -> Eff es Int64
+setIssueAssignee pid iids uid = updateIssues pid iids [HI.sql| assignee_id = #{uid} |]
 
 
 -- | Auto-archive open discovery-type issues (log_pattern, log_pattern_rate_change,
@@ -1903,6 +2143,11 @@ data IssuePayload
   | QueryAlertP QueryAlertData
   | LogPatternP LogPatternData
   | LogPatternRateChangeP LogPatternRateChangeData
+  | PerformanceP PerformanceData
+  | FrontendP FrontendData
+  | FeedbackP FeedbackData
+  | UptimeP UptimeData
+  | CronP CronData
   deriving stock (Generic, Show)
 
 
@@ -1915,6 +2160,11 @@ payloadType = \case
   QueryAlertP{} -> QueryAlert
   LogPatternP{} -> LogPattern
   LogPatternRateChangeP{} -> LogPatternRateChange
+  PerformanceP{} -> Performance
+  FrontendP{} -> Frontend
+  FeedbackP{} -> Feedback
+  UptimeP{} -> Uptime
+  CronP{} -> Cron
 
 
 -- | The @issue_data@ column's value: the *bare* per-type object, exactly as before
@@ -1933,6 +2183,11 @@ payloadJson = \case
   QueryAlertP d -> AE.toJSON d
   LogPatternP d -> AE.toJSON d
   LogPatternRateChangeP d -> AE.toJSON d
+  PerformanceP d -> AE.toJSON d
+  FrontendP d -> AE.toJSON d
+  FeedbackP d -> AE.toJSON d
+  UptimeP d -> AE.toJSON d
+  CronP d -> AE.toJSON d
 
 
 -- | Pair a stored @issue_type@ with its @issue_data@. 'Nothing' means the two
@@ -1957,6 +2212,11 @@ parsePayload t v = case t of
   QueryAlert -> wrap QueryAlertP
   LogPattern -> wrap LogPatternP
   LogPatternRateChange -> wrap LogPatternRateChangeP
+  Performance -> wrap PerformanceP
+  Frontend -> wrap FrontendP
+  Feedback -> wrap FeedbackP
+  Uptime -> wrap UptimeP
+  Cron -> wrap CronP
   where
     wrap :: AE.FromJSON a => (a -> IssuePayload) -> Maybe IssuePayload
     wrap f = case AE.fromJSON v of
@@ -2023,6 +2283,9 @@ mkIssue opts = do
       , cooldownUntil = Nothing
       , lastNotifiedAt = Nothing
       , acknowledgedUntil = Nothing
+      , assigneeId = Nothing
+      , archivedUntil = Nothing
+      , archiveUntilEscalating = False
       }
 
 
@@ -2042,6 +2305,11 @@ data IssueEvent
   | IEAutoResolved
   | IEEscalated
   | IEAckExpired
+  | IECommented
+  | IEViewed
+  | IELinked
+  | IEMerged
+  | IESpam
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC 'Nothing "IE" IssueEvent
@@ -2084,6 +2352,8 @@ data IssueActivity = IssueActivity
   { event :: ActivityEvent
   , createdBy :: Maybe Projects.UserId
   , createdAt :: UTCTime
+  , metadata :: Maybe AE.Value
+  -- ^ A comment's @body@, a link's @url@/@title@; the lifecycle's own details otherwise.
   }
   deriving stock (Generic, Show)
   deriving anyclass (NFData)
@@ -2125,13 +2395,13 @@ logIssueActivity issueId event createdBy metadataM = do
 selectIssueActivity :: (DB es, Log :> es) => Projects.ProjectId -> IssueId -> Eff es [IssueActivity]
 selectIssueActivity pid issueId = do
   rows <-
-    Hasql.interp @[(Text, Maybe Projects.UserId, UTCTime)]
-      [HI.sql| SELECT a.event::text, a.created_by, a.created_at
+    Hasql.interp @[(Text, Maybe Projects.UserId, UTCTime, Maybe (HI.AsJsonb AE.Value))]
+      [HI.sql| SELECT a.event::text, a.created_by, a.created_at, a.metadata
         FROM apis.issue_activity_log a
         JOIN apis.issues i ON i.id = a.issue_id
         WHERE a.issue_id = #{issueId} AND i.project_id = #{pid}
         UNION ALL
-        SELECT 'episode:' || ev.event_kind, ev.actor_id, ev.observed_at
+        SELECT 'episode:' || ev.event_kind, ev.actor_id, ev.observed_at, NULL::jsonb
         FROM apis.incident_events ev
         JOIN apis.incident_episodes ep ON ep.id = ev.episode_id
         WHERE ep.issue_id = #{issueId} AND ep.project_id = #{pid}
@@ -2143,7 +2413,19 @@ selectIssueActivity pid issueId = do
     $ logAttention "ISSUE_TIMELINE_UNKNOWN_EVENT" (AE.object ["issue_id" AE..= issueId, "events" AE..= ordNub unparsable])
   pure activities
   where
-    toActivity (raw, by, at) = maybe (Left raw) (\e -> Right $ IssueActivity e by at) (parseActivityEvent raw)
+    toActivity (raw, by, at, meta) = maybe (Left raw) (\e -> Right $ IssueActivity e by at ((\(HI.AsJsonb v) -> v) <$> meta)) (parseActivityEvent raw)
+
+
+-- | Log that a user opened the issue, at most once a day, for the page's People list.
+recordIssueView :: (DB es, Time :> es) => IssueId -> Projects.UserId -> Eff es ()
+recordIssueView issueId uid = do
+  now <- Time.currentTime
+  Hasql.interpExecute_
+    [HI.sql| INSERT INTO apis.issue_activity_log (issue_id, event, created_by, created_at)
+             SELECT #{issueId}, #{IEViewed}, #{uid}, #{now}
+             WHERE NOT EXISTS (SELECT 1 FROM apis.issue_activity_log
+                               WHERE issue_id = #{issueId} AND created_by = #{uid} AND event = #{IEViewed}
+                                 AND created_at > #{now}::timestamptz - INTERVAL '1 day') |]
 
 
 -- Reports
@@ -2215,8 +2497,8 @@ createNewErrorIssue projectId err =
     projectId
     err
     1
-    (\isFw -> (if isFw then "Framework Error: " else "New Error: ") <> err.errorType <> " - " <> T.take 80 err.message)
-    "Investigate the new error and implement a fix."
+    (\isFw -> bool "" "Framework: " isFw <> err.errorType <> ": " <> truncateMiddle 200 err.message)
+    newErrorRecommendedAction
 
 
 -- | Fields shared by 'ErrorPatterns.ErrorPattern' and 'ErrorPatterns.ErrorPatternWithCurrentRate'.
@@ -2229,6 +2511,63 @@ type ErrorLike p =
   , HasField "service" p (Maybe Text)
   , HasField "stacktrace" p Text
   )
+
+
+-- | An issue detected from a signal rather than an error pattern: no parent-hash rollup, critical iff 'Critical'.
+signalIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Maybe Text -> Text -> IssueSeverity -> (Text, Text) -> Maybe ZonedTime -> IssuePayload -> Eff es Issue
+signalIssue projectId service targetHash severity (title, recommendedAction) timestamp payload =
+  mkIssue MkIssueOpts{projectId, targetHash, parentHash = Nothing, isFramework = False, service, critical = severity == Critical, severity, title, recommendedAction, migrationComplexity = "n/a", timestamp, payload}
+
+
+-- | One performance issue per (kind, service, transaction, query): the target hash is
+-- that key, so the open-issue upsert folds repeat detections into one issue.
+createPerformanceIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Maybe Text -> PerformanceData -> Eff es Issue
+createPerformanceIssue projectId service d =
+  signalIssue projectId service (toXXHash $ T.intercalate "|" [display d.kind, fromMaybe "" service, fromMaybe "" d.transaction, d.query]) Warning text Nothing (PerformanceP d)
+  where
+    text = case d.kind of
+      PKNPlusOne -> ("N+1 Query: " <> T.take 100 d.query, "Batch these queries: load the rows in one query (a join or an IN list) instead of one per item.")
+      PKSlowQuery -> ("Slow DB Query: " <> T.take 100 d.query, "Check the query plan: add an index for its filter, or narrow what it reads.")
+
+
+-- | One downtime issue per check: the target hash is the check id, so a check that
+-- stays down folds every failed probe into the open issue.
+createUptimeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> UptimeData -> Eff es Issue
+createUptimeIssue projectId d =
+  signalIssue projectId (Just d.name) (uptimeTargetHash d.checkId) Critical ("Downtime detected for " <> d.url, "The check at " <> d.url <> " is failing: " <> d.reason <> ".") Nothing (UptimeP d)
+
+
+uptimeTargetHash :: Text -> Text
+uptimeTargetHash = ("uptime:" <>)
+
+
+-- | One open issue per cron monitor, missed or failed.
+createCronIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> CronData -> Eff es Issue
+createCronIssue projectId d = signalIssue projectId Nothing (cronTargetHash d.monitorId) Critical text Nothing (CronP d)
+  where
+    text = case d.failure of
+      CFMissed -> ("Cron missed: " <> d.name, "No check-in from " <> d.slug <> " in its window: check the job ran and can reach Monoscope.")
+      CFFailed -> ("Cron failed: " <> d.name, "The job " <> d.slug <> " reported monitor.status = error on its last run.")
+
+
+cronTargetHash :: Text -> Text
+cronTargetHash = ("cron:" <>)
+
+
+-- | One issue per feedback submission, keyed by its record id so a rescan cannot duplicate it.
+createFeedbackIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Maybe Text -> Text -> FeedbackData -> Eff es Issue
+createFeedbackIssue projectId service recordId d =
+  signalIssue projectId service ("feedback:" <> recordId) Info ("Feedback: " <> T.take 100 d.message, "Reply to the user, or mark it as spam.") (Just (utcToZonedTime utc d.observedAt)) (FeedbackP d)
+
+
+-- | One frontend issue per (kind, page path, element).
+createFrontendIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Maybe Text -> FrontendData -> Eff es Issue
+createFrontendIssue projectId service d =
+  signalIssue projectId service (toXXHash $ T.intercalate "|" [display d.kind, maybe "" (T.takeWhile (/= '?')) d.pageUrl, d.element, fromMaybe "" d.selector]) Warning text Nothing (FrontendP d)
+  where
+    text = case d.kind of
+      FKRageClick -> ("Rage Click: " <> T.take 100 d.element, "Users clicked this repeatedly: check it responds, shows progress, and is not disabled without saying why.")
+      FKDeadClick -> ("Dead Click: " <> T.take 100 d.element, "Clicking this changed nothing on the page: wire up its handler or stop it looking clickable.")
 
 
 -- | Build a RuntimeException issue from an error pattern. Framework/transport errors

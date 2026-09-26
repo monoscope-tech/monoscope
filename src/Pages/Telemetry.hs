@@ -1318,7 +1318,7 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
               [__|on click if #trace_expanded_view exists then send closeTraceView to #trace_expanded_view else call history.back() end|]
             ]
             (faSprite_ "chevron-left" "regular" "w-3.5 h-3.5" >> "Back")
-          h3_ [class_ "whitespace-nowrap font-semibold text-textStrong"] "Trace Breakdown"
+          h3_ [class_ "whitespace-nowrap font-semibold text-textStrong [.investigation-content_&]:hidden"] "Trace Breakdown"
         div_ [class_ "flex items-center gap-2 ml-auto shrink-0"] $ do
           Components.dateTime traceItem.traceStartTime (Just traceItem.traceEndTime)
           div_ [class_ "flex gap-1 items-center"] do
@@ -1796,6 +1796,8 @@ buildSpanTree_ pid sp level scol = do
       serviceCol = getServiceColor sp.spanRecord.serviceName scol
       indent = show (level * 12) <> "px"
       isSynthetic = maybe False (Map.member syntheticMissingParentKey) sp.spanRecord.attributes
+      label = fromMaybe sp.spanRecord.spanName (spanDisplayLabel sp.spanRecord.attributes)
+      tip = sp.spanRecord.serviceName <> " — " <> label
   div_ [class_ "span-filterble"] do
     div_
       ( [ class_ $ "flex items-center w-full h-7 hover:bg-fillWeaker waterfall-row" <> bool "" " bg-fillError-weak/40 hover:bg-fillError-weak" sp.spanRecord.hasErrors <> bool " cursor-pointer" " italic text-textWeak bg-fillWeaker/50" isSynthetic
@@ -1804,8 +1806,13 @@ buildSpanTree_ pid sp level scol = do
           <> ( if isSynthetic
                  then [title_ ("Upstream parent span " <> sp.spanRecord.spanId <> " was never reported by the service. Showing an inferred placeholder.")]
                  else
-                   [__|on click remove .bg-fillBrand-weak .waterfall-active from .waterfall-active then add .bg-fillBrand-weak .waterfall-active to me|]
-                     : spanDetailAttrs_ ShowSkeleton pid.toText (UUID.toText sp.spanRecord.uSpanId) sp.spanRecord.timestamp
+                   [ tabindex_ "0"
+                   , role_ "button"
+                   , Aria.label_ $ "Show span details: " <> tip
+                   , [__|on click remove .bg-fillBrand-weak .waterfall-active from .waterfall-active then add .bg-fillBrand-weak .waterfall-active to me
+                        on keydown[(key is 'Enter' or key is ' ') and target is me] halt the event then call me.click()|]
+                   ]
+                     <> spanDetailAttrs_ ShowSkeleton pid.toText (UUID.toText sp.spanRecord.uSpanId) sp.spanRecord.timestamp
              )
       )
       do
@@ -1813,13 +1820,15 @@ buildSpanTree_ pid sp level scol = do
           if hasChildren
             then
               button_
-                [ class_ "waterfall-toggle w-4 h-4 flex items-center justify-center shrink-0"
-                , [__|on click halt the event's bubbling then toggle .hidden on the next .waterfall-children from the closest .span-filterble then toggle .rotate-90 on the first <svg/> in me|]
+                [ type_ "button"
+                , class_ "waterfall-toggle w-6 h-7 flex items-center justify-center shrink-0"
+                , Aria.label_ "Child spans"
+                , term "aria-expanded" "true"
+                , [__|on click halt the event's bubbling then toggle .hidden on the first <.waterfall-children/> in the closest .span-filterble then toggle .rotate-90 on the first <svg/> in me
+                       then if @aria-expanded is 'true' set @aria-expanded to 'false' else set @aria-expanded to 'true' end|]
                 ]
                 $ faSprite_ "chevron-right" "regular" "h-3 w-3 text-textWeak rotate-90"
-            else div_ [class_ "w-4 shrink-0"] pass
-          let label = fromMaybe sp.spanRecord.spanName (spanDisplayLabel sp.spanRecord.attributes)
-              tip = sp.spanRecord.serviceName <> " — " <> label
+            else div_ [class_ "w-6 shrink-0"] pass
           if isSynthetic
             then faSprite_ "circle-question" "regular" "h-3 w-3 text-textWeak shrink-0"
             else div_ [class_ $ "w-2.5 h-2.5 rounded-full shrink-0 " <> serviceCol, title_ sp.spanRecord.serviceName] pass

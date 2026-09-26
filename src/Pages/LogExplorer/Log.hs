@@ -798,9 +798,6 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
       | not (T.null (T.strip queryInput)) && null ast -> parseError "Invalid query syntax"
       | otherwise -> pure (ast, Nothing)
 
-  -- Fire-and-forget: mark onboarding done + log this query into history.
-  recordExploration pid sess.persistentSession.userId project.onboardingStepsCompleted queryAST
-
   now <- Time.currentTime
   let (_, _, currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
   authCtx <- Effectful.Reader.Static.ask @AuthContext
@@ -878,8 +875,9 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
       Components.liveDataControls_ (Just "log_explorer_form") currentRange Nothing (Components.RowStreaming supportsStreaming)
 
 
--- | Fire-and-forget on page load: mark the @explored_logs@ onboarding step done
--- and record the query in the user's history.
+-- | Mark the @explored_logs@ onboarding step done and record the query in the user's
+-- history. Called from the rows request, not the page shell: the body preloads links on
+-- hover, so the shell GET runs for pages nobody opened.
 recordExploration :: Projects.ProjectId -> Projects.UserId -> V.Vector Text -> [Section] -> ATAuthCtx ()
 recordExploration pid uid stepsDone queryAST = do
   unless (V.elem "explored_logs" stepsDone)
@@ -952,7 +950,11 @@ logExplorerDataH pid LogDataQuery{query = queryM', cols = cols', cursor = cursor
         "Log explorer data: rejected invalid KQL query"
         (AE.object ["query" AE..= T.take 2000 (fromMaybe "" queryM'), "error" AE..= err])
         $> (Just err, emptyTable)
-    Right (withSortSection sortM -> queryAST) -> do
+    Right ast -> do
+      let queryAST = withSortSection sortM ast
+      when (isNothing cursorM') do
+        (sess, project) <- Projects.sessionAndProject pid
+        recordExploration pid sess.persistentSession.userId project.onboardingStepsCompleted ast
       resultE <-
         LogQueries.selectLogTable authCtx.env.enableTimefusionReads pid queryAST (toQText queryAST) cursor (fromD, toD) addCols (parseMaybe pSource =<< sourceM) targetSpansM envM serviceM
       case resultE of

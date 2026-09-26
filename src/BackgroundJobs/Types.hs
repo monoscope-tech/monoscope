@@ -51,6 +51,9 @@ data BgJobs
   | LogPatternHourlyProcessing UTCTime Projects.ProjectId
   | ErrorBaselineCalculation Projects.ProjectId -- Calculate baselines for all errors in a project
   | ErrorSpikeDetection Projects.ProjectId -- Detect error spikes and create issues
+  | PerformanceIssueDetection Projects.ProjectId -- N+1 and slow database queries over the last hour's spans
+  | FrontendIssueDetection Projects.ProjectId -- Rage clicks over the last hour's browser interaction spans
+  | FeedbackDetection Projects.ProjectId -- user.feedback spans/logs into feedback issues
   | ErrorAssigned Projects.ProjectId ErrorPatterns.ErrorPatternId Projects.UserId -- projectId, errorId, assigneeId
   | PatternEmbeddingAndMerge UTCTime Projects.ProjectId
   | ErrorGroupReview UTCTime Projects.ProjectId

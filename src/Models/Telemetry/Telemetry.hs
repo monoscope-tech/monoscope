@@ -8,6 +8,15 @@ module Models.Telemetry.Telemetry (
   getUsageTotals,
   SpanRecord (..),
   getAllATErrors,
+  adjacentHashEvent,
+  EventStep (..),
+  PerfCandidate (..),
+  selectPerfCandidates,
+  spanAndRootNames,
+  selectClickSpans,
+  selectNamedRecords,
+  traceErrorHash,
+  bursts,
   isErrorRecord,
   getProjectStatsForReport,
   Trace (..),
@@ -85,6 +94,7 @@ module Models.Telemetry.Telemetry (
   atMapText,
   atMapInt,
   spanServiceName,
+  spanAttr,
   getProjectStatsBySpanType,
   getEndpointStats,
   getDBQueryStats,
@@ -118,7 +128,7 @@ import Data.Text.Display (Display)
 import Data.These (These (..))
 import Data.These qualified as These
 import Data.Time (UTCTime (..))
-import Data.Time.Clock (addUTCTime, diffTimeToPicoseconds, diffUTCTime, nominalDay, picosecondsToDiffTime)
+import Data.Time.Clock (NominalDiffTime, addUTCTime, diffTimeToPicoseconds, diffUTCTime, nominalDay, picosecondsToDiffTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
 import Data.UUID.Quasi (uuid)
@@ -154,7 +164,8 @@ import System.IO (hPutStrLn)
 import System.Logging qualified as Log
 import System.Tracing (forkWithCtx)
 import UnliftIO (throwIO, tryAny)
-import Utils (encodeText, extractMessageFromLog, formatBytes, getDurationNSMS, jsonToMap, lookupValueText, nonEmptyT, scrubNulText, scrubNulValue)
+import Utils (classifyUserAgent, encodeText, extractMessageFromLog, formatBytes, getDurationNSMS, jsonToMap, lookupValueText, nonEmptyT, scrubNulText, scrubNulValue)
+import Web.HttpApiData (FromHttpApiData)
 
 
 -- $setup
@@ -223,6 +234,10 @@ atMapInt key maybeMap =
 
 spanServiceName :: OtelLogsAndSpans -> Maybe Text
 spanServiceName = resourceServiceName . unAesonTextMaybe . (.resource)
+
+
+spanAttr :: Text -> OtelLogsAndSpans -> Maybe Text
+spanAttr k = atMapText k . unAesonTextMaybe . (.attributes)
 
 
 -- | 'atMapText' already tries the flat @"service.name"@ key before descending.
@@ -798,6 +813,127 @@ getTraceRowsWith select spanIdOf parentIdOf useTf pid trId tme now limitM = Hasq
   if hasMore
     then pure (initial, True)
     else (,False) <$> resolveTraceOrphans pid trId resolveHop spanIdOf parentIdOf initial
+
+
+-- | A database-span pattern worth a performance issue, as found in one trace.
+data PerfCandidate = PerfCandidate
+  { traceId :: Text
+  , parentId :: Maybe Text
+  , query :: Text
+  , occurrences :: Int
+  , durationNs :: Int64
+  , at :: UTCTime
+  , service :: Maybe Text
+  , dbSystem :: Maybe Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+-- | N+1 candidates: the same query run at least 5 times under one parent span in one
+-- trace, costing 50ms or more together. Slow candidates: single queries over 1s.
+-- Both read database spans (@db.query.text@) in @[from, to)@ and return the costliest.
+selectPerfCandidates :: DB es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es ([PerfCandidate], [PerfCandidate])
+selectPerfCandidates pid from to =
+  (,)
+    <$> Hasql.interp
+      [HI.sql| SELECT context___trace_id, parent_id, ^{normalizedQuery},
+                      count(*)::bigint, sum(duration)::bigint, min(timestamp), max(resource___service___name), max(attributes___db___system___name)
+               ^{dbSpans} AND parent_id IS NOT NULL
+               GROUP BY context___trace_id, parent_id, ^{normalizedQuery}
+               HAVING count(*) >= 5 AND sum(duration) >= 50000000
+               ORDER BY sum(duration) DESC LIMIT 50 |]
+    <*> Hasql.interp
+      [HI.sql| SELECT context___trace_id, parent_id, ^{normalizedQuery},
+                      1::bigint, duration, timestamp, resource___service___name, attributes___db___system___name
+               ^{dbSpans} AND duration > 1000000000
+               ORDER BY duration DESC LIMIT 50 |]
+  where
+    dbSpans = [HI.sql| FROM otel_logs_and_spans WHERE project_id = #{pid.toText} AND timestamp >= #{from} AND timestamp < #{to} AND attributes___db___query___text IS NOT NULL AND context___trace_id IS NOT NULL |]
+    -- Literals out, so `WHERE id = 1` and `WHERE id = 2` group as one query. Both engines
+    -- (Postgres, DataFusion) accept this regexp_replace form.
+    normalizedQuery = [HI.sql|regexp_replace(regexp_replace(COALESCE(attributes___db___query___summary, attributes___db___query___text), '''[^'']*''', '?', 'g'), '[0-9]+', '?', 'g')|]
+
+
+-- | Name of a span in a trace, and the trace's root span name, near @at@.
+spanAndRootNames :: DB es => Projects.ProjectId -> Text -> Maybe Text -> UTCTime -> Eff es (Maybe Text, Maybe Text)
+spanAndRootNames pid tid spanIdM at = do
+  rows <-
+    Hasql.interp @[(Maybe Text, Maybe Text, Maybe Text)]
+      [HI.sql| SELECT context___span_id, parent_id, name FROM otel_logs_and_spans
+               WHERE project_id = #{pid.toText} AND context___trace_id = #{tid}
+                 AND timestamp BETWEEN #{addUTCTime (-300) at} AND #{addUTCTime 300 at}
+                 AND (context___span_id = #{spanIdM} OR parent_id IS NULL OR parent_id = '') LIMIT 20 |]
+  pure
+    ( asum [n | isJust spanIdM, (sid, _, n) <- rows, sid == spanIdM]
+    , asum [n | (_, par, n) <- rows, maybe True T.null par]
+    )
+
+
+-- | The browser SDK's click and dead-click spans (carrying @session.id@) in @[from, to)@.
+selectClickSpans :: DB es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [OtelLogsAndSpans]
+selectClickSpans pid from to =
+  Hasql.interp $ selectOtelSpans pid.toText from to [HI.sql| AND name IN ('click', 'dead_click') AND attributes___session___id IS NOT NULL ORDER BY timestamp LIMIT 20000 |]
+
+
+-- | Spans or logs with this name in @[from, to)@: cron check-ins (@cron.checkin@), user feedback (@user.feedback@).
+selectNamedRecords :: DB es => Projects.ProjectId -> Text -> UTCTime -> UTCTime -> Eff es [OtelLogsAndSpans]
+selectNamedRecords pid name from to = Hasql.interp $ selectOtelSpans pid.toText from to [HI.sql| AND name = #{name} ORDER BY timestamp LIMIT 5000 |]
+
+
+-- | The first error hash (@err:…@) carried by any record of this trace within an hour of @at@.
+traceErrorHash :: DB es => Projects.ProjectId -> Text -> UTCTime -> Eff es (Maybe Text)
+traceErrorHash pid tid at =
+  Hasql.interpOne
+    [HI.sql| SELECT h FROM (SELECT unnest(hashes) AS h FROM otel_logs_and_spans
+               WHERE project_id = #{pid.toText} AND context___trace_id = #{tid} AND timestamp BETWEEN #{addUTCTime (-3600) at} AND #{addUTCTime 3600 at}) t
+             WHERE h LIKE 'err:%' LIMIT 1 |]
+
+
+-- | The largest burst per key: at least @minCount@ events within @window@ seconds.
+-- Rage clicks are bursts of clicks on one element in one session.
+--
+-- >>> import Data.Time (UTCTime (..), fromGregorian)
+-- >>> let t s = UTCTime (fromGregorian 2026 1 1) s
+-- >>> map (fmap length) $ bursts (\t -> t) 3 2 [("save", t 0), ("save", t 0.5), ("save", t 1.2), ("save", t 9), ("nav", t 0), ("nav", t 5)]
+-- [("save",3)]
+bursts :: Ord k => (a -> UTCTime) -> Int -> NominalDiffTime -> [(k, a)] -> [(k, NonEmpty a)]
+bursts at minCount window evs =
+  [ (k, best)
+  | (k, xs) <- Map.toList $ Map.fromListWith (flip (<>)) [(k, [x]) | (k, x) <- evs]
+  , Just best <- [listToMaybe $ sortOn (Down . length) [w | w <- windows (sortOn at xs), length w >= minCount]]
+  ]
+  where
+    windows xs = [s :| takeWhile (\x -> diffUTCTime (at x) (at s) <= window) rest | (s : rest) <- tails xs]
+
+
+-- | Which event to open from @from@: the nearest older or newer one, or the richest of the day before
+-- (Sentry's "Recommended": a replay session, then a user, then a URL, newest first).
+data EventStep = Older | Newer | Recommended
+  deriving stock (Eq, Read, Show)
+  deriving (FromHttpApiData) via WrappedEnumSC 'Nothing "" EventStep
+
+
+-- | The traced event carrying @hashKey@ nearest to @from@ in one direction, within a
+-- day of it: the hash test is an unindexed array scan, so the window bounds its cost.
+adjacentHashEvent :: DB es => Projects.ProjectId -> Text -> EventStep -> UTCTime -> Eff es (Maybe (Text, UTCTime))
+adjacentHashEvent pid hashKey step from =
+  Hasql.interpOne
+    [HI.sql| SELECT context___trace_id, timestamp FROM otel_logs_and_spans
+             WHERE project_id = #{pid.toText} AND timestamp BETWEEN #{lo} AND #{hi} AND timestamp <> #{from}
+               AND #{hashKey} = ANY(hashes) AND context___trace_id IS NOT NULL AND context___trace_id <> ''
+             ORDER BY ^{order} LIMIT 1 |]
+  where
+    (lo, hi, order) = case step of
+      Older -> (addUTCTime (-86400) from, from, nearest)
+      Newer -> (from, addUTCTime 86400 from, nearest)
+      Recommended ->
+        ( addUTCTime (-86400) from
+        , from
+        , [HI.sql| (CASE WHEN attributes___session___id <> '' THEN 4 ELSE 0 END) + (CASE WHEN attributes___user___id <> '' OR attributes___user___email <> '' THEN 2 ELSE 0 END)
+                 + (CASE WHEN attributes___url___full <> '' OR attributes___url___path <> '' THEN 1 ELSE 0 END) DESC, timestamp DESC |]
+        )
+    nearest = [HI.sql| abs(extract(epoch FROM timestamp - #{from}::timestamptz)) |]
 
 
 -- | First/recent trace_id for a (project, method, url_path). Window kept tight (7d) since
@@ -2202,7 +2338,9 @@ extractATError spanObj (AE.Object o) = do
   -- Strings-only, no NUL-scrub: these feed computeErrorHashes, so widening the
   -- accepted values (or scrubbing) would re-key existing error patterns.
   let getTextOrEmpty k = fromMaybe "" $ asTextRaw =<< KEM.lookup k attrs
-  pure $ atErrorFrom spanObj (getTextOrEmpty "type") (getTextOrEmpty "message") (getTextOrEmpty "stacktrace")
+      -- `exception.escaped` is deprecated but still the only OTel handled/unhandled signal.
+      escaped = KEM.lookup "escaped" attrs >>= \case AE.Bool b -> Just b; AE.String t -> readMaybe (toString $ T.toTitle t); _ -> Nothing
+  pure $ atErrorFrom spanObj ErrorPatterns.CMExceptionEvent (not <$> escaped) (getTextOrEmpty "type") (getTextOrEmpty "message") (getTextOrEmpty "stacktrace")
 extractATError _ _ = Nothing
 
 
@@ -2223,18 +2361,20 @@ extractATErrorFromRecord spanObj =
       stack = fromMaybe "" (excAttr "stacktrace")
    in if T.null msg && T.null stack
         then Nothing
-        else Just (atErrorFrom spanObj typ msg stack)
+        else Just (atErrorFrom spanObj (bool ErrorPatterns.CMSpanStatus ErrorPatterns.CMLogRecord (isJust spanObj.severity || spanObj.kind == Just "log")) Nothing typ msg stack)
 
 
 -- | Build an 'ErrorPatterns.ATError' from a span/log plus the extracted
 -- @(errorType, message, stackTrace)@ triple. Hash-driven dedup groups similar errors.
-atErrorFrom :: OtelLogsAndSpans -> Text -> Text -> Text -> ErrorPatterns.ATError
-atErrorFrom spanObj typ msg stack =
+atErrorFrom :: OtelLogsAndSpans -> ErrorPatterns.CaptureMechanism -> Maybe Bool -> Text -> Text -> Text -> ErrorPatterns.ATError
+atErrorFrom spanObj mechanism handled typ msg stack =
   let attrs = unAesonTextMaybe spanObj.attributes
       resc = unAesonTextMaybe spanObj.resource
-      getSpanAttr k = attrs >>= Map.lookup k >>= valText
+      -- Attributes arrive both flat ("client.address") and nested by ingest's dot-notation
+      -- expansion ({client: {address}}), so each key is tried both ways.
+      getSpanAttr k = (attrs >>= Map.lookup k >>= valText) <|> atMapText k attrs
       getUserAttrM k v = valText =<< Map.lookup k =<< jsonToMap =<< Map.lookup v =<< resc
-      getIdentityAttrM k namespaces = asum [getUserAttrM k namespace | namespace <- namespaces]
+      getIdentityAttrM k namespaces = asum [getSpanAttr (namespace <> "." <> k) <|> getUserAttrM k namespace | namespace <- namespaces]
       method = getSpanAttr "http.request.method"
       urlPath = getSpanAttr "http.route" <|> getSpanAttr "http.target"
       -- TODO: parse telemetry.sdk.name to SDKTypes
@@ -2243,6 +2383,13 @@ atErrorFrom spanObj typ msg stack =
       -- An unrecognised/absent SDK language parses to the generic frame parser,
       -- which is what the old empty-string default selected too.
       rt = EF.parseRuntime $ fromMaybe "" tech
+      -- Span attribute first, resource second: browser SDKs put user_agent/geo on the
+      -- span, mobile SDKs put os/device on the resource.
+      attr k = getSpanAttr k <|> atMapText k resc
+      withVersion n v = n <&> \n' -> maybe n' (\v' -> n' <> " " <> v') v
+      ua = attr "user_agent.original"
+      (uaBrowser, uaOs, uaDevice) = maybe (Nothing, Nothing, Nothing) ((\(b, o, d) -> (known b, known o, Just d)) . classifyUserAgent) ua
+      known v = v <$ guard (v /= "Other")
       hashes = EF.computeErrorHashes spanObj.project_id serviceName spanObj.name rt typ msg stack
    in ErrorPatterns.ATError
         { projectId = UUIDId <$> UUID.fromText spanObj.project_id
@@ -2265,13 +2412,35 @@ atErrorFrom spanObj typ msg stack =
         , runtime = tech
         , parentSpanId = spanObj.parent_id
         , endpointHash = Nothing
-        , environment = Nothing
+        , environment = attr "deployment.environment.name" <|> attr "deployment.environment"
         , userId = getIdentityAttrM "id" ["user", "enduser"]
         , userEmail = getIdentityAttrM "email" ["user", "enduser"]
         , userName = getIdentityAttrM "name" ["user", "enduser"]
         , userIp = getSpanAttr "client.address"
         , sessionId = getUserAttrM "id" "session"
         , tenantName = getSpanAttr "tenant.name" <|> getIdentityAttrM "name" ["tenant", "organization"]
+        , release = attr "service.version"
+        , handled
+        , mechanism = Just mechanism
+        , level = spanObj.level <|> (toText . encodeEnumSC @"SL" <$> ((.severity_text) =<< spanObj.severity)) <|> ("error" <$ guard (spanObj.status_code == Just "ERROR"))
+        , userAgent = ua
+        , browser = withVersion (attr "user_agent.name") (attr "user_agent.version") <|> uaBrowser
+        , os = withVersion (attr "os.name" <|> attr "user_agent.os.name") (attr "os.version" <|> attr "user_agent.os.version") <|> uaOs
+        , device = attr "device.model.name" <|> attr "device.model.identifier" <|> uaDevice
+        , geoCountry = attr "geo.country.iso_code"
+        , geoRegion = attr "geo.region.iso_code"
+        , geoCity = attr "geo.locality.name"
+        , threadId = attr "thread.id"
+        , threadName = attr "thread.name"
+        , urlFull = attr "url.full"
+        , urlQuery = attr "url.query"
+        , requestHeaders =
+            -- `http.request.header.<name>` (semconv, string[] values) or the legacy `.headers`.
+            mfilter (not . Map.null)
+              . fmap (Map.mapMaybe \case AE.Array vs -> nonEmptyT $ Just $ T.intercalate ", " $ mapMaybe valText $ V.toList vs; v -> valText v)
+              $ asum [jsonToMap =<< getNestedValue (T.splitOn "." k) =<< attrs | k <- ["http.request.header", "http.request.headers"]]
+        , attachments =
+            mfilter (not . null) $ Just [u | k <- ["attachment.url", "screenshot.url"], v <- maybeToList (getNestedValue (T.splitOn "." k) =<< attrs), u <- case v of AE.Array vs -> mapMaybe valText (V.toList vs); _ -> maybeToList (valText v), any (`T.isPrefixOf` u) ["https://", "http://"]]
         }
 
 

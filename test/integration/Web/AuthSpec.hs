@@ -4,8 +4,10 @@ import Data.Effectful.Hasql qualified as Hasql
 import Data.List qualified as L
 import Data.Text qualified as T
 import Data.UUID qualified as UUID
+import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Hasql.Interpolate qualified as HI
+import Lucid qualified
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (RequestHeaders, hAuthorization, hCookie)
 import Network.Wai qualified as Wai
@@ -146,3 +148,16 @@ spec = aroundAll withTestResources do
           location `shouldNotSatisfy` T.isInfixOf "screen_hint"
           location `shouldNotSatisfy` T.isInfixOf "login_hint"
         _ -> fail "No Location header in loginH response"
+
+  -- Regression: GET /device?code=X&action=approve approved, so any link could bind an
+  -- attacker's CLI device code to the clicker's account. GET must only render the prompt.
+  describe "CLI device approval" do
+    it "binds the device code only on POST, never on GET" \tr -> do
+      code <- T.take 8 . UUID.toText <$> UUIDV4.nextRandom
+      let bound = runQueryEffect tr (Hasql.interp [HI.sql| SELECT session_id IS NOT NULL FROM users.device_auth_codes WHERE user_code = #{code} |])
+      runQueryEffect tr $ Hasql.interpExecute_ [HI.sql| INSERT INTO users.device_auth_codes (id, device_code, user_code, expires_at) VALUES (gen_random_uuid(), gen_random_uuid()::text, #{code}, now() + interval '5 minutes') |]
+      (_, prompt) <- testServant tr $ Auth.deviceApproveH False (Just code)
+      toStrict (Lucid.renderText prompt) `shouldSatisfy` T.isInfixOf "method=\"POST\""
+      bound `shouldReturn` V.singleton False
+      _ <- testServant tr $ Auth.deviceApproveH True (Just code)
+      bound `shouldReturn` V.singleton True

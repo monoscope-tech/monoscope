@@ -1,4 +1,10 @@
 module Models.Apis.Monitors (
+  CronMonitor (..),
+  cronMonitorsByProject,
+  insertCronMonitor,
+  deleteCronMonitor,
+  claimDueCronMonitors,
+  recordCronCheckin,
   queryMonitorsAll,
   queryMonitorByTitle,
   queryMonitorById,
@@ -350,3 +356,54 @@ getWidgetAlertStatuses pid dashboardId widgetIds
         AND deleted_at IS NULL
         AND deactivated_at IS NULL
     |]
+
+
+-- | A scheduled job that checks in with a @cron.checkin@ span or log (@monitor.slug@,
+-- @monitor.status@). It is late once @interval + grace@ passes without one.
+data CronMonitor = CronMonitor
+  { id :: UUID.UUID
+  , projectId :: Projects.ProjectId
+  , slug :: Text
+  , name :: Text
+  , intervalSecs :: Int
+  , graceSecs :: Int
+  , createdAt :: UTCTime
+  , lastCheckinAt :: Maybe UTCTime
+  , lastStatus :: Maybe Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+cronCols :: HI.Sql
+cronCols = [HI.sql| id, project_id, slug, name, interval_secs::bigint, grace_secs::bigint, created_at, last_checkin_at, last_status |]
+
+
+cronMonitorsByProject :: DB es => Projects.ProjectId -> Eff es [CronMonitor]
+cronMonitorsByProject pid = Hasql.interp ([HI.sql| SELECT |] <> cronCols <> [HI.sql| FROM apis.cron_monitors WHERE project_id = #{pid} ORDER BY created_at |])
+
+
+-- | @now@ is the app clock, not the DB's: the first missed window is measured from it.
+insertCronMonitor :: DB es => Projects.ProjectId -> Text -> Text -> Int -> Int -> UTCTime -> Eff es Int64
+insertCronMonitor pid slug name interval grace now =
+  Hasql.interpExecute [HI.sql| INSERT INTO apis.cron_monitors (project_id, slug, name, interval_secs, grace_secs, created_at) VALUES (#{pid}, #{slug}, #{name}, #{interval}, #{grace}, #{now}) ON CONFLICT (project_id, slug) DO NOTHING |]
+
+
+deleteCronMonitor :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es Int64
+deleteCronMonitor pid mid = Hasql.interpExecute [HI.sql| DELETE FROM apis.cron_monitors WHERE project_id = #{pid} AND id = #{mid} |]
+
+
+-- | Lease monitors due for evaluation for a minute, so concurrent ticks on several
+-- nodes each take a disjoint set.
+claimDueCronMonitors :: DB es => Int -> Eff es [CronMonitor]
+claimDueCronMonitors limit =
+  Hasql.interp
+    ( [HI.sql| UPDATE apis.cron_monitors SET next_eval_at = now() + interval '1 minute'
+               WHERE id IN (SELECT id FROM apis.cron_monitors WHERE next_eval_at <= now() ORDER BY next_eval_at FOR UPDATE SKIP LOCKED LIMIT #{limit})
+               RETURNING |]
+        <> cronCols
+    )
+
+
+recordCronCheckin :: DB es => UUID.UUID -> UTCTime -> Text -> Eff es Int64
+recordCronCheckin mid at status = Hasql.interpExecute [HI.sql| UPDATE apis.cron_monitors SET last_checkin_at = #{at}, last_status = #{status} WHERE id = #{mid} |]

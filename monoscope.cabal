@@ -221,6 +221,21 @@ extra-source-files:
     static/migrations/0188_ai_threads_and_routines.sql
     static/migrations/0189_ai_routine_run_lease.sql
     static/migrations/0190_ai_thread_read_indexes.sql
+    static/migrations/0191_ai_usage_billing.sql
+    static/migrations/0192_routine_catalog.sql
+    static/migrations/0193_ai_usage_and_routine_run_invariants.sql
+    static/migrations/0194_ai_chat_execution_events.sql
+    static/migrations/0195_preserve_custom_routine_actions.sql
+    static/migrations/0196_ai_chat_execution_events.sql
+    static/migrations/0197_routine_schedule_invariants.sql
+    static/migrations/0198_dashboard_default_team.sql
+    static/migrations/0199_error_releases_and_users.sql
+    static/migrations/0200_issue_triage.sql
+    static/migrations/0201_issue_views.sql
+    static/migrations/0202_performance_issue_type.sql
+    static/migrations/0203_frontend_issue_type.sql
+    static/migrations/0204_uptime_checks.sql
+    static/migrations/0205_cron_monitors.sql
 
 source-repository head
   type: git
@@ -473,6 +488,7 @@ library
     , filepath
     , fmt
     , generic-lens
+    , geoip2
     , gogol
     , gogol-core
     , gogol-pubsub
@@ -499,6 +515,7 @@ library
     , hw-kafka-client
     , indexed-traversable
     , insert-ordered-containers
+    , iproute
     , jose-jwt
     , kafka-effectful
     , ki
@@ -1170,6 +1187,7 @@ test-suite test-dev
     , filepath
     , fmt
     , generic-lens
+    , geoip2
     , gogol
     , gogol-core
     , gogol-pubsub
@@ -1196,6 +1214,7 @@ test-suite test-dev
     , hw-kafka-client
     , indexed-traversable
     , insert-ordered-containers
+    , iproute
     , jose-jwt
     , kafka-effectful
     , ki

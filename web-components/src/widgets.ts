@@ -380,6 +380,9 @@ const updateChartConfiguration = (widgetData: WidGetData, opt: any, data: any) =
 
   const source = collapseLongTail(data);
   opt.dataset = { ...opt.dataset, source };
+  // Counts must not get fractional ticks (0.2, 0.6) when the peak is small.
+  if (opt.yAxis && !Array.isArray(opt.yAxis))
+    opt.yAxis.minInterval = source.slice(1).every((r: ChartCell[]) => r.slice(1).every((v) => v == null || Number.isInteger(v))) ? 1 : undefined;
 
   // Avoid unnecessary updates if data structure hasn't changed
   const cols = source[0]?.slice(1);
@@ -751,6 +754,8 @@ type WidGetData = {
   timeTo?: string | null;
   highlightFrom?: string | null;
   highlightTo?: string | null;
+  // Labelled instants (e.g. releases) drawn as vertical lines; `at` is ISO-8601.
+  markers?: { label: string; at: string }[] | null;
   dashboardId?: string | null;
 };
 
@@ -800,6 +805,14 @@ const applyHighlightBand = (chart: any, { highlightFrom, highlightTo, timeFrom, 
     { series: [{ id: '__highlight', type: 'line', data: [], silent: true, animation: false, ...mark }] },
     { replaceMerge: [] },
   );
+};
+
+const applyMarkers = (chart: any, { markers }: WidGetData) => {
+  const data = (markers ?? []).map(m => ({ xAxis: new Date(m.at).getTime(), name: m.label })).filter(d => Number.isFinite(d.xAxis));
+  if (!data.length) return;
+  const { strokeStrong } = getChartStyles();
+  const markLine = { silent: true, symbol: 'none', lineStyle: { color: strokeStrong, type: 'dotted', width: 1 }, label: { formatter: '{b}', position: 'insideEndTop', fontSize: 10 }, data };
+  chart.setOption({ series: [{ id: '__markers', type: 'line', data: [], silent: true, animation: false, markLine }] }, { replaceMerge: [] });
 };
 
 type Exemplar = { trace_id: string; timestamp: string; value: number; metric_name: string; url: string };
@@ -965,6 +978,7 @@ const chartWidget = (widgetData: WidGetData) => {
   chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source));
   chartRefreshState.set(chart, { url: chartDataUrl(widgetData), hasData: (opt.dataset.source?.length ?? 0) > 1, failures: 0 });
   applyHighlightBand(chart, widgetData);
+  applyMarkers(chart, widgetData);
   (chartEl as any).applyThresholds = (thresholds: Record<string, number>) => applyThresholds(chart, thresholds, widgetData.unit ?? '');
 
   // Opt-in per chart: the Lucid container declares data-exemplars-url next to the

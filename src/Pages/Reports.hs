@@ -439,7 +439,7 @@ liveReportPage view = div_ ([id_ "live-report-preview", class_ "w-full h-full mi
       LiveReportReady{} -> []
       LiveReportBuilding pid -> poll pid "every 2s"
       LiveReportFailed pid -> poll pid "every 60s"
-    poll pid trigger = [hxGet_ $ "/p/" <> pid.toText <> "/reports/live", hxTrigger_ trigger, hxTarget_ "this", hxSelect_ "#live-report-preview", hxSwap_ "outerHTML"]
+    poll pid trigger = [term "hx-preload" "false", hxGet_ $ "/p/" <> pid.toText <> "/reports/live", hxTrigger_ trigger, hxTarget_ "this", hxSelect_ "#live-report-preview", hxSwap_ "outerHTML"]
 
 
 -- | (reportType, dateLabel, emailHtml)

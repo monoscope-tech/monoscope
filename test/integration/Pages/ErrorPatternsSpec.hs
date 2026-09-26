@@ -7,7 +7,7 @@ import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
-import Data.Time (addUTCTime)
+import Data.Time (NominalDiffTime, addUTCTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
@@ -31,6 +31,18 @@ import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, sequential
 
 pid :: Projects.ProjectId
 pid = UUIDId UUID.nil
+
+
+patternOf :: TestResources -> Text -> IO ErrorPatterns.ErrorPattern
+patternOf tr ty = runTestBg frozenTime tr (ErrorPatterns.getErrorPatterns pid Nothing 200 0) >>= maybe (fail $ "no " <> toString ty) pure . find ((== ty) . (.errorType))
+
+
+issueOf :: TestResources -> Text -> IO Issues.Issue
+issueOf tr h = runTestBg frozenTime tr (Issues.selectIssueByHash pid h Issues.AnyIssue) >>= maybe (fail "no issue") pure
+
+
+issuePageText :: TestResources -> Issues.IssueId -> IO Text
+issuePageText tr iid = TL.toStrict . renderText . toHtml . snd <$> testServant tr (Pages.Issues.issueDetailGetH pid iid Nothing Nothing Nothing Nothing Nothing)
 
 
 countIssues :: TestResources -> Issues.IssueType -> IO Int
@@ -90,6 +102,73 @@ spec = sequential $ aroundAll withTestResources do
         p.message `shouldSatisfy` (/= "")
         p.stacktrace `shouldSatisfy` (/= "")
 
+    it "1a. an error snapshot carries release, handled, environment, client and geo from OTel attributes" \tr -> do
+      apiKey <- createTestAPIKey tr pid "error-context-key"
+      let ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
+      ingestTraceWithExceptionAttrs
+        tr
+        apiKey
+        ( [("user_agent.original", ua), ("geo.country.iso_code", "US"), ("geo.locality.name", "Santa Clara"), ("thread.name", "main"), ("http.request.method", "GET"), ("url.full", "https://shop.example.com/api/context?cart=7&coupon=x"), ("url.query", "cart=7&coupon=x"), ("http.request.header.x-request-id", "req-42"), ("screenshot.url", "https://cdn.example.com/shot.png"), ("attachment.url", "javascript:alert(1)")]
+        , [("service.version", "26.3.1"), ("deployment.environment.name", "production")]
+        , [("exception.escaped", "true")]
+        )
+        "GET /api/context"
+        "ContextError"
+        "context probe"
+        "ContextError: context probe\n    at probe (/app/src/probe.js:1:1)"
+        (addUTCTime (-15) frozenTime)
+      drainExtractionWorker tr
+      void $ runAllBackgroundJobs frozenTime tr.trATCtx
+      ctxPattern <- patternOf tr "ContextError"
+      let e = ctxPattern.errorData
+      void $ runTestBg frozenTime tr $ ErrorPatterns.updateErrorPatternAnalysis ctxPattern.id "The cart line has no price" "data"
+      (e.release, e.environment, e.handled, e.mechanism) `shouldBe` (Just "26.3.1", Just "production", Just False, Just ErrorPatterns.CMExceptionEvent)
+      (e.browser, e.os, e.device, e.userAgent) `shouldBe` (Just "Chrome", Just "Windows", Just "Desktop", Just ua)
+      (e.geoCountry, e.geoCity, e.threadName, e.attachments) `shouldBe` (Just "US", Just "Santa Clara", Just "main", Just ["https://cdn.example.com/shot.png"])
+      issue <- issueOf tr e.hash
+      issuePageText tr issue.id >>= (`shouldContainAll` ["id=\"issue-contexts\"", "Santa Clara, US", "26.3.1", "Chrome", "exception_event", "id=\"issue-http\"", "https://shop.example.com/api/context?cart=7&amp;coupon=x", "coupon", "x-request-id", "curl -X GET", "id=\"issue-copy-json\"", "&quot;release&quot;:&quot;26.3.1&quot;", "## ", "id=\"issue-grouping\"", "context probe", "Root cause", "The cart line has no price", "Plan a fix", "id=\"issue-tags\"", ">release</h4>", ">26.3.1</span>", "100%", "id=\"issue-attachments\"", "src=\"https://cdn.example.com/shot.png\""])
+
+    it "1c. releases and distinct users are tracked, and resolve-in-next-release holds until a new release" \tr -> do
+      apiKey <- createTestAPIKey tr pid "release-key"
+      let stack = "ReleaseError: probe\n    at probe (/app/src/release.js:1:1)"
+          emit rel extra at = do
+            ingestTraceWithExceptionAttrs tr apiKey (extra, [("service.version", rel)], []) "GET /api/release" "ReleaseError" "release probe" stack (addUTCTime at frozenTime)
+            drainExtractionWorker tr
+            void $ runAllBackgroundJobs frozenTime tr.trATCtx
+          current = patternOf tr "ReleaseError"
+      emit "1.0" [("user.id", "u-1")] (-50)
+      emit "1.0" [("client.address", "10.0.0.9")] (-45)
+      emit "1.0" [("user.id", "u-1")] (-40)
+      p0 <- current
+      (p0.firstRelease, p0.lastRelease, p0.usersCount) `shouldBe` (Just "1.0", Just "1.0", 2)
+      issue <- issueOf tr p0.hash
+      issuePageText tr issue.id >>= (`shouldContainAll` ["Distinct users affected", ">2<", "Last release", "next_release=true", "Resolve in the release after 1.0"])
+      void $ testServant tr $ Pages.Issues.resolveErrorPostH pid p0.id.unErrorPatternId True
+      emit "1.0" [] (-35)
+      (((.state) &&& (.resolvedInRelease)) <$> current) `shouldReturn` (ESResolved, Just "1.0")
+      emit "1.1" [] (-30)
+      p2 <- current
+      (p2.state, p2.lastRelease, p2.resolvedInRelease) `shouldBe` (ESRegressed, Just "1.1", Nothing)
+      -- The chart marks where each release began; a later event of the same release must not move it.
+      emit "1.1" [] (-25)
+      (fmap zonedTimeToUTC . (.lastReleaseSince) <$> current) `shouldReturn` Just (addUTCTime (-30) frozenTime)
+      issuePageText tr issue.id >>= (`shouldContainAll` ["markers: [{\"label\":\"1.0\",\"at\":", "\"label\":\"1.1\""])
+
+    it "1d. bulk merge folds the newer errors into the oldest and archives their issues" \tr -> do
+      apiKey <- createTestAPIKey tr pid "merge-key"
+      forM_ ([("MergeAError", -50), ("MergeBError", -40)] :: [(Text, NominalDiffTime)]) \(ty, at) ->
+        ingestTraceWithException tr apiKey "GET /api/merge" ty "merge probe" (ty <> ": merge probe\n    at probe (/app/src/" <> ty <> ".js:1:1)") (addUTCTime at frozenTime)
+      drainExtractionWorker tr
+      void $ runAllBackgroundJobs frozenTime tr.trATCtx
+      [a, b] <- forM ["MergeAError", "MergeBError"] (patternOf tr)
+      [ia, ib] <- forM [a, b] (issueOf tr . (.hash))
+      void $ testServant tr $ Pages.Issues.issueBulkActionsPostH pid Pages.Issues.BAMerge Nothing Nothing Pages.Issues.IssueBulk{itemId = UUID.toText . (.id.unUUIDId) <$> [ib, ia]}
+      b' <- runTestBg frozenTime tr (ErrorPatterns.getErrorPatternById b.id) >>= maybe (fail "no b") pure
+      (b'.canonicalId, b'.mergeOverride) `shouldBe` (Just a.id, True)
+      [ia', ib'] <- forM [ia, ib] \i -> runTestBg frozenTime tr (Issues.selectIssueById pid i.id) >>= maybe (fail "no issue") pure
+      (isJust ia'.archivedAt, isJust ib'.archivedAt) `shouldBe` (False, True)
+      withResource tr.trPool (\conn -> PGS.query conn [sql| SELECT event::text FROM apis.issue_activity_log WHERE issue_id = ? AND event = 'merged' |] (PGS.Only ib.id)) `shouldReturn` [PGS.Only ("merged" :: Text)]
+
     it "1b. ERROR-severity records produce error patterns — OTel exception.* (backend log) and error.* (Monoscope browser SDK)" \tr -> do
       -- OTLP log records never carry span events; internal browser spans often
       -- carry status_code=ERROR but no exception event. Both cases rely on the
@@ -144,14 +223,20 @@ spec = sequential $ aroundAll withTestResources do
       patternWithTrace <- maybe (fail "the ingested exception has no trace") pure $ find (isJust . (.firstTraceId)) patterns
       traceIdText <- maybe (fail "the ingested exception has no trace") pure patternWithTrace.firstTraceId
       issue <- maybe (fail "the runtime issue was not listed") pure $ find ((== patternWithTrace.hash) . (.targetHash)) issues
-      (_, page) <- testServant tr $ Pages.Issues.issueDetailGetH pid issue.id Nothing Nothing Nothing Nothing
+      (_, page) <- testServant tr $ Pages.Issues.issueDetailGetH pid issue.id Nothing Nothing Nothing Nothing Nothing
       let html = TL.toStrict $ renderText $ toHtml page
       html `shouldSatisfy` T.isInfixOf issue.title
+      -- The header once read "New Error: Error - <message cut at 80 chars>", under a
+      -- canned "Investigate the new error…" line, with severity shown twice.
+      fresh <- runTestBg frozenTime tr $ Issues.createNewErrorIssue pid patternWithTrace
+      fresh.title `shouldBe` patternWithTrace.errorType <> ": " <> patternWithTrace.message
+      forM_ [Issues.newErrorRecommendedAction, ">Critical</span>"] \t -> html `shouldSatisfy` not . T.isInfixOf t
+      html `shouldSatisfy` T.isInfixOf "Every 10 min"
       html `shouldSatisfy` T.isInfixOf ("/traces/" <> traceIdText)
       html `shouldSatisfy` T.isInfixOf "timestamp="
 
       let otherPid = UUIDId $ UUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef0
-      (_, otherPage) <- testServant tr $ Pages.Issues.issueDetailGetH otherPid issue.id Nothing Nothing Nothing Nothing
+      (_, otherPage) <- testServant tr $ Pages.Issues.issueDetailGetH otherPid issue.id Nothing Nothing Nothing Nothing Nothing
       let otherHtml = TL.toStrict $ renderText $ toHtml otherPage
       otherHtml `shouldSatisfy` T.isInfixOf "Issue not found"
       otherHtml `shouldSatisfy` not . T.isInfixOf issue.title
@@ -373,6 +458,23 @@ spec = sequential $ aroundAll withTestResources do
           fmap (.state) deescalatedPat `shouldBe` Just ESOngoing
         Nothing -> expectationFailure "No escalating pattern found for de-escalation test"
 
+    it "5b2. A spike wakes the issue archived until it escalates" \tr -> do
+      errRates <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternsWithCurrentRates pid frozenTime
+      case find (\r -> r.state == ESOngoing && r.baselineState == BSEstablished && maybe False (> 0) r.baselineStddev) errRates of
+        Nothing -> expectationFailure "No de-escalated pattern left by 5b"
+        Just errRate -> do
+          iid <- (.id) <$> (runTestBg frozenTime tr (Issues.selectIssueByHash pid errRate.hash (Issues.OpenOfType Issues.RuntimeException)) >>= maybe (fail "no issue for the pattern") pure)
+          void $ runTestBg frozenTime tr $ Issues.setArchiveState pid [iid] (Just (frozenTime, Issues.ArchiveUntilEscalating))
+          let spikeTime = addUTCTime 7200 frozenTime
+              spikeCount = ceiling (fromMaybe 0 errRate.baselineMean + 3 * fromMaybe 0 errRate.baselineStddev + 50) :: Int
+          void $ runTestBg frozenTime tr $ ErrorPatterns.upsertErrorPatternHourlyStats pid spikeTime (V.singleton (errRate.hash, spikeCount, 5))
+          runTestBg spikeTime tr $ BackgroundJobs.detectErrorSpikes pid
+          woken <- runTestBg frozenTime tr (Issues.selectIssueById pid iid) >>= maybe (fail "issue vanished") pure
+          (isNothing woken.archivedAt, woken.archiveUntilEscalating) `shouldBe` (True, False)
+          withResource tr.trPool (\conn -> PGS.query conn [sql| SELECT count(*)::int FROM apis.issue_activity_log WHERE issue_id = ? AND event = 'escalated' |] (PGS.Only iid)) `shouldReturn` [PGS.Only (1 :: Int)]
+          -- Leave the pattern as 5b did: the tests after this one start from an ongoing pattern.
+          void $ runTestBg frozenTime tr $ ErrorPatterns.updateErrorPatternState errRate.errorId ESOngoing frozenTime
+
     it "5c. Flat baseline (stddev=0) still detects spikes via MAD floor" \tr -> do
       -- Find the pattern from 5b (now ESOngoing) and give it a flat baseline (stddev=0)
       errRates <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternsWithCurrentRates pid frozenTime
@@ -501,7 +603,7 @@ spec = sequential $ aroundAll withTestResources do
 
           -- Resolve after the prior spike evaluations, not before their incident events.
           advanceMinutes tr 241
-          void $ testServant tr $ Pages.Issues.resolveErrorPostH pid errUuid
+          void $ testServant tr $ Pages.Issues.resolveErrorPostH pid errUuid False
           resolvedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
           fmap (.state) resolvedPat `shouldBe` Just ESResolved
           issue <- maybe (fail "resolved error has no customer issue") pure =<< runTestBg frozenTime tr (Issues.selectIssueByHash pid pat.hash Issues.AnyIssue)

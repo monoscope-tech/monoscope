@@ -3,6 +3,9 @@ module Models.Apis.ErrorPatterns (
   ErrorPatternId (..),
   ErrorState (..),
   ATError (..),
+  CaptureMechanism (..),
+  enrichGeo,
+  geoFields,
   ErrorPatternL (..),
   -- Queries
   getErrorPatterns,
@@ -25,6 +28,12 @@ module Models.Apis.ErrorPatterns (
   updateErrorPatternAnalysis,
   -- Error spike detection
   ErrorPatternWithCurrentRate (..),
+  upsertErrorPatternUsers,
+  userKey,
+  errorTags,
+  upsertErrorTagCounts,
+  selectErrorTagCounts,
+  setResolvedInRelease,
   getErrorPatternsWithCurrentRates,
   findCanonicalMatch,
 )
@@ -33,8 +42,12 @@ where
 import Data.Aeson qualified as AE
 import Data.Default
 import Data.Effectful.Hasql qualified as Hasql
+import Data.GeoIP2 qualified as GeoIP2
 import Data.HashMap.Strict qualified as HM
+import Data.IP (IP)
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Text.Display (Display)
 import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -130,6 +143,11 @@ data ErrorPattern = ErrorPattern
   , parentHash :: Maybe Text
   , isFramework :: Bool
   , resolvedBy :: Maybe Projects.UserId
+  , firstRelease :: Maybe Text
+  , lastRelease :: Maybe Text
+  , lastReleaseSince :: Maybe ZonedTime
+  , resolvedInRelease :: Maybe Text
+  , usersCount :: Int
   }
   deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow, NFData)
@@ -155,6 +173,21 @@ instance HI.DecodeRow ErrorPatternL where
   decodeRow = ErrorPatternL <$> HI.decodeRow <*> HI.decodeRow <*> HI.decodeRow <*> HI.decodeRow
 
 
+-- | How the error reached us. OTel has no "mechanism" attribute, so this is the
+-- signal the error was extracted from rather than the SDK's capture hook.
+data CaptureMechanism = CMExceptionEvent | CMLogRecord | CMSpanStatus
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON, Display) via WrappedEnumSC 'Nothing "CM" CaptureMechanism
+
+
+-- | The error's stored snapshot. Rows written before a field existed still decode:
+--
+-- >>> :set -XOverloadedStrings
+-- >>> isRight (AE.eitherDecode @ATError "{\"when\":\"2026-01-01T00:00:00Z\",\"error_type\":\"E\",\"root_error_type\":\"E\",\"message\":\"m\",\"root_error_message\":\"m\",\"stack_trace\":\"\",\"hash\":\"h\",\"is_framework\":false}")
+-- True
+-- >>> AE.encode CMExceptionEvent
+-- "\"exception_event\""
 data ATError = ATError
   { projectId :: Maybe Projects.ProjectId
   , when :: UTCTime
@@ -183,12 +216,64 @@ data ATError = ATError
   , userIp :: Maybe Text
   , sessionId :: Maybe Text
   , tenantName :: Maybe Text
+  , -- Everything below is read from OTel semantic-convention attributes, and absent
+    -- from rows stored before it existed (the codec defaults a missing field to Nothing).
+    release :: Maybe Text
+  , handled :: Maybe Bool
+  , mechanism :: Maybe CaptureMechanism
+  , level :: Maybe Text
+  , userAgent :: Maybe Text
+  , browser :: Maybe Text
+  , os :: Maybe Text
+  , device :: Maybe Text
+  , geoCountry :: Maybe Text
+  , geoRegion :: Maybe Text
+  , geoCity :: Maybe Text
+  , threadId :: Maybe Text
+  , threadName :: Maybe Text
+  , urlFull :: Maybe Text
+  , urlQuery :: Maybe Text
+  , requestHeaders :: Maybe (Map Text Text)
+  , attachments :: Maybe [Text]
+  -- ^ http(s) URLs from @attachment.url@ / @screenshot.url@ (string or string[]); the SDK hosts the files.
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, NFData)
   deriving (FromField, ToField) via Aeson ATError
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake ATError
   deriving (HI.DecodeValue, HI.EncodeValue) via HI.AsJsonb ATError
+
+
+-- | Place an error by its @client.address@ when the SDK sent no @geo.*@ attributes.
+enrichGeo :: GeoIP2.GeoDB -> ATError -> ATError
+enrichGeo db e
+  | isJust e.geoCountry = e
+  | otherwise = maybe e place (e.userIp >>= readMaybe @IP . toString >>= rightToMaybe . GeoIP2.rawGeoData db)
+  where
+    place f = let (country, region, city) = geoFields f in e{geoCountry = country, geoRegion = region, geoCity = city}
+
+
+-- | (country, region, city) from one MaxMind-format record. MaxMind databases nest
+-- (@country.iso_code@, @subdivisions[0].iso_code@, @city.names.en@; DB-IP names the subdivision
+-- without an iso_code); IPinfo's are flat (@country_code@, @region@, @city@).
+--
+-- >>> let m = GeoIP2.DataMap . Map.fromList . map (\(k, v) -> (GeoIP2.DataString k, v)); s = GeoIP2.DataString
+-- >>> geoFields (m [("country", m [("iso_code", s "US")]), ("city", m [("names", m [("en", s "Santa Clara")])]), ("subdivisions", GeoIP2.DataArray [m [("iso_code", s "CA")]])])
+-- (Just "US",Just "CA",Just "Santa Clara")
+-- >>> geoFields (m [("country", m [("iso_code", s "US")]), ("subdivisions", GeoIP2.DataArray [m [("names", m [("en", s "California")])]])])
+-- (Just "US",Just "California",Nothing)
+-- >>> geoFields (m [("country_code", s "NG"), ("region", s "Lagos"), ("city", s "Ikeja")])
+-- (Just "NG",Just "Lagos",Just "Ikeja")
+-- >>> geoFields (m [("asn", s "AS1")])
+-- (Nothing,Nothing,Nothing)
+geoFields :: GeoIP2.GeoField -> (Maybe Text, Maybe Text, Maybe Text)
+geoFields f = (at ["country", "iso_code"] <|> at ["country_code"], at ["subdivisions", "iso_code"] <|> at ["subdivisions", "names", "en"] <|> at ["region"], at ["city", "names", "en"] <|> at ["city"])
+  where
+    at = (`walk` f)
+    walk [] (GeoIP2.DataString t) = Just t
+    walk (k : ks) (GeoIP2.DataMap m) = walk ks =<< Map.lookup (GeoIP2.DataString k) m
+    walk ks (GeoIP2.DataArray (x : _)) = walk ks x
+    walk _ _ = Nothing
 
 
 -- | Get error patterns for a project with optional state filter (excludes merged patterns)
@@ -465,11 +550,11 @@ batchUpsertErrorPatterns pid errors now =
     <$> Hasql.interp
       [HI.sql| INSERT INTO apis.error_patterns (
             project_id, error_type, message, stacktrace, hash, parent_hash, shape_hash, is_framework,
-            environment, service, runtime, error_data,
+            environment, service, runtime, error_data, first_release, last_release, last_release_at, last_release_since,
             first_trace_id, first_trace_at, recent_trace_id, recent_trace_at,
             occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h)
           SELECT #{pid}, u.error_type, u.message, u.stacktrace, u.hash, u.parent_hash, u.shape_hash, u.is_framework,
-                 u.environment, u.service, u.runtime, u.error_data,
+                 u.environment, u.service, u.runtime, u.error_data, u.release, u.release, CASE WHEN u.release IS NOT NULL THEN u.event_at END, CASE WHEN u.release IS NOT NULL THEN u.event_at END,
                  u.trace_id, CASE WHEN u.trace_id IS NOT NULL THEN u.event_at END,
                  u.trace_id, CASE WHEN u.trace_id IS NOT NULL THEN u.event_at END, u.cnt, u.cnt, u.cnt, u.cnt
           FROM (SELECT unnest(#{errorTypes}::text[]) AS error_type, unnest(#{messages}::text[]) AS message,
@@ -477,15 +562,21 @@ batchUpsertErrorPatterns pid errors now =
                        unnest(#{parentHashes}::text[]) AS parent_hash, unnest(#{shapeHashes}::text[]) AS shape_hash,
                        unnest(#{isFrameworks}::bool[]) AS is_framework,
                        unnest(#{environments}::text[]) AS environment, unnest(#{services}::text[]) AS service,
-                       unnest(#{runtimes}::text[]) AS runtime, unnest(#{errorDatas}::jsonb[]) AS error_data,
+                       unnest(#{runtimes}::text[]) AS runtime, unnest(#{errorDatas}::jsonb[]) AS error_data, unnest(#{releases}::text[]) AS release,
                        unnest(#{traceIds}::text[]) AS trace_id, unnest(#{eventTimes}::timestamptz[]) AS event_at, unnest(#{counts}::bigint[]) AS cnt) u
           ON CONFLICT (project_id, hash) DO UPDATE SET
             updated_at = #{now},
+            first_release = COALESCE(apis.error_patterns.first_release, EXCLUDED.first_release),
+            -- Only a newer event moves the last release: batches arrive late and out of order.
+            last_release = CASE WHEN ^{newerRelease} THEN EXCLUDED.last_release ELSE apis.error_patterns.last_release END,
+            last_release_at = CASE WHEN ^{newerRelease} THEN EXCLUDED.last_release_at ELSE apis.error_patterns.last_release_at END,
+            last_release_since = CASE WHEN ^{newerRelease} AND EXCLUDED.last_release IS DISTINCT FROM apis.error_patterns.last_release THEN EXCLUDED.last_release_at ELSE apis.error_patterns.last_release_since END,
+            resolved_in_release = CASE WHEN ^{regresses} THEN NULL ELSE apis.error_patterns.resolved_in_release END,
             -- Toastable columns (message, error_data, parent_hash) are content-derived from hash
             -- and refreshed only on regression to avoid pg_toast bloat from per-occurrence rewrites.
-            message = CASE WHEN apis.error_patterns.state = 'resolved' THEN EXCLUDED.message ELSE apis.error_patterns.message END,
-            error_data = CASE WHEN apis.error_patterns.state = 'resolved' THEN EXCLUDED.error_data ELSE apis.error_patterns.error_data END,
-            parent_hash = CASE WHEN apis.error_patterns.state = 'resolved' THEN EXCLUDED.parent_hash ELSE apis.error_patterns.parent_hash END,
+            message = CASE WHEN ^{regresses} THEN EXCLUDED.message ELSE apis.error_patterns.message END,
+            error_data = CASE WHEN ^{regresses} THEN EXCLUDED.error_data ELSE apis.error_patterns.error_data END,
+            parent_hash = CASE WHEN ^{regresses} THEN EXCLUDED.parent_hash ELSE apis.error_patterns.parent_hash END,
             -- Write-once, which is how the 23,372 rows that predate the column acquire
             -- one: a row takes its shape the next time it occurs and never pays a
             -- rewrite after that. Unconditional assignment here would rewrite a column
@@ -520,11 +611,11 @@ batchUpsertErrorPatterns pid errors now =
             occurrences_5m = apis.error_patterns.occurrences_5m + EXCLUDED.occurrences_1m,
             occurrences_1h = apis.error_patterns.occurrences_1h + EXCLUDED.occurrences_1m,
             occurrences_24h = apis.error_patterns.occurrences_24h + EXCLUDED.occurrences_1m,
-            quiet_minutes = CASE WHEN apis.error_patterns.state = 'resolved' THEN 0 ELSE apis.error_patterns.quiet_minutes END,
-            state = CASE WHEN apis.error_patterns.state = 'resolved' THEN 'regressed' ELSE apis.error_patterns.state END,
+            quiet_minutes = CASE WHEN ^{regresses} THEN 0 ELSE apis.error_patterns.quiet_minutes END,
+            state = CASE WHEN ^{regresses} THEN 'regressed' ELSE apis.error_patterns.state END,
             resolved_by = NULL,
-            regressed_at = CASE WHEN apis.error_patterns.state = 'resolved' THEN #{now} ELSE apis.error_patterns.regressed_at END,
-            regression_count = CASE WHEN apis.error_patterns.state = 'resolved'
+            regressed_at = CASE WHEN ^{regresses} THEN #{now} ELSE apis.error_patterns.regressed_at END,
+            regression_count = CASE WHEN ^{regresses}
                                     THEN apis.error_patterns.regression_count + 1
                                     ELSE apis.error_patterns.regression_count END
           RETURNING hash, CASE
@@ -532,10 +623,11 @@ batchUpsertErrorPatterns pid errors now =
             WHEN state = 'regressed' AND regressed_at = #{now} THEN 'regressed'
             ELSE 'unchanged' END::text |]
   where
-    -- Group by hash: keep last occurrence + sum count (avoids ON CONFLICT duplicate-row error).
+    -- Group by hash: keep the latest occurrence (by event time, not batch order — a batch
+    -- is not time-ordered) + sum count (avoids ON CONFLICT duplicate-row error).
     -- The bang keeps the running count forced: a hot hash otherwise accumulates one thunk per occurrence.
     (errs, counts) =
-      V.unzip $ V.fromList $ HM.elems $ HM.fromListWith (\(a, n) (_, !k) -> (a, n + k)) [(e.hash, (e, 1 :: Int)) | e <- V.toList errors]
+      V.unzip $ V.fromList $ HM.elems $ HM.fromListWith (\(a, n) (b, !k) -> (bool b a (a.when >= b.when), n + k)) [(e.hash, (e, 1 :: Int)) | e <- V.toList errors]
     errorTypes = V.map (.errorType) errs
     messages = V.map (.message) errs
     stacktraces = V.map (.stackTrace) errs
@@ -551,6 +643,99 @@ batchUpsertErrorPatterns pid errors now =
     -- page off to fetch "trace ''" — every trace-less row in the window.
     traceIds = V.map (mfilter (not . T.null) . (.traceId)) errs
     eventTimes = V.map (.when) errs
+    releases = V.map (.release) errs
+    -- A resolved pattern regresses on its next occurrence, unless it was resolved "in
+    -- next release" and the occurrence still reports that release.
+    newerRelease = [HI.sql| EXCLUDED.last_release IS NOT NULL AND (apis.error_patterns.last_release_at IS NULL OR EXCLUDED.last_release_at >= apis.error_patterns.last_release_at) |]
+    regresses =
+      [HI.sql| apis.error_patterns.state = 'resolved'
+               AND (apis.error_patterns.resolved_in_release IS NULL
+                    OR EXCLUDED.last_release IS DISTINCT FROM apis.error_patterns.resolved_in_release) |]
+
+
+-- | Record each error's affected users and bump @users_count@ by the ones not seen
+-- before, in one statement. A user is keyed by the most specific OTel identity the
+-- event carries: @user.id@, then @user.email@, then @client.address@.
+upsertErrorPatternUsers :: DB es => Projects.ProjectId -> V.Vector ATError -> Eff es Int64
+upsertErrorPatternUsers pid errs
+  | V.null keyed = pure 0
+  | otherwise =
+      Hasql.interpExecute
+        [HI.sql|
+          WITH ins AS (
+            INSERT INTO apis.error_pattern_users (project_id, error_id, user_key)
+            SELECT DISTINCT e.project_id, e.id, u.user_key
+            FROM (SELECT unnest(#{hashes}::text[]) AS hash, unnest(#{keys}::text[]) AS user_key) u
+            JOIN apis.error_patterns e ON e.project_id = #{pid} AND e.hash = u.hash
+            ON CONFLICT DO NOTHING
+            RETURNING error_id)
+          UPDATE apis.error_patterns p SET users_count = p.users_count + c.n
+          FROM (SELECT error_id, count(*) AS n FROM ins GROUP BY error_id) c
+          WHERE p.id = c.error_id |]
+  where
+    keyed = V.mapMaybe (\e -> (e.hash,) <$> userKey e) errs
+    (hashes, keys) = V.unzip keyed
+
+
+-- | The tags an error's distribution is rolled up over: a fixed set, so the rollup's
+-- write cost is bounded per event.
+--
+-- >>> errorTags (def{browser = Just "Chrome", release = Just "1.0", handled = Just False} :: ATError)
+-- [("browser","Chrome"),("release","1.0"),("handled","no")]
+errorTags :: ATError -> [(Text, Text)]
+errorTags e =
+  [ (k, v)
+  | (k, Just v) <-
+      [ ("browser", e.browser)
+      , ("os", e.os)
+      , ("device", e.device)
+      , ("release", e.release)
+      , ("environment", e.environment)
+      , ("country", e.geoCountry)
+      , ("service", e.serviceName)
+      , ("handled", bool "no" "yes" <$> e.handled)
+      ]
+  , not (T.null v)
+  ]
+
+
+-- | Add a batch's tag counts to the per-error rollup.
+upsertErrorTagCounts :: DB es => Projects.ProjectId -> V.Vector ATError -> Eff es Int64
+upsertErrorTagCounts pid errs
+  | null counts = pure 0
+  | otherwise =
+      Hasql.interpExecute
+        [HI.sql| INSERT INTO apis.error_tag_counts (project_id, error_id, tag_key, tag_value, count)
+                 SELECT e.project_id, e.id, u.k, u.v, u.n
+                 FROM (SELECT unnest(#{hashes}::text[]) AS hash, unnest(#{keys}::text[]) AS k, unnest(#{vals}::text[]) AS v, unnest(#{ns}::bigint[]) AS n) u
+                 JOIN apis.error_patterns e ON e.project_id = #{pid} AND e.hash = u.hash
+                 ON CONFLICT (project_id, error_id, tag_key, tag_value) DO UPDATE SET count = apis.error_tag_counts.count + EXCLUDED.count |]
+  where
+    counts = HM.toList $ HM.fromListWith (+) [((e.hash, k, v), 1 :: Int) | e <- V.toList errs, (k, v) <- errorTags e]
+    (hashes, keys, vals, ns) = V.unzip4 $ V.fromList [(h, k, v, n) | ((h, k, v), n) <- counts]
+
+
+-- | An error's tag distribution: per key, values by count, most common first.
+selectErrorTagCounts :: DB es => ErrorPatternId -> Eff es [(Text, Text, Int)]
+selectErrorTagCounts eid = Hasql.interp [HI.sql| SELECT tag_key, tag_value, count FROM apis.error_tag_counts WHERE error_id = #{eid} ORDER BY tag_key, count DESC |]
+
+
+-- | The identity 'upsertErrorPatternUsers' counts a user by.
+--
+-- >>> userKey (def{userEmail = Just "a@b.c", userIp = Just "1.2.3.4"} :: ATError)
+-- Just "email:a@b.c"
+-- >>> userKey (def :: ATError)
+-- Nothing
+userKey :: ATError -> Maybe Text
+userKey e = asum [("id:" <>) <$> e.userId, ("email:" <>) <$> e.userEmail, ("ip:" <>) <$> e.userIp]
+
+
+-- | "Resolve in next release" pins the release the pattern is resolved in, so
+-- occurrences still reporting it do not regress it; a plain resolve clears it.
+setResolvedInRelease :: DB es => ErrorPatternId -> Bool -> Eff es Int64
+setResolvedInRelease eid inNextRelease =
+  Hasql.interpExecute
+    [HI.sql| UPDATE apis.error_patterns SET resolved_in_release = CASE WHEN #{inNextRelease} THEN last_release END WHERE id = #{eid} |]
 
 
 -- | Batch upsert hourly rollup stats. Takes (hash, event_count, user_count) triples and

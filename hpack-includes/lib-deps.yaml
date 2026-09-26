@@ -59,6 +59,8 @@
 - PyF
 - retry
 - generic-lens
+- geoip2
+- iproute
 - gogol
 - gogol-core
 - gogol-pubsub

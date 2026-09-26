@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, enqueueAIRoutine, runAIRoutineWith, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, endpointAutoAckLockName, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), errorTrendChartUrl) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, enqueueAIRoutine, runAIRoutineWith, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, detectPerformanceIssues, detectFrontendIssues, detectFeedback, applyUptimeResult, evaluateCronMonitor, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, endpointAutoAckLockName, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), errorTrendChartUrl) where
 
 import BackgroundJobs.Types (BgJobs (..))
 import BackgroundJobs.Types qualified as Jobs
@@ -8,7 +8,7 @@ import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
 import Control.Concurrent.STM.TBQueue (isFullTBQueue, readTBQueue, writeTBQueue)
 import Control.Exception qualified as CE
-import Control.Lens (view, (.~), (^.), (^..), (^?), _1, _3)
+import Control.Lens (view, (.~), (?~), (^.), (^..), (^?), _1, _3)
 import Control.Monad.Extra (whileM)
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens qualified as AL
@@ -106,7 +106,7 @@ import Pages.Replay qualified as Replay
 import Pages.Reports qualified as RP
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (BaselineState (..), UUIDId (..), WrappedEnumSC (..), rawSql)
+import Pkg.DeriveUtils (BaselineState (..), UUIDId (..), WrappedEnumSC (..), rawSql, unAesonTextMaybe)
 import Pkg.Drain qualified as Drain
 import Pkg.EmailTemplates qualified as ET
 import Pkg.ErrorFingerprint qualified as EF
@@ -135,7 +135,7 @@ import System.Types (ATBackgroundCtx, ATBackgroundEffects, DB, runBackground)
 import UnliftIO (withRunInIO)
 import UnliftIO qualified as UIO
 import UnliftIO.Exception (bracket, catch, finally, throwIO, try, tryAny)
-import Utils (calculateCycleStartDate, formatUTC, formatUTCMicros, freeTierDailyMaxEvents, hostPath, toXXHash, usageWindowStart)
+import Utils (calculateCycleStartDate, formatUTC, formatUTCMicros, freeTierDailyMaxEvents, hostPath, nonEmptyT, toXXHash, usageWindowStart)
 
 
 sendMessageToDiscord :: Text -> Text -> ATBackgroundCtx ()
@@ -294,7 +294,7 @@ processBackgroundJob authCtx bgJob =
     GitSyncPushDashboard pid dashboardId -> gitSyncPushDashboard pid (UUIDId dashboardId)
     GitSyncPushAllDashboards pid -> gitSyncPushAllDashboards pid
     QueryMonitorsCheck -> checkTriggeredQueryMonitors
-    PrometheusScrapeTick _ -> dispatchPrometheusScrapes authCtx
+    PrometheusScrapeTick _ -> dispatchPrometheusScrapes authCtx >> evaluateCronMonitors
     PrometheusScrapeOne cid -> scrapePrometheusTarget cid
     ServiceMapRollupTick t -> dispatchServiceMapRollups authCtx t
     ServiceMapRollup pid bucket -> rollUpServiceMap authCtx pid bucket
@@ -307,6 +307,9 @@ processBackgroundJob authCtx bgJob =
       void $ Hasql.interpExecute [HI.sql| DELETE FROM apis.share_events WHERE created_at < #{now}::timestamptz - interval '30 days' - interval '48 hours' |]
     ErrorBaselineCalculation pid -> calculateErrorBaselines pid
     ErrorSpikeDetection pid -> detectErrorSpikes pid
+    PerformanceIssueDetection pid -> detectPerformanceIssues pid
+    FrontendIssueDetection pid -> detectFrontendIssues pid
+    FeedbackDetection pid -> detectFeedback pid
     PatternEmbeddingAndMerge scheduledTime pid -> unlessStale "PatternEmbeddingAndMerge" scheduledTime (15 * 60) $ patternEmbeddingAndMerge pid
     ErrorGroupReview scheduledTime pid -> unlessStale "ErrorGroupReview" scheduledTime (15 * 60) $ reviewErrorGroups pid
     EndpointTemplateDiscovery scheduledTime pid -> unlessStale "EndpointTemplateDiscovery" scheduledTime 900 $ endpointTemplateDiscovery pid
@@ -1377,7 +1380,7 @@ runHourlyJob scheduledTime hour = do
 
   enqueueJobs ctx
     $ map (\batch -> Jobs.GenerateOtelFacetsBatch (V.fromList batch) scheduledTime) projectBatches
-    <> concatMap (\pid -> [Jobs.ReportUsage pid, ErrorBaselineCalculation pid, ErrorSpikeDetection pid]) activeProjects
+    <> concatMap (\pid -> [Jobs.ReportUsage pid, ErrorBaselineCalculation pid, ErrorSpikeDetection pid, PerformanceIssueDetection pid, FrontendIssueDetection pid, FeedbackDetection pid]) activeProjects
 
   -- Cleanup expired query cache entries
   tryStep "monitor-evaluation-retention" $ Monitors.pruneEvaluations (addUTCTime (-(7 * 86400)) scheduledTime)
@@ -1796,10 +1799,14 @@ runNotificationSweep _scheduledTime = do
 -- ack window exists to remove.
 expireLapsedAcks :: ATBackgroundCtx ()
 expireLapsedAcks = do
-  expired <- Issues.expireAcks =<< Time.currentTime
+  now <- Time.currentTime
+  expired <- Issues.expireAcks now
   unless (null expired) do
     forM_ expired \iid -> Issues.logIssueActivity iid Issues.IEAckExpired Nothing Nothing
     Log.logInfo "issue_acks_expired" (AE.object ["count" AE..= length expired])
+  -- "Archive for N hours" ends the same way.
+  unarchived <- Issues.expireArchives now
+  forM_ unarchived \iid -> Issues.logIssueActivity iid Issues.IEUnarchived Nothing Nothing
 
 
 -- | Flush the digest queue once per hour. Groups pending rows by project and
@@ -2184,7 +2191,10 @@ notifyIssue issue project users cooldownHours digestReason alert alertUrl subj h
 -- | Process and insert errors for a specific project (single batched round-trip via unnest).
 -- Creates issues synchronously for new/regressed errors. Reopens existing issues on regression.
 processProjectErrors :: Projects.ProjectId -> V.Vector ErrorPatterns.ATError -> UTCTime -> ATBackgroundCtx ()
-processProjectErrors pid errors now = do
+processProjectErrors pid rawErrors now = do
+  authCtx <- ask @Config.AuthContext
+  -- GeoIP only fills errors the SDK did not already place with geo.*.
+  let errors = maybe id (V.map . ErrorPatterns.enrichGeo) authCtx.geoDb rawErrors
   tryAny (ErrorPatterns.batchUpsertErrorPatterns pid errors now) >>= \case
     Left e ->
       Log.logAttention "ERR_BATCH_UPSERT_FAILED"
@@ -2203,7 +2213,8 @@ processProjectErrors pid errors now = do
             errorRollupGroups = HM.toList $ V.foldl' (\acc e -> HM.insertWith addErrCounts e.hash (1 :: Int, bool 0 1 (isJust e.userId)) acc) HM.empty errors
             errorRollupStats = V.fromList [(h, cnt, users) | (h, (cnt, users)) <- errorRollupGroups]
         void $ ErrorPatterns.upsertErrorPatternHourlyStats pid now errorRollupStats
-      authCtx <- ask @Config.AuthContext
+        void $ ErrorPatterns.upsertErrorPatternUsers pid errors
+        void $ ErrorPatterns.upsertErrorTagCounts pid errors
       forM_ newOrRegressed \(errorHash, outcome) -> do
         errM <- ErrorPatterns.getErrorPatternByHash pid errorHash
         -- A merged pattern is silent on every path, including this one. The
@@ -4984,7 +4995,85 @@ dispatchPrometheusScrapes authCtx = do
 -- at claim time already prevents re-firing before the next interval, so a broken endpoint
 -- backs off instead of retry-storming, and one bad target never fails sibling work.
 scrapePrometheusTarget :: PromCfg.PrometheusScrapeConfigId -> ATBackgroundCtx ()
-scrapePrometheusTarget cid = whenJustM (PromCfg.getConfig cid) \cfg -> when cfg.enabled do
+scrapePrometheusTarget cid = whenJustM (PromCfg.getConfig cid) \cfg -> when cfg.enabled case cfg.kind of
+  PromCfg.CKUptime -> do
+    t0 <- Time.currentTime
+    -- Any status is an answer here: the probe compares it, so a 5xx must not throw.
+    res <- tryAny $ W.getWith (PromCfg.prometheusScrapeOpts Nothing & Wreq.checkResponse ?~ \_ _ -> pass) (toString cfg.url)
+    t1 <- Time.currentTime
+    applyUptimeResult cfg t1 (round (realToFrac (diffUTCTime t1 t0) * 1000 :: Double)) (bimap (toText . displayException) (^. Wreq.responseStatus . Wreq.statusCode) res)
+  PromCfg.CKPrometheus -> scrapeMetrics cfg
+
+
+-- | Per-minute: evaluate the cron monitors whose lease has lapsed.
+evaluateCronMonitors :: ATBackgroundCtx ()
+evaluateCronMonitors = do
+  now <- Time.currentTime
+  Monitors.claimDueCronMonitors 200 >>= traverse_ (evaluateCronMonitor now)
+
+
+-- | Act on the check-ins newer than the last one recorded: a newer @ok@ records it and
+-- resolves an open issue; a newer @error@ opens a failed issue; none, past
+-- @interval + grace@, opens a missed issue. Re-evaluating an open miss folds into it.
+evaluateCronMonitor :: UTCTime -> Monitors.CronMonitor -> ATBackgroundCtx ()
+evaluateCronMonitor now m = do
+  let since = max (addUTCTime (-86400) now) (fromMaybe m.createdAt m.lastCheckinAt)
+  spans <- tfRead $ Telemetry.selectNamedRecords m.projectId "cron.checkin" since now
+  let attr = Telemetry.spanAttr
+      latest = viaNonEmpty last $ sortWith fst [(c.timestamp, fromMaybe "ok" (attr "monitor.status" c)) | c <- spans, attr "monitor.slug" c == Just m.slug, maybe True (c.timestamp >) m.lastCheckinAt]
+      lastSeen = (fst <$> latest) <|> m.lastCheckinAt
+      expectedBy = addUTCTime (fromIntegral $ m.intervalSecs + m.graceSecs) (fromMaybe m.createdAt lastSeen)
+      open failure =
+        Issues.insertIssue
+          =<< Issues.createCronIssue m.projectId Issues.CronData{monitorId = UUID.toText m.id, slug = m.slug, name = m.name, failure, expectedBy, lastCheckinAt = lastSeen}
+  whenJust latest \(at, status) -> void $ Monitors.recordCronCheckin m.id at status
+  case latest of
+    Just (_, "ok") -> resolveOpenIssue m.projectId (Issues.cronTargetHash (UUID.toText m.id)) Issues.Cron now []
+    Just _ -> open Issues.CFFailed
+    Nothing -> when (now > expectedBy) $ open Issues.CFMissed
+
+
+-- | Record an uptime probe. Two failures in a row confirm downtime and open (or fold
+-- into) the check's issue; the first success after that resolves it. One failed probe
+-- alone is a blip, not an outage.
+applyUptimeResult :: PromCfg.PrometheusScrapeConfig -> UTCTime -> Int -> Either Text Int -> ATBackgroundCtx ()
+applyUptimeResult cfg now ms res = do
+  let expected = fromMaybe 200 cfg.expectedStatus
+      ok = res == Right expected
+      reason = either ("request failed: " <>) (\c -> bool ("status " <> show c <> ", expected " <> show expected) "ok" ok) res
+  (before, after) <- PromCfg.recordUptime cfg.id ok (reason <> " · " <> show ms <> "ms")
+  when (not ok && after == 2)
+    $ Issues.insertIssue
+    =<< Issues.createUptimeIssue
+      cfg.projectId
+      Issues.UptimeData
+        { checkId = cfg.id.toText
+        , name = cfg.name
+        , url = cfg.url
+        , expectedStatus = expected
+        , statusCode = rightToMaybe res
+        , reason
+        , durationMs = ms
+        , downSince = addUTCTime (negate $ fromIntegral cfg.scrapeIntervalSeconds) now
+        }
+  when (ok && before >= 2) $ resolveOpenIssue cfg.projectId (Issues.uptimeTargetHash cfg.id.toText) Issues.Uptime now ["after_failures" AE..= before]
+
+
+-- | Archive a recovered signal's open issue and log it as resolved.
+resolveOpenIssue :: Projects.ProjectId -> Text -> Issues.IssueType -> UTCTime -> [(AE.Key, AE.Value)] -> ATBackgroundCtx ()
+resolveOpenIssue pid hash ty now extra =
+  Issues.selectIssueByHash pid hash (Issues.OpenOfType ty) >>= traverse_ \i -> do
+    void $ Issues.setArchiveState pid [i.id] (Just (now, Issues.ArchiveIndefinite))
+    Issues.logIssueActivity i.id Issues.IEResolved Nothing (Just $ AE.object (("recovered_at" AE..= now) : extra))
+
+
+-- | A read against TimeFusion when the project's reads are switched to it.
+tfRead :: Eff (Hasql ': ATBackgroundEffects) a -> ATBackgroundCtx a
+tfRead q = ask @Config.AuthContext >>= \c -> withHasqlTimefusion c.env.enableTimefusionReads q
+
+
+scrapeMetrics :: PromCfg.PrometheusScrapeConfig -> ATBackgroundCtx ()
+scrapeMetrics cfg = do
   result <- tryAny do
     resp <- W.getWith (PromCfg.prometheusScrapeOpts cfg.authHeader) (toString cfg.url)
     -- Capture the fallback metricTime *after* the response arrives: a slow endpoint would
@@ -5610,6 +5699,8 @@ detectErrorSpikes pid = do
             Log.logInfo "Error spike detected" (errRate.errorId, errRate.errorType, spike.currentRate, mean, spike.zScore)
             unless alreadyEscalating do
               void $ ErrorPatterns.updateErrorPatternState errRate.errorId ErrorPatterns.ESEscalating now
+              woken <- Issues.wakeOnEscalation pid errRate.hash
+              forM_ woken \iid -> Issues.logIssueActivity iid Issues.IEEscalated Nothing Nothing
               issue <- Issues.createErrorSpikeIssue pid errRate spike.currentRate mean spike.zScore
               Issues.insertIssue issue
               ctx <- ask @Config.AuthContext
@@ -5623,6 +5714,96 @@ detectErrorSpikes pid = do
               $ ErrorPatterns.updateErrorPatternState errRate.errorId ErrorPatterns.ESOngoing now
       _ -> pass -- Skip errors without established baseline
   Log.logTrace "Finished error spike detection" pid
+
+
+-- | Open (or fold into the open) performance issues for the last hour's database spans.
+-- One issue per query shape: candidates are grouped by kind and normalised query, and
+-- the costliest trace of each group is kept as the sample evidence.
+detectPerformanceIssues :: Projects.ProjectId -> ATBackgroundCtx ()
+detectPerformanceIssues pid = do
+  now <- Time.currentTime
+  (nPlusOne, slow) <- tfRead $ Telemetry.selectPerfCandidates pid (addUTCTime (-3600) now) now
+  let costliest kind cs = [(kind, q, c) | ((_, q), c) <- HM.toList $ HM.fromListWith (\a b -> bool b a (a.durationNs >= b.durationNs)) [((c.service, EF.normalizeMessage c.query), c) | c <- cs]]
+  forM_ (costliest Issues.PKNPlusOne nPlusOne <> costliest Issues.PKSlowQuery slow) \(kind, query, c) -> do
+    (parentName, rootName) <- tfRead $ Telemetry.spanAndRootNames pid c.traceId c.parentId c.at
+    Issues.insertIssue
+      =<< Issues.createPerformanceIssue
+        pid
+        c.service
+        Issues.PerformanceData
+          { kind
+          , transaction = rootName
+          , parentSpan = parentName
+          , query
+          , dbSystem = c.dbSystem
+          , repeatCount = c.occurrences
+          , durationImpactMs = fromIntegral c.durationNs / 1e6
+          , traceId = c.traceId
+          , observedAt = c.at
+          }
+
+
+-- | One feedback issue per @user.feedback@ span or log in the last hour (plus a margin the
+-- record-id key makes safe to rescan), linked to the error issue sharing its trace.
+detectFeedback :: Projects.ProjectId -> ATBackgroundCtx ()
+detectFeedback pid = do
+  now <- Time.currentTime
+  records <- tfRead $ Telemetry.selectNamedRecords pid "user.feedback" (addUTCTime (-3900) now) now
+  forM_ records \r -> do
+    let attr k = Telemetry.spanAttr k r
+        bodyText = (^? AL._String) =<< unAesonTextMaybe r.body
+        tidM = nonEmptyT (r.context >>= (.trace_id))
+    whenJust (mfilter (not . T.null . T.strip) (attr "feedback.message" <|> bodyText)) \message ->
+      whenNothingM_ (Issues.selectIssueByHash pid ("feedback:" <> r.id) Issues.AnyIssue) do
+        related <- join <$> forM tidM \tid -> tfRead (Telemetry.traceErrorHash pid tid r.timestamp)
+        Issues.insertIssue
+          =<< Issues.createFeedbackIssue
+            pid
+            (Telemetry.spanServiceName r)
+            r.id
+            Issues.FeedbackData
+              { message
+              , contactEmail = attr "feedback.contact_email" <|> attr "user.email"
+              , userName = attr "user.name" <|> attr "user.full_name"
+              , pageUrl = attr "url.full" <|> attr "page.url"
+              , sessionId = attr "session.id"
+              , traceId = tidM
+              , relatedErrorHash = T.stripPrefix "err:" =<< related
+              , observedAt = r.timestamp
+              }
+
+
+-- | Open (or fold into the open) rage-click issues for the last hour's click spans:
+-- three or more clicks on one element in one session within two seconds.
+detectFrontendIssues :: Projects.ProjectId -> ATBackgroundCtx ()
+detectFrontendIssues pid = do
+  now <- Time.currentTime
+  clicks <- tfRead $ Telemetry.selectClickSpans pid (addUTCTime (-3600) now) now
+  let attr = Telemetry.spanAttr
+      element c = attr "monoscope.display.label" c <|> attr "target.id" c <|> attr "target.tag_name" c
+      selector c = (\tag -> tag <> foldMap ("#" <>) (attr "target.id" c)) <$> attr "target.tag_name" c
+      (deadSpans, clickSpans) = partition ((== Just "dead_click") . (.name)) clicks
+      keyed = [((sid, attr "page.url" c, el), c) | c <- clickSpans, Just sid <- [attr "session.id" c], Just el <- [element c]]
+      open kind el pageUrl n sample =
+        Issues.insertIssue
+          =<< Issues.createFrontendIssue
+            pid
+            (Telemetry.spanServiceName sample)
+            Issues.FrontendData
+              { kind
+              , element = el
+              , selector = selector sample
+              , pageUrl
+              , clickCount = n
+              , sessionId = fromMaybe "" (attr "session.id" sample)
+              , traceId = fromMaybe "" (sample.context >>= (.trace_id))
+              , observedAt = sample.timestamp
+              }
+  forM_ (Telemetry.bursts (.timestamp) 3 2 keyed) \((_, pageUrl, el), cs) -> open Issues.FKRageClick el pageUrl (length cs) (head cs)
+  -- Dead clicks: the SDK already decided nothing happened; two on one element in the
+  -- hour (any sessions) is enough to not be a one-off.
+  forM_ (Map.toList $ Map.fromListWith (<>) [((attr "page.url" c, el), c :| []) | c <- deadSpans, Just el <- [element c]]) \((pageUrl, el), cs) ->
+    when (length cs >= 2) $ open Issues.FKDeadClick el pageUrl (length cs) (head cs)
 
 
 -- | How many shape groups one review run may ask about. Mirrors

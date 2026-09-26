@@ -5,6 +5,7 @@ module Models.Apis.PatternMerge (
   updateErrorEmbeddings,
   assignErrorsToCanonical,
   unmergeErrorPattern,
+  mergeErrorPatterns,
   getErrorPatternGroupMembers,
   fetchErrorTexts,
   setCanonicalId,
@@ -112,6 +113,12 @@ setCanonicalId patternId canonicalId =
 unmergeErrorPattern :: DB es => Projects.ProjectId -> ErrorPatternId -> Eff es Int64
 unmergeErrorPattern pid epid =
   Hasql.interpExecute [HI.sql| UPDATE apis.error_patterns SET merge_override = TRUE, canonical_id = NULL WHERE id = #{epid} AND project_id = #{pid} |]
+
+
+-- | A person's merge, the inverse of 'unmergeErrorPattern': @merge_override@ keeps the model from undoing it.
+mergeErrorPatterns :: DB es => Projects.ProjectId -> ErrorPatternId -> [ErrorPatternId] -> Eff es Int64
+mergeErrorPatterns pid canonical members =
+  Hasql.interpExecute [HI.sql| UPDATE apis.error_patterns SET canonical_id = #{canonical}, merge_override = TRUE WHERE project_id = #{pid} AND id = ANY(#{members}::uuid[]) |]
 
 
 -- | Members of an error pattern's merge group.

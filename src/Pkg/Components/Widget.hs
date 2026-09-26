@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), WidgetCta (..), SqlOrder, mkSqlOrder, PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), statScalar, formatStatValue, widgetPostH, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, decodeWidgetZ, widgetFetchUrl, getSpanJson) where
+module Pkg.Components.Widget (Widget (..), WidgetCta (..), WidgetMarker (..), SqlOrder, mkSqlOrder, PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), statScalar, formatStatValue, widgetPostH, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, decodeWidgetZ, widgetFetchUrl, getSpanJson) where
 
 import Codec.Compression.GZip qualified as GZip
 import Control.Exception.Safe qualified as Safe
@@ -206,6 +206,13 @@ data WidgetCta = WidgetCta
   deriving (FromHttpApiData) via JSONHttpApiData WidgetCta
 
 
+-- | A labelled instant drawn as a vertical line, e.g. the release an issue first appeared in.
+data WidgetMarker = WidgetMarker {label :: Text, at :: Text}
+  deriving stock (Generic, Show, THS.Lift)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake WidgetMarker
+
+
 -- when processing widgets we'll do them async, so eager queries are loaded upfront
 data Widget = Widget
   { wType :: WidgetType -- Widget type: "timeseries", "table", etc.
@@ -247,6 +254,7 @@ data Widget = Widget
   -- window. Every vendor surveyed draws this; without it the reader cannot tell
   -- whether their request was inside the spike or merely near it.
   , highlightTo :: Maybe Text
+  , markers :: Maybe [WidgetMarker]
   , _projectId :: Maybe Projects.ProjectId
   , _dashboardId :: Maybe Text -- Dashboard ID for context
   , _isNested :: Maybe Bool
@@ -1228,6 +1236,7 @@ renderChart widget = do
                 timeToJS = encodeText widget.timeTo
                 highlightFromJS = encodeText widget.highlightFrom
                 highlightToJS = encodeText widget.highlightTo
+                markersJS = encodeText widget.markers
                 dashboardIdJS = encodeText widget._dashboardId
             script_
               [type_ "text/javascript", data_ "chart-init" chartId]
@@ -1259,6 +1268,7 @@ renderChart widget = do
                   timeTo: ${timeToJS},
                   highlightFrom: ${highlightFromJS},
                   highlightTo: ${highlightToJS},
+                  markers: ${markersJS},
                   dashboardId: ${dashboardIdJS}
                 };
 
