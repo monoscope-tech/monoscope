@@ -108,14 +108,16 @@ spec = sequential $ aroundAll withTestResources do
       drainExtractionWorker tr
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
       patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 50 0
-      e <- maybe (fail "no ContextError pattern") (pure . (.errorData)) $ find ((== "ContextError") . (.errorType)) patterns
+      ctxPattern <- maybe (fail "no ContextError pattern") pure $ find ((== "ContextError") . (.errorType)) patterns
+      let e = ctxPattern.errorData
+      void $ runTestBg frozenTime tr $ ErrorPatterns.updateErrorPatternAnalysis ctxPattern.id "The cart line has no price" "data"
       (e.release, e.environment, e.handled, e.mechanism) `shouldBe` (Just "26.3.1", Just "production", Just False, Just ErrorPatterns.CMExceptionEvent)
       (e.browser, e.os, e.device, e.userAgent) `shouldBe` (Just "Chrome", Just "Windows", Just "Desktop", Just ua)
       (e.geoCountry, e.geoCity, e.threadName) `shouldBe` (Just "US", Just "Santa Clara", Just "main")
       -- ...and the issue page renders them in its Highlights and Contexts sections.
       issue <- runTestBg frozenTime tr (Issues.selectIssueByHash pid e.hash Issues.AnyIssue) >>= maybe (fail "no ContextError issue") pure
       (_, page) <- testServant tr $ Pages.Issues.issueDetailGetH pid issue.id Nothing Nothing Nothing Nothing
-      TL.toStrict (renderText $ toHtml page) `shouldContainAll` ["id=\"issue-contexts\"", "Santa Clara, US", "26.3.1", "Chrome", "exception_event", "id=\"issue-http\"", "https://shop.example.com/api/context?cart=7&amp;coupon=x", "coupon", "x-request-id", "curl -X GET", "id=\"issue-copy-json\"", "&quot;release&quot;:&quot;26.3.1&quot;", "## ", "id=\"issue-grouping\"", "context probe"]
+      TL.toStrict (renderText $ toHtml page) `shouldContainAll` ["id=\"issue-contexts\"", "Santa Clara, US", "26.3.1", "Chrome", "exception_event", "id=\"issue-http\"", "https://shop.example.com/api/context?cart=7&amp;coupon=x", "coupon", "x-request-id", "curl -X GET", "id=\"issue-copy-json\"", "&quot;release&quot;:&quot;26.3.1&quot;", "## ", "id=\"issue-grouping\"", "context probe", "Root cause", "The cart line has no price", "Plan a fix"]
 
     it "1c. releases and distinct users are tracked, and resolve-in-next-release holds until a new release" \tr -> do
       apiKey <- createTestAPIKey tr pid "release-key"

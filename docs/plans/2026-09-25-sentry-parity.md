@@ -31,7 +31,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (commit).
 - [x] B7 Triage — editable priority, assignee + resolve on every issue type, archive until
       escalating / for N hours.
 - [x] B8 Collaboration — comments in Activity, people viewing, external links (GitHub/Jira/Linear).
-- [ ] B9 AI in the rail — root cause, plan, code changes rendered on the page.
+- [x] B9 AI in the rail — root cause, plan, code changes rendered on the page.
 
 ## C. Issue types (detectors over spans)
 

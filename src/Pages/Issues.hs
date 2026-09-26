@@ -934,11 +934,29 @@ issueDetailPage v@IssueView{..} = div_ [class_ "flex h-full overflow-hidden rela
             (zonedTimeToUTC issue.createdAt, zonedTimeToUTC issue.updatedAt)
             (\errL -> (zonedTimeToUTC errL.base.createdAt, zonedTimeToUTC errL.base.updatedAt))
             errM
-        railSection_ "AI assistant" do
-          p_ [class_ "text-sm text-textWeak mb-2"] "Ask about the cause, the blast radius, or a fix — answered from this issue's telemetry."
-          label_ [Lucid.for_ "ai-panel-toggle", class_ "btn btn-sm btn-outline w-full gap-1.5"] do
-            faSprite_ "sparkles" "regular" "w-3.5 h-3.5"
-            "Investigate with AI"
+        railSection_ "AI analysis" do
+          -- The background analysis job's verdict, when it has run for this error.
+          case errM >>= \errL -> (,errL.base.errorCategory) <$> errL.base.rootCause of
+            Just (rootCause, categoryM) -> div_ [class_ "mb-3 rounded-lg border border-strokeWeak p-3 space-y-1.5"] do
+              div_ [class_ "flex items-center gap-2"] do
+                span_ [class_ "text-xs font-semibold text-textStrong"] "Root cause"
+                whenJust categoryM $ span_ [class_ "badge badge-sm badge-ghost"] . toHtml
+              p_ [class_ "text-sm text-textStrong"] $ toHtml rootCause
+            Nothing -> p_ [class_ "text-sm text-textWeak mb-2"] "Ask about the cause, the blast radius, or a fix — answered from this issue's telemetry."
+          div_ [class_ "flex gap-2"] do
+            label_ [Lucid.for_ "ai-panel-toggle", class_ "btn btn-sm btn-outline flex-1 gap-1.5"] do
+              faSprite_ "sparkles" "regular" "w-3.5 h-3.5"
+              "Investigate"
+            button_
+              [ type_ "button"
+              , class_ "btn btn-sm btn-outline flex-1 gap-1.5"
+              , [__|on click set #ai-panel-toggle's checked to true then send change to #ai-panel-toggle
+                    then set #ai-chat-input's value to 'Propose a step-by-step fix plan for this issue, with the code changes, citing the files and lines from the stack trace.'
+                    then call (#ai-chat-input).form.requestSubmit()|]
+              ]
+              do
+                faSprite_ "code" "regular" "w-3.5 h-3.5"
+                "Plan a fix"
         whenJust errM \errL ->
           div_ [hxGet_ $ "/p/" <> pid.toText <> "/issues/errors/" <> UUID.toText errL.base.id.unErrorPatternId <> "/group_members", hxTrigger_ "load", hxSwap_ "innerHTML"] pass
         activityPanel_ pid issue.id.toText traceRef
