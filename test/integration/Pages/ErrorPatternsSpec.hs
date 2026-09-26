@@ -7,7 +7,7 @@ import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
-import Data.Time (addUTCTime, zonedTimeToUTC)
+import Data.Time (NominalDiffTime, addUTCTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
@@ -146,6 +146,22 @@ spec = sequential $ aroundAll withTestResources do
       (fmap zonedTimeToUTC . (.lastReleaseSince) <$> current) `shouldReturn` Just (addUTCTime (-30) frozenTime)
       (_, page') <- testServant tr $ Pages.Issues.issueDetailGetH pid issue.id Nothing Nothing Nothing Nothing Nothing
       TL.toStrict (renderText $ toHtml page') `shouldContainAll` ["markers: [{\"label\":\"1.0\",\"at\":", "\"label\":\"1.1\""]
+
+    it "1d. bulk merge folds the newer errors into the oldest and archives their issues" \tr -> do
+      apiKey <- createTestAPIKey tr pid "merge-key"
+      forM_ ([("MergeAError", -50), ("MergeBError", -40)] :: [(Text, NominalDiffTime)]) \(ty, at) ->
+        ingestTraceWithExceptionAttrs tr apiKey ([], [], []) "GET /api/merge" ty "merge probe" (ty <> ": merge probe\n    at probe (/app/src/" <> ty <> ".js:1:1)") (addUTCTime at frozenTime)
+      drainExtractionWorker tr
+      void $ runAllBackgroundJobs frozenTime tr.trATCtx
+      pats <- runTestBg frozenTime tr (ErrorPatterns.getErrorPatterns pid Nothing 200 0)
+      [a, b] <- forM ["MergeAError", "MergeBError"] \ty -> maybe (fail $ "no " <> toString ty) pure $ find ((== ty) . (.errorType)) pats
+      [ia, ib] <- forM [a, b] \e -> runTestBg frozenTime tr (Issues.selectIssueByHash pid e.hash Issues.AnyIssue) >>= maybe (fail "no issue") pure
+      void $ testServant tr $ Pages.Issues.issueBulkActionsPostH pid Pages.Issues.BAMerge Nothing Nothing Pages.Issues.IssueBulk{itemId = UUID.toText . (.id.unUUIDId) <$> [ib, ia]}
+      b' <- runTestBg frozenTime tr (ErrorPatterns.getErrorPatternById b.id) >>= maybe (fail "no b") pure
+      (b'.canonicalId, b'.mergeOverride) `shouldBe` (Just a.id, True)
+      [ia', ib'] <- forM [ia, ib] \i -> runTestBg frozenTime tr (Issues.selectIssueById pid i.id) >>= maybe (fail "no issue") pure
+      (isJust ia'.archivedAt, isJust ib'.archivedAt) `shouldBe` (False, True)
+      withResource tr.trPool (\conn -> PGS.query conn [sql| SELECT event::text FROM apis.issue_activity_log WHERE issue_id = ? AND event = 'merged' |] (PGS.Only ib.id)) `shouldReturn` [PGS.Only ("merged" :: Text)]
 
     it "1b. ERROR-severity records produce error patterns — OTel exception.* (backend log) and error.* (Monoscope browser SDK)" \tr -> do
       -- OTLP log records never carry span events; internal browser spans often

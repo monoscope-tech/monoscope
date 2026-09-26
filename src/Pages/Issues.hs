@@ -259,8 +259,8 @@ instance ToHtml IssueAction where
 -- The slugs are the existing wire spellings, so live URLs are unchanged:
 --
 -- >>> map bulkActionSlug [minBound .. maxBound :: IssueBulkAction]
--- ["acknowledge","unacknowledge","archive","unarchive","resolve","priority","assign"]
-data IssueBulkAction = BAAcknowledge | BAUnacknowledge | BAArchive | BAUnarchive | BAResolve | BAPriority | BAAssign
+-- ["acknowledge","unacknowledge","archive","unarchive","resolve","priority","assign","merge"]
+data IssueBulkAction = BAAcknowledge | BAUnacknowledge | BAArchive | BAUnarchive | BAResolve | BAPriority | BAAssign | BAMerge
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
   deriving (FromHttpApiData) via WrappedEnumSC 'Nothing "BA" IssueBulkAction
 
@@ -308,6 +308,16 @@ issueBulkActionsPostH pid action durationM valueM items = do
           let assigneeM = valueM >>= UUID.fromText <&> Projects.UserId
           void $ Issues.setIssueAssignee pid issueIds assigneeM
           pure (issueIds, Just (maybe Issues.IEUnassigned (const Issues.IEAssigned) assigneeM), maybe "Unassigned" (const "Assigned") assigneeM)
+        -- The oldest selected error becomes canonical; the rest join its group and leave the Inbox.
+        BAMerge -> do
+          issues <- catMaybes <$> traverse (Issues.selectIssueById pid) issueIds
+          errs <- catMaybes <$> forM [i | i <- issues, i.issueType == Issues.RuntimeException] \i -> fmap (i.id,) <$> ErrorPatterns.getErrorPatternByHash pid i.targetHash
+          case sortOn (zonedTimeToUTC . (.createdAt) . snd) errs of
+            (_, canon) : rest@(_ : _) -> do
+              void $ PatternMerge.mergeErrorPatterns pid canon.id ((.id) . snd <$> rest)
+              void $ Issues.setArchiveState pid (fst <$> rest) (Just (now, Issues.ArchiveIndefinite))
+              pure (fst <$> rest, Just Issues.IEMerged, "Merged " <> show (length rest) <> " into " <> canon.errorType)
+            _ -> pure ([], Nothing, "Select two or more errors to merge")
       forM_ eventM \ev -> forM_ logIds \u -> Issues.logIssueActivity u ev (Just sess.user.id) Nothing
       addSuccessToast msg Nothing
       addTriggerEvent "issuesListChanged" AE.Null
@@ -2438,6 +2448,7 @@ issueBulkActions pid tab members =
       [ ("circle-check", "Resolve", BAResolve, [])
       , ("flag", "Priority", BAPriority, [(T.toTitle (display sev), withValue BAPriority (display sev)) | sev <- [minBound .. maxBound :: Issues.IssueSeverity]])
       , ("user", "Assign", BAAssign, ("Unassigned", url BAAssign) : [(memberLabel m, withValue BAAssign m.userId.toText) | m <- members])
+      , ("code-merge", "Merge", BAMerge, [])
       ]
 
 
@@ -2919,6 +2930,7 @@ issueActivityTimeline_ userMap now activities
       Issues.Lifecycle Issues.IECommented -> ("comment", "bg-fillBrand-weak text-fillBrand-strong", "Commented")
       Issues.Lifecycle Issues.IEViewed -> ("eye", "bg-fillWeaker text-textWeak", "Viewed")
       Issues.Lifecycle Issues.IELinked -> ("link", "bg-fillBrand-weak text-fillBrand-strong", "Linked an external issue")
+      Issues.Lifecycle Issues.IEMerged -> ("code-merge", "bg-fillWeaker text-textWeak", "Merged into another issue")
 
 
 data SaveViewForm = SaveViewForm {name :: Text, query :: Text}

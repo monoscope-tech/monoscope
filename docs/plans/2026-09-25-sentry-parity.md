@@ -48,7 +48,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (commit).
 - [x] D1 Views — category views + saved views.
 - [x] D2 Search chips (`is:unresolved`, …) + sort (recommended, events, users, age).
 - [x] D3 Columns — Age, Users, inline priority + assignee.
-- [~] D4 Bulk actions — resolve, assign, merge, set priority.
+- [x] D4 Bulk actions — resolve, assign, merge, set priority.
 
 ## Notes
 
@@ -72,7 +72,9 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (commit).
   scored at read time from flattened columns rather than a stored score.
 - D2: sort by most events / most users; active filters render as removable chips in the shared Table.
 - D3: Priority and Assignee show in the row; they are edited from the detail header or in bulk.
-- D4: bulk resolve, priority and assign done (`BulkAction` gained `choices`); bulk merge still open.
+- D4: bulk resolve, priority, assign (`BulkAction` gained `choices`) and merge: the oldest selected error
+  is canonical, the rest join its group with `merge_override` (so the model's passes leave it alone) and
+  their issues are archived with an `IEMerged` activity. Only runtime exceptions merge.
 - A6 so far captures `thread.id`/`thread.name`; attachments need a storage decision.
 
 - Latent, pre-existing: `handleRegression` calls `reopenIssue` with no guard against another open issue
