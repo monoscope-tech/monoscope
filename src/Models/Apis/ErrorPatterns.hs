@@ -132,6 +132,7 @@ data ErrorPattern = ErrorPattern
   , slackThreadTs :: Maybe Text
   , discordMessageId :: Maybe Text
   , firstTraceId :: Maybe Text
+  , firstTraceAt :: Maybe ZonedTime
   , recentTraceId :: Maybe Text
   , regressionCount :: Int
   , canonicalId :: Maybe ErrorPatternId

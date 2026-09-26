@@ -162,6 +162,9 @@ spec = sequential $ aroundAll withTestResources do
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
       [a, b] <- forM ["MergeAError", "MergeBError"] (patternOf tr)
       [ia, ib] <- forM [a, b] (issueOf tr . (.hash))
+      -- One extraction pass can stamp both rows with the same created_at; "oldest" must then come from
+      -- their first events, not from the selection order (seed-dependent failure, 2026-09-26).
+      void $ withResource tr.trPool \conn -> PGS.execute conn [sql| UPDATE apis.error_patterns SET created_at = ? WHERE id IN (?, ?) |] (frozenTime, a.id, b.id)
       void $ testServant tr $ Pages.Issues.issueBulkActionsPostH pid Pages.Issues.BAMerge Nothing Nothing Pages.Issues.IssueBulk{itemId = UUID.toText . (.id.unUUIDId) <$> [ib, ia]}
       b' <- runTestBg frozenTime tr (ErrorPatterns.getErrorPatternById b.id) >>= maybe (fail "no b") pure
       (b'.canonicalId, b'.mergeOverride) `shouldBe` (Just a.id, True)

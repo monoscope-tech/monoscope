@@ -49,6 +49,25 @@ describe('Log Explorer chart auto-refresh', () => {
     history.replaceState({}, '', '/');
   });
 
+  // The data response replaces the whole option (notMerge), so markers added once at init were wiped.
+  test('release markers survive the data response', async () => {
+    const instance = chart();
+    (window as any).echarts = { getInstanceByDom: () => null, init: () => instance };
+    document.body.innerHTML = '<div id="marker-series" data-chart-widget></div>';
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({
+      ...chartData, headers: ['timestamp', 'count'], dataset: [[0, 1]],
+    }), { headers: { 'Content-Type': 'application/json' } })) as any;
+    (window as any).chartWidget({ ...widget('marker-series'), markers: [{ label: '1.0', at: '2026-09-25T10:00:00Z' }, { label: 'bad', at: 'nope' }] });
+    (globalThis as any).triggerIntersection();
+    await vi.waitFor(() => expect(instance.hideLoading).toHaveBeenCalled());
+    const [option, notMerge] = instance.setOption.mock.calls.at(-1)!;
+    expect(notMerge).toBe(true);
+    const markers = option.series.filter((s: any) => s.id === '__markers');
+    expect(markers).toHaveLength(1);
+    expect(markers[0].markLine.data).toEqual([{ xAxis: Date.parse('2026-09-25T10:00:00Z'), name: '1.0' }]);
+    expect(option.series[0].id).not.toBe('__markers');
+  });
+
   test.each([
     { thresholds: { alertThreshold: 5 }, lower: 0, upper: 5 },
     { thresholds: { warningThreshold: -5 }, lower: -5, upper: 1 },

@@ -25,6 +25,7 @@ module Pkg.TestUtils (
   runBackgroundJobsWhere,
   setBjRunAtInThePast,
   toServantResponse,
+  runAuthHandler,
   toBaseServantResponse,
   runAsBaseRecordingHTTP,
   runAsBase,
@@ -185,6 +186,7 @@ import Proto.Opentelemetry.Proto.Trace.V1.Trace qualified as PT
 import Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields qualified as PTF
 import Relude
 import Relude.Extra.Enum (prev)
+import Relude.Extra.Tuple (toSnd)
 import Relude.Unsafe qualified as Unsafe
 import Servant qualified
 import Servant.Server qualified as ServantS
@@ -948,16 +950,19 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
 
 
 toServantResponse :: TestResources -> ATAuthCtx (RespHeaders a) -> IO (RespHeaders a, a)
-toServantResponse TestResources{..} k = do
+toServantResponse tr k = toSnd Servant.getResponse <$> runAuthHandler tr k
+
+
+-- | Run an authenticated handler of any response type (e.g. a bare @Location@ redirect).
+runAuthHandler :: TestResources -> ATAuthCtx a -> IO a
+runAuthHandler TestResources{..} k = do
   tp <- getGlobalTracerProvider
   uuidRef <- freshUUIDRef
-  headersResp <-
-    ( atAuthToBase trSessAndHeader k
-        & effToServantHandlerTest trTestClock uuidRef trATCtx trLogger tp
-        & ServantS.runHandler
+  ( atAuthToBase trSessAndHeader k
+      & effToServantHandlerTest trTestClock uuidRef trATCtx trLogger tp
+      & ServantS.runHandler
     )
-      <&> fromRightShow
-  pure (headersResp, Servant.getResponse headersResp)
+    <&> fromRightShow
 
 
 testServant :: TestResources -> ATAuthCtx (RespHeaders a) -> IO (RespHeaders a, a)

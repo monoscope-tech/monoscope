@@ -33,6 +33,7 @@ import Pkg.TestUtils
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant qualified
+import Servant.API (ResponseHeader (..), lookupResponseHeader)
 import System.Config (AuthContext (..), EnvConfig (..))
 import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, sequential, shouldBe, shouldNotSatisfy, shouldReturn, shouldSatisfy)
 
@@ -715,6 +716,13 @@ spec = sequential $ aroundAll withTestResources do
       step Telemetry.Newer (at (-600)) `shouldReturn` Just ("step-trace-b", at (-300))
       step Telemetry.Older (at (-600)) `shouldReturn` Nothing
       step Telemetry.Recommended (at 1) `shouldReturn` Just ("step-trace-a", at (-600))
+      -- Past the oldest event the reader stays where they were, not on the default event.
+      let stepTo dir ev =
+            runAuthHandler tr (IssuesPage.issueStepGetH testPid iid (Just dir) (Just ev)) >>= \h -> case lookupResponseHeader @"Location" h of
+              Header loc -> pure loc
+              _ -> fail "no Location"
+      stepTo Telemetry.Older (IssuesPage.EventRef "step-trace-c" (at 0)) >>= (`shouldSatisfy` T.isInfixOf "step-trace-b")
+      stepTo Telemetry.Older (IssuesPage.EventRef "step-trace-a" (at (-600))) >>= (`shouldSatisfy` T.isInfixOf "step-trace-a")
       (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid iid Nothing Nothing Nothing Nothing (Just $ IssuesPage.EventRef "step-trace-b" (at (-300)))
       renderPage page `shouldContainAll` ["step-trace-b", "id=\"issue-events\"", "/step?dir=older", "/step?dir=recommended", "hashes%5B%2A%5D%3D%3D%22err%3Astepprobe%22"]
 

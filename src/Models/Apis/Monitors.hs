@@ -1,5 +1,6 @@
 module Models.Apis.Monitors (
   CronMonitor (..),
+  CheckinStatus (..),
   cronMonitorsByProject,
   insertCronMonitor,
   deleteCronMonitor,
@@ -369,10 +370,16 @@ data CronMonitor = CronMonitor
   , graceSecs :: Int
   , createdAt :: UTCTime
   , lastCheckinAt :: Maybe UTCTime
-  , lastStatus :: Maybe Text
+  , lastStatus :: Maybe CheckinStatus
   }
   deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow)
+
+
+-- | A completed run's @monitor.status@; runs still in progress are not check-ins.
+data CheckinStatus = CSOk | CSError
+  deriving stock (Eq, Read, Show)
+  deriving (HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "CS" CheckinStatus
 
 
 cronCols :: HI.Sql
@@ -405,5 +412,5 @@ claimDueCronMonitors limit =
     )
 
 
-recordCronCheckin :: DB es => UUID.UUID -> UTCTime -> Text -> Eff es Int64
+recordCronCheckin :: DB es => UUID.UUID -> UTCTime -> CheckinStatus -> Eff es Int64
 recordCronCheckin mid at status = Hasql.interpExecute [HI.sql| UPDATE apis.cron_monitors SET last_checkin_at = #{at}, last_status = #{status} WHERE id = #{mid} |]
