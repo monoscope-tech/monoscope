@@ -1411,6 +1411,15 @@ eventCard_ IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflow-cli
                  | Just method <- [d.requestMethod <|> field (.requestMethod)]
                  , Just url <- [field (.urlFull) <|> d.requestPath <|> field (.requestPath)]
                  ]
+              <> [ section "issue-attachments" "paperclip" "Attachments"
+                     $ div_ [class_ "max-md:px-3 px-4 flex flex-wrap gap-3"]
+                     $ forM_ urls \u ->
+                       a_ [href_ u, target_ "_blank", rel_ "noopener noreferrer", class_ "block max-w-60 text-xs text-textBrand break-all"]
+                         $ if any (`T.isSuffixOf` T.toLower (T.takeWhile (/= '?') u)) [".png", ".jpg", ".jpeg", ".gif", ".webp"]
+                           then img_ [src_ u, alt_ "Attachment", loading_ "lazy", class_ "max-h-40 rounded border border-strokeWeak"]
+                           else toHtml u
+                 | Just urls <- [field (.attachments)]
+                 ]
       Just (Issues.CronP d) ->
         [ section "issue-cron-evidence" "clock" "Evidence"
             $ kvRows_ "max-md:px-3 px-4"

@@ -2427,6 +2427,8 @@ atErrorFrom spanObj mechanism handled typ msg stack =
             mfilter (not . Map.null)
               . fmap (Map.mapMaybe \case AE.Array vs -> nonEmptyT $ Just $ T.intercalate ", " $ mapMaybe valText $ V.toList vs; v -> valText v)
               $ asum [jsonToMap =<< getNestedValue (T.splitOn "." k) =<< attrs | k <- ["http.request.header", "http.request.headers"]]
+        , attachments =
+            mfilter (not . null) $ Just [u | k <- ["attachment.url", "screenshot.url"], v <- maybeToList (getNestedValue (T.splitOn "." k) =<< attrs), u <- case v of AE.Array vs -> mapMaybe valText (V.toList vs); _ -> maybeToList (valText v), any (`T.isPrefixOf` u) ["https://", "http://"]]
         }
 
 

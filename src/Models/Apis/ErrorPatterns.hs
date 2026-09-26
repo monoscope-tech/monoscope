@@ -234,6 +234,8 @@ data ATError = ATError
   , urlFull :: Maybe Text
   , urlQuery :: Maybe Text
   , requestHeaders :: Maybe (Map Text Text)
+  , attachments :: Maybe [Text]
+  -- ^ http(s) URLs from @attachment.url@ / @screenshot.url@ (string or string[]); the SDK hosts the files.
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, NFData)

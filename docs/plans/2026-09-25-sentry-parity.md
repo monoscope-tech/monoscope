@@ -15,7 +15,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (commit).
       (exception event / log record / span status); level = `severity_text` / span status.
 - [x] A5 Browser / OS / device on errors — `user_agent.original` (parsed), `browser.*`, `os.*`,
       `device.*`, `host.arch`.
-- [~] A6 Threads + attachments — `thread.id`, `thread.name`; attachments/screenshots via span
+- [x] A6 Threads + attachments — `thread.id`, `thread.name`; attachments/screenshots via span
       events or `*.attachment` attributes.
 
 ## B. Issue page
@@ -75,7 +75,9 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (commit).
 - D4: bulk resolve, priority, assign (`BulkAction` gained `choices`) and merge: the oldest selected error
   is canonical, the rest join its group with `merge_override` (so the model's passes leave it alone) and
   their issues are archived with an `IEMerged` activity. Only runtime exceptions merge.
-- A6 so far captures `thread.id`/`thread.name`; attachments need a storage decision.
+- A6: `thread.id`/`thread.name`, and attachments as http(s) URLs in `attachment.url` / `screenshot.url`
+  (string or string[]; OTel has no convention). The SDK hosts the files — we store and render links, images
+  inline. Uploading files to our own storage is a separate decision if SDKs can't host them.
 
 - Latent, pre-existing: `handleRegression` calls `reopenIssue` with no guard against another open issue
   for the same signal, so it can hit `idx_issues_project_target_type_open` (23505) when the newest issue is

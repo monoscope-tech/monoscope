@@ -96,7 +96,7 @@ spec = sequential $ aroundAll withTestResources do
       ingestTraceWithExceptionAttrs
         tr
         apiKey
-        ( [("user_agent.original", ua), ("geo.country.iso_code", "US"), ("geo.locality.name", "Santa Clara"), ("thread.name", "main"), ("http.request.method", "GET"), ("url.full", "https://shop.example.com/api/context?cart=7&coupon=x"), ("url.query", "cart=7&coupon=x"), ("http.request.header.x-request-id", "req-42")]
+        ( [("user_agent.original", ua), ("geo.country.iso_code", "US"), ("geo.locality.name", "Santa Clara"), ("thread.name", "main"), ("http.request.method", "GET"), ("url.full", "https://shop.example.com/api/context?cart=7&coupon=x"), ("url.query", "cart=7&coupon=x"), ("http.request.header.x-request-id", "req-42"), ("screenshot.url", "https://cdn.example.com/shot.png"), ("attachment.url", "javascript:alert(1)")]
         , [("service.version", "26.3.1"), ("deployment.environment.name", "production")]
         , [("exception.escaped", "true")]
         )
@@ -113,11 +113,11 @@ spec = sequential $ aroundAll withTestResources do
       void $ runTestBg frozenTime tr $ ErrorPatterns.updateErrorPatternAnalysis ctxPattern.id "The cart line has no price" "data"
       (e.release, e.environment, e.handled, e.mechanism) `shouldBe` (Just "26.3.1", Just "production", Just False, Just ErrorPatterns.CMExceptionEvent)
       (e.browser, e.os, e.device, e.userAgent) `shouldBe` (Just "Chrome", Just "Windows", Just "Desktop", Just ua)
-      (e.geoCountry, e.geoCity, e.threadName) `shouldBe` (Just "US", Just "Santa Clara", Just "main")
+      (e.geoCountry, e.geoCity, e.threadName, e.attachments) `shouldBe` (Just "US", Just "Santa Clara", Just "main", Just ["https://cdn.example.com/shot.png"])
       -- ...and the issue page renders them in its Highlights and Contexts sections.
       issue <- runTestBg frozenTime tr (Issues.selectIssueByHash pid e.hash Issues.AnyIssue) >>= maybe (fail "no ContextError issue") pure
       (_, page) <- testServant tr $ Pages.Issues.issueDetailGetH pid issue.id Nothing Nothing Nothing Nothing Nothing
-      TL.toStrict (renderText $ toHtml page) `shouldContainAll` ["id=\"issue-contexts\"", "Santa Clara, US", "26.3.1", "Chrome", "exception_event", "id=\"issue-http\"", "https://shop.example.com/api/context?cart=7&amp;coupon=x", "coupon", "x-request-id", "curl -X GET", "id=\"issue-copy-json\"", "&quot;release&quot;:&quot;26.3.1&quot;", "## ", "id=\"issue-grouping\"", "context probe", "Root cause", "The cart line has no price", "Plan a fix", "id=\"issue-tags\"", ">release</h4>", ">26.3.1</span>", "100%"]
+      TL.toStrict (renderText $ toHtml page) `shouldContainAll` ["id=\"issue-contexts\"", "Santa Clara, US", "26.3.1", "Chrome", "exception_event", "id=\"issue-http\"", "https://shop.example.com/api/context?cart=7&amp;coupon=x", "coupon", "x-request-id", "curl -X GET", "id=\"issue-copy-json\"", "&quot;release&quot;:&quot;26.3.1&quot;", "## ", "id=\"issue-grouping\"", "context probe", "Root cause", "The cart line has no price", "Plan a fix", "id=\"issue-tags\"", ">release</h4>", ">26.3.1</span>", "100%", "id=\"issue-attachments\"", "src=\"https://cdn.example.com/shot.png\""]
 
     it "1c. releases and distinct users are tracked, and resolve-in-next-release holds until a new release" \tr -> do
       apiKey <- createTestAPIKey tr pid "release-key"
