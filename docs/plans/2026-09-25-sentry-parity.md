@@ -41,7 +41,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (commit).
 - [ ] C2 Frontend — rage click / dead click from browser SDK click events; selector + replay.
 - [ ] C3 Uptime — HTTP checks → downtime issues with status code, reason, duration.
 - [ ] C4 Cron monitors — check-ins (span/log with `monitor.slug`); missed/failed issues.
-- [ ] C5 User feedback — inbox / resolved / spam, AI summary, linked issue.
+- [-] C5 User feedback — descoped by the user (2026-09-26).
 
 ## D. Issue list
 
@@ -75,10 +75,11 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (commit).
   for the same signal, so it can hit `idx_issues_project_target_type_open` (23505) when the newest issue is
   closed and an older one is open. Seen only from contrived test state so far.
 
-## Decisions needed
+## Decisions (asked 2026-09-26)
 
-- GeoIP provider: MaxMind GeoLite2 (license key + attribution) or IPinfo Lite (free, CC-BY-SA).
-- Release ordering for "resolve in next release": treat any *different* `service.version` as newer
-  (Sentry's default for non-semver), or require semver.
-- N+1 detection scope: ingest batches see partial traces; a background pass over completed traces is
-  the alternative.
+- GeoIP: IPinfo Lite free (country) first; the reader also takes city/region fields so the licensed city `.mmdb` drops in later. Env-configured path; absent = no lookup.
+- Uptime (C3): HTTP check monitors (URL, interval, expected status) that open downtime issues.
+- Cron (C4): in scope — check-ins as OTel spans/logs carrying a monitor slug.
+- User feedback (C5): out of scope for this effort.
+- Release ordering: any different `service.version` counts as newer (Sentry's non-semver rule).
+- N+1 detection: background pass over completed traces, not ingest batches.
