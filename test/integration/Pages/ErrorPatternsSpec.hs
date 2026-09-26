@@ -425,6 +425,26 @@ spec = sequential $ aroundAll withTestResources do
           fmap (.state) deescalatedPat `shouldBe` Just ESOngoing
         Nothing -> expectationFailure "No escalating pattern found for de-escalation test"
 
+    it "5b2. A spike wakes the issue archived until it escalates" \tr -> do
+      errRates <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternsWithCurrentRates pid frozenTime
+      case find (\r -> r.state == ESOngoing && r.baselineState == BSEstablished && maybe False (> 0) r.baselineStddev) errRates of
+        Nothing -> expectationFailure "No de-escalated pattern left by 5b"
+        Just errRate -> do
+          iid <- withResource tr.trPool \conn ->
+            maybe (fail "no issue for the pattern") (pure . UUIDId . PGS.fromOnly)
+              . listToMaybe
+              =<< PGS.query conn [sql| SELECT id FROM apis.issues WHERE project_id = ? AND target_hash = ? AND issue_type = 'runtime_exception' AND acknowledged_at IS NULL AND archived_at IS NULL LIMIT 1 |] (pid, errRate.hash)
+          void $ runTestBg frozenTime tr $ Issues.setArchiveState pid [iid] (Just (frozenTime, Issues.ArchiveUntilEscalating))
+          let spikeTime = addUTCTime 7200 frozenTime
+              spikeCount = ceiling (fromMaybe 0 errRate.baselineMean + 3 * fromMaybe 0 errRate.baselineStddev + 50) :: Int
+          void $ runTestBg frozenTime tr $ ErrorPatterns.upsertErrorPatternHourlyStats pid spikeTime (V.singleton (errRate.hash, spikeCount, 5))
+          runTestBg spikeTime tr $ BackgroundJobs.detectErrorSpikes pid
+          woken <- runTestBg frozenTime tr (Issues.selectIssueById pid iid) >>= maybe (fail "issue vanished") pure
+          (isNothing woken.archivedAt, woken.archiveUntilEscalating) `shouldBe` (True, False)
+          withResource tr.trPool (\conn -> PGS.query conn [sql| SELECT count(*)::int FROM apis.issue_activity_log WHERE issue_id = ? AND event = 'escalated' |] (PGS.Only iid)) `shouldReturn` [PGS.Only (1 :: Int)]
+          -- Leave the pattern as 5b did: the tests after this one start from an ongoing pattern.
+          void $ runTestBg frozenTime tr $ ErrorPatterns.updateErrorPatternState errRate.errorId ESOngoing frozenTime
+
     it "5c. Flat baseline (stddev=0) still detects spikes via MAD floor" \tr -> do
       -- Find the pattern from 5b (now ESOngoing) and give it a flat baseline (stddev=0)
       errRates <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternsWithCurrentRates pid frozenTime

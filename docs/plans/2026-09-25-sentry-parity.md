@@ -71,6 +71,10 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (commit).
 - D4: bulk resolve, priority and assign done (`BulkAction` gained `choices`); bulk merge still open.
 - A6 so far captures `thread.id`/`thread.name`; attachments need a storage decision.
 
+- Latent, pre-existing: `handleRegression` calls `reopenIssue` with no guard against another open issue
+  for the same signal, so it can hit `idx_issues_project_target_type_open` (23505) when the newest issue is
+  closed and an older one is open. Seen only from contrived test state so far.
+
 ## Decisions needed
 
 - GeoIP provider: MaxMind GeoLite2 (license key + attribution) or IPinfo Lite (free, CC-BY-SA).
