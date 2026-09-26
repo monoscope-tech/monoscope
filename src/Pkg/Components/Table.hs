@@ -181,10 +181,13 @@ data Config = Config
 
 -- Supporting Types
 
+-- | A toolbar action over the checked rows. With @choices@ it opens a menu and each
+-- @(label, uri)@ posts the selection to its own uri (bulk priority, bulk assign).
 data BulkAction = BulkAction
   { icon :: Maybe Text
   , title :: Text
   , uri :: Text
+  , choices :: [(Text, Text)]
   }
 
 
@@ -591,13 +594,15 @@ renderTableRow tbl row =
 
 -- | Bulk action button: enabled (via CSS) only while some row checkbox is checked.
 bulkActionBtn_ :: Text -> Text -> BulkAction -> Html ()
-bulkActionBtn_ btnSize iconSize blkA =
-  button_
-    [ class_ $ "btn " <> btnSize <> " btn-disabled group-has-[.bulkactionItemCheckbox:checked]/grid:text-white group-has-[.bulkactionItemCheckbox:checked]/grid:bg-fillBrand-strong group-has-[.bulkactionItemCheckbox:checked]/grid:pointer-events-auto!"
-    , hxPost_ blkA.uri
-    , hxSwap_ "none"
-    ]
-    do
+bulkActionBtn_ btnSize iconSize blkA
+  | null blkA.choices = button_ [class_ $ "btn " <> btnSize <> " " <> armed, hxPost_ blkA.uri, hxSwap_ "none"] label
+  | otherwise = details_ [class_ "dropdown"] do
+      summary_ [class_ $ "btn " <> btnSize <> " " <> armed <> " list-none [&::-webkit-details-marker]:hidden"] label
+      ul_ [class_ "dropdown-content menu z-50 min-w-40 rounded-md border border-strokeWeak bg-bgRaised p-1 text-sm shadow-lg"]
+        $ forM_ blkA.choices \(lbl, uri) -> li_ $ button_ [type_ "button", hxPost_ uri, hxSwap_ "none", [__|on click remove @open from closest <details/>|]] $ toHtml lbl
+  where
+    armed = "btn-disabled group-has-[.bulkactionItemCheckbox:checked]/grid:text-white group-has-[.bulkactionItemCheckbox:checked]/grid:bg-fillBrand-strong group-has-[.bulkactionItemCheckbox:checked]/grid:pointer-events-auto!"
+    label = do
       whenJust blkA.icon \icon -> faSprite_ icon "regular" $ iconSize <> " inline-block"
       span_ [class_ "ml-1"] $ toHtml blkA.title
 

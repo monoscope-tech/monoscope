@@ -602,15 +602,15 @@ bulkActionsFor tab pid =
   let bulkBase = "/p/" <> pid.toText <> "/monitors/alerts/bulk_action/"
    in case tab of
         TabActive ->
-          [ BulkAction (Just "pause") "Deactivate" (bulkBase <> bulkActionSlug BADeactivate)
-          , BulkAction (Just "bell-slash") "Mute" (bulkBase <> bulkActionSlug BAMute)
-          , BulkAction (Just "bell") "Unmute" (bulkBase <> bulkActionSlug BAUnmute)
-          , BulkAction (Just "check") "Resolve" (bulkBase <> bulkActionSlug BAResolve)
-          , BulkAction (Just "trash") "Delete" (bulkBase <> bulkActionSlug BADelete)
+          [ BulkAction (Just "pause") "Deactivate" (bulkBase <> bulkActionSlug BADeactivate) []
+          , BulkAction (Just "bell-slash") "Mute" (bulkBase <> bulkActionSlug BAMute) []
+          , BulkAction (Just "bell") "Unmute" (bulkBase <> bulkActionSlug BAUnmute) []
+          , BulkAction (Just "check") "Resolve" (bulkBase <> bulkActionSlug BAResolve) []
+          , BulkAction (Just "trash") "Delete" (bulkBase <> bulkActionSlug BADelete) []
           ]
         TabInactive ->
-          [ BulkAction (Just "play") "Reactivate" (bulkBase <> bulkActionSlug BAReactivate)
-          , BulkAction (Just "trash") "Delete" (bulkBase <> bulkActionSlug BADelete)
+          [ BulkAction (Just "play") "Reactivate" (bulkBase <> bulkActionSlug BAReactivate) []
+          , BulkAction (Just "trash") "Delete" (bulkBase <> bulkActionSlug BADelete) []
           ]
 
 

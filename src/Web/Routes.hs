@@ -655,7 +655,7 @@ data IssuesRoutes' mode = IssuesRoutes'
   , resolveGet :: mode :- Capture "issueID" Issues.IssueId :> "resolve" :> Get '[HTML] (RespHeaders IssuesPage.IssueAction)
   , triagePost :: mode :- Capture "issueID" Issues.IssueId :> "triage" :> ReqBody '[FormUrlEncoded] IssuesPage.TriageForm :> Post '[HTML] (RespHeaders (Html ()))
   , unarchiveGet :: mode :- Capture "issueID" Issues.IssueId :> "unarchive" :> Get '[HTML] (RespHeaders IssuesPage.IssueAction)
-  , bulkActionsPost :: mode :- "bulk_actions" :> Capture "action" IssuesPage.IssueBulkAction :> QueryParam "duration" Int :> ReqBody '[FormUrlEncoded] IssuesPage.IssueBulkForm :> Post '[HTML] (RespHeaders IssuesPage.IssueAction)
+  , bulkActionsPost :: mode :- "bulk_actions" :> Capture "action" IssuesPage.IssueBulkAction :> QueryParam "duration" Int :> QueryParam "value" Text :> ReqBody '[FormUrlEncoded] IssuesPage.IssueBulkForm :> Post '[HTML] (RespHeaders IssuesPage.IssueAction)
   , listGet :: mode :- QPT "filter" :> QPT "sort" :> QPT "since" :> QPT "page" :> QPT "per_page" :> QPT "load_more" :> QPT "period" :> QueryParams "service" Text :> QueryParams "type" Text :> Get '[HTML] (RespHeaders IssuesPage.IssueListGet)
   , detailGet :: mode :- Capture "issueID" Issues.IssueId :> QPT "first_occurrence" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   , detailHashGet :: mode :- "by_hash" :> Capture "issueHash" Text :> QPT "first_occurrence" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))

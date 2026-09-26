@@ -149,7 +149,7 @@ spec = sequential $ aroundAll withTestResources do
       acknowledged <- listAnomalies tr (Just "Acknowledged")
       let acknowledgedIds = [issue.base.id.toText | IssuesPage.IssueVM _ _ issue <- V.toList acknowledged]
       unless (null acknowledgedIds) do
-        void $ testServant tr $ IssuesPage.issueBulkActionsPostH testPid IssuesPage.BAUnacknowledge Nothing IssuesPage.IssueBulk{itemId = acknowledgedIds}
+        void $ testServant tr $ IssuesPage.issueBulkActionsPostH testPid IssuesPage.BAUnacknowledge Nothing Nothing IssuesPage.IssueBulk{itemId = acknowledgedIds}
 
       let load page perPage services types = do
             (_, response) <- testServant tr $ IssuesPage.issueListGetH testPid (Just "Inbox") Nothing Nothing (Just $ show page) (Just $ show perPage) Nothing (Just "24h") services types
@@ -207,7 +207,7 @@ spec = sequential $ aroundAll withTestResources do
       withResource tr.trPool \conn -> do
         void $ PGS.execute conn [sql| UPDATE apis.issues    SET acknowledged_at=NULL, acknowledged_by=NULL WHERE id=? |] (Only issueId)
 
-      _ <- testServant tr $ IssuesPage.issueBulkActionsPostH testPid IssuesPage.BAAcknowledge Nothing IssuesPage.IssueBulk{itemId = [DataUUID.toText issueId.unUUIDId]}
+      _ <- testServant tr $ IssuesPage.issueBulkActionsPostH testPid IssuesPage.BAAcknowledge Nothing Nothing IssuesPage.IssueBulk{itemId = [DataUUID.toText issueId.unUUIDId]}
 
       countQ tr [sql| SELECT COUNT(*)::INT FROM apis.issues WHERE id=? AND acknowledged_at IS NOT NULL |] (Only issueId)
         >>= (`shouldBe` 1)
@@ -225,7 +225,7 @@ spec = sequential $ aroundAll withTestResources do
       inboxBefore <- listAnomalies tr Nothing
       containsIssue inboxBefore `shouldBe` True
 
-      _ <- testServant tr $ IssuesPage.issueBulkActionsPostH testPid IssuesPage.BAArchive Nothing IssuesPage.IssueBulk{itemId = [DataUUID.toText issueId.unUUIDId]}
+      _ <- testServant tr $ IssuesPage.issueBulkActionsPostH testPid IssuesPage.BAArchive Nothing Nothing IssuesPage.IssueBulk{itemId = [DataUUID.toText issueId.unUUIDId]}
 
       inboxAfter <- listAnomalies tr Nothing
       containsIssue inboxAfter `shouldBe` False
@@ -653,6 +653,25 @@ spec = sequential $ aroundAll withTestResources do
       _ <- testServant tr $ IssuesPage.resolveIssueGetH testPid logIid
       (isJust . (.archivedAt) <$> reload logIid) `shouldReturn` True
       runTestBg frozenTime tr (Issues.selectLatestStateEvent logIid) `shouldReturn` Just Issues.IEResolved
+
+    it "bulk priority, assign and resolve apply to every selected issue; the list shows priority, assignee and users" \tr -> do
+      iids <- forM ["bulk-a", "bulk-b"] \h ->
+        withResource tr.trPool \conn ->
+          maybe (fail "no row") (pure . fromOnly)
+            . listToMaybe
+            =<< PGS.query conn [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, created_at, updated_at) VALUES (?, 'log_pattern', ?, ?, ?, ?) RETURNING id |] (testPid, "bulk " <> h, h, frozenTime, frozenTime)
+      member <- runTestBg frozenTime tr (ProjectMembers.selectActiveProjectMembers testPid) >>= maybe (fail "no member") pure . listToMaybe
+      let sel = IssuesPage.IssueBulk{itemId = DataUUID.toText <$> iids}
+          bulk a v = void $ testServant tr $ IssuesPage.issueBulkActionsPostH testPid a Nothing v sel
+          issues = catMaybes <$> forM iids (runTestBg frozenTime tr . Issues.selectIssueById testPid . UUIDId)
+      bulk IssuesPage.BAPriority (Just "warning")
+      bulk IssuesPage.BAAssign (Just member.userId.toText)
+      map ((.severity) &&& (.assigneeId)) <$> issues `shouldReturn` replicate 2 (Issues.Warning, Just member.userId)
+      (_, page) <- testServant tr $ IssuesPage.issueListGetH testPid (Just "Inbox") (Just "-users_count") Nothing Nothing (Just "100") Nothing (Just "24h") [] []
+      renderPage page `shouldContainAll` ["Priority", "Assignee", "Age", "Most users", IssuesPage.memberLabel member, "bulk_actions/priority?value=critical"]
+      bulk IssuesPage.BAResolve Nothing
+      all (isJust . (.archivedAt)) <$> issues `shouldReturn` True
+      forM iids (runTestBg frozenTime tr . Issues.selectLatestStateEvent . UUIDId) `shouldReturn` replicate 2 (Just Issues.IEResolved)
 
     -- Sentry's stack trace earns its slot by separating the code you wrote from the
     -- runtime's, and this page had the parser (Pkg.ErrorFingerprint, which the issue

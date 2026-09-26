@@ -434,6 +434,7 @@ data IssueL = IssueL
   , lastSeen :: UTCTime
   , latestStateEvent :: Maybe IssueEvent
   , activityBuckets :: V.Vector Int
+  , usersCount :: Int
   }
   deriving stock (Generic, Show)
   deriving anyclass (NFData)
@@ -441,7 +442,7 @@ data IssueL = IssueL
 
 -- Generic HI.DecodeRow can't derive this: Issue has DecodeRow but not DecodeValue.
 instance HI.DecodeRow IssueL where
-  decodeRow = IssueL <$> HI.decodeRow <*> HI.decodeRow <*> HI.decodeRow <*> HI.decodeRow <*> HI.decodeRow
+  decodeRow = IssueL <$> HI.decodeRow <*> HI.decodeRow <*> HI.decodeRow <*> HI.decodeRow <*> HI.decodeRow <*> HI.decodeRow
 
 
 -- | Insert a single issue
@@ -683,6 +684,8 @@ selectIssues pid projection f = do
         _ -> (UTCTime (addDays (-6) (utctDay now)) 0, [HI.sql|interval '1 day'|])
       orderBy pfx = rawSql case T.uncons =<< f.order of
         Just (s, c) | s == '-' || s == '+', c `elem` ["created_at", "updated_at", "title"] -> pfx <> c <> bool " ASC" " DESC" (s == '-')
+        -- Output aliases of the IssueL projection; only that query (prefix "i.") has them.
+        Just (s, c) | s == '-' || s == '+', pfx == "i.", c `elem` ["event_count", "users_count"] -> c <> bool " ASC" " DESC" (s == '-') <> ", i.created_at DESC"
         _ -> pfx <> "critical DESC, " <> pfx <> "created_at DESC"
       arrF pfx col xs = if null xs then mempty else [HI.sql| AND ^{pfx}^{col} = ANY(#{xs}::text[])|]
       mkFilters pfx =
@@ -717,13 +720,14 @@ selectIssues pid projection f = do
             WHEN i.issue_type = 'runtime_exception' THEN COALESCE(err_ev.cnt, 0)
             WHEN i.issue_type IN ('log_pattern', 'log_pattern_rate_change') THEN COALESCE(lp_ev.cnt, 0)
             ELSE i.affected_requests
-          END::bigint,
+          END::bigint AS event_count,
           i.updated_at, lat.event,
           CASE
             WHEN i.issue_type = 'runtime_exception' THEN COALESCE(err_ev.buckets, '{}'::bigint[])
             WHEN i.issue_type IN ('log_pattern', 'log_pattern_rate_change') THEN COALESCE(lp_ev.buckets, '{}'::bigint[])
             ELSE '{}'::bigint[]
-          END
+          END,
+          COALESCE((SELECT ep.users_count FROM apis.error_patterns ep WHERE ep.project_id = i.project_id AND ep.hash = i.target_hash), 0)::bigint AS users_count
         FROM apis.issues i
         LEFT JOIN LATERAL (
           SELECT SUM(day_cnt)::bigint AS cnt, array_agg(day_cnt ORDER BY day) AS buckets FROM (

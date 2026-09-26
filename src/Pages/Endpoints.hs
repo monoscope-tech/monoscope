@@ -74,8 +74,8 @@ apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM statsM = d
       -- request_type and let the handler resolve direction per row.
       bulkActionItem =
         if showArchived
-          then BulkAction{icon = Just "rotate-left", title = "Unarchive", uri = "/p/" <> pid.toText <> "/api_catalog/bulk_action/" <> bulkActionSlug BAUnarchive}
-          else BulkAction{icon = Just "archive", title = "Archive", uri = "/p/" <> pid.toText <> "/api_catalog/bulk_action/" <> bulkActionSlug BAArchive <> "?request_type=" <> currentTabT}
+          then BulkAction{icon = Just "rotate-left", title = "Unarchive", uri = "/p/" <> pid.toText <> "/api_catalog/bulk_action/" <> bulkActionSlug BAUnarchive, choices = []}
+          else BulkAction{icon = Just "archive", title = "Archive", uri = "/p/" <> pid.toText <> "/api_catalog/bulk_action/" <> bulkActionSlug BAArchive <> "?request_type=" <> currentTabT, choices = []}
       hostsVM = V.fromList $ map (\events -> HostEventsVM{events, currTime, statsMode}) hostsAndEvents
       cols = catalogColumns pid baseUrl periodT
       hostRowId = Just \(vm :: HostEventsVM) -> vm.events.host
@@ -363,7 +363,7 @@ endpointListGetH pid pageM perPageM _layoutM filterTM hostM currentTabM sortM pe
               def
                 { rowId = endpRowId
                 , rowAttrs = endpRowAttrs
-                , bulkActions = [BulkAction{icon = Just "archive", title = "Archive", uri = "/p/" <> pid.toText <> "/endpoints/bulk_action/archive"}]
+                , bulkActions = [BulkAction{icon = Just "archive", title = "Archive", uri = "/p/" <> pid.toText <> "/endpoints/bulk_action/archive", choices = []}]
                 , search = Just (ServerSide baseUrl)
                 , tableHeaderActions = Just tableActions
                 , pagination = pagination'

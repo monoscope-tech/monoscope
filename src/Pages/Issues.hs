@@ -6,6 +6,7 @@ module Pages.Issues (
   archiveIssueGetH,
   resolveIssueGetH,
   TriageForm (..),
+  memberLabel,
   triagePostH,
   issueDetailGetH,
   IssueBulkForm (..),
@@ -107,7 +108,7 @@ import System.Logging qualified as Log
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent, useTfReads)
 import Utils (LoadingSize (..), LoadingType (..), checkFreeTierStatus, countNoun, faSprite_, formatOffset, formatUTC, formatWithCommas, hostPath, isoT, loadingIndicator_, lookupValueText, renderMarkdown, timeScopedUrl, toUriStr)
 import Web.FormUrlEncoded (FromForm)
-import Web.HttpApiData (FromHttpApiData)
+import Web.HttpApiData (FromHttpApiData (..))
 
 
 newtype IssueBulkForm = IssueBulk
@@ -245,14 +246,14 @@ instance ToHtml IssueAction where
 -- The slugs are the existing wire spellings, so live URLs are unchanged:
 --
 -- >>> map bulkActionSlug [minBound .. maxBound :: IssueBulkAction]
--- ["acknowledge","unacknowledge","archive","unarchive"]
-data IssueBulkAction = BAAcknowledge | BAUnacknowledge | BAArchive | BAUnarchive
+-- ["acknowledge","unacknowledge","archive","unarchive","resolve","priority","assign"]
+data IssueBulkAction = BAAcknowledge | BAUnacknowledge | BAArchive | BAUnarchive | BAResolve | BAPriority | BAAssign
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
   deriving (FromHttpApiData) via WrappedEnumSC 'Nothing "BA" IssueBulkAction
 
 
-issueBulkActionsPostH :: Projects.ProjectId -> IssueBulkAction -> Maybe Int -> IssueBulkForm -> ATAuthCtx (RespHeaders IssueAction)
-issueBulkActionsPostH pid action durationM items = do
+issueBulkActionsPostH :: Projects.ProjectId -> IssueBulkAction -> Maybe Int -> Maybe Text -> IssueBulkForm -> ATAuthCtx (RespHeaders IssueAction)
+issueBulkActionsPostH pid action durationM valueM items = do
   (sess, _) <- Projects.sessionAndProject pid
   if null items.itemId
     then do
@@ -265,20 +266,36 @@ issueBulkActionsPostH pid action durationM items = do
           until' = Issues.ackUntil now window
       -- Acknowledging sweeps siblings the selection never named, so each branch
       -- reports the rows it actually touched and those are what get logged.
-      (logIds, eventType, msg) <- case action of
+      (logIds, eventM, msg) <- case action of
         BAAcknowledge -> do
           acked <- Issues.ackCascade pid sess.user.id window issueIds
-          pure (acked, Issues.IEAcknowledged, untilLabel "Acknowledged" now until' <> " \x2014 notifications paused")
+          pure (acked, Just Issues.IEAcknowledged, untilLabel "Acknowledged" now until' <> " \x2014 notifications paused")
         BAUnacknowledge -> do
           void $ Issues.setAckState pid issueIds Nothing
-          pure (issueIds, Issues.IEUnacknowledged, "Back in the Inbox \x2014 notifications resumed")
+          pure (issueIds, Just Issues.IEUnacknowledged, "Back in the Inbox \x2014 notifications resumed")
         BAArchive -> do
           void $ Issues.setArchiveState pid issueIds (Just (now, Issues.ArchiveIndefinite))
-          pure (issueIds, Issues.IEArchived, "Archived \x2014 notifications stopped")
+          pure (issueIds, Just Issues.IEArchived, "Archived \x2014 notifications stopped")
         BAUnarchive -> do
           void $ Issues.setArchiveState pid issueIds Nothing
-          pure (issueIds, Issues.IEUnarchived, "Restored to the Inbox")
-      forM_ logIds \u -> Issues.logIssueActivity u eventType (Just sess.user.id) Nothing
+          pure (issueIds, Just Issues.IEUnarchived, "Restored to the Inbox")
+        -- An error-backed issue resolves its error pattern and incident; the rest leave the Inbox.
+        BAResolve -> do
+          issues <- catMaybes <$> traverse (Issues.selectIssueById pid) issueIds
+          forM_ issues \i ->
+            when (i.issueType == Issues.RuntimeException)
+              $ ErrorPatterns.getErrorPatternByHash pid i.targetHash
+              >>= traverse_ \err -> void $ resolveErrorAs sess.user err now
+          void $ Issues.setArchiveState pid issueIds (Just (now, Issues.ArchiveIndefinite))
+          pure (issueIds, Just Issues.IEResolved, "Resolved")
+        BAPriority -> case parseQueryParam @Issues.IssueSeverity =<< maybeToRight "" valueM of
+          Right sev -> Issues.setIssuePriority pid issueIds sev $> ([], Nothing, "Priority set to " <> display sev)
+          Left _ -> pure ([], Nothing, "Pick a priority")
+        BAAssign -> do
+          let assigneeM = valueM >>= UUID.fromText <&> Projects.UserId
+          void $ Issues.setIssueAssignee pid issueIds assigneeM
+          pure (issueIds, Just (maybe Issues.IEUnassigned (const Issues.IEAssigned) assigneeM), maybe "Unassigned" (const "Assigned") assigneeM)
+      forM_ eventM \ev -> forM_ logIds \u -> Issues.logIssueActivity u ev (Just sess.user.id) Nothing
       addSuccessToast msg Nothing
       addTriggerEvent "issuesListChanged" AE.Null
       addRespHeaders Bulk
@@ -1505,14 +1522,11 @@ resolveErrorPostH pid errUuid inNextRelease = do
           addRespHeaders $ errorResolveAction pid err err.state False
       | otherwise -> do
           now <- Time.currentTime
-          ctx <- ask @AuthContext
-          let projectUrl = hostPath ctx.env.hostUrl $ "p/" <> pid.toText
-              message iid = Mail.resolvedErrorMessage err sess.user now projectUrl (((projectUrl <> "/issues/") <>) . (.toText) <$> iid)
-              resolved = do
+          let resolved = do
                 void $ ErrorPatterns.setResolvedInRelease err.id inNextRelease
                 addSuccessToast (maybe "Error resolved" ("Resolved in the release after " <>) (err.lastRelease <* guard inNextRelease)) Nothing
                 addRespHeaders $ errorResolveAction pid err ErrorPatterns.ESResolved True
-          Incidents.resolveErrorIncident pid err.id sess.user.id now message >>= \case
+          resolveErrorAs sess.user err now >>= \case
             Incidents.ErrorResolutionDenied -> do
               addErrorToast "You do not have permission to resolve this error" Nothing
               addRespHeaders $ errorResolveAction pid err err.state False
@@ -1522,6 +1536,15 @@ resolveErrorPostH pid errUuid inNextRelease = do
               addRespHeaders $ errorResolveAction pid err err.state False
             Incidents.ErrorResolved -> resolved
             Incidents.ErrorAlreadyResolved -> resolved
+
+
+-- | Resolve an error pattern and close its incident episode, notifying as the user.
+resolveErrorAs :: Projects.User -> ErrorPatterns.ErrorPattern -> UTCTime -> ATAuthCtx Incidents.ErrorResolution
+resolveErrorAs user err now = do
+  ctx <- ask @AuthContext
+  let projectUrl = hostPath ctx.env.hostUrl $ "p/" <> err.projectId.toText
+      message iid = Mail.resolvedErrorMessage err user now projectUrl (((projectUrl <> "/issues/") <>) . (.toText) <$> iid)
+  Incidents.resolveErrorIncident err.projectId err.id user.id now message
 
 
 errorSubscriptionPostH :: Projects.ProjectId -> UUID.UUID -> ErrorSubscriptionForm -> ATAuthCtx (RespHeaders (Html ()))
@@ -2019,6 +2042,8 @@ issueListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM service
             }
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
   currTime <- Time.currentTime
+  members <- ProjectMembers.selectActiveProjectMembers pid
+  let names = Map.fromList [(m.userId, memberLabel m) | m <- members]
   ((issues, totalCount), (availableServices, availableTypes)) <-
     concurrently
       ( Issues.selectIssues
@@ -2052,6 +2077,8 @@ issueListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM service
               [ ("Newest", "Most recently created", "-created_at")
               , ("Oldest", "Oldest issues first", "+created_at")
               , ("Recently Updated", "Most recently updated", "-updated_at")
+              , ("Most events", "Most events in the period", "-event_count")
+              , ("Most users", "Most distinct users affected", "-users_count")
               , ("Name (A-Z)", "Sort alphabetically", "+title")
               , ("Name (Z-A)", "Sort reverse alphabetically", "-title")
               ]
@@ -2070,13 +2097,13 @@ issueListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM service
                 , bulkActionsInHeader = Just 0
                 , refreshOnEvent = Just ("issuesListChanged", baseUrl)
                 }
-          , columns = issueColumns pid period (Just $ periodToggle_ baseUrl "anomalyListContainer" period)
+          , columns = issueColumns pid period names (Just $ periodToggle_ baseUrl "anomalyListContainer" period)
           , rows = issuesVM
           , features =
               def
                 { rowId = Just issueRowId
                 , rowAttrs = Just issueRowAttrs
-                , bulkActions = issueBulkActions pid tab
+                , bulkActions = issueBulkActions pid tab members
                 , search = Just ClientSide
                 , tableHeaderActions = Just tableActions
                 , pagination = if totalCount > 0 then Just paginationConfig else Nothing
@@ -2104,7 +2131,7 @@ issueListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM service
           }
   addRespHeaders
     $ if loadM == Just "true"
-      then ALRows $ TableRows{columns = issueColumns pid period Nothing, rows = issuesVM, renderAsTable = True, rowId = Just issueRowId, rowAttrs = Just issueRowAttrs, pagination = if totalCount > 0 then Just paginationConfig else Nothing}
+      then ALRows $ TableRows{columns = issueColumns pid period names Nothing, rows = issuesVM, renderAsTable = True, rowId = Just issueRowId, rowAttrs = Just issueRowAttrs, pagination = if totalCount > 0 then Just paginationConfig else Nothing}
       else ALPage $ PageCtx bwconf issuesTable
 
 
@@ -2160,14 +2187,22 @@ tabBlurb = \case
 
 -- | Bulk actions offered on each tab: only transitions that make sense from the
 -- state you're looking at.
-issueBulkActions :: Projects.ProjectId -> IssueTab -> [BulkAction]
-issueBulkActions pid tab =
-  [ BulkAction{icon = Just i, title = t, uri = "/p/" <> pid.toText <> "/issues/bulk_actions/" <> bulkActionSlug a}
-  | (i, t, a) <- case tab of
-      TabAcknowledged -> [("arrow-rotate-left", "Unacknowledge", BAUnacknowledge), ("archive", "Archive", BAArchive)]
-      TabArchived -> [("arrow-rotate-left", "Unarchive", BAUnarchive)]
-      TabInbox -> [("check", "Acknowledge", BAAcknowledge), ("archive", "Archive", BAArchive)]
+issueBulkActions :: Projects.ProjectId -> IssueTab -> [ProjectMembers.ProjectMemberVM] -> [BulkAction]
+issueBulkActions pid tab members =
+  [ BulkAction{icon = Just i, title = t, uri = url a, choices = cs}
+  | (i, t, a, cs) <- case tab of
+      TabAcknowledged -> [("arrow-rotate-left", "Unacknowledge", BAUnacknowledge, []), ("archive", "Archive", BAArchive, [])] <> triage
+      TabArchived -> [("arrow-rotate-left", "Unarchive", BAUnarchive, [])]
+      TabInbox -> [("check", "Acknowledge", BAAcknowledge, []), ("archive", "Archive", BAArchive, [])] <> triage
   ]
+  where
+    url a = "/p/" <> pid.toText <> "/issues/bulk_actions/" <> bulkActionSlug a
+    withValue a v = url a <> "?value=" <> toUriStr v
+    triage =
+      [ ("circle-check", "Resolve", BAResolve, [])
+      , ("flag", "Priority", BAPriority, [(T.toTitle (display sev), withValue BAPriority (display sev)) | sev <- [minBound .. maxBound :: Issues.IssueSeverity]])
+      , ("user", "Assign", BAAssign, ("Unassigned", url BAAssign) : [(memberLabel m, withValue BAAssign m.userId.toText) | m <- members])
+      ]
 
 
 issueZeroState :: Projects.ProjectId -> IssueTab -> ZeroState
@@ -2232,14 +2267,21 @@ data IssueVM = IssueVM UTCTime Text Issues.IssueL
   deriving stock (Show)
 
 
-issueColumns :: Projects.ProjectId -> Text -> Maybe (Html ()) -> [Column IssueVM]
-issueColumns pid period toggleM =
+issueColumns :: Projects.ProjectId -> Text -> Map.Map Projects.UserId Text -> Maybe (Html ()) -> [Column IssueVM]
+issueColumns pid period names toggleM =
   [ col "Issue" (renderIssueMainCol pid) & withAttrs [class_ "min-w-0 max-w-0 w-full"]
-  , col ("Events (" <> period <> ")") eventsCol & withAttrs [class_ "w-24 max-md:hidden"]
   , col "Last Seen" lastSeenCol & withAttrs [class_ "w-24 max-md:hidden"]
+  , col "Age" ageCol & withAttrs [class_ "w-16 max-md:hidden"]
   , col "Activity" activityCol & withAttrs [class_ "w-40 max-md:hidden"] & maybe identity withColHeaderExtra toggleM
+  , col ("Events (" <> period <> ")") eventsCol & withAttrs [class_ "w-24 max-md:hidden"]
+  , col "Users" usersCol & withAttrs [class_ "w-16 max-md:hidden"]
+  , col "Priority" (\(IssueVM _ _ i) -> span_ [class_ "text-xs text-textWeak"] $ toHtml $ T.toTitle $ display i.base.severity) & withAttrs [class_ "w-20 max-lg:hidden"]
+  , col "Assignee" assigneeCol & withAttrs [class_ "w-28 max-lg:hidden"]
   ]
   where
+    ageCol (IssueVM currTime _ issue) = span_ [class_ "text-xs text-textWeak"] $ toHtml $ agoText currTime $ zonedTimeToUTC issue.base.createdAt
+    usersCol (IssueVM _ _ issue) = span_ [class_ "tabular-nums text-sm text-textStrong"] $ toHtml $ bool (formatWithCommas (fromIntegral issue.usersCount :: Double)) "\x2014" (issue.usersCount == 0)
+    assigneeCol (IssueVM _ _ issue) = span_ [class_ "text-xs text-textWeak truncate block"] $ toHtml $ fromMaybe "\x2014" $ (`Map.lookup` names) =<< issue.base.assigneeId
     eventsCol (IssueVM _ _ issue) =
       span_ [class_ $ "tabular-nums font-medium text-sm " <> countStyle issue.eventCount]
         $ toHtml
@@ -2249,7 +2291,7 @@ issueColumns pid period toggleM =
       | n >= 10 = "text-fillWarning-strong"
       | otherwise = "text-textStrong"
     lastSeenCol (IssueVM currTime _ issue) =
-      span_ [class_ "text-xs text-textWeak"] $ toHtml $ agoText currTime $ zonedTimeToUTC issue.base.createdAt
+      span_ [class_ "text-xs text-textWeak"] $ toHtml $ agoText currTime issue.lastSeen
     activityCol (IssueVM _ _ issue) = sparkline_ $ V.toList issue.activityBuckets
 
 
