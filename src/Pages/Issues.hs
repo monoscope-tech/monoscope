@@ -478,20 +478,20 @@ issueDetailCore pid firstM eventM requestedRange fetchIssue = do
 -- | ‹ › stepping: the event before or after @from@ that carries the issue's hash, within
 -- a day of it (the hash predicate is an unindexed array scan, so the window is the cost
 -- bound), opened on the issue page. With none, back to the page as it was.
-issueStepGetH :: Projects.ProjectId -> Issues.IssueId -> Maybe Text -> Maybe UTCTime -> ATAuthCtx (Headers '[Header "Location" Text] NoContent)
+issueStepGetH :: Projects.ProjectId -> Issues.IssueId -> Maybe Telemetry.EventStep -> Maybe UTCTime -> ATAuthCtx (Headers '[Header "Location" Text] NoContent)
 issueStepGetH pid issueId dirM fromM = do
   _ <- Projects.sessionAndProject pid
   useTf <- useTfReads
   issueM <- Issues.selectIssueById pid issueId
+  from <- maybe Time.currentTime pure fromM
   let pageUrl = "/p/" <> pid.toText <> "/issues/" <> issueId.toText <> "?"
-      older = dirM /= Just "next"
+      step = fromMaybe Telemetry.Older dirM
   nextM <-
-    join <$> forM ((,,) <$> issueM <*> (Issues.hashPrefix . (.issueType) =<< issueM) <*> fromM) \(issue, prefix, from) ->
-      let key = prefix <> issue.targetHash
-       in tryWithin (Just 5_000_000) "ISSUE_STEP" ["issue_id" AE..= issueId]
-            $ Hasql.withHasqlTimefusion useTf
-            $ Telemetry.adjacentHashEvent pid key older from
-  when (isNothing (join nextM)) $ addErrorToast (bool "No later event within a day" "No earlier event within a day" older) Nothing
+    join <$> forM ((,) <$> issueM <*> (Issues.hashPrefix . (.issueType) =<< issueM)) \(issue, prefix) ->
+      tryWithin (Just 5_000_000) "ISSUE_STEP" ["issue_id" AE..= issueId]
+        $ Hasql.withHasqlTimefusion useTf
+        $ Telemetry.adjacentHashEvent pid (prefix <> issue.targetHash) step from
+  when (isNothing (join nextM)) $ addErrorToast (case step of Telemetry.Older -> "No earlier event within a day"; Telemetry.Newer -> "No later event within a day"; Telemetry.Recommended -> "No event in the last day") Nothing
   pure $ addHeader (pageUrl <> maybe "" (uncurry eventParam) (join nextM)) NoContent
 
 
@@ -1239,12 +1239,13 @@ eventCard_ IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflow-cli
       -- links: one picks which occurrence, the others where to look in it.
       div_ [class_ "ml-auto flex items-center gap-1 text-xs"] do
         when hasOccurrences do
-          whenJust (snd <$> traceRef) \at -> forM_ ([("prev", "chevron-left", "Earlier event"), ("next", "chevron-right", "Later event")] :: [(Text, Text, Text)]) \(dir, icon, tip) ->
+          whenJust (snd <$> traceRef) \at -> forM_ ([("older", "chevron-left", "Earlier event"), ("newer", "chevron-right", "Later event")] :: [(Text, Text, Text)]) \(dir, icon, tip) ->
             a_ [href_ $ "/p/" <> pid.toText <> "/issues/" <> issue.id.toText <> "/step?dir=" <> dir <> "&from=" <> toUriStr (isoT at), class_ "px-1.5 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker", Aria.label_ tip, term "data-tippy-content" tip]
               $ faSprite_ icon "regular" "w-3 h-3"
           span_ [class_ "text-textWeak mr-1 max-md:hidden"] "Occurrence"
           forM_ ([(True, isFirst, "Show the first occurrence", "First"), (False, not isFirst, "Show the most recent occurrence", "Recent")] :: [(Bool, Bool, Text, Text)]) \(useFirst, active, tip, lbl) ->
             a_ [href_ $ occurrenceUrl useFirst, class_ $ "px-2 py-1 rounded " <> bool "text-textWeak hover:text-textStrong hover:bg-fillWeaker" "bg-fillBrand-weak text-textBrand font-medium" active, term "data-tippy-content" tip] $ toHtml lbl
+          a_ [href_ $ "/p/" <> pid.toText <> "/issues/" <> issue.id.toText <> "/step?dir=recommended", class_ "px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker", term "data-tippy-content" "The last day's event with the most context: a replay, then a user, then a URL"] "Recommended"
           span_ [class_ "w-px h-4 bg-strokeWeak mx-1"] ""
         -- A popover, not a dropdown: this row scrolls horizontally and would clip one.
         button_ [type_ "button", class_ "px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker flex items-center gap-1", term "popovertarget" "issue-copy-pop", style_ "anchor-name: --anchor-issue-copy-pop"] do

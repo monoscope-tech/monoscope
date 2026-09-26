@@ -9,6 +9,7 @@ module Models.Telemetry.Telemetry (
   SpanRecord (..),
   getAllATErrors,
   adjacentHashEvent,
+  EventStep (..),
   PerfCandidate (..),
   selectPerfCandidates,
   spanAndRootNames,
@@ -162,6 +163,7 @@ import System.Logging qualified as Log
 import System.Tracing (forkWithCtx)
 import UnliftIO (throwIO, tryAny)
 import Utils (classifyUserAgent, encodeText, extractMessageFromLog, formatBytes, getDurationNSMS, jsonToMap, lookupValueText, nonEmptyT, scrubNulText, scrubNulValue)
+import Web.HttpApiData (FromHttpApiData)
 
 
 -- $setup
@@ -902,15 +904,29 @@ bursts minCount window evs =
 
 -- | The traced event carrying @hashKey@ nearest to @from@ in one direction, within a
 -- day of it: the hash test is an unindexed array scan, so the window bounds its cost.
-adjacentHashEvent :: DB es => Projects.ProjectId -> Text -> Bool -> UTCTime -> Eff es (Maybe (Text, UTCTime))
-adjacentHashEvent pid hashKey older from =
+-- | Which event to open from @from@: the nearest older or newer one, or the richest of the day before
+-- (Sentry's "Recommended": a replay session, then a user, then a URL, newest first).
+data EventStep = Older | Newer | Recommended
+  deriving stock (Eq, Read, Show)
+  deriving (FromHttpApiData) via WrappedEnumSC 'Nothing "" EventStep
+
+
+adjacentHashEvent :: DB es => Projects.ProjectId -> Text -> EventStep -> UTCTime -> Eff es (Maybe (Text, UTCTime))
+adjacentHashEvent pid hashKey step from =
   Hasql.interpOne
     [HI.sql| SELECT context___trace_id, timestamp FROM otel_logs_and_spans
              WHERE project_id = #{pid.toText} AND timestamp BETWEEN #{lo} AND #{hi} AND timestamp <> #{from}
                AND #{hashKey} = ANY(hashes) AND context___trace_id IS NOT NULL AND context___trace_id <> ''
-             ORDER BY abs(extract(epoch FROM timestamp - #{from}::timestamptz)) LIMIT 1 |]
+             ORDER BY ^{order} LIMIT 1 |]
   where
-    (lo, hi) = bool (from, addUTCTime 86400 from) (addUTCTime (-86400) from, from) older
+    (lo, hi) = if step == Newer then (from, addUTCTime 86400 from) else (addUTCTime (-86400) from, from)
+    order = case step of
+      Recommended ->
+        [HI.sql| (CASE WHEN attributes___session___id <> '' THEN 4 ELSE 0 END) + (CASE WHEN attributes___user___id <> '' OR attributes___user___email <> '' THEN 2 ELSE 0 END)
+                 + (CASE WHEN attributes___url___full <> '' OR attributes___url___path <> '' THEN 1 ELSE 0 END) DESC, timestamp DESC |]
+      Older -> nearest
+      Newer -> nearest
+    nearest = [HI.sql| abs(extract(epoch FROM timestamp - #{from}::timestamptz)) |]
 
 
 getEndpointTraceId :: DB es => Projects.ProjectId -> Text -> Text -> Bool -> UTCTime -> Eff es (Maybe (Text, UTCTime))

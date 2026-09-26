@@ -713,15 +713,18 @@ spec = sequential $ aroundAll withTestResources do
       iid <- withResource tr.trPool \conn -> do
         forM_ traces \(tid, ts) ->
           void $ PGS.execute conn [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, kind, hashes, summary, context___trace_id) VALUES (gen_random_uuid(), ?, ?, ?, 'server', ARRAY['err:stepprobe'], ARRAY['boom'], ?) |] (testPid, ts, ts, tid)
+        -- The oldest event carries a replay session and a user, so it is the Recommended one.
+        void $ PGS.execute conn [sql| UPDATE otel_logs_and_spans SET attributes___session___id = 'sess-1', attributes___user___id = 'u-1' WHERE context___trace_id = 'step-trace-a' |] ()
         maybe (fail "no row") (pure . UUIDId . fromOnly)
           . listToMaybe
           =<< PGS.query conn [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, created_at, updated_at) VALUES (?, 'runtime_exception', 'step probe', 'stepprobe', ?, ?) RETURNING id |] (testPid, frozenTime, frozenTime)
-      let step older from = runTestBg frozenTime tr (Telemetry.adjacentHashEvent testPid "err:stepprobe" older from)
-      step True (at 0) `shouldReturn` Just ("step-trace-b", at (-300))
-      step False (at (-600)) `shouldReturn` Just ("step-trace-b", at (-300))
-      step True (at (-600)) `shouldReturn` Nothing
+      let step dir from = runTestBg frozenTime tr (Telemetry.adjacentHashEvent testPid "err:stepprobe" dir from)
+      step Telemetry.Older (at 0) `shouldReturn` Just ("step-trace-b", at (-300))
+      step Telemetry.Newer (at (-600)) `shouldReturn` Just ("step-trace-b", at (-300))
+      step Telemetry.Older (at (-600)) `shouldReturn` Nothing
+      step Telemetry.Recommended (at 1) `shouldReturn` Just ("step-trace-a", at (-600))
       (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid iid Nothing Nothing Nothing Nothing (Just $ IssuesPage.EventRef "step-trace-b" (at (-300)))
-      renderPage page `shouldContainAll` ["step-trace-b", "id=\"issue-events\"", "/step?dir=prev", "hashes%5B%2A%5D%3D%3D%22err%3Astepprobe%22"]
+      renderPage page `shouldContainAll` ["step-trace-b", "id=\"issue-events\"", "/step?dir=older", "/step?dir=recommended", "hashes%5B%2A%5D%3D%3D%22err%3Astepprobe%22"]
 
     it "category views, filter chips and saved views on the issue list" \tr -> do
       let list types = renderPage . snd <$> testServant tr (IssuesPage.issueListGetH testPid (Just "Inbox") Nothing Nothing Nothing Nothing Nothing (Just "24h") [] types)
