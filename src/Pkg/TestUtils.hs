@@ -922,6 +922,7 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
               }
           )
           Nothing -- backgroundScope: no app-lifetime ki scope in tests; forkBackground falls back to an untracked fork
+          Nothing -- geoDb: no GeoIP database in tests; geo comes from geo.* attributes only
   uuidRef <- newIORef (map (UUID.fromWords 0 0 0) [1 .. 100000])
   testClock <- newTestClock frozenTime
   -- Release the three hasql pools when the example finishes. Under `around`

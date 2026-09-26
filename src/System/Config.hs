@@ -6,6 +6,7 @@ import Data.Base64.Types qualified as B64
 import Data.Cache (Cache, newCache)
 import Data.Char (isHexDigit)
 import Data.Default (Default (..))
+import Data.GeoIP2 qualified as GeoIP2
 import Data.Map.Strict qualified as M
 import Data.Pool as Pool (Pool, defaultPoolConfig, newPool, setNumStripes)
 import Data.Pool qualified as Pool
@@ -177,6 +178,9 @@ data EnvConfig = EnvConfig
   -- place a span self-join runs against TimeFusion, which is the query shape that has
   -- OOM-killed it before, so it gets a staged rollout rather than shipping on.
   , enableTimefusionWrites :: Bool
+  , geoipDbPath :: Text
+  -- ^ A MaxMind-format @.mmdb@ (IPinfo Lite/Core, MaxMind GeoLite2) used to place errors'
+  -- @client.address@ when the SDK sent no @geo.*@. Empty disables the lookup.
   , enablePostgresTelemetryWrites :: Bool
   -- ^ Dual-write to the legacy Postgres @otel_logs_and_spans@ store. Defaults
   -- to True; set ENABLE_POSTGRES_TELEMETRY_WRITES=False once TimeFusion is the source of
@@ -315,6 +319,7 @@ instance DefConfig EnvConfig where
       , kafkaGroupConcurrency = 4
       , enableKafkaDeadLetterService = True
       , enableOtlpGrpcService = True
+      , geoipDbPath = ""
       , enablePostgresTelemetryWrites = True
       , extractionWorkerShards = 4
       , extractionQueueCapacity = 64
@@ -468,6 +473,7 @@ data AuthContext = AuthContext
     -- (Slack/Twilio handlers ACK fast, then process in the background). Nothing in
     -- non-server contexts (tests); see 'System.Tracing.forkBackground'.
     backgroundScope :: Maybe Ki.Scope
+  , geoDb :: Maybe GeoIP2.GeoDB
   }
   deriving stock (Generic)
 
@@ -600,6 +606,7 @@ configToEnv config = do
   -- during partial migration falls back to 'flattenedOtelAttributesBuiltin'
   -- so the server still boots.
   liftIO $ introspectAndCacheOtelColumns pool
+  geoDb <- liftIO $ traverse (GeoIP2.openGeoDB . toString) (mfilter (not . T.null) (Just config.geoipDbPath))
   pure
     AuthContext
       { pool
@@ -629,6 +636,7 @@ configToEnv config = do
       , liveTail
       , config
       , backgroundScope = Nothing
+      , geoDb
       }
 
 

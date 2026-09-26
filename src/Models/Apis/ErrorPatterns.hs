@@ -4,6 +4,8 @@ module Models.Apis.ErrorPatterns (
   ErrorState (..),
   ATError (..),
   CaptureMechanism (..),
+  enrichGeo,
+  geoFields,
   ErrorPatternL (..),
   -- Queries
   getErrorPatterns,
@@ -37,7 +39,10 @@ where
 import Data.Aeson qualified as AE
 import Data.Default
 import Data.Effectful.Hasql qualified as Hasql
+import Data.GeoIP2 qualified as GeoIP2
 import Data.HashMap.Strict qualified as HM
+import Data.IP (IP)
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Text.Display (Display)
 import Data.Time (UTCTime, ZonedTime)
@@ -231,6 +236,39 @@ data ATError = ATError
   deriving (FromField, ToField) via Aeson ATError
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake ATError
   deriving (HI.DecodeValue, HI.EncodeValue) via HI.AsJsonb ATError
+
+
+-- | Place an error by its @client.address@ when the SDK sent no @geo.*@ attributes.
+enrichGeo :: GeoIP2.GeoDB -> ATError -> ATError
+enrichGeo db e
+  | isJust e.geoCountry = e
+  | otherwise = maybe e place (e.userIp >>= readMaybe @IP . toString >>= rightToMaybe . GeoIP2.rawGeoData db)
+  where
+    place f = let (country, region, city) = geoFields f in e{geoCountry = country, geoRegion = region, geoCity = city}
+
+
+-- | (country, region, city) from one MaxMind-format record. MaxMind databases nest
+-- (@country.iso_code@, @subdivisions[0].iso_code@, @city.names.en@); IPinfo's are flat
+-- (@country_code@, @region@, @city@) — reading both lets a city database drop in later.
+--
+-- >>> import Data.Map qualified as Map
+-- >>> let m = GeoIP2.DataMap . Map.fromList . map (\(k, v) -> (GeoIP2.DataString k, v)); s = GeoIP2.DataString
+-- >>> geoFields (m [("country", m [("iso_code", s "US")]), ("city", m [("names", m [("en", s "Santa Clara")])]), ("subdivisions", GeoIP2.DataArray [m [("iso_code", s "CA")]])])
+-- (Just "US",Just "CA",Just "Santa Clara")
+-- >>> geoFields (m [("country_code", s "NG"), ("region", s "Lagos"), ("city", s "Ikeja")])
+-- (Just "NG",Just "Lagos",Just "Ikeja")
+-- >>> geoFields (m [("asn", s "AS1")])
+-- (Nothing,Nothing,Nothing)
+geoFields :: GeoIP2.GeoField -> (Maybe Text, Maybe Text, Maybe Text)
+geoFields f = (at ["country", "iso_code"] <|> at ["country_code"], subdivision <|> at ["region"], at ["city", "names", "en"] <|> at ["city"])
+  where
+    at = (`walk` f)
+    walk [] (GeoIP2.DataString t) = Just t
+    walk (k : ks) (GeoIP2.DataMap m) = walk ks =<< Map.lookup (GeoIP2.DataString k) m
+    walk _ _ = Nothing
+    subdivision = case f of
+      GeoIP2.DataMap m | Just (GeoIP2.DataArray (sub1 : _)) <- Map.lookup (GeoIP2.DataString "subdivisions") m -> walk ["iso_code"] sub1
+      _ -> Nothing
 
 
 -- | Get error patterns for a project with optional state filter (excludes merged patterns)

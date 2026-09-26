@@ -6,7 +6,7 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (commit).
 
 ## A. Capture / derive at ingest (`Telemetry.atErrorFrom` → `ErrorPatterns.ATError`)
 
-- [~] A1 Geography — `client.geo.*` / `geo.*` when the SDK sends them; else GeoIP from `client.address`
+- [x] A1 Geography — `client.geo.*` / `geo.*` when the SDK sends them; else GeoIP from `client.address`
       (MaxMind GeoLite2 `.mmdb`, path from env, optional).
 - [~] A2 Releases — `service.version` (resource). First/last seen release on the pattern, release
       markers on the chart, "resolve in next release".
@@ -57,8 +57,9 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done (commit).
   latest event needs its own column, written under the same 5-minute throttle as `recent_trace_id`.
 - OTel has no handled/mechanism attributes: handled = `not exception.escaped` (deprecated but the only
   signal), mechanism = the signal the error came from (exception event / log record / span status).
-- A1 so far reads `geo.*` when the SDK or a collector processor sets it; GeoIP from `client.address`
-  still needs a provider decision (below).
+- A1: `geo.*` attributes first; otherwise `client.address` is looked up in `GEOIP_DB_PATH` (a MaxMind-
+  format `.mmdb`; `geoip2` package). Both MaxMind and IPinfo layouts are read, so the IPinfo city
+  database drops in for today's free country one. Only the field parsing is tested (doctest).
 - A2 done: first/last release columns, "resolve in next release" (`resolved_in_release`; any other
   `service.version` counts as newer, Sentry's non-semver rule). Still open: release markers on the chart.
 - A3: `apis.error_pattern_users` + `users_count`, keyed `id:`/`email:`/`ip:` in that order.
