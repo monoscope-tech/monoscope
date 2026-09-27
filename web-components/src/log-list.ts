@@ -2799,6 +2799,8 @@ export class LogList extends LitElement {
               if (col === 'summary')
                 return `.col-summary.break-all { width: var(--col-summary-width); min-width: var(--col-summary-width); }
 .col-summary:not(.break-all) { width: var(--col-summary-width); min-width: var(--col-summary-width); max-width: var(--col-summary-width); }`;
+              // The sticky latency cell grows leftward to hold its badges; capping it made them overflow onto the summary.
+              if (col === 'latency_breakdown') return `.col-${col} { min-width: var(--col-${col}-width); }`;
               return `.col-${col} { width: var(--col-${col}-width); min-width: var(--col-${col}-width); max-width: var(--col-${col}-width); }`;
             })
             .join('\n')
@@ -2808,11 +2810,13 @@ export class LogList extends LitElement {
       <div
         ${ref(this.containerRef)}
         class=${clsx(
-          'relative group-hash-full shrink-1 min-w-0 pb-32 m-0 surface-raised rounded-t-2xl w-full h-full c-scroll overflow-y-auto contain-strict',
+          'relative group-hash-full shrink-1 min-w-0 m-0 surface-raised rounded-t-2xl w-full c-scroll overflow-y-auto',
+          // Embedded lists size to their rows up to the height their container allows.
+          this.initialFetchUrl ? 'min-h-0 contain-content' : 'pb-32 h-full min-h-[500px] contain-strict',
           isInitialLoading && 'overflow-hidden'
         )}
         id="logs_list_container_inner"
-        style="min-height: 500px; overflow-anchor: none;"
+        style="overflow-anchor: none;"
         @mousedown=${this.preserveGridFocusOnPointerRowClick}
         @scroll=${{ handleEvent: this.handleListScroll, passive: true }}
       >
@@ -3258,7 +3262,7 @@ export class LogList extends LitElement {
               userId = value;
               if (!userBadgeStyle) userBadgeStyle = badgeStyle;
             } else {
-              rightAlignedBadges.push(renderBadge(`cbadge-sm ${badgeStyle} bg-opacity-100`, value));
+              rightAlignedBadges.push(renderBadge(`cbadge-sm ${badgeStyle}`, value));
             }
           }
           // One identity pill per row, whichever identifiers the span carries. The server
@@ -3269,7 +3273,7 @@ export class LogList extends LitElement {
             const full = userEmail || userName || userId;
             const display = full.length > 20 ? full.substring(0, 18) + '…' : full;
             const tip = [userName, userEmail, userId && `id ${userId}`].filter(Boolean).join(' — ');
-            rightAlignedBadges.push(renderBadge(`cbadge-sm ${userBadgeStyle} bg-opacity-100`, display, tip));
+            rightAlignedBadges.push(renderBadge(`cbadge-sm ${userBadgeStyle}`, display, tip));
           }
 
           // Sessions have no trace waterfall. Duration now lives in the summary
@@ -3286,7 +3290,7 @@ export class LogList extends LitElement {
             latencyHtml = html`<div class="flex justify-end items-center">${sessionActions}</div>`;
           } else {
             latencyHtml = html`
-              <div class="flex justify-end items-center gap-1 text-textWeak pl-1 rounded-lg bg-bgBase" style="min-width:${currentWidth}px">
+              <div class="flex justify-end items-center gap-1 text-textWeak pl-1" style="min-width:${currentWidth}px">
                 ${sessionActions}${rightAlignedBadges}
                 ${spanLatencyBreakdown({
                   track,
@@ -3696,6 +3700,13 @@ export class LogList extends LitElement {
       // row tint makes the same severity scannable without turning it into a CTA.
       const cellBg = isErrorRow ? 'bg-fillError-weak' : isWarningRow ? 'bg-fillWarning-weak' : 'bg-bgRaised';
       const rowHoverBg = isErrorRow ? 'hover:bg-fillError-weak' : isWarningRow ? 'hover:bg-fillWarning-weak' : 'hover:bg-fillWeaker';
+      // The row tints are translucent, so the sticky cell paints them over an opaque base
+      // or the summary scrolled beneath it shows through.
+      const stickyBg = isErrorRow
+        ? 'bg-bgRaised bg-linear-to-r from-fillError-weak to-fillError-weak'
+        : isWarningRow
+          ? 'bg-bgRaised bg-linear-to-r from-fillWarning-weak to-fillWarning-weak'
+          : 'bg-bgRaised group-hover:bg-linear-to-r group-hover:from-fillWeaker group-hover:to-fillWeaker';
       // Synthetic placeholder rows (server tags id="synthetic-<parent_id>")
       // get muted styling so they don't compete with real spans.
       const isSynthetic = isSyntheticRowId(lookupVecValue<string>(rowData.data, this.colIdxMap, 'id'));
@@ -3764,7 +3775,7 @@ export class LogList extends LitElement {
           ? html`<div role="cell" class=${`${cellBg} group-hover:bg-inherit pl-2 shrink-0 col-latency_breakdown`}>
               ${this.logItemCol(rowData, 'latency_breakdown')}
             </div>`
-          : html`<td class=${`sticky right-0 max-md:static z-10 ${cellBg} group-hover:bg-inherit pl-2 shrink-0 ${
+          : html`<td class=${`sticky right-0 max-md:static z-10 ${stickyBg} border-l border-strokeWeak max-md:border-l-0 pl-2 shrink-0 ${
               this.isNarrow ? '' : 'col-latency_breakdown'
             }`}>
               ${this.logItemCol(rowData, 'latency_breakdown')}
@@ -3803,7 +3814,7 @@ export class LogList extends LitElement {
         }`}
       >
         <button
-          class="group font-medium text-base py-1 cursor-pointer"
+          class="group font-medium text-xs py-1 cursor-pointer"
           data-tippy-content=${title}
           aria-label="${title.split('•').reverse()[0]} column options"
           aria-haspopup="true"
@@ -3875,9 +3886,9 @@ export class LogList extends LitElement {
             document.body.style.userSelect = 'none';
             (event.target as HTMLElement).setPointerCapture?.(event.pointerId);
           }}
-          class="w-3 text-textWeak text-right select-none hover:text-textBrand overflow-hidden font-bold absolute right-0 top-1/2 -translate-y-1/2 h-4 cursor-ew-resize"
+          class="group/resize w-3 flex justify-end absolute right-0 top-1/2 -translate-y-1/2 h-4 cursor-ew-resize"
         >
-          |
+          <span class="w-px h-full bg-strokeWeak group-hover/resize:bg-strokeBrand-strong" aria-hidden="true"></span>
         </div>
       </th>
     `;
@@ -3995,11 +4006,11 @@ export class LogList extends LitElement {
         @click=${() => this.changeView(view)}
         aria-pressed=${this.view === view}
         aria-label="${label} view"
-        class=${`flex items-center cursor-pointer justify-center gap-1 px-2 py-1 text-xs rounded transition-transform duration-150 ease-out active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100 ${
-          this.view === view ? 'bg-fillWeak text-textStrong ring-1 ring-inset ring-strokeStrong' : 'text-textWeak hover:bg-fillWeaker'
+        class=${`flex items-center cursor-pointer justify-center gap-1 px-2 min-h-6 text-xs rounded transition-transform duration-150 ease-out active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-strokeBrand-strong ${
+          this.view === view ? 'bg-bgBase text-textStrong ring-1 ring-strokeStrong' : 'text-textWeak hover:text-textStrong'
         }`}
       >
-        ${faSprite(icon, 'regular', 'h-4 w-4')}
+        ${faSprite(icon, 'regular', 'h-3.5 w-3.5')}
         <span class="sm:inline hidden">${label}</span>
       </button>`;
 
@@ -4090,7 +4101,7 @@ export class LogList extends LitElement {
               </div>
             </div>`
           : html`<span class="flex-1"></span>`}
-        <div class="tabs tabs-box tabs-md p-0 tabs-outline items-center border border-strokeStrong">
+        <div class="inline-flex items-center gap-0.5 p-0.5 rounded-md bg-fillWeaker" role="group" aria-label="Row layout">
           ${viewButton('tree', 'tree', 'Tree')} ${viewButton('list', 'list-view', 'List')}
         </div>
 
@@ -4102,7 +4113,7 @@ export class LogList extends LitElement {
             aria-haspopup="true"
             class=${`flex cursor-pointer items-center justify-center gap-1 px-2 min-h-6 min-w-6 text-xs rounded text-textWeak hover:text-textStrong transition-transform duration-150 ease-out active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-strokeBrand-strong`}
           >
-            ${faSprite('gear', 'regular', `h-3 w-3`)}
+            ${faSprite('gear', 'regular', 'h-3.5 w-3.5')}
             <span class="sm:inline hidden">Options</span>
           </button>
           <div tabindex="0" class="dropdown-content space-y-2 bg-bgBase border w-64 border-strokeWeak p-2 text-sm rounded shadow">

@@ -102,6 +102,16 @@ describe('unescapeJsonString', () => {
     expect(out.toLowerCase()).toContain('span');
   });
 
+  test('colorizeJsonValues_timestampAndHostPort_areNotRewritten', () => {
+    const s = '2026-09-27T08:39:08.640Z info host=10.0.0.1:8080';
+    expect(unescapeJsonString(s)).toBe(s);
+  });
+
+  test('ingestedBodyMarkup_isEscaped_notRendered', () => {
+    expect(unescapeJsonString('<img src=x onerror=alert(1)> & co')).toBe('&lt;img src=x onerror=alert(1)&gt; &amp; co');
+    expect(unescapeJsonString('\x1b[31m<b>\x1b[0m')).not.toContain('<b>');
+  });
+
   test('is a no-op on the empty string', () => {
     expect(unescapeJsonString('')).toBe('');
   });

@@ -1506,7 +1506,7 @@ virtualTable pid initialFetchUrl modeM = do
   termRaw
     "log-list"
     ( [ id_ "resultTable"
-      , class_ "w-full shrink-1 flex flex-col h-full min-w-0 rr-block"
+      , class_ "w-full shrink-1 flex flex-col h-full min-h-0 min-w-0 rr-block"
       , term "windowTarget" "logList"
       , term "projectId" pid.toText
       ]
