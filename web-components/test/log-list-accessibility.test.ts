@@ -39,8 +39,9 @@ describe('log table accessibility', () => {
     const selected = el.querySelector<HTMLButtonElement>('button[aria-label="Tree view"]');
     const group = selected?.parentElement;
 
-    expect(group?.className).toContain('border-strokeStrong');
+    // One boundary, on the selection: a second one on the group doubled the outline.
     expect(selected?.className).toContain('ring-strokeStrong');
+    expect(group?.className).not.toContain('border');
   });
 
   test('new-row feedback is static rather than a recurring animation', async () => {

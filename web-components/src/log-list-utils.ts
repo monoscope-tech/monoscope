@@ -78,12 +78,17 @@ export const parseSummaryElement = (
   };
 };
 
-// Pre-compiled regex for better performance
-const JSON_VALUE_REGEX = /:\s*("[^"]*"|\d+|true|false|null)/g;
+// Anchored on a quoted key so `08:39:08` and `host:8080` are left alone.
+const JSON_VALUE_REGEX = /("[^"]*"\s*:\s*)("[^"]*"|-?\d[\d.eE+-]*|true|false|null)/g;
 
 function colorizeJsonValues(jsonStr: string): string {
-  return jsonStr.replace(JSON_VALUE_REGEX, ': <span class="text-textStrong font-medium">$1</span>');
+  return jsonStr.replace(JSON_VALUE_REGEX, '$1<span class="text-textStrong font-medium">$2</span>');
 }
+
+// Bodies are ingested data rendered through unsafeHTML; `"` stays literal for the key/value match.
+const HTML_SPECIAL_REGEX = /[&<>]/g;
+const NEEDS_PROCESSING_REGEX = /[\\\x1b:&<>]/;
+const HTML_ESCAPES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;' };
 
 const ansi_up = new AnsiUp();
 ansi_up.escapeForHtml = false;
@@ -99,12 +104,9 @@ export const unescapeBasic = (s: string): string =>
 // Unescape JSON strings - optimized with early exits
 export const unescapeJsonString = (str: string): string => {
   // Early exit if string doesn't need processing
-  if (!str.includes('\\') && !str.includes('\x1b') && !str.includes(':')) {
-    return str;
-  }
+  if (!NEEDS_PROCESSING_REGEX.test(str)) return str;
 
-  // Only unescape if needed
-  let result = unescapeBasic(str);
+  let result = unescapeBasic(str).replace(HTML_SPECIAL_REGEX, (c) => HTML_ESCAPES[c]);
 
   // Only process ANSI if likely present
   if (result.includes('\x1b')) {

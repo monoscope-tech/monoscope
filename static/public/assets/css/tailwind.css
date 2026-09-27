@@ -2313,44 +2313,46 @@ code, pre, .code, .monospace {
 
 /* Dashboard variable selectors */
 .dash-variable {
-  /* Tagify replaces the text input after first paint. Reserve the final
-     control box so that replacement cannot resize the sticky toolbar. Longer
-     legends can still expand the fieldset naturally. */
-  box-sizing: border-box;
-  height: 2.25rem;
-  min-width: 7.75rem;
+  /* Tagify replaces the text input after first paint; the fixed row height and
+     this floor keep that swap from resizing the sticky toolbar. */
+  min-width: 9rem;
 }
 
-.dash-variable > input.dash-variable-input {
+.dash-variable input.dash-variable-input {
   /* Match Tagify's input minimum width before it initializes. Otherwise the
      wider native text input can make the toolbar wrap for a single frame. */
-  width: 110px;
+  width: 4.5rem;
 }
 
 .dash-variable .tagify {
   --tags-border-color: transparent;
+  --tags-hover-border-color: transparent;
+  --tags-focus-border-color: transparent;
+  --tag-bg: transparent;
+  --tag-hover: transparent;
   --tag-text-color: var(--color-textStrong);
+  --tag-pad: 0;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
   padding: 0;
+  line-height: inherit;
 }
 
-.dash-variable legend {
-  line-height: 0;
-  margin-bottom: -0.25em;
-}
+.dash-variable .tagify__input { margin: 0; min-width: 4.5rem; min-height: 0; line-height: 1.25rem; }
+.dash-variable .tagify--select { cursor: pointer; }
+.dash-variable .tagify--select::after { content: none !important; }
 
-.dash-variable .tagify--select {
-  cursor: pointer;
-}
-
-.dash-variable .tagify__tag {
-  min-width: 100%;
-  margin-inline-end: 0.5em;
-  padding-right: 1em;
-}
+.dash-variable .tagify__tag { margin: 0; min-height: 0; line-height: 1.25rem; }
+.dash-variable .tagify__tag__removeBtn { margin-inline: 0.375rem 0; }
 
 .dash-variable .tagify__tag-text {
+  font-weight: 500;
   text-wrap-mode: nowrap !important;
 }
+
+.dash-variable .tagify__dropdown { font-size: var(--text-sm); }
+.dash-variable .tagify__dropdown__item { padding: 0.375rem 0.625rem; white-space: nowrap; }
 
 /* Group widget collapsed state - header fills the item. The header checkbox
    (.wgt-collapse) is the collapse state; chevron rotation and nested-grid hiding

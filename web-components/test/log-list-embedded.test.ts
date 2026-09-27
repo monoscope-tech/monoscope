@@ -170,3 +170,28 @@ describe('embedded log widget: chrome', () => {
     expect(ids(el)).toEqual(['a', 'b', 'c']);
   });
 });
+
+describe('embedded log widget: sizing', () => {
+  beforeEach(() => document.body.replaceChildren());
+  const scroller = async (el: any) => (await el.updateComplete, el.querySelector('#logs_list_container_inner') as HTMLElement);
+
+  test('embeddedList_sizesToItsRows_insteadOfReservingAFixedHeight', async () => {
+    const s = await scroller(await embedded());
+    expect(s.className).not.toMatch(/\bcontain-strict\b|\bh-full\b|\bpb-32\b/);
+    expect(s.style.minHeight).toBe('');
+  });
+
+  test('explorerList_keepsItsFullHeightScroller', async () => {
+    const s = await scroller(await mountList({ projectId: 'proj-1' } as any));
+    expect(s.className).toMatch(/\bcontain-strict\b/);
+    expect(s.className).toMatch(/min-h-\[500px\]/);
+  });
+
+  test('latencyColumn_growsToFitItsBadges_ratherThanOverflowingOverSummary', async () => {
+    const el: any = await embedded();
+    el.logsColumns = ['summary', 'latency_breakdown'];
+    await el.updateComplete;
+    const css = el.querySelector('style')!.textContent!;
+    expect(css).toMatch(/\.col-latency_breakdown \{ min-width: var\(--col-latency_breakdown-width\); \}/);
+  });
+});

@@ -263,8 +263,10 @@ dashboardVariables_ pid dashId hasTabs variables extraAttrs = div_ ([id_ "dashbo
     faSprite_ "filter" "regular" "w-3 h-3"
     "Hide Filters"
   div_ [class_ $ "max-md:hidden max-md:peer-checked/vars:flex flex gap-2 flex-wrap max-md:w-full max-md:pt-1 " <> if hasTabs then "ml-auto max-md:ml-0" else ""] do
-    forM_ variables \var -> fieldset_ [class_ "border border-strokeStrong bg-fillWeaker p-0 inline-block rounded-lg dash-variable text-sm"] do
-      legend_ [class_ "px-1 ml-2 text-xs"] $ toHtml $ fromMaybe var.key var.title <> memptyIfFalse (var.required == Just True) " *"
+    forM_ variables \var -> fieldset_ ([class_ "dash-variable max-md:w-full pl-3 pr-2.5 border border-strokeWeak bg-bgRaised rounded-lg text-sm hover:border-strokeStrong focus-within:border-strokeFocus"] <> foldMap (pure . title_) var.helpText) do
+      legend_ [class_ "ml-1 px-1 text-xs leading-none text-textWeak whitespace-nowrap cursor-pointer", [__|on click call (next .tagify__input).focus()|]] do
+        toHtml $ fromMaybe var.key var.title
+        when (var.required == Just True) $ span_ [class_ "text-textError"] (span_ [Aria.hidden_ "true"] " *" >> span_ [class_ "sr-only"] " (required)")
       let whitelist =
             maybe
               "[]"
@@ -277,28 +279,30 @@ dashboardVariables_ pid dashId hasTabs variables extraAttrs = div_ ([id_ "dashbo
               )
               var.options
 
-      input_
-        $ [ type_ "text"
-          , name_ var.key
-          , class_ "dash-variable-input"
-          , data_ "project-id" pid.toText
-          , data_ "dashboard-id" dashId.toText
-          , data_ "tagify" ""
-          , data_ "tagify-whitelist" whitelist
-          , data_ "tagify-enforce-whitelist" ""
-          , data_ "tagify-text-prop" "name"
-          , data_ "tagify-query-sql" $ maybeToMonoid $ (.statement) <$> var.sql
-          , -- Which store the statement belongs to. Without it the client-side
-            -- refresh below re-runs a postgres-only statement (apis.endpoints)
-            -- against TimeFusion and the variable silently stops updating.
-            data_ "tagify-db-source" $ foldMap (Data.Effectful.Hasql.sqlSourceParam . (.source)) var.sql
-          , data_ "tagify-query" $ maybeToMonoid var.query
-          , data_ "tagify-reload-on-change" $ maybe "false" (T.toLower . show) var.reloadOnChange
-          , value_ $ maybeToMonoid var.value
-          ]
-        -- Multi vars must carry NO tagify-mode attr (main.ts only sets options.mode
-        -- when present); a second data_ attr would be (<>)-merged by Lucid.
-        <> memptyIfFalse (var.multi /= Just True) [data_ "tagify-mode" "select"]
+      div_ [class_ "flex items-center gap-2 h-7 max-md:h-9"] do
+        input_
+          $ [ type_ "text"
+            , name_ var.key
+            , class_ "dash-variable-input"
+            , data_ "project-id" pid.toText
+            , data_ "dashboard-id" dashId.toText
+            , data_ "tagify" ""
+            , data_ "tagify-whitelist" whitelist
+            , data_ "tagify-enforce-whitelist" ""
+            , data_ "tagify-text-prop" "name"
+            , data_ "tagify-query-sql" $ foldMap (.statement) var.sql
+            , -- Which store the statement belongs to. Without it the client-side
+              -- refresh below re-runs a postgres-only statement (apis.endpoints)
+              -- against TimeFusion and the variable silently stops updating.
+              data_ "tagify-db-source" $ foldMap (Data.Effectful.Hasql.sqlSourceParam . (.source)) var.sql
+            , data_ "tagify-query" $ maybeToMonoid var.query
+            , data_ "tagify-reload-on-change" $ maybe "false" (T.toLower . show) var.reloadOnChange
+            , value_ $ maybeToMonoid var.value
+            ]
+          -- Multi vars must carry NO tagify-mode attr (main.ts only sets options.mode
+          -- when present); a second data_ attr would be (<>)-merged by Lucid.
+          <> memptyIfFalse (var.multi /= Just True) [data_ "tagify-mode" "select"]
+        faSprite_ "chevron-down" "regular" "h-3 w-3 shrink-0 text-iconNeutral pointer-events-none"
 
 
 dashboardPage_ :: Projects.ProjectId -> Dashboards.DashboardId -> Dashboards.Dashboard -> Dashboards.DashboardVM -> [(Text, Maybe Text)] -> Html ()

@@ -1314,7 +1314,7 @@ eventCard_ IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflow-cli
     -- trace re-opens the page on that event.
     eventsSection =
       [ section "issue-events" "list-check" "All events"
-          $ div_ [class_ "max-md:px-1 px-2 h-[50vh]"]
+          $ div_ [class_ "max-md:px-1 px-2 flex flex-col max-h-[50vh]"]
           $ virtualTable pid (Just ("/p/" <> pid.toText <> "/log_explorer/data?json=true&query=" <> toUriStr ("hashes[*]==\"" <> key <> "\"") <> TimePicker.rangeQuery tp)) Nothing
       | not isLogPatternIssue
       , Just key <- [issueHashKey issue]
@@ -1634,8 +1634,8 @@ eventCard_ IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflow-cli
               faSprite_ "arrow-up-right-from-square" "regular" "w-3 h-3 shrink-0"
         logs =
           IssueSection (Just explorerLink) [] "issue-logs" "list-view" "Logs" do
-            div_ [id_ "log-content", class_ "max-md:px-1 px-2 flex flex-col lg:flex-row w-full lg:h-[70vh]"] do
-              div_ [class_ "grow min-w-0 min-h-0 h-full"]
+            div_ [id_ "log-content", class_ "max-md:px-1 px-2 flex flex-col lg:flex-row w-full lg:max-h-[70vh]"] do
+              div_ [class_ "grow min-w-0 min-h-0 flex flex-col"]
                 $ virtualTable pid (Just ("/p/" <> pid.toText <> "/log_explorer/data?json=true&query=" <> toUriStr logsQuery <> logsParams)) Nothing
               -- Starts hidden alongside the collapsed pane; the swap handler reveals
               -- both together, and closeDetailPanel puts them back.
