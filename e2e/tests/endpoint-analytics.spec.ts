@@ -1,9 +1,10 @@
 import { test, expect } from "@playwright/test";
 import { DEMO_PROJECT, sql } from "./helpers";
 
-const cleanup = `DELETE FROM apis.endpoints WHERE project_id='${DEMO_PROJECT}' AND hash='e2e-browser-endpoint';`;
+const cleanup = `DELETE FROM apis.endpoints WHERE project_id='${DEMO_PROJECT}' AND hash IN ('e2e-browser-endpoint','e2e-browser-long');`;
 test.beforeAll(() => sql(cleanup + `INSERT INTO apis.endpoints (project_id,url_path,url_params,method,host,hash,outgoing)
-  VALUES ('${DEMO_PROJECT}','/e2e-browser','{}','GET','browser.example','e2e-browser-endpoint',false);`));
+  VALUES ('${DEMO_PROJECT}','/e2e-browser','{}','GET','browser.example','e2e-browser-endpoint',false),
+         ('${DEMO_PROJECT}','/e2e-browser/a/very/long/route/that/is/wider/than/the/variable/chip/{param}','{}','POST','browser.example','e2e-browser-long',false);`));
 test.afterAll(() => sql(cleanup));
 
 // Endpoint Analytics is a template-backed redirect, not a fixed dashboard id. Supplying
@@ -72,4 +73,19 @@ test("Endpoint Analytics exposes real-user impact and direct dependency investig
   await expect(page.getByRole("tab", { name: "Experience" })).toHaveClass(/tab-active/);
   await expect(page.getByText("Real-user impact", { exact: true })).toBeVisible();
   expect(page.url()).toMatch(/\/tab\/experience/);
+});
+
+// The variable chips sit at the toolbar's trailing edge; a dropdown wider than its chip
+// used to open rightward past the viewport and widen the page.
+test("variable dropdown opens inside the viewport", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto(`/p/${DEMO_PROJECT}/endpoints/details?var-host=browser.example&var-endpointHash=e2e-browser-endpoint`);
+  await page.waitForURL(new RegExp(`/p/${DEMO_PROJECT}/dashboards/[0-9a-f-]+`, "i"));
+  await page.locator(".dash-variable .tagify").last().click();
+  const dropdown = page.locator(".tagify__dropdown");
+  await expect(dropdown.getByText("/e2e-browser/a/very/long", { exact: false })).toBeVisible();
+  const box = (await dropdown.boundingBox())!;
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(1280);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1280);
 });

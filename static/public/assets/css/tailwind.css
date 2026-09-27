@@ -2351,8 +2351,18 @@ code, pre, .code, .monospace {
   text-wrap-mode: nowrap !important;
 }
 
-.dash-variable .tagify__dropdown { font-size: var(--text-sm); }
-.dash-variable .tagify__dropdown__item { padding: 0.375rem 0.625rem; white-space: nowrap; }
+/* Variables sit at the toolbar's trailing edge: open leftward from the chip and stay
+   inside the viewport instead of widening the page. */
+.dash-variable .tagify { position: relative; }
+.dash-variable .tagify__dropdown {
+  font-size: var(--text-sm);
+  left: auto !important;
+  right: 0;
+  min-width: 100% !important;
+  width: max-content !important;
+  max-width: min(32rem, calc(100vw - 2rem)) !important;
+}
+.dash-variable .tagify__dropdown__item { padding: 0.375rem 0.625rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* Group widget collapsed state - header fills the item. The header checkbox
    (.wgt-collapse) is the collapse state; chevron rotation and nested-grid hiding
