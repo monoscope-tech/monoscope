@@ -1,5 +1,6 @@
 module Pkg.TestUtils (
   shouldContainAll,
+  eventually,
   withSetup,
   withTestResources,
   fromRightShow,
@@ -24,6 +25,7 @@ module Pkg.TestUtils (
   runBackgroundJobsWhere,
   setBjRunAtInThePast,
   toServantResponse,
+  runAuthHandler,
   toBaseServantResponse,
   runAsBaseRecordingHTTP,
   runAsBase,
@@ -54,6 +56,8 @@ module Pkg.TestUtils (
   ingestSpanReq,
   withSpanKind,
   withSpanStatus,
+  withTraceId,
+  withSpanDuration,
   ingestMetric,
   ingestLogWithHeader,
   ingestTraceWithHeader,
@@ -72,6 +76,7 @@ module Pkg.TestUtils (
   createOtelTraceWithExceptionAtTime,
   createGaugeMetricAtTime,
   mkSpanRequest,
+  mkSpanEvent,
   mergeSpanRequests,
   mkResource,
   mkAttr,
@@ -87,7 +92,7 @@ import Control.Concurrent (threadDelay)
 import Control.Concurrent.STM.TBQueue (isEmptyTBQueue, readTBQueue)
 import Control.Exception (finally, throwIO, try)
 import Control.Exception.Safe qualified as Safe
-import Control.Lens ((.~), (^.), (^..))
+import Control.Lens ((%~), (.~), (^.), (^..))
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.QQ (aesonQQ)
@@ -183,6 +188,7 @@ import Proto.Opentelemetry.Proto.Trace.V1.Trace qualified as PT
 import Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields qualified as PTF
 import Relude
 import Relude.Extra.Enum (prev)
+import Relude.Extra.Tuple (toSnd)
 import Relude.Unsafe qualified as Unsafe
 import Servant qualified
 import Servant.Server qualified as ServantS
@@ -946,16 +952,19 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
 
 
 toServantResponse :: TestResources -> ATAuthCtx (RespHeaders a) -> IO (RespHeaders a, a)
-toServantResponse TestResources{..} k = do
+toServantResponse tr k = toSnd Servant.getResponse <$> runAuthHandler tr k
+
+
+-- | Run an authenticated handler of any response type (e.g. a bare @Location@ redirect).
+runAuthHandler :: TestResources -> ATAuthCtx a -> IO a
+runAuthHandler TestResources{..} k = do
   tp <- getGlobalTracerProvider
   uuidRef <- freshUUIDRef
-  headersResp <-
-    ( atAuthToBase trSessAndHeader k
-        & effToServantHandlerTest trTestClock uuidRef trATCtx trLogger tp
-        & ServantS.runHandler
+  ( atAuthToBase trSessAndHeader k
+      & effToServantHandlerTest trTestClock uuidRef trATCtx trLogger tp
+      & ServantS.runHandler
     )
-      <&> fromRightShow
-  pure (headersResp, Servant.getResponse headersResp)
+    <&> fromRightShow
 
 
 testServant :: TestResources -> ATAuthCtx (RespHeaders a) -> IO (RespHeaders a, a)
@@ -1491,6 +1500,16 @@ withSpanKind :: PT.Span'SpanKind -> TS.ExportTraceServiceRequest -> TS.ExportTra
 withSpanKind k = TSF.resourceSpans . traverse . PTF.scopeSpans . traverse . PTF.spans . traverse . PTF.kind .~ k
 
 
+-- | Pin every span to one trace (hex, as 'mkSpanRequest' takes it), e.g. to link an error to a later record.
+withTraceId :: Text -> TS.ExportTraceServiceRequest -> TS.ExportTraceServiceRequest
+withTraceId t = TSF.resourceSpans . traverse . PTF.scopeSpans . traverse . PTF.spans . traverse . PTF.traceId .~ hexPad 32 t
+
+
+-- | Span duration in nanoseconds ('mkSpanRequest' defaults to 100ms).
+withSpanDuration :: Word64 -> TS.ExportTraceServiceRequest -> TS.ExportTraceServiceRequest
+withSpanDuration ns = TSF.resourceSpans . traverse . PTF.scopeSpans . traverse . PTF.spans . traverse %~ \sp -> sp & PTF.endTimeUnixNano .~ (sp ^. PTF.startTimeUnixNano + ns)
+
+
 withSpanStatus :: PT.Status'StatusCode -> TS.ExportTraceServiceRequest -> TS.ExportTraceServiceRequest
 withSpanStatus c = TSF.resourceSpans . traverse . PTF.scopeSpans . traverse . PTF.spans . traverse . PTF.status .~ (defMessage & PTF.code .~ c)
 
@@ -1763,6 +1782,22 @@ mkSpanRequest trId spanId parentSpanIdM spanName events statusM attrs resource t
    in defMessage & TSF.resourceSpans .~ [defMessage & PTF.resource .~ resource & PTF.scopeSpans .~ [scopeSpan]]
 
 
+mkSpanEvent :: Text -> [(Text, Text)] -> UTCTime -> Span'Event
+mkSpanEvent name attrs ts = defMessage & PTF.name .~ name & PTF.timeUnixNano .~ toNanos ts & PTF.attributes .~ map (uncurry mkAttr) attrs
+
+
+-- | Re-run @act@ until @ok@ holds, then return the last result (which the caller
+-- asserts on, so a persistent failure still reports the real value). TimeFusion is
+-- an asynchronous store: a row is durable when the write returns but not
+-- necessarily readable in the same instant, so a single read is a race.
+eventually :: IO a -> (a -> Bool) -> IO a
+eventually act ok = go (40 :: Int)
+  where
+    go n = do
+      a <- act
+      if ok a || n <= 0 then pure a else threadDelay 250_000 >> go (n - 1)
+
+
 createOtelSpanAtTime :: Text -> Text -> Text -> Maybe Text -> Text -> UTCTime -> TS.ExportTraceServiceRequest
 createOtelSpanAtTime apiKey trId spanId parentSpanIdM spanName =
   let (method, path) = case words spanName of
@@ -1794,12 +1829,7 @@ createOtelTraceWithExceptionAtTime :: Text -> ([(Text, Text)], [(Text, Text)], [
 createOtelTraceWithExceptionAtTime apiKey (spanExtra, resExtra, eventExtra) spanName excType excMessage excStacktrace timestamp = do
   trIdText <- UUID.toText <$> nextRandom
   spanIdText <- UUID.toText <$> nextRandom
-  let exceptionEvent =
-        defMessage & PTF.name
-          .~ "exception" & PTF.timeUnixNano
-          .~ toNanos timestamp
-            & PTF.attributes
-          .~ ([mkAttr "exception.type" excType, mkAttr "exception.message" excMessage, mkAttr "exception.stacktrace" excStacktrace] <> map (uncurry mkAttr) eventExtra)
+  let exceptionEvent = mkSpanEvent "exception" ([("exception.type", excType), ("exception.message", excMessage), ("exception.stacktrace", excStacktrace)] <> eventExtra) timestamp
       spanStatus = defMessage & PTF.code .~ PT.Status'STATUS_CODE_ERROR & PTF.message .~ excMessage
       resource = mkResource apiKey (mkAttr "telemetry.sdk.language" "nodejs" : map (uncurry mkAttr) resExtra)
       -- No http.request.method: exception spans shouldn't match the HTTP span filter (attributes___http___request___method IS NOT NULL)

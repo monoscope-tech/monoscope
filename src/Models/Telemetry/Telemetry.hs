@@ -890,8 +890,8 @@ traceErrorHash pid tid at =
              WHERE h LIKE 'err:%' LIMIT 1 |]
 
 
--- | The largest burst per key: at least @minCount@ events within @window@ seconds.
--- Rage clicks are bursts of clicks on one element in one session.
+-- | The largest burst per key: at least @minCount@ events within @window@ seconds, each
+-- still carrying its record. Rage clicks are bursts of clicks on one element in one session.
 --
 -- >>> import Data.Time (UTCTime (..), fromGregorian)
 -- >>> let t s = UTCTime (fromGregorian 2026 1 1) s

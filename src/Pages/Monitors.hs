@@ -37,6 +37,7 @@ where
 
 import Data.Aeson qualified as AE
 import Data.CaseInsensitive qualified as CI
+import Data.Char (isAsciiLower, isDigit)
 import Data.Default (def)
 import Data.Either.Extra (fromRight')
 import Data.List (partition)
@@ -986,7 +987,7 @@ uptimeChecksList_ pid checks = div_ [id_ "uptime-checks", class_ "space-y-4"] do
   div_ [class_ "surface-raised rounded-xl divide-y divide-strokeWeak"] do
     when (V.null checks) $ emptyState_ def{size = ESCompact} "No uptime checks yet" "Add a URL above to start checking it."
     forM_ checks \c -> do
-      let up = maybe False ("ok" `T.isPrefixOf`) c.lastStatus
+      let up = isJust c.lastStatus && c.consecutiveFailures == 0
           base = "/p/" <> pid.toText <> "/monitors/uptime/" <> c.id.toText
       div_ [class_ "flex items-center gap-3 px-4 py-3 text-sm"] do
         span_ [class_ $ "w-2 h-2 rounded-full shrink-0 " <> if not c.enabled then "bg-fillWeak" else bool "bg-fillError-strong" "bg-fillSuccess-strong" up, term "data-tippy-content" $ bool "Paused" (bool "Down or not yet checked" "Up" up) c.enabled] ""
@@ -1021,6 +1022,7 @@ uptimeCheckPostH pid form = do
     | otherwise -> do
         void $ PromCfg.insertConfig pid PromCfg.CKUptime name url (max 60 $ fromMaybe 60 form.interval) Nothing (AE.object []) (Just $ clamp (100, 599) $ fromMaybe 200 form.expectedStatus)
         addSuccessToast "Uptime check added" Nothing
+        addTriggerEvent "monitorSaved" AE.Null
   uptimeListResp pid
 
 
@@ -1060,7 +1062,8 @@ instance ToHtml CronMonitors where
 cronMonitorsList_ :: Projects.ProjectId -> [Monitors.CronMonitor] -> Html ()
 cronMonitorsList_ pid mons = div_ [id_ "cron-monitors", class_ "space-y-4"] do
   form_ [class_ "surface-raised rounded-xl p-4 grid md:grid-cols-[1fr_1fr_auto_auto_auto] gap-2 items-end", hxPost_ ("/p/" <> pid.toText <> "/monitors/cron"), hxTarget_ "#cron-monitors", hxSwap_ "outerHTML"] do
-    formField_ FieldSm def{placeholder = "nightly-billing", extraAttrs = [pattern_ "[a-z0-9-_.]+"]} "Slug" "slug" True Nothing
+    -- `-` last: browsers compile `pattern` with the v flag, where a bare `-` mid-class is a syntax error.
+    formField_ FieldSm def{placeholder = "nightly-billing", extraAttrs = [pattern_ "[a-z0-9_.\\-]+"]} "Slug" "slug" True Nothing
     formField_ FieldSm def{placeholder = "Nightly billing run"} "Name" "name" True Nothing
     formSelectField_ FieldSm "Runs every" "interval" False $ options_ Nothing [("300", "5 min"), ("900", "15 min"), ("3600", "1 hour"), ("21600", "6 hours"), ("86400", "1 day"), ("604800", "1 week")]
     formSelectField_ FieldSm "Grace" "grace" False $ options_ Nothing [("300", "5 min"), ("900", "15 min"), ("3600", "1 hour")]
@@ -1068,7 +1071,7 @@ cronMonitorsList_ pid mons = div_ [id_ "cron-monitors", class_ "space-y-4"] do
   div_ [class_ "surface-raised rounded-xl divide-y divide-strokeWeak"] do
     when (null mons) $ emptyState_ def{size = ESCompact} "No cron monitors yet" "Add one above, then send a check-in from the job."
     forM_ mons \m -> div_ [class_ "flex items-center gap-3 px-4 py-3 text-sm"] do
-      span_ [class_ $ "w-2 h-2 rounded-full shrink-0 " <> case m.lastStatus of { Just "ok" -> "bg-fillSuccess-strong"; Just _ -> "bg-fillError-strong"; Nothing -> "bg-fillWeak" }] ""
+      span_ [class_ $ "w-2 h-2 rounded-full shrink-0 " <> case m.lastStatus of { Just Monitors.CSOk -> "bg-fillSuccess-strong"; Just Monitors.CSError -> "bg-fillError-strong"; Nothing -> "bg-fillWeak" }] ""
       div_ [class_ "min-w-0 flex-1"] do
         div_ [class_ "font-medium text-textStrong truncate"] $ toHtml m.name
         div_ [class_ "text-xs text-textWeak truncate font-mono"] $ toHtml $ m.slug <> " \x00b7 every " <> show (m.intervalSecs `div` 60) <> " min"
@@ -1093,12 +1096,13 @@ cronMonitorPostH pid form = do
   _ <- Projects.sessionAndProject pid
   let slug = T.toLower (T.strip form.slug)
       name = T.strip form.name
-  if T.null slug || T.null name
-    then rejected "Slug and name are required"
-    else
-      (Monitors.insertCronMonitor pid slug name (max 60 form.interval) (max 60 form.grace) =<< Time.currentTime) >>= \case
-        0 -> rejected ("A monitor with slug " <> slug <> " already exists")
-        _ -> addSuccessToast "Cron monitor added" Nothing
+  if
+    | T.null slug || T.null name -> rejected "Slug and name are required"
+    | not (T.all (\c -> isAsciiLower c || isDigit c || c `elem` ("_.-" :: String)) slug) -> rejected "Slug may only contain a-z, 0-9, _, . and -"
+    | otherwise ->
+        (Monitors.insertCronMonitor pid slug name (max 60 form.interval) (max 60 form.grace) =<< Time.currentTime) >>= \case
+          0 -> rejected ("A monitor with slug " <> slug <> " already exists")
+          _ -> addSuccessToast "Cron monitor added" Nothing
   cronListResp pid
 
 

@@ -81,7 +81,9 @@ module Models.Apis.Issues (
   FrontendData (..),
   FeedbackData (..),
   createFeedbackIssue,
+  feedbackTargetHash,
   setSpamState,
+  resolveIssues,
   createFrontendIssue,
   PerformanceData (..),
   createPerformanceIssue,
@@ -334,8 +336,8 @@ data FrontendData = FrontendData
   , selector :: Maybe Text
   , pageUrl :: Maybe Text
   , clickCount :: Int
-  , sessionId :: Text
-  , traceId :: Text
+  , sessionId :: Maybe Text
+  , traceId :: Maybe Text
   , observedAt :: UTCTime
   }
   deriving stock (Generic, Show)
@@ -1181,9 +1183,9 @@ updateIssues :: DB es => Projects.ProjectId -> [IssueId] -> HI.Sql -> Eff es Int
 updateIssues pid iids set = Hasql.interpExecute [HI.sql| UPDATE apis.issues SET ^{set} WHERE project_id = #{pid} AND id = ANY(#{iids}::uuid[]) |]
 
 
--- | Spam leaves the Inbox with the archive and is listed only under the Spam tab; clearing it restores both.
+-- | Spam is its own state: every tab but Spam filters it out, so it never touches the archive.
 setSpamState :: DB es => Projects.ProjectId -> [IssueId] -> Maybe UTCTime -> Eff es Int64
-setSpamState pid iids at = updateIssues pid iids [HI.sql| spam_at = #{at}, archived_at = #{at}, updated_at = COALESCE(#{at}, updated_at) |]
+setSpamState pid iids at = updateIssues pid iids [HI.sql| spam_at = #{at}, updated_at = COALESCE(#{at}, updated_at) |]
 
 
 -- | Set archive state on a batch of issues. @Just (now, window)@ archives, @Nothing@ unarchives.
@@ -1198,6 +1200,14 @@ setArchiveState pid iids archiveM
       ArchiveIndefinite -> (Nothing, False)
       ArchiveFor mins -> (Just (addUTCTime (fromIntegral mins * 60) t), False)
       ArchiveUntilEscalating -> (Nothing, True)
+
+
+-- | Resolved issues leave the Inbox for good, and the timeline says resolved rather than archived.
+resolveIssues :: (DB es, Time :> es) => Projects.ProjectId -> [IssueId] -> Maybe Projects.UserId -> Maybe AE.Value -> Eff es ()
+resolveIssues pid iids actor meta = do
+  now <- Time.currentTime
+  void $ setArchiveState pid iids (Just (now, ArchiveIndefinite))
+  forM_ iids \i -> logIssueActivity i IEResolved actor meta
 
 
 -- | Lift archives, returning the reopened ids. A reopen must not collide with an
@@ -2310,6 +2320,7 @@ data IssueEvent
   | IELinked
   | IEMerged
   | IESpam
+  | IENotSpam
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC 'Nothing "IE" IssueEvent
@@ -2530,8 +2541,7 @@ createPerformanceIssue projectId service d =
       PKSlowQuery -> ("Slow DB Query: " <> T.take 100 d.query, "Check the query plan: add an index for its filter, or narrow what it reads.")
 
 
--- | One downtime issue per check: the target hash is the check id, so a check that
--- stays down folds every failed probe into the open issue.
+-- | One downtime issue per check, so a check that stays down folds every failed probe into it.
 createUptimeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> UptimeData -> Eff es Issue
 createUptimeIssue projectId d =
   signalIssue projectId (Just d.name) (uptimeTargetHash d.checkId) Critical ("Downtime detected for " <> d.url, "The check at " <> d.url <> " is failing: " <> d.reason <> ".") Nothing (UptimeP d)
@@ -2557,7 +2567,11 @@ cronTargetHash = ("cron:" <>)
 -- | One issue per feedback submission, keyed by its record id so a rescan cannot duplicate it.
 createFeedbackIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Maybe Text -> Text -> FeedbackData -> Eff es Issue
 createFeedbackIssue projectId service recordId d =
-  signalIssue projectId service ("feedback:" <> recordId) Info ("Feedback: " <> T.take 100 d.message, "Reply to the user, or mark it as spam.") (Just (utcToZonedTime utc d.observedAt)) (FeedbackP d)
+  signalIssue projectId service (feedbackTargetHash recordId) Info ("Feedback: " <> T.take 100 d.message, "Reply to the user, or mark it as spam.") (Just (utcToZonedTime utc d.observedAt)) (FeedbackP d)
+
+
+feedbackTargetHash :: Text -> Text
+feedbackTargetHash = ("feedback:" <>)
 
 
 -- | One frontend issue per (kind, page path, element).

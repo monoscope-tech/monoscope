@@ -119,7 +119,7 @@ import Servant (Header, Headers, NoContent (..), addHeader)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.IO.Error (userError)
 import System.Logging qualified as Log
-import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent, useTfReads)
+import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent, redirectCS, useTfReads)
 import Utils (LoadingSize (..), LoadingType (..), checkFreeTierStatus, countNoun, faSprite_, formatOffset, formatUTC, formatWithCommas, hostPath, isoT, loadingIndicator_, lookupValueText, renderMarkdown, timeScopedUrl, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData (..), parseQueryParamMaybe)
@@ -200,26 +200,21 @@ data TriageForm = TriageForm {severity :: Maybe Issues.IssueSeverity, assigneeId
   deriving anyclass (FromForm)
 
 
--- | Priority and assignee, set from the issue header on any issue type. A runtime
--- exception's assignee is mirrored onto its error pattern, whose assignment email
--- and resolve permission read it.
+-- | Priority and assignee, set from the issue header on any issue type.
 triagePostH :: Projects.ProjectId -> Issues.IssueId -> TriageForm -> ATAuthCtx (RespHeaders (Html ()))
 triagePostH pid issueId form = do
   (sess, _) <- Projects.sessionAndProject pid
-  now <- Time.currentTime
   issueM <- Issues.selectIssueById pid issueId
   members <- ProjectMembers.selectActiveProjectMembers pid
-  let assigneeM = form.assigneeId >>= UUID.fromText <&> Projects.UserId
   case issueM of
     Nothing -> addErrorToast "Issue not found" Nothing >> addRespHeaders mempty
     Just issue -> do
       whenJust form.severity $ void . Issues.setIssuePriority pid [issueId]
-      when (assigneeM /= issue.assigneeId) do
-        void $ Issues.setIssueAssignee pid [issueId] assigneeM
-        Issues.logIssueActivity issueId (maybe Issues.IEUnassigned (const Issues.IEAssigned) assigneeM) (Just sess.user.id) Nothing
-        issueErrorPattern pid issue >>= traverse_ \err -> ErrorPatterns.setErrorPatternAssignee err.id assigneeM now
+      either (`addErrorToast` Nothing) (assignIssues pid sess.user.id [issue]) (parseAssignee form.assigneeId)
       addTriggerEvent "issuesListChanged" AE.Null
-      addRespHeaders $ issueTriage_ pid issue{Issues.severity = fromMaybe issue.severity form.severity, Issues.assigneeId = assigneeM} members
+      -- Re-read: a refused assignee must not render as if it had been set.
+      saved <- fromMaybe issue <$> Issues.selectIssueById pid issueId
+      addRespHeaders $ issueTriage_ pid saved members
 
 
 -- | The header's Priority and Assignee selects; one form, re-rendered on change.
@@ -235,6 +230,41 @@ issueTriage_ pid issue members =
       select_ [class_ "select select-sm md:w-44 max-md:flex-1 min-w-0", name_ "assigneeId", Aria.label_ "Assignee"] do
         option_ ([value_ ""] <> [selected_ "true" | isNothing issue.assigneeId]) "Unassigned"
         forM_ members \m -> option_ ([value_ m.userId.toText] <> [selected_ "true" | issue.assigneeId == Just m.userId]) $ toHtml $ memberLabel m
+
+
+-- | The assignee on issues, mirrored onto their error patterns (whose assignment email and
+-- resolve permission read it). Unchanged issues are skipped, so nothing is logged twice.
+assignIssues :: Projects.ProjectId -> Projects.UserId -> [Issues.Issue] -> Maybe Projects.UserId -> ATAuthCtx ()
+assignIssues pid actor issues assigneeM = do
+  members <- ProjectMembers.selectActiveProjectMembers pid
+  if not (all (\uid -> any ((== uid) . (.userId)) members) assigneeM)
+    then addErrorToast "Assignee must be an active project member" Nothing
+    else do
+      now <- Time.currentTime
+      appCtx <- ask @AuthContext
+      let changed = filter ((/= assigneeM) . (.assigneeId)) issues
+      void $ Issues.setIssueAssignee pid ((.id) <$> changed) assigneeM
+      forM_ changed \i -> Issues.logIssueActivity i.id (maybe Issues.IEUnassigned (const Issues.IEAssigned) assigneeM) (Just actor) (assigneeM <&> \u -> AE.object ["assignee_id" AE..= u])
+      issueErrors pid changed >>= traverse_ \(_, err) -> do
+        void $ ErrorPatterns.setErrorPatternAssignee err.id assigneeM now
+        whenJust assigneeM \a -> void $ liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.ErrorAssigned pid err.id a
+
+
+-- | An assignee field: empty means unassigned, anything else must be a user id. A malformed id used to
+-- parse to "unassigned" and silently clear the assignee.
+--
+-- >>> map parseAssignee [Nothing, Just "", Just "00000000-0000-0000-0000-000000000001", Just "bob"]
+-- [Right Nothing,Right Nothing,Right (Just (UUIDId {unUUIDId = 00000000-0000-0000-0000-000000000001})),Left "Not a user id: bob"]
+parseAssignee :: Maybe Text -> Either Text (Maybe Projects.UserId)
+parseAssignee = \case
+  Nothing -> Right Nothing
+  Just "" -> Right Nothing
+  Just t -> maybe (Left $ "Not a user id: " <> t) (Right . Just . UUIDId) (UUID.fromText t)
+
+
+-- | The runtime-exception issues among these, each with its error pattern.
+issueErrors :: Projects.ProjectId -> [Issues.Issue] -> ATAuthCtx [(Issues.Issue, ErrorPatterns.ErrorPattern)]
+issueErrors pid issues = catMaybes <$> forM issues \i -> fmap (i,) <$> issueErrorPattern pid i
 
 
 memberLabel :: ProjectMembers.ProjectMemberVM -> Text
@@ -278,9 +308,8 @@ issueBulkActionsPostH pid action durationM valueM items = do
       let issueIds = UUIDId <$> mapMaybe UUID.fromText items.itemId
           window = maybe Issues.AckIndefinite Issues.AckFor durationM
           until' = Issues.ackUntil now window
-          selectedErrors = do
-            issues <- catMaybes <$> traverse (Issues.selectIssueById pid) issueIds
-            catMaybes <$> forM issues \i -> fmap (i.id,) <$> issueErrorPattern pid i
+      issues <- catMaybes <$> traverse (Issues.selectIssueById pid) issueIds
+      let selectedErrors = issueErrors pid issues
       -- Acknowledging sweeps siblings the selection never named, so each branch
       -- reports the rows it actually touched and those are what get logged.
       (logIds, eventM, msg) <- case action of
@@ -304,21 +333,21 @@ issueBulkActionsPostH pid action durationM valueM items = do
         BAPriority -> case valueM >>= parseQueryParamMaybe @Issues.IssueSeverity of
           Just sev -> Issues.setIssuePriority pid issueIds sev $> ([], Nothing, "Priority set to " <> display sev)
           Nothing -> pure ([], Nothing, "Pick a priority")
-        BAAssign -> do
-          let assigneeM = valueM >>= UUID.fromText <&> Projects.UserId
-          void $ Issues.setIssueAssignee pid issueIds assigneeM
-          pure (issueIds, Just (maybe Issues.IEUnassigned (const Issues.IEAssigned) assigneeM), maybe "Unassigned" (const "Assigned") assigneeM)
-        -- The oldest selected error becomes canonical; the rest join its group and leave the Inbox.
+        BAAssign -> case parseAssignee valueM of
+          Right assigneeM -> assignIssues pid sess.user.id issues assigneeM $> ([], Nothing, maybe "Unassigned" (const "Assigned") assigneeM)
+          Left _ -> pure ([], Nothing, "Pick a member to assign")
+        -- The error first seen earliest becomes canonical (created_at ties within one extraction
+        -- pass, so first event time decides); the rest join its group and leave the Inbox.
         BAMerge -> do
           errs <- selectedErrors
-          case sortOn (zonedTimeToUTC . (.createdAt) . snd) errs of
+          case sortOn (\(_, e) -> (zonedTimeToUTC (fromMaybe e.createdAt e.firstTraceAt), zonedTimeToUTC e.createdAt, e.id)) errs of
             (_, canon) : rest@(_ : _) -> do
               void $ PatternMerge.mergeErrorPatterns pid canon.id ((.id) . snd <$> rest)
-              void $ Issues.setArchiveState pid (fst <$> rest) (Just (now, Issues.ArchiveIndefinite))
-              pure (fst <$> rest, Just Issues.IEMerged, "Merged " <> show (length rest) <> " into " <> canon.errorType)
+              void $ Issues.setArchiveState pid ((.id) . fst <$> rest) (Just (now, Issues.ArchiveIndefinite))
+              pure ((.id) . fst <$> rest, Just Issues.IEMerged, "Merged " <> show (length rest) <> " into " <> canon.errorType)
             _ -> pure ([], Nothing, "Select two or more errors to merge")
         BASpam -> Issues.setSpamState pid issueIds (Just now) $> (issueIds, Just Issues.IESpam, "Marked as spam")
-        BAUnspam -> Issues.setSpamState pid issueIds Nothing $> (issueIds, Just Issues.IEUnarchived, "Back in the Inbox")
+        BAUnspam -> Issues.setSpamState pid issueIds Nothing $> (issueIds, Just Issues.IENotSpam, "No longer spam")
       forM_ eventM \ev -> forM_ logIds \u -> Issues.logIssueActivity u ev (Just sess.user.id) Nothing
       addSuccessToast msg Nothing
       addTriggerEvent "issuesListChanged" AE.Null
@@ -445,7 +474,7 @@ issueDetailCore pid firstM eventM requestedRange fetchIssue = do
             Just (Issues.LogPatternP _) -> pure Nothing
             Just (Issues.LogPatternRateChangeP _) -> pure Nothing
             Just (Issues.PerformanceP d) -> pure $ Just (d.traceId, d.observedAt)
-            Just (Issues.FrontendP d) -> pure $ (,d.observedAt) <$> guarded (not . T.null) d.traceId
+            Just (Issues.FrontendP d) -> pure $ (,d.observedAt) <$> d.traceId
             Just (Issues.UptimeP _) -> pure Nothing
             Just (Issues.CronP _) -> pure Nothing
             Just (Issues.FeedbackP d) -> pure $ (,d.observedAt) <$> d.traceId
@@ -472,7 +501,7 @@ issueDetailCore pid firstM eventM requestedRange fetchIssue = do
       -- only once a recording exists. A non-UUID session key (backend SDKs
       -- without setSession, where the session is derived from user identity)
       -- can never have one, so it never reaches the lookup.
-      let sessionM = tracedSession <|> listToMaybe ([d.sessionId | Just (Issues.FrontendP d) <- [Issues.issuePayload issue]] <> [sid | Just (Issues.FeedbackP d) <- [Issues.issuePayload issue], Just sid <- [d.sessionId]])
+      let sessionM = tracedSession <|> listToMaybe ([sid | Just (Issues.FrontendP d) <- [Issues.issuePayload issue], Just sid <- [d.sessionId]] <> [sid | Just (Issues.FeedbackP d) <- [Issues.issuePayload issue], Just sid <- [d.sessionId]])
       replaySession <- enriching "replay_recording" $ flip foldMapM (UUID.fromText =<< sessionM) \sid ->
         listToMaybe @Text
           <$> Hasql.interp [HI.sql| SELECT session_id::text FROM projects.replay_sessions WHERE project_id = #{pid} AND session_id = #{sid} LIMIT 1 |]
@@ -482,22 +511,22 @@ issueDetailCore pid firstM eventM requestedRange fetchIssue = do
           IssueView{pid = pid, issue = issue, traceRef = mTraceRef, replaySession = replaySession, errM = errorM, now = now, isFirst = isFirst, tp = tp, stateEvent = stateEvent, canResolve = canResolve, members = members, tagCounts = tagCounts}
 
 
--- | ‹ › stepping: the event before or after @from@ that carries the issue's hash, within
--- a day of it (the hash predicate is an unindexed array scan, so the window is the cost
--- bound), opened on the issue page. With none, back to the page as it was.
-issueStepGetH :: Projects.ProjectId -> Issues.IssueId -> Maybe Telemetry.EventStep -> Maybe UTCTime -> ATAuthCtx (Headers '[Header "Location" Text] NoContent)
-issueStepGetH pid issueId dirM fromM = do
+-- | ‹ › stepping (and Recommended): the matching event carrying the issue's hash within a day of
+-- @current@ (the hash predicate is an unindexed array scan, so the window is the cost bound). With
+-- none the reader stays on @current@: a redirect cannot carry a toast, and the default event would
+-- lose their place.
+issueStepGetH :: Projects.ProjectId -> Issues.IssueId -> Maybe Telemetry.EventStep -> Maybe EventRef -> ATAuthCtx (Headers '[Header "Location" Text] NoContent)
+issueStepGetH pid issueId dirM current = do
   _ <- Projects.sessionAndProject pid
   useTf <- useTfReads
   issueM <- Issues.selectIssueById pid issueId
-  from <- maybe Time.currentTime pure fromM
-  let pageUrl = "/p/" <> pid.toText <> "/issues/" <> issueId.toText <> "?"
-      step = fromMaybe Telemetry.Older dirM
+  from <- maybe Time.currentTime (pure . (.at)) current
   nextM <-
     join . join <$> forM (issueHashKey =<< issueM) \key ->
-      tryWithin (Just 5_000_000) "ISSUE_STEP" ["issue_id" AE..= issueId] $ Hasql.withHasqlTimefusion useTf $ Telemetry.adjacentHashEvent pid key step from
-  whenNothing_ nextM $ addErrorToast (case step of Telemetry.Older -> "No earlier event within a day"; Telemetry.Newer -> "No later event within a day"; Telemetry.Recommended -> "No event in the last day") Nothing
-  pure $ addHeader (pageUrl <> foldMap (\(tid, at) -> "&event=" <> toUriStr (tid <> "@" <> isoT at)) nextM) NoContent
+      tryWithin (Just 5_000_000) "ISSUE_STEP" ["issue_id" AE..= issueId] $ Hasql.withHasqlTimefusion useTf $ Telemetry.adjacentHashEvent pid key (fromMaybe Telemetry.Older dirM) from
+  pure $ addHeader ("/p/" <> pid.toText <> "/issues/" <> issueId.toText <> "?" <> foldMap eventParam (uncurry EventRef <$> nextM <|> current)) NoContent
+  where
+    eventParam ev = "event=" <> toUriStr (ev.traceId <> "@" <> isoT ev.at)
 
 
 -- | @secs@ either side of @t@.
@@ -1078,7 +1107,7 @@ issueHeader_ IssueView{..} = header_ [class_ "max-md:px-3 px-4 max-md:pt-4 pt-6 
         errorSubscriptionAction pid errL.base
       Nothing ->
         unless (isJust issue.archivedAt)
-          $ button_ [type_ "button", class_ "btn btn-sm btn-ghost gap-1.5 text-textSuccess hover:bg-fillSuccess-weak", hxPost_ $ "/p/" <> pid.toText <> "/issues/" <> issue.id.toText <> "/resolve", hxTarget_ $ "#archive-ctl-" <> issue.id.toText, hxSwap_ "outerHTML", Aria.label_ "Resolve issue", [__|on htmx:afterRequest remove me|]] do
+          $ button_ [type_ "button", class_ "btn btn-sm btn-ghost gap-1.5 text-textSuccess hover:bg-fillSuccess-weak", hxPost_ $ "/p/" <> pid.toText <> "/issues/" <> issue.id.toText <> "/resolve", hxTarget_ $ "#archive-ctl-" <> issue.id.toText, hxSwap_ "outerHTML", Aria.label_ "Resolve issue", [__|on htmx:afterRequest[detail.successful] remove me|]] do
             faSprite_ "circle-check" "regular" "w-4 h-4"
             span_ [class_ "max-md:hidden"] "Resolve"
     issueTriage_ pid issue members
@@ -1243,8 +1272,8 @@ eventCard_ IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflow-cli
       div_ [class_ "ml-auto flex items-center gap-1 text-xs"] do
         when hasOccurrences do
           span_ [class_ "text-textWeak mr-1 max-md:hidden"] "Occurrence"
-          whenJust (snd <$> traceRef) \at -> forM_ ([("older", "chevron-left", "Earlier event"), ("newer", "chevron-right", "Later event")] :: [(Text, Text, Text)]) \(dir, icon, tip) ->
-            a_ [href_ $ "/p/" <> pid.toText <> "/issues/" <> issue.id.toText <> "/step?dir=" <> dir <> "&from=" <> toUriStr (isoT at), class_ "px-1.5 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker", Aria.label_ tip, term "data-tippy-content" tip]
+          whenJust traceRef \(tid, at) -> forM_ ([("older", "chevron-left", "Earlier event"), ("newer", "chevron-right", "Later event")] :: [(Text, Text, Text)]) \(dir, icon, tip) ->
+            a_ [href_ $ "/p/" <> pid.toText <> "/issues/" <> issue.id.toText <> "/step?dir=" <> dir <> "&event=" <> toUriStr (tid <> "@" <> isoT at), class_ "px-1.5 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker", Aria.label_ tip, term "data-tippy-content" tip]
               $ faSprite_ icon "regular" "w-3 h-3"
           forM_ ([(True, isFirst, "Show the first occurrence", "First"), (False, not isFirst, "Show the most recent occurrence", "Recent")] :: [(Bool, Bool, Text, Text)]) \(useFirst, active, tip, lbl) ->
             a_ [href_ $ occurrenceUrl useFirst, class_ $ "px-2 py-1 rounded " <> bool "text-textWeak hover:text-textStrong hover:bg-fillWeaker" "bg-fillBrand-weak text-textBrand font-medium" active, term "data-tippy-content" tip] $ toHtml lbl
@@ -1457,7 +1486,7 @@ eventCard_ IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflow-cli
           , ("selector", d.selector)
           , ("page", d.pageUrl)
           , ("clicks", Just $ show d.clickCount <> " within 2s")
-          , ("session.id", Just d.sessionId)
+          , ("session.id", d.sessionId)
           ]
       Just (Issues.PerformanceP d) ->
         evidence
@@ -1720,15 +1749,13 @@ assignErrorPostH pid errUuid form = do
       | not isMember -> addErrorToast "Assignee must be an active project member" Nothing >> render (Just err.id) err.assigneeId
       | assigneeIdM == err.assigneeId -> addSuccessToast "Assignee unchanged" Nothing >> render (Just err.id) err.assigneeId
       | otherwise -> do
-          now <- Time.currentTime
-          void $ ErrorPatterns.setErrorPatternAssignee err.id assigneeIdM now
-          whenJust assigneeIdM \assigneeId ->
-            void $ liftIO $ withResource appCtx.pool \conn ->
-              createJob conn "background_jobs" $ BackgroundJobs.ErrorAssigned pid err.id assigneeId
-          issueM <- Issues.selectIssueByHash pid err.hash Issues.AnyIssue
-          let event = maybe Issues.IEUnassigned (const Issues.IEAssigned) assigneeIdM
-              meta = assigneeIdM <&> \uid -> AE.object ["assignee_id" AE..= uid]
-          whenJust issueM \issue -> Issues.logIssueActivity issue.id event (Just sess.user.id) meta
+          Issues.selectIssueByHash pid err.hash Issues.AnyIssue >>= \case
+            Just issue -> assignIssues pid sess.user.id [issue{Issues.assigneeId = err.assigneeId}] assigneeIdM
+            -- An error older than issue tracking has no issue row to carry the assignee.
+            Nothing -> do
+              now <- Time.currentTime
+              void $ ErrorPatterns.setErrorPatternAssignee err.id assigneeIdM now
+              whenJust assigneeIdM \a -> void $ liftIO $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.ErrorAssigned pid err.id a
           addSuccessToast "Assignee updated" Nothing
           render (Just err.id) assigneeIdM
   where
@@ -2380,10 +2407,10 @@ issueListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM service
                 viewLink (sortNub typeFilters == sortNub types) (listUrl types) lbl
               forM_ savedViews \v -> span_ [class_ "inline-flex items-center"] do
                 viewLink (listQuery typeFilters == v.query) ("/p/" <> pid.toText <> "/issues?" <> v.query) v.name
-                button_ [type_ "button", class_ "p-0.5 rounded text-textWeak hover:text-textStrong", Aria.label_ ("Delete view " <> v.name), hxPost_ ("/p/" <> pid.toText <> "/issues/views/" <> UUID.toText v.id <> "/delete"), hxSwap_ "none", [__|on htmx:afterRequest call window.location.reload()|]]
+                button_ [type_ "button", class_ "p-0.5 rounded text-textWeak hover:text-textStrong", Aria.label_ ("Delete view " <> v.name), hxPost_ ("/p/" <> pid.toText <> "/issues/views/" <> UUID.toText v.id <> "/delete"), hxSwap_ "none"]
                   $ faSprite_ "xmark" "regular" "w-2.5 h-2.5"
               button_ [type_ "button", class_ "px-2 py-1 rounded text-xs text-textBrand hover:bg-fillWeaker whitespace-nowrap", term "popovertarget" "save-view-pop", style_ "anchor-name: --anchor-save-view-pop"] "Save view"
-              form_ [id_ "save-view-pop", term "popover" "auto", class_ "bg-bgRaised p-3 border border-strokeWeak rounded-md shadow-lg flex gap-2", style_ "position-anchor: --anchor-save-view-pop; top: anchor(bottom); left: anchor(left)", hxPost_ ("/p/" <> pid.toText <> "/issues/views"), hxSwap_ "none", [__|on htmx:afterRequest call window.location.reload()|]] do
+              form_ [id_ "save-view-pop", term "popover" "auto", class_ "bg-bgRaised p-3 border border-strokeWeak rounded-md shadow-lg flex gap-2", style_ "position-anchor: --anchor-save-view-pop; top: anchor(bottom); left: anchor(left)", hxPost_ ("/p/" <> pid.toText <> "/issues/views"), hxSwap_ "none"] do
                 input_ [type_ "hidden", name_ "query", value_ $ listQuery typeFilters]
                 input_ [type_ "text", name_ "name", required_ "", placeholder_ "View name", Aria.label_ "View name", class_ "input input-sm w-44"]
                 button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save"
@@ -2432,10 +2459,12 @@ parseTab = fromMaybe TabInbox . (inverseMap tabParam =<<)
 -- | Inbox additionally hides severity='low' so demoted silent drops don't clutter it.
 tabIssueFilters :: IssueTab -> Issues.IssueFilters
 tabIssueFilters = \case
-  TabAcknowledged -> Issues.defIssueFilters{Issues.ack = Issues.IsNotNull, Issues.spam = Issues.IsNull}
-  TabArchived -> Issues.defIssueFilters{Issues.archive = Issues.IsNotNull, Issues.spam = Issues.IsNull}
-  TabInbox -> Issues.defIssueFilters{Issues.ack = Issues.IsNull, Issues.archive = Issues.IsNull, Issues.spam = Issues.IsNull, Issues.hideLowSeverity = True}
+  TabAcknowledged -> notSpam{Issues.ack = Issues.IsNotNull}
+  TabArchived -> notSpam{Issues.archive = Issues.IsNotNull}
+  TabInbox -> notSpam{Issues.ack = Issues.IsNull, Issues.archive = Issues.IsNull, Issues.hideLowSeverity = True}
   TabSpam -> Issues.defIssueFilters{Issues.spam = Issues.IsNotNull}
+  where
+    notSpam = Issues.defIssueFilters{Issues.spam = Issues.IsNull}
 
 
 -- | One line under the tab strip saying what the tab *means*.
@@ -2444,7 +2473,7 @@ tabBlurb = \case
   TabAcknowledged -> "Someone owns these. Notifications are paused until the acknowledgement expires or the issue regresses."
   TabArchived -> "Not actionable. Hidden and never notified — unarchive to bring one back."
   TabInbox -> "Needs triage. Acknowledge to pause notifications, or archive if it isn't actionable."
-  TabSpam -> "Marked as spam, mostly user feedback. Hidden from the Inbox and never notified."
+  TabSpam -> "Marked as spam, mostly user feedback. Hidden from every other tab."
 
 
 -- | Bulk actions offered on each tab: only transitions that make sense from the
@@ -2955,6 +2984,7 @@ issueActivityTimeline_ userMap now activities
       Issues.Lifecycle Issues.IELinked -> ("link", "bg-fillBrand-weak text-fillBrand-strong", "Linked an external issue")
       Issues.Lifecycle Issues.IEMerged -> ("code-merge", "bg-fillWeaker text-textWeak", "Merged into another issue")
       Issues.Lifecycle Issues.IESpam -> ("ban", "bg-fillWeaker text-textWeak", "Marked as spam")
+      Issues.Lifecycle Issues.IENotSpam -> ("arrow-rotate-left", "bg-fillWeaker text-textWeak", "Marked as not spam")
 
 
 data SaveViewForm = SaveViewForm {name :: Text, query :: Text}
@@ -2967,7 +2997,7 @@ saveViewPostH pid form = do
   (sess, _) <- Projects.sessionAndProject pid
   if T.null (T.strip form.name)
     then addErrorToast "Name the view" Nothing
-    else Issues.saveIssueView pid sess.user.id (T.strip form.name) form.query >> addSuccessToast "View saved" Nothing
+    else Issues.saveIssueView pid sess.user.id (T.strip form.name) form.query >> redirectCS ("/p/" <> pid.toText <> "/issues?" <> form.query)
   addRespHeaders mempty
 
 
@@ -2975,6 +3005,7 @@ deleteViewPostH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (Ht
 deleteViewPostH pid vid = do
   _ <- Projects.sessionAndProject pid
   void $ Issues.deleteIssueView pid vid
+  redirectCS ("/p/" <> pid.toText <> "/issues")
   addRespHeaders mempty
 
 

@@ -162,6 +162,9 @@ spec = sequential $ aroundAll withTestResources do
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
       [a, b] <- forM ["MergeAError", "MergeBError"] (patternOf tr)
       [ia, ib] <- forM [a, b] (issueOf tr . (.hash))
+      -- One extraction pass can stamp both rows with the same created_at; "oldest" must then come from
+      -- their first events, not from the selection order (seed-dependent failure, 2026-09-26).
+      void $ withResource tr.trPool \conn -> PGS.execute conn [sql| UPDATE apis.error_patterns SET created_at = ? WHERE id IN (?, ?) |] (frozenTime, a.id, b.id)
       void $ testServant tr $ Pages.Issues.issueBulkActionsPostH pid Pages.Issues.BAMerge Nothing Nothing Pages.Issues.IssueBulk{itemId = UUID.toText . (.id.unUUIDId) <$> [ib, ia]}
       b' <- runTestBg frozenTime tr (ErrorPatterns.getErrorPatternById b.id) >>= maybe (fail "no b") pure
       (b'.canonicalId, b'.mergeOverride) `shouldBe` (Just a.id, True)
@@ -312,9 +315,18 @@ spec = sequential $ aroundAll withTestResources do
             conn
             [sql| UPDATE projects.projects SET error_alerts = true WHERE id = ? |]
             (PGS.Only pid)
-      -- Find the regressed pattern from test 3 (issue was already created by processOneMinuteErrors)
-      patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 10 0
-      let regressedM = find (\p -> p.state == ESRegressed) patterns
+      -- Regress an error of its own: the suite shares one DB in random order, so "any regressed
+      -- pattern" could be another test's (e.g. 1c's release regression) with other notify rules.
+      apiKey <- createTestAPIKey tr pid "regress-notify-key"
+      let emit at = do
+            ingestTraceWithException tr apiKey "GET /api/notify" "NotifyProbeError" "notify probe" "NotifyProbeError: notify probe\n    at probe (/app/src/notify.js:1:1)" (addUTCTime at frozenTime)
+            drainExtractionWorker tr
+            void $ runAllBackgroundJobs frozenTime tr.trATCtx
+          probe = find ((== "NotifyProbeError") . (.errorType)) <$> runTestBg frozenTime tr (ErrorPatterns.getErrorPatterns pid Nothing 200 0)
+      emit (-30)
+      probe >>= traverse_ \p -> runTestBg frozenTime tr $ ErrorPatterns.updateErrorPatternState p.id ErrorPatterns.ESResolved frozenTime
+      emit 90
+      regressedM <- mfilter ((== ESRegressed) . (.state)) <$> probe
       case regressedM of
         Just pat -> do
           -- Reset last_notified_at so this counts as a first alert
@@ -589,7 +601,12 @@ spec = sequential $ aroundAll withTestResources do
         _ -> expectationFailure "Need at least 2 established patterns for concurrent spike test"
 
     it "6. User action handlers (assign, resolve, subscribe)" \tr -> do
-      patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 1 0
+      -- Its own error: "the most recently updated pattern" depends on which tests ran first.
+      apiKey <- createTestAPIKey tr pid "user-actions-key"
+      ingestTraceWithException tr apiKey "GET /api/actions" "ActionProbeError" "action probe" "ActionProbeError: action probe\n    at probe (/app/src/actions.js:1:1)" (addUTCTime (-20) frozenTime)
+      drainExtractionWorker tr
+      void $ runAllBackgroundJobs frozenTime tr.trATCtx
+      patterns <- filter ((== "ActionProbeError") . (.errorType)) <$> runTestBg frozenTime tr (ErrorPatterns.getErrorPatterns pid Nothing 200 0)
       case patterns of
         [] -> expectationFailure "no patterns"
         (pat : _) -> do

@@ -5020,7 +5020,9 @@ evaluateCronMonitor now m = do
   let since = max (addUTCTime (-86400) now) (fromMaybe m.createdAt m.lastCheckinAt)
   spans <- tfRead $ Telemetry.selectNamedRecords m.projectId "cron.checkin" since now
   let attr = Telemetry.spanAttr
-      latest = viaNonEmpty last $ sortWith fst [(c.timestamp, fromMaybe "ok" (attr "monitor.status" c)) | c <- spans, attr "monitor.slug" c == Just m.slug, maybe True (c.timestamp >) m.lastCheckinAt]
+      -- No status means the run finished; in_progress and anything unknown are not completions.
+      completion c = case attr "monitor.status" c of Nothing -> Just Monitors.CSOk; Just "ok" -> Just Monitors.CSOk; Just "error" -> Just Monitors.CSError; Just _ -> Nothing
+      latest = viaNonEmpty last $ sortWith fst [(c.timestamp, st) | c <- spans, attr "monitor.slug" c == Just m.slug, maybe True (c.timestamp >) m.lastCheckinAt, Just st <- [completion c]]
       lastSeen = (fst <$> latest) <|> m.lastCheckinAt
       expectedBy = addUTCTime (fromIntegral $ m.intervalSecs + m.graceSecs) (fromMaybe m.createdAt lastSeen)
       open failure =
@@ -5028,8 +5030,8 @@ evaluateCronMonitor now m = do
           =<< Issues.createCronIssue m.projectId Issues.CronData{monitorId = UUID.toText m.id, slug = m.slug, name = m.name, failure, expectedBy, lastCheckinAt = lastSeen}
   whenJust latest \(at, status) -> void $ Monitors.recordCronCheckin m.id at status
   case latest of
-    Just (_, "ok") -> resolveOpenIssue m.projectId (Issues.cronTargetHash (UUID.toText m.id)) Issues.Cron now []
-    Just _ -> open Issues.CFFailed
+    Just (_, Monitors.CSOk) -> resolveOpenIssue m.projectId (Issues.cronTargetHash (UUID.toText m.id)) Issues.Cron now []
+    Just (_, Monitors.CSError) -> open Issues.CFFailed
     Nothing -> when (now > expectedBy) $ open Issues.CFMissed
 
 
@@ -5062,9 +5064,7 @@ applyUptimeResult cfg now ms res = do
 -- | Archive a recovered signal's open issue and log it as resolved.
 resolveOpenIssue :: Projects.ProjectId -> Text -> Issues.IssueType -> UTCTime -> [(AE.Key, AE.Value)] -> ATBackgroundCtx ()
 resolveOpenIssue pid hash ty now extra =
-  Issues.selectIssueByHash pid hash (Issues.OpenOfType ty) >>= traverse_ \i -> do
-    void $ Issues.setArchiveState pid [i.id] (Just (now, Issues.ArchiveIndefinite))
-    Issues.logIssueActivity i.id Issues.IEResolved Nothing (Just $ AE.object (("recovered_at" AE..= now) : extra))
+  Issues.selectIssueByHash pid hash (Issues.OpenOfType ty) >>= traverse_ \i -> Issues.resolveIssues pid [i.id] Nothing (Just $ AE.object (("recovered_at" AE..= now) : extra))
 
 
 -- | A read against TimeFusion when the project's reads are switched to it.
@@ -5754,7 +5754,7 @@ detectFeedback pid = do
         bodyText = (^? AL._String) =<< unAesonTextMaybe r.body
         tidM = nonEmptyT (r.context >>= (.trace_id))
     whenJust (mfilter (not . T.null . T.strip) (attr "feedback.message" <|> bodyText)) \message ->
-      whenNothingM_ (Issues.selectIssueByHash pid ("feedback:" <> r.id) Issues.AnyIssue) do
+      whenNothingM_ (Issues.selectIssueByHash pid (Issues.feedbackTargetHash r.id) Issues.AnyIssue) do
         related <- join <$> forM tidM \tid -> tfRead (Telemetry.traceErrorHash pid tid r.timestamp)
         Issues.insertIssue
           =<< Issues.createFeedbackIssue
@@ -5768,7 +5768,7 @@ detectFeedback pid = do
               , pageUrl = attr "url.full" <|> attr "page.url"
               , sessionId = attr "session.id"
               , traceId = tidM
-              , relatedErrorHash = T.stripPrefix "err:" =<< related
+              , relatedErrorHash = related >>= \h -> Issues.hashPrefix Issues.RuntimeException >>= (`T.stripPrefix` h)
               , observedAt = r.timestamp
               }
 
@@ -5795,8 +5795,8 @@ detectFrontendIssues pid = do
               , selector = selector sample
               , pageUrl
               , clickCount = n
-              , sessionId = fromMaybe "" (attr "session.id" sample)
-              , traceId = fromMaybe "" (sample.context >>= (.trace_id))
+              , sessionId = attr "session.id" sample
+              , traceId = mfilter (not . T.null) (sample.context >>= (.trace_id))
               , observedAt = sample.timestamp
               }
   forM_ (Telemetry.bursts (.timestamp) 3 2 keyed) \((_, pageUrl, el), cs) -> open Issues.FKRageClick el pageUrl (length cs) (head cs)
