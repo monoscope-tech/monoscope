@@ -56,6 +56,8 @@ module Pkg.TestUtils (
   ingestSpanReq,
   withSpanKind,
   withSpanStatus,
+  withTraceId,
+  withSpanDuration,
   ingestMetric,
   ingestLogWithHeader,
   ingestTraceWithHeader,
@@ -90,7 +92,7 @@ import Control.Concurrent (threadDelay)
 import Control.Concurrent.STM.TBQueue (isEmptyTBQueue, readTBQueue)
 import Control.Exception (finally, throwIO, try)
 import Control.Exception.Safe qualified as Safe
-import Control.Lens ((.~), (^.), (^..))
+import Control.Lens ((%~), (.~), (^.), (^..))
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.QQ (aesonQQ)
@@ -1496,6 +1498,16 @@ ingestSpanReq tr = void . OtlpServer.traceServiceExport tr.trLogger tr.trATCtx t
 
 withSpanKind :: PT.Span'SpanKind -> TS.ExportTraceServiceRequest -> TS.ExportTraceServiceRequest
 withSpanKind k = TSF.resourceSpans . traverse . PTF.scopeSpans . traverse . PTF.spans . traverse . PTF.kind .~ k
+
+
+-- | Pin every span to one trace (hex, as 'mkSpanRequest' takes it), e.g. to link an error to a later record.
+withTraceId :: Text -> TS.ExportTraceServiceRequest -> TS.ExportTraceServiceRequest
+withTraceId t = TSF.resourceSpans . traverse . PTF.scopeSpans . traverse . PTF.spans . traverse . PTF.traceId .~ hexPad 32 t
+
+
+-- | Span duration in nanoseconds ('mkSpanRequest' defaults to 100ms).
+withSpanDuration :: Word64 -> TS.ExportTraceServiceRequest -> TS.ExportTraceServiceRequest
+withSpanDuration ns = TSF.resourceSpans . traverse . PTF.scopeSpans . traverse . PTF.spans . traverse %~ \sp -> sp & PTF.endTimeUnixNano .~ (sp ^. PTF.startTimeUnixNano + ns)
 
 
 withSpanStatus :: PT.Status'StatusCode -> TS.ExportTraceServiceRequest -> TS.ExportTraceServiceRequest

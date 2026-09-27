@@ -18,6 +18,7 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Hasql.Interpolate qualified as HI
 import Lucid (ToHtml, renderText, toHtml)
 import Models.Apis.ApiChanges qualified as ApiChanges
+import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.ProjectMembers qualified as ProjectMembers
@@ -703,28 +704,33 @@ spec = sequential $ aroundAll withTestResources do
       withResource tr.trPool (\conn -> PGS.query conn [sql| SELECT count(*)::int FROM apis.issue_activity_log WHERE issue_id = ? AND event = 'viewed' |] (Only iid)) `shouldReturn` [Only (1 :: Int)]
 
     it "events step to their neighbours and the page opens on a chosen event" \tr -> do
+      apiKey <- createTestAPIKey tr testPid "step-key"
       let at dt = addUTCTime dt frozenTime
-          traces = [("step-trace-a", at (-600)), ("step-trace-b", at (-300)), ("step-trace-c", at 0)] :: [(Text, UTCTime)]
-      withResource tr.trPool \conn -> do
-        forM_ traces \(tid, ts) ->
-          void $ PGS.execute conn [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, kind, hashes, summary, context___trace_id) VALUES (gen_random_uuid(), ?, ?, ?, 'server', ARRAY['err:stepprobe'], ARRAY['boom'], ?) |] (testPid, ts, ts, tid)
-        -- The oldest event carries a replay session and a user, so it is the Recommended one.
-        void $ PGS.execute conn [sql| UPDATE otel_logs_and_spans SET attributes___session___id = 'sess-1', attributes___user___id = 'u-1' WHERE context___trace_id = 'step-trace-a' |] ()
-      iid <- seedIssue tr Issues.RuntimeException "step probe" "stepprobe"
-      let step dir from = runTestBg frozenTime tr (Telemetry.adjacentHashEvent testPid "err:stepprobe" dir from)
-      step Telemetry.Older (at 0) `shouldReturn` Just ("step-trace-b", at (-300))
-      step Telemetry.Newer (at (-600)) `shouldReturn` Just ("step-trace-b", at (-300))
+          (ta, tb, tc) = ("57e9000000000000000000000000000a", "57e9000000000000000000000000000b", "57e9000000000000000000000000000c") :: (Text, Text, Text)
+          -- Ingested (so TimeFusion, which the step handler reads on CI, has them); the oldest
+          -- carries a replay session and a user, so it is the Recommended one.
+          emit tid extra dt = ingestSpanReq tr . withTraceId tid =<< createOtelTraceWithExceptionAtTime apiKey (extra, [], []) "GET /step" "StepProbeError" "step probe" "StepProbeError: step probe\n    at step (/app/src/step.js:1:1)" (at dt)
+      emit ta [("session.id", "sess-1"), ("user.id", "u-1")] (-600)
+      emit tb [] (-300)
+      emit tc [] 0
+      drainExtractionWorker tr
+      void $ runAllBackgroundJobs frozenTime tr.trATCtx
+      pat <- runTestBg frozenTime tr (ErrorPatterns.getErrorPatterns testPid Nothing 500 0) >>= maybe (fail "no StepProbeError") pure . find ((== "StepProbeError") . (.errorType))
+      iid <- (.id) <$> (runTestBg frozenTime tr (Issues.selectIssueByHash testPid pat.hash Issues.AnyIssue) >>= maybe (fail "no issue") pure)
+      let step dir from = runTestBg frozenTime tr (Telemetry.adjacentHashEvent testPid ("err:" <> pat.hash) dir from)
+      step Telemetry.Older (at 0) `shouldReturn` Just (tb, at (-300))
+      step Telemetry.Newer (at (-600)) `shouldReturn` Just (tb, at (-300))
       step Telemetry.Older (at (-600)) `shouldReturn` Nothing
-      step Telemetry.Recommended (at 1) `shouldReturn` Just ("step-trace-a", at (-600))
+      step Telemetry.Recommended (at 1) `shouldReturn` Just (ta, at (-600))
       -- Past the oldest event the reader stays where they were, not on the default event.
       let stepTo dir ev =
             runAuthHandler tr (IssuesPage.issueStepGetH testPid iid (Just dir) (Just ev)) >>= \h -> case lookupResponseHeader @"Location" h of
               Header loc -> pure loc
               _ -> fail "no Location"
-      stepTo Telemetry.Older (IssuesPage.EventRef "step-trace-c" (at 0)) >>= (`shouldSatisfy` T.isInfixOf "step-trace-b")
-      stepTo Telemetry.Older (IssuesPage.EventRef "step-trace-a" (at (-600))) >>= (`shouldSatisfy` T.isInfixOf "step-trace-a")
-      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid iid Nothing Nothing Nothing Nothing (Just $ IssuesPage.EventRef "step-trace-b" (at (-300)))
-      renderPage page `shouldContainAll` ["step-trace-b", "id=\"issue-events\"", "/step?dir=older", "/step?dir=recommended", "hashes%5B%2A%5D%3D%3D%22err%3Astepprobe%22"]
+      eventually (stepTo Telemetry.Older (IssuesPage.EventRef tc (at 0))) (T.isInfixOf tb) >>= (`shouldSatisfy` T.isInfixOf tb)
+      stepTo Telemetry.Older (IssuesPage.EventRef ta (at (-600))) >>= (`shouldSatisfy` T.isInfixOf ta)
+      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid iid Nothing Nothing Nothing Nothing (Just $ IssuesPage.EventRef tb (at (-300)))
+      renderPage page `shouldContainAll` [tb, "id=\"issue-events\"", "/step?dir=older", "/step?dir=recommended"]
 
     it "category views, filter chips and saved views on the issue list" \tr -> do
       let list types = renderPage . snd <$> testServant tr (IssuesPage.issueListGetH testPid (Just "Inbox") Nothing Nothing Nothing Nothing Nothing (Just "24h") [] types)
@@ -737,73 +743,52 @@ spec = sequential $ aroundAll withTestResources do
       forM_ views \v -> testServant tr $ IssuesPage.deleteViewPostH testPid v.id
       (null <$> runTestBg frozenTime tr (Issues.selectIssueViews testPid)) `shouldReturn` True
 
+    -- Seeded through ingestion (which also writes TimeFusion) and polled: on CI the detectors read
+    -- an asynchronous, shared TimeFusion, which a raw Postgres INSERT never reaches.
     it "performance detection opens N+1 and slow-query issues with span evidence" \tr -> do
-      let tid = "perf0000000000000000000000000001"
-          at dt = addUTCTime dt frozenTime
-          span' :: PGS.Connection -> (Text, Maybe Text, Text, Maybe Text, Int64, NominalDiffTime) -> IO ()
-          span' conn (sid, parent, name, q, durNs, dt) =
-            void
-              $ PGS.execute
-                conn
-                [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, kind, name, summary, context___trace_id, context___span_id, parent_id, duration, attributes___db___query___text, attributes___db___system___name, resource___service___name, context)
-                      VALUES (gen_random_uuid(), ?, ?, ?, 'client', ?, ARRAY[?], ?, ?, ?, ?, ?, 'postgresql', 'catalog', jsonb_build_object('trace_id', ?::text, 'span_id', ?::text)) |]
-                (testPid, at dt, at dt, name, name, tid, sid, parent, durNs, q, tid, sid)
-      withResource tr.trPool \conn -> do
-        span' conn ("root", Nothing, "GET /products", Nothing, 900_000_000, -60)
-        span' conn ("ctl", Just "root", "ProductController.index", Nothing, 800_000_000, -59)
-        forM_ [1 .. 6 :: Integer] \i -> span' conn ("q" <> show i, Just "ctl", "SELECT reviews", Just ("SELECT * FROM reviews WHERE product_id = " <> show i), 20_000_000, fromIntegral (-58 + i))
-        span' conn ("slow", Just "root", "SELECT promotions", Just "SELECT * FROM promotions WHERE active", 1_500_000_000, -40)
+      apiKey <- createTestAPIKey tr testPid "perf-key"
+      let span' (sid, parent, name, q, durNs, dt) =
+            ingestSpanReq tr
+              . withSpanDuration durNs
+              $ mkSpanRequest "0e7f0000000000000000000000000001" sid parent name [] Nothing (mkAttr "db.system.name" "postgresql" : [mkAttr "db.query.text" q' | Just q' <- [q]]) (mkResource apiKey [mkAttr "service.name" "catalog"]) (addUTCTime dt frozenTime)
+      span' ("1", Nothing, "GET /products", Nothing, 900_000_000, -60)
+      span' ("2", Just "1", "ProductController.index", Nothing, 800_000_000, -59)
+      forM_ [1 .. 6 :: Integer] \i -> span' ("3" <> show i, Just "2", "SELECT reviews", Just ("SELECT * FROM reviews WHERE product_id = " <> show i), 20_000_000, fromIntegral (i - 58))
+      span' ("4", Just "1", "SELECT promotions", Just "SELECT * FROM promotions WHERE active", 1_500_000_000, -40)
+      let detect = runTestBg frozenTime tr (BackgroundJobs.detectPerformanceIssues testPid) >> issuesOfType tr Issues.Performance
+      void $ eventually detect ((== 2) . length)
       -- Repeat detections fold into the same issues.
-      replicateM_ 2 $ runTestBg frozenTime tr $ BackgroundJobs.detectPerformanceIssues testPid
-      [(n1, n1Title), (_, slowTitle)] <- issuesOfType tr Issues.Performance
+      [(n1, n1Title), (_, slowTitle)] <- detect
       n1Title `shouldSatisfy` T.isPrefixOf "N+1 Query: SELECT * FROM reviews WHERE product_id ="
       slowTitle `shouldSatisfy` T.isPrefixOf "Slow DB Query: SELECT * FROM promotions"
       issuePage tr n1 >>= (`shouldContainAll` ["Span evidence", "repeating query (\x00d7" <> "6)", "ProductController.index", "GET /products", "120 ms", "id=\"issue-trace\"", "Performance"])
 
     it "frontend detection turns a burst of clicks on one element into a rage-click issue" \tr -> do
-      let click :: PGS.Connection -> (Text, Text, Text, NominalDiffTime) -> IO ()
-          click conn (name, sid, label, dt) =
-            void
-              $ PGS.execute
-                conn
-                [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, kind, name, summary, context___trace_id, context___span_id, attributes___session___id, attributes, context)
-                      VALUES (gen_random_uuid(), ?, ?, ?, 'internal', ?, ARRAY['click'], 'rage-trace', gen_random_uuid()::text, ?,
-                              jsonb_build_object('session', jsonb_build_object('id', ?::text), 'page', jsonb_build_object('url', 'https://shop.example.com/checkout'),
-                                                 'monoscope', jsonb_build_object('display', jsonb_build_object('label', ?::text)), 'target', jsonb_build_object('tag_name', 'button', 'id', 'place-order')),
-                              jsonb_build_object('trace_id', 'rage-trace')) |]
-                (testPid, addUTCTime dt frozenTime, addUTCTime dt frozenTime, name, sid, sid, label)
-      withResource tr.trPool \conn -> do
-        forM_ [0, 0.4, 0.9, 1.4] \dt -> click conn ("click", "sess-rage", "Place order", -120 + dt)
-        click conn ("click", "sess-rage", "Continue shopping", -100)
-        forM_ ([("sess-a", -90), ("sess-b", -80)] :: [(Text, NominalDiffTime)]) \(sid, dt) -> click conn ("dead_click", sid, "Apply coupon", dt)
-      runTestBg frozenTime tr $ BackgroundJobs.detectFrontendIssues testPid
-      [(_, deadTitle), (rage, rageTitle)] <- issuesOfType tr Issues.Frontend
+      apiKey <- createTestAPIKey tr testPid "rage-key"
+      let click (name, sid, label, dt) = do
+            spanId <- T.replace "-" "" . DataUUID.toText <$> UUID.nextRandom
+            ingestSpanLinked tr apiKey spanId spanId Nothing name [("session.id", sid), ("page.url", "https://shop.example.com/checkout"), ("monoscope.display.label", label), ("target.tag_name", "button"), ("target.id", "place-order")] (addUTCTime dt frozenTime)
+      forM_ [0, 0.4, 0.9, 1.4] \dt -> click ("click", "sess-rage", "Place order", -120 + dt)
+      click ("click", "sess-rage", "Continue shopping", -100)
+      forM_ ([("sess-a", -90), ("sess-b", -80)] :: [(Text, NominalDiffTime)]) \(sid, dt) -> click ("dead_click", sid, "Apply coupon", dt)
+      [(_, deadTitle), (rage, rageTitle)] <- eventually (runTestBg frozenTime tr (BackgroundJobs.detectFrontendIssues testPid) >> issuesOfType tr Issues.Frontend) ((== 2) . length)
       (deadTitle, rageTitle) `shouldBe` ("Dead Click: Apply coupon", "Rage Click: Place order")
       issuePage tr rage >>= (`shouldContainAll` ["Rage click", "button#place-order", "https://shop.example.com/checkout", "4 within 2s", "sess-rage"])
 
     it "user.feedback records become feedback issues linked to their trace's error, and spam leaves the Inbox" \tr -> do
-      withResource tr.trPool \conn -> do
-        void
-          $ PGS.execute
-            conn
-            [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, kind, name, summary, hashes, context___trace_id, context)
-                                     VALUES (gen_random_uuid(), ?, ?, ?, 'server', 'POST /cart', ARRAY['boom'], ARRAY['err:fbprobe'], 'fb-trace', jsonb_build_object('trace_id', 'fb-trace')) |]
-            (testPid, addUTCTime (-70) frozenTime, addUTCTime (-70) frozenTime)
-        forM_ ([("fb-trace", "The cart button does nothing"), ("", "   ")] :: [(Text, Text)]) \(tid, msg) ->
-          void
-            $ PGS.execute
-              conn
-              [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, kind, name, summary, context___trace_id, attributes, context)
-                                       VALUES (gen_random_uuid(), ?, ?, ?, 'log', 'user.feedback', ARRAY['feedback'], NULLIF(?, ''),
-                                               jsonb_build_object('feedback', jsonb_build_object('message', ?::text, 'contact_email', 'ada@example.com'), 'user', jsonb_build_object('name', 'Ada'), 'url', jsonb_build_object('full', 'https://shop.example.com/cart')),
-                                               jsonb_build_object('trace_id', NULLIF(?, ''))) |]
-              (testPid, addUTCTime (-60) frozenTime, addUTCTime (-60) frozenTime, tid, msg, tid)
+      apiKey <- createTestAPIKey tr testPid "feedback-key"
+      let tid = "fb000000000000000000000000000001"
+          feedback trId msg = ingestSpanLinked tr apiKey trId trId Nothing "user.feedback" [("feedback.message", msg), ("feedback.contact_email", "ada@example.com"), ("user.name", "Ada"), ("url.full", "https://shop.example.com/cart")] (addUTCTime (-60) frozenTime)
+      ingestSpanReq tr . withTraceId tid =<< createOtelTraceWithExceptionAtTime apiKey ([], [], []) "POST /cart" "CartError" "boom" "CartError: boom\n    at add (/app/src/cart.js:1:1)" (addUTCTime (-70) frozenTime)
+      feedback tid "The cart button does nothing"
+      feedback "fb000000000000000000000000000002" "   "
+      let detect = runTestBg frozenTime tr (BackgroundJobs.detectFeedback testPid) >> issuesOfType tr Issues.Feedback
+      void $ eventually detect (not . null)
       -- A second pass over the same window must not duplicate the submission.
-      replicateM_ 2 $ runTestBg frozenTime tr $ BackgroundJobs.detectFeedback testPid
-      rows <- issuesOfType tr Issues.Feedback
+      rows <- detect
       map snd rows `shouldBe` ["Feedback: The cart button does nothing"]
       [(iid, _)] <- pure rows
-      issuePage tr iid >>= (`shouldContainAll` ["The cart button does nothing", "Ada", "ada@example.com", "https://shop.example.com/cart", "/issues/by_hash/fbprobe", "Feedback"])
+      issuePage tr iid >>= (`shouldContainAll` ["The cart button does nothing", "Ada", "ada@example.com", "https://shop.example.com/cart", "/issues/by_hash/", "Feedback"])
       let list tab = renderPage . snd <$> testServant tr (IssuesPage.issueListGetH testPid (Just tab) Nothing Nothing Nothing Nothing Nothing (Just "24h") [] ["feedback"])
       list "Inbox" >>= (`shouldContainAll` ["The cart button does nothing", "bulk_actions/spam"])
       void $ testServant tr $ IssuesPage.issueBulkActionsPostH testPid IssuesPage.BASpam Nothing Nothing IssuesPage.IssueBulk{itemId = [iid.toText]}

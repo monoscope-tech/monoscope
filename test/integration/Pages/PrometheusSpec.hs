@@ -91,31 +91,26 @@ spec = around withTestResources do
       (dupH, _) <- testServant tr $ Monitors.cronMonitorPostH testPid (Monitors.CronForm "nightly-billing" "Again" 3600 300)
       reswapOf dupH `shouldBe` Just "none"
       [m] <- runQueryEffect tr (MonitorsM.cronMonitorsByProject testPid)
+      apiKey <- createTestAPIKey tr testPid "cron-key"
+      -- Check-ins go through ingestion (which also writes TimeFusion, read on CI) and every
+      -- evaluation is retried until the check-in it depends on is visible.
       let at dt = addUTCTime dt frozenTime
-          checkin status dt =
-            withResource tr.trPool \conn ->
-              void
-                $ PGS.execute
-                  conn
-                  [sql| INSERT INTO otel_logs_and_spans (id, project_id, timestamp, start_time, kind, name, summary, attributes)
-                        VALUES (gen_random_uuid(), ?, ?, ?, 'internal', 'cron.checkin', ARRAY['cron.checkin'], jsonb_build_object('monitor', jsonb_build_object('slug', 'nightly-billing', 'status', ?::text))) |]
-                  (testPid, at dt, at dt, status :: Text)
+          checkin status dt = ingestSessionEvent tr apiKey "cron.checkin" [("monitor.slug", "nightly-billing"), ("monitor.status", status)] False (at dt)
           evaluate dt = do
             fresh <- runQueryEffect tr (MonitorsM.cronMonitorsByProject testPid) >>= maybe (fail "monitor gone") pure . listToMaybe
             runTestBg (at dt) tr $ BackgroundJobs.evaluateCronMonitor (at dt) fresh
           issue sc = runQueryEffect tr (Issues.selectIssueByHash testPid (Issues.cronTargetHash (UUID.toText m.id)) sc)
+          evaluateUntil dt sc ok = eventually (evaluate dt >> issue sc) ok
       checkin "ok" 0
-      evaluate 60
+      void $ eventually (evaluate 60 >> (.lastCheckinAt) <<$>> runQueryEffect tr (MonitorsM.cronMonitorsByProject testPid)) (== [Just (at 0)])
       (isNothing <$> issue Issues.AnyIssue) `shouldReturn` True
-      evaluate (3600 + 300 + 120) -- past interval + grace with no newer check-in
-      missed <- issue Issues.AnyIssue >>= maybe (fail "no missed issue") pure
+      -- Past interval + grace with no newer check-in.
+      missed <- evaluateUntil (3600 + 300 + 120) Issues.AnyIssue isJust >>= maybe (fail "no missed issue") pure
       (missed.title, isNothing missed.archivedAt) `shouldBe` ("Cron missed: Nightly billing", True)
       checkin "ok" 4200
-      evaluate 4260
-      (fmap (isJust . (.archivedAt)) <$> issue Issues.AnyIssue) `shouldReturn` Just True
+      (fmap (isJust . (.archivedAt)) <$> evaluateUntil 4260 Issues.AnyIssue (any (isJust . (.archivedAt)))) `shouldReturn` Just True
       checkin "error" 8000
-      evaluate 8060
-      failed <- issue (Issues.OpenOfType Issues.Cron) >>= maybe (fail "no failed issue") pure
+      failed <- evaluateUntil 8060 (Issues.OpenOfType Issues.Cron) isJust >>= maybe (fail "no failed issue") pure
       failed.title `shouldBe` "Cron failed: Nightly billing"
 
     it "claims each due target once and leases it (multi-node safe), skipping disabled" \tr -> do
