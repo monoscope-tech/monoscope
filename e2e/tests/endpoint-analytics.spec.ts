@@ -81,7 +81,7 @@ test("variable dropdown opens inside the viewport", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto(`/p/${DEMO_PROJECT}/endpoints/details?var-host=browser.example&var-endpointHash=e2e-browser-endpoint`);
   await page.waitForURL(new RegExp(`/p/${DEMO_PROJECT}/dashboards/[0-9a-f-]+`, "i"));
-  await page.locator(".dash-variable .tagify").last().locator(".tagify__input").click();
+  await page.locator(".dash-variable .tagify").last().click();
   const dropdown = page.locator(".tagify__dropdown");
   await expect(dropdown.getByText("/e2e-browser/a/very/long", { exact: false })).toBeVisible();
   const box = (await dropdown.boundingBox())!;
