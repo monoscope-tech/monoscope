@@ -1,7 +1,17 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { DEMO_PROJECT, sql } from "./helpers";
 
 const clearSessions = `DELETE FROM projects.replay_sessions WHERE project_id = '${DEMO_PROJECT}' AND session_id::text LIKE 'ec2e0000-0000-4000-8000-%'`;
+
+const refreshSessionList = (page: Page) => page.evaluate(() => new Promise<void>(resolve => {
+  const settled = (event: Event) => {
+    if ((event.target as HTMLElement).id !== "rum-sessions-list") return;
+    document.removeEventListener("htmx:after:settle", settled);
+    resolve();
+  };
+  document.addEventListener("htmx:after:settle", settled);
+  window.dispatchEvent(new Event("update-query"));
+}));
 
 // scripts/e2e.sh supplies the isolated server URL; local browser probes use existing data.
 test.beforeAll(() => {
@@ -27,6 +37,21 @@ test("desktop session list keeps session identities readable", async ({ page }) 
     text.selectNodeContents(element);
     return text.getBoundingClientRect().width <= element.getBoundingClientRect().width;
   })).toBe(true);
+});
+
+test("live session refresh preserves keyboard focus and list scroll", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`/p/${DEMO_PROJECT}/rum?tab=sessions`);
+  const list = page.locator("#rum-sessions-list");
+  const session = list.locator(".rum-session-link").nth(50);
+  await session.scrollIntoViewIfNeeded();
+  await session.focus();
+  const sessionId = await session.getAttribute("data-session-id");
+  const scrollTop = await list.evaluate(element => element.scrollTop);
+  expect(scrollTop).toBeGreaterThan(0);
+  await refreshSessionList(page);
+  await expect(list.locator(`.rum-session-link[data-session-id="${sessionId}"]`)).toBeFocused();
+  expect(Math.abs(await list.evaluate(element => element.scrollTop) - scrollTop)).toBeLessThanOrEqual(1);
 });
 
 test("mobile session list keeps the replay workspace within reach", async ({ page }) => {
@@ -69,17 +94,15 @@ test("session search survives filter changes and keeps the replay workspace", as
     await expect(search).toHaveValue("e2e-missing-session");
     await expect(page.locator("#rum-session-filter")).toHaveValue(filter);
     await expect(workspace).toHaveAttribute("data-e2e-preserved", "true");
-    const previousList = await page.locator("#rum-sessions-list").elementHandle();
     const refresh = page.waitForResponse(r => {
       const url = new URL(r.url());
       return url.pathname.endsWith("/rum") && url.searchParams.get("panel") === "sessions"
         && r.request().headers()["hx-source"] === "div#rum-panel-sessions";
     });
-    await page.evaluate(() => window.dispatchEvent(new Event("update-query")));
+    await refreshSessionList(page);
     const refreshedUrl = new URL((await refresh).url());
     expect(refreshedUrl.searchParams.get("q")).toBe("e2e-missing-session");
     expect(refreshedUrl.searchParams.get("filter") ?? "").toBe(filter);
-    await expect.poll(() => previousList!.evaluate(element => element.isConnected)).toBe(false);
     await expect(filters.getByRole("link", { name: label, exact: true })).toHaveAttribute("aria-current", "page");
     await expect(page.getByText("No sessions match this filter", { exact: true })).toBeVisible();
     await expect(workspace).toHaveAttribute("data-e2e-preserved", "true");

@@ -939,7 +939,7 @@ slot_ page panel skeleton content
     -- panel would restart a replay the viewer just opened. Only the list is re-fetched
     -- there — a selection made while the refresh is in flight survives.
     swapAttrs url trigger extras =
-      [hxGet_ url, hxTrigger_ trigger, hxTarget_ refreshTarget, hxSelect_ refreshTarget, hxSwap_ "outerHTML"]
+      [hxGet_ url, hxTrigger_ trigger, hxTarget_ refreshTarget, hxSelect_ refreshTarget, hxSwap_ $ if sessionList then "outerMorph" else "outerHTML"]
         <> extras
         <> [term "hx-include" "#rum-session-search-form" | sessionList]
         <> [term "hx-preload" "false"]
@@ -972,7 +972,7 @@ sessionSearch_ page = form_
   , hxTrigger_ "input delay:300ms, submit"
   , hxTarget_ "#rum-sessions-list"
   , hxSelect_ "#rum-sessions-list"
-  , hxSwap_ "outerHTML"
+  , hxSwap_ "outerMorph"
   , term "hx-sync" "this:replace"
   , term "hx-vals" "{\"panel\":\"sessions\",\"deferred\":\"1\"}"
   , class_ "flex min-w-0 flex-[1_1_22rem] items-center gap-2"
@@ -1412,7 +1412,8 @@ sessionsTable_ workspace now links query sessionFilter selectedSession sessions 
                   div_ [class_ "flex items-center gap-1.5"] do
                     a_
                       ( sessionLinkAttrs session.id
-                          <> [ class_ "rum-session-link block truncate font-medium text-textStrong hover:text-textBrand aria-[current=true]:text-textBrand focus-visible:outline-none"
+                          <> [ id_ $ "rum-session-" <> toXXHash session.id
+                             , class_ "rum-session-link block truncate font-medium text-textStrong hover:text-textBrand aria-[current=true]:text-textBrand focus-visible:outline-none"
                              , data_ "session-id" session.id
                              , term "aria-current" $ bool "false" "true" (selectedSession == Just session.id)
                              , Aria.label_ $ bool "Open session for " "Watch replay for " session.hasReplay <> sessionIdentity session
@@ -1497,7 +1498,7 @@ sessionsTable_ workspace now links query sessionFilter selectedSession sessions 
                         , term "hx-vals" $ "{\"panel\":\"sessions\",\"deferred\":\"1\",\"filter\":\"" <> filterValue <> "\"}"
                         , hxTarget_ "#rum-sessions-list"
                         , hxSelect_ "#rum-sessions-list"
-                        , hxSwap_ "outerHTML"
+                        , hxSwap_ "outerMorph"
                         , hxPushUrl_ url
                         , term "hx-sync" "#rum-session-search-form:replace"
                         , data_ "filter" filterValue
