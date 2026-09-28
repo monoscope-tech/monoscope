@@ -255,26 +255,26 @@ spec = sequential $ aroundAll withTestResources do
       purgeRumCaches tr
       let sid = "00000000-0000-0000-0000-000000000046"
           environment = Just "cache-environment"
-          load env = do
-            (_, RUM.RumGet (PageCtx _ body)) <- testServant tr $ RUM.rumGetScopedH testPid (Just "sessions") (Just "Legacy replay") Nothing Nothing Nothing (Just "24H") (Just sid) Nothing (Just "sessions") (Just "1") Nothing env
+          load env refreshM = do
+            (_, RUM.RumGet (PageCtx _ body)) <- testServant tr $ RUM.rumGetScopedH testPid (Just "sessions") (Just "Legacy replay") Nothing Nothing Nothing (Just "24H") (Just sid) Nothing (Just "sessions") (Just "1") refreshM env
             case body of
               DeferredBody loaded -> pure loaded
               DeferredShell{} -> fail "expected the sessions panel"
           legacyKey query = toXXHash $ show $ RUMData.RumCacheKey testPid query environment Nothing Nothing Nothing (Just "24H")
       withResource tr.trPool $ \conn ->
         void $ PG.execute conn "INSERT INTO projects.replay_sessions (session_id, project_id, created_at, last_event_at, event_file_count, user_name) VALUES (?::uuid, ?, ?, ?, 1, 'Legacy replay')" (sid, testPid, frozenTime, addUTCTime 60 frozenTime)
-      legacy <- load Nothing
+      legacy <- load Nothing Nothing
       map (.id) legacy.sessions `shouldBe` [sid]
       runQueryEffect tr do
         RUMData.rumPanelCacheSet (legacyKey $ RUMData.SessionSearchQuery (Just "Legacy replay") RUMData.AllSessionRows) 300 (RUMData.SessionsResult legacy.sessions)
         RUMData.rumPanelCacheSet (legacyKey $ RUMData.SessionDetailQuery sid) 300 (RUMData.SessionDetailResult legacy.selectedSessionData)
       Cache.purge tr.trATCtx.rumCache
-      scoped <- load environment
+      scoped <- load environment Nothing
       scoped.sessions `shouldBe` []
       scoped.selectedSessionData `shouldBe` Nothing
       apiKey <- createTestAPIKey tr testPid "rum-environment-cache-key"
       ingestSpanReq tr $ mkSpanRequest "83000000000000000000000000000008" "8300000000000001" Nothing "documentLoad" [] Nothing [mkAttr "session.id" sid] (mkResource apiKey [mkAttr "service.name" "legacy-browser", mkAttr "telemetry.sdk.language" "webjs", mkAttr "deployment.environment.name" "cache-environment"]) frozenTime
-      attributed <- load environment
+      attributed <- load environment (Just "1")
       map (.events) attributed.sessions `shouldBe` [1]
       map (.hasReplay) attributed.sessions `shouldBe` [True]
       (.hasReplay) <$> attributed.selectedSessionData `shouldBe` Just True
@@ -389,6 +389,63 @@ spec = sequential $ aroundAll withTestResources do
               map (T.isInfixOf "/cart") responses `shouldBe` [True, True]
               writes <- withResource tr.trPool $ \cacheConn -> PG.query_ cacheConn "SELECT last_value, is_called FROM rum_flight_writes" :: IO [(Int64, Bool)]
               writes `shouldBe` [(1, True)]
+
+    it "emptySessionSearch_isBrieflyShared_andRefreshOrExpiryShowsNewTelemetry" \tr -> do
+      purgeRumCaches tr
+      let alter sql = withResource tr.trPool $ \conn -> void $ PG.execute_ conn sql
+          load query refreshM = do
+            (_, RUM.RumGet (PageCtx _ body)) <- testServant tr $ RUM.rumGetH testPid (Just "sessions") (Just query) Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "sessions") (Just "1") refreshM
+            case body of
+              DeferredBody page -> map (.id) page.sessions <$ (page.degradedPanels `shouldBe` [])
+              DeferredShell{} -> fail "expected session search results"
+          refreshSearch = "session-negative-refresh"
+          expirySearch = "session-negative-expiry"
+      E.bracket_
+        (alter "CREATE SEQUENCE rum_search_writes; CREATE FUNCTION count_rum_search_write() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM nextval('rum_search_writes'); RETURN NEW; END $$; CREATE TRIGGER count_rum_search_write BEFORE INSERT ON rum_panel_cache FOR EACH ROW EXECUTE FUNCTION count_rum_search_write()")
+        (alter "DROP TRIGGER count_rum_search_write ON rum_panel_cache; DROP FUNCTION count_rum_search_write(); DROP SEQUENCE rum_search_writes")
+        do
+          load refreshSearch Nothing `shouldReturn` []
+          -- A fresh replica must reuse the empty result without scanning telemetry.
+          observed <- withResource tr.trPool \conn ->
+            E.bracket_
+              (void $ PG.execute_ conn "BEGIN; LOCK TABLE otel_logs_and_spans IN ACCESS EXCLUSIVE MODE")
+              (void $ PG.execute_ conn "ROLLBACK")
+              $ withAsync (do memory <- load refreshSearch Nothing; Cache.purge tr.trATCtx.rumCache; shared <- load refreshSearch Nothing; pure (memory, shared)) \request -> do
+                result <- E.finally (timeout 2000000 $ wait request) (void $ PG.execute_ conn "ROLLBACK")
+                void $ wait request
+                pure result
+          observed `shouldBe` Just ([], [])
+          writes <- withResource tr.trPool $ \conn -> PG.query_ conn "SELECT last_value, is_called FROM rum_search_writes" :: IO [(Int64, Bool)]
+          writes `shouldBe` [(1, True)]
+          -- Older replicas promote this namespace with the full positive TTL.
+          let oldKey = toXXHash $ show (RUMData.RumCacheKey testPid (RUMData.SessionSearchQuery (Just refreshSearch) RUMData.AllSessionRows) Nothing Nothing Nothing Nothing (Just "24H")) <> ":attributed-recordings-v2"
+          [PG.Only oldEntries] <- withResource tr.trPool $ \conn -> PG.query conn "SELECT count(*)::bigint FROM rum_panel_cache WHERE cache_key = ?" (PG.Only oldKey)
+          oldEntries `shouldBe` (0 :: Int64)
+          [PG.Only shortExpiry] <- withResource tr.trPool $ \conn -> PG.query_ conn "SELECT expires_at > now() AND expires_at <= now() + interval '30 seconds' FROM rum_panel_cache"
+          shortExpiry `shouldBe` True
+          purgeRumCaches tr
+          load refreshSearch Nothing `shouldReturn` []
+          apiKey <- createTestAPIKey tr testPid "rum-negative-search-key"
+          otelBrowserSpan apiKey "85000000000000000000000000000008" "8500000000000001" refreshSearch "negative-search-browser" tr
+          load refreshSearch (Just "1") `shouldReturn` [refreshSearch]
+          [PG.Only positiveExpiry] <- withResource tr.trPool $ \conn -> PG.query_ conn "SELECT expires_at > now() + interval '4 minutes' FROM rum_panel_cache"
+          positiveExpiry `shouldBe` True
+          load expirySearch Nothing `shouldReturn` []
+          otelBrowserSpan apiKey "86000000000000000000000000000008" "8600000000000001" expirySearch "negative-search-browser" tr
+          Cache.purge tr.trATCtx.rumCache
+          alter "UPDATE rum_panel_cache SET expires_at = now() - interval '1 minute'"
+          load expirySearch Nothing `shouldReturn` [expirySearch]
+
+    it "emptySessionList_withoutSearch_doesNotHideNewSdkTelemetry" \tr -> do
+      purgeRumCaches tr
+      let service = "negative-cache-onboarding"
+          fetch = renderPanel tr (Just "sessions") Nothing Nothing Nothing (Just service) (Just "sessions")
+      forM_ ([Nothing, Just " \t "] :: [Maybe Text]) $ \query -> void $ renderPanel tr (Just "sessions") query Nothing Nothing (Just service) (Just "sessions")
+      [PG.Only entries] <- withResource tr.trPool $ \conn -> PG.query_ conn "SELECT count(*)::bigint FROM rum_panel_cache"
+      entries `shouldBe` (0 :: Int64)
+      apiKey <- createTestAPIKey tr testPid "rum-negative-onboarding-key"
+      otelBrowserSpan apiKey "87000000000000000000000000000008" "8700000000000001" "session-first-sdk-arrival" service tr
+      fetch >>= (`shouldContainAll` ["session-first-sdk-arrival", "/cart"])
 
     it "panelCache_isSharedAcrossReplicas_notPerProcessMemory" \tr -> do
       -- A fresh replica has an empty memory cache; the shared rum_panel_cache table must

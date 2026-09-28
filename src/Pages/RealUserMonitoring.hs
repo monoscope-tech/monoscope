@@ -697,19 +697,8 @@ instance ToHtml RumGet where
   toHtmlRaw = toHtml
 
 
--- Empty panels are not cached: browser telemetry can arrive immediately after SDK setup, and
--- pinning an empty first visit would hide it until expiry.
-cacheableRumResult :: RumQueryResult -> Bool
-cacheableRumResult = \case
-  PresenceResult present -> present
-  PagesResult rows -> not $ null rows
-  ErrorsResult rows -> not $ null rows
-  SessionsResult rows -> not $ null rows
-  ReplaySessionsResult rows -> not $ null rows
-  SessionDetailResult row -> isJust row
-  VitalSamplesResult rows -> not $ null rows
-  VitalsDetailResult trend byPage -> not (null trend) || not (null byPage)
-  BreakdownResult rows -> not $ null rows
+data RumCachePolicy = SkipCache | CachePopulated | CacheEmptySearch
+  deriving stock (Eq)
 
 
 -- | Every RUM panel is a separate scan of a 24-hour window, and a tab click re-runs all of
@@ -798,38 +787,61 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
       -- Concurrent requests share lookup, computation and publication within a replica.
       -- Completed entries are shared across replicas through rum_panel_cache.
       --
-      -- The shared layer also serves STALE entries (past expiry, inside the prune horizon):
+      -- The shared layer also serves STALE populated entries (past expiry, inside the prune horizon):
       -- an expired panel answers instantly with its last-known data and the page re-fetches
       -- itself with @refresh@, which bypasses the stale band and recomputes. First paint
       -- stops waiting on a cold scan after the very first visit. Stale payloads are never
       -- copied into the memory cache — its TTL would re-classify them as fresh and suppress
       -- the revalidation they exist to trigger.
       --
-      -- A failed recompute falls back to the stale entry rather than blanking the panel:
+      -- A failed recompute falls back to populated stale data rather than blanking the panel:
       -- last-known data plus no revalidation trigger, so the page neither lies forever nor
       -- collapses to zero states while the store is down. A payload from an older code
       -- shape fails to decode; that is a cache miss, not an error.
       runQuery (label, key, ttl, action) = withRunInIO \unlift -> fmap snd $ QueryCache.coalesceQuery appCtx.rumQueryFlights (key, refresh) $ unlift do
+        -- First SDK visits remain uncached; an explicit missing search gets a brief fresh-only hit.
+        let policy result
+              | SessionSearchQuery (Just _) _ <- key.query, SessionsResult [] <- result = CacheEmptySearch
+              | populated = CachePopulated
+              | otherwise = SkipCache
+              where
+                populated = case result of
+                  PresenceResult present -> present
+                  PagesResult rows -> not $ null rows
+                  ErrorsResult rows -> not $ null rows
+                  SessionsResult rows -> not $ null rows
+                  ReplaySessionsResult rows -> not $ null rows
+                  SessionDetailResult row -> isJust row
+                  VitalSamplesResult rows -> not $ null rows
+                  VitalsDetailResult trend byPage -> not (null trend) || not (null byPage)
+                  BreakdownResult rows -> not $ null rows
+            usable (value, stale) = policy value /= CacheEmptySearch || not (stale || refresh)
         l1 <- liftIO $ Cache.lookup appCtx.rumCache key
         case l1 of
-          Just hit -> pure $ Right (hit, False)
-          Nothing -> do
+          Just hit | usable (hit, False) -> pure $ Right (hit, False)
+          _ -> do
             let dbKey =
                   toXXHash $ show key <> case key.query of
+                    -- Older replicas would promote brief empty hits with the full positive TTL.
+                    SessionSearchQuery (Just _) _ -> ":attributed-recordings-v2:negative-search-v1"
                     SessionSearchQuery{} -> ":attributed-recordings-v2"
                     SessionDetailQuery{} -> ":attributed-recordings-v2"
                     _ -> ""
-            staleEntryM <- fromRight Nothing <$> tryAny (rumPanelCacheGetStale dbKey)
+            staleEntryM <- mfilter usable . fromRight Nothing <$> tryAny (rumPanelCacheGetStale dbKey)
             outcome <-
               tryAny
                 ( case staleEntryM of
-                    Just (shared, False) -> (shared, False) <$ liftIO (Cache.insert' appCtx.rumCache (Just ttl) key shared)
+                    Just (shared, False) -> do
+                      -- Shared empty searches keep their database expiry rather than extend it in L1.
+                      when (policy shared /= CacheEmptySearch) $ liftIO $ Cache.insert' appCtx.rumCache (Just ttl) key shared
+                      pure (shared, False)
                     Just (shared, True) | not refresh -> pure (shared, True)
                     _ -> do
                       fresh <- action
-                      when (cacheableRumResult fresh) do
-                        liftIO $ Cache.insert' appCtx.rumCache (Just ttl) key fresh
-                        either (\err -> Log.logAttention "RUM panel cache write failed" (label, displayException err)) pure =<< tryAny (rumPanelCacheSet dbKey ttl.sec fresh)
+                      when (policy fresh /= SkipCache) do
+                        let lifetime = if policy fresh == CacheEmptySearch then min ttl (TimeSpec 30 0) else ttl
+                        liftIO $ Cache.insert' appCtx.rumCache (Just lifetime) key fresh
+                        either (\err -> Log.logAttention "RUM panel cache write failed" (label, displayException err)) pure =<< tryAny (rumPanelCacheSet dbKey lifetime.sec fresh)
                       pure (fresh, False)
                 )
             case outcome of
