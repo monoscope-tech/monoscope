@@ -427,6 +427,7 @@ spec = sequential $ aroundAll withTestResources do
           load refreshSearch Nothing `shouldReturn` []
           apiKey <- createTestAPIKey tr testPid "rum-negative-search-key"
           otelBrowserSpan apiKey "85000000000000000000000000000008" "8500000000000001" refreshSearch "negative-search-browser" tr
+          load refreshSearch Nothing `shouldReturn` []
           load refreshSearch (Just "1") `shouldReturn` [refreshSearch]
           [PG.Only positiveExpiry] <- withResource tr.trPool $ \conn -> PG.query_ conn "SELECT expires_at > now() + interval '4 minutes' FROM rum_panel_cache"
           positiveExpiry `shouldBe` True
