@@ -446,6 +446,8 @@ data AuthContext = AuthContext
   -- ^ One expensive metrics pivot feeds every infrastructure tab and detail drawer.
   , rumCache :: Cache RUM.RumCacheKey RUM.RumQueryResult
   -- ^ Briefly reuses RUM panel reads across tab navigation and preloaded requests.
+  , rumQueryFlights :: QueryCache.QueryFlights (RUM.RumCacheKey, Bool) (Either Text (RUM.RumQueryResult, Bool))
+  -- ^ Shares panel requests within a replica; stale reads and forced refreshes remain separate.
   , codeBlobCache :: Cache CodeBlobKey ByteString
   -- ^ Source blobs for stack-trace code context, keyed @(owner, repo, ref, path)@. One git-host
   -- API call per frame opened otherwise, and a hot issue viewed repeatedly re-fetches every
@@ -568,6 +570,7 @@ configToEnv config = do
   -- window, so every entry expired before the next request could reach it and the cache
   -- never hit. Matches the other telemetry stat caches above.
   rumCache <- liftIO $ newCache (Just $ TimeSpec 300 0)
+  rumQueryFlights <- liftIO QueryCache.newQueryFlights
   -- 15 min: a mutable ref (a branch name) must not pin a stale blob for long, and the value
   -- here is collapsing the burst of frames opened while reading ONE issue, not long-term
   -- storage. A commit-sha ref is immutable and would tolerate far longer, but the key cannot
@@ -631,6 +634,7 @@ configToEnv config = do
       , rawQueryFlights
       , infrastructureCache
       , rumCache
+      , rumQueryFlights
       , codeBlobCache
       , repoListCache
       , extractionWorker

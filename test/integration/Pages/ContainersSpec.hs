@@ -3,19 +3,23 @@
 -- handler renders them the way Datadog's Containers Explorer would — one table, both runtimes.
 module Pages.ContainersSpec (spec) where
 
+import Data.Aeson qualified as AE
 import Data.Cache qualified as Cache
 import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as LT
-import Data.Time (addUTCTime)
+import Data.Time (NominalDiffTime, addUTCTime)
 import Data.Vector qualified as V
 import Lucid qualified
 import Models.Telemetry.Containers (ContainerRow (..), ContainerSnapshotKey, Runtime (..), Scope (..), containersInWindow, cpuPctOfLimit, memPctOfLimit, runtimeOf)
+import Network.HTTP.Types.URI (parseQueryText)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
+import Pages.Charts.Charts qualified as Charts
 import Pages.Components (Deferred (..))
 import Pages.Containers qualified as Containers
 import Pages.Infrastructure qualified as Infrastructure
 import Pkg.Components.Table (Table (..))
+import Pkg.Components.Widget qualified as Widget
 import Pkg.Icons qualified as Icons
 import Pkg.TestUtils
 import Proto.Opentelemetry.Proto.Common.V1.Common qualified as PC
@@ -23,6 +27,7 @@ import Relude
 import System.Config (AuthContext (..))
 import System.Types (ATAuthCtx, RespHeaders)
 import Test.Hspec
+import Utils (toUriStr)
 
 
 -- | The containers handler's facets, so a test names only the one it varies and a new
@@ -412,7 +417,7 @@ spec = sequential $ aroundAll withTestResources do
       (_, hostMap) <- testServant tr $ Infrastructure.hostMapGetH testPid (Just "storage") Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "1")
       let hostMapHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml hostMap
       hostMapHtml
-        `shouldContainAll` ["Host Map", "Fill by", "Group by", "vps-bare-01", "clip-path:polygon", "bg-fillNeutral-strong", "onchange=\"this.form.requestSubmit()\""]
+        `shouldContainAll` ["Host Map", "Fill by", "Group by", "vps-bare-01", "clip-path:polygon", "bg-fillNeutral-strong", "onchange=\"this.form.requestSubmit()\"", "name=\"os\""]
       hostMapHtml `shouldNotSatisfy` T.isInfixOf ">Apply</button>"
 
       (_, hostDetail) <- testServant tr $ Infrastructure.hostDetailGetH testPid (Just "vps-bare-01") Nothing Nothing Nothing
@@ -425,7 +430,7 @@ spec = sequential $ aroundAll withTestResources do
                            , "id=\"host-logs\""
                            , "<log-list"
                            , "initialFetchUrl=\"/p/00000000-0000-0000-0000-000000000000/log_explorer/data?"
-                           , "resource.host.name%3D%3D%22vps-bare-01%22"
+                           , toUriStr "coalesce(resource.k8s.node.name, resource.host.name)==\"vps-bare-01\""
                            , "View in Metrics"
                            , "Metrics coverage: 2 of 4"
                            ]
@@ -437,6 +442,51 @@ spec = sequential $ aroundAll withTestResources do
       (_, kubeDetail) <- testServant tr $ Infrastructure.kubernetesDetailGetH testPid (Just "pods") (Just "checkout-7fb5b4f859-nlcjs") (Just "otel-demo") (Just "default") Nothing Nothing Nothing
       LT.toStrict (Lucid.renderText $ Lucid.toHtml kubeDetail)
         `shouldContainAll` ["Pod summary", "CPU / limit", "View containers", "View logs", "View metrics"]
+
+    it "hostCpuChart_normalizesAcrossLogicalCoresAndRepeatedSamples" \tr -> do
+      key <- createTestAPIKey tr testPid "host-cpu-chart"
+      forM_ ([-60, -120] :: [NominalDiffTime]) \offset ->
+        forM_ (["cpu0", "cpu1", "cpu2", "cpu3"] :: [Text]) \core ->
+          forM_ ([("idle", 0.875), ("user", 0.125)] :: [(Text, Double)]) \(mode, value) ->
+            ingestMetric tr key [mkAttr "host.name" "four-core-host"] [mkAttr "cpu.logical_number" core, mkAttr "cpu.mode" mode] "system.cpu.utilization" value (addUTCTime offset frozenTime)
+      forM_ ([("four-core-host", 12.5), ("vps-d6d7e318", 25)] :: [(Text, Double)]) \(host, expected) -> do
+        html <- shellHtml tr $ Infrastructure.hostDetailGetH testPid (Just host) Nothing Nothing (Just "2H")
+        let payload = T.replace "&quot;" "\"" $ T.takeWhile (/= '"') $ T.drop (T.length "data-widget=\"") $ snd $ T.breakOn "data-widget=\"" html
+        widget <- either fail pure $ AE.eitherDecodeStrict' @Widget.Widget $ encodeUtf8 payload
+        widget.id `shouldBe` Just "host-cpu"
+        query <- maybe (fail "host CPU widget has no query") pure widget.query
+        response <- runQueryEffect tr $ Charts.queryMetrics (Just "postgres") (Just Charts.DTMetric) (Just testPid) (Just query) Nothing Nothing (Just "2024-12-31T23:55:00Z") (Just "2025-01-01T00:01:00Z") (Just "metrics") Nothing []
+        response.error `shouldBe` Nothing
+        let values = V.toList $ V.mapMaybe ((V.!? 1) >=> id) response.dataset
+        values `shouldSatisfy` (not . null)
+        values `shouldSatisfy` all (\value -> abs (value - expected) < 0.001)
+
+    it "infrastructureDrawer_drilldownsKeepTheSelectedTimeWindow" \tr -> do
+      hostHtml <- shellHtml tr $ Infrastructure.hostDetailGetH testPid (Just "vps-bare-01") Nothing Nothing (Just "24H")
+      hostHtml `shouldContainAll` ["/infrastructure/containers?since=24H&amp;node=vps-bare-01", "/metrics?since=24H&amp;metric_prefix=system.", "/log_explorer?since=24H&amp;query=", "/log_explorer/data?since=24H&amp;query="]
+      hostHtml `shouldNotSatisfy` T.isInfixOf "since=15M"
+      historicalHost <- shellHtml tr $ Infrastructure.hostDetailGetH testPid (Just "vps-bare-01") (Just "2024-12-31T23:00:00Z") (Just "2025-01-01T00:00:00Z") Nothing
+      historicalHost `shouldContainAll` ["/infrastructure/containers?from=2024-12-31T23%3A00%3A00Z&amp;to=2025-01-01T00%3A00%3A00Z&amp;node=vps-bare-01"]
+      imageHtml <- shellHtml tr $ Infrastructure.imageDetailGetH testPid (Just "ghcr.io/open-telemetry/demo") Nothing Nothing (Just "24H")
+      imageHtml `shouldContainAll` ["/infrastructure/containers?since=24H&amp;image=", "/metrics?since=24H&amp;metric_prefix=container."]
+      kubeHtml <- shellHtml tr $ Infrastructure.kubernetesDetailGetH testPid (Just "pods") (Just "checkout-7fb5b4f859-nlcjs") (Just "otel-demo") (Just "default") Nothing Nothing (Just "24H")
+      kubeHtml `shouldContainAll` ["/infrastructure/containers?since=24H&amp;namespace=default", "/log_explorer?since=24H&amp;query=", "/metrics?since=24H&amp;metric_prefix=k8s."]
+
+    it "kubernetesLogsDrilldown_preservesNamespaceClusterAndUidFallback" \tr -> do
+      key <- createTestAPIKey tr testPid "kubernetes-scoped-logs"
+      let otherCluster = "8b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+      forM_ (zip ([1 ..] :: [Int]) [("scope-a", clusterUid), ("scope-b", clusterUid), ("scope-a", otherCluster)]) \(index, (namespace, cluster)) -> do
+        let resource = [mkAttr "k8s.pod.name" "same-pod", mkAttr "k8s.container.name" ("scope-" <> show index), mkAttr "k8s.namespace.name" namespace, mkAttr "k8s.cluster.uid" cluster]
+            timestamp = addUTCTime (-60) frozenTime
+        ingestMetric tr key resource [] "container.cpu.usage" 0.5 timestamp
+        ingestSpanReq tr $ mkSpanRequest (T.justifyRight 32 '0' $ show index) (T.justifyRight 16 '0' $ show index) Nothing "kubernetes event" [] Nothing [] (mkResource key resource) timestamp
+      forM_ ([("clusters", clusterUid, Nothing, 2), ("pods", "same-pod", Just "scope-a", 1)] :: [(Text, Text, Maybe Text, Double)]) \(resource, name, namespace, expected) -> do
+        html <- shellHtml tr $ Infrastructure.kubernetesDetailGetH testPid (Just resource) (Just name) (Just clusterUid) namespace Nothing Nothing (Just "3H")
+        let params = parseQueryText $ encodeUtf8 $ T.replace "&amp;" "&" $ T.takeWhile (/= '"') $ T.drop (T.length "/log_explorer") $ snd $ T.breakOn "/log_explorer?" html
+        query <- maybe (fail "Kubernetes drawer has no log query") pure $ join $ lookup "query" params
+        response <- runQueryEffect tr $ Charts.queryMetrics (Just "postgres") (Just Charts.DTFloat) (Just testPid) (Just $ query <> " | summarize count()") Nothing (join $ lookup "since" params) Nothing Nothing (Just "spans") Nothing []
+        response.error `shouldBe` Nothing
+        response.dataFloat `shouldBe` Just expected
 
     it "firstRequest_rendersChromeAndASelfFetchingSkeleton_notRows" \tr -> do
       -- Every infrastructure view is one multi-second metrics pivot. The request that paints

@@ -802,6 +802,7 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
   rawQueryFlights <- QueryCache.newRawQueryFlights
   infrastructureCache <- newCache (Just $ TimeSpec 15 0)
   rumCache <- newCache (Just $ TimeSpec 15 0)
+  rumQueryFlights <- QueryCache.newQueryFlights
   codeBlobCache <- newCache (Just $ TimeSpec (15 * 60) 0)
   repoListCache <- newCache (Just $ TimeSpec (10 * 60) 0)
   tp <- getGlobalTracerProvider
@@ -881,6 +882,7 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
           rawQueryFlights
           infrastructureCache
           rumCache
+          rumQueryFlights
           codeBlobCache
           repoListCache
           projectKeyCache

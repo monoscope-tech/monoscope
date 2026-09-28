@@ -715,13 +715,14 @@ export class SessionReplay extends LitElement {
 
   protected firstUpdated(_changedProperties: PropertyValues): void {
     this.makeDraggable();
-    // Open the console panel by default when consoleOpen attr is set and the user hasn't saved a width yet.
-    if (this.consoleOpen && localStorage.getItem('replay-activity-width') === null && this.activityWidth === 0) {
-      this.activityWidth = 300;
-    }
     // fullWidth: stretch to host element's available width (issue page) instead of the inner container's
     // default min-w. Without this the player stays at min-w-[640px] regardless of available space.
     const hostWidth = this.fullWidth ? this.getBoundingClientRect().width : 0;
+    // Preserve the recording on narrow hosts, including when desktop saved a wide console.
+    if (hostWidth > 0 && hostWidth < 640) this.activityWidth = 0;
+    else if (this.consoleOpen && localStorage.getItem('replay-activity-width') === null && this.activityWidth === 0) {
+      this.activityWidth = 300;
+    }
     const mContainer = hostWidth > 0 ? hostWidth : Number(getComputedStyle(this.replayerOuterContainer).width.replace('px', ''));
     this.containerWidth = mContainer - this.activityWidth;
     // initialSession (share/anomaly pages) renders inline; a ?session_replay= deep

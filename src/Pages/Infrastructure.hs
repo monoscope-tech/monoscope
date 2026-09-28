@@ -39,7 +39,7 @@ import Relude
 import Relude.Extra.Tuple (dup)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (drawerLoadAttrs_, drawerRowAttrs_, faSprite_, formatBytes, infrastructureNavTabs_, kqlQuoted, showFFloat', toUriStr)
+import Utils (drawerLoadAttrs_, drawerRowAttrs_, faSprite_, formatBytes, infrastructureNavTabs_, kqlQuoted, showFFloat')
 
 
 infraUrl :: Projects.ProjectId -> Text -> [(Text, Text)] -> TimePicker.TimeWindow -> Text
@@ -322,12 +322,12 @@ hostDetailGetH pid hostM fromParam toParam sinceParam = do
   window <- mkWindow fromParam toParam sinceParam
   hosts <- hostsFromRows <$> infraSnapshot pid window
   addRespHeaders
-    $ detailFrom def{icon = Just "server", action = ESLink "./hosts" "Return to Hosts"} "Host not found in this time range" "Monoscope did not find this host in the current telemetry window. Return to Hosts to choose another host or time range." (hostDetail_ pid)
+    $ detailFrom def{icon = Just "server", action = ESLink (infraUrl pid "/infrastructure/hosts" [] window) "Return to Hosts"} "Host not found in this time range" "Monoscope did not find this host in the current telemetry window. Return to Hosts to choose another host or time range." (hostDetail_ pid window)
     $ V.find ((== hostM) . Just . (.name)) hosts
 
 
-hostDetail_ :: Projects.ProjectId -> HostRow -> Html ()
-hostDetail_ pid host = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
+hostDetail_ :: Projects.ProjectId -> TimePicker.TimeWindow -> HostRow -> Html ()
+hostDetail_ pid window host = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
   header_ [class_ "border-b border-strokeBrand-weak bg-fillBrand-weak px-5 py-4 pr-14"] do
     div_ [class_ "flex flex-wrap items-start justify-between gap-3"] do
       div_ [class_ "min-w-0"] do
@@ -400,26 +400,29 @@ hostDetail_ pid host = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
           , ("Containers", show host.containers)
           ]
     pct = maybe "—" pctText
-    query = "resource.host.name==" <> kqlQuoted host.name
-    path = "/p/" <> pid.toText
-    logExplorerUrl = path <> "/log_explorer?query=" <> toUriStr query <> "&since=15M&source=logs"
-    logDataUrl = path <> "/log_explorer/data?query=" <> toUriStr query <> "&since=15M&source=logs"
-    metricsUrl = path <> "/metrics?metric_prefix=system."
-    containersUrl = path <> "/infrastructure/containers?node=" <> toUriStr host.name
+    query = hostQuery host.name
+    logExplorerUrl = infraUrl pid "/log_explorer" [("query", query), ("source", "logs")] window
+    logDataUrl = infraUrl pid "/log_explorer/data" [("query", query), ("source", "logs")] window
+    metricsUrl = infraUrl pid "/metrics" [("metric_prefix", "system.")] window
+    containersUrl = infraUrl pid "/infrastructure/containers" [("node", host.name)] window
     sectionLink anchor icon label = a_ [href_ $ "#" <> anchor, class_ "flex items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1.5 text-sm text-textWeak hover:bg-fillBrand-weak hover:text-textBrand max-sm:min-h-11"] $ faSprite_ icon "regular" "h-3.5 w-3.5" >> toHtml label
 
 
 hostWidgets :: Projects.ProjectId -> HostRow -> [Widget.Widget]
 hostWidgets pid host =
   catMaybes
-    [ widget host.cpuPct "host-cpu" "CPU usage" "%" $ "metrics | where metric_name == \"system.cpu.utilization\" and resource.host.name == " <> quoted <> " and attributes.cpu.mode != \"idle\" | summarize sum(value) * 100 by bin_auto(timestamp)"
-    , widget host.memoryPct "host-memory" "Memory usage" "bytes" $ "metrics | where metric_name == \"system.memory.usage\" and resource.host.name == " <> quoted <> " and attributes.system.memory.state == \"used\" | summarize max(value) by bin_auto(timestamp)"
-    , widget host.storagePct "host-storage" "Max storage usage" "%" $ "metrics | where metric_name == \"system.filesystem.utilization\" and resource.host.name == " <> quoted <> " | summarize max(value) * 100 by bin_auto(timestamp)"
-    , widget host.load1 "host-load" "Load average (1m)" "" $ "metrics | where metric_name == \"system.cpu.load_average.1m\" and resource.host.name == " <> quoted <> " | summarize max(value) by bin_auto(timestamp)"
+    [ widget host.cpuPct "host-cpu" "CPU usage" "%" $ "metrics | where metric_name == \"system.cpu.utilization\" and " <> selector <> " and attributes.cpu.mode == \"idle\" | summarize 100 - avg(value) * 100 by bin_auto(timestamp)"
+    , widget host.memoryPct "host-memory" "Memory usage" "bytes" $ "metrics | where metric_name == \"system.memory.usage\" and " <> selector <> " and attributes.system.memory.state == \"used\" | summarize max(value) by bin_auto(timestamp)"
+    , widget host.storagePct "host-storage" "Max storage usage" "%" $ "metrics | where metric_name == \"system.filesystem.utilization\" and " <> selector <> " | summarize max(value) * 100 by bin_auto(timestamp)"
+    , widget host.load1 "host-load" "Load average (1m)" "" $ "metrics | where metric_name == \"system.cpu.load_average.1m\" and " <> selector <> " | summarize max(value) by bin_auto(timestamp)"
     ]
   where
-    quoted = kqlQuoted host.name
+    selector = hostQuery host.name
     widget signal ident title unit query = signal $> Widget.infraTimeseries pid ident title unit query
+
+
+hostQuery :: Text -> Text
+hostQuery name = "coalesce(resource.k8s.node.name, resource.host.name)==" <> kqlQuoted name
 
 
 data ImageRow = ImageRow
@@ -518,12 +521,12 @@ imageDetailGetH pid imageM fromParam toParam sinceParam = do
   window <- mkWindow fromParam toParam sinceParam
   images <- imagesFromRows <$> infraSnapshot pid window
   addRespHeaders
-    $ detailFrom def{icon = Just "layer-group", action = ESNone} "This image is no longer present in the selected time range." "" (imageDetail_ pid)
+    $ detailFrom def{icon = Just "layer-group", action = ESNone} "This image is no longer present in the selected time range." "" (imageDetail_ pid window)
     $ V.find ((== imageM) . Just . (.image)) images
 
 
-imageDetail_ :: Projects.ProjectId -> ImageRow -> Html ()
-imageDetail_ pid image = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
+imageDetail_ :: Projects.ProjectId -> TimePicker.TimeWindow -> ImageRow -> Html ()
+imageDetail_ pid window image = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
   header_ [class_ "border-b border-strokeWeak px-5 py-4 pr-14"] do
     div_ [class_ "flex items-center gap-2"] $ faSprite_ "layer-group" "solid" "h-4 w-4 text-iconNeutral" >> h2_ [class_ "break-words text-lg font-semibold text-textStrong"] (toHtml image.image)
     div_ [class_ "mt-2 flex flex-wrap gap-1.5"] do
@@ -547,8 +550,8 @@ imageDetail_ pid image = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
         faSprite_ "shield-check" "regular" "mt-0.5 h-4 w-4 shrink-0 text-iconInformation"
         "No SBOM or vulnerability findings are connected for this image. Monoscope will not infer a clean result from missing scanner data."
     div_ [class_ "flex flex-wrap gap-2 border-t border-strokeWeak pt-4"] do
-      a_ [href_ $ "/p/" <> pid.toText <> "/infrastructure/containers?image=" <> toUriStr image.image, class_ "btn btn-sm"] "View containers"
-      a_ [href_ $ "/p/" <> pid.toText <> "/metrics?metric_prefix=container.", class_ "btn btn-sm"] "View metrics"
+      a_ [href_ $ infraUrl pid "/infrastructure/containers" [("image", image.image)] window, class_ "btn btn-sm"] "View containers"
+      a_ [href_ $ infraUrl pid "/metrics" [("metric_prefix", "container.")] window, class_ "btn btn-sm"] "View metrics"
 
 
 -- | Constructor order is tab order: @[minBound ..]@ is what the resource tab strip renders,
@@ -722,12 +725,12 @@ kubernetesDetailGetH pid resourceM nameM clusterM namespaceM fromParam toParam s
   let resource = parseParam KubePods kubeResourceParam resourceM
   rows <- kubeRowsFromRows resource <$> infraSnapshot pid window
   addRespHeaders
-    $ detailFrom def{icon = Just "cube", action = ESNone} "This Kubernetes resource is no longer present in the selected time range." "" (kubernetesDetail_ pid resource)
+    $ detailFrom def{icon = Just "cube", action = ESNone} "This Kubernetes resource is no longer present in the selected time range." "" (kubernetesDetail_ pid window resource)
     $ V.find (\row -> Just row.name == nameM && matchesFilter clusterM row.cluster && matchesFilter namespaceM row.namespace) rows
 
 
-kubernetesDetail_ :: Projects.ProjectId -> KubeResource -> KubeRow -> Html ()
-kubernetesDetail_ pid resource row = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
+kubernetesDetail_ :: Projects.ProjectId -> TimePicker.TimeWindow -> KubeResource -> KubeRow -> Html ()
+kubernetesDetail_ pid window resource row = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
   header_ [class_ "border-b border-strokeWeak px-5 py-4 pr-14"] do
     div_ [class_ "flex flex-wrap items-center gap-2"] do
       faSprite_ (kubeIcon resource) "solid" "h-4 w-4 text-iconNeutral"
@@ -747,21 +750,26 @@ kubernetesDetail_ pid resource row = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
         ]
       when (isNothing row.cpuCores || isNothing row.memoryBytes) $ p_ [class_ "rounded-md bg-fillInformation-weak px-3 py-2 text-sm text-textWeak"] "Usage is incomplete in this time range. Enable the kubeletstats receiver's node, pod, and container metric groups to fill the missing signals."
     div_ [class_ "flex flex-wrap gap-2 border-t border-strokeWeak pt-4"] do
-      whenJust row.namespace $ \namespace -> a_ [href_ $ "/p/" <> pid.toText <> "/infrastructure/containers?namespace=" <> toUriStr namespace, class_ "btn btn-sm"] "View containers"
-      a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?query=" <> toUriStr kubeQuery, class_ "btn btn-sm"] "View logs"
-      a_ [href_ $ "/p/" <> pid.toText <> "/metrics?metric_prefix=k8s.", class_ "btn btn-sm"] "View metrics"
+      whenJust row.namespace $ \namespace -> a_ [href_ $ infraUrl pid "/infrastructure/containers" [("namespace", namespace)] window, class_ "btn btn-sm"] "View containers"
+      a_ [href_ $ infraUrl pid "/log_explorer" [("query", kubeQuery)] window, class_ "btn btn-sm"] "View logs"
+      a_ [href_ $ infraUrl pid "/metrics" [("metric_prefix", "k8s.")] window, class_ "btn btn-sm"] "View metrics"
   where
     metadata = [(label, value) | (label, Just value) <- [("Cluster", row.cluster), ("Namespace", row.namespace), ("Node", row.node), ("Workload", row.workload)]]
-    kubeQuery =
-      ( case resource of
-          KubePods -> "resource.k8s.pod.name"
-          KubeClusters -> "resource.k8s.cluster.name"
-          KubeNamespaces -> "resource.k8s.namespace.name"
-          KubeNodes -> "resource.k8s.node.name"
-          KubeWorkloads -> "coalesce(resource.k8s.deployment.name, resource.k8s.statefulset.name, resource.k8s.daemonset.name, resource.k8s.job.name, resource.k8s.cronjob.name)"
-      )
-        <> "=="
-        <> kqlQuoted row.name
+    kubeQuery = T.intercalate " and " [field <> "==" <> kqlQuoted value | (field, value) <- filters]
+    clusterField = "coalesce(resource.k8s.cluster.name, resource.k8s.cluster.uid)"
+    filters =
+      [
+        ( case resource of
+            KubePods -> "resource.k8s.pod.name"
+            KubeClusters -> clusterField
+            KubeNamespaces -> "resource.k8s.namespace.name"
+            KubeNodes -> "resource.k8s.node.name"
+            KubeWorkloads -> "coalesce(resource.k8s.deployment.name, resource.k8s.statefulset.name, resource.k8s.daemonset.name, resource.k8s.job.name, resource.k8s.cronjob.name)"
+        , row.name
+        )
+      ]
+        <> [(clusterField, cluster) | resource /= KubeClusters, cluster <- maybeToList row.cluster]
+        <> [("resource.k8s.namespace.name", namespace) | resource /= KubeNamespaces, namespace <- maybeToList row.namespace]
 
 
 data HostMapFill = FillCPU | FillMemory | FillStorage
@@ -826,13 +834,14 @@ hostMapSkeleton_ = div_ [class_ "flex min-h-full flex-col bg-bgBase", role_ "sta
 
 hostMap_ :: HostMapData -> Html ()
 hostMap_ page = div_ [id_ "hostMapContainer", class_ "flex min-h-full flex-col bg-bgBase"] do
-  form_ [method_ "get", action_ $ "/p/" <> page.pid.toText <> "/infrastructure/host-map", class_ "flex flex-wrap items-end gap-3 border-b border-strokeWeak bg-bgRaised px-4 py-3"] do
+  form_ [method_ "get", action_ $ "/p/" <> page.pid.toText <> "/infrastructure/host-map", class_ "flex flex-wrap items-end gap-3 border-b border-strokeWeak bg-bgRaised px-4 py-3 max-sm:grid max-sm:grid-cols-2"] do
     TimePicker.timeHiddenInputs_ page.window.fromQuery page.window.toQuery page.window.sinceQuery
     mapSelect "fill" "Fill by" (hostMapFillParam page.fill) (map hostMapFillOption [minBound ..])
     mapSelect "group" "Group by" (hostGroupParam page.grouping) (map hostGroupOption [minBound ..])
     mapSelect "provider" "Provider" (fromMaybe "" page.filters.provider) $ ("", "All") : map dup (facetValues (.provider) page.allHosts)
     mapSelect "region" "Region" (fromMaybe "" page.filters.region) $ ("", "All") : map dup (facetValues (.region) page.allHosts)
-    div_ [class_ "ml-auto flex flex-wrap items-center gap-3 text-xs text-textWeak", Aria.label_ "Utilization legend"] do
+    mapSelect "os" "Operating system" (fromMaybe "" page.filters.osType) $ ("", "All") : map dup (facetValues (.osType) page.allHosts)
+    div_ [class_ "ml-auto flex flex-wrap items-center gap-3 text-xs text-textWeak max-sm:col-span-2 max-sm:ml-0", Aria.label_ "Utilization legend"] do
       legend "bg-fillSuccess-strong" "Below 60%"
       legend "bg-fillWarning-strong" "60–85%"
       legend "bg-fillError-strong" "Above 85%"
@@ -854,7 +863,7 @@ hostMap_ page = div_ [id_ "hostMapContainer", class_ "flex min-h-full flex-col b
     mapSelect :: Text -> Text -> Text -> [(Text, Text)] -> Html ()
     mapSelect field label current options = label_ [class_ "flex flex-col gap-1 text-xs text-textWeak"] do
       toHtml label
-      select_ [name_ field, class_ "select select-sm min-w-44 border-strokeWeak bg-bgBase text-sm text-textStrong max-sm:h-11", onchange_ "this.form.requestSubmit()"] $ forM_ options \(value, title) -> option_ ([value_ value] <> [selected_ "" | value == current]) $ toHtml title
+      select_ [name_ field, class_ "select select-sm min-w-44 border-strokeWeak bg-bgBase text-sm text-textStrong max-sm:h-11 max-sm:min-w-0 max-sm:w-full", onchange_ "this.form.requestSubmit()"] $ forM_ options \(value, title) -> option_ ([value_ value] <> [selected_ "" | value == current]) $ toHtml title
     hostHex enlarged host = div_ [class_ $ "flex flex-col items-center gap-1 " <> bool "" "w-24" enlarged] do
       let value = case page.fill of FillCPU -> host.cpuPct; FillMemory -> host.memoryPct; FillStorage -> host.storagePct
       button_

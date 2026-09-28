@@ -116,6 +116,8 @@ live-test-reload-all:
 # (`..._con_info`) fails macOS flat-namespace resolution in dynLoadObjs — the
 # intermittent "symbol not found in flat namespace" relink flake. Forcing every
 # recompile to object code keeps the whole session single-mode, so it can't mix.
+# Keep those flags in repl-options so dependency interfaces retain their normal
+# profile for the concurrently running live-reload session.
 # Filter with: TEST_MATCH=Monitoring make live-test-dev
 # (hspec-discover node names drop the module's "Spec" suffix)
 # NB: GHCi's :main only strips quotes at token start, so `--match="X"` would
@@ -123,7 +125,7 @@ live-test-reload-all:
 TEST_MATCH ?=
 live-test-dev: build-chart-cli
 	USE_EXTERNAL_DB=true LOG_LEVEL=attention \
-	ghcid --command 'cabal repl monoscope:test:test-dev --no-semaphore --ghc-options="-j$(NCPUS) -fobject-code -osuf dyn_o -hisuf dyn_hi -O0" --with-compiler=$(GHC)' \
+	ghcid --command 'cabal repl monoscope:test:test-dev --no-semaphore --ghc-options="-j$(NCPUS) -O0" --repl-options="-fobject-code -osuf dyn_o -hisuf dyn_hi" --with-compiler=$(GHC)' \
 		--test ':main $(if $(TEST_MATCH),--match $(TEST_MATCH))' $(RELOAD_ENV) --warnings 2>&1 | tee build-test-dev.log
 
 hot-reload:

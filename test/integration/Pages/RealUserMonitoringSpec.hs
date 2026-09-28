@@ -1,5 +1,6 @@
 module Pages.RealUserMonitoringSpec (spec) where
 
+import Control.Concurrent (threadDelay)
 import Data.Cache qualified as Cache
 import Data.Pool (withResource)
 import Data.Text qualified as T
@@ -16,7 +17,11 @@ import Pages.RealUserMonitoring qualified as RUM
 import Pkg.TestUtils
 import Relude
 import System.Config (AuthContext (..))
+import System.Timeout (timeout)
 import Test.Hspec
+import UnliftIO.Async (wait, withAsync)
+import UnliftIO.Exception qualified as E
+import Utils (toXXHash)
 
 
 replayUuid :: UUID.UUID
@@ -96,12 +101,12 @@ spec = sequential $ aroundAll withTestResources do
   describe "Real User Monitoring" do
     it "emptyProject_explainsBrowserTelemetryAndOffersTheDashboard" \tr -> do
       (_, shell) <- testServant tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing Nothing Nothing
-      toStrict (Lucid.renderText $ Lucid.toHtml shell) `shouldContainAll` ["hx-trigger=\"load\"", "deferred=1", "skeleton-shimmer"]
+      toStrict (Lucid.renderText $ Lucid.toHtml shell) `shouldContainAll` ["hx-trigger=\"load\"", "deferred=1", "skeleton-shimmer", "tabs tabs-box tabs-outline"]
       -- The shell stands in for the tab it is loading, so switching tabs does not reflow.
       (_, sessionsShell) <- testServant tr $ RUM.rumGetH testPid (Just "sessions") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing Nothing Nothing
-      toStrict (Lucid.renderText $ Lucid.toHtml sessionsShell) `shouldContainAll` ["xl:grid-cols-[minmax(28rem,30%)_minmax(0,1fr)]", "skeleton-shimmer"]
+      toStrict (Lucid.renderText $ Lucid.toHtml sessionsShell) `shouldContainAll` ["Loading sessions", "skeleton-shimmer"]
       html <- renderPage tr Nothing Nothing Nothing Nothing
-      html `shouldContainAll` ["No browser telemetry yet", "Install the browser SDK", "Open RUM dashboard", "tabs tabs-box tabs-outline", "empty-state"]
+      html `shouldContainAll` ["No browser telemetry yet", "Install the browser SDK", "Open RUM dashboard", "empty-state"]
 
     it "browserTelemetry_correlatesExperienceVitalsErrorsAndReplaySessions" \tr -> do
       apiKey <- createTestAPIKey tr testPid "rum-browser-key"
@@ -159,6 +164,15 @@ spec = sequential $ aroundAll withTestResources do
       replaySessions <- renderPage tr (Just "sessions") Nothing (Just "replays") Nothing
       T.isInfixOf "No recording" replaySessions `shouldBe` False
       T.isInfixOf "Merged replay" replaySessions `shouldBe` True
+
+    it "deferredRUMPanel_omitsPageChrome_preservesPanelMarkup" \tr -> do
+      (_, page@(RUM.RumGet (PageCtx _ body))) <- testServant tr $ RUM.rumGetH testPid (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "pages") (Just "1") Nothing
+      let rendered = Lucid.renderText $ Lucid.toHtml page
+      (rendered == Lucid.renderText (Lucid.toHtml body)) `shouldBe` True
+      toStrict rendered `shouldContainAll` ["id=\"rum-page\"", "id=\"rum-panel-pages\"", "Top pages", "/checkout"]
+      T.isInfixOf "<html" (toStrict rendered) `shouldBe` False
+      (_, fullPage) <- testServant tr $ RUM.rumGetH testPid (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing (Just "1") Nothing
+      T.isInfixOf "<html" (toStrict $ Lucid.renderText $ Lucid.toHtml fullPage) `shouldBe` True
 
     it "panelLinks_carryKqlTheLogExplorerCanParse" \tr -> do
       -- windowUrl URI-encodes every parameter it is given, so a caller that encodes first
@@ -226,6 +240,41 @@ spec = sequential $ aroundAll withTestResources do
       -- unscoped.
       pulse.hasTelemetry `shouldBe` False
 
+      (_, RUM.RumGet (PageCtx _ sessionsBody)) <- testServant tr $ RUM.rumGetScopedH testPid (Just "sessions") Nothing Nothing Nothing Nothing (Just "24H") (Just sessionId) Nothing (Just "sessions") (Just "1") Nothing (Just "missing-environment")
+      case sessionsBody of
+        DeferredBody loaded -> do
+          loaded.sessions `shouldBe` []
+          loaded.selectedSessionData `shouldBe` Nothing
+        DeferredShell{} -> expectationFailure "expected the sessions panel"
+
+    it "environmentSessionCache_ignoresLegacyUnattributedRecordings" \tr -> do
+      purgeRumCaches tr
+      let sid = "00000000-0000-0000-0000-000000000046"
+          environment = Just "cache-environment"
+          load env = do
+            (_, RUM.RumGet (PageCtx _ body)) <- testServant tr $ RUM.rumGetScopedH testPid (Just "sessions") (Just "Legacy replay") Nothing Nothing Nothing (Just "24H") (Just sid) Nothing (Just "sessions") (Just "1") Nothing env
+            case body of
+              DeferredBody loaded -> pure loaded
+              DeferredShell{} -> fail "expected the sessions panel"
+          legacyKey query = toXXHash $ show $ RUMData.RumCacheKey testPid query environment Nothing Nothing Nothing (Just "24H")
+      withResource tr.trPool $ \conn ->
+        void $ PG.execute conn "INSERT INTO projects.replay_sessions (session_id, project_id, created_at, last_event_at, event_file_count, user_name) VALUES (?::uuid, ?, ?, ?, 1, 'Legacy replay')" (sid, testPid, frozenTime, addUTCTime 60 frozenTime)
+      legacy <- load Nothing
+      map (.id) legacy.sessions `shouldBe` [sid]
+      runQueryEffect tr do
+        RUMData.rumPanelCacheSet (legacyKey $ RUMData.SessionSearchQuery (Just "Legacy replay") RUMData.AllSessionRows) 300 (RUMData.SessionsResult legacy.sessions)
+        RUMData.rumPanelCacheSet (legacyKey $ RUMData.SessionDetailQuery sid) 300 (RUMData.SessionDetailResult legacy.selectedSessionData)
+      Cache.purge tr.trATCtx.rumCache
+      scoped <- load environment
+      scoped.sessions `shouldBe` []
+      scoped.selectedSessionData `shouldBe` Nothing
+      apiKey <- createTestAPIKey tr testPid "rum-environment-cache-key"
+      ingestSpanReq tr $ mkSpanRequest "83000000000000000000000000000008" "8300000000000001" Nothing "documentLoad" [] Nothing [mkAttr "session.id" sid] (mkResource apiKey [mkAttr "service.name" "legacy-browser", mkAttr "telemetry.sdk.language" "webjs", mkAttr "deployment.environment.name" "cache-environment"]) frozenTime
+      attributed <- load environment
+      map (.events) attributed.sessions `shouldBe` [1]
+      map (.hasReplay) attributed.sessions `shouldBe` [True]
+      (.hasReplay) <$> attributed.selectedSessionData `shouldBe` Just True
+
     it "browserSdkWithoutSdkLanguage_isStillSeenAndGloballyScopeable" \tr -> do
       -- The OpenTelemetry browser SDKs leave telemetry.sdk.language unset, and RUM used to
       -- filter on that alone. Every browser application in production was therefore invisible:
@@ -255,6 +304,20 @@ spec = sequential $ aroundAll withTestResources do
       T.isInfixOf "zzz-fonts.example" row `shouldBe` False
       T.isInfixOf "/alpha" row `shouldBe` False
 
+    it "selectedSession_withoutRecording_keepsIdentityAndTelemetryInWorkspace" \tr -> do
+      purgeRumCaches tr
+      apiKey <- createTestAPIKey tr testPid "rum-telemetry-workspace-key"
+      let sid = "session-without-recording"
+      browserSpanAt apiKey "84000000000000000000000000000008" "8400000000000001" [("url.path", "/profile"), ("user.full_name", "Telemetry visitor")] "documentLoad" sid Nothing "workspace-browser" (addUTCTime (-65) frozenTime) tr
+      browserSpan apiKey "84000000000000000000000000000008" "8400000000000002" [("exception.type", "TypeError"), ("exception.message", "Form failed")] "TypeError" sid (Just "8400000000000001") "workspace-browser" tr
+      html <- renderPanel tr (Just "sessions") (Just sid) Nothing (Just sid) Nothing (Just "sessions")
+      let workspace = fst $ T.breakOn "</section>" $ snd $ T.breakOn "<section id=\"rum-replay-workspace\"" html
+          headings = fst $ T.breakOn "</thead>" $ snd $ T.breakOn "<thead" html
+      workspace `shouldContainAll` ["Telemetry visitor", sid, "Duration", "1m 5s", "Page views", "Events", "Errors", "/profile", "workspace-browser", "No recording for this session", "Inspect telemetry"]
+      T.isInfixOf ">2</dd>" workspace `shouldBe` True
+      headings `shouldContainAll` ["Last page"]
+      T.isInfixOf "Landing page" headings `shouldBe` False
+
     it "replayOnlySessions_sayWhatTheyAre_insteadOfUnknownPageAndZeroCounts" \tr -> do
       -- A recording whose session id never appears on a span is a real session; stacking
       -- "Unknown page" over "0 views · 0 events" reads as broken data, not as what it is.
@@ -279,6 +342,49 @@ spec = sequential $ aroundAll withTestResources do
       panel `shouldSatisfy` T.isInfixOf "tab=sessions"
       -- Grouped, not listed: the message renders once for the pair.
       T.count "Cannot read cart item" panel `shouldBe` 1
+
+    it "panelCache_writeFailure_preservesFreshTelemetry" \tr -> do
+      purgeRumCaches tr
+      apiKey <- createTestAPIKey tr testPid "rum-cache-write-key"
+      otelBrowserSpan apiKey "81000000000000000000000000000008" "8100000000000001" "session-cache-write" "cache-write-browser" tr
+      let alter sql = withResource tr.trPool $ \conn -> void $ PG.execute_ conn sql
+      E.bracket_
+        (alter "ALTER TABLE rum_panel_cache ADD CONSTRAINT reject_panel_cache_write CHECK (false)")
+        (alter "ALTER TABLE rum_panel_cache DROP CONSTRAINT reject_panel_cache_write")
+        do
+          (_, RUM.RumGet (PageCtx _ body)) <- testServant tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "pages") (Just "1") Nothing
+          case body of
+            DeferredBody loaded -> do
+              loaded.degradedPanels `shouldBe` []
+              map (.path) loaded.pages `shouldSatisfy` elem "https://shop.example/cart"
+            DeferredShell{} -> expectationFailure "expected the pages panel"
+
+    it "panelCache_concurrentColdRequests_shareOneTelemetryReadAndWrite" \tr -> do
+      purgeRumCaches tr
+      apiKey <- createTestAPIKey tr testPid "rum-flight-key"
+      otelBrowserSpan apiKey "82000000000000000000000000000008" "8200000000000001" "session-flight" "flight-browser" tr
+      let alter sql = withResource tr.trPool $ \conn -> void $ PG.execute_ conn sql
+          fetch = renderPanel tr Nothing Nothing Nothing Nothing (Just "flight-browser") (Just "pages")
+          waitForReaders expected = do
+            [PG.Only readers] <- withResource tr.trPool $ \conn -> PG.query_ conn "SELECT count(*)::bigint FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%otel_logs_and_spans%'"
+            unless (readers >= (expected :: Int64)) $ threadDelay 10000 >> waitForReaders expected
+      E.bracket_
+        (alter "CREATE SEQUENCE rum_flight_writes; CREATE FUNCTION count_rum_flight_write() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM nextval('rum_flight_writes'); RETURN NEW; END $$; CREATE TRIGGER count_rum_flight_write BEFORE INSERT ON rum_panel_cache FOR EACH ROW EXECUTE FUNCTION count_rum_flight_write()")
+        (alter "DROP TRIGGER count_rum_flight_write ON rum_panel_cache; DROP FUNCTION count_rum_flight_write(); DROP SEQUENCE rum_flight_writes")
+        $ withResource tr.trPool \conn ->
+          E.bracket_
+            (void $ PG.execute_ conn "BEGIN; LOCK TABLE otel_logs_and_spans IN ACCESS EXCLUSIVE MODE")
+            (void $ PG.execute_ conn "ROLLBACK")
+            $ withAsync fetch \leader -> withAsync fetch \follower -> do
+              observed <-
+                E.finally
+                  ((,) <$> timeout 5000000 (waitForReaders 1) <*> timeout 1000000 (waitForReaders 2))
+                  (void $ PG.execute_ conn "ROLLBACK")
+              responses <- traverse wait [leader, follower]
+              observed `shouldBe` (Just (), Nothing)
+              map (T.isInfixOf "/cart") responses `shouldBe` [True, True]
+              writes <- withResource tr.trPool $ \cacheConn -> PG.query_ cacheConn "SELECT last_value, is_called FROM rum_flight_writes" :: IO [(Int64, Bool)]
+              writes `shouldBe` [(1, True)]
 
     it "panelCache_isSharedAcrossReplicas_notPerProcessMemory" \tr -> do
       -- A fresh replica has an empty memory cache; the shared rum_panel_cache table must

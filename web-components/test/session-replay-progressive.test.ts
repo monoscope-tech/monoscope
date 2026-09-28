@@ -97,6 +97,29 @@ describe('session-replay progressive shard loading', () => {
     vi.restoreAllMocks();
   });
 
+  test.each([
+    [390, null, 0],
+    [390, '600', 0],
+    [960, null, 300],
+    [960, '500', 500],
+  ])('preserves replay width at %ipx with saved console width %s', async (width, saved, expected) => {
+    if (saved === null) localStorage.removeItem('replay-activity-width');
+    else localStorage.setItem('replay-activity-width', saved);
+    try {
+      const el = await mountPlayer({ fullWidth: 'true', consoleOpen: 'true', getBoundingClientRect: () => ({ width }) });
+      await el.updateComplete;
+      expect(el.querySelector('#replay-activity-bar').style.width).toBe(`${expected}px`);
+      expect(el.containerWidth).toBe(width - expected);
+      const toggle = el.querySelector('button[title="Toggle the console panel (errors, warnings, logs)"]');
+      expect(toggle.getAttribute('aria-pressed')).toBe(String(expected > 0));
+      toggle.click();
+      await el.updateComplete;
+      expect(toggle.getAttribute('aria-pressed')).toBe(String(expected === 0));
+    } finally {
+      localStorage.removeItem('replay-activity-width');
+    }
+  });
+
   test('makes the floating log-explorer player draggable when loaded after DOMContentLoaded', async () => {
     const wrapper = document.createElement('div');
     wrapper.id = 'sessionPlayerWrapper';

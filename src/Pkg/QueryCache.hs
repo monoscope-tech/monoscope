@@ -7,6 +7,9 @@ module Pkg.QueryCache (
   RawQueryFlights,
   newRawQueryFlights,
   coalesceRawQuery,
+  QueryFlights,
+  newQueryFlights,
+  coalesceQuery,
   cachedRawQuery,
   lookupRawCache,
   updateRawCache,
@@ -128,17 +131,28 @@ data RawCacheResult = RawCacheHit MetricsData | RawCacheMiss
 -- | Per-process request coalescer. The durable result cache is shared through
 -- PostgreSQL; this small registry prevents one web process from issuing the same
 -- expensive TimeFusion query many times while the shared entry is still absent.
-newtype RawQueryFlights = RawQueryFlights (STM.TVar (M.Map RawCacheKey (STM.TMVar (Either E.SomeException MetricsData))))
+newtype QueryFlights key value = QueryFlights (STM.TVar (M.Map key (STM.TMVar (Either E.SomeException value))))
+
+
+type RawQueryFlights = QueryFlights RawCacheKey MetricsData
+
+
+newQueryFlights :: IO (QueryFlights key value)
+newQueryFlights = QueryFlights <$> STM.newTVarIO M.empty
 
 
 newRawQueryFlights :: IO RawQueryFlights
-newRawQueryFlights = RawQueryFlights <$> STM.newTVarIO M.empty
+newRawQueryFlights = newQueryFlights
 
 
 -- | The action includes cache lookup, execution and persistence. Publication and
 -- removal are atomic, including when a leader is cancelled; followers cannot hang.
 coalesceRawQuery :: RawQueryFlights -> RawCacheKey -> IO MetricsData -> IO (Bool, MetricsData)
-coalesceRawQuery (RawQueryFlights flights) key action = E.mask \restore -> do
+coalesceRawQuery = coalesceQuery
+
+
+coalesceQuery :: Ord key => QueryFlights key value -> key -> IO value -> IO (Bool, value)
+coalesceQuery (QueryFlights flights) key action = E.mask \restore -> do
   (leader, resultVar) <- STM.atomically do
     running <- STM.readTVar flights
     case M.lookup key running of

@@ -50,13 +50,14 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (DB, decodeEnumSC, encodeEnumSC)
 import Pkg.ErrorFingerprint (normalizeMessage)
 import Pkg.Parser (ScopedQuery (..), applyScopedKqlContext, mkScopedQuery)
+import Pkg.QueryCache qualified as QueryCache
 import Relude
 import Relude.Extra.Foldable1 (maximum1)
 import System.Clock (TimeSpec (..))
 import System.Config (AuthContext (..), EnvConfig (enableTimefusionReads))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import UnliftIO (tryAny)
+import UnliftIO (tryAny, withRunInIO)
 import Utils (classifyUserAgent, countNoun, faSprite_, fmtDate, getDurationNSMS, prettyTimeShort, replaceAllFormats, showFFloat', toXXHash)
 
 
@@ -561,14 +562,14 @@ searchSessions scope query sessionFilter = do
       newSpanIds = filter (`notElem` recordingIds) spanIds
   extraSpans <- if null newRecordingIds then pure [] else otelSessionRows scope (SessionIds newRecordingIds) sessionFilter
   extraRecordings <- if null newSpanIds then pure [] else replaySessionRows scope (SessionIds newSpanIds)
-  pure $ take 200 $ filterSessions sessionFilter $ mergeSessions scope.queryScope.service (extraSpans <> spans) (recordings <> extraRecordings)
+  pure $ take 200 $ filterSessions sessionFilter $ mergeSessions scope.queryScope (extraSpans <> spans) (recordings <> extraRecordings)
 
 
 sessionDetail :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> Text -> Eff es (Maybe RumSession)
 sessionDetail scope sid = do
   spans <- otelSessionRows scope (SessionIds [sid]) AllSessionRows
   recordings <- replaySessionRows scope (SessionIds [sid])
-  pure $ listToMaybe $ mergeSessions scope.queryScope.service spans recordings
+  pure $ listToMaybe $ mergeSessions scope.queryScope spans recordings
 
 
 -- A recent 2,000-point sample keeps field-vital navigation bounded. Returning the previous
@@ -591,17 +592,14 @@ vitalSamples scope =
       )
 
 
--- | Recordings are stored per session and carry no service attribution. Unscoped, a recording
--- with no matching span is still a real session and gets a row of its own. Under a service
--- scope it is only trustworthy where a span already places that session in the service — so it
--- attaches to sessions that survived the filter and adds none, which keeps the replay badge
--- working without smuggling another team's sessions back in.
-mergeSessions :: Maybe Text -> [RumSession] -> [ReplaySession] -> [RumSession]
-mergeSessions serviceScope otel replays = sortWith (Down . (.endedAt)) $ M.elems $ foldl' addReplay (M.fromList [(s.id, s) | s <- otel]) replays
+-- | Recordings carry no service or environment attribution. Under either scope they
+-- may enrich matching telemetry, but cannot introduce recording-only sessions.
+mergeSessions :: ScopedQuery -> [RumSession] -> [ReplaySession] -> [RumSession]
+mergeSessions scope otel replays = sortWith (Down . (.endedAt)) $ M.elems $ foldl' addReplay (M.fromList [(s.id, s) | s <- otel]) replays
   where
     addReplay sessions replay =
       let sid = UUID.toText replay.id
-       in if isJust serviceScope
+       in if isJust scope.service || isJust scope.environment
             then M.adjust (attachReplay replay) sid sessions
             else M.alter (Just . maybe (fromReplay replay) (attachReplay replay)) sid sessions
     fromReplay replay =
@@ -690,7 +688,13 @@ data RumData = RumData
 
 
 newtype RumGet = RumGet (PageCtx (Deferred RumData))
-  deriving newtype (ToHtml)
+
+
+instance ToHtml RumGet where
+  toHtml (RumGet page@(PageCtx _ body)) = case body of
+    DeferredBody loaded | isJust loaded.panel -> toHtml loaded
+    _ -> toHtml page
+  toHtmlRaw = toHtml
 
 
 -- Empty panels are not cached: browser telemetry can arrive immediately after SDK setup, and
@@ -791,9 +795,8 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
         Just PanelSessions -> (if tab == Sessions then [sessionSearchQ] else [sessionsQ, replaysQ]) <> sessionDetailQs
         Just PanelAudience -> [breakdownQ]
         Nothing -> []
-      -- Memory first, then the shared rum_panel_cache table, then the store. A miss at both
-      -- layers computes once and fills both, so a cold panel is paid at most once per TTL
-      -- across every replica rather than once per replica.
+      -- Concurrent requests share lookup, computation and publication within a replica.
+      -- Completed entries are shared across replicas through rum_panel_cache.
       --
       -- The shared layer also serves STALE entries (past expiry, inside the prune horizon):
       -- an expired panel answers instantly with its last-known data and the page re-fetches
@@ -806,12 +809,16 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
       -- last-known data plus no revalidation trigger, so the page neither lies forever nor
       -- collapses to zero states while the store is down. A payload from an older code
       -- shape fails to decode; that is a cache miss, not an error.
-      runQuery (label, key, ttl, action) = do
+      runQuery (label, key, ttl, action) = withRunInIO \unlift -> fmap snd $ QueryCache.coalesceQuery appCtx.rumQueryFlights (key, refresh) $ unlift do
         l1 <- liftIO $ Cache.lookup appCtx.rumCache key
         case l1 of
           Just hit -> pure $ Right (hit, False)
           Nothing -> do
-            let dbKey = toXXHash $ show key
+            let dbKey =
+                  toXXHash $ show key <> case key.query of
+                    SessionSearchQuery{} -> ":attributed-recordings-v2"
+                    SessionDetailQuery{} -> ":attributed-recordings-v2"
+                    _ -> ""
             staleEntryM <- fromRight Nothing <$> tryAny (rumPanelCacheGetStale dbKey)
             outcome <-
               tryAny
@@ -822,7 +829,7 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
                       fresh <- action
                       when (cacheableRumResult fresh) do
                         liftIO $ Cache.insert' appCtx.rumCache (Just ttl) key fresh
-                        rumPanelCacheSet dbKey ttl.sec fresh
+                        either (\err -> Log.logAttention "RUM panel cache write failed" (label, displayException err)) pure =<< tryAny (rumPanelCacheSet dbKey ttl.sec fresh)
                       pure (fresh, False)
                 )
             case outcome of
@@ -844,7 +851,7 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
         hasTelemetry = or [value | PresenceResult value <- results]
         pages = fold [value | PagesResult value <- results]
         errors = fold [value | ErrorsResult value <- results]
-        sessions = mergeSessions serviceFilter (fold [value | SessionsResult value <- results]) (fold [value | ReplaySessionsResult value <- results])
+        sessions = mergeSessions scope.queryScope (fold [value | SessionsResult value <- results]) (fold [value | ReplaySessionsResult value <- results])
         selectedSessionData = asum [value | SessionDetailResult value <- results]
         vitals = vitalsFromSamples $ fold [value | VitalSamplesResult value <- results]
         vitalTrend = fold [value | VitalsDetailResult value _ <- results]
@@ -927,15 +934,17 @@ slot_ page panel skeleton content
     -- the panel's cache TTL costs a cache read.
     -- A tick arriving while the previous one is still in flight replaces it rather than
     -- queueing behind it: the newer window is the one being looked at.
-    liveAttrs = swapAttrs panelUrl "update-query from:window" [term "hx-sync" "this:replace"]
+    liveAttrs = swapAttrs panelUrl "update-query from:window" [term "hx-sync" $ if sessionList then "#rum-session-search-form:replace" else "this:replace"]
     -- On the Sessions tab the panel also carries the replay workspace; swapping the whole
     -- panel would restart a replay the viewer just opened. Only the list is re-fetched
     -- there — a selection made while the refresh is in flight survives.
     swapAttrs url trigger extras =
       [hxGet_ url, hxTrigger_ trigger, hxTarget_ refreshTarget, hxSelect_ refreshTarget, hxSwap_ "outerHTML"]
         <> extras
+        <> [term "hx-include" "#rum-session-search-form" | sessionList]
         <> [term "hx-preload" "false"]
-    refreshTarget = if page.tab == Sessions && panel == PanelSessions then "#rum-sessions-list" else "#" <> panelId panel
+    sessionList = page.tab == Sessions && panel == PanelSessions
+    refreshTarget = if sessionList then "#rum-sessions-list" else "#" <> panelId panel
     panelUrl =
       rumUrl page.links
         $ [("tab", tabParam page.tab), ("panel", panelParam panel), ("deferred", "1")]
@@ -1347,8 +1356,8 @@ recentSessions_ page = rumPanel_ "Recent sessions" "Open a recording or inspect 
 -- neither the first paint nor the panel shell flashes a different frame than the content
 -- that replaces it. No fake search bar: the real one is already in the toolbar above.
 sessionsSkeleton_ :: Html ()
-sessionsSkeleton_ = div_ [class_ "grid bg-bgBase xl:h-full xl:min-h-0 xl:grid-cols-[minmax(28rem,30%)_minmax(0,1fr)]", role_ "status", Aria.label_ "Loading sessions"] do
-  section_ [class_ "min-w-0 border-strokeWeak xl:border-e max-xl:border-b"] do
+sessionsSkeleton_ = div_ [class_ "grid bg-bgBase xl:h-full xl:min-h-0 xl:grid-cols-[minmax(32rem,35%)_minmax(0,1fr)]", role_ "status", Aria.label_ "Loading sessions"] do
+  section_ [class_ "min-w-0 overflow-y-auto border-strokeWeak xl:border-e max-xl:max-h-[45svh] max-xl:border-b"] do
     div_ [class_ "flex items-center gap-1.5 border-b border-strokeWeak px-3 py-1.5"]
       $ replicateM_ 3
       $ div_ [class_ "h-5 w-20 rounded-full skeleton-shimmer"] ""
@@ -1367,10 +1376,10 @@ sessions_ :: RumData -> Html ()
 sessions_ page = slot_ page PanelSessions sessionsSkeleton_ do
   let filtered = page.sessions
       selected = page.selectedSessionData <|> (page.selectedSession >>= \sid -> find ((== sid) . (.id)) page.sessions)
-  div_ [class_ "grid bg-bgBase xl:h-full xl:min-h-0 xl:grid-cols-[minmax(28rem,30%)_minmax(0,1fr)]"] do
-    section_ [id_ "rum-sessions-list", Aria.label_ "Sessions", tabindex_ "0", class_ "min-w-0 border-strokeWeak xl:min-h-0 xl:overflow-y-auto xl:overscroll-contain xl:border-e max-xl:border-b"]
+  div_ [class_ "grid bg-bgBase xl:h-full xl:min-h-0 xl:grid-cols-[minmax(32rem,35%)_minmax(0,1fr)]"] do
+    section_ [id_ "rum-sessions-list", Aria.label_ "Sessions", tabindex_ "0", class_ "min-w-0 overflow-y-auto overscroll-contain border-strokeWeak xl:min-h-0 xl:border-e max-xl:max-h-[45svh] max-xl:border-b"]
       $ sessionsTable_ True page.now page.links page.query page.sessionFilter page.selectedSession filtered
-    section_ [id_ "rum-replay-workspace", class_ "min-w-0 bg-bgBase xl:min-h-0 xl:overflow-y-auto xl:overscroll-contain", Aria.label_ "Session replay workspace"] $ replayWorkspace_ page.links selected
+    section_ [id_ "rum-replay-workspace", class_ "min-w-0 bg-bgBase xl:min-h-0 xl:overflow-y-auto xl:overscroll-contain", Aria.label_ "Session details"] $ replayWorkspace_ page.links selected
 
 
 filterSessions :: SessionFilter -> [RumSession] -> [RumSession]
@@ -1422,10 +1431,10 @@ sessionsTable_ workspace now links query sessionFilter selectedSession sessions 
                       faSprite_ (deviceIcon device) "solid" "h-3 w-3 shrink-0 text-iconNeutral"
                     span_ [class_ "truncate font-mono", title_ session.id] $ toHtml $ T.take 8 session.id
             )
-              { Table.attrs = [class_ "w-[38%] px-2 py-2"]
+              { Table.attrs = [class_ $ bool "w-[38%]" "w-[46%]" workspace <> " px-2 py-2"]
               , Table.headerExtra = Just $ span_ [class_ "md:hidden"] "Session"
               }
-          , ( Table.col "Landing page" \session -> do
+          , ( Table.col "Last page" \session -> do
                 -- Display the distinguishing path; keep the full URL available on hover.
                 span_ [class_ $ "block text-sm text-textStrong" <> bool "" " truncate" (isJust session.lastPage), title_ $ fromMaybe "" session.lastPage]
                   $ toHtml
@@ -1434,7 +1443,7 @@ sessionsTable_ workspace now links query sessionFilter selectedSession sessions 
                   $ toHtml
                   $ prettyTimeShort now session.endedAt
             )
-              { Table.attrs = [class_ "w-[22%] px-2 py-2"]
+              { Table.attrs = [class_ $ bool "w-[22%]" "w-[20%]" workspace <> " px-2 py-2"]
               }
           , ( Table.col "Activity" \session -> do
                 when (session.errors > 0) $ span_ [class_ "mb-1 inline-flex items-center gap-1 rounded-full bg-fillError-weak px-1.5 py-0.5 text-xs font-medium text-textError"] do
@@ -1453,7 +1462,7 @@ sessionsTable_ workspace now links query sessionFilter selectedSession sessions 
                       toHtml $ show session.events
                       span_ [class_ "sr-only"] $ toHtml $ " " <> countNoun session.events "event"
             )
-              { Table.attrs = [class_ "w-[22%] px-2 py-2"]
+              { Table.attrs = [class_ $ bool "w-[22%]" "w-[18%]" workspace <> " px-2 py-2"]
               }
           , ( Table.col "Duration" \session -> do
                 span_ [class_ "block text-sm tabular-nums text-textStrong"] $ toHtml $ formatSessionDuration session
@@ -1463,7 +1472,7 @@ sessionsTable_ workspace now links query sessionFilter selectedSession sessions 
                     "Replay"
                   else span_ [class_ "mt-0.5 block text-xs text-textWeak"] "No replay"
             )
-              { Table.attrs = [class_ "w-[18%] px-2 py-2.5"]
+              { Table.attrs = [class_ $ bool "w-[18%]" "w-[16%]" workspace <> " px-2 py-2.5"]
               }
           ]
       , rows = V.fromList sessions
@@ -1492,7 +1501,7 @@ sessionsTable_ workspace now links query sessionFilter selectedSession sessions 
                         , hxPushUrl_ url
                         , term "hx-sync" "#rum-session-search-form:replace"
                         , data_ "filter" filterValue
-                        , term "hx-on::after:request" "if (event.detail.ctx.response.status === 200) document.getElementById('rum-session-filter').value = this.dataset.filter"
+                        , term "hx-on::before:request" "document.getElementById('rum-session-filter').value = this.dataset.filter"
                         , term "aria-current" $ bool "false" "page" (value == sessionFilter)
                         , class_ $ "tab h-auto! " <> bool "" "tab-active text-textStrong" (value == sessionFilter)
                         ]
@@ -1531,7 +1540,7 @@ sessionsTable_ workspace now links query sessionFilter selectedSession sessions 
 
 replayWorkspace_ :: RumLinks -> Maybe RumSession -> Html ()
 replayWorkspace_ links = \case
-  Just session | session.hasReplay -> div_ [class_ "min-h-full"] do
+  Just session -> div_ [class_ "min-h-full"] do
     header_ [class_ "flex flex-wrap items-center justify-between gap-3 border-b border-strokeWeak bg-bgBase px-4 py-3"] do
       div_ [class_ "flex min-w-0 items-center gap-3"] do
         sessionAvatar_ session
@@ -1546,15 +1555,22 @@ replayWorkspace_ links = \case
       a_ [href_ $ sessionLogsUrl links session.id, class_ "btn btn-sm gap-1.5"] do
         faSprite_ "magnifying-glass-chart" "regular" "h-3.5 w-3.5"
         "Inspect telemetry"
-    termRaw "session-replay" [id_ "rumSessionReplay", term "initialSession" session.id, term "consoleOpen" "true", term "fullWidth" "true", class_ "block min-h-[34rem] w-full", term "projectId" links.queryScope.projectId.toText, term "containerId" "rum-replay-workspace"] ("" :: Text)
-  Just session -> replayPrompt_ "No recording for this session" "Open its correlated OpenTelemetry events to inspect navigation, network, and error spans." $ Just ("Inspect telemetry", sessionLogsUrl links session.id)
-  Nothing -> replayPrompt_ "Select a session" "Choose a row with Replay to watch the user's experience beside its errors and OpenTelemetry context." Nothing
-
-
-replayPrompt_ :: Text -> Text -> Maybe (Text, Text) -> Html ()
-replayPrompt_ title description action =
-  div_ [class_ "flex min-h-[34rem] flex-col items-center justify-center p-8"]
-    $ Components.emptyState_ def{icon = Just "video", action = maybe ESNone (\(label, url) -> ESLink url label) action} title description
+    if session.hasReplay
+      then termRaw "session-replay" [id_ "rumSessionReplay", term "initialSession" session.id, term "consoleOpen" "true", term "fullWidth" "true", class_ "block min-h-[34rem] w-full", term "projectId" links.queryScope.projectId.toText, term "containerId" "rum-replay-workspace"] ("" :: Text)
+      else div_ [class_ "space-y-6 p-4"] do
+        dl_ [class_ "grid grid-cols-2 gap-4 sm:grid-cols-4"] do
+          forM_ [("Duration" :: Text, formatSessionDuration session), ("Page views", show session.views), ("Events", show session.events), ("Errors", show session.errors)] \(label, value) -> div_ do
+            dt_ [class_ "text-xs text-textWeak"] $ toHtml label
+            dd_ [class_ "mt-1 text-sm font-medium tabular-nums text-textStrong"] $ toHtml value
+          forM_ ([("Last page", session.lastPage), ("Service", session.service)] :: [(Text, Maybe Text)]) \(label, value) -> forM_ value \text -> div_ [class_ "col-span-full min-w-0"] do
+            dt_ [class_ "text-xs text-textWeak"] $ toHtml label
+            dd_ [class_ "mt-1 break-words text-sm text-textStrong"] $ toHtml text
+        div_ [class_ "space-y-1"] do
+          h3_ [class_ "text-sm font-medium text-textStrong"] "No recording for this session"
+          p_ [class_ "text-sm text-textWeak"] "Inspect telemetry to follow navigation, network requests, and errors."
+  Nothing ->
+    div_ [class_ "flex min-h-[34rem] flex-col items-center justify-center p-8"]
+      $ Components.emptyState_ def{icon = Just "video"} "Select a session" "Choose a session to inspect its activity or watch an available recording."
 
 
 performance_ :: RumData -> Html ()
