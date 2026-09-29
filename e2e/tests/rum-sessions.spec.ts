@@ -491,3 +491,40 @@ test("explicit RUM window survives reload and shared navigation without since", 
     expect(current.searchParams.has("since")).toBe(false);
   }
 });
+
+test("initial RUM field panel does not depend on application globals", async ({ page }) => {
+  test.skip(!process.env.E2E_BASE_URL, "Requires the disposable e2e database");
+  const scope = `e2e-initial-rum-${Date.now()}`;
+  const cleanup = `DELETE FROM otel_metrics WHERE project_id='${DEMO_PROJECT}' AND resource___service___name='${scope}'`;
+  sql(`INSERT INTO otel_metrics (project_id,id,series_id,timestamp,metric_name,metric_type,metric_unit,value,resource,resource___service___name)
+    SELECT '${DEMO_PROJECT}',gen_random_uuid(),'${scope}',at,'browser.web_vital.fcp','GAUGE','ms',value,
+      jsonb_build_object('service',jsonb_build_object('name','${scope}')),'${scope}'
+    FROM (VALUES(now()-interval '10 seconds',22.5),(now()-interval '2 hours',99)) AS points(at,value)`);
+  let release = () => {};
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const errors: string[] = [];
+  page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
+  page.on("pageerror", error => errors.push(error.message));
+  await page.route(/\/public\/assets\/(?:js\/main\.|web-components\/dist\/js\/index\.).*\.js$/, async route => { await held; await route.continue(); });
+  const responses: string[] = [];
+  page.on("response", response => { if (new URL(response.url()).searchParams.get("panel") === "vitals" && response.status() === 200) responses.push(response.url()); });
+  try {
+    await page.goto(`/p/${DEMO_PROJECT}/rum?tab=performance&since=24H&since=1H&service_scope=${scope}`, { waitUntil: "commit" });
+    const shell = page.locator("#rum-panel-vitals");
+    await expect(shell).toBeAttached();
+    await expect.poll(() => page.evaluate(() => typeof (window as any).htmx)).toBe("object");
+    expect(await page.evaluate(() => typeof (window as any).params)).toBe("undefined");
+    await shell.evaluate(element => (window as any).htmx.process(element));
+    const table = page.getByRole("heading", { name: "Web Vitals field performance", exact: true }).locator("xpath=ancestor::section[1]").getByRole("table");
+    await expect(table).toContainText("22.5 ms", { timeout: 5_000 });
+    expect(responses).toHaveLength(1);
+    const url = new URL(responses[0]);
+    expect(url.searchParams.getAll("since")).toEqual(["1H"]);
+    expect(url.searchParams.get("service_scope")).toBe(scope);
+    expect(errors).toEqual([]);
+  } finally {
+    release();
+    try { await page.unrouteAll({ behavior: "wait" }); } finally { sql(cleanup); }
+    await test.info().attach("initial-rum-errors", { body: JSON.stringify(errors), contentType: "application/json" });
+  }
+});
