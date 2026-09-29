@@ -214,6 +214,9 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
           let image = shortImage img <> maybe "" (":" <>) vm.row.imageTag
            in span_ [class_ "min-w-0 flex-1 truncate", data_ "tippy-content" $ "Image: " <> image] $ toHtml image
         whenJust vm.row.workload \workload -> span_ [class_ "badge badge-xs badge-ghost min-w-0 max-w-36 truncate", data_ "tippy-content" $ "Workload: " <> workload] $ toHtml workload
+      div_ [class_ "hidden max-lg:flex flex-col gap-0.5 text-xs leading-normal text-textWeak"]
+        $ forM_ ([("Pod", vm.row.podName), ("Namespace", vm.row.namespace), ("Cluster", vm.row.cluster), ("Node / host", vm.row.nodeName)] :: [(Text, Maybe Text)]) \(label, value) ->
+          whenJust value \v -> span_ [class_ "whitespace-normal break-all"] $ toHtml $ label <> ": " <> v
 
     -- The drawer reads the window the row was rendered from, so it shows the same numbers the
     -- row does and hits the same cached snapshot the list already fetched.
