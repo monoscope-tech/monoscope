@@ -19,6 +19,7 @@ import Database.PostgreSQL.Simple qualified as PG
 import Effectful.Dispatch.Dynamic (interpose, send)
 import Effectful.Labeled (Labeled (..))
 import Hasql.Interpolate qualified as HI
+import Hasql.Pool qualified as HP
 import Lucid qualified
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.RUM qualified as RUMData
@@ -623,6 +624,52 @@ spec = sequential $ aroundAll withTestResources do
       T.isInfixOf "<html" (toStrict rendered) `shouldBe` False
       (_, fullPage) <- testServant scoped $ RUM.rumGetH testPid (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing (Just "1") Nothing
       T.isInfixOf "<html" (toStrict $ Lucid.renderText $ Lucid.toHtml fullPage) `shouldBe` True
+
+    it "panelQueryFailure_survivesHTMXSelection_insteadOfClaimingNoData" \tr -> do
+      purgeRumCaches tr
+      projectId <- createTestProject tr "RUM failed panel"
+      let scoped = tr{trATCtx = tr.trATCtx{env = tr.trATCtx.env{enableTimefusionReads = True}}}
+          unavailable = interpose @(Labeled "timefusion" Hasql.Hasql) \_ (Labeled effect) -> case effect of
+            Hasql.UseStatement{} -> pure $ Left HP.AcquisitionTimeoutUsageError
+            Hasql.UseSession{} -> pure $ Left HP.AcquisitionTimeoutUsageError
+            Hasql.UseLabeledSession{} -> pure $ Left HP.AcquisitionTimeoutUsageError
+      forM_ ([("vitals", "rum-panel-vitals", ["web vitals"]), ("vital_trend", "rum-panel-vital_trend", ["web vitals"]), ("sessions", "rum-sessions-list", ["sessions", "session"]), ("session_detail", "rum-replay-workspace", ["session"])] :: [(Text, Text, [Text])]) \(panel, target, labels) -> do
+        (_, payload@(RUM.RumGet (PageCtx _ body))) <- testServant scoped $ unavailable $ RUM.rumGetH projectId (Just $ if panel `elem` ["sessions", "session_detail"] then "sessions" else "performance") Nothing Nothing Nothing Nothing (Just "24H") (Just "selected-session") Nothing (Just panel) (Just "1") Nothing
+        case body of
+          DeferredBody page -> page.degradedPanels `shouldBe` labels
+          DeferredShell{} -> expectationFailure "Expected the failed panel response"
+        let selected = snd $ T.breakOn ("id=\"" <> target <> "\"") $ toStrict $ Lucid.renderText $ Lucid.toHtml payload
+        T.isPrefixOf "<div role=\"alert\"" (T.drop 1 $ snd $ T.breakOn ">" selected) `shouldBe` True
+        selected `shouldContainAll` ["Some RUM data could not be loaded.", ">Retry</button>", "refresh=1"]
+        any (`T.isInfixOf` selected) ["No data", "No web vital samples", "Choose a session", "No sessions match"] `shouldBe` False
+      let sid = "00000000-0000-0000-0000-000000000091" :: Text
+          sessions resources panel selected = testServant resources $ RUM.rumGetH projectId (Just "sessions") Nothing Nothing Nothing Nothing (Just "24H") selected Nothing (Just panel) (Just "1") Nothing
+          render = toStrict . Lucid.renderText . Lucid.toHtml
+          firstContent target = T.drop 1 . snd . T.breakOn ">" . snd . T.breakOn ("id=\"" <> target <> "\"") . render
+      withResource tr.trPool $ \conn ->
+        void $ PG.execute conn "INSERT INTO projects.replay_sessions (session_id, project_id, created_at, last_event_at, event_file_count, user_name) VALUES (?::uuid, ?, ?, ?, 1, 'Failure survivor')" (sid, projectId, frozenTime, addUTCTime 60 frozenTime)
+      -- A healthy cached counterpart survives the other query's acquisition failure.
+      forM_ ([("session_detail", Just sid, "rum-sessions-list", "rum-replay-workspace", ["sessions"]), ("sessions", Nothing, "rum-replay-workspace", "rum-sessions-list", ["session"])] :: [(Text, Maybe Text, Text, Text, [Text])]) $ \(warmPanel, warmSelection, failedTarget, healthyTarget, labels) -> do
+        purgeRumCaches tr
+        void $ sessions tr warmPanel warmSelection
+        (_, response@(RUM.RumGet (PageCtx _ body))) <- testServant scoped $ unavailable $ RUM.rumGetH projectId (Just "sessions") Nothing Nothing Nothing Nothing (Just "24H") (Just sid) Nothing (Just "sessions") (Just "1") Nothing
+        case body of
+          DeferredBody page -> page.degradedPanels `shouldBe` labels
+          DeferredShell{} -> expectationFailure "Expected the sessions panel response"
+        T.isPrefixOf "<div role=\"alert\"" (firstContent failedTarget response) `shouldBe` True
+        T.isPrefixOf "<div role=\"alert\"" (firstContent healthyTarget response) `shouldBe` False
+        render response `shouldContainAll` ["Failure survivor"]
+      purgeRumCaches tr
+      let healthy = testServant tr $ RUM.rumGetH projectId (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "vitals") (Just "1") Nothing
+      (_, emptyPage) <- healthy
+      render emptyPage `shouldContainAll` ["No data"]
+      T.isInfixOf "role=\"alert\"" (render emptyPage) `shouldBe` False
+      apiKey <- createTestAPIKey tr projectId "rum-panel-recovery-key"
+      ingestMetric tr apiKey [] [] "browser.web_vital.fcp" 10 frozenTime
+      purgeRumCaches tr
+      (_, populated) <- healthy
+      render populated `shouldContainAll` ["10.0 ms"]
+      T.isInfixOf "role=\"alert\"" (render populated) `shouldBe` False
 
     it "panelLinks_carryKqlTheLogExplorerCanParse" \tr -> do
       -- windowUrl URI-encodes every parameter it is given, so a caller that encodes first

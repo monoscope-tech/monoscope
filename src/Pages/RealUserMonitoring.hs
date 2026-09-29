@@ -824,7 +824,7 @@ instance ToHtml RumData where
 slot_ :: RumData -> RumPanel -> Html () -> Html () -> Html ()
 slot_ page panel skeleton content
   | page.panel == Just panel = div_ ([id_ $ panelId panel, class_ $ "w-full" <> if panel == PanelSessions then " flex-1 min-h-0" else ""] <> liveAttrs) do
-      content
+      if sessionList || null page.degradedPanels then content else degradedBanner_ page panel
       unless sessionList $ panelRevalidation_ page panel
   | otherwise =
       div_
@@ -871,7 +871,6 @@ rumPanelUrl page panel =
 rumPage_ :: RumData -> Html ()
 rumPage_ page | page.panel == Just PanelSessionDetail = sessionWorkspace_ page
 rumPage_ page = div_ [id_ "rum-page", class_ $ "bg-bgBase " <> if page.tab == Sessions then "flex flex-col xl:h-full xl:min-h-0 [&>#rum-panel-sessions]:flex-1 [&>#rum-panel-sessions]:min-h-0" else "min-h-full"] do
-  unless (null page.degradedPanels) $ degradedBanner_ page.degradedPanels
   when (page.tab == Sessions) $ div_ [class_ "flex shrink-0 items-center border-b border-strokeWeak px-4 py-1 max-md:px-3"] $ sessionSearch_ page
   case page.tab of
     Overview -> overview_ page
@@ -1284,7 +1283,7 @@ sessions_ page = slot_ page PanelSessions sessionsSkeleton_ do
   let filtered = page.sessions
   div_ [class_ "grid bg-bgBase xl:h-full xl:min-h-0 xl:grid-cols-[minmax(32rem,35%)_minmax(0,1fr)]"] do
     section_ [id_ "rum-sessions-list", Aria.label_ "Sessions", tabindex_ "0", class_ "min-w-0 overflow-y-auto overscroll-contain border-strokeWeak xl:min-h-0 xl:border-e max-xl:max-h-[45svh] max-xl:border-b"] do
-      sessionsTable_ True page.now page.links page.query page.sessionFilter page.selectedSession filtered
+      if "sessions" `elem` page.degradedPanels then degradedBanner_ page PanelSessions else sessionsTable_ True page.now page.links page.query page.sessionFilter page.selectedSession filtered
       panelRevalidation_ page PanelSessions
     sessionWorkspace_ page
 
@@ -1292,7 +1291,7 @@ sessions_ page = slot_ page PanelSessions sessionsSkeleton_ do
 sessionWorkspace_ :: RumData -> Html ()
 sessionWorkspace_ page =
   section_ [id_ "rum-replay-workspace", class_ "min-w-0 bg-bgBase xl:min-h-0 xl:overflow-y-auto xl:overscroll-contain", Aria.label_ "Session details"] do
-    replayWorkspace_ page.links selected
+    if "session" `elem` page.degradedPanels then degradedBanner_ page PanelSessionDetail else replayWorkspace_ page.links selected
     when (page.panel == Just PanelSessionDetail) $ panelRevalidation_ page PanelSessionDetail
   where
     selected = page.selectedSessionData <|> (page.selectedSession >>= \sid -> find ((== sid) . (.id)) page.sessions)
@@ -1897,9 +1896,10 @@ sessionsUrl links query sessionFilter sessionM =
     : [(key, value) | (key, Just value) <- [("q", query), ("filter", sessionFilterParam sessionFilter), ("session", sessionM)]]
 
 
-degradedBanner_ :: [Text] -> Html ()
-degradedBanner_ panels = div_ [role_ "alert", class_ "flex items-start gap-2 border-b border-strokeWarning-strong bg-fillWarning-weak px-4 py-2.5 text-sm text-textStrong"] do
+degradedBanner_ :: RumData -> RumPanel -> Html ()
+degradedBanner_ page panel = div_ [role_ "alert", class_ "flex items-start gap-2 border-b border-strokeWarning-strong bg-fillWarning-weak px-4 py-2.5 text-sm text-textStrong"] do
   faSprite_ "triangle-exclamation" "solid" "mt-0.5 h-4 w-4 shrink-0 text-iconWarning"
   div_ do
     strong_ "Some RUM data could not be loaded."
-    span_ [class_ "ml-1 text-textWeak"] $ toHtml $ "Retry or narrow the time range. Unavailable: " <> T.intercalate ", " panels <> "."
+    span_ [class_ "ml-1 text-textWeak"] $ toHtml $ "Retry or narrow the time range. Unavailable: " <> T.intercalate ", " page.degradedPanels <> "."
+  button_ ([type_ "button", class_ "btn btn-sm shrink-0"] <> panelSwapAttrs page panel (rumPanelUrl page panel <> "&refresh=1") "click" [term "hx-sync" $ if page.tab == Sessions && panel == PanelSessions then "#rum-session-search-form:replace" else "#" <> panelId panel <> ":replace"]) "Retry"

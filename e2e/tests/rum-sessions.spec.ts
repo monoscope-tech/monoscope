@@ -482,6 +482,36 @@ test("Performance and Overview panels use the current picker window", async ({ p
   }
 });
 
+test("failed RUM queries show an error after the panel swap and recover on retry", async ({ page }) => {
+  test.skip(!process.env.E2E_BASE_URL, "Requires the disposable e2e database");
+  const scope = `e2e-panel-failure-${Date.now()}`;
+  const cleanup = `DELETE FROM otel_metrics WHERE project_id='${DEMO_PROJECT}' AND resource___service___name='${scope}'`;
+  sql(`INSERT INTO otel_metrics (project_id,id,series_id,timestamp,metric_name,metric_type,metric_unit,value,resource,resource___service___name,attributes)
+    VALUES ('${DEMO_PROJECT}',gen_random_uuid(),'${scope}',now()-interval '10 seconds','browser.web_vital.fcp','GAUGE','ms',10,
+      jsonb_build_object('service',jsonb_build_object('name','${scope}')),'${scope}','{"page.url":"/panel-recovery"}')`);
+  let renamed = false;
+  try {
+    sql("ALTER TABLE otel_metrics RENAME TO rum_failed_metrics_fixture");
+    renamed = true;
+    const failed = page.waitForResponse(response => new URL(response.url()).searchParams.get("panel") === "vitals");
+    await page.goto(`/p/${DEMO_PROJECT}/rum?tab=performance&since=1H&service_scope=${scope}`);
+    expect((await failed).status()).toBe(200);
+    const panel = page.locator("#rum-panel-vitals");
+    await expect(panel.getByRole("alert")).toContainText("Some RUM data could not be loaded.");
+    await expect(panel.getByText("No data", { exact: true })).toHaveCount(0);
+    sql("ALTER TABLE rum_failed_metrics_fixture RENAME TO otel_metrics");
+    renamed = false;
+    const recovered = page.waitForResponse(response => new URL(response.url()).searchParams.get("panel") === "vitals");
+    await panel.getByRole("button", { name: "Retry", exact: true }).click();
+    expect((await recovered).status()).toBe(200);
+    await expect(panel.getByRole("alert")).toHaveCount(0);
+    await expect(panel.getByRole("row").filter({ hasText: "First Contentful Paint" })).toContainText("10.0 ms");
+  } finally {
+    if (renamed) sql("ALTER TABLE rum_failed_metrics_fixture RENAME TO otel_metrics");
+    sql(cleanup);
+  }
+});
+
 test("mobile vital tables keep measurements and page identities readable", async ({ page }) => {
   test.skip(!process.env.E2E_BASE_URL, "Requires the disposable e2e database");
   const scope = `e2e-mobile-vitals-${Date.now()}`;
