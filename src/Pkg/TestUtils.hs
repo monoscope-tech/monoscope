@@ -44,6 +44,7 @@ module Pkg.TestUtils (
   getTestTime,
   -- Helper functions for tests
   drainExtractionWorker,
+  drainExtractionWorkerAt,
   processMessagesAndBackgroundJobs,
   createTestSpans,
   -- OTLP/Telemetry helpers
@@ -1229,25 +1230,29 @@ setBjRunAtInThePast now conn = void $ PGS.execute conn q (Only now)
 -- | Drain all queued extraction batches synchronously, then flush drain
 -- buffers and run pattern extraction.
 drainExtractionWorker :: TestResources -> IO ()
-drainExtractionWorker TestResources{..} = do
+drainExtractionWorker = drainExtractionWorkerAt frozenTime
+
+
+drainExtractionWorkerAt :: UTCTime -> TestResources -> IO ()
+drainExtractionWorkerAt at TestResources{..} = do
   let shards = V.toList trATCtx.extractionWorker.shards
   for_ shards \shard ->
     drainSTM (isEmptyTBQueue shard.ingressQ) (readTBQueue shard.ingressQ <* modifyTVar' shard.queueDepth prev) \batch ->
-      runTestBackgroundWithLogger frozenTime trLogger trATCtx $ BackgroundJobs.processEagerBatch batch shard
+      runTestBackgroundWithLogger at trLogger trATCtx $ BackgroundJobs.processEagerBatch batch shard
   now <- getCurrentTime
   ExtractionWorker.forceFlushAllBuffers trATCtx.extractionWorker now
   for_ shards \shard ->
     drainSTM
       (isEmptyTBQueue shard.drainFlushQ)
       (readTBQueue shard.drainFlushQ)
-      (runTestBackgroundWithLogger frozenTime trLogger trATCtx . BackgroundJobs.flushDrainTask shard)
+      (runTestBackgroundWithLogger at trLogger trATCtx . BackgroundJobs.flushDrainTask shard)
   -- Persist the schema-learning catalog's dirty entries (and enqueue
   -- NewAnomaly jobs). In prod runSchemaFlusherFiber does this on a timer;
   -- in tests we have to drive it explicitly so anomalies/issues land before
   -- runAllBackgroundJobs picks up the NewAnomaly jobs.
   for_ shards \shard ->
     void
-      $ runTestBackgroundWithLogger frozenTime trLogger trATCtx
+      $ runTestBackgroundWithLogger at trLogger trATCtx
       $ SchemaWorker.flushDirty shard.schemaState
   where
     drainSTM isEmpty pop process = do
