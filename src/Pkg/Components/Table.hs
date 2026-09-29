@@ -315,7 +315,7 @@ multiSelectFilter = filterMenu True
 facetActions :: Text -> Text -> [FilterMenu] -> TableHeaderActions
 facetActions baseUrl targetId filterMenus =
   TableHeaderActions
-    { baseUrl
+    { baseUrl = foldl' withQuery baseUrl [menu.paramName <> "=" <> toUriStr opt.value | menu <- filterMenus, opt <- menu.options, opt.isActive]
     , targetId
     , sortOptions = []
     , currentSort = ""
@@ -633,8 +633,8 @@ renderFilterRail actions =
         $ forM_ menu.options (renderFilterOption actions menu)
   where
     clearAll =
-      a_
-        ([class_ "flex items-center justify-between rounded px-2 py-1.5 text-xs text-textBrand hover:bg-fillWeak"] <> swapTarget_ actions.targetId actions.baseUrl)
+      button_
+        ([type_ "button", class_ "flex items-center justify-between rounded px-2 py-1.5 text-xs text-textBrand hover:bg-fillWeak"] <> swapTarget_ actions.targetId (foldl' (\url menu -> deleteParam menu.paramName url) actions.baseUrl actions.filterMenus))
         $ "Clear all"
         >> faSprite_ "xmark" "regular" "h-3 w-3"
 
@@ -657,8 +657,8 @@ renderFilterDropdown actions = do
       do
         div_ [class_ "flex items-center justify-between px-3 py-2 text-sm font-semibold text-textStrong border-b border-strokeWeak"] do
           span_ "Select Filter"
-          a_
-            ([class_ "text-xs text-textBrand cursor-pointer flex items-center gap-1"] <> swapTarget_ actions.targetId actions.baseUrl)
+          button_
+            ([type_ "button", class_ "text-xs text-textBrand cursor-pointer flex items-center gap-1"] <> swapTarget_ actions.targetId (foldl' (\url menu -> deleteParam menu.paramName url) actions.baseUrl actions.filterMenus))
             ("Clear all" >> faSprite_ "xmark" "regular" "w-3 h-3")
         div_ [class_ "p-1"] $ forM_ actions.filterMenus (renderFilterMenuItem actions)
 
