@@ -313,3 +313,49 @@ test("Overview keeps its loaded values during refresh after the first browser ev
     sql(cleanup);
   }
 });
+
+test("Performance and Overview panels use the current picker window", async ({ page }) => {
+  test.skip(!process.env.E2E_BASE_URL, "Requires the disposable e2e database");
+  const scope = `e2e-panel-window-${Date.now()}`;
+  const cleanup = `DELETE FROM otel_logs_and_spans WHERE project_id='${DEMO_PROJECT}' AND resource___service___name='${scope}'`;
+  sql(`INSERT INTO otel_logs_and_spans (project_id,summary,name,kind,timestamp,start_time,end_time,duration,attributes,resource,
+    attributes___url___path,resource___telemetry___sdk___language,resource___service___name,resource___deployment___environment___name)
+    SELECT '${DEMO_PROJECT}',ARRAY['documentLoad'],'documentLoad','span',at,at,at+interval '10 milliseconds',10000000,
+      '{"url":{"path":"/picker-window"}}',
+      jsonb_build_object('telemetry',jsonb_build_object('sdk',jsonb_build_object('language','webjs')),
+        'service',jsonb_build_object('name','${scope}'),'deployment',jsonb_build_object('environment',jsonb_build_object('name','${scope}'))),
+      '/picker-window','webjs','${scope}','${scope}' FROM (VALUES(now()-interval '10 minutes'),(now()-interval '2 hours')) AS events(at)`);
+  try {
+    for (const tab of ["performance", "overview"]) {
+      await page.goto(`/p/${DEMO_PROJECT}/rum?tab=${tab}&since=1H&service_scope=${scope}&environment=${scope}`);
+      const row = page.locator("#rum-panel-pages tbody tr").filter({ has: page.getByRole("link", { name: "/picker-window", exact: true }) });
+      await expect(row.locator("td").nth(1)).toHaveText("1");
+      const changed = page.waitForResponse(response => response.request().headers()["hx-source"] === "div#rum-panel-pages");
+      await page.locator("[data-live-range]").click();
+      await page.locator('#n-timepicker-popover button[data-value="24H"]').click();
+      const changedUrl = new URL((await changed).url());
+      await expect(row.locator("td").nth(1)).toHaveText("2");
+      expect(changedUrl.searchParams.get("since")).toBe("24H");
+      for (const key of ["service_scope", "environment"]) expect(changedUrl.searchParams.get(key)).toBe(scope);
+      const previous = page.waitForResponse(response => response.request().headers()["hx-source"] === "div#rum-panel-pages");
+      await page.getByRole("button", { name: "Previous time window", exact: true }).first().click();
+      const previousUrl = new URL((await previous).url());
+      for (const key of ["from", "to"]) {
+        expect(previousUrl.searchParams.get(key)).toBeTruthy();
+        expect(previousUrl.searchParams.get(key)).toBe(new URL(page.url()).searchParams.get(key));
+      }
+      expect(previousUrl.searchParams.get("since") ?? "").toBe("");
+      for (const key of ["service_scope", "environment"]) expect(previousUrl.searchParams.get(key)).toBe(scope);
+      await expect(row).toHaveCount(0);
+    }
+    await page.goto(`/p/${DEMO_PROJECT}/rum?tab=overview&service_scope=${scope}&environment=${scope}`);
+    const defaultRow = page.locator("#rum-panel-pages tbody tr").filter({ has: page.getByRole("link", { name: "/picker-window", exact: true }) });
+    await expect(defaultRow.locator("td").nth(1)).toHaveText("2");
+    const defaultRefresh = page.waitForResponse(response => response.request().headers()["hx-source"] === "div#rum-panel-pages");
+    await page.evaluate(() => window.dispatchEvent(new Event("update-query")));
+    expect(new URL((await defaultRefresh).url()).searchParams.get("since")).toBe("24H");
+    await expect(defaultRow.locator("td").nth(1)).toHaveText("2");
+  } finally {
+    sql(cleanup);
+  }
+});

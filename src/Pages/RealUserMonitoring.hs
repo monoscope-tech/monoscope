@@ -969,7 +969,7 @@ panelSwapAttrs page panel url trigger extras =
   [hxGet_ url, hxTrigger_ trigger, hxTarget_ refreshTarget, hxSelect_ refreshTarget, hxSwap_ $ if sessionList then "outerMorph" else "outerHTML"]
     <> extras
     <> [term "hx-include" "#rum-session-search-form" | sessionList]
-    <> [term "hx-preload" "false"]
+    <> [term "hx-vals" "js:{since:window.params().since ?? (window.params().from || window.params().to ? '' : '24H'),from:window.params().from || '',to:window.params().to || ''}", term "hx-preload" "false"]
   where
     sessionList = page.tab == Sessions && panel == PanelSessions
     refreshTarget = if sessionList then "#rum-sessions-list" else "#" <> panelId panel
