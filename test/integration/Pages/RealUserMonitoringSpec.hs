@@ -454,6 +454,23 @@ spec = sequential $ aroundAll withTestResources do
       html `shouldContainAll` [low, high, "17.5 ms", "1.8 s", "attributes.url.full%20%3D%3D%20%22https"]
       html `shouldSatisfy` (not . T.isInfixOf "/item/{hex}")
 
+    it "singletonVitalTrend_keepsTheSelectedTimeWindow" \tr -> do
+      projectId <- createTestProject tr "RUM singleton time window"
+      apiKey <- createTestAPIKey tr projectId "rum-singleton-window-key"
+      ingestMetric tr apiKey [] [] "browser.web_vital.lcp" 1200 (addUTCTime (-10) frozenTime)
+      let millis :: UTCTime -> Int
+          millis = floor . (* 1000) . utcTimeToPOSIXSeconds
+          explicitFrom = addUTCTime (-5400) frozenTime
+          explicitTo = addUTCTime (-5) frozenTime
+      forM_ [(Nothing, Nothing, Just ("1H" :: Text), addUTCTime (-3600) frozenTime, frozenTime), (Just $ toText $ iso8601Show explicitFrom, Just $ toText $ iso8601Show explicitTo, Just "", explicitFrom, explicitTo)] \(from, to, since, expectedFrom, expectedTo) -> do
+        (_, RUM.RumGet (PageCtx _ body)) <- testServant tr $ RUM.rumGetH projectId (Just "performance") Nothing Nothing from to since Nothing Nothing (Just "vital_trend") (Just "1") Nothing
+        case body of
+          DeferredBody page -> do
+            length page.vitalTrend `shouldBe` 1
+            let html = toStrict $ Lucid.renderText $ Lucid.toHtml body
+            all (`T.isInfixOf` html) ["&quot;from&quot;:" <> show (millis expectedFrom), "&quot;to&quot;:" <> show (millis expectedTo)] `shouldBe` True
+          DeferredShell{} -> fail "Expected loaded singleton trend panel"
+
     it "browserTelemetry_correlatesExperienceVitalsErrorsAndReplaySessions" \tr -> do
       apiKey <- createTestAPIKey tr testPid "rum-browser-key"
       browserSpan apiKey "10000000000000000000000000000001" "1000000000000001" [("url.path", "/checkout"), ("user.id", "usr-42"), ("user.full_name", "Ada Lovelace")] "Pageview · /checkout" sessionId Nothing "storefront" tr

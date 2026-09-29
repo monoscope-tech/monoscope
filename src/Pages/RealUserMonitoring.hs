@@ -1493,7 +1493,7 @@ performance_ :: RumData -> Html ()
 performance_ page = div_ [class_ "space-y-2 px-4 pb-4 pt-2 max-md:px-3"] do
   slot_ page PanelVitals (panelSkeleton_ $ Components.tableSkeleton_ 6) $ vitalsTable_ page.vitals
   slot_ page PanelVitalTrend (panelSkeleton_ Components.chartSkeleton_) do
-    vitalTrendPanel_ page.vitalTrend
+    vitalTrendPanel_ page.links.window page.vitalTrend
     div_ [class_ "mt-4"] $ pageVitalsTable_ page.links page.pageVitals
   div_ [class_ "grid grid-cols-2 gap-4 max-lg:grid-cols-1"] do
     slot_ page PanelPages (panelSkeleton_ $ Components.tableSkeleton_ 5) $ topPages_ page.links page.pages
@@ -1506,8 +1506,8 @@ performance_ page = div_ [class_ "space-y-2 px-4 pb-4 pt-2 max-md:px-3"] do
 -- histogram-backed vitals are not yet expressible in the widget KQL pipeline (@value@ is
 -- NULL on histogram datapoints); the dataset is embedded, so the widget renders like every
 -- other chart in the product without fetching anything of its own.
-vitalTrendPanel_ :: [VitalTrendPoint] -> Html ()
-vitalTrendPanel_ points = rumPanel_ "Web Vitals over time" "P75 of intervals ending in each bucket; unavailable coverage appears as gaps" Nothing do
+vitalTrendPanel_ :: TimePicker.TimeWindow -> [VitalTrendPoint] -> Html ()
+vitalTrendPanel_ window points = rumPanel_ "Web Vitals over time" "P75 of intervals ending in each bucket; unavailable coverage appears as gaps" Nothing do
   if null points
     then panelEmpty_ "No web vital samples in this time range"
     else div_ [class_ "grid grid-cols-2 gap-3 p-3 max-lg:grid-cols-1"] $ forM_ vitalDefinitions \vital -> do
@@ -1530,7 +1530,13 @@ vitalTrendPanel_ points = rumPanel_ "Web Vitals over time" "P75 of intervals end
             , Widget.warningThreshold = Just vital.goodAt
             , Widget.alertThreshold = Just vital.poorAt
             , Widget.showThresholdLines = Just "always"
-            , Widget.dataset = Just (def :: Widget.WidgetDataset){Widget.source = AE.toJSON sourceRows}
+            , Widget.dataset =
+                Just
+                  (def :: Widget.WidgetDataset)
+                    { Widget.source = AE.toJSON sourceRows
+                    , Widget.from = Just $ floor $ 1000 * utcTimeToPOSIXSeconds window.fromTime
+                    , Widget.to = Just $ floor $ 1000 * utcTimeToPOSIXSeconds window.toTime
+                    }
             }
 
 
@@ -1774,7 +1780,7 @@ formatMeasurement vital = \case
 measurementNote :: Vital -> VitalMeasurement -> Text
 measurementNote vital = \case
   Unmeasured -> "No observations"
-  Measured _ estimate -> maybe "Individual observations" (\(lower, upper) -> "Estimated within " <> formatVitalThreshold vital lower <> "–" <> formatVitalThreshold vital upper) $ RUM.estimateRange estimate
+  Measured _ estimate -> maybe "Exact quantile" (\(lower, upper) -> "Estimated within " <> formatVitalThreshold vital lower <> "–" <> formatVitalThreshold vital upper) $ RUM.estimateRange estimate
   Unavailable _ issue -> case issue of
     RUM.MissingBaseline -> "Missing previous export"
     RUM.UnknownStart -> "Unknown interval start"

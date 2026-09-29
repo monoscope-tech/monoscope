@@ -402,3 +402,28 @@ test("Performance and Overview panels use the current picker window", async ({ p
     sql(cleanup);
   }
 });
+
+test("singleton vital trend keeps the selected time axis", async ({ page }) => {
+  test.skip(!process.env.E2E_BASE_URL, "Requires the disposable e2e database");
+  const scope = `e2e-vital-axis-${Date.now()}`;
+  const cleanup = `DELETE FROM otel_metrics WHERE project_id='${DEMO_PROJECT}' AND resource___service___name='${scope}'`;
+  sql(`INSERT INTO otel_metrics (project_id,id,series_id,timestamp,metric_name,metric_type,metric_unit,value,resource,resource___service___name)
+    VALUES ('${DEMO_PROJECT}',gen_random_uuid(),'${scope}',now()-interval '10 seconds','browser.web_vital.lcp','GAUGE','ms',1200,
+      jsonb_build_object('service',jsonb_build_object('name','${scope}')),'${scope}')`);
+  try {
+    const to = new Date();
+    const from = new Date(to.getTime() - 90 * 60 * 1000);
+    for (const [range, span] of [[{ since: "1H" }, 60 * 60 * 1000], [{ from: from.toISOString(), to: to.toISOString() }, 90 * 60 * 1000]] as const) {
+      await page.goto(`/p/${DEMO_PROJECT}/rum?${new URLSearchParams({ tab: "performance", service_scope: scope, ...range })}`);
+      const chart = page.locator("#rum-vital-trend-lcp");
+      await expect(chart).toBeVisible();
+      await expect.poll(() => chart.evaluate(element => {
+        const instance = (window as any).echarts?.getInstanceByDom(element);
+        const extent = instance?.getModel().getComponent("xAxis").axis.scale.getExtent();
+        return extent ? extent[1] - extent[0] : null;
+      })).toBe(span);
+    }
+  } finally {
+    sql(cleanup);
+  }
+});
