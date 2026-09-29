@@ -1523,7 +1523,8 @@ renderJsonpath :: Jsonpath -> Text
 renderJsonpath (Jsonpath base path pred_) =
   -- Single-quoted SQL literal with @''@-escaping (matches the rest of the module and
   -- transformFlattenedAttribute), not @$$@ dollar-quoting which a @$$@ in a user value would break.
-  "jsonb_path_exists(to_jsonb(" <> base <> "), " <> sqlStringLit (renderPath path <> " ? (" <> renderPred False pred_ <> ")") <> "::jsonpath)"
+  -- These telemetry columns are already JSONB/VARIANT; to_jsonb serializes native JSON again.
+  "jsonb_path_exists(" <> (if base `elem` ["attributes", "resource"] then base else "to_jsonb(" <> base <> ")") <> ", " <> sqlStringLit (renderPath path <> " ? (" <> renderPred False pred_ <> ")") <> "::jsonpath)"
   where
     renderPath (JPath steps) = "$" <> foldMap step steps
     step (JKey k) = ".\"" <> k <> "\""
@@ -1568,6 +1569,13 @@ jsonString = toText . encodeToLazyText . AE.String
 --
 -- >>> renderJsonpath <$> lowerPred "=" (Subject "" "data" [FieldKey "name"]) (Str "John Doe")
 -- Right "jsonb_path_exists(to_jsonb(data), '$.\"name\" ? (@ == \"John Doe\")'::jsonpath)"
+--
+-- >>> renderJsonpath <$> lowerPred "matches regex" (Subject "" "attributes" [FieldKey "url", FieldKey "full"]) (Str "^/cart$")
+-- Right "jsonb_path_exists(attributes, '$.\"url\".\"full\" ? (@ like_regex \"^/cart$\")'::jsonpath)"
+-- >>> renderJsonpath <$> lowerPred "matches regex" (Subject "" "resource" [FieldKey "service", FieldKey "name"]) (Str "^checkout$")
+-- Right "jsonb_path_exists(resource, '$.\"service\".\"name\" ? (@ like_regex \"^checkout$\")'::jsonpath)"
+-- >>> renderJsonpath <$> lowerPred "matches regex" (Subject "" "name" []) (Str "^GET /pay$")
+-- Right "jsonb_path_exists(to_jsonb(name), '$ ? (@ like_regex \"^GET /pay$\")'::jsonpath)"
 --
 -- >>> renderJsonpath <$> lowerPred "!=" (Subject "" "settings" [ArrayWildcard "", FieldKey "enabled"]) (Boolean True)
 -- Right "jsonb_path_exists(to_jsonb(settings), '$[*].\"enabled\" ? (@ != true)'::jsonpath)"

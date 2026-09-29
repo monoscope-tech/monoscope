@@ -58,8 +58,8 @@ import OpenTelemetry.Attributes qualified as OA
 import Pages.Charts.Types (DataType, MetricsData (..), MetricsStats (..))
 import Pkg.DeriveUtils (AesonText (..), DB)
 import Pkg.Metrics qualified as Metrics
-import Pkg.Parser (RangeEnd (..), SqlQueryCfg (..), autoBinWidth)
-import Pkg.Parser.Expr (ToQueryText (..), kqlTimespanToTimeBucket)
+import Pkg.Parser (RangeEnd (..), SqlQueryCfg (..), autoBinWidth, fixedUTCTime)
+import Pkg.Parser.Expr (ToQueryText (..), display, kqlTimespanToTimeBucket, resolveWildcardTimes)
 import Pkg.Parser.Stats (BinFunction (..), ByClauseItem (..), Section (..), Sources (..), SummarizeByClause (..), defaultBinSize)
 import Relude
 import UnliftIO (withRunInIO)
@@ -411,9 +411,18 @@ generateCacheKey pid sourceM sections sqlCfg =
   CacheKey
     { projectId = pid
     , source = maybe "spans" toQText sourceM
-    , queryHash = toXXHash $ toQText sections <> "\NULenvironment=" <> fromMaybe "" sqlCfg.environment <> "\NULservice=" <> fromMaybe "" sqlCfg.service
+    , queryHash = toXXHash $ toQText sections <> "\NULenvironment=" <> fromMaybe "" sqlCfg.environment <> "\NULservice=" <> fromMaybe "" sqlCfg.service <> foldMap compiledPredicate sections
     , binInterval = extractBinInterval sqlCfg sections
     }
+  where
+    -- Compiler changes must not reuse old historical results. A fixed clock keeps
+    -- now()/ago() fingerprints stable while preserving their JSON-path rendering.
+    fingerprint = ("\NULpredicate=" <>) . display . resolveWildcardTimes fixedUTCTime
+    compiledPredicate = \case
+      Search expr -> fingerprint expr
+      WhereClause expr -> fingerprint expr
+      HavingClause expr -> fingerprint expr
+      _ -> ""
 
 
 -- | Convert UTCTime to POSIX epoch seconds
