@@ -258,6 +258,8 @@ spec = sequential $ aroundAll withTestResources do
             , (PM.AGGREGATION_TEMPORALITY_DELTA, schemaDelta, [150], (Just 150, 201))
             , (PM.AGGREGATION_TEMPORALITY_DELTA, unknownStart, [], (Just 93.75, 100))
             , (PM.AGGREGATION_TEMPORALITY_DELTA, [point (at (-10)) (at (-9)) 100 7000 0 200 [80, 20, 0, 0]], [], (Nothing, 0))
+            , (PM.AGGREGATION_TEMPORALITY_CUMULATIVE, take 1 invalidReset <> [point (at (-10)) (at (-90000)) 0 0 0 0 [0, 0, 0, 0]], [], (Nothing, 0))
+            , (PM.AGGREGATION_TEMPORALITY_CUMULATIVE, [point (at (-86401)) (at (-90000)) 0 0 0 0 [0, 0, 0, 0], point (at (-11)) (at (-90000)) 0 0 0 0 [0, 0, 0, 0], point (at (-10)) (at (-90000)) 4000000000000000000 4000000000000000000 0 100 [4000000000000000000, 0, 0, 0]], [], (Just 75, 4000000000000000000))
             ]
       pages <- forM cases \(temporality, points, scalars, _) -> do
         projectId <- createTestProject tr "RUM histogram"
@@ -300,9 +302,37 @@ spec = sequential $ aroundAll withTestResources do
       map (\(detail, summary) -> (map (measured . (.measurement)) detail.vitalTrend, [(value.page, measured value.measurement) | value <- detail.pageVitals], [measured value.measurement | value <- summary.vitals, value.name == "lcp"])) pages
         `shouldBe` [([expected], [("/histogram", expected)], [expected]) | (_, _, _, expected) <- cases]
       let lcpMeasurements = [value.measurement | (_, summary) <- pages, value <- summary.vitals, value.name == "lcp"]
-      [issue | RUMData.Unavailable _ issue <- lcpMeasurements] `shouldBe` [RUMData.MissingBaseline, RUMData.UnboundedBucket, RUMData.UnknownStart, RUMData.InterruptedSeries, RUMData.InterruptedSeries, RUMData.InterruptedSeries, RUMData.UnboundedBucket, RUMData.UnboundedBucket, RUMData.InvalidReset, RUMData.UnknownTemporality, RUMData.InvalidBuckets, RUMData.OverlappingIntervals, RUMData.UnknownStart]
+      [issue | RUMData.Unavailable _ issue <- lcpMeasurements] `shouldBe` [RUMData.MissingBaseline, RUMData.UnboundedBucket, RUMData.UnknownStart, RUMData.InterruptedSeries, RUMData.InterruptedSeries, RUMData.InterruptedSeries, RUMData.UnboundedBucket, RUMData.UnboundedBucket, RUMData.InvalidReset, RUMData.UnknownTemporality, RUMData.InvalidBuckets, RUMData.OverlappingIntervals, RUMData.UnknownStart, RUMData.InvalidReset]
       [RUMData.estimateRange estimate | RUMData.Measured _ estimate <- lcpMeasurements]
-        `shouldBe` [Just (0, 100), Just (0, 100), Just (0, 200), Just (0, 200), Just (0, 100), Just (0, 100), Just (0, 100), Just (0, 100), Just (0, 100), Nothing, Just (0, 200), Just (0, 100)]
+        `shouldBe` [Just (0, 100), Just (0, 100), Just (0, 200), Just (0, 200), Just (0, 100), Just (0, 100), Just (0, 100), Just (0, 100), Just (0, 100), Nothing, Just (0, 200), Just (0, 100), Just (0, 100)]
+
+    it "vitalPopulation_gaugeAndDelta_useOneCurrentWindowRead" \tr -> do
+      projectId <- createTestProject tr "RUM one-read population"
+      apiKey <- createTestAPIKey tr projectId "rum-one-read-key"
+      let at = (`addUTCTime` frozenTime)
+          nanos = floor . (* 1000000000) . utcTimeToPOSIXSeconds
+          point = defMessage & PMF.timeUnixNano .~ nanos (at (-10)) & PMF.startTimeUnixNano .~ nanos (at (-60)) & PMF.attributes .~ [mkAttr "page.url" "/one-read"] & PMF.count .~ 100 & PMF.bucketCounts .~ [80, 20, 0] & PMF.explicitBounds .~ [100, 200]
+          metric = defMessage & PMF.name .~ "browser.web_vital.lcp" & PMF.histogram .~ (defMessage & PMF.aggregationTemporality .~ PM.AGGREGATION_TEMPORALITY_DELTA & PMF.dataPoints .~ [point])
+          request = defMessage & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ mkResource apiKey [] & PMF.scopeMetrics .~ [defMessage & PMF.metrics .~ [metric]]]
+          nativeQueries = runQueryEffect tr $ Hasql.withHasqlTimefusion True $ do
+            counts :: [HI.OneColumn Int64] <- Hasql.interp [HI.sql|SELECT value::bigint FROM timefusion_stats WHERE component='pgwire' AND key='queries_total'|]
+            pure $ map HI.getOneColumn counts
+      void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto request)
+      forM_ (zip [10, 30] [-11, -10]) \(value, seconds) -> ingestMetric tr apiKey [] [mkAttr "page.url" "/one-read"] "browser.web_vital.fcp" value (at seconds)
+      queriesBefore <- if tr.trATCtx.env.enableTimefusionReads then nativeQueries else pure []
+      (_, RUM.RumGet (PageCtx _ body)) <- testServant tr $ RUM.rumGetH projectId (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "vital_trend") (Just "1") Nothing
+      queriesAfter <- if tr.trATCtx.env.enableTimefusionReads then nativeQueries else pure []
+      case body of
+        DeferredBody page -> do
+          page.degradedPanels `shouldBe` []
+          let measured name measurement = (name, RUMData.measurementValue measurement, RUMData.measurementSamples measurement)
+              expected = [("fcp", Just 25, 2), ("lcp", Just 93.75, 100)]
+          sort [measured vital.name vital.measurement | vital <- page.vitals, vital.name `elem` ["fcp", "lcp"]] `shouldBe` expected
+          sort [measured vital.metricName vital.measurement | vital <- page.vitalTrend] `shouldBe` expected
+          sort [measured vital.metricName vital.measurement | vital <- page.pageVitals] `shouldBe` expected
+        DeferredShell{} -> fail "Expected loaded one-read vital panel"
+      -- The second metadata snapshot is itself one native statement.
+      when tr.trATCtx.env.enableTimefusionReads $ zipWith (-) queriesAfter queriesBefore `shouldBe` [2]
 
     it "histogramVitals_missingCount_retainsUnavailableCoverage" \tr -> do
       projectId <- createTestProject tr "RUM missing histogram count"
