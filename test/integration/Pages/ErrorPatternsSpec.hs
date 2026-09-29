@@ -529,7 +529,10 @@ spec = sequential $ aroundAll withTestResources do
           runTestBg regressionTime tr $ BackgroundJobs.runHourlyJob regressionTime 0
           -- Re-ingest to regress
           apiKey <- createTestAPIKey tr pid "regress-spike-key"
-          ingestTraceWithException tr apiKey "GET /regress-spike" errRate.errorType errRate.message errRate.stacktrace regressionTime
+          -- Preserve the capture path: replaying a log as a Node.js trace changes its fingerprint.
+          case errRate.errorData.mechanism of
+            Just ErrorPatterns.CMLogRecord -> ingestErrorLog tr apiKey errRate.message [("exception.type", errRate.errorType), ("exception.message", errRate.message), ("exception.stacktrace", errRate.stacktrace)] regressionTime
+            _ -> ingestTraceWithException tr apiKey "GET /regress-spike" errRate.errorType errRate.message errRate.stacktrace regressionTime
           drainExtractionWorkerAt regressionTime tr
           -- Observe regression before running independent spike tickers.
           void $ runBackgroundJobsWhere regressionTime tr.trATCtx \case BackgroundJobs.ProcessProjectErrorsJob _ _ at -> at == regressionTime; _ -> False
