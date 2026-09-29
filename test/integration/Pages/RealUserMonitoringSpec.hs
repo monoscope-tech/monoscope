@@ -855,9 +855,21 @@ spec = sequential $ aroundAll withTestResources do
           hits <- forM [(Just "", Just "", Just "24H"), (Nothing, Nothing, Nothing)] \(from, to, since) -> do
             Cache.purge tr.trATCtx.rumCache
             load from to since "vitals"
-          writes <- withResource tr.trPool $ \conn -> PG.query_ conn "SELECT last_value, is_called FROM rum_window_writes" :: IO [(Int64, Bool)]
-          writes `shouldBe` [(1, True)]
           warm : hits `shouldBe` replicate 3 [(Just 1000, 1)]
+          let fromQuery = Just $ toText $ iso8601Show $ addUTCTime (-60) frozenTime
+              toQuery = Just $ toText $ iso8601Show frozenTime
+              publications = withResource tr.trPool (`PG.query_` "SELECT last_value, is_called FROM rum_window_writes") :: IO [(Int64, Bool)]
+          explicit <- load fromQuery toQuery Nothing "vital_trend"
+          ingest 10000 (-8)
+          Cache.purge tr.trATCtx.rumCache
+          blankSince <- load fromQuery toQuery (Just "") "vitals"
+          publications `shouldReturn` [(2, True)]
+          [explicit, blankSince] `shouldBe` replicate 2 [(Just 7000, 2)]
+          Cache.purge tr.trATCtx.rumCache
+          load (Just "") (Just "") (Just "") "vitals" `shouldReturn` [(Just 9500, 3)]
+          Cache.purge tr.trATCtx.rumCache
+          load Nothing Nothing Nothing "vitals" `shouldReturn` [(Just 1000, 1)]
+          publications `shouldReturn` [(3, True)]
 
     it "panelCache_isSharedAcrossReplicas_notPerProcessMemory" \tr -> do
       -- A fresh replica has an empty memory cache; the shared rum_panel_cache table must
