@@ -832,12 +832,11 @@ slot_ page panel skeleton content
     -- One panel's worth of work per tick, swapped in place: the page chrome, the scroll
     -- position and any open replay stay exactly as they were, and a tick that lands inside
     -- the panel's cache TTL costs a cache read.
-    -- A tick arriving while the previous one is still in flight replaces it rather than
-    -- queueing behind it: the newer window is the one being looked at.
+    -- Automatic ticks leave in-flight work running; manual changes still replace it.
     -- Populated summary widgets refresh themselves; replacing their parent resets loaded values.
     liveAttrs
       | panel == PanelPulse && page.hasTelemetry = []
-      | otherwise = panelSwapAttrs page panel (rumPanelUrl page panel) "update-query from:window" [term "hx-sync" $ if sessionList then "#rum-session-search-form:replace" else "this:replace"]
+      | otherwise = panelSwapAttrs page panel (rumPanelUrl page panel) "update-query[event.detail?.source!='auto-refresh'||!this.matches('.htmx-request,:has(.htmx-request),#rum-page:has(#rum-session-search-form.htmx-request) #rum-panel-sessions')] from:window" [term "hx-sync" $ if sessionList then "#rum-session-search-form:replace" else "this:replace"]
     -- On the Sessions tab the panel also carries the replay workspace; swapping the whole
     -- panel would restart a replay the viewer just opened. Only the list is re-fetched
     -- there — a selection made while the refresh is in flight survives.
@@ -978,15 +977,6 @@ pulseOrEmpty_ page
   | page.hasTelemetry = div_ [class_ "space-y-4"] do
       rumStatWidgets_ page.links
       rumActivityWidget_ page.links
-      -- The shared population warms the Performance tab while Overview is open.
-      -- Delay it until the visible panels have settled.
-      div_
-        [ hxGet_ $ rumUrl page.links [("tab", "performance"), ("panel", panelParam PanelVitalTrend), ("deferred", "1")]
-        , hxTrigger_ "load delay:8s"
-        , hxSwap_ "none"
-        , term "hx-preload" "false"
-        ]
-        mempty
   | otherwise = maybe (rumEmptyState_ page.links.queryScope.projectId) (scopedEmptyState_ page.links) page.links.queryScope.service
 
 

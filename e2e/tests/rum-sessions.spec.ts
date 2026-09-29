@@ -261,6 +261,49 @@ test("Overview counts a session once when its events span chart intervals", asyn
   }
 });
 
+test("Overview does not prewarm hidden Performance panels while visible panels load", async ({ page }) => {
+  test.skip(!process.env.E2E_BASE_URL, "Requires the disposable e2e database");
+  const scope = `e2e-overview-prewarm-${Date.now()}`;
+  const cleanup = `DELETE FROM otel_logs_and_spans WHERE project_id='${DEMO_PROJECT}' AND resource___service___name='${scope}'; DELETE FROM otel_metrics WHERE project_id='${DEMO_PROJECT}' AND resource___service___name='${scope}'`;
+  sql(`INSERT INTO otel_logs_and_spans (project_id,summary,name,kind,timestamp,start_time,end_time,duration,attributes,resource,
+    attributes___url___path,resource___telemetry___sdk___language,resource___service___name)
+    VALUES('${DEMO_PROJECT}',ARRAY['documentLoad'],'documentLoad','span',now()-interval '10 seconds',now()-interval '10 seconds',now(),10000000,
+      '{"url":{"path":"/overview-visible"}}',jsonb_build_object('service',jsonb_build_object('name','${scope}')),'/overview-visible','webjs','${scope}');
+    INSERT INTO otel_metrics (project_id,id,series_id,timestamp,metric_name,metric_type,metric_unit,value,resource,resource___service___name)
+    VALUES('${DEMO_PROJECT}',gen_random_uuid(),'${scope}',now()-interval '10 seconds','browser.web_vital.fcp','GAUGE','ms',22.5,
+      jsonb_build_object('service',jsonb_build_object('name','${scope}')),'${scope}')`);
+  let release = () => {};
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const hiddenRequests: string[] = [];
+  page.on("request", request => {
+    const params = new URL(request.url()).searchParams;
+    if (params.get("tab") === "performance" && params.has("panel")) hiddenRequests.push(request.url());
+  });
+  await page.route("**/rum?**", async route => {
+    if (new URL(route.request().url()).searchParams.get("panel") !== "pages") return route.continue();
+    const response = await route.fetch();
+    await held;
+    await route.fulfill({ response });
+  });
+  try {
+    await page.goto(`/p/${DEMO_PROJECT}/rum?tab=overview&since=24H&service_scope=${scope}`);
+    await expect(page.locator("#rum-stat-pageviewsValue")).toHaveText("1 views");
+    await expect(page.locator("#rum-panel-vitals")).toContainText("22.5 ms");
+    // Observe the existing eight-second prewarm boundary while a real visible response is held.
+    await page.evaluate(() => new Promise<void>(resolve => setTimeout(resolve, 8500)));
+    await expect(page.locator("#rum-panel-pages")).toHaveAttribute("data-deferred-shell", "");
+    expect(hiddenRequests).toEqual([]);
+    release();
+    await expect(page.locator("#rum-panel-pages")).toContainText("/overview-visible");
+    await page.unrouteAll({ behavior: "wait" });
+    await page.getByRole("link", { name: "Performance", exact: true }).click();
+    await expect(page.locator("#rum-panel-vitals")).toContainText("22.5 ms");
+  } finally {
+    release();
+    try { await page.unrouteAll({ behavior: "wait" }); } finally { sql(cleanup); }
+  }
+});
+
 test("Overview keeps its loaded values during refresh after the first browser event arrives", async ({ page }) => {
   test.skip(!process.env.E2E_BASE_URL, "Requires the disposable e2e database");
   const scope = `e2e-overview-live-${Date.now()}`;
@@ -657,4 +700,67 @@ test("refreshed vital charts remain registered on their current elements", async
   } finally {
     sql(cleanup);
   }
+});
+
+test("automatic session ticks keep an in-flight list request while search replaces it", async ({ page }) => {
+  test.skip(!process.env.E2E_BASE_URL, "Requires a disposable fixture database");
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.goto(`/p/${DEMO_PROJECT}/rum?tab=sessions&since=1H`);
+  const list = page.locator("#rum-sessions-list");
+  await expect(list.locator(".rum-session-link").first()).toBeVisible();
+  await page.locator('[popovertarget="n-timepicker-popover"]').click();
+  await page.locator("[data-mobile-live-toggle]").click();
+  await expect(page.locator("[data-time-transport]")).toHaveAttribute("data-interval", "0");
+  await page.locator('[popovertarget="n-timepicker-popover"]').click();
+  const workspace = page.locator("#rum-replay-workspace");
+  await workspace.evaluate(element => element.setAttribute("data-e2e-preserved", "true"));
+  let release = () => {};
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let releaseSearch = () => {};
+  const heldSearch = new Promise<void>(resolve => { releaseSearch = resolve; });
+  const automatic: import("@playwright/test").Request[] = [];
+  await page.route("**/rum?**", async route => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get("panel") === "sessions" && route.request().headers()["hx-source"] === "div#rum-panel-sessions") {
+      automatic.push(route.request());
+      if (automatic.length === 1) await held;
+    }
+    if (url.searchParams.get("q") === "e2e-missing-session" && route.request().headers()["hx-source"] === "form#rum-session-search-form") await heldSearch;
+    await route.continue();
+  });
+  try {
+    const first = page.waitForRequest(request => new URL(request.url()).searchParams.get("panel") === "sessions");
+    await page.evaluate(() => window.dispatchEvent(new CustomEvent("update-query", { detail: { source: "auto-refresh" } })));
+    const pending = await first;
+    await expect(page.locator("#rum-panel-sessions")).toHaveClass(/htmx-request/);
+    await page.evaluate(() => window.dispatchEvent(new CustomEvent("update-query", { detail: { source: "auto-refresh" } })));
+    await page.waitForTimeout(300); // Let an unwanted replacement reach the real HTTP route.
+    expect(automatic).toHaveLength(1);
+    expect(pending.failure()).toBeNull();
+    const search = page.getByRole("searchbox", { name: "Search sessions" });
+    const replaced = page.waitForEvent("requestfailed", request => request === pending);
+    const searching = page.waitForRequest(request => new URL(request.url()).searchParams.get("q") === "e2e-missing-session");
+    const searched = page.waitForResponse(response => new URL(response.url()).searchParams.get("q") === "e2e-missing-session");
+    await search.fill("e2e-missing-session");
+    const pendingSearch = await searching;
+    release();
+    await replaced;
+    await expect(page.locator("#rum-session-search-form")).toHaveClass(/htmx-request/);
+    await page.evaluate(() => window.dispatchEvent(new CustomEvent("update-query", { detail: { source: "auto-refresh" } })));
+    await page.waitForTimeout(300);
+    expect(automatic).toHaveLength(1);
+    expect(pendingSearch.failure()).toBeNull();
+    releaseSearch();
+    expect((await searched).status()).toBe(200);
+    await expect(page.getByText("No sessions match this filter", { exact: true })).toBeVisible();
+    await expect(search).toBeFocused();
+    await expect(workspace).toHaveAttribute("data-e2e-preserved", "true");
+    await expect(page.locator("#rum-session-search-form")).not.toHaveClass(/htmx-request/);
+    const resumed = page.waitForResponse(response => response.request().headers()["hx-source"] === "div#rum-panel-sessions");
+    await page.evaluate(() => window.dispatchEvent(new CustomEvent("update-query", { detail: { source: "auto-refresh" } })));
+    expect((await resumed).status()).toBe(200);
+    expect(automatic).toHaveLength(2);
+    await expect(search).toHaveValue("e2e-missing-session");
+    await expect(workspace).toHaveAttribute("data-e2e-preserved", "true");
+  } finally { release(); releaseSearch(); await page.unrouteAll({ behavior: "wait" }); }
 });

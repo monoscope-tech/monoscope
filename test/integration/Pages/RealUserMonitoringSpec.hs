@@ -545,12 +545,9 @@ spec = sequential $ aroundAll withTestResources do
       -- The numbers and activity chart are dashboard Widget components that fetch their own
       -- data through the chart pipeline; the page ships their queries, not their values.
       overview `shouldContainAll` ["Page views", "Browser errors", "bin_auto(timestamp)", "rum-activity", "Largest Contentful Paint", "2.2 s", "/checkout", "Ada Lovelace"]
-      -- The Overview warms the Performance tab's heaviest scan in the background, with the
-      -- response discarded — so opening Performance answers from cache.
-      overview `shouldContainAll` ["panel=vital_trend", "hx-swap=\"none\""]
       -- The LIVE badge is only honest if something listens for the time transport's tick, and
       -- the panels hold every number on this page. Each re-fetches itself in place.
-      overview `shouldContainAll` ["hx-trigger=\"update-query from:window\"", "hx-sync=\"this:replace\""]
+      overview `shouldContainAll` ["hx-trigger=\"update-query[", "from:window\"", "hx-sync=\"this:replace\""]
       -- The tab strip and time picker must not wait on six 24-hour scans: the request that
       -- paints the page answers with a skeleton that fetches the panels itself. Panel data
       -- appearing here again would mean a tab click is back to seconds of blank page.
