@@ -338,15 +338,11 @@ spec = sequential $ aroundAll withResources do
       cached <- Cache.lookup tr.trATCtx.infrastructureCache cacheKey :: IO (Maybe (V.Vector ContainerRow))
       V.length <$> cached `shouldBe` Just 8
       -- Both runtimes in one table, with the facet menus the filter dropdown is built from.
-      html `shouldContainAll` ["checkout", "srv-captain--redpanda-0.1.tt13bkp5", "kube-system", "namespace=", "runtime=", "cluster=", "otel-demo", "vps-bare-01", "Search containers", "CPU limit used", "Memory limit used", "data-live-mode=\"refresh-only\"", "&quot;hide_value&quot;:true", "data-component=\"facet-rail\"", "data-component=\"facet-section\"", "data-component=\"facet-option\"", "Last 5 mins", "bg-bgAlternate sticky", "container-usage-chart bg-bgRaised px-2 pt-2", "bg-fillWarning-strong", "hidden max-md:inline-flex", "data-header-actions", "text-textWeak widget-subtitle", "/infrastructure/containers/detail?since=5M"]
+      html `shouldContainAll` ["checkout", "srv-captain--redpanda-0.1.tt13bkp5", "kube-system", "namespace=", "runtime=", "cluster=", "otel-demo", "vps-bare-01", "Search containers", "CPU limit used", "Memory limit used", "data-live-mode=\"refresh-only\"", "data-component=\"facet-rail\"", "data-component=\"facet-section\"", "data-component=\"facet-option\"", "Last 5 mins", "bg-bgAlternate sticky", "bg-fillWarning-strong", "hidden max-md:inline-flex", "data-header-actions", "/infrastructure/containers/detail?since=5M"]
       T.isInfixOf "group/summary" html `shouldBe` False
       T.isInfixOf "Usage over time" html `shouldBe` False
       T.isInfixOf "min-height:" html `shouldBe` False
-      T.count "class=\"container-usage-chart " html `shouldBe` 2
-      -- Escaped, because the chart options now ride in a JS *string literal* rather than a
-      -- template literal (6bfc9434f): the page carries \"bottom\":0, and asserting the bare
-      -- form would pass only for the shape that broke every chart's JSON.parse.
-      html `shouldContainAll` ["px-2 pt-2", "\\\"bottom\\\":0", "\\\"tooltip\\\":{\\\"show\\\":true}"]
+      T.isInfixOf "data-widget=" html `shouldBe` False
       T.count "data-component=\"facet-section\" open>" html `shouldBe` 1
       -- The screenshot regression: "Not ready" wrapped onto two lines in the narrow status
       -- column, crossing the badge border. The label is one indivisible status.
@@ -590,6 +586,11 @@ spec = sequential $ aroundAll withResources do
       (_, html') <- testServant tr $ Containers.containerDetailGetH testPid (Just "checkout") (Just "checkout-7fb5b4f859-nlcjs") Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml html'
       html `shouldContainAll` ["Requests and limits", "vps-d6d7e318", "View logs", "resource.k8s.pod.name", "data-tippy-content=\"Pod: checkout-7fb5b4f859-nlcjs\""]
+
+      -- Escaped, because the chart options now ride in a JS *string literal* rather than a
+      -- template literal (6bfc9434f): the page carries \"bottom\":0, and asserting the bare
+      -- form would pass only for the shape that broke every chart's JSON.parse.
+      html `shouldContainAll` ["&quot;hide_value&quot;:true", "text-textWeak widget-subtitle", "\\\"bottom\\\":0", "\\\"tooltip\\\":{\\\"show\\\":true}"]
 
       -- A container that stopped reporting must say so, not render a blank panel.
       (_, gone) <- testServant tr $ Containers.containerDetailGetH testPid (Just "ghost") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing

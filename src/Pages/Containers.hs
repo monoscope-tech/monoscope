@@ -125,7 +125,6 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
                       , menu "Node" "node" filters.node (.nodeName)
                       , menu "Image" "image" filters.image (.image)
                       ]
-              , header = Just containerCharts_
               , showFilterRail = True
               , -- Says the freshness window, not the picker's: the pivot reads the newest
                 -- datapoint per series from the last few minutes of the range, so a wide
@@ -151,7 +150,6 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
           , pageActions = Just $ div_ [class_ "inline-flex items-center gap-2", data_ "default-window" "5M"] do
               TimePicker.liveDataControls_ Nothing window.currentRange Nothing TimePicker.RefreshOnly
           , serviceOptions = V.empty
-          , needsGridStack = True
           }
   addRespHeaders $ ContainersPage $ PageCtx bwconf body
   where
@@ -226,12 +224,6 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
         ("/p/" <> vm.pid.toText <> "/infrastructure/containers/detail")
         ([("container", vm.row.containerName), ("scope", display vm.row.scope)] <> mapMaybe sequenceA [("pod", vm.row.podName), ("cluster", vm.row.cluster), ("namespace", vm.row.namespace), ("node", vm.row.nodeName)])
         vm.window
-
-    containerCharts_ :: Html ()
-    containerCharts_ =
-      div_ [class_ "grid grid-cols-2 gap-3 max-lg:grid-cols-1"]
-        $ forM_ ([("containers-cpu", "CPU by container", "cores", "container.cpu.usage"), ("containers-memory", "Memory by container", "bytes", "container.memory.working_set")] :: [(Text, Text, Text, Text)]) \(wid, title, unit, metric) ->
-          div_ [class_ "container-usage-chart bg-bgRaised px-2 pt-2"] $ Widget.widget_ $ infrastructureWidget pid wid title unit ("metrics | where metric_name == \"" <> metric <> "\" | summarize avg(value) by bin_auto(timestamp), coalesce(resource.k8s.container.name, resource.container.name)")
 
 
 newtype ContainersGet = ContainersPage (PageCtx (Deferred (Table ContainerVM)))

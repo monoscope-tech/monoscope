@@ -59,3 +59,35 @@ test("a Kubernetes namespace drilldown keeps containers within its cluster", asy
   await expect(rows).toHaveCount(3);
   expect(await rows.evaluateAll((rows, cluster) => rows.every(row => new URL(row.getAttribute("data-hx-get")!, "http://localhost").searchParams.get("cluster") === cluster), CLUSTER)).toBe(true);
 });
+
+for (const width of [390, 1280]) {
+  test(`container inventory leaves scoped charts in the selected drawer at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    const chartRequests: string[] = [];
+    page.on("request", request => { if (new URL(request.url()).pathname.startsWith("/chart_data")) chartRequests.push(request.url()); });
+    await page.goto(`/p/${DEMO_PROJECT}/infrastructure/containers?namespace=identity-b&from=2024-12-31T23:00:00Z&to=2025-01-01T00:00:00Z`, { waitUntil: "domcontentloaded" });
+    await expect(page.locator("[data-deferred-shell]")).toHaveCount(0);
+    const rows = page.locator(`tr[role="button"][data-hx-get*="container=${CONTAINER}"]`);
+    await expect(rows).toHaveCount(1);
+    await expect(rows.locator("td").nth(4)).toHaveText("2.000");
+    await expect(page.locator("#containersContainer [data-widget]")).toHaveCount(0);
+    expect(chartRequests).toHaveLength(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    const cpuResponse = page.waitForResponse(response => {
+      const query = new URL(response.url()).searchParams.get("query");
+      return response.url().includes("/chart_data") && (query?.includes("container.cpu.usage") ?? false);
+    });
+    await rows.locator("td").first().click();
+    const drawer = page.locator("#global-data-drawer-content");
+    await expect(drawer.getByText(/^Namespace:\s*identity-b$/)).toBeVisible();
+    const url = new URL((await cpuResponse).url());
+    expect(url.searchParams.get("from")).toBe("2024-12-31T23:00:00Z");
+    expect(url.searchParams.get("to")).toBe("2025-01-01T00:00:00Z");
+    const response = await page.request.get(url.toString().replace("/chart_data/stream", "/chart_data"));
+    expect(response.ok()).toBe(true);
+    const data = await response.json();
+    expect(data.error ?? null).toBeNull();
+    expect(data.dataset.map((row: number[]) => row.slice(1))).toEqual([[2]]);
+    await expect(drawer.locator("#container-detail-cpu canvas")).toBeVisible();
+  });
+}
