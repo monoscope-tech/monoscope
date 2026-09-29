@@ -594,6 +594,15 @@ spec = sequential $ aroundAll withResources do
       thenRows <- runTestBg frozenTime tr $ containersInWindow False testPid (addUTCTime (-86400) frozenTime) (addUTCTime (-10800) frozenTime)
       map fst (rowsByName thenRows) `shouldContain` ["long-gone"]
 
+    it "restartedContainer_newSeriesHashSameIdentity_showsNewestSampleNotTheMaxAcrossSeries" \tr -> do
+      key <- createTestAPIKey tr testPid "containers-restart-key"
+      -- A restart changes container.id, so the newer sample is a different ingest series with
+      -- the same identity; the older, higher sample must lose to it rather than win a MAX.
+      forM_ ([("old-id", 9, -120), ("new-id", 2, -60)] :: [(Text, Double, NominalDiffTime)]) \(cid, cpu, offset) ->
+        ingestMetric tr key (mkAttr "container.id" cid : k8sResource "restart" "restart-pod" "restarted") [] "container.cpu.usage" cpu (addUTCTime offset frozenTime)
+      rows <- runTestBg frozenTime tr $ containersInWindow False testPid (addUTCTime (-900) frozenTime) frozenTime
+      (.cpuCores) <$> lookup "restarted" (rowsByName rows) `shouldBe` Just (Just 2)
+
     it "containerSummary_describesTheEffectiveSliceAtTheSelectedWindowEnd" \tr -> do
       key <- createTestAPIKey tr testPid "containers-summary-key"
       forM_ ([("summary-recent", -15), ("summary-ten-min", -600), ("summary-historical", -10815)] :: [(Text, NominalDiffTime)]) \(name, offset) ->

@@ -320,9 +320,12 @@ freshnessWindow = 15 * 60
 -- | Every container, stand-in pod and bare host reporting at the end of the window, newest
 -- datapoint per series.
 --
--- One pass: a window function picks the latest datapoint per series, then conditional
--- aggregates pivot the metrics into columns. No self-join — that is the shape that kills
--- TimeFusion.
+-- Two windows, then conditional aggregates pivot the metrics into columns; no self-join —
+-- that is the shape that kills TimeFusion. The first keeps the newest datapoint per ingest
+-- @series_id@, so the blob lookups below run over the survivors, not the whole slice (2.7x).
+-- The identity is a function of the series hash, so the second window only matters for a
+-- series whose hash changed but identity did not: a restarted container (new @container.id@)
+-- must collapse to its newest sample, not the max across both.
 --
 -- The grouping key carries the node or host, not just the container name, because Docker
 -- container names collide across the nodes of a Swarm and pod names collide across clusters.
@@ -357,7 +360,19 @@ containersWithLimit limitM useTimefusion pid fromTime' toTime =
     . map normalizeRow
     <$> Hasql.interp
       ( [HI.sql|
-      WITH series AS (
+      WITH newest AS (
+        SELECT metric_name, value, timestamp, resource, attributes,
+          resource___host___name, resource___k8s___pod___name, resource___k8s___namespace___name,
+          resource___k8s___container___name, resource___container___name,
+          row_number() OVER (PARTITION BY series_id ORDER BY timestamp DESC) AS rn
+        FROM otel_metrics
+        WHERE project_id = #{pid.toText}
+          AND timestamp >= #{fromTime}
+          AND timestamp <= #{toTime}
+          AND metric_name IN |]
+          <> raw metricNameInList
+          <> [HI.sql|
+      ), series AS (
         SELECT |]
           <> raw scopeExpr
           <> [HI.sql| AS scope,
@@ -435,14 +450,8 @@ containersWithLimit limitM useTimefusion pid fromTime' toTime =
           |]
           <> raw memState
           <> [HI.sql| AS mem_state, timestamp
-        FROM otel_metrics
-        WHERE project_id = #{pid.toText}
-          AND timestamp >= #{fromTime}
-          AND timestamp <= #{toTime}
-          AND metric_name IN |]
-          <> raw metricNameInList
-          <> [HI.sql|
-          AND |]
+        FROM newest
+        WHERE rn = 1 AND |]
           <> raw identityExpr
           <> [HI.sql| IS NOT NULL
       ), latest AS (
