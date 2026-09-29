@@ -850,11 +850,7 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
                 Just (stale, _) -> Right (stale, False) <$ Log.logAttention "RUM panel query failed; served stale cache" (label, displayException err)
                 Nothing -> Left label <$ Log.logAttention "RUM panel query failed" (label, displayException err)
       refresh = isJust refreshM
-      deferredUrl =
-        TimePicker.windowUrl
-          ("/p/" <> pid.toText <> "/rum")
-          ([(key, value) | (key, Just value) <- [("tab", tabM), ("q", queryM), ("filter", sessionFilterM), ("session", selectedM), ("environment", environment)]] <> [("deferred", "1")])
-          window
+      deferredUrl = rumUrl links ([(key, value) | (key, Just value) <- [("tab", tabM), ("q", queryM), ("filter", sessionFilterM), ("session", selectedM)]] <> [("deferred", "1")])
   body <- withDeferredBody deferredM "rum-page" deferredUrl (rumSkeleton_ tab) do
     outcomes <- pooledForConcurrently panelQueries runQuery
     let (degradedPanels, served) = partitionEithers outcomes
@@ -986,6 +982,7 @@ sessionSearch_ page = form_
   , hxSelect_ "#rum-sessions-list"
   , hxSwap_ "outerMorph"
   , term "hx-sync" "this:replace"
+  , term "hx-on::before:request" "event.detail.ctx.replace = this.action + '?' + new URLSearchParams(new FormData(this))"
   , term "hx-vals" "{\"panel\":\"sessions\",\"deferred\":\"1\"}"
   , class_ "flex min-w-0 flex-[1_1_22rem] items-center gap-2"
   ]
@@ -994,6 +991,7 @@ sessionSearch_ page = form_
     input_ [type_ "hidden", name_ "session", value_ $ fromMaybe "" page.selectedSession]
     TimePicker.timeHiddenInputs_ page.links.window.fromQuery page.links.window.toQuery page.links.window.sinceQuery
     forM_ page.links.queryScope.environment $ \environment -> input_ [type_ "hidden", name_ "environment", value_ environment]
+    forM_ page.links.queryScope.service $ \service -> input_ [type_ "hidden", name_ "service_scope", value_ service]
     input_ [id_ "rum-session-filter", type_ "hidden", name_ "filter", value_ $ fromMaybe "" $ sessionFilterParam page.sessionFilter]
     label_ [class_ "input input-sm flex min-w-0 flex-1 items-center gap-2 border-strokeWeak bg-bgBase shadow-none max-sm:h-11"] do
       faSprite_ "magnifying-glass" "regular" "h-4 w-4 shrink-0 text-textWeak"
@@ -1913,6 +1911,7 @@ rumUrl links extras =
     ("/p/" <> links.queryScope.projectId.toText <> "/rum")
     ( extras
         <> [("environment", environment) | environment <- maybeToList links.queryScope.environment]
+        <> [("service_scope", service) | service <- maybeToList links.queryScope.service]
     )
     links.window
 

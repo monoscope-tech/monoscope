@@ -138,3 +138,74 @@ test("page links preserve regex query characters through Explorer preload", asyn
     sql(cleanup);
   }
 });
+
+test("settled session search preserves scope and survives reload and a shared URL", async ({ page, context }) => {
+  test.skip(!process.env.E2E_BASE_URL, "Requires the disposable e2e database");
+  const cleanup = `DELETE FROM otel_logs_and_spans WHERE project_id='${DEMO_PROJECT}' AND resource___deployment___environment___name='e2e-session-search'`;
+  sql(`${cleanup};
+    INSERT INTO otel_logs_and_spans (project_id,summary,name,kind,timestamp,start_time,end_time,duration,attributes,resource,
+      attributes___session___id,resource___telemetry___sdk___language,resource___service___name,resource___deployment___environment___name)
+    SELECT '${DEMO_PROJECT}',ARRAY['documentLoad'],'documentLoad','span',now(),now(),now()+interval '10 milliseconds',10000000,
+      jsonb_build_object('session',jsonb_build_object('id',sid),'url',jsonb_build_object('path','/scoped-session-proof')),
+      jsonb_build_object('telemetry',jsonb_build_object('sdk',jsonb_build_object('language','webjs')),'service',jsonb_build_object('name',svc),
+        'deployment',jsonb_build_object('environment',jsonb_build_object('name','e2e-session-search'))),
+      sid,'webjs',svc,'e2e-session-search'
+    FROM (VALUES ('ec2e0000-0000-4000-8000-000000000001','e2e-session-search'),
+      ('ec2e0000-0000-4000-8000-000000000002','other-service')) AS scopes(sid,svc)`);
+  try {
+    const initialPanel = page.waitForResponse(r => {
+      const url = new URL(r.url());
+      return url.pathname.endsWith("/rum") && url.searchParams.get("panel") === "sessions"
+        && r.request().headers()["hx-source"] === "div#rum-panel-sessions";
+    });
+    await page.goto(`/p/${DEMO_PROJECT}/rum?tab=sessions&since=1H&environment=e2e-session-search&service_scope=e2e-session-search`);
+    const initialUrl = new URL((await initialPanel).url());
+    expect(initialUrl.searchParams.get("service_scope")).toBe("e2e-session-search");
+    await expect(page.locator(".rum-session-link")).toHaveCount(1);
+    await page.locator(".rum-session-link").click();
+    const workspace = page.locator("#rum-replay-workspace");
+    await expect(workspace.locator("session-replay")).toBeVisible();
+    await page.waitForURL(url => url.searchParams.has("session"));
+    const session = new URL(page.url()).searchParams.get("session");
+    await page.getByRole("link", { name: "With replay", exact: true }).click();
+    await expect(page.getByRole("link", { name: "With replay", exact: true })).toHaveAttribute("aria-current", "page");
+    await page.waitForURL(url => url.searchParams.get("filter") === "replays");
+    const query = "e2e missing session + % &";
+    const response = page.waitForResponse(r => {
+      const url = new URL(r.url());
+      return url.pathname.endsWith("/rum") && url.searchParams.get("q") === query
+        && r.request().headers()["hx-source"] === "form#rum-session-search-form";
+    });
+    await page.getByRole("searchbox", { name: "Search sessions" }).fill(query);
+    await response;
+    await expect(page.getByText("No sessions match this filter", { exact: true })).toBeVisible();
+    await page.waitForURL(url => url.searchParams.get("q") === query);
+    await page.getByRole("link", { name: "All sessions", exact: true }).click();
+    await expect(page.getByRole("link", { name: "All sessions", exact: true })).toHaveAttribute("aria-current", "page");
+    await page.waitForURL(url => !url.searchParams.has("filter"));
+    const url = new URL(page.url());
+    for (const [key, value] of Object.entries({q:query, session, since:"1H", environment:"e2e-session-search", service_scope:"e2e-session-search"})) {
+      expect(url.searchParams.get(key)).toBe(value);
+    }
+    expect(url.searchParams.get("filter") ?? "").toBe("");
+    for (const parameter of ["panel", "deferred", "refresh"]) expect(url.searchParams.has(parameter)).toBe(false);
+    await page.reload();
+    await expect(page.getByRole("searchbox", { name: "Search sessions" })).toHaveValue(query);
+    await expect(page.getByText("No sessions match this filter", { exact: true })).toBeVisible();
+    await expect(workspace.locator("session-replay")).toBeVisible();
+    const shared = await context.newPage();
+    await shared.goto(url.toString());
+    await expect(shared.getByRole("searchbox", { name: "Search sessions" })).toHaveValue(query);
+    await expect(shared.getByText("No sessions match this filter", { exact: true })).toBeVisible();
+    await expect(shared.locator("#rum-replay-workspace session-replay")).toBeVisible();
+    await page.goBack();
+    await expect(page.getByRole("searchbox", { name: "Search sessions" })).toHaveValue(query);
+    await expect(page.getByRole("link", { name: "With replay", exact: true })).toHaveAttribute("aria-current", "page");
+    await page.goBack();
+    await expect(page.getByRole("searchbox", { name: "Search sessions" })).toHaveValue("");
+    await expect(page.getByRole("link", { name: "All sessions", exact: true })).toHaveAttribute("aria-current", "page");
+    await expect(workspace.locator("session-replay")).toBeVisible();
+  } finally {
+    sql(cleanup);
+  }
+});
