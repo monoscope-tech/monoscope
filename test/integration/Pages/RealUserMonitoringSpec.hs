@@ -26,6 +26,7 @@ import Pages.BodyWrapper (PageCtx (..))
 import Pages.Components (Deferred (..))
 import Pages.LogExplorer.Log qualified as Log
 import Pages.RealUserMonitoring qualified as RUM
+import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.TestUtils
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields qualified as MSF
 import Proto.Opentelemetry.Proto.Metrics.V1.Metrics qualified as PM
@@ -455,6 +456,24 @@ spec = sequential $ aroundAll withTestResources do
       let html = toStrict $ Lucid.renderText $ Lucid.toHtml response
       html `shouldContainAll` [low, high, "17.5 ms", "1.8 s", "attributes.url.full%20%3D%3D%20%22https"]
       html `shouldSatisfy` (not . T.isInfixOf "/item/{hex}")
+
+    it "explicitTimeWindow_withoutSince_survivesSharedNavigation" \tr -> do
+      let from = addUTCTime (-5400) frozenTime
+          to = addUTCTime (-5) frozenTime
+          fromQuery = Just $ toText $ iso8601Show from
+          toQuery = Just $ toText $ iso8601Show to
+      (_, RUM.RumGet (PageCtx _ shell)) <- testServant tr $ RUM.rumGetH testPid (Just "performance") Nothing Nothing fromQuery toQuery Nothing Nothing Nothing Nothing Nothing Nothing
+      case shell of
+        DeferredShell _ url _ -> url `shouldNotSatisfy` T.isInfixOf "since=24H"
+        DeferredBody{} -> fail "Expected initial shared-window shell"
+      forM_ [(fromQuery, toQuery, from, to, Nothing), (fromQuery, Nothing, from, frozenTime, Nothing), (Nothing, toQuery, addUTCTime (-300) frozenTime, to, Nothing), (Nothing, Nothing, addUTCTime (-86400) frozenTime, frozenTime, Just ("24H" :: Text))] \(fromM, toM, expectedFrom, expectedTo, expectedSince) -> do
+        (_, RUM.RumGet (PageCtx _ body)) <- testServant tr $ RUM.rumGetH testPid (Just "performance") Nothing Nothing fromM toM Nothing Nothing Nothing Nothing (Just "1") Nothing
+        case body of
+          DeferredBody page -> do
+            let window :: TimePicker.TimeWindow
+                window = page.links.window
+            (window.fromTime, window.toTime, window.sinceQuery) `shouldBe` (expectedFrom, expectedTo, expectedSince)
+          DeferredShell{} -> fail "Expected loaded shared-window page"
 
     it "singletonVitalTrend_keepsTheSelectedTimeWindow" \tr -> do
       projectId <- createTestProject tr "RUM singleton time window"

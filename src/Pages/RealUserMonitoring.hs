@@ -58,7 +58,7 @@ import System.Config (AuthContext (..), EnvConfig (enableTimefusionReads))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import UnliftIO (tryAny, withRunInIO)
-import Utils (classifyUserAgent, countNoun, faSprite_, fmtDate, getDurationNSMS, prettyTimeShort, replaceAllFormats, showFFloat', toXXHash)
+import Utils (classifyUserAgent, countNoun, faSprite_, fmtDate, getDurationNSMS, nonEmptyT, prettyTimeShort, replaceAllFormats, showFFloat', toXXHash)
 
 
 data RumTab = Overview | Sessions | Performance
@@ -638,7 +638,7 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
       panel = panelM >>= parsePanel
       sessionFilter = parseSessionFilter sessionFilterM
       searchQuery = mfilter (not . T.null) $ T.strip <$> queryM
-      since = sinceM <|> Just "24H"
+      since = sinceM <|> ("24H" <$ guard (all (isNothing . nonEmptyT) [fromM, toM]))
       window = TimePicker.mkTimeWindow now fromM toM since
       -- A shared investigation link names its environment explicitly. The sticky selection
       -- remains the default for a hand-entered RUM URL, but must not silently rewrite a link

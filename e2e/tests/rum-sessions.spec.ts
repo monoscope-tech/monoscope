@@ -427,3 +427,22 @@ test("singleton vital trend keeps the selected time axis", async ({ page }) => {
     sql(cleanup);
   }
 });
+
+test("explicit RUM window survives reload and shared navigation without since", async ({ page, context }) => {
+  const to = new Date();
+  const from = new Date(to.getTime() - 90 * 60 * 1000);
+  const params = new URLSearchParams({ tab: "performance", from: from.toISOString(), to: to.toISOString(), environment: "e2e-explicit-window", service_scope: "e2e-explicit-window" });
+  const url = `/p/${DEMO_PROJECT}/rum?${params}`;
+  for (const target of [page, await context.newPage()]) {
+    const response = await target.goto(url);
+    const initialRange = (await response!.text()).match(/id="n-currentRange">([^<]*)/)?.[1];
+    expect(initialRange).toBeTruthy();
+    expect(initialRange).not.toBe("Last 24 hours");
+    await expect(target.locator("#n-currentRange")).not.toHaveText("Last 24 hours");
+    await target.reload();
+    await expect(target.locator("#n-currentRange")).not.toHaveText("Last 24 hours");
+    const current = new URL(target.url());
+    for (const [key, value] of params) expect(current.searchParams.get(key)).toBe(value);
+    expect(current.searchParams.has("since")).toBe(false);
+  }
+});
