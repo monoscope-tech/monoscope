@@ -1,4 +1,4 @@
-module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), kqlTimespanToTimeBucket, unsupportedTimespan, defaultBinWidth, FieldKey (..), pSquareBracketKey, pTerm, Jsonpath, LowerErr (..), lowerPred, renderJsonpath, resolveWildcardTimes, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), flattenedOtelAttributes, flattenedOtelAttributesBuiltin, setOtelColumns, setMetricsColumns, topLevelOtelColumns, acceptedFieldRoots, FieldUniverse (..), otelFieldUniverse, metricsFieldUniverse, knownFieldRoot, suggestFieldRoot, transformFlattenedAttribute, outputFieldAliases, errorFlagSql, severityIsErrorSql, sqlStringLit) where
+module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), CaseMode (..), kqlTimespanToTimeBucket, unsupportedTimespan, defaultBinWidth, FieldKey (..), pSquareBracketKey, pTerm, Jsonpath, LowerErr (..), lowerPred, renderJsonpath, resolveWildcardTimes, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), flattenedOtelAttributes, flattenedOtelAttributesBuiltin, setOtelColumns, setMetricsColumns, topLevelOtelColumns, acceptedFieldRoots, FieldUniverse (..), otelFieldUniverse, metricsFieldUniverse, knownFieldRoot, suggestFieldRoot, transformFlattenedAttribute, outputFieldAliases, errorFlagSql, severityIsErrorSql, sqlStringLit) where
 
 import Control.Monad.Combinators.Expr (
   Operator (InfixL),
@@ -157,6 +157,11 @@ pSubject = do
   return $ Subject entire primaryKey $ maybeToList firstField ++ fields
 
 
+data CaseMode = CI | CS
+  deriving stock (Eq, Generic, Ord, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
 data Expr
   = Eq Subject Values
   | NotEq Subject Values
@@ -164,8 +169,7 @@ data Expr
   | LT Subject Values
   | GTEq Subject Values
   | LTEq Subject Values
-  | Regex Subject Text
-  | MatchesRegex Subject Text
+  | Regex CaseMode Subject Text
   | In Subject Values
   | NotIn Subject Values
   | Has Subject Values
@@ -178,7 +182,6 @@ data Expr
   | NotStartsWith Subject Values
   | EndsWith Subject Values
   | NotEndsWith Subject Values
-  | Matches Subject Text
   | Paren Expr
   | And Expr Expr
   | Or Expr Expr
@@ -481,10 +484,10 @@ pValues = pValuesWith pValues [try pScalarFunc] -- try pScalarFunc must come fir
 -- Right (NotEndsWith (Subject "url" "url" []) (Str ".css"))
 --
 -- >>> parse pTerm "" "email matches /.*@company\\\\.com/"
--- Right (Matches (Subject "email" "email" []) ".*@company\\.com")
+-- Right (Regex CI (Subject "email" "email" []) ".*@company\\.com")
 --
 -- Canonical KQL regexes are case-sensitive, with quoted patterns that round-trip.
--- >>> let e = MatchesRegex (Subject "url" "url" []) "^/a\\.b\\\\c([?#].*)?$"
+-- >>> let e = Regex CS (Subject "url" "url" []) "^/a\\.b\\\\c([?#].*)?$"
 -- >>> parse pTerm "" (toQText e) == Right e
 -- True
 --
@@ -496,8 +499,8 @@ pTerm =
   (Paren <$> parens pExpr)
     <|> asum [binTerm pValues ctor sym | (ctor, _, sym, _) <- valBinOps]
     <|> asum [binTerm pSubject ctor sym | (ctor, _, sym, _) <- subjectBinOps]
-    <|> try (MatchesRegex <$> pSubject <* space <* void (symbol "matches" *> symbol "regex") <*> (toText <$> (char '"' *> manyTill L.charLiteral (char '"'))))
-    <|> try (Matches <$> pSubject <* space <* void (symbol "matches") <* space <*> (toText <$> (char '/' *> manyTill L.charLiteral (char '/'))))
+    <|> try (Regex CS <$> pSubject <* space <* void (symbol "matches" *> symbol "regex") <*> regexPattern '"')
+    <|> try (Regex CI <$> pSubject <* space <* void (symbol "matches") <* space <*> regexPattern '/')
     <|> try regexParser
     <|> try (BoolFunc <$> pBoolScalarFunc) -- Standalone boolean functions: isnull(x), isnotnull(x), etc.
     <|> (BoolFunc . ScalarFunc "isnotempty" . pure . Field <$> pSubject) -- Standalone subject = isnotempty check per KQL spec
@@ -553,16 +556,23 @@ subjectBinOps =
   ]
 
 
+regexPattern :: Char -> Parser Text
+regexPattern delimiter = toText <$> (char delimiter *> manyTill L.charLiteral (char delimiter))
+
+
 -- >>> parse regexParser "" "abc=~/abc.*/"
--- Right (Regex (Subject "abc" "abc" []) "abc.*")
+-- Right (Regex CI (Subject "abc" "abc" []) "abc.*")
+-- >>> let Right e = parse pTerm "" "abc=~/abc.*/"
+-- >>> parse pTerm "" (toQText e) == Right e
+-- True
 regexParser :: Parser Expr
 regexParser = do
   subj <- pSubject
   space
   void $ symbol "=~"
   space
-  regexStr <- char '/' *> manyTill L.charLiteral (char '/')
-  pure $ Regex subj (toText regexStr)
+  regexStr <- regexPattern '/'
+  pure $ Regex CI subj regexStr
 
 
 pExpr :: Parser Expr
@@ -686,21 +696,32 @@ flattenedOtelColumnsRef = unsafePerformIO (newIORef flattenedOtelAttributesBuilt
 -- at startup: @___@ columns become the dotted flattened-attribute set, the
 -- rest the bare-column set. Both are unioned with their hand-coded fallbacks
 -- so a missing/partial introspection still behaves.
-setOtelColumns :: [T.Text] -> IO ()
+setOtelColumns :: [(T.Text, T.Text)] -> IO ()
 setOtelColumns = seedColumns flattenedOtelColumnsRef flattenedOtelAttributesBuiltin bareOtelColumnsRef bareOtelColumnsBuiltin
 
 
 -- | 'setOtelColumns' for @otel_metrics@.
-setMetricsColumns :: [T.Text] -> IO ()
+setMetricsColumns :: [(T.Text, T.Text)] -> IO ()
 setMetricsColumns = seedColumns flattenedMetricsColumnsRef flattenedMetricsAttributesBuiltin bareMetricsColumnsRef bareMetricsColumnsBuiltin
 
 
-seedColumns :: IORef (Set T.Text) -> Set T.Text -> IORef (Set T.Text) -> Set T.Text -> [T.Text] -> IO ()
+seedColumns :: IORef (Set T.Text) -> Set T.Text -> IORef (Set T.Text) -> Set T.Text -> [(T.Text, T.Text)] -> IO ()
 seedColumns flatRef flatBuiltin bareRef bareBuiltin cols = do
   writeIORef flatRef (fromList [T.replace "___" "." c | c <- flattened] <> flatBuiltin)
   writeIORef bareRef (fromList bare <> bareBuiltin)
+  atomicModifyIORef' jsonbColumnsRef (\known -> (known <> fromList [name | (name, typ) <- cols, typ == "jsonb"], ()))
   where
-    (flattened, bare) = partition (T.isInfixOf "___") cols
+    (flattened, bare) = partition (T.isInfixOf "___") (map fst cols)
+
+
+{-# NOINLINE jsonbColumnsRef #-}
+jsonbColumnsRef :: IORef (Set T.Text)
+jsonbColumnsRef = unsafePerformIO (newIORef $ fromList ["attributes", "body", "context", "events", "exemplars", "resource", "severity"])
+
+
+{-# NOINLINE isJsonbColumn #-}
+isJsonbColumn :: T.Text -> Bool
+isJsonbColumn name = unsafePerformIO (S.member name <$> readIORef jsonbColumnsRef)
 
 
 -- | The runtime flattened-attribute set. Reads from the bootstrap-once
@@ -1332,7 +1353,7 @@ scalarFuncToSQL name args
 -- >>> display (Subject "" "request_body" [FieldKey "message", ArrayWildcard "tags", FieldKey "name"])
 -- "request_body->'message'->'tags'->>'name'"
 --
--- >>> display (Regex (Subject "" "request_body" [FieldKey "msg"]) "^abc.*")
+-- >>> display (Regex CI (Subject "" "request_body" [FieldKey "msg"]) "^abc.*")
 -- "jsonb_path_exists(to_jsonb(request_body), '$.\"msg\" ? (@ like_regex \"^abc.*\" flag \"i\")'::jsonpath)"
 --
 -- Test new operators Display instances for SQL generation:
@@ -1381,13 +1402,13 @@ scalarFuncToSQL name args
 -- >>> display (NotHas (Subject "" "logs" [ArrayWildcard "", FieldKey "msg"]) (Str "error"))
 -- "NOT (jsonb_path_exists(to_jsonb(logs), '$[*].\"msg\" ? (@ like_regex \"error\" flag \"i\")'::jsonpath))"
 --
--- >>> display (Matches (Subject "" "email" []) ".*@company\\.com")
+-- >>> display (Regex CI (Subject "" "email" []) ".*@company\\.com")
 -- "jsonb_path_exists(to_jsonb(email), '$ ? (@ like_regex \".*@company\\\\.com\" flag \"i\")'::jsonpath)"
 
 -- | Decompose a binary Expr into its operands plus the (display op-string, KQL
 -- parse symbol) drawn from the shared operator tables, so Display and
 -- ToQueryText reuse a single constructor->token map. The bespoke cases
--- (Matches/MatchesRegex/Paren/And/Or/Regex/BoolFunc) are handled directly in the instances.
+-- (Regex/Paren/And/Or/BoolFunc) are handled directly in the instances.
 binaryParts :: [(ctor, Expr -> Maybe (a, b), Text, Text)] -> Expr -> Maybe (a, b, Text, Text)
 binaryParts tbl e = listToMaybe [(x, y, dop, sym) | (_, matchP, sym, dop) <- tbl, Just (x, y) <- [matchP e]]
 
@@ -1396,12 +1417,10 @@ instance Display Expr where
   displayPrec prec e
     | Just (sub, val, op, _) <- binaryParts subjectBinOps e = displayExprHelper op prec sub val
     | Just (v1, v2, op, _) <- binaryParts valBinOps e = displayParen (prec > 0) $ displayPrec prec v1 <> " " <> displayBuilder op <> " " <> displayPrec prec v2
-  displayPrec prec (MatchesRegex sub val) = displayPrec prec $ renderJsonpathSQL "matches regex" sub (Str val)
-  displayPrec prec (Matches sub val) = displayPrec prec $ renderJsonpathSQL "like_regex" sub (Str val)
+  displayPrec prec (Regex mode sub val) = displayPrec prec $ renderJsonpathSQL (if mode == CS then "matches regex" else "like_regex") sub (Str val)
   displayPrec prec (Paren u1) = displayParen True $ displayPrec prec u1
   displayPrec prec (And u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " AND " <> displayPrec prec u2
   displayPrec prec (Or u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " OR " <> displayPrec prec u2
-  displayPrec prec (Regex sub val) = displayPrec prec $ renderJsonpathSQL "like_regex" sub (Str val)
   displayPrec prec (BoolFunc v) = displayPrec prec v -- Boolean scalar function renders directly to SQL
   displayPrec _ _ = error "Display Expr: unreachable"
 
@@ -1411,12 +1430,11 @@ instance ToQueryText Expr where
   toQText e
     | Just (sub, val, _, sym) <- binaryParts subjectBinOps e = toQText sub <> " " <> sym <> " " <> toQText val
     | Just (v1, v2, _, sym) <- binaryParts valBinOps e = toQText v1 <> " " <> sym <> " " <> toQText v2
-  toQText (MatchesRegex sub val) = toQText sub <> " matches regex " <> toQText (Str val)
-  toQText (Matches sub val) = toQText sub <> " matches /" <> val <> "/"
+  toQText (Regex CS sub val) = toQText sub <> " matches regex " <> toQText (Str val)
+  toQText (Regex CI sub val) = toQText sub <> " matches /" <> val <> "/"
   toQText (Paren expr) = "(" <> toQText expr <> ")"
   toQText (And left right) = toQText left <> " AND " <> toQText right
   toQText (Or left right) = toQText left <> " OR " <> toQText right
-  toQText (Regex sub val) = toQText sub <> " =~ " <> toQText (Str val)
   toQText (BoolFunc v) = toQText v
   toQText _ = error "ToQueryText Expr: unreachable"
 
@@ -1487,8 +1505,7 @@ data JStep = JKey Text | JIdx Int | JWild
 -- | A filter predicate: the body of @? ( … )@, always about the current item @\@@.
 data JPred
   = JCmp JCmpOp JLit -- @\@ == "x"@
-  | JMatchesRegex Text
-  | JLikeRegex Text -- @\@ like_regex "…" flag "i"@ (always case-insensitive here)
+  | JRegex CaseMode Text
   | JAnd JPred JPred
   | JOr JPred JPred
   deriving stock (Show)
@@ -1523,8 +1540,7 @@ renderJsonpath :: Jsonpath -> Text
 renderJsonpath (Jsonpath base path pred_) =
   -- Single-quoted SQL literal with @''@-escaping (matches the rest of the module and
   -- transformFlattenedAttribute), not @$$@ dollar-quoting which a @$$@ in a user value would break.
-  -- These telemetry columns are already JSONB/VARIANT; to_jsonb serializes native JSON again.
-  "jsonb_path_exists(" <> (if base `elem` ["attributes", "resource"] then base else "to_jsonb(" <> base <> ")") <> ", " <> sqlStringLit (renderPath path <> " ? (" <> renderPred False pred_ <> ")") <> "::jsonpath)"
+  "jsonb_path_exists(" <> (if isJsonbColumn base then base else "to_jsonb(" <> base <> ")") <> ", " <> sqlStringLit (renderPath path <> " ? (" <> renderPred False pred_ <> ")") <> "::jsonpath)"
   where
     renderPath (JPath steps) = "$" <> foldMap step steps
     step (JKey k) = ".\"" <> k <> "\""
@@ -1536,8 +1552,7 @@ renderJsonpath (Jsonpath base path pred_) =
     -- Datetime comparison coerces both operands via @.datetime()@ (jsonpath has no now()).
     renderPred _ (JCmp o (JDateTime iso)) = "@.datetime() " <> cmp o <> " " <> jsonString iso <> ".datetime()"
     renderPred _ (JCmp o l) = "@ " <> cmp o <> " " <> lit l
-    renderPred _ (JMatchesRegex rx) = "@ like_regex " <> jsonString rx
-    renderPred _ (JLikeRegex rx) = "@ like_regex " <> jsonString rx <> " flag \"i\""
+    renderPred _ (JRegex mode rx) = "@ like_regex " <> jsonString rx <> if mode == CI then " flag \"i\"" else ""
     renderPred p (JAnd a b) = paren p (renderPred True a <> " && " <> renderPred True b)
     renderPred p (JOr a b) = paren p (renderPred True a <> " || " <> renderPred True b)
 
@@ -1569,6 +1584,8 @@ jsonString = toText . encodeToLazyText . AE.String
 --
 -- >>> renderJsonpath <$> lowerPred "=" (Subject "" "data" [FieldKey "name"]) (Str "John Doe")
 -- Right "jsonb_path_exists(to_jsonb(data), '$.\"name\" ? (@ == \"John Doe\")'::jsonpath)"
+-- >>> renderJsonpath <$> lowerPred "=" (Subject "" "body" [FieldKey "name"]) (Str "John Doe")
+-- Right "jsonb_path_exists(body, '$.\"name\" ? (@ == \"John Doe\")'::jsonpath)"
 --
 -- >>> renderJsonpath <$> lowerPred "matches regex" (Subject "" "attributes" [FieldKey "url", FieldKey "full"]) (Str "^/cart$")
 -- Right "jsonb_path_exists(attributes, '$.\"url\".\"full\" ? (@ like_regex \"^/cart$\")'::jsonpath)"
@@ -1640,17 +1657,17 @@ lowerPred op (Subject _ base keys) val = Jsonpath base (JPath (concatMap toSteps
       (Nothing, "CONTAINS") -> substr
       (Nothing, "HAS_ANY") -> likeList JOr
       (Nothing, "HAS_ALL") -> likeList JAnd
-      (Nothing, "STARTSWITH") -> JLikeRegex . (\t -> "^" <> escapeRegex t) <$> asTerm val
-      (Nothing, "ENDSWITH") -> JLikeRegex . (\t -> escapeRegex t <> "$") <$> asTerm val
-      (Nothing, "matches regex") -> JMatchesRegex <$> asTerm val
-      (Nothing, "like_regex") -> JLikeRegex <$> asTerm val -- raw user regex, not escaped
+      (Nothing, "STARTSWITH") -> JRegex CI . (\t -> "^" <> escapeRegex t) <$> asTerm val
+      (Nothing, "ENDSWITH") -> JRegex CI . (\t -> escapeRegex t <> "$") <$> asTerm val
+      (Nothing, "matches regex") -> JRegex CS <$> asTerm val
+      (Nothing, "like_regex") -> JRegex CI <$> asTerm val -- raw user regex, not escaped
       (Nothing, _) -> Left (UnknownOp op)
 
     cmpOps :: [(Text, JCmpOp)]
     cmpOps = [("=", JEq), ("==", JEq), ("!=", JNeq), (">=", JGte), ("<=", JLte), (">", JGt), ("<", JLt)]
-    substr = JLikeRegex . escapeRegex <$> asTerm val
+    substr = JRegex CI . escapeRegex <$> asTerm val
     orEq = combineList JOr . fmap (JCmp JEq) =<< traverse lit =<< listVals
-    likeList c = combineList c . fmap (JLikeRegex . escapeRegex) =<< traverse asTerm =<< listVals
+    likeList c = combineList c . fmap (JRegex CI . escapeRegex) =<< traverse asTerm =<< listVals
     combineList c xs = maybe (Left (NoJsonpathForm "empty list")) (Right . \(y :| ys) -> foldl' c y ys) (nonEmpty xs)
 
     listVals = case val of List xs -> Right xs; _ -> Left (NoJsonpathForm "expected list")

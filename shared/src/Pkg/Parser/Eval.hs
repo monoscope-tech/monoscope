@@ -59,7 +59,6 @@ module Pkg.Parser.Eval (
   evalValue,
   filterExpr,
   jsonAsText,
-  matchesRegex,
 ) where
 
 import Data.Aeson qualified as AE
@@ -202,17 +201,19 @@ filterExpr = fmap (fromMaybe matchAll) . foldlM step Nothing
 -- Right False
 --
 -- Canonical quoted regexes preserve case; legacy slash regexes remain insensitive:
--- >>> evalExpr (const [AE.String "Cart"]) (E.MatchesRegex (Subject "x" "x" []) "^cart$")
+-- >>> evalExpr (const [AE.String "Cart"]) (E.Regex E.CS (Subject "x" "x" []) "^cart$")
 -- Right False
--- >>> evalExpr (const [AE.String "Cart"]) (E.MatchesRegex (Subject "x" "x" []) "^Cart$")
+-- >>> evalExpr (const [AE.String "Cart"]) (E.Regex E.CS (Subject "x" "x" []) "^Cart$")
 -- Right True
--- >>> evalExpr (const [AE.String "Cart"]) (E.Matches (Subject "x" "x" []) "^cart$")
+-- >>> evalExpr (const [AE.String "Cart"]) (E.Regex E.CI (Subject "x" "x" []) "^cart$")
 -- Right True
 --
 -- A broken regex is an error, never a match:
 --
--- >>> evalExpr (resolveIn AE.Null) (E.Regex (Subject "name" "name" []) "[")
+-- >>> evalExpr (resolveIn AE.Null) (E.Regex E.CI (Subject "name" "name" []) "[")
 -- Left (BadRegex "[")
+-- >>> evalExpr (resolveIn AE.Null) (E.Regex E.CI (Subject "name" "name" []) (T.replicate 600 "a"))
+-- Left (RegexTooLong 600)
 evalExpr :: Resolver -> Expr -> Either EvalError Bool
 evalExpr r = go
   where
@@ -242,9 +243,7 @@ evalExpr r = go
       E.NotEndsWith s v -> pure (negated s (txt s v T.isSuffixOf))
       E.HasAny s v -> pure $ any (\t -> txt s t T.isInfixOf) (items v)
       E.HasAll s v -> pure $ all (\t -> txt s t T.isInfixOf) (items v)
-      E.MatchesRegex s pat -> (\p -> anyOf s (p . jsonAsText)) <$> compileRegex RE.defaultCompOpt pat
-      E.Regex s pat -> re s pat
-      E.Matches s pat -> re s pat
+      E.Regex mode s pat -> (\p -> anyOf s (p . jsonAsText)) <$> compileRegex RE.defaultCompOpt{RE.caseSensitive = mode == E.CS} pat
       E.ValEq a b -> pure (vcmp a b (== EQ))
       E.ValNotEq a b -> pure (vcmp a b (/= EQ))
       E.ValGT a b -> pure (vcmp a b (== GT))
@@ -252,8 +251,6 @@ evalExpr r = go
       E.ValGTEq a b -> pure (vcmp a b (/= LT))
       E.ValLTEq a b -> pure (vcmp a b (/= GT))
       E.BoolFunc v -> pure (any truthy (evalValue r v))
-
-    re s pat = (\p -> anyOf s (p . jsonAsText)) <$> matchesRegex pat
 
     anyOf s p = any p (r s)
 
@@ -372,22 +369,6 @@ cmpJson a b = case (a, b) of
   _ -> case (jsonAsNumber a, jsonAsNumber b) of
     (Just x, Just y) -> Just (compare (toRealFloat @Double x) (toRealFloat y))
     _ -> Just (compare (jsonAsText a) (jsonAsText b))
-
-
--- | Compile a KQL pattern to a case-insensitive matcher, mirroring the @~*@ /
--- @like_regex … flag "i"@ the SQL side emits.
---
--- Returns the matcher rather than a 'Bool' so a filter compiles its patterns once at
--- registration instead of once per telemetry row.
---
--- >>> either (const Nothing) (\f -> Just (f "Hello")) (matchesRegex "hel+o")
--- Just True
--- >>> leftToMaybe (matchesRegex "[")
--- Just (BadRegex "[")
--- >>> leftToMaybe (matchesRegex (T.replicate 600 "a"))
--- Just (RegexTooLong 600)
-matchesRegex :: Text -> Either EvalError (Text -> Bool)
-matchesRegex = compileRegex RE.defaultCompOpt{RE.caseSensitive = False}
 
 
 compileRegex :: RE.CompOption -> Text -> Either EvalError (Text -> Bool)

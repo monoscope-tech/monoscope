@@ -682,16 +682,15 @@ getAppContext = do
 -- skipped validation entirely and shipped spans-only fields to TimeFusion.
 introspectAndCacheOtelColumns :: Pool.Pool Connection -> IO ()
 introspectAndCacheOtelColumns pool =
-  forM_ ([("otel_logs_and_spans", ParserExpr.setOtelColumns), ("otel_metrics", ParserExpr.setMetricsColumns)] :: [(Text, [Text] -> IO ())]) \(table, seed) -> do
+  forM_ ([("otel_logs_and_spans", ParserExpr.setOtelColumns), ("otel_metrics", ParserExpr.setMetricsColumns)] :: [(Text, [(Text, Text)] -> IO ())]) \(table, seed) -> do
     result <- Safe.try $ Pool.withResource pool $ \conn ->
-      map PG.fromOnly
-        <$> ( PG.query
-                conn
-                "SELECT column_name::text FROM information_schema.columns \
-                \WHERE table_schema = 'public' AND table_name = ?"
-                (PG.Only table)
-                :: IO [PG.Only Text]
-            )
+      ( PG.query
+          conn
+          "SELECT column_name::text, udt_name::text FROM information_schema.columns \
+          \WHERE table_schema = 'public' AND table_name = ?"
+          (PG.Only table)
+          :: IO [(Text, Text)]
+      )
     case result of
       Right cols -> seed cols
       Left (e :: SomeException) ->

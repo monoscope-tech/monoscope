@@ -14,8 +14,8 @@ import Data.Time (NominalDiffTime, UTCTime, addUTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
-import Data.Vector qualified as V
 import Data.UUID.Quasi (uuid)
+import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PG
 import Effectful.Dispatch.Dynamic (interpose, send)
 import Effectful.Labeled (Labeled (..))
@@ -155,7 +155,7 @@ spec = sequential $ aroundAll withTestResources do
       projectId <- createTestProject tr "RUM scalar quantile"
       apiKey <- createTestAPIKey tr projectId "rum-scalar-key"
       forM_ (zip [1, 10, 20, 30] [-10, -9, -8, -7]) \(value, seconds) ->
-        ingestMetric tr apiKey [] [mkAttr "page.url" "/scalar"] "browser.web_vital.lcp" value (addUTCTime seconds frozenTime)
+        ingestMetric tr apiKey [] [mkAttr "page.url" "/scalar"] (if value == 30 then "k6.browser_web_vital_lcp" else "browser.web_vital.lcp") value (addUTCTime seconds frozenTime)
       detail <- loadVitalPanel tr projectId Nothing "vital_trend"
       summary <- loadVitalPanel tr projectId Nothing "vitals"
       (mapMaybe (RUMData.measurementValue . (.measurement)) detail.vitalTrend, [(RUMData.measurementValue point.measurement, RUMData.measurementSamples point.measurement) | point <- detail.pageVitals], [(RUMData.measurementValue vital.measurement, RUMData.measurementSamples vital.measurement) | vital <- summary.vitals, vital.name == "lcp"])

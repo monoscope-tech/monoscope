@@ -116,7 +116,7 @@ response_time >= 100 and response_time <= 500
 
 ## String Operators
 
-| Operator | Description | Case Sensitive | Example |
+| Operator | Description | Case-sensitive match? | Example |
 |----------|-------------|----------------|---------|
 | `has` | Contains word (token match) | No | `message has "error"` |
 | `!has` | Does not contain word | No | `message !has "debug"` |
@@ -129,6 +129,8 @@ response_time >= 100 and response_time <= 500
 | `matches regex` | Matches a quoted regex pattern | Yes | `name matches regex "^GET /Cart$"` |
 | `matches` | Matches a slash regex pattern | No | `email matches /.*@company\.com/` |
 | `=~` | Matches a slash regex pattern (alternate syntax) | No | `body =~ /^ERROR:.*/` |
+
+`Yes` means case-sensitive matching; `No` means case-insensitive matching. In particular, `matches regex` preserves case, while slash-regex `matches` and `=~` ignore it.
 
 **`has` vs `contains`:**
 - `has` matches whole words/tokens (bounded by non-alphanumeric characters)
