@@ -1356,7 +1356,14 @@ audienceColumn_ title hueM rows = div_ [class_ "min-w-0 px-3 py-2.5"] do
 
 recentSessions_ :: RumData -> Html ()
 recentSessions_ page = rumPanel_ "Recent sessions" "Open a recording or inspect its correlated telemetry" (Just ("View all sessions", sessionsUrl page.links Nothing AllSessionRows Nothing)) do
+  when page.servedStale refreshingHint_
   sessionsTable_ False page.now page.links Nothing AllSessionRows Nothing (take 8 page.sessions)
+
+
+refreshingHint_ :: Html ()
+refreshingHint_ = p_ [class_ "flex items-center gap-2 border-b border-strokeWeak px-3 py-1.5 text-xs text-textWeak", role_ "status"] do
+  span_ [class_ "loading loading-spinner loading-xs", Aria.hidden_ "true"] ""
+  "Refreshing the full time range…"
 
 
 -- | Mirrors the split layout 'sessions_' renders — list left, replay workspace right — so
@@ -1384,9 +1391,7 @@ sessions_ page = slot_ page PanelSessions sessionsSkeleton_ do
   let filtered = page.sessions
   div_ [class_ "grid bg-bgBase xl:h-full xl:min-h-0 xl:grid-cols-[minmax(32rem,35%)_minmax(0,1fr)]"] do
     section_ [id_ "rum-sessions-list", Aria.label_ "Sessions", tabindex_ "0", class_ "min-w-0 overflow-y-auto overscroll-contain border-strokeWeak xl:min-h-0 xl:border-e max-xl:max-h-[45svh] max-xl:border-b"] do
-      when page.servedStale $ p_ [class_ "flex items-center gap-2 border-b border-strokeWeak px-3 py-1.5 text-xs text-textWeak", role_ "status"] do
-        span_ [class_ "loading loading-spinner loading-xs", Aria.hidden_ "true"] ""
-        "Refreshing the full time range…"
+      when page.servedStale refreshingHint_
       if any (\case SessionsQuery -> True; SessionSearchQuery{} -> True; _ -> False) page.degradedPanels then degradedBanner_ page PanelSessions else sessionsTable_ True page.now page.links page.query page.sessionFilter page.selectedSession filtered
       panelRevalidation_ page PanelSessions
     sessionWorkspace_ page
@@ -1423,7 +1428,7 @@ sessionsTable_ :: Bool -> UTCTime -> RumLinks -> Maybe Text -> SessionFilter -> 
 sessionsTable_ workspace now links query sessionFilter selectedSession sessions =
   toHtml
     Table.Table
-      { config = (rumTableConfig $ bool "rumRecentSessions" "rumSessions" workspace){Table.containerClasses = "w-full mx-auto space-y-0", Table.tableClasses = "table table-sm w-full table-fixed min-w-[28rem]"}
+      { config = (rumTableConfig $ bool "rumRecentSessions" "rumSessions" workspace){Table.containerClasses = "w-full mx-auto space-y-0", Table.tableClasses = "table table-sm w-full table-fixed sm:min-w-[28rem]"}
       , columns =
           [ ( Table.col "Session" \session -> div_ [class_ "flex items-center gap-2.5"] do
                 sessionAvatar_ session
@@ -1482,7 +1487,7 @@ sessionsTable_ workspace now links query sessionFilter selectedSession sessions 
                       toHtml $ show session.events
                       span_ [class_ "sr-only"] $ toHtml $ " " <> countNoun session.events "event"
             )
-              { Table.attrs = [class_ $ bool "w-[22%]" "w-[18%]" workspace <> " px-2 py-2"]
+              { Table.attrs = [class_ $ bool "w-[22%]" "w-[18%]" workspace <> " px-2 py-2 max-sm:hidden"]
               }
           , ( Table.col "Duration" \session -> do
                 span_ [class_ "block text-sm tabular-nums text-textStrong"] $ toHtml $ formatSessionDuration session
