@@ -2,6 +2,7 @@ module Pages.RealUserMonitoringSpec (spec) where
 
 import Control.Concurrent (threadDelay)
 import Control.Lens ((.~))
+import Data.Aeson qualified as AE
 import Data.Cache qualified as Cache
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
@@ -9,7 +10,7 @@ import Data.List (lookup)
 import Data.Pool (withResource)
 import Data.ProtoLens (defMessage)
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime)
+import Data.Time (NominalDiffTime, UTCTime, addUTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
@@ -27,6 +28,7 @@ import Pages.Components (Deferred (..))
 import Pages.LogExplorer.Log qualified as Log
 import Pages.RealUserMonitoring qualified as RUM
 import Pkg.Components.TimePicker qualified as TimePicker
+import Pkg.Components.Widget qualified as Widget
 import Pkg.TestUtils
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields qualified as MSF
 import Proto.Opentelemetry.Proto.Metrics.V1.Metrics qualified as PM
@@ -143,6 +145,27 @@ spec = sequential $ aroundAll withTestResources do
       summary <- loaded "vitals"
       (mapMaybe (RUMData.measurementValue . (.measurement)) detail.vitalTrend, [(RUMData.measurementValue point.measurement, RUMData.measurementSamples point.measurement) | point <- detail.pageVitals], [(RUMData.measurementValue vital.measurement, RUMData.measurementSamples vital.measurement) | vital <- summary.vitals, vital.name == "lcp"])
         `shouldBe` ([22.5], [(Just 22.5, 4)], [(Just 22.5, 4)])
+
+    it "vitalTrend_partialFirstBucket_staysInsideTheSelectedAxis" \tr -> do
+      projectId <- createTestProject tr "RUM partial trend bucket"
+      apiKey <- createTestAPIKey tr projectId "rum-partial-bucket-key"
+      ingestMetric tr apiKey [] [mkAttr "page.url" "/partial-bucket"] "browser.web_vital.lcp" 175 (addUTCTime (-10) frozenTime)
+      let fromQuery = Just $ toText $ iso8601Show $ addUTCTime (-31.125) frozenTime
+          toQuery = Just $ toText $ iso8601Show $ addUTCTime (-1.25) frozenTime
+      forM_ ([(Nothing, Nothing, Just "30S", -30, 0), (fromQuery, toQuery, Nothing, -31.125, -1.25), (Nothing, Nothing, Just "1H", -3600, 0)] :: [(Maybe Text, Maybe Text, Maybe Text, NominalDiffTime, NominalDiffTime)]) \(from, to, since, start, end) -> do
+        (_, RUM.RumGet (PageCtx _ body)) <- testServant tr $ RUM.rumGetH projectId (Just "performance") Nothing Nothing from to since Nothing Nothing (Just "vital_trend") (Just "1") Nothing
+        case body of
+          DeferredShell{} -> fail "Expected loaded partial-bucket panel"
+          DeferredBody page -> do
+            page.degradedPanels `shouldBe` []
+            [(RUMData.measurementValue vital.measurement, RUMData.measurementSamples vital.measurement) | vital <- page.vitals, vital.name == "lcp"] `shouldBe` [(Just 175, 1)]
+            let html = toText $ Lucid.renderText $ Lucid.toHtml page
+                payload = T.replace "&quot;" "\"" $ T.takeWhile (/= '"') $ T.drop (T.length "data-widget=\"") $ snd $ T.breakOn "data-widget=\"" html
+            widget <- either fail pure $ AE.eitherDecodeStrict @Widget.Widget $ encodeUtf8 payload
+            let millis seconds = floor (1000 * utcTimeToPOSIXSeconds (addUTCTime seconds frozenTime)) :: Int
+                plottedStart = max (millis start) (millis (-300))
+            [(dataset.from, dataset.to, dataset.source) | dataset <- maybeToList widget.dataset]
+              `shouldBe` [(Just $ millis start, Just $ millis end, AE.toJSON ([AE.toJSON (["timestamp", "P75"] :: [Text]), AE.toJSON (plottedStart, 175 :: Int)] :: [AE.Value]))]
 
     it "histogramVitals_useObservationBuckets_insteadOfExportMeans" \tr -> do
       let point timestamp start count total low high counts =

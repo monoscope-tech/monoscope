@@ -1514,7 +1514,7 @@ vitalTrendPanel_ window points = rumPanel_ "Web Vitals over time" "P75 of interv
       let series = sortWith fst [(p.bucket, RUM.measurementValue p.measurement) | p <- points, p.metricName == vital.name]
           -- Milliseconds, matching what the chart endpoint serves (Charts.convertTimestampsToMs):
           -- the axis reads epoch-ms, and seconds silently render as a 1970 timeline.
-          sourceRows = AE.toJSON (["timestamp", "P75"] :: [Text]) : [AE.toJSON (1000 * (floor $ utcTimeToPOSIXSeconds bucketTime :: Int64), value) | (bucketTime, value) <- series]
+          sourceRows = AE.toJSON (["timestamp", "P75"] :: [Text]) : [AE.toJSON (floor (1000 * utcTimeToPOSIXSeconds (max window.fromTime bucketTime)) :: Int64, value) | (bucketTime, value) <- series]
       unless (null series)
         $ div_ [class_ "h-52 min-h-52"]
         $ Widget.widget_
