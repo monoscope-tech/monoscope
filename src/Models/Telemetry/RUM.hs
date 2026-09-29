@@ -344,6 +344,7 @@ rumVitalPopulation useTf scope window bucket = Hasql.withHasqlTimefusion useTf d
                 <> [HI.sql| AND timestamp>=#{oldest} AND timestamp<#{fromTime} AND (flags & 1!=0 OR |]
                 <> exactEpochs
                 <> [HI.sql|)) AS history WHERE predecessor=1|]
+      -- TimeFusion drops partitions when inheriting a named window with a new order/frame.
       readPopulations source discoverEpochs =
         Hasql.interp
           $ [HI.sql|WITH source AS (|]
@@ -410,32 +411,36 @@ rumVitalPopulation useTf scope window bucket = Hasql.withHasqlTimefusion useTf d
    ROW_NUMBER() OVER(PARTITION BY timestamp,series_id,start_timestamp ORDER BY bound NULLS LAST) AS ordinal
  FROM paired WHERE side=0 AND (value IS NOT NULL OR aggregation_temporality='DELTA' OR prior_count IS NULL OR prior_cumulative IS NOT NULL)
 ), selected AS (
- SELECT *,CASE WHEN #{discoverEpochs} AND metric_type='HISTOGRAM' AND aggregation_temporality='CUMULATIVE' AND start_timestamp<#{fromTime} THEN series_id END AS needed_series,
-   CASE WHEN #{discoverEpochs} AND metric_type='HISTOGRAM' AND aggregation_temporality='CUMULATIVE' AND start_timestamp<#{fromTime} THEN start_timestamp END AS needed_start,
-   MAX(CASE WHEN point_coverage='complete' AND (cdf<0 OR cdf<LAG_CDF) THEN 'invalid_buckets' ELSE point_coverage END) OVER(PARTITION BY timestamp,series_id,start_timestamp) AS effective_coverage
+ SELECT *,MAX(CASE WHEN point_coverage='complete' AND (cdf<0 OR cdf<LAG_CDF) THEN 'invalid_buckets' ELSE point_coverage END) OVER(PARTITION BY timestamp,series_id,start_timestamp) AS effective_coverage
  FROM (SELECT *,LAG(cdf,1,0) OVER(PARTITION BY timestamp,series_id,start_timestamp ORDER BY bound NULLS LAST) AS LAG_CDF FROM selected_raw) AS ordered
 ), totals AS (
- SELECT CASE WHEN GROUPING(needed_series)=0 THEN 3 WHEN GROUPING(bucket)=0 THEN 1 WHEN GROUPING(page)=0 THEN 2 ELSE 0 END AS kind,
-   bucket AS group_bucket,page AS group_page,needed_series AS epoch_series,needed_start AS epoch_start,metric,bound,
+ SELECT CASE WHEN GROUPING(bucket)=0 THEN 1 WHEN GROUPING(page)=0 THEN 2 ELSE 0 END AS kind,
+   bucket AS group_bucket,page AS group_page,metric,bound,
    SUM(CASE WHEN value IS NULL AND observations>0 AND effective_coverage='complete' THEN cdf ELSE 0 END)::bigint AS histogram_cdf,
    COUNT(*) FILTER(WHERE value IS NULL AND observations>0 AND effective_coverage='complete') AS histogram_points_at_bound,
    SUM(CASE WHEN value IS NOT NULL AND effective_coverage='complete' THEN observations ELSE 0 END)::bigint AS scalar_observations,
    SUM(CASE WHEN ordinal=1 AND effective_coverage='complete' THEN observations ELSE 0 END)::bigint AS observations,
    COUNT(*) FILTER(WHERE ordinal=1 AND value IS NULL AND observations>0 AND effective_coverage='complete') AS histogram_points,
    MAX(effective_coverage) AS coverage
- FROM selected GROUP BY GROUPING SETS((metric,bound),(bucket,metric,bound),(page,metric,bound),(needed_series,needed_start,metric,bound))
+ FROM selected GROUP BY GROUPING SETS((metric,bound),(bucket,metric,bound),(page,metric,bound))
 ), distribution AS (
- SELECT *,SUM(observations) OVER(PARTITION BY kind,group_bucket,group_page,metric,epoch_series,epoch_start) AS total,
-   SUM(histogram_points) OVER(PARTITION BY kind,group_bucket,group_page,metric,epoch_series,epoch_start) AS total_histogram_points,
-   MAX(coverage) OVER(PARTITION BY kind,group_bucket,group_page,metric,epoch_series,epoch_start) AS population_coverage,
-   SUM(scalar_observations) OVER(PARTITION BY kind,group_bucket,group_page,metric,epoch_series,epoch_start ORDER BY bound NULLS LAST ROWS UNBOUNDED PRECEDING) AS scalar_cdf
- FROM totals WHERE kind!=3 OR epoch_series IS NOT NULL
+ SELECT *,SUM(observations) OVER population AS total,
+   SUM(histogram_points) OVER population AS total_histogram_points,
+   MAX(coverage) OVER population AS population_coverage,
+   SUM(scalar_observations) OVER scalar_population AS scalar_cdf
+ FROM totals
+ WINDOW population AS (PARTITION BY kind,group_bucket,group_page,metric),
+   scalar_population AS (PARTITION BY kind,group_bucket,group_page,metric ORDER BY bound NULLS LAST ROWS UNBOUNDED PRECEDING)
 ), common AS (
- SELECT *,MAX(CASE WHEN histogram_points_at_bound=total_histogram_points THEN bound END) OVER(PARTITION BY kind,group_bucket,group_page,metric,epoch_series,epoch_start ORDER BY bound NULLS LAST ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS histogram_lower_bound,
-   MIN(CASE WHEN histogram_points_at_bound=total_histogram_points THEN bound END) OVER(PARTITION BY kind,group_bucket,group_page,metric,epoch_series,epoch_start ORDER BY bound NULLS LAST ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) AS histogram_upper_bound,
-   MAX(CASE WHEN histogram_points_at_bound=total_histogram_points THEN histogram_cdf END) OVER(PARTITION BY kind,group_bucket,group_page,metric,epoch_series,epoch_start ORDER BY bound NULLS LAST ROWS UNBOUNDED PRECEDING) AS histogram_lower_cdf,
-   MIN(CASE WHEN histogram_points_at_bound=total_histogram_points THEN histogram_cdf END) OVER(PARTITION BY kind,group_bucket,group_page,metric,epoch_series,epoch_start ORDER BY bound NULLS LAST ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) AS histogram_upper_cdf
- FROM distribution WHERE kind=3 OR total_histogram_points=0 OR histogram_points_at_bound=total_histogram_points OR scalar_observations>0
+ SELECT *,CASE WHEN total_histogram_points=0 THEN 1+0.75::float8*(total-1)::float8 ELSE 0.75::float8*total::float8 END AS quantile_position,
+   MAX(CASE WHEN histogram_points_at_bound=total_histogram_points THEN bound END) OVER preceding_population AS histogram_lower_bound,
+   MIN(CASE WHEN histogram_points_at_bound=total_histogram_points THEN bound END) OVER following_population AS histogram_upper_bound,
+   MAX(CASE WHEN histogram_points_at_bound=total_histogram_points THEN histogram_cdf END) OVER cumulative_population AS histogram_lower_cdf,
+   MIN(CASE WHEN histogram_points_at_bound=total_histogram_points THEN histogram_cdf END) OVER following_population AS histogram_upper_cdf
+ FROM distribution WHERE total_histogram_points=0 OR histogram_points_at_bound=total_histogram_points OR scalar_observations>0
+ WINDOW preceding_population AS (PARTITION BY kind,group_bucket,group_page,metric ORDER BY bound NULLS LAST ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),
+   following_population AS (PARTITION BY kind,group_bucket,group_page,metric ORDER BY bound NULLS LAST ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING),
+   cumulative_population AS (PARTITION BY kind,group_bucket,group_page,metric ORDER BY bound NULLS LAST ROWS UNBOUNDED PRECEDING)
 ), interpolated AS (
  SELECT *,CASE WHEN histogram_points_at_bound=total_histogram_points THEN histogram_cdf::float8
      WHEN COALESCE(histogram_lower_cdf,0)=histogram_upper_cdf THEN histogram_upper_cdf::float8
@@ -445,33 +450,41 @@ rumVitalPopulation useTf scope window bucket = Hasql.withHasqlTimefusion useTf d
 ), combined AS (
  SELECT *,COALESCE(histogram_at_bound,histogram_lower_cdf::float8,0)+scalar_cdf::float8 AS cdf FROM interpolated
 ), ranked AS (
- SELECT *,LAG(bound) OVER(PARTITION BY kind,group_bucket,group_page,metric,epoch_series,epoch_start ORDER BY bound NULLS LAST) AS lower_bound,
-   LAG(cdf,1,0) OVER(PARTITION BY kind,group_bucket,group_page,metric,epoch_series,epoch_start ORDER BY bound NULLS LAST) AS lower_cdf,
-   LAG(histogram_at_bound,1,0) OVER(PARTITION BY kind,group_bucket,group_page,metric,epoch_series,epoch_start ORDER BY bound NULLS LAST) AS prior_histogram_cdf,
-   ROW_NUMBER() OVER(PARTITION BY kind,group_bucket,group_page,metric,epoch_series,epoch_start ORDER BY bound NULLS LAST) AS quantile_ordinal
+ SELECT *,CASE WHEN total_histogram_points=0 THEN CEIL(quantile_position) ELSE quantile_position END AS quantile_target,
+   LAG(bound) OVER population AS lower_bound,
+   LAG(cdf,1,0) OVER population AS lower_cdf,
+   LAG(histogram_at_bound,1,0) OVER population AS prior_histogram_cdf,
+   ROW_NUMBER() OVER population AS quantile_ordinal
  FROM combined
+ WINDOW population AS (PARTITION BY kind,group_bucket,group_page,metric ORDER BY bound NULLS LAST)
 ), quantiles AS (
  SELECT *,CASE WHEN population_coverage='complete' AND total>0 AND (bound IS NULL OR histogram_at_bound IS NULL) THEN 'unbounded_bucket'
     WHEN population_coverage!='complete' THEN population_coverage END AS issue,
    CASE WHEN population_coverage!='complete' OR total=0 OR bound IS NULL OR histogram_at_bound IS NULL THEN NULL
-     WHEN total_histogram_points=0 THEN CASE WHEN lower_cdf<FLOOR(1+0.75::float8*(total-1)::float8) THEN bound
-       ELSE lower_bound+(bound-lower_bound)*(1+0.75::float8*(total-1)::float8-FLOOR(1+0.75::float8*(total-1)::float8)) END
-     WHEN 0.75::float8*total::float8>cdf-scalar_observations::float8 THEN bound
+     WHEN total_histogram_points=0 THEN CASE WHEN lower_cdf<FLOOR(quantile_position) THEN bound
+       ELSE lower_bound+(bound-lower_bound)*(quantile_position-FLOOR(quantile_position)) END
+     WHEN quantile_position>cdf-scalar_observations::float8 THEN bound
      ELSE COALESCE(lower_bound,0)::float8+(bound-COALESCE(lower_bound,0))::float8*
-       (0.75::float8*total::float8-lower_cdf::float8)/(histogram_at_bound-prior_histogram_cdf)::float8 END AS p75
- FROM ranked WHERE (kind=3 AND quantile_ordinal=1) OR (kind!=3 AND (
-   ((total=0 OR population_coverage!='complete') AND quantile_ordinal=1)
+       (quantile_position-lower_cdf::float8)/(histogram_at_bound-prior_histogram_cdf)::float8 END AS p75
+ FROM ranked WHERE ((total=0 OR population_coverage!='complete') AND quantile_ordinal=1)
    OR (total>0 AND population_coverage='complete'
-     AND cdf>=CASE WHEN total_histogram_points=0 THEN CEIL(1+0.75::float8*(total-1)::float8) ELSE 0.75::float8*total::float8 END
-     AND lower_cdf<CASE WHEN total_histogram_points=0 THEN CEIL(1+0.75::float8*(total-1)::float8) ELSE 0.75::float8*total::float8 END)))
-)
-SELECT ROW(CASE WHEN kind!=3 THEN ROW(kind::bigint,group_bucket,group_page,metric::text,total::bigint,issue::text,p75::float8,
+     AND cdf>=quantile_target
+     AND lower_cdf<quantile_target)
+), reads AS (
+SELECT ROW(kind::bigint,group_bucket,group_page,metric::text,total::bigint,issue::text,p75::float8,
   CASE WHEN issue IS NULL AND total>0 AND total_histogram_points>0 AND (histogram_points_at_bound=total_histogram_points OR COALESCE(histogram_lower_cdf,0)!=histogram_upper_cdf) THEN COALESCE(histogram_lower_bound,0)::float8 END,
-  CASE WHEN issue IS NULL AND total>0 AND total_histogram_points>0 AND (histogram_points_at_bound=total_histogram_points OR COALESCE(histogram_lower_cdf,0)!=histogram_upper_cdf) THEN histogram_upper_bound::float8 END) END,epoch_series::text,epoch_start)
+  CASE WHEN issue IS NULL AND total>0 AND total_histogram_points>0 AND (histogram_points_at_bound=total_histogram_points OR COALESCE(histogram_lower_cdf,0)!=histogram_upper_cdf) THEN histogram_upper_bound::float8 END) AS population,NULL::text AS epoch_series,NULL::timestamptz AS epoch_start
 FROM quantiles WHERE kind!=2 OR group_page IS NOT NULL
+UNION ALL
+SELECT NULL,series_id::text,start_timestamp FROM (
+ SELECT DISTINCT series_id,start_timestamp FROM selected
+ WHERE #{discoverEpochs} AND metric_type='HISTOGRAM' AND aggregation_temporality='CUMULATIVE' AND start_timestamp<#{fromTime}
+) AS epochs
+)
+SELECT ROW(population,epoch_series,epoch_start) FROM reads
 |]
   initial <- readPopulations current True
-  let epochs = ordNub [(series, start) | EpochRead series start <- initial]
+  let epochs = [(series, start) | EpochRead series start <- initial]
   populationReads <- if null epochs then pure initial else readPopulations (withHistory epochs) False
   let populations = [population | PopulationRead population <- populationReads]
   -- Grouped pages are ordered/capped here to avoid native final-sort memory pressure.

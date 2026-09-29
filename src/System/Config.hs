@@ -446,7 +446,7 @@ data AuthContext = AuthContext
   -- ^ One expensive metrics pivot feeds every infrastructure tab and detail drawer.
   , rumCache :: Cache RUM.RumCacheKey RUM.RumQueryResult
   -- ^ Briefly reuses RUM panel reads across tab navigation and preloaded requests.
-  , rumQueryFlights :: QueryCache.QueryFlights (RUM.RumCacheKey, Bool) (Either Text (RUM.RumQueryResult, Bool))
+  , rumQueryFlights :: QueryCache.QueryFlights (RUM.RumCacheKey, Bool) (Either RUM.RumQuery (RUM.RumQueryResult, Bool))
   -- ^ Shares panel requests within a replica; stale reads and forced refreshes remain separate.
   , codeBlobCache :: Cache CodeBlobKey ByteString
   -- ^ Source blobs for stack-trace code context, keyed @(owner, repo, ref, path)@. One git-host

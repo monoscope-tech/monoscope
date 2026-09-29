@@ -596,7 +596,7 @@ data RumData = RumData
   , sessionFilter :: SessionFilter
   , selectedSession :: Maybe Text
   , selectedSessionData :: Maybe RumSession
-  , degradedPanels :: [Text]
+  , degradedPanels :: [RumQuery]
   }
 
 
@@ -668,15 +668,15 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
         | otherwise = SixHours
       cacheKey query = RumCacheKey pid query environment serviceFilter (nonEmptyT fromM) (nonEmptyT toM) window.sinceQuery
       panelTtl = TimePicker.cacheTtl window
-      pulseQ = ("experience" :: Text, cacheKey PresenceQuery, panelTtl, PresenceResult <$> rumHasBrowserTelemetry scope)
-      pagesQ = ("pages" :: Text, cacheKey PagesQuery, panelTtl, PagesResult <$> rumPages scope)
-      errorsQ = ("errors" :: Text, cacheKey ErrorsQuery, panelTtl, ErrorsResult <$> rumErrors scope)
-      sessionsQ = ("sessions" :: Text, cacheKey SessionsQuery, panelTtl, SessionsResult <$> otelSessionRows scope (SessionText Nothing) AllSessionRows)
-      replaysQ = ("replays" :: Text, cacheKey ReplaySessionsQuery, panelTtl, ReplaySessionsResult <$> replaySessionRows scope (SessionText Nothing))
-      sessionSearchQ = ("sessions" :: Text, cacheKey $ SessionSearchQuery searchQuery sessionFilter, panelTtl, SessionsResult <$> searchSessions scope searchQuery sessionFilter)
-      sessionDetailQs = [("session" :: Text, cacheKey $ SessionDetailQuery sid, panelTtl, SessionDetailResult <$> sessionDetail scope sid) | sid <- maybeToList selectedM, not $ T.null sid]
-      vitalsQ = ("web vitals" :: Text, cacheKey $ VitalPopulationQuery bucket, panelTtl, VitalPopulationResult <$> RUM.rumVitalPopulation scope.useTf scope.queryScope window bucket)
-      breakdownQ = ("audience" :: Text, cacheKey BreakdownQuery, panelTtl, BreakdownResult <$> rumBreakdown scope)
+      pulseQ = (cacheKey PresenceQuery, panelTtl, PresenceResult <$> rumHasBrowserTelemetry scope)
+      pagesQ = (cacheKey PagesQuery, panelTtl, PagesResult <$> rumPages scope)
+      errorsQ = (cacheKey ErrorsQuery, panelTtl, ErrorsResult <$> rumErrors scope)
+      sessionsQ = (cacheKey SessionsQuery, panelTtl, SessionsResult <$> otelSessionRows scope (SessionText Nothing) AllSessionRows)
+      replaysQ = (cacheKey ReplaySessionsQuery, panelTtl, ReplaySessionsResult <$> replaySessionRows scope (SessionText Nothing))
+      sessionSearchQ = (cacheKey $ SessionSearchQuery searchQuery sessionFilter, panelTtl, SessionsResult <$> searchSessions scope searchQuery sessionFilter)
+      sessionDetailQs = [(cacheKey $ SessionDetailQuery sid, panelTtl, SessionDetailResult <$> sessionDetail scope sid) | sid <- maybeToList selectedM, not $ T.null sid]
+      vitalsQ = (cacheKey $ VitalPopulationQuery bucket, panelTtl, VitalPopulationResult <$> RUM.rumVitalPopulation scope.useTf scope.queryScope window bucket)
+      breakdownQ = (cacheKey BreakdownQuery, panelTtl, BreakdownResult <$> rumBreakdown scope)
       -- Only the requested panel's queries run. The skeleton request runs none at all, so the
       -- page chrome is free and each panel pays only for itself.
       --
@@ -709,9 +709,10 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
       -- last-known data plus no revalidation trigger, so the page neither lies forever nor
       -- collapses to zero states while the store is down. A payload from an older code
       -- shape fails to decode; that is a cache miss, not an error.
-      runQuery (label, key, ttl, action) = withRunInIO \unlift -> fmap snd $ QueryCache.coalesceQuery appCtx.rumQueryFlights (key, refresh) $ unlift do
+      runQuery (key, ttl, action) = withRunInIO \unlift -> fmap snd $ QueryCache.coalesceQuery appCtx.rumQueryFlights (key, refresh) $ unlift do
         -- First SDK visits remain uncached; an explicit missing search gets a brief fresh-only hit.
-        let policy result
+        let label = rumQueryLabel key.query
+            policy result
               | SessionSearchQuery (Just _) _ <- key.query, SessionsResult [] <- result = CacheEmptySearch
               | populated = CachePopulated
               | otherwise = SkipCache
@@ -764,7 +765,7 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
               Right res -> pure $ Right res
               Left err -> case staleEntryM of
                 Just (stale, _) -> Right (stale, False) <$ Log.logAttention "RUM panel query failed; served stale cache" (label, displayException err)
-                Nothing -> Left label <$ Log.logAttention "RUM panel query failed" (label, displayException err)
+                Nothing -> Left key.query <$ Log.logAttention "RUM panel query failed" (label, displayException err)
       refresh = isJust refreshM
       deferredUrl = rumUrl links ([(key, value) | (key, Just value) <- [("tab", tabM), ("q", queryM), ("filter", sessionFilterM), ("session", selectedM)]] <> [("deferred", "1")])
   body <- withDeferredBody deferredM "rum-page" deferredUrl (rumSkeleton_ tab) do
@@ -1013,8 +1014,7 @@ panelSkeleton_ = div_ [class_ "rounded-lg border border-strokeWeak surface-raise
 rumStatWidgets_ :: RumLinks -> Html ()
 rumStatWidgets_ links = div_ [class_ "grid grid-cols-4 gap-3 max-md:grid-cols-2"] do
   statSlot_
-    $ statWidget "rum-stat-sessions" Widget.WTStat "Sessions" "users" "sessions"
-    $ sessionsSql
+    $ statWidget "rum-stat-sessions" Widget.WTStat "Sessions" "users" "sessions" sessionsSql
   statSlot_
     -- The page-view predicate alone: its two disjuncts are already inside 'browserSql''s
     -- OR, so @browserSql AND pageView@ is just @pageView@ — the same subset collapse
@@ -1028,8 +1028,7 @@ rumStatWidgets_ links = div_ [class_ "grid grid-cols-4 gap-3 max-md:grid-cols-2"
       { Widget.seriesIntent = Just "error"
       }
   statSlot_
-    $ statWidget "rum-stat-p75" Widget.WTStat "P75 page load" "gauge" "ms"
-    $ p75Sql
+    $ statWidget "rum-stat-p75" Widget.WTStat "P75 page load" "gauge" "ms" p75Sql
   where
     statSlot_ = div_ [class_ "h-28 min-h-28"] . Widget.widget_
     statWidget wid wType title icon unit sql =
@@ -1337,7 +1336,7 @@ sessions_ page = slot_ page PanelSessions sessionsSkeleton_ do
   let filtered = page.sessions
   div_ [class_ "grid bg-bgBase xl:h-full xl:min-h-0 xl:grid-cols-[minmax(32rem,35%)_minmax(0,1fr)]"] do
     section_ [id_ "rum-sessions-list", Aria.label_ "Sessions", tabindex_ "0", class_ "min-w-0 overflow-y-auto overscroll-contain border-strokeWeak xl:min-h-0 xl:border-e max-xl:max-h-[45svh] max-xl:border-b"] do
-      if "sessions" `elem` page.degradedPanels then degradedBanner_ page PanelSessions else sessionsTable_ True page.now page.links page.query page.sessionFilter page.selectedSession filtered
+      if any (\case SessionsQuery -> True; SessionSearchQuery{} -> True; _ -> False) page.degradedPanels then degradedBanner_ page PanelSessions else sessionsTable_ True page.now page.links page.query page.sessionFilter page.selectedSession filtered
       panelRevalidation_ page PanelSessions
     sessionWorkspace_ page
 
@@ -1345,7 +1344,7 @@ sessions_ page = slot_ page PanelSessions sessionsSkeleton_ do
 sessionWorkspace_ :: RumData -> Html ()
 sessionWorkspace_ page =
   section_ [id_ "rum-replay-workspace", class_ "min-w-0 bg-bgBase xl:min-h-0 xl:overflow-y-auto xl:overscroll-contain", Aria.label_ "Session details"] do
-    if "session" `elem` page.degradedPanels then degradedBanner_ page PanelSessionDetail else replayWorkspace_ page.links selected
+    if any (\case SessionDetailQuery{} -> True; _ -> False) page.degradedPanels then degradedBanner_ page PanelSessionDetail else replayWorkspace_ page.links selected
     when (page.panel == Just PanelSessionDetail) $ panelRevalidation_ page PanelSessionDetail
   where
     selected = page.selectedSessionData <|> (page.selectedSession >>= \sid -> find ((== sid) . (.id)) page.sessions)
@@ -1950,5 +1949,18 @@ degradedBanner_ page panel = div_ [role_ "alert", class_ "flex items-start gap-2
   faSprite_ "triangle-exclamation" "solid" "mt-0.5 h-4 w-4 shrink-0 text-iconWarning"
   div_ do
     strong_ "Some RUM data could not be loaded."
-    span_ [class_ "ml-1 text-textWeak"] $ toHtml $ "Retry or narrow the time range. Unavailable: " <> T.intercalate ", " page.degradedPanels <> "."
+    span_ [class_ "ml-1 text-textWeak"] $ toHtml $ "Retry or narrow the time range. Unavailable: " <> T.intercalate ", " (map rumQueryLabel page.degradedPanels) <> "."
   button_ ([type_ "button", class_ "btn btn-sm shrink-0"] <> panelSwapAttrs page panel (rumPanelUrl page panel <> "&refresh=1") "click" [term "hx-sync" $ if page.tab == Sessions && panel == PanelSessions then "#rum-session-search-form:replace" else "#" <> panelId panel <> ":replace"]) "Retry"
+
+
+rumQueryLabel :: RumQuery -> Text
+rumQueryLabel = \case
+  PresenceQuery -> "experience"
+  PagesQuery -> "pages"
+  ErrorsQuery -> "errors"
+  SessionsQuery -> "sessions"
+  ReplaySessionsQuery -> "replays"
+  SessionSearchQuery{} -> "sessions"
+  SessionDetailQuery{} -> "session"
+  VitalPopulationQuery{} -> "web vitals"
+  BreakdownQuery -> "audience"

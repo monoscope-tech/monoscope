@@ -37,6 +37,7 @@ import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.TestUtils
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields qualified as MSF
+import Proto.Opentelemetry.Proto.Common.V1.Common qualified as PC
 import Proto.Opentelemetry.Proto.Metrics.V1.Metrics qualified as PM
 import Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields qualified as PMF
 import Relude
@@ -117,6 +118,19 @@ renderPanel tr tab query sessionFilterM selected service panel = do
   pure $ toStrict $ Lucid.renderText $ Lucid.toHtml page
 
 
+loadVitalPanel :: TestResources -> Projects.ProjectId -> Maybe Text -> Text -> IO RUM.RumData
+loadVitalPanel tr projectId refresh panel = do
+  (_, RUM.RumGet (PageCtx _ body)) <- testServant tr $ RUM.rumGetH projectId (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just panel) (Just "1") refresh
+  case body of
+    DeferredBody page -> pure page
+    DeferredShell{} -> fail "Expected loaded vital panel"
+
+
+exportMetrics :: TestResources -> Text -> [PC.KeyValue] -> [PM.Metric] -> IO ()
+exportMetrics tr apiKey resourceAttrs metrics =
+  void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ defMessage & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ mkResource apiKey resourceAttrs & PMF.scopeMetrics .~ [defMessage & PMF.metrics .~ metrics]])
+
+
 -- | Both cache layers: the shared rum_panel_cache table outlives a memory purge by design,
 -- which is exactly what these examples must not inherit from each other.
 purgeRumCaches :: TestResources -> IO ()
@@ -142,13 +156,8 @@ spec = sequential $ aroundAll withTestResources do
       apiKey <- createTestAPIKey tr projectId "rum-scalar-key"
       forM_ (zip [1, 10, 20, 30] [-10, -9, -8, -7]) \(value, seconds) ->
         ingestMetric tr apiKey [] [mkAttr "page.url" "/scalar"] "browser.web_vital.lcp" value (addUTCTime seconds frozenTime)
-      let loaded panel = do
-            (_, RUM.RumGet (PageCtx _ body)) <- testServant tr $ RUM.rumGetH projectId (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just panel) (Just "1") Nothing
-            case body of
-              DeferredBody page -> pure page
-              DeferredShell{} -> fail "Expected loaded scalar vital panel"
-      detail <- loaded "vital_trend"
-      summary <- loaded "vitals"
+      detail <- loadVitalPanel tr projectId Nothing "vital_trend"
+      summary <- loadVitalPanel tr projectId Nothing "vitals"
       (mapMaybe (RUMData.measurementValue . (.measurement)) detail.vitalTrend, [(RUMData.measurementValue point.measurement, RUMData.measurementSamples point.measurement) | point <- detail.pageVitals], [(RUMData.measurementValue vital.measurement, RUMData.measurementSamples vital.measurement) | vital <- summary.vitals, vital.name == "lcp"])
         `shouldBe` ([22.5], [(Just 22.5, 4)], [(Just 22.5, 4)])
 
@@ -272,14 +281,8 @@ spec = sequential $ aroundAll withTestResources do
         apiKey <- createTestAPIKey tr projectId "rum-histogram-key"
         let histogram = defMessage & PMF.aggregationTemporality .~ temporality & PMF.dataPoints .~ points
             metric = defMessage & PMF.name .~ "browser.web_vital.lcp" & PMF.histogram .~ histogram
-            request = defMessage & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ mkResource apiKey [mkAttr "service.name" "histogram-ui"] & PMF.scopeMetrics .~ [defMessage & PMF.metrics .~ [metric]]]
             scoped = tr{trSessAndHeader = fmap (\session -> session{Projects.service = Just "histogram-ui"}) tr.trSessAndHeader}
-            loaded panel = do
-              (_, RUM.RumGet (PageCtx _ body)) <- testServant scoped $ RUM.rumGetH projectId (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just panel) (Just "1") Nothing
-              case body of
-                DeferredBody page -> pure page
-                DeferredShell{} -> fail "Expected loaded histogram vital panel"
-        void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto request)
+        exportMetrics tr apiKey [mkAttr "service.name" "histogram-ui"] [metric]
         when (temporality == PM.AGGREGATION_TEMPORALITY_UNSPECIFIED)
           $ runTestBg frozenTime tr
           $ Hasql.withHasqlTimefusion True
@@ -295,8 +298,8 @@ spec = sequential $ aroundAll withTestResources do
             FROM otel_metrics WHERE project_id=#{projectId.toText}|]
         forM_ (zip scalars [0 :: Int ..]) \(value, index) -> ingestMetric tr apiKey [mkAttr "service.name" "histogram-ui"] [mkAttr "page.url" "/histogram"] "browser.web_vital.lcp" value (at (-6 + fromIntegral index / 1000))
         purgeRumCaches tr
-        detail <- loaded "vital_trend"
-        summary <- loaded "vitals"
+        detail <- loadVitalPanel scoped projectId Nothing "vital_trend"
+        summary <- loadVitalPanel scoped projectId Nothing "vitals"
         pure (detail, summary)
       map (\(detail, summary) -> (detail.degradedPanels, summary.degradedPanels)) pages `shouldBe` replicate (length cases) ([], [])
       forM_ (zip cases pages) \((_, _, _, (value, count)), (_, summary)) ->
@@ -319,8 +322,7 @@ spec = sequential $ aroundAll withTestResources do
           nanos = floor . (* 1000000000) . utcTimeToPOSIXSeconds
           point = defMessage & PMF.timeUnixNano .~ nanos (at (-10)) & PMF.startTimeUnixNano .~ nanos (at (-60)) & PMF.attributes .~ [mkAttr "page.url" "/one-read"] & PMF.count .~ 100 & PMF.bucketCounts .~ [80, 20, 0] & PMF.explicitBounds .~ [100, 200]
           metric = defMessage & PMF.name .~ "browser.web_vital.lcp" & PMF.histogram .~ (defMessage & PMF.aggregationTemporality .~ PM.AGGREGATION_TEMPORALITY_DELTA & PMF.dataPoints .~ [point])
-          request = defMessage & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ mkResource apiKey [] & PMF.scopeMetrics .~ [defMessage & PMF.metrics .~ [metric]]]
-      void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto request)
+      exportMetrics tr apiKey [] [metric]
       forM_ (zip [10, 30] [-11, -10]) \(value, seconds) -> ingestMetric tr apiKey [] [mkAttr "page.url" "/one-read"] "browser.web_vital.fcp" value (at seconds)
       queries <- newIORef (0 :: Int)
       let database = interpose @(Labeled "timefusion" Hasql.Hasql) \_ (Labeled effect) -> do
@@ -367,8 +369,7 @@ spec = sequential $ aroundAll withTestResources do
               .~ "browser.web_vital.lcp"
                 & PMF.histogram
               .~ (defMessage & PMF.aggregationTemporality .~ PM.AGGREGATION_TEMPORALITY_DELTA & PMF.dataPoints .~ [point])
-          request = defMessage & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ mkResource apiKey [] & PMF.scopeMetrics .~ [defMessage & PMF.metrics .~ [metric]]]
-      void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto request)
+      exportMetrics tr apiKey [] [metric]
       runTestBg frozenTime tr
         $ Hasql.withHasqlTimefusion True
         $ Hasql.interpExecute_
@@ -383,13 +384,10 @@ spec = sequential $ aroundAll withTestResources do
         <> [HI.sql| FROM otel_metrics WHERE project_id=#{projectId.toText}
       |]
       forM_ ["vitals", "vital_trend"] \panel -> do
-        (_, RUM.RumGet (PageCtx _ body)) <- testServant tr $ RUM.rumGetH projectId (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just panel) (Just "1") Nothing
-        case body of
-          DeferredBody page -> do
-            page.degradedPanels `shouldBe` []
-            let measurements = if panel == "vitals" then [vital.measurement | vital <- page.vitals, vital.name == "lcp"] else map (.measurement) page.vitalTrend <> map (.measurement) page.pageVitals
-            measurements `shouldBe` replicate (if panel == "vitals" then 1 else 2) (RUMData.Unavailable 100 RUMData.InvalidBuckets)
-          DeferredShell{} -> fail "Expected loaded missing-count panel"
+        page <- loadVitalPanel tr projectId Nothing panel
+        page.degradedPanels `shouldBe` []
+        let measurements = if panel == "vitals" then [vital.measurement | vital <- page.vitals, vital.name == "lcp"] else map (.measurement) page.vitalTrend <> map (.measurement) page.pageVitals
+        measurements `shouldBe` replicate (if panel == "vitals" then 1 else 2) (RUMData.Unavailable 100 RUMData.InvalidBuckets)
 
     it "denseHistogramVitals_keepCompleteCounts_andBoundCachedPages" \tr -> do
       projectId <- createTestProject tr "RUM dense histogram"
@@ -420,25 +418,21 @@ spec = sequential $ aroundAll withTestResources do
               .~ "browser.web_vital.fcp"
                 & PMF.gauge
               .~ (defMessage & PMF.dataPoints .~ [defMessage & PMF.timeUnixNano .~ nanos (at (-10)) & PMF.attributes .~ [mkAttr "page.url" ("https://dense.example/" <> show series)] & PMF.asDouble .~ 25 | series <- [0 .. 199 :: Int]])
-          request = defMessage & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ mkResource apiKey [] & PMF.scopeMetrics .~ [defMessage & PMF.metrics .~ [metric, scalar]]]
-      void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto request)
+      exportMetrics tr apiKey [] [metric, scalar]
       forM_ ([Just "1", Nothing] :: [Maybe Text]) \refresh -> do
         when (isNothing refresh) $ Cache.purge tr.trATCtx.rumCache
-        (_, RUM.RumGet (PageCtx _ body)) <- testServant tr $ RUM.rumGetH projectId (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "vital_trend") (Just "1") refresh
-        case body of
-          DeferredBody page -> do
-            page.degradedPanels `shouldBe` []
-            forM_ ([("lcp", 75, 32000), ("fcp", 25, 200)] :: [(Text, Double, Natural)]) \(name, value, count) -> do
-              [(RUMData.measurementValue vital.measurement, RUMData.measurementSamples vital.measurement) | vital <- page.vitals, vital.name == name] `shouldBe` [(Just value, count)]
-              let trend = filter ((== name) . (.metricName)) page.vitalTrend
-              sum (map (RUMData.measurementSamples . (.measurement)) trend) `shouldBe` count
-              map (RUMData.measurementValue . (.measurement)) trend `shouldSatisfy` all (== Just value)
-            let selectedPages = take 150 (sort ["https://dense.example/" <> show series | series <- [0 .. 199 :: Int]])
-            forM_ ([("lcp", 160), ("fcp", 1)] :: [(Text, Natural)]) \(name, count) -> do
-              let metricPages = filter ((== name) . (.metricName)) page.pageVitals
-              map (RUMData.measurementSamples . (.measurement)) metricPages `shouldBe` replicate 150 count
-              map (.page) metricPages `shouldBe` selectedPages
-          DeferredShell{} -> fail "Expected loaded dense histogram panel"
+        page <- loadVitalPanel tr projectId refresh "vital_trend"
+        page.degradedPanels `shouldBe` []
+        forM_ ([("lcp", 75, 32000), ("fcp", 25, 200)] :: [(Text, Double, Natural)]) \(name, value, count) -> do
+          [(RUMData.measurementValue vital.measurement, RUMData.measurementSamples vital.measurement) | vital <- page.vitals, vital.name == name] `shouldBe` [(Just value, count)]
+          let trend = filter ((== name) . (.metricName)) page.vitalTrend
+          sum (map (RUMData.measurementSamples . (.measurement)) trend) `shouldBe` count
+          map (RUMData.measurementValue . (.measurement)) trend `shouldSatisfy` all (== Just value)
+        let selectedPages = take 150 (sort ["https://dense.example/" <> show series | series <- [0 .. 199 :: Int]])
+        forM_ ([("lcp", 160), ("fcp", 1)] :: [(Text, Natural)]) \(name, count) -> do
+          let metricPages = filter ((== name) . (.metricName)) page.pageVitals
+          map (RUMData.measurementSamples . (.measurement)) metricPages `shouldBe` replicate 150 count
+          map (.page) metricPages `shouldBe` selectedPages
 
     it "invalidScalarVitals_areUnavailableWithoutHistogramBucketErrors" \tr -> do
       forM_ [-1, 1 / 0, 0 / 0] \value -> do
@@ -446,13 +440,10 @@ spec = sequential $ aroundAll withTestResources do
         apiKey <- createTestAPIKey tr projectId "rum-invalid-key"
         ingestMetric tr apiKey [] [mkAttr "page.url" "/invalid"] "browser.web_vital.lcp" value (addUTCTime (-10) frozenTime)
         forM_ ["vitals", "vital_trend"] \panel -> do
-          (_, RUM.RumGet (PageCtx _ body)) <- testServant tr $ RUM.rumGetH projectId (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just panel) (Just "1") Nothing
-          case body of
-            DeferredBody page -> do
-              page.degradedPanels `shouldBe` []
-              let measurements = if panel == "vitals" then [vital.measurement | vital <- page.vitals, vital.name == "lcp"] else map (.measurement) page.vitalTrend <> map (.measurement) page.pageVitals
-              [(count, issue) | RUMData.Unavailable count issue <- measurements] `shouldBe` replicate (if panel == "vitals" then 1 else 2) (0, RUMData.InvalidValue)
-            DeferredShell{} -> fail "Expected loaded invalid scalar panel"
+          page <- loadVitalPanel tr projectId Nothing panel
+          page.degradedPanels `shouldBe` []
+          let measurements = if panel == "vitals" then [vital.measurement | vital <- page.vitals, vital.name == "lcp"] else map (.measurement) page.vitalTrend <> map (.measurement) page.pageVitals
+          [(count, issue) | RUMData.Unavailable count issue <- measurements] `shouldBe` replicate (if panel == "vitals" then 1 else 2) (0, RUMData.InvalidValue)
 
     it "unsupportedVitals_doNotPresentSumOrOtherDistributionMeansAsObservations" \tr -> do
       let end :: Word64
@@ -476,16 +467,12 @@ spec = sequential $ aroundAll withTestResources do
       forM_ metrics \metric -> do
         projectId <- createTestProject tr "RUM unsupported populations"
         apiKey <- createTestAPIKey tr projectId "rum-unsupported-key"
-        let request = defMessage & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ mkResource apiKey [] & PMF.scopeMetrics .~ [defMessage & PMF.metrics .~ [metric]]]
-        void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto request)
+        exportMetrics tr apiKey [] [metric]
         forM_ ["vitals", "vital_trend"] \panel -> do
-          (_, RUM.RumGet (PageCtx _ body)) <- testServant tr $ RUM.rumGetH projectId (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just panel) (Just "1") Nothing
-          case body of
-            DeferredBody page -> do
-              page.degradedPanels `shouldBe` []
-              let measurements = if panel == "vitals" then [vital.measurement | vital <- page.vitals, vital.name == "lcp"] else map (.measurement) page.vitalTrend <> map (.measurement) page.pageVitals
-              [(count, issue) | RUMData.Unavailable count issue <- measurements] `shouldBe` replicate (if panel == "vitals" then 1 else 2) (0, RUMData.UnsupportedPopulation)
-            DeferredShell{} -> fail "Expected loaded unsupported vital panel"
+          page <- loadVitalPanel tr projectId Nothing panel
+          page.degradedPanels `shouldBe` []
+          let measurements = if panel == "vitals" then [vital.measurement | vital <- page.vitals, vital.name == "lcp"] else map (.measurement) page.vitalTrend <> map (.measurement) page.pageVitals
+          [(count, issue) | RUMData.Unavailable count issue <- measurements] `shouldBe` replicate (if panel == "vitals" then 1 else 2) (0, RUMData.UnsupportedPopulation)
 
     it "histogramVitals_exclusiveBucketLowerBounds_preserveKnownRatingBands" \tr -> do
       ratings <- forM [[2500, 4000], [4000, 5000], [2000, 4000]] \bounds -> do
@@ -506,12 +493,9 @@ spec = sequential $ aroundAll withTestResources do
                 .~ bounds
             histogram = defMessage & PMF.aggregationTemporality .~ PM.AGGREGATION_TEMPORALITY_DELTA & PMF.dataPoints .~ [point]
             metric = defMessage & PMF.name .~ "browser.web_vital.lcp" & PMF.histogram .~ histogram
-            request = defMessage & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ mkResource apiKey [] & PMF.scopeMetrics .~ [defMessage & PMF.metrics .~ [metric]]]
-        void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto request)
-        (_, RUM.RumGet (PageCtx _ body)) <- testServant tr $ RUM.rumGetH projectId (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "vitals") (Just "1") Nothing
-        case body of
-          DeferredBody _ -> pure $ fst $ T.breakOn "</tr>" $ snd $ T.breakOn "Largest Contentful Paint" $ toStrict $ Lucid.renderText $ Lucid.toHtml body
-          DeferredShell{} -> fail "Expected loaded histogram rating panel"
+        exportMetrics tr apiKey [] [metric]
+        page <- loadVitalPanel tr projectId Nothing "vitals"
+        pure $ fst $ T.breakOn "</tr>" $ snd $ T.breakOn "Largest Contentful Paint" $ toStrict $ Lucid.renderText $ Lucid.toHtml page
       zipWithM_ shouldContainAll ratings [["Needs improvement"], ["Poor"], ["Not assessed"]]
 
     it "pageVitals_distinctExactUrls_doNotMergeRoutePercentiles" \tr -> do
@@ -653,10 +637,10 @@ spec = sequential $ aroundAll withTestResources do
             Hasql.UseStatement{} -> pure $ Left HP.AcquisitionTimeoutUsageError
             Hasql.UseSession{} -> pure $ Left HP.AcquisitionTimeoutUsageError
             Hasql.UseLabeledSession{} -> pure $ Left HP.AcquisitionTimeoutUsageError
-      forM_ ([("vitals", "rum-panel-vitals", ["web vitals"]), ("vital_trend", "rum-panel-vital_trend", ["web vitals"]), ("sessions", "rum-sessions-list", ["sessions", "session"]), ("session_detail", "rum-replay-workspace", ["session"])] :: [(Text, Text, [Text])]) \(panel, target, labels) -> do
+      forM_ ([("vitals", "rum-panel-vitals", [RUMData.VitalPopulationQuery RUMData.OneHour]), ("vital_trend", "rum-panel-vital_trend", [RUMData.VitalPopulationQuery RUMData.OneHour]), ("sessions", "rum-sessions-list", [RUMData.SessionSearchQuery Nothing RUMData.AllSessionRows, RUMData.SessionDetailQuery "selected-session"]), ("session_detail", "rum-replay-workspace", [RUMData.SessionDetailQuery "selected-session"])] :: [(Text, Text, [RUMData.RumQuery])]) \(panel, target, queries) -> do
         (_, payload@(RUM.RumGet (PageCtx _ body))) <- testServant scoped $ unavailable $ RUM.rumGetH projectId (Just $ if panel `elem` ["sessions", "session_detail"] then "sessions" else "performance") Nothing Nothing Nothing Nothing (Just "24H") (Just "selected-session") Nothing (Just panel) (Just "1") Nothing
         case body of
-          DeferredBody page -> page.degradedPanels `shouldBe` labels
+          DeferredBody page -> page.degradedPanels `shouldBe` queries
           DeferredShell{} -> expectationFailure "Expected the failed panel response"
         let selected = snd $ T.breakOn ("id=\"" <> target <> "\"") $ toStrict $ Lucid.renderText $ Lucid.toHtml payload
         T.isPrefixOf "<div role=\"alert\"" (T.drop 1 $ snd $ T.breakOn ">" selected) `shouldBe` True
@@ -669,12 +653,12 @@ spec = sequential $ aroundAll withTestResources do
       withResource tr.trPool $ \conn ->
         void $ PG.execute conn "INSERT INTO projects.replay_sessions (session_id, project_id, created_at, last_event_at, event_file_count, user_name) VALUES (?::uuid, ?, ?, ?, 1, 'Failure survivor')" (sid, projectId, frozenTime, addUTCTime 60 frozenTime)
       -- A healthy cached counterpart survives the other query's acquisition failure.
-      forM_ ([("session_detail", Just sid, "rum-sessions-list", "rum-replay-workspace", ["sessions"]), ("sessions", Nothing, "rum-replay-workspace", "rum-sessions-list", ["session"])] :: [(Text, Maybe Text, Text, Text, [Text])]) $ \(warmPanel, warmSelection, failedTarget, healthyTarget, labels) -> do
+      forM_ ([("session_detail", Just sid, "rum-sessions-list", "rum-replay-workspace", [RUMData.SessionSearchQuery Nothing RUMData.AllSessionRows]), ("sessions", Nothing, "rum-replay-workspace", "rum-sessions-list", [RUMData.SessionDetailQuery sid])] :: [(Text, Maybe Text, Text, Text, [RUMData.RumQuery])]) $ \(warmPanel, warmSelection, failedTarget, healthyTarget, queries) -> do
         purgeRumCaches tr
         void $ sessions tr warmPanel warmSelection
         (_, response@(RUM.RumGet (PageCtx _ body))) <- testServant scoped $ unavailable $ RUM.rumGetH projectId (Just "sessions") Nothing Nothing Nothing Nothing (Just "24H") (Just sid) Nothing (Just "sessions") (Just "1") Nothing
         case body of
-          DeferredBody page -> page.degradedPanels `shouldBe` labels
+          DeferredBody page -> page.degradedPanels `shouldBe` queries
           DeferredShell{} -> expectationFailure "Expected the sessions panel response"
         T.isPrefixOf "<div role=\"alert\"" (firstContent failedTarget response) `shouldBe` True
         T.isPrefixOf "<div role=\"alert\"" (firstContent healthyTarget response) `shouldBe` False
