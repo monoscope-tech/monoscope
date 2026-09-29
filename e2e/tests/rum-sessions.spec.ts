@@ -680,7 +680,9 @@ test("refreshed vital charts remain registered on their current elements", async
   try {
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.goto(`/p/${DEMO_PROJECT}/rum?tab=performance&since=1H&service_scope=${scope}`);
-    await page.getByRole("button", { name: "Pause live data", exact: true }).first().click();
+    await expect(page.getByRole("link", { name: "Performance", exact: true })).toHaveAttribute("aria-current", "page");
+    await expect(page.getByRole("heading", { name: "Web Vitals over time", exact: true })).toBeVisible();
+    await page.locator("[data-time-transport]").getByRole("button", { name: /^Pause live (data|updates)$/ }).click();
     await expect(page.locator("[data-time-transport]")).toHaveAttribute("data-interval", "0");
     await assertCharts(60 * 60 * 1000, 1);
     await page.locator("[data-live-range]").click();
@@ -763,4 +765,60 @@ test("automatic session ticks keep an in-flight list request while search replac
     await expect(search).toHaveValue("e2e-missing-session");
     await expect(workspace).toHaveAttribute("data-e2e-preserved", "true");
   } finally { release(); releaseSearch(); await page.unrouteAll({ behavior: "wait" }); }
+});
+
+test("manual session replacements keep cancellation attached to the newest request", async ({ page }) => {
+  test.skip(!process.env.E2E_BASE_URL, "Requires a disposable fixture database");
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.goto(`/p/${DEMO_PROJECT}/rum?tab=sessions&since=1H`);
+  await expect(page.locator(".rum-session-link").first()).toBeVisible();
+  await page.locator('[popovertarget="n-timepicker-popover"]').click();
+  await page.locator("[data-mobile-live-toggle]").click();
+  await expect(page.locator("[data-time-transport]")).toHaveAttribute("data-interval", "0");
+  await page.locator('[popovertarget="n-timepicker-popover"]').click();
+  let releaseFirst = () => {};
+  const firstGate = new Promise<void>(resolve => { releaseFirst = resolve; });
+  let releaseSecond = () => {};
+  const secondGate = new Promise<void>(resolve => { releaseSecond = resolve; });
+  await page.route("**/rum?**", async route => {
+    const query = new URL(route.request().url()).searchParams.get("q");
+    if (query === "e2e-first-pending") await firstGate;
+    if (query === "e2e-second-pending") await secondGate;
+    await route.continue();
+  });
+  try {
+    const search = page.getByRole("searchbox", { name: "Search sessions" });
+    const firstIssued = page.waitForRequest(request => new URL(request.url()).searchParams.get("q") === "e2e-first-pending");
+    await search.fill("e2e-first-pending");
+    const first = await firstIssued;
+    const firstCancelled = page.waitForEvent("requestfailed", request => request === first);
+    const secondIssued = page.waitForRequest(request => new URL(request.url()).searchParams.get("q") === "e2e-second-pending");
+    await search.fill("e2e-second-pending");
+    const second = await secondIssued;
+    const secondSettled = Promise.race([
+      page.waitForEvent("requestfinished", request => request === second),
+      page.waitForEvent("requestfailed", request => request === second),
+    ]);
+    releaseFirst();
+    await firstCancelled;
+    await expect(page.locator("#rum-session-search-form")).toHaveClass(/htmx-request/);
+    const latest = page.waitForResponse(response => new URL(response.url()).searchParams.get("q") === fixtureUser);
+    await search.fill(fixtureUser);
+    expect((await latest).status()).toBe(200);
+    await expect(page.locator(".rum-session-link")).toHaveCount(200);
+    await expect.poll(() => new URL(page.url()).searchParams.get("q")).toBe(fixtureUser);
+    await expect(search).toBeFocused();
+    releaseSecond();
+    await secondSettled;
+    await page.waitForTimeout(300);
+    await expect(page.locator(".rum-session-link")).toHaveCount(200);
+    expect(second.failure()).not.toBeNull();
+    await expect(search).toHaveValue(fixtureUser);
+    await expect.poll(() => new URL(page.url()).searchParams.get("q")).toBe(fixtureUser);
+    await expect(search).toBeFocused();
+  } finally {
+    releaseFirst();
+    releaseSecond();
+    await page.unrouteAll({ behavior: "wait" });
+  }
 });
