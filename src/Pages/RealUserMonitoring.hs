@@ -692,8 +692,8 @@ newtype RumGet = RumGet (PageCtx (Deferred RumData))
 
 instance ToHtml RumGet where
   toHtml (RumGet page@(PageCtx _ body)) = case body of
-    DeferredBody loaded | isJust loaded.panel -> toHtml loaded
-    _ -> toHtml page
+    DeferredBody loaded -> if isJust loaded.panel then toHtml loaded else toHtml page
+    DeferredShell{} -> toHtml page
   toHtmlRaw = toHtml
 
 
@@ -826,7 +826,14 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
                     SessionSearchQuery (Just _) _ -> ":attributed-recordings-v2:negative-search-v1"
                     SessionSearchQuery{} -> ":attributed-recordings-v2"
                     SessionDetailQuery{} -> ":attributed-recordings-v2"
-                    _ -> ""
+                    PresenceQuery -> ""
+                    PagesQuery -> ""
+                    ErrorsQuery -> ""
+                    SessionsQuery -> ""
+                    ReplaySessionsQuery -> ""
+                    VitalSamplesQuery -> ""
+                    VitalsDetailQuery{} -> ""
+                    BreakdownQuery -> ""
             staleEntryM <- mfilter usable . fromRight Nothing <$> tryAny (rumPanelCacheGetStale dbKey)
             outcome <-
               tryAny

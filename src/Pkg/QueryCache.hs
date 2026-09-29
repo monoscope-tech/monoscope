@@ -5,8 +5,6 @@ module Pkg.QueryCache (
   RawCacheKey (..),
   RawCacheResult (..),
   RawQueryFlights,
-  newRawQueryFlights,
-  coalesceRawQuery,
   QueryFlights,
   newQueryFlights,
   coalesceQuery,
@@ -141,16 +139,8 @@ newQueryFlights :: IO (QueryFlights key value)
 newQueryFlights = QueryFlights <$> STM.newTVarIO M.empty
 
 
-newRawQueryFlights :: IO RawQueryFlights
-newRawQueryFlights = newQueryFlights
-
-
 -- | The action includes cache lookup, execution and persistence. Publication and
 -- removal are atomic, including when a leader is cancelled; followers cannot hang.
-coalesceRawQuery :: RawQueryFlights -> RawCacheKey -> IO MetricsData -> IO (Bool, MetricsData)
-coalesceRawQuery = coalesceQuery
-
-
 coalesceQuery :: Ord key => QueryFlights key value -> key -> IO value -> IO (Bool, value)
 coalesceQuery (QueryFlights flights) key action = E.mask \restore -> do
   (leader, resultVar) <- STM.atomically do
@@ -202,7 +192,7 @@ cachedRawQuery flights now key fetch = do
             updateRawCache now key value `Ann.catch` cacheFailure "store" ()
             finish "raw-miss" value
       run = do
-        (leader, value) <- withRunInIO $ \unlift -> coalesceRawQuery flights key (unlift action)
+        (leader, value) <- withRunInIO $ \unlift -> coalesceQuery flights key (unlift action)
         if leader
           then pure value
           else do

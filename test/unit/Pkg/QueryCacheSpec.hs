@@ -13,7 +13,7 @@ import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Parser (RangeEnd (..), SqlQueryCfg (..), defPid, defSqlQueryCfg, fixedUTCTime)
 import Pkg.Parser.Expr (Subject (..))
 import Pkg.Parser.Stats (BinFunction (..), ByClauseItem (..), Section (..), SummarizeByClause (..))
-import Pkg.QueryCache (CacheKey (..), RawCacheKey (..), bucketStart, chartChunks, coalesceRawQuery, generateCacheKey, hasSummarizeWithBin, mergeTimeseriesData, newRawQueryFlights, trimOldData, trimToRange)
+import Pkg.QueryCache (CacheKey (..), RawCacheKey (..), bucketStart, chartChunks, coalesceQuery, generateCacheKey, hasSummarizeWithBin, mergeTimeseriesData, newQueryFlights, trimOldData, trimToRange)
 import Relude
 import System.IO.Error (userError)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldNotBe, shouldReturn, shouldSatisfy)
@@ -52,30 +52,30 @@ spec :: Spec
 spec = do
   describe "raw SQL request coalescing" do
     it "runs one leader for concurrent requests with the complete endpoint key" do
-      flights <- newRawQueryFlights
+      flights <- newQueryFlights
       calls <- newIORef (0 :: Int)
       let key = rawKey "endpoint-a" (Just "production") "5 minutes"
           fetch = do
             atomicModifyIORef' calls $ \n -> (n + 1, ())
             threadDelay 100_000
             pure emptyMetrics
-      results <- replicateConcurrently 12 $ coalesceRawQuery flights key fetch
+      results <- replicateConcurrently 12 $ coalesceQuery flights key fetch
       readIORef calls `shouldReturn` 1
       length (filter fst results) `shouldBe` 1
       map ((.rowsCount) . snd) results `shouldBe` replicate 12 0
 
     it "wakes every follower on failure and permits a later retry" do
-      flights <- newRawQueryFlights
+      flights <- newQueryFlights
       let key = rawKey "failure" Nothing "5 minutes"
           failed = threadDelay 100000 >> E.throwIO (userError "backend failed")
-      results <- replicateConcurrently 12 $ E.try @E.IOException $ coalesceRawQuery flights key failed
+      results <- replicateConcurrently 12 $ E.try @E.IOException $ coalesceQuery flights key failed
       results `shouldSatisfy` all isLeft
-      retried <- coalesceRawQuery flights key (pure emptyMetrics)
+      retried <- coalesceQuery flights key (pure emptyMetrics)
       fst retried `shouldBe` True
       (snd retried).rowsCount `shouldBe` 0
 
     it "does not coalesce requests when an explicit key dimension changes" do
-      flights <- newRawQueryFlights
+      flights <- newQueryFlights
       calls <- newIORef (0 :: Int)
       let key = rawKey "endpoint-a" Nothing "5 minutes"
           keys :: [RawCacheKey]
@@ -97,7 +97,7 @@ spec = do
             atomicModifyIORef' calls (\n -> (n + 1, ()))
             threadDelay 100000
             pure emptyMetrics
-      void $ mapConcurrently (\k -> coalesceRawQuery flights k fetch) keys
+      void $ mapConcurrently (\k -> coalesceQuery flights k fetch) keys
       readIORef calls `shouldReturn` length keys
 
   describe "chart response event rate" do

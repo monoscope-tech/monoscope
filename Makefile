@@ -116,8 +116,7 @@ live-test-reload-all:
 # (`..._con_info`) fails macOS flat-namespace resolution in dynLoadObjs — the
 # intermittent "symbol not found in flat namespace" relink flake. Forcing every
 # recompile to object code keeps the whole session single-mode, so it can't mix.
-# Keep those flags in repl-options so dependency interfaces retain their normal
-# profile for the concurrently running live-reload session.
+# Keep GHCi suffix flags out of Cabal dependency hashes.
 # Filter with: TEST_MATCH=Monitoring make live-test-dev
 # (hspec-discover node names drop the module's "Spec" suffix)
 # NB: GHCi's :main only strips quotes at token start, so `--match="X"` would

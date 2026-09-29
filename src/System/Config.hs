@@ -564,7 +564,7 @@ configToEnv config = do
   logsPatternCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0)
   hostStatsCache <- liftIO $ newCache (Just $ TimeSpec 300 0)
   endpointStatsCache <- liftIO $ newCache (Just $ TimeSpec 300 0)
-  rawQueryFlights <- liftIO QueryCache.newRawQueryFlights
+  rawQueryFlights <- liftIO QueryCache.newQueryFlights
   infrastructureCache <- liftIO $ newCache (Just $ TimeSpec 15 0)
   -- 15s was shorter than the queries it caches: a RUM panel set takes ~28s over a 24h
   -- window, so every entry expired before the next request could reach it and the cache

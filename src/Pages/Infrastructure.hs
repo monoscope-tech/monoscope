@@ -713,8 +713,8 @@ kubeDetailUrl pid window resource row =
     pid
     "/infrastructure/kubernetes/detail"
     ( [("resource", kubeResourceParam resource), ("name", row.name)]
-        <> [("cluster", cluster) | cluster <- maybeToList row.cluster]
-        <> [("namespace", namespace) | namespace <- maybeToList row.namespace]
+        <> [("cluster", cluster) | cluster <- toList row.cluster]
+        <> [("namespace", namespace) | namespace <- toList row.namespace]
     )
     window
 
@@ -768,8 +768,8 @@ kubernetesDetail_ pid window resource row = div_ [class_ "-mx-8 -mb-4 min-h-full
         , row.name
         )
       ]
-        <> [(clusterField, cluster) | resource /= KubeClusters, cluster <- maybeToList row.cluster]
-        <> [("resource.k8s.namespace.name", namespace) | resource /= KubeNamespaces, namespace <- maybeToList row.namespace]
+        <> [(clusterField, cluster) | resource /= KubeClusters, cluster <- toList row.cluster]
+        <> [("resource.k8s.namespace.name", namespace) | resource /= KubeNamespaces, namespace <- toList row.namespace]
 
 
 data HostMapFill = FillCPU | FillMemory | FillStorage

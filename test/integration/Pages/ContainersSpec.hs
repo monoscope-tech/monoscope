@@ -453,17 +453,23 @@ spec = sequential $ aroundAll withResources do
         forM_ (["cpu0", "cpu1", "cpu2", "cpu3"] :: [Text]) \core ->
           forM_ ([("idle", 0.875), ("user", 0.125)] :: [(Text, Double)]) \(mode, value) ->
             ingestMetric tr key [mkAttr "host.name" "four-core-host"] [mkAttr "cpu.logical_number" core, mkAttr "cpu.mode" mode] "system.cpu.utilization" value (addUTCTime offset frozenTime)
-      forM_ ([("four-core-host", 12.5), ("vps-d6d7e318", 25)] :: [(Text, Double)]) \(host, expected) -> do
+      ingestMetric tr key [mkAttr "host.name" "host-without-idle"] [mkAttr "cpu.logical_number" "cpu0", mkAttr "cpu.mode" "user"] "system.cpu.utilization" 0.5 (addUTCTime (-60) frozenTime)
+      forM_ ([("four-core-host", Just 12.5), ("vps-d6d7e318", Just 25), ("host-without-idle", Nothing)] :: [(Text, Maybe Double)]) \(host, expected) -> do
         html <- shellHtml tr $ Infrastructure.hostDetailGetH testPid (Just host) Nothing Nothing (Just "2H")
-        let payload = T.replace "&quot;" "\"" $ T.takeWhile (/= '"') $ T.drop (T.length "data-widget=\"") $ snd $ T.breakOn "data-widget=\"" html
-        widget <- either fail pure $ AE.eitherDecodeStrict' @Widget.Widget $ encodeUtf8 payload
-        widget.id `shouldBe` Just "host-cpu"
-        query <- maybe (fail "host CPU widget has no query") pure widget.query
-        response <- runQueryEffect tr $ Charts.queryMetrics (Just "postgres") (Just Charts.DTMetric) (Just testPid) (Just query) Nothing Nothing (Just "2024-12-31T23:55:00Z") (Just "2025-01-01T00:01:00Z") (Just "metrics") Nothing []
-        response.error `shouldBe` Nothing
-        let values = V.toList $ V.mapMaybe ((V.!? 1) >=> id) response.dataset
-        values `shouldSatisfy` (not . null)
-        values `shouldSatisfy` all (\value -> abs (value - expected) < 0.001)
+        case expected of
+          Just percentage -> do
+            let payload = T.replace "&quot;" "\"" $ T.takeWhile (/= '"') $ T.drop (T.length "data-widget=\"") $ snd $ T.breakOn "data-widget=\"" html
+            widget <- either fail pure $ AE.eitherDecodeStrict' @Widget.Widget $ encodeUtf8 payload
+            widget.id `shouldBe` Just "host-cpu"
+            query <- maybe (fail "host CPU widget has no query") pure widget.query
+            response <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just testPid) (Just query) Nothing Nothing (Just "2024-12-31T23:55:00Z") (Just "2025-01-01T00:01:00Z") (Just "metrics") Nothing []
+            response.error `shouldBe` Nothing
+            let values = V.toList $ V.mapMaybe ((V.!? 1) >=> id) response.dataset
+            values `shouldSatisfy` (not . null)
+            values `shouldSatisfy` all (\value -> abs (value - percentage) < 0.001)
+          Nothing -> do
+            html `shouldContainAll` ["No host metrics in this time range", "Metrics coverage: 0 of 4"]
+            html `shouldNotSatisfy` T.isInfixOf "host-cpu"
 
     it "infrastructureDrawer_drilldownsKeepTheSelectedTimeWindow" \tr -> do
       containerHtml <- shellHtml tr $ Containers.containerDetailGetH testPid (Just "checkout") (Just "checkout-7fb5b4f859-nlcjs") Nothing Nothing Nothing Nothing Nothing Nothing (Just "24H")
