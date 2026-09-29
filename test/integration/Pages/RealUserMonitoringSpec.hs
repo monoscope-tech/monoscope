@@ -832,6 +832,30 @@ spec = sequential $ aroundAll withTestResources do
       otelBrowserSpan apiKey "87000000000000000000000000000008" "8700000000000001" "session-first-sdk-arrival" service tr
       fetch >>= (`shouldContainAll` ["session-first-sdk-arrival", "/cart"])
 
+    it "vitalPanelCache_blankWindowFields_reuseThePrewarmedPopulation" \tr -> do
+      projectId <- createTestProject tr "RUM canonical cache window"
+      apiKey <- createTestAPIKey tr projectId "rum-canonical-window-key"
+      let ingest value seconds = ingestMetric tr apiKey [] [mkAttr "page.url" "/canonical-window"] "browser.web_vital.lcp" value (addUTCTime seconds frozenTime)
+          alter sql = withResource tr.trPool $ \conn -> void $ PG.execute_ conn sql
+          load from to since panel = do
+            (_, RUM.RumGet (PageCtx _ body)) <- testServant tr $ RUM.rumGetH projectId (Just "performance") Nothing Nothing from to since Nothing Nothing (Just panel) (Just "1") Nothing
+            case body of
+              DeferredBody page -> [(RUMData.measurementValue vital.measurement, RUMData.measurementSamples vital.measurement) | vital <- page.vitals, vital.name == "lcp"] <$ (page.degradedPanels `shouldBe` [])
+              DeferredShell{} -> fail "Expected loaded canonical-window vital panel"
+      ingest 1000 (-10)
+      E.bracket_
+        (alter "CREATE SEQUENCE rum_window_writes; CREATE FUNCTION count_rum_window_write() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM nextval('rum_window_writes'); RETURN NEW; END $$; CREATE TRIGGER count_rum_window_write BEFORE INSERT ON rum_panel_cache FOR EACH ROW EXECUTE FUNCTION count_rum_window_write()")
+        (alter "DROP TRIGGER count_rum_window_write ON rum_panel_cache; DROP FUNCTION count_rum_window_write(); DROP SEQUENCE rum_window_writes")
+        do
+          warm <- load Nothing Nothing (Just "24H") "vital_trend"
+          ingest 9000 (-9)
+          hits <- forM [(Just "", Just "", Just "24H"), (Nothing, Nothing, Nothing)] \(from, to, since) -> do
+            Cache.purge tr.trATCtx.rumCache
+            load from to since "vitals"
+          writes <- withResource tr.trPool $ \conn -> PG.query_ conn "SELECT last_value, is_called FROM rum_window_writes" :: IO [(Int64, Bool)]
+          writes `shouldBe` [(1, True)]
+          warm : hits `shouldBe` replicate 3 [(Just 1000, 1)]
+
     it "panelCache_isSharedAcrossReplicas_notPerProcessMemory" \tr -> do
       -- A fresh replica has an empty memory cache; the shared rum_panel_cache table must
       -- still answer, proven by deleting the underlying rows so a recompute could not.

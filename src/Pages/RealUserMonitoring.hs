@@ -651,7 +651,7 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
         | diffUTCTime window.toTime window.fromTime <= 6 * 3600 = FiveMinutes
         | diffUTCTime window.toTime window.fromTime <= 3 * 86400 = OneHour
         | otherwise = SixHours
-      cacheKey query = RumCacheKey pid query environment serviceFilter fromM toM since
+      cacheKey query = RumCacheKey pid query environment serviceFilter (nonEmptyT fromM) (nonEmptyT toM) since
       panelTtl = TimePicker.cacheTtl window
       pulseQ = ("experience" :: Text, cacheKey PresenceQuery, panelTtl, PresenceResult <$> rumHasBrowserTelemetry scope)
       pagesQ = ("pages" :: Text, cacheKey PagesQuery, panelTtl, PagesResult <$> rumPages scope)
