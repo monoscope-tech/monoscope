@@ -97,9 +97,10 @@ Two deliberate differences from your normal `make test`:
   it runs would otherwise make the running shell resume at a stale offset and die
   with `syntax error near unexpected token`. A run lasts tens of minutes, so
   editing it meanwhile is normal, not a mistake.
-- **Build directories are container-private.** `dist-newstyle` and both
-  `node_modules` are named volumes; your host's are macOS/arm64 artifacts and
-  sharing them corrupts both. The volumes persist, so the second `make ci` is
+- **Build directories are container-private.** `dist-newstyle`, both
+  `node_modules` directories, and Playwright's browser download are named
+  volumes. Your host's macOS/arm64 artifacts would corrupt the Linux build.
+  The volumes persist, so the second `make ci` is
   fast — but the **first one is a cold build** and takes as long as a cold CI
   run. Start it and go do something else; every run after that is incremental.
   `make ci-down` keeps them; `make ci-clean` deletes them and buys you the cold
@@ -107,6 +108,9 @@ Two deliberate differences from your normal `make test`:
   Each `integration-tests` invocation recreates only the ephemeral Postgres,
   MinIO, and TimeFusion service containers, so deterministic fixture IDs and
   telemetry rows never leak into the next run. The build-cache volumes remain.
+  Checks that do not need services start only the runner; `e2e` starts Postgres,
+  and `integration-tests` starts all three services.
+  When every selected check is already attested, `make ci` skips Docker entirely.
 
 **TimeFusion publishes no arm64 image**, and the amd64 one segfaults under
 emulation on Apple Silicon. Build one for this machine, once:

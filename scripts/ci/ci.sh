@@ -498,46 +498,53 @@ compose() { docker compose -f "$COMPOSE_FILE" --project-name monoscope-ci "$@"; 
 cmd_local() {
   command -v docker >/dev/null 2>&1 || die "docker is required for \`ci.sh local\`"
   docker compose version >/dev/null 2>&1 || die "docker compose v2 is required"
+  if [ "${CI_FORCE:-}" != "true" ]; then
+    local cached=true c
+    for c in $(selected_checks "$@"); do
+      find_attestation "$c" >/dev/null || { cached=false; break; }
+    done
+    if [ "$cached" = true ]; then
+      note "all selected checks are already attested — skipping local containers"
+      return 0
+    fi
+  fi
   # Postgres and MinIO are deliberately cache-free integration fixtures (Postgres
   # is tmpfs-backed).  Keeping their *containers* after a run made a second local
   # integration invocation inherit the first run's deterministic test IDs and
   # report duplicate rows as product failures.  Recreate only these services when
   # the integration suite is selected; named Cabal/node volumes remain untouched.
-  local needs_integration=false check
+  local needs_integration=false needs_postgres=false check
   [ "$#" -eq 0 ] && needs_integration=true
   for check in "$@"; do
     [ "$check" = integration-tests ] && needs_integration=true
+    [ "$check" = e2e ] && needs_postgres=true
   done
   if [ "$needs_integration" = true ]; then
+    needs_postgres=true
     note "resetting ephemeral integration services"
     compose rm -sf postgres minio timefusion >/dev/null 2>&1 || true
   fi
-  note "starting CI services…"
-  # An arm64 TimeFusion built here is the difference between `integration-tests`
-  # running locally and it being CI's job forever — the published image is amd64
-  # only and segfaults under emulation. Pick it up automatically: needing two
-  # exported variables to get the one check that cannot otherwise run is exactly
-  # the friction that sends people back to pushing and waiting.
-  if [ -z "${MONOSCOPE_CI_TF_IMAGE:-}" ] && [ "$(uname -m)" = arm64 ] \
-     && docker image inspect "$TF_LOCAL_IMAGE" >/dev/null 2>&1; then
-    export MONOSCOPE_CI_TF_IMAGE="$TF_LOCAL_IMAGE" MONOSCOPE_CI_TF_PLATFORM=linux/arm64
-    note "using locally built $TF_LOCAL_IMAGE (native arm64)"
+  if [ "$needs_postgres" = true ]; then
+    note "starting Postgres…"
+    compose up -d --wait postgres
   fi
-  compose up -d --wait postgres minio
-  # TimeFusion publishes no arm64 image, and the amd64 one dies under emulation on
-  # Apple Silicon (SIGSEGV). Don't let that sink the rest of the sweep: warn, carry
-  # on, and let cmd_run refuse the one check that needs it. docs/local-ci.md has
-  # the build-it-locally recipe.
-  # Readiness is probed from the runner, not by a compose healthcheck: TF's image
-  # is distroless, so it cannot run one (see ci/compose.yml). Waiting on the port
-  # this way also proves the thing the check actually needs — pgwire accepting
-  # connections — rather than that the container is up.
-  if compose up -d timefusion >/dev/null 2>&1 \
-     && compose run --rm -T --no-deps runner bash -c \
-          'for _ in $(seq 1 60); do (exec 3<>/dev/tcp/timefusion/5432) 2>/dev/null && exit 0; sleep 2; done; exit 1' >/dev/null 2>&1; then
-    note "TimeFusion is accepting pgwire connections"
-  else
-    note "TimeFusion did not start (${MONOSCOPE_CI_TF_PLATFORM:-linux/amd64} on $(uname -m)) — integration-tests will be left to CI; see docs/local-ci.md"
+  if [ "$needs_integration" = true ]; then
+    note "starting integration services…"
+    compose up -d --wait minio
+    # Pick up a native arm64 TimeFusion image when available.
+    if [ -z "${MONOSCOPE_CI_TF_IMAGE:-}" ] && [ "$(uname -m)" = arm64 ] \
+       && docker image inspect "$TF_LOCAL_IMAGE" >/dev/null 2>&1; then
+      export MONOSCOPE_CI_TF_IMAGE="$TF_LOCAL_IMAGE" MONOSCOPE_CI_TF_PLATFORM=linux/arm64
+      note "using locally built $TF_LOCAL_IMAGE (native arm64)"
+    fi
+    # Probe from the runner: TimeFusion's distroless image has no healthcheck shell.
+    if compose up -d timefusion >/dev/null 2>&1 \
+       && compose run --rm -T --no-deps runner bash -c \
+            'for _ in $(seq 1 60); do (exec 3<>/dev/tcp/timefusion/5432) 2>/dev/null && exit 0; sleep 2; done; exit 1' >/dev/null 2>&1; then
+      note "TimeFusion is accepting pgwire connections"
+    else
+      note "TimeFusion did not start (${MONOSCOPE_CI_TF_PLATFORM:-linux/amd64} on $(uname -m)) — integration-tests will be left to CI; see docs/local-ci.md"
+    fi
   fi
   rm -f .ci/attest.tsv
   local rc=0
@@ -551,6 +558,7 @@ cmd_local() {
   compose run --rm \
     -e CI_ROOT=/build \
     -e "CI_ALLOW_DEGRADED=${CI_ALLOW_DEGRADED:-}" -e "CI_FORCE=${CI_FORCE:-}" -e "CI_KEEP_GOING=${CI_KEEP_GOING:-}" \
+    -e "CI_NO_ATTEST=${CI_NO_ATTEST:-}" \
     runner sh -c 'cp scripts/ci/ci.sh /tmp/ci-run.sh && exec bash /tmp/ci-run.sh run "$@"' ci-run "$@" || rc=$?
   # Publish whatever passed even if a later check failed — a green check is green.
   cmd_publish .ci/attest.tsv
