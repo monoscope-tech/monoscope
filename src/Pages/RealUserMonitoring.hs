@@ -949,7 +949,10 @@ slot_ page panel skeleton content
     -- the panel's cache TTL costs a cache read.
     -- A tick arriving while the previous one is still in flight replaces it rather than
     -- queueing behind it: the newer window is the one being looked at.
-    liveAttrs = panelSwapAttrs page panel (rumPanelUrl page panel) "update-query from:window" [term "hx-sync" $ if sessionList then "#rum-session-search-form:replace" else "this:replace"]
+    -- Populated summary widgets refresh themselves; replacing their parent resets loaded values.
+    liveAttrs
+      | panel == PanelPulse && page.hasTelemetry = []
+      | otherwise = panelSwapAttrs page panel (rumPanelUrl page panel) "update-query from:window" [term "hx-sync" $ if sessionList then "#rum-session-search-form:replace" else "this:replace"]
     -- On the Sessions tab the panel also carries the replay workspace; swapping the whole
     -- panel would restart a replay the viewer just opened. Only the list is re-fetched
     -- there — a selection made while the refresh is in flight survives.
