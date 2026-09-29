@@ -12,7 +12,6 @@ module Pages.RealUserMonitoring (
   Vital (..),
   VitalRating (..),
   classifyVital,
-  vitalKey,
   pageLabel,
 ) where
 
@@ -40,7 +39,8 @@ import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx (hxGet_, hxIndicator_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.RUM (PageVitalPoint (..), ReplaySession (..), RumBreakdown (..), RumBucket (..), RumCacheKey (..), RumError (..), RumPage (..), RumQuery (..), RumQueryResult (..), RumSession (..), SessionFilter (..), VitalSample (..), VitalTrendPoint (..), rumPanelCacheGetStale, rumPanelCacheSet)
+import Models.Telemetry.RUM (PageVitalPoint (..), ReplaySession (..), RumBreakdown (..), RumBucket (..), RumCacheKey (..), RumError (..), RumPage (..), RumQuery (..), RumQueryResult (..), RumSession (..), SessionFilter (..), VitalGrouping (..), VitalMeasurement (..), VitalPopulation (..), VitalTrendPoint (..), rumPanelCacheGetStale, rumPanelCacheSet)
+import Models.Telemetry.RUM qualified as RUM
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Components (Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), withDeferredBody)
 import Pages.Components qualified as Components
@@ -63,13 +63,6 @@ import Utils (classifyUserAgent, countNoun, faSprite_, fmtDate, getDurationNSMS,
 
 data RumTab = Overview | Sessions | Performance
   deriving stock (Bounded, Enum, Eq, Read, Show)
-
-
-renderBucket :: RumBucket -> Text
-renderBucket = \case
-  FiveMinutes -> "5 minutes"
-  OneHour -> "1 hour"
-  SixHours -> "6 hours"
 
 
 parseTab :: Maybe Text -> RumTab
@@ -108,12 +101,10 @@ data Vital = Vital
   { name :: Text
   , label :: Text
   , description :: Text
-  , value :: Maybe Double
-  , samples :: Int64
+  , measurement :: VitalMeasurement
   , unit :: Text
   , goodAt :: Double
   , poorAt :: Double
-  , rating :: VitalRating
   }
   deriving stock (Show)
 
@@ -135,7 +126,7 @@ classifyVital good poor = \case
   Just _ -> Poor
 
 
--- | Unmeasured definitions; 'vitalsFromSamples' fills in value/samples/rating.
+-- | Field definitions acquire a measurement from the shared population.
 vitalDefinitions :: [Vital]
 vitalDefinitions =
   [ mk "lcp" "Largest Contentful Paint" "When the main content becomes visible" "ms" 2500 4000
@@ -145,53 +136,20 @@ vitalDefinitions =
   , mk "ttfb" "Time to First Byte" "Server and network response before rendering" "ms" 800 1800
   ]
   where
-    mk name label description unit goodAt poorAt = Vital{name, label, description, unit, goodAt, poorAt, value = Nothing, samples = 0, rating = Unknown}
+    mk name label description unit goodAt poorAt = Vital{name, label, description, unit, goodAt, poorAt, measurement = Unmeasured}
 
 
--- | The metric names each emitter uses for a web vital.
---
--- The OpenTelemetry browser SDK dots them (@browser.web_vital.lcp@); k6's browser module
--- underscores them behind its own prefix (@k6.browser_web_vital_lcp@). Only the first spelling
--- was matched, so a project whose vitals come from k6 — which is what the demo emits — showed
--- "No data, 0 samples" on both the Overview panel and the Performance table while the metrics
--- sat in the store. Listed exactly rather than matched with LIKE, so the IN still routes.
-vitalMetricNames :: [Text]
-vitalMetricNames = [prefix <> v.name | v <- vitalDefinitions, prefix <- ["browser.web_vital.", "k6.browser_web_vital_"]]
-
-
--- | 'vitalMetricNames' as a literal IN-list. Literal rather than @= ANY(#{names})@ so the
--- store can still route on it.
-vitalMetricNamesSql :: HI.Sql
-vitalMetricNamesSql = fromString $ toString $ " AND metric_name IN (" <> T.intercalate ", " ["'" <> n <> "'" | n <- vitalMetricNames] <> ")"
-
-
--- | The vital a metric name refers to: everything after the last separator, lowercased.
---
--- Derived rather than stripped per known prefix, so a third emitter's spelling maps itself.
---
--- >>> map vitalKey ["browser.web_vital.lcp", "k6.browser_web_vital_ttfb", "CLS"]
--- ["lcp","ttfb","cls"]
-vitalKey :: Text -> Text
-vitalKey = T.toLower . T.takeWhileEnd (\c -> c /= '.' && c /= '_')
-
-
-vitalsFromSamples :: [VitalSample] -> [Vital]
-vitalsFromSamples samples = map measure vitalDefinitions
-  where
-    byName = M.fromListWith (<>) [(vitalKey s.metricName, [(s.value, s.samples)]) | s <- samples]
-    measure vital =
-      let points = M.findWithDefault [] vital.name byName
-          measured = weightedPercentile 0.75 points
-       in vital{value = measured, samples = sum $ map snd points, rating = classifyVital vital.goodAt vital.poorAt measured}
-
-
-weightedPercentile :: Double -> [(Double, Int64)] -> Maybe Double
-weightedPercentile percentile points = do
-  guard $ total > 0
-  let wanted = max 1 $ ceiling (fromIntegral total * percentile)
-  fst <$> find ((>= wanted) . snd) (scanl1 (\(_, n) (value, count) -> (value, n + count)) $ sortWith fst points)
-  where
-    total = sum $ map snd points
+vitalRating :: Vital -> VitalRating
+vitalRating vital = case vital.measurement of
+  Measured _ estimate -> case RUM.estimateRange estimate of
+    Nothing -> classifyVital vital.goodAt vital.poorAt (Just $ RUM.estimateValue estimate)
+    Just (lower, upper)
+      | upper <= vital.goodAt -> Good
+      | lower >= vital.poorAt -> Poor
+      | lower >= vital.goodAt && upper <= vital.poorAt -> NeedsImprovement
+      | otherwise -> Unknown
+  Unmeasured -> Unknown
+  Unavailable _ _ -> Unknown
 
 
 -- | What every RUM read is scoped to. Bundled rather than passed as five positional
@@ -455,46 +413,6 @@ sessionMatchPredicate (SessionText (Just query)) =
         <> [HI.sql|) ILIKE #{needle}) > 0 |]
 
 
--- | P75 of each vital per time bucket AND per page, from one scan. These are two views of
--- the same rows: a full-window read of otel_metrics is the expensive part (concurrent with
--- the span panels it ran 20–48s on the demo project), so both groupings share it via
--- GROUPING SETS. The bucket rows make a regression visible as a change over time; the page
--- rows find the page it happened on — a site-wide P75 hides exactly the page being hunted.
--- Our SDK stamps @page.url@ on every vital datapoint; k6's browser module stamps @url@.
-rumVitalsDetail :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> RumBucket -> Eff es ([VitalTrendPoint], [PageVitalPoint])
-rumVitalsDetail scope bucket = do
-  let bucketExpr = [HI.sql|time_bucket(|] <> fromString (toString $ "'" <> renderBucket bucket <> "'") <> [HI.sql|, timestamp)|]
-      -- Both nested ({"page":{"url":..}}) and flat ({"page.url":..}) spellings, because the
-      -- two stores may not agree on how a dotted attribute key was flattened at ingest.
-      pageExpr = [HI.sql|COALESCE(attributes->'page'->>'url', attributes->>'page.url', attributes->>'url')|]
-  rows :: [(Maybe UTCTime, Maybe Text, Text, Double, Int64)] <-
-    Hasql.withHasqlTimefusion scope.useTf
-      $ Hasql.interp
-        ( [HI.sql|SELECT |]
-            <> bucketExpr
-            <> [HI.sql|, |]
-            <> pageExpr
-            <> [HI.sql|, metric_name,
-            approx_percentile(0.75, percentile_agg(COALESCE(value, distribution_sum / NULLIF(distribution_count, 0))))::float8,
-            COUNT(*)::bigint
-          FROM otel_metrics
-          WHERE |]
-            <> scopePredicate scope
-            <> vitalMetricNamesSql
-            <> [HI.sql| AND COALESCE(value, distribution_sum / NULLIF(distribution_count, 0)) IS NOT NULL
-          GROUP BY GROUPING SETS ((|]
-            <> bucketExpr
-            <> [HI.sql|, metric_name), (|]
-            <> pageExpr
-            <> [HI.sql|, metric_name)) ORDER BY 1|]
-        )
-  let trend = [VitalTrendPoint bucketTime metric p75 | (Just bucketTime, _, metric, p75, _) <- rows]
-      -- Bucket NULL and page NULL together is the page grouping's "vitals without a page
-      -- attribute" bucket; a page column can't represent it, so it is dropped.
-      byPage = [PageVitalPoint page metric p75 samples | (Nothing, Just page, metric, p75, samples) <- rows]
-  pure (trend, take 150 $ sortWith (Down . (.samples)) byPage)
-
-
 -- | Traffic per user agent string, busiest first. Classification into browser, OS and
 -- device happens in 'classifyUserAgent': the store only groups, so a new browser release
 -- needs no query change to show up.
@@ -570,26 +488,6 @@ sessionDetail scope sid = do
   spans <- otelSessionRows scope (SessionIds [sid]) AllSessionRows
   recordings <- replaySessionRows scope (SessionIds [sid])
   pure $ listToMaybe $ mergeSessions scope.queryScope spans recordings
-
-
--- A recent 2,000-point sample keeps field-vital navigation bounded. Returning the previous
--- 10,000 raw rows made this one panel dominate the page while adding negligible p75 precision.
-vitalSamples :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> Eff es [VitalSample]
-vitalSamples scope =
-  Hasql.withHasqlTimefusion scope.useTf
-    $ Hasql.interp
-      ( [HI.sql|
-        SELECT metric_name,
-          COALESCE(value, distribution_sum / NULLIF(distribution_count, 0))::float8,
-          COALESCE(distribution_count, 1)::bigint
-        FROM otel_metrics
-        WHERE |]
-          <> scopePredicate scope
-          <> vitalMetricNamesSql
-          <> [HI.sql|
-          AND COALESCE(value, distribution_sum / NULLIF(distribution_count, 0)) IS NOT NULL
-        ORDER BY timestamp DESC LIMIT 2000|]
-      )
 
 
 -- | Recordings carry no service or environment attribution. Under either scope they
@@ -762,10 +660,7 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
       replaysQ = ("replays" :: Text, cacheKey ReplaySessionsQuery, panelTtl, ReplaySessionsResult <$> replaySessionRows scope (SessionText Nothing))
       sessionSearchQ = ("sessions" :: Text, cacheKey $ SessionSearchQuery searchQuery sessionFilter, panelTtl, SessionsResult <$> searchSessions scope searchQuery sessionFilter)
       sessionDetailQs = [("session" :: Text, cacheKey $ SessionDetailQuery sid, panelTtl, SessionDetailResult <$> sessionDetail scope sid) | sid <- maybeToList selectedM, not $ T.null sid]
-      vitalsQ = ("web vitals" :: Text, cacheKey VitalSamplesQuery, panelTtl, VitalSamplesResult <$> vitalSamples scope)
-      -- Held longer than the panel TTL: this is the heaviest scan on the page, and per-page
-      -- P75s move on deploys, not by the minute.
-      vitalsDetailQ = ("web vitals detail" :: Text, cacheKey $ VitalsDetailQuery bucket, max panelTtl (TimeSpec 900 0), uncurry VitalsDetailResult <$> rumVitalsDetail scope bucket)
+      vitalsQ = ("web vitals" :: Text, cacheKey $ VitalPopulationQuery bucket, panelTtl, VitalPopulationResult <$> RUM.rumVitalPopulation scope.useTf scope.queryScope window bucket)
       breakdownQ = ("audience" :: Text, cacheKey BreakdownQuery, panelTtl, BreakdownResult <$> rumBreakdown scope)
       -- Only the requested panel's queries run. The skeleton request runs none at all, so the
       -- page chrome is free and each panel pays only for itself.
@@ -779,7 +674,7 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
         Just PanelPulse -> [pulseQ]
         Just PanelPages -> [pagesQ]
         Just PanelVitals -> [vitalsQ]
-        Just PanelVitalTrend -> [vitalsDetailQ]
+        Just PanelVitalTrend -> [vitalsQ]
         Just PanelErrors -> [errorsQ]
         Just PanelSessions -> (if tab == Sessions then [sessionSearchQ] else [sessionsQ, replaysQ]) <> sessionDetailQs
         Just PanelAudience -> [breakdownQ]
@@ -812,8 +707,7 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
                   SessionsResult rows -> not $ null rows
                   ReplaySessionsResult rows -> not $ null rows
                   SessionDetailResult row -> isJust row
-                  VitalSamplesResult rows -> not $ null rows
-                  VitalsDetailResult trend byPage -> not (null trend) || not (null byPage)
+                  VitalPopulationResult rows -> not $ null rows
                   BreakdownResult rows -> not $ null rows
             usable (value, stale) = policy value /= CacheEmptySearch || not (stale || refresh)
         l1 <- liftIO $ Cache.lookup appCtx.rumCache key
@@ -831,8 +725,7 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
                     ErrorsQuery -> ""
                     SessionsQuery -> ""
                     ReplaySessionsQuery -> ""
-                    VitalSamplesQuery -> ""
-                    VitalsDetailQuery{} -> ""
+                    VitalPopulationQuery{} -> ":vital-population-v1"
                     BreakdownQuery -> ""
             staleEntryM <- mfilter usable . fromRight Nothing <$> tryAny (rumPanelCacheGetStale dbKey)
             outcome <-
@@ -868,9 +761,11 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
         errors = fold [value | ErrorsResult value <- results]
         sessions = mergeSessions scope.queryScope (fold [value | SessionsResult value <- results]) (fold [value | ReplaySessionsResult value <- results])
         selectedSessionData = asum [value | SessionDetailResult value <- results]
-        vitals = vitalsFromSamples $ fold [value | VitalSamplesResult value <- results]
-        vitalTrend = fold [value | VitalsDetailResult value _ <- results]
-        pageVitals = fold [value | VitalsDetailResult _ value <- results]
+        populations = fold [value | VitalPopulationResult value <- results]
+        fieldMeasurements = M.fromList [(population.metricName, population.measurement) | population <- populations, population.grouping == FieldVital]
+        vitals = [(vital :: Vital){measurement = M.findWithDefault Unmeasured vital.name fieldMeasurements} | vital <- vitalDefinitions]
+        vitalTrend = [VitalTrendPoint time population.metricName population.measurement | population <- populations, TrendVital time <- [population.grouping]]
+        pageVitals = [PageVitalPoint url population.metricName population.measurement | population <- populations, PageVital url <- [population.grouping]]
         breakdown = fold [value | BreakdownResult value <- results]
     pure RumData{links, tab, panel, servedStale, now, hasTelemetry, pages, errors, sessions, vitals, vitalTrend, pageVitals, breakdown, query = queryM, sessionFilter, selectedSession = selectedM, selectedSessionData, degradedPanels}
   let conf =
@@ -1083,10 +978,8 @@ pulseOrEmpty_ page
   | page.hasTelemetry = div_ [class_ "space-y-4"] do
       rumStatWidgets_ page.links
       rumActivityWidget_ page.links
-      -- Warms the Performance tab's heaviest scan while the user reads the Overview: the
-      -- vitals-detail query costs ~25s cold and its result is cached for 15 minutes, so by
-      -- the time Performance is opened it answers from cache. The response is discarded;
-      -- the delay keeps the warm-up from contending with the panels the user is watching.
+      -- The shared population warms the Performance tab while Overview is open.
+      -- Delay it until the visible panels have settled.
       div_
         [ hxGet_ $ rumUrl page.links [("tab", "performance"), ("panel", panelParam PanelVitalTrend), ("deferred", "1")]
         , hxTrigger_ "load delay:8s"
@@ -1217,7 +1110,7 @@ topPages_ links pages = rumPanel_ "Top pages" "Traffic and real-user load latenc
 
 
 vitalsPanel_ :: [Vital] -> Html ()
-vitalsPanel_ vitals = rumPanel_ "Core Web Vitals" "P75 of the most recent samples against Google's thresholds" Nothing do
+vitalsPanel_ vitals = rumPanel_ "Core Web Vitals" "P75 of intervals ending in this range; histogram values are bucket estimates" Nothing do
   div_ [class_ "divide-y divide-strokeWeak"] $ forM_ vitals vitalRow_
 
 
@@ -1227,11 +1120,12 @@ vitalRow_ vital = div_ [class_ "px-3 py-3"] do
     div_ [class_ "min-w-0"] do
       h3_ [class_ "truncate text-sm font-medium text-textStrong"] $ toHtml vital.label
       p_ [class_ "mt-0.5 text-xs text-textWeak"] $ toHtml vital.description
+      p_ [class_ "mt-0.5 text-xs text-textWeak"] $ toHtml $ measurementNote vital vital.measurement
     div_ [class_ "shrink-0 text-right"] do
-      strong_ [class_ $ "block text-sm font-semibold tabular-nums " <> (ratingStyle vital.rating).textClass] $ toHtml $ formatVital vital
-      span_ [class_ "text-xs text-textWeak"] $ toHtml $ show vital.samples <> " samples"
-  div_ [class_ "mt-2 grid grid-cols-3 gap-1", Aria.label_ $ vital.label <> " rating: " <> (ratingStyle vital.rating).label] do
-    forM_ [Good, NeedsImprovement, Poor] (`ratingBand` vital.rating)
+      strong_ [class_ $ "block text-sm font-semibold tabular-nums " <> (ratingStyle (vitalRating vital)).textClass] $ toHtml $ formatVital vital
+      span_ [class_ "text-xs text-textWeak"] $ toHtml $ observationLabel vital.measurement
+  div_ [class_ "mt-2 grid grid-cols-3 gap-1", Aria.label_ $ vital.label <> " rating: " <> (ratingStyle (vitalRating vital)).label] do
+    forM_ [Good, NeedsImprovement, Poor] (`ratingBand` vitalRating vital)
 
 
 ratingBand :: VitalRating -> VitalRating -> Html ()
@@ -1608,17 +1502,16 @@ performance_ page = div_ [class_ "space-y-2 px-4 pb-4 pt-2 max-md:px-3"] do
 
 
 -- | One platform chart per vital, with Google's good/poor marks as the widget's own
--- threshold lines. The data is computed server-side ('rumVitalsDetail') because
+-- threshold lines. The data uses the shared server-side population because
 -- histogram-backed vitals are not yet expressible in the widget KQL pipeline (@value@ is
 -- NULL on histogram datapoints); the dataset is embedded, so the widget renders like every
 -- other chart in the product without fetching anything of its own.
 vitalTrendPanel_ :: [VitalTrendPoint] -> Html ()
-vitalTrendPanel_ points = rumPanel_ "Web Vitals over time" "P75 per interval with Google's thresholds marked" Nothing do
+vitalTrendPanel_ points = rumPanel_ "Web Vitals over time" "P75 of intervals ending in each bucket; unavailable coverage appears as gaps" Nothing do
   if null points
     then panelEmpty_ "No web vital samples in this time range"
     else div_ [class_ "grid grid-cols-2 gap-3 p-3 max-lg:grid-cols-1"] $ forM_ vitalDefinitions \vital -> do
-      -- Where two emitters report the same vital in a bucket, the worse P75 is shown.
-      let series = sortWith fst $ M.toList $ M.fromListWith max [(p.bucket, p.p75) | p <- points, vitalKey p.metricName == vital.name]
+      let series = sortWith fst [(p.bucket, RUM.measurementValue p.measurement) | p <- points, p.metricName == vital.name]
           -- Milliseconds, matching what the chart endpoint serves (Charts.convertTimestampsToMs):
           -- the axis reads epoch-ms, and seconds silently render as a 1970 timeline.
           sourceRows = AE.toJSON (["timestamp", "P75"] :: [Text]) : [AE.toJSON (1000 * (floor $ utcTimeToPOSIXSeconds bucketTime :: Int64), value) | (bucketTime, value) <- series]
@@ -1713,7 +1606,7 @@ routeKql route
 -- 0.0
 -- >>> opportunityScore [(2500, 4000, 4750)] 10 > opportunityScore [(2500, 4000, 2000)] 100000
 -- True
-opportunityScore :: [(Double, Double, Double)] -> Int64 -> Double
+opportunityScore :: [(Double, Double, Double)] -> Natural -> Double
 opportunityScore vitals sampleTotal = fromIntegral sampleTotal * sum [max 0 ((p75 - goodAt) / (poorAt - goodAt)) | (goodAt, poorAt, p75) <- vitals]
 
 
@@ -1721,50 +1614,54 @@ opportunityScore vitals sampleTotal = fromIntegral sampleTotal * sum [max 0 ((p7
 -- own thresholds. Rows lead with the largest 'opportunityScore' (ties broken by traffic),
 -- so the fix that would move the site-wide experience most is always on top.
 pageVitalsTable_ :: RumLinks -> [PageVitalPoint] -> Html ()
-pageVitalsTable_ links points = rumPanel_ "Web Vitals by page" "P75 per page, biggest traffic-weighted regressions first — a site-wide average hides the page that hurts most users" Nothing do
+pageVitalsTable_ links points = rumPanel_ "Web Vitals by page" "Exact page URLs; histogram P75s are estimates within the shown bucket range" Nothing do
   toHtml
     Table.Table
       { config = rumTableConfig "rumPageVitals"
       , columns =
-          (Table.col "Page" \(route, _, _) -> a_ [href_ $ logsUrl links (browserKql <> " and " <> routeKql route), class_ "block truncate font-medium text-textBrand", data_ "tippy-content" route] $ toHtml route){Table.attrs = [class_ "w-[28%]"]}
+          ( Table.col "Page" \(url, _, _) -> a_ [href_ $ logsUrl links (browserKql <> " and " <> exactPageKql url), class_ "block truncate font-medium text-textBrand", title_ url, Aria.label_ url] do
+              toHtml $ pageLabel url
+              when (pageLabel url /= url) $ span_ [class_ "block truncate text-xs text-textWeak"] $ toHtml url
+          )
+            { Table.attrs = [class_ "w-[28%]"]
+            }
             : [rightCol (T.toUpper vital.name) (\(_, byVital, _) -> vitalCell vital byVital) | vital <- vitalDefinitions]
-              <> [rightCol "Samples" \(_, _, sampleTotal) -> toHtml $ show sampleTotal]
+              <> [rightCol "Observations" \(_, _, sampleTotal) -> toHtml $ show sampleTotal]
       , rows = V.fromList pageRows
-      , features = def{Table.zeroState = Just $ tableZero_ "No page-attributed web vital samples in this time range"}
+      , features = def{Table.zeroState = Just $ tableZero_ "No page-attributed web vital observations in this time range"}
       }
   where
+    exactPageKql url
+      | "://" `T.isInfixOf` url = "attributes.url.full == " <> kqlValue url
+      | otherwise = routeKql url
     vitalCell vital byVital = case M.lookup vital.name byVital of
       Nothing -> span_ [class_ "text-textWeak"] "—"
-      Just value ->
-        span_ [class_ $ "font-medium tabular-nums " <> (ratingStyle $ classifyVital vital.goodAt vital.poorAt $ Just value).textClass]
-          $ toHtml
-          $ formatVitalThreshold vital value
-    -- Scored off the same aggregated map the cells render from, so rank and display agree.
-    score byVital = opportunityScore [(v.goodAt, v.poorAt, p75) | v <- vitalDefinitions, Just p75 <- [M.lookup v.name byVital]]
+      Just measurement -> span_ [class_ $ "font-medium tabular-nums " <> (ratingStyle $ vitalRating vital{measurement}).textClass, title_ $ measurementNote vital measurement] $ toHtml $ formatMeasurement vital measurement
+    score byVital = opportunityScore [(v.goodAt, v.poorAt, value) | v <- vitalDefinitions, Just measurement <- [M.lookup v.name byVital], Just value <- [RUM.measurementValue measurement]]
     pageRows =
       take 12
-        $ sortWith (\(_, byVital, sampleTotal) -> Down (score byVital sampleTotal, sampleTotal))
-        $ map (\(page, cells) -> (page, M.fromListWith max [(vitalKey p.metricName, p.p75) | p <- cells], sum $ map (.samples) cells))
-        $ M.toList
-        $ M.fromListWith (<>) [(pageRoute p.page, [p]) | p <- points]
+        $ sortWith
+          (\(_, byVital, sampleTotal) -> Down (score byVital sampleTotal, sampleTotal))
+          [(url, M.fromList [(point.metricName, point.measurement) | point <- cells], sum $ map (RUM.measurementSamples . (.measurement)) cells) | (url, cells) <- M.toList $ M.fromListWith (<>) [(point.page, [point]) | point <- points]]
 
 
 vitalsTable_ :: [Vital] -> Html ()
 vitalsTable_ vitals = do
-  rumPanel_ "Web Vitals field performance" "P75 of the most recent samples — what most real users experience; thresholds follow the Core Web Vitals assessment model" Nothing do
+  rumPanel_ "Web Vitals field performance" "Intervals ending in this range can include earlier observations. Histogram estimates assume uniform values within a bucket." Nothing do
     div_ [class_ "overflow-x-auto"] $ table_ [class_ "table table-sm w-full"] do
-      thead_ $ tr_ $ th_ "Metric" >> th_ [class_ "text-right"] "P75" >> th_ [class_ "text-right"] "Good" >> th_ [class_ "text-right"] "Poor" >> th_ "Assessment" >> th_ [class_ "text-right"] "Samples"
+      thead_ $ tr_ $ th_ "Metric" >> th_ [class_ "text-right"] "P75" >> th_ [class_ "text-right"] "Good" >> th_ [class_ "text-right"] "Poor" >> th_ "Assessment" >> th_ "Coverage" >> th_ [class_ "text-right"] "Observations"
       tbody_ $ forM_ vitals \vital -> tr_ do
         td_ do
           strong_ [class_ "block text-sm font-medium text-textStrong"] $ toHtml vital.label
           span_ [class_ "text-xs text-textWeak"] $ toHtml vital.description
-        td_ [class_ $ "text-right font-semibold tabular-nums " <> (ratingStyle vital.rating).textClass] $ toHtml $ formatVital vital
+        td_ [class_ $ "text-right font-semibold tabular-nums " <> (ratingStyle (vitalRating vital)).textClass] $ toHtml $ formatVital vital
         td_ [class_ "text-right tabular-nums text-textWeak"] $ toHtml $ formatVitalThreshold vital vital.goodAt
         td_ [class_ "text-right tabular-nums text-textWeak"] $ toHtml $ formatVitalThreshold vital vital.poorAt
-        td_ $ span_ [class_ $ "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium " <> (ratingStyle vital.rating).badgeClass] do
-          span_ [class_ $ "h-2 w-2 rounded-full " <> (ratingStyle vital.rating).fillClass, Aria.hidden_ "true"] ""
-          toHtml (ratingStyle vital.rating).label
-        td_ [class_ "text-right tabular-nums text-textWeak"] $ toHtml $ show vital.samples
+        td_ $ span_ [class_ $ "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium " <> (ratingStyle (vitalRating vital)).badgeClass] do
+          span_ [class_ $ "h-2 w-2 rounded-full " <> (ratingStyle (vitalRating vital)).fillClass, Aria.hidden_ "true"] ""
+          toHtml (ratingStyle (vitalRating vital)).label
+        td_ [class_ "text-xs text-textWeak"] $ toHtml $ measurementNote vital vital.measurement
+        td_ [class_ "text-right tabular-nums text-textWeak"] $ toHtml $ observationLabel vital.measurement
 
 
 -- | Every RUM card is the shared 'Components.panel_' flush-card variant.
@@ -1864,7 +1761,39 @@ deviceIcon = \case
 
 
 formatVital :: Vital -> Text
-formatVital vital = maybe "No data" (formatVitalThreshold vital) vital.value
+formatVital vital = formatMeasurement vital vital.measurement
+
+
+formatMeasurement :: Vital -> VitalMeasurement -> Text
+formatMeasurement vital = \case
+  Unmeasured -> "No data"
+  Unavailable _ _ -> "Unavailable"
+  Measured _ estimate -> (if isJust (RUM.estimateRange estimate) then "≈ " else "") <> formatVitalThreshold vital (RUM.estimateValue estimate)
+
+
+measurementNote :: Vital -> VitalMeasurement -> Text
+measurementNote vital = \case
+  Unmeasured -> "No observations"
+  Measured _ estimate -> maybe "Individual observations" (\(lower, upper) -> "Estimated within " <> formatVitalThreshold vital lower <> "–" <> formatVitalThreshold vital upper) $ RUM.estimateRange estimate
+  Unavailable _ issue -> case issue of
+    RUM.MissingBaseline -> "Missing previous export"
+    RUM.UnknownStart -> "Unknown interval start"
+    RUM.UnknownTemporality -> "Unknown aggregation mode"
+    RUM.UnsupportedPopulation -> "Unsupported population"
+    RUM.InvalidValue -> "Invalid scalar observation"
+    RUM.InvalidBuckets -> "Invalid histogram buckets"
+    RUM.InvalidReset -> "Counter reset without a new interval"
+    RUM.OverlappingIntervals -> "Overlapping report intervals"
+    RUM.UnboundedBucket -> "Quantile falls in an unbounded bucket"
+    RUM.InterruptedSeries -> "Series resumed without a usable baseline"
+
+
+observationLabel :: VitalMeasurement -> Text
+observationLabel measurement =
+  show (RUM.measurementSamples measurement) <> case measurement of
+    Unavailable _ _ -> " known observations"
+    Unmeasured -> " observations"
+    Measured _ _ -> " observations"
 
 
 formatVitalThreshold :: Vital -> Double -> Text
@@ -1881,7 +1810,7 @@ ratingStyle = \case
   Good -> RatingStyle "Good" "text-textSuccess" "bg-fillSuccess-strong" "bg-fillSuccess-weak text-textSuccess"
   NeedsImprovement -> RatingStyle "Needs improvement" "text-textWarning" "bg-fillWarning-strong" "bg-fillWarning-weak text-textWarning"
   Poor -> RatingStyle "Poor" "text-textError" "bg-fillError-strong" "bg-fillError-weak text-textError"
-  Unknown -> RatingStyle "No data" "text-textWeak" "bg-fillNeutral-strong" "bg-fillWeak text-textWeak"
+  Unknown -> RatingStyle "Not assessed" "text-textWeak" "bg-fillNeutral-strong" "bg-fillWeak text-textWeak"
 
 
 -- | The KQL counterparts of 'browserScope' and 'pageViewPredicate'. A link that filtered on

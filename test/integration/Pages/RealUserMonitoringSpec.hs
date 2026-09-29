@@ -1,32 +1,47 @@
 module Pages.RealUserMonitoringSpec (spec) where
 
 import Control.Concurrent (threadDelay)
+import Control.Lens ((.~))
 import Data.Cache qualified as Cache
 import Data.Default (def)
+import Data.Effectful.Hasql qualified as Hasql
 import Data.List (lookup)
 import Data.Pool (withResource)
+import Data.ProtoLens (defMessage)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
+import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
 import Data.UUID.Quasi (uuid)
 import Database.PostgreSQL.Simple qualified as PG
+import Hasql.Interpolate qualified as HI
 import Lucid qualified
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.RUM qualified as RUMData
+import Network.GRPC.Common.Protobuf (Proto (..))
 import Network.HTTP.Types.URI (parseQueryText)
+import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Components (Deferred (..))
 import Pages.LogExplorer.Log qualified as Log
 import Pages.RealUserMonitoring qualified as RUM
 import Pkg.TestUtils
+import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields qualified as MSF
+import Proto.Opentelemetry.Proto.Metrics.V1.Metrics qualified as PM
+import Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields qualified as PMF
 import Relude
-import System.Config (AuthContext (..))
+import System.Config (AuthContext (..), EnvConfig (..))
 import System.Timeout (timeout)
 import Test.Hspec
 import UnliftIO.Async (wait, withAsync)
 import UnliftIO.Exception qualified as E
 import Utils (toXXHash)
+
+
+-- TimeFusion's partition date is absent from the PostgreSQL mirror.
+nativeDateColumn :: TestResources -> HI.Sql
+nativeDateColumn tr = if tr.trATCtx.env.enableTimefusionWrites then [HI.sql|,date|] else mempty
 
 
 replayUuid :: UUID.UUID
@@ -113,6 +128,330 @@ spec = sequential $ aroundAll withTestResources do
       html <- renderPage tr Nothing Nothing Nothing Nothing
       html `shouldContainAll` ["No browser telemetry yet", "Install the browser SDK", "Open RUM dashboard", "empty-state"]
 
+    it "scalarVitals_summaryAndDetail_shareTheContinuousPopulationQuantile" \tr -> do
+      projectId <- createTestProject tr "RUM scalar quantile"
+      apiKey <- createTestAPIKey tr projectId "rum-scalar-key"
+      forM_ (zip [1, 10, 20, 30] [-10, -9, -8, -7]) \(value, seconds) ->
+        ingestMetric tr apiKey [] [mkAttr "page.url" "/scalar"] "browser.web_vital.lcp" value (addUTCTime seconds frozenTime)
+      let loaded panel = do
+            (_, RUM.RumGet (PageCtx _ body)) <- testServant tr $ RUM.rumGetH projectId (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just panel) (Just "1") Nothing
+            case body of
+              DeferredBody page -> pure page
+              DeferredShell{} -> fail "Expected loaded scalar vital panel"
+      detail <- loaded "vital_trend"
+      summary <- loaded "vitals"
+      (mapMaybe (RUMData.measurementValue . (.measurement)) detail.vitalTrend, [(RUMData.measurementValue point.measurement, RUMData.measurementSamples point.measurement) | point <- detail.pageVitals], [(RUMData.measurementValue vital.measurement, RUMData.measurementSamples vital.measurement) | vital <- summary.vitals, vital.name == "lcp"])
+        `shouldBe` ([22.5], [(Just 22.5, 4)], [(Just 22.5, 4)])
+
+    it "histogramVitals_useObservationBuckets_insteadOfExportMeans" \tr -> do
+      let point timestamp start count total low high counts =
+            defMessage
+              & PMF.timeUnixNano
+              .~ floor (utcTimeToPOSIXSeconds timestamp * 1000000000)
+                & PMF.startTimeUnixNano
+              .~ floor (utcTimeToPOSIXSeconds start * 1000000000)
+                & PMF.attributes
+              .~ [mkAttr "page.url" "/histogram"]
+                & PMF.count
+              .~ count
+                & PMF.sum
+              .~ total
+                & PMF.min
+              .~ low
+                & PMF.max
+              .~ high
+                & PMF.bucketCounts
+              .~ counts
+                & PMF.explicitBounds
+              .~ [100, 200, 10000]
+          at = (`addUTCTime` frozenTime)
+          delta = [point (at (-10)) (at (-60)) 100 7000 0 200 [80, 20, 0, 0], point (at (-9)) (at (-10)) 1 9000 9000 9000 [0, 0, 1, 0]]
+          -- The previous export is outside the selected 24H window. The repeated export
+          -- contributes nothing; a new start timestamp starts a fresh cumulative epoch.
+          cumulative =
+            [ point (at (-86401)) (at (-90000)) 100 7000 0 200 [80, 20, 0, 0]
+            , point (at (-10)) (at (-90000)) 101 16000 0 9000 [80, 20, 1, 0]
+            , point (at (-9)) (at (-90000)) 101 16000 0 9000 [80, 20, 1, 0]
+            , point (at (-7)) (at (-8)) 100 7000 0 200 [80, 20, 0, 0]
+            ]
+          schemaDelta =
+            [ point (at (-10)) (at (-60)) 100 7000 0 200 [80, 20, 0] & PMF.explicitBounds .~ [100, 200]
+            , point (at (-9)) (at (-10)) 100 12000 0 200 [10, 90, 0] & PMF.explicitBounds .~ [50, 200]
+            ]
+          schemaCumulative =
+            [ point (at (-86401)) (at (-90000)) 100 7000 0 200 [40, 60, 0] & PMF.explicitBounds .~ [50, 200]
+            , point (at (-10)) (at (-90000)) 120 10000 0 200 [80, 40, 0] & PMF.explicitBounds .~ [100, 200]
+            ]
+          mixed = [point (at (-10)) (at (-60)) 100 7000 0 200 [80, 20, 0, 0]]
+          mixedInside = [point (at (-10)) (at (-60)) 20 1000 0 100 [20, 0, 0, 0]]
+          mixedOverflow = [point (at (-10)) (at (-60)) 20 1000 0 100 [20] & PMF.explicitBounds .~ []]
+          disjoint = [point (at (-10)) (at (-60)) 100 7000 0 200 [80, 20] & PMF.explicitBounds .~ [100], point (at (-9)) (at (-10)) 100 7000 0 200 [80, 20] & PMF.explicitBounds .~ [200]]
+          invalidReset = [point (at (-86401)) (at (-90000)) 100 7000 0 200 [80, 20, 0, 0], point (at (-10)) (at (-90000)) 90 6000 0 200 [70, 20, 0, 0]]
+          missing = [point (at (-10)) (at (-90000)) 100 7000 0 200 [80, 20, 0, 0], point (at (-9)) (at (-90000)) 101 16000 0 9000 [80, 20, 1, 0]]
+          unknownMarker = [point (at (-10)) (at (-10)) 100 7000 0 200 [80, 20, 0, 0], point (at (-9)) (at (-10)) 101 7100 0 200 [81, 20, 0, 0]]
+          overflow = [point (at (-10)) (at (-60)) 100 1500000 10001 20000 [0, 0, 0, 100]]
+          unknownStart = [point (at (-10)) (at (-60)) 100 7000 0 200 [80, 20, 0, 0] & PMF.startTimeUnixNano .~ 0]
+          staleResume =
+            [ point (at (-86401)) (at (-90000)) 100 7000 0 200 [80, 20, 0, 0]
+            , point (at (-10)) (at (-90000)) 101 7100 0 200 [81, 20, 0, 0]
+            , point (at (-9)) (at (-90000)) 1000 70000 0 200 [980, 20, 0, 0] & PMF.flags .~ 1
+            , point (at (-8)) (at (-90000)) 102 7200 0 200 [82, 20, 0, 0]
+            , point (at (-7)) (at (-90000)) 103 7300 0 200 [83, 20, 0, 0]
+            ]
+          staleNoEpoch = take 2 staleResume <> [point (at (-9)) (at (-90000)) 1000 70000 0 200 [980, 20, 0, 0] & PMF.flags .~ 1 & PMF.startTimeUnixNano .~ 0] <> drop 3 staleResume
+          staleBeforeWindow =
+            [ point (at (-86403)) (at (-90000)) 100 7000 0 200 [80, 20, 0, 0]
+            , point (at (-86401)) (at (-90000)) 1000 70000 0 200 [980, 20, 0, 0] & PMF.flags .~ 1 & PMF.startTimeUnixNano .~ 0
+            , point (at (-10)) (at (-90000)) 101 7100 0 200 [81, 20, 0, 0]
+            , point (at (-9)) (at (-90000)) 102 7200 0 200 [82, 20, 0, 0]
+            ]
+          staleReset = take 3 staleNoEpoch <> [point (at (-7)) (at (-8)) 100 7000 0 200 [80, 20, 0, 0]]
+          staleUnknownReset = take 3 staleNoEpoch <> [point (at (-8)) (at (-8)) 100 7000 0 200 [80, 20, 0, 0], point (at (-7)) (at (-8)) 101 7100 0 200 [81, 20, 0, 0]]
+          cases =
+            [ (PM.AGGREGATION_TEMPORALITY_DELTA, delta, [], (Just 94.6875, 101))
+            , (PM.AGGREGATION_TEMPORALITY_CUMULATIVE, cumulative, [], (Just 94.6875, 101))
+            , (PM.AGGREGATION_TEMPORALITY_DELTA, schemaDelta, [], (Just 150, 200))
+            , (PM.AGGREGATION_TEMPORALITY_CUMULATIVE, schemaCumulative, [], (Just 150, 20))
+            , (PM.AGGREGATION_TEMPORALITY_DELTA, mixed, [9000], (Just 94.6875, 101))
+            , (PM.AGGREGATION_TEMPORALITY_CUMULATIVE, missing, [], (Nothing, 1))
+            , (PM.AGGREGATION_TEMPORALITY_CUMULATIVE, unknownMarker, [], (Just 75, 1))
+            , (PM.AGGREGATION_TEMPORALITY_DELTA, overflow, [], (Nothing, 100))
+            , (PM.AGGREGATION_TEMPORALITY_CUMULATIVE, unknownStart, [], (Nothing, 0))
+            , (PM.AGGREGATION_TEMPORALITY_CUMULATIVE, staleResume, [], (Nothing, 2))
+            , (PM.AGGREGATION_TEMPORALITY_CUMULATIVE, staleNoEpoch, [], (Nothing, 2))
+            , (PM.AGGREGATION_TEMPORALITY_CUMULATIVE, staleBeforeWindow, [], (Nothing, 1))
+            , (PM.AGGREGATION_TEMPORALITY_CUMULATIVE, staleReset, [], (Just (75.75 / 81 * 100), 101))
+            , (PM.AGGREGATION_TEMPORALITY_CUMULATIVE, staleUnknownReset, [], (Just 75, 2))
+            , (PM.AGGREGATION_TEMPORALITY_DELTA, mixedInside, replicate 80 90, (Just 90, 100))
+            , (PM.AGGREGATION_TEMPORALITY_DELTA, mixedOverflow, replicate 70 90 <> replicate 10 100, (Nothing, 100))
+            , (PM.AGGREGATION_TEMPORALITY_DELTA, disjoint, [], (Nothing, 200))
+            , (PM.AGGREGATION_TEMPORALITY_CUMULATIVE, invalidReset, [], (Nothing, 0))
+            , (PM.AGGREGATION_TEMPORALITY_UNSPECIFIED, mixed, [], (Nothing, 0))
+            , (PM.AGGREGATION_TEMPORALITY_DELTA, [point (at (-10)) (at (-60)) 100 7000 0 200 [80, 10, 0, 0]], [], (Nothing, 0))
+            , (PM.AGGREGATION_TEMPORALITY_DELTA, [point (at (-10)) (at (-60)) 100 7000 0 200 [80, 20, 0, 0], point (at (-9)) (at (-20)) 100 7000 0 200 [80, 20, 0, 0]], [], (Nothing, 100))
+            , (PM.AGGREGATION_TEMPORALITY_DELTA, [point (at (-10)) (at (-60)) 0 0 0 0 [0, 0, 0, 0]], [], (Nothing, 0))
+            ]
+      pages <- forM cases \(temporality, points, scalars, _) -> do
+        projectId <- createTestProject tr "RUM histogram"
+        apiKey <- createTestAPIKey tr projectId "rum-histogram-key"
+        let histogram = defMessage & PMF.aggregationTemporality .~ temporality & PMF.dataPoints .~ points
+            metric = defMessage & PMF.name .~ "browser.web_vital.lcp" & PMF.histogram .~ histogram
+            request = defMessage & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ mkResource apiKey [mkAttr "service.name" "histogram-ui"] & PMF.scopeMetrics .~ [defMessage & PMF.metrics .~ [metric]]]
+            scoped = tr{trSessAndHeader = fmap (\session -> session{Projects.service = Just "histogram-ui"}) tr.trSessAndHeader}
+            loaded panel = do
+              (_, RUM.RumGet (PageCtx _ body)) <- testServant scoped $ RUM.rumGetH projectId (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just panel) (Just "1") Nothing
+              case body of
+                DeferredBody page -> pure page
+                DeferredShell{} -> fail "Expected loaded histogram vital panel"
+        void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto request)
+        when (temporality == PM.AGGREGATION_TEMPORALITY_UNSPECIFIED)
+          $ runTestBg frozenTime tr
+          $ Hasql.withHasqlTimefusion True
+          $ Hasql.interpExecute_
+          $ [HI.sql|INSERT INTO otel_metrics(project_id,timestamp,ingested_at,metric_unit,dropped_attributes_count,message_size_bytes,id,series_id,start_timestamp,metric_name,metric_type,
+              distribution_count,hist_bucket_counts,hist_explicit_bounds,attributes,resource,resource___service___name,flags|]
+          <> nativeDateColumn tr
+          <> [HI.sql|)
+            SELECT project_id,timestamp-INTERVAL '1 second',ingested_at,metric_unit,dropped_attributes_count,message_size_bytes,id,series_id,start_timestamp,metric_name,metric_type,
+              distribution_count,hist_bucket_counts,hist_explicit_bounds,attributes,resource,resource___service___name,flags|]
+          <> nativeDateColumn tr
+          <> [HI.sql|
+            FROM otel_metrics WHERE project_id=#{projectId.toText}|]
+        forM_ (zip scalars [0 :: Int ..]) \(value, index) -> ingestMetric tr apiKey [mkAttr "service.name" "histogram-ui"] [mkAttr "page.url" "/histogram"] "browser.web_vital.lcp" value (at (-6 + fromIntegral index / 1000))
+        purgeRumCaches tr
+        detail <- loaded "vital_trend"
+        summary <- loaded "vitals"
+        pure (detail, summary)
+      map (\(detail, summary) -> (detail.degradedPanels, summary.degradedPanels)) pages `shouldBe` replicate (length cases) ([], [])
+      -- Explicit/custom buckets use uniform within-bucket interpolation; scalar observations
+      -- remain exact. Missing baselines retain known counts without a full-population P75.
+      let measured measurement = (RUMData.measurementValue measurement, RUMData.measurementSamples measurement)
+      map (\(detail, summary) -> (map (measured . (.measurement)) detail.vitalTrend, [(value.page, measured value.measurement) | value <- detail.pageVitals], [measured value.measurement | value <- summary.vitals, value.name == "lcp"])) pages
+        `shouldBe` [([expected], [("/histogram", expected)], [expected]) | (_, _, _, expected) <- cases]
+      let lcpMeasurements = [value.measurement | (_, summary) <- pages, value <- summary.vitals, value.name == "lcp"]
+      [issue | RUMData.Unavailable _ issue <- lcpMeasurements] `shouldBe` [RUMData.MissingBaseline, RUMData.UnboundedBucket, RUMData.UnknownStart, RUMData.InterruptedSeries, RUMData.InterruptedSeries, RUMData.InterruptedSeries, RUMData.UnboundedBucket, RUMData.UnboundedBucket, RUMData.InvalidReset, RUMData.UnknownTemporality, RUMData.InvalidBuckets, RUMData.OverlappingIntervals]
+      [RUMData.estimateRange estimate | RUMData.Measured _ estimate <- lcpMeasurements]
+        `shouldBe` [Just (0, 100), Just (0, 100), Just (0, 200), Just (0, 200), Just (0, 100), Just (0, 100), Just (0, 100), Just (0, 100), Just (0, 100)]
+
+    it "histogramVitals_missingCount_retainsUnavailableCoverage" \tr -> do
+      projectId <- createTestProject tr "RUM missing histogram count"
+      apiKey <- createTestAPIKey tr projectId "rum-missing-count-key"
+      let at = (`addUTCTime` frozenTime)
+          point =
+            defMessage & PMF.timeUnixNano
+              .~ floor (utcTimeToPOSIXSeconds (at (-10)) * 1000000000)
+                & PMF.startTimeUnixNano
+              .~ floor (utcTimeToPOSIXSeconds (at (-60)) * 1000000000)
+                & PMF.attributes
+              .~ [mkAttr "page.url" "/missing-count"] & PMF.count
+              .~ 100
+                & PMF.bucketCounts
+              .~ [80, 20, 0] & PMF.explicitBounds
+              .~ [100, 200]
+          metric =
+            defMessage & PMF.name
+              .~ "browser.web_vital.lcp"
+                & PMF.histogram
+              .~ (defMessage & PMF.aggregationTemporality .~ PM.AGGREGATION_TEMPORALITY_DELTA & PMF.dataPoints .~ [point])
+          request = defMessage & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ mkResource apiKey [] & PMF.scopeMetrics .~ [defMessage & PMF.metrics .~ [metric]]]
+      void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto request)
+      runTestBg frozenTime tr
+        $ Hasql.withHasqlTimefusion True
+        $ Hasql.interpExecute_
+        $ [HI.sql|
+        INSERT INTO otel_metrics(project_id,timestamp,ingested_at,metric_unit,dropped_attributes_count,message_size_bytes,id,series_id,start_timestamp,metric_name,metric_type,aggregation_temporality,
+          hist_bucket_counts,hist_explicit_bounds,attributes,resource,flags|]
+        <> nativeDateColumn tr
+        <> [HI.sql|)
+        SELECT project_id,timestamp-INTERVAL '1 minute',ingested_at,metric_unit,dropped_attributes_count,message_size_bytes,id,series_id,start_timestamp-INTERVAL '1 minute',metric_name,metric_type,aggregation_temporality,
+          hist_bucket_counts,hist_explicit_bounds,attributes,resource,flags|]
+        <> nativeDateColumn tr
+        <> [HI.sql| FROM otel_metrics WHERE project_id=#{projectId.toText}
+      |]
+      forM_ ["vitals", "vital_trend"] \panel -> do
+        (_, RUM.RumGet (PageCtx _ body)) <- testServant tr $ RUM.rumGetH projectId (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just panel) (Just "1") Nothing
+        case body of
+          DeferredBody page -> do
+            page.degradedPanels `shouldBe` []
+            let measurements = if panel == "vitals" then [vital.measurement | vital <- page.vitals, vital.name == "lcp"] else map (.measurement) page.vitalTrend <> map (.measurement) page.pageVitals
+            measurements `shouldBe` replicate (if panel == "vitals" then 1 else 2) (RUMData.Unavailable 100 RUMData.InvalidBuckets)
+          DeferredShell{} -> fail "Expected loaded missing-count panel"
+
+    it "denseHistogramVitals_keepCompleteCounts_andBoundCachedPages" \tr -> do
+      projectId <- createTestProject tr "RUM dense histogram"
+      apiKey <- createTestAPIKey tr projectId "rum-dense-key"
+      let at = (`addUTCTime` frozenTime)
+          nanos = floor . (* 1000000000) . utcTimeToPOSIXSeconds
+          points =
+            [ defMessage & PMF.timeUnixNano
+                .~ nanos (at end) & PMF.startTimeUnixNano
+                .~ nanos (at (-90000))
+                  & PMF.attributes
+                .~ [mkAttr "page.url" ("https://dense.example/" <> show series)]
+                  & PMF.count
+                .~ (100 + fromIntegral ordinal) & PMF.bucketCounts
+                .~ [80 + fromIntegral ordinal, 20, 0]
+                  & PMF.explicitBounds
+                .~ [100, 200]
+            | series <- [0 .. 199 :: Int]
+            , (ordinal, end) <- [(0, -86401)] <> [(n, -4800 + 30 * fromIntegral n) | n <- [1 .. 160 :: Int]]
+            ]
+          metric =
+            defMessage & PMF.name
+              .~ "browser.web_vital.lcp"
+                & PMF.histogram
+              .~ (defMessage & PMF.aggregationTemporality .~ PM.AGGREGATION_TEMPORALITY_CUMULATIVE & PMF.dataPoints .~ points)
+          scalar =
+            defMessage & PMF.name
+              .~ "browser.web_vital.fcp"
+                & PMF.gauge
+              .~ (defMessage & PMF.dataPoints .~ [defMessage & PMF.timeUnixNano .~ nanos (at (-10)) & PMF.attributes .~ [mkAttr "page.url" ("https://dense.example/" <> show series)] & PMF.asDouble .~ 25 | series <- [0 .. 199 :: Int]])
+          request = defMessage & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ mkResource apiKey [] & PMF.scopeMetrics .~ [defMessage & PMF.metrics .~ [metric, scalar]]]
+      void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto request)
+      forM_ ([Just "1", Nothing] :: [Maybe Text]) \refresh -> do
+        when (isNothing refresh) $ Cache.purge tr.trATCtx.rumCache
+        (_, RUM.RumGet (PageCtx _ body)) <- testServant tr $ RUM.rumGetH projectId (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "vital_trend") (Just "1") refresh
+        case body of
+          DeferredBody page -> do
+            page.degradedPanels `shouldBe` []
+            forM_ ([("lcp", 75, 32000), ("fcp", 25, 200)] :: [(Text, Double, Natural)]) \(name, value, count) -> do
+              [(RUMData.measurementValue vital.measurement, RUMData.measurementSamples vital.measurement) | vital <- page.vitals, vital.name == name] `shouldBe` [(Just value, count)]
+              let trend = filter ((== name) . (.metricName)) page.vitalTrend
+              sum (map (RUMData.measurementSamples . (.measurement)) trend) `shouldBe` count
+              map (RUMData.measurementValue . (.measurement)) trend `shouldSatisfy` all (== Just value)
+            let selectedPages = take 150 (sort ["https://dense.example/" <> show series | series <- [0 .. 199 :: Int]])
+            forM_ ([("lcp", 160), ("fcp", 1)] :: [(Text, Natural)]) \(name, count) -> do
+              let metricPages = filter ((== name) . (.metricName)) page.pageVitals
+              map (RUMData.measurementSamples . (.measurement)) metricPages `shouldBe` replicate 150 count
+              map (.page) metricPages `shouldBe` selectedPages
+          DeferredShell{} -> fail "Expected loaded dense histogram panel"
+
+    it "invalidScalarVitals_areUnavailableWithoutHistogramBucketErrors" \tr -> do
+      forM_ [-1, 1 / 0, 0 / 0] \value -> do
+        projectId <- createTestProject tr "RUM invalid scalar"
+        apiKey <- createTestAPIKey tr projectId "rum-invalid-key"
+        ingestMetric tr apiKey [] [mkAttr "page.url" "/invalid"] "browser.web_vital.lcp" value (addUTCTime (-10) frozenTime)
+        forM_ ["vitals", "vital_trend"] \panel -> do
+          (_, RUM.RumGet (PageCtx _ body)) <- testServant tr $ RUM.rumGetH projectId (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just panel) (Just "1") Nothing
+          case body of
+            DeferredBody page -> do
+              page.degradedPanels `shouldBe` []
+              let measurements = if panel == "vitals" then [vital.measurement | vital <- page.vitals, vital.name == "lcp"] else map (.measurement) page.vitalTrend <> map (.measurement) page.pageVitals
+              [(count, issue) | RUMData.Unavailable count issue <- measurements] `shouldBe` replicate (if panel == "vitals" then 1 else 2) (0, RUMData.InvalidValue)
+            DeferredShell{} -> fail "Expected loaded invalid scalar panel"
+
+    it "unsupportedVitals_doNotPresentSumOrOtherDistributionMeansAsObservations" \tr -> do
+      let end :: Word64
+          end = floor (utcTimeToPOSIXSeconds (addUTCTime (-10) frozenTime) * 1000000000)
+          start :: Word64
+          start = floor (utcTimeToPOSIXSeconds (addUTCTime (-60) frozenTime) * 1000000000)
+          attributes = [mkAttr "page.url" "/unsupported"]
+          number :: PM.NumberDataPoint
+          number = defMessage & PMF.timeUnixNano .~ end & PMF.startTimeUnixNano .~ start & PMF.attributes .~ attributes & PMF.asDouble .~ 2200
+          distribution :: PM.ExponentialHistogramDataPoint
+          distribution = defMessage & PMF.timeUnixNano .~ end & PMF.startTimeUnixNano .~ start & PMF.attributes .~ attributes & PMF.count .~ 100 & PMF.sum .~ 220000
+          summaryPoint :: PM.SummaryDataPoint
+          summaryPoint = defMessage & PMF.timeUnixNano .~ end & PMF.attributes .~ attributes & PMF.count .~ 100 & PMF.sum .~ 220000
+          base :: PM.Metric
+          base = defMessage & PMF.name .~ "browser.web_vital.lcp"
+          metrics =
+            [ base & PMF.sum .~ (defMessage & PMF.aggregationTemporality .~ PM.AGGREGATION_TEMPORALITY_CUMULATIVE & PMF.dataPoints .~ [number])
+            , base & PMF.exponentialHistogram .~ (defMessage & PMF.aggregationTemporality .~ PM.AGGREGATION_TEMPORALITY_DELTA & PMF.dataPoints .~ [distribution])
+            , base & PMF.summary .~ (defMessage & PMF.dataPoints .~ [summaryPoint])
+            ]
+      forM_ metrics \metric -> do
+        projectId <- createTestProject tr "RUM unsupported populations"
+        apiKey <- createTestAPIKey tr projectId "rum-unsupported-key"
+        let request = defMessage & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ mkResource apiKey [] & PMF.scopeMetrics .~ [defMessage & PMF.metrics .~ [metric]]]
+        void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto request)
+        forM_ ["vitals", "vital_trend"] \panel -> do
+          (_, RUM.RumGet (PageCtx _ body)) <- testServant tr $ RUM.rumGetH projectId (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just panel) (Just "1") Nothing
+          case body of
+            DeferredBody page -> do
+              page.degradedPanels `shouldBe` []
+              let measurements = if panel == "vitals" then [vital.measurement | vital <- page.vitals, vital.name == "lcp"] else map (.measurement) page.vitalTrend <> map (.measurement) page.pageVitals
+              [(count, issue) | RUMData.Unavailable count issue <- measurements] `shouldBe` replicate (if panel == "vitals" then 1 else 2) (0, RUMData.UnsupportedPopulation)
+            DeferredShell{} -> fail "Expected loaded unsupported vital panel"
+
+    it "histogramVitals_exclusiveBucketLowerBounds_preserveKnownRatingBands" \tr -> do
+      ratings <- forM [[2500, 4000], [4000, 5000], [2000, 4000]] \bounds -> do
+        projectId <- createTestProject tr "RUM histogram bands"
+        apiKey <- createTestAPIKey tr projectId "rum-band-key"
+        let at = (`addUTCTime` frozenTime)
+            point =
+              defMessage & PMF.timeUnixNano
+                .~ floor (utcTimeToPOSIXSeconds (at (-10)) * 1000000000)
+                  & PMF.startTimeUnixNano
+                .~ floor (utcTimeToPOSIXSeconds (at (-60)) * 1000000000)
+                  & PMF.attributes
+                .~ [mkAttr "page.url" "/bands"] & PMF.count
+                .~ 100
+                  & PMF.sum
+                .~ 300000 & PMF.bucketCounts
+                .~ [0, 100, 0] & PMF.explicitBounds
+                .~ bounds
+            histogram = defMessage & PMF.aggregationTemporality .~ PM.AGGREGATION_TEMPORALITY_DELTA & PMF.dataPoints .~ [point]
+            metric = defMessage & PMF.name .~ "browser.web_vital.lcp" & PMF.histogram .~ histogram
+            request = defMessage & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ mkResource apiKey [] & PMF.scopeMetrics .~ [defMessage & PMF.metrics .~ [metric]]]
+        void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto request)
+        (_, RUM.RumGet (PageCtx _ body)) <- testServant tr $ RUM.rumGetH projectId (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "vitals") (Just "1") Nothing
+        case body of
+          DeferredBody _ -> pure $ fst $ T.breakOn "</tr>" $ snd $ T.breakOn "Largest Contentful Paint" $ toStrict $ Lucid.renderText $ Lucid.toHtml body
+          DeferredShell{} -> fail "Expected loaded histogram rating panel"
+      zipWithM_ shouldContainAll ratings [["Needs improvement"], ["Poor"], ["Not assessed"]]
+
+    it "pageVitals_distinctExactUrls_doNotMergeRoutePercentiles" \tr -> do
+      projectId <- createTestProject tr "RUM exact page populations"
+      apiKey <- createTestAPIKey tr projectId "rum-page-key"
+      let low = "https://shop.example/item/ABCDEF12?variant=low"
+          high = "https://shop.example/item/DEADBEEF?variant=high"
+      forM_ ([(low, 10, -10), (low, 20, -9), (high, 1000, -8), (high, 2000, -7)] :: [(Text, Double, Int)]) \(url, value, seconds) ->
+        ingestMetric tr apiKey [] [mkAttr "page.url" url] "browser.web_vital.lcp" value (addUTCTime (fromIntegral seconds) frozenTime)
+      (_, response) <- testServant tr $ RUM.rumGetH projectId (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "vital_trend") (Just "1") Nothing
+      let html = toStrict $ Lucid.renderText $ Lucid.toHtml response
+      html `shouldContainAll` [low, high, "17.5 ms", "1.8 s", "attributes.url.full%20%3D%3D%20%22https"]
+      html `shouldSatisfy` (not . T.isInfixOf "/item/{hex}")
+
     it "browserTelemetry_correlatesExperienceVitalsErrorsAndReplaySessions" \tr -> do
       apiKey <- createTestAPIKey tr testPid "rum-browser-key"
       browserSpan apiKey "10000000000000000000000000000001" "1000000000000001" [("url.path", "/checkout"), ("user.id", "usr-42"), ("user.full_name", "Ada Lovelace")] "Pageview · /checkout" sessionId Nothing "storefront" tr
@@ -136,7 +475,7 @@ spec = sequential $ aroundAll withTestResources do
       overview <- renderPage tr Nothing Nothing Nothing Nothing
       -- The unscoped read caches under an unscoped key; `service` is part of that key so a
       -- scoped page can never be served these rows.
-      isJust <$> Cache.lookup tr.trATCtx.rumCache (RUMData.RumCacheKey testPid RUMData.VitalSamplesQuery Nothing Nothing Nothing Nothing (Just "24H")) `shouldReturn` True
+      isJust <$> Cache.lookup tr.trATCtx.rumCache (RUMData.RumCacheKey testPid (RUMData.VitalPopulationQuery RUMData.OneHour) Nothing Nothing Nothing Nothing (Just "24H")) `shouldReturn` True
       -- The numbers and activity chart are dashboard Widget components that fetch their own
       -- data through the chart pipeline; the page ships their queries, not their values.
       overview `shouldContainAll` ["Page views", "Browser errors", "bin_auto(timestamp)", "rum-activity", "Largest Contentful Paint", "2.2 s", "/checkout", "Ada Lovelace"]
@@ -584,7 +923,7 @@ spec = sequential $ aroundAll withTestResources do
         (_, page) <- testServant scoped $ RUM.rumGetScopedH testPid (Just "performance") Nothing Nothing (Just from) (Just to) Nothing Nothing (Just service) (Just panel) (Just "1") Nothing (Just environment)
         let html = toStrict $ Lucid.renderText $ Lucid.toHtml page
         forM_ ([("/cart", 5), ("/", 3), ("/cart/", 1), ("/a.b+(x)", 1), ("/literal%2Fsegment", 1)] :: [(Text, Int)]) \(route, count) -> do
-          let label = ">" <> route <> "</a>"
+          let label = if panel == "pages" then ">" <> route <> "</a>" else "aria-label=\"https://shop.example" <> route <> "\""
           html `shouldContainAll` [label]
           let href = T.takeWhile (/= '"') $ snd $ T.breakOnEnd "href=\"" $ fst $ T.breakOn label html
               params = parseQueryText $ encodeUtf8 $ T.replace "&amp;" "&" $ snd $ T.breakOn "?" href
@@ -593,6 +932,6 @@ spec = sequential $ aroundAll withTestResources do
           query <- maybe (fail "RUM page link omitted its Explorer query") pure $ join $ lookup "query" params
           (_, events) <- testServant tr $ Log.logExplorerDataH testPid def{Log.query = Just query, Log.from = Just from, Log.to = Just to}
           events.error `shouldBe` Nothing
-          events.queryResultCount `shouldBe` count
+          events.queryResultCount `shouldBe` if panel == "pages" then count else 1
           forM_ [events.nextUrl, events.resetLogsUrl, events.recentUrl] \url ->
             join (lookup "query" $ parseQueryText $ encodeUtf8 $ snd $ T.breakOn "?" url) `shouldBe` Just query
