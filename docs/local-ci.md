@@ -97,8 +97,8 @@ Two deliberate differences from your normal `make test`:
   it runs would otherwise make the running shell resume at a stale offset and die
   with `syntax error near unexpected token`. A run lasts tens of minutes, so
   editing it meanwhile is normal, not a mistake.
-- **Build directories are container-private.** `dist-newstyle`, both
-  `node_modules` directories, and Playwright's browser download are named
+- **Build directories are container-private.** `dist-newstyle`, all three
+  `node_modules` directories, npm's download cache, and Playwright's browser download are named
   volumes. Your host's macOS/arm64 artifacts would corrupt the Linux build.
   The volumes persist, so the second `make ci` is
   fast — but the **first one is a cold build** and takes as long as a cold CI

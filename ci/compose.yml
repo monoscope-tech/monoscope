@@ -93,8 +93,11 @@ services:
       # content, so the first run inherits the deps image's prebuilt 3.1GB store
       # and later runs add to it.
       - cabal:/root/.cabal
+      # npm ci replaces node_modules each run; keep its tarball cache too.
+      - npm:/root/.npm
       - node:/build/node_modules
       - wc-node:/build/web-components/node_modules
+      - e2e-node:/build/e2e/node_modules
       - playwright:/root/.cache/ms-playwright
       # CI has no .env. Mount an empty one so a developer's local secrets and
       # DATABASE_URL (which points at PRODUCTION) cannot change the result — the
@@ -124,7 +127,9 @@ services:
 
 volumes:
   cabal:
+  npm:
   dist:
   node:
   wc-node:
+  e2e-node:
   playwright:

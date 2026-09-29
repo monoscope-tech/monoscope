@@ -204,6 +204,7 @@ REMOTE_REFS_CACHE=''
 remote_refs() {
   if [ -z "$REMOTE_REFS_CACHE" ]; then
     REMOTE_REFS_CACHE=$(mktemp -t ci-refs.XXXXXX)
+    trap 'rm -f "$REMOTE_REFS_CACHE"' EXIT
     if [ "${CI_ATTEST_DISABLED:-}" = "true" ]; then
       note "CI_ATTEST_DISABLED=true — ignoring all attestations"
     else
@@ -309,7 +310,7 @@ run_body() { # <check>
       mkdir -p static/public/assets/css static/public/assets/web-components/dist/js static/public/assets/web-components/dist/css
       npm ci --prefer-offline --no-audit
       npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify
-      (cd web-components && npm ci --prefer-online --no-audit && NODE_ENV=production npx vite build --mode production --sourcemap false)
+      (cd web-components && npm ci --prefer-offline --no-audit && NODE_ENV=production npx vite build --mode production --sourcemap false)
       ;;
     build)      cabal build all -j $CABAL_FLAGS "$CABAL_OPTS" ;;
     # doctest shells out to GHC with `-package` for each local library.  A fresh
@@ -327,7 +328,7 @@ run_body() { # <check>
       weeder --config weeder.toml --hie-directory dist-newstyle
       ;;
     hlint)   hlint src/ shared/src cli ;;
-    ui-tests) (cd web-components && npm ci --prefer-online --no-audit && npm test) ;;
+    ui-tests) (cd web-components && npm ci --prefer-offline --no-audit && npm test) ;;
     # Drives the real server in a real browser. scripts/e2e.sh starts that server itself on
     # 8081 against a throwaway database, so this only has to supply the binary and chromium.
     e2e)
@@ -352,7 +353,7 @@ run_integration() {
   # reached under CI_ALLOW_DEGRADED — cmd_run refuses this check otherwise.
   case " ${CAPS:-} " in *" tf-real "*) ;; *) unset TIMEFUSION_PG_TEST_URL ;; esac
   export USE_EXTERNAL_DB=true LOG_LEVEL=${LOG_LEVEL:-warn}
-  (cd web-components && npm ci --prefer-online --no-audit)
+  (cd web-components && npm ci --prefer-offline --no-audit)
   make build-chart-cli
   cabal build integration-tests $CABAL_FLAGS "$CABAL_OPTS"
   # Same flags as the build above: list-bin resolves against a plan, and a
@@ -404,6 +405,7 @@ cmd_gate() {
   { echo 'fingerprints<<CI_FP_EOF'; cat .ci/fingerprints.tsv; echo CI_FP_EOF; } >> "$out"
   echo "| check | decision | attestation |" >> "$summary"
   echo "|---|---|---|" >> "$summary"
+  remote_refs >/dev/null # find_attestation runs in a subshell; seed its shared cache here.
   for c in $(selected_checks "$@"); do
     if ref=$(find_attestation "$c"); then
       echo "$(printf '%s' "skip_$c" | tr '-' '_')=true" >> "$out"
@@ -425,6 +427,7 @@ cmd_run() {
   note "capabilities: ${CAPS:-none}"
   # shellcheck disable=SC2046
   [ -n "${CI_FINGERPRINTS:-}" ] || pin_fingerprints $(selected_checks "$@")
+  [ "${CI_FORCE:-}" = "true" ] || remote_refs >/dev/null
   for c in $(selected_checks "$@"); do
     req=$(check_requires "$c")
     # A missing capability is never a silent pass — this run can say nothing about
@@ -499,6 +502,7 @@ cmd_local() {
   command -v docker >/dev/null 2>&1 || die "docker is required for \`ci.sh local\`"
   docker compose version >/dev/null 2>&1 || die "docker compose v2 is required"
   if [ "${CI_FORCE:-}" != "true" ]; then
+    remote_refs >/dev/null
     local cached=true c
     for c in $(selected_checks "$@"); do
       find_attestation "$c" >/dev/null || { cached=false; break; }
@@ -824,7 +828,9 @@ cmd_ship() {
   if [ "$rc" -ne 0 ]; then
     local blocking=''
     # The checks just published refs; the cached listing predates them.
+    rm -f "$REMOTE_REFS_CACHE"
     REMOTE_REFS_CACHE=''
+    remote_refs >/dev/null
     for c in build doctests unit-tests cli-tests integration-tests e2e; do
       find_attestation "$c" >/dev/null 2>&1 || blocking="$blocking $c"
     done
