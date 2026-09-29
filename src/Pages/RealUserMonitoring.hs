@@ -31,7 +31,7 @@ import Data.Effectful.Hasql qualified as Hasql
 import Data.Fixed (mod')
 import Data.Map.Strict qualified as M
 import Data.Text qualified as T
-import Data.Time (UTCTime, diffUTCTime)
+import Data.Time (NominalDiffTime, UTCTime, addUTCTime, diffUTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -59,7 +59,7 @@ import Pkg.ErrorFingerprint (normalizeMessage)
 import Pkg.Parser (ScopedQuery (..), applyScopedKqlContext, mkScopedQuery)
 import Pkg.QueryCache qualified as QueryCache
 import Relude
-import Relude.Extra.Foldable1 (maximum1)
+import Relude.Extra.Foldable1 (maximum1, minimum1)
 import System.Clock (TimeSpec (..))
 import System.Config (AuthContext (..), EnvConfig (enableTimefusionReads))
 import System.Logging qualified as Log
@@ -243,13 +243,13 @@ rumHasBrowserTelemetry scope =
     $ not
     . null
     . map (HI.getOneColumn @Int64)
-    <$> Hasql.interp ([HI.sql|SELECT 1::bigint FROM otel_logs_and_spans WHERE |] <> browserScope scope <> [HI.sql| LIMIT 1|])
+    <$> Hasql.interpForTimefusion scope.useTf ([HI.sql|SELECT 1::bigint FROM otel_logs_and_spans WHERE |] <> browserScope scope <> [HI.sql| LIMIT 1|])
 
 
 rumPages :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> Eff es [RumPage]
 rumPages scope =
   Hasql.withHasqlTimefusion scope.useTf
-    $ Hasql.interp
+    $ Hasql.interpForTimefusion scope.useTf
       ( [HI.sql|
         SELECT
           |]
@@ -279,7 +279,7 @@ rumPages scope =
 rumErrors :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> Eff es [RumError]
 rumErrors scope =
   Hasql.withHasqlTimefusion scope.useTf
-    $ Hasql.interp
+    $ Hasql.interpForTimefusion scope.useTf
       ( [HI.sql|
         SELECT timestamp,
           COALESCE(attributes___exception___type, status_message, 'Browser error'),
@@ -310,7 +310,7 @@ otelSessionRows scope match sessionFilter = otelSessionCoreRows scope match sess
 otelSessionRowsRaw :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> SessionMatch -> SessionFilter -> Eff es [RumSession]
 otelSessionRowsRaw scope match sessionFilter =
   Hasql.withHasqlTimefusion scope.useTf
-    $ Hasql.interp
+    $ Hasql.interpForTimefusion scope.useTf
       ( [HI.sql|
         SELECT attributes___session___id,
           MIN(timestamp), MAX(timestamp), COUNT(*)::bigint,
@@ -343,7 +343,7 @@ otelSessionRowsRaw scope match sessionFilter =
 otelSessionCoreRows :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> SessionMatch -> SessionFilter -> Eff es [RumSession]
 otelSessionCoreRows scope match sessionFilter =
   Hasql.withHasqlTimefusion scope.useTf
-    $ Hasql.interp
+    $ Hasql.interpForTimefusion scope.useTf
       ( [HI.sql|
         SELECT attributes___session___id,
           MIN(timestamp), MAX(timestamp), COUNT(*)::bigint,
@@ -374,13 +374,31 @@ sessionCoreWhere (SessionText Nothing) = mempty
 sessionCoreWhere (SessionText (Just _)) = error "text search must use the raw session query"
 
 
+-- | Every follow-up read of sessions already in hand scans only their own span. The newest
+-- 200 sessions of a 24h window cover ~11h on a busy project, and the enrichment scan costs
+-- 1.7s over that span against 9.7s over the day (scripts/local/rum-sessions-2026-09-29.md).
+--
+-- >>> import Data.Time (UTCTime (..))
+-- >>> import Pkg.DeriveUtils (UUIDId (..))
+-- >>> let day = UTCTime (toEnum 60000) 0
+-- >>> let scope = RumScope True (mkScopedQuery (UUIDId UUID.nil) (Just day, Just (addUTCTime 86400 day)) Nothing Nothing)
+-- >>> (spanScope 0 [(addUTCTime 100 day, addUTCTime 200 day), (addUTCTime 50 day, addUTCTime 150 day)] scope).queryScope.timeRange == (Just (addUTCTime 50 day), Just (addUTCTime 200 day))
+-- True
+-- >>> (spanScope 900 [] scope).queryScope.timeRange == scope.queryScope.timeRange
+-- True
+spanScope :: NominalDiffTime -> [(UTCTime, UTCTime)] -> RumScope -> RumScope
+spanScope pad spans scope = case nonEmpty spans of
+  Nothing -> scope
+  Just found -> scope{queryScope = scope.queryScope{timeRange = (Just $ addUTCTime (-pad) $ minimum1 $ fst <$> found, Just $ addUTCTime pad $ maximum1 $ snd <$> found)}}
+
+
 enrichSessionRows :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> [RumSession] -> Eff es [RumSession]
 enrichSessionRows _ [] = pure []
 enrichSessionRows scope rows = do
   let ids = map (.id) rows
   details :: [(Text, Maybe Text, Maybe Text)] <-
     Hasql.withHasqlTimefusion scope.useTf
-      $ Hasql.interp
+      $ Hasql.interpForTimefusion scope.useTf
         ( [HI.sql|
           SELECT attributes___session___id,
             (ARRAY_AGG(|]
@@ -391,7 +409,7 @@ enrichSessionRows scope rows = do
             MAX(COALESCE(NULLIF(attributes___user_agent___original, ''), resource___user_agent___original))
           FROM otel_logs_and_spans
           WHERE |]
-            <> browserScope scope
+            <> browserScope (spanScope 0 [(row.startedAt, row.endedAt) | row <- rows] scope)
             <> [HI.sql| AND attributes___session___id = ANY(#{ids})
           GROUP BY attributes___session___id|]
         )
@@ -433,7 +451,7 @@ sessionMatchPredicate (SessionText (Just query)) =
 rumBreakdown :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> Eff es [RumBreakdown]
 rumBreakdown scope =
   Hasql.withHasqlTimefusion scope.useTf
-    $ Hasql.interp
+    $ Hasql.interpForTimefusion scope.useTf
       ( [HI.sql|
         SELECT COALESCE(NULLIF(attributes___user_agent___original, ''), resource___user_agent___original),
           COUNT(DISTINCT NULLIF(attributes___session___id, ''))::bigint,
@@ -492,16 +510,24 @@ searchSessions scope query sessionFilter = do
       -- entirely, which skips a second full-window scan of the span table.
       newRecordingIds = filter (`notElem` spanIds) recordingIds
       newSpanIds = filter (`notElem` recordingIds) spanIds
-  extraSpans <- if null newRecordingIds then pure [] else otelSessionRows scope (SessionIds newRecordingIds) sessionFilter
+  -- A recording's spans sit inside it, give or take the flush lag either side. Only a text
+  -- search pays for this: on the plain list a recording missing from the newest 200 span
+  -- sessions almost always has no browser spans at all, and the id lookup across the
+  -- recordings' combined span (most of the window) cost 34s on TimeFusion for that nothing.
+  extraSpans <- if null newRecordingIds || isNothing query then pure [] else otelSessionRows (spanScope recordingPad [(r.startedAt, r.endedAt) | r <- recordings, UUID.toText r.id `elem` newRecordingIds] scope) (SessionIds newRecordingIds) sessionFilter
   extraRecordings <- if null newSpanIds then pure [] else replaySessionRows scope (SessionIds newSpanIds)
   pure $ take 200 $ filterSessions sessionFilter $ mergeSessions scope.queryScope (extraSpans <> spans) (recordings <> extraRecordings)
 
 
 sessionDetail :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> Text -> Eff es (Maybe RumSession)
 sessionDetail scope sid = do
-  spans <- otelSessionRows scope (SessionIds [sid]) AllSessionRows
   recordings <- replaySessionRows scope (SessionIds [sid])
+  spans <- otelSessionRows (spanScope recordingPad [(r.startedAt, r.endedAt) | r <- recordings] scope) (SessionIds [sid]) AllSessionRows
   pure $ listToMaybe $ mergeSessions scope.queryScope spans recordings
+
+
+recordingPad :: NominalDiffTime
+recordingPad = 15 * 60
 
 
 -- | Recordings carry no service or environment attribution. Under either scope they
@@ -668,15 +694,21 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
         | otherwise = SixHours
       cacheKey query = RumCacheKey pid query environment serviceFilter (nonEmptyT fromM) (nonEmptyT toM) window.sinceQuery
       panelTtl = TimePicker.cacheTtl window
-      pulseQ = (cacheKey PresenceQuery, panelTtl, PresenceResult <$> rumHasBrowserTelemetry scope)
-      pagesQ = (cacheKey PagesQuery, panelTtl, PagesResult <$> rumPages scope)
-      errorsQ = (cacheKey ErrorsQuery, panelTtl, ErrorsResult <$> rumErrors scope)
-      sessionsQ = (cacheKey SessionsQuery, panelTtl, SessionsResult <$> otelSessionRows scope (SessionText Nothing) AllSessionRows)
-      replaysQ = (cacheKey ReplaySessionsQuery, panelTtl, ReplaySessionsResult <$> replaySessionRows scope (SessionText Nothing))
-      sessionSearchQ = (cacheKey $ SessionSearchQuery searchQuery sessionFilter, panelTtl, SessionsResult <$> searchSessions scope searchQuery sessionFilter)
-      sessionDetailQs = [(cacheKey $ SessionDetailQuery sid, panelTtl, SessionDetailResult <$> sessionDetail scope sid) | sid <- maybeToList selectedM, not $ T.null sid]
-      vitalsQ = (cacheKey $ VitalPopulationQuery bucket, panelTtl, VitalPopulationResult <$> RUM.rumVitalPopulation scope.useTf scope.queryScope window bucket)
-      breakdownQ = (cacheKey BreakdownQuery, panelTtl, BreakdownResult <$> rumBreakdown scope)
+      pulseQ = (cacheKey PresenceQuery, panelTtl, PresenceResult <$> rumHasBrowserTelemetry scope, Nothing)
+      pagesQ = (cacheKey PagesQuery, panelTtl, PagesResult <$> rumPages scope, Nothing)
+      errorsQ = (cacheKey ErrorsQuery, panelTtl, ErrorsResult <$> rumErrors scope, Nothing)
+      -- A cold list over a wide window paints the newest three hours first — a 24h scan of the
+      -- session shape is 7-24s on a busy project against 0.2s for 3h
+      -- (scripts/local/rum-sessions-2026-09-29.md) — and the stale-serve revalidation then
+      -- fetches the full range. Only the plain newest-first list qualifies: a text search or a
+      -- filter must see the whole window or it silently answers "no match".
+      recent = spanScope 0 [(max window.fromTime $ addUTCTime (-(3 * 3600)) window.toTime, window.toTime)] scope <$ guard (diffUTCTime window.toTime window.fromTime > 6 * 3600)
+      sessionsQ = (cacheKey SessionsQuery, panelTtl, SessionsResult <$> otelSessionRows scope (SessionText Nothing) AllSessionRows, recent <&> \quick -> SessionsResult <$> otelSessionRows quick (SessionText Nothing) AllSessionRows)
+      replaysQ = (cacheKey ReplaySessionsQuery, panelTtl, ReplaySessionsResult <$> replaySessionRows scope (SessionText Nothing), Nothing)
+      sessionSearchQ = (cacheKey $ SessionSearchQuery searchQuery sessionFilter, panelTtl, SessionsResult <$> searchSessions scope searchQuery sessionFilter, guard (isNothing searchQuery && sessionFilter == AllSessionRows) *> recent <&> \quick -> SessionsResult <$> searchSessions quick Nothing AllSessionRows)
+      sessionDetailQs = [(cacheKey $ SessionDetailQuery sid, panelTtl, SessionDetailResult <$> sessionDetail scope sid, Nothing) | sid <- maybeToList selectedM, not $ T.null sid]
+      vitalsQ = (cacheKey $ VitalPopulationQuery bucket, panelTtl, VitalPopulationResult <$> RUM.rumVitalPopulation scope.useTf scope.queryScope window bucket, Nothing)
+      breakdownQ = (cacheKey BreakdownQuery, panelTtl, BreakdownResult <$> rumBreakdown scope, Nothing)
       -- Only the requested panel's queries run. The skeleton request runs none at all, so the
       -- page chrome is free and each panel pays only for itself.
       --
@@ -709,7 +741,7 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
       -- last-known data plus no revalidation trigger, so the page neither lies forever nor
       -- collapses to zero states while the store is down. A payload from an older code
       -- shape fails to decode; that is a cache miss, not an error.
-      runQuery (key, ttl, action) = withRunInIO \unlift -> fmap snd $ QueryCache.coalesceQuery appCtx.rumQueryFlights (key, refresh) $ unlift do
+      runQuery (key, ttl, action, quick) = withRunInIO \unlift -> fmap snd $ QueryCache.coalesceQuery appCtx.rumQueryFlights (key, refresh) $ unlift do
         -- First SDK visits remain uncached; an explicit missing search gets a brief fresh-only hit.
         let label = rumQueryLabel key.query
             policy result
@@ -753,6 +785,12 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
                       when (policy shared /= CacheEmptySearch) $ liftIO $ Cache.insert' appCtx.rumCache (Just ttl) key shared
                       pure (shared, False)
                     Just (shared, True) | not refresh -> pure (shared, True)
+                    -- Shared as an already-expired entry: every replica serves it stale until the
+                    -- revalidation it triggers caches the full window, and never as fresh.
+                    Nothing | Just partial <- quick, not refresh -> do
+                      slice <- partial
+                      either (\err -> Log.logAttention "RUM panel cache write failed" (label, displayException err)) pure =<< tryAny (rumPanelCacheSet dbKey 0 slice)
+                      pure (slice, True)
                     _ -> do
                       fresh <- action
                       when (policy fresh /= SkipCache) do
@@ -1339,6 +1377,9 @@ sessions_ page = slot_ page PanelSessions sessionsSkeleton_ do
   div_ [class_ "grid bg-bgBase xl:h-full xl:min-h-0 xl:grid-cols-[minmax(32rem,35%)_minmax(0,1fr)]"] do
     section_ [id_ "rum-sessions-list", Aria.label_ "Sessions", tabindex_ "0", class_ "min-w-0 overflow-y-auto overscroll-contain border-strokeWeak xl:min-h-0 xl:border-e max-xl:max-h-[45svh] max-xl:border-b"] do
       if any (\case SessionsQuery -> True; SessionSearchQuery{} -> True; _ -> False) page.degradedPanels then degradedBanner_ page PanelSessions else sessionsTable_ True page.now page.links page.query page.sessionFilter page.selectedSession filtered
+      when page.servedStale $ p_ [class_ "flex items-center gap-2 border-t border-strokeWeak px-3 py-1.5 text-xs text-textWeak", role_ "status"] do
+        span_ [class_ "loading loading-spinner loading-xs", Aria.hidden_ "true"] ""
+        "Refreshing the full time range…"
       panelRevalidation_ page PanelSessions
     sessionWorkspace_ page
 
@@ -1727,7 +1768,7 @@ vitalsTable_ vitals = do
         td_ [class_ $ "text-right font-semibold tabular-nums max-sm:order-1 max-sm:text-left " <> style.textClass] do
           span_ [class_ "mr-2 text-xs font-normal text-textWeak sm:hidden", Aria.hidden_ "true"] "P75"
           toHtml $ formatVital vital
-        forM_ ([("Good", vital.goodAt, "max-sm:order-5"), ("Poor", vital.poorAt, "max-sm:order-6")] :: [(Text, Double, Text)]) \(label, threshold, order) -> td_ [class_ $ "text-right tabular-nums text-textWeak max-sm:text-left " <> order] do
+        forM_ ([("Good", vital.goodAt, False), ("Poor", vital.poorAt, True)] :: [(Text, Double, Bool)]) \(label, threshold, poor) -> td_ [class_ $ "text-right tabular-nums text-textWeak max-sm:text-left " <> bool "max-sm:order-5" "max-sm:order-6" poor] do
           span_ [class_ "mr-2 text-xs sm:hidden", Aria.hidden_ "true"] $ toHtml label
           toHtml $ formatVitalThreshold vital threshold
         td_ [class_ "max-sm:order-2 max-sm:text-right"] $ span_ [class_ $ "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium " <> style.badgeClass] do

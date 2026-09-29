@@ -975,6 +975,30 @@ spec = sequential $ aroundAll withTestResources do
       refreshRender <- renderPages "6H" (Just "1")
       T.isInfixOf "refresh=1" refreshRender `shouldBe` False
 
+    it "wideColdSessionList_paintsTheNewestThreeHours_thenRevalidatesTheFullWindow" \tr -> do
+      purgeRumCaches tr
+      projectId <- createTestProject tr "RUM wide cold list"
+      apiKey <- createTestAPIKey tr projectId "rum-wide-cold-key"
+      let load since refreshM = do
+            (_, response@(RUM.RumGet (PageCtx _ body))) <- testServant tr $ RUM.rumGetH projectId (Just "sessions") Nothing Nothing Nothing Nothing (Just since) Nothing Nothing (Just "sessions") (Just "1") refreshM
+            case body of
+              DeferredBody page -> pure (page, toStrict $ Lucid.renderText $ Lucid.toHtml response)
+              DeferredShell{} -> fail "Expected loaded sessions panel"
+      browserSpanAt apiKey "8a000000000000000000000000000008" "8a00000000000001" [("url.path", "/old")] "documentLoad" "session-wide-old" Nothing "wide-ui" (addUTCTime (-10 * 3600) frozenTime) tr
+      browserSpanAt apiKey "8b000000000000000000000000000008" "8b00000000000001" [("url.path", "/new")] "documentLoad" "session-wide-new" Nothing "wide-ui" (addUTCTime (-60) frozenTime) tr
+      (quick, quickHtml) <- load "24H" Nothing
+      map (.id) quick.sessions `shouldBe` ["session-wide-new"]
+      quick.servedStale `shouldBe` True
+      quickHtml `shouldContainAll` ["refresh=1", "Refreshing the full time range"]
+      (full, fullHtml) <- load "24H" (Just "1")
+      (map (.id) full.sessions, full.servedStale) `shouldBe` (["session-wide-new", "session-wide-old"], False)
+      T.isInfixOf "Refreshing the full time range" fullHtml `shouldBe` False
+      -- The full result is what got cached, so the next cold-free load is complete at once.
+      fst <$> load "24H" Nothing >>= \cached -> (map (.id) cached.sessions, cached.servedStale) `shouldBe` (["session-wide-new", "session-wide-old"], False)
+      -- Narrow windows scan themselves in one read.
+      purgeRumCaches tr
+      fst <$> load "6H" Nothing >>= \narrow -> (map (.id) narrow.sessions, narrow.servedStale) `shouldBe` (["session-wide-new"], False)
+
     it "staleSessionList_liveSelection_keepsRevalidationInsideTheSwappedChild" \tr -> do
       purgeRumCaches tr
       projectId <- createTestProject tr "RUM stale live selection"
