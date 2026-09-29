@@ -65,7 +65,7 @@ import System.Config (AuthContext (..), EnvConfig (enableTimefusionReads))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import UnliftIO (tryAny, withRunInIO)
-import Utils (classifyUserAgent, countNoun, faSprite_, fmtDate, getDurationNSMS, nonEmptyT, prettyTimeShort, replaceAllFormats, showFFloat', toXXHash)
+import Utils (classifyUserAgent, countNoun, faSprite_, getDurationNSMS, nonEmptyT, prettyTimeShort, replaceAllFormats, showFFloat', toXXHash)
 
 
 data RumTab = Overview | Sessions | Performance
@@ -508,13 +508,14 @@ searchSessions scope query sessionFilter = do
       -- both searches found carries complete aggregates already (the text predicate is a
       -- HAVING filter, not a row filter). On an unfiltered load the sets overlap almost
       -- entirely, which skips a second full-window scan of the span table.
-      newRecordingIds = filter (`notElem` spanIds) recordingIds
+      newRecordings = filter ((`notElem` spanIds) . UUID.toText . (.id)) recordings
+      newRecordingIds = map (UUID.toText . (.id)) newRecordings
       newSpanIds = filter (`notElem` recordingIds) spanIds
   -- A recording's spans sit inside it, give or take the flush lag either side. Only a text
   -- search pays for this: on the plain list a recording missing from the newest 200 span
   -- sessions almost always has no browser spans at all, and the id lookup across the
   -- recordings' combined span (most of the window) cost 34s on TimeFusion for that nothing.
-  extraSpans <- if null newRecordingIds || isNothing query then pure [] else otelSessionRows (spanScope recordingPad [(r.startedAt, r.endedAt) | r <- recordings, UUID.toText r.id `elem` newRecordingIds] scope) (SessionIds newRecordingIds) sessionFilter
+  extraSpans <- if null newRecordings || isNothing query then pure [] else otelSessionRows (spanScope recordingPad [(r.startedAt, r.endedAt) | r <- newRecordings] scope) (SessionIds newRecordingIds) sessionFilter
   extraRecordings <- if null newSpanIds then pure [] else replaySessionRows scope (SessionIds newSpanIds)
   pure $ take 200 $ filterSessions sessionFilter $ mergeSessions scope.queryScope (extraSpans <> spans) (recordings <> extraRecordings)
 
@@ -702,10 +703,12 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
       -- (scripts/local/rum-sessions-2026-09-29.md) — and the stale-serve revalidation then
       -- fetches the full range. Only the plain newest-first list qualifies: a text search or a
       -- filter must see the whole window or it silently answers "no match".
-      recent = spanScope 0 [(max window.fromTime $ addUTCTime (-(3 * 3600)) window.toTime, window.toTime)] scope <$ guard (diffUTCTime window.toTime window.fromTime > 6 * 3600)
-      sessionsQ = (cacheKey SessionsQuery, panelTtl, SessionsResult <$> otelSessionRows scope (SessionText Nothing) AllSessionRows, recent <&> \quick -> SessionsResult <$> otelSessionRows quick (SessionText Nothing) AllSessionRows)
+      recent = spanScope 0 [(addUTCTime (-(3 * 3600)) window.toTime, window.toTime)] scope <$ guard (diffUTCTime window.toTime window.fromTime > 6 * 3600)
+      sessionsAt s = SessionsResult <$> otelSessionRows s (SessionText Nothing) AllSessionRows
+      searchAt s = SessionsResult <$> searchSessions s searchQuery sessionFilter
+      sessionsQ = (cacheKey SessionsQuery, panelTtl, sessionsAt scope, sessionsAt <$> recent)
       replaysQ = (cacheKey ReplaySessionsQuery, panelTtl, ReplaySessionsResult <$> replaySessionRows scope (SessionText Nothing), Nothing)
-      sessionSearchQ = (cacheKey $ SessionSearchQuery searchQuery sessionFilter, panelTtl, SessionsResult <$> searchSessions scope searchQuery sessionFilter, guard (isNothing searchQuery && sessionFilter == AllSessionRows) *> recent <&> \quick -> SessionsResult <$> searchSessions quick Nothing AllSessionRows)
+      sessionSearchQ = (cacheKey $ SessionSearchQuery searchQuery sessionFilter, panelTtl, searchAt scope, searchAt <$> (guard (isNothing searchQuery && sessionFilter == AllSessionRows) *> recent))
       sessionDetailQs = [(cacheKey $ SessionDetailQuery sid, panelTtl, SessionDetailResult <$> sessionDetail scope sid, Nothing) | sid <- maybeToList selectedM, not $ T.null sid]
       vitalsQ = (cacheKey $ VitalPopulationQuery bucket, panelTtl, VitalPopulationResult <$> RUM.rumVitalPopulation scope.useTf scope.queryScope window bucket, Nothing)
       breakdownQ = (cacheKey BreakdownQuery, panelTtl, BreakdownResult <$> rumBreakdown scope, Nothing)
@@ -776,6 +779,7 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
                     ReplaySessionsQuery -> ""
                     VitalPopulationQuery{} -> ":vital-population-v1"
                     BreakdownQuery -> ""
+                publish lifetime value = either (\err -> Log.logAttention "RUM panel cache write failed" (label, displayException err)) pure =<< tryAny (rumPanelCacheSet dbKey lifetime value)
             staleEntryM <- mfilter usable . fromRight Nothing <$> tryAny (rumPanelCacheGetStale dbKey)
             outcome <-
               tryAny
@@ -789,14 +793,14 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
                     -- revalidation it triggers caches the full window, and never as fresh.
                     Nothing | Just partial <- quick, not refresh -> do
                       slice <- partial
-                      either (\err -> Log.logAttention "RUM panel cache write failed" (label, displayException err)) pure =<< tryAny (rumPanelCacheSet dbKey 0 slice)
+                      when (policy slice /= SkipCache) $ publish 0 slice
                       pure (slice, True)
                     _ -> do
                       fresh <- action
                       when (policy fresh /= SkipCache) do
                         let lifetime = if policy fresh == CacheEmptySearch then min ttl (TimeSpec 30 0) else ttl
                         liftIO $ Cache.insert' appCtx.rumCache (Just lifetime) key fresh
-                        either (\err -> Log.logAttention "RUM panel cache write failed" (label, displayException err)) pure =<< tryAny (rumPanelCacheSet dbKey lifetime.sec fresh)
+                        publish lifetime.sec fresh
                       pure (fresh, False)
                 )
             case outcome of
@@ -1177,8 +1181,8 @@ topPages_ links pages = rumPanel_ "Top pages" "Traffic and real-user load latenc
             -- at a glance which rows hurt, not just which are busiest.
             rightCol "P75 load" \page -> case page.p75LoadMs of
               Nothing -> "—"
-              Just ms -> span_ [class_ $ "font-medium " <> (ratingStyle $ classifyVital 2500 4000 (Just ms)).textClass] $ toHtml $ getDurationNSMS $ round $ ms * 1e6
-          , (rightCol "Last seen" $ toHtml . fmtDate "%d %b %H:%M" . (.lastSeen)){Table.attrs = [class_ "max-sm:hidden"]}
+              Just ms -> ratedValue_ (ratingStyle $ classifyVital 2500 4000 (Just ms)) $ toHtml $ getDurationNSMS $ round $ ms * 1e6
+          , (rightCol "Last seen" $ Components.localTimeFmt_ "dd MMM HH:mm" . (.lastSeen)){Table.attrs = [class_ "max-sm:hidden"]}
           ]
       , rows = V.fromList $ sortWith (Down . (.views)) $ map merge $ M.elems $ M.fromListWith (<>) [(pageRoute p.path, pure @NonEmpty p) | p <- pages]
       , features = def{Table.zeroState = Just $ tableZero_ "No page views in this time range"}
@@ -1268,7 +1272,7 @@ recentErrors_ links errors = rumPanel_ "Browser errors" "Grouped by signature; c
             div_ [class_ "flex min-w-0 items-center gap-1.5"] do
               strong_ [class_ "truncate text-sm font-medium text-textStrong"] $ toHtml issue.errorType
               when (issue.count > 1) $ span_ [class_ "badge badge-sm badge-error badge-outline shrink-0 tabular-nums"] $ toHtml $ "×" <> show issue.count
-            time_ [datetime_ $ show issue.lastSeen, class_ "shrink-0 text-xs text-textWeak"] $ toHtml $ fmtDate "%H:%M" issue.lastSeen
+            span_ [class_ "shrink-0 text-xs text-textWeak"] $ Components.localTimeFmt_ "HH:mm" issue.lastSeen
           p_ [class_ "mt-0.5 line-clamp-2 text-xs text-textWeak"] $ toHtml issue.message
           div_ [class_ "mt-1 flex flex-wrap items-center gap-x-2 text-xs text-textWeak"] do
             forM_ issue.path $ span_ [class_ "max-w-56 truncate font-mono"] . toHtml
@@ -1317,15 +1321,15 @@ osHue = \case
   "Windows" -> 230
   "macOS" -> 261
   "iOS" -> 300
-  "Android" -> 162
-  "ChromeOS" -> 205
-  "Linux" -> 69
+  "Android" -> 200
+  "ChromeOS" -> 215
+  "Linux" -> 320
   _ -> 261
 
 
 deviceHue :: Text -> Int
 deviceHue = \case
-  "Mobile" -> 162
+  "Mobile" -> 200
   "Tablet" -> 300
   _ -> 230
 
@@ -1447,7 +1451,7 @@ sessionsTable_ workspace now links query sessionFilter selectedSession sessions 
                       faSprite_ (deviceIcon device) "solid" "h-3 w-3 shrink-0 text-iconNeutral"
                     span_ [class_ "truncate font-mono", title_ session.id] $ toHtml $ T.take 8 session.id
             )
-              { Table.attrs = [class_ $ bool "w-[38%]" "w-[46%]" workspace <> " px-2 py-2"]
+              { Table.attrs = [class_ $ bool "w-[38%]" "w-[36%]" workspace <> " px-2 py-2"]
               , Table.headerExtra = Just $ span_ [class_ "md:hidden"] "Session"
               }
           , ( Table.col "Last page" \session -> do
@@ -1459,7 +1463,7 @@ sessionsTable_ workspace now links query sessionFilter selectedSession sessions 
                   $ toHtml
                   $ prettyTimeShort now session.endedAt
             )
-              { Table.attrs = [class_ $ bool "w-[22%]" "w-[20%]" workspace <> " px-2 py-2"]
+              { Table.attrs = [class_ $ bool "w-[22%]" "w-[30%]" workspace <> " px-2 py-2"]
               }
           , ( Table.col "Activity" \session -> do
                 when (session.errors > 0) $ span_ [class_ "mb-1 inline-flex items-center gap-1 rounded-full bg-fillError-weak px-1.5 py-0.5 text-xs font-medium text-textError"] do
@@ -1595,9 +1599,14 @@ performance_ page = div_ [class_ "space-y-2 px-4 pb-4 pt-2 max-md:px-3"] do
     $ if noVitals
       then rumPanel_ "Web Vitals" "P75 of LCP, INP, CLS, FCP and TTFB against Google's thresholds" Nothing
         $ Components.emptyState_
-          def{icon = Just "gauge", action = ESLink "https://monoscope.tech/docs/sdks/browser/" "Set up Web Vitals"}
+          def
+            { icon = Just "gauge"
+            , action = ESCustom $ div_ [class_ "flex flex-wrap items-center justify-center gap-3"] do
+                a_ [href_ $ rumUrl page.links{window = TimePicker.mkTimeWindow page.now Nothing Nothing (Just "7D")} [("tab", "performance")], class_ "btn btn-sm btn-primary"] "Widen to 7 days"
+                a_ [href_ "https://monoscope.tech/docs/sdks/browser/", target_ "_blank", rel_ "noopener noreferrer", class_ "link text-sm text-textBrand"] "Check the SDK metrics export"
+            }
           "No Web Vitals in this time range"
-          "Nothing sent a browser.web_vital.* metric for this scope. The browser SDK reports them automatically; widen the time range or check the SDK's metrics export."
+          "Nothing sent a browser.web_vital.* metric for this scope. The browser SDK reports LCP, INP, CLS, FCP and TTFB automatically once its metrics export is on."
       else vitalsTable_ page.vitals
   slot_ page PanelVitalTrend (panelSkeleton_ Components.chartSkeleton_) $ unless noVitals do
     vitalTrendPanel_ page.links.window page.vitalTrend
@@ -1759,7 +1768,7 @@ pageVitalsTable_ links points = rumPanel_ "Web Vitals by page" "Exact page URLs;
       Nothing -> span_ [class_ "text-textWeak"] "—"
       Just measurement -> do
         let measured = (vital :: Vital){measurement}
-        span_ [class_ $ "font-medium tabular-nums " <> (ratingStyle $ vitalRating measured).textClass, title_ $ measurementNote measured] $ toHtml $ formatVital measured
+        ratedValue_ (ratingStyle $ vitalRating measured) $ toHtml $ formatVital measured
         span_ [class_ "block text-xs text-textWeak sm:hidden"] $ toHtml $ measurementNote measured
     score byVital = opportunityScore [(v.goodAt, v.poorAt, value) | v <- vitalDefinitions, Just measurement <- [M.lookup v.name byVital], Just value <- [RUM.measurementValue measurement]]
     pageRows =
@@ -1870,9 +1879,9 @@ browserHue :: Text -> Int
 browserHue = \case
   "Chrome" -> 230
   "Safari" -> 205
-  "Firefox" -> 25
-  "Edge" -> 190
-  "Opera" -> 350
+  "Firefox" -> 340
+  "Edge" -> 195
+  "Opera" -> 330
   "Samsung Internet" -> 280
   _ -> 261
 
@@ -1926,6 +1935,14 @@ formatVitalThreshold vital value
 
 
 data RatingStyle = RatingStyle {label :: Text, textClass :: Text, fillClass :: Text, badgeClass :: Text}
+
+
+-- | A rated number carries its rating as a dot and as text, never as colour alone.
+ratedValue_ :: RatingStyle -> Html () -> Html ()
+ratedValue_ style value = span_ [class_ $ "inline-flex items-center gap-1.5 font-medium tabular-nums " <> style.textClass, title_ style.label] do
+  span_ [class_ $ "h-2 w-2 shrink-0 rounded-full " <> style.fillClass, Aria.hidden_ "true"] ""
+  span_ [class_ "sr-only"] $ toHtml $ style.label <> ": "
+  value
 
 
 ratingStyle :: VitalRating -> RatingStyle

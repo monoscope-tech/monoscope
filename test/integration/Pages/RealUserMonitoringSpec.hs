@@ -598,6 +598,7 @@ spec = sequential $ aroundAll withTestResources do
       let healthy = testServant tr $ RUM.rumGetH projectId (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "vitals") (Just "1") Nothing
       (_, emptyPage) <- healthy
       render emptyPage `shouldContainAll` ["No Web Vitals in this time range"]
+      any (\params -> lookup "tab" params == Just "performance" && lookup "since" params == Just "7D" && all (isNothing . (`lookup` params)) ["from", "to"]) (linkParams ("/p/" <> projectId.toText <> "/rum") $ render emptyPage) `shouldBe` True
       T.isInfixOf "role=\"alert\"" (render emptyPage) `shouldBe` False
       apiKey <- createTestAPIKey tr projectId "rum-panel-recovery-key"
       ingestMetric tr apiKey [] [] "browser.web_vital.fcp" 10 frozenTime
