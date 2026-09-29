@@ -5,10 +5,13 @@ module Models.Telemetry.ContainerTypes (
   ContainerSnapshotKey,
 ) where
 
+import Data.OpenApi (ToParamSchema)
+import Data.Text.Display (Display)
 import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (WrappedEnumSC (..))
 import Relude
+import Web.HttpApiData (FromHttpApiData)
 
 
 data ContainerRow = ContainerRow
@@ -44,7 +47,7 @@ data ContainerRow = ContainerRow
 data Scope = ScopeContainer | ScopePod | ScopeHost
   deriving stock (Bounded, Enum, Eq, Generic, Ord, Read, Show)
   deriving anyclass (NFData)
-  deriving (HI.DecodeValue) via WrappedEnumSC 'Nothing "Scope" Scope
+  deriving (Display, FromHttpApiData, HI.DecodeValue, ToParamSchema) via WrappedEnumSC 'Nothing "Scope" Scope
 
 
 data Runtime = Kubernetes | Docker | Host

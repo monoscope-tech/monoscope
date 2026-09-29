@@ -13,12 +13,13 @@ module Pages.Containers (containersGetH, containerDetailGetH, ContainersGet (..)
 
 import Data.Default (def)
 import Data.Text qualified as T
+import Data.Text.Display (display)
 import Data.Vector qualified as V
 import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
 import Lucid
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), containersInWindowCached, cpuPctOfLimit, freshnessWindow, memPctOfLimit, runtimeOf)
+import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), Scope (..), containersInWindowCached, cpuPctOfLimit, freshnessWindow, memPctOfLimit, runtimeOf)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Components (Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), emptyState_, factGrid_, metaChip_, tableSkeleton_, withDeferredBody)
 import Pkg.Components.Table (Column, Config (..), Features (..), SearchMode (..), Table (..), ZeroState (..), col, facetActions, facetValues, singleSelectFilter, withAttrs, withColHeaderExtra)
@@ -27,7 +28,7 @@ import Pkg.Components.Widget qualified as Widget
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (drawerRowAttrs_, faSprite_, formatBytes, infrastructureNavTabs_, showFFloat', toUriStr)
+import Utils (drawerRowAttrs_, faSprite_, formatBytes, infrastructureNavTabs_, kqlQuoted, showFFloat')
 
 
 -- | A row plus the project it belongs to, so column renderers can build pivot links without
@@ -220,7 +221,7 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
     detailUrl vm =
       TimePicker.windowUrl
         ("/p/" <> vm.pid.toText <> "/infrastructure/containers/detail")
-        (("container", vm.row.containerName) : [("pod", pod) | pod <- maybeToList vm.row.podName])
+        ([("container", vm.row.containerName), ("scope", display vm.row.scope)] <> mapMaybe sequenceA [("pod", vm.row.podName), ("cluster", vm.row.cluster), ("namespace", vm.row.namespace), ("node", vm.row.nodeName)])
         vm.window
 
     containerCharts_ :: Html ()
@@ -274,17 +275,21 @@ shortImage = T.takeWhileEnd (/= '/')
 
 -- | The drawer for one container. It reuses the list query rather than adding a second one:
 -- the window is short and the result already carries every field the panel shows.
-containerDetailGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
-containerDetailGetH pid containerM podM fromParam toParam sinceParam = do
+containerDetailGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Scope -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+containerDetailGetH pid containerM podM scopeM clusterM namespaceM nodeM fromParam toParam sinceParam = do
   appCtx <- Reader.ask @AuthContext
   now <- Time.currentTime
   let window = TimePicker.mkTimeWindow now fromParam toParam sinceParam
   rows <- containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) (TimePicker.cacheTtl window) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
-  let found = V.find (\r -> Just r.containerName == containerM && r.podName == podM) rows
-  addRespHeaders $ maybe (emptyState_ def{icon = Just "cube", action = ESNone} "This container is no longer reporting." "") containerDetail_ found
+  -- Generated links identify missing metadata exactly; legacy name/pod links must be unique.
+  let found = V.filter (\r -> Just r.containerName == containerM && r.podName == podM && maybe True (\scope -> (r.scope, r.cluster, r.namespace, r.nodeName) == (scope, clusterM, namespaceM, nodeM)) scopeM) rows
+  addRespHeaders $ case V.toList found of
+    [r] -> containerDetail_ window r
+    [] -> emptyState_ def{icon = Just "cube", action = ESNone} "This container is no longer reporting." ""
+    _ -> emptyState_ def{icon = Just "cube", action = ESLink (TimePicker.windowUrl ("/p/" <> pid.toText <> "/infrastructure/containers") [] window) "View containers"} "Several containers match this link." "Select a container from the list to view its metrics."
   where
-    containerDetail_ :: ContainerRow -> Html ()
-    containerDetail_ r = div_ [class_ "min-h-full"] do
+    containerDetail_ :: TimePicker.TimeWindow -> ContainerRow -> Html ()
+    containerDetail_ window r = div_ [class_ "min-h-full"] do
       header_ [class_ "border-b border-strokeWeak px-5 py-4"] do
         div_ [class_ "flex flex-wrap items-center gap-2"] do
           runtimeIcon_ r "h-4 w-4 text-iconNeutral"
@@ -322,16 +327,20 @@ containerDetailGetH pid containerM podM fromParam toParam sinceParam = do
       where
         dash = fromMaybe "—"
         pct = dash . fmap (\value -> showFFloat' 0 (value * 100) <> "%")
-        metadata = mapMaybe sequenceA [("Pod", r.podName), ("Namespace", r.namespace), ("Node / host", r.nodeName), ("Workload", r.workload)]
+        metadata = mapMaybe sequenceA [("Cluster", r.cluster), ("Pod", r.podName), ("Namespace", r.namespace), ("Node / host", r.nodeName), ("Workload", r.workload)]
         availableSignals = length $ catMaybes [r.cpuCores, r.cpuLimit, r.memBytes, r.memLimit]
-        -- Quotes are escaped: a container or pod name carrying a @"@ would otherwise close the
-        -- literal early and hand the store a malformed query.
-        quoted value = "\"" <> T.replace "\"" "\\\"" value <> "\""
-        subject = maybe ("resource.container.name == " <> quoted r.containerName) (\pod -> "resource.k8s.pod.name == " <> quoted pod) r.podName
+        subject = T.intercalate " and " [field <> "==" <> maybe "null" kqlQuoted value | (field, value) <- fields]
+        fields =
+          ( case r.scope of
+              ScopeContainer -> [("coalesce(resource.k8s.container.name, resource.container.name)", Just r.containerName), ("resource.k8s.pod.name", r.podName)]
+              ScopePod -> [("resource.k8s.pod.name", Just r.containerName)]
+              ScopeHost -> [("coalesce(resource.k8s.node.name, resource.host.name)", Just r.containerName)]
+          )
+            <> if r.scope == ScopeHost then [] else [("resource.k8s.namespace.name", r.namespace), ("coalesce(resource.k8s.cluster.name, resource.k8s.cluster.uid)", r.cluster), ("coalesce(resource.k8s.node.name, resource.host.name)", r.nodeName)]
         metricQuery metric = "metrics | where metric_name == \"" <> metric <> "\" and " <> subject <> " | summarize avg(value) by bin_auto(timestamp)"
         pivots =
-          [ ("View logs", "/p/" <> pid.toText <> "/log_explorer?query=" <> toUriStr subject)
-          , ("View metrics", "/p/" <> pid.toText <> "/metrics?metric_prefix=" <> toUriStr (maybe "container." (const "k8s.") r.podName))
+          [ ("View logs", TimePicker.windowUrl ("/p/" <> pid.toText <> "/log_explorer") [("query", subject)] window)
+          , ("View metrics", TimePicker.windowUrl ("/p/" <> pid.toText <> "/metrics") [("metric_prefix", maybe "container." (const "k8s.") r.podName)] window)
           ]
 
 

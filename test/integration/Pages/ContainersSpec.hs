@@ -3,13 +3,16 @@
 -- handler renders them the way Datadog's Containers Explorer would — one table, both runtimes.
 module Pages.ContainersSpec (spec) where
 
+import Control.Exception qualified as E
 import Data.Aeson qualified as AE
 import Data.Cache qualified as Cache
 import Data.List (lookup)
+import Data.Pool (defaultPoolConfig, destroyAllResources, newPool, setNumStripes)
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as LT
 import Data.Time (NominalDiffTime, addUTCTime)
 import Data.Vector qualified as V
+import Database.PostgreSQL.Simple qualified as PG
 import Lucid qualified
 import Models.Telemetry.Containers (ContainerRow (..), ContainerSnapshotKey, Runtime (..), Scope (..), containersInWindow, cpuPctOfLimit, memPctOfLimit, runtimeOf)
 import Network.HTTP.Types.URI (parseQueryText)
@@ -28,6 +31,7 @@ import System.Config (AuthContext (..))
 import System.Types (ATAuthCtx, RespHeaders)
 import Test.Hspec
 import Utils (toUriStr)
+import Web.HttpApiData (parseUrlPiece)
 
 
 -- | The containers handler's facets, so a test names only the one it varies and a new
@@ -165,7 +169,7 @@ ingestFixture tr key = do
   -- to its containers rather than appear beside them.
   forM_
     ([("k8s.pod.cpu.usage", 9.9), ("k8s.pod.memory.working_set", 9999999)] :: [(Text, Double)])
-    (emit $ k8sPodResource "default" "checkout-7fb5b4f859-nlcjs" "checkout")
+    (emit k8sChecked)
 
   -- A bare node. Four logical cores, each reporting idle and user; 0.25 busy on each of two
   -- of them is 0.5 cores of a 4-core box. Memory is per state and the limit is their sum.
@@ -209,7 +213,7 @@ containerNamed byName n = maybe (fail $ "no container named " <> toString n) pur
 spec :: Spec
 -- Sequential and aroundAll: the fixture is ingested once and the later examples read it back
 -- through the handler, which is the point — they assert on the same rows a user would see.
-spec = sequential $ aroundAll withTestResources do
+spec = sequential $ aroundAll withResources do
   describe "Containers page" do
     it "emptyProject_rendersZeroStateRatherThanAnEmptyTable" \tr -> do
       rows <- runTestBg frozenTime tr $ containersInWindow False testPid (addUTCTime (-900) frozenTime) frozenTime
@@ -462,6 +466,10 @@ spec = sequential $ aroundAll withTestResources do
         values `shouldSatisfy` all (\value -> abs (value - expected) < 0.001)
 
     it "infrastructureDrawer_drilldownsKeepTheSelectedTimeWindow" \tr -> do
+      containerHtml <- shellHtml tr $ Containers.containerDetailGetH testPid (Just "checkout") (Just "checkout-7fb5b4f859-nlcjs") Nothing Nothing Nothing Nothing Nothing Nothing (Just "24H")
+      containerHtml `shouldContainAll` ["/log_explorer?since=24H&amp;query=", "/metrics?since=24H&amp;metric_prefix=k8s."]
+      historicalContainer <- shellHtml tr $ Containers.containerDetailGetH testPid (Just "checkout") (Just "checkout-7fb5b4f859-nlcjs") Nothing Nothing Nothing Nothing (Just "2024-12-31T23:00:00Z") (Just "2025-01-01T00:00:00Z") Nothing
+      historicalContainer `shouldContainAll` ["/log_explorer?from=2024-12-31T23%3A00%3A00Z&amp;to=2025-01-01T00%3A00%3A00Z&amp;query=", "/metrics?from=2024-12-31T23%3A00%3A00Z&amp;to=2025-01-01T00%3A00%3A00Z&amp;metric_prefix=k8s."]
       hostHtml <- shellHtml tr $ Infrastructure.hostDetailGetH testPid (Just "vps-bare-01") Nothing Nothing (Just "24H")
       hostHtml `shouldContainAll` ["/infrastructure/containers?since=24H&amp;node=vps-bare-01", "/metrics?since=24H&amp;metric_prefix=system.", "/log_explorer?since=24H&amp;query=", "/log_explorer/data?since=24H&amp;query="]
       hostHtml `shouldNotSatisfy` T.isInfixOf "since=15M"
@@ -514,13 +522,59 @@ spec = sequential $ aroundAll withTestResources do
       html `shouldContainAll` ["No host metrics in this time range", "Try last 1 hour", "Set up host metrics", "View logs", "Metrics coverage: 0 of 4"]
       html `shouldNotSatisfy` T.isInfixOf "host-cpu"
 
+    it "containerDrawer_sameNamesRemainDistinctAndKeepTheirMetricScope" \tr -> do
+      pid <- createTestProject tr "container-scoped-drawer"
+      key <- createTestAPIKey tr pid "container-scoped-drawer"
+      let otherCluster = "8b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+          resource namespace cluster node container = [mkAttr "k8s.pod.name" "shared-pod", mkAttr "k8s.container.name" container, mkAttr "k8s.namespace.name" namespace, mkAttr "k8s.cluster.uid" cluster, mkAttr "k8s.node.name" node]
+      forM_ (zip ([1 ..] :: [Int]) ([("scope-a", clusterUid, "scope-node-a", 1), ("scope-b", clusterUid, "scope-node-a", 3), ("scope-a", otherCluster, "scope-node-a", 5), ("scope-a", clusterUid, "scope-node-b", 7)] :: [(Text, Text, Text, Double)])) \(index, (namespace, cluster, node, value)) -> do
+        let attrs = resource namespace cluster node "duplicate-api"
+        forM_ ([-60, -120] :: [NominalDiffTime]) \offset ->
+          ingestMetric tr key attrs [] "container.cpu.usage" value (addUTCTime offset frozenTime)
+        ingestSpanReq tr $ mkSpanRequest ("c" <> T.justifyRight 31 '0' (show index)) ("c" <> T.justifyRight 15 '0' (show index)) Nothing "container event" [] Nothing [] (mkResource key attrs) (addUTCTime (-60) frozenTime)
+      ingestMetric tr key (resource "scope-a" clusterUid "scope-node-a" "duplicate-z-sidecar") [] "container.cpu.usage" 9 (addUTCTime (-60) frozenTime)
+      let missingNamespace = [mkAttr "k8s.pod.name" "shared-pod", mkAttr "k8s.container.name" "duplicate-api", mkAttr "k8s.cluster.uid" clusterUid, mkAttr "k8s.node.name" "scope-node-a"]
+      ingestMetric tr key missingNamespace [] "container.cpu.usage" 13 (addUTCTime (-60) frozenTime)
+      ingestSpanReq tr $ mkSpanRequest ("c" <> T.replicate 30 "0" <> "5") ("c" <> T.replicate 14 "0" <> "5") Nothing "container event" [] Nothing [] (mkResource key missingNamespace) (addUTCTime (-60) frozenTime)
+      ingestMetric tr key [mkAttr "k8s.pod.name" "shared-pod", mkAttr "k8s.namespace.name" "scope-c", mkAttr "k8s.cluster.uid" clusterUid, mkAttr "k8s.node.name" "scope-node-a"] [] "k8s.pod.cpu.usage" 11 (addUTCTime (-60) frozenTime)
+      (_, Containers.ContainersPage (PageCtx _ result)) <- testServant tr $ Containers.containersGetH pid Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "4H") (Just "1")
+      table <- deferredBody result
+      let matching = V.filter ((== "duplicate-api") . (.containerName) . (.row)) table.rows
+      V.length matching `shouldBe` 5
+      V.length (V.filter ((== "shared-pod") . (.containerName) . (.row)) table.rows) `shouldBe` 1
+      sort (V.toList $ (.cpuCores) . (.row) <$> matching) `shouldBe` map Just ([1, 3, 5, 7, 13] :: [Double])
+      html <- shellHtml tr $ Containers.containersGetH pid (Just "kubernetes") Nothing (Just "scope-node-a") Nothing (Just clusterUid) Nothing Nothing (Just "4H") (Just "1")
+      let links = [parseQueryText $ encodeUtf8 $ "?" <> T.replace "&amp;" "&" (T.takeWhile (/= '"') link) | link <- drop 1 $ T.splitOn "/infrastructure/containers/detail?" html]
+      forM_ ([(Just "scope-a", 1), (Nothing, 13)] :: [(Maybe Text, Double)]) \(namespace, expected) -> do
+        params <- maybe (fail "container row has no scoped drawer link") pure $ find (\params -> join (lookup "container" params) == Just "duplicate-api" && join (lookup "namespace" params) == namespace) links
+        scope <- either (fail . toString) pure $ traverse (parseUrlPiece @Scope) $ join $ lookup "scope" params
+        detail <- shellHtml tr $ Containers.containerDetailGetH pid (join $ lookup "container" params) (join $ lookup "pod" params) scope (join $ lookup "cluster" params) (join $ lookup "namespace" params) (join $ lookup "node" params) (join $ lookup "from" params) (join $ lookup "to" params) (join $ lookup "since" params)
+        detail `shouldContainAll` ["Node / host: scope-node-a", "Cluster: " <> clusterUid]
+        let logParams = parseQueryText $ encodeUtf8 $ T.replace "&amp;" "&" $ T.takeWhile (/= '"') $ T.drop (T.length "/log_explorer") $ snd $ T.breakOn "/log_explorer?" detail
+        logQuery <- maybe (fail "container drawer has no log query") pure $ join $ lookup "query" logParams
+        logs <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTFloat) (Just pid) (Just $ logQuery <> " | summarize count()") Nothing (join $ lookup "since" logParams) Nothing Nothing (Just "spans") Nothing []
+        logs.error `shouldBe` Nothing
+        logs.dataFloat `shouldBe` Just 1
+        let payload = T.replace "&quot;" "\"" $ T.takeWhile (/= '"') $ T.drop (T.length "data-widget=\"") $ snd $ T.breakOn "data-widget=\"" detail
+        widget <- either fail pure $ AE.eitherDecodeStrict' @Widget.Widget $ encodeUtf8 payload
+        widget.id `shouldBe` Just "container-detail-cpu"
+        query <- maybe (fail "container CPU widget has no query") pure widget.query
+        response <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just query) Nothing Nothing (Just "2024-12-31T23:55:00Z") (Just "2025-01-01T00:01:00Z") (Just "metrics") Nothing []
+        response.error `shouldBe` Nothing
+        let values = V.toList $ V.mapMaybe ((V.!? 1) >=> id) response.dataset
+        values `shouldSatisfy` (not . null)
+        values `shouldSatisfy` all (\value -> abs (value - expected) < 0.001)
+      ambiguous <- shellHtml tr $ Containers.containerDetailGetH pid (Just "duplicate-api") (Just "shared-pod") Nothing Nothing Nothing Nothing Nothing Nothing (Just "4H")
+      ambiguous `shouldContainAll` ["Several containers match this link.", "/infrastructure/containers?since=4H"]
+      ambiguous `shouldNotSatisfy` T.isInfixOf "data-widget="
+
     it "detailDrawer_showsRequestsAndLimitsAndPivots" \tr -> do
-      (_, html') <- testServant tr $ Containers.containerDetailGetH testPid (Just "checkout") (Just "checkout-7fb5b4f859-nlcjs") Nothing Nothing Nothing
+      (_, html') <- testServant tr $ Containers.containerDetailGetH testPid (Just "checkout") (Just "checkout-7fb5b4f859-nlcjs") Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml html'
       html `shouldContainAll` ["Requests and limits", "vps-d6d7e318", "View logs", "resource.k8s.pod.name", "data-tippy-content=\"Pod: checkout-7fb5b4f859-nlcjs\""]
 
       -- A container that stopped reporting must say so, not render a blank panel.
-      (_, gone) <- testServant tr $ Containers.containerDetailGetH testPid (Just "ghost") Nothing Nothing Nothing Nothing
+      (_, gone) <- testServant tr $ Containers.containerDetailGetH testPid (Just "ghost") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       LT.toStrict (Lucid.renderText $ Lucid.toHtml gone) `shouldContainAll` ["no longer reporting"]
 
     -- The pivot reads the newest datapoint per series, so scanning the picker's whole window
@@ -540,3 +594,8 @@ spec = sequential $ aroundAll withTestResources do
       -- slice of the selected range rather than a hard-coded "last 15 minutes from now".
       thenRows <- runTestBg frozenTime tr $ containersInWindow False testPid (addUTCTime (-86400) frozenTime) (addUTCTime (-10800) frozenTime)
       map fst (rowsByName thenRows) `shouldContain` ["long-gone"]
+  where
+    withResources k = withTestResources \tr -> do
+      -- TestUtils wires native TF through Hasql; charts also need its postgres-simple pool.
+      tfUrl <- lookupEnv "TIMEFUSION_PG_TEST_URL"
+      maybe (k tr) (\url -> E.bracket (newPool $ setNumStripes (Just 1) $ defaultPoolConfig (PG.connectPostgreSQL $ encodeUtf8 $ toText url) PG.close 60 2) destroyAllResources \pool -> k tr{trATCtx = tr.trATCtx{timefusionPgPool = pool}}) tfUrl

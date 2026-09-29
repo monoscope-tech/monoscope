@@ -69,6 +69,7 @@ import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.ContainerTypes (Scope)
 import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pkg.Parser qualified as Parser
@@ -701,7 +702,7 @@ data TelemetryRoutes' mode = TelemetryRoutes'
   , hostsGetH :: mode :- "infrastructure" :> "hosts" :> QPT "provider" :> QPT "region" :> QPT "os" :> QPT "integration" :> QPT "group" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "deferred" :> Get '[HTML] (RespHeaders Infrastructure.HostsGet)
   , hostDetailGetH :: mode :- "infrastructure" :> "hosts" :> "detail" :> QPT "host" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders Infrastructure.DetailGet)
   , infrastructureContainersGetH :: mode :- "infrastructure" :> "containers" :> QPT "runtime" :> QPT "namespace" :> QPT "node" :> QPT "image" :> QPT "cluster" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "deferred" :> Get '[HTML] (RespHeaders Containers.ContainersGet)
-  , infrastructureContainerDetailGetH :: mode :- "infrastructure" :> "containers" :> "detail" :> QPT "container" :> QPT "pod" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders (Html ()))
+  , infrastructureContainerDetailGetH :: mode :- "infrastructure" :> "containers" :> "detail" :> QPT "container" :> QPT "pod" :> QueryParam "scope" Scope :> QPT "cluster" :> QPT "namespace" :> QPT "node" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders (Html ()))
   , imagesGetH :: mode :- "infrastructure" :> "images" :> QPT "runtime" :> QPT "registry" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "deferred" :> Get '[HTML] (RespHeaders Infrastructure.ImagesGet)
   , imageDetailGetH :: mode :- "infrastructure" :> "images" :> "detail" :> QPT "image" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders Infrastructure.DetailGet)
   , kubernetesGetH :: mode :- "infrastructure" :> "kubernetes" :> QPT "resource" :> QPT "cluster" :> QPT "namespace" :> QPT "status" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "deferred" :> Get '[HTML] (RespHeaders Infrastructure.KubernetesGet)
@@ -709,7 +710,7 @@ data TelemetryRoutes' mode = TelemetryRoutes'
   , hostMapGetH :: mode :- "infrastructure" :> "host-map" :> QPT "fill" :> QPT "group" :> QPT "provider" :> QPT "region" :> QPT "os" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "deferred" :> Get '[HTML] (RespHeaders Infrastructure.HostMapGet)
   , -- Legacy compatibility route. Navigation and generated links use /infrastructure/containers.
     containersGetH :: mode :- "containers" :> QPT "runtime" :> QPT "namespace" :> QPT "node" :> QPT "image" :> QPT "cluster" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "deferred" :> Get '[HTML] (RespHeaders Containers.ContainersGet)
-  , containerDetailGetH :: mode :- "containers" :> "detail" :> QPT "container" :> QPT "pod" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders (Html ()))
+  , containerDetailGetH :: mode :- "containers" :> "detail" :> QPT "container" :> QPT "pod" :> QueryParam "scope" Scope :> QPT "cluster" :> QPT "namespace" :> QPT "node" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders (Html ()))
   }
   deriving stock (Generic)
 
