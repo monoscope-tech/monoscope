@@ -597,7 +597,7 @@ spec = sequential $ aroundAll withTestResources do
       purgeRumCaches tr
       let healthy = testServant tr $ RUM.rumGetH projectId (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "vitals") (Just "1") Nothing
       (_, emptyPage) <- healthy
-      render emptyPage `shouldContainAll` ["No data"]
+      render emptyPage `shouldContainAll` ["No Web Vitals in this time range"]
       T.isInfixOf "role=\"alert\"" (render emptyPage) `shouldBe` False
       apiKey <- createTestAPIKey tr projectId "rum-panel-recovery-key"
       ingestMetric tr apiKey [] [] "browser.web_vital.fcp" 10 frozenTime

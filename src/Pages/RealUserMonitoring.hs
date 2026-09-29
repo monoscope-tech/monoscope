@@ -900,14 +900,18 @@ slot_ page panel skeleton content
 
 panelRevalidation_ :: RumData -> RumPanel -> Html ()
 panelRevalidation_ page panel =
-  when page.servedStale $ div_ (class_ "hidden" : panelSwapAttrs page panel True "load delay:600ms" ("abort" <$ guard (page.tab == Sessions && panel == PanelSessions || panel == PanelSessionDetail))) mempty
+  -- A populated pulse is four widgets that fetch and refresh themselves; re-rendering the
+  -- panel around them only restarts them, which is the spinner flash on first load.
+  when (page.servedStale && not (panel == PanelPulse && page.hasTelemetry)) $ div_ (class_ "hidden" : panelSwapAttrs page panel True "load delay:600ms" ("abort" <$ guard (page.tab == Sessions && panel == PanelSessions || panel == PanelSessionDetail))) mempty
 
 
 -- | A rendered session list syncs with the search form that also replaces it; any other
 -- panel syncs with itself.
 panelSwapAttrs :: RumData -> RumPanel -> Bool -> Text -> Maybe Text -> [Attribute]
 panelSwapAttrs page panel refresh trigger syncMode =
-  [hxGet_ url, hxTrigger_ trigger, hxTarget_ refreshTarget, hxSelect_ refreshTarget, hxSwap_ $ if sessionList then "outerMorph" else "outerHTML"]
+  -- Rendered content morphs, so a live tick patches numbers into the table the viewer is
+  -- reading instead of rebuilding it under their pointer; only the skeleton is replaced.
+  [hxGet_ url, hxTrigger_ trigger, hxTarget_ refreshTarget, hxSelect_ refreshTarget, hxSwap_ $ if isJust page.panel then "outerMorph" else "outerHTML"]
     <> [term "hx-sync" $ bool ("#" <> panelId panel) "#rum-session-search-form" sessionList <> ":" <> mode | mode <- toList syncMode]
     <> [term "hx-include" "#rum-session-search-form" | sessionList]
     <> [Components.timeWindowVals_ "24H", term "hx-preload" "false"]
@@ -1584,8 +1588,18 @@ replayWorkspace_ links = \case
 
 performance_ :: RumData -> Html ()
 performance_ page = div_ [class_ "space-y-2 px-4 pb-4 pt-2 max-md:px-3"] do
-  slot_ page PanelVitals (panelSkeleton_ $ Components.tableSkeleton_ 6) $ vitalsTable_ page.vitals
-  slot_ page PanelVitalTrend (panelSkeleton_ Components.chartSkeleton_) do
+  -- A project that reports no Web Vitals at all gets one explanation, not five "No data"
+  -- rows plus two more empty panels below them.
+  let noVitals = all ((== Unmeasured) . (.measurement)) page.vitals
+  slot_ page PanelVitals (panelSkeleton_ $ Components.tableSkeleton_ 6)
+    $ if noVitals
+      then rumPanel_ "Web Vitals" "P75 of LCP, INP, CLS, FCP and TTFB against Google's thresholds" Nothing
+        $ Components.emptyState_
+          def{icon = Just "gauge", action = ESLink "https://monoscope.tech/docs/sdks/browser/" "Set up Web Vitals"}
+          "No Web Vitals in this time range"
+          "Nothing sent a browser.web_vital.* metric for this scope. The browser SDK reports them automatically; widen the time range or check the SDK's metrics export."
+      else vitalsTable_ page.vitals
+  slot_ page PanelVitalTrend (panelSkeleton_ Components.chartSkeleton_) $ unless noVitals do
     vitalTrendPanel_ page.links.window page.vitalTrend
     div_ [class_ "mt-4"] $ pageVitalsTable_ page.links page.pageVitals
   div_ [class_ "grid grid-cols-2 gap-4 max-lg:grid-cols-1"] do
