@@ -16,6 +16,8 @@ import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
 import Data.UUID.Quasi (uuid)
 import Database.PostgreSQL.Simple qualified as PG
+import Effectful.Dispatch.Dynamic (interpose, send)
+import Effectful.Labeled (Labeled (..))
 import Hasql.Interpolate qualified as HI
 import Lucid qualified
 import Models.Projects.Projects qualified as Projects
@@ -314,14 +316,22 @@ spec = sequential $ aroundAll withTestResources do
           point = defMessage & PMF.timeUnixNano .~ nanos (at (-10)) & PMF.startTimeUnixNano .~ nanos (at (-60)) & PMF.attributes .~ [mkAttr "page.url" "/one-read"] & PMF.count .~ 100 & PMF.bucketCounts .~ [80, 20, 0] & PMF.explicitBounds .~ [100, 200]
           metric = defMessage & PMF.name .~ "browser.web_vital.lcp" & PMF.histogram .~ (defMessage & PMF.aggregationTemporality .~ PM.AGGREGATION_TEMPORALITY_DELTA & PMF.dataPoints .~ [point])
           request = defMessage & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ mkResource apiKey [] & PMF.scopeMetrics .~ [defMessage & PMF.metrics .~ [metric]]]
-          nativeQueries = runQueryEffect tr $ Hasql.withHasqlTimefusion True $ do
-            counts :: [HI.OneColumn Int64] <- Hasql.interp [HI.sql|SELECT value::bigint FROM timefusion_stats WHERE component='pgwire' AND key='queries_total'|]
-            pure $ map HI.getOneColumn counts
       void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto request)
       forM_ (zip [10, 30] [-11, -10]) \(value, seconds) -> ingestMetric tr apiKey [] [mkAttr "page.url" "/one-read"] "browser.web_vital.fcp" value (at seconds)
-      queriesBefore <- if tr.trATCtx.env.enableTimefusionReads then nativeQueries else pure []
-      (_, RUM.RumGet (PageCtx _ body)) <- testServant tr $ RUM.rumGetH projectId (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "vital_trend") (Just "1") Nothing
-      queriesAfter <- if tr.trATCtx.env.enableTimefusionReads then nativeQueries else pure []
+      queries <- newIORef (0 :: Int)
+      let database = interpose @(Labeled "timefusion" Hasql.Hasql) \_ (Labeled effect) -> do
+            modifyIORef' queries (+ 1)
+            case effect of
+              Hasql.UseStatement params statement -> send $ Labeled @"timefusion" $ Hasql.UseStatement params statement
+              Hasql.UseSession session -> send $ Labeled @"timefusion" $ Hasql.UseSession session
+              Hasql.UseLabeledSession label attributes session -> send $ Labeled @"timefusion" $ Hasql.UseLabeledSession label attributes session
+      -- Unrelated native traffic must not affect the handler-local count.
+      when tr.trATCtx.env.enableTimefusionReads
+        $ void
+        $ runQueryEffect tr
+        $ Hasql.withHasqlTimefusion True
+        $ Hasql.interpOne @(HI.OneColumn Int64) [HI.sql|SELECT 1::bigint|]
+      (_, RUM.RumGet (PageCtx _ body)) <- testServant tr $ database $ RUM.rumGetH projectId (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "vital_trend") (Just "1") Nothing
       case body of
         DeferredBody page -> do
           page.degradedPanels `shouldBe` []
@@ -331,8 +341,7 @@ spec = sequential $ aroundAll withTestResources do
           sort [measured vital.metricName vital.measurement | vital <- page.vitalTrend] `shouldBe` expected
           sort [measured vital.metricName vital.measurement | vital <- page.pageVitals] `shouldBe` expected
         DeferredShell{} -> fail "Expected loaded one-read vital panel"
-      -- The second metadata snapshot is itself one native statement.
-      when tr.trATCtx.env.enableTimefusionReads $ zipWith (-) queriesAfter queriesBefore `shouldBe` [2]
+      when tr.trATCtx.env.enableTimefusionReads $ readIORef queries `shouldReturn` 1
 
     it "histogramVitals_missingCount_retainsUnavailableCoverage" \tr -> do
       projectId <- createTestProject tr "RUM missing histogram count"
