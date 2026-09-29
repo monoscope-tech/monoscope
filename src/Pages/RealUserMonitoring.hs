@@ -826,7 +826,7 @@ slot_ page panel skeleton content
       unless sessionList $ panelRevalidation_ page panel
   | otherwise =
       div_
-        ([id_ $ panelId panel, class_ "w-full", data_ "deferred-shell" ""] <> panelSwapAttrs page panel (rumPanelUrl page panel) "load, update-query from:window" [term "hx-sync" "this:replace"])
+        ([id_ $ panelId panel, class_ "w-full", data_ "deferred-shell" ""] <> panelSwapAttrs page panel (rumPanelUrl page panel) "load, update-query[event.detail?.source!='auto-refresh'] from:window" [term "hx-sync" "this:replace"])
         skeleton
   where
     -- One panel's worth of work per tick, swapped in place: the page chrome, the scroll

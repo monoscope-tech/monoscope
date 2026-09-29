@@ -553,6 +553,56 @@ test("initial RUM field panel does not depend on application globals", async ({ 
 });
 
 
+test("automatic live updates do not cancel the first RUM panel response", async ({ page }) => {
+  test.skip(!process.env.E2E_BASE_URL, "Requires the disposable e2e database");
+  const scope = `e2e-initial-live-${Date.now()}`;
+  const cleanup = `DELETE FROM otel_metrics WHERE project_id='${DEMO_PROJECT}' AND resource___service___name='${scope}'`;
+  sql(`INSERT INTO otel_metrics (project_id,id,series_id,timestamp,metric_name,metric_type,metric_unit,value,resource,resource___service___name)
+    VALUES('${DEMO_PROJECT}',gen_random_uuid(),'${scope}',now()-interval '10 seconds','browser.web_vital.fcp','GAUGE','ms',22.5,
+      jsonb_build_object('service',jsonb_build_object('name','${scope}')),'${scope}')`);
+  let release = () => {};
+  try {
+    for (const [tab, panel, scopeParams] of [["performance", "vitals", `service_scope=${scope}`], ["sessions", "sessions", `q=${fixtureUser}`]]) {
+      const pending = new Promise<void>(resolve => { release = resolve; });
+      let fetched = () => {};
+      const initialFetched = new Promise<void>(resolve => { fetched = resolve; });
+      const requests: string[] = [];
+      const cancelled: string[] = [];
+      const trackCancellation = (request: import("@playwright/test").Request) => {
+        if (new URL(request.url()).searchParams.get("panel") === panel) cancelled.push(request.url());
+      };
+      page.on("requestfailed", trackCancellation);
+      await page.route("**/rum?**", async route => {
+        if (new URL(route.request().url()).searchParams.get("panel") !== panel) return route.continue();
+        requests.push(route.request().url());
+        if (requests.length !== 1) return route.continue();
+        const response = await route.fetch();
+        fetched();
+        await pending;
+        await route.fulfill({ response });
+      });
+      await page.goto(`/p/${DEMO_PROJECT}/rum?tab=${tab}&since=24H&${scopeParams}`);
+      await initialFetched;
+      await expect(page.locator("[data-time-transport]")).toHaveAttribute("data-interval", "15000");
+      await expect(page.locator(`#rum-panel-${panel}`)).toHaveAttribute("data-deferred-shell", "");
+      await page.evaluate(() => window.dispatchEvent(new CustomEvent("update-query", { detail: { source: "auto-refresh" } })));
+      release();
+      if (tab === "performance") await expect(page.locator("#rum-panel-vitals")).toContainText("22.5 ms");
+      else await expect(page.locator(".rum-session-link")).toHaveCount(200);
+      expect(cancelled).toEqual([]);
+      expect(requests).toHaveLength(1);
+      const loaded = page.waitForResponse(response => new URL(response.url()).searchParams.get("panel") === panel);
+      await page.evaluate(() => window.dispatchEvent(new CustomEvent("update-query", { detail: { source: "auto-refresh" } })));
+      expect((await loaded).status()).toBe(200);
+      await page.unrouteAll({ behavior: "wait" });
+      page.off("requestfailed", trackCancellation);
+    }
+  } finally {
+    release();
+    try { await page.unrouteAll({ behavior: "wait" }); } finally { sql(cleanup); }
+  }
+});
+
 test("refreshed vital charts remain registered on their current elements", async ({ page }) => {
   test.skip(!process.env.E2E_BASE_URL, "Requires the disposable e2e database");
   const scope = `e2e-vital-registry-${Date.now()}`;
