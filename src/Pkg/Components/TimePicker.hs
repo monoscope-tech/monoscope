@@ -477,7 +477,7 @@ refreshIntervalOption_ (label, title, ms) =
     , term "aria-pressed" "false"
     , term "hx-live:aria-pressed" "closest('[data-live-data]').q('[data-time-transport]').data.interval == data.value"
     , term "hx-live:data-selected" "closest('[data-live-data]').q('[data-time-transport]').data.interval == data.value"
-    , [__|on click call window.setTimeRefreshInterval(me.closest('[data-live-data]').q('[data-time-transport]'), Number(my.dataset.value)) then call me.closest('[popover]').hidePopover()|]
+    , [__|on click call window.setTimeRefreshInterval(me.closest('[data-live-data]').querySelector('[data-time-transport]'), Number(my.dataset.value)) then call me.closest('[popover]').hidePopover()|]
     ]
     do
       span_ $ toHtml label

@@ -24,6 +24,31 @@ test.afterAll(() => {
 
 test.describe.configure({ mode: "serial" });
 
+test("navbar refresh menu applies Off and interval options", async ({ page }) => {
+  test.skip(!process.env.E2E_BASE_URL, "Requires a disposable fixture database");
+  for (const width of [390, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(`/p/${DEMO_PROJECT}/infrastructure/containers?since=5M`, { waitUntil: "domcontentloaded" });
+    const transport = page.locator("[data-time-transport]");
+    const menuToggle = page.locator(width < 768 ? '[popovertarget="n-timepicker-popover"]' : '[data-live-data-trigger]');
+    await expect(transport).toHaveAttribute("data-interval", "15000");
+    await expect(transport).toHaveAttribute("data-state", "live");
+    await menuToggle.click();
+    await expect(page.getByRole("button", { name: "15 seconds", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await menuToggle.click();
+    for (const [label, interval] of [["Turn off automatic refresh", "0"], ["30 seconds", "30000"], ["15 seconds", "15000"], ["Turn off automatic refresh", "0"]]) {
+      await menuToggle.click();
+      const option = page.getByRole("button", { name: label, exact: true });
+      await option.click();
+      await expect(transport).toHaveAttribute("data-interval", interval);
+      await expect(transport).toHaveAttribute("data-state", interval === "0" ? "paused" : "live");
+      await menuToggle.click();
+      await expect(page.getByRole("button", { name: label, exact: true })).toHaveAttribute("aria-pressed", "true");
+      await menuToggle.click();
+    }
+  }
+});
+
 test("changing the container time preset refreshes inventory and drawer windows", async ({ page }) => {
   test.setTimeout(90_000); // Includes a real 15s live tick, repeated presets and held initial arrival.
   test.skip(!process.env.E2E_BASE_URL, "Requires a disposable fixture database");
