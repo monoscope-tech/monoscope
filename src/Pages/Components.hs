@@ -704,7 +704,7 @@ instance ToHtml a => ToHtml (RefreshingDeferred a) where
 
 
 timeRefreshListener_ :: Text -> Text -> Html ()
-timeRefreshListener_ cid url = div_ ([class_ "hidden", term "_" $ "on htmx:afterSwap from #" <> cid <> " send input to <input[type=text]/> in #" <> cid] <> timeRefreshAttrs cid url "update-query from:window") mempty
+timeRefreshListener_ cid url = div_ ([class_ "hidden", term "_" [text|on htmx:afterSwap from #${cid} send input to <input[type=text]/> in #${cid}|]] <> timeRefreshAttrs cid url "update-query from:window") mempty
 
 
 timeRefreshAttrs :: Text -> Text -> Text -> [Attribute]
