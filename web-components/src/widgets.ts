@@ -1,6 +1,7 @@
 'use strict';
 import { getSeriesColor, invalidateLogLevelColors } from './colorMapping';
 import { ChartQueryError, readChartResponse } from './chart-stream';
+import { shouldReloadForStaleChunk } from './stale-chunk-reload';
 import { beginChartFetch } from './chart-fetch-seq';
 import { isNearChartViewport } from './chart-initialization';
 import { formatNumber, formatBytes, convertToNanoseconds, formatDuration, statScalar, formatStatValue, type StatAggregates } from './stat-value';
@@ -536,8 +537,20 @@ const canFetchData = (widgetData: WidGetData) => !!widgetData.pid && widgetData.
 type ChartPrefetch = { url: string; response: Promise<ChartDataResponse | null>; controller: AbortController; latest?: ChartDataResponse; partial?: (data: ChartDataResponse) => void };
 const chartDataPrefetch = new Map<string, ChartPrefetch>();
 const streamUrl = (url: string) => url.replace('/chart_data?', '/chart_data/stream?');
-const checkChartResponse = (res: Response) => {
-  if (res.status === 401) { window.location.reload(); throw new Error('session expired'); }
+class ChartSessionError extends Error {}
+// /chart_data intermittently answers 401 while the page's session is fine (server-side
+// lookup, cause unknown); reloading on each one looped the page every ~2s. One re-fetch
+// after a second confirms it, shared by every chart that hit it at the same time.
+let sessionCheck: Promise<boolean> | undefined;
+const sessionExpired = (url: string) => (sessionCheck ??= new Promise((resolve) => setTimeout(resolve, 1000))
+  .then(() => fetch(url, { headers: { Accept: 'application/json' } }).then((res) => res.status === 401, () => false))
+  .finally(() => { sessionCheck = undefined; }));
+
+const checkChartResponse = async (res: Response) => {
+  if (res.status === 401) {
+    if (await sessionExpired(res.url) && shouldReloadForStaleChunk(Date.now(), sessionStorage, 60_000, 'monoscope:session-reload')) window.location.reload();
+    throw new ChartSessionError('Session expired. Retry reloads the page.');
+  }
   if (!res.ok) throw new Error(`widget request failed: ${res.status} ${res.statusText}`);
   return res;
 };
@@ -554,10 +567,10 @@ const prefetchChartData = (widgetData: WidGetData) => {
   // A failed prefetch resolves to null so the consumer falls back to a live fetch and
   // surfaces the real error, rather than inheriting a rejection nobody is awaiting yet.
   const entry: ChartPrefetch = { url, response: Promise.resolve(null), controller: new AbortController() };
-  entry.response = limitedFetch(streamUrl(url), res => readChartResponse<ChartDataResponse>(checkChartResponse(res), data => {
+  entry.response = limitedFetch(streamUrl(url), res => checkChartResponse(res).then(res => readChartResponse<ChartDataResponse>(res, data => {
     entry.latest = data;
     entry.partial?.(data);
-  }), entry.controller.signal).catch(() => null);
+  })), entry.controller.signal).catch(() => null);
   chartDataPrefetch.set(chartId, entry);
 };
 
@@ -622,12 +635,12 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
   let receivedPartial = false;
   const subtitle = $(`${chartId}Subtitle`);
   const retry = () => updateChartData(chart, opt, true, widgetData, lifetimeSignal);
-  const reportFailure = (message: string) => {
+  const reportFailure = (message: string, action = retry) => {
     state.failures = showLoader ? 0 : state.failures + 1;
     chart.hideLoading();
     if (!showLoader && state.hasData) {
       if (state.failures >= BACKGROUND_FAILURE_THRESHOLD) {
-        showChartError(chartId, 'Updates delayed. Showing last successful data.', retry);
+        showChartError(chartId, 'Updates delayed. Showing last successful data.', action);
       }
       return;
     }
@@ -635,13 +648,13 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
       message = `Incomplete results. ${message}`;
       if (subtitle) subtitle.textContent = 'Incomplete results';
     } else if (showLoader && subtitle) subtitle.textContent = '';
-    showChartError(chartId, message, retry);
+    showChartError(chartId, message, action);
     if (!state.hasData) setStatValue(widgetData, null);
   };
-  // Batch DOM updates before fetch
+  // Batch DOM updates before fetch. The stat value rendered by the server (or the previous
+  // fetch) stays up until the response replaces it; blanking it read as the tile breaking.
   if (showLoader) {
     hideChartError(chartId);
-    setStatValue(widgetData, null);
     if (subtitle) subtitle.textContent = 'Loading…';
     $(chartId)?.removeAttribute('data-chart-partial');
     $(chartId)?.setAttribute('aria-busy', 'true');
@@ -664,7 +677,7 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
     };
     const data: ChartDataResponse =
       (await takePrefetched(chartId, url, partial, signal)) ??
-      (await limitedFetch(showLoader ? streamUrl(url) : url, res => readChartResponse<ChartDataResponse>(checkChartResponse(res), partial), signal));
+      (await limitedFetch(showLoader ? streamUrl(url) : url, res => checkChartResponse(res).then(res => readChartResponse<ChartDataResponse>(res, partial)), signal));
     const { from, to, dataset, rows_per_min, stats, error } = data;
     if (signal.aborted || isStale()) return; // a newer fetch already won; don't overwrite its state
     if (error) {
@@ -703,7 +716,8 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
   } catch (e) {
     if (signal.aborted || isStale()) return;
     console.error('Failed to fetch new data:', e);
-    reportFailure(e instanceof ChartQueryError ? e.message : "Couldn't load this chart. Retry to fetch it again.");
+    if (e instanceof ChartSessionError) reportFailure(e.message, async () => window.location.reload());
+    else reportFailure(e instanceof ChartQueryError ? e.message : "Couldn't load this chart. Retry to fetch it again.");
   } finally {
     lifetimeSignal.removeEventListener('abort', abort);
     if (chartRequests.get(chart) === request) chartRequests.delete(chart);
@@ -863,6 +877,7 @@ const attachExemplars = async (chart: any, url: string, signal: AbortSignal) => 
 };
 
 const chartDisposers = new Map<string, () => void>();
+const chartUpdaters = new Map<string, (widgetData: WidGetData) => void>();
 const DISPOSABLE_CHARTS = '[data-chart-widget], [data-service-map]';
 
 const disposeChart = (chartId: string) => {
@@ -899,10 +914,10 @@ document.addEventListener('htmx:before:swap', (event) => {
     if (['none', 'beforebegin', 'afterbegin', 'beforeend', 'afterend'].includes(task.swapSpec?.style ?? '')) continue;
     const target = typeof task.target === 'string' ? document.querySelector(task.target) : task.target;
     if (!(target instanceof Element)) continue;
-    disposeChartsIn(target);
-    // Morph removes ECharts' generated DOM but preserves identical script nodes.
-    // Remove the outgoing initializers so incoming widgets run even when their
-    // configuration is unchanged (e.g. Explorer navigation clears the URL query).
+    // A morph keeps the chart element (hx-morph-skip below); chartWidget then updates it in place.
+    if (!/morph/i.test(task.swapSpec?.style ?? '')) disposeChartsIn(target);
+    // Morph preserves identical script nodes. Remove the outgoing initializers so incoming
+    // widgets run even when their configuration is unchanged (e.g. Explorer navigation clears the URL query).
     target.querySelectorAll('script[data-chart-init]').forEach(script => script.remove());
   }
 });
@@ -952,7 +967,7 @@ const queueChartResize = (chartId: string) => {
 };
 
 const chartWidget = (widgetData: WidGetData) => {
-  const { chartType, opt, chartId } = widgetData,
+  const { chartType, chartId } = widgetData,
     chartEl = $(chartId),
     liveStreamCheckbox = $('streamLiveData') as HTMLInputElement;
   const settling = chartEl?.closest('.htmx-settling');
@@ -960,42 +975,64 @@ const chartWidget = (widgetData: WidGetData) => {
     settling.addEventListener('htmx:after:settle', () => chartWidget(widgetData), { once: true });
     return;
   }
+  // A re-rendered widget whose chart element survived (morph swap) keeps its instance,
+  // listeners and observers; only the option changes. A replaced element has no instance.
+  const existingChart = window.echarts.getInstanceByDom(chartEl);
+  const update = chartUpdaters.get(chartId);
+  if (existingChart && !existingChart.isDisposed() && update) return update(widgetData);
+
   let intervalId: NodeJS.Timeout | null = null;
   const controller = new AbortController();
+  let { opt } = widgetData;
 
   chartDisposers.get(chartId)?.();
-
-  // Dispose of any existing chart instance before creating a new one
-  const existingChart = window.echarts.getInstanceByDom(chartEl);
-  if (existingChart) existingChart.dispose();
+  existingChart?.dispose();
 
   const isDarkMode = document.body.getAttribute('data-theme') === 'dark';
   const theme = isDarkMode ? 'dark' : widgetData.theme || 'default';
   const chart = window.echarts.init(chartEl, theme);
   chart.group = 'default';
+  // ECharts owns this subtree; a morph must leave it alone (htmx checks the skip before syncing attributes).
+  chartEl?.setAttribute('hx-morph-skip', '');
 
-  const baseQuery = widgetData.query;
-  const userQuery = params().query;
-  widgetData.query = (userQuery && userQuery !== 'null')
-    ? (baseQuery ? userQuery + ' | ' + baseQuery : userQuery)
-    : baseQuery;
+  let baseQuery = widgetData.query;
+  const updateQuery = () => {
+    const uq = params().query;
+    widgetData.query = (uq && uq !== 'null') ? (baseQuery ? uq + ' | ' + baseQuery : uq) : baseQuery;
+  };
+  updateQuery();
 
   (window as any)[`${chartType}Chart`] = chart;
 
-  const styles = applyChartTheme(opt);
-  if (opt.series?.[0]?.backgroundStyle) {
-    opt.series[0].backgroundStyle = { color: styles.chartBg };
-  }
-
-  chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source));
-  chartRefreshState.set(chart, { url: chartDataUrl(widgetData), hasData: (opt.dataset.source?.length ?? 0) > 1, failures: 0 });
-  applyHighlightBand(chart, widgetData);
+  const render = (notMerge = false) => {
+    const styles = applyChartTheme(opt);
+    if (opt.series?.[0]?.backgroundStyle) {
+      opt.series[0].backgroundStyle = { color: styles.chartBg };
+    }
+    chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source), notMerge);
+    chartRefreshState.set(chart, { url: chartDataUrl(widgetData), hasData: (opt.dataset.source?.length ?? 0) > 1, failures: 0 });
+    applyHighlightBand(chart, widgetData);
+  };
+  render();
   (chartEl as any).applyThresholds = (thresholds: Record<string, number>) => applyThresholds(chart, thresholds, widgetData.unit ?? '');
+  chartUpdaters.set(chartId, (next) => {
+    widgetData = next;
+    opt = next.opt;
+    baseQuery = next.query;
+    updateQuery();
+    // A changed query replaces the drawn data (and any fetch still in flight for the old one);
+    // an unchanged lazy widget keeps its drawing and refreshes quietly.
+    const urlChanged = chartRefreshState.get(chart)?.url !== chartDataUrl(widgetData);
+    if (opt.dataset.source || urlChanged) render(true);
+    if (!opt.dataset.source) updateChartData(chart, opt, true, widgetData, controller.signal, urlChanged);
+    attach();
+  });
 
   // Opt-in per chart: the Lucid container declares data-exemplars-url next to the
   // chart it decorates (see Pages.Telemetry.metricDetailChart).
   const exemplarUrl = chartEl?.closest('[data-exemplars-url]')?.getAttribute('data-exemplars-url');
-  if (exemplarUrl) attachExemplars(chart, exemplarUrl, controller.signal).catch(() => {});
+  const attach = () => exemplarUrl && attachExemplars(chart, exemplarUrl, controller.signal).catch(() => {});
+  attach();
 
   // Use shared ResizeObserver instead of per-widget
   if (chartEl) sharedResizeObserver.observe(chartEl);
@@ -1017,11 +1054,6 @@ const chartWidget = (widgetData: WidGetData) => {
     );
     dataObserver.observe(chartEl);
   }
-
-  const updateQuery = () => {
-    const uq = params().query;
-    widgetData.query = (uq && uq !== 'null') ? (baseQuery ? uq + ' | ' + baseQuery : uq) : baseQuery;
-  };
 
   // A chart refreshes its own data and nothing else. It used to also call
   // `logListTable.refetchLogs()`, which made every chart on the page order a full replacement of
@@ -1067,8 +1099,10 @@ const chartWidget = (widgetData: WidGetData) => {
     if (chartEl) sharedResizeObserver.unobserve(chartEl);
     themeCallbacks.delete(onThemeChange);
     if (!chart.isDisposed()) chart.dispose();
+    chartEl?.removeAttribute('hx-morph-skip');
     if ((window as any)[`${chartType}Chart`] === chart) delete (window as any)[`${chartType}Chart`];
     chartDisposers.delete(chartId);
+    chartUpdaters.delete(chartId);
   });
 };
 

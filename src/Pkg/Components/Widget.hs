@@ -1288,8 +1288,8 @@ renderChart widget = do
                   const chartEl = document.getElementById(config.chartId);
                   if (!chartEl) return;
                   echartOpt.tooltip.appendTo = chartEl.closest('.dashboard-grid-wrapper') || 'body';
-                  const existing = window.echarts && window.echarts.getInstanceByDom(chartEl);
-                  if (existing) existing.dispose();
+                  // A live instance is updated in place by chartWidget (a morphed panel keeps
+                  // the node); disposing it here is what blanked every chart on a live tick.
                   window.bindFunctionsToObjects(echartOpt, echartOpt);
                   window.chartWidget({ ...config, opt: echartOpt });
                 }
