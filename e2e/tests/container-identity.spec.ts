@@ -170,3 +170,34 @@ test("mobile namespace facet preserves the selected cluster", async ({ page }) =
   expect(clearUrl.searchParams.get("to")).toBe("2025-01-01T00:00:00Z");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
+
+test("mobile container search remains reachable and preserves drawer identity", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.goto(`/p/${DEMO_PROJECT}/infrastructure/containers?cluster=${CLUSTER}&from=2024-12-31T23:00:00Z&to=2025-01-01T00:00:00Z`, { waitUntil: "domcontentloaded" });
+  await expect(page.locator("[data-deferred-shell]")).toHaveCount(0);
+  const rows = page.locator(`tr[role="button"][data-hx-get*="container=${CONTAINER}"]:visible`);
+  await expect(rows).toHaveCount(4);
+  const search = page.getByPlaceholder("Search containers", { exact: true });
+  await expect(search).toBeVisible();
+  expect(await search.evaluate(input => parseFloat(getComputedStyle(input).fontSize))).toBeGreaterThanOrEqual(16);
+  await search.focus();
+  await expect(search).toBeFocused();
+  await page.keyboard.type("identity-node-b");
+  await expect(rows).toHaveCount(1);
+  await expect(rows.locator("td").nth(4)).toHaveText("4.000");
+  await page.keyboard.press("ControlOrMeta+A");
+  await page.keyboard.press("Backspace");
+  await expect(rows).toHaveCount(4);
+  await page.keyboard.type("identity-node-b");
+  await expect(rows).toHaveCount(1);
+  const url = new URL(page.url());
+  expect(url.searchParams.get("cluster")).toBe(CLUSTER);
+  expect(url.searchParams.get("from")).toBe("2024-12-31T23:00:00Z");
+  expect(url.searchParams.get("to")).toBe("2025-01-01T00:00:00Z");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await rows.focus();
+  await page.keyboard.press("Enter");
+  const drawer = page.locator("#global-data-drawer-content");
+  await expect(drawer.getByText(/^Node \/ host:\s*identity-node-b$/)).toBeVisible();
+  await expect(drawer.getByText(/^Namespace:\s*identity-a$/)).toBeVisible();
+});

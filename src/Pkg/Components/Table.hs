@@ -729,10 +729,10 @@ renderToolbar tbl =
 
 renderSearch :: Text -> Text -> SearchMode -> Html ()
 renderSearch elemID searchPlaceholder searchMode =
-  label_ [class_ "input input-sm max-md:hidden flex w-full h-9 bg-transparent border border-strokeWeak shadow-none overflow-hidden items-center gap-2"] do
+  label_ [class_ "input input-sm flex w-full h-9 bg-transparent border border-strokeWeak shadow-none overflow-hidden items-center gap-2"] do
     faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
     input_
-      $ [type_ "text", class_ "grow", placeholder_ searchPlaceholder, Aria.label_ searchPlaceholder]
+      $ [type_ "text", class_ "grow max-md:text-base", placeholder_ searchPlaceholder, Aria.label_ searchPlaceholder]
       <> case searchMode of
         ServerSide url -> [name_ "search", id_ "search_box", hxTrigger_ "keyup changed delay:500ms", hxGet_ url, hxTarget_ "#rowsContainer", hxSwap_ "innerHTML", hxIndicator_ "#searchIndicator"]
         ClientSide -> [term "_" [text|on input show .itemsListItem in #${elemID}_page when its textContent.toLowerCase() contains my value.toLowerCase()|]]
