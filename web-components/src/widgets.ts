@@ -877,6 +877,11 @@ const attachExemplars = async (chart: any, url: string, signal: AbortSignal) => 
 };
 
 const chartDisposers = new Map<string, () => void>();
+// A morph swap keeps live charts (see htmx:before:swap); the ones whose element left the
+// document with the fragment (a tab switch) are released once the swap settles.
+document.addEventListener('htmx:after:settle', () => {
+  for (const chartId of [...chartDisposers.keys()]) if (!document.getElementById(chartId)) disposeChart(chartId);
+});
 const chartUpdaters = new Map<string, (widgetData: WidGetData) => void>();
 const DISPOSABLE_CHARTS = '[data-chart-widget], [data-service-map]';
 

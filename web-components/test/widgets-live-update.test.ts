@@ -143,3 +143,14 @@ test('a 401 fails the chart unless a second 401 confirms it, and then reloads at
   await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(4), { timeout: 5000 });
   await vi.waitFor(() => expect(sessionStorage.getItem('monoscope:session-reload')).not.toBeNull());
 });
+
+test('a chart whose element left with a morphed fragment is disposed once the swap settles', async () => {
+  fakeECharts();
+  document.body.innerHTML = panel([[1, 10]]);
+  (window as any).chartWidget(config('lcp', [[1, 10]]));
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('<div id="panel"><p id="label">no chart</p></div>', { headers: { 'Content-Type': 'text/html' } })));
+  htmx.process(document.body);
+  window.dispatchEvent(new CustomEvent('update-query', { detail: { source: 'auto-refresh' } }));
+  await vi.waitFor(() => expect(document.getElementById('label')?.textContent).toBe('no chart'));
+  await vi.waitFor(() => expect(instances[0].dispose).toHaveBeenCalledTimes(1));
+});

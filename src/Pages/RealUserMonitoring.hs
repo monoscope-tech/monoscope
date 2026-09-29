@@ -379,17 +379,22 @@ sessionCoreWhere (SessionText (Just _)) = error "text search must use the raw se
 -- 1.7s over that span against 9.7s over the day (scripts/local/rum-sessions-2026-09-29.md).
 --
 -- >>> import Data.Time (UTCTime (..))
--- >>> import Pkg.DeriveUtils (UUIDId (..))
+-- >>> import "monoscope" Pkg.DeriveUtils (UUIDId (..))
 -- >>> let day = UTCTime (toEnum 60000) 0
 -- >>> let scope = RumScope True (mkScopedQuery (UUIDId UUID.nil) (Just day, Just (addUTCTime 86400 day)) Nothing Nothing)
 -- >>> (spanScope 0 [(addUTCTime 100 day, addUTCTime 200 day), (addUTCTime 50 day, addUTCTime 150 day)] scope).queryScope.timeRange == (Just (addUTCTime 50 day), Just (addUTCTime 200 day))
 -- True
 -- >>> (spanScope 900 [] scope).queryScope.timeRange == scope.queryScope.timeRange
 -- True
+-- >>> (spanScope 900 [(day, addUTCTime 86400 day)] scope).queryScope.timeRange == scope.queryScope.timeRange
+-- True
 spanScope :: NominalDiffTime -> [(UTCTime, UTCTime)] -> RumScope -> RumScope
 spanScope pad spans scope = case nonEmpty spans of
   Nothing -> scope
-  Just found -> scope{queryScope = scope.queryScope{timeRange = (Just $ addUTCTime (-pad) $ minimum1 $ fst <$> found, Just $ addUTCTime pad $ maximum1 $ snd <$> found)}}
+  Just found ->
+    let (from, to) = scope.queryScope.timeRange
+        clamp bound f x = maybe x (f x) bound
+     in scope{queryScope = scope.queryScope{timeRange = (Just $ clamp from max $ addUTCTime (-pad) $ minimum1 $ fst <$> found, Just $ clamp to min $ addUTCTime pad $ maximum1 $ snd <$> found)}}
 
 
 enrichSessionRows :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> [RumSession] -> Eff es [RumSession]
@@ -789,12 +794,9 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
                       when (policy shared /= CacheEmptySearch) $ liftIO $ Cache.insert' appCtx.rumCache (Just ttl) key shared
                       pure (shared, False)
                     Just (shared, True) | not refresh -> pure (shared, True)
-                    -- Shared as an already-expired entry: every replica serves it stale until the
-                    -- revalidation it triggers caches the full window, and never as fresh.
-                    Nothing | Just partial <- quick, not refresh -> do
-                      slice <- partial
-                      when (policy slice /= SkipCache) $ publish 0 slice
-                      pure (slice, True)
+                    -- Never cached: a cached slice would be served as the final answer whenever the
+                    -- full revalidation fails. The revalidation computes and caches the full window.
+                    Nothing | Just partial <- quick, not refresh -> (,True) <$> partial
                     _ -> do
                       fresh <- action
                       when (policy fresh /= SkipCache) do
@@ -1451,7 +1453,7 @@ sessionsTable_ workspace now links query sessionFilter selectedSession sessions 
                       faSprite_ (deviceIcon device) "solid" "h-3 w-3 shrink-0 text-iconNeutral"
                     span_ [class_ "truncate font-mono", title_ session.id] $ toHtml $ T.take 8 session.id
             )
-              { Table.attrs = [class_ $ bool "w-[38%]" "w-[36%]" workspace <> " px-2 py-2"]
+              { Table.attrs = [class_ $ bool "w-[38%]" "w-[46%]" workspace <> " px-2 py-2"]
               , Table.headerExtra = Just $ span_ [class_ "md:hidden"] "Session"
               }
           , ( Table.col "Last page" \session -> do
@@ -1463,7 +1465,7 @@ sessionsTable_ workspace now links query sessionFilter selectedSession sessions 
                   $ toHtml
                   $ prettyTimeShort now session.endedAt
             )
-              { Table.attrs = [class_ $ bool "w-[22%]" "w-[30%]" workspace <> " px-2 py-2"]
+              { Table.attrs = [class_ $ bool "w-[22%]" "w-[20%]" workspace <> " px-2 py-2"]
               }
           , ( Table.col "Activity" \session -> do
                 when (session.errors > 0) $ span_ [class_ "mb-1 inline-flex items-center gap-1 rounded-full bg-fillError-weak px-1.5 py-0.5 text-xs font-medium text-textError"] do

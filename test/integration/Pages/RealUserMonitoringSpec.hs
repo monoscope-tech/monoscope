@@ -578,7 +578,8 @@ spec = sequential $ aroundAll withTestResources do
         selected `shouldContainAll` ["Some RUM data could not be loaded.", ">Retry</button>", "refresh=1"]
         any (`T.isInfixOf` selected) ["No data", "No web vital samples", "Choose a session", "No sessions match"] `shouldBe` False
       let sid = "00000000-0000-0000-0000-000000000091" :: Text
-          sessions resources panel selected = testServant resources $ RUM.rumGetH projectId (Just "sessions") Nothing Nothing Nothing Nothing (Just "24H") selected Nothing (Just panel) (Just "1") Nothing
+          -- refresh: a cold wide list otherwise answers with the uncached newest-3h slice.
+          sessions resources panel selected = testServant resources $ RUM.rumGetH projectId (Just "sessions") Nothing Nothing Nothing Nothing (Just "24H") selected Nothing (Just panel) (Just "1") (Just "1")
           render = toStrict . Lucid.renderText . Lucid.toHtml
           firstContent target = T.drop 1 . snd . T.breakOn ">" . snd . T.breakOn ("id=\"" <> target <> "\"") . render
       withResource tr.trPool $ \conn ->
