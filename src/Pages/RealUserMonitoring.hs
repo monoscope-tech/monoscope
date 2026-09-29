@@ -930,18 +930,8 @@ slot_ page panel skeleton content
       content
       unless sessionList $ panelRevalidation_ page panel
   | otherwise =
-      Components.deferredShell_
-        (panelId panel)
-        -- Search, session filter and selected session ride along so a deep link still
-        -- renders as the page it addressed; without them the sessions panel came back
-        -- unfiltered with nothing selected.
-        (rumPanelUrl page panel)
-        -- Deliberately NOT serialised with @hx-sync ... queue@. The panels do contend in
-        -- TimeFusion, but measured cold over 24h that is still the better trade: concurrent
-        -- paints the first panel at 2.6s and finishes at 24.7s, queued paints the first at
-        -- 5.0s and finishes at 28.7s (scripts/local/rum-perf-2026-08-30.md). Contention costs
-        -- less than the queue wait it would replace.
-        []
+      div_
+        ([id_ $ panelId panel, class_ "w-full", data_ "deferred-shell" ""] <> panelSwapAttrs page panel (rumPanelUrl page panel) "load, update-query from:window" [term "hx-sync" "this:replace"])
         skeleton
   where
     -- One panel's worth of work per tick, swapped in place: the page chrome, the scroll
@@ -971,7 +961,7 @@ panelSwapAttrs page panel url trigger extras =
     <> [term "hx-include" "#rum-session-search-form" | sessionList]
     <> [term "hx-vals" "js:{since:window.params().since ?? (window.params().from || window.params().to ? '' : '24H'),from:window.params().from || '',to:window.params().to || ''}", term "hx-preload" "false"]
   where
-    sessionList = page.tab == Sessions && panel == PanelSessions
+    sessionList = page.panel == Just panel && page.tab == Sessions && panel == PanelSessions
     refreshTarget = if sessionList then "#rum-sessions-list" else "#" <> panelId panel
 
 

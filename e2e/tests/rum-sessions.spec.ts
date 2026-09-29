@@ -325,6 +325,7 @@ test("Performance and Overview panels use the current picker window", async ({ p
       jsonb_build_object('telemetry',jsonb_build_object('sdk',jsonb_build_object('language','webjs')),
         'service',jsonb_build_object('name','${scope}'),'deployment',jsonb_build_object('environment',jsonb_build_object('name','${scope}'))),
       '/picker-window','webjs','${scope}','${scope}' FROM (VALUES(now()-interval '10 minutes'),(now()-interval '2 hours')) AS events(at)`);
+  let release = () => {};
   try {
     for (const tab of ["performance", "overview"]) {
       await page.goto(`/p/${DEMO_PROJECT}/rum?tab=${tab}&since=1H&service_scope=${scope}&environment=${scope}`);
@@ -355,7 +356,49 @@ test("Performance and Overview panels use the current picker window", async ({ p
     await page.evaluate(() => window.dispatchEvent(new Event("update-query")));
     expect(new URL((await defaultRefresh).url()).searchParams.get("since")).toBe("24H");
     await expect(defaultRow.locator("td").nth(1)).toHaveText("2");
+    for (const [tab, panel] of [["performance", "pages"], ["sessions", "sessions"]]) {
+      const pending = new Promise<void>(resolve => { release = resolve; });
+      let fetched = () => {};
+      const initialFetched = new Promise<void>(resolve => { fetched = resolve; });
+      let held = false;
+      const cancelled: string[] = [];
+      page.on("requestfailed", request => {
+        const url = new URL(request.url());
+        if (url.searchParams.get("panel") === panel && url.searchParams.get("since") === "1H") cancelled.push(request.url());
+      });
+      await page.route("**/rum?**", async route => {
+        if (held || new URL(route.request().url()).searchParams.get("panel") !== panel) return route.continue();
+        held = true;
+        const response = await route.fetch();
+        fetched();
+        await pending;
+        await route.fulfill({ response });
+      });
+      await page.context().clearCookies();
+      const scopeParams = tab === "sessions" ? `q=${fixtureUser}` : `service_scope=${scope}&environment=${scope}`;
+      await page.goto(`/p/${DEMO_PROJECT}/rum?tab=${tab}&since=1H&${scopeParams}`);
+      await initialFetched;
+      const responses: number[] = [];
+      page.on("response", response => {
+        const url = new URL(response.url());
+        if (url.searchParams.get("panel") === panel && url.searchParams.get("since") === "24H") responses.push(response.status());
+      });
+      await page.locator("[data-live-range]").click();
+      await page.locator('#n-timepicker-popover button[data-value="24H"]').click();
+      await expect(page.locator("#n-currentRange")).toHaveText("Last 24 hours");
+      release();
+      if (tab === "performance") await expect(defaultRow.locator("td").nth(1)).toHaveText("2");
+      else {
+        await expect(page.locator(".rum-session-link")).toHaveCount(200);
+        await expect(page.locator("#rum-replay-workspace")).toBeVisible();
+      }
+      await expect.poll(() => responses).toEqual([200]);
+      await expect.poll(() => cancelled.length).toBe(1);
+      await page.unrouteAll({ behavior: "wait" });
+    }
   } finally {
+    release();
+    await page.unrouteAll({ behavior: "wait" });
     sql(cleanup);
   }
 });
