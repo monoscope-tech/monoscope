@@ -441,21 +441,32 @@ test("singleton vital trend keeps the selected time axis", async ({ page }) => {
   test.skip(!process.env.E2E_BASE_URL, "Requires the disposable e2e database");
   const scope = `e2e-vital-axis-${Date.now()}`;
   const cleanup = `DELETE FROM otel_metrics WHERE project_id='${DEMO_PROJECT}' AND resource___service___name='${scope}'`;
+  // Keep the short window inside one five-minute bucket even at a wall-clock boundary.
+  const to = new Date(Math.floor(Date.now() / 300000) * 300000 - 60000);
+  const from = new Date(to.getTime() - 90 * 60 * 1000);
   sql(`INSERT INTO otel_metrics (project_id,id,series_id,timestamp,metric_name,metric_type,metric_unit,value,resource,resource___service___name)
-    VALUES ('${DEMO_PROJECT}',gen_random_uuid(),'${scope}',now()-interval '10 seconds','browser.web_vital.lcp','GAUGE','ms',1200,
+    VALUES ('${DEMO_PROJECT}',gen_random_uuid(),'${scope}','${new Date(to.getTime() - 10000).toISOString()}','browser.web_vital.lcp','GAUGE','ms',1200,
       jsonb_build_object('service',jsonb_build_object('name','${scope}')),'${scope}')`);
   try {
-    const to = new Date();
-    const from = new Date(to.getTime() - 90 * 60 * 1000);
-    for (const [range, span] of [[{ since: "1H" }, 60 * 60 * 1000], [{ from: from.toISOString(), to: to.toISOString() }, 90 * 60 * 1000]] as const) {
+    for (const [range, span] of [[{ since: "1H" }, 60 * 60 * 1000], [{ from: from.toISOString(), to: to.toISOString() }, 90 * 60 * 1000], [{ from: new Date(to.getTime() - 30000).toISOString(), to: to.toISOString() }, 30000]] as const) {
       await page.goto(`/p/${DEMO_PROJECT}/rum?${new URLSearchParams({ tab: "performance", service_scope: scope, ...range })}`);
       const chart = page.locator("#rum-vital-trend-lcp");
       await expect(chart).toBeVisible();
+      await chart.scrollIntoViewIfNeeded();
       await expect.poll(() => chart.evaluate(element => {
         const instance = (window as any).echarts?.getInstanceByDom(element);
         const extent = instance?.getModel().getComponent("xAxis").axis.scale.getExtent();
         return extent ? extent[1] - extent[0] : null;
       })).toBe(span);
+      await expect.poll(() => chart.evaluate(element => {
+        const instance = (window as any).echarts?.getInstanceByDom(element);
+        const series = instance?.getModel().getSeriesByIndex(0);
+        if (!series || series.getData().count() !== 1 || !series.get("showSymbol")) return false;
+        const datum = instance.getOption().dataset[0].source[1];
+        const [x, y] = instance.convertToPixel({ seriesIndex: 0 }, datum);
+        const plot = instance.getModel().getComponent("grid").coordinateSystem.getRect();
+        return datum[1] === 1200 && x >= plot.x && x <= plot.x + plot.width && y >= plot.y && y <= plot.y + plot.height;
+      })).toBe(true);
     }
   } finally {
     sql(cleanup);
