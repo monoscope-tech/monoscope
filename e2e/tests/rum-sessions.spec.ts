@@ -764,7 +764,10 @@ test("refreshed vital charts remain registered on their current elements", async
     await page.evaluate(() => window.dispatchEvent(new Event("update-query")));
     await refreshed;
     await assertCharts(24 * 60 * 60 * 1000, 2);
-    expect(await page.evaluate(() => (window as any).__rumPriorCharts.every((instance: any) => instance.isDisposed() && !(window as any).echarts.getInstanceById(instance.id)))).toBe(true);
+    expect(await page.evaluate(() => ["fcp", "ttfb"].every((name, index) => {
+      const instance = (window as any).__rumPriorCharts[index];
+      return !instance.isDisposed() && (window as any).echarts.getInstanceByDom(document.getElementById(`rum-vital-trend-${name}`)) === instance;
+    }))).toBe(true);
   } finally {
     sql(cleanup);
   }
