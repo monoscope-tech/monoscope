@@ -13,6 +13,13 @@ module Pages.RealUserMonitoring (
   VitalRating (..),
   classifyVital,
   pageLabel,
+  binnedSql,
+  activitySql,
+  sessionsSql,
+  p75Sql,
+  browserSql,
+  pageViewSql,
+  errorSql,
 ) where
 
 import Data.Aeson qualified as AE
@@ -47,7 +54,7 @@ import Pages.Components qualified as Components
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (DB, decodeEnumSC, encodeEnumSC, escapeRegex)
+import Pkg.DeriveUtils (DB, decodeEnumSC, encodeEnumSC, escapeRegex, rawSql)
 import Pkg.ErrorFingerprint (normalizeMessage)
 import Pkg.Parser (ScopedQuery (..), applyScopedKqlContext, mkScopedQuery)
 import Pkg.QueryCache qualified as QueryCache
@@ -189,14 +196,21 @@ scopePredicate scope =
 -- of all browser rows here, and it carries nothing RUM shows — its sessions and users are
 -- already on the page-level spans beside it.
 browserScope :: RumScope -> HI.Sql
-browserScope scope =
-  scopePredicate scope
-    <> [HI.sql| AND (resource___telemetry___sdk___language IN ('webjs', 'javascript', 'js')
-         OR resource___user_agent___original IS NOT NULL
-         OR name IN ('documentLoad', 'documentFetch')
-         OR |]
-    <> pageViewPredicate
-    <> [HI.sql|)|]
+browserScope scope = scopePredicate scope <> " AND " <> rawSql browserSql
+
+
+-- | The predicates as text, shared by the Hasql queries and the summary widgets' SQL.
+-- TimeFusion's @rum_*@ rollup measures declare these strings verbatim and serve a widget
+-- only while its filter matches exactly, so an edit here must be mirrored in TimeFusion's
+-- @schemas/otel_logs_and_spans.yaml@.
+browserSql, pageViewSql, errorSql :: Text
+browserSql =
+  "(resource___telemetry___sdk___language IN ('webjs', 'javascript', 'js') OR resource___user_agent___original IS NOT NULL"
+    <> " OR name IN ('documentLoad', 'documentFetch') OR "
+    <> pageViewSql
+    <> ")"
+pageViewSql = "(name LIKE 'Pageview %' OR name = 'documentLoad')"
+errorSql = "(status_code = 'ERROR' OR lower(COALESCE(level, '')) = 'error' OR attributes___exception___type IS NOT NULL)"
 
 
 -- | The page a browser event was on. Our SDK sets @url.path@; the OpenTelemetry browser SDK
@@ -210,13 +224,13 @@ pagePath = [HI.sql|COALESCE(NULLIF(attributes___url___path, ''), NULLIF(attribut
 -- span; @Pageview ·@ is ours. Shared so the summary, the trend, the table and the per-session
 -- counts cannot disagree about what they are counting.
 pageViewPredicate :: HI.Sql
-pageViewPredicate = [HI.sql|(name LIKE 'Pageview %' OR name = 'documentLoad')|]
+pageViewPredicate = rawSql pageViewSql
 
 
 -- | What counts as a browser error. Shared for the same reason as 'pageViewPredicate': the
 -- summary, the trend, the error list and the per-session counts must agree.
 errorPredicate :: HI.Sql
-errorPredicate = [HI.sql|(status_code = 'ERROR' OR lower(COALESCE(level, '')) = 'error' OR attributes___exception___type IS NOT NULL)|]
+errorPredicate = rawSql errorSql
 
 
 -- | Whether any browser telemetry exists in the window. One probe row decides between the
@@ -1000,41 +1014,80 @@ rumStatWidgets_ :: RumLinks -> Html ()
 rumStatWidgets_ links = div_ [class_ "grid grid-cols-4 gap-3 max-md:grid-cols-2"] do
   statSlot_
     $ statWidget "rum-stat-sessions" Widget.WTStat "Sessions" "users" "sessions"
-    $ scopedKql links (browserKql <> " and attributes.session.id != null")
-    <> " | summarize dcount(attributes.session.id)"
+    $ sessionsSql
   statSlot_
-    -- The page-view predicate alone: its two disjuncts are already inside 'browserKql''s
-    -- OR, so @browserKql AND pageView@ is just @pageView@ — the same subset collapse
+    -- The page-view predicate alone: its two disjuncts are already inside 'browserSql''s
+    -- OR, so @browserSql AND pageView@ is just @pageView@ — the same subset collapse
     -- 'rumPages' applies, and the cheaper predicate plans measurably faster.
     $ statWidget "rum-stat-pageviews" Widget.WTTimeseriesStat "Page views" "file-lines" "views"
-    $ scopedKql links pageViewKql
-    <> " | summarize count() by bin_auto(timestamp)"
+    $ binnedSql "count(*)" pageViewSql
   statSlot_
     $ ( statWidget "rum-stat-errors" Widget.WTTimeseriesStat "Browser errors" "triangle-exclamation" "errors"
-          $ scopedKql links (browserKql <> " and " <> errorKql)
-          <> " | summarize count() by bin_auto(timestamp)"
+          $ binnedSql "count(*)" (browserSql <> " AND " <> errorSql)
       )
       { Widget.seriesIntent = Just "error"
       }
   statSlot_
     $ statWidget "rum-stat-p75" Widget.WTStat "P75 page load" "gauge" "ms"
-    $ scopedKql links (pageViewKql <> " and duration != null")
-    <> " | summarize p75(duration) / 1000000"
+    $ p75Sql
   where
     statSlot_ = div_ [class_ "h-28 min-h-28"] . Widget.widget_
-    statWidget wid wType title icon unit query =
+    statWidget wid wType title icon unit sql =
       def
         { Widget.wType = wType
         , Widget.id = Just wid
         , Widget.title = Just title
         , Widget.icon = Just icon
         , Widget.unit = Just unit
-        , Widget.query = Just query
+        , Widget.sql = Just sql
+        , Widget.query = Just $ scopedKql links ""
         , Widget.summarizeBy = Just Widget.SBSum
         , Widget._projectId = Just links.queryScope.projectId
         , Widget.standalone = Just True
         , Widget.hideSubtitle = Just True
         }
+
+
+-- | A RUM series as SQL rather than KQL: TimeFusion serves it from the @rum_*@ rollup measures
+-- only when its filter is exactly the declared predicate, which KQL's lowering never produces
+-- (@startswith@ becomes a regex, @exception.type != null@ a JSON search).
+binnedSql :: Text -> Text -> Text
+binnedSql aggregate predicate =
+  "SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer, 'value', "
+    <> aggregate
+    <> "::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND "
+    <> predicate
+    <> " GROUP BY time_bucket('{{rollup_interval}}', timestamp) ORDER BY time_bucket('{{rollup_interval}}', timestamp) DESC"
+
+
+sessionsSql :: Text
+sessionsSql =
+  "SELECT distinct_count(approx_count_distinct(attributes___session___id))::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND "
+    <> browserSql
+    <> " AND attributes___session___id IS NOT NULL"
+
+
+p75Sql :: Text
+p75Sql =
+  "SELECT (approx_percentile(0.75, percentile_agg(duration)) / 1000000)::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND "
+    <> pageViewSql
+    <> " AND duration IS NOT NULL"
+
+
+-- | One aggregate unpivoted to (time, series, value): an @iff@ series key is not a rollup
+-- dimension, while two filtered counts read two rollup measures. A page view that errored
+-- counts in both series.
+activitySql :: Text
+activitySql =
+  "SELECT a.time, s.series, CASE s.series WHEN 'Page views' THEN a.page_views ELSE a.errors END FROM ("
+    <> "SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time, count(*) FILTER (WHERE "
+    <> pageViewSql
+    <> ")::float AS page_views, count(*) FILTER (WHERE "
+    <> browserSql
+    <> " AND "
+    <> errorSql
+    <> ")::float AS errors FROM otel_logs_and_spans WHERE {{query_ast_filters}} GROUP BY time_bucket('{{rollup_interval}}', timestamp)) a"
+    <> " CROSS JOIN (VALUES ('Page views'), ('Errors')) AS s(series) ORDER BY a.time DESC"
 
 
 rumActivityWidget_ :: RumLinks -> Html ()
@@ -1045,7 +1098,8 @@ rumActivityWidget_ links =
         { Widget.wType = Widget.WTTimeseries
         , Widget.id = Just "rum-activity"
         , Widget.title = Just "Page views and errors"
-        , Widget.query = Just $ scopedKql links (browserKql <> " and (" <> pageViewKql <> " or " <> errorKql <> ")") <> " | summarize count() by bin_auto(timestamp), iff(" <> errorKql <> ", \"Errors\", \"Page views\")"
+        , Widget.sql = Just activitySql
+        , Widget.query = Just $ scopedKql links ""
         , Widget._projectId = Just links.queryScope.projectId
         , Widget.standalone = Just True
         , Widget.hideSubtitle = Just True
@@ -1842,10 +1896,6 @@ browserKql = "(resource.telemetry.sdk.language == \"webjs\" or resource.user_age
 pageViewKql :: Text
 pageViewKql = "(name == \"documentLoad\" or name startswith \"Pageview \")"
 
-
--- | The KQL twin of 'errorPredicate'.
-errorKql :: Text
-errorKql = "(status_code == \"ERROR\" or attributes.exception.type != null)"
 
 
 -- | A first-stage KQL filter carrying the page's investigation boundary. The scope has to

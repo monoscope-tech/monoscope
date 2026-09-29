@@ -14,6 +14,7 @@ import Data.Time (NominalDiffTime, UTCTime, addUTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
+import Data.Vector qualified as V
 import Data.UUID.Quasi (uuid)
 import Database.PostgreSQL.Simple qualified as PG
 import Effectful.Dispatch.Dynamic (interpose, send)
@@ -27,6 +28,8 @@ import Network.GRPC.Common.Protobuf (Proto (..))
 import Network.HTTP.Types.URI (parseQueryText)
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.BodyWrapper (PageCtx (..))
+import Pages.Charts.Charts qualified as Charts
+import Pages.Charts.Types (MetricsData)
 import Pages.Components (Deferred (..))
 import Pages.LogExplorer.Log qualified as Log
 import Pages.RealUserMonitoring qualified as RUM
@@ -572,6 +575,23 @@ spec = sequential $ aroundAll withTestResources do
         void $ PG.execute conn "INSERT INTO projects.replay_sessions (session_id, project_id, created_at, last_event_at, event_file_count, user_name) VALUES (?, ?, ?, ?, 0, ?) ON CONFLICT (session_id) DO UPDATE SET created_at = EXCLUDED.created_at, last_event_at = EXCLUDED.last_event_at, event_file_count = 0, file_keys = '{}', shard_keys = '{}'" (emptyReplayUuid, testPid, frozenTime, addUTCTime 60 frozenTime, "No recording" :: Text)
         void $ PG.execute conn "INSERT INTO projects.replay_sessions (session_id, project_id, created_at, last_event_at, event_file_count, shard_keys, user_name) VALUES (?, ?, ?, ?, 0, ARRAY['00000000-0000-0000-0000-000000000044/merged.json.gz'], ?) ON CONFLICT (session_id) DO UPDATE SET created_at = EXCLUDED.created_at, last_event_at = EXCLUDED.last_event_at, event_file_count = 0, shard_keys = EXCLUDED.shard_keys" (mergedReplayUuid, testPid, frozenTime, addUTCTime 60 frozenTime, "Merged replay" :: Text)
 
+      -- The summary widgets send raw SQL (so TimeFusion can serve them from rollup measures);
+      -- run it through the chart pipeline exactly as the widgets do. Two page views and two
+      -- sessions from the browser spans; the backend span is in neither.
+      let widget dataType sql = runQueryEffect tr $ Charts.queryMetrics Nothing (Just dataType) (Just testPid) Nothing (Just sql) Nothing (Just $ stamp (-3600)) (Just $ stamp 3600) (Just "spans") Nothing []
+          stamp s = toText $ iso8601Show $ addUTCTime s frozenTime
+          series :: Text -> MetricsData -> Double
+          series name m = sum $ maybe [] (\i -> mapMaybe (join . (V.!? i)) (V.toList m.dataset)) (V.elemIndex name m.headers)
+      pageViews <- widget Charts.DTMetric $ RUM.binnedSql "count(*)" RUM.pageViewSql
+      sessionCount <- widget Charts.DTFloat RUM.sessionsSql
+      errors <- widget Charts.DTMetric $ RUM.binnedSql "count(*)" (RUM.browserSql <> " AND " <> RUM.errorSql)
+      activity <- widget Charts.DTMetric RUM.activitySql
+      p75 <- widget Charts.DTFloat RUM.p75Sql
+      forM_ (zip ["pageViews", "sessions", "errors", "activity", "p75" :: Text] [pageViews, sessionCount, errors, activity, p75]) \(name, m) -> (name, m.error) `shouldBe` (name, Nothing)
+      (series "value" pageViews, sessionCount.dataFloat) `shouldBe` (2, Just (2 :: Double))
+      (series "Page views" activity, series "Errors" activity) `shouldBe` (2 :: Double, series "value" errors)
+      isJust p75.dataFloat `shouldBe` True
+
       (_, RUM.RumGet (PageCtx _ overviewBody)) <- testServant tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "pulse") (Just "1") Nothing
       overviewData <- case overviewBody of
         DeferredBody loaded -> pure loaded
@@ -584,7 +604,7 @@ spec = sequential $ aroundAll withTestResources do
       isJust <$> Cache.lookup tr.trATCtx.rumCache (RUMData.RumCacheKey testPid (RUMData.VitalPopulationQuery RUMData.OneHour) Nothing Nothing Nothing Nothing (Just "24H")) `shouldReturn` True
       -- The numbers and activity chart are dashboard Widget components that fetch their own
       -- data through the chart pipeline; the page ships their queries, not their values.
-      overview `shouldContainAll` ["Page views", "Browser errors", "bin_auto(timestamp)", "rum-activity", "Largest Contentful Paint", "2.2 s", "/checkout", "Ada Lovelace"]
+      overview `shouldContainAll` ["Page views", "Browser errors", "{{query_ast_filters}}", "rum-activity", "Largest Contentful Paint", "2.2 s", "/checkout", "Ada Lovelace"]
       -- The LIVE badge is only honest if something listens for the time transport's tick, and
       -- the panels hold every number on this page. Each re-fetches itself in place.
       overview `shouldContainAll` ["hx-trigger=\"update-query[", "from:window\"", "hx-sync=\"this:replace\""]
