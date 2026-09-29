@@ -130,6 +130,23 @@ describe('Log Explorer chart auto-refresh', () => {
     for (const body of bodies.slice(1)) body.enqueue(complete);
   });
 
+  test('shows a lone line observation through null gaps until the same series fills', async () => {
+    const instance = chart();
+    (window as any).echarts = { getInstanceByDom: () => null, init: () => instance, graphic, color };
+    document.body.innerHTML = '<div id="sparse-lines" data-chart-widget></div>';
+    let body!: ReadableStreamDefaultController<Uint8Array>;
+    globalThis.fetch = vi.fn(async () => new Response(new ReadableStream<Uint8Array>({ start(controller) { body = controller; } }),
+      { headers: { 'Content-Type': 'application/x-ndjson' } })) as any;
+    (window as any).chartWidget({ ...widget('sparse-lines'), chartType: 'line' });
+    (globalThis as any).triggerIntersection();
+    await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
+    const data = { ...chartData, headers: ['timestamp', 'dense', 'lone', 'empty'], dataset: [[0, 1, null, null], [1, 2, 0, null], [2, 3, null, null]] };
+    body.enqueue(new TextEncoder().encode(JSON.stringify({ type: 'partial', data }) + '\n'));
+    await vi.waitFor(() => expect(instance.setOption.mock.calls.at(-1)![0].series.map((series: any) => series.showSymbol)).toEqual([false, true, false]));
+    body.enqueue(new TextEncoder().encode(JSON.stringify({ type: 'complete', data: { ...data, dataset: [...data.dataset, [3, 4, 5, null]] } }) + '\n'));
+    await vi.waitFor(() => expect(instance.setOption.mock.calls.at(-1)![0].series.map((series: any) => series.showSymbol)).toEqual([false, false, false]));
+  });
+
   test('renders partial points before completion and finalizes statistics afterward', async () => {
     const instance = chart();
     (window as any).echarts = { getInstanceByDom: () => null, init: () => instance };

@@ -394,6 +394,13 @@ const updateChartConfiguration = (widgetData: WidGetData, opt: any, data: any) =
     opt.legend.data = cols;
   }
 
+  opt.series?.forEach((series: any, i: number) => {
+    if (series.type === 'line') {
+      const first = source.findIndex((row: ChartRow, index: number) => index > 0 && Number.isFinite(row[i + 1]));
+      series.showSymbol = first !== -1 && !source.some((row: ChartRow, index: number) => index > first && Number.isFinite(row[i + 1]));
+    }
+  });
+
   // Merge threshold markLines into first series to avoid a second setOption call
   const thresholds: Record<string, number> = {};
   if (widgetData.alertThreshold != null && Number.isFinite(widgetData.alertThreshold)) thresholds.alert = widgetData.alertThreshold;

@@ -91,3 +91,35 @@ for (const width of [390, 1280]) {
     await expect(drawer.locator("#container-detail-cpu canvas")).toBeVisible();
   });
 }
+
+for (const theme of ["dark", "light"]) {
+  test(`a lone container metric observation has a visible point in ${theme} appearance`, async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(`/p/${DEMO_PROJECT}/infrastructure/containers?namespace=identity-b&from=2024-12-31T23:00:00Z&to=2025-01-01T00:00:00Z`, { waitUntil: "domcontentloaded" });
+    await expect(page.locator("[data-deferred-shell]")).toHaveCount(0);
+    if (await page.locator("body").getAttribute("data-theme") !== theme) await page.evaluate(() => (window as any).toggleDarkMode());
+    await page.locator(`tr[role="button"][data-hx-get*="container=${CONTAINER}"] td`).first().click();
+    await expect(page.locator("#global-data-drawer-content #container-detail-cpu canvas")).toBeVisible();
+    await expect(page.locator("#container-detail-cpu")).toHaveAttribute("aria-busy", "false");
+    const rendered = await page.evaluate(() => {
+      const chart = (window as any).echarts.getInstanceByDom(document.getElementById("container-detail-cpu"));
+      const data = chart.getModel().getSeriesByIndex(0)?.getData();
+      if (!data) return { values: [], symbols: 0 };
+      const dimension = data.mapDimension("y");
+      const values = Array.from({ length: data.count() }, (_, index) => data.get(dimension, index)).filter(Number.isFinite);
+      const symbols = Array.from({ length: data.count() }, (_, index) => data.getItemGraphicEl(index)).filter(element => element && !element.ignore && element.getBoundingRect().width > 0 && element.getBoundingRect().height > 0).length;
+      return { values, symbols };
+    });
+    expect(rendered.values).toEqual([2]);
+    expect(rendered.symbols).toBe(1);
+    const point = await page.evaluate(() => {
+      const element = document.getElementById("container-detail-cpu")!;
+      const chart = (window as any).echarts.getInstanceByDom(element);
+      const pixel = chart.convertToPixel({ seriesIndex: 0 }, chart.getOption().dataset[0].source[1]);
+      const bounds = element.getBoundingClientRect();
+      return { x: bounds.left + pixel[0], y: bounds.top + pixel[1] };
+    });
+    await page.mouse.move(point.x, point.y + 1);
+    await expect(page.getByText("2 cores", { exact: true })).toBeVisible();
+  });
+}
