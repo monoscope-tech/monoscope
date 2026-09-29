@@ -319,8 +319,7 @@ rumVitalPopulation useTf scope window bucket = Hasql.withHasqlTimefusion useTf d
       vitalScope name =
         let names :: [Text]
             names = [prefix <> name | prefix <- ["browser.web_vital.", "k6.browser_web_vital_"]]
-         in
-        [HI.sql|project_id=#{scope.projectId.toText} AND (#{scope.environment}::text IS NULL OR resource___deployment___environment___name = #{scope.environment})
+         in [HI.sql|project_id=#{scope.projectId.toText} AND (#{scope.environment}::text IS NULL OR resource___deployment___environment___name = #{scope.environment})
         AND (#{scope.service}::text IS NULL OR resource___service___name = #{scope.service}) AND metric_name = ANY(#{names}::text[])|]
       columns =
         [HI.sql|timestamp,start_timestamp,series_id,metric_type,aggregation_temporality,flags,
@@ -487,11 +486,12 @@ SELECT #{Epoch}::text,NULL,series_id::text,start_timestamp FROM (
 )
 SELECT ROW(read_kind,population,epoch_series,epoch_start) FROM reads
 |]
-  populations <- concat <$> forM ["lcp", "inp", "cls", "fcp", "ttfb"] \name -> do
-    initial <- readPopulations (current name) True
-    let epochs = [(series, start) | EpochRead series start <- initial]
-    populationReads <- if null epochs then pure initial else readPopulations (withHistory name epochs) False
-    pure [population | PopulationRead population <- populationReads]
+  populations <-
+    concat <$> forM ["lcp", "inp", "cls", "fcp", "ttfb"] \name -> do
+      initial <- readPopulations (current name) True
+      let epochs = [(series, start) | EpochRead series start <- initial]
+      populationReads <- if null epochs then pure initial else readPopulations (withHistory name epochs) False
+      pure [population | PopulationRead population <- populationReads]
   -- Grouped pages are ordered/capped here to avoid native final-sort memory pressure.
   let (pages, fieldAndTrend) = partition (\population -> case population.grouping of PageVital{} -> True; FieldVital -> False; TrendVital{} -> False) populations
       pageGroups = Map.fromListWith (<>) [(url, [population]) | population@VitalPopulation{grouping = PageVital url} <- pages]
