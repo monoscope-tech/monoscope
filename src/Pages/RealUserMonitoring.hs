@@ -379,9 +379,8 @@ sessionCoreWhere (SessionText (Just _)) = error "text search must use the raw se
 -- 1.7s over that span against 9.7s over the day (scripts/local/rum-sessions-2026-09-29.md).
 --
 -- >>> import Data.Time (UTCTime (..))
--- >>> import "monoscope" Pkg.DeriveUtils (UUIDId (..))
 -- >>> let day = UTCTime (toEnum 60000) 0
--- >>> let scope = RumScope True (mkScopedQuery (UUIDId UUID.nil) (Just day, Just (addUTCTime 86400 day)) Nothing Nothing)
+-- >>> let scope = RumScope True (mkScopedQuery Projects.demoProjectId (Just day, Just (addUTCTime 86400 day)) Nothing Nothing)
 -- >>> (spanScope 0 [(addUTCTime 100 day, addUTCTime 200 day), (addUTCTime 50 day, addUTCTime 150 day)] scope).queryScope.timeRange == (Just (addUTCTime 50 day), Just (addUTCTime 200 day))
 -- True
 -- >>> (spanScope 900 [] scope).queryScope.timeRange == scope.queryScope.timeRange
