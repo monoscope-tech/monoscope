@@ -4,13 +4,16 @@ import Data.Cache qualified as Cache
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
+import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
+import Data.Vector qualified as V
 import Data.UUID.Quasi (uuid)
 import Database.PostgreSQL.Simple qualified as PG
 import Lucid qualified
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.RUM qualified as RUMData
 import Pages.BodyWrapper (PageCtx (..))
+import Pages.Charts.Charts qualified as Charts
 import Pages.Components (Deferred (..))
 import Pages.RealUserMonitoring qualified as RUM
 import Pkg.TestUtils
@@ -116,6 +119,22 @@ spec = sequential $ aroundAll withTestResources do
         void $ PG.execute conn "INSERT INTO projects.replay_sessions (session_id, project_id, created_at, last_event_at, event_file_count, user_id, user_name) VALUES (?, ?, ?, ?, 1, ?, ?) ON CONFLICT (session_id) DO UPDATE SET created_at = EXCLUDED.created_at, last_event_at = EXCLUDED.last_event_at" (replayUuid, testPid, frozenTime, addUTCTime 60 frozenTime, "usr-42" :: Text, "Ada Lovelace" :: Text)
         void $ PG.execute conn "INSERT INTO projects.replay_sessions (session_id, project_id, created_at, last_event_at, event_file_count, user_name) VALUES (?, ?, ?, ?, 0, ?) ON CONFLICT (session_id) DO UPDATE SET created_at = EXCLUDED.created_at, last_event_at = EXCLUDED.last_event_at, event_file_count = 0, file_keys = '{}', shard_keys = '{}'" (emptyReplayUuid, testPid, frozenTime, addUTCTime 60 frozenTime, "No recording" :: Text)
         void $ PG.execute conn "INSERT INTO projects.replay_sessions (session_id, project_id, created_at, last_event_at, event_file_count, shard_keys, user_name) VALUES (?, ?, ?, ?, 0, ARRAY['00000000-0000-0000-0000-000000000044/merged.json.gz'], ?) ON CONFLICT (session_id) DO UPDATE SET created_at = EXCLUDED.created_at, last_event_at = EXCLUDED.last_event_at, event_file_count = 0, shard_keys = EXCLUDED.shard_keys" (mergedReplayUuid, testPid, frozenTime, addUTCTime 60 frozenTime, "Merged replay" :: Text)
+
+      -- The summary widgets send raw SQL (so TimeFusion can serve them from rollup measures);
+      -- run it through the chart pipeline exactly as the widgets do. Two page views and two
+      -- sessions from the browser spans; the backend span is in neither.
+      let widget sql = runQueryEffect tr $ Charts.queryMetrics Nothing Nothing (Just testPid) Nothing (Just sql) Nothing (Just $ stamp (-3600)) (Just $ stamp 3600) (Just "spans") Nothing []
+          stamp s = toText $ iso8601Show $ addUTCTime s frozenTime
+          series name m = sum $ maybe [] (\i -> mapMaybe (join . (V.!? i)) (V.toList m.dataset)) (V.elemIndex name m.headers)
+      pageViews <- widget $ RUM.binnedSql "count(*)" RUM.pageViewSql
+      sessions <- widget $ RUM.binnedSql "distinct_count(approx_count_distinct(attributes___session___id))" (RUM.browserSql <> " AND attributes___session___id IS NOT NULL")
+      errors <- widget $ RUM.binnedSql "count(*)" (RUM.browserSql <> " AND " <> RUM.errorSql)
+      activity <- widget RUM.activitySql
+      p75 <- widget RUM.p75Sql
+      forM_ [pageViews, sessions, errors, activity, p75] \m -> m.error `shouldBe` Nothing
+      (series "value" pageViews, series "value" sessions) `shouldBe` (2, 2)
+      (series "Page views" activity, series "Errors" activity) `shouldBe` (2, series "value" errors)
+      isJust p75.dataFloat `shouldBe` True
 
       (_, RUM.RumGet (PageCtx _ overviewBody)) <- testServant tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "pulse") (Just "1") Nothing
       overviewData <- case overviewBody of
