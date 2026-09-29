@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { DEMO_PROJECT, sql } from "./helpers";
 
+const fixtureUser = `e2e-session-fixture-${Date.now()}`;
 const clearSessions = `DELETE FROM projects.replay_sessions WHERE project_id = '${DEMO_PROJECT}' AND session_id::text LIKE 'ec2e0000-0000-4000-8000-%'`;
 
 const refreshSessionList = (page: Page) => page.evaluate(() => new Promise<void>(resolve => {
@@ -17,10 +18,10 @@ const refreshSessionList = (page: Page) => page.evaluate(() => new Promise<void>
 test.beforeAll(() => {
   if (!process.env.E2E_BASE_URL) return;
   sql(`${clearSessions};
-    INSERT INTO projects.replay_sessions (session_id, project_id, created_at, last_event_at, event_file_count, user_name)
+    INSERT INTO projects.replay_sessions (session_id, project_id, created_at, last_event_at, event_file_count, user_name, user_id)
     SELECT ('ec2e0000-0000-4000-8000-' || lpad(i::text, 12, '0'))::uuid, '${DEMO_PROJECT}',
       now() - interval '30 seconds' - i * interval '1 second', now() - i * interval '1 second',
-      1, 'Demo shopper ' || lpad(i::text, 8, '0') FROM generate_series(1, 200) AS i`);
+      1, 'Demo shopper ' || lpad(i::text, 8, '0'), '${fixtureUser}' FROM generate_series(1, 200) AS i`);
 });
 
 test.afterAll(() => {
@@ -41,9 +42,13 @@ test("desktop session list keeps session identities readable", async ({ page }) 
 
 test("live session refresh preserves keyboard focus and list scroll", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto(`/p/${DEMO_PROJECT}/rum?tab=sessions`);
+  await page.goto(`/p/${DEMO_PROJECT}/rum?tab=sessions${process.env.E2E_BASE_URL ? `&q=${fixtureUser}` : ""}`);
   const list = page.locator("#rum-sessions-list");
   const session = list.locator(".rum-session-link").nth(50);
+  await expect(session).toBeAttached();
+  await expect(list.locator('[hx-get*="refresh=1"]')).toHaveCount(0);
+  if (process.env.E2E_BASE_URL) await expect(list.getByText("200 active now", { exact: true })).toBeVisible();
+  await page.evaluate(() => document.fonts.ready);
   await session.scrollIntoViewIfNeeded();
   await session.focus();
   const sessionId = await session.getAttribute("data-session-id");
@@ -139,7 +144,7 @@ test("page links preserve regex query characters through Explorer preload", asyn
   }
 });
 
-test("settled session search preserves scope and survives reload and a shared URL", async ({ page, context }) => {
+test("session time changes survive live refresh, search, filters and reload", async ({ page, context }) => {
   test.skip(!process.env.E2E_BASE_URL, "Requires the disposable e2e database");
   const cleanup = `DELETE FROM otel_logs_and_spans WHERE project_id='${DEMO_PROJECT}' AND resource___deployment___environment___name='e2e-session-search'`;
   sql(`${cleanup};
@@ -167,6 +172,11 @@ test("settled session search preserves scope and survives reload and a shared UR
     await expect(workspace.locator("session-replay")).toBeVisible();
     await page.waitForURL(url => url.searchParams.has("session"));
     const session = new URL(page.url()).searchParams.get("session");
+    const changedWindow = page.waitForResponse(r => r.request().headers()["hx-source"] === "div#rum-panel-sessions");
+    await page.locator("[data-live-range]").click();
+    await page.locator('#n-timepicker-popover button[data-value="24H"]').click();
+    expect(new URL((await changedWindow).url()).searchParams.get("since")).toBe("24H");
+    await expect(page.locator("#n-currentRange")).toHaveText("Last 24 hours");
     await page.getByRole("link", { name: "With replay", exact: true }).click();
     await expect(page.getByRole("link", { name: "With replay", exact: true })).toHaveAttribute("aria-current", "page");
     await page.waitForURL(url => url.searchParams.get("filter") === "replays");
@@ -184,7 +194,7 @@ test("settled session search preserves scope and survives reload and a shared UR
     await expect(page.getByRole("link", { name: "All sessions", exact: true })).toHaveAttribute("aria-current", "page");
     await page.waitForURL(url => !url.searchParams.has("filter"));
     const url = new URL(page.url());
-    for (const [key, value] of Object.entries({q:query, session, since:"1H", environment:"e2e-session-search", service_scope:"e2e-session-search"})) {
+    for (const [key, value] of Object.entries({q:query, session, since:"24H", environment:"e2e-session-search", service_scope:"e2e-session-search"})) {
       expect(url.searchParams.get(key)).toBe(value);
     }
     expect(url.searchParams.get("filter") ?? "").toBe("");
@@ -205,6 +215,24 @@ test("settled session search preserves scope and survives reload and a shared UR
     await expect(page.getByRole("searchbox", { name: "Search sessions" })).toHaveValue("");
     await expect(page.getByRole("link", { name: "All sessions", exact: true })).toHaveAttribute("aria-current", "page");
     await expect(workspace.locator("session-replay")).toBeVisible();
+    const historicalResponse = page.waitForResponse(r => r.request().headers()["hx-source"] === "div#rum-panel-sessions");
+    await page.getByRole("button", { name: "Previous time window", exact: true }).first().click();
+    const historical = new URL(page.url());
+    const historicalRequest = new URL((await historicalResponse).url());
+    for (const key of ["from", "to"]) {
+      expect(historical.searchParams.get(key)).toBeTruthy();
+      expect(historicalRequest.searchParams.get(key)).toBe(historical.searchParams.get(key));
+    }
+    expect(historicalRequest.searchParams.get("since") ?? "").toBe("");
+    await page.getByRole("searchbox", { name: "Search sessions" }).fill("historical missing session");
+    await page.waitForURL(url => url.searchParams.get("q") === "historical missing session");
+    for (const key of ["from", "to", "session", "environment", "service_scope"]) {
+      expect(new URL(page.url()).searchParams.get(key)).toBe(historical.searchParams.get(key));
+    }
+    expect(new URL(page.url()).searchParams.get("since") ?? "").toBe("");
+    await page.reload();
+    await expect(page.getByRole("searchbox", { name: "Search sessions" })).toHaveValue("historical missing session");
+    for (const key of ["from", "to"]) expect(new URL(page.url()).searchParams.get(key)).toBe(historical.searchParams.get(key));
   } finally {
     sql(cleanup);
   }
