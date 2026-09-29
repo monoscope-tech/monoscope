@@ -43,3 +43,19 @@ for (const width of [390, 1280]) {
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 }
+
+test("a Kubernetes namespace drilldown keeps containers within its cluster", async ({ page }) => {
+  await page.goto(`/p/${DEMO_PROJECT}/infrastructure/kubernetes?resource=namespaces&from=2024-12-31T23:00:00Z&to=2025-01-01T00:00:00Z`, { waitUntil: "domcontentloaded" });
+  await expect(page.locator("[data-deferred-shell]")).toHaveCount(0);
+  const namespace = page.locator(`tr[role="button"][data-hx-get*="name=identity-a"][data-hx-get*="cluster=${CLUSTER}"]`);
+  await namespace.locator("td").first().click();
+  const drawer = page.locator("#global-data-drawer-content");
+  await expect(drawer.getByText(new RegExp(`^Cluster:\\s*${CLUSTER}$`))).toBeVisible();
+  const containers = drawer.getByRole("link", { name: "View containers", exact: true });
+  expect(new URL((await containers.getAttribute("href"))!, "http://localhost").searchParams.get("cluster")).toBe(CLUSTER);
+  await containers.click();
+  await expect(page.locator("[data-deferred-shell]")).toHaveCount(0);
+  const rows = page.locator(`tr[role="button"][data-hx-get*="container=${CONTAINER}"]`);
+  await expect(rows).toHaveCount(3);
+  expect(await rows.evaluateAll((rows, cluster) => rows.every(row => new URL(row.getAttribute("data-hx-get")!, "http://localhost").searchParams.get("cluster") === cluster), CLUSTER)).toBe(true);
+});

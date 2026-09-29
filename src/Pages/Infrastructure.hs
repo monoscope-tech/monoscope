@@ -750,7 +750,7 @@ kubernetesDetail_ pid window resource row = div_ [class_ "-mx-8 -mb-4 min-h-full
         ]
       when (isNothing row.cpuCores || isNothing row.memoryBytes) $ p_ [class_ "rounded-md bg-fillInformation-weak px-3 py-2 text-sm text-textWeak"] "Usage is incomplete in this time range. Enable the kubeletstats receiver's node, pod, and container metric groups to fill the missing signals."
     div_ [class_ "flex flex-wrap gap-2 border-t border-strokeWeak pt-4"] do
-      whenJust row.namespace $ \namespace -> a_ [href_ $ infraUrl pid "/infrastructure/containers" [("namespace", namespace)] window, class_ "btn btn-sm"] "View containers"
+      whenJust row.namespace $ \namespace -> a_ [href_ $ infraUrl pid "/infrastructure/containers" ([("namespace", namespace)] <> [("cluster", cluster) | cluster <- toList row.cluster]) window, class_ "btn btn-sm"] "View containers"
       a_ [href_ $ infraUrl pid "/log_explorer" [("query", kubeQuery)] window, class_ "btn btn-sm"] "View logs"
       a_ [href_ $ infraUrl pid "/metrics" [("metric_prefix", "k8s.")] window, class_ "btn btn-sm"] "View metrics"
   where

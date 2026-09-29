@@ -502,6 +502,18 @@ spec = sequential $ aroundAll withResources do
         response.error `shouldBe` Nothing
         response.dataFloat `shouldBe` Just expected
 
+    it "kubernetesContainerDrilldown_sameNamespaceDoesNotIncludeOtherClusters" \tr -> do
+      pid <- createTestProject tr "kubernetes-container-drilldown"
+      key <- createTestAPIKey tr pid "kubernetes-container-drilldown"
+      forM_ (zip ([1 ..] :: [Int]) ([clusterUid, "8b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d", clusterUid] :: [Text])) \(index, cluster) ->
+        ingestMetric tr key [mkAttr "k8s.container.name" ("namespace-api-" <> show index), mkAttr "k8s.pod.name" ("namespace-pod-" <> show index), mkAttr "k8s.namespace.name" "shared-namespace", mkAttr "k8s.cluster.uid" cluster] [] "container.cpu.usage" (fromIntegral index) (addUTCTime (-60) frozenTime)
+      html <- shellHtml tr $ Infrastructure.kubernetesDetailGetH pid (Just "namespaces") (Just "shared-namespace") (Just clusterUid) (Just "shared-namespace") Nothing Nothing (Just "4H")
+      let params = parseQueryText $ encodeUtf8 $ T.replace "&amp;" "&" $ T.takeWhile (/= '"') $ T.drop (T.length "/infrastructure/containers") $ snd $ T.breakOn "/infrastructure/containers?" html
+      (_, Containers.ContainersPage (PageCtx _ result)) <- testServant tr $ Containers.containersGetH pid (join $ lookup "runtime" params) (join $ lookup "namespace" params) (join $ lookup "node" params) (join $ lookup "image" params) (join $ lookup "cluster" params) (join $ lookup "from" params) (join $ lookup "to" params) (join $ lookup "since" params) (Just "1")
+      table <- deferredBody result
+      sort (V.toList $ (.containerName) . (.row) <$> table.rows) `shouldBe` ["namespace-api-1", "namespace-api-3"]
+      join (lookup "since" params) `shouldBe` Just "4H"
+
     it "firstRequest_rendersChromeAndASelfFetchingSkeleton_notRows" \tr -> do
       -- Every infrastructure view is one multi-second metrics pivot. The request that paints
       -- the page must not wait for it: it answers with nav, tabs and a skeleton that fetches
