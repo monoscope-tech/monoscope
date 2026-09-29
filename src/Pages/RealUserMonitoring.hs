@@ -1385,10 +1385,10 @@ sessions_ page = slot_ page PanelSessions sessionsSkeleton_ do
   let filtered = page.sessions
   div_ [class_ "grid bg-bgBase xl:h-full xl:min-h-0 xl:grid-cols-[minmax(32rem,35%)_minmax(0,1fr)]"] do
     section_ [id_ "rum-sessions-list", Aria.label_ "Sessions", tabindex_ "0", class_ "min-w-0 overflow-y-auto overscroll-contain border-strokeWeak xl:min-h-0 xl:border-e max-xl:max-h-[45svh] max-xl:border-b"] do
-      if any (\case SessionsQuery -> True; SessionSearchQuery{} -> True; _ -> False) page.degradedPanels then degradedBanner_ page PanelSessions else sessionsTable_ True page.now page.links page.query page.sessionFilter page.selectedSession filtered
-      when page.servedStale $ p_ [class_ "flex items-center gap-2 border-t border-strokeWeak px-3 py-1.5 text-xs text-textWeak", role_ "status"] do
+      when page.servedStale $ p_ [class_ "flex items-center gap-2 border-b border-strokeWeak px-3 py-1.5 text-xs text-textWeak", role_ "status"] do
         span_ [class_ "loading loading-spinner loading-xs", Aria.hidden_ "true"] ""
         "Refreshing the full time range…"
+      if any (\case SessionsQuery -> True; SessionSearchQuery{} -> True; _ -> False) page.degradedPanels then degradedBanner_ page PanelSessions else sessionsTable_ True page.now page.links page.query page.sessionFilter page.selectedSession filtered
       panelRevalidation_ page PanelSessions
     sessionWorkspace_ page
 
