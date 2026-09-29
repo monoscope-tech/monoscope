@@ -617,7 +617,7 @@ renderHeaderTableActions actions = span_ [class_ "inline-flex flex-wrap items-ce
   unless (null actions.filterMenus) $ renderFilterDropdown actions
   -- Each active filter as a removable chip, Sentry-search style: "Type: runtime_exception ×".
   forM_ actions.filterMenus \menu -> forM_ (filter (.isActive) menu.options) \opt ->
-    button_ ([type_ "button", class_ "inline-flex items-center gap-1 rounded-md border border-strokeWeak bg-fillWeak px-2 py-0.5 text-xs text-textStrong hover:bg-fillWeaker", Aria.label_ $ "Remove filter " <> menu.label <> ": " <> opt.label] <> swapTarget_ actions.targetId (deleteParamValue menu.paramName opt.value actions.baseUrl)) do
+    button_ ([type_ "button", class_ "inline-flex items-center gap-1 rounded-md border border-strokeWeak bg-fillWeak px-2 py-0.5 text-xs text-textStrong hover:bg-fillWeaker max-md:whitespace-normal", Aria.label_ $ "Remove filter " <> menu.label <> ": " <> opt.label] <> swapTarget_ actions.targetId (deleteParamValue menu.paramName opt.value actions.baseUrl)) do
       span_ [class_ "text-textWeak"] $ toHtml $ menu.label <> ":"
       toHtml opt.label
       faSprite_ "xmark" "regular" "w-2.5 h-2.5 text-textWeak"

@@ -201,3 +201,16 @@ test("mobile container search remains reachable and preserves drawer identity", 
   await expect(drawer.getByText(/^Node \/ host:\s*identity-node-b$/)).toBeVisible();
   await expect(drawer.getByText(/^Namespace:\s*identity-a$/)).toBeVisible();
 });
+
+
+test("mobile container CPU fits initially with an active cluster filter", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.goto(`/p/${DEMO_PROJECT}/infrastructure/containers?cluster=${CLUSTER}&from=2024-12-31T23:00:00Z&to=2025-01-01T00:00:00Z`, { waitUntil: "domcontentloaded" });
+  await expect(page.locator("[data-deferred-shell]")).toHaveCount(0);
+  const rows = page.locator(`tr[role="button"][data-hx-get*="container=${CONTAINER}"]`);
+  await expect(rows).toHaveCount(4);
+  const cpu = rows.filter({ hasText: "Node / host: identity-node-b" }).locator("td").nth(4).locator("span");
+  await expect(cpu).toHaveText("4.000");
+  await expect(cpu).toBeInViewport({ ratio: 0.95 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
