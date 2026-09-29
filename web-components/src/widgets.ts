@@ -955,6 +955,11 @@ const chartWidget = (widgetData: WidGetData) => {
   const { chartType, opt, chartId } = widgetData,
     chartEl = $(chartId),
     liveStreamCheckbox = $('streamLiveData') as HTMLInputElement;
+  const settling = chartEl?.closest('.htmx-settling');
+  if (settling) {
+    settling.addEventListener('htmx:after:settle', () => chartWidget(widgetData), { once: true });
+    return;
+  }
   let intervalId: NodeJS.Timeout | null = null;
   const controller = new AbortController();
 

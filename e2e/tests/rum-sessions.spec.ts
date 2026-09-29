@@ -551,3 +551,60 @@ test("initial RUM field panel does not depend on application globals", async ({ 
     await test.info().attach("initial-rum-errors", { body: JSON.stringify(errors), contentType: "application/json" });
   }
 });
+
+
+test("refreshed vital charts remain registered on their current elements", async ({ page }) => {
+  test.skip(!process.env.E2E_BASE_URL, "Requires the disposable e2e database");
+  const scope = `e2e-vital-registry-${Date.now()}`;
+  const cleanup = `DELETE FROM otel_metrics WHERE project_id='${DEMO_PROJECT}' AND resource___service___name='${scope}'`;
+  sql(`INSERT INTO otel_metrics (project_id,id,series_id,timestamp,metric_name,metric_type,metric_unit,value,resource,resource___service___name)
+    SELECT '${DEMO_PROJECT}',gen_random_uuid(),'${scope}' || name,at,'browser.web_vital.' || name,'GAUGE','ms',value,
+      jsonb_build_object('service',jsonb_build_object('name','${scope}')),'${scope}'
+    FROM (VALUES ('fcp',now()-interval '10 minutes',20),('ttfb',now()-interval '10 minutes',100),
+      ('fcp',now()-interval '2 hours',80),('ttfb',now()-interval '2 hours',500)) AS points(name,at,value)`);
+  const assertCharts = async (span: number, samples: number) => {
+    for (const name of ["fcp", "ttfb"]) {
+      const chart = page.locator(`#rum-vital-trend-${name}`);
+      await chart.scrollIntoViewIfNeeded();
+      await expect.poll(() => chart.evaluate(element => {
+        const instance = (window as any).echarts?.getInstanceByDom(element);
+        const extent = instance?.getModel().getComponent("xAxis").axis.scale.getExtent();
+        const data = instance?.getOption().dataset[0].source;
+        return [Boolean(instance && instance.getDom() === element && !instance.isDisposed()),
+          element.querySelectorAll("canvas").length, extent ? extent[1] - extent[0] : null,
+          data?.slice(1).map((point: number[]) => point[1]).sort((a: number, b: number) => a - b) ?? []];
+      })).toEqual([true, 1, span, (name === "fcp" ? [20, 80] : [100, 500]).slice(0, samples)]);
+    }
+  };
+  const waitForTrend = () => page.evaluate(() => new Promise<void>(resolve => {
+    const settled = (event: Event) => {
+      if ((event.target as HTMLElement).id !== "rum-panel-vital_trend") return;
+      document.removeEventListener("htmx:after:settle", settled);
+      resolve();
+    };
+    document.addEventListener("htmx:after:settle", settled);
+  }));
+  try {
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto(`/p/${DEMO_PROJECT}/rum?tab=performance&since=1H&service_scope=${scope}`);
+    await page.getByRole("button", { name: "Pause live data", exact: true }).first().click();
+    await expect(page.locator("[data-time-transport]")).toHaveAttribute("data-interval", "0");
+    await assertCharts(60 * 60 * 1000, 1);
+    await page.locator("[data-live-range]").click();
+    const changed = waitForTrend();
+    await page.locator('#n-timepicker-popover button[data-value="24H"]').click();
+    await changed;
+    await expect(page.locator("#n-currentRange")).toHaveText("Last 24 hours");
+    await assertCharts(24 * 60 * 60 * 1000, 2);
+    await page.evaluate(() => {
+      (window as any).__rumPriorCharts = ["fcp", "ttfb"].map(name => (window as any).echarts.getInstanceByDom(document.getElementById(`rum-vital-trend-${name}`)));
+    });
+    const refreshed = waitForTrend();
+    await page.evaluate(() => window.dispatchEvent(new Event("update-query")));
+    await refreshed;
+    await assertCharts(24 * 60 * 60 * 1000, 2);
+    expect(await page.evaluate(() => (window as any).__rumPriorCharts.every((instance: any) => instance.isDisposed() && !(window as any).echarts.getInstanceById(instance.id)))).toBe(true);
+  } finally {
+    sql(cleanup);
+  }
+});
