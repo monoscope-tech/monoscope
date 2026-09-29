@@ -214,3 +214,33 @@ test("mobile container CPU fits initially with an active cluster filter", async 
   await expect(cpu).toBeInViewport({ ratio: 0.95 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
+
+
+for (const width of [390, 1280]) {
+  test(`container CPU fits initially with collector image and workload metadata at ${width}px`, async ({ page }) => {
+    test.skip(!process.env.E2E_BASE_URL, "Requires a disposable fixture server");
+    const cluster = "13269e1e-e624-4d51-a30d-86524c5041f5";
+    const name = "opentelemetry-collector";
+    const cleanup = `DELETE FROM otel_metrics WHERE project_id='${DEMO_PROJECT}' AND resource->'k8s'->'cluster'->>'uid'='${cluster}' AND resource->'k8s'->'container'->>'name'='${name}';`;
+    const resource = JSON.stringify({ container: { image: { name: "opentelemetry-collector-k8s", tag: "0.149.0" } }, k8s: { container: { name }, pod: { name: "monoscope-agent-opentelemetry-collector-agent-2d4kw" }, namespace: { name: "default" }, cluster: { uid: cluster }, node: { name: "vps-ca6245f8" }, daemonset: { name: "monoscope-agent-opentelemetry-collector-agent" } } });
+    sql(cleanup + [["container.cpu.usage", 4], ["k8s.container.ready", 1]].map(([metric, value]) => `
+      INSERT INTO otel_metrics (project_id,id,series_id,timestamp,metric_name,metric_type,value,resource___k8s___container___name,resource___k8s___pod___name,resource___k8s___namespace___name,resource)
+      VALUES ('${DEMO_PROJECT}',gen_random_uuid(),'e2e-collector-${metric}','2024-12-31T23:59:00Z','${metric}','GAUGE',${value},'${name}','monoscope-agent-opentelemetry-collector-agent-2d4kw','default','${resource}');`).join(""));
+    try {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(`/p/${DEMO_PROJECT}/infrastructure/containers?cluster=${cluster}&from=2024-12-31T23:00:00Z&to=2025-01-01T00:01:00Z`, { waitUntil: "domcontentloaded" });
+      await expect(page.locator("[data-deferred-shell]")).toHaveCount(0);
+      const row = page.locator(`tr[role="button"][data-hx-get*="container=${name}"]`);
+      await expect(row).toHaveCount(1);
+      await expect(row.locator("td").first()).toContainText("Ready");
+      await expect(row.locator('[data-tippy-content^="Image:"]')).toHaveText("opentelemetry-collector-k8s:0.149.0");
+      await expect(row.locator('[data-tippy-content^="Workload:"]')).toHaveText("monoscope-agent-opentelemetry-collector-agent");
+      const cpu = row.locator("td").nth(4).locator("span");
+      await expect(cpu).toHaveText("4.000");
+      await expect(cpu).toBeInViewport({ ratio: 0.95 });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    } finally {
+      sql(cleanup);
+    }
+  });
+}

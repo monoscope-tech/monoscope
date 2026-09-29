@@ -207,7 +207,7 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
           $ runtimeIcon_ vm.row "w-3.5 h-3.5 fill-iconNeutral"
         span_ [class_ "min-w-0 truncate font-medium text-textStrong", data_ "tippy-content" $ "Container: " <> vm.row.containerName] $ toHtml vm.row.containerName
         span_ [class_ "hidden max-md:inline-flex"] $ readyCell vm.row
-      div_ [class_ "flex items-center gap-2 min-w-0 overflow-hidden text-xs text-textWeak"] do
+      div_ [class_ "flex items-center gap-2 min-w-0 overflow-hidden text-xs text-textWeak max-md:flex-wrap"] do
         whenJust vm.row.image \img ->
           let image = shortImage img <> maybe "" (":" <>) vm.row.imageTag
            in span_ [class_ "min-w-0 flex-1 truncate", data_ "tippy-content" $ "Image: " <> image] $ toHtml image
