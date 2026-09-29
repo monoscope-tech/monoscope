@@ -613,6 +613,26 @@ spec = sequential $ aroundAll withResources do
       -- slice of the selected range rather than a hard-coded "last 15 minutes from now".
       thenRows <- runTestBg frozenTime tr $ containersInWindow False testPid (addUTCTime (-86400) frozenTime) (addUTCTime (-10800) frozenTime)
       map fst (rowsByName thenRows) `shouldContain` ["long-gone"]
+
+    it "containerSummary_describesTheEffectiveSliceAtTheSelectedWindowEnd" \tr -> do
+      key <- createTestAPIKey tr testPid "containers-summary-key"
+      forM_ ([("summary-recent", -15), ("summary-ten-min", -600), ("summary-historical", -10815)] :: [(Text, NominalDiffTime)]) \(name, offset) ->
+        ingestMetric tr key (k8sResource "summary-window" name name) [] "container.cpu.usage" 1 (addUTCTime offset frozenTime)
+      Cache.purge tr.trATCtx.infrastructureCache
+      forM_
+        ( [ (Nothing, Nothing, Just "5M", "5m", ["summary-recent"])
+          , (Nothing, Nothing, Just "24H", "15m", ["summary-recent", "summary-ten-min"])
+          , (Just "2024-12-31T20:00:00Z", Just "2024-12-31T21:00:00Z", Nothing, "15m", ["summary-historical"])
+          , (Nothing, Nothing, Just "30S", "30s", ["summary-recent"])
+          ]
+            :: [(Maybe Text, Maybe Text, Maybe Text, Text, [Text])]
+        )
+        \(from, to, since, duration, expected) -> do
+          (_, page@(Containers.ContainersPage (PageCtx _ result))) <- testServant tr $ Containers.containersGetH testPid Nothing (Just "summary-window") Nothing Nothing Nothing from to since (Just "1")
+          table <- deferredBody result
+          V.toList ((.containerName) . (.row) <$> table.rows) `shouldMatchList` expected
+          toText (Lucid.renderText $ Lucid.toHtml page)
+            `shouldContainAll` ["containers reporting in the final " <> duration <> " of this range"]
   where
     withResources k = withTestResources \tr -> do
       -- TestUtils wires native TF through Hasql; charts also need its postgres-simple pool.

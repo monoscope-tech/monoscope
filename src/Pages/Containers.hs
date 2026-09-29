@@ -14,6 +14,7 @@ module Pages.Containers (containersGetH, containerDetailGetH, ContainersGet (..)
 import Data.Default (def)
 import Data.Text qualified as T
 import Data.Text.Display (display)
+import Data.Time (NominalDiffTime, diffUTCTime)
 import Data.Vector qualified as V
 import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
@@ -87,6 +88,9 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
   appCtx <- Reader.ask @AuthContext
   now <- Time.currentTime
   let window = TimePicker.mkTimeWindow now fromParam toParam sinceParam
+      effectiveDuration = min freshnessWindow $ diffUTCTime window.toTime window.fromTime
+      (minutes, fraction) = properFraction (effectiveDuration / 60) :: (Integer, NominalDiffTime)
+      freshnessLabel = if fraction == 0 then show minutes <> "m" else show effectiveDuration
       filters = ContainerFilters runtimeM namespaceM nodeM imageM clusterM
       path = "/p/" <> pid.toText <> "/infrastructure/containers"
       baseUrl = TimePicker.windowUrl path [] window
@@ -126,10 +130,7 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
                       , menu "Image" "image" filters.image (.image)
                       ]
               , showFilterRail = True
-              , -- Says the freshness window, not the picker's: the pivot reads the newest
-                -- datapoint per series from the last few minutes of the range, so a wide
-                -- picker window does not mean a wide inventory. See 'Containers.freshnessWindow'.
-                resultSummary = Just $ "Showing " <> show (length rows) <> " of " <> show (V.length allRows) <> " containers reporting in the last " <> freshnessLabel
+              , resultSummary = Just $ "Showing " <> show (length rows) <> " of " <> show (V.length allRows) <> " containers reporting in the final " <> freshnessLabel <> " of this range"
               , exportName = Just "containers"
               , zeroState =
                   Just
@@ -228,15 +229,6 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
 
 newtype ContainersGet = ContainersPage (PageCtx (Deferred (Table ContainerVM)))
   deriving newtype (ToHtml)
-
-
--- | 'freshnessWindow' rendered for the result summary, so the number the page quotes and the
--- window the query actually read can never drift apart.
---
--- >>> freshnessLabel
--- "15m"
-freshnessLabel :: Text
-freshnessLabel = show (round (freshnessWindow / 60) :: Int) <> "m"
 
 
 -- | A missing value is an em dash, never a zero. Datadog is explicit that without a limit it
