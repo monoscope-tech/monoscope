@@ -209,3 +209,25 @@ test("settled session search preserves scope and survives reload and a shared UR
     sql(cleanup);
   }
 });
+
+test("Overview counts a session once when its events span chart intervals", async ({ page }) => {
+  test.skip(!process.env.E2E_BASE_URL, "Requires the disposable e2e database");
+  const cleanup = `DELETE FROM otel_logs_and_spans WHERE project_id='${DEMO_PROJECT}' AND resource___deployment___environment___name='e2e-overview-session'`;
+  sql(`${cleanup};
+    INSERT INTO otel_logs_and_spans (project_id,summary,name,kind,timestamp,start_time,end_time,duration,attributes,resource,
+      attributes___session___id,resource___telemetry___sdk___language,resource___service___name,resource___deployment___environment___name)
+    SELECT '${DEMO_PROJECT}',ARRAY['documentLoad'],'documentLoad','span',at,at,at+interval '10 milliseconds',10000000,
+      jsonb_build_object('session',jsonb_build_object('id','overview-shared-session'),'url',jsonb_build_object('path','/overview-count')),
+      jsonb_build_object('telemetry',jsonb_build_object('sdk',jsonb_build_object('language','webjs')),'service',jsonb_build_object('name','e2e-overview-session'),
+        'deployment',jsonb_build_object('environment',jsonb_build_object('name','e2e-overview-session'))),
+      'overview-shared-session','webjs','e2e-overview-session','e2e-overview-session'
+    FROM (VALUES (now()-interval '40 minutes'),(now()-interval '10 minutes')) AS events(at)`);
+  try {
+    await page.goto(`/p/${DEMO_PROJECT}/rum?since=1H&environment=e2e-overview-session&service_scope=e2e-overview-session`);
+    await expect(page.locator("#rum-stat-pageviewsValue")).toHaveText("2 views");
+    await expect(page.locator("#rum-stat-p75Value")).toHaveText("10.0ms");
+    await expect(page.locator("#rum-stat-sessionsValue")).toHaveText("1 sessions");
+  } finally {
+    sql(cleanup);
+  }
+});
