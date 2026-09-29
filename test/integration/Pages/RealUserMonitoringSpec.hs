@@ -166,12 +166,16 @@ spec = sequential $ aroundAll withTestResources do
       T.isInfixOf "Merged replay" replaySessions `shouldBe` True
 
     it "deferredRUMPanel_omitsPageChrome_preservesPanelMarkup" \tr -> do
-      (_, page@(RUM.RumGet (PageCtx _ body))) <- testServant tr $ RUM.rumGetH testPid (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "pages") (Just "1") Nothing
+      purgeRumCaches tr
+      apiKey <- createTestAPIKey tr testPid "rum-panel-body-key"
+      otelBrowserSpan apiKey "88000000000000000000000000000008" "8800000000000001" "session-panel-body" "panel-body-browser" tr
+      let scoped = tr{trSessAndHeader = fmap (\session -> session{Projects.service = Just "panel-body-browser"}) tr.trSessAndHeader}
+      (_, page@(RUM.RumGet (PageCtx _ body))) <- testServant scoped $ RUM.rumGetH testPid (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "pages") (Just "1") Nothing
       let rendered = Lucid.renderText $ Lucid.toHtml page
       (rendered == Lucid.renderText (Lucid.toHtml body)) `shouldBe` True
-      toStrict rendered `shouldContainAll` ["id=\"rum-page\"", "id=\"rum-panel-pages\"", "Top pages", "/checkout"]
+      toStrict rendered `shouldContainAll` ["id=\"rum-page\"", "id=\"rum-panel-pages\"", "Top pages", "/cart"]
       T.isInfixOf "<html" (toStrict rendered) `shouldBe` False
-      (_, fullPage) <- testServant tr $ RUM.rumGetH testPid (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing (Just "1") Nothing
+      (_, fullPage) <- testServant scoped $ RUM.rumGetH testPid (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing (Just "1") Nothing
       T.isInfixOf "<html" (toStrict $ Lucid.renderText $ Lucid.toHtml fullPage) `shouldBe` True
 
     it "panelLinks_carryKqlTheLogExplorerCanParse" \tr -> do
@@ -359,21 +363,21 @@ spec = sequential $ aroundAll withTestResources do
               map (.path) loaded.pages `shouldSatisfy` elem "https://shop.example/cart"
             DeferredShell{} -> expectationFailure "expected the pages panel"
 
-    it "panelCache_concurrentColdRequests_shareOneTelemetryReadAndWrite" \tr -> do
+    it "panelCache_concurrentColdRequests_shareOneLookupAndPublication" \tr -> do
       purgeRumCaches tr
       apiKey <- createTestAPIKey tr testPid "rum-flight-key"
       otelBrowserSpan apiKey "82000000000000000000000000000008" "8200000000000001" "session-flight" "flight-browser" tr
       let alter sql = withResource tr.trPool $ \conn -> void $ PG.execute_ conn sql
           fetch = renderPanel tr Nothing Nothing Nothing Nothing (Just "flight-browser") (Just "pages")
           waitForReaders expected = do
-            [PG.Only readers] <- withResource tr.trPool $ \conn -> PG.query_ conn "SELECT count(*)::bigint FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%otel_logs_and_spans%'"
+            [PG.Only readers] <- withResource tr.trPool $ \conn -> PG.query_ conn "SELECT count(*)::bigint FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%rum_panel_cache%'"
             unless (readers >= (expected :: Int64)) $ threadDelay 10000 >> waitForReaders expected
       E.bracket_
         (alter "CREATE SEQUENCE rum_flight_writes; CREATE FUNCTION count_rum_flight_write() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM nextval('rum_flight_writes'); RETURN NEW; END $$; CREATE TRIGGER count_rum_flight_write BEFORE INSERT ON rum_panel_cache FOR EACH ROW EXECUTE FUNCTION count_rum_flight_write()")
         (alter "DROP TRIGGER count_rum_flight_write ON rum_panel_cache; DROP FUNCTION count_rum_flight_write(); DROP SEQUENCE rum_flight_writes")
         $ withResource tr.trPool \conn ->
           E.bracket_
-            (void $ PG.execute_ conn "BEGIN; LOCK TABLE otel_logs_and_spans IN ACCESS EXCLUSIVE MODE")
+            (void $ PG.execute_ conn "BEGIN; LOCK TABLE rum_panel_cache IN ACCESS EXCLUSIVE MODE")
             (void $ PG.execute_ conn "ROLLBACK")
             $ withAsync fetch \leader -> withAsync fetch \follower -> do
               observed <-
