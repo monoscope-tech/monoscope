@@ -403,6 +403,40 @@ test("Performance and Overview panels use the current picker window", async ({ p
   }
 });
 
+test("mobile vital rows keep value, assessment, coverage and observations together", async ({ page }) => {
+  test.skip(!process.env.E2E_BASE_URL, "Requires the disposable e2e database");
+  const scope = `e2e-mobile-vitals-${Date.now()}`;
+  const cleanup = `DELETE FROM otel_metrics WHERE project_id='${DEMO_PROJECT}' AND resource___service___name='${scope}'`;
+  sql(`INSERT INTO otel_metrics (project_id,id,series_id,timestamp,start_timestamp,metric_name,metric_type,metric_unit,value,aggregation_temporality,distribution_count,hist_bucket_counts,hist_explicit_bounds,resource,resource___service___name)
+    SELECT '${DEMO_PROJECT}',gen_random_uuid(),'${scope}' || name,now()-interval '10 seconds',now()-interval '1 minute',
+      'browser.web_vital.' || name,type,unit,value,'DELTA',count,buckets,bounds,jsonb_build_object('service',jsonb_build_object('name','${scope}')),'${scope}'
+    FROM (VALUES ('lcp','HISTOGRAM','ms',NULL::float8,100::bigint,ARRAY[80,20]::bigint[],ARRAY[100]::float8[]),
+      ('fcp','GAUGE','ms',22.5,NULL,NULL,NULL),('ttfb','SUM','ms',100,NULL,NULL,NULL)) AS points(name,type,unit,value,count,buckets,bounds)`);
+  try {
+    for (const width of [390, 320, 1440]) {
+      await page.setViewportSize({ width, height: 844 });
+      await page.goto(`/p/${DEMO_PROJECT}/rum?tab=performance&since=1H&service_scope=${scope}`);
+      const table = page.getByRole("heading", { name: "Web Vitals field performance", exact: true }).locator("xpath=ancestor::section[1]").getByRole("table");
+      await expect(table.getByRole("row")).toHaveCount(6);
+      await expect(table.getByRole("cell")).toHaveCount(35);
+      await expect(table).toContainText("Estimated within");
+      await expect(table).toContainText("Exact quantile");
+      await expect(table).toContainText("Unsupported population");
+      for (const theme of ["light", "dark"]) {
+        await page.evaluate(theme => { if (document.body.dataset.theme !== theme) (window as any).toggleDarkMode(); }, theme);
+        expect(await table.locator("tbody tr").evaluateAll(rows => rows.every(row => [...row.querySelectorAll("td")].every(cell => {
+          const bounds = cell.getBoundingClientRect();
+          return bounds.width > 0 && bounds.left >= 0 && bounds.right <= window.innerWidth && cell.scrollWidth <= cell.clientWidth;
+        })))).toBe(true);
+        await table.locator("tbody tr").first().screenshot({ path: test.info().outputPath(`vitals-${theme}-${width}.png`) });
+      }
+      await expect(table.getByRole("columnheader", { name: "Coverage", exact: true })).toHaveCount(1);
+    }
+  } finally {
+    sql(cleanup);
+  }
+});
+
 test("singleton vital trend keeps the selected time axis", async ({ page }) => {
   test.skip(!process.env.E2E_BASE_URL, "Requires the disposable e2e database");
   const scope = `e2e-vital-axis-${Date.now()}`;

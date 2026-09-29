@@ -1654,20 +1654,26 @@ pageVitalsTable_ links points = rumPanel_ "Web Vitals by page" "Exact page URLs;
 vitalsTable_ :: [Vital] -> Html ()
 vitalsTable_ vitals = do
   rumPanel_ "Web Vitals field performance" "Intervals ending in this range can include earlier observations. Histogram estimates assume uniform values within a bucket." Nothing do
-    div_ [class_ "overflow-x-auto"] $ table_ [class_ "table table-sm w-full"] do
-      thead_ $ tr_ $ th_ "Metric" >> th_ [class_ "text-right"] "P75" >> th_ [class_ "text-right"] "Good" >> th_ [class_ "text-right"] "Poor" >> th_ "Assessment" >> th_ "Coverage" >> th_ [class_ "text-right"] "Observations"
-      tbody_ $ forM_ vitals \vital -> tr_ do
-        td_ do
+    div_ [class_ "overflow-x-auto"] $ table_ [class_ "table table-sm w-full max-sm:[&_td]:block max-sm:[&_td]:min-w-0 max-sm:[&_td]:border-0 max-sm:[&_td]:py-1"] do
+      thead_ [class_ "max-sm:sr-only"] $ tr_ $ th_ "Metric" >> th_ [class_ "text-right"] "P75" >> th_ [class_ "text-right"] "Good" >> th_ [class_ "text-right"] "Poor" >> th_ "Assessment" >> th_ "Coverage" >> th_ [class_ "text-right"] "Observations"
+      tbody_ $ forM_ vitals \vital -> tr_ [class_ "max-sm:grid max-sm:grid-cols-2 max-sm:border-b max-sm:border-strokeWeak max-sm:py-3 max-sm:last:border-0"] do
+        td_ [class_ "max-sm:col-span-2"] do
           strong_ [class_ "block text-sm font-medium text-textStrong"] $ toHtml vital.label
           span_ [class_ "text-xs text-textWeak"] $ toHtml vital.description
-        td_ [class_ $ "text-right font-semibold tabular-nums " <> (ratingStyle (vitalRating vital)).textClass] $ toHtml $ formatVital vital
-        td_ [class_ "text-right tabular-nums text-textWeak"] $ toHtml $ formatVitalThreshold vital vital.goodAt
-        td_ [class_ "text-right tabular-nums text-textWeak"] $ toHtml $ formatVitalThreshold vital vital.poorAt
-        td_ $ span_ [class_ $ "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium " <> (ratingStyle (vitalRating vital)).badgeClass] do
+        td_ [class_ $ "text-right font-semibold tabular-nums max-sm:order-1 max-sm:text-left " <> (ratingStyle (vitalRating vital)).textClass] do
+          span_ [class_ "mr-2 text-xs font-normal text-textWeak sm:hidden", Aria.hidden_ "true"] "P75"
+          toHtml $ formatVital vital
+        td_ [class_ "text-right tabular-nums text-textWeak max-sm:order-5 max-sm:text-left"] do
+          span_ [class_ "mr-2 text-xs sm:hidden", Aria.hidden_ "true"] "Good"
+          toHtml $ formatVitalThreshold vital vital.goodAt
+        td_ [class_ "text-right tabular-nums text-textWeak max-sm:order-6 max-sm:text-left"] do
+          span_ [class_ "mr-2 text-xs sm:hidden", Aria.hidden_ "true"] "Poor"
+          toHtml $ formatVitalThreshold vital vital.poorAt
+        td_ [class_ "max-sm:order-2 max-sm:text-right"] $ span_ [class_ $ "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium " <> (ratingStyle (vitalRating vital)).badgeClass] do
           span_ [class_ $ "h-2 w-2 rounded-full " <> (ratingStyle (vitalRating vital)).fillClass, Aria.hidden_ "true"] ""
           toHtml (ratingStyle (vitalRating vital)).label
-        td_ [class_ "text-xs text-textWeak"] $ toHtml $ measurementNote vital vital.measurement
-        td_ [class_ "text-right tabular-nums text-textWeak"] $ toHtml $ observationLabel vital.measurement
+        td_ [class_ "text-xs text-textWeak max-sm:order-4 max-sm:col-span-2"] $ toHtml $ measurementNote vital vital.measurement
+        td_ [class_ "text-right tabular-nums text-textWeak max-sm:order-3 max-sm:col-span-2 max-sm:text-left"] $ toHtml $ observationLabel vital.measurement
 
 
 -- | Every RUM card is the shared 'Components.panel_' flush-card variant.
