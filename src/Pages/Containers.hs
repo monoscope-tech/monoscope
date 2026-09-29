@@ -9,7 +9,7 @@
 -- happen here in Haskell over that result. That keeps the store doing exactly one short-window
 -- read per page view, which matters because wide aggregates over @otel_metrics@ are the query
 -- shape that has repeatedly OOM-killed TimeFusion.
-module Pages.Containers (containersGetH, containerDetailGetH, ContainersGet (..), ContainerVM (..), ContainerFilters (..), applyFilters, runtimeLabel, formatBytes, emDash_, kqlFilter, nodeField, clusterField) where
+module Pages.Containers (containersGetH, containerDetailGetH, ContainersGet (..), ContainerVM (..), ContainerFilters (..), applyFilters, runtimeLabel, formatBytes, coresText, emDash_, readyBadge_, kqlFilter, nodeField, clusterField) where
 
 import Data.Default (def)
 import Data.Text qualified as T
@@ -161,7 +161,7 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
       , col "Pod" (textCell (.podName)) & withAttrs [class_ "w-72 max-w-72 overflow-hidden max-lg:hidden"]
       , col "Namespace" (textCell (.namespace)) & withAttrs [class_ "w-32 max-lg:hidden"]
       , col "Node" (textCell (.nodeName)) & withAttrs [class_ "w-36 max-md:hidden"]
-      , col "CPU" (numCell (showFFloat' 3) (.cpuCores)) & withAttrs [class_ "w-20 text-right"]
+      , col "CPU (cores)" (numCell (showFFloat' 3) (.cpuCores)) & withAttrs [class_ "w-24 text-right"]
       , col "CPU limit used" (pctCell "CPU limit used" cpuPctOfLimit) & withAttrs [class_ "w-36 max-md:hidden"]
       , col "Memory" (numCell formatBytes (.memBytes)) & withAttrs [class_ "w-28 text-right max-md:hidden"]
       , col "Memory limit used" (pctCell "Memory limit used" memPctOfLimit) & withAttrs [class_ "w-40 max-md:hidden"]
@@ -213,7 +213,8 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
         whenJust vm.row.image \img ->
           let image = shortImage img <> maybe "" (":" <>) vm.row.imageTag
            in span_ [class_ "min-w-0 flex-1 truncate", data_ "tippy-content" $ "Image: " <> image] $ toHtml image
-        whenJust vm.row.workload \workload -> span_ [class_ "badge badge-xs badge-ghost min-w-0 max-w-36 truncate", data_ "tippy-content" $ "Workload: " <> workload] $ toHtml workload
+        -- The badge is a flex box, so the ellipsis has to live on an inner block or the name clips at its start.
+        whenJust vm.row.workload \workload -> span_ [class_ "badge badge-xs badge-ghost min-w-0 max-w-36 truncate", data_ "tippy-content" $ "Workload: " <> workload] $ span_ [class_ "min-w-0 truncate"] $ toHtml workload
       div_ [class_ "hidden max-lg:flex flex-col gap-0.5 text-xs leading-normal text-textWeak"]
         $ forM_ ([("Pod", vm.row.podName), ("Namespace", vm.row.namespace), ("Cluster", vm.row.cluster), ("Node / host", vm.row.nodeName)] :: [(Text, Maybe Text)]) \(label, value) ->
           whenJust value \v -> span_ [class_ "whitespace-normal break-all"] $ toHtml $ label <> ": " <> v
@@ -239,11 +240,17 @@ emDash_ = span_ [class_ "text-textWeak"] "—"
 
 
 readyCell :: ContainerRow -> Html ()
-readyCell row = case row.ready of
-  Nothing -> emDash_
-  Just v
-    | v > 0 -> span_ [class_ "badge badge-sm badge-success whitespace-nowrap", data_ "tippy-content" "Latest reported readiness: Ready"] "Ready"
-    | otherwise -> span_ [class_ "badge badge-sm badge-error whitespace-nowrap", data_ "tippy-content" "Latest reported readiness: Not ready"] "Not ready"
+readyCell row = maybe emDash_ (readyBadge_ . (> 0)) row.ready
+
+
+-- | Ready is the expected state, so it reads as text with a dot; only the exception gets a filled badge.
+readyBadge_ :: Bool -> Html ()
+readyBadge_ True = span_ [class_ "inline-flex items-center gap-1.5 whitespace-nowrap text-textStrong", data_ "tippy-content" "Latest reported readiness: Ready"] $ span_ [class_ "h-1.5 w-1.5 rounded-full bg-fillSuccess-strong", term "aria-hidden" "true"] "" >> "Ready"
+readyBadge_ False = span_ [class_ "badge badge-sm badge-error whitespace-nowrap", data_ "tippy-content" "Latest reported readiness: Not ready"] "Not ready"
+
+
+coresText :: Double -> Text
+coresText value = showFFloat' 3 value <> " cores"
 
 
 runtimeIcon_ :: ContainerRow -> Text -> Html ()
@@ -292,7 +299,7 @@ containerDetailGetH pid containerM podM scopeM clusterM namespaceM nodeM fromPar
             span_ [class_ "text-xs text-textWeak"] $ toHtml $ "Signal coverage " <> show availableSignals <> "/4"
           factGrid_
             "grid-cols-4 max-sm:grid-cols-2"
-            [ ("CPU used", dash $ (\value -> showFFloat' 3 value <> " cores") <$> r.cpuCores)
+            [ ("CPU used", dash $ coresText <$> r.cpuCores)
             , ("CPU / limit", pct $ cpuPctOfLimit r)
             , ("Memory used", dash $ formatBytes <$> r.memBytes)
             , ("Memory / limit", pct $ memPctOfLimit r)

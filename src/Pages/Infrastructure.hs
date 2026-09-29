@@ -39,7 +39,7 @@ import Relude
 import Relude.Extra.Tuple (dup)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (drawerLoadAttrs_, drawerRowAttrs_, faSprite_, formatBytes, infrastructureNavTabs_, showFFloat')
+import Utils (drawerLoadAttrs_, drawerRowAttrs_, faSprite_, formatBytes, infrastructureNavTabs_, showFFloat', timeScopedUrl)
 
 
 infraUrl :: Projects.ProjectId -> Text -> [(Text, Text)] -> TimePicker.TimeWindow -> Text
@@ -215,14 +215,14 @@ hostsTable pid window url filters grouping hosts allHosts =
           , bulkActionsInHeader = Just 0
           , containerClasses = "w-full mx-auto space-y-2 group/columns"
           }
-    , columns = hostColumns pid window
+    , columns = hostColumns $ any (\h -> isJust h.provider || isJust h.region) allHosts
     , rows = hostEntries grouping hosts
     , features =
         def
           { search = Just ClientSide
           , searchPlaceholder = Just "Search hosts"
           , rowAttrs = Just $ \case HostGroupRow _ _ -> []; HostItem host -> drawerRowAttrs_ $ hostDetailUrl pid window host.name
-          , header = Just $ timeRefreshListener_ "hostsContainer" url >> hostGroupControl pid window filters grouping (V.length hosts)
+          , header = Just $ timeRefreshListener_ "hostsContainer" url >> hostGroupControl pid window filters grouping
           , showFilterRail = True
           , resultSummary = Just $ "Showing " <> show (V.length hosts) <> " of " <> show (V.length allHosts) <> " hosts"
           , exportName = Just "hosts"
@@ -251,10 +251,10 @@ hostsTable pid window url filters grouping hosts allHosts =
     hostEntries g = V.fromList . concatMap (\(label, hs) -> HostGroupRow label (length hs) : map HostItem (sortOn (.name) hs)) . groupHosts g
 
 
-hostGroupControl :: Projects.ProjectId -> TimePicker.TimeWindow -> HostFilters -> HostGroup -> Int -> Html ()
-hostGroupControl pid window filters grouping count =
-  div_ [class_ "flex flex-wrap items-center justify-between gap-2 border-b border-strokeWeak px-3 py-2"] do
-    span_ [class_ "text-xs text-textWeak", role_ "status", Aria.live_ "polite"] $ toHtml $ show count <> " hosts"
+-- | The table's own result summary is the live row count; a second count here would announce twice.
+hostGroupControl :: Projects.ProjectId -> TimePicker.TimeWindow -> HostFilters -> HostGroup -> Html ()
+hostGroupControl pid window filters grouping =
+  div_ [class_ "flex justify-end px-3"] do
     form_ [method_ "get", action_ $ "/p/" <> pid.toText <> "/infrastructure/hosts", class_ "flex shrink-0 items-center gap-2 whitespace-nowrap"] do
       TimePicker.timeHiddenInputs_ window.fromQuery window.toQuery window.sinceQuery
       forM_ [(field, value) | (field, Just value) <- [("provider", filters.provider), ("region", filters.region), ("os", filters.osType), ("integration", filters.integration)]] \(field, value) ->
@@ -265,35 +265,36 @@ hostGroupControl pid window filters grouping count =
           option_ ([value_ value] <> [selected_ "" | value == hostGroupParam grouping]) $ toHtml label
 
 
-hostColumns :: Projects.ProjectId -> TimePicker.TimeWindow -> [Column HostListRow]
-hostColumns pid window =
-  [ col "Host" nameCell & withAttrs [class_ "min-w-52"]
-  , col "Configuration" configCell & withAttrs [class_ "w-44 max-lg:hidden"]
-  , col "System" systemCell & withAttrs [class_ "w-32 max-xl:hidden"]
-  , col "CPU" (metricCell (.cpuPct)) & withAttrs [class_ "w-32"]
-  , col "Memory" (metricCell (.memoryPct)) & withAttrs [class_ "w-32"]
-  , col "Storage" (metricCell (.storagePct)) & withAttrs [class_ "host-col-storage w-32 max-lg:hidden"]
-  , col "Load (1m)" (itemOnly $ plainCell . fmap (showFFloat' 2) . (.load1)) & withAttrs [class_ "host-col-load w-24 text-right max-xl:hidden"]
-  , col "Uptime" uptimeCell & withAttrs [class_ "w-24 max-xl:hidden"]
-  , col "Containers" containersCell & withAttrs [class_ "w-24 text-right"]
-  , col "Integrations" integrationsCell & withAttrs [class_ "w-64 max-md:hidden"]
-  ]
+-- | Configuration only earns its width when some host reports a provider or region; it is
+-- decided over the unfiltered inventory so a facet never toggles a column.
+hostColumns :: Bool -> [Column HostListRow]
+hostColumns hasConfiguration =
+  [col "Host" nameCell & withAttrs [class_ "min-w-52"]]
+    <> [col "Configuration" configCell & withAttrs [class_ "w-44 max-lg:hidden"] | hasConfiguration]
+    <> [ col "System" systemCell & withAttrs [class_ "w-32 max-xl:hidden"]
+       , col "CPU" (metricCell (.cpuPct)) & withAttrs [class_ "w-32"]
+       , col "Memory" (metricCell (.memoryPct)) & withAttrs [class_ "w-32"]
+       , col "Storage" (metricCell (.storagePct)) & withAttrs [class_ "host-col-storage w-32 max-lg:hidden"]
+       , col "Load (1m)" (itemOnly $ plainCell . fmap (showFFloat' 2) . (.load1)) & withAttrs [class_ "host-col-load w-24 text-right max-xl:hidden"]
+       , col "Uptime" uptimeCell & withAttrs [class_ "w-24 max-xl:hidden"]
+       , col "Containers" containersCell & withAttrs [class_ "w-24 text-right"]
+       , col "Integrations" integrationsCell & withAttrs [class_ "w-56 max-md:hidden"]
+       ]
   where
+    -- The row itself opens the drawer; a button in the name would be a second tab stop for the same action.
     nameCell = \case
       HostGroupRow label count -> div_ [class_ "flex items-center gap-2 py-1 font-semibold text-textStrong"] $ toHtml label >> span_ [class_ "badge badge-xs badge-ghost"] (toHtml $ show count)
-      HostItem host -> button_ ([class_ "flex cursor-pointer items-center gap-2 font-medium text-textStrong hover:text-textBrand", type_ "button", onclick_ "event.stopPropagation()"] <> drawerLoadAttrs_ (hostDetailUrl pid window host.name)) do
-        faSprite_ "server" "solid" "h-3.5 w-3.5 text-iconNeutral"
+      HostItem host -> div_ [class_ "flex min-w-0 items-center gap-2 font-medium text-textStrong"] do
+        faSprite_ "server" "solid" "h-3.5 w-3.5 shrink-0 text-iconNeutral"
         span_ [class_ "truncate"] $ toHtml host.name
     configCell = itemOnly \host -> div_ [class_ "flex flex-wrap gap-1"] do
       whenJust host.provider $ metadataChip "cloud" . T.toTitle
       whenJust host.region $ metadataChip "location-dot"
-    systemCell = itemOnly \host -> div_ [class_ "flex items-center gap-1 text-xs text-textWeak"] do
-      faSprite_ "server" "regular" "h-3 w-3"
-      toHtml $ T.intercalate " · " $ catMaybes [host.osType, host.architecture]
+    systemCell = itemOnly \host -> span_ [class_ "text-xs text-textWeak"] $ toHtml $ T.intercalate " · " $ catMaybes [host.osType, host.architecture]
     metricCell getter = itemOnly $ utilizationCell . getter
     uptimeCell = itemOnly $ plainCell . fmap formatUptime . (.uptime)
     containersCell = itemOnly $ span_ [class_ "tabular-nums text-textStrong"] . toHtml . show . (.containers)
-    integrationsCell = itemOnly \host -> div_ [class_ "flex flex-wrap gap-1"] $ forM_ host.integrations \integration -> span_ [class_ "inline-flex items-center gap-1 whitespace-nowrap rounded-md border border-strokeWeak bg-fillWeak px-1.5 py-0.5 text-xs text-textWeak"] do
+    integrationsCell = itemOnly \host -> div_ [class_ "flex flex-nowrap gap-1"] $ forM_ host.integrations \integration -> span_ [class_ "inline-flex items-center gap-1 whitespace-nowrap rounded-md border border-strokeWeak bg-fillWeak px-1.5 py-0.5 text-xs text-textWeak"] do
       faSprite_ (case integration of OpenTelemetryIntegration -> "arrows-turn-right"; KubernetesIntegration -> "cube"; DockerIntegration -> "layer-group") "regular" "h-3 w-3"
       toHtml $ integrationLabel integration
     itemOnly render = \case HostGroupRow _ _ -> mempty; HostItem host -> render host
@@ -328,11 +329,11 @@ hostDetailGetH pid hostM fromParam toParam sinceParam = do
 
 hostDetail_ :: Projects.ProjectId -> TimePicker.TimeWindow -> HostRow -> Html ()
 hostDetail_ pid window host = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
-  header_ [class_ "border-b border-strokeBrand-weak bg-fillBrand-weak px-5 py-4 pr-14"] do
+  header_ [class_ "border-b border-strokeWeak px-5 py-4 pr-14"] do
     div_ [class_ "flex flex-wrap items-start justify-between gap-3"] do
       div_ [class_ "min-w-0"] do
         div_ [class_ "flex items-center gap-2"] do
-          faSprite_ "server" "solid" "h-4 w-4 text-iconBrand"
+          faSprite_ "server" "solid" "h-4 w-4 text-iconNeutral"
           h2_ [id_ "host-detail-title", data_ "drawer-title" "true", class_ "break-words text-lg font-semibold text-textStrong"] $ toHtml host.name
         div_ [class_ "mt-1.5 flex flex-wrap gap-1.5"] do
           forM_ metadata $ uncurry metaChip_
@@ -380,11 +381,12 @@ hostDetail_ pid window host = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
             def
               { icon = Just "chart-line"
               , action = ESCustom $ div_ [class_ "flex flex-wrap justify-center gap-2"] do
-                  a_ [href_ $ "/p/" <> pid.toText <> "/infrastructure/host-map?since=1H", class_ "btn btn-sm max-sm:h-11"] "Try last 1 hour"
+                  -- Reloads this drawer at 1H rather than navigating away from the host.
+                  button_ ([type_ "button", class_ "btn btn-sm max-sm:h-11"] <> drawerLoadAttrs_ (timeScopedUrl ("/p/" <> pid.toText <> "/infrastructure/hosts/detail") [("host", host.name)] Nothing Nothing (Just "1H"))) "Try last 1 hour"
                   a_ [href_ "https://monoscope.tech/docs/sdks/infrastructure/", target_ "_blank", rel_ "noopener noreferrer", class_ "btn btn-sm btn-primary max-sm:h-11"] "Set up host metrics"
               }
             "No host metrics in this time range"
-            "Monoscope found no CPU, memory, filesystem, or load samples for this host. Expand the time range or check the collector setup."
+            "This host reported no CPU, memory, filesystem, or load samples in the final 15 minutes of the range. Check that the collector's hostmetrics receiver is enabled."
         else div_ [class_ "grid grid-cols-2 gap-3 max-xl:grid-cols-1"] $ forM_ (hostWidgets pid host) $ div_ [class_ "min-h-56"] . Widget.widget_
   where
     metadata = [(label, value) | (label, Just value) <- [("Provider", host.provider), ("Region", host.region), ("OS", host.osType), ("Architecture", host.architecture)]]
@@ -478,11 +480,11 @@ imagesTable pid window url runtimeM registryM images allImages =
     { config = def{elemID = "imagesForm", containerId = Just "imagesContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0}
     , columns =
         [ col "Image" (\image -> div_ [class_ "flex items-center gap-2 min-w-0"] $ faSprite_ "layer-group" "solid" "h-3.5 w-3.5 shrink-0 text-iconNeutral" >> span_ [class_ "truncate font-medium text-textStrong"] (toHtml image.image)) & withAttrs [class_ "min-w-72 w-full"]
-        , col "Running" (\image -> span_ [class_ "badge badge-sm badge-success whitespace-nowrap"] $ toHtml $ show image.running <> " running") & withAttrs [class_ "w-28"]
+        , col "Running" (\image -> span_ [class_ "tabular-nums text-textStrong"] $ toHtml $ show image.running) & withAttrs [class_ "w-24 text-right"]
         , col "Source" (\image -> span_ [class_ "text-textWeak"] $ toHtml image.registry) & withAttrs [class_ "w-36"]
         , col "Tags" renderTags & withAttrs [class_ "w-64 max-lg:hidden"]
         , col "Runtime" (\image -> span_ [class_ "text-textWeak"] $ toHtml $ T.intercalate ", " $ map Containers.runtimeLabel image.runtimes) & withAttrs [class_ "w-28 max-xl:hidden"]
-        , col "CPU" (plainCell . fmap coresText . (.cpuCores)) & withAttrs [class_ "w-24 text-right"]
+        , col "CPU (cores)" (plainCell . fmap (showFFloat' 3) . (.cpuCores)) & withAttrs [class_ "w-24 text-right"]
         , col "Memory" (plainCell . fmap formatBytes . (.memoryBytes)) & withAttrs [class_ "w-24 text-right"]
         , col "Security" (const $ span_ [class_ "inline-flex whitespace-nowrap rounded-md border border-strokeWeak bg-fillWeak px-1.5 py-0.5 text-xs text-textWeak", term "data-tippy-content" "Connect an SBOM and vulnerability scanner to populate security findings"] "SBOM unavailable") & withAttrs [class_ "w-36 max-md:hidden"]
         ]
@@ -539,7 +541,7 @@ imageDetail_ pid window image = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
       factGrid_
         "grid-cols-3 max-sm:grid-cols-1 max-sm:divide-x-0 max-sm:divide-y"
         [ ("Running containers", show image.running)
-        , ("CPU used", maybe "—" coresText image.cpuCores)
+        , ("CPU used", maybe "—" Containers.coresText image.cpuCores)
         , ("Memory used", maybe "—" formatBytes image.memoryBytes)
         ]
     section_ [class_ "space-y-2 border-t border-strokeWeak pt-4"] do
@@ -665,13 +667,13 @@ kubernetesTable pid window url resource clusterM namespaceM statusM rows allRows
   Table
     { config = def{elemID = "kubernetesForm", containerId = Just "kubernetesContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0}
     , columns =
-        [ col (resourceLabel resource) (\row -> div_ [class_ "flex items-center gap-2"] $ faSprite_ (kubeIcon resource) "solid" "h-3.5 w-3.5 text-iconNeutral" >> span_ [class_ "font-medium text-textStrong", term "data-tippy-content" row.name] (toHtml $ bool id clusterLabel (resource == KubeClusters) row.name)) & withAttrs [class_ "min-w-56 w-full"]
+        [ col (resourceLabel resource) (\row -> div_ [class_ "flex min-w-0 items-center gap-2"] $ faSprite_ (kubeIcon resource) "solid" "h-3.5 w-3.5 shrink-0 text-iconNeutral" >> span_ [class_ "min-w-0 truncate font-medium text-textStrong", term "data-tippy-content" row.name] (toHtml $ bool id clusterLabel (resource == KubeClusters) row.name)) & withAttrs [class_ "min-w-56 w-full"]
         , col "Status" (statusBadge . (.status)) & withAttrs [class_ "w-28"]
         , col "Cluster" (\row -> maybe Containers.emDash_ (\value -> span_ [class_ "block truncate whitespace-nowrap text-textStrong", term "data-tippy-content" value] $ toHtml $ clusterLabel value) row.cluster) & withAttrs [class_ "w-36 max-lg:hidden"]
         , col "Namespace" (plainCell . (.namespace)) & withAttrs [class_ "w-32 max-lg:hidden"]
         , col "Node" (plainCell . (.node)) & withAttrs [class_ "w-36 max-xl:hidden"]
         , col "Containers" (\row -> span_ [class_ "tabular-nums text-textStrong"] $ toHtml $ show row.containers) & withAttrs [class_ "w-24 text-right"]
-        , col "CPU" (plainCell . fmap coresText . (.cpuCores)) & withAttrs [class_ "w-24 text-right"]
+        , col "CPU (cores)" (plainCell . fmap (showFFloat' 3) . (.cpuCores)) & withAttrs [class_ "w-24 text-right"]
         , col "CPU limit used" (utilizationCell . (.cpuPct)) & withAttrs [class_ "w-36 max-md:hidden"]
         , col "Memory" (plainCell . fmap formatBytes . (.memoryBytes)) & withAttrs [class_ "w-24 text-right"]
         , col "Memory limit used" (utilizationCell . (.memoryPct)) & withAttrs [class_ "w-40 max-md:hidden"]
@@ -683,7 +685,7 @@ kubernetesTable pid window url resource clusterM namespaceM statusM rows allRows
           { search = Just ClientSide
           , searchPlaceholder = Just $ "Search " <> kubeResourceParam resource
           , rowAttrs = Just $ drawerRowAttrs_ . kubeDetailUrl pid window resource
-          , header = Just $ timeRefreshListener_ "kubernetesContainer" url >> kubeResourceNav pid window resource (V.length rows)
+          , header = Just $ timeRefreshListener_ "kubernetesContainer" url >> kubeResourceNav pid window resource
           , showFilterRail = True
           , resultSummary = Just $ "Showing " <> show (V.length rows) <> " resources"
           , exportName = Just $ "kubernetes-" <> kubeResourceParam resource
@@ -701,11 +703,10 @@ kubernetesTable pid window url resource clusterM namespaceM statusM rows allRows
     }
 
 
-kubeResourceNav :: Projects.ProjectId -> TimePicker.TimeWindow -> KubeResource -> Int -> Html ()
-kubeResourceNav pid window current count = div_ [class_ "flex flex-wrap items-center justify-between gap-2 border-b border-strokeWeak px-3 py-2"] do
-  div_ [class_ "tabs tabs-box tabs-outline tabs-sm", role_ "tablist", Aria.label_ "Kubernetes resource"] $ forM_ [minBound ..] \resource ->
+kubeResourceNav :: Projects.ProjectId -> TimePicker.TimeWindow -> KubeResource -> Html ()
+kubeResourceNav pid window current = div_ [class_ "px-3"] do
+  div_ [class_ "tabs tabs-box tabs-outline tabs-sm w-fit", role_ "tablist", Aria.label_ "Kubernetes resource"] $ forM_ [minBound ..] \resource ->
     a_ ([href_ $ infraUrl pid "/infrastructure/kubernetes" [("resource", kubeResourceParam resource)] window, role_ "tab", class_ $ "tab" <> bool "" " tab-active" (resource == current)] <> navTabAttrs) $ toHtml $ resourceLabel resource <> "s"
-  span_ [class_ "text-xs text-textWeak", role_ "status", Aria.live_ "polite"] $ toHtml $ show count <> " resources"
 
 
 kubeDetailUrl :: Projects.ProjectId -> TimePicker.TimeWindow -> KubeResource -> KubeRow -> Text
@@ -744,7 +745,7 @@ kubernetesDetail_ pid window resource row = div_ [class_ "-mx-8 -mb-4 min-h-full
       factGrid_
         "grid-cols-5 max-lg:grid-cols-3 max-sm:grid-cols-2"
         [ ("Containers", show row.containers)
-        , ("CPU", maybe "—" coresText row.cpuCores)
+        , ("CPU", maybe "—" Containers.coresText row.cpuCores)
         , ("CPU / limit", maybe "—" pctText row.cpuPct)
         , ("Memory", maybe "—" formatBytes row.memoryBytes)
         , ("Restarts", maybe "—" (showFFloat' 0) row.restarts)
@@ -855,7 +856,7 @@ hostMap_ page = div_ [id_ "hostMapContainer", class_ "flex min-h-full flex-col b
     else div_ [class_ "flex flex-wrap items-start gap-4 p-4"] $ forM_ page.groups \(label, hosts) ->
       let enlarged = length hosts <= 12
        in section_ [class_ $ "rounded-lg border border-strokeWeak bg-bgRaised p-3 shadow-sm " <> bool "min-w-80 flex-1" "w-fit min-w-72" enlarged] do
-            h2_ [class_ "mb-3 flex items-center gap-2 text-sm font-semibold text-textStrong"] $ toHtml label >> span_ [class_ "rounded-full bg-fillBrand-weak px-2 py-0.5 text-xs font-medium text-textStrong"] (toHtml $ show (length hosts) <> " hosts")
+            h2_ [class_ "mb-3 flex items-center gap-2 text-sm font-semibold text-textStrong"] $ toHtml label >> span_ [class_ "badge badge-xs badge-ghost"] (toHtml $ show (length hosts) <> " hosts")
             div_ [class_ $ "flex flex-wrap " <> bool "gap-1" "gap-2" enlarged] $ forM_ (sortOn (.name) hosts) $ hostHex enlarged
   where
     legend colour label = span_ [class_ "inline-flex items-center gap-1.5"] $ span_ [class_ $ "h-3 w-3 " <> colour, style_ hexClipPath] mempty >> toHtml label
@@ -916,10 +917,6 @@ pctText :: Double -> Text
 pctText value = showFFloat' 0 (value * 100) <> "%"
 
 
-coresText :: Double -> Text
-coresText value = showFFloat' 2 value <> " cores"
-
-
 plainCell :: Maybe Text -> Html ()
 plainCell = maybe Containers.emDash_ (\value -> span_ [class_ "block truncate whitespace-nowrap text-textStrong tabular-nums", term "data-tippy-content" value] $ toHtml value)
 
@@ -947,7 +944,10 @@ utilizationCell = \case
 
 
 statusBadge :: KubeStatus -> Html ()
-statusBadge status = span_ [class_ $ "badge badge-sm whitespace-nowrap " <> case status of { KubeReady -> "badge-success"; KubeNotReady -> "badge-error"; KubeUnknown -> "badge-ghost" }] $ toHtml $ kubeStatusLabel status
+statusBadge = \case
+  KubeReady -> Containers.readyBadge_ True
+  KubeNotReady -> Containers.readyBadge_ False
+  KubeUnknown -> span_ [class_ "badge badge-sm badge-ghost whitespace-nowrap"] "Unknown"
 
 
 formatUptime :: Double -> Text
