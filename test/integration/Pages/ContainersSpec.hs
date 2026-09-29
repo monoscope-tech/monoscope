@@ -520,7 +520,7 @@ spec = sequential $ aroundAll withResources do
       hostsShell `shouldNotSatisfy` T.isInfixOf "vps-bare-01"
 
       containersShell <- shellHtml tr $ Containers.containersGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
-      containersShell `shouldContainAll` ["id=\"containersContainer\"", "hx-trigger=\"load\"", "deferred=1"]
+      containersShell `shouldContainAll` ["id=\"containersContainer\"", "hx-trigger=\"load, update-query from:window\"", "deferred=1"]
       containersShell `shouldNotSatisfy` T.isInfixOf "checkout-7fb5b4f859-nlcjs"
 
       -- The filters the shell was asked for have to survive the round trip, or the rows that

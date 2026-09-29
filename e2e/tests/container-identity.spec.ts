@@ -24,6 +24,93 @@ test.afterAll(() => {
 
 test.describe.configure({ mode: "serial" });
 
+test("changing the container time preset refreshes inventory and drawer windows", async ({ page }) => {
+  test.setTimeout(90_000); // Includes a real 15s live tick, repeated presets and held initial arrival.
+  test.skip(!process.env.E2E_BASE_URL, "Requires a disposable fixture database");
+  const namespace = "e2e-container-preset";
+  const cleanup = `DELETE FROM otel_metrics WHERE project_id='${DEMO_PROJECT}' AND resource->'k8s'->'namespace'->>'name'='${namespace}';`;
+  sql(cleanup + [30, 600].map(age => `INSERT INTO otel_metrics (project_id,id,series_id,timestamp,metric_name,metric_type,value,resource___k8s___container___name,resource___k8s___pod___name,resource___k8s___namespace___name,resource)
+    VALUES ('${DEMO_PROJECT}',gen_random_uuid(),'preset-${age}','${new Date(Date.now() - age * 1000).toISOString()}','container.cpu.usage','GAUGE',1,'preset-${age}','preset-pod-${age}','${namespace}',
+      '${JSON.stringify({ k8s: { container: { name: `preset-${age}` }, pod: { name: `preset-pod-${age}` }, namespace: { name: namespace }, cluster: { uid: CLUSTER }, node: { name: "preset-node" } } })}');`).join(""));
+  try {
+    await page.setViewportSize({ width: 390, height: 900 });
+    await page.goto(`/p/${DEMO_PROJECT}/infrastructure/containers?namespace=${namespace}&cluster=${CLUSTER}&since=5M`, { waitUntil: "domcontentloaded" });
+    const rows = page.locator('#containersContainer tr[role="button"]');
+    await expect(rows).toHaveCount(1);
+    await expect(page.getByText(/containers reporting in the final 5m of this range/)).toBeVisible();
+    const refresh = page.waitForRequest(request => new URL(request.url()).searchParams.get("deferred") === "1" && new URL(request.url()).searchParams.get("since") === "1H");
+    await page.locator('[popovertarget="n-timepicker-popover"]').click();
+    await page.locator('#n-timepicker-popover button[data-value="1H"]').click();
+    const requested = new URL((await refresh).url()).searchParams;
+    expect(requested.getAll("since")).toEqual(["1H"]);
+    expect(requested.get("namespace")).toBe(namespace);
+    expect(requested.get("cluster")).toBe(CLUSTER);
+    await expect(page).toHaveURL(/since=1H/);
+    await expect(rows).toHaveCount(2);
+    await expect(page.getByText(/containers reporting in the final 15m of this range/)).toBeVisible();
+    expect(await rows.evaluateAll(rows => rows.every(row => {
+      const params = new URL(row.getAttribute("data-hx-get")!, location.origin).searchParams;
+      return params.get("since") === "1H" && params.get("namespace") === "e2e-container-preset" && params.get("cluster") === "8b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d";
+    }))).toBe(true);
+    const search = page.getByRole("textbox", { name: "Search containers", exact: true });
+    await search.fill("preset-600");
+    await expect(page.locator('#containersContainer tr[role="button"]:visible')).toHaveCount(1);
+    for (const [preset, count] of [["5M", 1], ["1H", 2]] as const) {
+      await page.locator('[popovertarget="n-timepicker-popover"]').click();
+      await page.locator(`#n-timepicker-popover button[data-value="${preset}"]`).click();
+      await expect(rows).toHaveCount(count);
+      await expect(search).toHaveValue("preset-600");
+      await expect(page.locator('#containersContainer tr[role="button"]:visible')).toHaveCount(preset === "1H" ? 1 : 0);
+      expect(new URL((await rows.first().getAttribute("data-hx-get"))!, page.url()).searchParams.get("since")).toBe(preset);
+    }
+    await search.focus();
+    await page.evaluate(() => new Promise<void>(resolve => document.getElementById("containersContainer")!.addEventListener("htmx:afterSwap", () => resolve(), { once: true })));
+    await expect(search).toBeFocused();
+    await expect(search).toHaveValue("preset-600");
+    await expect(page.locator('#containersContainer tr[role="button"]:visible')).toHaveCount(1);
+    await search.fill("");
+    await page.locator('[popovertarget="n-timepicker-popover"]').click();
+    await page.getByRole("button", { name: "Previous time window", exact: true }).click();
+    await expect.poll(() => new URL(page.url()).searchParams.get("from")).toBeTruthy();
+    await expect(rows).toHaveCount(0);
+    await page.locator('#n-timepicker-popover button[data-value="1H"]').click();
+    await expect(rows).toHaveCount(2);
+    const restored = new URL((await rows.first().getAttribute("data-hx-get"))!, page.url()).searchParams;
+    expect(restored.get("since")).toBe("1H");
+    expect(restored.get("from") || restored.get("to")).toBeFalsy();
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(rows).toHaveCount(2);
+    await rows.filter({ hasText: "preset-600" }).focus();
+    await page.keyboard.press("Enter");
+    const drawer = page.locator("#global-data-drawer-content");
+    await expect(drawer.getByText(/^Pod:\s*preset-pod-600$/)).toBeVisible();
+    expect(new URL((await drawer.getByRole("link", { name: "View logs", exact: true }).getAttribute("href"))!, page.url()).searchParams.get("since")).toBe("1H");
+    let release = () => {};
+    const held = new Promise<void>(resolve => { release = resolve; });
+    await page.route("**/infrastructure/containers?**", async route => {
+      const params = new URL(route.request().url()).searchParams;
+      if (params.get("deferred") === "1" && params.get("since") === "5M") await held;
+      await route.continue();
+    });
+    try {
+      const initial = page.waitForRequest(request => new URL(request.url()).searchParams.get("deferred") === "1");
+      await page.goto(`/p/${DEMO_PROJECT}/infrastructure/containers?namespace=${namespace}&cluster=${CLUSTER}&since=5M`, { waitUntil: "domcontentloaded" });
+      await initial;
+      await page.locator('[popovertarget="n-timepicker-popover"]').click();
+      await page.locator("[data-mobile-live-toggle]").click();
+      await expect(page.locator("[data-time-transport]")).toHaveAttribute("data-interval", "0");
+      await page.locator('#n-timepicker-popover button[data-value="1H"]').click();
+      release();
+      await expect(rows).toHaveCount(2);
+      expect(new URL((await rows.first().getAttribute("data-hx-get"))!, page.url()).searchParams.get("since")).toBe("1H");
+    } finally {
+      release();
+    }
+  } finally {
+    sql(cleanup);
+  }
+});
+
 for (const width of [390, 1280]) {
   test(`duplicate containers expose their identity before opening a drawer at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });

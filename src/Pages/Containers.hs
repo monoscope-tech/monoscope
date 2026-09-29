@@ -19,6 +19,7 @@ import Data.Vector qualified as V
 import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
 import Lucid
+import Lucid.Htmx
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), Scope (..), containersInWindowCached, cpuPctOfLimit, freshnessWindow, memPctOfLimit, runtimeOf)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
@@ -113,7 +114,8 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
         , rows = V.fromList $ map (ContainerVM pid window) rows
         , features =
             def
-              { search = Just ClientSide
+              { header = Just $ div_ ([class_ "hidden", term "_" "on htmx:afterSwap from #containersContainer send input to <#containersForm_page input[type=text]/>"] <> containerRefreshAttrs deferredUrl "update-query from:window") mempty
+              , search = Just ClientSide
               , searchPlaceholder = Just "Search containers"
               , rowAttrs = Just $ drawerRowAttrs_ . detailUrl
               , tableHeaderActions =
@@ -228,7 +230,17 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
 
 
 newtype ContainersGet = ContainersPage (PageCtx (Deferred (Table ContainerVM)))
-  deriving newtype (ToHtml)
+
+
+instance ToHtml ContainersGet where
+  toHtml (ContainersPage (PageCtx conf body)) = toHtml $ PageCtx conf $ case body of
+    DeferredShell cid url skeleton -> div_ ([id_ cid, class_ "w-full", data_ "deferred-shell" ""] <> containerRefreshAttrs url "load, update-query from:window") skeleton
+    DeferredBody table -> toHtml table
+  toHtmlRaw = toHtml
+
+
+containerRefreshAttrs :: Text -> Text -> [Attribute]
+containerRefreshAttrs url trigger = [hxGet_ url, hxTrigger_ trigger, hxTarget_ "#containersContainer", hxSelect_ "#containersContainer", hxSwap_ "outerMorph", term "hx-sync" "this:replace", term "hx-preload" "false", term "hx-vals" "js:{since:window.params().since || '',from:window.params().from || '',to:window.params().to || ''}"]
 
 
 -- | A missing value is an em dash, never a zero. Datadog is explicit that without a limit it
