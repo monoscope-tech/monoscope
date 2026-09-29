@@ -491,6 +491,38 @@ spec = sequential $ aroundAll withTestResources do
       refreshRender <- renderPages "6H" (Just "1")
       T.isInfixOf "refresh=1" refreshRender `shouldBe` False
 
+    it "staleSessionList_liveSelection_keepsRevalidationInsideTheSwappedChild" \tr -> do
+      purgeRumCaches tr
+      projectId <- createTestProject tr "RUM stale live selection"
+      apiKey <- createTestAPIKey tr projectId "rum-live-stale-key"
+      let ingest trId spId sid path at = ingestSpanReq tr $ mkSpanRequest trId spId Nothing "documentLoad" [] Nothing [mkAttr "session.id" sid, mkAttr "url.path" path, mkAttr "error.type" "LiveError"] (mkResource apiKey [mkAttr "service.name" "live-stale-browser", mkAttr "deployment.environment.name" "preview"]) at
+          scoped = tr{trSessAndHeader = fmap (\session -> session{Projects.service = Just "live-stale-browser"}) tr.trSessAndHeader}
+          load refreshM = do
+            (_, response@(RUM.RumGet (PageCtx _ body))) <- testServant scoped $ RUM.rumGetScopedH projectId (Just "sessions") (Just "session-live") (Just "errors") Nothing Nothing (Just "6H") (Just "session-live-old") Nothing (Just "sessions") (Just "1") refreshM (Just "preview")
+            case body of
+              DeferredBody page -> pure (page, toStrict $ Lucid.renderText $ Lucid.toHtml response)
+              DeferredShell{} -> fail "Expected loaded sessions panel"
+          -- HTMX's hx-select retains this section and discards its siblings.
+          selectedList = fst . T.breakOn "</section>" . snd . T.breakOn "id=\"rum-sessions-list\""
+      ingest "88000000000000000000000000000008" "8800000000000001" "session-live-old" "/old" (addUTCTime (-1) frozenTime)
+      (initial, _) <- load Nothing
+      map (.id) initial.sessions `shouldBe` ["session-live-old"]
+      initial.servedStale `shouldBe` False
+      ingest "89000000000000000000000000000008" "8900000000000001" "session-live-new" "/new" frozenTime
+      Cache.purge tr.trATCtx.rumCache
+      withResource tr.trPool $ \conn -> void $ PG.execute_ conn "UPDATE rum_panel_cache SET expires_at = now() - interval '1 minute'"
+      (stale, staleHtml) <- load Nothing
+      stale.servedStale `shouldBe` True
+      map (.id) stale.sessions `shouldBe` ["session-live-old"]
+      selectedList staleHtml `shouldContainAll` ["refresh=1", "load delay:600ms", "hx-target=\"#rum-sessions-list\"", "hx-select=\"#rum-sessions-list\"", "hx-swap=\"outerMorph\"", "hx-sync=\"#rum-session-search-form:abort\"", "hx-include=\"#rum-session-search-form\"", "q=session-live", "filter=errors", "session=session-live-old", "environment=preview", "since=6H"]
+      T.isInfixOf "id=\"rum-replay-workspace\"" (selectedList staleHtml) `shouldBe` False
+      (fresh, freshHtml) <- load (Just "1")
+      fresh.servedStale `shouldBe` False
+      map (.id) fresh.sessions `shouldBe` ["session-live-new", "session-live-old"]
+      selectedList freshHtml `shouldContainAll` ["/new", "/old", "aria-current=\"true\""]
+      T.isInfixOf "refresh=1" (selectedList freshHtml) `shouldBe` False
+      (.id) <$> fresh.selectedSessionData `shouldBe` Just "session-live-old"
+
     it "audiencePanel_classifiesUserAgentsIntoBrowserOsAndDevice" \tr -> do
       purgeRumCaches tr
       apiKey <- createTestAPIKey tr testPid "rum-audience-key"

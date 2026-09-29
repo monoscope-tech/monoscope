@@ -928,14 +928,14 @@ slot_ :: RumData -> RumPanel -> Html () -> Html () -> Html ()
 slot_ page panel skeleton content
   | page.panel == Just panel = div_ ([id_ $ panelId panel, class_ $ "w-full" <> if panel == PanelSessions then " flex-1 min-h-0" else ""] <> liveAttrs) do
       content
-      when page.servedStale $ div_ (class_ "hidden" : swapAttrs (panelUrl <> "&refresh=1") "load delay:600ms" []) mempty
+      unless sessionList $ panelRevalidation_ page panel
   | otherwise =
       Components.deferredShell_
         (panelId panel)
         -- Search, session filter and selected session ride along so a deep link still
         -- renders as the page it addressed; without them the sessions panel came back
         -- unfiltered with nothing selected.
-        panelUrl
+        (rumPanelUrl page panel)
         -- Deliberately NOT serialised with @hx-sync ... queue@. The panels do contend in
         -- TimeFusion, but measured cold over 24h that is still the better trade: concurrent
         -- paints the first panel at 2.6s and finishes at 24.7s, queued paints the first at
@@ -949,21 +949,34 @@ slot_ page panel skeleton content
     -- the panel's cache TTL costs a cache read.
     -- A tick arriving while the previous one is still in flight replaces it rather than
     -- queueing behind it: the newer window is the one being looked at.
-    liveAttrs = swapAttrs panelUrl "update-query from:window" [term "hx-sync" $ if sessionList then "#rum-session-search-form:replace" else "this:replace"]
+    liveAttrs = panelSwapAttrs page panel (rumPanelUrl page panel) "update-query from:window" [term "hx-sync" $ if sessionList then "#rum-session-search-form:replace" else "this:replace"]
     -- On the Sessions tab the panel also carries the replay workspace; swapping the whole
     -- panel would restart a replay the viewer just opened. Only the list is re-fetched
     -- there — a selection made while the refresh is in flight survives.
-    swapAttrs url trigger extras =
-      [hxGet_ url, hxTrigger_ trigger, hxTarget_ refreshTarget, hxSelect_ refreshTarget, hxSwap_ $ if sessionList then "outerMorph" else "outerHTML"]
-        <> extras
-        <> [term "hx-include" "#rum-session-search-form" | sessionList]
-        <> [term "hx-preload" "false"]
+    sessionList = page.tab == Sessions && panel == PanelSessions
+
+
+panelRevalidation_ :: RumData -> RumPanel -> Html ()
+panelRevalidation_ page panel =
+  when page.servedStale $ div_ (class_ "hidden" : panelSwapAttrs page panel (rumPanelUrl page panel <> "&refresh=1") "load delay:600ms" [term "hx-sync" "#rum-session-search-form:abort" | page.tab == Sessions && panel == PanelSessions]) mempty
+
+
+panelSwapAttrs :: RumData -> RumPanel -> Text -> Text -> [Attribute] -> [Attribute]
+panelSwapAttrs page panel url trigger extras =
+  [hxGet_ url, hxTrigger_ trigger, hxTarget_ refreshTarget, hxSelect_ refreshTarget, hxSwap_ $ if sessionList then "outerMorph" else "outerHTML"]
+    <> extras
+    <> [term "hx-include" "#rum-session-search-form" | sessionList]
+    <> [term "hx-preload" "false"]
+  where
     sessionList = page.tab == Sessions && panel == PanelSessions
     refreshTarget = if sessionList then "#rum-sessions-list" else "#" <> panelId panel
-    panelUrl =
-      rumUrl page.links
-        $ [("tab", tabParam page.tab), ("panel", panelParam panel), ("deferred", "1")]
-        <> [(key, value) | (key, Just value) <- [("q", page.query), ("filter", sessionFilterParam page.sessionFilter), ("session", page.selectedSession)]]
+
+
+rumPanelUrl :: RumData -> RumPanel -> Text
+rumPanelUrl page panel =
+  rumUrl page.links
+    $ [("tab", tabParam page.tab), ("panel", panelParam panel), ("deferred", "1")]
+    <> [(key, value) | (key, Just value) <- [("q", page.query), ("filter", sessionFilterParam page.sessionFilter), ("session", page.selectedSession)]]
 
 
 rumPage_ :: RumData -> Html ()
@@ -1394,8 +1407,9 @@ sessions_ page = slot_ page PanelSessions sessionsSkeleton_ do
   let filtered = page.sessions
       selected = page.selectedSessionData <|> (page.selectedSession >>= \sid -> find ((== sid) . (.id)) page.sessions)
   div_ [class_ "grid bg-bgBase xl:h-full xl:min-h-0 xl:grid-cols-[minmax(32rem,35%)_minmax(0,1fr)]"] do
-    section_ [id_ "rum-sessions-list", Aria.label_ "Sessions", tabindex_ "0", class_ "min-w-0 overflow-y-auto overscroll-contain border-strokeWeak xl:min-h-0 xl:border-e max-xl:max-h-[45svh] max-xl:border-b"]
-      $ sessionsTable_ True page.now page.links page.query page.sessionFilter page.selectedSession filtered
+    section_ [id_ "rum-sessions-list", Aria.label_ "Sessions", tabindex_ "0", class_ "min-w-0 overflow-y-auto overscroll-contain border-strokeWeak xl:min-h-0 xl:border-e max-xl:max-h-[45svh] max-xl:border-b"] do
+      sessionsTable_ True page.now page.links page.query page.sessionFilter page.selectedSession filtered
+      panelRevalidation_ page PanelSessions
     section_ [id_ "rum-replay-workspace", class_ "min-w-0 bg-bgBase xl:min-h-0 xl:overflow-y-auto xl:overscroll-contain", Aria.label_ "Session details"] $ replayWorkspace_ page.links selected
 
 
