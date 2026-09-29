@@ -1902,7 +1902,6 @@ pageViewKql :: Text
 pageViewKql = "(name == \"documentLoad\" or name startswith \"Pageview \")"
 
 
-
 -- | A first-stage KQL filter carrying the page's investigation boundary. The scope has to
 -- land before any pipe — or a piped query would append it to the summarize — and must retain
 -- both the selected environment and service when the reader opens the Explorer.
