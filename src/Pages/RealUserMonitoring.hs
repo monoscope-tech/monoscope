@@ -540,7 +540,7 @@ data RumLinks = RumLinks
 -- window, costing 0.5–4s on its own, and the panels together contend badly enough that six
 -- concurrently take 10–28s. Loading them as one unit made the whole page wait for the
 -- slowest; each panel now fetches itself, so a panel appears as soon as /its/ query lands.
-data RumPanel = PanelPulse | PanelPages | PanelVitals | PanelVitalTrend | PanelErrors | PanelSessions | PanelAudience
+data RumPanel = PanelPulse | PanelPages | PanelVitals | PanelVitalTrend | PanelErrors | PanelSessions | PanelSessionDetail | PanelAudience
   deriving stock (Eq, Read, Show)
 
 
@@ -551,6 +551,7 @@ panelParam = toText . encodeEnumSC @"Panel"
 -- | Ids are the swap contract: 'deferredShell_' selects @#id@ out of the panel response, so
 -- the shell and the rendered panel must agree on it.
 panelId :: RumPanel -> Text
+panelId PanelSessionDetail = "rum-replay-workspace"
 panelId panel = "rum-panel-" <> panelParam panel
 
 
@@ -677,6 +678,7 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
         Just PanelVitalTrend -> [vitalsQ]
         Just PanelErrors -> [errorsQ]
         Just PanelSessions -> (if tab == Sessions then [sessionSearchQ] else [sessionsQ, replaysQ]) <> sessionDetailQs
+        Just PanelSessionDetail -> sessionDetailQs
         Just PanelAudience -> [breakdownQ]
         Nothing -> []
       -- Concurrent requests share lookup, computation and publication within a replica.
@@ -845,7 +847,7 @@ slot_ page panel skeleton content
 
 panelRevalidation_ :: RumData -> RumPanel -> Html ()
 panelRevalidation_ page panel =
-  when page.servedStale $ div_ (class_ "hidden" : panelSwapAttrs page panel (rumPanelUrl page panel <> "&refresh=1") "load delay:600ms" [term "hx-sync" "#rum-session-search-form:abort" | page.tab == Sessions && panel == PanelSessions]) mempty
+  when page.servedStale $ div_ (class_ "hidden" : panelSwapAttrs page panel (rumPanelUrl page panel <> "&refresh=1") "load delay:600ms" ([term "hx-sync" "#rum-session-search-form:abort" | page.tab == Sessions && panel == PanelSessions] <> [term "hx-sync" "#rum-replay-workspace:abort" | panel == PanelSessionDetail])) mempty
 
 
 panelSwapAttrs :: RumData -> RumPanel -> Text -> Text -> [Attribute] -> [Attribute]
@@ -867,6 +869,7 @@ rumPanelUrl page panel =
 
 
 rumPage_ :: RumData -> Html ()
+rumPage_ page | page.panel == Just PanelSessionDetail = sessionWorkspace_ page
 rumPage_ page = div_ [id_ "rum-page", class_ $ "bg-bgBase " <> if page.tab == Sessions then "flex flex-col xl:h-full xl:min-h-0 [&>#rum-panel-sessions]:flex-1 [&>#rum-panel-sessions]:min-h-0" else "min-h-full"] do
   unless (null page.degradedPanels) $ degradedBanner_ page.degradedPanels
   when (page.tab == Sessions) $ div_ [class_ "flex shrink-0 items-center border-b border-strokeWeak px-4 py-1 max-md:px-3"] $ sessionSearch_ page
@@ -1279,12 +1282,20 @@ sessionsSkeleton_ = div_ [class_ "grid bg-bgBase xl:h-full xl:min-h-0 xl:grid-co
 sessions_ :: RumData -> Html ()
 sessions_ page = slot_ page PanelSessions sessionsSkeleton_ do
   let filtered = page.sessions
-      selected = page.selectedSessionData <|> (page.selectedSession >>= \sid -> find ((== sid) . (.id)) page.sessions)
   div_ [class_ "grid bg-bgBase xl:h-full xl:min-h-0 xl:grid-cols-[minmax(32rem,35%)_minmax(0,1fr)]"] do
     section_ [id_ "rum-sessions-list", Aria.label_ "Sessions", tabindex_ "0", class_ "min-w-0 overflow-y-auto overscroll-contain border-strokeWeak xl:min-h-0 xl:border-e max-xl:max-h-[45svh] max-xl:border-b"] do
       sessionsTable_ True page.now page.links page.query page.sessionFilter page.selectedSession filtered
       panelRevalidation_ page PanelSessions
-    section_ [id_ "rum-replay-workspace", class_ "min-w-0 bg-bgBase xl:min-h-0 xl:overflow-y-auto xl:overscroll-contain", Aria.label_ "Session details"] $ replayWorkspace_ page.links selected
+    sessionWorkspace_ page
+
+
+sessionWorkspace_ :: RumData -> Html ()
+sessionWorkspace_ page =
+  section_ [id_ "rum-replay-workspace", class_ "min-w-0 bg-bgBase xl:min-h-0 xl:overflow-y-auto xl:overscroll-contain", Aria.label_ "Session details"] do
+    replayWorkspace_ page.links selected
+    when (page.panel == Just PanelSessionDetail) $ panelRevalidation_ page PanelSessionDetail
+  where
+    selected = page.selectedSessionData <|> (page.selectedSession >>= \sid -> find ((== sid) . (.id)) page.sessions)
 
 
 filterSessions :: SessionFilter -> [RumSession] -> [RumSession]
@@ -1429,10 +1440,7 @@ sessionsTable_ workspace now links query sessionFilter selectedSession sessions 
        in href_ url
             : if workspace
               then
-                [ -- @panel=sessions@ is what makes the response carry the workspace at all: a
-                  -- deferred request without a panel renders every slot as a shell, so the
-                  -- hx-select found nothing and the outerHTML swap deleted the workspace.
-                  hxGet_ $ url <> "&panel=sessions&deferred=1"
+                [ hxGet_ $ url <> "&panel=session_detail&deferred=1"
                 , hxTarget_ "#rum-replay-workspace"
                 , term "hx-on::after:request" "if (event.detail.ctx.response.status >= 200 && event.detail.ctx.response.status < 300) { document.querySelectorAll('.rum-session-link').forEach(link => link.setAttribute('aria-current', String(link.dataset.sessionId === this.dataset.sessionId))); document.getElementById('rum-session-search').form.elements.session.value = this.dataset.sessionId; }"
                 , hxSelect_ "#rum-replay-workspace"

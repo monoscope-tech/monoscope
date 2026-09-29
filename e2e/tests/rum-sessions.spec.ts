@@ -71,6 +71,42 @@ test("mobile session list keeps the replay workspace within reach", async ({ pag
   await expect(workspace.getByRole("link", { name: "Inspect telemetry" })).toBeVisible();
 });
 
+test("selecting a session does not wait for a full list response", async ({ page }) => {
+  test.skip(!process.env.E2E_BASE_URL, "Requires the disposable e2e database");
+  await page.goto(`/p/${DEMO_PROJECT}/rum?tab=sessions&since=1H&filter=replays&q=${fixtureUser}`);
+  const list = page.locator("#rum-sessions-list");
+  const session = list.locator(".rum-session-link").first();
+  await expect(session).toBeVisible();
+  await page.locator("[data-time-transport]").getByRole("button", { name: /^Pause live (data|updates)$/ }).click();
+  await expect(page.locator("[data-time-transport]")).toHaveAttribute("data-interval", "0");
+  const sid = await session.getAttribute("data-session-id");
+  await list.evaluate(element => element.setAttribute("data-e2e-preserved", "true"));
+  let fullListRequests = 0;
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  await page.route("**/rum?**", async route => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get("session") !== sid || url.searchParams.get("panel") !== "sessions") return route.continue();
+    fullListRequests++;
+    const response = await route.fetch();
+    await held;
+    await route.fulfill({ response });
+  });
+  try {
+    await session.click();
+    await expect(page.locator("#rum-replay-workspace session-replay")).toBeVisible();
+    expect(fullListRequests).toBe(0);
+    await expect(list).toHaveAttribute("data-e2e-preserved", "true");
+    await expect(session).toHaveAttribute("aria-current", "true");
+    const url = new URL(page.url());
+    for (const [key, value] of Object.entries({ session: sid, q: fixtureUser, filter: "replays", since: "1H" })) expect(url.searchParams.get(key)).toBe(value);
+    for (const key of ["panel", "deferred", "refresh"]) expect(url.searchParams.has(key)).toBe(false);
+  } finally {
+    release();
+    await page.unrouteAll({ behavior: "wait" });
+  }
+});
+
 test("session search survives filter changes and keeps the replay workspace", async ({ page }) => {
   await page.goto(`/p/${DEMO_PROJECT}/rum?tab=sessions`);
   const search = page.getByRole("searchbox", { name: "Search sessions" });

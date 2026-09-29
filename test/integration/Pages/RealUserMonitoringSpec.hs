@@ -768,6 +768,33 @@ spec = sequential $ aroundAll withTestResources do
       headings `shouldContainAll` ["Last page"]
       T.isInfixOf "Landing page" headings `shouldBe` False
 
+    it "selectedSession_detailPanel_doesNotRunTheFullSessionSearch" \tr -> do
+      purgeRumCaches tr
+      projectId <- createTestProject tr "RUM independent session detail"
+      apiKey <- createTestAPIKey tr projectId "rum-independent-detail-key"
+      let sid = "session-independent-detail"
+          query = "unrelated-full-list-search"
+          searchKey = RUMData.RumCacheKey projectId (RUMData.SessionSearchQuery (Just query) RUMData.ErrorSessionRows) Nothing (Just "detail-browser") Nothing Nothing (Just "24H")
+          scoped = tr{trSessAndHeader = fmap (\session -> session{Projects.service = Just "detail-browser"}) tr.trSessAndHeader}
+          load refresh = do
+            (_, page) <- testServant scoped $ RUM.rumGetH projectId (Just "sessions") (Just query) (Just "errors") Nothing Nothing (Just "24H") (Just sid) Nothing (Just "session_detail") (Just "1") refresh
+            pure $ toStrict $ Lucid.renderText $ Lucid.toHtml page
+      browserSpan apiKey "85000000000000000000000000000008" "8500000000000001" [("url.path", "/independent-detail"), ("user.full_name", "Independent visitor")] "documentLoad" sid Nothing "detail-browser" tr
+      html <- load Nothing
+      html `shouldContainAll` ["rum-replay-workspace", "Independent visitor", sid, "/independent-detail", "No recording for this session", "Inspect telemetry"]
+      T.isInfixOf "rum-sessions-list" html `shouldBe` False
+      (isNothing <$> Cache.lookup tr.trATCtx.rumCache searchKey) `shouldReturn` True
+      [PG.Only publications] <- withResource tr.trPool $ \conn -> PG.query_ conn "SELECT count(*)::bigint FROM rum_panel_cache"
+      publications `shouldBe` (1 :: Int64)
+      Cache.purge tr.trATCtx.rumCache
+      withResource tr.trPool $ \conn -> void $ PG.execute_ conn "UPDATE rum_panel_cache SET expires_at=now()-interval '1 minute'"
+      browserSpan apiKey "85000000000000000000000000000008" "8500000000000002" [("exception.type", "TypeError")] "TypeError" sid Nothing "detail-browser" tr
+      stale <- load Nothing
+      stale `shouldContainAll` ["Independent visitor", "panel=session_detail", "refresh=1", "hx-target=\"#rum-replay-workspace\"", "hx-select=\"#rum-replay-workspace\"", "hx-sync=\"#rum-replay-workspace:abort\""]
+      fresh <- load $ Just "1"
+      T.isInfixOf ">2</dd>" fresh `shouldBe` True
+      T.isInfixOf "refresh=1" fresh `shouldBe` False
+
     it "replayOnlySessions_sayWhatTheyAre_insteadOfUnknownPageAndZeroCounts" \tr -> do
       -- A recording whose session id never appears on a span is a real session; stacking
       -- "Unknown page" over "0 views · 0 events" reads as broken data, not as what it is.
