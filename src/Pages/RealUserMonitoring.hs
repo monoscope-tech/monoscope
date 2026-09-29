@@ -843,7 +843,7 @@ slot_ page panel skeleton content
       unless sessionList $ panelRevalidation_ page panel
   | otherwise =
       div_
-        ([id_ $ panelId panel, class_ "w-full", data_ "deferred-shell" ""] <> panelSwapAttrs page panel (rumPanelUrl page panel) "load, update-query[event.detail?.source!='auto-refresh'] from:window" [term "hx-sync" "this:replace"])
+        ([id_ $ panelId panel, class_ "w-full", data_ "deferred-shell" ""] <> panelSwapAttrs page panel False "load, update-query[event.detail?.source!='auto-refresh'] from:window" (Just "replace"))
         skeleton
   where
     -- One panel's worth of work per tick, swapped in place: the page chrome, the scroll
@@ -853,7 +853,7 @@ slot_ page panel skeleton content
     -- Populated summary widgets refresh themselves; replacing their parent resets loaded values.
     liveAttrs
       | panel == PanelPulse && page.hasTelemetry = []
-      | otherwise = panelSwapAttrs page panel (rumPanelUrl page panel) "update-query[event.detail?.source!='auto-refresh'||!this.matches('.htmx-request,:has(.htmx-request),#rum-page:has(#rum-session-search-form.htmx-request) #rum-panel-sessions')] from:window" [term "hx-sync" $ if sessionList then "#rum-session-search-form:replace" else "this:replace"]
+      | otherwise = panelSwapAttrs page panel False "update-query[event.detail?.source!='auto-refresh'||!this.matches('.htmx-request,:has(.htmx-request),#rum-page:has(#rum-session-search-form.htmx-request) #rum-panel-sessions')] from:window" (Just "replace")
     -- On the Sessions tab the panel also carries the replay workspace; swapping the whole
     -- panel would restart a replay the viewer just opened. Only the list is re-fetched
     -- there — a selection made while the refresh is in flight survives.
@@ -862,25 +862,25 @@ slot_ page panel skeleton content
 
 panelRevalidation_ :: RumData -> RumPanel -> Html ()
 panelRevalidation_ page panel =
-  when page.servedStale $ div_ (class_ "hidden" : panelSwapAttrs page panel (rumPanelUrl page panel <> "&refresh=1") "load delay:600ms" ([term "hx-sync" "#rum-session-search-form:abort" | page.tab == Sessions && panel == PanelSessions] <> [term "hx-sync" "#rum-replay-workspace:abort" | panel == PanelSessionDetail])) mempty
+  when page.servedStale $ div_ (class_ "hidden" : panelSwapAttrs page panel True "load delay:600ms" ("abort" <$ guard (page.tab == Sessions && panel == PanelSessions || panel == PanelSessionDetail))) mempty
 
 
-panelSwapAttrs :: RumData -> RumPanel -> Text -> Text -> [Attribute] -> [Attribute]
-panelSwapAttrs page panel url trigger extras =
+-- | A rendered session list syncs with the search form that also replaces it; any other
+-- panel syncs with itself.
+panelSwapAttrs :: RumData -> RumPanel -> Bool -> Text -> Maybe Text -> [Attribute]
+panelSwapAttrs page panel refresh trigger syncMode =
   [hxGet_ url, hxTrigger_ trigger, hxTarget_ refreshTarget, hxSelect_ refreshTarget, hxSwap_ $ if sessionList then "outerMorph" else "outerHTML"]
-    <> extras
+    <> [term "hx-sync" $ bool ("#" <> panelId panel) "#rum-session-search-form" sessionList <> ":" <> mode | mode <- toList syncMode]
     <> [term "hx-include" "#rum-session-search-form" | sessionList]
-    <> [term "hx-vals" "js:{...(p=>({since:p.since ?? (p.from || p.to ? '' : '24H'),from:p.from || '',to:p.to || ''}))(Object.fromEntries(new URLSearchParams(location.search)))}", term "hx-preload" "false"]
+    <> [Components.timeWindowVals_ "24H", term "hx-preload" "false"]
   where
     sessionList = page.panel == Just panel && page.tab == Sessions && panel == PanelSessions
     refreshTarget = if sessionList then "#rum-sessions-list" else "#" <> panelId panel
-
-
-rumPanelUrl :: RumData -> RumPanel -> Text
-rumPanelUrl page panel =
-  rumUrl page.links
-    $ [("tab", tabParam page.tab), ("panel", panelParam panel), ("deferred", "1")]
-    <> [(key, value) | (key, Just value) <- [("q", page.query), ("filter", sessionFilterParam page.sessionFilter), ("session", page.selectedSession)]]
+    url =
+      rumUrl page.links
+        $ [("tab", tabParam page.tab), ("panel", panelParam panel), ("deferred", "1")]
+        <> [(key, value) | (key, Just value) <- [("q", page.query), ("filter", sessionFilterParam page.sessionFilter), ("session", page.selectedSession)]]
+        <> [("refresh", "1") | refresh]
 
 
 rumPage_ :: RumData -> Html ()
@@ -1165,12 +1165,14 @@ vitalRow_ vital = div_ [class_ "px-3 py-3"] do
     div_ [class_ "min-w-0"] do
       h3_ [class_ "truncate text-sm font-medium text-textStrong"] $ toHtml vital.label
       p_ [class_ "mt-0.5 text-xs text-textWeak"] $ toHtml vital.description
-      p_ [class_ "mt-0.5 text-xs text-textWeak"] $ toHtml $ measurementNote vital vital.measurement
+      p_ [class_ "mt-0.5 text-xs text-textWeak"] $ toHtml $ measurementNote vital
     div_ [class_ "shrink-0 text-right"] do
-      strong_ [class_ $ "block text-sm font-semibold tabular-nums " <> (ratingStyle (vitalRating vital)).textClass] $ toHtml $ formatVital vital
+      strong_ [class_ $ "block text-sm font-semibold tabular-nums " <> style.textClass] $ toHtml $ formatVital vital
       span_ [class_ "text-xs text-textWeak"] $ toHtml $ observationLabel vital.measurement
-  div_ [class_ "mt-2 grid grid-cols-3 gap-1", Aria.label_ $ vital.label <> " rating: " <> (ratingStyle (vitalRating vital)).label] do
+  div_ [class_ "mt-2 grid grid-cols-3 gap-1", Aria.label_ $ vital.label <> " rating: " <> style.label] do
     forM_ [Good, NeedsImprovement, Poor] (`ratingBand` vitalRating vital)
+  where
+    style = ratingStyle $ vitalRating vital
 
 
 ratingBand :: VitalRating -> VitalRating -> Html ()
@@ -1701,8 +1703,9 @@ pageVitalsTable_ links points = rumPanel_ "Web Vitals by page" "Exact page URLs;
     vitalCell vital byVital = case M.lookup vital.name byVital of
       Nothing -> span_ [class_ "text-textWeak"] "—"
       Just measurement -> do
-        span_ [class_ $ "font-medium tabular-nums " <> (ratingStyle $ vitalRating vital{measurement}).textClass, title_ $ measurementNote vital measurement] $ toHtml $ formatMeasurement vital measurement
-        span_ [class_ "block text-xs text-textWeak sm:hidden"] $ toHtml $ measurementNote vital measurement
+        let measured = (vital :: Vital){measurement}
+        span_ [class_ $ "font-medium tabular-nums " <> (ratingStyle $ vitalRating measured).textClass, title_ $ measurementNote measured] $ toHtml $ formatVital measured
+        span_ [class_ "block text-xs text-textWeak sm:hidden"] $ toHtml $ measurementNote measured
     score byVital = opportunityScore [(v.goodAt, v.poorAt, value) | v <- vitalDefinitions, Just measurement <- [M.lookup v.name byVital], Just value <- [RUM.measurementValue measurement]]
     pageRows =
       take 12
@@ -1717,22 +1720,20 @@ vitalsTable_ vitals = do
     div_ [class_ "overflow-x-auto"] $ table_ [class_ "table table-sm w-full max-sm:[&_td]:block max-sm:[&_td]:min-w-0 max-sm:[&_td]:border-0 max-sm:[&_td]:py-1"] do
       thead_ [class_ "max-sm:sr-only"] $ tr_ $ th_ "Metric" >> th_ [class_ "text-right"] "P75" >> th_ [class_ "text-right"] "Good" >> th_ [class_ "text-right"] "Poor" >> th_ "Assessment" >> th_ "Coverage" >> th_ [class_ "text-right"] "Observations"
       tbody_ $ forM_ vitals \vital -> tr_ [class_ "max-sm:grid max-sm:grid-cols-2 max-sm:border-b max-sm:border-strokeWeak max-sm:py-3 max-sm:last:border-0"] do
+        let style = ratingStyle $ vitalRating vital
         td_ [class_ "max-sm:col-span-2"] do
           strong_ [class_ "block text-sm font-medium text-textStrong"] $ toHtml vital.label
           span_ [class_ "text-xs text-textWeak"] $ toHtml vital.description
-        td_ [class_ $ "text-right font-semibold tabular-nums max-sm:order-1 max-sm:text-left " <> (ratingStyle (vitalRating vital)).textClass] do
+        td_ [class_ $ "text-right font-semibold tabular-nums max-sm:order-1 max-sm:text-left " <> style.textClass] do
           span_ [class_ "mr-2 text-xs font-normal text-textWeak sm:hidden", Aria.hidden_ "true"] "P75"
           toHtml $ formatVital vital
-        td_ [class_ "text-right tabular-nums text-textWeak max-sm:order-5 max-sm:text-left"] do
-          span_ [class_ "mr-2 text-xs sm:hidden", Aria.hidden_ "true"] "Good"
-          toHtml $ formatVitalThreshold vital vital.goodAt
-        td_ [class_ "text-right tabular-nums text-textWeak max-sm:order-6 max-sm:text-left"] do
-          span_ [class_ "mr-2 text-xs sm:hidden", Aria.hidden_ "true"] "Poor"
-          toHtml $ formatVitalThreshold vital vital.poorAt
-        td_ [class_ "max-sm:order-2 max-sm:text-right"] $ span_ [class_ $ "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium " <> (ratingStyle (vitalRating vital)).badgeClass] do
-          span_ [class_ $ "h-2 w-2 rounded-full " <> (ratingStyle (vitalRating vital)).fillClass, Aria.hidden_ "true"] ""
-          toHtml (ratingStyle (vitalRating vital)).label
-        td_ [class_ "text-xs text-textWeak max-sm:order-4 max-sm:col-span-2"] $ toHtml $ measurementNote vital vital.measurement
+        forM_ ([("Good", vital.goodAt, "max-sm:order-5"), ("Poor", vital.poorAt, "max-sm:order-6")] :: [(Text, Double, Text)]) \(label, threshold, order) -> td_ [class_ $ "text-right tabular-nums text-textWeak max-sm:text-left " <> order] do
+          span_ [class_ "mr-2 text-xs sm:hidden", Aria.hidden_ "true"] $ toHtml label
+          toHtml $ formatVitalThreshold vital threshold
+        td_ [class_ "max-sm:order-2 max-sm:text-right"] $ span_ [class_ $ "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium " <> style.badgeClass] do
+          span_ [class_ $ "h-2 w-2 rounded-full " <> style.fillClass, Aria.hidden_ "true"] ""
+          toHtml style.label
+        td_ [class_ "text-xs text-textWeak max-sm:order-4 max-sm:col-span-2"] $ toHtml $ measurementNote vital
         td_ [class_ "text-right tabular-nums text-textWeak max-sm:order-3 max-sm:col-span-2 max-sm:text-left"] $ toHtml $ observationLabel vital.measurement
 
 
@@ -1833,18 +1834,14 @@ deviceIcon = \case
 
 
 formatVital :: Vital -> Text
-formatVital vital = formatMeasurement vital vital.measurement
-
-
-formatMeasurement :: Vital -> VitalMeasurement -> Text
-formatMeasurement vital = \case
+formatVital vital = case vital.measurement of
   Unmeasured -> "No data"
   Unavailable _ _ -> "Unavailable"
   Measured _ estimate -> (if isJust (RUM.estimateRange estimate) then "≈ " else "") <> formatVitalThreshold vital (RUM.estimateValue estimate)
 
 
-measurementNote :: Vital -> VitalMeasurement -> Text
-measurementNote vital = \case
+measurementNote :: Vital -> Text
+measurementNote vital = case vital.measurement of
   Unmeasured -> "No observations"
   Measured _ estimate -> maybe "Exact quantile" (\(lower, upper) -> "Estimated within " <> formatVitalThreshold vital lower <> "–" <> formatVitalThreshold vital upper) $ RUM.estimateRange estimate
   Unavailable _ issue -> case issue of
@@ -1950,7 +1947,7 @@ degradedBanner_ page panel = div_ [role_ "alert", class_ "flex items-start gap-2
   div_ do
     strong_ "Some RUM data could not be loaded."
     span_ [class_ "ml-1 text-textWeak"] $ toHtml $ "Retry or narrow the time range. Unavailable: " <> T.intercalate ", " (map rumQueryLabel page.degradedPanels) <> "."
-  button_ ([type_ "button", class_ "btn btn-sm shrink-0"] <> panelSwapAttrs page panel (rumPanelUrl page panel <> "&refresh=1") "click" [term "hx-sync" $ if page.tab == Sessions && panel == PanelSessions then "#rum-session-search-form:replace" else "#" <> panelId panel <> ":replace"]) "Retry"
+  button_ ([type_ "button", class_ "btn btn-sm shrink-0"] <> panelSwapAttrs page panel True "click" (Just "replace")) "Retry"
 
 
 rumQueryLabel :: RumQuery -> Text

@@ -40,7 +40,7 @@ import Hasql.Decoders qualified as D
 import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
 import Pkg.Components.TimePicker qualified as TimePicker
-import Pkg.DeriveUtils (AesonText (..), DB, WrappedEnumSC (..), encodeEnumSC)
+import Pkg.DeriveUtils (AesonText (..), DB, WrappedEnumSC (..))
 import Pkg.Parser (ScopedQuery (..))
 import Relude
 import Relude.Extra.Foldable1 (minimum1)
@@ -192,7 +192,7 @@ estimateRange = \case
 
 data VitalCoverage = MissingBaseline | UnknownStart | UnknownTemporality | UnsupportedPopulation | InvalidValue | InvalidBuckets | InvalidReset | OverlappingIntervals | UnboundedBucket | InterruptedSeries
   deriving stock (Eq, Generic, Read, Show)
-  deriving (AE.FromJSON, AE.ToJSON, HI.DecodeValue) via WrappedEnumSC 'Nothing "" VitalCoverage
+  deriving (AE.FromJSON, AE.ToJSON, HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "" VitalCoverage
 
 
 data VitalMeasurement = Unmeasured | Measured ObservationCount VitalEstimate | Unavailable Natural VitalCoverage
@@ -271,7 +271,7 @@ data VitalRead = PopulationRead VitalPopulation | EpochRead Text UTCTime
 
 data VitalReadKind = Population | Epoch
   deriving stock (Read, Show)
-  deriving (HI.DecodeValue) via WrappedEnumSC 'Nothing "" VitalReadKind
+  deriving (HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "" VitalReadKind
 
 
 instance HI.DecodeRow VitalRead where
@@ -314,19 +314,14 @@ data PageVitalPoint = PageVitalPoint
 -- Reports are selected by end time; DELTA populations do not require a known start.
 rumVitalPopulation :: (DB es, Labeled "timefusion" Hasql.Hasql :> es) => Bool -> ScopedQuery -> TimePicker.TimeWindow -> RumBucket -> Eff es [VitalPopulation]
 rumVitalPopulation useTf scope window bucket = Hasql.withHasqlTimefusion useTf do
-  let project = scope.projectId.toText
-      environment = scope.environment
-      service = scope.service
-      fromTime = window.fromTime
-      toTime = window.toTime
-      interval :: Text
+  let interval :: Text
       interval = case bucket of FiveMinutes -> "5 minutes"; OneHour -> "1 hour"; SixHours -> "6 hours"
-      resourceScope =
-        [HI.sql|project_id=#{project} AND (#{environment}::text IS NULL OR resource___deployment___environment___name = #{environment})
-        AND (#{service}::text IS NULL OR resource___service___name = #{service})|]
-      names :: [Text]
-      names = [prefix <> name | name <- ["lcp", "inp", "cls", "fcp", "ttfb"], prefix <- ["browser.web_vital.", "k6.browser_web_vital_"]]
-      metricFilter = [HI.sql| AND metric_name = ANY(#{names}::text[])|]
+      vitalScope name =
+        let names :: [Text]
+            names = [prefix <> name | prefix <- ["browser.web_vital.", "k6.browser_web_vital_"]]
+         in
+        [HI.sql|project_id=#{scope.projectId.toText} AND (#{scope.environment}::text IS NULL OR resource___deployment___environment___name = #{scope.environment})
+        AND (#{scope.service}::text IS NULL OR resource___service___name = #{scope.service}) AND metric_name = ANY(#{names}::text[])|]
       columns =
         [HI.sql|timestamp,start_timestamp,series_id,metric_type,aggregation_temporality,flags,
         CASE WHEN metric_type IN ('GAUGE') THEN value END AS value,
@@ -334,40 +329,26 @@ rumVitalPopulation useTf scope window bucket = Hasql.withHasqlTimefusion useTf d
         COALESCE(attributes #>> '{page,url}',attributes->>'page.url',attributes->>'url') AS page,
         CASE WHEN starts_with(metric_name,'browser.web_vital.') THEN substring(metric_name FROM length('browser.web_vital.')+1)
           ELSE substring(metric_name FROM length('k6.browser_web_vital_')+1) END::text AS metric|]
-      current = [HI.sql|SELECT |] <> columns <> [HI.sql| FROM otel_metrics WHERE |] <> resourceScope <> metricFilter <> [HI.sql| AND timestamp>=#{fromTime} AND timestamp<=#{toTime}|]
-      withHistory epochs = case nonEmpty epochs of
-        Nothing -> current
+      current name = [HI.sql|SELECT |] <> columns <> [HI.sql| FROM otel_metrics WHERE |] <> vitalScope name <> [HI.sql| AND timestamp>=#{window.fromTime} AND timestamp<=#{window.toTime}|]
+      withHistory name epochs = case nonEmpty epochs of
+        Nothing -> current name
         Just selected ->
           let oldest = minimum1 $ fmap snd selected
               seriesIds :: [Text]
               seriesIds = ordNub $ map fst epochs
               exactEpochs = mconcat $ intersperse [HI.sql| OR |] [[HI.sql|(series_id::text=#{seriesId} AND start_timestamp=#{start})|] | (seriesId, start) <- epochs]
-           in current
+           in current name
                 <> [HI.sql| UNION ALL SELECT |]
                 <> columns
                 <> [HI.sql| FROM (
                 SELECT *,ROW_NUMBER() OVER(PARTITION BY series_id,CASE WHEN flags & 1!=0 THEN NULL ELSE start_timestamp END ORDER BY timestamp DESC) AS predecessor
                 FROM otel_metrics WHERE |]
-                <> resourceScope
-                <> metricFilter
+                <> vitalScope name
                 <> [HI.sql| AND series_id = ANY(#{seriesIds}::text[])|]
-                <> [HI.sql| AND timestamp>=#{oldest} AND timestamp<#{fromTime} AND (flags & 1!=0 OR |]
+                <> [HI.sql| AND timestamp>=#{oldest} AND timestamp<#{window.fromTime} AND (flags & 1!=0 OR |]
                 <> exactEpochs
                 <> [HI.sql|)) AS history WHERE predecessor=1|]
       -- TimeFusion drops partitions when inheriting a named window with a new order/frame.
-      coverageLabel = toText . encodeEnumSC @""
-      invalidValue = coverageLabel InvalidValue
-      unsupportedPopulation = coverageLabel UnsupportedPopulation
-      invalidBuckets = coverageLabel InvalidBuckets
-      unknownStart = coverageLabel UnknownStart
-      overlappingIntervals = coverageLabel OverlappingIntervals
-      unknownTemporality = coverageLabel UnknownTemporality
-      interruptedSeries = coverageLabel InterruptedSeries
-      invalidReset = coverageLabel InvalidReset
-      missingBaseline = coverageLabel MissingBaseline
-      unboundedBucket = coverageLabel UnboundedBucket
-      populationTag = toText $ encodeEnumSC @"" Population
-      epochTag = toText $ encodeEnumSC @"" Epoch
       readPopulations source discoverEpochs =
         Hasql.interp
           $ [HI.sql|WITH source AS (|]
@@ -387,23 +368,23 @@ rumVitalPopulation useTf scope window bucket = Hasql.withHasqlTimefusion useTf d
      WHEN aggregation_temporality='DELTA' THEN distribution_count
      WHEN prior_count IS NOT NULL THEN distribution_count-prior_count
      WHEN start_timestamp=timestamp THEN 0
-     WHEN start_timestamp >= #{fromTime} AND start_timestamp < timestamp THEN distribution_count
+     WHEN start_timestamp >= #{window.fromTime} AND start_timestamp < timestamp THEN distribution_count
      ELSE 0 END AS observations,
-   CASE WHEN metric_type='GAUGE' THEN CASE WHEN value>=0 AND value<'Infinity'::float8 THEN 'complete' ELSE #{invalidValue} END
-     WHEN metric_type!='HISTOGRAM' THEN #{unsupportedPopulation}
-     WHEN distribution_count IS NULL OR hist_bucket_counts IS NULL OR hist_explicit_bounds IS NULL OR cardinality(hist_bucket_counts)!=cardinality(hist_explicit_bounds)+1 OR distribution_count<0 THEN #{invalidBuckets}
-     WHEN start_timestamp>timestamp OR (start_timestamp IS NULL AND aggregation_temporality IS DISTINCT FROM 'DELTA') THEN #{unknownStart}
-     WHEN aggregation_temporality='DELTA' AND previous_series_timestamp>start_timestamp THEN #{overlappingIntervals}
+   CASE WHEN metric_type='GAUGE' THEN CASE WHEN value>=0 AND value<'Infinity'::float8 THEN 'complete' ELSE #{InvalidValue} END
+     WHEN metric_type!='HISTOGRAM' THEN #{UnsupportedPopulation}
+     WHEN distribution_count IS NULL OR hist_bucket_counts IS NULL OR hist_explicit_bounds IS NULL OR cardinality(hist_bucket_counts)!=cardinality(hist_explicit_bounds)+1 OR distribution_count<0 THEN #{InvalidBuckets}
+     WHEN start_timestamp>timestamp OR (start_timestamp IS NULL AND aggregation_temporality IS DISTINCT FROM 'DELTA') THEN #{UnknownStart}
+     WHEN aggregation_temporality='DELTA' AND previous_series_timestamp>start_timestamp THEN #{OverlappingIntervals}
      WHEN aggregation_temporality='DELTA' THEN 'complete'
-     WHEN aggregation_temporality IS NULL OR aggregation_temporality!='CUMULATIVE' THEN #{unknownTemporality}
-     WHEN last_marker>prior_timestamp OR (prior_timestamp IS NULL AND last_marker>=start_timestamp AND start_timestamp!=timestamp) THEN #{interruptedSeries}
-     WHEN prior_count IS NOT NULL AND (distribution_count<prior_count OR (prior_timestamp=timestamp AND distribution_count!=prior_count)) THEN #{invalidReset}
-     WHEN prior_count IS NULL AND previous_series_timestamp>start_timestamp THEN #{overlappingIntervals}
+     WHEN aggregation_temporality IS NULL OR aggregation_temporality!='CUMULATIVE' THEN #{UnknownTemporality}
+     WHEN last_marker>prior_timestamp OR (prior_timestamp IS NULL AND last_marker>=start_timestamp AND start_timestamp!=timestamp) THEN #{InterruptedSeries}
+     WHEN prior_count IS NOT NULL AND (distribution_count<prior_count OR (prior_timestamp=timestamp AND distribution_count!=prior_count)) THEN #{InvalidReset}
+     WHEN prior_count IS NULL AND previous_series_timestamp>start_timestamp THEN #{OverlappingIntervals}
      WHEN prior_count IS NOT NULL THEN 'complete'
      WHEN start_timestamp=timestamp THEN 'complete'
-     WHEN start_timestamp<#{fromTime} THEN #{missingBaseline}
+     WHEN start_timestamp<#{window.fromTime} THEN #{MissingBaseline}
      ELSE 'complete' END AS coverage
- FROM previous WHERE timestamp>=#{fromTime} AND flags & 1=0
+ FROM previous WHERE timestamp>=#{window.fromTime} AND flags & 1=0
 ), sides AS (
  SELECT points.*,unnest(ARRAY[0,1]) AS side FROM points
 ), expanded AS (
@@ -424,7 +405,7 @@ rumVitalPopulation useTf scope window bucket = Hasql.withHasqlTimefusion useTf d
    ROW_NUMBER() OVER(PARTITION BY timestamp,series_id,start_timestamp,side ORDER BY position) AS bound_ordinal
  FROM indexed
 ), validated AS (
- SELECT *,MAX(CASE WHEN coverage IN (#{unsupportedPopulation},#{invalidValue}) THEN coverage WHEN amount IS NULL OR amount<0 OR bucket_count!=expected_count OR expected_count<0 OR (bound IS NOT NULL AND NOT(bound>=0 AND bound<'Infinity'::float8)) OR (bound_ordinal>1 AND bound IS NOT NULL AND (preceding_bound IS NULL OR bound<=preceding_bound)) THEN #{invalidBuckets} ELSE coverage END) OVER(PARTITION BY timestamp,series_id,start_timestamp) AS point_coverage
+ SELECT *,MAX(CASE WHEN coverage IN (#{UnsupportedPopulation},#{InvalidValue}) THEN coverage WHEN amount IS NULL OR amount<0 OR bucket_count!=expected_count OR expected_count<0 OR (bound IS NOT NULL AND NOT(bound>=0 AND bound<'Infinity'::float8)) OR (bound_ordinal>1 AND bound IS NOT NULL AND (preceding_bound IS NULL OR bound<=preceding_bound)) THEN #{InvalidBuckets} ELSE coverage END) OVER(PARTITION BY timestamp,series_id,start_timestamp) AS point_coverage
  FROM cumulative
 ), paired AS (
  SELECT *, MAX(CASE WHEN side=1 THEN cumulative END) OVER(PARTITION BY timestamp,series_id,start_timestamp,bound) AS prior_cumulative
@@ -434,7 +415,7 @@ rumVitalPopulation useTf scope window bucket = Hasql.withHasqlTimefusion useTf d
    ROW_NUMBER() OVER(PARTITION BY timestamp,series_id,start_timestamp ORDER BY bound NULLS LAST) AS ordinal
  FROM paired WHERE side=0 AND (value IS NOT NULL OR aggregation_temporality='DELTA' OR prior_count IS NULL OR prior_cumulative IS NOT NULL)
 ), selected AS (
- SELECT *,MAX(CASE WHEN point_coverage='complete' AND (cdf<0 OR cdf<LAG_CDF) THEN #{invalidBuckets} ELSE point_coverage END) OVER(PARTITION BY timestamp,series_id,start_timestamp) AS effective_coverage
+ SELECT *,MAX(CASE WHEN point_coverage='complete' AND (cdf<0 OR cdf<LAG_CDF) THEN #{InvalidBuckets} ELSE point_coverage END) OVER(PARTITION BY timestamp,series_id,start_timestamp) AS effective_coverage
  FROM (SELECT *,LAG(cdf,1,0) OVER(PARTITION BY timestamp,series_id,start_timestamp ORDER BY bound NULLS LAST) AS LAG_CDF FROM selected_raw) AS ordered
 ), totals AS (
  SELECT CASE WHEN GROUPING(bucket)=0 THEN 1 WHEN GROUPING(page)=0 THEN 2 ELSE 0 END AS kind,
@@ -481,7 +462,7 @@ rumVitalPopulation useTf scope window bucket = Hasql.withHasqlTimefusion useTf d
  FROM combined
  WINDOW population AS (PARTITION BY kind,group_bucket,group_page,metric ORDER BY bound NULLS LAST)
 ), quantiles AS (
- SELECT *,CASE WHEN population_coverage='complete' AND total>0 AND (bound IS NULL OR histogram_at_bound IS NULL) THEN #{unboundedBucket}
+ SELECT *,CASE WHEN population_coverage='complete' AND total>0 AND (bound IS NULL OR histogram_at_bound IS NULL) THEN #{UnboundedBucket}
     WHEN population_coverage!='complete' THEN population_coverage END AS issue,
    CASE WHEN population_coverage!='complete' OR total=0 OR bound IS NULL OR histogram_at_bound IS NULL THEN NULL
      WHEN total_histogram_points=0 THEN CASE WHEN lower_cdf<FLOOR(quantile_position) THEN bound
@@ -494,22 +475,23 @@ rumVitalPopulation useTf scope window bucket = Hasql.withHasqlTimefusion useTf d
      AND cdf>=quantile_target
      AND lower_cdf<quantile_target)
 ), reads AS (
-SELECT #{populationTag}::text AS read_kind,ROW(group_bucket,group_page,metric::text,total::bigint,issue::text,p75::float8,
+SELECT #{Population}::text AS read_kind,ROW(group_bucket,group_page,metric::text,total::bigint,issue::text,p75::float8,
   CASE WHEN issue IS NULL AND total>0 AND total_histogram_points>0 AND (histogram_points_at_bound=total_histogram_points OR COALESCE(histogram_lower_cdf,0)!=histogram_upper_cdf) THEN COALESCE(histogram_lower_bound,0)::float8 END,
   CASE WHEN issue IS NULL AND total>0 AND total_histogram_points>0 AND (histogram_points_at_bound=total_histogram_points OR COALESCE(histogram_lower_cdf,0)!=histogram_upper_cdf) THEN histogram_upper_bound::float8 END) AS population,NULL::text AS epoch_series,NULL::timestamptz AS epoch_start
 FROM quantiles WHERE kind!=2 OR group_page IS NOT NULL
 UNION ALL
-SELECT #{epochTag}::text,NULL,series_id::text,start_timestamp FROM (
+SELECT #{Epoch}::text,NULL,series_id::text,start_timestamp FROM (
  SELECT DISTINCT series_id,start_timestamp FROM selected
- WHERE #{discoverEpochs} AND metric_type='HISTOGRAM' AND aggregation_temporality='CUMULATIVE' AND start_timestamp<#{fromTime}
+ WHERE #{discoverEpochs} AND metric_type='HISTOGRAM' AND aggregation_temporality='CUMULATIVE' AND start_timestamp<#{window.fromTime}
 ) AS epochs
 )
 SELECT ROW(read_kind,population,epoch_series,epoch_start) FROM reads
 |]
-  initial <- readPopulations current True
-  let epochs = [(series, start) | EpochRead series start <- initial]
-  populationReads <- if null epochs then pure initial else readPopulations (withHistory epochs) False
-  let populations = [population | PopulationRead population <- populationReads]
+  populations <- concat <$> forM ["lcp", "inp", "cls", "fcp", "ttfb"] \name -> do
+    initial <- readPopulations (current name) True
+    let epochs = [(series, start) | EpochRead series start <- initial]
+    populationReads <- if null epochs then pure initial else readPopulations (withHistory name epochs) False
+    pure [population | PopulationRead population <- populationReads]
   -- Grouped pages are ordered/capped here to avoid native final-sort memory pressure.
   let (pages, fieldAndTrend) = partition (\population -> case population.grouping of PageVital{} -> True; FieldVital -> False; TrendVital{} -> False) populations
       pageGroups = Map.fromListWith (<>) [(url, [population]) | population@VitalPopulation{grouping = PageVital url} <- pages]

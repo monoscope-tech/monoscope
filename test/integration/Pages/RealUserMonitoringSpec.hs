@@ -119,11 +119,41 @@ renderPanel tr tab query sessionFilterM selected service panel = do
 
 
 loadVitalPanel :: TestResources -> Projects.ProjectId -> Maybe Text -> Text -> IO RUM.RumData
-loadVitalPanel tr projectId refresh panel = do
-  (_, RUM.RumGet (PageCtx _ body)) <- testServant tr $ RUM.rumGetH projectId (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just panel) (Just "1") refresh
+loadVitalPanel tr projectId refresh = loadPerformance tr projectId Nothing Nothing (Just "24H") refresh . Just
+
+
+-- | The loaded Performance tab body for a window, or for one panel of it.
+loadPerformance :: TestResources -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> IO RUM.RumData
+loadPerformance tr projectId from to since refresh panel = do
+  (_, RUM.RumGet (PageCtx _ body)) <- testServant tr $ RUM.rumGetH projectId (Just "performance") Nothing Nothing from to since Nothing Nothing panel (Just "1") refresh
   case body of
     DeferredBody page -> pure page
-    DeferredShell{} -> fail "Expected loaded vital panel"
+    DeferredShell{} -> fail "Expected a loaded Performance body"
+
+
+measured :: RUMData.VitalMeasurement -> (Maybe Double, Natural)
+measured measurement = (RUMData.measurementValue measurement, RUMData.measurementSamples measurement)
+
+
+-- | Both vital panels report LCP unavailable, in the summary and in every trend/page point.
+lcpUnavailable :: TestResources -> Projects.ProjectId -> Natural -> RUMData.VitalCoverage -> Expectation
+lcpUnavailable tr projectId count issue = forM_ ["vitals", "vital_trend"] \panel -> do
+  page <- loadVitalPanel tr projectId Nothing panel
+  page.degradedPanels `shouldBe` []
+  (if panel == "vitals" then [vital.measurement | vital <- page.vitals, vital.name == "lcp"] else map (.measurement) page.vitalTrend <> map (.measurement) page.pageVitals)
+    `shouldBe` replicate (if panel == "vitals" then 1 else 2) (RUMData.Unavailable count issue)
+
+
+nanos :: UTCTime -> Word64
+nanos = floor . (* 1000000000) . utcTimeToPOSIXSeconds
+
+
+histogramPoint :: Text -> UTCTime -> UTCTime -> Word64 -> [Word64] -> [Double] -> PM.HistogramDataPoint
+histogramPoint url end start count counts bounds = defMessage & PMF.timeUnixNano .~ nanos end & PMF.startTimeUnixNano .~ nanos start & PMF.attributes .~ [mkAttr "page.url" url] & PMF.count .~ count & PMF.bucketCounts .~ counts & PMF.explicitBounds .~ bounds
+
+
+lcpHistogram :: PM.AggregationTemporality -> [PM.HistogramDataPoint] -> PM.Metric
+lcpHistogram temporality points = defMessage & PMF.name .~ "browser.web_vital.lcp" & PMF.histogram .~ (defMessage & PMF.aggregationTemporality .~ temporality & PMF.dataPoints .~ points)
 
 
 exportMetrics :: TestResources -> Text -> [PC.KeyValue] -> [PM.Metric] -> IO ()
@@ -158,7 +188,7 @@ spec = sequential $ aroundAll withTestResources do
         ingestMetric tr apiKey [] [mkAttr "page.url" "/scalar"] (if value == 30 then "k6.browser_web_vital_lcp" else "browser.web_vital.lcp") value (addUTCTime seconds frozenTime)
       detail <- loadVitalPanel tr projectId Nothing "vital_trend"
       summary <- loadVitalPanel tr projectId Nothing "vitals"
-      (mapMaybe (RUMData.measurementValue . (.measurement)) detail.vitalTrend, [(RUMData.measurementValue point.measurement, RUMData.measurementSamples point.measurement) | point <- detail.pageVitals], [(RUMData.measurementValue vital.measurement, RUMData.measurementSamples vital.measurement) | vital <- summary.vitals, vital.name == "lcp"])
+      (mapMaybe (RUMData.measurementValue . (.measurement)) detail.vitalTrend, [measured point.measurement | point <- detail.pageVitals], [measured vital.measurement | vital <- summary.vitals, vital.name == "lcp"])
         `shouldBe` ([22.5], [(Just 22.5, 4)], [(Just 22.5, 4)])
 
     it "vitalTrend_partialFirstBucket_staysInsideTheSelectedAxis" \tr -> do
@@ -168,41 +198,17 @@ spec = sequential $ aroundAll withTestResources do
       let fromQuery = Just $ toText $ iso8601Show $ addUTCTime (-31.125) frozenTime
           toQuery = Just $ toText $ iso8601Show $ addUTCTime (-1.25) frozenTime
       forM_ ([(Nothing, Nothing, Just "30S", -30, 0), (fromQuery, toQuery, Nothing, -31.125, -1.25), (Nothing, Nothing, Just "1H", -3600, 0)] :: [(Maybe Text, Maybe Text, Maybe Text, NominalDiffTime, NominalDiffTime)]) \(from, to, since, start, end) -> do
-        (_, RUM.RumGet (PageCtx _ body)) <- testServant tr $ RUM.rumGetH projectId (Just "performance") Nothing Nothing from to since Nothing Nothing (Just "vital_trend") (Just "1") Nothing
-        case body of
-          DeferredShell{} -> fail "Expected loaded partial-bucket panel"
-          DeferredBody page -> do
-            page.degradedPanels `shouldBe` []
-            [(RUMData.measurementValue vital.measurement, RUMData.measurementSamples vital.measurement) | vital <- page.vitals, vital.name == "lcp"] `shouldBe` [(Just 175, 1)]
-            let html = toText $ Lucid.renderText $ Lucid.toHtml page
-                payload = T.replace "&quot;" "\"" $ T.takeWhile (/= '"') $ T.drop (T.length "data-widget=\"") $ snd $ T.breakOn "data-widget=\"" html
-            widget <- either fail pure $ AE.eitherDecodeStrict @Widget.Widget $ encodeUtf8 payload
-            let millis seconds = floor (1000 * utcTimeToPOSIXSeconds (addUTCTime seconds frozenTime)) :: Int
-                plottedStart = max (millis start) (millis (-300))
-            [(dataset.from, dataset.to, dataset.source) | dataset <- maybeToList widget.dataset]
-              `shouldBe` [(Just $ millis start, Just $ millis end, AE.toJSON ([AE.toJSON (["timestamp", "P75"] :: [Text]), AE.toJSON (plottedStart, 175 :: Int)] :: [AE.Value]))]
+        page <- loadPerformance tr projectId from to since Nothing (Just "vital_trend")
+        page.degradedPanels `shouldBe` []
+        [measured vital.measurement | vital <- page.vitals, vital.name == "lcp"] `shouldBe` [(Just 175, 1)]
+        widget <- renderedWidget $ toText $ Lucid.renderText $ Lucid.toHtml page
+        let millis seconds = floor (1000 * utcTimeToPOSIXSeconds (addUTCTime seconds frozenTime)) :: Int
+            plottedStart = max (millis start) (millis (-300))
+        [(dataset.from, dataset.to, dataset.source) | dataset <- maybeToList widget.dataset]
+          `shouldBe` [(Just $ millis start, Just $ millis end, AE.toJSON ([AE.toJSON (["timestamp", "P75"] :: [Text]), AE.toJSON (plottedStart, 175 :: Int)] :: [AE.Value]))]
 
     it "histogramVitals_useObservationBuckets_insteadOfExportMeans" \tr -> do
-      let point timestamp start count total low high counts =
-            defMessage
-              & PMF.timeUnixNano
-              .~ floor (utcTimeToPOSIXSeconds timestamp * 1000000000)
-                & PMF.startTimeUnixNano
-              .~ floor (utcTimeToPOSIXSeconds start * 1000000000)
-                & PMF.attributes
-              .~ [mkAttr "page.url" "/histogram"]
-                & PMF.count
-              .~ count
-                & PMF.sum
-              .~ total
-                & PMF.min
-              .~ low
-                & PMF.max
-              .~ high
-                & PMF.bucketCounts
-              .~ counts
-                & PMF.explicitBounds
-              .~ [100, 200, 10000]
+      let point end start count total low high counts = histogramPoint "/histogram" end start count counts [100, 200, 10000] & PMF.sum .~ total & PMF.min .~ low & PMF.max .~ high
           at = (`addUTCTime` frozenTime)
           delta = [point (at (-10)) (at (-60)) 100 7000 0 200 [80, 20, 0, 0], point (at (-9)) (at (-10)) 1 9000 9000 9000 [0, 0, 1, 0]]
           -- The previous export is outside the selected 24H window. The repeated export
@@ -279,10 +285,8 @@ spec = sequential $ aroundAll withTestResources do
       pages <- forM cases \(temporality, points, scalars, _) -> do
         projectId <- createTestProject tr "RUM histogram"
         apiKey <- createTestAPIKey tr projectId "rum-histogram-key"
-        let histogram = defMessage & PMF.aggregationTemporality .~ temporality & PMF.dataPoints .~ points
-            metric = defMessage & PMF.name .~ "browser.web_vital.lcp" & PMF.histogram .~ histogram
-            scoped = tr{trSessAndHeader = fmap (\session -> session{Projects.service = Just "histogram-ui"}) tr.trSessAndHeader}
-        exportMetrics tr apiKey [mkAttr "service.name" "histogram-ui"] [metric]
+        let scoped = tr{trSessAndHeader = fmap (\session -> session{Projects.service = Just "histogram-ui"}) tr.trSessAndHeader}
+        exportMetrics tr apiKey [mkAttr "service.name" "histogram-ui"] [lcpHistogram temporality points]
         when (temporality == PM.AGGREGATION_TEMPORALITY_UNSPECIFIED)
           $ runTestBg frozenTime tr
           $ Hasql.withHasqlTimefusion True
@@ -307,7 +311,6 @@ spec = sequential $ aroundAll withTestResources do
           toText (Lucid.renderText $ Lucid.toHtml summary) `shouldContainAll` [">" <> label <> "</td>"]
       -- Explicit/custom buckets use uniform within-bucket interpolation; scalar observations
       -- remain exact. Missing baselines retain known counts without a full-population P75.
-      let measured measurement = (RUMData.measurementValue measurement, RUMData.measurementSamples measurement)
       map (\(detail, summary) -> (map (measured . (.measurement)) detail.vitalTrend, [(value.page, measured value.measurement) | value <- detail.pageVitals], [measured value.measurement | value <- summary.vitals, value.name == "lcp"])) pages
         `shouldBe` [([expected], [("/histogram", expected)], [expected]) | (_, _, _, expected) <- cases]
       let lcpMeasurements = [value.measurement | (_, summary) <- pages, value <- summary.vitals, value.name == "lcp"]
@@ -319,10 +322,7 @@ spec = sequential $ aroundAll withTestResources do
       projectId <- createTestProject tr "RUM one-read population"
       apiKey <- createTestAPIKey tr projectId "rum-one-read-key"
       let at = (`addUTCTime` frozenTime)
-          nanos = floor . (* 1000000000) . utcTimeToPOSIXSeconds
-          point = defMessage & PMF.timeUnixNano .~ nanos (at (-10)) & PMF.startTimeUnixNano .~ nanos (at (-60)) & PMF.attributes .~ [mkAttr "page.url" "/one-read"] & PMF.count .~ 100 & PMF.bucketCounts .~ [80, 20, 0] & PMF.explicitBounds .~ [100, 200]
-          metric = defMessage & PMF.name .~ "browser.web_vital.lcp" & PMF.histogram .~ (defMessage & PMF.aggregationTemporality .~ PM.AGGREGATION_TEMPORALITY_DELTA & PMF.dataPoints .~ [point])
-      exportMetrics tr apiKey [] [metric]
+      exportMetrics tr apiKey [] [lcpHistogram PM.AGGREGATION_TEMPORALITY_DELTA [histogramPoint "/one-read" (at (-10)) (at (-60)) 100 [80, 20, 0] [100, 200]]]
       forM_ (zip [10, 30] [-11, -10]) \(value, seconds) -> ingestMetric tr apiKey [] [mkAttr "page.url" "/one-read"] "browser.web_vital.fcp" value (at seconds)
       queries <- newIORef (0 :: Int)
       let database = interpose @(Labeled "timefusion" Hasql.Hasql) \_ (Labeled effect) -> do
@@ -341,35 +341,17 @@ spec = sequential $ aroundAll withTestResources do
       case body of
         DeferredBody page -> do
           page.degradedPanels `shouldBe` []
-          let measured name measurement = (name, RUMData.measurementValue measurement, RUMData.measurementSamples measurement)
-              expected = [("fcp", Just 25, 2), ("lcp", Just 93.75, 100)]
-          sort [measured vital.name vital.measurement | vital <- page.vitals, vital.name `elem` ["fcp", "lcp"]] `shouldBe` expected
-          sort [measured vital.metricName vital.measurement | vital <- page.vitalTrend] `shouldBe` expected
-          sort [measured vital.metricName vital.measurement | vital <- page.pageVitals] `shouldBe` expected
+          let expected = [("fcp", (Just 25, 2)), ("lcp", (Just 93.75, 100))]
+          sort [(vital.name, measured vital.measurement) | vital <- page.vitals, vital.name `elem` ["fcp", "lcp"]] `shouldBe` expected
+          sort [(vital.metricName, measured vital.measurement) | vital <- page.vitalTrend] `shouldBe` expected
+          sort [(vital.metricName, measured vital.measurement) | vital <- page.pageVitals] `shouldBe` expected
         DeferredShell{} -> fail "Expected loaded one-read vital panel"
       when tr.trATCtx.env.enableTimefusionReads $ readIORef queries `shouldReturn` 1
 
     it "histogramVitals_missingCount_retainsUnavailableCoverage" \tr -> do
       projectId <- createTestProject tr "RUM missing histogram count"
       apiKey <- createTestAPIKey tr projectId "rum-missing-count-key"
-      let at = (`addUTCTime` frozenTime)
-          point =
-            defMessage & PMF.timeUnixNano
-              .~ floor (utcTimeToPOSIXSeconds (at (-10)) * 1000000000)
-                & PMF.startTimeUnixNano
-              .~ floor (utcTimeToPOSIXSeconds (at (-60)) * 1000000000)
-                & PMF.attributes
-              .~ [mkAttr "page.url" "/missing-count"] & PMF.count
-              .~ 100
-                & PMF.bucketCounts
-              .~ [80, 20, 0] & PMF.explicitBounds
-              .~ [100, 200]
-          metric =
-            defMessage & PMF.name
-              .~ "browser.web_vital.lcp"
-                & PMF.histogram
-              .~ (defMessage & PMF.aggregationTemporality .~ PM.AGGREGATION_TEMPORALITY_DELTA & PMF.dataPoints .~ [point])
-      exportMetrics tr apiKey [] [metric]
+      exportMetrics tr apiKey [] [lcpHistogram PM.AGGREGATION_TEMPORALITY_DELTA [histogramPoint "/missing-count" (addUTCTime (-10) frozenTime) (addUTCTime (-60) frozenTime) 100 [80, 20, 0] [100, 200]]]
       runTestBg frozenTime tr
         $ Hasql.withHasqlTimefusion True
         $ Hasql.interpExecute_
@@ -383,48 +365,29 @@ spec = sequential $ aroundAll withTestResources do
         <> nativeDateColumn tr
         <> [HI.sql| FROM otel_metrics WHERE project_id=#{projectId.toText}
       |]
-      forM_ ["vitals", "vital_trend"] \panel -> do
-        page <- loadVitalPanel tr projectId Nothing panel
-        page.degradedPanels `shouldBe` []
-        let measurements = if panel == "vitals" then [vital.measurement | vital <- page.vitals, vital.name == "lcp"] else map (.measurement) page.vitalTrend <> map (.measurement) page.pageVitals
-        measurements `shouldBe` replicate (if panel == "vitals" then 1 else 2) (RUMData.Unavailable 100 RUMData.InvalidBuckets)
+      lcpUnavailable tr projectId 100 RUMData.InvalidBuckets
 
     it "denseHistogramVitals_keepCompleteCounts_andBoundCachedPages" \tr -> do
       projectId <- createTestProject tr "RUM dense histogram"
       apiKey <- createTestAPIKey tr projectId "rum-dense-key"
       let at = (`addUTCTime` frozenTime)
-          nanos = floor . (* 1000000000) . utcTimeToPOSIXSeconds
           points =
-            [ defMessage & PMF.timeUnixNano
-                .~ nanos (at end) & PMF.startTimeUnixNano
-                .~ nanos (at (-90000))
-                  & PMF.attributes
-                .~ [mkAttr "page.url" ("https://dense.example/" <> show series)]
-                  & PMF.count
-                .~ (100 + fromIntegral ordinal) & PMF.bucketCounts
-                .~ [80 + fromIntegral ordinal, 20, 0]
-                  & PMF.explicitBounds
-                .~ [100, 200]
+            [ histogramPoint ("https://dense.example/" <> show series) (at end) (at (-90000)) (100 + fromIntegral ordinal) [80 + fromIntegral ordinal, 20, 0] [100, 200]
             | series <- [0 .. 199 :: Int]
             , (ordinal, end) <- [(0, -86401)] <> [(n, -4800 + 30 * fromIntegral n) | n <- [1 .. 160 :: Int]]
             ]
-          metric =
-            defMessage & PMF.name
-              .~ "browser.web_vital.lcp"
-                & PMF.histogram
-              .~ (defMessage & PMF.aggregationTemporality .~ PM.AGGREGATION_TEMPORALITY_CUMULATIVE & PMF.dataPoints .~ points)
           scalar =
             defMessage & PMF.name
               .~ "browser.web_vital.fcp"
                 & PMF.gauge
               .~ (defMessage & PMF.dataPoints .~ [defMessage & PMF.timeUnixNano .~ nanos (at (-10)) & PMF.attributes .~ [mkAttr "page.url" ("https://dense.example/" <> show series)] & PMF.asDouble .~ 25 | series <- [0 .. 199 :: Int]])
-      exportMetrics tr apiKey [] [metric, scalar]
+      exportMetrics tr apiKey [] [lcpHistogram PM.AGGREGATION_TEMPORALITY_CUMULATIVE points, scalar]
       forM_ ([Just "1", Nothing] :: [Maybe Text]) \refresh -> do
         when (isNothing refresh) $ Cache.purge tr.trATCtx.rumCache
         page <- loadVitalPanel tr projectId refresh "vital_trend"
         page.degradedPanels `shouldBe` []
         forM_ ([("lcp", 75, 32000), ("fcp", 25, 200)] :: [(Text, Double, Natural)]) \(name, value, count) -> do
-          [(RUMData.measurementValue vital.measurement, RUMData.measurementSamples vital.measurement) | vital <- page.vitals, vital.name == name] `shouldBe` [(Just value, count)]
+          [measured vital.measurement | vital <- page.vitals, vital.name == name] `shouldBe` [(Just value, count)]
           let trend = filter ((== name) . (.metricName)) page.vitalTrend
           sum (map (RUMData.measurementSamples . (.measurement)) trend) `shouldBe` count
           map (RUMData.measurementValue . (.measurement)) trend `shouldSatisfy` all (== Just value)
@@ -439,17 +402,11 @@ spec = sequential $ aroundAll withTestResources do
         projectId <- createTestProject tr "RUM invalid scalar"
         apiKey <- createTestAPIKey tr projectId "rum-invalid-key"
         ingestMetric tr apiKey [] [mkAttr "page.url" "/invalid"] "browser.web_vital.lcp" value (addUTCTime (-10) frozenTime)
-        forM_ ["vitals", "vital_trend"] \panel -> do
-          page <- loadVitalPanel tr projectId Nothing panel
-          page.degradedPanels `shouldBe` []
-          let measurements = if panel == "vitals" then [vital.measurement | vital <- page.vitals, vital.name == "lcp"] else map (.measurement) page.vitalTrend <> map (.measurement) page.pageVitals
-          [(count, issue) | RUMData.Unavailable count issue <- measurements] `shouldBe` replicate (if panel == "vitals" then 1 else 2) (0, RUMData.InvalidValue)
+        lcpUnavailable tr projectId 0 RUMData.InvalidValue
 
     it "unsupportedVitals_doNotPresentSumOrOtherDistributionMeansAsObservations" \tr -> do
-      let end :: Word64
-          end = floor (utcTimeToPOSIXSeconds (addUTCTime (-10) frozenTime) * 1000000000)
-          start :: Word64
-          start = floor (utcTimeToPOSIXSeconds (addUTCTime (-60) frozenTime) * 1000000000)
+      let end = nanos $ addUTCTime (-10) frozenTime
+          start = nanos $ addUTCTime (-60) frozenTime
           attributes = [mkAttr "page.url" "/unsupported"]
           number :: PM.NumberDataPoint
           number = defMessage & PMF.timeUnixNano .~ end & PMF.startTimeUnixNano .~ start & PMF.attributes .~ attributes & PMF.asDouble .~ 2200
@@ -468,32 +425,13 @@ spec = sequential $ aroundAll withTestResources do
         projectId <- createTestProject tr "RUM unsupported populations"
         apiKey <- createTestAPIKey tr projectId "rum-unsupported-key"
         exportMetrics tr apiKey [] [metric]
-        forM_ ["vitals", "vital_trend"] \panel -> do
-          page <- loadVitalPanel tr projectId Nothing panel
-          page.degradedPanels `shouldBe` []
-          let measurements = if panel == "vitals" then [vital.measurement | vital <- page.vitals, vital.name == "lcp"] else map (.measurement) page.vitalTrend <> map (.measurement) page.pageVitals
-          [(count, issue) | RUMData.Unavailable count issue <- measurements] `shouldBe` replicate (if panel == "vitals" then 1 else 2) (0, RUMData.UnsupportedPopulation)
+        lcpUnavailable tr projectId 0 RUMData.UnsupportedPopulation
 
     it "histogramVitals_exclusiveBucketLowerBounds_preserveKnownRatingBands" \tr -> do
       ratings <- forM [[2500, 4000], [4000, 5000], [2000, 4000]] \bounds -> do
         projectId <- createTestProject tr "RUM histogram bands"
         apiKey <- createTestAPIKey tr projectId "rum-band-key"
-        let at = (`addUTCTime` frozenTime)
-            point =
-              defMessage & PMF.timeUnixNano
-                .~ floor (utcTimeToPOSIXSeconds (at (-10)) * 1000000000)
-                  & PMF.startTimeUnixNano
-                .~ floor (utcTimeToPOSIXSeconds (at (-60)) * 1000000000)
-                  & PMF.attributes
-                .~ [mkAttr "page.url" "/bands"] & PMF.count
-                .~ 100
-                  & PMF.sum
-                .~ 300000 & PMF.bucketCounts
-                .~ [0, 100, 0] & PMF.explicitBounds
-                .~ bounds
-            histogram = defMessage & PMF.aggregationTemporality .~ PM.AGGREGATION_TEMPORALITY_DELTA & PMF.dataPoints .~ [point]
-            metric = defMessage & PMF.name .~ "browser.web_vital.lcp" & PMF.histogram .~ histogram
-        exportMetrics tr apiKey [] [metric]
+        exportMetrics tr apiKey [] [lcpHistogram PM.AGGREGATION_TEMPORALITY_DELTA [histogramPoint "/bands" (addUTCTime (-10) frozenTime) (addUTCTime (-60) frozenTime) 100 [0, 100, 0] bounds & PMF.sum .~ 300000]]
         page <- loadVitalPanel tr projectId Nothing "vitals"
         pure $ fst $ T.breakOn "</tr>" $ snd $ T.breakOn "Largest Contentful Paint" $ toStrict $ Lucid.renderText $ Lucid.toHtml page
       zipWithM_ shouldContainAll ratings [["Needs improvement"], ["Poor"], ["Not assessed"]]
@@ -520,13 +458,10 @@ spec = sequential $ aroundAll withTestResources do
         DeferredShell _ url _ -> url `shouldNotSatisfy` T.isInfixOf "since=24H"
         DeferredBody{} -> fail "Expected initial shared-window shell"
       forM_ [(fromQuery, toQuery, from, to, Nothing), (fromQuery, Nothing, from, frozenTime, Nothing), (Nothing, toQuery, addUTCTime (-300) frozenTime, to, Nothing), (Nothing, Nothing, addUTCTime (-86400) frozenTime, frozenTime, Just ("24H" :: Text))] \(fromM, toM, expectedFrom, expectedTo, expectedSince) -> do
-        (_, RUM.RumGet (PageCtx _ body)) <- testServant tr $ RUM.rumGetH testPid (Just "performance") Nothing Nothing fromM toM Nothing Nothing Nothing Nothing (Just "1") Nothing
-        case body of
-          DeferredBody page -> do
-            let window :: TimePicker.TimeWindow
-                window = page.links.window
-            (window.fromTime, window.toTime, window.sinceQuery) `shouldBe` (expectedFrom, expectedTo, expectedSince)
-          DeferredShell{} -> fail "Expected loaded shared-window page"
+        page <- loadPerformance tr testPid fromM toM Nothing Nothing Nothing
+        let window :: TimePicker.TimeWindow
+            window = page.links.window
+        (window.fromTime, window.toTime, window.sinceQuery) `shouldBe` (expectedFrom, expectedTo, expectedSince)
 
     it "singletonVitalTrend_keepsTheSelectedTimeWindow" \tr -> do
       projectId <- createTestProject tr "RUM singleton time window"
@@ -537,13 +472,9 @@ spec = sequential $ aroundAll withTestResources do
           explicitFrom = addUTCTime (-5400) frozenTime
           explicitTo = addUTCTime (-5) frozenTime
       forM_ [(Nothing, Nothing, Just ("1H" :: Text), addUTCTime (-3600) frozenTime, frozenTime), (Just $ toText $ iso8601Show explicitFrom, Just $ toText $ iso8601Show explicitTo, Just "", explicitFrom, explicitTo)] \(from, to, since, expectedFrom, expectedTo) -> do
-        (_, RUM.RumGet (PageCtx _ body)) <- testServant tr $ RUM.rumGetH projectId (Just "performance") Nothing Nothing from to since Nothing Nothing (Just "vital_trend") (Just "1") Nothing
-        case body of
-          DeferredBody page -> do
-            length page.vitalTrend `shouldBe` 1
-            let html = toStrict $ Lucid.renderText $ Lucid.toHtml body
-            all (`T.isInfixOf` html) ["&quot;from&quot;:" <> show (millis expectedFrom), "&quot;to&quot;:" <> show (millis expectedTo)] `shouldBe` True
-          DeferredShell{} -> fail "Expected loaded singleton trend panel"
+        page <- loadPerformance tr projectId from to since Nothing (Just "vital_trend")
+        length page.vitalTrend `shouldBe` 1
+        toStrict (Lucid.renderText $ Lucid.toHtml page) `shouldContainAll` ["&quot;from&quot;:" <> show (millis expectedFrom), "&quot;to&quot;:" <> show (millis expectedTo)]
 
     it "browserTelemetry_correlatesExperienceVitalsErrorsAndReplaySessions" \tr -> do
       apiKey <- createTestAPIKey tr testPid "rum-browser-key"
@@ -591,7 +522,7 @@ spec = sequential $ aroundAll withTestResources do
       overview `shouldContainAll` ["Page views", "Browser errors", "{{query_ast_filters}}", "rum-activity", "Largest Contentful Paint", "2.2 s", "/checkout", "Ada Lovelace"]
       -- The LIVE badge is only honest if something listens for the time transport's tick, and
       -- the panels hold every number on this page. Each re-fetches itself in place.
-      overview `shouldContainAll` ["hx-trigger=\"update-query[", "from:window\"", "hx-sync=\"this:replace\""]
+      overview `shouldContainAll` ["hx-trigger=\"update-query[", "from:window\"", "hx-sync=\"#rum-panel-pages:replace\""]
       -- The tab strip and time picker must not wait on six 24-hour scans: the request that
       -- paints the page answers with a skeleton that fetches the panels itself. Panel data
       -- appearing here again would mean a tab click is back to seconds of blank page.
@@ -978,10 +909,8 @@ spec = sequential $ aroundAll withTestResources do
       let ingest value seconds = ingestMetric tr apiKey [] [mkAttr "page.url" "/canonical-window"] "browser.web_vital.lcp" value (addUTCTime seconds frozenTime)
           alter sql = withResource tr.trPool $ \conn -> void $ PG.execute_ conn sql
           load from to since panel = do
-            (_, RUM.RumGet (PageCtx _ body)) <- testServant tr $ RUM.rumGetH projectId (Just "performance") Nothing Nothing from to since Nothing Nothing (Just panel) (Just "1") Nothing
-            case body of
-              DeferredBody page -> [(RUMData.measurementValue vital.measurement, RUMData.measurementSamples vital.measurement) | vital <- page.vitals, vital.name == "lcp"] <$ (page.degradedPanels `shouldBe` [])
-              DeferredShell{} -> fail "Expected loaded canonical-window vital panel"
+            page <- loadPerformance tr projectId from to since Nothing (Just panel)
+            [measured vital.measurement | vital <- page.vitals, vital.name == "lcp"] <$ (page.degradedPanels `shouldBe` [])
       ingest 1000 (-10)
       E.bracket_
         (alter "CREATE SEQUENCE rum_window_writes; CREATE FUNCTION count_rum_window_write() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM nextval('rum_window_writes'); RETURN NEW; END $$; CREATE TRIGGER count_rum_window_write BEFORE INSERT ON rum_panel_cache FOR EACH ROW EXECUTE FUNCTION count_rum_window_write()")

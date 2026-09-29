@@ -39,7 +39,7 @@ import Relude
 import Relude.Extra.Tuple (dup)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (drawerLoadAttrs_, drawerRowAttrs_, faSprite_, formatBytes, infrastructureNavTabs_, kqlQuoted, showFFloat')
+import Utils (drawerLoadAttrs_, drawerRowAttrs_, faSprite_, formatBytes, infrastructureNavTabs_, showFFloat')
 
 
 infraUrl :: Projects.ProjectId -> Text -> [(Text, Text)] -> TimePicker.TimeWindow -> Text
@@ -422,7 +422,7 @@ hostWidgets pid host =
 
 
 hostQuery :: Text -> Text
-hostQuery name = "coalesce(resource.k8s.node.name, resource.host.name)==" <> kqlQuoted name
+hostQuery name = Containers.kqlFilter [(Containers.nodeField, Just name)]
 
 
 data ImageRow = ImageRow
@@ -756,21 +756,18 @@ kubernetesDetail_ pid window resource row = div_ [class_ "-mx-8 -mb-4 min-h-full
       a_ [href_ $ infraUrl pid "/metrics" [("metric_prefix", "k8s.")] window, class_ "btn btn-sm"] "View metrics"
   where
     metadata = [(label, value) | (label, Just value) <- [("Cluster", row.cluster), ("Namespace", row.namespace), ("Node", row.node), ("Workload", row.workload)]]
-    kubeQuery = T.intercalate " and " [field <> "==" <> kqlQuoted value | (field, value) <- filters]
-    clusterField = "coalesce(resource.k8s.cluster.name, resource.k8s.cluster.uid)"
-    filters =
-      [
-        ( case resource of
-            KubePods -> "resource.k8s.pod.name"
-            KubeClusters -> clusterField
-            KubeNamespaces -> "resource.k8s.namespace.name"
-            KubeNodes -> "resource.k8s.node.name"
-            KubeWorkloads -> "coalesce(resource.k8s.deployment.name, resource.k8s.statefulset.name, resource.k8s.daemonset.name, resource.k8s.job.name, resource.k8s.cronjob.name)"
-        , row.name
-        )
-      ]
-        <> [(clusterField, cluster) | resource /= KubeClusters, cluster <- toList row.cluster]
-        <> [("resource.k8s.namespace.name", namespace) | resource /= KubeNamespaces, namespace <- toList row.namespace]
+    kubeQuery =
+      Containers.kqlFilter
+        $ ( case resource of
+              KubePods -> "resource.k8s.pod.name"
+              KubeClusters -> Containers.clusterField
+              KubeNamespaces -> "resource.k8s.namespace.name"
+              KubeNodes -> "resource.k8s.node.name"
+              KubeWorkloads -> "coalesce(resource.k8s.deployment.name, resource.k8s.statefulset.name, resource.k8s.daemonset.name, resource.k8s.job.name, resource.k8s.cronjob.name)"
+          , Just row.name
+          )
+        : [(Containers.clusterField, row.cluster) | resource /= KubeClusters, isJust row.cluster]
+          <> [("resource.k8s.namespace.name", row.namespace) | resource /= KubeNamespaces, isJust row.namespace]
 
 
 data HostMapFill = FillCPU | FillMemory | FillStorage

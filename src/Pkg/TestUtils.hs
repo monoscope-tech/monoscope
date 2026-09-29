@@ -1,5 +1,7 @@
 module Pkg.TestUtils (
   shouldContainAll,
+  linkParams,
+  renderedWidget,
   eventually,
   withSetup,
   withTestResources,
@@ -151,6 +153,7 @@ import Network.HTTP.Client qualified as HC
 import Network.HTTP.Client.Internal (Response (..), ResponseClose (..))
 import Network.HTTP.Client.TLS qualified as HCTLS
 import Network.HTTP.Types.Status (ok200)
+import Network.HTTP.Types.URI (parseQueryText)
 import Network.HTTP.Types.Version (http11)
 import Network.Minio qualified as Minio
 import Network.Wai.Handler.Warp qualified as Warp
@@ -162,6 +165,7 @@ import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.Charts.Charts qualified as Charts
 import Pages.LogExplorer.Log qualified as Log
 import Pages.Settings qualified as Api
+import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), mkHasqlPool)
 import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.IngestBudget qualified as IngestBudget
@@ -1873,3 +1877,13 @@ shouldContainAll :: HasCallStack => Text -> [Text] -> Expectation
 shouldContainAll haystack needles = case filter (not . (`T.isInfixOf` haystack)) needles of
   [] -> pass
   missing -> expectationFailure $ "missing from rendered page: " <> show missing
+
+
+-- | Decoded query params of every rendered link to @path@, in document order.
+linkParams :: Text -> Text -> [[(Text, Text)]]
+linkParams path html = [mapMaybe sequence $ parseQueryText $ encodeUtf8 $ T.replace "&amp;" "&" $ T.takeWhile (/= '"') link | link <- drop 1 $ T.splitOn (path <> "?") html]
+
+
+-- | The first widget a rendered page embeds in a @data-widget@ attribute.
+renderedWidget :: Text -> IO Widget.Widget
+renderedWidget html = either fail pure $ AE.eitherDecodeStrict' $ encodeUtf8 $ T.replace "&quot;" "\"" $ T.takeWhile (/= '"') $ T.drop (T.length "data-widget=\"") $ snd $ T.breakOn "data-widget=\"" html

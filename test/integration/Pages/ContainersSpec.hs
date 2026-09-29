@@ -4,7 +4,6 @@
 module Pages.ContainersSpec (spec) where
 
 import Control.Exception qualified as E
-import Data.Aeson qualified as AE
 import Data.Cache qualified as Cache
 import Data.List (lookup)
 import Data.Pool (defaultPoolConfig, destroyAllResources, newPool, setNumStripes)
@@ -15,7 +14,6 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PG
 import Lucid qualified
 import Models.Telemetry.Containers (ContainerRow (..), ContainerSnapshotKey, Runtime (..), Scope (..), containersInWindow, cpuPctOfLimit, memPctOfLimit, runtimeOf)
-import Network.HTTP.Types.URI (parseQueryText)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (Deferred (..))
@@ -453,16 +451,7 @@ spec = sequential $ aroundAll withResources do
       forM_ ([("four-core-host", Just 12.5), ("vps-d6d7e318", Just 25), ("host-without-idle", Nothing)] :: [(Text, Maybe Double)]) \(host, expected) -> do
         html <- shellHtml tr $ Infrastructure.hostDetailGetH testPid (Just host) Nothing Nothing (Just "2H")
         case expected of
-          Just percentage -> do
-            let payload = T.replace "&quot;" "\"" $ T.takeWhile (/= '"') $ T.drop (T.length "data-widget=\"") $ snd $ T.breakOn "data-widget=\"" html
-            widget <- either fail pure $ AE.eitherDecodeStrict' @Widget.Widget $ encodeUtf8 payload
-            widget.id `shouldBe` Just "host-cpu"
-            query <- maybe (fail "host CPU widget has no query") pure widget.query
-            response <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just testPid) (Just query) Nothing Nothing (Just "2024-12-31T23:55:00Z") (Just "2025-01-01T00:01:00Z") (Just "metrics") Nothing []
-            response.error `shouldBe` Nothing
-            let values = V.toList $ V.mapMaybe ((V.!? 1) >=> id) response.dataset
-            values `shouldSatisfy` (not . null)
-            values `shouldSatisfy` all (\value -> abs (value - percentage) < 0.001)
+          Just percentage -> chartPlotsOnly tr testPid "host-cpu" percentage html
           Nothing -> do
             html `shouldContainAll` ["No host metrics in this time range", "Metrics coverage: 0 of 4"]
             html `shouldNotSatisfy` T.isInfixOf "host-cpu"
@@ -492,11 +481,7 @@ spec = sequential $ aroundAll withResources do
         ingestSpanReq tr $ mkSpanRequest (T.justifyRight 32 '0' $ show index) (T.justifyRight 16 '0' $ show index) Nothing "kubernetes event" [] Nothing [] (mkResource key resource) timestamp
       forM_ ([("clusters", clusterUid, Nothing, 2), ("pods", "same-pod", Just "scope-a", 1)] :: [(Text, Text, Maybe Text, Double)]) \(resource, name, namespace, expected) -> do
         html <- shellHtml tr $ Infrastructure.kubernetesDetailGetH testPid (Just resource) (Just name) (Just clusterUid) namespace Nothing Nothing (Just "3H")
-        let params = parseQueryText $ encodeUtf8 $ T.replace "&amp;" "&" $ T.takeWhile (/= '"') $ T.drop (T.length "/log_explorer") $ snd $ T.breakOn "/log_explorer?" html
-        query <- maybe (fail "Kubernetes drawer has no log query") pure $ join $ lookup "query" params
-        response <- runQueryEffect tr $ Charts.queryMetrics (Just "postgres") (Just Charts.DTFloat) (Just testPid) (Just $ query <> " | summarize count()") Nothing (join $ lookup "since" params) Nothing Nothing (Just "spans") Nothing []
-        response.error `shouldBe` Nothing
-        response.dataFloat `shouldBe` Just expected
+        logLinkCount tr testPid (Just "postgres") html `shouldReturn` Just expected
 
     it "kubernetesContainerDrilldown_sameNamespaceDoesNotIncludeOtherClusters" \tr -> do
       pid <- createTestProject tr "kubernetes-container-drilldown"
@@ -504,11 +489,12 @@ spec = sequential $ aroundAll withResources do
       forM_ (zip ([1 ..] :: [Int]) ([clusterUid, "8b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d", clusterUid] :: [Text])) \(index, cluster) ->
         ingestMetric tr key [mkAttr "k8s.container.name" ("namespace-api-" <> show index), mkAttr "k8s.pod.name" ("namespace-pod-" <> show index), mkAttr "k8s.namespace.name" "shared-namespace", mkAttr "k8s.cluster.uid" cluster] [] "container.cpu.usage" (fromIntegral index) (addUTCTime (-60) frozenTime)
       html <- shellHtml tr $ Infrastructure.kubernetesDetailGetH pid (Just "namespaces") (Just "shared-namespace") (Just clusterUid) (Just "shared-namespace") Nothing Nothing (Just "4H")
-      let params = parseQueryText $ encodeUtf8 $ T.replace "&amp;" "&" $ T.takeWhile (/= '"') $ T.drop (T.length "/infrastructure/containers") $ snd $ T.breakOn "/infrastructure/containers?" html
-      (_, Containers.ContainersPage (PageCtx _ result)) <- testServant tr $ Containers.containersGetH pid (join $ lookup "runtime" params) (join $ lookup "namespace" params) (join $ lookup "node" params) (join $ lookup "image" params) (join $ lookup "cluster" params) (join $ lookup "from" params) (join $ lookup "to" params) (join $ lookup "since" params) (Just "1")
+      params : _ <- pure $ linkParams "/infrastructure/containers" html
+      let param = (`lookup` params)
+      (_, Containers.ContainersPage (PageCtx _ result)) <- testServant tr $ Containers.containersGetH pid (param "runtime") (param "namespace") (param "node") (param "image") (param "cluster") (param "from") (param "to") (param "since") (Just "1")
       table <- deferredBody result
       sort (V.toList $ (.containerName) . (.row) <$> table.rows) `shouldBe` ["namespace-api-1", "namespace-api-3"]
-      join (lookup "since" params) `shouldBe` Just "4H"
+      param "since" `shouldBe` Just "4H"
 
     it "firstRequest_rendersChromeAndASelfFetchingSkeleton_notRows" \tr -> do
       -- Every infrastructure view is one multi-second metrics pivot. The request that paints
@@ -564,26 +550,14 @@ spec = sequential $ aroundAll withResources do
       V.length (V.filter ((== "shared-pod") . (.containerName) . (.row)) table.rows) `shouldBe` 1
       sort (V.toList $ (.cpuCores) . (.row) <$> matching) `shouldBe` map Just ([1, 3, 5, 7, 13] :: [Double])
       html <- shellHtml tr $ Containers.containersGetH pid (Just "kubernetes") Nothing (Just "scope-node-a") Nothing (Just clusterUid) Nothing Nothing (Just "4H") (Just "1")
-      let links = [parseQueryText $ encodeUtf8 $ "?" <> T.replace "&amp;" "&" (T.takeWhile (/= '"') link) | link <- drop 1 $ T.splitOn "/infrastructure/containers/detail?" html]
       forM_ ([(Just "scope-a", 1), (Nothing, 13)] :: [(Maybe Text, Double)]) \(namespace, expected) -> do
-        params <- maybe (fail "container row has no scoped drawer link") pure $ find (\params -> join (lookup "container" params) == Just "duplicate-api" && join (lookup "namespace" params) == namespace) links
-        scope <- either (fail . toString) pure $ traverse (parseUrlPiece @Scope) $ join $ lookup "scope" params
-        detail <- shellHtml tr $ Containers.containerDetailGetH pid (join $ lookup "container" params) (join $ lookup "pod" params) scope (join $ lookup "cluster" params) (join $ lookup "namespace" params) (join $ lookup "node" params) (join $ lookup "from" params) (join $ lookup "to" params) (join $ lookup "since" params)
+        params <- maybe (fail "container row has no scoped drawer link") pure $ find (\params -> lookup "container" params == Just "duplicate-api" && lookup "namespace" params == namespace) $ linkParams "/infrastructure/containers/detail" html
+        let param = (`lookup` params)
+        scope <- either (fail . toString) pure $ traverse (parseUrlPiece @Scope) $ param "scope"
+        detail <- shellHtml tr $ Containers.containerDetailGetH pid (param "container") (param "pod") scope (param "cluster") (param "namespace") (param "node") (param "from") (param "to") (param "since")
         detail `shouldContainAll` ["Node / host: scope-node-a", "Cluster: " <> clusterUid]
-        let logParams = parseQueryText $ encodeUtf8 $ T.replace "&amp;" "&" $ T.takeWhile (/= '"') $ T.drop (T.length "/log_explorer") $ snd $ T.breakOn "/log_explorer?" detail
-        logQuery <- maybe (fail "container drawer has no log query") pure $ join $ lookup "query" logParams
-        logs <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTFloat) (Just pid) (Just $ logQuery <> " | summarize count()") Nothing (join $ lookup "since" logParams) Nothing Nothing (Just "spans") Nothing []
-        logs.error `shouldBe` Nothing
-        logs.dataFloat `shouldBe` Just 1
-        let payload = T.replace "&quot;" "\"" $ T.takeWhile (/= '"') $ T.drop (T.length "data-widget=\"") $ snd $ T.breakOn "data-widget=\"" detail
-        widget <- either fail pure $ AE.eitherDecodeStrict' @Widget.Widget $ encodeUtf8 payload
-        widget.id `shouldBe` Just "container-detail-cpu"
-        query <- maybe (fail "container CPU widget has no query") pure widget.query
-        response <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just query) Nothing Nothing (Just "2024-12-31T23:55:00Z") (Just "2025-01-01T00:01:00Z") (Just "metrics") Nothing []
-        response.error `shouldBe` Nothing
-        let values = V.toList $ V.mapMaybe ((V.!? 1) >=> id) response.dataset
-        values `shouldSatisfy` (not . null)
-        values `shouldSatisfy` all (\value -> abs (value - expected) < 0.001)
+        logLinkCount tr pid Nothing detail `shouldReturn` Just 1
+        chartPlotsOnly tr pid "container-detail-cpu" expected detail
       ambiguous <- shellHtml tr $ Containers.containerDetailGetH pid (Just "duplicate-api") (Just "shared-pod") Nothing Nothing Nothing Nothing Nothing Nothing (Just "4H")
       ambiguous `shouldContainAll` ["Several containers match this link.", "/infrastructure/containers?since=4H"]
       ambiguous `shouldNotSatisfy` T.isInfixOf "data-widget="
@@ -640,6 +614,21 @@ spec = sequential $ aroundAll withResources do
           toText (Lucid.renderText $ Lucid.toHtml page)
             `shouldContainAll` ["containers reporting in the final " <> duration <> " of this range"]
   where
+    -- The drawer's first log link, counted through the chart pipeline.
+    logLinkCount tr pid source html = do
+      params : _ <- pure $ linkParams "/log_explorer" html
+      query <- maybe (fail "drawer has no log query") pure $ lookup "query" params
+      response <- runQueryEffect tr $ Charts.queryMetrics source (Just Charts.DTFloat) (Just pid) (Just $ query <> " | summarize count()") Nothing (lookup "since" params) Nothing Nothing (Just "spans") Nothing []
+      response.error `shouldBe` Nothing
+      pure response.dataFloat
+    -- The page's first chart, run through the chart pipeline, plots only @expected@.
+    chartPlotsOnly tr pid widgetId expected html = do
+      widget <- renderedWidget html
+      Widget.id widget `shouldBe` Just (widgetId :: Text)
+      query <- maybe (fail "widget has no query") pure $ Widget.query widget
+      response <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just query) Nothing Nothing (Just "2024-12-31T23:55:00Z") (Just "2025-01-01T00:01:00Z") (Just "metrics") Nothing []
+      response.error `shouldBe` Nothing
+      V.toList (V.mapMaybe ((V.!? 1) >=> id) response.dataset) `shouldSatisfy` \values -> not (null values) && all (\value -> abs (value - expected) < 0.001) values
     withResources k = withTestResources \tr -> do
       -- TestUtils wires native TF through Hasql; charts also need its postgres-simple pool.
       tfUrl <- lookupEnv "TIMEFUSION_PG_TEST_URL"

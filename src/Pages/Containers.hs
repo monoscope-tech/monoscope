@@ -9,7 +9,7 @@
 -- happen here in Haskell over that result. That keeps the store doing exactly one short-window
 -- read per page view, which matters because wide aggregates over @otel_metrics@ are the query
 -- shape that has repeatedly OOM-killed TimeFusion.
-module Pages.Containers (containersGetH, containerDetailGetH, ContainersGet (..), ContainerVM (..), ContainerFilters (..), applyFilters, runtimeLabel, formatBytes, emDash_) where
+module Pages.Containers (containersGetH, containerDetailGetH, ContainersGet (..), ContainerVM (..), ContainerFilters (..), applyFilters, runtimeLabel, formatBytes, emDash_, kqlFilter, nodeField, clusterField) where
 
 import Data.Default (def)
 import Data.Text qualified as T
@@ -317,19 +317,29 @@ containerDetailGetH pid containerM podM scopeM clusterM namespaceM nodeM fromPar
         pct = dash . fmap (\value -> showFFloat' 0 (value * 100) <> "%")
         metadata = mapMaybe sequenceA [("Cluster", r.cluster), ("Pod", r.podName), ("Namespace", r.namespace), ("Node / host", r.nodeName), ("Workload", r.workload)]
         availableSignals = length $ catMaybes [r.cpuCores, r.cpuLimit, r.memBytes, r.memLimit]
-        subject = T.intercalate " and " [field <> "==" <> maybe "null" kqlQuoted value | (field, value) <- fields]
-        fields =
-          ( case r.scope of
-              ScopeContainer -> [("coalesce(resource.k8s.container.name, resource.container.name)", Just r.containerName), ("resource.k8s.pod.name", r.podName)]
-              ScopePod -> [("resource.k8s.pod.name", Just r.containerName)]
-              ScopeHost -> [("coalesce(resource.k8s.node.name, resource.host.name)", Just r.containerName)]
-          )
-            <> if r.scope == ScopeHost then [] else [("resource.k8s.namespace.name", r.namespace), ("coalesce(resource.k8s.cluster.name, resource.k8s.cluster.uid)", r.cluster), ("coalesce(resource.k8s.node.name, resource.host.name)", r.nodeName)]
+        subject =
+          kqlFilter
+            $ ( case r.scope of
+                  ScopeContainer -> [("coalesce(resource.k8s.container.name, resource.container.name)", Just r.containerName), ("resource.k8s.pod.name", r.podName)]
+                  ScopePod -> [("resource.k8s.pod.name", Just r.containerName)]
+                  ScopeHost -> [(nodeField, Just r.containerName)]
+              )
+            <> if r.scope == ScopeHost then [] else [("resource.k8s.namespace.name", r.namespace), (clusterField, r.cluster), (nodeField, r.nodeName)]
         metricQuery metric = "metrics | where metric_name == \"" <> metric <> "\" and " <> subject <> " | summarize avg(value) by bin_auto(timestamp)"
         pivots =
           [ ("View logs", TimePicker.windowUrl ("/p/" <> pid.toText <> "/log_explorer") [("query", subject)] window)
           , ("View metrics", TimePicker.windowUrl ("/p/" <> pid.toText <> "/metrics") [("metric_prefix", maybe "container." (const "k8s.") r.podName)] window)
           ]
+
+
+-- | Equality on every field; a missing value must be absent (@== null@), not unconstrained.
+kqlFilter :: [(Text, Maybe Text)] -> Text
+kqlFilter fields = T.intercalate " and " [field <> "==" <> maybe "null" kqlQuoted value | (field, value) <- fields]
+
+
+nodeField, clusterField :: Text
+nodeField = "coalesce(resource.k8s.node.name, resource.host.name)"
+clusterField = "coalesce(resource.k8s.cluster.name, resource.k8s.cluster.uid)"
 
 
 infrastructureWidget :: Projects.ProjectId -> Text -> Text -> Text -> Text -> Widget.Widget
