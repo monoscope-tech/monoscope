@@ -516,7 +516,7 @@ spec = sequential $ aroundAll withResources do
       -- the body itself. Rows appearing here again would mean the deferral was undone and
       -- navigating the section is back to seconds per click.
       hostsShell <- shellHtml tr $ Infrastructure.hostsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
-      hostsShell `shouldContainAll` ["Infrastructure", "Hosts", "id=\"hostsContainer\"", "hx-trigger=\"load\"", "/infrastructure/hosts?", "deferred=1"]
+      hostsShell `shouldContainAll` ["Infrastructure", "Hosts", "id=\"hostsContainer\"", "hx-trigger=\"load, update-query from:window\"", "/infrastructure/hosts?", "deferred=1"]
       hostsShell `shouldNotSatisfy` T.isInfixOf "vps-bare-01"
 
       containersShell <- shellHtml tr $ Containers.containersGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
@@ -526,7 +526,13 @@ spec = sequential $ aroundAll withResources do
       -- The filters the shell was asked for have to survive the round trip, or the rows that
       -- arrive would not be the rows the visible filter chips claim.
       filteredShell <- shellHtml tr $ Infrastructure.kubernetesGetH testPid (Just "pods") (Just "otel-demo") (Just "default") Nothing Nothing Nothing Nothing Nothing
-      filteredShell `shouldContainAll` ["resource=pods", "cluster=otel-demo", "namespace=default", "deferred=1"]
+      filteredShell `shouldContainAll` ["resource=pods", "cluster=otel-demo", "namespace=default", "deferred=1", "hx-trigger=\"load, update-query from:window\""]
+
+      imagesShell <- shellHtml tr $ Infrastructure.imagesGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing
+      imagesShell `shouldContainAll` ["id=\"imagesContainer\"", "data-deferred-shell", "hx-trigger=\"load, update-query from:window\""]
+      mapShell <- shellHtml tr $ Infrastructure.hostMapGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+      mapShell `shouldContainAll` ["id=\"hostMapContainer\"", "Loading host map", "hx-trigger=\"load, update-query from:window\""]
+      mapShell `shouldNotSatisfy` T.isInfixOf "data-visible-host-label"
 
     it "hostDetail_withoutHostMetrics_collapsesChartsIntoRecoveryState" \tr -> do
       -- The Docker host: containers report against it but no system.* series does.

@@ -29,7 +29,7 @@ import Lucid.Aria qualified as Aria
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), Scope (..), containersInWindowCached, cpuPctOfLimit, memPctOfLimit, ratio, runtimeOf)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
-import Pages.Components (Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), emptyState_, factGrid_, metaChip_, tableSkeleton_, withDeferredBody)
+import Pages.Components (Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), RefreshingDeferred (..), emptyState_, factGrid_, metaChip_, tableSkeleton_, timeRefreshListener_, withDeferredBody)
 import Pages.Containers qualified as Containers
 import Pages.LogExplorer.Log qualified as Log
 import Pkg.Components.Table (Column, Config (..), Features (..), SearchMode (..), Table (..), ZeroState (..), col, facetActions, facetValues, singleSelectFilter, withAttrs)
@@ -195,16 +195,16 @@ hostsGetH pid providerM regionM osM integrationM groupM fromParam toParam sinceP
       url = deferUrl pid "/infrastructure/hosts" [("provider", providerM), ("region", regionM), ("os", osM), ("integration", integrationM), ("group", groupM)] window
   body <- withDeferredBody deferredM "hostsContainer" url (tableSkeleton_ 8) do
     allHosts <- hostsFromRows <$> infraSnapshot pid window
-    pure $ hostsTable pid window filters grouping (applyHostFilters filters allHosts) allHosts
+    pure $ hostsTable pid window url filters grouping (applyHostFilters filters allHosts) allHosts
   addRespHeaders $ HostsPage $ PageCtx (infrastructureBW pid "Hosts" window bw) body
 
 
 newtype HostsGet = HostsPage (PageCtx (Deferred (Table HostListRow)))
-  deriving newtype (ToHtml)
+  deriving (ToHtml) via (PageCtx (RefreshingDeferred (Table HostListRow)))
 
 
-hostsTable :: Projects.ProjectId -> TimePicker.TimeWindow -> HostFilters -> HostGroup -> V.Vector HostRow -> V.Vector HostRow -> Table HostListRow
-hostsTable pid window filters grouping hosts allHosts =
+hostsTable :: Projects.ProjectId -> TimePicker.TimeWindow -> Text -> HostFilters -> HostGroup -> V.Vector HostRow -> V.Vector HostRow -> Table HostListRow
+hostsTable pid window url filters grouping hosts allHosts =
   Table
     { config =
         def
@@ -222,7 +222,7 @@ hostsTable pid window filters grouping hosts allHosts =
           { search = Just ClientSide
           , searchPlaceholder = Just "Search hosts"
           , rowAttrs = Just $ \case HostGroupRow _ _ -> []; HostItem host -> drawerRowAttrs_ $ hostDetailUrl pid window host.name
-          , header = Just $ hostGroupControl pid window filters grouping (V.length hosts)
+          , header = Just $ timeRefreshListener_ "hostsContainer" url >> hostGroupControl pid window filters grouping (V.length hosts)
           , showFilterRail = True
           , resultSummary = Just $ "Showing " <> show (V.length hosts) <> " of " <> show (V.length allHosts) <> " hosts"
           , exportName = Just "hosts"
@@ -464,16 +464,16 @@ imagesGetH pid runtimeM registryM fromParam toParam sinceParam deferredM = do
   body <- withDeferredBody deferredM "imagesContainer" url (tableSkeleton_ 8) do
     allImages <- imagesFromRows <$> infraSnapshot pid window
     let images = V.filter (\image -> matchesAny runtimeM (map Containers.runtimeLabel image.runtimes) && matchesFilter registryM (Just image.registry)) allImages
-    pure $ imagesTable pid window runtimeM registryM images allImages
+    pure $ imagesTable pid window url runtimeM registryM images allImages
   addRespHeaders $ ImagesPage $ PageCtx (infrastructureBW pid "Images" window bw) body
 
 
 newtype ImagesGet = ImagesPage (PageCtx (Deferred (Table ImageRow)))
-  deriving newtype (ToHtml)
+  deriving (ToHtml) via (PageCtx (RefreshingDeferred (Table ImageRow)))
 
 
-imagesTable :: Projects.ProjectId -> TimePicker.TimeWindow -> Maybe Text -> Maybe Text -> V.Vector ImageRow -> V.Vector ImageRow -> Table ImageRow
-imagesTable pid window runtimeM registryM images allImages =
+imagesTable :: Projects.ProjectId -> TimePicker.TimeWindow -> Text -> Maybe Text -> Maybe Text -> V.Vector ImageRow -> V.Vector ImageRow -> Table ImageRow
+imagesTable pid window url runtimeM registryM images allImages =
   Table
     { config = def{elemID = "imagesForm", containerId = Just "imagesContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0}
     , columns =
@@ -489,7 +489,8 @@ imagesTable pid window runtimeM registryM images allImages =
     , rows = images
     , features =
         def
-          { search = Just ClientSide
+          { header = Just $ timeRefreshListener_ "imagesContainer" url
+          , search = Just ClientSide
           , searchPlaceholder = Just "Search images"
           , rowAttrs = Just $ drawerRowAttrs_ . imageDetailUrl pid window . (.image)
           , tableHeaderActions =
@@ -651,16 +652,16 @@ kubernetesGetH pid resourceM clusterM namespaceM statusM fromParam toParam since
   body <- withDeferredBody deferredM "kubernetesContainer" url (tableSkeleton_ 8) do
     allRows <- kubeRowsFromRows resource <$> infraSnapshot pid window
     let rows = V.filter (\row -> matchesFilter clusterM row.cluster && matchesFilter namespaceM row.namespace && matchesFilter statusM (Just $ kubeStatusLabel row.status)) allRows
-    pure $ kubernetesTable pid window resource clusterM namespaceM statusM rows allRows
+    pure $ kubernetesTable pid window url resource clusterM namespaceM statusM rows allRows
   addRespHeaders $ KubernetesPage $ PageCtx (infrastructureBW pid "Kubernetes" window bw) body
 
 
 newtype KubernetesGet = KubernetesPage (PageCtx (Deferred (Table KubeRow)))
-  deriving newtype (ToHtml)
+  deriving (ToHtml) via (PageCtx (RefreshingDeferred (Table KubeRow)))
 
 
-kubernetesTable :: Projects.ProjectId -> TimePicker.TimeWindow -> KubeResource -> Maybe Text -> Maybe Text -> Maybe Text -> V.Vector KubeRow -> V.Vector KubeRow -> Table KubeRow
-kubernetesTable pid window resource clusterM namespaceM statusM rows allRows =
+kubernetesTable :: Projects.ProjectId -> TimePicker.TimeWindow -> Text -> KubeResource -> Maybe Text -> Maybe Text -> Maybe Text -> V.Vector KubeRow -> V.Vector KubeRow -> Table KubeRow
+kubernetesTable pid window url resource clusterM namespaceM statusM rows allRows =
   Table
     { config = def{elemID = "kubernetesForm", containerId = Just "kubernetesContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0}
     , columns =
@@ -682,7 +683,7 @@ kubernetesTable pid window resource clusterM namespaceM statusM rows allRows =
           { search = Just ClientSide
           , searchPlaceholder = Just $ "Search " <> kubeResourceParam resource
           , rowAttrs = Just $ drawerRowAttrs_ . kubeDetailUrl pid window resource
-          , header = Just $ kubeResourceNav pid window resource (V.length rows)
+          , header = Just $ timeRefreshListener_ "kubernetesContainer" url >> kubeResourceNav pid window resource (V.length rows)
           , showFilterRail = True
           , resultSummary = Just $ "Showing " <> show (V.length rows) <> " resources"
           , exportName = Just $ "kubernetes-" <> kubeResourceParam resource
@@ -800,7 +801,7 @@ data HostMapData = HostMapData
 
 
 newtype HostMapGet = HostMapPage (PageCtx (Deferred HostMapData))
-  deriving newtype (ToHtml)
+  deriving (ToHtml) via (PageCtx (RefreshingDeferred HostMapData))
 
 
 instance ToHtml HostMapData where
@@ -834,6 +835,7 @@ hostMapSkeleton_ = div_ [class_ "flex min-h-full flex-col bg-bgBase", role_ "sta
 
 hostMap_ :: HostMapData -> Html ()
 hostMap_ page = div_ [id_ "hostMapContainer", class_ "flex min-h-full flex-col bg-bgBase"] do
+  timeRefreshListener_ "hostMapContainer" (deferUrl page.pid "/infrastructure/host-map" [("fill", Just $ hostMapFillParam page.fill), ("group", Just $ hostGroupParam page.grouping), ("provider", page.filters.provider), ("region", page.filters.region), ("os", page.filters.osType)] page.window)
   form_ [method_ "get", action_ $ "/p/" <> page.pid.toText <> "/infrastructure/host-map", class_ "flex flex-wrap items-end gap-3 border-b border-strokeWeak bg-bgRaised px-4 py-3 max-sm:grid max-sm:grid-cols-2"] do
     TimePicker.timeHiddenInputs_ page.window.fromQuery page.window.toQuery page.window.sinceQuery
     mapSelect "fill" "Fill by" (hostMapFillParam page.fill) (map hostMapFillOption [minBound ..])
