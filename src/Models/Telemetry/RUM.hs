@@ -281,6 +281,7 @@ data PageVitalPoint = PageVitalPoint
 
 -- | A histogram contributes observations, not its export mean. All surfaces share the
 -- same population, with exact scalar quantiles and estimates over common explicit bounds.
+-- Reports are selected by end time; DELTA populations do not require a known start.
 rumVitalPopulation :: (DB es, Labeled "timefusion" Hasql.Hasql :> es) => Bool -> ScopedQuery -> TimePicker.TimeWindow -> RumBucket -> Eff es [VitalPopulation]
 rumVitalPopulation useTf scope window bucket = Hasql.withHasqlTimefusion useTf do
   let project = scope.projectId.toText
@@ -353,7 +354,7 @@ rumVitalPopulation useTf scope window bucket = Hasql.withHasqlTimefusion useTf d
    CASE WHEN metric_type='GAUGE' THEN CASE WHEN value>=0 AND value<'Infinity'::float8 THEN 'complete' ELSE 'invalid_value' END
      WHEN metric_type!='HISTOGRAM' THEN 'unsupported_population'
      WHEN distribution_count IS NULL OR hist_bucket_counts IS NULL OR hist_explicit_bounds IS NULL OR cardinality(hist_bucket_counts)!=cardinality(hist_explicit_bounds)+1 OR distribution_count<0 THEN 'invalid_buckets'
-     WHEN start_timestamp IS NULL OR start_timestamp>timestamp THEN 'unknown_start'
+     WHEN start_timestamp>timestamp OR (start_timestamp IS NULL AND aggregation_temporality IS DISTINCT FROM 'DELTA') THEN 'unknown_start'
      WHEN aggregation_temporality='DELTA' AND previous_series_timestamp>start_timestamp THEN 'overlapping_intervals'
      WHEN aggregation_temporality='DELTA' THEN 'complete'
      WHEN aggregation_temporality IS NULL OR aggregation_temporality!='CUMULATIVE' THEN 'unknown_temporality'
