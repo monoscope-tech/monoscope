@@ -1623,26 +1623,36 @@ pageVitalsTable_ :: RumLinks -> [PageVitalPoint] -> Html ()
 pageVitalsTable_ links points = rumPanel_ "Web Vitals by page" "Exact page URLs; histogram P75s are estimates within the shown bucket range" Nothing do
   toHtml
     Table.Table
-      { config = rumTableConfig "rumPageVitals"
+      { config = (rumTableConfig "rumPageVitals"){Table.tableClasses = "table table-sm w-full table-fixed max-sm:[&_thead]:sr-only max-sm:[&_td]:block max-sm:[&_td]:min-w-0 max-sm:[&_td]:border-0 max-sm:[&_td]:py-1 max-sm:[&_td]:text-left"}
       , columns =
-          ( Table.col "Page" \(url, _, _) -> a_ [href_ $ logsUrl links (browserKql <> " and " <> exactPageKql url), class_ "block truncate font-medium text-textBrand", title_ url, Aria.label_ url] do
+          ( Table.col "Page" \(url, _, _) -> a_ [href_ $ logsUrl links (browserKql <> " and " <> exactPageKql url), class_ "block truncate font-medium text-textBrand max-sm:min-h-11 max-sm:whitespace-normal max-sm:break-all", title_ url, Aria.label_ url] do
               toHtml $ pageLabel url
-              when (pageLabel url /= url) $ span_ [class_ "block truncate text-xs text-textWeak"] $ toHtml url
+              when (pageLabel url /= url) $ span_ [class_ "block truncate text-xs text-textWeak max-sm:whitespace-normal max-sm:break-all"] $ toHtml url
           )
-            { Table.attrs = [class_ "w-[28%]"]
+            { Table.attrs = [class_ "sm:w-[28%] max-sm:col-span-2"]
             }
-            : [rightCol (T.toUpper vital.name) (\(_, byVital, _) -> vitalCell vital byVital) | vital <- vitalDefinitions]
-              <> [rightCol "Observations" \(_, _, sampleTotal) -> toHtml $ show sampleTotal]
+            : [ rightCol (T.toUpper vital.name) \(_, byVital, _) -> do
+                  span_ [class_ "block text-xs text-textWeak sm:hidden", Aria.hidden_ "true"] $ toHtml $ T.toUpper vital.name <> " P75"
+                  vitalCell vital byVital
+              | vital <- vitalDefinitions
+              ]
+              <> [ rightCol "Observations" \(_, _, sampleTotal) -> do
+                     span_ [class_ "block text-xs text-textWeak sm:hidden", Aria.hidden_ "true"] "Observations"
+                     toHtml $ show sampleTotal
+                 ]
       , rows = V.fromList pageRows
-      , features = def{Table.zeroState = Just $ tableZero_ "No page-attributed web vital observations in this time range"}
+      , features = def{Table.zeroState = Just $ tableZero_ "No page-attributed web vital observations in this time range", Table.rowAttrs = Just $ const [class_ " max-sm:grid max-sm:grid-cols-2 max-sm:gap-x-4 max-sm:border-b max-sm:border-strokeWeak max-sm:py-3 max-sm:last:border-0"]}
       }
   where
     exactPageKql url
       | "://" `T.isInfixOf` url = "attributes.url.full == " <> kqlValue url
       | otherwise = routeKql url
+    vitalCell :: Vital -> M.Map Text VitalMeasurement -> Html ()
     vitalCell vital byVital = case M.lookup vital.name byVital of
       Nothing -> span_ [class_ "text-textWeak"] "—"
-      Just measurement -> span_ [class_ $ "font-medium tabular-nums " <> (ratingStyle $ vitalRating vital{measurement}).textClass, title_ $ measurementNote vital measurement] $ toHtml $ formatMeasurement vital measurement
+      Just measurement -> do
+        span_ [class_ $ "font-medium tabular-nums " <> (ratingStyle $ vitalRating vital{measurement}).textClass, title_ $ measurementNote vital measurement] $ toHtml $ formatMeasurement vital measurement
+        span_ [class_ "block text-xs text-textWeak sm:hidden"] $ toHtml $ measurementNote vital measurement
     score byVital = opportunityScore [(v.goodAt, v.poorAt, value) | v <- vitalDefinitions, Just measurement <- [M.lookup v.name byVital], Just value <- [RUM.measurementValue measurement]]
     pageRows =
       take 12

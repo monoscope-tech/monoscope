@@ -403,13 +403,14 @@ test("Performance and Overview panels use the current picker window", async ({ p
   }
 });
 
-test("mobile vital rows keep value, assessment, coverage and observations together", async ({ page }) => {
+test("mobile vital tables keep measurements and page identities readable", async ({ page }) => {
   test.skip(!process.env.E2E_BASE_URL, "Requires the disposable e2e database");
   const scope = `e2e-mobile-vitals-${Date.now()}`;
   const cleanup = `DELETE FROM otel_metrics WHERE project_id='${DEMO_PROJECT}' AND resource___service___name='${scope}'`;
-  sql(`INSERT INTO otel_metrics (project_id,id,series_id,timestamp,start_timestamp,metric_name,metric_type,metric_unit,value,aggregation_temporality,distribution_count,hist_bucket_counts,hist_explicit_bounds,resource,resource___service___name)
+  sql(`INSERT INTO otel_metrics (project_id,id,series_id,timestamp,start_timestamp,metric_name,metric_type,metric_unit,value,aggregation_temporality,distribution_count,hist_bucket_counts,hist_explicit_bounds,resource,resource___service___name,attributes)
     SELECT '${DEMO_PROJECT}',gen_random_uuid(),'${scope}' || name,now()-interval '10 seconds',now()-interval '1 minute',
-      'browser.web_vital.' || name,type,unit,value,'DELTA',count,buckets,bounds,jsonb_build_object('service',jsonb_build_object('name','${scope}')),'${scope}'
+      'browser.web_vital.' || name,type,unit,value,'DELTA',count,buckets,bounds,jsonb_build_object('service',jsonb_build_object('name','${scope}')),'${scope}',
+      '{"page.url":"https://shop.example/item/ABCDEF12?variant=long-mobile-page-identity"}'
     FROM (VALUES ('lcp','HISTOGRAM','ms',NULL::float8,100::bigint,ARRAY[80,20]::bigint[],ARRAY[100]::float8[]),
       ('fcp','GAUGE','ms',22.5,NULL,NULL,NULL),('ttfb','SUM','ms',100,NULL,NULL,NULL)) AS points(name,type,unit,value,count,buckets,bounds)`);
   try {
@@ -429,6 +430,28 @@ test("mobile vital rows keep value, assessment, coverage and observations togeth
           return bounds.width > 0 && bounds.left >= 0 && bounds.right <= window.innerWidth && cell.scrollWidth <= cell.clientWidth;
         })))).toBe(true);
         await table.locator("tbody tr").first().screenshot({ path: test.info().outputPath(`vitals-${theme}-${width}.png`) });
+        const pages = page.getByRole("heading", { name: "Web Vitals by page", exact: true }).locator("xpath=ancestor::section[1]").getByRole("table");
+        await expect(pages.getByRole("cell")).toHaveCount(7);
+        await pages.locator("tbody tr").first().screenshot({ path: test.info().outputPath(`page-vitals-${theme}-${width}.png`) });
+        expect(await pages.locator("tbody td").evaluateAll(cells => cells.every((cell, index) => {
+          const bounds = cell.getBoundingClientRect();
+          const text = document.createRange();
+          text.selectNodeContents(cell);
+          return bounds.width > 0 && bounds.left >= 0 && bounds.right <= window.innerWidth && cell.scrollWidth <= cell.clientWidth
+            && (window.innerWidth >= 640 && index === 0 || [...text.getClientRects()].every(rect => rect.left >= bounds.left - 1 && rect.right <= bounds.right + 1));
+        }))).toBe(true);
+        await expect(pages.getByRole("columnheader")).toHaveCount(7);
+        await expect(pages.getByRole("columnheader", { name: "Observations", exact: true })).toHaveCount(1);
+        if (width < 640) {
+          await expect(pages.getByText("Unsupported population", { exact: true })).toBeVisible();
+          await expect(pages.getByText("Exact quantile", { exact: true })).toBeVisible();
+        }
+        const link = pages.getByRole("link", { name: "https://shop.example/item/ABCDEF12?variant=long-mobile-page-identity", exact: true });
+        if (width < 640) expect(await link.evaluate(element => element.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
+        const destination = new URL((await link.getAttribute("href"))!, page.url());
+        expect(destination.searchParams.get("query")).toContain('attributes.url.full == "https://shop.example/item/ABCDEF12?variant=long-mobile-page-identity"');
+        expect(destination.searchParams.get("query")).toContain(`service=="${scope}"`);
+        expect(destination.searchParams.get("since")).toBe("1H");
       }
       await expect(table.getByRole("columnheader", { name: "Coverage", exact: true })).toHaveCount(1);
     }
