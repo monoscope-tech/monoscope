@@ -484,7 +484,7 @@ pValues = pValuesWith pValues [try pScalarFunc] -- try pScalarFunc must come fir
 -- Right (Matches (Subject "email" "email" []) ".*@company\\.com")
 --
 -- Canonical KQL regexes are case-sensitive, with quoted patterns that round-trip.
--- >>> let e = MatchesRegex (Subject "url" "url" []) "^/cart([?#].*)?$"
+-- >>> let e = MatchesRegex (Subject "url" "url" []) "^/a\\.b\\\\c([?#].*)?$"
 -- >>> parse pTerm "" (toQText e) == Right e
 -- True
 --
