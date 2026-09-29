@@ -1796,10 +1796,9 @@ measurementNote vital = \case
 
 observationLabel :: VitalMeasurement -> Text
 observationLabel measurement =
-  show (RUM.measurementSamples measurement) <> case measurement of
-    Unavailable _ _ -> " known observations"
-    Unmeasured -> " observations"
-    Measured _ _ -> " observations"
+  countNoun (RUM.measurementSamples measurement) $ case measurement of
+    Unavailable{} -> "known observation"
+    _ -> "observation"
 
 
 formatVitalThreshold :: Vital -> Double -> Text

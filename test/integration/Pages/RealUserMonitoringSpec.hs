@@ -268,6 +268,9 @@ spec = sequential $ aroundAll withTestResources do
         summary <- loaded "vitals"
         pure (detail, summary)
       map (\(detail, summary) -> (detail.degradedPanels, summary.degradedPanels)) pages `shouldBe` replicate (length cases) ([], [])
+      forM_ (zip cases pages) \((_, _, _, (value, count)), (_, summary)) ->
+        forM_ (lookup (isJust value, count) [((False, 1), "1 known observation"), ((True, 1), "1 observation"), ((True, 100), "100 observations")]) \label ->
+          toText (Lucid.renderText $ Lucid.toHtml summary) `shouldContainAll` [">" <> label <> "</td>"]
       -- Explicit/custom buckets use uniform within-bucket interpolation; scalar observations
       -- remain exact. Missing baselines retain known counts without a full-population P75.
       let measured measurement = (RUMData.measurementValue measurement, RUMData.measurementSamples measurement)
