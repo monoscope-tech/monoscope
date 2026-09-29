@@ -992,6 +992,15 @@ spec = sequential $ aroundAll withTestResources do
       map (.id) quick.sessions `shouldBe` ["session-wide-new"]
       quick.servedStale `shouldBe` True
       quickHtml `shouldContainAll` ["refresh=1", "Refreshing the full time range"]
+      -- The slice is never cached: a failed revalidation degrades instead of serving it as final.
+      let unavailable = interpose @(Labeled "timefusion" Hasql.Hasql) \_ (Labeled effect) -> case effect of
+            Hasql.UseStatement{} -> pure $ Left HP.AcquisitionTimeoutUsageError
+            Hasql.UseSession{} -> pure $ Left HP.AcquisitionTimeoutUsageError
+            Hasql.UseLabeledSession{} -> pure $ Left HP.AcquisitionTimeoutUsageError
+      (_, RUM.RumGet (PageCtx _ failedBody)) <- testServant tr{trATCtx = tr.trATCtx{env = tr.trATCtx.env{enableTimefusionReads = True}}} $ unavailable $ RUM.rumGetH projectId (Just "sessions") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "sessions") (Just "1") (Just "1")
+      case failedBody of
+        DeferredBody failed -> failed.degradedPanels `shouldBe` [RUMData.SessionSearchQuery Nothing RUMData.AllSessionRows]
+        DeferredShell{} -> fail "Expected the degraded sessions panel"
       (full, fullHtml) <- load "24H" (Just "1")
       (map (.id) full.sessions, full.servedStale) `shouldBe` (["session-wide-new", "session-wide-old"], False)
       T.isInfixOf "Refreshing the full time range" fullHtml `shouldBe` False

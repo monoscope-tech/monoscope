@@ -783,7 +783,6 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
                     ReplaySessionsQuery -> ""
                     VitalPopulationQuery{} -> ":vital-population-v1"
                     BreakdownQuery -> ""
-                publish lifetime value = either (\err -> Log.logAttention "RUM panel cache write failed" (label, displayException err)) pure =<< tryAny (rumPanelCacheSet dbKey lifetime value)
             staleEntryM <- mfilter usable . fromRight Nothing <$> tryAny (rumPanelCacheGetStale dbKey)
             outcome <-
               tryAny
@@ -801,7 +800,7 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
                       when (policy fresh /= SkipCache) do
                         let lifetime = if policy fresh == CacheEmptySearch then min ttl (TimeSpec 30 0) else ttl
                         liftIO $ Cache.insert' appCtx.rumCache (Just lifetime) key fresh
-                        publish lifetime.sec fresh
+                        either (\err -> Log.logAttention "RUM panel cache write failed" (label, displayException err)) pure =<< tryAny (rumPanelCacheSet dbKey lifetime.sec fresh)
                       pure (fresh, False)
                 )
             case outcome of
@@ -1182,7 +1181,7 @@ topPages_ links pages = rumPanel_ "Top pages" "Traffic and real-user load latenc
             -- at a glance which rows hurt, not just which are busiest.
             rightCol "P75 load" \page -> case page.p75LoadMs of
               Nothing -> "—"
-              Just ms -> ratedValue_ (ratingStyle $ classifyVital 2500 4000 (Just ms)) $ toHtml $ getDurationNSMS $ round $ ms * 1e6
+              Just ms -> let style = ratingStyle $ classifyVital 2500 4000 (Just ms) in ratedValue_ style style.label $ toHtml $ getDurationNSMS $ round $ ms * 1e6
           , (rightCol "Last seen" $ Components.localTimeFmt_ "dd MMM HH:mm" . (.lastSeen)){Table.attrs = [class_ "max-sm:hidden"]}
           ]
       , rows = V.fromList $ sortWith (Down . (.views)) $ map merge $ M.elems $ M.fromListWith (<>) [(pageRoute p.path, pure @NonEmpty p) | p <- pages]
@@ -1769,7 +1768,7 @@ pageVitalsTable_ links points = rumPanel_ "Web Vitals by page" "Exact page URLs;
       Nothing -> span_ [class_ "text-textWeak"] "—"
       Just measurement -> do
         let measured = (vital :: Vital){measurement}
-        ratedValue_ (ratingStyle $ vitalRating measured) $ toHtml $ formatVital measured
+        ratedValue_ (ratingStyle $ vitalRating measured) (measurementNote measured) $ toHtml $ formatVital measured
         span_ [class_ "block text-xs text-textWeak sm:hidden"] $ toHtml $ measurementNote measured
     score byVital = opportunityScore [(v.goodAt, v.poorAt, value) | v <- vitalDefinitions, Just measurement <- [M.lookup v.name byVital], Just value <- [RUM.measurementValue measurement]]
     pageRows =
@@ -1939,8 +1938,8 @@ data RatingStyle = RatingStyle {label :: Text, textClass :: Text, fillClass :: T
 
 
 -- | A rated number carries its rating as a dot and as text, never as colour alone.
-ratedValue_ :: RatingStyle -> Html () -> Html ()
-ratedValue_ style value = span_ [class_ $ "inline-flex items-center gap-1.5 font-medium tabular-nums " <> style.textClass, title_ style.label] do
+ratedValue_ :: RatingStyle -> Text -> Html () -> Html ()
+ratedValue_ style title value = span_ [class_ $ "inline-flex items-center gap-1.5 font-medium tabular-nums " <> style.textClass, title_ title] do
   span_ [class_ $ "h-2 w-2 shrink-0 rounded-full " <> style.fillClass, Aria.hidden_ "true"] ""
   span_ [class_ "sr-only"] $ toHtml $ style.label <> ": "
   value
