@@ -230,6 +230,8 @@ spec = sequential $ aroundAll withTestResources do
             , (PM.AGGREGATION_TEMPORALITY_DELTA, [point (at (-10)) (at (-60)) 100 7000 0 200 [80, 10, 0, 0]], [], (Nothing, 0))
             , (PM.AGGREGATION_TEMPORALITY_DELTA, [point (at (-10)) (at (-60)) 100 7000 0 200 [80, 20, 0, 0], point (at (-9)) (at (-20)) 100 7000 0 200 [80, 20, 0, 0]], [], (Nothing, 100))
             , (PM.AGGREGATION_TEMPORALITY_DELTA, [point (at (-10)) (at (-60)) 0 0 0 0 [0, 0, 0, 0]], [], (Nothing, 0))
+            , (PM.AGGREGATION_TEMPORALITY_DELTA, [point (at (-10)) (at (-60)) 1 50 0 100 [1, 0] & PMF.explicitBounds .~ [100]], [9000], (Just 9000, 2))
+            , (PM.AGGREGATION_TEMPORALITY_DELTA, schemaDelta, [150], (Just 150, 201))
             ]
       pages <- forM cases \(temporality, points, scalars, _) -> do
         projectId <- createTestProject tr "RUM histogram"
@@ -271,7 +273,7 @@ spec = sequential $ aroundAll withTestResources do
       let lcpMeasurements = [value.measurement | (_, summary) <- pages, value <- summary.vitals, value.name == "lcp"]
       [issue | RUMData.Unavailable _ issue <- lcpMeasurements] `shouldBe` [RUMData.MissingBaseline, RUMData.UnboundedBucket, RUMData.UnknownStart, RUMData.InterruptedSeries, RUMData.InterruptedSeries, RUMData.InterruptedSeries, RUMData.UnboundedBucket, RUMData.UnboundedBucket, RUMData.InvalidReset, RUMData.UnknownTemporality, RUMData.InvalidBuckets, RUMData.OverlappingIntervals]
       [RUMData.estimateRange estimate | RUMData.Measured _ estimate <- lcpMeasurements]
-        `shouldBe` [Just (0, 100), Just (0, 100), Just (0, 200), Just (0, 200), Just (0, 100), Just (0, 100), Just (0, 100), Just (0, 100), Just (0, 100)]
+        `shouldBe` [Just (0, 100), Just (0, 100), Just (0, 200), Just (0, 200), Just (0, 100), Just (0, 100), Just (0, 100), Just (0, 100), Just (0, 100), Nothing, Just (0, 200)]
 
     it "histogramVitals_missingCount_retainsUnavailableCoverage" \tr -> do
       projectId <- createTestProject tr "RUM missing histogram count"

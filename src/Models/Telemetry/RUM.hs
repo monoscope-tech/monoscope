@@ -448,8 +448,8 @@ rumVitalPopulation useTf scope window bucket = Hasql.withHasqlTimefusion useTf d
      AND lower_cdf<CASE WHEN total_histogram_points=0 THEN CEIL(1+0.75::float8*(total-1)::float8) ELSE 0.75::float8*total::float8 END)
 )
 SELECT ROW(kind::bigint,group_bucket,group_page,metric::text,total::bigint,issue::text,p75::float8,
-  CASE WHEN issue IS NULL AND total>0 AND total_histogram_points>0 THEN COALESCE(histogram_lower_bound,0)::float8 END,
-  CASE WHEN issue IS NULL AND total>0 AND total_histogram_points>0 THEN histogram_upper_bound::float8 END)
+  CASE WHEN issue IS NULL AND total>0 AND total_histogram_points>0 AND (histogram_points_at_bound=total_histogram_points OR COALESCE(histogram_lower_cdf,0)!=histogram_upper_cdf) THEN COALESCE(histogram_lower_bound,0)::float8 END,
+  CASE WHEN issue IS NULL AND total>0 AND total_histogram_points>0 AND (histogram_points_at_bound=total_histogram_points OR COALESCE(histogram_lower_cdf,0)!=histogram_upper_cdf) THEN histogram_upper_bound::float8 END)
 FROM quantiles WHERE kind!=2 OR group_page IS NOT NULL
 |]
   -- Grouped pages are ordered/capped here to avoid native final-sort memory pressure.
