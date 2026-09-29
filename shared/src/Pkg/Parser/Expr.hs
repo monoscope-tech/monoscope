@@ -165,6 +165,7 @@ data Expr
   | GTEq Subject Values
   | LTEq Subject Values
   | Regex Subject Text
+  | MatchesRegex Subject Text
   | In Subject Values
   | NotIn Subject Values
   | Has Subject Values
@@ -482,6 +483,11 @@ pValues = pValuesWith pValues [try pScalarFunc] -- try pScalarFunc must come fir
 -- >>> parse pTerm "" "email matches /.*@company\\\\.com/"
 -- Right (Matches (Subject "email" "email" []) ".*@company\\.com")
 --
+-- Canonical KQL regexes are case-sensitive, with quoted patterns that round-trip.
+-- >>> let e = MatchesRegex (Subject "url" "url" []) "^/cart([?#].*)?$"
+-- >>> parse pTerm "" (toQText e) == Right e
+-- True
+--
 -- Standalone subject is treated as isnotempty check (KQL spec):
 -- >>> parse pTerm "" "x.y.z"
 -- Right (BoolFunc (ScalarFunc "isnotempty" [Field (Subject "x.y.z" "x" [FieldKey "y",FieldKey "z"])]))
@@ -490,6 +496,7 @@ pTerm =
   (Paren <$> parens pExpr)
     <|> asum [binTerm pValues ctor sym | (ctor, _, sym, _) <- valBinOps]
     <|> asum [binTerm pSubject ctor sym | (ctor, _, sym, _) <- subjectBinOps]
+    <|> try (MatchesRegex <$> pSubject <* space <* void (symbol "matches" *> symbol "regex") <*> (toText <$> (char '"' *> manyTill L.charLiteral (char '"'))))
     <|> try (Matches <$> pSubject <* space <* void (symbol "matches") <* space <*> (toText <$> (char '/' *> manyTill L.charLiteral (char '/'))))
     <|> try regexParser
     <|> try (BoolFunc <$> pBoolScalarFunc) -- Standalone boolean functions: isnull(x), isnotnull(x), etc.
@@ -1380,7 +1387,7 @@ scalarFuncToSQL name args
 -- | Decompose a binary Expr into its operands plus the (display op-string, KQL
 -- parse symbol) drawn from the shared operator tables, so Display and
 -- ToQueryText reuse a single constructor->token map. The bespoke cases
--- (Matches/Paren/And/Or/Regex/BoolFunc) are handled directly in the instances.
+-- (Matches/MatchesRegex/Paren/And/Or/Regex/BoolFunc) are handled directly in the instances.
 binaryParts :: [(ctor, Expr -> Maybe (a, b), Text, Text)] -> Expr -> Maybe (a, b, Text, Text)
 binaryParts tbl e = listToMaybe [(x, y, dop, sym) | (_, matchP, sym, dop) <- tbl, Just (x, y) <- [matchP e]]
 
@@ -1389,6 +1396,7 @@ instance Display Expr where
   displayPrec prec e
     | Just (sub, val, op, _) <- binaryParts subjectBinOps e = displayExprHelper op prec sub val
     | Just (v1, v2, op, _) <- binaryParts valBinOps e = displayParen (prec > 0) $ displayPrec prec v1 <> " " <> displayBuilder op <> " " <> displayPrec prec v2
+  displayPrec prec (MatchesRegex sub val) = displayPrec prec $ renderJsonpathSQL "matches regex" sub (Str val)
   displayPrec prec (Matches sub val) = displayPrec prec $ renderJsonpathSQL "like_regex" sub (Str val)
   displayPrec prec (Paren u1) = displayParen True $ displayPrec prec u1
   displayPrec prec (And u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " AND " <> displayPrec prec u2
@@ -1403,6 +1411,7 @@ instance ToQueryText Expr where
   toQText e
     | Just (sub, val, _, sym) <- binaryParts subjectBinOps e = toQText sub <> " " <> sym <> " " <> toQText val
     | Just (v1, v2, _, sym) <- binaryParts valBinOps e = toQText v1 <> " " <> sym <> " " <> toQText v2
+  toQText (MatchesRegex sub val) = toQText sub <> " matches regex " <> toQText (Str val)
   toQText (Matches sub val) = toQText sub <> " matches /" <> val <> "/"
   toQText (Paren expr) = "(" <> toQText expr <> ")"
   toQText (And left right) = toQText left <> " AND " <> toQText right
@@ -1478,6 +1487,7 @@ data JStep = JKey Text | JIdx Int | JWild
 -- | A filter predicate: the body of @? ( … )@, always about the current item @\@@.
 data JPred
   = JCmp JCmpOp JLit -- @\@ == "x"@
+  | JMatchesRegex Text
   | JLikeRegex Text -- @\@ like_regex "…" flag "i"@ (always case-insensitive here)
   | JAnd JPred JPred
   | JOr JPred JPred
@@ -1525,6 +1535,7 @@ renderJsonpath (Jsonpath base path pred_) =
     -- Datetime comparison coerces both operands via @.datetime()@ (jsonpath has no now()).
     renderPred _ (JCmp o (JDateTime iso)) = "@.datetime() " <> cmp o <> " " <> jsonString iso <> ".datetime()"
     renderPred _ (JCmp o l) = "@ " <> cmp o <> " " <> lit l
+    renderPred _ (JMatchesRegex rx) = "@ like_regex " <> jsonString rx
     renderPred _ (JLikeRegex rx) = "@ like_regex " <> jsonString rx <> " flag \"i\""
     renderPred p (JAnd a b) = paren p (renderPred True a <> " && " <> renderPred True b)
     renderPred p (JOr a b) = paren p (renderPred True a <> " || " <> renderPred True b)
@@ -1623,6 +1634,7 @@ lowerPred op (Subject _ base keys) val = Jsonpath base (JPath (concatMap toSteps
       (Nothing, "HAS_ALL") -> likeList JAnd
       (Nothing, "STARTSWITH") -> JLikeRegex . (\t -> "^" <> escapeRegex t) <$> asTerm val
       (Nothing, "ENDSWITH") -> JLikeRegex . (\t -> escapeRegex t <> "$") <$> asTerm val
+      (Nothing, "matches regex") -> JMatchesRegex <$> asTerm val
       (Nothing, "like_regex") -> JLikeRegex <$> asTerm val -- raw user regex, not escaped
       (Nothing, _) -> Left (UnknownOp op)
 

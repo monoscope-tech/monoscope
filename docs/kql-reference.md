@@ -126,8 +126,9 @@ response_time >= 100 and response_time <= 500
 | `!startswith` | Does not start with string | No | `path !startswith "/internal"` |
 | `endswith` | Ends with string | No | `filename endswith ".json"` |
 | `!endswith` | Does not end with string | No | `url !endswith ".css"` |
-| `matches` | Matches regex pattern | Yes | `email matches /.*@company\.com/` |
-| `=~` | Matches regex pattern (alternate syntax) | Yes | `body =~ /^ERROR:.*/` |
+| `matches regex` | Matches a quoted regex pattern | Yes | `name matches regex "^GET /Cart$"` |
+| `matches` | Matches a slash regex pattern | No | `email matches /.*@company\.com/` |
+| `=~` | Matches a slash regex pattern (alternate syntax) | No | `body =~ /^ERROR:.*/` |
 
 **`has` vs `contains`:**
 - `has` matches whole words/tokens (bounded by non-alphanumeric characters)
@@ -699,6 +700,7 @@ url contains "/api/v2" and method == "GET"
 
 // Pattern matching
 email matches /.*@company\.com$/
+name matches regex "^GET /Cart$"
 ```
 
 ### Time-Based Analysis

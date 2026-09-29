@@ -108,3 +108,33 @@ test("session search survives filter changes and keeps the replay workspace", as
     await expect(workspace).toHaveAttribute("data-e2e-preserved", "true");
   }
 });
+
+test("page links preserve regex query characters through Explorer preload", async ({ page }) => {
+  test.skip(!process.env.E2E_BASE_URL, "Requires the disposable e2e database");
+  const cleanup = `DELETE FROM otel_logs_and_spans WHERE project_id='${DEMO_PROJECT}' AND resource___deployment___environment___name='e2e-page-links'`;
+  sql(`${cleanup};
+    INSERT INTO otel_logs_and_spans (project_id,summary,name,kind,timestamp,start_time,end_time,duration,attributes,resource,
+      attributes___url___full,resource___user_agent___original,resource___deployment___environment___name,context___trace_id,context___span_id)
+    SELECT '${DEMO_PROJECT}',ARRAY['documentLoad'],'documentLoad','span',now(),now(),now()+interval '10 milliseconds',10000000,
+      jsonb_build_object('url',jsonb_build_object('full',url)),
+      jsonb_build_object('user_agent',jsonb_build_object('original','Mozilla/5.0'),'deployment',jsonb_build_object('environment',jsonb_build_object('name','e2e-page-links'))),
+      url,'Mozilla/5.0','e2e-page-links',repeat('f',31)||i::text,repeat('f',15)||i::text
+    FROM unnest(ARRAY['https://shop.example/cart&ready','https://shop.example/cart&ready?q=x','https://shop.example/cart&ready#section',
+      'https://shop.example/cart&ready-later','https://shop.example/Cart&ready','https://shop.example/other/cart&ready','https://shop.example/search?q=/cart&ready']) WITH ORDINALITY AS paths(url,i)`);
+  try {
+    await page.goto(`/p/${DEMO_PROJECT}/rum?tab=performance&since=1H&environment=e2e-page-links`);
+    const link = page.locator("#rum-panel-pages").getByRole("link", { name: "/cart&ready", exact: true });
+    await expect(link).toBeVisible();
+    const query = new URL((await link.getAttribute("href"))!, page.url()).searchParams.get("query");
+    const preload = page.waitForResponse(r => new URL(r.url()).pathname.endsWith("/log_explorer/data"));
+    await link.click();
+    const response = await preload;
+    expect(new URL(response.url()).searchParams.get("query")).toBe(query);
+    const events = await response.json();
+    expect(events.error).toBeUndefined();
+    expect(events.queryResultCount).toBe(3);
+    await expect(page.locator("#resultTable [data-row-id]")).toHaveCount(3);
+  } finally {
+    sql(cleanup);
+  }
+});

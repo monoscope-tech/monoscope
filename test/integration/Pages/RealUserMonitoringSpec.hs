@@ -2,17 +2,22 @@ module Pages.RealUserMonitoringSpec (spec) where
 
 import Control.Concurrent (threadDelay)
 import Data.Cache qualified as Cache
+import Data.Default (def)
+import Data.List (lookup)
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
+import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
 import Data.UUID.Quasi (uuid)
 import Database.PostgreSQL.Simple qualified as PG
 import Lucid qualified
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.RUM qualified as RUMData
+import Network.HTTP.Types.URI (parseQueryText)
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Components (Deferred (..))
+import Pages.LogExplorer.Log qualified as Log
 import Pages.RealUserMonitoring qualified as RUM
 import Pkg.TestUtils
 import Relude
@@ -522,3 +527,40 @@ spec = sequential $ aroundAll withTestResources do
       -- Selecting an old deep link does not depend on it surviving the list's limit.
       detail <- renderPanel tr (Just "sessions") Nothing Nothing (Just oldId) (Just "bulk-ui") (Just "sessions")
       detail `shouldContainAll` ["Newest 200 sessions", "initialSession=\"" <> oldId <> "\""]
+
+    it "pageLinks_findAbsoluteUrlEventsWithoutWideningTheirRouteOrScope" \tr -> do
+      apiKey <- createTestAPIKey tr testPid "rum-page-links-key"
+      let service = "route-links"
+          environment = "route-links-env"
+          ingest index attribute url svc env at =
+            ingestSpanReq tr $ mkSpanRequest ("d" <> T.justifyRight 31 '0' (show index)) ("d" <> T.justifyRight 15 '0' (show index)) Nothing "documentLoad" [] Nothing [mkAttr attribute url] (mkResource apiKey [mkAttr "service.name" svc, mkAttr "user_agent.original" "Mozilla/5.0", mkAttr "deployment.environment.name" env]) at
+      forM_ (zip ([1 ..] :: [Int]) ["/cart", "/cart?coupon=x", "/cart#section", "/cartoon", "/other/cart", "/search?q=/cart", "/Cart", "/cart/"]) \(index, path) ->
+        ingest index "url.full" ("https://shop.example" <> path) service environment frozenTime
+      ingest 9 "url.path" "/cart" service environment frozenTime
+      ingest 10 "url.full" "https://shop.example/cart" "other-service" environment frozenTime
+      ingest 11 "url.full" "https://shop.example/cart" service "other-environment" frozenTime
+      ingest 12 "url.full" "https://shop.example/cart" service environment $ addUTCTime (-120) frozenTime
+      ingestMetric tr apiKey [mkAttr "service.name" service, mkAttr "deployment.environment.name" environment] [mkAttr "page.url" "https://shop.example/cart"] "browser.web_vital.lcp" 1200 frozenTime
+      forM_ (zip ([13 ..] :: [Int]) ["https://shop.example", "https://shop.example/", "/?q=x", "/cart", "https://shop.example/a.b+(x)", "https://shop.example/aZbxxx", "https://shop.example/literal%2Fsegment"]) \(index, url) ->
+        ingest index "url.full" url service environment frozenTime
+      forM_ ["/", "/cart/", "/a.b+(x)", "/literal%2Fsegment"] \route ->
+        ingestMetric tr apiKey [mkAttr "service.name" service, mkAttr "deployment.environment.name" environment] [mkAttr "page.url" $ "https://shop.example" <> route] "browser.web_vital.lcp" 1200 frozenTime
+      let from = toText $ iso8601Show $ addUTCTime (-60) frozenTime
+          to = toText $ iso8601Show $ addUTCTime 60 frozenTime
+          scoped = tr{trSessAndHeader = fmap (\session -> session{Projects.service = Just service}) tr.trSessAndHeader}
+      forM_ ["pages", "vital_trend"] \panel -> do
+        (_, page) <- testServant scoped $ RUM.rumGetScopedH testPid (Just "performance") Nothing Nothing (Just from) (Just to) Nothing Nothing (Just service) (Just panel) (Just "1") Nothing (Just environment)
+        let html = toStrict $ Lucid.renderText $ Lucid.toHtml page
+        forM_ ([("/cart", 5), ("/", 3), ("/cart/", 1), ("/a.b+(x)", 1), ("/literal%2Fsegment", 1)] :: [(Text, Int)]) \(route, count) -> do
+          let label = ">" <> route <> "</a>"
+          html `shouldContainAll` [label]
+          let href = T.takeWhile (/= '"') $ snd $ T.breakOnEnd "href=\"" $ fst $ T.breakOn label html
+              params = parseQueryText $ encodeUtf8 $ T.replace "&amp;" "&" $ snd $ T.breakOn "?" href
+          lookup "from" params `shouldBe` Just (Just from)
+          lookup "to" params `shouldBe` Just (Just to)
+          query <- maybe (fail "RUM page link omitted its Explorer query") pure $ join $ lookup "query" params
+          (_, events) <- testServant tr $ Log.logExplorerDataH testPid def{Log.query = Just query, Log.from = Just from, Log.to = Just to}
+          events.error `shouldBe` Nothing
+          events.queryResultCount `shouldBe` count
+          forM_ [events.nextUrl, events.resetLogsUrl, events.recentUrl] \url ->
+            join (lookup "query" $ parseQueryText $ encodeUtf8 $ snd $ T.breakOn "?" url) `shouldBe` Just query

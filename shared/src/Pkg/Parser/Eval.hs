@@ -31,8 +31,9 @@
 --
 -- [Case sensitivity] @==@, @!=@, @in@, @!in@ and the ordering operators are case-/sensitive/,
 --   matching SQL @=@. Every text operator — @has@, @contains@, @startswith@, @endswith@, their
---   negations, @has_any@, @has_all@, @=~@ and @matches regex@ — is case-/insensitive/, matching
---   the @~*@ / @like_regex … flag "i"@ that @Display Expr@ emits.
+--   negations, @has_any@, @has_all@, @=~@ and @matches /…/@ — is case-/insensitive/, matching
+--   the @~*@ / @like_regex … flag "i"@ that @Display Expr@ emits. Canonical
+--   @matches regex "…"@ is case-sensitive, as in KQL.
 --
 -- [@has@ token boundaries] Real KQL matches @has@ on whole tokens and @contains@ on substrings.
 --   This codebase's SQL lowers /both/ to a case-insensitive substring match (@~*@ over a
@@ -200,6 +201,14 @@ filterExpr = fmap (fromMaybe matchAll) . foldlM step Nothing
 -- >>> match "status_message != null"
 -- Right False
 --
+-- Canonical quoted regexes preserve case; legacy slash regexes remain insensitive:
+-- >>> evalExpr (const [AE.String "Cart"]) (E.MatchesRegex (Subject "x" "x" []) "^cart$")
+-- Right False
+-- >>> evalExpr (const [AE.String "Cart"]) (E.MatchesRegex (Subject "x" "x" []) "^Cart$")
+-- Right True
+-- >>> evalExpr (const [AE.String "Cart"]) (E.Matches (Subject "x" "x" []) "^cart$")
+-- Right True
+--
 -- A broken regex is an error, never a match:
 --
 -- >>> evalExpr (resolveIn AE.Null) (E.Regex (Subject "name" "name" []) "[")
@@ -233,6 +242,7 @@ evalExpr r = go
       E.NotEndsWith s v -> pure (negated s (txt s v T.isSuffixOf))
       E.HasAny s v -> pure $ any (\t -> txt s t T.isInfixOf) (items v)
       E.HasAll s v -> pure $ all (\t -> txt s t T.isInfixOf) (items v)
+      E.MatchesRegex s pat -> (\p -> anyOf s (p . jsonAsText)) <$> compileRegex RE.defaultCompOpt pat
       E.Regex s pat -> re s pat
       E.Matches s pat -> re s pat
       E.ValEq a b -> pure (vcmp a b (== EQ))
@@ -377,9 +387,13 @@ cmpJson a b = case (a, b) of
 -- >>> leftToMaybe (matchesRegex (T.replicate 600 "a"))
 -- Just (RegexTooLong 600)
 matchesRegex :: Text -> Either EvalError (Text -> Bool)
-matchesRegex pat
+matchesRegex = compileRegex RE.defaultCompOpt{RE.caseSensitive = False}
+
+
+compileRegex :: RE.CompOption -> Text -> Either EvalError (Text -> Bool)
+compileRegex options pat
   | T.length pat > maxRegexLength = Left (RegexTooLong (T.length pat))
-  | otherwise = case RE.compile RE.defaultCompOpt{RE.caseSensitive = False} RE.defaultExecOpt pat of
+  | otherwise = case RE.compile options RE.defaultExecOpt pat of
       Right re -> Right (either (const False) isJust . RE.execute re)
       Left _ -> Left (BadRegex pat)
 

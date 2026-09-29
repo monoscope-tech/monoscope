@@ -306,6 +306,7 @@ traverseSubjects f = traverse goSec
       GTEq s v -> sv GTEq s v
       LTEq s v -> sv LTEq s v
       Regex s t -> st Regex s t
+      MatchesRegex s t -> st MatchesRegex s t
       In s v -> sv In s v
       NotIn s v -> sv NotIn s v
       Has s v -> sv Has s v

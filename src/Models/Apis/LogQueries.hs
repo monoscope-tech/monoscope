@@ -73,8 +73,8 @@ import Relude hiding (many, some)
 import Relude.Extra.Foldable1 (maximum1, minimum1)
 import System.Logging qualified as Log
 import System.Tracing (Tracing, withSpan_)
-import Utils (listToIndexHashMap, lookupVecNonEmptyText, replaceAllFormats)
-import Web.HttpApiData (FromHttpApiData (..), ToHttpApiData (..))
+import Utils (listToIndexHashMap, lookupVecNonEmptyText, replaceAllFormats, toUriStr)
+import Web.HttpApiData (FromHttpApiData (..))
 
 
 data SDKTypes
@@ -192,7 +192,7 @@ data LogEndpoint = Data | Sessions | Patterns
 logExplorerUrlPath :: Projects.ProjectId -> LogEndpoint -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Bool -> Text
 logExplorerUrlPath pid endpoint q cols cursor since fromV toV layout source recent = "/p/" <> pid.toText <> "/log_explorer/" <> toText (encodeEnumSC @"" endpoint) <> "?" <> T.intercalate "&" params
   where
-    param k v = ((k <> "=") <>) . toQueryParam <$> v
+    param k v = ((k <> "=") <>) . toUriStr <$> v
     unlessRecent v = if recent then Nothing else v
     params =
       "json=true"

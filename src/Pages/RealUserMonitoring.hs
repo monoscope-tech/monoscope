@@ -47,7 +47,7 @@ import Pages.Components qualified as Components
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (DB, decodeEnumSC, encodeEnumSC)
+import Pkg.DeriveUtils (DB, decodeEnumSC, encodeEnumSC, escapeRegex)
 import Pkg.ErrorFingerprint (normalizeMessage)
 import Pkg.Parser (ScopedQuery (..), applyScopedKqlContext, mkScopedQuery)
 import Pkg.QueryCache qualified as QueryCache
@@ -1685,10 +1685,12 @@ pageRoute = T.intercalate "/" . map maskSegment . T.splitOn "/" . T.takeWhile (`
 routeKql :: Text -> Text
 routeKql route
   -- Both spellings, matching 'pagePath': our SDK sets url.path, the browser SDK only url.full.
-  | prefix == route = "(attributes.url.path == " <> kqlValue route <> " or attributes.url.full == " <> kqlValue route <> ")"
+  | prefix == route = "(attributes.url.path == " <> kqlValue route <> " or attributes.url.full matches regex " <> kqlValue routeRegex <> ")"
   | otherwise = "(attributes.url.path startswith " <> kqlValue prefix <> " or attributes.url.full contains " <> kqlValue prefix <> ")"
   where
     prefix = fst $ T.breakOn "{" $ fst $ T.breakOn ":id" route
+    origin = "[A-Za-z][A-Za-z0-9+.-]*://[^/?#]+"
+    routeRegex = "^" <> (if route == "/" then "(" <> origin <> "/?|/)" else "(" <> origin <> ")?" <> escapeRegex route) <> "([?#].*)?$"
 
 
 -- | Traffic-weighted room for improvement, after Sentry's "Opportunity" ranking: sample
