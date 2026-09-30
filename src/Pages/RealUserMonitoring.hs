@@ -714,10 +714,9 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
       -- fetches the full range. Only the plain newest-first list qualifies: a text search or a
       -- filter must see the whole window or it silently answers "no match".
       recent = spanScope 0 [(addUTCTime (-(3 * 3600)) window.toTime, window.toTime)] scope <$ guard (diffUTCTime window.toTime window.fromTime > 6 * 3600)
-      sessionsAt s = SessionsResult <$> otelSessionRows s (SessionText Nothing) AllSessionRows
+      -- The Overview's recent sessions are the Sessions tab's unfiltered list, so the two
+      -- tabs share one cache entry instead of scanning the window twice.
       searchAt s = SessionsResult <$> searchSessions s searchQuery sessionFilter
-      sessionsQ = (cacheKey SessionsQuery, panelTtl, sessionsAt scope, sessionsAt <$> recent)
-      replaysQ = (cacheKey ReplaySessionsQuery, panelTtl, ReplaySessionsResult <$> replaySessionRows scope (SessionText Nothing), Nothing)
       sessionSearchQ = (cacheKey $ SessionSearchQuery searchQuery sessionFilter, panelTtl, searchAt scope, searchAt <$> (guard (isNothing searchQuery && sessionFilter == AllSessionRows) *> recent))
       sessionDetailQs = [(cacheKey $ SessionDetailQuery sid, panelTtl, SessionDetailResult <$> sessionDetail scope sid, Nothing) | sid <- maybeToList selectedM, not $ T.null sid]
       vitalsQ = (cacheKey $ VitalPopulationQuery bucket, panelTtl, VitalPopulationResult <$> RUM.rumVitalPopulation scope.useTf scope.queryScope window bucket, Nothing)
@@ -736,7 +735,7 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
         Just PanelVitals -> [vitalsQ]
         Just PanelVitalTrend -> [vitalsQ]
         Just PanelErrors -> [errorsQ]
-        Just PanelSessions -> (if tab == Sessions then [sessionSearchQ] else [sessionsQ, replaysQ]) <> sessionDetailQs
+        Just PanelSessions -> sessionSearchQ : sessionDetailQs
         Just PanelSessionDetail -> sessionDetailQs
         Just PanelAudience -> [breakdownQ]
         Nothing -> []
@@ -767,7 +766,6 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
                   PagesResult rows -> not $ null rows
                   ErrorsResult rows -> not $ null rows
                   SessionsResult rows -> not $ null rows
-                  ReplaySessionsResult rows -> not $ null rows
                   SessionDetailResult row -> isJust row
                   VitalPopulationResult rows -> not $ null rows
                   BreakdownResult rows -> not $ null rows
@@ -785,8 +783,6 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
                     PresenceQuery -> ""
                     PagesQuery -> ""
                     ErrorsQuery -> ""
-                    SessionsQuery -> ""
-                    ReplaySessionsQuery -> ""
                     VitalPopulationQuery{} -> ":vital-population-v1"
                     BreakdownQuery -> ""
             staleEntryM <- mfilter usable . fromRight Nothing <$> tryAny (rumPanelCacheGetStale dbKey)
@@ -824,7 +820,7 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
         hasTelemetry = or [value | PresenceResult value <- results]
         pages = fold [value | PagesResult value <- results]
         errors = fold [value | ErrorsResult value <- results]
-        sessions = mergeSessions scope.queryScope (fold [value | SessionsResult value <- results]) (fold [value | ReplaySessionsResult value <- results])
+        sessions = fold [value | SessionsResult value <- results]
         selectedSessionData = asum [value | SessionDetailResult value <- results]
         populations = fold [value | VitalPopulationResult value <- results]
         fieldMeasurements = M.fromList [(population.metricName, population.measurement) | population <- populations, population.grouping == FieldVital]
@@ -1398,7 +1394,7 @@ sessions_ page = slot_ page PanelSessions sessionsSkeleton_ do
   div_ [class_ "grid bg-bgBase xl:h-full xl:min-h-0 xl:grid-cols-[minmax(32rem,35%)_minmax(0,1fr)]"] do
     section_ [id_ "rum-sessions-list", Aria.label_ "Sessions", tabindex_ "0", class_ "min-w-0 overflow-y-auto overscroll-contain border-strokeWeak xl:min-h-0 xl:border-e max-xl:max-h-[45svh] max-xl:border-b"] do
       when page.servedStale refreshingHint_
-      if any (\case SessionsQuery -> True; SessionSearchQuery{} -> True; _ -> False) page.degradedPanels then degradedBanner_ page PanelSessions else sessionsTable_ True page.now page.links page.query page.sessionFilter page.selectedSession filtered
+      if any (\case SessionSearchQuery{} -> True; _ -> False) page.degradedPanels then degradedBanner_ page PanelSessions else sessionsTable_ True page.now page.links page.query page.sessionFilter page.selectedSession filtered
       panelRevalidation_ page PanelSessions
     sessionWorkspace_ page
 
@@ -2060,8 +2056,6 @@ rumQueryLabel = \case
   PresenceQuery -> "experience"
   PagesQuery -> "pages"
   ErrorsQuery -> "errors"
-  SessionsQuery -> "sessions"
-  ReplaySessionsQuery -> "replays"
   SessionSearchQuery{} -> "sessions"
   SessionDetailQuery{} -> "session"
   VitalPopulationQuery{} -> "web vitals"

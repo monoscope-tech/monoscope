@@ -505,7 +505,6 @@ data RumQueryResult
   | PagesResult [RumPage]
   | ErrorsResult [RumError]
   | SessionsResult [RumSession]
-  | ReplaySessionsResult [ReplaySession]
   | SessionDetailResult (Maybe RumSession)
   | VitalPopulationResult [VitalPopulation]
   | BreakdownResult [RumBreakdown]
@@ -517,8 +516,6 @@ data RumQuery
   = PresenceQuery
   | PagesQuery
   | ErrorsQuery
-  | SessionsQuery
-  | ReplaySessionsQuery
   | SessionSearchQuery (Maybe Text) SessionFilter
   | SessionDetailQuery Text
   | VitalPopulationQuery RumBucket
