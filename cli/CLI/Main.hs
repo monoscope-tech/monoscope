@@ -131,6 +131,7 @@ data EventsCommand
 
 data MetricsCommand
   = MQuery MetricsQueryOpts
+  | MList MetricsListOpts
   | MChart MetricsChartOpts
   deriving stock (Show)
 
@@ -401,6 +402,7 @@ metricsParser =
   subparser
     $ mconcat
       [ command "query" (info (MQuery <$> metricsQueryParser <**> helper) (progDesc "Run metrics query"))
+      , command "list" (info (MList <$> metricsListParser <**> helper) (progDesc "List recently seen metrics"))
       , command "chart" (info (MChart <$> metricsChartParser <**> helper) (progDesc "Render chart"))
       ]
 
@@ -413,6 +415,16 @@ metricsQueryParser =
     <*> optional (strOption (long "from" <> metavar "TIMESTAMP"))
     <*> optional (strOption (long "to" <> metavar "TIMESTAMP"))
     <*> optional (strOption (long "assert" <> metavar "CONDITION" <> help "Assert condition (e.g. '< 0.01')"))
+
+
+metricsListParser :: Parser MetricsListOpts
+metricsListParser =
+  MetricsListOpts
+    <$> optional (strOption (long "service" <> metavar "NAME" <> help "Exact service name"))
+    <*> optional (strOption (long "search" <> metavar "TEXT" <> help "Metric name search"))
+    <*> optional (option auto (long "limit" <> metavar "COUNT" <> help "Page size (max 100)"))
+    <*> optional (option auto (long "offset" <> metavar "COUNT" <> help "Page offset"))
+    <*> switch (long "inactive" <> help "List metrics last seen more than seven days ago")
 
 
 metricsChartParser :: Parser MetricsChartOpts
@@ -998,6 +1010,7 @@ run version global = \case
     EvContext opts -> runEventsContext cfg opts kindOverride mode
   MetricsCmd mCmd -> withCfgMode global $ \cfg mode -> case mCmd of
     MQuery opts -> runMetricsQuery cfg opts mode
+    MList opts -> runMetricsList cfg opts mode
     MChart opts -> runMetricsChart cfg opts mode
   ServicesCmd (SList opts) -> withCfgMode global $ \cfg mode -> runServicesList cfg opts mode
   ConfigCmd CInit -> runConfigInit

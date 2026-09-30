@@ -306,6 +306,13 @@ With `--summary`, the JSON envelope is augmented with a `traces` array:
 The `metrics` endpoint runs **KQL** queries against the same store as the web UI.
 Use `summarize` for aggregations and `by` for grouping.
 
+### Discover
+
+`monoscope metrics list --service checkout --limit 20 --offset 0` lists metric
+names and metadata seen in the selected project during the last seven days.
+Use `--inactive` for older metrics, `--search` to filter names, and `--json`
+to inspect `total`, `active`, `hasMore`, and `activeSince`.
+
 ### Query
 
 ```bash

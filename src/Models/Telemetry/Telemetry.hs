@@ -83,8 +83,11 @@ module Models.Telemetry.Telemetry (
   mintOtelLogIds,
   getMetricChartListData,
   getMetricCatalogPage,
+  getMetricCatalogResponse,
   getMetricGroups,
   MetricCatalogPage (..),
+  MetricCatalogMode (..),
+  MetricCatalogResponse (..),
   getTraceShapes,
   getMetricServiceNames,
   getMetricNames,
@@ -113,6 +116,7 @@ import Control.Concurrent.STM qualified as STM
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
+import Data.OpenApi (ToSchema)
 import Data.ByteString qualified as BS
 import Data.Default (Default (..))
 import Data.Effectful.Hasql (Hasql, retryTransientLoop)
@@ -121,6 +125,7 @@ import Data.HashMap.Strict qualified as HM
 import Data.List.Extra (lookup)
 import Data.List.NonEmpty qualified as NE
 import Data.Map qualified as Map
+import Data.Ord (clamp)
 import Data.Scientific qualified as Sci
 import Data.Set qualified as S
 import Data.Text qualified as T
@@ -629,7 +634,7 @@ data MetricChartListData = MetricChartListData
   , metricLabels :: V.Vector Text
   }
   deriving (Generic, Show)
-  deriving anyclass (FromRow, HI.DecodeRow, NFData, ToRow)
+  deriving anyclass (AE.ToJSON, FromRow, HI.DecodeRow, NFData, ToRow, ToSchema)
 
 
 -- | Aggregate 'Trace' for a non-empty span batch; accessor parameters keep the
@@ -1321,9 +1326,8 @@ getMetricChartListData pid sourceM prefixM =
   Hasql.interp $ metricCatalogAggSql pid sourceM prefixM <> [HI.sql| SELECT * FROM catalog ORDER BY metric_name |]
 
 
--- | One page of active metrics, the full inactive tail, and the total active count — in a
--- single pass, because evaluating the catalogue aggregate is the expensive part and all
--- three answers come from it.
+-- | One activity-filtered page, optionally with the full inactive tail for the
+-- overview, and both the active and selected totals in a single catalogue pass.
 --
 -- The overview page renders 20 active metrics but used to read the entire catalogue to do
 -- it, then paginate in memory; on a project with 406 metrics that was the dominant cost of
@@ -1332,11 +1336,45 @@ data MetricCatalogPage = MetricCatalogPage
   { active :: V.Vector MetricChartListData
   , inactive :: V.Vector MetricChartListData
   , activeTotal :: Int
+  , pageTotal :: Int
   }
 
 
--- | One row of the tagged UNION below: a catalogue entry plus which side of the
--- active/inactive split it came from and the active total carried on every row.
+data MetricCatalogMode = ActivePage | ActivePageWithInactive | InactivePage
+  deriving stock (Eq)
+
+
+data MetricCatalogResponse = MetricCatalogResponse
+  { metrics :: V.Vector MetricChartListData
+  , total :: Int
+  , active :: Bool
+  , hasMore :: Bool
+  , activeSince :: UTCTime
+  , service :: Maybe Text
+  , search :: Maybe Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.ToJSON, ToSchema)
+
+
+getMetricCatalogResponse :: DB es => Projects.ProjectId -> Maybe Text -> Maybe Text -> UTCTime -> Int -> Int -> Bool -> Eff es MetricCatalogResponse
+getMetricCatalogResponse pid service search now requestedLimit requestedOffset active = do
+  let limit = clamp (1, 100) requestedLimit
+      offset = max 0 requestedOffset
+      cutoff = addUTCTime (-(7 * 24 * 3600)) now
+      selectedService = mfilter (`notElem` ["", "all"]) service
+      selectedSearch = mfilter (not . T.null) (T.strip <$> search)
+      pageAt = getMetricCatalogPage pid selectedService Nothing selectedSearch cutoff
+      selected page = if active then page.active else page.inactive
+      mode = if active then ActivePage else InactivePage
+  page <- pageAt limit offset mode
+  total <- if offset > 0 && V.null (selected page)
+    then (.pageTotal) <$> pageAt 1 0 mode
+    else pure page.pageTotal
+  pure $ MetricCatalogResponse (selected page) total active (offset + V.length (selected page) < total) cutoff selectedService selectedSearch
+
+
+-- | One catalogue entry with its activity and totals carried on every row.
 data MetricCatalogRow = MetricCatalogRow
   { metricName :: Text
   , metricType :: Text
@@ -1346,15 +1384,17 @@ data MetricCatalogRow = MetricCatalogRow
   , metricLabels :: V.Vector Text
   , isActive :: Bool
   , activeTotal :: Int64
+  , pageTotal :: Int64
   }
   deriving (Generic)
   deriving anyclass (HI.DecodeRow)
 
 
--- @withInactive@ is False for scroll-in pages: the inactive list is only rendered on the
--- first page, so later pages must not carry it back.
-getMetricCatalogPage :: DB es => Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> UTCTime -> Int -> Int -> Bool -> Eff es MetricCatalogPage
-getMetricCatalogPage pid sourceM prefixM queryM cutoff limit offset withInactive = do
+-- The overview's first page includes its inactive tail; API pages stay bounded.
+getMetricCatalogPage :: DB es => Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> UTCTime -> Int -> Int -> MetricCatalogMode -> Eff es MetricCatalogPage
+getMetricCatalogPage pid sourceM prefixM queryM cutoff limit offset mode = do
+  let pageActive = mode /= InactivePage
+      withInactive = mode == ActivePageWithInactive
   -- Select names before expanding labels. Scroll requests only aggregate labels for
   -- their own page, rather than every metric in the project.
   rows <-
@@ -1369,18 +1409,19 @@ getMetricCatalogPage pid sourceM prefixM queryM cutoff limit offset withInactive
         MAX(metric_description) AS metric_description, MAX(last_seen_at) AS last_seen
       FROM scoped GROUP BY metric_name
     ), act AS (SELECT * FROM meta WHERE last_seen >= #{cutoff}),
-    page AS (SELECT * FROM act ORDER BY metric_name LIMIT #{limit} OFFSET #{offset}),
+    selected_page AS (SELECT * FROM meta WHERE (last_seen >= #{cutoff}) = #{pageActive}),
+    page AS (SELECT * FROM selected_page ORDER BY metric_name LIMIT #{limit} OFFSET #{offset}),
     labels AS (
       SELECT metric_name, ARRAY_AGG(DISTINCT label ORDER BY label) FILTER (WHERE label IS NOT NULL) AS labs
       FROM scoped JOIN (SELECT metric_name FROM page UNION ALL SELECT metric_name FROM meta WHERE #{withInactive} AND last_seen < #{cutoff}) selected USING (metric_name)
       LEFT JOIN LATERAL unnest(metric_labels) AS label ON TRUE GROUP BY metric_name
     )
     SELECT page.metric_name, metric_type, metric_unit, metric_description, last_seen,
-      COALESCE(labs, '{}'::text[]), TRUE, (SELECT COUNT(*)::int8 FROM act)
+      COALESCE(labs, '{}'::text[]), #{pageActive}, (SELECT COUNT(*)::int8 FROM act), (SELECT COUNT(*)::int8 FROM selected_page)
     FROM page LEFT JOIN labels USING (metric_name)
     UNION ALL
     SELECT metric_name, metric_type, metric_unit, metric_description, last_seen,
-      COALESCE(labs, '{}'::text[]), FALSE, (SELECT COUNT(*)::int8 FROM act)
+      COALESCE(labs, '{}'::text[]), FALSE, (SELECT COUNT(*)::int8 FROM act), (SELECT COUNT(*)::int8 FROM selected_page)
     FROM meta LEFT JOIN labels USING (metric_name) WHERE #{withInactive} AND last_seen < #{cutoff}
     ORDER BY 7 DESC, 1 |]
   let metric :: MetricCatalogRow -> MetricChartListData
@@ -1390,6 +1431,7 @@ getMetricCatalogPage pid sourceM prefixM queryM cutoff limit offset withInactive
       { active = V.fromList $ metric <$> filter (.isActive) rows
       , inactive = V.fromList $ metric <$> filter (not . (.isActive)) rows
       , activeTotal = maybe 0 (fromIntegral . (.activeTotal)) $ viaNonEmpty head rows
+      , pageTotal = maybe 0 (fromIntegral . (.pageTotal)) $ viaNonEmpty head rows
       }
   where
     selected = mfilter (`notElem` ["", "all"])

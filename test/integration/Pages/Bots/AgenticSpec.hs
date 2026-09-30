@@ -31,6 +31,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Logging
 import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldContain, shouldNotContain, shouldSatisfy)
 import UnliftIO.Exception (throwIO)
+import Web.FormUrlEncoded (urlDecodeAsForm)
 
 
 spec :: Spec
@@ -115,6 +116,14 @@ spec = around withTestResources do
         scheduledActionable `shouldContain` ["send_to_slack"]
 
     describe "Web conversation persistence" do
+      it "requires an explicit per-message grant for project changes" \tr -> do
+        let absent = urlDecodeAsForm @AIThreads.AIChatForm "query=check+metrics&mode=chat"
+            granted = urlDecodeAsForm @AIThreads.AIChatForm "query=acknowledge+issue&mode=chat&allowActions=true"
+        fmap (.allowActions) absent `shouldBe` Right Nothing
+        fmap (.allowActions) granted `shouldBe` Right (Just True)
+        (_, threadPage) <- testServant tr $ AIThreads.threadGetH testPid (UUIDId UUID.nil)
+        (LT.toStrict $ Lucid.renderText $ Lucid.toHtml threadPage) `shouldSatisfy` T.isInfixOf "name=\"allowActions\""
+
       it "assistantPages_defaultToNavigation" \tr -> do
         let convId = UUIDId UUID.nil
         void $ runTestBg frozenTime tr $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTWeb})|]

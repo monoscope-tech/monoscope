@@ -10,7 +10,6 @@ module Pages.LogExplorer.Log (
   logSessionsH,
   alertFormH,
   apiLogExpandH,
-  aiSearchH,
   queryEvents,
   LogsGet (..),
   LogResult (..),
@@ -90,34 +89,20 @@ import Models.Projects.ProjectMembers qualified as ManageMembers
 import Pages.Components (FieldCfg (..), FieldSize (..), facetOption_, facetRail_, facetSection_, formField_, keyboardActivateAttr_, localTimeFmt_, resetFormOnSuccessAttr_, resizer_)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Monitors qualified as AlertUI
-import Pkg.AI qualified as AI
 
-import BackgroundJobs qualified
+import BackgroundJobs.Types qualified as BackgroundJobs
 import Data.Map.Strict qualified as Map
 import Data.OpenApi (ToSchema (..))
 import Data.Pool (withResource)
 import Data.Set qualified as S
 import Deriving.Aeson qualified as DAE
-import Deriving.Aeson.Stock qualified as DAE
 import OddJobs.Job (createJob)
-import Pkg.DeriveUtils (CamelSchema (..), SnakeSchema (..))
+import Pkg.DeriveUtils (CamelSchema (..))
 import System.Logging qualified as Log
 import System.Tracing (Tracing, withSpan_)
 import Text.Slugify (slugify)
 import UnliftIO.Exception (tryAny)
-
-
-data TraceTreeEntry = TraceTreeEntry
-  { traceId :: Text
-  , startTime :: Int64
-  , duration :: Int64
-  , traceStartTime :: Maybe Text
-  , root :: Text
-  , children :: Map.Map Text [Text]
-  }
-  deriving stock (Eq, Generic, Show)
-  deriving (AE.ToJSON) via DAE.Snake TraceTreeEntry
-  deriving (ToSchema) via SnakeSchema TraceTreeEntry
+import Web.ApiTypes (LogResult (..), TraceTreeEntry (..))
 
 
 data SpanInfo = SpanInfo {spanId :: Text, parentId :: Maybe Text, traceIdVal :: Text, startNs :: Int64, dur :: Int64, timestamp :: Maybe Text, isQueryResult :: Bool, rowIdx :: Int}
@@ -1482,26 +1467,6 @@ data ApiLogsPageData = ApiLogsPageData
   }
 
 
-data LogResult = LogResult
-  { logsData :: V.Vector (V.Vector AE.Value)
-  , cols :: [Text]
-  , colIdxMap :: HM.HashMap Text Int
-  , cursor :: Maybe Text
-  , nextUrl, resetLogsUrl, recentUrl :: Text
-  , serviceColors :: HM.HashMap Text Text
-  , queryResultCount, count :: Int
-  , hasMore :: Bool
-  , traces :: [TraceTreeEntry]
-  , error :: Maybe Text
-  -- ^ Sanitized backend-failure message. When set, the web client renders an
-  -- error state (inline on first load, toast on refresh) instead of the
-  -- misleading empty "no events" list. Raw detail stays in the OTEL span + log.
-  }
-  deriving stock (Generic)
-  deriving (ToSchema) via CamelSchema LogResult
-  deriving (AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] LogResult
-
-
 virtualTable :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Html ()
 virtualTable pid initialFetchUrl modeM = do
   termRaw
@@ -1881,28 +1846,6 @@ apiLogExpandH pid kindM keyM skipM queryM sinceM fromM toM = do
       , "traces" AE..= traces
       , "queryResultCount" AE..= V.length shown
       ]
-
-
-aiSearchH :: Projects.ProjectId -> AE.Value -> ATAuthCtx (RespHeaders AE.Value)
-aiSearchH pid requestBody = do
-  authCtx <- Effectful.Reader.Static.ask @AuthContext
-  let envCfg = authCtx.env
-      parsed = AET.parseMaybe (AE.withObject "request" \o -> liftA2 (,) (o AE..: "input") (o AE..:? "timezone")) requestBody
-
-  (inputText, timezoneM) <-
-    parsed `whenNothing` do
-      addErrorToast "Invalid AI search input" Nothing
-      throwError Servant.err400{Servant.errBody = "Invalid input format"}
-
-  when (T.null (T.strip inputText)) do
-    addErrorToast "Please enter a search query" Nothing
-    throwError Servant.err400{Servant.errBody = "Empty input"}
-
-  AI.runNlSearch pid envCfg timezoneM inputText >>= \case
-    Left errMsg -> do
-      addErrorToast "AI search failed" (Just errMsg)
-      throwError Servant.err502{Servant.errBody = encodeUtf8 errMsg}
-    Right payload -> addRespHeaders payload
 
 
 -- | Visible columns = server defaults plus the URL's deltas (@addCols@ show extra, @removeCols@
