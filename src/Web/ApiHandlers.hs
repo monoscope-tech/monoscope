@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedRecordDot #-}
+{-# LANGUAGE NoFieldSelectors #-}
 
 -- | JSON REST handlers for the public API (Plan A).
 --
@@ -7,6 +8,10 @@
 -- so the HTML handlers (which still own toast/redirect/HTML-rendering concerns)
 -- stay untouched.
 module Web.ApiHandlers (
+  ApiV1Routes (..),
+  AllQueryParams,
+  apiV1OpenApiSpec,
+  apiV1Server,
   -- Monitors
   apiMonitorsList,
   apiMonitorGet,
@@ -24,7 +29,6 @@ module Web.ApiHandlers (
   -- Dashboards
   apiDashboardsList,
   apiDashboardGet,
-  apiDashboardData,
   apiDashboardCreate,
   apiDashboardApply,
   apiDashboardUpdate,
@@ -87,13 +91,14 @@ module Web.ApiHandlers (
   apiMemberRemove,
   -- Facets
   apiFacets,
+  apiMetricsCatalog,
   -- Direct event lookup by (id, timestamp)
   apiEventGet,
   -- Internals exposed for testing
   synthStackFromSpans,
 ) where
 
-import Control.Lens ((%~), (.~), _Just)
+import Control.Lens ((%~), (.~), (?~), _Just)
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
@@ -103,16 +108,15 @@ import Data.Effectful.UUID qualified as UUID
 import Data.Generics.Labels ()
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
-import Data.OpenApi (ToSchema (..))
+import Data.OpenApi (OpenApi, SecurityDefinitions (..), SecurityScheme (..), SecuritySchemeType (..), ToSchema (..))
+import Data.OpenApi qualified as OA
 import Data.Text qualified as T
 import Data.Text.Display (display)
 import Data.Time (UTCTime, addUTCTime, nominalDay, zonedTimeToUTC)
-import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Deriving.Aeson.Stock qualified as DAE
-import Effectful.Concurrent.Async (pooledForConcurrently)
 import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
@@ -130,28 +134,371 @@ import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as PM
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
+import Models.Telemetry.Schema qualified as Schema
 import Pages.Charts.Types qualified as Charts
-import Pages.Dashboards qualified as DashPage
-import Pages.LogExplorer.Log qualified as Log
+import Pages.Charts.Charts qualified as ChartsPage
+import Pages.Replay qualified as Replay
 import Pkg.Components.TimePicker qualified as TP
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (SnakeSchema (..), UUIDId (..))
 import Pkg.Parser qualified as Parser
+import Pkg.Parser.Expr qualified as ParserExpr
 import Pkg.SchemaLearning.Catalog qualified as Fields
 import Relude hiding (ask, id)
-import Servant (Header, Headers, NoContent (..), ServerError (..), addHeader, err400, err401, err403, err404)
+import Network.Wai (Request, queryString)
+import Servant (Capture, Delete, Get, HasServer (..), JSON, NamedRoutes, Header, Headers, NoContent (..), addHeader, Patch, Post, Put, QueryParam, ReqBody, ServerError (..), err400, err401, err403, err404, (:-), (:>))
+import Servant.OpenApi (HasOpenApi (..), toOpenApi)
+import Servant.Server.Internal.Delayed (passToServer)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATBaseCtx, ApiPrincipal (..), useTfReads)
 import Text.Slugify (slugify)
 import Utils (hostPath)
-import Web.ApiTypes
+import Web.ApiTypes hiding (count)
+import Web.ApiTypes qualified as ApiT
 import Web.FacetsFallback (facetsFallback)
 import Web.Wire qualified as Wire
 
 
+type QPT a = QueryParam a Text
+
+
+data AllQueryParams
+
+
+-- =============================================================================
+-- Public API v1 Routes
+-- =============================================================================
+
+type ApiV1Routes :: Type -> Type
+data ApiV1Routes mode = ApiV1Routes
+  { ingestionKey :: mode :- "ingestion-key" :> Get '[JSON] (Headers '[Header "Cache-Control" Text] Wire.IngestionKey)
+  , eventsSearch
+      :: mode
+        :- "events"
+          :> QPT "query"
+          :> QPT "since"
+          :> QPT "from"
+          :> QPT "to"
+          :> QPT "source"
+          :> QueryParam "limit" Int
+          :> QueryParam "with_children" Bool
+          :> QueryParam "include_attributes" Bool
+          :> QPT "environment"
+          :> QPT "service"
+          :> Get '[JSON] LogResult
+  , eventGet
+      :: mode
+        :- "events"
+          :> Capture "event_id" UUID.UUID
+          :> "time"
+          :> Capture "timestamp" UTCTime
+          :> Get '[JSON] AE.Value
+  , metricsQuery
+      :: mode
+        :- "metrics"
+          :> QueryParam "query" Text
+          :> QueryParam "data_type" Charts.DataType
+          :> QPT "since"
+          :> QPT "from"
+          :> QPT "to"
+          :> QPT "source"
+          :> QPT "environment"
+          :> QPT "service"
+          :> Get '[JSON] Charts.MetricsData
+  , metricsCatalog
+      :: mode
+        :- "metrics"
+          :> "catalog"
+          :> QPT "service"
+          :> QPT "search"
+          :> QueryParam "limit" Int
+          :> QueryParam "offset" Int
+          :> QueryParam "active" Bool
+          :> Get '[JSON] Telemetry.MetricCatalogResponse
+  , schemaGet :: mode :- "schema" :> Get '[JSON] Schema.Schema
+  , facetsGet
+      :: mode
+        :- "facets"
+          :> QPT "since"
+          :> QPT "from"
+          :> QPT "to"
+          :> QPT "field"
+          :> Get '[JSON] AE.Value
+  , rrwebPost :: mode :- "rrweb" :> ReqBody '[JSON] Replay.ReplayPost :> Post '[JSON] AE.Value
+  , -- Monitors (CRUD + lifecycle)
+    monitorsList :: mode :- "monitors" :> Get '[JSON] [Monitors.QueryMonitor]
+  , monitorGet :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> Get '[JSON] Monitors.QueryMonitor
+  , monitorCreate :: mode :- "monitors" :> ReqBody '[JSON] ApiT.MonitorInput :> Post '[JSON] Monitors.QueryMonitor
+  , monitorApply :: mode :- "monitors" :> "apply" :> ReqBody '[JSON] ApiT.MonitorInput :> Post '[JSON] Monitors.QueryMonitor
+  , monitorYaml :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> "yaml" :> Get '[JSON] ApiT.MonitorInput
+  -- ^ /yaml returns the applyable MonitorInput as JSON (same for dashboards);
+  -- the CLI renders it as YAML client-side via runYamlDump.
+  , monitorUpdate :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> ReqBody '[JSON] ApiT.MonitorInput :> Put '[JSON] Monitors.QueryMonitor
+  , monitorPatch :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> ReqBody '[JSON] ApiT.MonitorPatch :> Patch '[JSON] Monitors.QueryMonitor
+  , monitorDelete :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> Delete '[JSON] NoContent
+  , monitorToggleActive :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> "toggle_active" :> Post '[JSON] Monitors.QueryMonitor
+  , monitorMute :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> "mute" :> QueryParam "duration_minutes" Int :> Post '[JSON] Monitors.QueryMonitor
+  , monitorUnmute :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> "unmute" :> Post '[JSON] Monitors.QueryMonitor
+  , monitorResolve :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> "resolve" :> Post '[JSON] Monitors.QueryMonitor
+  , monitorBulk :: mode :- "monitors" :> "bulk" :> ReqBody '[JSON] (ApiT.BulkAction UUID.UUID) :> Post '[JSON] (ApiT.BulkResult UUID.UUID)
+  , -- Events body variant (avoids URL length limits)
+    eventsQuery :: mode :- "events" :> "query" :> ReqBody '[JSON] ApiT.EventsQuery :> Post '[JSON] LogResult
+  , -- Share links
+    shareLinkCreate :: mode :- "share" :> ReqBody '[JSON] ShareLinkCreate :> Post '[JSON] ShareLinkCreated
+  , -- Dashboards (CRUD + IaC apply + widgets)
+    dashboardsList
+      :: mode
+        :- "dashboards"
+          :> QPT "sort"
+          :> QPT "team_id"
+          :> Get '[JSON] [ApiT.DashboardSummary]
+  , dashboardGet :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> Get '[JSON] ApiT.DashboardFull
+  , -- Widget data resolved server-side, for clients that can't run the widget JS
+    -- (the CLI renders these straight into the terminal).
+    dashboardData
+      :: mode
+        :- "dashboards"
+          :> Capture "dashboard_id" Dashboards.DashboardId
+          :> "data"
+          :> QPT "tab"
+          :> QPT "widget"
+          :> QPT "since"
+          :> QPT "from"
+          :> QPT "to"
+          :> AllQueryParams
+          :> Get '[JSON] ApiT.DashboardData
+  , dashboardCreate :: mode :- "dashboards" :> ReqBody '[JSON] ApiT.DashboardInput :> Post '[JSON] ApiT.DashboardFull
+  , dashboardApply :: mode :- "dashboards" :> "apply" :> ReqBody '[JSON] ApiT.DashboardYAMLDoc :> Post '[JSON] ApiT.DashboardFull
+  , dashboardUpdate :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> ReqBody '[JSON] ApiT.DashboardInput :> Put '[JSON] ApiT.DashboardFull
+  , dashboardPatch :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> ReqBody '[JSON] ApiT.DashboardPatch :> Patch '[JSON] ApiT.DashboardFull
+  , dashboardDelete :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> Delete '[JSON] NoContent
+  , dashboardDuplicate :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "duplicate" :> Post '[JSON] ApiT.DashboardFull
+  , dashboardStar :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "star" :> Post '[JSON] ApiT.DashboardFull
+  , dashboardUnstar :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "star" :> Delete '[JSON] NoContent
+  , dashboardYaml :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "yaml" :> Get '[JSON] ApiT.DashboardYAMLDoc
+  , dashboardWidgetUpsert :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> ReqBody '[JSON] Widget.Widget :> Put '[JSON] Widget.Widget
+  , dashboardWidgetDelete :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> Delete '[JSON] NoContent
+  , dashboardWidgetsReorder :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> "order" :> ReqBody '[JSON] (Map Text ApiT.WidgetPosition) :> Patch '[JSON] NoContent
+  , dashboardBulk :: mode :- "dashboards" :> "bulk" :> ReqBody '[JSON] (ApiT.BulkAction UUID.UUID) :> Post '[JSON] (ApiT.BulkResult UUID.UUID)
+  , -- API keys
+    apiKeysList :: mode :- "api_keys" :> Get '[JSON] [ApiT.ApiKeySummary]
+  , apiKeyGet :: mode :- "api_keys" :> Capture "key_id" ProjectApiKeys.ProjectApiKeyId :> Get '[JSON] ApiT.ApiKeySummary
+  , apiKeyCreate :: mode :- "api_keys" :> ReqBody '[JSON] ApiT.ApiKeyCreate :> Post '[JSON] ApiT.ApiKeyCreated
+  , apiKeyActivate :: mode :- "api_keys" :> Capture "key_id" ProjectApiKeys.ProjectApiKeyId :> "activate" :> Post '[JSON] ApiT.ApiKeySummary
+  , apiKeyDeactivate :: mode :- "api_keys" :> Capture "key_id" ProjectApiKeys.ProjectApiKeyId :> "deactivate" :> Post '[JSON] ApiT.ApiKeySummary
+  , apiKeyDelete :: mode :- "api_keys" :> Capture "key_id" ProjectApiKeys.ProjectApiKeyId :> Delete '[JSON] NoContent
+  , -- Plan B: /me + /project (singular) + /issues + /endpoints + /log_patterns
+    meGet :: mode :- "me" :> Get '[JSON] ApiT.MeResponse
+  , projectGet :: mode :- "project" :> Get '[JSON] ApiT.ProjectFull
+  , projectPatch :: mode :- "project" :> ReqBody '[JSON] Projects.ProjectPatch :> Patch '[JSON] ApiT.ProjectFull
+  , endpointsList
+      :: mode
+        :- "endpoints"
+          :> QPT "search"
+          :> QueryParam "outgoing" Bool
+          :> QueryParam "page" Int
+          :> QueryParam "per_page" Int
+          :> Get '[JSON] (ApiT.Paged ApiT.EndpointSummary)
+  , endpointGet :: mode :- "endpoints" :> Capture "endpoint_id" Endpoints.EndpointId :> Get '[JSON] ApiT.EndpointFull
+  , logPatternsList
+      :: mode
+        :- "log_patterns"
+          :> QueryParam "page" Int
+          :> QueryParam "per_page" Int
+          :> Get '[JSON] (ApiT.Paged ApiT.LogPatternSummary)
+  , logPatternGet :: mode :- "log_patterns" :> Capture "pattern_id" Int64 :> Get '[JSON] ApiT.LogPatternFull
+  , logPatternAck :: mode :- "log_patterns" :> Capture "pattern_id" Int64 :> "ack" :> Post '[JSON] ApiT.LogPatternFull
+  , logPatternsBulk :: mode :- "log_patterns" :> "bulk" :> ReqBody '[JSON] (ApiT.BulkAction Int64) :> Post '[JSON] (ApiT.BulkResult Int64)
+  , -- Issues
+    issuesList
+      :: mode
+        :- "issues"
+          :> QueryParam "status" ApiT.IssueStatus
+          :> QPT "type"
+          :> QPT "service"
+          :> QueryParam "page" Int
+          :> QueryParam "per_page" Int
+          :> Get '[JSON] (ApiT.Paged ApiT.IssueApiSummary)
+  , issueGet :: mode :- "issues" :> Capture "issue_id" Issues.IssueId :> Get '[JSON] ApiT.IssueApiFull
+  , issueAck :: mode :- "issues" :> Capture "issue_id" Issues.IssueId :> "ack" :> QueryParam "duration_minutes" Int :> Post '[JSON] ApiT.IssueApiFull
+  , issueUnack :: mode :- "issues" :> Capture "issue_id" Issues.IssueId :> "unack" :> Post '[JSON] ApiT.IssueApiFull
+  , issueArchive :: mode :- "issues" :> Capture "issue_id" Issues.IssueId :> "archive" :> Post '[JSON] ApiT.IssueApiFull
+  , issueUnarchive :: mode :- "issues" :> Capture "issue_id" Issues.IssueId :> "unarchive" :> Post '[JSON] ApiT.IssueApiFull
+  , issuesBulk :: mode :- "issues" :> "bulk" :> ReqBody '[JSON] (ApiT.BulkAction Issues.IssueId) :> Post '[JSON] (ApiT.BulkResult Issues.IssueId)
+  , incidentsList :: mode :- "incidents" :> QueryParam "phase" Incidents.EpisodePhase :> QueryParam "limit" Int :> Get '[JSON] [ApiT.IncidentSummary]
+  , incidentGet :: mode :- "incidents" :> Capture "incident_id" Incidents.EpisodeId :> Get '[JSON] ApiT.IncidentSummary
+  , -- Teams (B3) + Members (B4)
+    teamsList :: mode :- "teams" :> Get '[JSON] [ApiT.TeamSummary]
+  , teamGet :: mode :- "teams" :> Capture "team_id" ApiT.TeamId :> Get '[JSON] ApiT.TeamFull
+  , teamCreate :: mode :- "teams" :> ReqBody '[JSON] ApiT.TeamInput :> Post '[JSON] ApiT.TeamFull
+  , teamUpdate :: mode :- "teams" :> Capture "team_id" ApiT.TeamId :> ReqBody '[JSON] ApiT.TeamInput :> Put '[JSON] ApiT.TeamFull
+  , teamPatch :: mode :- "teams" :> Capture "team_id" ApiT.TeamId :> ReqBody '[JSON] ApiT.TeamPatch :> Patch '[JSON] ApiT.TeamFull
+  , teamDelete :: mode :- "teams" :> Capture "team_id" ApiT.TeamId :> Delete '[JSON] NoContent
+  , teamsBulk :: mode :- "teams" :> "bulk" :> ReqBody '[JSON] (ApiT.BulkAction ApiT.TeamId) :> Post '[JSON] (ApiT.BulkResult ApiT.TeamId)
+  , membersList :: mode :- "members" :> Get '[JSON] [ApiT.MemberSummary]
+  , memberGet :: mode :- "members" :> Capture "user_id" UUID.UUID :> Get '[JSON] ApiT.MemberSummary
+  , memberAdd :: mode :- "members" :> ReqBody '[JSON] ApiT.MemberAdd :> Post '[JSON] ApiT.MemberSummary
+  , memberPatch :: mode :- "members" :> Capture "user_id" UUID.UUID :> ReqBody '[JSON] ApiT.MemberPatch :> Patch '[JSON] ApiT.MemberSummary
+  , memberRemove :: mode :- "members" :> Capture "user_id" UUID.UUID :> Delete '[JSON] NoContent
+  , -- Model Context Protocol endpoint (JSON-RPC; tools derived from this OpenAPI spec)
+    mcp :: mode :- "mcp" :> ReqBody '[JSON] AE.Value :> Post '[JSON] AE.Value
+  }
+  deriving stock (Generic)
+
+
+apiV1OpenApiSpec :: OpenApi
+apiV1OpenApiSpec =
+  toOpenApi (Proxy @(NamedRoutes ApiV1Routes))
+    & OA.info .~ (mempty & OA.title .~ "Monoscope API" & OA.version .~ "1.0" & OA.description ?~ "Observability API for querying logs, traces, and metrics. Requires a Bearer API key and X-Project-Id header.")
+    & OA.servers .~ [OA.Server "/api/v1" Nothing mempty]
+    & OA.components . OA.securitySchemes .~ SecurityDefinitions (fromList [("BearerAuth", SecurityScheme (SecuritySchemeApiKey (OA.ApiKeyParams "Authorization" OA.ApiKeyHeader)) Nothing)])
+    & OA.security .~ [OA.SecurityRequirement (fromList [("BearerAuth", [])])]
+
+
+-- =============================================================================
+-- Custom HasServer instances
+-- =============================================================================
+
+-- | We add a HasServer instance that says:
+--   - The handler will receive a list of (Text, Maybe Text).
+--   - We pull that out of the WAI `Request` in `route`.
+instance HasServer api ctx => HasServer (AllQueryParams :> api) ctx where
+  type ServerT (AllQueryParams :> api) m = [(Text, Maybe Text)] -> ServerT api m
+
+
+  route _ ctx subserver = route (Proxy :: Proxy api) ctx $ passToServer subserver grabAllParams
+    where
+      grabAllParams :: Request -> [(Text, Maybe Text)]
+      grabAllParams = map (bimap dec (fmap dec)) . queryString
+      dec = decodeUtf8With lenientDecode
+
+
+  hoistServerWithContext
+    :: Proxy (AllQueryParams :> api)
+    -> Proxy ctx
+    -> (forall x. m x -> n x)
+    -> ([(Text, Maybe Text)] -> ServerT api m)
+    -> ([(Text, Maybe Text)] -> ServerT api n)
+  hoistServerWithContext _ pc nat s = hoistServerWithContext (Proxy :: Proxy api) pc nat . s
+
+
+-- | @AllQueryParams@ is a catch-all: it grabs whatever query string arrives, so
+-- there is nothing specific to advertise. Documenting it as the identity keeps
+-- routes that use it (currently @/dashboards/{id}/data@, which forwards
+-- @var-*@/@const-*@ dashboard variables) inside the generated OpenAPI spec
+-- instead of forcing them out of it.
+instance HasOpenApi api => HasOpenApi (AllQueryParams :> api) where
+  toOpenApi _ = toOpenApi (Proxy @api)
+
+
+type EventsSearchHandler = Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Bool -> Maybe Bool -> Maybe Text -> Maybe Text -> ATBaseCtx LogResult
+
+
+type DashboardDataHandler = Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATBaseCtx DashboardData
+
+
+-- API v1 server
+apiV1Server :: ApiPrincipal -> EventsSearchHandler -> DashboardDataHandler -> (AE.Value -> ATBaseCtx AE.Value) -> ServerT (NamedRoutes ApiV1Routes) ATBaseCtx
+apiV1Server principal queryEvents dashboardRenderer mcpHandler =
+  ApiV1Routes
+    { ingestionKey = apiIngestionKey principal
+    , eventsSearch = queryEvents pid
+    , eventGet = apiEventGet pid
+    , -- API clients have no browser scope cookie. Omitting either boundary is the
+      -- intentional cross-environment/service default; callers that need a scope
+      -- state it explicitly and receive the same generated predicate as a chart.
+      metricsQuery = \queryM dataTypeM sinceM fromM toM sourceM environmentM serviceM ->
+        ChartsPage.queryMetrics Nothing dataTypeM (Just pid) queryM Nothing sinceM fromM toM sourceM Nothing [("environment", environmentM), ("service", serviceM)]
+    , metricsCatalog = apiMetricsCatalog pid
+    , -- C1: derive schema from the live introspected column set (seeded at
+      -- startup) and decorate with the hand-coded descriptions / examples in
+      -- 'Schema.telemetrySchema'. Live entries without a decoration get a
+      -- bare {type:"text", description:"", examples:null} entry — so a new
+      -- column added to otel_logs_and_spans is queryable + visible in the
+      -- schema response without a code edit.
+      schemaGet = pure (Schema.deriveSchema ParserExpr.flattenedOtelAttributes)
+    , facetsGet = apiFacets pid
+    , rrwebPost = Replay.replayPostH pid
+    , -- Monitors
+      monitorsList = apiMonitorsList pid
+    , monitorGet = apiMonitorGet pid
+    , monitorCreate = apiMonitorCreate pid
+    , monitorApply = apiMonitorApply pid
+    , monitorYaml = apiMonitorYaml pid
+    , monitorUpdate = apiMonitorUpdate pid
+    , monitorPatch = apiMonitorPatch pid
+    , monitorDelete = apiMonitorDelete pid
+    , monitorToggleActive = apiMonitorToggleActive pid
+    , monitorMute = apiMonitorMute pid
+    , monitorUnmute = apiMonitorUnmute pid
+    , monitorResolve = apiMonitorResolve pid
+    , monitorBulk = apiMonitorBulk pid
+    , eventsQuery = apiEventsQuery queryEvents pid
+    , shareLinkCreate = apiShareLinkCreate pid
+    , -- Dashboards
+      dashboardsList = apiDashboardsList pid
+    , dashboardGet = apiDashboardGet pid
+    , dashboardData = dashboardRenderer pid
+    , dashboardCreate = apiDashboardCreate pid
+    , dashboardApply = apiDashboardApply pid
+    , dashboardUpdate = apiDashboardUpdate pid
+    , dashboardPatch = apiDashboardPatch pid
+    , dashboardDelete = apiDashboardDelete pid
+    , dashboardDuplicate = apiDashboardDuplicate pid
+    , dashboardStar = apiDashboardStar pid
+    , dashboardUnstar = apiDashboardUnstar pid
+    , dashboardYaml = apiDashboardYaml pid
+    , dashboardWidgetUpsert = apiDashboardWidgetUpsert pid
+    , dashboardWidgetDelete = apiDashboardWidgetDelete pid
+    , dashboardWidgetsReorder = apiDashboardWidgetsReorder pid
+    , dashboardBulk = apiDashboardBulk pid
+    , -- API keys
+      apiKeysList = apiKeysList pid
+    , apiKeyGet = apiKeyGet pid
+    , apiKeyCreate = apiKeyCreate pid
+    , apiKeyActivate = apiKeyActivate pid
+    , apiKeyDeactivate = apiKeyDeactivate pid
+    , apiKeyDelete = apiKeyDelete pid
+    , -- Plan B
+      meGet = apiMe pid
+    , projectGet = apiProjectGet pid
+    , projectPatch = apiProjectPatch pid
+    , endpointsList = apiEndpointsList pid
+    , endpointGet = apiEndpointGet pid
+    , logPatternsList = apiLogPatternsList pid
+    , logPatternGet = apiLogPatternGet pid
+    , logPatternAck = apiLogPatternAck pid
+    , logPatternsBulk = apiLogPatternsBulk pid
+    , -- Issues
+      issuesList = apiIssuesList pid
+    , issueGet = apiIssueGet pid
+    , issueAck = apiIssueAck pid
+    , issueUnack = apiIssueUnack pid
+    , issueArchive = apiIssueArchive pid
+    , issueUnarchive = apiIssueUnarchive pid
+    , issuesBulk = apiIssuesBulk pid
+    , incidentsList = apiIncidentsList pid
+    , incidentGet = apiIncidentGet pid
+    , -- Teams + Members
+      teamsList = apiTeamsList pid
+    , teamGet = apiTeamGet pid
+    , teamCreate = apiTeamCreate pid
+    , teamUpdate = apiTeamUpdate pid
+    , teamPatch = apiTeamPatch pid
+    , teamDelete = apiTeamDelete pid
+    , teamsBulk = apiTeamsBulk pid
+    , membersList = apiMembersList pid
+    , memberGet = apiMemberGet pid
+    , memberAdd = apiMemberAdd pid
+    , memberPatch = apiMemberPatch pid
+    , memberRemove = apiMemberRemove pid
+    , mcp = mcpHandler
+    }
 -- | Return the value or throw a 404 with a given message.
 notFoundOr :: Text -> Maybe a -> ATBaseCtx a
 notFoundOr msg = maybe (throwError err404{errBody = encodeUtf8 msg}) pure
+  where
+    pid = principal.projectId
 
 
 -- | 404 with @msg@ unless the row exists /and/ belongs to @pid@.
@@ -458,80 +805,6 @@ apiDashboardGet :: Projects.ProjectId -> Dashboards.DashboardId -> ATBaseCtx Das
 apiDashboardGet pid did = toFull <$> (notFoundOr "Dashboard not found" =<< Dashboards.getDashboardByProjectId pid did)
 
 
--- | Server-rendered dashboard data: one request returns every widget on the
--- (optionally selected) tab with its query already run, so a non-browser client
--- can draw the dashboard without re-implementing constant/variable resolution
--- or firing one request per widget. This is what @monoscope dashboards render@
--- uses to paint charts in a terminal.
-apiDashboardData :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATBaseCtx DashboardData
-apiDashboardData pid did tabM widgetM sinceM fromM toM allParams = do
-  vm <- notFoundOr "Dashboard not found" =<< Dashboards.getDashboardByProjectId pid did
-  (_, dash) <- DashPage.getDashAndVM pid did Nothing
-  now <- Time.currentTime
-  let timeParams = (sinceM, fromM, toM)
-      allTabs = fold dash.tabs
-  (dash', params) <- DashPage.resolveDashboardParams pid now timeParams allParams dash
-  -- No `tabs:` key means the widgets live at the top level; with tabs, an
-  -- unknown --tab is a 404 rather than a silently empty render.
-  (tabName, tabWidgets) <- case (allTabs, tabM) of
-    ([], _) -> pure (Nothing, [])
-    (t : _, Nothing) -> pure (Just t.name, t.widgets)
-    (_, Just wanted) ->
-      DashPage.findTabBySlug allTabs wanted
-        & maybe (throwError err404{errBody = "Tab not found: " <> encodeUtf8 wanted}) (\(_, t) -> pure (Just t.name, t.widgets))
-  -- Most dashboards leave widget ids unset, so --widget also matches a
-  -- slugified title ("p95-latency"); otherwise there'd be no way to name one.
-  let matches wanted w = w.id == Just wanted || (slugify <$> w.title) == Just (slugify wanted)
-      selected = filter (\w -> maybe True (`matches` w) widgetM) (dash'.widgets <> tabWidgets)
-  widgets <- pooledForConcurrently selected (renderWidgetTree pid timeParams params)
-  -- The window comes from the request, not from scraping a widget's result:
-  -- every widget shares it, and a dashboard with no widgets should still say
-  -- which range it was asked about.
-  let (fromT, toT, _) = TP.parseTimeRange now (TP.TimePicker sinceM fromM toM)
-  pure
-    DashboardData
-      { id = did
-      , title = vm.title
-      , tab = tabName
-      , tabs = (.name) <$> allTabs
-      , since = sinceM
-      , from = epochMs <$> fromT
-      , to = epochMs <$> toT
-      , widgets
-      }
-  where
-    epochMs = round . (* 1000) . utcTimeToPOSIXSeconds
-
-
--- | Resolve a widget and, recursively, the sub-grid of any group widget.
--- Widgets with no query of their own (groups, the anomalies feed) skip the
--- round trip entirely rather than reporting a spurious query failure.
-renderWidgetTree :: Projects.ProjectId -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATBaseCtx RenderedWidget
-renderWidgetTree pid timeParams params w = do
-  let blank = maybe True (T.null . T.strip)
-  md <- if blank w.query && blank w.sql then pure def else DashPage.widgetMetrics pid timeParams params w
-  kids <- pooledForConcurrently (fold w.children) (renderWidgetTree pid timeParams params)
-  pure
-    RenderedWidget
-      { id = w.id
-      , title = w.title
-      , subtitle = w.subtitle
-      , wType = w.wType
-      , unit = w.unit
-      , query = w.query
-      , layout = w.layout
-      , summarizeBy = w.summarizeBy
-      , value = md.dataFloat
-      , headers = V.toList md.headers
-      , rows = V.toList (V.toList <$> md.dataset)
-      , textRows = V.toList (V.toList <$> md.dataText)
-      , stats = md.stats
-      , error = md.error
-      , columns = maybe [] (map (.title)) w.columns
-      , children = kids
-      }
-
-
 -- | Insert a new dashboard row from an input.
 insertDashboard :: Projects.ProjectId -> Projects.UserId -> UTCTime -> Dashboards.DashboardId -> Text -> Maybe [Text] -> Maybe [PM.TeamId] -> Maybe Text -> Maybe Dashboards.Dashboard -> ATBaseCtx DashboardFull
 insertDashboard pid uid now did title tags teams filePath schema = do
@@ -698,8 +971,8 @@ apiKeyDelete :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATBaseCt
 apiKeyDelete pid kid = withRefetchNoContent (apiKeyGet pid kid) (ProjectApiKeys.revokeApiKey kid)
 
 
-apiEventsQuery :: Projects.ProjectId -> EventsQuery -> ATBaseCtx Log.LogResult
-apiEventsQuery pid q = Log.queryEvents pid q.query q.since q.from q.to q.source q.limit q.withChildren q.includeAttributes q.environment q.service
+apiEventsQuery :: EventsSearchHandler -> Projects.ProjectId -> EventsQuery -> ATBaseCtx LogResult
+apiEventsQuery queryEvents pid q = queryEvents pid q.query q.since q.from q.to q.source q.limit q.withChildren q.includeAttributes q.environment q.service
 
 
 -- | Bulk action: currently supports "delete".
@@ -1298,6 +1571,12 @@ apiMemberRemove pid uid = do
 -- The response is always a JSON object keyed by field path, each value a
 -- @[{value, count}]@ list sorted by count descending. Missing/expired
 -- facets return @{}@ (not 404) — agents can rely on the shape regardless.
+apiMetricsCatalog :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Bool -> ATBaseCtx Telemetry.MetricCatalogResponse
+apiMetricsCatalog pid service search limit offset active = do
+  now <- Time.currentTime
+  Telemetry.getMetricCatalogResponse pid service search now (fromMaybe 20 limit) (fromMaybe 0 offset) (fromMaybe True active)
+
+
 apiFacets :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATBaseCtx AE.Value
 apiFacets pid sinceM fromM toM fieldM = do
   now <- Time.currentTime

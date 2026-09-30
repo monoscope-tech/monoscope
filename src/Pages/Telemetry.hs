@@ -364,7 +364,7 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM expandM la
           pageSize = 12
       -- Only the requested page comes back, not the whole catalogue. The inactive tail rides
       -- along in the same result set because it falls out of the same aggregate.
-      page <- Telemetry.getMetricCatalogPage pid sourceM prefixM queryM cutoff pageSize cursor (cursor == 0)
+      page <- Telemetry.getMetricCatalogPage pid sourceM prefixM queryM cutoff pageSize cursor (if cursor == 0 then Telemetry.ActivePageWithInactive else Telemetry.ActivePage)
       let metricList = page.active
           nextFetchUrl = do
             guard $ cursor + pageSize < page.activeTotal

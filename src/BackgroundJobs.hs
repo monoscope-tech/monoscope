@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, enqueueAIRoutine, runAIRoutineWith, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, detectPerformanceIssues, detectFrontendIssues, detectFeedback, applyUptimeResult, evaluateCronMonitor, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, endpointAutoAckLockName, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), errorTrendChartUrl) where
+module BackgroundJobs (jobsWorkerInit, jobsWorkerInitWithTools, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, enqueueAIRoutine, runAIRoutineWith, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, detectPerformanceIssues, detectFrontendIssues, detectFeedback, applyUptimeResult, evaluateCronMonitor, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, endpointAutoAckLockName, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), errorTrendChartUrl) where
 
 import BackgroundJobs.Types (BgJobs (..))
 import BackgroundJobs.Types qualified as Jobs
@@ -149,8 +149,8 @@ jobTypeName :: BgJobs -> Text
 jobTypeName bgJob = T.takeWhile (/= ' ') $ toText $ show bgJob
 
 
-jobsRunner :: Logger -> Config.AuthContext -> TracerProvider -> Job -> IO ()
-jobsRunner logger authCtx tp job = when authCtx.config.enableBackgroundJobs $ do
+jobsRunner :: Logger -> Config.AuthContext -> TracerProvider -> Maybe AI.ProjectTools -> Job -> IO ()
+jobsRunner logger authCtx tp projectTools job = when authCtx.config.enableBackgroundJobs $ do
   bgJob <- throwParsePayload job
   void $ runBackground logger authCtx tp $ do
     let jobType = jobTypeName bgJob
@@ -162,7 +162,7 @@ jobsRunner logger authCtx tp job = when authCtx.config.enableBackgroundJobs $ do
       ]
       $ \sp -> do
         addEvent sp "job.started" []
-        result <- try $ processBackgroundJob authCtx bgJob
+        result <- try $ processBackgroundJobWithTools projectTools authCtx bgJob
         -- Re-throw after recording, so odd-jobs still sees the failure.
         case result of
           Left (e :: SomeException) -> do
@@ -228,7 +228,11 @@ renderAndSend to (subj, html) = sendRenderedEmail to subj (ET.renderEmail subj h
 
 -- | Process a background job - extracted so it can be run with different effect interpreters
 processBackgroundJob :: Config.AuthContext -> BgJobs -> ATBackgroundCtx ()
-processBackgroundJob authCtx bgJob =
+processBackgroundJob = processBackgroundJobWithTools Nothing
+
+
+processBackgroundJobWithTools :: Maybe AI.ProjectTools -> Config.AuthContext -> BgJobs -> ATBackgroundCtx ()
+processBackgroundJobWithTools projectTools authCtx bgJob =
   case bgJob of
     GenerateOtelFacetsBatch pids timestamp -> generateOtelFacetsBatch pids timestamp
     DashboardsAutoProvision scheduledTime -> autoProvisionDashboards scheduledTime
@@ -292,9 +296,9 @@ processBackgroundJob authCtx bgJob =
         Tx.statement pid [resultlessStatement|DELETE FROM tests.collections WHERE project_id = $1 :: uuid AND title != 'Default Health check'|]
         Tx.statement pid [resultlessStatement|DELETE FROM projects.project_api_keys WHERE project_id = $1 :: uuid AND title != 'Default API Key'|]
     SlackNotification pid message -> sendSlackMessage pid message
-    ProcessSlackEvent eventId -> Slack.processSlackEvent eventId
+    ProcessSlackEvent eventId -> Slack.processSlackEventWithTools projectTools eventId
     RefreshSlackProgress publicationId -> Slack.refreshSlackProgress publicationId
-    AIRoutineRun routineId scheduledAt -> runAIRoutine authCtx routineId scheduledAt
+    AIRoutineRun routineId scheduledAt -> runAIRoutine authCtx projectTools routineId scheduledAt
     ResetSlackSession pid uid receiptId -> Slack.resetSlackSession pid uid receiptId
     EnhanceIssuesWithLLM pid issueIds -> enhanceIssuesWithLLM pid issueIds
     ProcessIssuesEnhancement scheduledTime -> unlessStale "ProcessIssuesEnhancement" scheduledTime (2 * 3600) $ processIssuesEnhancement scheduledTime
@@ -351,11 +355,11 @@ processBackgroundJob authCtx bgJob =
     UsageAuditReport -> runUsageAuditReport authCtx
 
 
-runAIRoutine :: Config.AuthContext -> UUIDId "ai_routine" -> UTCTime -> ATBackgroundCtx ()
-runAIRoutine authCtx =
+runAIRoutine :: Config.AuthContext -> Maybe AI.ProjectTools -> UUIDId "ai_routine" -> UTCTime -> ATBackgroundCtx ()
+runAIRoutine authCtx projectTools =
   runAIRoutineWith
     routineRunTimeoutMicros
-    (\config -> AI.runAgenticChatWithHistory config routinePrompt authCtx.config.openaiModel authCtx.config.openaiApiKey)
+    (\config -> AI.runAgenticChatWithHistory config{AI.projectTools = projectTools} routinePrompt authCtx.config.openaiModel authCtx.config.openaiApiKey)
     (enqueueAIRoutine authCtx)
     authCtx
   where
@@ -3250,14 +3254,18 @@ dispatchTeamNotifications team alert projectId projectTitle monitorUrl subj rend
 
 
 jobsWorkerInit :: Logger -> Config.AuthContext -> TracerProvider -> IO ()
-jobsWorkerInit logger appCtx tp = when appCtx.config.enableBackgroundJobs do
+jobsWorkerInit logger appCtx tp = jobsWorkerInitWithTools logger appCtx tp Nothing
+
+
+jobsWorkerInitWithTools :: Logger -> Config.AuthContext -> TracerProvider -> Maybe AI.ProjectTools -> IO ()
+jobsWorkerInitWithTools logger appCtx tp projectTools = when appCtx.config.enableBackgroundJobs do
   when appCtx.config.enableDailyJobScheduling do
     ensureDailyJobScheduled appCtx
     void $ async $ forever do
       threadDelay (30 * 60 * 1_000_000) -- 30 minutes
       ensureDailyJobScheduled appCtx
   startJobRunner
-    $ mkConfig jobLogger "background_jobs" appCtx.jobsPool (MaxConcurrentJobs appCtx.config.maxConcurrentJobs) (jobsRunner logger appCtx tp) (\cfg -> cfg{cfgJobOrdering = EarliestRunAtFirst})
+    $ mkConfig jobLogger "background_jobs" appCtx.jobsPool (MaxConcurrentJobs appCtx.config.maxConcurrentJobs) (jobsRunner logger appCtx tp projectTools) (\cfg -> cfg{cfgJobOrdering = EarliestRunAtFirst})
   where
     -- Drop the poll chatter. odd-jobs emits 'LogPoll' on every poll of the job
     -- table, and a LevelWarn @LogText "NOT polling the job queue due to

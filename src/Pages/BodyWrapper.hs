@@ -646,6 +646,9 @@ bodyWrapper bcfg child = do
                   , [__|on keydown[key=='Enter' and (metaKey or ctrlKey)] halt the event then call my form.requestSubmit()|]
                   ]
                   ""
+              label_ [class_ "flex cursor-pointer items-center gap-2 px-1 py-2 text-xs text-textWeak"] do
+                input_ [type_ "checkbox", name_ "allowActions", value_ "true", class_ "checkbox checkbox-xs"]
+                span_ "Allow the project changes I request in this message"
               div_ [class_ "hidden group-has-[#ai-composer-routine:checked]/composer:flex items-center justify-between gap-3 border-b border-base-300 px-4 py-3"] do
                 label_ [Lucid.for_ "ai-routine-interval", class_ "text-xs font-medium text-textStrong"] "Run every"
                 select_ [id_ "ai-routine-interval", name_ "intervalMinutes", class_ "select select-sm h-8 min-h-8 border-strokeWeak bg-bgRaised text-xs text-textStrong"] do
