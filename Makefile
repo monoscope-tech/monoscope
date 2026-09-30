@@ -230,7 +230,7 @@ lint:
 	hlint src
 
 fix-lint:
-	find ./src -name '*.hs' | xargs -L1 hlint --refactor --refactor-options="--inplace"
+	hlint src/ --refactor --refactor-options="--inplace"
 
 # Add a FontAwesome icon to the sprite sheet.
 # Usage: make fa-add ICON=arrow-right STYLE=solid
