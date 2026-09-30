@@ -554,10 +554,9 @@ rumPanelCacheGet key =
 
 -- | Payload plus staleness: 'True' when the entry is past its freshness expiry but still
 -- inside the prune horizon ('rumPanelCacheSet' deletes rows expired by over twelve hours).
--- The RUM page serves stale entries instantly and revalidates in the background, so a
--- panel never holds first paint hostage to a fresh scan of the window. Twelve hours covers
--- the overnight gap: the first visit of the morning paints last night's list and refreshes
--- it, instead of paying a cold 24h scan. Entries older than that are treated as absent.
+-- The RUM page serves stale entries instantly and revalidates in the background. Twelve
+-- hours spans the overnight gap, so the morning's first visit paints last night's list and
+-- refreshes it instead of paying a cold 24h scan. Older entries are treated as absent.
 rumPanelCacheGetStale :: (AE.FromJSON a, DB es) => Text -> Eff es (Maybe (a, Bool))
 rumPanelCacheGetStale key =
   fmap (\(AesonText value, isStale) -> (value, isStale))

@@ -714,8 +714,7 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
       -- fetches the full range. Only the plain newest-first list qualifies: a text search or a
       -- filter must see the whole window or it silently answers "no match".
       recent = spanScope 0 [(addUTCTime (-(3 * 3600)) window.toTime, window.toTime)] scope <$ guard (diffUTCTime window.toTime window.fromTime > 6 * 3600)
-      -- The Overview's recent sessions are the Sessions tab's unfiltered list, so the two
-      -- tabs share one cache entry instead of scanning the window twice.
+      -- The Overview's recent sessions are the Sessions tab's unfiltered list: one cache entry, one scan.
       searchAt s = SessionsResult <$> searchSessions s searchQuery sessionFilter
       sessionSearchQ = (cacheKey $ SessionSearchQuery searchQuery sessionFilter, panelTtl, searchAt scope, searchAt <$> (guard (isNothing searchQuery && sessionFilter == AllSessionRows) *> recent))
       sessionDetailQs = [(cacheKey $ SessionDetailQuery sid, panelTtl, SessionDetailResult <$> sessionDetail scope sid, Nothing) | sid <- maybeToList selectedM, not $ T.null sid]
@@ -1935,8 +1934,7 @@ measurementNote :: Vital -> Text
 measurementNote vital = case vital.measurement of
   Unmeasured -> "No observations"
   Measured _ estimate -> maybe "Exact quantile" (\(lower, upper) -> "Estimated within " <> formatVitalThreshold vital lower <> "–" <> formatVitalThreshold vital upper) $ RUM.estimateRange estimate
-  -- Each note says what the export did and what would fix it: the reader is an engineer
-  -- deciding whether to touch the SDK, the collector, or the time range.
+  -- Each note names the export defect and its fix (SDK, collector, or time range).
   Unavailable _ issue -> case issue of
     RUM.MissingBaseline -> "Cumulative histogram with no earlier export in range; widen the range"
     RUM.UnknownStart -> "Cumulative histogram exported without a start time; use delta temporality"
