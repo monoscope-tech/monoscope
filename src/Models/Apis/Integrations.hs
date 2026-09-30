@@ -43,6 +43,7 @@ import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId, enumLit)
 import Models.Projects.ProjectMembers qualified as ProjectMembers
+import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId)
 import Relude
 import System.Types (DB)

@@ -112,6 +112,7 @@ import UnliftIO.Exception (handle)
 import Utils qualified
 import Web.ApiHandlers qualified as ApiH
 import Web.ApiHandlers (AllQueryParams, ApiV1Routes (..), apiV1OpenApiSpec)
+import Web.ApiHandlers qualified as ApiH
 import Web.ApiTypes qualified as ApiT
 import Web.Auth (APItoolkitAuthContext, ApiKeyAuthContext, apiKeyAuthHandler, authHandler, htmlServerError)
 import Web.Auth qualified as Auth

@@ -132,6 +132,7 @@ import Data.HashMap.Strict qualified as HM
 import Data.List.Extra (lookup)
 import Data.List.NonEmpty qualified as NE
 import Data.Map qualified as Map
+import Data.OpenApi (ToSchema)
 import Data.Ord (clamp)
 import Data.Scientific qualified as Sci
 import Data.Set qualified as S
@@ -1354,9 +1355,10 @@ getMetricCatalogResponse pid service search now requestedLimit requestedOffset a
       selected page = if active then page.active else page.inactive
       mode = if active then ActivePage else InactivePage
   page <- pageAt limit offset mode
-  total <- if offset > 0 && V.null (selected page)
-    then (.pageTotal) <$> pageAt 1 0 mode
-    else pure page.pageTotal
+  total <-
+    if offset > 0 && V.null (selected page)
+      then (.pageTotal) <$> pageAt 1 0 mode
+      else pure page.pageTotal
   pure $ MetricCatalogResponse (selected page) total active (offset + V.length (selected page) < total) cutoff selectedService selectedSearch
 
 

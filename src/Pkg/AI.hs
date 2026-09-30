@@ -96,10 +96,10 @@ import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.Dashboards qualified as Dashboards
-import Models.Projects.Projects qualified as Projects
 import Models.Projects.ProjectMembers qualified as ProjectMembers
-import Models.Telemetry.Telemetry qualified as Telemetry
+import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
+import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
 import OpenAI.V1.Chat.Completions qualified as OpenAIV1
 import OpenAI.V1.Tool qualified as OAITool
@@ -1109,8 +1109,9 @@ executeToolCall config tc = do
       Nothing -> AE.object ["error" AE..= ("query is required" :: Text)]
       Just query ->
         let summaries = case config.projectTools of
-              Just backend -> [(tool.name, tool.description) | tool <- Map.elems backend.catalog, Map.member tool.name MCP.agentPolicies]
-                <> [(fn.name, fromMaybe "" fn.description) | fn <- mapMaybe toolFunction allToolDefs, Map.notMember fn.name backend.catalog]
+              Just backend ->
+                [(tool.name, tool.description) | tool <- Map.elems backend.catalog, Map.member tool.name MCP.agentPolicies]
+                  <> [(fn.name, fromMaybe "" fn.description) | fn <- mapMaybe toolFunction allToolDefs, Map.notMember fn.name backend.catalog]
               Nothing -> [(fn.name, fromMaybe "" fn.description) | fn <- mapMaybe toolFunction allToolDefs]
             terms = words $ T.toCaseFold $ T.map (\c -> if isAlphaNum c then c else ' ') query
             score (name, description) = sum [4 | term <- terms, term `T.isInfixOf` T.toCaseFold name] + sum [1 | term <- terms, term `T.isInfixOf` T.toCaseFold description]
