@@ -111,6 +111,10 @@ Two deliberate differences from your normal `make test`:
   Checks that do not need services start only the runner; `e2e` starts Postgres,
   and `integration-tests` starts all three services.
   When every selected check is already attested, `make ci` skips Docker entirely.
+  Local CI runs serialize automatically because they share build volumes and service databases.
+  Worktree runs mount their shared Git metadata so attestation fingerprints work in containers.
+  If HLint is installed on the host, `make ci` runs that check there, as the GitHub workflow does.
+  The host passes its attestation-ref list to the runner, which has no SSH keys.
 
 **TimeFusion publishes no arm64 image**, and the amd64 one segfaults under
 emulation on Apple Silicon. Build one for this machine, once:
@@ -265,7 +269,7 @@ QEMU, so it runs at a useful fraction of native rather than 10× slower. Budget
 | `CI_KEEP_GOING=true` | don't stop the sweep at the first failure |
 | `CI_ALLOW_DEGRADED=true` | run checks whose capabilities are missing, unattested |
 | `CI_NO_ATTEST=true` | run, publish nothing |
-| `CI_SHARDS=n` | integration-test shard count (CI uses 4; more needs more `max_connections`) |
+| `CI_SHARDS=n` | integration-test shard count (local defaults to 6; GitHub uses 4) |
 | `CI_ATTEST_DISABLED=true` | ignore all attestations — set as a repo variable to force full CI runs |
 | `MONOSCOPE_CI_TF_IMAGE` / `MONOSCOPE_CI_TF_PLATFORM` | point at a locally built TimeFusion image (auto-detected after `make tf-image`) |
 | `TF_TARGET_CPU` | CPU baseline used by `make tf-image`; defaults to `neoverse-n1` on arm64 and `x86-64-v3` on amd64. Override only for a known compatible target. |

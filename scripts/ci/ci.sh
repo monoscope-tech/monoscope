@@ -207,6 +207,8 @@ remote_refs() {
     trap 'rm -f "$REMOTE_REFS_CACHE"' EXIT
     if [ "${CI_ATTEST_DISABLED:-}" = "true" ]; then
       note "CI_ATTEST_DISABLED=true — ignoring all attestations"
+    elif [ -n "${CI_REMOTE_REFS_FILE:-}" ]; then
+      cp "$CI_REMOTE_REFS_FILE" "$REMOTE_REFS_CACHE"
     else
       git ls-remote "$REMOTE" "$NS/*" 2>/dev/null | cut -f2 > "$REMOTE_REFS_CACHE" || true
     fi
@@ -327,7 +329,7 @@ run_body() { # <check>
       command -v weeder >/dev/null 2>&1 || cabal install weeder --install-method=copy --installdir=/usr/local/bin --overwrite-policy=always
       weeder --config weeder.toml --hie-directory dist-newstyle
       ;;
-    hlint)   hlint src/ shared/src cli ;;
+    hlint)   hlint -j src/ shared/src cli ;;
     ui-tests) (cd web-components && npm ci --prefer-offline --no-audit && npm test) ;;
     # Drives the real server in a real browser. scripts/e2e.sh starts that server itself on
     # 8081 against a throwaway database, so this only has to supply the binary and chromium.
@@ -499,6 +501,34 @@ COMPOSE_FILE=ci/compose.yml
 compose() { docker compose -f "$COMPOSE_FILE" --project-name monoscope-ci "$@"; }
 
 cmd_local() {
+  # Every local run shares the Cabal/Node volumes and ephemeral service databases.
+  # Lock before even resetting services; parallel runs corrupt GHC interface files.
+  if [ "${CI_LOCAL_LOCKED:-}" != true ]; then
+    python3 -c '
+import fcntl, os, sys
+with open(sys.argv[1], "w") as lock:
+    try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print("ci: waiting for another local CI run", file=sys.stderr)
+        fcntl.flock(lock, fcntl.LOCK_EX)
+    os.set_inheritable(lock.fileno(), True)
+    os.execvpe(sys.argv[2], [sys.argv[2], "local", *sys.argv[3:]], {**os.environ, "CI_LOCAL_LOCKED": "true"})
+' "${TMPDIR:-/tmp}/monoscope-ci-$(id -u).lock" "$0" "$@"
+    return
+  fi
+  # The dependency image has no HLint; the host tool is also how CI runs it.
+  local c host_rc=0
+  local -a container_checks=()
+  for c in $(selected_checks "$@"); do
+    if [ "$c" = hlint ] && command -v hlint >/dev/null 2>&1; then
+      "$0" run hlint || host_rc=$?
+    else
+      container_checks+=("$c")
+    fi
+  done
+  [ "$host_rc" -eq 0 ] || [ "${CI_KEEP_GOING:-}" = true ] || return "$host_rc"
+  [ "${#container_checks[@]}" -gt 0 ] || return "$host_rc"
+  set -- "${container_checks[@]}"
   command -v docker >/dev/null 2>&1 || die "docker is required for \`ci.sh local\`"
   docker compose version >/dev/null 2>&1 || die "docker compose v2 is required"
   if [ "${CI_FORCE:-}" != "true" ]; then
@@ -509,7 +539,7 @@ cmd_local() {
     done
     if [ "$cached" = true ]; then
       note "all selected checks are already attested — skipping local containers"
-      return 0
+      return "$host_rc"
     fi
   fi
   # Postgres and MinIO are deliberately cache-free integration fixtures (Postgres
@@ -552,6 +582,14 @@ cmd_local() {
   fi
   rm -f .ci/attest.tsv
   local rc=0
+  local -a git_mount=() refs_mount=()
+  if [ -f .git ]; then
+    local git_common
+    git_common=$(git rev-parse --path-format=absolute --git-common-dir)
+    git_mount=(-v "$git_common:$git_common")
+  fi
+  # The runner has no SSH keys, so hand it the host's read-only attestation list.
+  [ -z "$REMOTE_REFS_CACHE" ] || refs_mount=(-v "$REMOTE_REFS_CACHE:/tmp/ci-remote-refs:ro" -e CI_REMOTE_REFS_FILE=/tmp/ci-remote-refs)
   # --rm so a failed run leaves nothing behind; the caches live in named volumes.
   # Forward the run's knobs; `compose run` only passes what it is told to.
   # Run from a COPY inside the container, not from the bind mount. bash reads a
@@ -559,7 +597,7 @@ cmd_local() {
   # is in flight makes the running shell resume at a stale offset and die with
   # "syntax error near unexpected token". A `make ci` lasts tens of minutes —
   # long enough that editing it meanwhile is a normal thing to do, not a mistake.
-  compose run --rm \
+  compose run --rm "${git_mount[@]}" "${refs_mount[@]}" \
     -e CI_ROOT=/build \
     -e "CI_ALLOW_DEGRADED=${CI_ALLOW_DEGRADED:-}" -e "CI_FORCE=${CI_FORCE:-}" -e "CI_KEEP_GOING=${CI_KEEP_GOING:-}" \
     -e "CI_NO_ATTEST=${CI_NO_ATTEST:-}" \
@@ -567,7 +605,8 @@ cmd_local() {
   # Publish whatever passed even if a later check failed — a green check is green.
   cmd_publish .ci/attest.tsv
   [ "$rc" -eq 0 ] || note "local CI failed (exit $rc); services left up for debugging — \`make ci-down\` to clean up"
-  return $rc
+  [ "$host_rc" -eq 0 ] || return "$host_rc"
+  return "$rc"
 }
 
 cmd_shell() {
