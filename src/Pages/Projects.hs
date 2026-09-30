@@ -1103,7 +1103,7 @@ manageMembersBody pid projMembers paymentPlan teamsCount =
             p_ [class_ "text-sm text-textStrong font-medium"] "Free plan allows only 1 team member"
             p_ [class_ "text-sm text-textWeak mt-1"] "Additional team members are disabled and cannot access the project. Upgrade to enable team access."
 
-      form_ [class_ "space-y-6", hxPost_ "", hxTarget_ settingsContentTarget, hxSwap_ "innerHTML", hxIndicator_ "#submitIndicator"] do
+      form_ [class_ "space-y-6", hxPost_ $ "/p/" <> pid.toText <> "/manage_members", hxTarget_ settingsContentTarget, hxSwap_ "innerHTML", hxIndicator_ "#submitIndicator"] do
         div_ [class_ "space-y-2"] do
           label_ [class_ "text-sm font-medium text-textStrong block"] "Invite new member"
           div_ [class_ "flex gap-2"] do

@@ -1,11 +1,14 @@
 module Pages.Projects.ManageMembersSpec (spec) where
 
 import Data.UUID qualified as UUID
+import Data.Text qualified as T
+import Data.Text.Lazy qualified as LT
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact qualified as PGT
+import Lucid (renderText, toHtml)
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
@@ -28,6 +31,10 @@ userID = Projects.UserId (Unsafe.fromJust $ UUID.fromText "00000000-0000-0000-00
 spec :: Spec
 spec = sequential $ aroundAll withTestResources do
   describe "Members Creation, Update and Consumption" do
+    it "invite form posts to the project members endpoint" \tr -> do
+      (_, page) <- testServant tr $ ManageMembers.manageMembersGetH testPid
+      LT.toStrict (renderText $ toHtml page) `shouldSatisfy` T.isInfixOf ("hx-post=\"/p/" <> testPid.toText <> "/manage_members\"")
+
     it "creates, updates, gets, deletes, and re-adds a member" \tr -> do
       void $ withPool tr.trPool $ PGT.execute [sql|UPDATE projects.projects SET payment_plan = 'PAID' WHERE id = ?|] (Only testPid)
       void $ withPool tr.trPool $ PGT.execute [sql|DELETE FROM projects.project_members WHERE project_id = ? AND user_id != '00000000-0000-0000-0000-000000000001'|] (Only testPid)
