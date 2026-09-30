@@ -201,6 +201,9 @@ spec = sequential $ aroundAll withTestResources do
                     disabled_channels = '{}'
                 WHERE project_id = ? AND handle = 'everyone'|]
           (PGS.Only testPid)
+      -- Regression: a raw-SQL widget posts an empty query, which compiled to an all-traffic count.
+      void (runAsBase tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.widgetAlertUpsertH testPid widgetId (Just $ unUUIDId dashboardId) alertForm{Dashboards.query = ""}) `shouldThrow` anyIOException
+      isNothing <$> runTestBgNoReset tr (Monitors.queryMonitorByWidgetId testPid (Just $ unUUIDId dashboardId) widgetId) `shouldReturn` True
       void $ testServant tr $ Dashboards.widgetAlertUpsertH testPid widgetId (Just $ unUUIDId dashboardId) alertForm
       isNothing <$> runTestBgNoReset tr (Monitors.queryMonitorByWidgetId otherPid (Just $ unUUIDId dashboardId) widgetId) `shouldReturn` True
 

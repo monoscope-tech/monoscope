@@ -1569,7 +1569,7 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
   unless isNewWidget do
     let alertFormId = widPrefix <> "-alert-form"
         alertEndpoint = flip foldMap dashboardIdM \dashId -> "/p/" <> pid.toText <> "/widgets/" <> sourceWid <> "/alert?dashboard_id=" <> dashId.toText
-    div_ [class_ "group/walert hidden group-has-[.page-drawer-tab-monitors:checked]/wgtexp:block mt-6"] do
+    div_ [class_ "group/walert hidden group-has-[.page-drawer-tab-monitors:checked]/wgtexp:block mt-6"] $ if maybe True (T.null . T.strip) widgetToUse.query then emptyState_ def{icon = Just "bell", size = ESCompact} "This widget can't be monitored" "Monitors evaluate a KQL query, and this widget is built from raw SQL." else do
       let hasAlert = isJust monitorM
           defaultTitle = maybe (fromMaybe "Widget Alert" widgetToUse.title <> " - Threshold Alert") (.alertConfig.title) monitorM
       -- Enable Alert toggle
@@ -1653,6 +1653,11 @@ widgetAlertUpsertH :: Projects.ProjectId -> Text -> Maybe UUID.UUID -> WidgetAle
 widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = do
   (session, _) <- Projects.sessionAndProject pid
   now <- Time.currentTime
+
+  -- An empty query compiles to a count over all traffic, not the widget's series.
+  when (isJust form.alertEnabled && T.null (T.strip form.query)) do
+    addErrorToast "This widget can't be monitored" (Just "Monitors need a KQL query; this widget is built from raw SQL.")
+    throwError err400{errBody = "Widget monitors need a KQL query"}
 
   -- Reuse the widget's existing monitor id when there is one
   queryMonitorId <-

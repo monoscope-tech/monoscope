@@ -52,7 +52,7 @@ type Dash = { id: string; title: string };
 async function makeDashboard(page: Page, title: string, template = "Blank dashboard"): Promise<Dash> {
   await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
   await page.locator('label[for="newDashboardMdl"]').first().click();
-  await page.getByText(template, { exact: true }).click();
+  await page.locator("#dashListItemParent").getByText(template, { exact: true }).click();
   await page.getByRole("textbox", { name: "Dashboard name *", exact: true }).fill(title);
   await page.getByRole("button", { name: "Create" }).first().click();
   await page.waitForURL(/\/dashboards\/[0-9a-f-]{36}/i, { timeout: 60000 });
@@ -586,4 +586,44 @@ test("widget monitors persist independently across dashboards and reopen with sa
   await openWidgetMonitor(page, dashboards[1]);
   await expect(form.locator('[name="alertThreshold"]')).toHaveValue("10.0");
   await expect(form.getByRole("button", { name: "Update monitor", exact: true })).toBeVisible();
+});
+
+// Regressions from one bug report, all on a tabbed template (root `widgets: []`): the list
+// counted 0 widgets and clipped rows below the fold, unstarred stars were invisible until
+// hover, and the expand drawer saved edits to the root list, so a rename silently vanished.
+test("a tabbed dashboard lists its widgets and keeps a rename made in the widget drawer", async ({ page }) => {
+  test.slow();
+  const dash = await makeDashboard(page, `E2E Tabbed ${Date.now()}`, "Overview");
+
+  await page.setViewportSize({ width: 1280, height: 360 });
+  await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
+  const row = page.locator("#dashboardsTable tbody tr", { hasText: dash.title });
+  expect(Number(await row.locator("td").last().innerText())).toBeGreaterThan(0);
+  await expect(row.getByRole("button", { name: "Add dashboard to favorites" })).toHaveCSS("opacity", "1");
+  const lastRow = page.locator("#dashboardsTable tbody tr").last();
+  await page.locator("#main-content").hover();
+  await page.mouse.wheel(0, 5000);
+  await expect.poll(async () => (await lastRow.boundingBox())!.y + (await lastRow.boundingBox())!.height).toBeLessThanOrEqual(360);
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`/p/${DEMO_PROJECT}/dashboards/${dash.id}`);
+  await page.getByRole("button", { name: "Expand widget", exact: true }).first().click();
+  await page.getByRole("tab", { name: "Edit", exact: true }).click();
+  const editor = page.locator(".widget-editor");
+  // The log explorer's timeline/monitor toggles did nothing here; the Monitors tab owns alerts.
+  await expect(editor.getByText("Hide timeline")).toHaveCount(0);
+  const renamed = `Renamed ${Date.now()}`;
+  await editor.getByRole("textbox", { name: "Widget title" }).fill(renamed);
+  await Promise.all([
+    page.waitForResponse((r) => r.request().method() === "PUT" && r.url().includes("tab=") && r.ok()),
+    editor.getByRole("button", { name: "Save changes" }).click(),
+  ]);
+  await page.reload();
+  await expect(page.getByText(renamed).first()).toBeVisible();
+
+  // The reload keeps ?expand=, so the drawer reopens on the same widget.
+  await page.getByRole("tab", { name: "Edit", exact: true }).click();
+  await editor.locator('label[for$="-tab-monitors"]').click();
+  await expect(editor.locator(".page-drawer-tab-monitors")).toBeChecked();
+  await deleteDashboard(page, dash);
 });
