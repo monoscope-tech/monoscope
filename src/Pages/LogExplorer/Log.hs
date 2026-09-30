@@ -1148,8 +1148,14 @@ logLatencyWidget pid =
 -- "100.0%"
 -- >>> LL.fmtPct1 (-1.25)
 -- "-1.2%"
+-- | One-decimal percentage; a rate that would round to zero but is not zero says so.
+--
+-- >>> map fmtPct1 [0, 0.03, 0.05, 4.14, 100]
+-- ["0.0%","<0.1%","0.1%","4.1%","100.0%"]
 fmtPct1 :: Double -> Text
-fmtPct1 x = toText (showFFloat (Just 1) x "") <> "%"
+fmtPct1 x
+  | x > 0 && x < 0.05 = "<0.1%"
+  | otherwise = toText (showFFloat (Just 1) x "") <> "%"
 
 
 -- | Shimmer placeholder mirroring 'sessionsHeader_' (6-KPI grid + over-time bar
