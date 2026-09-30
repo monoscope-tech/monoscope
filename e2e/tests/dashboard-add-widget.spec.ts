@@ -613,6 +613,13 @@ test("a tabbed dashboard lists its widgets and keeps a rename made in the widget
 
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(`/p/${DEMO_PROJECT}/dashboards/${dash.id}`);
+  // Tab links used to carry the server-rendered range, so a range picked here reset on switch.
+  await page.locator("#n-currentRange").click();
+  await page.locator("#n-timepicker-popover button", { hasText: "Last 24 hours" }).click();
+  await page.getByRole("tab", { name: "Service", exact: true }).click();
+  await expect(page).toHaveURL(/\/tab\/service\?.*since=24H/);
+  await page.getByRole("tab", { name: "Overview", exact: true }).click();
+
   await page.getByRole("button", { name: "Expand widget", exact: true }).first().click();
   await page.getByRole("tab", { name: "Edit", exact: true }).click();
   const editor = page.locator(".widget-editor");
