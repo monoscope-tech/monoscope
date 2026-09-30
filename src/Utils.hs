@@ -666,7 +666,7 @@ countNoun n noun = show n <> " " <> noun <> bool "s" "" (n == 1)
 -- | Nanoseconds as a one-decimal human duration; minutes spell @min@ so they cannot be
 -- read as milli beside @ms@, and long sessions roll into hours and days.
 --
--- >>> map getDurationNSMS [1500, 2.5e6, 90e9, 5.4e12, 1.8e14]
+-- >>> map getDurationNSMS [1500, 2500000, 90000000000, 5400000000000, 180000000000000]
 -- ["1.5 \181s","2.5 ms","1.5 min","1.5 h","2.1 d"]
 getDurationNSMS :: Integer -> Text
 getDurationNSMS duration = toText @String $ printf "%.1f %s" (d / scale) unit
