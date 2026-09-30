@@ -93,10 +93,10 @@ import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.Dashboards qualified as Dashboards
-import Models.Projects.Projects qualified as Projects
 import Models.Projects.ProjectMembers qualified as ProjectMembers
-import Models.Telemetry.Telemetry qualified as Telemetry
+import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
+import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
 import OpenAI.V1.Chat.Completions qualified as OpenAIV1
 import OpenAI.V1.Tool qualified as OAITool
@@ -1091,8 +1091,9 @@ executeToolCall config tc = do
       Nothing -> AE.object ["error" AE..= ("query is required" :: Text)]
       Just query ->
         let summaries = case config.projectTools of
-              Just backend -> [(tool.name, tool.description) | tool <- Map.elems backend.catalog, Map.member tool.name MCP.agentPolicies]
-                <> [(fn.name, fromMaybe "" fn.description) | fn <- mapMaybe toolFunction allToolDefs, Map.notMember fn.name backend.catalog]
+              Just backend ->
+                [(tool.name, tool.description) | tool <- Map.elems backend.catalog, Map.member tool.name MCP.agentPolicies]
+                  <> [(fn.name, fromMaybe "" fn.description) | fn <- mapMaybe toolFunction allToolDefs, Map.notMember fn.name backend.catalog]
               Nothing -> [(fn.name, fromMaybe "" fn.description) | fn <- mapMaybe toolFunction allToolDefs]
             terms = words $ T.toCaseFold $ T.map (\c -> if isAlphaNum c then c else ' ') query
             score (name, description) = sum [4 | term <- terms, term `T.isInfixOf` T.toCaseFold name] + sum [1 | term <- terms, term `T.isInfixOf` T.toCaseFold description]
@@ -1100,24 +1101,28 @@ executeToolCall config tc = do
          in AE.object ["tools" AE..= map (\(_, (name, description)) -> AE.object ["name" AE..= name, "description" AE..= description]) (take 12 matches), "total" AE..= length matches, "has_more" AE..= (length matches > 12)]
     "get_project_tool_schema" -> pure $ noRaw $ decodeUtf8 $ AE.encode $ case getTextArg "name" args >>= projectToolDef config >>= toolFunction of
       Nothing -> AE.object ["error" AE..= ("unknown project operation" :: Text)]
-      Just fn -> AE.object $ ["name" AE..= fn.name, "description" AE..= fn.description, "input_schema" AE..= fn.parameters]
-        <> maybe [] (\policy -> ["minimum_permission" AE..= policy.minimumPermission, "action" AE..= show @Text policy.action]) (Map.lookup fn.name MCP.agentPolicies)
-    name | Just backend <- config.projectTools, Just _ <- Map.lookup name backend.catalog ->
-      case Map.lookup name MCP.agentPolicies of
-        Nothing -> pure $ noRaw "This project operation has no Agent policy."
-        Just policy -> do
-          authority <- agentAuthority config.access config.projectId
-          let allowed = case authority of
-                ServiceAuthority -> True
-                MemberAuthority permission -> permission >= policy.minimumPermission
-          if not allowed
-            then pure $ noRaw "Your project role does not permit this operation."
-            else case policy.action of
-              MCP.ReadOnly -> runProjectTool backend name args
-              MCP.RequestedWrite -> do
-                permitted <- actionAuthorized
-                if permitted then runProjectTool backend name args else pure $ noRaw "This operation requires an explicit request and is not available in this conversation."
-              MCP.ConfirmedWrite -> pure $ noRaw "This operation requires confirmation and is not available in this conversation."
+      Just fn ->
+        AE.object
+          $ ["name" AE..= fn.name, "description" AE..= fn.description, "input_schema" AE..= fn.parameters]
+          <> maybe [] (\policy -> ["minimum_permission" AE..= policy.minimumPermission, "action" AE..= show @Text policy.action]) (Map.lookup fn.name MCP.agentPolicies)
+    name
+      | Just backend <- config.projectTools
+      , Just _ <- Map.lookup name backend.catalog ->
+          case Map.lookup name MCP.agentPolicies of
+            Nothing -> pure $ noRaw "This project operation has no Agent policy."
+            Just policy -> do
+              authority <- agentAuthority config.access config.projectId
+              let allowed = case authority of
+                    ServiceAuthority -> True
+                    MemberAuthority permission -> permission >= policy.minimumPermission
+              if not allowed
+                then pure $ noRaw "Your project role does not permit this operation."
+                else case policy.action of
+                  MCP.ReadOnly -> runProjectTool backend name args
+                  MCP.RequestedWrite -> do
+                    permitted <- actionAuthorized
+                    if permitted then runProjectTool backend name args else pure $ noRaw "This operation requires an explicit request and is not available in this conversation."
+                  MCP.ConfirmedWrite -> pure $ noRaw "This operation requires confirmation and is not available in this conversation."
     "get_investigation_history" ->
       noRaw <$> case config.access of
         SlackInvestigationAccess run -> decodeUtf8 . AE.encode <$> Investigations.recentEvents config.projectId run.teamId run.channelId run.threadTs

@@ -133,10 +133,11 @@ import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as PM
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Telemetry.Schema qualified as Schema
-import Pages.Charts.Types qualified as Charts
+import Models.Telemetry.Telemetry qualified as Telemetry
+import Network.Wai (Request, queryString)
 import Pages.Charts.Charts qualified as ChartsPage
+import Pages.Charts.Types qualified as Charts
 import Pages.Replay qualified as Replay
 import Pkg.Components.TimePicker qualified as TP
 import Pkg.Components.Widget qualified as Widget
@@ -349,10 +350,15 @@ data ApiV1Routes mode = ApiV1Routes
 apiV1OpenApiSpec :: OpenApi
 apiV1OpenApiSpec =
   toOpenApi (Proxy @(NamedRoutes ApiV1Routes))
-    & OA.info .~ (mempty & OA.title .~ "Monoscope API" & OA.version .~ "1.0" & OA.description ?~ "Observability API for querying logs, traces, and metrics. Requires a Bearer API key and X-Project-Id header.")
-    & OA.servers .~ [OA.Server "/api/v1" Nothing mempty]
-    & OA.components . OA.securitySchemes .~ SecurityDefinitions (fromList [("BearerAuth", SecurityScheme (SecuritySchemeApiKey (OA.ApiKeyParams "Authorization" OA.ApiKeyHeader)) Nothing)])
-    & OA.security .~ [OA.SecurityRequirement (fromList [("BearerAuth", [])])]
+    & OA.info
+    .~ (mempty & OA.title .~ "Monoscope API" & OA.version .~ "1.0" & OA.description ?~ "Observability API for querying logs, traces, and metrics. Requires a Bearer API key and X-Project-Id header.")
+      & OA.servers
+    .~ [OA.Server "/api/v1" Nothing mempty]
+      & OA.components
+      . OA.securitySchemes
+    .~ SecurityDefinitions (fromList [("BearerAuth", SecurityScheme (SecuritySchemeApiKey (OA.ApiKeyParams "Authorization" OA.ApiKeyHeader)) Nothing)])
+      & OA.security
+    .~ [OA.SecurityRequirement (fromList [("BearerAuth", [])])]
 
 
 -- =============================================================================
@@ -494,6 +500,8 @@ apiV1Server principal queryEvents dashboardRenderer mcpHandler =
     , memberRemove = apiMemberRemove pid
     , mcp = mcpHandler
     }
+
+
 -- | Return the value or throw a 404 with a given message.
 notFoundOr :: Text -> Maybe a -> ATBaseCtx a
 notFoundOr msg = maybe (throwError err404{errBody = encodeUtf8 msg}) pure

@@ -39,8 +39,8 @@ import Deriving.Aeson qualified as AE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 import Hasql.Interpolate qualified as HI
-import Models.Projects.Projects qualified as Projects
 import Models.Projects.ProjectMembers qualified as ProjectMembers
+import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId)
 import Relude
 import System.Types (DB)
