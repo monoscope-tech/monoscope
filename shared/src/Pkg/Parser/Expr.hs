@@ -1,4 +1,4 @@
-module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), CaseMode (..), kqlTimespanToTimeBucket, unsupportedTimespan, defaultBinWidth, FieldKey (..), pSquareBracketKey, pTerm, Jsonpath, LowerErr (..), lowerPred, renderJsonpath, resolveWildcardTimes, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), flattenedOtelAttributes, flattenedOtelAttributesBuiltin, setOtelColumns, setMetricsColumns, topLevelOtelColumns, acceptedFieldRoots, FieldUniverse (..), otelFieldUniverse, metricsFieldUniverse, knownFieldRoot, suggestFieldRoot, transformFlattenedAttribute, outputFieldAliases, errorFlagSql, severityIsErrorSql, sqlStringLit) where
+module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), CaseMode (..), kqlTimespanToTimeBucket, unsupportedTimespan, defaultBinWidth, FieldKey (..), pSquareBracketKey, pTerm, Jsonpath, LowerErr (..), lowerPred, renderJsonpath, resolveWildcardTimes, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), flattenedOtelAttributes, flattenedOtelAttributesBuiltin, setOtelColumns, setMetricsColumns, topLevelOtelColumns, arrayColumns, acceptedFieldRoots, FieldUniverse (..), otelFieldUniverse, metricsFieldUniverse, knownFieldRoot, suggestFieldRoot, transformFlattenedAttribute, outputFieldAliases, errorFlagSql, severityIsErrorSql, sqlStringLit) where
 
 import Control.Monad.Combinators.Expr (
   Operator (InfixL),
@@ -192,6 +192,7 @@ data Expr
   | ValGTEq Values Values -- Value-to-value greater than or equal
   | ValLTEq Values Values -- Value-to-value less than or equal
   | BoolFunc Values -- Boolean scalar function as standalone expression (isnull, isnotnull, isempty, isnotempty)
+  | ArrayHas Text Text -- TimeFusion-only lowering of `col[*] == "v"` on a native array column; never parsed, see rewriteSectionsForSource
   deriving stock (Eq, Generic, Ord, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -738,6 +739,12 @@ flattenedOtelAttributes = unsafePerformIO (readIORef flattenedOtelColumnsRef)
 -- ('prop_facetsAreFast') can gate them as fast-filter columns too.
 topLevelOtelColumns :: Set T.Text
 topLevelOtelColumns = fromList ["level", "name", "kind", "status_code", "status_message"]
+
+
+-- | Native array columns on @otel_logs_and_spans@: @TEXT[]@ in Postgres and @List(Utf8View)@
+-- on TimeFusion. Only these may lower to @array_has@; @events@ is jsonb / a JSON string.
+arrayColumns :: Set T.Text
+arrayColumns = fromList ["hashes", "summary"]
 
 
 -- | Hand-coded fallback for the bare (dot-free) column set — the same role
@@ -1328,6 +1335,12 @@ scalarFuncToSQL name args
 -- >>> display (Eq (Subject "" "errors" [ArrayWildcard "", ArrayIndex "message" 0, FieldKey "details"]) (Str "detailsVal"))
 -- "jsonb_path_exists(to_jsonb(errors), '$[*].\"message\"[0].\"details\" ? (@ == \"detailsVal\")'::jsonpath)"
 --
+-- >>> display (ArrayHas "hashes" "o'x")
+-- "array_has(hashes, 'o''x')"
+--
+-- >>> toQText (ArrayHas "hashes" "x")
+-- "hashes[*] == \"x\""
+--
 -- A bare @errors@ compared with a boolean answers with the projected flag, and the two
 -- spellings of each verdict agree:
 --
@@ -1422,6 +1435,7 @@ instance Display Expr where
   displayPrec prec (And u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " AND " <> displayPrec prec u2
   displayPrec prec (Or u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " OR " <> displayPrec prec u2
   displayPrec prec (BoolFunc v) = displayPrec prec v -- Boolean scalar function renders directly to SQL
+  displayPrec prec (ArrayHas col v) = displayPrec prec $ "array_has(" <> col <> ", " <> sqlStringLit v <> ")"
   displayPrec _ _ = error "Display Expr: unreachable"
 
 
@@ -1436,6 +1450,7 @@ instance ToQueryText Expr where
   toQText (And left right) = toQText left <> " AND " <> toQText right
   toQText (Or left right) = toQText left <> " OR " <> toQText right
   toQText (BoolFunc v) = toQText v
+  toQText (ArrayHas col v) = col <> "[*] == " <> toQText (Str v)
   toQText _ = error "ToQueryText Expr: unreachable"
 
 
