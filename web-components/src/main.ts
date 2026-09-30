@@ -217,40 +217,39 @@ window.updateTimePicker = function (
   timeRange: { since?: string; from?: string; to?: string },
   opts?: { targetPr?: string; label?: string; skipSetParams?: boolean }
 ): string {
-  const tp = opts?.targetPr || 'n';
-  const rangeEl = document.getElementById(tp + '-currentRange');
-  const picker = rangeEl?.closest<HTMLElement>('[data-live-range]');
-  const inputEl = document.getElementById(tp + '-custom_range_input') as HTMLInputElement | null;
   let displayLabel = '';
-
+  const live = Boolean(timeRange.since);
   if (timeRange.since) {
-    if (picker) picker.dataset.liveRange = 'true';
-    if (inputEl) inputEl.value = timeRange.since;
     if (!opts?.skipSetParams) window.setParams({ since: timeRange.since, from: '', to: '' });
-    if (opts?.label) {
-      displayLabel = opts.label;
-    } else {
-      const units: Record<string, string> = { S: 'Second', M: 'Minute', H: 'Hour', D: 'Day' };
-      const m = timeRange.since.match(/^(\d+)\s*([SMHD])$/i);
-      displayLabel = m ? `Last ${m[1]} ${units[m[2].toUpperCase()] || m[2]}${m[1] !== '1' ? 's' : ''}` : 'Last ' + timeRange.since;
-    }
-    if (rangeEl) rangeEl.innerText = displayLabel;
+    const units: Record<string, string> = { S: 'Second', M: 'Minute', H: 'Hour', D: 'Day' };
+    const m = timeRange.since.match(/^(\d+)\s*([SMHD])$/i);
+    displayLabel = opts?.label ?? (m ? `Last ${m[1]} ${units[m[2].toUpperCase()] || m[2]}${m[1] !== '1' ? 's' : ''}` : 'Last ' + timeRange.since);
   } else if (timeRange.from && timeRange.to) {
-    if (picker) picker.dataset.liveRange = 'false';
-    if (inputEl) inputEl.value = timeRange.from + '/' + timeRange.to;
     if (!opts?.skipSetParams) window.setParams({ from: timeRange.from, to: timeRange.to, since: '' });
     displayLabel = opts?.label ?? window.formatTimeRange(timeRange.from, timeRange.to);
-    if (rangeEl) rangeEl.innerText = displayLabel;
   } else {
     console.warn('updateTimePicker: malformed timeRange — expected "since" or "from"+"to"', timeRange);
     return displayLabel;
   }
-  const transport = picker?.parentElement?.querySelector<HTMLElement>('[data-time-transport]');
-  if (transport) {
-    transport.dataset.live = String(Boolean(timeRange.since));
-    if (!timeRange.since && window.dashboardRefreshInterval > 0) window.setTimeRefreshInterval(transport, 0);
-    else syncTimeTransports();
-  }
+  // The URL range is page-wide, so every picker on the page (e.g. the dashboard's and the
+  // widget editor's) shows it; a local-only update touches just its own picker.
+  const prefixes = opts?.skipSetParams
+    ? [opts?.targetPr || 'n']
+    : [...document.querySelectorAll('[id$="-currentRange"]')].map((el) => el.id.slice(0, -'-currentRange'.length));
+  prefixes.forEach((tp) => {
+    const rangeEl = document.getElementById(tp + '-currentRange');
+    const picker = rangeEl?.closest<HTMLElement>('[data-live-range]');
+    const inputEl = document.getElementById(tp + '-custom_range_input') as HTMLInputElement | null;
+    if (picker) picker.dataset.liveRange = String(live);
+    if (inputEl) inputEl.value = live ? timeRange.since! : timeRange.from + '/' + timeRange.to;
+    if (rangeEl) rangeEl.innerText = displayLabel;
+    const transport = picker?.parentElement?.querySelector<HTMLElement>('[data-time-transport]');
+    if (transport) {
+      transport.dataset.live = String(live);
+      if (!live && window.dashboardRefreshInterval > 0) window.setTimeRefreshInterval(transport, 0);
+      else syncTimeTransports();
+    }
+  });
   return displayLabel;
 };
 

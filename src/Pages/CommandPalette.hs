@@ -92,7 +92,7 @@ paletteShell_ pid = do
     , class_ "cmd-palette-backdrop hidden fixed inset-0 flex flex-col items-center pt-[15vh] bg-black/40"
     , style_ "z-index:99999"
     , [__|on click if event.target is me add .hidden to me end
-          on htmx:before:request from <body/> add .hidden to me end|]
+          on htmx:before:request from <body/> if event.target.id is not 'cmd-palette-dynamic' add .hidden to me end|]
     ]
     do
       -- Header
@@ -143,9 +143,10 @@ paletteShell_ pid = do
               [ data_ "ai-action" "true"
               , [__|on click
                   set :q to #cmd-palette-input.value
-                  fetch `/p/${me.closest('.cmd-palette').dataset.pid}/log_explorer/ai_search` {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({input: :q})}
-                  then set :r to it.json()
-                  then set window.location to `/p/${me.closest('.cmd-palette').dataset.pid}/log_explorer?query=${encodeURIComponent(:r.query)}`
+                  fetch `/p/${me.closest('.cmd-palette').dataset.pid}/log_explorer/ai_search` {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({input: :q, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone})} as json
+                  then set :r to it
+                  then set tr to :r.time_range
+                  then set window.location to `/p/${me.closest('.cmd-palette').dataset.pid}/log_explorer?query=${encodeURIComponent(:r.query or '')}&since=${tr.since or ''}&from=${encodeURIComponent(tr.from or '')}&to=${encodeURIComponent(tr.to or '')}`
                |]
               ]
             $ itemBody_ "sparkles" "cmd-ai-label" "Ask AI: \"\"" "AI"
@@ -215,8 +216,8 @@ paletteShell_ pid = do
               end
             end
           else
-            -- Root: filter direct + category items
-            for item in <a.cmd-item/> in :palette
+            -- Root: filter direct + category items; the log/AI shortcuts echo the query, so they never filter
+            for item in <a.cmd-item:not([data-ai-action]):not([data-log-shortcut])/> in :palette
               set :typ to item.dataset.cmdType
               if :typ === 'child' then
                 -- Show matching children inline during global search

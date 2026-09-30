@@ -108,7 +108,7 @@ import Pkg.Components.Table (Table (..))
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), assetUrl, bulkActionSlug)
+import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), assetUrl, bulkActionSlug, encodeEnumSC)
 import Pkg.Metrics qualified as Metrics
 import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), applyScopedQuery, binDensityFor, constantToKQLList, constantToSQLList, defSqlQueryCfg, fixedUTCTime, mkScopedQuery, parseQueryToComponents, replacePlaceholders, variablePresetsKQL)
 import Pkg.SchemaLearning.Catalog qualified as Catalog
@@ -1145,8 +1145,13 @@ dashboardWidgetPutH pid dashId widgetIdM tabSlugM widget = do
   uid <- UUID.genUUID <&> UUID.toText
   let normalizedWidgetIdM = normalizeWidgetId <$> widgetIdM
       widgetUpdated = normalizeWidget widget normalizedWidgetIdM uid
+  -- An edit locates its widget itself: a client without the tab slug would otherwise
+  -- update the root list, match nothing, and still report success.
+  tabSlugM' <- case normalizedWidgetIdM of
+    Nothing -> pure tabSlugM
+    Just nwid -> maybe (throwError err404{errBody = "Widget not found in dashboard"}) (pure . (tabSlugM <|>) . fst) $ findWidgetInDashboard nwid dash
 
-  _ <- Dashboards.updateSchema dashId (updateDashboardWidgets dash tabSlugM normalizedWidgetIdM widgetUpdated) Nothing
+  _ <- Dashboards.updateSchema dashId (updateDashboardWidgets dash tabSlugM' normalizedWidgetIdM widgetUpdated) Nothing
   syncDashboardAndQueuePush pid dashId
   whenJust normalizedWidgetIdM \nwid -> do
     existingMonitor <- Monitors.queryMonitorByWidgetId pid (Just dashId.unUUIDId) nwid
@@ -1179,9 +1184,14 @@ normalizeWidget widget normalizedWidgetIdM generatedId =
 
 updateDashboardWidgets :: Dashboards.Dashboard -> Maybe Text -> Maybe Text -> Widget.Widget -> Dashboards.Dashboard
 updateDashboardWidgets dash tabSlugM normalizedWidgetIdM widgetUpdated =
-  overDashWidgets tabSlugM (\ws -> maybe (ws <> [widgetUpdated]) (\nwid -> map (updateWidget nwid) ws) normalizedWidgetIdM) dash
+  overDashWidgets tabSlugM (\ws -> maybe (ws <> [widgetUpdated]) (\nwid -> overWidgetTree (updateWidget nwid) ws) normalizedWidgetIdM) dash
   where
     updateWidget nwid w = if widgetMatches nwid w then mergeWidgetPreservingQuery w widgetUpdated else w
+
+
+-- | Apply @f@ to every widget, group children included.
+overWidgetTree :: (Widget.Widget -> Widget.Widget) -> [Widget.Widget] -> [Widget.Widget]
+overWidgetTree f = map \w -> f $ w & #children %~ fmap (overWidgetTree f)
 
 
 -- | A widget is addressed either by its explicit id or by its slugified title.
@@ -1399,7 +1409,6 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
     , term
         "_"
         [text| on htmx:before:request 
-            set widgetJSON.type to document.getElementById('${widgetPreviewId}').closest('[class~="group/wgtexp"]').querySelector('#visualizationTabs input:checked').value then
             set widgetJSON.title to #{'${widgetTitleInputId}'}.value then 
             if not widgetJSON.id
               gridStackInstance.removeWidget('#add_a_widget_label', true, false)
@@ -1436,6 +1445,7 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
                       $ [ type_ "radio"
                         , value_ tabName
                         , class_ $ "hidden page-drawer-tab-" <> T.toLower tabName
+                        , id_ $ widPrefix <> "-tab-" <> T.toLower tabName
                         , name_ $ wid <> "-drawer-tab"
                         ]
                       <> [checked_ | isActive]
@@ -1483,10 +1493,9 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
                 , source = Nothing
                 , targetSpan = Nothing
                 , query = widgetToUse.rawQuery <|> widgetToUse.query
-                , vizType = Just $ case widgetToUse.wType of
-                    Widget.WTTimeseriesLine -> "timeseries_line"
-                    Widget.WTLogs -> "logs"
-                    _ -> "timeseries"
+                , -- Non-chart types (table, stat, …) match no viz tab, so none is checked
+                  -- and the widget keeps its own type instead of saving as a bar chart.
+                  vizType = if isNewWidget then Nothing else Just $ toText $ encodeEnumSC @"WT" widgetToUse.wType
                 , updateUrl = False
                 , targetWidgetPreview = Just widgetPreviewId
                 , alert = False
@@ -1495,6 +1504,9 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
                 , mobileExtra = Nothing
                 , parseError = Nothing
                 }
+            unless isNewWidget
+              $ label_ [Lucid.for_ $ widPrefix <> "-tab-monitors", class_ "self-end cursor-pointer text-xs text-textBrand hover:underline"]
+              $ if isJust monitorM then "Edit monitor" else "Create monitor"
             details_ [class_ "text-xs text-textWeak"] do
               summary_ [class_ "cursor-pointer select-none transition-colors hover:text-textStrong"] "Show generated SQL"
               div_
@@ -1542,7 +1554,6 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
           , term
               "_"
               [text| on 'update-widget-query'
-                   set widgetJSON.type to me.closest('[class~="group/wgtexp"]').querySelector('#visualizationTabs input:checked').value then
                    set widgetJSON.query to event.detail.value then
                    set widgetJSON.title to #{'${widgetTitleInputId}'}.value then
                    trigger 'update-widget' on me |]
@@ -1550,7 +1561,9 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
           Components.chartSkeleton_
         script_
           [text| var widgetJSON = ${widgetJSON};
-                 widgetJSON.type = document.getElementById('${widgetPreviewId}')?.closest('[class~="group/wgtexp"]')?.querySelector('#visualizationTabs input:checked')?.value || widgetJSON.type; |]
+                 widgetJSON.type = document.getElementById('${widgetPreviewId}')?.closest('[class~="group/wgtexp"]')?.querySelector('#visualizationTabs input:checked')?.value || widgetJSON.type;
+                 { const p = new URLSearchParams(location.search), since = p.get('since'), from = p.get('from'), to = p.get('to');
+                   if (since || (from && to)) window.updateTimePicker({since, from, to}, {targetPr: 'widget', skipSetParams: true}); } |]
 
   -- Alerts tab content
   unless isNewWidget do
@@ -1651,7 +1664,7 @@ widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = do
     let dashboardId = UUIDId dashId
     (_, dash) <- getDashAndVM pid dashboardId Nothing
     let updateWidget w = if widgetMatches form.widgetId w then w{Widget.id = Just form.widgetId, Widget.showThresholdLines = form.showThresholdLines, Widget.unit = mfilter (not . T.null) $ T.strip <$> form.unit} else w
-        dash' = dash & #widgets %~ map updateWidget & #tabs %~ fmap (map (\t -> t & #widgets %~ map updateWidget))
+        dash' = dash & #widgets %~ overWidgetTree updateWidget & #tabs %~ fmap (map (#widgets %~ overWidgetTree updateWidget))
     void $ Dashboards.updateSchema dashboardId dash' Nothing
 
   -- If alertEnabled is not checked, delete the monitor
@@ -1766,7 +1779,7 @@ starButton_ :: Projects.ProjectId -> Dashboards.DashboardId -> Bool -> Html ()
 starButton_ pid dashId isStarred =
   button_
     [ id_ $ "star-btn-" <> dashId.toText
-    , class_ $ "inline-flex h-6 w-6 items-center justify-center rounded leading-none cursor-pointer focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2 " <> if isStarred then "" else "opacity-0 group-hover/row:opacity-100"
+    , class_ "inline-flex h-6 w-6 items-center justify-center rounded leading-none cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 [&:hover>svg]:text-iconWarning"
     , Aria.label_ $ if isStarred then "Remove dashboard from favorites" else "Add dashboard to favorites"
     , data_ "tippy-content" $ if isStarred then "Remove from favorites" else "Add to favorites"
     , hxPost_ $ "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/star"
@@ -1820,10 +1833,10 @@ dashboardsGet_ dg = do
           $ div_ [class_ "bg-fillBrand-strong px-2 py-4 rounded-xl w-full flex items-center"]
           $ img_ [src_ "/public/assets/svgs/screens/dashboard_blank.svg", class_ "w-full rounded overflow-hidden", id_ "dItemPreview", term "loading" "lazy", term "decoding" "async"]
 
-  div_ [id_ "itemsListPage", class_ "mx-auto gap-8 w-full flex flex-col h-full overflow-hidden group/pg"] do
+  div_ [id_ "itemsListPage", class_ "mx-auto gap-8 w-full flex flex-col group/pg"] do
     let getTeams x = mapMaybe (\xx -> find (\t -> t.id == xx) dg.teams) (V.toList x.teams)
         getDashIcon dash = fromMaybe "square-dashed" (loadDashboardFromVM dg.dashTemplates dash >>= (.icon))
-        getWidgetCount dash = maybe 0 (length . (.widgets)) (loadDashboardFromVM dg.dashTemplates dash)
+        getWidgetCount dash = maybe 0 (length . filter ((/= Widget.WTGroup) . (.wType)) . Dashboards.allWidgets) (loadDashboardFromVM dg.dashTemplates dash)
         noBulkActions = dg.embedded || dg.hideActions || isJust dg.copyMode
         inCopyMode = isJust dg.copyMode
         baseUrl = "/p/" <> dg.projectId.toText <> "/dashboards"
@@ -2358,11 +2371,11 @@ dashboardWidgetExpandGetH pid dashId widgetId = do
   let timeParams = (Nothing, Nothing, Nothing)
       paramsWithVarDefaults = addVariableDefaults [] dash.variables
   (_, allParamsWithConstants) <- processConstantsAndExtendParams pid now timeParams paramsWithVarDefaults (dashboardQueryText dash) (fold dash.constants)
-  widgetToExpand <- (snd <$> findWidgetInDashboard widgetId dash) `whenNothing` throwError err404{errBody = "Widget not found in dashboard"}
+  (tabSlugM, widgetToExpand) <- findWidgetInDashboard widgetId dash `whenNothing` throwError err404{errBody = "Widget not found in dashboard"}
   processedWidget <- processWidget PrefillWidgets pid now timeParams allParamsWithConstants widgetToExpand
   monitorM <- Monitors.queryMonitorByWidgetId pid (Just dashId.unUUIDId) widgetId
   teams <- V.fromList <$> ManageMembers.getTeams pid
-  addRespHeaders $ widgetViewerEditor_ pid project.paymentPlan (Just dashId) Nothing Nothing (Just processedWidget) monitorM teams "edit"
+  addRespHeaders $ widgetViewerEditor_ pid project.paymentPlan (Just dashId) tabSlugM Nothing (Just processedWidget) monitorM teams "edit"
 
 
 -- | Lazy content for the new-widget drawer. Keeping this out of the initial
