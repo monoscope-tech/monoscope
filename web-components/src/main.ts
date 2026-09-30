@@ -751,8 +751,20 @@ function syncFacetCheckboxes(root: Document | Element = document) {
 }
 window.addEventListener('update-query', () => syncFacetCheckboxes());
 
+// Pages that don't ship Tagify (the log explorer, for load time) still receive tag inputs
+// in lazily swapped fragments such as the monitor form; fetch it the first time one appears.
+let tagifyLoading: Promise<unknown> | null = null;
+const loadTagify = () =>
+  (tagifyLoading ??= new Promise((resolve, reject) => {
+    const src = (name: string) => document.querySelector<HTMLMetaElement>(`meta[name="${name}"]`)?.content || '';
+    document.head.append(Object.assign(document.createElement('link'), { rel: 'stylesheet', href: src('tagify-css') }));
+    document.head.append(Object.assign(document.createElement('script'), { src: src('tagify-js'), onload: resolve, onerror: reject }));
+  }));
+
 function initAllTagifyInputs(root: Document | Element = document) {
-  root.querySelectorAll<HTMLElement>('[data-tagify]').forEach(initTagifyElement);
+  const els = [...root.querySelectorAll<HTMLElement>('[data-tagify]')];
+  if ((window as any).Tagify) els.forEach(initTagifyElement);
+  else if (els.length) loadTagify().then(() => els.forEach(initTagifyElement), (e) => console.error('[Tagify] failed to load', e));
 }
 
 window.getTagValues = (selector: string): string[] => {
