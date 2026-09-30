@@ -1193,7 +1193,8 @@ renderChart widget = do
           when isStat $ renderStatContent widget valueM
           unless (widget.wType == WTStat) $ div_ [class_ $ "relative h-0 max-h-full overflow-hidden w-full flex-1 min-h-0" <> if isStat then "" else " p-3"] do
             div_ [class_ "chart-render-slot h-full min-h-full w-full", id_ chartId, data_ "chart-widget" "", term "hx-morph-skip" ""] ""
-            div_
+            -- A stat tile's value already says "0"; the two-line overlay only clips inside it.
+            unless isStat $ div_
               [ id_ $ chartId <> "_empty"
               , class_ "chart-no-data hidden absolute inset-3 z-10 flex items-center justify-center bg-bgRaised px-4 text-center"
               , role_ "status"
