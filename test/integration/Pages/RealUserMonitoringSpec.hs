@@ -1018,6 +1018,10 @@ spec = sequential $ aroundAll withTestResources do
       T.isInfixOf "Refreshing the full time range" fullHtml `shouldBe` False
       -- The full result is what got cached, so the next cold-free load is complete at once.
       fst <$> load "24H" Nothing >>= \cached -> (map (.id) cached.sessions, cached.servedStale) `shouldBe` (["session-wide-new", "session-wide-old"], False)
+      -- Last night's list still paints first the next morning, then revalidates.
+      Cache.purge tr.trATCtx.rumCache
+      withResource tr.trPool $ \conn -> void $ PG.execute_ conn "UPDATE rum_panel_cache SET expires_at = now() - interval '9 hours'"
+      fst <$> load "24H" Nothing >>= \overnight -> (map (.id) overnight.sessions, overnight.servedStale) `shouldBe` (["session-wide-new", "session-wide-old"], True)
       -- Narrow windows scan themselves in one read.
       purgeRumCaches tr
       fst <$> load "6H" Nothing >>= \narrow -> (map (.id) narrow.sessions, narrow.servedStale) `shouldBe` (["session-wide-new"], False)
