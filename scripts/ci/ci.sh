@@ -536,20 +536,21 @@ with open(sys.argv[1], "w") as lock:
   done
   [ "$host_rc" -eq 0 ] || [ "${CI_KEEP_GOING:-}" = true ] || return "$host_rc"
   [ "${#container_checks[@]}" -gt 0 ] || return "$host_rc"
-  set -- "${container_checks[@]}"
-  command -v docker >/dev/null 2>&1 || die "docker is required for \`ci.sh local\`"
-  docker compose version >/dev/null 2>&1 || die "docker compose v2 is required"
   if [ "${CI_FORCE:-}" != "true" ]; then
     remote_refs >/dev/null
-    local cached=true c
-    for c in $(selected_checks "$@"); do
-      find_attestation "$c" >/dev/null || { cached=false; break; }
+    local -a pending=()
+    for c in "${container_checks[@]}"; do
+      find_attestation "$c" >/dev/null || pending+=("$c")
     done
-    if [ "$cached" = true ]; then
+    if [ "${#pending[@]}" -eq 0 ]; then
       note "all selected checks are already attested — skipping local containers"
       return "$host_rc"
     fi
+    container_checks=("${pending[@]}")
   fi
+  set -- "${container_checks[@]}"
+  command -v docker >/dev/null 2>&1 || die "docker is required for \`ci.sh local\`"
+  docker compose version >/dev/null 2>&1 || die "docker compose v2 is required"
   # Postgres and MinIO are deliberately cache-free integration fixtures (Postgres
   # is tmpfs-backed).  Keeping their *containers* after a run made a second local
   # integration invocation inherit the first run's deterministic test IDs and
@@ -929,6 +930,13 @@ cmd_selftest() {
   assert "fingerprints distinct" "$(echo $seen | tr ' ' '\n' | wc -l | tr -d ' ')" \
                                  "$(echo $seen | tr ' ' '\n' | sort -u | wc -l | tr -d ' ')"
   assert "fingerprint stable" "$(fingerprint hlint)" "$(WORKTREE_TREE=''; fingerprint hlint)"
+
+  local cached_ref
+  cached_ref=$(mktemp -t ci-selftest-refs.XXXXXX)
+  attest_ref frontend "$(fingerprint frontend)" node > "$cached_ref"
+  assert "cached local skips containers" skipped \
+    "$(CI_LOCAL_LOCKED=true CI_REMOTE_REFS_FILE="$cached_ref" "$0" local frontend 2>&1 | sed -n 's/.*all selected checks are already attested.*/skipped/p')"
+  rm -f "$cached_ref"
 
   # A change under a check's inputs must move its fingerprint; one outside must not.
   # Probe with NEW files only — never edit-and-restore a tracked file, which would
