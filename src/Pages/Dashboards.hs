@@ -1504,7 +1504,7 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
                 , mobileExtra = Nothing
                 , parseError = Nothing
                 }
-            unless isNewWidget
+            unless (isNewWidget || maybe True (T.null . T.strip) widgetToUse.query)
               $ label_ [Lucid.for_ $ widPrefix <> "-tab-monitors", class_ "self-end cursor-pointer text-xs text-textBrand hover:underline"]
               $ if isJust monitorM then "Edit monitor" else "Create monitor"
             details_ [class_ "text-xs text-textWeak"] do

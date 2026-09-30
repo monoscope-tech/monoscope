@@ -636,7 +636,13 @@ test("a tabbed dashboard lists its widgets and keeps a rename made in the widget
 
   // The reload keeps ?expand=, so the drawer reopens on the same widget.
   await page.getByRole("tab", { name: "Edit", exact: true }).click();
-  await editor.locator('label[for$="-tab-monitors"]').click();
-  await expect(editor.locator(".page-drawer-tab-monitors")).toBeChecked();
+  // The editor links to its Monitors tab only for a KQL widget; a raw-SQL one cannot be monitored.
+  const monitorLink = editor.locator('label[for$="-tab-monitors"]');
+  const hasKql = await page.evaluate(() => Boolean((window as any).widgetJSON.query?.trim()));
+  await expect(monitorLink).toHaveCount(hasKql ? 1 : 0);
+  if (hasKql) {
+    await monitorLink.click();
+    await expect(editor.locator(".page-drawer-tab-monitors")).toBeChecked();
+  }
   await deleteDashboard(page, dash);
 });
