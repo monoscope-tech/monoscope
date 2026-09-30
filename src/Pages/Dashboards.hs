@@ -127,9 +127,9 @@ import Text.Slugify (slugify)
 import UnliftIO qualified
 import UnliftIO.Exception (try)
 import Utils
+import Web.ApiTypes qualified as ApiT
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData)
-import Web.ApiTypes qualified as ApiT
 
 
 -- | Server-rendered dashboard data: one request returns every widget on the

@@ -70,8 +70,8 @@ import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.ContainerTypes (Scope)
 import Models.Telemetry.Telemetry qualified as Telemetry
-import Pkg.Parser qualified as Parser
 import Pkg.AI qualified as AI
+import Pkg.Parser qualified as Parser
 import UnliftIO.Exception (handle, throwIO)
 import Utils qualified
 import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
@@ -119,8 +119,8 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.EmailTemplates qualified as ET
 import Pkg.Git qualified as Git
 import Pkg.LiveTail qualified as LT
-import Web.ApiHandlers qualified as ApiH
 import Web.ApiHandlers (AllQueryParams, ApiV1Routes (..), apiV1OpenApiSpec)
+import Web.ApiHandlers qualified as ApiH
 import Web.ApiTypes qualified as ApiT
 
 
@@ -621,68 +621,68 @@ server :: Logger -> AuthContext -> TracerProvider -> OtlpHttpHandler -> OtlpHttp
 server logger env tp otlpTraces otlpLogs =
   let projectTools = Just $ mcpProjectTools logger env tp
    in Routes
-    { public = Servant.serveDirectoryWebApp "./static/public"
-    , ping = pingH
-    , status = statusH
-    , login = Auth.loginH
-    , toLogin = Auth.loginRedirectH
-    , logout = Auth.logoutH
-    , setLanguage = Auth.setLanguageH
-    , authCallback = Auth.authCallbackH
-    , otlpTracesPost = otlpHttpH otlpTraces
-    , otlpLogsPost = otlpHttpH otlpLogs
-    , shareLinkGet = Share.shareLinkGetH
-    , shareReplaySessionGet = Share.shareReplaySessionGetH
-    , discordLinkProjectGet = Discord.linkDiscordGetH
-    , discordInteractions = Discord.discordInteractionsH
-    , slackInteractions = Slack.slackFormPostH $ Slack.slackInteractionsHWithTools projectTools
-    , slackActionsPost = Slack.slackFormPostH Slack.slackActionsH
-    , slackEventsPost = Slack.slackEventsPostH
-    , externalOptionsGet = Slack.slackFormPostH Slack.externalOptionsH
-    , whatsappIncomingPost = Whatsapp.whatsappIncomingPostH
-    , clientMetadata = Auth.clientMetadataH
-    , lemonWebhook = Settings.webhookPostH
-    , stripeWebhook = Settings.stripeWebhookPostH
-    , githubWebhook = \sigM eventM body -> GitSync.gitWebhookPostH Git.GitHub (Git.WebhookReq eventM sigM Nothing Nothing Nothing body)
-    , gitWebhook = \host bbSig giteaSig glSig glToken glId glTs giteaEvent glEvent bbEvent body ->
-        GitSync.gitWebhookPostH
-          host
-          Git.WebhookReq
-            { event = asum [giteaEvent, glEvent, bbEvent]
-            , signature = asum [giteaSig, glSig, bbSig]
-            , gitlabToken = glToken
-            , gitlabWebhookId = glId
-            , gitlabTimestamp = glTs
-            , body = body
-            }
-    , chartsDataShot = Charts.queryMetrics Nothing
-    , avatarGet = avatarGetH
-    , widgetPngGet = widgetPngGetH
-    , proxyLanding = \path ->
-        Onboarding.proxyLandingH path
-          & State.evalState @TriggerEvents mempty
-          & State.evalState @HXRedirectDest Nothing
-          & State.evalState @XWidgetJSON Nothing
-    , deviceCode = Auth.deviceCodeH
-    , deviceToken = Auth.deviceTokenH
-    , emailPreviewList = emailPreviewListH
-    , emailPreview = emailPreviewH
-    , apiV1 = apiV1Server logger env tp
-    , apiV1OpenApi = pure apiV1OpenApiSpec
-    , cookieProtected = \sessionWithCookies ->
-        Servant.hoistServerWithContext
-          (Proxy @(Servant.NamedRoutes CookieProtectedRoutes))
-          (Proxy @'[APItoolkitAuthContext])
-          ( \page ->
-              page
-                & Notify.runNotifyProduction
-                & State.evalState mempty -- TriggerEvents
-                & State.evalState Nothing -- HXRedirectDest
-                & State.evalState Nothing -- XWidgetJSON
-                & Reader.runReader sessionWithCookies
-          )
-          (cookieProtectedServer projectTools)
-    }
+        { public = Servant.serveDirectoryWebApp "./static/public"
+        , ping = pingH
+        , status = statusH
+        , login = Auth.loginH
+        , toLogin = Auth.loginRedirectH
+        , logout = Auth.logoutH
+        , setLanguage = Auth.setLanguageH
+        , authCallback = Auth.authCallbackH
+        , otlpTracesPost = otlpHttpH otlpTraces
+        , otlpLogsPost = otlpHttpH otlpLogs
+        , shareLinkGet = Share.shareLinkGetH
+        , shareReplaySessionGet = Share.shareReplaySessionGetH
+        , discordLinkProjectGet = Discord.linkDiscordGetH
+        , discordInteractions = Discord.discordInteractionsH
+        , slackInteractions = Slack.slackFormPostH $ Slack.slackInteractionsHWithTools projectTools
+        , slackActionsPost = Slack.slackFormPostH Slack.slackActionsH
+        , slackEventsPost = Slack.slackEventsPostH
+        , externalOptionsGet = Slack.slackFormPostH Slack.externalOptionsH
+        , whatsappIncomingPost = Whatsapp.whatsappIncomingPostH
+        , clientMetadata = Auth.clientMetadataH
+        , lemonWebhook = Settings.webhookPostH
+        , stripeWebhook = Settings.stripeWebhookPostH
+        , githubWebhook = \sigM eventM body -> GitSync.gitWebhookPostH Git.GitHub (Git.WebhookReq eventM sigM Nothing Nothing Nothing body)
+        , gitWebhook = \host bbSig giteaSig glSig glToken glId glTs giteaEvent glEvent bbEvent body ->
+            GitSync.gitWebhookPostH
+              host
+              Git.WebhookReq
+                { event = asum [giteaEvent, glEvent, bbEvent]
+                , signature = asum [giteaSig, glSig, bbSig]
+                , gitlabToken = glToken
+                , gitlabWebhookId = glId
+                , gitlabTimestamp = glTs
+                , body = body
+                }
+        , chartsDataShot = Charts.queryMetrics Nothing
+        , avatarGet = avatarGetH
+        , widgetPngGet = widgetPngGetH
+        , proxyLanding = \path ->
+            Onboarding.proxyLandingH path
+              & State.evalState @TriggerEvents mempty
+              & State.evalState @HXRedirectDest Nothing
+              & State.evalState @XWidgetJSON Nothing
+        , deviceCode = Auth.deviceCodeH
+        , deviceToken = Auth.deviceTokenH
+        , emailPreviewList = emailPreviewListH
+        , emailPreview = emailPreviewH
+        , apiV1 = apiV1Server logger env tp
+        , apiV1OpenApi = pure apiV1OpenApiSpec
+        , cookieProtected = \sessionWithCookies ->
+            Servant.hoistServerWithContext
+              (Proxy @(Servant.NamedRoutes CookieProtectedRoutes))
+              (Proxy @'[APItoolkitAuthContext])
+              ( \page ->
+                  page
+                    & Notify.runNotifyProduction
+                    & State.evalState mempty -- TriggerEvents
+                    & State.evalState Nothing -- HXRedirectDest
+                    & State.evalState Nothing -- XWidgetJSON
+                    & Reader.runReader sessionWithCookies
+              )
+              (cookieProtectedServer projectTools)
+        }
 
 
 -- API v1 server

@@ -957,9 +957,10 @@ processSlackEventWithTools projectTools receiptId =
             ( \started -> when started $ whenLeftM_ (tryAny $ setSessionStatus slackData.botToken event.channel threadTs Active >> clearQueuedSlackJob resetJob) \_ ->
                 Log.logAttention "Slack session status cleanup remains queued" $ AE.object ["receipt_id" AE..= receiptId, "channel_id" AE..= event.channel, "thread_ts" AE..= threadTs]
             )
-            ( \_ -> race_
-                (forever $ AI.requireAgentAccess access slackData.projectId >> liftIO (threadDelay 500_000))
-                (withInvestigationProgress slackData access deliverAnswer)
+            ( \_ ->
+                race_
+                  (forever $ AI.requireAgentAccess access slackData.projectId >> liftIO (threadDelay 500_000))
+                  (withInvestigationProgress slackData access deliverAnswer)
             )
         )
         `catch` \AI.AgentStopped -> do

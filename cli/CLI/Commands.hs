@@ -1054,7 +1054,9 @@ runMetricsQuery cfg opts mode = do
 
 runMetricsList :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> MetricsListOpts -> OutputMode -> Eff es ()
 runMetricsList cfg opts mode =
-  withAPIResult cfg "/api/v1/metrics/catalog"
+  withAPIResult
+    cfg
+    "/api/v1/metrics/catalog"
     ( catMaybes
         [ ("service",) <$> opts.service
         , ("search",) <$> opts.search
@@ -1062,11 +1064,13 @@ runMetricsList cfg opts mode =
         , (\value -> ("offset", show value)) <$> opts.offset
         , guard opts.inactive $> ("active", "false")
         ]
-    ) \val ->
+    )
+    \val ->
       renderWith mode val $ case val ^? AL.key "metrics" . AL._Array of
         Nothing -> renderJSON val
         Just metrics -> do
-          renderTable ["metric", "type", "unit", "last seen"]
+          renderTable
+            ["metric", "type", "unit", "last seen"]
             [ [ fromMaybe "" $ metric ^? AL.key "metricName" . AL._String
               , fromMaybe "" $ metric ^? AL.key "metricType" . AL._String
               , fromMaybe "" $ metric ^? AL.key "metricUnit" . AL._String
@@ -1074,8 +1078,8 @@ runMetricsList cfg opts mode =
               ]
             | metric <- V.toList metrics
             ]
-          when (val ^? AL.key "hasMore" . AL._Bool == Just True) $
-            putTextLn "More metrics are available; use --offset to read the next page."
+          when (val ^? AL.key "hasMore" . AL._Bool == Just True)
+            $ putTextLn "More metrics are available; use --offset to read the next page."
 
 
 runMetricsChart :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> MetricsChartOpts -> OutputMode -> Eff es ()
