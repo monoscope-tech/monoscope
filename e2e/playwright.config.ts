@@ -17,7 +17,7 @@ export default defineConfig({
     trace: "on-first-retry",
   },
   projects: [
-    { name: "chromium", use: { ...devices["Desktop Chrome"] }, testIgnore: /(host-map|infrastructure-time-window|rum-sessions)\.spec\.ts$/ },
-    { name: "chromium-fixtures", use: { ...devices["Desktop Chrome"] }, testMatch: /(host-map|infrastructure-time-window|rum-sessions)\.spec\.ts$/, dependencies: ["chromium"], workers: 1 },
+    { name: "chromium", use: { ...devices["Desktop Chrome"] }, testIgnore: /(container-identity|endpoint-analytics|host-map|infrastructure-time-window|metric-exemplars|metrics-catalog|rum-sessions|tabs)\.spec\.ts$/ },
+    { name: "chromium-fixtures", use: { ...devices["Desktop Chrome"] }, testMatch: /(container-identity|endpoint-analytics|host-map|infrastructure-time-window|metric-exemplars|metrics-catalog|rum-sessions|tabs)\.spec\.ts$/, dependencies: ["chromium"], workers: 1 },
   ],
 });

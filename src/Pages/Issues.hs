@@ -679,7 +679,7 @@ stackTrace_ pid serviceM runtimeM raw = case EF.parseStackTrace (EF.parseRuntime
 
 
 -- | Run a lookup that only decides whether an *optional* panel renders, degrading
--- to @fallback@ if it throws rather than taking the page with it.
+-- to @fallback@ if it throws or outlasts ten seconds rather than taking the page with it.
 --
 -- All three call sites read TimeFusion or the replay table to enrich the issue
 -- page; none of them is the page. A transient TF connection error used to
@@ -689,7 +689,7 @@ stackTrace_ pid serviceM runtimeM raw = case EF.parseStackTrace (EF.parseRuntime
 -- states the principle in its own comments ("the trace is supporting evidence,
 -- not the page"); this makes it true of the queries as well as the rendering.
 enriching :: Text -> ATAuthCtx (Maybe a) -> ATAuthCtx (Maybe a)
-enriching what = fmap join . tryWithin Nothing "ISSUE_DETAIL_OPTIONAL_LOOKUP" ["lookup" AE..= what]
+enriching what = fmap join . tryWithin (Just 10_000_000) "ISSUE_DETAIL_OPTIONAL_LOOKUP" ["lookup" AE..= what]
 
 
 -- | Run an optional lookup, bounded by @limitM@ microseconds where a slow read is

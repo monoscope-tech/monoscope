@@ -180,7 +180,7 @@ runQueryAST authCtx dbSource respDataType pid source binDensity environment serv
           scope
           (defSqlQueryCfg pid now source Nothing)
             { binDensity
-            , metricJsonAsVariant = usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource
+            , targetsTimefusion = usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource
             }
 
   case querySQLM of
@@ -754,7 +754,7 @@ queryMetricsStream dbSource dataTypeM pidM queryM querySQLM sinceM fromM toM sou
           Left
           (raw >>= rawSqlScopeError environment service)
       scope = mkScopedQuery pid (fromD, toD) environment service
-      cfg = (applyScopedQuery scope $ defSqlQueryCfg pid now source Nothing){binDensity = density, metricJsonAsVariant = usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource}
+      cfg = (applyScopedQuery scope $ defSqlQueryCfg pid now source Nothing){binDensity = density, targetsTimefusion = usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource}
       run emit = case parsed of
         Left message -> pure $ Left message
         Right ast -> do

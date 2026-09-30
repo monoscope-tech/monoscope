@@ -61,10 +61,11 @@ import Control.Monad.Combinators.Expr (Operator (..), makeExprParser)
 import Data.Aeson qualified as AE
 import Data.Char (isDigit, isSpace)
 import Data.Generics.Product (typed)
+import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (Display, display, displayBuilder, displayPrec)
 import Pkg.Deriving (WrappedEnumSC (..))
-import Pkg.Parser.Expr (Expr (..), Parser, Subject (..), ToQueryText (..), Values (..), defaultBinWidth, knownFieldRoot, kqlTimespanToTimeBucket, metricsFieldUniverse, otelFieldUniverse, pExpr, pSubject, pValues, suggestFieldRoot, unsupportedTimespan)
+import Pkg.Parser.Expr (Expr (..), FieldKey (..), Parser, Subject (..), ToQueryText (..), Values (..), arrayColumns, defaultBinWidth, knownFieldRoot, kqlTimespanToTimeBucket, metricsFieldUniverse, otelFieldUniverse, pExpr, pSubject, pValues, suggestFieldRoot, unsupportedTimespan)
 import Relude hiding (GT, LT, Sum, many, some)
 import Text.Megaparsec
 import Text.Megaparsec.Char (alphaNumChar, char, digitChar, hspace, space, string)
@@ -262,25 +263,45 @@ data Sources = SSpans | SMetrics
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
--- | TimeFusion stores metric JSON columns as variants, so metric queries wrap
--- them in @variant_to_json@ before KQL's JSON-path operators are applied.
--- PostgreSQL stores the same columns as native @jsonb@ and must not use that
--- TimeFusion-only function.
+-- | TimeFusion-only lowerings, keyed on the same flag; with it off the AST is untouched, so
+-- Postgres SQL is byte-identical. Metrics: JSON columns are variants, so wrap them in
+-- @variant_to_json@ before the JSON-path operators. Any source: a bare-wildcard equality on
+-- a native array column ('arrayColumns') becomes @array_has@, ~2.3x faster than the jsonpath
+-- form. Equality only — @!=@ / @in@ / regex quantify differently over the elements.
+--
+-- >>> let tf = fmap (rewriteSectionsForSource True Nothing) . parseQueryToAST
+-- >>> tf "hashes[*] == \"x\""
+-- Right [Search (ArrayHas "hashes" "x")]
+--
+-- Anything else — other operators, a nested path, a non-array column, a non-string value — is untouched:
+--
+-- >>> all (\q -> isRight (parseQueryToAST q) && tf q == parseQueryToAST q) ["hashes[*] != \"x\"", "hashes[*] in (\"x\")", "hashes[*].k == \"x\"", "events[*] == \"x\"", "hashes[*] == 1"]
+-- True
+-- >>> fmap (rewriteSectionsForSource False Nothing) (parseQueryToAST "hashes[*]==\"x\"")
+-- Right [Search (Eq (Subject "hashes[*]" "hashes" [ArrayWildcard ""]) (Str "x"))]
 rewriteSectionsForSource :: Bool -> Maybe Sources -> [Section] -> [Section]
-rewriteSectionsForSource True (Just SMetrics) = mapSubjects \case
-  Subject entire "attributes" keys -> Subject entire "variant_to_json(attributes)" keys
-  Subject entire "resource" keys -> Subject entire "variant_to_json(resource)" keys
-  subject -> subject
-rewriteSectionsForSource _ _ = id
+rewriteSectionsForSource False _ = id
+rewriteSectionsForSource True src =
+  runIdentity . traverseAst (Identity . subject) \case
+    Eq (Subject _ col [ArrayWildcard ""]) (Str v) | S.member col arrayColumns -> ArrayHas col v
+    e -> e
+  where
+    subject = case src of
+      Just SMetrics -> \case
+        Subject entire "attributes" keys -> Subject entire "variant_to_json(attributes)" keys
+        Subject entire "resource" keys -> Subject entire "variant_to_json(resource)" keys
+        s -> s
+      Just SSpans -> id
+      Nothing -> id
 
 
--- | Effectful walk over every Subject reachable from a Section list; the
--- single traversal 'mapSubjects' (rewrite) and 'collectSubjects' (gather)
--- are both derived from. Hand-rolled because generic-lens 'types' overflows
+-- | Effectful walk over every Subject reachable from a Section list, with a pure bottom-up
+-- Expr rewrite applied to each rebuilt predicate; 'rewriteSectionsForSource' (rewrite)
+-- and 'collectSubjects' (gather) are both derived from this single traversal. Hand-rolled because generic-lens 'types' overflows
 -- GHC's reduction depth on this AST (Values/Expr mutual recursion). Any new
 -- Subject-bearing constructor needs its case added here.
-traverseSubjects :: forall m. Applicative m => (Subject -> m Subject) -> [Section] -> m [Section]
-traverseSubjects f = traverse goSec
+traverseAst :: forall m. Applicative m => (Subject -> m Subject) -> (Expr -> Expr) -> [Section] -> m [Section]
+traverseAst f g = traverse goSec
   where
     goSec = \case
       Search e -> Search <$> goE e
@@ -298,36 +319,38 @@ traverseSubjects f = traverse goSec
     sv c s v = c <$> f s <*> goV v
     st :: (Subject -> t -> a) -> Subject -> t -> m a
     st c s t = flip c t <$> f s
-    goE = \case
-      Eq s v -> sv Eq s v
-      NotEq s v -> sv NotEq s v
-      GT s v -> sv GT s v
-      LT s v -> sv LT s v
-      GTEq s v -> sv GTEq s v
-      LTEq s v -> sv LTEq s v
-      Regex mode s t -> st (Regex mode) s t
-      In s v -> sv In s v
-      NotIn s v -> sv NotIn s v
-      Has s v -> sv Has s v
-      NotHas s v -> sv NotHas s v
-      HasAny s v -> sv HasAny s v
-      HasAll s v -> sv HasAll s v
-      Contains s v -> sv Contains s v
-      NotContains s v -> sv NotContains s v
-      StartsWith s v -> sv StartsWith s v
-      NotStartsWith s v -> sv NotStartsWith s v
-      EndsWith s v -> sv EndsWith s v
-      NotEndsWith s v -> sv NotEndsWith s v
-      Paren e -> Paren <$> goE e
-      And a b -> And <$> goE a <*> goE b
-      Or a b -> Or <$> goE a <*> goE b
-      ValEq a b -> ValEq <$> goV a <*> goV b
-      ValNotEq a b -> ValNotEq <$> goV a <*> goV b
-      ValGT a b -> ValGT <$> goV a <*> goV b
-      ValLT a b -> ValLT <$> goV a <*> goV b
-      ValGTEq a b -> ValGTEq <$> goV a <*> goV b
-      ValLTEq a b -> ValLTEq <$> goV a <*> goV b
-      BoolFunc v -> BoolFunc <$> goV v
+    goE =
+      fmap g . \case
+        Eq s v -> sv Eq s v
+        NotEq s v -> sv NotEq s v
+        GT s v -> sv GT s v
+        LT s v -> sv LT s v
+        GTEq s v -> sv GTEq s v
+        LTEq s v -> sv LTEq s v
+        Regex mode s t -> st (Regex mode) s t
+        In s v -> sv In s v
+        NotIn s v -> sv NotIn s v
+        Has s v -> sv Has s v
+        NotHas s v -> sv NotHas s v
+        HasAny s v -> sv HasAny s v
+        HasAll s v -> sv HasAll s v
+        Contains s v -> sv Contains s v
+        NotContains s v -> sv NotContains s v
+        StartsWith s v -> sv StartsWith s v
+        NotStartsWith s v -> sv NotStartsWith s v
+        EndsWith s v -> sv EndsWith s v
+        NotEndsWith s v -> sv NotEndsWith s v
+        Paren e -> Paren <$> goE e
+        And a b -> And <$> goE a <*> goE b
+        Or a b -> Or <$> goE a <*> goE b
+        ValEq a b -> ValEq <$> goV a <*> goV b
+        ValNotEq a b -> ValNotEq <$> goV a <*> goV b
+        ValGT a b -> ValGT <$> goV a <*> goV b
+        ValLT a b -> ValLT <$> goV a <*> goV b
+        ValGTEq a b -> ValGTEq <$> goV a <*> goV b
+        ValLTEq a b -> ValLTEq <$> goV a <*> goV b
+        BoolFunc v -> BoolFunc <$> goV v
+        e@ArrayHas{} -> pure e
     goV = \case
       Field s -> Field <$> f s
       List vs -> List <$> traverse goV vs
@@ -375,17 +398,12 @@ traverseSubjects f = traverse goSec
       ByScalarFunc a -> ByScalarFunc <$> goAgg a
 
 
--- | Apply a Subject rewrite to every Subject reachable from a Section list.
-mapSubjects :: (Subject -> Subject) -> [Section] -> [Section]
-mapSubjects f = runIdentity . traverseSubjects (Identity . f)
-
-
 -- | Every Subject a Section list references, in traversal order.
 --
 -- >>> fmap collectSubjects (parseQueryToAST "name==\"a\" | summarize count(*) by kind")
 -- Right [Subject "name" "name" [],Subject "*" "*" [],Subject "kind" "kind" []]
 collectSubjects :: [Section] -> [Subject]
-collectSubjects = getConst . traverseSubjects (\s -> Const [s])
+collectSubjects = getConst . traverseAst (\s -> Const [s]) id
 
 
 -- | Parse a numeric value (float or int) for percentile values

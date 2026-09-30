@@ -274,7 +274,7 @@ selectLogTable :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time
 selectLogTable useTimefusion pid queryAST queryText cursorM dateRange projectedColsByUser source targetSpansM environment service = do
   now <- Time.currentTime
   let scope = mkScopedQuery pid dateRange environment service
-      cfg = (applyScopedQuery scope $ defSqlQueryCfg pid now source targetSpansM){cursorM, projectedColsByUser, metricJsonAsVariant = useTimefusion}
+      cfg = (applyScopedQuery scope $ defSqlQueryCfg pid now source targetSpansM){cursorM, projectedColsByUser, targetsTimefusion = useTimefusion}
       (q, queryComponents) = queryASTToComponents cfg queryAST
       canonicalOrder = case cursorM of Just (PageCursor PageNewer _) -> V.reverse; _ -> identity
 
