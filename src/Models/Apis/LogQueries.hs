@@ -56,6 +56,7 @@ import Database.PostgreSQL.Simple.ToField (ToField)
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
+import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
 import Effectful.Time qualified as Time
@@ -71,7 +72,7 @@ import Pkg.Parser.Stats (Section, Sources (..))
 import Relude hiding (many, some)
 import Relude.Extra.Foldable1 (maximum1, minimum1)
 import System.Logging qualified as Log
-import System.Tracing (Tracing, withSpan_)
+import System.Tracing (Tracing, forkWithCtx, withSpan_)
 import Utils (listToIndexHashMap, lookupVecNonEmptyText, replaceAllFormats, toUriStr)
 import Web.HttpApiData (FromHttpApiData (..))
 
@@ -723,7 +724,7 @@ sessionSortLabel ordering = T.toUpper (T.take 1 label) <> T.drop 1 label
     label = T.replace "_" " " $ sessionSortParam ordering
 
 
-fetchSessions :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Bool -> Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Text -> Maybe Text -> Maybe SessionSort -> Int -> Bool -> Eff es (Maybe SessionSummary, Int, [SessionRow])
+fetchSessions :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Ki.StructuredConcurrency :> es) => Bool -> Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Text -> Maybe Text -> Maybe SessionSort -> Int -> Bool -> Eff es (Maybe SessionSummary, Int, [SessionRow])
 fetchSessions enableTfReads pid queryAST dateRange environment service sortByM skip header = do
   now <- Time.currentTime
   let scope = mkScopedQuery pid dateRange environment service
@@ -736,38 +737,42 @@ fetchSessions enableTfReads pid queryAST dateRange environment service sortByM s
   -- One scan of the window keyed by 'sessionKeyExpr' (identity = MAX non-null per session),
   -- with only rollup-servable aggregates: a distinct count per group (trace ids, services)
   -- forces the raw store — 7s against 0.15s. Sorting, paging and the header happen here.
-  sessions :: [SessionAggRow] <-
-    Hasql.withHasqlTimefusion enableTfReads
-      $ Hasql.interp
-      $ [HI.sql|SELECT |]
-      <> keySql
-      <> [HI.sql| AS session_id,
+  -- The header's service read (GROUP BY service rather than a distinct count, which also
+  -- keeps it on the rollups) runs alongside the scan: on long-session projects both are
+  -- raw window scans of several seconds each.
+  (sessions :: [SessionAggRow], serviceRows :: [Maybe Text]) <- Ki.scoped \ks -> do
+    servicesT <-
+      forkWithCtx ks
+        $ if not header
+          then pure []
+          else
+            Hasql.withHasqlTimefusion enableTfReads
+              $ Hasql.interp
+              $ [HI.sql|SELECT resource___service___name FROM otel_logs_and_spans WHERE |]
+              <> whereSql
+              <> [HI.sql| GROUP BY 1|]
+    sessions <-
+      Hasql.withHasqlTimefusion enableTfReads
+        $ Hasql.interp
+        $ [HI.sql|SELECT |]
+        <> keySql
+        <> [HI.sql| AS session_id,
             MAX(attributes___user___id), MAX(attributes___user___email),
             MAX(COALESCE(NULLIF(attributes___user___full_name, ''), NULLIF(attributes___user___name, ''))),
             COUNT(*)::BIGINT,
             COUNT(*) FILTER (WHERE |]
-      <> rawSql severityIsErrorSql
-      <> [HI.sql|)::BIGINT,
+        <> rawSql severityIsErrorSql
+        <> [HI.sql|)::BIGINT,
             MIN(timestamp), MAX(COALESCE(end_time, timestamp))
           FROM otel_logs_and_spans
           WHERE |]
-      <> whereSql
-      <> [HI.sql| AND |]
-      <> keySql
-      <> [HI.sql| IS NOT NULL
+        <> whereSql
+        <> [HI.sql| AND |]
+        <> keySql
+        <> [HI.sql| IS NOT NULL
           GROUP BY 1|]
+    (sessions,) <$> Ki.atomically (Ki.await servicesT)
   Log.logTrace "fetchSessions: query done" $ AE.object ["rows" AE..= length sessions]
-  -- Services seen in the window, for the header tile. Grouping by the service (instead of
-  -- a distinct count) keeps this on the rollups.
-  serviceRows :: [Maybe Text] <-
-    if not header
-      then pure []
-      else
-        Hasql.withHasqlTimefusion enableTfReads
-          $ Hasql.interp
-          $ [HI.sql|SELECT resource___service___name FROM otel_logs_and_spans WHERE |]
-          <> whereSql
-          <> [HI.sql| GROUP BY 1|]
   let durationNs r = round (diffUTCTime r.lastSeen r.firstSeen * 1e9) :: Int64
       ordered = sortOn (Down . case ordering of SortLastSeen -> Left . (.lastSeen); SortFirstSeen -> Left . (.firstSeen); SortDuration -> Right . durationNs; SortErrors -> Right . (.errorCount); SortEvents -> Right . (.eventCount)) sessions
       page = take aggregatePageSize $ drop skip ordered
