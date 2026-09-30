@@ -236,17 +236,19 @@ errorPredicate = rawSql errorSql
 -- | Presence plus the two headline numbers that have no sparkline, from one scan of the
 -- window: the session and P75 tiles then arrive with the panel (and share its cache) instead
 -- of each spinning through its own fetch. The page-view and error tiles keep fetching: their
--- sparkline series is the same request as their number.
+-- sparkline series is the same request as their number. @HAVING@ turns an empty window into
+-- no row, so presence is the row's existence.
 rumPulse :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> Eff es (Maybe RumPulse)
 rumPulse scope =
   Hasql.withHasqlTimefusion scope.useTf
     $ Hasql.interpOne
-    $ [HI.sql|SELECT COUNT(*)::bigint, COUNT(DISTINCT NULLIF(attributes___session___id, ''))::bigint,
+    $ [HI.sql|SELECT COUNT(DISTINCT NULLIF(attributes___session___id, ''))::bigint,
         (approx_percentile(0.75, percentile_agg(CASE WHEN |]
     <> pageViewPredicate
     <> [HI.sql| THEN duration END)) / 1000000.0)::float8
       FROM otel_logs_and_spans WHERE |]
     <> browserScope scope
+    <> [HI.sql| HAVING COUNT(*) > 0|]
 
 
 rumPages :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> Eff es [RumPage]
@@ -764,7 +766,7 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
               | otherwise = SkipCache
               where
                 populated = case result of
-                  PulseResult pulse -> any ((> 0) . (.events)) pulse
+                  PulseResult pulse -> isJust pulse
                   PagesResult rows -> not $ null rows
                   ErrorsResult rows -> not $ null rows
                   SessionsResult rows -> not $ null rows
@@ -819,7 +821,7 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
     let (degradedPanels, served) = partitionEithers outcomes
         results = map fst served
         servedStale = any snd served
-        pulse = mfilter ((> 0) . (.events)) $ asum [value | PulseResult value <- results]
+        pulse = asum [value | PulseResult value <- results]
         pages = fold [value | PagesResult value <- results]
         errors = fold [value | ErrorsResult value <- results]
         sessions = fold [value | SessionsResult value <- results]

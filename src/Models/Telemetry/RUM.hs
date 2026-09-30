@@ -501,10 +501,9 @@ SELECT ROW(read_kind,population,epoch_series,epoch_start) FROM reads
     <> concatMap (sortWith (.metricName) . snd) (take 150 orderedPages)
 
 
--- | The Overview's headline numbers from one scan of the window. Presence is @events > 0@.
+-- | The Overview's headline numbers from one scan of the window; a window with no browser telemetry yields no row.
 data RumPulse = RumPulse
-  { events :: Int64
-  , sessions :: Int64
+  { sessions :: Int64
   , p75LoadMs :: Maybe Double
   }
   deriving stock (Eq, Generic, Show)

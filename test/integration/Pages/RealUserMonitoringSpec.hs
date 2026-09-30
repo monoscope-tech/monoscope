@@ -523,14 +523,15 @@ spec = sequential $ aroundAll withTestResources do
       overviewData <- case overviewBody of
         DeferredBody loaded -> pure loaded
         DeferredShell{} -> fail "RUM answered with the deferred shell when asked for the body"
-      isJust overviewData.pulse `shouldBe` True
+      (\p -> (p.sessions, isJust p.p75LoadMs)) <$> overviewData.pulse `shouldBe` Just (2, True)
       overviewData.degradedPanels `shouldBe` []
       overview <- renderPage tr Nothing Nothing Nothing Nothing
       -- The unscoped read caches under an unscoped key; `service` is part of that key so a
       -- scoped page can never be served these rows.
       isJust <$> Cache.lookup tr.trATCtx.rumCache (RUMData.RumCacheKey testPid (RUMData.VitalPopulationQuery RUMData.OneHour) Nothing Nothing Nothing Nothing (Just "24H")) `shouldReturn` True
       -- The numbers and activity chart are dashboard Widget components that fetch their own
-      -- data through the chart pipeline; the page ships their queries, not their values.
+      -- data through the chart pipeline; the page ships their queries. The session and P75
+      -- tiles also arrive with their value from the pulse row above.
       overview `shouldContainAll` ["Page views", "Browser errors", "{{query_ast_filters}}", "rum-activity", "Largest Contentful Paint", "2.2 s", "/checkout", "Ada Lovelace"]
       -- The LIVE badge is only honest if something listens for the time transport's tick, and
       -- the panels hold every number on this page. Each re-fetches itself in place.
@@ -684,7 +685,7 @@ spec = sequential $ aroundAll withTestResources do
       -- The project has browser telemetry from the preceding examples. It must not leak into
       -- a link scoped to another environment merely because this test session's default is
       -- unscoped.
-      isJust pulse.pulse `shouldBe` False
+      pulse.pulse `shouldBe` Nothing
 
       (_, RUM.RumGet (PageCtx _ sessionsBody)) <- testServant tr $ RUM.rumGetScopedH testPid (Just "sessions") Nothing Nothing Nothing Nothing (Just "24H") (Just sessionId) Nothing (Just "sessions") (Just "1") Nothing (Just "missing-environment")
       case sessionsBody of
