@@ -597,7 +597,7 @@ with open(sys.argv[1], "w") as lock:
   # is in flight makes the running shell resume at a stale offset and die with
   # "syntax error near unexpected token". A `make ci` lasts tens of minutes —
   # long enough that editing it meanwhile is a normal thing to do, not a mistake.
-  compose run --rm "${git_mount[@]}" "${refs_mount[@]}" \
+  compose run --rm ${git_mount[@]+"${git_mount[@]}"} ${refs_mount[@]+"${refs_mount[@]}"} \
     -e CI_ROOT=/build \
     -e "CI_ALLOW_DEGRADED=${CI_ALLOW_DEGRADED:-}" -e "CI_FORCE=${CI_FORCE:-}" -e "CI_KEEP_GOING=${CI_KEEP_GOING:-}" \
     -e "CI_NO_ATTEST=${CI_NO_ATTEST:-}" \
