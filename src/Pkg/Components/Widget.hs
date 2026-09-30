@@ -1194,13 +1194,14 @@ renderChart widget = do
           unless (widget.wType == WTStat) $ div_ [class_ $ "relative h-0 max-h-full overflow-hidden w-full flex-1 min-h-0" <> if isStat then "" else " p-3"] do
             div_ [class_ "chart-render-slot h-full min-h-full w-full", id_ chartId, data_ "chart-widget" "", term "hx-morph-skip" ""] ""
             -- A stat tile's value already says "0"; the two-line overlay only clips inside it.
-            unless isStat $ div_
-              [ id_ $ chartId <> "_empty"
-              , class_ "chart-no-data hidden absolute inset-3 z-10 flex items-center justify-center bg-bgRaised px-4 text-center"
-              , role_ "status"
-              , Aria.live_ "polite"
-              , Aria.atomic_ "true"
-              ]
+            unless isStat
+              $ div_
+                [ id_ $ chartId <> "_empty"
+                , class_ "chart-no-data hidden absolute inset-3 z-10 flex items-center justify-center bg-bgRaised px-4 text-center"
+                , role_ "status"
+                , Aria.live_ "polite"
+                , Aria.atomic_ "true"
+                ]
               $ div_ [class_ "max-w-sm"] do
                 strong_ [class_ "text-sm font-semibold text-textStrong"] "No data in this time range"
                 p_ [class_ "mt-1 text-xs leading-5 text-textWeak"] "Try a wider time range or adjust the filters."
