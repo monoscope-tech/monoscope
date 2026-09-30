@@ -1,17 +1,16 @@
 import { test, expect } from "@playwright/test";
-import { DEMO_PROJECT, awaitInfraSnapshotExpiry, sql } from "./helpers";
+import { DEMO_PROJECT, sql } from "./helpers";
 
-const HOST_MAP_URL = `/p/${DEMO_PROJECT}/infrastructure/host-map?since=5M`;
+// 300S is a five-minute window with its own raw cache key among fixture suites.
+const HOST_MAP_URL = `/p/${DEMO_PROJECT}/infrastructure/host-map?since=300S`;
 
 const HOST = "e2e-host-without-usage";
 const cleanup = `DELETE FROM otel_metrics WHERE project_id='${DEMO_PROJECT}' AND resource___host___name='${HOST}';`;
-test.beforeAll(async () => {
-  test.setTimeout(60_000);
+test.beforeAll(() => {
   sql(cleanup + `
   INSERT INTO otel_metrics (project_id,id,series_id,timestamp,metric_name,metric_type,value,resource___host___name,resource)
   VALUES ('${DEMO_PROJECT}',gen_random_uuid(),'e2e-host',now(),'system.uptime','GAUGE',60,'${HOST}',
     '{"host":{"name":"${HOST}"},"os":{"type":"linux"}}');`);
-  await awaitInfraSnapshotExpiry();
 });
 test.afterAll(() => sql(cleanup));
 
