@@ -56,7 +56,10 @@ sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -d' ' -
 # into rendered pages, so a bundle change is a Haskell-visible change. The three
 # static/ dirs are TH-embedded outright — dashboard templates by DashboardTemplates,
 # translations by Web.I18n, icon sprites by Pkg.Icons — so editing one recompiles.
-PATHSET_hs='app src shared cli test tests config proto static/migrations static/public/dashboards static/i18n static/public/assets/svgs/fa-sprites package.yaml cabal.project cabal.project.freeze hpack-includes monoscope.cabal shared/monoscope-shared.cabal cli/monoscope-cli.cabal'
+# monoscope.cabal is NOT an input: hpack regenerates it from package.yaml + hpack-includes
+# (both listed) at the start of every run, and a differing hpack version rewrites its header,
+# which the end-of-run inputs_unchanged guard would otherwise report as a concurrent edit.
+PATHSET_hs='app src shared cli test tests config proto static/migrations static/public/dashboards static/i18n static/public/assets/svgs/fa-sprites package.yaml cabal.project cabal.project.freeze hpack-includes shared/monoscope-shared.cabal cli/monoscope-cli.cabal'
 PATHSET_fe='web-components/src web-components/test web-components/package.json web-components/package-lock.json web-components/vite.config.mjs web-components/tsconfig.json web-components/vitest.config.ts web-components/index.html package.json package-lock.json config/tailwind.config.js static/public/assets/css/tailwind.css'
 # What the frontend checks read outside web-components: the hyperscript guard parses every
 # [__|…|] and interpolated attributes in src/, tailwind scans src/**/*.hs, two specs load the vendored htmx builds.

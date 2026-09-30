@@ -210,21 +210,19 @@ jobs:
           mkdir -p static/public/assets/web-components/dist/js
           mkdir -p static/public/assets/web-components/dist/css
 
-      # Attest the fingerprints the gate looked up. hpack below rewrites
-      # monoscope.cabal, which is one of the inputs — recomputing after it would
-      # attest a fingerprint no gate will ever ask for, and nothing would be reused.
+      # Attest the fingerprints the gate looked up: recomputing after the steps below
+      # rewrite the tree would attest a fingerprint no gate will ever ask for.
       - name: Pin fingerprints from gate
         env:
           FINGERPRINTS: ${{ needs.gate.outputs.fingerprints }}
         run: mkdir -p .ci && printf '%s\n' "$FINGERPRINTS" > .ci/fingerprints.tsv
 
       - name: Install hpack
-        run: cabal install --install-method=copy --overwrite-policy=always hpack-0.39.5
+        run: cabal install --install-method=copy --overwrite-policy=always hpack-0.39.6
 
       # Delete first: hpack refuses to overwrite a .cabal whose header names a
-      # newer hpack than its own. Keep the installed version pinned to the one
-      # that generated the checked-in manifest: the generated header participates
-      # in CI fingerprints, so version drift otherwise invalidates a passing build.
+      # newer hpack than its own. Keep the installed version pinned to the one that
+      # generated the checked-in manifest so CI builds the same cabal file developers do.
       - name: Regenerate cabal file
         run: rm -f monoscope.cabal && hpack
 
