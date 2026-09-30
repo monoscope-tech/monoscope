@@ -355,6 +355,7 @@ run_body() { # <check>
 # under the server's max_connections.
 run_integration() {
   local shards bin i green
+  local -a shard_pids=()
   shards=${CI_SHARDS:-4}
   # Without a reachable TimeFusion the URL must go, or every example dies dialling
   # a dead host instead of taking TestUtils' Postgres-as-TimeFusion fallback. Only
@@ -371,8 +372,9 @@ run_integration() {
   for i in $(seq 0 $((shards - 1))); do
     ( start=$(date +%s); SHARD_INDEX=$i SHARD_TOTAL=$shards "$bin" --color > "build-shard-$i.log" 2>&1
       echo "[shard-time] $(( $(date +%s) - start ))s" >> "build-shard-$i.log" ) &
+    shard_pids+=("$!")
   done
-  wait
+  for i in "${shard_pids[@]}"; do wait "$i" || true; done
   echo "=== per-shard (wall-clock | result) — wide spreads ⇒ rebalance ==="
   for i in $(seq 0 $((shards - 1))); do
     printf "shard %s: %-6s | %s\n" "$i" "$(sed -n 's/.*\[shard-time\] //p' "build-shard-$i.log" | tail -1)" \
@@ -430,13 +432,26 @@ cmd_gate() {
 }
 
 cmd_run() {
-  local c req ref rc=0 unrunnable='' degraded=''
+  local c req ref rc=0 unrunnable='' degraded='' e2e_pid='' e2e_log='' e2e_result=''
+  local checks
+  checks=$(selected_checks "$@")
   CAPS=$(detect_caps)
   note "capabilities: ${CAPS:-none}"
   # shellcheck disable=SC2046
-  [ -n "${CI_FINGERPRINTS:-}" ] || pin_fingerprints $(selected_checks "$@")
+  [ -n "${CI_FINGERPRINTS:-}" ] || pin_fingerprints $checks
   [ "${CI_FORCE:-}" = "true" ] || remote_refs >/dev/null
-  for c in $(selected_checks "$@"); do
+  for c in $checks; do
+    if [ "$c" = e2e ] && [ -n "$e2e_pid" ]; then
+      if wait "$e2e_pid"; then
+        [ ! -s "$e2e_result" ] || cat "$e2e_result" >> "$CI_ATTEST_OUT"
+      else
+        rc=1
+      fi
+      cat "$e2e_log"
+      rm -f "$e2e_log" "$e2e_result"
+      [ "$rc" -eq 0 ] || [ "${CI_KEEP_GOING:-}" = "true" ] || return 1
+      continue
+    fi
     req=$(check_requires "$c")
     # A missing capability is never a silent pass — this run can say nothing about
     # that check. CI_ALLOW_DEGRADED still runs it for the feedback (e.g. the suite
@@ -454,6 +469,15 @@ cmd_run() {
       note "$c already proven ($ref) — skipping (CI_FORCE=true to override)"
       continue
     fi
+    # These suites use separate databases. Starting the browser suite here lets
+    # it share integration's long execution phase after the build has completed.
+    if [ "$c" = integration-tests ] && [ -n "${CI_ATTEST_OUT:-}" ] \
+       && case " $(echo "$checks" | tr '\n' ' ') " in *" integration-tests "*" e2e "*) true ;; *) false ;; esac; then
+      e2e_log=$(mktemp -t ci-e2e-log.XXXXXX)
+      e2e_result=$(mktemp -t ci-e2e-result.XXXXXX)
+      CI_ATTEST_OUT="$e2e_result" "$0" run e2e > "$e2e_log" 2>&1 &
+      e2e_pid=$!
+    fi
     note "running $c"
     local started=$SECONDS
     if run_body "$c"; then
@@ -470,7 +494,7 @@ cmd_run() {
     else
       rc=1
       note "FAILED $c"
-      [ "${CI_KEEP_GOING:-}" = "true" ] || return 1
+      [ "${CI_KEEP_GOING:-}" = "true" ] || [ -n "$e2e_pid" ] || return 1
     fi
   done
   [ -z "$unrunnable" ] || note "not run here (CI will still have to):$unrunnable"
