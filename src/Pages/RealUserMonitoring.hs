@@ -1450,6 +1450,8 @@ sessionsTable_ workspace now links query sessionFilter selectedSession sessions 
                              , title_ $ sessionIdentity session
                              , onkeydown_ "if (event.key === 'Enter') event.stopPropagation()"
                              ]
+                          -- A shared link lands with its row in view; the list morphs on refresh, so this fires once.
+                          <> [term "_" "init call me.scrollIntoView({block: 'center'})" | selectedSession == Just session.id]
                       )
                       $ toHtml
                       $ if sessionIdentity session == session.id then "Session " <> T.take 8 session.id else sessionIdentity session
@@ -1503,7 +1505,7 @@ sessionsTable_ workspace now links query sessionFilter selectedSession sessions 
                     "Replay"
                   else span_ [class_ "mt-0.5 block text-xs text-textWeak"] "No replay"
             )
-              { Table.attrs = [class_ $ bool "w-[18%]" "w-[16%]" workspace <> " px-2 py-2.5"]
+              { Table.attrs = [class_ $ bool "w-[18%]" "w-[16%]" workspace <> " max-sm:w-[20%] px-2 py-2.5"]
               }
           ]
       , rows = V.fromList sessions
@@ -1569,33 +1571,50 @@ sessionsTable_ workspace now links query sessionFilter selectedSession sessions 
 replayWorkspace_ :: RumLinks -> Maybe RumSession -> Html ()
 replayWorkspace_ links = \case
   Just session -> div_ [class_ "min-h-full"] do
-    header_ [class_ "flex flex-wrap items-center justify-between gap-3 border-b border-strokeWeak bg-bgBase px-4 py-3"] do
-      div_ [class_ "flex min-w-0 items-center gap-3"] do
-        sessionAvatar_ session
-        div_ [class_ "min-w-0"] do
-          div_ [class_ "flex items-center gap-2"] do
-            h2_ [class_ "truncate text-sm font-semibold text-textStrong"] $ toHtml $ sessionIdentity session
-            forM_ (classifyUserAgent <$> session.userAgent) \(browser, os, device) -> do
-              envChip_ browser
-              span_ [class_ "text-xs text-textWeak"] $ toHtml os
-              faSprite_ (deviceIcon device) "solid" "h-3 w-3 text-iconNeutral"
-          p_ [class_ "mt-0.5 truncate font-mono text-xs text-textWeak"] $ toHtml session.id
-      a_ [href_ $ sessionLogsUrl links session.id, class_ "btn btn-sm gap-1.5"] do
-        faSprite_ "magnifying-glass-chart" "regular" "h-3.5 w-3.5"
-        "Inspect telemetry"
+    header_ [class_ "border-b border-strokeWeak bg-bgBase px-4 py-3"] do
+      div_ [class_ "flex flex-wrap items-center justify-between gap-3"] do
+        div_ [class_ "flex min-w-0 items-center gap-3"] do
+          sessionAvatar_ session
+          div_ [class_ "min-w-0"] do
+            div_ [class_ "flex items-center gap-2"] do
+              h2_ [class_ "truncate text-sm font-semibold text-textStrong"] $ toHtml $ sessionIdentity session
+              forM_ (classifyUserAgent <$> session.userAgent) \(browser, os, device) -> do
+                envChip_ browser
+                span_ [class_ "text-xs text-textWeak"] $ toHtml os
+                faSprite_ (deviceIcon device) "solid" "h-3 w-3 text-iconNeutral"
+            p_ [class_ "mt-0.5 truncate font-mono text-xs text-textWeak"] $ toHtml session.id
+        a_ [href_ $ sessionLogsUrl links session.id, class_ "btn btn-sm gap-1.5"] do
+          faSprite_ "magnifying-glass-chart" "regular" "h-3.5 w-3.5"
+          "Inspect telemetry"
+      -- The facts the list row carries, so a shared link answers "how long, how many pages,
+      -- any errors" before the recording has loaded. Errors are the only tinted value.
+      dl_ [class_ "mt-2 flex flex-wrap items-baseline gap-x-4 gap-y-1 text-xs tabular-nums"] do
+        let fact :: Text -> Text -> Maybe Text -> Html ()
+            fact label value hint = div_ [class_ "flex min-w-0 items-baseline gap-1"] do
+              dt_ [class_ "shrink-0 text-textWeak"] $ toHtml label
+              dd_ (class_ "truncate font-medium text-textStrong" : [title_ h | Just h <- [hint]]) $ toHtml value
+        fact "Duration" (formatSessionDuration session) Nothing
+        if replayOnly session
+          then div_ do
+            dt_ [class_ "sr-only"] "Telemetry"
+            dd_ [class_ "text-textWeak"] "No telemetry"
+          else do
+            fact "Page views" (show session.views) Nothing
+            fact "Events" (show session.events) Nothing
+            if session.errors > 0
+              then div_ do
+                dt_ [class_ "sr-only"] "Errors"
+                dd_ [class_ "inline-flex items-center gap-1 rounded-full bg-fillError-weak px-1.5 py-0.5 font-medium text-textError"] do
+                  faSprite_ "triangle-exclamation" "solid" "h-2.5 w-2.5 shrink-0"
+                  toHtml $ countNoun session.errors "error"
+              else fact "Errors" "0" Nothing
+        forM_ session.lastPage \url -> fact "Last page" (pageLabel url) (Just url)
+        forM_ session.service \service -> fact "Service" service (Just service)
     if session.hasReplay
       then termRaw "session-replay" [id_ "rumSessionReplay", term "initialSession" session.id, term "consoleOpen" "true", term "fullWidth" "true", class_ "block min-h-[34rem] w-full", term "projectId" links.queryScope.projectId.toText, term "containerId" "rum-replay-workspace"] ("" :: Text)
-      else div_ [class_ "space-y-6 p-4"] do
-        dl_ [class_ "grid grid-cols-2 gap-4 sm:grid-cols-4"] do
-          forM_ [("Duration" :: Text, formatSessionDuration session), ("Page views", show session.views), ("Events", show session.events), ("Errors", show session.errors)] \(label, value) -> div_ do
-            dt_ [class_ "text-xs text-textWeak"] $ toHtml label
-            dd_ [class_ "mt-1 text-sm font-medium tabular-nums text-textStrong"] $ toHtml value
-          forM_ ([("Last page", session.lastPage), ("Service", session.service)] :: [(Text, Maybe Text)]) \(label, value) -> forM_ value \text -> div_ [class_ "col-span-full min-w-0"] do
-            dt_ [class_ "text-xs text-textWeak"] $ toHtml label
-            dd_ [class_ "mt-1 break-words text-sm text-textStrong"] $ toHtml text
-        div_ [class_ "space-y-1"] do
-          h3_ [class_ "text-sm font-medium text-textStrong"] "No recording for this session"
-          p_ [class_ "text-sm text-textWeak"] "Inspect telemetry to follow navigation, network requests, and errors."
+      else div_ [class_ "space-y-1 p-4"] do
+        h3_ [class_ "text-sm font-medium text-textStrong"] "No recording for this session"
+        p_ [class_ "text-sm text-textWeak"] "Inspect telemetry to follow navigation, network requests, and errors."
   Nothing ->
     div_ [class_ "flex min-h-[34rem] flex-col items-center justify-center p-8"]
       $ Components.emptyState_ def{icon = Just "video"} "Select a session" "Choose a session to inspect its activity or watch an available recording."
