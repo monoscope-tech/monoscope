@@ -1,6 +1,6 @@
 # Slack Agent consolidation plan
 
-Status: proposed implementation plan. Research and code inspection are complete; this plan does not claim live Slack acceptance or authorize implementation.
+Status: implementation in progress. Interactive project writes require an in-app, per-message grant; confirmed writes remain unavailable. The native Slack Agent has not passed sandbox acceptance or gone live.
 
 This plan narrows the [Slack Agent roadmap](2026-09-08-slack-agent.md) to the unfinished conversation and tool experience. The [implementation log](2026-09-08-slack-agent-implementation.md) records earlier work. Current code, tests, and live behavior take precedence over old status notes in that log.
 

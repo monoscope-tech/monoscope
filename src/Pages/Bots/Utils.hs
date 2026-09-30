@@ -1,4 +1,4 @@
-module Pages.Bots.Utils (BotEmoji (..), BotType (..), BotReply (..), botReplyPayload, BotResponse (..), Channel (..), authHeader, contentTypeHeader, dcContainer, dcText, dcGallery, dcLinkButton, processAIQuery, processAIQueryWithMode, storeAgenticResponse, verifyWidgetSignature, QueryIntent (..), detectReportIntent, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, runBotQuery, slackResponse, withBotThread, withDashboardTemplate, parseInstallState, installedResponse) where
+module Pages.Bots.Utils (BotEmoji (..), BotType (..), BotReply (..), botReplyPayload, BotResponse (..), Channel (..), authHeader, contentTypeHeader, dcContainer, dcText, dcGallery, dcLinkButton, processAIQuery, processAIQueryWithTools, processActionableAIQueryWithTools, processAIQueryWithMode, storeAgenticResponse, verifyWidgetSignature, QueryIntent (..), detectReportIntent, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, runBotQuery, runBotQueryWithTools, slackResponse, withBotThread, withDashboardTemplate, parseInstallState, installedResponse) where
 
 import Control.Lens ((.~), (^?))
 import Data.Aeson qualified as AE
@@ -195,11 +195,19 @@ data Channel = Channel
 
 
 processAIQuery :: (DB es, ELLM.LLM :> es, HTTP :> es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es, UUIDEff :> es) => Maybe EnvConfig -> Bool -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe (UUIDId "conversation") -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
-processAIQuery sourceConfig useTf = processAIQueryWithMode sourceConfig useTf AI.InteractiveReadOnly
+processAIQuery sourceConfig useTf = processAIQueryWithTools sourceConfig useTf Nothing
 
 
-processAIQueryWithMode :: (DB es, ELLM.LLM :> es, HTTP :> es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es, UUIDEff :> es) => Maybe EnvConfig -> Bool -> AI.InvocationMode -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe (UUIDId "conversation") -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
-processAIQueryWithMode sourceConfig useTf invocationMode access pid userQuery conversationId model apiKey = do
+processAIQueryWithTools :: (DB es, IOE :> es, UUIDEff :> es, ELLM.LLM :> es, HTTP :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Maybe EnvConfig -> Bool -> Maybe AI.ProjectTools -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe (UUIDId "conversation") -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
+processAIQueryWithTools sourceConfig useTf projectTools = processAIQueryWithMode sourceConfig useTf projectTools AI.InteractiveReadOnly
+
+
+processActionableAIQueryWithTools :: (DB es, IOE :> es, UUIDEff :> es, ELLM.LLM :> es, HTTP :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Maybe EnvConfig -> Bool -> Maybe AI.ProjectTools -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe (UUIDId "conversation") -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
+processActionableAIQueryWithTools sourceConfig useTf projectTools = processAIQueryWithMode sourceConfig useTf projectTools AI.InteractiveWithActions
+
+
+processAIQueryWithMode :: (DB es, IOE :> es, UUIDEff :> es, ELLM.LLM :> es, HTTP :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Maybe EnvConfig -> Bool -> Maybe AI.ProjectTools -> AI.InvocationMode -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe (UUIDId "conversation") -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
+processAIQueryWithMode sourceConfig useTf projectTools invocationMode access pid userQuery conversationId model apiKey = do
   AI.requireAgentAccess access pid
   now <- Time.currentTime
   facetSummaryM <- SchemaCatalog.getFacetSummary Nothing pid "otel_logs_and_spans" (addUTCTime (-86400) now) now
@@ -212,6 +220,7 @@ processAIQueryWithMode sourceConfig useTf invocationMode access pid userQuery co
           , AI.access = access
           , AI.sourceConfig = sourceConfig
           , AI.invocationMode = invocationMode
+          , AI.projectTools = projectTools
           , AI.maxIterations = case access of
               AI.SlackInvestigationAccess{} -> 12
               AI.SlackAccess{} -> defaults.maxIterations
@@ -302,7 +311,21 @@ runBotQuery
   -- ^ resolves the conversation thread; run only for agentic queries, so a
   -- report request never pays for a thread backfill
   -> Eff es ()
-runBotQuery target deliver envCfg access pid userQuery resolveThread =
+runBotQuery = runBotQueryWithTools Nothing
+
+
+runBotQueryWithTools
+  :: (DB es, ELLM.LLM :> es, HTTP :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es)
+  => Maybe AI.ProjectTools
+  -> BotType
+  -> (BotReply -> Eff es ())
+  -> EnvConfig
+  -> AI.AgentAccess
+  -> Projects.ProjectId
+  -> Text
+  -> Eff es (Maybe (UUIDId "conversation"))
+  -> Eff es ()
+runBotQueryWithTools projectTools target deliver envCfg access pid userQuery resolveThread =
   AI.requireAgentAccess access pid >> case detectReportIntent userQuery of
     ReportIntent reportType ->
       Issues.getLatestReportByType pid reportType >>= \case
@@ -315,7 +338,7 @@ runBotQuery target deliver envCfg access pid userQuery resolveThread =
           send $ ReplyText $ formatReport report eventsUrl errorsUrl
     GeneralQueryIntent -> do
       threadM <- resolveThread
-      processAIQuery (Just envCfg) envCfg.enableTimefusionReads access pid userQuery threadM envCfg.openaiModel envCfg.openaiApiKey
+      processAIQueryWithMode (Just envCfg) envCfg.enableTimefusionReads projectTools AI.InteractiveReadOnly access pid userQuery threadM envCfg.openaiModel envCfg.openaiApiKey
         >>= either (const $ send $ ReplyText $ formatBotError target ServiceError) dispatchAIResponse
   where
     send reply = AI.requireAgentAccess access pid >> deliver reply

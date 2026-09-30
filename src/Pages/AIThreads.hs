@@ -1,18 +1,21 @@
-module Pages.AIThreads (AIChatForm (..), RoutineForm (..), RoutineTemplateForm (..), RoutineDestinationForm (..), TitleForm (..), threadsGetH, threadGetH, routinesGetH, routineInstallPostH, startThreadPostH, threadPostH, threadTitlePostH, threadDeleteH, routinePostH, routinePausePostH, routineCancelPostH, routineResumePostH, routineDestinationPostH, routineDeleteH) where
+module Pages.AIThreads (AIChatForm (..), RoutineForm (..), RoutineTemplateForm (..), RoutineDestinationForm (..), TitleForm (..), threadsGetH, threadGetH, routinesGetH, routineInstallPostH, startThreadPostHWithTools, threadPostHWithTools, threadTitlePostH, threadDeleteH, routinePostH, routinePausePostH, routineCancelPostH, routineResumePostH, routineDestinationPostH, routineDeleteH, aiSearchH) where
 
 import BackgroundJobs qualified
 import Data.Aeson qualified as AE
 import Data.Default (def)
+import Data.Aeson.Types qualified as AET
 import Data.Effectful.UUID qualified as UUID
 import Data.Text qualified as T
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Effectful.Concurrent.Async (concurrently)
+import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static (ask)
 import Lucid hiding (for_)
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxConfirm_, hxDelete_, hxGet_, hxIndicator_, hxPost_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Issues qualified as Issues
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkAIPageCtx, navTabAttrs)
 import Pages.Bots.Utils qualified as Bots
@@ -22,6 +25,7 @@ import Pkg.AI qualified as AI
 import Pkg.Components.Table (Config (..), EmptyStateAction (..), Features (..), Table (..), ZeroState (ZeroState), col, withAttrs)
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Relude hiding (ask)
+import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, redirectCS)
 import Utils (faSprite_, renderMarkdownToc)
@@ -29,10 +33,34 @@ import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData (..))
 
 
+aiSearchH :: Projects.ProjectId -> AE.Value -> ATAuthCtx (RespHeaders AE.Value)
+aiSearchH pid requestBody = do
+  authorizeProject pid
+  authCtx <- ask @AuthContext
+  let envCfg = authCtx.env
+      parsed = AET.parseMaybe (AE.withObject "request" \o -> liftA2 (,) (o AE..: "input") (o AE..:? "timezone")) requestBody
+
+  (inputText, timezoneM) <-
+    parsed `whenNothing` do
+      addErrorToast "Invalid AI search input" Nothing
+      throwError Servant.err400{Servant.errBody = "Invalid input format"}
+
+  when (T.null (T.strip inputText)) do
+    addErrorToast "Please enter a search query" Nothing
+    throwError Servant.err400{Servant.errBody = "Empty input"}
+
+  AI.runNlSearch pid envCfg timezoneM inputText >>= \case
+    Left errMsg -> do
+      addErrorToast "AI search failed" (Just errMsg)
+      throwError Servant.err502{Servant.errBody = encodeUtf8 errMsg}
+    Right payload -> addRespHeaders payload
+
+
 data AIChatForm = AIChatForm
   { query :: Text
   , mode :: ComposerMode
   , intervalMinutes :: Maybe Issues.RoutineInterval
+  , allowActions :: Maybe Bool
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)
@@ -237,7 +265,7 @@ threadGetH pid convId docM hxTarget = do
                   span_ [class_ "max-md:hidden"] "View issue"
                 Nothing -> scheduleControl_ conversation.conversationId routineM <$ guard (conversation.conversationType == Issues.CTWeb)
           }
-  addRespHeaders $ PageCtx pageConfig $ threadPage_ pid activeId routineM messages docs openDoc
+  addRespHeaders $ PageCtx pageConfig $ threadPage_ pid activeId routineM (maybe True (isNothing . Issues.conversationIssueId) conversationM) messages docs openDoc
   where
     scheduleControl_ :: UUIDId "conversation" -> Maybe (Issues.ConversationSummary, Issues.RoutineInterval) -> Html ()
     scheduleControl_ conversationId routineState = details_ [class_ "relative group/routine"] do
@@ -253,8 +281,8 @@ threadGetH pid convId docM hxTarget = do
           button_ [type_ "submit", class_ "btn btn-sm btn-primary w-full active:scale-[0.96] transition-transform"] "Save routine"
         when (any ((.routineActive) . fst) routineState) $ form_ [class_ "mt-3 border-t border-strokeWeak pt-2", hxPost_ $ threadUrl pid conversationId <> "/routine/pause", hxSwap_ "none"] $ button_ [type_ "submit", class_ "btn btn-sm btn-ghost w-full active:scale-[0.96] transition-transform"] "Pause routine"
 
-    threadPage_ :: Projects.ProjectId -> Maybe (UUIDId "conversation") -> Maybe (Issues.ConversationSummary, Issues.RoutineInterval) -> [Issues.AIChatMessage] -> [Issues.AIArtifact] -> Maybe Issues.AIArtifact -> Html ()
-    threadPage_ projectId activeConversationIdM routineM messages docs openDoc = div_ [class_ "h-full flex bg-bgBase"] do
+    threadPage_ :: Projects.ProjectId -> Maybe (UUIDId "conversation") -> Maybe (Issues.ConversationSummary, Issues.RoutineInterval) -> Bool -> [Issues.AIChatMessage] -> [Issues.AIArtifact] -> Maybe Issues.AIArtifact -> Html ()
+    threadPage_ projectId activeConversationIdM routineM allowActionUi messages docs openDoc = div_ [class_ "h-full flex bg-bgBase"] do
       div_ [class_ "min-w-0 grow flex flex-col"] do
         div_ [id_ "ai-thread-messages", class_ "min-h-0 grow overflow-y-auto"] do
           div_ [class_ "max-w-3xl mx-auto px-5 py-8"] do
@@ -300,6 +328,9 @@ threadGetH pid convId docM hxTarget = do
               button_ [type_ "submit", Aria.label_ "Send message", class_ "group/send w-9 h-9 shrink-0 rounded-lg bg-fillBrand-strong text-white flex items-center justify-center cursor-pointer active:scale-[0.96] transition-transform"] do
                 span_ [id_ "ai-thread-loader", class_ "htmx-indicator"] $ faSprite_ "spinner" "regular" "w-3.5 h-3.5 animate-spin"
                 span_ [class_ "inline-flex group-has-[.htmx-request]/send:hidden"] $ faSprite_ "arrow-up" "regular" "w-3.5 h-3.5"
+            when allowActionUi $ label_ [class_ "max-w-3xl mx-auto mt-2 flex cursor-pointer items-center justify-center gap-2 text-xs text-textWeak"] do
+              input_ [type_ "checkbox", name_ "allowActions", value_ "true", class_ "checkbox checkbox-xs"]
+              span_ "Allow the project changes I request in this message"
             p_ [class_ "max-w-3xl mx-auto mt-2 text-xs text-textWeak text-center"] "AI can use your project data and connected integrations. Review actions before relying on them."
       unless (null docs) $ aside_ [class_ "hidden lg:block w-64 shrink-0 overflow-y-auto border-l border-strokeWeak p-3"] documentsNav_
       where
@@ -382,8 +413,8 @@ routineInstallPostH pid form = do
           redirectToThread pid convId
 
 
-startThreadPostH :: Projects.ProjectId -> AIChatForm -> ATAuthCtx (RespHeaders (Html ()))
-startThreadPostH pid form = do
+startThreadPostHWithTools :: Maybe AI.ProjectTools -> Projects.ProjectId -> AIChatForm -> ATAuthCtx (RespHeaders (Html ()))
+startThreadPostHWithTools projectTools pid form = do
   authorizeProject pid
   case normalizeNewThread form of
     Left err -> reject err
@@ -391,13 +422,13 @@ startThreadPostH pid form = do
       convId <- UUIDId <$> UUID.genUUID
       void $ Issues.getOrCreateConversation pid convId Issues.CTWeb (AE.object [])
       case request of
-        NewChat prompt -> submitTurn pid convId prompt
-        NewRoutine prompt interval -> submitTurn pid convId prompt >> enqueue (Issues.upsertRoutine pid convId interval)
+        NewChat prompt -> submitTurn projectTools (form.allowActions == Just True) pid convId prompt
+        NewRoutine prompt interval -> submitTurn projectTools (form.allowActions == Just True) pid convId prompt >> enqueue (Issues.upsertRoutine pid convId interval)
       redirectToThread pid convId
 
 
-threadPostH :: Projects.ProjectId -> UUIDId "conversation" -> AIChatForm -> ATAuthCtx (RespHeaders (Html ()))
-threadPostH pid convId form = do
+threadPostHWithTools :: Maybe AI.ProjectTools -> Projects.ProjectId -> UUIDId "conversation" -> AIChatForm -> ATAuthCtx (RespHeaders (Html ()))
+threadPostHWithTools projectTools pid convId form = do
   authorizeProject pid
   case normalizeQuery form.query of
     Left err -> reject err
@@ -406,8 +437,8 @@ threadPostH pid convId form = do
         Nothing -> addRespHeaders mempty
         Just conversation -> do
           case Issues.conversationIssueId conversation of
-            Just issueId -> void $ IssuePage.aiChatPostH pid issueId (IssuePage.AIChatForm prompt)
-            Nothing -> submitTurn pid convId prompt
+            Just issueId -> void $ IssuePage.aiChatPostHWithTools projectTools pid issueId (IssuePage.AIChatForm prompt)
+            Nothing -> submitTurn projectTools (form.allowActions == Just True) pid convId prompt
           redirectToThread pid convId
 
 
@@ -424,11 +455,15 @@ threadDeleteH :: Projects.ProjectId -> UUIDId "conversation" -> ATAuthCtx (RespH
 threadDeleteH pid convId = authorizeProject pid >> Issues.deleteConversation pid convId >> redirect pid ""
 
 
-submitTurn :: Projects.ProjectId -> UUIDId "conversation" -> Text -> ATAuthCtx ()
-submitTurn pid convId prompt = do
+submitTurn :: Maybe AI.ProjectTools -> Bool -> Projects.ProjectId -> UUIDId "conversation" -> Text -> ATAuthCtx ()
+submitTurn projectTools allowActions pid convId prompt = do
   appCtx <- ask @AuthContext
-  result <- Bots.processAIQueryWithMode (Just appCtx.config) appCtx.env.enableTimefusionReads AI.InteractiveWithActions AI.ServiceAccess pid prompt (Just convId) appCtx.config.openaiModel appCtx.config.openaiApiKey
-  whenLeft_ result \err -> Issues.insertChatMessage pid convId Issues.ChatAssistant ("I couldn't complete that request: " <> err) Nothing Nothing
+  (sess, _) <- Projects.sessionAndProject pid
+  let query = if allowActions then Bots.processActionableAIQueryWithTools else Bots.processAIQueryWithTools
+  result <- query (Just appCtx.config) appCtx.env.enableTimefusionReads projectTools (AI.MemberAccess sess.user.id) pid prompt (Just convId) appCtx.config.openaiModel appCtx.config.openaiApiKey
+  case result of
+    Left err -> Issues.insertChatMessage pid convId Issues.ChatAssistant ("I couldn't complete that request: " <> err) Nothing Nothing
+    Right _ -> pass
 
 
 normalizeQuery :: Text -> Either Text Text
@@ -450,7 +485,9 @@ reject message = addErrorToast message Nothing >> addRespHeaders mempty
 
 
 authorizeProject :: Projects.ProjectId -> ATAuthCtx ()
-authorizeProject = void . Projects.sessionAndProject
+authorizeProject pid = do
+  (sess, _) <- Projects.sessionAndProject pid
+  unlessM (isJust <$> ProjectMembers.getUserPermission pid sess.user.id) $ throwError Servant.err403
 
 
 threadUrl :: Projects.ProjectId -> UUIDId "conversation" -> Text

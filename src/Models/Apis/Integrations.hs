@@ -42,6 +42,8 @@ import Hasql.Interpolate qualified as HI
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId, enumLit)
+import Models.Projects.ProjectMembers qualified as ProjectMembers
+import Pkg.DeriveUtils (UUIDId)
 import Relude
 import System.Types (DB)
 
@@ -56,7 +58,7 @@ data SlackLinkProject = SlackLinkProject {projectId :: Projects.ProjectId, title
   deriving anyclass (HI.DecodeRow)
 
 
-data SlackPrincipal = SlackPrincipal {userId :: Projects.UserId, projectId :: Projects.ProjectId}
+data SlackPrincipal = SlackPrincipal {userId :: Projects.UserId, projectId :: Projects.ProjectId, permission :: ProjectMembers.Permissions}
   deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow)
 
@@ -162,7 +164,7 @@ completeSlackLink linkId userId projectId = do
 resolveSlackPrincipal :: DB es => Text -> Text -> Maybe Projects.ProjectId -> Eff es (Maybe SlackPrincipal)
 resolveSlackPrincipal teamId slackUserId threadProject =
   Hasql.interpOne
-    $ [HI.sql|SELECT identity.user_id, member.project_id FROM apis.slack_identities identity
+    $ [HI.sql|SELECT identity.user_id, member.project_id, member.permission FROM apis.slack_identities identity
     JOIN projects.project_members member ON member.project_id = COALESCE(#{threadProject}, identity.project_id) AND member.user_id = identity.user_id
     JOIN users.users account ON account.id = identity.user_id
     JOIN projects.projects project ON project.id = member.project_id
