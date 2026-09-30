@@ -55,7 +55,6 @@ import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx
-import Lucid.Hyperscript (__)
 import Models.Apis.Integrations qualified as Slack
 import Models.Apis.Monitors (MonitorBulkAction (..))
 import Models.Apis.Monitors qualified as Monitors
