@@ -1135,7 +1135,7 @@ renderChart widget = do
   let rateM = widget.dataset >>= (.rowsPerMin) <&> \r -> Utils.prettyPrintCount (round r) <> "/min"
       chartId = maybeToMonoid widget.id
       isTimeseriesStat = widget.wType == WTTimeseriesStat
-      fallback = widget.dataset >>= bool (.value) (.servedValue) isTimeseriesStat <&> \value -> formatStatValue value $ fromMaybe "" widget.unit
+      fallback = widget.dataset >>= (\d -> d.servedValue <|> d.value) <&> \value -> formatStatValue value $ fromMaybe "" widget.unit
       valueM =
         ( do
             guard isTimeseriesStat

@@ -714,7 +714,8 @@ timeRefreshAttrs cid url trigger = [hxGet_ url, hxTrigger_ trigger, hxTarget_ $ 
 -- | Sends the address bar's current time window, so a live refresh follows the picker. With
 -- no window in the URL, @since@ falls back to the page's default range.
 timeWindowVals_ :: Text -> Attribute
-timeWindowVals_ defaultSince = term "hx-vals" $ "js:{...(p=>({since:p.since ?? (p.from || p.to ? '' : '" <> defaultSince <> "'),from:p.from || '',to:p.to || ''}))(window.params())}"
+-- Inline rather than window.params(): the shell must resolve before the application script arrives.
+timeWindowVals_ defaultSince = term "hx-vals" $ "js:{...(p=>({since:p.since ?? (p.from || p.to ? '' : '" <> defaultSince <> "'),from:p.from || '',to:p.to || ''}))(Object.fromEntries(new URLSearchParams(location.search)))}"
 
 
 -- | The skeleton half of 'Deferred', also usable on its own for a panel whose body is one
