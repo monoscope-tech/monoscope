@@ -316,7 +316,7 @@ data SqlQueryCfg = SqlQueryCfg
   , currentTime :: UTCTime
   , defaultSelect :: [Text]
   , source :: Maybe Sources
-  , metricJsonAsVariant :: Bool
+  , targetsTimefusion :: Bool
   , targetSpansM :: Maybe Text
   , -- Time window (minutes) the alert query should look back over.
     -- Monitors pass max(60, 2 * checkIntervalMins) so buckets aren't missed.
@@ -661,6 +661,15 @@ sqlFromQueryComponents sqlCfg qc =
 -- >>> c4.whereClause
 -- Just "(jsonb_path_exists(to_jsonb(errors), '$[*].\"error_type\" ? (@ like_regex \"^ab.*c\" flag \"i\")'::jsonpath))"
 --
+-- A bare wildcard equality on an array column lowers to @array_has@ only on TimeFusion;
+-- Postgres keeps the jsonpath form byte for byte:
+-- >>> let Right (_, c5) = parseQueryToComponents cfg{targetsTimefusion = True} "hashes[*] == \"x\""
+-- >>> c5.whereClause
+-- Just "(array_has(hashes, 'x'))"
+-- >>> let Right (_, c6) = parseQueryToComponents cfg "hashes[*] == \"x\""
+-- >>> c6.whereClause
+-- Just "(jsonb_path_exists(to_jsonb(hashes), '$[*] ? (@ == \"x\")'::jsonpath))"
+--
 -- Field validation is told the cfg's source for the same reason 'queryASTToComponents'
 -- resolves the FROM table from it: a metrics query can arrive with its source in the
 -- request rather than in the query text, and validating those fields against
@@ -672,7 +681,7 @@ parseQueryToComponents sqlCfg = fmap (queryASTToComponents sqlCfg) . first (.mes
 queryASTToComponents :: SqlQueryCfg -> [Section] -> (Text, QueryComponents)
 queryASTToComponents sqlCfg sections =
   let effectiveSource = sqlCfg.source <|> listToMaybe [s | Source s <- sections]
-      qc = sectionsToComponents sqlCfg $ rewriteSectionsForSource sqlCfg.metricJsonAsVariant effectiveSource sections
+      qc = sectionsToComponents sqlCfg $ rewriteSectionsForSource sqlCfg.targetsTimefusion effectiveSource sections
    in -- The FROM table follows the effective source (cfg or an explicit `source`
       -- section); without this a metrics query built via the cfg arg alone would
       -- silently read otel_logs_and_spans.
@@ -792,7 +801,7 @@ defSqlQueryCfg pid currentTime source spanT =
     , dateRange = (Nothing, Nothing)
     , rangeEnd = InclusiveEnd
     , source = source
-    , metricJsonAsVariant = False
+    , targetsTimefusion = False
     , targetSpansM = spanT
     , projectedColsByUser = []
     , currentTime

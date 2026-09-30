@@ -221,7 +221,7 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', c
       fromMaybe "" groupComps.finalSummarizeQuery `shouldSatisfy` T.isInfixOf "GROUP BY time_bucket('2 hours', timestamp), COALESCE(resource->'kind'->>'name'::text, 'null')"
 
     it "TimeFusion metrics source converts variant dimensions to JSON" do
-      let cfg = (defSqlQueryCfg defPid fixedUTCTime (Just SMetrics) Nothing){metricJsonAsVariant = True}
+      let cfg = (defSqlQueryCfg defPid fixedUTCTime (Just SMetrics) Nothing){targetsTimefusion = True}
           components query = fromRight' $ parseQueryToComponents cfg ("metrics | " <> query)
       let (attributeQuery, _) = components "where attributes.system.device == \"disk0\""
       attributeQuery `shouldSatisfy` T.isInfixOf "variant_to_json(attributes)->'system'->>'device' = 'disk0'"

@@ -679,7 +679,7 @@ stackTrace_ pid serviceM runtimeM raw = case EF.parseStackTrace (EF.parseRuntime
 
 
 -- | Run a lookup that only decides whether an *optional* panel renders, degrading
--- to @fallback@ if it throws rather than taking the page with it.
+-- to @fallback@ if it throws or outlasts ten seconds rather than taking the page with it.
 --
 -- All three call sites read TimeFusion or the replay table to enrich the issue
 -- page; none of them is the page. A transient TF connection error used to
