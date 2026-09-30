@@ -255,7 +255,11 @@ cmd_publish() { # [file]
   while IFS=$'\t' read -r c fp caps plat; do
     if [ -n "$c" ]; then
       if spec=$(attestation_refspec "$c" "$fp" "$caps" "$plat"); then
-        refspecs+=("$spec")
+        if remote_refs | grep -Fx "${spec#*:}" >/dev/null; then
+          note "already attested ${spec#*:}"
+        else
+          refspecs+=("$spec")
+        fi
       else
         note "could not prepare attestation for $c — result is still valid, just not cached"
       fi
@@ -525,13 +529,17 @@ cmd_run() {
       # the network and the object store; neither is part of what the check proved.
       case " $degraded " in *" $c "*) ;; *) [ "${CI_NO_ATTEST:-}" = "true" ] \
         || record_result "$c" || note "could not record $c — it still passed, just isn't cached" ;; esac
-      # Build has populated Cabal's cache; the suites use separate databases.
+      # Build has populated Cabal's cache; start integration while the remaining
+      # checks run. Browser tests start after the unit and CLI checks to avoid
+      # overloading UI interactions during the peak.
       if [ "$c" = build ] && [ -n "${CI_ATTEST_OUT:-}" ] \
          && case " $(echo "$checks" | tr '\n' ' ') " in *" build "*" integration-tests "*" e2e "*) true ;; *) false ;; esac; then
         integration_log=$(mktemp -t ci-integration-log.XXXXXX)
         integration_result=$(mktemp -t ci-integration-result.XXXXXX)
         CI_ATTEST_OUT="$integration_result" "$0" run integration-tests > "$integration_log" 2>&1 &
         integration_pid=$!
+      fi
+      if [ "$c" = cli-tests ] && [ -n "$integration_pid" ] && [ -z "$e2e_pid" ]; then
         e2e_log=$(mktemp -t ci-e2e-log.XXXXXX)
         e2e_result=$(mktemp -t ci-e2e-result.XXXXXX)
         CI_ATTEST_OUT="$e2e_result" "$0" run e2e > "$e2e_log" 2>&1 &
