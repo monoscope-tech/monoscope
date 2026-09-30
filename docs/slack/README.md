@@ -81,8 +81,9 @@ receipt pending for retry. Durable tool-message replay remains incomplete.
 Signed-event investigations set the native session to `processing` before work
 and attempt to return it to `active` on completion or failure, using
 [`agents.sessions.setStatus`](https://docs.slack.dev/reference/methods/agents.sessions.setStatus/).
-A rejected startup status prevents the investigation and retains the pending
-receipt. Failed status cleanup is logged without replaying a completed answer.
+A rejected startup status is logged and the investigation continues without
+native processing state. Failed status cleanup is logged without replaying a
+completed answer.
 Signed `agent_session_stopped` events persist a cancellation cutoff for an existing
 project thread. Only a linked, current project member can stop its investigation.
 Running work checks that cutoff at access boundaries and every half second while

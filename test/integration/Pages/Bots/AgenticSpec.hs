@@ -31,6 +31,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Logging
 import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldContain, shouldNotContain, shouldSatisfy)
 import UnliftIO.Exception (throwIO)
+import Web.FormUrlEncoded (urlDecodeAsForm)
 
 
 spec :: Spec
@@ -98,7 +99,7 @@ spec = around withTestResources do
         isJust (body ^? key "tools" . _Array) `shouldBe` True
         (body ^? key "reasoning_effort") `shouldBe` Just (AE.String "none")
 
-      it "exposes project repository reads while keeping actions permission-gated" \tr -> do
+      it "starts with project tool discovery while keeping actions permission-gated" \tr -> do
         let toolNames config = do
               (_, _, params) <- Eff.runEff $ Time.runTime $ AI.agenticSetup config "any query" "model"
               pure $ AE.toJSON params ^.. key "tools" . values . key "function" . key "name" . _String
@@ -109,12 +110,21 @@ spec = around withTestResources do
         repositoryAware <- toolNames (AI.defaultAgenticConfig testPid){AI.sourceConfig = Just tr.trATCtx.config}
         readonly `shouldNotContain` ["send_to_slack"]
         scheduledReadOnly `shouldNotContain` ["send_to_slack"]
-        readonly `shouldContain` ["list_issues", "get_issue", "list_incidents", "get_incident", "list_monitors", "get_monitor", "list_endpoints", "get_endpoint", "list_log_patterns", "get_log_pattern", "list_dashboards", "get_dashboard", "get_project"]
+        readonly `shouldSatisfy` (\names -> all (`elem` names) ["search_project_tools", "get_project_tool_schema", "list_metrics"])
+        readonly `shouldSatisfy` (\names -> all (`notElem` names) ["list_issues", "get_issue", "list_incidents", "get_incident", "list_monitors", "get_monitor", "list_endpoints", "get_endpoint", "list_log_patterns", "get_log_pattern", "list_dashboards", "get_dashboard", "get_project"])
         repositoryAware `shouldContain` ["get_code_context", "list_runbooks", "read_runbook", "get_linked_repositories", "get_deployments"]
         actionable `shouldContain` ["send_to_slack"]
         scheduledActionable `shouldContain` ["send_to_slack"]
 
     describe "Web conversation persistence" do
+      it "requires an explicit per-message grant for project changes" \tr -> do
+        let absent = urlDecodeAsForm @AIThreads.AIChatForm "query=check+metrics&mode=chat"
+            granted = urlDecodeAsForm @AIThreads.AIChatForm "query=acknowledge+issue&mode=chat&allowActions=true"
+        fmap (.allowActions) absent `shouldBe` Right Nothing
+        fmap (.allowActions) granted `shouldBe` Right (Just True)
+        (_, threadPage) <- testServant tr $ AIThreads.threadGetH testPid (UUIDId UUID.nil)
+        (LT.toStrict $ Lucid.renderText $ Lucid.toHtml threadPage) `shouldSatisfy` T.isInfixOf "name=\"allowActions\""
+
       it "assistantPages_defaultToNavigation" \tr -> do
         let convId = UUIDId UUID.nil
         void $ runTestBg frozenTime tr $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTWeb})|]

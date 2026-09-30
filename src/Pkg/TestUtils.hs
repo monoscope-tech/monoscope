@@ -1668,6 +1668,7 @@ routeApiV1Get tr rest params = case T.splitOn "/" rest of
       (Log.queryEvents testPid (lookupParam "query" params) (lookupParam "since" params) (lookupParam "from" params) (lookupParam "to" params) (lookupParam "source" params) (pInt "limit" params) (pBool "with_children" params) (pBool "include_attributes" params) (lookupParam "environment" params) (lookupParam "service" params))
   ["events", eid, "time", ts] -> jsonRoute tr (ApiH.apiEventGet testPid (rawUUID eid) (parseISOTime ts))
   ["facets"] -> jsonRoute tr (ApiH.apiFacets testPid (lookupParam "since" params) (lookupParam "from" params) (lookupParam "to" params) (lookupParam "field" params))
+  ["metrics", "catalog"] -> jsonRoute tr (ApiH.apiMetricsCatalog testPid (lookupParam "service" params) (lookupParam "search" params) (pInt "limit" params) (pInt "offset" params) (pBool "active" params))
   ["metrics"] -> do
     result <-
       runQueryEffect tr

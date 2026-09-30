@@ -33,7 +33,7 @@ module Pages.Issues (
   errorSubscriptionPostH,
   -- AI Chat
   AIChatForm (..),
-  aiChatPostH,
+  aiChatPostHWithTools,
   aiChatHistoryGetH,
   -- Activity
   issueActivityGetH,
@@ -74,6 +74,7 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
 import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Deriving.Aeson qualified as DAE
 import Effectful.Concurrent.Async (concurrently)
+import Effectful.Error.Static (throwError)
 import Effectful.Exception (trySync)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
@@ -115,7 +116,7 @@ import Pkg.Parser (ScopedQuery (..), applyScopedKqlContext, mkScopedQuery)
 import Pkg.SchemaLearning.Catalog (FacetData (..), FacetSummary (..), FacetValue (..))
 import PyF (fmt)
 import Relude hiding (ask)
-import Servant (Header, Headers, NoContent (..), addHeader)
+import Servant (Header, Headers, NoContent (..), addHeader, err403)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.IO.Error (userError)
 import System.Logging qualified as Log
@@ -1883,25 +1884,27 @@ issueSystemPrompt now =
 
 -- | Handle AI chat POST request
 -- Designed to power the AI chat in the anomalies page. The chat thread is loaded via htmx and theres an input which when submitted gets sent here.
-aiChatPostH :: Projects.ProjectId -> Issues.IssueId -> AIChatForm -> ATAuthCtx (RespHeaders (Html ()))
-aiChatPostH pid issueId form
+aiChatPostHWithTools :: Maybe AI.ProjectTools -> Projects.ProjectId -> Issues.IssueId -> AIChatForm -> ATAuthCtx (RespHeaders (Html ()))
+aiChatPostHWithTools projectTools pid issueId form
   | T.length form.query > 4000 = addRespHeaders $ aiChatResponse_ pid form.query "Query too long. Maximum 4000 characters allowed." Nothing Nothing Nothing
   | otherwise = do
       appCtx <- ask @AuthContext
+      (sess, _) <- Projects.sessionAndProject pid
+      unlessM (isJust <$> ProjectMembers.getUserPermission pid sess.user.id) $ throwError err403
       now <- Time.currentTime
       let convId = UUIDId issueId.unUUIDId :: UUIDId "conversation"
       void $ Issues.getOrCreateConversation pid convId Issues.CTAnomaly (AE.object ["issue_id" AE..= issueId])
       issueM <- Issues.selectIssueById pid issueId
-      maybe (respond Nothing convId "Issue not found. Unable to analyze." Nothing Nothing True) (processIssue appCtx now convId) issueM
+      maybe (respond Nothing convId "Issue not found. Unable to analyze." Nothing Nothing True) (processIssue sess.user.id appCtx now convId) issueM
   where
     respond systemPromptM convId response widgets toolCalls includeUserMsg = do
       when includeUserMsg $ Issues.insertChatMessage pid convId Issues.ChatUser form.query Nothing Nothing
       Issues.insertChatMessage pid convId Issues.ChatAssistant response (AE.toJSON <$> widgets) (AE.toJSON <$> toolCalls)
       addRespHeaders $ aiChatResponse_ pid form.query response widgets toolCalls systemPromptM
 
-    processIssue appCtx now convId issue = do
+    processIssue userId appCtx now convId issue = do
       fullSystemPrompt <- buildSystemPromptForIssue pid issue now
-      let config = (AI.defaultAgenticConfig pid){AI.facetContext = Nothing, AI.customContext = Just fullSystemPrompt, AI.conversationId = Just convId, AI.conversationType = Just Issues.CTAnomaly, AI.systemPromptOverride = Just $ issueSystemPrompt now, AI.sourceConfig = Just appCtx.config, AI.useTimefusion = appCtx.env.enableTimefusionReads}
+      let config = (AI.defaultAgenticConfig pid){AI.facetContext = Nothing, AI.customContext = Just fullSystemPrompt, AI.conversationId = Just convId, AI.conversationType = Just Issues.CTAnomaly, AI.systemPromptOverride = Just $ issueSystemPrompt now, AI.sourceConfig = Just appCtx.config, AI.useTimefusion = appCtx.env.enableTimefusionReads, AI.access = AI.MemberAccess userId, AI.projectTools = projectTools}
       result <- AI.runAgenticChatWithHistory config form.query appCtx.config.openaiModel appCtx.config.openaiApiKey
       either
         (\err -> respond (Just fullSystemPrompt) convId ("I encountered an error while analyzing this issue: " <> err) Nothing Nothing False)
