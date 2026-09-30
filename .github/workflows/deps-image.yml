@@ -9,6 +9,7 @@ on:
       - 'Dockerfile.deps'
       - 'package*.json'
       - 'web-components/package*.json'
+      - 'e2e/package*.json'
       - 'web-components/src/chart-cli.ts'
     branches: [master]
 

@@ -115,7 +115,7 @@ services:
       MINIO_SECRET_KEY: minioadmin
       TIMEFUSION_PG_TEST_URL: postgresql://postgres:postgres@timefusion:5432/postgres
       DISCORD_CLIENT_ID: '1328384474395967631'
-      CI_SHARDS: ${CI_SHARDS:-6}
+      CI_SHARDS: ${CI_SHARDS:-12}
       # The container has no push credentials (origin is ssh); it records results
       # here and the host publishes them after the run.
       CI_ATTEST_OUT: /build/.ci/attest.tsv

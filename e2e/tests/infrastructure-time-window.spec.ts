@@ -27,7 +27,6 @@ const views = [
 ] as const;
 for (const [route, container, filters, searchName] of views) {
   test(`${route} time presets refresh scoped inventory`, async ({ page }) => {
-    test.setTimeout(60_000); // Includes a real 15s refresh tick and repeated picker changes.
     test.skip(!process.env.E2E_BASE_URL, "Requires a disposable fixture database");
     await page.setViewportSize({ width: 390, height: 900 });
     const url = `/p/${DEMO_PROJECT}/infrastructure/${route}?${new URLSearchParams({ ...filters, from: "", to: "", since: "5m" })}`;
@@ -38,6 +37,7 @@ for (const [route, container, filters, searchName] of views) {
     await page.locator('[popovertarget="n-timepicker-popover"]').click();
     await page.locator("[data-mobile-live-toggle]").click();
     await expect(page.locator("[data-time-transport]")).toHaveAttribute("data-interval", "0");
+    await page.clock.install();
     const refresh = page.waitForRequest(request => { const url = new URL(request.url()); return url.pathname.endsWith(`/infrastructure/${route}`) && url.searchParams.get("deferred") === "1" && url.searchParams.get("since") === "1H"; });
     await page.locator('#n-timepicker-popover button[data-value="1H"]').click();
     await expect(page).toHaveURL(/since=1H/);
@@ -67,7 +67,12 @@ for (const [route, container, filters, searchName] of views) {
     await expect(page.locator("[data-time-transport]")).toHaveAttribute("data-interval", "15000");
     await page.locator('[popovertarget="n-timepicker-popover"]').click();
     await focusTarget.focus();
-    await page.evaluate(container => new Promise<void>(resolve => document.getElementById(container)!.addEventListener("htmx:afterSwap", () => resolve(), { once: true })), container);
+    const tick = page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return url.pathname.endsWith(`/infrastructure/${route}`) && url.searchParams.get("deferred") === "1" && url.searchParams.get("since") === "1H";
+    });
+    await page.clock.fastForward(15_000);
+    await tick;
     await expect(focusTarget).toBeFocused();
     await expect(focusTarget).toHaveValue(searchName ? "600" : "memory");
     if (searchName) await expect(page.locator(`#${container} tr[role="button"]:visible`)).toHaveCount(1);
