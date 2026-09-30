@@ -296,9 +296,8 @@ rewriteSectionsForSource True src =
 
 
 -- | Effectful walk over every Subject reachable from a Section list, with a pure bottom-up
--- Expr rewrite applied to each rebuilt predicate; 'mapSubjects' (rewrite),
--- 'collectSubjects' (gather) and 'rewriteSectionsForSource' are all derived from this
--- single traversal. Hand-rolled because generic-lens 'types' overflows
+-- Expr rewrite applied to each rebuilt predicate; 'rewriteSectionsForSource' (rewrite)
+-- and 'collectSubjects' (gather) are both derived from this single traversal. Hand-rolled because generic-lens 'types' overflows
 -- GHC's reduction depth on this AST (Values/Expr mutual recursion). Any new
 -- Subject-bearing constructor needs its case added here.
 traverseAst :: forall m. Applicative m => (Subject -> m Subject) -> (Expr -> Expr) -> [Section] -> m [Section]
@@ -397,11 +396,6 @@ traverseAst f g = traverse goSec
       ByBinFunc (Bin s t) -> ByBinFunc . flip Bin t <$> f s
       ByBinFunc (BinAuto s) -> ByBinFunc . BinAuto <$> f s
       ByScalarFunc a -> ByScalarFunc <$> goAgg a
-
-
--- | Apply a Subject rewrite to every Subject reachable from a Section list.
-mapSubjects :: (Subject -> Subject) -> [Section] -> [Section]
-mapSubjects f = runIdentity . traverseAst (Identity . f) id
 
 
 -- | Every Subject a Section list references, in traversal order.
