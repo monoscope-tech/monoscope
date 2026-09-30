@@ -15,12 +15,6 @@ templatesDir :: FilePath
 templatesDir = "static/public/dashboards"
 
 
-allWidgets :: Dashboards.Dashboard -> [Widget.Widget]
-allWidgets d = concatMap flatten (d.widgets <> maybe [] (concatMap (.widgets)) d.tabs)
-  where
-    flatten w = w : maybe [] (concatMap flatten) w.children
-
-
 -- | Replace {{placeholder}} spans with a literal so template queries parse standalone.
 stripPlaceholders :: Text -> Text
 stripPlaceholders t = case T.splitOn "{{" t of
@@ -46,7 +40,7 @@ spec = describe "dashboard templates" do
     let broken =
           [ (d.file, q)
           | d <- templates
-          , w <- allWidgets d
+          , w <- Dashboards.allWidgets d
           , Just q <- [w.query]
           , Left _ <- [parseQueryToAST (stripPlaceholders q)]
           ]
@@ -56,7 +50,7 @@ spec = describe "dashboard templates" do
     let broken =
           [ (d.file, w.title)
           | d <- templates
-          , w <- allWidgets d
+          , w <- Dashboards.allWidgets d
           , Just sql <- [w.sql]
           , any ((== Just True) . (.sortable)) $ fromMaybe [] w.columns
           , not ("{{table_sort}}" `T.isInfixOf` sql) || isNothing w.defaultSort
@@ -73,14 +67,14 @@ spec = describe "dashboard templates" do
         Nothing -> expectationFailure $ "missing template: " <> toString file
         Just d -> do
           d.discoveryMetrics `shouldSatisfy` isJust
-          let metricQueries = [q | w <- allWidgets d, Just q <- [w.query], "metrics" `T.isPrefixOf` T.strip q]
+          let metricQueries = [q | w <- Dashboards.allWidgets d, Just q <- [w.query], "metrics" `T.isPrefixOf` T.strip q]
           metricQueries `shouldSatisfy` (not . null)
 
   it "RUM scopes Web Vitals by application and counts each session once" do
     case find (\d -> d.file == Just "rum.yaml") templates of
       Nothing -> expectationFailure "missing template: rum.yaml"
       Just d -> do
-        let widgets = allWidgets d
+        let widgets = Dashboards.allWidgets d
             metricSql = [sql | w <- widgets, Just sql <- [w.sql], "FROM otel_metrics" `T.isInfixOf` sql]
             sessionQueries = [q | w <- widgets, w.title == Just "Sessions", Just q <- [w.query]]
         metricSql `shouldSatisfy` (not . null)
@@ -100,26 +94,26 @@ spec = describe "dashboard templates" do
     (trend >>= (.unit)) `shouldBe` Just "ms"
 
   it "endpoint analytics ships a direct-dependency investigation map" $ withEndpointTemplate \d -> do
-    let maps = filter (\w -> w.wType == Widget.WTServiceMap) (allWidgets d)
+    let maps = filter (\w -> w.wType == Widget.WTServiceMap) (Dashboards.allWidgets d)
     maps `shouldSatisfy` (not . null)
     forM_ maps \w -> do
       w.title `shouldBe` Just "Endpoint Dependency Map"
       (w.layout >>= (.w)) `shouldBe` Just 12
 
   it "endpoint analytics only advertises replay when its session index has a recording" $ withEndpointTemplate \d -> do
-    let sessionWidget = find (\w -> w.title == Just "Endpoint Sessions") (allWidgets d)
+    let sessionWidget = find (\w -> w.title == Just "Endpoint Sessions") (Dashboards.allWidgets d)
     (sessionWidget >>= (.dbSource)) `shouldBe` Just "postgres"
     (sessionWidget >>= (.sql)) `shouldSatisfy` maybe False (T.isInfixOf "projects.replay_sessions")
     (sessionWidget >>= (.sql)) `shouldSatisfy` maybe False (T.isInfixOf "'Available'")
 
   it "endpoint analytics only joins Web Vitals with an explicit browser session correlation" $ withEndpointTemplate \d -> do
-    let vitalsWidget = find (\w -> w.title == Just "Request-linked Web Vitals") (allWidgets d)
+    let vitalsWidget = find (\w -> w.title == Just "Request-linked Web Vitals") (Dashboards.allWidgets d)
     (vitalsWidget >>= (.dbSource)) `shouldBe` Just "postgres"
     (vitalsWidget >>= (.sql)) `shouldSatisfy` maybe False (T.isInfixOf "endpoint_sessions")
     (vitalsWidget >>= (.sql)) `shouldSatisfy` maybe False (T.isInfixOf "endpoint_sessions.session_id = vital_samples.session_id")
 
   it "endpoint analytics derives browser cohorts only from observed browser telemetry" $ withEndpointTemplate \d -> do
-    let cohortWidget = find (\w -> w.title == Just "Browser Cohorts") (allWidgets d)
+    let cohortWidget = find (\w -> w.title == Just "Browser Cohorts") (Dashboards.allWidgets d)
     (cohortWidget >>= (.dbSource)) `shouldBe` Just "postgres"
     (cohortWidget >>= (.sql)) `shouldSatisfy` maybe False (T.isInfixOf "resource___user_agent___original")
     (cohortWidget >>= (.sql)) `shouldSatisfy` maybe False (T.isInfixOf "COUNT(DISTINCT NULLIF(attributes___session___id, ''))")

@@ -1145,11 +1145,13 @@ dashboardWidgetPutH pid dashId widgetIdM tabSlugM widget = do
   uid <- UUID.genUUID <&> UUID.toText
   let normalizedWidgetIdM = normalizeWidgetId <$> widgetIdM
       widgetUpdated = normalizeWidget widget normalizedWidgetIdM uid
-  -- An edit locates its widget itself: a client without the tab slug would otherwise
-  -- update the root list, match nothing, and still report success.
+  -- An edit keeps the sent tab only if the widget is on it (ids repeat across tabs);
+  -- a missing or stale slug falls back to where the widget actually lives.
   tabSlugM' <- case normalizedWidgetIdM of
     Nothing -> pure tabSlugM
-    Just nwid -> maybe (throwError err404{errBody = "Widget not found in dashboard"}) (pure . (tabSlugM <|>) . fst) $ findWidgetInDashboard nwid dash
+    Just nwid ->
+      let onTab slug = any (any (any (widgetMatches nwid) . universeOf (#children . _Just . folded)) . (.widgets) . snd) $ findTabBySlug (fold dash.tabs) slug
+       in maybe (throwError err404{errBody = "Widget not found in dashboard"}) (pure . (mfilter onTab tabSlugM <|>) . fst) $ findWidgetInDashboard nwid dash
 
   _ <- Dashboards.updateSchema dashId (updateDashboardWidgets dash tabSlugM' normalizedWidgetIdM widgetUpdated) Nothing
   syncDashboardAndQueuePush pid dashId

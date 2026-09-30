@@ -308,12 +308,18 @@ spec = sequential $ aroundAll withTestResources do
 
     -- Regression: the expand drawer saved without a tab slug, so a rename of a tab's
     -- widget (or a group child) updated the root list, matched nothing, and still toasted.
-    it "renames a tab widget and a group child when the save names no tab" \tr -> do
+    it "renames tab and group widgets despite a missing or wrong tab slug" \tr -> do
       dashId <- newTabbedDashboard tr
-      let save wid t = runAsBase tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.dashboardWidgetPutH testPid dashId (Just wid) Nothing (widgetOf Widget.WTStat t)
-      void $ save "second-widget" "Renamed Second"
+      let save wid slug t = runAsBase tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.dashboardWidgetPutH testPid dashId (Just wid) slug (widgetOf Widget.WTStat t)
+      void $ save "second-widget" Nothing "Renamed Second"
       map (.title) <$> tabWidgets tr dashId "second-tab" >>= (`shouldBe` [Just "Renamed Second"])
-      save "no-such-widget" "Ghost" `shouldThrow` anyIOException
+      void $ save "second-widget" (Just "first-tab") "Still Second"
+      map (.title) <$> tabWidgets tr dashId "second-tab" >>= (`shouldBe` [Just "Still Second"])
+      save "no-such-widget" Nothing "Ghost" `shouldThrow` anyIOException
+      -- Ids repeat across tabs (slugified template titles), so a sent tab that holds the id wins.
+      _ <- testServant tr $ Dashboards.dashboardYamlPutH testPid dashId Dashboards.YamlForm{Dashboards.yaml = "title: Dup\nwidgets: []\ntabs:\n  - name: First Tab\n    widgets:\n      - { type: stat, id: dup, title: One, layout: { x: 0, y: 0, w: 3, h: 3 } }\n  - name: Second Tab\n    widgets:\n      - { type: stat, id: dup, title: Two, layout: { x: 0, y: 0, w: 3, h: 3 } }\n"}
+      void $ save "dup" (Just "second-tab") "Renamed Two"
+      (,) <$> (map (.title) <$> tabWidgets tr dashId "first-tab") <*> (map (.title) <$> tabWidgets tr dashId "second-tab") >>= (`shouldBe` ([Just "One"], [Just "Renamed Two"]))
 
       groupDash <- newDashboard tr "overview.yaml" "Grouped"
       _ <- testServant tr $ Dashboards.dashboardYamlPutH testPid groupDash Dashboards.YamlForm{Dashboards.yaml = "title: Grouped\nwidgets:\n  - type: group\n    id: grp\n    title: Group\n    layout: { x: 0, y: 0, w: 12, h: 4 }\n    children:\n      - type: stat\n        id: inner\n        title: Inner\n        layout: { x: 0, y: 0, w: 3, h: 2 }\n"}
