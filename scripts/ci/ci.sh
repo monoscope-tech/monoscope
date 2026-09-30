@@ -351,8 +351,8 @@ run_body() { # <check>
       cabal build monoscope:lib:monoscope monoscope-shared:lib:monoscope-shared monoscope-cli:lib:monoscope-cli -j $CABAL_FLAGS "$CABAL_OPTS"
       cabal test doctests -j $CABAL_FLAGS "$CABAL_OPTS" --test-show-details=direct
       ;;
-    unit-tests) cabal test unit-tests -j $CABAL_FLAGS "$CABAL_OPTS" --test-show-details=direct ;;
-    cli-tests)  cabal test monoscope-cli:cli-tests -j $CABAL_FLAGS "$CABAL_OPTS" --test-show-details=direct ;;
+    unit-tests) if [ -n "${CI_UNIT_BIN:-}" ]; then "$CI_UNIT_BIN"; else cabal test unit-tests -j $CABAL_FLAGS "$CABAL_OPTS" --test-show-details=direct; fi ;;
+    cli-tests)  if [ -n "${CI_CLI_BIN:-}" ]; then "$CI_CLI_BIN"; else cabal test monoscope-cli:cli-tests -j $CABAL_FLAGS "$CABAL_OPTS" --test-show-details=direct; fi ;;
     weeder)
       cabal build integration-tests unit-tests -j $CABAL_FLAGS "$CABAL_OPTS"
       command -v weeder >/dev/null 2>&1 || cabal install weeder --install-method=copy --installdir=/usr/local/bin --overwrite-policy=always
@@ -363,7 +363,7 @@ run_body() { # <check>
     # Drives the real server in a real browser. scripts/e2e.sh starts that server itself on
     # 8081 against a throwaway database, so this only has to supply the binary and chromium.
     e2e)
-      cabal build monoscope-server -j $CABAL_FLAGS "$CABAL_OPTS"
+      [ -n "${E2E_SERVER_BIN:-}" ] || cabal build monoscope-server -j $CABAL_FLAGS "$CABAL_OPTS"
       (cd e2e && npm ci --prefer-offline --no-audit && \
         { [ -e /usr/local/share/monoscope-playwright-deps ] || npx playwright install-deps chromium; } && \
         npx playwright install chromium)
@@ -390,10 +390,10 @@ run_integration() {
   export USE_EXTERNAL_DB=true LOG_LEVEL=${LOG_LEVEL:-warn}
   (cd web-components && npm ci --prefer-offline --no-audit)
   make build-chart-cli
-  cabal build integration-tests -j $CABAL_FLAGS "$CABAL_OPTS"
+  [ -n "${CI_INTEGRATION_BIN:-}" ] || cabal build integration-tests -j $CABAL_FLAGS "$CABAL_OPTS"
   # Same flags as the build above: list-bin resolves against a plan, and a
   # different one points at a path the build never wrote.
-  bin=$(cabal list-bin integration-tests $CABAL_FLAGS)
+  bin=${CI_INTEGRATION_BIN:-$(cabal list-bin integration-tests $CABAL_FLAGS)}
   rm -f build-shard-*.log
   for i in $(seq 0 $((shards - 1))); do
     ( start=$(date +%s); SHARD_INDEX=$i SHARD_TOTAL=$shards "$bin" --color > "build-shard-$i.log" 2>&1
@@ -458,7 +458,7 @@ cmd_gate() {
 }
 
 cmd_run() {
-  local c req ref rc=0 unrunnable='' degraded='' e2e_pid='' e2e_log='' e2e_result=''
+  local c req ref bin rc=0 unrunnable='' degraded='' e2e_pid='' e2e_log='' e2e_result=''
   local integration_pid='' integration_log='' integration_result=''
   local checks
   checks=$(selected_checks "$@")
@@ -520,6 +520,16 @@ cmd_run() {
     local started=$SECONDS
     if CAPS="$CAPS" "$0" body "$c"; then
       note "passed $c in $((SECONDS - started))s"
+      if [ "$c" = build ] && [ -n "${CI_ATTEST_OUT:-}" ]; then
+        CI_UNIT_BIN=$(cabal list-bin unit-tests $CABAL_FLAGS)
+        CI_CLI_BIN=$(cabal list-bin monoscope-cli:cli-tests $CABAL_FLAGS)
+        CI_INTEGRATION_BIN=$(cabal list-bin integration-tests $CABAL_FLAGS)
+        E2E_SERVER_BIN=$(cabal list-bin monoscope-server $CABAL_FLAGS)
+        export CI_UNIT_BIN CI_CLI_BIN CI_INTEGRATION_BIN E2E_SERVER_BIN
+        for bin in "$CI_UNIT_BIN" "$CI_CLI_BIN" "$CI_INTEGRATION_BIN" "$E2E_SERVER_BIN"; do
+          [ -x "$bin" ] || die "build did not produce $bin"
+        done
+      fi
       if ! inputs_unchanged "$c"; then
         note "PASSED $c, but inputs changed during the run — NOT attested; rerun required"
         rc=1
@@ -530,8 +540,7 @@ cmd_run() {
       case " $degraded " in *" $c "*) ;; *) [ "${CI_NO_ATTEST:-}" = "true" ] \
         || record_result "$c" || note "could not record $c — it still passed, just isn't cached" ;; esac
       # Build has populated Cabal's cache; start integration while the remaining
-      # checks run. Browser tests start after the unit and CLI checks to avoid
-      # overloading UI interactions during the peak.
+      # checks run. Browser tests start after doctests to avoid peak compiler work.
       if [ "$c" = build ] && [ -n "${CI_ATTEST_OUT:-}" ] \
          && case " $(echo "$checks" | tr '\n' ' ') " in *" build "*" integration-tests "*" e2e "*) true ;; *) false ;; esac; then
         integration_log=$(mktemp -t ci-integration-log.XXXXXX)
@@ -539,7 +548,7 @@ cmd_run() {
         CI_ATTEST_OUT="$integration_result" "$0" run integration-tests > "$integration_log" 2>&1 &
         integration_pid=$!
       fi
-      if [ "$c" = cli-tests ] && [ -n "$integration_pid" ] && [ -z "$e2e_pid" ]; then
+      if [ "$c" = doctests ] && [ -n "$integration_pid" ] && [ -z "$e2e_pid" ]; then
         e2e_log=$(mktemp -t ci-e2e-log.XXXXXX)
         e2e_result=$(mktemp -t ci-e2e-result.XXXXXX)
         CI_ATTEST_OUT="$e2e_result" "$0" run e2e > "$e2e_log" 2>&1 &
@@ -1002,6 +1011,7 @@ cmd_selftest() {
   local body_rc=0
   "$0" body selftest-fail >/dev/null 2>&1 || body_rc=$?
   assert "body stops at first failure" 1 "$body_rc"
+  assert "built unit binary runs without Cabal" ok "$(CI_UNIT_BIN=$(command -v true) "$0" body unit-tests && echo ok)"
 
   assert "caps superset"      ok "$(caps_satisfy 'ghc pg minio tf-real' 'ghc pg' && echo ok)"
   assert "caps exact"         ok "$(caps_satisfy 'ghc' 'ghc' && echo ok)"
