@@ -86,6 +86,7 @@ module Utils (
   FieldAction (..),
   FieldMenuCtx (..),
   renderSummaryTags,
+  summaryWords,
   renderSummaryElements,
   summaryForDetailView,
   calculateCycleStartDate,
@@ -1999,7 +2000,22 @@ ansiToHtml t
 renderSummaryTags :: Text -> Html ()
 renderSummaryTags txt =
   span_ [class_ "inline-flex flex-wrap items-center gap-1"]
-    $ forM_ (words txt) renderSummaryElement
+    $ forM_ (summaryWords txt) renderSummaryElement
+
+
+-- | Split a space-joined summary back into its elements. A value may contain spaces
+-- (@10.0 min@), so a word without @⇒@ continues the element before it.
+--
+-- >>> summaryWords "duration;badge-neutral⇒10.0 min kind;text-weak⇒rpc"
+-- ["duration;badge-neutral\8658\&10.0 min","kind;text-weak\8658rpc"]
+--
+-- >>> summaryWords "plain log words"
+-- ["plain","log","words"]
+summaryWords :: Text -> [Text]
+summaryWords = reverse . foldl' step [] . words
+  where
+    step (prev : acc) w | not ("⇒" `T.isInfixOf` w), "⇒" `T.isInfixOf` prev = (prev <> " " <> w) : acc
+    step acc w = w : acc
 
 
 -- | Render a pre-split summary vector (from Telemetry.generateSummary) as pills.

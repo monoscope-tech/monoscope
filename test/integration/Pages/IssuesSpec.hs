@@ -519,6 +519,24 @@ spec = sequential $ aroundAll withTestResources do
       forM_ ["issue-pattern", "issue-sample-section", "issue-logs"] \anchor ->
         html `shouldSatisfy` T.isInfixOf ("href=\"#" <> anchor <> "\"")
 
+    -- Regression: a log-pattern issue row is written once, so "Last seen" and the "all time"
+    -- count froze at detection while the pattern kept firing; and the pattern text was split
+    -- on spaces, orphaning the second half of a value such as `<*> min` outside its chip.
+    it "log-pattern issue shows the pattern's live counts and keeps multi-word values in one chip" \tr -> do
+      patternHash <- DataUUID.toText <$> UUID.nextRandom
+      let detectedAt = addUTCTime (-86400) frozenTime
+          pat = "kind;text-weak\8658rpc duration;badge-neutral\8658<*> min"
+          payload = Issues.LogPatternData patternHash pat Nothing Nothing (Just "checkout") "summary" detectedAt 2
+      issueId <- withResource tr.trPool \conn -> do
+        void $ PGS.execute conn [sql| INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, source_field, first_seen_at, last_seen_at, occurrence_count) VALUES (?, ?, ?, 'summary', ?, ?, 92) |] (testPid, pat, patternHash, detectedAt, addUTCTime (-120) frozenTime)
+        maybe (fail "INSERT ... RETURNING id returned no row") (pure . fromOnly) . listToMaybe
+          =<< PGS.query conn [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, service, issue_data, created_at, updated_at) VALUES (?, 'log_pattern', 'rpc pattern', ?, 'checkout', ?::jsonb, ?, ?) RETURNING id |] (testPid, patternHash, AE.encode payload, detectedAt, detectedAt)
+      (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing Nothing
+      let html = renderPage page
+      html `shouldSatisfy` T.isInfixOf "92 all time"
+      html `shouldSatisfy` T.isInfixOf ">2 mins ago<"
+      html `shouldSatisfy` T.isInfixOf ">&lt;*&gt; min</span>"
+
     -- Regression: an issue that never captured a trace id used to render the logs tab as
     -- `context___trace_id==""`, a predicate that filters nothing — so the tab fetched the
     -- project's entire retention window (~6s / 550KB of unrelated logs, on ~24% of issues).

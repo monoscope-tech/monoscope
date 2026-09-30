@@ -89,6 +89,7 @@ import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns (sourceFieldLabel)
+import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.PatternMerge qualified as PatternMerge
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
@@ -120,7 +121,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.IO.Error (userError)
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent, redirectCS, useTfReads)
-import Utils (LoadingSize (..), LoadingType (..), checkFreeTierStatus, countNoun, faSprite_, formatOffset, formatUTC, formatWithCommas, hostPath, isoT, loadingIndicator_, lookupValueText, renderMarkdown, timeScopedUrl, toUriStr)
+import Utils (LoadingSize (..), LoadingType (..), checkFreeTierStatus, countNoun, faSprite_, formatOffset, formatUTC, formatWithCommas, hostPath, isoT, loadingIndicator_, lookupValueText, renderMarkdown, summaryWords, timeScopedUrl, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData (..), parseQueryParamMaybe)
 
@@ -415,10 +416,15 @@ issueDetailCore pid firstM eventM requestedRange fetchIssue = do
       -- The relative branch stays because a *live* issue's last activity is ~now, and
       -- a trailing 24H window over recent (sparse, hot) partitions measures ~3.4s —
       -- the same budget the 4h bracket buys over the dense older ones.
+      -- A log-pattern issue row is written once; its pattern keeps the live seen/count.
+      patternM <- case Issues.issuePayload issue of
+        Just (Issues.LogPatternP d) -> LogPatterns.getLogPatternByHash pid d.sourceField d.patternHash
+        Just (Issues.LogPatternRateChangeP d) -> LogPatterns.getLogPatternByHash pid d.sourceField d.patternHash
+        _ -> pure Nothing
       let
         -- +/-2h: the widest bracket that stays inside ~3s (see the table above).
         bracketAround = windowAround 7200
-        lastActive = zonedTimeToUTC issue.updatedAt
+        lastActive = zonedTimeToUTC $ maybe issue.updatedAt (.lastSeenAt) patternM
         -- ~2x the issue's age so the data fills the chart, capped at 24H by the cost above.
         defaultSinceRange createdAt
           | ageH < 1 = "1H" :: Text
@@ -508,7 +514,7 @@ issueDetailCore pid firstM eventM requestedRange fetchIssue = do
       addRespHeaders
         $ PageCtx bwconf
         $ issueDetailPage
-          IssueView{pid = pid, issue = issue, traceRef = mTraceRef, replaySession = replaySession, errM = errorM, now = now, isFirst = isFirst, tp = tp, stateEvent = stateEvent, canResolve = canResolve, members = members, tagCounts = tagCounts}
+          IssueView{pid = pid, issue = issue, traceRef = mTraceRef, replaySession = replaySession, errM = errorM, patternM = patternM, now = now, isFirst = isFirst, tp = tp, stateEvent = stateEvent, canResolve = canResolve, members = members, tagCounts = tagCounts}
 
 
 -- | ‹ › stepping (and Recommended): the matching event carrying the issue's hash within a day of
@@ -917,8 +923,8 @@ railSection_ title body = section_ [class_ "py-4 border-b border-strokeWeak last
 --
 -- Absent cells are omitted, not rendered as "Unknown service": an issue with no
 -- environment set is not an issue in an environment called Unknown.
-issueFactRow_ :: UTCTime -> Issues.Issue -> Maybe ErrorPatterns.ErrorPattern -> Html ()
-issueFactRow_ now issue errM =
+issueFactRow_ :: UTCTime -> Issues.Issue -> Maybe ErrorPatterns.ErrorPattern -> Maybe LogPatterns.LogPattern -> Html ()
+issueFactRow_ now issue errM patternM =
   railSection_ "Seen"
     $ dl_ [class_ "grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-sm"]
     $ forM_ facts \(lbl, value, tip) -> do
@@ -926,7 +932,7 @@ issueFactRow_ now issue errM =
       dd_ [class_ "text-textStrong font-medium truncate", term "data-tippy-content" tip] $ toHtml value
   where
     nonBlank = mfilter (not . T.null . T.strip)
-    (firstSeen, lastSeen) = bimap zonedTimeToUTC zonedTimeToUTC $ maybe (issue.createdAt, issue.updatedAt) (\e -> (e.createdAt, e.updatedAt)) errM
+    (firstSeen, lastSeen) = bimap zonedTimeToUTC zonedTimeToUTC $ fromMaybe (issue.createdAt, issue.updatedAt) $ ((\e -> (e.createdAt, e.updatedAt)) <$> errM) <|> ((\p -> (p.firstSeenAt, p.lastSeenAt)) <$> patternM)
     facts =
       [("Last seen", agoText now lastSeen, formatUTC lastSeen), ("First seen", agoText now firstSeen, formatUTC firstSeen)]
         <> catMaybes
@@ -972,6 +978,7 @@ data IssueView = IssueView
   , traceRef :: Maybe (Text, UTCTime)
   , replaySession :: Maybe Text
   , errM :: Maybe ErrorPatterns.ErrorPatternL
+  , patternM :: Maybe LogPatterns.LogPattern
   , now :: UTCTime
   , isFirst :: Bool
   , tp :: TimePicker.TimePicker
@@ -1013,7 +1020,7 @@ issueDetailPage v@IssueView{..} = div_ [class_ "flex h-full overflow-hidden rela
         issueAggregate_ v
         eventCard_ v
       aside_ [class_ "min-w-0 max-md:px-3 px-4 xl:border-l max-xl:border-t border-strokeWeak"] do
-        issueFactRow_ now issue ((.base) <$> errM)
+        issueFactRow_ now issue ((.base) <$> errM) patternM
         railSection_ "AI analysis" do
           -- The background analysis job's verdict, when it has run for this error.
           case errM >>= \errL -> (,errL.base.errorCategory) <$> errL.base.rootCause of
@@ -1069,7 +1076,7 @@ issueHeader_ IssueView{..} = header_ [class_ "max-md:px-3 px-4 max-md:pt-4 pt-6 
             logLevelChip_ d.logLevel d.logPattern
             -- "all time" is explicit: the Events figure beside the title is scoped to
             -- the selected range, and an unqualified count reads as a contradiction.
-            metadataChip_ "tally" $ show d.occurrenceCount <> " all time"
+            metadataChip_ "tally" $ show (maybe d.occurrenceCount (.occurrenceCount) patternM) <> " all time"
           Just (Issues.LogPatternRateChangeP d) -> do
             logLevelChip_ d.logLevel d.logPattern
             metadataChip_ "arrow-trend-up" $ display d.changeDirection
@@ -2623,7 +2630,7 @@ renderLogContent_ txt =
 
 
 renderSummaryText_ :: Monad m => Text -> HtmlT m ()
-renderSummaryText_ = traverse_ (summaryToken_ False) . words
+renderSummaryText_ = traverse_ (summaryToken_ False) . summaryWords
 
 
 renderIssueTitle_ :: Issues.IssueL -> Html ()
