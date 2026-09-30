@@ -46,7 +46,7 @@ import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx (hxGet_, hxIndicator_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.RUM (PageVitalPoint (..), ReplaySession (..), RumBreakdown (..), RumBucket (..), RumCacheKey (..), RumError (..), RumPage (..), RumQuery (..), RumQueryResult (..), RumSession (..), SessionFilter (..), VitalGrouping (..), VitalMeasurement (..), VitalPopulation (..), VitalTrendPoint (..), rumPanelCacheGetStale, rumPanelCacheSet)
+import Models.Telemetry.RUM (PageVitalPoint (..), ReplaySession (..), RumBreakdown (..), RumBucket (..), RumCacheKey (..), RumError (..), RumPage (..), RumPulse (..), RumQuery (..), RumQueryResult (..), RumSession (..), SessionFilter (..), VitalGrouping (..), VitalMeasurement (..), VitalPopulation (..), VitalTrendPoint (..), rumPanelCacheGetStale, rumPanelCacheSet)
 import Models.Telemetry.RUM qualified as RUM
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Components (Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), withDeferredBody)
@@ -233,17 +233,20 @@ errorPredicate :: HI.Sql
 errorPredicate = rawSql errorSql
 
 
--- | Whether any browser telemetry exists in the window. One probe row decides between the
--- onboarding empty state and the widget hero; the numbers and chart themselves are Widget
--- components that fetch through the same chart pipeline (and cache) as dashboards and the
--- Log Explorer, so RUM cannot drift from how the rest of the platform reads and draws.
-rumHasBrowserTelemetry :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> Eff es Bool
-rumHasBrowserTelemetry scope =
+-- | Presence plus the two headline numbers that have no sparkline, from one scan of the
+-- window: the session and P75 tiles then arrive with the panel (and share its cache) instead
+-- of each spinning through its own fetch. The page-view and error tiles keep fetching: their
+-- sparkline series is the same request as their number.
+rumPulse :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> Eff es (Maybe RumPulse)
+rumPulse scope =
   Hasql.withHasqlTimefusion scope.useTf
-    $ not
-    . null
-    . map (HI.getOneColumn @Int64)
-    <$> Hasql.interpForTimefusion scope.useTf ([HI.sql|SELECT 1::bigint FROM otel_logs_and_spans WHERE |] <> browserScope scope <> [HI.sql| LIMIT 1|])
+    $ Hasql.interpOne
+    $ [HI.sql|SELECT COUNT(*)::bigint, COUNT(DISTINCT NULLIF(attributes___session___id, ''))::bigint,
+        (approx_percentile(0.75, percentile_agg(CASE WHEN |]
+    <> pageViewPredicate
+    <> [HI.sql| THEN duration END)) / 1000000.0)::float8
+      FROM otel_logs_and_spans WHERE |]
+    <> browserScope scope
 
 
 rumPages :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> Eff es [RumPage]
@@ -621,7 +624,7 @@ data RumData = RumData
   -- panel re-fetches itself with @refresh@ so the viewer always converges on fresh data
   -- without ever waiting on a cold scan for first paint.
   , now :: UTCTime
-  , hasTelemetry :: Bool
+  , pulse :: Maybe RumPulse
   , pages :: [RumPage]
   , errors :: [RumError]
   , sessions :: [RumSession]
@@ -705,7 +708,7 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
         | otherwise = SixHours
       cacheKey query = RumCacheKey pid query environment serviceFilter (nonEmptyT fromM) (nonEmptyT toM) window.sinceQuery
       panelTtl = TimePicker.cacheTtl window
-      pulseQ = (cacheKey PresenceQuery, panelTtl, PresenceResult <$> rumHasBrowserTelemetry scope, Nothing)
+      pulseQ = (cacheKey PresenceQuery, panelTtl, PulseResult <$> rumPulse scope, Nothing)
       pagesQ = (cacheKey PagesQuery, panelTtl, PagesResult <$> rumPages scope, Nothing)
       errorsQ = (cacheKey ErrorsQuery, panelTtl, ErrorsResult <$> rumErrors scope, Nothing)
       -- A cold list over a wide window paints the newest three hours first — a 24h scan of the
@@ -761,7 +764,7 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
               | otherwise = SkipCache
               where
                 populated = case result of
-                  PresenceResult present -> present
+                  PulseResult pulse -> any ((> 0) . (.events)) pulse
                   PagesResult rows -> not $ null rows
                   ErrorsResult rows -> not $ null rows
                   SessionsResult rows -> not $ null rows
@@ -779,7 +782,7 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
                     SessionSearchQuery (Just _) _ -> ":attributed-recordings-v2:negative-search-v1"
                     SessionSearchQuery{} -> ":attributed-recordings-v2"
                     SessionDetailQuery{} -> ":attributed-recordings-v2"
-                    PresenceQuery -> ""
+                    PresenceQuery -> ":pulse-v1"
                     PagesQuery -> ""
                     ErrorsQuery -> ""
                     VitalPopulationQuery{} -> ":vital-population-v1"
@@ -816,7 +819,7 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
     let (degradedPanels, served) = partitionEithers outcomes
         results = map fst served
         servedStale = any snd served
-        hasTelemetry = or [value | PresenceResult value <- results]
+        pulse = mfilter ((> 0) . (.events)) $ asum [value | PulseResult value <- results]
         pages = fold [value | PagesResult value <- results]
         errors = fold [value | ErrorsResult value <- results]
         sessions = fold [value | SessionsResult value <- results]
@@ -827,7 +830,7 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
         vitalTrend = [VitalTrendPoint time population.metricName population.measurement | population <- populations, TrendVital time <- [population.grouping]]
         pageVitals = [PageVitalPoint url population.metricName population.measurement | population <- populations, PageVital url <- [population.grouping]]
         breakdown = fold [value | BreakdownResult value <- results]
-    pure RumData{links, tab, panel, servedStale, now, hasTelemetry, pages, errors, sessions, vitals, vitalTrend, pageVitals, breakdown, query = queryM, sessionFilter, selectedSession = selectedM, selectedSessionData, degradedPanels}
+    pure RumData{links, tab, panel, servedStale, now, pulse, pages, errors, sessions, vitals, vitalTrend, pageVitals, breakdown, query = queryM, sessionFilter, selectedSession = selectedM, selectedSessionData, degradedPanels}
   let conf =
         bw
           { pageTitle = "Real User Monitoring"
@@ -895,7 +898,7 @@ slot_ page panel skeleton content
     -- Automatic ticks leave in-flight work running; manual changes still replace it.
     -- Populated summary widgets refresh themselves; replacing their parent resets loaded values.
     liveAttrs
-      | panel == PanelPulse && page.hasTelemetry = []
+      | panel == PanelPulse && isJust page.pulse = []
       | otherwise = panelSwapAttrs page panel False "update-query[event.detail?.source!='auto-refresh'||!this.matches('.htmx-request,:has(.htmx-request),#rum-page:has(#rum-session-search-form.htmx-request) #rum-panel-sessions')] from:window" (Just "replace")
     -- On the Sessions tab the panel also carries the replay workspace; swapping the whole
     -- panel would restart a replay the viewer just opened. Only the list is re-fetched
@@ -907,7 +910,7 @@ panelRevalidation_ :: RumData -> RumPanel -> Html ()
 panelRevalidation_ page panel =
   -- A populated pulse is four widgets that fetch and refresh themselves; re-rendering the
   -- panel around them only restarts them, which is the spinner flash on first load.
-  when (page.servedStale && not (panel == PanelPulse && page.hasTelemetry)) $ div_ (class_ "hidden" : panelSwapAttrs page panel True "load delay:600ms" ("abort" <$ guard (page.tab == Sessions && panel == PanelSessions || panel == PanelSessionDetail))) mempty
+  when (page.servedStale && not (panel == PanelPulse && isJust page.pulse)) $ div_ (class_ "hidden" : panelSwapAttrs page panel True "load delay:600ms" ("abort" <$ guard (page.tab == Sessions && panel == PanelSessions || panel == PanelSessionDetail))) mempty
 
 
 -- | A rendered session list syncs with the search form that also replaces it; any other
@@ -1038,8 +1041,8 @@ overview_ page = div_ [class_ "space-y-2 px-4 pb-4 pt-2 max-md:px-3"] do
 -- number and chart in the product.
 pulseOrEmpty_ :: RumData -> Html ()
 pulseOrEmpty_ page
-  | page.hasTelemetry = div_ [class_ "space-y-4"] do
-      rumStatWidgets_ page.links
+  | Just pulse <- page.pulse = div_ [class_ "space-y-4"] do
+      rumStatWidgets_ page.links pulse
       rumActivityWidget_ page.links
   | otherwise = maybe (rumEmptyState_ page.links.queryScope.projectId) (scopedEmptyState_ page.links) page.links.queryScope.service
 
@@ -1058,9 +1061,10 @@ panelSkeleton_ :: Html () -> Html ()
 panelSkeleton_ = div_ [class_ "rounded-lg border border-strokeWeak surface-raised"]
 
 
-rumStatWidgets_ :: RumLinks -> Html ()
-rumStatWidgets_ links = div_ [class_ "grid grid-cols-4 gap-3 max-md:grid-cols-2"] do
+rumStatWidgets_ :: RumLinks -> RumPulse -> Html ()
+rumStatWidgets_ links pulse = div_ [class_ "grid grid-cols-4 gap-3 max-md:grid-cols-2"] do
   statSlot_
+    $ served (Just $ fromIntegral pulse.sessions)
     $ statWidget "rum-stat-sessions" Widget.WTStat "Sessions" "users" "sessions" sessionsSql
   statSlot_
     -- The page-view predicate alone: its two disjuncts are already inside 'browserSql''s
@@ -1075,9 +1079,12 @@ rumStatWidgets_ links = div_ [class_ "grid grid-cols-4 gap-3 max-md:grid-cols-2"
       { Widget.seriesIntent = Just "error"
       }
   statSlot_
+    $ served pulse.p75LoadMs
     $ statWidget "rum-stat-p75" Widget.WTStat "P75 page load" "gauge" "ms" p75Sql
   where
     statSlot_ = div_ [class_ "h-28 min-h-28"] . Widget.widget_
+    -- A value rendered with the panel; the widget still refreshes itself on live ticks.
+    served value widget = widget{Widget.dataset = Just (def :: Widget.WidgetDataset){Widget.value = value}}
     statWidget wid wType title icon unit sql =
       def
         { Widget.wType = wType

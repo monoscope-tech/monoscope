@@ -3,6 +3,7 @@ module Models.Telemetry.RUM (
   RumPage (..),
   RumError (..),
   RumBreakdown (..),
+  RumPulse (..),
   ReplaySession (..),
   RumSession (..),
   SessionFilter (..),
@@ -500,8 +501,18 @@ SELECT ROW(read_kind,population,epoch_series,epoch_start) FROM reads
     <> concatMap (sortWith (.metricName) . snd) (take 150 orderedPages)
 
 
+-- | The Overview's headline numbers from one scan of the window. Presence is @events > 0@.
+data RumPulse = RumPulse
+  { events :: Int64
+  , sessions :: Int64
+  , p75LoadMs :: Maybe Double
+  }
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, HI.DecodeRow)
+
+
 data RumQueryResult
-  = PresenceResult Bool
+  = PulseResult (Maybe RumPulse)
   | PagesResult [RumPage]
   | ErrorsResult [RumError]
   | SessionsResult [RumSession]

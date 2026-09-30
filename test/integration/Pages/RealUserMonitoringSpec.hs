@@ -523,7 +523,7 @@ spec = sequential $ aroundAll withTestResources do
       overviewData <- case overviewBody of
         DeferredBody loaded -> pure loaded
         DeferredShell{} -> fail "RUM answered with the deferred shell when asked for the body"
-      overviewData.hasTelemetry `shouldBe` True
+      isJust overviewData.pulse `shouldBe` True
       overviewData.degradedPanels `shouldBe` []
       overview <- renderPage tr Nothing Nothing Nothing Nothing
       -- The unscoped read caches under an unscoped key; `service` is part of that key so a
@@ -684,7 +684,7 @@ spec = sequential $ aroundAll withTestResources do
       -- The project has browser telemetry from the preceding examples. It must not leak into
       -- a link scoped to another environment merely because this test session's default is
       -- unscoped.
-      pulse.hasTelemetry `shouldBe` False
+      isJust pulse.pulse `shouldBe` False
 
       (_, RUM.RumGet (PageCtx _ sessionsBody)) <- testServant tr $ RUM.rumGetScopedH testPid (Just "sessions") Nothing Nothing Nothing Nothing (Just "24H") (Just sessionId) Nothing (Just "sessions") (Just "1") Nothing (Just "missing-environment")
       case sessionsBody of
