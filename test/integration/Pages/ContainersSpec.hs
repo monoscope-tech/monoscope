@@ -16,7 +16,6 @@ import Lucid qualified
 import Models.Telemetry.Containers (ContainerRow (..), ContainerSnapshotKey, Runtime (..), Scope (..), containersInWindow, cpuPctOfLimit, memPctOfLimit, runtimeOf)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Charts.Charts qualified as Charts
-import Pages.Components (Deferred (..))
 import Pages.Containers qualified as Containers
 import Pages.Infrastructure qualified as Infrastructure
 import Pkg.Components.Table (Table (..))
@@ -45,19 +44,6 @@ data ContainerQuery = ContainerQuery
 
 noContainerFilters :: ContainerQuery
 noContainerFilters = ContainerQuery Nothing Nothing Nothing Nothing Nothing
-
-
--- | The loaded body of a deferred response. A shell here means the handler skipped the query
--- the test is asserting on, which is a failure worth naming rather than a pattern-match crash.
-deferredBody :: Deferred a -> IO a
-deferredBody = \case
-  DeferredBody body -> pure body
-  DeferredShell{} -> fail "handler answered with the deferred shell; expected the loaded body"
-
-
--- | What a first, non-deferred request answers with: page chrome and a skeleton, no query.
-shellHtml :: Lucid.ToHtml a => TestResources -> ATAuthCtx (RespHeaders a) -> IO Text
-shellHtml tr render = LT.toStrict . Lucid.renderText . Lucid.toHtml . snd <$> testServant tr render
 
 
 containersPage :: ContainerQuery -> ATAuthCtx (RespHeaders Containers.ContainersGet)

@@ -23,7 +23,7 @@ module Data.Effectful.Hasql (
   labeledSession,
   labeledTransaction,
   interp,
-  interpForTimefusion,
+  interpTimefusion,
   interpOne,
   interpOneJson,
   interpOneOrThrow,
@@ -282,8 +282,8 @@ interp s = statement () (HI.interp True s)
 
 -- | TimeFusion plans named prepared statements before seeing parameters, missing partition
 -- pruning and cache admission. PostgreSQL still needs preparation for parameter inference.
-interpForTimefusion :: (HI.DecodeResult a, Hasql :> es, IOE :> es) => Bool -> HI.Sql -> Eff es a
-interpForTimefusion useTf s = statement () (HI.interp (not useTf) s)
+interpTimefusion :: (HI.DecodeResult a, Hasql :> es, Labeled "timefusion" Hasql :> es, IOE :> es) => Bool -> HI.Sql -> Eff es a
+interpTimefusion useTf = withHasqlTimefusion useTf . statement () . HI.interp (not useTf)
 
 
 -- | Run a query expecting at most one row.

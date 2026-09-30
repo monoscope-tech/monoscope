@@ -17,6 +17,7 @@ import Data.UUID qualified as UUID
 import Data.UUID.Quasi (uuid)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PG
+import Effectful (Eff, (:>))
 import Effectful.Dispatch.Dynamic (interpose, send)
 import Effectful.Labeled (Labeled (..))
 import Hasql.Interpolate qualified as HI
@@ -43,6 +44,7 @@ import Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields qualified as PMF
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Timeout (timeout)
+import System.Types (ATAuthCtx, RespHeaders)
 import Test.Hspec
 import UnliftIO.Async (wait, withAsync)
 import UnliftIO.Exception qualified as E
@@ -112,10 +114,46 @@ renderScoped tr tab query sessionFilterM selected service =
 
 
 renderPanel :: TestResources -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> IO Text
-renderPanel tr tab query sessionFilterM selected service panel = do
-  let scoped = tr{trSessAndHeader = fmap (\session -> session{Projects.service = service}) tr.trSessAndHeader}
-  (_, page) <- testServant scoped $ RUM.rumGetH testPid tab query sessionFilterM Nothing Nothing (Just "24H") selected Nothing panel (Just "1") Nothing
-  pure $ toStrict $ Lucid.renderText $ Lucid.toHtml page
+renderPanel tr tab query sessionFilterM selected service panel =
+  shellHtml (withService service tr) $ RUM.rumGetH testPid tab query sessionFilterM Nothing Nothing (Just "24H") selected Nothing panel (Just "1") Nothing
+
+
+withService :: Maybe Text -> TestResources -> TestResources
+withService service tr = tr{trSessAndHeader = fmap (\session -> session{Projects.service = service}) tr.trSessAndHeader}
+
+
+htmlOf :: Lucid.ToHtml a => a -> Text
+htmlOf = toStrict . Lucid.renderText . Lucid.toHtml
+
+
+-- | The loaded panel body of a RUM response.
+rumBody :: TestResources -> ATAuthCtx (RespHeaders RUM.RumGet) -> IO RUM.RumData
+rumBody tr action = testServant tr action >>= \(_, RUM.RumGet (PageCtx _ body)) -> deferredBody body
+
+
+-- | Every TimeFusion read fails to acquire a connection.
+tfUnavailable :: Labeled "timefusion" Hasql.Hasql :> es => Eff es a -> Eff es a
+tfUnavailable = interpose @(Labeled "timefusion" Hasql.Hasql) \_ (Labeled effect) -> case effect of
+  Hasql.UseStatement{} -> pure $ Left HP.AcquisitionTimeoutUsageError
+  Hasql.UseSession{} -> pure $ Left HP.AcquisitionTimeoutUsageError
+  Hasql.UseLabeledSession{} -> pure $ Left HP.AcquisitionTimeoutUsageError
+
+
+execSql :: TestResources -> PG.Query -> IO ()
+execSql tr sql = withResource tr.trPool $ \conn -> void $ PG.execute_ conn sql
+
+
+-- | Counts rum_panel_cache inserts made while the action runs.
+withCacheWriteCounter :: TestResources -> Text -> (IO Int64 -> IO a) -> IO a
+withCacheWriteCounter tr name body = E.bracket_ (execSql tr create) (execSql tr remove) (body count)
+  where
+    sequenceName = name <> "_writes"
+    function = "count_" <> name <> "_write"
+    create = fromString $ toString $ "CREATE SEQUENCE " <> sequenceName <> "; CREATE FUNCTION " <> function <> "() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM nextval('" <> sequenceName <> "'); RETURN NEW; END $$; CREATE TRIGGER " <> function <> " BEFORE INSERT ON rum_panel_cache FOR EACH ROW EXECUTE FUNCTION " <> function <> "()"
+    remove = fromString $ toString $ "DROP TRIGGER " <> function <> " ON rum_panel_cache; DROP FUNCTION " <> function <> "(); DROP SEQUENCE " <> sequenceName
+    count = withResource tr.trPool \conn -> do
+      [(lastValue, isCalled)] <- PG.query_ conn (fromString $ toString $ "SELECT last_value, is_called FROM " <> sequenceName) :: IO [(Int64, Bool)]
+      pure $ if isCalled then lastValue else 0
 
 
 loadVitalPanel :: TestResources -> Projects.ProjectId -> Maybe Text -> Text -> IO RUM.RumData
@@ -124,11 +162,7 @@ loadVitalPanel tr projectId refresh = loadPerformance tr projectId Nothing Nothi
 
 -- | The loaded Performance tab body for a window, or for one panel of it.
 loadPerformance :: TestResources -> Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> IO RUM.RumData
-loadPerformance tr projectId from to since refresh panel = do
-  (_, RUM.RumGet (PageCtx _ body)) <- testServant tr $ RUM.rumGetH projectId (Just "performance") Nothing Nothing from to since Nothing Nothing panel (Just "1") refresh
-  case body of
-    DeferredBody page -> pure page
-    DeferredShell{} -> fail "Expected a loaded Performance body"
+loadPerformance tr projectId from to since refresh panel = rumBody tr $ RUM.rumGetH projectId (Just "performance") Nothing Nothing from to since Nothing Nothing panel (Just "1") refresh
 
 
 measured :: RUMData.VitalMeasurement -> (Maybe Double, Natural)
@@ -173,11 +207,11 @@ spec :: Spec
 spec = sequential $ aroundAll withTestResources do
   describe "Real User Monitoring" do
     it "emptyProject_explainsBrowserTelemetryAndOffersTheDashboard" \tr -> do
-      (_, shell) <- testServant tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing Nothing Nothing
-      toStrict (Lucid.renderText $ Lucid.toHtml shell) `shouldContainAll` ["hx-trigger=\"load\"", "deferred=1", "skeleton-shimmer", "tabs tabs-box tabs-outline"]
+      shell <- shellHtml tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing Nothing Nothing
+      shell `shouldContainAll` ["hx-trigger=\"load\"", "deferred=1", "skeleton-shimmer", "tabs tabs-box tabs-outline"]
       -- The shell stands in for the tab it is loading, so switching tabs does not reflow.
-      (_, sessionsShell) <- testServant tr $ RUM.rumGetH testPid (Just "sessions") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing Nothing Nothing
-      toStrict (Lucid.renderText $ Lucid.toHtml sessionsShell) `shouldContainAll` ["Loading sessions", "skeleton-shimmer"]
+      sessionsShell <- shellHtml tr $ RUM.rumGetH testPid (Just "sessions") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing Nothing Nothing
+      sessionsShell `shouldContainAll` ["Loading sessions", "skeleton-shimmer"]
       html <- renderPage tr Nothing Nothing Nothing Nothing
       html `shouldContainAll` ["No browser telemetry yet", "Install the browser SDK", "Open RUM dashboard", "empty-state"]
 
@@ -213,7 +247,7 @@ spec = sequential $ aroundAll withTestResources do
         page <- loadPerformance tr projectId from to since Nothing (Just "vital_trend")
         page.degradedPanels `shouldBe` []
         [measured vital.measurement | vital <- page.vitals, vital.name == "lcp"] `shouldBe` [(Just 175, 1)]
-        widget <- renderedWidget $ toText $ Lucid.renderText $ Lucid.toHtml page
+        widget <- renderedWidget $ htmlOf page
         let millis seconds = floor (1000 * utcTimeToPOSIXSeconds (addUTCTime seconds frozenTime)) :: Int
             plottedStart = max (millis start) (millis (-300))
         [(dataset.from, dataset.to, dataset.source) | dataset <- maybeToList widget.dataset]
@@ -297,7 +331,7 @@ spec = sequential $ aroundAll withTestResources do
       pages <- forM cases \(temporality, points, scalars, _) -> do
         projectId <- createTestProject tr "RUM histogram"
         apiKey <- createTestAPIKey tr projectId "rum-histogram-key"
-        let scoped = tr{trSessAndHeader = fmap (\session -> session{Projects.service = Just "histogram-ui"}) tr.trSessAndHeader}
+        let scoped = withService (Just "histogram-ui") tr
         exportMetrics tr apiKey [mkAttr "service.name" "histogram-ui"] [lcpHistogram temporality points]
         when (temporality == PM.AGGREGATION_TEMPORALITY_UNSPECIFIED)
           $ runTestBg frozenTime tr
@@ -320,14 +354,14 @@ spec = sequential $ aroundAll withTestResources do
       map (\(detail, summary) -> (detail.degradedPanels, summary.degradedPanels)) pages `shouldBe` replicate (length cases) ([], [])
       forM_ (zip cases pages) \((_, _, _, (value, count)), (_, summary)) ->
         forM_ (lookup (isJust value, count) [((False, 1), "1 known observation"), ((True, 1), "1 observation"), ((True, 100), "100 observations")]) \label ->
-          toText (Lucid.renderText $ Lucid.toHtml summary) `shouldContainAll` [">" <> label <> "</td>"]
+          htmlOf summary `shouldContainAll` [">" <> label <> "</td>"]
       -- Explicit/custom buckets use uniform within-bucket interpolation; scalar observations
       -- remain exact. Missing baselines retain known counts without a full-population P75.
       map (\(detail, summary) -> (map (measured . (.measurement)) detail.vitalTrend, [(value.page, measured value.measurement) | value <- detail.pageVitals], [measured value.measurement | value <- summary.vitals, value.name == "lcp"])) pages
         `shouldBe` [([expected], [("/histogram", expected)], [expected]) | (_, _, _, expected) <- cases]
       let lcpMeasurements = [value.measurement | (_, summary) <- pages, value <- summary.vitals, value.name == "lcp"]
       [issue | RUMData.Unavailable _ issue <- lcpMeasurements] `shouldBe` [RUMData.MissingBaseline, RUMData.UnboundedBucket, RUMData.UnknownStart, RUMData.InterruptedSeries, RUMData.InterruptedSeries, RUMData.InterruptedSeries, RUMData.UnboundedBucket, RUMData.UnboundedBucket, RUMData.InvalidReset, RUMData.UnknownTemporality, RUMData.InvalidBuckets, RUMData.OverlappingIntervals, RUMData.UnknownStart, RUMData.InvalidReset]
-      [RUMData.estimateRange estimate | RUMData.Measured _ estimate <- lcpMeasurements]
+      [estimate.bounds | RUMData.Measured _ estimate <- lcpMeasurements]
         `shouldBe` [Just (0, 100), Just (0, 100), Just (0, 200), Just (0, 200), Just (0, 100), Just (0, 100), Just (0, 100), Just (0, 100), Just (0, 100), Nothing, Just (0, 200), Just (0, 100), Just (0, 100)]
 
     it "vitalPopulation_gaugeAndDelta_useOneCurrentWindowRead" \tr -> do
@@ -349,15 +383,12 @@ spec = sequential $ aroundAll withTestResources do
         $ runQueryEffect tr
         $ Hasql.withHasqlTimefusion True
         $ Hasql.interpOne @(HI.OneColumn Int64) [HI.sql|SELECT 1::bigint|]
-      (_, RUM.RumGet (PageCtx _ body)) <- testServant tr $ database $ RUM.rumGetH projectId (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "vital_trend") (Just "1") Nothing
-      case body of
-        DeferredBody page -> do
-          page.degradedPanels `shouldBe` []
-          let expected = [("fcp", (Just 25, 2)), ("lcp", (Just 93.75, 100))]
-          sort [(vital.name, measured vital.measurement) | vital <- page.vitals, vital.name `elem` ["fcp", "lcp"]] `shouldBe` expected
-          sort [(vital.metricName, measured vital.measurement) | vital <- page.vitalTrend] `shouldBe` expected
-          sort [(vital.metricName, measured vital.measurement) | vital <- page.pageVitals] `shouldBe` expected
-        DeferredShell{} -> fail "Expected loaded one-read vital panel"
+      page <- rumBody tr $ database $ RUM.rumGetH projectId (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "vital_trend") (Just "1") Nothing
+      page.degradedPanels `shouldBe` []
+      let expected = [("fcp", (Just 25, 2)), ("lcp", (Just 93.75, 100))]
+      sort [(vital.name, measured vital.measurement) | vital <- page.vitals, vital.name `elem` ["fcp", "lcp"]] `shouldBe` expected
+      sort [(vital.metricName, measured vital.measurement) | vital <- page.vitalTrend] `shouldBe` expected
+      sort [(vital.metricName, measured vital.measurement) | vital <- page.pageVitals] `shouldBe` expected
       when tr.trATCtx.env.enableTimefusionReads $ readIORef queries `shouldReturn` 1
 
     it "histogramVitals_missingCount_retainsUnavailableCoverage" \tr -> do
@@ -445,7 +476,7 @@ spec = sequential $ aroundAll withTestResources do
         apiKey <- createTestAPIKey tr projectId "rum-band-key"
         exportMetrics tr apiKey [] [lcpHistogram PM.AGGREGATION_TEMPORALITY_DELTA [histogramPoint "/bands" (addUTCTime (-10) frozenTime) (addUTCTime (-60) frozenTime) 100 [0, 100, 0] bounds & PMF.sum .~ 300000]]
         page <- loadVitalPanel tr projectId Nothing "vitals"
-        pure $ fst $ T.breakOn "</tr>" $ snd $ T.breakOn "Largest Contentful Paint" $ toStrict $ Lucid.renderText $ Lucid.toHtml page
+        pure $ fst $ T.breakOn "</tr>" $ snd $ T.breakOn "Largest Contentful Paint" $ htmlOf page
       zipWithM_ shouldContainAll ratings [["Needs improvement"], ["Poor"], ["Not assessed"]]
 
     it "pageVitals_distinctExactUrls_doNotMergeRoutePercentiles" \tr -> do
@@ -455,10 +486,9 @@ spec = sequential $ aroundAll withTestResources do
           high = "https://shop.example/item/DEADBEEF?variant=high"
       forM_ ([(low, 10, -10), (low, 20, -9), (high, 1000, -8), (high, 2000, -7)] :: [(Text, Double, Int)]) \(url, value, seconds) ->
         ingestMetric tr apiKey [] [mkAttr "page.url" url] "browser.web_vital.lcp" value (addUTCTime (fromIntegral seconds) frozenTime)
-      (_, response) <- testServant tr $ RUM.rumGetH projectId (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "vital_trend") (Just "1") Nothing
-      let html = toStrict $ Lucid.renderText $ Lucid.toHtml response
-      html `shouldContainAll` [low, high, "17.5 ms", "1.8 s", "attributes.url.full%20%3D%3D%20%22https"]
-      html `shouldSatisfy` (not . T.isInfixOf "/item/{hex}")
+      page <- shellHtml tr $ RUM.rumGetH projectId (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "vital_trend") (Just "1") Nothing
+      page `shouldContainAll` [low, high, "17.5 ms", "1.8 s", "attributes.url.full%20%3D%3D%20%22https"]
+      page `shouldSatisfy` (not . T.isInfixOf "/item/{hex}")
 
     it "explicitTimeWindow_withoutSince_survivesSharedNavigation" \tr -> do
       let from = addUTCTime (-5400) frozenTime
@@ -486,7 +516,7 @@ spec = sequential $ aroundAll withTestResources do
       forM_ [(Nothing, Nothing, Just ("1H" :: Text), addUTCTime (-3600) frozenTime, frozenTime), (Just $ toText $ iso8601Show explicitFrom, Just $ toText $ iso8601Show explicitTo, Just "", explicitFrom, explicitTo)] \(from, to, since, expectedFrom, expectedTo) -> do
         page <- loadPerformance tr projectId from to since Nothing (Just "vital_trend")
         length page.vitalTrend `shouldBe` 1
-        toStrict (Lucid.renderText $ Lucid.toHtml page) `shouldContainAll` ["&quot;from&quot;:" <> show (millis expectedFrom), "&quot;to&quot;:" <> show (millis expectedTo)]
+        htmlOf page `shouldContainAll` ["&quot;from&quot;:" <> show (millis expectedFrom), "&quot;to&quot;:" <> show (millis expectedTo)]
 
     it "browserTelemetry_correlatesExperienceVitalsErrorsAndReplaySessions" \tr -> do
       apiKey <- createTestAPIKey tr testPid "rum-browser-key"
@@ -519,10 +549,7 @@ spec = sequential $ aroundAll withTestResources do
       (series "Page views" activity, series "Errors" activity) `shouldBe` (2 :: Double, series "value" errors)
       isJust p75.dataFloat `shouldBe` True
 
-      (_, RUM.RumGet (PageCtx _ overviewBody)) <- testServant tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "pulse") (Just "1") Nothing
-      overviewData <- case overviewBody of
-        DeferredBody loaded -> pure loaded
-        DeferredShell{} -> fail "RUM answered with the deferred shell when asked for the body"
+      overviewData <- rumBody tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "pulse") (Just "1") Nothing
       (\p -> (p.sessions, isJust p.p75LoadMs)) <$> overviewData.pulse `shouldBe` Just (2, True)
       overviewData.degradedPanels `shouldBe` []
       overview <- renderPage tr Nothing Nothing Nothing Nothing
@@ -539,8 +566,7 @@ spec = sequential $ aroundAll withTestResources do
       -- The tab strip and time picker must not wait on six 24-hour scans: the request that
       -- paints the page answers with a skeleton that fetches the panels itself. Panel data
       -- appearing here again would mean a tab click is back to seconds of blank page.
-      (_, shellPage) <- testServant tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing Nothing Nothing
-      let shell = toStrict $ Lucid.renderText $ Lucid.toHtml shellPage
+      shell <- shellHtml tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing Nothing Nothing
       shell `shouldContainAll` ["Real User Monitoring", "tabs tabs-box tabs-outline", "id=\"rum-page\"", "hx-trigger=\"load\"", "deferred=1"]
       T.isInfixOf "Ada Lovelace" shell `shouldBe` False
 
@@ -553,8 +579,8 @@ spec = sequential $ aroundAll withTestResources do
       sessions `shouldContainAll` ["panel=sessions&amp;deferred=1"]
       -- And the shells a deep link renders must carry its filter and selection, or the panel
       -- they fetch comes back unfiltered with nothing selected.
-      (_, deepShell) <- testServant tr $ RUM.rumGetH testPid (Just "sessions") Nothing (Just "errors") Nothing Nothing (Just "24H") (Just sessionId) Nothing Nothing (Just "1") Nothing
-      toStrict (Lucid.renderText $ Lucid.toHtml deepShell) `shouldContainAll` ["filter=errors", "session=00000000-0000-0000-0000-000000000042"]
+      deepShell <- shellHtml tr $ RUM.rumGetH testPid (Just "sessions") Nothing (Just "errors") Nothing Nothing (Just "24H") (Just sessionId) Nothing Nothing (Just "1") Nothing
+      deepShell `shouldContainAll` ["filter=errors", "session=00000000-0000-0000-0000-000000000042"]
 
       replaySessions <- renderPage tr (Just "sessions") Nothing (Just "replays") Nothing
       T.isInfixOf "No recording" replaySessions `shouldBe` False
@@ -564,62 +590,55 @@ spec = sequential $ aroundAll withTestResources do
       purgeRumCaches tr
       apiKey <- createTestAPIKey tr testPid "rum-panel-body-key"
       otelBrowserSpan apiKey "88000000000000000000000000000008" "8800000000000001" "session-panel-body" "panel-body-browser" tr
-      let scoped = tr{trSessAndHeader = fmap (\session -> session{Projects.service = Just "panel-body-browser"}) tr.trSessAndHeader}
+      let scoped = withService (Just "panel-body-browser") tr
       (_, page@(RUM.RumGet (PageCtx _ body))) <- testServant scoped $ RUM.rumGetH testPid (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "pages") (Just "1") Nothing
-      let rendered = Lucid.renderText $ Lucid.toHtml page
-      (rendered == Lucid.renderText (Lucid.toHtml body)) `shouldBe` True
-      toStrict rendered `shouldContainAll` ["id=\"rum-page\"", "id=\"rum-panel-pages\"", "Top pages", "/cart"]
-      T.isInfixOf "<html" (toStrict rendered) `shouldBe` False
-      (_, fullPage) <- testServant scoped $ RUM.rumGetH testPid (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing (Just "1") Nothing
-      T.isInfixOf "<html" (toStrict $ Lucid.renderText $ Lucid.toHtml fullPage) `shouldBe` True
+      let rendered = htmlOf page
+      (rendered == htmlOf body) `shouldBe` True
+      rendered `shouldContainAll` ["id=\"rum-page\"", "id=\"rum-panel-pages\"", "Top pages", "/cart"]
+      T.isInfixOf "<html" rendered `shouldBe` False
+      fullPage <- shellHtml scoped $ RUM.rumGetH testPid (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing (Just "1") Nothing
+      T.isInfixOf "<html" fullPage `shouldBe` True
 
     it "panelQueryFailure_survivesHTMXSelection_insteadOfClaimingNoData" \tr -> do
       purgeRumCaches tr
       projectId <- createTestProject tr "RUM failed panel"
       let scoped = tr{trATCtx = tr.trATCtx{env = tr.trATCtx.env{enableTimefusionReads = True}}}
-          unavailable = interpose @(Labeled "timefusion" Hasql.Hasql) \_ (Labeled effect) -> case effect of
-            Hasql.UseStatement{} -> pure $ Left HP.AcquisitionTimeoutUsageError
-            Hasql.UseSession{} -> pure $ Left HP.AcquisitionTimeoutUsageError
-            Hasql.UseLabeledSession{} -> pure $ Left HP.AcquisitionTimeoutUsageError
       forM_ ([("vitals", "rum-panel-vitals", [RUMData.VitalPopulationQuery RUMData.OneHour]), ("vital_trend", "rum-panel-vital_trend", [RUMData.VitalPopulationQuery RUMData.OneHour]), ("sessions", "rum-sessions-list", [RUMData.SessionSearchQuery Nothing RUMData.AllSessionRows, RUMData.SessionDetailQuery "selected-session"]), ("session_detail", "rum-replay-workspace", [RUMData.SessionDetailQuery "selected-session"])] :: [(Text, Text, [RUMData.RumQuery])]) \(panel, target, queries) -> do
-        (_, payload@(RUM.RumGet (PageCtx _ body))) <- testServant scoped $ unavailable $ RUM.rumGetH projectId (Just $ if panel `elem` ["sessions", "session_detail"] then "sessions" else "performance") Nothing Nothing Nothing Nothing (Just "24H") (Just "selected-session") Nothing (Just panel) (Just "1") Nothing
-        case body of
-          DeferredBody page -> page.degradedPanels `shouldBe` queries
-          DeferredShell{} -> expectationFailure "Expected the failed panel response"
-        let selected = snd $ T.breakOn ("id=\"" <> target <> "\"") $ toStrict $ Lucid.renderText $ Lucid.toHtml payload
+        (_, payload@(RUM.RumGet (PageCtx _ body))) <- testServant scoped $ tfUnavailable $ RUM.rumGetH projectId (Just $ if panel `elem` ["sessions", "session_detail"] then "sessions" else "performance") Nothing Nothing Nothing Nothing (Just "24H") (Just "selected-session") Nothing (Just panel) (Just "1") Nothing
+        page <- deferredBody body
+        page.degradedPanels `shouldBe` queries
+        let selected = snd $ T.breakOn ("id=\"" <> target <> "\"") $ htmlOf payload
         T.isPrefixOf "<div role=\"alert\"" (T.drop 1 $ snd $ T.breakOn ">" selected) `shouldBe` True
         selected `shouldContainAll` ["Some RUM data could not be loaded.", ">Retry</button>", "refresh=1"]
         any (`T.isInfixOf` selected) ["No data", "No web vital samples", "Choose a session", "No sessions match"] `shouldBe` False
       let sid = "00000000-0000-0000-0000-000000000091" :: Text
           -- refresh: a cold wide list otherwise answers with the uncached newest-3h slice.
           sessions resources panel selected = testServant resources $ RUM.rumGetH projectId (Just "sessions") Nothing Nothing Nothing Nothing (Just "24H") selected Nothing (Just panel) (Just "1") (Just "1")
-          render = toStrict . Lucid.renderText . Lucid.toHtml
-          firstContent target = T.drop 1 . snd . T.breakOn ">" . snd . T.breakOn ("id=\"" <> target <> "\"") . render
+          firstContent target = T.drop 1 . snd . T.breakOn ">" . snd . T.breakOn ("id=\"" <> target <> "\"") . htmlOf
       withResource tr.trPool $ \conn ->
         void $ PG.execute conn "INSERT INTO projects.replay_sessions (session_id, project_id, created_at, last_event_at, event_file_count, user_name) VALUES (?::uuid, ?, ?, ?, 1, 'Failure survivor')" (sid, projectId, frozenTime, addUTCTime 60 frozenTime)
       -- A healthy cached counterpart survives the other query's acquisition failure.
       forM_ ([("session_detail", Just sid, "rum-sessions-list", "rum-replay-workspace", [RUMData.SessionSearchQuery Nothing RUMData.AllSessionRows]), ("sessions", Nothing, "rum-replay-workspace", "rum-sessions-list", [RUMData.SessionDetailQuery sid])] :: [(Text, Maybe Text, Text, Text, [RUMData.RumQuery])]) $ \(warmPanel, warmSelection, failedTarget, healthyTarget, queries) -> do
         purgeRumCaches tr
         void $ sessions tr warmPanel warmSelection
-        (_, response@(RUM.RumGet (PageCtx _ body))) <- testServant scoped $ unavailable $ RUM.rumGetH projectId (Just "sessions") Nothing Nothing Nothing Nothing (Just "24H") (Just sid) Nothing (Just "sessions") (Just "1") Nothing
-        case body of
-          DeferredBody page -> page.degradedPanels `shouldBe` queries
-          DeferredShell{} -> expectationFailure "Expected the sessions panel response"
+        (_, response@(RUM.RumGet (PageCtx _ body))) <- testServant scoped $ tfUnavailable $ RUM.rumGetH projectId (Just "sessions") Nothing Nothing Nothing Nothing (Just "24H") (Just sid) Nothing (Just "sessions") (Just "1") Nothing
+        page <- deferredBody body
+        page.degradedPanels `shouldBe` queries
         T.isPrefixOf "<div role=\"alert\"" (firstContent failedTarget response) `shouldBe` True
         T.isPrefixOf "<div role=\"alert\"" (firstContent healthyTarget response) `shouldBe` False
-        render response `shouldContainAll` ["Failure survivor"]
+        htmlOf response `shouldContainAll` ["Failure survivor"]
       purgeRumCaches tr
       let healthy = testServant tr $ RUM.rumGetH projectId (Just "performance") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "vitals") (Just "1") Nothing
       (_, emptyPage) <- healthy
-      render emptyPage `shouldContainAll` ["No Web Vitals in this time range"]
-      any (\params -> lookup "tab" params == Just "performance" && lookup "since" params == Just "7D" && all (isNothing . (`lookup` params)) ["from", "to"]) (linkParams ("/p/" <> projectId.toText <> "/rum") $ render emptyPage) `shouldBe` True
-      T.isInfixOf "role=\"alert\"" (render emptyPage) `shouldBe` False
+      htmlOf emptyPage `shouldContainAll` ["No Web Vitals in this time range"]
+      any (\params -> lookup "tab" params == Just "performance" && lookup "since" params == Just "7D" && all (isNothing . (`lookup` params)) ["from", "to"]) (linkParams ("/p/" <> projectId.toText <> "/rum") $ htmlOf emptyPage) `shouldBe` True
+      T.isInfixOf "role=\"alert\"" (htmlOf emptyPage) `shouldBe` False
       apiKey <- createTestAPIKey tr projectId "rum-panel-recovery-key"
       ingestMetric tr apiKey [] [] "browser.web_vital.fcp" 10 frozenTime
       purgeRumCaches tr
       (_, populated) <- healthy
-      render populated `shouldContainAll` ["10.0 ms"]
-      T.isInfixOf "role=\"alert\"" (render populated) `shouldBe` False
+      htmlOf populated `shouldContainAll` ["10.0 ms"]
+      T.isInfixOf "role=\"alert\"" (htmlOf populated) `shouldBe` False
 
     it "panelLinks_carryKqlTheLogExplorerCanParse" \tr -> do
       -- windowUrl URI-encodes every parameter it is given, so a caller that encodes first
@@ -672,37 +691,26 @@ spec = sequential $ aroundAll withTestResources do
       -- investigation evidence, so its explicit environment has to win and remain present on
       -- the deferred request and every self-link it renders.
       purgeRumCaches tr
-      (_, scopedPage) <- testServant tr $ RUM.rumGetScopedH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing (Just "admin-console") Nothing (Just "1") Nothing (Just "missing-environment")
-      let scopedHtml = toStrict $ Lucid.renderText $ Lucid.toHtml scopedPage
+      scopedHtml <- shellHtml tr $ RUM.rumGetScopedH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing (Just "admin-console") Nothing (Just "1") Nothing (Just "missing-environment")
       scopedHtml `shouldContainAll` ["environment=missing-environment"]
       T.isInfixOf "&amp;service=admin-console" scopedHtml `shouldBe` False
       T.isInfixOf "?service=admin-console" scopedHtml `shouldBe` False
 
-      (_, RUM.RumGet (PageCtx _ pulseBody)) <- testServant tr $ RUM.rumGetScopedH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing (Just "admin-console") (Just "pulse") (Just "1") Nothing (Just "missing-environment")
-      pulse <- case pulseBody of
-        DeferredBody loaded -> pure loaded
-        DeferredShell{} -> fail "RUM answered with the deferred shell when asked for the panel"
+      pulse <- rumBody tr $ RUM.rumGetScopedH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing (Just "admin-console") (Just "pulse") (Just "1") Nothing (Just "missing-environment")
       -- The project has browser telemetry from the preceding examples. It must not leak into
       -- a link scoped to another environment merely because this test session's default is
       -- unscoped.
       pulse.pulse `shouldBe` Nothing
 
-      (_, RUM.RumGet (PageCtx _ sessionsBody)) <- testServant tr $ RUM.rumGetScopedH testPid (Just "sessions") Nothing Nothing Nothing Nothing (Just "24H") (Just sessionId) Nothing (Just "sessions") (Just "1") Nothing (Just "missing-environment")
-      case sessionsBody of
-        DeferredBody loaded -> do
-          loaded.sessions `shouldBe` []
-          loaded.selectedSessionData `shouldBe` Nothing
-        DeferredShell{} -> expectationFailure "expected the sessions panel"
+      loaded <- rumBody tr $ RUM.rumGetScopedH testPid (Just "sessions") Nothing Nothing Nothing Nothing (Just "24H") (Just sessionId) Nothing (Just "sessions") (Just "1") Nothing (Just "missing-environment")
+      loaded.sessions `shouldBe` []
+      loaded.selectedSessionData `shouldBe` Nothing
 
     it "environmentSessionCache_ignoresLegacyUnattributedRecordings" \tr -> do
       purgeRumCaches tr
       let sid = "00000000-0000-0000-0000-000000000046"
           environment = Just "cache-environment"
-          load env refreshM = do
-            (_, RUM.RumGet (PageCtx _ body)) <- testServant tr $ RUM.rumGetScopedH testPid (Just "sessions") (Just "Legacy replay") Nothing Nothing Nothing (Just "24H") (Just sid) Nothing (Just "sessions") (Just "1") refreshM env
-            case body of
-              DeferredBody loaded -> pure loaded
-              DeferredShell{} -> fail "expected the sessions panel"
+          load env refreshM = rumBody tr $ RUM.rumGetScopedH testPid (Just "sessions") (Just "Legacy replay") Nothing Nothing Nothing (Just "24H") (Just sid) Nothing (Just "sessions") (Just "1") refreshM env
           legacyKey query = toXXHash $ show $ RUMData.RumCacheKey testPid query environment Nothing Nothing Nothing (Just "24H")
       withResource tr.trPool $ \conn ->
         void $ PG.execute conn "INSERT INTO projects.replay_sessions (session_id, project_id, created_at, last_event_at, event_file_count, user_name) VALUES (?::uuid, ?, ?, ?, 1, 'Legacy replay')" (sid, testPid, frozenTime, addUTCTime 60 frozenTime)
@@ -772,10 +780,8 @@ spec = sequential $ aroundAll withTestResources do
       let sid = "session-independent-detail"
           query = "unrelated-full-list-search"
           searchKey = RUMData.RumCacheKey projectId (RUMData.SessionSearchQuery (Just query) RUMData.ErrorSessionRows) Nothing (Just "detail-browser") Nothing Nothing (Just "24H")
-          scoped = tr{trSessAndHeader = fmap (\session -> session{Projects.service = Just "detail-browser"}) tr.trSessAndHeader}
-          load refresh = do
-            (_, page) <- testServant scoped $ RUM.rumGetH projectId (Just "sessions") (Just query) (Just "errors") Nothing Nothing (Just "24H") (Just sid) Nothing (Just "session_detail") (Just "1") refresh
-            pure $ toStrict $ Lucid.renderText $ Lucid.toHtml page
+          scoped = withService (Just "detail-browser") tr
+          load refresh = shellHtml scoped $ RUM.rumGetH projectId (Just "sessions") (Just query) (Just "errors") Nothing Nothing (Just "24H") (Just sid) Nothing (Just "session_detail") (Just "1") refresh
       browserSpan apiKey "85000000000000000000000000000008" "8500000000000001" [("url.path", "/independent-detail"), ("user.full_name", "Independent visitor")] "documentLoad" sid Nothing "detail-browser" tr
       html <- load Nothing
       html `shouldContainAll` ["rum-replay-workspace", "Independent visitor", sid, "/independent-detail", "No recording for this session", "Inspect telemetry"]
@@ -821,31 +827,24 @@ spec = sequential $ aroundAll withTestResources do
       purgeRumCaches tr
       apiKey <- createTestAPIKey tr testPid "rum-cache-write-key"
       otelBrowserSpan apiKey "81000000000000000000000000000008" "8100000000000001" "session-cache-write" "cache-write-browser" tr
-      let alter sql = withResource tr.trPool $ \conn -> void $ PG.execute_ conn sql
       E.bracket_
-        (alter "ALTER TABLE rum_panel_cache ADD CONSTRAINT reject_panel_cache_write CHECK (false)")
-        (alter "ALTER TABLE rum_panel_cache DROP CONSTRAINT reject_panel_cache_write")
+        (execSql tr "ALTER TABLE rum_panel_cache ADD CONSTRAINT reject_panel_cache_write CHECK (false)")
+        (execSql tr "ALTER TABLE rum_panel_cache DROP CONSTRAINT reject_panel_cache_write")
         do
-          (_, RUM.RumGet (PageCtx _ body)) <- testServant tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "pages") (Just "1") Nothing
-          case body of
-            DeferredBody loaded -> do
-              loaded.degradedPanels `shouldBe` []
-              map (.path) loaded.pages `shouldSatisfy` elem "https://shop.example/cart"
-            DeferredShell{} -> expectationFailure "expected the pages panel"
+          loaded <- rumBody tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "pages") (Just "1") Nothing
+          loaded.degradedPanels `shouldBe` []
+          map (.path) loaded.pages `shouldSatisfy` elem "https://shop.example/cart"
 
     it "panelCache_concurrentColdRequests_shareOneLookupAndPublication" \tr -> do
       purgeRumCaches tr
       apiKey <- createTestAPIKey tr testPid "rum-flight-key"
       otelBrowserSpan apiKey "82000000000000000000000000000008" "8200000000000001" "session-flight" "flight-browser" tr
-      let alter sql = withResource tr.trPool $ \conn -> void $ PG.execute_ conn sql
-          fetch = renderPanel tr Nothing Nothing Nothing Nothing (Just "flight-browser") (Just "pages")
+      let fetch = renderPanel tr Nothing Nothing Nothing Nothing (Just "flight-browser") (Just "pages")
           waitForReaders expected = do
             [PG.Only readers] <- withResource tr.trPool $ \conn -> PG.query_ conn "SELECT count(*)::bigint FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%rum_panel_cache%'"
             unless (readers >= (expected :: Int64)) $ threadDelay 10000 >> waitForReaders expected
-      E.bracket_
-        (alter "CREATE SEQUENCE rum_flight_writes; CREATE FUNCTION count_rum_flight_write() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM nextval('rum_flight_writes'); RETURN NEW; END $$; CREATE TRIGGER count_rum_flight_write BEFORE INSERT ON rum_panel_cache FOR EACH ROW EXECUTE FUNCTION count_rum_flight_write()")
-        (alter "DROP TRIGGER count_rum_flight_write ON rum_panel_cache; DROP FUNCTION count_rum_flight_write(); DROP SEQUENCE rum_flight_writes")
-        $ withResource tr.trPool \conn ->
+      withCacheWriteCounter tr "rum_flight" \writes ->
+        withResource tr.trPool \conn ->
           E.bracket_
             (void $ PG.execute_ conn "BEGIN; LOCK TABLE rum_panel_cache IN ACCESS EXCLUSIVE MODE")
             (void $ PG.execute_ conn "ROLLBACK")
@@ -857,23 +856,16 @@ spec = sequential $ aroundAll withTestResources do
               responses <- traverse wait [leader, follower]
               observed `shouldBe` (Just (), Nothing)
               map (T.isInfixOf "/cart") responses `shouldBe` [True, True]
-              writes <- withResource tr.trPool $ \cacheConn -> PG.query_ cacheConn "SELECT last_value, is_called FROM rum_flight_writes" :: IO [(Int64, Bool)]
-              writes `shouldBe` [(1, True)]
+              writes `shouldReturn` 1
 
     it "emptySessionSearch_isBrieflyShared_andRefreshOrExpiryShowsNewTelemetry" \tr -> do
       purgeRumCaches tr
-      let alter sql = withResource tr.trPool $ \conn -> void $ PG.execute_ conn sql
-          load query refreshM = do
-            (_, RUM.RumGet (PageCtx _ body)) <- testServant tr $ RUM.rumGetH testPid (Just "sessions") (Just query) Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "sessions") (Just "1") refreshM
-            case body of
-              DeferredBody page -> map (.id) page.sessions <$ (page.degradedPanels `shouldBe` [])
-              DeferredShell{} -> fail "expected session search results"
+      let load query refreshM = do
+            page <- rumBody tr $ RUM.rumGetH testPid (Just "sessions") (Just query) Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "sessions") (Just "1") refreshM
+            map (.id) page.sessions <$ (page.degradedPanels `shouldBe` [])
           refreshSearch = "session-negative-refresh"
           expirySearch = "session-negative-expiry"
-      E.bracket_
-        (alter "CREATE SEQUENCE rum_search_writes; CREATE FUNCTION count_rum_search_write() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM nextval('rum_search_writes'); RETURN NEW; END $$; CREATE TRIGGER count_rum_search_write BEFORE INSERT ON rum_panel_cache FOR EACH ROW EXECUTE FUNCTION count_rum_search_write()")
-        (alter "DROP TRIGGER count_rum_search_write ON rum_panel_cache; DROP FUNCTION count_rum_search_write(); DROP SEQUENCE rum_search_writes")
-        do
+      withCacheWriteCounter tr "rum_search" \writes -> do
           load refreshSearch Nothing `shouldReturn` []
           -- A fresh replica must reuse the empty result without scanning telemetry.
           observed <- withResource tr.trPool \conn ->
@@ -885,12 +877,11 @@ spec = sequential $ aroundAll withTestResources do
                 void $ wait request
                 pure result
           observed `shouldBe` Just ([], [])
-          writes <- withResource tr.trPool $ \conn -> PG.query_ conn "SELECT last_value, is_called FROM rum_search_writes" :: IO [(Int64, Bool)]
-          writes `shouldBe` [(1, True)]
-          -- Older replicas promote this namespace with the full positive TTL.
-          let oldKey = toXXHash $ show (RUMData.RumCacheKey testPid (RUMData.SessionSearchQuery (Just refreshSearch) RUMData.AllSessionRows) Nothing Nothing Nothing Nothing (Just "24H")) <> ":attributed-recordings-v2"
-          [PG.Only oldEntries] <- withResource tr.trPool $ \conn -> PG.query conn "SELECT count(*)::bigint FROM rum_panel_cache WHERE cache_key = ?" (PG.Only oldKey)
-          oldEntries `shouldBe` (0 :: Int64)
+          writes `shouldReturn` 1
+          -- The one entry sits under the versioned key, never under an older replica's spelling.
+          let searchKey = RUMData.rumCacheDbKey $ RUMData.RumCacheKey testPid (RUMData.SessionSearchQuery (Just refreshSearch) RUMData.AllSessionRows) Nothing Nothing Nothing Nothing (Just "24H")
+          [PG.Only versionedEntries] <- withResource tr.trPool $ \conn -> PG.query conn "SELECT count(*)::bigint FROM rum_panel_cache WHERE cache_key = ?" (PG.Only searchKey)
+          versionedEntries `shouldBe` (1 :: Int64)
           [PG.Only shortExpiry] <- withResource tr.trPool $ \conn -> PG.query_ conn "SELECT expires_at > now() AND expires_at <= now() + interval '30 seconds' FROM rum_panel_cache"
           shortExpiry `shouldBe` True
           purgeRumCaches tr
@@ -904,7 +895,7 @@ spec = sequential $ aroundAll withTestResources do
           load expirySearch Nothing `shouldReturn` []
           otelBrowserSpan apiKey "86000000000000000000000000000008" "8600000000000001" expirySearch "negative-search-browser" tr
           Cache.purge tr.trATCtx.rumCache
-          alter "UPDATE rum_panel_cache SET expires_at = now() - interval '1 minute'"
+          execSql tr "UPDATE rum_panel_cache SET expires_at = now() - interval '1 minute'"
           load expirySearch Nothing `shouldReturn` [expirySearch]
 
     it "emptySessionList_withoutSearch_doesNotHideNewSdkTelemetry" \tr -> do
@@ -922,15 +913,11 @@ spec = sequential $ aroundAll withTestResources do
       projectId <- createTestProject tr "RUM canonical cache window"
       apiKey <- createTestAPIKey tr projectId "rum-canonical-window-key"
       let ingest value seconds = ingestMetric tr apiKey [] [mkAttr "page.url" "/canonical-window"] "browser.web_vital.lcp" value (addUTCTime seconds frozenTime)
-          alter sql = withResource tr.trPool $ \conn -> void $ PG.execute_ conn sql
           load from to since panel = do
             page <- loadPerformance tr projectId from to since Nothing (Just panel)
             [measured vital.measurement | vital <- page.vitals, vital.name == "lcp"] <$ (page.degradedPanels `shouldBe` [])
       ingest 1000 (-10)
-      E.bracket_
-        (alter "CREATE SEQUENCE rum_window_writes; CREATE FUNCTION count_rum_window_write() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM nextval('rum_window_writes'); RETURN NEW; END $$; CREATE TRIGGER count_rum_window_write BEFORE INSERT ON rum_panel_cache FOR EACH ROW EXECUTE FUNCTION count_rum_window_write()")
-        (alter "DROP TRIGGER count_rum_window_write ON rum_panel_cache; DROP FUNCTION count_rum_window_write(); DROP SEQUENCE rum_window_writes")
-        do
+      withCacheWriteCounter tr "rum_window" \publications -> do
           warm <- load Nothing Nothing (Just "24H") "vital_trend"
           ingest 9000 (-9)
           hits <- forM [(Just "", Just "", Just "24H"), (Nothing, Nothing, Nothing)] \(from, to, since) -> do
@@ -939,18 +926,17 @@ spec = sequential $ aroundAll withTestResources do
           warm : hits `shouldBe` replicate 3 [(Just 1000, 1)]
           let fromQuery = Just $ toText $ iso8601Show $ addUTCTime (-60) frozenTime
               toQuery = Just $ toText $ iso8601Show frozenTime
-              publications = withResource tr.trPool (`PG.query_` "SELECT last_value, is_called FROM rum_window_writes") :: IO [(Int64, Bool)]
           explicit <- load fromQuery toQuery Nothing "vital_trend"
           ingest 10000 (-8)
           Cache.purge tr.trATCtx.rumCache
           blankSince <- load fromQuery toQuery (Just "") "vitals"
-          publications `shouldReturn` [(2, True)]
+          publications `shouldReturn` 2
           [explicit, blankSince] `shouldBe` replicate 2 [(Just 7000, 2)]
           Cache.purge tr.trATCtx.rumCache
           load (Just "") (Just "") (Just "") "vitals" `shouldReturn` [(Just 9500, 3)]
           Cache.purge tr.trATCtx.rumCache
           load Nothing Nothing Nothing "vitals" `shouldReturn` [(Just 1000, 1)]
-          publications `shouldReturn` [(3, True)]
+          publications `shouldReturn` 3
 
     it "panelCache_isSharedAcrossReplicas_notPerProcessMemory" \tr -> do
       -- A fresh replica has an empty memory cache; the shared rum_panel_cache table must
@@ -961,9 +947,7 @@ spec = sequential $ aroundAll withTestResources do
       apiKey <- createTestAPIKey tr testPid "rum-l2-key"
       ingestSpanReq tr $ mkSpanRequest "80000000000000000000000000000008" "8000000000000001" Nothing "documentLoad" [] Nothing [mkAttr "session.id" "session-l2", mkAttr "url.full" "https://l2.example/cached"] (mkResource apiKey [mkAttr "service.name" "storefront", mkAttr "user_agent.original" "Mozilla/5.0 L2"]) frozenTime
       -- A window no earlier example used, so the shared table has no entry yet for this key.
-      let renderPages since refreshM = do
-            (_, page) <- testServant tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just since) Nothing Nothing (Just "pages") (Just "1") refreshM
-            pure $ toStrict $ Lucid.renderText $ Lucid.toHtml page
+      let renderPages since refreshM = shellHtml tr $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just since) Nothing Nothing (Just "pages") (Just "1") refreshM
       firstRender <- renderPages "6H" Nothing
       -- Top pages renders path-only routes ('pageRoute'), so the host is stripped.
       firstRender `shouldContainAll` ["/cached"]
@@ -996,9 +980,7 @@ spec = sequential $ aroundAll withTestResources do
       apiKey <- createTestAPIKey tr projectId "rum-wide-cold-key"
       let load since refreshM = do
             (_, response@(RUM.RumGet (PageCtx _ body))) <- testServant tr $ RUM.rumGetH projectId (Just "sessions") Nothing Nothing Nothing Nothing (Just since) Nothing Nothing (Just "sessions") (Just "1") refreshM
-            case body of
-              DeferredBody page -> pure (page, toStrict $ Lucid.renderText $ Lucid.toHtml response)
-              DeferredShell{} -> fail "Expected loaded sessions panel"
+            (,htmlOf response) <$> deferredBody body
       browserSpanAt apiKey "8a000000000000000000000000000008" "8a00000000000001" [("url.path", "/old")] "documentLoad" "session-wide-old" Nothing "wide-ui" (addUTCTime (-10 * 3600) frozenTime) tr
       browserSpanAt apiKey "8b000000000000000000000000000008" "8b00000000000001" [("url.path", "/new")] "documentLoad" "session-wide-new" Nothing "wide-ui" (addUTCTime (-60) frozenTime) tr
       (quick, quickHtml) <- load "24H" Nothing
@@ -1006,14 +988,8 @@ spec = sequential $ aroundAll withTestResources do
       quick.servedStale `shouldBe` True
       quickHtml `shouldContainAll` ["refresh=1", "Refreshing the full time range"]
       -- The slice is never cached: a failed revalidation degrades instead of serving it as final.
-      let unavailable = interpose @(Labeled "timefusion" Hasql.Hasql) \_ (Labeled effect) -> case effect of
-            Hasql.UseStatement{} -> pure $ Left HP.AcquisitionTimeoutUsageError
-            Hasql.UseSession{} -> pure $ Left HP.AcquisitionTimeoutUsageError
-            Hasql.UseLabeledSession{} -> pure $ Left HP.AcquisitionTimeoutUsageError
-      (_, RUM.RumGet (PageCtx _ failedBody)) <- testServant tr{trATCtx = tr.trATCtx{env = tr.trATCtx.env{enableTimefusionReads = True}}} $ unavailable $ RUM.rumGetH projectId (Just "sessions") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "sessions") (Just "1") (Just "1")
-      case failedBody of
-        DeferredBody failed -> failed.degradedPanels `shouldBe` [RUMData.SessionSearchQuery Nothing RUMData.AllSessionRows]
-        DeferredShell{} -> fail "Expected the degraded sessions panel"
+      failed <- rumBody tr{trATCtx = tr.trATCtx{env = tr.trATCtx.env{enableTimefusionReads = True}}} $ tfUnavailable $ RUM.rumGetH projectId (Just "sessions") Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "sessions") (Just "1") (Just "1")
+      failed.degradedPanels `shouldBe` [RUMData.SessionSearchQuery Nothing RUMData.AllSessionRows]
       (full, fullHtml) <- load "24H" (Just "1")
       (map (.id) full.sessions, full.servedStale) `shouldBe` (["session-wide-new", "session-wide-old"], False)
       T.isInfixOf "Refreshing the full time range" fullHtml `shouldBe` False
@@ -1032,12 +1008,10 @@ spec = sequential $ aroundAll withTestResources do
       projectId <- createTestProject tr "RUM stale live selection"
       apiKey <- createTestAPIKey tr projectId "rum-live-stale-key"
       let ingest trId spId sid path at = ingestSpanReq tr $ mkSpanRequest trId spId Nothing "documentLoad" [] Nothing [mkAttr "session.id" sid, mkAttr "url.path" path, mkAttr "error.type" "LiveError"] (mkResource apiKey [mkAttr "service.name" "live-stale-browser", mkAttr "deployment.environment.name" "preview"]) at
-          scoped = tr{trSessAndHeader = fmap (\session -> session{Projects.service = Just "live-stale-browser"}) tr.trSessAndHeader}
+          scoped = withService (Just "live-stale-browser") tr
           load refreshM = do
             (_, response@(RUM.RumGet (PageCtx _ body))) <- testServant scoped $ RUM.rumGetScopedH projectId (Just "sessions") (Just "session-live") (Just "errors") Nothing Nothing (Just "6H") (Just "session-live-old") Nothing (Just "sessions") (Just "1") refreshM (Just "preview")
-            case body of
-              DeferredBody page -> pure (page, toStrict $ Lucid.renderText $ Lucid.toHtml response)
-              DeferredShell{} -> fail "Expected loaded sessions panel"
+            (,htmlOf response) <$> deferredBody body
           -- HTMX's hx-select retains this section and discards its siblings.
           selectedList = fst . T.breakOn "</section>" . snd . T.breakOn "id=\"rum-sessions-list\""
       ingest "88000000000000000000000000000008" "8800000000000001" "session-live-old" "/old" (addUTCTime (-1) frozenTime)
@@ -1115,10 +1089,9 @@ spec = sequential $ aroundAll withTestResources do
         ingestMetric tr apiKey [mkAttr "service.name" service, mkAttr "deployment.environment.name" environment] [mkAttr "page.url" $ "https://shop.example" <> route] "browser.web_vital.lcp" 1200 frozenTime
       let from = toText $ iso8601Show $ addUTCTime (-60) frozenTime
           to = toText $ iso8601Show $ addUTCTime 60 frozenTime
-          scoped = tr{trSessAndHeader = fmap (\session -> session{Projects.service = Just service}) tr.trSessAndHeader}
+          scoped = withService (Just service) tr
       forM_ ["pages", "vital_trend"] \panel -> do
-        (_, page) <- testServant scoped $ RUM.rumGetScopedH testPid (Just "performance") Nothing Nothing (Just from) (Just to) Nothing Nothing (Just service) (Just panel) (Just "1") Nothing (Just environment)
-        let html = toStrict $ Lucid.renderText $ Lucid.toHtml page
+        html <- shellHtml scoped $ RUM.rumGetScopedH testPid (Just "performance") Nothing Nothing (Just from) (Just to) Nothing Nothing (Just service) (Just panel) (Just "1") Nothing (Just environment)
         forM_ ([("/cart", 5), ("/", 3), ("/cart/", 1), ("/a.b+(x)", 1), ("/literal%2Fsegment", 1)] :: [(Text, Int)]) \(route, count) -> do
           let label = if panel == "pages" then ">" <> route <> "</a>" else "aria-label=\"https://shop.example" <> route <> "\""
           html `shouldContainAll` [label]

@@ -914,7 +914,7 @@ document.addEventListener('htmx:before:swap', (event) => {
     if (['none', 'beforebegin', 'afterbegin', 'beforeend', 'afterend'].includes(task.swapSpec?.style ?? '')) continue;
     const target = typeof task.target === 'string' ? document.querySelector(task.target) : task.target;
     if (!(target instanceof Element)) continue;
-    // A morph keeps the chart element (hx-morph-skip below); chartWidget then updates it in place.
+    // A morph keeps the chart element (hx-morph-skip in the server markup); chartWidget then updates it in place.
     if (!/morph/i.test(task.swapSpec?.style ?? '')) disposeChartsIn(target);
     // Morph preserves identical script nodes. Remove the outgoing initializers so incoming
     // widgets run even when their configuration is unchanged (e.g. Explorer navigation clears the URL query).
@@ -994,8 +994,6 @@ const chartWidget = (widgetData: WidGetData) => {
   const theme = isDarkMode ? 'dark' : widgetData.theme || 'default';
   const chart = window.echarts.init(chartEl, theme);
   chart.group = 'default';
-  // ECharts owns this subtree; a morph must leave it alone (htmx checks the skip before syncing attributes).
-  chartEl?.setAttribute('hx-morph-skip', '');
 
   let baseQuery = widgetData.query;
   const updateQuery = () => {
@@ -1101,7 +1099,6 @@ const chartWidget = (widgetData: WidGetData) => {
     if (chartEl) sharedResizeObserver.unobserve(chartEl);
     themeCallbacks.delete(onThemeChange);
     if (!chart.isDisposed()) chart.dispose();
-    chartEl?.removeAttribute('hx-morph-skip');
     if ((window as any)[`${chartType}Chart`] === chart) delete (window as any)[`${chartType}Chart`];
     chartDisposers.delete(chartId);
     chartUpdaters.delete(chartId);

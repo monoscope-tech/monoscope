@@ -8,9 +8,7 @@ module Models.Telemetry.RUM (
   RumSession (..),
   SessionFilter (..),
   ObservationCount,
-  VitalEstimate,
-  estimateValue,
-  estimateRange,
+  VitalEstimate (value, bounds),
   VitalCoverage (..),
   VitalMeasurement (..),
   measurementValue,
@@ -23,6 +21,7 @@ module Models.Telemetry.RUM (
   RumQueryResult (..),
   RumQuery (..),
   RumCacheKey (..),
+  rumCacheDbKey,
   rumPanelCacheGet,
   rumPanelCacheGetStale,
   withSharedCache,
@@ -31,7 +30,6 @@ module Models.Telemetry.RUM (
 
 import Data.Aeson qualified as AE
 import Data.Effectful.Hasql qualified as Hasql
-import Data.List (partition)
 import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
@@ -142,9 +140,7 @@ newtype ObservationCount = ObservationCount Natural
 
 
 instance AE.FromJSON ObservationCount where
-  parseJSON value = do
-    count <- AE.parseJSON value
-    maybe (fail "Observation count must be positive") pure (mkObservationCount count)
+  parseJSON = AE.parseJSON >=> maybe (fail "Observation count must be positive") pure . mkObservationCount
 
 
 mkObservationCount :: Natural -> Maybe ObservationCount
@@ -153,47 +149,41 @@ mkObservationCount count = ObservationCount count <$ guard (count > 0)
 
 -- | A cached quantile is finite and nonnegative, and an estimated value lies in its bucket.
 --
--- >>> let valid = AE.eitherDecode "{\"tag\":\"Estimated\",\"contents\":[75,0,100]}" :: Either String VitalEstimate
+-- >>> let valid = AE.eitherDecode "{\"value\":75,\"bounds\":[0,100]}" :: Either String VitalEstimate
 -- >>> fmap (\estimate -> AE.eitherDecode (AE.encode estimate) == Right estimate) valid
 -- Right True
--- >>> map (isLeft . (AE.eitherDecode :: LByteString -> Either String VitalEstimate)) ["{\"tag\":\"Estimated\",\"contents\":[120,0,100]}", "{\"tag\":\"Exact\",\"contents\":-1}", "{\"tag\":\"Exact\",\"contents\":1e400}"]
+-- >>> map (isLeft . (AE.eitherDecode :: LByteString -> Either String VitalEstimate)) ["{\"value\":120,\"bounds\":[0,100]}", "{\"value\":-1,\"bounds\":null}", "{\"value\":1e400,\"bounds\":null}"]
 -- [True,True,True]
-data VitalEstimate = Exact Double | Estimated Double Double Double
+data VitalEstimate = VitalEstimate {value :: Double, bounds :: Maybe (Double, Double)}
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.ToJSON)
 
 
 instance AE.FromJSON VitalEstimate where
-  parseJSON value = do
-    estimate <- AE.genericParseJSON AE.defaultOptions value
-    maybe (fail "Invalid vital quantile or bucket range") pure (mkEstimate estimate)
+  parseJSON = AE.genericParseJSON AE.defaultOptions >=> maybe (fail "Invalid vital quantile or bucket range") pure . mkEstimate
 
 
 mkEstimate :: VitalEstimate -> Maybe VitalEstimate
-mkEstimate estimate = estimate <$ guard valid
+mkEstimate e = e <$ guard (finite e.value && all (\(lo, hi) -> finite lo && finite hi && lo <= e.value && e.value <= hi) e.bounds)
   where
-    valid =
-      finite (estimateValue estimate) && case estimateRange estimate of
-        Nothing -> True
-        Just (lower, upper) -> finite lower && finite upper && lower <= estimateValue estimate && estimateValue estimate <= upper
-    finite value = value >= 0 && not (isInfinite value || isNaN value)
+    finite v = v >= 0 && not (isInfinite v || isNaN v)
 
 
-estimateValue :: VitalEstimate -> Double
-estimateValue = \case
-  Exact value -> value
-  Estimated value _ _ -> value
-
-
-estimateRange :: VitalEstimate -> Maybe (Double, Double)
-estimateRange = \case
-  Exact _ -> Nothing
-  Estimated _ lower upper -> Just (lower, upper)
-
-
-data VitalCoverage = MissingBaseline | UnknownStart | UnknownTemporality | UnsupportedPopulation | InvalidValue | InvalidBuckets | InvalidReset | OverlappingIntervals | UnboundedBucket | InterruptedSeries
-  deriving stock (Eq, Generic, Read, Show)
+-- | Constructor order is severity, least first: a population with several defects reports its last.
+data VitalCoverage = InterruptedSeries | InvalidBuckets | InvalidReset | InvalidValue | MissingBaseline | OverlappingIntervals | UnboundedBucket | UnknownStart | UnknownTemporality | UnsupportedPopulation
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
   deriving (AE.FromJSON, AE.ToJSON, HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "" VitalCoverage
+
+
+-- | SQL rank of a coverage column (NULL for @'complete'@), and the inverse, so @MAX@ picks the
+-- most severe defect by constructor order rather than by its spelling.
+coverageRank, coverageName :: HI.Sql -> HI.Sql
+coverageRank col = [HI.sql|CASE (|] <> col <> [HI.sql|)|] <> foldMap (\(rank, issue) -> [HI.sql| WHEN #{issue} THEN #{rank}|]) coverageRanks <> [HI.sql| END|]
+coverageName col = [HI.sql|COALESCE(CASE (|] <> col <> [HI.sql|)|] <> foldMap (\(rank, issue) -> [HI.sql| WHEN #{rank} THEN #{issue}|]) coverageRanks <> [HI.sql| END, 'complete')|]
+
+
+coverageRanks :: [(Int64, VitalCoverage)]
+coverageRanks = zip [1 ..] [minBound .. maxBound]
 
 
 data VitalMeasurement = Unmeasured | Measured ObservationCount VitalEstimate | Unavailable Natural VitalCoverage
@@ -203,7 +193,7 @@ data VitalMeasurement = Unmeasured | Measured ObservationCount VitalEstimate | U
 
 measurementValue :: VitalMeasurement -> Maybe Double
 measurementValue = \case
-  Measured _ estimate -> Just (estimateValue estimate)
+  Measured _ estimate -> Just estimate.value
   Unmeasured -> Nothing
   Unavailable _ _ -> Nothing
 
@@ -229,10 +219,6 @@ data VitalPopulation = VitalPopulation
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
-instance HI.DecodeRow VitalPopulation where
-  decodeRow = D.column $ D.nonNullable $ HI.decodeValue @VitalPopulation
-
-
 instance HI.DecodeValue VitalPopulation where
   decodeValue =
     D.refine decode
@@ -253,18 +239,17 @@ instance HI.DecodeValue VitalPopulation where
           (Just time, Nothing) -> Right (TrendVital time)
           (Nothing, Just url) -> Right (PageVital url)
           _ -> Left "Invalid vital population grouping"
-        guardError "Negative vital observation count" (count >= 0)
+        unless (count >= 0) $ Left "Negative vital observation count"
         measurement <- case (coverage, count, value, lower, upper) of
           (Just issue, _, Nothing, _, _) -> Right $ Unavailable (fromIntegral count) issue
           (Nothing, 0, Nothing, _, _) -> Right Unmeasured
-          (Nothing, _, Just measured, Nothing, Nothing) -> measuredEstimate count (Exact measured)
-          (Nothing, _, Just measured, Just lo, Just hi) -> measuredEstimate count (Estimated measured lo hi)
+          (Nothing, _, Just measured, Nothing, Nothing) -> measuredEstimate count (VitalEstimate measured Nothing)
+          (Nothing, _, Just measured, Just lo, Just hi) -> measuredEstimate count (VitalEstimate measured (Just (lo, hi)))
           _ -> Left "Invalid vital population measurement"
         pure VitalPopulation{grouping, metricName = metric, measurement}
       measuredEstimate count estimate = do
         samples <- maybeToRight "Invalid measured vital population" (mkObservationCount $ fromIntegral count)
         Measured samples <$> maybeToRight "Invalid measured vital population" (mkEstimate estimate)
-      guardError message condition = unless condition (Left message)
 
 
 data VitalRead = PopulationRead VitalPopulation | EpochRead Text UTCTime
@@ -314,7 +299,7 @@ data PageVitalPoint = PageVitalPoint
 -- same population, with exact scalar quantiles and estimates over common explicit bounds.
 -- Reports are selected by end time; DELTA populations do not require a known start.
 rumVitalPopulation :: (DB es, Labeled "timefusion" Hasql.Hasql :> es) => Bool -> ScopedQuery -> TimePicker.TimeWindow -> RumBucket -> Eff es [VitalPopulation]
-rumVitalPopulation useTf scope window bucket = Hasql.withHasqlTimefusion useTf do
+rumVitalPopulation useTf scope window bucket = do
   let interval :: Text
       interval = case bucket of FiveMinutes -> "5 minutes"; OneHour -> "1 hour"; SixHours -> "6 hours"
       vitalScope =
@@ -351,7 +336,7 @@ rumVitalPopulation useTf scope window bucket = Hasql.withHasqlTimefusion useTf d
                 <> [HI.sql|)) AS history WHERE predecessor=1|]
       -- TimeFusion drops partitions when inheriting a named window with a new order/frame.
       readPopulations source discoverEpochs =
-        Hasql.interpForTimefusion useTf
+        Hasql.interpTimefusion useTf
           $ [HI.sql|WITH source AS (|]
           <> source
           <> [HI.sql|
@@ -406,7 +391,9 @@ rumVitalPopulation useTf scope window bucket = Hasql.withHasqlTimefusion useTf d
    ROW_NUMBER() OVER(PARTITION BY timestamp,series_id,start_timestamp,side ORDER BY position) AS bound_ordinal
  FROM indexed
 ), validated AS (
- SELECT *,MAX(CASE WHEN coverage IN (#{UnsupportedPopulation},#{InvalidValue}) THEN coverage WHEN amount IS NULL OR amount<0 OR bucket_count!=expected_count OR expected_count<0 OR (bound IS NOT NULL AND NOT(bound>=0 AND bound<'Infinity'::float8)) OR (bound_ordinal>1 AND bound IS NOT NULL AND (preceding_bound IS NULL OR bound<=preceding_bound)) THEN #{InvalidBuckets} ELSE coverage END) OVER(PARTITION BY timestamp,series_id,start_timestamp) AS point_coverage
+ SELECT *,|]
+          <> coverageName ([HI.sql|MAX(|] <> coverageRank [HI.sql|CASE WHEN coverage IN (#{UnsupportedPopulation},#{InvalidValue}) THEN coverage WHEN amount IS NULL OR amount<0 OR bucket_count!=expected_count OR expected_count<0 OR (bound IS NOT NULL AND NOT(bound>=0 AND bound<'Infinity'::float8)) OR (bound_ordinal>1 AND bound IS NOT NULL AND (preceding_bound IS NULL OR bound<=preceding_bound)) THEN #{InvalidBuckets} ELSE coverage END|] <> [HI.sql|) OVER(PARTITION BY timestamp,series_id,start_timestamp)|])
+          <> [HI.sql| AS point_coverage
  FROM cumulative
 ), paired AS (
  SELECT *, MAX(CASE WHEN side=1 THEN cumulative END) OVER(PARTITION BY timestamp,series_id,start_timestamp,bound) AS prior_cumulative
@@ -416,7 +403,9 @@ rumVitalPopulation useTf scope window bucket = Hasql.withHasqlTimefusion useTf d
    ROW_NUMBER() OVER(PARTITION BY timestamp,series_id,start_timestamp ORDER BY bound NULLS LAST) AS ordinal
  FROM paired WHERE side=0 AND (value IS NOT NULL OR aggregation_temporality='DELTA' OR prior_count IS NULL OR prior_cumulative IS NOT NULL)
 ), selected AS (
- SELECT *,MAX(CASE WHEN point_coverage='complete' AND (cdf<0 OR cdf<LAG_CDF) THEN #{InvalidBuckets} ELSE point_coverage END) OVER(PARTITION BY timestamp,series_id,start_timestamp) AS effective_coverage
+ SELECT *,|]
+          <> coverageName ([HI.sql|MAX(|] <> coverageRank [HI.sql|CASE WHEN point_coverage='complete' AND (cdf<0 OR cdf<LAG_CDF) THEN #{InvalidBuckets} ELSE point_coverage END|] <> [HI.sql|) OVER(PARTITION BY timestamp,series_id,start_timestamp)|])
+          <> [HI.sql| AS effective_coverage
  FROM (SELECT *,LAG(cdf,1,0) OVER(PARTITION BY timestamp,series_id,start_timestamp ORDER BY bound NULLS LAST) AS LAG_CDF FROM selected_raw) AS ordered
 ), totals AS (
  SELECT CASE WHEN GROUPING(bucket)=0 THEN 1 WHEN GROUPING(page)=0 THEN 2 ELSE 0 END AS kind,
@@ -426,12 +415,16 @@ rumVitalPopulation useTf scope window bucket = Hasql.withHasqlTimefusion useTf d
    SUM(CASE WHEN value IS NOT NULL AND effective_coverage='complete' THEN observations ELSE 0 END)::bigint AS scalar_observations,
    SUM(CASE WHEN ordinal=1 AND effective_coverage='complete' THEN observations ELSE 0 END)::bigint AS observations,
    COUNT(*) FILTER(WHERE ordinal=1 AND value IS NULL AND observations>0 AND effective_coverage='complete') AS histogram_points,
-   MAX(effective_coverage) AS coverage
+   MAX(|]
+          <> coverageRank [HI.sql|effective_coverage|]
+          <> [HI.sql|) AS coverage
  FROM selected GROUP BY GROUPING SETS((metric,bound),(bucket,metric,bound),(page,metric,bound))
 ), distribution AS (
  SELECT *,SUM(observations) OVER population AS total,
    SUM(histogram_points) OVER population AS total_histogram_points,
-   MAX(coverage) OVER population AS population_coverage,
+   |]
+          <> coverageName [HI.sql|MAX(coverage) OVER population|]
+          <> [HI.sql| AS population_coverage,
    SUM(scalar_observations) OVER scalar_population AS scalar_cdf
  FROM totals
  WINDOW population AS (PARTITION BY kind,group_bucket,group_page,metric),
@@ -493,8 +486,8 @@ SELECT ROW(read_kind,population,epoch_series,epoch_start) FROM reads
   populationReads <- if null epochs then pure initial else readPopulations (withHistory epochs) False
   let populations = [population | PopulationRead population <- populationReads]
   -- Grouped pages are ordered/capped here to avoid native final-sort memory pressure.
-  let (pages, fieldAndTrend) = partition (\population -> case population.grouping of PageVital{} -> True; FieldVital -> False; TrendVital{} -> False) populations
-      pageGroups = Map.fromListWith (<>) [(url, [population]) | population@VitalPopulation{grouping = PageVital url} <- pages]
+  let (fieldAndTrend, pageEntries) = partitionWith (\population -> case population.grouping of PageVital url -> Right (url, [population]); FieldVital -> Left population; TrendVital{} -> Left population) populations
+      pageGroups = Map.fromListWith (<>) pageEntries
       orderedPages = sortWith (\(url, rows) -> (Down $ sum $ map (measurementSamples . (.measurement)) rows, url)) $ Map.toList pageGroups
   pure
     $ sortWith (\population -> (population.grouping, population.metricName)) fieldAndTrend
@@ -525,7 +518,7 @@ data RumQueryResult
 
 
 data RumQuery
-  = PresenceQuery
+  = PulseQuery
   | PagesQuery
   | ErrorsQuery
   | SessionSearchQuery (Maybe Text) SessionFilter
@@ -534,6 +527,19 @@ data RumQuery
   | BreakdownQuery
   deriving stock (Eq, Generic, Ord, Show)
   deriving anyclass (Hashable)
+
+
+-- | Bumped when a query's cached payload shape or semantics change, so an older replica's
+-- entry is never decoded here.
+queryVersion :: RumQuery -> Word
+queryVersion = \case
+  PulseQuery -> 1
+  PagesQuery -> 0
+  ErrorsQuery -> 0
+  SessionSearchQuery{} -> 2
+  SessionDetailQuery{} -> 2
+  VitalPopulationQuery{} -> 2
+  BreakdownQuery -> 0
 
 
 -- | @service@ is part of the key, not a filter applied after it. Without it a page scoped to
@@ -550,6 +556,10 @@ data RumCacheKey = RumCacheKey
   }
   deriving stock (Eq, Generic, Ord, Show)
   deriving anyclass (Hashable)
+
+
+rumCacheDbKey :: RumCacheKey -> Text
+rumCacheDbKey key = toXXHash $ show key <> ":v" <> show (queryVersion key.query)
 
 
 -- | Shared L2 for expensive panel/stats results, keyed by the hashed memory-cache key.

@@ -307,6 +307,7 @@ data WidgetDataset = WidgetDataset
   { source :: AE.Value
   , rowsPerMin :: Maybe Double
   , value :: Maybe Double
+  , servedValue :: Maybe Double -- Stand-in shown until a timeseries stat's own stats arrive
   , from :: Maybe Int
   , to :: Maybe Int
   , stats :: Maybe Charts.MetricsStats
@@ -359,6 +360,7 @@ toWidgetDataset md =
     { source = AE.toJSON $ V.cons (AE.toJSON <$> md.headers) (AE.toJSON <<$>> md.dataset)
     , rowsPerMin = md.rowsPerMin
     , value = Just md.rowsCount
+    , servedValue = Nothing
     , from = md.from
     , to = md.to
     , stats = md.stats
@@ -1108,7 +1110,7 @@ renderStatContent :: Widget -> Maybe Text -> Html ()
 renderStatContent widget valueM = do
   let chartId = maybeToMonoid widget.id
       statContentId = chartId <> "_stat"
-      hasData = isTrue widget.eager || isJust (widget.dataset >>= (.value))
+      hasData = isTrue widget.eager || isJust (widget.dataset >>= \d -> d.value <|> d.servedValue)
   div_
     [ id_ statContentId
     , class_ $ "px-3 flex flex-col " <> bool "py-3 " "py-2 " (isTrue widget._isNested)
@@ -1132,21 +1134,19 @@ renderChart :: Widget -> Html ()
 renderChart widget = do
   let rateM = widget.dataset >>= (.rowsPerMin) <&> \r -> Utils.prettyPrintCount (round r) <> "/min"
       chartId = maybeToMonoid widget.id
-      served = widget.dataset >>= (.value) <&> \value -> formatStatValue value $ fromMaybe "" widget.unit
-      valueM = case widget.wType of
-        -- A server-supplied value stands in until the sparkline response brings its stats.
-        WTTimeseriesStat ->
-          ( do
-              dataset <- widget.dataset
-              stats <- dataset.stats
-              let summarize = fromMaybe SBSum widget.summarizeBy
-              value <- statScalar summarize dataset.from dataset.to stats
-              let prefix = summarizeByPrefix summarize
-                  formatted = formatStatValue value $ fromMaybe "" widget.unit
-              pure $ prefix <> memptyIfFalse (not $ T.null prefix) " " <> formatted
-          )
-            <|> served
-        _ -> served
+      isTimeseriesStat = widget.wType == WTTimeseriesStat
+      fallback = widget.dataset >>= bool (.value) (.servedValue) isTimeseriesStat <&> \value -> formatStatValue value $ fromMaybe "" widget.unit
+      valueM =
+        ( do
+            guard isTimeseriesStat
+            dataset <- widget.dataset
+            stats <- dataset.stats
+            let summarize = fromMaybe SBSum widget.summarizeBy
+            value <- statScalar summarize dataset.from dataset.to stats
+            let prefix = summarizeByPrefix summarize
+            pure $ prefix <> memptyIfFalse (not $ T.null prefix) " " <> formatStatValue value (fromMaybe "" widget.unit)
+        )
+          <|> fallback
       isStat = widget.wType `elem` [WTTimeseriesStat, WTStat]
   div_ [class_ "gap-0.5 flex flex-col h-full justify-end"] do
     unless (isTrue widget.naked || isStat)
@@ -1192,7 +1192,7 @@ renderChart widget = do
                       forM_ options \label -> item label label
           when isStat $ renderStatContent widget valueM
           unless (widget.wType == WTStat) $ div_ [class_ $ "relative h-0 max-h-full overflow-hidden w-full flex-1 min-h-0" <> if isStat then "" else " p-3"] do
-            div_ [class_ "chart-render-slot h-full min-h-full w-full", id_ chartId, data_ "chart-widget" ""] ""
+            div_ [class_ "chart-render-slot h-full min-h-full w-full", id_ chartId, data_ "chart-widget" "", term "hx-morph-skip" ""] ""
             div_
               [ id_ $ chartId <> "_empty"
               , class_ "chart-no-data hidden absolute inset-3 z-10 flex items-center justify-center bg-bgRaised px-4 text-center"

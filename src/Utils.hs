@@ -663,11 +663,16 @@ countNoun :: (Eq n, Num n, Show n) => n -> Text -> Text
 countNoun n noun = show n <> " " <> noun <> bool "s" "" (n == 1)
 
 
+-- | Nanoseconds as a one-decimal human duration; minutes spell @min@ so they cannot be
+-- read as milli beside @ms@, and long sessions roll into hours and days.
+--
+-- >>> map getDurationNSMS [1500, 2.5e6, 90e9, 5.4e12, 1.8e14]
+-- ["1.5 \181s","2.5 ms","1.5 min","1.5 h","2.1 d"]
 getDurationNSMS :: Integer -> Text
 getDurationNSMS duration = toText @String $ printf "%.1f %s" (d / scale) unit
   where
     d = fromIntegral @_ @Double duration
-    (scale, unit) = fromMaybe (1, "ns" :: String) $ find ((<= d) . fst) [(6e10, "m"), (1e9, "s"), (1e6, "ms"), (1e3, "µs")]
+    (scale, unit) = fromMaybe (1, "ns" :: String) $ find ((<= d) . fst) [(8.64e13, "d"), (3.6e12, "h"), (6e10, "min"), (1e9, "s"), (1e6, "ms"), (1e3, "µs")]
 
 
 displayTimestamp :: Text -> Text

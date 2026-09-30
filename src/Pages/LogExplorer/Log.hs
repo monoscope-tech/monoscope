@@ -1069,13 +1069,11 @@ logSessionsH pid queryM' sinceM fromM toM skipM sortByM cursorM = do
     Left err -> Log.logInfo "Log explorer sessions: rejected invalid KQL query" err >> addRespHeaders (SessionsView 0 V.empty Nothing)
     Right queryAST -> do
       let skip = fromMaybe 0 skipM
-          -- The header rides the first page only; a live poll (cursor set) merges new rows
-          -- into a list that already has one, so it skips the header and its service read.
-          header = skip == 0 && isNothing cursorM
+          readKind = if skip == 0 && isNothing cursorM then LogQueries.WithHeader else LogQueries.RowsOnly
       -- An unrecognised sort_by (stale shared link, hand-edited URL) falls back to the
       -- default rather than 400-ing; the parse exists so a new dropdown option can't
       -- silently land here.
-      (summ, total, rows) <- Hasql.retryTransientEff 3 "log-explorer.sessions" $ LogQueries.fetchSessions authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) envM serviceM (rightToMaybe . parseUrlPiece =<< sortByM) skip header
+      (summ, total, rows) <- Hasql.retryTransientEff 3 "log-explorer.sessions" $ LogQueries.fetchSessions authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) envM serviceM (rightToMaybe . parseUrlPiece =<< sortByM) skip readKind
       addRespHeaders $ SessionsView total (V.fromList rows) summ
 
 

@@ -46,7 +46,8 @@ module Pkg.TestUtils (
   getTestTime,
   -- Helper functions for tests
   drainExtractionWorker,
-  drainExtractionWorkerAt,
+  deferredBody,
+  shellHtml,
   processMessagesAndBackgroundJobs,
   createTestSpans,
   -- OTLP/Telemetry helpers
@@ -162,7 +163,9 @@ import OddJobs.Job (Job (..))
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import OpenTelemetry.Trace (TracerProvider, getGlobalTracerProvider)
 import Opentelemetry.OtlpServer qualified as OtlpServer
+import Lucid qualified
 import Pages.Charts.Charts qualified as Charts
+import Pages.Components (Deferred (..))
 import Pages.LogExplorer.Log qualified as Log
 import Pages.Settings qualified as Api
 import Pkg.Components.Widget qualified as Widget
@@ -1231,32 +1234,41 @@ setBjRunAtInThePast now conn = void $ PGS.execute conn q (Only now)
     q = [sql|UPDATE background_jobs SET run_at = ?::timestamptz - INTERVAL '1 day' WHERE status = 'pending'|]
 
 
+-- | The loaded body of a deferred response. A shell here means the handler skipped the query
+-- the test is asserting on, which is a failure worth naming rather than a pattern-match crash.
+deferredBody :: Deferred a -> IO a
+deferredBody = \case
+  DeferredBody body -> pure body
+  DeferredShell{} -> fail "handler answered with the deferred shell; expected the loaded body"
+
+
+-- | A handler's response rendered to HTML.
+shellHtml :: Lucid.ToHtml a => TestResources -> ATAuthCtx (RespHeaders a) -> IO Text
+shellHtml tr render = toStrict . Lucid.renderText . Lucid.toHtml . snd <$> testServant tr render
+
+
 -- | Drain all queued extraction batches synchronously, then flush drain
 -- buffers and run pattern extraction.
 drainExtractionWorker :: TestResources -> IO ()
-drainExtractionWorker = drainExtractionWorkerAt frozenTime
-
-
-drainExtractionWorkerAt :: UTCTime -> TestResources -> IO ()
-drainExtractionWorkerAt at TestResources{..} = do
+drainExtractionWorker TestResources{..} = do
   let shards = V.toList trATCtx.extractionWorker.shards
   for_ shards \shard ->
     drainSTM (isEmptyTBQueue shard.ingressQ) (readTBQueue shard.ingressQ <* modifyTVar' shard.queueDepth prev) \batch ->
-      runTestBackgroundWithLogger at trLogger trATCtx $ BackgroundJobs.processEagerBatch batch shard
+      runTestBackgroundWithLogger frozenTime trLogger trATCtx $ BackgroundJobs.processEagerBatch batch shard
   now <- getCurrentTime
   ExtractionWorker.forceFlushAllBuffers trATCtx.extractionWorker now
   for_ shards \shard ->
     drainSTM
       (isEmptyTBQueue shard.drainFlushQ)
       (readTBQueue shard.drainFlushQ)
-      (runTestBackgroundWithLogger at trLogger trATCtx . BackgroundJobs.flushDrainTask shard)
+      (runTestBackgroundWithLogger frozenTime trLogger trATCtx . BackgroundJobs.flushDrainTask shard)
   -- Persist the schema-learning catalog's dirty entries (and enqueue
   -- NewAnomaly jobs). In prod runSchemaFlusherFiber does this on a timer;
   -- in tests we have to drive it explicitly so anomalies/issues land before
   -- runAllBackgroundJobs picks up the NewAnomaly jobs.
   for_ shards \shard ->
     void
-      $ runTestBackgroundWithLogger at trLogger trATCtx
+      $ runTestBackgroundWithLogger frozenTime trLogger trATCtx
       $ SchemaWorker.flushDirty shard.schemaState
   where
     drainSTM isEmpty pop process = do

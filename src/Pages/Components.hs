@@ -704,7 +704,7 @@ instance ToHtml a => ToHtml (RefreshingDeferred a) where
 
 
 timeRefreshListener_ :: Text -> Text -> Html ()
-timeRefreshListener_ cid url = div_ ([class_ "hidden", term "_" [text|on htmx:afterSwap from #${cid} send input to <input[type=text]/> in #${cid}|]] <> timeRefreshAttrs cid url "update-query from:window") mempty
+timeRefreshListener_ cid url = div_ ([class_ "hidden", term "_" [text|on htmx:after:settle from #${cid} send input to <input[type=text]/> in #${cid}|]] <> timeRefreshAttrs cid url "update-query from:window") mempty
 
 
 timeRefreshAttrs :: Text -> Text -> Text -> [Attribute]
@@ -714,7 +714,7 @@ timeRefreshAttrs cid url trigger = [hxGet_ url, hxTrigger_ trigger, hxTarget_ $ 
 -- | Sends the address bar's current time window, so a live refresh follows the picker. With
 -- no window in the URL, @since@ falls back to the page's default range.
 timeWindowVals_ :: Text -> Attribute
-timeWindowVals_ defaultSince = term "hx-vals" $ "js:{...(p=>({since:p.since ?? (p.from || p.to ? '' : '" <> defaultSince <> "'),from:p.from || '',to:p.to || ''}))(Object.fromEntries(new URLSearchParams(location.search)))}"
+timeWindowVals_ defaultSince = term "hx-vals" $ "js:{...(p=>({since:p.since ?? (p.from || p.to ? '' : '" <> defaultSince <> "'),from:p.from || '',to:p.to || ''}))(window.params())}"
 
 
 -- | The skeleton half of 'Deferred', also usable on its own for a panel whose body is one

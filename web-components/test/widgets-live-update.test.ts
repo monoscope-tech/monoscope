@@ -51,7 +51,7 @@ const config = (chartId: string, rows: number[][]) => ({
   opt: { dataset: { source: [['timestamp', 'P75'], ...rows] }, series: [{ type: 'line' }], legend: {}, yAxis: {}, xAxis: {} },
 });
 const panel = (rows: number[][]) => `<div id="panel" hx-get="/panel" hx-trigger="update-query from:window" hx-target="#panel" hx-select="#panel" hx-swap="outerMorph">
-  <p id="label">rows:${rows.length}</p><div id="lcp" data-chart-widget></div>
+  <p id="label">rows:${rows.length}</p><div id="lcp" data-chart-widget hx-morph-skip></div>
   <script data-chart-init="lcp">document.dispatchEvent(new CustomEvent('test-init-chart', { detail: ${JSON.stringify(rows)} }));</script></div>`;
 
 test('a morph-swapped panel updates its live chart in place; a replaced element initializes anew', async () => {
@@ -87,7 +87,7 @@ test('a morph-swapped panel updates its live chart in place; a replaced element 
 
 test('an in-place update with a changed query aborts the pending fetch; an unchanged one refreshes quietly', async () => {
   fakeECharts();
-  document.body.innerHTML = '<div id="lazy" data-chart-widget></div>';
+  document.body.innerHTML = '<div id="lazy" data-chart-widget hx-morph-skip></div>';
   const lazy = (query: string) => ({ ...config('lazy', []), opt: { dataset: {}, series: [], legend: {}, yAxis: {} }, pid: 'p', query });
   const signals: AbortSignal[] = [];
   vi.stubGlobal('fetch', vi.fn((_url: unknown, options?: RequestInit) => new Promise<Response>((_resolve, reject) => {

@@ -243,7 +243,7 @@ evalExpr r = go
       E.NotEndsWith s v -> pure (negated s (txt s v T.isSuffixOf))
       E.HasAny s v -> pure $ any (\t -> txt s t T.isInfixOf) (items v)
       E.HasAll s v -> pure $ all (\t -> txt s t T.isInfixOf) (items v)
-      E.Regex mode s pat -> (\p -> anyOf s (p . jsonAsText)) <$> compileRegex RE.defaultCompOpt{RE.caseSensitive = mode == E.CS} pat
+      E.Regex mode s pat -> (\p -> anyOf s (p . jsonAsText)) <$> compileRegex mode pat
       E.ValEq a b -> pure (vcmp a b (== EQ))
       E.ValNotEq a b -> pure (vcmp a b (/= EQ))
       E.ValGT a b -> pure (vcmp a b (== GT))
@@ -257,6 +257,12 @@ evalExpr r = go
     -- A negated text predicate still needs the subject to exist, so `!contains` drops
     -- absent-field rows exactly as `NOT (x ~* '…')` does on a NULL x.
     negated s p = not (null (r s)) && not p
+
+    compileRegex mode pat
+      | T.length pat > maxRegexLength = Left (RegexTooLong (T.length pat))
+      | otherwise = case RE.compile RE.defaultCompOpt{RE.caseSensitive = mode == E.CS} RE.defaultExecOpt pat of
+          Right re -> Right (either (const False) isJust . RE.execute re)
+          Left _ -> Left (BadRegex pat)
 
     cmp s v p = pure case evalValue r v of
       [] -> False
@@ -369,14 +375,6 @@ cmpJson a b = case (a, b) of
   _ -> case (jsonAsNumber a, jsonAsNumber b) of
     (Just x, Just y) -> Just (compare (toRealFloat @Double x) (toRealFloat y))
     _ -> Just (compare (jsonAsText a) (jsonAsText b))
-
-
-compileRegex :: RE.CompOption -> Text -> Either EvalError (Text -> Bool)
-compileRegex options pat
-  | T.length pat > maxRegexLength = Left (RegexTooLong (T.length pat))
-  | otherwise = case RE.compile options RE.defaultExecOpt pat of
-      Right re -> Right (either (const False) isJust . RE.execute re)
-      Left _ -> Left (BadRegex pat)
 
 
 -- | Resolve a subject against a decoded row.

@@ -623,6 +623,10 @@ renderHeaderTableActions actions = span_ [class_ "inline-flex flex-wrap items-ce
       faSprite_ "xmark" "regular" "w-2.5 h-2.5 text-textWeak"
 
 
+clearFiltersUrl :: TableHeaderActions -> Text
+clearFiltersUrl actions = foldl' (\url menu -> deleteParam menu.paramName url) actions.baseUrl actions.filterMenus
+
+
 renderFilterRail :: TableHeaderActions -> Html ()
 renderFilterRail actions =
   details_ [open_ "", class_ "w-60 shrink-0 max-lg:w-full", detailsClosedBelowAttr_ 1024] do
@@ -634,7 +638,7 @@ renderFilterRail actions =
   where
     clearAll =
       button_
-        ([type_ "button", class_ "flex items-center justify-between rounded px-2 py-1.5 text-xs text-textBrand hover:bg-fillWeak"] <> swapTarget_ actions.targetId (foldl' (\url menu -> deleteParam menu.paramName url) actions.baseUrl actions.filterMenus))
+        ([type_ "button", class_ "flex items-center justify-between rounded px-2 py-1.5 text-xs text-textBrand hover:bg-fillWeak"] <> swapTarget_ actions.targetId (clearFiltersUrl actions))
         $ "Clear all"
         >> faSprite_ "xmark" "regular" "h-3 w-3"
 
@@ -658,7 +662,7 @@ renderFilterDropdown actions = do
         div_ [class_ "flex items-center justify-between px-3 py-2 text-sm font-semibold text-textStrong border-b border-strokeWeak"] do
           span_ "Select Filter"
           button_
-            ([type_ "button", class_ "text-xs text-textBrand cursor-pointer flex items-center gap-1"] <> swapTarget_ actions.targetId (foldl' (\url menu -> deleteParam menu.paramName url) actions.baseUrl actions.filterMenus))
+            ([type_ "button", class_ "text-xs text-textBrand cursor-pointer flex items-center gap-1"] <> swapTarget_ actions.targetId (clearFiltersUrl actions))
             ("Clear all" >> faSprite_ "xmark" "regular" "w-3 h-3")
         div_ [class_ "p-1"] $ forM_ actions.filterMenus (renderFilterMenuItem actions)
 

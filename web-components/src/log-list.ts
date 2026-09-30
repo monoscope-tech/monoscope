@@ -1185,7 +1185,7 @@ export class LogList extends LitElement {
       suffixText = ` found (based on ${formatLargeCount(this.totalCount)} logs)`;
     } else if (this.mode === 'sessions') {
       countText = `${formatLargeCount(this.totalSessions)} sessions`;
-      suffixText = this.totalCount ? ` (${formatLargeCount(this.totalCount)} events)` : '';
+      suffixText = '';
     } else {
       countText = formatLargeCount(this.hasChartCount ? this.totalCount : this.loadedCount);
       suffixText = !this.hasChartCount && this.hasMore ? '+ rows' : ' rows';
@@ -1883,7 +1883,7 @@ export class LogList extends LitElement {
       if (isRecentFetch || !this.spanListTree.length) this.recentFetchUrl = meta.recentUrl ?? '';
       if (meta.count !== undefined && !isLoadMore) this.totalCount = meta.count;
       if (meta.totalPatterns !== undefined && !isLoadMore) this.totalPatterns = meta.totalPatterns;
-      if (meta.totalSessions !== undefined && !isLoadMore) this.totalSessions = meta.totalSessions;
+      if (meta.totalSessions !== undefined && !isLoadMore && !isRecentFetch) this.totalSessions = meta.totalSessions;
       if (meta.serviceColors) Object.assign(this.serviceColors, meta.serviceColors);
       // Only a new query / refresh redefines the column set. Load-more pages and
       // 5s live-stream ticks return the same server cols, so adopting them here
@@ -3383,10 +3383,6 @@ export class LogList extends LitElement {
                         @click=${(e: Event) => {
                           e.stopPropagation();
                           e.preventDefault();
-                        }}
-                        @pointerdown=${(e: Event) => {
-                          e.stopPropagation();
-                          e.preventDefault();
                           this.expandTrace(traceId, id);
                         }}
                         aria-expanded=${expanded}
@@ -3933,7 +3929,7 @@ export class LogList extends LitElement {
       // identifies the page ("/checkout/cart" is more useful than "/api/v2/…").
       const [head, tail] = middleTruncatePath(url);
       add(
-        html`<span class="text-xs font-mono text-textStrong inline-flex items-center min-w-0" title=${url}
+        html`<span class="text-xs font-mono text-textStrong inline-flex items-center min-w-0 max-w-[40ch]" title=${url}
           >${head ? html`<span class="truncate min-w-0">${head}</span>` : nothing}<span class="shrink-0">${tail}</span></span
         >`
       );
@@ -3969,10 +3965,6 @@ export class LogList extends LitElement {
       data-tip=${hasErrors ? 'Replay — errors in this session' : 'Replay recording'}
       aria-label=${hasErrors ? 'Replay session with errors' : 'Replay session recording'}
       @click=${(e: Event) => {
-        e.stopPropagation();
-        e.preventDefault();
-      }}
-      @pointerdown=${(e: Event) => {
         e.stopPropagation();
         e.preventDefault();
         window.dispatchEvent(new CustomEvent('loadSessionReplay', { detail: { sessionId }, bubbles: true, cancelable: false }));

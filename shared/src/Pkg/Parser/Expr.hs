@@ -709,7 +709,7 @@ seedColumns :: IORef (Set T.Text) -> Set T.Text -> IORef (Set T.Text) -> Set T.T
 seedColumns flatRef flatBuiltin bareRef bareBuiltin cols = do
   writeIORef flatRef (fromList [T.replace "___" "." c | c <- flattened] <> flatBuiltin)
   writeIORef bareRef (fromList bare <> bareBuiltin)
-  atomicModifyIORef' jsonbColumnsRef (\known -> (known <> fromList [name | (name, typ) <- cols, typ == "jsonb"], ()))
+  modifyIORef' jsonbColumnsRef (<> fromList [name | (name, "jsonb") <- cols])
   where
     (flattened, bare) = partition (T.isInfixOf "___") (map fst cols)
 
@@ -1417,7 +1417,7 @@ instance Display Expr where
   displayPrec prec e
     | Just (sub, val, op, _) <- binaryParts subjectBinOps e = displayExprHelper op prec sub val
     | Just (v1, v2, op, _) <- binaryParts valBinOps e = displayParen (prec > 0) $ displayPrec prec v1 <> " " <> displayBuilder op <> " " <> displayPrec prec v2
-  displayPrec prec (Regex mode sub val) = displayPrec prec $ renderJsonpathSQL (if mode == CS then "matches regex" else "like_regex") sub (Str val)
+  displayPrec prec (Regex mode sub val) = displayPrec prec $ renderJsonpath (lowerRegex mode sub val)
   displayPrec prec (Paren u1) = displayParen True $ displayPrec prec u1
   displayPrec prec (And u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " AND " <> displayPrec prec u2
   displayPrec prec (Or u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " OR " <> displayPrec prec u2
@@ -1578,21 +1578,13 @@ jsonString = toText . encodeToLazyText . AE.String
 
 
 -- | Lower a KQL @operator/subject/value@ comparison into the jsonpath IR. The
--- operator token is the display token from 'subjectBinOps' (plus @like_regex@ for
--- the regex exprs); every token that reaches here has an explicit arm, and any
--- value with no jsonpath form is a typed 'LowerErr'.
+-- operator token is the display token from 'subjectBinOps'; every token that reaches
+-- here has an explicit arm, and any value with no jsonpath form is a typed 'LowerErr'.
 --
 -- >>> renderJsonpath <$> lowerPred "=" (Subject "" "data" [FieldKey "name"]) (Str "John Doe")
 -- Right "jsonb_path_exists(to_jsonb(data), '$.\"name\" ? (@ == \"John Doe\")'::jsonpath)"
 -- >>> renderJsonpath <$> lowerPred "=" (Subject "" "body" [FieldKey "name"]) (Str "John Doe")
 -- Right "jsonb_path_exists(body, '$.\"name\" ? (@ == \"John Doe\")'::jsonpath)"
---
--- >>> renderJsonpath <$> lowerPred "matches regex" (Subject "" "attributes" [FieldKey "url", FieldKey "full"]) (Str "^/cart$")
--- Right "jsonb_path_exists(attributes, '$.\"url\".\"full\" ? (@ like_regex \"^/cart$\")'::jsonpath)"
--- >>> renderJsonpath <$> lowerPred "matches regex" (Subject "" "resource" [FieldKey "service", FieldKey "name"]) (Str "^checkout$")
--- Right "jsonb_path_exists(resource, '$.\"service\".\"name\" ? (@ like_regex \"^checkout$\")'::jsonpath)"
--- >>> renderJsonpath <$> lowerPred "matches regex" (Subject "" "name" []) (Str "^GET /pay$")
--- Right "jsonb_path_exists(to_jsonb(name), '$ ? (@ like_regex \"^GET /pay$\")'::jsonpath)"
 --
 -- >>> renderJsonpath <$> lowerPred "!=" (Subject "" "settings" [ArrayWildcard "", FieldKey "enabled"]) (Boolean True)
 -- Right "jsonb_path_exists(to_jsonb(settings), '$[*].\"enabled\" ? (@ != true)'::jsonpath)"
@@ -1624,9 +1616,6 @@ jsonString = toText . encodeToLazyText . AE.String
 -- >>> renderJsonpath <$> lowerPred "ENDSWITH" (Subject "" "f" [ArrayWildcard "", FieldKey "name"]) (Str ".log")
 -- Right "jsonb_path_exists(to_jsonb(f), '$[*].\"name\" ? (@ like_regex \"\\\\.log$\" flag \"i\")'::jsonpath)"
 --
--- >>> renderJsonpath <$> lowerPred "like_regex" (Subject "" "request_body" [FieldKey "msg"]) (Str "^abc.*")
--- Right "jsonb_path_exists(to_jsonb(request_body), '$.\"msg\" ? (@ like_regex \"^abc.*\" flag \"i\")'::jsonpath)"
---
 -- A resolved timestamp compares via @.datetime()@ on both operands:
 --
 -- >>> renderJsonpath <$> lowerPred ">" (Subject "" "spans" [ArrayWildcard "", FieldKey "ts"]) (TimestampLit "2026-07-11T20:00:00Z")
@@ -1640,14 +1629,8 @@ jsonString = toText . encodeToLazyText . AE.String
 -- >>> lowerPred ">" (Subject "" "attrs" [ArrayWildcard "", FieldKey "ts"]) (AgoExpression "1h")
 -- Left (NoJsonpathForm "ago(1h)")
 lowerPred :: Text -> Subject -> Values -> Either LowerErr Jsonpath
-lowerPred op (Subject _ base keys) val = Jsonpath base (JPath (concatMap toSteps keys)) <$> pred_
+lowerPred op sub val = onSubject sub <$> pred_
   where
-    toSteps (FieldKey k) = [JKey k]
-    toSteps (ArrayIndex "" i) = [JIdx i]
-    toSteps (ArrayIndex k i) = [JKey k, JIdx i]
-    toSteps (ArrayWildcard "") = [JWild]
-    toSteps (ArrayWildcard k) = [JKey k, JWild]
-
     -- Negation is NOT handled here: on a wildcard subject it must negate the whole
     -- existence test (@NOT jsonb_path_exists@), not the inner filter — see renderJsonpathSQL.
     pred_ = case (lookup op cmpOps, op) of
@@ -1659,8 +1642,6 @@ lowerPred op (Subject _ base keys) val = Jsonpath base (JPath (concatMap toSteps
       (Nothing, "HAS_ALL") -> likeList JAnd
       (Nothing, "STARTSWITH") -> JRegex CI . (\t -> "^" <> escapeRegex t) <$> asTerm val
       (Nothing, "ENDSWITH") -> JRegex CI . (\t -> escapeRegex t <> "$") <$> asTerm val
-      (Nothing, "matches regex") -> JRegex CS <$> asTerm val
-      (Nothing, "like_regex") -> JRegex CI <$> asTerm val -- raw user regex, not escaped
       (Nothing, _) -> Left (UnknownOp op)
 
     cmpOps :: [(Text, JCmpOp)]
@@ -1688,6 +1669,27 @@ lowerPred op (Subject _ base keys) val = Jsonpath base (JPath (concatMap toSteps
     asTerm (Str s) = Right s
     asTerm (Num n) = Right n
     asTerm v = Left (NoJsonpathForm (display v))
+
+
+onSubject :: Subject -> JPred -> Jsonpath
+onSubject (Subject _ base keys) = Jsonpath base (JPath (concatMap toSteps keys))
+  where
+    toSteps (FieldKey k) = [JKey k]
+    toSteps (ArrayIndex "" i) = [JIdx i]
+    toSteps (ArrayIndex k i) = [JKey k, JIdx i]
+    toSteps (ArrayWildcard "") = [JWild]
+    toSteps (ArrayWildcard k) = [JKey k, JWild]
+
+
+-- | Lower a regex expr; the user pattern is passed through unescaped, and 'CI' adds
+-- the @"i"@ flag.
+--
+-- >>> display (Regex CS (Subject "" "attributes" [FieldKey "url", FieldKey "full"]) "^/cart$")
+-- "jsonb_path_exists(attributes, '$.\"url\".\"full\" ? (@ like_regex \"^/cart$\")'::jsonpath)"
+-- >>> display (Regex CS (Subject "" "name" []) "^GET /pay$")
+-- "jsonb_path_exists(to_jsonb(name), '$ ? (@ like_regex \"^GET /pay$\")'::jsonpath)"
+lowerRegex :: CaseMode -> Subject -> Text -> Jsonpath
+lowerRegex mode sub = onSubject sub . JRegex mode
 
 
 -- | SQL for a wildcard-subject comparison. A @NOT X@ operator negates the whole

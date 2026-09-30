@@ -19,6 +19,7 @@ module Models.Apis.LogQueries (
   fetchLogPatterns,
   fetchSessions,
   SessionSort (..),
+  SessionsRead (..),
   sessionSortParam,
   sessionSortLabel,
   ExpandKind (..),
@@ -504,6 +505,12 @@ data SessionRow = SessionRow
   deriving stock (Generic, Show)
 
 
+-- | The first page carries the header (summary tiles + service count); load-more pages
+-- and live polls merge rows into a list that already has one.
+data SessionsRead = WithHeader | RowsOnly
+  deriving stock (Eq, Show)
+
+
 -- | One session of the Sessions viz, as the grouped scan returns it.
 data SessionAggRow = SessionAggRow
   { sessionId :: Text
@@ -724,8 +731,8 @@ sessionSortLabel ordering = T.toUpper (T.take 1 label) <> T.drop 1 label
     label = T.replace "_" " " $ sessionSortParam ordering
 
 
-fetchSessions :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Ki.StructuredConcurrency :> es) => Bool -> Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Text -> Maybe Text -> Maybe SessionSort -> Int -> Bool -> Eff es (Maybe SessionSummary, Int, [SessionRow])
-fetchSessions enableTfReads pid queryAST dateRange environment service sortByM skip header = do
+fetchSessions :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Ki.StructuredConcurrency :> es) => Bool -> Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Text -> Maybe Text -> Maybe SessionSort -> Int -> SessionsRead -> Eff es (Maybe SessionSummary, Int, [SessionRow])
+fetchSessions enableTfReads pid queryAST dateRange environment service sortByM skip readKind = do
   now <- Time.currentTime
   let scope = mkScopedQuery pid dateRange environment service
       whereSql = rawSql $ scopedQueryWhere now (Just SSpans) scope queryAST
@@ -743,7 +750,7 @@ fetchSessions enableTfReads pid queryAST dateRange environment service sortByM s
   (sessions :: [SessionAggRow], serviceRows :: [Maybe Text]) <- Ki.scoped \ks -> do
     servicesT <-
       forkWithCtx ks
-        $ if header
+        $ if readKind == WithHeader
           then
             Hasql.withHasqlTimefusion enableTfReads
               $ Hasql.interp
@@ -821,7 +828,7 @@ fetchSessions enableTfReads pid queryAST dateRange environment service sortByM s
       pMin = epochBucket fromT
       pMax = max pMin (epochBucket toT)
       buckets errored = densifyBuckets (pMin, pMax) [(epochBucket r.firstSeen, 1) | r <- sessions, (r.errorCount > 0) == errored]
-      summary = guard header $> SessionSummary
+      summary = guard (readKind == WithHeader) $> SessionSummary
           { totalSessions = fromIntegral $ length sessions
           , erroredSessions = fromIntegral $ length $ filter ((> 0) . (.errorCount)) sessions
           , uniqueUsers = fromIntegral $ length $ ordNub $ mapMaybe (\r -> r.userId <|> r.userEmail) sessions
