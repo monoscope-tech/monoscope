@@ -2712,14 +2712,20 @@ dashboardTabStrip_ pidText dashIdText activeTabIdx tabs queryStr extraAttrs =
           toHtml tab.name
 
 
+-- | The range comes from the live picker, not @url@: a range picked client-side leaves every
+-- server-rendered link's @since@/@from@/@to@ stale, and a duplicate key resolves to the first.
 dashboardContentNavAttrs :: Text -> [Attribute]
 dashboardContentNavAttrs url =
-  [ hxGet_ url
+  [ hxGet_ $ path <> foldMap ("?" <>) (nonEmpty kept <&> T.intercalate "&" . toList)
+  , hxVals_ "js:{...getTimeRange()}"
   , hxTarget_ "#dashboard-tabs-content"
   , hxSwap_ "outerMorph"
   , hxPushUrl_ "true"
   , [__|on click set my.preloadState to 'DONE'|]
   ]
+  where
+    (path, qs) = T.breakOn "?" url
+    kept = filter ((`notElem` ["", "since", "from", "to"]) . T.takeWhile (/= '=')) $ T.splitOn "&" $ T.drop 1 qs
 
 
 -- | Render a single tab content panel.

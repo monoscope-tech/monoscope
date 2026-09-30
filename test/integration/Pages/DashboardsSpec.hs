@@ -216,6 +216,15 @@ spec = sequential $ aroundAll withTestResources do
       show overview `shouldNotContain` "telemetry.metrics"
       show overview `shouldNotContain` "metric_value"
 
+    -- Regression: the overview's Infra stats selected `…::text || '%'`, and the stat path
+    -- decodes a number, so every one rendered "Query execution failed".
+    it "every template's SQL stat widget decodes as a number" \tr -> do
+      stats <- filter (\w -> w.wType == Widget.WTStat && isJust w.sql) . foldMap DashboardModel.allWidgets <$> DashboardModel.readDashboardsFromDisk "static/public/dashboards"
+      length stats `shouldSatisfy` (> 3)
+      for_ stats \w -> do
+        md <- runQueryEffect tr $ runConcurrent $ Dashboards.widgetMetrics testPid (Just "24h", Nothing, Nothing) [] w
+        (w.title, md.error :: Maybe Text) `shouldBe` (w.title, Nothing)
+
     it "dashboard SQL source migrations remain byte-for-byte immutable" \_ -> do
       migration0119 <- readFileBS "static/migrations/0119_endpoint_dashboard_sql_source.sql"
       migration0120 <- readFileBS "static/migrations/0120_repair_dashboard_sql_source.sql"

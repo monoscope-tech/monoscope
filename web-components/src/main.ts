@@ -156,7 +156,7 @@ export const params = () => ({ ...Object.fromEntries(new URLSearchParams(locatio
 window.params = params;
 
 window.getTimeRange = function () {
-  const rangeInput = document.getElementById('custom_range_input') as HTMLInputElement | undefined;
+  const rangeInput = document.getElementById('n-custom_range_input') as HTMLInputElement | undefined;
   if (rangeInput) {
     const range = rangeInput.value.split('/');
     if (range.length == 2) {
@@ -167,7 +167,7 @@ window.getTimeRange = function () {
     }
     // No explicit pick: send empty and let the server fill its default (see
     // defaultSince in TimePicker.hs). The frontend never names a default range.
-    return { since: params().since || '', from: params().from, to: params().to };
+    return { since: params().since || '', from: params().from || '', to: params().to || '' };
   }
 
   const fromInput = document.querySelector('input[name="from"]') as HTMLInputElement | null;

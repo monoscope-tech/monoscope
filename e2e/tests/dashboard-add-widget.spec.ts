@@ -605,6 +605,12 @@ test("a tabbed dashboard lists its widgets and keeps a rename made in the widget
   await page.mouse.wheel(0, 5000);
   await expect.poll(async () => (await lastRow.boundingBox())!.y + (await lastRow.boundingBox())!.height).toBeLessThanOrEqual(360);
 
+  // Escape used to be heard only by the hidden toggle, never by the focused modal content.
+  await page.locator('label[for="newDashboardMdl"]').first().click();
+  await expect(page.locator("#newDashboardMdl")).toBeChecked();
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#newDashboardMdl")).not.toBeChecked();
+
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(`/p/${DEMO_PROJECT}/dashboards/${dash.id}`);
   await page.getByRole("button", { name: "Expand widget", exact: true }).first().click();
