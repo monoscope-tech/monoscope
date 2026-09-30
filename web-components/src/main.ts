@@ -763,8 +763,9 @@ const loadTagify = () =>
 
 function initAllTagifyInputs(root: Document | Element = document) {
   const els = [...root.querySelectorAll<HTMLElement>('[data-tagify]')];
-  if ((window as any).Tagify) els.forEach(initTagifyElement);
-  else if (els.length) loadTagify().then(() => els.forEach(initTagifyElement), (e) => console.error('[Tagify] failed to load', e));
+  const pending = (window as any).Tagify ? [] : els.filter((el) => !(el as any)._tagifyInstance);
+  els.filter((el) => !pending.includes(el)).forEach(initTagifyElement);
+  if (pending.length) loadTagify().then(() => pending.forEach(initTagifyElement), (e) => console.error('[Tagify] failed to load', e));
 }
 
 window.getTagValues = (selector: string): string[] => {

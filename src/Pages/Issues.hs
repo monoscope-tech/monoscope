@@ -56,6 +56,7 @@ import Data.Char (isHexDigit)
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
+import Data.Hashable (hash)
 import Data.List (partition)
 import Data.List.NonEmpty qualified as NE
 import Data.Map qualified as Map
@@ -2125,8 +2126,10 @@ aiChatResponse_ pid userQuery explanation widgetsM toolCallsM systemPromptM =
         div_ [class_ "prose prose-sm text-textStrong max-w-none leading-relaxed"] $ renderMarkdown explanation
         whenJust widgetsM \widgets -> do
           let processedWidgets = maybe widgets (`processWidgetsWithToolData` widgets) toolCallsM
-          div_ [class_ "grid grid-cols-1 gap-3 mt-3"] $ forM_ processedWidgets \widget ->
-            div_ [class_ "w-full aspect-[3/1]"] $ Widget.widget_ widget{Widget._projectId = Just pid}
+          -- Model widgets carry no id, and the widget's element ids and hx-target/select derive from it.
+          let fallbackId i = "chat-" <> show (abs $ hash (userQuery, explanation)) <> "-" <> show @Text @Int i
+          div_ [class_ "grid grid-cols-1 gap-3 mt-3"] $ forM_ (zip [0 ..] processedWidgets) \(i, widget) ->
+            div_ [class_ "w-full aspect-[3/1]"] $ Widget.widget_ widget{Widget._projectId = Just pid, Widget.id = widget.id <|> Just (fallbackId i)}
     -- Collapsed debug info (tool calls + system prompt)
     let toolCalls = fromMaybe [] toolCallsM
     unless (null toolCalls && isNothing systemPromptM)

@@ -2716,7 +2716,7 @@ dashboardTabStrip_ pidText dashIdText activeTabIdx tabs queryStr extraAttrs =
 -- server-rendered link's @since@/@from@/@to@ stale, and a duplicate key resolves to the first.
 dashboardContentNavAttrs :: Text -> [Attribute]
 dashboardContentNavAttrs url =
-  [ hxGet_ $ path <> foldMap ("?" <>) (nonEmpty kept <&> T.intercalate "&" . toList)
+  [ hxGet_ $ path <> foldMap (("?" <>) . T.intercalate "&" . toList) (nonEmpty kept)
   , hxVals_ "js:{...getTimeRange()}"
   , hxTarget_ "#dashboard-tabs-content"
   , hxSwap_ "outerMorph"

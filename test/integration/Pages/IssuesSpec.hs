@@ -3,6 +3,7 @@ module Pages.IssuesSpec (spec) where
 import BackgroundJobs qualified
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
+import Data.Default (def)
 import Data.Effectful.Hasql qualified as EHasql
 import Data.Pool (withResource)
 import Data.Text qualified as T
@@ -536,6 +537,14 @@ spec = sequential $ aroundAll withTestResources do
       html `shouldSatisfy` T.isInfixOf "92 all time"
       html `shouldSatisfy` T.isInfixOf ">2 mins ago<"
       html `shouldSatisfy` T.isInfixOf ">&lt;*&gt; min</span>"
+
+    -- Regression: model widgets carry no id, and a table derives hx-target/select from it,
+    -- so every chat table fetched into `#` ("'#' is not a valid selector").
+    it "AI chat widgets without ids render addressable targets" \_ -> do
+      let turn = [def{Issues.role = Issues.ChatUser, Issues.content = "slow checkouts"}, def{Issues.role = Issues.ChatAssistant, Issues.content = "{\"query\":\"name != null\",\"visualization\":\"table\"}"}]
+          html = TL.toStrict $ renderText $ IssuesPage.aiChatHistoryView_ testPid turn
+      html `shouldSatisfy` T.isInfixOf "hx-target=\"#chat-"
+      html `shouldNotSatisfy` T.isInfixOf "hx-target=\"#\""
 
     -- Regression: an issue that never captured a trace id used to render the logs tab as
     -- `context___trace_id==""`, a predicate that filters nothing — so the tab fetched the
