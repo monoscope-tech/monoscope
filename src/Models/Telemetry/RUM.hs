@@ -504,6 +504,8 @@ SELECT ROW(read_kind,population,epoch_series,epoch_start) FROM reads
 -- | The Overview's headline numbers from one scan of the window; a window with no browser telemetry yields no row.
 data RumPulse = RumPulse
   { sessions :: Int64
+  , pageViews :: Int64
+  , errors :: Int64
   , p75LoadMs :: Maybe Double
   }
   deriving stock (Eq, Generic, Show)

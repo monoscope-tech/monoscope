@@ -1132,16 +1132,21 @@ renderChart :: Widget -> Html ()
 renderChart widget = do
   let rateM = widget.dataset >>= (.rowsPerMin) <&> \r -> Utils.prettyPrintCount (round r) <> "/min"
       chartId = maybeToMonoid widget.id
+      served = widget.dataset >>= (.value) <&> \value -> formatStatValue value $ fromMaybe "" widget.unit
       valueM = case widget.wType of
-        WTTimeseriesStat -> do
-          dataset <- widget.dataset
-          stats <- dataset.stats
-          let summarize = fromMaybe SBSum widget.summarizeBy
-          value <- statScalar summarize dataset.from dataset.to stats
-          let prefix = summarizeByPrefix summarize
-              formatted = formatStatValue value $ fromMaybe "" widget.unit
-          pure $ prefix <> memptyIfFalse (not $ T.null prefix) " " <> formatted
-        _ -> widget.dataset >>= (.value) <&> \value -> formatStatValue value $ fromMaybe "" widget.unit
+        -- A server-supplied value stands in until the sparkline response brings its stats.
+        WTTimeseriesStat ->
+          ( do
+              dataset <- widget.dataset
+              stats <- dataset.stats
+              let summarize = fromMaybe SBSum widget.summarizeBy
+              value <- statScalar summarize dataset.from dataset.to stats
+              let prefix = summarizeByPrefix summarize
+                  formatted = formatStatValue value $ fromMaybe "" widget.unit
+              pure $ prefix <> memptyIfFalse (not $ T.null prefix) " " <> formatted
+          )
+            <|> served
+        _ -> served
       isStat = widget.wType `elem` [WTTimeseriesStat, WTStat]
   div_ [class_ "gap-0.5 flex flex-col h-full justify-end"] do
     unless (isTrue widget.naked || isStat)

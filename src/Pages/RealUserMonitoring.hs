@@ -233,16 +233,20 @@ errorPredicate :: HI.Sql
 errorPredicate = rawSql errorSql
 
 
--- | Presence plus the two headline numbers that have no sparkline, from one scan of the
--- window: the session and P75 tiles then arrive with the panel (and share its cache) instead
--- of each spinning through its own fetch. The page-view and error tiles keep fetching: their
--- sparkline series is the same request as their number. @HAVING@ turns an empty window into
+-- | Presence plus the four headline numbers from one scan of the window, so every tile
+-- arrives with the panel (and shares its cache) instead of spinning through its own fetch;
+-- the two sparkline tiles still fetch their series and refresh the number from it. @HAVING@ turns an empty window into
 -- no row, so presence is the row's existence.
 rumPulse :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> Eff es (Maybe RumPulse)
 rumPulse scope =
   Hasql.withHasqlTimefusion scope.useTf
     $ Hasql.interpOne
     $ [HI.sql|SELECT COUNT(DISTINCT NULLIF(attributes___session___id, ''))::bigint,
+        COUNT(*) FILTER (WHERE |]
+    <> pageViewPredicate
+    <> [HI.sql|)::bigint, COUNT(*) FILTER (WHERE |]
+    <> errorPredicate
+    <> [HI.sql|)::bigint,
         (approx_percentile(0.75, percentile_agg(CASE WHEN |]
     <> pageViewPredicate
     <> [HI.sql| THEN duration END)) / 1000000.0)::float8
@@ -1072,9 +1076,11 @@ rumStatWidgets_ links pulse = div_ [class_ "grid grid-cols-4 gap-3 max-md:grid-c
     -- The page-view predicate alone: its two disjuncts are already inside 'browserSql''s
     -- OR, so @browserSql AND pageView@ is just @pageView@ — the same subset collapse
     -- 'rumPages' applies, and the cheaper predicate plans measurably faster.
+    $ served (Just $ fromIntegral pulse.pageViews)
     $ statWidget "rum-stat-pageviews" Widget.WTTimeseriesStat "Page views" "file-lines" "views"
     $ binnedSql "count(*)" pageViewSql
   statSlot_
+    $ served (Just $ fromIntegral pulse.errors)
     $ ( statWidget "rum-stat-errors" Widget.WTTimeseriesStat "Browser errors" "triangle-exclamation" "errors"
           $ binnedSql "count(*)" (browserSql <> " AND " <> errorSql)
       )
