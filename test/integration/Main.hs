@@ -36,6 +36,8 @@ main = do
       where
         groupName = concat (take 1 groups)
         hashed = foldl' (\a c -> a * 31 + ord c) 7 groupName `mod` n
+        -- Measured overrides for the local CI default of 12 shards; other totals
+        -- use the stable hash so changing CI_SHARDS never drops a spec.
         balanced =
           [ ("Pages.LogExplorer.Log", 4)
           , ("Pages.Bots.Workflows", 5)

@@ -269,13 +269,16 @@ QEMU, so it runs at a useful fraction of native rather than 10× slower. Budget
 | `CI_KEEP_GOING=true` | don't stop the sweep at the first failure |
 | `CI_ALLOW_DEGRADED=true` | run checks whose capabilities are missing, unattested |
 | `CI_NO_ATTEST=true` | run, publish nothing |
-| `CI_SHARDS=n` | integration-test shard count (local defaults to 6; GitHub uses 4) |
+| `CI_SHARDS=n` | integration-test shard count (local defaults to 12; GitHub uses 4) |
 | `CI_ATTEST_DISABLED=true` | ignore all attestations — set as a repo variable to force full CI runs |
 | `MONOSCOPE_CI_TF_IMAGE` / `MONOSCOPE_CI_TF_PLATFORM` | point at a locally built TimeFusion image (auto-detected after `make tf-image`) |
 | `TF_TARGET_CPU` | CPU baseline used by `make tf-image`; defaults to `neoverse-n1` on arm64 and `x86-64-v3` on amd64. Override only for a known compatible target. |
 | `BUILD_HOST` / `BUILD_CPUS` / `BUILD_MEMORY` | the native amd64 build host and its caps (`make builder-setup`) |
 | `MONOSCOPE_BUILDER` | buildx builder to build the image with; falls back to the default builder if absent |
 | `SHIP_ANY_BRANCH=1` | let `make ship` deploy something other than master |
+
+`CI_UNIT_BIN`, `CI_CLI_BIN`, `CI_INTEGRATION_BIN`, `E2E_SERVER_BIN`, and
+`CI_LOCAL_ASYNC_SERVICES` are internal handoffs between local checks; leave them unset.
 
 ## When you need to invalidate everything
 

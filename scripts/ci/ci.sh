@@ -297,14 +297,10 @@ runner=$runner_id")
 }
 
 publish_attestation() { # <check> [fingerprint] [caps] [platform]
-  local spec
-  if ! spec=$(attestation_refspec "$@"); then
-    note "could not prepare attestation for $1 — result is still valid, just not cached"
-  elif git push -q "$REMOTE" "$spec" 2>/dev/null; then
-    note "attested $1 → ${spec#*:}"
-  else
-    note "could not publish attestation for $1 (no push access to $REMOTE?) — result is still valid, just not cached"
-  fi
+  local f
+  f=$(mktemp -t ci-attest.XXXXXX)
+  printf '%s\t%s\t%s\t%s\n' "$1" "${2:-$(fingerprint "$1")}" "${3:-$(detect_caps)}" "${4:-$(platform_tag)}" > "$f"
+  cmd_publish "$f"
 }
 
 # ---------------------------------------------------------------- check bodies
@@ -370,7 +366,6 @@ run_body() { # <check>
       scripts/e2e.sh
       ;;
     integration-tests) run_integration ;;
-    selftest-fail) false; true ;;
     *) die "no body for check '$1'" ;;
   esac
 }
@@ -380,7 +375,7 @@ run_body() { # <check>
 # resource-pool lifecycle (see test/integration/Main.hs). Keep shards * ~9 conns
 # under the server's max_connections.
 run_integration() {
-  local shards bin i green
+  local shards bin i green shard_rc=0
   local -a shard_pids=()
   shards=${CI_SHARDS:-4}
   # Without a reachable TimeFusion the URL must go, or every example dies dialling
@@ -400,7 +395,7 @@ run_integration() {
       echo "[shard-time] $(( $(date +%s) - start ))s" >> "build-shard-$i.log" ) &
     shard_pids+=("$!")
   done
-  for i in "${shard_pids[@]}"; do wait "$i" || true; done
+  for i in "${shard_pids[@]}"; do wait "$i" || shard_rc=1; done
   echo "=== per-shard (wall-clock | result) — wide spreads ⇒ rebalance ==="
   for i in $(seq 0 $((shards - 1))); do
     printf "shard %s: %-6s | %s\n" "$i" "$(sed -n 's/.*\[shard-time\] //p' "build-shard-$i.log" | tail -1)" \
@@ -409,7 +404,7 @@ run_integration() {
   green=$(grep -lE "examples?, 0 failures" build-shard-*.log | wc -l | tr -d ' ')
   # green==N already means every shard printed a clean summary; don't also grep for
   # "error:" — the app logs error: lines at LOG_LEVEL=warn on passing runs.
-  if [ "$green" -ne "$shards" ] || grep -qE "[1-9][0-9]* failures?|Interrupted" build-shard-*.log; then
+  if [ "$shard_rc" -ne 0 ] || [ "$green" -ne "$shards" ] || grep -qE "[1-9][0-9]* failures?|Interrupted" build-shard-*.log; then
     echo "SHARDED RUN FAILED ($green/$shards green):"
     for f in build-shard-*.log; do
       grep -qE "examples?, 0 failures" "$f" && continue
@@ -457,6 +452,17 @@ cmd_gate() {
   echo "skip_all=$skip_all" >> "$out"
 }
 
+stop_early() { [ "$1" -ne 0 ] && [ "${CI_KEEP_GOING:-}" != true ]; }
+
+collect_background() { # <pid> <log> <result>
+  local status=0
+  wait "$1" || status=1
+  [ "$status" -ne 0 ] || [ ! -s "$3" ] || cat "$3" >> "$CI_ATTEST_OUT"
+  cat "$2"
+  rm -f "$2" "$3"
+  return "$status"
+}
+
 cmd_run() {
   local c req ref bin i rc=0 unrunnable='' degraded='' e2e_pid='' e2e_log='' e2e_result=''
   local integration_pid='' integration_log='' integration_result=''
@@ -469,25 +475,15 @@ cmd_run() {
   [ "${CI_FORCE:-}" = "true" ] || remote_refs >/dev/null
   for c in $checks; do
     if [ "$c" = integration-tests ] && [ -n "$integration_pid" ]; then
-      if wait "$integration_pid"; then
-        [ ! -s "$integration_result" ] || cat "$integration_result" >> "$CI_ATTEST_OUT"
-      else
-        rc=1
-      fi
-      cat "$integration_log"
-      rm -f "$integration_log" "$integration_result"
-      [ "$rc" -eq 0 ] || [ "${CI_KEEP_GOING:-}" = "true" ] || [ -n "$e2e_pid" ] || return 1
+      collect_background "$integration_pid" "$integration_log" "$integration_result" || rc=1
+      integration_pid=''
+      stop_early "$rc" && break
       continue
     fi
     if [ "$c" = e2e ] && [ -n "$e2e_pid" ]; then
-      if wait "$e2e_pid"; then
-        [ ! -s "$e2e_result" ] || cat "$e2e_result" >> "$CI_ATTEST_OUT"
-      else
-        rc=1
-      fi
-      cat "$e2e_log"
-      rm -f "$e2e_log" "$e2e_result"
-      [ "$rc" -eq 0 ] || [ "${CI_KEEP_GOING:-}" = "true" ] || return 1
+      collect_background "$e2e_pid" "$e2e_log" "$e2e_result" || rc=1
+      e2e_pid=''
+      stop_early "$rc" && break
       continue
     fi
     if [ "$c" = integration-tests ] && [ "${CI_LOCAL_ASYNC_SERVICES:-}" = true ]; then
@@ -506,7 +502,9 @@ cmd_run() {
     if ! caps_satisfy "$CAPS" "$req"; then
       if [ "${CI_ALLOW_DEGRADED:-}" != "true" ]; then
         note "CANNOT RUN $c here — needs [$req], have [$CAPS]"
-        unrunnable="$unrunnable $c"; rc=1; continue
+        unrunnable="$unrunnable $c"; rc=1
+        stop_early "$rc" && break
+        continue
       fi
       note "running $c DEGRADED — needs [$req], have [$CAPS]; result will not be attested"
       degraded="$degraded $c"
@@ -540,6 +538,7 @@ cmd_run() {
       if ! inputs_unchanged "$c"; then
         note "PASSED $c, but inputs changed during the run — NOT attested; rerun required"
         rc=1
+        stop_early "$rc" && break
         continue
       fi
       # A green check stays green even if we cannot record it. Publishing touches
@@ -564,9 +563,11 @@ cmd_run() {
     else
       rc=1
       note "FAILED $c"
-      [ "${CI_KEEP_GOING:-}" = "true" ] || [ -n "$e2e_pid" ] || return 1
     fi
+    stop_early "$rc" && break
   done
+  [ -z "$integration_pid" ] || collect_background "$integration_pid" "$integration_log" "$integration_result" || rc=1
+  [ -z "$e2e_pid" ] || collect_background "$e2e_pid" "$e2e_log" "$e2e_result" || rc=1
   [ -z "$unrunnable" ] || note "not run here (CI will still have to):$unrunnable"
   [ -z "$degraded" ] || note "run degraded, NOT attested (CI will still run these):$degraded"
   return $rc
@@ -1006,10 +1007,19 @@ assert() { # <desc> <expected> <actual>
 
 cmd_selftest() {
   SELFTEST_RC=0
-  local body_rc=0
-  "$0" body selftest-fail >/dev/null 2>&1 || body_rc=$?
+  local body_rc=0 bg_log bg_result
+  CI_UNIT_BIN=false "$0" body unit-tests >/dev/null 2>&1 || body_rc=$?
   assert "body stops at first failure" 1 "$body_rc"
   assert "built unit binary runs without Cabal" ok "$(CI_UNIT_BIN=$(command -v true) "$0" body unit-tests && echo ok)"
+  bg_log=$(mktemp -t ci-selftest-bg-log.XXXXXX)
+  bg_result=$(mktemp -t ci-selftest-bg-result.XXXXXX)
+  (exit 1) &
+  body_rc=0
+  collect_background "$!" "$bg_log" "$bg_result" || body_rc=$?
+  assert "background failure propagates" 1 "$body_rc"
+  assert "background files cleaned" no "$([ -e "$bg_log" ] || [ -e "$bg_result" ] && echo yes || echo no)"
+  assert "failure stops sweep" yes "$(stop_early 1 && echo yes)"
+  assert "keep-going continues sweep" no "$(CI_KEEP_GOING=true stop_early 1 && echo yes || echo no)"
 
   assert "caps superset"      ok "$(caps_satisfy 'ghc pg minio tf-real' 'ghc pg' && echo ok)"
   assert "caps exact"         ok "$(caps_satisfy 'ghc' 'ghc' && echo ok)"
