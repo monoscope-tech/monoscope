@@ -527,15 +527,8 @@ spec = sequential $ aroundAll withTestResources do
         Just errRate -> do
           void $ runTestBg regressionTime tr $ ErrorPatterns.updateErrorPatternState errRate.errorId ErrorPatterns.ESResolved regressionTime
           runTestBg regressionTime tr $ BackgroundJobs.runHourlyJob regressionTime 0
-          -- Re-ingest to regress
-          apiKey <- createTestAPIKey tr pid "regress-spike-key"
-          -- Preserve the capture path: replaying a log as a Node.js trace changes its fingerprint.
-          case errRate.errorData.mechanism of
-            Just ErrorPatterns.CMLogRecord -> ingestErrorLog tr apiKey errRate.message [("exception.type", errRate.errorType), ("exception.message", errRate.message), ("exception.stacktrace", errRate.stacktrace)] regressionTime
-            _ -> ingestTraceWithException tr apiKey "GET /regress-spike" errRate.errorType errRate.message errRate.stacktrace regressionTime
-          drainExtractionWorkerAt regressionTime tr
-          -- Observe regression before running independent spike tickers.
-          void $ runBackgroundJobsWhere regressionTime tr.trATCtx \case BackgroundJobs.ProcessProjectErrorsJob _ _ at -> at == regressionTime; _ -> False
+          -- Replay the selected error itself; a newly ingested event may have a different fingerprint.
+          runTestBg regressionTime tr $ BackgroundJobs.processProjectErrors pid (V.singleton errRate.errorData{ErrorPatterns.when = regressionTime}) regressionTime
 
           regressedPat <- runTestBg regressionTime tr $ ErrorPatterns.getErrorPatternById errRate.errorId
           fmap (.state) regressedPat `shouldBe` Just ESRegressed

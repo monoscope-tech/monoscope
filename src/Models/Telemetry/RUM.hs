@@ -316,12 +316,13 @@ rumVitalPopulation :: (DB es, Labeled "timefusion" Hasql.Hasql :> es) => Bool ->
 rumVitalPopulation useTf scope window bucket = Hasql.withHasqlTimefusion useTf do
   let interval :: Text
       interval = case bucket of FiveMinutes -> "5 minutes"; OneHour -> "1 hour"; SixHours -> "6 hours"
-      vitalScope name =
+      vitalScope =
         let names :: [Text]
-            names = [prefix <> name | prefix <- ["browser.web_vital.", "k6.browser_web_vital_"]]
+            names = [prefix <> name | name <- ["lcp", "inp", "cls", "fcp", "ttfb"], prefix <- ["browser.web_vital.", "k6.browser_web_vital_"]]
          in
         [HI.sql|project_id=#{scope.projectId.toText} AND (#{scope.environment}::text IS NULL OR resource___deployment___environment___name = #{scope.environment})
-        AND (#{scope.service}::text IS NULL OR resource___service___name = #{scope.service}) AND metric_name = ANY(#{names}::text[])|]
+        AND (#{scope.service}::text IS NULL OR resource___service___name = #{scope.service}) AND metric_name = ANY(#{names}::text[])
+        AND (starts_with(metric_name,'browser.web_vital.') OR metric_type='GAUGE')|]
       columns =
         [HI.sql|timestamp,start_timestamp,series_id,metric_type,aggregation_temporality,flags,
         CASE WHEN metric_type IN ('GAUGE') THEN value END AS value,
@@ -329,28 +330,28 @@ rumVitalPopulation useTf scope window bucket = Hasql.withHasqlTimefusion useTf d
         COALESCE(attributes #>> '{page,url}',attributes->>'page.url',attributes->>'url') AS page,
         CASE WHEN starts_with(metric_name,'browser.web_vital.') THEN substring(metric_name FROM length('browser.web_vital.')+1)
           ELSE substring(metric_name FROM length('k6.browser_web_vital_')+1) END::text AS metric|]
-      current name = [HI.sql|SELECT |] <> columns <> [HI.sql| FROM otel_metrics WHERE |] <> vitalScope name <> [HI.sql| AND timestamp>=#{window.fromTime} AND timestamp<=#{window.toTime}|]
-      withHistory name epochs = case nonEmpty epochs of
-        Nothing -> current name
+      current = [HI.sql|SELECT |] <> columns <> [HI.sql| FROM otel_metrics WHERE |] <> vitalScope <> [HI.sql| AND timestamp>=#{window.fromTime} AND timestamp<=#{window.toTime}|]
+      withHistory epochs = case nonEmpty epochs of
+        Nothing -> current
         Just selected ->
           let oldest = minimum1 $ fmap snd selected
               seriesIds :: [Text]
               seriesIds = ordNub $ map fst epochs
               exactEpochs = mconcat $ intersperse [HI.sql| OR |] [[HI.sql|(series_id::text=#{seriesId} AND start_timestamp=#{start})|] | (seriesId, start) <- epochs]
-           in current name
+           in current
                 <> [HI.sql| UNION ALL SELECT |]
                 <> columns
                 <> [HI.sql| FROM (
                 SELECT *,ROW_NUMBER() OVER(PARTITION BY series_id,CASE WHEN flags & 1!=0 THEN NULL ELSE start_timestamp END ORDER BY timestamp DESC) AS predecessor
                 FROM otel_metrics WHERE |]
-                <> vitalScope name
+                <> vitalScope
                 <> [HI.sql| AND series_id = ANY(#{seriesIds}::text[])|]
                 <> [HI.sql| AND timestamp>=#{oldest} AND timestamp<#{window.fromTime} AND (flags & 1!=0 OR |]
                 <> exactEpochs
                 <> [HI.sql|)) AS history WHERE predecessor=1|]
       -- TimeFusion drops partitions when inheriting a named window with a new order/frame.
       readPopulations source discoverEpochs =
-        Hasql.interp
+        Hasql.interpForTimefusion useTf
           $ [HI.sql|WITH source AS (|]
           <> source
           <> [HI.sql|
@@ -487,11 +488,10 @@ SELECT #{Epoch}::text,NULL,series_id::text,start_timestamp FROM (
 )
 SELECT ROW(read_kind,population,epoch_series,epoch_start) FROM reads
 |]
-  populations <- concat <$> forM ["lcp", "inp", "cls", "fcp", "ttfb"] \name -> do
-    initial <- readPopulations (current name) True
-    let epochs = [(series, start) | EpochRead series start <- initial]
-    populationReads <- if null epochs then pure initial else readPopulations (withHistory name epochs) False
-    pure [population | PopulationRead population <- populationReads]
+  initial <- readPopulations current True
+  let epochs = [(series, start) | EpochRead series start <- initial]
+  populationReads <- if null epochs then pure initial else readPopulations (withHistory epochs) False
+  let populations = [population | PopulationRead population <- populationReads]
   -- Grouped pages are ordered/capped here to avoid native final-sort memory pressure.
   let (pages, fieldAndTrend) = partition (\population -> case population.grouping of PageVital{} -> True; FieldVital -> False; TrendVital{} -> False) populations
       pageGroups = Map.fromListWith (<>) [(url, [population]) | population@VitalPopulation{grouping = PageVital url} <- pages]

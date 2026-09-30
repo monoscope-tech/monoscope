@@ -191,6 +191,18 @@ spec = sequential $ aroundAll withTestResources do
       (mapMaybe (RUMData.measurementValue . (.measurement)) detail.vitalTrend, [measured point.measurement | point <- detail.pageVitals], [measured vital.measurement | vital <- summary.vitals, vital.name == "lcp"])
         `shouldBe` ([22.5], [(Just 22.5, 4)], [(Just 22.5, 4)])
 
+    it "syntheticHistograms_doNotOverwhelmRealUserVitals" \tr -> do
+      projectId <- createTestProject tr "RUM synthetic histogram isolation"
+      apiKey <- createTestAPIKey tr projectId "rum-synthetic-key"
+      let at = (`addUTCTime` frozenTime)
+          point count buckets = histogramPoint "/real" (at (-10)) (at (-60)) count buckets [100, 200]
+      exportMetrics tr apiKey []
+        [ lcpHistogram PM.AGGREGATION_TEMPORALITY_DELTA [point 10 [10, 0, 0]]
+        , lcpHistogram PM.AGGREGATION_TEMPORALITY_DELTA [point 1000 [0, 1000, 0]] & PMF.name .~ "k6.browser_web_vital_lcp"
+        ]
+      page <- loadVitalPanel tr projectId Nothing "vitals"
+      [measured vital.measurement | vital <- page.vitals, vital.name == "lcp"] `shouldBe` [(Just 75, 10)]
+
     it "vitalTrend_partialFirstBucket_staysInsideTheSelectedAxis" \tr -> do
       projectId <- createTestProject tr "RUM partial trend bucket"
       apiKey <- createTestAPIKey tr projectId "rum-partial-bucket-key"
