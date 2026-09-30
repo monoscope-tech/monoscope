@@ -306,7 +306,19 @@ export class SessionReplay extends LitElement {
     frameContainer.style.width = `${this.containerWidth}px`;
     frameContainer.style.height = `${this.containerHeight}px`;
   }
+  // Inline embeds (fullWidth) own their height, so fit it to the recording's aspect
+  // instead of a fixed 550px that letterboxes wide recordings and crops tall ones.
+  private fitHeight() {
+    if (!this.fullWidth) return;
+    const maxH = Math.max(160, window.innerHeight - 124 - 96); // 124 player chrome, ~96 workspace header
+    const h = Math.max(160, Math.min(maxH, Math.round((this.containerWidth * this.iframeHeight) / this.iframeWidth)));
+    if (h !== this.containerHeight) {
+      this.containerHeight = h;
+      this.requestUpdate();
+    }
+  }
   updateScale = () => {
+    this.fitHeight();
     this.updateContainerWidths();
     const el = this.player?.wrapper;
     const widthScale = this.containerWidth / this.iframeWidth;
@@ -725,6 +737,7 @@ export class SessionReplay extends LitElement {
     }
     const mContainer = hostWidth > 0 ? hostWidth : Number(getComputedStyle(this.replayerOuterContainer).width.replace('px', ''));
     this.containerWidth = mContainer - this.activityWidth;
+    this.fitHeight();
     // initialSession (share/anomaly pages) renders inline; a ?session_replay= deep
     // link on the log explorer targets the floating wrapper, which starts hidden —
     // reveal it before loading so shared "Share moment" links actually play.
@@ -866,12 +879,13 @@ export class SessionReplay extends LitElement {
   };
 
   render() {
-    // Below ~760px the identity row gets cramped: user + timestamp + duration +
-    // "N errors" + "Copy session ID" + "Share moment" can't all breathe.
-    // Demote the two utility buttons to icon-only; tooltips carry the label.
-    const compactHeader = this.containerWidth + this.activityWidth < 760;
+    // The header spans the replay column only, so the console panel's width never buys it
+    // room. Below ~760px demote every control to icon-only (tooltips and aria-labels carry
+    // the words) so the identity keeps its width; icon buttons keep a 44px-wide target.
+    const compactHeader = this.containerWidth < 760;
+    const compactBtn = compactHeader ? 'min-w-11 h-10 justify-center' : '';
     return html`<div
-      class="flex overflow-hidden rr-block relative rounded shadow-lg min-h-[400px] ${this.fullWidth ? 'w-full' : 'resize min-w-[640px] max-w-[90vw]'}"
+      class="flex overflow-hidden rr-block relative rounded shadow-lg ${this.fullWidth ? 'w-full' : 'min-h-[400px] resize min-w-[640px] max-w-[90vw]'}"
       id="replayerOuterContainer"
       style="height:${this.containerHeight + 124}px;${this.fullWidth ? '' : ` width:${this.containerWidth + this.activityWidth}px`}"
     >
@@ -882,7 +896,7 @@ export class SessionReplay extends LitElement {
         style="background: linear-gradient(135deg, transparent 0 50%, var(--color-strokeStrong) 50% 60%, transparent 60% 70%, var(--color-strokeStrong) 70% 80%, transparent 80% 100%);"
       ></div>
       <div class="w-full flex flex-col justify-start shrink-1 min-w-0 overflow-hidden">
-        <div class="bg-fillWeak w-full px-3 h-10 min-h-10 flex items-center border-b gap-4 cursor-move justify-between playerHeader">
+        <div class="bg-fillWeak w-full px-3 h-10 min-h-10 flex items-center border-b ${compactHeader ? 'gap-2' : 'gap-4'} cursor-move justify-between playerHeader">
           <!-- Identity block: who, when, how long, how many errors -->
           <div class="flex items-center gap-3 min-w-0 shrink">
             <div class="flex flex-col min-w-0 leading-tight">
@@ -940,15 +954,15 @@ export class SessionReplay extends LitElement {
             </div>
           </div>
 
-          <div class="flex items-center gap-4 text-xs font-semibold">
+          <div class="flex items-center ${compactHeader ? 'gap-0' : 'gap-4'} text-xs font-semibold shrink-0 whitespace-nowrap">
             <div class="dropdown" title="Playback speed (press &lt; or &gt; to step)">
               <div
                 tabindex="0"
                 role="button"
                 aria-label="Playback speed"
-                class="cursor-pointer flex items-center gap-1 tabular-nums ${this.playSpeed !== 1 ? 'text-textBrand' : ''}"
+                class="cursor-pointer flex items-center gap-1 tabular-nums ${compactBtn} ${this.playSpeed !== 1 ? 'text-textBrand' : ''}"
               >
-                ${faSprite_('gauge', 'regular', 'w-3 h-3')} Speed ${this.playSpeed}×
+                ${faSprite_('gauge', 'regular', 'w-3 h-3')} ${compactHeader ? '' : 'Speed '}${this.playSpeed}×
               </div>
               <ul tabindex="0" class="dropdown-content menu bg-base-100 border text-xs rounded-box z-1 w-max p-2 shadow">
                 ${SPEED_STEPS.map(
@@ -967,24 +981,26 @@ export class SessionReplay extends LitElement {
               </ul>
             </div>
             <button
-              class="flex items-center cursor-pointer gap-1 ${this.skipInactive ? 'text-textBrand' : ''}"
+              class="flex items-center cursor-pointer gap-1 ${compactBtn} ${this.skipInactive ? 'text-textBrand' : ''}"
               title="Skip idle stretches longer than 2 seconds"
+              aria-label="Skip idle"
               aria-pressed=${this.skipInactive}
               @click=${() => (this.skipInactive = !this.skipInactive)}
             >
               ${faSprite_('skip', 'regular', 'w-3 h-3')}
-              <span>Skip idle</span>
+              ${compactHeader ? nothing : html`<span>Skip idle</span>`}
             </button>
             <button
               @click=${() => {
                 this.activityWidth = this.activityWidth <= 0 ? 300 : 0;
               }}
-              class="cursor-pointer flex items-center gap-1 ${this.activityWidth > 0 ? 'text-textBrand' : ''}"
+              class="cursor-pointer flex items-center gap-1 ${compactBtn} ${this.activityWidth > 0 ? 'text-textBrand' : ''}"
               title="Toggle the console panel (errors, warnings, logs)"
+              aria-label=${compactHeader ? 'Console' : nothing}
               aria-pressed=${this.activityWidth > 0}
             >
               ${faSprite_('side-chevron-left-in-box', 'regular', 'w-3 h-3')}
-              <span>Console</span>
+              ${compactHeader ? nothing : html`<span>Console</span>`}
               ${this.consoleTypesCounts.error > 0
                 ? html`<span class="text-textError tabular-nums">(${this.consoleTypesCounts.error})</span>`
                 : nothing}
