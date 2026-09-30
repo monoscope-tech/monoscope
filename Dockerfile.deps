@@ -83,6 +83,11 @@ COPY web-components ./web-components
 RUN cd web-components && bun build --compile src/chart-cli.ts --outfile /usr/local/bin/chart-cli && \
   chmod +x /usr/local/bin/chart-cli
 
+COPY e2e/package*.json ./e2e/
+RUN cd e2e && npm ci --prefer-offline --no-audit && \
+  npx playwright install --with-deps chromium && \
+  touch /usr/local/share/monoscope-playwright-deps
+
 # The resulting image contains:
 # - All system libraries
 # - GHC (from ARG GHC_VERSION above)

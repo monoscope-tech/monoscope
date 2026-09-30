@@ -3,10 +3,8 @@ import { defineConfig, devices } from "@playwright/test";
 export default defineConfig({
   testDir: "./tests",
   fullyParallel: true,
-  // Real dashboards exercise layout, rendering, and latency budgets. Keep the
-  // default independent of host CPU count so browsers do not starve each other.
-  // Developers can still opt into concurrency with --workers.
-  workers: 1,
+  // Keep browser concurrency bounded so layout and latency checks have headroom.
+  workers: 4,
   forbidOnly: !!process.env.CI,
   retries: 0,
   use: {
@@ -19,6 +17,7 @@ export default defineConfig({
     trace: "on-first-retry",
   },
   projects: [
-    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
+    { name: "chromium", use: { ...devices["Desktop Chrome"] }, testIgnore: /(host-map|infrastructure-time-window|rum-sessions)\.spec\.ts$/ },
+    { name: "chromium-fixtures", use: { ...devices["Desktop Chrome"] }, testMatch: /(host-map|infrastructure-time-window|rum-sessions)\.spec\.ts$/, dependencies: ["chromium"], workers: 1 },
   ],
 });

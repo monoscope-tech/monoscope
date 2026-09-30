@@ -72,7 +72,7 @@ PATHSET_cli='cli shared cabal.project cabal.project.freeze'
 # — an edit to the Claude review or CLI release workflow says nothing about the
 # test suite, and invalidating a 40-minute suite over it would train people to
 # distrust the cache.
-PATHSET_meta='Makefile ci/checks.tsv ci/compose.yml scripts/ci .github/workflows/pullrequest.yml .github/workflows/haskell.yml'
+PATHSET_meta='Makefile Dockerfile.deps ci/checks.tsv ci/compose.yml scripts/ci .github/workflows/pullrequest.yml .github/workflows/haskell.yml .github/workflows/deps-image.yml'
 
 pathset() { eval "printf '%s' \"\${PATHSET_$1:-}\""; }
 
@@ -295,7 +295,8 @@ runner=$runner_id")
 # CABAL_OPTS stays ONE argument and must keep its quotes at every call site: the
 # RTS words after -O0 are part of the --ghc-options value, and splitting them hands
 # cabal `+RTS` as a target.
-CABAL_OPTS='--ghc-options=-O0 +RTS -A64m -n2m -RTS'
+CI_CORES=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+CABAL_OPTS="--ghc-options=-O0 -j$CI_CORES +RTS -A64m -n2m -RTS"
 
 # Flags, which cabal wants as their own argv entries — hence a second variable
 # rather than more words in CABAL_OPTS (`-f` would swallow the whole string).
@@ -324,10 +325,10 @@ run_body() { # <check>
     # this check remains independently reproducible when build is skipped.
     doctests)
       cabal build monoscope:lib:monoscope monoscope-shared:lib:monoscope-shared monoscope-cli:lib:monoscope-cli -j $CABAL_FLAGS "$CABAL_OPTS"
-      cabal test doctests $CABAL_FLAGS "$CABAL_OPTS" --test-show-details=direct
+      cabal test doctests -j $CABAL_FLAGS "$CABAL_OPTS" --test-show-details=direct
       ;;
-    unit-tests) cabal test unit-tests $CABAL_FLAGS "$CABAL_OPTS" --test-show-details=direct ;;
-    cli-tests)  cabal test monoscope-cli:cli-tests $CABAL_FLAGS "$CABAL_OPTS" --test-show-details=direct ;;
+    unit-tests) cabal test unit-tests -j $CABAL_FLAGS "$CABAL_OPTS" --test-show-details=direct ;;
+    cli-tests)  cabal test monoscope-cli:cli-tests -j $CABAL_FLAGS "$CABAL_OPTS" --test-show-details=direct ;;
     weeder)
       command -v weeder >/dev/null 2>&1 || cabal install weeder --install-method=copy --installdir=/usr/local/bin --overwrite-policy=always
       weeder --config weeder.toml --hie-directory dist-newstyle
@@ -337,8 +338,10 @@ run_body() { # <check>
     # Drives the real server in a real browser. scripts/e2e.sh starts that server itself on
     # 8081 against a throwaway database, so this only has to supply the binary and chromium.
     e2e)
-      cabal build monoscope-server $CABAL_FLAGS "$CABAL_OPTS"
-      (cd e2e && npm ci --prefer-offline --no-audit && npx playwright install --with-deps chromium)
+      cabal build monoscope-server -j $CABAL_FLAGS "$CABAL_OPTS"
+      (cd e2e && npm ci --prefer-offline --no-audit && \
+        { [ -e /usr/local/share/monoscope-playwright-deps ] || npx playwright install-deps chromium; } && \
+        npx playwright install chromium)
       scripts/e2e.sh
       ;;
     integration-tests) run_integration ;;
@@ -360,7 +363,7 @@ run_integration() {
   export USE_EXTERNAL_DB=true LOG_LEVEL=${LOG_LEVEL:-warn}
   (cd web-components && npm ci --prefer-offline --no-audit)
   make build-chart-cli
-  cabal build integration-tests $CABAL_FLAGS "$CABAL_OPTS"
+  cabal build integration-tests -j $CABAL_FLAGS "$CABAL_OPTS"
   # Same flags as the build above: list-bin resolves against a plan, and a
   # different one points at a path the build never wrote.
   bin=$(cabal list-bin integration-tests $CABAL_FLAGS)
@@ -452,7 +455,9 @@ cmd_run() {
       continue
     fi
     note "running $c"
+    local started=$SECONDS
     if run_body "$c"; then
+      note "passed $c in $((SECONDS - started))s"
       if ! inputs_unchanged "$c"; then
         note "PASSED $c, but inputs changed during the run — NOT attested; rerun required"
         rc=1
