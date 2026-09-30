@@ -737,20 +737,20 @@ fetchSessions enableTfReads pid queryAST dateRange environment service sortByM s
   -- One scan of the window keyed by 'sessionKeyExpr' (identity = MAX non-null per session),
   -- with only rollup-servable aggregates: a distinct count per group (trace ids, services)
   -- forces the raw store — 7s against 0.15s. Sorting, paging and the header happen here.
-  -- The header's service read (GROUP BY service rather than a distinct count, which also
-  -- keeps it on the rollups) runs alongside the scan: on long-session projects both are
-  -- raw window scans of several seconds each.
+  -- The header's service read (a GROUP BY, since a distinct count leaves the rollups) is
+  -- independent of the scan and forks beside it; on long-session projects both are raw
+  -- window scans of several seconds. A failure on either side still fails the request.
   (sessions :: [SessionAggRow], serviceRows :: [Maybe Text]) <- Ki.scoped \ks -> do
     servicesT <-
       forkWithCtx ks
-        $ if not header
-          then pure []
-          else
+        $ if header
+          then
             Hasql.withHasqlTimefusion enableTfReads
               $ Hasql.interp
               $ [HI.sql|SELECT resource___service___name FROM otel_logs_and_spans WHERE |]
               <> whereSql
               <> [HI.sql| GROUP BY 1|]
+          else pure []
     sessions <-
       Hasql.withHasqlTimefusion enableTfReads
         $ Hasql.interp

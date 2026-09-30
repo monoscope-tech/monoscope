@@ -37,6 +37,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
 import Data.Default (Default, def)
 import Data.Effectful.Hasql (Hasql)
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Foldable.WithIndex (iforM_)
 import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
@@ -1074,7 +1075,7 @@ logSessionsH pid queryM' sinceM fromM toM skipM sortByM cursorM = do
       -- An unrecognised sort_by (stale shared link, hand-edited URL) falls back to the
       -- default rather than 400-ing; the parse exists so a new dropdown option can't
       -- silently land here.
-      (summ, total, rows) <- LogQueries.fetchSessions authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) envM serviceM (rightToMaybe . parseUrlPiece =<< sortByM) skip header
+      (summ, total, rows) <- Hasql.retryTransientEff 3 "log-explorer.sessions" $ LogQueries.fetchSessions authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) envM serviceM (rightToMaybe . parseUrlPiece =<< sortByM) skip header
       addRespHeaders $ SessionsView total (V.fromList rows) summ
 
 
