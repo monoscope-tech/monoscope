@@ -1789,7 +1789,8 @@ export class LogList extends LitElement {
     revealRecent = false,
     recentDelivery: RecentDelivery = 'manual'
   ) => {
-    if (isRecentFetch && this.isFetchingRecent) return;
+    // A tick during the initial or refresh load has no cursor yet and would re-run that whole load.
+    if (isRecentFetch && (this.isFetchingRecent || this.isLoading)) return;
     if (isLoadMore && this.isLoadingMore) return;
 
     const loadMoreAnchor = isLoadMore ? this.captureScrollAnchor() : null;
