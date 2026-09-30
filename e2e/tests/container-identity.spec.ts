@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { DEMO_PROJECT, sql } from "./helpers";
+import { DEMO_PROJECT, sql, awaitInfraSnapshotExpiry } from "./helpers";
 
 const CONTAINER = "e2e-duplicate-container";
 const CLUSTER = "8b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d";
@@ -11,12 +11,14 @@ const identities = [
   ["identity-a", CLUSTER, "identity-node-a", "identity-pod-b"],
 ];
 const cleanup = `DELETE FROM otel_metrics WHERE project_id='${DEMO_PROJECT}' AND resource->'k8s'->'container'->>'name'='${CONTAINER}';`;
-test.beforeAll(() => {
+test.beforeAll(async () => {
+  test.setTimeout(60_000);
   if (!process.env.E2E_BASE_URL) return;
   sql(cleanup + identities.map(([namespace, cluster, node, pod], index) => `
   INSERT INTO otel_metrics (project_id,id,series_id,timestamp,metric_name,metric_type,value,resource___k8s___container___name,resource___k8s___pod___name,resource___k8s___namespace___name,resource)
   VALUES ('${DEMO_PROJECT}',gen_random_uuid(),'e2e-container-${index}','2024-12-31T23:59:00Z','container.cpu.usage','GAUGE',${index + 1},'${CONTAINER}','${pod}','${namespace}',
     '${JSON.stringify({ k8s: { container: { name: CONTAINER }, pod: { name: pod }, namespace: { name: namespace }, cluster: { uid: cluster }, node: { name: node } } })}');`).join(""));
+  await awaitInfraSnapshotExpiry();
 });
 test.afterAll(() => {
   if (process.env.E2E_BASE_URL) sql(cleanup);
