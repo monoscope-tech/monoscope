@@ -143,6 +143,7 @@ import Effectful.Timeout qualified as Timeout
 import Log qualified
 import Log.Data (showLogMessage)
 import Log.Logger (mkBulkLogger)
+import Lucid qualified
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
@@ -163,7 +164,6 @@ import OddJobs.Job (Job (..))
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import OpenTelemetry.Trace (TracerProvider, getGlobalTracerProvider)
 import Opentelemetry.OtlpServer qualified as OtlpServer
-import Lucid qualified
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (Deferred (..))
 import Pages.LogExplorer.Log qualified as Log

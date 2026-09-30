@@ -711,7 +711,6 @@ data SessionSort = SortLastSeen | SortFirstSeen | SortDuration | SortErrors | So
   deriving (AE.ToJSON, FromHttpApiData) via WrappedEnumSC 'Nothing "Sort" SessionSort
 
 
-
 -- | The wire value the sort dropdown emits and 'parseUrlPiece' reads back. Named to match
 -- 'Pages.RealUserMonitoring.tabParam' and the tab functions.
 --
@@ -731,7 +730,7 @@ sessionSortLabel ordering = T.toUpper (T.take 1 label) <> T.drop 1 label
     label = T.replace "_" " " $ sessionSortParam ordering
 
 
-fetchSessions :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Ki.StructuredConcurrency :> es) => Bool -> Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Text -> Maybe Text -> Maybe SessionSort -> Int -> SessionsRead -> Eff es (Maybe SessionSummary, Int, [SessionRow])
+fetchSessions :: (DB es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Bool -> Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Text -> Maybe Text -> Maybe SessionSort -> Int -> SessionsRead -> Eff es (Maybe SessionSummary, Int, [SessionRow])
 fetchSessions enableTfReads pid queryAST dateRange environment service sortByM skip readKind = do
   now <- Time.currentTime
   let scope = mkScopedQuery pid dateRange environment service
@@ -828,20 +827,22 @@ fetchSessions enableTfReads pid queryAST dateRange environment service sortByM s
       pMin = epochBucket fromT
       pMax = max pMin (epochBucket toT)
       buckets errored = densifyBuckets (pMin, pMax) [(epochBucket r.firstSeen, 1) | r <- sessions, (r.errorCount > 0) == errored]
-      summary = guard (readKind == WithHeader) $> SessionSummary
-          { totalSessions = fromIntegral $ length sessions
-          , erroredSessions = fromIntegral $ length $ filter ((> 0) . (.errorCount)) sessions
-          , uniqueUsers = fromIntegral $ length $ ordNub $ mapMaybe (\r -> r.userId <|> r.userEmail) sessions
-          , uniqueServices = fromIntegral $ length $ catMaybes serviceRows
-          , medianDurationNs = percentile 0.5 durations
-          , p95DurationNs = percentile 0.95 durations
-          , medianEvents = percentile 0.5 events
-          , totalEvents = sum $ map (.eventCount) sessions
-          , bucketWidthSec = bucketW
-          , bucketStartEpoch = pMin * bucketW
-          , clean = buckets False
-          , errored = buckets True
-          }
+      summary =
+        guard (readKind == WithHeader)
+          $> SessionSummary
+            { totalSessions = fromIntegral $ length sessions
+            , erroredSessions = fromIntegral $ length $ filter ((> 0) . (.errorCount)) sessions
+            , uniqueUsers = fromIntegral $ length $ ordNub $ mapMaybe (\r -> r.userId <|> r.userEmail) sessions
+            , uniqueServices = fromIntegral $ length $ catMaybes serviceRows
+            , medianDurationNs = percentile 0.5 durations
+            , p95DurationNs = percentile 0.95 durations
+            , medianEvents = percentile 0.5 events
+            , totalEvents = sum $ map (.eventCount) sessions
+            , bucketWidthSec = bucketW
+            , bucketStartEpoch = pMin * bucketW
+            , clean = buckets False
+            , errored = buckets True
+            }
       toRow r@SessionAggRow{..} =
         let (landingUrl, userAgent, firstError, services) = fromMaybe (Nothing, Nothing, Nothing, V.empty) $ HM.lookup sessionId contextById
          in SessionRow{durationNs = durationNs r, hasReplay = maybe False (`S.member` replayed) (UUID.fromText sessionId), ..}

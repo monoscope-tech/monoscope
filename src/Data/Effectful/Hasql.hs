@@ -282,7 +282,7 @@ interp s = statement () (HI.interp True s)
 
 -- | TimeFusion plans named prepared statements before seeing parameters, missing partition
 -- pruning and cache admission. PostgreSQL still needs preparation for parameter inference.
-interpTimefusion :: (HI.DecodeResult a, Hasql :> es, Labeled "timefusion" Hasql :> es, IOE :> es) => Bool -> HI.Sql -> Eff es a
+interpTimefusion :: (HI.DecodeResult a, Hasql :> es, IOE :> es, Labeled "timefusion" Hasql :> es) => Bool -> HI.Sql -> Eff es a
 interpTimefusion useTf = withHasqlTimefusion useTf . statement () . HI.interp (not useTf)
 
 
