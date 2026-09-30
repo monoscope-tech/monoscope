@@ -348,7 +348,7 @@ run_body() { # <check>
     # those libraries are absent from its package database.  Build them here so
     # this check remains independently reproducible when build is skipped.
     doctests)
-      cabal build monoscope:lib:monoscope monoscope-shared:lib:monoscope-shared monoscope-cli:lib:monoscope-cli -j $CABAL_FLAGS "$CABAL_OPTS"
+      [ -n "${CI_UNIT_BIN:-}" ] || cabal build monoscope:lib:monoscope monoscope-shared:lib:monoscope-shared monoscope-cli:lib:monoscope-cli -j $CABAL_FLAGS "$CABAL_OPTS"
       cabal test doctests -j $CABAL_FLAGS "$CABAL_OPTS" --test-show-details=direct
       ;;
     unit-tests) if [ -n "${CI_UNIT_BIN:-}" ]; then "$CI_UNIT_BIN"; else cabal test unit-tests -j $CABAL_FLAGS "$CABAL_OPTS" --test-show-details=direct; fi ;;
@@ -396,7 +396,7 @@ run_integration() {
   bin=${CI_INTEGRATION_BIN:-$(cabal list-bin integration-tests $CABAL_FLAGS)}
   rm -f build-shard-*.log
   for i in $(seq 0 $((shards - 1))); do
-    ( start=$(date +%s); SHARD_INDEX=$i SHARD_TOTAL=$shards "$bin" --color > "build-shard-$i.log" 2>&1
+    ( start=$(date +%s); SHARD_INDEX=$i SHARD_TOTAL=$shards "$bin" +RTS -N1 -RTS --color > "build-shard-$i.log" 2>&1
       echo "[shard-time] $(( $(date +%s) - start ))s" >> "build-shard-$i.log" ) &
     shard_pids+=("$!")
   done
@@ -458,7 +458,7 @@ cmd_gate() {
 }
 
 cmd_run() {
-  local c req ref bin rc=0 unrunnable='' degraded='' e2e_pid='' e2e_log='' e2e_result=''
+  local c req ref bin i rc=0 unrunnable='' degraded='' e2e_pid='' e2e_log='' e2e_result=''
   local integration_pid='' integration_log='' integration_result=''
   local checks
   checks=$(selected_checks "$@")
@@ -489,6 +489,13 @@ cmd_run() {
       rm -f "$e2e_log" "$e2e_result"
       [ "$rc" -eq 0 ] || [ "${CI_KEEP_GOING:-}" = "true" ] || return 1
       continue
+    fi
+    if [ "$c" = integration-tests ] && [ "${CI_LOCAL_ASYNC_SERVICES:-}" = true ]; then
+      for i in $(seq 1 60); do
+        CAPS=$(detect_caps)
+        caps_satisfy "$CAPS" "$(check_requires integration-tests)" && break
+        sleep 2
+      done
     fi
     req=$(check_requires "$c")
     # A missing capability is never a silent pass — this run can say nothing about
@@ -664,27 +671,18 @@ with open(sys.argv[1], "w") as lock:
     note "resetting ephemeral integration services"
     compose rm -sf postgres minio timefusion >/dev/null 2>&1 || true
   fi
-  if [ "$needs_postgres" = true ]; then
-    note "starting Postgres…"
-    compose up -d --wait postgres
-  fi
   if [ "$needs_integration" = true ]; then
-    note "starting integration services…"
-    compose up -d --wait minio
     # Pick up a native arm64 TimeFusion image when available.
     if [ -z "${MONOSCOPE_CI_TF_IMAGE:-}" ] && [ "$(uname -m)" = arm64 ] \
        && docker image inspect "$TF_LOCAL_IMAGE" >/dev/null 2>&1; then
       export MONOSCOPE_CI_TF_IMAGE="$TF_LOCAL_IMAGE" MONOSCOPE_CI_TF_PLATFORM=linux/arm64
       note "using locally built $TF_LOCAL_IMAGE (native arm64)"
     fi
-    # Probe from the runner: TimeFusion's distroless image has no healthcheck shell.
-    if compose up -d timefusion >/dev/null 2>&1 \
-       && compose run --rm -T --no-deps runner bash -c \
-            'for _ in $(seq 1 60); do (exec 3<>/dev/tcp/timefusion/5432) 2>/dev/null && exit 0; sleep 2; done; exit 1' >/dev/null 2>&1; then
-      note "TimeFusion is accepting pgwire connections"
-    else
-      note "TimeFusion did not start (${MONOSCOPE_CI_TF_PLATFORM:-linux/amd64} on $(uname -m)) — integration-tests will be left to CI; see docs/local-ci.md"
-    fi
+    note "starting integration services…"
+    compose up -d postgres timefusion || note "TimeFusion did not start — integration-tests will report missing capabilities"
+  elif [ "$needs_postgres" = true ]; then
+    note "starting Postgres…"
+    compose up -d --wait postgres
   fi
   if [ -n "$host_pid" ]; then
     wait "$host_pid" || host_rc=$?
@@ -712,7 +710,7 @@ with open(sys.argv[1], "w") as lock:
   compose run --rm ${git_mount[@]+"${git_mount[@]}"} ${refs_mount[@]+"${refs_mount[@]}"} \
     -e CI_ROOT=/build \
     -e "CI_ALLOW_DEGRADED=${CI_ALLOW_DEGRADED:-}" -e "CI_FORCE=${CI_FORCE:-}" -e "CI_KEEP_GOING=${CI_KEEP_GOING:-}" \
-    -e "CI_NO_ATTEST=${CI_NO_ATTEST:-}" \
+    -e "CI_NO_ATTEST=${CI_NO_ATTEST:-}" -e "CI_LOCAL_ASYNC_SERVICES=$needs_integration" \
     runner sh -c 'cp scripts/ci/ci.sh /tmp/ci-run.sh && exec bash /tmp/ci-run.sh run "$@"' ci-run "$@" || rc=$?
   # Publish whatever passed even if a later check failed — a green check is green.
   cmd_publish .ci/attest.tsv
