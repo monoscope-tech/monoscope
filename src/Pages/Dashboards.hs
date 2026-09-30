@@ -1191,7 +1191,7 @@ updateDashboardWidgets dash tabSlugM normalizedWidgetIdM widgetUpdated =
 
 -- | Apply @f@ to every widget, group children included.
 overWidgetTree :: (Widget.Widget -> Widget.Widget) -> [Widget.Widget] -> [Widget.Widget]
-overWidgetTree f = map \w -> f $ w & #children %~ fmap (overWidgetTree f)
+overWidgetTree = map . transformOf (#children . _Just . traversed)
 
 
 -- | A widget is addressed either by its explicit id or by its slugified title.
@@ -2542,9 +2542,8 @@ addVariableDefaults params varsM = params <> defaults
 -- query (e.g. a top_resources GROUP BY full-day scan) on every page load.
 dashboardQueryText :: Dashboards.Dashboard -> Text
 dashboardQueryText dash =
-  T.concat $ concatMap widgetText (dash.widgets <> foldMap (.widgets) (fold dash.tabs)) <> foldMap varText (fold dash.variables)
+  T.concat $ concatMap (\w -> catMaybes [w.query, w.sql]) (Dashboards.allWidgets dash) <> foldMap varText (fold dash.variables)
   where
-    widgetText w = catMaybes [w.query, w.sql] <> concatMap widgetText (fold w.children)
     varText v = catMaybes [(.statement) <$> v.sql, v.query]
 
 

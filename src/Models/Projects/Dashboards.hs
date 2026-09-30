@@ -260,9 +260,7 @@ readDashboardEndpoint uri = do
 
 -- | Every widget across root and tabs, group children included.
 allWidgets :: Dashboard -> [Widget.Widget]
-allWidgets dashboard = concatMap flatten $ dashboard.widgets <> foldMap (concatMap (.widgets)) dashboard.tabs
-  where
-    flatten widget = widget : foldMap (concatMap flatten) widget.children
+allWidgets dashboard = foldMap (universeOf (#children . _Just . folded)) $ dashboard.widgets <> foldMap (concatMap (.widgets)) dashboard.tabs
 
 
 -- | Reject handwritten sortable SQL unless it exposes the trusted sort slot

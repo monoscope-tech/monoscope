@@ -421,7 +421,15 @@ issueDetailCore pid firstM eventM requestedRange fetchIssue = do
       patternM <- case Issues.issuePayload issue of
         Just (Issues.LogPatternP d) -> LogPatterns.getLogPatternByHash pid d.sourceField d.patternHash
         Just (Issues.LogPatternRateChangeP d) -> LogPatterns.getLogPatternByHash pid d.sourceField d.patternHash
-        _ -> pure Nothing
+        Just (Issues.RuntimeExceptionP _) -> pure Nothing
+        Just (Issues.ApiChangeP _) -> pure Nothing
+        Just (Issues.QueryAlertP _) -> pure Nothing
+        Just (Issues.PerformanceP _) -> pure Nothing
+        Just (Issues.FrontendP _) -> pure Nothing
+        Just (Issues.UptimeP _) -> pure Nothing
+        Just (Issues.CronP _) -> pure Nothing
+        Just (Issues.FeedbackP _) -> pure Nothing
+        Nothing -> pure Nothing
       let
         -- +/-2h: the widest bracket that stays inside ~3s (see the table above).
         bracketAround = windowAround 7200
@@ -2180,6 +2188,11 @@ toolCallView_ tc =
 -- >>> import Data.Aeson qualified as AE
 -- >>> import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 -- >>> import Lucid (renderText, toHtml)
+-- >>> import Data.Default (def)
+-- >>> import Data.Text.Lazy qualified as TL
+-- >>> import Data.UUID qualified as UUID
+-- >>> import Models.Apis.Issues qualified as Issues
+-- >>> import Pkg.DeriveUtils (UUIDId (..))
 
 
 -- | Shown where an issue's stored @issue_type@ and @issue_data@ do not agree.
@@ -2199,6 +2212,14 @@ unparsablePayload_ = span_ [class_ "text-xs italic text-textWeak"] "details unav
 
 -- | Render model turns and operational execution events. Events remain visible
 -- to people without being presented to the model as assistant output.
+--
+-- Model widgets carry no id, yet a table derives its hx-target from one; each gets a
+-- fallback, never a bare @#@:
+--
+-- >>> let turn = [def{Issues.role = Issues.ChatUser, Issues.content = "slow checkouts"}, def{Issues.role = Issues.ChatAssistant, Issues.content = "{\"query\":\"name != null\",\"visualization\":\"table\"}"}]
+-- >>> let html = renderText $ aiChatHistoryView_ (UUIDId UUID.nil) turn
+-- >>> ("hx-target=\"#chat-" `TL.isInfixOf` html, "hx-target=\"#\"" `TL.isInfixOf` html)
+-- (True,False)
 aiChatHistoryView_ :: Projects.ProjectId -> [Issues.AIChatMessage] -> Html ()
 aiChatHistoryView_ pid = render
   where
