@@ -338,7 +338,7 @@ run_body() { # <check>
       npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify
       (cd web-components && npm ci --prefer-offline --no-audit && NODE_ENV=production npx vite build --mode production --sourcemap false)
       ;;
-    build)      cabal build all -j $CABAL_FLAGS "$CABAL_OPTS" ;;
+    build)      cabal build all unit-tests monoscope-cli:cli-tests integration-tests -j $CABAL_FLAGS "$CABAL_OPTS" ;;
     # doctest shells out to GHC with `-package` for each local library.  A fresh
     # runner can legitimately reuse the separate build attestation, but then
     # those libraries are absent from its package database.  Build them here so
