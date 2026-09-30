@@ -689,7 +689,7 @@ stackTrace_ pid serviceM runtimeM raw = case EF.parseStackTrace (EF.parseRuntime
 -- states the principle in its own comments ("the trace is supporting evidence,
 -- not the page"); this makes it true of the queries as well as the rendering.
 enriching :: Text -> ATAuthCtx (Maybe a) -> ATAuthCtx (Maybe a)
-enriching what = fmap join . tryWithin Nothing "ISSUE_DETAIL_OPTIONAL_LOOKUP" ["lookup" AE..= what]
+enriching what = fmap join . tryWithin (Just 10_000_000) "ISSUE_DETAIL_OPTIONAL_LOOKUP" ["lookup" AE..= what]
 
 
 -- | Run an optional lookup, bounded by @limitM@ microseconds where a slow read is
