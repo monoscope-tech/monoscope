@@ -41,6 +41,7 @@ describe('Log Explorer chart auto-refresh', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
     globalThis.fetch = originalFetch;
     delete (window as any).echarts;
     delete (window as any).logListTable;
@@ -239,6 +240,7 @@ describe('Log Explorer chart auto-refresh', () => {
       (window as any).chartWidget({ ...config, pid: id });
     }
     const tick = async (n: number) => {
+      vi.setSystemTime(Date.now() + 600_000); // past any backoff: this test is about the banner threshold
       window.dispatchEvent(new CustomEvent('update-query', { detail: { source: 'auto-refresh' } }));
       await vi.waitFor(() => {
         for (const instance of instances.values()) expect(instance.hideLoading).toHaveBeenCalledTimes(n);
@@ -273,6 +275,7 @@ describe('Log Explorer chart auto-refresh', () => {
     const banner = document.getElementById('volume_error')!;
     let completed = 1;
     const refresh = async (background = true) => {
+      vi.setSystemTime(Date.now() + 600_000);
       window.dispatchEvent(new CustomEvent('update-query', { detail: { source: background ? 'auto-refresh' : 'user' } }));
       completed++;
       await vi.waitFor(() => expect(instance.hideLoading).toHaveBeenCalledTimes(completed));
@@ -298,6 +301,49 @@ describe('Log Explorer chart auto-refresh', () => {
     fail = true;
     await refresh(false); // an explicit request reports failure immediately
     expect(banner.classList.contains('hidden')).toBe(false);
+  });
+
+  // An issue chart whose query hits TimeFusion's 90s timeout was re-issued on every 15s tick.
+  test('backs off a failing chart per tick, doubling to a 10 minute cap, until a user action or success resets it', async () => {
+    vi.useFakeTimers();
+    const instance = chart();
+    (window as any).echarts = { getInstanceByDom: () => null, init: () => instance };
+    document.body.innerHTML = '<div id="volume" data-chart-widget></div><div id="volume_error" class="hidden"><span id="volume_errorMsg"></span></div>';
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    let fail = false;
+    globalThis.fetch = vi.fn(async () => ({ ok: true, json: async () => fail ? { error: 'Query execution failed' } : chartData })) as any;
+    (window as any).chartWidget(widget('volume'));
+    (globalThis as any).triggerIntersection();
+    const flush = () => vi.advanceTimersByTimeAsync(0);
+    const tick = async (source = 'auto-refresh') => {
+      window.dispatchEvent(new CustomEvent('update-query', { detail: { source } }));
+      await flush();
+    };
+    await flush();
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    fail = true;
+    let fetches = 1;
+    for (const wait of [15, 30, 60, 120, 240, 480, 600, 600]) {
+      await tick();
+      expect(globalThis.fetch).toHaveBeenCalledTimes(++fetches);
+      await vi.advanceTimersByTimeAsync(wait * 1000 - 1);
+      await tick();
+      expect(globalThis.fetch).toHaveBeenCalledTimes(fetches);
+      await vi.advanceTimersByTimeAsync(1);
+    }
+    await tick('user');
+    expect(globalThis.fetch).toHaveBeenCalledTimes(++fetches);
+    await tick();
+    expect(globalThis.fetch).toHaveBeenCalledTimes(fetches);
+    fail = false;
+    await tick('user');
+    await tick();
+    expect(globalThis.fetch).toHaveBeenCalledTimes(fetches += 2);
+    fail = true;
+    await tick();
+    await vi.advanceTimersByTimeAsync(15_000);
+    await tick();
+    expect(globalThis.fetch).toHaveBeenCalledTimes(fetches += 2);
   });
 
   test('refreshes each chart once without flashing or refetching the list', async () => {

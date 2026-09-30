@@ -598,8 +598,11 @@ const takePrefetched = async (chartId: string, url: string, partial: (data: Char
 // over a chart that is already drawn reads as the page breaking, several times a minute, and it
 // tells the reader nothing they need — the previous rendering stays correct right up until the
 // new data replaces it. Loaders belong to the initial load and to explicit user actions.
-const chartRefreshState = new WeakMap<object, { url: string; hasData: boolean; failures: number }>();
+const chartRefreshState = new WeakMap<object, { url: string; hasData: boolean; failures: number; retryAt: number }>();
 const BACKGROUND_FAILURE_THRESHOLD = 3;
+// A failing query (a TimeFusion timeout costs 90s each) must not be re-issued on every live tick.
+const BACKOFF_BASE_MS = 15_000;
+const BACKOFF_MAX_MS = 600_000;
 const chartRequests = new WeakMap<object, AbortController>();
 
 // Every response snapshot uses the same scale, dimensions and series mapping.
@@ -615,8 +618,15 @@ const applyChartResponse = (chart: any, opt: any, widgetData: WidGetData, data: 
 
 const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widgetData: WidGetData, lifetimeSignal: AbortSignal, showLoader = true) => {
   if (!shouldFetch || !canFetchData(widgetData) || lifetimeSignal.aborted) return;
-  // A timer must not replace an unfinished stream with a blocking refresh.
-  if (!showLoader && chartRequests.has(chart)) return;
+  const { chartId } = widgetData;
+  const url = chartDataUrl(widgetData);
+  let state = chartRefreshState.get(chart);
+  if (!state || state.url !== url) {
+    state = { url, hasData: false, failures: 0, retryAt: 0 };
+    chartRefreshState.set(chart, state);
+  }
+  // A timer must not replace an unfinished stream with a blocking refresh, nor retry before the backoff.
+  if (!showLoader && (chartRequests.has(chart) || Date.now() < state.retryAt)) return;
   chartRequests.get(chart)?.abort();
   const request = new AbortController();
   chartRequests.set(chart, request);
@@ -624,19 +634,13 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
   const abort = () => request.abort();
   lifetimeSignal.addEventListener('abort', abort, { once: true });
 
-  const { chartId } = widgetData;
-  const url = chartDataUrl(widgetData);
-  let state = chartRefreshState.get(chart);
-  if (!state || state.url !== url) {
-    state = { url, hasData: false, failures: 0 };
-    chartRefreshState.set(chart, state);
-  }
   const isStale = beginChartFetch(chartId);
   let receivedPartial = false;
   const subtitle = $(`${chartId}Subtitle`);
   const retry = () => updateChartData(chart, opt, true, widgetData, lifetimeSignal);
   const reportFailure = (message: string, action = retry) => {
-    state.failures = showLoader ? 0 : state.failures + 1;
+    state.failures++;
+    state.retryAt = Date.now() + Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** (state.failures - 1));
     chart.hideLoading();
     if (!showLoader && state.hasData) {
       if (state.failures >= BACKGROUND_FAILURE_THRESHOLD) {
@@ -705,6 +709,7 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
     $(chartId)?.setAttribute('aria-busy', 'false');
     state.hasData = !!dataset?.length;
     state.failures = 0;
+    state.retryAt = 0;
     if ((window as any).barChart) {
       (window as any).barChart.dispatchAction({
         type: 'takeGlobalCursor',
@@ -1010,7 +1015,7 @@ const chartWidget = (widgetData: WidGetData) => {
       opt.series[0].backgroundStyle = { color: styles.chartBg };
     }
     chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source), notMerge);
-    chartRefreshState.set(chart, { url: chartDataUrl(widgetData), hasData: (opt.dataset.source?.length ?? 0) > 1, failures: 0 });
+    chartRefreshState.set(chart, { url: chartDataUrl(widgetData), hasData: (opt.dataset.source?.length ?? 0) > 1, failures: 0, retryAt: 0 });
     applyHighlightBand(chart, widgetData);
   };
   render();
