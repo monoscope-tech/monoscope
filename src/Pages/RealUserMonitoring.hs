@@ -1939,17 +1939,19 @@ measurementNote :: Vital -> Text
 measurementNote vital = case vital.measurement of
   Unmeasured -> "No observations"
   Measured _ estimate -> maybe "Exact quantile" (\(lower, upper) -> "Estimated within " <> formatVitalThreshold vital lower <> "–" <> formatVitalThreshold vital upper) $ RUM.estimateRange estimate
+  -- Each note says what the export did and what would fix it: the reader is an engineer
+  -- deciding whether to touch the SDK, the collector, or the time range.
   Unavailable _ issue -> case issue of
-    RUM.MissingBaseline -> "Missing previous export"
-    RUM.UnknownStart -> "Unknown interval start"
-    RUM.UnknownTemporality -> "Unknown aggregation mode"
+    RUM.MissingBaseline -> "Cumulative histogram with no earlier export in range; widen the range"
+    RUM.UnknownStart -> "Cumulative histogram exported without a start time; use delta temporality"
+    RUM.UnknownTemporality -> "Histogram exported without an aggregation temporality"
     RUM.UnsupportedPopulation -> "Unsupported population"
-    RUM.InvalidValue -> "Invalid scalar observation"
-    RUM.InvalidBuckets -> "Invalid histogram buckets"
-    RUM.InvalidReset -> "Counter reset without a new interval"
-    RUM.OverlappingIntervals -> "Overlapping report intervals"
-    RUM.UnboundedBucket -> "Quantile falls in an unbounded bucket"
-    RUM.InterruptedSeries -> "Series resumed without a usable baseline"
+    RUM.InvalidValue -> "Observation is negative or infinite"
+    RUM.InvalidBuckets -> "Histogram bucket counts do not match its bounds"
+    RUM.InvalidReset -> "Cumulative count went backwards without a new interval"
+    RUM.OverlappingIntervals -> "Report intervals overlap; the exporter is double-counting"
+    RUM.UnboundedBucket -> "P75 falls in the histogram's open top bucket; add a higher bound"
+    RUM.InterruptedSeries -> "Series restarted mid-range without a baseline"
 
 
 observationLabel :: VitalMeasurement -> Text
