@@ -824,6 +824,7 @@ test-suite integration-tests
     , hasql-transaction
     , hs-opentelemetry-instrumentation-auto
     , hspec
+    , http-api-data
     , http-client
     , http-client-tls
     , http-types
