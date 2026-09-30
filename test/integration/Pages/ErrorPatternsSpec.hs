@@ -519,39 +519,39 @@ spec = sequential $ aroundAll withTestResources do
         Nothing -> expectationFailure "No ongoing pattern found for flat baseline test"
 
     it "5d. Full cycle: Regressed error that spikes transitions to ESEscalating" \tr -> do
+      let regressionTime = addUTCTime 9000 frozenTime
       -- Find an established pattern and resolve it
-      errRates <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternsWithCurrentRates pid frozenTime
+      errRates <- runTestBg regressionTime tr $ ErrorPatterns.getErrorPatternsWithCurrentRates pid regressionTime
       let estM = find (\r -> r.baselineState == BSEstablished && r.state /= ESResolved) errRates
       case estM of
         Just errRate -> do
-          void $ runTestBg frozenTime tr $ ErrorPatterns.updateErrorPatternState errRate.errorId ErrorPatterns.ESResolved frozenTime
-          -- Re-ingest to regress
-          apiKey <- createTestAPIKey tr pid "regress-spike-key"
-          ingestTraceWithException tr apiKey "GET /regress-spike" errRate.errorType errRate.message errRate.stacktrace (addUTCTime 9000 frozenTime)
-          drainExtractionWorker tr
-          void $ runAllBackgroundJobs frozenTime tr.trATCtx
+          void $ runTestBg regressionTime tr $ ErrorPatterns.updateErrorPatternState errRate.errorId ErrorPatterns.ESResolved regressionTime
+          runTestBg regressionTime tr $ BackgroundJobs.runHourlyJob regressionTime 0
+          -- Replay the selected error itself; a newly ingested event may have a different fingerprint.
+          runTestBg regressionTime tr $ BackgroundJobs.processProjectErrors pid (V.singleton errRate.errorData{ErrorPatterns.when = regressionTime}) regressionTime
 
-          regressedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById errRate.errorId
+          regressedPat <- runTestBg regressionTime tr $ ErrorPatterns.getErrorPatternById errRate.errorId
           fmap (.state) regressedPat `shouldBe` Just ESRegressed
+          fmap (fmap zonedTimeToUTC . (.regressedAt)) regressedPat `shouldBe` Just (Just regressionTime)
 
           -- Now spike the regressed error — should transition to ESEscalating with a new issue
           let mean = fromMaybe 0 errRate.baselineMean
               stddev = fromMaybe 0 errRate.baselineStddev
               spikeCount = ceiling (mean + 3 * stddev + 100) :: Int
               spikeTime = addUTCTime 10800 frozenTime
-          void $ runTestBg frozenTime tr $ ErrorPatterns.upsertErrorPatternHourlyStats pid spikeTime (V.singleton (errRate.hash, spikeCount, 5))
+          void $ runTestBg regressionTime tr $ ErrorPatterns.upsertErrorPatternHourlyStats pid spikeTime (V.singleton (errRate.hash, spikeCount, 5))
 
           -- Acknowledge existing issues to avoid ON CONFLICT dedup
           let sess = Servant.getResponse tr.trSessAndHeader
-          (issues, _) <- runTestBg frozenTime tr $ Issues.selectIssues pid Issues.PIssueL Issues.defIssueFilters{Issues.ack = Issues.IsNull, Issues.period = "24h", Issues.limit = 100}
-          forM_ issues \issue -> runTestBg frozenTime tr $ ackIssue pid sess.user.id issue.base.id
+          (issues, _) <- runTestBg regressionTime tr $ Issues.selectIssues pid Issues.PIssueL Issues.defIssueFilters{Issues.ack = Issues.IsNull, Issues.period = "24h", Issues.limit = 100}
+          forM_ issues \issue -> runTestBg regressionTime tr $ ackIssue pid sess.user.id issue.base.id
 
           issuesBefore <- countIssues tr Issues.RuntimeException
           runTestBg spikeTime tr $ BackgroundJobs.detectErrorSpikes pid
           issuesAfter <- countIssues tr Issues.RuntimeException
           issuesAfter `shouldSatisfy` (> issuesBefore)
 
-          spikedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById errRate.errorId
+          spikedPat <- runTestBg spikeTime tr $ ErrorPatterns.getErrorPatternById errRate.errorId
           fmap (.state) spikedPat `shouldBe` Just ESEscalating
         Nothing -> expectationFailure "No established pattern found for full-cycle test"
 

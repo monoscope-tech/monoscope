@@ -76,3 +76,14 @@ describe('local-time', () => {
     expect(el.textContent).toBe('untouched');
   });
 });
+
+// A morph rewrites the text node to the server's UTC fallback; the settle event re-localizes it.
+test('a local-time re-renders after a morph swap resets its text', () => {
+  document.body.innerHTML = '<div id="panel"><local-time datetime="2026-06-16T03:38:47.176Z" format="HH:mm">Jun 16, 03:38:47 UTC</local-time></div>';
+  const el = document.querySelector('local-time')!;
+  const localized = el.textContent;
+  expect(localized).not.toBe('Jun 16, 03:38:47 UTC');
+  el.textContent = 'Jun 16, 03:38:47 UTC';
+  document.getElementById('panel')!.dispatchEvent(new CustomEvent('htmx:after:settle', { bubbles: true }));
+  expect(el.textContent).toBe(localized);
+});

@@ -1,5 +1,7 @@
 module Pkg.TestUtils (
   shouldContainAll,
+  linkParams,
+  renderedWidget,
   eventually,
   withSetup,
   withTestResources,
@@ -44,6 +46,8 @@ module Pkg.TestUtils (
   getTestTime,
   -- Helper functions for tests
   drainExtractionWorker,
+  deferredBody,
+  shellHtml,
   processMessagesAndBackgroundJobs,
   createTestSpans,
   -- OTLP/Telemetry helpers
@@ -139,6 +143,7 @@ import Effectful.Timeout qualified as Timeout
 import Log qualified
 import Log.Data (showLogMessage)
 import Log.Logger (mkBulkLogger)
+import Lucid qualified
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
@@ -150,6 +155,7 @@ import Network.HTTP.Client qualified as HC
 import Network.HTTP.Client.Internal (Response (..), ResponseClose (..))
 import Network.HTTP.Client.TLS qualified as HCTLS
 import Network.HTTP.Types.Status (ok200)
+import Network.HTTP.Types.URI (parseQueryText)
 import Network.HTTP.Types.Version (http11)
 import Network.Minio qualified as Minio
 import Network.Wai.Handler.Warp qualified as Warp
@@ -159,8 +165,10 @@ import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import OpenTelemetry.Trace (TracerProvider, getGlobalTracerProvider)
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.Charts.Charts qualified as Charts
+import Pages.Components (Deferred (..))
 import Pages.LogExplorer.Log qualified as Log
 import Pages.Settings qualified as Api
+import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), mkHasqlPool)
 import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.IngestBudget qualified as IngestBudget
@@ -799,9 +807,10 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
   logsPatternCache <- newCache (Just $ TimeSpec (30 * 60) 0) -- Cache for log patterns, 30 minutes TTL
   hostStatsCache <- newCache (Just $ TimeSpec 300 0)
   endpointStatsCache <- newCache (Just $ TimeSpec 300 0)
-  rawQueryFlights <- QueryCache.newRawQueryFlights
+  rawQueryFlights <- QueryCache.newQueryFlights
   infrastructureCache <- newCache (Just $ TimeSpec 15 0)
   rumCache <- newCache (Just $ TimeSpec 15 0)
+  rumQueryFlights <- QueryCache.newQueryFlights
   codeBlobCache <- newCache (Just $ TimeSpec (15 * 60) 0)
   repoListCache <- newCache (Just $ TimeSpec (10 * 60) 0)
   tp <- getGlobalTracerProvider
@@ -881,6 +890,7 @@ withTestResources f = withSetup $ \pool cstr -> withSharedLogger \logger -> do
           rawQueryFlights
           infrastructureCache
           rumCache
+          rumQueryFlights
           codeBlobCache
           repoListCache
           projectKeyCache
@@ -1222,6 +1232,19 @@ setBjRunAtInThePast :: UTCTime -> Connection -> IO ()
 setBjRunAtInThePast now conn = void $ PGS.execute conn q (Only now)
   where
     q = [sql|UPDATE background_jobs SET run_at = ?::timestamptz - INTERVAL '1 day' WHERE status = 'pending'|]
+
+
+-- | The loaded body of a deferred response. A shell here means the handler skipped the query
+-- the test is asserting on, which is a failure worth naming rather than a pattern-match crash.
+deferredBody :: Deferred a -> IO a
+deferredBody = \case
+  DeferredBody body -> pure body
+  DeferredShell{} -> fail "handler answered with the deferred shell; expected the loaded body"
+
+
+-- | A handler's response rendered to HTML.
+shellHtml :: Lucid.ToHtml a => TestResources -> ATAuthCtx (RespHeaders a) -> IO Text
+shellHtml tr render = toStrict . Lucid.renderText . Lucid.toHtml . snd <$> testServant tr render
 
 
 -- | Drain all queued extraction batches synchronously, then flush drain
@@ -1866,3 +1889,13 @@ shouldContainAll :: HasCallStack => Text -> [Text] -> Expectation
 shouldContainAll haystack needles = case filter (not . (`T.isInfixOf` haystack)) needles of
   [] -> pass
   missing -> expectationFailure $ "missing from rendered page: " <> show missing
+
+
+-- | Decoded query params of every rendered link to @path@, in document order.
+linkParams :: Text -> Text -> [[(Text, Text)]]
+linkParams path html = [mapMaybe sequence $ parseQueryText $ encodeUtf8 $ T.replace "&amp;" "&" $ T.takeWhile (/= '"') link | link <- drop 1 $ T.splitOn (path <> "?") html]
+
+
+-- | The first widget a rendered page embeds in a @data-widget@ attribute.
+renderedWidget :: Text -> IO Widget.Widget
+renderedWidget html = either fail pure $ AE.eitherDecodeStrict' $ encodeUtf8 $ T.replace "&quot;" "\"" $ T.takeWhile (/= '"') $ T.drop (T.length "data-widget=\"") $ snd $ T.breakOn "data-widget=\"" html

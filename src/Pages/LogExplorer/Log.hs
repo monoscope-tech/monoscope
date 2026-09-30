@@ -37,6 +37,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
 import Data.Default (Default, def)
 import Data.Effectful.Hasql (Hasql)
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Foldable.WithIndex (iforM_)
 import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
@@ -77,7 +78,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Casing (fromAny, toKebab)
 import Text.Megaparsec (parseMaybe)
-import Utils (FieldAction (..), FieldMenuCtx (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, explorerNavTabs_, faSprite_, fieldContextMenuItems_, fieldMenuPanel_, getDurationNSMS, getServiceColors, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecBy, lookupVecNonEmptyText, lookupVecTextByKey, methodFillColor, nonEmptyT, popoverTrigger_, prettyPrintCount, sanitizeBackendError, serviceFillColor, statusFillColorText, toUriStr)
+import Utils (FieldAction (..), FieldMenuCtx (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, encodeText, explorerNavTabs_, faSprite_, fieldContextMenuItems_, fieldMenuPanel_, getDurationNSMS, getServiceColors, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecBy, lookupVecNonEmptyText, lookupVecTextByKey, methodFillColor, nonEmptyT, popoverTrigger_, prettyPrintCount, sanitizeBackendError, serviceFillColor, statusFillColorText, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (parseUrlPiece)
 
@@ -826,7 +827,7 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
         Just "sessions" -> LogQueries.Sessions
         Just "patterns" -> LogQueries.Patterns
         _ -> LogQueries.Data
-      preloadUrl = T.replace "\"" "%22" $ withTelemetryScope sess.environment sess.service $ LogQueries.logExplorerUrlPath pid dataEndpoint queryM' cols' Nothing sinceM fromM toM Nothing sourceM False
+      preloadUrl = withTelemetryScope sess.environment sess.service $ LogQueries.logExplorerUrlPath pid dataEndpoint queryM' cols' Nothing sinceM fromM toM Nothing sourceM False
 
   let stampPng base = do
         url <- Widget.widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid base sinceM fromM toM
@@ -1061,19 +1062,19 @@ logPatternsH pid queryM' sinceM fromM toM sourceM pTargetM skipM = do
 
 
 -- | Sessions visualization data endpoint (aggregate sessions as JSON).
-logSessionsH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> ATAuthCtx (RespHeaders SessionsView)
-logSessionsH pid queryM' sinceM fromM toM skipM sortByM = do
+logSessionsH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders SessionsView)
+logSessionsH pid queryM' sinceM fromM toM skipM sortByM cursorM = do
   (authCtx, _, fromD, toD, envM, serviceM) <- logDataEnv pid sinceM fromM toM
   case parseQueryToAST (maybeToMonoid queryM') of
     Left err -> Log.logInfo "Log explorer sessions: rejected invalid KQL query" err >> addRespHeaders (SessionsView 0 V.empty Nothing)
     Right queryAST -> do
       let skip = fromMaybe 0 skipM
+          readKind = if skip == 0 && isNothing cursorM then LogQueries.WithHeader else LogQueries.RowsOnly
       -- An unrecognised sort_by (stale shared link, hand-edited URL) falls back to the
       -- default rather than 400-ing; the parse exists so a new dropdown option can't
       -- silently land here.
-      (summ, total, rows) <- LogQueries.fetchSessions authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) envM serviceM (rightToMaybe . parseUrlPiece =<< sortByM) skip
-      -- Summary only rides the first page; later load-more pages don't need it.
-      addRespHeaders $ SessionsView total (V.fromList rows) (guard (skip == 0) $> summ)
+      (summ, total, rows) <- Hasql.retryTransientEff 3 "log-explorer.sessions" $ LogQueries.fetchSessions authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) envM serviceM (rightToMaybe . parseUrlPiece =<< sortByM) skip readKind
+      addRespHeaders $ SessionsView total (V.fromList rows) summ
 
 
 -- | Lazily-loaded alert configuration form (HTMX partial). Kept off the shell's
@@ -1420,7 +1421,7 @@ instance AE.ToJSON SessionsView where
             , AE.toJSON summaryParts
             , AE.Null
             , AE.String ""
-            , AE.toJSON s.traceCount -- event_count, drives the [+N] children badge
+            , AE.toJSON s.eventCount -- event_count, drives the [+N] children badge
             ]
         where
           -- Full session id (not truncated): the client feeds it into /replay_session/{id}, a Servant UUID capture.
@@ -1603,9 +1604,9 @@ apiLogsPage page = do
   -- cache's request and would double-fetch.
   when (isNothing page.showTrace)
     $ script_
-    $ "window.logDataPromise = fetch(\""
-    <> page.preloadUrl
-    <> "\", {headers: {Accept: \"application/json\"}, credentials: \"include\"}).then(r => r.json());"
+    $ "window.logDataPromise = fetch("
+    <> encodeText page.preloadUrl
+    <> ", {headers: {Accept: \"application/json\"}, credentials: \"include\"}).then(r => r.json());"
   sectionWrapper_ do
     template_ [id_ "trace-loading-skeleton"] traceLoadingSkeleton_
     div_ [class_ "fixed z-[9999] hidden right-0 w-max h-max border border-strokeWeak rounded top-32 bg-bgBase shadow-2xl", id_ "sessionPlayerWrapper"] do

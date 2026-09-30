@@ -2152,7 +2152,7 @@ aiChatResponse_ pid userQuery explanation widgetsM toolCallsM systemPromptM =
       dataRows <- obj AE..: "data" :: Parser (V.Vector (V.Vector AE.Value))
       count <- obj AE..:? "count"
       let source = AE.toJSON $ V.cons (AE.toJSON <$> V.fromList headers) (fmap AE.toJSON <$> dataRows)
-      pure Widget.WidgetDataset{source, rowsPerMin = Nothing, value = count, from = Nothing, to = Nothing, stats = Nothing}
+      pure Widget.WidgetDataset{source, rowsPerMin = Nothing, value = count, servedValue = Nothing, from = Nothing, to = Nothing, stats = Nothing}
 
 
 -- | Render a single tool call

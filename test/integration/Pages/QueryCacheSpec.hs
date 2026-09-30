@@ -16,7 +16,8 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Projects.Projects qualified as Projects
 import Pages.Charts.Charts qualified as Charts
 import Pkg.DeriveUtils (UUIDId (..))
-import Pkg.Parser (dateRange, defSqlQueryCfg, environment, parseQueryToAST, service)
+import Pkg.Parser (currentTime, dateRange, defSqlQueryCfg, environment, parseQueryToAST, service)
+import Pkg.Parser.Expr (ToQueryText (..))
 import Pkg.QueryCache qualified as QC
 import Pkg.TestUtils
 import Relude
@@ -25,6 +26,7 @@ import Servant.Types.SourceT qualified as Source
 import System.Config (AuthContext (..))
 import Test.Hspec (Spec, around, describe, it, shouldBe, shouldNotBe, shouldReturn, shouldSatisfy)
 import Text.Read (read)
+import Utils (toXXHash)
 
 
 pid :: Projects.ProjectId
@@ -123,6 +125,21 @@ isSorted xs = V.and $ V.zipWith (<=) xs (V.drop 1 xs)
 spec :: Spec
 spec = around withTestResources do
   describe "Chart cache scope" do
+    it "jsonpathCompilerChanges_doNotReuseHistoricalResultsFromTheOldPredicate" $ \tr -> forM_ ["attributes.url.full matches regex \"^/cache-invalidated$\"", "spans | where attributes.url.full matches regex \"^/cache-invalidated$\"", "attributes.events[*].timestamp > ago(1h)"] \predicate -> do
+      clearAllTestData tr
+      let q = predicate <> " | summarize count(*) by bin(timestamp, 1h)"
+          end = addUTCTime 3600 baseTime
+      sections <- either (fail . toString) pure $ parseQueryToAST q
+      let cfg = (defSqlQueryCfg pid baseTime Nothing Nothing){dateRange = (Just baseTime, Just end)}
+          key = QC.generateCacheKey pid Nothing sections cfg
+          legacyKey = key{QC.queryHash = toXXHash $ toQText sections <> "\NULenvironment=\NULservice="} :: QC.CacheKey
+          stale = def{Charts.dataset = V.singleton (V.fromList [Just $ realToFrac $ utcTimeToPOSIXSeconds baseTime, Just 5]), Charts.headers = V.fromList ["timestamp", "count"], Charts.rowsCount = 1}
+      QC.generateCacheKey pid Nothing sections cfg{currentTime = end} `shouldBe` key
+      runQueryEffect tr $ QC.updateCache legacyKey (baseTime, end) stale q
+      actual <- queryMetrics tr q (timeAt 0) (timeAt 3600)
+      actual.dataset `shouldBe` V.empty
+      runQueryEffect tr (QC.lookupCache key (baseTime, end)) >>= (`shouldSatisfy` \case QC.CacheHit _ -> True; _ -> False)
+
     it "distinguishes service scope in generated cache keys" $ \_ -> do
       sections <- either (fail . toString) pure $ parseQueryToAST "summarize count(*) by bin(timestamp, 1h)"
       let cfg service = (defSqlQueryCfg pid baseTime Nothing Nothing){dateRange = (Just baseTime, Just $ addUTCTime 3600 baseTime), environment = Just "production", service = Just service}

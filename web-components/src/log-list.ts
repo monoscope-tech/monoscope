@@ -1185,7 +1185,7 @@ export class LogList extends LitElement {
       suffixText = ` found (based on ${formatLargeCount(this.totalCount)} logs)`;
     } else if (this.mode === 'sessions') {
       countText = `${formatLargeCount(this.totalSessions)} sessions`;
-      suffixText = this.totalCount ? ` (${formatLargeCount(this.totalCount)} events)` : '';
+      suffixText = '';
     } else {
       countText = formatLargeCount(this.hasChartCount ? this.totalCount : this.loadedCount);
       suffixText = !this.hasChartCount && this.hasMore ? '+ rows' : ' rows';
@@ -1789,7 +1789,8 @@ export class LogList extends LitElement {
     revealRecent = false,
     recentDelivery: RecentDelivery = 'manual'
   ) => {
-    if (isRecentFetch && this.isFetchingRecent) return;
+    // A tick during the initial or refresh load has no cursor yet and would re-run that whole load.
+    if (isRecentFetch && (this.isFetchingRecent || this.isLoading)) return;
     if (isLoadMore && this.isLoadingMore) return;
 
     const loadMoreAnchor = isLoadMore ? this.captureScrollAnchor() : null;
@@ -1882,7 +1883,7 @@ export class LogList extends LitElement {
       if (isRecentFetch || !this.spanListTree.length) this.recentFetchUrl = meta.recentUrl ?? '';
       if (meta.count !== undefined && !isLoadMore) this.totalCount = meta.count;
       if (meta.totalPatterns !== undefined && !isLoadMore) this.totalPatterns = meta.totalPatterns;
-      if (meta.totalSessions !== undefined && !isLoadMore) this.totalSessions = meta.totalSessions;
+      if (meta.totalSessions !== undefined && !isLoadMore && !isRecentFetch) this.totalSessions = meta.totalSessions;
       if (meta.serviceColors) Object.assign(this.serviceColors, meta.serviceColors);
       // Only a new query / refresh redefines the column set. Load-more pages and
       // 5s live-stream ticks return the same server cols, so adopting them here
@@ -3382,10 +3383,6 @@ export class LogList extends LitElement {
                         @click=${(e: Event) => {
                           e.stopPropagation();
                           e.preventDefault();
-                        }}
-                        @pointerdown=${(e: Event) => {
-                          e.stopPropagation();
-                          e.preventDefault();
                           this.expandTrace(traceId, id);
                         }}
                         aria-expanded=${expanded}
@@ -3395,7 +3392,7 @@ export class LogList extends LitElement {
                           : expanded
                             ? 'Collapse'
                             : 'Expand'} trace (${children} ${children === 1 ? 'span' : 'spans'})"
-                        class=${`hover:border-strokeBrand-strong rounded-sm ml-1 cursor-pointer shrink-0 w-8 px-1 flex justify-center gap-[2px] text-xs items-center h-5 ${errClas}`}
+                        class=${`hover:border-strokeBrand-strong rounded-sm ml-1 cursor-pointer shrink-0 min-w-8 px-1 flex justify-center gap-[2px] text-xs items-center h-5 ${errClas}`}
                       >
                         ${this.loadingSessions[id]
                           ? faSprite('spinner', 'regular', 'w-3 h-3 shrink-0 animate-spin')
@@ -3932,7 +3929,7 @@ export class LogList extends LitElement {
       // identifies the page ("/checkout/cart" is more useful than "/api/v2/…").
       const [head, tail] = middleTruncatePath(url);
       add(
-        html`<span class="text-xs font-mono text-textStrong inline-flex items-center min-w-0" title=${url}
+        html`<span class="text-xs font-mono text-textStrong inline-flex items-center min-w-0 max-w-[40ch]" title=${url}
           >${head ? html`<span class="truncate min-w-0">${head}</span>` : nothing}<span class="shrink-0">${tail}</span></span
         >`
       );
@@ -3968,10 +3965,6 @@ export class LogList extends LitElement {
       data-tip=${hasErrors ? 'Replay — errors in this session' : 'Replay recording'}
       aria-label=${hasErrors ? 'Replay session with errors' : 'Replay session recording'}
       @click=${(e: Event) => {
-        e.stopPropagation();
-        e.preventDefault();
-      }}
-      @pointerdown=${(e: Event) => {
         e.stopPropagation();
         e.preventDefault();
         window.dispatchEvent(new CustomEvent('loadSessionReplay', { detail: { sessionId }, bubbles: true, cancelable: false }));

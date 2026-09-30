@@ -3,15 +3,25 @@ module Models.Telemetry.RUM (
   RumPage (..),
   RumError (..),
   RumBreakdown (..),
+  RumPulse (..),
   ReplaySession (..),
   RumSession (..),
   SessionFilter (..),
-  VitalSample (..),
+  ObservationCount,
+  VitalEstimate (value, bounds),
+  VitalCoverage (..),
+  VitalMeasurement (..),
+  measurementValue,
+  measurementSamples,
+  VitalGrouping (..),
+  VitalPopulation (..),
+  rumVitalPopulation,
   VitalTrendPoint (..),
   PageVitalPoint (..),
   RumQueryResult (..),
   RumQuery (..),
   RumCacheKey (..),
+  rumCacheDbKey,
   rumPanelCacheGet,
   rumPanelCacheGetStale,
   withSharedCache,
@@ -20,13 +30,19 @@ module Models.Telemetry.RUM (
 
 import Data.Aeson qualified as AE
 import Data.Effectful.Hasql qualified as Hasql
+import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
-import Effectful (Eff)
+import Effectful (Eff, (:>))
+import Effectful.Labeled (Labeled)
+import Hasql.Decoders qualified as D
 import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (AesonText (..), DB)
+import Pkg.Components.TimePicker qualified as TimePicker
+import Pkg.DeriveUtils (AesonText (..), DB, WrappedEnumSC (..))
+import Pkg.Parser (ScopedQuery (..))
 import Relude
+import Relude.Extra.Foldable1 (minimum1)
 import Utils (toXXHash)
 
 
@@ -105,61 +121,425 @@ data RumSession = RumSession
   deriving anyclass (AE.FromJSON, AE.ToJSON, HI.DecodeRow)
 
 
+-- $setup
+-- >>> import Data.Aeson qualified as AE
+-- >>> import Data.Either (isLeft)
+-- >>> import Relude (LByteString)
+
+
+-- | Cache decoding preserves positive observation counts.
+--
+-- >>> let valid = AE.eitherDecode "3" :: Either String ObservationCount
+-- >>> fmap (\count -> AE.eitherDecode (AE.encode count) == Right count) valid
+-- Right True
+-- >>> map (isLeft . (AE.eitherDecode :: LByteString -> Either String ObservationCount)) ["0", "-1"]
+-- [True,True]
+newtype ObservationCount = ObservationCount Natural
+  deriving stock (Eq, Generic, Show)
+  deriving newtype (AE.ToJSON)
+
+
+instance AE.FromJSON ObservationCount where
+  parseJSON = AE.parseJSON >=> maybe (fail "Observation count must be positive") pure . mkObservationCount
+
+
+mkObservationCount :: Natural -> Maybe ObservationCount
+mkObservationCount count = ObservationCount count <$ guard (count > 0)
+
+
+-- | A cached quantile is finite and nonnegative, and an estimated value lies in its bucket.
+--
+-- >>> let valid = AE.eitherDecode "{\"value\":75,\"bounds\":[0,100]}" :: Either String VitalEstimate
+-- >>> fmap (\estimate -> AE.eitherDecode (AE.encode estimate) == Right estimate) valid
+-- Right True
+-- >>> map (isLeft . (AE.eitherDecode :: LByteString -> Either String VitalEstimate)) ["{\"value\":120,\"bounds\":[0,100]}", "{\"value\":-1,\"bounds\":null}", "{\"value\":1e400,\"bounds\":null}"]
+-- [True,True,True]
+data VitalEstimate = VitalEstimate {value :: Double, bounds :: Maybe (Double, Double)}
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.ToJSON)
+
+
+instance AE.FromJSON VitalEstimate where
+  parseJSON = AE.genericParseJSON AE.defaultOptions >=> maybe (fail "Invalid vital quantile or bucket range") pure . mkEstimate
+
+
+mkEstimate :: VitalEstimate -> Maybe VitalEstimate
+mkEstimate e = e <$ guard (finite e.value && all (\(lo, hi) -> finite lo && finite hi && lo <= e.value && e.value <= hi) e.bounds)
+  where
+    finite v = v >= 0 && not (isInfinite v || isNaN v)
+
+
+-- | Constructor order is severity, least first: a population with several defects reports its last.
+data VitalCoverage = InterruptedSeries | InvalidBuckets | InvalidReset | InvalidValue | MissingBaseline | OverlappingIntervals | UnboundedBucket | UnknownStart | UnknownTemporality | UnsupportedPopulation
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving (AE.FromJSON, AE.ToJSON, HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "" VitalCoverage
+
+
+-- | SQL rank of a coverage column (NULL for @'complete'@), and the inverse, so @MAX@ picks the
+-- most severe defect by constructor order rather than by its spelling.
+coverageRank, coverageName :: HI.Sql -> HI.Sql
+coverageRank col = [HI.sql|CASE (|] <> col <> [HI.sql|)|] <> foldMap (\(rank, issue) -> [HI.sql| WHEN #{issue} THEN #{rank}|]) coverageRanks <> [HI.sql| END|]
+coverageName col = [HI.sql|COALESCE(CASE (|] <> col <> [HI.sql|)|] <> foldMap (\(rank, issue) -> [HI.sql| WHEN #{rank} THEN #{issue}|]) coverageRanks <> [HI.sql| END, 'complete')|]
+
+
+coverageRanks :: [(Int64, VitalCoverage)]
+coverageRanks = zip [1 ..] [minBound .. maxBound]
+
+
+data VitalMeasurement = Unmeasured | Measured ObservationCount VitalEstimate | Unavailable Natural VitalCoverage
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+measurementValue :: VitalMeasurement -> Maybe Double
+measurementValue = \case
+  Measured _ estimate -> Just estimate.value
+  Unmeasured -> Nothing
+  Unavailable _ _ -> Nothing
+
+
+measurementSamples :: VitalMeasurement -> Natural
+measurementSamples = \case
+  Measured (ObservationCount count) _ -> count
+  Unmeasured -> 0
+  Unavailable count _ -> count
+
+
+data VitalGrouping = FieldVital | TrendVital UTCTime | PageVital Text
+  deriving stock (Eq, Generic, Ord, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data VitalPopulation = VitalPopulation
+  { grouping :: VitalGrouping
+  , metricName :: Text
+  , measurement :: VitalMeasurement
+  }
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+instance HI.DecodeValue VitalPopulation where
+  decodeValue =
+    D.refine decode
+      $ D.record
+      $ (,,,,,,,)
+      <$> D.field (D.nullable D.timestamptz)
+      <*> D.field (D.nullable D.text)
+      <*> D.field (D.nonNullable D.text)
+      <*> D.field (D.nonNullable D.int8)
+      <*> D.field (D.nullable $ HI.decodeValue @VitalCoverage)
+      <*> D.field (D.nullable D.float8)
+      <*> D.field (D.nullable D.float8)
+      <*> D.field (D.nullable D.float8)
+    where
+      decode (bucket, page, metric, count, coverage, value, lower, upper) = do
+        grouping <- case (bucket, page) of
+          (Nothing, Nothing) -> Right FieldVital
+          (Just time, Nothing) -> Right (TrendVital time)
+          (Nothing, Just url) -> Right (PageVital url)
+          _ -> Left "Invalid vital population grouping"
+        unless (count >= 0) $ Left "Negative vital observation count"
+        measurement <- case (coverage, count, value, lower, upper) of
+          (Just issue, _, Nothing, _, _) -> Right $ Unavailable (fromIntegral count) issue
+          (Nothing, 0, Nothing, _, _) -> Right Unmeasured
+          (Nothing, _, Just measured, Nothing, Nothing) -> measuredEstimate count (VitalEstimate measured Nothing)
+          (Nothing, _, Just measured, Just lo, Just hi) -> measuredEstimate count (VitalEstimate measured (Just (lo, hi)))
+          _ -> Left "Invalid vital population measurement"
+        pure VitalPopulation{grouping, metricName = metric, measurement}
+      measuredEstimate count estimate = do
+        samples <- maybeToRight "Invalid measured vital population" (mkObservationCount $ fromIntegral count)
+        Measured samples <$> maybeToRight "Invalid measured vital population" (mkEstimate estimate)
+
+
+data VitalRead = PopulationRead VitalPopulation | EpochRead Text UTCTime
+
+
+data VitalReadKind = Population | Epoch
+  deriving stock (Read, Show)
+  deriving (HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "" VitalReadKind
+
+
+instance HI.DecodeRow VitalRead where
+  decodeRow =
+    D.column
+      $ D.nonNullable
+      $ D.refine decode
+      $ D.record
+      $ (,,,)
+      <$> D.field (D.nonNullable $ HI.decodeValue @VitalReadKind)
+      <*> D.field (D.nullable $ HI.decodeValue @VitalPopulation)
+      <*> D.field (D.nullable D.text)
+      <*> D.field (D.nullable D.timestamptz)
+    where
+      decode (Population, Just population, Nothing, Nothing) = Right $ PopulationRead population
+      decode (Epoch, Nothing, Just series, Just start) = Right $ EpochRead series start
+      decode _ = Left "Invalid vital read row"
+
+
 data VitalTrendPoint = VitalTrendPoint
   { bucket :: UTCTime
   , metricName :: Text
-  , p75 :: Double
+  , measurement :: VitalMeasurement
   }
   deriving stock (Generic, Show)
-  deriving anyclass (AE.FromJSON, AE.ToJSON, HI.DecodeRow)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 data PageVitalPoint = PageVitalPoint
   { page :: Text
   , metricName :: Text
-  , p75 :: Double
-  , samples :: Int64
+  , measurement :: VitalMeasurement
   }
   deriving stock (Generic, Show)
-  deriving anyclass (AE.FromJSON, AE.ToJSON, HI.DecodeRow)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
-data VitalSample = VitalSample
-  { metricName :: Text
-  , value :: Double
-  , samples :: Int64
+-- | A histogram contributes observations, not its export mean. All surfaces share the
+-- same population, with exact scalar quantiles and estimates over common explicit bounds.
+-- Reports are selected by end time; DELTA populations do not require a known start.
+rumVitalPopulation :: (DB es, Labeled "timefusion" Hasql.Hasql :> es) => Bool -> ScopedQuery -> TimePicker.TimeWindow -> RumBucket -> Eff es [VitalPopulation]
+rumVitalPopulation useTf scope window bucket = do
+  let interval :: Text
+      interval = case bucket of FiveMinutes -> "5 minutes"; OneHour -> "1 hour"; SixHours -> "6 hours"
+      vitalScope =
+        let names :: [Text]
+            names = [prefix <> name | name <- ["lcp", "inp", "cls", "fcp", "ttfb"], prefix <- ["browser.web_vital.", "k6.browser_web_vital_"]]
+         in [HI.sql|project_id=#{scope.projectId.toText} AND (#{scope.environment}::text IS NULL OR resource___deployment___environment___name = #{scope.environment})
+        AND (#{scope.service}::text IS NULL OR resource___service___name = #{scope.service}) AND metric_name = ANY(#{names}::text[])
+        AND (starts_with(metric_name,'browser.web_vital.') OR metric_type='GAUGE')|]
+      columns =
+        [HI.sql|timestamp,start_timestamp,series_id,metric_type,aggregation_temporality,flags,
+        CASE WHEN metric_type IN ('GAUGE') THEN value END AS value,
+        distribution_count,hist_bucket_counts,CASE WHEN hist_explicit_bounds IS NULL AND cardinality(hist_bucket_counts)=1 THEN ARRAY[]::float8[] ELSE hist_explicit_bounds END AS hist_explicit_bounds,
+        COALESCE(attributes #>> '{page,url}',attributes->>'page.url',attributes->>'url') AS page,
+        CASE WHEN starts_with(metric_name,'browser.web_vital.') THEN substring(metric_name FROM length('browser.web_vital.')+1)
+          ELSE substring(metric_name FROM length('k6.browser_web_vital_')+1) END::text AS metric|]
+      current = [HI.sql|SELECT |] <> columns <> [HI.sql| FROM otel_metrics WHERE |] <> vitalScope <> [HI.sql| AND timestamp>=#{window.fromTime} AND timestamp<=#{window.toTime}|]
+      withHistory epochs = case nonEmpty epochs of
+        Nothing -> current
+        Just selected ->
+          let oldest = minimum1 $ fmap snd selected
+              seriesIds :: [Text]
+              seriesIds = ordNub $ map fst epochs
+              exactEpochs = mconcat $ intersperse [HI.sql| OR |] [[HI.sql|(series_id::text=#{seriesId} AND start_timestamp=#{start})|] | (seriesId, start) <- epochs]
+           in current
+                <> [HI.sql| UNION ALL SELECT |]
+                <> columns
+                <> [HI.sql| FROM (
+                SELECT *,ROW_NUMBER() OVER(PARTITION BY series_id,CASE WHEN flags & 1!=0 THEN NULL ELSE start_timestamp END ORDER BY timestamp DESC) AS predecessor
+                FROM otel_metrics WHERE |]
+                <> vitalScope
+                <> [HI.sql| AND series_id = ANY(#{seriesIds}::text[])|]
+                <> [HI.sql| AND timestamp>=#{oldest} AND timestamp<#{window.fromTime} AND (flags & 1!=0 OR |]
+                <> exactEpochs
+                <> [HI.sql|)) AS history WHERE predecessor=1|]
+      -- TimeFusion drops partitions when inheriting a named window with a new order/frame.
+      readPopulations source discoverEpochs =
+        Hasql.interpTimefusion useTf
+          $ [HI.sql|WITH source AS (|]
+          <> source
+          <> [HI.sql|
+), previous AS (
+ SELECT *, LAG(CASE WHEN flags & 1=0 THEN timestamp END) OVER(PARTITION BY series_id,start_timestamp ORDER BY timestamp) AS prior_timestamp,
+   MAX(CASE WHEN flags & 1!=0 THEN timestamp END) OVER(PARTITION BY series_id ORDER BY timestamp ROWS UNBOUNDED PRECEDING) AS last_marker,
+   LAG(CASE WHEN flags & 1=0 THEN timestamp END) OVER(PARTITION BY series_id ORDER BY timestamp) AS previous_series_timestamp,
+   LAG(CASE WHEN flags & 1=0 THEN distribution_count END) OVER(PARTITION BY series_id,start_timestamp ORDER BY timestamp) AS prior_count,
+   LAG(CASE WHEN flags & 1=0 THEN hist_bucket_counts END) OVER(PARTITION BY series_id,start_timestamp ORDER BY timestamp) AS prior_counts,
+   LAG(CASE WHEN flags & 1=0 THEN hist_explicit_bounds END) OVER(PARTITION BY series_id,start_timestamp ORDER BY timestamp) AS prior_bounds
+ FROM source
+), points AS (
+ SELECT *, time_bucket(#{interval}::interval,timestamp) AS bucket,
+   CASE WHEN metric_type IN ('GAUGE') AND value IS NOT NULL THEN 1
+     WHEN aggregation_temporality='DELTA' THEN distribution_count
+     WHEN prior_count IS NOT NULL THEN distribution_count-prior_count
+     WHEN start_timestamp=timestamp THEN 0
+     WHEN start_timestamp >= #{window.fromTime} AND start_timestamp < timestamp THEN distribution_count
+     ELSE 0 END AS observations,
+   CASE WHEN metric_type='GAUGE' THEN CASE WHEN value>=0 AND value<'Infinity'::float8 THEN 'complete' ELSE #{InvalidValue} END
+     WHEN metric_type!='HISTOGRAM' THEN #{UnsupportedPopulation}
+     WHEN distribution_count IS NULL OR hist_bucket_counts IS NULL OR hist_explicit_bounds IS NULL OR cardinality(hist_bucket_counts)!=cardinality(hist_explicit_bounds)+1 OR distribution_count<0 THEN #{InvalidBuckets}
+     WHEN start_timestamp>timestamp OR (start_timestamp IS NULL AND aggregation_temporality IS DISTINCT FROM 'DELTA') THEN #{UnknownStart}
+     WHEN aggregation_temporality='DELTA' AND previous_series_timestamp>start_timestamp THEN #{OverlappingIntervals}
+     WHEN aggregation_temporality='DELTA' THEN 'complete'
+     WHEN aggregation_temporality IS NULL OR aggregation_temporality!='CUMULATIVE' THEN #{UnknownTemporality}
+     WHEN last_marker>prior_timestamp OR (prior_timestamp IS NULL AND last_marker>=start_timestamp AND start_timestamp!=timestamp) THEN #{InterruptedSeries}
+     WHEN prior_count IS NOT NULL AND (distribution_count<prior_count OR (prior_timestamp=timestamp AND distribution_count!=prior_count)) THEN #{InvalidReset}
+     WHEN prior_count IS NULL AND previous_series_timestamp>start_timestamp THEN #{OverlappingIntervals}
+     WHEN prior_count IS NOT NULL THEN 'complete'
+     WHEN start_timestamp=timestamp THEN 'complete'
+     WHEN start_timestamp<#{window.fromTime} THEN #{MissingBaseline}
+     ELSE 'complete' END AS coverage
+ FROM previous WHERE timestamp>=#{window.fromTime} AND flags & 1=0
+), sides AS (
+ SELECT points.*,unnest(ARRAY[0,1]) AS side FROM points
+), expanded AS (
+ SELECT sides.*,CASE WHEN value IS NOT NULL THEN 1 WHEN side=0 THEN distribution_count ELSE prior_count END AS expected_count,
+   unnest(CASE WHEN value IS NOT NULL THEN ARRAY[value]::float8[]
+      WHEN side=0 THEN hist_explicit_bounds||ARRAY[NULL]::float8[] ELSE prior_bounds||ARRAY[NULL]::float8[] END) AS bound,
+   unnest(CASE WHEN value IS NOT NULL THEN ARRAY[1]::bigint[]
+      WHEN side=0 THEN hist_bucket_counts ELSE prior_counts END) AS amount
+ FROM sides
+ WHERE side=0 OR (aggregation_temporality='CUMULATIVE' AND prior_count IS NOT NULL AND value IS NULL)
+), indexed AS (
+ SELECT *,CASE WHEN value IS NOT NULL THEN 1 ELSE COALESCE(array_position(CASE WHEN side=0 THEN hist_explicit_bounds ELSE prior_bounds END,bound),cardinality(CASE WHEN side=0 THEN hist_explicit_bounds ELSE prior_bounds END)+1) END AS position
+ FROM expanded
+), cumulative AS (
+ SELECT *,SUM(amount) OVER(PARTITION BY timestamp,series_id,start_timestamp,side ORDER BY bound NULLS LAST ROWS UNBOUNDED PRECEDING) AS cumulative,
+   SUM(amount) OVER(PARTITION BY timestamp,series_id,start_timestamp,side) AS bucket_count,
+   LAG(bound) OVER(PARTITION BY timestamp,series_id,start_timestamp,side ORDER BY position) AS preceding_bound,
+   ROW_NUMBER() OVER(PARTITION BY timestamp,series_id,start_timestamp,side ORDER BY position) AS bound_ordinal
+ FROM indexed
+), validated AS (
+ SELECT *,|]
+          <> coverageName ([HI.sql|MAX(|] <> coverageRank [HI.sql|CASE WHEN coverage IN (#{UnsupportedPopulation},#{InvalidValue}) THEN coverage WHEN amount IS NULL OR amount<0 OR bucket_count!=expected_count OR expected_count<0 OR (bound IS NOT NULL AND NOT(bound>=0 AND bound<'Infinity'::float8)) OR (bound_ordinal>1 AND bound IS NOT NULL AND (preceding_bound IS NULL OR bound<=preceding_bound)) THEN #{InvalidBuckets} ELSE coverage END|] <> [HI.sql|) OVER(PARTITION BY timestamp,series_id,start_timestamp)|])
+          <> [HI.sql| AS point_coverage
+ FROM cumulative
+), paired AS (
+ SELECT *, MAX(CASE WHEN side=1 THEN cumulative END) OVER(PARTITION BY timestamp,series_id,start_timestamp,bound) AS prior_cumulative
+ FROM validated
+), selected_raw AS (
+ SELECT *,cumulative-COALESCE(prior_cumulative,0) AS cdf,
+   ROW_NUMBER() OVER(PARTITION BY timestamp,series_id,start_timestamp ORDER BY bound NULLS LAST) AS ordinal
+ FROM paired WHERE side=0 AND (value IS NOT NULL OR aggregation_temporality='DELTA' OR prior_count IS NULL OR prior_cumulative IS NOT NULL)
+), selected AS (
+ SELECT *,|]
+          <> coverageName ([HI.sql|MAX(|] <> coverageRank [HI.sql|CASE WHEN point_coverage='complete' AND (cdf<0 OR cdf<LAG_CDF) THEN #{InvalidBuckets} ELSE point_coverage END|] <> [HI.sql|) OVER(PARTITION BY timestamp,series_id,start_timestamp)|])
+          <> [HI.sql| AS effective_coverage
+ FROM (SELECT *,LAG(cdf,1,0) OVER(PARTITION BY timestamp,series_id,start_timestamp ORDER BY bound NULLS LAST) AS LAG_CDF FROM selected_raw) AS ordered
+), totals AS (
+ SELECT CASE WHEN GROUPING(bucket)=0 THEN 1 WHEN GROUPING(page)=0 THEN 2 ELSE 0 END AS kind,
+   bucket AS group_bucket,page AS group_page,metric,bound,
+   SUM(CASE WHEN value IS NULL AND observations>0 AND effective_coverage='complete' THEN cdf ELSE 0 END)::bigint AS histogram_cdf,
+   COUNT(*) FILTER(WHERE value IS NULL AND observations>0 AND effective_coverage='complete') AS histogram_points_at_bound,
+   SUM(CASE WHEN value IS NOT NULL AND effective_coverage='complete' THEN observations ELSE 0 END)::bigint AS scalar_observations,
+   SUM(CASE WHEN ordinal=1 AND effective_coverage='complete' THEN observations ELSE 0 END)::bigint AS observations,
+   COUNT(*) FILTER(WHERE ordinal=1 AND value IS NULL AND observations>0 AND effective_coverage='complete') AS histogram_points,
+   MAX(|]
+          <> coverageRank [HI.sql|effective_coverage|]
+          <> [HI.sql|) AS coverage
+ FROM selected GROUP BY GROUPING SETS((metric,bound),(bucket,metric,bound),(page,metric,bound))
+), distribution AS (
+ SELECT *,SUM(observations) OVER population AS total,
+   SUM(histogram_points) OVER population AS total_histogram_points,
+   |]
+          <> coverageName [HI.sql|MAX(coverage) OVER population|]
+          <> [HI.sql| AS population_coverage,
+   SUM(scalar_observations) OVER scalar_population AS scalar_cdf
+ FROM totals
+ WINDOW population AS (PARTITION BY kind,group_bucket,group_page,metric),
+   scalar_population AS (PARTITION BY kind,group_bucket,group_page,metric ORDER BY bound NULLS LAST ROWS UNBOUNDED PRECEDING)
+), common AS (
+ SELECT *,CASE WHEN total_histogram_points=0 THEN 1+0.75::float8*(total-1)::float8 ELSE 0.75::float8*total::float8 END AS quantile_position,
+   MAX(CASE WHEN histogram_points_at_bound=total_histogram_points THEN bound END) OVER preceding_population AS histogram_lower_bound,
+   MIN(CASE WHEN histogram_points_at_bound=total_histogram_points THEN bound END) OVER following_population AS histogram_upper_bound,
+   MAX(CASE WHEN histogram_points_at_bound=total_histogram_points THEN histogram_cdf END) OVER cumulative_population AS histogram_lower_cdf,
+   MIN(CASE WHEN histogram_points_at_bound=total_histogram_points THEN histogram_cdf END) OVER following_population AS histogram_upper_cdf
+ FROM distribution WHERE total_histogram_points=0 OR histogram_points_at_bound=total_histogram_points OR scalar_observations>0
+ WINDOW preceding_population AS (PARTITION BY kind,group_bucket,group_page,metric ORDER BY bound NULLS LAST ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),
+   following_population AS (PARTITION BY kind,group_bucket,group_page,metric ORDER BY bound NULLS LAST ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING),
+   cumulative_population AS (PARTITION BY kind,group_bucket,group_page,metric ORDER BY bound NULLS LAST ROWS UNBOUNDED PRECEDING)
+), interpolated AS (
+ SELECT *,CASE WHEN histogram_points_at_bound=total_histogram_points THEN histogram_cdf::float8
+     WHEN COALESCE(histogram_lower_cdf,0)=histogram_upper_cdf THEN histogram_upper_cdf::float8
+     WHEN histogram_upper_bound IS NOT NULL THEN COALESCE(histogram_lower_cdf,0)::float8+
+       (histogram_upper_cdf-COALESCE(histogram_lower_cdf,0))::float8*(bound-COALESCE(histogram_lower_bound,0))/(histogram_upper_bound-COALESCE(histogram_lower_bound,0)) END AS histogram_at_bound
+ FROM common
+), combined AS (
+ SELECT *,COALESCE(histogram_at_bound,histogram_lower_cdf::float8,0)+scalar_cdf::float8 AS cdf FROM interpolated
+), ranked AS (
+ SELECT *,CASE WHEN total_histogram_points=0 THEN CEIL(quantile_position) ELSE quantile_position END AS quantile_target,
+   LAG(bound) OVER population AS lower_bound,
+   LAG(cdf,1,0) OVER population AS lower_cdf,
+   LAG(histogram_at_bound,1,0) OVER population AS prior_histogram_cdf,
+   ROW_NUMBER() OVER population AS quantile_ordinal
+ FROM combined
+ WINDOW population AS (PARTITION BY kind,group_bucket,group_page,metric ORDER BY bound NULLS LAST)
+), quantiles AS (
+ SELECT *,CASE WHEN population_coverage='complete' AND total>0 AND (bound IS NULL OR histogram_at_bound IS NULL) THEN #{UnboundedBucket}
+    WHEN population_coverage!='complete' THEN population_coverage END AS issue,
+   CASE WHEN population_coverage!='complete' OR total=0 OR bound IS NULL OR histogram_at_bound IS NULL THEN NULL
+     WHEN total_histogram_points=0 THEN CASE WHEN lower_cdf<FLOOR(quantile_position) THEN bound
+       ELSE lower_bound+(bound-lower_bound)*(quantile_position-FLOOR(quantile_position)) END
+     WHEN quantile_position>cdf-scalar_observations::float8 THEN bound
+     ELSE COALESCE(lower_bound,0)::float8+(bound-COALESCE(lower_bound,0))::float8*
+       (quantile_position-lower_cdf::float8)/(histogram_at_bound-prior_histogram_cdf)::float8 END AS p75
+ FROM ranked WHERE ((total=0 OR population_coverage!='complete') AND quantile_ordinal=1)
+   OR (total>0 AND population_coverage='complete'
+     AND cdf>=quantile_target
+     AND lower_cdf<quantile_target)
+), reads AS (
+SELECT #{Population}::text AS read_kind,ROW(group_bucket,group_page,metric::text,total::bigint,issue::text,p75::float8,
+  CASE WHEN issue IS NULL AND total>0 AND total_histogram_points>0 AND (histogram_points_at_bound=total_histogram_points OR COALESCE(histogram_lower_cdf,0)!=histogram_upper_cdf) THEN COALESCE(histogram_lower_bound,0)::float8 END,
+  CASE WHEN issue IS NULL AND total>0 AND total_histogram_points>0 AND (histogram_points_at_bound=total_histogram_points OR COALESCE(histogram_lower_cdf,0)!=histogram_upper_cdf) THEN histogram_upper_bound::float8 END) AS population,NULL::text AS epoch_series,NULL::timestamptz AS epoch_start
+FROM quantiles WHERE kind!=2 OR group_page IS NOT NULL
+UNION ALL
+SELECT #{Epoch}::text,NULL,series_id::text,start_timestamp FROM (
+ SELECT DISTINCT series_id,start_timestamp FROM selected
+ WHERE #{discoverEpochs} AND metric_type='HISTOGRAM' AND aggregation_temporality='CUMULATIVE' AND start_timestamp<#{window.fromTime}
+) AS epochs
+)
+SELECT ROW(read_kind,population,epoch_series,epoch_start) FROM reads
+|]
+  initial <- readPopulations current True
+  let epochs = [(series, start) | EpochRead series start <- initial]
+  populationReads <- if null epochs then pure initial else readPopulations (withHistory epochs) False
+  let populations = [population | PopulationRead population <- populationReads]
+  -- Grouped pages are ordered/capped here to avoid native final-sort memory pressure.
+  let (fieldAndTrend, pageEntries) = partitionWith (\population -> case population.grouping of PageVital url -> Right (url, [population]); FieldVital -> Left population; TrendVital{} -> Left population) populations
+      pageGroups = Map.fromListWith (<>) pageEntries
+      orderedPages = sortWith (\(url, rows) -> (Down $ sum $ map (measurementSamples . (.measurement)) rows, url)) $ Map.toList pageGroups
+  pure
+    $ sortWith (\population -> (population.grouping, population.metricName)) fieldAndTrend
+    <> concatMap (sortWith (.metricName) . snd) (take 150 orderedPages)
+
+
+-- | The Overview's headline numbers from one scan of the window; a window with no browser telemetry yields no row.
+data RumPulse = RumPulse
+  { sessions :: Int64
+  , pageViews :: Int64
+  , errors :: Int64
+  , p75LoadMs :: Maybe Double
   }
-  deriving stock (Generic, Show)
+  deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON, HI.DecodeRow)
 
 
 data RumQueryResult
-  = PresenceResult Bool
+  = PulseResult (Maybe RumPulse)
   | PagesResult [RumPage]
   | ErrorsResult [RumError]
   | SessionsResult [RumSession]
-  | ReplaySessionsResult [ReplaySession]
   | SessionDetailResult (Maybe RumSession)
-  | VitalSamplesResult [VitalSample]
-  | VitalsDetailResult [VitalTrendPoint] [PageVitalPoint]
+  | VitalPopulationResult [VitalPopulation]
   | BreakdownResult [RumBreakdown]
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 data RumQuery
-  = PresenceQuery
+  = PulseQuery
   | PagesQuery
   | ErrorsQuery
-  | SessionsQuery
-  | ReplaySessionsQuery
   | SessionSearchQuery (Maybe Text) SessionFilter
   | SessionDetailQuery Text
-  | VitalSamplesQuery
-  | VitalsDetailQuery RumBucket
+  | VitalPopulationQuery RumBucket
   | BreakdownQuery
   deriving stock (Eq, Generic, Ord, Show)
   deriving anyclass (Hashable)
+
+
+-- | Bumped when a query's cached payload shape or semantics change, so an older replica's
+-- entry is never decoded here.
+queryVersion :: RumQuery -> Word
+queryVersion = \case
+  PulseQuery -> 1
+  PagesQuery -> 0
+  ErrorsQuery -> 0
+  SessionSearchQuery{} -> 2
+  SessionDetailQuery{} -> 2
+  VitalPopulationQuery{} -> 2
+  BreakdownQuery -> 0
 
 
 -- | @service@ is part of the key, not a filter applied after it. Without it a page scoped to
@@ -178,6 +558,10 @@ data RumCacheKey = RumCacheKey
   deriving anyclass (Hashable)
 
 
+rumCacheDbKey :: RumCacheKey -> Text
+rumCacheDbKey key = toXXHash $ show key <> ":v" <> show (queryVersion key.query)
+
+
 -- | Shared L2 for expensive panel/stats results, keyed by the hashed memory-cache key.
 -- The in-memory caches are per replica; without this layer every replica paid each cold
 -- scan once per TTL (the vitals-detail scan alone costs ~25s), and the first visitor
@@ -191,16 +575,15 @@ rumPanelCacheGet key =
 
 
 -- | Payload plus staleness: 'True' when the entry is past its freshness expiry but still
--- inside the prune horizon ('rumPanelCacheSet' deletes rows expired by over an hour).
--- The RUM page serves stale entries instantly and revalidates in the background, so a
--- panel never holds first paint hostage to a fresh scan of the window. Entries older than
--- the horizon are treated as absent — past that point the drift would mislead rather than
--- orient.
+-- inside the prune horizon ('rumPanelCacheSet' deletes rows expired by over twelve hours).
+-- The RUM page serves stale entries instantly and revalidates in the background. Twelve
+-- hours spans the overnight gap, so the morning's first visit paints last night's list and
+-- refreshes it instead of paying a cold 24h scan. Older entries are treated as absent.
 rumPanelCacheGetStale :: (AE.FromJSON a, DB es) => Text -> Eff es (Maybe (a, Bool))
 rumPanelCacheGetStale key =
   fmap (\(AesonText value, isStale) -> (value, isStale))
     . listToMaybe
-    <$> Hasql.interp [HI.sql|SELECT payload, expires_at <= now() FROM rum_panel_cache WHERE cache_key = #{key} AND expires_at > now() - interval '1 hour'|]
+    <$> Hasql.interp [HI.sql|SELECT payload, expires_at <= now() FROM rum_panel_cache WHERE cache_key = #{key} AND expires_at > now() - interval '12 hours'|]
 
 
 -- | Memory-miss path in one step: read the shared table, else compute and publish for
@@ -223,4 +606,4 @@ rumPanelCacheSet key ttlSeconds value = do
       ON CONFLICT (cache_key) DO UPDATE SET payload = EXCLUDED.payload, expires_at = EXCLUDED.expires_at|]
   -- Expired rows are pruned on write: writes are rare (one per cold panel per TTL), and it
   -- keeps the table from needing its own cleanup job.
-  Hasql.interpExecute_ [HI.sql|DELETE FROM rum_panel_cache WHERE expires_at < now() - interval '1 hour'|]
+  Hasql.interpExecute_ [HI.sql|DELETE FROM rum_panel_cache WHERE expires_at < now() - interval '12 hours'|]

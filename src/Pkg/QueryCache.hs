@@ -5,8 +5,9 @@ module Pkg.QueryCache (
   RawCacheKey (..),
   RawCacheResult (..),
   RawQueryFlights,
-  newRawQueryFlights,
-  coalesceRawQuery,
+  QueryFlights,
+  newQueryFlights,
+  coalesceQuery,
   cachedRawQuery,
   lookupRawCache,
   updateRawCache,
@@ -57,8 +58,8 @@ import OpenTelemetry.Attributes qualified as OA
 import Pages.Charts.Types (DataType, MetricsData (..), MetricsStats (..))
 import Pkg.DeriveUtils (AesonText (..), DB)
 import Pkg.Metrics qualified as Metrics
-import Pkg.Parser (RangeEnd (..), SqlQueryCfg (..), autoBinWidth)
-import Pkg.Parser.Expr (ToQueryText (..), kqlTimespanToTimeBucket)
+import Pkg.Parser (RangeEnd (..), SqlQueryCfg (..), autoBinWidth, fixedUTCTime)
+import Pkg.Parser.Expr (ToQueryText (..), display, kqlTimespanToTimeBucket, resolveWildcardTimes)
 import Pkg.Parser.Stats (BinFunction (..), ByClauseItem (..), Section (..), Sources (..), SummarizeByClause (..), defaultBinSize)
 import Relude
 import UnliftIO (withRunInIO)
@@ -128,17 +129,20 @@ data RawCacheResult = RawCacheHit MetricsData | RawCacheMiss
 -- | Per-process request coalescer. The durable result cache is shared through
 -- PostgreSQL; this small registry prevents one web process from issuing the same
 -- expensive TimeFusion query many times while the shared entry is still absent.
-newtype RawQueryFlights = RawQueryFlights (STM.TVar (M.Map RawCacheKey (STM.TMVar (Either E.SomeException MetricsData))))
+newtype QueryFlights key value = QueryFlights (STM.TVar (M.Map key (STM.TMVar (Either E.SomeException value))))
 
 
-newRawQueryFlights :: IO RawQueryFlights
-newRawQueryFlights = RawQueryFlights <$> STM.newTVarIO M.empty
+type RawQueryFlights = QueryFlights RawCacheKey MetricsData
+
+
+newQueryFlights :: IO (QueryFlights key value)
+newQueryFlights = QueryFlights <$> STM.newTVarIO M.empty
 
 
 -- | The action includes cache lookup, execution and persistence. Publication and
 -- removal are atomic, including when a leader is cancelled; followers cannot hang.
-coalesceRawQuery :: RawQueryFlights -> RawCacheKey -> IO MetricsData -> IO (Bool, MetricsData)
-coalesceRawQuery (RawQueryFlights flights) key action = E.mask \restore -> do
+coalesceQuery :: Ord key => QueryFlights key value -> key -> IO value -> IO (Bool, value)
+coalesceQuery (QueryFlights flights) key action = E.mask \restore -> do
   (leader, resultVar) <- STM.atomically do
     running <- STM.readTVar flights
     case M.lookup key running of
@@ -188,7 +192,7 @@ cachedRawQuery flights now key fetch = do
             updateRawCache now key value `Ann.catch` cacheFailure "store" ()
             finish "raw-miss" value
       run = do
-        (leader, value) <- withRunInIO $ \unlift -> coalesceRawQuery flights key (unlift action)
+        (leader, value) <- withRunInIO $ \unlift -> coalesceQuery flights key (unlift action)
         if leader
           then pure value
           else do
@@ -407,9 +411,18 @@ generateCacheKey pid sourceM sections sqlCfg =
   CacheKey
     { projectId = pid
     , source = maybe "spans" toQText sourceM
-    , queryHash = toXXHash $ toQText sections <> "\NULenvironment=" <> fromMaybe "" sqlCfg.environment <> "\NULservice=" <> fromMaybe "" sqlCfg.service
+    , queryHash = toXXHash $ toQText sections <> "\NULenvironment=" <> fromMaybe "" sqlCfg.environment <> "\NULservice=" <> fromMaybe "" sqlCfg.service <> foldMap compiledPredicate sections
     , binInterval = extractBinInterval sqlCfg sections
     }
+  where
+    -- Compiler changes must not reuse old historical results. A fixed clock keeps
+    -- now()/ago() fingerprints stable while preserving their JSON-path rendering.
+    fingerprint = ("\NULpredicate=" <>) . display . resolveWildcardTimes fixedUTCTime
+    compiledPredicate = \case
+      Search expr -> fingerprint expr
+      WhereClause expr -> fingerprint expr
+      HavingClause expr -> fingerprint expr
+      _ -> ""
 
 
 -- | Convert UTCTime to POSIX epoch seconds

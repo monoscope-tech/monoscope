@@ -28,7 +28,7 @@ async function openFixture(page: Page): Promise<string> {
     // Blank, not a template: these tests count widgets, and a template's own widgets
     // would make "did one get added?" a question about arithmetic rather than behaviour.
     await page.getByText("Blank dashboard").click();
-    await page.locator('input[name="title"]').first().fill(FIXTURE);
+    await page.getByRole("textbox", { name: "Dashboard name *", exact: true }).fill(FIXTURE);
     await page.getByRole("button", { name: "Create" }).first().click();
     await page.waitForURL(/\/dashboards\/[0-9a-f-]{36}/i, { timeout: 60000 });
   } else {
@@ -53,7 +53,7 @@ async function makeDashboard(page: Page, title: string, template = "Blank dashbo
   await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
   await page.locator('label[for="newDashboardMdl"]').first().click();
   await page.getByText(template, { exact: true }).click();
-  await page.locator('input[name="title"]').first().fill(title);
+  await page.getByRole("textbox", { name: "Dashboard name *", exact: true }).fill(title);
   await page.getByRole("button", { name: "Create" }).first().click();
   await page.waitForURL(/\/dashboards\/[0-9a-f-]{36}/i, { timeout: 60000 });
   return { id: page.url().match(/\/dashboards\/([0-9a-f-]{36})/i)![1], title };

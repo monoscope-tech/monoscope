@@ -21,17 +21,18 @@ const KEY = 'monoscope:stale-chunk-reload';
 export function shouldReloadForStaleChunk(
   now: number,
   storage: Pick<Storage, 'getItem' | 'setItem'>,
-  cooldownMs = 60_000
+  cooldownMs = 60_000,
+  key = KEY
 ): boolean {
   let last: number | null = null;
   try {
-    last = Number(storage.getItem(KEY)) || null;
+    last = Number(storage.getItem(key)) || null;
   } catch {
     return false; // storage disabled (private mode, blocked cookies): never loop
   }
   if (last !== null && now - last < cooldownMs) return false;
   try {
-    storage.setItem(KEY, String(now));
+    storage.setItem(key, String(now));
   } catch {
     return false;
   }

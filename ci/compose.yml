@@ -93,14 +93,19 @@ services:
       # content, so the first run inherits the deps image's prebuilt 3.1GB store
       # and later runs add to it.
       - cabal:/root/.cabal
+      # npm ci replaces node_modules each run; keep its tarball cache too.
+      - npm:/root/.npm
       - node:/build/node_modules
       - wc-node:/build/web-components/node_modules
+      - e2e-node:/build/e2e/node_modules
+      - playwright:/root/.cache/ms-playwright
       # CI has no .env. Mount an empty one so a developer's local secrets and
       # DATABASE_URL (which points at PRODUCTION) cannot change the result — the
       # whole point is to reproduce CI, not your laptop.
       - ./empty.env:/build/.env:ro
     environment:
       CABAL_DIR: /root/.cabal
+      PATH: /opt/ghc/9.12.2/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
       LANG: C.UTF-8
       LOG_LEVEL: warn
       USE_EXTERNAL_DB: 'true'
@@ -110,23 +115,21 @@ services:
       MINIO_SECRET_KEY: minioadmin
       TIMEFUSION_PG_TEST_URL: postgresql://postgres:postgres@timefusion:5432/postgres
       DISCORD_CLIENT_ID: '1328384474395967631'
-      CI_SHARDS: ${CI_SHARDS:-4}
+      CI_SHARDS: ${CI_SHARDS:-6}
       # The container has no push credentials (origin is ssh); it records results
       # here and the host publishes them after the run.
       CI_ATTEST_OUT: /build/.ci/attest.tsv
       GIT_CONFIG_COUNT: '1'
       GIT_CONFIG_KEY_0: safe.directory
       GIT_CONFIG_VALUE_0: /build
-    depends_on:
-      postgres: {condition: service_healthy}
-      minio: {condition: service_healthy}
-      # Deliberately NOT timefusion: it has no arm64 image and dies under emulation
-      # on Apple Silicon, and a hard dependency there would stop every other check
-      # from running. `ci.sh local` starts it best-effort and the capability model
-      # refuses to attest anything that needed it. See docs/local-ci.md.
+    # ci.sh starts only the services selected checks need. A dependency here
+    # would start Postgres and MinIO even for frontend-only signoff.
 
 volumes:
   cabal:
+  npm:
   dist:
   node:
   wc-node:
+  e2e-node:
+  playwright:

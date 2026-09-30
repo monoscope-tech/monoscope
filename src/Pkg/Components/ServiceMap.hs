@@ -67,6 +67,7 @@ serviceMapPanelWith_ panel pid elId graph colors = div_ [class_ "w-full flex fle
             [ class_ "border border-strokeStrong bg-bgBase rounded-2xl w-full h-[720px] max-md:h-[460px] relative overflow-hidden touch-none select-none"
             , id_ elId
             , term "data-service-map" elId
+            , term "hx-morph-skip" ""
             , -- Base for the node menu's links; the renderer only appends the query.
               term "data-map-base" ("/p/" <> pid.toText)
             ]

@@ -9,25 +9,27 @@
 -- happen here in Haskell over that result. That keeps the store doing exactly one short-window
 -- read per page view, which matters because wide aggregates over @otel_metrics@ are the query
 -- shape that has repeatedly OOM-killed TimeFusion.
-module Pages.Containers (containersGetH, containerDetailGetH, ContainersGet (..), ContainerVM (..), ContainerFilters (..), applyFilters, runtimeLabel, formatBytes, emDash_) where
+module Pages.Containers (containersGetH, containerDetailGetH, ContainersGet (..), ContainerVM (..), ContainerFilters (..), applyFilters, runtimeLabel, formatBytes, coresText, freshnessLabel, emDash_, readyBadge_, kqlFilter, nodeField, clusterField) where
 
 import Data.Default (def)
 import Data.Text qualified as T
+import Data.Text.Display (display)
+import Data.Time (NominalDiffTime, diffUTCTime)
 import Data.Vector qualified as V
 import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
 import Lucid
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), containersInWindowCached, cpuPctOfLimit, freshnessWindow, memPctOfLimit, runtimeOf)
+import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), Scope (..), containersInWindowCached, cpuPctOfLimit, freshnessWindow, memPctOfLimit, runtimeOf)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
-import Pages.Components (Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), emptyState_, factGrid_, metaChip_, tableSkeleton_, withDeferredBody)
+import Pages.Components (Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), RefreshingDeferred (..), emptyState_, factGrid_, metaChip_, tableSkeleton_, timeRefreshListener_, withDeferredBody)
 import Pkg.Components.Table (Column, Config (..), Features (..), SearchMode (..), Table (..), ZeroState (..), col, facetActions, facetValues, singleSelectFilter, withAttrs, withColHeaderExtra)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (drawerRowAttrs_, faSprite_, formatBytes, infrastructureNavTabs_, showFFloat', toUriStr)
+import Utils (drawerRowAttrs_, faSprite_, formatBytes, infrastructureNavTabs_, kqlQuoted, showFFloat')
 
 
 -- | A row plus the project it belongs to, so column renderers can build pivot links without
@@ -108,7 +110,8 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
         , rows = V.fromList $ map (ContainerVM pid window) rows
         , features =
             def
-              { search = Just ClientSide
+              { header = Just $ timeRefreshListener_ "containersContainer" deferredUrl
+              , search = Just ClientSide
               , searchPlaceholder = Just "Search containers"
               , rowAttrs = Just $ drawerRowAttrs_ . detailUrl
               , tableHeaderActions =
@@ -124,12 +127,8 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
                       , menu "Node" "node" filters.node (.nodeName)
                       , menu "Image" "image" filters.image (.image)
                       ]
-              , header = Just containerCharts_
               , showFilterRail = True
-              , -- Says the freshness window, not the picker's: the pivot reads the newest
-                -- datapoint per series from the last few minutes of the range, so a wide
-                -- picker window does not mean a wide inventory. See 'Containers.freshnessWindow'.
-                resultSummary = Just $ "Showing " <> show (length rows) <> " of " <> show (V.length allRows) <> " containers reporting in the last " <> freshnessLabel
+              , resultSummary = Just $ "Showing " <> show (length rows) <> " of " <> show (V.length allRows) <> " containers reporting in the final " <> freshnessLabel window <> " of this range"
               , exportName = Just "containers"
               , zeroState =
                   Just
@@ -150,7 +149,6 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
           , pageActions = Just $ div_ [class_ "inline-flex items-center gap-2", data_ "default-window" "5M"] do
               TimePicker.liveDataControls_ Nothing window.currentRange Nothing TimePicker.RefreshOnly
           , serviceOptions = V.empty
-          , needsGridStack = True
           }
   addRespHeaders $ ContainersPage $ PageCtx bwconf body
   where
@@ -160,7 +158,7 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
       , col "Pod" (textCell (.podName)) & withAttrs [class_ "w-72 max-w-72 overflow-hidden max-lg:hidden"]
       , col "Namespace" (textCell (.namespace)) & withAttrs [class_ "w-32 max-lg:hidden"]
       , col "Node" (textCell (.nodeName)) & withAttrs [class_ "w-36 max-md:hidden"]
-      , col "CPU" (numCell (showFFloat' 3) (.cpuCores)) & withAttrs [class_ "w-20 text-right"]
+      , col "CPU (cores)" (numCell (showFFloat' 3) (.cpuCores)) & withAttrs [class_ "w-24 text-right"]
       , col "CPU limit used" (pctCell "CPU limit used" cpuPctOfLimit) & withAttrs [class_ "w-36 max-md:hidden"]
       , col "Memory" (numCell formatBytes (.memBytes)) & withAttrs [class_ "w-28 text-right max-md:hidden"]
       , col "Memory limit used" (pctCell "Memory limit used" memPctOfLimit) & withAttrs [class_ "w-40 max-md:hidden"]
@@ -208,11 +206,15 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
           $ runtimeIcon_ vm.row "w-3.5 h-3.5 fill-iconNeutral"
         span_ [class_ "min-w-0 truncate font-medium text-textStrong", data_ "tippy-content" $ "Container: " <> vm.row.containerName] $ toHtml vm.row.containerName
         span_ [class_ "hidden max-md:inline-flex"] $ readyCell vm.row
-      div_ [class_ "flex items-center gap-2 min-w-0 overflow-hidden text-xs text-textWeak"] do
+      div_ [class_ "flex items-center gap-2 min-w-0 overflow-hidden text-xs text-textWeak max-md:flex-wrap"] do
         whenJust vm.row.image \img ->
           let image = shortImage img <> maybe "" (":" <>) vm.row.imageTag
            in span_ [class_ "min-w-0 flex-1 truncate", data_ "tippy-content" $ "Image: " <> image] $ toHtml image
-        whenJust vm.row.workload \workload -> span_ [class_ "badge badge-xs badge-ghost min-w-0 max-w-36 truncate", data_ "tippy-content" $ "Workload: " <> workload] $ toHtml workload
+        -- The badge is a flex box, so the ellipsis has to live on an inner block or the name clips at its start.
+        whenJust vm.row.workload \workload -> span_ [class_ "badge badge-xs badge-ghost min-w-0 max-w-36 truncate", data_ "tippy-content" $ "Workload: " <> workload] $ span_ [class_ "min-w-0 truncate"] $ toHtml workload
+      div_ [class_ "hidden max-lg:flex flex-col gap-0.5 text-xs leading-normal text-textWeak"]
+        $ forM_ ([("Pod", vm.row.podName), ("Namespace", vm.row.namespace), ("Cluster", vm.row.cluster), ("Node / host", vm.row.nodeName)] :: [(Text, Maybe Text)]) \(label, value) ->
+          whenJust value \v -> span_ [class_ "whitespace-normal break-all"] $ toHtml $ label <> ": " <> v
 
     -- The drawer reads the window the row was rendered from, so it shows the same numbers the
     -- row does and hits the same cached snapshot the list already fetched.
@@ -220,27 +222,12 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
     detailUrl vm =
       TimePicker.windowUrl
         ("/p/" <> vm.pid.toText <> "/infrastructure/containers/detail")
-        (("container", vm.row.containerName) : [("pod", pod) | pod <- maybeToList vm.row.podName])
+        ([("container", vm.row.containerName), ("scope", display vm.row.scope)] <> mapMaybe sequenceA [("pod", vm.row.podName), ("cluster", vm.row.cluster), ("namespace", vm.row.namespace), ("node", vm.row.nodeName)])
         vm.window
-
-    containerCharts_ :: Html ()
-    containerCharts_ =
-      div_ [class_ "grid grid-cols-2 gap-3 max-lg:grid-cols-1"]
-        $ forM_ ([("containers-cpu", "CPU by container", "cores", "container.cpu.usage"), ("containers-memory", "Memory by container", "bytes", "container.memory.working_set")] :: [(Text, Text, Text, Text)]) \(wid, title, unit, metric) ->
-          div_ [class_ "container-usage-chart bg-bgRaised px-2 pt-2"] $ Widget.widget_ $ infrastructureWidget pid wid title unit ("metrics | where metric_name == \"" <> metric <> "\" | summarize avg(value) by bin_auto(timestamp), coalesce(resource.k8s.container.name, resource.container.name)")
 
 
 newtype ContainersGet = ContainersPage (PageCtx (Deferred (Table ContainerVM)))
-  deriving newtype (ToHtml)
-
-
--- | 'freshnessWindow' rendered for the result summary, so the number the page quotes and the
--- window the query actually read can never drift apart.
---
--- >>> freshnessLabel
--- "15m"
-freshnessLabel :: Text
-freshnessLabel = show (round (freshnessWindow / 60) :: Int) <> "m"
+  deriving (ToHtml) via (PageCtx (RefreshingDeferred (Table ContainerVM)))
 
 
 -- | A missing value is an em dash, never a zero. Datadog is explicit that without a limit it
@@ -250,11 +237,25 @@ emDash_ = span_ [class_ "text-textWeak"] "—"
 
 
 readyCell :: ContainerRow -> Html ()
-readyCell row = case row.ready of
-  Nothing -> emDash_
-  Just v
-    | v > 0 -> span_ [class_ "badge badge-sm badge-success whitespace-nowrap", data_ "tippy-content" "Latest reported readiness: Ready"] "Ready"
-    | otherwise -> span_ [class_ "badge badge-sm badge-error whitespace-nowrap", data_ "tippy-content" "Latest reported readiness: Not ready"] "Not ready"
+readyCell row = maybe emDash_ (readyBadge_ . (> 0)) row.ready
+
+
+-- | Ready is the expected state, so it reads as text with a dot; only the exception gets a filled badge.
+readyBadge_ :: Bool -> Html ()
+readyBadge_ True = span_ [class_ "inline-flex items-center gap-1.5 whitespace-nowrap text-textStrong", data_ "tippy-content" "Latest reported readiness: Ready"] $ span_ [class_ "h-1.5 w-1.5 rounded-full bg-fillSuccess-strong", term "aria-hidden" "true"] mempty >> "Ready"
+readyBadge_ False = span_ [class_ "badge badge-sm badge-error whitespace-nowrap", data_ "tippy-content" "Latest reported readiness: Not ready"] "Not ready"
+
+
+coresText :: Double -> Text
+coresText value = showFFloat' 3 value <> " cores"
+
+
+-- | How far back the snapshot actually looked: 'freshnessWindow', or the whole range when that is shorter.
+freshnessLabel :: TimePicker.TimeWindow -> Text
+freshnessLabel window =
+  let effectiveDuration = min freshnessWindow $ diffUTCTime window.toTime window.fromTime
+      (minutes, fraction) = properFraction (effectiveDuration / 60) :: (Integer, NominalDiffTime)
+   in if fraction == 0 then show minutes <> "m" else show effectiveDuration
 
 
 runtimeIcon_ :: ContainerRow -> Text -> Html ()
@@ -274,17 +275,21 @@ shortImage = T.takeWhileEnd (/= '/')
 
 -- | The drawer for one container. It reuses the list query rather than adding a second one:
 -- the window is short and the result already carries every field the panel shows.
-containerDetailGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
-containerDetailGetH pid containerM podM fromParam toParam sinceParam = do
+containerDetailGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Scope -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+containerDetailGetH pid containerM podM scopeM clusterM namespaceM nodeM fromParam toParam sinceParam = do
   appCtx <- Reader.ask @AuthContext
   now <- Time.currentTime
   let window = TimePicker.mkTimeWindow now fromParam toParam sinceParam
   rows <- containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) (TimePicker.cacheTtl window) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
-  let found = V.find (\r -> Just r.containerName == containerM && r.podName == podM) rows
-  addRespHeaders $ maybe (emptyState_ def{icon = Just "cube", action = ESNone} "This container is no longer reporting." "") containerDetail_ found
+  -- Generated links identify missing metadata exactly; legacy name/pod links must be unique.
+  let found = V.filter (\r -> Just r.containerName == containerM && r.podName == podM && maybe True (\scope -> (r.scope, r.cluster, r.namespace, r.nodeName) == (scope, clusterM, namespaceM, nodeM)) scopeM) rows
+  addRespHeaders $ case V.toList found of
+    [r] -> containerDetail_ window r
+    [] -> emptyState_ def{icon = Just "cube", action = ESNone} "This container is no longer reporting." ""
+    _ -> emptyState_ def{icon = Just "cube", action = ESLink (TimePicker.windowUrl ("/p/" <> pid.toText <> "/infrastructure/containers") [] window) "View containers"} "Several containers match this link." "Select a container from the list to view its metrics."
   where
-    containerDetail_ :: ContainerRow -> Html ()
-    containerDetail_ r = div_ [class_ "min-h-full"] do
+    containerDetail_ :: TimePicker.TimeWindow -> ContainerRow -> Html ()
+    containerDetail_ window r = div_ [class_ "min-h-full"] do
       header_ [class_ "border-b border-strokeWeak px-5 py-4"] do
         div_ [class_ "flex flex-wrap items-center gap-2"] do
           runtimeIcon_ r "h-4 w-4 text-iconNeutral"
@@ -299,7 +304,7 @@ containerDetailGetH pid containerM podM fromParam toParam sinceParam = do
             span_ [class_ "text-xs text-textWeak"] $ toHtml $ "Signal coverage " <> show availableSignals <> "/4"
           factGrid_
             "grid-cols-4 max-sm:grid-cols-2"
-            [ ("CPU used", dash $ (\value -> showFFloat' 3 value <> " cores") <$> r.cpuCores)
+            [ ("CPU used", dash $ coresText <$> r.cpuCores)
             , ("CPU / limit", pct $ cpuPctOfLimit r)
             , ("Memory used", dash $ formatBytes <$> r.memBytes)
             , ("Memory / limit", pct $ memPctOfLimit r)
@@ -322,17 +327,31 @@ containerDetailGetH pid containerM podM fromParam toParam sinceParam = do
       where
         dash = fromMaybe "—"
         pct = dash . fmap (\value -> showFFloat' 0 (value * 100) <> "%")
-        metadata = mapMaybe sequenceA [("Pod", r.podName), ("Namespace", r.namespace), ("Node / host", r.nodeName), ("Workload", r.workload)]
+        metadata = mapMaybe sequenceA [("Cluster", r.cluster), ("Pod", r.podName), ("Namespace", r.namespace), ("Node / host", r.nodeName), ("Workload", r.workload)]
         availableSignals = length $ catMaybes [r.cpuCores, r.cpuLimit, r.memBytes, r.memLimit]
-        -- Quotes are escaped: a container or pod name carrying a @"@ would otherwise close the
-        -- literal early and hand the store a malformed query.
-        quoted value = "\"" <> T.replace "\"" "\\\"" value <> "\""
-        subject = maybe ("resource.container.name == " <> quoted r.containerName) (\pod -> "resource.k8s.pod.name == " <> quoted pod) r.podName
+        subject =
+          kqlFilter
+            $ ( case r.scope of
+                  ScopeContainer -> [("coalesce(resource.k8s.container.name, resource.container.name)", Just r.containerName), ("resource.k8s.pod.name", r.podName)]
+                  ScopePod -> [("resource.k8s.pod.name", Just r.containerName)]
+                  ScopeHost -> [(nodeField, Just r.containerName)]
+              )
+            <> if r.scope == ScopeHost then [] else [("resource.k8s.namespace.name", r.namespace), (clusterField, r.cluster), (nodeField, r.nodeName)]
         metricQuery metric = "metrics | where metric_name == \"" <> metric <> "\" and " <> subject <> " | summarize avg(value) by bin_auto(timestamp)"
         pivots =
-          [ ("View logs", "/p/" <> pid.toText <> "/log_explorer?query=" <> toUriStr subject)
-          , ("View metrics", "/p/" <> pid.toText <> "/metrics?metric_prefix=" <> toUriStr (maybe "container." (const "k8s.") r.podName))
+          [ ("View logs", TimePicker.windowUrl ("/p/" <> pid.toText <> "/log_explorer") [("query", subject)] window)
+          , ("View metrics", TimePicker.windowUrl ("/p/" <> pid.toText <> "/metrics") [("metric_prefix", maybe "container." (const "k8s.") r.podName)] window)
           ]
+
+
+-- | Equality on every field; a missing value must be absent (@== null@), not unconstrained.
+kqlFilter :: [(Text, Maybe Text)] -> Text
+kqlFilter fields = T.intercalate " and " [field <> "==" <> maybe "null" kqlQuoted value | (field, value) <- fields]
+
+
+nodeField, clusterField :: Text
+nodeField = "coalesce(resource.k8s.node.name, resource.host.name)"
+clusterField = "coalesce(resource.k8s.cluster.name, resource.k8s.cluster.uid)"
 
 
 infrastructureWidget :: Projects.ProjectId -> Text -> Text -> Text -> Text -> Widget.Widget

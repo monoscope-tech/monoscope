@@ -965,8 +965,11 @@ databaseSpec = do
     it "sessions endpoint returns a well-formed aggregate envelope" \tr -> do
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
           toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime
-      (_, sv) <- testServant tr $ Log.logSessionsH testPid Nothing fromTime Nothing toTime Nothing Nothing
-      case sv of { Log.SessionsView total _ _ -> total `shouldSatisfy` (>= 0) }
+      (_, sv) <- testServant tr $ Log.logSessionsH testPid Nothing fromTime Nothing toTime Nothing Nothing Nothing
+      case sv of { Log.SessionsView total _ summ -> (total >= 0, isJust summ) `shouldBe` (True, True) }
+      -- A live poll (cursor set) merges into a list that already has a header: no summary.
+      (_, poll) <- testServant tr $ Log.logSessionsH testPid Nothing fromTime Nothing toTime Nothing Nothing fromTime
+      case poll of { Log.SessionsView _ _ summ -> summ `shouldSatisfy` isNothing }
 
   describe "Log Explorer page shell" do
     it "renders Common facets with the page and leaves other groups lazy" \tr -> do

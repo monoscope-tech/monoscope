@@ -1,4 +1,4 @@
-module Pages.Components (drawer_, drawerLoadingSkeleton_, tableSkeleton_, deferredShell_, Deferred (..), withDeferredBody, emptyState_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), facetRail_, facetSection_, facetOption_, factGrid_, metaChip_, resizer_, detailTab_, httpTab_, tabPanel_, dateTime, localTimeFmt_, paymentPlanPicker, navBar, modal_, primaryButton_, headerRow_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, copyButton_, RowAction (..), rowActions_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, detailsClosedBelowAttr_, installationSettingsLink_, keyboardActivateAttr_, copySourceAttr_, filterInputAttr_, sparkline_, periodToggle_, abbreviateUnit, agoText, stackTrace_, durationMenu_, durationQuery, untilLabel) where
+module Pages.Components (drawer_, drawerLoadingSkeleton_, tableSkeleton_, deferredShell_, Deferred (..), RefreshingDeferred (..), timeRefreshListener_, timeWindowVals_, withDeferredBody, emptyState_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), facetRail_, facetSection_, facetOption_, factGrid_, metaChip_, resizer_, detailTab_, httpTab_, tabPanel_, dateTime, localTimeFmt_, paymentPlanPicker, navBar, modal_, primaryButton_, headerRow_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, copyButton_, RowAction (..), rowActions_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, detailsClosedBelowAttr_, installationSettingsLink_, keyboardActivateAttr_, copySourceAttr_, filterInputAttr_, sparkline_, periodToggle_, abbreviateUnit, agoText, stackTrace_, durationMenu_, durationQuery, untilLabel) where
 
 import Data.Default (Default (..))
 import Data.List (elemIndex, lookup)
@@ -692,6 +692,30 @@ instance ToHtml a => ToHtml (Deferred a) where
   toHtml (DeferredBody body) = toHtml body
   toHtml (DeferredShell containerId url skeleton) = toHtmlRaw $ deferredShell_ containerId url [] skeleton
   toHtmlRaw = toHtml
+
+
+newtype RefreshingDeferred a = RefreshingDeferred (Deferred a)
+
+
+instance ToHtml a => ToHtml (RefreshingDeferred a) where
+  toHtml (RefreshingDeferred (DeferredBody body)) = toHtml body
+  toHtml (RefreshingDeferred (DeferredShell cid url skeleton)) = toHtmlRaw (div_ ([id_ cid, class_ "w-full", data_ "deferred-shell" ""] <> timeRefreshAttrs cid url "load, update-query from:window") skeleton :: Html ())
+  toHtmlRaw = toHtml
+
+
+timeRefreshListener_ :: Text -> Text -> Html ()
+timeRefreshListener_ cid url = div_ ([class_ "hidden", term "_" [text|on htmx:after:settle from #${cid} send input to <input[type=text]/> in #${cid}|]] <> timeRefreshAttrs cid url "update-query from:window") mempty
+
+
+timeRefreshAttrs :: Text -> Text -> Text -> [Attribute]
+timeRefreshAttrs cid url trigger = [hxGet_ url, hxTrigger_ trigger, hxTarget_ $ "#" <> cid, hxSelect_ $ "#" <> cid, hxSwap_ "outerMorph", term "hx-sync" "this:replace", term "hx-preload" "false", timeWindowVals_ ""]
+
+
+-- | Sends the address bar's current time window, so a live refresh follows the picker. With
+-- no window in the URL, @since@ falls back to the page's default range.
+timeWindowVals_ :: Text -> Attribute
+-- Inline rather than window.params(): the shell must resolve before the application script arrives.
+timeWindowVals_ defaultSince = term "hx-vals" $ "js:{...(p=>({since:p.since ?? (p.from || p.to ? '' : '" <> defaultSince <> "'),from:p.from || '',to:p.to || ''}))(Object.fromEntries(new URLSearchParams(location.search)))}"
 
 
 -- | The skeleton half of 'Deferred', also usable on its own for a panel whose body is one

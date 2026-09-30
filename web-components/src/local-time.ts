@@ -27,3 +27,12 @@ class LocalTime extends HTMLElement {
 }
 
 if (!customElements.get('local-time')) customElements.define('local-time', LocalTime);
+
+// A morph swap patches the element's text back to the server's UTC fallback without touching its
+// attributes or reconnecting it, so the live tick would revert every localized time on the page.
+for (const event of ['htmx:after:swap', 'htmx:after:settle']) {
+  document.addEventListener(event, (e) => {
+    const root = e.target instanceof Element ? e.target : document;
+    root.querySelectorAll<LocalTime>('local-time').forEach((el) => el.render());
+  });
+}

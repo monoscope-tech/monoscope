@@ -446,6 +446,8 @@ data AuthContext = AuthContext
   -- ^ One expensive metrics pivot feeds every infrastructure tab and detail drawer.
   , rumCache :: Cache RUM.RumCacheKey RUM.RumQueryResult
   -- ^ Briefly reuses RUM panel reads across tab navigation and preloaded requests.
+  , rumQueryFlights :: QueryCache.QueryFlights (RUM.RumCacheKey, Bool) (Either RUM.RumQuery (RUM.RumQueryResult, Bool))
+  -- ^ Shares panel requests within a replica; stale reads and forced refreshes remain separate.
   , codeBlobCache :: Cache CodeBlobKey ByteString
   -- ^ Source blobs for stack-trace code context, keyed @(owner, repo, ref, path)@. One git-host
   -- API call per frame opened otherwise, and a hot issue viewed repeatedly re-fetches every
@@ -562,12 +564,13 @@ configToEnv config = do
   logsPatternCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0)
   hostStatsCache <- liftIO $ newCache (Just $ TimeSpec 300 0)
   endpointStatsCache <- liftIO $ newCache (Just $ TimeSpec 300 0)
-  rawQueryFlights <- liftIO QueryCache.newRawQueryFlights
+  rawQueryFlights <- liftIO QueryCache.newQueryFlights
   infrastructureCache <- liftIO $ newCache (Just $ TimeSpec 15 0)
   -- 15s was shorter than the queries it caches: a RUM panel set takes ~28s over a 24h
   -- window, so every entry expired before the next request could reach it and the cache
   -- never hit. Matches the other telemetry stat caches above.
   rumCache <- liftIO $ newCache (Just $ TimeSpec 300 0)
+  rumQueryFlights <- liftIO QueryCache.newQueryFlights
   -- 15 min: a mutable ref (a branch name) must not pin a stale blob for long, and the value
   -- here is collapsing the burst of frames opened while reading ONE issue, not long-term
   -- storage. A commit-sha ref is immutable and would tolerate far longer, but the key cannot
@@ -631,6 +634,7 @@ configToEnv config = do
       , rawQueryFlights
       , infrastructureCache
       , rumCache
+      , rumQueryFlights
       , codeBlobCache
       , repoListCache
       , extractionWorker
@@ -678,16 +682,15 @@ getAppContext = do
 -- skipped validation entirely and shipped spans-only fields to TimeFusion.
 introspectAndCacheOtelColumns :: Pool.Pool Connection -> IO ()
 introspectAndCacheOtelColumns pool =
-  forM_ ([("otel_logs_and_spans", ParserExpr.setOtelColumns), ("otel_metrics", ParserExpr.setMetricsColumns)] :: [(Text, [Text] -> IO ())]) \(table, seed) -> do
+  forM_ ([("otel_logs_and_spans", ParserExpr.setOtelColumns), ("otel_metrics", ParserExpr.setMetricsColumns)] :: [(Text, [(Text, Text)] -> IO ())]) \(table, seed) -> do
     result <- Safe.try $ Pool.withResource pool $ \conn ->
-      map PG.fromOnly
-        <$> ( PG.query
-                conn
-                "SELECT column_name::text FROM information_schema.columns \
-                \WHERE table_schema = 'public' AND table_name = ?"
-                (PG.Only table)
-                :: IO [PG.Only Text]
-            )
+      ( PG.query
+          conn
+          "SELECT column_name::text, udt_name::text FROM information_schema.columns \
+          \WHERE table_schema = 'public' AND table_name = ?"
+          (PG.Only table)
+          :: IO [(Text, Text)]
+      )
     case result of
       Right cols -> seed cols
       Left (e :: SomeException) ->

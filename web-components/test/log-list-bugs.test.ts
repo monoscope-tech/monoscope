@@ -1066,4 +1066,20 @@ describe('LogList — concurrent refresh vs load-more', () => {
     await loadMore;
     expect((el as any).isLoadingMore).toBe(false);
   });
+
+  // The 15s tick fired while a 24s initial sessions load was still in flight; with no rows
+  // there was no cursor, so the tick re-ran the whole aggregation as a second full fetch.
+  test('a live tick during the initial load is dropped instead of re-running it', async () => {
+    const el = await mountList();
+    const tx = deferredTransport();
+    el.transport = tx as any;
+
+    const initial = el.fetchData('initial', false, false, false); // isLoading = true
+    await el.fetchData('recent', false, true, false);
+    expect(tx.pending.length).toBe(1);
+
+    tx.settle(0, treeFromLogs(['r1']));
+    await initial;
+    expect((el as any).isLoading).toBe(false);
+  });
 });

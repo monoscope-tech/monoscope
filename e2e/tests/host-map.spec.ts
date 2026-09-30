@@ -52,7 +52,7 @@ test.describe("Host map", () => {
     const dialog = page.getByRole("dialog");
     await expect(dialog.getByText("Metrics coverage: 0 of 4")).toBeVisible();
     await expect(dialog.getByText("No host metrics in this time range", { exact: true })).toBeVisible();
-    await expect(dialog.getByRole("link", { name: "Try last 1 hour" })).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Try last 1 hour" })).toBeVisible();
     const setup = dialog.getByRole("link", { name: "Set up host metrics" });
     await expect(setup).toBeVisible();
     await expect(setup).toHaveClass(/\bbtn-primary\b/);
@@ -87,7 +87,7 @@ test.describe("Host map", () => {
       dialog.getByRole("link", { name: "Recent logs", exact: true }),
       dialog.getByRole("link", { name: "Metrics", exact: true }),
       dialog.getByRole("link", { name: "Open logs in Explorer", exact: true }),
-      dialog.getByRole("link", { name: "Try last 1 hour", exact: true }),
+      dialog.getByRole("button", { name: "Try last 1 hour", exact: true }),
       dialog.getByRole("link", { name: "Set up host metrics", exact: true }),
     ]) {
       await expect.poll(async () => (await control.boundingBox())?.height).toBeGreaterThanOrEqual(44);

@@ -247,7 +247,7 @@ swarmService name = case reverse (T.splitOn "." name) of
 -- @container.*@ and @k8s.pod.*@ produces a row for each container /and/ one for the pod; the
 -- pod is only ever a stand-in for containers we cannot see, so it yields to them.
 --
--- Shadowing is by pod name, not by workload: two pods of one Deployment are two rows.
+-- Pod names can repeat across namespaces, clusters and nodes; only the same pod is covered.
 --
 -- >>> let ctr n p = row n ScopeContainer (Just p)
 -- >>> let pod p = row p ScopePod (Just p)
@@ -258,8 +258,9 @@ swarmService name = case reverse (T.splitOn "." name) of
 dropShadowed :: [ContainerRow] -> [ContainerRow]
 dropShadowed rows = filter keep rows
   where
-    covered = S.fromList [p | r <- rows, r.scope == ScopeContainer, Just p <- [r.podName]]
-    keep r = r.scope /= ScopePod || maybe True (`S.notMember` covered) r.podName
+    podIdentity r = (r.podName, r.namespace, r.nodeName, r.cluster)
+    covered = S.fromList [podIdentity r | r <- rows, r.scope == ScopeContainer, isJust r.podName]
+    keep r = r.scope /= ScopePod || podIdentity r `S.notMember` covered
 
 
 -- | Fill in what a receiver left implicit, so a row means the same thing whichever collector
@@ -319,9 +320,12 @@ freshnessWindow = 15 * 60
 -- | Every container, stand-in pod and bare host reporting at the end of the window, newest
 -- datapoint per series.
 --
--- One pass: a window function picks the latest datapoint per series, then conditional
--- aggregates pivot the metrics into columns. No self-join — that is the shape that kills
--- TimeFusion.
+-- Two windows, then conditional aggregates pivot the metrics into columns; no self-join —
+-- that is the shape that kills TimeFusion. The first keeps the newest datapoint per ingest
+-- @series_id@, so the blob lookups below run over the survivors, not the whole slice (2.7x).
+-- The identity is a function of the series hash, so the second window only matters for a
+-- series whose hash changed but identity did not: a restarted container (new @container.id@)
+-- must collapse to its newest sample, not the max across both.
 --
 -- The grouping key carries the node or host, not just the container name, because Docker
 -- container names collide across the nodes of a Swarm and pod names collide across clusters.
@@ -356,7 +360,19 @@ containersWithLimit limitM useTimefusion pid fromTime' toTime =
     . map normalizeRow
     <$> Hasql.interp
       ( [HI.sql|
-      WITH latest AS (
+      WITH newest AS (
+        SELECT metric_name, value, timestamp, resource, attributes,
+          resource___host___name, resource___k8s___pod___name, resource___k8s___namespace___name,
+          resource___k8s___container___name, resource___container___name,
+          row_number() OVER (PARTITION BY series_id ORDER BY timestamp DESC) AS rn
+        FROM otel_metrics
+        WHERE project_id = #{pid.toText}
+          AND timestamp >= #{fromTime}
+          AND timestamp <= #{toTime}
+          AND metric_name IN |]
+          <> raw metricNameInList
+          <> [HI.sql|
+      ), series AS (
         SELECT |]
           <> raw scopeExpr
           <> [HI.sql| AS scope,
@@ -433,37 +449,20 @@ containersWithLimit limitM useTimefusion pid fromTime' toTime =
           <> [HI.sql| AS cpu_num,
           |]
           <> raw memState
-          <> [HI.sql| AS mem_state,
-          row_number() OVER (
-            PARTITION BY |]
-          <> raw groupKeyExpr
-          <> [HI.sql|, |]
-          <> raw identityExpr
-          <> [HI.sql|, metric_name, |]
-          <> raw cpuMode
-          <> [HI.sql|, |]
-          <> raw cpuNum
-          <> [HI.sql|, |]
-          <> raw memState
-          <> [HI.sql|
-            ORDER BY timestamp DESC) AS rn,
-          |]
-          <> raw groupKeyExpr
-          <> [HI.sql| AS group_key
-        FROM otel_metrics
-        WHERE project_id = #{pid.toText}
-          AND timestamp >= #{fromTime}
-          AND timestamp <= #{toTime}
-          AND metric_name IN |]
-          <> raw metricNameInList
-          <> [HI.sql|
-          AND |]
+          <> [HI.sql| AS mem_state, timestamp
+        FROM newest
+        WHERE rn = 1 AND |]
           <> raw identityExpr
           <> [HI.sql| IS NOT NULL
+      ), latest AS (
+        SELECT *, row_number() OVER (
+          PARTITION BY scope, container_name, pod_name, namespace, node_name, cluster,
+            metric_name, cpu_mode, cpu_num, mem_state
+          ORDER BY timestamp DESC) AS rn
+        FROM series
       )
       SELECT
-        container_name,
-        MAX(scope), MAX(pod_name), MAX(namespace), MAX(node_name), MAX(cluster),
+        container_name, scope, pod_name, namespace, node_name, cluster,
         MAX(provider), MAX(region), MAX(os_type), MAX(architecture),
         MAX(image), MAX(image_tag), MAX(workload),
         -- Docker reports CPU with Docker's own formula, percent-of-a-single-core, so 200 means
@@ -503,7 +502,7 @@ containersWithLimit limitM useTimefusion pid fromTime' toTime =
         MAX(CASE WHEN metric_name = 'k8s.container.ready' THEN value END)
       FROM latest
       WHERE rn = 1
-      GROUP BY container_name, group_key
+      GROUP BY container_name, scope, pod_name, namespace, node_name, cluster
       ORDER BY container_name|]
           <> foldMap (\rowLimit -> [HI.sql| LIMIT #{rowLimit}|]) limitM
       )
@@ -537,9 +536,6 @@ containersWithLimit limitM useTimefusion pid fromTime' toTime =
         <> " WHEN "
         <> isPod
         <> " THEN resource___k8s___pod___name ELSE COALESCE(resource___k8s___container___name, resource___container___name) END"
-    -- A pod's identity is already unique, so only a container needs the pod or host appended
-    -- to separate same-named containers across pods and Swarm nodes.
-    groupKeyExpr = "CASE WHEN " <> isHost <> " THEN " <> hostNameExpr <> " ELSE COALESCE(resource___k8s___pod___name, resource___host___name) END"
     cpuMode = blobPath "attributes" ["cpu", "mode"]
     cpuNum = blobPath "attributes" ["cpu", "logical_number"]
     memState = blobPath "attributes" ["system", "memory", "state"]

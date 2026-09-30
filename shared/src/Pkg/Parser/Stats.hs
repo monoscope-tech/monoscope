@@ -305,7 +305,7 @@ traverseSubjects f = traverse goSec
       LT s v -> sv LT s v
       GTEq s v -> sv GTEq s v
       LTEq s v -> sv LTEq s v
-      Regex s t -> st Regex s t
+      Regex mode s t -> st (Regex mode) s t
       In s v -> sv In s v
       NotIn s v -> sv NotIn s v
       Has s v -> sv Has s v
@@ -318,7 +318,6 @@ traverseSubjects f = traverse goSec
       NotStartsWith s v -> sv NotStartsWith s v
       EndsWith s v -> sv EndsWith s v
       NotEndsWith s v -> sv NotEndsWith s v
-      Matches s t -> st Matches s t
       Paren e -> Paren <$> goE e
       And a b -> And <$> goE a <*> goE b
       Or a b -> Or <$> goE a <*> goE b

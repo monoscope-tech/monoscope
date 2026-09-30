@@ -781,7 +781,9 @@ queryEditorInitializationCode vizTypeM = do
       bars.forEach(bar => {
         const from = start + (+bar.dataset.bi) * width;
         const base = bar.getAttribute('data-count') || '';
-        bar.setAttribute('data-tippy-content', fmt(from) + ' \u2013 ' + fmt(from + width) + (base ? ' \u00b7 ' + base : '') + (note ? ' \u00b7 ' + note : ''));
+        const label = fmt(from) + ' \u2013 ' + fmt(from + width) + (base ? ' \u00b7 ' + base : '') + (note ? ' \u00b7 ' + note : '');
+        bar.setAttribute('data-tippy-content', label);
+        bar.setAttribute('aria-label', label);
       });
     };
 

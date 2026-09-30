@@ -131,6 +131,11 @@ cases =
   , "level == \"ERROR\"" -- …case-sensitive, so this must not match
   , "name contains \"/PAY\"" -- text operators are case-insensitive
   , "name startswith \"get\""
+  , "name matches regex \"^GET /pay$\""
+  , "name matches regex \"^get /pay$\""
+  , "resource.service.name matches regex \"^checkout$\""
+  , "resource.service.name matches regex \"^Checkout$\""
+  , "name matches /^get/"
   , "name !endswith \"/checkout\""
   , "name !contains \"nope\""
   , "attributes.http.response.status_code >= 500" -- flattened numeric column
@@ -170,7 +175,6 @@ sqlVerdict tr q = case clauseFor q of
       _ -> False
   where
     clauseFor s = display <$> (maybeToRight "not a filter" . filterExpr =<< parseQueryToAST s)
-
 
 
 spec :: Spec

@@ -85,7 +85,7 @@ queryLogsVizSorted :: TestResources -> Projects.ProjectId -> Maybe Text -> Text 
 queryLogsVizSorted tr projectId queryM vizType sortByM = do
   unless (vizType == "sessions") $ fail ("queryLogsVizSorted only supports the sessions viz, got: " <> toString vizType)
   let (timeFrom, timeTo) = testTimeRange
-  snd <$> toServantResponse tr (Log.logSessionsH projectId queryM Nothing (Just timeFrom) (Just timeTo) Nothing sortByM)
+  snd <$> toServantResponse tr (Log.logSessionsH projectId queryM Nothing (Just timeFrom) (Just timeTo) Nothing sortByM Nothing)
 
 
 -- | Helper to extract the row dataset from a LogResult.
@@ -612,15 +612,23 @@ spec = sequential $ aroundAll withTestResources do
                 s.errorCount `shouldBe` 0
                 s.userEmail `shouldBe` Just "bob@example.com"
               Nothing -> expectationFailure "session xyz not found"
-            -- The session summary is computed in the SAME scan as the rows (single
-            -- scan, P1) and reconciles with them: 2 sessions, 1 errored, 2 users, 6 events.
+            -- The session summary comes from the same scan as the rows and reconciles with
+            -- them: 2 sessions, 1 errored, 2 users, 6 events, median events between 2 and 4,
+            -- and the over-time buckets account for every session.
             case summaryM of
               Just summ -> do
                 summ.totalSessions `shouldBe` 2
                 summ.erroredSessions `shouldBe` 1
                 summ.uniqueUsers `shouldBe` 2
                 summ.totalEvents `shouldBe` 6
+                summ.uniqueServices `shouldBe` 1
+                summ.medianEvents `shouldBe` 3
+                (sum summ.clean, sum summ.errored) `shouldBe` (1, 1)
               Nothing -> expectationFailure "session summary missing from first page"
+        -- Sorting happens after the scan: errors-first puts alice's errored session ahead.
+        byErrors <- queryLogsVizSorted tr spid Nothing "sessions" (Just "errors")
+        case byErrors of
+          Log.SessionsView _ rows _ -> V.toList ((.sessionId) <$> rows) `shouldBe` ["abc", "xyz"]
       it "Test 11.2: KQL filter narrows sessions result to a single user" $ \tr -> do
         key <- createTestAPIKey tr pid "sessions-filter-key"
         -- Unique emails are REQUIRED: examples share one DB (sequential $ aroundAll),
