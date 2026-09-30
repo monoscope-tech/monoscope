@@ -34,7 +34,6 @@ test("navbar refresh menu applies Off and interval options", async ({ page }) =>
     const menuToggle = page.locator(width < 768 ? '[popovertarget="n-timepicker-popover"]' : '[data-live-data-trigger]');
     await expect(transport).toHaveAttribute("data-interval", "15000");
     await expect(transport).toHaveAttribute("data-state", "live");
-    await expect(page.locator(`${width < 768 ? '#n-timepicker-popover' : '#n-live-data-pop'} [data-refresh-option][data-value="15000"]`)).toHaveAttribute("aria-pressed", "true");
     await menuToggle.click();
     await expect(page.getByRole("button", { name: "15 seconds", exact: true })).toHaveAttribute("aria-pressed", "true");
     await menuToggle.click();
