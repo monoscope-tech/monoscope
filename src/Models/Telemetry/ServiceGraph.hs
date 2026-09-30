@@ -829,23 +829,24 @@ rollupEndpointDependencyEdges useTf pid lo hi =
         FROM endpoints e JOIN sp p ON e.tid = p.tid AND p.par = e.sid
         WHERE p.knd IN ('client','producer')
           AND NOT EXISTS (SELECT 1 FROM sp c WHERE c.tid = p.tid AND c.par = p.sid AND c.knd IN ('server','consumer'))
-      ),
-      bucketed AS (
-        SELECT env, endpoint_hash, tgt, tgt_kind, tid, st, dur,
-               CAST(FLOOR(4 * LOG(2, GREATEST(COALESCE(dur, 0) / 1000, 1))) AS int8) bkt
-        FROM hops
-      ),
-      trace_counts AS (
-        SELECT env, endpoint_hash, tgt, tgt_kind, COUNT(DISTINCT tid)::int8 trace_count
-        FROM bucketed GROUP BY env, endpoint_hash, tgt, tgt_kind
       )
-      SELECT b.env, b.endpoint_hash, b.tgt, b.tgt_kind, b.bkt,
-             COUNT(*)::int8, t.trace_count,
-             COUNT(*) FILTER (WHERE b.st = 'ERROR')::int8,
-             COALESCE(SUM(b.dur), 0)::int8
-      FROM bucketed b JOIN trace_counts t
-        ON t.env = b.env AND t.endpoint_hash = b.endpoint_hash AND t.tgt = b.tgt AND t.tgt_kind = b.tgt_kind
-      GROUP BY b.env, b.endpoint_hash, b.tgt, b.tgt_kind, b.bkt, t.trace_count
+      -- Per-edge distinct traces as ascending + descending DENSE_RANK - 1 (PG has no windowed
+      -- COUNT DISTINCT). Joining a COUNT(DISTINCT) CTE instead would re-derive @hops@ on
+      -- TimeFusion, which inlines every CTE reference, doubling every span scan.
+      SELECT env, endpoint_hash, tgt, tgt_kind, bkt,
+             COUNT(*)::int8, MAX(trace_count)::int8,
+             COUNT(*) FILTER (WHERE st = 'ERROR')::int8,
+             COALESCE(SUM(dur), 0)::int8
+      FROM (
+        SELECT env, endpoint_hash, tgt, tgt_kind, st, dur,
+               CAST(FLOOR(4 * LOG(2, GREATEST(COALESCE(dur, 0) / 1000, 1))) AS int8) bkt,
+               DENSE_RANK() OVER (PARTITION BY env, endpoint_hash, tgt, tgt_kind ORDER BY tid)
+                 + DENSE_RANK() OVER (PARTITION BY env, endpoint_hash, tgt, tgt_kind ORDER BY tid DESC) - 1 trace_count
+        FROM hops
+        -- A hop without a named target is not an edge.
+        WHERE tgt IS NOT NULL
+      ) b
+      GROUP BY env, endpoint_hash, tgt, tgt_kind, bkt
       ORDER BY COUNT(*) DESC
       LIMIT 20000|]
 
