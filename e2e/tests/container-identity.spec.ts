@@ -26,10 +26,9 @@ test.describe.configure({ mode: "serial" });
 
 test("navbar refresh menu applies Off and interval options", async ({ page }) => {
   test.skip(!process.env.E2E_BASE_URL, "Requires a disposable fixture database");
-  // Lowercase keeps this cache key separate from the later 5M inventory fixture.
   for (const width of [390, 1440]) {
     await page.setViewportSize({ width, height: 900 });
-    await page.goto(`/p/${DEMO_PROJECT}/infrastructure/containers?since=5m`, { waitUntil: "domcontentloaded" });
+    await page.goto(`/p/${DEMO_PROJECT}/infrastructure/containers?since=5M`, { waitUntil: "domcontentloaded" });
     const transport = page.locator("[data-time-transport]");
     const menuToggle = page.locator(width < 768 ? '[popovertarget="n-timepicker-popover"]' : '[data-live-data-trigger]');
     await expect(transport).toHaveAttribute("data-interval", "15000");

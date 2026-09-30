@@ -21,13 +21,6 @@ export async function assertStripeCheckout(
   }
 }
 
-// These fixtures only use the disposable database owned by scripts/e2e.sh.
-// Infrastructure pages serve one container snapshot per (project, window) for at least 30s
-// (containersInWindowCached / TimePicker.cacheTtl). Specs in the serialized project seed the
-// shared demo project back to back, so rows seeded after a neighbour's page load stay
-// invisible until that snapshot expires. Call after seeding, before the first page load.
-export const awaitInfraSnapshotExpiry = () => new Promise<void>(resolve => setTimeout(resolve, 31_000));
-
 export function sql(query: string) {
   execFileSync('psql', ['-h', process.env.E2E_PGHOST ?? process.env.DB_HOST ?? 'localhost',
     '-p', process.env.E2E_PGPORT ?? process.env.DB_PORT ?? '5432', '-U', 'postgres',

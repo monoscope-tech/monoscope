@@ -1,19 +1,18 @@
 import { test, expect } from "@playwright/test";
-import { DEMO_PROJECT, sql, awaitInfraSnapshotExpiry } from "./helpers";
+import { DEMO_PROJECT, sql } from "./helpers";
 
 const namespace = "e2e-infra-preset";
 const cluster = "8b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d";
 const provider = "e2e-infra-provider";
 const cleanup = `DELETE FROM otel_metrics WHERE project_id='${DEMO_PROJECT}' AND resource->'k8s'->'namespace'->>'name'='${namespace}';`;
 test.beforeAll(async ({ request }) => {
-  test.setTimeout(90_000); // Fixture setup waits out the shared snapshot's 30s TTL.
   if (!process.env.E2E_BASE_URL) return;
   sql(cleanup + [30, 600].map(age => `INSERT INTO otel_metrics (project_id,id,series_id,timestamp,metric_name,metric_type,value,resource___k8s___container___name,resource___k8s___pod___name,resource___k8s___namespace___name,resource)
     VALUES ('${DEMO_PROJECT}',gen_random_uuid(),'infra-preset-${age}','${new Date(Date.now() - age * 1000).toISOString()}','container.cpu.usage','GAUGE',1,'infra-preset-${age}','infra-preset-pod-${age}','${namespace}',
       '${JSON.stringify({ k8s: { container: { name: `infra-preset-${age}` }, pod: { name: `infra-preset-pod-${age}` }, namespace: { name: namespace }, cluster: { uid: cluster }, node: { name: `infra-preset-host-${age}` } }, container: { image: { name: `registry.example/infra-preset-${age}` } }, cloud: { provider, region: "e2e-infra-region" } })}');`).join(""));
-  await awaitInfraSnapshotExpiry();
+  // Match the page's raw cache key; earlier fixture pages omit from/to.
   await expect.poll(async () => {
-    const response = await request.get(`/p/${DEMO_PROJECT}/infrastructure/hosts?${new URLSearchParams({ provider, group: "region", since: "5M", deferred: "1" })}`);
+    const response = await request.get(`/p/${DEMO_PROJECT}/infrastructure/hosts?${new URLSearchParams({ provider, group: "region", from: "", to: "", since: "5m", deferred: "1" })}`);
     expect(response.status()).toBe(200);
     return (await response.text()).includes("infra-preset-host-30");
   }, { timeout: 40_000 }).toBe(true);
