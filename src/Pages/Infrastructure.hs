@@ -39,7 +39,7 @@ import Relude
 import Relude.Extra.Tuple (dup)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (drawerLoadAttrs_, drawerRowAttrs_, faSprite_, formatBytes, infrastructureNavTabs_, showFFloat', timeScopedUrl)
+import Utils (drawerLoadAttrs_, drawerRowAttrs_, faSprite_, formatBytes, infrastructureNavTabs_, showFFloat')
 
 
 infraUrl :: Projects.ProjectId -> Text -> [(Text, Text)] -> TimePicker.TimeWindow -> Text
@@ -251,18 +251,16 @@ hostsTable pid window url filters grouping hosts allHosts =
     hostEntries g = V.fromList . concatMap (\(label, hs) -> HostGroupRow label (length hs) : map HostItem (sortOn (.name) hs)) . groupHosts g
 
 
--- | The table's own result summary is the live row count; a second count here would announce twice.
 hostGroupControl :: Projects.ProjectId -> TimePicker.TimeWindow -> HostFilters -> HostGroup -> Html ()
 hostGroupControl pid window filters grouping =
-  div_ [class_ "flex justify-end px-3"] do
-    form_ [method_ "get", action_ $ "/p/" <> pid.toText <> "/infrastructure/hosts", class_ "flex shrink-0 items-center gap-2 whitespace-nowrap"] do
-      TimePicker.timeHiddenInputs_ window.fromQuery window.toQuery window.sinceQuery
-      forM_ [(field, value) | (field, Just value) <- [("provider", filters.provider), ("region", filters.region), ("os", filters.osType), ("integration", filters.integration)]] \(field, value) ->
-        input_ [type_ "hidden", name_ field, value_ value]
-      label_ [Lucid.for_ "hosts-group", class_ "shrink-0 text-xs text-textWeak"] "Group by"
-      select_ [id_ "hosts-group", name_ "group", class_ "select select-xs w-auto cursor-pointer border-strokeWeak bg-bgBase", onchange_ "this.form.requestSubmit()"]
-        $ forM_ (map hostGroupOption [minBound ..]) \(value, label) ->
-          option_ ([value_ value] <> [selected_ "" | value == hostGroupParam grouping]) $ toHtml label
+  form_ [method_ "get", action_ $ "/p/" <> pid.toText <> "/infrastructure/hosts", class_ "ml-auto mr-3 flex w-fit items-center gap-2 whitespace-nowrap"] do
+    TimePicker.timeHiddenInputs_ window.fromQuery window.toQuery window.sinceQuery
+    forM_ [(field, value) | (field, Just value) <- [("provider", filters.provider), ("region", filters.region), ("os", filters.osType), ("integration", filters.integration)]] \(field, value) ->
+      input_ [type_ "hidden", name_ field, value_ value]
+    label_ [Lucid.for_ "hosts-group", class_ "shrink-0 text-xs text-textWeak"] "Group by"
+    select_ [id_ "hosts-group", name_ "group", class_ "select select-xs w-auto cursor-pointer border-strokeWeak bg-bgBase", onchange_ "this.form.requestSubmit()"]
+      $ forM_ (map hostGroupOption [minBound ..]) \(value, label) ->
+        option_ ([value_ value] <> [selected_ "" | value == hostGroupParam grouping]) $ toHtml label
 
 
 -- | Configuration only earns its width when some host reports a provider or region; it is
@@ -381,12 +379,11 @@ hostDetail_ pid window host = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
             def
               { icon = Just "chart-line"
               , action = ESCustom $ div_ [class_ "flex flex-wrap justify-center gap-2"] do
-                  -- Reloads this drawer at 1H rather than navigating away from the host.
-                  button_ ([type_ "button", class_ "btn btn-sm max-sm:h-11"] <> drawerLoadAttrs_ (timeScopedUrl ("/p/" <> pid.toText <> "/infrastructure/hosts/detail") [("host", host.name)] Nothing Nothing (Just "1H"))) "Try last 1 hour"
+                  button_ ([type_ "button", class_ "btn btn-sm max-sm:h-11"] <> drawerLoadAttrs_ (hostDetailUrl pid window{TimePicker.fromQuery = Nothing, TimePicker.toQuery = Nothing, TimePicker.sinceQuery = Just "1H"} host.name)) "Try last 1 hour"
                   a_ [href_ "https://monoscope.tech/docs/sdks/infrastructure/", target_ "_blank", rel_ "noopener noreferrer", class_ "btn btn-sm btn-primary max-sm:h-11"] "Set up host metrics"
               }
             "No host metrics in this time range"
-            "This host reported no CPU, memory, filesystem, or load samples in the final 15 minutes of the range. Check that the collector's hostmetrics receiver is enabled."
+            ("This host reported no CPU, memory, filesystem, or load samples in the final " <> Containers.freshnessLabel window <> " of the range. Check that the collector's hostmetrics receiver is enabled.")
         else div_ [class_ "grid grid-cols-2 gap-3 max-xl:grid-cols-1"] $ forM_ (hostWidgets pid host) $ div_ [class_ "min-h-56"] . Widget.widget_
   where
     metadata = [(label, value) | (label, Just value) <- [("Provider", host.provider), ("Region", host.region), ("OS", host.osType), ("Architecture", host.architecture)]]
@@ -704,8 +701,8 @@ kubernetesTable pid window url resource clusterM namespaceM statusM rows allRows
 
 
 kubeResourceNav :: Projects.ProjectId -> TimePicker.TimeWindow -> KubeResource -> Html ()
-kubeResourceNav pid window current = div_ [class_ "px-3"] do
-  div_ [class_ "tabs tabs-box tabs-outline tabs-sm w-fit", role_ "tablist", Aria.label_ "Kubernetes resource"] $ forM_ [minBound ..] \resource ->
+kubeResourceNav pid window current =
+  div_ [class_ "tabs tabs-box tabs-outline tabs-sm mx-3 w-fit", role_ "tablist", Aria.label_ "Kubernetes resource"] $ forM_ [minBound ..] \resource ->
     a_ ([href_ $ infraUrl pid "/infrastructure/kubernetes" [("resource", kubeResourceParam resource)] window, role_ "tab", class_ $ "tab" <> bool "" " tab-active" (resource == current)] <> navTabAttrs) $ toHtml $ resourceLabel resource <> "s"
 
 

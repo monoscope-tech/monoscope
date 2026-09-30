@@ -9,7 +9,7 @@
 -- happen here in Haskell over that result. That keeps the store doing exactly one short-window
 -- read per page view, which matters because wide aggregates over @otel_metrics@ are the query
 -- shape that has repeatedly OOM-killed TimeFusion.
-module Pages.Containers (containersGetH, containerDetailGetH, ContainersGet (..), ContainerVM (..), ContainerFilters (..), applyFilters, runtimeLabel, formatBytes, coresText, emDash_, readyBadge_, kqlFilter, nodeField, clusterField) where
+module Pages.Containers (containersGetH, containerDetailGetH, ContainersGet (..), ContainerVM (..), ContainerFilters (..), applyFilters, runtimeLabel, formatBytes, coresText, freshnessLabel, emDash_, readyBadge_, kqlFilter, nodeField, clusterField) where
 
 import Data.Default (def)
 import Data.Text qualified as T
@@ -88,9 +88,6 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
   appCtx <- Reader.ask @AuthContext
   now <- Time.currentTime
   let window = TimePicker.mkTimeWindow now fromParam toParam sinceParam
-      effectiveDuration = min freshnessWindow $ diffUTCTime window.toTime window.fromTime
-      (minutes, fraction) = properFraction (effectiveDuration / 60) :: (Integer, NominalDiffTime)
-      freshnessLabel = if fraction == 0 then show minutes <> "m" else show effectiveDuration
       filters = ContainerFilters runtimeM namespaceM nodeM imageM clusterM
       path = "/p/" <> pid.toText <> "/infrastructure/containers"
       baseUrl = TimePicker.windowUrl path [] window
@@ -131,7 +128,7 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
                       , menu "Image" "image" filters.image (.image)
                       ]
               , showFilterRail = True
-              , resultSummary = Just $ "Showing " <> show (length rows) <> " of " <> show (V.length allRows) <> " containers reporting in the final " <> freshnessLabel <> " of this range"
+              , resultSummary = Just $ "Showing " <> show (length rows) <> " of " <> show (V.length allRows) <> " containers reporting in the final " <> freshnessLabel window <> " of this range"
               , exportName = Just "containers"
               , zeroState =
                   Just
@@ -245,12 +242,20 @@ readyCell row = maybe emDash_ (readyBadge_ . (> 0)) row.ready
 
 -- | Ready is the expected state, so it reads as text with a dot; only the exception gets a filled badge.
 readyBadge_ :: Bool -> Html ()
-readyBadge_ True = span_ [class_ "inline-flex items-center gap-1.5 whitespace-nowrap text-textStrong", data_ "tippy-content" "Latest reported readiness: Ready"] $ span_ [class_ "h-1.5 w-1.5 rounded-full bg-fillSuccess-strong", term "aria-hidden" "true"] "" >> "Ready"
+readyBadge_ True = span_ [class_ "inline-flex items-center gap-1.5 whitespace-nowrap text-textStrong", data_ "tippy-content" "Latest reported readiness: Ready"] $ span_ [class_ "h-1.5 w-1.5 rounded-full bg-fillSuccess-strong", term "aria-hidden" "true"] mempty >> "Ready"
 readyBadge_ False = span_ [class_ "badge badge-sm badge-error whitespace-nowrap", data_ "tippy-content" "Latest reported readiness: Not ready"] "Not ready"
 
 
 coresText :: Double -> Text
 coresText value = showFFloat' 3 value <> " cores"
+
+
+-- | How far back the snapshot actually looked: 'freshnessWindow', or the whole range when that is shorter.
+freshnessLabel :: TimePicker.TimeWindow -> Text
+freshnessLabel window =
+  let effectiveDuration = min freshnessWindow $ diffUTCTime window.toTime window.fromTime
+      (minutes, fraction) = properFraction (effectiveDuration / 60) :: (Integer, NominalDiffTime)
+   in if fraction == 0 then show minutes <> "m" else show effectiveDuration
 
 
 runtimeIcon_ :: ContainerRow -> Text -> Html ()
