@@ -100,7 +100,7 @@ Two deliberate differences from your normal `make test`:
 - **Build directories are container-private.** `dist-newstyle`, all three
   `node_modules` directories, npm's download cache, and Playwright's browser download are named
   volumes. Your host's macOS/arm64 artifacts would corrupt the Linux build.
-  The volumes persist, so the second `make ci` is
+  Volumes are separate for each worktree and persist, so the second `make ci` there is
   fast — but the **first one is a cold build** and takes as long as a cold CI
   run. Start it and go do something else; every run after that is incremental.
   `make ci-down` keeps them; `make ci-clean` deletes them and buys you the cold
@@ -111,7 +111,7 @@ Two deliberate differences from your normal `make test`:
   Checks that do not need services start only the runner; `e2e` starts Postgres,
   and `integration-tests` starts all three services.
   When every selected check is already attested, `make ci` skips Docker entirely.
-  Local CI runs serialize automatically because they share build volumes and service databases.
+  Local CI runs serialize automatically to avoid overloading the host.
   Worktree runs mount their shared Git metadata so attestation fingerprints work in containers.
   If HLint is installed on the host, `make ci` runs that check there, as the GitHub workflow does.
   The host passes its attestation-ref list to the runner, which has no SSH keys.

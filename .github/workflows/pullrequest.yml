@@ -285,7 +285,7 @@ jobs:
         if: needs.gate.outputs.skip_hlint != 'true'
         id: refactor
         run: |
-          hlint src/ --refactor --refactor-options="--inplace" || true
+          make fix-lint || true
           # Recorded before the push is attempted, because the push is what forks
           # and dependabot can't do — the tree still changed either way, and that
           # is what decides whether the check below may be attested.

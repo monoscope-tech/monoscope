@@ -1,5 +1,6 @@
 module Main (main) where
 
+import Data.List (lookup)
 import Relude
 import Spec qualified
 import Test.Hspec.Runner (Config (..), defaultConfig, hspecWith)
@@ -31,4 +32,14 @@ main = do
     -- Deterministic hash of the outermost group; keeps a spec's examples (and any
     -- shared state) together in one shard.
     inShard :: Int -> Int -> ([String], String) -> Bool
-    inShard i n (groups, _) = foldl' (\a c -> a * 31 + ord c) 7 (concat (take 1 groups)) `mod` n == i
+    inShard i n (groups, _) = (if n == 12 then fromMaybe hashed (lookup groupName balanced) else hashed) == i
+      where
+        groupName = concat (take 1 groups)
+        hashed = foldl' (\a c -> a * 31 + ord c) 7 groupName `mod` n
+        balanced =
+          [ ("Pages.LogExplorer.Log", 4)
+          , ("Pages.Bots.Workflows", 5)
+          , ("BackgroundJobs.ReportUsage", 2)
+          , ("EndpointDiscovery", 7)
+          , ("Pages.Endpoints.ApiCatalog", 0)
+          ]

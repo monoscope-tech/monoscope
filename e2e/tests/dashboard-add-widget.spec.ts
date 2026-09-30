@@ -403,8 +403,14 @@ test("dashboard teams default to @everyone and support bulk add and removal", as
   const team = `e2e-team-${Date.now()}`;
   await page.goto(`/p/${DEMO_PROJECT}/manage_teams`);
   await page.getByText("New Team", { exact: true }).click();
-  await page.locator('[name="teamName"]').fill(team);
-  await page.locator('[name="teamHandle"]').fill(team);
+  const teamName = page.locator('[name="teamName"]');
+  const teamHandle = page.locator('[name="teamHandle"]');
+  await expect(teamName).toBeFocused();
+  await teamName.fill(team);
+  await expect(teamName).toHaveValue(team);
+  await teamHandle.fill(team);
+  await expect(teamHandle).toHaveValue(team);
+  await expect(teamName).toHaveValue(team);
   await page.getByRole("button", { name: "Create Team", exact: true }).click();
   await expect(page.getByRole("link", { name: team, exact: true })).toBeVisible();
   await page.goto(`/p/${DEMO_PROJECT}/dashboards`);

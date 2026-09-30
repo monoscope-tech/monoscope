@@ -37,7 +37,7 @@ psql -h "$PGHOST" -p "$PGPORT" -U postgres -tAc \
   "SELECT 1 FROM pg_database WHERE datname='$DB'" | grep -q 1 ||
   psql -h "$PGHOST" -p "$PGPORT" -U postgres -q -c "CREATE DATABASE \"$DB\""
 
-BIN=$(cabal list-bin monoscope-server 2>/dev/null || true)
+BIN=${E2E_SERVER_BIN:-$(cabal list-bin monoscope-server 2>/dev/null || true)}
 [ -x "$BIN" ] || { echo "monoscope-server not built. Run: cabal build monoscope-server" >&2; exit 1; }
 
 # The server's working directory. Built from .env.example so no real credential is ever
