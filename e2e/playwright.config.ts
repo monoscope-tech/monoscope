@@ -4,7 +4,7 @@ export default defineConfig({
   testDir: "./tests",
   fullyParallel: true,
   // Keep browser concurrency bounded so layout and latency checks have headroom.
-  workers: 4,
+  workers: 2,
   forbidOnly: !!process.env.CI,
   retries: 0,
   use: {

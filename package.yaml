@@ -199,7 +199,6 @@ tests:
     main: Main.hs
     source-dirs: test/integration
     ghc-options:
-      - -fno-write-ide-info
       - -threaded
       - -rtsopts
       - '"-with-rtsopts=-N -A64m"'
@@ -300,7 +299,6 @@ tests:
     main: Main.hs
     source-dirs: test/unit
     ghc-options:
-      - -fno-write-ide-info
       - -threaded
       - -rtsopts
       - '"-with-rtsopts=-N -A64m"'

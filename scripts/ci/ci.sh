@@ -248,16 +248,29 @@ record_result() { # <check> — attest now, or stage for a caller that has push 
 # Publish the results staged by a run that could not push (the local CI container
 # has no credentials — origin is ssh and the image has no keys).
 cmd_publish() { # [file]
-  local f c fp caps plat
+  local f c fp caps plat spec
+  local -a refspecs=()
   f=${1:-${CI_ATTEST_OUT:-.ci/attest.tsv}}
   [ -s "$f" ] || { note "nothing to publish ($f)"; return 0; }
   while IFS=$'\t' read -r c fp caps plat; do
-    [ -n "$c" ] && publish_attestation "$c" "$fp" "$caps" "$plat"
+    if [ -n "$c" ]; then
+      if spec=$(attestation_refspec "$c" "$fp" "$caps" "$plat"); then
+        refspecs+=("$spec")
+      else
+        note "could not prepare attestation for $c — result is still valid, just not cached"
+      fi
+    fi
   done < "$f"
   rm -f "$f"
+  [ "${#refspecs[@]}" -gt 0 ] || return 0
+  if git push -q "$REMOTE" "${refspecs[@]}" 2>/dev/null; then
+    for spec in "${refspecs[@]}"; do note "attested ${spec#*:}"; done
+  else
+    note "could not publish attestations (no push access to $REMOTE?) — results are still valid, just not cached"
+  fi
 }
 
-publish_attestation() { # <check> [fingerprint] [caps] [platform]
+attestation_refspec() { # <check> [fingerprint] [caps] [platform]
   local fp caps plat ref tree commit runner_id
   fp=${2:-$(fingerprint "$1")}
   caps=${3:-$(detect_caps)}
@@ -276,8 +289,15 @@ caps=$caps
 platform=$plat
 commit=$(git rev-parse HEAD)
 runner=$runner_id")
-  if git push -q "$REMOTE" "${commit}:${ref}" 2>/dev/null; then
-    note "attested $1 → $ref"
+  printf '%s:%s' "$commit" "$ref"
+}
+
+publish_attestation() { # <check> [fingerprint] [caps] [platform]
+  local spec
+  if ! spec=$(attestation_refspec "$@"); then
+    note "could not prepare attestation for $1 — result is still valid, just not cached"
+  elif git push -q "$REMOTE" "$spec" 2>/dev/null; then
+    note "attested $1 → ${spec#*:}"
   else
     note "could not publish attestation for $1 (no push access to $REMOTE?) — result is still valid, just not cached"
   fi
@@ -330,6 +350,7 @@ run_body() { # <check>
     unit-tests) cabal test unit-tests -j $CABAL_FLAGS "$CABAL_OPTS" --test-show-details=direct ;;
     cli-tests)  cabal test monoscope-cli:cli-tests -j $CABAL_FLAGS "$CABAL_OPTS" --test-show-details=direct ;;
     weeder)
+      cabal build integration-tests unit-tests -j $CABAL_FLAGS "$CABAL_OPTS"
       command -v weeder >/dev/null 2>&1 || cabal install weeder --install-method=copy --installdir=/usr/local/bin --overwrite-policy=always
       weeder --config weeder.toml --hie-directory dist-newstyle
       ;;
@@ -345,6 +366,7 @@ run_body() { # <check>
       scripts/e2e.sh
       ;;
     integration-tests) run_integration ;;
+    selftest-fail) false; true ;;
     *) die "no body for check '$1'" ;;
   esac
 }
@@ -433,6 +455,7 @@ cmd_gate() {
 
 cmd_run() {
   local c req ref rc=0 unrunnable='' degraded='' e2e_pid='' e2e_log='' e2e_result=''
+  local integration_pid='' integration_log='' integration_result=''
   local checks
   checks=$(selected_checks "$@")
   CAPS=$(detect_caps)
@@ -441,6 +464,17 @@ cmd_run() {
   [ -n "${CI_FINGERPRINTS:-}" ] || pin_fingerprints $checks
   [ "${CI_FORCE:-}" = "true" ] || remote_refs >/dev/null
   for c in $checks; do
+    if [ "$c" = integration-tests ] && [ -n "$integration_pid" ]; then
+      if wait "$integration_pid"; then
+        [ ! -s "$integration_result" ] || cat "$integration_result" >> "$CI_ATTEST_OUT"
+      else
+        rc=1
+      fi
+      cat "$integration_log"
+      rm -f "$integration_log" "$integration_result"
+      [ "$rc" -eq 0 ] || [ "${CI_KEEP_GOING:-}" = "true" ] || [ -n "$e2e_pid" ] || return 1
+      continue
+    fi
     if [ "$c" = e2e ] && [ -n "$e2e_pid" ]; then
       if wait "$e2e_pid"; then
         [ ! -s "$e2e_result" ] || cat "$e2e_result" >> "$CI_ATTEST_OUT"
@@ -469,9 +503,9 @@ cmd_run() {
       note "$c already proven ($ref) — skipping (CI_FORCE=true to override)"
       continue
     fi
-    # These suites use separate databases. Starting the browser suite here lets
-    # it share integration's long execution phase after the build has completed.
+    # If build was skipped, still overlap the two suites when both need to run.
     if [ "$c" = integration-tests ] && [ -n "${CI_ATTEST_OUT:-}" ] \
+       && [ -z "$e2e_pid" ] \
        && case " $(echo "$checks" | tr '\n' ' ') " in *" integration-tests "*" e2e "*) true ;; *) false ;; esac; then
       e2e_log=$(mktemp -t ci-e2e-log.XXXXXX)
       e2e_result=$(mktemp -t ci-e2e-result.XXXXXX)
@@ -480,7 +514,7 @@ cmd_run() {
     fi
     note "running $c"
     local started=$SECONDS
-    if run_body "$c"; then
+    if CAPS="$CAPS" "$0" body "$c"; then
       note "passed $c in $((SECONDS - started))s"
       if ! inputs_unchanged "$c"; then
         note "PASSED $c, but inputs changed during the run — NOT attested; rerun required"
@@ -491,6 +525,18 @@ cmd_run() {
       # the network and the object store; neither is part of what the check proved.
       case " $degraded " in *" $c "*) ;; *) [ "${CI_NO_ATTEST:-}" = "true" ] \
         || record_result "$c" || note "could not record $c — it still passed, just isn't cached" ;; esac
+      # Build has populated Cabal's cache; the suites use separate databases.
+      if [ "$c" = build ] && [ -n "${CI_ATTEST_OUT:-}" ] \
+         && case " $(echo "$checks" | tr '\n' ' ') " in *" build "*" integration-tests "*" e2e "*) true ;; *) false ;; esac; then
+        integration_log=$(mktemp -t ci-integration-log.XXXXXX)
+        integration_result=$(mktemp -t ci-integration-result.XXXXXX)
+        CI_ATTEST_OUT="$integration_result" "$0" run integration-tests > "$integration_log" 2>&1 &
+        integration_pid=$!
+        e2e_log=$(mktemp -t ci-e2e-log.XXXXXX)
+        e2e_result=$(mktemp -t ci-e2e-result.XXXXXX)
+        CI_ATTEST_OUT="$e2e_result" "$0" run e2e > "$e2e_log" 2>&1 &
+        e2e_pid=$!
+      fi
     else
       rc=1
       note "FAILED $c"
@@ -530,11 +576,12 @@ cmd_gc() {
 # ---------------------------------------------------------------- local docker
 
 COMPOSE_FILE=ci/compose.yml
-compose() { docker compose -f "$COMPOSE_FILE" --project-name monoscope-ci "$@"; }
+COMPOSE_PROJECT="monoscope-ci-$(printf '%s' "$ROOT" | sha256 | cut -c1-12)"
+compose() { docker compose -f "$COMPOSE_FILE" --project-name "$COMPOSE_PROJECT" "$@"; }
 
 cmd_local() {
-  # Every local run shares the Cabal/Node volumes and ephemeral service databases.
-  # Lock before even resetting services; parallel runs corrupt GHC interface files.
+  # Serialize local runs to avoid oversubscribing the host. Each worktree has its
+  # own volumes so a checkout on another branch cannot replace this one's HIE files.
   if [ "${CI_LOCAL_LOCKED:-}" != true ]; then
     python3 -c '
 import fcntl, os, sys
@@ -549,17 +596,19 @@ with open(sys.argv[1], "w") as lock:
     return
   fi
   # The dependency image has no HLint; the host tool is also how CI runs it.
-  local c host_rc=0
+  local c host_rc=0 host_hlint=false host_pid='' host_log='' host_fp=''
   local -a container_checks=()
   for c in $(selected_checks "$@"); do
     if [ "$c" = hlint ] && command -v hlint >/dev/null 2>&1; then
-      "$0" run hlint || host_rc=$?
+      host_hlint=true
     else
       container_checks+=("$c")
     fi
   done
-  [ "$host_rc" -eq 0 ] || [ "${CI_KEEP_GOING:-}" = true ] || return "$host_rc"
-  [ "${#container_checks[@]}" -gt 0 ] || return "$host_rc"
+  if [ "${#container_checks[@]}" -eq 0 ]; then
+    [ "$host_hlint" = false ] || "$0" run hlint
+    return
+  fi
   if [ "${CI_FORCE:-}" != "true" ]; then
     remote_refs >/dev/null
     local -a pending=()
@@ -567,14 +616,21 @@ with open(sys.argv[1], "w") as lock:
       find_attestation "$c" >/dev/null || pending+=("$c")
     done
     if [ "${#pending[@]}" -eq 0 ]; then
+      [ "$host_hlint" = false ] || "$0" run hlint
       note "all selected checks are already attested — skipping local containers"
-      return "$host_rc"
+      return 0
     fi
     container_checks=("${pending[@]}")
   fi
   set -- "${container_checks[@]}"
   command -v docker >/dev/null 2>&1 || die "docker is required for \`ci.sh local\`"
   docker compose version >/dev/null 2>&1 || die "docker compose v2 is required"
+  if [ "$host_hlint" = true ]; then
+    host_log=$(mktemp -t ci-hlint-log.XXXXXX)
+    host_fp=$(mktemp -t ci-hlint-fp.XXXXXX)
+    CI_FINGERPRINTS_PATH="$host_fp" "$0" run hlint > "$host_log" 2>&1 &
+    host_pid=$!
+  fi
   # Postgres and MinIO are deliberately cache-free integration fixtures (Postgres
   # is tmpfs-backed).  Keeping their *containers* after a run made a second local
   # integration invocation inherit the first run's deterministic test IDs and
@@ -612,6 +668,12 @@ with open(sys.argv[1], "w") as lock:
     else
       note "TimeFusion did not start (${MONOSCOPE_CI_TF_PLATFORM:-linux/amd64} on $(uname -m)) — integration-tests will be left to CI; see docs/local-ci.md"
     fi
+  fi
+  if [ -n "$host_pid" ]; then
+    wait "$host_pid" || host_rc=$?
+    cat "$host_log"
+    rm -f "$host_log" "$host_fp"
+    [ "$host_rc" -eq 0 ] || [ "${CI_KEEP_GOING:-}" = true ] || return "$host_rc"
   fi
   rm -f .ci/attest.tsv
   local rc=0
@@ -929,6 +991,9 @@ assert() { # <desc> <expected> <actual>
 
 cmd_selftest() {
   SELFTEST_RC=0
+  local body_rc=0
+  "$0" body selftest-fail >/dev/null 2>&1 || body_rc=$?
+  assert "body stops at first failure" 1 "$body_rc"
 
   assert "caps superset"      ok "$(caps_satisfy 'ghc pg minio tf-real' 'ghc pg' && echo ok)"
   assert "caps exact"         ok "$(caps_satisfy 'ghc' 'ghc' && echo ok)"
@@ -1054,6 +1119,7 @@ case "$cmd" in
   caps)        detect_caps; echo ;;
   gate)        cmd_gate "$@" ;;
   run)         cmd_run "$@" ;;
+  body)        run_body "$@" ;;
   attest)      cmd_attest "$@" ;;
   publish)     cmd_publish "$@" ;;
   local)       cmd_local "$@" ;;
