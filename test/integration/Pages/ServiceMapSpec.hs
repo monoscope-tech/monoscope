@@ -267,14 +267,15 @@ spec = around withTestResources do
     it "endpointRollup_keepsOnlyTheSelectedEndpointDirectDependency" \tr -> do
       pid <- createTestProject tr "endpoint dependency rollup"
       apiKey <- createTestAPIKey tr pid "endpoint-dependency-key"
-      ingestFixture tr apiKey frozenTime
+      -- Two traces, so trace_count is a distinct count and not just the row count of one.
+      replicateM_ 2 $ ingestFixture tr apiKey frozenTime
       let endpointHash = "endpoint-checkout"
           secondEndpointHash = "endpoint-checkout-alias"
           endpointHashes = [endpointHash, secondEndpointHash, "err:ignored"] :: [Text]
           expectedEdges =
             L.sort
-              [ (endpointHash, "checkout", NKService, 1, 1)
-              , (secondEndpointHash, "checkout", NKService, 1, 1)
+              [ (endpointHash, "checkout", NKService, 2, 2)
+              , (secondEndpointHash, "checkout", NKService, 2, 2)
               ]
           relevantEdges edges =
             L.sort
