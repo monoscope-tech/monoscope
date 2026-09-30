@@ -1571,48 +1571,51 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
   unless isNewWidget do
     let alertFormId = widPrefix <> "-alert-form"
         alertEndpoint = flip foldMap dashboardIdM \dashId -> "/p/" <> pid.toText <> "/widgets/" <> sourceWid <> "/alert?dashboard_id=" <> dashId.toText
-    div_ [class_ "group/walert hidden group-has-[.page-drawer-tab-monitors:checked]/wgtexp:block mt-6"] $ if maybe True (T.null . T.strip) widgetToUse.query then emptyState_ def{icon = Just "bell", size = ESCompact} "This widget can't be monitored" "Monitors evaluate a KQL query, and this widget is built from raw SQL." else do
-      let hasAlert = isJust monitorM
-          defaultTitle = maybe (fromMaybe "Widget Alert" widgetToUse.title <> " - Threshold Alert") (.alertConfig.title) monitorM
-      -- Enable Alert toggle
-      label_ [class_ "flex items-center justify-between p-4 bg-fillWeaker rounded-xl border border-strokeWeak cursor-pointer mb-4"] do
-        div_ [] do
-          h4_ [class_ "font-medium text-textStrong"] "Enable Alert"
-          p_ [class_ "text-xs text-textWeak"] "Get notified when this widget's value crosses thresholds"
-        input_ $ [type_ "checkbox", name_ "alertEnabled", form_ alertFormId, class_ "toggle toggle-primary alert-enable"] <> [checked_ | hasAlert]
-      form_
-        [ id_ alertFormId
-        , hxPost_ alertEndpoint
-        , hxSwap_ "none"
-        , hxTrigger_ "submit"
-        , hxVals_ $ "js:{teams: window.getTagValues('#" <> alertFormId <> "-teams')}"
-        , class_ "flex flex-col gap-3 hidden group-has-[.alert-enable:checked]/walert:flex"
-        ]
-        do
-          input_ [type_ "hidden", name_ "widgetId", value_ sourceWid]
-          input_ [type_ "hidden", name_ "query", value_ $ fromMaybe "" widgetToUse.query]
-          input_ [type_ "hidden", name_ "vizType", value_ $ case widgetToUse.wType of Widget.WTTimeseriesLine -> "timeseries_line"; _ -> "timeseries"]
+    div_ [class_ "group/walert hidden group-has-[.page-drawer-tab-monitors:checked]/wgtexp:block mt-6"]
+      $ if maybe True (T.null . T.strip) widgetToUse.query
+        then emptyState_ def{icon = Just "bell", size = ESCompact} "This widget can't be monitored" "Monitors evaluate a KQL query, and this widget is built from raw SQL."
+        else do
+          let hasAlert = isJust monitorM
+              defaultTitle = maybe (fromMaybe "Widget Alert" widgetToUse.title <> " - Threshold Alert") (.alertConfig.title) monitorM
+          -- Enable Alert toggle
+          label_ [class_ "flex items-center justify-between p-4 bg-fillWeaker rounded-xl border border-strokeWeak cursor-pointer mb-4"] do
+            div_ [] do
+              h4_ [class_ "font-medium text-textStrong"] "Enable Alert"
+              p_ [class_ "text-xs text-textWeak"] "Get notified when this widget's value crosses thresholds"
+            input_ $ [type_ "checkbox", name_ "alertEnabled", form_ alertFormId, class_ "toggle toggle-primary alert-enable"] <> [checked_ | hasAlert]
+          form_
+            [ id_ alertFormId
+            , hxPost_ alertEndpoint
+            , hxSwap_ "none"
+            , hxTrigger_ "submit"
+            , hxVals_ $ "js:{teams: window.getTagValues('#" <> alertFormId <> "-teams')}"
+            , class_ "flex flex-col gap-3 hidden group-has-[.alert-enable:checked]/walert:flex"
+            ]
+            do
+              input_ [type_ "hidden", name_ "widgetId", value_ sourceWid]
+              input_ [type_ "hidden", name_ "query", value_ $ fromMaybe "" widgetToUse.query]
+              input_ [type_ "hidden", name_ "vizType", value_ $ case widgetToUse.wType of Widget.WTTimeseriesLine -> "timeseries_line"; _ -> "timeseries"]
 
-          Components.formField_ Components.FieldSm def{Components.value = defaultTitle, Components.placeholder = "e.g. High error rate monitor"} "Name" "title" True Nothing
-          -- Monitor Schedule section (shared component)
-          Alerts.monitorScheduleSection_ paymentPlan (maybe 5 (.checkIntervalMins) monitorM) (maybe 5 (.timeWindowMins) monitorM) (Just "threshold_exceeded")
-          -- Thresholds section (shared component)
-          Alerts.thresholdsSection_ ((monitorM >>= (.alertConfig.unit)) <|> widgetToUse.unit) (Just wid) (((.alertThreshold) <$> monitorM) <|> widgetToUse.alertThreshold) ((monitorM >>= (.warningThreshold)) <|> widgetToUse.warningThreshold) (maybe False (.triggerLessThan) monitorM) (monitorM >>= (.alertRecoveryThreshold)) (monitorM >>= (.warningRecoveryThreshold))
-          -- Widget-specific: Show threshold lines option
-          let currentLines = fromMaybe "always" widgetToUse.showThresholdLines
-          div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak p-3"]
-            $ Components.formSelectField_ Components.FieldSm "Show threshold lines on chart" "showThresholdLines" False
-            $ forM_ ([("always", "Always"), ("on_breach", "Only when breached"), ("never", "Never")] :: [(Text, Text)]) \(v, lbl) ->
-              option_ ([value_ v] <> [selected_ "" | v == currentLines]) $ toHtml lbl
+              Components.formField_ Components.FieldSm def{Components.value = defaultTitle, Components.placeholder = "e.g. High error rate monitor"} "Name" "title" True Nothing
+              -- Monitor Schedule section (shared component)
+              Alerts.monitorScheduleSection_ paymentPlan (maybe 5 (.checkIntervalMins) monitorM) (maybe 5 (.timeWindowMins) monitorM) (Just "threshold_exceeded")
+              -- Thresholds section (shared component)
+              Alerts.thresholdsSection_ ((monitorM >>= (.alertConfig.unit)) <|> widgetToUse.unit) (Just wid) (((.alertThreshold) <$> monitorM) <|> widgetToUse.alertThreshold) ((monitorM >>= (.warningThreshold)) <|> widgetToUse.warningThreshold) (maybe False (.triggerLessThan) monitorM) (monitorM >>= (.alertRecoveryThreshold)) (monitorM >>= (.warningRecoveryThreshold))
+              -- Widget-specific: Show threshold lines option
+              let currentLines = fromMaybe "always" widgetToUse.showThresholdLines
+              div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak p-3"]
+                $ Components.formSelectField_ Components.FieldSm "Show threshold lines on chart" "showThresholdLines" False
+                $ forM_ ([("always", "Always"), ("on_breach", "Only when breached"), ("never", "Never")] :: [(Text, Text)]) \(v, lbl) ->
+                  option_ ([value_ v] <> [selected_ "" | v == currentLines]) $ toHtml lbl
 
-          Alerts.notificationSettingsSection_ ((.alertConfig.severity) <$> monitorM) ((.alertConfig.subject) <$> monitorM) ((.alertConfig.message) <$> monitorM) (maybe True (.alertConfig.emailAll) monitorM) teams (maybe V.empty (.teams) monitorM) alertFormId monitorM
+              Alerts.notificationSettingsSection_ ((.alertConfig.severity) <$> monitorM) ((.alertConfig.subject) <$> monitorM) ((.alertConfig.message) <$> monitorM) (maybe True (.alertConfig.emailAll) monitorM) teams (maybe V.empty (.teams) monitorM) alertFormId monitorM
 
-          -- Action buttons
-          div_ [class_ "flex items-center justify-end gap-2 pt-4 pb-20 mt-4 border-t border-strokeWeak"] do
-            when hasAlert $ button_ [type_ "button", class_ "btn btn-ghost btn-sm", hxDelete_ alertEndpoint, hxSwap_ "none"] "Remove monitor"
-            primaryButton_ [type_ "submit"] do
-              faSprite_ "plus" "regular" "w-3.5 h-3.5"
-              if hasAlert then "Update monitor" else "Create monitor"
+              -- Action buttons
+              div_ [class_ "flex items-center justify-end gap-2 pt-4 pb-20 mt-4 border-t border-strokeWeak"] do
+                when hasAlert $ button_ [type_ "button", class_ "btn btn-ghost btn-sm", hxDelete_ alertEndpoint, hxSwap_ "none"] "Remove monitor"
+                primaryButton_ [type_ "submit"] do
+                  faSprite_ "plus" "regular" "w-3.5 h-3.5"
+                  if hasAlert then "Update monitor" else "Create monitor"
 
 
 --------------------------------------------------------------------
