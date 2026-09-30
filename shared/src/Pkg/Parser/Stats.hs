@@ -281,9 +281,10 @@ data Sources = SSpans | SMetrics
 -- Right [Search (Eq (Subject "hashes[*]" "hashes" [ArrayWildcard ""]) (Str "x"))]
 rewriteSectionsForSource :: Bool -> Maybe Sources -> [Section] -> [Section]
 rewriteSectionsForSource False _ = id
-rewriteSectionsForSource True src = runIdentity . traverseAst (Identity . subject) \case
-  Eq (Subject _ col [ArrayWildcard ""]) (Str v) | S.member col arrayColumns -> ArrayHas col v
-  e -> e
+rewriteSectionsForSource True src =
+  runIdentity . traverseAst (Identity . subject) \case
+    Eq (Subject _ col [ArrayWildcard ""]) (Str v) | S.member col arrayColumns -> ArrayHas col v
+    e -> e
   where
     subject = case src of
       Just SMetrics -> \case
@@ -319,37 +320,38 @@ traverseAst f g = traverse goSec
     sv c s v = c <$> f s <*> goV v
     st :: (Subject -> t -> a) -> Subject -> t -> m a
     st c s t = flip c t <$> f s
-    goE = fmap g . \case
-      Eq s v -> sv Eq s v
-      NotEq s v -> sv NotEq s v
-      GT s v -> sv GT s v
-      LT s v -> sv LT s v
-      GTEq s v -> sv GTEq s v
-      LTEq s v -> sv LTEq s v
-      Regex mode s t -> st (Regex mode) s t
-      In s v -> sv In s v
-      NotIn s v -> sv NotIn s v
-      Has s v -> sv Has s v
-      NotHas s v -> sv NotHas s v
-      HasAny s v -> sv HasAny s v
-      HasAll s v -> sv HasAll s v
-      Contains s v -> sv Contains s v
-      NotContains s v -> sv NotContains s v
-      StartsWith s v -> sv StartsWith s v
-      NotStartsWith s v -> sv NotStartsWith s v
-      EndsWith s v -> sv EndsWith s v
-      NotEndsWith s v -> sv NotEndsWith s v
-      Paren e -> Paren <$> goE e
-      And a b -> And <$> goE a <*> goE b
-      Or a b -> Or <$> goE a <*> goE b
-      ValEq a b -> ValEq <$> goV a <*> goV b
-      ValNotEq a b -> ValNotEq <$> goV a <*> goV b
-      ValGT a b -> ValGT <$> goV a <*> goV b
-      ValLT a b -> ValLT <$> goV a <*> goV b
-      ValGTEq a b -> ValGTEq <$> goV a <*> goV b
-      ValLTEq a b -> ValLTEq <$> goV a <*> goV b
-      BoolFunc v -> BoolFunc <$> goV v
-      e@ArrayHas{} -> pure e
+    goE =
+      fmap g . \case
+        Eq s v -> sv Eq s v
+        NotEq s v -> sv NotEq s v
+        GT s v -> sv GT s v
+        LT s v -> sv LT s v
+        GTEq s v -> sv GTEq s v
+        LTEq s v -> sv LTEq s v
+        Regex mode s t -> st (Regex mode) s t
+        In s v -> sv In s v
+        NotIn s v -> sv NotIn s v
+        Has s v -> sv Has s v
+        NotHas s v -> sv NotHas s v
+        HasAny s v -> sv HasAny s v
+        HasAll s v -> sv HasAll s v
+        Contains s v -> sv Contains s v
+        NotContains s v -> sv NotContains s v
+        StartsWith s v -> sv StartsWith s v
+        NotStartsWith s v -> sv NotStartsWith s v
+        EndsWith s v -> sv EndsWith s v
+        NotEndsWith s v -> sv NotEndsWith s v
+        Paren e -> Paren <$> goE e
+        And a b -> And <$> goE a <*> goE b
+        Or a b -> Or <$> goE a <*> goE b
+        ValEq a b -> ValEq <$> goV a <*> goV b
+        ValNotEq a b -> ValNotEq <$> goV a <*> goV b
+        ValGT a b -> ValGT <$> goV a <*> goV b
+        ValLT a b -> ValLT <$> goV a <*> goV b
+        ValGTEq a b -> ValGTEq <$> goV a <*> goV b
+        ValLTEq a b -> ValLTEq <$> goV a <*> goV b
+        BoolFunc v -> BoolFunc <$> goV v
+        e@ArrayHas{} -> pure e
     goV = \case
       Field s -> Field <$> f s
       List vs -> List <$> traverse goV vs
