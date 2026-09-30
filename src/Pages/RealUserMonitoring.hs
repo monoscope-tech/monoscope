@@ -249,7 +249,8 @@ rumHasBrowserTelemetry scope =
 rumPages :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> Eff es [RumPage]
 rumPages scope =
   Hasql.withHasqlTimefusion scope.useTf
-    $ Hasql.interpForTimefusion scope.useTf
+    $ Hasql.interpForTimefusion
+      scope.useTf
       ( [HI.sql|
         SELECT
           |]
@@ -279,7 +280,8 @@ rumPages scope =
 rumErrors :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> Eff es [RumError]
 rumErrors scope =
   Hasql.withHasqlTimefusion scope.useTf
-    $ Hasql.interpForTimefusion scope.useTf
+    $ Hasql.interpForTimefusion
+      scope.useTf
       ( [HI.sql|
         SELECT timestamp,
           COALESCE(attributes___exception___type, status_message, 'Browser error'),
@@ -310,7 +312,8 @@ otelSessionRows scope match sessionFilter = otelSessionCoreRows scope match sess
 otelSessionRowsRaw :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> SessionMatch -> SessionFilter -> Eff es [RumSession]
 otelSessionRowsRaw scope match sessionFilter =
   Hasql.withHasqlTimefusion scope.useTf
-    $ Hasql.interpForTimefusion scope.useTf
+    $ Hasql.interpForTimefusion
+      scope.useTf
       ( [HI.sql|
         SELECT attributes___session___id,
           MIN(timestamp), MAX(timestamp), COUNT(*)::bigint,
@@ -343,7 +346,8 @@ otelSessionRowsRaw scope match sessionFilter =
 otelSessionCoreRows :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> SessionMatch -> SessionFilter -> Eff es [RumSession]
 otelSessionCoreRows scope match sessionFilter =
   Hasql.withHasqlTimefusion scope.useTf
-    $ Hasql.interpForTimefusion scope.useTf
+    $ Hasql.interpForTimefusion
+      scope.useTf
       ( [HI.sql|
         SELECT attributes___session___id,
           MIN(timestamp), MAX(timestamp), COUNT(*)::bigint,
@@ -402,7 +406,8 @@ enrichSessionRows scope rows = do
   let ids = map (.id) rows
   details :: [(Text, Maybe Text, Maybe Text)] <-
     Hasql.withHasqlTimefusion scope.useTf
-      $ Hasql.interpForTimefusion scope.useTf
+      $ Hasql.interpForTimefusion
+        scope.useTf
         ( [HI.sql|
           SELECT attributes___session___id,
             (ARRAY_AGG(|]
@@ -455,7 +460,8 @@ sessionMatchPredicate (SessionText (Just query)) =
 rumBreakdown :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> Eff es [RumBreakdown]
 rumBreakdown scope =
   Hasql.withHasqlTimefusion scope.useTf
-    $ Hasql.interpForTimefusion scope.useTf
+    $ Hasql.interpForTimefusion
+      scope.useTf
       ( [HI.sql|
         SELECT COALESCE(NULLIF(attributes___user_agent___original, ''), resource___user_agent___original),
           COUNT(DISTINCT NULLIF(attributes___session___id, ''))::bigint,
@@ -1602,16 +1608,17 @@ performance_ page = div_ [class_ "space-y-2 px-4 pb-4 pt-2 max-md:px-3"] do
   let noVitals = all ((== Unmeasured) . (.measurement)) page.vitals
   slot_ page PanelVitals (panelSkeleton_ $ Components.tableSkeleton_ 6)
     $ if noVitals
-      then rumPanel_ "Web Vitals" "P75 of LCP, INP, CLS, FCP and TTFB against Google's thresholds" Nothing
-        $ Components.emptyState_
-          def
-            { icon = Just "gauge"
-            , action = ESCustom $ div_ [class_ "flex flex-wrap items-center justify-center gap-3"] do
-                a_ [href_ $ rumUrl page.links{window = TimePicker.mkTimeWindow page.now Nothing Nothing (Just "7D")} [("tab", "performance")], class_ "btn btn-sm btn-primary"] "Widen to 7 days"
-                a_ [href_ "https://monoscope.tech/docs/sdks/browser/", target_ "_blank", rel_ "noopener noreferrer", class_ "link text-sm text-textBrand"] "Check the SDK metrics export"
-            }
-          "No Web Vitals in this time range"
-          "Nothing sent a browser.web_vital.* metric for this scope. The browser SDK reports LCP, INP, CLS, FCP and TTFB automatically once its metrics export is on."
+      then
+        rumPanel_ "Web Vitals" "P75 of LCP, INP, CLS, FCP and TTFB against Google's thresholds" Nothing
+          $ Components.emptyState_
+            def
+              { icon = Just "gauge"
+              , action = ESCustom $ div_ [class_ "flex flex-wrap items-center justify-center gap-3"] do
+                  a_ [href_ $ rumUrl page.links{window = TimePicker.mkTimeWindow page.now Nothing Nothing (Just "7D")} [("tab", "performance")], class_ "btn btn-sm btn-primary"] "Widen to 7 days"
+                  a_ [href_ "https://monoscope.tech/docs/sdks/browser/", target_ "_blank", rel_ "noopener noreferrer", class_ "link text-sm text-textBrand"] "Check the SDK metrics export"
+              }
+            "No Web Vitals in this time range"
+            "Nothing sent a browser.web_vital.* metric for this scope. The browser SDK reports LCP, INP, CLS, FCP and TTFB automatically once its metrics export is on."
       else vitalsTable_ page.vitals
   slot_ page PanelVitalTrend (panelSkeleton_ Components.chartSkeleton_) $ unless noVitals do
     vitalTrendPanel_ page.links.window page.vitalTrend
