@@ -1420,7 +1420,7 @@ instance AE.ToJSON SessionsView where
             , AE.toJSON summaryParts
             , AE.Null
             , AE.String ""
-            , AE.toJSON s.traceCount -- event_count, drives the [+N] children badge
+            , AE.toJSON s.eventCount -- event_count, drives the [+N] children badge
             ]
         where
           -- Full session id (not truncated): the client feeds it into /replay_session/{id}, a Servant UUID capture.

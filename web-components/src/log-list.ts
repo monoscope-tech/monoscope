@@ -3395,7 +3395,7 @@ export class LogList extends LitElement {
                           : expanded
                             ? 'Collapse'
                             : 'Expand'} trace (${children} ${children === 1 ? 'span' : 'spans'})"
-                        class=${`hover:border-strokeBrand-strong rounded-sm ml-1 cursor-pointer shrink-0 w-8 px-1 flex justify-center gap-[2px] text-xs items-center h-5 ${errClas}`}
+                        class=${`hover:border-strokeBrand-strong rounded-sm ml-1 cursor-pointer shrink-0 min-w-8 px-1 flex justify-center gap-[2px] text-xs items-center h-5 ${errClas}`}
                       >
                         ${this.loadingSessions[id]
                           ? faSprite('spinner', 'regular', 'w-3 h-3 shrink-0 animate-spin')

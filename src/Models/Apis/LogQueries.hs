@@ -19,7 +19,6 @@ module Models.Apis.LogQueries (
   fetchLogPatterns,
   fetchSessions,
   SessionSort (..),
-  sessionSortColumn,
   sessionSortParam,
   sessionSortLabel,
   ExpandKind (..),
@@ -246,7 +245,7 @@ jsonArrayRows =
 -- | Check that query contains a project_id filter with the correct project ID
 -- This validates that the query has been properly prepared with the project_id substituted
 hasProjectIdFilter :: Text -> Projects.ProjectId -> Bool
-hasProjectIdFilter query pid = any (`T.isInfixOf` query) ["project_id='" <> pidTxt <> "'", "project_id = '" <> pidTxt <> "'"]
+hasProjectIdFilter query pid = any (`T.isInfixOf` query) (["project_id='" <> pidTxt <> "'", "project_id = '" <> pidTxt <> "'"] :: [Text])
   where
     pidTxt :: Text
     pidTxt = pid.toText
@@ -493,7 +492,6 @@ data SessionRow = SessionRow
   , firstSeen :: UTCTime
   , lastSeen :: UTCTime
   , durationNs :: Int64
-  , traceCount :: Int64
   , services :: V.Vector Text
   , landingUrl :: Maybe Text
   , userAgent :: Maybe Text
@@ -505,17 +503,8 @@ data SessionRow = SessionRow
   deriving stock (Generic, Show)
 
 
--- | One decoded row of 'fetchSessions', mirroring the column order of its
--- SELECT. Decoded directly via hasql to bypass the jsonb wrapper entirely —
--- Postgres' jsonb type rejects NULL bytes / lone surrogates in TEXT values
--- regardless of which function builds it, so the only safe path for raw OTLP
--- text (user_agent, url_path, ...) is to never round-trip through jsonb.
--- The trailing @sum*@ fields are the
--- session-level summary, CROSS JOINed onto every page row so the header
--- aggregates ride the same single scan (decoded once, from the head row).
--- (hasql-interpolate decodes a flat column list, so these live in one record
--- rather than a tuple of sub-rows.)
-data RawSessionRow = RawSessionRow
+-- | One session of the Sessions viz, as the grouped scan returns it.
+data SessionAggRow = SessionAggRow
   { sessionId :: Text
   , userId :: Maybe Text
   , userEmail :: Maybe Text
@@ -524,23 +513,6 @@ data RawSessionRow = RawSessionRow
   , errorCount :: Int64
   , firstSeen :: UTCTime
   , lastSeen :: UTCTime
-  , durationNs :: Int64
-  , traceCount :: Int64
-  , services :: V.Vector Text
-  , landingUrl :: Maybe Text
-  , userAgent :: Maybe Text
-  , firstError :: Maybe Text
-  , totalSessions :: Int64
-  , erroredSessions :: Int64
-  , uniqueUsers :: Int64
-  , uniqueServices :: Int64
-  , medDur :: Int64
-  , p95Dur :: Int64
-  , medEvt :: Int64
-  , totalEvents :: Int64
-  , summBis :: V.Vector Int64
-  , cleanBkt :: V.Vector Int64
-  , errBkt :: V.Vector Int64
   }
   deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow)
@@ -709,20 +681,13 @@ sessionKeyExpr :: Text
 sessionKeyExpr = "COALESCE(NULLIF(attributes___session___id, ''), NULLIF(attributes___user___id, ''), NULLIF(attributes___user___email, ''))"
 
 
--- | Fetch session-aggregated rows for the Sessions visualization tab.
--- Rows are keyed by 'sessionKeyExpr'; user identity is taken as the
--- MAX non-null value within the session (stable for a given user). Pagination
--- happens before the hourly bucket/service joins so join cost tracks page size.
--- The session-level summary (header KPIs + over-time buckets) is computed in the
--- SAME scan via a @summ@ CTE CROSS JOINed onto every page row, so the sessions
--- viz reads the window once instead of twice (was a separate 'fetchSessionSummary').
 -- | Ordering for the Sessions viz. The wire spellings are exactly the values the sort
 -- dropdown in "Pkg.Components.LogQueryBox" emits and what shared URLs carry.
 --
 -- This was 'Text' matched in a @case@ whose fall-through defaulted to @last_seen@, so a
 -- sixth option added to the dropdown would have silently sorted by last-seen instead —
 -- the same failure 'Endpoints.EndpointSort' was introduced to kill, in its sibling
--- module. An exhaustive 'sessionSortColumn' makes that mismatch a compile error.
+-- module. An exhaustive @case@ in 'fetchSessions' makes that mismatch a compile error.
 --
 -- >>> map (\s -> parseUrlPiece s :: Either Text SessionSort) ["last_seen", "first_seen", "duration", "errors", "events"]
 -- [Right SortLastSeen,Right SortFirstSeen,Right SortDuration,Right SortErrors,Right SortEvents]
@@ -737,18 +702,6 @@ data SessionSort = SortLastSeen | SortFirstSeen | SortDuration | SortErrors | So
   -- unrecognised sort_by shows as null — which is the signal that the fallback fired.
   deriving (AE.ToJSON, FromHttpApiData) via WrappedEnumSC 'Nothing "Sort" SessionSort
 
-
--- | The column each ordering sorts on. Exhaustive by construction.
---
--- >>> map sessionSortColumn [minBound .. maxBound]
--- ["last_seen","first_seen","duration_ns","error_count","event_count"]
-sessionSortColumn :: SessionSort -> Text
-sessionSortColumn = \case
-  SortLastSeen -> "last_seen"
-  SortFirstSeen -> "first_seen"
-  SortDuration -> "duration_ns"
-  SortErrors -> "error_count"
-  SortEvents -> "event_count"
 
 
 -- | The wire value the sort dropdown emits and 'parseUrlPiece' reads back. Named to match
@@ -774,171 +727,150 @@ fetchSessions :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time 
 fetchSessions enableTfReads pid queryAST dateRange environment service sortByM skip = do
   now <- Time.currentTime
   let scope = mkScopedQuery pid dateRange environment service
-      fullWhere = scopedQueryWhere now (Just SSpans) scope queryAST
+      whereSql = rawSql $ scopedQueryWhere now (Just SSpans) scope queryAST
+      keySql = rawSql sessionKeyExpr
       bucketW = bucketWidthSecs dateRange now
-      sortCol = sessionSortColumn $ fromMaybe SortLastSeen sortByM
+      ordering = fromMaybe SortLastSeen sortByM
   Log.logTrace "fetchSessions: start"
     $ AE.object ["project_id" AE..= pid, "skip" AE..= skip, "date_range" AE..= show dateRange, "sort_by" AE..= sortByM]
-  let sortColSql = rawSql sortCol
-      whereSql = rawSql fullWhere
-      -- Ordered-set aggregate: valid on both backends (PG ordered-set aggregate;
-      -- DataFusion supports array_agg + ORDER BY + FILTER) and measured fastest
-      -- (PG: 0.6s vs 1.9s for a row_number window equivalent; TF: equal, 7.0s).
-      -- FIRST_VALUE errors without OVER on Postgres only; DataFusion answers it
-      -- as a real aggregate (TF @monoscope_query_shapes.slt@ §16). One statement
-      -- serves both stores, so the array spelling stays.
-      firstObservedSql =
-        [HI.sql|
-        (ARRAY_AGG(url_path ORDER BY timestamp) FILTER (WHERE url_path IS NOT NULL AND url_path <> ''))[1] AS landing_url,
-        (ARRAY_AGG(user_agent ORDER BY timestamp) FILTER (WHERE user_agent IS NOT NULL AND user_agent <> ''))[1] AS user_agent,
-        (ARRAY_AGG(error_text ORDER BY timestamp) FILTER (WHERE is_error AND error_text IS NOT NULL AND error_text <> ''))[1] AS first_error|]
-      q =
-        [HI.sql|WITH filtered AS (
-          SELECT |]
-          <> rawSql sessionKeyExpr
-          <> [HI.sql| AS session_id,
-            attributes___user___id AS user_id,
-            attributes___user___email AS user_email,
-            COALESCE(NULLIF(attributes___user___full_name, ''), NULLIF(attributes___user___name, '')) AS user_name,
-            resource___service___name AS service_name,
-            context___trace_id AS trace_id,
-            attributes___url___path AS url_path,
-            attributes___user_agent___original AS user_agent,
-            COALESCE(NULLIF(status_message, ''), NULLIF(body::text, '')) AS error_text,
-            (|]
+  -- One scan of the window keyed by 'sessionKeyExpr' (identity = MAX non-null per session),
+  -- with only rollup-servable aggregates: a distinct count per group (trace ids, services)
+  -- forces the raw store — 7s against 0.15s. Sorting, paging and the header happen here.
+  sessions :: [SessionAggRow] <-
+    Hasql.withHasqlTimefusion enableTfReads
+      $ Hasql.interp
+      $ [HI.sql|SELECT |]
+      <> keySql
+      <> [HI.sql| AS session_id,
+            MAX(attributes___user___id), MAX(attributes___user___email),
+            MAX(COALESCE(NULLIF(attributes___user___full_name, ''), NULLIF(attributes___user___name, ''))),
+            COUNT(*)::BIGINT,
+            COUNT(*) FILTER (WHERE |]
+      <> rawSql severityIsErrorSql
+      <> [HI.sql|)::BIGINT,
+            MIN(timestamp), MAX(COALESCE(end_time, timestamp))
+          FROM otel_logs_and_spans
+          WHERE |]
+      <> whereSql
+      <> [HI.sql| AND |]
+      <> keySql
+      <> [HI.sql| IS NOT NULL
+          GROUP BY 1|]
+  Log.logTrace "fetchSessions: query done" $ AE.object ["rows" AE..= length sessions]
+  -- Services seen in the window, for the header tile; only the first page renders the
+  -- header. Grouping by the service (instead of a distinct count) keeps this on the rollups.
+  serviceRows :: [Maybe Text] <-
+    if skip > 0
+      then pure []
+      else
+        Hasql.withHasqlTimefusion enableTfReads
+          $ Hasql.interp
+          $ [HI.sql|SELECT resource___service___name FROM otel_logs_and_spans WHERE |]
+          <> whereSql
+          <> [HI.sql| GROUP BY 1|]
+  let durationNs r = round (diffUTCTime r.lastSeen r.firstSeen * 1e9) :: Int64
+      ordered = sortOn (Down . case ordering of SortLastSeen -> Left . (.lastSeen); SortFirstSeen -> Left . (.firstSeen); SortDuration -> Right . durationNs; SortErrors -> Right . (.errorCount); SortEvents -> Right . (.eventCount)) sessions
+      page = take aggregatePageSize $ drop skip ordered
+      pageIds = map (.sessionId) page
+  -- First-observed context and the service list for the page only, bounded to the page's own
+  -- span: a session's rows all lie inside it, and it is a fraction of the window.
+  context :: [(Text, Maybe Text, Maybe Text, Maybe Text, Maybe (V.Vector Text))] <-
+    case nonEmpty page of
+      Nothing -> pure []
+      Just rows ->
+        Hasql.withHasqlTimefusion enableTfReads
+          $ Hasql.interp
+          $ [HI.sql|SELECT |]
+          <> keySql
+          <> [HI.sql|,
+            (ARRAY_AGG(attributes___url___path ORDER BY timestamp) FILTER (WHERE attributes___url___path IS NOT NULL AND attributes___url___path <> ''))[1],
+            (ARRAY_AGG(attributes___user_agent___original ORDER BY timestamp) FILTER (WHERE attributes___user_agent___original IS NOT NULL AND attributes___user_agent___original <> ''))[1],
+            (ARRAY_AGG(COALESCE(NULLIF(status_message, ''), NULLIF(body::text, '')) ORDER BY timestamp) FILTER (WHERE (|]
           <> rawSql severityIsErrorSql
-          <> [HI.sql|) AS is_error,
-            timestamp, end_time, level, severity___severity_number, status_code,
-            floor(extract(epoch from timestamp) / #{bucketW})::BIGINT AS bi
+          <> [HI.sql|) AND COALESCE(NULLIF(status_message, ''), NULLIF(body::text, '')) IS NOT NULL))[1],
+            ARRAY_REMOVE(ARRAY_AGG(DISTINCT resource___service___name), NULL)
           FROM otel_logs_and_spans
           WHERE |]
           <> whereSql
-          <> [HI.sql| AND |]
-          <> rawSql sessionKeyExpr
-          <> [HI.sql| IS NOT NULL
-        ), agg AS (
-          SELECT session_id,
-            MAX(user_id) AS user_id, MAX(user_email) AS user_email, MAX(user_name) AS user_name,
-            COUNT(*)::BIGINT AS event_count,
-            COUNT(*) FILTER (WHERE is_error)::BIGINT AS error_count,
-            MIN(timestamp) AS first_seen,
-            MAX(COALESCE(end_time, timestamp)) AS last_seen,
-            (EXTRACT(EPOCH FROM (MAX(COALESCE(end_time, timestamp)) - MIN(timestamp))) * 1000000000)::BIGINT AS duration_ns,
-            -- Sketch, not exact: an exact distinct holds every trace id per
-            -- session for the whole scan, and the sketch is exact below 512
-            -- distinct values anyway -- which every real session is. Same
-            -- spelling on both backends; see Pkg.Parser.Stats.dcountSQL.
-            distinct_count(approx_count_distinct(trace_id))::BIGINT AS trace_count,
-            -- First-observed context, by timestamp. FILTER drops empties so
-            -- we don't report "user landed on '' " for sessions where the
-            -- opening event has no url_path / user_agent.|]
-          <> firstObservedSql
-          <> [HI.sql|
-          FROM filtered GROUP BY session_id
-        ), sess_bkt AS (
-          -- One row per session, keyed to the bucket of its first event, tagged
-          -- clean/errored. Feeds the header's over-time bar chart.
-          SELECT floor(extract(epoch from first_seen) / #{bucketW})::BIGINT AS bi, (error_count > 0) AS has_err FROM agg
-        ), bkt AS (
-          SELECT bi, COUNT(*) FILTER (WHERE NOT has_err)::BIGINT AS c, COUNT(*) FILTER (WHERE has_err)::BIGINT AS e
-          FROM sess_bkt GROUP BY bi
-        ), summ AS (
-          -- Header aggregates over ALL sessions (not just the page), computed in
-          -- this same scan and CROSS JOINed onto page rows below.
-          SELECT
-            COUNT(*)::BIGINT AS total_sessions,
-            COUNT(*) FILTER (WHERE error_count > 0)::BIGINT AS errored_sessions,
-            distinct_count(approx_count_distinct(COALESCE(user_id, user_email)) FILTER (WHERE COALESCE(user_id, user_email) IS NOT NULL))::BIGINT AS unique_users,
-            (SELECT distinct_count(approx_count_distinct(service_name) FILTER (WHERE service_name IS NOT NULL))::BIGINT FROM filtered) AS unique_services,
-            COALESCE(PERCENTILE_CONT(0.5)  WITHIN GROUP (ORDER BY duration_ns), 0)::BIGINT AS med_dur,
-            COALESCE(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY duration_ns), 0)::BIGINT AS p95_dur,
-            COALESCE(PERCENTILE_CONT(0.5)  WITHIN GROUP (ORDER BY event_count), 0)::BIGINT AS med_evt,
-            COALESCE(SUM(event_count), 0)::BIGINT AS total_events,
-            COALESCE((SELECT ARRAY_AGG(bi ORDER BY bi) FROM bkt), '{}'::BIGINT[]) AS bis,
-            COALESCE((SELECT ARRAY_AGG(c  ORDER BY bi) FROM bkt), '{}'::BIGINT[]) AS clean_bkt,
-            COALESCE((SELECT ARRAY_AGG(e  ORDER BY bi) FROM bkt), '{}'::BIGINT[]) AS err_bkt
-          FROM agg
-        ), page AS (
-          SELECT * FROM agg ORDER BY |]
-          <> sortColSql
-          <> [HI.sql| DESC NULLS LAST OFFSET #{skip} LIMIT #{aggregatePageSize}
-        ), svcs AS (
-          SELECT session_id, ARRAY_REMOVE(ARRAY_AGG(DISTINCT service_name), NULL) AS services
-          FROM filtered WHERE session_id IN (SELECT session_id FROM page) GROUP BY session_id
-        ) SELECT p.session_id, p.user_id, p.user_email, p.user_name,
-            p.event_count, p.error_count, p.first_seen,
-            p.last_seen, p.duration_ns, p.trace_count,
-            COALESCE(s.services, '{}'::TEXT[]),
-            p.landing_url, p.user_agent, p.first_error,
-            sm.total_sessions, sm.errored_sessions, sm.unique_users, sm.unique_services,
-            sm.med_dur, sm.p95_dur, sm.med_evt, sm.total_events,
-            sm.bis, sm.clean_bkt, sm.err_bkt
-          FROM page p LEFT JOIN svcs s USING (session_id)
-          CROSS JOIN summ sm
-          ORDER BY p.|]
-          <> sortColSql
-          <> [HI.sql| DESC NULLS LAST|]
-  rawRows :: [RawSessionRow] <- Hasql.withHasqlTimefusion enableTfReads $ Hasql.interp q
-  Log.logTrace "fetchSessions: query done" $ AE.object ["rows" AE..= length rawRows]
+          <> [HI.sql| AND timestamp >= #{minimum1 $ fmap (.firstSeen) rows} AND timestamp <= #{maximum1 $ fmap (.lastSeen) rows}
+            AND |]
+          <> keySql
+          <> [HI.sql| = ANY(#{pageIds}::text[])
+          GROUP BY 1|]
   -- Which of this page's sessions actually have a screen recording. Lives in
   -- Postgres (projects.replay_sessions), never in telemetry, so it's a second
   -- lookup over the page's ids only. Non-UUID session keys (sessions derived
   -- from user id/email) can never have a recording, so they're not even asked for.
-  replayed <- replayedSessionIds pid (mapMaybe (UUID.fromText . (.sessionId)) rawRows)
-  let
-    -- Densify the header's over-time buckets across the full picker range so
-    -- empty periods render as blanks (mirrors the previous fetchSessionSummary).
-    -- The summary columns are identical on every row (CROSS JOIN); read the head.
-    mkSummary s =
-      let fromT = fromMaybe (addUTCTime (-3600) now) (fst dateRange)
-          toT = fromMaybe now (snd dateRange)
-          epochBucket t = floor (utcTimeToPOSIXSeconds t) `div` bucketW
-          pMin = epochBucket fromT
-          pMax = max pMin (epochBucket toT)
-          bisI = ints s.summBis
-          dens v = densifyBuckets (pMin, pMax) $ zip bisI (ints v)
-       in SessionSummary
-            { totalSessions = s.totalSessions
-            , erroredSessions = s.erroredSessions
-            , uniqueUsers = s.uniqueUsers
-            , uniqueServices = s.uniqueServices
-            , medianDurationNs = s.medDur
-            , p95DurationNs = s.p95Dur
-            , medianEvents = s.medEvt
-            , totalEvents = s.totalEvents
-            , bucketWidthSec = bucketW
-            , bucketStartEpoch = pMin * bucketW
-            , clean = dens s.cleanBkt
-            , errored = dens s.errBkt
-            }
-    summary = maybe def{bucketWidthSec = bucketW} mkSummary (listToMaybe rawRows)
-    total = fromIntegral summary.totalSessions
-    toRowWithVolume r =
-      SessionRow
-        { sessionId = r.sessionId
-        , userId = r.userId
-        , userEmail = r.userEmail
-        , userName = r.userName
-        , eventCount = r.eventCount
-        , errorCount = r.errorCount
-        , firstSeen = r.firstSeen
-        , lastSeen = r.lastSeen
-        , durationNs = r.durationNs
-        , traceCount = r.traceCount
-        , services = r.services
-        , landingUrl = r.landingUrl
-        , userAgent = r.userAgent
-        , firstError = r.firstError
-        , hasReplay = maybe False (`S.member` replayed) (UUID.fromText r.sessionId)
-        }
-  pure (summary, total, map toRowWithVolume rawRows)
-  where
-    ints :: V.Vector Int64 -> [Int]
-    ints = map fromIntegral . V.toList
+  replayed <- replayedSessionIds pid (mapMaybe UUID.fromText pageIds)
+  unless (length context == length page)
+    $ Log.logAttention "fetchSessions: page rows without context"
+    $ AE.object ["project_id" AE..= pid, "page" AE..= length page, "context" AE..= length context]
+  let contextById = HM.fromList [(sid, (landing, agent, firstError, fromMaybe V.empty services)) | (sid, landing, agent, firstError, services) <- context]
+      durations = V.fromList $ sort $ map durationNs sessions
+      events = V.fromList $ sort $ map (.eventCount) sessions
+      -- Densify the header's over-time buckets across the full picker range so
+      -- empty periods render as blanks.
+      fromT = fromMaybe (addUTCTime (-3600) now) (fst dateRange)
+      toT = fromMaybe now (snd dateRange)
+      epochBucket t = floor (utcTimeToPOSIXSeconds t) `div` bucketW
+      pMin = epochBucket fromT
+      pMax = max pMin (epochBucket toT)
+      buckets errored = densifyBuckets (pMin, pMax) [(epochBucket r.firstSeen, 1) | r <- sessions, (r.errorCount > 0) == errored]
+      summary =
+        SessionSummary
+          { totalSessions = fromIntegral $ length sessions
+          , erroredSessions = fromIntegral $ length $ filter ((> 0) . (.errorCount)) sessions
+          , uniqueUsers = fromIntegral $ length $ ordNub $ mapMaybe (\r -> r.userId <|> r.userEmail) sessions
+          , uniqueServices = fromIntegral $ length $ catMaybes serviceRows
+          , medianDurationNs = percentile 0.5 durations
+          , p95DurationNs = percentile 0.95 durations
+          , medianEvents = percentile 0.5 events
+          , totalEvents = sum $ map (.eventCount) sessions
+          , bucketWidthSec = bucketW
+          , bucketStartEpoch = pMin * bucketW
+          , clean = buckets False
+          , errored = buckets True
+          }
+      toRow r =
+        let (landingUrl, userAgent, firstError, services) = fromMaybe (Nothing, Nothing, Nothing, V.empty) $ HM.lookup r.sessionId contextById
+         in SessionRow
+              { sessionId = r.sessionId
+              , userId = r.userId
+              , userEmail = r.userEmail
+              , userName = r.userName
+              , eventCount = r.eventCount
+              , errorCount = r.errorCount
+              , firstSeen = r.firstSeen
+              , lastSeen = r.lastSeen
+              , durationNs = durationNs r
+              , services
+              , landingUrl
+              , userAgent
+              , firstError
+              , hasReplay = maybe False (`S.member` replayed) (UUID.fromText r.sessionId)
+              }
+  pure (summary, fromIntegral summary.totalSessions, map toRow page)
 
 
--- | Session-level aggregates for the Sessions viz header. Shares the filter
--- and CTE shape with 'fetchSessions' so the header reconciles with the table.
+-- | PERCENTILE_CONT over an ascending vector, as the sessions header always reported it.
+--
+-- >>> percentile 0.5 (V.fromList [10, 20, 30, 40])
+-- 25
+-- >>> (percentile 0.95 (V.fromList [1 .. 100]), percentile 0.5 (V.fromList [7]), percentile 0.5 V.empty)
+-- (95,7,0)
+percentile :: Double -> V.Vector Int64 -> Int64
+percentile q sorted
+  | V.null sorted = 0
+  | otherwise =
+      let pos = q * fromIntegral (V.length sorted - 1)
+          lo = floor pos
+          lower = fromIntegral $ sorted V.! lo
+          upper = fromIntegral $ sorted V.! min (V.length sorted - 1) (lo + 1)
+       in round $ lower + (pos - fromIntegral lo) * (upper - lower)
+
+
+-- | Session-level aggregates for the Sessions viz header, computed from the same
+-- scan as the table so the two reconcile.
 -- @clean@ and @errored@ are parallel arrays: bucket @i@ starts at
 -- @bucketStartEpoch + i*bucketWidthSec@. Both are empty when there are no
 -- sessions in range.
