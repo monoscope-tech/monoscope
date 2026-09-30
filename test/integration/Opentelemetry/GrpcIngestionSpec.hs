@@ -85,7 +85,7 @@ queryLogsVizSorted :: TestResources -> Projects.ProjectId -> Maybe Text -> Text 
 queryLogsVizSorted tr projectId queryM vizType sortByM = do
   unless (vizType == "sessions") $ fail ("queryLogsVizSorted only supports the sessions viz, got: " <> toString vizType)
   let (timeFrom, timeTo) = testTimeRange
-  snd <$> toServantResponse tr (Log.logSessionsH projectId queryM Nothing (Just timeFrom) (Just timeTo) Nothing sortByM)
+  snd <$> toServantResponse tr (Log.logSessionsH projectId queryM Nothing (Just timeFrom) (Just timeTo) Nothing sortByM Nothing)
 
 
 -- | Helper to extract the row dataset from a LogResult.
@@ -621,6 +621,7 @@ spec = sequential $ aroundAll withTestResources do
                 summ.erroredSessions `shouldBe` 1
                 summ.uniqueUsers `shouldBe` 2
                 summ.totalEvents `shouldBe` 6
+                summ.uniqueServices `shouldBe` 1
                 summ.medianEvents `shouldBe` 3
                 (sum summ.clean, sum summ.errored) `shouldBe` (1, 1)
               Nothing -> expectationFailure "session summary missing from first page"

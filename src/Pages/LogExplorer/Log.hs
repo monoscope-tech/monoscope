@@ -1061,19 +1061,21 @@ logPatternsH pid queryM' sinceM fromM toM sourceM pTargetM skipM = do
 
 
 -- | Sessions visualization data endpoint (aggregate sessions as JSON).
-logSessionsH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> ATAuthCtx (RespHeaders SessionsView)
-logSessionsH pid queryM' sinceM fromM toM skipM sortByM = do
+logSessionsH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders SessionsView)
+logSessionsH pid queryM' sinceM fromM toM skipM sortByM cursorM = do
   (authCtx, _, fromD, toD, envM, serviceM) <- logDataEnv pid sinceM fromM toM
   case parseQueryToAST (maybeToMonoid queryM') of
     Left err -> Log.logInfo "Log explorer sessions: rejected invalid KQL query" err >> addRespHeaders (SessionsView 0 V.empty Nothing)
     Right queryAST -> do
       let skip = fromMaybe 0 skipM
+          -- The header rides the first page only; a live poll (cursor set) merges new rows
+          -- into a list that already has one, so it skips the header and its service read.
+          header = skip == 0 && isNothing cursorM
       -- An unrecognised sort_by (stale shared link, hand-edited URL) falls back to the
       -- default rather than 400-ing; the parse exists so a new dropdown option can't
       -- silently land here.
-      (summ, total, rows) <- LogQueries.fetchSessions authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) envM serviceM (rightToMaybe . parseUrlPiece =<< sortByM) skip
-      -- Summary only rides the first page; later load-more pages don't need it.
-      addRespHeaders $ SessionsView total (V.fromList rows) (guard (skip == 0) $> summ)
+      (summ, total, rows) <- LogQueries.fetchSessions authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) envM serviceM (rightToMaybe . parseUrlPiece =<< sortByM) skip header
+      addRespHeaders $ SessionsView total (V.fromList rows) summ
 
 
 -- | Lazily-loaded alert configuration form (HTMX partial). Kept off the shell's

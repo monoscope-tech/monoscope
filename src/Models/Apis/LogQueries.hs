@@ -723,8 +723,8 @@ sessionSortLabel ordering = T.toUpper (T.take 1 label) <> T.drop 1 label
     label = T.replace "_" " " $ sessionSortParam ordering
 
 
-fetchSessions :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Bool -> Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Text -> Maybe Text -> Maybe SessionSort -> Int -> Eff es (SessionSummary, Int, [SessionRow])
-fetchSessions enableTfReads pid queryAST dateRange environment service sortByM skip = do
+fetchSessions :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Bool -> Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Text -> Maybe Text -> Maybe SessionSort -> Int -> Bool -> Eff es (Maybe SessionSummary, Int, [SessionRow])
+fetchSessions enableTfReads pid queryAST dateRange environment service sortByM skip header = do
   now <- Time.currentTime
   let scope = mkScopedQuery pid dateRange environment service
       whereSql = rawSql $ scopedQueryWhere now (Just SSpans) scope queryAST
@@ -757,10 +757,10 @@ fetchSessions enableTfReads pid queryAST dateRange environment service sortByM s
       <> [HI.sql| IS NOT NULL
           GROUP BY 1|]
   Log.logTrace "fetchSessions: query done" $ AE.object ["rows" AE..= length sessions]
-  -- Services seen in the window, for the header tile; only the first page renders the
-  -- header. Grouping by the service (instead of a distinct count) keeps this on the rollups.
+  -- Services seen in the window, for the header tile. Grouping by the service (instead of
+  -- a distinct count) keeps this on the rollups.
   serviceRows :: [Maybe Text] <-
-    if skip > 0
+    if not header
       then pure []
       else
         Hasql.withHasqlTimefusion enableTfReads
@@ -816,8 +816,7 @@ fetchSessions enableTfReads pid queryAST dateRange environment service sortByM s
       pMin = epochBucket fromT
       pMax = max pMin (epochBucket toT)
       buckets errored = densifyBuckets (pMin, pMax) [(epochBucket r.firstSeen, 1) | r <- sessions, (r.errorCount > 0) == errored]
-      summary =
-        SessionSummary
+      summary = guard header $> SessionSummary
           { totalSessions = fromIntegral $ length sessions
           , erroredSessions = fromIntegral $ length $ filter ((> 0) . (.errorCount)) sessions
           , uniqueUsers = fromIntegral $ length $ ordNub $ mapMaybe (\r -> r.userId <|> r.userEmail) sessions
@@ -831,25 +830,10 @@ fetchSessions enableTfReads pid queryAST dateRange environment service sortByM s
           , clean = buckets False
           , errored = buckets True
           }
-      toRow r =
-        let (landingUrl, userAgent, firstError, services) = fromMaybe (Nothing, Nothing, Nothing, V.empty) $ HM.lookup r.sessionId contextById
-         in SessionRow
-              { sessionId = r.sessionId
-              , userId = r.userId
-              , userEmail = r.userEmail
-              , userName = r.userName
-              , eventCount = r.eventCount
-              , errorCount = r.errorCount
-              , firstSeen = r.firstSeen
-              , lastSeen = r.lastSeen
-              , durationNs = durationNs r
-              , services
-              , landingUrl
-              , userAgent
-              , firstError
-              , hasReplay = maybe False (`S.member` replayed) (UUID.fromText r.sessionId)
-              }
-  pure (summary, fromIntegral summary.totalSessions, map toRow page)
+      toRow r@SessionAggRow{..} =
+        let (landingUrl, userAgent, firstError, services) = fromMaybe (Nothing, Nothing, Nothing, V.empty) $ HM.lookup sessionId contextById
+         in SessionRow{durationNs = durationNs r, hasReplay = maybe False (`S.member` replayed) (UUID.fromText sessionId), ..}
+  pure (summary, length sessions, map toRow page)
 
 
 -- | PERCENTILE_CONT over an ascending vector, as the sessions header always reported it.
@@ -889,7 +873,6 @@ data SessionSummary = SessionSummary
   , errored :: [Int]
   }
   deriving stock (Generic, Show)
-  deriving anyclass (Default)
   deriving (AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake], DAE.OmitNothingFields] SessionSummary
 
 
