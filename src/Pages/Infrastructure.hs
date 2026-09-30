@@ -478,7 +478,7 @@ imagesTable pid window url runtimeM registryM images allImages =
     , columns =
         [ col "Image" (\image -> div_ [class_ "flex items-center gap-2 min-w-0"] $ faSprite_ "layer-group" "solid" "h-3.5 w-3.5 shrink-0 text-iconNeutral" >> span_ [class_ "truncate font-medium text-textStrong"] (toHtml image.image)) & withAttrs [class_ "min-w-72 w-full"]
         , col "Running" (\image -> span_ [class_ "tabular-nums text-textStrong"] $ toHtml $ show image.running) & withAttrs [class_ "w-24 text-right"]
-        , col "Source" (\image -> span_ [class_ "text-textWeak"] $ toHtml image.registry) & withAttrs [class_ "w-36"]
+        , col "Source" (\image -> span_ [class_ "whitespace-nowrap text-textWeak"] $ toHtml image.registry) & withAttrs [class_ "w-36"]
         , col "Tags" renderTags & withAttrs [class_ "w-64 max-lg:hidden"]
         , col "Runtime" (\image -> span_ [class_ "text-textWeak"] $ toHtml $ T.intercalate ", " $ map Containers.runtimeLabel image.runtimes) & withAttrs [class_ "w-28 max-xl:hidden"]
         , col "CPU (cores)" (plainCell . fmap (showFFloat' 3) . (.cpuCores)) & withAttrs [class_ "w-24 text-right"]
@@ -507,7 +507,8 @@ imagesTable pid window url runtimeM registryM images allImages =
           }
     }
   where
-    renderTags image = div_ [class_ "flex max-w-72 flex-nowrap gap-1 overflow-hidden"] do
+    -- Two tags and a "+N" pill wrap rather than clip: a long tag used to cut the pill to "(".
+    renderTags image = div_ [class_ "flex max-w-72 flex-wrap gap-1"] do
       forM_ (take 2 image.tags) $ \tag -> span_ [class_ "badge badge-xs badge-ghost shrink-0"] $ toHtml tag
       when (length image.tags > 2) $ span_ [class_ "badge badge-xs badge-outline shrink-0"] $ toHtml $ "+" <> show (length image.tags - 2)
 
