@@ -218,11 +218,12 @@ jobs:
         run: mkdir -p .ci && printf '%s\n' "$FINGERPRINTS" > .ci/fingerprints.tsv
 
       - name: Install hpack
-        run: cabal install --install-method=copy --overwrite-policy=always hpack-0.39.6
+        run: cabal install --install-method=copy --overwrite-policy=always hpack-0.39.5
 
-      # Delete first: hpack refuses to overwrite a .cabal whose header names a
-      # newer hpack than its own. Keep the installed version pinned to the one that
-      # generated the checked-in manifest so CI builds the same cabal file developers do.
+      # Delete first: hpack refuses to overwrite a .cabal whose header names a newer
+      # hpack than its own, and developers may commit a file from a newer release. The
+      # generated file is not a fingerprint input, so the version only has to resolve in
+      # the runner's cabal index (0.39.6 does not, as of 2026-09-30).
       - name: Regenerate cabal file
         run: rm -f monoscope.cabal && hpack
 
