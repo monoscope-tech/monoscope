@@ -1767,19 +1767,21 @@ instance ToHtml DashboardsGet where
   toHtmlRaw = toHtml
 
 
-renderDashboardListItem :: Bool -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Html ()
-renderDashboardListItem checked title value description icon prview = label_
+renderDashboardListItem :: Bool -> Text -> Text -> Maybe Text -> Maybe Text -> Html ()
+renderDashboardListItem checked title value description icon = label_
   [ class_
-      [text| cursor-pointer group/it text-sm border border-transparent hover:bg-fillWeaker hover:border-strokeWeak rounded-lg flex p-1.5 gap-2 items-center
+      [text| cursor-pointer group/it text-sm border border-transparent hover:bg-fillWeaker hover:border-strokeWeak rounded-lg flex p-1.5 gap-2 items-center group-has-[input:focus-visible]/it:outline-2 group-has-[input:focus-visible]/it:outline-offset-2
       group-has-[input:checked]/it:bg-fillWeaker group-has-[input:checked]/it:border-strokeWeak dashboardListItem|]
   , term "data-title" title
   , term "data-description" $ maybeToMonoid description
-  , term "data-preview" $ fromMaybe "/public/assets/svgs/screens/dashboard_blank.svg" prview
-  , term "hx-on:mouseover" "dItemPreview.src = this.dataset.preview; dItemTitle.innerText = this.dataset.title; dItemDescription.innerText = this.dataset.description"
-  , term "hx-on:mouseout" "const c = document.querySelector('.dashboardListItem:has(input:checked)'); if (c) { dItemPreview.src = c.dataset.preview; dItemTitle.innerText = c.dataset.title; dItemDescription.innerText = c.dataset.description }"
   ]
   do
-    input_ $ [class_ "hidden", type_ "radio", name_ "file", value_ value] <> [checked_ | checked]
+    input_ $ [ class_ "sr-only"
+             , type_ "radio"
+             , name_ "file"
+             , value_ value
+             , term "hx-on:change" "const item = this.closest('label'); const name = document.getElementById('title'); if (!name.value.trim() || name.value === name.dataset.templateTitle) name.value = item.dataset.title; name.dataset.templateTitle = item.dataset.title; dItemDescription.textContent = item.dataset.description; document.querySelectorAll('#dashboardTemplatePreviews [data-template]').forEach(preview => preview.hidden = preview.dataset.template !== this.value)"
+             ] <> [checked_ | checked]
     span_ [class_ "p-1 px-2 bg-fillWeak rounded-md"] $ faSprite_ (fromMaybe "square-dashed" icon) "regular" "w-3 h-3"
     span_ [class_ "grow"] $ toHtml title
     span_ [class_ "px-2 p-1 invisible group-has-[input:checked]/it:visible"] $ faSprite_ "chevron-right" "regular" "w-3 h-3"
@@ -1803,13 +1805,14 @@ starButton_ pid dashId isStarred =
 
 dashboardsGet_ :: DashboardsGetD -> Html ()
 dashboardsGet_ dg = do
-  unless dg.embedded $ Components.modalWith_ "newDashboardMdl" def{autoOpen = dg.showNew} Nothing $ form_
-    [ class_ "flex  h-[90vh] gap-4 group/md"
+  unless dg.embedded $ Components.modalWith_ "newDashboardMdl" def{autoOpen = dg.showNew, boxClass = "max-w-none", boxStyle = "width:min(92vw,76rem);max-width:none;overflow:clip"} Nothing $ form_
+    [ class_ "flex flex-col gap-5 overflow-y-auto md:min-h-0 md:flex-row md:overflow-hidden group/md"
+    , style_ "height:min(80vh,48rem)"
     , hxPost_ $ "/p/" <> dg.projectId.toText <> "/dashboards"
     , hxVals_ "js:{ teams: window.getTagValues('#teamHandlesInput') }"
     ]
     do
-      div_ [class_ "w-2/7 space-y-4 h-full flex flex-col"] do
+      div_ [class_ "flex max-h-48 shrink-0 flex-col gap-3 md:max-h-none md:w-72"] do
         div_ [class_ "flex flex-col gap-2 border-b pb-4"] do
           strong_ "Create dashboard"
           label_ [class_ "input input-sm flex items-center "] do
@@ -1817,31 +1820,59 @@ dashboardsGet_ dg = do
             input_
               [ type_ "search"
               , class_ "grow pl-2"
-              , placeholder_ "Search"
+              , placeholder_ "Find a template"
+              , Aria.label_ "Find a dashboard template"
               , filterInputAttr_ ".dashboardListItem in #dashListItemParent"
               ]
-            kbd_ [class_ "kbd kbd-sm"] "/"
-        div_ [class_ "space-y-1 h-auto overflow-auto", id_ "dashListItemParent"] do
-          renderDashboardListItem True "Blank dashboard" "" (Just "Get started from a blank slate") (Just "cards-blank") Nothing
+        div_ [class_ "min-h-0 space-y-1 overflow-auto", id_ "dashListItemParent"] do
+          renderDashboardListItem True "Blank dashboard" "" (Just "Start with an empty dashboard") (Just "cards-blank")
           forM_ dg.dashTemplates \dashTmpl ->
-            renderDashboardListItem False (maybeToMonoid dashTmpl.title) (maybeToMonoid dashTmpl.file) dashTmpl.description dashTmpl.icon dashTmpl.preview
+            renderDashboardListItem False (maybeToMonoid dashTmpl.title) (maybeToMonoid dashTmpl.file) dashTmpl.description dashTmpl.icon
 
-      div_ [class_ "w-5/7 px-3 py-5 h-full overflow-y-scroll "] do
-        div_ [class_ "flex items-end gap-2"] do
-          div_ [class_ "flex w-full gap-2"] do
-            formField_ FieldSm def{placeholder = "Dashboard Title"} "Dashboard name" "title" True Nothing
-            let teamList = encodeText $ (\x -> AE.object ["name" AE..= ("@" <> x.handle), "value" AE..= x.id]) <$> dg.teams
-            formField_ FieldSm def{placeholder = "Add teams"} "Teams" "teamHandlesInput" False $ Just $ tagInput_ "teamHandlesInput" "Add teams" [data_ "tagify-text-prop" "name", data_ "tagify-whitelist" teamList, data_ "tagify-resolve" "", data_ "tagify-initial" $ encodeText $ V.map (.id) $ V.filter (.is_everyone) dg.teams]
-            formField_ FieldSm def{placeholder = "reports/"} "Folder" "fileDir" False Nothing
-          div_ [class_ "shrink"] $ primaryButton_ [type_ "submit"] "Create"
-        div_ [class_ "py-2 border-b border-b-strokeWeak"] do
-          span_ [class_ "text-sm "] "Using "
-          span_ [class_ "text-sm font-medium", id_ "dItemTitle"] "Custom Dashboard"
-          span_ [class_ "text-sm "] " template"
-          p_ [class_ "text-xs text-textWeak w-full overflow-ellipsis truncate", id_ "dItemDescription"] "Get started from a blank slate"
-        div_ [class_ "pt-5"]
-          $ div_ [class_ "bg-fillBrand-strong px-2 py-4 rounded-xl w-full flex items-center"]
-          $ img_ [src_ "/public/assets/svgs/screens/dashboard_blank.svg", class_ "w-full rounded overflow-hidden", id_ "dItemPreview", term "loading" "lazy", term "decoding" "async"]
+      div_ [class_ "flex min-w-0 shrink-0 flex-col gap-4 md:min-h-0 md:flex-1 md:overflow-hidden"] do
+        div_ [class_ "grid shrink-0 grid-cols-1 gap-3 sm:grid-cols-3 [&_.input]:h-12 [&_.tagify]:h-12 [&_.tagify]:min-h-12 [&_.tagify]:overflow-y-auto"] do
+          formField_ FieldSm def{value = "Blank dashboard", extraAttrs = [data_ "template-title" "Blank dashboard"]} "Dashboard name" "title" True Nothing
+          let teamList = encodeText $ (\x -> AE.object ["name" AE..= ("@" <> x.handle), "value" AE..= x.id]) <$> dg.teams
+          formField_ FieldSm def{placeholder = "Add teams"} "Teams" "teamHandlesInput" False $ Just $ tagInput_ "teamHandlesInput" "Add teams" [rows_ "1", data_ "tagify-text-prop" "name", data_ "tagify-whitelist" teamList, data_ "tagify-resolve" "", data_ "tagify-initial" $ encodeText $ V.map (.id) $ V.filter (.is_everyone) dg.teams]
+          formField_ FieldSm def{placeholder = "reports/"} "Folder" "fileDir" False Nothing
+        p_ [class_ "shrink-0 text-sm text-textWeak", id_ "dItemDescription"] "Start with an empty dashboard"
+        div_ [id_ "dashboardTemplatePreviews", class_ "h-80 shrink-0 md:min-h-0 md:h-auto md:flex-1"] do
+          div_ [data_ "template" "", class_ "h-full"] $ div_ [class_ "flex h-full min-h-80 flex-col overflow-hidden rounded-xl border border-strokeWeak bg-bgRaised"] do
+            div_ [class_ "flex items-center justify-between border-b border-strokeWeak px-4 py-3"] do
+              span_ [class_ "text-sm font-medium text-textStrong"] "Empty canvas"
+              span_ [class_ "text-xs text-textWeak"] "Layout preview"
+            div_ [class_ "flex flex-1 items-center justify-center bg-fillWeaker p-6"] $
+              div_ [class_ "flex w-full max-w-sm flex-col items-center gap-3 rounded-xl border border-dashed border-strokeWeak bg-bgRaised px-6 py-10 text-center"] do
+                span_ [class_ "rounded-lg bg-fillBrand-weak p-3 text-textBrand"] $ faSprite_ "chart-line" "regular" "h-5 w-5"
+                span_ [class_ "text-sm font-medium text-textStrong"] "Your first chart goes here"
+                span_ [class_ "text-xs text-textWeak"] "Start with a blank canvas and add widgets after creating it."
+          forM_ dg.dashTemplates \dashTmpl -> do
+            let firstTab = dashTmpl.tabs >>= listToMaybe
+                widgets = filter ((/= Widget.WTGroup) . (.wType)) $ foldMap (universeOf (#children . _Just . folded)) $ maybe dashTmpl.widgets (.widgets) firstTab
+            div_ [data_ "template" $ maybeToMonoid dashTmpl.file, class_ "h-full", hidden_ ""]
+              $ div_ [class_ "flex h-full min-h-80 flex-col overflow-hidden rounded-xl border border-strokeWeak bg-bgRaised"] do
+                div_ [class_ "flex items-center justify-between gap-3 border-b border-strokeWeak px-4 py-3"] do
+                  span_ [class_ "truncate text-sm font-medium text-textStrong"] $ toHtml $ fromMaybe "Dashboard" dashTmpl.title
+                  span_ [class_ "shrink-0 text-xs text-textWeak"] "Layout preview · no live data"
+                div_ [class_ "min-h-0 flex-1 overflow-y-auto bg-fillWeaker p-3"] $ div_ [class_ "grid grid-cols-12 gap-2"] do
+                  forM_ (take 24 widgets) \widget ->
+                    div_ [class_ $ "col-span-6 flex min-h-28 min-w-0 flex-col rounded-lg border border-strokeWeak bg-bgRaised p-3 " <> (case widget.layout >>= (.w) of
+                      Just w | w <= 3 -> "sm:col-span-3"
+                      Just w | w <= 4 -> "sm:col-span-4"
+                      Just w | w <= 6 -> "sm:col-span-6"
+                      _ -> "sm:col-span-12")
+                      ] do
+                      p_ [class_ "truncate text-xs font-medium text-textStrong", title_ $ fromMaybe "Untitled widget" widget.title] $ toHtml $ fromMaybe "Untitled widget" widget.title
+                      p_ [class_ "mt-1 text-[10px] text-textWeak"] $ toHtml $ T.toTitle $ T.replace "_" " " $ toText $ encodeEnumSC @"WT" widget.wType
+                      if widget.wType `elem` [Widget.WTStat, Widget.WTTimeseriesStat]
+                        then div_ [class_ "mt-auto pt-3"] do
+                          div_ [class_ "h-5 w-16 rounded bg-fillBrand-weak"] ""
+                          div_ [class_ "mt-2 h-1.5 w-24 max-w-full rounded bg-fillWeak"] ""
+                        else div_ [class_ "mt-auto flex h-12 items-end gap-1 border-b border-strokeWeak pt-3"] do
+                          forM_ [5, 7, 4, 9, 6, 8, 5] \height ->
+                            div_ [class_ "max-w-4 flex-1 rounded-t bg-fillBrand-weak", style_ $ "height:" <> show (height * 10) <> "%"] ""
+                  when (length widgets > 24) $ p_ [class_ "col-span-12 py-2 text-center text-xs text-textWeak"] $ toHtml $ "+ " <> show (length widgets - 24) <> " more widgets"
+        div_ [class_ "flex shrink-0 justify-end border-t border-strokeWeak pt-3"] $ primaryButton_ [type_ "submit"] "Create"
 
   div_ [id_ "itemsListPage", class_ "mx-auto gap-8 w-full flex flex-col group/pg"] do
     let getTeams x = mapMaybe (\xx -> find (\t -> t.id == xx) dg.teams) (V.toList x.teams)

@@ -330,6 +330,20 @@ spec = sequential $ aroundAll withTestResources do
       html `shouldSatisfy` T.isInfixOf "for=\"newDashboardMdl\""
       html `shouldSatisfy` (not . T.isInfixOf "href=\"newDashboardMdl\"")
 
+    it "dashboardTemplatePicker_prefillsNameAndPreviewsEveryTemplate" \tr -> do
+      (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters
+      let html = TL.toStrict $ renderText $ toHtml pg
+      html `shouldSatisfy` T.isInfixOf "value=\"Blank dashboard\""
+      html `shouldSatisfy` T.isInfixOf "data-title=\"Nginx\""
+      html `shouldSatisfy` T.isInfixOf "data-template=\"nginx.yaml\""
+      html `shouldSatisfy` T.isInfixOf "Requests"
+      html `shouldSatisfy` (not . T.isInfixOf "http-stats.svg")
+      case pg of
+        Dashboards.DashboardsGet (PageCtx _ d) ->
+          forM_ d.dashTemplates \template ->
+            html `shouldSatisfy` T.isInfixOf ("data-template=\"" <> fromMaybe "" template.file <> "\"")
+        _ -> fail "Expected full dashboard list response"
+
     it "dashboard list omits the global service selector" \tr -> do
       (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters
       case pg of

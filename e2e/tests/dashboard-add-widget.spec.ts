@@ -94,6 +94,31 @@ async function openWidgetDrawer(page: Page) {
   await expect(page.locator("#visualizationTabs")).toBeVisible({ timeout: 20000 });
 }
 
+test("dashboard templates prefill the name and preview their own widgets", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`/p/${DEMO_PROJECT}/dashboards?new=true`);
+  const modal = page.locator("#newDashboardMdl + .modal .modal-box");
+  const preview = page.locator("#dashboardTemplatePreviews");
+  const create = page.getByRole("button", { name: "Create", exact: true });
+  const initial = { modal: await modal.boundingBox(), preview: await preview.boundingBox(), create: await create.boundingBox() };
+  const name = page.getByRole("textbox", { name: "Dashboard name *", exact: true });
+  await expect(name).toHaveValue("Blank dashboard");
+  await page.locator("#dashListItemParent").getByText("Nginx", { exact: true }).click();
+  await expect(name).toHaveValue("Nginx");
+  await expect(page.locator('#dashboardTemplatePreviews [data-template="nginx.yaml"]')).toBeVisible();
+  await expect(page.locator('#dashboardTemplatePreviews [data-template="nginx.yaml"]')).toContainText("Requests");
+  const selected = { modal: await modal.boundingBox(), preview: await preview.boundingBox(), create: await create.boundingBox() };
+  for (const part of ["modal", "preview", "create"] as const) {
+    for (const edge of ["x", "y", "width", "height"] as const) {
+      expect(Math.abs(selected[part]![edge] - initial[part]![edge]), `${part} ${edge} moved`).toBeLessThan(1);
+    }
+  }
+  await name.fill("My infrastructure");
+  await page.locator("#dashListItemParent").getByText("Redis", { exact: true }).click();
+  await expect(name).toHaveValue("My infrastructure");
+  await expect(page.locator('#dashboardTemplatePreviews [data-template="redis.yaml"]')).toBeVisible();
+});
+
 test.describe("adding widgets to a dashboard", () => {
   // Every test here writes to one shared dashboard.
   test.describe.configure({ mode: "serial" });
