@@ -15,6 +15,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy qualified as LBS
 import Data.Default (def)
+import Data.Time (addUTCTime)
 import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
 import Data.Text qualified as T
@@ -630,13 +631,14 @@ spec = sequential $ aroundAll withTestResources do
       md.error `shouldBe` Nothing
 
     -- The issue volume chart's KQL scans every row of its window on TimeFusion (4-27s
-    -- for a day in prod); a wide, unscoped window is answered from the hourly rollup.
+    -- for a day in prod); a wide, unscoped, covered window is answered from the hourly rollup.
     it "answers a wide window from the hourly rollup and a narrow one from the query" \tr -> do
       now <- getTestTime tr.trTestClock
       _ <- withResource tr.trPool \conn -> PG.execute conn [SqlQQ.sql|INSERT INTO apis.log_pattern_hourly_stats (project_id, pattern_hash, hour_bucket, event_count) VALUES (?, 'rollup-route', date_trunc('hour', ?::timestamptz) - interval '2 hours', 7)|] (testPid, now)
       let rollup = Issues.hourlyRollupSql "apis.log_pattern_hourly_stats" "pattern_hash = 'rollup-route'"
-          total since = testServant tr (addRespHeaders =<< Routes.chartsDataGetH Nothing (Just Charts.DTMetric) (Just testPid) (Just "hashes[*]==\"pat:rollup-route\" | summarize count(*) by bin_auto(timestamp)") Nothing (Just since) Nothing Nothing Nothing Nothing [("rollup_sql", Just rollup)]) <&> \(_, md) -> sum (md.dataset >>= V.catMaybes . V.drop 1)
-      (,) <$> total "24H" <*> total "3H" >>= (`shouldBe` (7, 0))
+          total coveredFor since = testServant tr (addRespHeaders =<< Routes.chartsDataGetH Nothing (Just Charts.DTMetric) (Just testPid) (Just "hashes[*]==\"pat:rollup-route\" | summarize count(*) by bin_auto(timestamp)") Nothing (Just since) Nothing Nothing Nothing Nothing [("rollup_sql", Just rollup), ("rollup_from", Just $ Utils.isoT $ addUTCTime (-coveredFor) now)]) <&> \(_, md) -> sum (md.dataset >>= V.catMaybes . V.drop 1)
+      -- A window reaching before the rollup's coverage (pruned hours) must not read it as zero.
+      (,,) <$> total 172800 "24H" <*> total 172800 "3H" <*> total 3600 "24H" >>= (`shouldBe` (7, 0, 0))
 
   describe "Streaming chart results" do
     let sql = "SELECT i::bigint, 'value'::text, i::double precision FROM generate_series(1, 3) i"

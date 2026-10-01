@@ -31,6 +31,7 @@ module Models.Apis.LogPatterns (
   getTotalEventCount,
   pruneStalePatterns,
   pruneOldHourlyStats,
+  hourlyStatsRetentionHours,
   autoAcknowledgeStaleNewPatterns,
 )
 where
@@ -470,6 +471,12 @@ pruneStalePatterns pid now staleDays = Hasql.interpExecute [HI.sql| DELETE FROM 
 
 
 -- | Delete hourly stats older than hoursBack (keeps baseline window + buffer)
+-- | Hours of 'apis.log_pattern_hourly_stats' kept; anything older is pruned, so a
+-- window reaching further back is not answerable from it.
+hourlyStatsRetentionHours :: Int
+hourlyStatsRetentionHours = 72
+
+
 pruneOldHourlyStats :: DB es => Projects.ProjectId -> UTCTime -> Int -> Eff es Int64
 pruneOldHourlyStats pid now hoursBack = Hasql.interpExecute [HI.sql| DELETE FROM apis.log_pattern_hourly_stats WHERE project_id = #{pid} AND hour_bucket < #{now}::timestamptz - INTERVAL '1 hour' * #{hoursBack} |]
 
