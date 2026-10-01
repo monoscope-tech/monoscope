@@ -57,9 +57,11 @@ module Pkg.Parser.Stats (
   definedNames,
   seriesLeaves,
   seriesSourceSQL,
+  seriesBinsSQL,
+  seriesBinnable,
 ) where
 
-import Control.Lens (Traversal', foldMapOf, over, set, view)
+import Control.Lens (Traversal', allOf, foldMapOf, notNullOf, over, set, view)
 import Control.Monad.Combinators.Expr (Operator (..), makeExprParser)
 import Data.Aeson qualified as AE
 import Data.Char (isAlphaNum, isDigit, isSpace)
@@ -304,6 +306,21 @@ aggScalars f = \case
   a@Plain{} -> pure a
 
 
+-- | Whether an aggregation is unfiltered series aggregations alone, under
+-- arithmetic with numbers: 'seriesBinsSQL' rows are bins, so nothing else (an
+-- @…if@ predicate included) may read them.
+seriesBinnable :: AggFunction -> Bool
+seriesBinnable = \case
+  Series _ _ predM _ -> isNothing predM
+  a -> notNullOf aggScalars a && allOf aggScalars scalar a
+  where
+    scalar = \case
+      SAgg a -> seriesBinnable a
+      SArith a _ b -> scalar a && scalar b
+      SVal (Num _) -> True
+      SVal _ -> False
+
+
 -- | The FROM source a summarize with 'Series' aggregations reads instead of the
 -- metrics table. It keeps every row and adds, per leaf, a column whose plain
 -- @sum@ over any grouping is the per-series answer summed across series:
@@ -333,13 +350,11 @@ seriesSourceSQL bucketM binSecondsM table innerWhere inRange (ordNub -> leaves) 
     lags = [lagTs | Rate `elem` map fst leaves] <> map lag (ordNub [s | (fn, s) <- leaves, fn /= Last])
     series = "PARTITION BY series_id ORDER BY timestamp"
     part = "PARTITION BY series_id" <> foldMap (", " <>) bucketM
-    epoch c = "CAST(extract(epoch from " <> c <> ") AS DOUBLE PRECISION)"
-    lagTs = "LAG(" <> epoch "timestamp" <> ") OVER (" <> series <> ") AS __prev_ts"
+    lagTs = "LAG(" <> epochSecs "timestamp" <> ") OVER (" <> series <> ") AS __prev_ts"
     prev s = "__prev" <> T.drop 1 (seriesCol Rate s)
     lag s = "LAG(" <> display s <> ") OVER (" <> series <> ") AS " <> prev s
-    isDelta = "aggregation_temporality = 'DELTA'"
-    inc s = let v = display s; p = prev s in "CASE WHEN " <> isDelta <> " THEN " <> v <> " WHEN " <> p <> " IS NULL THEN NULL WHEN " <> v <> " < " <> p <> " THEN " <> v <> " ELSE " <> v <> " - " <> p <> " END"
-    gap = epoch "timestamp" <> " - CASE WHEN " <> isDelta <> " THEN COALESCE(" <> epoch "start_timestamp" <> ", __prev_ts) ELSE __prev_ts END"
+    inc s = let v = display s in counterIncrease v v v (prev s)
+    gap = epochSecs "timestamp" <> " - CASE WHEN " <> isDelta <> " THEN COALESCE(" <> epochSecs "start_timestamp" <> ", __prev_ts) ELSE __prev_ts END"
     timeBase = "SUM(" <> gap <> ") OVER (" <> part <> ")"
     contribution (fn, s) =
       ( case fn of
@@ -349,6 +364,66 @@ seriesSourceSQL bucketM binSecondsM table innerWhere inRange (ordNub -> leaves) 
       )
         <> " AS "
         <> seriesCol fn s
+
+
+-- | 'seriesSourceSQL' for binned rate/increase alone, reading one row per series
+-- and @cell@ (a bucket dividing the bin) instead of every point, so TimeFusion
+-- answers its inner aggregate from its per-series rollup. A cell's increase is its
+-- @max@ less the previous cell's @max@ (a monotonic counter's max is its last
+-- value, or its peak before a reset); a first value below that previous max means
+-- the counter reset before the cell, so the whole max is the increase. Totals
+-- equal the per-point answer; increments a series makes after a reset in the same
+-- cell land in the next cell, and a series that resets twice within one cell
+-- loses the middle run. Gaps between the cells' newest points telescope to the
+-- per-point time base. Every @by@ column must be a plain column (it is grouped
+-- per cell); 'Nothing' otherwise, or for @last@, which a max cannot answer.
+--
+-- >>> let Right a = parse aggFunctionParser "" "rate(value)"
+-- >>> seriesBinsSQL True "time_bucket('5 minutes', timestamp)" "time_bucket('30 minutes', timestamp)" 1800 ["metric_name"] "otel_metrics" "w" (seriesLeaves a)
+-- Just "(SELECT *, (CASE WHEN aggregation_temporality = 'DELTA' THEN __sum_value WHEN __prev_value IS NULL THEN NULL WHEN __first_value < __prev_value THEN __max_value ELSE __max_value - __prev_value END) / GREATEST(1800.0, SUM(CAST(extract(epoch from timestamp) AS DOUBLE PRECISION) - CAST(extract(epoch from __prev_ts) AS DOUBLE PRECISION)) OVER (PARTITION BY series_id, time_bucket('30 minutes', timestamp))) AS __rate_value FROM (SELECT *, __last_ts AS timestamp, LAG(__last_ts) OVER (PARTITION BY series_id ORDER BY __last_ts) AS __prev_ts, LAG(__max_value) OVER (PARTITION BY series_id ORDER BY __last_ts) AS __prev_value FROM (SELECT series_id, aggregation_temporality, metric_name, max(timestamp) AS __last_ts, max(value) AS __max_value, first_value(value ORDER BY timestamp) AS __first_value, sum(value) AS __sum_value FROM otel_metrics WHERE w GROUP BY time_bucket('5 minutes', timestamp), series_id, aggregation_temporality, metric_name) AS __series_cells) AS __series_points) AS otel_metrics"
+-- >>> isJust $ seriesBinsSQL True "c" "b" 60 ["attributes->>'t'"] "otel_metrics" "w" (seriesLeaves a)
+-- False
+seriesBinsSQL :: Bool -> Text -> Text -> Double -> [Text] -> Text -> Text -> [(SeriesFn, Subject)] -> Maybe Text
+seriesBinsSQL timefusion cell bucket binSeconds groupCols table innerWhere (ordNub -> leaves) = do
+  guard $ not (null leaves) && all (T.all (\c -> isAlphaNum c || c == '_')) groupCols
+  contributions <- traverse contribution leaves
+  pure $ "(SELECT *, " <> T.intercalate ", " contributions <> " FROM (SELECT *, __last_ts AS timestamp, " <> T.intercalate ", " lags <> " FROM (SELECT " <> T.intercalate ", " (keys <> ["max(timestamp) AS __last_ts"] <> concatMap states subjects) <> " FROM " <> table <> " WHERE " <> innerWhere <> " GROUP BY " <> T.intercalate ", " (cell : keys) <> ") AS __series_cells) AS __series_points) AS " <> table
+  where
+    subjects = ordNub (map snd leaves)
+    keys = ordNub $ ["series_id", "aggregation_temporality"] <> groupCols
+    col = seriesStateCol
+    firstOf v = if timefusion then "first_value(" <> v <> " ORDER BY timestamp)" else "(array_agg(" <> v <> " ORDER BY timestamp))[1]"
+    states s = let v = display s in ["max(" <> v <> ") AS " <> col "max" s, firstOf v <> " AS " <> col "first" s, "sum(" <> v <> ") AS " <> col "sum" s]
+    lagOf c = "LAG(" <> c <> ") OVER (PARTITION BY series_id ORDER BY __last_ts)"
+    lags = (lagOf "__last_ts" <> " AS __prev_ts") : [lagOf (col "max" s) <> " AS " <> col "prev" s | s <- subjects]
+    inc s = counterIncrease (col "sum" s) (col "first" s) (col "max" s) (col "prev" s)
+    timeBase = "SUM(" <> epochSecs "timestamp" <> " - " <> epochSecs "__prev_ts" <> ") OVER (PARTITION BY series_id, " <> bucket <> ")"
+    contribution (fn, s) =
+      (<> (" AS " <> seriesCol fn s)) <$> case fn of
+        Increase -> Just (inc s)
+        Rate -> Just $ "(" <> inc s <> ") / GREATEST(" <> show binSeconds <> ", " <> timeBase <> ")"
+        Last -> Nothing
+
+
+-- | A per-series state column of the series subqueries, e.g. @__prev_value@.
+seriesStateCol :: Text -> Subject -> Text
+seriesStateCol tag s = "__" <> tag <> T.drop 6 (seriesCol Rate s)
+
+
+epochSecs :: Text -> Text
+epochSecs c = "CAST(extract(epoch from " <> c <> ") AS DOUBLE PRECISION)"
+
+
+isDelta :: Text
+isDelta = "aggregation_temporality = 'DELTA'"
+
+
+-- | A counter's increment to @cur@ from the series' previous reading @prev@: a
+-- @lead@ (first) reading below @prev@ is a reset, so @cur@ counts whole; DELTA points
+-- carry their own increment @delta@.
+counterIncrease :: Text -> Text -> Text -> Text -> Text
+counterIncrease delta lead cur prev =
+  "CASE WHEN " <> isDelta <> " THEN " <> delta <> " WHEN " <> prev <> " IS NULL THEN NULL WHEN " <> lead <> " < " <> prev <> " THEN " <> cur <> " ELSE " <> cur <> " - " <> prev <> " END"
 
 
 data BinFunction

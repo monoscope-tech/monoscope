@@ -40,6 +40,7 @@ data QueryComponents = QueryComponents
   , percentilesInfo :: Maybe (Text, [Double]) -- (field expr SQL, percentile values) extracted from AST
   , extendedColumns :: [(Text, Text)] -- Extended column mappings (alias -> full SQL expression without AS)
   , seriesAggs :: [(SeriesFn, Subject)] -- rate/increase/last leaves; non-empty reads through 'seriesSourceSQL'
+  , seriesBinned :: Bool -- the summarize is series aggregations alone, so a binned chart may read 'seriesBinsSQL'
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default)
@@ -226,7 +227,7 @@ applySectionToComponent sqlCfg qc = \case
      in qc{havingClause = Just $ maybe new (\old -> old <> " AND " <> new) qc.havingClause}
   Source source -> qc{fromTable = Just $ display source}
   sec@(SummarizeCommand aggs byClauseM) ->
-    applySummarizeByClauseToQC sqlCfg byClauseM qc{aggregations = qc.aggregations <> map display aggs, percentilesInfo = extractPercentilesInfo [sec], seriesAggs = qc.seriesAggs <> concatMap seriesLeaves aggs}
+    applySummarizeByClauseToQC sqlCfg byClauseM qc{aggregations = qc.aggregations <> map display aggs, percentilesInfo = extractPercentilesInfo [sec], seriesAggs = qc.seriesAggs <> concatMap seriesLeaves aggs, seriesBinned = all seriesBinnable aggs}
   -- extend adds computed columns (appends to defaults) AND tracks mappings for GROUP BY resolution
   ExtendCommand cols ->
     qc
@@ -455,13 +456,25 @@ sqlFromQueryComponents sqlCfg qc =
     -- the range: the series source reads 'seriesLookback' further back, then
     -- keeps only in-range rows. Derived from the cfg, so cache refreshes of a
     -- single bucket get their lookback too.
-    lookbackRange = buildDateRange sqlCfg{dateRange = first (fmap (addUTCTime (negate seriesLookback))) sqlCfg.dateRange, cursorM = Nothing}
+    lookbackRange by = buildDateRange sqlCfg{dateRange = first (fmap (addUTCTime (negate by))) sqlCfg.dateRange, cursorM = Nothing}
+    inRange = if T.null nq.nqDateRange then "TRUE" else nq.nqDateRange
+    -- A binned chart of rate/increase alone reads one row per cell and series, which
+    -- TimeFusion serves from its per-series rollup; it reaches a whole bin back so
+    -- the first bin has a predecessor. Its rows already passed every filter but the range.
+    binnedSeries = do
+      interval <- qc.finalSummarizeQuery
+      guard qc.seriesBinned
+      secs <- intervalSeconds interval
+      -- 5-minute cells (TimeFusion's per-series grain) keep a restart's misattribution under 5 minutes.
+      let cell = timeBucketExpr $ if denominator (secs / 300) == 1 then "5 minutes" else interval
+      seriesBinsSQL sqlCfg.targetsTimefusion cell (timeBucketExpr interval) (fromRational secs) resolvedGroupCols fromTable (whereWith $ lookbackRange $ max seriesLookback $ fromRational secs) qc.seriesAggs
+    dataWhere = maybe buildWhere (const inRange) binnedSeries
     -- Every aggregating shape reads this; it is the plain table unless the summarize has series aggregations.
-    dataTable =
+    dataTable = flip fromMaybe binnedSeries $
       let (bucketM, binSecondsM) = case qc.finalSummarizeQuery of
             Just interval -> (Just $ timeBucketExpr interval, fromRational <$> intervalSeconds interval)
             Nothing -> (Nothing, case sqlCfg.dateRange of (Just a, Just b) -> Just (realToFrac (diffUTCTime b a)); _ -> Nothing)
-       in seriesSourceSQL bucketM binSecondsM fromTable (whereWith lookbackRange) (if T.null nq.nqDateRange then "TRUE" else nq.nqDateRange) qc.seriesAggs
+       in seriesSourceSQL bucketM binSecondsM fromTable (whereWith $ lookbackRange seriesLookback) inRange qc.seriesAggs
 
     -- count(*) OVER() goes inside the array as the LAST element when
     -- hasCountOver = True; 'selectLogTable' peels it back off via dropLast.
@@ -494,7 +507,7 @@ sqlFromQueryComponents sqlCfg qc =
                 bucketGroupBy = T.intercalate ", " $ bucketExpr : resolvedGroupCols
              in ( [fmt|SELECT {wrap args}
                    FROM {dataTable}
-                   WHERE {buildWhere}
+                   WHERE {dataWhere}
                    GROUP BY {bucketGroupBy} {havingClause}
                    ORDER BY {bucketExpr} DESC
                    {limitClause} |]
@@ -551,7 +564,7 @@ sqlFromQueryComponents sqlCfg qc =
                   bucketExpr = timeBucketExpr binInterval
                   groupByPart = if null qc.groupByClause then bucketExpr else bucketExpr <> ", " <> groupCol
                in [fmt|SELECT extract(epoch from {bucketExpr})::integer, {groupCol}, {aggCol}
-                      FROM {dataTable} WHERE {buildWhere} GROUP BY {groupByPart} {havingClause}
+                      FROM {dataTable} WHERE {dataWhere} GROUP BY {groupByPart} {havingClause}
                       ORDER BY {bucketExpr} DESC {limitClause}|]
         Nothing ->
           let hasAggregationsNoGroupBy = not (null qc.aggregations) && null qc.groupByClause
@@ -680,6 +693,14 @@ intervalSeconds t = case words t of
 -- >>> let Right (_, c6) = parseQueryToComponents cfg "kind == \"log\" | extend slow = duration"
 -- >>> c6.havingClause
 -- Nothing
+--
+-- A binned rate by plain columns reads per-bin series rows, filtered inside; by
+-- an attribute, or mixed with another aggregation, it reads every point:
+-- >>> let chart q = maybe "" (T.unwords . words) $ (.finalSummarizeQuery) . snd =<< hush (parseQueryToComponents cfg ("metrics | where metric_name == \"a\" | summarize " <> q))
+-- >>> [T.isInfixOf "AS __series_cells" (chart q) | q <- ["rate(value) * 60 by bin(timestamp, 30m), metric_name", "rate(value) by bin(timestamp, 30m), attributes.t", "rate(value), count() by bin(timestamp, 30m)"]]
+-- [True,False,False]
+-- >>> snd $ T.breakOn ") AS otel_metrics" $ chart "increase(value) by bin(timestamp, 30m)"
+-- ") AS otel_metrics WHERE TRUE GROUP BY time_bucket('30 minutes', timestamp) ORDER BY time_bucket('30 minutes', timestamp) DESC"
 --
 -- >>> let Right (q2, c2) = parseQueryToComponents cfg "kind == \"server\" | summarize count(*) by bin(timestamp, 1h)"
 -- >>> c2.hasCountOver

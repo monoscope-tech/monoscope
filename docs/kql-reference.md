@@ -369,6 +369,12 @@ How the increase is computed:
 - **`rate()`** divides each series' increase in a bin by the larger of the bin
   width and the time that its points cover. A bin narrower than the export
   interval still shows the true rate, not a multiple of it.
+- **Binned charts of `rate()`/`increase()` alone**, grouped by plain columns
+  such as `metric_name`, compare the highest value of each 5-minute cell with
+  the cell before, so wide ranges read pre-aggregated data. Totals stay exact.
+  Increments a series makes after a restart in the same cell show in the next
+  cell, and a series that restarts twice in one cell loses the run between the
+  restarts.
 - **`last()`** takes the newest point of each series in the bin and adds the
   series together. Filter to one series (or group `by` its attributes) to see one
   value.
