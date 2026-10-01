@@ -140,7 +140,7 @@ dashboardHeadContent_ = do
     .grid-stack{position:relative}
     .grid-stack.grid-stack-preloaded:not(.grid-stack-initialized){visibility:visible}
     .grid-stack.grid-stack-preloaded:not(.grid-stack-initialized)>.grid-stack-item{position:absolute;left:var(--grid-preload-left,0%)!important;top:var(--grid-preload-top,0rem)!important;width:var(--grid-preload-width,8.3333333333%)!important;height:var(--grid-preload-height,5rem)!important}
-    @media(max-width:767px){.grid-stack{display:flex!important;flex-direction:column;gap:.5rem;height:auto!important}.grid-stack.grid-stack-preloaded:not(.grid-stack-initialized)>.grid-stack-item{position:relative!important;left:auto!important;top:auto!important;width:100%!important}.grid-stack>.grid-stack-item:not([data-mobile-autofit]){height:180px!important}.grid-stack>.grid-stack-item[data-mobile-autofit]{height:auto!important}.nested-grid>.grid-stack-item{height:120px!important}}
+    @container dashboard (max-width:400px){.grid-stack{display:flex!important;flex-direction:column;gap:.5rem;height:auto!important}.grid-stack.grid-stack-preloaded:not(.grid-stack-initialized)>.grid-stack-item{position:relative!important;left:auto!important;top:auto!important;width:100%!important}.grid-stack>.grid-stack-item:not([data-mobile-autofit]){height:180px!important}.grid-stack>.grid-stack-item[data-mobile-autofit]{height:auto!important}.nested-grid>.grid-stack-item{height:120px!important}}
     """
 
 
@@ -492,18 +492,20 @@ dashboardPage_ pid dashId dash dashVM allParams = do
                   float: false,
                   animate: false,
                   columnOpts: {
-                    breakpointForWindow: true,
-                    breakpoints: [{w: 768, c: 1}],
+                    breakpointForWindow: false,
+                    breakpoints: [{w: 800, c: 6}, {w: 400, c: 1}],
                     layout: 'list'
                   },
                 }, gridEl);
                 let lastCol = grid.getColumn();
-                if (lastCol === 1) grid.setStatic(true);
+                if (lastCol === 6) grid.compact();
+                if (lastCol !== 12) grid.setStatic(true);
                 new ResizeObserver(() => {
                   const col = grid.getColumn();
                   if (col !== lastCol) {
                     lastCol = col;
-                    grid.setStatic(col === 1);
+                    if (col === 6) grid.compact();
+                    grid.setStatic(col !== 12);
                   }
                 }).observe(gridEl);
 
@@ -513,7 +515,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
                 // template snapshot into the schema column, defeating YAML live-reload.
                 grid.on('dragstart resizestart', () => { gridEl._userInteracted = true; });
                 grid.on('removed change', debounce(() => {
-                  if (grid.getColumn() === 1) return;
+                  if (grid.getColumn() !== 12) return;
                   if (gridEl.offsetParent === null) return;
                   const collapsingWidget = gridEl.querySelector('[data-collapse-action]');
                   if (collapsingWidget) { delete collapsingWidget.dataset.collapseAction; return; }
@@ -550,11 +552,14 @@ dashboardPage_ pid dashId dash dashVM allParams = do
                 styleInHead: true,
                 animate: false,
                 columnOpts: {
-                  breakpointForWindow: true,
-                  breakpoints: [{w: 768, c: 1}],
+                  breakpointForWindow: false,
+                  breakpoints: [{w: 600, c: 6}, {w: 400, c: 1}],
                   layout: 'list'
                 },
               }, nestedEl);
+              let lastNestedCol = nestedInstance.getColumn();
+              if (lastNestedCol === 6) nestedInstance.compact();
+              if (lastNestedCol !== 12) nestedInstance.setStatic(true);
 
               // Auto-fit group to children
               function autoFitGroupToChildren() {
@@ -583,9 +588,18 @@ dashboardPage_ pid dashId dash dashVM allParams = do
 
               nestedInstance.on('change added removed', autoFitGroupToChildren);
               requestAnimationFrame(autoFitGroupToChildren);
+              new ResizeObserver(() => {
+                const col = nestedInstance.getColumn();
+                if (col !== lastNestedCol) {
+                  lastNestedCol = col;
+                  if (col === 6) nestedInstance.compact();
+                  nestedInstance.setStatic(col !== 12);
+                  autoFitGroupToChildren();
+                }
+              }).observe(nestedEl);
               nestedInstance.on('dragstart resizestart removed', () => { nestedEl._userInteracted = true; });
               nestedInstance.on('removed change', debounce(() => {
-                if (window.innerWidth < 768) return;
+                if (nestedInstance.getColumn() !== 12) return;
                 if (nestedEl.offsetParent === null) return;
                 const collapsingWidget = nestedEl.closest('[data-collapse-action]');
                 if (collapsingWidget) { delete collapsingWidget.dataset.collapseAction; return; }

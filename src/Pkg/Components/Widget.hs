@@ -1123,7 +1123,7 @@ renderStatContent widget valueM = do
       hasData = isTrue widget.eager || isJust (widget.dataset >>= \d -> d.value <|> d.servedValue)
   div_
     [ id_ statContentId
-    , class_ $ "px-3 flex flex-col " <> bool "py-3 " "py-2 " (isTrue widget._isNested)
+    , class_ $ "stat-widget px-3 flex flex-col " <> bool "py-3 " "py-2 " (isTrue widget._isNested)
     , hxGet_ $ widgetFetchUrl (widget & #eager ?~ True)
     , hxTrigger_ $ bool "intersect once, update-query from:window" "update-query from:window" hasData
     , hxTarget_ $ "#" <> statContentId
@@ -1132,10 +1132,10 @@ renderStatContent widget valueM = do
     , hxExt_ "forward-page-params"
     ]
     $ div_ [class_ "flex flex-col gap-1"] do
-      strong_ [class_ "text-textStrong text-4xl font-bold tabular-nums", id_ $ chartId <> "Value"]
+      strong_ [class_ "text-textStrong text-lg font-semibold tabular-nums", id_ $ chartId <> "Value"]
         $ if hasData then whenJust valueM toHtml else loadingIndicator_ LdSM LdSpinner
-      div_ [class_ "inline-flex gap-1 items-center text-sm"] do
-        whenJust widget.icon \icon -> Utils.faSprite_ icon "regular" "w-4 h-4 text-iconBrand"
+      div_ [class_ "stat-label inline-flex gap-1 items-center text-xs"] do
+        whenJust widget.icon \icon -> Utils.faSprite_ icon "regular" "stat-icon w-4 h-4 text-iconBrand"
         toHtml $ maybeToMonoid widget.title
         descIcon_ widget.description " text-iconNeutral"
 
@@ -1164,7 +1164,11 @@ renderChart widget = do
     div_ [class_ $ "flex-1 flex min-h-0 " <> bool "" (gridStackHandleClassFor widget) isStat] do
       div_
         [ class_
-            $ "h-full w-full flex flex-col justify-end "
+            $ "h-full w-full flex flex-col "
+            <> case widget.wType of
+              WTStat -> "justify-center "
+              WTTimeseriesStat -> "justify-start "
+              _ -> "justify-end "
             <> bool "min-h-0 " "" isStat
             <> if isTrue widget.naked then "" else "surface-raised rounded-2xl relative"
         , id_ $ chartId <> "_bordered"

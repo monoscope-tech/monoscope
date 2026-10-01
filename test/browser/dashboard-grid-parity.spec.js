@@ -59,3 +59,29 @@ for (const viewport of [{ name: 'desktop', width: 1280, height: 900 }, { name: '
     });
   }
 }
+
+test('dashboard keeps four metrics on one tablet row and packs narrower canvases', async ({ page }) => {
+  for (const [width, columns, positions] of [
+    [912, 12, [{ x: 0, y: 0 }, { x: 3, y: 0 }, { x: 6, y: 0 }, { x: 9, y: 0 }]],
+    [700, 6, [{ x: 0, y: 0 }, { x: 3, y: 0 }, { x: 0, y: 2 }, { x: 3, y: 2 }]],
+  ]) {
+    await page.setViewportSize({ width, height: 1200 });
+    await page.setContent(`<meta name="viewport" content="width=device-width,initial-scale=1">
+      <div style="display:flex"><aside style="width:240px;flex:none"></aside>
+      <div style="width:100%;min-width:0"><div id="grid" class="grid-stack" style="height:160px">
+        ${[0, 3, 6, 9].map((x, i) => item(`stat-${i}`, x, 0, 3, 2)).join('')}
+      </div></div></div>`);
+    await page.addStyleTag({ path: gridCss });
+    await page.addScriptTag({ path: gridJs });
+    const layout = await page.evaluate(() => {
+      const grid = GridStack.init({
+        column: 12, cellHeight: '80px', margin: '8px 4px',
+        columnOpts: { breakpointForWindow: false, breakpoints: [{ w: 600, c: 6 }, { w: 400, c: 1 }], layout: 'list' }
+      }, '#grid');
+      if (grid.getColumn() === 6) grid.compact();
+      return { columns: grid.getColumn(), positions: [...document.querySelectorAll('#grid > .grid-stack-item')].map(el => ({ x: el.gridstackNode.x, y: el.gridstackNode.y })) };
+    });
+    expect(layout.columns).toBe(columns);
+    expect(layout.positions).toEqual(positions);
+  }
+});
