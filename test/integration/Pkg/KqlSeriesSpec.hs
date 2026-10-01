@@ -1,18 +1,20 @@
 module Pkg.KqlSeriesSpec (spec) where
 
 import Data.Pool (withResource)
-import Data.Time (UTCTime, addUTCTime)
+import Data.Text qualified as T
+import Data.Time (NominalDiffTime, UTCTime, addUTCTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
+import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple (execute)
+import Database.PostgreSQL.Simple (execute, execute_)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Projects.Projects qualified as Projects
 import Pages.Charts.Charts qualified as Charts
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
-import Test.Hspec (Spec, around, describe, it, shouldBe, shouldReturn)
+import Test.Hspec (Spec, SpecWith, around, describe, it, shouldBe, shouldReturn)
 import Text.Read (read)
 
 
@@ -20,8 +22,13 @@ baseTime :: UTCTime
 baseTime = read "2025-01-01 00:00:00 UTC"
 
 
+at :: NominalDiffTime -> Text
+at s = toText $ iso8601Show $ addUTCTime s baseTime
+
+
 -- | Points every 30s from base-10m to base+10m. Two cumulative series of one counter at
 -- 100/s ("a" restarts at +120s), a DELTA counter at 100/s, and two gauges.
+-- Written straight to Postgres, so 'seriesSpec' reads Postgres even when TimeFusion is wired in.
 seed :: TestResources -> Projects.ProjectId -> IO ()
 seed tr pid = withResource tr.trPool \conn ->
   void
@@ -39,12 +46,17 @@ seed tr pid = withResource tr.trPool \conn ->
 
 
 spec :: Spec
-spec = around withTestResources $ describe "rate / increase / last" do
+spec = describe "rate / increase / last" do
+  around withTestResources seriesSpec
+  around withTfChartResources ratioSpec
+
+
+seriesSpec :: SpecWith TestResources
+seriesSpec = do
   it "are counter-aware per series, reset-safe, honour every by column, and cover DELTA and gauges" \tr -> do
     pid <- UUIDId <$> UUIDV4.nextRandom
     seed tr pid
-    let at s = toText $ iso8601Show $ addUTCTime s baseTime
-        chart dt q = runQueryEffect tr $ Charts.queryMetrics Nothing dt (Just pid) (Just q) Nothing Nothing (Just $ at 0) (Just $ at 290) (Just "metrics") Nothing []
+    let chart dt q = runQueryEffect tr $ Charts.queryMetrics (Just "postgres") dt (Just pid) (Just q) Nothing Nothing (Just $ at 0) (Just $ at 290) (Just "metrics") Nothing []
         series q = do
           md <- chart (Just Charts.DTMetric) q
           md.error `shouldBe` Nothing
@@ -67,3 +79,29 @@ spec = around withTestResources $ describe "rate / increase / last" do
     rows "metrics | where metric_name == \"d.total\" | summarize rate(value) by bin(timestamp, 10s)" `shouldReturn` replicate 10 [Just 100]
     -- last: newest point of each gauge series in the bin, summed across series.
     (take 1 <$> rows "metrics | where metric_name == \"g.bytes\" | summarize last(value) by bin(timestamp, 1m)") `shouldReturn` [[Just 3060]]
+
+
+-- | Gauges ingested through OTLP, so they reach every configured backend: hits at 10/s
+-- (tier a) and 30/s (tier b), misses at 60/s (tier a), a point every 30s.
+ratioSpec :: SpecWith TestResources
+ratioSpec = it "rateif / lastif divide filtered series by metric name or attribute, on Postgres and TimeFusion" \tr -> do
+  key <- createTestAPIKey tr testPid "kql-ratio"
+  tag <- T.take 8 . UUID.toText <$> UUIDV4.nextRandom
+  let hits = "kql.hits." <> tag
+      misses = "kql.misses." <> tag
+  for_ [-300, -270 .. 290] \s -> for_ ([(hits, "a", 10), (hits, "b", 30), (misses, "a", 60)] :: [(Text, Text, Double)]) \(name, tier, perSec) ->
+    ingestMetric tr key [] [mkAttr "tier" tier] name (perSec * realToFrac (s + 300)) (addUTCTime s baseTime)
+  tfUrl <- lookupEnv "TIMEFUSION_PG_TEST_URL"
+  let isHit = "metric_name == \"" <> hits <> "\""
+      chart db aggs extend = do
+        let q = "metrics | where metric_name in (\"" <> hits <> "\", \"" <> misses <> "\") | summarize " <> aggs <> " by bin(timestamp, 1m)" <> extend
+        md <- runQueryEffect tr $ Charts.queryMetrics (Just db) (Just Charts.DTMetric) (Just testPid) (Just q) Nothing Nothing (Just $ at 0) (Just $ at 290) (Just "metrics") Nothing []
+        md.error `shouldBe` Nothing
+        pure $ map (V.toList . V.drop 1) (V.toList md.dataset)
+  for_ ("postgres" : ["timefusion" | isJust tfUrl]) \db -> do
+    -- The chart cache is keyed on the query, not the backend.
+    withResource tr.trPool \conn -> void $ execute_ conn "DELETE FROM query_cache"
+    -- A post-summarize extend computes from the named aggregates and is the charted series.
+    chart db ("hits = rateif(value, " <> isHit <> "), total = rate(value)") " | extend hit_pct = 100.0 * hits / total" `shouldReturn` replicate 5 [Just 40]
+    chart db "100.0 * rateif(value, attributes.tier == \"a\") / rate(value)" "" `shouldReturn` replicate 5 [Just 70]
+    chart db ("lastif(value, attributes.tier == \"b\" and " <> isHit <> ") / lastif(value, attributes.tier == \"a\" and " <> isHit <> ")") "" `shouldReturn` replicate 5 [Just 3]

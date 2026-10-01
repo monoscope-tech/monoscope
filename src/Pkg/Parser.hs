@@ -708,6 +708,16 @@ intervalSeconds t = case words t of
 -- >>> c6.whereClause
 -- Just "(jsonb_path_exists(to_jsonb(hashes), '$[*] ? (@ == \"x\")'::jsonpath))"
 --
+-- A ratio of filtered rates. The filter applies to the outer sum, so every series
+-- still takes its deltas over its own points in the shared series source;
+-- on TimeFusion the attribute goes through the metrics variant accessor:
+-- >>> let ratio = "metrics | summarize hits = rateif(value, attributes.tier == \"day\"), total = rate(value) by bin(timestamp, 1m) | extend pct = 100.0 * hits / total"
+-- >>> let chartSelect c = either id (T.strip . T.takeWhile (/= '\n') . T.strip . maybeToMonoid . (.finalSummarizeQuery) . snd) (parseQueryToComponents c ratio)
+-- >>> chartSelect cfg
+-- "SELECT extract(epoch from time_bucket('1 minutes', timestamp))::integer, 'value', (COALESCE(((100.0 * COALESCE(sum(CASE WHEN attributes->>'tier' = 'day' THEN __rate_value END), 0)::float) / NULLIF(COALESCE(sum(__rate_value), 0)::float, 0)), 0))::float AS pct"
+-- >>> chartSelect cfg{targetsTimefusion = True}
+-- "SELECT extract(epoch from time_bucket('1 minutes', timestamp))::integer, 'value', (COALESCE(((100.0 * COALESCE(sum(CASE WHEN variant_to_json(attributes)->>'tier' = 'day' THEN __rate_value END), 0)::float) / NULLIF(COALESCE(sum(__rate_value), 0)::float, 0)), 0))::float AS pct"
+--
 -- Field validation is told the cfg's source for the same reason 'queryASTToComponents'
 -- resolves the FROM table from it: a metrics query can arrive with its source in the
 -- request rather than in the query text, and validating those fields against

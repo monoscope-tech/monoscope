@@ -346,6 +346,8 @@ monoscope chart 'summarize count(*) by bin_auto(timestamp)' --watch 30s
 # Metrics: counters as a per-second rate (per series, restart-safe), gauges as their newest value
 monoscope chart 'metrics | where metric_name == "http.server.requests" | summarize rate(value) by bin_auto(timestamp), resource.service.name' --source metrics
 monoscope chart 'metrics | where metric_name == "process.memory.usage" | summarize last(value) by bin_auto(timestamp)' --source metrics
+# Ratio of two filtered counters, in percent
+monoscope chart 'metrics | where metric_name in ("cache.hits", "cache.misses") | summarize 100.0 * rateif(value, metric_name == "cache.hits") / rate(value) by bin_auto(timestamp)' --source metrics
 ```
 
 For counters use `rate(value)` or `increase(value)`, not `sum(value)` or `range(value)`;

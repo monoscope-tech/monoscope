@@ -252,6 +252,18 @@ Adds computed columns to the result set while preserving all existing columns.
     status_text = tostring(status_code)
 ```
 
+**After a `summarize`**, `extend` computes from the aggregates by name. The
+computed column is added in front of the aggregates, so a time-series chart draws
+it:
+
+```kusto
+| summarize errors = countif(status_code >= 400), total = count() by bin_auto(timestamp)
+| extend error_pct = 100.0 * errors / total
+```
+
+A monitor alerts on the largest of all the aggregates. To alert on a ratio, write
+it as the only aggregate: `| summarize 100.0 * countif(status_code >= 400) / count()`.
+
 ### project
 
 Selects and renames specific columns, removing all others.
@@ -339,6 +351,9 @@ functions work on each series first, then add the series together within each
 | `rate(value)` | Increase per second | Counters: requests/s, rows/s, bytes/s |
 | `increase(value)` | Total increase in the bin | Counters: requests per bin, errors in the window |
 | `last(value)` | Newest value in the bin | Gauges: memory in use, queue depth, connections |
+| `rateif(value, predicate)` | `rate(value)` of the series that match | One part of a ratio of counters |
+| `increaseif(value, predicate)` | `increase(value)` of the series that match | |
+| `lastif(value, predicate)` | `last(value)` of the series that match | One part of a ratio of gauges |
 
 How the increase is computed:
 
@@ -357,6 +372,40 @@ How the increase is computed:
 - **`last()`** takes the newest point of each series in the bin and adds the
   series together. Filter to one series (or group `by` its attributes) to see one
   value.
+
+**Filtered series (`rateif`, `increaseif`, `lastif`).** The predicate selects
+which series are added together for that one aggregate. Each series still
+computes its increase from its own points, so two filtered aggregates in one
+`summarize` can divide each other. Write the predicate on columns that are the
+same for every point of a series: `metric_name`, `attributes.*`, `resource.*`.
+A predicate on `value` or `timestamp` selects points, not series, and gives
+increases that are not correct. Keep the `where` wide enough to read every
+series that the aggregates use:
+
+```kusto
+// Rollup hit rate in percent: hits / (hits + misses)
+metrics
+| where metric_name in ("rollup.hits", "rollup.misses")
+| summarize hits = rateif(value, metric_name == "rollup.hits"), total = rate(value) by bin_auto(timestamp)
+| extend hit_pct = 100.0 * hits / total
+
+// The same as one expression
+metrics
+| where metric_name in ("rollup.hits", "rollup.misses")
+| summarize 100.0 * rateif(value, metric_name == "rollup.hits") / rate(value) by bin_auto(timestamp)
+
+// Memory in use as a percent of the limit (two gauges)
+metrics
+| where metric_name in ("memory.used_bytes", "memory.limit_bytes")
+| summarize 100.0 * lastif(value, metric_name == "memory.used_bytes") / lastif(value, metric_name == "memory.limit_bytes") by bin_auto(timestamp)
+
+// Share of requests that are 5xx, filtered on an attribute
+metrics
+| where metric_name == "http.server.requests"
+| summarize 100.0 * rateif(value, attributes.http.response.status_code >= 500) / rate(value) by bin_auto(timestamp)
+```
+
+A division by 0 gives 0.
 
 `rate()` and `increase()` are not useful on gauges: a gauge that goes down is
 read as a reset. Use `last()`, `avg()` or `max()` for gauges.
@@ -382,6 +431,7 @@ metrics | where metric_name == "process.memory.usage" | summarize last(value) by
 | A rate (per second or per minute) | `rate(value)` (`* 60` for per minute) |
 | How many in each bin, or in the whole range | `increase(value)` |
 | The current level of a gauge | `last(value)` |
+| A ratio of counters or gauges | `rateif(value, …) / rate(value)`, `lastif(value, …) / lastif(value, …)` |
 | The spread of a gauge in a bin | `range(value)` |
 
 Do not use `range(value)` or `sum(value)` on a cumulative counter. `range()` is
@@ -921,6 +971,7 @@ bin(timestamp, 1h), bin_auto(timestamp)
 count(), sum(), avg(), min(), max()
 median(), stdev(), range()
 rate(value), increase(value), last(value)   // metrics only, per series
+rateif(value, pred), increaseif(value, pred), lastif(value, pred)
 p50(), p75(), p90(), p95(), p99()
 percentile(field, N), percentiles(field, N1, N2, ...)
 countif(condition), dcount(field)
@@ -940,7 +991,7 @@ iff(cond, then, else), case(p1, v1, ..., else)
 This implementation supports a subset of KQL. Notable differences from Azure Data Explorer KQL:
 - No `join`, `union`, or subquery support
 - No `let` statements for variable binding
-- No `project`, `extend`, or `mv-expand` operators
+- No `mv-expand` operator
 - No `render` operator (visualization is handled separately)
 
 ### Null Handling

@@ -14,10 +14,10 @@ discovery_metrics:
 # TimeFusion counters are cumulative per process and reset on every restart. Chart them
 # with rate(value) (per second; `* 60` for per minute) or increase(value): both follow
 # each series (series_id), read the point before the range, and treat a drop as a
-# restart. range(value) per bin reads 0 when a bin holds one point. Three widgets stay
-# SQL because KQL cannot express them: &mem_pct (a ratio of two gauges), &restarts
-# (counting resets) and &hit_rate (a ratio of two counters). Their `query` supplies the
-# metric filter through {{query_ast_filters}}.
+# restart. range(value) per bin reads 0 when a bin holds one point. Ratios divide
+# filtered aggregates: rateif(value, <series predicate>) / rate(value) for counters,
+# lastif(value, …) for gauges. &restarts (counting resets) stays SQL; its `query`
+# supplies the metric filter through {{query_ast_filters}}.
 # A counter that never moved since boot is not exported: "No data" there means zero.
 widgets: []
 
@@ -33,14 +33,7 @@ tabs:
             title: 'Memory Peak / Limit'
             description: '500 ms peak of cgroup memory (less clean page cache) as a share of the limit. Good: under 70%. Catches the OOM path: tantivy index installs spiked it to 41–106 GB on a 120 GiB box (2026-09-30).'
             icon: server
-            query: metrics | where metric_name in ("timefusion.memory.charged_peak_bytes", "timefusion.memory.limit_bytes")
-            sql: &mem_pct |
-              WITH b AS (SELECT time_bucket('{{rollup_interval}}', timestamp) AS b, metric_name, MAX(value) AS v
-                FROM otel_metrics WHERE {{query_ast_filters}} GROUP BY 1, 2)
-              SELECT extract(epoch from b)::integer AS time, 'peak % of limit' AS series,
-                (100 * MAX(CASE WHEN metric_name = 'timefusion.memory.charged_peak_bytes' THEN v END)
-                  / NULLIF(MAX(CASE WHEN metric_name = 'timefusion.memory.limit_bytes' THEN v END), 0))::float AS value
-              FROM b GROUP BY 1 ORDER BY 1 DESC
+            query: metrics | where metric_name in ("timefusion.memory.charged_peak_bytes", "timefusion.memory.limit_bytes") | summarize 100.0 * lastif(value, metric_name == "timefusion.memory.charged_peak_bytes") / lastif(value, metric_name == "timefusion.memory.limit_bytes") by bin_auto(timestamp)
             unit: '%'
             summarize_by: max
             warning_threshold: 80
@@ -177,14 +170,7 @@ tabs:
             title: 'Rollup Hit Rate'
             description: 'Share of dashboard aggregates served from a rollup instead of a raw scan. Higher is faster; see the Rollups tab for miss reasons.'
             icon: chart-simple
-            query: metrics | where metric_name in ("timefusion.rollup.hits", "timefusion.rollup.misses")
-            sql: &hit_rate |
-              WITH p AS (SELECT timestamp, metric_name, value, value - LAG(value) OVER (PARTITION BY series_id ORDER BY timestamp) AS d
-                FROM otel_metrics WHERE {{query_ast_filters}}),
-              i AS (SELECT time_bucket('{{rollup_interval}}', timestamp) AS b, metric_name, CASE WHEN d < 0 THEN value ELSE d END AS inc FROM p WHERE d IS NOT NULL)
-              SELECT extract(epoch from b)::integer AS time, 'hit rate' AS series,
-                (100 * SUM(CASE WHEN metric_name = 'timefusion.rollup.hits' THEN inc ELSE 0 END) / NULLIF(SUM(inc), 0))::float AS value
-              FROM i GROUP BY 1 ORDER BY 1 DESC
+            query: &hit_rate metrics | where metric_name in ("timefusion.rollup.hits", "timefusion.rollup.misses") | summarize hits = rateif(value, metric_name == "timefusion.rollup.hits"), total = rate(value) by bin_auto(timestamp) | extend hit_pct = 100.0 * hits / total
             unit: '%'
             summarize_by: mean
             eager: true
@@ -594,8 +580,7 @@ tabs:
       - type: 'timeseries_line'
         title: 'Rollup Hit Rate'
         description: 'Share of dashboard aggregates served from a rollup. Good: high and stable; a drop right after a deploy is the coverage map warming.'
-        query: metrics | where metric_name in ("timefusion.rollup.hits", "timefusion.rollup.misses")
-        sql: *hit_rate
+        query: *hit_rate
         unit: '%'
         layout: { w: 6, h: 4 }
 

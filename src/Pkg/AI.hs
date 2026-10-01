@@ -288,6 +288,7 @@ kqlGuide =
   - Counters (`metric_type` SUM, e.g. `*_total`, requests, bytes sent): `rate(value)` per second (`rate(value) * 60` per minute) or `increase(value)` per bin. Both are per series and restart-safe. NEVER `sum(value)` or `range(value)` on a counter.
   - Gauges (memory, queue depth, connections): `last(value)` for the current level, `avg(value)`/`max(value)` for the trend.
   - Example: `metrics | where metric_name == "http.server.requests" | summarize rate(value) by bin_auto(timestamp), resource.service.name`
+  - Ratios: `rateif(value, pred)`, `increaseif(value, pred)`, `lastif(value, pred)` aggregate only the series matching a predicate on `metric_name`/`attributes.*`/`resource.*` (never on `value`). Divide them in one expression, or name them and divide in an `extend` after the summarize (the computed column is what is charted). Example: `metrics | where metric_name in ("cache.hits", "cache.misses") | summarize hits = rateif(value, metric_name == "cache.hits"), total = rate(value) by bin_auto(timestamp) | extend hit_pct = 100.0 * hits / total`
 
   ### Time Binning Rules
   - DEFAULT: `bin_auto(timestamp)` — the system picks the bin size from the time range.

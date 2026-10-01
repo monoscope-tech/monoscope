@@ -42,7 +42,7 @@ export interface SchemaAccess {
 export const DATA_SOURCES = ['spans', 'metrics'];
 export const LOGICAL_OPERATORS = ['and', 'or', 'not', 'has', '!has', 'exists', '!exists'];
 export const AGGREGATION_COMMANDS = ['summarize', 'timechart', 'stats', 'sort', 'take', 'project', 'extend', 'where'];
-export const STATS_FUNCTIONS = ['count', 'sum', 'avg', 'min', 'max', 'median', 'stdev', 'range', 'rate', 'increase', 'last', 'p50', 'p75', 'p90', 'p95', 'p99', 'p100'];
+export const STATS_FUNCTIONS = ['count', 'sum', 'avg', 'min', 'max', 'median', 'stdev', 'range', 'rate', 'increase', 'last', 'rateif', 'increaseif', 'lastif', 'p50', 'p75', 'p90', 'p95', 'p99', 'p100'];
 
 // Offered left-to-right in this order; `==` first because it dominates real usage.
 export const SUGGESTION_OPERATORS = [

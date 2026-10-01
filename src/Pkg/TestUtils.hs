@@ -5,6 +5,7 @@ module Pkg.TestUtils (
   eventually,
   withSetup,
   withTestResources,
+  withTfChartResources,
   fromRightShow,
   TestResources (..),
   testSessionHeader,
@@ -94,7 +95,7 @@ import BackgroundJobs qualified
 import Configuration.Dotenv qualified as Dotenv
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.STM.TBQueue (isEmptyTBQueue, readTBQueue)
-import Control.Exception (finally, throwIO, try)
+import Control.Exception (bracket, finally, throwIO, try)
 import Control.Exception.Safe qualified as Safe
 import Control.Lens ((%~), (.~), (^.), (^..))
 import Data.Aeson qualified as AE
@@ -112,7 +113,7 @@ import Data.Effectful.UUID (UUIDEff, runStaticUUID, runUUID)
 import Data.Effectful.Wreq (HTTP (..), runHTTPGolden, runHTTPRecord, runHTTPWreq)
 import Data.Either.Extra
 import Data.HashMap.Strict qualified as HM
-import Data.Pool (Pool, defaultPoolConfig, destroyAllResources, newPool, withResource)
+import Data.Pool (Pool, defaultPoolConfig, destroyAllResources, newPool, setNumStripes, withResource)
 import Data.ProtoLens (defMessage)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, ZonedTime, getCurrentTime, zonedTimeToUTC)
@@ -797,6 +798,16 @@ sharedTestLogger = unsafePerformIO $ Logging.tolerantLogger <$> mkBulkLogger "te
 
 withSharedLogger :: (Log.Logger -> m a) -> m a
 withSharedLogger act = act sharedTestLogger
+
+
+-- | 'withTestResources' with the postgres-simple TimeFusion pool (what charts read) on
+-- the real TimeFusion when TIMEFUSION_PG_TEST_URL is set; 'withTestResources' wires TF
+-- only through Hasql.
+withTfChartResources :: (TestResources -> IO ()) -> IO ()
+withTfChartResources k = withTestResources \tr ->
+  lookupEnv "TIMEFUSION_PG_TEST_URL" >>= \case
+    Nothing -> k tr
+    Just url -> bracket (newPool $ setNumStripes (Just 1) $ defaultPoolConfig (connectPostgreSQL $ encodeUtf8 $ toText url) close 60 2) destroyAllResources \pool -> k tr{trATCtx = tr.trATCtx{timefusionPgPool = pool}}
 
 
 -- Compose withSetup with additional IO actions

@@ -59,11 +59,12 @@ module Pkg.Parser.Stats (
   seriesSourceSQL,
 ) where
 
-import Control.Lens (set, view)
+import Control.Lens (Traversal', foldMapOf, over, set, view)
 import Control.Monad.Combinators.Expr (Operator (..), makeExprParser)
 import Data.Aeson qualified as AE
 import Data.Char (isAlphaNum, isDigit, isSpace)
 import Data.Generics.Product (typed)
+import Data.List (lookup)
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (Display, display, displayBuilder, displayPrec)
@@ -185,7 +186,8 @@ aggToSqlNoAlias (Max sub _) = simpleAggSQL "max" sub
 aggToSqlNoAlias (Median sub _) = simpleAggSQL "median" sub
 aggToSqlNoAlias (Stdev sub _) = simpleAggSQL "stdev" sub
 aggToSqlNoAlias (Range sub _) = "(max((" <> display sub <> ")::float) - min((" <> display sub <> ")::float))"
-aggToSqlNoAlias (Series fn sub _) = "COALESCE(sum(" <> seriesCol fn sub <> "), 0)::float"
+-- A CASE, not FILTER (WHERE …): TimeFusion fails to plan a FILTER over a variant @->>@.
+aggToSqlNoAlias (Series fn sub predM _) = "COALESCE(sum(" <> maybe id (\p c -> "CASE WHEN " <> display p <> " THEN " <> c <> " END") predM (seriesCol fn sub) <> "), 0)::float"
 aggToSqlNoAlias (P50 sub _) = percentileSQL 0.50 (display sub)
 aggToSqlNoAlias (P75 sub _) = percentileSQL 0.75 (display sub)
 aggToSqlNoAlias (P90 sub _) = percentileSQL 0.90 (display sub)
@@ -226,7 +228,8 @@ data AggFunction
   | Stdev Subject (Maybe Text)
   | Range Subject (Maybe Text)
   | -- | Counter-aware per-series aggregations over the metrics table; see 'seriesSourceSQL'.
-    Series SeriesFn Subject (Maybe Text)
+    -- The predicate (@rateif@/@increaseif@/@lastif@) picks which series are summed.
+    Series SeriesFn Subject (Maybe Expr) (Maybe Text)
   | -- Scalar functions that can be used in aggregations (Microsoft KQL compatible)
     Coalesce [Values] (Maybe Text) -- coalesce(expr1, expr2, ...) - variadic, returns first non-null
   | Strcat [Values] (Maybe Text) -- strcat(expr1, expr2, ...) - concatenate any scalar expressions
@@ -257,40 +260,48 @@ seriesCol fn (Subject entire _ _) = "__" <> display fn <> "_" <> T.toLower (T.ma
 -- | Every 'Series' aggregation inside an aggregation, including under arithmetic.
 seriesLeaves :: AggFunction -> [(SeriesFn, Subject)]
 seriesLeaves = \case
-  Series fn s _ -> [(fn, s)]
-  Round e _ _ -> scalar e
-  ToFloat e _ -> scalar e
-  ToInt e _ -> scalar e
-  ToString e _ -> scalar e
-  ArithExpr e _ -> scalar e
-  Count{} -> []
-  CountIf{} -> []
-  DCount{} -> []
-  P50{} -> []
-  P75{} -> []
-  P90{} -> []
-  P95{} -> []
-  P99{} -> []
-  P100{} -> []
-  Percentile{} -> []
-  Percentiles{} -> []
-  Sum{} -> []
-  Avg{} -> []
-  Min{} -> []
-  Max{} -> []
-  Median{} -> []
-  Stdev{} -> []
-  Range{} -> []
-  Coalesce{} -> []
-  Strcat{} -> []
-  Iff{} -> []
-  Case{} -> []
-  Plain{} -> []
+  Series fn s _ _ -> [(fn, s)]
+  a -> foldMapOf aggScalars scalar a
   where
     scalar = \case
       SAgg a -> seriesLeaves a
       SArith a _ b -> scalar a <> scalar b
       SVal _ -> []
+
+
+-- | The scalar expressions an aggregation wraps (round/tofloat/toint/tostring and
+-- arithmetic). Exhaustive, so a new wrapping constructor cannot be missed.
+aggScalars :: Traversal' AggFunction ScalarExpr
+aggScalars f = \case
+  Round e d t -> (\e' -> Round e' d t) <$> f e
+  ToFloat e t -> (`ToFloat` t) <$> f e
+  ToInt e t -> (`ToInt` t) <$> f e
+  ToString e t -> (`ToString` t) <$> f e
+  ArithExpr e t -> (`ArithExpr` t) <$> f e
+  a@Series{} -> pure a
+  a@Count{} -> pure a
+  a@CountIf{} -> pure a
+  a@DCount{} -> pure a
+  a@P50{} -> pure a
+  a@P75{} -> pure a
+  a@P90{} -> pure a
+  a@P95{} -> pure a
+  a@P99{} -> pure a
+  a@P100{} -> pure a
+  a@Percentile{} -> pure a
+  a@Percentiles{} -> pure a
+  a@Sum{} -> pure a
+  a@Avg{} -> pure a
+  a@Min{} -> pure a
+  a@Max{} -> pure a
+  a@Median{} -> pure a
+  a@Stdev{} -> pure a
+  a@Range{} -> pure a
+  a@Coalesce{} -> pure a
+  a@Strcat{} -> pure a
+  a@Iff{} -> pure a
+  a@Case{} -> pure a
+  a@Plain{} -> pure a
 
 
 -- | The FROM source a summarize with 'Series' aggregations reads instead of the
@@ -483,7 +494,7 @@ traverseAst f g = traverse goSec
       Median s t -> st Median s t
       Stdev s t -> st Stdev s t
       Range s t -> st Range s t
-      Series fn s t -> st (Series fn) s t
+      Series fn s p t -> (\s' p' -> Series fn s' p' t) <$> f s <*> traverse goE p
       Coalesce vs t -> flip Coalesce t <$> traverse goV vs
       Strcat vs t -> flip Strcat t <$> traverse goV vs
       Iff e a b t -> (\e' a' b' -> Iff e' a' b' t) <$> goE e <*> goV a <*> goV b
@@ -562,6 +573,14 @@ pCountIf :: Parser AggFunction
 pCountIf = withoutAlias $ CountIf <$> (string "countif(" *> pExpr <* string ")")
 
 
+-- | @rateif@/@increaseif@/@lastif(field, predicate)@: the series aggregation over
+-- only the series the predicate selects (Kusto's @sumif@ shape).
+-- >>> parse (pSeriesIf Rate) "" "rateif(value, metric_name == \"hits\")"
+-- Right (Series Rate (Subject "value" "value" []) (Just (Eq (Subject "metric_name" "metric_name" []) (Str "hits"))) Nothing)
+pSeriesIf :: SeriesFn -> Parser AggFunction
+pSeriesIf fn = withoutAlias $ Series fn <$> (string (display fn <> "if(") *> pSubject <* comma) <*> (Just <$> pExpr <* string ")")
+
+
 -- | Parse dcount(expr [, accuracy]) - distinct count with optional accuracy
 -- Microsoft KQL: dcount(expr [, accuracy]) where accuracy is 0-4
 -- >>> parse pDCount "" "dcount(user_id)"
@@ -613,7 +632,7 @@ baseAggParsers =
   , pSimpleAgg "stdev" Stdev
   , pSimpleAgg "range" Range
   ]
-    <> [pSimpleAgg (display fn) (Series fn) | fn <- universe]
+    <> concat [[pSimpleAgg (display fn) (\s -> Series fn s Nothing), pSeriesIf fn] | fn <- universe]
 
 
 -- | Left-associative * / (tighter) then + - operator table, parameterised by the
@@ -817,7 +836,7 @@ instance ToQueryText AggFunction where
   toQText (Median sub _) = "median(" <> toQText sub <> ")"
   toQText (Stdev sub _) = "stdev(" <> toQText sub <> ")"
   toQText (Range sub _) = "range(" <> toQText sub <> ")"
-  toQText (Series fn sub _) = display fn <> "(" <> toQText sub <> ")"
+  toQText (Series fn sub predM _) = display fn <> maybe "(" (const "if(") predM <> toQText sub <> foldMap ((", " <>) . toQText) predM <> ")"
   toQText (Coalesce exprs _) = "coalesce(" <> T.intercalate ", " (map toQText exprs) <> ")"
   toQText (Strcat exprs _) = "strcat(" <> T.intercalate ", " (map toQText exprs) <> ")"
   toQText (Iff cond thenVal elseVal _) = "iff(" <> toQText cond <> ", " <> toQText thenVal <> ", " <> toQText elseVal <> ")"
@@ -860,7 +879,7 @@ defaultAlias = \case
   Median (Subject n _ _) _ -> "median_" <> sanitizeAlias n
   Stdev (Subject n _ _) _ -> "stdev_" <> sanitizeAlias n
   Range (Subject n _ _) _ -> "range_" <> sanitizeAlias n
-  Series fn (Subject n _ _) _ -> display fn <> "_" <> sanitizeAlias n
+  Series fn (Subject n _ _) predM _ -> display fn <> maybe "" (const "if") predM <> "_" <> sanitizeAlias n
   Coalesce{} -> "coalesce_"
   Strcat{} -> "strcat_"
   Iff{} -> "iff_"
@@ -887,7 +906,7 @@ instance ToQueryText Section where
   toQText (HavingClause expr) = "where " <> toQText expr
   toQText (SummarizeCommand funcs byClauseM) =
     "summarize "
-      <> T.intercalate "," (map toQText funcs)
+      <> T.intercalate "," [foldMap (<> " = ") (view (typed @(Maybe Text)) f) <> toQText f | f <- funcs]
       <> maybeToMonoid (toQText <$> byClauseM)
   toQText (ExtendCommand cols) =
     "extend " <> T.intercalate ", " [name <> " = " <> toQText expr | (name, expr) <- cols]
@@ -1040,7 +1059,7 @@ pNamedExpr = do
   name <- try $ toText <$> some (alphaNumChar <|> oneOf ("_." :: String)) <* space <* string "=" <* space
   let sanitized = sanitizeAlias name
   -- generic-lens sets the Maybe Text alias field of whichever constructor is parsed
-  (sanitized,) . set (typed @(Maybe Text)) (Just sanitized) <$> aggFunctionParser
+  (sanitized,) . set (typed @(Maybe Text)) (Just sanitized) <$> pAggArith
 
 
 -- | Helper for column-assignment commands (extend/project)
@@ -1113,19 +1132,24 @@ pSummarizeSection = do
   _ <- string "summarize"
   space
   -- namedAggregation has try only on prefix "name =" so validation errors propagate
-  funcs <- sepBy (namedAggregation <|> (unwrapAgg <$> pArithExpr)) (char ',' <* space)
+  funcs <- sepBy (namedAggregation <|> pAggArith) (char ',' <* space)
   SummarizeCommand funcs <$> optional (try (space *> pSummarizeByClause))
-  where
-    unwrapAgg = \case
-      SAgg agg -> agg
-      expr -> ArithExpr expr Nothing
-    pArithExpr :: Parser ScalarExpr
-    pArithExpr = makeExprParser pArithTerm (arithTable hspace)
 
+
+-- | An aggregation, or arithmetic over aggregations and numbers.
+--
+-- >>> parse pAggArith "" "100.0 * hits / total"
+-- Right (ArithExpr (SArith (SArith (SVal (Num "100.0")) Mul (SAgg (Plain (Subject "hits" "hits" []) Nothing))) Div (SAgg (Plain (Subject "total" "total" []) Nothing))) Nothing)
+pAggArith :: Parser AggFunction
+pAggArith =
+  pArith <&> \case
+    SAgg agg -> agg
+    expr -> ArithExpr expr Nothing
+  where
+    pArith = makeExprParser pArithTerm (arithTable hspace)
     -- try on pNumericOnly is fine; aggFunctionParser parsers use try on prefix only
     -- so validation errors propagate after consuming function input
-    pArithTerm = choice @[] [SVal <$> try pNumericOnly, SAgg <$> aggFunctionParser, char '(' *> pArithExpr <* char ')']
-
+    pArithTerm = choice @[] [SVal <$> try pNumericOnly, SAgg <$> aggFunctionParser, char '(' *> pArith <* char ')']
     pNumericOnly = Num . toText <$> ((<>) <$> some digitChar <*> option "" (try ((:) <$> char '.' <*> some digitChar)))
 
 
@@ -1189,6 +1213,24 @@ parseQuery = do
   pure $ transformAST sections
 
 
+-- | Replace references to named aggregations with the aggregations themselves.
+--
+-- >>> let Right hits = parse namedAggregation "" "hits = count()"
+-- >>> let Right e = parse pAggArith "" "100 * hits / total"
+-- >>> toQText (inlineAggNames [("hits", hits)] e)
+-- "100 * count() / total"
+inlineAggNames :: [(Text, AggFunction)] -> AggFunction -> AggFunction
+inlineAggNames named = \case
+  Plain (Subject n _ []) t | Just a <- lookup n named -> set (typed @(Maybe Text)) t a
+  a -> over aggScalars scalar a
+  where
+    scalar = \case
+      SAgg a -> SAgg (inlineAggNames named a)
+      SVal (Field (Subject n _ [])) | Just a <- lookup n named -> SAgg a
+      SArith l o r -> SArith (scalar l) o (scalar r)
+      v -> v
+
+
 -- | Transform AST to normalize and optimize the query structure.
 -- Combines consecutive WHERE/Search clauses and reorders sections to canonical order.
 --
@@ -1216,8 +1258,20 @@ parseQuery = do
 -- >>> [(length [() | WhereClause _ <- s], length [() | HavingClause _ <- s]) | let s = secs "| summarize count() by kind | where name == \"a\" and count_ > 5"]
 -- [(1,1)]
 transformAST :: [Section] -> [Section]
-transformAST = reorderSections . combineWheres . markPostSummarizeFilters
+transformAST = reorderSections . combineWheres . markPostSummarizeFilters . foldPostSummarizeExtends
   where
+    -- An extend after a summarize computes from its aggregates, so it becomes part
+    -- of that summarize with the names it reads inlined — first, because a
+    -- time-series chart draws the first aggregation. Left as an extend,
+    -- reorderSections would hoist it above the summarize, where those names do
+    -- not exist.
+    foldPostSummarizeExtends secs = case break (\case SummarizeCommand{} -> True; _ -> False) secs of
+      (pre, SummarizeCommand aggs by : post) ->
+        let inline named (n, e) = let e' = set (typed @(Maybe Text)) (Just n) (inlineAggNames named e) in ((n, e') : named, e')
+            computed = snd $ mapAccumL inline [(aggName a, a) | a <- aggs] [c | ExtendCommand cs <- post, c <- cs]
+         in pre <> (SummarizeCommand (computed <> aggs) by : filter (\case ExtendCommand{} -> False; _ -> True) post)
+      _ -> secs
+
     -- Position is meaningful only until reorderSections runs, so the after-a-
     -- summarize filters are re-tagged first and keep their meaning thereafter.
     --
@@ -1473,5 +1527,8 @@ definedNames sections =
       ProjectCommand kvs -> map fst kvs
       _ -> []
   ]
-  where
-    aggName agg = fromMaybe (defaultAlias agg) (view (typed @(Maybe Text)) agg)
+
+
+-- | The column name an aggregation produces: its alias, else 'defaultAlias'.
+aggName :: AggFunction -> Text
+aggName agg = fromMaybe (defaultAlias agg) (view (typed @(Maybe Text)) agg)

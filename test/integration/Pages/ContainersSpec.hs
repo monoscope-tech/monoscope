@@ -3,15 +3,12 @@
 -- handler renders them the way Datadog's Containers Explorer would — one table, both runtimes.
 module Pages.ContainersSpec (spec) where
 
-import Control.Exception qualified as E
 import Data.Cache qualified as Cache
 import Data.List (lookup)
-import Data.Pool (defaultPoolConfig, destroyAllResources, newPool, setNumStripes)
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as LT
 import Data.Time (NominalDiffTime, addUTCTime)
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple qualified as PG
 import Lucid qualified
 import Models.Telemetry.Containers (ContainerRow (..), ContainerSnapshotKey, Runtime (..), Scope (..), containersInWindow, cpuPctOfLimit, memPctOfLimit, runtimeOf)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
@@ -197,7 +194,7 @@ containerNamed byName n = maybe (fail $ "no container named " <> toString n) pur
 spec :: Spec
 -- Sequential and aroundAll: the fixture is ingested once and the later examples read it back
 -- through the handler, which is the point — they assert on the same rows a user would see.
-spec = sequential $ aroundAll withResources do
+spec = sequential $ aroundAll withTfChartResources do
   describe "Containers page" do
     it "emptyProject_rendersZeroStateRatherThanAnEmptyTable" \tr -> do
       rows <- runTestBg frozenTime tr $ containersInWindow False testPid (addUTCTime (-900) frozenTime) frozenTime
@@ -624,7 +621,3 @@ spec = sequential $ aroundAll withResources do
       response <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just query) Nothing Nothing (Just "2024-12-31T23:55:00Z") (Just "2025-01-01T00:01:00Z") (Just "metrics") Nothing []
       response.error `shouldBe` Nothing
       V.toList (V.mapMaybe ((V.!? 1) >=> id) response.dataset) `shouldSatisfy` \values -> not (null values) && all (\value -> abs (value - expected) < 0.001) values
-    withResources k = withTestResources \tr -> do
-      -- TestUtils wires native TF through Hasql; charts also need its postgres-simple pool.
-      tfUrl <- lookupEnv "TIMEFUSION_PG_TEST_URL"
-      maybe (k tr) (\url -> E.bracket (newPool $ setNumStripes (Just 1) $ defaultPoolConfig (PG.connectPostgreSQL $ encodeUtf8 $ toText url) PG.close 60 2) destroyAllResources \pool -> k tr{trATCtx = tr.trATCtx{timefusionPgPool = pool}}) tfUrl

@@ -283,7 +283,7 @@ data ApiV1Routes mode = ApiV1Routes
   , metricsQuery
       :: mode
         :- "metrics"
-          :> QueryParam' '[Optional, Strict, Description "KQL over the metrics source, e.g. metrics | where metric_name == \"http.server.requests\" | summarize rate(value) by bin_auto(timestamp). Use rate(value) (per second) or increase(value) (per bin) for counters, last(value) for gauges; they are computed per series and reset-aware."] "query" Text
+          :> QueryParam' '[Optional, Strict, Description "KQL over the metrics source, e.g. metrics | where metric_name == \"http.server.requests\" | summarize rate(value) by bin_auto(timestamp). Use rate(value) (per second) or increase(value) (per bin) for counters, last(value) for gauges; they are computed per series and reset-aware. rateif/increaseif/lastif(value, predicate) aggregate only the matching series, for ratios."] "query" Text
           :> QueryParam "data_type" Charts.DataType
           :> QPT "since"
           :> QPT "from"
