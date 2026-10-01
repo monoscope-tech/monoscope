@@ -1781,7 +1781,19 @@ renderDashboardListItem checked title value description icon = label_
         , type_ "radio"
         , name_ "file"
         , value_ value
-        , term "hx-on:change" "const item = this.closest('label'); const name = document.getElementById('title'); if (!name.value.trim() || name.value === name.dataset.templateTitle) name.value = item.dataset.title; name.dataset.templateTitle = item.dataset.title; dItemDescription.textContent = item.dataset.description; document.querySelectorAll('#dashboardTemplatePreviews [data-template]').forEach(preview => preview.hidden = preview.dataset.template !== this.value)"
+        , [__|
+            on change
+              set :item to closest <label/>
+              set :name to #title
+              if :name.value.trim() is '' or :name.value is :name.dataset.templateTitle then
+                set :name.value to :item.dataset.title
+              end
+              set :name.dataset.templateTitle to :item.dataset.title
+              set #dItemDescription.textContent to :item.dataset.description
+              for preview in <[data-template]/> in #dashboardTemplatePreviews
+                set preview.hidden to preview.dataset.template != my value
+              end
+          |]
         ]
       <> [checked_ | checked]
     span_ [class_ "p-1 px-2 bg-fillWeak rounded-md"] $ faSprite_ (fromMaybe "square-dashed" icon) "regular" "w-3 h-3"

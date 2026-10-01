@@ -153,3 +153,25 @@ spec = around withTestResources do
         snapshotsAfter <- mapMaybe (AE.decodeStrict . encodeUtf8 . PGS.fromOnly) <$> (PGS.query conn "SELECT schema::text FROM projects.dashboards WHERE id::text = ANY(?::text[]) ORDER BY id" (PGS.Only $ PGArray ids) :: IO [PGS.Only Text])
         snapshotsAfter `shouldBe` after
         void $ PGS.execute conn "DELETE FROM projects.dashboards WHERE id::text = ANY(?::text[])" (PGS.Only $ PGArray ids)
+
+  describe "overview infrastructure stats migration" do
+    it "adds percentage units to saved stats even when their JSON contains other fields" \tr -> do
+      let did = "02100000-0000-0000-0000-000000000001" :: Text
+          values :: [AE.Value] -> [AE.Value]
+          values = identity
+          stat title icon sqlText = AE.object ["type" AE..= ("stat" :: Text), "title" AE..= title, "icon" AE..= icon, "unit" AE..= AE.Null, "layout" AE..= AE.object ["w" AE..= (3 :: Int)], "sql" AE..= sqlText]
+          children =
+            values [ stat "Avg CPU Utilization" "cpu" ("ROUND(AVG(value::numeric * 100), 1)::text || '%'" :: Text)
+            , stat "Avg Memory Usage" "hard-drive" ("ROUND(AVG(value::numeric), 1)::text || '%'" :: Text)
+            , stat "Other" "circle" ("SELECT 1" :: Text)
+            ]
+          schema = AE.object ["tabs" AE..= values [AE.object ["widgets" AE..= values [AE.object ["type" AE..= ("group" :: Text), "children" AE..= children]]]]]
+      withResource tr.trPool \conn -> do
+        void $ PGS.execute conn "DELETE FROM projects.dashboards WHERE id::text = ?" (PGS.Only did)
+        void $ PGS.execute conn "INSERT INTO projects.dashboards (id, project_id, created_by, title, base_template, schema) VALUES (?::uuid, ?, (SELECT id FROM users.users LIMIT 1), 'overview fixture', '_overview.yaml', ?::jsonb)" (did, testPid, decodeUtf8 (toStrict $ AE.encode schema) :: Text)
+        forM_ ["0209_overview_infra_stats_numeric.sql", "0210_overview_infra_stat_units.sql"] \file -> do
+          migration <- readFileBS $ "static/migrations/" <> file
+          void $ PGS.execute_ conn (fromString $ toString (decodeUtf8 migration :: Text))
+        fields <- PGS.query conn "SELECT schema #>> '{tabs,0,widgets,0,children,0,unit}', schema #>> '{tabs,0,widgets,0,children,0,sql}', schema #>> '{tabs,0,widgets,0,children,1,unit}', schema #>> '{tabs,0,widgets,0,children,1,sql}', schema #>> '{tabs,0,widgets,0,children,2,unit}' FROM projects.dashboards WHERE id::text = ?" (PGS.Only did) :: IO [(Maybe Text, Maybe Text, Maybe Text, Maybe Text, Maybe Text)]
+        fields `shouldBe` [(Just "%", Just "ROUND(AVG(value::numeric * 100), 1)::float8", Just "%", Just "ROUND(AVG(value::numeric), 1)::float8", Nothing)]
+        void $ PGS.execute conn "DELETE FROM projects.dashboards WHERE id::text = ?" (PGS.Only did)
