@@ -470,11 +470,12 @@ sqlFromQueryComponents sqlCfg qc =
       seriesBinsSQL sqlCfg.targetsTimefusion cell (timeBucketExpr interval) (fromRational secs) resolvedGroupCols fromTable (whereWith $ lookbackRange $ max seriesLookback $ fromRational secs) qc.seriesAggs
     dataWhere = maybe buildWhere (const inRange) binnedSeries
     -- Every aggregating shape reads this; it is the plain table unless the summarize has series aggregations.
-    dataTable = flip fromMaybe binnedSeries $
-      let (bucketM, binSecondsM) = case qc.finalSummarizeQuery of
-            Just interval -> (Just $ timeBucketExpr interval, fromRational <$> intervalSeconds interval)
-            Nothing -> (Nothing, case sqlCfg.dateRange of (Just a, Just b) -> Just (realToFrac (diffUTCTime b a)); _ -> Nothing)
-       in seriesSourceSQL bucketM binSecondsM fromTable (whereWith $ lookbackRange seriesLookback) inRange qc.seriesAggs
+    dataTable =
+      flip fromMaybe binnedSeries
+        $ let (bucketM, binSecondsM) = case qc.finalSummarizeQuery of
+                Just interval -> (Just $ timeBucketExpr interval, fromRational <$> intervalSeconds interval)
+                Nothing -> (Nothing, case sqlCfg.dateRange of (Just a, Just b) -> Just (realToFrac (diffUTCTime b a)); _ -> Nothing)
+           in seriesSourceSQL bucketM binSecondsM fromTable (whereWith $ lookbackRange seriesLookback) inRange qc.seriesAggs
 
     -- count(*) OVER() goes inside the array as the LAST element when
     -- hasCountOver = True; 'selectLogTable' peels it back off via dropLast.
