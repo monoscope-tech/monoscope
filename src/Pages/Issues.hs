@@ -1,5 +1,6 @@
 module Pages.Issues (
   issueListGetH,
+  hourlyRollupSql,
   issueBulkActionsPostH,
   IssueBulkAction (..),
   acknowledgeIssueGetH,
@@ -114,6 +115,7 @@ import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), assetUrl, bulkActionSlu
 import Pkg.ErrorFingerprint qualified as EF
 import Pkg.Mail qualified as Mail
 import Pkg.Parser (ScopedQuery (..), applyScopedKqlContext, mkScopedQuery)
+import Pkg.Parser.Expr (sqlStringLit)
 import Pkg.SchemaLearning.Catalog (FacetData (..), FacetSummary (..), FacetValue (..))
 import PyF (fmt)
 import Relude hiding (ask)
@@ -1155,8 +1157,8 @@ contextCard_ bodyCls title body = div_ [class_ "surface-raised rounded-2xl overf
 -- count, so it stays in the chart header; every other type's total is the Events
 -- figure in 'issueHeader_'. @thresholdM@ draws the alert's breach line; @heightCls@
 -- is taller when the chart *is* the evidence.
-issueChartCard_ :: IssueView -> Text -> Text -> Maybe Double -> Text -> Html ()
-issueChartCard_ IssueView{..} chartTitle heightCls thresholdM chartQuery = do
+issueChartCard_ :: IssueView -> Text -> Text -> Maybe Double -> Maybe Text -> Text -> Html ()
+issueChartCard_ IssueView{..} chartTitle heightCls thresholdM rollupSqlM chartQuery = do
   let chartId = issueChartId issue
       total = div_ [class_ "flex flex-col gap-0.5 leading-none"] do
         span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] "Value"
@@ -1174,6 +1176,7 @@ issueChartCard_ IssueView{..} chartTitle heightCls thresholdM chartQuery = do
           , Widget.wType = Widget.WTTimeseries
           , Widget.showTooltip = Just True
           , Widget.query = Just chartQuery
+          , Widget.rollupSql = rollupSqlM
           , Widget._projectId = Just issue.projectId
           , Widget.hideLegend = Just True
           , Widget.hideSubtitle = Just True
@@ -1189,7 +1192,26 @@ issueChartCard_ IssueView{..} chartTitle heightCls thresholdM chartQuery = do
 -- | Volume of the issue's own signal over the selected range.
 issueVolumeChart_ :: IssueView -> Text -> Html ()
 issueVolumeChart_ v chartTitle = whenJust (issueHashKey v.issue) \key ->
-  issueChartCard_ v chartTitle "h-24" Nothing $ "hashes[*]==\"" <> key <> "\" | summarize count(*) by bin_auto(timestamp)"
+  issueChartCard_ v chartTitle "h-24" Nothing (issueHourlySql v) $ "hashes[*]==\"" <> key <> "\" | summarize count(*) by bin_auto(timestamp)"
+
+
+-- | The volume chart's series from the hourly counts ingest already keeps. The KQL
+-- form scans every row in the window on TimeFusion (@hashes@ has no index there),
+-- 4-27s for a day; this is an index lookup. See 'Web.Routes.rollupRoute' for when
+-- the server prefers it.
+issueHourlySql :: IssueView -> Maybe Text
+issueHourlySql v =
+  uncurry hourlyRollupSql <$> case Issues.issuePayload v.issue of
+    Just (Issues.LogPatternP d) -> logPattern d.sourceField d.patternHash
+    Just (Issues.LogPatternRateChangeP d) -> logPattern d.sourceField d.patternHash
+    _ -> v.errM <&> \e -> ("apis.error_hourly_stats", "error_id = " <> sqlStringLit (UUID.toText e.base.id.unErrorPatternId))
+  where
+    logPattern sf h = Just ("apis.log_pattern_hourly_stats", "source_field = " <> sqlStringLit sf <> " AND pattern_hash = " <> sqlStringLit h)
+
+
+-- | A chart series over one key of an hourly stats table, bounded by the chart's window.
+hourlyRollupSql :: Text -> Text -> Text
+hourlyRollupSql tbl key = "SELECT * FROM (SELECT hour_bucket AS timestamp, 'value', event_count::float FROM " <> tbl <> " WHERE project_id = '{{project_id}}' AND " <> key <> ") s WHERE TRUE{{time_filter}} ORDER BY 1"
 
 
 -- | The aggregate band: the range every panel below reads, then the chart beside the
@@ -1230,7 +1252,7 @@ issueAggregate_ v@IssueView{..} = do
     Just (Issues.QueryAlertP d) -> do
       let below = d.thresholdType == Issues.Below
           meetsThreshold = if below then d.actualValue <= d.thresholdValue else d.actualValue >= d.thresholdValue
-      sideBySide_ (issueChartCard_ v "Alert Query" "h-56" (Just d.thresholdValue) d.queryExpression)
+      sideBySide_ (issueChartCard_ v "Alert Query" "h-56" (Just d.thresholdValue) Nothing d.queryExpression)
         $ contextCard_ "p-4 flex flex-col gap-4" "Recorded evaluation" do
           div_ [class_ "flex items-start gap-6"] do
             div_ [class_ "flex flex-col gap-1"] do
