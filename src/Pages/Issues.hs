@@ -1209,8 +1209,10 @@ issueHourlySql :: IssueView -> Maybe (Text, UTCTime)
 issueHourlySql v = case Issues.issuePayload v.issue of
   Just (Issues.LogPatternP d) -> logPattern d.sourceField d.patternHash
   Just (Issues.LogPatternRateChangeP d) -> logPattern d.sourceField d.patternHash
-  _ -> v.errM >>= \e -> v.errHourlyFrom <&> \counted ->
-    (hourlyRollupSql "apis.error_hourly_stats" $ "error_id = " <> sqlStringLit (UUID.toText e.base.id.unErrorPatternId), coveredFrom (zonedTimeToUTC e.base.createdAt) counted)
+  _ ->
+    v.errM >>= \e ->
+      v.errHourlyFrom <&> \counted ->
+        (hourlyRollupSql "apis.error_hourly_stats" $ "error_id = " <> sqlStringLit (UUID.toText e.base.id.unErrorPatternId), coveredFrom (zonedTimeToUTC e.base.createdAt) counted)
   where
     logPattern sf h = Just (hourlyRollupSql "apis.log_pattern_hourly_stats" $ "source_field = " <> sqlStringLit sf <> " AND pattern_hash = " <> sqlStringLit h, maybe horizon (\p -> coveredFrom (zonedTimeToUTC p.firstSeenAt) horizon) v.patternM)
     horizon = addUTCTime (fromIntegral $ -(3600 * LogPatterns.hourlyStatsRetentionHours)) v.now
