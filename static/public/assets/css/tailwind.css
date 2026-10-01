@@ -1231,6 +1231,19 @@ body, :host {
     contain: layout paint;
     min-height: 100%;
   }
+  .chart-render-slot:empty::before {
+    content: '';
+    display: block;
+    height: 0.25rem;
+    margin: 1.25rem 0.75rem 0;
+    border-radius: 9999px;
+    background: linear-gradient(90deg, var(--color-fillWeak), var(--color-fillBrand-weak), var(--color-fillWeak));
+    background-size: 200% 100%;
+    animation: shimmer 2s ease-in-out infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .chart-render-slot:empty::before { animation: none; }
+  }
 
   /*
     Log explorer latency bar hover card.

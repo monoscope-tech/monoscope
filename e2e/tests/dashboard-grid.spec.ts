@@ -27,6 +27,22 @@ const V11_DEPRECATION = /does not support HTMLElement anymore/;
 const ROOT_GRID = ".grid-stack:not(.nested-grid)";
 const ROOT_ITEMS = `${ROOT_GRID} > .grid-stack-item`;
 
+test("a loading chart does not look blank", async ({ page }) => {
+  await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
+  const href = await page.locator(`a[href^="/p/${DEMO_PROJECT}/dashboards/"]`).first().getAttribute("href");
+  expect(href).toBeTruthy();
+  await page.route(/\/js\/widgets\.[^/]+\.js/, async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    await route.continue();
+  });
+  await page.goto(href!, { waitUntil: "domcontentloaded" });
+  const chart = page.locator(".chart-render-slot").first();
+  await expect(chart).toBeVisible();
+  await expect(chart.locator("canvas")).toHaveCount(0);
+  expect(await chart.evaluate((el) => getComputedStyle(el, "::before").content)).not.toBe("none");
+  await expect(chart.locator("canvas")).toHaveCount(1, { timeout: 15000 });
+});
+
 type Layout = { id: string; x: number; y: number; w: number; h: number };
 
 test("a dashboard can be created without assigning a team", async ({ page }) => {

@@ -1536,12 +1536,12 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
                      |]
               ]
 
-          numberedStep_ 3 "Widget thresholds" $ div_ [class_ "space-y-2"] do
-            p_ [class_ "text-xs text-textWeak"] "Optional lines on the chart. Save the widget to set up a monitor."
-            Components.formField_ Components.FieldSm def{Components.value = fromMaybe "" widgetToUse.unit, Components.placeholder = "e.g. ms, requests/s", Components.extraAttrs = [term "hx-on:change" [text|widgetJSON.unit = this.value || null; htmx.trigger(document.getElementById('${widgetPreviewId}'), 'update-widget')|]]} "Measurement unit" "widgetUnit" False Nothing
-            div_ [class_ "grid grid-cols-1 gap-3 sm:grid-cols-2"] do
-              Components.formField_ Components.FieldSm def{Components.inputType = "number", Components.value = maybe "" show widgetToUse.warningThreshold, Components.dot = Just "bg-fillWarning-strong", Components.extraAttrs = [step_ "any", term "hx-on:change" [text|widgetJSON.warning_threshold = this.value === '' ? null : Number(this.value); htmx.trigger(document.getElementById('${widgetPreviewId}'), 'update-widget')|]]} "Warning threshold" "widgetWarningThreshold" False Nothing
-              Components.formField_ Components.FieldSm def{Components.inputType = "number", Components.value = maybe "" show widgetToUse.alertThreshold, Components.dot = Just "bg-fillError-strong", Components.extraAttrs = [step_ "any", term "hx-on:change" [text|widgetJSON.alert_threshold = this.value === '' ? null : Number(this.value); htmx.trigger(document.getElementById('${widgetPreviewId}'), 'update-widget')|]]} "Alert threshold" "widgetAlertThreshold" False Nothing
+          when (widgetToUse.wType `elem` [Widget.WTTimeseries, Widget.WTTimeseriesLine, Widget.WTTimeseriesStat]) $ div_ [class_ "group-has-[#viz-logs:checked]/wgtexp:hidden"] $ numberedStep_ 3 "Widget thresholds" $ div_ [class_ "space-y-2"] do
+              p_ [class_ "text-xs text-textWeak"] "Set optional warning and alert limits. Save the widget to add a monitor."
+              Components.formField_ Components.FieldSm def{Components.value = fromMaybe "" widgetToUse.unit, Components.placeholder = "e.g. ms, requests/s", Components.extraAttrs = [term "hx-on:change" [text|widgetJSON.unit = this.value || null; htmx.trigger(document.getElementById('${widgetPreviewId}'), 'update-widget')|]]} "Measurement unit" "widgetUnit" False Nothing
+              div_ [class_ "grid grid-cols-1 gap-3 sm:grid-cols-2"] do
+                Components.formField_ Components.FieldSm def{Components.inputType = "number", Components.value = maybe "" show widgetToUse.warningThreshold, Components.dot = Just "bg-fillWarning-strong", Components.extraAttrs = [step_ "any", term "hx-on:change" [text|widgetJSON.warning_threshold = this.value === '' ? null : Number(this.value); htmx.trigger(document.getElementById('${widgetPreviewId}'), 'update-widget')|]]} "Warning threshold" "widgetWarningThreshold" False Nothing
+                Components.formField_ Components.FieldSm def{Components.inputType = "number", Components.value = maybe "" show widgetToUse.alertThreshold, Components.dot = Just "bg-fillError-strong", Components.extraAttrs = [step_ "any", term "hx-on:change" [text|widgetJSON.alert_threshold = this.value === '' ? null : Number(this.value); htmx.trigger(document.getElementById('${widgetPreviewId}'), 'update-widget')|]]} "Alert threshold" "widgetAlertThreshold" False Nothing
 
     section_ [class_ "min-w-0 rounded-xl border border-strokeWeak bg-bgRaised p-4 group-has-[.page-drawer-tab-monitors:checked]/wgtexp:hidden [@media(max-height:48rem)]:p-3"] do
       div_ [class_ "flex min-h-7 items-center justify-between gap-4"] do

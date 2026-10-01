@@ -410,6 +410,12 @@ spec = sequential $ aroundAll withTestResources do
       only <- onlyWidget =<< storedWidgets tr dashId
       (only.alertThreshold, only.warningThreshold, only.unit) `shouldBe` (Just 10, Just 7, Just "requests/s")
 
+      tableDashId <- newDashboard tr "overview.yaml" "Table Without Thresholds"
+      _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid tableDashId Nothing Nothing (widgetOf Widget.WTTable "Rows")
+      tableId <- firstWidgetId =<< storedWidgets tr tableDashId
+      (_, tableEditor) <- testServant tr $ Dashboards.dashboardWidgetExpandGetH testPid tableDashId tableId
+      toStrict (renderText tableEditor) `shouldNotSatisfy` T.isInfixOf "Widget thresholds"
+
     -- Opening "add widget" on a dashboard must start on a chart. Logs is a full log
     -- table: it is the wrong thing to drop on a dashboard by default, and it is the
     -- most expensive one to render.
