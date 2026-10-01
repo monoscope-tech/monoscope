@@ -393,22 +393,22 @@ spec = sequential $ aroundAll withTestResources do
       formTag `shouldSatisfy` T.isInfixOf "errorToast"
 
   describe "The add-widget experience" do
-    it "widget thresholds live in Monitors and save without notifications" \tr -> do
+    it "widget chart thresholds live in Edit and can feed a monitor" \tr -> do
       dashId <- newDashboard tr "overview.yaml" "Widget Display Thresholds"
       (_, newEditor) <- testServant tr $ Dashboards.dashboardWidgetNewGetH testPid dashId Nothing Nothing Nothing
       let newHtml = toStrict $ renderText newEditor
-      newHtml `shouldNotSatisfy` T.isInfixOf "Widget thresholds"
+      newHtml `shouldSatisfy` T.isInfixOf "Chart thresholds"
 
       let widget = (widgetOf Widget.WTTimeseries "Thresholded"){Widget.alertThreshold = Just 10, Widget.warningThreshold = Just 7, Widget.unit = Just "requests/s"}
       _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid dashId Nothing Nothing widget
       wid <- firstWidgetId =<< storedWidgets tr dashId
       (_, editEditor) <- testServant tr $ Dashboards.dashboardWidgetExpandGetH testPid dashId wid
       let editHtml = toStrict $ renderText editEditor
-      editHtml `shouldNotSatisfy` T.isInfixOf "Widget thresholds"
+      editHtml `shouldSatisfy` T.isInfixOf "Chart thresholds"
       editHtml `shouldSatisfy` T.isInfixOf "Monitors"
-      for_ ["Measurement unit", "Save thresholds", "widgetJSON.alert_threshold", "widgetJSON.warning_threshold"] \fragment ->
+      for_ ["Measurement unit", "widgetJSON.alert_threshold", "widgetJSON.arning_threshold", "Edit chart thresholds"] \fragment ->
         editHtml `shouldSatisfy` T.isInfixOf fragment
-      fst (T.breakOn "Enable monitor" editHtml) `shouldNotSatisfy` T.isInfixOf "Optional warning and alert limits"
+      editHtml `shouldNotSatisfy` T.isInfixOf "Save thresholds"
       fst (T.breakOn "widget-preview-container" editHtml) `shouldNotSatisfy` T.isInfixOf "Configure query"
       only <- onlyWidget =<< storedWidgets tr dashId
       (only.alertThreshold, only.warningThreshold, only.unit) `shouldBe` (Just 10, Just 7, Just "requests/s")
@@ -417,14 +417,14 @@ spec = sequential $ aroundAll withTestResources do
       _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid tableDashId Nothing Nothing (widgetOf Widget.WTTable "Rows")
       tableId <- firstWidgetId =<< storedWidgets tr tableDashId
       (_, tableEditor) <- testServant tr $ Dashboards.dashboardWidgetExpandGetH testPid tableDashId tableId
-      toStrict (renderText tableEditor) `shouldNotSatisfy` T.isInfixOf "Widget thresholds"
+      toStrict (renderText tableEditor) `shouldNotSatisfy` T.isInfixOf ">Chart thresholds</strong>"
 
       sqlDashId <- newDashboard tr "overview.yaml" "SQL Chart Thresholds"
       _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid sqlDashId Nothing Nothing (widgetOf Widget.WTTimeseries "SQL Chart"){Widget.query = Nothing, Widget.sql = Just "SELECT 1"}
       sqlId <- firstWidgetId =<< storedWidgets tr sqlDashId
       (_, sqlEditor) <- testServant tr $ Dashboards.dashboardWidgetExpandGetH testPid sqlDashId sqlId
       let sqlHtml = toStrict $ renderText sqlEditor
-      sqlHtml `shouldSatisfy` T.isInfixOf "Save thresholds"
+      sqlHtml `shouldSatisfy` T.isInfixOf "Chart thresholds"
       sqlHtml `shouldSatisfy` T.isInfixOf "Monitors evaluate a KQL query"
 
     -- Opening "add widget" on a dashboard must start on a chart. Logs is a full log

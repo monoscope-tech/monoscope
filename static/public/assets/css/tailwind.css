@@ -21,6 +21,59 @@
 /* Hover-only variant: Only applies hover effects on devices that support hover (not touch) */
 @custom-variant hover-only (@media (hover: hover) and (pointer: fine));
 
+@layer custom {
+  .widget-editor {
+    overflow-anchor: none;
+  }
+
+  .widget-editor .widget-preview {
+    top: var(--widget-header-height, 56px);
+  }
+
+  .widget-editor .widget-preview-heading {
+    height: 1.75rem;
+    overflow: hidden;
+  }
+
+  .widget-editor.is-compact .widget-preview-heading {
+    height: 0;
+    opacity: 0;
+  }
+
+  .widget-editor.is-compact .widget-preview-container {
+    height: clamp(8rem, 18dvh, 11rem);
+  }
+
+  @media (max-width: 767px) {
+    .widget-editor :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea) {
+      font-size: 16px;
+    }
+
+    .widget-editor:not(.is-compact) .widget-preview-container {
+      height: min(25dvh, 13rem);
+    }
+
+    .widget-editor.is-compact .widget-preview-container {
+      height: clamp(8rem, 18dvh, 10rem);
+    }
+  }
+
+  @media (max-height: 600px) {
+    .widget-editor.is-compact .widget-preview-container {
+      height: 6rem;
+    }
+  }
+
+  .widget-editor.keyboard-open .widget-preview-container,
+  .widget-editor.keyboard-open .widget-preview-heading {
+    display: none;
+  }
+
+  .widget-editor.keyboard-open .widget-preview {
+    padding-block: 0.5rem;
+  }
+}
+
 /* JetBrains Mono font */
 @font-face {
   font-family: 'JetBrains Mono';

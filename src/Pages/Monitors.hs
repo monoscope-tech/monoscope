@@ -8,6 +8,7 @@ module Pages.Monitors (
   Alert (..),
   -- Shared alert section components
   monitorScheduleSection_,
+  ScheduleCondition (..),
   thresholdsSection_,
   notificationSettingsSection_,
   -- Unified monitors (formerly Testing)
@@ -298,7 +299,10 @@ alertTeamDeleteH pid monitorId teamId = do
   addRespHeaders $ AlertNoContent ""
 
 
-monitorScheduleSection_ :: Text -> Int -> Int -> Maybe Text -> Html ()
+data ScheduleCondition = FixedThreshold | SelectCondition (Maybe Text)
+
+
+monitorScheduleSection_ :: Text -> Int -> Int -> ScheduleCondition -> Html ()
 monitorScheduleSection_ paymentPlan defaultFrequency defaultTimeWindow conditionType = do
   let timeOpts :: [(Int, Text)]
       timeOpts = [(1, "minute"), (2, "2 minutes"), (5, "5 minutes"), (10, "10 minutes"), (15, "15 minutes"), (30, "30 minutes"), (60, "hour"), (360, "6 hours"), (720, "12 hours"), (1440, "day")]
@@ -314,7 +318,6 @@ monitorScheduleSection_ paymentPlan defaultFrequency defaultTimeWindow condition
             attrs = [value_ (show m <> "m")] <> [disabled_ "" | isDisabled] <> [selected_ "" | m == clampedFreq]
          in option_ attrs ("every " <> toHtml l)
       mkTimeOpt (m, l) = option_ ([value_ (show m <> "m")] <> [selected_ "" | m == defaultTimeWindow]) ("the last " <> toHtml l)
-      isThresholdType = maybe True (== "threshold_exceeded") conditionType
       -- Both flows retune the bin through the query builder. The widget flow used to call
       -- chart.updateRollup, which is implemented nowhere — and since `if chart exists`
       -- tests the element rather than the method, it threw on every change instead of
@@ -322,15 +325,21 @@ monitorScheduleSection_ paymentPlan defaultFrequency defaultTimeWindow condition
       chartUpdateAttr = term "hx-on:change" "document.querySelector('query-builder')?.updateBinInQuery('timestamp', this.value)"
   panel_ def{icon = Just "clock", collapsible = Just True} "Monitor Schedule" do
     when isFree $ p_ [class_ "text-xs text-textWeak mt-1"] "Free plan: hourly minimum frequency. Upgrade for faster checks."
-    div_ [class_ "flex gap-2 py-2"] do
+    div_ [class_ "flex flex-col gap-3 py-2 sm:flex-row"] do
       formSelectField_ FieldSm "Execute the query" "frequency" False $ forM_ timeOpts mkFreqOpt
       formField_ FieldSm def "Include rows from" "timeWindow" False
         $ Just (select_ [class_ "select select-bordered select-sm w-full", name_ "timeWindow", id_ "timeWindow", chartUpdateAttr] $ forM_ timeOpts mkTimeOpt)
-      formField_ FieldSm def "Notify me when" "conditionType" False
-        $ Just
-        $ select_ [name_ "conditionType", class_ "select select-bordered select-sm w-full", id_ "condType", term "hx-on:change" "document.getElementById('thresholds').open = this.value == 'threshold_exceeded'"] do
-          option_ ([value_ "threshold_exceeded"] <> [selected_ "" | isThresholdType]) "threshold is exceeded"
-          option_ ([value_ "has_matches"] <> [selected_ "" | not isThresholdType]) "the query has any results"
+      case conditionType of
+        FixedThreshold -> div_ [class_ "fieldset flex-1 min-w-0"] do
+          span_ [class_ "label text-xs text-textStrong"] "Alert when"
+          p_ [class_ "text-sm text-textStrong py-2"] "A chart threshold is crossed"
+        SelectCondition choice ->
+          let isThresholdType = maybe True (== "threshold_exceeded") choice
+           in formField_ FieldSm def "Alert when" "conditionType" False
+                $ Just
+                $ select_ [name_ "conditionType", class_ "select select-bordered select-sm w-full", id_ "condType", term "hx-on:change" "document.getElementById('thresholds').open = this.value == 'threshold_exceeded'"] do
+                  option_ ([value_ "threshold_exceeded"] <> [selected_ "" | isThresholdType]) "chart threshold is crossed"
+                  option_ ([value_ "has_matches"] <> [selected_ "" | not isThresholdType]) "the query has any results"
 
 
 thresholdsSection_ :: Maybe Text -> Maybe Text -> Maybe Double -> Maybe Double -> Bool -> Maybe Double -> Maybe Double -> Html ()
@@ -367,15 +376,22 @@ notificationSettingsSection_ severityM subjectM messageM emailAll allTeams selec
       stopEnabled = maybe False (isJust . (.stopAfterCount)) monitorM
       stopVal = maybe "5" show $ monitorM >>= (.stopAfterCount)
   panel_ def{icon = Just "envelope", collapsible = Just False} "Notification Settings" do
-    div_ [class_ "flex items-center w-full gap-2 mb-3"] do
-      formSelectField_ FieldSm "Severity" "severity" False $ forM_ ["Info", "Error", "Warning", "Critical"] \s -> option_ [selected_ "" | defaultSeverity == s] $ toHtml s
-      div_ [class_ "flex-1"] $ formField_ FieldSm def{value = defaultSubject, placeholder = "e.g. Alert triggered for high error rate"} "Subject" "subject" False Nothing
-    formField_ FieldSm def{inputType = "textarea", value = defaultMessage, placeholder = "Alert message details", extraAttrs = [rows_ "3"]} "Message" "message" False Nothing
-    div_ [class_ "border-t border-strokeWeak pt-4 mt-4"] do
-      div_ [class_ "mb-3"] do
-        h4_ [class_ "font-medium text-sm text-textStrong mb-1"] "Recovery Notifications"
-        p_ [class_ "text-xs text-textWeak"] "Continue notifications until monitor recovers"
-      div_ [class_ "space-y-3"] do
+    div_ [class_ "flex flex-col gap-1"] do
+      span_ [class_ "text-sm text-textStrong"] "Teams"
+      span_ [class_ "text-xs text-textWeak"] "If no team is selected, project notification channels are used."
+    tagInput_ (formId <> "-teams") "" [name_ "teams", data_ "tagify-text-prop" "name", data_ "tagify-whitelist" teamList, data_ "tagify-initial" existingTeams]
+    div_ [class_ "flex items-center gap-2 mt-4"] do
+      formCheckbox_ FieldMd "Send to all team members" "recipientEmailAll" $ value_ "true" : [checked_ | emailAll]
+      span_ [class_ "tooltip", data_ "tip" "Configure specific recipients in alert settings after creation"] $ faSprite_ "circle-info" "regular" "w-3.5 h-3.5 text-iconNeutral"
+    details_ [class_ "mt-4 border-t border-strokeWeak pt-3"] do
+      summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] "Advanced notification settings"
+      div_ [class_ "space-y-3 pt-3"] do
+        div_ [class_ "flex flex-col sm:flex-row sm:items-center w-full gap-2"] do
+          formSelectField_ FieldSm "Severity" "severity" False $ forM_ ["Info", "Error", "Warning", "Critical"] \s -> option_ [selected_ "" | defaultSeverity == s] $ toHtml s
+          div_ [class_ "flex-1"] $ formField_ FieldSm def{value = defaultSubject, placeholder = "e.g. Alert triggered for high error rate"} "Subject" "subject" False Nothing
+        formField_ FieldSm def{inputType = "textarea", value = defaultMessage, placeholder = "Alert message details", extraAttrs = [rows_ "3"]} "Message" "message" False Nothing
+        h4_ [class_ "font-medium text-sm text-textStrong"] "Repeat notifications"
+        p_ [class_ "text-xs text-textWeak"] "Continue notifications until the monitor recovers."
         div_ [class_ "flex items-center"] do
           formCheckbox_ FieldSm "Renotify every" "notifyAfterCheck" $ value_ "true" : [checked_ | renotifyEnabled]
           select_ [class_ "select select-sm w-28 ml-2", name_ "notifyAfter", id_ "notifyAfterInterval"] $ options_ (Just renotifyVal) [("10m", "10 mins"), ("20m", "20 mins"), ("30m", "30 mins"), ("1h", "1 hour"), ("6h", "6 hours"), ("24h", "24 hours")]
@@ -384,14 +400,6 @@ notificationSettingsSection_ severityM subjectM messageM emailAll allTeams selec
           div_ [class_ "items-center gap-1.5 ml-2 hidden group-has-[#stopAfterCheck:checked]/stopafter:flex", id_ "stopAfterInput"] do
             input_ [type_ "number", class_ "input input-sm w-16", value_ stopVal, name_ "stopAfter", min_ "1", max_ "100"]
             span_ [class_ "text-xs text-textWeak"] "occurrences"
-    div_ [class_ "border-t border-strokeWeak pt-4 mt-4"] do
-      div_ [class_ "flex flex-col gap-1"] do
-        span_ [class_ "text text-sm"] "Teams"
-        span_ [class_ "text-xs text-textWeak"] "Add teams to notify (if no team is added, project level notification channels will be used)"
-      tagInput_ (formId <> "-teams") "" [name_ "teams", data_ "tagify-text-prop" "name", data_ "tagify-whitelist" teamList, data_ "tagify-initial" existingTeams]
-    div_ [class_ "flex items-center gap-2 mt-4 pt-3 border-t border-strokeWeak"] do
-      formCheckbox_ FieldMd "Send to all team members" "recipientEmailAll" $ value_ "true" : [checked_ | emailAll]
-      span_ [class_ "tooltip", data_ "tip" "Configure specific recipients in alert settings after creation"] $ faSprite_ "circle-info" "regular" "w-3.5 h-3.5 text-iconNeutral"
 
 
 ---------------------------------

@@ -159,25 +159,19 @@ spec = sequential $ aroundAll withTestResources do
             dashboardId
             Nothing
             Nothing
-            def{Widget.wType = Widget.WTTimeseries, Widget.title = Just "Checkout errors", Widget.query = Just "name == \"checkout\""}
+            def{Widget.wType = Widget.WTTimeseries, Widget.title = Just "Checkout errors", Widget.query = Just "name == \"checkout\"", Widget.alertThreshold = Just 1, Widget.unit = Just "events"}
       widgetId <- maybe (fail "the saved widget has no id") pure savedWidget.id
       let alertForm =
             Dashboards.WidgetAlertForm
-              { unit = Just "events"
-              , widgetId
+              { widgetId
               , query = "name == \"checkout\""
               , vizType = Just "timeseries"
-              , alertEnabled = Just "on"
-              , alertThreshold = 1
-              , warningThreshold = Nothing
               , direction = "above"
-              , showThresholdLines = Just "on_breach"
               , alertRecoveryThreshold = Nothing
               , warningRecoveryThreshold = Nothing
               , frequency = Just "1m"
               , title = "Checkout errors"
               , timeWindow = Just "1h"
-              , conditionType = Just "threshold_exceeded"
               , severity = Just "Error"
               , subject = Just "Checkout errors"
               , message = Just "A checkout request failed"
@@ -206,6 +200,13 @@ spec = sequential $ aroundAll withTestResources do
       isNothing <$> runTestBgNoReset tr (Monitors.queryMonitorByWidgetId testPid (Just $ unUUIDId dashboardId) widgetId) `shouldReturn` True
       void $ testServant tr $ Dashboards.widgetAlertUpsertH testPid widgetId (Just $ unUUIDId dashboardId) alertForm
       isNothing <$> runTestBgNoReset tr (Monitors.queryMonitorByWidgetId otherPid (Just $ unUUIDId dashboardId) widgetId) `shouldReturn` True
+      void $ testServant tr $ Dashboards.widgetAlertToggleH testPid widgetId (Just $ unUUIDId dashboardId)
+      paused <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId testPid (Just $ unUUIDId dashboardId) widgetId
+      isJust (paused >>= (.deactivatedAt)) `shouldBe` True
+      void $ testServant tr $ Dashboards.widgetAlertUpsertH testPid widgetId (Just $ unUUIDId dashboardId) alertForm
+      stillPaused <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId testPid (Just $ unUUIDId dashboardId) widgetId
+      isJust (stillPaused >>= (.deactivatedAt)) `shouldBe` True
+      void $ testServant tr $ Dashboards.widgetAlertToggleH testPid widgetId (Just $ unUUIDId dashboardId)
 
       apiKey <- createTestAPIKey tr testPid "widget-monitor"
       ingestionTime <- getCurrentTime
@@ -214,6 +215,7 @@ spec = sequential $ aroundAll withTestResources do
       fired <- fst <$> captureNotifs tr checkTriggeredQueryMonitors
       firedMonitor <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId testPid (Just $ unUUIDId dashboardId) widgetId
       (firedMonitor >>= (.alertConfig.unit)) `shouldBe` Just "events"
+      ((\m -> (m.alertThreshold, m.warningThreshold)) <$> firedMonitor) `shouldBe` Just (1, Nothing)
       ((\m -> (m.currentStatus, m.currentValue, m.notificationCount)) <$> firedMonitor) `shouldBe` Just (Monitors.MSAlerting, 1, 1)
       deliverySummary fired
         `shouldBe` [ "discord:C_MONITOR"
@@ -237,11 +239,13 @@ spec = sequential $ aroundAll withTestResources do
       (refresh, _) <- captureNotifs tr runSlackIncidentDeliveries
       deliverySummary refresh `shouldBe` ["slack-update:C_NOTIF_CHANNEL"]
 
+      void (runAsBase tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.dashboardWidgetPutH testPid dashboardId (Just widgetId) Nothing savedWidget{Widget.alertThreshold = Nothing}) `shouldThrow` anyIOException
       let recoveryQuery = "name == \"search\""
-          updatedWidget = savedWidget{Widget.query = Just recoveryQuery}
+          updatedWidget = savedWidget{Widget.query = Just recoveryQuery, Widget.alertThreshold = Just 2}
       void $ testServant tr $ Dashboards.dashboardWidgetPutH testPid dashboardId (Just widgetId) Nothing updatedWidget
       synced <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId testPid (Just $ unUUIDId dashboardId) widgetId
       (.logQuery) <$> synced `shouldBe` Just recoveryQuery
+      (.alertThreshold) <$> synced `shouldBe` Just 2
 
       advanceMinutes tr 1
       recovered <- fst <$> captureNotifs tr checkTriggeredQueryMonitors

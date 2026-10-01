@@ -1985,7 +1985,7 @@ alertConfigurationForm_ project selectedEnvironment alertM teams = do
 
           let defaultFrequency = maybe 5 (.checkIntervalMins) alertM
               conditionType = if maybe True (\x -> x.alertThreshold > 0 && isJust x.warningThreshold) alertM then Just "threshold_exceeded" else Just "has_matches"
-          AlertUI.monitorScheduleSection_ project.paymentPlan defaultFrequency 5 conditionType
+          AlertUI.monitorScheduleSection_ project.paymentPlan defaultFrequency 5 (AlertUI.SelectCondition conditionType)
 
           AlertUI.thresholdsSection_ (alertM >>= (.alertConfig.unit)) Nothing (fmap (.alertThreshold) alertM) ((.warningThreshold) =<< alertM) (maybe False (.triggerLessThan) alertM) ((.alertRecoveryThreshold) =<< alertM) ((.warningRecoveryThreshold) =<< alertM)
 
