@@ -22,10 +22,12 @@ describe('chartDataUrl', () => {
     expect(url.searchParams.get('db_source')).toBe('postgres');
   });
 
-  test('sends an hourly rollup alongside the KQL query, leaving the source to the server', () => {
-    const url = new URL(chartDataUrl({ query: 'x | summarize count(*) by bin_auto(timestamp)', querySQL: '', rollupSQL: 'SELECT 1', pid: 'proj', chartType: 'timeseries' }), window.location.origin);
+  test('sends an hourly rollup and its coverage alongside the KQL query, leaving the source to the server', () => {
+    const url = (rollupFrom: string | null) => new URL(chartDataUrl({ query: 'x | summarize count(*) by bin_auto(timestamp)', querySQL: '', rollupSQL: 'SELECT 1', rollupFrom, pid: 'proj', chartType: 'timeseries' }), window.location.origin).searchParams;
+    const covered = url('2026-10-01T00:00:00Z');
 
-    expect([url.searchParams.get('rollup_sql'), url.searchParams.get('db_source'), url.searchParams.get('query_sql')]).toEqual(['SELECT 1', null, null]);
+    expect([covered.get('rollup_sql'), covered.get('rollup_from'), covered.get('db_source'), covered.get('query_sql')]).toEqual(['SELECT 1', '2026-10-01T00:00:00Z', null, null]);
+    expect(url(null).get('rollup_sql')).toBeNull();
   });
 
   test('marks dashboard requests so service scope comes from dashboard variables', () => {

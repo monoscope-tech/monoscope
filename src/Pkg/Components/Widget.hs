@@ -229,8 +229,10 @@ data Widget = Widget
   , timeseriesStatAggregate :: Maybe Text -- average, min, max, sum, etc
   , sql :: Maybe Text
   , rollupSql :: Maybe Text
-  -- ^ Postgres SQL over an hourly rollup of the same series as @query@; the server
-  -- prefers it for wide, unscoped windows (see 'Web.Routes.rollupRoute').
+  -- ^ Postgres SQL over an hourly rollup of the same series as @query@, answerable
+  -- from @rollupFrom@ (ISO-8601) on; the server decides per request whether to use it
+  -- (see 'Web.Routes.rollupRoute').
+  , rollupFrom :: Maybe Text
   , defaultSort :: Maybe SqlOrder -- Trusted default ORDER BY for the {{table_sort}} SQL slot
   , rawQuery :: Maybe Text -- Original KQL query with {{const-...}} placeholders (for editor display)
   , summarizeBy :: Maybe SummarizeBy
@@ -1232,6 +1234,7 @@ renderChart widget = do
                 -- would otherwise end the template literal or interpolate.
                 querySQLJS = encodeText $ maybeToMonoid widget.sql
                 rollupSQLJS = encodeText widget.rollupSql
+                rollupFromJS = encodeText widget.rollupFrom
                 chartType = mapWidgetTypeToChartType widget.wType
                 summarizeBy = toText $ encodeEnumSC @"SB" sumBy
                 summarizeByPfx = summarizeByPrefix sumBy
@@ -1269,6 +1272,7 @@ renderChart widget = do
                   query: ${query},
                   querySQL: ${querySQLJS},
                   rollupSQL: ${rollupSQLJS},
+                  rollupFrom: ${rollupFromJS},
                   dbSource: ${dbSourceJS},
                   theme: "${theme}",
                   yAxisLabel: "${yAxisLabel}",

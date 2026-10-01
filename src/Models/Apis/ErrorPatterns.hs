@@ -21,6 +21,7 @@ module Models.Apis.ErrorPatterns (
   UpsertOutcome (..),
   batchUpsertErrorPatterns,
   upsertErrorPatternHourlyStats,
+  hourlyStatsFrom,
   updateErrorPatternSubscription,
   NotifiedStamp (..),
   updateErrorPatternThreadIds,
@@ -737,6 +738,11 @@ setResolvedInRelease :: DB es => ErrorPatternId -> Bool -> Eff es Int64
 setResolvedInRelease eid inNextRelease =
   Hasql.interpExecute
     [HI.sql| UPDATE apis.error_patterns SET resolved_in_release = CASE WHEN #{inNextRelease} THEN last_release END WHERE id = #{eid} |]
+
+
+-- | The oldest hour 'apis.error_hourly_stats' holds for an error: the counts start there.
+hourlyStatsFrom :: DB es => Projects.ProjectId -> ErrorPatternId -> Eff es (Maybe UTCTime)
+hourlyStatsFrom pid eid = join <$> Hasql.interpOne [HI.sql| SELECT min(hour_bucket) FROM apis.error_hourly_stats WHERE project_id = #{pid} AND error_id = #{eid} |]
 
 
 -- | Batch upsert hourly rollup stats. Takes (hash, event_count, user_count) triples and

@@ -460,6 +460,7 @@ issueDetailCore pid firstM eventM requestedRange fetchIssue = do
           pure $ userPermission >= Just ProjectMembers.PEdit || errL.base.assigneeId == Just sess.user.id
       members <- ProjectMembers.selectActiveProjectMembers pid
       tagCounts <- foldMapM (ErrorPatterns.selectErrorTagCounts . (.base.id)) errorM
+      errHourlyFrom <- join <$> traverse (ErrorPatterns.hourlyStatsFrom pid . (.base.id)) errorM
       let bwconf =
             baseBwconf
               { prePageTitle = Just "Issues"
@@ -525,7 +526,7 @@ issueDetailCore pid firstM eventM requestedRange fetchIssue = do
       addRespHeaders
         $ PageCtx bwconf
         $ issueDetailPage
-          IssueView{pid = pid, issue = issue, traceRef = mTraceRef, replaySession = replaySession, errM = errorM, patternM = patternM, now = now, isFirst = isFirst, tp = tp, stateEvent = stateEvent, canResolve = canResolve, members = members, tagCounts = tagCounts}
+          IssueView{pid = pid, issue = issue, traceRef = mTraceRef, replaySession = replaySession, errM = errorM, patternM = patternM, now = now, isFirst = isFirst, tp = tp, stateEvent = stateEvent, canResolve = canResolve, members = members, tagCounts = tagCounts, errHourlyFrom = errHourlyFrom}
 
 
 -- | ‹ › stepping (and Recommended): the matching event carrying the issue's hash within a day of
@@ -997,6 +998,8 @@ data IssueView = IssueView
   , canResolve :: Bool
   , members :: [ProjectMembers.ProjectMemberVM]
   , tagCounts :: [(Text, Text, Int)]
+  , errHourlyFrom :: Maybe UTCTime
+  -- ^ The first hour 'ErrorPatterns.hourlyStatsFrom' holds for the error, if any.
   -- ^ The error's tag distribution rollup (key, value, count), most common first per key.
   }
 
@@ -1157,8 +1160,8 @@ contextCard_ bodyCls title body = div_ [class_ "surface-raised rounded-2xl overf
 -- count, so it stays in the chart header; every other type's total is the Events
 -- figure in 'issueHeader_'. @thresholdM@ draws the alert's breach line; @heightCls@
 -- is taller when the chart *is* the evidence.
-issueChartCard_ :: IssueView -> Text -> Text -> Maybe Double -> Maybe Text -> Text -> Html ()
-issueChartCard_ IssueView{..} chartTitle heightCls thresholdM rollupSqlM chartQuery = do
+issueChartCard_ :: IssueView -> Text -> Text -> Maybe Double -> Maybe (Text, UTCTime) -> Text -> Html ()
+issueChartCard_ IssueView{..} chartTitle heightCls thresholdM rollupM chartQuery = do
   let chartId = issueChartId issue
       total = div_ [class_ "flex flex-col gap-0.5 leading-none"] do
         span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] "Value"
@@ -1176,7 +1179,8 @@ issueChartCard_ IssueView{..} chartTitle heightCls thresholdM rollupSqlM chartQu
           , Widget.wType = Widget.WTTimeseries
           , Widget.showTooltip = Just True
           , Widget.query = Just chartQuery
-          , Widget.rollupSql = rollupSqlM
+          , Widget.rollupSql = fst <$> rollupM
+          , Widget.rollupFrom = isoT . snd <$> rollupM
           , Widget._projectId = Just issue.projectId
           , Widget.hideLegend = Just True
           , Widget.hideSubtitle = Just True
@@ -1197,16 +1201,16 @@ issueVolumeChart_ v chartTitle = whenJust (issueHashKey v.issue) \key ->
 
 -- | The volume chart's series from the hourly counts ingest already keeps. The KQL
 -- form scans every row in the window on TimeFusion (@hashes@ has no index there),
--- 4-27s for a day; this is an index lookup. See 'Web.Routes.rollupRoute' for when
--- the server prefers it.
-issueHourlySql :: IssueView -> Maybe Text
-issueHourlySql v =
-  uncurry hourlyRollupSql <$> case Issues.issuePayload v.issue of
-    Just (Issues.LogPatternP d) -> logPattern d.sourceField d.patternHash
-    Just (Issues.LogPatternRateChangeP d) -> logPattern d.sourceField d.patternHash
-    _ -> v.errM <&> \e -> ("apis.error_hourly_stats", "error_id = " <> sqlStringLit (UUID.toText e.base.id.unErrorPatternId))
+-- 4-27s for a day; this is an index lookup. Paired with the first hour the table can
+-- answer: pattern stats are pruned past their retention, and error stats start when
+-- the error's counting did. See 'Web.Routes.rollupRoute' for when the server prefers it.
+issueHourlySql :: IssueView -> Maybe (Text, UTCTime)
+issueHourlySql v = case Issues.issuePayload v.issue of
+  Just (Issues.LogPatternP d) -> logPattern d.sourceField d.patternHash
+  Just (Issues.LogPatternRateChangeP d) -> logPattern d.sourceField d.patternHash
+  _ -> (,) <$> (v.errM <&> \e -> hourlyRollupSql "apis.error_hourly_stats" $ "error_id = " <> sqlStringLit (UUID.toText e.base.id.unErrorPatternId)) <*> v.errHourlyFrom
   where
-    logPattern sf h = Just ("apis.log_pattern_hourly_stats", "source_field = " <> sqlStringLit sf <> " AND pattern_hash = " <> sqlStringLit h)
+    logPattern sf h = Just (hourlyRollupSql "apis.log_pattern_hourly_stats" $ "source_field = " <> sqlStringLit sf <> " AND pattern_hash = " <> sqlStringLit h, addUTCTime (fromIntegral $ -(3600 * LogPatterns.hourlyStatsRetentionHours)) v.now)
 
 
 -- | A chart series over one key of an hourly stats table, bounded by the chart's window.

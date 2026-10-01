@@ -5654,7 +5654,7 @@ pruneStaleLogPatterns pid = do
   now <- Time.currentTime
   autoAcked <- LogPatterns.autoAcknowledgeStaleNewPatterns pid now staleNewPatternDays
   pruned <- LogPatterns.pruneStalePatterns pid now stalePatternDays
-  statsPruned <- LogPatterns.pruneOldHourlyStats pid now (baselineWindowHours + 24)
+  statsPruned <- LogPatterns.pruneOldHourlyStats pid now LogPatterns.hourlyStatsRetentionHours
   autoArchived <- Issues.autoArchiveStaleDiscoveryIssues pid now staleLogPatternIssueDays
   when (autoAcked > 0 || pruned > 0 || statsPruned > 0 || autoArchived > 0)
     $ Log.logTrace
