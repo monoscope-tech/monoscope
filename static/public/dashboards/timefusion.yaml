@@ -3,20 +3,26 @@ icon: database
 preview: /public/assets/svgs/screens/http-stats.svg
 description: TimeFusion health — memory and restarts, ingest vs flush rates, WAL and buffer, maintenance backlog and throughput, dedup and certification, rollups, and query latency
 refresh_interval: 60s
+time_range:
+  since: 1h
+  from: now-1h
+  to: now
 tags: [database]
 discovery_metrics:
   - 'timefusion.'
 
 # TimeFusion counters are cumulative per process and reset on every restart. Do NOT
 # chart them with range(value) per bin: at short ranges bin_auto picks bins narrower
-# than the 30s export interval, so every bin holds one point and range() reads 0, and
-# a bin spanning a restart reads the whole pre-restart total. Counter widgets use the
-# &rate_s / &rate_m SQL below instead: per-series LAG deltas (a drop = restart, so the
-# post-restart value is the increase), divided by elapsed seconds, then summed per
-# series label. The widget's `query` supplies the metric filter via {{query_ast_filters}}.
-# Series labels are the metric's attribute values, else the metric name minus
-# `timefusion.`, so never mix attributed metrics in one counter widget.
-# Counters that never moved since boot are not exported at all: "No data" there = zero.
+# than the 30s export interval, so each bin holds one point and range() reads 0, and a
+# bin spanning a restart reads the whole pre-restart total. Counter widgets use SQL:
+#   &rate_s / &rate_m: per-bin MAX per metric, LAG across bins, a drop = restart (the
+#     post-restart value is the increase), divided by the bin gap. Aggregates by
+#     metric_name only, so TimeFusion answers wide windows from its metrics rollup.
+#     Only for metrics with one series.
+#   &series_rate_s / &series_rate_m: the same per series_id, labelled by attribute
+#     values (else the metric name), summed per label. Raw points, so slower past ~3 days.
+# The widget's `query` supplies the metric filter through {{query_ast_filters}}.
+# A counter that never moved since boot is not exported: "No data" there means zero.
 widgets: []
 
 tabs:
@@ -33,10 +39,12 @@ tabs:
             icon: server
             query: metrics | where metric_name in ("timefusion.memory.charged_peak_bytes", "timefusion.memory.limit_bytes")
             sql: &mem_pct |
-              SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time, 'peak % of limit' AS series,
-                (100 * MAX(CASE WHEN metric_name = 'timefusion.memory.charged_peak_bytes' THEN value END)
-                  / NULLIF(MAX(CASE WHEN metric_name = 'timefusion.memory.limit_bytes' THEN value END), 0))::float AS value
-              FROM otel_metrics WHERE {{query_ast_filters}} GROUP BY 1 ORDER BY 1 DESC
+              WITH b AS (SELECT time_bucket('{{rollup_interval}}', timestamp) AS b, metric_name, MAX(value) AS v
+                FROM otel_metrics WHERE {{query_ast_filters}} GROUP BY 1, 2)
+              SELECT extract(epoch from b)::integer AS time, 'peak % of limit' AS series,
+                (100 * MAX(CASE WHEN metric_name = 'timefusion.memory.charged_peak_bytes' THEN v END)
+                  / NULLIF(MAX(CASE WHEN metric_name = 'timefusion.memory.limit_bytes' THEN v END), 0))::float AS value
+              FROM b GROUP BY 1 ORDER BY 1 DESC
             unit: '%'
             summarize_by: max
             warning_threshold: 80
@@ -50,11 +58,11 @@ tabs:
             icon: alert-triangle
             query: metrics | where metric_name == "timefusion.scan.pgwire_total"
             sql: &restarts |
-              WITH p AS (SELECT timestamp, value - LAG(value) OVER (PARTITION BY series_id ORDER BY timestamp) AS d
-                FROM otel_metrics WHERE {{query_ast_filters}})
-              SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time, 'restarts' AS series,
-                SUM(CASE WHEN d < 0 THEN 1 ELSE 0 END)::float AS value
-              FROM p WHERE d IS NOT NULL GROUP BY 1 ORDER BY 1 DESC
+              WITH b AS (SELECT time_bucket('{{rollup_interval}}', timestamp) AS b, metric_name, MIN(value) AS lo, MAX(value) AS hi
+                FROM otel_metrics WHERE {{query_ast_filters}} GROUP BY 1, 2),
+              p AS (SELECT b, lo, LAG(hi) OVER (PARTITION BY metric_name ORDER BY b) AS prev FROM b)
+              SELECT extract(epoch from b)::integer AS time, 'restarts' AS series, SUM(CASE WHEN lo < prev THEN 1 ELSE 0 END)::float AS value
+              FROM p WHERE prev IS NOT NULL GROUP BY 1 ORDER BY 1 DESC
             unit: restarts
             summarize_by: sum
             warning_threshold: 1
@@ -67,16 +75,15 @@ tabs:
             icon: alert-triangle
             query: metrics | where metric_name == "timefusion.maintenance.coordinator_errors"
             sql: &rate_m |
-              WITH p AS (
-                SELECT timestamp, series_id, value,
-                  COALESCE(NULLIF(CONCAT_WS(' ', attributes->>'project_id', attributes->>'table_name', attributes->>'operation', attributes->>'outcome', attributes->>'reason', attributes->>'class', attributes->>'tier', attributes->>'mode', attributes->>'op'), ''), regexp_replace(metric_name, '^timefusion[.]', '')) AS series,
-                  value - LAG(value) OVER w AS d, EXTRACT(EPOCH FROM timestamp - LAG(timestamp) OVER w) AS dt
-                FROM otel_metrics WHERE {{query_ast_filters}}
-                WINDOW w AS (PARTITION BY series_id ORDER BY timestamp)),
-              r AS (
-                SELECT time_bucket('{{rollup_interval}}', timestamp) AS b, series, SUM(CASE WHEN d < 0 THEN value ELSE d END) / SUM(dt) AS v
-                FROM p WHERE dt > 0 GROUP BY 1, 2, series_id)
-              SELECT extract(epoch from b)::integer AS time, series, (SUM(v) * 60)::float AS value FROM r GROUP BY 1, 2 ORDER BY 1 DESC
+              WITH b AS (
+                SELECT time_bucket('{{rollup_interval}}', timestamp) AS b, metric_name, MAX(value) AS v
+                FROM otel_metrics WHERE {{query_ast_filters}} GROUP BY 1, 2),
+              p AS (
+                SELECT b, metric_name, v, v - LAG(v) OVER w AS d, EXTRACT(EPOCH FROM b - LAG(b) OVER w) AS dt
+                FROM b WINDOW w AS (PARTITION BY metric_name ORDER BY b))
+              SELECT extract(epoch from b)::integer AS time, regexp_replace(metric_name, '^timefusion[.]', '') AS series,
+                (60 * CASE WHEN d < 0 THEN v ELSE d END / dt)::float AS value
+              FROM p WHERE dt > 0 ORDER BY 1 DESC
             unit: /min
             summarize_by: max
             warning_threshold: 0.1
@@ -104,16 +111,15 @@ tabs:
             icon: activity
             query: metrics | where metric_name == "timefusion.mem_buffer.rows_ingested_total"
             sql: &rate_s |
-              WITH p AS (
-                SELECT timestamp, series_id, value,
-                  COALESCE(NULLIF(CONCAT_WS(' ', attributes->>'project_id', attributes->>'table_name', attributes->>'operation', attributes->>'outcome', attributes->>'reason', attributes->>'class', attributes->>'tier', attributes->>'mode', attributes->>'op'), ''), regexp_replace(metric_name, '^timefusion[.]', '')) AS series,
-                  value - LAG(value) OVER w AS d, EXTRACT(EPOCH FROM timestamp - LAG(timestamp) OVER w) AS dt
-                FROM otel_metrics WHERE {{query_ast_filters}}
-                WINDOW w AS (PARTITION BY series_id ORDER BY timestamp)),
-              r AS (
-                SELECT time_bucket('{{rollup_interval}}', timestamp) AS b, series, SUM(CASE WHEN d < 0 THEN value ELSE d END) / SUM(dt) AS v
-                FROM p WHERE dt > 0 GROUP BY 1, 2, series_id)
-              SELECT extract(epoch from b)::integer AS time, series, SUM(v)::float AS value FROM r GROUP BY 1, 2 ORDER BY 1 DESC
+              WITH b AS (
+                SELECT time_bucket('{{rollup_interval}}', timestamp) AS b, metric_name, MAX(value) AS v
+                FROM otel_metrics WHERE {{query_ast_filters}} GROUP BY 1, 2),
+              p AS (
+                SELECT b, metric_name, v, v - LAG(v) OVER w AS d, EXTRACT(EPOCH FROM b - LAG(b) OVER w) AS dt
+                FROM b WINDOW w AS (PARTITION BY metric_name ORDER BY b))
+              SELECT extract(epoch from b)::integer AS time, regexp_replace(metric_name, '^timefusion[.]', '') AS series,
+                (CASE WHEN d < 0 THEN v ELSE d END / dt)::float AS value
+              FROM p WHERE dt > 0 ORDER BY 1 DESC
             unit: rows/s
             summarize_by: mean
             eager: true
@@ -263,7 +269,17 @@ tabs:
         title: 'Ingest Rate by Project & Table (rows/s)'
         description: 'Stacked per tenant. A tenant that suddenly dominates is the first suspect for buffer pressure and flush lag.'
         query: metrics | where metric_name == "timefusion.ingest.rows"
-        sql: *rate_s
+        sql: &series_rate_s |
+              WITH p AS (
+                SELECT timestamp, series_id, value,
+                  COALESCE(NULLIF(CONCAT_WS(' ', attributes->>'project_id', attributes->>'table_name', attributes->>'operation', attributes->>'outcome', attributes->>'reason', attributes->>'class', attributes->>'tier', attributes->>'mode', attributes->>'op'), ''), regexp_replace(metric_name, '^timefusion[.]', '')) AS series,
+                  value - LAG(value) OVER w AS d, EXTRACT(EPOCH FROM timestamp - LAG(timestamp) OVER w) AS dt
+                FROM otel_metrics WHERE {{query_ast_filters}}
+                WINDOW w AS (PARTITION BY series_id ORDER BY timestamp)),
+              r AS (
+                SELECT time_bucket('{{rollup_interval}}', timestamp) AS b, series, SUM(CASE WHEN d < 0 THEN value ELSE d END) / SUM(dt) AS v
+                FROM p WHERE dt > 0 GROUP BY 1, 2, series_id)
+              SELECT extract(epoch from b)::integer AS time, series, SUM(v)::float AS value FROM r GROUP BY 1, 2 ORDER BY 1 DESC
         unit: rows/s
         layout: { w: 12, h: 5 }
 
@@ -271,7 +287,17 @@ tabs:
         title: 'Insert Calls by Project & Table (/min)'
         description: 'Insert statements accepted. Rows per call = ingest rate / call rate; a tenant sending many tiny inserts costs WAL fsyncs.'
         query: metrics | where metric_name == "timefusion.ingest.inserts"
-        sql: *rate_m
+        sql: &series_rate_m |
+              WITH p AS (
+                SELECT timestamp, series_id, value,
+                  COALESCE(NULLIF(CONCAT_WS(' ', attributes->>'project_id', attributes->>'table_name', attributes->>'operation', attributes->>'outcome', attributes->>'reason', attributes->>'class', attributes->>'tier', attributes->>'mode', attributes->>'op'), ''), regexp_replace(metric_name, '^timefusion[.]', '')) AS series,
+                  value - LAG(value) OVER w AS d, EXTRACT(EPOCH FROM timestamp - LAG(timestamp) OVER w) AS dt
+                FROM otel_metrics WHERE {{query_ast_filters}}
+                WINDOW w AS (PARTITION BY series_id ORDER BY timestamp)),
+              r AS (
+                SELECT time_bucket('{{rollup_interval}}', timestamp) AS b, series, SUM(CASE WHEN d < 0 THEN value ELSE d END) / SUM(dt) AS v
+                FROM p WHERE dt > 0 GROUP BY 1, 2, series_id)
+              SELECT extract(epoch from b)::integer AS time, series, (SUM(v) * 60)::float AS value FROM r GROUP BY 1, 2 ORDER BY 1 DESC
         unit: /min
         layout: { w: 6, h: 4 }
 
@@ -356,7 +382,7 @@ tabs:
         theme: 'roma'
         description: 'Commit-path operations abandoned while holding a table commit lock (a hung object-store request). Good: no data. Sustained nonzero means commit throughput is degraded.'
         query: metrics | where metric_name == "timefusion.commit.lock_timeouts"
-        sql: *rate_m
+        sql: *series_rate_m
         unit: /min
         layout: { w: 6, h: 4 }
 
@@ -420,7 +446,7 @@ tabs:
         title: 'Lease Time by Operation & Outcome'
         description: 'Milliseconds of unit lease held per second, so 1 s/s ≈ one unit in flight. Shows where maintenance capacity goes; Retry/Superseded time is wasted work.'
         query: metrics | where metric_name == "timefusion.maintenance.lease_ms"
-        sql: *rate_s
+        sql: *series_rate_s
         unit: ms
         layout: { w: 6, h: 4 }
 
@@ -428,7 +454,7 @@ tabs:
         title: 'Input Processed by Operation (/s)'
         description: 'Estimated decoded input bytes of completed units per second — the drain rate per lane.'
         query: metrics | where metric_name == "timefusion.maintenance.processed_bytes"
-        sql: *rate_s
+        sql: *series_rate_s
         unit: bytes
         layout: { w: 6, h: 4 }
 
@@ -436,7 +462,7 @@ tabs:
         title: 'Claim Passes by Operation (/min)'
         description: 'claim_next passes, whether or not they claimed.'
         query: metrics | where metric_name == "timefusion.maintenance.claims"
-        sql: *rate_m
+        sql: *series_rate_m
         unit: /min
         layout: { w: 6, h: 4 }
 
@@ -444,7 +470,7 @@ tabs:
         title: 'Claim Time by Operation'
         description: 'Microseconds per second spent inside claim_next with the journal lock held. Climbing means the journal lock is a bottleneck.'
         query: metrics | where metric_name == "timefusion.maintenance.claim_us"
-        sql: *rate_s
+        sql: *series_rate_s
         unit: us
         layout: { w: 6, h: 4 }
 
@@ -525,7 +551,7 @@ tabs:
         title: 'Object Store Requests by Op (/s)'
         description: 'Requests below the local cache. A spike in get is a cold cache or a wide scan.'
         query: metrics | where metric_name == "timefusion.store.requests"
-        sql: *rate_s
+        sql: *series_rate_s
         unit: req/s
         layout: { w: 6, h: 4 }
 
@@ -612,7 +638,7 @@ tabs:
         title: 'Per-file Skip Blocked by Class (/min)'
         description: 'Uncertified files holding back a certified file''s per-file dedup skip, by why they are uncertified.'
         query: metrics | where metric_name == "timefusion.cert.skip_blocked"
-        sql: *rate_m
+        sql: *series_rate_m
         unit: /min
         layout: { w: 6, h: 4 }
 
@@ -632,9 +658,9 @@ tabs:
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries_line'
-        title: 'Mean Since Boot (histograms)'
-        description: 'Cumulative mean of each histogram since the process started: certification dwell (s), pgwire and scan latency (s), wide-scan selected MB. Resets on restart; use for drift, not spikes.'
-        query: metrics | where metric_name in ("timefusion.cert.dwell_seconds", "timefusion.pgwire.query_latency_seconds", "timefusion.scan.latency_seconds", "timefusion.scan.wide_scan_selected_mb") | summarize max(distribution_sum) / max(distribution_count) by bin_auto(timestamp), metric_name
+        title: 'Mean Since Boot: Cert Dwell (s) & Wide-scan Size (MB)'
+        description: 'Cumulative histogram means since the process started. Resets on restart; read for drift, not spikes.'
+        query: metrics | where metric_name in ("timefusion.cert.dwell_seconds", "timefusion.scan.wide_scan_selected_mb") | summarize max(distribution_sum) / max(distribution_count) by bin_auto(timestamp), metric_name
         layout: { w: 6, h: 4 }
 
   - name: Rollups
@@ -652,7 +678,7 @@ tabs:
         title: 'Rollup Hits by Tier & Mode (/min)'
         description: 'hybrid = rollup plus a raw fringe.'
         query: metrics | where metric_name == "timefusion.rollup.hits"
-        sql: *rate_m
+        sql: *series_rate_m
         unit: /min
         layout: { w: 6, h: 4 }
 
@@ -660,7 +686,7 @@ tabs:
         title: 'Rollup Misses by Reason (/min)'
         description: 'Aggregates that fell through to a raw scan. The dominant reason says what to fix next: stale_coverage = maintenance behind, unknown_filter / unsupported_shape = query shape, unaligned_bucket_width = dashboard bin.'
         query: metrics | where metric_name == "timefusion.rollup.misses"
-        sql: *rate_m
+        sql: *series_rate_m
         unit: /min
         layout: { w: 6, h: 4 }
 
@@ -683,7 +709,7 @@ tabs:
       - type: 'timeseries'
         title: 'Rollup Publications by Tier (/min)'
         query: metrics | where metric_name == "timefusion.rollup.publications"
-        sql: *rate_m
+        sql: *series_rate_m
         unit: /min
         layout: { w: 6, h: 4 }
 
@@ -691,7 +717,7 @@ tabs:
         title: 'Rollup Input Published by Tier (/s)'
         description: 'Estimated decoded input bytes of published rollup units.'
         query: metrics | where metric_name == "timefusion.rollup.published_input_bytes"
-        sql: *rate_s
+        sql: *series_rate_s
         unit: bytes
         layout: { w: 6, h: 4 }
 
@@ -699,7 +725,7 @@ tabs:
         title: 'Rollup Bytes Scanned by Tier (/s)'
         description: 'Projected bytes of every rollup scan pass, failed and repeated ones included. Against input published, the excess is wasted scan.'
         query: metrics | where metric_name == "timefusion.rollup.scan_estimated_bytes"
-        sql: *rate_s
+        sql: *series_rate_s
         unit: bytes
         layout: { w: 6, h: 4 }
 
@@ -730,7 +756,7 @@ tabs:
         title: 'MoR Version Rows by Tier (/s)'
         description: 'Merge-on-read version rows by the rollup tier they would invalidate (relevant and irrelevant summed).'
         query: metrics | where metric_name == "timefusion.rollup.version_append_rows"
-        sql: *rate_s
+        sql: *series_rate_s
         unit: rows/s
         layout: { w: 6, h: 4 }
 
@@ -738,7 +764,7 @@ tabs:
         title: 'Rows Moving Rollup Witnesses by Class (/s)'
         description: 'Rows landing below a live slice''s covered_through. flushed = every flushed row; base_version / transparent = merge-on-read versions.'
         query: metrics | where metric_name == "timefusion.rollup.witness_moving_rows"
-        sql: *rate_s
+        sql: *series_rate_s
         unit: rows/s
         layout: { w: 6, h: 4 }
 
@@ -779,6 +805,13 @@ tabs:
         description: 'Routing-table scan p50/p95/p99 over the last 1–2 minutes.'
         query: metrics | where metric_name in ("timefusion.scan.latency_p50_ms", "timefusion.scan.latency_p95_ms", "timefusion.scan.latency_p99_ms") | summarize max(value) by bin_auto(timestamp), metric_name
         unit: ms
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries_line'
+        title: 'Mean Latency Since Boot'
+        description: 'Cumulative mean of the pgwire and scan latency histograms since the process started. Resets on restart; read for drift, not spikes.'
+        query: metrics | where metric_name in ("timefusion.pgwire.query_latency_seconds", "timefusion.scan.latency_seconds") | summarize max(distribution_sum) / max(distribution_count) by bin_auto(timestamp), metric_name
+        unit: s
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries'
