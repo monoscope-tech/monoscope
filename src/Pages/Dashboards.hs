@@ -1164,16 +1164,20 @@ dashboardWidgetPutH pid dashId widgetIdM tabSlugM widget = do
     let newQuery = fromMaybe monitor.logQuery widget.query
         scope = mkScopedQuery pid (Nothing, Nothing) monitor.environment monitor.service
         sqlQueryCfg = (applyScopedQuery scope $ defSqlQueryCfg pid fixedUTCTime Nothing Nothing){alertLookbackMins = monitor.timeWindowMins}
-        newSqlQuery = if monitor.logQuery == newQuery then monitor.logQueryAsSql else case parseQueryToComponents sqlQueryCfg newQuery of
-          Right (_, qc) -> fromMaybe "" qc.finalAlertQuery
-          Left _ -> monitor.logQueryAsSql
-        updatedMonitor = (monitor :: Monitors.QueryMonitor)
-          { Monitors.logQuery = newQuery
-          , Monitors.logQueryAsSql = newSqlQuery
-          , Monitors.alertThreshold = fromMaybe monitor.alertThreshold widgetUpdated.alertThreshold
-          , Monitors.warningThreshold = widgetUpdated.warningThreshold
-          , Monitors.alertConfig = monitor.alertConfig{Monitors.unit = widgetUpdated.unit}
-          }
+        newSqlQuery =
+          if monitor.logQuery == newQuery
+            then monitor.logQueryAsSql
+            else case parseQueryToComponents sqlQueryCfg newQuery of
+              Right (_, qc) -> fromMaybe "" qc.finalAlertQuery
+              Left _ -> monitor.logQueryAsSql
+        updatedMonitor =
+          (monitor :: Monitors.QueryMonitor)
+            { Monitors.logQuery = newQuery
+            , Monitors.logQueryAsSql = newSqlQuery
+            , Monitors.alertThreshold = fromMaybe monitor.alertThreshold widgetUpdated.alertThreshold
+            , Monitors.warningThreshold = widgetUpdated.warningThreshold
+            , Monitors.alertConfig = monitor.alertConfig{Monitors.unit = widgetUpdated.unit}
+            }
     when (updatedMonitor.logQuery /= monitor.logQuery || updatedMonitor.alertThreshold /= monitor.alertThreshold || updatedMonitor.warningThreshold /= monitor.warningThreshold || updatedMonitor.alertConfig.unit /= monitor.alertConfig.unit) $ void $ Monitors.queryMonitorUpsert updatedMonitor
 
   addSuccessToast (if isJust existingMonitorM then "Widget and monitor updated successfully" else if isJust normalizedWidgetIdM then "Widget updated successfully" else "Widget added to dashboard successfully") Nothing
@@ -1381,13 +1385,15 @@ widgetMonitorStatus_ pid statusId widgetId dashboardIdM monitorM = div_ [id_ sta
       Nothing -> "No monitor"
       Just monitor -> if isJust monitor.deactivatedAt then "Paused monitor" else "Active monitor"
     p_ [class_ "text-xs text-textWeak"] "Check this query and alert when a chart threshold is crossed."
-  whenJust monitorM \monitor -> button_
-    [ type_ "button"
-    , class_ "btn btn-ghost btn-sm shrink-0"
-    , hxPost_ $ "/p/" <> pid.toText <> "/widgets/" <> widgetId <> "/alert/toggle_active" <> maybe "" ("?dashboard_id=" <>) dashboardIdM
-    , hxTarget_ $ "#" <> statusId
-    , hxSwap_ "outerHTML"
-    ] $ if isJust monitor.deactivatedAt then "Resume monitor" else "Pause monitor"
+  whenJust monitorM \monitor ->
+    button_
+      [ type_ "button"
+      , class_ "btn btn-ghost btn-sm shrink-0"
+      , hxPost_ $ "/p/" <> pid.toText <> "/widgets/" <> widgetId <> "/alert/toggle_active" <> maybe "" ("?dashboard_id=" <>) dashboardIdM
+      , hxTarget_ $ "#" <> statusId
+      , hxSwap_ "outerHTML"
+      ]
+      $ if isJust monitor.deactivatedAt then "Resume monitor" else "Pause monitor"
 
 
 widgetViewerEditor_ :: Projects.ProjectId -> Text -> Maybe Dashboards.DashboardId -> Maybe Text -> Maybe (Text, Text) -> Maybe Widget.Widget -> Maybe Monitors.QueryMonitor -> V.Vector ManageMembers.Team -> Text -> Html ()
@@ -1526,7 +1532,8 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
                  { const p = new URLSearchParams(location.search), since = p.get('since'), from = p.get('from'), to = p.get('to');
                    if (since || (from && to)) window.updateTimePicker({since, from, to}, {targetPr: 'widget', skipSetParams: true}); } |]
 
-    script_ [text|{ const editor = document.getElementById('${widgetPreviewId}').closest('.widget-editor');
+    script_
+      [text|{ const editor = document.getElementById('${widgetPreviewId}').closest('.widget-editor');
                     const pane = editor.closest('[role="dialog"]');
                     const header = editor.querySelector('.widget-editor-header');
                     const update = () => {
@@ -1550,7 +1557,6 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
                     }, {signal: pane._widgetPreviewAbort.signal});
                     editor.addEventListener('change', e => { if (e.target.matches('.page-drawer-tab-edit, .page-drawer-tab-monitors')) requestAnimationFrame(update); });
                     resize(); update(); }|]
-
 
     div_
       [ class_
@@ -1653,7 +1659,7 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
                 p_ [class_ "text-sm text-textWeak"] $ toHtml $ "Chart thresholds: " <> maybe "not set" show widgetToUse.alertThreshold <> " alert · " <> maybe "not set" show widgetToUse.warningThreshold <> " warning" <> maybe "" (" " <>) widgetToUse.unit
                 when (isNothing widgetToUse.alertThreshold) $ p_ [class_ "text-xs text-textWarning"] "Set an alert threshold in Edit before creating a monitor."
                 button_ [type_ "button", class_ "btn btn-ghost btn-sm self-start max-md:min-h-11", term "_" [text|on click set #${widPrefix}-tab-edit.checked to true then trigger change on #${widPrefix}-tab-edit|]] "Edit chart thresholds"
-                Components.formSelectField_ Components.FieldSm "Trigger direction" "direction" False $ forM_ ([ ("above", "Above threshold"), ("below", "Below threshold") ] :: [(Text, Text)]) \(v, lbl) -> option_ ([value_ v] <> [selected_ "" | v == bool "above" "below" (maybe False (.triggerLessThan) monitorM)]) $ toHtml lbl
+                Components.formSelectField_ Components.FieldSm "Trigger direction" "direction" False $ forM_ ([("above", "Above threshold"), ("below", "Below threshold")] :: [(Text, Text)]) \(v, lbl) -> option_ ([value_ v] <> [selected_ "" | v == bool "above" "below" (maybe False (.triggerLessThan) monitorM)]) $ toHtml lbl
                 div_ [class_ "grid grid-cols-1 gap-3 sm:grid-cols-2"] do
                   Components.formField_ Components.FieldSm def{Components.inputType = "number", Components.value = maybe "" show (monitorM >>= (.alertRecoveryThreshold)), Components.placeholder = "Same as alert threshold", Components.extraAttrs = [step_ "any"]} "Alert recovery (optional)" "alertRecoveryThreshold" False Nothing
                   Components.formField_ Components.FieldSm def{Components.inputType = "number", Components.value = maybe "" show (monitorM >>= (.warningRecoveryThreshold)), Components.placeholder = "Same as warning threshold", Components.extraAttrs = [step_ "any"]} "Warning recovery (optional)" "warningRecoveryThreshold" False Nothing
@@ -1662,6 +1668,7 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
 
               -- Action buttons
               when hasAlert $ button_ [type_ "button", class_ "btn btn-ghost btn-sm self-start text-textError", hxDelete_ alertEndpoint, hxSwap_ "none", term "_" [text|on htmx:afterRequest[detail.successful] set #${drawerStateCheckbox}.checked to false then trigger change on #${drawerStateCheckbox}|]] "Remove monitor"
+
 
 --------------------------------------------------------------------
 -- Widget Alert Handlers
@@ -1707,47 +1714,51 @@ widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = do
   existingMonitor <- Monitors.queryMonitorByWidgetId pid dashboardIdM form.widgetId
   queryMonitorId <- maybe (Monitors.QueryMonitorId <$> UUID.genUUID) (pure . (.id)) existingMonitor
 
-  chartWidget <- traverse (\dashId -> do
-    (_, dash) <- getDashAndVM pid (UUIDId dashId) Nothing
-    maybe (throwError err404{errBody = "Widget not found in dashboard"}) (pure . snd) $ findWidgetInDashboard form.widgetId dash) dashboardIdM
+  chartWidget <-
+    traverse
+      ( \dashId -> do
+          (_, dash) <- getDashAndVM pid (UUIDId dashId) Nothing
+          maybe (throwError err404{errBody = "Widget not found in dashboard"}) (pure . snd) $ findWidgetInDashboard form.widgetId dash
+      )
+      dashboardIdM
 
   chartThreshold <- maybe (throwError err400{errBody = "Set an alert threshold in Edit before creating a monitor"}) pure (chartWidget >>= (.alertThreshold))
   -- Convert to AlertUpsertForm and reuse convertToQueryMonitor
   let alertForm =
         Alerts.AlertUpsertForm
-              { unit = chartWidget >>= (.unit)
-              , alertId = Just $ Monitors.unQueryMonitorId queryMonitorId & UUID.toText
-              , alertThreshold = chartThreshold
-              , warningThreshold = show <$> (chartWidget >>= (.warningThreshold))
-              , recipientEmails = []
-              , recipientSlacks = []
-              , recipientEmailAll = Just (form.recipientEmailAll == Just "true")
-              , direction = form.direction
-              , title = form.title
-              , severity = fromMaybe "Warning" form.severity
-              , subject = fromMaybe form.title form.subject
-              , message = fromMaybe "" form.message
-              , query = form.query
-              , since = "1h"
-              , from = ""
-              , to = ""
-              , frequency = form.frequency
-              , timeWindow = form.timeWindow
-              , conditionType = Just "threshold_exceeded"
-              , source = Just "widget"
-              , vizType = form.vizType
-              , teams = form.teams
-              , alertRecoveryThreshold = form.alertRecoveryThreshold
-              , warningRecoveryThreshold = form.warningRecoveryThreshold
-              , widgetId = Just form.widgetId
-              , dashboardId = UUID.toText <$> dashboardIdM
-              , notifyAfterCheck = form.notifyAfterCheck
-              , notifyAfter = form.notifyAfter
-              , stopAfterCheck = form.stopAfterCheck
-              , stopAfter = form.stopAfter
-              , environment = session.environment
-              , service = session.service
-              }
+          { unit = chartWidget >>= (.unit)
+          , alertId = Just $ Monitors.unQueryMonitorId queryMonitorId & UUID.toText
+          , alertThreshold = chartThreshold
+          , warningThreshold = show <$> (chartWidget >>= (.warningThreshold))
+          , recipientEmails = []
+          , recipientSlacks = []
+          , recipientEmailAll = Just (form.recipientEmailAll == Just "true")
+          , direction = form.direction
+          , title = form.title
+          , severity = fromMaybe "Warning" form.severity
+          , subject = fromMaybe form.title form.subject
+          , message = fromMaybe "" form.message
+          , query = form.query
+          , since = "1h"
+          , from = ""
+          , to = ""
+          , frequency = form.frequency
+          , timeWindow = form.timeWindow
+          , conditionType = Just "threshold_exceeded"
+          , source = Just "widget"
+          , vizType = form.vizType
+          , teams = form.teams
+          , alertRecoveryThreshold = form.alertRecoveryThreshold
+          , warningRecoveryThreshold = form.warningRecoveryThreshold
+          , widgetId = Just form.widgetId
+          , dashboardId = UUID.toText <$> dashboardIdM
+          , notifyAfterCheck = form.notifyAfterCheck
+          , notifyAfter = form.notifyAfter
+          , stopAfterCheck = form.stopAfterCheck
+          , stopAfter = form.stopAfter
+          , environment = session.environment
+          , service = session.service
+          }
 
   let queryMonitor = (Alerts.convertToQueryMonitor pid now queryMonitorId alertForm){Monitors.deactivatedAt = existingMonitor >>= (.deactivatedAt)}
   _ <- Monitors.queryMonitorUpsert queryMonitor
