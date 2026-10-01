@@ -1200,10 +1200,11 @@ issueVolumeChart_ v chartTitle = whenJust (issueHashKey v.issue) \key ->
 -- 4-27s for a day; this is an index lookup. See 'Web.Routes.rollupRoute' for when
 -- the server prefers it.
 issueHourlySql :: IssueView -> Maybe Text
-issueHourlySql v = uncurry hourlyRollupSql <$> case Issues.issuePayload v.issue of
-  Just (Issues.LogPatternP d) -> logPattern d.sourceField d.patternHash
-  Just (Issues.LogPatternRateChangeP d) -> logPattern d.sourceField d.patternHash
-  _ -> v.errM <&> \e -> ("apis.error_hourly_stats", "error_id = " <> sqlStringLit (UUID.toText e.base.id.unErrorPatternId))
+issueHourlySql v =
+  uncurry hourlyRollupSql <$> case Issues.issuePayload v.issue of
+    Just (Issues.LogPatternP d) -> logPattern d.sourceField d.patternHash
+    Just (Issues.LogPatternRateChangeP d) -> logPattern d.sourceField d.patternHash
+    _ -> v.errM <&> \e -> ("apis.error_hourly_stats", "error_id = " <> sqlStringLit (UUID.toText e.base.id.unErrorPatternId))
   where
     logPattern sf h = Just ("apis.log_pattern_hourly_stats", "source_field = " <> sqlStringLit sf <> " AND pattern_hash = " <> sqlStringLit h)
 
