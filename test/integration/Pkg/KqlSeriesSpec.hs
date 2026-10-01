@@ -84,7 +84,7 @@ seriesSpec = do
 -- | Gauges ingested through OTLP, so they reach every configured backend: hits at 10/s
 -- (tier a) and 30/s (tier b), misses at 60/s (tier a), a point every 30s.
 ratioSpec :: SpecWith TestResources
-ratioSpec = it "rateif / lastif divide filtered series by metric name or attribute, on Postgres and TimeFusion" \tr -> do
+ratioSpec = it "rateif / lastif divide filtered series by metric name or attribute, and rate groups by attribute, on Postgres and TimeFusion" \tr -> do
   key <- createTestAPIKey tr testPid "kql-ratio"
   tag <- T.take 8 . UUID.toText <$> UUIDV4.nextRandom
   let hits = "kql.hits." <> tag
@@ -105,3 +105,5 @@ ratioSpec = it "rateif / lastif divide filtered series by metric name or attribu
     chart db ("hits = rateif(value, " <> isHit <> "), total = rate(value)") " | extend hit_pct = 100.0 * hits / total" `shouldReturn` replicate 5 [Just 40]
     chart db "100.0 * rateif(value, attributes.tier == \"a\") / rate(value)" "" `shouldReturn` replicate 5 [Just 70]
     chart db ("lastif(value, attributes.tier == \"b\" and " <> isHit <> ") / lastif(value, attributes.tier == \"a\" and " <> isHit <> ")") "" `shouldReturn` replicate 5 [Just 3]
+    -- By attribute, each series' cells join its attributes: tier a reads 10/s + 60/s, b 30/s.
+    chart db "rate(value)" ", attributes.tier" `shouldReturn` replicate 5 [Just 70, Just 30]

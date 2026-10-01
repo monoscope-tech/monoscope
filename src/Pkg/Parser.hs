@@ -467,7 +467,13 @@ sqlFromQueryComponents sqlCfg qc =
       secs <- intervalSeconds interval
       -- 5-minute cells (TimeFusion's per-series grain) keep a restart's misattribution under 5 minutes.
       let cell = timeBucketExpr $ if denominator (secs / 300) == 1 then "5 minutes" else interval
-      seriesBinsSQL sqlCfg.targetsTimefusion cell (timeBucketExpr interval) (fromRational secs) resolvedGroupCols fromTable (whereWith $ lookbackRange $ max seriesLookback $ fromRational secs) qc.seriesAggs
+          lookback = max seriesLookback $ fromRational secs
+          -- Whole UTC days, which TimeFusion's daily attributes tier serves; a wider range
+          -- is exact, as each cell joins only its own series.
+          days = bimap (fmap $ startOfDay . addUTCTime (negate lookback)) (fmap $ startOfDay . addUTCTime 86400)
+          startOfDay t = UTCTime (utctDay t) 0
+          attrsWhere = whereWith $ buildDateRange sqlCfg{dateRange = days sqlCfg.dateRange, cursorM = Nothing}
+      seriesBinsSQL sqlCfg.targetsTimefusion cell (timeBucketExpr interval) (fromRational secs) resolvedGroupCols fromTable (whereWith $ lookbackRange lookback) attrsWhere qc.seriesAggs
     dataWhere = maybe buildWhere (const inRange) binnedSeries
     -- Every aggregating shape reads this; it is the plain table unless the summarize has series aggregations.
     dataTable =
@@ -695,13 +701,18 @@ intervalSeconds t = case words t of
 -- >>> c6.havingClause
 -- Nothing
 --
--- A binned rate by plain columns reads per-bin series rows, filtered inside; by
--- an attribute, or mixed with another aggregation, it reads every point:
+-- A binned rate by plain columns or attributes reads per-bin series rows, filtered
+-- inside; mixed with another aggregation, it reads every point:
 -- >>> let chart q = maybe "" (T.unwords . words) $ (.finalSummarizeQuery) . snd =<< hush (parseQueryToComponents cfg ("metrics | where metric_name == \"a\" | summarize " <> q))
 -- >>> [T.isInfixOf "AS __series_cells" (chart q) | q <- ["rate(value) * 60 by bin(timestamp, 30m), metric_name", "rate(value) by bin(timestamp, 30m), attributes.t", "rate(value), count() by bin(timestamp, 30m)"]]
--- [True,False,False]
+-- [True,True,False]
 -- >>> snd $ T.breakOn ") AS otel_metrics" $ chart "increase(value) by bin(timestamp, 30m)"
 -- ") AS otel_metrics WHERE TRUE GROUP BY time_bucket('30 minutes', timestamp) ORDER BY time_bucket('30 minutes', timestamp) DESC"
+--
+-- By an attribute, the cells join each series' attributes, read over whole UTC days:
+-- >>> let attrs = cfg{dateRange = (Just (addUTCTime 3600 fixedUTCTime), Just (addUTCTime 7200 fixedUTCTime))}
+-- >>> fmap (fst . T.breakOn " GROUP BY series_id" . snd . T.breakOn "SELECT series_id, attributes" . T.unwords . T.words) $ (.finalSummarizeQuery) . snd =<< hush (parseQueryToComponents attrs "metrics | summarize rate(value) by bin(timestamp, 30m), attributes.t")
+-- Just "SELECT series_id, attributes FROM otel_metrics WHERE project_id='00000000-0000-0000-0000-000000000000' and timestamp BETWEEN '2020-01-01T00:00:00Z' AND '2020-01-02T00:00:00Z' and (TRUE)"
 --
 -- >>> let Right (q2, c2) = parseQueryToComponents cfg "kind == \"server\" | summarize count(*) by bin(timestamp, 1h)"
 -- >>> c2.hasCountOver

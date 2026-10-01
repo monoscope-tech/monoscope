@@ -66,7 +66,7 @@ import Control.Monad.Combinators.Expr (Operator (..), makeExprParser)
 import Data.Aeson qualified as AE
 import Data.Char (isAlphaNum, isDigit, isSpace)
 import Data.Generics.Product (typed)
-import Data.List (lookup)
+import Data.List (lookup, partition)
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (Display, display, displayBuilder, displayPrec)
@@ -375,22 +375,31 @@ seriesSourceSQL bucketM binSecondsM table innerWhere inRange (ordNub -> leaves) 
 -- equal the per-point answer; increments a series makes after a reset in the same
 -- cell land in the next cell, and a series that resets twice within one cell
 -- loses the middle run. Gaps between the cells' newest points telescope to the
--- per-point time base. Every @by@ column must be a plain column (it is grouped
--- per cell); 'Nothing' otherwise, or for @last@, which a max cannot answer.
+-- per-point time base. A plain @by@ column is grouped per cell; a series'
+-- attributes never change (@series_id@ hashes them), so a @by@ over them joins each
+-- series' attributes to its cells, read with @attrsWhere@ (TimeFusion's daily
+-- attributes tier serves that lookup). 'Nothing' for any other @by@ column, or for
+-- @last@, which a max cannot answer.
 --
 -- >>> let Right a = parse aggFunctionParser "" "rate(value)"
--- >>> seriesBinsSQL True "time_bucket('5 minutes', timestamp)" "time_bucket('30 minutes', timestamp)" 1800 ["metric_name"] "otel_metrics" "w" (seriesLeaves a)
+-- >>> seriesBinsSQL True "time_bucket('5 minutes', timestamp)" "time_bucket('30 minutes', timestamp)" 1800 ["metric_name"] "otel_metrics" "w" "aw" (seriesLeaves a)
 -- Just "(SELECT *, (CASE WHEN aggregation_temporality = 'DELTA' THEN __sum_value WHEN __prev_value IS NULL THEN NULL WHEN __first_value < __prev_value THEN __max_value ELSE __max_value - __prev_value END) / GREATEST(1800.0, SUM(CAST(extract(epoch from timestamp) AS DOUBLE PRECISION) - CAST(extract(epoch from __prev_ts) AS DOUBLE PRECISION)) OVER (PARTITION BY series_id, time_bucket('30 minutes', timestamp))) AS __rate_value FROM (SELECT *, __last_ts AS timestamp, LAG(__last_ts) OVER (PARTITION BY series_id ORDER BY __last_ts) AS __prev_ts, LAG(__max_value) OVER (PARTITION BY series_id ORDER BY __last_ts) AS __prev_value FROM (SELECT series_id, aggregation_temporality, metric_name, max(timestamp) AS __last_ts, max(value) AS __max_value, first_value(value ORDER BY timestamp) AS __first_value, sum(value) AS __sum_value FROM otel_metrics WHERE w GROUP BY time_bucket('5 minutes', timestamp), series_id, aggregation_temporality, metric_name) AS __series_cells) AS __series_points) AS otel_metrics"
--- >>> isJust $ seriesBinsSQL True "c" "b" 60 ["attributes->>'t'"] "otel_metrics" "w" (seriesLeaves a)
--- False
-seriesBinsSQL :: Bool -> Text -> Text -> Double -> [Text] -> Text -> Text -> [(SeriesFn, Subject)] -> Maybe Text
-seriesBinsSQL timefusion cell bucket binSeconds groupCols table innerWhere (ordNub -> leaves) = do
-  guard $ not (null leaves) && all (T.all (\c -> isAlphaNum c || c == '_')) groupCols
+-- >>> let attrs pg = snd . T.breakOn "AS __series_cells" <$> seriesBinsSQL pg "c" "b" 60 ["attributes->'k8s'->>'pod'", "metric_name"] "otel_metrics" "w" "aw" (seriesLeaves a)
+-- >>> attrs False
+-- Just "AS __series_cells JOIN (SELECT series_id, (array_agg(attributes))[1] AS attributes FROM (SELECT series_id, attributes FROM otel_metrics WHERE aw GROUP BY series_id, attributes) AS __attrs GROUP BY series_id) AS __series_attrs USING (series_id)) AS __series_points) AS otel_metrics"
+-- >>> [isJust $ seriesBinsSQL True "c" "b" 60 [col] "otel_metrics" "w" "aw" (seriesLeaves a) | col <- ["variant_to_json(attributes)->>'t'", "resource->>'t'", "COALESCE(attributes->>'t', 'x')"]]
+-- [True,False,False]
+seriesBinsSQL :: Bool -> Text -> Text -> Double -> [Text] -> Text -> Text -> Text -> [(SeriesFn, Subject)] -> Maybe Text
+seriesBinsSQL timefusion cell bucket binSeconds groupCols table innerWhere attrsWhere (ordNub -> leaves) = do
+  guard $ not (null leaves) && all (T.all (\c -> isAlphaNum c || c == '_')) plainCols
   contributions <- traverse contribution leaves
-  pure $ "(SELECT *, " <> T.intercalate ", " contributions <> " FROM (SELECT *, __last_ts AS timestamp, " <> T.intercalate ", " lags <> " FROM (SELECT " <> T.intercalate ", " (keys <> ["max(timestamp) AS __last_ts"] <> concatMap states subjects) <> " FROM " <> table <> " WHERE " <> innerWhere <> " GROUP BY " <> T.intercalate ", " (cell : keys) <> ") AS __series_cells) AS __series_points) AS " <> table
+  pure $ "(SELECT *, " <> T.intercalate ", " contributions <> " FROM (SELECT *, __last_ts AS timestamp, " <> T.intercalate ", " lags <> " FROM (SELECT " <> T.intercalate ", " (keys <> ["max(timestamp) AS __last_ts"] <> concatMap states subjects) <> " FROM " <> table <> " WHERE " <> innerWhere <> " GROUP BY " <> T.intercalate ", " (cell : keys) <> ") AS __series_cells" <> memptyIfTrue (null attrCols) attrsJoin <> ") AS __series_points) AS " <> table
   where
     subjects = ordNub (map snd leaves)
-    keys = ordNub $ ["series_id", "aggregation_temporality"] <> groupCols
+    (attrCols, plainCols) = partition attributePath groupCols
+    keys = ordNub $ ["series_id", "aggregation_temporality"] <> plainCols
+    -- Grouped by attributes first: TimeFusion's tier holds them as a dimension.
+    attrsJoin = " JOIN (SELECT series_id, " <> (if timefusion then "first_value(attributes)" else "(array_agg(attributes))[1]") <> " AS attributes FROM (SELECT series_id, attributes FROM " <> table <> " WHERE " <> attrsWhere <> " GROUP BY series_id, attributes) AS __attrs GROUP BY series_id) AS __series_attrs USING (series_id)"
     col = seriesStateCol
     firstOf v = if timefusion then "first_value(" <> v <> " ORDER BY timestamp)" else "(array_agg(" <> v <> " ORDER BY timestamp))[1]"
     states s = let v = display s in ["max(" <> v <> ") AS " <> col "max" s, firstOf v <> " AS " <> col "first" s, "sum(" <> v <> ") AS " <> col "sum" s]
@@ -403,6 +412,16 @@ seriesBinsSQL timefusion cell bucket binSeconds groupCols table innerWhere (ordN
         Increase -> Just (inc s)
         Rate -> Just $ "(" <> inc s <> ") / GREATEST(" <> show binSeconds <> ", " <> timeBase <> ")"
         Last -> Nothing
+
+
+-- | Whether a @by@ column reads nothing but a series' attributes, e.g.
+-- @attributes->'k8s'->>'pod'@ or TimeFusion's @variant_to_json(attributes)->>'t'@.
+attributePath :: Text -> Bool
+attributePath c = any steps $ asum [T.stripPrefix p c | p <- ["variant_to_json(attributes)", "attributes"]]
+  where
+    steps r = case T.stripPrefix "->>'" r <|> T.stripPrefix "->'" r of
+      Just (T.breakOn "'" -> (_, T.uncons -> Just (_, rest))) -> T.null rest || steps rest
+      _ -> False
 
 
 -- | A per-series state column of the series subqueries, e.g. @__prev_value@.
