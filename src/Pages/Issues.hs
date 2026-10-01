@@ -1210,7 +1210,7 @@ issueHourlySql v = case Issues.issuePayload v.issue of
   Just (Issues.LogPatternRateChangeP d) -> logPattern d.sourceField d.patternHash
   _ -> (,) <$> (v.errM <&> \e -> hourlyRollupSql "apis.error_hourly_stats" $ "error_id = " <> sqlStringLit (UUID.toText e.base.id.unErrorPatternId)) <*> v.errHourlyFrom
   where
-    logPattern sf h = Just (hourlyRollupSql "apis.log_pattern_hourly_stats" $ "source_field = " <> sqlStringLit sf <> " AND pattern_hash = " <> sqlStringLit h, addUTCTime (fromIntegral $ -3600 * LogPatterns.hourlyStatsRetentionHours) v.now)
+    logPattern sf h = Just (hourlyRollupSql "apis.log_pattern_hourly_stats" $ "source_field = " <> sqlStringLit sf <> " AND pattern_hash = " <> sqlStringLit h, addUTCTime (fromIntegral $ -(3600 * LogPatterns.hourlyStatsRetentionHours)) v.now)
 
 
 -- | A chart series over one key of an hourly stats table, bounded by the chart's window.
