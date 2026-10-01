@@ -92,7 +92,7 @@ transform fields tuples =
 statsTriple :: V.Vector (Int, Text, Double) -> MetricsStats
 statsTriple v
   | V.null v = def
-  | otherwise = MetricsStats mn mx tot cnt (tot / fromIntegral cnt) mode maxGroupSum
+  | otherwise = MetricsStats mn mx tot cnt (tot / fromIntegral cnt) mode maxGroupSum (snd <$> M.lookupMax timestampMap)
   where
     d0 = thd3 $ V.head v
 

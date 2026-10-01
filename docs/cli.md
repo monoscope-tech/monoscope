@@ -342,7 +342,14 @@ monoscope chart 'summarize p95(duration)' --type stat --since 24h
 
 # Refresh in place
 monoscope chart 'summarize count(*) by bin_auto(timestamp)' --watch 30s
+
+# Metrics: counters as a per-second rate (per series, restart-safe), gauges as their newest value
+monoscope chart 'metrics | where metric_name == "http.server.requests" | summarize rate(value) by bin_auto(timestamp), resource.service.name' --source metrics
+monoscope chart 'metrics | where metric_name == "process.memory.usage" | summarize last(value) by bin_auto(timestamp)' --source metrics
 ```
+
+For counters use `rate(value)` or `increase(value)`, not `sum(value)` or `range(value)`;
+see [KQL reference](kql-reference.md#metric-series-functions-metrics-source-only).
 
 | Flag | Description |
 |---|---|

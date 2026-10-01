@@ -133,6 +133,7 @@ data SummarizeBy
   | SBCount
   | SBMean
   | SBRate
+  | SBLast
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show, THS.Lift)
   deriving anyclass (Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "SB", DAE.CamelToSnake]] SummarizeBy
@@ -150,6 +151,7 @@ summarizeByPrefix SBSum = ""
 summarizeByPrefix SBCount = ""
 summarizeByPrefix SBMean = ""
 summarizeByPrefix SBRate = ""
+summarizeByPrefix SBLast = ""
 
 
 data PngProfile = PngStandard | PngSlack
@@ -708,13 +710,15 @@ displayUnit = \case
 -- and replacing it with a mean after the first refresh made @5.9K ms@ flash into
 -- @6.6s@ for the same latency tile.
 --
--- >>> let s = Charts.MetricsStats 50 200 1200 10 120 50 200
+-- >>> let s = Charts.MetricsStats 50 200 1200 10 120 50 200 (Just 70)
 -- >>> statScalar SBMean (Just 0) (Just 600000) s
 -- Just 120.0
 -- >>> statScalar SBRate (Just 0) (Just 600000) s
 -- Just 120.0
 -- >>> statScalar SBRate Nothing Nothing s
 -- Nothing
+-- >>> statScalar SBLast Nothing Nothing s
+-- Just 70.0
 statScalar :: SummarizeBy -> Maybe Int -> Maybe Int -> Charts.MetricsStats -> Maybe Double
 statScalar summarize fromM toM stats
   | stats.count < 1 = Nothing
@@ -729,6 +733,7 @@ statScalar summarize fromM toM stats
       SBMin -> Just stats.min
       SBCount -> Just $ fromIntegral stats.count
       SBSum -> Just stats.sum
+      SBLast -> stats.last
 
 
 -- | Format a stat value by the meaning of its declared unit. This mirrors

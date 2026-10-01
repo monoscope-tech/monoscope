@@ -759,6 +759,7 @@ test-suite integration-tests
       Pages.TelemetrySpec
       Pkg.EmbeddingFairnessSpec
       Pkg.KafkaConsumerSpec
+      Pkg.KqlSeriesSpec
       ProcessMessageSpec
       ReplaySpec
       SchemaLearningPerfSpec
@@ -1064,6 +1065,7 @@ test-suite test-dev
       Pages.TelemetrySpec
       Pkg.EmbeddingFairnessSpec
       Pkg.KafkaConsumerSpec
+      Pkg.KqlSeriesSpec
       ProcessMessageSpec
       ReplaySpec
       SchemaLearningPerfSpec

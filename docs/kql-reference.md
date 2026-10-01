@@ -87,7 +87,7 @@ Each pipe (`|`) passes the output of one operation to the next.
 ```kusto
 spans | where method == "POST"
 
-metrics | where metric_name == "http_requests_total"
+metrics | where metric_name == "http_requests_total" | summarize rate(value) by bin_auto(timestamp)
 ```
 
 If no source is specified, the query applies to the default context (usually spans/logs).
@@ -327,6 +327,73 @@ Limits the number of results returned.
 | summarize min(response_time), max(response_time), avg(response_time)
 ```
 
+### Metric Series Functions (`metrics` source only)
+
+Counters and gauges are stored as points per **series**: one metric name plus one
+exact set of attributes and resource attributes (the `series_id` column). These
+functions work on each series first, then add the series together within each
+`by` group. They only work on the `metrics` source.
+
+| Function | Result per bin | Use for |
+|----------|----------------|---------|
+| `rate(value)` | Increase per second | Counters: requests/s, rows/s, bytes/s |
+| `increase(value)` | Total increase in the bin | Counters: requests per bin, errors in the window |
+| `last(value)` | Newest value in the bin | Gauges: memory in use, queue depth, connections |
+
+How the increase is computed:
+
+- **Cumulative counters** (the OTLP and Prometheus default): the increase of a
+  point is its value minus the previous point of the same series. The previous
+  point can be in an earlier bin, or up to 5 minutes before the time range, so a
+  bin with one point still has a correct value.
+- **Counter resets**: when a value is lower than the previous one, the process
+  restarted. The new value is the increase. A restart does not make a negative or
+  very large spike.
+- **Delta counters** (`aggregation_temporality = DELTA`): each point is its own
+  increase.
+- **`rate()`** divides each series' increase in a bin by the larger of the bin
+  width and the time that its points cover. A bin narrower than the export
+  interval still shows the true rate, not a multiple of it.
+- **`last()`** takes the newest point of each series in the bin and adds the
+  series together. Filter to one series (or group `by` its attributes) to see one
+  value.
+
+`rate()` and `increase()` are not useful on gauges: a gauge that goes down is
+read as a reset. Use `last()`, `avg()` or `max()` for gauges.
+
+```kusto
+// Requests per second, one line per service
+metrics | where metric_name == "http.server.requests" | summarize rate(value) by bin_auto(timestamp), resource.service.name
+
+// Per minute: multiply the rate
+metrics | where metric_name == "jobs.failed" | summarize rate(value) * 60 by bin_auto(timestamp)
+
+// Total increase over the whole time range (one number)
+metrics | where metric_name == "jobs.failed" | summarize increase(value)
+
+// Newest value of a gauge
+metrics | where metric_name == "process.memory.usage" | summarize last(value) by bin_auto(timestamp)
+```
+
+**Which one to use:**
+
+| You want | Use |
+|----------|-----|
+| A rate (per second or per minute) | `rate(value)` (`* 60` for per minute) |
+| How many in each bin, or in the whole range | `increase(value)` |
+| The current level of a gauge | `last(value)` |
+| The spread of a gauge in a bin | `range(value)` |
+
+Do not use `range(value)` or `sum(value)` on a cumulative counter. `range()` is
+0 when a bin has one point, and it is wrong across a restart. `sum()` adds
+running totals together.
+
+On dashboards, a `timeseries_stat` tile shows one number for the time range. Set
+`summarize_by` to match the function: `sum` for `increase()` (the total increase),
+`mean` or `max` for `rate()`, and `last` for `last()` (the newest bin). Do not use
+`summarize_by: rate` with `rate()`: it divides by the minutes in the range a
+second time.
+
 ### Percentile Functions
 
 | Function | Description | Example |
@@ -539,7 +606,11 @@ bin_auto(timestamp_field)
 ```kusto
 | summarize count() by bin_auto(timestamp)
 | summarize avg(duration) by bin_auto(timestamp), method
+| summarize count() by bin_auto(timestamp), method, status_code
 ```
+
+A chart draws one series for each combination of the `by` columns after the
+time bin. The series label joins the values with ` / `, for example `GET / 200`.
 
 ---
 
@@ -795,10 +866,20 @@ timestamp >= ago(1h)
 ### Metrics Queries
 
 ```kusto
-// Query metrics data
+// Requests per second from a cumulative counter
 metrics
 | where metric_name == "http_requests_total"
-| summarize sum(value) by bin_auto(timestamp)
+| summarize rate(value) by bin_auto(timestamp)
+
+// Requests per bin, one series per route and method
+metrics
+| where metric_name == "http_requests_total"
+| summarize increase(value) by bin_auto(timestamp), attributes.http.route, attributes.http.request.method
+
+// Current value of a gauge
+metrics
+| where metric_name == "process_resident_memory_bytes"
+| summarize last(value) by bin_auto(timestamp)
 
 // Filter by metric labels
 metrics
@@ -839,6 +920,7 @@ bin(timestamp, 1h), bin_auto(timestamp)
 ```
 count(), sum(), avg(), min(), max()
 median(), stdev(), range()
+rate(value), increase(value), last(value)   // metrics only, per series
 p50(), p75(), p90(), p95(), p99()
 percentile(field, N), percentiles(field, N1, N2, ...)
 countif(condition), dcount(field)

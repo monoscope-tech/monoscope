@@ -22,6 +22,7 @@ data MetricsStats = MetricsStats
   , mean :: Double
   , mode :: Double
   , maxGroupSum :: Double
+  , last :: Maybe Double -- newest bin's total across series; absent in caches written before it existed
   }
   deriving (Generic, Show, THS.Lift)
   deriving anyclass (Default, NFData)

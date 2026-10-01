@@ -14,7 +14,8 @@ widgets:
       - type: 'timeseries_stat'
         title: 'Active Connections'
         icon: swap
-        query: metrics | where metric_name == "postgresql.backends" | summarize avg(value) by bin_auto(timestamp)
+        query: metrics | where metric_name == "postgresql.backends" | summarize last(value) by bin_auto(timestamp)
+        summarize_by: last
         unit: connections
         eager: true
         layout: { w: 3, h: 2 }
@@ -46,7 +47,7 @@ widgets:
   - type: 'timeseries'
     title: 'Transactions (commits vs rollbacks)'
     description: 'Increase per interval. A rising rollback share usually means application errors or deadlocks.'
-    query: metrics | where metric_name in ("postgresql.commits", "postgresql.rollbacks") | summarize range(value) by bin_auto(timestamp), metric_name
+    query: metrics | where metric_name in ("postgresql.commits", "postgresql.rollbacks") | summarize increase(value) by bin_auto(timestamp), metric_name
     unit: txn
     layout: { w: 6, h: 4 }
 
@@ -59,13 +60,13 @@ widgets:
   - type: 'timeseries'
     title: 'Block Reads by Source'
     description: 'heap_hit vs heap_read shows buffer-cache effectiveness: hits should dwarf disk reads.'
-    query: metrics | where metric_name == "postgresql.blocks_read" | summarize range(value) by bin_auto(timestamp), attributes.source
+    query: metrics | where metric_name == "postgresql.blocks_read" | summarize increase(value) by bin_auto(timestamp), attributes.source
     unit: blocks
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
     title: 'Row Operations'
-    query: metrics | where metric_name == "postgresql.operations" | summarize range(value) by bin_auto(timestamp), attributes.operation
+    query: metrics | where metric_name == "postgresql.operations" | summarize increase(value) by bin_auto(timestamp), attributes.operation
     unit: rows
     layout: { w: 6, h: 4 }
 
@@ -78,7 +79,7 @@ widgets:
 
   - type: 'timeseries'
     title: 'Vacuum Operations by Table'
-    query: metrics | where metric_name == "postgresql.table.vacuum.count" | summarize range(value) by bin_auto(timestamp), attributes.db.collection.name
+    query: metrics | where metric_name == "postgresql.table.vacuum.count" | summarize increase(value) by bin_auto(timestamp), attributes.db.collection.name
     unit: vacuums
     layout: { w: 6, h: 4 }
 
@@ -90,20 +91,20 @@ widgets:
 
   - type: 'timeseries'
     title: 'Index Scans by Table'
-    query: metrics | where metric_name == "postgresql.index.scans" | summarize range(value) by bin_auto(timestamp), attributes.db.collection.name
+    query: metrics | where metric_name == "postgresql.index.scans" | summarize increase(value) by bin_auto(timestamp), attributes.db.collection.name
     unit: scans
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
     title: 'Checkpoints'
     description: 'Frequent requested (non-scheduled) checkpoints indicate max_wal_size is too small.'
-    query: metrics | where metric_name == "postgresql.bgwriter.checkpoint.count" | summarize range(value) by bin_auto(timestamp), attributes.type
+    query: metrics | where metric_name == "postgresql.bgwriter.checkpoint.count" | summarize increase(value) by bin_auto(timestamp), attributes.type
     unit: checkpoints
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
     title: 'Buffers Written by Source'
-    query: metrics | where metric_name == "postgresql.bgwriter.buffers.writes" | summarize range(value) by bin_auto(timestamp), attributes.source
+    query: metrics | where metric_name == "postgresql.bgwriter.buffers.writes" | summarize increase(value) by bin_auto(timestamp), attributes.source
     unit: buffers
     layout: { w: 6, h: 4 }
 

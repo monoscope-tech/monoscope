@@ -14,7 +14,7 @@ widgets:
       - type: 'timeseries_stat'
         title: 'Messages Published'
         icon: activity
-        query: metrics | where metric_name == "rabbitmq.message.published" | summarize range(value) by bin_auto(timestamp)
+        query: metrics | where metric_name == "rabbitmq.message.published" | summarize increase(value) by bin_auto(timestamp)
         unit: msgs
         eager: true
         layout: { w: 3, h: 2 }
@@ -46,7 +46,7 @@ widgets:
   - type: 'timeseries'
     title: 'Published vs Delivered vs Acknowledged'
     description: 'Delivery lagging publish rate means consumers are falling behind.'
-    query: metrics | where metric_name in ("rabbitmq.message.published", "rabbitmq.message.delivered", "rabbitmq.message.acknowledged") | summarize range(value) by bin_auto(timestamp), metric_name
+    query: metrics | where metric_name in ("rabbitmq.message.published", "rabbitmq.message.delivered", "rabbitmq.message.acknowledged") | summarize increase(value) by bin_auto(timestamp), metric_name
     unit: msgs
     layout: { w: 6, h: 4 }
 
@@ -66,7 +66,7 @@ widgets:
   - type: 'timeseries'
     title: 'Dropped Messages'
     theme: 'roma'
-    query: metrics | where metric_name == "rabbitmq.message.dropped" | summarize range(value) by bin_auto(timestamp), resource.rabbitmq.queue.name
+    query: metrics | where metric_name == "rabbitmq.message.dropped" | summarize increase(value) by bin_auto(timestamp), resource.rabbitmq.queue.name
     unit: msgs
     layout: { w: 6, h: 4 }
 
@@ -78,6 +78,6 @@ widgets:
 
   - type: 'timeseries'
     title: 'Deliveries by Queue'
-    query: metrics | where metric_name == "rabbitmq.message.delivered" | summarize range(value) by bin_auto(timestamp), resource.rabbitmq.queue.name
+    query: metrics | where metric_name == "rabbitmq.message.delivered" | summarize increase(value) by bin_auto(timestamp), resource.rabbitmq.queue.name
     unit: msgs
     layout: { w: 6, h: 4 }

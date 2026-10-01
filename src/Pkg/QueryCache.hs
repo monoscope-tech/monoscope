@@ -37,9 +37,7 @@ import Data.Aeson qualified as AE
 import Data.ByteString.Lazy qualified as LBS
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
-import Data.List (lookup)
 import Data.Map.Strict qualified as M
-import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.Vector qualified as V
@@ -58,7 +56,7 @@ import OpenTelemetry.Attributes qualified as OA
 import Pages.Charts.Types (DataType, MetricsData (..), MetricsStats (..))
 import Pkg.DeriveUtils (AesonText (..), DB)
 import Pkg.Metrics qualified as Metrics
-import Pkg.Parser (RangeEnd (..), SqlQueryCfg (..), autoBinWidth, fixedUTCTime)
+import Pkg.Parser (RangeEnd (..), SqlQueryCfg (..), autoBinWidth, fixedUTCTime, intervalSeconds)
 import Pkg.Parser.Expr (ToQueryText (..), display, kqlTimespanToTimeBucket, resolveWildcardTimes)
 import Pkg.Parser.Stats (BinFunction (..), ByClauseItem (..), Section (..), Sources (..), SummarizeByClause (..), defaultBinSize)
 import Relude
@@ -285,18 +283,7 @@ parseBinIntervalToSeconds = max 1 . ceiling . intervalWidth
 
 
 intervalWidth :: Text -> Rational
-intervalWidth interval = fromMaybe 60 $ do
-  canonical <- kqlTimespanToTimeBucket interval
-  case words canonical of
-    [n, unit] -> do
-      count <- readMaybe @Integer $ toString n
-      multiplier <-
-        lookup
-          (T.dropWhileEnd (== 's') unit)
-          [("second", 1), ("minute", 60), ("hour", 3600), ("day", 86400), ("week", 604800), ("millisecond", 1 / 1000), ("microsecond", 1 / 1000000), ("nanosecond", 1 / 1000000000)]
-      guard (count > 0)
-      pure $ fromInteger count * multiplier
-    _ -> Nothing
+intervalWidth interval = fromMaybe 60 (kqlTimespanToTimeBucket interval >>= intervalSeconds)
 
 
 -- Chart timestamps are whole seconds. Keep subsecond bins on the existing
@@ -552,7 +539,7 @@ recalculateStats rows =
                 (V.tail allValues)
             maxGroupSum = if V.null rowSums then 0 else V.maximum rowSums
             mode = fst $ M.foldlWithKey' (\acc@(_, cnt') k c -> if c > cnt' then (k, c) else acc) (h, 0) freq
-         in MetricsStats minV maxV sumV cnt (sumV / fromIntegral cnt) mode maxGroupSum
+         in MetricsStats minV maxV sumV cnt (sumV / fromIntegral cnt) mode maxGroupSum (snd <$> V.unsnoc rowSums)
 
 
 timeseriesRate :: V.Vector (V.Vector (Maybe Double)) -> Double

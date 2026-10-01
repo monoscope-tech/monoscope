@@ -77,7 +77,7 @@ spec = describe "lazyWidget (dashboard render-budget fallback)" do
     selfFetches (statWidget & #eager ?~ True & #html .~ Nothing & #dataset .~ Nothing) `shouldBe` False
 
   it "uses the configured aggregate for server-rendered timeseries stats" do
-    let stats = Charts.MetricsStats 5000 7000 59000 10 5900 5000 7000
+    let stats = Charts.MetricsStats 5000 7000 59000 10 5900 5000 7000 Nothing
         latency =
           statWidget
             & #wType .~ Widget.WTTimeseriesStat

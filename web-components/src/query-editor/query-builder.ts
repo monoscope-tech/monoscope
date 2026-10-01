@@ -43,7 +43,7 @@ export class QueryBuilderComponent extends LitElement {
   @state() private binValue: string = '5m';
 
   // Available aggregation functions
-  private readonly aggFunctions = ['count', 'sum', 'avg', 'min', 'max', 'median', 'stdev', 'range', 'p50', 'p75', 'p90', 'p95', 'p99'];
+  private readonly aggFunctions = ['count', 'sum', 'avg', 'min', 'max', 'median', 'stdev', 'range', 'rate', 'increase', 'last', 'p50', 'p75', 'p90', 'p95', 'p99'];
 
   // Precompiled regex patterns for performance - created once, reused many times
   private readonly QUERY_PATTERNS = {

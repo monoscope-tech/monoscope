@@ -14,7 +14,7 @@ widgets:
       - type: 'timeseries_stat'
         title: 'Spans Received'
         icon: activity
-        query: metrics | where metric_name == "otelcol_receiver_accepted_spans" | summarize range(value) by bin_auto(timestamp)
+        query: metrics | where metric_name == "otelcol_receiver_accepted_spans" | summarize increase(value) by bin_auto(timestamp)
         unit: spans
         eager: true
         layout: { w: 3, h: 2 }
@@ -45,7 +45,7 @@ widgets:
 
   - type: 'timeseries'
     title: 'Received by Signal'
-    query: metrics | where metric_name in ("otelcol_receiver_accepted_spans", "otelcol_receiver_accepted_log_records", "otelcol_receiver_accepted_metric_points") | summarize range(value) by bin_auto(timestamp), metric_name
+    query: metrics | where metric_name in ("otelcol_receiver_accepted_spans", "otelcol_receiver_accepted_log_records", "otelcol_receiver_accepted_metric_points") | summarize increase(value) by bin_auto(timestamp), metric_name
     unit: items
     layout: { w: 6, h: 4 }
 
@@ -53,13 +53,13 @@ widgets:
     title: 'Receiver Failures & Refusals'
     theme: 'roma'
     description: 'Refused = backpressure (queue full); failed = malformed or erroring data. Either means telemetry loss at the door.'
-    query: metrics | where metric_name in ("otelcol_receiver_refused_spans", "otelcol_receiver_refused_log_records", "otelcol_receiver_refused_metric_points", "otelcol_receiver_failed_spans", "otelcol_receiver_failed_log_records", "otelcol_receiver_failed_metric_points") | summarize range(value) by bin_auto(timestamp), metric_name
+    query: metrics | where metric_name in ("otelcol_receiver_refused_spans", "otelcol_receiver_refused_log_records", "otelcol_receiver_refused_metric_points", "otelcol_receiver_failed_spans", "otelcol_receiver_failed_log_records", "otelcol_receiver_failed_metric_points") | summarize increase(value) by bin_auto(timestamp), metric_name
     unit: items
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
     title: 'Exported by Signal'
-    query: metrics | where metric_name in ("otelcol_exporter_sent_spans", "otelcol_exporter_sent_log_records", "otelcol_exporter_sent_metric_points") | summarize range(value) by bin_auto(timestamp), metric_name
+    query: metrics | where metric_name in ("otelcol_exporter_sent_spans", "otelcol_exporter_sent_log_records", "otelcol_exporter_sent_metric_points") | summarize increase(value) by bin_auto(timestamp), metric_name
     unit: items
     layout: { w: 6, h: 4 }
 
@@ -67,7 +67,7 @@ widgets:
     title: 'Export Failures'
     theme: 'roma'
     description: 'send_failed after retries = data dropped; enqueue_failed = queue overflow before sending.'
-    query: metrics | where metric_name in ("otelcol_exporter_send_failed_spans", "otelcol_exporter_send_failed_log_records", "otelcol_exporter_send_failed_metric_points", "otelcol_exporter_enqueue_failed_spans", "otelcol_exporter_enqueue_failed_log_records", "otelcol_exporter_enqueue_failed_metric_points") | summarize range(value) by bin_auto(timestamp), metric_name
+    query: metrics | where metric_name in ("otelcol_exporter_send_failed_spans", "otelcol_exporter_send_failed_log_records", "otelcol_exporter_send_failed_metric_points", "otelcol_exporter_enqueue_failed_spans", "otelcol_exporter_enqueue_failed_log_records", "otelcol_exporter_enqueue_failed_metric_points") | summarize increase(value) by bin_auto(timestamp), metric_name
     unit: items
     layout: { w: 6, h: 4 }
 
@@ -81,7 +81,7 @@ widgets:
   - type: 'timeseries'
     title: 'Batch Send Triggers'
     description: 'Mostly timeout-triggered batches with small sizes means the batch processor is underfilled.'
-    query: metrics | where metric_name in ("otelcol_processor_batch_batch_size_trigger_send", "otelcol_processor_batch_timeout_trigger_send") | summarize range(value) by bin_auto(timestamp), metric_name
+    query: metrics | where metric_name in ("otelcol_processor_batch_batch_size_trigger_send", "otelcol_processor_batch_timeout_trigger_send") | summarize increase(value) by bin_auto(timestamp), metric_name
     unit: batches
     layout: { w: 6, h: 4 }
 
@@ -93,6 +93,6 @@ widgets:
 
   - type: 'timeseries'
     title: 'CPU Time'
-    query: metrics | where metric_name == "otelcol_process_cpu_seconds" | summarize range(value) by bin_auto(timestamp)
+    query: metrics | where metric_name == "otelcol_process_cpu_seconds" | summarize increase(value) by bin_auto(timestamp)
     unit: s
     layout: { w: 6, h: 4 }

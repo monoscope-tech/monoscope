@@ -67,7 +67,7 @@ export const formatDuration = (ns: number): string => {
 // Units that format as a duration. NB: 'm' here is minutes, not meters.
 const DURATION_UNITS = new Set(['ns', 'μs', 'us', 'ms', 's', 'm', 'h']);
 
-export type StatAggregates = { min: number; max: number; sum: number; count: number; mean: number };
+export type StatAggregates = { min: number; max: number; sum: number; count: number; mean: number; last: number };
 
 /**
  * Pick the representative scalar for a timeseries_stat's big number. Summing
@@ -85,6 +85,7 @@ export const statScalar = (stats: Partial<StatAggregates>, summarizeBy: string, 
     case 'max': return Number(stats.max);
     case 'min': return Number(stats.min);
     case 'count': return Number(stats.count);
+    case 'last': return Number(stats.last); // newest bin, for gauges (bytes, queue depth)
     default: return Number(stats.sum);
   }
 };

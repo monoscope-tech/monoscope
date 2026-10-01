@@ -95,14 +95,14 @@ widgets:
 
   - type: 'timeseries'
     title: 'Pod Network I/O'
-    query: metrics | where metric_name == "k8s.pod.network.io" | summarize range(value) / 1048576 by bin_auto(timestamp), attributes.direction
+    query: metrics | where metric_name == "k8s.pod.network.io" | summarize increase(value) / 1048576 by bin_auto(timestamp), attributes.direction
     unit: MB
     layout: { w: 6, h: 4 }
 
   - type: 'timeseries'
     title: 'Pod Network Errors'
     theme: 'roma'
-    query: metrics | where metric_name == "k8s.pod.network.errors" | summarize range(value) by bin_auto(timestamp), attributes.direction
+    query: metrics | where metric_name == "k8s.pod.network.errors" | summarize increase(value) by bin_auto(timestamp), attributes.direction
     unit: errors
     layout: { w: 6, h: 4 }
 

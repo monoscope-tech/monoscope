@@ -1,5 +1,5 @@
 -- Parser implemented with help and code from: https://markkarpov.com/tutorial/megaparsec.html
-module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, PageDirection (..), PageCursor (..), ScopedQuery (..), mkScopedQuery, applyScopedQuery, applyScopedKqlContext, SqlQueryCfg (..), RangeEnd (..), QueryComponents (..), NormalizedQuery (..), normalizeQuery, buildDateRange, buildGroupBy, buildOrderBy, buildLimit, buildWhereCondition, buildEnvFilter, buildServiceFilter, listToColNames, colsNoAsClause, defaultSelectSqlQuery, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth, autoBinWidth, BinDensity (..), binDensityFor, replacePlaceholders, variablePresets, variablePresetsKQL, constantToSQLList, constantToKQLList, defaultQueryLimit) where
+module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, PageDirection (..), PageCursor (..), ScopedQuery (..), mkScopedQuery, applyScopedQuery, applyScopedKqlContext, SqlQueryCfg (..), RangeEnd (..), QueryComponents (..), NormalizedQuery (..), normalizeQuery, buildDateRange, buildGroupBy, buildOrderBy, buildLimit, buildWhereCondition, buildEnvFilter, buildServiceFilter, listToColNames, colsNoAsClause, defaultSelectSqlQuery, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth, autoBinWidth, BinDensity (..), binDensityFor, replacePlaceholders, variablePresets, variablePresetsKQL, constantToSQLList, constantToKQLList, defaultQueryLimit, intervalSeconds) where
 
 import Control.Error (hush)
 import Data.Char (isAlphaNum)
@@ -7,7 +7,7 @@ import Data.Default (Default (def))
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time.Calendar (fromGregorian)
-import Data.Time.Clock (UTCTime (..), addUTCTime, diffUTCTime, secondsToDiffTime)
+import Data.Time.Clock (NominalDiffTime, UTCTime (..), addUTCTime, diffUTCTime, secondsToDiffTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
@@ -39,6 +39,7 @@ data QueryComponents = QueryComponents
   , takeLimit :: Maybe Int -- Limit number of results
   , percentilesInfo :: Maybe (Text, [Double]) -- (field expr SQL, percentile values) extracted from AST
   , extendedColumns :: [(Text, Text)] -- Extended column mappings (alias -> full SQL expression without AS)
+  , seriesAggs :: [(SeriesFn, Subject)] -- rate/increase/last leaves; non-empty reads through 'seriesSourceSQL'
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default)
@@ -225,7 +226,7 @@ applySectionToComponent sqlCfg qc = \case
      in qc{havingClause = Just $ maybe new (\old -> old <> " AND " <> new) qc.havingClause}
   Source source -> qc{fromTable = Just $ display source}
   sec@(SummarizeCommand aggs byClauseM) ->
-    applySummarizeByClauseToQC sqlCfg byClauseM qc{aggregations = qc.aggregations <> map display aggs, percentilesInfo = extractPercentilesInfo [sec]}
+    applySummarizeByClauseToQC sqlCfg byClauseM qc{aggregations = qc.aggregations <> map display aggs, percentilesInfo = extractPercentilesInfo [sec], seriesAggs = qc.seriesAggs <> concatMap seriesLeaves aggs}
   -- extend adds computed columns (appends to defaults) AND tracks mappings for GROUP BY resolution
   ExtendCommand cols ->
     qc
@@ -447,7 +448,20 @@ sqlFromQueryComponents sqlCfg qc =
     whereCondition = nq.nqWhere
 
     -- Build complete WHERE clause for data queries
-    buildWhere = T.intercalate " and " $ filter (not . T.null) (["project_id='" <> nq.nqProjectId <> "'", nq.nqDateRange] <> nq.nqScopeFilters <> ["(" <> whereCondition <> ")"])
+    whereWith dateRange = T.intercalate " and " $ filter (not . T.null) (["project_id='" <> nq.nqProjectId <> "'", dateRange] <> nq.nqScopeFilters <> ["(" <> whereCondition <> ")"])
+    buildWhere = whereWith nq.nqDateRange
+
+    -- rate/increase/last need each series' previous point, which may sit before
+    -- the range: the series source reads 'seriesLookback' further back, then
+    -- keeps only in-range rows. Derived from the cfg, so cache refreshes of a
+    -- single bucket get their lookback too.
+    lookbackRange = buildDateRange sqlCfg{dateRange = first (fmap (addUTCTime (negate seriesLookback))) sqlCfg.dateRange, cursorM = Nothing}
+    -- Every aggregating shape reads this; it is the plain table unless the summarize has series aggregations.
+    dataTable =
+      let (bucketM, binSecondsM) = case qc.finalSummarizeQuery of
+            Just interval -> (Just $ timeBucketExpr interval, fromRational <$> intervalSeconds interval)
+            Nothing -> (Nothing, case sqlCfg.dateRange of (Just a, Just b) -> Just (realToFrac (diffUTCTime b a)); _ -> Nothing)
+       in seriesSourceSQL bucketM binSecondsM fromTable (whereWith lookbackRange) (if T.null nq.nqDateRange then "TRUE" else nq.nqDateRange) qc.seriesAggs
 
     -- count(*) OVER() goes inside the array as the LAST element when
     -- hasCountOver = True; 'selectLogTable' peels it back off via dropLast.
@@ -479,7 +493,7 @@ sqlFromQueryComponents sqlCfg qc =
                 args = "extract(epoch from " <> bucketExpr <> ")::integer, " <> selectPart <> countOver
                 bucketGroupBy = T.intercalate ", " $ bucketExpr : resolvedGroupCols
              in ( [fmt|SELECT {wrap args}
-                   FROM {fromTable}
+                   FROM {dataTable}
                    WHERE {buildWhere}
                    GROUP BY {bucketGroupBy} {havingClause}
                    ORDER BY {bucketExpr} DESC
@@ -488,7 +502,7 @@ sqlFromQueryComponents sqlCfg qc =
                 )
           Nothing
             | not (null qc.aggregations) ->
-                ( [fmt|SELECT {wrap (T.intercalate "," (colsNoAsClause groupedAggregateCols) <> ", " <> countOver)} FROM {fromTable}
+                ( [fmt|SELECT {wrap (T.intercalate "," (colsNoAsClause groupedAggregateCols) <> ", " <> countOver)} FROM {dataTable}
                    WHERE {buildWhere}
                    {groupByClause} {havingClause} {aggregateSortOrder} {limitClause} |]
                 , True
@@ -528,15 +542,16 @@ sqlFromQueryComponents sqlCfg qc =
             Nothing ->
               -- Normal summarize query
               let resolve = resolveExtendedColumn (Map.fromList qc.extendedColumns)
-                  groupCol =
-                    if null qc.groupByClause
-                      then "'" <> (if null qc.aggregations then "count" else "value") <> "'"
-                      else "COALESCE(" <> maybe "status_code" resolve (listToMaybe qc.groupByClause) <> "::text, 'null')"
+                  -- One series per distinct combination of every `by` column.
+                  groupCol = case ["COALESCE(" <> resolve c <> "::text, 'null')" | c <- qc.groupByClause] of
+                    [] -> "'" <> (if null qc.aggregations then "count" else "value") <> "'"
+                    [c] -> c
+                    cs -> "concat_ws(' / ', " <> T.intercalate ", " cs <> ")"
                   aggCol = fromMaybe "count(*)::float" (listToMaybe qc.aggregations)
                   bucketExpr = timeBucketExpr binInterval
                   groupByPart = if null qc.groupByClause then bucketExpr else bucketExpr <> ", " <> groupCol
                in [fmt|SELECT extract(epoch from {bucketExpr})::integer, {groupCol}, {aggCol}
-                      FROM {fromTable} WHERE {buildWhere} GROUP BY {groupByPart} {havingClause}
+                      FROM {dataTable} WHERE {buildWhere} GROUP BY {groupByPart} {havingClause}
                       ORDER BY {bucketExpr} DESC {limitClause}|]
         Nothing ->
           let hasAggregationsNoGroupBy = not (null qc.aggregations) && null qc.groupByClause
@@ -564,13 +579,14 @@ sqlFromQueryComponents sqlCfg qc =
               -- by count_ desc` came back alphabetical.
               orderClause = if hasAggregationsNoGroupBy then "" else " " <> buildOrderBy qc
               limitPart = if hasAggregationsNoGroupBy then "" else limitClause
-           in [fmt|SELECT {T.intercalate "," selectCols} FROM {fromTable} WHERE {buildWhere}
+           in [fmt|SELECT {T.intercalate "," selectCols} FROM {dataTable} WHERE {buildWhere}
               {groupByClause} {havingClause}{orderClause} {limitPart}|]
 
     -- Alert queries reuse whereCondition but drop the date range/cursor for this
     -- recency filter; without it time_bucket groups across all history and max
     -- returns the all-time peak bucket.
-    alertTimeFilter = timestampCol <> " >= NOW() - INTERVAL '" <> show sqlCfg.alertLookbackMins <> " minutes'"
+    alertSince mins = timestampCol <> " >= NOW() - INTERVAL '" <> show @Text @Int mins <> " minutes'"
+    alertTimeFilter = alertSince sqlCfg.alertLookbackMins
     -- The alert query is built by hand rather than through 'buildWhere', so every
     -- persisted scope predicate has to be included here too. A monitor scoped to
     -- staging or checkout that silently alerts on another scope is worse than one
@@ -599,10 +615,11 @@ sqlFromQueryComponents sqlCfg qc =
     -- expects float8 even when an aggregate produces float4.
     alertAggregate =
       "GREATEST(" <> T.intercalate ", " (if null qc.aggregations then ["count(*)"] else colsNoAsClause qc.aggregations) <> ")::float8"
+    alertWhere timeFilter = [fmt|project_id='{sqlCfg.pid.toText}' AND {timeFilter} {alertScopeFilters} AND ({whereCondition})|]
     alertQuery =
       [fmt|
-          SELECT {alertAggregate} FROM {fromTable}
-          WHERE project_id='{sqlCfg.pid.toText}' AND {alertTimeFilter} {alertScopeFilters} AND ({whereCondition})
+          SELECT {alertAggregate} FROM {seriesSourceSQL Nothing (Just $ fromIntegral sqlCfg.alertLookbackMins * 60) fromTable (alertWhere $ alertSince $ sqlCfg.alertLookbackMins + round (seriesLookback / 60)) alertTimeFilter qc.seriesAggs}
+          WHERE {alertWhere alertTimeFilter}
           {alertTail}
         |]
    in
@@ -616,6 +633,27 @@ sqlFromQueryComponents sqlCfg qc =
         , finalAlertQuery = Just alertQuery
         }
     )
+
+
+-- | How far before the range a series source reads to find each series'
+-- previous point: Prometheus' default lookback, well above common export intervals.
+seriesLookback :: NominalDiffTime
+seriesLookback = 300
+
+
+-- | Seconds in a positive @time_bucket@ interval.
+--
+-- >>> map (fmap (fromRational @Double) . intervalSeconds) ["10 seconds", "1 hours", "500 milliseconds", "2 days", "0 seconds", "nope"]
+-- [Just 10.0,Just 3600.0,Just 0.5,Just 172800.0,Nothing,Nothing]
+intervalSeconds :: Text -> Maybe Rational
+intervalSeconds t = case words t of
+  [n, unit] -> do
+    count <- readMaybe @Integer (toString n)
+    guard (count > 0)
+    (fromInteger count *) <$> Map.lookup (T.dropWhileEnd (== 's') unit) units
+  _ -> Nothing
+  where
+    units = Map.fromList @Text @Rational [("nanosecond", 1e-9), ("microsecond", 1e-6), ("millisecond", 1e-3), ("second", 1), ("minute", 60), ("hour", 3600), ("day", 86400), ("week", 604800)]
 
 
 -- | Parse a monoscope query to components ready for database execution.

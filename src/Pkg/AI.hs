@@ -284,6 +284,11 @@ kqlGuide =
   ### Aggregations
   `summarize` accepts `count()`, `sum(...)`, `avg(...)`, `min(...)`, `max(...)`, `median(...)`, etc.
 
+  ### Metrics (`metrics |` source)
+  - Counters (`metric_type` SUM, e.g. `*_total`, requests, bytes sent): `rate(value)` per second (`rate(value) * 60` per minute) or `increase(value)` per bin. Both are per series and restart-safe. NEVER `sum(value)` or `range(value)` on a counter.
+  - Gauges (memory, queue depth, connections): `last(value)` for the current level, `avg(value)`/`max(value)` for the trend.
+  - Example: `metrics | where metric_name == "http.server.requests" | summarize rate(value) by bin_auto(timestamp), resource.service.name`
+
   ### Time Binning Rules
   - DEFAULT: `bin_auto(timestamp)` — the system picks the bin size from the time range.
   - Only hardcode `bin(timestamp, <size>)` when the user EXPLICITLY names an interval (e.g. "by hour" → `bin(timestamp, 1h)`, "per 30 seconds" → `bin(timestamp, 30s)`).

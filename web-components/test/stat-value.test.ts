@@ -25,6 +25,10 @@ describe('statScalar', () => {
     expect(statScalar(errorRate, 'mean')).toBe(2.3);
   });
 
+  test('last is the newest bin for gauges, not a sum of levels', () => {
+    expect(statScalar({ ...traffic, last: 70 }, 'last')).toBe(70);
+  });
+
   test('default/sum keeps total for additive counts', () => {
     expect(statScalar(traffic, 'sum')).toBe(1200);
     expect(statScalar(traffic, 'whatever')).toBe(1200);

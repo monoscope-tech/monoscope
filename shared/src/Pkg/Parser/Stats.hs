@@ -1,6 +1,7 @@
 module Pkg.Parser.Stats (
   -- Types
   AggFunction (..),
+  SeriesFn (..),
   ArithOp (..),
   ScalarExpr (..),
   Section (..),
@@ -54,19 +55,21 @@ module Pkg.Parser.Stats (
   parseQueryDiagnosed,
   QueryError (..),
   definedNames,
+  seriesLeaves,
+  seriesSourceSQL,
 ) where
 
 import Control.Lens (set, view)
 import Control.Monad.Combinators.Expr (Operator (..), makeExprParser)
 import Data.Aeson qualified as AE
-import Data.Char (isDigit, isSpace)
+import Data.Char (isAlphaNum, isDigit, isSpace)
 import Data.Generics.Product (typed)
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (Display, display, displayBuilder, displayPrec)
 import Pkg.Deriving (WrappedEnumSC (..))
 import Pkg.Parser.Expr (Expr (..), FieldKey (..), Parser, Subject (..), ToQueryText (..), Values (..), arrayColumns, defaultBinWidth, knownFieldRoot, kqlTimespanToTimeBucket, metricsFieldUniverse, otelFieldUniverse, pExpr, pSubject, pValues, suggestFieldRoot, unsupportedTimespan)
-import Relude hiding (GT, LT, Sum, many, some)
+import Relude hiding (GT, LT, Last, Sum, many, some)
 import Text.Megaparsec
 import Text.Megaparsec.Char (alphaNumChar, char, digitChar, hspace, space, string)
 import Text.Megaparsec.Char.Lexer qualified as L
@@ -182,6 +185,7 @@ aggToSqlNoAlias (Max sub _) = simpleAggSQL "max" sub
 aggToSqlNoAlias (Median sub _) = simpleAggSQL "median" sub
 aggToSqlNoAlias (Stdev sub _) = simpleAggSQL "stdev" sub
 aggToSqlNoAlias (Range sub _) = "(max((" <> display sub <> ")::float) - min((" <> display sub <> ")::float))"
+aggToSqlNoAlias (Series fn sub _) = "COALESCE(sum(" <> seriesCol fn sub <> "), 0)::float"
 aggToSqlNoAlias (P50 sub _) = percentileSQL 0.50 (display sub)
 aggToSqlNoAlias (P75 sub _) = percentileSQL 0.75 (display sub)
 aggToSqlNoAlias (P90 sub _) = percentileSQL 0.90 (display sub)
@@ -221,6 +225,8 @@ data AggFunction
   | Median Subject (Maybe Text)
   | Stdev Subject (Maybe Text)
   | Range Subject (Maybe Text)
+  | -- | Counter-aware per-series aggregations over the metrics table; see 'seriesSourceSQL'.
+    Series SeriesFn Subject (Maybe Text)
   | -- Scalar functions that can be used in aggregations (Microsoft KQL compatible)
     Coalesce [Values] (Maybe Text) -- coalesce(expr1, expr2, ...) - variadic, returns first non-null
   | Strcat [Values] (Maybe Text) -- strcat(expr1, expr2, ...) - concatenate any scalar expressions
@@ -235,6 +241,103 @@ data AggFunction
   | ArithExpr ScalarExpr (Maybe Text) -- Arithmetic on aggregations: count() / 5.0
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data SeriesFn = Rate | Increase | Last
+  deriving stock (Bounded, Enum, Eq, Generic, Ord, Read, Show)
+  deriving (AE.FromJSON, AE.ToJSON, Display) via WrappedEnumSC 'Nothing "" SeriesFn
+
+
+-- | Column of the series subquery that carries one point's contribution to a
+-- 'Series' aggregation; the outer query only ever sums it.
+seriesCol :: SeriesFn -> Subject -> Text
+seriesCol fn (Subject entire _ _) = "__" <> display fn <> "_" <> T.toLower (T.map (\c -> if isAlphaNum c then c else '_') entire)
+
+
+-- | Every 'Series' aggregation inside an aggregation, including under arithmetic.
+seriesLeaves :: AggFunction -> [(SeriesFn, Subject)]
+seriesLeaves = \case
+  Series fn s _ -> [(fn, s)]
+  Round e _ _ -> scalar e
+  ToFloat e _ -> scalar e
+  ToInt e _ -> scalar e
+  ToString e _ -> scalar e
+  ArithExpr e _ -> scalar e
+  Count{} -> []
+  CountIf{} -> []
+  DCount{} -> []
+  P50{} -> []
+  P75{} -> []
+  P90{} -> []
+  P95{} -> []
+  P99{} -> []
+  P100{} -> []
+  Percentile{} -> []
+  Percentiles{} -> []
+  Sum{} -> []
+  Avg{} -> []
+  Min{} -> []
+  Max{} -> []
+  Median{} -> []
+  Stdev{} -> []
+  Range{} -> []
+  Coalesce{} -> []
+  Strcat{} -> []
+  Iff{} -> []
+  Case{} -> []
+  Plain{} -> []
+  where
+    scalar = \case
+      SAgg a -> seriesLeaves a
+      SArith a _ b -> scalar a <> scalar b
+      SVal _ -> []
+
+
+-- | The FROM source a summarize with 'Series' aggregations reads instead of the
+-- metrics table. It keeps every row and adds, per leaf, a column whose plain
+-- @sum@ over any grouping is the per-series answer summed across series:
+--
+-- * @increase@: the point's increment over the previous point of its series
+--   (@series_id@, ordered by time) — a drop is a counter reset, so the new value
+--   is the increment; DELTA points are their own increment.
+-- * @rate@: that increment divided by the series' time base in the bin,
+--   @GREATEST(bin seconds, sum of point gaps)@. The gap sum keeps a bin narrower
+--   than the export interval at the true rate (not a multiple of it); the bin
+--   width keeps a series that covers only part of a bin (a restart) from
+--   overstating it.
+-- * @last@: the series' newest value in the bin.
+--
+-- The previous point comes from @innerWhere@, which reaches back before the
+-- range, so a bin's first point still has a predecessor; @inRange@ then drops
+-- those lookback rows before the per-bin windows are taken.
+--
+-- >>> let Right a = parse aggFunctionParser "" "rate(value)"
+-- >>> seriesSourceSQL (Just "time_bucket('10 seconds', timestamp)") (Just 10) "otel_metrics" "w" "r" (seriesLeaves a)
+-- "(SELECT *, (CASE WHEN aggregation_temporality = 'DELTA' THEN value WHEN __prev_rate_value IS NULL THEN NULL WHEN value < __prev_rate_value THEN value ELSE value - __prev_rate_value END) / GREATEST(10.0, SUM(CAST(extract(epoch from timestamp) AS DOUBLE PRECISION) - CASE WHEN aggregation_temporality = 'DELTA' THEN COALESCE(CAST(extract(epoch from start_timestamp) AS DOUBLE PRECISION), __prev_ts) ELSE __prev_ts END) OVER (PARTITION BY series_id, time_bucket('10 seconds', timestamp))) AS __rate_value FROM (SELECT *, LAG(CAST(extract(epoch from timestamp) AS DOUBLE PRECISION)) OVER (PARTITION BY series_id ORDER BY timestamp) AS __prev_ts, LAG(value) OVER (PARTITION BY series_id ORDER BY timestamp) AS __prev_rate_value FROM otel_metrics WHERE w) AS __series_points WHERE r) AS otel_metrics"
+seriesSourceSQL :: Maybe Text -> Maybe Double -> Text -> Text -> Text -> [(SeriesFn, Subject)] -> Text
+seriesSourceSQL _ _ table _ _ [] = table
+seriesSourceSQL bucketM binSecondsM table innerWhere inRange (ordNub -> leaves) =
+  "(SELECT *, " <> T.intercalate ", " (map contribution leaves) <> " FROM (SELECT " <> T.intercalate ", " ("*" : lags) <> " FROM " <> table <> " WHERE " <> innerWhere <> ") AS __series_points WHERE " <> inRange <> ") AS " <> table
+  where
+    lags = [lagTs | Rate `elem` map fst leaves] <> map lag (ordNub [s | (fn, s) <- leaves, fn /= Last])
+    series = "PARTITION BY series_id ORDER BY timestamp"
+    part = "PARTITION BY series_id" <> foldMap (", " <>) bucketM
+    epoch c = "CAST(extract(epoch from " <> c <> ") AS DOUBLE PRECISION)"
+    lagTs = "LAG(" <> epoch "timestamp" <> ") OVER (" <> series <> ") AS __prev_ts"
+    prev s = "__prev" <> T.drop 1 (seriesCol Rate s)
+    lag s = "LAG(" <> display s <> ") OVER (" <> series <> ") AS " <> prev s
+    isDelta = "aggregation_temporality = 'DELTA'"
+    inc s = let v = display s; p = prev s in "CASE WHEN " <> isDelta <> " THEN " <> v <> " WHEN " <> p <> " IS NULL THEN NULL WHEN " <> v <> " < " <> p <> " THEN " <> v <> " ELSE " <> v <> " - " <> p <> " END"
+    gap = epoch "timestamp" <> " - CASE WHEN " <> isDelta <> " THEN COALESCE(" <> epoch "start_timestamp" <> ", __prev_ts) ELSE __prev_ts END"
+    timeBase = "SUM(" <> gap <> ") OVER (" <> part <> ")"
+    contribution (fn, s) =
+      ( case fn of
+          Increase -> inc s
+          Rate -> "(" <> inc s <> ") / " <> maybe ("NULLIF(" <> timeBase <> ", 0)") (\b -> "GREATEST(" <> show b <> ", " <> timeBase <> ")") binSecondsM
+          Last -> "CASE WHEN ROW_NUMBER() OVER (" <> part <> " ORDER BY timestamp DESC) = 1 THEN " <> display s <> " END"
+      )
+        <> " AS "
+        <> seriesCol fn s
 
 
 data BinFunction
@@ -380,6 +483,7 @@ traverseAst f g = traverse goSec
       Median s t -> st Median s t
       Stdev s t -> st Stdev s t
       Range s t -> st Range s t
+      Series fn s t -> st (Series fn) s t
       Coalesce vs t -> flip Coalesce t <$> traverse goV vs
       Strcat vs t -> flip Strcat t <$> traverse goV vs
       Iff e a b t -> (\e' a' b' -> Iff e' a' b' t) <$> goE e <*> goV a <*> goV b
@@ -509,6 +613,7 @@ baseAggParsers =
   , pSimpleAgg "stdev" Stdev
   , pSimpleAgg "range" Range
   ]
+    <> [pSimpleAgg (display fn) (Series fn) | fn <- universe]
 
 
 -- | Left-associative * / (tighter) then + - operator table, parameterised by the
@@ -712,6 +817,7 @@ instance ToQueryText AggFunction where
   toQText (Median sub _) = "median(" <> toQText sub <> ")"
   toQText (Stdev sub _) = "stdev(" <> toQText sub <> ")"
   toQText (Range sub _) = "range(" <> toQText sub <> ")"
+  toQText (Series fn sub _) = display fn <> "(" <> toQText sub <> ")"
   toQText (Coalesce exprs _) = "coalesce(" <> T.intercalate ", " (map toQText exprs) <> ")"
   toQText (Strcat exprs _) = "strcat(" <> T.intercalate ", " (map toQText exprs) <> ")"
   toQText (Iff cond thenVal elseVal _) = "iff(" <> toQText cond <> ", " <> toQText thenVal <> ", " <> toQText elseVal <> ")"
@@ -754,6 +860,7 @@ defaultAlias = \case
   Median (Subject n _ _) _ -> "median_" <> sanitizeAlias n
   Stdev (Subject n _ _) _ -> "stdev_" <> sanitizeAlias n
   Range (Subject n _ _) _ -> "range_" <> sanitizeAlias n
+  Series fn (Subject n _ _) _ -> display fn <> "_" <> sanitizeAlias n
   Coalesce{} -> "coalesce_"
   Strcat{} -> "strcat_"
   Iff{} -> "iff_"
@@ -1257,7 +1364,22 @@ parseQueryDiagnosed srcM (T.strip -> q) = do
   -- Point at the offending token; T.breakOn finds its first occurrence, which
   -- is where a reader looks even if the name repeats later.
   let at (tok, msg) = let before = fst (T.breakOn tok q) in QueryError{message = msg, column = T.length before + 1, width = T.length tok}
-  first at $ maybeToLeft ast (unknownField (maybe ast ((: ast) . Source) srcM) <|> badTimespan ast)
+  let sourced = maybe ast ((: ast) . Source) srcM
+  first at $ maybeToLeft ast (unknownField sourced <|> badTimespan ast <|> seriesOffMetrics sourced)
+
+
+-- | @rate@/@increase@/@last@ follow a metric series (@series_id@), which only the
+-- metrics table has; on spans they would fail at the database instead.
+--
+-- >>> first (.message) $ parseQueryDiagnosed Nothing "| summarize rate(duration) by bin_auto(timestamp)"
+-- Left "rate() reads metric series; start the query with `metrics |`"
+-- >>> isRight $ parseQueryDiagnosed (Just SMetrics) "| summarize rate(value) * 60, last(value) by bin_auto(timestamp), metric_name"
+-- True
+seriesOffMetrics :: [Section] -> Maybe (Text, Text)
+seriesOffMetrics sections = do
+  guard $ Source SMetrics `notElem` sections
+  fn <- listToMaybe [fn | SummarizeCommand aggs _ <- sections, agg <- aggs, (fn, _) <- seriesLeaves agg]
+  pure (display fn <> "(", display fn <> "() reads metric series; start the query with `metrics |`")
 
 
 -- | The first @bin()@ width we cannot bucket by, as @(token, message)@.
