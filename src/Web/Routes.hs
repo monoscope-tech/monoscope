@@ -8,7 +8,7 @@ import Data.ByteString.Builder (Builder)
 import Data.Default (def)
 import Data.List qualified as L
 import Data.Ord (clamp)
-import Data.Time (UTCTime, diffUTCTime)
+import Data.Time (UTCTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.UUID qualified as UUID
 import Deriving.Aeson.Stock qualified as DAE
@@ -1332,30 +1332,27 @@ guardClientPostgresSql dbSource pidM querySqlM =
 
 -- | @rollup_sql@ is a Postgres statement over an hourly rollup that answers the same
 -- series as the chart's KQL query, for hours from @rollup_from@ on. It replaces the
--- query when the window starts inside that coverage, no environment or service scope
--- applies (the rollup has no column to honour one), and hourly bars cost nothing a
--- reader would miss: the window holds at least six of them, or ended over an hour ago.
--- A short live window stays on the query, which is cheap there and keeps fine bins.
+-- query whenever the window starts inside that coverage and no environment or service
+-- scope applies (the rollup has no column to honour one). Short windows included: on a
+-- busy project three live hours of the query took 90s, and hourly bars do not.
 --
 -- >>> import Data.Time (addUTCTime)
 -- >>> let now = Parser.fixedUTCTime; t = Utils.isoT . (`addUTCTime` now) . (* 3600); since s = TimePicker.TimePicker (Just s) Nothing Nothing; abs' a b = TimePicker.TimePicker Nothing (Just $ t a) (Just $ t b)
 -- >>> let r from = [("rollup_sql", Just "R"), ("rollup_from", Just $ t from)]; route tp ps = fst $ rollupRoute now tp ps (Nothing, Nothing)
 -- >>> (route (since "24H") (r (-72)), route (since "3H") (r (-72)), route (abs' (-30) (-26)) (r (-72)))
--- (Just "postgres",Nothing,Just "postgres")
+-- (Just "postgres",Just "postgres",Just "postgres")
 -- >>> (route (since "24H") (r (-12)), route (since "24H") (("environment", Just "prod") : r (-72)), route (since "24H") (take 1 $ r (-72)))
 -- (Nothing,Nothing,Nothing)
 rollupRoute :: UTCTime -> TimePicker.TimePicker -> [(Text, Maybe Text)] -> (Maybe Text, Maybe Text) -> (Maybe Text, Maybe Text)
 rollupRoute now tp params source = case (param "rollup_sql", iso8601ParseM . toString =<< param "rollup_from", fromM) of
   (Just rollup, Just covered, Just start)
     | all (isNothing . param) ["environment", "service"]
-    , start >= covered
-    , diffUTCTime end start >= 6 * 3600 || diffUTCTime now end >= 3600 ->
+    , start >= covered ->
         (Just "postgres", Just rollup)
   _ -> source
   where
     param k = Utils.nonEmptyT $ join $ L.lookup k params
-    (fromM, toM, _) = TimePicker.parseTimeRange now tp
-    end = fromMaybe now toM
+    (fromM, _, _) = TimePicker.parseTimeRange now tp
 
 
 chartsDataGetH :: Maybe Text -> Maybe Charts.DataType -> Maybe Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Parser.BinDensity -> [(Text, Maybe Text)] -> ATAuthCtx Charts.MetricsData

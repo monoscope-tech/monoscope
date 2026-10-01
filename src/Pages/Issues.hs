@@ -1202,15 +1202,20 @@ issueVolumeChart_ v chartTitle = whenJust (issueHashKey v.issue) \key ->
 -- | The volume chart's series from the hourly counts ingest already keeps. The KQL
 -- form scans every row in the window on TimeFusion (@hashes@ has no index there),
 -- 4-27s for a day; this is an index lookup. Paired with the first hour the table can
--- answer: pattern stats are pruned past their retention, and error stats start when
--- the error's counting did. See 'Web.Routes.rollupRoute' for when the server prefers it.
+-- answer. A signal counted since it first appeared has no gap, since it had no events
+-- before then. Otherwise pattern stats start at their retention horizon, and error
+-- stats where the error's counting did. See 'Web.Routes.rollupRoute'.
 issueHourlySql :: IssueView -> Maybe (Text, UTCTime)
 issueHourlySql v = case Issues.issuePayload v.issue of
   Just (Issues.LogPatternP d) -> logPattern d.sourceField d.patternHash
   Just (Issues.LogPatternRateChangeP d) -> logPattern d.sourceField d.patternHash
-  _ -> (,) <$> (v.errM <&> \e -> hourlyRollupSql "apis.error_hourly_stats" $ "error_id = " <> sqlStringLit (UUID.toText e.base.id.unErrorPatternId)) <*> v.errHourlyFrom
+  _ -> v.errM >>= \e -> v.errHourlyFrom <&> \counted ->
+    (hourlyRollupSql "apis.error_hourly_stats" $ "error_id = " <> sqlStringLit (UUID.toText e.base.id.unErrorPatternId), coveredFrom (zonedTimeToUTC e.base.createdAt) counted)
   where
-    logPattern sf h = Just (hourlyRollupSql "apis.log_pattern_hourly_stats" $ "source_field = " <> sqlStringLit sf <> " AND pattern_hash = " <> sqlStringLit h, addUTCTime (fromIntegral $ -(3600 * LogPatterns.hourlyStatsRetentionHours)) v.now)
+    logPattern sf h = Just (hourlyRollupSql "apis.log_pattern_hourly_stats" $ "source_field = " <> sqlStringLit sf <> " AND pattern_hash = " <> sqlStringLit h, maybe horizon (\p -> coveredFrom (zonedTimeToUTC p.firstSeenAt) horizon) v.patternM)
+    horizon = addUTCTime (fromIntegral $ -(3600 * LogPatterns.hourlyStatsRetentionHours)) v.now
+    -- Counting that began within the hour of the first event leaves nothing uncounted.
+    coveredFrom firstEvent countedFrom = bool countedFrom (POSIX.posixSecondsToUTCTime 0) (countedFrom <= addUTCTime 3600 firstEvent)
 
 
 -- | A chart series over one key of an hourly stats table, bounded by the chart's window.
