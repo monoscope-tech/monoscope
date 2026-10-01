@@ -882,10 +882,10 @@ cmd_deploy() { # [sha] — point the CapRover app at this commit's image
   code=$(curl -sS -o /tmp/caprover-deploy.$$ -w '%{http_code}' -X POST \
     "$CAPROVER_URL/api/v2/user/apps/appData/$CAPROVER_APP?detached=1" \
     -H 'Content-Type: application/json' -H 'x-namespace: captain' \
-    -H "x-captain-auth: $CAPROVER_APP_TOKEN" -d "$body")
+    -H "x-captain-app-token: $CAPROVER_APP_TOKEN" -d "$body")
   # CapRover answers 200 with a status field even when it refuses, so the body
   # decides, not the HTTP code.
-  if [ "$code" = 200 ] && grep -q '"status":100' /tmp/caprover-deploy.$$; then
+  if [ "$code" = 200 ] && grep -Eq '"status":10(0|1)' /tmp/caprover-deploy.$$; then
     rm -f /tmp/caprover-deploy.$$
     publish_attestation deploy "$sha" caprover "$CAPROVER_APP"
     note "deploy accepted. CapRover is pulling the image; \`make deploy-status\` to watch it."
