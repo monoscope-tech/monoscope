@@ -309,17 +309,11 @@ jobs:
         # cannot update the branch, so pre-existing warnings would fail unrelated
         # external contributions.
         continue-on-error: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
-        env:
-          FINGERPRINTS: ${{ needs.gate.outputs.fingerprints }}
         run: |
-          # Only cacheable when the tree still is what the gate fingerprinted. If
-          # the refactor rewrote src/, this run proves nothing about the commit the
-          # gate looked at — and the pushed commit gets its own gate run anyway.
+          # This job checks out the PR head, while the gate checks the merge ref.
+          # Pinning the gate fingerprint would reject a clean lint run on the head.
           if [ "${{ steps.refactor.outputs.changed }}" = "true" ]; then
             export CI_NO_ATTEST=true
-          else
-            mkdir -p .ci && printf '%s\n' "$FINGERPRINTS" > .ci/fingerprints.tsv
-            export CI_FINGERPRINTS=.ci/fingerprints.tsv
           fi
           scripts/ci/ci.sh run hlint
 
