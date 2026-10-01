@@ -1,14 +1,22 @@
 title: TimeFusion
 icon: database
 preview: /public/assets/svgs/screens/http-stats.svg
-description: TimeFusion health — ingest and update rates, WAL and unflushed buffer, flush, compaction, dedup and certification, rollups, and query latency
+description: TimeFusion health — memory and restarts, ingest vs flush rates, WAL and buffer, maintenance backlog and throughput, dedup and certification, rollups, and query latency
 refresh_interval: 60s
 tags: [database]
 discovery_metrics:
   - 'timefusion.'
 
-# Counters are cumulative per process, so each chart takes range(value) per bin.
-# A bin that spans a restart reads (pre-restart value − ~0): expect a spike at deploys.
+# TimeFusion counters are cumulative per process and reset on every restart. Do NOT
+# chart them with range(value) per bin: at short ranges bin_auto picks bins narrower
+# than the 30s export interval, so every bin holds one point and range() reads 0, and
+# a bin spanning a restart reads the whole pre-restart total. Counter widgets use the
+# &rate_s / &rate_m SQL below instead: per-series LAG deltas (a drop = restart, so the
+# post-restart value is the increase), divided by elapsed seconds, then summed per
+# series label. The widget's `query` supplies the metric filter via {{query_ast_filters}}.
+# Series labels are the metric's attribute values, else the metric name minus
+# `timefusion.`, so never mix attributed metrics in one counter widget.
+# Counters that never moved since boot are not exported at all: "No data" there = zero.
 widgets: []
 
 tabs:
@@ -16,65 +24,147 @@ tabs:
     icon: grid
     widgets:
       - type: group
-        title: Throughput
+        title: Is it up and safe?
         layout: { w: 12, h: 3 }
         children:
           - type: 'timeseries_stat'
-            title: 'Rows Ingested'
-            icon: activity
-            query: metrics | where metric_name == "timefusion.mem_buffer.rows_ingested_total" | summarize range(value) by bin_auto(timestamp)
-            unit: rows
-            eager: true
-            layout: { w: 3, h: 2 }
-
-          - type: 'timeseries_stat'
-            title: 'Rows Flushed to Delta'
-            icon: database
-            query: metrics | where metric_name == "timefusion.mem_buffer.rows_flushed_total" | summarize range(value) by bin_auto(timestamp)
-            unit: rows
-            eager: true
-            layout: { w: 3, h: 2 }
-
-          - type: 'timeseries_stat'
-            title: 'Unflushed Buffer'
+            title: 'Memory Peak / Limit'
+            description: '500 ms peak of cgroup memory (less clean page cache) as a share of the limit. Good: under 70%. Catches the OOM path: tantivy index installs spiked it to 41–106 GB on a 120 GiB box (2026-09-30).'
             icon: server
-            query: metrics | where metric_name == "timefusion.mem_buffer.estimated_bytes" | summarize avg(value) / 1048576 by bin_auto(timestamp)
-            unit: MB
+            query: metrics | where metric_name in ("timefusion.memory.charged_peak_bytes", "timefusion.memory.limit_bytes")
+            sql: &mem_pct |
+              SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time, 'peak % of limit' AS series,
+                (100 * MAX(CASE WHEN metric_name = 'timefusion.memory.charged_peak_bytes' THEN value END)
+                  / NULLIF(MAX(CASE WHEN metric_name = 'timefusion.memory.limit_bytes' THEN value END), 0))::float AS value
+              FROM otel_metrics WHERE {{query_ast_filters}} GROUP BY 1 ORDER BY 1 DESC
+            unit: '%'
+            summarize_by: max
+            warning_threshold: 80
+            alert_threshold: 90
             eager: true
             layout: { w: 3, h: 2 }
 
           - type: 'timeseries_stat'
-            title: 'WAL on Disk'
-            icon: folders
-            query: metrics | where metric_name == "timefusion.wal.disk_bytes" | summarize avg(value) / 1048576 by bin_auto(timestamp)
-            unit: MB
+            title: 'Restarts'
+            description: 'Process restarts, counted as resets of the pgwire query counter. Good: only at deploys. A restart with no deploy, after a memory peak near 100%, is an OOM kill.'
+            icon: alert-triangle
+            query: metrics | where metric_name == "timefusion.scan.pgwire_total"
+            sql: &restarts |
+              WITH p AS (SELECT timestamp, value - LAG(value) OVER (PARTITION BY series_id ORDER BY timestamp) AS d
+                FROM otel_metrics WHERE {{query_ast_filters}})
+              SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time, 'restarts' AS series,
+                SUM(CASE WHEN d < 0 THEN 1 ELSE 0 END)::float AS value
+              FROM p WHERE d IS NOT NULL GROUP BY 1 ORDER BY 1 DESC
+            unit: restarts
+            summarize_by: sum
+            warning_threshold: 1
+            eager: true
+            layout: { w: 3, h: 2 }
+
+          - type: 'timeseries_stat'
+            title: 'Coordinator Errors'
+            description: 'Maintenance turns that ended in an error, most often a rollup aggregation losing the maintenance pool. Good: 0.'
+            icon: alert-triangle
+            query: metrics | where metric_name == "timefusion.maintenance.coordinator_errors"
+            sql: &rate_m |
+              WITH p AS (
+                SELECT timestamp, series_id, value,
+                  COALESCE(NULLIF(CONCAT_WS(' ', attributes->>'project_id', attributes->>'table_name', attributes->>'operation', attributes->>'outcome', attributes->>'reason', attributes->>'class', attributes->>'tier', attributes->>'mode', attributes->>'op'), ''), regexp_replace(metric_name, '^timefusion[.]', '')) AS series,
+                  value - LAG(value) OVER w AS d, EXTRACT(EPOCH FROM timestamp - LAG(timestamp) OVER w) AS dt
+                FROM otel_metrics WHERE {{query_ast_filters}}
+                WINDOW w AS (PARTITION BY series_id ORDER BY timestamp)),
+              r AS (
+                SELECT time_bucket('{{rollup_interval}}', timestamp) AS b, series, SUM(CASE WHEN d < 0 THEN value ELSE d END) / SUM(dt) AS v
+                FROM p WHERE dt > 0 GROUP BY 1, 2, series_id)
+              SELECT extract(epoch from b)::integer AS time, series, (SUM(v) * 60)::float AS value FROM r GROUP BY 1, 2 ORDER BY 1 DESC
+            unit: /min
+            summarize_by: max
+            warning_threshold: 0.1
+            eager: true
+            layout: { w: 3, h: 2 }
+
+          - type: 'timeseries_stat'
+            title: 'Quarantined Units'
+            description: 'Maintenance units rationed to the quarantine lane after repeated failures. Good: 0. Nonzero is a unit that keeps crashing its worker.'
+            icon: alert-triangle
+            query: metrics | where metric_name == "timefusion.maintenance.quarantined_tasks" | summarize max(value) by bin_auto(timestamp)
+            unit: units
+            summarize_by: max
+            warning_threshold: 1
             eager: true
             layout: { w: 3, h: 2 }
 
       - type: group
-        title: Health
+        title: Is ingest keeping up?
         layout: { w: 12, h: 3 }
         children:
           - type: 'timeseries_stat'
-            title: 'Query p95'
+            title: 'Ingest Rate'
+            description: 'Rows accepted into the buffer per second, including WAL replay after a restart.'
+            icon: activity
+            query: metrics | where metric_name == "timefusion.mem_buffer.rows_ingested_total"
+            sql: &rate_s |
+              WITH p AS (
+                SELECT timestamp, series_id, value,
+                  COALESCE(NULLIF(CONCAT_WS(' ', attributes->>'project_id', attributes->>'table_name', attributes->>'operation', attributes->>'outcome', attributes->>'reason', attributes->>'class', attributes->>'tier', attributes->>'mode', attributes->>'op'), ''), regexp_replace(metric_name, '^timefusion[.]', '')) AS series,
+                  value - LAG(value) OVER w AS d, EXTRACT(EPOCH FROM timestamp - LAG(timestamp) OVER w) AS dt
+                FROM otel_metrics WHERE {{query_ast_filters}}
+                WINDOW w AS (PARTITION BY series_id ORDER BY timestamp)),
+              r AS (
+                SELECT time_bucket('{{rollup_interval}}', timestamp) AS b, series, SUM(CASE WHEN d < 0 THEN value ELSE d END) / SUM(dt) AS v
+                FROM p WHERE dt > 0 GROUP BY 1, 2, series_id)
+              SELECT extract(epoch from b)::integer AS time, series, SUM(v)::float AS value FROM r GROUP BY 1, 2 ORDER BY 1 DESC
+            unit: rows/s
+            summarize_by: mean
+            eager: true
+            layout: { w: 3, h: 2 }
+
+          - type: 'timeseries_stat'
+            title: 'Flush Rate'
+            description: 'Rows drained from the buffer to Delta per second. Bursty (one flush per interval); over an hour it should match the ingest rate.'
+            icon: database
+            query: metrics | where metric_name == "timefusion.mem_buffer.rows_flushed_total"
+            sql: *rate_s
+            unit: rows/s
+            summarize_by: mean
+            eager: true
+            layout: { w: 3, h: 2 }
+
+          - type: 'timeseries_stat'
+            title: 'Oldest Unflushed Bucket'
+            description: 'Age of the oldest buffer bucket. Good: under ~2x the flush interval. Rising without bound means flush is stuck.'
             icon: clock
-            query: metrics | where metric_name == "timefusion.pgwire.query_latency_p95_ms" | summarize avg(value) by bin_auto(timestamp)
-            unit: ms
+            query: metrics | where metric_name == "timefusion.mem_buffer.oldest_bucket_age_seconds" | summarize max(value) by bin_auto(timestamp)
+            unit: s
             summarize_by: max
-            warning_threshold: 2000
-            alert_threshold: 10000
+            warning_threshold: 1800
+            alert_threshold: 3600
             eager: true
             layout: { w: 3, h: 2 }
 
           - type: 'timeseries_stat'
             title: 'Buffer Pressure'
-            description: 'MemBuffer memory as a share of its budget. Above 100% inserts hit backpressure.'
+            description: 'Buffer memory as a share of its budget. Above 100% inserts hit backpressure.'
             icon: chart-simple
             query: metrics | where metric_name == "timefusion.mem_buffer.pressure_pct" | summarize max(value) by bin_auto(timestamp)
             unit: '%'
             summarize_by: max
             warning_threshold: 80
             alert_threshold: 100
+            eager: true
+            layout: { w: 3, h: 2 }
+
+      - type: group
+        title: Are maintenance and reads keeping up?
+        layout: { w: 12, h: 3 }
+        children:
+          - type: 'timeseries_stat'
+            title: 'Oldest Due Unit Wait'
+            description: 'How long the oldest due, unclaimed, non-quarantined maintenance unit has waited past its deadline. Rising = the queue is starving; a re-arm resets it.'
+            icon: clock
+            query: metrics | where metric_name == "timefusion.maintenance.oldest_due_unclaimed_age_seconds" | summarize max(value) by bin_auto(timestamp)
+            unit: s
+            summarize_by: max
             eager: true
             layout: { w: 3, h: 2 }
 
@@ -91,92 +181,135 @@ tabs:
             layout: { w: 3, h: 2 }
 
           - type: 'timeseries_stat'
-            title: 'Oldest Unflushed Bucket'
-            description: 'Age of the oldest MemBuffer bucket. Alert above 2x the flush interval.'
+            title: 'Query p95'
+            description: 'pgwire end-to-end p95 over the last 1–2 minutes, inserts included.'
             icon: clock
-            query: metrics | where metric_name == "timefusion.mem_buffer.oldest_bucket_age_seconds" | summarize max(value) by bin_auto(timestamp)
-            unit: s
+            query: metrics | where metric_name == "timefusion.pgwire.query_latency_p95_ms" | summarize max(value) by bin_auto(timestamp)
+            unit: ms
             summarize_by: max
+            warning_threshold: 2000
+            alert_threshold: 10000
             eager: true
             layout: { w: 3, h: 2 }
 
-      - type: 'timeseries'
-        title: 'Page-worthy Events'
-        description: 'Every counter here should be zero. Any bar is data at risk or a wedged commit path: stalled flush, unsorted flush, rejected inserts, WAL corruption or quarantine, lost DML, destroyed parquet, corrupt checkpoint, packer invariant break.'
-        theme: 'roma'
-        query: metrics | where metric_name in ("timefusion.flush.stalled", "timefusion.flush.sort_unsorted_fallbacks", "timefusion.ingest.backpressure_rejected", "timefusion.wal.corruption_events", "timefusion.wal.quarantine_backlog_events", "timefusion.dml.coalesce_dropped", "timefusion.dml.coalesce_quarantined", "timefusion.maintenance.reconcile_dangling_removed", "timefusion.maintenance.checkpoint_corrupt", "timefusion.maintenance.compaction_invariant_violations") | summarize range(value) by bin_auto(timestamp), metric_name
-        unit: events
-        layout: { w: 12, h: 4 }
+          - type: 'timeseries_stat'
+            title: 'Rollup Hit Rate'
+            description: 'Share of dashboard aggregates served from a rollup instead of a raw scan. Higher is faster; see the Rollups tab for miss reasons.'
+            icon: chart-simple
+            query: metrics | where metric_name in ("timefusion.rollup.hits", "timefusion.rollup.misses")
+            sql: &hit_rate |
+              WITH p AS (SELECT timestamp, metric_name, value, value - LAG(value) OVER (PARTITION BY series_id ORDER BY timestamp) AS d
+                FROM otel_metrics WHERE {{query_ast_filters}}),
+              i AS (SELECT time_bucket('{{rollup_interval}}', timestamp) AS b, metric_name, CASE WHEN d < 0 THEN value ELSE d END AS inc FROM p WHERE d IS NOT NULL)
+              SELECT extract(epoch from b)::integer AS time, 'hit rate' AS series,
+                (100 * SUM(CASE WHEN metric_name = 'timefusion.rollup.hits' THEN inc ELSE 0 END) / NULLIF(SUM(inc), 0))::float AS value
+              FROM i GROUP BY 1 ORDER BY 1 DESC
+            unit: '%'
+            summarize_by: mean
+            eager: true
+            layout: { w: 3, h: 2 }
 
       - type: 'timeseries_line'
-        title: 'Ingest vs Flush'
-        description: 'Rows accepted vs rows drained to Delta. Ingest persistently above flush means the buffer is growing. Counters reset on restart, so a bin spanning a deploy shows a one-off spike.'
-        query: metrics | where metric_name in ("timefusion.mem_buffer.rows_ingested_total", "timefusion.mem_buffer.rows_flushed_total") | summarize range(value) by bin_auto(timestamp), metric_name
-        unit: rows
+        title: 'Ingest vs Flush (rows/s)'
+        description: 'Good: flush averages out to ingest. Ingest persistently above flush means the buffer and WAL are growing; flush at 0 for longer than the flush interval is a stuck flush.'
+        query: metrics | where metric_name in ("timefusion.mem_buffer.rows_ingested_total", "timefusion.mem_buffer.rows_flushed_total")
+        sql: *rate_s
+        unit: rows/s
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries_line'
-        title: 'Maintenance Backlog'
-        description: 'Queued units per lane. These move both ways; a lane that only climbs is starved.'
-        query: metrics | where metric_name in ("timefusion.maintenance.pending_dedup", "timefusion.maintenance.pending_repair", "timefusion.maintenance.pending_base_rollup") | summarize avg(value) by bin_auto(timestamp), metric_name
+        title: 'Memory vs Limit'
+        description: 'charged = cgroup memory less clean page cache (what the OOM killer sees); peak = highest 500 ms sample per export; jemalloc resident minus allocated is fragmentation. Good: peak well under limit.'
+        query: metrics | where metric_name startswith "timefusion.memory." | summarize max(value) by bin_auto(timestamp), strcat(metric_name, " ", attributes.kind)
+        unit: bytes
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries'
+        title: 'Page-worthy Events (/min)'
+        theme: 'roma'
+        description: 'Good: no bars. Any bar is data at risk or a wedged path: stalled or failed flush, unsorted flush, rejected inserts, WAL corruption or quarantine, lost or quarantined DML, destroyed parquet, corrupt checkpoint, packer invariant break, failed optimize, coordinator errors, broken query streams. Counters that never fired are not exported, so most are absent.'
+        query: metrics | where metric_name in ("timefusion.flush.stalled", "timefusion.flush.failed", "timefusion.flush.sort_unsorted_fallbacks", "timefusion.ingest.backpressure_rejected", "timefusion.wal.corruption_events", "timefusion.wal.quarantine_backlog_events", "timefusion.dml.coalesce_dropped", "timefusion.dml.coalesce_quarantined", "timefusion.dml.retry_exhausted", "timefusion.maintenance.reconcile_dangling_removed", "timefusion.maintenance.checkpoint_corrupt", "timefusion.maintenance.compaction_invariant_violations", "timefusion.optimize.failed", "timefusion.maintenance.coordinator_errors", "timefusion.pgwire.stream_failed")
+        sql: *rate_m
+        unit: /min
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries_line'
+        title: 'Maintenance Backlog by Lane'
+        description: 'Queued units per lane. Good: moves both ways. A lane that only climbs is starved; a sawtooth jump of hundreds is a whole-day re-arm wave.'
+        query: metrics | where metric_name in ("timefusion.maintenance.pending_base_rollup", "timefusion.maintenance.pending_dedup", "timefusion.maintenance.pending_repair", "timefusion.maintenance.due_nonquarantined_tasks", "timefusion.maintenance.quarantined_tasks") | summarize max(value) by bin_auto(timestamp), metric_name
         unit: units
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries'
+        title: 'Restarts'
+        theme: 'roma'
+        description: 'One bar per process restart. Line up with deploys; one without a deploy is a crash or OOM kill.'
+        query: metrics | where metric_name == "timefusion.scan.pgwire_total"
+        sql: *restarts
+        unit: restarts
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries_line'
+        title: 'Query Latency (pgwire)'
+        description: 'End-to-end p50/p95/p99 over the last 1–2 minutes, inserts included. Good: p95 under 2 s.'
+        query: metrics | where metric_name in ("timefusion.pgwire.query_latency_p50_ms", "timefusion.pgwire.query_latency_p95_ms", "timefusion.pgwire.query_latency_p99_ms") | summarize max(value) by bin_auto(timestamp), metric_name
+        unit: ms
         layout: { w: 6, h: 4 }
 
   - name: Ingest & WAL
     icon: activity
     widgets:
       - type: 'timeseries'
-        title: 'Insert Calls'
-        query: metrics | where metric_name == "timefusion.ingest.inserts" | summarize range(value) by bin_auto(timestamp), attributes.project_id, attributes.table_name
-        unit: inserts
+        title: 'Ingest Rate by Project & Table (rows/s)'
+        description: 'Stacked per tenant. A tenant that suddenly dominates is the first suspect for buffer pressure and flush lag.'
+        query: metrics | where metric_name == "timefusion.ingest.rows"
+        sql: *rate_s
+        unit: rows/s
+        layout: { w: 12, h: 5 }
+
+      - type: 'timeseries'
+        title: 'Insert Calls by Project & Table (/min)'
+        description: 'Insert statements accepted. Rows per call = ingest rate / call rate; a tenant sending many tiny inserts costs WAL fsyncs.'
+        query: metrics | where metric_name == "timefusion.ingest.inserts"
+        sql: *rate_m
+        unit: /min
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries'
-        title: 'Rows Ingested by Table'
-        description: 'One series per project and table.'
-        query: metrics | where metric_name == "timefusion.ingest.rows" | summarize range(value) by bin_auto(timestamp), attributes.project_id, attributes.table_name
-        unit: rows
-        layout: { w: 6, h: 4 }
-
-      - type: 'timeseries'
-        title: 'Updates (coalesced UPDATE … FROM)'
-        description: 'Statements whose Delta leg was deferred to the coalescer, and the merges that drained them. enqueued / merges is the batching ratio. Buffer-only UPDATEs skip the Delta leg and are counted as delta_leg_skipped.'
-        query: metrics | where metric_name in ("timefusion.dml.coalesce_enqueued", "timefusion.dml.coalesce_merges", "timefusion.dml.delta_leg_skipped") | summarize range(value) by bin_auto(timestamp), metric_name
-        unit: ops
-        layout: { w: 6, h: 4 }
-
-      - type: 'timeseries'
-        title: 'DML Conflicts & Retries'
+        title: 'Ingest Errors & Backpressure (/min)'
         theme: 'roma'
-        description: 'UPDATE/DELETE Delta operations that lost an OCC race. Sustained conflicts mean UPDATE churn is racing flush commits; exhausted retries are failed statements.'
-        query: metrics | where metric_name in ("timefusion.dml.conflict", "timefusion.dml.retry_success", "timefusion.dml.retry_exhausted") | summarize range(value) by bin_auto(timestamp), metric_name
-        unit: ops
+        description: 'Failed inserts, rows dropped for out-of-bounds timestamps, and inserts that hit the memory hard limit (engaged → forced flush → rejected). Good: no data (never fired since boot).'
+        query: metrics | where metric_name in ("timefusion.ingest.errors", "timefusion.ingest.event_time_bounded_rows", "timefusion.ingest.backpressure_engaged", "timefusion.ingest.backpressure_force_flush", "timefusion.ingest.backpressure_rejected")
+        sql: *rate_m
+        unit: /min
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries'
-        title: 'Ingest Errors by Table'
-        theme: 'roma'
-        description: 'Failed insert calls, and rows dropped for event timestamps outside sanity bounds (pre-2000 or >48h ahead).'
-        query: metrics | where metric_name in ("timefusion.ingest.errors", "timefusion.ingest.event_time_bounded_rows") | summarize range(value) by bin_auto(timestamp), metric_name, attributes.project_id, attributes.table_name
-        unit: events
+        title: 'Updates & DML (/min)'
+        description: 'Coalesced UPDATE … FROM statements, the merges that drained them (enqueued / merges = batching ratio), buffer-only legs skipped, and OCC conflicts/retries. Sustained conflicts mean UPDATE churn is racing flush commits. No data = none since boot.'
+        query: metrics | where metric_name in ("timefusion.dml.coalesce_enqueued", "timefusion.dml.coalesce_merges", "timefusion.dml.delta_leg_skipped", "timefusion.dml.conflict", "timefusion.dml.retry_success", "timefusion.dml.retry_exhausted")
+        sql: *rate_m
+        unit: /min
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries'
-        title: 'Backpressure'
-        description: 'Inserts that hit the hard limit and forced a synchronous flush, and inserts rejected when that did not free memory. Sustained nonzero means flush is not keeping up.'
-        query: metrics | where metric_name in ("timefusion.ingest.backpressure_engaged", "timefusion.ingest.backpressure_force_flush", "timefusion.ingest.backpressure_rejected") | summarize range(value) by bin_auto(timestamp), metric_name
-        unit: events
+        title: 'WAL Maintenance (/min)'
+        description: 'Stale WAL files reclaimed by the reaper, and quarantined payloads re-driven or corrupt at boot. Good: steady GC, no corruption.'
+        query: metrics | where metric_name in ("timefusion.wal.gc_deleted_files", "timefusion.wal.quarantine_redriven", "timefusion.wal.corruption_events", "timefusion.wal.quarantine_backlog_events")
+        sql: *rate_m
+        unit: /min
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries_line'
-        title: 'WAL Size'
-        query: metrics | where metric_name == "timefusion.wal.disk_bytes" | summarize avg(value) / 1048576 by bin_auto(timestamp)
-        unit: MB
+        title: 'WAL on Disk'
+        description: 'Good: a sawtooth that drops after each flush checkpoint. Steady growth means flush or checkpointing is behind; boot replay time grows with it.'
+        query: metrics | where metric_name == "timefusion.wal.disk_bytes" | summarize max(value) by bin_auto(timestamp)
+        unit: bytes
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries_line'
         title: 'WAL Segment Files'
-        query: metrics | where metric_name == "timefusion.wal.files" | summarize avg(value) by bin_auto(timestamp)
+        query: metrics | where metric_name == "timefusion.wal.files" | summarize max(value) by bin_auto(timestamp)
         unit: files
         layout: { w: 6, h: 4 }
 
@@ -185,51 +318,57 @@ tabs:
     widgets:
       - type: 'timeseries_line'
         title: 'Unflushed Buffer Size'
-        query: metrics | where metric_name == "timefusion.mem_buffer.estimated_bytes" | summarize avg(value) / 1048576 by bin_auto(timestamp)
-        unit: MB
+        query: metrics | where metric_name == "timefusion.mem_buffer.estimated_bytes" | summarize max(value) by bin_auto(timestamp)
+        unit: bytes
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries_line'
         title: 'Unflushed Rows'
-        query: metrics | where metric_name == "timefusion.mem_buffer.rows" | summarize avg(value) by bin_auto(timestamp)
+        query: metrics | where metric_name == "timefusion.mem_buffer.rows" | summarize max(value) by bin_auto(timestamp)
         unit: rows
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries_line'
         title: 'Buffer Pressure'
+        description: 'Share of the buffer budget. Good: well under 80%; at 100% inserts block on a synchronous flush.'
         query: metrics | where metric_name == "timefusion.mem_buffer.pressure_pct" | summarize max(value) by bin_auto(timestamp)
         unit: '%'
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries_line'
         title: 'Oldest Bucket Age'
+        description: 'Good: a sawtooth bounded by the flush interval. A ramp is a flush that is not draining.'
         query: metrics | where metric_name == "timefusion.mem_buffer.oldest_bucket_age_seconds" | summarize max(value) by bin_auto(timestamp)
         unit: s
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries'
-        title: 'Flush Cycles'
+        title: 'Flush Cycles (/min)'
         theme: 'roma'
-        query: metrics | where metric_name in ("timefusion.flush.completed", "timefusion.flush.failed", "timefusion.flush.stalled") | summarize range(value) by bin_auto(timestamp), metric_name
-        unit: flushes
+        description: 'Flushes committed vs failed or stalled past the watchdog. Good: only completed.'
+        query: metrics | where metric_name in ("timefusion.flush.completed", "timefusion.flush.failed", "timefusion.flush.stalled", "timefusion.flush.sort_unsorted_fallbacks")
+        sql: *rate_m
+        unit: /min
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries'
-        title: 'Rows Deduplicated at Flush'
-        description: 'Rows collapsed by per-table dedup keys before the Delta commit.'
-        query: metrics | where metric_name == "timefusion.flush.dedup_dropped_rows" | summarize range(value) by bin_auto(timestamp)
-        unit: rows
+        title: 'Commit Lock Timeouts by Operation (/min)'
+        theme: 'roma'
+        description: 'Commit-path operations abandoned while holding a table commit lock (a hung object-store request). Good: no data. Sustained nonzero means commit throughput is degraded.'
+        query: metrics | where metric_name == "timefusion.commit.lock_timeouts"
+        sql: *rate_m
+        unit: /min
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries'
-        title: 'Commit Lock Timeouts by Operation'
-        theme: 'roma'
-        description: 'Commit-path operations abandoned while holding a table commit lock (a hung object-store request). Sustained nonzero means commit throughput is degraded.'
-        query: metrics | where metric_name == "timefusion.commit.lock_timeouts" | summarize range(value) by bin_auto(timestamp), attributes.op
-        unit: timeouts
+        title: 'Flush Cache Tee (/min)'
+        description: 'Flush outputs confirmed in the local cache before drain: probes, files re-fetched because write-capture skipped them, and timeouts. warmed ≈ attempts means capture caps are too tight. insert_bypassed = populations skipped inside a wide scan.'
+        query: metrics | where metric_name in ("timefusion.cache.confirm_attempts", "timefusion.cache.confirm_warmed", "timefusion.cache.confirm_timeouts", "timefusion.cache.write_capture_skipped", "timefusion.cache.insert_bypassed")
+        sql: *rate_m
+        unit: /min
         layout: { w: 12, h: 4 }
 
-  - name: Compaction
+  - name: Maintenance
     icon: folders
     widgets:
       - type: group
@@ -252,8 +391,9 @@ tabs:
             title: 'Permits Free'
             description: 'Free hygiene rewrite permits. Pinned at 0 while the lane is wedged.'
             icon: swap
-            query: metrics | where metric_name == "timefusion.maintenance.permits_available" | summarize avg(value) by bin_auto(timestamp)
+            query: metrics | where metric_name == "timefusion.maintenance.permits_available" | summarize min(value) by bin_auto(timestamp)
             unit: permits
+            summarize_by: min
             eager: true
             layout: { w: 3, h: 2 }
 
@@ -267,228 +407,441 @@ tabs:
             layout: { w: 3, h: 2 }
 
           - type: 'timeseries_stat'
-            title: 'Quarantined Units'
+            title: 'Rollup Dirty Partitions'
+            description: 'Source partitions with durable rollup invalidations awaiting maintenance.'
             icon: alert-triangle
-            query: metrics | where metric_name == "timefusion.maintenance.quarantined_tasks" | summarize max(value) by bin_auto(timestamp)
-            unit: units
+            query: metrics | where metric_name == "timefusion.rollup.maintenance.pending_dirty_partitions" | summarize max(value) by bin_auto(timestamp)
+            unit: partitions
             summarize_by: max
             eager: true
             layout: { w: 3, h: 2 }
 
       - type: 'timeseries'
-        title: 'Bins Committed'
-        description: 'The drain rate: hot-pack + sealed consolidation bins, and dedup bins.'
-        query: metrics | where metric_name in ("timefusion.maintenance.light_optimize_bins_committed", "timefusion.maintenance.dedup_bins_committed") | summarize range(value) by bin_auto(timestamp), metric_name
-        unit: bins
-        layout: { w: 6, h: 4 }
-
-      - type: 'timeseries_line'
-        title: 'Queued Units by Lane'
-        query: metrics | where metric_name in ("timefusion.maintenance.pending_dedup", "timefusion.maintenance.pending_repair", "timefusion.maintenance.pending_base_rollup", "timefusion.maintenance.due_nonquarantined_tasks") | summarize avg(value) by bin_auto(timestamp), metric_name
-        unit: units
+        title: 'Lease Time by Operation & Outcome'
+        description: 'Milliseconds of unit lease held per second, so 1 s/s ≈ one unit in flight. Shows where maintenance capacity goes; Retry/Superseded time is wasted work.'
+        query: metrics | where metric_name == "timefusion.maintenance.lease_ms"
+        sql: *rate_s
+        unit: ms
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries'
-        title: 'Permits Acquired vs Unavailable'
-        description: 'Both climbing is healthy contention. Acquired frozen while unavailable climbs is a wedged lane.'
-        query: metrics | where metric_name in ("timefusion.maintenance.permits_acquired", "timefusion.maintenance.permits_unavailable", "timefusion.maintenance.compaction_units_selected_nothing") | summarize range(value) by bin_auto(timestamp), metric_name
-        unit: turns
+        title: 'Input Processed by Operation (/s)'
+        description: 'Estimated decoded input bytes of completed units per second — the drain rate per lane.'
+        query: metrics | where metric_name == "timefusion.maintenance.processed_bytes"
+        sql: *rate_s
+        unit: bytes
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries'
-        title: 'Admission Refusals by Resource'
-        description: 'Which budget is the limiter: CPU tokens, decoded memory, object reads or object writes.'
-        query: metrics | where metric_name in ("timefusion.maintenance.admission_refused_cpu", "timefusion.maintenance.admission_refused_decoded_bytes", "timefusion.maintenance.admission_refused_object_reads", "timefusion.maintenance.admission_refused_object_writes") | summarize range(value) by bin_auto(timestamp), metric_name
-        unit: refusals
+        title: 'Claim Passes by Operation (/min)'
+        description: 'claim_next passes, whether or not they claimed.'
+        query: metrics | where metric_name == "timefusion.maintenance.claims"
+        sql: *rate_m
+        unit: /min
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries'
+        title: 'Claim Time by Operation'
+        description: 'Microseconds per second spent inside claim_next with the journal lock held. Climbing means the journal lock is a bottleneck.'
+        query: metrics | where metric_name == "timefusion.maintenance.claim_us"
+        sql: *rate_s
+        unit: us
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries'
+        title: 'Bins Committed (/min)'
+        description: 'The drain rate: hot-pack + sealed consolidation bins, dedup bins, and dedup units completed without a scan because the partition was certified.'
+        query: metrics | where metric_name in ("timefusion.maintenance.light_optimize_bins_committed", "timefusion.maintenance.dedup_bins_committed", "timefusion.dedup.unit_skipped_certified")
+        sql: *rate_m
+        unit: /min
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries'
+        title: 'Permits & Hot-pack Reservation (/min)'
+        description: 'Both acquired and unavailable climbing is healthy contention. Acquired frozen while unavailable climbs is a wedged lane. selected_nothing in the thousands is the packer wedge.'
+        query: metrics | where metric_name in ("timefusion.maintenance.permits_acquired", "timefusion.maintenance.permits_unavailable", "timefusion.maintenance.compaction_units_selected_nothing", "timefusion.maintenance.hot_packing_reserve_unavailable", "timefusion.maintenance.hot_packing_reserve_waits")
+        sql: *rate_m
+        unit: /min
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries'
+        title: 'Admission Refusals by Resource (/min)'
+        description: 'Which budget is the limiter: CPU tokens, decoded memory, rollup state bytes or its waiter slot, rollup memory, object reads or object writes.'
+        query: metrics | where metric_name in ("timefusion.maintenance.admission_refused_cpu", "timefusion.maintenance.admission_refused_decoded_bytes", "timefusion.maintenance.admission_refused_state_bytes", "timefusion.maintenance.admission_refused_state_waiter", "timefusion.maintenance.admission_refused_rollup_memory", "timefusion.maintenance.admission_refused_object_reads", "timefusion.maintenance.admission_refused_object_writes")
+        sql: *rate_m
+        unit: /min
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries_line'
         title: 'CPU Tokens (used / limit / capacity)'
-        query: metrics | where metric_name in ("timefusion.maintenance.cpu_tokens_used", "timefusion.maintenance.cpu_tokens_limit", "timefusion.maintenance.cpu_tokens_capacity", "timefusion.maintenance.rollup_reserved_cpu_tokens") | summarize avg(value) by bin_auto(timestamp), metric_name
+        query: metrics | where metric_name in ("timefusion.maintenance.cpu_tokens_used", "timefusion.maintenance.cpu_tokens_limit", "timefusion.maintenance.cpu_tokens_capacity", "timefusion.maintenance.rollup_reserved_cpu_tokens") | summarize max(value) by bin_auto(timestamp), metric_name
         unit: tokens
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries_line'
         title: 'Object I/O Tokens (used vs capacity)'
-        query: metrics | where metric_name in ("timefusion.maintenance.object_read_tokens_used", "timefusion.maintenance.object_read_tokens_capacity", "timefusion.maintenance.object_write_tokens_used", "timefusion.maintenance.object_write_tokens_capacity") | summarize avg(value) by bin_auto(timestamp), metric_name
+        query: metrics | where metric_name in ("timefusion.maintenance.object_read_tokens_used", "timefusion.maintenance.object_read_tokens_capacity", "timefusion.maintenance.object_write_tokens_used", "timefusion.maintenance.object_write_tokens_capacity") | summarize max(value) by bin_auto(timestamp), metric_name
         unit: tokens
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries_line'
         title: 'Decoded Memory Reserved vs Capacity'
-        query: metrics | where metric_name in ("timefusion.maintenance.decoded_bytes_used", "timefusion.maintenance.decoded_bytes_capacity") | summarize avg(value) / 1073741824 by bin_auto(timestamp), metric_name
-        unit: GB
+        query: metrics | where metric_name in ("timefusion.maintenance.decoded_bytes_used", "timefusion.maintenance.decoded_bytes_capacity") | summarize max(value) by bin_auto(timestamp), metric_name
+        unit: bytes
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries_line'
         title: 'Sealed Compaction Debt'
         description: 'Decoded bytes (~12x on-disk), and a stock of estimates that never decrements: read the shape, not a drain rate.'
-        query: metrics | where metric_name == "timefusion.maintenance.sealed_compaction_debt_bytes" | summarize avg(value) / 1073741824 by bin_auto(timestamp)
-        unit: GB
+        query: metrics | where metric_name == "timefusion.maintenance.sealed_compaction_debt_bytes" | summarize max(value) by bin_auto(timestamp)
+        unit: bytes
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries_line'
+        title: 'Lane Recency & Waits'
+        description: 'Seconds since the last compaction and sealed commit, the longest permit hold, and the oldest due unit wait. Good: sawtooth. A straight ramp is a lane that stopped.'
+        query: metrics | where metric_name in ("timefusion.maintenance.compaction_seconds_since_commit", "timefusion.maintenance.sealed_seconds_since_commit", "timefusion.maintenance.permit_held_seconds", "timefusion.maintenance.oldest_due_unclaimed_age_seconds") | summarize max(value) by bin_auto(timestamp), metric_name
+        unit: s
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries'
-        title: 'Optimize Outcomes'
+        title: 'Maintenance Errors (/min)'
         theme: 'roma'
-        query: metrics | where metric_name in ("timefusion.optimize.partitions_rewritten", "timefusion.optimize.partitions_skipped", "timefusion.optimize.conflict", "timefusion.optimize.failed") | summarize range(value) by bin_auto(timestamp), metric_name
-        unit: partitions
+        description: 'Coordinator errors, failed checkpoints and log cleanups, cron runs past the long-running threshold, optimize conflicts and failures, dangling parquet removed. Good: no bars.'
+        query: metrics | where metric_name in ("timefusion.maintenance.coordinator_errors", "timefusion.maintenance.checkpoint_failed", "timefusion.maintenance.checkpoint_corrupt", "timefusion.maintenance.log_cleanup_failed", "timefusion.maintenance.cron_long_running", "timefusion.maintenance.reconcile_dangling_removed", "timefusion.optimize.conflict", "timefusion.optimize.failed")
+        sql: *rate_m
+        unit: /min
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries'
-        title: 'Maintenance Errors'
-        theme: 'roma'
-        query: metrics | where metric_name in ("timefusion.maintenance.coordinator_errors", "timefusion.maintenance.checkpoint_failed", "timefusion.maintenance.log_cleanup_failed", "timefusion.maintenance.cron_long_running") | summarize range(value) by bin_auto(timestamp), metric_name
-        unit: errors
+        title: 'Full Optimize (/min)'
+        description: 'Date partitions rewritten or skipped (file set unchanged) by full z-order optimize. No data = it has not run since boot.'
+        query: metrics | where metric_name in ("timefusion.optimize.partitions_rewritten", "timefusion.optimize.partitions_skipped")
+        sql: *rate_m
+        unit: /min
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries'
+        title: 'Object Store Requests by Op (/s)'
+        description: 'Requests below the local cache. A spike in get is a cold cache or a wide scan.'
+        query: metrics | where metric_name == "timefusion.store.requests"
+        sql: *rate_s
+        unit: req/s
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries_line'
+        title: 'Object Store Latency by Op'
+        description: 'p50/p95/p99 over the last 1–2 minutes, below the cache. Commits stall when put/list tails grow.'
+        query: metrics | where metric_name == "timefusion.store.request_ms" | summarize max(value) by bin_auto(timestamp), strcat(attributes.op, " ", attributes.quantile)
+        unit: ms
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries_line'
+        title: 'Object Store Requests In Flight by Op'
+        query: metrics | where metric_name == "timefusion.store.inflight_requests" | summarize max(value) by bin_auto(timestamp), attributes.op
+        unit: requests
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries_line'
+        title: 'Runtime Scheduling Lag'
+        description: 'How late a 500 ms timer woke. Nonzero means async workers are starved, which is what a missed health probe looks like from inside. max = worst this process lifetime.'
+        query: metrics | where metric_name in ("timefusion.runtime.scheduling_lag_ms", "timefusion.runtime.scheduling_lag_max_ms") | summarize max(value) by bin_auto(timestamp), metric_name
+        unit: ms
         layout: { w: 6, h: 4 }
 
   - name: Dedup & Certification
     icon: list-tree
     widgets:
       - type: 'timeseries'
-        title: 'Duplicate Rows Removed'
+        title: 'Duplicate Rows Removed (/s)'
         description: 'Rows collapsed at flush (same batch) and by Delta-vs-Delta dedup compaction (across flushes).'
-        query: metrics | where metric_name in ("timefusion.flush.dedup_dropped_rows", "timefusion.compaction.dedup_dropped_rows") | summarize range(value) by bin_auto(timestamp), metric_name
-        unit: rows
+        query: metrics | where metric_name in ("timefusion.flush.dedup_dropped_rows", "timefusion.compaction.dedup_dropped_rows")
+        sql: *rate_s
+        unit: rows/s
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries'
-        title: 'Read-side Dedup Skipped vs Eligible'
-        description: 'Scans that skipped merge-on-read dedup because their partitions were certified clean. A higher skip share means cheaper reads.'
-        query: metrics | where metric_name in ("timefusion.scan.dedup_eligible_scans", "timefusion.scan.dedup_skipped", "timefusion.scan.dedup_skipped_per_date", "timefusion.scan.dedup_skipped_per_file") | summarize range(value) by bin_auto(timestamp), metric_name
-        unit: scans
+        title: 'Read-side Dedup Skipped vs Eligible (/min)'
+        description: 'Scans that skipped merge-on-read dedup because their partitions were certified clean (whole window, per date, per file). Good: skipped close to eligible; each skip is a cheaper read.'
+        query: metrics | where metric_name in ("timefusion.scan.dedup_eligible_scans", "timefusion.scan.dedup_skipped", "timefusion.scan.dedup_skipped_per_date", "timefusion.scan.dedup_skipped_per_file", "timefusion.scan.dedup_partial_skipped")
+        sql: *rate_m
+        unit: /min
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries'
-        title: 'Why Dedup Was Not Skipped'
-        description: 'never_certified = the dedup lane has not reached the partition; fp_moved = a commit landed after certification.'
-        query: metrics | where metric_name in ("timefusion.scan.dedup_denied_never_certified", "timefusion.scan.dedup_denied_fp_moved", "timefusion.scan.dedup_denied_no_window", "timefusion.scan.dedup_denied_unresolved", "timefusion.scan.dedup_denied_by_leg", "timefusion.scan.dedup_denied_disabled") | summarize range(value) by bin_auto(timestamp), metric_name
-        unit: scans
+        title: 'Why Dedup Was Not Skipped (/min)'
+        description: 'never_certified = the dedup lane has not reached the partition; fp_moved = a commit landed after certification; slice_only = only part of the window is proved.'
+        query: metrics | where metric_name in ("timefusion.scan.dedup_denied_never_certified", "timefusion.scan.dedup_denied_fp_moved", "timefusion.scan.dedup_denied_no_window", "timefusion.scan.dedup_denied_unresolved", "timefusion.scan.dedup_denied_by_leg", "timefusion.scan.dedup_denied_slice_only", "timefusion.scan.dedup_denied_uncertified", "timefusion.scan.dedup_denied_disabled")
+        sql: *rate_m
+        unit: /min
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries'
-        title: 'Certifications Granted'
-        description: 'Whole-day grants, windows that survived a fingerprint move, and windows granted from accumulated slice coverage.'
-        query: metrics | where metric_name in ("timefusion.scan.cert_granted_total", "timefusion.scan.cert_window_survived_fp_move", "timefusion.scan.cert_window_from_slice_coverage") | summarize range(value) by bin_auto(timestamp), metric_name
-        unit: grants
+        title: 'Merge-on-read Dedup Mode (/min)'
+        description: 'bounded = dedup with LIMIT early termination; full_set = no early exit, charged to the per-query memory budget. full_set climbing is where read memory goes.'
+        query: metrics | where metric_name in ("timefusion.scan.dedup_bounded_total", "timefusion.scan.dedup_full_set_total")
+        sql: *rate_m
+        unit: /min
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries'
-        title: 'Certification Slice Outcomes'
-        description: 'Exits of each dedup pass: which ones ended in a proof and which did not.'
-        query: metrics | where metric_name in ("timefusion.scan.cert_slice_day_covered", "timefusion.scan.cert_slice_files_proved", "timefusion.scan.cert_slice_partial", "timefusion.scan.cert_slice_dirty", "timefusion.scan.cert_slice_dv_moved", "timefusion.scan.cert_slice_outside_day", "timefusion.scan.cert_slice_files_unproven") | summarize range(value) by bin_auto(timestamp), metric_name
-        unit: slices
+        title: 'Certifications Granted (/min)'
+        description: 'Whole-day grants, windows that survived a fingerprint move, windows granted from slice coverage, and slice coverage kept vs reset by a commit. Resets climbing = coverage that never accumulates.'
+        query: metrics | where metric_name in ("timefusion.scan.cert_granted_total", "timefusion.scan.cert_window_survived_fp_move", "timefusion.scan.cert_window_from_slice_coverage", "timefusion.scan.cert_coverage_retained", "timefusion.scan.cert_coverage_reset")
+        sql: *rate_m
+        unit: /min
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries'
-        title: 'Certification Probes Declined'
-        description: 'Probes that found duplicates, and the dirty 10-minute bins (of 144 per day) behind them.'
-        query: metrics | where metric_name in ("timefusion.scan.cert_probe_declined", "timefusion.scan.cert_declined_dirty_bins") | summarize range(value) by bin_auto(timestamp), metric_name
-        unit: count
+        title: 'Certification Slice Outcomes (/min)'
+        description: 'Exits of each dedup pass: which ended in a proof and which did not.'
+        query: metrics | where metric_name in ("timefusion.scan.cert_slice_day_covered", "timefusion.scan.cert_slice_files_proved", "timefusion.scan.cert_slice_partial", "timefusion.scan.cert_slice_dirty", "timefusion.scan.cert_slice_dv_moved", "timefusion.scan.cert_slice_outside_day", "timefusion.scan.cert_slice_files_unproven")
+        sql: *rate_m
+        unit: /min
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries'
-        title: 'Dedup Chunks Skipped'
-        theme: 'roma'
-        description: 'Dedup rewrites skipped over budget or in backoff. Duplicates stay in Delta until a later sweep; reads stay correct.'
-        query: metrics | where metric_name == "timefusion.dedup.chunk_skipped" | summarize range(value) by bin_auto(timestamp)
-        unit: chunks
-        layout: { w: 12, h: 4 }
+        title: 'Certification Declines & Refusals (/min)'
+        description: 'Probes that found duplicates, the dirty 10-minute bins (of 144 per day) behind them, removal units minted for them, and certifications refused (rows dropped, fingerprint moved).'
+        query: metrics | where metric_name in ("timefusion.scan.cert_probe_declined", "timefusion.scan.cert_declined_dirty_bins", "timefusion.scan.cert_decline_units_minted", "timefusion.scan.cert_refused_dropped", "timefusion.scan.cert_refused_fp_moved", "timefusion.dedup.chunk_skipped")
+        sql: *rate_m
+        unit: /min
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries'
+        title: 'Per-file Skip Blocked by Class (/min)'
+        description: 'Uncertified files holding back a certified file''s per-file dedup skip, by why they are uncertified.'
+        query: metrics | where metric_name == "timefusion.cert.skip_blocked"
+        sql: *rate_m
+        unit: /min
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries'
+        title: 'Per-file Skip: Files Skipped vs Overlap-blocked (/min)'
+        query: metrics | where metric_name in ("timefusion.scan.cert_skip_files", "timefusion.scan.cert_skip_blocked_overlap")
+        sql: *rate_m
+        unit: /min
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries'
+        title: 'Certification Lifetimes Ended (/min)'
+        description: 'Certifications that ended, and the seconds of survival they accumulated (dwell_secs / dwell_total = mean lifetime). Short lifetimes mean commits keep invalidating proofs.'
+        query: metrics | where metric_name in ("timefusion.scan.cert_dwell_total", "timefusion.scan.cert_dwell_secs_total")
+        sql: *rate_m
+        unit: /min
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries_line'
+        title: 'Mean Since Boot (histograms)'
+        description: 'Cumulative mean of each histogram since the process started: certification dwell (s), pgwire and scan latency (s), wide-scan selected MB. Resets on restart; use for drift, not spikes.'
+        query: metrics | where metric_name in ("timefusion.cert.dwell_seconds", "timefusion.pgwire.query_latency_seconds", "timefusion.scan.latency_seconds", "timefusion.scan.wide_scan_selected_mb") | summarize max(distribution_sum) / max(distribution_count) by bin_auto(timestamp), metric_name
+        layout: { w: 6, h: 4 }
 
   - name: Rollups
     icon: chart-simple
     widgets:
-      - type: 'timeseries'
-        title: 'Rollup Hits by Mode & Grain'
-        description: 'Aggregates served from pre-aggregated rollups. hybrid = rollup plus a raw fringe.'
-        query: metrics | where metric_name == "timefusion.rollup.hits" | summarize range(value) by bin_auto(timestamp), attributes.mode, attributes.grain
-        unit: queries
+      - type: 'timeseries_line'
+        title: 'Rollup Hit Rate'
+        description: 'Share of dashboard aggregates served from a rollup. Good: high and stable; a drop right after a deploy is the coverage map warming.'
+        query: metrics | where metric_name in ("timefusion.rollup.hits", "timefusion.rollup.misses")
+        sql: *hit_rate
+        unit: '%'
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries'
-        title: 'Rollup Misses by Reason'
-        description: 'Aggregates that fell through to a raw scan. The dominant reason says what to fix next.'
-        query: metrics | where metric_name == "timefusion.rollup.misses" | summarize range(value) by bin_auto(timestamp), attributes.reason
-        unit: queries
+        title: 'Rollup Hits by Tier & Mode (/min)'
+        description: 'hybrid = rollup plus a raw fringe.'
+        query: metrics | where metric_name == "timefusion.rollup.hits"
+        sql: *rate_m
+        unit: /min
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries'
-        title: 'Why Coverage Was Stale'
-        description: 'grew = rows arrived; shrank = rows collapsed by dedup/compaction; fp/epoch moved = the source changed under the coverage; absent_invalidated = a write destroyed coverage; absent_never_built = the build lane has not reached it.'
-        query: metrics | where metric_name in ("timefusion.scan.rollup_stale_grew", "timefusion.scan.rollup_stale_shrank", "timefusion.scan.rollup_stale_fp_moved", "timefusion.scan.rollup_stale_epoch_moved", "timefusion.scan.rollup_stale_no_witness", "timefusion.scan.rollup_coverage_absent_invalidated", "timefusion.scan.rollup_coverage_absent_never_built", "timefusion.scan.rollup_ticket_recheck_failed") | summarize range(value) by bin_auto(timestamp), metric_name
-        unit: checks
+        title: 'Rollup Misses by Reason (/min)'
+        description: 'Aggregates that fell through to a raw scan. The dominant reason says what to fix next: stale_coverage = maintenance behind, unknown_filter / unsupported_shape = query shape, unaligned_bucket_width = dashboard bin.'
+        query: metrics | where metric_name == "timefusion.rollup.misses"
+        sql: *rate_m
+        unit: /min
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries'
-        title: 'Bounded Witness: Rescued vs Stale'
-        description: 'Slices that failed the whole-partition compare and were re-proved against their bounded witness (rescued) or genuinely changed (stale_too).'
-        query: metrics | where metric_name in ("timefusion.scan.rollup_witness_bounded_rescued", "timefusion.scan.rollup_witness_bounded_stale_too") | summarize range(value) by bin_auto(timestamp), metric_name
-        unit: slices
+        title: 'Why Coverage Was Stale (/min)'
+        description: 'grew = rows arrived; shrank = rows collapsed by dedup/compaction; fp/epoch moved = the source changed under the coverage; absent_invalidated = a write destroyed coverage; absent_never_built = the build lane has not reached it; ticket_recheck_failed = coverage moved during planning.'
+        query: metrics | where metric_name in ("timefusion.scan.rollup_stale_grew", "timefusion.scan.rollup_stale_shrank", "timefusion.scan.rollup_stale_fp_moved", "timefusion.scan.rollup_stale_epoch_moved", "timefusion.scan.rollup_stale_no_witness", "timefusion.scan.rollup_stale_no_source_rows", "timefusion.scan.rollup_coverage_absent_invalidated", "timefusion.scan.rollup_coverage_absent_never_built", "timefusion.scan.rollup_ticket_recheck_failed")
+        sql: *rate_m
+        unit: /min
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries'
+        title: 'Coverage Witness Rescues (/min)'
+        description: 'Slices re-proved against their bounded witness (rescued) or genuinely changed (stale_too), slices whose exact file set still matches (content_rescued), and recovered slices with vs without a bounded witness.'
+        query: metrics | where metric_name in ("timefusion.scan.rollup_witness_bounded_rescued", "timefusion.scan.rollup_witness_bounded_stale_too", "timefusion.scan.rollup_witness_content_rescued", "timefusion.scan.rollup_witness_bounded_present", "timefusion.scan.rollup_witness_bounded_absent")
+        sql: *rate_m
+        unit: /min
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries'
+        title: 'Rollup Publications by Tier (/min)'
+        query: metrics | where metric_name == "timefusion.rollup.publications"
+        sql: *rate_m
+        unit: /min
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries'
+        title: 'Rollup Input Published by Tier (/s)'
+        description: 'Estimated decoded input bytes of published rollup units.'
+        query: metrics | where metric_name == "timefusion.rollup.published_input_bytes"
+        sql: *rate_s
+        unit: bytes
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries'
+        title: 'Rollup Bytes Scanned by Tier (/s)'
+        description: 'Projected bytes of every rollup scan pass, failed and repeated ones included. Against input published, the excess is wasted scan.'
+        query: metrics | where metric_name == "timefusion.rollup.scan_estimated_bytes"
+        sql: *rate_s
+        unit: bytes
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries'
+        title: 'Rollup Escalations (/min)'
+        description: 'Published rebuilds wider than the invalidated ranges that armed them. Each is work the invalidation did not ask for.'
+        query: metrics | where metric_name == "timefusion.maintenance.rollup_escalations"
+        sql: *rate_m
+        unit: /min
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries'
+        title: 'Escalated Rows Rebuilt (/s)'
+        description: 'Estimated input rows rebuilt outside invalidated ranges.'
+        query: metrics | where metric_name == "timefusion.maintenance.rollup_escalated_rows"
+        sql: *rate_s
+        unit: rows/s
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries'
+        title: 'Escalated Bytes Rebuilt (/s)'
+        query: metrics | where metric_name == "timefusion.maintenance.rollup_escalated_bytes"
+        sql: *rate_s
+        unit: bytes
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries'
+        title: 'MoR Version Rows by Tier (/s)'
+        description: 'Merge-on-read version rows by the rollup tier they would invalidate (relevant and irrelevant summed).'
+        query: metrics | where metric_name == "timefusion.rollup.version_append_rows"
+        sql: *rate_s
+        unit: rows/s
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries'
+        title: 'Rows Moving Rollup Witnesses by Class (/s)'
+        description: 'Rows landing below a live slice''s covered_through. flushed = every flushed row; base_version / transparent = merge-on-read versions.'
+        query: metrics | where metric_name == "timefusion.rollup.witness_moving_rows"
+        sql: *rate_s
+        unit: rows/s
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries'
+        title: 'Rollup Census (/min)'
+        description: 'Census re-admissions declined as no-ops, tier units queued to re-mint a missing measure, and derived-rollup dependency checks that fell back to scanning completed base tasks.'
+        query: metrics | where metric_name in ("timefusion.rollup.census_readmit_declined", "timefusion.rollup.measure_remints_queued", "timefusion.maintenance.dependency_fallbacks")
+        sql: *rate_m
+        unit: /min
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries_line'
-        title: 'Rollup Build Backlog'
-        query: metrics | where metric_name == "timefusion.maintenance.pending_base_rollup" | summarize avg(value) by bin_auto(timestamp)
-        unit: units
+        title: 'Oldest Rollup Invalidation'
+        description: 'Age of the oldest durable rollup invalidation. A ramp means one partition is never rebuilt.'
+        query: metrics | where metric_name == "timefusion.rollup.maintenance.oldest_invalidation_age_seconds" | summarize max(value) by bin_auto(timestamp)
+        unit: s
         layout: { w: 6, h: 4 }
 
-      - type: 'timeseries'
-        title: 'Rollup Build Errors'
-        theme: 'roma'
-        description: 'Coordinator turns that errored, most often a rollup aggregation losing the maintenance memory pool. Upstream of not_built misses.'
-        query: metrics | where metric_name == "timefusion.maintenance.coordinator_errors" | summarize range(value) by bin_auto(timestamp)
-        unit: errors
+      - type: 'timeseries_line'
+        title: 'Rollup Dirty Partitions'
+        query: metrics | where metric_name == "timefusion.rollup.maintenance.pending_dirty_partitions" | summarize max(value) by bin_auto(timestamp)
+        unit: partitions
         layout: { w: 6, h: 4 }
 
   - name: Queries
     icon: clock
     widgets:
       - type: 'timeseries_line'
-        title: 'Query Latency (pgwire, end to end)'
-        summarize_by: max
-        query: metrics | where metric_name in ("timefusion.pgwire.query_latency_p50_ms", "timefusion.pgwire.query_latency_p95_ms", "timefusion.pgwire.query_latency_p99_ms") | summarize avg(value) by bin_auto(timestamp), metric_name
-        unit: ms
+        title: 'Query Rate (/s)'
+        description: 'pgwire statements (inserts included) and table scans planned per second.'
+        query: metrics | where metric_name in ("timefusion.scan.pgwire_total", "timefusion.scan.scans_total", "timefusion.query.executions")
+        sql: *rate_s
+        unit: queries/s
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries_line'
         title: 'Scan Latency'
-        summarize_by: max
-        query: metrics | where metric_name in ("timefusion.scan.latency_p50_ms", "timefusion.scan.latency_p95_ms", "timefusion.scan.latency_p99_ms") | summarize avg(value) by bin_auto(timestamp), metric_name
+        description: 'Routing-table scan p50/p95/p99 over the last 1–2 minutes.'
+        query: metrics | where metric_name in ("timefusion.scan.latency_p50_ms", "timefusion.scan.latency_p95_ms", "timefusion.scan.latency_p99_ms") | summarize max(value) by bin_auto(timestamp), metric_name
         unit: ms
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries'
-        title: 'Queries & Pushdowns'
-        description: 'Plans executed, and COUNT(*) queries answered from metadata without a scan.'
-        query: metrics | where metric_name in ("timefusion.query.executions", "timefusion.query.count_pushdown_used", "timefusion.query.logical_count_pushdown_used") | summarize range(value) by bin_auto(timestamp), metric_name
-        unit: queries
-        layout: { w: 6, h: 4 }
-
-      - type: 'timeseries'
-        title: 'Failed Queries'
+        title: 'Failed Query Streams (/min)'
         theme: 'roma'
-        description: 'pgwire row streams that died mid-flight — the user-visible query failure.'
-        query: metrics | where metric_name == "timefusion.pgwire.stream_failed" | summarize range(value) by bin_auto(timestamp)
-        unit: failures
+        description: 'pgwire row streams that died mid-flight — the user-visible query failure. Good: no bars.'
+        query: metrics | where metric_name == "timefusion.pgwire.stream_failed"
+        sql: *rate_m
+        unit: /min
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries'
-        title: 'Scan Mix'
-        description: 'Which legs each scan touched: buffer only, Delta only, or both.'
-        query: metrics | where metric_name in ("timefusion.scan.scans_mem_only", "timefusion.scan.scans_delta_only", "timefusion.scan.scans_mem_plus_delta", "timefusion.scan.scans_skipped_delta") | summarize range(value) by bin_auto(timestamp), metric_name
-        unit: scans
+        title: 'Heavy-query Admission (/min)'
+        description: 'Unbounded sorts admitted straight away, queued for a slot, or timed out waiting. Queued with a healthy admitted rate is orderly backpressure; timeouts mean too few slots or too-slow queries.'
+        query: metrics | where metric_name in ("timefusion.scan.heavy_query_admitted", "timefusion.scan.heavy_query_ordered_mor_admitted", "timefusion.scan.heavy_query_queued", "timefusion.scan.heavy_query_queue_timeout")
+        sql: *rate_m
+        unit: /min
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries'
-        title: 'Full-text Prefilter'
-        description: 'text_match lookups that used the Tantivy id-set prefilter, fell back to a UDF scan, or errored.'
-        query: metrics | where metric_name in ("timefusion.tantivy.prefilter_attempts", "timefusion.tantivy.prefilter_used", "timefusion.tantivy.prefilter_skipped", "timefusion.tantivy.prefilter_errors") | summarize range(value) by bin_auto(timestamp), metric_name
-        unit: queries
+        title: 'Scan Mix (/min)'
+        description: 'Which legs each scan touched: buffer only, Delta only, or both; skipped_delta = Delta leg pruned by time.'
+        query: metrics | where metric_name in ("timefusion.scan.scans_mem_only", "timefusion.scan.scans_delta_only", "timefusion.scan.scans_mem_plus_delta", "timefusion.scan.scans_skipped_delta")
+        sql: *rate_m
+        unit: /min
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries'
+        title: 'Full-text Prefilter Outcomes (/min)'
+        description: 'text_match lookups that used the Tantivy id-set prefilter, were skipped (see reasons), or errored. tantivy.* and scan.* are the OTel and stats mirrors of the same events.'
+        query: metrics | where metric_name in ("timefusion.tantivy.prefilter_attempts", "timefusion.tantivy.prefilter_used", "timefusion.tantivy.prefilter_skipped", "timefusion.tantivy.prefilter_errors", "timefusion.scan.prefilter_attempts", "timefusion.scan.prefilter_used", "timefusion.scan.prefilter_skipped")
+        sql: *rate_m
+        unit: /min
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries'
+        title: 'Prefilter Skip Reasons (/min)'
+        description: 'Why a lookup fell back to a UDF scan. cold_index = index not cached yet (a cold first query took 89 s on 2026-09-30); cap_exceeded_* = too many hits to push down.'
+        query: metrics | where metric_name startswith "timefusion.scan.prefilter_skipped."
+        sql: *rate_m
+        unit: /min
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries'
+        title: 'Tantivy Scan Path (/min)'
+        description: 'Tantivy-routed scans, and why each left the single-provider fast path: raw files, bloom pruning, or a date restriction.'
+        query: metrics | where metric_name in ("timefusion.scan.tantivy_scan_calls", "timefusion.scan.tantivy_fastpath", "timefusion.scan.tantivy_split_raw", "timefusion.scan.tantivy_split_bloom", "timefusion.scan.tantivy_split_date")
+        sql: *rate_m
+        unit: /min
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries'
+        title: 'Tantivy Scan Files (/s)'
+        description: 'Live files served through an index vs raw files scanned without one.'
+        query: metrics | where metric_name in ("timefusion.scan.tantivy_live_files", "timefusion.scan.tantivy_raw_files")
+        sql: *rate_s
+        unit: files/s
         layout: { w: 6, h: 4 }
 
       - type: 'timeseries_line'
         title: 'Files Without a Full-text Index'
-        description: 'Queries over these files fall back to a UDF scan. Alert on the sealed count; today''s partition is excluded on purpose.'
-        query: metrics | where metric_name in ("timefusion.tantivy.uncovered_sealed_files", "timefusion.tantivy.uncovered_files") | summarize avg(value) by bin_auto(timestamp), metric_name
+        description: 'Queries over these files fall back to a UDF scan. Alert on the sealed count; today''s partition is excluded on purpose. recovery_pending = awaiting post-replay indexing.'
+        query: metrics | where metric_name in ("timefusion.tantivy.uncovered_sealed_files", "timefusion.tantivy.uncovered_files", "timefusion.tantivy.recovery_pending_files") | summarize max(value) by bin_auto(timestamp), metric_name
         unit: files
         layout: { w: 6, h: 4 }
 
@@ -497,4 +850,57 @@ tabs:
         description: 'Seconds between now and the newest indexed row.'
         query: metrics | where metric_name == "timefusion.tantivy.index_lag_seconds" | summarize max(value) by bin_auto(timestamp)
         unit: s
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries'
+        title: 'Tantivy Index Builds (/min)'
+        description: 'Indexes built by the backfill, carried forward across a compaction, manifest commits, segment merges run or deferred, deferred recovery builds, and build failures (accumulating failures = silent UDF-scan fallback).'
+        query: metrics | where metric_name in ("timefusion.scan.tantivy_backfill_built", "timefusion.scan.tantivy_carried_forward", "timefusion.scan.tantivy_manifest_commits", "timefusion.tantivy.merges_executed", "timefusion.tantivy.merges_deferred", "timefusion.tantivy.recovery_deferred", "timefusion.tantivy.build_failures")
+        sql: *rate_m
+        unit: /min
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries_line'
+        title: 'Tantivy Cache on Disk'
+        query: metrics | where metric_name == "timefusion.tantivy.cache_disk_bytes" | summarize max(value) by bin_auto(timestamp)
+        unit: bytes
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries'
+        title: 'Tantivy Histograms (/min)'
+        description: 'Exact count-histogram requests answered from indexed docs: snapshots, parquet prepares, distinct partitions, delta-cache hits.'
+        query: metrics | where metric_name in ("timefusion_tantivy_histogram_snapshots_total", "timefusion_tantivy_histogram_parquet_prepares_total", "timefusion_tantivy_histogram_unique_partitions_total", "timefusion_tantivy_histogram_delta_cache_hits_total")
+        sql: *rate_m
+        unit: /min
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries'
+        title: 'Planning & Scan Time'
+        description: 'Microseconds per second spent building table providers, scanning them, planning the buffer leg, the three steps of the file-pruned scan, Tantivy scans and URI resolution, and backfill manifest commits. The biggest band is where query CPU goes.'
+        query: metrics | where metric_name in ("timefusion.scan.provider_build_us_total", "timefusion.scan.provider_scan_us_total", "timefusion.scan.mem_plan_us_total", "timefusion.scan.pruned_select_us", "timefusion.scan.pruned_build_us", "timefusion.scan.pruned_scan_us", "timefusion.scan.tantivy_scan_us", "timefusion.scan.tantivy_uris_us", "timefusion.scan.tantivy_manifest_commit_us")
+        sql: *rate_s
+        unit: us
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries'
+        title: 'Planning Calls & Provider Cache (/min)'
+        description: 'Provider builds and scans, buffer-leg plans, pruned-scan calls, and the provider cache hit/miss/eviction split. Misses close to builds = the cache is not helping.'
+        query: metrics | where metric_name in ("timefusion.scan.provider_build_total", "timefusion.scan.provider_scan_total", "timefusion.scan.mem_plan_total", "timefusion.scan.pruned_calls", "timefusion.scan.provider_cache_hits", "timefusion.scan.provider_cache_misses", "timefusion.scan.provider_cache_evictions", "timefusion.scan.mem_ordering_declared")
+        sql: *rate_m
+        unit: /min
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries'
+        title: 'Scan Volume (/s)'
+        description: 'Files selected by the pruned scan per second, and wide scans over the size threshold.'
+        query: metrics | where metric_name in ("timefusion.scan.pruned_files", "timefusion.scan.wide_scan_oversize_total")
+        sql: *rate_s
+        unit: /s
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries'
+        title: 'Bytes Decoded by Scans (/s)'
+        query: metrics | where metric_name == "timefusion.scan.decode_bytes_total"
+        sql: *rate_s
+        unit: bytes
         layout: { w: 6, h: 4 }
