@@ -123,10 +123,10 @@ for (const [route, container, filters] of [...views, ["containers", "containersC
     try {
       await page.goto(`/p/${DEMO_PROJECT}/infrastructure/${route}?${new URLSearchParams({ ...filters, from: "", to: "", since: "5M" })}&since=5m`, { waitUntil: "commit" });
       const entries = page.locator(`#${container} ${route === "host-map" ? "button[data-hx-get]" : 'tr[role="button"]'}`);
-      await page.waitForFunction(() => Boolean((window as any).htmx && document.querySelector("[data-deferred-shell]")));
+      await page.waitForFunction(() => Boolean((window as any).htmx));
       await expect.poll(() => page.evaluate(() => typeof (window as any).params)).toBe("undefined");
-      // Process the actual shell before deferred application globals arrive.
-      await page.evaluate(() => (window as any).htmx.process(document.querySelector("[data-deferred-shell]")));
+      // The shell may have loaded automatically before this test reaches it.
+      await page.evaluate(() => { const shell = document.querySelector("[data-deferred-shell]"); if (shell) (window as any).htmx.process(shell); });
       await expect(entries).toHaveCount(1);
       expect(new URL((await entries.first().getAttribute("data-hx-get"))!, page.url()).searchParams.get("since")).toBe("5m");
     } finally { release(); }
