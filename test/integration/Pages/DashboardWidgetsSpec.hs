@@ -393,6 +393,23 @@ spec = sequential $ aroundAll withTestResources do
       formTag `shouldSatisfy` T.isInfixOf "errorToast"
 
   describe "The add-widget experience" do
+    it "widget thresholds are editable without creating a monitor" \tr -> do
+      dashId <- newDashboard tr "overview.yaml" "Widget Display Thresholds"
+      (_, newEditor) <- testServant tr $ Dashboards.dashboardWidgetNewGetH testPid dashId Nothing Nothing Nothing
+      let newHtml = toStrict $ renderText newEditor
+      for_ ["Widget thresholds", "Measurement unit", "widgetJSON.alert_threshold", "widgetJSON.warning_threshold"] \fragment ->
+        newHtml `shouldSatisfy` T.isInfixOf fragment
+
+      let widget = (widgetOf Widget.WTTimeseries "Thresholded"){Widget.alertThreshold = Just 10, Widget.warningThreshold = Just 7, Widget.unit = Just "requests/s"}
+      _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid dashId Nothing Nothing widget
+      wid <- firstWidgetId =<< storedWidgets tr dashId
+      (_, editEditor) <- testServant tr $ Dashboards.dashboardWidgetExpandGetH testPid dashId wid
+      let editHtml = toStrict $ renderText editEditor
+      editHtml `shouldSatisfy` T.isInfixOf "Widget thresholds"
+      editHtml `shouldSatisfy` T.isInfixOf "Monitors"
+      only <- onlyWidget =<< storedWidgets tr dashId
+      (only.alertThreshold, only.warningThreshold, only.unit) `shouldBe` (Just 10, Just 7, Just "requests/s")
+
     -- Opening "add widget" on a dashboard must start on a chart. Logs is a full log
     -- table: it is the wrong thing to drop on a dashboard by default, and it is the
     -- most expensive one to render.
