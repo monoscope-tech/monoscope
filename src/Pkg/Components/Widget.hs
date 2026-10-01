@@ -228,6 +228,9 @@ data Widget = Widget
   , icon :: Maybe Text
   , timeseriesStatAggregate :: Maybe Text -- average, min, max, sum, etc
   , sql :: Maybe Text
+  , rollupSql :: Maybe Text
+  -- ^ Postgres SQL over an hourly rollup of the same series as @query@; the server
+  -- prefers it for wide, unscoped windows (see 'Web.Routes.rollupRoute').
   , defaultSort :: Maybe SqlOrder -- Trusted default ORDER BY for the {{table_sort}} SQL slot
   , rawQuery :: Maybe Text -- Original KQL query with {{const-...}} placeholders (for editor display)
   , summarizeBy :: Maybe SummarizeBy
@@ -1228,6 +1231,7 @@ renderChart widget = do
                 -- Same reason as echartOptJS: a backtick or a ${…} in stored SQL
                 -- would otherwise end the template literal or interpolate.
                 querySQLJS = encodeText $ maybeToMonoid widget.sql
+                rollupSQLJS = encodeText widget.rollupSql
                 chartType = mapWidgetTypeToChartType widget.wType
                 summarizeBy = toText $ encodeEnumSC @"SB" sumBy
                 summarizeByPfx = summarizeByPrefix sumBy
@@ -1264,6 +1268,7 @@ renderChart widget = do
                   widgetType: ${wType},
                   query: ${query},
                   querySQL: ${querySQLJS},
+                  rollupSQL: ${rollupSQLJS},
                   dbSource: ${dbSourceJS},
                   theme: "${theme}",
                   yAxisLabel: "${yAxisLabel}",

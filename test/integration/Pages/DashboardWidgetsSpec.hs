@@ -32,6 +32,7 @@ import Pages.BodyWrapper (BWConfig (..), NavigationResponse (..), PageCtx (..))
 import Pages.Charts.Charts qualified as Charts
 import Pages.Dashboards (DashboardFilters (..))
 import Pages.Dashboards qualified as Dashboards
+import Pages.Issues qualified as Issues
 import Pkg.Components.Widget qualified as Widget
 import Pkg.QueryCache qualified as QueryCache
 import Pkg.TestClock (getTestTime, setTestTime)
@@ -627,6 +628,15 @@ spec = sequential $ aroundAll withTestResources do
     it "routes the statement at the store the variable declared" \tr -> do
       (_, md) <- testServant tr $ addRespHeaders =<< Routes.chartsDataGetH (Just "postgres") (Just Charts.DTText) (Just testPid) Nothing (Just endpointsSql) (Just "24H") Nothing Nothing Nothing Nothing []
       md.error `shouldBe` Nothing
+
+    -- The issue volume chart's KQL scans every row of its window on TimeFusion (4-27s
+    -- for a day in prod); a wide, unscoped window is answered from the hourly rollup.
+    it "answers a wide window from the hourly rollup and a narrow one from the query" \tr -> do
+      now <- getTestTime tr.trTestClock
+      _ <- withResource tr.trPool \conn -> PG.execute conn [SqlQQ.sql|INSERT INTO apis.log_pattern_hourly_stats (project_id, pattern_hash, hour_bucket, event_count) VALUES (?, 'rollup-route', date_trunc('hour', ?::timestamptz) - interval '2 hours', 7)|] (testPid, now)
+      let rollup = Issues.hourlyRollupSql "apis.log_pattern_hourly_stats" "pattern_hash = 'rollup-route'"
+          total since = testServant tr (addRespHeaders =<< Routes.chartsDataGetH Nothing (Just Charts.DTMetric) (Just testPid) (Just "hashes[*]==\"pat:rollup-route\" | summarize count(*) by bin_auto(timestamp)") Nothing (Just since) Nothing Nothing Nothing Nothing [("rollup_sql", Just rollup)]) <&> \(_, md) -> sum (md.dataset >>= V.catMaybes . V.drop 1)
+      (,) <$> total "24H" <*> total "3H" >>= (`shouldBe` (7, 0))
 
   describe "Streaming chart results" do
     let sql = "SELECT i::bigint, 'value'::text, i::double precision FROM generate_series(1, 3) i"

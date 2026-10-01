@@ -468,13 +468,14 @@ const setStatValue = (widgetData: WidGetData, stats: ChartDataResponse['stats'],
 export const chartDataUrl = ({
   query,
   querySQL,
+  rollupSQL,
   pid,
   chartType,
   dbSource,
   timeFrom,
   timeTo,
   dashboardId,
-}: Pick<WidGetData, 'query' | 'querySQL' | 'pid' | 'chartType' | 'dbSource' | 'timeFrom' | 'timeTo' | 'dashboardId'>): string => {
+}: Pick<WidGetData, 'query' | 'querySQL' | 'rollupSQL' | 'pid' | 'chartType' | 'dbSource' | 'timeFrom' | 'timeTo' | 'dashboardId'>): string => {
   const params = new URLSearchParams(window.location.search);
   params.set('pid', pid);
   if (dashboardId) params.set('dashboard_id', dashboardId);
@@ -519,6 +520,7 @@ export const chartDataUrl = ({
   }
 
   if (querySQL && querySQL !== 'null') params.set('query_sql', querySQL);
+  if (rollupSQL) params.set('rollup_sql', rollupSQL);
 
   return `/chart_data?${params}`;
 };
@@ -768,6 +770,7 @@ type WidGetData = {
   query: string;
   sql: string;
   querySQL: string;
+  rollupSQL?: string | null;
   dbSource?: string | null;
   theme: string;
   yAxisLabel: string;

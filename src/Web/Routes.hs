@@ -8,6 +8,7 @@ import Data.ByteString.Builder (Builder)
 import Data.Default (def)
 import Data.List qualified as L
 import Data.Ord (clamp)
+import Data.Time (UTCTime, diffUTCTime)
 import Data.UUID qualified as UUID
 import Deriving.Aeson.Stock qualified as DAE
 import GHC.TypeLits (Symbol)
@@ -119,6 +120,7 @@ import Pages.Share qualified as Share
 import Pages.Telemetry qualified as Metrics
 import Pages.Telemetry qualified as Trace
 import Pkg.Components.Table qualified as Table
+import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.EmailTemplates qualified as ET
 import Pkg.Git qualified as Git
@@ -1327,17 +1329,44 @@ guardClientPostgresSql dbSource pidM querySqlM =
   whenJust (clientPostgresSqlRejection dbSource pidM querySqlM) \msg -> Error.throwError err400{errBody = toLazy (encodeUtf8 msg)}
 
 
+-- | @rollup_sql@ is a Postgres statement over an hourly rollup that answers the same
+-- series as the chart's KQL query. It replaces the query once the window holds at
+-- least six hourly bars, and only while no environment or service scope applies,
+-- since the rollup has no column to honour one. Everything else stays on the query.
+--
+-- >>> let now = Parser.fixedUTCTime; tp s = TimePicker.TimePicker (Just s) Nothing Nothing; r = [("rollup_sql", Just "R")]
+-- >>> rollupRoute now (tp "24H") r (Nothing, Nothing)
+-- (Just "postgres",Just "R")
+-- >>> rollupRoute now (tp "3H") r (Nothing, Nothing)
+-- (Nothing,Nothing)
+-- >>> rollupRoute now (tp "24H") (("environment", Just "prod") : r) (Nothing, Nothing)
+-- (Nothing,Nothing)
+-- >>> rollupRoute now (tp "24H") (("environment", Nothing) : r) (Nothing, Nothing)
+-- (Just "postgres",Just "R")
+rollupRoute :: UTCTime -> TimePicker.TimePicker -> [(Text, Maybe Text)] -> (Maybe Text, Maybe Text) -> (Maybe Text, Maybe Text)
+rollupRoute now tp params source = case param "rollup_sql" of
+  Just rollup | all (isNothing . param) ["environment", "service"], Just start <- fromM, diffUTCTime (fromMaybe now toM) start >= 6 * 3600 -> (Just "postgres", Just rollup)
+  _ -> source
+  where
+    param k = Utils.nonEmptyT $ join $ L.lookup k params
+    (fromM, toM, _) = TimePicker.parseTimeRange now tp
+
+
 chartsDataGetH :: Maybe Text -> Maybe Charts.DataType -> Maybe Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Parser.BinDensity -> [(Text, Maybe Text)] -> ATAuthCtx Charts.MetricsData
-chartsDataGetH dbSource dt pid q qSql since fromD toD src density params = do
-  guardClientPostgresSql dbSource pid qSql
+chartsDataGetH dbSource0 dt pid q qSql0 since fromD toD src density params = do
   scopedParams <- chartScopeParams pid params
+  now <- Time.currentTime
+  let (dbSource, qSql) = rollupRoute now (TimePicker.TimePicker since fromD toD) scopedParams (dbSource0, qSql0)
+  guardClientPostgresSql dbSource pid qSql
   Charts.queryMetrics dbSource dt pid q qSql since fromD toD src density scopedParams
 
 
 chartsDataStreamGetH :: Maybe Text -> Maybe Charts.DataType -> Maybe Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Parser.BinDensity -> [(Text, Maybe Text)] -> ATAuthCtx (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceIO AE.Value))
-chartsDataStreamGetH dbSource dt pid q qSql since fromD toD src density params = do
-  guardClientPostgresSql dbSource pid qSql
+chartsDataStreamGetH dbSource0 dt pid q qSql0 since fromD toD src density params = do
   scopedParams <- chartScopeParams pid params
+  now <- Time.currentTime
+  let (dbSource, qSql) = rollupRoute now (TimePicker.TimePicker since fromD toD) scopedParams (dbSource0, qSql0)
+  guardClientPostgresSql dbSource pid qSql
   Charts.queryMetricsStream dbSource dt pid q qSql since fromD toD src density scopedParams
 
 
