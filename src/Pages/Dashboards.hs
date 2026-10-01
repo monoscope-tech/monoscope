@@ -1776,12 +1776,14 @@ renderDashboardListItem checked title value description icon = label_
   , term "data-description" $ maybeToMonoid description
   ]
   do
-    input_ $ [ class_ "sr-only"
-             , type_ "radio"
-             , name_ "file"
-             , value_ value
-             , term "hx-on:change" "const item = this.closest('label'); const name = document.getElementById('title'); if (!name.value.trim() || name.value === name.dataset.templateTitle) name.value = item.dataset.title; name.dataset.templateTitle = item.dataset.title; dItemDescription.textContent = item.dataset.description; document.querySelectorAll('#dashboardTemplatePreviews [data-template]').forEach(preview => preview.hidden = preview.dataset.template !== this.value)"
-             ] <> [checked_ | checked]
+    input_
+      $ [ class_ "sr-only"
+        , type_ "radio"
+        , name_ "file"
+        , value_ value
+        , term "hx-on:change" "const item = this.closest('label'); const name = document.getElementById('title'); if (!name.value.trim() || name.value === name.dataset.templateTitle) name.value = item.dataset.title; name.dataset.templateTitle = item.dataset.title; dItemDescription.textContent = item.dataset.description; document.querySelectorAll('#dashboardTemplatePreviews [data-template]').forEach(preview => preview.hidden = preview.dataset.template !== this.value)"
+        ]
+      <> [checked_ | checked]
     span_ [class_ "p-1 px-2 bg-fillWeak rounded-md"] $ faSprite_ (fromMaybe "square-dashed" icon) "regular" "w-3 h-3"
     span_ [class_ "grow"] $ toHtml title
     span_ [class_ "px-2 p-1 invisible group-has-[input:checked]/it:visible"] $ faSprite_ "chevron-right" "regular" "w-3 h-3"
@@ -1841,8 +1843,8 @@ dashboardsGet_ dg = do
             div_ [class_ "flex items-center justify-between border-b border-strokeWeak px-4 py-3"] do
               span_ [class_ "text-sm font-medium text-textStrong"] "Empty canvas"
               span_ [class_ "text-xs text-textWeak"] "Layout preview"
-            div_ [class_ "flex flex-1 items-center justify-center bg-fillWeaker p-6"] $
-              div_ [class_ "flex w-full max-w-sm flex-col items-center gap-3 rounded-xl border border-dashed border-strokeWeak bg-bgRaised px-6 py-10 text-center"] do
+            div_ [class_ "flex flex-1 items-center justify-center bg-fillWeaker p-6"]
+              $ div_ [class_ "flex w-full max-w-sm flex-col items-center gap-3 rounded-xl border border-dashed border-strokeWeak bg-bgRaised px-6 py-10 text-center"] do
                 span_ [class_ "rounded-lg bg-fillBrand-weak p-3 text-textBrand"] $ faSprite_ "chart-line" "regular" "h-5 w-5"
                 span_ [class_ "text-sm font-medium text-textStrong"] "Your first chart goes here"
                 span_ [class_ "text-xs text-textWeak"] "Start with a blank canvas and add widgets after creating it."
@@ -1856,21 +1858,26 @@ dashboardsGet_ dg = do
                   span_ [class_ "shrink-0 text-xs text-textWeak"] "Layout preview · no live data"
                 div_ [class_ "min-h-0 flex-1 overflow-y-auto bg-fillWeaker p-3"] $ div_ [class_ "grid grid-cols-12 gap-2"] do
                   forM_ (take 24 widgets) \widget ->
-                    div_ [class_ $ "col-span-6 flex min-h-28 min-w-0 flex-col rounded-lg border border-strokeWeak bg-bgRaised p-3 " <> (case widget.layout >>= (.w) of
-                      Just w | w <= 3 -> "sm:col-span-3"
-                      Just w | w <= 4 -> "sm:col-span-4"
-                      Just w | w <= 6 -> "sm:col-span-6"
-                      _ -> "sm:col-span-12")
-                      ] do
-                      p_ [class_ "truncate text-xs font-medium text-textStrong", title_ $ fromMaybe "Untitled widget" widget.title] $ toHtml $ fromMaybe "Untitled widget" widget.title
-                      p_ [class_ "mt-1 text-[10px] text-textWeak"] $ toHtml $ T.toTitle $ T.replace "_" " " $ toText $ encodeEnumSC @"WT" widget.wType
-                      if widget.wType `elem` [Widget.WTStat, Widget.WTTimeseriesStat]
-                        then div_ [class_ "mt-auto pt-3"] do
-                          div_ [class_ "h-5 w-16 rounded bg-fillBrand-weak"] ""
-                          div_ [class_ "mt-2 h-1.5 w-24 max-w-full rounded bg-fillWeak"] ""
-                        else div_ [class_ "mt-auto flex h-12 items-end gap-1 border-b border-strokeWeak pt-3"] do
-                          forM_ [5, 7, 4, 9, 6, 8, 5] \height ->
-                            div_ [class_ "max-w-4 flex-1 rounded-t bg-fillBrand-weak", style_ $ "height:" <> show (height * 10) <> "%"] ""
+                    div_
+                      [ class_
+                          $ "col-span-6 flex min-h-28 min-w-0 flex-col rounded-lg border border-strokeWeak bg-bgRaised p-3 "
+                          <> ( case widget.layout >>= (.w) of
+                                 Just w | w <= 3 -> "sm:col-span-3"
+                                 Just w | w <= 4 -> "sm:col-span-4"
+                                 Just w | w <= 6 -> "sm:col-span-6"
+                                 _ -> "sm:col-span-12"
+                             )
+                      ]
+                      do
+                        p_ [class_ "truncate text-xs font-medium text-textStrong", title_ $ fromMaybe "Untitled widget" widget.title] $ toHtml $ fromMaybe "Untitled widget" widget.title
+                        p_ [class_ "mt-1 text-[10px] text-textWeak"] $ toHtml $ T.toTitle $ T.replace "_" " " $ toText $ encodeEnumSC @"WT" widget.wType
+                        if widget.wType `elem` [Widget.WTStat, Widget.WTTimeseriesStat]
+                          then div_ [class_ "mt-auto pt-3"] do
+                            div_ [class_ "h-5 w-16 rounded bg-fillBrand-weak"] ""
+                            div_ [class_ "mt-2 h-1.5 w-24 max-w-full rounded bg-fillWeak"] ""
+                          else div_ [class_ "mt-auto flex h-12 items-end gap-1 border-b border-strokeWeak pt-3"] do
+                            forM_ [5, 7, 4, 9, 6, 8, 5] \height ->
+                              div_ [class_ "max-w-4 flex-1 rounded-t bg-fillBrand-weak", style_ $ "height:" <> show (height * 10) <> "%"] ""
                   when (length widgets > 24) $ p_ [class_ "col-span-12 py-2 text-center text-xs text-textWeak"] $ toHtml $ "+ " <> show (length widgets - 24) <> " more widgets"
         div_ [class_ "flex shrink-0 justify-end border-t border-strokeWeak pt-3"] $ primaryButton_ [type_ "submit"] "Create"
 
