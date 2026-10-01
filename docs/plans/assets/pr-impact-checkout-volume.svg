@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="270" viewBox="0 0 640 270" role="img" aria-labelledby="title desc">
+  <title id="title">Checkout spans per day</title>
+  <desc id="desc">Production, September 24 to 30. Daily counts in thousands: 164, 169, 171, 174, 170, 176, 176. Total 1.2 million spans.</desc>
+  <rect width="640" height="270" rx="12" fill="#ffffff"/>
+  <text x="28" y="34" fill="#172554" font-family="Arial, sans-serif" font-size="18" font-weight="700">Checkout spans per day</text>
+  <text x="28" y="54" fill="#526176" font-family="Arial, sans-serif" font-size="12">Production · Sep 24–30 · 1.2M spans</text>
+  <g stroke="#dce4ed" stroke-width="1">
+    <line x1="69" y1="78" x2="615" y2="78"/>
+    <line x1="69" y1="147" x2="615" y2="147"/>
+    <line x1="69" y1="216" x2="615" y2="216"/>
+  </g>
+  <g fill="#526176" font-family="Arial, sans-serif" font-size="11" text-anchor="end">
+    <text x="61" y="82">200k</text>
+    <text x="61" y="151">100k</text>
+    <text x="61" y="220">0</text>
+  </g>
+  <g fill="#2563eb">
+    <rect x="88" y="103" width="42" height="113" rx="3"/>
+    <rect x="164" y="99" width="42" height="117" rx="3"/>
+    <rect x="240" y="98" width="42" height="118" rx="3"/>
+    <rect x="316" y="96" width="42" height="120" rx="3"/>
+    <rect x="392" y="99" width="42" height="117" rx="3"/>
+    <rect x="468" y="95" width="42" height="121" rx="3"/>
+    <rect x="544" y="95" width="42" height="121" rx="3"/>
+  </g>
+  <g fill="#172554" font-family="Arial, sans-serif" font-size="11" font-weight="700" text-anchor="middle">
+    <text x="109" y="96">164k</text>
+    <text x="185" y="92">169k</text>
+    <text x="261" y="91">171k</text>
+    <text x="337" y="89">174k</text>
+    <text x="413" y="92">170k</text>
+    <text x="489" y="88">176k</text>
+    <text x="565" y="88">176k</text>
+  </g>
+  <g fill="#526176" font-family="Arial, sans-serif" font-size="11" text-anchor="middle">
+    <text x="109" y="238">Sep 24</text>
+    <text x="185" y="238">25</text>
+    <text x="261" y="238">26</text>
+    <text x="337" y="238">27</text>
+    <text x="413" y="238">28</text>
+    <text x="489" y="238">29</text>
+    <text x="565" y="238">30</text>
+  </g>
+</svg>

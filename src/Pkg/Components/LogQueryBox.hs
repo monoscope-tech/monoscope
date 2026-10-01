@@ -302,7 +302,8 @@ logQueryBox_ config = do
 
         -- One shared control group across breakpoints: duplicate mobile/desktop
         -- Timeline controls can both become visible when conditional variants win.
-        div_ [class_ "flex items-center justify-end gap-3 max-md:w-full"] do
+        -- Explorer-only: the widget editor has no timeline, and its Monitors tab owns alerts.
+        whenNothing_ config.targetWidgetPreview $ div_ [class_ "flex items-center justify-end gap-3 max-md:w-full"] do
           label_ [class_ "flex min-h-8 cursor-pointer items-center gap-1.5 text-xs text-textWeak hover:text-textStrong"] do
             input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart", [__|init if window.innerWidth < 768 set my.checked to true|]]
             span_ "Hide timeline"

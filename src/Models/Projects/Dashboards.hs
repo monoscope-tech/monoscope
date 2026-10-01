@@ -17,6 +17,7 @@ module Models.Projects.Dashboards (
   readDashboardsFromDirectory,
   readDashboardEndpoint,
   validateDashboard,
+  allWidgets,
   replaceDashboardVariables,
   deleteDashboardsByIds,
   addTeamsToDashboards,
@@ -257,6 +258,11 @@ readDashboardEndpoint uri = do
     >>= validateDashboard
 
 
+-- | Every widget across root and tabs, group children included.
+allWidgets :: Dashboard -> [Widget.Widget]
+allWidgets dashboard = foldMap (universeOf (#children . _Just . folded)) $ dashboard.widgets <> foldMap (concatMap (.widgets)) dashboard.tabs
+
+
 -- | Reject handwritten sortable SQL unless it exposes the trusted sort slot
 -- and a fallback order. Without both, the browser can display a sortable header
 -- while the database still limits the original order, which is a false control.
@@ -265,11 +271,9 @@ validateDashboard dashboard = case violations of
   [] -> Right dashboard
   xs -> Left $ "sortable SQL widgets require {{table_sort}} and default_sort: " <> T.intercalate ", " xs
   where
-    widgets = concatMap flatten $ dashboard.widgets <> maybe [] (concatMap (.widgets)) dashboard.tabs
-    flatten widget = widget : maybe [] (concatMap flatten) widget.children
     violations =
       [ fromMaybe "<untitled>" widget.title
-      | widget <- widgets
+      | widget <- allWidgets dashboard
       , any ((== Just True) . (.sortable)) $ fromMaybe [] widget.columns
       , Just sql <- [widget.sql]
       , isNothing widget.defaultSort || not ("{{table_sort}}" `T.isInfixOf` sql)

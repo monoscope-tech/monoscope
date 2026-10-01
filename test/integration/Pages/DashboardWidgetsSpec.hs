@@ -24,6 +24,7 @@ import Database.PostgreSQL.Simple.SqlQQ qualified as SqlQQ
 import GHC.Clock (getMonotonicTime)
 import Lucid (renderText, toHtml)
 import Models.Apis.Endpoints qualified as Endpoints
+import Models.Projects.DashboardTemplates (loadDashboardFromVM)
 import Models.Projects.Dashboards (DashboardVM (..))
 import Models.Projects.Dashboards qualified as DashboardModel
 import Models.Projects.Projects (Session (..))
@@ -292,6 +293,38 @@ spec = sequential $ aroundAll withTestResources do
       let tabTwoIds = mapMaybe (.id) tabTwo
       length tabTwoIds `shouldBe` 3
       length (ordNub tabTwoIds) `shouldBe` 3
+
+    -- Regression: the list counted only root widgets, so a tabbed template (root
+    -- `widgets: []`) showed 0 and group children were never counted.
+    it "the dashboard list counts tab and group widgets" \tr -> do
+      _ <- newDashboard tr "_overview.yaml" "Tabbed Count"
+      (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing noFilters
+      case pg of
+        Dashboards.DashboardsGet (PageCtx _ d) -> do
+          let leaves = filter ((/= Widget.WTGroup) . (.wType)) $ foldMap DashboardModel.allWidgets $ V.toList d.dashboards >>= maybeToList . loadDashboardFromVM d.dashTemplates
+          length leaves `shouldSatisfy` (> 20)
+          toStrict (renderText $ toHtml pg) `shouldSatisfy` T.isInfixOf (show (length leaves) <> " widgets")
+        _ -> fail "Expected DashboardsGet response"
+
+    -- Regression: the expand drawer saved without a tab slug, so a rename of a tab's
+    -- widget (or a group child) updated the root list, matched nothing, and still toasted.
+    it "renames tab and group widgets despite a missing or wrong tab slug" \tr -> do
+      dashId <- newTabbedDashboard tr
+      let save wid slug t = runAsBase tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.dashboardWidgetPutH testPid dashId (Just wid) slug (widgetOf Widget.WTStat t)
+      void $ save "second-widget" Nothing "Renamed Second"
+      map (.title) <$> tabWidgets tr dashId "second-tab" >>= (`shouldBe` [Just "Renamed Second"])
+      void $ save "second-widget" (Just "first-tab") "Still Second"
+      map (.title) <$> tabWidgets tr dashId "second-tab" >>= (`shouldBe` [Just "Still Second"])
+      save "no-such-widget" Nothing "Ghost" `shouldThrow` anyIOException
+      -- Ids repeat across tabs (slugified template titles), so a sent tab that holds the id wins.
+      _ <- testServant tr $ Dashboards.dashboardYamlPutH testPid dashId Dashboards.YamlForm{Dashboards.yaml = "title: Dup\nwidgets: []\ntabs:\n  - name: First Tab\n    widgets:\n      - { type: stat, id: dup, title: One, layout: { x: 0, y: 0, w: 3, h: 3 } }\n  - name: Second Tab\n    widgets:\n      - { type: stat, id: dup, title: Two, layout: { x: 0, y: 0, w: 3, h: 3 } }\n"}
+      void $ save "dup" (Just "second-tab") "Renamed Two"
+      (,) <$> (map (.title) <$> tabWidgets tr dashId "first-tab") <*> (map (.title) <$> tabWidgets tr dashId "second-tab") >>= (`shouldBe` ([Just "One"], [Just "Renamed Two"]))
+
+      groupDash <- newDashboard tr "overview.yaml" "Grouped"
+      _ <- testServant tr $ Dashboards.dashboardYamlPutH testPid groupDash Dashboards.YamlForm{Dashboards.yaml = "title: Grouped\nwidgets:\n  - type: group\n    id: grp\n    title: Group\n    layout: { x: 0, y: 0, w: 12, h: 4 }\n    children:\n      - type: stat\n        id: inner\n        title: Inner\n        layout: { x: 0, y: 0, w: 3, h: 2 }\n"}
+      void $ runAsBase tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.dashboardWidgetPutH testPid groupDash (Just "inner") Nothing (widgetOf Widget.WTStat "Renamed Inner")
+      map (.title) . foldMap (fold . (.children)) <$> storedWidgets tr groupDash >>= (`shouldBe` [Just "Renamed Inner"])
 
   -- Rendering, not persistence: a widget the canvas cannot address is a widget the next
   -- drag deletes, because the reorder patch is built by walking `#<id>_widgetEl` elements

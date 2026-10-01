@@ -240,14 +240,19 @@ describe('malformed input', () => {
     expect(params().get('since')).toBe('1H');
   });
 
-  test('a prefixed picker is addressed by its own ids', () => {
+  test('a URL range relabels every picker; a local-only one just its own', () => {
     const other = mountPicker('n');
     const mine = mountPicker('alertPr');
 
+    // Both pickers read the page URL, so a range written there is every picker's range
+    // (the widget editor's picker used to keep showing the stale one).
     updateTimePicker({ since: '2H' }, { targetPr: 'alertPr' });
-
     expect(mine.label.innerText).toBe('Last 2 Hours');
-    expect(other.label.innerText ?? '').toBe(''); // the default picker is left alone
+    expect(other.label.innerText).toBe('Last 2 Hours');
+
+    updateTimePicker({ since: '6H' }, { targetPr: 'alertPr', skipSetParams: true });
+    expect(mine.label.innerText).toBe('Last 6 Hours');
+    expect(other.label.innerText).toBe('Last 2 Hours');
   });
 });
 

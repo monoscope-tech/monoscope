@@ -216,6 +216,15 @@ spec = sequential $ aroundAll withTestResources do
       show overview `shouldNotContain` "telemetry.metrics"
       show overview `shouldNotContain` "metric_value"
 
+    -- Regression: the overview's Infra stats selected `…::text || '%'`, and the stat path
+    -- decodes a number, so every one rendered "Query execution failed".
+    it "every template's SQL stat widget decodes as a number" \tr -> do
+      stats <- filter (\w -> w.wType == Widget.WTStat && isJust w.sql) . foldMap DashboardModel.allWidgets <$> DashboardModel.readDashboardsFromDisk "static/public/dashboards"
+      length stats `shouldSatisfy` (> 3)
+      for_ stats \w -> do
+        md <- runQueryEffect tr $ runConcurrent $ Dashboards.widgetMetrics testPid (Just "24h", Nothing, Nothing) [] w
+        (w.title, md.error :: Maybe Text) `shouldBe` (w.title, Nothing)
+
     it "dashboard SQL source migrations remain byte-for-byte immutable" \_ -> do
       migration0119 <- readFileBS "static/migrations/0119_endpoint_dashboard_sql_source.sql"
       migration0120 <- readFileBS "static/migrations/0120_repair_dashboard_sql_source.sql"
@@ -320,6 +329,20 @@ spec = sequential $ aroundAll withTestResources do
       html `shouldSatisfy` T.isInfixOf "No dashboards yet"
       html `shouldSatisfy` T.isInfixOf "for=\"newDashboardMdl\""
       html `shouldSatisfy` (not . T.isInfixOf "href=\"newDashboardMdl\"")
+
+    it "dashboardTemplatePicker_prefillsNameAndPreviewsEveryTemplate" \tr -> do
+      (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters
+      let html = TL.toStrict $ renderText $ toHtml pg
+      html `shouldSatisfy` T.isInfixOf "value=\"Blank dashboard\""
+      html `shouldSatisfy` T.isInfixOf "data-title=\"Nginx\""
+      html `shouldSatisfy` T.isInfixOf "data-template=\"nginx.yaml\""
+      html `shouldSatisfy` T.isInfixOf "Requests"
+      html `shouldSatisfy` (not . T.isInfixOf "http-stats.svg")
+      case pg of
+        Dashboards.DashboardsGet (PageCtx _ d) ->
+          forM_ d.dashTemplates \template ->
+            html `shouldSatisfy` T.isInfixOf ("data-template=\"" <> fromMaybe "" template.file <> "\"")
+        _ -> fail "Expected full dashboard list response"
 
     it "dashboard list omits the global service selector" \tr -> do
       (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters

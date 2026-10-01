@@ -6,15 +6,16 @@ const cluster = "8b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d";
 const provider = "e2e-infra-provider";
 const cleanup = `DELETE FROM otel_metrics WHERE project_id='${DEMO_PROJECT}' AND resource->'k8s'->'namespace'->>'name'='${namespace}';`;
 test.beforeAll(async ({ request }) => {
+  test.setTimeout(90_000);
   if (!process.env.E2E_BASE_URL) return;
   sql(cleanup + [30, 600].map(age => `INSERT INTO otel_metrics (project_id,id,series_id,timestamp,metric_name,metric_type,value,resource___k8s___container___name,resource___k8s___pod___name,resource___k8s___namespace___name,resource)
     VALUES ('${DEMO_PROJECT}',gen_random_uuid(),'infra-preset-${age}','${new Date(Date.now() - age * 1000).toISOString()}','container.cpu.usage','GAUGE',1,'infra-preset-${age}','infra-preset-pod-${age}','${namespace}',
       '${JSON.stringify({ k8s: { container: { name: `infra-preset-${age}` }, pod: { name: `infra-preset-pod-${age}` }, namespace: { name: namespace }, cluster: { uid: cluster }, node: { name: `infra-preset-host-${age}` } }, container: { image: { name: `registry.example/infra-preset-${age}` } }, cloud: { provider, region: "e2e-infra-region" } })}');`).join(""));
-  // Match the page's raw cache key; earlier fixture pages omit from/to.
-  await expect.poll(async () => {
-    const response = await request.get(`/p/${DEMO_PROJECT}/infrastructure/hosts?${new URLSearchParams({ provider, group: "region", from: "", to: "", since: "5m", deferred: "1" })}`);
+  // Match both page cache keys before asserting the picker changes the inventory.
+  for (const [since, host] of [["5m", "infra-preset-host-30"], ["1H", "infra-preset-host-600"]]) await expect.poll(async () => {
+    const response = await request.get(`/p/${DEMO_PROJECT}/infrastructure/hosts?${new URLSearchParams({ provider, group: "region", from: "", to: "", since, deferred: "1" })}`);
     expect(response.status()).toBe(200);
-    return (await response.text()).includes("infra-preset-host-30");
+    return (await response.text()).includes(host);
   }, { timeout: 40_000 }).toBe(true);
 });
 test.afterAll(() => { if (process.env.E2E_BASE_URL) sql(cleanup); });
@@ -122,10 +123,10 @@ for (const [route, container, filters] of [...views, ["containers", "containersC
     try {
       await page.goto(`/p/${DEMO_PROJECT}/infrastructure/${route}?${new URLSearchParams({ ...filters, from: "", to: "", since: "5M" })}&since=5m`, { waitUntil: "commit" });
       const entries = page.locator(`#${container} ${route === "host-map" ? "button[data-hx-get]" : 'tr[role="button"]'}`);
-      await page.waitForFunction(() => Boolean((window as any).htmx && document.querySelector("[data-deferred-shell]")));
+      await page.waitForFunction(() => Boolean((window as any).htmx));
       await expect.poll(() => page.evaluate(() => typeof (window as any).params)).toBe("undefined");
-      // Process the actual shell before deferred application globals arrive.
-      await page.evaluate(() => (window as any).htmx.process(document.querySelector("[data-deferred-shell]")));
+      // The shell may have loaded automatically before this test reaches it.
+      await page.evaluate(() => { const shell = document.querySelector("[data-deferred-shell]"); if (shell) (window as any).htmx.process(shell); });
       await expect(entries).toHaveCount(1);
       expect(new URL((await entries.first().getAttribute("data-hx-get"))!, page.url()).searchParams.get("since")).toBe("5m");
     } finally { release(); }

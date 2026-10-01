@@ -52,7 +52,7 @@ type Dash = { id: string; title: string };
 async function makeDashboard(page: Page, title: string, template = "Blank dashboard"): Promise<Dash> {
   await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
   await page.locator('label[for="newDashboardMdl"]').first().click();
-  await page.getByText(template, { exact: true }).click();
+  await page.locator("#dashListItemParent").getByText(template, { exact: true }).click();
   await page.getByRole("textbox", { name: "Dashboard name *", exact: true }).fill(title);
   await page.getByRole("button", { name: "Create" }).first().click();
   await page.waitForURL(/\/dashboards\/[0-9a-f-]{36}/i, { timeout: 60000 });
@@ -93,6 +93,31 @@ async function openWidgetDrawer(page: Page) {
   await page.locator('[aria-label="Add a new widget"]').first().click();
   await expect(page.locator("#visualizationTabs")).toBeVisible({ timeout: 20000 });
 }
+
+test("dashboard templates prefill the name and preview their own widgets", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`/p/${DEMO_PROJECT}/dashboards?new=true`);
+  const modal = page.locator("#newDashboardMdl + .modal .modal-box");
+  const preview = page.locator("#dashboardTemplatePreviews");
+  const create = page.getByRole("button", { name: "Create", exact: true });
+  const initial = { modal: await modal.boundingBox(), preview: await preview.boundingBox(), create: await create.boundingBox() };
+  const name = page.getByRole("textbox", { name: "Dashboard name *", exact: true });
+  await expect(name).toHaveValue("Blank dashboard");
+  await page.locator("#dashListItemParent").getByText("Nginx", { exact: true }).click();
+  await expect(name).toHaveValue("Nginx");
+  await expect(page.locator('#dashboardTemplatePreviews [data-template="nginx.yaml"]')).toBeVisible();
+  await expect(page.locator('#dashboardTemplatePreviews [data-template="nginx.yaml"]')).toContainText("Requests");
+  const selected = { modal: await modal.boundingBox(), preview: await preview.boundingBox(), create: await create.boundingBox() };
+  for (const part of ["modal", "preview", "create"] as const) {
+    for (const edge of ["x", "y", "width", "height"] as const) {
+      expect(Math.abs(selected[part]![edge] - initial[part]![edge]), `${part} ${edge} moved`).toBeLessThan(1);
+    }
+  }
+  await name.fill("My infrastructure");
+  await page.locator("#dashListItemParent").getByText("Redis", { exact: true }).click();
+  await expect(name).toHaveValue("My infrastructure");
+  await expect(page.locator('#dashboardTemplatePreviews [data-template="redis.yaml"]')).toBeVisible();
+});
 
 test.describe("adding widgets to a dashboard", () => {
   // Every test here writes to one shared dashboard.
@@ -586,4 +611,63 @@ test("widget monitors persist independently across dashboards and reopen with sa
   await openWidgetMonitor(page, dashboards[1]);
   await expect(form.locator('[name="alertThreshold"]')).toHaveValue("10.0");
   await expect(form.getByRole("button", { name: "Update monitor", exact: true })).toBeVisible();
+});
+
+// Regressions from one bug report, all on a tabbed template (root `widgets: []`): the list
+// counted 0 widgets and clipped rows below the fold, unstarred stars were invisible until
+// hover, and the expand drawer saved edits to the root list, so a rename silently vanished.
+test("a tabbed dashboard lists its widgets and keeps a rename made in the widget drawer", async ({ page }) => {
+  test.slow();
+  const dash = await makeDashboard(page, `E2E Tabbed ${Date.now()}`, "Overview");
+
+  await page.setViewportSize({ width: 1280, height: 360 });
+  await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
+  const row = page.locator("#dashboardsTable tbody tr", { hasText: dash.title });
+  expect(Number(await row.locator("td").last().innerText())).toBeGreaterThan(0);
+  await expect(row.getByRole("button", { name: "Add dashboard to favorites" })).toHaveCSS("opacity", "1");
+  const lastRow = page.locator("#dashboardsTable tbody tr").last();
+  await page.locator("#main-content").hover();
+  await page.mouse.wheel(0, 5000);
+  await expect.poll(async () => (await lastRow.boundingBox())!.y + (await lastRow.boundingBox())!.height).toBeLessThanOrEqual(360);
+
+  // Escape used to be heard only by the hidden toggle, never by the focused modal content.
+  await page.locator('label[for="newDashboardMdl"]').first().click();
+  await expect(page.locator("#newDashboardMdl")).toBeChecked();
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#newDashboardMdl")).not.toBeChecked();
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`/p/${DEMO_PROJECT}/dashboards/${dash.id}`);
+  // Tab links used to carry the server-rendered range, so a range picked here reset on switch.
+  await page.locator("#n-currentRange").click();
+  await page.locator("#n-timepicker-popover button", { hasText: "Last 24 hours" }).click();
+  await page.getByRole("tab", { name: "Service", exact: true }).click();
+  await expect(page).toHaveURL(/\/tab\/service\?.*since=24H/);
+  await page.getByRole("tab", { name: "Overview", exact: true }).click();
+
+  await page.getByRole("button", { name: "Expand widget", exact: true }).first().click();
+  await page.getByRole("tab", { name: "Edit", exact: true }).click();
+  const editor = page.locator(".widget-editor");
+  // The log explorer's timeline/monitor toggles did nothing here; the Monitors tab owns alerts.
+  await expect(editor.getByText("Hide timeline")).toHaveCount(0);
+  const renamed = `Renamed ${Date.now()}`;
+  await editor.getByRole("textbox", { name: "Widget title" }).fill(renamed);
+  await Promise.all([
+    page.waitForResponse((r) => r.request().method() === "PUT" && r.url().includes("tab=") && r.ok()),
+    editor.getByRole("button", { name: "Save changes" }).click(),
+  ]);
+  await page.reload();
+  await expect(page.getByText(renamed).first()).toBeVisible();
+
+  // The reload keeps ?expand=, so the drawer reopens on the same widget.
+  await page.getByRole("tab", { name: "Edit", exact: true }).click();
+  // The editor links to its Monitors tab only for a KQL widget; a raw-SQL one cannot be monitored.
+  const monitorLink = editor.locator('label[for$="-tab-monitors"]');
+  const hasKql = await page.evaluate(() => Boolean((window as any).widgetJSON.query?.trim()));
+  await expect(monitorLink).toHaveCount(hasKql ? 1 : 0);
+  if (hasKql) {
+    await monitorLink.click();
+    await expect(editor.locator(".page-drawer-tab-monitors")).toBeChecked();
+  }
+  await deleteDashboard(page, dash);
 });

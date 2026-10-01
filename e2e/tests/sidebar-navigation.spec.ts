@@ -53,3 +53,16 @@ test('Explorer stays highlighted through tab navigation and browser history', as
   await expect(page).toHaveURL(/\/service_map(?:\?|$)/);
   await expect(explorer).toHaveAttribute('aria-current', 'page');
 });
+
+// Regressions: the palette's own lazy fetch closed it on the first Cmd+K, the fuzzy filter
+// hid the Ask AI row, and Ask AI navigated with the query alone, dropping its time range.
+test('command palette Ask AI opens the explorer with the AI time range', async ({ page }) => {
+  await page.route('**/log_explorer/ai_search', (route) =>
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify({ query: 'level == "ERROR"', time_range: { since: '1H' } }) }));
+  await page.goto(project + '/dashboards');
+  await page.locator('body').press('Control+k');
+  await page.locator('#cmd-palette-input').fill('errors from checkout in the last hour');
+  await page.locator('[data-ai-action]').click();
+  await expect(page).toHaveURL(/\/log_explorer\?.*since=1H/);
+  expect(new URL(page.url()).searchParams.get('query')).toBe('level == "ERROR"');
+});

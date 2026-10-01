@@ -937,8 +937,8 @@ modalWith_ modalId cfg triggerM contentHtml = do
       , id_ modalId
       , type_ "checkbox"
       , Aria.label_ "Toggle modal"
-      , [__|on keyup if the event's key is 'Escape' set my.checked to false trigger keyup end
-          on closeModal from body set my.checked to false end
+      , -- Escape is heard on window: focus sits inside the modal, which is not this input's subtree.
+        [__|on keyup[key is 'Escape'] from window or closeModal from body if my.checked set my.checked to false then send change to me end
           on change if my.checked then
             add .overflow-hidden to <body/>
             wait 50ms then

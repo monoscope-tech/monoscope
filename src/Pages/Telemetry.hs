@@ -1277,7 +1277,7 @@ metricReferences metricName dashboards monitors = (filter ((> 0) . countWidgetsW
 
 countWidgetsWithMetric :: Text -> Dashboards.DashboardVM -> Int
 countWidgetsWithMetric metricName dashboard =
-  sum $ map (fromEnum . widgetRefsMetric metricName) $ flip foldMap dashboard.schema \schema -> schema.widgets <> foldMap (concatMap (.widgets)) schema.tabs
+  sum $ map (fromEnum . widgetRefsMetric metricName) $ foldMap Dashboards.allWidgets dashboard.schema
 
 
 monitorHasMetric :: Text -> Monitors.QueryMonitor -> Bool
