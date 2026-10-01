@@ -37,6 +37,8 @@ jobs:
       skip_haskell: ${{ steps.haskell.outputs.skip_all }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
       - id: checks
         run: scripts/ci/ci.sh gate
       # Whether the whole container job (image pull + service containers + cabal
@@ -52,6 +54,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -186,6 +190,8 @@ jobs:
       CI_FINGERPRINTS: .ci/fingerprints.tsv
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Cache dist-newstyle
         uses: actions/cache@v5
@@ -324,6 +330,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
