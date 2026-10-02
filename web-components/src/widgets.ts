@@ -3,7 +3,7 @@ import { getSeriesColor, invalidateLogLevelColors } from './colorMapping';
 import { ChartQueryError, readChartResponse } from './chart-stream';
 import { shouldReloadForStaleChunk } from './stale-chunk-reload';
 import { beginChartFetch } from './chart-fetch-seq';
-import { isNearChartViewport } from './chart-initialization';
+import { chartLayoutForSize, isNearChartViewport } from './chart-initialization';
 import { formatNumber, formatBytes, convertToNanoseconds, formatDuration, statScalar, formatStatValue, type StatAggregates } from './stat-value';
 import { echartsUrls } from './assets';
 import { copyParams } from './time-range-utils';
@@ -619,7 +619,8 @@ const applyChartResponse = (chart: any, opt: any, widgetData: WidGetData, data: 
   opt.dataset.source = [headers || [], ...(data.dataset || [])];
   const maximum = widgetData.chartType === 'line' ? data.stats?.max : data.stats?.max_group_sum;
   opt.yAxis = { ...opt.yAxis, max: maximum != null && Number.isFinite(maximum) && maximum > 0 ? maximum : undefined };
-  chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source), true);
+  const el = $(widgetData.chartId);
+  chart.setOption(chartLayoutForSize(updateChartConfiguration(widgetData, opt, opt.dataset.source), el?.clientWidth ?? 0, el?.clientHeight ?? 0), true);
 };
 
 const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widgetData: WidGetData, lifetimeSignal: AbortSignal, showLoader = true) => {
@@ -891,6 +892,7 @@ const attachExemplars = async (chart: any, url: string, signal: AbortSignal) => 
 
 const chartDisposers = new Map<string, () => void>();
 const chartUpdaters = new Map<string, (widgetData: WidGetData) => void>();
+const chartLayoutUpdaters = new Map<string, () => void>();
 const DISPOSABLE_CHARTS = '[data-chart-widget], [data-service-map]';
 
 const disposeChart = (chartId: string) => {
@@ -963,6 +965,7 @@ const processResizeQueue = () => {
       // not canvas — and a missing global must not throw for every other chart in the queue.
       const chart = window.echarts?.getInstanceByDom(chartEl);
       if (chart && !chart.isDisposed()) {
+        chartLayoutUpdaters.get(chartId)?.();
         chart.resize();
       }
     }
@@ -1007,6 +1010,15 @@ const chartWidget = (widgetData: WidGetData) => {
   const theme = isDarkMode ? 'dark' : widgetData.theme || 'default';
   const chart = window.echarts.init(chartEl, theme);
   chart.group = 'default';
+  let compactLayout = false;
+  const sizedOptions = () => chartLayoutForSize(opt, chartEl?.clientWidth ?? 0, chartEl?.clientHeight ?? 0);
+  chartLayoutUpdaters.set(chartId, () => {
+    const layout = sizedOptions();
+    if ((layout !== opt) !== compactLayout) {
+      chart.setOption(layout);
+      compactLayout = layout !== opt;
+    }
+  });
 
   let baseQuery = widgetData.query;
   const updateQuery = () => {
@@ -1022,7 +1034,9 @@ const chartWidget = (widgetData: WidGetData) => {
     if (opt.series?.[0]?.backgroundStyle) {
       opt.series[0].backgroundStyle = { color: styles.chartBg };
     }
-    chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source), notMerge);
+    const layout = chartLayoutForSize(updateChartConfiguration(widgetData, opt, opt.dataset.source), chartEl?.clientWidth ?? 0, chartEl?.clientHeight ?? 0);
+    chart.setOption(layout, notMerge);
+    compactLayout = layout !== opt;
     chartRefreshState.set(chart, { url: chartDataUrl(widgetData), hasData: (opt.dataset.source?.length ?? 0) > 1, failures: 0, retryAt: 0 });
     applyHighlightBand(chart, widgetData);
   };
@@ -1101,7 +1115,7 @@ const chartWidget = (widgetData: WidGetData) => {
         if (s.type === 'line') s.lineStyle = { ...s.lineStyle, color };
       }
     });
-    chart.setOption(opt, false);
+    chart.setOption(sizedOptions(), false);
   };
   themeCallbacks.add(onThemeChange);
 
@@ -1115,6 +1129,7 @@ const chartWidget = (widgetData: WidGetData) => {
     if ((window as any)[`${chartType}Chart`] === chart) delete (window as any)[`${chartType}Chart`];
     chartDisposers.delete(chartId);
     chartUpdaters.delete(chartId);
+    chartLayoutUpdaters.delete(chartId);
   });
 };
 
