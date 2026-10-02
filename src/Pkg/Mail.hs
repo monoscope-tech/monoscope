@@ -323,7 +323,7 @@ slackMonitorAlert monitorTitle monitorUrl chartUrlM channelId =
 -- The root retains onset evidence; thread replies contain only the new observation.
 monitorIncidentMessages :: Monitors.QueryMonitor -> Double -> Monitors.MonitorStatus -> UTCTime -> Maybe Incidents.Episode -> Text -> Text -> Maybe Text -> (Incidents.SlackPayload, Incidents.SlackPayload)
 monitorIncidentMessages monitor value status observedAt episode issueUrl monitorUrl chart =
-  (incidentMessage text (current : snapshot <> [actions]), incidentMessage text [current, slackContext ["<" <> issueUrl <> "|Open issue>"]])
+  (incidentMessage text (current : snapshot <> [actions]), incidentMessage text [current, slackContext ["<" <> issueUrl <> "|Open issue> · <" <> monitorUrl <> "|" <> sourceLabel <> ">"]])
   where
     label = case status of Monitors.MSNormal -> "RECOVERED"; Monitors.MSWarning -> "WARNING"; Monitors.MSAlerting -> "ALERTING"
     threshold = case status of
@@ -340,17 +340,18 @@ monitorIncidentMessages monitor value status observedAt episode issueUrl monitor
     recovery = ["Recovery condition passed · Duration: " <> (if seconds < 60 then show seconds <> " s" else show (seconds `div` 60) <> " min") | status == Monitors.MSNormal]
     text = label <> " · " <> title <> "\n" <> detail <> foldMap ("\n" <>) recovery
     current = slackSection text
+    sourceLabel = if isJust monitor.widgetId && isJust monitor.dashboardId then "Open widget" else "Open monitor"
     snapshot =
       [ tagged "incident_onset" $ slackContext ["Started " <> atUtc started <> " · Initial value: " <> reading value]
-      , tagged "incident_chart" $ maybe (slackContext ["Chart unavailable. <" <> monitorUrl <> "|Open monitor>"]) (slackImage ("Recorded values for " <> title) Nothing) chart
+      , tagged "incident_chart" $ maybe (slackContext ["Chart unavailable. <" <> monitorUrl <> "|" <> sourceLabel <> ">"]) (slackImage ("Recorded values for " <> title) Nothing) chart
       ]
-    actions = incidentActions issueUrl monitorUrl
+    actions = incidentActions issueUrl monitorUrl sourceLabel
 
 
 -- | A missing evaluation preserves the last verified reading, never a synthetic zero.
 monitorDataUnavailableMessage :: Monitors.QueryMonitor -> Monitors.MeasurementFailure -> UTCTime -> Maybe (UTCTime, Double) -> Text -> Text -> Incidents.SlackPayload
 monitorDataUnavailableMessage monitor reason now reading incidentUrl monitorUrl =
-  incidentMessage text [slackSection text, incidentActions incidentUrl monitorUrl]
+  incidentMessage text [slackSection text, incidentActions incidentUrl monitorUrl (if isJust monitor.widgetId && isJust monitor.dashboardId then "Open widget" else "Open monitor")]
   where
     explanation = case reason of
       Monitors.NoMeasurements -> "No measurements in the evaluation window."
@@ -416,9 +417,9 @@ incidentHeadline :: Text -> Text
 incidentHeadline = slackEscape . T.take 160
 
 
-incidentActions :: Text -> Text -> AE.Value
-incidentActions incidentUrl monitorUrl =
-  tagged "incident_actions" $ slackActions [slackButton "Open issue" (Just "primary") incidentUrl, slackButton "Open monitor" Nothing monitorUrl]
+incidentActions :: Text -> Text -> Text -> AE.Value
+incidentActions incidentUrl monitorUrl sourceLabel =
+  tagged "incident_actions" $ slackActions [slackButton "Open issue" (Just "primary") incidentUrl, slackButton sourceLabel Nothing monitorUrl]
 
 
 -- | Blocks a root update carries forward from the message that opened the

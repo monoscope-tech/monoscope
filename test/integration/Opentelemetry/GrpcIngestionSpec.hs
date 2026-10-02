@@ -198,7 +198,7 @@ spec = sequential $ aroundAll withTestResources do
       -- keydown only to synthesise the very click it had just suppressed. Assert the
       -- reachable-and-focusable behaviour instead of that redundant glue.
       dataPointsHtml `shouldContain` "focus-visible:ring-strokeFocus"
-      dataPointsHtml `shouldContain` "window.evalScriptsFromContent(this)"
+      dataPointsHtml `shouldContain` "window.evalScriptsFromContent(event.target)"
       dataPointsHtml `shouldContain` "role=\"button\""
       dataPointsHtml `shouldContain` "tabindex=\"0\""
       dataPointsHtml `shouldContain` "w-10 shrink-0"

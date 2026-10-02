@@ -215,19 +215,21 @@ minsToInterval = \case
 alertUpsertPostH :: Projects.ProjectId -> AlertUpsertForm -> ATAuthCtx (RespHeaders Alert)
 alertUpsertPostH pid form = do
   _ <- Projects.sessionAndProject pid
+  everyoneM <- ManageMembers.getEveryoneTeam pid
   let alertId = form.alertId >>= UUID.fromText
+      emailAll = null form.teams || maybe False (\team -> team.id `elem` form.teams) everyoneM
   queryMonitorId <- Monitors.QueryMonitorId <$> maybe (liftIO UUID.nextRandom) pure alertId
   now <- Time.currentTime
 
   -- For widget-tied alerts, preserve the query from the widget (can't edit directly)
   existingMonitor <- maybe (pure Nothing) (Monitors.queryMonitorById . Monitors.QueryMonitorId) alertId
 
-  let baseMonitor = convertToQueryMonitor pid now queryMonitorId form
+  let baseMonitor = convertToQueryMonitor pid now queryMonitorId form{recipientEmailAll = Just emailAll}
       -- The form has no active/inactive control, and convertToQueryMonitor defaults
       -- deactivatedAt to Nothing — so carry the stored value or editing a deactivated
       -- monitor here would silently re-activate it.
       withStoredState m = maybe m (\e -> m{Monitors.deactivatedAt = e.deactivatedAt}) existingMonitor
-      queryMonitor = withStoredState $ maybe baseMonitor (\e -> baseMonitor{Monitors.logQuery = e.logQuery, Monitors.logQueryAsSql = e.logQueryAsSql, Monitors.environment = e.environment, Monitors.service = e.service}) $ mfilter (isJust . (.widgetId)) existingMonitor
+      queryMonitor = withStoredState $ maybe baseMonitor (\e -> baseMonitor{Monitors.logQuery = e.logQuery, Monitors.logQueryAsSql = e.logQueryAsSql, Monitors.environment = e.environment, Monitors.service = e.service, Monitors.alertConfig = baseMonitor.alertConfig{Monitors.title = e.alertConfig.title}}) $ mfilter (isJust . (.widgetId)) existingMonitor
 
   _ <- Monitors.queryMonitorUpsert queryMonitor
   when (isNothing alertId)
@@ -363,26 +365,24 @@ thresholdsSection_ unitM chartTargetIdM alertThresholdM warningThresholdM trigge
         formField_ FieldSm def{inputType = "number", dot = Just "bg-fillWarning-strong", suffix = unitM, placeholder = "Same as trigger", value = showVal warningRecoveryM} "Warning recovery" "warningRecoveryThreshold" False Nothing
 
 
-notificationSettingsSection_ :: Maybe Text -> Maybe Text -> Maybe Text -> Bool -> V.Vector ManageMembers.Team -> V.Vector ManageMembers.TeamId -> Text -> Maybe Monitors.QueryMonitor -> Html ()
-notificationSettingsSection_ severityM subjectM messageM emailAll allTeams selectedTeamIds formId monitorM = do
-  let defaultSeverity = fromMaybe "Error" severityM
-      defaultSubject = fromMaybe "Alert triggered" subjectM
-      defaultMessage = fromMaybe "The alert threshold has been exceeded. Check the APItoolkit dashboard for details." messageM
-      teamList = encodeText $ (\x -> AE.object ["name" AE..= x.handle, "value" AE..= x.id]) <$> allTeams
-      teamName tId = maybe "Unknown Team" (.handle) $ V.find (\t -> t.id == tId) allTeams
-      existingTeams = encodeText $ (\tId -> AE.object ["name" AE..= teamName tId, "value" AE..= tId]) <$> selectedTeamIds
+notificationSettingsSection_ :: V.Vector ManageMembers.Team -> V.Vector ManageMembers.TeamId -> Text -> Maybe Monitors.QueryMonitor -> Html ()
+notificationSettingsSection_ allTeams selectedTeamIds formId monitorM = do
+  let defaultSeverity = maybe "Error" (.alertConfig.severity) monitorM
+      defaultSubject = maybe "Alert triggered" (.alertConfig.subject) monitorM
+      defaultMessage = maybe "The alert threshold has been exceeded. Check the APItoolkit dashboard for details." (.alertConfig.message) monitorM
+      teamList = encodeText $ (\x -> AE.object ["name" AE..= ("@" <> x.handle), "value" AE..= x.id]) <$> allTeams
+      teamName tId = maybe "Unknown Team" (("@" <>) . (.handle)) $ V.find (\t -> t.id == tId) allTeams
+      initialTeamIds = if V.null selectedTeamIds then V.map (.id) $ V.filter (.is_everyone) allTeams else selectedTeamIds
+      existingTeams = encodeText $ (\tId -> AE.object ["name" AE..= teamName tId, "value" AE..= tId]) <$> initialTeamIds
       renotifyEnabled = maybe True (isJust . (.renotifyIntervalMins)) monitorM
       renotifyVal = maybe "30m" minsToInterval $ monitorM >>= (.renotifyIntervalMins)
       stopEnabled = maybe False (isJust . (.stopAfterCount)) monitorM
       stopVal = maybe "5" show $ monitorM >>= (.stopAfterCount)
   panel_ def{icon = Just "envelope", collapsible = Just False} "Notification Settings" do
     div_ [class_ "flex flex-col gap-1"] do
-      span_ [class_ "text-sm text-textStrong"] "Teams"
-      span_ [class_ "text-xs text-textWeak"] "If no team is selected, project notification channels are used."
+      label_ [Lucid.for_ $ formId <> "-teams", class_ "text-sm text-textStrong"] "Teams"
+      span_ [class_ "text-xs text-textWeak"] "@everyone includes all project members and project notification channels."
     tagInput_ (formId <> "-teams") "" [name_ "teams", data_ "tagify-text-prop" "name", data_ "tagify-whitelist" teamList, data_ "tagify-initial" existingTeams]
-    div_ [class_ "flex items-center gap-2 mt-4"] do
-      formCheckbox_ FieldMd "Send to all team members" "recipientEmailAll" $ value_ "true" : [checked_ | emailAll]
-      span_ [class_ "tooltip", data_ "tip" "Configure specific recipients in alert settings after creation"] $ faSprite_ "circle-info" "regular" "w-3.5 h-3.5 text-iconNeutral"
     details_ [class_ "mt-4 border-t border-strokeWeak pt-3"] do
       summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] "Advanced notification settings"
       div_ [class_ "space-y-3 pt-3"] do
@@ -773,7 +773,7 @@ unifiedMonitorOverviewH pid monitorId = do
     Just alert -> do
       (teams, (slackDataM, discordDataM)) <-
         concurrently
-          (ManageMembers.getTeamsById pid alert.teams)
+          (ManageMembers.getTeamsById pid alert.teams >>= \selected -> if null selected then maybeToList <$> ManageMembers.getEveryoneTeam pid else pure selected)
           (concurrently (Slack.getProjectSlackData pid) (Slack.getDiscordDataByProjectId pid))
       (channels, discordChannels) <-
         concurrently
@@ -832,6 +832,8 @@ unifiedOverviewPage pid alert currTime teams slackDataM discordDataM = do
       statusBadge_ False display
 
     div_ [class_ "flex flex-wrap gap-2 items-center"] do
+      whenJust ((,) <$> alert.dashboardId <*> alert.widgetId) \(dashboardId, widgetId) ->
+        a_ [href_ $ "/p/" <> pid.toText <> "/dashboards/" <> UUID.toText dashboardId <> "?expand=" <> toUriStr widgetId, class_ "btn btn-sm btn-ghost"] "View widget"
       metadataChip_ "shield-halved" $ "Severity: " <> alert.alertConfig.severity
       metadataChip_ "clock" $ "Every " <> show alert.checkIntervalMins <> " min"
       whenJust alert.environment $ metadataChip_ "layer-group" . ("Environment: " <>)
@@ -937,15 +939,16 @@ alertNotificationsTab_ alert teams = do
             a_ [href_ $ "/p/" <> alert.projectId.toText <> "/settings/integrations", class_ "text-sm text-textBrand hover:underline"] "Configure integrations"
         else div_ [class_ "flex flex-wrap gap-4 mb-4"] $ forM_ teams \team ->
           div_ [class_ "flex flex-col border rounded-lg gap-4 border-strokeWeak p-6 relative w-96", id_ team.handle] do
-            button_
-              [ type_ "button"
-              , class_ "absolute top-3 cursor-pointer right-3 text-iconNeutral hover:text-iconBrand transition-colors"
-              , Aria.label_ $ "Remove " <> team.name <> " team"
-              , term "data-tippy-content" "Remove team"
-              , hxDelete_ $ "/p/" <> alert.projectId.toText <> "/monitors/alerts/" <> alert.id.toText <> "/teams/" <> team.id.toText
-              , hxTarget_ $ "#" <> team.handle
-              , hxSwap_ "outerHTML"
-              ]
+            unless team.is_everyone
+              $ button_
+                [ type_ "button"
+                , class_ "absolute top-3 cursor-pointer right-3 text-iconNeutral hover:text-iconBrand transition-colors"
+                , Aria.label_ $ "Remove " <> team.name <> " team"
+                , term "data-tippy-content" "Remove team"
+                , hxDelete_ $ "/p/" <> alert.projectId.toText <> "/monitors/alerts/" <> alert.id.toText <> "/teams/" <> team.id.toText
+                , hxTarget_ $ "#" <> team.handle
+                , hxSwap_ "outerHTML"
+                ]
               $ faSprite_ "trash" "regular" "h-3 w-3"
             span_ [class_ "text-sm font-medium"] $ toHtml team.name
             forM_ ([("envelope", "regular", team.notify_emails), ("slack", "solid", ("#" <>) <$> team.slack_channels), ("discord", "brand", ("#" <>) <$> team.discord_channels)] :: [(Text, Text, V.Vector Text)]) \(icon, style, entries) ->

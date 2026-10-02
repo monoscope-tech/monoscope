@@ -1958,7 +1958,7 @@ alertConfigurationForm_ project selectedEnvironment alertM teams = do
         div_ [class_ "w-8 h-8 rounded-full bg-fillBrand-weak flex items-center justify-center shrink-0"]
           $ faSprite_ "bell" "regular" "w-4 h-4 text-iconBrand"
         div_ [] do
-          h3_ [class_ "text-base font-semibold text-textStrong"] "Create monitor"
+          h3_ [class_ "text-base font-semibold text-textStrong"] $ if isJust alertM then "Edit monitor" else "Create monitor"
           p_ [class_ "text-xs text-textWeak hidden sm:block"] "Get notified when your query matches specific conditions"
       label_
         [ Lucid.for_ "create-alert-toggle"
@@ -1981,7 +1981,9 @@ alertConfigurationForm_ project selectedEnvironment alertM teams = do
         ]
         do
           input_ [type_ "hidden", name_ "alertId", value_ $ maybe "" (.id.toText) alertM]
-          formField_ FieldSm def{value = maybe "" (\x -> x.alertConfig.title) alertM, placeholder = "e.g. High error rate on checkout API"} "Name" "title" True Nothing
+          if maybe False (isJust . (.widgetId)) alertM
+            then input_ [type_ "hidden", name_ "title", value_ $ maybe "" (.alertConfig.title) alertM]
+            else formField_ FieldSm def{value = maybe "" (\x -> x.alertConfig.title) alertM, placeholder = "e.g. High error rate on checkout API"} "Name" "title" True Nothing
 
           let defaultFrequency = maybe 5 (.checkIntervalMins) alertM
               conditionType = if maybe True (\x -> x.alertThreshold > 0 && isJust x.warningThreshold) alertM then Just "threshold_exceeded" else Just "has_matches"
@@ -1997,7 +1999,7 @@ alertConfigurationForm_ project selectedEnvironment alertM teams = do
               div_ [class_ "flex-1"] $ formField_ FieldSm def{value = fromMaybe "" monitorService, placeholder = "e.g. checkout"} "Service" "service" False Nothing
 
           let selectedTeamIds = maybe V.empty (.teams) alertM
-          AlertUI.notificationSettingsSection_ ((.alertConfig.severity) <$> alertM) ((.alertConfig.subject) <$> alertM) ((.alertConfig.message) <$> alertM) (maybe True (.alertConfig.emailAll) alertM) teams selectedTeamIds "alert-form" alertM
+          AlertUI.notificationSettingsSection_ teams selectedTeamIds "alert-form" alertM
 
           div_ [class_ "flex items-center justify-end gap-2 pt-4 pb-20 mt-4 border-t border-strokeWeak"] do
             label_

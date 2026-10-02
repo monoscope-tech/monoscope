@@ -135,7 +135,7 @@ import System.Types (ATBackgroundCtx, ATBackgroundEffects, DB, runBackground)
 import UnliftIO (withRunInIO)
 import UnliftIO qualified as UIO
 import UnliftIO.Exception (bracket, catch, finally, throwIO, try, tryAny)
-import Utils (calculateCycleStartDate, formatUTC, formatUTCMicros, freeTierDailyMaxEvents, hostPath, nonEmptyT, toXXHash, usageWindowStart)
+import Utils (calculateCycleStartDate, formatUTC, formatUTCMicros, freeTierDailyMaxEvents, hostPath, nonEmptyT, toUriStr, toXXHash, usageWindowStart)
 
 
 sendMessageToDiscord :: Text -> Text -> ATBackgroundCtx ()
@@ -211,6 +211,13 @@ seedJobs conn from count step mkJob = forM_ ([0 .. count - 1] :: [Int]) \i -> do
 -- | URL for a project's main view.
 projectUrl :: Config.AuthContext -> Projects.ProjectId -> Text
 projectUrl ctx pid = hostPath ctx.env.hostUrl $ "p/" <> pid.toText
+
+
+widgetMonitorUrl :: Text -> Monitors.QueryMonitor -> Maybe Text
+widgetMonitorUrl baseUrl monitor = do
+  dashboardId <- monitor.dashboardId
+  widgetId <- monitor.widgetId
+  pure $ baseUrl <> "/dashboards/" <> UUID.toText dashboardId <> "?expand=" <> toUriStr widgetId
 
 
 -- | Render a (subject, body) pair and send it to the given address.
@@ -3152,7 +3159,8 @@ commitQueryMonitorEvaluation monitor value status observedAt delivery commitStat
       targetTeams <- if null teams then maybeToList <$> ProjectMembers.getEveryoneTeam monitor.projectId else pure teams
       installation <- Integrations.getProjectSlackData monitor.projectId
       let baseUrl = projectUrl appCtx monitor.projectId
-          monitorUrl = baseUrl <> "/monitors/" <> monitor.id.toText <> "/overview"
+          widgetUrlM = widgetMonitorUrl baseUrl monitor
+          monitorUrl = fromMaybe (baseUrl <> "/monitors/" <> monitor.id.toText <> "/overview") widgetUrlM
           chartMins = clamp (15, 240) (4 * monitor.checkIntervalMins)
           chartFrom = addUTCTime (negate $ fromIntegral (chartMins * 60)) observedAt
           destinations = slackDestinations installation targetTeams
@@ -3178,8 +3186,9 @@ commitQueryMonitorEvaluation monitor value status observedAt delivery commitStat
                 then traverse (Issues.reopenOrInsertIssueTx observedAt) issue
                 else pure Nothing
             let issueId = persistedId <|> (active >>= (.issueId))
-                alertUrl = maybe monitorUrl (\iid -> baseUrl <> "/issues/" <> iid.toText) issueId
-                (rootPayload, replyPayload) = Mail.monitorIncidentMessages monitor value status observedAt active alertUrl monitorUrl chartUrlM
+                issueUrl = maybe monitorUrl (\iid -> baseUrl <> "/issues/" <> iid.toText) issueId
+                alertUrl = fromMaybe issueUrl widgetUrlM
+                (rootPayload, replyPayload) = Mail.monitorIncidentMessages monitor value status observedAt active issueUrl monitorUrl chartUrlM
                 change
                   | isRecovery = Incidents.IncidentRecovered
                   | status /= monitor.currentStatus = Incidents.IncidentAlert
@@ -5155,7 +5164,7 @@ recordMonitorDataGap monitor at reason = do
   ctx <- ask @Config.AuthContext
   let source = Incidents.MonitorIncident monitor.id
       baseUrl = projectUrl ctx monitor.projectId
-      monitorUrl = baseUrl <> "/monitors/" <> monitor.id.toText <> "/overview"
+      monitorUrl = fromMaybe (baseUrl <> "/monitors/" <> monitor.id.toText <> "/overview") $ widgetMonitorUrl baseUrl monitor
       suppressed = ctx.config.pauseNotifications || maybe False (> at) monitor.mutedUntil || maybe False (monitor.notificationCount >=) monitor.stopAfterCount
   committed <- Hasql.transaction TxS.ReadCommitted TxS.Write do
     HI.RowsAffected changed <-

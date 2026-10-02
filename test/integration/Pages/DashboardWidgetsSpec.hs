@@ -393,20 +393,27 @@ spec = sequential $ aroundAll withTestResources do
       formTag `shouldSatisfy` T.isInfixOf "errorToast"
 
   describe "The add-widget experience" do
-    it "widget chart thresholds live in Edit and can feed a monitor" \tr -> do
+    it "widget chart thresholds are editable in Edit and Monitors" \tr -> do
       dashId <- newDashboard tr "overview.yaml" "Widget Display Thresholds"
       (_, newEditor) <- testServant tr $ Dashboards.dashboardWidgetNewGetH testPid dashId Nothing Nothing Nothing
       let newHtml = toStrict $ renderText newEditor
       newHtml `shouldSatisfy` T.isInfixOf "Chart thresholds"
+      newHtml `shouldSatisfy` T.isInfixOf "Widget name"
+      newHtml `shouldSatisfy` T.isInfixOf "page-drawer-tab-monitors"
+      newHtml `shouldSatisfy` T.isInfixOf "Add widget and monitor"
+      snd (T.breakOn "Name your widget" newHtml) `shouldSatisfy` T.isInfixOf "Chart thresholds"
 
       let widget = (widgetOf Widget.WTTimeseries "Thresholded"){Widget.alertThreshold = Just 10, Widget.warningThreshold = Just 7, Widget.unit = Just "requests/s"}
       _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid dashId Nothing Nothing widget
       wid <- firstWidgetId =<< storedWidgets tr dashId
-      (_, editEditor) <- testServant tr $ Dashboards.dashboardWidgetExpandGetH testPid dashId wid
+      (_, editEditor) <- testServant tr $ Dashboards.dashboardWidgetExpandGetH testPid dashId wid Nothing
       let editHtml = toStrict $ renderText editEditor
       editHtml `shouldSatisfy` T.isInfixOf "Chart thresholds"
+      T.take 120 (snd $ T.breakOn "group/thresholds" editHtml) `shouldSatisfy` T.isInfixOf "open"
       editHtml `shouldSatisfy` T.isInfixOf "Monitors"
-      for_ ["Measurement unit", "widgetJSON.alert_threshold", "widgetJSON.arning_threshold", "Edit chart thresholds"] \fragment ->
+      (_, monitorEditor) <- testServant tr $ Dashboards.dashboardWidgetExpandGetH testPid dashId wid (Just "alerts")
+      T.take 180 (snd $ T.breakOn "page-drawer-tab-monitors" $ toStrict $ renderText monitorEditor) `shouldSatisfy` T.isInfixOf "checked"
+      for_ ["Measurement unit", "widgetJSON.alert_threshold", "widgetJSON.arning_threshold", "name=\"alertThreshold\"", "Create monitor"] \fragment ->
         editHtml `shouldSatisfy` T.isInfixOf fragment
       editHtml `shouldNotSatisfy` T.isInfixOf "Save thresholds"
       fst (T.breakOn "widget-preview-container" editHtml) `shouldNotSatisfy` T.isInfixOf "Configure query"
@@ -416,13 +423,13 @@ spec = sequential $ aroundAll withTestResources do
       tableDashId <- newDashboard tr "overview.yaml" "Table Without Thresholds"
       _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid tableDashId Nothing Nothing (widgetOf Widget.WTTable "Rows")
       tableId <- firstWidgetId =<< storedWidgets tr tableDashId
-      (_, tableEditor) <- testServant tr $ Dashboards.dashboardWidgetExpandGetH testPid tableDashId tableId
+      (_, tableEditor) <- testServant tr $ Dashboards.dashboardWidgetExpandGetH testPid tableDashId tableId Nothing
       toStrict (renderText tableEditor) `shouldNotSatisfy` T.isInfixOf ">Chart thresholds</strong>"
 
       sqlDashId <- newDashboard tr "overview.yaml" "SQL Chart Thresholds"
       _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid sqlDashId Nothing Nothing (widgetOf Widget.WTTimeseries "SQL Chart"){Widget.query = Nothing, Widget.sql = Just "SELECT 1"}
       sqlId <- firstWidgetId =<< storedWidgets tr sqlDashId
-      (_, sqlEditor) <- testServant tr $ Dashboards.dashboardWidgetExpandGetH testPid sqlDashId sqlId
+      (_, sqlEditor) <- testServant tr $ Dashboards.dashboardWidgetExpandGetH testPid sqlDashId sqlId Nothing
       let sqlHtml = toStrict $ renderText sqlEditor
       sqlHtml `shouldSatisfy` T.isInfixOf "Chart thresholds"
       sqlHtml `shouldSatisfy` T.isInfixOf "Monitors evaluate a KQL query"

@@ -26,6 +26,10 @@
     overflow-anchor: none;
   }
 
+  .widget-editor.is-compact {
+    min-height: calc(100dvh + 2rem);
+  }
+
   .widget-editor .widget-preview {
     top: var(--widget-header-height, 56px);
   }

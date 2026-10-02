@@ -237,13 +237,15 @@ logQueryBox_ config = do
                   $ faSprite_ "floppy-disk" "regular" "h-4 w-4"
               button_
                 [ type_ "submit"
-                , class_ "btn btn-primary !h-8 !min-h-8 w-9 cursor-pointer rounded-md p-0 leading-none active:scale-[0.96] transition-transform"
+                , class_ $ "btn btn-primary !h-8 !min-h-8 cursor-pointer rounded-md leading-none active:scale-[0.96] transition-transform motion-reduce:transition-none motion-reduce:active:scale-100 " <> bool "w-9 p-0" "gap-1.5 px-3" (isJust config.targetWidgetPreview)
                 , Aria.label_ "Run query"
                 , onpointerdown_ "this.form.dispatchEvent(new Event('submit', {bubbles: true}))"
                 ]
-                $ faSprite_ "magnifying-glass" "regular" "h-4 w-4"
+                $ do
+                  faSprite_ "magnifying-glass" "regular" "h-4 w-4"
+                  when (isJust config.targetWidgetPreview) "Run query"
 
-      div_ [class_ "flex justify-between max-md:flex-wrap max-md:gap-0.5"] do
+      div_ [class_ $ "flex justify-between max-md:flex-wrap max-md:gap-0.5" <> bool "" " mt-1 border-t border-strokeWeak pt-2" (isJust config.targetWidgetPreview)] do
         div_ [class_ "flex min-w-0 items-center gap-0 max-md:w-full"] do
           div_ [class_ "flex items-center gap-2 max-md:gap-1"] do
             visualizationTabs_

@@ -20,6 +20,7 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Lucid (renderText, toHtml)
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Issues qualified as Issues
@@ -29,7 +30,7 @@ import Models.Projects.Dashboards qualified as DashboardModel
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Bots.BotTestHelpers (receiveSlackEvent, setupDiscordData, setupSlackData, slackRootEvent)
 import Pages.Dashboards qualified as Dashboards
-import Pages.Monitors (AlertUpsertForm (..), convertToQueryMonitor)
+import Pages.Monitors (AlertUpsertForm (..), alertUpsertPostH, convertToQueryMonitor, unifiedMonitorOverviewH)
 import Pages.Projects qualified as ProjectPages
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
@@ -138,7 +139,7 @@ spec = sequential $ aroundAll withTestResources do
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
 
   describe "Widget Monitor Lifecycle" do
-    it "creates a monitor for the saved widget, alerts, recovers after an edit, and disappears with the widget" \tr -> do
+    it "alerts and recovers for the saved widget, links copied monitors to their dashboard, and deletes with the widget" \tr -> do
       void
         $ testServant tr
         $ Dashboards.dashboardsPostH
@@ -159,31 +160,31 @@ spec = sequential $ aroundAll withTestResources do
             dashboardId
             Nothing
             Nothing
-            def{Widget.wType = Widget.WTTimeseries, Widget.title = Just "Checkout errors", Widget.query = Just "name == \"checkout\"", Widget.alertThreshold = Just 1, Widget.unit = Just "events"}
+            def{Widget.wType = Widget.WTTimeseries, Widget.title = Just "Checkout errors", Widget.query = Just "name == \"checkout\""}
       widgetId <- maybe (fail "the saved widget has no id") pure savedWidget.id
+      let widgetUrl = "/p/" <> testPid.toText <> "/dashboards/" <> dashboardId.toText <> "?expand=" <> widgetId
       let alertForm =
             Dashboards.WidgetAlertForm
               { widgetId
               , query = "name == \"checkout\""
               , vizType = Just "timeseries"
+              , unit = Just "events"
+              , alertThreshold = Just "1"
+              , warningThreshold = Nothing
               , direction = "above"
               , alertRecoveryThreshold = Nothing
               , warningRecoveryThreshold = Nothing
               , frequency = Just "1m"
-              , title = "Checkout errors"
               , timeWindow = Just "1h"
               , severity = Just "Error"
               , subject = Just "Checkout errors"
               , message = Just "A checkout request failed"
-              , recipientEmailAll = Nothing
               , notifyAfterCheck = Nothing
               , notifyAfter = Nothing
-              , stopAfterCheck = Nothing
-              , stopAfter = Nothing
+              , stopAfterCheck = Just True
+              , stopAfter = Just 1
               , teams = []
               }
-      setupSlackData tr testPid "T_MONITOR_SIM"
-      setupDiscordData tr testPid "G_MONITOR_SIM"
       void $ withResource tr.trPool \conn ->
         PGS.execute
           conn
@@ -197,8 +198,61 @@ spec = sequential $ aroundAll withTestResources do
           (PGS.Only testPid)
       -- Regression: a raw-SQL widget posts an empty query, which compiled to an all-traffic count.
       void (runAsBase tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.widgetAlertUpsertH testPid widgetId (Just $ unUUIDId dashboardId) alertForm{Dashboards.query = ""}) `shouldThrow` anyIOException
+      void (runAsBase tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.widgetAlertUpsertH testPid widgetId (Just $ unUUIDId dashboardId) alertForm{Dashboards.alertThreshold = Nothing}) `shouldThrow` anyIOException
       isNothing <$> runTestBgNoReset tr (Monitors.queryMonitorByWidgetId testPid (Just $ unUUIDId dashboardId) widgetId) `shouldReturn` True
       void $ testServant tr $ Dashboards.widgetAlertUpsertH testPid widgetId (Just $ unUUIDId dashboardId) alertForm
+      createdMonitor <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId testPid (Just $ unUUIDId dashboardId) widgetId
+      ((.alertConfig.title) <$> createdMonitor) `shouldBe` Just "Checkout errors · Widget Monitor Lifecycle"
+      ((.alertConfig.emailAll) <$> createdMonitor) `shouldBe` Just True
+      (_, overview) <- testServant tr $ unifiedMonitorOverviewH testPid (maybe "" (.id.toText) createdMonitor)
+      (toStrict $ renderText $ toHtml overview) `shouldSatisfy` T.isInfixOf ("href=\"" <> widgetUrl <> "\"")
+      setupSlackData tr testPid "T_MONITOR_SIM"
+      setupDiscordData tr testPid "G_MONITOR_SIM"
+      void $ testServant tr $ Dashboards.dashboardWidgetPutH testPid dashboardId (Just widgetId) Nothing savedWidget{Widget.title = Just "Checkout failures", Widget.alertThreshold = Just 1, Widget.unit = Just "events"}
+      renamedWidgetMonitor <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId testPid (Just $ unUUIDId dashboardId) widgetId
+      ((.alertConfig.title) <$> renamedWidgetMonitor) `shouldBe` Just "Checkout failures · Widget Monitor Lifecycle"
+      void $ testServant tr $ Dashboards.dashboardRenamePatchH testPid dashboardId Dashboards.DashboardRenameForm{Dashboards.title = "Renamed Dashboard", Dashboards.fileDir = Nothing}
+      renamedDashboardMonitor <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId testPid (Just $ unUUIDId dashboardId) widgetId
+      ((.alertConfig.title) <$> renamedDashboardMonitor) `shouldBe` Just "Checkout failures · Renamed Dashboard"
+      monitorId <- maybe (fail "the widget monitor was not saved") (pure . (.id)) renamedDashboardMonitor
+      void $ testServant tr $ alertUpsertPostH testPid AlertUpsertForm
+        { unit = Just "events"
+        , alertId = Just monitorId.toText
+        , alertThreshold = 1
+        , warningThreshold = Nothing
+        , recipientEmails = []
+        , recipientSlacks = []
+        , recipientEmailAll = Nothing
+        , direction = "above"
+        , title = "Stale hidden title"
+        , severity = "Error"
+        , subject = "Checkout errors"
+        , message = "A checkout request failed"
+        , query = "name == \"checkout\""
+        , since = "1h"
+        , from = ""
+        , to = ""
+        , frequency = Just "1m"
+        , timeWindow = Just "1h"
+        , conditionType = Just "threshold_exceeded"
+        , source = Just "widget"
+        , vizType = Just "timeseries"
+        , teams = []
+        , alertRecoveryThreshold = Nothing
+        , warningRecoveryThreshold = Nothing
+        , widgetId = Just widgetId
+        , dashboardId = Just dashboardId.toText
+        , notifyAfterCheck = Nothing
+        , notifyAfter = Nothing
+        , stopAfterCheck = Nothing
+        , stopAfter = Nothing
+        , environment = Nothing
+        , service = Nothing
+        }
+      afterExplorerEdit <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId testPid (Just $ unUUIDId dashboardId) widgetId
+      ((.alertConfig.title) <$> afterExplorerEdit) `shouldBe` Just "Checkout failures · Renamed Dashboard"
+      savedDash <- runTestBgNoReset tr $ DashboardModel.getDashboardByProjectId testPid dashboardId
+      (savedDash >>= (.schema) >>= find ((== Just widgetId) . (.id)) . DashboardModel.allWidgets >>= (.alertThreshold)) `shouldBe` Just 1
       isNothing <$> runTestBgNoReset tr (Monitors.queryMonitorByWidgetId otherPid (Just $ unUUIDId dashboardId) widgetId) `shouldReturn` True
       void $ testServant tr $ Dashboards.widgetAlertToggleH testPid widgetId (Just $ unUUIDId dashboardId)
       paused <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId testPid (Just $ unUUIDId dashboardId) widgetId
@@ -224,6 +278,10 @@ spec = sequential $ aroundAll withTestResources do
                    , "slack:C_NOTIF_CHANNEL"
                    , "whatsapp:+15550001111"
                    ]
+      let assertWidgetLink notification =
+            unless (widgetUrl `T.isInfixOf` (decodeUtf8 @Text $ toStrict $ AE.encode notification))
+              $ expectationFailure $ "Missing widget link in " <> show (deliverySummary [notification])
+      mapM_ assertWidgetLink fired
 
       advanceMinutes tr 1
       duplicate <- fst <$> captureNotifs tr checkTriggeredQueryMonitors
@@ -257,9 +315,10 @@ spec = sequential $ aroundAll withTestResources do
                    , "slack:C_NOTIF_CHANNEL"
                    , "whatsapp:+15550001111"
                    ]
+      mapM_ assertWidgetLink recovered
 
       void $ testServant tr $ ProjectPages.updateNotificationsChannel testPid $ ProjectPages.NotifListForm ["email", "discord", "pagerduty"] [] ["alerts@example.com"] [] Nothing
-      void $ testServant tr $ Dashboards.dashboardWidgetPutH testPid dashboardId (Just widgetId) Nothing savedWidget
+      void $ testServant tr $ Dashboards.dashboardWidgetPutH testPid dashboardId (Just widgetId) Nothing savedWidget{Widget.alertThreshold = Just 1, Widget.unit = Just "events"}
       advanceMinutes tr 1
       gated <- fst <$> captureNotifs tr checkTriggeredQueryMonitors
       deliverySummary gated
@@ -268,6 +327,25 @@ spec = sequential $ aroundAll withTestResources do
                    , "pagerduty:widget-monitor-test:PDTrigger"
                    ]
       void $ testServant tr $ ProjectPages.updateNotificationsChannel testPid $ ProjectPages.NotifListForm ["email", "slack", "discord", "phone", "pagerduty"] ["+15550001111"] ["alerts@example.com"] [] Nothing
+
+      sourceBeforeCopy <- runTestBgNoReset tr (Monitors.queryMonitorByWidgetId testPid (Just $ unUUIDId dashboardId) widgetId) >>= maybe (fail "the source widget has no monitor") pure
+      sourceBeforeCopy.notificationCount `shouldBe` 1
+      let copyDashboardId = UUIDId $ UUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef1
+      sourceDashboardVM <- maybe (fail "the source dashboard disappeared") pure savedDash
+      void $ runTestBgNoReset tr $ DashboardModel.insert sourceDashboardVM{DashboardModel.id = copyDashboardId, DashboardModel.title = "Widget Monitor Copy", DashboardModel.schema = Just (def :: DashboardModel.Dashboard){DashboardModel.title = Just "Widget Monitor Copy"}, DashboardModel.filePath = Nothing}
+      (_, copyWidget) <- testServant tr $ Dashboards.dashboardDuplicateWidgetPostH testPid copyDashboardId widgetId (Just $ unUUIDId dashboardId)
+      copyWidgetId <- maybe (fail "the copied widget has no id") pure copyWidget.id
+      copyMonitor <- runTestBgNoReset tr (Monitors.queryMonitorByWidgetId testPid (Just $ unUUIDId copyDashboardId) copyWidgetId) >>= maybe (fail "the copied widget has no monitor") pure
+      copyMonitor.notificationCount `shouldBe` 0
+      copyMonitor.currentValue `shouldBe` 0
+      copyNotifs <- fst <$> captureNotifs tr (evaluateQueryMonitorValue copyMonitor (addUTCTime 3600 frozenTime) 1)
+      deliverySummary copyNotifs `shouldBe` ["discord:C_MONITOR", "email:alerts@example.com", "pagerduty:widget-monitor-test:PDTrigger", "whatsapp:+15550001111"]
+      let copyWidgetUrl = "/p/" <> testPid.toText <> "/dashboards/" <> copyDashboardId.toText <> "?expand=" <> copyWidgetId
+      for_ copyNotifs \notification ->
+        unless (copyWidgetUrl `T.isInfixOf` (decodeUtf8 @Text $ toStrict $ AE.encode notification))
+          $ expectationFailure $ "Missing copied widget link in " <> show (deliverySummary [notification])
+      copyMonitor.alertConfig.title `shouldBe` "Checkout errors · Widget Monitor Copy"
+      void $ testServant tr $ Dashboards.dashboardWidgetReorderPatchH testPid copyDashboardId Nothing Map.empty
 
       currentMonitor <- maybe (fail "the widget monitor disappeared before deletion") pure firedMonitor
       let otherMonitorId = Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "a11e7ed0-0000-0000-0000-000000000001"
