@@ -641,10 +641,13 @@ normalizeWidgetLayouts widgets =
           width = min 12 $ max 1 $ fromMaybe defaultWidgetWidth layout.w
           groupChildren = fromMaybe [] widget.children
           fourStatRow =
-            widget.wType == WTGroup
-              && width == 12
+            widget.wType
+              == WTGroup
+              && width
+              == 12
               && all (\child -> child.wType `elem` [WTStat, WTTimeseriesStat]) groupChildren
-              && map (\child -> (child.layout >>= (.x), child.layout >>= (.y))) groupChildren == [(Just x, Just 0) | x <- [0, 3, 6, 9]]
+              && map (\child -> (child.layout >>= (.x), child.layout >>= (.y))) groupChildren
+              == [(Just x, Just 0) | x <- [0, 3, 6, 9]]
           rowHeight = max 1 $ layoutRows groupChildren
           alignedChildren =
             if fourStatRow
