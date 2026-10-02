@@ -1,5 +1,27 @@
 # Endpoint Analytics query-plan evidence
 
+## Shipbubble follow-up (2026-10-02)
+
+The outgoing `POST integrations.routelift.com/v1/deliveries/estimate/v2`
+endpoint (`faa041ff`) returned 432 rows over the same 24-hour window with either
+`hashes @> ARRAY['faa041ff']` or equality on `server.address`, `url.path`, and
+`http.request.method`. Both `EXPLAIN` plans selected the same 24 project/date
+file groups. Neither host nor path had a bloom filter in the deployed schema.
+Repeated count timings varied widely: hash 2.3–30.5 seconds, direct fields
+0.5–3.7 seconds. These runs show the direct fields can be faster, but do not
+establish a stable latency target; engine cache and concurrent load were not
+controlled. Literal endpoints with a known host and method now use those fields.
+Templated or hostless endpoints retain the hash filter because `url.path` is
+the concrete request path, while
+`http.route` is only present when a server framework provides its matched
+route. Client spans may provide `url.template`; ingest preserves both OTel
+fields and stores an inferred template in `monoscope.endpoint.route`.
+
+TimeFusion's file bloom pruning needs `bloom_filter: true` on the selected
+scalar columns and Parquet files written with those blooms. Enabling the schema
+flag does not add blooms to existing files; they need a scoped rewrite before
+historical windows can benefit.
+
 Captured on 2026-09-18 against the configured TimeFusion store for project
 `87576849-4941-49d3-a15d-680fef88a1a8`, endpoint hash `f14abbef`, with a fixed
 end time of `2026-09-18T00:00:00Z`. The two windows were 24 hours and 3 days.

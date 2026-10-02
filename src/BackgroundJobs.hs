@@ -2629,12 +2629,11 @@ processEagerBatch batch shard
                           FROM unnest(COALESCE(o.hashes, '{}'::text[]) || u.new_hashes) AS h
                         ),
                         errors = COALESCE(NULLIF(u.errors, 'null'::jsonb), o.errors),
-                        attributes___url___path = COALESCE(u.norm_path, o.attributes___url___path),
                         attributes = CASE WHEN u.norm_path IS NOT NULL THEN
                           COALESCE(o.attributes, '{}'::jsonb)
                             || jsonb_build_object(
-                                 'url',  COALESCE(o.attributes->'url',  '{}'::jsonb) || jsonb_build_object('path',  u.norm_path),
-                                 'http', COALESCE(o.attributes->'http', '{}'::jsonb) || jsonb_build_object('route', u.norm_path))
+                                 'monoscope', COALESCE(o.attributes->'monoscope', '{}'::jsonb)
+                                   || jsonb_build_object('endpoint', jsonb_build_object('route', u.norm_path)))
                           ELSE o.attributes END,
                         processed_at = now()
                     FROM (

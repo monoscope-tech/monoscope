@@ -79,6 +79,7 @@ import Effectful.Labeled qualified
 import Effectful.Log (Log)
 import Effectful.Reader.Static (Reader, ask)
 import Effectful.Time qualified as Time
+import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxConfirm_, hxDelete_, hxExt_, hxGet_, hxPatch_, hxPost_, hxPushUrl_, hxPut_, hxSelect_, hxSwapOob_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
@@ -113,6 +114,7 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), assetUrl, bulkActionSlug, encodeEnumSC)
 import Pkg.Metrics qualified as Metrics
 import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), applyScopedQuery, binDensityFor, constantToKQLList, constantToSQLList, defSqlQueryCfg, fixedUTCTime, mkScopedQuery, parseQueryToComponents, replacePlaceholders, variablePresetsKQL)
+import Pkg.Parser.Expr (sqlStringLit)
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Relude hiding (ask)
 import Servant (NoContent (..), ServerError, err302, err400, err404, errBody, errHeaders)
@@ -2791,7 +2793,20 @@ processConstantsAndExtendParams pid now timeParams allParams haystack constants 
 -- dashboard and the params extended with variable defaults and constant results.
 resolveDashboardParams :: WidgetData es => Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Dashboards.Dashboard -> Eff es (Dashboards.Dashboard, [(Text, Maybe Text)])
 resolveDashboardParams pid now timeParams allParams dash = do
-  (constants, params) <- processConstantsAndExtendParams pid now timeParams (addVariableDefaults allParams dash.variables) (dashboardQueryText dash) (fold dash.constants)
+  endpointParams <- case dash.file of
+    Just "endpoint-stats.yaml" -> do
+      let endpointHash = fromMaybe "" $ join $ lookup "var-endpointHash" allParams
+      endpoint <- if T.null endpointHash then pure Nothing else Data.Effectful.Hasql.interpOne [HI.sql| SELECT host, method, url_path FROM apis.endpoints WHERE project_id = #{pid} AND hash = #{endpointHash} |]
+      let (sqlFilter, kqlFilter) = case endpoint of
+            Just (host :: Text, method :: Text, path :: Text) | not (any T.null [host, method, path]) && not ("{" `T.isInfixOf` path) ->
+              let fields = [("server.address", host), ("http.request.method", method), ("url.path", path)]
+               in ( T.intercalate " AND " ["attributes___" <> T.replace "." "___" field <> " IN " <> constantToSQLList [[value]] | (field, value) <- fields]
+                  , T.intercalate " AND " ["attributes." <> field <> " in " <> constantToKQLList [[value]] | (field, value) <- fields]
+                  )
+            _ -> ("hashes @> ARRAY[" <> sqlStringLit endpointHash <> "]", "hashes[*] in " <> constantToKQLList [[endpointHash]])
+      pure [("const-endpointFilter", Just sqlFilter), ("const-endpointFilter-kql", Just kqlFilter)]
+    _ -> pure []
+  (constants, params) <- processConstantsAndExtendParams pid now timeParams (addVariableDefaults (allParams <> endpointParams) dash.variables) (dashboardQueryText dash) (fold dash.constants)
   dash' <- processVariablesConcurrently pid now timeParams params (dash & #constants ?~ constants)
   pure (dash', params)
 

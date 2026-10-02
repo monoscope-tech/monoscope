@@ -182,11 +182,12 @@ httpKeyOf canonicalTemplates otelSpan =
       !method = T.toUpper $ fromMaybe "GET" $ attrValue ^? key "http" . key "request" . key "method" . _String
       -- An empty @http.route@ means the router matched nothing (Django writes
       -- one for every unrouted request), so it is absence, not a route.
-      !routeAttr = normalizeHttpRoute <$> (attrValue ^? key "http" . key "route" . _String >>= guarded (not . T.null))
+      !routeAttr = normalizeHttpRoute <$> (guard (otelSpan.kind /= Just "client") *> (attrValue ^? key "http" . key "route" . _String >>= guarded (not . T.null)))
+      !clientTemplate = normalizeHttpRoute <$> (attrValue ^? key "url" . key "template" . _String >>= guarded (not . T.null))
       -- The route we are willing to take as authority — carrying both the
       -- decision and the value, so neither can be read without the other.
       !authoritative = routeAttr >>= guarded routeIsAuthoritative
-      !routePath = fromMaybe "/" $ routeAttr <|> (attrValue ^? key "url" . key "path" . _String)
+      !routePath = fromMaybe "/" $ (if otelSpan.kind == Just "client" then clientTemplate else routeAttr) <|> (attrValue ^? key "url" . key "path" . _String)
       !statusCode =
         fromMaybe 200
           $ ( (attrValue ^? key "http" . key "response" . key "status_code" . _String >>= readMaybe @Int . toString)
@@ -246,9 +247,9 @@ httpKeyOf canonicalTemplates otelSpan =
 -- @(mkEndpoint, hashes, normalizedPath, frameworkHash)@ —
 -- the endpoint is returned as a function of its row id so hash-only callers
 -- ('stampHashesAtIngest') never have to conjure a placeholder UUID;
--- the normalized path (@Just@ for HTTP spans) is stamped back onto the span's
--- @attributes.http.route@ and @attributes.url.path@ by the caller so explorer
--- queries match the template stored in @apis.endpoints@. Schema learning flows
+-- the normalized path (@Just@ for HTTP spans) is stamped onto Monoscope's
+-- endpoint route field; the OTel route and URL path retain their original meaning.
+-- Schema learning flows
 -- through 'extractObservation' instead; this only does endpoint discovery.
 --
 -- @frameworkHash@ is set only for a /new/ endpoint whose path came from
@@ -297,9 +298,7 @@ processSpanToEntities canonicalTemplates pjc projectId otelSpan =
                 , environment
                 }
    in -- One stamped hash per span (the endpoint hash) — field/shape hashes moved to
-      -- the schema-learning catalog. The normalized path goes back into both
-      -- attributes.http.route and attributes.url.path so notification links and the
-      -- catalog UI filter by the same template stored in apis.endpoints.
+      -- the schema-learning catalog.
       ( endpoint
       , V.singleton endpointHash
       , if isHttpSpan then Just urlPath else Nothing
@@ -320,9 +319,19 @@ stampHashesAtIngest caches spans = V.map stamp spans
     stamp r = fromMaybe r do
       pid <- Projects.projectIdFromText r.project_id
       pjc <- HM.lookup pid caches
-      let (_, spanHashes, _, _) = processSpanToEntities (HM.lookupDefault (mkPathClassifier pjc) pid templatesByPid) pjc pid r
+      let classifier = HM.lookupDefault (mkPathClassifier pjc) pid templatesByPid
+          (_, spanHashes, normalizedPath, _) = processSpanToEntities classifier pjc pid r
+          HttpKey{method = canonicalMethod, host = canonicalHost} = httpKeyOf classifier r
           errHashes = V.map (\e -> "err:" <> e.hash) (Telemetry.getAllATErrors (V.singleton r))
-      pure r{hashes = Just $ spanHashes <> errHashes}
+          attrs = AEKM.fromMapText $ maybeToMonoid $ unAesonTextMaybe r.attributes
+          originalMethod = AE.Object attrs ^? key "http" . key "request" . key "method" . _String
+          hasOriginalMethod = isJust $ AE.Object attrs ^? key "http" . key "request" . key "method_original" . _String
+          normalizedAttrs = normalizedPath >>= (\path -> AesonText <$> jsonToMap (AE.Object attrs `lodashMerge` nestedJsonFromDotNotation
+            ([ ("monoscope.endpoint.route", AE.String path)
+             , ("http.request.method", AE.String canonicalMethod)
+             ] <> [("server.address", AE.String canonicalHost) | not (T.null canonicalHost)]
+               <> [("http.request.method_original", AE.String method) | Just method <- [originalMethod], method /= canonicalMethod, not hasOriginalMethod])))
+      pure r{hashes = Just $ spanHashes <> errHashes, attributes = normalizedAttrs <|> r.attributes}
     templatesByPid = mkBatchPathClassifiers caches spans
 
 
@@ -507,24 +516,25 @@ createSpanAttributes :: RequestMessage -> AE.Value
 createSpanAttributes rm =
   let baseAttrs =
         nestedJsonFromDotNotation
-          [ ("net.host.name", AE.String $ fromMaybe "" rm.host)
+          ( [ ("net.host.name", AE.String $ fromMaybe "" rm.host)
           , ("server.address", AE.String serverAddress)
           , ("http.method", AE.String rm.method)
           , ("http.request.method", AE.String rm.method)
           , ("http.request.path_params", rm.pathParams)
           , ("http.request.query_params", rm.queryParams)
-          , ("http.request.path", AE.String $ fromMaybe "/" rm.urlPath)
+          , ("http.request.path", AE.String rawPath)
           , ("http.response.status_code", AE.Number $ fromIntegral rm.statusCode)
           , ("http.status_code", AE.Number $ fromIntegral rm.statusCode)
-          , ("http.route", AE.String $ fromMaybe (T.takeWhile (/= '?') rm.rawUrl) rm.urlPath)
           , ("http.url", AE.String rm.rawUrl)
-          , ("url.path", AE.String $ fromMaybe "/" rm.urlPath)
+          , ("url.path", AE.String rawPath)
           , ("url.full", AE.String rm.rawUrl)
           , ("monoscope.msg_id", AE.String $ maybe "" UUID.toText rm.msgId)
           , ("monoscope.parent_id", AE.String $ maybe "" UUID.toText rm.parentId)
           , ("monoscope.sdk_type", AE.String $ show rm.sdkType)
           , ("monoscope.errors", AE.String $ maybe "[]" (decodeUtf8 . AE.encode) rm.errors)
           ]
+          <> [("http.route", AE.String route) | Just route <- [rm.urlPath], routeIsAuthoritative (normalizeHttpRoute route)]
+          )
    in baseAttrs
         `lodashMerge` refererObj
         `lodashMerge` headersObj
@@ -534,6 +544,10 @@ createSpanAttributes rm =
     -- Host resolution reads that column and nothing else, so it is populated here rather
     -- than reconstructed at query time; rawUrl keeps hostless spans attributable.
     serverAddress = fromMaybe (hostFromRawUrl rm.rawUrl) (rm.host >>= guarded (not . T.null))
+    rawPath =
+      let (_, authorityAndPath) = T.breakOn "://" rm.rawUrl
+          path = if T.null authorityAndPath then rm.rawUrl else T.dropWhile (/= '/') $ T.drop 3 authorityAndPath
+       in fromMaybe "/" $ guarded (not . T.null) $ T.takeWhile (\c -> c /= '?' && c /= '#') path
 
     tagsObj = maybe (AE.object []) (\tags -> nestedJsonFromDotNotation [("monoscope.tags", AE.Array $ V.fromList $ map AE.String tags)]) rm.tags
 
@@ -944,10 +958,8 @@ isBracedPlaceholder t = T.length t > 2 && T.isPrefixOf "{" t && T.isSuffixOf "}"
 -- >>> map normalizeHttpRoute ["/f/<int:page>", "/f/<name>", "/f/<path:sub>"]
 -- ["/f/{page}","/f/{name}","/f/{sub}"]
 --
--- A concrete path is left alone — which is what keeps the legacy SDK bridge
--- honest, since 'createSpanAttributes' synthesises @http.route@ from the raw
--- URL. It carries no template, so it stays a URL and the id heuristics still get
--- their turn at it:
+-- A concrete path is left alone. Older SDKs supplied a concrete @http.route@;
+-- it carries no template, so the id heuristics still get their turn at it:
 --
 -- >>> map normalizeHttpRoute ["/users/123/posts", "/ns:resource:123", ""]
 -- ["/users/123/posts","/ns:resource:123",""]

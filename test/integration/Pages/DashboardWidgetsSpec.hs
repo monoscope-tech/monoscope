@@ -35,6 +35,7 @@ import Pages.Dashboards (DashboardFilters (..))
 import Pages.Dashboards qualified as Dashboards
 import Pages.Issues qualified as Issues
 import Pkg.Components.Widget qualified as Widget
+import Pkg.Parser (parseQueryToAST)
 import Pkg.QueryCache qualified as QueryCache
 import Pkg.TestClock (getTestTime, setTestTime)
 import Pkg.TestUtils
@@ -812,8 +813,7 @@ spec = sequential $ aroundAll withTestResources do
     it "rejects a corrupt blob instead of decompressing something arbitrary" \_ ->
       Widget.decodeWidgetZ "not-a-gzip-blob" `shouldReturn` Nothing
 
-  -- Endpoint Analytics filters by endpoint hash, which already identifies one endpoint.
-  -- Every widget *also* pinned kind=="server", so the ~56% of a project's endpoints that
+  -- Every widget once pinned kind=="server", so the ~56% of a project's endpoints that
   -- are outgoing calls (apis.endpoints.outgoing, discovered from client spans) rendered an
   -- entirely empty dashboard: "0 reqs", "No data in this time range", while the log
   -- explorer showed the traffic. Reported by a customer for dellyman.com/api/v3.0/GetQuotes.
@@ -837,8 +837,38 @@ spec = sequential $ aroundAll withTestResources do
 
     it "ships a template that does not filter the endpoint's widgets by span kind" \_ -> do
       template <- decodeUtf8 <$> readFileBS "static/public/dashboards/endpoint-stats.yaml"
-      template `shouldSatisfy` T.isInfixOf "hashes[*]==\"{{var-endpointHash}}\""
+      template `shouldSatisfy` T.isInfixOf "{{const-endpointFilter}}"
       template `shouldNotSatisfy` T.isInfixOf "kind"
+
+    it "uses exact host, method, and path for literal endpoints, retaining hashes for templates" \tr -> do
+      dashId <- newDashboard tr "endpoint-stats.yaml" "Endpoint selectors"
+      let endpoint hash path =
+            (def :: Endpoints.Endpoint)
+              { Endpoints.projectId = testPid
+              , Endpoints.host = "integrations.routelift.com"
+              , Endpoints.method = "POST"
+              , Endpoints.urlPath = path
+              , Endpoints.hash = hash
+              , Endpoints.outgoing = True
+              }
+          filters hash = do
+            (_, response) <- testServant tr $ Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "24H") (Just "true") Nothing [("var-host", Just "integrations.routelift.com"), ("var-endpointHash", Just hash)]
+            let Dashboards.DashboardGet _ _ _ _ params = tabDashboard response
+                values = Map.fromList params
+            pure (Map.lookup "const-endpointFilter" values, Map.lookup "const-endpointFilter-kql" values)
+          hostless :: Endpoints.Endpoint
+          hostless = (endpoint "hostless-route" "/health"){Endpoints.host = ""}
+      runQueryEffect tr $ Endpoints.bulkInsertEndpoints $ V.fromList [endpoint "literal-route" "/v1/deliveries/estimate/v2", endpoint "template-route" "/v1/deliveries/{id}", hostless]
+      filters "literal-route" `shouldReturn`
+        ( Just (Just "attributes___server___address IN ('integrations.routelift.com') AND attributes___http___request___method IN ('POST') AND attributes___url___path IN ('/v1/deliveries/estimate/v2')")
+        , Just (Just "attributes.server.address in (\"integrations.routelift.com\") AND attributes.http.request.method in (\"POST\") AND attributes.url.path in (\"/v1/deliveries/estimate/v2\")")
+        )
+      filters "template-route" `shouldReturn` (Just (Just "hashes @> ARRAY['template-route']"), Just (Just "hashes[*] in (\"template-route\")"))
+      filters "hostless-route" `shouldReturn` (Just (Just "hashes @> ARRAY['hostless-route']"), Just (Just "hashes[*] in (\"hostless-route\")"))
+      filters "" `shouldReturn` (Just (Just "hashes @> ARRAY['']"), Just (Just "hashes[*] in (\"\")"))
+      for_ ["literal-route", "template-route", "hostless-route", ""] \hash -> do
+        (_, kql) <- filters hash
+        join kql `shouldSatisfy` maybe False (isRight . parseQueryToAST)
 
     it "renders a dashboard table link with the current project and URL-encoded row value" \_ -> do
       let column = (def :: Widget.TableColumn){Widget.field = "session_id", Widget.title = "Session", Widget.link = Just "/p/{{project_id}}/rum?tab=sessions&session={{row.session_id}}"}

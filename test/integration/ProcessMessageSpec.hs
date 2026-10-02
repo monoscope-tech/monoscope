@@ -141,6 +141,13 @@ resourceSpec = do
           expected = Just $ V.singleton $ toXXHash $ pid.toText <> "GET" <> "/api/stores/{id}/business-hours"
       for_ [V.fromList [declared, unrouted], V.fromList [unrouted, declared]] \spans ->
         V.map (.hashes) (stampHashesAtIngest caches spans) `shouldBe` V.replicate 2 expected
+      let stamped = stampHashesAtIngest caches $ V.fromList [unrouted, declared]
+          canonicalPath = "/api/stores/{id}/business-hours"
+      for_ (V.toList $ V.zip stamped (V.fromList ["", "/api/stores/:id/business-hours"])) \(sp, originalRoute) -> do
+        AesonText attrs <- maybe (fail "missing stamped attributes") pure sp.attributes
+        Map.lookup "url" attrs `shouldBe` Just (AE.object ["path" AE..= path])
+        Map.lookup "http" attrs `shouldBe` Just (AE.object ["request" AE..= AE.object ["method" AE..= ("GET" :: Text)], "route" AE..= originalRoute])
+        Map.lookup "monoscope" attrs `shouldBe` Just (AE.object ["endpoint" AE..= AE.object ["route" AE..= canonicalPath]])
       Telemetry.handOffBatches tr.trATCtx.extractionWorker caches $ stampHashesAtIngest caches $ V.fromList [unrouted, declared]
       drainExtractionWorker tr
       endpoints <-
@@ -158,6 +165,36 @@ resourceSpec = do
           stamped = stampHashesAtIngest caches $ V.fromList [declared, unrouted]
           expected = Just $ V.singleton $ toXXHash $ pid.toText <> "GET" <> "/api/stores/{uuid}/business-hours"
       (.hashes) <$> (stamped V.!? 1) `shouldBe` Just expected
+
+    it "stampHashesAtIngest_canonicalizesLegacyHostAndMethodForEndpointFilters" \_ -> do
+      let attrs = Map.fromList [("http", AE.object ["request" AE..= AE.object ["method" AE..= ("post" :: Text)]]), ("net", AE.object ["host" AE..= AE.object ["name" AE..= ("integrations.routelift.com" :: Text)]]), ("url", AE.object ["path" AE..= ("/v1/deliveries/estimate/v2" :: Text)])]
+          sp :: Telemetry.OtelLogsAndSpans
+          sp = (emptySpan frozenTime){Telemetry.kind = Just "client", Telemetry.attributes = Just $ AesonText attrs}
+          stamped = stampHashesAtIngest (one (pid, Projects.defaultProjectCache)) (V.singleton sp)
+      for_ (stamped V.!? 0) \row -> do
+        AesonText result <- maybe (fail "missing stamped attributes") pure row.attributes
+        Map.lookup "server" result `shouldBe` Just (AE.object ["address" AE..= ("integrations.routelift.com" :: Text)])
+        Map.lookup "http" result `shouldBe` Just (AE.object ["request" AE..= AE.object ["method" AE..= ("POST" :: Text), "method_original" AE..= ("post" :: Text)]])
+        Map.lookup "url" result `shouldBe` Just (AE.object ["path" AE..= ("/v1/deliveries/estimate/v2" :: Text)])
+        Map.lookup "monoscope" result `shouldBe` Just (AE.object ["endpoint" AE..= AE.object ["route" AE..= ("/v1/deliveries/estimate/v2" :: Text)]])
+
+    it "clientUrlTemplate_definesEndpointWithoutSynthesizingHttpRoute" \_ -> do
+      let sp :: Telemetry.OtelLogsAndSpans
+          sp =
+            (emptySpan frozenTime)
+              { Telemetry.kind = Just "client"
+              , Telemetry.attributes = Just $ AesonText $ Map.fromList
+                  [ ("http", AE.object ["request" AE..= AE.object ["method" AE..= ("GET" :: Text)]])
+                  , ("url", AE.object ["path" AE..= ("/orders/42" :: Text), "template" AE..= ("/orders/{id}" :: Text)])
+                  ]
+              }
+          stamped = stampHashesAtIngest (one (pid, Projects.defaultProjectCache)) (V.singleton sp)
+      for_ (stamped V.!? 0) \row -> do
+        row.hashes `shouldBe` Just (V.singleton $ toXXHash $ pid.toText <> "GET/orders/{id}")
+        AesonText result <- maybe (fail "missing stamped attributes") pure row.attributes
+        Map.lookup "http" result `shouldBe` Just (AE.object ["request" AE..= AE.object ["method" AE..= ("GET" :: Text)]])
+        Map.lookup "url" result `shouldBe` Just (AE.object ["path" AE..= ("/orders/42" :: Text), "template" AE..= ("/orders/{id}" :: Text)])
+        Map.lookup "monoscope" result `shouldBe` Just (AE.object ["endpoint" AE..= AE.object ["route" AE..= ("/orders/{id}" :: Text)]])
 
     -- Django writes a Python named-group regex. normalizeUrlPath then truncated
     -- it at the '?' of "(?P<", which is how "api/v1/wallets/(" became 162 real
@@ -183,8 +220,8 @@ resourceSpec = do
       pathOf classifier cache sp `shouldBe` Just "/v1/rates/{param}/history"
       fwHashOf classifier cache sp `shouldBe` Nothing
 
-    -- The legacy SDK bridge synthesises http.route from the raw URL. It carries
-    -- no parameter, so it is not authority and the id heuristics still run.
+    -- Old SDKs supplied concrete URLs as http.route; these are not router
+    -- declarations, so the id heuristics still run.
     it "httpRoute_synthesisedFromConcreteUrl_isNotTreatedAsAuthority" \_ -> do
       now <- getCurrentTime
       let sp = route "/users/550e8400-e29b-41d4-a716-446655440000" "/users/550e8400-e29b-41d4-a716-446655440000" now
@@ -257,11 +294,7 @@ resourceSpec = do
       let expected = toXXHash $ pid.toText <> "172.31.29.11" <> "GET" <> "/"
       V.map fromOnly hashes `shouldBe` V.singleton expected
 
-    -- http.route is promoted out of the `attributes` blob into its own column,
-    -- on both dual-write legs. One insert statement serves both, so a column
-    -- present on one store and absent on the other fails every batch — this
-    -- asserts the Postgres half exists and is populated (migration 0141).
-    it "httpRoute_isWrittenToItsPromotedColumn_notOnlyTheAttributesBlob" $ \tr -> do
+    it "rawUrl_doesNotSynthesizeHttpRouteButKeepsCanonicalEndpoint" $ \tr -> do
       currentTime <- getCurrentTime
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
           reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
@@ -269,9 +302,9 @@ resourceSpec = do
       whenLeft_ resp \_ -> expectationFailure "processMessages returned Left WriteFailure"
       routes <-
         withPool tr.trPool
-          $ DBT.query [sql| SELECT attributes___http___route FROM otel_logs_and_spans WHERE project_id = ? |] (Only pid)
-          :: IO (V.Vector (Only (Maybe Text)))
-      V.mapMaybe fromOnly routes `shouldBe` V.singleton "/"
+          $ DBT.query [sql| SELECT attributes___http___route, attributes->'monoscope'->'endpoint'->>'route' FROM otel_logs_and_spans WHERE project_id = ? |] (Only pid)
+          :: IO (V.Vector (Maybe Text, Maybe Text))
+      routes `shouldBe` V.singleton (Nothing, Just "/")
 
     it "We should expect 2 endpoints, albeit unacknowleged." $ \tr -> do
       currentTime <- getCurrentTime
