@@ -224,7 +224,7 @@ drawer_ drawerId startOpen urlM content trigger = div_ [class_ "drawer drawer-en
         div_
           [ id_ $ drawerId <> "-content"
           , class_ "h-full flex flex-col gap-8 px-8 pb-4 max-lg:px-6 max-md:px-4"
-          , term "hx-on::after:swap" "window.evalScriptsFromContent(this); window.labelDrawer(this.closest('[role=dialog]'))"
+          , term "hx-on::after:swap" "window.evalScriptsFromContent(event.target); window.labelDrawer(this.closest('[role=dialog]'))"
           ]
           -- hx-swap sits on the requester rather than being inherited from the wrapper:
           -- htmx 4 resolves inheritance explicitly, so a parent's value no longer reaches here.

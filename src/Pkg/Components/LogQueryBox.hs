@@ -199,7 +199,7 @@ logQueryBox_ config = do
                   -- border-box, so its borders leave 30 for content). Anything taller
                   -- pinned here pushes that box past the h-8 controls beside it,
                   -- which is what the `matches the query controls' height` spec measures.
-                  ( [id_ "filterElement", class_ $ "w-full flex items-center" <> bool "" " pr-16" (isNothing config.targetWidgetPreview), term "default-value" (fromMaybe "" config.query), term "project-id" config.pid.toText]
+                  ( [id_ "filterElement", class_ "w-full flex items-center pr-16", term "default-value" (fromMaybe "" config.query), term "project-id" config.pid.toText]
                       -- The editor validates against the server, which needs the same source the
                       -- query will run under: metrics live in another table, so without this the
                       -- Metrics page squiggles `metric_name` on a query it then runs happily.
@@ -208,10 +208,9 @@ logQueryBox_ config = do
                       <> [term "widget-editor" "true" | isJust config.targetWidgetPreview]
                   )
                   queryEditorSkeleton_
-                whenNothing_ config.targetWidgetPreview
-                  $ label_ [Lucid.for_ "ai-search-chkbox", class_ "absolute top-1/2 right-1 -translate-y-1/2 px-2 py-1 inline-flex gap-1 items-center cursor-pointer rounded-sm text-xs font-medium leading-none text-textWeak hover:bg-fillWeak hover:text-textBrand group-has-[.ai-search:checked]/fltr:hidden", data_ "tippy-content" "Ask AI in plain English"] do
-                    faSprite_ "sparkles" "regular" "h-4 w-4 shrink-0"
-                    "Ask AI"
+                label_ [Lucid.for_ "ai-search-chkbox", role_ "button", tabindex_ "0", Aria.label_ "Ask AI", class_ "absolute top-1/2 right-1 -translate-y-1/2 px-2 py-1 inline-flex gap-1 items-center cursor-pointer rounded-sm text-xs font-medium leading-none text-textWeak hover:bg-fillWeak hover:text-textBrand focus-visible:outline-2 group-has-[.ai-search:checked]/fltr:hidden", data_ "tippy-content" "Ask AI in plain English", keyboardActivateAttr_] do
+                  faSprite_ "sparkles" "regular" "h-4 w-4 shrink-0"
+                  "Ask AI"
 
             div_ [class_ "flex shrink-0 items-center gap-1"] do
               whenNothing_ config.targetWidgetPreview $ do
@@ -238,13 +237,15 @@ logQueryBox_ config = do
                   $ faSprite_ "floppy-disk" "regular" "h-4 w-4"
               button_
                 [ type_ "submit"
-                , class_ "btn btn-primary !h-8 !min-h-8 w-9 cursor-pointer rounded-md p-0 leading-none active:scale-[0.96] transition-transform"
+                , class_ $ "btn btn-primary !h-8 !min-h-8 cursor-pointer rounded-md leading-none active:scale-[0.96] transition-transform motion-reduce:transition-none motion-reduce:active:scale-100 " <> bool "w-9 p-0" "gap-1.5 px-3" (isJust config.targetWidgetPreview)
                 , Aria.label_ "Run query"
                 , onpointerdown_ "this.form.dispatchEvent(new Event('submit', {bubbles: true}))"
                 ]
-                $ faSprite_ "magnifying-glass" "regular" "h-4 w-4"
+                $ do
+                  faSprite_ "magnifying-glass" "regular" "h-4 w-4"
+                  when (isJust config.targetWidgetPreview) "Run query"
 
-      div_ [class_ "flex justify-between max-md:flex-wrap max-md:gap-0.5"] do
+      div_ [class_ $ "flex justify-between max-md:flex-wrap max-md:gap-0.5" <> bool "" " mt-1 border-t border-strokeWeak pt-2" (isJust config.targetWidgetPreview)] do
         div_ [class_ "flex min-w-0 items-center gap-0 max-md:w-full"] do
           div_ [class_ "flex items-center gap-2 max-md:gap-1"] do
             visualizationTabs_

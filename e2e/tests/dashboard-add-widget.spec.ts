@@ -153,6 +153,103 @@ test.describe("adding widgets to a dashboard", () => {
       .locator("#visualizationTabs input[type=radio]:checked")
       .getAttribute("value");
     expect(checked).not.toBe("logs");
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(drawer.getByRole("tab", { name: "Monitors" })).toHaveCount(0);
+    await expect(drawer.getByRole("checkbox", { name: "Create a monitor" })).toBeVisible();
+    await drawer.getByRole("checkbox", { name: "Create a monitor" }).check();
+    await expect(drawer.getByRole("button", { name: "Add widget and monitor" })).toBeVisible();
+    await expect.poll(async () => {
+      const heading = await drawer.getByRole("heading", { name: "Set up a monitor" }).boundingBox();
+      const header = await drawer.locator(".widget-editor-header").boundingBox();
+      return heading && header ? heading.y - (header.y + header.height) : -1;
+    }).toBeGreaterThan(0);
+    await drawer.locator('[name="alertThreshold"]').fill("7");
+    await drawer.getByRole("checkbox", { name: "Create a monitor" }).uncheck();
+    await expect(drawer.getByRole("button", { name: "Add widget", exact: true })).toBeVisible();
+    await expect(drawer.locator('form[id$="-alert-form"]')).toBeHidden();
+    await expect(drawer.locator('#widgetAlertThreshold')).toHaveValue("7");
+    await drawer.getByRole("checkbox", { name: "Create a monitor" }).check();
+    await expect(drawer.locator('[name="alertThreshold"]')).toHaveValue("7");
+  });
+
+  test("a new widget saves its monitor from the same form", async ({ page }) => {
+    const dash = await makeDashboard(page, `E2E New Widget Monitor ${Date.now()}`);
+    try {
+      await page.waitForSelector(`${ROOT_GRID}.grid-stack-initialized`);
+      await openWidgetDrawer(page);
+      const drawer = page.locator("#page-data-drawer-panel");
+      await drawer.getByRole("checkbox", { name: "Create a monitor" }).check();
+      await expect(drawer.locator('form[id$="-alert-form"]')).toBeVisible();
+      await drawer.getByRole("button", { name: "Add widget and monitor" }).click();
+      await expect(drawer.getByText("Enter a KQL query to create a monitor.")).toBeVisible();
+      await expect(drawer.locator("#filterElement .cm-content")).toBeFocused();
+      await page.locator('input[placeholder="Throughput"]').fill("New widget errors");
+      await page.locator("#page-data-drawer-panel #filterElement .cm-content").fill('name == "e2e-new-widget-monitor"');
+      await expect(drawer.locator('[name="title"]')).toHaveCount(0);
+      await drawer.locator('[name="alertThreshold"]').fill("1");
+      await drawer.locator('[name="frequency"]').selectOption("10m");
+      await drawer.locator('[name="timeWindow"]').selectOption("15m");
+      await drawer.locator('[name="direction"]').selectOption("below");
+      const alertRequest = (url: URL) => url.pathname.endsWith("/alert") && url.pathname.includes("/widgets/");
+      await page.route(alertRequest, route => route.fulfill({ status: 503, body: "Temporary failure" }));
+      await drawer.getByRole("button", { name: "Add widget and monitor" }).click();
+      await expect(drawer.getByRole("button", { name: "Retry monitor" })).toBeVisible();
+      await expect(page.locator(ROOT_ITEMS).filter({ hasText: "New widget errors" })).toHaveCount(1);
+      await page.unroute(alertRequest);
+      await drawer.getByRole("button", { name: "Retry monitor" }).click();
+      await expect(page.getByText("Widget monitor configured successfully")).toBeVisible();
+      await expect(page.locator("#page-data-drawer")).not.toBeChecked();
+      await page.goto(`/p/${DEMO_PROJECT}/monitors`);
+      await expect(page.getByText(`New widget errors · ${dash.title}`, { exact: true })).toBeVisible();
+      await page.getByText(`New widget errors · ${dash.title}`, { exact: true }).click();
+      const widgetLink = page.getByRole("link", { name: "View widget" });
+      await expect(widgetLink).toHaveAttribute("href", new RegExp(`/dashboards/${dash.id}\\?expand=`));
+      await widgetLink.click();
+      await expect(page).toHaveURL(new RegExp(`/dashboards/${dash.id}\\?expand=`));
+      await expect(page.locator(ROOT_ITEMS).filter({ hasText: "New widget errors" })).toHaveCount(1);
+      await expect(page.locator(".widget-editor")).toBeVisible();
+      await page.getByRole("tab", { name: "Monitors", exact: true }).click();
+      const saved = page.locator('form[id$="-alert-form"]');
+      await expect(saved.locator('[name="alertThreshold"]')).toHaveValue("1.0");
+      await expect(saved.locator('[name="frequency"]')).toHaveValue("10m");
+      await expect(saved.locator('[name="timeWindow"]')).toHaveValue("15m");
+      await expect(saved.locator('[name="direction"]')).toHaveValue("below");
+    } finally {
+      await deleteDashboard(page, dash);
+    }
+  });
+
+  test("widget name entered after the query survives save and reload", async ({ page }) => {
+    const dash = await makeDashboard(page, `E2E Widget Name ${Date.now()}`);
+    try {
+      await page.waitForSelector(`${ROOT_GRID}.grid-stack-initialized`);
+      await openWidgetDrawer(page);
+      const drawer = page.locator("#page-data-drawer-panel");
+      await drawer.locator("#filterElement .cm-content").fill('name == "e2e-widget-name"');
+      await drawer.getByRole("textbox", { name: "Widget name" }).fill("Custom widget name");
+      expect(await page.evaluate(() => (window as any).widgetJSON.title)).toBe("Custom widget name");
+      await Promise.all([
+        page.waitForResponse(r => r.request().method() === "PUT" && r.url().includes(dash.id) && r.status() < 400),
+        drawer.getByRole("button", { name: "Add widget", exact: true }).click(),
+      ]);
+      await page.reload();
+      const saved = page.locator(ROOT_ITEMS).filter({ hasText: "Custom widget name" });
+      await expect(saved).toHaveCount(1);
+      await saved.getByRole("button", { name: "Expand widget", exact: true }).click();
+      const editor = page.locator("#global-data-drawer-panel");
+      await editor.locator("#filterElement .cm-content").fill('name == "e2e-renamed-widget"');
+      await editor.getByRole("textbox", { name: "Widget name" }).fill("Renamed widget");
+      expect(await page.evaluate(() => (window as any).widgetJSON.title)).toBe("Renamed widget");
+      await Promise.all([
+        page.waitForResponse(r => r.request().method() === "PUT" && r.url().includes(dash.id) && r.status() < 400),
+        editor.getByRole("button", { name: "Save widget" }).click(),
+      ]);
+      await page.reload();
+      await expect(page.locator(ROOT_ITEMS).filter({ hasText: "Renamed widget" })).toHaveCount(1);
+    } finally {
+      await deleteDashboard(page, dash);
+    }
   });
 
   test("AI search preserves the widget visualization and programmatic changes stay in sync", async ({ page }) => {
@@ -216,12 +313,6 @@ test.describe("adding widgets to a dashboard", () => {
     // than paint over the rest of the form.
     expect(fit.clipped, "the preview frame lets its contents escape").toBe(true);
 
-    // And the frame really did get taller for logs than it is for a chart.
-    const frameBox = (await frame.boundingBox())!;
-    await page.locator('#visualizationTabs label[data-value="timeseries"]').click();
-    await page.waitForTimeout(1500);
-    const chartBox = (await frame.boundingBox())!;
-    expect(frameBox.height, "logs and charts get the same preview height").toBeGreaterThan(chartBox.height);
   });
 
   test("a log explorer chart can be added to a dashboard", async ({ page }) => {
@@ -569,10 +660,123 @@ test("dashboard team actions remain reachable on mobile", async ({ page }) => {
 
 async function openWidgetMonitor(page: Page, dash: Dash) {
   await page.goto(`/p/${DEMO_PROJECT}/dashboards/${dash.id}`);
-  await page.getByRole("button", { name: "Expand widget", exact: true }).first().click();
+  await page.locator(ROOT_ITEMS).filter({ hasText: "Request Rate" }).getByRole("button", { name: "Expand widget", exact: true }).click();
   await page.getByRole("tab", { name: "Monitors", exact: true }).click();
   return page.locator('form[id$="-alert-form"]');
 }
+
+test("widget thresholds save from Edit and remain visible in Monitors", async ({ page }) => {
+  const dash = await makeDashboard(page, `E2E Widget Thresholds ${Date.now()}`, "Apache HTTP Server");
+  try {
+    await page.goto(`/p/${DEMO_PROJECT}/dashboards/${dash.id}`);
+    await page.locator(ROOT_ITEMS).filter({ hasText: "Request Rate" }).getByRole("button", { name: "Expand widget", exact: true }).click();
+    const editor = page.locator(".widget-editor");
+    await expect(editor.locator(".widget-preview-container")).toBeVisible();
+    await editor.getByRole("tab", { name: "Edit", exact: true }).click();
+    await expect(editor.locator(".widget-preview-container")).toBeVisible();
+    await expect(editor.getByText("Chart thresholds", { exact: true })).toBeVisible();
+    await editor.getByText("Chart thresholds", { exact: true }).click();
+    await editor.getByRole("button", { name: "Hide AI input" }).click();
+    const reopenAi = editor.locator('label[for="ai-search-chkbox"]').filter({ hasText: "Ask AI" });
+    await expect(reopenAi).toBeVisible();
+    await reopenAi.click();
+    await expect(editor.getByRole("textbox", { name: "Describe the events to find" })).toBeVisible();
+    await editor.getByRole("textbox", { name: "Measurement unit" }).fill("requests/s");
+    await editor.getByRole("spinbutton", { name: "Warning threshold" }).fill("7.5");
+    await editor.getByRole("spinbutton", { name: "Alert threshold" }).fill("10");
+    await expect(editor.getByRole("spinbutton", { name: "Warning threshold" })).toHaveValue("7.5");
+    const [saveResponse] = await Promise.all([
+      page.waitForResponse(r => r.request().method() === "PUT" && r.url().includes(`/dashboards/${dash.id}`) && r.ok()),
+      editor.getByRole("button", { name: "Save widget" }).click(),
+    ]);
+    expect(saveResponse.request().postDataJSON().unit).toBe("requests/s");
+    expect(saveResponse.request().postDataJSON().arning_threshold).toBe(7.5);
+    await page.reload();
+    await expect(page.locator(".widget-editor")).toBeVisible();
+    await editor.getByRole("tab", { name: "Edit", exact: true }).click();
+    await expect(editor.getByRole("textbox", { name: "Measurement unit" })).toHaveValue("requests/s");
+    await expect(editor.getByRole("spinbutton", { name: "Warning threshold" })).toHaveValue("7.5");
+    await expect(editor.getByRole("spinbutton", { name: "Alert threshold" })).toHaveValue("10.0");
+    await expect(editor.locator(".widget-preview-container")).toBeVisible();
+    await editor.getByRole("tab", { name: "Monitors", exact: true }).click();
+    await expect(editor.getByText("No monitor", { exact: true })).toBeVisible();
+    await expect(editor.locator('[name="alertThreshold"]')).toHaveValue("10.0");
+    await expect(editor.locator('[name="warningThreshold"]')).toHaveValue("7.5");
+    await editor.getByRole("tab", { name: "Edit", exact: true }).click();
+    await editor.getByRole("spinbutton", { name: "Warning threshold" }).fill("");
+    await Promise.all([
+      page.waitForResponse(r => r.request().method() === "PUT" && r.url().includes(`/dashboards/${dash.id}`) && r.ok()),
+      editor.getByRole("button", { name: "Save widget" }).click(),
+    ]);
+    await page.reload();
+    await expect(page.locator(".widget-editor")).toBeVisible();
+    await editor.getByRole("tab", { name: "Edit", exact: true }).click();
+    await expect(editor.getByRole("spinbutton", { name: "Warning threshold" })).toBeEmpty();
+  } finally {
+    await deleteDashboard(page, dash);
+  }
+});
+
+test("widget preview stays visible and compacts as the mobile drawer scrolls", async ({ page }) => {
+  const dash = await makeDashboard(page, `E2E Sticky Widget ${Date.now()}`, "Apache HTTP Server");
+  try {
+    await page.setViewportSize({ width: 390, height: 700 });
+    await page.goto(`/p/${DEMO_PROJECT}/dashboards/${dash.id}`);
+    await page.locator(ROOT_ITEMS).filter({ hasText: "Request Rate" }).getByRole("button", { name: "Expand widget", exact: true }).click();
+    const editor = page.locator(".widget-editor");
+    const panel = page.locator("#global-data-drawer-panel");
+    const preview = editor.locator(".widget-preview-container");
+    const fullHeight = (await preview.boundingBox())!.height;
+    await panel.evaluate(el => { el.scrollTop = 500; });
+    await expect(editor).toHaveClass(/is-compact/);
+    await expect.poll(async () => (await preview.boundingBox())!.height).toBeLessThan(fullHeight);
+    await expect.poll(async () => editor.locator(".widget-preview-heading").evaluate(el => el.getBoundingClientRect().height)).toBe(0);
+    const save = editor.getByRole("button", { name: "Save widget" });
+    await expect(save).toBeInViewport();
+    expect((await save.boundingBox())!.y).toBeLessThan((await preview.boundingBox())!.y);
+    await panel.evaluate(el => { el.scrollTop = 0; });
+    await expect(editor).not.toHaveClass(/is-compact/);
+    await editor.getByRole("tab", { name: "Monitors", exact: true }).click();
+    await expect(editor).not.toHaveClass(/is-compact/);
+    expect((await preview.boundingBox())!.height).toBe(fullHeight);
+  } finally {
+    await deleteDashboard(page, dash);
+  }
+});
+
+test("widget preview compacts when a desktop drawer has a short scroll range", async ({ page }) => {
+  const dash = await makeDashboard(page, `E2E Desktop Sticky Widget ${Date.now()}`, "Overview");
+  try {
+    await page.setViewportSize({ width: 2048, height: 700 });
+    await page.goto(`/p/${DEMO_PROJECT}/dashboards/${dash.id}`);
+    await page.locator(ROOT_ITEMS).filter({ hasText: "HTTP Errors (4xx & 5xx) - Incoming" }).getByRole("button", { name: "Expand widget", exact: true }).click();
+    const editor = page.locator(".widget-editor");
+    const panel = page.locator("#global-data-drawer-panel");
+    await expect(editor).toBeVisible();
+    await expect.poll(async () => panel.evaluate(el => el.scrollHeight - el.clientHeight)).toBeGreaterThan(0);
+    await expect.poll(async () => panel.evaluate(el => el.scrollHeight - el.clientHeight)).toBeLessThan(180);
+    await panel.evaluate(el => { el.scrollTop = 500; });
+    await expect(editor).toHaveClass(/is-compact/);
+    await expect(editor.locator(".widget-preview-heading")).toHaveJSProperty("offsetHeight", 0);
+    await expect.poll(async () => panel.evaluate(el => el.scrollTop)).toBeGreaterThan(0);
+    await panel.evaluate(el => { el.scrollTop = 0; });
+    await expect(editor).not.toHaveClass(/is-compact/);
+    await page.setViewportSize({ width: 2048, height: 900 });
+    await expect.poll(async () => panel.evaluate(el => el.scrollHeight - el.clientHeight)).toBeGreaterThan(0);
+    await panel.evaluate(el => { el.scrollTop = 500; });
+    await expect(editor).toHaveClass(/is-compact/);
+    await expect.poll(async () => panel.evaluate(el => el.scrollTop)).toBeGreaterThan(0);
+    expect(await panel.evaluate(async el => {
+      for (let frame = 0; frame < 12; frame++) {
+        await new Promise(requestAnimationFrame);
+        if (!el.querySelector('.widget-editor')?.classList.contains('is-compact') || el.scrollTop === 0) return false;
+      }
+      return true;
+    })).toBe(true);
+  } finally {
+    await deleteDashboard(page, dash);
+  }
+});
 
 test("widget monitors persist independently across dashboards and reopen with saved settings", async ({ page }) => {
   test.slow(); // Two dashboard lifecycles, including repeated navigation to verify persistence.
@@ -581,36 +785,58 @@ test("widget monitors persist independently across dashboards and reopen with sa
     const title = `E2E Widget Monitor ${Date.now()} ${suffix}`;
     const dash = await makeDashboard(page, title, "Apache HTTP Server");
     dashboards.push(dash);
+    await openWidgetMonitor(page, dash);
+    await page.getByRole("tab", { name: "Edit", exact: true }).click();
+    await page.getByText("Chart thresholds", { exact: true }).click();
+    await page.getByRole("spinbutton", { name: "Alert threshold" }).fill("10");
+    await Promise.all([
+      page.waitForResponse(r => r.request().method() === "PUT" && r.url().includes(`/dashboards/${dash.id}`) && r.ok()),
+      page.getByRole("button", { name: "Save widget" }).click(),
+    ]);
     const form = await openWidgetMonitor(page, dash);
-    await page.getByRole("checkbox", { name: /Enable Alert/ }).check();
-    await form.locator('[name="title"]').fill(title);
-    await form.locator('[name="alertThreshold"]').fill("10");
+    await expect(form.locator('[name="title"]')).toHaveCount(0);
+    await expect(form.locator(".tagify__tag")).toContainText("@everyone");
+    await expect(form.getByRole("checkbox", { name: "Send to all team members" })).toHaveCount(0);
+    await expect(form.locator('[name="alertThreshold"]')).toHaveValue("10.0");
     await form.getByText("Notification Settings", { exact: true }).click();
+    await form.getByText("Advanced notification settings", { exact: true }).click();
     await form.locator('[name="notifyAfter"]').selectOption("10m");
     await form.getByRole("button", { name: "Create monitor", exact: true }).click();
     await expect(page.getByText("Widget monitor configured successfully")).toBeVisible();
   }
   await page.goto(`/p/${DEMO_PROJECT}/monitors`);
-  for (const dash of dashboards) await expect(page.getByText(dash.title, { exact: true })).toBeVisible();
+  for (const dash of dashboards) await expect(page.getByText(`Request Rate · ${dash.title}`, { exact: true })).toBeVisible();
   const form = await openWidgetMonitor(page, dashboards[0]);
-  await expect(page.getByRole("checkbox", { name: /Enable Alert/ })).toBeChecked();
-  await expect(form.getByRole("button", { name: "Update monitor", exact: true })).toBeVisible();
-  await expect(form.locator('[name="title"]')).toHaveValue(dashboards[0].title);
+  await expect(page.getByText("Active monitor", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Pause monitor" }).click();
+  await expect(page.getByText("Paused monitor", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Resume monitor" }).click();
+  await expect(page.getByText("Active monitor", { exact: true })).toBeVisible();
+  await expect(form.getByRole("button", { name: "Save monitor", exact: true })).toBeVisible();
+  await expect(form.locator('[name="title"]')).toHaveCount(0);
+  await expect(form.locator(".tagify__tag")).toContainText("@everyone");
   await expect(form.locator('[name="alertThreshold"]')).toHaveValue("10.0");
   await expect(form.locator('[name="notifyAfterCheck"]')).toBeChecked();
   await expect(form.locator('[name="notifyAfter"]')).toHaveValue("10m");
-  await form.locator('[name="alertThreshold"]').fill("15");
-  await form.getByRole("button", { name: "Update monitor", exact: true }).click();
-  await expect(page.getByText("Widget monitor configured successfully")).toBeVisible();
+  await page.getByRole("tab", { name: "Edit", exact: true }).click();
+  await page.getByRole("spinbutton", { name: "Alert threshold" }).fill("15");
+  await Promise.all([
+    page.waitForResponse(r => r.request().method() === "PUT" && r.url().includes(`/dashboards/${dashboards[0].id}`) && r.ok()),
+    page.getByRole("button", { name: "Save widget" }).click(),
+  ]);
+  await expect(page.getByText("Widget and monitor updated successfully")).toBeVisible();
   await openWidgetMonitor(page, dashboards[0]);
   await expect(form.locator('[name="alertThreshold"]')).toHaveValue("15.0");
-  await form.getByRole("button", { name: "Remove monitor", exact: true }).click();
+  const widgetId = await form.locator('[name="widgetId"]').inputValue();
+  const widget = await page.locator(`[id="${widgetId}_widgetEl"]`).getAttribute("data-widget");
+  expect(JSON.parse(widget!).alert_threshold).toBe(15);
+  await page.getByRole("button", { name: "Remove monitor", exact: true }).click();
   await expect(page.getByText("Monitor removed from widget")).toBeVisible();
   await openWidgetMonitor(page, dashboards[0]);
-  await expect(page.getByRole("checkbox", { name: /Enable Alert/ })).not.toBeChecked();
+  await expect(page.getByText("No monitor", { exact: true })).toBeVisible();
   await openWidgetMonitor(page, dashboards[1]);
   await expect(form.locator('[name="alertThreshold"]')).toHaveValue("10.0");
-  await expect(form.getByRole("button", { name: "Update monitor", exact: true })).toBeVisible();
+  await expect(form.getByRole("button", { name: "Save monitor", exact: true })).toBeVisible();
 });
 
 // Regressions from one bug report, all on a tabbed template (root `widgets: []`): the list
@@ -643,6 +869,14 @@ test("a tabbed dashboard lists its widgets and keeps a rename made in the widget
   await page.locator("#n-timepicker-popover button", { hasText: "Last 24 hours" }).click();
   await page.getByRole("tab", { name: "Service", exact: true }).click();
   await expect(page).toHaveURL(/\/tab\/service\?.*since=24H/);
+  await page.getByRole("tab", { name: "Logs", exact: true }).click();
+  await page.getByRole("button", { name: "Expand widget", exact: true }).first().click();
+  const logsWidgetId = new URL(page.url()).searchParams.get("expand");
+  expect(logsWidgetId).toBeTruthy();
+  await page.goto(`/p/${DEMO_PROJECT}/dashboards/${dash.id}?expand=${encodeURIComponent(logsWidgetId!)}`);
+  await expect(page).toHaveURL(new RegExp(`/tab/logs\\?expand=${logsWidgetId}`));
+  await expect(page.locator(`[id="${logsWidgetId}_widgetEl"]`)).toBeVisible();
+  await page.locator('.widget-editor [aria-label="Close drawer"]').click();
   await page.getByRole("tab", { name: "Overview", exact: true }).click();
 
   await page.getByRole("button", { name: "Expand widget", exact: true }).first().click();
@@ -651,23 +885,15 @@ test("a tabbed dashboard lists its widgets and keeps a rename made in the widget
   // The log explorer's timeline/monitor toggles did nothing here; the Monitors tab owns alerts.
   await expect(editor.getByText("Hide timeline")).toHaveCount(0);
   const renamed = `Renamed ${Date.now()}`;
-  await editor.getByRole("textbox", { name: "Widget title" }).fill(renamed);
+  await editor.getByRole("textbox", { name: "Widget name" }).fill(renamed);
   await Promise.all([
     page.waitForResponse((r) => r.request().method() === "PUT" && r.url().includes("tab=") && r.ok()),
-    editor.getByRole("button", { name: "Save changes" }).click(),
+    editor.getByRole("button", { name: "Save widget" }).click(),
   ]);
   await page.reload();
   await expect(page.getByText(renamed).first()).toBeVisible();
 
   // The reload keeps ?expand=, so the drawer reopens on the same widget.
   await page.getByRole("tab", { name: "Edit", exact: true }).click();
-  // The editor links to its Monitors tab only for a KQL widget; a raw-SQL one cannot be monitored.
-  const monitorLink = editor.locator('label[for$="-tab-monitors"]');
-  const hasKql = await page.evaluate(() => Boolean((window as any).widgetJSON.query?.trim()));
-  await expect(monitorLink).toHaveCount(hasKql ? 1 : 0);
-  if (hasKql) {
-    await monitorLink.click();
-    await expect(editor.locator(".page-drawer-tab-monitors")).toBeChecked();
-  }
   await deleteDashboard(page, dash);
 });

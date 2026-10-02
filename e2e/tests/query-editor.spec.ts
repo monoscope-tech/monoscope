@@ -156,6 +156,8 @@ test("the explorer creates a monitor with a working teams picker", async ({ page
   const form = page.locator("#alert-form");
   await expect(form).toBeVisible({ timeout: 20000 });
   await expect.poll(() => page.evaluate(() => Boolean((document.getElementById("alert-form-teams") as any)?._tagifyInstance))).toBe(true);
+  await expect(form.locator(".tagify__tag")).toContainText("@everyone");
+  await expect(form.getByRole("checkbox", { name: "Send to all team members" })).toHaveCount(0);
   await form.locator('[name="title"]').fill(title);
   await form.locator('[name="alertThreshold"]').fill("10");
   await form.getByRole("button", { name: /Create monitor/ }).click();
