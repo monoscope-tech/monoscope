@@ -1137,19 +1137,15 @@ logLatencyWidget pid =
     }
 
 
--- | One-decimal percent formatter.
+-- | One-decimal percent formatter; a rate that would round to zero but is not zero says so.
 --
 -- >>> import "monoscope" Pages.LogExplorer.Log qualified as LL
--- >>> LL.fmtPct1 0
--- "0.0%"
--- >>> LL.fmtPct1 5.24
--- "5.2%"
--- >>> LL.fmtPct1 100
--- "100.0%"
--- >>> LL.fmtPct1 (-1.25)
--- "-1.2%"
+-- >>> map LL.fmtPct1 [0, 0.03, 0.05, 5.24, 100, -1.25]
+-- ["0.0%","<0.1%","0.1%","5.2%","100.0%","-1.2%"]
 fmtPct1 :: Double -> Text
-fmtPct1 x = toText (showFFloat (Just 1) x "") <> "%"
+fmtPct1 x
+  | x > 0 && x < 0.05 = "<0.1%"
+  | otherwise = toText (showFFloat (Just 1) x "") <> "%"
 
 
 -- | Shimmer placeholder mirroring 'sessionsHeader_' (6-KPI grid + over-time bar
