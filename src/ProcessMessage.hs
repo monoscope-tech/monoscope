@@ -326,11 +326,21 @@ stampHashesAtIngest caches spans = V.map stamp spans
           attrs = AEKM.fromMapText $ maybeToMonoid $ unAesonTextMaybe r.attributes
           originalMethod = AE.Object attrs ^? key "http" . key "request" . key "method" . _String
           hasOriginalMethod = isJust $ AE.Object attrs ^? key "http" . key "request" . key "method_original" . _String
-          normalizedAttrs = normalizedPath >>= (\path -> AesonText <$> jsonToMap (AE.Object attrs `lodashMerge` nestedJsonFromDotNotation
-            ([ ("monoscope.endpoint.route", AE.String path)
-             , ("http.request.method", AE.String canonicalMethod)
-             ] <> [("server.address", AE.String canonicalHost) | not (T.null canonicalHost)]
-               <> [("http.request.method_original", AE.String method) | Just method <- [originalMethod], method /= canonicalMethod, not hasOriginalMethod])))
+          normalizedAttrs =
+            normalizedPath
+              >>= ( \path ->
+                      AesonText
+                        <$> jsonToMap
+                          ( AE.Object attrs
+                              `lodashMerge` nestedJsonFromDotNotation
+                                ( [ ("monoscope.endpoint.route", AE.String path)
+                                  , ("http.request.method", AE.String canonicalMethod)
+                                  ]
+                                    <> [("server.address", AE.String canonicalHost) | not (T.null canonicalHost)]
+                                    <> [("http.request.method_original", AE.String method) | Just method <- [originalMethod], method /= canonicalMethod, not hasOriginalMethod]
+                                )
+                          )
+                  )
       pure r{hashes = Just $ spanHashes <> errHashes, attributes = normalizedAttrs <|> r.attributes}
     templatesByPid = mkBatchPathClassifiers caches spans
 
@@ -517,23 +527,23 @@ createSpanAttributes rm =
   let baseAttrs =
         nestedJsonFromDotNotation
           ( [ ("net.host.name", AE.String $ fromMaybe "" rm.host)
-          , ("server.address", AE.String serverAddress)
-          , ("http.method", AE.String rm.method)
-          , ("http.request.method", AE.String rm.method)
-          , ("http.request.path_params", rm.pathParams)
-          , ("http.request.query_params", rm.queryParams)
-          , ("http.request.path", AE.String rawPath)
-          , ("http.response.status_code", AE.Number $ fromIntegral rm.statusCode)
-          , ("http.status_code", AE.Number $ fromIntegral rm.statusCode)
-          , ("http.url", AE.String rm.rawUrl)
-          , ("url.path", AE.String rawPath)
-          , ("url.full", AE.String rm.rawUrl)
-          , ("monoscope.msg_id", AE.String $ maybe "" UUID.toText rm.msgId)
-          , ("monoscope.parent_id", AE.String $ maybe "" UUID.toText rm.parentId)
-          , ("monoscope.sdk_type", AE.String $ show rm.sdkType)
-          , ("monoscope.errors", AE.String $ maybe "[]" (decodeUtf8 . AE.encode) rm.errors)
-          ]
-          <> [("http.route", AE.String route) | Just route <- [rm.urlPath], routeIsAuthoritative (normalizeHttpRoute route)]
+            , ("server.address", AE.String serverAddress)
+            , ("http.method", AE.String rm.method)
+            , ("http.request.method", AE.String rm.method)
+            , ("http.request.path_params", rm.pathParams)
+            , ("http.request.query_params", rm.queryParams)
+            , ("http.request.path", AE.String rawPath)
+            , ("http.response.status_code", AE.Number $ fromIntegral rm.statusCode)
+            , ("http.status_code", AE.Number $ fromIntegral rm.statusCode)
+            , ("http.url", AE.String rm.rawUrl)
+            , ("url.path", AE.String rawPath)
+            , ("url.full", AE.String rm.rawUrl)
+            , ("monoscope.msg_id", AE.String $ maybe "" UUID.toText rm.msgId)
+            , ("monoscope.parent_id", AE.String $ maybe "" UUID.toText rm.parentId)
+            , ("monoscope.sdk_type", AE.String $ show rm.sdkType)
+            , ("monoscope.errors", AE.String $ maybe "[]" (decodeUtf8 . AE.encode) rm.errors)
+            ]
+              <> [("http.route", AE.String route) | Just route <- [rm.urlPath], routeIsAuthoritative (normalizeHttpRoute route)]
           )
    in baseAttrs
         `lodashMerge` refererObj

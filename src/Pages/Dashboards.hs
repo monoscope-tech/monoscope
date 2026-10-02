@@ -2798,11 +2798,12 @@ resolveDashboardParams pid now timeParams allParams dash = do
       let endpointHash = fromMaybe "" $ join $ lookup "var-endpointHash" allParams
       endpoint <- if T.null endpointHash then pure Nothing else Data.Effectful.Hasql.interpOne [HI.sql| SELECT host, method, url_path FROM apis.endpoints WHERE project_id = #{pid} AND hash = #{endpointHash} |]
       let (sqlFilter, kqlFilter) = case endpoint of
-            Just (host :: Text, method :: Text, path :: Text) | not (any T.null [host, method, path]) && not ("{" `T.isInfixOf` path) ->
-              let fields = [("server.address", host), ("http.request.method", method), ("url.path", path)]
-               in ( T.intercalate " AND " ["attributes___" <> T.replace "." "___" field <> " IN " <> constantToSQLList [[value]] | (field, value) <- fields]
-                  , T.intercalate " AND " ["attributes." <> field <> " in " <> constantToKQLList [[value]] | (field, value) <- fields]
-                  )
+            Just (host :: Text, method :: Text, path :: Text)
+              | not (any T.null [host, method, path]) && not ("{" `T.isInfixOf` path) ->
+                  let fields = [("server.address", host), ("http.request.method", method), ("url.path", path)]
+                   in ( T.intercalate " AND " ["attributes___" <> T.replace "." "___" field <> " IN " <> constantToSQLList [[value]] | (field, value) <- fields]
+                      , T.intercalate " AND " ["attributes." <> field <> " in " <> constantToKQLList [[value]] | (field, value) <- fields]
+                      )
             _ -> ("hashes @> ARRAY[" <> sqlStringLit endpointHash <> "]", "hashes[*] in " <> constantToKQLList [[endpointHash]])
       pure [("const-endpointFilter", Just sqlFilter), ("const-endpointFilter-kql", Just kqlFilter)]
     _ -> pure []
