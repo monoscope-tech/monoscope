@@ -748,12 +748,12 @@ spec = sequential $ aroundAll withTestResources do
       eventually (stepTo Telemetry.Older (IssuesPage.EventRef tc (at 0))) (T.isInfixOf tb) >>= (`shouldSatisfy` T.isInfixOf tb)
       stepTo Telemetry.Older (IssuesPage.EventRef ta (at (-600))) >>= (`shouldSatisfy` T.isInfixOf ta)
       (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid iid Nothing Nothing Nothing Nothing (Just $ IssuesPage.EventRef tb (at (-300)))
-      renderPage page `shouldContainAll` [tb, "id=\"issue-events\"", "/step?dir=older", "/step?dir=recommended"]
+      renderPage page `shouldContainAll` [tb, "id=\"issue-events\"", "/step?dir=older", "/step?dir=recommended", "class=\"dropdown dropdown-end menu", "id=\"issue-copy-pop\""]
 
     it "category views, filter chips and saved views on the issue list" \tr -> do
       let list types = renderPage . snd <$> testServant tr (IssuesPage.issueListGetH testPid (Just "Inbox") Nothing Nothing Nothing Nothing Nothing (Just "24h") [] types)
       html <- list ["runtime_exception"]
-      html `shouldContainAll` ["&amp;type=log_pattern&amp;type=log_pattern_rate_change", "Remove filter Type: runtime_exception", "Save view"]
+      html `shouldContainAll` ["&amp;type=log_pattern&amp;type=log_pattern_rate_change", "Remove filter Type: runtime_exception", "Save view", "class=\"dropdown dropdown-start", "id=\"save-view-pop\""]
       _ <- testServant tr $ IssuesPage.saveViewPostH testPid (IssuesPage.SaveViewForm "My errors" "filter=Inbox&type=runtime_exception")
       views <- runTestBg frozenTime tr (Issues.selectIssueViews testPid)
       map (.name) views `shouldBe` ["My errors"]

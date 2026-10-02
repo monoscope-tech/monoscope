@@ -124,7 +124,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.IO.Error (userError)
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent, redirectCS, useTfReads)
-import Utils (LoadingSize (..), LoadingType (..), checkFreeTierStatus, countNoun, faSprite_, formatOffset, formatUTC, formatWithCommas, hostPath, isoT, loadingIndicator_, lookupValueText, renderMarkdown, summaryWords, timeScopedUrl, toUriStr)
+import Utils (LoadingSize (..), LoadingType (..), checkFreeTierStatus, countNoun, faSprite_, formatOffset, formatUTC, formatWithCommas, hostPath, isoT, loadingIndicator_, lookupValueText, popoverPanel_, popoverTrigger_, renderMarkdown, summaryWords, timeScopedUrl, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData (..), parseQueryParamMaybe)
 
@@ -1328,11 +1328,11 @@ eventCard_ IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflow-cli
             a_ [href_ $ occurrenceUrl useFirst, class_ $ "px-2 py-1 rounded " <> bool "text-textWeak hover:text-textStrong hover:bg-fillWeaker" "bg-fillBrand-weak text-textBrand font-medium" active, term "data-tippy-content" tip] $ toHtml lbl
           a_ [href_ $ "/p/" <> pid.toText <> "/issues/" <> issue.id.toText <> "/step?dir=recommended", class_ "px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker", term "data-tippy-content" "The last day's event with the most context: a replay, then a user, then a URL"] "Recommended"
           span_ [class_ "w-px h-4 bg-strokeWeak mx-1"] ""
-        -- A popover, not a dropdown: this row scrolls horizontally and would clip one.
-        button_ [type_ "button", class_ "px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker flex items-center gap-1", term "popovertarget" "issue-copy-pop", style_ "anchor-name: --anchor-issue-copy-pop"] do
+        -- The native popover escapes this horizontally scrolling row.
+        button_ ([type_ "button", class_ "px-2 py-1 rounded text-textWeak hover:text-textStrong hover:bg-fillWeaker flex items-center gap-1"] <> popoverTrigger_ "issue-copy-pop") do
           faSprite_ "copy" "regular" "w-3 h-3"
           "Copy as"
-        div_ [id_ "issue-copy-pop", term "popover" "auto", class_ "menu bg-bgRaised p-2 text-sm border border-strokeWeak rounded-md shadow-lg space-y-1", style_ "position-try: flip-block; position-anchor: --anchor-issue-copy-pop; top: anchor(bottom); right: anchor(right)"] do
+        div_ ([class_ "dropdown dropdown-end menu bg-bgRaised p-2 text-sm border border-strokeWeak rounded-md shadow-lg space-y-1"] <> popoverPanel_ "issue-copy-pop") do
           forM_ ([("JSON", "issue-copy-json"), ("Markdown", "issue-copy-md")] :: [(Text, Text)]) \(lbl, src) -> div_ [class_ "flex items-center justify-between gap-6"] do
             span_ [class_ "text-textStrong"] $ toHtml lbl
             copyButton_ "btn btn-xs btn-ghost" "w-3 h-3" ("#" <> src <> "'s textContent") []
@@ -2473,8 +2473,8 @@ issueListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM service
                 viewLink (listQuery typeFilters == v.query) ("/p/" <> pid.toText <> "/issues?" <> v.query) v.name
                 button_ [type_ "button", class_ "p-0.5 rounded text-textWeak hover:text-textStrong", Aria.label_ ("Delete view " <> v.name), hxPost_ ("/p/" <> pid.toText <> "/issues/views/" <> UUID.toText v.id <> "/delete"), hxSwap_ "none"]
                   $ faSprite_ "xmark" "regular" "w-2.5 h-2.5"
-              button_ [type_ "button", class_ "px-2 py-1 rounded text-xs text-textBrand hover:bg-fillWeaker whitespace-nowrap", term "popovertarget" "save-view-pop", style_ "anchor-name: --anchor-save-view-pop"] "Save view"
-              form_ [id_ "save-view-pop", term "popover" "auto", class_ "bg-bgRaised p-3 border border-strokeWeak rounded-md shadow-lg flex gap-2", style_ "position-anchor: --anchor-save-view-pop; top: anchor(bottom); left: anchor(left)", hxPost_ ("/p/" <> pid.toText <> "/issues/views"), hxSwap_ "none"] do
+              button_ ([type_ "button", class_ "px-2 py-1 rounded text-xs text-textBrand hover:bg-fillWeaker whitespace-nowrap"] <> popoverTrigger_ "save-view-pop") "Save view"
+              form_ ([class_ "dropdown dropdown-start bg-bgRaised p-3 border border-strokeWeak rounded-md shadow-lg flex gap-2", hxPost_ ("/p/" <> pid.toText <> "/issues/views"), hxSwap_ "none"] <> popoverPanel_ "save-view-pop") do
                 input_ [type_ "hidden", name_ "query", value_ $ listQuery typeFilters]
                 input_ [type_ "text", name_ "name", required_ "", placeholder_ "View name", Aria.label_ "View name", class_ "input input-sm w-44"]
                 button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save"
