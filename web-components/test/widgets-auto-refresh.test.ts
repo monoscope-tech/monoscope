@@ -50,15 +50,19 @@ describe('Log Explorer chart auto-refresh', () => {
     history.replaceState({}, '', '/');
   });
 
-  // The data response replaces the whole option (notMerge), so markers added once at init were wiped.
-  test('release markers survive the data response', async () => {
+  // The data response replaces the whole option (notMerge), so layout and markers must be reapplied.
+  test('release markers and compact spacing survive the data response', async () => {
     const instance = chart();
     (window as any).echarts = { getInstanceByDom: () => null, init: () => instance };
     document.body.innerHTML = '<div id="marker-series" data-chart-widget></div>';
+    Object.defineProperties(document.getElementById('marker-series'), {
+      clientWidth: { value: 1000 }, clientHeight: { value: 180 },
+    });
     globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({
       ...chartData, headers: ['timestamp', 'count'], dataset: [[0, 1]],
     }), { headers: { 'Content-Type': 'application/json' } })) as any;
-    (window as any).chartWidget({ ...widget('marker-series'), markers: [{ label: '1.0', at: '2026-09-25T10:00:00Z' }, { label: 'bad', at: 'nope' }] });
+    const config = widget('marker-series');
+    (window as any).chartWidget({ ...config, opt: { ...config.opt, grid: { top: 8, bottom: 36 }, legend: { show: true, bottom: 2 }, xAxis: { axisLabel: { margin: 8 } } }, markers: [{ label: '1.0', at: '2026-09-25T10:00:00Z' }, { label: 'bad', at: 'nope' }] });
     (globalThis as any).triggerIntersection();
     await vi.waitFor(() => expect(instance.hideLoading).toHaveBeenCalled());
     const [option, notMerge] = instance.setOption.mock.calls.at(-1)!;
@@ -67,6 +71,8 @@ describe('Log Explorer chart auto-refresh', () => {
     expect(markers).toHaveLength(1);
     expect(markers[0].markLine.data).toEqual([{ xAxis: Date.parse('2026-09-25T10:00:00Z'), name: '1.0' }]);
     expect(option.series[0].id).not.toBe('__markers');
+    expect(option.grid.bottom).toBe(8);
+    expect(option.xAxis.axisLabel.margin).toBe(4);
   });
 
   test.each([
