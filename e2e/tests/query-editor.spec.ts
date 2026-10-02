@@ -160,7 +160,11 @@ test("the explorer creates a monitor with a working teams picker", async ({ page
   await expect(form.getByRole("checkbox", { name: "Send to all team members" })).toHaveCount(0);
   await form.locator('[name="title"]').fill(title);
   await form.locator('[name="alertThreshold"]').fill("10");
-  await form.getByRole("button", { name: /Create monitor/ }).click();
+  const [response] = await Promise.all([
+    page.waitForResponse(r => new URL(r.url()).pathname.endsWith("/monitors/alerts") && r.request().method() === "POST"),
+    form.getByRole("button", { name: /Create monitor/ }).click(),
+  ]);
+  expect(response.ok()).toBe(true);
   await page.goto(`/p/${DEMO_PROJECT}/monitors`);
   await expect(page.getByText(title, { exact: true })).toBeVisible();
 });
