@@ -28,14 +28,13 @@ const ROOT_GRID = ".grid-stack:not(.nested-grid)";
 const ROOT_ITEMS = `${ROOT_GRID} > .grid-stack-item`;
 
 test("a loading chart does not look blank", async ({ page }) => {
-  await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
-  const href = await page.locator(`a[href^="/p/${DEMO_PROJECT}/dashboards/"]`).first().getAttribute("href");
-  expect(href).toBeTruthy();
+  await openFirstDashboard(page);
+  const href = page.url();
   await page.route(/\/js\/widgets\.[^/]+\.js/, async (route) => {
     await new Promise((resolve) => setTimeout(resolve, 3000));
     await route.continue();
   });
-  await page.goto(href!, { waitUntil: "domcontentloaded" });
+  await page.goto(href, { waitUntil: "domcontentloaded" });
   const chart = page.locator(".chart-render-slot").first();
   await expect(chart).toBeVisible();
   await expect(chart.locator("canvas")).toHaveCount(0);
