@@ -2666,8 +2666,34 @@ table td a[href]:not(.btn):not([data-no-preview]) { --tooltip-z: 100; --tooltip-
   }
 }
 
-/* Mobile dashboard layout */
-@media (max-width: 767px) {
+/* Follow the dashboard canvas, which may be narrow beside an open sidebar. */
+.dashboard-grid-wrapper {
+  container: dashboard / inline-size;
+}
+
+.stat-widget {
+  container: stat / inline-size;
+}
+
+.stat-widget strong {
+  font-size: var(--text-lg);
+  overflow-wrap: anywhere;
+}
+
+@container stat (max-width: 12rem) {
+  .stat-icon { display: none; }
+}
+
+@container stat (min-width: 12rem) {
+  .stat-widget strong { font-size: var(--text-2xl); }
+  .stat-label { font-size: var(--text-sm); }
+}
+
+@container stat (min-width: 20rem) {
+  .stat-widget strong { font-size: var(--text-3xl); }
+}
+
+@container dashboard (max-width: 400px) {
   /* Override GridStack absolute positioning with flex flow on mobile */
   .grid-stack {
     display: flex !important;
