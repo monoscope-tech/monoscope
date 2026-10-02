@@ -529,7 +529,7 @@ widget_ w' = case w.wType of
   WTFlamegraph -> gridItem_ $ div_ [class_ "h-full "] $ div_ [class_ "p-3"] "Flamegraph widget coming soon"
   _ -> gridItem_ $ div_ [class_ " w-full h-full group/wgt "] $ renderChart w
   where
-    normalizedChildren = normalizeWidgetLayouts $ fromMaybe [] w'.children
+    normalizedChildren = fromMaybe [] $ listToMaybe (normalizeWidgetLayouts [w']) >>= (.children)
     w = (w' & #children .~ (normalizedChildren <$ w'.children)) & #id %~ (<|> (slugify <$> w'.title))
     effectiveWidth = min 12 $ max 1 $ fromMaybe defaultWidgetWidth $ w.layout >>= (.w)
     isFullWidth = effectiveWidth == 12
@@ -607,6 +607,16 @@ gridStackAttrs widgets =
 -- Just (Just (Just 0,Just 0,Just 12,Just 3))
 -- >>> map coordinates (fold $ listToMaybe (normalizeWidgetLayouts [groupWidget]) >>= (.children))
 -- [Just (Just 0,Just 0,Just 8,Just 1),Just (Just 0,Just 1,Just 8,Just 1)]
+--
+-- A saved four-stat row with shrunken cards still fills its group:
+--
+-- >>> let stat x width height = testWidget WTStat Layout{x = Just x, y = Just 0, w = Just width, h = Just height}
+-- >>> let overview = (testWidget WTGroup Layout{x = Just 0, y = Just 0, w = Just 12, h = Just 3}){children = Just [stat 0 3 2, stat 3 3 2, stat 6 2 1, stat 9 2 2]}
+-- >>> map coordinates (fold $ listToMaybe (normalizeWidgetLayouts [overview]) >>= (.children))
+-- [Just (Just 0,Just 0,Just 3,Just 2),Just (Just 3,Just 0,Just 3,Just 2),Just (Just 6,Just 0,Just 3,Just 2),Just (Just 9,Just 0,Just 3,Just 2)]
+-- >>> let html = toStrict $ renderText $ widget_ overview
+-- >>> (T.count "gs-w=\"3\"" html, T.count "gs-h=\"2\"" html)
+-- (4,4)
 normalizeWidgetLayouts :: [Widget] -> [Widget]
 normalizeWidgetLayouts widgets =
   map snd
@@ -629,7 +639,18 @@ normalizeWidgetLayouts widgets =
     placeWidget (occupied, acc) (idx, widget) =
       let layout = fromMaybe def widget.layout
           width = min 12 $ max 1 $ fromMaybe defaultWidgetWidth layout.w
-          normalizedChildren = normalizeWidgetLayouts $ fromMaybe [] widget.children
+          groupChildren = fromMaybe [] widget.children
+          fourStatRow =
+            widget.wType == WTGroup
+              && width == 12
+              && all (\child -> child.wType `elem` [WTStat, WTTimeseriesStat]) groupChildren
+              && map (\child -> (child.layout >>= (.x), child.layout >>= (.y))) groupChildren == [(Just x, Just 0) | x <- [0, 3, 6, 9]]
+          rowHeight = max 1 $ layoutRows groupChildren
+          alignedChildren =
+            if fourStatRow
+              then map (\child -> child{layout = Just (fromMaybe def child.layout){w = Just 3, h = Just rowHeight}}) groupChildren
+              else groupChildren
+          normalizedChildren = normalizeWidgetLayouts alignedChildren
           normalizedWidget = widget{children = normalizedChildren <$ widget.children}
           height = widgetHeightForWidth width normalizedWidget
           requestedX = min (12 - width) $ max 0 $ fromMaybe 0 layout.x
