@@ -48,7 +48,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Extra (lodashMerge)
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
-import Data.Aeson.Lens (key, _Number, _Object, _String)
+import Data.Aeson.Lens (key, _Bool, _Number, _Object, _String)
 import Data.Aeson.Types qualified as AE
 import Data.ByteString qualified as BS
 import Data.Cache qualified as Cache
@@ -178,16 +178,26 @@ httpKeyOf :: PathClassifier -> Telemetry.OtelLogsAndSpans -> HttpKey
 httpKeyOf canonicalTemplates otelSpan =
   let !attributes = maybeToMonoid (unAesonTextMaybe otelSpan.attributes)
       !attrValue = AE.Object $ AEKM.fromMapText attributes
-      !isHttpSpan = isJust $ attrValue ^? key "http" . key "request" . key "method" . _String
-      !method = T.toUpper $ fromMaybe "GET" $ attrValue ^? key "http" . key "request" . key "method" . _String
+      !suppliedMethod = ((attrValue ^? key "http" . key "request" . key "method" . _String) <|> (attrValue ^? key "http" . key "method" . _String)) >>= guarded (not . T.null)
+      !spanNameParts = maybe [] words otelSpan.name
+      !namedMethod = case spanNameParts of
+        verb : _ | verb `elem` (["GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH", "QUERY"] :: [Text]) -> Just verb
+        _ -> Nothing
+      !namedPath = case spanNameParts of
+        _ : path : _ | "/" `T.isPrefixOf` path -> Just path
+        _ -> Nothing
+      !isHttpSpan = isJust suppliedMethod || isJust namedMethod || isJust ((attrValue ^? key "http" . key "route" . _String) >>= guarded (not . T.null)) || isJust (attrValue ^? key "http" . key "response" . key "status_code") || ((otelSpan.kind == Just "client" || otelSpan.kind == Just "server") && isJust (attrValue ^? key "url" . key "path" . _String))
+      !method = T.toUpper $ fromMaybe "_OTHER" $ suppliedMethod <|> namedMethod
+      !routeInferred = attrValue ^? key "monoscope" . key "endpoint" . key "route_inferred" . _Bool == Just True
       -- An empty @http.route@ means the router matched nothing (Django writes
       -- one for every unrouted request), so it is absence, not a route.
-      !routeAttr = normalizeHttpRoute <$> (guard (otelSpan.kind /= Just "client") *> (attrValue ^? key "http" . key "route" . _String >>= guarded (not . T.null)))
+      !routeAttr = normalizeHttpRoute <$> (guard (otelSpan.kind /= Just "client" && not routeInferred) *> (attrValue ^? key "http" . key "route" . _String >>= guarded (not . T.null)))
+      !inferredRoute = guard routeInferred *> (attrValue ^? key "http" . key "route" . _String)
       !clientTemplate = normalizeHttpRoute <$> (attrValue ^? key "url" . key "template" . _String >>= guarded (not . T.null))
       -- The route we are willing to take as authority — carrying both the
       -- decision and the value, so neither can be read without the other.
       !authoritative = routeAttr >>= guarded routeIsAuthoritative
-      !routePath = fromMaybe "/" $ (if otelSpan.kind == Just "client" then clientTemplate else routeAttr) <|> (attrValue ^? key "url" . key "path" . _String)
+      !routePath = fromMaybe "/" $ (if otelSpan.kind == Just "client" then clientTemplate <|> inferredRoute else routeAttr <|> inferredRoute) <|> (attrValue ^? key "url" . key "path" . _String) <|> namedPath
       !statusCode =
         fromMaybe 200
           $ ( (attrValue ^? key "http" . key "response" . key "status_code" . _String >>= readMaybe @Int . toString)
@@ -247,8 +257,8 @@ httpKeyOf canonicalTemplates otelSpan =
 -- @(mkEndpoint, hashes, normalizedPath, frameworkHash)@ —
 -- the endpoint is returned as a function of its row id so hash-only callers
 -- ('stampHashesAtIngest') never have to conjure a placeholder UUID;
--- the normalized path (@Just@ for HTTP spans) is stamped onto Monoscope's
--- endpoint route field; the OTel route and URL path retain their original meaning.
+-- the normalized path (@Just@ for HTTP spans) is stamped onto the OTel and
+-- Monoscope endpoint route fields; the URL path retains its original meaning.
 -- Schema learning flows
 -- through 'extractObservation' instead; this only does endpoint discovery.
 --
@@ -321,7 +331,7 @@ stampHashesAtIngest caches spans = V.map stamp spans
       pjc <- HM.lookup pid caches
       let classifier = HM.lookupDefault (mkPathClassifier pjc) pid templatesByPid
           (_, spanHashes, normalizedPath, _) = processSpanToEntities classifier pjc pid r
-          HttpKey{method = canonicalMethod, host = canonicalHost} = httpKeyOf classifier r
+          HttpKey{method = canonicalMethod, host = canonicalHost, pathSource} = httpKeyOf classifier r
           errHashes = V.map (\e -> "err:" <> e.hash) (Telemetry.getAllATErrors (V.singleton r))
           attrs = AEKM.fromMapText $ maybeToMonoid $ unAesonTextMaybe r.attributes
           originalMethod = AE.Object attrs ^? key "http" . key "request" . key "method" . _String
@@ -334,7 +344,9 @@ stampHashesAtIngest caches spans = V.map stamp spans
                           ( AE.Object attrs
                               `lodashMerge` nestedJsonFromDotNotation
                                 ( [ ("monoscope.endpoint.route", AE.String path)
+                                  , ("monoscope.endpoint.route_inferred", AE.Bool $ pathSource == DerivedFromUrl)
                                   , ("http.request.method", AE.String canonicalMethod)
+                                  , ("http.route", AE.String path)
                                   ]
                                     <> [("server.address", AE.String canonicalHost) | not (T.null canonicalHost)]
                                     <> [("http.request.method_original", AE.String method) | Just method <- [originalMethod], method /= canonicalMethod, not hasOriginalMethod]

@@ -840,7 +840,7 @@ spec = sequential $ aroundAll withTestResources do
       template `shouldSatisfy` T.isInfixOf "{{const-endpointFilter}}"
       template `shouldNotSatisfy` T.isInfixOf "kind"
 
-    it "uses exact host, method, and path for literal endpoints, retaining hashes for templates" \tr -> do
+    it "uses the route with a path fallback for literal endpoints and retains hashes for templates" \tr -> do
       dashId <- newDashboard tr "endpoint-stats.yaml" "Endpoint selectors"
       let endpoint hash path =
             (def :: Endpoints.Endpoint)
@@ -860,10 +860,13 @@ spec = sequential $ aroundAll withTestResources do
           hostless = (endpoint "hostless-route" "/health"){Endpoints.host = ""}
       runQueryEffect tr $ Endpoints.bulkInsertEndpoints $ V.fromList [endpoint "literal-route" "/v1/deliveries/estimate/v2", endpoint "template-route" "/v1/deliveries/{id}", hostless]
       filters "literal-route" `shouldReturn`
-        ( Just (Just "attributes___server___address IN ('integrations.routelift.com') AND attributes___http___request___method IN ('POST') AND attributes___url___path IN ('/v1/deliveries/estimate/v2')")
-        , Just (Just "attributes.server.address in (\"integrations.routelift.com\") AND attributes.http.request.method in (\"POST\") AND attributes.url.path in (\"/v1/deliveries/estimate/v2\")")
+        ( Just (Just "attributes___server___address IN ('integrations.routelift.com') AND attributes___http___request___method IN ('POST') AND (attributes___http___route IN ('/v1/deliveries/estimate/v2') OR ((attributes___http___route IS NULL OR attributes___http___route = '') AND attributes___url___path IN ('/v1/deliveries/estimate/v2')))")
+        , Just (Just "attributes.server.address in (\"integrations.routelift.com\") AND attributes.http.request.method in (\"POST\") AND (attributes.http.route in (\"/v1/deliveries/estimate/v2\") or (isempty(attributes.http.route) and attributes.url.path in (\"/v1/deliveries/estimate/v2\")))")
         )
-      filters "template-route" `shouldReturn` (Just (Just "hashes @> ARRAY['template-route']"), Just (Just "hashes[*] in (\"template-route\")"))
+      filters "template-route" `shouldReturn`
+        ( Just (Just "(attributes___server___address IN ('integrations.routelift.com') AND attributes___http___request___method IN ('POST') AND attributes___http___route IN ('/v1/deliveries/{id}') OR hashes @> ARRAY['template-route'])")
+        , Just (Just "(attributes.server.address in (\"integrations.routelift.com\") AND attributes.http.request.method in (\"POST\") AND attributes.http.route in (\"/v1/deliveries/{id}\") or hashes[*] in (\"template-route\"))")
+        )
       filters "hostless-route" `shouldReturn` (Just (Just "hashes @> ARRAY['hostless-route']"), Just (Just "hashes[*] in (\"hostless-route\")"))
       filters "" `shouldReturn` (Just (Just "hashes @> ARRAY['']"), Just (Just "hashes[*] in (\"\")"))
       for_ ["literal-route", "template-route", "hostless-route", ""] \hash -> do

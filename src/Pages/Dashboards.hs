@@ -2797,14 +2797,22 @@ resolveDashboardParams pid now timeParams allParams dash = do
     Just "endpoint-stats.yaml" -> do
       let endpointHash = fromMaybe "" $ join $ lookup "var-endpointHash" allParams
       endpoint <- if T.null endpointHash then pure Nothing else Data.Effectful.Hasql.interpOne [HI.sql| SELECT host, method, url_path FROM apis.endpoints WHERE project_id = #{pid} AND hash = #{endpointHash} |]
-      let (sqlFilter, kqlFilter) = case endpoint of
+      let hashSql = "hashes @> ARRAY[" <> sqlStringLit endpointHash <> "]"
+          hashKql = "hashes[*] in " <> constantToKQLList [[endpointHash]]
+          (sqlFilter, kqlFilter) = case endpoint of
             Just (host :: Text, method :: Text, path :: Text)
-              | not (any T.null [host, method, path]) && not ("{" `T.isInfixOf` path) ->
-                  let fields = [("server.address", host), ("http.request.method", method), ("url.path", path)]
-                   in ( T.intercalate " AND " ["attributes___" <> T.replace "." "___" field <> " IN " <> constantToSQLList [[value]] | (field, value) <- fields]
-                      , T.intercalate " AND " ["attributes." <> field <> " in " <> constantToKQLList [[value]] | (field, value) <- fields]
-                      )
-            _ -> ("hashes @> ARRAY[" <> sqlStringLit endpointHash <> "]", "hashes[*] in " <> constantToKQLList [[endpointHash]])
+              | not (any T.null [host, method, path]) ->
+                  let fields = [("server.address", host), ("http.request.method", method)]
+                      scopedSql = T.intercalate " AND " ["attributes___" <> T.replace "." "___" field <> " IN " <> constantToSQLList [[value]] | (field, value) <- fields]
+                      scopedKql = T.intercalate " AND " ["attributes." <> field <> " in " <> constantToKQLList [[value]] | (field, value) <- fields]
+                   in if "{" `T.isInfixOf` path
+                        then ( "(" <> scopedSql <> " AND attributes___http___route IN " <> constantToSQLList [[path]] <> " OR " <> hashSql <> ")"
+                             , "(" <> scopedKql <> " AND attributes.http.route in " <> constantToKQLList [[path]] <> " or " <> hashKql <> ")"
+                             )
+                        else ( scopedSql <> " AND (attributes___http___route IN " <> constantToSQLList [[path]] <> " OR ((attributes___http___route IS NULL OR attributes___http___route = '') AND attributes___url___path IN " <> constantToSQLList [[path]] <> "))"
+                             , scopedKql <> " AND (attributes.http.route in " <> constantToKQLList [[path]] <> " or (isempty(attributes.http.route) and attributes.url.path in " <> constantToKQLList [[path]] <> "))"
+                             )
+            _ -> (hashSql, hashKql)
       pure [("const-endpointFilter", Just sqlFilter), ("const-endpointFilter-kql", Just kqlFilter)]
     _ -> pure []
   (constants, params) <- processConstantsAndExtendParams pid now timeParams (addVariableDefaults (allParams <> endpointParams) dash.variables) (dashboardQueryText dash) (fold dash.constants)

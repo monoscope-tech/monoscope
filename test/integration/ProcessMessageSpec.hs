@@ -143,11 +143,11 @@ resourceSpec = do
         V.map (.hashes) (stampHashesAtIngest caches spans) `shouldBe` V.replicate 2 expected
       let stamped = stampHashesAtIngest caches $ V.fromList [unrouted, declared]
           canonicalPath = "/api/stores/{id}/business-hours"
-      for_ (V.toList $ V.zip stamped (V.fromList ["", "/api/stores/:id/business-hours"])) \(sp, originalRoute) -> do
+      for_ (V.toList $ V.zip stamped (V.fromList [True, False])) \(sp, inferred) -> do
         AesonText attrs <- maybe (fail "missing stamped attributes") pure sp.attributes
         Map.lookup "url" attrs `shouldBe` Just (AE.object ["path" AE..= path])
-        Map.lookup "http" attrs `shouldBe` Just (AE.object ["request" AE..= AE.object ["method" AE..= ("GET" :: Text)], "route" AE..= originalRoute])
-        Map.lookup "monoscope" attrs `shouldBe` Just (AE.object ["endpoint" AE..= AE.object ["route" AE..= canonicalPath]])
+        Map.lookup "http" attrs `shouldBe` Just (AE.object ["request" AE..= AE.object ["method" AE..= ("GET" :: Text)], "route" AE..= canonicalPath])
+        Map.lookup "monoscope" attrs `shouldBe` Just (AE.object ["endpoint" AE..= AE.object ["route" AE..= canonicalPath, "route_inferred" AE..= inferred]])
       Telemetry.handOffBatches tr.trATCtx.extractionWorker caches $ stampHashesAtIngest caches $ V.fromList [unrouted, declared]
       drainExtractionWorker tr
       endpoints <-
@@ -174,11 +174,11 @@ resourceSpec = do
       for_ (stamped V.!? 0) \row -> do
         AesonText result <- maybe (fail "missing stamped attributes") pure row.attributes
         Map.lookup "server" result `shouldBe` Just (AE.object ["address" AE..= ("integrations.routelift.com" :: Text)])
-        Map.lookup "http" result `shouldBe` Just (AE.object ["request" AE..= AE.object ["method" AE..= ("POST" :: Text), "method_original" AE..= ("post" :: Text)]])
+        Map.lookup "http" result `shouldBe` Just (AE.object ["request" AE..= AE.object ["method" AE..= ("POST" :: Text), "method_original" AE..= ("post" :: Text)], "route" AE..= ("/v1/deliveries/estimate/v2" :: Text)])
         Map.lookup "url" result `shouldBe` Just (AE.object ["path" AE..= ("/v1/deliveries/estimate/v2" :: Text)])
-        Map.lookup "monoscope" result `shouldBe` Just (AE.object ["endpoint" AE..= AE.object ["route" AE..= ("/v1/deliveries/estimate/v2" :: Text)]])
+        Map.lookup "monoscope" result `shouldBe` Just (AE.object ["endpoint" AE..= AE.object ["route" AE..= ("/v1/deliveries/estimate/v2" :: Text), "route_inferred" AE..= True]])
 
-    it "clientUrlTemplate_definesEndpointWithoutSynthesizingHttpRoute" \_ -> do
+    it "clientUrlTemplate_definesTheInferredHttpRoute" \_ -> do
       let sp :: Telemetry.OtelLogsAndSpans
           sp =
             (emptySpan frozenTime)
@@ -192,9 +192,9 @@ resourceSpec = do
       for_ (stamped V.!? 0) \row -> do
         row.hashes `shouldBe` Just (V.singleton $ toXXHash $ pid.toText <> "GET/orders/{id}")
         AesonText result <- maybe (fail "missing stamped attributes") pure row.attributes
-        Map.lookup "http" result `shouldBe` Just (AE.object ["request" AE..= AE.object ["method" AE..= ("GET" :: Text)]])
+        Map.lookup "http" result `shouldBe` Just (AE.object ["request" AE..= AE.object ["method" AE..= ("GET" :: Text)], "route" AE..= ("/orders/{id}" :: Text)])
         Map.lookup "url" result `shouldBe` Just (AE.object ["path" AE..= ("/orders/42" :: Text), "template" AE..= ("/orders/{id}" :: Text)])
-        Map.lookup "monoscope" result `shouldBe` Just (AE.object ["endpoint" AE..= AE.object ["route" AE..= ("/orders/{id}" :: Text)]])
+        Map.lookup "monoscope" result `shouldBe` Just (AE.object ["endpoint" AE..= AE.object ["route" AE..= ("/orders/{id}" :: Text), "route_inferred" AE..= True]])
 
     -- Django writes a Python named-group regex. normalizeUrlPath then truncated
     -- it at the '?' of "(?P<", which is how "api/v1/wallets/(" became 162 real
@@ -294,7 +294,7 @@ resourceSpec = do
       let expected = toXXHash $ pid.toText <> "172.31.29.11" <> "GET" <> "/"
       V.map fromOnly hashes `shouldBe` V.singleton expected
 
-    it "rawUrl_doesNotSynthesizeHttpRouteButKeepsCanonicalEndpoint" $ \tr -> do
+    it "rawUrl_infersTheCanonicalHttpRoute" $ \tr -> do
       currentTime <- getCurrentTime
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
           reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
@@ -304,7 +304,7 @@ resourceSpec = do
         withPool tr.trPool
           $ DBT.query [sql| SELECT attributes___http___route, attributes->'monoscope'->'endpoint'->>'route' FROM otel_logs_and_spans WHERE project_id = ? |] (Only pid)
           :: IO (V.Vector (Maybe Text, Maybe Text))
-      routes `shouldBe` V.singleton (Nothing, Just "/")
+      routes `shouldBe` V.singleton (Just "/", Just "/")
 
     it "We should expect 2 endpoints, albeit unacknowleged." $ \tr -> do
       currentTime <- getCurrentTime
