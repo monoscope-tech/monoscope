@@ -1,5 +1,29 @@
 # Endpoint Analytics query-plan evidence
 
+## Shipbubble follow-up (2026-10-02)
+
+The outgoing `POST integrations.routelift.com/v1/deliveries/estimate/v2`
+endpoint (`faa041ff`) returned 432 rows over the same 24-hour window with either
+`hashes @> ARRAY['faa041ff']` or equality on `server.address`, `url.path`, and
+`http.request.method`. Both `EXPLAIN` plans selected the same 24 project/date
+file groups. Neither host nor path had a bloom filter in the deployed schema.
+Repeated count timings varied widely: hash 2.3–30.5 seconds, direct fields
+0.5–3.7 seconds. These runs show the direct fields can be faster, but do not
+establish a stable latency target; engine cache and concurrent load were not
+controlled. Literal endpoints with a known host and method now filter on
+`http.route`, falling back to `url.path` when the stored route is absent or
+empty. Templated endpoints filter on `http.route` with a hash fallback for
+older spans; hostless endpoints retain the hash filter. Ingest populates a
+canonical `http.route` for HTTP spans, using the framework route or
+`url.template` when available and otherwise inferring it from `url.path` or
+the standard method-and-target span name.
+`monoscope.endpoint.route_inferred` records whether the route was inferred.
+
+TimeFusion now has bloom filters configured for host, path, and route, but only
+new or rewritten Parquet files carry them. Historical files need a scoped
+rewrite before bloom pruning can benefit those windows. The route/path
+fallback query has not yet been benchmarked against the bloom pruning planner.
+
 Captured on 2026-09-18 against the configured TimeFusion store for project
 `87576849-4941-49d3-a15d-680fef88a1a8`, endpoint hash `f14abbef`, with a fixed
 end time of `2026-09-18T00:00:00Z`. The two windows were 24 hours and 3 days.

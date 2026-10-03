@@ -17,7 +17,7 @@ templatesDir = "static/public/dashboards"
 
 -- | Replace {{placeholder}} spans with a literal so template queries parse standalone.
 stripPlaceholders :: Text -> Text
-stripPlaceholders t = case T.splitOn "{{" t of
+stripPlaceholders t = case T.splitOn "{{" $ T.replace "{{const-endpointFilter}}" "hashes[*] == \"x\"" t of
   (prefix : rest) -> prefix <> mconcat [(\(_, after) -> "x" <> T.drop 2 after) (T.breakOn "}}" seg) | seg <- rest]
   [] -> t
 

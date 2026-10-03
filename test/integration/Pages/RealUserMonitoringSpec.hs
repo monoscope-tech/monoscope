@@ -746,6 +746,13 @@ spec = sequential $ aroundAll withTestResources do
       scoped `shouldContainAll` ["checkout-web", "https://shop.example/cart"]
       T.isInfixOf "/admin/users" scoped `shouldBe` False
 
+    it "sdkPageview_fullUrlWithQueryStillGroupsByPath" \tr -> do
+      purgeRumCaches tr
+      apiKey <- createTestAPIKey tr testPid "rum-pageview-query-key"
+      browserSpan apiKey "41000000000000000000000000000004" "4100000000000001" [("url.path", "/cart"), ("url.full", "/cart?coupon=x")] "Pageview · /cart" "session-page-query" Nothing "pageview-query-test" tr
+      loaded <- rumBody (withService (Just "pageview-query-test") tr) $ RUM.rumGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "24H") Nothing Nothing (Just "pages") (Just "1") Nothing
+      map (.path) loaded.pages `shouldBe` ["/cart"]
+
     it "sessionLastPage_isTheLatestPageView_notALexicographicResourceUrl" \tr -> do
       -- MAX(path) over every browser span used to pick the alphabetically largest URL: on
       -- real traffic that is a third-party font fetched by the page, shown as the page.

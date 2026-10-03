@@ -222,7 +222,7 @@ spec = sequential $ aroundAll withTestResources do
       stats <- filter (\w -> w.wType == Widget.WTStat && isJust w.sql) . foldMap DashboardModel.allWidgets <$> DashboardModel.readDashboardsFromDisk "static/public/dashboards"
       length stats `shouldSatisfy` (> 3)
       for_ stats \w -> do
-        md <- runQueryEffect tr $ runConcurrent $ Dashboards.widgetMetrics testPid (Just "24h", Nothing, Nothing) [] w
+        md <- runQueryEffect tr $ runConcurrent $ Dashboards.widgetMetrics testPid (Just "24h", Nothing, Nothing) [("const-endpointFilter", Just "hashes @> ARRAY['']")] w
         (w.title, md.error :: Maybe Text) `shouldBe` (w.title, Nothing)
 
     it "dashboard SQL source migrations remain byte-for-byte immutable" \_ -> do

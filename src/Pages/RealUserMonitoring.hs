@@ -213,11 +213,10 @@ pageViewSql = "(name LIKE 'Pageview %' OR name = 'documentLoad')"
 errorSql = "(status_code = 'ERROR' OR lower(COALESCE(level, '')) = 'error' OR attributes___exception___type IS NOT NULL)"
 
 
--- | The page a browser event was on. Our SDK sets @url.path@; the OpenTelemetry browser SDK
--- sets only @url.full@ and leaves @url.path@ null, which would otherwise collapse every row of
--- the Top Pages table onto a single blank path.
+-- | The page a browser event was on. Document loads retain the browser's full
+-- URL; our Pageview events group by path, even when their raw URL has a query.
 pagePath :: HI.Sql
-pagePath = [HI.sql|COALESCE(NULLIF(attributes___url___path, ''), NULLIF(attributes___url___full, ''), replace(name, 'Pageview · ', ''))|]
+pagePath = [HI.sql|COALESCE(NULLIF(CASE WHEN name = 'documentLoad' THEN attributes___url___full END, ''), NULLIF(attributes___url___path, ''), NULLIF(attributes___url___full, ''), replace(name, 'Pageview · ', ''))|]
 
 
 -- | What counts as one page view. @documentLoad@ is the OpenTelemetry browser SDK's page-load

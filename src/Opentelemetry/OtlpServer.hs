@@ -280,7 +280,8 @@ dualWriteWithPoisonMapping
 dualWriteWithPoisonMapping appCtx target label caches perMsg = do
   let !allRecords = V.concat [rs | (_, _, rs) <- perMsg]
   stamped <- stampOrPassthrough appCtx allRecords
-  let minted = Telemetry.mintOtelLogIds $ stampHashesAtIngest caches stamped
+  -- Mint before route normalization: records without a span ID hash their raw attributes.
+  let minted = stampHashesAtIngest caches $ Telemetry.mintOtelLogIds stamped
   -- Live Tail, before the durable write: the whole point is that a browser sees the log
   -- sooner than a query could return it. Runs after minting so the streamed row carries the
   -- same id the stored row will, and so "open the full record" resolves once the write lands.
@@ -625,7 +626,7 @@ migrateElasticsearchPathParts keyVals =
 -- [("http.response.status_code",Number 200.0)]
 --
 -- >>> OS.migrateHttpSemanticConventions [("http.url", AE.String "https://example.com"), ("http.client_ip", AE.String "192.168.1.1")]
--- [("url.full",String "https://example.com"),("client.address",String "192.168.1.1")]
+-- [("url.full",String "https://example.com"),("client.address",String "192.168.1.1"),("url.path",String "/")]
 --
 -- == Database field migrations
 -- >>> OS.migrateHttpSemanticConventions [("db.system", AE.String "postgresql"), ("db.name", AE.String "users")]
@@ -657,6 +658,8 @@ migrateElasticsearchPathParts keyVals =
 --
 -- >>> OS.migrateHttpSemanticConventions [("http.target", AE.String "/api/users"), ("url.path", AE.String "/api/users")]
 -- [("url.path",String "/api/users")]
+-- >>> OS.migrateHttpSemanticConventions [("url.full", AE.String "https://api.example.com/orders/42?expand=true")]
+-- [("url.full",String "https://api.example.com/orders/42?expand=true"),("url.path",String "/orders/42")]
 --
 -- == HTTP method _OTHER migration
 -- >>> OS.migrateHttpSemanticConventions [("http.method", AE.String "_OTHER"), ("http.request.method_original", AE.String "PROPFIND")]
@@ -786,6 +789,15 @@ migrateHttpSemanticConventions !keyVals =
              in ("url.path", AE.String path) : [("url.query", AE.String (T.drop 1 query)) | not (T.null query)]
       _ -> []
 
+    migrateUrlFullPath
+      | hasUrlPath || isJust httpTargetM = []
+      | Just (AE.String full) <- HM.lookup "url.full" kvMap <|> HM.lookup "http.url" kvMap
+      , (_, authorityAndPath) <- T.breakOn "://" full
+      , not (T.null authorityAndPath) =
+          let path = T.dropWhile (/= '/') $ T.drop 3 authorityAndPath
+           in [("url.path", AE.String $ fromMaybe "/" $ guarded (not . T.null) $ T.takeWhile (\c -> c /= '?' && c /= '#') path)]
+      | otherwise = []
+
     -- Migrate method "_OTHER" case
     migrateMethodOther = case (httpMethodM, methodOriginalM) of
       (Just (AE.String "_OTHER"), Just originalMethod)
@@ -822,7 +834,7 @@ migrateHttpSemanticConventions !keyVals =
     -- the proxy's address (or nothing) in attributes___client___address.
     migrateClientAddress = deriveClientAddress kvMap
    in
-    mgVals ++ migrateHttpTarget ++ migrateMethodOther ++ migrateConnectionString ++ migrateElasticsearchPathParts keyVals ++ migrateRedisIndex ++ migrateBrowserError ++ migrateServerAddress ++ migrateClientAddress
+    mgVals ++ migrateHttpTarget ++ migrateUrlFullPath ++ migrateMethodOther ++ migrateConnectionString ++ migrateElasticsearchPathParts keyVals ++ migrateRedisIndex ++ migrateBrowserError ++ migrateServerAddress ++ migrateClientAddress
 
 
 -- | Derive @client.address@ from common proxy/CDN headers when not explicitly set.
@@ -1238,11 +1250,12 @@ convertSpanToOtelLog !fallbackTime !pid resourceM pSpan =
                   $ KEM.insert "request" (AE.Object $ KEM.delete "body" re) http
            in Map.insert "http" (AE.Object http') <$> attributes
         _ -> attributes
-      -- Fall back to resource.service.name for server.address when no host attribute is present on HTTP spans
+      -- A URL can supply server.address; service.name identifies the local
+      -- service and does not imply the remote HTTP server's address.
       !resourceAttrs = jsonToMap $ removeProjectId $ resourceToJSON resourceM
       newAttributes = case newAttributes' of
         Just attrs | hasNoHost attrs ->
-          case hostFromUrlFull attrs <|> serviceName of
+          case hostFromUrlFull attrs of
             Just sn | not (T.null sn) -> Just $ Map.insertWith mergeObjects "server" (AE.Object $ KEM.singleton "address" (AE.String sn)) attrs
             _ -> newAttributes'
         _ -> newAttributes'
@@ -1260,8 +1273,6 @@ convertSpanToOtelLog !fallbackTime !pid resourceM pSpan =
             let stripped = fromMaybe u $ T.stripPrefix "https://" u <|> T.stripPrefix "http://" u
              in guarded (not . T.null) $ T.takeWhile (\c -> c /= '/' && c /= '?' && c /= ':') stripped
           _ -> Nothing
-      serviceName =
-        (resourceAttrs >>= lookupNested "service" "name") >>= \case AE.String n -> Just n; _ -> Nothing
       mergeObjects (AE.Object new) (AE.Object old) = AE.Object (KEM.union new old)
       mergeObjects new _ = new
       otelSpan =
@@ -1543,7 +1554,8 @@ processSignalRequest label signal receivedMsg noun countKey metadataApiKey proje
 
   unless (V.null records) do
     stamped <- stampOrPassthrough appCtx records
-    let minted = Telemetry.mintOtelLogIds $ stampHashesAtIngest projectCaches stamped
+    -- Keep retry IDs independent of the current endpoint-template cache.
+    let minted = stampHashesAtIngest projectCaches $ Telemetry.mintOtelLogIds stamped
     -- Live Tail, before the durable write — the same hook 'dualWriteWithPoisonMapping' has,
     -- for the same reason. This is the /direct/ path: OTLP over gRPC on 4317 and OTLP over
     -- HTTP, neither of which passes through Kafka or Pub/Sub. It is the only path a

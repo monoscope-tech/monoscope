@@ -13,6 +13,8 @@ import Network.GRPC.Common.Protobuf (Proto (..))
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
+import Proto.Opentelemetry.Proto.Common.V1.Common qualified as PC
+import Proto.Opentelemetry.Proto.Trace.V1.Trace qualified as PT
 import Relude
 import Test.Hspec (Spec, around, describe, it, shouldBe, shouldSatisfy)
 
@@ -40,6 +42,43 @@ ingestStdOtelSpan tr apiKey spanName method urlPath statusCode serverAddr = do
 spec :: Spec
 spec = around withTestResources do
   describe "Standard OpenTelemetry HTTP Spans" do
+    it "normalizes HTTP spans from legacy and current language SDK conventions" \tr -> do
+      apiKey <- createTestAPIKey tr pid "otel-language-conventions"
+      let cases :: [(Text, PT.Span'SpanKind, [PC.KeyValue], Text, Text, Text, Text)]
+          cases =
+            [ ("java", PT.Span'SPAN_KIND_SERVER, [mkAttr "http.method" "GET", mkAttr "http.target" "/orders/42?expand=true", mkAttr "net.host.name" "api.java.test", mkAttr "http.route" "/orders/{id}"], "/orders/42", "api.java.test", "GET", "/orders/{id}")
+            , ("python", PT.Span'SPAN_KIND_SERVER, [mkAttr "http.request.method" "GET", mkAttr "url.path" "/orders/43", mkAttr "server.address" "api.python.test"], "/orders/43", "api.python.test", "GET", "/orders/{number}")
+            , ("nodejs", PT.Span'SPAN_KIND_CLIENT, [mkAttr "http.request.method" "POST", mkAttr "url.full" "https://api.node.test/v1/send/44?expand=true"], "/v1/send/44", "api.node.test", "POST", "/v1/send/{number}")
+            , ("go", PT.Span'SPAN_KIND_CLIENT, [mkAttr "http.request.method" "GET", mkAttr "url.full" "https://api.go.test/orders/45", mkAttr "url.template" "/orders/:id"], "/orders/45", "api.go.test", "GET", "/orders/{id}")
+            ]
+      forM_ cases \(language, kind, attrs, path, host, method, endpointPath) -> do
+        trId <- show <$> nextRandom
+        spanId' <- show <$> nextRandom
+        let name = language <> " HTTP"
+            resource = mkResource apiKey [mkAttr "telemetry.sdk.language" language]
+            req = withSpanKind kind $ mkSpanRequest trId spanId' Nothing name [] Nothing attrs resource frozenTime
+        void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto req)
+        rows <- withPool tr.trPool $ DBT.query [sql|
+          SELECT attributes___url___path, attributes___http___route, attributes___server___address, attributes___http___request___method,
+                 attributes->'monoscope'->'endpoint'->>'route'
+          FROM otel_logs_and_spans WHERE project_id = ? AND name = ?
+        |] (pid, name) :: IO (V.Vector (Maybe Text, Maybe Text, Maybe Text, Maybe Text, Maybe Text))
+        rows `shouldBe` V.singleton (Just path, Just endpointPath, Just host, Just method, Just endpointPath)
+
+    it "recovers a missing HTTP method from the span name without assuming GET" \tr -> do
+      apiKey <- createTestAPIKey tr pid "otel-method-from-name"
+      forM_ ([("POST /orders/{id}", "POST", "/orders/{id}", True, True), ("HTTP /orders/{id}", "_OTHER", "/orders/{id}", True, True), ("HTTP /orders/42", "_OTHER", "/orders/{number}", False, True), ("PATCH /orders/{id}", "PATCH", "/orders/{id}", False, False)] :: [(Text, Text, Text, Bool, Bool)]) \(name, expectedMethod, expectedRoute, hasRoute, hasPath) -> do
+        trId <- show <$> nextRandom
+        spanId' <- show <$> nextRandom
+        let attrs = [mkAttr "url.path" "/orders/42" | hasPath] <> [mkAttr "http.route" "/orders/{id}" | hasRoute]
+            req = withSpanKind PT.Span'SPAN_KIND_SERVER $ mkSpanRequest trId spanId' Nothing name [] Nothing attrs (mkResource apiKey []) frozenTime
+        void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto req)
+        rows <- withPool tr.trPool $ DBT.query [sql|
+          SELECT attributes___http___request___method, attributes___http___route FROM otel_logs_and_spans
+          WHERE project_id = ? AND name = ?
+        |] (pid, name) :: IO (V.Vector (Maybe Text, Maybe Text))
+        rows `shouldBe` V.singleton (Just expectedMethod, Just expectedRoute)
+
     it "ingests standard OTel HTTP span preserving original name" \tr -> do
       apiKey <- createTestAPIKey tr pid "std-otel-key"
       ingestStdOtelSpan tr apiKey "GET /api/users" "GET" "/api/users/550e8400-e29b-41d4-a716-446655440000" 200 "api.example.com"
