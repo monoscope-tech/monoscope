@@ -2806,12 +2806,14 @@ resolveDashboardParams pid now timeParams allParams dash = do
                       scopedSql = T.intercalate " AND " ["attributes___" <> T.replace "." "___" field <> " IN " <> constantToSQLList [[value]] | (field, value) <- fields]
                       scopedKql = T.intercalate " AND " ["attributes." <> field <> " in " <> constantToKQLList [[value]] | (field, value) <- fields]
                    in if "{" `T.isInfixOf` path
-                        then ( "(" <> scopedSql <> " AND attributes___http___route IN " <> constantToSQLList [[path]] <> " OR " <> hashSql <> ")"
-                             , "(" <> scopedKql <> " AND attributes.http.route in " <> constantToKQLList [[path]] <> " or " <> hashKql <> ")"
-                             )
-                        else ( scopedSql <> " AND (attributes___http___route IN " <> constantToSQLList [[path]] <> " OR ((attributes___http___route IS NULL OR attributes___http___route = '') AND attributes___url___path IN " <> constantToSQLList [[path]] <> "))"
-                             , scopedKql <> " AND (attributes.http.route in " <> constantToKQLList [[path]] <> " or (isempty(attributes.http.route) and attributes.url.path in " <> constantToKQLList [[path]] <> "))"
-                             )
+                        then
+                          ( "(" <> scopedSql <> " AND attributes___http___route IN " <> constantToSQLList [[path]] <> " OR " <> hashSql <> ")"
+                          , "(" <> scopedKql <> " AND attributes.http.route in " <> constantToKQLList [[path]] <> " or " <> hashKql <> ")"
+                          )
+                        else
+                          ( scopedSql <> " AND (attributes___http___route IN " <> constantToSQLList [[path]] <> " OR ((attributes___http___route IS NULL OR attributes___http___route = '') AND attributes___url___path IN " <> constantToSQLList [[path]] <> "))"
+                          , scopedKql <> " AND (attributes.http.route in " <> constantToKQLList [[path]] <> " or (isempty(attributes.http.route) and attributes.url.path in " <> constantToKQLList [[path]] <> "))"
+                          )
             _ -> (hashSql, hashKql)
       pure [("const-endpointFilter", Just sqlFilter), ("const-endpointFilter-kql", Just kqlFilter)]
     _ -> pure []
