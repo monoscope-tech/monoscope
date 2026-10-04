@@ -347,7 +347,7 @@ timepickerWithStatus_ showLiveStatus submitForm currentRange targetIdM = do
           [text|
       (function() {
         const el = (suffix) => document.getElementById("$targetPr-" + suffix);
-        const hideSidebar = () => el('timepickerSidebar').classList.add('hidden');
+        const hideSidebar = () => el('timepickerSidebar')?.classList.add('hidden');
         function initTimeDisplay() {
           const zoneEl = el('offsetIndicator');
           if (zoneEl && window.getUTCOffset) zoneEl.innerText = window.getUTCOffset();
@@ -358,9 +358,11 @@ timepickerWithStatus_ showLiveStatus submitForm currentRange targetIdM = do
         }
         window.addEventListener('monoscope:time-format-ready', initTimeDisplay, {once: true});
         function initEasepick() {
+          const root = el('timepicker-root');
+          if (!root) return;
           if (typeof easepick === 'undefined') { setTimeout(initEasepick, 100); return; }
           if (window["$targetPr-picker"]) return;
-          window["$targetPr-picker"] = new easepick.create({
+          const picker = new easepick.create({
             element: '#$targetPr-startTime',
             css: ['${easepickCss}'],
             inline: true,
@@ -380,6 +382,12 @@ timepickerWithStatus_ showLiveStatus submitForm currentRange targetIdM = do
                 el('timepicker-popover').hidePopover();
               });
             },
+          });
+          window["$targetPr-picker"] = picker;
+          root.addEventListener('htmx:beforeCleanupElement', (event) => {
+            if (event.target !== root) return;
+            picker.destroy();
+            delete window["$targetPr-picker"];
           });
         }
         initTimeDisplay();
