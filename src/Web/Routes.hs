@@ -1460,9 +1460,9 @@ widgetPngGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr widthM heightM s
 
   pngBytes <-
     liftIO (timeout 30000000 $ readProcess $ setStdin (byteStringInput input) $ proc "./chart-cli" []) >>= \case
-      Nothing -> Error.throwError err504{errBody = "Chart rendering timed out"} <* Log.logAttention "widgetPngGetH: chart render timed out" (AE.object ["widgetId" AE..= widget.id, "width" AE..= width, "height" AE..= height])
+      Nothing -> Log.logAttention "widgetPngGetH: chart render timed out" (AE.object ["widgetId" AE..= widget.id, "width" AE..= width, "height" AE..= height]) *> Error.throwError err504{errBody = "Chart rendering timed out"}
       Just (ExitSuccess, bytes, _) -> pure bytes
-      Just (ExitFailure code, _, errOut) -> Error.throwError err500{errBody = "Chart rendering failed"} <* Log.logAttention "widgetPngGetH: chart render failed" (AE.object ["exitCode" AE..= code, "stderr" AE..= decodeUtf8 @Text (toStrict errOut), "widgetId" AE..= widget.id])
+      Just (ExitFailure code, _, errOut) -> Log.logAttention "widgetPngGetH: chart render failed" (AE.object ["exitCode" AE..= code, "stderr" AE..= decodeUtf8 @Text (toStrict errOut), "widgetId" AE..= widget.id]) *> Error.throwError err500{errBody = "Chart rendering failed"}
 
   pure $ addHeader @"Cache-Control" (if isLeft chart then "no-store" else bool "public, max-age=300" "public, max-age=31536000, immutable" $ isJust fromDStr && isJust toDStr) pngBytes
 

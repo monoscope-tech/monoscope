@@ -1423,6 +1423,8 @@ widgetToECharts widget =
       axisVisibility = not isStat
       legendVisibility = not isStat && not (isTrue widget.hideLegend)
       seriesNames = extractSeriesNamesFromDataset widget.dataset
+      yMax = (.maxGroupSum) <$> (widget.dataset >>= (.stats))
+      maxLabel = if fromMaybe False (widget.yAxis >>= (.showOnlyMaxLabel)) then decodeUtf8 @Text . toStrict . AE.encode <$> yMax else Nothing
       -- Detect categorical widget types (no time axis)
       isCategorical = widget.wType `elem` [WTDistribution, WTPieChart, WTTopList, WTTreeMap, WTFunnel]
       xAxisType = if isCategorical then "category" else "time"
@@ -1495,15 +1497,13 @@ widgetToECharts widget =
             AE..= AE.object
               [ "type" AE..= ("value" :: Text)
               , "min" AE..= (0 :: Int)
-              , "max" AE..= ((.maxGroupSum) <$> (widget.dataset >>= (.stats)))
+              , "max" AE..= yMax
               , "splitLine"
                   AE..= AE.object
                     [ "show" AE..= axisVisibility
                     , "lineStyle" AE..= AE.object ["type" AE..= "dotted", "color" AE..= "#0011661A"]
                     , "interval"
-                        AE..= if fromMaybe False (widget.yAxis >>= (.showOnlyMaxLabel))
-                          then "function(index, value) { return value === this.yAxis.max }"
-                          else AE.Null
+                        AE..= maybe AE.Null (\n -> AE.String $ "function(index, value) { return value === " <> n <> "; }") maxLabel
                     ]
               , "axisTick" AE..= AE.object ["show" AE..= False]
               , "axisLine" AE..= AE.object ["show" AE..= False]
@@ -1515,10 +1515,7 @@ widgetToECharts widget =
                     , "hideOverlap" AE..= True
                     , "formatter"
                         AE..= let fmt = unitValueExprJS DropUnitWord widget.unit
-                                  showOnlyMax = fromMaybe False (widget.yAxis >>= (.showOnlyMaxLabel))
-                               in if showOnlyMax
-                                    then "function(value, index) { return (value === this.yAxis.max || value == 0) ? " <> fmt <> " : ''; }"
-                                    else "function(value, index) { return " <> fmt <> "; }"
+                               in maybe ("function(value, index) { return " <> fmt <> "; }") (\n -> "function(value, index) { return (value === " <> n <> " || value == 0) ? " <> fmt <> " : ''; }") maxLabel
                     ]
               , "show" AE..= axisVisibility
               ]
