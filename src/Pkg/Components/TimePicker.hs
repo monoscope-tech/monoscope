@@ -267,7 +267,9 @@ timepickerWithStatus_ showLiveStatus submitForm currentRange targetIdM = do
       span_ [id_ $ targetPr <> "-offsetIndicator", class_ "text-xs text-textWeak max-md:hidden"] "UTC+0"
       faSprite_ "chevron-down" "regular" "h-3 w-3"
 
-  div_ [class_ "contents", data_ "time-picker-root" ""] do
+  -- The id stops a cross-page morph soft-matching this wrapper onto its popover; DaisyUI's discrete
+  -- display transition then held `contents`, laying the closed list out inline (dashboard -> Explorer).
+  div_ [class_ "contents", id_ $ targetPr <> "-timepicker-root", data_ "time-picker-root" ""] do
     div_
       [ class_ "time-range-popover border dropdown dropdown-end menu w-96 rounded-box bg-bgRaised shadow-lg"
       , term "popover" "manual"

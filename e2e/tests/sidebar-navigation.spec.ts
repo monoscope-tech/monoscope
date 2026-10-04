@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { DEMO_PROJECT } from './helpers';
+import { DEMO_PROJECT, makeDashboard, deleteDashboard } from './helpers';
 
 const project = `/p/${DEMO_PROJECT}`;
 const cases = [
@@ -65,4 +65,25 @@ test('command palette Ask AI opens the explorer with the AI time range', async (
   await page.locator('[data-ai-action]').click();
   await expect(page).toHaveURL(/\/log_explorer\?.*since=1H/);
   expect(new URL(page.url()).searchParams.get('query')).toBe('level == "ERROR"');
+});
+
+// Regression: morphing a dashboard's deeper-nested navbar into Explorer's showed the closed time-range list inline.
+test('morphing from a dashboard never lays out the closed time picker inline', async ({ page }) => {
+  const dash = await makeDashboard(page, `E2E Navbar Morph ${Date.now()}`);
+  try {
+    await page.evaluate(() => {
+      const w = window as any;
+      w.leaked = '';
+      new MutationObserver(() => {
+        const el = document.getElementById('n-timepicker-popover');
+        const display = el && !el.matches(':popover-open') && getComputedStyle(el).display;
+        if (display && display !== 'none') w.leaked ||= display;
+      }).observe(document.documentElement, { subtree: true, childList: true, attributes: true });
+    });
+    await page.locator(`#main-sidenav .nav-flyout a[href^="${project}/log_explorer"]`).first().evaluate((a: HTMLElement) => a.click());
+    await expect(page.locator('#log-explorer-all-traces')).toBeVisible();
+    expect(await page.evaluate(() => (window as any).leaked)).toBe('');
+  } finally {
+    await deleteDashboard(page, dash);
+  }
 });
