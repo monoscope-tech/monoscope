@@ -982,15 +982,17 @@ enrichIssue pid issue = case Issues.issuePayload issue of
     let rd' :: Issues.RuntimeExceptionData
         rd' = rd{Issues.lastSeen = maybe rd.lastSeen (max rd.lastSeen) lastEvent}
         withData d = issue{Issues.issueData = Aeson (Issues.payloadJson (Issues.RuntimeExceptionP d))}
-    if not (T.null rd.stackTrace) then pure (withData rd') else do
-      epM <- ErrorPatterns.getErrorPatternByHash pid issue.targetHash
-      case epM >>= \ep -> (,zonedTimeToUTC ep.updatedAt) <$> ep.recentTraceId of
-        Nothing -> pure (withData rd')
-        Just (trId, ts) -> do
-          useTf <- useTfReads
-          now <- Time.currentTime
-          synth <- synthStackFromSpans trId <$> Telemetry.getSpanRecordsByTraceId useTf pid trId (Just ts) now Nothing
-          pure $ withData rd'{Issues.stackTrace = synth}
+    if not (T.null rd.stackTrace)
+      then pure (withData rd')
+      else do
+        epM <- ErrorPatterns.getErrorPatternByHash pid issue.targetHash
+        case epM >>= \ep -> (,zonedTimeToUTC ep.updatedAt) <$> ep.recentTraceId of
+          Nothing -> pure (withData rd')
+          Just (trId, ts) -> do
+            useTf <- useTfReads
+            now <- Time.currentTime
+            synth <- synthStackFromSpans trId <$> Telemetry.getSpanRecordsByTraceId useTf pid trId (Just ts) now Nothing
+            pure $ withData rd'{Issues.stackTrace = synth}
   _ -> pure issue
 
 

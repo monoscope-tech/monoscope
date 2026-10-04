@@ -313,8 +313,9 @@ selectErrorTraceRefs pid h =
 
 selectErrorLastEventAt :: DB es => Projects.ProjectId -> Text -> Bool -> Eff es (Maybe UTCTime)
 selectErrorLastEventAt pid h grouped =
-  join <$> Hasql.interpOne
-    [HI.sql| SELECT MAX(GREATEST(last_event_at, recent_trace_at))
+  join
+    <$> Hasql.interpOne
+      [HI.sql| SELECT MAX(GREATEST(last_event_at, recent_trace_at))
              FROM apis.error_patterns
              WHERE project_id = #{pid} AND
                ((#{grouped} AND parent_hash = #{h}) OR (NOT #{grouped} AND hash = #{h})) |]
