@@ -17,6 +17,7 @@ module Models.Apis.ErrorPatterns (
   getErrorPatternLByHash,
   ErrorTraceRefs (..),
   selectErrorTraceRefs,
+  selectErrorLastEventAt,
   bulkCalculateAndUpdateBaselines,
   UpsertOutcome (..),
   batchUpsertErrorPatterns,
@@ -310,6 +311,15 @@ selectErrorTraceRefs pid h =
              FROM apis.error_patterns WHERE project_id = #{pid} AND hash = #{h} LIMIT 1 |]
 
 
+selectErrorLastEventAt :: DB es => Projects.ProjectId -> Text -> Bool -> Eff es (Maybe UTCTime)
+selectErrorLastEventAt pid h grouped =
+  join <$> Hasql.interpOne
+    [HI.sql| SELECT MAX(GREATEST(last_event_at, recent_trace_at))
+             FROM apis.error_patterns
+             WHERE project_id = #{pid} AND
+               ((#{grouped} AND parent_hash = #{h}) OR (NOT #{grouped} AND hash = #{h})) |]
+
+
 getErrorPatternLByHash :: DB es => Projects.ProjectId -> Text -> UTCTime -> Eff es (Maybe ErrorPatternL)
 getErrorPatternLByHash pid eHash now =
   -- @e@ is the entity's explicit column list, not the table: @e.*@ then expands to exactly
@@ -553,12 +563,12 @@ batchUpsertErrorPatterns pid errors now =
       [HI.sql| INSERT INTO apis.error_patterns (
             project_id, error_type, message, stacktrace, hash, parent_hash, shape_hash, is_framework,
             environment, service, runtime, error_data, first_release, last_release, last_release_at, last_release_since,
-            first_trace_id, first_trace_at, recent_trace_id, recent_trace_at,
+            first_trace_id, first_trace_at, recent_trace_id, recent_trace_at, last_event_at,
             occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h)
           SELECT #{pid}, u.error_type, u.message, u.stacktrace, u.hash, u.parent_hash, u.shape_hash, u.is_framework,
                  u.environment, u.service, u.runtime, u.error_data, u.release, u.release, CASE WHEN u.release IS NOT NULL THEN u.event_at END, CASE WHEN u.release IS NOT NULL THEN u.event_at END,
                  u.trace_id, CASE WHEN u.trace_id IS NOT NULL THEN u.event_at END,
-                 u.trace_id, CASE WHEN u.trace_id IS NOT NULL THEN u.event_at END, u.cnt, u.cnt, u.cnt, u.cnt
+                 u.trace_id, CASE WHEN u.trace_id IS NOT NULL THEN u.event_at END, u.event_at, u.cnt, u.cnt, u.cnt, u.cnt
           FROM (SELECT unnest(#{errorTypes}::text[]) AS error_type, unnest(#{messages}::text[]) AS message,
                        unnest(#{stacktraces}::text[]) AS stacktrace, unnest(#{hashes}::text[]) AS hash,
                        unnest(#{parentHashes}::text[]) AS parent_hash, unnest(#{shapeHashes}::text[]) AS shape_hash,
@@ -568,6 +578,7 @@ batchUpsertErrorPatterns pid errors now =
                        unnest(#{traceIds}::text[]) AS trace_id, unnest(#{eventTimes}::timestamptz[]) AS event_at, unnest(#{counts}::bigint[]) AS cnt) u
           ON CONFLICT (project_id, hash) DO UPDATE SET
             updated_at = #{now},
+            last_event_at = GREATEST(apis.error_patterns.last_event_at, EXCLUDED.last_event_at),
             first_release = COALESCE(apis.error_patterns.first_release, EXCLUDED.first_release),
             -- Only a newer event moves the last release: batches arrive late and out of order.
             last_release = CASE WHEN ^{newerRelease} THEN EXCLUDED.last_release ELSE apis.error_patterns.last_release END,

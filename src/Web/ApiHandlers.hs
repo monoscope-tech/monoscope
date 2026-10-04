@@ -977,16 +977,20 @@ apiIssueGet pid iid = issueToFull <$> (enrichIssue pid =<< fetchIssue pid iid)
 -- TODO(perf): store the synth stack at ingestion to avoid these 2 extra queries.
 enrichIssue :: Projects.ProjectId -> Issues.Issue -> ATBaseCtx Issues.Issue
 enrichIssue pid issue = case Issues.issuePayload issue of
-  Just (Issues.RuntimeExceptionP rd)
-    | T.null rd.stackTrace -> do
-        epM <- ErrorPatterns.getErrorPatternByHash pid issue.targetHash
-        case epM >>= \ep -> (,zonedTimeToUTC ep.updatedAt) <$> ep.recentTraceId of
-          Nothing -> pure issue
-          Just (trId, ts) -> do
-            useTf <- useTfReads
-            now <- Time.currentTime
-            synth <- synthStackFromSpans trId <$> Telemetry.getSpanRecordsByTraceId useTf pid trId (Just ts) now Nothing
-            pure $ if T.null synth then issue else issue{Issues.issueData = Aeson (Issues.payloadJson (Issues.RuntimeExceptionP rd{Issues.stackTrace = synth}))}
+  Just (Issues.RuntimeExceptionP rd) -> do
+    lastEvent <- ErrorPatterns.selectErrorLastEventAt pid issue.targetHash issue.isFramework
+    let rd' :: Issues.RuntimeExceptionData
+        rd' = rd{Issues.lastSeen = maybe rd.lastSeen (max rd.lastSeen) lastEvent}
+        withData d = issue{Issues.issueData = Aeson (Issues.payloadJson (Issues.RuntimeExceptionP d))}
+    if not (T.null rd.stackTrace) then pure (withData rd') else do
+      epM <- ErrorPatterns.getErrorPatternByHash pid issue.targetHash
+      case epM >>= \ep -> (,zonedTimeToUTC ep.updatedAt) <$> ep.recentTraceId of
+        Nothing -> pure (withData rd')
+        Just (trId, ts) -> do
+          useTf <- useTfReads
+          now <- Time.currentTime
+          synth <- synthStackFromSpans trId <$> Telemetry.getSpanRecordsByTraceId useTf pid trId (Just ts) now Nothing
+          pure $ withData rd'{Issues.stackTrace = synth}
   _ -> pure issue
 
 
