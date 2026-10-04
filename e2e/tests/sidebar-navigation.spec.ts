@@ -87,3 +87,17 @@ test('morphing from a dashboard never lays out the closed time picker inline', a
     await deleteDashboard(page, dash);
   }
 });
+
+test('time picker releases its document click handler when HTMX removes it', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.goto(project + '/metrics');
+  await expect.poll(() => page.evaluate(() => Boolean((window as any)['n-picker']))).toBe(true);
+  await page.locator('#n-timepicker-root').evaluate(element => {
+    element.dispatchEvent(new Event('htmx:beforeCleanupElement', { bubbles: true }));
+    element.remove();
+  });
+  await page.locator('body').click();
+  expect(errors).toEqual([]);
+  expect(await page.evaluate(() => (window as any)['n-picker'])).toBeUndefined();
+});
