@@ -2817,7 +2817,8 @@ resolveDashboardParams pid now timeParams allParams dash = do
             _ -> (hashSql, hashKql)
       pure [("const-endpointFilter", Just sqlFilter), ("const-endpointFilter-kql", Just kqlFilter)]
     _ -> pure []
-  (constants, params) <- processConstantsAndExtendParams pid now timeParams (addVariableDefaults (allParams <> endpointParams) dash.variables) (dashboardQueryText dash) (fold dash.constants)
+  let paramsWithEndpoint = endpointParams <> filter (\(key, _) -> key `notElem` map fst endpointParams) allParams
+  (constants, params) <- processConstantsAndExtendParams pid now timeParams (addVariableDefaults paramsWithEndpoint dash.variables) (dashboardQueryText dash) (fold dash.constants)
   dash' <- processVariablesConcurrently pid now timeParams params (dash & #constants ?~ constants)
   pure (dash', params)
 
