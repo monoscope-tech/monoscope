@@ -88,8 +88,9 @@ spec = around withTestResources do
           spans :: [(PT.Span'SpanKind, Text, [PC.KeyValue])]
           spans =
             [ (PT.Span'SPAN_KIND_SERVER, "POST", [mkAttr "http.request.method" "POST", mkAttr "url.path" "/identity/login"])
-            , (PT.Span'SPAN_KIND_INTERNAL, "request handler - /identity/:id", [mkAttr "http.route" "/identity/:id", mkAttr "express.type" "request_handler"])
-            , (PT.Span'SPAN_KIND_INTERNAL, "documentFetch", [mkAttr "url.full" "https://identity.example.com/identity/page"])
+            , (PT.Span'SPAN_KIND_INTERNAL, "request middleware - /identity/:id", [mkAttr "http.route" "/identity/:id", mkAttr "express.type" "middleware"])
+            , (PT.Span'SPAN_KIND_INTERNAL, "request handler - /identity/:id", [mkAttr "http.request.method" "_OTHER", mkAttr "http.route" "/identity/:id", mkAttr "express.type" "request_handler"])
+            , (PT.Span'SPAN_KIND_INTERNAL, "documentFetch", [mkAttr "http.request.method" "GET", mkAttr "url.full" "https://identity.example.com/identity/page"])
             ]
       forM_ spans \(kind, name, attrs) -> do
         trId <- show <$> nextRandom

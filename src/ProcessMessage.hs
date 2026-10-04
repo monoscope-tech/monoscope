@@ -186,13 +186,12 @@ httpKeyOf canonicalTemplates otelSpan =
       !namedPath = case spanNameParts of
         _ : path : _ | "/" `T.isPrefixOf` path -> Just path
         _ -> Nothing
-      -- Without a method, route/status/path are HTTP evidence only on a server or client
-      -- span: Express middleware carries http.route and browser documentFetch a URL,
-      -- and both are kind=internal.
+      -- Express middleware and browser documentFetch can carry HTTP attributes,
+      -- but their internal spans are not requests.
       -- An empty @http.route@ means the router matched nothing (Django writes
       -- one for every unrouted request), so it is absence, not a route.
       !suppliedRoute = attrValue ^? key "http" . key "route" . _String >>= guarded (not . T.null)
-      !isHttpSpan = isJust (suppliedMethod <|> namedMethod) || (otelSpan.kind `elem` map Just ["client", "server"] && (isJust suppliedRoute || isJust (attrValue ^? key "http" . key "response" . key "status_code") || isJust (attrValue ^? key "url" . key "path" . _String)))
+      !isHttpSpan = otelSpan.kind `notElem` map Just ["internal", "log"] && (isJust (suppliedMethod <|> namedMethod) || (otelSpan.kind `elem` map Just ["client", "server"] && (isJust suppliedRoute || isJust (attrValue ^? key "http" . key "response" . key "status_code") || isJust (attrValue ^? key "url" . key "path" . _String))))
       !method = T.toUpper $ fromMaybe "_OTHER" $ suppliedMethod <|> namedMethod
       !routeInferred = attrValue ^? key "monoscope" . key "endpoint" . key "route_inferred" . _Bool == Just True
       !routeAttr = normalizeHttpRoute <$> (guard (otelSpan.kind /= Just "client" && not routeInferred) *> suppliedRoute)
