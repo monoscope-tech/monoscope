@@ -150,17 +150,21 @@ spec = around withTestResources do
           latest = addUTCTime 300 frozenTime
           groupLatest = addUTCTime 120 latest
           metadataUpdate = addUTCTime 60 latest
+          quietData = AE.toJSON $ Issues.RuntimeExceptionData
+            { Issues.errorType = "Error", Issues.errorMessage = "quiet now", Issues.stackTrace = "frame"
+            , Issues.requestPath = Nothing, Issues.requestMethod = Nothing, Issues.occurrenceCount = 1
+            , Issues.firstSeen = later, Issues.lastSeen = later
+            }
       void $ runTestBg frozenTime tr do
         _ <- Hasql.interpExecute [HI.sql|
           INSERT INTO apis.error_patterns
             (project_id, error_type, message, stacktrace, hash, parent_hash, is_framework, error_data, last_event_at)
           VALUES (#{testPid}, 'Error', 'still happening', 'frame', #{oldHash}, NULL, false, '{}'::jsonb, #{latest}),
-                 (#{testPid}, 'Error', 'quiet now', 'frame', #{newerHash}, NULL, false, '{}'::jsonb, #{later}),
                  (#{testPid}, 'Error', 'framework child', 'frame', #{groupHash <> "-child"}, #{groupHash}, true, '{}'::jsonb, #{groupLatest}) |]
         Hasql.interpExecute [HI.sql|
           INSERT INTO apis.issues (id, project_id, issue_type, title, target_hash, service, is_framework, issue_data, created_at, updated_at)
           VALUES (#{oldId}, #{testPid}, 'runtime_exception', 'active old issue', #{oldHash}, 'recency-smoke', false, '{}'::jsonb, #{frozenTime}, #{frozenTime}),
-                 (#{newerId}, #{testPid}, 'runtime_exception', 'newer quiet issue', #{newerHash}, 'recency-smoke', false, '{}'::jsonb, #{later}, #{metadataUpdate}),
+                 (#{newerId}, #{testPid}, 'runtime_exception', 'newer quiet issue', #{newerHash}, 'recency-smoke', false, #{Aeson quietData}, #{later}, #{metadataUpdate}),
                  (#{groupId}, #{testPid}, 'runtime_exception', 'grouped active issue', #{groupHash}, 'recency-smoke', true, '{}'::jsonb, #{frozenTime}, #{frozenTime}) |]
       (ec, out) <- runCLILifecycle tr ["--json", "issues", "list", "--service", "recency-smoke", "--per-page", "10"]
       ec `shouldBe` ExitSuccess
