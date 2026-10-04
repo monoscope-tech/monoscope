@@ -10,15 +10,19 @@ import CLI.Harness (runCLILifecycle)
 import Control.Concurrent (threadDelay)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Text qualified as T
 import Data.Time (addUTCTime, getCurrentTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
+import Data.UUID.V4 qualified as UUID4
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..))
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Hasql.Interpolate qualified as HI
 import Pages.Share qualified as Share
 import Pkg.TestUtils
 import Relude
@@ -103,6 +107,36 @@ spec = around withTestResources do
       (humanEc, humanOut) <- runCLILifecycle tr ["--table", "status"]
       humanEc `shouldBe` ExitSuccess
       toString humanOut `shouldContain` "CLI status issue"
+
+    it "issues_get_uses_latest_pattern_event_for_runtime_last_seen" \tr ->
+      forM_ [False, True] \grouped -> do
+        uid <- UUID4.nextRandom
+        let target = UUID.toText uid
+            patternHash = if grouped then target <> "-child" else target
+            latest = addUTCTime 300 frozenTime
+            sampled = addUTCTime 60 frozenTime
+            payload = AE.object
+              [ "error_type" AE..= ("Error" :: Text)
+              , "error_message" AE..= ("boom" :: Text)
+              , "stack_trace" AE..= ("frame" :: Text)
+              , "occurrence_count" AE..= (1 :: Int)
+              , "first_seen" AE..= frozenTime
+              , "last_seen" AE..= frozenTime
+              ]
+        void $ runTestBg frozenTime tr do
+          _ <- Hasql.interpExecute [HI.sql|
+            INSERT INTO apis.error_patterns
+              (project_id, error_type, message, stacktrace, hash, error_data, created_at, updated_at, recent_trace_at, last_event_at, parent_hash, is_framework)
+            VALUES (#{testPid}, 'Error', 'boom', 'frame', #{patternHash}, '{}'::jsonb, #{frozenTime}, #{frozenTime}, #{sampled}, #{latest}, #{if grouped then Just target else Nothing}, #{grouped}) |]
+          Hasql.interpExecute [HI.sql|
+            INSERT INTO apis.issues (id, project_id, issue_type, title, target_hash, is_framework, issue_data, created_at, updated_at)
+            VALUES (#{uid}, #{testPid}, 'runtime_exception', 'stale last seen', #{target}, #{grouped}, #{Aeson payload}, #{frozenTime}, #{frozenTime}) |]
+        (ec, out) <- runCLILifecycle tr ["--json", "issues", "get", toString target]
+        ec `shouldBe` ExitSuccess
+        jsonOut out >>= \case
+          AE.Object o | Just (AE.Object issueData) <- KM.lookup "issue_data" o ->
+            KM.lookup "last_seen" issueData `shouldBe` Just (AE.toJSON latest)
+          v -> expectationFailure $ "missing issue_data: " <> show v
 
   describe "monitors-as-code lifecycle" do
     it "apply is idempotent by title; mute/unmute/delete round-trip" \tr -> do
