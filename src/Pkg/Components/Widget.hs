@@ -28,7 +28,7 @@ import Log qualified
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (termRaw)
-import Lucid.Htmx (hxExt_, hxGet_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
+import Lucid.Htmx (hxGet_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -1128,9 +1128,8 @@ renderTableShell widget = do
       , hxTarget_ $ "#" <> tableId
       , hxSelect_ $ "#" <> tableId
       , hxSwap_ "outerHTML"
-      , hxExt_ "forward-page-params"
       , term "hx-sync" "this:replace"
-      , term "hx-vals" "js:{'table-sort': this.dataset.tableSort || ''}"
+      , term "hx-vals" "js:{...Object.fromEntries(new URLSearchParams(location.search)), ...JSON.parse(this.closest('[data-constants]')?.dataset.constants || '{}'), 'table-sort': this.dataset.tableSort || ''}"
       , data_ "table-fetch" ""
       ]
     $ case widget.html of
@@ -1153,7 +1152,7 @@ renderStatContent widget valueM = do
     , hxTarget_ $ "#" <> statContentId
     , hxSelect_ $ "#" <> statContentId
     , hxSwap_ "outerHTML"
-    , hxExt_ "forward-page-params"
+    , term "hx-vals" "js:{...Object.fromEntries(new URLSearchParams(location.search)), ...JSON.parse(this.closest('[data-constants]')?.dataset.constants || '{}')}"
     ]
     $ div_ [class_ "flex flex-col gap-1"] do
       strong_ [class_ "text-textStrong text-lg font-semibold tabular-nums", id_ $ chartId <> "Value"]

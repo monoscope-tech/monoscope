@@ -7,6 +7,24 @@ test.beforeAll(() => sql(cleanup + `INSERT INTO apis.endpoints (project_id,url_p
          ('${DEMO_PROJECT}','/e2e-browser/a/very/long/route/that/is/wider/than/the/variable/chip/{param}','{}','POST','browser.example','e2e-browser-long',false);`));
 test.afterAll(() => sql(cleanup));
 
+test("lazy endpoint widgets forward filters before the web component bundle loads", async ({ page }) => {
+  const widgetRequests: URL[] = [];
+  await page.route("**/web-components/dist/js/index.*.js", async route => {
+    await new Promise(resolve => setTimeout(resolve, 3_000));
+    await route.continue();
+  });
+  await page.route("**/widget?*", route => {
+    widgetRequests.push(new URL(route.request().url()));
+    return route.abort();
+  });
+  await page.goto(`/p/${DEMO_PROJECT}/endpoints/details?var-host=browser.example&var-endpointHash=e2e-browser-endpoint`);
+  await expect.poll(() => widgetRequests.length).toBeGreaterThanOrEqual(2);
+  expect(widgetRequests.every(url =>
+    url.searchParams.get("const-endpointFilter")?.includes("browser.example") &&
+    url.searchParams.get("var-endpointHash") === "e2e-browser-endpoint"
+  )).toBe(true);
+});
+
 // Endpoint Analytics is a template-backed redirect, not a fixed dashboard id. Supplying
 // its required variables is important: otherwise the intentional variable picker replaces
 // the canvas and this test would never exercise the investigation tabs.
