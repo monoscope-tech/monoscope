@@ -101,3 +101,22 @@ test('time picker releases its document click handler when HTMX removes it', asy
   expect(errors).toEqual([]);
   expect(await page.evaluate(() => (window as any)['n-picker'])).toBeUndefined();
 });
+
+test('time picker load retry stops after its root is removed', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  let release!: () => void;
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/deps/easepick/**', async route => {
+    await blocked;
+    await route.continue();
+  });
+  await page.goto(project + '/metrics', { waitUntil: 'commit' });
+  await page.locator('#n-timepicker-root').waitFor({ state: 'attached' });
+  expect(await page.evaluate(() => typeof (window as any).easepick)).toBe('undefined');
+  await page.locator('#n-timepicker-root').evaluate(element => element.remove());
+  release();
+  await expect.poll(() => page.evaluate(() => typeof (window as any).easepick)).toBe('object');
+  await page.waitForTimeout(200);
+  expect(errors).toEqual([]);
+});

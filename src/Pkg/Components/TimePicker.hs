@@ -358,6 +358,8 @@ timepickerWithStatus_ showLiveStatus submitForm currentRange targetIdM = do
         }
         window.addEventListener('monoscope:time-format-ready', initTimeDisplay, {once: true});
         function initEasepick() {
+          const root = el('timepicker-root');
+          if (!root) return;
           if (typeof easepick === 'undefined') { setTimeout(initEasepick, 100); return; }
           if (window["$targetPr-picker"]) return;
           const picker = new easepick.create({
@@ -382,7 +384,6 @@ timepickerWithStatus_ showLiveStatus submitForm currentRange targetIdM = do
             },
           });
           window["$targetPr-picker"] = picker;
-          const root = el('timepicker-root');
           root.addEventListener('htmx:beforeCleanupElement', (event) => {
             if (event.target !== root) return;
             picker.destroy();
