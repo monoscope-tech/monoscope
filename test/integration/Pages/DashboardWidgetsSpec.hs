@@ -696,6 +696,22 @@ spec = sequential $ aroundAll withTestResources do
           viaNonEmpty last values `shouldBe` Just (AE.object ["type" AE..= ("complete" :: Text), "data" AE..= expected])
         Left message -> expectationFailure message
 
+    it "renders rounded numeric chart and stat values from widget SQL" \tr -> do
+      let numericSql = "SELECT 1::bigint, 'cpu'::text, ROUND(AVG(1.25::numeric), 2)"
+      expected <- runQueryEffect tr $ Charts.queryMetrics (Just "postgres") (Just Charts.DTMetric) (Just testPid) Nothing (Just numericSql) (Just "24H") Nothing Nothing Nothing Nothing []
+      expected.error `shouldBe` Nothing
+      expected.dataset `shouldBe` V.singleton (V.fromList [Just 1000, Just 1.25])
+      response <- runQueryEffect tr $ Charts.queryMetricsStream (Just "postgres") (Just Charts.DTMetric) (Just testPid) Nothing (Just numericSql) (Just "24H") Nothing Nothing Nothing Nothing []
+      frames <- runExceptT $ Source.runSourceT $ Servant.getResponse response
+      fmap (viaNonEmpty last) frames `shouldBe` Right (Just $ AE.object ["type" AE..= ("complete" :: Text), "data" AE..= expected])
+      let scalarSql = "SELECT ROUND(AVG(1.25::numeric), 2)"
+      scalar <- runQueryEffect tr $ Charts.queryMetrics (Just "postgres") (Just Charts.DTFloat) (Just testPid) Nothing (Just scalarSql) (Just "24H") Nothing Nothing Nothing Nothing []
+      scalar.error `shouldBe` Nothing
+      scalar.dataFloat `shouldBe` Just 1.25
+      scalarResponse <- runQueryEffect tr $ Charts.queryMetricsStream (Just "postgres") (Just Charts.DTFloat) (Just testPid) Nothing (Just scalarSql) (Just "24H") Nothing Nothing Nothing Nothing []
+      scalarFrames <- runExceptT $ Source.runSourceT $ Servant.getResponse scalarResponse
+      fmap (viaNonEmpty last) scalarFrames `shouldBe` Right (Just $ AE.object ["type" AE..= ("complete" :: Text), "data" AE..= scalar])
+
     it "discards a connection when a row consumer fails and keeps the pool usable" \tr -> do
       -- Two large rows flush a complete first row through PostgreSQL's socket buffer.
       -- The third row stays asleep until the consumer cancels the query.

@@ -15,6 +15,7 @@ import Data.Effectful.Hasql (SqlSource (..), runHasqlPool)
 import Data.List (lookup)
 import Data.Map.Strict qualified as M
 import Data.Pool (Pool, destroyAllResources, withResource)
+import Data.Scientific (Scientific)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, diffUTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
@@ -27,7 +28,7 @@ import Database.PostgreSQL.Simple.FromField (FromField (..), ResultError (..), t
 import Database.PostgreSQL.Simple.FromRow (fromRow)
 import Database.PostgreSQL.Simple.Internal qualified as PGI
 import Database.PostgreSQL.Simple.Ok (ManyErrors (..), Ok (..))
-import Database.PostgreSQL.Simple.TypeInfo.Static (timestamptz, typoid)
+import Database.PostgreSQL.Simple.TypeInfo.Static (numeric, timestamptz, typoid)
 import Database.PostgreSQL.Simple.Types (Only (..), Query (Query), fromOnly)
 import Effectful (Eff, IOE, runEff, (:>))
 import Effectful.Error.Static (Error, throwError)
@@ -583,16 +584,16 @@ fetchMetricsDataWithProgress progress respDataType sqlQuery now fromD toD authCt
 
   retryOnPoolExhaustion $ try @SomePostgreSqlException $ checkpoint (toAnnotation (respDataType, sqlQuery)) $ case respDataType of
     DTFloat -> do
-      chartData <- runQ :: IO [Only (Maybe Double)]
+      chartData <- runQ :: IO [Only (Maybe ChartNumber)]
       pure
         baseMetricsData
-          { dataFloat = listToMaybe chartData >>= fromOnly
+          { dataFloat = coerce (listToMaybe chartData >>= fromOnly)
           , rowsCount = 1
           }
     DTMetric -> do
       -- Rows arrive as 'BucketEpoch' so a hand-written bucket column may be a timestamptz;
       -- coerce back to the epoch Int the pivot works in.
-      let metrics :: V.Vector (BucketEpoch, Text, Double) -> MetricsData
+      let metrics :: V.Vector (BucketEpoch, Text, ChartNumber) -> MetricsData
           metrics (coerce -> rows) =
             let (hdrs, groupedData, rowsCount, rpm) = pivot' rows
              in baseMetricsData{dataset = groupedData, headers = V.cons "timestamp" hdrs, rowsCount, rowsPerMin = Just rpm, stats = Just $ statsTriple rows}
@@ -660,6 +661,15 @@ instance FromField BucketEpoch where
   fromField f v
     | typeOid f == typoid timestamptz = BucketEpoch . round . utcTimeToPOSIXSeconds <$> fromField f v
     | otherwise = BucketEpoch <$> fromField f v
+
+
+newtype ChartNumber = ChartNumber Double
+
+
+instance FromField ChartNumber where
+  fromField f v
+    | typeOid f == typoid numeric = ChartNumber . realToFrac <$> fromField @Scientific f v
+    | otherwise = ChartNumber <$> fromField f v
 
 
 -- | Convert timestamps in MetricsData from seconds to milliseconds for ECharts
