@@ -15,6 +15,10 @@ import Data.Time (addUTCTime, getCurrentTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Database.PostgreSQL.Entity.DBT (withPool)
+import Database.PostgreSQL.Entity.DBT qualified as DBT
+import Database.PostgreSQL.Simple (Only (..))
+import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Pages.Share qualified as Share
 import Pkg.TestUtils
 import Relude
@@ -79,6 +83,26 @@ spec = around withTestResources do
       (ec, out) <- runCLILifecycle tr ["--json", "incidents", "list"]
       ec `shouldBe` ExitSuccess
       jsonOut out >>= (`shouldHaveKeys` ["data", "pagination"])
+
+    it "status_reportsTotalOpenIssuesBeyondFirstPage" \tr -> do
+      withPool tr.trPool $ void $ DBT.execute [sql|
+        INSERT INTO apis.issues
+          (id, project_id, issue_type, target_hash, endpoint_hash, title, severity,
+           critical, affected_requests, affected_clients, issue_data, created_at, updated_at)
+        SELECT gen_random_uuid(), ?, 'runtime_exception', gen_random_uuid()::text, '',
+               'CLI status issue', 'warning', false, 1, 1, '{}'::jsonb, now(), now()
+        FROM generate_series(1, 6)
+      |] (Only testPid)
+      (ec, out) <- runCLILifecycle tr ["--json", "status"]
+      ec `shouldBe` ExitSuccess
+      jsonOut out >>= \case
+        AE.Object o -> KM.lookup "open_issues" o `shouldSatisfy` \case
+          Just (AE.Number n) -> n >= 6
+          _ -> False
+        _ -> expectationFailure "status did not return a JSON object"
+      (humanEc, humanOut) <- runCLILifecycle tr ["--table", "status"]
+      humanEc `shouldBe` ExitSuccess
+      toString humanOut `shouldContain` "CLI status issue"
 
   describe "monitors-as-code lifecycle" do
     it "apply is idempotent by title; mute/unmute/delete round-trip" \tr -> do

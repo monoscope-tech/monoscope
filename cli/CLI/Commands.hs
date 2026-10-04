@@ -1144,15 +1144,14 @@ runStatus cfg opts mode = do
   -- boolean comparison fails to plan.
   errors <- metric "status_code==\"ERROR\" | summarize count(*) by bin_auto(timestamp)"
   byService <- metric "summarize count(*) by resource.service.name | sort by count_ desc | take 8"
-  issues <- either (const AE.Null) Relude.id <$> apiGetJson @_ @AE.Value cfg "/api/v1/issues" [("status", "open"), ("per_page", "5")]
+  issues <- apiGetJson @_ @(Wire.Paged AE.Value) cfg "/api/v1/issues" [("status", "open"), ("per_page", "5")]
   monitors <- either (const AE.Null) Relude.id <$> apiGetJson @_ @AE.Value cfg "/api/v1/monitors" []
   let summary =
         AE.object
           [ "since" AE..= since
           , "events" AE..= sum (mapMaybe (join . (V.!? 1)) (V.toList volume.dataset))
           , "errors" AE..= sum (mapMaybe (join . (V.!? 1)) (V.toList errors.dataset))
-          , -- \^.. not ^?: `length` on a Maybe counts the Just, not the array.
-            "open_issues" AE..= length (issues ^.. AL.key "data" . AL._Array . traverse)
+          , "open_issues" AE..= either (const AE.Null) (AE.toJSON . (.totalCount)) issues
           , "alerting_monitors" AE..= alertingMonitors monitors
           ]
   renderWith mode summary do
@@ -1166,9 +1165,11 @@ runStatus cfg opts mode = do
     panel "Errors" errors (Chart.renderTimeseries chartOpts{Chart.height = 5} . Chart.seriesFromMetrics)
     panel "Busiest services" byService (Chart.renderBars chartOpts . labelledRows)
     section "Open issues"
-    putTextLn $ case issues ^.. AL.key "data" . AL._Array . traverse . AL.key "title" . AL._String of
-      [] -> Chart.dim color "  none"
-      ts -> unlines ["  " <> Chart.ellipsize (w - 2) t | t <- take 5 ts]
+    putTextLn $ case issues of
+      Left err -> Chart.colorize color (Chart.seriesColor 6) ("  unavailable: " <> renderAPIError err)
+      Right page -> case mapMaybe (^? AL.key "title" . AL._String) page.items of
+        [] -> Chart.dim color "  none"
+        ts -> unlines ["  " <> Chart.ellipsize (w - 2) t | t <- ts]
     let alerting = alertingMonitors monitors
     section "Monitors"
     putTextLn
