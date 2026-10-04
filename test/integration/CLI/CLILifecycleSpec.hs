@@ -23,6 +23,7 @@ import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Hasql.Interpolate qualified as HI
+import Models.Apis.Issues qualified as Issues
 import Pages.Share qualified as Share
 import Pkg.TestUtils
 import Relude
@@ -137,6 +138,37 @@ spec = around withTestResources do
           AE.Object o | Just (AE.Object issueData) <- KM.lookup "issue_data" o ->
             KM.lookup "last_seen" issueData `shouldBe` Just (AE.toJSON latest)
           v -> expectationFailure $ "missing issue_data: " <> show v
+
+    it "issues_list_orders_active_runtime_errors_by_latest_event" \tr -> do
+      oldId <- UUID4.nextRandom
+      newerId <- UUID4.nextRandom
+      groupId <- UUID4.nextRandom
+      let oldHash = UUID.toText oldId
+          newerHash = UUID.toText newerId
+          groupHash = UUID.toText groupId
+          later = addUTCTime 60 frozenTime
+          latest = addUTCTime 300 frozenTime
+          groupLatest = addUTCTime 120 latest
+          metadataUpdate = addUTCTime 60 latest
+      void $ runTestBg frozenTime tr do
+        _ <- Hasql.interpExecute [HI.sql|
+          INSERT INTO apis.error_patterns
+            (project_id, error_type, message, stacktrace, hash, parent_hash, is_framework, error_data, last_event_at)
+          VALUES (#{testPid}, 'Error', 'still happening', 'frame', #{oldHash}, NULL, false, '{}'::jsonb, #{latest}),
+                 (#{testPid}, 'Error', 'quiet now', 'frame', #{newerHash}, NULL, false, '{}'::jsonb, #{later}),
+                 (#{testPid}, 'Error', 'framework child', 'frame', #{groupHash <> "-child"}, #{groupHash}, true, '{}'::jsonb, #{groupLatest}) |]
+        Hasql.interpExecute [HI.sql|
+          INSERT INTO apis.issues (id, project_id, issue_type, title, target_hash, service, is_framework, issue_data, created_at, updated_at)
+          VALUES (#{oldId}, #{testPid}, 'runtime_exception', 'active old issue', #{oldHash}, 'recency-smoke', false, '{}'::jsonb, #{frozenTime}, #{frozenTime}),
+                 (#{newerId}, #{testPid}, 'runtime_exception', 'newer quiet issue', #{newerHash}, 'recency-smoke', false, '{}'::jsonb, #{later}, #{metadataUpdate}),
+                 (#{groupId}, #{testPid}, 'runtime_exception', 'grouped active issue', #{groupHash}, 'recency-smoke', true, '{}'::jsonb, #{frozenTime}, #{frozenTime}) |]
+      (ec, out) <- runCLILifecycle tr ["--json", "issues", "list", "--service", "recency-smoke", "--per-page", "10"]
+      ec `shouldBe` ExitSuccess
+      rows <- listRows <$> jsonOut out
+      map rowId rows `shouldBe` map toString [groupHash, oldHash, newerHash]
+      (issues, _) <- runTestBg frozenTime tr $ Issues.selectIssues testPid Issues.PIssueL Issues.defIssueFilters{Issues.service = Just "recency-smoke", Issues.order = Just "-last_seen"}
+      map (.base.targetHash) issues `shouldBe` [groupHash, oldHash, newerHash]
+      map (.lastSeen) issues `shouldBe` [groupLatest, latest, later]
 
   describe "monitors-as-code lifecycle" do
     it "apply is idempotent by title; mute/unmute/delete round-trip" \tr -> do

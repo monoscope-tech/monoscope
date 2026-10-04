@@ -936,7 +936,7 @@ apiIssuesList pid statusM typeM svcM pageM perPageM = paged pageM perPageM 200 $
             , Issues.archive = archF
             , Issues.types = oneOf typeM
             , Issues.services = oneOf svcM
-            , Issues.order = Just "-updated_at"
+            , Issues.order = Just "-last_seen"
             , Issues.limit = perPage
             , Issues.offset = offset
             }

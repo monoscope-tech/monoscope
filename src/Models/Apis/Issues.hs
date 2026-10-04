@@ -827,6 +827,17 @@ selectIssues pid projection f = do
   let (seriesStart, stepSql) = case f.period of
         "24h" -> (addUTCTime (-(23 * 3600)) now, [HI.sql|interval '1 hour'|])
         _ -> (UTCTime (addDays (-6) (utctDay now)) 0, [HI.sql|interval '1 day'|])
+      lastSeenAt pfx =
+        let col = rawSql pfx
+         in [HI.sql| COALESCE(
+               CASE WHEN ^{col}issue_type = 'runtime_exception' THEN
+                 (SELECT MAX(GREATEST(ep.last_event_at, ep.recent_trace_at))
+                  FROM apis.error_patterns ep
+                  WHERE ep.project_id = ^{col}project_id
+                    AND ((^{col}is_framework AND ep.parent_hash = ^{col}target_hash)
+                      OR (NOT ^{col}is_framework AND ep.hash = ^{col}target_hash)))
+               END, ^{col}updated_at) |]
+      orderBy pfx | f.order == Just "-last_seen" = lastSeenAt pfx <> [HI.sql| DESC, ^{rawSql pfx}id DESC|]
       orderBy pfx = rawSql case T.uncons =<< f.order of
         Just (s, c) | s == '-' || s == '+', c `elem` ["created_at", "updated_at", "title"] -> pfx <> c <> bool " ASC" " DESC" (s == '-')
         -- Output aliases of the IssueL projection; only that query (prefix "i.") has them.
@@ -849,7 +860,7 @@ selectIssues pid projection f = do
     PIssue ->
       Hasql.interp
         $ selectFrom @Issue
-        <> [HI.sql| WHERE project_id = #{pid} ^{cFilters} ORDER BY ^{orderBy ""} LIMIT #{f.limit} OFFSET #{f.offset} |]
+        <> [HI.sql| WHERE project_id = #{pid} ^{cFilters} ORDER BY ^{orderBy "apis.issues."} LIMIT #{f.limit} OFFSET #{f.offset} |]
     PIssueL ->
       Hasql.interp
         [HI.sql|
@@ -867,7 +878,7 @@ selectIssues pid projection f = do
             WHEN i.issue_type IN ('log_pattern', 'log_pattern_rate_change') THEN COALESCE(lp_ev.cnt, 0)
             ELSE i.affected_requests
           END::bigint AS event_count,
-          i.updated_at, lat.event,
+          ^{lastSeenAt "i."}, lat.event,
           CASE
             WHEN i.issue_type = 'runtime_exception' THEN COALESCE(err_ev.buckets, '{}'::bigint[])
             WHEN i.issue_type IN ('log_pattern', 'log_pattern_rate_change') THEN COALESCE(lp_ev.buckets, '{}'::bigint[])
