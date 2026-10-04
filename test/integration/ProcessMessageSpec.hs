@@ -94,7 +94,7 @@ resourceSpec = do
     -- so the span's own project_id text is never parsed and a garbage value can't crash.
     it "does not crash on an unparseable project_id and stamps the threaded ProjectId" $ \_ -> do
       now <- getCurrentTime
-      let badSpan = (emptySpan now){Telemetry.project_id = "not-a-uuid"}
+      let badSpan = (emptySpan now){Telemetry.project_id = "not-a-uuid", Telemetry.name = Just "GET /"}
           (mkEndpoint, _hashes, _, _) = processSpanToEntities emptyPathClassifier Projects.defaultProjectCache pid badSpan
       fmap (.projectId) (mkEndpoint UUID.nil) `shouldBe` Just pid
 
@@ -103,7 +103,7 @@ resourceSpec = do
     -- caller that populates one and not the other re-mints every endpoint on every span.
     it "treats a hash already in knownHashes as an existing endpoint" $ \_ -> do
       now <- getCurrentTime
-      let sp = emptySpan now
+      let sp = (emptySpan now){Telemetry.name = Just "GET /"}
           run c pc = processSpanToEntities c pc pid sp
           mints c pc = isJust $ (\(mk, _, _, _) -> mk UUID.nil) (run c pc)
           -- take the hash the function itself stamps rather than re-deriving it

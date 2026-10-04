@@ -186,12 +186,16 @@ httpKeyOf canonicalTemplates otelSpan =
       !namedPath = case spanNameParts of
         _ : path : _ | "/" `T.isPrefixOf` path -> Just path
         _ -> Nothing
-      !isHttpSpan = isJust suppliedMethod || isJust namedMethod || isJust ((attrValue ^? key "http" . key "route" . _String) >>= guarded (not . T.null)) || isJust (attrValue ^? key "http" . key "response" . key "status_code") || ((otelSpan.kind == Just "client" || otelSpan.kind == Just "server") && isJust (attrValue ^? key "url" . key "path" . _String))
-      !method = T.toUpper $ fromMaybe "_OTHER" $ suppliedMethod <|> namedMethod
-      !routeInferred = attrValue ^? key "monoscope" . key "endpoint" . key "route_inferred" . _Bool == Just True
+      -- Without a method, route/status/path are HTTP evidence only on a server or client
+      -- span: Express middleware carries http.route and browser documentFetch a URL,
+      -- and both are kind=internal.
       -- An empty @http.route@ means the router matched nothing (Django writes
       -- one for every unrouted request), so it is absence, not a route.
-      !routeAttr = normalizeHttpRoute <$> (guard (otelSpan.kind /= Just "client" && not routeInferred) *> (attrValue ^? key "http" . key "route" . _String >>= guarded (not . T.null)))
+      !suppliedRoute = attrValue ^? key "http" . key "route" . _String >>= guarded (not . T.null)
+      !isHttpSpan = isJust (suppliedMethod <|> namedMethod) || (otelSpan.kind `elem` map Just ["client", "server"] && (isJust suppliedRoute || isJust (attrValue ^? key "http" . key "response" . key "status_code") || isJust (attrValue ^? key "url" . key "path" . _String)))
+      !method = T.toUpper $ fromMaybe "_OTHER" $ suppliedMethod <|> namedMethod
+      !routeInferred = attrValue ^? key "monoscope" . key "endpoint" . key "route_inferred" . _Bool == Just True
+      !routeAttr = normalizeHttpRoute <$> (guard (otelSpan.kind /= Just "client" && not routeInferred) *> suppliedRoute)
       !inferredRoute = guard routeInferred *> (attrValue ^? key "http" . key "route" . _String)
       !clientTemplate = normalizeHttpRoute <$> (attrValue ^? key "url" . key "template" . _String >>= guarded (not . T.null))
       -- The route we are willing to take as authority — carrying both the
@@ -209,12 +213,17 @@ httpKeyOf canonicalTemplates otelSpan =
       -- resolution reads. The deprecated keys stay as fallbacks for rows written
       -- before the migration. Empties are skipped so an SDK span that sent no host
       -- still picks up the url-derived server.address instead of hashing on "".
+      --
+      -- Failing all of those, a span's own service.name, matching what ingest wrote
+      -- into server.address before #631; dropping it re-keyed every endpoint of SDKs
+      -- that send no host. A client span's server is remote, so never its service.
       !host =
         fromMaybe ""
           $ asum
-            [ attrValue ^? p . _String >>= guarded (not . T.null)
+          $ [ attrValue ^? p . _String >>= guarded (not . T.null)
             | p <- [key "server" . key "address", key "net" . key "host" . key "name", key "http" . key "host"]
             ]
+          <> [guard (otelSpan.kind `notElem` map Just ["client", "log"]) *> Telemetry.spanServiceName otelSpan]
       !sdkTypeStr =
         fromMaybe "unknown"
           $ (attrValue ^? key "monoscope" . key "sdk_type" . _String)
@@ -285,7 +294,7 @@ processSpanToEntities canonicalTemplates pjc projectId otelSpan =
 
       -- knownHashes is the same set, built once per batch. The vector scan this replaces
       -- ran per span, over a catalog that reaches 7k entries on a busy project.
-      !isNewEndpoint = not (HashSet.member endpointHash canonicalTemplates.knownHashes) && statusCode /= 404
+      !isNewEndpoint = isHttpSpan && not (HashSet.member endpointHash canonicalTemplates.knownHashes) && statusCode /= 404
 
       endpoint dumpId =
         if not isNewEndpoint
