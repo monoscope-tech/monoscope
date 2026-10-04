@@ -39,12 +39,12 @@ facetsFallback pid field fromT toT
       pure (AE.object [])
   | otherwise = do
       -- HI.sql is a QuasiQuoter so we can't splice the column name through
-      -- it. The column ref is whitelisted; UUID and ISO 8601 timestamps
+      -- it. The column ref is whitelisted; project ID and ISO 8601 timestamps
       -- stringify into safe SQL literals.
       let col = T.replace "." "___" field
           colRef = "\"" <> col <> "\""
           tsLit t = "'" <> toText (Data.Time.Format.ISO8601.iso8601Show t) <> "'::timestamptz"
-          pidLit = "'" <> pid.toText <> "'::uuid"
+          pidLit = "'" <> pid.toText <> "'::text"
           snippet =
             "SELECT ("
               <> fromString (toString colRef)

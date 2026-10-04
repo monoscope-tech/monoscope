@@ -303,6 +303,11 @@ spec = around withTestResources
           s `shouldSatisfy` isJust
 
     describe "Layer A — handler wire shape" $ do
+      it "apiFacets_emptyCachedSummary_returnsLiveServiceFacet" $ \tr -> do
+        clearAll tr [pid]
+        body <- runAsBase tr $ ApiH.apiFacets pid Nothing Nothing Nothing (Just "resource.service.name")
+        body `shouldBe` AE.object ["resource.service.name" AE..= ([] :: [AE.Value]), "source" AE..= ("fallback" :: Text)]
+
       it "GET /api/v1/facets returns dotted keys only (no triple-underscore)" $ \tr -> do
         clearAll tr [pid]
         seedSummary tr pid
