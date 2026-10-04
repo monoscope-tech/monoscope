@@ -759,13 +759,13 @@ const loadTagify = () =>
     const src = (name: string) => document.querySelector<HTMLMetaElement>(`meta[name="${name}"]`)?.content || '';
     document.head.append(Object.assign(document.createElement('link'), { rel: 'stylesheet', href: src('tagify-css') }));
     document.head.append(Object.assign(document.createElement('script'), { src: src('tagify-js'), onload: resolve, onerror: reject }));
-  }));
+  }).catch(e => { tagifyLoading = null; throw e; }));
 
 function initAllTagifyInputs(root: Document | Element = document) {
   const els = [...root.querySelectorAll<HTMLElement>('[data-tagify]')];
   const pending = (window as any).Tagify ? [] : els.filter((el) => !(el as any)._tagifyInstance);
   els.filter((el) => !pending.includes(el)).forEach(initTagifyElement);
-  if (pending.length) loadTagify().then(() => pending.forEach(initTagifyElement), (e) => console.error('[Tagify] failed to load', e));
+  if (pending.length) loadTagify().catch(() => loadTagify()).then(() => pending.forEach(initTagifyElement), (e) => console.error('[Tagify] failed to load', e));
 }
 
 window.getTagValues = (selector: string): string[] => {
