@@ -25,6 +25,17 @@ test("lazy endpoint widgets forward filters before the web component bundle load
   )).toBe(true);
 });
 
+test("dashboard variables recover when Tagify fails to load", async ({ page }) => {
+  let requests = 0;
+  await page.route("**/public/assets/deps/tagify/*.js", route => {
+    requests++;
+    return requests <= 2 ? route.abort() : route.continue();
+  });
+  await page.goto(`/p/${DEMO_PROJECT}/endpoints/details?var-host=browser.example&var-endpointHash=e2e-browser-endpoint`);
+  await expect.poll(() => requests).toBe(3);
+  await expect(page.locator(".dash-variable .tagify")).toHaveCount(2);
+});
+
 // Endpoint Analytics is a template-backed redirect, not a fixed dashboard id. Supplying
 // its required variables is important: otherwise the intentional variable picker replaces
 // the canvas and this test would never exercise the investigation tabs.

@@ -320,10 +320,9 @@ bodyWrapper bcfg child = do
             void $ script_ "window.gridStackReady = new Promise(resolve => { window.__resolveGridStack = resolve; });"
             script_ [src_ src, defer_ "true", onload_ "window.__resolveGridStack?.(window.GridStack)"] ("" :: Text)
       deferredCss $ assetUrl "/public/assets/css/thirdparty/rrweb.css"
-      -- Without Tagify up front, main.ts fetches it from here when a tag input first appears.
-      unless bcfg.needsTagify do
-        meta_ [name_ "tagify-js", content_ $ assetUrl "/public/assets/deps/tagify/tagify.min.js"]
-        meta_ [name_ "tagify-css", content_ $ assetUrl "/public/assets/css/thirdparty/tagify.min.css"]
+      -- main.ts fetches Tagify on demand or retries if the deferred script fails.
+      meta_ [name_ "tagify-js", content_ $ assetUrl "/public/assets/deps/tagify/tagify.min.js"]
+      meta_ [name_ "tagify-css", content_ $ assetUrl "/public/assets/css/thirdparty/tagify.min.css"]
       mapM_ css
         $ [assetUrl "/public/assets/css/thirdparty/tagify.min.css" | bcfg.needsTagify]
         <> [assetUrl "/public/assets/deps/gridstack/gridstack.min.css" | bcfg.needsGridStack]
