@@ -42,8 +42,8 @@ import Data.Time.LocalTime (getCurrentTimeZone, utcToZonedTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
-import Data.Vector.Unboxed qualified as VU
 import Data.Vector.Algorithms.Intro qualified as VA
+import Data.Vector.Unboxed qualified as VU
 import Database.PostgreSQL.Simple (FromRow)
 import Database.PostgreSQL.Simple qualified as SimplePG
 import Database.PostgreSQL.Simple.FromField (FromField)

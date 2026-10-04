@@ -41,10 +41,10 @@ module Models.Apis.PatternMerge (
 where
 
 import Control.Exception.Safe qualified as CE
-import Data.Effectful.Hasql qualified as Hasql
 import Data.Binary.Get (getFloatbe, getWord32be, runGetOrFail, skip)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BL
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime)
 import Data.Vector qualified as V
@@ -113,7 +113,7 @@ decodeEmbedding bytes = case runGetOrFail readArray (fromStrict bytes) of
 getCanonicalErrorPatterns :: DB es => Projects.ProjectId -> Eff es [(ErrorPatternId, VU.Vector Float)]
 getCanonicalErrorPatterns pid =
   Hasql.interp
-      [HI.sql| SELECT id, array_send(embedding) FROM apis.error_patterns
+    [HI.sql| SELECT id, array_send(embedding) FROM apis.error_patterns
         WHERE project_id = #{pid} AND canonical_id IS NULL
           AND embedding IS NOT NULL AND merge_override = FALSE
         LIMIT 10000 |]
@@ -196,7 +196,7 @@ updateLogEmbeddings pairs =
 getCanonicalLogPatterns :: DB es => Projects.ProjectId -> Eff es [(LogPatternId, VU.Vector Float)]
 getCanonicalLogPatterns pid =
   Hasql.interp
-      [HI.sql| SELECT id, array_send(embedding) FROM apis.log_patterns
+    [HI.sql| SELECT id, array_send(embedding) FROM apis.log_patterns
         WHERE project_id = #{pid} AND canonical_id IS NULL
           AND embedding IS NOT NULL AND merge_override = FALSE
         LIMIT 10000 |]
