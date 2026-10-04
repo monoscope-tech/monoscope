@@ -553,13 +553,28 @@ normalizeStackTrace runtime stackText =
 --
 -- >>> normalizeMessage "   Trimmed message   "
 -- "Trimmed message"
+--
+-- A serialised context object is collapsed. htmx logs its whole event, whose
+-- listener arrays and request fields differ on every occurrence, so each one
+-- minted its own pattern (611 hashes for 611 Talstack AbortErrors):
+--
+-- >>> let dump n = "{\"elt\":{\"listeners\":[" <> T.intercalate "," (replicate n "{\"runCount\":7}") <> "]},\"pad\":\"" <> T.replicate 512 "x" <> "\"}"
+-- >>> normalizeMessage ("htmx:error: The user aborted a request. " <> dump 1) == normalizeMessage ("htmx:error: The user aborted a request. " <> dump 3)
+-- True
+--
+-- A short JSON body is kept: it is usually what tells two failures apart.
+--
+-- >>> normalizeMessage "Apaylo request failed: {\"StatusCode\":400,\"Message\":\"No data found\"}" == normalizeMessage "Apaylo request failed: {\"StatusCode\":500,\"Message\":\"A technical error occurred\"}"
+-- False
 normalizeMessage :: Text -> Text
 normalizeMessage msg =
   let lns = take 2 $ filter (not . T.null . T.strip) $ T.splitOn "\n" $ T.replace "\r\n" "\n" msg
       combined = T.intercalate " " $ map T.strip lns
-      -- Replace variable patterns with placeholders
-      normalized = replaceAllFormats combined
-   in T.strip normalized
+      -- Every discriminating JSON body seen in 90 days of prod patterns is under 512
+      -- chars; everything over it is a dump (htmx events, ethers transactions).
+      (prose, json) = T.breakOn "{\"" combined
+      collapsed = if T.compareLength json 512 == GT then prose <> "{json}" else combined
+   in T.strip $ replaceAllFormats collapsed
 
 
 -- | Compute the error fingerprint hash using stack-trace-first prioritization

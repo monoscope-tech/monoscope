@@ -79,6 +79,28 @@ spec = around withTestResources do
         |] (pid, name) :: IO (V.Vector (Maybe Text, Maybe Text))
         rows `shouldBe` V.singleton (Just expectedMethod, Just expectedRoute)
 
+    -- #631 re-keyed every endpoint of a project whose server spans carry no host
+    -- (Talstack's `POST /login` was announced "new" again), and minted `_OTHER`
+    -- endpoints for Express middleware and browser documentFetch spans.
+    it "hostlessServerSpan_keepsServiceNameIdentity_andInternalSpansMintNoEndpoint" \tr -> do
+      apiKey <- createTestAPIKey tr pid "otel-endpoint-identity"
+      let resource = mkResource apiKey [mkAttr "service.name" "identity-svc"]
+          spans :: [(PT.Span'SpanKind, Text, [PC.KeyValue])]
+          spans =
+            [ (PT.Span'SPAN_KIND_SERVER, "POST", [mkAttr "http.request.method" "POST", mkAttr "url.path" "/identity/login"])
+            , (PT.Span'SPAN_KIND_INTERNAL, "request handler - /identity/:id", [mkAttr "http.route" "/identity/:id", mkAttr "express.type" "request_handler"])
+            , (PT.Span'SPAN_KIND_INTERNAL, "documentFetch", [mkAttr "url.full" "https://identity.example.com/identity/page"])
+            ]
+      forM_ spans \(kind, name, attrs) -> do
+        trId <- show <$> nextRandom
+        spanId' <- show <$> nextRandom
+        void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ withSpanKind kind $ mkSpanRequest trId spanId' Nothing name [] Nothing attrs resource frozenTime)
+      drainExtractionWorker tr
+      endpoints <- withPool tr.trPool $ DBT.query [sql|
+        SELECT method, host, url_path FROM apis.endpoints WHERE project_id = ? AND url_path LIKE '/identity%'
+      |] (Only pid) :: IO (V.Vector (Text, Text, Text))
+      endpoints `shouldBe` V.singleton ("POST", "identity-svc", "/identity/login")
+
     it "ingests standard OTel HTTP span preserving original name" \tr -> do
       apiKey <- createTestAPIKey tr pid "std-otel-key"
       ingestStdOtelSpan tr apiKey "GET /api/users" "GET" "/api/users/550e8400-e29b-41d4-a716-446655440000" 200 "api.example.com"
