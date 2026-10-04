@@ -1604,9 +1604,9 @@ apiLogsPage page = do
   -- cache's request and would double-fetch.
   when (isNothing page.showTrace)
     $ script_
-    $ "window.logDataPromise = fetch("
+    $ "{const load = () => fetch("
     <> encodeText page.preloadUrl
-    <> ", {headers: {Accept: \"application/json\"}, credentials: \"include\"}).then(r => r.json());"
+    <> ", {headers: {Accept: \"application/json\"}, credentials: \"include\"}).then(r => r.json()); window.logDataPromise = load().catch(load);}"
   sectionWrapper_ do
     template_ [id_ "trace-loading-skeleton"] traceLoadingSkeleton_
     div_ [class_ "fixed z-[9999] hidden right-0 w-max h-max border border-strokeWeak rounded top-32 bg-bgBase shadow-2xl", id_ "sessionPlayerWrapper"] do

@@ -4,6 +4,22 @@ import { DEMO_PROJECT } from "./helpers";
 const LOG_EXPLORER_URL = `/p/${DEMO_PROJECT}/log_explorer`;
 const HARNESS_URL = process.env.LOG_LIST_HARNESS_URL;
 
+test("initial log data recovers from an empty response", async ({ page }) => {
+  let requests = 0;
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await page.route("**/log_explorer/data**", route => {
+    requests++;
+    return requests === 1
+      ? route.fulfill({ status: 200, contentType: "application/json", body: "" })
+      : route.fulfill({ json: { logsData: [], cols: [], colIdxMap: {}, traces: [], count: 0, hasMore: false } });
+  });
+  await page.goto(LOG_EXPLORER_URL);
+  await expect(page.locator("log-list").getByText("No events in this time range.", { exact: true })).toBeVisible();
+  expect(requests).toBe(2);
+  expect(errors).toEqual([]);
+});
+
 // This is intentionally a browser test rather than another jsdom geometry stub. It drives the
 // production <lit-virtualizer> with its real external scroll container through repeated keyed
 // remounts — the combination that used to clamp a deep reader to the newest edge for one frame.
