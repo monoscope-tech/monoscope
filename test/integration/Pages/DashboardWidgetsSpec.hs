@@ -873,6 +873,29 @@ spec = sequential $ aroundAll withTestResources do
         (_, kql) <- filters hash
         join kql `shouldSatisfy` maybe False (isRight . parseQueryToAST)
 
+    it "recomputes endpoint filters when the dashboard URL carries stale constants" \tr -> do
+      dashId <- newDashboard tr "endpoint-stats.yaml" "Endpoint selectors"
+      runQueryEffect tr $ Endpoints.bulkInsertEndpoints $ V.singleton
+        (def :: Endpoints.Endpoint)
+          { Endpoints.projectId = testPid
+          , Endpoints.host = "integrations.routelift.com"
+          , Endpoints.method = "POST"
+          , Endpoints.urlPath = "/v1/deliveries/estimate/v2"
+          , Endpoints.hash = "faa041ff"
+          , Endpoints.outgoing = True
+          }
+      (_, response) <- testServant tr $ Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "3D") (Just "true") Nothing
+        [ ("const-endpointFilter", Just "hashes @> ARRAY['']")
+        , ("const-endpointFilter-kql", Just "hashes[*] in (\"\")")
+        , ("var-endpointHash", Just "faa041ff")
+        , ("var-host", Just "integrations.routelift.com")
+        ]
+      let Dashboards.DashboardGet _ _ _ _ params = tabDashboard response
+      [value | (key, value) <- params, key == "const-endpointFilter"] `shouldBe`
+        [Just "attributes___server___address IN ('integrations.routelift.com') AND attributes___http___request___method IN ('POST') AND (attributes___http___route IN ('/v1/deliveries/estimate/v2') OR ((attributes___http___route IS NULL OR attributes___http___route = '') AND attributes___url___path IN ('/v1/deliveries/estimate/v2')))"]
+      [value | (key, value) <- params, key == "const-endpointFilter-kql"] `shouldBe`
+        [Just "attributes.server.address in (\"integrations.routelift.com\") AND attributes.http.request.method in (\"POST\") AND (attributes.http.route in (\"/v1/deliveries/estimate/v2\") or (isempty(attributes.http.route) and attributes.url.path in (\"/v1/deliveries/estimate/v2\")))"]
+
     it "renders a dashboard table link with the current project and URL-encoded row value" \_ -> do
       let column = (def :: Widget.TableColumn){Widget.field = "session_id", Widget.title = "Session", Widget.link = Just "/p/{{project_id}}/rum?tab=sessions&session={{row.session_id}}"}
           widget = (def :: Widget.Widget){Widget.wType = Widget.WTTable, Widget.columns = Just [column], Widget._projectId = Just testPid}
