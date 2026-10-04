@@ -2413,6 +2413,7 @@ issueListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM service
               [ ("Newest", "Most recently created", "-created_at")
               , ("Oldest", "Oldest issues first", "+created_at")
               , ("Recently Updated", "Most recently updated", "-updated_at")
+              , ("Recently Active", "Most recently seen", "-last_seen")
               , ("Most events", "Most events in the period", "-event_count")
               , ("Most users", "Most distinct users affected", "-users_count")
               , ("Name (A-Z)", "Sort alphabetically", "+title")
