@@ -42,6 +42,7 @@ import Data.Time.LocalTime (getCurrentTimeZone, utcToZonedTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
+import Data.Vector.Unboxed qualified as VU
 import Data.Vector.Algorithms.Intro qualified as VA
 import Database.PostgreSQL.Simple (FromRow)
 import Database.PostgreSQL.Simple qualified as SimplePG
@@ -4044,7 +4045,7 @@ data MergeConfig k a = MergeConfig
   , normalizeEmb :: Text -> Text -- normalize text before embedding (e.g. unify placeholders)
   , toId :: a -> k
   , updateEmbs :: [(k, [Float])] -> ATBackgroundCtx Int64
-  , getCentroids :: ATBackgroundCtx [(k, [Float])]
+  , getCentroids :: ATBackgroundCtx [(k, VU.Vector Float)]
   , assignCanonical :: [(k, k)] -> ATBackgroundCtx Int64
   , fetchTexts :: [k] -> ATBackgroundCtx (Map k Text)
   , canMerge :: Text -> Text -> Bool

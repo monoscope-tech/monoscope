@@ -40,10 +40,15 @@ module Models.Apis.PatternMerge (
 )
 where
 
+import Control.Exception.Safe qualified as CE
 import Data.Effectful.Hasql qualified as Hasql
+import Data.Binary.Get (getFloatbe, getWord32be, runGetOrFail, skip)
+import Data.ByteString qualified as BS
+import Data.ByteString.Lazy qualified as BL
 import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime)
 import Data.Vector qualified as V
+import Data.Vector.Unboxed qualified as VU
 import Effectful (Eff, (:>))
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
@@ -76,14 +81,43 @@ updateErrorEmbeddings pairs =
     (ids, embs) = second (map showPGFloatArray) $ unzip pairs
 
 
-getCanonicalErrorPatterns :: DB es => Projects.ProjectId -> Eff es [(ErrorPatternId, [Float])]
+data InvalidEmbedding = InvalidEmbedding
+  deriving stock (Show)
+  deriving anyclass (CE.Exception)
+
+
+-- PostgreSQL's float4[] send format has a 20-byte header and 8 bytes per element.
+decodeEmbedding :: ByteString -> Either InvalidEmbedding (VU.Vector Float)
+decodeEmbedding bytes = case runGetOrFail readArray (fromStrict bytes) of
+  Right (rest, _, vector) | BL.null rest -> Right vector
+  _ -> Left InvalidEmbedding
+  where
+    readArray = do
+      dimensions <- getWord32be
+      flags <- getWord32be
+      oid <- getWord32be
+      unless (flags == 0 && oid == 700) $ fail "Invalid float4 array header"
+      if dimensions == 0
+        then pure VU.empty
+        else do
+          unless (dimensions == 1) $ fail "Invalid float4 array dimensions"
+          count <- fromIntegral <$> getWord32be
+          skip 4
+          unless (BS.length bytes == 20 + count * 8) $ fail "Invalid float4 array length"
+          VU.replicateM count do
+            size <- getWord32be
+            unless (size == 4) $ fail "Invalid float4 element length"
+            getFloatbe
+
+
+getCanonicalErrorPatterns :: DB es => Projects.ProjectId -> Eff es [(ErrorPatternId, VU.Vector Float)]
 getCanonicalErrorPatterns pid =
-  map (second V.toList)
-    <$> Hasql.interp
-      [HI.sql| SELECT id, embedding FROM apis.error_patterns
+  Hasql.interp
+      [HI.sql| SELECT id, array_send(embedding) FROM apis.error_patterns
         WHERE project_id = #{pid} AND canonical_id IS NULL
           AND embedding IS NOT NULL AND merge_override = FALSE
         LIMIT 10000 |]
+    >>= traverse (traverse $ either CE.throwM pure . decodeEmbedding)
 
 
 assignErrorsToCanonical :: DB es => [(ErrorPatternId, ErrorPatternId)] -> Eff es Int64
@@ -159,14 +193,14 @@ updateLogEmbeddings pairs =
     (ids, embs) = second (map showPGFloatArray) $ unzip pairs
 
 
-getCanonicalLogPatterns :: DB es => Projects.ProjectId -> Eff es [(LogPatternId, [Float])]
+getCanonicalLogPatterns :: DB es => Projects.ProjectId -> Eff es [(LogPatternId, VU.Vector Float)]
 getCanonicalLogPatterns pid =
-  map (second V.toList)
-    <$> Hasql.interp
-      [HI.sql| SELECT id, embedding FROM apis.log_patterns
+  Hasql.interp
+      [HI.sql| SELECT id, array_send(embedding) FROM apis.log_patterns
         WHERE project_id = #{pid} AND canonical_id IS NULL
           AND embedding IS NOT NULL AND merge_override = FALSE
         LIMIT 10000 |]
+    >>= traverse (traverse $ either CE.throwM pure . decodeEmbedding)
 
 
 assignLogsToCanonical :: DB es => [(LogPatternId, LogPatternId)] -> Eff es Int64

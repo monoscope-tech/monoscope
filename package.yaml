@@ -201,7 +201,7 @@ tests:
     ghc-options:
       - -threaded
       - -rtsopts
-      - '"-with-rtsopts=-N -A64m"'
+      - '"-with-rtsopts=-N -A64m -T"'
       - -O0
     build-tools:
       - hspec-discover:hspec-discover
@@ -357,7 +357,7 @@ tests:
       # -threaded is already in the global ghc-options; do not repeat it here.
       - -fno-write-ide-info
       - -rtsopts
-      - '"-with-rtsopts=-N -A64m"'
+      - '"-with-rtsopts=-N -A64m -T"'
       - -O0
     build-tools:
       - hspec-discover:hspec-discover

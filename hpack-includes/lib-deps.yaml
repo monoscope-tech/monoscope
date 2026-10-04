@@ -26,6 +26,7 @@
 - attoparsec-aeson
 - async
 - barbies
+- binary
 - bytestring
 - base64
 - mtl
