@@ -830,12 +830,13 @@ selectIssues pid projection f = do
       lastSeenAt pfx =
         let col = rawSql pfx
          in [HI.sql| COALESCE(
-               CASE WHEN ^{col}issue_type = 'runtime_exception' THEN
+               CASE WHEN ^{col}issue_type = 'runtime_exception' THEN GREATEST(
                  (SELECT MAX(GREATEST(ep.last_event_at, ep.recent_trace_at))
                   FROM apis.error_patterns ep
                   WHERE ep.project_id = ^{col}project_id
                     AND ((^{col}is_framework AND ep.parent_hash = ^{col}target_hash)
-                      OR (NOT ^{col}is_framework AND ep.hash = ^{col}target_hash)))
+                      OR (NOT ^{col}is_framework AND ep.hash = ^{col}target_hash))),
+                 (^{col}issue_data->>'last_seen')::timestamptz)
                END, ^{col}updated_at) |]
       orderBy pfx | f.order == Just "-last_seen" = lastSeenAt pfx <> [HI.sql| DESC, ^{rawSql pfx}id DESC|]
       orderBy pfx = rawSql case T.uncons =<< f.order of
