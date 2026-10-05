@@ -53,10 +53,10 @@ import Hasql.Interpolate qualified as HI
 import Models.Apis.ErrorPatterns (ErrorPattern, ErrorPatternId)
 import Models.Apis.LogPatterns (LogPattern, LogPatternId)
 import Models.Projects.Projects qualified as Projects
-import PostgreSQL.Binary.Decoding qualified as PB
 import Pkg.DeriveUtils (selectFrom, showPGFloatArray)
 import Pkg.ErrorFingerprint qualified as EF
 import Pkg.PatternMerge (embeddingTextForError)
+import PostgreSQL.Binary.Decoding qualified as PB
 import Relude
 import System.Types (DB)
 
