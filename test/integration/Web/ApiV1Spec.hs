@@ -49,6 +49,15 @@ specJson :: AE.Value
 specJson = AE.toJSON apiV1OpenApiSpec
 
 
+-- | The whole server minus production's WAI middleware stack.
+topApp :: TestResources -> Wai.Application
+topApp tr =
+  genericServeTWithContext
+    (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
+    (Routes.server tr.trLogger tr.trATCtx tr.trTracerProvider (OtlpServer.httpTracesExport tr.trLogger tr.trATCtx tr.trTracerProvider) (OtlpServer.httpLogsExport tr.trLogger tr.trATCtx tr.trTracerProvider))
+    (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
+
+
 spec :: Spec
 spec = around withTestResources do
   describe "API v1" do
@@ -161,39 +170,24 @@ spec = around withTestResources do
         emptyResult `shouldBe` Nothing
 
       it "rejects API requests with no auth and no demo project header" $ \tr -> do
-        let mkTopApp =
-              genericServeTWithContext
-                (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
-                (Routes.server tr.trLogger tr.trATCtx tr.trTracerProvider (OtlpServer.httpTracesExport tr.trLogger tr.trATCtx tr.trTracerProvider) (OtlpServer.httpLogsExport tr.trLogger tr.trATCtx tr.trTracerProvider))
-                (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
-            req = WT.setPath Wai.defaultRequest "/api/v1/schema"
-        resp <- WT.runSession (WT.srequest (WT.SRequest req "")) mkTopApp
+        let req = WT.setPath Wai.defaultRequest "/api/v1/schema"
+        resp <- WT.runSession (WT.srequest (WT.SRequest req "")) (topApp tr)
         H.statusCode (WT.simpleStatus resp) `shouldBe` 401
 
       it "allows unauthenticated access when X-Project-Id is the demo project" $ \tr -> do
-        let mkTopApp =
-              genericServeTWithContext
-                (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
-                (Routes.server tr.trLogger tr.trATCtx tr.trTracerProvider (OtlpServer.httpTracesExport tr.trLogger tr.trATCtx tr.trTracerProvider) (OtlpServer.httpLogsExport tr.trLogger tr.trATCtx tr.trTracerProvider))
-                (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
-            req =
+        let req =
               WT.setPath
                 Wai.defaultRequest
                   { Wai.requestHeaders = [("X-Project-Id", "00000000-0000-0000-0000-000000000000")]
                   }
                 "/api/v1/schema"
-        resp <- WT.runSession (WT.srequest (WT.SRequest req "")) mkTopApp
+        resp <- WT.runSession (WT.srequest (WT.SRequest req "")) (topApp tr)
         H.statusCode (WT.simpleStatus resp) `shouldBe` 200
 
     -- nginx keeps the first of duplicate Content-Type headers, which served the SVG
     -- fallback as application/octet-stream: a broken image in the sidebar.
     it "avatar_unknownUser_servesInitialsSvgWithOneContentType" $ \tr -> do
-      let mkTopApp =
-            genericServeTWithContext
-              (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
-              (Routes.server tr.trLogger tr.trATCtx tr.trTracerProvider (OtlpServer.httpTracesExport tr.trLogger tr.trATCtx tr.trTracerProvider) (OtlpServer.httpLogsExport tr.trLogger tr.trATCtx tr.trTracerProvider))
-              (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
-      resp <- WT.runSession (WT.srequest (WT.SRequest (WT.setPath Wai.defaultRequest "/api/avatar/00000000-0000-0000-0000-00000000dead") "")) mkTopApp
+      resp <- WT.runSession (WT.srequest (WT.SRequest (WT.setPath Wai.defaultRequest "/api/avatar/00000000-0000-0000-0000-00000000dead") "")) (topApp tr)
       H.statusCode (WT.simpleStatus resp) `shouldBe` 200
       filter ((== H.hContentType) . fst) (WT.simpleHeaders resp) `shouldBe` [(H.hContentType, "image/svg+xml")]
       decodeUtf8 @Text (WT.simpleBody resp) `shouldSatisfy` T.isInfixOf "?</text>"
@@ -638,14 +632,6 @@ spec = around withTestResources do
               (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
               (apiV1Server tr.trLogger tr.trATCtx tr.trTracerProvider pid)
               Servant.EmptyContext
-          -- Top-level Servant app for the e2e tests below — same wiring as
-          -- mkServer in production minus the WAI middleware stack. Hitting
-          -- /api/v1/mcp through this exercises auth + JSON-RPC + dispatch.
-          mkTopApp tr =
-            genericServeTWithContext
-              (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
-              (Routes.server tr.trLogger tr.trATCtx tr.trTracerProvider (OtlpServer.httpTracesExport tr.trLogger tr.trATCtx tr.trTracerProvider) (OtlpServer.httpLogsExport tr.trLogger tr.trATCtx tr.trTracerProvider))
-              (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
           mcpHttp tr authHdr body =
             let req =
                   WT.setPath
@@ -654,7 +640,7 @@ spec = around withTestResources do
                       , Wai.requestHeaders = ("Content-Type", "application/json") : authHdr
                       }
                     "/api/v1/mcp"
-             in WT.runSession (WT.srequest (WT.SRequest req (AE.encode body))) (mkTopApp tr)
+             in WT.runSession (WT.srequest (WT.SRequest req (AE.encode body))) (topApp tr)
           rpcCall body =
             AE.object
               [ "jsonrpc" AE..= ("2.0" :: Text)
