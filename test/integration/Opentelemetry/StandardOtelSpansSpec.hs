@@ -55,7 +55,7 @@ spec = around withTestResources do
         trId <- show <$> nextRandom
         spanId' <- show <$> nextRandom
         let name = language <> " HTTP"
-            resource = mkResource apiKey [mkAttr "telemetry.sdk.language" language]
+            resource = mkResource apiKey [mkAttr "telemetry.sdk.language" language, mkAttr "service.name" "fallback-svc"]
             req = withSpanKind kind $ mkSpanRequest trId spanId' Nothing name [] Nothing attrs resource frozenTime
         void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto req)
         rows <- withPool tr.trPool $ DBT.query [sql|
@@ -89,7 +89,7 @@ spec = around withTestResources do
           spans =
             [ (PT.Span'SPAN_KIND_SERVER, "POST", [mkAttr "http.request.method" "POST", mkAttr "url.path" "/identity/login"])
             , (PT.Span'SPAN_KIND_INTERNAL, "request middleware - /identity/:id", [mkAttr "http.route" "/identity/:id", mkAttr "express.type" "middleware"])
-            , (PT.Span'SPAN_KIND_INTERNAL, "request handler - /identity/:id", [mkAttr "http.request.method" "_OTHER", mkAttr "http.route" "/identity/:id", mkAttr "express.type" "request_handler"])
+            , (PT.Span'SPAN_KIND_INTERNAL, "request handler - /identity/:id", [mkAttr "http.request.method" "_OTHER", mkAttr "http.route" "/identity/:id", mkAttr "server.address" "", mkAttr "express.type" "request_handler"])
             , (PT.Span'SPAN_KIND_INTERNAL, "documentFetch", [mkAttr "http.request.method" "GET", mkAttr "url.full" "https://identity.example.com/identity/page"])
             ]
       forM_ spans \(kind, name, attrs) -> do
@@ -101,6 +101,12 @@ spec = around withTestResources do
         SELECT method, host, url_path FROM apis.endpoints WHERE project_id = ? AND url_path LIKE '/identity%'
       |] (Only pid) :: IO (V.Vector (Text, Text, Text))
       endpoints `shouldBe` V.singleton ("POST", "identity-svc", "/identity/login")
+      hosts <- withPool tr.trPool $ DBT.query [sql|
+        SELECT attributes___server___address FROM otel_logs_and_spans
+        WHERE project_id = ? AND name IN ('POST', 'request handler - /identity/:id')
+        ORDER BY name
+      |] (Only pid) :: IO (V.Vector (Only (Maybe Text)))
+      hosts `shouldBe` V.fromList [Only (Just "identity-svc"), Only (Just "identity-svc")]
 
     it "ingests standard OTel HTTP span preserving original name" \tr -> do
       apiKey <- createTestAPIKey tr pid "std-otel-key"

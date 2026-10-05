@@ -1250,19 +1250,18 @@ convertSpanToOtelLog !fallbackTime !pid resourceM pSpan =
                   $ KEM.insert "request" (AE.Object $ KEM.delete "body" re) http
            in Map.insert "http" (AE.Object http') <$> attributes
         _ -> attributes
-      -- A URL can supply server.address; service.name identifies the local
-      -- service and does not imply the remote HTTP server's address.
+      -- Prefer the request host or URL; use the local service only when neither exists.
       !resourceAttrs = jsonToMap $ removeProjectId $ resourceToJSON resourceM
       newAttributes = case newAttributes' of
         Just attrs | hasNoHost attrs ->
-          case hostFromUrlFull attrs of
+          case hostFromUrlFull attrs <|> serviceName of
             Just sn | not (T.null sn) -> Just $ Map.insertWith mergeObjects "server" (AE.Object $ KEM.singleton "address" (AE.String sn)) attrs
             _ -> newAttributes'
         _ -> newAttributes'
       hasNoHost attrs =
-        isNothing (lookupNested "net" "host" attrs)
-          && isNothing (lookupNested "server" "address" attrs)
-          && isNothing (lookupNested "http" "host" attrs)
+        all
+          (maybe True (\case AE.String h -> T.null h; _ -> True))
+          [lookupNested "net" "host" attrs, lookupNested "server" "address" attrs, lookupNested "http" "host" attrs]
       lookupNested outer inner attrs =
         Map.lookup outer attrs >>= \case
           AE.Object o -> KEM.lookup (AEK.fromText inner) o
@@ -1273,6 +1272,8 @@ convertSpanToOtelLog !fallbackTime !pid resourceM pSpan =
             let stripped = fromMaybe u $ T.stripPrefix "https://" u <|> T.stripPrefix "http://" u
              in guarded (not . T.null) $ T.takeWhile (\c -> c /= '/' && c /= '?' && c /= ':') stripped
           _ -> Nothing
+      serviceName =
+        (resourceAttrs >>= lookupNested "service" "name") >>= \case AE.String n -> Just n; _ -> Nothing
       mergeObjects (AE.Object new) (AE.Object old) = AE.Object (KEM.union new old)
       mergeObjects new _ = new
       otelSpan =
