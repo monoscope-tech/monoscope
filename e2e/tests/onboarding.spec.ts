@@ -4,6 +4,20 @@ import { DEMO_PROJECT, assertStripeCheckout } from "./helpers";
 const ONBOARDING_URL = `/p/${DEMO_PROJECT}/onboarding`;
 
 test.describe("Onboarding flow", () => {
+  test("loads integration docs with HTML negotiation and switches framework guides", async ({ page }) => {
+    const initialDocs = page.waitForResponse(response => new URL(response.url()).pathname === "/proxy/docs/sdks/nodejs/expressjs");
+    await page.goto(`${ONBOARDING_URL}?step=Integration`);
+    expect((await initialDocs).status()).toBe(200);
+    await page.locator("#check-js").check();
+    const article = page.locator("#fw-content-js #mainArticle");
+    await expect(article.getByRole("heading", { level: 1 })).toContainText(/Express/i);
+
+    const nextDocs = page.waitForResponse(response => new URL(response.url()).pathname === "/proxy/docs/sdks/nodejs/fastifyjs");
+    await page.locator('label[for="fw-tab-js-2"]').click();
+    expect((await nextDocs).status()).toBe(200);
+    await expect(article.getByRole("heading", { level: 1 })).toContainText(/Fastify/i);
+  });
+
   test("moves from profile setup to an instrumentable project", async ({ page }) => {
     await page.goto(ONBOARDING_URL);
     await expect(page.getByText("Step 1 of 5")).toBeVisible();

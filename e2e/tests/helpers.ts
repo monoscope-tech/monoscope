@@ -22,7 +22,7 @@ export async function assertStripeCheckout(
 }
 
 export function sql(query: string) {
-  execFileSync('psql', ['-h', process.env.E2E_PGHOST ?? process.env.DB_HOST ?? 'localhost',
+  return execFileSync('psql', ['-At', '-h', process.env.E2E_PGHOST ?? process.env.DB_HOST ?? 'localhost',
     '-p', process.env.E2E_PGPORT ?? process.env.DB_PORT ?? '5432', '-U', 'postgres',
     '-d', process.env.E2E_DB ?? 'monoscope_e2e', '-v', 'ON_ERROR_STOP=1', '-c', query],
   { env: { ...process.env, PGPASSWORD: process.env.E2E_PGPASSWORD ?? 'postgres' }, stdio: 'pipe' });

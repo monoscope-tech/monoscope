@@ -746,7 +746,7 @@ function syncFacetCheckboxes(root: Document | Element = document) {
   const el = document.getElementById('filterElement') as any;
   const query = el?.getValue?.() ?? el?.querySelector('textarea[data-query-input]')?.value ?? el?.getAttribute('default-value') ?? '';
   root.querySelectorAll<HTMLInputElement>('input[type="checkbox"][data-field][data-value]').forEach((cb) => {
-    cb.checked = fragmentInQuery(query, `${cb.dataset.field} == "${cb.dataset.value}"`);
+    cb.checked = fragmentInQuery(query, `${cb.dataset.field} == ${JSON.stringify(cb.dataset.value)}`);
   });
 }
 window.addEventListener('update-query', () => syncFacetCheckboxes());

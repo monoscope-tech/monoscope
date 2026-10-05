@@ -1,4 +1,5 @@
 import { LitElement, html } from 'lit';
+import escapeRegExp from 'lodash/escapeRegExp';
 import { customElement, query } from 'lit/decorators.js';
 import { EditorState, Prec, Transaction, Compartment } from '@codemirror/state';
 import { EditorView, keymap, placeholder } from '@codemirror/view';
@@ -476,33 +477,31 @@ export class QueryEditorComponent extends LitElement {
     }
     this.emitQuery();
   }
-  // Toggle a subquery - add if not present, remove if present
-  public toggleSubQuery(queryFragment: string): void {
-    const currentValue = this.getValue().trim();
-
-    if (currentValue.includes(queryFragment)) {
-      // Remove the fragment if it exists
-      const escFragment = queryFragment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      let newQuery = currentValue;
-
-      // Handle different position cases
-      if (new RegExp(`^${escFragment}$`).test(currentValue)) {
-        newQuery = ''; // It's the only query
-      } else if (new RegExp(`^${escFragment} and `, 'i').test(currentValue)) {
-        newQuery = currentValue.replace(new RegExp(`^${escFragment} and `, 'i'), ''); // At start
-      } else if (new RegExp(` and ${escFragment}$`, 'i').test(currentValue)) {
-        newQuery = currentValue.replace(new RegExp(` and ${escFragment}$`, 'i'), ''); // At end
-      } else {
-        newQuery = currentValue.replace(new RegExp(` and ${escFragment}`, 'i'), ''); // In middle
-      }
-
-      // Clean up
-      newQuery = newQuery.replace(/^and /i, '').replace(/ and$/i, '').trim();
-      this.handleAddQuery(newQuery, true);
-    } else {
-      // Add the fragment if it doesn't exist
-      this.handleAddQuery(queryFragment, currentValue ? false : true);
+  public toggleSubQuery(field: string, value: string): void {
+    const current = this.getValue().trim();
+    const queryFragment = `${field} == ${JSON.stringify(value)}`;
+    const comparison = `(?<![\\w.])${escapeRegExp(field)}\\s*==\\s*"(?:\\\\.|[^"\\\\])*"`;
+    const quoted = `"(?:\\\\.|[^"\\\\])*"|'(?:\\\\.|[^'\\\\])*'`;
+    // Consume quoted strings so predicate text inside a value cannot match a facet.
+    const match = [...current.matchAll(new RegExp(`\\(${comparison}(?:\\s+or\\s+${comparison})*\\)|${comparison}|${quoted}`, 'gi'))]
+      .find(([fragment]) => !/^["']/.test(fragment));
+    if (!match) {
+      this.handleAddQuery(queryFragment);
+      return;
     }
+    const [group] = match;
+    const fragments = (group.match(new RegExp(comparison, 'gi')) ?? []).map(fragment => fragment.replace(/\s*==\s*/, ' == '));
+    const selected = fragments.includes(queryFragment)
+      ? fragments.filter(fragment => fragment !== queryFragment)
+      : [...fragments, queryFragment];
+    const replacement = selected.length > 1 ? `(${selected.join(' or ')})` : selected.join('');
+    const before = current.slice(0, match.index), after = current.slice(match.index + group.length);
+    const nextQuery = replacement
+      ? before + replacement + after
+      : /\s+and\s*$/i.test(before)
+        ? before.replace(/\s+and\s*$/i, '') + after
+        : before + after.replace(/^\s*and\s+/i, '');
+    this.handleAddQuery(nextQuery.trim(), true);
   }
 
   public handleVisualizationChange(visualizationType: string): void {
