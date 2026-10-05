@@ -91,6 +91,7 @@ ambiguousThreshold = 0.75
 -- Returns (auto-merge assignments, ambiguous pairs needing LLM judge).
 -- Patterns below ambiguousThreshold remain standalone (not returned).
 -- Pre-computes centroid norms and uses unboxed vectors for O(n*m) with low constant factor.
+-- Stored centroids dominate memory; newly fetched embeddings are bounded to 500 per job.
 --
 -- >>> assignToCentroids [("c1", VU.fromList [1,0,0])] [("n1", [1,0,0])]
 -- ([("n1","c1")],[])

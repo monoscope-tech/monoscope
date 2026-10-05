@@ -40,10 +40,8 @@ module Models.Apis.PatternMerge (
 )
 where
 
+import BinaryParser qualified as BP
 import Control.Exception.Safe qualified as CE
-import Data.Binary.Get (getFloatbe, getWord32be, runGetOrFail, skip)
-import Data.ByteString qualified as BS
-import Data.ByteString.Lazy qualified as BL
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime)
@@ -55,6 +53,7 @@ import Hasql.Interpolate qualified as HI
 import Models.Apis.ErrorPatterns (ErrorPattern, ErrorPatternId)
 import Models.Apis.LogPatterns (LogPattern, LogPatternId)
 import Models.Projects.Projects qualified as Projects
+import PostgreSQL.Binary.Decoding qualified as PB
 import Pkg.DeriveUtils (selectFrom, showPGFloatArray)
 import Pkg.ErrorFingerprint qualified as EF
 import Pkg.PatternMerge (embeddingTextForError)
@@ -81,33 +80,17 @@ updateErrorEmbeddings pairs =
     (ids, embs) = second (map showPGFloatArray) $ unzip pairs
 
 
-data InvalidEmbedding = InvalidEmbedding
+newtype InvalidEmbedding = InvalidEmbedding Text
   deriving stock (Show)
   deriving anyclass (CE.Exception)
 
 
--- PostgreSQL's float4[] send format has a 20-byte header and 8 bytes per element.
 decodeEmbedding :: ByteString -> Either InvalidEmbedding (VU.Vector Float)
-decodeEmbedding bytes = case runGetOrFail readArray (fromStrict bytes) of
-  Right (rest, _, vector) | BL.null rest -> Right vector
-  _ -> Left InvalidEmbedding
-  where
-    readArray = do
-      dimensions <- getWord32be
-      flags <- getWord32be
-      oid <- getWord32be
-      unless (flags == 0 && oid == 700) $ fail "Invalid float4 array header"
-      if dimensions == 0
-        then pure VU.empty
-        else do
-          unless (dimensions == 1) $ fail "Invalid float4 array dimensions"
-          count <- fromIntegral <$> getWord32be
-          skip 4
-          unless (BS.length bytes == 20 + count * 8) $ fail "Invalid float4 array length"
-          VU.replicateM count do
-            size <- getWord32be
-            unless (size == 4) $ fail "Invalid float4 element length"
-            getFloatbe
+decodeEmbedding bytes = do
+  dimensions <- first InvalidEmbedding $ BP.run BP.beWord32 bytes
+  if dimensions > 1
+    then Left $ InvalidEmbedding "Expected one-dimensional embedding"
+    else first InvalidEmbedding $ PB.valueParser (PB.array $ PB.dimensionArray VU.replicateM $ PB.valueArray PB.float4) bytes
 
 
 getCanonicalErrorPatterns :: DB es => Projects.ProjectId -> Eff es [(ErrorPatternId, VU.Vector Float)]

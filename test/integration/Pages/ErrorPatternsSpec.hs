@@ -10,6 +10,7 @@ import Data.Text.Lazy qualified as TL
 import Data.Time (NominalDiffTime, addUTCTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Data.Vector.Unboxed qualified as VU
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (PGArray (..))
@@ -1012,6 +1013,8 @@ spec = sequential $ aroundAll withTestResources do
       -- Merge: first TypeError becomes canonical, second gets assigned to it
       case typeErrPatterns of
         (PGS.Only canonId : PGS.Only childId : _) -> do
+          canonicals <- runTestBg frozenTime tr $ PatternMerge.getCanonicalErrorPatterns pid
+          Map.lookup canonId (Map.fromList canonicals) `shouldBe` Just (VU.fromList typeEmb)
           void $ runTestBg frozenTime tr $ PatternMerge.assignErrorsToCanonical [(childId, canonId)]
 
           -- Verify the specific child got assigned to the specific canonical.

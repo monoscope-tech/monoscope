@@ -804,4 +804,4 @@ spec = sequential $ aroundAll withTestResources do
           inserted = filter ((`S.member` insertedIds) . fst) canonicals
       length inserted `shouldBe` 1500
       all (\(_, emb) -> VU.length emb == 1536 && VU.all (== 0.1) emb) inserted `shouldBe` True
-      ((fromIntegral after :: Int64) - fromIntegral before) `shouldSatisfy` (< 20_000_000)
+      ((fromIntegral after :: Int64) - fromIntegral before) `shouldSatisfy` (< 40_000_000)

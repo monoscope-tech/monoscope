@@ -26,7 +26,7 @@
 - attoparsec-aeson
 - async
 - barbies
-- binary
+- binary-parser
 - bytestring
 - base64
 - mtl
@@ -84,6 +84,7 @@
 - odd-jobs
 - parser-combinators
 - pg-entity
+- postgresql-binary
 - postgresql-migration
 - postgresql-simple
 - hasql
