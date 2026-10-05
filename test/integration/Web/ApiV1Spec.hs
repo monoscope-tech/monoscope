@@ -192,6 +192,15 @@ spec = around withTestResources do
       filter ((== H.hContentType) . fst) (WT.simpleHeaders resp) `shouldBe` [(H.hContentType, "image/svg+xml")]
       decodeUtf8 @Text (WT.simpleBody resp) `shouldSatisfy` T.isInfixOf "?</text>"
 
+    it "onboardingDocs_acceptsHtmxHtmlRequest_andPreservesArticleMarkup" $ \tr -> do
+      let req = WT.setPath Wai.defaultRequest{Wai.requestHeaders = [(H.hAccept, "text/html"), ("HX-Request", "true")]} "/proxy/docs/sdks/nodejs/expressjs"
+      resp <- WT.runSession (WT.srequest (WT.SRequest req "")) (topApp tr)
+      H.statusCode (WT.simpleStatus resp) `shouldBe` 200
+      filter ((== H.hContentType) . fst) (WT.simpleHeaders resp) `shouldBe` [(H.hContentType, "text/html;charset=utf-8")]
+      let body = decodeUtf8 @Text (WT.simpleBody resp)
+      for_ ["<article id=\"mainArticle\">", "<h1>ExpressJS integration</h1>", "href=\"https://monoscope.tech/docs/sdks/\""] $ \markup ->
+        body `shouldSatisfy` T.isInfixOf markup
+
     describe "Schema endpoint" do
       it "returns schema with expected fields and valid JSON round-trip" $ \_tr -> do
         let schema = Schema.telemetrySchema

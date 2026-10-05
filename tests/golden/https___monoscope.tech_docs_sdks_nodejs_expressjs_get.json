@@ -1,0 +1,1 @@
+{"statusCode":200,"statusMessage":"OK","respBody":"<!doctype html><html><body><article id=\"mainArticle\"><h1>ExpressJS integration</h1><a href=\"/docs/sdks/\">SDK guides</a></article></body></html>","responseHeaders":[["Content-Type","text/html; charset=utf-8"]],"originalRequest":"https://monoscope.tech/docs/sdks/nodejs/expressjs","responseEarlyHints":[]}
