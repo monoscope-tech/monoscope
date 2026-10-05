@@ -40,10 +40,13 @@ module Models.Apis.PatternMerge (
 )
 where
 
+import BinaryParser qualified as BP
+import Control.Exception.Safe qualified as CE
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime)
 import Data.Vector qualified as V
+import Data.Vector.Unboxed qualified as VU
 import Effectful (Eff, (:>))
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
@@ -53,6 +56,7 @@ import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (selectFrom, showPGFloatArray)
 import Pkg.ErrorFingerprint qualified as EF
 import Pkg.PatternMerge (embeddingTextForError)
+import PostgreSQL.Binary.Decoding qualified as PB
 import Relude
 import System.Types (DB)
 
@@ -76,14 +80,27 @@ updateErrorEmbeddings pairs =
     (ids, embs) = second (map showPGFloatArray) $ unzip pairs
 
 
-getCanonicalErrorPatterns :: DB es => Projects.ProjectId -> Eff es [(ErrorPatternId, [Float])]
+newtype InvalidEmbedding = InvalidEmbedding Text
+  deriving stock (Show)
+  deriving anyclass (CE.Exception)
+
+
+decodeEmbedding :: ByteString -> Either InvalidEmbedding (VU.Vector Float)
+decodeEmbedding bytes = do
+  dimensions <- first InvalidEmbedding $ BP.run BP.beWord32 bytes
+  if dimensions > 1
+    then Left $ InvalidEmbedding "Expected one-dimensional embedding"
+    else first InvalidEmbedding $ PB.valueParser (PB.array $ PB.dimensionArray VU.replicateM $ PB.valueArray PB.float4) bytes
+
+
+getCanonicalErrorPatterns :: DB es => Projects.ProjectId -> Eff es [(ErrorPatternId, VU.Vector Float)]
 getCanonicalErrorPatterns pid =
-  map (second V.toList)
-    <$> Hasql.interp
-      [HI.sql| SELECT id, embedding FROM apis.error_patterns
+  Hasql.interp
+    [HI.sql| SELECT id, array_send(embedding) FROM apis.error_patterns
         WHERE project_id = #{pid} AND canonical_id IS NULL
           AND embedding IS NOT NULL AND merge_override = FALSE
         LIMIT 10000 |]
+    >>= traverse (traverse $ either CE.throwM pure . decodeEmbedding)
 
 
 assignErrorsToCanonical :: DB es => [(ErrorPatternId, ErrorPatternId)] -> Eff es Int64
@@ -159,14 +176,14 @@ updateLogEmbeddings pairs =
     (ids, embs) = second (map showPGFloatArray) $ unzip pairs
 
 
-getCanonicalLogPatterns :: DB es => Projects.ProjectId -> Eff es [(LogPatternId, [Float])]
+getCanonicalLogPatterns :: DB es => Projects.ProjectId -> Eff es [(LogPatternId, VU.Vector Float)]
 getCanonicalLogPatterns pid =
-  map (second V.toList)
-    <$> Hasql.interp
-      [HI.sql| SELECT id, embedding FROM apis.log_patterns
+  Hasql.interp
+    [HI.sql| SELECT id, array_send(embedding) FROM apis.log_patterns
         WHERE project_id = #{pid} AND canonical_id IS NULL
           AND embedding IS NOT NULL AND merge_override = FALSE
         LIMIT 10000 |]
+    >>= traverse (traverse $ either CE.throwM pure . decodeEmbedding)
 
 
 assignLogsToCanonical :: DB es => [(LogPatternId, LogPatternId)] -> Eff es Int64

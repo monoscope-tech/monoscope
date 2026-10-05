@@ -461,6 +461,7 @@ library
     , base
     , base16-bytestring
     , base64
+    , binary-parser
     , brick
     , bytestring
     , cache >=0.1.3.0
@@ -553,6 +554,7 @@ library
     , pg-entity
     , pg-transact
     , postgresql-libpq
+    , postgresql-binary
     , postgresql-migration
     , postgresql-simple
     , pretty-relative-time
@@ -794,7 +796,7 @@ test-suite integration-tests
       TypeFamilies
       UndecidableInstances
       ViewPatterns
-  ghc-options: -fwrite-ide-info -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-ambiguous-fields -threaded -rtsopts "-with-rtsopts=-N -A64m" -O0
+  ghc-options: -fwrite-ide-info -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-ambiguous-fields -threaded -rtsopts "-with-rtsopts=-N -A64m -T" -O0
   build-tool-depends:
       hspec-discover:hspec-discover
     , proto-lens-protoc:proto-lens-protoc
@@ -1142,7 +1144,7 @@ test-suite test-dev
       TypeFamilies
       UndecidableInstances
       ViewPatterns
-  ghc-options: -fwrite-ide-info -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-ambiguous-fields -fno-write-ide-info -rtsopts "-with-rtsopts=-N -A64m" -O0
+  ghc-options: -fwrite-ide-info -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-ambiguous-fields -fno-write-ide-info -rtsopts "-with-rtsopts=-N -A64m -T" -O0
   build-tool-depends:
       hspec-discover:hspec-discover
     , proto-lens-protoc:proto-lens-protoc
@@ -1162,6 +1164,7 @@ test-suite test-dev
     , base
     , base16-bytestring
     , base64
+    , binary-parser
     , brick
     , bytestring
     , cache >=0.1.3.0
@@ -1254,6 +1257,7 @@ test-suite test-dev
     , pg-entity
     , pg-transact
     , postgresql-libpq
+    , postgresql-binary
     , postgresql-migration
     , postgresql-simple
     , pretty-relative-time

@@ -1,15 +1,20 @@
 module Pages.LogPatternsSpec (spec) where
 
 import BackgroundJobs qualified
+import Control.Exception.Safe qualified as CE
 import Data.Pool (withResource)
+import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, zonedTimeToUTC)
-import Effectful.Time qualified as Time
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
+import Data.Vector.Unboxed qualified as VU
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Database.PostgreSQL.Simple.Types (PGArray (..))
+import Effectful.Time qualified as Time
+import GHC.Stats (gc, gcdetails_live_bytes, getRTSStats)
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns (BaselineState (..), LogPatternState (..))
 import Models.Apis.LogPatterns qualified as LogPatterns
@@ -20,8 +25,8 @@ import Pkg.PatternMerge qualified as PM
 import Pkg.TestUtils
 import Relude
 import Servant qualified
-import Database.PostgreSQL.Simple.Types (PGArray (..))
-import Test.Hspec (Spec, aroundAll, sequential, describe, it, shouldBe, shouldSatisfy, expectationFailure)
+import System.Mem (performGC)
+import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, sequential, shouldBe, shouldSatisfy, shouldThrow)
 
 
 pid :: Projects.ProjectId
@@ -781,3 +786,36 @@ spec = sequential $ aroundAll withTestResources do
       issue <- runTestBg frozenTime tr $ Issues.createLogPatternRateChangeIssue pid lp sr
       issue.title `shouldSatisfy` T.isInfixOf "(5/hr vs 2/hr)"
       issue.title `shouldSatisfy` (not . T.isInfixOf "/hr/hr")
+
+    it "getCanonicalLogPatterns_boxedFloats_doesNotRetainBoxedEmbeddings" \tr -> do
+      ids <- withResource tr.trPool \conn ->
+        PGS.query conn
+          [sql| INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, embedding)
+                SELECT ?, 'embedding memory ' || n, 'embedding-memory-' || n,
+                       array_fill(0.1::real, ARRAY[1536])
+                FROM generate_series(1, 1500) AS n RETURNING id |]
+          (PGS.Only pid)
+      performGC
+      before <- gcdetails_live_bytes . gc <$> getRTSStats
+      canonicals <- runTestBg frozenTime tr (PatternMerge.getCanonicalLogPatterns pid)
+      _ <- evaluateWHNF $ sum $ map (VU.sum . snd) canonicals
+      performGC
+      after <- gcdetails_live_bytes . gc <$> getRTSStats
+      let insertedIds = S.fromList $ map PGS.fromOnly ids
+          inserted = filter ((`S.member` insertedIds) . fst) canonicals
+      length inserted `shouldBe` 1500
+      all (\(_, emb) -> VU.length emb == 1536 && VU.all (== 0.1) emb) inserted `shouldBe` True
+      ((fromIntegral after :: Int64) - fromIntegral before) `shouldSatisfy` (< 40_000_000)
+
+    it "getCanonicalLogPatterns_rejectsMultidimensionalAndNullEmbeddings" \tr ->
+      forM_ ([("{{0.1,0.2},{0.3,0.4}}", "Expected one-dimensional embedding"), ("{NULL}", "Unexpected NULL")] :: [(Text, Text)]) \(embedding, message) ->
+        CE.bracket
+          (withResource tr.trPool \conn -> PGS.execute conn
+            [sql| INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, embedding)
+                  VALUES (?, 'invalid embedding', 'invalid-embedding', ?::float4[]) |]
+            (pid, embedding))
+          (\_ -> withResource tr.trPool \conn -> PGS.execute conn
+            [sql| DELETE FROM apis.log_patterns WHERE project_id = ? AND pattern_hash = 'invalid-embedding' |]
+            (PGS.Only pid))
+          (\_ -> runTestBg frozenTime tr (PatternMerge.getCanonicalLogPatterns pid)
+            `shouldThrow` \(e :: SomeException) -> message `T.isInfixOf` show e)
