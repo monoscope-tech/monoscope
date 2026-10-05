@@ -63,6 +63,7 @@ import Web.MCP qualified as MCP
 
 -- Model imports
 
+import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
 import Data.Effectful.Wreq qualified as Wreq
@@ -81,7 +82,6 @@ import Pkg.Parser.Expr qualified as ParserExpr
 import UnliftIO.Exception (handle, throwIO)
 import Utils qualified
 import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
-import Data.ByteString.Base16 qualified as B16
 
 -- Page imports
 
