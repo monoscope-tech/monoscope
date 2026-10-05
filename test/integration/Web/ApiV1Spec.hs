@@ -185,6 +185,19 @@ spec = around withTestResources do
         resp <- WT.runSession (WT.srequest (WT.SRequest req "")) mkTopApp
         H.statusCode (WT.simpleStatus resp) `shouldBe` 200
 
+    -- nginx keeps the first of duplicate Content-Type headers, which served the SVG
+    -- fallback as application/octet-stream: a broken image in the sidebar.
+    it "avatar_unknownUser_servesInitialsSvgWithOneContentType" $ \tr -> do
+      let mkTopApp =
+            genericServeTWithContext
+              (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
+              (Routes.server tr.trLogger tr.trATCtx tr.trTracerProvider (OtlpServer.httpTracesExport tr.trLogger tr.trATCtx tr.trTracerProvider) (OtlpServer.httpLogsExport tr.trLogger tr.trATCtx tr.trTracerProvider))
+              (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
+      resp <- WT.runSession (WT.srequest (WT.SRequest (WT.setPath Wai.defaultRequest "/api/avatar/00000000-0000-0000-0000-00000000dead") "")) mkTopApp
+      H.statusCode (WT.simpleStatus resp) `shouldBe` 200
+      filter ((== H.hContentType) . fst) (WT.simpleHeaders resp) `shouldBe` [(H.hContentType, "image/svg+xml")]
+      decodeUtf8 @Text (WT.simpleBody resp) `shouldSatisfy` T.isInfixOf "?</text>"
+
     describe "Schema endpoint" do
       it "returns schema with expected fields and valid JSON round-trip" $ \_tr -> do
         let schema = Schema.telemetrySchema
