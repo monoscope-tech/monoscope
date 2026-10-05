@@ -123,8 +123,8 @@ live-test-reload-all:
 # pass the quote chars to hspec and silently match nothing — keep the space form.
 TEST_MATCH ?=
 live-test-dev: build-chart-cli
-	USE_EXTERNAL_DB=true LOG_LEVEL=attention GHCRTS="-T $${GHCRTS:-}" \
-	ghcid --command 'cabal repl monoscope:test:test-dev --no-semaphore --ghc-options="-j$(NCPUS) -O0" --repl-options="-fobject-code -osuf dyn_o -hisuf dyn_hi" --with-compiler=$(GHC)' \
+	USE_EXTERNAL_DB=true LOG_LEVEL=attention \
+	ghcid --command 'cabal repl monoscope:test:test-dev --no-semaphore --ghc-options="-j$(NCPUS) -O0" --repl-options="-fobject-code -osuf dyn_o -hisuf dyn_hi +RTS -T -RTS" --with-compiler=$(GHC)' \
 		--test ':main $(if $(TEST_MATCH),--match "$(TEST_MATCH)")' $(RELOAD_ENV) --warnings 2>&1 | tee build-test-dev.log
 
 hot-reload:
