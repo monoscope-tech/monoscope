@@ -31,7 +31,9 @@ import Effectful.Time qualified as Time
 -- Web and server imports
 import Log (Logger, UTCTime)
 import Lucid
+import Network.HTTP.Types qualified as H
 import Network.Wai (Request, queryString)
+import Network.Wai qualified as Wai
 import Servant
 import Servant.HTML.Lucid (HTML)
 import Servant.Htmx
@@ -61,6 +63,7 @@ import Web.MCP qualified as MCP
 
 -- Model imports
 
+import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
 import Data.Effectful.Wreq qualified as Wreq
@@ -479,7 +482,7 @@ data Routes mode = Routes
           :> ReqBody '[RawJSON] BS.ByteString
           :> Post '[JSON] AE.Value
   , chartsDataShot :: mode :- "chart_data_shot" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QueryParam "chart_type" Parser.BinDensity :> AllQueryParams :> Get '[JSON] Charts.MetricsData
-  , avatarGet :: mode :- "api" :> "avatar" :> Capture "user_id" Projects.UserId :> Get '[OctetStream] (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
+  , avatarGet :: mode :- "api" :> "avatar" :> Capture "user_id" Projects.UserId :> RawM
   , widgetPngGet :: mode :- "p" :> ProjectId :> "widget.png" :> QPT "widgetJSON" :> QPT "widgetZ" :> QPT "since" :> QPT "from" :> QPT "to" :> QueryParam "width" Int :> QueryParam "height" Int :> QPT "sig" :> AllQueryParams :> Get '[PNG] (Headers '[Header "Cache-Control" Text] LBS.ByteString)
   , proxyLanding :: mode :- "proxy" :> CaptureAll "path" Text :> Get '[PlainText] (RespHeaders Text)
   , deviceCode :: mode :- "api" :> "device" :> "code" :> Post '[JSON] Auth.DeviceCodeResponse
@@ -1269,34 +1272,41 @@ pingH :: ATBaseCtx Text
 pingH = pure "pong"
 
 
-avatarGetH :: Projects.UserId -> ATBaseCtx (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
-avatarGetH userId =
-  Projects.userById userId >>= maybe (fetchGravatar "" "?") \user ->
-    let email = CI.original user.email
-        name = user.firstName <> " " <> user.lastName
-     in if T.null user.displayImageUrl
-          then fetchGravatar email name
-          else fetchImage user.displayImageUrl "image/jpeg" "public, max-age=604800, immutable" (fetchGravatar email name)
-  where
-    fetchGravatar email name =
-      fetchImage
-        (mkGravatarUrl email name)
-        "image/png"
-        "public, max-age=604800"
-        (pure $ addImageHeaders "image/svg+xml" "public, max-age=60" avatarFallback)
+-- | 'RawM' so the response carries the image's own Content-Type: a route content type
+-- adds a second header, and nginx keeps the first (an SVG served as octet-stream is a
+-- broken image).
+avatarGetH :: Projects.UserId -> Request -> (Wai.Response -> IO Wai.ResponseReceived) -> ATBaseCtx Wai.ResponseReceived
+avatarGetH userId _ send = do
+  userM <- Projects.userById userId
+  let name = foldMap (\u -> u.firstName <> " " <> u.lastName) userM
+      initialsImg = pure ("image/svg+xml", "public, max-age=60", avatarInitialsSvg name)
+      fetchImage url ct cache fallback = handle (\(_ :: SomeException) -> fallback) $ Wreq.get (toString url) <&> \r -> (ct, cache, r ^. Wreq.responseBody)
+      gravatar u = fetchImage (gravatarUrl (CI.original u.email) name) "image/png" "public, max-age=604800" initialsImg
+  (ct, cache, body) <- case userM of
+    Nothing -> initialsImg
+    Just u
+      | T.null u.displayImageUrl -> gravatar u
+      | otherwise -> fetchImage u.displayImageUrl "image/jpeg" "public, max-age=604800, immutable" (gravatar u)
+  liftIO $ send $ Wai.responseLBS H.status200 [(H.hContentType, ct), (H.hCacheControl, cache)] body
 
-    fetchImage url ct cache fallback =
-      handle
-        (\(_ :: SomeException) -> fallback)
-        (Wreq.get (toString url) <&> addImageHeaders ct cache . (^. Wreq.responseBody))
 
-    toMd5 msg = decodeUtf8 $ MD5.hash $ encodeUtf8 $ T.toLower msg
-    mkGravatarUrl email name = "https://www.gravatar.com/avatar/" <> toMd5 email <> "?d=https%3A%2F%2Fui-avatars.com%2Fapi%2F/" <> T.replace " " "+" name <> "/128"
-    addImageHeaders ct cache body = addHeader @"Cache-Control" cache $ addHeader @"Content-Type" ct body
-    -- A valid image keeps the reserved avatar box painted and avoids the browser's
-    -- broken-image fallback when both the configured avatar and Gravatar fail.
-    avatarFallback =
-      "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 128 128\"><rect width=\"128\" height=\"128\" rx=\"64\" fill=\"#e5e7eb\"/><circle cx=\"64\" cy=\"48\" r=\"23\" fill=\"#9ca3af\"/><path d=\"M23 116c5-25 19-38 41-38s36 13 41 38\" fill=\"#9ca3af\"/></svg>"
+-- | Gravatar, defaulting to a ui-avatars initials image when the email has none.
+--
+-- >>> gravatarUrl "Foo@Example.com" "E2E Test"
+-- "https://www.gravatar.com/avatar/b48def645758b95537d4424c84d1a9ff?d=https%3A%2F%2Fui-avatars.com%2Fapi%2FE2E%2BTest%2F128"
+gravatarUrl :: Text -> Text -> Text
+gravatarUrl email name =
+  "https://www.gravatar.com/avatar/" <> decodeUtf8 (B16.encode $ MD5.hash $ encodeUtf8 $ T.toLower email) <> "?d=" <> decodeUtf8 (H.urlEncode True $ encodeUtf8 $ "https://ui-avatars.com/api/" <> T.intercalate "+" (words name) <> "/128")
+
+
+-- | Last-resort avatar, drawn locally so it renders when both remote sources fail.
+--
+-- >>> zipWith T.isInfixOf [">ET<", ">?<"] $ map (decodeUtf8 . avatarInitialsSvg) ["  e2e   test user ", ""]
+-- [True,True]
+avatarInitialsSvg :: Text -> LBS.ByteString
+avatarInitialsSvg name =
+  let initials = T.toUpper $ T.take 2 $ foldMap (T.take 1) $ words name
+   in encodeUtf8 $ "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 128 128\"><rect width=\"128\" height=\"128\" rx=\"64\" fill=\"#e5e7eb\"/><text x=\"64\" y=\"64\" dy=\".35em\" text-anchor=\"middle\" font-family=\"system-ui,sans-serif\" font-size=\"52\" font-weight=\"600\" fill=\"#4b5563\">" <> (if T.null initials then "?" else initials) <> "</text></svg>"
 
 
 -- | @/chart_data@ is the one query path whose SQL text arrives from the browser
