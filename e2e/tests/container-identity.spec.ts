@@ -356,3 +356,42 @@ for (const width of [390, 1280]) {
     }
   });
 }
+
+test("facet multi-selection uses OR within a field and AND between fields", async ({ page }) => {
+  test.skip(!process.env.E2E_BASE_URL, "Requires a disposable fixture database");
+  const original = sql(`SELECT doc FROM apis.schema_summary WHERE project_id='${DEMO_PROJECT}'`).toString().trim();
+  const workerValue = String.raw`facet-"worker"\service`;
+  const workerFragment = `resource.service.name == ${JSON.stringify(workerValue)}`;
+  const doc = {
+    fields: {
+      "service.name": { types: [], formats: [], category: "resource", is_enum: false },
+      level: { types: [], formats: [], category: "top_level", is_enum: false },
+    },
+    services: ["facet-api", workerValue],
+    top_values_by_field: { "service.name": { distinct: 2, top: { "facet-api": 3, [workerValue]: 2 } }, level: { distinct: 1, top: { ERROR: 1 } } },
+  };
+  sql(`INSERT INTO apis.schema_summary (project_id,doc) VALUES ('${DEMO_PROJECT}','${JSON.stringify(doc)}') ON CONFLICT (project_id) DO UPDATE SET doc=EXCLUDED.doc`);
+  try {
+    await page.goto(`/p/${DEMO_PROJECT}/log_explorer`, { waitUntil: "domcontentloaded" });
+    const api = page.getByRole("checkbox", { name: 'resource.service.name equals facet-api', exact: true });
+    const worker = page.getByRole("checkbox", { name: `resource.service.name equals ${workerValue}`, exact: true });
+    const error = page.getByRole("checkbox", { name: 'level equals ERROR', exact: true });
+    await api.check();
+    await worker.check();
+    const query = () => page.locator("#filterElement").evaluate((el: any) => el.getValue());
+    await expect.poll(query).toBe(`(resource.service.name == "facet-api" or ${workerFragment})`);
+    await error.check();
+    await expect.poll(query).toBe(`(resource.service.name == "facet-api" or ${workerFragment}) and level == "ERROR"`);
+    await api.uncheck();
+    await expect(worker).toBeChecked();
+    await expect(error).toBeChecked();
+    await expect.poll(query).toBe(`${workerFragment} and level == "ERROR"`);
+    await worker.uncheck();
+    await error.uncheck();
+    await expect.poll(query).toBe('');
+  } finally {
+    sql(original
+      ? `UPDATE apis.schema_summary SET doc='${original.replace(/'/g, "''")}' WHERE project_id='${DEMO_PROJECT}'`
+      : `DELETE FROM apis.schema_summary WHERE project_id='${DEMO_PROJECT}'`);
+  }
+});

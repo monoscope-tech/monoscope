@@ -477,11 +477,12 @@ export class QueryEditorComponent extends LitElement {
     }
     this.emitQuery();
   }
-  public toggleSubQuery(queryFragment: string): void {
+  public toggleSubQuery(field: string, value: string): void {
     const current = this.getValue().trim();
-    const field = queryFragment.slice(0, queryFragment.indexOf(' == '));
+    const queryFragment = `${field} == ${JSON.stringify(value)}`;
     const comparison = `(?<![\\w.])${escapeRegExp(field)}\\s*==\\s*"(?:\\\\.|[^"\\\\])*"`;
     const quoted = `"(?:\\\\.|[^"\\\\])*"|'(?:\\\\.|[^'\\\\])*'`;
+    // Consume quoted strings so predicate text inside a value cannot match a facet.
     const match = [...current.matchAll(new RegExp(`\\(${comparison}(?:\\s+or\\s+${comparison})*\\)|${comparison}|${quoted}`, 'gi'))]
       .find(([fragment]) => !/^["']/.test(fragment));
     if (!match) {
@@ -495,12 +496,12 @@ export class QueryEditorComponent extends LitElement {
       : [...fragments, queryFragment];
     const replacement = selected.length > 1 ? `(${selected.join(' or ')})` : selected.join('');
     const before = current.slice(0, match.index), after = current.slice(match.index + group.length);
-    const value = replacement
+    const nextQuery = replacement
       ? before + replacement + after
       : /\s+and\s*$/i.test(before)
         ? before.replace(/\s+and\s*$/i, '') + after
         : before + after.replace(/^\s*and\s+/i, '');
-    this.handleAddQuery(value.trim(), true);
+    this.handleAddQuery(nextQuery.trim(), true);
   }
 
   public handleVisualizationChange(visualizationType: string): void {
