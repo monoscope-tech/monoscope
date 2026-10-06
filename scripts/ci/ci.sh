@@ -172,7 +172,6 @@ detect_caps() {
   command -v cabal >/dev/null 2>&1 && caps="$caps ghc"
   command -v node >/dev/null 2>&1 && caps="$caps node"
   command -v bun >/dev/null 2>&1 && caps="$caps bun"
-  command -v python3 >/dev/null 2>&1 && caps="$caps python"
   command -v hlint >/dev/null 2>&1 && caps="$caps hlint"
   probe_tcp "${DB_HOST:-localhost}" "${DB_PORT:-5432}" && caps="$caps pg"
   # shellcheck disable=SC2086
@@ -355,7 +354,7 @@ run_body() { # <check>
       command -v weeder >/dev/null 2>&1 || cabal install weeder --install-method=copy --installdir=/usr/local/bin --overwrite-policy=always
       weeder --config weeder.toml --hie-directory dist-newstyle
       ;;
-    release-tests) python3 scripts/ci/release-test.py ;;
+    release-tests) node --test scripts/ci/release-test.mjs ;;
     hlint)   hlint -j src/ shared/src cli ;;
     ui-tests) (cd web-components && npm ci --prefer-offline --no-audit && npm test) ;;
     # Drives the real server in a real browser. scripts/e2e.sh starts that server itself on
@@ -623,7 +622,7 @@ with open(sys.argv[1], "w") as lock:
   local c host_rc=0 host_hlint=false host_pid='' host_log='' host_fp=''
   local -a container_checks=()
   for c in $(selected_checks "$@"); do
-    if [ "$c" = release-tests ] && command -v python3 >/dev/null 2>&1; then
+    if [ "$c" = release-tests ] && command -v node >/dev/null 2>&1; then
       "$0" run release-tests || return $?
     elif [ "$c" = hlint ] && command -v hlint >/dev/null 2>&1; then
       host_hlint=true
@@ -845,7 +844,7 @@ cmd_deploy() { # [sha] [rollback] — rollback must be explicitly requested
     scripts/ci/release.sh current-master "$sha"
   fi
   digest=$(docker buildx imagetools inspect "$IMAGE:$sha" --format '{{json .Manifest}}' \
-    | python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])')
+    | node -p 'JSON.parse(require("node:fs").readFileSync(0, "utf8")).digest.toString()')
   if [ "${2:-}" != rollback ]; then
     scripts/ci/release.sh latest "$sha" "$digest"
     scripts/ci/release.sh current-master "$sha"
@@ -904,7 +903,7 @@ cmd_image_who() { # <sha> — immutable image labels preserve the original PR bu
   local ref="$IMAGE:$1"
   case "$1" in sha256:*) ref="$IMAGE@$1" ;; esac
   docker buildx imagetools inspect "$ref" --format '{{json .Image}}' \
-    | python3 -c 'import json,sys; labels=json.load(sys.stdin).get("config",{}).get("Labels",{}); print("built by:",labels.get("io.monoscope.builder","unknown")); print("built revision:",labels.get("org.opencontainers.image.revision","unknown")); print("source tree:",labels.get("io.monoscope.source-tree","unknown")); print("build inputs:",labels.get("io.monoscope.build-inputs","unknown"))'
+    | node -e 'const labels = JSON.parse(require("node:fs").readFileSync(0, "utf8")).config?.Labels ?? {}; for (const [name, key] of [["built by", "io.monoscope.builder"], ["built revision", "org.opencontainers.image.revision"], ["source tree", "io.monoscope.source-tree"], ["build inputs", "io.monoscope.build-inputs"]]) console.log(name + ":", labels[key] ?? "unknown");'
 }
 
 # ---------------------------------------------------------------- ship
@@ -968,7 +967,7 @@ assert() { # <desc> <expected> <actual>
 
 cmd_selftest() {
   SELFTEST_RC=0
-  python3 scripts/ci/release-test.py || SELFTEST_RC=1
+  node --test scripts/ci/release-test.mjs || SELFTEST_RC=1
   local body_rc=0 bg_log bg_result
   CI_UNIT_BIN=false "$0" body unit-tests >/dev/null 2>&1 || body_rc=$?
   assert "body stops at first failure" 1 "$body_rc"

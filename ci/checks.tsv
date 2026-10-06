@@ -26,4 +26,4 @@ weeder	ghc	@hs @fe
 hlint	hlint	src shared/src cli .hlint.yaml
 ui-tests	node	@fe @uisrc
 e2e	ghc node pg	@hs @fe e2e scripts/e2e.sh
-release-tests	python	scripts/ci/release.sh scripts/ci/release-test.py Dockerfile
+release-tests	node	scripts/ci/release.sh scripts/ci/release-test.mjs Dockerfile

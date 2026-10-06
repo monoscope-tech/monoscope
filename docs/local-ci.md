@@ -196,7 +196,8 @@ for this tree. GitHub still verifies the gate and skips checks with matching
 attestations; the registry cache makes its image build a lookup and promotion.
 
 `make ci-signoff CHECKS="release-tests"` runs the release regression suite on the
-host and records its result. `make ci-selftest` also runs it. The suite checks
+host using Node’s built-in test runner, with no npm dependencies, and records its
+result. `make ci-selftest` also runs it. The suite checks
 squash reuse, source and toolchain invalidation, pinned build inputs, rejection
 of dirty or mismatched checkouts, and stale local/remote deployment prevention.
 

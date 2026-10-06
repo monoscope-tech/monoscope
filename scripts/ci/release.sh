@@ -9,7 +9,7 @@ output() { [ -z "${GITHUB_OUTPUT:-}" ] || printf '%s=%s\n' "$1" "$2" >> "$GITHUB
 sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -d' ' -f1; else shasum -a 256 | cut -d' ' -f1; fi; }
 registry_digest() {
   docker buildx imagetools inspect "$1" --format '{{json .Manifest}}' \
-    | python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])'
+    | node -p 'JSON.parse(require("node:fs").readFileSync(0, "utf8")).digest.toString()'
 }
 current_master() {
   local current
@@ -48,7 +48,7 @@ build() {
       --cache-to "type=registry,ref=$IMAGE:buildcache,mode=max" \
       --metadata-file "$metadata" --provenance=false --push \
       -t "$IMAGE:inputs-$fingerprint" -t "$IMAGE:$sha" -
-    digest=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["containerimage.digest"])' "$metadata")
+    digest=$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))["containerimage.digest"].toString()' "$metadata")
     rm -f "$metadata"
     trap - EXIT
   fi
