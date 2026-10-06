@@ -155,3 +155,32 @@ test('requested revision must match checkout', () => {
   release(['build', sha], false);
   assert.deepEqual(calls(), []);
 });
+
+test('current master deploys by digest and explicit rollback preserves latest', () => {
+  release(['build']);
+  writeFileSync(join(root, 'bin/curl'), `#!/usr/bin/env node
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+fs.writeFileSync(process.env.CALLS + '-caprover', args[args.indexOf('-d') + 1]);
+fs.writeFileSync(args[args.indexOf('-o') + 1], '{"status":100}');
+process.stdout.write('200');
+`, { mode: 0o755 });
+  const deploy = command => {
+    const result = spawnSync('bash', [join(dirname(script), 'ci.sh'), command, sha], {
+      cwd: repo, env: { ...env, CAPROVER_URL: 'https://example.invalid', CAPROVER_APP: 'test', CAPROVER_APP_TOKEN: 'test' }, encoding: 'utf8',
+    });
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr);
+    const request = JSON.parse(readFileSync(`${env.CALLS}-caprover`, 'utf8'));
+    assert.equal(JSON.parse(request.captainDefinitionContent).imageName, `${image}@${digest}`);
+    assert.equal(request.gitHash, sha);
+  };
+  deploy('deploy');
+  assert.equal(registry()[`${image}:latest`], digest);
+  git('commit', '--allow-empty', '-qm', 'new master');
+  git('push', '-q', 'origin', 'HEAD:master');
+  const currentDigest = `sha256:${'d'.repeat(64)}`;
+  writeFileSync(env.REGISTRY, JSON.stringify({ ...registry(), [`${image}:latest`]: currentDigest }));
+  deploy('deploy-rollback');
+  assert.equal(registry()[`${image}:latest`], currentDigest);
+});

@@ -840,9 +840,6 @@ cmd_deploy() { # [sha] [rollback] — rollback must be explicitly requested
   git fetch -q "$REMOTE" 2>/dev/null || true
   git merge-base --is-ancestor "$sha" "$REMOTE/master" 2>/dev/null \
     || die "$sha is not on $REMOTE/master — push it before deploying"
-  if [ "${2:-}" != rollback ]; then
-    scripts/ci/release.sh current-master "$sha"
-  fi
   digest=$(docker buildx imagetools inspect "$IMAGE:$sha" --format '{{json .Manifest}}' \
     | node -p 'JSON.parse(require("node:fs").readFileSync(0, "utf8")).digest.toString()')
   if [ "${2:-}" != rollback ]; then
@@ -926,7 +923,7 @@ cmd_ship() {
   # shellcheck disable=SC2046
   pin_fingerprints $(selected_checks "$@")
 
-  note "ship: 1/4 checks"
+  note "ship: 1/3 checks"
   # Keep going past a failure. The sweep runs in checks.tsv order, so stopping at
   # the first one would let a red `weeder` — which does not gate the deploy —
   # prevent `e2e`, which does, from ever running. Decide what blocks below, on
@@ -948,13 +945,10 @@ cmd_ship() {
     note "checks reported a failure, but every deploy-path check is proven — continuing"
   fi
 
-  note "ship: 2/4 image"
+  note "ship: 2/3 image"
   cmd_image "$sha"
 
-  note "ship: 3/4 confirm merged master $sha"
-  scripts/ci/release.sh current-master "$sha"
-
-  note "ship: 4/4 deploy"
+  note "ship: 3/3 deploy"
   cmd_deploy "$sha"
   cmd_deploy_status
 }
