@@ -344,3 +344,25 @@ jobs:
         run: |
           mkdir -p .ci && printf '%s\n' "$FINGERPRINTS" > .ci/fingerprints.tsv
           CI_FINGERPRINTS=.ci/fingerprints.tsv scripts/ci/ci.sh run ui-tests
+
+  production-image:
+    name: Production image ready
+    # Forks run checks but cannot publish trusted production artifacts.
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]'
+    uses: ./.github/workflows/production-image.yml
+    permissions:
+      contents: read
+      packages: write
+    secrets:
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+    with:
+      revision: ${{ github.event.pull_request.head.sha }}
+
+  release-tests:
+    name: Release regression tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - run: scripts/ci/ci.sh run release-tests

@@ -4,14 +4,6 @@ on:
   workflow_dispatch:
   push:
     branches: [master]
-    # Investigation notes and prose do not change the application; avoid an
-    # ~85-minute image build and a consumer restart just to publish a checkpoint
-    # or edit a doc. `paths-ignore` skips only when EVERY changed path matches,
-    # so a commit touching code still deploys.
-    paths-ignore:
-      - 'plans/**'
-      - 'docs/**'
-      - '**/*.md'
 
 env:
   LANG: C.UTF-8
@@ -28,7 +20,7 @@ jobs:
   # PR run that produced this merge, an earlier attempt, or a developer's `make ci`
   # — the result is on the remote as a ref and the job below skips it. A squash
   # merge keeps the PR head's tree, so master normally skips the lot and the deploy
-  # is bounded by the image build. See docs/local-ci.md.
+  # reuses the PR image when its pinned build inputs match. See docs/local-ci.md.
   gate:
     name: Gate
     runs-on: ubuntu-24.04
@@ -275,72 +267,14 @@ jobs:
   # off the critical path. Only the CapRover call is gated.
   build-image:
     name: Build and Push Docker Image
-    runs-on: ubuntu-24.04
+    uses: ./.github/workflows/production-image.yml
     permissions:
-      contents: 'read'
-      id-token: 'write'
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Login to Container Registry
-        uses: docker/login-action@v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GH_TOKEN }}
-
-      # The registry is the cache and the commit SHA is the fingerprint: an image
-      # tagged with this SHA is by construction the image for this commit, so
-      # rebuilding it produces the same thing at a cost of ~4 minutes. Turns a
-      # re-run, a workflow_dispatch of an existing commit, or a revert to an
-      # already-built SHA into a ~30-second deploy. It does nothing for a genuinely
-      # new commit, which is the common case — this is for the repeat ones.
-      #
-      # It also lets a developer pre-build and push the image themselves (see
-      # `make deploy-image`); the deploy job records who built it either way.
-      - name: Is this commit's image already in the registry?
-        id: probe
-        run: |
-          img=ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}
-          if docker manifest inspect "$img:${{ github.sha }}" >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "Image for \`${{ github.sha }}\` already in the registry — skipping the build." >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      # Skipping the build must not leave :latest pointing at an older commit —
-      # docker-compose.yml (self-hosters) pulls :latest. Re-point it at the image
-      # we just decided to reuse; this copies a manifest, it does not rebuild.
-      - name: Point :latest at the existing image
-        if: steps.probe.outputs.exists == 'true'
-        run: |
-          img=ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}
-          docker buildx imagetools create -t "$img:latest" "$img:${{ github.sha }}"
-
-      - name: Build and push Docker Image
-        if: steps.probe.outputs.exists != 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:${{ github.sha }}
-            ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:latest
-          cache-from: type=registry,ref=ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:buildcache
-          cache-to: type=registry,ref=ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:buildcache,mode=max
-          platforms: linux/amd64
-          provenance: false
-          build-args: |
-            BUILDKIT_INLINE_CACHE=1
-            GIT_HASH=${{ github.sha }}
-            GIT_COMMIT_DATE=${{ github.event.head_commit.timestamp || 'unknown' }}
+      contents: read
+      packages: write
+    secrets:
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+    with:
+      revision: ${{ github.sha }}
 
   # The gate. `if` is what enforces it, and it is deliberately spelled out rather
   # than left to `needs`: build-and-test is now allowed to be SKIPPED, but only
@@ -351,29 +285,44 @@ jobs:
   # that is exactly what let untested builds reach prod for months.
   deploy:
     name: Deploy to CapRover
-    needs: [gate, build-image, build-and-test]
+    needs: [gate, build-image, build-and-test, release-tests]
     if: >-
       always()
       && needs.build-image.result == 'success'
+      && needs.release-tests.result == 'success'
       && (needs.build-and-test.result == 'success'
           || (needs.build-and-test.result == 'skipped' && needs.gate.outputs.skip_haskell == 'true'))
     runs-on: ubuntu-24.04
+    concurrency:
+      group: monoscope-production-deploy
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@v6
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GH_TOKEN }}
 
       # An image cannot be re-derived from source to check it (a Haskell build is
       # not bit-reproducible), so the only way "what is running in prod, and who
       # built it" stays answerable is to say so here, every time.
       - name: Note why this deploy was allowed, and who built the image
+        env:
+          IMAGE_DIGEST: ${{ needs.build-image.outputs.digest }}
         run: |
           {
             echo "build-and-test: ${{ needs.build-and-test.result }} (all Haskell checks pre-proven: ${{ needs.gate.outputs.skip_haskell }})"
             # Never fatal: this is a note about the deploy, not a condition of it.
             # A provenance lookup that cannot reach the remote must not be the
             # reason a green, gated build fails to reach production.
-            scripts/ci/ci.sh image-who "${{ github.sha }}" || echo "built by: (could not read provenance)"
+            scripts/ci/ci.sh image-who "$IMAGE_DIGEST" || echo "built by: (could not read provenance)"
           } >> "$GITHUB_STEP_SUMMARY"
       # Pinned deliberately, not using caprover/deploy-from-github: that action
       # does an unpinned `npm i -g caprover` at image-build time, so an upstream
@@ -382,8 +331,8 @@ jobs:
       # command registers — every deploy crashed on startup for two days before
       # 2.4.3 fixed it. 2.3.1 is the last version on the permissive commander and
       # is what was deploying successfully before that. Bump it on purpose.
-      # A developer's `make ship` deploys this exact image before pushing, and
-      # records it. Deploying again would pull the identical image and restart
+      # A developer's `make ship` deploys this merged revision and records it.
+      # Deploying again would pull the identical image and restart
       # production for no reason, so ask first. Read-only and never fatal: if the
       # lookup cannot reach the remote we deploy, because a redundant deploy is a
       # restart and a missed one is an undeployed commit.
@@ -397,15 +346,29 @@ jobs:
             echo "already=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Promote current master image to latest
+        env:
+          IMAGE_DIGEST: ${{ needs.build-image.outputs.digest }}
+        run: scripts/ci/release.sh latest "$GITHUB_SHA" "$IMAGE_DIGEST"
+
       - name: Deploy Image to CapRrover
         if: steps.shipped.outputs.already != 'true'
         run: |
+          scripts/ci/release.sh current-master "$GITHUB_SHA"
           npx -y caprover@2.3.1 deploy \
             --caproverUrl "$CAPROVER_URL" \
             --appToken "$CAPROVER_APP_TOKEN" \
             --appName "$CAPROVER_APP" \
-            --imageName "ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:${{ github.sha }}"
+            --imageName "ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}@$IMAGE_DIGEST"
         env:
+          IMAGE_DIGEST: ${{ needs.build-image.outputs.digest }}
           CAPROVER_URL: ${{ secrets.CAPTAINROVER_SERVER }}
           CAPROVER_APP: ${{ secrets.CAPTAINROVER_APP_NAME }}
           CAPROVER_APP_TOKEN: ${{ secrets.CAPTAINROVER_APP_TOKEN }}
+
+  release-tests:
+    name: Release regression tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - run: scripts/ci/ci.sh run release-tests

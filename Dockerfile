@@ -1,6 +1,8 @@
 # Single build stage using pre-built deps image
 # Contains: GHC, Node.js, bun, all npm/cabal deps pre-installed, chart-cli pre-built
-FROM ghcr.io/monoscope-tech/monoscope-deps:latest AS builder
+ARG DEPS_IMAGE=ghcr.io/monoscope-tech/monoscope-deps:latest
+ARG RUNTIME_IMAGE=debian:12-slim
+FROM ${DEPS_IMAGE} AS builder
 
 # Install system dependencies if not using deps image (no-ops if already installed)
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -120,7 +122,7 @@ RUN --mount=type=cache,target=/root/.cabal/store \
         exit 1; }; }
 
 # Final runtime image
-FROM debian:12-slim
+FROM ${RUNTIME_IMAGE}
 
 ARG GIT_HASH=dev
 ARG GIT_COMMIT_DATE=dev

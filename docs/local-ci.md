@@ -153,43 +153,52 @@ shows no health status is therefore normal, not broken.
 Dependency images rebuild when their declared inputs change or through a manual workflow run.
 There is no weekly rebuild. Use the manual run for base image or system package updates.
 
-## Shipping without waiting for CI
+## Production images and deployment
 
-`make ship` is the whole deploy from this machine: checks, image, push, deploy.
+Same-repository PRs run `Production image ready` and publish a production image.
+Configure branch protection to require `Production image ready / Production image`
+and `Release regression tests` before merging. Fork and Dependabot PRs run checks but cannot publish production
+images; master builds their image after merge.
 
-```bash
-make ship
-```
+Images are indexed by the complete committed source tree, `linux/amd64`, and the
+registry digests of both the dependency image and Debian runtime image. These
+base digests are passed into the Docker build, so the fingerprint describes the
+actual toolchain used. The context comes from `git archive`; ignored local build
+settings and generated files cannot alter a published artifact. Full-tree hashing
+is deliberately conservative: even a file outside the Docker context can
+trigger a new image.
 
-It runs, in this order, and stops at the first thing that fails:
+Master reuses the existing immutable digest when these inputs match, including
+across squash merges. Changed inputs trigger a new build. Commit-SHA tags are
+aliases; the image retains OCI labels for the original build revision, source
+tree, input fingerprint, and builder. Its embedded `GIT_HASH` and
+`GIT_COMMIT_DATE` describe the original build, which can be the PR revision.
 
-1. **Checks**, exactly as `make ci` runs them, attesting each pass.
-2. **Image** — build and push `ghcr.io/…/monoscope:<sha>` (and move `:latest`).
-3. **Push** the commit to `origin/master`.
-4. **Deploy** — tell CapRover to run that image, and record that it was deployed.
-
-Why this order: checks first because everything after is expensive; image before
-push so CI's probe finds it and skips its own build; push before deploy because
-production must run a commit that exists on origin — `ship` refuses to deploy a
-commit `origin/master` does not contain, so a rollback always has something to
-roll back to.
-
-CI still runs on the push, but there is nothing left for it to do: every check is
-attested, the image is in the registry, and the deploy job asks
-`ci.sh deployed <sha>` first and skips when the answer is yes. It becomes a
-second opinion instead of the critical path.
-
-**`ship` will not deploy something it cannot vouch for.** If a deploy-path check
-(`build`, `doctests`, `unit-tests`, `cli-tests`, `integration-tests`, `e2e`) has
-no attestation for this exact tree, it stops. A `weeder` or `hlint` failure does
-not stop it — those gate pull requests, not the deploy — but it says so.
-
-Related commands:
+Image builds never update `latest`. After the test gate passes, the deployment
+job serializes with other GitHub deployments and checks the live master ref
+before updating `latest` and again before submitting the digest to CapRover.
+Every master push starts this workflow, including docs-only pushes, so a newer
+ignored commit cannot strand an in-flight application deployment.
+A failed remote lookup blocks deployment. Local deployments make the same
+master check; deliberate rollbacks use a separate command.
 
 ```bash
-make deploy-status         # what CapRover is running right now
-make deploy-app SHA=<sha>  # deploy an already-built image, e.g. a rollback
+make deploy-image          # build or reuse an image for this clean checkout
+make ship                  # check, build/reuse, and deploy already-merged master
+make deploy-app SHA=<sha>  # deploy current master only
+make rollback-app SHA=<sha> # explicitly deploy an older image already on master
+make deploy-status
 ```
+
+`make ship` never pushes to master. Merge the pull request first, then use a
+clean checkout of that merged revision. Every deploy-path check must be proven
+for this tree. GitHub still verifies the gate and skips checks with matching
+attestations; the registry cache makes its image build a lookup and promotion.
+
+`make ci-signoff CHECKS="release-tests"` runs the release regression suite on the
+host and records its result. `make ci-selftest` also runs it. The suite checks
+squash reuse, source and toolchain invalidation, pinned build inputs, rejection
+of dirty or mismatched checkouts, and stale local/remote deployment prevention.
 
 ### A native amd64 builder (do this once)
 
@@ -232,33 +241,11 @@ the server.
 
 ## Building the deploy image yourself
 
-The image build is the rest of the deploy: with tests cached it is ~4 of the ~4.5
-minutes. It is not fingerprinted like the other checks, because it produces an
-*artifact* rather than a verdict — skipping it would leave nothing to deploy. Its
-cache is the registry, and its fingerprint is the commit SHA:
-
-```bash
-make deploy-image          # build + push ghcr.io/…/monoscope:<HEAD sha>, linux/amd64
-```
-
-Push that commit and CI's `build-image` job finds the tag already there and skips
-the build. The same check makes a re-run, a `workflow_dispatch` of an existing
-commit, or a revert to an already-built SHA into a ~30-second deploy for free.
-
-Two things to know before using it:
-
-- **It refuses a dirty tree.** The image is tagged with a commit SHA and must
-  actually be that commit, or the tag lies about what is running in production.
-- **It records who built it.** An image cannot be re-derived from source to check
-  (a Haskell build is not bit-reproducible), so unlike an attestation there is no
-  way to verify after the fact that a pushed image matches its tag. The deploy job
-  therefore prints `built by: …` in its summary, every deploy, sourced from a
-  `refs/ci-attest/v1/image/<sha>/…` record written at build time. If that line
-  ever names someone unexpected, that is the signal.
-
-Prod is `linux/amd64`. On Apple Silicon that is emulated — but by **Rosetta**, not
-QEMU, so it runs at a useful fraction of native rather than 10× slower. Budget
-~10 GB of free disk for the amd64 deps image the first time.
+`make deploy-image` uses the same `scripts/ci/release.sh` recipe as the PR and
+master image jobs. It requires a clean tree and registry access. It publishes
+an immutable digest, a content-input tag, and a commit-SHA alias without moving
+`latest`. Master reuses that artifact when its source tree and pinned bases
+match. Image labels preserve who built it and from which revision.
 
 ## Knobs
 
