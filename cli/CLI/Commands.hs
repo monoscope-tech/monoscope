@@ -51,7 +51,7 @@ import Relude
 
 import CLI.Chart qualified as Chart
 import CLI.Config (CLIConfig (..), ConfigKey (..), allConfigKeys, configDir, configFilePath, configKeyText, parseConfigKey, removeToken, resolveConfig, saveToken, setConfigValue)
-import CLI.Core (Ingestion, OutputMode (..), apiGet, apiGetJson, apiPostUnauth, isInteractiveTTY, ingestionKey, isJsonOutput, printDebug, printError, renderAPIError, renderJSON, renderTable, renderWith, withAPIResult)
+import CLI.Core (Ingestion, OutputMode (..), apiGet, apiGetJson, apiPostUnauth, ingestionKey, isInteractiveTTY, isJsonOutput, printDebug, printError, renderAPIError, renderJSON, renderTable, renderWith, withAPIResult)
 import CLI.Dashboard qualified as Dash
 import CLI.LogView (EventRow (..), LogFormat (..), eventRows, parseLogFormat, renderEventLine, renderLogfmt, renderWaterfall)
 import CLI.Table (termWidth)
@@ -1436,7 +1436,7 @@ tryOpenBrowser url =
 
 -- | Point the OTel SDK at the configured endpoint/service/resources and run @act@
 -- with a tracer and a synchronous @send@ that exits nonzero unless the span was exported.
-withCliTracer :: (Ingestion :> es, IOE :> es) => CLIConfig -> Text -> [(Text, Text)] -> (Tracer -> (Trace.Span -> IO ()) -> IO a) -> Eff es a
+withCliTracer :: (IOE :> es, Ingestion :> es) => CLIConfig -> Text -> [(Text, Text)] -> (Tracer -> (Trace.Span -> IO ()) -> IO a) -> Eff es a
 withCliTracer cfg service resources act = do
   key <- ingestionKey cfg >>= validateOrDie
   liftIO $ do
@@ -1500,7 +1500,7 @@ parseSepKV sep label s = case T.break (== sep) (toText s) of
   _ -> Left $ "expected " <> label <> ", got: " <> s
 
 
-runSendEvent :: (Ingestion :> es, IOE :> es) => CLIConfig -> SendEventOpts -> Eff es ()
+runSendEvent :: (IOE :> es, Ingestion :> es) => CLIConfig -> SendEventOpts -> Eff es ()
 runSendEvent cfg opts = do
   withCliTracer cfg opts.service opts.resources $ \tracer send -> do
     ctx <- OtelCtx.getContext
@@ -1530,7 +1530,7 @@ data TelemetryGenOpts = TelemetryGenOpts
   deriving stock (Show)
 
 
-runTelemetryGen :: (Ingestion :> es, IOE :> es) => CLIConfig -> TelemetryGenOpts -> Eff es ()
+runTelemetryGen :: (IOE :> es, Ingestion :> es) => CLIConfig -> TelemetryGenOpts -> Eff es ()
 runTelemetryGen cfg opts = withCliTracer cfg opts.service opts.resources $ \tracer send -> do
   putTextLn $ "Generating " <> opts.kind <> " at " <> show opts.rate <> "/s"
   forM_ (maybe [1 ..] (enumFromTo 1) opts.count) \(i :: Int) -> do

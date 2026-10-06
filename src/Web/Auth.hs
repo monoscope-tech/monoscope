@@ -338,11 +338,12 @@ type ApiKeyAuthContext = AuthHandler Request ApiPrincipal
 
 
 resolveApiKeyProject :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Log :> es) => Text -> Maybe Projects.ProjectId -> Eff es (Maybe Projects.ProjectId)
-resolveApiKeyProject bearerToken pidM = runMaybeT $ MaybeT (ProjectApiKeys.getProjectIdByApiKey token) <|> do
-  sessId <- hoistMaybe $ Projects.PersistentSessionId <$> UUID.fromText token
-  pid <- hoistMaybe pidM
-  sess <- MaybeT $ Projects.getPersistentSession sessId
-  pid <$ guard (V.any ((== pid) . (.id)) sess.projects.getProjects)
+resolveApiKeyProject bearerToken pidM =
+  runMaybeT $ MaybeT (ProjectApiKeys.getProjectIdByApiKey token) <|> do
+    sessId <- hoistMaybe $ Projects.PersistentSessionId <$> UUID.fromText token
+    pid <- hoistMaybe pidM
+    sess <- MaybeT $ Projects.getPersistentSession sessId
+    pid <$ guard (V.any ((== pid) . (.id)) sess.projects.getProjects)
   where
     token = stripBearer bearerToken
 

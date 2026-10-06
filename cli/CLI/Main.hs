@@ -984,7 +984,7 @@ withCfgMode global k = do
   k cfg{projectId = global.projectFlag <|> cfg.projectId} mode
 
 
-run :: (Environment :> es, FileSystem :> es, HTTP :> es, Ingestion :> es, IOE :> es) => Version -> GlobalOpts -> Command -> Eff es ()
+run :: (Environment :> es, FileSystem :> es, HTTP :> es, IOE :> es, Ingestion :> es) => Version -> GlobalOpts -> Command -> Eff es ()
 run version global = \case
   -- C7: resolve the output mode before auth too — 'runAuth' relies on
   -- 'isJsonOutput' to refuse the interactive device flow when piped.
