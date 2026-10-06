@@ -181,8 +181,9 @@ before updating `latest` and again before submitting the digest to CapRover.
 Every master push starts this workflow, including docs-only pushes, so a newer
 ignored commit cannot strand an in-flight application deployment.
 A failed remote lookup blocks deployment. Local deployments make the same
-master check; deliberate rollbacks use a separate command. The ref check and
-deployment request are separate operations; a merge between them can make the request stale.
+master check; deliberate rollbacks use a separate command. Local deployments are
+outside GitHub's concurrency group. The ref check and tag/deployment updates are
+separate operations; a merge between them can make an update stale.
 
 ```bash
 make deploy-image          # build or reuse an image for this clean checkout

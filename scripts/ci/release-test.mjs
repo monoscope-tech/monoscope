@@ -54,7 +54,10 @@ else if (is('buildx', 'imagetools', 'inspect')) {
   const ref = args[3];
   const digest = ref === 'ghcr.io/monoscope-tech/monoscope-deps:latest' ? state.deps ?? 'sha256:' + 'a'.repeat(64)
     : ref === 'debian:12-slim' ? 'sha256:' + 'b'.repeat(64) : state[ref];
-  if (!digest) process.exit(1);
+  if (!digest) {
+    if (process.env.FAIL_LOOKUP) console.error('registry unavailable');
+    process.exit(1);
+  }
   console.log(args[args.indexOf('--format') + 1] === '{{.Manifest.Digest}}' ? digest : JSON.stringify({ digest }));
 } else if (is('buildx', 'build')) {
   fs.writeFileSync(process.env.CALLS + '-context.tar', fs.readFileSync(0));
@@ -137,9 +140,10 @@ test('ignored local settings are not part of build context', () => {
   assert.ok(!files.includes('cabal.project.local'));
 });
 
-test('failed build does not publish a digest or promote', () => {
+test('failed build keeps lookup diagnostics and does not publish a digest or promote', () => {
   env.FAIL_BUILD = 'true';
-  release(['build'], false);
+  env.FAIL_LOOKUP = 'true';
+  assert.match(release(['build'], false).stderr, /registry unavailable/);
   assert.ok(!existsSync(env.REGISTRY));
   assert.ok(!existsSync(env.GITHUB_OUTPUT));
 });

@@ -25,7 +25,7 @@ build() {
   deps="ghcr.io/monoscope-tech/monoscope-deps@$(registry_digest ghcr.io/monoscope-tech/monoscope-deps:latest)"
   runtime="debian@$(registry_digest debian:12-slim)"
   fingerprint=$(printf 'monoscope-image-v1\nlinux/amd64\n%s\n%s\n%s\n' "$tree" "$deps" "$runtime" | sha256)
-  if digest=$(registry_digest "$IMAGE:inputs-$fingerprint" 2>/dev/null); then
+  if digest=$(registry_digest "$IMAGE:inputs-$fingerprint"); then
     echo "Reusing $IMAGE@$digest for tree $tree" >&2
     # Alias the merge SHA without modifying the image's build revision/provenance.
     docker buildx imagetools create --prefer-index=false -t "$IMAGE:$sha" "$IMAGE@$digest"
