@@ -304,7 +304,7 @@ processAIQueryWithMode sourceConfig useTf invocationMode access pid userQuery co
   AI.requireAgentAccess access pid
   now <- Time.currentTime
   let dayAgo = addUTCTime (-86400) now
-  facetSummaryM <- SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" dayAgo now
+  facetSummaryM <- SchemaCatalog.getFacetSummary Nothing pid "otel_logs_and_spans" dayAgo now
   let defaults = AI.defaultAgenticConfig pid
       config =
         defaults

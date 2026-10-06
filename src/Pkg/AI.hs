@@ -591,7 +591,7 @@ runNlSearch
   => Projects.ProjectId -> Config.EnvConfig -> Maybe Text -> Text -> Eff es (Either Text AE.Value)
 runNlSearch pid config tzRaw input = do
   now <- Time.currentTime
-  facets <- SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" (addUTCTime (-86400) now) now
+  facets <- SchemaCatalog.getFacetSummary Nothing pid "otel_logs_and_spans" (addUTCTime (-86400) now) now
   fmap render <$> runAgenticQuery ((nlSearchConfig pid config.enableTimefusionReads facets tzRaw){sourceConfig = Just config}) input config.openaiModel config.openaiApiKey
   where
     render resp =

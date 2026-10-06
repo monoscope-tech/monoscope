@@ -1005,11 +1005,12 @@ export class QueryBuilderComponent extends LitElement {
 
   render() {
     return html`
-      <div class="flex flex-wrap items-center gap-2 text-sm max-md:gap-1">
+      <!-- One clipped line on desktop: a section that doesn't fit wraps out of view whole. -->
+      <div class="flex flex-wrap content-start items-center gap-x-2 text-sm whitespace-nowrap max-md:gap-1 md:h-7 md:gap-y-10 md:overflow-hidden">
         <!-- AGG Section -->
         <div class="flex items-center gap-1 max-md:hidden">
           <span class="text-xs text-textDisabled monospace" data-tippy-content="Apply aggregation functions like count, sum, avg, etc.">agg:</span>
-          <div class="flex flex-wrap gap-1">
+          <div class="flex gap-1">
             ${this.aggregations.map(
               (agg, index) => html`
                 <div class="text-xs text-textDisabled monospace bg-fillWeaker">
@@ -1111,7 +1112,7 @@ export class QueryBuilderComponent extends LitElement {
             ? html`
                 <div class="flex items-center ml-4 gap-1 max-md:hidden">
                   <span class="text-xs text-textDisabled monospace" data-tippy-content="Group results by field value">by:</span>
-                  <div class="flex flex-wrap gap-1">
+                  <div class="flex gap-1">
                     ${this.groupByFields.map((field, index) => {
                       // Determine if this is a binned field
                       const isBinned = field.includes('bin(') || field.includes('bin_auto(');
@@ -1264,7 +1265,7 @@ export class QueryBuilderComponent extends LitElement {
           this.sortFields.length > 0
             ? html`
                 <div class="flex items-center ml-4 gap-1 max-md:hidden">
-                  <div class="flex flex-wrap gap-1">
+                  <div class="flex gap-1">
                     ${this.sortFields.map(
                       (sort, index) => html`
                         <div class="text-xs text-textDisabled monospace bg-fillWeaker">
@@ -1303,7 +1304,7 @@ export class QueryBuilderComponent extends LitElement {
           this.limitValue !== null
             ? html`
                 <div class="flex items-center ml-4 gap-1 max-md:hidden">
-                  <div class="flex flex-wrap gap-1">
+                  <div class="flex gap-1">
                     <div class="text-xs text-textDisabled monospace bg-fillWeaker">
                       [<span class="text-textDisabled">limit:</span>
                       <input

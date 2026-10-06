@@ -196,7 +196,7 @@ spec = around withTestResources
       it "getFacetSummary surfaces dotted keys with section prefixes" $ \tr -> do
         clearAll tr [pid]
         seedSummary tr pid
-        sumM <- runHasqlEffect tr $ SC.getFacetSummary pid "otel_logs_and_spans" frozenTime frozenTime
+        sumM <- runHasqlEffect tr $ SC.getFacetSummary Nothing pid "otel_logs_and_spans" frozenTime frozenTime
         case sumM of
           Nothing -> fail "expected a summary, got Nothing"
           Just s -> do
@@ -213,7 +213,7 @@ spec = around withTestResources
       it "returns Nothing for an unknown project" $ \tr -> do
         let unknown = mkPid 9999
         clearAll tr [unknown]
-        sumM <- runHasqlEffect tr (SC.getFacetSummary unknown "otel_logs_and_spans" frozenTime frozenTime)
+        sumM <- runHasqlEffect tr (SC.getFacetSummary Nothing unknown "otel_logs_and_spans" frozenTime frozenTime)
         sumM `shouldSatisfy` isNothing
 
     describe "Layer C — ingestion → flush → summary" $ do
@@ -226,7 +226,7 @@ spec = around withTestResources
         ref <- newIORef Hot.emptySchemaShardState
         Hot.observeSpans ref Hot.defaultPolicy pid (V.fromList [richObs pid "GET", richObs pid "POST"])
         _ <- runHasqlEffect tr (Worker.flushDirty ref)
-        sumM <- runHasqlEffect tr $ SC.getFacetSummary pid "otel_logs_and_spans" frozenTime frozenTime
+        sumM <- runHasqlEffect tr $ SC.getFacetSummary Nothing pid "otel_logs_and_spans" frozenTime frozenTime
         case sumM of
           Nothing -> fail "expected a summary after flushDirty"
           Just s -> do
@@ -257,7 +257,7 @@ spec = around withTestResources
         ref <- newIORef Hot.emptySchemaShardState
         Hot.observeSpans ref Hot.defaultPolicy pid (V.singleton (richObsWithTopLevel pid "POST"))
         _ <- runHasqlEffect tr (Worker.flushDirty ref)
-        sumM <- runHasqlEffect tr $ SC.getFacetSummary pid "otel_logs_and_spans" frozenTime frozenTime
+        sumM <- runHasqlEffect tr $ SC.getFacetSummary Nothing pid "otel_logs_and_spans" frozenTime frozenTime
         case sumM of
           Nothing -> fail "expected a summary"
           Just s -> do
@@ -269,6 +269,20 @@ spec = around withTestResources
               Just vs -> map (.value) vs `shouldContain` ["INFO"]
               Nothing -> fail "missing level values"
 
+      -- Page shells read only the facets they render; the multi-MB full doc made every page slow.
+      it "a path-narrowed read returns exactly the full read's entries for those paths" $ \tr -> do
+        clearAll tr [pid]
+        ref <- newIORef Hot.emptySchemaShardState
+        Hot.observeSpans ref Hot.defaultPolicy pid (V.fromList [richObs pid "GET", richObsWithTopLevel pid "POST"])
+        _ <- runHasqlEffect tr (Worker.flushDirty ref)
+        let paths = ["attributes.http.request.method", "resource.service.name", "level", "severity.severity_text", "attributes.not.seen"]
+            facetMap = maybe HM.empty (\s -> let Catalog.FacetData m = s.facetJson in m)
+        full <- facetMap <$> runHasqlEffect tr (SC.getFacetSummary Nothing pid "otel_logs_and_spans" frozenTime frozenTime)
+        narrowed <- facetMap <$> runHasqlEffect tr (SC.getFacetSummary (Just paths) pid "otel_logs_and_spans" frozenTime frozenTime)
+        HM.size full `shouldSatisfy` (> HM.size narrowed)
+        forM_ paths \p -> HM.lookup p narrowed `shouldBe` HM.lookup p full
+        HM.keys narrowed `shouldNotContain` ["attributes.db.operation.name"]
+
     describe "Layer C — bulk refresh" $ do
       it "K projects, K dirty keys: one flushDirty pass refreshes all summaries" $ \tr -> do
         let projs = [mkPid i | i <- [1 .. 5]]
@@ -279,7 +293,7 @@ spec = around withTestResources
         r.summariesUpdated `shouldBe` length projs
         -- Every project has a non-empty doc post-flush.
         forM_ projs \p -> do
-          sumM <- runHasqlEffect tr $ SC.getSummary p
+          sumM <- runHasqlEffect tr $ SC.getSummary Nothing p
           sumM `shouldSatisfy` isJust
 
       -- Relies on 'upsertSummary' stamping @now()@ at seed time and the
@@ -299,7 +313,7 @@ spec = around withTestResources
         r.summariesUpdated `shouldBe` length otherPs -- freshP skipped
         -- The two non-fresh projects were summarised this pass.
         forM_ otherPs \p -> do
-          s <- runHasqlEffect tr $ SC.getSummary p
+          s <- runHasqlEffect tr $ SC.getSummary Nothing p
           s `shouldSatisfy` isJust
 
     describe "Layer A — handler wire shape" $ do

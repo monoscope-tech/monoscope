@@ -1789,6 +1789,9 @@ export class LogList extends LitElement {
     revealRecent = false,
     recentDelivery: RecentDelivery = 'manual'
   ) => {
+    // Bar/Line hide the list behind the chart: its rows would be a query nobody sees. The viz
+    // radio sets this before it refetches, so switching back to Logs loads the list then.
+    if ((window as any).chartVizTypes?.includes((window as any).currentVisualizationType)) return;
     // A tick during the initial or refresh load has no cursor yet and would re-run that whole load.
     if (isRecentFetch && (this.isFetchingRecent || this.isLoading)) return;
     if (isLoadMore && this.isLoadingMore) return;

@@ -1998,7 +1998,7 @@ buildSystemPromptForIssue pid issue now = do
       metricsData <- Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just alertData.queryExpression) Nothing Nothing (Just $ show twoDaysAgo) (Just $ show now) Nothing Nothing []
       pure $ Just (alertData, monitorM, metricsData)
     _ -> pure Nothing
-  facetSummaryM <- SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" (addUTCTime (-86400) now) now
+  facetSummaryM <- SchemaCatalog.getFacetSummary Nothing pid "otel_logs_and_spans" (addUTCTime (-86400) now) now
   pure
     $ unlines
       [ issueSystemPrompt now

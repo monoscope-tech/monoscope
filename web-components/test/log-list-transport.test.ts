@@ -186,3 +186,20 @@ describe('the worker path', () => {
     vi.useRealTimers();
   });
 });
+
+// Regression: in Bar/Line mode the list is hidden behind the chart, yet it still fetched
+// its rows — a summarize query per load whose result nothing rendered.
+test('a list hidden behind a chart viz does not fetch until the viz returns to logs', async () => {
+  const transport = vi.fn(async () => ({ tree: [], meta: {} }) as any);
+  const el = await mountList({ transport } as any);
+  (window as any).chartVizTypes = ['timeseries', 'timeseries_line'];
+  (window as any).currentVisualizationType = 'timeseries';
+  await el.refetchLogs();
+  expect(transport).not.toHaveBeenCalled();
+  (window as any).currentVisualizationType = 'logs';
+  await el.refetchLogs();
+  expect(transport).toHaveBeenCalledTimes(1);
+  delete (window as any).currentVisualizationType;
+  delete (window as any).chartVizTypes;
+  el.remove();
+});

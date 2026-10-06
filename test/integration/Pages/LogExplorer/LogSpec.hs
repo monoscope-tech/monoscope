@@ -815,6 +815,15 @@ databaseSpec = do
       find (elem "id=\"visualization-widget-container\"" . T.words) (T.splitOn "<" html)
         `shouldSatisfy` maybe False (T.isInfixOf "hx-vals=\"js:{...widgetJSON}\"")
 
+    -- Chart modes hide the log list, so preloading its rows ran a summarize query nobody saw.
+    it "apiLogH_chartVizSkipsTheHiddenLogListPreload" \tr -> do
+      let preloads viz = do
+            (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing viz Nothing Nothing Nothing
+            pure $ T.isInfixOf "window.logDataPromise" $ toText $ Lucid.renderText $ Lucid.toHtml page
+      preloads (Just "timeseries") `shouldReturn` False
+      preloads (Just "timeseries_line") `shouldReturn` False
+      preloads Nothing `shouldReturn` True
+
   describe "Trace fullscreen scrolling" do
     it "apiLogH_traceOverlayDoesNotCreateAScrollContainer" \tr -> do
       (_, page) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing

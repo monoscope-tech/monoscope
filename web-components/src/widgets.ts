@@ -186,8 +186,16 @@ export const toEChartsColor = (cssColor: string): string => {
     : '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('');
 };
 
-// Read chart-related CSS tokens from the design system
+// Read chart-related CSS tokens from the design system. Cached per theme: getComputedStyle
+// interleaved with echarts' DOM writes forced a full-page style recalc on every series of
+// every render (~1/3 of the log explorer's chart startup). Reading the key forces nothing.
+let chartStylesCache: { key: string; styles: ReturnType<typeof readChartStyles> } | undefined;
 export const getChartStyles = () => {
+  const key = `${document.body.getAttribute('data-theme')}:${matchMedia('(prefers-color-scheme: dark)').matches}`;
+  if (chartStylesCache?.key !== key) chartStylesCache = { key, styles: readChartStyles() };
+  return chartStylesCache.styles;
+};
+const readChartStyles = () => {
   const cs = getComputedStyle(document.body);
   const get = (prop: string) => toEChartsColor(cs.getPropertyValue(prop).trim());
   return {
@@ -610,17 +618,31 @@ const BACKGROUND_FAILURE_THRESHOLD = 3;
 const BACKOFF_BASE_MS = 15_000;
 const BACKOFF_MAX_MS = 600_000;
 const chartRequests = new WeakMap<object, AbortController>();
+const PARTIAL_DRAW_DELAY_MS = 300;
 
 // Every response snapshot uses the same scale, dimensions and series mapping.
+// A stream's partial frames often repeat the final answer exactly; each full rebuild costs
+// ~100ms of main thread at 4x CPU, so an unchanged snapshot is not redrawn.
+const drawnResponse = new WeakMap<object, string>();
+// Whether the drawn option is chartLayoutForSize's compact variant; every draw records it so a
+// resize only rebuilds the chart when compactness actually flips.
+const compactLayouts = new WeakMap<object, boolean>();
 const applyChartResponse = (chart: any, opt: any, widgetData: WidGetData, data: ChartDataResponse) => {
+  const el = $(widgetData.chartId);
+  const width = el?.clientWidth ?? 0, height = el?.clientHeight ?? 0;
+  const key = JSON.stringify([width, height, data.from, data.to, data.headers, data.stats, data.dataset]);
+  if (drawnResponse.get(chart) === key) return;
+  drawnResponse.set(chart, key);
   const headers = data.headers?.map(h => h === 'timestamp' || h === 'created_at'
     ? h : h.substring(0, 75) + (h.length > 75 ? '...' : ''));
   opt.xAxis = { ...opt.xAxis, min: data.from, max: data.to };
   opt.dataset.source = [headers || [], ...(data.dataset || [])];
   const maximum = widgetData.chartType === 'line' ? data.stats?.max : data.stats?.max_group_sum;
   opt.yAxis = { ...opt.yAxis, max: maximum != null && Number.isFinite(maximum) && maximum > 0 ? maximum : undefined };
-  const el = $(widgetData.chartId);
-  chart.setOption(chartLayoutForSize(updateChartConfiguration(widgetData, opt, opt.dataset.source), el?.clientWidth ?? 0, el?.clientHeight ?? 0), true);
+  const configured = updateChartConfiguration(widgetData, opt, opt.dataset.source);
+  const layout = chartLayoutForSize(configured, width, height);
+  chart.setOption(layout, true);
+  compactLayouts.set(chart, layout !== configured);
 };
 
 const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widgetData: WidGetData, lifetimeSignal: AbortSignal, showLoader = true) => {
@@ -672,10 +694,12 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
     setChartLoading(chartId, true);
   }
 
+  // The first partial draws at once; later ones only when the final answer is slow. Each is
+  // a full ~100ms rebuild at 4x CPU, and a fast stream would otherwise draw three times.
+  let partialTimer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const partial = (data: ChartDataResponse) => {
-      if (signal.aborted || isStale() || !showLoader) return;
-      receivedPartial = !!data.dataset?.length;
+    const drawPartial = (data: ChartDataResponse) => {
+      if (signal.aborted || isStale()) return;
       if (subtitle) subtitle.textContent = receivedPartial ? 'Loading partial results…' : 'Loading…';
       if (data.dataset?.length) chart.hideLoading();
       hideNoDataOverlay(chartId);
@@ -686,9 +710,18 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
       element?.setAttribute('aria-busy', 'true');
       element?.setAttribute('data-chart-partial', 'true');
     };
+    const partial = (data: ChartDataResponse) => {
+      if (signal.aborted || isStale() || !showLoader) return;
+      const first = !receivedPartial;
+      receivedPartial = !!data.dataset?.length;
+      clearTimeout(partialTimer);
+      if (first) drawPartial(data);
+      else partialTimer = setTimeout(() => drawPartial(data), PARTIAL_DRAW_DELAY_MS);
+    };
     const data: ChartDataResponse =
       (await takePrefetched(chartId, url, partial, signal)) ??
       (await limitedFetch(showLoader ? streamUrl(url) : url, res => checkChartResponse(res).then(res => readChartResponse<ChartDataResponse>(res, partial)), signal));
+    clearTimeout(partialTimer);
     const { from, to, dataset, rows_per_min, stats, error } = data;
     if (signal.aborted || isStale()) return; // a newer fetch already won; don't overwrite its state
     if (error) {
@@ -726,6 +759,7 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
     }
     window.dispatchEvent(new CustomEvent('chart-updated', { detail: { chartId, total: sumTimeseriesValues(dataset) } }));
   } catch (e) {
+    clearTimeout(partialTimer);
     if (signal.aborted || isStale()) return;
     console.error('Failed to fetch new data:', e);
     if (e instanceof ChartSessionError) reportFailure(e.message, async () => window.location.reload());
@@ -1010,13 +1044,12 @@ const chartWidget = (widgetData: WidGetData) => {
   const theme = isDarkMode ? 'dark' : widgetData.theme || 'default';
   const chart = window.echarts.init(chartEl, theme);
   chart.group = 'default';
-  let compactLayout = false;
   const sizedOptions = () => chartLayoutForSize(opt, chartEl?.clientWidth ?? 0, chartEl?.clientHeight ?? 0);
   chartLayoutUpdaters.set(chartId, () => {
     const layout = sizedOptions();
-    if ((layout !== opt) !== compactLayout) {
+    if ((layout !== opt) !== (compactLayouts.get(chart) ?? false)) {
       chart.setOption(layout);
-      compactLayout = layout !== opt;
+      compactLayouts.set(chart, layout !== opt);
     }
   });
 
@@ -1036,7 +1069,8 @@ const chartWidget = (widgetData: WidGetData) => {
     }
     const layout = chartLayoutForSize(updateChartConfiguration(widgetData, opt, opt.dataset.source), chartEl?.clientWidth ?? 0, chartEl?.clientHeight ?? 0);
     chart.setOption(layout, notMerge);
-    compactLayout = layout !== opt;
+    drawnResponse.delete(chart);
+    compactLayouts.set(chart, layout !== opt);
     chartRefreshState.set(chart, { url: chartDataUrl(widgetData), hasData: (opt.dataset.source?.length ?? 0) > 1, failures: 0, retryAt: 0 });
     applyHighlightBand(chart, widgetData);
   };

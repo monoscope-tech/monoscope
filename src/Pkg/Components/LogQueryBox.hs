@@ -1,4 +1,4 @@
-module Pkg.Components.LogQueryBox (logQueryBox_, VizType (..), visTypes, queryLibraryContent_, enrichSchemaWithFacets, LogQueryBoxConfig (..)) where
+module Pkg.Components.LogQueryBox (logQueryBox_, VizType (..), VizSurface (..), visTypes, queryLibraryContent_, enrichSchemaWithFacets, LogQueryBoxConfig (..)) where
 
 import Data.Aeson qualified as AE
 import Data.Default (def)
@@ -245,7 +245,7 @@ logQueryBox_ config = do
                   faSprite_ "magnifying-glass" "regular" "h-4 w-4"
                   when (isJust config.targetWidgetPreview) "Run query"
 
-      div_ [class_ $ "flex justify-between max-md:flex-wrap max-md:gap-0.5" <> bool "" " mt-1 border-t border-strokeWeak pt-2" (isJust config.targetWidgetPreview)] do
+      div_ [class_ $ "@container flex justify-between gap-3 max-md:flex-wrap max-md:gap-0.5" <> bool "" " mt-1 border-t border-strokeWeak pt-2" (isJust config.targetWidgetPreview)] do
         div_ [class_ "flex min-w-0 items-center gap-0 max-md:w-full"] do
           div_ [class_ "flex items-center gap-2 max-md:gap-1"] do
             visualizationTabs_
@@ -295,7 +295,9 @@ logQueryBox_ config = do
               datalist_ [id_ "pattern-field-list"] $ options_ Nothing $ map (,"") $ Map.keys Schema.telemetrySchema.fields
           span_ [class_ "mx-3 hidden h-4 w-px shrink-0 bg-strokeWeak opacity-70 md:block", Aria.hidden_ "true"] ""
           div_ [class_ "flex min-w-0 items-center gap-2"] do
-            termRaw "query-builder" [term "query-editor-selector" "#filterElement"] ("" :: Text)
+            -- Phones already hide its agg section. On a short row its sections clip from the end
+            -- (see query-builder.ts), after the Try chips have given up their space.
+            div_ [class_ "min-w-0 @max-[800px]:hidden"] $ termRaw "query-builder" [term "query-editor-selector" "#filterElement"] ("" :: Text)
             whenNothing_ config.targetWidgetPreview popularSearchChips_
 
         whenJust config.mobileExtra
@@ -304,7 +306,7 @@ logQueryBox_ config = do
         -- One shared control group across breakpoints: duplicate mobile/desktop
         -- Timeline controls can both become visible when conditional variants win.
         -- Explorer-only: the widget editor has no timeline, and its Monitors tab owns alerts.
-        whenNothing_ config.targetWidgetPreview $ div_ [class_ "flex items-center justify-end gap-3 max-md:w-full"] do
+        whenNothing_ config.targetWidgetPreview $ div_ [class_ "flex shrink-0 items-center justify-end gap-3 whitespace-nowrap max-md:w-full"] do
           label_ [class_ "flex min-h-8 cursor-pointer items-center gap-1.5 text-xs text-textWeak hover:text-textStrong"] do
             input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart", [__|init if window.innerWidth < 768 set my.checked to true|]]
             span_ "Hide timeline"
@@ -349,7 +351,7 @@ logQueryBox_ config = do
     -- Helper for visualizing the data with different chart types
     visualizationTabs_ :: Html ()
     visualizationTabs_ =
-      div_ [class_ "tabs tabs-box tabs-outline tabs-xs bg-fillWeak p-1 rounded-lg", id_ "visualizationTabs", role_ "radiogroup", Aria.label_ "Visualization type"] do
+      div_ [class_ "tabs tabs-box tabs-outline tabs-xs shrink-0 flex-nowrap bg-fillWeak p-1 rounded-lg", id_ "visualizationTabs", role_ "radiogroup", Aria.label_ "Visualization type"] do
         let
           -- A widget container means we are in the dashboard widget editor rather than the
           -- log explorer.
@@ -369,7 +371,7 @@ logQueryBox_ config = do
               $ filter (not . hiddenHere) visTypes
         forM_ visible \v -> do
           let vizType = v.key
-          label_ [data_ "value" vizType, class_ "tab !shadow-none !border-strokeWeak flex gap-1"] do
+          label_ [data_ "value" vizType, class_ "tab !shadow-none !border-strokeWeak flex gap-1 whitespace-nowrap"] do
             input_
               $ [ type_ "radio"
                 , name_ "visualization"
@@ -398,7 +400,8 @@ logQueryBox_ config = do
                               if #resultTable exists
                                 set #resultTable's mode to my.value
                                 set #resultTable's mode to 'logs' unless my.value is 'patterns' or my.value is 'sessions'
-                                call #resultTable.refetchLogs()
+                                -- Debounced: the editor's own update-query refetch collapses into this one.
+                                call #resultTable.debouncedRefetchLogs()
                               end
                               if window.swapSessionsRegionIfNeeded then call window.swapSessionsRegionIfNeeded(my.value, prevViz)
                             end
@@ -413,27 +416,31 @@ logQueryBox_ config = do
     -- When no query is active, shows "Try:" chips inline. "more" opens the full library dropdown.
     popularSearchChips_ :: Html ()
     popularSearchChips_ =
-      div_ [class_ "max-md:hidden group-has-[.ai-search:checked]/fltr:hidden inline-flex gap-1.5 text-xs items-center", id_ "queryLibraryParentEl"] do
+      div_ [class_ "max-md:hidden group-has-[.ai-search:checked]/fltr:hidden inline-flex shrink-[100] gap-1.5 text-xs items-center whitespace-nowrap", id_ "queryLibraryParentEl"] do
         when noActiveQuery
           $ span_
-            [ class_ "inline-flex gap-1.5 items-center"
+            [ class_ "flex h-7 min-w-0 flex-wrap content-start items-center gap-x-1.5 overflow-hidden @max-[820px]:hidden"
             , id_ "popular-search-chips"
             , [__|on 'update-query' from window if (event.detail.value or '').trim() is not '' add .hidden to me else remove .hidden from me|]
             ]
             do
-              span_ [class_ "text-textWeak"] "Try:"
-              forM_ (take 3 popularQueries) \(q, l, _) ->
-                button_
-                  [ type_ "button"
-                  , -- Keep the quiet, borderless treatment without shrinking the
-                    -- pointer target below the 24px WCAG 2.5.8 minimum.
-                    class_ "inline-flex h-7 items-center rounded-md bg-transparent px-2 text-textWeak hover:bg-fillWeak hover:text-textStrong focus-visible:outline-2 focus-visible:outline-offset-1 cursor-pointer transition-[color,background-color]"
-                  , onclick_ $ applyQueryJS q
-                  ]
-                  $ toHtml l
+              -- A chip that doesn't fit wraps onto this one-line strip's clipped second line, so each
+              -- shows whole or not at all. The first chip can't clip ("Try:" sizes the strip), hence 820px.
+              let chip (q, l, _) =
+                    button_
+                      [ type_ "button"
+                      , -- Keep the quiet, borderless treatment without shrinking the
+                        -- pointer target below the 24px WCAG 2.5.8 minimum.
+                        class_ "inline-flex h-7 items-center rounded-md bg-transparent px-2 text-textWeak hover:bg-fillWeak hover:text-textStrong focus-visible:outline-2 focus-visible:outline-offset-1 cursor-pointer transition-[color,background-color]"
+                      , onclick_ $ applyQueryJS q
+                      ]
+                      $ toHtml l
+              case take 3 popularQueries of
+                c : cs -> span_ [class_ "inline-flex items-center gap-1.5"] (span_ [class_ "text-textWeak"] "Try:" >> chip c) >> mapM_ chip cs
+                [] -> pass
         button_
           [ type_ "button"
-          , class_ "inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-md bg-fillWeaker px-2 text-textWeak hover:bg-fillWeak hover:text-textStrong focus-visible:outline-2 focus-visible:outline-offset-2 active:scale-[0.96] transition-[color,background-color,scale]"
+          , class_ "inline-flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md bg-fillWeaker px-2 text-textWeak hover:bg-fillWeak hover:text-textStrong focus-visible:outline-2 focus-visible:outline-offset-2 active:scale-[0.96] transition-[color,background-color,scale]"
           , term "popovertarget" "queryLibraryPopover"
           , style_ "anchor-name: --querylib-anchor"
           , hxGet_ $ "/p/" <> config.pid.toText <> "/log_explorer/queries"
@@ -654,16 +661,20 @@ queryEditorInitializationCode vizTypeM = do
   let
     popularQueriesJson = decodeUtf8 $ AE.encode Schema.popularOtelQueriesJson
     vizType = fromMaybe "logs" vizTypeM
+    chartVizTypes = decodeUtf8 $ AE.encode [v.key | v <- visTypes, v.surface == Chart]
   script_
     [text|
     // Set initial visualization type
     window.currentVisualizationType = "$vizType";
+    // Views the widget draws instead of the log list; the list skips fetching while one is active.
+    window.chartVizTypes = $chartVizTypes;
     
     // Function to update viz type in URL without reloading the page
+    // Resolves once the query is rewritten, so a caller's refetch sees the new query.
     window.updateVizTypeInUrl = function(vizType, shouldUpdateUrl = true, editor = document.getElementById('filterElement')) {
       // Update the current visualization type
       window.currentVisualizationType = vizType;
-      requestAnimationFrame(() => {
+      return new Promise(resolve => requestAnimationFrame(() => {
         // Only update URL if we're not in widget mode and shouldUpdateUrl is true
         const isWidgetMode = editor && editor.hasAttribute('target-widget-preview');
         
@@ -675,8 +686,8 @@ queryEditorInitializationCode vizTypeM = do
         
         // Call the query editor's handleVisualizationChange method to update the query
         const vizTypeMap = { 'bar': 'timeseries', 'line': 'timeseries_line' };
-        window.queryEditorCallFor(editor, 'handleVisualizationChange', vizTypeMap[vizType] || vizType);
-      });
+        Promise.resolve(window.queryEditorCallFor?.(editor, 'handleVisualizationChange', vizTypeMap[vizType] || vizType)).finally(resolve);
+      }));
     };
 
     // Called by the AI-search response handler and query-builder.ts to switch viz type.

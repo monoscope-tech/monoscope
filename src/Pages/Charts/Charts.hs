@@ -597,19 +597,18 @@ fetchMetricsDataWithProgress progress respDataType sqlQuery now fromD toD authCt
           metrics (coerce -> rows) =
             let (hdrs, groupedData, rowsCount, rpm) = pivot' rows
              in baseMetricsData{dataset = groupedData, headers = V.cons "timestamp" hdrs, rowsCount, rowsPerMin = Just rpm, stats = Just $ statsTriple rows}
-      case progress of
-        Nothing -> metrics . V.fromList <$> runQ
-        Just emit -> do
-          rowsRef <- newIORef []
-          lastEmit <- newIORef 0
-          withResource pool \conn -> streamQuery_ conn (Query $ encodeUtf8 sqlQuery) \row -> do
-            modifyIORef' rowsRef (row :)
-            tick <- getMonotonicTimeNSec
-            previous <- readIORef lastEmit
-            when (previous == 0 || tick - previous >= 100000000) do
-              readIORef rowsRef >>= emit . metrics . V.fromList . reverse
-              writeIORef lastEmit tick
-          metrics . V.fromList . reverse <$> readIORef rowsRef
+      -- Always streamed, so an abandoned read cancels its SQL; @progress@ only reports.
+      rowsRef <- newIORef []
+      lastEmit <- newIORef 0
+      withResource pool \conn -> streamQuery_ conn (Query $ encodeUtf8 sqlQuery) \row -> do
+        modifyIORef' rowsRef (row :)
+        forM_ progress \emit -> do
+          tick <- getMonotonicTimeNSec
+          previous <- readIORef lastEmit
+          when (previous == 0 || tick - previous >= 100000000) do
+            readIORef rowsRef >>= emit . metrics . V.fromList . reverse
+            writeIORef lastEmit tick
+      metrics . V.fromList . reverse <$> readIORef rowsRef
     DTText -> do
       -- Decoded through 'AnyText', not 'Text': a raw-SQL widget selects whatever its author
       -- wrote, and demanding `text` for every column failed the *whole* widget on one
@@ -788,7 +787,7 @@ queryMetricsStream dbSource dataTypeM pidM queryM querySQLM sinceM fromM toM sou
                     runChunk chunkCfg = do
                       let (_, chunkParts) = queryASTToComponents chunkCfg fixed
                           (chunkFrom, chunkTo) = chunkCfg.dateRange
-                      result <- readMetrics (Just $ const pass) (maybeToMonoid chunkParts.finalSummarizeQuery) chunkFrom chunkTo
+                      result <- readMetrics Nothing (maybeToMonoid chunkParts.finalSummarizeQuery) chunkFrom chunkTo
                       either throwIO pure result
                 case (actual, chunkableChart ast', start, end) of
                   (DTMetric, True, Just a, Just b) | QC.chunkIntervalSupported key.binInterval && b > addUTCTime 86400 a -> do
@@ -803,8 +802,10 @@ queryMetricsStream dbSource dataTypeM pidM queryM querySQLM sinceM fromM toM sou
                         (emptyMetricsFor now start end)
                         (QC.chartChunks key.binInterval (a, b))
                     pure result{from = floor . utcTimeToPOSIXSeconds <$> Just a, to = floor . utcTimeToPOSIXSeconds <$> Just b}
+                  -- One aggregate query sends its rows in one burst once grouping finishes; framing
+                  -- that burst as partials only redraws the chart. The chunked path has real progress.
                   _ -> do
-                    result <- readMetrics progress (maybeToMonoid parts.finalSummarizeQuery) start end
+                    result <- readMetrics Nothing (maybeToMonoid parts.finalSummarizeQuery) start end
                     either throwIO pure result
           result <- tryAny $ case raw of
             Just template ->

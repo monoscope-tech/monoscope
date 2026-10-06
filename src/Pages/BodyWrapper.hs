@@ -42,20 +42,19 @@ mkPageCtx pid = do
   (sess, project) <- Projects.sessionAndProject pid
   appCtx <- EffReader.ask @AuthContext
   now <- Time.currentTime
-  -- One indexed row read of the learned facet values — the same summary the Log Explorer
-  -- sidebar renders, so the picker offers exactly the environments this project has
-  -- reported. getFacetSummary ignores the time range.
-  facetsM <- SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" now now
+  -- The learned facet values narrowed to the two pickers, so they offer exactly the
+  -- environments/services this project has reported. getFacetSummary ignores the time range.
+  facetsM <- SchemaCatalog.getFacetSummary (Just [envField, serviceField]) pid "otel_logs_and_spans" now now
   activationProgressM <-
     if V.elem "checklist_dismissed" project.onboardingStepsCompleted
       then pure Nothing
       else Just <$> activationProgress pid (V.elem "Integration" project.onboardingStepsCompleted)
   conversations <- Issues.listConversations pid
-  let envOptions = maybe V.empty (facetValues "resource.deployment.environment.name" . (.facetJson)) facetsM
-      serviceOptions = maybe V.empty (facetValues "resource.service.name" . (.facetJson)) facetsM
-  pure (sess, project, def{sessM = Just sess, currProject = Just project, config = appCtx.config, facetSummaryM = facetsM, activationProgressM, conversations, envOptions, serviceOptions, needsTagify = True, shellNow = now})
+  let options field = V.fromList $ sort [v.value | SchemaCatalog.FacetData m <- (.facetJson) <$> maybeToList facetsM, v <- HM.findWithDefault [] field m, not (T.null v.value)]
+  pure (sess, project, def{sessM = Just sess, currProject = Just project, config = appCtx.config, activationProgressM, conversations, envOptions = options envField, serviceOptions = options serviceField, needsTagify = True, shellNow = now})
   where
-    facetValues field (SchemaCatalog.FacetData m) = V.fromList $ sort [v.value | v <- HM.findWithDefault [] field m, not (T.null v.value)]
+    envField = "resource.deployment.environment.name"
+    serviceField = "resource.service.name"
 
 
 -- | Minimal authenticated shell for AI threads. The AI execution path loads its own
@@ -236,13 +235,10 @@ data BWConfig = BWConfig
   , headContent :: Maybe (Html ()) -- Optional HTML content to include in the head
   , globalDrawerContent :: Maybe (Html ())
   , config :: EnvConfig -- Environment configuration for telemetry
-  , facetSummaryM :: Maybe SchemaCatalog.FacetSummary
-  -- ^ The project summary already fetched by 'mkPageCtx'. Page renderers that need
-  -- facet values should reuse it instead of issuing the same primary-key read again.
   , envOptions :: V.Vector Text
   -- ^ Deployment environments this project has actually reported, for the app-wide picker.
   -- Seeded by 'mkPageCtx' from the learned facet values, so it is the same set the Log
-  -- Explorer's facet sidebar offers and it costs one indexed row read.
+  -- Explorer's facet sidebar offers.
   , serviceOptions :: V.Vector Text
   , activationProgressM :: Maybe ActivationProgress
   , conversations :: [Issues.ConversationSummary]

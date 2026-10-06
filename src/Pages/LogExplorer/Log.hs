@@ -63,7 +63,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
 import Numeric (showFFloat)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, pageActions, pageTitle)
-import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), enrichSchemaWithFacets, logQueryBox_)
+import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), VizSurface (..), VizType (..), enrichSchemaWithFacets, logQueryBox_, visTypes)
 import Pkg.Components.TimePicker qualified as Components
 import Pkg.Components.Widget (WidgetAxis (..), WidgetType (WTTimeseries, WTTimeseriesLine))
 import Pkg.Components.Widget qualified as Widget
@@ -513,6 +513,10 @@ facetsByGroup :: Map.Map FacetGroup [Facet]
 facetsByGroup = Map.fromListWith (flip (<>)) [(f.group, [f]) | f <- facetDefs]
 
 
+facetGroupPaths :: FacetGroup -> [Text]
+facetGroupPaths g = map (.path) $ Map.findWithDefault [] g facetsByGroup
+
+
 -- | Render facet data for Log Explorer sidebar in a compact format.
 -- The facet counts are scaled in the upstream summary based on the selected time range.
 renderFacets :: FacetSummary -> Html ()
@@ -813,7 +817,8 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
   -- The initial HTMX facet request used to enqueue this job. Common facets now render
   -- with the page, so preserve the missing-summary recovery without restoring that
   -- client-side round trip.
-  when (isNothing bw.facetSummaryM) $ enqueueFacetsJob authCtx pid now
+  facetSummaryM <- SchemaCatalog.getFacetSummary (Just $ facetGroupPaths FGCommon) pid "otel_logs_and_spans" now now
+  when (isNothing facetSummaryM) $ enqueueFacetsJob authCtx pid now
 
   whenLeft_ freeTierStatusE (Log.logAttention "Log explorer freeTierStatus failed" . show @Text)
 
@@ -827,7 +832,10 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
         Just "sessions" -> LogQueries.Sessions
         Just "patterns" -> LogQueries.Patterns
         _ -> LogQueries.Data
-      preloadUrl = withTelemetryScope sess.environment sess.service $ LogQueries.logExplorerUrlPath pid dataEndpoint queryM' cols' Nothing sinceM fromM toM Nothing sourceM False
+      -- Chart viz types and trace deep links don't show the log list: its rows would be a
+      -- query nobody sees, contending with the one they do.
+      chartViz = any (\v -> v.surface == Chart && Just v.key == effectiveVizType) visTypes
+      preloadUrl = guard (not chartViz && isNothing showTraceM) $> withTelemetryScope sess.environment sess.service (LogQueries.logExplorerUrlPath pid dataEndpoint queryM' cols' Nothing sinceM fromM toM Nothing sourceM False)
 
   let stampPng base = do
         url <- Widget.widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid base sinceM fromM toM
@@ -865,7 +873,7 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
           , sessionSort = fromMaybe LogQueries.SortLastSeen $ rightToMaybe . parseUrlPiece =<< sortByM
           , parseError = parseErrorMsg
           , preloadUrl
-          , facetSummary = bw.facetSummaryM
+          , facetSummary = facetSummaryM
           }
   addRespHeaders $ LogPage $ PageCtx bwconf page
   where
@@ -990,12 +998,14 @@ logExplorerFacetsH pid fieldM groupM = do
   _ <- Projects.sessionAndProject pid
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   now <- Time.currentTime
-  facetSummary <- SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" now now
+  let facetGroupM = groupM >>= parseFacetGroup
+      paths = maybe (maybe (map (.path) facetDefs) facetGroupPaths facetGroupM) one fieldM
+  facetSummary <- SchemaCatalog.getFacetSummary (Just paths) pid "otel_logs_and_spans" now now
   when (isNothing facetSummary) $ enqueueFacetsJob authCtx pid now
   addRespHeaders
     $ maybe
       (div_ [class_ "px-1 py-4 text-xs italic text-textWeak"] "Filters are still being built for this project.")
-      ( \summary -> case (fieldM, groupM >>= parseFacetGroup) of
+      ( \summary -> case (fieldM, facetGroupM) of
           (Just field, _) -> renderFacetTail field summary
           (_, Just facetGroup) -> renderFacetGroup True facetGroup summary
           _ -> renderFacets summary
@@ -1039,7 +1049,7 @@ logExplorerSchemaH :: Projects.ProjectId -> ATAuthCtx (RespHeaders AE.Value)
 logExplorerSchemaH pid = do
   _ <- Projects.sessionAndProject pid
   now <- Time.currentTime
-  facetsM <- SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" now now
+  facetsM <- SchemaCatalog.getFacetSummary Nothing pid "otel_logs_and_spans" now now
   -- Derived, not the hand-coded schema: the query editor validates field names
   -- against this response, so it has to advertise everything the parser accepts
   -- (live columns + aliases) or working queries get "Unknown field" squiggles.
@@ -1477,7 +1487,7 @@ data ApiLogsPageData = ApiLogsPageData
   , queryResultCount :: Int
   , sessionSort :: LogQueries.SessionSort
   , parseError :: Maybe Text
-  , preloadUrl :: Text
+  , preloadUrl :: Maybe Text
   , facetSummary :: Maybe FacetSummary
   }
 
@@ -1597,16 +1607,15 @@ traceLoadingSkeleton_ =
 apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
   -- #main-content is the HTMX swap target; <head> is not included in a boosted
-  -- response, so the preload must live here for in-app navigation too. A trace
-  -- deep link does not display the log table, so do not contend with its fetch.
+  -- response, so the preload must live here for in-app navigation too.
   -- Deliberately a script, not <link rel=preload as=fetch>: the log-list fetches
   -- with Accept: application/json + credentials, which won't match the preload
   -- cache's request and would double-fetch.
-  when (isNothing page.showTrace)
-    $ script_
-    $ "{const load = () => fetch("
-    <> encodeText page.preloadUrl
-    <> ", {headers: {Accept: \"application/json\"}, credentials: \"include\"}).then(r => r.json()); window.logDataPromise = load().catch(load);}"
+  whenJust page.preloadUrl \url ->
+    script_
+      $ "{const load = () => fetch("
+      <> encodeText url
+      <> ", {headers: {Accept: \"application/json\"}, credentials: \"include\"}).then(r => r.json()); window.logDataPromise = load().catch(load);}"
   sectionWrapper_ do
     template_ [id_ "trace-loading-skeleton"] traceLoadingSkeleton_
     div_ [class_ "fixed z-[9999] hidden right-0 w-max h-max border border-strokeWeak rounded top-32 bg-bgBase shadow-2xl", id_ "sessionPlayerWrapper"] do
@@ -1724,7 +1733,7 @@ apiLogsPage page = do
           renderFacets
           page.facetSummary
 
-    logsListPanel = div_ [class_ "grow will-change-[width] contain-[layout_style] relative flex flex-col shrink-1 min-w-0 w-full h-full ", id_ "logs_list_container"] do
+    logsListPanel = div_ [class_ "@container grow will-change-[width] contain-[layout_style] relative flex flex-col shrink-1 min-w-0 w-full h-full ", id_ "logs_list_container"] do
       rowCountHeader
       vizWidget
       traceOverlay
@@ -1735,7 +1744,8 @@ apiLogsPage page = do
     -- Filters toggle and row count, shown above the viz widget / trace / virtual table.
     -- max-md:hidden: on phones this row moves into the toolbar via mobileExtra, and two
     -- copies would also give the screen reader two aria-live regions for one count.
-    rowCountHeader = div_ [class_ "max-md:hidden flex gap-2 py-1 text-sm z-10 w-max bg-bgBase -mb-6 group-has-[#viz-patterns:checked]/pg:mb-0"] do
+    -- It overlays the widget's header row; a panel too narrow to clear the centred title stacks it instead.
+    rowCountHeader = div_ [class_ "max-md:hidden flex gap-2 py-1 text-sm z-10 w-max bg-bgBase -mb-6 @max-[640px]:mb-0 group-has-[#viz-patterns:checked]/pg:mb-0"] do
       filtersLabel_ []
         $ input_
           [ type_ "checkbox"

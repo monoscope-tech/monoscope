@@ -1293,7 +1293,7 @@ apiFacets pid sinceM fromM toM fieldM = do
   let (fromT, toT, _) = TP.parseTimeRange now (TP.TimePicker sinceM fromM toM)
       defaultFrom = fromMaybe (addUTCTime (negate nominalDay) now) fromT
       defaultTo = fromMaybe now toT
-  summaryM <- SchemaCatalog.getFacetSummary pid "otel_logs_and_spans" defaultFrom defaultTo
+  summaryM <- SchemaCatalog.getFacetSummary Nothing pid "otel_logs_and_spans" defaultFrom defaultTo
   let Fields.FacetData facetMap = maybe (Fields.FacetData mempty) (.facetJson) summaryM
       -- Storage uses `___` as the path separator (raw column names like
       -- `resource___service___name`); the public API contract is dotted.

@@ -148,7 +148,8 @@ export class QueryEditorComponent extends LitElement {
 
   protected createRenderRoot() {
     const input = this.querySelector<HTMLTextAreaElement>('textarea[data-query-input]');
-    this.value = input?.value ?? this.getAttribute('default-value') ?? '';
+    // The page already reflects its initial query, so only a departure from it is news.
+    this.value = this.lastEmitted = input?.value ?? this.getAttribute('default-value') ?? '';
     if (input) this.initialSelection = { anchor: input.selectionStart, head: input.selectionEnd };
     this.initialFocus = !!input && document.activeElement === input;
     this.replaceChildren();

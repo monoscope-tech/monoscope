@@ -531,7 +531,7 @@ data FieldCategoryEnum
     -- status_code, severity_*). Emitted bare in the facet output — no
     -- @attributes.@/@resource.@ prefix.
     FCTopLevel
-  deriving stock (Eq, Generic, Ord, Read, Show)
+  deriving stock (Bounded, Enum, Eq, Generic, Ord, Read, Show)
   deriving anyclass (Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "FC" FieldCategoryEnum
 

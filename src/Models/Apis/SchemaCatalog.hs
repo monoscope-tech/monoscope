@@ -41,6 +41,7 @@ import Data.Aeson qualified as AE
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HS
+import Data.Text qualified as T
 import Data.Text.Display (display)
 import Data.Time (UTCTime)
 import Data.UUID (UUID)
@@ -265,12 +266,21 @@ newtype SummaryRow = SummaryRow {doc :: HI.AsJsonb Catalog.SummaryDoc}
   deriving anyclass (HI.DecodeRow)
 
 
--- | Read the materialised AI/query-editor doc for a project.
-getSummary :: DB es => Projects.ProjectId -> Eff es (Maybe Catalog.SummaryDoc)
-getSummary pid =
-  fmap (\(SummaryRow (HI.AsJsonb d)) -> d)
-    <$> Hasql.interpOne
-      [HI.sql| SELECT doc FROM apis.schema_summary WHERE project_id = #{pid} |]
+-- | Read the materialised AI/query-editor doc for a project. @Just keys@ narrows
+-- @fields@/@top_values_by_field@ to those bare keys in SQL: the full doc runs to
+-- megabytes (7k+ fields), and page shells only need a handful of them. The lateral
+-- detoasts each sub-object once instead of once per key lookup.
+getSummary :: DB es => Maybe (V.Vector Text) -> Projects.ProjectId -> Eff es (Maybe Catalog.SummaryDoc)
+getSummary keysM pid =
+  fmap (\(SummaryRow (HI.AsJsonb d)) -> d) <$> Hasql.interpOne case keysM of
+    Nothing -> [HI.sql| SELECT doc FROM apis.schema_summary WHERE project_id = #{pid} |]
+    Just keys ->
+      [HI.sql| SELECT jsonb_build_object('services', x.s,
+                 'fields', (SELECT coalesce(jsonb_object_agg(k, x.f->k), '{}') FROM unnest(#{keys}::text[]) k WHERE x.f ? k),
+                 'top_values_by_field', (SELECT coalesce(jsonb_object_agg(k, x.t->k), '{}') FROM unnest(#{keys}::text[]) k WHERE x.t ? k))
+               FROM apis.schema_summary,
+                 LATERAL (SELECT doc->'services' s, doc->'fields' f, doc->'top_values_by_field' t OFFSET 0) x
+               WHERE project_id = #{pid} |]
 
 
 -- | Batched per-project summary upsert. One round trip regardless of how many
@@ -323,15 +333,26 @@ freshSummaryProjects pids
 -- type signature; @tableName@ and the time range are accepted for source-
 -- compat but ignored (schema is now unified per project, and counts come
 -- from in-memory state rather than scaled-by-time-range warehouse scans).
+--
+-- @Just paths@ fetches only the entries that can surface as those facet paths.
 getFacetSummary
   :: DB es
-  => Projects.ProjectId
+  => Maybe [Text]
+  -> Projects.ProjectId
   -> Text
   -> UTCTime
   -> UTCTime
   -> Eff es (Maybe Catalog.FacetSummary)
-getFacetSummary pid tableName _from _to =
-  fmap (toFacetSummary pid tableName) <$> getSummary pid
+getFacetSummary pathsM pid tableName _from _to =
+  fmap (toFacetSummary pid tableName) <$> getSummary (facetBareKeys <$> pathsM) pid
+
+
+-- | Every bare doc key that some category prefix maps onto one of these facet paths.
+--
+-- >>> sort $ V.toList $ facetBareKeys ["resource.service.name", "attributes.http.request.header.host"]
+-- ["attributes.http.request.header.host","host","http.request.header.host","resource.service.name","service.name"]
+facetBareKeys :: [Text] -> V.Vector Text
+facetBareKeys paths = V.fromList $ ordNub [k | p <- paths, cat <- universe, Just k <- [T.stripPrefix (categoryPrefix cat) p]]
 
 
 -- | Adapter: convert a 'Catalog.SummaryDoc' into the legacy
@@ -354,31 +375,32 @@ toFacetSummary pid tableName doc =
     , facetJson =
         Catalog.FacetData
           $ HM.fromList
-            [ ( prefixed (maybe Catalog.FCAttribute (.category) (HM.lookup path doc.fields)) path
+            [ ( categoryPrefix (maybe Catalog.FCAttribute (.category) (HM.lookup path doc.fields)) <> path
               , sortOn (Down . (.count)) [Catalog.FacetValue v (fromIntegral n :: Int) | (v, n) <- HM.toList tk.top]
               )
             | (path, tk) <- HM.toList doc.topValuesByField
             ]
     }
-  where
-    -- 'FacetData' has two consumers: the Log Explorer sidebar (only renders
-    -- entries that match 'facetDefs', all of which are in
-    -- 'flattenedOtelAttributes') and the AI prompt context, which wants the
-    -- full shape including request/response body keys. So
-    -- @body.request.*@ / @body.response.*@ keys are intentionally emitted
-    -- here even though they're unreachable from the sidebar.
-    prefixed :: Catalog.FieldCategoryEnum -> Text -> Text
-    prefixed cat path = case cat of
-      Catalog.FCAttribute -> "attributes." <> path
-      Catalog.FCResource -> "resource." <> path
-      Catalog.FCEvent -> "events." <> path
-      Catalog.FCRequestHeader -> "attributes.http.request.header." <> path
-      Catalog.FCResponseHeader -> "attributes.http.response.header." <> path
-      Catalog.FCQueryParam -> "attributes.url.query." <> path
-      Catalog.FCPathParam -> "attributes.url.path_param." <> path
-      Catalog.FCRequestBody -> "body.request." <> path
-      Catalog.FCResponseBody -> "body.response." <> path
-      Catalog.FCTopLevel -> path -- bare flat column (e.g. "level", "name", "severity.severity_text")
+
+
+-- 'FacetData' has two consumers: the Log Explorer sidebar (only renders
+-- entries that match 'facetDefs', all of which are in
+-- 'flattenedOtelAttributes') and the AI prompt context, which wants the
+-- full shape including request/response body keys. So
+-- @body.request.*@ / @body.response.*@ keys are intentionally emitted
+-- here even though they're unreachable from the sidebar.
+categoryPrefix :: Catalog.FieldCategoryEnum -> Text
+categoryPrefix = \case
+  Catalog.FCAttribute -> "attributes."
+  Catalog.FCResource -> "resource."
+  Catalog.FCEvent -> "events."
+  Catalog.FCRequestHeader -> "attributes.http.request.header."
+  Catalog.FCResponseHeader -> "attributes.http.response.header."
+  Catalog.FCQueryParam -> "attributes.url.query."
+  Catalog.FCPathParam -> "attributes.url.path_param."
+  Catalog.FCRequestBody -> "body.request."
+  Catalog.FCResponseBody -> "body.response."
+  Catalog.FCTopLevel -> "" -- bare flat column (e.g. "level", "name", "severity.severity_text")
 
 
 -- ---------------------------------------------------------------------------

@@ -168,6 +168,19 @@ spec = around withTestResources do
           _ -> fail "missing complete chart frame"
         PG.query_ active "SELECT 1" `shouldReturn` [PG.Only (1 :: Int)]
 
+    -- One query's rows arrive in a single burst once the aggregation finishes; framing that
+    -- burst as partials only made every chart redraw three times.
+    it "streams a sub-24h chart's single query as one data frame" $ \tr -> do
+      clearAllTestData tr
+      key <- createTestAPIKey tr pid "single-query-frames"
+      forM_ [60, 1200, 2400, 3500] \offset -> ingestLog tr key ("event " <> show offset) (addUTCTime (fromIntegral offset) baseTime)
+      void $ runAllBackgroundJobs frozenTime tr.trATCtx
+      clearCache tr
+      response <- runQueryEffect tr $ Charts.queryMetricsStream (Just "postgres") (Just Charts.DTMetric) (Just pid) (Just "summarize count(*) by bin(timestamp, 10m)") Nothing Nothing (Just $ timeAt 0) (Just $ timeAt 3600) (Just "spans") Nothing []
+      frames <- runExceptT (Source.runSourceT $ Servant.getResponse response) >>= either fail pure
+      let dataFrames = [kind | AE.Object o <- frames, Just kind <- [KM.lookup "type" o], Just (AE.Object d) <- [KM.lookup "data" o], Just (AE.Array ds) <- [KM.lookup "dataset" d], not (null ds)]
+      dataFrames `shouldBe` [AE.String "complete"]
+
     it "keeps a slow query's response active until completion" $ \tr -> do
       let slowSql = "SELECT 1::integer AS bucket, 'wait'::text AS series, count(*)::float AS value FROM pg_sleep(6)"
       response <- runQueryEffect tr $ Charts.queryMetricsStream (Just "postgres") (Just Charts.DTMetric) (Just pid) Nothing (Just slowSql) Nothing (Just $ timeAt 0) (Just $ timeAt 3600) (Just "spans") Nothing []

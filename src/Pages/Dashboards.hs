@@ -794,7 +794,7 @@ processVariable pid now (sinceStr, fromDStr, toDStr) allParams variableBase = do
   -- seconds on high-volume projects (e.g. the databases-tab picker).
   facetOpts <- case variable.facetField of
     Just field -> do
-      docM <- SchemaCatalog.getSummary pid
+      docM <- SchemaCatalog.getSummary Nothing pid
       pure $ docM >>= \(d :: Catalog.SummaryDoc) -> HM.lookup field d.topValuesByField <&> \tk -> map (one . fst) $ sortWith (Down . snd) $ HM.toList tk.top
     Nothing -> pure Nothing
   -- The rendered input carries its statement so the client can re-fetch options when a
