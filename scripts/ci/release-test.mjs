@@ -55,7 +55,7 @@ else if (is('buildx', 'imagetools', 'inspect')) {
   const digest = ref === 'ghcr.io/monoscope-tech/monoscope-deps:latest' ? state.deps ?? 'sha256:' + 'a'.repeat(64)
     : ref === 'debian:12-slim' ? 'sha256:' + 'b'.repeat(64) : state[ref];
   if (!digest) process.exit(1);
-  console.log(JSON.stringify({ digest }));
+  console.log(args[args.indexOf('--format') + 1] === '{{.Manifest.Digest}}' ? digest : JSON.stringify({ digest }));
 } else if (is('buildx', 'build')) {
   fs.writeFileSync(process.env.CALLS + '-context.tar', fs.readFileSync(0));
   if (process.env.FAIL_BUILD) process.exit(2);

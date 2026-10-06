@@ -8,8 +8,7 @@ die() { echo "release: $*" >&2; exit 1; }
 output() { [ -z "${GITHUB_OUTPUT:-}" ] || printf '%s=%s\n' "$1" "$2" >> "$GITHUB_OUTPUT"; }
 sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -d' ' -f1; else shasum -a 256 | cut -d' ' -f1; fi; }
 registry_digest() {
-  docker buildx imagetools inspect "$1" --format '{{json .Manifest}}' \
-    | node -p 'JSON.parse(require("node:fs").readFileSync(0, "utf8")).digest.toString()'
+  docker buildx imagetools inspect "$1" --format '{{.Manifest.Digest}}'
 }
 current_master() {
   local current

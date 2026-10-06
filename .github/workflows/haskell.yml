@@ -346,6 +346,7 @@ jobs:
             echo "already=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # Keep latest aligned even if make ship already deployed this revision.
       - name: Promote current master image to latest
         env:
           IMAGE_DIGEST: ${{ needs.build-image.outputs.digest }}
@@ -354,6 +355,7 @@ jobs:
       - name: Deploy Image to CapRrover
         if: steps.shipped.outputs.already != 'true'
         run: |
+          # A merge can land between this lookup and the deployment request.
           scripts/ci/release.sh current-master "$GITHUB_SHA"
           npx -y caprover@2.3.1 deploy \
             --caproverUrl "$CAPROVER_URL" \

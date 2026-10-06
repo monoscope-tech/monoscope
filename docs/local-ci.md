@@ -169,7 +169,8 @@ is deliberately conservative: even a file outside the Docker context can
 trigger a new image.
 
 Master reuses the existing immutable digest when these inputs match, including
-across squash merges. Changed inputs trigger a new build. Commit-SHA tags are
+across squash merges. Changed sources or base-image digests require a new build,
+including a dependency-image update between the PR build and merge. Commit-SHA tags are
 aliases; the image retains OCI labels for the original build revision, source
 tree, input fingerprint, and builder. Its embedded `GIT_HASH` and
 `GIT_COMMIT_DATE` describe the original build, which can be the PR revision.
@@ -180,7 +181,8 @@ before updating `latest` and again before submitting the digest to CapRover.
 Every master push starts this workflow, including docs-only pushes, so a newer
 ignored commit cannot strand an in-flight application deployment.
 A failed remote lookup blocks deployment. Local deployments make the same
-master check; deliberate rollbacks use a separate command.
+master check; deliberate rollbacks use a separate command. The ref check and
+deployment request are separate operations; a merge between them can make the request stale.
 
 ```bash
 make deploy-image          # build or reuse an image for this clean checkout
