@@ -172,6 +172,7 @@ detect_caps() {
   command -v cabal >/dev/null 2>&1 && caps="$caps ghc"
   command -v node >/dev/null 2>&1 && caps="$caps node"
   command -v bun >/dev/null 2>&1 && caps="$caps bun"
+  command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 && docker buildx version >/dev/null 2>&1 && caps="$caps docker"
   command -v hlint >/dev/null 2>&1 && caps="$caps hlint"
   probe_tcp "${DB_HOST:-localhost}" "${DB_PORT:-5432}" && caps="$caps pg"
   # shellcheck disable=SC2086

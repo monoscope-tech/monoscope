@@ -197,7 +197,10 @@ attestations; the registry cache makes its image build a lookup and promotion.
 
 `make ci-signoff CHECKS="release-tests"` runs the release regression suite on the
 host using Node’s built-in test runner, with no npm dependencies, and records its
-result. `make ci-selftest` also runs it. The suite checks
+result. Docker is required for the small cold-cache regression build. The Cabal
+cache mounts are seeded from the dependency image, so a fresh builder retains its
+prebuilt packages instead of hiding them beneath an empty cache.
+`make ci-selftest` also runs it. The suite checks
 squash reuse, source and toolchain invalidation, pinned build inputs, rejection
 of dirty or mismatched checkouts, and stale local/remote deployment prevention.
 

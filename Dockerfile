@@ -2,7 +2,8 @@
 # Contains: GHC, Node.js, bun, all npm/cabal deps pre-installed, chart-cli pre-built
 ARG DEPS_IMAGE=ghcr.io/monoscope-tech/monoscope-deps:latest
 ARG RUNTIME_IMAGE=debian:12-slim
-FROM ${DEPS_IMAGE} AS builder
+FROM ${DEPS_IMAGE} AS dependencies
+FROM dependencies AS builder
 
 # Install system dependencies if not using deps image (no-ops if already installed)
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -55,7 +56,7 @@ RUN printf 'package *\n  profiling: True\n  profiling-detail: none\npackage mono
 # GHC outputs are mutable. Use a fresh namespace to avoid legacy shared mounts,
 # and hold its lock through compilation and copying the executable.
 # Build Haskell dependencies (fast - already cached in deps image)
-RUN --mount=type=cache,target=/root/.cabal/store \
+RUN --mount=type=cache,from=dependencies,source=/root/.cabal/store,target=/root/.cabal/store \
     --mount=type=cache,id=monoscope-production-dist-locked-v1,target=/build/dist-newstyle,sharing=locked \
     cabal update && cabal build --only-dependencies exe:monoscope-server -j --semaphore
 
@@ -104,7 +105,7 @@ RUN npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/publi
 # BodyWrapper holds the viteAssetFile splice that embeds the entry path; its cached
 # object can survive with a stale entry (2026-09-08 incident), so evict it and let the
 # splice re-read the manifest this build just wrote. One module recompile is noise here.
-RUN --mount=type=cache,target=/root/.cabal/store \
+RUN --mount=type=cache,from=dependencies,source=/root/.cabal/store,target=/root/.cabal/store \
     --mount=type=cache,id=monoscope-production-dist-locked-v1,target=/build/dist-newstyle,sharing=locked \
     (command -v hpack >/dev/null && hpack || echo "hpack not installed, using committed monoscope.cabal") && \
     find /build/dist-newstyle -name 'BodyWrapper.*' -delete && \
