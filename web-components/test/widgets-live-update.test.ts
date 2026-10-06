@@ -56,10 +56,12 @@ const panel = (rows: number[][]) => `<div id="panel" hx-get="/panel" hx-trigger=
 
 test('a morph-swapped panel updates its live chart in place; a replaced element initializes anew', async () => {
   fakeECharts();
-  document.body.innerHTML = panel([[1, 10]]);
+  document.body.innerHTML = `<div class="dashboard-grid-wrapper">${panel([[1, 10]])}</div>`;
   vi.stubGlobal('fetch', vi.fn(async () => new Response(panel([[1, 10], [2, 20]]), { headers: { 'Content-Type': 'text/html' } })));
   htmx.process(document.body);
   await vi.waitFor(() => expect(instances[0]?.setOption).toHaveBeenCalledTimes(1));
+  // Tooltips stay inside the grid so they layer under the sticky variables bar.
+  expect(instances[0].setOption.mock.calls[0][0].tooltip.appendTo).toBe(document.querySelector('.dashboard-grid-wrapper'));
   const chartEl = document.getElementById('lcp')!;
   expect(chartEl.hasAttribute('hx-morph-skip')).toBe(true);
 

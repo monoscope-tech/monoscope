@@ -365,7 +365,7 @@ spec = do
           $ DBT.execute [sql| UPDATE otel_metrics_meta SET metric_labels = ? WHERE project_id = ? AND metric_name = 'request.duration' |] (PGArray labels, testPid)
         (_, card) <- testServant tr $ Trace.metricCardGetH testPid "request.duration" requested (Just "checkout")
         let markup = LT.toStrict $ Lucid.renderText card
-        for_ ["sum(distribution_sum) / sum(distribution_count)", "distribution_count > 0", "resource.service.name", "checkout", "hideValue: true"] \text ->
+        for_ ["sum(distribution_sum) / sum(distribution_count)", "distribution_count &gt; 0", "resource.service.name", "checkout", "&quot;hideValue&quot;:true"] \text ->
           markup `shouldSatisfy` T.isInfixOf text
         case expected of
           Just label -> do
