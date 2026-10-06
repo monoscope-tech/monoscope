@@ -423,9 +423,15 @@ ci:
 	./scripts/ci/ci.sh local $(CHECKS)
 
 # Run local checks, publish passing results, then show what GitHub still needs.
+# A committed, clean tree also gets its deploy image, built alongside the checks so
+# `make ship` only has to deploy it.
 ci-signoff:
-	@result=0; \
+	@result=0; image_pid=''; mkdir -p .ci; \
+	if [ -z "$$(git status --porcelain)" ]; then \
+	  ./scripts/ci/ci.sh image > .ci/image.log 2>&1 & image_pid=$$!; \
+	else echo "── uncommitted changes: skipping the deploy image (commit and rerun to build it)"; fi; \
 	./scripts/ci/ci.sh local $(CHECKS) || result=$$?; \
+	if [ -n "$$image_pid" ]; then wait $$image_pid && tail -n 1 .ci/image.log || { result=1; tail -n 30 .ci/image.log; }; fi; \
 	./scripts/ci/ci.sh gate || exit $$?; \
 	exit $$result
 

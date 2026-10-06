@@ -3,8 +3,9 @@ import { defineConfig, devices } from "@playwright/test";
 export default defineConfig({
   testDir: "./tests",
   fullyParallel: true,
-  // Keep browser concurrency bounded so layout and latency checks have headroom.
-  workers: 2,
+  // Keep browser concurrency bounded so layout and latency checks have headroom. Local
+  // sign-off raises it (E2E_WORKERS) on machines with the cores for it.
+  workers: Number(process.env.E2E_WORKERS) || 2,
   forbidOnly: !!process.env.CI,
   retries: 0,
   use: {

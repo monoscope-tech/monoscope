@@ -51,6 +51,8 @@ test("dashboard templates prefill the name and preview their own widgets", async
   const modal = page.locator("#newDashboardMdl + .modal .modal-box");
   const preview = page.locator("#dashboardTemplatePreviews");
   const create = page.getByRole("button", { name: "Create", exact: true });
+  // Measure after the open transition (scale .95 → 1), not mid-way through it.
+  await modal.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
   const initial = { modal: await modal.boundingBox(), preview: await preview.boundingBox(), create: await create.boundingBox() };
   const name = page.getByRole("textbox", { name: "Dashboard name *", exact: true });
   await expect(name).toHaveValue("Blank dashboard");

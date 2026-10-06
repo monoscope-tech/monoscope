@@ -125,11 +125,6 @@ RUN --mount=type=cache,from=dependencies,source=/root/.cabal/store,target=/root/
 # Final runtime image
 FROM ${RUNTIME_IMAGE}
 
-ARG GIT_HASH=dev
-ARG GIT_COMMIT_DATE=dev
-ENV GIT_HASH=$GIT_HASH
-ENV GIT_COMMIT_DATE=$GIT_COMMIT_DATE
-
 # Install runtime dependencies
 # Graphics libs needed for @napi-rs/canvas in chart-cli
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -156,15 +151,16 @@ RUN useradd -m -U -s /bin/false monoscope
 
 WORKDIR /opt/monoscope
 
-# Copy artifacts
-COPY --from=builder /build/dist/monoscope-server ./
-COPY --from=builder /build/static ./static
-COPY --from=builder /usr/local/bin/chart-cli ./
+# Declared after the apt layer: a per-commit value above it would rebuild that layer every time.
+ARG GIT_HASH=dev
+ARG GIT_COMMIT_DATE=dev
+ENV GIT_HASH=$GIT_HASH
+ENV GIT_COMMIT_DATE=$GIT_COMMIT_DATE
 
-# Set ownership and permissions
-RUN mkdir -p profiles && \
-  chown -R monoscope:monoscope /opt/monoscope && \
-  chmod +x monoscope-server chart-cli
+# --chown on COPY, not a later `chown -R`, which would duplicate every file into another layer.
+RUN mkdir -p profiles && chown monoscope:monoscope . profiles
+COPY --from=builder --chown=monoscope:monoscope --chmod=755 /build/dist/monoscope-server /usr/local/bin/chart-cli ./
+COPY --from=builder --chown=monoscope:monoscope /build/static ./static
 
 USER monoscope
 

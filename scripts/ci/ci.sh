@@ -339,14 +339,16 @@ run_body() { # <check>
       npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify
       (cd web-components && npm ci --prefer-offline --no-audit && NODE_ENV=production npx vite build --mode production --sourcemap false)
       ;;
-    build)      cabal build all unit-tests monoscope-cli:cli-tests integration-tests -j $CABAL_FLAGS "$CABAL_OPTS" ;;
+    build)      cabal build all unit-tests monoscope-cli:cli-tests integration-tests doctests -j $CABAL_FLAGS "$CABAL_OPTS" ;;
     # doctest shells out to GHC with `-package` for each local library.  A fresh
     # runner can legitimately reuse the separate build attestation, but then
     # those libraries are absent from its package database.  Build them here so
     # this check remains independently reproducible when build is skipped.
     doctests)
-      [ -n "${CI_UNIT_BIN:-}" ] || cabal build monoscope:lib:monoscope monoscope-shared:lib:monoscope-shared monoscope-cli:lib:monoscope-cli -j $CABAL_FLAGS "$CABAL_OPTS"
-      cabal test doctests -j $CABAL_FLAGS "$CABAL_OPTS" --test-show-details=direct
+      if [ -n "${CI_DOCTESTS_BIN:-}" ]; then "$CI_DOCTESTS_BIN"; else
+        cabal build monoscope:lib:monoscope monoscope-shared:lib:monoscope-shared monoscope-cli:lib:monoscope-cli -j $CABAL_FLAGS "$CABAL_OPTS"
+        cabal test doctests -j $CABAL_FLAGS "$CABAL_OPTS" --test-show-details=direct
+      fi
       ;;
     unit-tests) if [ -n "${CI_UNIT_BIN:-}" ]; then "$CI_UNIT_BIN"; else cabal test unit-tests -j $CABAL_FLAGS "$CABAL_OPTS" --test-show-details=direct; fi ;;
     cli-tests)  if [ -n "${CI_CLI_BIN:-}" ]; then "$CI_CLI_BIN"; else cabal test monoscope-cli:cli-tests -j $CABAL_FLAGS "$CABAL_OPTS" --test-show-details=direct; fi ;;
@@ -456,19 +458,23 @@ cmd_gate() {
 
 stop_early() { [ "$1" -ne 0 ] && [ "${CI_KEEP_GOING:-}" != true ]; }
 
-collect_background() { # <pid> <log> <result>
+# Background lanes live in $BG_DIR as <check>.{pid,log,result}.
+start_background() { # <check>
+  CI_ATTEST_OUT="$BG_DIR/$1.result" "$0" run "$1" > "$BG_DIR/$1.log" 2>&1 &
+  echo $! > "$BG_DIR/$1.pid"
+}
+collect_background() { # <check>
   local status=0
-  wait "$1" || status=1
-  [ "$status" -ne 0 ] || [ ! -s "$3" ] || cat "$3" >> "$CI_ATTEST_OUT"
-  cat "$2"
-  rm -f "$2" "$3"
+  wait "$(cat "$BG_DIR/$1.pid")" || status=1
+  [ "$status" -ne 0 ] || [ ! -s "$BG_DIR/$1.result" ] || cat "$BG_DIR/$1.result" >> "$CI_ATTEST_OUT"
+  cat "$BG_DIR/$1.log"
   return "$status"
 }
 
 cmd_run() {
-  local c req ref bin i rc=0 unrunnable='' degraded='' e2e_pid='' e2e_log='' e2e_result=''
-  local integration_pid='' integration_log='' integration_result=''
+  local c req ref bin i rc=0 unrunnable='' degraded='' bg=''
   local checks
+  BG_DIR=$(mktemp -d -t ci-bg.XXXXXX)
   checks=$(selected_checks "$@")
   CAPS=$(detect_caps)
   note "capabilities: ${CAPS:-none}"
@@ -476,18 +482,9 @@ cmd_run() {
   [ -n "${CI_FINGERPRINTS:-}" ] || pin_fingerprints $checks
   [ "${CI_FORCE:-}" = "true" ] || remote_refs >/dev/null
   for c in $checks; do
-    if [ "$c" = integration-tests ] && [ -n "$integration_pid" ]; then
-      collect_background "$integration_pid" "$integration_log" "$integration_result" || rc=1
-      integration_pid=''
-      stop_early "$rc" && break
-      continue
-    fi
-    if [ "$c" = e2e ] && [ -n "$e2e_pid" ]; then
-      collect_background "$e2e_pid" "$e2e_log" "$e2e_result" || rc=1
-      e2e_pid=''
-      stop_early "$rc" && break
-      continue
-    fi
+    # Already running in a background lane; collected after the sweep, so the checks
+    # listed after it (weeder, ui-tests) don't wait on it.
+    case " $bg " in *" $c "*) continue ;; esac
     if [ "$c" = integration-tests ] && [ "${CI_LOCAL_ASYNC_SERVICES:-}" = true ]; then
       for i in $(seq 1 60); do
         CAPS=$(detect_caps)
@@ -516,12 +513,9 @@ cmd_run() {
     fi
     # If build was skipped, still overlap the two suites when both need to run.
     if [ "$c" = integration-tests ] && [ -n "${CI_ATTEST_OUT:-}" ] \
-       && [ -z "$e2e_pid" ] \
+       && case " $bg " in *" e2e "*) false ;; *) true ;; esac \
        && case " $(echo "$checks" | tr '\n' ' ') " in *" integration-tests "*" e2e "*) true ;; *) false ;; esac; then
-      e2e_log=$(mktemp -t ci-e2e-log.XXXXXX)
-      e2e_result=$(mktemp -t ci-e2e-result.XXXXXX)
-      CI_ATTEST_OUT="$e2e_result" "$0" run e2e > "$e2e_log" 2>&1 &
-      e2e_pid=$!
+      start_background e2e; bg="$bg e2e"
     fi
     note "running $c"
     local started=$SECONDS
@@ -531,9 +525,10 @@ cmd_run() {
         CI_UNIT_BIN=$(cabal list-bin unit-tests $CABAL_FLAGS)
         CI_CLI_BIN=$(cabal list-bin monoscope-cli:cli-tests $CABAL_FLAGS)
         CI_INTEGRATION_BIN=$(cabal list-bin integration-tests $CABAL_FLAGS)
+        CI_DOCTESTS_BIN=$(cabal list-bin doctests $CABAL_FLAGS)
         E2E_SERVER_BIN=$(cabal list-bin monoscope-server $CABAL_FLAGS)
-        export CI_UNIT_BIN CI_CLI_BIN CI_INTEGRATION_BIN E2E_SERVER_BIN
-        for bin in "$CI_UNIT_BIN" "$CI_CLI_BIN" "$CI_INTEGRATION_BIN" "$E2E_SERVER_BIN"; do
+        export CI_UNIT_BIN CI_CLI_BIN CI_INTEGRATION_BIN CI_DOCTESTS_BIN E2E_SERVER_BIN
+        for bin in "$CI_UNIT_BIN" "$CI_CLI_BIN" "$CI_INTEGRATION_BIN" "$CI_DOCTESTS_BIN" "$E2E_SERVER_BIN"; do
           [ -x "$bin" ] || die "build did not produce $bin"
         done
       fi
@@ -547,17 +542,12 @@ cmd_run() {
       # the network and the object store; neither is part of what the check proved.
       case " $degraded " in *" $c "*) ;; *) [ "${CI_NO_ATTEST:-}" = "true" ] \
         || record_result "$c" || note "could not record $c — it still passed, just isn't cached" ;; esac
-      # Build has populated Cabal's cache; overlap the independent test suites.
-      if [ "$c" = build ] && [ -n "${CI_ATTEST_OUT:-}" ] \
-         && case " $(echo "$checks" | tr '\n' ' ') " in *" build "*" integration-tests "*" e2e "*) true ;; *) false ;; esac; then
-        integration_log=$(mktemp -t ci-integration-log.XXXXXX)
-        integration_result=$(mktemp -t ci-integration-result.XXXXXX)
-        CI_ATTEST_OUT="$integration_result" "$0" run integration-tests > "$integration_log" 2>&1 &
-        integration_pid=$!
-        e2e_log=$(mktemp -t ci-e2e-log.XXXXXX)
-        e2e_result=$(mktemp -t ci-e2e-result.XXXXXX)
-        CI_ATTEST_OUT="$e2e_result" "$0" run e2e > "$e2e_log" 2>&1 &
-        e2e_pid=$!
+      # Build produced every binary; overlap the long suites. They run prebuilt
+      # binaries, never cabal, so they can't race the foreground's cabal calls.
+      if [ "$c" = build ] && [ -n "${CI_ATTEST_OUT:-}" ]; then
+        for i in doctests integration-tests e2e; do
+          case " $(echo "$checks" | tr '\n' ' ') " in *" $i "*) start_background "$i"; bg="$bg $i" ;; esac
+        done
       fi
     else
       rc=1
@@ -565,8 +555,7 @@ cmd_run() {
     fi
     stop_early "$rc" && break
   done
-  [ -z "$integration_pid" ] || collect_background "$integration_pid" "$integration_log" "$integration_result" || rc=1
-  [ -z "$e2e_pid" ] || collect_background "$e2e_pid" "$e2e_log" "$e2e_result" || rc=1
+  for c in $bg; do collect_background "$c" || rc=1; done
   [ -z "$unrunnable" ] || note "not run here (CI will still have to):$unrunnable"
   [ -z "$degraded" ] || note "run degraded, NOT attested (CI will still run these):$degraded"
   return $rc
@@ -603,6 +592,9 @@ COMPOSE_FILE=ci/compose.yml
 COMPOSE_PROJECT="monoscope-ci-$(printf '%s' "$ROOT" | sha256 | cut -c1-12)"
 compose() { docker compose -f "$COMPOSE_FILE" --project-name "$COMPOSE_PROJECT" "$@"; }
 
+# Wait for a host check started in the background and replay its output.
+collect_host() { [ -n "$1" ] || return 0; local r=0; wait "$1" || r=$?; cat "$2"; rm -f "$2"; return "$r"; }
+
 cmd_local() {
   # Serialize local runs to avoid oversubscribing the host. Each worktree has its
   # own volumes so a checkout on another branch cannot replace this one's HIE files.
@@ -620,11 +612,14 @@ with open(sys.argv[1], "w") as lock:
     return
   fi
   # The dependency image has no HLint; the host tool is also how CI runs it.
-  local c host_rc=0 host_hlint=false host_pid='' host_log='' host_fp=''
+  local c host_rc=0 host_hlint=false host_pid='' host_log='' host_fp='' release_pid='' release_log=''
   local -a container_checks=()
   for c in $(selected_checks "$@"); do
     if [ "$c" = release-tests ] && command -v node >/dev/null 2>&1; then
-      "$0" run release-tests || return $?
+      # Host-only and independent of the containers: overlap it with service startup.
+      release_log=$(mktemp -t ci-release-log.XXXXXX)
+      CI_FINGERPRINTS_PATH=$(mktemp -t ci-release-fp.XXXXXX) "$0" run release-tests > "$release_log" 2>&1 &
+      release_pid=$!
     elif [ "$c" = hlint ] && command -v hlint >/dev/null 2>&1; then
       host_hlint=true
     else
@@ -632,8 +627,9 @@ with open(sys.argv[1], "w") as lock:
     fi
   done
   if [ "${#container_checks[@]}" -eq 0 ]; then
-    [ "$host_hlint" = false ] || "$0" run hlint
-    return
+    [ "$host_hlint" = false ] || "$0" run hlint || host_rc=$?
+    collect_host "$release_pid" "$release_log" || host_rc=$?
+    return "$host_rc"
   fi
   if [ "${CI_FORCE:-}" != "true" ]; then
     remote_refs >/dev/null
@@ -642,9 +638,10 @@ with open(sys.argv[1], "w") as lock:
       find_attestation "$c" >/dev/null || pending+=("$c")
     done
     if [ "${#pending[@]}" -eq 0 ]; then
-      [ "$host_hlint" = false ] || "$0" run hlint
+      [ "$host_hlint" = false ] || "$0" run hlint || host_rc=$?
+      collect_host "$release_pid" "$release_log" || host_rc=$?
       note "all selected checks are already attested — skipping local containers"
-      return 0
+      return "$host_rc"
     fi
     container_checks=("${pending[@]}")
   fi
@@ -713,9 +710,11 @@ with open(sys.argv[1], "w") as lock:
     -e CI_ROOT=/build \
     -e "CI_ALLOW_DEGRADED=${CI_ALLOW_DEGRADED:-}" -e "CI_FORCE=${CI_FORCE:-}" -e "CI_KEEP_GOING=${CI_KEEP_GOING:-}" \
     -e "CI_NO_ATTEST=${CI_NO_ATTEST:-}" -e "CI_LOCAL_ASYNC_SERVICES=$needs_integration" \
+    -e "E2E_WORKERS=${E2E_WORKERS:-6}" \
     runner sh -c 'cp scripts/ci/ci.sh /tmp/ci-run.sh && exec bash /tmp/ci-run.sh run "$@"' ci-run "$@" || rc=$?
   # Publish whatever passed even if a later check failed — a green check is green.
   cmd_publish .ci/attest.tsv
+  collect_host "$release_pid" "$release_log" || host_rc=$?
   [ "$rc" -eq 0 ] || note "local CI failed (exit $rc); services left up for debugging — \`make ci-down\` to clean up"
   [ "$host_rc" -eq 0 ] || return "$host_rc"
   return "$rc"
@@ -746,10 +745,10 @@ IMAGE=${MONOSCOPE_IMAGE:-ghcr.io/monoscope-tech/monoscope}
 # the habit this whole file exists to kill. A BUILDER naming a native amd64
 # buildx endpoint removes the emulation instead of tolerating it.
 #
-# `make builder-setup` creates one over SSH. Nothing here requires it: with no
-# builder configured this falls back to the local emulated build, which is what
-# it always did.
-BUILDER=${MONOSCOPE_BUILDER:-monoscope-amd64}
+# Deploy images build on this machine by default (Rosetta-emulated on Apple Silicon, with
+# BuildKit's cache kept here). MONOSCOPE_BUILDER=monoscope-amd64 opts into the native
+# builder `make builder-setup` creates over SSH — that host is production.
+BUILDER=${MONOSCOPE_BUILDER:-}
 
 # A TimeFusion image built for this machine's own architecture. `make tf-image`
 # produces it; cmd_local picks it up on its own.

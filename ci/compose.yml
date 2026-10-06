@@ -31,8 +31,10 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: monoscope
     # The suite runs one template DB plus a database per shard; the stock 100 is
-    # tight once you shard wider than CI's 4.
-    command: postgres -c max_connections=300
+    # tight once you shard wider than CI's 4. Every example creates and drops its own
+    # database, and this instance is recreated per run, so durability buys nothing:
+    # without it CREATE DATABASE … TEMPLATE drops from ~1.7s to ~0.5s per example.
+    command: postgres -c max_connections=300 -c fsync=off -c synchronous_commit=off -c full_page_writes=off
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U postgres']
       interval: 5s

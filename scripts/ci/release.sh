@@ -36,6 +36,9 @@ build() {
     if [ -n "${MONOSCOPE_BUILDER:-}" ] && docker buildx inspect "$MONOSCOPE_BUILDER" >/dev/null 2>&1; then
       set -- --builder "$MONOSCOPE_BUILDER"
     fi
+    # Exporting the registry cache costs minutes. It only helps a builder without its own
+    # cache (a fresh GitHub runner); a developer's builder keeps one locally.
+    [ -z "${GITHUB_ACTIONS:-}" ] || set -- "$@" --cache-to "type=registry,ref=$IMAGE:buildcache,mode=max"
     git archive "$sha" | docker buildx build "$@" --platform linux/amd64 -f Dockerfile \
       --build-arg "DEPS_IMAGE=$deps" --build-arg "RUNTIME_IMAGE=$runtime" \
       --build-arg "GIT_HASH=$sha" --build-arg "GIT_COMMIT_DATE=$(git show -s --format=%cI HEAD)" \
@@ -44,7 +47,6 @@ build() {
       --label "io.monoscope.builder=${GITHUB_ACTOR:-$(git config user.name)}" \
       --label "io.monoscope.source-tree=$tree" --label "io.monoscope.build-inputs=$fingerprint" \
       --cache-from "type=registry,ref=$IMAGE:buildcache" \
-      --cache-to "type=registry,ref=$IMAGE:buildcache,mode=max" \
       --metadata-file "$metadata" --provenance=false --push \
       -t "$IMAGE:inputs-$fingerprint" -t "$IMAGE:$sha" -
     digest=$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))["containerimage.digest"].toString()' "$metadata")
