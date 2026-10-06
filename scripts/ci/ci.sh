@@ -72,7 +72,7 @@ PATHSET_cli='cli shared cabal.project cabal.project.freeze'
 # — an edit to the Claude review or CLI release workflow says nothing about the
 # test suite, and invalidating a 40-minute suite over it would train people to
 # distrust the cache.
-PATHSET_meta='Makefile Dockerfile.deps ci/checks.tsv ci/compose.yml scripts/ci .github/workflows/pullrequest.yml .github/workflows/haskell.yml .github/workflows/deps-image.yml'
+PATHSET_meta='Makefile Dockerfile.deps ci/checks.tsv ci/compose.yml scripts/ci .github/workflows/pullrequest.yml .github/workflows/haskell.yml .github/workflows/deps-image.yml .github/workflows/production-image.yml'
 
 pathset() { eval "printf '%s' \"\${PATHSET_$1:-}\""; }
 
@@ -172,6 +172,7 @@ detect_caps() {
   command -v cabal >/dev/null 2>&1 && caps="$caps ghc"
   command -v node >/dev/null 2>&1 && caps="$caps node"
   command -v bun >/dev/null 2>&1 && caps="$caps bun"
+  command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 && docker buildx version >/dev/null 2>&1 && caps="$caps docker"
   command -v hlint >/dev/null 2>&1 && caps="$caps hlint"
   probe_tcp "${DB_HOST:-localhost}" "${DB_PORT:-5432}" && caps="$caps pg"
   # shellcheck disable=SC2086
@@ -354,6 +355,7 @@ run_body() { # <check>
       command -v weeder >/dev/null 2>&1 || cabal install weeder --install-method=copy --installdir=/usr/local/bin --overwrite-policy=always
       weeder --config weeder.toml --hie-directory dist-newstyle
       ;;
+    release-tests) node --test scripts/ci/release-test.mjs ;;
     hlint)   hlint -j src/ shared/src cli ;;
     ui-tests) (cd web-components && npm ci --prefer-offline --no-audit && npm test) ;;
     # Drives the real server in a real browser. scripts/e2e.sh starts that server itself on
@@ -621,7 +623,9 @@ with open(sys.argv[1], "w") as lock:
   local c host_rc=0 host_hlint=false host_pid='' host_log='' host_fp=''
   local -a container_checks=()
   for c in $(selected_checks "$@"); do
-    if [ "$c" = hlint ] && command -v hlint >/dev/null 2>&1; then
+    if [ "$c" = release-tests ] && command -v node >/dev/null 2>&1; then
+      "$0" run release-tests || return $?
+    elif [ "$c" = hlint ] && command -v hlint >/dev/null 2>&1; then
       host_hlint=true
     else
       container_checks+=("$c")
@@ -729,8 +733,7 @@ cmd_clean() { compose down -v --remove-orphans; }
 
 # ---------------------------------------------------------------- deploy image
 
-# The deploy image is keyed by commit SHA, so the REGISTRY is its cache and the
-# tag is its fingerprint — no attestation needed to decide whether to build it.
+# Image content is keyed by tree and pinned base digests; commit tags are aliases.
 # What an attestation does add is provenance: an image is the artifact that runs
 # in production, and unlike a fingerprint it can't be re-derived from source
 # (a Haskell build isn't bit-reproducible), so "who built what's running" has to
@@ -754,51 +757,12 @@ TF_LOCAL_IMAGE=${MONOSCOPE_TF_LOCAL_IMAGE:-timefusion:local-arm64}
 
 image_exists() { docker manifest inspect "$IMAGE:$1" >/dev/null 2>&1; }
 
-# The configured builder, but only if it actually exists and is usable — a stale
-# name in the environment must degrade to the default builder, not fail a deploy.
-builder_args() {
-  [ -n "$BUILDER" ] || return 0
-  docker buildx inspect "$BUILDER" >/dev/null 2>&1 || return 0
-  printf -- '--builder\n%s' "$BUILDER"
-}
-
 cmd_image() { # [sha] — build and push the production image for a commit
-  local sha date args
+  local sha
   sha=${1:-HEAD}
-  [ -z "$(git status --porcelain)" ] || die "working tree is dirty; the image would not match $sha"
-  git cat-file -e "$sha^{commit}" 2>/dev/null || die "unknown commit $sha"
-  # Tags are full SHAs. Taking a short one at face value would look up a tag that
-  # cannot exist and report the image as missing, which reads as "the build
-  # failed" rather than "you abbreviated".
   sha=$(git rev-parse "$sha^{commit}")
-  if image_exists "$sha"; then
-    note "$IMAGE:$sha already exists — nothing to do (CI will skip its build)"
-    return 0
-  fi
-  date=$(git show -s --format=%cI "$sha")
-  args=$(builder_args)
-  if [ -n "$args" ]; then
-    note "building $IMAGE:$sha on builder '$BUILDER' (native linux/amd64)"
-  else
-    note "building $IMAGE:$sha for linux/amd64 (no native builder — emulated here; see \`make builder-setup\`)"
-  fi
-  # :latest must move with :<sha>. docker-compose.yml (self-hosters) pulls
-  # :latest, and CI tags both — a local build that tagged only the sha would
-  # leave :latest pointing at whatever CI last published.
-  # Share CI's registry build cache, in both directions. Without it a laptop
-  # build starts cold every time — it re-does the dependency layers CI already
-  # published, which is most of the wall clock and the reason a local build felt
-  # slower than letting CI do it. Writing it back means a local build also warms
-  # the cache for CI and for everyone else.
-  # shellcheck disable=SC2086
-  docker buildx build ${args:+$args} --platform linux/amd64 -f Dockerfile \
-    --build-arg "GIT_HASH=$sha" --build-arg "GIT_COMMIT_DATE=$date" \
-    --cache-from "type=registry,ref=$IMAGE:buildcache" \
-    --cache-to "type=registry,ref=$IMAGE:buildcache,mode=max" \
-    --provenance=false --push -t "$IMAGE:$sha" -t "$IMAGE:latest" .
-  # Record who built it BEFORE anyone can deploy it.
+  MONOSCOPE_BUILDER=$BUILDER scripts/ci/release.sh build "$sha"
   publish_attestation image "$sha" docker linux-amd64
-  note "pushed. Push commit $sha and CI will reuse this image instead of rebuilding."
 }
 
 # A native amd64 builder, so the image build is a build and not an emulation.
@@ -861,8 +825,8 @@ caprover_env() {
   [ -n "${CAPROVER_APP_TOKEN:-}" ] || die "CAPROVER_APP_TOKEN is unset (see docs/local-ci.md)"
 }
 
-cmd_deploy() { # [sha] — point the CapRover app at this commit's image
-  local sha body code
+cmd_deploy() { # [sha] [rollback] — rollback must be explicitly requested
+  local sha body code digest
   sha=${1:-HEAD}
   git cat-file -e "$sha^{commit}" 2>/dev/null || die "unknown commit $sha"
   sha=$(git rev-parse "$sha^{commit}")
@@ -877,8 +841,14 @@ cmd_deploy() { # [sha] — point the CapRover app at this commit's image
   git fetch -q "$REMOTE" 2>/dev/null || true
   git merge-base --is-ancestor "$sha" "$REMOTE/master" 2>/dev/null \
     || die "$sha is not on $REMOTE/master — push it before deploying"
-  note "deploying $IMAGE:$sha to $CAPROVER_APP"
-  body=$(printf '{"captainDefinitionContent":"{\\"schemaVersion\\":2,\\"imageName\\":\\"%s:%s\\"}","gitHash":"%s"}' "$IMAGE" "$sha" "$sha")
+  digest=$(docker buildx imagetools inspect "$IMAGE:$sha" --format '{{json .Manifest}}' \
+    | node -p 'JSON.parse(require("node:fs").readFileSync(0, "utf8")).digest.toString()')
+  if [ "${2:-}" != rollback ]; then
+    scripts/ci/release.sh latest "$sha" "$digest"
+    scripts/ci/release.sh current-master "$sha"
+  fi
+  note "deploying $IMAGE@$digest ($sha) to $CAPROVER_APP"
+  body=$(printf '{"captainDefinitionContent":"{\\"schemaVersion\\":2,\\"imageName\\":\\"%s@%s\\"}","gitHash":"%s"}' "$IMAGE" "$digest" "$sha")
   code=$(curl -sS -o /tmp/caprover-deploy.$$ -w '%{http_code}' -X POST \
     "$CAPROVER_URL/api/v2/user/apps/appData/$CAPROVER_APP?detached=1" \
     -H 'Content-Type: application/json' -H 'x-namespace: captain' \
@@ -927,26 +897,16 @@ cmd_deployed() { # <sha> — exit 0 if a deploy attestation exists
   remote_refs | grep -q "^$NS/deploy/$sha/" || return 1
 }
 
-cmd_image_who() { # <sha> — one line naming who built the image for this commit
-  local ref
-  ref=$(remote_refs | grep "^$NS/image/$1/" | head -1 || true)
-  if [ -z "$ref" ]; then echo "built by: CI (no local-build record)"; return 0; fi
-  git fetch -q "$REMOTE" "$ref" 2>/dev/null \
-    && echo "built by: $(git cat-file commit FETCH_HEAD | sed -n 's/^runner=//p')" \
-    || echo "built by: (record exists but could not be read) $ref"
+cmd_image_who() { # <sha> — immutable image labels preserve the original PR build
+  local ref="$IMAGE:$1"
+  case "$1" in sha256:*) ref="$IMAGE@$1" ;; esac
+  docker buildx imagetools inspect "$ref" --format '{{json .Image}}' \
+    | node -e 'const labels = JSON.parse(require("node:fs").readFileSync(0, "utf8")).config?.Labels ?? {}; for (const [name, key] of [["built by", "io.monoscope.builder"], ["built revision", "org.opencontainers.image.revision"], ["source tree", "io.monoscope.source-tree"], ["build inputs", "io.monoscope.build-inputs"]]) console.log(name + ":", labels[key] ?? "unknown");'
 }
 
 # ---------------------------------------------------------------- ship
 #
-# The whole path in one command: prove the tree, build the image, publish the
-# commit, deploy it. Every step already existed; what did not exist was doing
-# them in one place, so the slow half (image + deploy, ~85 minutes of CI wall
-# clock) stopped being something you waited on a remote queue for.
-#
-# The order is deliberate. Checks first, because everything after them is
-# expensive and irreversible-ish. Image before push, so CI's probe finds it and
-# skips its own build. Push before deploy, because production must run a commit
-# that exists on origin.
+# Check and deploy an already merged revision; publishing changes remains PR-only.
 cmd_ship() {
   local sha rc=0
   [ -z "$(git status --porcelain)" ] || die "working tree is dirty — commit or stash first"
@@ -956,6 +916,7 @@ cmd_ship() {
   git merge-base --is-ancestor "$REMOTE/master" HEAD 2>/dev/null \
     || die "$REMOTE/master has commits you do not have — rebase before shipping"
   sha=$(git rev-parse HEAD)
+  scripts/ci/release.sh current-master "$sha"
   # Pin BEFORE the checks run, for the same reason the gate does: the run
   # rewrites the tree as it goes (hpack regenerates the cabal file, `npm ci`
   # touches lockfiles), so a fingerprint computed afterwards would not be the one
@@ -963,7 +924,7 @@ cmd_ship() {
   # shellcheck disable=SC2046
   pin_fingerprints $(selected_checks "$@")
 
-  note "ship: 1/4 checks"
+  note "ship: 1/3 checks"
   # Keep going past a failure. The sweep runs in checks.tsv order, so stopping at
   # the first one would let a red `weeder` — which does not gate the deploy —
   # prevent `e2e`, which does, from ever running. Decide what blocks below, on
@@ -978,20 +939,17 @@ cmd_ship() {
     rm -f "$REMOTE_REFS_CACHE"
     REMOTE_REFS_CACHE=''
     remote_refs >/dev/null
-    for c in build doctests unit-tests cli-tests integration-tests e2e; do
+    for c in build doctests unit-tests cli-tests integration-tests e2e release-tests; do
       find_attestation "$c" >/dev/null 2>&1 || blocking="$blocking $c"
     done
     [ -z "$blocking" ] || die "not shipping: unproven deploy-path checks:$blocking"
     note "checks reported a failure, but every deploy-path check is proven — continuing"
   fi
 
-  note "ship: 2/4 image"
+  note "ship: 2/3 image"
   cmd_image "$sha"
 
-  note "ship: 3/4 push $sha"
-  git push -q "$REMOTE" HEAD:master
-
-  note "ship: 4/4 deploy"
+  note "ship: 3/3 deploy"
   cmd_deploy "$sha"
   cmd_deploy_status
 }
@@ -1004,6 +962,7 @@ assert() { # <desc> <expected> <actual>
 
 cmd_selftest() {
   SELFTEST_RC=0
+  node --test scripts/ci/release-test.mjs || SELFTEST_RC=1
   local body_rc=0 bg_log bg_result
   CI_UNIT_BIN=false "$0" body unit-tests >/dev/null 2>&1 || body_rc=$?
   assert "body stops at first failure" 1 "$body_rc"
@@ -1111,12 +1070,6 @@ cmd_selftest() {
   assert "ref roundtrip check" x "$(printf '%s' "$(attest_ref x deadbeef 'ghc')" | cut -d/ -f4)"
   assert "ref roundtrip fp" deadbeef "$(printf '%s' "$(attest_ref x deadbeef 'ghc')" | cut -d/ -f5)"
 
-  # A stale or mistyped builder name must fall back to the default builder. The
-  # alternative — failing the build — would mean one developer's leftover
-  # environment variable blocks a deploy on a machine that could build fine.
-  assert "builder falls back" "" "$(BUILDER=definitely-not-a-builder builder_args)"
-  assert "no builder configured" "" "$(BUILDER='' builder_args)"
-
   # deploy/image records reuse the attestation ref shape, so `deployed` can
   # answer from ref names alone — same one-ls-remote property as the checks.
   assert "deploy ref sha"  deadbeef "$(printf '%s' "$(attest_ref deploy deadbeef caprover monoscope)" | cut -d/ -f5)"
@@ -1126,7 +1079,7 @@ cmd_selftest() {
   # Every subcommand the Makefile and the workflows invoke must exist. A rename
   # here is otherwise found by a failing deploy, at the worst possible moment.
   local sub
-  for sub in ship deploy deploy-status deployed image image-who builder; do
+  for sub in ship deploy deploy-rollback deploy-status deployed image image-who builder; do
     assert "dispatch has $sub" yes "$(grep -qE "^  $sub\)|^  $sub\b" "$0" && echo yes)"
   done
 
@@ -1152,6 +1105,7 @@ case "$cmd" in
   image)       cmd_image "$@" ;;
   image-who)   cmd_image_who "$@" ;;
   deploy)      cmd_deploy "$@" ;;
+  deploy-rollback) cmd_deploy "${1:?rollback needs a SHA}" rollback ;;
   deploy-status) cmd_deploy_status ;;
   deployed)    cmd_deployed "$@" ;;
   ship)        cmd_ship "$@" ;;
