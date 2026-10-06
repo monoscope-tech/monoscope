@@ -11,6 +11,8 @@ test.describe("Onboarding flow", () => {
     await page.locator("#check-js").check();
     const article = page.locator("#fw-content-js #mainArticle");
     await expect(article.getByRole("heading", { level: 1 })).toContainText(/Express/i);
+    const notice = page.locator("#toastsParent > div").filter({ hasText: "No events found yet" });
+    while (await notice.count()) await notice.first().getByRole("button", { name: "Dismiss notification", exact: true }).click();
 
     const nextDocs = page.waitForResponse(response => new URL(response.url()).pathname === "/proxy/docs/sdks/nodejs/fastifyjs");
     await page.locator('label[for="fw-tab-js-2"]').click();
