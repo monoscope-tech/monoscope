@@ -829,6 +829,7 @@ test("a tabbed dashboard lists its widgets and keeps a rename made in the widget
   await expect(page.locator(`[id="${logsWidgetId}_widgetEl"]`)).toBeVisible();
   await page.locator('.widget-editor [aria-label="Close drawer"]').click();
   await page.getByRole("tab", { name: "Overview", exact: true }).click();
+  await expect(page.locator("#dashboard-tabs-content")).toContainText("Golden Signals");
 
   await page.getByRole("button", { name: "Expand widget", exact: true }).first().click();
   await page.getByRole("tab", { name: "Edit", exact: true }).click();
