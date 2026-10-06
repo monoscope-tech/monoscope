@@ -34,7 +34,8 @@ import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.List (isInfixOf)
 import Data.Text qualified as T
-import Network.HTTP.Client (defaultManagerSettings, httpLbs, newManager, parseRequest_, requestHeaders, responseStatus)
+import Network.HTTP.Client (httpLbs, parseRequest_, requestHeaders, responseStatus)
+import Network.HTTP.Client.TLS (getGlobalManager)
 import Network.HTTP.Types.Status (statusCode)
 import System.Directory (doesFileExist)
 import System.Exit (ExitCode (..))
@@ -137,7 +138,7 @@ withReachableServer body = do
         <> toString defaultProject
         <> "."
     Just cfg -> do
-      mgr <- newManager defaultManagerSettings
+      mgr <- getGlobalManager
       let req =
             (parseRequest_ (toString cfg.baseUrl <> "/api/v1/me"))
               { requestHeaders =
@@ -276,11 +277,10 @@ spec = describe "CLI binary E2E (real server)" $ do
       code `shouldNotBe` ExitSuccess
       err `shouldSatisfy` ("--kind" `isInfixOf`)
 
-    -- Audit C2: server error bodies are surfaced on KQL parse errors.
-    it "intentionally bad KQL surfaces server's parse-error body (D3)" $ withReachableServer $ \cfg -> do
-      (code, _, err) <- runMono cfg ["events", "search", "AND OR", "--since", "1h", "--limit", "1"]
+    it "malformed KQL exits nonzero with a clear syntax error" $ withReachableServer $ \cfg -> do
+      (code, _, err) <- runMono cfg ["events", "search", "|| invalid {{", "--since", "1h", "--limit", "1"]
       code `shouldNotBe` ExitSuccess
-      err `shouldSatisfy` (\e -> "HTTP 400" `isInfixOf` e || "parse" `isInfixOf` e || "expected" `isInfixOf` e)
+      err `shouldSatisfy` ("invalid query: Syntax error" `isInfixOf`)
 
   describe "services" $ do
     -- Pins the facets-backed implementation: services list hits

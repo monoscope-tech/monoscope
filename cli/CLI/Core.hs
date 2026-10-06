@@ -24,11 +24,16 @@ module CLI.Core (
   apiPatchJson,
   apiDelete,
   withAPIResult,
+  Ingestion (..),
+  ingestionKey,
+  runIngestion,
+  runIngestionStatic,
 ) where
 
 import Relude
+import Relude.Extra.Bifunctor (bimapF)
 
-import CLI.Config (CLIConfig (..))
+import CLI.Config (CLIConfig (..), Credential (..), credentialText)
 import Control.Lens ((.~), (^.))
 import Data.Aeson qualified as AE
 import Data.Aeson.Encode.Pretty qualified as AE
@@ -45,6 +50,7 @@ import Data.Text.IO qualified
 import Data.Yaml qualified as Yaml
 import Deriving.Aeson qualified as DAE
 import Effectful
+import Effectful.Dispatch.Dynamic (interpret, send)
 import Effectful.Environment (Environment)
 import Effectful.Environment qualified as Env
 import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), Request, host, method, path, port, responseTimeoutMicro, secure)
@@ -57,6 +63,7 @@ import System.IO.Unsafe (unsafePerformIO)
 import System.Random qualified as Random
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (catch)
+import Web.Wire qualified as Wire
 
 
 -- Output
@@ -266,7 +273,7 @@ reqOpts cfg params = do
     & (Wreq.manager .~ Left tlsManagerSettings{HC.managerResponseTimeout = responseTimeoutMicro (5 * 60 * 1_000_000)})
     & (W.header "Accept" .~ ["application/json"])
     & (if dbg then W.header "X-Debug" .~ ["1"] else id)
-    & addAuth cfg.apiKey
+    & addAuth cfg.credential
     & addProjectId cfg.projectId
     & addParams params
 
@@ -395,9 +402,33 @@ withAPIResult cfg path params onSuccess =
     Right val -> onSuccess val
 
 
-addAuth :: Maybe Text -> W.Options -> W.Options
+addAuth :: Maybe Credential -> W.Options -> W.Options
 addAuth Nothing o = o
-addAuth (Just key) o = o & W.header "Authorization" .~ [encodeUtf8 ("Bearer " <> key)]
+addAuth (Just c) o = o & W.header "Authorization" .~ [encodeUtf8 ("Bearer " <> credentialText c)]
+
+
+-- | The project ingestion key an OTLP export authenticates with.
+data Ingestion :: Effect where
+  GetIngestionKey :: CLIConfig -> Ingestion m (Either Text Text)
+
+
+type instance DispatchOf Ingestion = 'Dynamic
+
+
+ingestionKey :: Ingestion :> es => CLIConfig -> Eff es (Either Text Text)
+ingestionKey = send . GetIngestionKey
+
+
+-- | An API key already is one; a login session is exchanged for its project's key.
+runIngestion :: (Environment :> es, HTTP :> es, IOE :> es) => Eff (Ingestion ': es) a -> Eff es a
+runIngestion = interpret \_ (GetIngestionKey cfg) -> case cfg.credential of
+  Nothing -> pure $ Left "Not authenticated. Run: monoscope auth login"
+  Just (ApiKey k) -> pure $ Right k
+  Just (Session _) -> bimapF renderAPIError (.key) $ apiGetJson @_ @Wire.IngestionKey cfg "/api/v1/ingestion-key" []
+
+
+runIngestionStatic :: Text -> Eff (Ingestion ': es) a -> Eff es a
+runIngestionStatic k = interpret \_ (GetIngestionKey _) -> pure $ Right k
 
 
 addProjectId :: Maybe Text -> W.Options -> W.Options

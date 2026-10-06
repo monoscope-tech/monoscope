@@ -1110,14 +1110,7 @@ sortableTableHead_ widget selected =
 
 
 renderTable :: Widget -> Html ()
-renderTable = renderTableShell
-
-
--- | Shared eager-fetch shell for renderTable: HTMX-loaded
--- card whose body is either the already-rendered @widget.html@ or a loading
--- placeholder that is replaced by the rendered table.
-renderTableShell :: Widget -> Html ()
-renderTableShell widget = do
+renderTable widget = do
   let tableId = maybeToMonoid widget.id
       eagerWidget = widget & #eager ?~ True & #pngUrl .~ Nothing & #html .~ Nothing & #dataset .~ Nothing
   withCardFrame True widget Nothing
@@ -1180,6 +1173,35 @@ renderChart widget = do
             pure $ prefix <> memptyIfFalse (not $ T.null prefix) " " <> formatStatValue value (fromMaybe "" widget.unit)
         )
           <|> fallback
+      chartConfig =
+        AE.object
+          [ "chartId" AE..= chartId
+          , "echartOpt" AE..= encodeText (widgetToECharts widget)
+          , "chartType" AE..= mapWidgetTypeToChartType widget.wType
+          , "widgetType" AE..= widget.wType
+          , "query" AE..= widget.query
+          , "querySQL" AE..= maybeToMonoid widget.sql
+          , "rollupSQL" AE..= widget.rollupSql
+          , "rollupFrom" AE..= widget.rollupFrom
+          , "dbSource" AE..= widget.dbSource
+          , "theme" AE..= fromMaybe "default" widget.theme
+          , "yAxisLabel" AE..= fromMaybe (maybeToMonoid widget.unit) (widget.yAxis >>= (.label))
+          , "pid" AE..= (widget._projectId <&> (.toText))
+          , "summarizeBy" AE..= toText (encodeEnumSC @"SB" $ fromMaybe SBSum widget.summarizeBy)
+          , "summarizeByPrefix" AE..= summarizeByPrefix (fromMaybe SBSum widget.summarizeBy)
+          , "legendPosition" AE..= fromMaybe "bottom" widget.legendPosition
+          , "unit" AE..= maybeToMonoid widget.unit
+          , "alertThreshold" AE..= widget.alertThreshold
+          , "seriesIntent" AE..= widget.seriesIntent
+          , "warningThreshold" AE..= widget.warningThreshold
+          , "hideValue" AE..= isTrue widget.hideValue
+          , "timeFrom" AE..= widget.timeFrom
+          , "timeTo" AE..= widget.timeTo
+          , "highlightFrom" AE..= widget.highlightFrom
+          , "highlightTo" AE..= widget.highlightTo
+          , "markers" AE..= widget.markers
+          , "dashboardId" AE..= widget._dashboardId
+          ]
       isStat = widget.wType `elem` [WTTimeseriesStat, WTStat]
   div_ [class_ "gap-0.5 flex flex-col h-full justify-end"] do
     unless (isTrue widget.naked || isStat)
@@ -1228,7 +1250,7 @@ renderChart widget = do
                       item "all" "All values"
                       forM_ options \label -> item label label
           when isStat $ renderStatContent widget valueM
-          unless (widget.wType == WTStat) $ div_ [class_ $ "relative h-0 max-h-full overflow-hidden w-full flex-1 min-h-0" <> if isStat then "" else " p-3"] do
+          unless (widget.wType == WTStat) $ div_ [data_ "chart-config" $ encodeText chartConfig, class_ $ "relative h-0 max-h-full overflow-hidden w-full flex-1 min-h-0" <> if isStat then "" else " p-3"] do
             div_ [class_ "chart-render-slot h-full min-h-full w-full", id_ chartId, data_ "chart-widget" "", term "hx-morph-skip" ""] ""
             -- A stat tile's value already says "0"; the two-line overlay only clips inside it.
             unless isStat
@@ -1242,129 +1264,6 @@ renderChart widget = do
               $ div_ [class_ "max-w-sm"] do
                 strong_ [class_ "text-sm font-semibold text-textStrong"] "No data in this time range"
                 p_ [class_ "mt-1 text-xs leading-5 text-textWeak"] "Try a wider time range or adjust the filters."
-            let sumBy = fromMaybe SBSum widget.summarizeBy
-                theme = fromMaybe "default" widget.theme
-                -- Encoded again, deliberately: the first encode produces JSON, the
-                -- second makes that JSON a *JS string literal*. Interpolating it
-                -- into a `template literal` instead — which is what this did —
-                -- means JS unescapes it before JSON.parse sees it, so every \" in
-                -- a value collapses to " and the parse dies with "Expected ',' or
-                -- '}' after property value". Harmless until a value contained a
-                -- quote; the unit-aware `label.formatter` function string added one
-                -- and took every chart on the page down with it.
-                echartOptJS = encodeText $ encodeText $ widgetToECharts widget
-                yAxisLabel = fromMaybe (maybeToMonoid widget.unit) (widget.yAxis >>= (.label))
-                query = encodeText widget.query
-                pid = encodeText $ widget._projectId <&> (.toText)
-                dbSourceJS = encodeText widget.dbSource
-                -- Same reason as echartOptJS: a backtick or a ${…} in stored SQL
-                -- would otherwise end the template literal or interpolate.
-                querySQLJS = encodeText $ maybeToMonoid widget.sql
-                rollupSQLJS = encodeText widget.rollupSql
-                rollupFromJS = encodeText widget.rollupFrom
-                chartType = mapWidgetTypeToChartType widget.wType
-                summarizeBy = toText $ encodeEnumSC @"SB" sumBy
-                summarizeByPfx = summarizeByPrefix sumBy
-                wType = encodeText widget.wType
-                legendPos = fromMaybe "bottom" widget.legendPosition
-                widgetUnit = maybeToMonoid widget.unit
-                alertThresholdJS = maybe "null" show widget.alertThreshold
-                seriesIntentJS = encodeText widget.seriesIntent
-                warningThresholdJS = maybe "null" show widget.warningThreshold
-                hideValueJS = bool "false" "true" $ isTrue widget.hideValue
-                -- Mirrors chartWidget's `!opt.dataset.source` test: a widget with eager
-                -- server data never calls /chart_data, so prefetching one would be a
-                -- wasted request. See prefetchChartData in web-components/src/widgets.ts.
-                willFetchJS = if maybe True ((== AE.Null) . (.source)) widget.dataset then "true" else "false" :: Text
-                -- Encoded rather than interpolated bare: these are absent far more
-                -- often than not, and `null` is what the client tests for.
-                timeFromJS = encodeText widget.timeFrom
-                timeToJS = encodeText widget.timeTo
-                highlightFromJS = encodeText widget.highlightFrom
-                highlightToJS = encodeText widget.highlightTo
-                markersJS = encodeText widget.markers
-                dashboardIdJS = encodeText widget._dashboardId
-            script_
-              [type_ "text/javascript", data_ "chart-init" chartId]
-              [text|
-
-              // IIFE to avoid global variable conflicts
-              (function() {
-                // Configuration for this specific widget
-                const config = {
-                  chartId: "${chartId}",
-                  echartOpt: ${echartOptJS},
-                  chartType: '${chartType}',
-                  widgetType: ${wType},
-                  query: ${query},
-                  querySQL: ${querySQLJS},
-                  rollupSQL: ${rollupSQLJS},
-                  rollupFrom: ${rollupFromJS},
-                  dbSource: ${dbSourceJS},
-                  theme: "${theme}",
-                  yAxisLabel: "${yAxisLabel}",
-                  pid: ${pid},
-                  summarizeBy: '${summarizeBy}',
-                  summarizeByPrefix: '${summarizeByPfx}',
-                  legendPosition: "${legendPos}",
-                  unit: "${widgetUnit}",
-                  alertThreshold: ${alertThresholdJS},
-                  seriesIntent: ${seriesIntentJS},
-                  warningThreshold: ${warningThresholdJS},
-                  hideValue: ${hideValueJS},
-                  timeFrom: ${timeFromJS},
-                  timeTo: ${timeToJS},
-                  highlightFrom: ${highlightFromJS},
-                  highlightTo: ${highlightToJS},
-                  markers: ${markersJS},
-                  dashboardId: ${dashboardIdJS}
-                };
-
-                // Start the data request during HTML parse rather than after echarts,
-                // the stagger queue and chart construction (~2.2s later on the log
-                // explorer). widgets.ts drains this and swaps in a live prefetcher.
-                if (${willFetchJS}) (window.__chartPrefetch = window.__chartPrefetch || []).push(config);
-
-                function parseAndInit() {
-                  const echartOpt = JSON.parse(config.echartOpt, (key, value) => {
-                    if (typeof value === 'string' && value.trim().startsWith("function(")) {
-                      try { return eval('(' + value + ')'); }
-                      catch (e) { return value; }
-                    }
-                    return value;
-                  });
-                  const chartEl = document.getElementById(config.chartId);
-                  if (!chartEl) return;
-                  echartOpt.tooltip.appendTo = chartEl.closest('.dashboard-grid-wrapper') || 'body';
-                  // A live instance is updated in place by chartWidget (a morphed panel keeps
-                  // the node); disposing it here is what blanked every chart on a live tick.
-                  window.bindFunctionsToObjects(echartOpt, echartOpt);
-                  window.chartWidget({ ...config, opt: echartOpt });
-                }
-
-                // Stagger initialization via queue to avoid blocking main thread
-                function initializeThisWidget() {
-                  if (!window.widgetDepsReady) {
-                    if (document.readyState === 'loading') {
-                      document.addEventListener('DOMContentLoaded', initializeThisWidget, { once: true });
-                    } else {
-                      setTimeout(initializeThisWidget, 50);
-                    }
-                    return;
-                  }
-                  if (window.queueChartInit) window.queueChartInit(parseAndInit, config.chartId);
-                  else parseAndInit();
-                }
-
-                if (document.readyState === 'loading') {
-                  window.addEventListener('DOMContentLoaded', initializeThisWidget);
-                } else {
-                  initializeThisWidget();
-                }
-
-              })();
-            
-            |]
 
 
 -----------------------------------------------------------------------------

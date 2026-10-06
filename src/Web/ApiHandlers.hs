@@ -54,6 +54,7 @@ module Web.ApiHandlers (
   -- Plan B
   apiMe,
   apiProjectGet,
+  apiIngestionKey,
   apiProjectPatch,
   apiEndpointsList,
   apiEndpointGet,
@@ -138,13 +139,14 @@ import Pkg.DeriveUtils (SnakeSchema (..), UUIDId (..))
 import Pkg.Parser qualified as Parser
 import Pkg.SchemaLearning.Catalog qualified as Fields
 import Relude hiding (ask, id)
-import Servant (NoContent (..), ServerError (..), err400, err404)
+import Servant (Header, Headers, NoContent (..), ServerError (..), addHeader, err400, err401, err403, err404)
 import System.Config (AuthContext (..), EnvConfig (..))
-import System.Types (ATBaseCtx, useTfReads)
+import System.Types (ATBaseCtx, ApiPrincipal (..), useTfReads)
 import Text.Slugify (slugify)
 import Utils (hostPath)
 import Web.ApiTypes
 import Web.FacetsFallback (facetsFallback)
+import Web.Wire qualified as Wire
 
 
 -- | Return the value or throw a 404 with a given message.
@@ -769,6 +771,15 @@ apiMe pid = do
   p <- notFoundOr "Project not found" =<< Projects.projectById pid
   ctx <- ask @AuthContext
   pure MeResponse{projectId = pid, project = toProjectSummary p, hostUrl = ctx.config.hostUrl}
+
+
+apiIngestionKey :: ApiPrincipal -> ATBaseCtx (Headers '[Header "Cache-Control" Text] Wire.IngestionKey)
+apiIngestionKey = \case
+  DemoReader _ -> throwError err401{errBody = "Authentication required to retrieve an ingestion key"}
+  Authenticated pid -> do
+    whenNothingM_ (Projects.activeProjectById pid) $ throwError err403{errBody = "Project is deactivated or deleted"}
+    k <- notFoundOr "No active ingestion key; create one in project settings" . find (\key -> key.active && isNothing key.deletedAt) =<< ProjectApiKeys.projectApiKeysByProjectId pid
+    pure $ addHeader ("no-store" :: Text) (Wire.IngestionKey k.keyPrefix)
 
 
 apiProjectGet :: Projects.ProjectId -> ATBaseCtx ProjectFull

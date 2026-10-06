@@ -79,7 +79,7 @@ import Servant.Server (Handler, ServerError (..), err302, err401)
 import Servant.Server.Experimental.Auth (AuthHandler, mkAuthHandler)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Logging
-import System.Types (ATAuthCtx, ATBaseCtx, DB, RespHeaders, addRespHeaders)
+import System.Types (ATAuthCtx, ATBaseCtx, ApiPrincipal (..), DB, RespHeaders, addRespHeaders)
 import Utils (escapedQueryPartial, hostPath, nonEmptyT, toUriStr)
 import Web.Cookie (Cookies, SetCookie, parseCookies)
 import Web.I18n qualified as I18n
@@ -334,12 +334,17 @@ effToHandler computation = do
   either T.throwError pure v
 
 
-type ApiKeyAuthContext = AuthHandler Request Projects.ProjectId
+type ApiKeyAuthContext = AuthHandler Request ApiPrincipal
 
 
-resolveApiKeyProject :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Log :> es) => Text -> Eff es (Maybe Projects.ProjectId)
-resolveApiKeyProject bearerToken =
-  ProjectApiKeys.getProjectIdByApiKey (stripBearer bearerToken)
+resolveApiKeyProject :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Log :> es) => Text -> Maybe Projects.ProjectId -> Eff es (Maybe Projects.ProjectId)
+resolveApiKeyProject bearerToken pidM = runMaybeT $ MaybeT (ProjectApiKeys.getProjectIdByApiKey token) <|> do
+  sessId <- hoistMaybe $ Projects.PersistentSessionId <$> UUID.fromText token
+  pid <- hoistMaybe pidM
+  sess <- MaybeT $ Projects.getPersistentSession sessId
+  pid <$ guard (V.any ((== pid) . (.id)) sess.projects.getProjects)
+  where
+    token = stripBearer bearerToken
 
 
 apiKeyAuthHandler :: Logger -> AuthContext -> ApiKeyAuthContext
@@ -354,26 +359,12 @@ apiKeyAuthHandler logger env = mkAuthHandler \req -> do
           & EHasql.runHasqlPool env.hasqlPool
           & Effectful.Reader.Static.runReader env
           & runEff
-  -- Demo project: world-readable, mirrors the web UI bypass in `sessionByID`.
-  case mbHeaderPid of
-    Just pid | pid == Projects.demoProjectId -> pure pid
-    _ -> case mbAuth of
-      Nothing -> T.throwError err401{errBody = "Missing Authorization header"}
-      Just token -> do
-        result <- runEffs $ resolveApiKeyProject token
-        case result of
-          Just pid -> pure pid
-          Nothing -> do
-            -- Fallback for CLI clients that authenticate with session token + X-Project-Id
-            let rawToken = stripBearer token
-                mbSessionId = Projects.PersistentSessionId <$> UUID.fromText rawToken
-            case (mbSessionId, mbHeaderPid) of
-              (Just sessId, Just pid) -> do
-                mbSession <- runEffs $ Projects.getPersistentSession sessId
-                case mbSession of
-                  Just sess | V.any (\p -> p.id == pid) sess.projects.getProjects -> pure pid
-                  _ -> T.throwError err401{errBody = "Invalid session or project access denied"}
-              _ -> T.throwError err401{errBody = "Invalid API key"}
+  authed <- join <$> traverse (runEffs . (`resolveApiKeyProject` mbHeaderPid)) mbAuth
+  case (mbHeaderPid, authed) of
+    -- Demo project: world-readable, mirrors the web UI bypass in `sessionByID`.
+    (Just pid, _) | pid == Projects.demoProjectId -> pure $ bool DemoReader Authenticated (authed == Just pid) pid
+    (_, Just pid) -> pure $ Authenticated pid
+    _ -> T.throwError err401{errBody = maybe "Missing Authorization header" (const "Invalid API key, session, or project access") mbAuth}
 
 
 logoutH :: ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)

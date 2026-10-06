@@ -25,6 +25,7 @@ module System.Types (
   atAuthToBase,
   atAuthToBaseTest,
   useTfReads,
+  ApiPrincipal (..),
 )
 where
 
@@ -246,7 +247,13 @@ type instance
     (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
 
 
-type instance AuthServerData (AuthProtect "api-key-auth") = Sessions.ProjectId
+-- | How an @/api/v1@ request reached its project: with a key or session, or through
+-- the world-readable demo bypass, which must never be handed credentials.
+data ApiPrincipal = Authenticated {projectId :: Sessions.ProjectId} | DemoReader {projectId :: Sessions.ProjectId}
+  deriving stock (Eq, Show)
+
+
+type instance AuthServerData (AuthProtect "api-key-auth") = ApiPrincipal
 
 
 type RespHeaders =

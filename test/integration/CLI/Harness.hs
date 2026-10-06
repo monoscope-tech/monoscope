@@ -2,12 +2,14 @@
 -- rather than "Pkg.TestUtils" because it straddles both packages: the CLI is
 -- 'monoscope-cli' (which must never link libpq) while the fake transport routes
 -- into lib:monoscope's servant handlers.
-module CLI.Harness (runCLILifecycle) where
+module CLI.Harness (runCLILifecycle, runCLILifecycleLive) where
 
+import CLI.Core (runIngestion)
 import CLI.Main qualified as CLIMain
+import Data.Effectful.Wreq (HTTP, runHTTPWreq)
 import Data.UUID qualified as UUID
 import Data.Version (makeVersion)
-import Effectful (runEff)
+import Effectful (Eff, IOE, runEff)
 import Effectful.Environment (runEnvironment)
 import Effectful.FileSystem (runFileSystem)
 import Options.Applicative qualified as OA
@@ -25,7 +27,15 @@ import UnliftIO.Exception (bracket_, try)
 -- as @ExitFailure 1@; anything else as 'ExitSuccess'). Pass @--json@ in args for
 -- deterministic output regardless of TTY state.
 runCLILifecycle :: TestResources -> [String] -> IO (ExitCode, Text)
-runCLILifecycle tr args = do
+runCLILifecycle tr = runCLILifecycleWith (runEff . runHTTPtoServant tr)
+
+
+runCLILifecycleLive :: [String] -> IO (ExitCode, Text)
+runCLILifecycleLive = runCLILifecycleWith (runEff . runHTTPWreq)
+
+
+runCLILifecycleWith :: (Eff '[HTTP, IOE] () -> IO ()) -> [String] -> IO (ExitCode, Text)
+runCLILifecycleWith interpretHTTP args = do
   -- MONOSCOPE_TEST_API_KEY lets a test inject a real project key (needed by
   -- ingestion paths that authenticate the key, e.g. send-event → OTLP).
   key <- fromMaybe "test-key" <$> lookupEnv "MONOSCOPE_TEST_API_KEY"
@@ -40,10 +50,10 @@ runCLILifecycle tr args = do
       (out, res) <-
         Silently.capture
           $ try @IO @ExitCode
-          $ runEff
-          $ runHTTPtoServant tr
+          $ interpretHTTP
           $ runEnvironment
           $ runFileSystem
+          $ runIngestion
           $ CLIMain.run testVersion global cmd
       pure (fromLeft ExitSuccess res, toText out)
   where

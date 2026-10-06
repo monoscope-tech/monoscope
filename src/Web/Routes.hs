@@ -56,10 +56,11 @@ import System.Exit (ExitCode (..))
 import System.Logging qualified as Log
 import System.Process.Typed (byteStringInput, proc, readProcess, setStdin)
 import System.Timeout (timeout)
-import System.Types (ATAuthCtx, ATBaseCtx, HXRedirectDest, RespHeaders, TriggerEvents, XWidgetJSON, addRespHeaders, effToServantHandler)
+import System.Types (ATAuthCtx, ATBaseCtx, ApiPrincipal (..), HXRedirectDest, RespHeaders, TriggerEvents, XWidgetJSON, addRespHeaders, effToServantHandler)
 import Web.Auth (APItoolkitAuthContext, ApiKeyAuthContext, apiKeyAuthHandler, authHandler, htmlServerError)
 import Web.Auth qualified as Auth
 import Web.MCP qualified as MCP
+import Web.Wire qualified as Wire
 
 -- Model imports
 
@@ -265,7 +266,8 @@ instance Servant.MimeRender JSON ByteString where
 
 type ApiV1Routes :: Type -> Type
 data ApiV1Routes mode = ApiV1Routes
-  { eventsSearch
+  { ingestionKey :: mode :- "ingestion-key" :> Get '[JSON] (Headers '[Header "Cache-Control" Text] Wire.IngestionKey)
+  , eventsSearch
       :: mode
         :- "events"
           :> QPT "query"
@@ -868,10 +870,11 @@ server logger env tp otlpTraces otlpLogs =
 
 
 -- API v1 server
-apiV1Server :: Logger -> AuthContext -> TracerProvider -> Projects.ProjectId -> Servant.ServerT (NamedRoutes ApiV1Routes) ATBaseCtx
-apiV1Server logger env tp pid =
+apiV1Server :: Logger -> AuthContext -> TracerProvider -> ApiPrincipal -> Servant.ServerT (NamedRoutes ApiV1Routes) ATBaseCtx
+apiV1Server logger env tp principal =
   ApiV1Routes
-    { eventsSearch = Log.queryEvents pid
+    { ingestionKey = ApiH.apiIngestionKey principal
+    , eventsSearch = Log.queryEvents pid
     , eventGet = ApiH.apiEventGet pid
     , -- API clients have no browser scope cookie. Omitting either boundary is the
       -- intentional cross-environment/service default; callers that need a scope
@@ -960,14 +963,11 @@ apiV1Server logger env tp pid =
     , memberAdd = ApiH.apiMemberAdd pid
     , memberPatch = ApiH.apiMemberPatch pid
     , memberRemove = ApiH.apiMemberRemove pid
-    , mcp = MCP.handleJsonRpc mcpToolRegistry mkApiV1App pid
+    , -- MCP re-enters the REST API as the same principal, never with wider access.
+      mcp = MCP.handleJsonRpc mcpToolRegistry (genericServeTWithContext (effToServantHandler env logger tp) (apiV1Server logger env tp principal) Servant.EmptyContext) pid
     }
   where
-    mkApiV1App p =
-      genericServeTWithContext
-        (effToServantHandler env logger tp)
-        (apiV1Server logger env tp p)
-        Servant.EmptyContext
+    pid = principal.projectId
 
 
 -- | MCP tool registry — REST tools (from OpenAPI) + composite workflow tools,

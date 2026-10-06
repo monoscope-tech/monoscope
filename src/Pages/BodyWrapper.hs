@@ -378,8 +378,6 @@ bodyWrapper bcfg child = do
           spriteSolid: "${spriteSolidURL}", spriteRegular: "${spriteRegularURL}"
         };|]
 
-      -- Flag for widget initialization - set to true after web-components loads
-      script_ "window.widgetDepsReady = false;"
       script_ [type_ "module", src_ $(viteAssetFile "index.html")] ("" :: Text)
 
       when isProd

@@ -51,12 +51,12 @@ import Relude
 
 import CLI.Chart qualified as Chart
 import CLI.Config (CLIConfig (..), ConfigKey (..), allConfigKeys, configDir, configFilePath, configKeyText, parseConfigKey, removeToken, resolveConfig, saveToken, setConfigValue)
-import CLI.Core (OutputMode (..), apiGet, apiGetJson, apiPostUnauth, isInteractiveTTY, isJsonOutput, printDebug, printError, renderAPIError, renderJSON, renderTable, renderWith, withAPIResult)
+import CLI.Core (Ingestion, OutputMode (..), apiGet, apiGetJson, apiPostUnauth, isInteractiveTTY, ingestionKey, isJsonOutput, printDebug, printError, renderAPIError, renderJSON, renderTable, renderWith, withAPIResult)
 import CLI.Dashboard qualified as Dash
 import CLI.LogView (EventRow (..), LogFormat (..), eventRows, parseLogFormat, renderEventLine, renderLogfmt, renderWaterfall)
 import CLI.Table (termWidth)
 import CLI.UI (inputForm, selectFromList, withSpinner)
-import CLI.Validate (validateAndNormalizeKind, validateDurationOrDie, validateQueryOrDie)
+import CLI.Validate (validateAndNormalizeKind, validateDurationOrDie, validateOrDie, validateQueryOrDie)
 import Control.Exception (bracket)
 import Control.Lens ((%~), (^..), (^?))
 import Data.Aeson qualified as AE
@@ -84,11 +84,17 @@ import Effectful.FileSystem (FileSystem)
 import Numeric (showHex)
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Context.ThreadLocal qualified as OtelCtx
-import OpenTelemetry.Trace (SpanStatus (..), Tracer, TracerOptions (..), defaultSpanArguments, initializeGlobalTracerProvider, makeTracer, shutdownTracerProvider)
+import OpenTelemetry.Exporter.InMemory.Span (inMemoryListExporter)
+import OpenTelemetry.Exporter.OTLP.Span qualified as OTLP
+import OpenTelemetry.Exporter.Span qualified as Export
+import OpenTelemetry.Resource qualified as Resource
+import OpenTelemetry.Resource.Detect qualified as ResourceDetect
+import OpenTelemetry.Trace (SpanStatus (..), Tracer, TracerOptions (..), defaultSpanArguments, makeTracer, shutdownTracerProvider)
 import OpenTelemetry.Trace qualified as Trace
+import OpenTelemetry.Trace.Id.Generator.Default (defaultIdGenerator)
 import Pages.Charts.Types (MetricsData (..))
 import Pkg.CLIFormat (cleanSummaryValue, evalCond, extractColIdxMap, extractInt, extractRawRows, extractRows, extractTextArray, renderSummaryCell, valToText)
-import System.Environment (setEnv)
+import System.IO (hPutStrLn)
 import System.Process (spawnProcess)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (catch, tryAny)
@@ -157,7 +163,7 @@ runAuth = \case
     -- C8: JSON/YAML output emits a stable JSON shape so a script doesn't
     -- have to regex stdout. The shape is intentionally narrow — adding
     -- fields is safe; renaming or removing them is a breaking change.
-    let method = ("env" :: Text) <$ envKey <|> "token" <$ cfg.apiKey
+    let method = ("env" :: Text) <$ envKey <|> "token" <$ cfg.credential
     ifM
       isJsonOutput
       (renderJSON AuthStatusJson{authenticated = isJust method, method, apiUrl = cfg.apiUrl, project = cfg.projectId})
@@ -234,16 +240,16 @@ runConfigGet opts mode = do
         ConfigGetJson
           { apiUrl = cfg.apiUrl
           , project = cfg.projectId
-          , apiKey = ("********" :: Text) <$ cfg.apiKey
+          , apiKey = ("********" :: Text) <$ cfg.credential
           }
   case opts.key of
     Nothing -> renderWith mode asJson $ do
       putTextLn $ "api_url = " <> cfg.apiUrl
       putTextLn $ "project = " <> fromMaybe "(not set)" cfg.projectId
-      putTextLn $ "api_key = " <> maybe "(not set)" (const "********") cfg.apiKey
+      putTextLn $ "api_key = " <> maybe "(not set)" (const "********") cfg.credential
     Just "api_url" -> putTextLn cfg.apiUrl
     Just "project" -> putTextLn $ fromMaybe "(not set)" cfg.projectId
-    Just "api_key" -> putTextLn $ maybe "(not set)" (const "********") cfg.apiKey
+    Just "api_key" -> putTextLn $ maybe "(not set)" (const "********") cfg.credential
     Just k -> putTextLn ("Unknown key: " <> k) >> liftIO exitFailure
 
 
@@ -1428,23 +1434,37 @@ tryOpenBrowser url =
 
 -- OTel send helpers
 
--- | Point the OTel SDK at the configured endpoint/service/resources and run
--- @act@ with a CLI tracer, tearing the provider down on any exit path.
-withCliTracer :: CLIConfig -> Text -> [(Text, Text)] -> (Tracer -> IO a) -> IO a
+-- | Point the OTel SDK at the configured endpoint/service/resources and run @act@
+-- with a tracer and a synchronous @send@ that exits nonzero unless the span was exported.
+withCliTracer :: (Ingestion :> es, IOE :> es) => CLIConfig -> Text -> [(Text, Text)] -> (Tracer -> (Trace.Span -> IO ()) -> IO a) -> Eff es a
 withCliTracer cfg service resources act = do
-  -- The standard OTel env var wins over the API-URL-derived endpoint, so a
-  -- collector on a non-default port (or a test server) can be targeted.
-  whenNothingM_ (lookupEnv "OTEL_EXPORTER_OTLP_ENDPOINT")
-    $ setEnv "OTEL_EXPORTER_OTLP_ENDPOINT" (toString (otlpFromApiUrl cfg.apiUrl))
-  setEnv "OTEL_SERVICE_NAME" (toString service)
-  whenJust cfg.apiKey $ \k ->
-    setEnv "OTEL_EXPORTER_OTLP_HEADERS" ("x-api-key=" <> toString k)
-  unless (null resources)
-    $ setEnv "OTEL_RESOURCE_ATTRIBUTES"
-    $ toString
-    $ T.intercalate "," [k <> "=" <> v | (k, v) <- resources]
-  bracket initializeGlobalTracerProvider (`shutdownTracerProvider` Nothing)
-    $ \tp -> act (makeTracer tp "monoscope-cli" (TracerOptions Nothing []))
+  key <- ingestionKey cfg >>= validateOrDie
+  liftIO $ do
+    conf <- OTLP.loadExporterEnvironmentVariables
+    exporter <-
+      OTLP.otlpExporter
+        conf
+          { OTLP.otlpEndpoint = conf.otlpEndpoint <|> Just (toString $ T.dropWhileEnd (== '/') cfg.apiUrl)
+          , OTLP.otlpTracesHeaders = Just $ ("x-api-key", encodeUtf8 key) : filter ((/= "x-api-key") . fst) (fold $ conf.otlpTracesHeaders <|> conf.otlpHeaders)
+          }
+    builtIn <- Trace.detectBuiltInResources
+    envAttributes <- ResourceDetect.detectResourceAttributes
+    (processor, spanBuffer) <- inMemoryListExporter
+    let providerOptions =
+          Trace.emptyTracerProviderOptions
+            { Trace.tracerProviderOptionsIdGenerator = defaultIdGenerator
+            , Trace.tracerProviderOptionsResources = Resource.materializeResources (Resource.mkResource (map (Just . second OA.toAttribute) (resources <> [("service.name", service)])) <> Resource.mkResource (map Just envAttributes) <> builtIn)
+            }
+    bracket (Trace.createTracerProvider [processor] providerOptions) (`shutdownTracerProvider` Nothing) $ \tp -> do
+      let tracer = makeTracer tp "monoscope-cli" (TracerOptions Nothing [])
+          send sp = do
+            Trace.endSpan sp Nothing
+            spans <- atomicModifyIORef' spanBuffer ([],)
+            when (null spans) $ hPutStrLn stderr "Telemetry span was not recorded" >> exitFailure
+            Export.spanExporterExport exporter (one (Trace.tracerName tracer, V.fromList spans)) >>= \case
+              Export.Success -> pass
+              Export.Failure _ -> hPutStrLn stderr "Telemetry export failed. Check the endpoint and project API key." >> exitFailure
+      act tracer send
 
 
 data SendEventOpts = SendEventOpts
@@ -1480,23 +1500,24 @@ parseSepKV sep label s = case T.break (== sep) (toText s) of
   _ -> Left $ "expected " <> label <> ", got: " <> s
 
 
-runSendEvent :: IOE :> es => CLIConfig -> SendEventOpts -> Eff es ()
-runSendEvent cfg opts = liftIO $ do
-  let msg = T.intercalate "\n" opts.messages
-      isError = opts.level == "error" || opts.kind == "error"
-      attrs =
-        HM.fromList
-          $ [ ("log.message", OA.toAttribute msg)
-            , ("log.severity", OA.toAttribute opts.level)
-            , ("event.kind", OA.toAttribute opts.kind)
-            ]
-          <> map (second OA.toAttribute) (opts.tags <> opts.extras)
-  withCliTracer cfg opts.service opts.resources $ \tracer -> do
+runSendEvent :: (Ingestion :> es, IOE :> es) => CLIConfig -> SendEventOpts -> Eff es ()
+runSendEvent cfg opts = do
+  withCliTracer cfg opts.service opts.resources $ \tracer send -> do
     ctx <- OtelCtx.getContext
     sp <- Trace.createSpan tracer ctx (T.take 200 msg) (defaultSpanArguments{Trace.attributes = attrs})
     when isError $ Trace.setStatus sp (Error msg)
-    Trace.endSpan sp Nothing
+    send sp
   putTextLn "Event sent."
+  where
+    msg = T.intercalate "\n" opts.messages
+    isError = opts.level == "error" || opts.kind == "error"
+    attrs =
+      HM.fromList
+        $ [ ("log.message", OA.toAttribute msg)
+          , ("log.severity", OA.toAttribute opts.level)
+          , ("event.kind", OA.toAttribute opts.kind)
+          ]
+        <> map (second OA.toAttribute) (opts.tags <> opts.extras)
 
 
 data TelemetryGenOpts = TelemetryGenOpts
@@ -1509,29 +1530,11 @@ data TelemetryGenOpts = TelemetryGenOpts
   deriving stock (Show)
 
 
--- | Derive the OTLP gRPC endpoint from the CLI's configured API URL.
--- Strips the port (if any) and appends :4317 (the default OTLP gRPC port).
---
--- >>> otlpFromApiUrl "https://api.monoscope.tech"
--- "https://api.monoscope.tech:4317"
--- >>> otlpFromApiUrl "http://localhost:8080"
--- "http://localhost:4317"
-otlpFromApiUrl :: Text -> Text
-otlpFromApiUrl apiUrl =
-  let scheme = if "https" `T.isPrefixOf` apiUrl then "https" else "http"
-      rest = fromMaybe apiUrl (T.stripPrefix (scheme <> "://") apiUrl)
-      host = T.takeWhile (\c -> c /= ':' && c /= '/') rest
-   in scheme <> "://" <> host <> ":4317"
-
-
-runTelemetryGen :: IOE :> es => CLIConfig -> TelemetryGenOpts -> Eff es ()
-runTelemetryGen cfg opts = liftIO $ do
-  let delayUs = round (1_000_000 / opts.rate) :: Int
-  putTextLn $ "Generating " <> opts.kind <> " → " <> otlpFromApiUrl cfg.apiUrl <> " at " <> show opts.rate <> "/s"
-  withCliTracer cfg opts.service opts.resources $ \tracer -> do
-    let sendOne i = do
-          ctx <- OtelCtx.getContext
-          Trace.createSpan tracer ctx ("telemetrygen." <> opts.kind) defaultSpanArguments >>= (`Trace.endSpan` Nothing)
-          putStrLn $ "Sent " <> show (i :: Int) <> " " <> toString opts.kind <> "(s)"
-          threadDelay delayUs
-    forM_ (maybe [1 ..] (enumFromTo 1) opts.count) sendOne
+runTelemetryGen :: (Ingestion :> es, IOE :> es) => CLIConfig -> TelemetryGenOpts -> Eff es ()
+runTelemetryGen cfg opts = withCliTracer cfg opts.service opts.resources $ \tracer send -> do
+  putTextLn $ "Generating " <> opts.kind <> " at " <> show opts.rate <> "/s"
+  forM_ (maybe [1 ..] (enumFromTo 1) opts.count) \(i :: Int) -> do
+    ctx <- OtelCtx.getContext
+    Trace.createSpan tracer ctx ("telemetrygen." <> opts.kind) defaultSpanArguments >>= send
+    putStrLn $ "Sent " <> show i <> " " <> toString opts.kind <> "(s)"
+    threadDelay (round (1_000_000 / opts.rate))

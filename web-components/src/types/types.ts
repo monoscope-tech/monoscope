@@ -15,7 +15,6 @@ declare global {
     toggleLiveData: (liveData: HTMLElement | null, transport: HTMLElement | null) => void;
     shiftTimeRange: (direction: -1 | 1, transport?: HTMLElement | null) => void;
     exportTableCsv: (selector: string, filename: string) => void;
-    bindFunctionsToObjects: (rootObj: any, obj: any) => any;
     evalScriptsFromContent: (container: HTMLElement) => void;
     params: () => Record<string, string>;
     setQueryParamAndReload: (key: string, value: string) => void;

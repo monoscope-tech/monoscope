@@ -81,7 +81,7 @@ onboardingGetH pid onboardingStepM = do
     _ ->
       let q = fromMaybe "" . lookupValueText questions
        in pure $ InfoStep pid sess.user.firstName sess.user.lastName (q "companyName") (q "companySize") (q "foundUsFrom")
-  addRespHeaders $ OnboardingGet $ PageCtx bw{currProject = Nothing} stepData
+  addRespHeaders $ OnboardingGet $ PageCtx bw{currProject = Nothing, hideNavbar = True} stepData
 
 
 data OnboardingInfoForm = OnboardingInfoForm
@@ -237,7 +237,7 @@ checkIntegrationGet pid languageM = do
   void $ Projects.sessionAndProject pid
   v :: Maybe Text <- Hasql.interpOne [HI.sql|SELECT context___span_id FROM otel_logs_and_spans WHERE project_id = #{pid.toText} LIMIT 1|]
   case v of
-    Nothing -> addErrorToast "No events found yet" Nothing >> addRespHeaders ""
+    Nothing -> when (isNothing languageM) (addErrorToast "No events found yet" Nothing) >> addRespHeaders ""
     Just _ -> do
       markStepCompleted pid "Integration"
       Activation.recordActivationMilestone pid Activation.IngestVerified
@@ -404,15 +404,15 @@ integrationsPage pid apikey =
             div_ [class_ "flex-1 monospace bg-bgBase p-3 border border-strokeWeak rounded-lg overflow-x-auto", id_ "api-key-display"] $ toHtml apikey
             copyButton_ "px-4 py-2 bg-fillBrand-strong rounded-xl text-textInverse-strong flex items-center gap-1 hover:bg-fillBrand-strong/90 cursor-pointer" "h-4 w-4" "#api-key-display's innerText" []
 
-        div_ [class_ "mb-4 px-4 bg-gradient-to-r from-fillInformation-weak to-transparent border border-strokeInformation-weak rounded-lg"] do
+        div_ [class_ "mb-4 px-4 py-2.5 bg-gradient-to-r from-fillInformation-weak to-transparent border border-strokeInformation-weak rounded-lg"] do
           p_ [class_ "text-sm text-textStrong"] do
             "Want to test quickly? "
             label_
               [ class_ "text-textBrand hover:text-textStrong underline font-medium cursor-pointer"
               , Lucid.for_ "telemetrygen-modal"
               ]
-              "Use telemetrygen"
-            " to send sample data in seconds"
+              "Send a test event"
+            " with the CLI"
 
         forM_ integrationGroups \grp -> div_ [class_ "mb-4 md:mb-6"] do
           div_ [class_ "text-textWeak text-lg md:text-xl mb-2"] $ toHtml grp.name
@@ -448,8 +448,10 @@ integrationsPage pid apikey =
                         , id_ $ "fw-tab-" <> l.slug <> "-" <> show idx
                         , class_ "hidden"
                         , Aria.label_ fw.name
+                        , data_ "guide-url" $ "https://monoscope.tech/docs/sdks/" <> fw.docsPath
                         , hxGet_ $ "/proxy/docs/sdks/" <> fw.docsPath
                         , hxTarget_ $ "#fw-content-" <> l.slug
+                        , term "hx-sync" $ "#fw-content-" <> l.slug <> ":replace"
                         , hxTrigger_ "change"
                         , hxSwap_ "innerHTML"
                         , hxSelect_ "#mainArticle"
@@ -465,7 +467,8 @@ integrationsPage pid apikey =
                 div_
                   [ id_ $ "fw-content-" <> l.slug
                   , hxGet_ $ "/proxy/docs/sdks/" <> foldMap (.docsPath) (listToMaybe l.frameworks)
-                  , hxTrigger_ "load"
+                  , hxTrigger_ "intersect once"
+                  , term "hx-sync" "this:replace"
                   , hxSwap_ "innerHTML"
                   , hxSelect_ "#mainArticle"
                   , class_ "prose-a:!text-textBrand prose-a:!underline"
@@ -477,7 +480,7 @@ integrationsPage pid apikey =
         faSprite_ "flask-vial" "regular" "h-5 w-5"
         span_ "Quick Test with the CLI"
 
-      p_ [class_ "text-textWeak mb-6 leading-relaxed"] "Use the Monoscope CLI to send test traces and verify your setup is working. No extra tools needed."
+      p_ [class_ "text-textWeak mb-6 leading-relaxed"] "Use the Monoscope CLI to send one test event and verify your setup is working."
 
       div_ [class_ "space-y-4"] do
         div_ [class_ "p-4 bg-fillWeak rounded-lg"] do
@@ -491,19 +494,19 @@ integrationsPage pid apikey =
         div_ [class_ "p-4 bg-fillWeak rounded-lg"] do
           div_ [class_ "text-textStrong font-medium mb-2 flex items-center gap-2"] do
             span_ [class_ "inline-flex items-center justify-center w-6 h-6 rounded-full bg-fillBrand-weak text-textBrand text-sm font-bold"] "2"
-            span_ "Send test traces"
+            span_ "Send a test event"
           div_ [class_ "relative"] do
             pre_ [class_ "bg-bgBase p-3 rounded monospace text-sm overflow-x-auto border border-strokeWeak", id_ "telemetrygen-cmd"]
               $ code_
               $ toHtml
-                "monoscope telemetrygen --kind=trace --count=10"
+                "monoscope send-event -m \"hello world\""
             copyButton_ "absolute top-2 right-2 px-3 py-1 text-xs bg-fillBrand-strong rounded text-textInverse-strong flex items-center gap-1 hover:bg-fillBrand-strong/90" "h-3 w-3" "#telemetrygen-cmd's innerText" []
 
       div_ [class_ "mt-6 p-4 bg-fillSuccess-weak border border-strokeSuccess-weak rounded-lg flex items-start gap-3"] do
         faSprite_ "circle-check" "regular" "h-5 w-5 text-iconSuccess flex-shrink-0 mt-0.5"
         div_ do
           p_ [class_ "text-textSuccess text-sm font-medium leading-relaxed"] "What happens next?"
-          p_ [class_ "text-textSuccess text-sm mt-1 leading-relaxed"] "After running the command, traces will appear in your dashboard within seconds. You can then proceed with the full SDK integration."
+          p_ [class_ "text-textSuccess text-sm mt-1 leading-relaxed"] "After running the command, look for \"hello world\" in your dashboard. You can then proceed with the full SDK integration."
 
       div_ [class_ "modal-action"] $ label_ [Lucid.for_ "telemetrygen-modal", class_ "btn"] "Close"
 
@@ -511,10 +514,17 @@ integrationsPage pid apikey =
     style_
       $ unlines
         [ "@media(max-width:767px){#docs-panel{display:none}#docs-panel.open{display:flex;flex-direction:column;position:fixed;inset:0;z-index:50;background:var(--color-bgBase);overflow-y:auto}#docs-panel.open #docs-panel-back{display:block}}"
-        , ".ai-menu-wrap{position:relative}"
-        , ".ai-menu{position:absolute;right:0;top:100%;z-index:50;min-width:260px;margin-top:6px;background:var(--color-bgRaised);border:1px solid var(--color-strokeWeak);border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,0.12);padding:6px;opacity:0;transform:scale(0.95) translateY(-4px);pointer-events:none;transition:opacity 150ms ease,transform 150ms ease}"
-        , ".ai-menu.open{opacity:1;transform:scale(1) translateY(0);pointer-events:auto}"
-        , ".ai-menu-item{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;cursor:pointer;font-size:0.8125rem;color:var(--color-text);text-decoration:none;border:none;background:none;width:100%;text-align:left;transition:background 100ms ease}"
+        , "#docs-panel .breadcrumbs{display:none}"
+        , ".ai-menu-wrap{position:relative;margin-inline-start:auto}"
+        , ".ai-split-btn{display:inline-flex;align-items:stretch}"
+        , ".ai-split-primary,.ai-split-caret{min-height:36px;white-space:nowrap}"
+        , ".ai-split-caret{min-width:32px;justify-content:center}"
+        , ".ai-split-check,.ai-split-primary.copied .ai-split-icon{display:none}"
+        , ".ai-split-primary.copied .ai-split-check{display:block}"
+        , ".ai-split-primary:focus-visible,.ai-split-caret:focus-visible,.ai-menu-item:focus-visible{outline:2px solid var(--color-strokeFocus);outline-offset:2px}"
+        , ".ai-menu{position:fixed;inset:auto;top:anchor(bottom);right:anchor(right);z-index:50;width:260px;max-width:calc(100vw - 24px);max-height:calc(100dvh - 24px);overflow-y:auto;margin:6px 0 0;background:var(--color-bgRaised);border:1px solid var(--color-strokeWeak);border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,0.12);padding:6px}"
+        , ".ai-menu:not(:popover-open){display:none}"
+        , ".ai-menu-item{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;cursor:pointer;font-size:0.8125rem;color:var(--color-textStrong);text-decoration:none;border:none;background:none;width:100%;text-align:left;transition:background 100ms ease}"
         , ".ai-menu-item:hover{background:var(--color-fillWeak)}"
         , ".ai-menu-item.disabled{opacity:0.4;pointer-events:none}"
         , ".ai-menu-item svg{width:16px;height:16px;flex-shrink:0}"
@@ -539,8 +549,8 @@ integrationsPage pid apikey =
           var menu = container.querySelector('#ai-menu');
           if (!trigger || !menu) return;
           var mcpItems = menu.querySelectorAll('[data-action="copy-mcp"],[data-action="connect-cursor"],[data-action="connect-vscode"]');
-          mcpItems.forEach(function(el) { el.classList.add('disabled'); });
-          var pageUrl = window.location.href;
+          mcpItems.forEach(function(el) { el.classList.add('disabled'); el.inert = true; });
+          var pageUrl = container.closest('.lang-guide').querySelector('input[type=radio]:checked').dataset.guideUrl;
           var title = container.querySelector('h1');
           var pageTitle = title ? title.textContent.replace(/#/g, '').trim() : document.title;
           var prompt = 'Read this Monoscope docs page and help me understand it: ' + pageUrl;
@@ -550,23 +560,33 @@ integrationsPage pid apikey =
           if (claude) claude.href = 'https://claude.ai/new?q=' + encodeURIComponent(prompt);
           var perplexity = menu.querySelector('[data-action="open-perplexity"]');
           if (perplexity) perplexity.href = 'https://www.perplexity.ai/search?q=' + encodeURIComponent(prompt);
-          trigger.onclick = function(e) { e.stopPropagation(); menu.classList.toggle('open'); };
-          document.addEventListener('click', function(e) {
-            if (!menu.contains(e.target) && e.target !== trigger) menu.classList.remove('open');
-          });
-          document.addEventListener('keydown', function(e) { if (e.key === 'Escape') menu.classList.remove('open'); });
+          menu.id = container.id + '-copy-options';
+          menu.popover = 'auto';
+          trigger.setAttribute('popovertarget', menu.id);
+          trigger.style.anchorName = '--' + menu.id;
+          menu.style.positionAnchor = '--' + menu.id;
           function pageMarkdown() {
             var clone = container.cloneNode(true);
-            clone.querySelectorAll('.ai-menu-wrap, .code-header').forEach(function(el) { el.remove(); });
-            return '# ' + pageTitle + '\n\nSource: ' + pageUrl + '\n\n' + clone.innerText;
+            clone.querySelectorAll('.ai-menu-wrap, .code-header, .breadcrumbs').forEach(function(el) { el.remove(); });
+            return '# ' + pageTitle + '\n\nSource: ' + pageUrl + '\n\n' + clone.textContent.trim();
           }
-          var copyPage = menu.querySelector('[data-action="copy-page"]');
-          if (copyPage) copyPage.onclick = function() {
-            navigator.clipboard.writeText(pageMarkdown()).then(function() {
-              copyPage.classList.add('copied');
-              setTimeout(function() { copyPage.classList.remove('copied'); }, 2000);
-            });
-          };
+          var copyPage = container.querySelector('#ai-copy-page');
+          var copyOption = menu.querySelector('[data-action="copy-page"]');
+          [copyPage, copyOption].filter(Boolean).forEach(function(button) {
+            var label = button === copyPage ? button.querySelector('.ai-split-label') : null;
+            var setLabel = function(text) { if (label) label.textContent = text; };
+            button.onclick = async function() {
+              try {
+                await navigator.clipboard.writeText(pageMarkdown());
+                button.classList.add('copied');
+                setLabel('Copied');
+                setTimeout(function() { button.classList.remove('copied'); setLabel('Copy Page'); }, 2000);
+              } catch {
+                button.setAttribute('title', 'Copy failed. Select the guide text to copy it.');
+                setLabel('Copy failed');
+              }
+            };
+          });
           var viewMd = menu.querySelector('[data-action="view-markdown"]');
           if (viewMd) viewMd.onclick = function() {
             window.open(URL.createObjectURL(new Blob([pageMarkdown()], { type: 'text/plain' })), '_blank');
@@ -574,10 +594,9 @@ integrationsPage pid apikey =
         }
 
         // Re-highlight after HTMX swaps content
-        document.body.addEventListener('htmx:after:swap', function(event) {
-          // Only highlight content in the integration documentation area
-          const target = event.detail.target;
-          if (target && (target.id.startsWith('fw-content-') || target.classList.contains('lang-guide'))) {
+        document.body.addEventListener('htmx:after:process', function(event) {
+          const target = event.target.closest('[id^="fw-content-"]');
+          if (target) {
             target.querySelectorAll('pre code').forEach((block) => {
               hljs.highlightElement(block);
             });

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import '../src/widgets';
+import { chartWidget, prefetchChartData } from '../src/widgets';
 import { graphic, color } from 'echarts';
 
 const frame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
@@ -62,7 +62,7 @@ describe('Log Explorer chart auto-refresh', () => {
       ...chartData, headers: ['timestamp', 'count'], dataset: [[0, 1]],
     }), { headers: { 'Content-Type': 'application/json' } })) as any;
     const config = widget('marker-series');
-    (window as any).chartWidget({ ...config, opt: { ...config.opt, grid: { top: 8, bottom: 36 }, legend: { show: true, bottom: 2 }, xAxis: { axisLabel: { margin: 8 } } }, markers: [{ label: '1.0', at: '2026-09-25T10:00:00Z' }, { label: 'bad', at: 'nope' }] });
+    chartWidget({ ...config, opt: { ...config.opt, grid: { top: 8, bottom: 36 }, legend: { show: true, bottom: 2 }, xAxis: { axisLabel: { margin: 8 } } }, markers: [{ label: '1.0', at: '2026-09-25T10:00:00Z' }, { label: 'bad', at: 'nope' }] });
     (globalThis as any).triggerIntersection();
     await vi.waitFor(() => expect(instance.hideLoading).toHaveBeenCalled());
     const [option, notMerge] = instance.setOption.mock.calls.at(-1)!;
@@ -86,7 +86,7 @@ describe('Log Explorer chart auto-refresh', () => {
     globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({
       ...chartData, headers: ['timestamp', 'count'], dataset: [[0, 1]],
     }), { headers: { 'Content-Type': 'application/json' } })) as any;
-    (window as any).chartWidget({ ...widget('threshold-series'), ...thresholds });
+    chartWidget({ ...widget('threshold-series'), ...thresholds });
     (globalThis as any).triggerIntersection();
     await vi.waitFor(() => expect(instance.hideLoading).toHaveBeenCalled());
     const option = instance.setOption.mock.calls.at(-1)![0];
@@ -114,7 +114,7 @@ describe('Log Explorer chart auto-refresh', () => {
     globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({
       ...chartData, headers: ['timestamp', 'p75'], dataset: [[0, 1]],
     }), { headers: { 'Content-Type': 'application/json' } })) as any;
-    (window as any).chartWidget({ ...widget('ms-thresholds'), unit: 'ms', alertThreshold: 1800, warningThreshold: 800 });
+    chartWidget({ ...widget('ms-thresholds'), unit: 'ms', alertThreshold: 1800, warningThreshold: 800 });
     (globalThis as any).triggerIntersection();
     await vi.waitFor(() => expect(instance.hideLoading).toHaveBeenCalled());
 
@@ -127,7 +127,7 @@ describe('Log Explorer chart auto-refresh', () => {
     document.body.innerHTML = Array.from({ length: 5 }, (_, i) => `<div id="prefetch-${i}" data-chart-widget></div>`).join('');
     globalThis.fetch = vi.fn(async () => new Response(new ReadableStream<Uint8Array>({ start(body) { bodies.push(body); } }),
       { headers: { 'Content-Type': 'application/x-ndjson' } })) as any;
-    for (let i = 0; i < 5; i++) (window as any).__chartPrefetch.push(widget(`prefetch-${i}`));
+    for (let i = 0; i < 5; i++) prefetchChartData(widget(`prefetch-${i}`));
     await vi.waitFor(() => expect(bodies).toHaveLength(4));
     await frame();
     expect(globalThis.fetch).toHaveBeenCalledTimes(4);
@@ -144,7 +144,7 @@ describe('Log Explorer chart auto-refresh', () => {
     let body!: ReadableStreamDefaultController<Uint8Array>;
     globalThis.fetch = vi.fn(async () => new Response(new ReadableStream<Uint8Array>({ start(controller) { body = controller; } }),
       { headers: { 'Content-Type': 'application/x-ndjson' } })) as any;
-    (window as any).chartWidget({ ...widget('sparse-lines'), chartType: 'line' });
+    chartWidget({ ...widget('sparse-lines'), chartType: 'line' });
     (globalThis as any).triggerIntersection();
     await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
     const data = { ...chartData, headers: ['timestamp', 'dense', 'lone', 'empty'], dataset: [[0, 1, null, null], [1, 2, 0, null], [2, 3, null, null]] };
@@ -161,7 +161,7 @@ describe('Log Explorer chart auto-refresh', () => {
     let body!: ReadableStreamDefaultController<Uint8Array>;
     globalThis.fetch = vi.fn(async () => new Response(new ReadableStream<Uint8Array>({ start(controller) { body = controller; } }),
       { headers: { 'Content-Type': 'application/x-ndjson' } })) as any;
-    (window as any).chartWidget(widget('volume'));
+    chartWidget(widget('volume'));
     (globalThis as any).triggerIntersection();
     await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
     const send = (type: string, data = chartData) => body.enqueue(new TextEncoder().encode(JSON.stringify({ type, data }) + '\n'));
@@ -195,7 +195,7 @@ describe('Log Explorer chart auto-refresh', () => {
     const bodies: ReadableStreamDefaultController<Uint8Array>[] = [];
     globalThis.fetch = vi.fn(async () => new Response(new ReadableStream<Uint8Array>({ start(c) { bodies.push(c); } }),
       { headers: { 'Content-Type': 'application/x-ndjson' } })) as any;
-    (window as any).chartWidget({ ...widget('volume'), chartType });
+    chartWidget({ ...widget('volume'), chartType });
     (globalThis as any).triggerIntersection();
     await vi.waitFor(() => expect(bodies).toHaveLength(1));
     const send = (type: string, data: any) => bodies.at(-1)!.enqueue(new TextEncoder().encode(JSON.stringify({ type, data }) + '\n'));
@@ -243,7 +243,7 @@ describe('Log Explorer chart auto-refresh', () => {
     for (const id of ['volume', 'latency']) {
       const config = widget(id);
       (config.opt.dataset as any).source = [['timestamp', 'count'], [0, 1]];
-      (window as any).chartWidget({ ...config, pid: id });
+      chartWidget({ ...config, pid: id });
     }
     const tick = async (n: number) => {
       vi.setSystemTime(Date.now() + 600_000); // past any backoff: this test is about the banner threshold
@@ -274,7 +274,7 @@ describe('Log Explorer chart auto-refresh', () => {
       if (fail && failure === 'network') throw new Error('offline');
       return { ok: true, json: async () => fail ? { error: 'Query execution failed' } : chartData };
     }) as any;
-    (window as any).chartWidget(widget('volume'));
+    chartWidget(widget('volume'));
     (globalThis as any).triggerIntersection();
     await vi.waitFor(() => expect(instance.hideLoading).toHaveBeenCalledTimes(1));
     const value = document.getElementById('volumeValue')!.textContent;
@@ -318,7 +318,7 @@ describe('Log Explorer chart auto-refresh', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     let fail = false;
     globalThis.fetch = vi.fn(async () => ({ ok: true, json: async () => fail ? { error: 'Query execution failed' } : chartData })) as any;
-    (window as any).chartWidget(widget('volume'));
+    chartWidget(widget('volume'));
     (globalThis as any).triggerIntersection();
     const flush = () => vi.advanceTimersByTimeAsync(0);
     const tick = async (source = 'auto-refresh') => {
@@ -370,8 +370,8 @@ describe('Log Explorer chart auto-refresh', () => {
     // `ok` is not optional dressing: a real Response always carries it, and updateChartData
     // now refuses to parse a non-2xx body, so a mock without it fails every fetch.
     globalThis.fetch = vi.fn(async () => ({ ok: true, status: 200, json: () => new Promise<typeof chartData>((resolve) => responses.push(resolve)) })) as any;
-    (window as any).chartWidget(widget('volume'));
-    (window as any).chartWidget(widget('latency'));
+    chartWidget(widget('volume'));
+    chartWidget(widget('latency'));
     (globalThis as any).triggerIntersection();
     await vi.waitFor(() => expect(responses).toHaveLength(2));
     responses.splice(0).forEach((resolve) => resolve(chartData));
@@ -404,7 +404,7 @@ describe('Log Explorer chart auto-refresh', () => {
     document.body.innerHTML = '<div id="embedded" data-chart-widget></div><div id="embedded_bordered"></div>';
     globalThis.fetch = vi.fn(async () => ({ ok: true, status: 200, json: async () => chartData })) as any;
 
-    (window as any).chartWidget({ ...widget('embedded'), pid: null, opt: { dataset: { source: [['timestamp', 'P75'], [0, 1]] }, series: [], legend: {}, yAxis: {} } });
+    chartWidget({ ...widget('embedded'), pid: null, opt: { dataset: { source: [['timestamp', 'P75'], [0, 1]] }, series: [], legend: {}, yAxis: {} } });
     (globalThis as any).triggerIntersection();
     window.dispatchEvent(new CustomEvent('update-query', { detail: { source: 'auto-refresh' } }));
     await frame();
@@ -419,7 +419,7 @@ describe('Log Explorer chart auto-refresh', () => {
 
     const responses: Array<(data: typeof chartData) => void> = [];
     globalThis.fetch = vi.fn(async () => ({ ok: true, status: 200, json: () => new Promise<typeof chartData>((resolve) => responses.push(resolve)) })) as any;
-    (window as any).chartWidget(widget('volume'));
+    chartWidget(widget('volume'));
     (globalThis as any).triggerIntersection();
     await vi.waitFor(() => expect(responses).toHaveLength(1));
     responses.splice(0).forEach((resolve) => resolve(chartData));
@@ -461,7 +461,7 @@ describe('Log Explorer chart auto-refresh', () => {
       json: () => Promise.reject(new SyntaxError('The string did not match the expected pattern.')),
     })) as any;
 
-    (window as any).chartWidget(widget('volume'));
+    chartWidget(widget('volume'));
     (globalThis as any).triggerIntersection();
     await vi.waitFor(() => expect(logged.length).toBeGreaterThan(0));
     spy.mockRestore();

@@ -7,7 +7,7 @@ import Relude
 
 import CLI.Commands hiding (value)
 import CLI.Config (CLIConfig (..), resolveConfig)
-import CLI.Core (OutputMode (..), apiDelete, apiGetJson, apiPostJson, detectOutputMode, renderAPIError, setOutputMode)
+import CLI.Core (Ingestion, OutputMode (..), apiDelete, apiGetJson, apiPostJson, detectOutputMode, renderAPIError, runIngestion, setOutputMode)
 import CLI.Resource qualified as Resource
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
@@ -953,11 +953,11 @@ parserInfo v =
     )
 
 
-type CLIEffects = '[FileSystem, Environment, HTTP, IOE]
+type CLIEffects = '[Ingestion, FileSystem, Environment, HTTP, IOE]
 
 
 runCLI :: Eff CLIEffects a -> IO a
-runCLI = runEff . runHTTPWreq . runEnvironment . runFileSystem
+runCLI = runEff . runHTTPWreq . runEnvironment . runFileSystem . runIngestion
 
 
 cliMain :: Version -> IO ()
@@ -984,7 +984,7 @@ withCfgMode global k = do
   k cfg{projectId = global.projectFlag <|> cfg.projectId} mode
 
 
-run :: (Environment :> es, FileSystem :> es, HTTP :> es, IOE :> es) => Version -> GlobalOpts -> Command -> Eff es ()
+run :: (Environment :> es, FileSystem :> es, HTTP :> es, Ingestion :> es, IOE :> es) => Version -> GlobalOpts -> Command -> Eff es ()
 run version global = \case
   -- C7: resolve the output mode before auth too — 'runAuth' relies on
   -- 'isJsonOutput' to refuse the interactive device flow when piped.

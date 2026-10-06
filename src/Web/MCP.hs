@@ -297,11 +297,11 @@ bodyContentSchema rb =
 -- @initialize@, @notifications/*@, @tools/list@, @tools/call@.
 handleJsonRpc
   :: Map Text Tool
-  -> (Projects.ProjectId -> Servant.Application)
+  -> Servant.Application
   -> Projects.ProjectId
   -> AE.Value
   -> ATBaseCtx AE.Value
-handleJsonRpc reg buildApp pid req = case parseRpcReq req of
+handleJsonRpc reg app pid req = case parseRpcReq req of
   Nothing -> pure $ rpcError AE.Null (-32600) "Invalid Request"
   Just (mid, m, params)
     -- MCP spec says notifications expect no response body. On a request/response
@@ -314,10 +314,7 @@ handleJsonRpc reg buildApp pid req = case parseRpcReq req of
         Nothing -> pure $ rpcError mid (-32602) "Invalid params"
         Just (toolName, args) -> case Map.lookup toolName reg of
           Nothing -> pure $ rpcOk mid (toolError ("Unknown tool: " <> toolName))
-          -- Build the inner Servant Application once per tools/call so the
-          -- routing tree compiles a single time (was once per ViaOpenApi
-          -- dispatch inside runTool).
-          Just t -> rpcOk mid <$> runTool (buildApp pid) pid t args
+          Just t -> rpcOk mid <$> runTool app pid t args
     | otherwise -> pure $ rpcError mid (-32601) ("Method not found: " <> m)
 
 

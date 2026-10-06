@@ -474,6 +474,7 @@ const setStatValue = (widgetData: WidGetData, stats: ChartDataResponse['stats'],
 // refetch, so the two can't drift — the prefetch is only honoured when the URL it was
 // issued against still matches (see takePrefetched).
 export const chartDataUrl = ({
+  chartId,
   query,
   querySQL,
   rollupSQL,
@@ -484,7 +485,7 @@ export const chartDataUrl = ({
   timeFrom,
   timeTo,
   dashboardId,
-}: Pick<WidGetData, 'query' | 'querySQL' | 'rollupSQL' | 'rollupFrom' | 'pid' | 'chartType' | 'dbSource' | 'timeFrom' | 'timeTo' | 'dashboardId'>): string => {
+}: Pick<WidGetData, 'chartId' | 'query' | 'querySQL' | 'rollupSQL' | 'rollupFrom' | 'pid' | 'chartType' | 'dbSource' | 'timeFrom' | 'timeTo' | 'dashboardId'>): string => {
   const params = new URLSearchParams(window.location.search);
   params.set('pid', pid);
   if (dashboardId) params.set('dashboard_id', dashboardId);
@@ -509,10 +510,10 @@ export const chartDataUrl = ({
   // not exist.
   if (dbSource) params.set('db_source', dbSource);
 
-  // Add dashboard constants (from data-constants attribute)
-  const constants = window.getDashboardConstants?.() ?? {};
+  // The swapped panel's resolved constants supersede values carried by older links.
+  const constants = window.getDashboardConstants?.(document.getElementById(chartId)) ?? {};
   Object.entries(constants).forEach(([key, value]) => {
-    if (!params.has(key)) params.set(key, value as string);
+    params.set(key, value as string);
   });
 
   // Default query to use when no query is provided
@@ -569,7 +570,7 @@ const checkChartResponse = async (res: Response) => {
   return res;
 };
 
-const prefetchChartData = (widgetData: WidGetData) => {
+export const prefetchChartData = (widgetData: WidGetData) => {
   const { chartId } = widgetData;
   if (!chartId || !canFetchData(widgetData) || chartDataPrefetch.has(chartId)) return;
   // Same viewport gate as queueChartInit. Off-screen widgets deliberately don't fetch
@@ -602,11 +603,6 @@ const takePrefetched = async (chartId: string, url: string, partial: (data: Char
   try { return await entry.response; }
   finally { signal.removeEventListener('abort', abort); }
 };
-
-// Widget.hs pushes configs during HTML parse. Flush whatever landed before this module
-// evaluated, then keep prefetching on push so htmx-swapped widgets get the same head start.
-((window as any).__chartPrefetch as WidGetData[] | undefined)?.forEach(prefetchChartData);
-(window as any).__chartPrefetch = { push: prefetchChartData };
 
 // `showLoader` is false for a refresh nobody asked for. A timer tick that swaps the loader in
 // over a chart that is already drawn reads as the page breaking, several times a minute, and it
@@ -798,7 +794,7 @@ declare global {
     setVariable: (key: string, value: string) => void;
     getVariable: (key: string) => string;
     // Installed by the dashboard page; supplies the dashboard's constant substitutions.
-    getDashboardConstants?: () => Record<string, string>;
+    getDashboardConstants?: (el?: Element | null) => Record<string, string>;
   }
 }
 
@@ -965,9 +961,6 @@ document.addEventListener('htmx:before:swap', (event) => {
     if (!(target instanceof Element)) continue;
     // A morph keeps the chart element (hx-morph-skip in the server markup); chartWidget then updates it in place.
     if (!/morph/i.test(task.swapSpec?.style ?? '')) disposeChartsIn(target);
-    // Morph preserves identical script nodes. Remove the outgoing initializers so incoming
-    // widgets run even when their configuration is unchanged (e.g. Explorer navigation clears the URL query).
-    target.querySelectorAll('script[data-chart-init]').forEach(script => script.remove());
   }
 });
 
@@ -979,6 +972,7 @@ for (const event of ['htmx:after:swap', 'htmx:after:settle']) document.addEventL
   [...new Set([...chartDisposers.keys(), ...chartDataPrefetch.keys()])].forEach((chartId) => {
     if (!document.getElementById(chartId)?.matches(DISPOSABLE_CHARTS)) disposeChart(chartId);
   });
+  initializeChartWidgets();
 });
 
 // Global resize queue to batch chart resize operations
@@ -1018,7 +1012,7 @@ const queueChartResize = (chartId: string) => {
   }
 };
 
-const chartWidget = (widgetData: WidGetData) => {
+export const chartWidget = (widgetData: WidGetData) => {
   const { chartType, chartId } = widgetData,
     chartEl = $(chartId),
     liveStreamCheckbox = $('streamLiveData') as HTMLInputElement;
@@ -1167,10 +1161,6 @@ const chartWidget = (widgetData: WidGetData) => {
   });
 };
 
-// Expose both direct and queued init
-(window as any).chartWidget = chartWidget;
-(window as any).queueChartInit = queueChartInit;
-
 /**
  * Number/duration formatting now lives in ./stat-value (pure + unit-tested);
  * re-export onto window for the inline chart formatters that reference them.
@@ -1254,7 +1244,6 @@ function bindFunctionsToObjects(rootObj: any, obj: any) {
 
   return obj;
 }
-window.bindFunctionsToObjects = bindFunctionsToObjects;
 
 // Global delegated click handler for table rows with on_row_click
 document.addEventListener('click', (e) => {
@@ -1342,5 +1331,29 @@ const applyThresholds = (chart: any, thresholds: Record<string, number>, unit = 
   });
 };
 
-// Signal that widget dependencies are ready
-(window as any).widgetDepsReady = true;
+const chartConfigurations = new WeakMap<HTMLElement, string>();
+function initializeChartWidgets() {
+  [...document.querySelectorAll<HTMLElement>('[data-chart-config]')].sort((a, b) => b.clientHeight - a.clientHeight).forEach(host => {
+    const configJSON = host.dataset.chartConfig!;
+    const signature = configJSON + location.search + JSON.stringify(window.getDashboardConstants?.(host));
+    if (chartConfigurations.get(host) === signature) return;
+    chartConfigurations.set(host, signature);
+    const config = JSON.parse(configJSON);
+    const opt = JSON.parse(config.echartOpt, (_key, value) => {
+      if (typeof value === 'string' && value.trim().startsWith('function(')) {
+        try { return (0, eval)('(' + value + ')'); } catch { return value; }
+      }
+      return value;
+    });
+    const widgetData = { ...config, opt };
+    if (!opt.dataset.source) prefetchChartData(widgetData);
+    queueChartInit(() => {
+      if (!host.isConnected || chartConfigurations.get(host) !== signature) return;
+      opt.tooltip.appendTo = host.closest('.dashboard-grid-wrapper') || 'body';
+      bindFunctionsToObjects(opt, opt);
+      chartWidget(widgetData);
+    }, config.chartId);
+  });
+}
+initializeChartWidgets();
+document.addEventListener('htmx:after:process', initializeChartWidgets);

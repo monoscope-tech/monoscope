@@ -9,6 +9,7 @@ module Web.Wire (
   FacetValue (..),
   Paged (..),
   ProjectInfo (..),
+  IngestionKey (..),
 ) where
 
 import Data.Aeson qualified as AE
@@ -17,6 +18,12 @@ import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAES
 import Pkg.Deriving (JsonValueSchema (..))
 import Relude
+
+
+newtype IngestionKey = IngestionKey {key :: Text}
+  deriving stock (Generic)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+  deriving (ToSchema) via JsonValueSchema IngestionKey
 
 
 -- | Envelope every paginated @/api/v1@ listing returns.
