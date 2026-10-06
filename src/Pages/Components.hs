@@ -912,7 +912,7 @@ iconBadgeXs_ = iconBadgeWith_ "p-1.5" "h-3.5 w-3.5" "rounded-md"
 
 iconBadgeWith_ :: Monad m => Text -> Text -> Text -> BadgeColor -> Text -> HtmlT m ()
 iconBadgeWith_ pad iconSize shape color icon =
-  div_ [class_ $ pad <> " shrink-0 " <> shape <> " " <> bg color] $ faSprite_ icon "regular" (iconSize <> " " <> fg color)
+  div_ [class_ $ pad <> " w-fit shrink-0 " <> shape <> " " <> bg color] $ faSprite_ icon "regular" (iconSize <> " " <> fg color)
   where
     bg = \case BrandBadge -> "bg-fillBrand-weak"; SuccessBadge -> "bg-fillSuccess-weak"; ErrorBadge -> "bg-fillError-weak"; NeutralBadge -> "bg-fillWeak"
     fg = \case BrandBadge -> "text-iconBrand"; SuccessBadge -> "text-iconSuccess"; ErrorBadge -> "text-iconError"; NeutralBadge -> "text-iconNeutral"

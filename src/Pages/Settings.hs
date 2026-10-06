@@ -334,15 +334,20 @@ apiKeysPage pid apiKeys = do
   settingsSection_ do
     div_ [class_ "flex justify-between items-center"] do
       settingsH2_ "API Keys"
-      modalWith_ "apikey-modal" def{boxClass = "p-8"} (Just $ span_ [class_ "btn btn-sm btn-primary gap-1.5"] $ do faSprite_ "plus" "regular" "w-3 h-3"; "New Key") do
-        iconBadgeLg_ BrandBadge "key"
-        span_ [class_ "text-textStrong text-2xl font-semibold mb-1"] "Generate an API key"
-        form_ [hxPost_ $ "/p/" <> pid.toText <> "/apis", class_ "flex flex-col gap-4", hxTarget_ settingsContentTarget] do
+      modalWith_ "apikey-modal" def{boxClass = "w-full max-w-md p-6"} (Just $ span_ [class_ "btn btn-sm btn-primary gap-1.5"] $ do faSprite_ "plus" "regular" "w-3 h-3"; "New Key") do
+        div_ [class_ "flex flex-col gap-3"] do
+          iconBadgeLg_ BrandBadge "key"
+          div_ [class_ "flex flex-col gap-1"] do
+            h3_ [class_ "text-xl font-semibold text-textStrong"] "Generate an API key"
+            p_ [class_ "text-sm text-textWeak text-pretty"] "Keys authenticate the telemetry your services send to this project."
+        form_ [hxPost_ $ "/p/" <> pid.toText <> "/apis", class_ "flex flex-col gap-6 pt-4", hxTarget_ settingsContentTarget] do
           div_ [class_ "flex flex-col gap-1.5"] do
             label_ [Lucid.for_ "api-key-title", class_ "text-sm font-medium text-textStrong"] "Key title"
-            p_ [class_ "text-xs text-textWeak"] "Use a name that identifies where this key is used."
-            input_ [id_ "api-key-title", class_ "input px-4 py-2 border w-full", type_ "text", placeholder_ "Production collector", name_ "title", required_ "true", maxlength_ "100", autocomplete_ "off"]
-          div_ [class_ "flex w-full"] $ button_ [type_ "submit", class_ "btn btn-primary w-full"] "Create key"
+            input_ [id_ "api-key-title", class_ "input w-full", type_ "text", placeholder_ "Production collector", name_ "title", required_ "true", maxlength_ "100", autocomplete_ "off", Aria.describedby_ "api-key-title-hint"]
+            p_ [id_ "api-key-title-hint", class_ "text-xs text-textWeak"] "Name it after the service or environment that uses it."
+          div_ [class_ "flex justify-end gap-2"] do
+            label_ [class_ "btn btn-sm btn-ghost", Lucid.for_ "apikey-modal"] "Cancel"
+            button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Create key"
     apiMainContent pid apiKeys Nothing
 
 
@@ -372,6 +377,8 @@ makeApiKeysTable pid apiKeys elemId =
     apiKeyColumns =
       [ Table.col "Title" \apiKey ->
           span_ [class_ "text-textStrong font-semibold text-sm truncate min-w-0 block max-w-48"] $ toHtml apiKey.title
+      , -- Titles repeat (two "js-sdk2"); the creation date is what tells such keys apart.
+        Table.col "Created" \apiKey -> span_ [class_ "text-sm text-textWeak tabular-nums whitespace-nowrap"] $ localTimeFmt_ "MMM d, yyyy" apiKey.createdAt
       , Table.col "Key" \apiKey -> do
           -- Reveal is pure CSS: the sr-only checkbox flips both spans and both eye labels
           -- via `group-has-[:checked]` on the row container (no hyperscript, survives morph).
@@ -379,12 +386,17 @@ makeApiKeysTable pid apiKeys elemId =
           let revealId = "reveal-key-" <> apiKey.id.toText
           div_ [class_ "group whitespace-nowrap w-full flex items-center gap-2 text-sm text-textWeak"] do
             input_ [type_ "checkbox", id_ revealId, class_ "hidden"]
-            span_ [class_ "min-w-0 group-has-[:checked]:hidden"] $ toHtml $ T.take 8 apiKey.keyPrefix <> T.replicate 20 "*"
-            span_ [id_ ("key-value-" <> apiKey.id.toText), class_ "min-w-0 hidden group-has-[:checked]:inline"] $ toHtml apiKey.keyPrefix
+            span_ [class_ "min-w-0 font-mono group-has-[:checked]:hidden"] do
+              span_ [class_ "text-textStrong"] $ toHtml $ T.take 8 apiKey.keyPrefix
+              span_ [class_ "text-textDisabled", Aria.hidden_ "true"] "••••••••"
+            span_ [id_ ("key-value-" <> apiKey.id.toText), class_ "min-w-0 font-mono text-textStrong hidden group-has-[:checked]:inline"] $ toHtml apiKey.keyPrefix
             div_ [class_ "flex items-center gap-1.5 shrink-0 ml-auto"] do
-              label_ [Lucid.for_ revealId, role_ "button", tabindex_ "0", Aria.label_ $ "Show value for " <> apiKey.title, class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer group-has-[:checked]:hidden tooltip tooltip-left tap-target focus-visible:outline-2 focus-visible:outline-offset-2", data_ "tip" "Show key", keyboardActivateAttr_]
+              -- Wrappers carry the toggle: .tap-target's display (custom layer) outranks `hidden`.
+              span_ [class_ "group-has-[:checked]:hidden"]
+                $ label_ [Lucid.for_ revealId, role_ "button", tabindex_ "0", Aria.label_ $ "Show value for " <> apiKey.title, class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer tooltip tooltip-left tap-target focus-visible:outline-2 focus-visible:outline-offset-2", data_ "tip" "Show key", keyboardActivateAttr_]
                 $ faSprite_ "eye" "regular" "h-3.5 w-3.5 text-iconNeutral"
-              label_ [Lucid.for_ revealId, role_ "button", tabindex_ "0", Aria.label_ $ "Hide value for " <> apiKey.title, class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer hidden group-has-[:checked]:block tooltip tooltip-left tap-target focus-visible:outline-2 focus-visible:outline-offset-2", data_ "tip" "Hide key", keyboardActivateAttr_]
+              span_ [class_ "hidden group-has-[:checked]:inline"]
+                $ label_ [Lucid.for_ revealId, role_ "button", tabindex_ "0", Aria.label_ $ "Hide value for " <> apiKey.title, class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer tooltip tooltip-left tap-target focus-visible:outline-2 focus-visible:outline-offset-2", data_ "tip" "Hide key", keyboardActivateAttr_]
                 $ faSprite_ "eye" "regular" "h-3.5 w-3.5 text-iconNeutral"
               button_
                 [ class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer tooltip tooltip-left tap-target"
@@ -396,11 +408,11 @@ makeApiKeysTable pid apiKeys elemId =
                 $ faSprite_ "clipboard-copy" "regular" "h-3.5 w-3.5 text-iconNeutral"
               let (hxMethod, tip, icon, iconCls) =
                     if apiKey.active
-                      then (hxDelete_, "Revoke key", "circle-xmark", "text-iconError")
-                      else (hxPatch_, "Activate key", "circle-check", "text-iconSuccess")
+                      then (hxDelete_, "Revoke key", "circle-xmark", "group-hover/act:text-iconError")
+                      else (hxPatch_, "Activate key", "circle-check", "group-hover/act:text-iconSuccess")
                   confirmMsg = "Are you sure you want to " <> bool "activate " "revoke " apiKey.active <> apiKey.title <> " API key?"
               button_
-                [ class_ $ "p-1 rounded cursor-pointer tooltip tooltip-left tap-target " <> bool "hover:bg-fillSuccess-weak" "hover:bg-fillError-weak" apiKey.active
+                [ class_ $ "group/act p-1 rounded cursor-pointer tooltip tooltip-left tap-target " <> bool "hover:bg-fillSuccess-weak" "hover:bg-fillError-weak" apiKey.active
                 , type_ "button"
                 , Aria.label_ $ bool "Activate " "Revoke " apiKey.active <> apiKey.title
                 , hxMethod $ "/p/" <> pid.toText <> "/apis/" <> apiKey.id.toText
@@ -409,7 +421,7 @@ makeApiKeysTable pid apiKeys elemId =
                 , data_ "tip" tip
                 ]
                 $ faSprite_ icon "regular"
-                $ "h-3.5 w-3.5 "
+                $ "h-3.5 w-3.5 text-iconNeutral "
                 <> iconCls
       ]
 
