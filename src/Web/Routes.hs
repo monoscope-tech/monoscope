@@ -1,20 +1,25 @@
-module Web.Routes (server, genAuthServerContext, KeepPrefixExp, LogDataFieldExp, widgetPngGetH, widgetGetH, chartsDataGetH, ApiV1Routes, apiV1Server, apiV1OpenApiSpec) where
+module Web.Routes (server, genAuthServerContext, KeepPrefixExp, LogDataFieldExp, widgetPngGetH, widgetGetH, chartsDataGetH, ApiV1Routes, apiV1Server, apiV1OpenApiSpec, mcpProjectTools) where
 
 -- Standard library imports
 import Control.Lens
 import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString qualified as BS
 import Data.ByteString.Builder (Builder)
 import Data.Default (def)
 import Data.List qualified as L
+import Data.Map.Strict qualified as Map
 import Data.Ord (clamp)
 import Data.Time (UTCTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.UUID qualified as UUID
 import Deriving.Aeson.Stock qualified as DAE
+import Effectful (Eff)
+import Effectful qualified as Eff
 import GHC.TypeLits (Symbol)
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude hiding (ask)
+import UnliftIO (withRunInIO)
 
 -- Database imports
 import Data.Effectful.Hasql qualified as Hasql
@@ -29,10 +34,10 @@ import Effectful.State.Static.Local qualified as State
 import Effectful.Time qualified as Time
 
 -- Web and server imports
-import Log (Logger, UTCTime)
+import Log (Logger)
 import Lucid
 import Network.HTTP.Types qualified as H
-import Network.Wai (Request, queryString)
+import Network.Wai (Request)
 import Network.Wai qualified as Wai
 import Servant
 import Servant.HTML.Lucid (HTML)
@@ -41,26 +46,23 @@ import Servant.QueryParam.Record (RecordParam)
 import Servant.QueryParam.Server.Record ()
 import Servant.QueryParam.TypeLevel (Eval, Exp)
 import Servant.Server.Generic (AsServerT, genericServeTWithContext)
-import Servant.Server.Internal.Delayed (passToServer)
 import Web.Cookie (SetCookie)
 
 -- System and configuration imports
 
-import Data.OpenApi (OpenApi, SecurityDefinitions (..), SecurityScheme (..), SecuritySchemeType (..), components, description, info, security, securitySchemes, servers, title, version)
-import Data.OpenApi qualified as OA
+import Data.OpenApi (OpenApi)
 import OpenTelemetry.Trace (TracerProvider)
 import Pages.CommandPalette qualified as CommandPalette
-import Servant.OpenApi (HasOpenApi (..), toOpenApi)
 import System.Config (AuthContext (..), DeploymentEnv (..), EnvConfig (..))
 import System.Exit (ExitCode (..))
 import System.Logging qualified as Log
 import System.Process.Typed (byteStringInput, proc, readProcess, setStdin)
 import System.Timeout (timeout)
-import System.Types (ATAuthCtx, ATBaseCtx, ApiPrincipal (..), HXRedirectDest, RespHeaders, TriggerEvents, XWidgetJSON, addRespHeaders, effToServantHandler)
+import System.Types (ATAuthCtx, ATBaseCtx, ApiPrincipal (..), HXRedirectDest, ProjectToolCtx, RespHeaders, TriggerEvents, XWidgetJSON, addRespHeaders)
+import Web.ApiTypes (ApiActor (..))
 import Web.Auth (APItoolkitAuthContext, ApiKeyAuthContext, apiKeyAuthHandler, authHandler, htmlServerError)
 import Web.Auth qualified as Auth
 import Web.MCP qualified as MCP
-import Web.Wire qualified as Wire
 
 -- Model imports
 
@@ -76,18 +78,15 @@ import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.ContainerTypes (Scope)
-import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
+import Pkg.AI qualified as AI
 import Pkg.Parser qualified as Parser
-import Pkg.Parser.Expr qualified as ParserExpr
 import UnliftIO.Exception (handle, throwIO)
 import Utils qualified
 import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
 
 -- Page imports
 
-import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.CodeContext qualified as CodeContext
@@ -130,6 +129,7 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.EmailTemplates qualified as ET
 import Pkg.Git qualified as Git
 import Pkg.LiveTail qualified as LT
+import Web.ApiHandlers (AllQueryParams, ApiV1Routes (..), apiV1OpenApiSpec)
 import Web.ApiHandlers qualified as ApiH
 import Web.ApiTypes qualified as ApiT
 
@@ -156,9 +156,6 @@ type QPUUId a = QueryParam a UUID.UUID
 
 
 -- Custom type for handling all query parameters
-data AllQueryParams
-
-
 -- Type-level expression for preserving field prefixes in RecordParam
 data KeepPrefixExp :: Symbol -> Exp Symbol
 type instance Eval (KeepPrefixExp sym) = sym
@@ -258,177 +255,6 @@ otlpHttpH export keyM body =
 -- When bytestring is returned for json, simply return the bytestring
 instance Servant.MimeRender JSON ByteString where
   mimeRender _ = fromStrict
-
-
--- =============================================================================
--- Public API v1 Routes
--- =============================================================================
-
-type ApiV1Routes :: Type -> Type
-data ApiV1Routes mode = ApiV1Routes
-  { ingestionKey :: mode :- "ingestion-key" :> Get '[JSON] (Headers '[Header "Cache-Control" Text] Wire.IngestionKey)
-  , eventsSearch
-      :: mode
-        :- "events"
-          :> QPT "query"
-          :> QPT "since"
-          :> QPT "from"
-          :> QPT "to"
-          :> QPT "source"
-          :> QueryParam "limit" Int
-          :> QueryParam "with_children" Bool
-          :> QueryParam "include_attributes" Bool
-          :> QPT "environment"
-          :> QPT "service"
-          :> Get '[JSON] Log.LogResult
-  , eventGet
-      :: mode
-        :- "events"
-          :> Capture "event_id" UUID.UUID
-          :> "time"
-          :> Capture "timestamp" UTCTime
-          :> Get '[JSON] AE.Value
-  , metricsQuery
-      :: mode
-        :- "metrics"
-          :> QueryParam' '[Optional, Strict, Description "KQL over the metrics source, e.g. metrics | where metric_name == \"http.server.requests\" | summarize rate(value) by bin_auto(timestamp). Use rate(value) (per second) or increase(value) (per bin) for counters, last(value) for gauges; they are computed per series and reset-aware. rateif/increaseif/lastif(value, predicate) aggregate only the matching series, for ratios."] "query" Text
-          :> QueryParam "data_type" Charts.DataType
-          :> QPT "since"
-          :> QPT "from"
-          :> QPT "to"
-          :> QPT "source"
-          :> QPT "environment"
-          :> QPT "service"
-          :> Get '[JSON] Charts.MetricsData
-  , schemaGet :: mode :- "schema" :> Get '[JSON] Schema.Schema
-  , facetsGet
-      :: mode
-        :- "facets"
-          :> QPT "since"
-          :> QPT "from"
-          :> QPT "to"
-          :> QPT "field"
-          :> Get '[JSON] AE.Value
-  , rrwebPost :: mode :- "rrweb" :> ReqBody '[JSON] Replay.ReplayPost :> Post '[JSON] AE.Value
-  , -- Monitors (CRUD + lifecycle)
-    monitorsList :: mode :- "monitors" :> Get '[JSON] [Monitors.QueryMonitor]
-  , monitorGet :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> Get '[JSON] Monitors.QueryMonitor
-  , monitorCreate :: mode :- "monitors" :> ReqBody '[JSON] ApiT.MonitorInput :> Post '[JSON] Monitors.QueryMonitor
-  , monitorApply :: mode :- "monitors" :> "apply" :> ReqBody '[JSON] ApiT.MonitorInput :> Post '[JSON] Monitors.QueryMonitor
-  , monitorYaml :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> "yaml" :> Get '[JSON] ApiT.MonitorInput
-  -- ^ /yaml returns the applyable MonitorInput as JSON (same for dashboards);
-  -- the CLI renders it as YAML client-side via runYamlDump.
-  , monitorUpdate :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> ReqBody '[JSON] ApiT.MonitorInput :> Put '[JSON] Monitors.QueryMonitor
-  , monitorPatch :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> ReqBody '[JSON] ApiT.MonitorPatch :> Patch '[JSON] Monitors.QueryMonitor
-  , monitorDelete :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> Delete '[JSON] NoContent
-  , monitorToggleActive :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> "toggle_active" :> Post '[JSON] Monitors.QueryMonitor
-  , monitorMute :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> "mute" :> QueryParam "duration_minutes" Int :> Post '[JSON] Monitors.QueryMonitor
-  , monitorUnmute :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> "unmute" :> Post '[JSON] Monitors.QueryMonitor
-  , monitorResolve :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> "resolve" :> Post '[JSON] Monitors.QueryMonitor
-  , monitorBulk :: mode :- "monitors" :> "bulk" :> ReqBody '[JSON] (ApiT.BulkAction UUID.UUID) :> Post '[JSON] (ApiT.BulkResult UUID.UUID)
-  , -- Events body variant (avoids URL length limits)
-    eventsQuery :: mode :- "events" :> "query" :> ReqBody '[JSON] ApiT.EventsQuery :> Post '[JSON] Log.LogResult
-  , -- Share links
-    shareLinkCreate :: mode :- "share" :> ReqBody '[JSON] ApiH.ShareLinkCreate :> Post '[JSON] ApiH.ShareLinkCreated
-  , -- Dashboards (CRUD + IaC apply + widgets)
-    dashboardsList
-      :: mode
-        :- "dashboards"
-          :> QPT "sort"
-          :> QPT "team_id"
-          :> Get '[JSON] [ApiT.DashboardSummary]
-  , dashboardGet :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> Get '[JSON] ApiT.DashboardFull
-  , -- Widget data resolved server-side, for clients that can't run the widget JS
-    -- (the CLI renders these straight into the terminal).
-    dashboardData
-      :: mode
-        :- "dashboards"
-          :> Capture "dashboard_id" Dashboards.DashboardId
-          :> "data"
-          :> QPT "tab"
-          :> QPT "widget"
-          :> QPT "since"
-          :> QPT "from"
-          :> QPT "to"
-          :> AllQueryParams
-          :> Get '[JSON] ApiT.DashboardData
-  , dashboardCreate :: mode :- "dashboards" :> ReqBody '[JSON] ApiT.DashboardInput :> Post '[JSON] ApiT.DashboardFull
-  , dashboardApply :: mode :- "dashboards" :> "apply" :> ReqBody '[JSON] ApiT.DashboardYAMLDoc :> Post '[JSON] ApiT.DashboardFull
-  , dashboardUpdate :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> ReqBody '[JSON] ApiT.DashboardInput :> Put '[JSON] ApiT.DashboardFull
-  , dashboardPatch :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> ReqBody '[JSON] ApiT.DashboardPatch :> Patch '[JSON] ApiT.DashboardFull
-  , dashboardDelete :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> Delete '[JSON] NoContent
-  , dashboardDuplicate :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "duplicate" :> Post '[JSON] ApiT.DashboardFull
-  , dashboardStar :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "star" :> Post '[JSON] ApiT.DashboardFull
-  , dashboardUnstar :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "star" :> Delete '[JSON] NoContent
-  , dashboardYaml :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "yaml" :> Get '[JSON] ApiT.DashboardYAMLDoc
-  , dashboardWidgetUpsert :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> ReqBody '[JSON] Widget.Widget :> Put '[JSON] Widget.Widget
-  , dashboardWidgetDelete :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> Delete '[JSON] NoContent
-  , dashboardWidgetsReorder :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> "order" :> ReqBody '[JSON] (Map Text ApiT.WidgetPosition) :> Patch '[JSON] NoContent
-  , dashboardBulk :: mode :- "dashboards" :> "bulk" :> ReqBody '[JSON] (ApiT.BulkAction UUID.UUID) :> Post '[JSON] (ApiT.BulkResult UUID.UUID)
-  , -- API keys
-    apiKeysList :: mode :- "api_keys" :> Get '[JSON] [ApiT.ApiKeySummary]
-  , apiKeyGet :: mode :- "api_keys" :> Capture "key_id" ProjectApiKeys.ProjectApiKeyId :> Get '[JSON] ApiT.ApiKeySummary
-  , apiKeyCreate :: mode :- "api_keys" :> ReqBody '[JSON] ApiT.ApiKeyCreate :> Post '[JSON] ApiT.ApiKeyCreated
-  , apiKeyActivate :: mode :- "api_keys" :> Capture "key_id" ProjectApiKeys.ProjectApiKeyId :> "activate" :> Post '[JSON] ApiT.ApiKeySummary
-  , apiKeyDeactivate :: mode :- "api_keys" :> Capture "key_id" ProjectApiKeys.ProjectApiKeyId :> "deactivate" :> Post '[JSON] ApiT.ApiKeySummary
-  , apiKeyDelete :: mode :- "api_keys" :> Capture "key_id" ProjectApiKeys.ProjectApiKeyId :> Delete '[JSON] NoContent
-  , -- Plan B: /me + /project (singular) + /issues + /endpoints + /log_patterns
-    meGet :: mode :- "me" :> Get '[JSON] ApiT.MeResponse
-  , projectGet :: mode :- "project" :> Get '[JSON] ApiT.ProjectFull
-  , projectPatch :: mode :- "project" :> ReqBody '[JSON] Projects.ProjectPatch :> Patch '[JSON] ApiT.ProjectFull
-  , endpointsList
-      :: mode
-        :- "endpoints"
-          :> QPT "search"
-          :> QueryParam "outgoing" Bool
-          :> QueryParam "page" Int
-          :> QueryParam "per_page" Int
-          :> Get '[JSON] (ApiT.Paged ApiT.EndpointSummary)
-  , endpointGet :: mode :- "endpoints" :> Capture "endpoint_id" Endpoints.EndpointId :> Get '[JSON] ApiT.EndpointFull
-  , logPatternsList
-      :: mode
-        :- "log_patterns"
-          :> QueryParam "page" Int
-          :> QueryParam "per_page" Int
-          :> Get '[JSON] (ApiT.Paged ApiT.LogPatternSummary)
-  , logPatternGet :: mode :- "log_patterns" :> Capture "pattern_id" Int64 :> Get '[JSON] ApiT.LogPatternFull
-  , logPatternAck :: mode :- "log_patterns" :> Capture "pattern_id" Int64 :> "ack" :> Post '[JSON] ApiT.LogPatternFull
-  , logPatternsBulk :: mode :- "log_patterns" :> "bulk" :> ReqBody '[JSON] (ApiT.BulkAction Int64) :> Post '[JSON] (ApiT.BulkResult Int64)
-  , -- Issues
-    issuesList
-      :: mode
-        :- "issues"
-          :> QueryParam "status" ApiT.IssueStatus
-          :> QPT "type"
-          :> QPT "service"
-          :> QueryParam "page" Int
-          :> QueryParam "per_page" Int
-          :> Get '[JSON] (ApiT.Paged ApiT.IssueApiSummary)
-  , issueGet :: mode :- "issues" :> Capture "issue_id" Issues.IssueId :> Get '[JSON] ApiT.IssueApiFull
-  , issueAck :: mode :- "issues" :> Capture "issue_id" Issues.IssueId :> "ack" :> QueryParam "duration_minutes" Int :> Post '[JSON] ApiT.IssueApiFull
-  , issueUnack :: mode :- "issues" :> Capture "issue_id" Issues.IssueId :> "unack" :> Post '[JSON] ApiT.IssueApiFull
-  , issueArchive :: mode :- "issues" :> Capture "issue_id" Issues.IssueId :> "archive" :> Post '[JSON] ApiT.IssueApiFull
-  , issueUnarchive :: mode :- "issues" :> Capture "issue_id" Issues.IssueId :> "unarchive" :> Post '[JSON] ApiT.IssueApiFull
-  , issuesBulk :: mode :- "issues" :> "bulk" :> ReqBody '[JSON] (ApiT.BulkAction Issues.IssueId) :> Post '[JSON] (ApiT.BulkResult Issues.IssueId)
-  , incidentsList :: mode :- "incidents" :> QueryParam "phase" Incidents.EpisodePhase :> QueryParam "limit" Int :> Get '[JSON] [ApiT.IncidentSummary]
-  , incidentGet :: mode :- "incidents" :> Capture "incident_id" Incidents.EpisodeId :> Get '[JSON] ApiT.IncidentSummary
-  , -- Teams (B3) + Members (B4)
-    teamsList :: mode :- "teams" :> Get '[JSON] [ApiT.TeamSummary]
-  , teamGet :: mode :- "teams" :> Capture "team_id" ApiT.TeamId :> Get '[JSON] ApiT.TeamFull
-  , teamCreate :: mode :- "teams" :> ReqBody '[JSON] ApiT.TeamInput :> Post '[JSON] ApiT.TeamFull
-  , teamUpdate :: mode :- "teams" :> Capture "team_id" ApiT.TeamId :> ReqBody '[JSON] ApiT.TeamInput :> Put '[JSON] ApiT.TeamFull
-  , teamPatch :: mode :- "teams" :> Capture "team_id" ApiT.TeamId :> ReqBody '[JSON] ApiT.TeamPatch :> Patch '[JSON] ApiT.TeamFull
-  , teamDelete :: mode :- "teams" :> Capture "team_id" ApiT.TeamId :> Delete '[JSON] NoContent
-  , teamsBulk :: mode :- "teams" :> "bulk" :> ReqBody '[JSON] (ApiT.BulkAction ApiT.TeamId) :> Post '[JSON] (ApiT.BulkResult ApiT.TeamId)
-  , membersList :: mode :- "members" :> Get '[JSON] [ApiT.MemberSummary]
-  , memberGet :: mode :- "members" :> Capture "user_id" UUID.UUID :> Get '[JSON] ApiT.MemberSummary
-  , memberAdd :: mode :- "members" :> ReqBody '[JSON] ApiT.MemberAdd :> Post '[JSON] ApiT.MemberSummary
-  , memberPatch :: mode :- "members" :> Capture "user_id" UUID.UUID :> ReqBody '[JSON] ApiT.MemberPatch :> Patch '[JSON] ApiT.MemberSummary
-  , memberRemove :: mode :- "members" :> Capture "user_id" UUID.UUID :> Delete '[JSON] NoContent
-  , -- Model Context Protocol endpoint (JSON-RPC; tools derived from this OpenAPI spec)
-    mcp :: mode :- "mcp" :> ReqBody '[JSON] AE.Value :> Post '[JSON] AE.Value
-  }
-  deriving stock (Generic)
 
 
 -- =============================================================================
@@ -804,191 +630,116 @@ data ProjectsRoutes' mode = ProjectsRoutes'
 -- Main server for the root routes
 server :: Logger -> AuthContext -> TracerProvider -> OtlpHttpHandler -> OtlpHttpHandler -> Routes (AsServerT ATBaseCtx)
 server logger env tp otlpTraces otlpLogs =
-  Routes
-    { public = Servant.serveDirectoryWebApp "./static/public"
-    , ping = pingH
-    , status = statusH
-    , login = Auth.loginH
-    , toLogin = Auth.loginRedirectH
-    , logout = Auth.logoutH
-    , setLanguage = Auth.setLanguageH
-    , authCallback = Auth.authCallbackH
-    , otlpTracesPost = otlpHttpH otlpTraces
-    , otlpLogsPost = otlpHttpH otlpLogs
-    , shareLinkGet = Share.shareLinkGetH
-    , shareReplaySessionGet = Share.shareReplaySessionGetH
-    , discordLinkProjectGet = Discord.linkDiscordGetH
-    , discordInteractions = Discord.discordInteractionsH
-    , slackInteractions = Slack.slackFormPostH Slack.slackInteractionsH
-    , slackActionsPost = Slack.slackFormPostH Slack.slackActionsH
-    , slackEventsPost = Slack.slackEventsPostH
-    , externalOptionsGet = Slack.slackFormPostH Slack.externalOptionsH
-    , whatsappIncomingPost = Whatsapp.whatsappIncomingPostH
-    , clientMetadata = Auth.clientMetadataH
-    , lemonWebhook = Settings.webhookPostH
-    , stripeWebhook = Settings.stripeWebhookPostH
-    , githubWebhook = \sigM eventM body -> GitSync.gitWebhookPostH Git.GitHub (Git.WebhookReq eventM sigM Nothing Nothing Nothing body)
-    , gitWebhook = \host bbSig giteaSig glSig glToken glId glTs giteaEvent glEvent bbEvent body ->
-        GitSync.gitWebhookPostH
-          host
-          Git.WebhookReq
-            { event = asum [giteaEvent, glEvent, bbEvent]
-            , signature = asum [giteaSig, glSig, bbSig]
-            , gitlabToken = glToken
-            , gitlabWebhookId = glId
-            , gitlabTimestamp = glTs
-            , body = body
-            }
-    , chartsDataShot = Charts.queryMetrics Nothing
-    , avatarGet = avatarGetH
-    , widgetPngGet = widgetPngGetH
-    , proxyLanding = \path ->
-        Onboarding.proxyLandingH path
-          & State.evalState @TriggerEvents mempty
-          & State.evalState @HXRedirectDest Nothing
-          & State.evalState @XWidgetJSON Nothing
-    , deviceCode = Auth.deviceCodeH
-    , deviceToken = Auth.deviceTokenH
-    , emailPreviewList = emailPreviewListH
-    , emailPreview = emailPreviewH
-    , apiV1 = apiV1Server logger env tp
-    , apiV1OpenApi = pure apiV1OpenApiSpec
-    , cookieProtected = \sessionWithCookies ->
-        Servant.hoistServerWithContext
-          (Proxy @(Servant.NamedRoutes CookieProtectedRoutes))
-          (Proxy @'[APItoolkitAuthContext])
-          ( \page ->
-              page
-                & Notify.runNotifyProduction
-                & State.evalState mempty -- TriggerEvents
-                & State.evalState Nothing -- HXRedirectDest
-                & State.evalState Nothing -- XWidgetJSON
-                & Reader.runReader sessionWithCookies
-          )
-          cookieProtectedServer
-    }
+  let projectTools = Just mcpProjectTools
+   in Routes
+        { public = Servant.serveDirectoryWebApp "./static/public"
+        , ping = pingH
+        , status = statusH
+        , login = Auth.loginH
+        , toLogin = Auth.loginRedirectH
+        , logout = Auth.logoutH
+        , setLanguage = Auth.setLanguageH
+        , authCallback = Auth.authCallbackH
+        , otlpTracesPost = otlpHttpH otlpTraces
+        , otlpLogsPost = otlpHttpH otlpLogs
+        , shareLinkGet = Share.shareLinkGetH
+        , shareReplaySessionGet = Share.shareReplaySessionGetH
+        , discordLinkProjectGet = Discord.linkDiscordGetH
+        , discordInteractions = Discord.discordInteractionsH
+        , slackInteractions = Slack.slackFormPostH $ Slack.slackInteractionsHWithTools projectTools
+        , slackActionsPost = Slack.slackFormPostH Slack.slackActionsH
+        , slackEventsPost = Slack.slackEventsPostH
+        , externalOptionsGet = Slack.slackFormPostH Slack.externalOptionsH
+        , whatsappIncomingPost = Whatsapp.whatsappIncomingPostH
+        , clientMetadata = Auth.clientMetadataH
+        , lemonWebhook = Settings.webhookPostH
+        , stripeWebhook = Settings.stripeWebhookPostH
+        , githubWebhook = \sigM eventM body -> GitSync.gitWebhookPostH Git.GitHub (Git.WebhookReq eventM sigM Nothing Nothing Nothing body)
+        , gitWebhook = \host bbSig giteaSig glSig glToken glId glTs giteaEvent glEvent bbEvent body ->
+            GitSync.gitWebhookPostH
+              host
+              Git.WebhookReq
+                { event = asum [giteaEvent, glEvent, bbEvent]
+                , signature = asum [giteaSig, glSig, bbSig]
+                , gitlabToken = glToken
+                , gitlabWebhookId = glId
+                , gitlabTimestamp = glTs
+                , body = body
+                }
+        , chartsDataShot = Charts.queryMetrics Nothing
+        , avatarGet = avatarGetH
+        , widgetPngGet = widgetPngGetH
+        , proxyLanding = \path ->
+            Onboarding.proxyLandingH path
+              & State.evalState @TriggerEvents mempty
+              & State.evalState @HXRedirectDest Nothing
+              & State.evalState @XWidgetJSON Nothing
+        , deviceCode = Auth.deviceCodeH
+        , deviceToken = Auth.deviceTokenH
+        , emailPreviewList = emailPreviewListH
+        , emailPreview = emailPreviewH
+        , apiV1 = apiV1Server
+        , apiV1OpenApi = pure apiV1OpenApiSpec
+        , cookieProtected = \sessionWithCookies ->
+            Servant.hoistServerWithContext
+              (Proxy @(Servant.NamedRoutes CookieProtectedRoutes))
+              (Proxy @'[APItoolkitAuthContext])
+              ( \page ->
+                  page
+                    & Notify.runNotifyProduction
+                    & State.evalState mempty -- TriggerEvents
+                    & State.evalState Nothing -- HXRedirectDest
+                    & State.evalState Nothing -- XWidgetJSON
+                    & Reader.runReader sessionWithCookies
+              )
+              (cookieProtectedServer projectTools)
+        }
 
 
 -- API v1 server
-apiV1Server :: Logger -> AuthContext -> TracerProvider -> ApiPrincipal -> Servant.ServerT (NamedRoutes ApiV1Routes) ATBaseCtx
-apiV1Server logger env tp principal =
-  ApiV1Routes
-    { ingestionKey = ApiH.apiIngestionKey principal
-    , eventsSearch = Log.queryEvents pid
-    , eventGet = ApiH.apiEventGet pid
-    , -- API clients have no browser scope cookie. Omitting either boundary is the
-      -- intentional cross-environment/service default; callers that need a scope
-      -- state it explicitly and receive the same generated predicate as a chart.
-      metricsQuery = \queryM dataTypeM sinceM fromM toM sourceM environmentM serviceM ->
-        Charts.queryMetrics Nothing dataTypeM (Just pid) queryM Nothing sinceM fromM toM sourceM Nothing [("environment", environmentM), ("service", serviceM)]
-    , -- C1: derive schema from the live introspected column set (seeded at
-      -- startup) and decorate with the hand-coded descriptions / examples in
-      -- 'Schema.telemetrySchema'. Live entries without a decoration get a
-      -- bare {type:"text", description:"", examples:null} entry — so a new
-      -- column added to otel_logs_and_spans is queryable + visible in the
-      -- schema response without a code edit.
-      schemaGet = pure (Schema.deriveSchema ParserExpr.flattenedOtelAttributes)
-    , facetsGet = ApiH.apiFacets pid
-    , rrwebPost = Replay.replayPostH pid
-    , -- Monitors
-      monitorsList = ApiH.apiMonitorsList pid
-    , monitorGet = ApiH.apiMonitorGet pid
-    , monitorCreate = ApiH.apiMonitorCreate pid
-    , monitorApply = ApiH.apiMonitorApply pid
-    , monitorYaml = ApiH.apiMonitorYaml pid
-    , monitorUpdate = ApiH.apiMonitorUpdate pid
-    , monitorPatch = ApiH.apiMonitorPatch pid
-    , monitorDelete = ApiH.apiMonitorDelete pid
-    , monitorToggleActive = ApiH.apiMonitorToggleActive pid
-    , monitorMute = ApiH.apiMonitorMute pid
-    , monitorUnmute = ApiH.apiMonitorUnmute pid
-    , monitorResolve = ApiH.apiMonitorResolve pid
-    , monitorBulk = ApiH.apiMonitorBulk pid
-    , eventsQuery = ApiH.apiEventsQuery pid
-    , shareLinkCreate = ApiH.apiShareLinkCreate pid
-    , -- Dashboards
-      dashboardsList = ApiH.apiDashboardsList pid
-    , dashboardGet = ApiH.apiDashboardGet pid
-    , dashboardData = ApiH.apiDashboardData pid
-    , dashboardCreate = ApiH.apiDashboardCreate pid
-    , dashboardApply = ApiH.apiDashboardApply pid
-    , dashboardUpdate = ApiH.apiDashboardUpdate pid
-    , dashboardPatch = ApiH.apiDashboardPatch pid
-    , dashboardDelete = ApiH.apiDashboardDelete pid
-    , dashboardDuplicate = ApiH.apiDashboardDuplicate pid
-    , dashboardStar = ApiH.apiDashboardStar pid
-    , dashboardUnstar = ApiH.apiDashboardUnstar pid
-    , dashboardYaml = ApiH.apiDashboardYaml pid
-    , dashboardWidgetUpsert = ApiH.apiDashboardWidgetUpsert pid
-    , dashboardWidgetDelete = ApiH.apiDashboardWidgetDelete pid
-    , dashboardWidgetsReorder = ApiH.apiDashboardWidgetsReorder pid
-    , dashboardBulk = ApiH.apiDashboardBulk pid
-    , -- API keys
-      apiKeysList = ApiH.apiKeysList pid
-    , apiKeyGet = ApiH.apiKeyGet pid
-    , apiKeyCreate = ApiH.apiKeyCreate pid
-    , apiKeyActivate = ApiH.apiKeyActivate pid
-    , apiKeyDeactivate = ApiH.apiKeyDeactivate pid
-    , apiKeyDelete = ApiH.apiKeyDelete pid
-    , -- Plan B
-      meGet = ApiH.apiMe pid
-    , projectGet = ApiH.apiProjectGet pid
-    , projectPatch = ApiH.apiProjectPatch pid
-    , endpointsList = ApiH.apiEndpointsList pid
-    , endpointGet = ApiH.apiEndpointGet pid
-    , logPatternsList = ApiH.apiLogPatternsList pid
-    , logPatternGet = ApiH.apiLogPatternGet pid
-    , logPatternAck = ApiH.apiLogPatternAck pid
-    , logPatternsBulk = ApiH.apiLogPatternsBulk pid
-    , -- Issues
-      issuesList = ApiH.apiIssuesList pid
-    , issueGet = ApiH.apiIssueGet pid
-    , issueAck = ApiH.apiIssueAck pid
-    , issueUnack = ApiH.apiIssueUnack pid
-    , issueArchive = ApiH.apiIssueArchive pid
-    , issueUnarchive = ApiH.apiIssueUnarchive pid
-    , issuesBulk = ApiH.apiIssuesBulk pid
-    , incidentsList = ApiH.apiIncidentsList pid
-    , incidentGet = ApiH.apiIncidentGet pid
-    , -- Teams + Members
-      teamsList = ApiH.apiTeamsList pid
-    , teamGet = ApiH.apiTeamGet pid
-    , teamCreate = ApiH.apiTeamCreate pid
-    , teamUpdate = ApiH.apiTeamUpdate pid
-    , teamPatch = ApiH.apiTeamPatch pid
-    , teamDelete = ApiH.apiTeamDelete pid
-    , teamsBulk = ApiH.apiTeamsBulk pid
-    , membersList = ApiH.apiMembersList pid
-    , memberGet = ApiH.apiMemberGet pid
-    , memberAdd = ApiH.apiMemberAdd pid
-    , memberPatch = ApiH.apiMemberPatch pid
-    , memberRemove = ApiH.apiMemberRemove pid
-    , -- MCP re-enters the REST API as the same principal, never with wider access.
-      mcp = MCP.handleJsonRpc mcpToolRegistry (genericServeTWithContext (effToServantHandler env logger tp) (apiV1Server logger env tp principal) Servant.EmptyContext) pid
-    }
-  where
-    pid = principal.projectId
+apiV1Server :: ApiPrincipal -> Servant.ServerT (NamedRoutes ApiV1Routes) ATBaseCtx
+apiV1Server = apiV1ServerAs ApiKeyPrincipal
+
+
+apiV1ServerAs :: ApiActor -> ApiPrincipal -> Servant.ServerT (NamedRoutes ApiV1Routes) ATBaseCtx
+apiV1ServerAs actor principal = ApiH.apiV1Server actor principal Log.queryEvents Dashboards.apiDashboardData \request ->
+  withRunInIO \run -> run $ MCP.handleJsonRpc mcpToolRegistry (apiV1App run actor principal) principal.projectId request
+
+
+apiV1App :: ProjectToolCtx es => (forall a. Eff es a -> IO a) -> ApiActor -> ApiPrincipal -> Servant.Application
+apiV1App run actor principal =
+  genericServeTWithContext
+    (Handler . ExceptT . run . Error.runErrorNoCallStack @ServerError . Eff.inject)
+    (apiV1ServerAs actor principal)
+    Servant.EmptyContext
 
 
 -- | MCP tool registry — REST tools (from OpenAPI) + composite workflow tools,
 -- built once at startup.
 {-# NOINLINE mcpToolRegistry #-}
 mcpToolRegistry :: Map Text MCP.Tool
-mcpToolRegistry = MCP.allTools apiV1OpenApiSpec
+mcpToolRegistry = MCP.allTools apiV1OpenApiSpec $ \pid tz input -> do
+  authCtx <- Reader.ask @AuthContext
+  AI.runNlSearch pid authCtx.env tz input
 
 
-apiV1OpenApiSpec :: OpenApi
-apiV1OpenApiSpec =
-  toOpenApi (Proxy @(NamedRoutes ApiV1Routes))
-    & info .~ (mempty & title .~ "Monoscope API" & version .~ "1.0" & description ?~ "Observability API for querying logs, traces, and metrics. Requires a Bearer API key and X-Project-Id header.")
-    & servers .~ [OA.Server "/api/v1" Nothing mempty]
-    & components . securitySchemes .~ SecurityDefinitions (fromList [("BearerAuth", SecurityScheme (SecuritySchemeApiKey (OA.ApiKeyParams "Authorization" OA.ApiKeyHeader)) Nothing)])
-    & security .~ [OA.SecurityRequirement (fromList [("BearerAuth", [])])]
+mcpProjectTools :: AI.ProjectTools
+mcpProjectTools =
+  AI.ProjectTools
+    { AI.catalog = mcpToolRegistry
+    , AI.invoke = \principal pid name args ->
+        case Map.lookup name mcpToolRegistry of
+          Nothing -> pure $ MCP.toolError $ "Unknown tool: " <> name
+          Just tool -> withRunInIO \run ->
+            run
+              $ Error.runErrorNoCallStack @ServerError (Eff.inject $ MCP.runTool (apiV1App run principal (Authenticated pid)) pid tool $ KM.fromMapText args)
+              <&> either (MCP.toolError . decodeUtf8 . errBody) id
+    }
 
 
 -- Cookie Protected server
-cookieProtectedServer :: Servant.ServerT (Servant.NamedRoutes CookieProtectedRoutes) ATAuthCtx
-cookieProtectedServer =
+cookieProtectedServer :: Maybe AI.ProjectTools -> Servant.ServerT (Servant.NamedRoutes CookieProtectedRoutes) ATAuthCtx
+cookieProtectedServer projectTools =
   CookieProtectedRoutes
     { -- Dashboard handlers
       dashboardRedirectGet = Dashboards.entrypointRedirectGetH "_overview.yaml" "Overview" ["overview", "http", "logs", "traces", "events"]
@@ -1075,8 +826,8 @@ cookieProtectedServer =
     , aiRoutineInstallPost = AIThreads.routineInstallPostH
     , aiThreadsGet = AIThreads.threadsGetH
     , aiThreadGet = AIThreads.threadGetH
-    , aiThreadsPost = AIThreads.startThreadPostH
-    , aiThreadPost = AIThreads.threadPostH
+    , aiThreadsPost = AIThreads.startThreadPostHWithTools projectTools
+    , aiThreadPost = AIThreads.threadPostHWithTools projectTools
     , aiThreadTitlePost = AIThreads.threadTitlePostH
     , aiThreadDelete = AIThreads.threadDeleteH
     , aiRoutinePost = AIThreads.routinePostH
@@ -1091,7 +842,7 @@ cookieProtectedServer =
     , -- Sub-route handlers
       projects = projectsServer
     , logExplorer = logExplorerServer
-    , issues = issuesServer
+    , issues = issuesServer projectTools
     , monitors = monitorsServer
     , traces = telemetryServer
     }
@@ -1115,7 +866,7 @@ logExplorerServer pid =
     , logExplorerItemDetailedGet = LogItem.expandAPIlogItemH pid
     , logExplorerRelatedMetricsGet = Metrics.relatedMetricsGetH pid
     , logExplorerExpandGet = Log.apiLogExpandH pid
-    , aiSearchPost = Log.aiSearchH pid
+    , aiSearchPost = AIThreads.aiSearchH pid
     , codeContextGet = PageCodeContext.codeContextH pid
     , liveTailGet = LiveTail.liveTailGetH pid
     , liveTailRecordGet = LiveTail.liveTailRecordH pid
@@ -1127,8 +878,8 @@ logExplorerServer pid =
 
 
 -- Issues server
-issuesServer :: Projects.ProjectId -> Servant.ServerT IssuesRoutes ATAuthCtx
-issuesServer pid =
+issuesServer :: Maybe AI.ProjectTools -> Projects.ProjectId -> Servant.ServerT IssuesRoutes ATAuthCtx
+issuesServer projectTools pid =
   IssuesRoutes'
     { acknowledgeGet = IssuesPage.acknowledgeIssueGetH pid True
     , unAcknowledgeGet = \aid -> IssuesPage.acknowledgeIssueGetH pid False aid Nothing
@@ -1149,7 +900,7 @@ issuesServer pid =
     , assignErrorPost = IssuesPage.assignErrorPostH pid
     , resolveErrorPost = IssuesPage.resolveErrorPostH pid
     , errorSubscriptionPost = IssuesPage.errorSubscriptionPostH pid
-    , aiChatPost = IssuesPage.aiChatPostH pid
+    , aiChatPost = IssuesPage.aiChatPostHWithTools projectTools pid
     , aiChatHistoryGet = IssuesPage.aiChatHistoryGetH pid
     , sampleGet = IssuesPage.issueSampleGetH pid
     , activityGet = IssuesPage.issueActivityGetH pid
@@ -1549,39 +1300,3 @@ errorFormatters env =
     , Servant.bodyParserErrorFormatter = \_ _ _ -> htmlServerError env.config 400
     , Servant.urlParseErrorFormatter = \_ _ _ -> htmlServerError env.config 400
     }
-
-
--- =============================================================================
--- Custom HasServer instances
--- =============================================================================
-
--- | We add a HasServer instance that says:
---   - The handler will receive a list of (Text, Maybe Text).
---   - We pull that out of the WAI `Request` in `route`.
-instance HasServer api ctx => HasServer (AllQueryParams :> api) ctx where
-  type ServerT (AllQueryParams :> api) m = [(Text, Maybe Text)] -> ServerT api m
-
-
-  route _ ctx subserver = route (Proxy :: Proxy api) ctx $ passToServer subserver grabAllParams
-    where
-      grabAllParams :: Request -> [(Text, Maybe Text)]
-      grabAllParams = map (bimap dec (fmap dec)) . queryString
-      dec = decodeUtf8With lenientDecode
-
-
-  hoistServerWithContext
-    :: Proxy (AllQueryParams :> api)
-    -> Proxy ctx
-    -> (forall x. m x -> n x)
-    -> ([(Text, Maybe Text)] -> ServerT api m)
-    -> ([(Text, Maybe Text)] -> ServerT api n)
-  hoistServerWithContext _ pc nat s = hoistServerWithContext (Proxy :: Proxy api) pc nat . s
-
-
--- | @AllQueryParams@ is a catch-all: it grabs whatever query string arrives, so
--- there is nothing specific to advertise. Documenting it as the identity keeps
--- routes that use it (currently @/dashboards/{id}/data@, which forwards
--- @var-*@/@const-*@ dashboard variables) inside the generated OpenAPI spec
--- instead of forcing them out of it.
-instance HasOpenApi api => HasOpenApi (AllQueryParams :> api) where
-  toOpenApi _ = toOpenApi (Proxy @api)

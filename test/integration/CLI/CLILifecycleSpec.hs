@@ -11,6 +11,7 @@ import Control.Concurrent (threadDelay)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.Effectful.Hasql qualified as Hasql
+import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (addUTCTime, getCurrentTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
@@ -25,6 +26,7 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Hasql.Interpolate qualified as HI
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects qualified as Projects
+import Database.PostgreSQL.Simple qualified as PGS
 import Pages.Share qualified as Share
 import Pkg.TestUtils
 import Relude
@@ -67,7 +69,7 @@ jsonOut out = case AE.eitherDecodeStrict' (encodeUtf8 out) of
 
 
 shouldHaveKeys :: AE.Value -> [Text] -> Expectation
-shouldHaveKeys (AE.Object obj) keys = forM_ keys \k -> unless (KM.member (fromString (toString k)) obj) do
+shouldHaveKeys (AE.Object obj) keys = forM_ keys \k -> unless (KM.member (fromString (toString k)) obj) $
   expectationFailure $ "missing key " <> toString k <> " in: " <> take 300 (decodeUtf8 (AE.encode obj))
 shouldHaveKeys other _ = expectationFailure $ "expected JSON object, got: " <> show other
 
@@ -376,6 +378,41 @@ spec = around withTestResources do
       map rowId (eventsOf v3) `shouldBe` ids1
 
   describe "metrics SLO lifecycle" do
+    it "lists a scoped metric catalog page through the CLI and public API" \tr -> do
+      withResource tr.trPool \conn -> for_ (["checkout.duration", "checkout.requests"] :: [Text]) \name -> void $ PGS.execute conn
+        [sql|INSERT INTO otel_metrics_meta
+          (project_id, metric_name, metric_type, metric_unit, metric_description, service_name, scope_name, metric_labels, first_seen_at, last_seen_at, first_timestamp, last_timestamp)
+          VALUES (?, ?, 'GAUGE', 'ms', 'request metric', 'checkout', 'test', '{}', ?, ?, ?, ?)|]
+        (testPid, name, frozenTime, frozenTime, frozenTime, frozenTime)
+      let oldTime = addUTCTime (-(8 * 24 * 3600)) frozenTime
+      withResource tr.trPool \conn -> void $ PGS.execute conn
+        [sql|INSERT INTO otel_metrics_meta
+          (project_id, metric_name, metric_type, metric_unit, metric_description, service_name, scope_name, metric_labels, first_seen_at, last_seen_at, first_timestamp, last_timestamp)
+          VALUES (?, 'checkout.old', 'GAUGE', 'ms', 'old metric', 'checkout', 'test', '{}', ?, ?, ?, ?)|]
+        (testPid, oldTime, oldTime, oldTime, oldTime)
+      (ec, out) <- runCLILifecycle tr ["--json", "metrics", "list", "--service", "checkout", "--limit", "1"]
+      ec `shouldBe` ExitSuccess
+      jsonOut out >>= (`shouldHaveKeys` ["metrics", "total", "active", "hasMore", "activeSince"])
+      out `shouldSatisfy` T.isInfixOf "checkout.duration"
+      (tableCode, tableOut) <- runCLILifecycle tr ["--table", "metrics", "list", "--service", "checkout", "--limit", "1"]
+      tableCode `shouldBe` ExitSuccess
+      tableOut `shouldSatisfy` T.isInfixOf "More metrics are available"
+      (laterCode, laterOut) <- runCLILifecycle tr ["--json", "metrics", "list", "--service", "checkout", "--offset", "5"]
+      laterCode `shouldBe` ExitSuccess
+      later <- jsonOut laterOut
+      case later of
+        AE.Object obj -> KM.lookup "total" obj `shouldBe` Just (AE.toJSON (2 :: Int))
+        _ -> expectationFailure "Expected a catalog object"
+      (inactiveCode, inactiveOut) <- runCLILifecycle tr ["--json", "metrics", "list", "--service", "checkout", "--inactive"]
+      inactiveCode `shouldBe` ExitSuccess
+      inactiveOut `shouldSatisfy` T.isInfixOf "checkout.old"
+      inactive <- jsonOut inactiveOut
+      case inactive of
+        AE.Object obj -> do
+          KM.lookup "active" obj `shouldBe` Just (AE.Bool False)
+          KM.lookup "total" obj `shouldBe` Just (AE.toJSON (1 :: Int))
+        _ -> expectationFailure "Expected an inactive catalog object"
+
     it "KQL summarize expression returns data; --assert gates the exit code; chart renders" \tr -> do
       apiKey <- createTestAPIKey tr testPid "lifecycle-metrics-key"
       -- the server resolves --since against the frozen test clock, so the

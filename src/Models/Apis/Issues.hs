@@ -1572,6 +1572,7 @@ data ScheduledRoutine = ScheduledRoutine
 
 data ClaimedRoutine = ClaimedRoutine
   { runId :: UUIDId "ai_routine_run"
+  , requestedBy :: Projects.UserId
   , projectId :: Projects.ProjectId
   , conversationId :: UUIDId "conversation"
   , claimedAt :: UTCTime
@@ -1684,17 +1685,17 @@ deleteConversation pid convId =
       WHERE project_id = #{pid} AND conversation_id = #{convId}|]
 
 
-upsertRoutine :: (DB es, Time :> es) => Projects.ProjectId -> UUIDId "conversation" -> RoutineInterval -> Eff es (Maybe ScheduledRoutine)
-upsertRoutine pid convId interval = do
+upsertRoutine :: (DB es, Time :> es) => Projects.UserId -> Projects.ProjectId -> UUIDId "conversation" -> RoutineInterval -> Eff es (Maybe ScheduledRoutine)
+upsertRoutine requestedBy pid convId interval = do
   now <- Time.currentTime
   let intervalMinutes = routineIntervalMinutes interval
   Hasql.interpOne
     [HI.sql|WITH saved AS (
-        INSERT INTO apis.ai_routines AS routine (project_id, conversation_id, interval_minutes, next_run_at, allow_actions)
-        SELECT #{pid}, #{convId}, #{intervalMinutes}, #{addUTCTime (fromIntegral $ intervalMinutes * 60) now}, TRUE
+        INSERT INTO apis.ai_routines AS routine (requested_by, project_id, conversation_id, interval_minutes, next_run_at, allow_actions)
+        SELECT #{requestedBy}, #{pid}, #{convId}, #{intervalMinutes}, #{addUTCTime (fromIntegral $ intervalMinutes * 60) now}, TRUE
         FROM apis.ai_conversations WHERE project_id = #{pid} AND conversation_id = #{convId}
         ON CONFLICT (project_id, conversation_id) DO UPDATE SET
-          interval_minutes = EXCLUDED.interval_minutes, active = TRUE,
+          requested_by = EXCLUDED.requested_by, interval_minutes = EXCLUDED.interval_minutes, active = TRUE,
           next_run_at = CASE WHEN routine.running_since IS NULL THEN EXCLUDED.next_run_at ELSE routine.next_run_at END,
           schedule_kind = #{ScheduleInterval}, schedule_hour = NULL, schedule_minute = NULL, schedule_weekday = NULL,
           allow_actions = TRUE, cancelled_at = NULL
@@ -1702,21 +1703,21 @@ upsertRoutine pid convId interval = do
       ) SELECT id, next_run_at FROM saved WHERE running_since IS NULL|]
 
 
-installRoutineTemplate :: (DB es, Time :> es) => Projects.ProjectId -> UUIDId "conversation" -> Text -> RoutineTemplate -> Eff es (Maybe ScheduledRoutine)
-installRoutineTemplate pid convId timezone template = do
+installRoutineTemplate :: (DB es, Time :> es) => Projects.UserId -> Projects.ProjectId -> UUIDId "conversation" -> Text -> RoutineTemplate -> Eff es (Maybe ScheduledRoutine)
+installRoutineTemplate requestedBy pid convId timezone template = do
   now <- Time.currentTime
   let (kind, intervalMinutes, hour, minute, weekday) = scheduleColumns template.schedule
       zone = if isJust (TZ.tzByName $ encodeUtf8 timezone) then timezone else "UTC"
       nextRunAt = nextRoutineAt template.schedule zone now now
   Hasql.interpOne
     [HI.sql|INSERT INTO apis.ai_routines AS routine
-      (project_id, conversation_id, interval_minutes, timezone, next_run_at, template_key, template_version,
+      (requested_by, project_id, conversation_id, interval_minutes, timezone, next_run_at, template_key, template_version,
        schedule_kind, schedule_hour, schedule_minute, schedule_weekday, report_when, destination, allow_actions)
-      SELECT #{pid}, #{convId}, #{intervalMinutes}, #{zone}, #{nextRunAt}, #{template.key}, #{template.version},
+      SELECT #{requestedBy}, #{pid}, #{convId}, #{intervalMinutes}, #{zone}, #{nextRunAt}, #{template.key}, #{template.version},
              #{kind}, #{hour}, #{minute}, #{weekday}, #{template.reportWhen}, #{DestinationConversation}, FALSE
       FROM apis.ai_conversations WHERE project_id = #{pid} AND conversation_id = #{convId}
       ON CONFLICT (project_id, conversation_id) DO UPDATE SET
-        interval_minutes = EXCLUDED.interval_minutes, timezone = EXCLUDED.timezone, active = TRUE,
+        requested_by = EXCLUDED.requested_by, interval_minutes = EXCLUDED.interval_minutes, timezone = EXCLUDED.timezone, active = TRUE,
         next_run_at = EXCLUDED.next_run_at, template_key = EXCLUDED.template_key,
         template_version = EXCLUDED.template_version, schedule_kind = EXCLUDED.schedule_kind,
         schedule_hour = EXCLUDED.schedule_hour, schedule_minute = EXCLUDED.schedule_minute,
@@ -1764,9 +1765,9 @@ claimRoutine routineId scheduledAt =
   Hasql.interpOne
     [HI.sql|WITH claimed AS (
         UPDATE apis.ai_routines SET running_since = now()
-        WHERE id = #{routineId} AND active AND next_run_at = #{scheduledAt}
+        WHERE id = #{routineId} AND active AND requested_by IS NOT NULL AND next_run_at = #{scheduledAt}
           AND (running_since IS NULL OR running_since < now() - interval '30 minutes')
-        RETURNING project_id, conversation_id, running_since, allow_actions, report_when, destination
+        RETURNING requested_by, project_id, conversation_id, running_since, allow_actions, report_when, destination
       ), run AS (
         INSERT INTO apis.ai_routine_runs (routine_id, project_id, conversation_id, scheduled_at, started_at, status)
         SELECT #{routineId}, project_id, conversation_id, #{scheduledAt}, running_since, 'running' FROM claimed
@@ -1775,7 +1776,7 @@ claimRoutine routineId scheduledAt =
           WHERE apis.ai_routine_runs.status = 'running'
         RETURNING id
       )
-      SELECT run.id, claimed.project_id, claimed.conversation_id, claimed.running_since, claimed.allow_actions, claimed.report_when, claimed.destination
+      SELECT run.id, claimed.requested_by, claimed.project_id, claimed.conversation_id, claimed.running_since, claimed.allow_actions, claimed.report_when, claimed.destination
       FROM claimed CROSS JOIN run|]
 
 
@@ -1842,8 +1843,8 @@ cancelRoutineRun pid convId =
       WHERE project_id = #{pid} AND conversation_id = #{convId} AND running_since IS NOT NULL|]
 
 
-resumeRoutine :: (DB es, Time :> es) => Projects.ProjectId -> UUIDId "conversation" -> Eff es (Maybe ScheduledRoutine)
-resumeRoutine pid convId = do
+resumeRoutine :: (DB es, Time :> es) => Projects.UserId -> Projects.ProjectId -> UUIDId "conversation" -> Eff es (Maybe ScheduledRoutine)
+resumeRoutine requestedBy pid convId = do
   now <- Time.currentTime
   routineTiming [HI.sql|project_id = #{pid} AND conversation_id = #{convId}|] >>= \case
     Nothing -> pure Nothing
@@ -1851,7 +1852,7 @@ resumeRoutine pid convId = do
       let nextRunAt = nextRoutineAt schedule timezone now now
       Hasql.interpOne
         [HI.sql|WITH resumed AS (
-            UPDATE apis.ai_routines SET active = TRUE, cancelled_at = NULL,
+            UPDATE apis.ai_routines SET requested_by = #{requestedBy}, active = TRUE, cancelled_at = NULL,
               next_run_at = CASE WHEN running_since IS NULL THEN #{nextRunAt} ELSE next_run_at END
             WHERE project_id = #{pid} AND conversation_id = #{convId}
             RETURNING id, next_run_at, running_since
@@ -1864,11 +1865,11 @@ deleteRoutine pid convId =
     [HI.sql|DELETE FROM apis.ai_routines WHERE project_id = #{pid} AND conversation_id = #{convId}|]
 
 
-setRoutineDestination :: DB es => Projects.ProjectId -> UUIDId "conversation" -> RoutineDestination -> Eff es ()
-setRoutineDestination pid convId destination =
+setRoutineDestination :: DB es => Projects.UserId -> Projects.ProjectId -> UUIDId "conversation" -> RoutineDestination -> Eff es ()
+setRoutineDestination requestedBy pid convId destination =
   Hasql.interpExecute_
     [HI.sql|UPDATE apis.ai_routines
-      SET destination = #{destination}, allow_actions = #{destination == DestinationSlack}
+      SET requested_by = #{requestedBy}, destination = #{destination}, allow_actions = #{destination == DestinationSlack}
       WHERE project_id = #{pid} AND conversation_id = #{convId}|]
 
 

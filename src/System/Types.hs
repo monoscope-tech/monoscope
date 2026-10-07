@@ -1,5 +1,6 @@
 module System.Types (
   ATBaseCtx,
+  ProjectToolCtx,
   ATAuthCtx,
   ATBackgroundCtx,
   ATBackgroundEffects,
@@ -97,6 +98,23 @@ type CommonWebEffects =
    , Error ServerError
    , Effectful.IOE
    ]
+
+
+type ProjectToolCtx es =
+  ( ELLM.LLM :> es
+  , Effectful.Reader.Static.Reader AuthContext :> es
+  , UUIDEff :> es
+  , HTTP :> es
+  , Hasql :> es
+  , Labeled "timefusion" Hasql :> es
+  , Time :> es
+  , Log :> es
+  , Tracing :> es
+  , Concurrent :> es
+  , Ki.StructuredConcurrency :> es
+  , Timeout :> es
+  , IOE :> es
+  )
 
 
 type ATBaseCtx = Effectful.Eff CommonWebEffects

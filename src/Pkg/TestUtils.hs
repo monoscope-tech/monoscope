@@ -216,6 +216,7 @@ import Test.Hspec (Expectation, expectationFailure)
 import Unsafe.Coerce (unsafeCoerce)
 import Utils (toXXHash)
 import Web.ApiHandlers qualified as ApiH
+import Web.ApiTypes (ApiActor (..))
 import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie)
 import Web.I18n qualified as I18n
@@ -1679,6 +1680,7 @@ routeApiV1Get tr rest params = case T.splitOn "/" rest of
       (Log.queryEvents testPid (lookupParam "query" params) (lookupParam "since" params) (lookupParam "from" params) (lookupParam "to" params) (lookupParam "source" params) (pInt "limit" params) (pBool "with_children" params) (pBool "include_attributes" params) (lookupParam "environment" params) (lookupParam "service" params))
   ["events", eid, "time", ts] -> jsonRoute tr (ApiH.apiEventGet testPid (rawUUID eid) (parseISOTime ts))
   ["facets"] -> jsonRoute tr (ApiH.apiFacets testPid (lookupParam "since" params) (lookupParam "from" params) (lookupParam "to" params) (lookupParam "field" params))
+  ["metrics", "catalog"] -> jsonRoute tr (ApiH.apiMetricsCatalog testPid (lookupParam "service" params) (lookupParam "search" params) (pInt "limit" params) (pInt "offset" params) (pBool "active" params))
   ["metrics"] -> do
     result <-
       runQueryEffect tr
@@ -1703,20 +1705,20 @@ routeWriteRequest tr verb path params body
 
 routeApiV1Write :: TestResources -> Text -> Text -> [(Text, Text)] -> LBS.ByteString -> IO (Response LBS.ByteString)
 routeApiV1Write tr verb rest params body = case (verb, T.splitOn "/" rest) of
-  ("POST", ["issues", iid, "ack"]) -> jsonRoute tr (ApiH.apiIssueAck testPid (parseUUIDId iid) (pInt "duration_minutes" params))
+  ("POST", ["issues", iid, "ack"]) -> jsonRoute tr (ApiH.apiIssueAck ApiKeyPrincipal testPid (parseUUIDId iid) (pInt "duration_minutes" params))
   ("POST", ["issues", iid, "unack"]) -> jsonRoute tr (ApiH.apiIssueUnack testPid (parseUUIDId iid))
   ("POST", ["issues", iid, "archive"]) -> jsonRoute tr (ApiH.apiIssueArchive testPid (parseUUIDId iid))
   ("POST", ["issues", iid, "unarchive"]) -> jsonRoute tr (ApiH.apiIssueUnarchive testPid (parseUUIDId iid))
-  ("POST", ["issues", "bulk"]) -> jsonRoute tr (ApiH.apiIssuesBulk testPid (decodeBody "BulkAction IssueId"))
-  ("POST", ["log_patterns", lpid, "ack"]) -> jsonRoute tr (ApiH.apiLogPatternAck testPid (parseIntId lpid))
-  ("POST", ["log_patterns", "bulk"]) -> jsonRoute tr (ApiH.apiLogPatternsBulk testPid (decodeBody "BulkAction Int64"))
+  ("POST", ["issues", "bulk"]) -> jsonRoute tr (ApiH.apiIssuesBulk ApiKeyPrincipal testPid (decodeBody "BulkAction IssueId"))
+  ("POST", ["log_patterns", lpid, "ack"]) -> jsonRoute tr (ApiH.apiLogPatternAck ApiKeyPrincipal testPid (parseIntId lpid))
+  ("POST", ["log_patterns", "bulk"]) -> jsonRoute tr (ApiH.apiLogPatternsBulk ApiKeyPrincipal testPid (decodeBody "BulkAction Int64"))
   ("POST", ["monitors"]) -> jsonRoute tr (ApiH.apiMonitorCreate testPid (decodeBody "MonitorInput"))
   ("POST", ["monitors", "apply"]) -> jsonRoute tr (ApiH.apiMonitorApply testPid (decodeBody "MonitorInput"))
   ("POST", ["share"]) -> jsonRoute tr (ApiH.apiShareLinkCreate testPid (decodeBody "ShareLinkCreate"))
-  ("POST", ["dashboards"]) -> jsonRoute tr (ApiH.apiDashboardCreate testPid (decodeBody "DashboardInput"))
-  ("POST", ["dashboards", "apply"]) -> jsonRoute tr (ApiH.apiDashboardApply testPid (decodeBody "DashboardYAMLDoc"))
+  ("POST", ["dashboards"]) -> jsonRoute tr (ApiH.apiDashboardCreate ApiKeyPrincipal testPid (decodeBody "DashboardInput"))
+  ("POST", ["dashboards", "apply"]) -> jsonRoute tr (ApiH.apiDashboardApply ApiKeyPrincipal testPid (decodeBody "DashboardYAMLDoc"))
   ("PUT", ["dashboards", did]) -> jsonRoute tr (ApiH.apiDashboardUpdate testPid (parseUUIDId did) (decodeBody "DashboardInput"))
-  ("POST", ["dashboards", did, "duplicate"]) -> jsonRoute tr (ApiH.apiDashboardDuplicate testPid (parseUUIDId did))
+  ("POST", ["dashboards", did, "duplicate"]) -> jsonRoute tr (ApiH.apiDashboardDuplicate ApiKeyPrincipal testPid (parseUUIDId did))
   ("POST", ["dashboards", did, "star"]) -> jsonRoute tr (ApiH.apiDashboardStar testPid (parseUUIDId did))
   ("PUT", ["dashboards", did, "widgets"]) -> jsonRoute tr (ApiH.apiDashboardWidgetUpsert testPid (parseUUIDId did) (decodeBody "Widget"))
   ("PUT", ["monitors", mid]) -> jsonRoute tr (ApiH.apiMonitorUpdate testPid (monitorId mid) (decodeBody "MonitorInput"))

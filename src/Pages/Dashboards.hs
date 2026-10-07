@@ -53,6 +53,7 @@ module Pages.Dashboards (
   YamlForm (..),
   dashboardYamlGetH,
   dashboardYamlPutH,
+  apiDashboardData,
 ) where
 
 import Control.Lens
@@ -69,6 +70,7 @@ import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (display)
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
+import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Vector qualified as V
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, IOE, (:>))
@@ -129,8 +131,79 @@ import Text.Slugify (slugify)
 import UnliftIO qualified
 import UnliftIO.Exception (try)
 import Utils
+import Web.ApiTypes qualified as ApiT
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData)
+
+
+-- | Server-rendered dashboard data: one request returns every widget on the
+-- (optionally selected) tab with its query already run, so a non-browser client
+-- can draw the dashboard without re-implementing constant/variable resolution
+-- or firing one request per widget. This is what @monoscope dashboards render@
+-- uses to paint charts in a terminal.
+apiDashboardData :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATBaseCtx ApiT.DashboardData
+apiDashboardData pid did tabM widgetM sinceM fromM toM allParams = do
+  vm <- Dashboards.getDashboardByProjectId pid did `whenNothingM` throwError err404{errBody = "Dashboard not found"}
+  (_, dash) <- getDashAndVM pid did Nothing
+  now <- Time.currentTime
+  let timeParams = (sinceM, fromM, toM)
+      allTabs = fold dash.tabs
+  (dash', params) <- resolveDashboardParams pid now timeParams allParams dash
+  -- No `tabs:` key means the widgets live at the top level; with tabs, an
+  -- unknown --tab is a 404 rather than a silently empty render.
+  (tabName, tabWidgets) <- case (allTabs, tabM) of
+    ([], _) -> pure (Nothing, [])
+    (t : _, Nothing) -> pure (Just t.name, t.widgets)
+    (_, Just wanted) ->
+      findTabBySlug allTabs wanted
+        & maybe (throwError err404{errBody = "Tab not found: " <> encodeUtf8 wanted}) (\(_, t) -> pure (Just t.name, t.widgets))
+  -- Most dashboards leave widget ids unset, so --widget also matches a
+  -- slugified title ("p95-latency"); otherwise there'd be no way to name one.
+  let matches wanted w = w.id == Just wanted || (slugify <$> w.title) == Just (slugify wanted)
+      selected = filter (\w -> maybe True (`matches` w) widgetM) (dash'.widgets <> tabWidgets)
+  widgets <- pooledForConcurrently selected (renderWidgetTree timeParams params)
+  -- The window comes from the request, not from scraping a widget's result:
+  -- every widget shares it, and a dashboard with no widgets should still say
+  -- which range it was asked about.
+  let (fromT, toT, _) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceM fromM toM)
+  pure
+    ApiT.DashboardData
+      { id = did
+      , title = vm.title
+      , tab = tabName
+      , tabs = (.name) <$> allTabs
+      , since = sinceM
+      , from = epochMs <$> fromT
+      , to = epochMs <$> toT
+      , widgets
+      }
+  where
+    epochMs = round . (* 1000) . utcTimeToPOSIXSeconds
+
+    renderWidgetTree :: (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATBaseCtx ApiT.RenderedWidget
+    renderWidgetTree timeParams params w = do
+      let blank = maybe True (T.null . T.strip)
+      md <- if blank w.query && blank w.sql then pure def else widgetMetrics pid timeParams params w
+      kids <- pooledForConcurrently (fold w.children) (renderWidgetTree timeParams params)
+      pure
+        ApiT.RenderedWidget
+          { id = w.id
+          , title = w.title
+          , subtitle = w.subtitle
+          , wType = w.wType
+          , unit = w.unit
+          , query = w.query
+          , layout = w.layout
+          , summarizeBy = w.summarizeBy
+          , value = md.dataFloat
+          , headers = V.toList md.headers
+          , rows = V.toList (V.toList <$> md.dataset)
+          , textRows = V.toList (V.toList <$> md.dataText)
+          , stats = md.stats
+          , error = md.error
+          , columns = maybe [] (map (.title)) w.columns
+          , children = kids
+          }
 
 
 -- | Dashboard critical grid geometry. SQL-preview dependencies are loaded only

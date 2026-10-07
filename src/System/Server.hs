@@ -387,7 +387,7 @@ runServer appLogger env tp = do
           -- . loggingMiddleware
           . hashedAssetMiddleware
           $ server
-  let bgJobWorker = BackgroundJobs.jobsWorkerInit appLogger env tp
+  let bgJobWorker = BackgroundJobs.jobsWorkerInitWithTools appLogger env tp (Just Routes.mcpProjectTools)
       effectiveReplayBatch =
         if env.config.replayBatchSize == 0
           then max 1 (env.config.messagesPerPubsubPullBatch `div` 2)

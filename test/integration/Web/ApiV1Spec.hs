@@ -1,6 +1,6 @@
 module Web.ApiV1Spec (spec) where
 
-import Control.Lens ((^.), (^..), (^?), _Just)
+import Control.Lens (ix, (^.), (^..), (^?), _Just)
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
@@ -10,6 +10,7 @@ import Data.Effectful.Hasql qualified as Hasql
 import Data.List qualified as List
 import Data.Map qualified as Map
 import Data.OpenApi (OpenApi, info, title, version)
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (addUTCTime)
 import Data.UUID qualified as UUID
@@ -21,7 +22,9 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import Pages.Charts.Charts qualified as Charts
 import Pages.Charts.Types (MetricsData (..))
+import Pages.Dashboards qualified as DashPage
 import Pages.LogExplorer.Log qualified as Log
+import Pkg.AI qualified as AI
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Parser.Expr qualified as ParserExpr
 import Pkg.TestUtils
@@ -95,6 +98,7 @@ spec = around withTestResources do
             expectedPaths =
               [ "/events"
               , "/metrics"
+              , "/metrics/catalog"
               , "/schema"
               , "/monitors"
               , "/monitors/{monitor_id}"
@@ -397,11 +401,18 @@ spec = around withTestResources do
         patched.alertConfig.severity `shouldBe` "critical"
 
     describe "Dashboard CRUD" do
+      it "returns an empty dashboard's title and widget list" $ \tr -> do
+        created <- runAsBase tr $ ApiH.apiDashboardCreate ApiT.ApiKeyPrincipal testPid ApiT.DashboardInput{ApiT.title = "empty dashboard", ApiT.tags = Nothing, ApiT.teams = Nothing, ApiT.filePath = Nothing, ApiT.schema = Nothing}
+        rendered <- runAsBase tr $ DashPage.apiDashboardData testPid created.summary.id Nothing Nothing (Just "1h") Nothing Nothing []
+        rendered.id `shouldBe` created.summary.id
+        rendered.title `shouldBe` "empty dashboard"
+        rendered.widgets `shouldSatisfy` null
+
       it "create → star → unstar → delete round-trip" $ \tr -> do
         let runB :: ATBaseCtx a -> IO a
             runB k = runAsBase tr k
             input = ApiT.DashboardInput{ApiT.title = "d1", ApiT.tags = Just ["a"], ApiT.teams = Nothing, ApiT.filePath = Nothing, ApiT.schema = Nothing}
-        created <- runB $ ApiH.apiDashboardCreate testPid input
+        created <- runB $ ApiH.apiDashboardCreate ApiT.ApiKeyPrincipal testPid input
         created.summary.title `shouldBe` "d1"
         everyone <- runB $ PM.getEveryoneTeam testPid
         V.length created.summary.teams `shouldBe` 1
@@ -416,8 +427,8 @@ spec = around withTestResources do
         let runB :: ATBaseCtx a -> IO a
             runB k = runAsBase tr k
             mkInput n = ApiT.DashboardInput{ApiT.title = "bulk-d-" <> n, ApiT.tags = Nothing, ApiT.teams = Nothing, ApiT.filePath = Nothing, ApiT.schema = Nothing}
-        d1 <- runB $ ApiH.apiDashboardCreate testPid (mkInput "a")
-        d2 <- runB $ ApiH.apiDashboardCreate testPid (mkInput "b")
+        d1 <- runB $ ApiH.apiDashboardCreate ApiT.ApiKeyPrincipal testPid (mkInput "a")
+        d2 <- runB $ ApiH.apiDashboardCreate ApiT.ApiKeyPrincipal testPid (mkInput "b")
         res <- runB $ ApiH.apiDashboardBulk testPid ApiT.BulkAction{ApiT.action = "delete", ApiT.ids = [d1.summary.id.unwrap, d2.summary.id.unwrap], ApiT.durationMinutes = Nothing}
         length res.succeeded `shouldBe` 2
 
@@ -425,8 +436,8 @@ spec = around withTestResources do
         let runB :: ATBaseCtx a -> IO a
             runB k = runAsBase tr k
             doc = ApiT.DashboardYAMLDoc{ApiT.filePath = "dashes/foo.yaml", ApiT.title = Just "foo", ApiT.tags = Nothing, ApiT.teams = Nothing, ApiT.schema = def}
-        d1 <- runB $ ApiH.apiDashboardApply testPid doc
-        d2 <- runB $ ApiH.apiDashboardApply testPid doc
+        d1 <- runB $ ApiH.apiDashboardApply ApiT.ApiKeyPrincipal testPid doc
+        d2 <- runB $ ApiH.apiDashboardApply ApiT.ApiKeyPrincipal testPid doc
         d1.summary.id `shouldBe` d2.summary.id -- same row updated, not inserted again
     describe "API keys CRUD" do
       it "create returns plaintext once; list includes it; delete deactivates" $ \tr -> do
@@ -444,7 +455,7 @@ spec = around withTestResources do
       it "accepts EventsQuery payload and returns LogResult" $ \tr -> do
         result <-
           toBaseServantResponse tr
-            $ ApiH.apiEventsQuery testPid (def :: ApiT.EventsQuery){ApiT.query = Just "", ApiT.since = Just "1h"}
+            $ ApiH.apiEventsQuery Log.queryEvents testPid (def :: ApiT.EventsQuery){ApiT.query = Just "", ApiT.since = Just "1h"}
         let json = AE.toJSON result
         (json ^? key "logsData" . _Array) `shouldSatisfy` isJust
         (json ^? key "count" . _Number) `shouldSatisfy` isJust
@@ -457,7 +468,7 @@ spec = around withTestResources do
       it "includes attributes only when requested" $ \tr -> do
         result <-
           toBaseServantResponse tr
-            $ ApiH.apiEventsQuery testPid (def :: ApiT.EventsQuery){ApiT.query = Just "", ApiT.since = Just "1h", ApiT.includeAttributes = Just True}
+            $ ApiH.apiEventsQuery Log.queryEvents testPid (def :: ApiT.EventsQuery){ApiT.query = Just "", ApiT.since = Just "1h", ApiT.includeAttributes = Just True}
         result.cols `shouldContain` ["attributes"]
 
       -- Regression: previously the search backend returned every span in a
@@ -489,11 +500,11 @@ spec = around withTestResources do
         let q = "attributes.wc.marker == \"" <> marker <> "\""
             base = (def :: ApiT.EventsQuery){ApiT.query = Just q, ApiT.since = Just "1h"}
 
-        rDefault <- toBaseServantResponse tr $ ApiH.apiEventsQuery testPid base
+        rDefault <- toBaseServantResponse tr $ ApiH.apiEventsQuery Log.queryEvents testPid base
         V.length rDefault.logsData `shouldBe` 1 -- only A matches the predicate
         rWith <-
           toBaseServantResponse tr
-            $ ApiH.apiEventsQuery testPid base{ApiT.withChildren = Just True}
+            $ ApiH.apiEventsQuery Log.queryEvents testPid base{ApiT.withChildren = Just True}
         -- A + B + C. D is in the same trace but lives under E, not A — the
         -- old buggy behaviour would have included it; the descendant filter
         -- excludes it.
@@ -522,7 +533,7 @@ spec = around withTestResources do
         res.totalCount `shouldSatisfy` (>= 0)
 
       it "issues bulk with empty ids succeeds with empty result" $ \tr -> do
-        res <- runAsBase tr (ApiH.apiIssuesBulk testPid ApiT.BulkAction{ApiT.action = "acknowledge", ApiT.ids = [], ApiT.durationMinutes = Nothing})
+        res <- runAsBase tr (ApiH.apiIssuesBulk ApiT.ApiKeyPrincipal testPid ApiT.BulkAction{ApiT.action = "acknowledge", ApiT.ids = [], ApiT.durationMinutes = Nothing})
         res.succeeded `shouldBe` []
 
       it "endpoints list returns a Paged envelope" $ \tr -> do
@@ -534,7 +545,7 @@ spec = around withTestResources do
         res.perPage `shouldSatisfy` (> 0)
 
       it "log patterns bulk with empty ids succeeds with empty result" $ \tr -> do
-        res <- runAsBase tr (ApiH.apiLogPatternsBulk testPid ApiT.BulkAction{ApiT.action = "acknowledge", ApiT.ids = [], ApiT.durationMinutes = Nothing})
+        res <- runAsBase tr (ApiH.apiLogPatternsBulk ApiT.ApiKeyPrincipal testPid ApiT.BulkAction{ApiT.action = "acknowledge", ApiT.ids = [], ApiT.durationMinutes = Nothing})
         res.succeeded `shouldBe` []
 
       it "incidents list and get stay inside the authorized project" $ \tr -> do
@@ -650,12 +661,12 @@ spec = around withTestResources do
           `shouldThrow` anyException
 
     describe "MCP" do
-      let reg = MCP.allTools apiV1OpenApiSpec
+      let reg = MCP.allTools apiV1OpenApiSpec (\pid tz input -> pure $ Right $ AE.object ["query" AE..= input, "project_id" AE..= pid, "timezone" AE..= tz])
           dummyApp = error "dummyApp invoked unexpectedly"
           buildTestApp tr pid =
             genericServeTWithContext
               (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
-              (apiV1Server tr.trLogger tr.trATCtx tr.trTracerProvider (Authenticated pid))
+              (apiV1Server (Authenticated pid))
               Servant.EmptyContext
           mcpHttp tr authHdr body =
             let req =
@@ -682,6 +693,12 @@ spec = around withTestResources do
               , "method" AE..= (m :: Text)
               ]
 
+      it "runs the Agent project adapter through the same MCP route" \tr -> do
+        let backend = Routes.mcpProjectTools
+        result <- runAsBase tr $ AI.invoke backend ApiT.ApiKeyPrincipal testPid "get_project" Map.empty
+        (result ^? key "isError") `shouldBe` Just (AE.Bool False)
+        (result ^? key "structuredContent" . key "summary" . key "id" . _String) `shouldBe` Just testPid.toText
+
       it "registry uses verb-first canonical tool names" $ \_tr -> do
         Map.member "search_events" reg `shouldBe` True
         Map.member "list_events" reg `shouldBe` True
@@ -693,7 +710,17 @@ spec = around withTestResources do
         Map.member "get_schema" reg `shouldBe` True
         Map.member "whoami" reg `shouldBe` True
         Map.member "list_incidents" reg `shouldBe` True
+        Map.member "list_metrics" reg `shouldBe` True
         Map.member "get_incident" reg `shouldBe` True
+
+      it "requires an explicit Agent policy or exclusion for every MCP operation" $ \_tr -> do
+        let covered = Map.keysSet MCP.agentPolicies `Set.union` Map.keysSet MCP.agentExclusions
+        Map.keysSet reg `shouldBe` covered
+        Map.keysSet MCP.agentPolicies `Set.intersection` Map.keysSet MCP.agentExclusions `shouldBe` Set.empty
+        Map.lookup "list_metrics" MCP.agentPolicies `shouldBe` Just (MCP.AgentPolicy PM.PView MCP.ReadOnly)
+        Map.lookup "create_monitor" MCP.agentPolicies `shouldBe` Just (MCP.AgentPolicy PM.PEdit MCP.RequestedWrite)
+        Map.lookup "bulk_monitors" MCP.agentPolicies `shouldBe` Just (MCP.AgentPolicy PM.PAdmin MCP.ConfirmedWrite)
+        Map.lookup "remove_member" MCP.agentPolicies `shouldBe` Just (MCP.AgentPolicy PM.PAdmin MCP.ConfirmedWrite)
 
       it "does not expose the MCP endpoint as its own tool" $ \_tr -> do
         Map.member "post_mcp" reg `shouldBe` False
@@ -743,6 +770,25 @@ spec = around withTestResources do
             AE.Success s -> Map.keys s.fields `shouldMatchList` Map.keys (Schema.deriveSchema ParserExpr.flattenedOtelAttributes).fields
             AE.Error e -> expectationFailure ("structuredContent did not decode as Schema: " <> e)
           Nothing -> expectationFailure ("structuredContent missing; body: " <> show content)
+
+      it "tools/call list_metrics returns a project-scoped catalog page" $ \tr -> do
+        runQueryEffect tr $ Hasql.interpExecute_
+          [HI.sql|INSERT INTO otel_metrics_meta
+            (project_id, metric_name, metric_type, metric_unit, metric_description, service_name, scope_name, metric_labels, first_seen_at, last_seen_at, first_timestamp, last_timestamp)
+            VALUES (#{testPid}, 'checkout.duration', 'GAUGE', 'ms', 'request metric', 'checkout', 'test', '{}', #{frozenTime}, #{frozenTime}, #{frozenTime}, #{frozenTime})|]
+        let oldTime = addUTCTime (-(8 * 24 * 3600)) frozenTime
+        runQueryEffect tr $ Hasql.interpExecute_
+          [HI.sql|INSERT INTO otel_metrics_meta
+            (project_id, metric_name, metric_type, metric_unit, metric_description, service_name, scope_name, metric_labels, first_seen_at, last_seen_at, first_timestamp, last_timestamp)
+            VALUES (#{testPid}, 'checkout.old', 'GAUGE', 'ms', 'old metric', 'checkout', 'test', '{}', #{oldTime}, #{oldTime}, #{oldTime}, #{oldTime})|]
+        resp <- runAsBase tr $ MCP.handleJsonRpc reg (buildTestApp tr testPid) testPid
+          (rpcCallNamed "list_metrics" $ AE.object ["service" AE..= ("checkout" :: Text), "limit" AE..= (1 :: Int)])
+        (resp ^? key "result" . key "isError") `shouldBe` Just (AE.Bool False)
+        (resp ^? key "result" . key "structuredContent" . key "metrics" . _Array . ix 0 . key "metricName" . _String) `shouldBe` Just "checkout.duration"
+        inactive <- runAsBase tr $ MCP.handleJsonRpc reg (buildTestApp tr testPid) testPid
+          (rpcCallNamed "list_metrics" $ AE.object ["service" AE..= ("checkout" :: Text), "active" AE..= False])
+        (inactive ^? key "result" . key "structuredContent" . key "active") `shouldBe` Just (AE.Bool False)
+        (inactive ^? key "result" . key "structuredContent" . key "metrics" . _Array . ix 0 . key "metricName" . _String) `shouldBe` Just "checkout.old"
 
       it "tools/call with unknown tool name returns isError result, not JSON-RPC error" $ \tr -> do
         let req =
@@ -799,6 +845,13 @@ spec = around withTestResources do
                   ]
         resp <- runAsBase tr (MCP.handleJsonRpc reg dummyApp testPid req)
         (resp ^? key "result" . key "isError") `shouldBe` Just (AE.Bool True)
+
+      it "tools/call search_events_nl passes project and timezone to the registered translator" $ \tr -> do
+        let req = rpcCallNamed "search_events_nl" $ AE.object ["input" AE..= ("checkout errors" :: Text), "timezone" AE..= ("Europe/Berlin" :: Text)]
+        resp <- runAsBase tr (MCP.handleJsonRpc reg dummyApp testPid req)
+        (resp ^? key "result" . key "structuredContent" . key "project_id") `shouldBe` Just (AE.toJSON testPid)
+        (resp ^? key "result" . key "structuredContent" . key "query") `shouldBe` Just (AE.String "checkout errors")
+        (resp ^? key "result" . key "structuredContent" . key "timezone") `shouldBe` Just (AE.String "Europe/Berlin")
 
       it "tools/call analyze_issue with bad UUID returns isError, not JSON-RPC error" $ \tr -> do
         let req =

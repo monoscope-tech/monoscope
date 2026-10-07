@@ -9,8 +9,14 @@ module Web.MCP (
   Tool (..),
   Dispatch (..),
   OpenApiBinding (..),
+  AgentPolicy (..),
+  AgentAction (..),
+  agentPolicies,
+  agentExclusions,
   allTools,
   handleJsonRpc,
+  runTool,
+  toolError,
 ) where
 
 import Control.Lens (preview, (^.))
@@ -28,6 +34,7 @@ import Effectful.Error.Static qualified as Error
 import Effectful.Reader.Static qualified as Reader
 import Effectful.Time qualified as Time
 import Models.Apis.LogPatterns qualified as LogPatterns
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Network.HTTP.Types qualified as H
@@ -39,7 +46,6 @@ import Network.Wai qualified as Wai
 
 import Data.Effectful.LLM qualified as ELLM
 import Network.Wai.Test qualified as WT
-import Pkg.AI qualified as AI
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude
 import Servant qualified
@@ -99,6 +105,115 @@ data OpenApiBinding = OpenApiBinding
   }
 
 
+-- | The Agent adapter must deny operations without a policy. The registry
+-- coverage test makes each new MCP operation an explicit decision.
+data AgentPolicy = AgentPolicy
+  { minimumPermission :: !ProjectMembers.Permissions
+  , action :: !AgentAction
+  }
+  deriving stock (Eq, Show)
+
+
+data AgentAction = ReadOnly | RequestedWrite | ConfirmedWrite
+  deriving stock (Eq, Show)
+
+
+agentPolicies :: Map Text AgentPolicy
+agentPolicies =
+  Map.fromList
+    $ [(name, AgentPolicy ProjectMembers.PView ReadOnly) | name <- readTools]
+    <> [(name, AgentPolicy ProjectMembers.PAdmin ReadOnly) | name <- adminReadTools]
+    <> [(name, AgentPolicy ProjectMembers.PEdit RequestedWrite) | name <- editTools]
+    <> [(name, AgentPolicy ProjectMembers.PAdmin ConfirmedWrite) | name <- adminTools]
+  where
+    readTools =
+      [ "list_events"
+      , "get_event_context"
+      , "search_events"
+      , "query_metrics"
+      , "list_metrics"
+      , "get_schema"
+      , "list_facets"
+      , "list_monitors"
+      , "get_monitor"
+      , "get_monitor_yaml"
+      , "list_dashboards"
+      , "get_dashboard"
+      , "get_dashboard_yaml"
+      , "get_dashboard_data"
+      , "whoami"
+      , "get_project"
+      , "list_endpoints"
+      , "get_endpoint"
+      , "list_log_patterns"
+      , "get_log_pattern"
+      , "list_issues"
+      , "get_issue"
+      , "list_incidents"
+      , "get_incident"
+      , "list_teams"
+      , "get_team"
+      , "list_members"
+      , "get_member"
+      , "find_error_patterns"
+      , "search_events_nl"
+      , "analyze_issue"
+      ]
+    adminReadTools = ["list_api_keys", "get_api_key", "get_ingestion_key"]
+    editTools =
+      [ "create_monitor"
+      , "update_monitor"
+      , "patch_monitor"
+      , "mute_monitor"
+      , "unmute_monitor"
+      , "resolve_monitor"
+      , "toggle_monitor_active"
+      , "apply_monitor"
+      , "create_dashboard"
+      , "apply_dashboard"
+      , "update_dashboard"
+      , "patch_dashboard"
+      , "duplicate_dashboard"
+      , "star_dashboard"
+      , "unstar_dashboard"
+      , "upsert_dashboard_widget"
+      , "reorder_dashboard_widgets"
+      , "ack_log_pattern"
+      , "bulk_log_patterns"
+      , "ack_issue"
+      , "unack_issue"
+      , "archive_issue"
+      , "unarchive_issue"
+      , "bulk_issues"
+      ]
+    adminTools =
+      [ "delete_monitor"
+      , "bulk_monitors"
+      , "delete_dashboard"
+      , "delete_dashboard_widget"
+      , "bulk_dashboards"
+      , "create_api_key"
+      , "activate_api_key"
+      , "deactivate_api_key"
+      , "delete_api_key"
+      , "patch_project"
+      , "create_team"
+      , "update_team"
+      , "patch_team"
+      , "delete_team"
+      , "bulk_teams"
+      , "add_member"
+      , "patch_member"
+      , "remove_member"
+      , "create_share_link"
+      ]
+
+
+-- | Ingestion belongs to the telemetry client, not a conversational action.
+agentExclusions :: Map Text Text
+agentExclusions = one ("submit_rrweb_event", "Browser session telemetry ingestion")
+
+
 -- =============================================================================
 -- Registry
 -- =============================================================================
@@ -106,9 +221,9 @@ data OpenApiBinding = OpenApiBinding
 -- | The full tool registry: every OpenAPI operation plus the composite tools.
 -- @Map (<>)@ is left-biased, so listing composites first means a composite
 -- always wins on a name collision (none expected today, but cheap to enforce).
-allTools :: OpenApi -> Map Text Tool
-allTools spec =
-  Map.fromList [(t.name, t) | t <- compositeTools] <> mkToolsFromOpenApi spec
+allTools :: OpenApi -> (Projects.ProjectId -> Maybe Text -> Text -> ATBaseCtx (Either Text AE.Value)) -> Map Text Tool
+allTools spec nlSearch =
+  Map.fromList [(t.name, t) | t <- compositeTools nlSearch] <> mkToolsFromOpenApi spec
 
 
 mkToolsFromOpenApi :: OpenApi -> Map Text Tool
@@ -152,9 +267,12 @@ openApiTool p m op =
 toolNameOverrides :: Map (ByteString, Text) Text
 toolNameOverrides =
   Map.fromList
-    [ (("GET", "/events"), "list_events")
+    [ (("GET", "/ingestion-key"), "get_ingestion_key")
+    , (("GET", "/events"), "list_events")
+    , (("GET", "/events/{event_id}/time/{timestamp}"), "get_event_context")
     , (("POST", "/events/query"), "search_events")
     , (("GET", "/metrics"), "query_metrics")
+    , (("GET", "/metrics/catalog"), "list_metrics")
     , (("GET", "/schema"), "get_schema")
     , (("GET", "/facets"), "list_facets")
     , (("POST", "/rrweb"), "submit_rrweb_event")
@@ -162,6 +280,8 @@ toolNameOverrides =
       (("GET", "/monitors"), "list_monitors")
     , (("POST", "/monitors"), "create_monitor")
     , (("GET", "/monitors/{monitor_id}"), "get_monitor")
+    , (("GET", "/monitors/{monitor_id}/yaml"), "get_monitor_yaml")
+    , (("POST", "/monitors/apply"), "apply_monitor")
     , (("PUT", "/monitors/{monitor_id}"), "update_monitor")
     , (("PATCH", "/monitors/{monitor_id}"), "patch_monitor")
     , (("DELETE", "/monitors/{monitor_id}"), "delete_monitor")
@@ -175,6 +295,7 @@ toolNameOverrides =
     , (("POST", "/dashboards"), "create_dashboard")
     , (("POST", "/dashboards/apply"), "apply_dashboard")
     , (("GET", "/dashboards/{dashboard_id}"), "get_dashboard")
+    , (("GET", "/dashboards/{dashboard_id}/data"), "get_dashboard_data")
     , (("PUT", "/dashboards/{dashboard_id}"), "update_dashboard")
     , (("PATCH", "/dashboards/{dashboard_id}"), "patch_dashboard")
     , (("DELETE", "/dashboards/{dashboard_id}"), "delete_dashboard")
@@ -469,8 +590,8 @@ jsonToText v = encodeText v
 
 -- | Bundled, agent-friendly tools that combine several internal calls: one
 -- verb the agent calls in place of an ad-hoc multi-step plan.
-compositeTools :: [Tool]
-compositeTools = [findErrorPatterns, searchEventsNL, analyzeIssue]
+compositeTools :: (Projects.ProjectId -> Maybe Text -> Text -> ATBaseCtx (Either Text AE.Value)) -> [Tool]
+compositeTools nlSearch = [findErrorPatterns, searchEventsNL nlSearch, analyzeIssue]
 
 
 -- | Top log/error patterns ranked by current-hour volume.
@@ -491,8 +612,8 @@ findErrorPatterns =
 -- | Translate a natural-language description into a KQL query. Mirrors the
 -- existing aiSearch handler but returns the query string for the agent to
 -- run separately via @search_events@.
-searchEventsNL :: Tool
-searchEventsNL =
+searchEventsNL :: (Projects.ProjectId -> Maybe Text -> Text -> ATBaseCtx (Either Text AE.Value)) -> Tool
+searchEventsNL nlSearch =
   composite
     "search_events_nl"
     "Translate a natural-language description (e.g. 'failed payments in the last hour for service checkout') into a KQL query for the events index. Returns the suggested query, time range and an explanation; call search_events with the query to execute."
@@ -506,9 +627,8 @@ searchEventsNL =
       Nothing -> pure $ toolError "input is required"
       Just inputT
         | T.null inputT -> pure $ toolError "input must be non-empty"
-        | otherwise -> do
-            authCtx <- Reader.ask @AuthContext
-            AI.runNlSearch pid authCtx.env (textArg "timezone" args) inputT
+        | otherwise ->
+            nlSearch pid (textArg "timezone" args) inputT
               <&> either (\err -> toolError ("AI translation failed: " <> err)) okResult
 
 
