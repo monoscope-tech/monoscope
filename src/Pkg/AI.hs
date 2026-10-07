@@ -73,7 +73,7 @@ import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
-import Effectful (Eff, IOE, (:>))
+import Effectful (Eff, (:>))
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
 import Effectful.Log qualified as Log
@@ -108,9 +108,10 @@ import Pkg.SchemaLearning.Catalog (FacetData (..), FacetSummary (..), FacetValue
 import Relude
 import System.Config qualified as Config
 import System.Tracing (Tracing)
-import System.Types (DB)
+import System.Types (DB, ProjectToolCtx)
 import UnliftIO.Exception (onException, throwIO)
 import Utils (unwrapJsonPrimValue)
+import Web.ApiTypes (ApiActor (..))
 import Web.MCP qualified as MCP
 
 
@@ -483,7 +484,7 @@ data AgentAuthority = ServiceAuthority | MemberAuthority ProjectMembers.Permissi
 -- | The host supplies the MCP catalog and its in-process runner together.
 data ProjectTools = ProjectTools
   { catalog :: Map.Map Text MCP.Tool
-  , invoke :: forall es. IOE :> es => Projects.ProjectId -> Text -> Map.Map Text AE.Value -> Eff es AE.Value
+  , invoke :: forall es. ProjectToolCtx es => ApiActor -> Projects.ProjectId -> Text -> Map.Map Text AE.Value -> Eff es AE.Value
   }
 
 
@@ -612,7 +613,7 @@ nlSearchConfig pid useTf facets tzRaw =
 -- @search_events_nl@ tool; each maps 'Left' onto its own error shape (a toast
 -- plus 502, or an MCP tool error) and returns the 'Right' payload verbatim.
 runNlSearch
-  :: (DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es, W.HTTP :> es)
+  :: ProjectToolCtx es
   => Projects.ProjectId -> Config.EnvConfig -> Maybe Text -> Text -> Eff es (Either Text AE.Value)
 runNlSearch pid config tzRaw input = do
   now <- Time.currentTime
@@ -820,7 +821,7 @@ stripCodeBlock t
     stripped = T.strip t
 
 
-runAgenticQuery :: (DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es, W.HTTP :> es) => AgenticConfig -> Text -> Text -> Text -> Eff es (Either Text LLMResponse)
+runAgenticQuery :: ProjectToolCtx es => AgenticConfig -> Text -> Text -> Text -> Eff es (Either Text LLMResponse)
 runAgenticQuery config userQuery model apiKey = do
   (systemMsg, userMsg, params) <- agenticSetup config userQuery model
   -- Text only: these consumers (MCP, bots, log explorer) never read toolCalls; the
@@ -881,7 +882,7 @@ dbMessageToLLMMessage msg = do
 -- | Run agentic chat with DB-persisted history; returns the raw response plus tool call info
 -- (unlike runAgenticQuery, which parses the response and drops tool metadata)
 runAgenticChatWithHistory
-  :: (DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es, W.HTTP :> es)
+  :: ProjectToolCtx es
   => AgenticConfig
   -> Text
   -> Text
@@ -936,7 +937,7 @@ withInvestigationJournal config userQuery model action = do
 
 -- | Save each completed decision/read before advancing. Pending read tools may
 -- run again after an interrupted call; completed tools and model responses replay.
-runAgenticLoopRaw :: (DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es, W.HTTP :> es) => Maybe Investigations.CheckpointCursor -> Maybe Investigations.Scope -> AgenticConfig -> Text -> Investigations.Checkpoint -> Eff es (Either Text AgenticChatResult)
+runAgenticLoopRaw :: ProjectToolCtx es => Maybe Investigations.CheckpointCursor -> Maybe Investigations.Scope -> AgenticConfig -> Text -> Investigations.Checkpoint -> Eff es (Either Text AgenticChatResult)
 runAgenticLoopRaw turn journal config apiKey checkpoint = do
   requireAgentAccess config.access config.projectId
   case checkpoint of
@@ -1079,7 +1080,7 @@ pricedUsage config inputTokens outputTokens =
         charge cfg = (toInteger tokens * toInteger (Config.aiPriceMicrousd $ rate cfg) + 999_999) `div` 1_000_000
 
 
-executeToolCall :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es, W.HTTP :> es) => AgenticConfig -> LLM.ToolCall -> Eff es ToolResult
+executeToolCall :: ProjectToolCtx es => AgenticConfig -> LLM.ToolCall -> Eff es ToolResult
 executeToolCall config tc = do
   requireAgentAccess config.access config.projectId
   let funcName = LLM.toolFunctionName (LLM.toolCallFunction tc)
@@ -1216,7 +1217,12 @@ executeToolCall config tc = do
       ScheduledRoutine routineId True -> Issues.routineCanAct routineId
       mode -> pure $ actionsAllowed mode
     runProjectTool backend name args = do
-      value <- invoke backend config.projectId name args
+      let principal = case config.access of
+            ServiceAccess -> ApiKeyPrincipal
+            MemberAccess userId -> MemberPrincipal userId
+            SlackAccess _ _ userId -> MemberPrincipal userId
+            SlackInvestigationAccess run -> MemberPrincipal run.userId
+      value <- invoke backend principal config.projectId name args
       pure $ ToolResult (decodeUtf8 $ AE.encode value) (Just value)
     projectJson :: Projects.Project -> AE.Value
     projectJson project =

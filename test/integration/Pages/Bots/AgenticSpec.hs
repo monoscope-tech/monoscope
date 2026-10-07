@@ -18,6 +18,7 @@ import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Lucid qualified
 import Models.Apis.Issues qualified as Issues
+import Models.Projects.Projects qualified as Projects
 import Pages.AIThreads qualified as AIThreads
 import Pages.Bots.BotTestHelpers (assertJsonGolden, getOpenAIKey, getOpenAIModel)
 import Pages.Bots.SeedTestData (cleanupTelemetryData, seedTelemetryData)
@@ -27,6 +28,7 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
+import Servant.API.ResponseHeaders (getResponse)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Logging
 import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldContain, shouldNotContain, shouldSatisfy)
@@ -161,10 +163,10 @@ spec = around withTestResources do
           Issues.setConversationTitle testPid convId "Daily reliability brief"
           summary <- Issues.getConversation testPid convId
           listed <- Issues.listConversations testPid
-          scheduled <- Issues.upsertRoutine testPid convId $ fromRightShow $ Issues.mkRoutineInterval 15
+          scheduled <- Issues.upsertRoutine (getResponse tr.trSessAndHeader).user.id testPid convId $ fromRightShow $ Issues.mkRoutineInterval 15
           Issues.pauseRoutine testPid convId
           paused <- Issues.getConversation testPid convId
-          resumed <- Issues.resumeRoutine testPid convId
+          resumed <- Issues.resumeRoutine (getResponse tr.trSessAndHeader).user.id testPid convId
           Issues.deleteRoutine testPid convId
           deleted <- Issues.getConversation testPid convId
           pure (needsTitle, summary, listed, scheduled, paused, resumed, deleted)
@@ -184,9 +186,9 @@ spec = around withTestResources do
             let convId = UUIDId UUID.nil
             (scheduled, installed, canAct, slackEnabled) <- runTestBg frozenTime tr do
               void $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTWeb})|]
-              scheduled <- Issues.installRoutineTemplate testPid convId "Europe/Berlin" template
+              scheduled <- Issues.installRoutineTemplate (getResponse tr.trSessAndHeader).user.id testPid convId "Europe/Berlin" template
               initialCanAct <- maybe (pure False) (Issues.routineCanAct . (.id)) scheduled
-              Issues.setRoutineDestination testPid convId Issues.DestinationSlack
+              Issues.setRoutineDestination (getResponse tr.trSessAndHeader).user.id testPid convId Issues.DestinationSlack
               (scheduled,,initialCanAct,) <$> Issues.getConversation testPid convId <*> maybe (pure False) (Issues.routineCanAct . (.id)) scheduled
             (.scheduledAt) <$> scheduled `shouldBe` Just (addUTCTime (8 * 3600) frozenTime)
             ((.templateKey) =<< installed) `shouldBe` Just template.key
@@ -202,25 +204,26 @@ spec = around withTestResources do
                 interval = fromRightShow $ Issues.mkRoutineInterval 15
             resumed <- runTestBg frozenTime tr do
               void $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTWeb})|]
-              void $ Issues.installRoutineTemplate testPid convId "Europe/Berlin" template
-              void $ Issues.upsertRoutine testPid convId interval
+              void $ Issues.installRoutineTemplate (getResponse tr.trSessAndHeader).user.id testPid convId "Europe/Berlin" template
+              void $ Issues.upsertRoutine (getResponse tr.trSessAndHeader).user.id testPid convId interval
               Issues.pauseRoutine testPid convId
-              Issues.resumeRoutine testPid convId
+              Issues.resumeRoutine (getResponse tr.trSessAndHeader).user.id testPid convId
             (.scheduledAt) <$> resumed `shouldBe` Just (addUTCTime 900 frozenTime)
 
-      it "runs a routine once, completes its lease, and keeps the synthetic prompt out of history" \tr -> do
+      it "scheduledRoutine_carriesAuthorizingMember_andRunsOnce" \tr -> do
         executions <- IORef.newIORef ([] :: [AI.InvocationMode])
         successors <- IORef.newIORef ([] :: [(UUIDId "ai_routine", UTCTime)])
         let convId = UUIDId UUID.nil
             interval = fromRightShow $ Issues.mkRoutineInterval 15
             execute config = do
+              Eff.liftIO $ show config.access `shouldBe` show (AI.MemberAccess (getResponse tr.trSessAndHeader).user.id)
               Eff.liftIO $ IORef.modifyIORef' executions (<> [config.invocationMode])
               pure $ Right AI.AgenticChatResult{AI.response = "{\"explanation\":\"Routine completed\",\"widgets\":[]}", AI.toolCalls = []}
             enqueueNext routineId at = Eff.liftIO $ IORef.modifyIORef' successors (<> [(routineId, at)])
         (history, routine, runRecord, recentRuns) <- runTestBg frozenTime tr do
           void $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTWeb})|]
           Issues.insertChatMessage testPid convId Issues.ChatUser "Send a daily reliability brief to Slack" Nothing Nothing
-          scheduled <- Issues.upsertRoutine testPid convId interval >>= maybe (throwIO $ ErrorCall "routine was not scheduled") pure
+          scheduled <- Issues.upsertRoutine (getResponse tr.trSessAndHeader).user.id testPid convId interval >>= maybe (throwIO $ ErrorCall "routine was not scheduled") pure
           BackgroundJobs.runAIRoutineWith 1_000_000 execute enqueueNext tr.trATCtx scheduled.id scheduled.scheduledAt
           -- A duplicate delivery for the completed scheduled instant must be a no-op.
           BackgroundJobs.runAIRoutineWith 1_000_000 execute enqueueNext tr.trATCtx scheduled.id scheduled.scheduledAt
@@ -247,7 +250,7 @@ spec = around withTestResources do
             (history, runStatus) <- runTestBg frozenTime tr do
               void $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTWeb})|]
               Issues.insertChatMessage testPid convId Issues.ChatUser template.prompt Nothing Nothing
-              scheduled <- Issues.installRoutineTemplate testPid convId "UTC" template >>= maybe (throwIO $ ErrorCall "routine was not scheduled") pure
+              scheduled <- Issues.installRoutineTemplate (getResponse tr.trSessAndHeader).user.id testPid convId "UTC" template >>= maybe (throwIO $ ErrorCall "routine was not scheduled") pure
               BackgroundJobs.runAIRoutineWith 1_000_000 execute (\_ _ -> pass) tr.trATCtx scheduled.id scheduled.scheduledAt
               (,)
                 <$> Issues.selectChatHistory testPid convId
@@ -263,7 +266,7 @@ spec = around withTestResources do
               pure $ Right AI.AgenticChatResult{AI.response = "{\"explanation\":\"Do not publish\",\"has_findings\":true}", AI.toolCalls = []}
         (history, runStatus) <- runTestBg frozenTime tr do
           void $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTWeb})|]
-          scheduled <- Issues.upsertRoutine testPid convId interval >>= maybe (throwIO $ ErrorCall "routine was not scheduled") pure
+          scheduled <- Issues.upsertRoutine (getResponse tr.trSessAndHeader).user.id testPid convId interval >>= maybe (throwIO $ ErrorCall "routine was not scheduled") pure
           BackgroundJobs.runAIRoutineWith 1_000_000 execute (\_ _ -> pass) tr.trATCtx scheduled.id scheduled.scheduledAt
           (,)
             <$> Issues.selectChatHistory testPid convId
@@ -279,7 +282,7 @@ spec = around withTestResources do
             enqueueNext _ at = Eff.liftIO $ IORef.modifyIORef' successors (<> [at])
         (history, routine, runStatus) <- runTestBg frozenTime tr do
           void $ Hasql.interpExecute [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTWeb})|]
-          scheduled <- Issues.upsertRoutine testPid convId interval >>= maybe (throwIO $ ErrorCall "routine was not scheduled") pure
+          scheduled <- Issues.upsertRoutine (getResponse tr.trSessAndHeader).user.id testPid convId interval >>= maybe (throwIO $ ErrorCall "routine was not scheduled") pure
           BackgroundJobs.runAIRoutineWith 1_000 execute enqueueNext tr.trATCtx scheduled.id scheduled.scheduledAt
           (,,)
             <$> Issues.selectChatHistory testPid convId

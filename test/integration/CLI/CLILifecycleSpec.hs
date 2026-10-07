@@ -69,7 +69,7 @@ jsonOut out = case AE.eitherDecodeStrict' (encodeUtf8 out) of
 
 
 shouldHaveKeys :: AE.Value -> [Text] -> Expectation
-shouldHaveKeys (AE.Object obj) keys = forM_ keys \k -> unless (KM.member (fromString (toString k)) obj) do
+shouldHaveKeys (AE.Object obj) keys = forM_ keys \k -> unless (KM.member (fromString (toString k)) obj) $
   expectationFailure $ "missing key " <> toString k <> " in: " <> take 300 (decodeUtf8 (AE.encode obj))
 shouldHaveKeys other _ = expectationFailure $ "expected JSON object, got: " <> show other
 

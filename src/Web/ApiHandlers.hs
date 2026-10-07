@@ -146,13 +146,11 @@ import Pkg.Parser qualified as Parser
 import Pkg.Parser.Expr qualified as ParserExpr
 import Pkg.SchemaLearning.Catalog qualified as Fields
 import Relude hiding (ask, id)
-import Network.Wai (Request, queryString)
 import Servant (Capture, Delete, Get, HasServer (..), JSON, NamedRoutes, Header, Headers, NoContent (..), addHeader, Patch, Post, Put, QueryParam, ReqBody, ServerError (..), err400, err401, err403, err404, (:-), (:>))
 import Servant.OpenApi (HasOpenApi (..), toOpenApi)
 import Servant.Server.Internal.Delayed (passToServer)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATBaseCtx, ApiPrincipal (..), useTfReads)
-import Text.Slugify (slugify)
 import Utils (hostPath)
 import Web.ApiTypes hiding (count)
 import Web.ApiTypes qualified as ApiT
@@ -404,8 +402,8 @@ type DashboardDataHandler = Projects.ProjectId -> Dashboards.DashboardId -> Mayb
 
 
 -- API v1 server
-apiV1Server :: ApiPrincipal -> EventsSearchHandler -> DashboardDataHandler -> (AE.Value -> ATBaseCtx AE.Value) -> ServerT (NamedRoutes ApiV1Routes) ATBaseCtx
-apiV1Server principal queryEvents dashboardRenderer mcpHandler =
+apiV1Server :: ApiActor -> ApiPrincipal -> EventsSearchHandler -> DashboardDataHandler -> (AE.Value -> ATBaseCtx AE.Value) -> ServerT (NamedRoutes ApiV1Routes) ATBaseCtx
+apiV1Server actor principal queryEvents dashboardRenderer mcpHandler =
   ApiV1Routes
     { ingestionKey = apiIngestionKey principal
     , eventsSearch = queryEvents pid
@@ -445,12 +443,12 @@ apiV1Server principal queryEvents dashboardRenderer mcpHandler =
       dashboardsList = apiDashboardsList pid
     , dashboardGet = apiDashboardGet pid
     , dashboardData = dashboardRenderer pid
-    , dashboardCreate = apiDashboardCreate pid
-    , dashboardApply = apiDashboardApply pid
+    , dashboardCreate = apiDashboardCreate actor pid
+    , dashboardApply = apiDashboardApply actor pid
     , dashboardUpdate = apiDashboardUpdate pid
     , dashboardPatch = apiDashboardPatch pid
     , dashboardDelete = apiDashboardDelete pid
-    , dashboardDuplicate = apiDashboardDuplicate pid
+    , dashboardDuplicate = apiDashboardDuplicate actor pid
     , dashboardStar = apiDashboardStar pid
     , dashboardUnstar = apiDashboardUnstar pid
     , dashboardYaml = apiDashboardYaml pid
@@ -473,16 +471,16 @@ apiV1Server principal queryEvents dashboardRenderer mcpHandler =
     , endpointGet = apiEndpointGet pid
     , logPatternsList = apiLogPatternsList pid
     , logPatternGet = apiLogPatternGet pid
-    , logPatternAck = apiLogPatternAck pid
-    , logPatternsBulk = apiLogPatternsBulk pid
+    , logPatternAck = apiLogPatternAck actor pid
+    , logPatternsBulk = apiLogPatternsBulk actor pid
     , -- Issues
       issuesList = apiIssuesList pid
     , issueGet = apiIssueGet pid
-    , issueAck = apiIssueAck pid
+    , issueAck = apiIssueAck actor pid
     , issueUnack = apiIssueUnack pid
     , issueArchive = apiIssueArchive pid
     , issueUnarchive = apiIssueUnarchive pid
-    , issuesBulk = apiIssuesBulk pid
+    , issuesBulk = apiIssuesBulk actor pid
     , incidentsList = apiIncidentsList pid
     , incidentGet = apiIncidentGet pid
     , -- Teams + Members
@@ -500,13 +498,13 @@ apiV1Server principal queryEvents dashboardRenderer mcpHandler =
     , memberRemove = apiMemberRemove pid
     , mcp = mcpHandler
     }
+  where
+    pid = principal.projectId
 
 
 -- | Return the value or throw a 404 with a given message.
 notFoundOr :: Text -> Maybe a -> ATBaseCtx a
 notFoundOr msg = maybe (throwError err404{errBody = encodeUtf8 msg}) pure
-  where
-    pid = principal.projectId
 
 
 -- | 404 with @msg@ unless the row exists /and/ belongs to @pid@.
@@ -827,18 +825,18 @@ insertDashboard pid uid now did title tags teams filePath schema = do
   toFull <$> Dashboards.insert d
 
 
-apiDashboardCreate :: Projects.ProjectId -> DashboardInput -> ATBaseCtx DashboardFull
-apiDashboardCreate pid inp = do
+apiDashboardCreate :: ApiActor -> Projects.ProjectId -> DashboardInput -> ATBaseCtx DashboardFull
+apiDashboardCreate principal pid inp = do
   when (T.null inp.title) $ throwError err400{errBody = "title is required"}
   now <- Time.currentTime
   did <- UUIDId <$> UUID.genUUID
-  -- API creation has no session so createdBy is a synthetic nil; git sync is skipped
-  insertDashboard pid (Projects.UserId UUID.nil) now did inp.title inp.tags inp.teams inp.filePath inp.schema
+  -- API-key creation retains the legacy unattributed creator.
+  insertDashboard pid (fromMaybe (Projects.UserId UUID.nil) $ principalUser principal) now did inp.title inp.tags inp.teams inp.filePath inp.schema
 
 
 -- | Upsert keyed by file_path.
-apiDashboardApply :: Projects.ProjectId -> DashboardYAMLDoc -> ATBaseCtx DashboardFull
-apiDashboardApply pid doc = do
+apiDashboardApply :: ApiActor -> Projects.ProjectId -> DashboardYAMLDoc -> ATBaseCtx DashboardFull
+apiDashboardApply principal pid doc = do
   now <- Time.currentTime
   existingM <- Dashboards.getDashboardByFilePath pid doc.filePath
   let newTitle = fromMaybe (T.takeWhileEnd (/= '/') doc.filePath) doc.title
@@ -850,7 +848,7 @@ apiDashboardApply pid doc = do
       apiDashboardGet pid existing.id
     Nothing -> do
       did <- UUIDId <$> UUID.genUUID
-      insertDashboard pid (Projects.UserId UUID.nil) now did newTitle doc.tags doc.teams (Just doc.filePath) (Just doc.schema)
+      insertDashboard pid (fromMaybe (Projects.UserId UUID.nil) $ principalUser principal) now did newTitle doc.tags doc.teams (Just doc.filePath) (Just doc.schema)
 
 
 apiDashboardUpdate :: Projects.ProjectId -> Dashboards.DashboardId -> DashboardInput -> ATBaseCtx DashboardFull
@@ -872,14 +870,14 @@ apiDashboardDelete :: Projects.ProjectId -> Dashboards.DashboardId -> ATBaseCtx 
 apiDashboardDelete pid did = withRefetchNoContent (apiDashboardGet pid did) (Dashboards.deleteDashboardsByIds pid (V.singleton did))
 
 
-apiDashboardDuplicate :: Projects.ProjectId -> Dashboards.DashboardId -> ATBaseCtx DashboardFull
-apiDashboardDuplicate pid did = do
+apiDashboardDuplicate :: ApiActor -> Projects.ProjectId -> Dashboards.DashboardId -> ATBaseCtx DashboardFull
+apiDashboardDuplicate principal pid did = do
   existing <- apiDashboardGet pid did
   now <- Time.currentTime
   newId <- UUIDId <$> UUID.genUUID
   let copyTitle = existing.summary.title <> " (Copy)"
       copySchema = existing.schema & _Just . #title %~ fmap (<> " (Copy)") . (<|> Just "Untitled")
-  insertDashboard pid (Projects.UserId UUID.nil) now newId copyTitle (Just $ V.toList existing.summary.tags) (Just $ V.toList existing.summary.teams) Nothing copySchema
+  insertDashboard pid (fromMaybe (Projects.UserId UUID.nil) $ principalUser principal) now newId copyTitle (Just $ V.toList existing.summary.tags) (Just $ V.toList existing.summary.teams) Nothing copySchema
 
 
 apiDashboardStar :: Projects.ProjectId -> Dashboards.DashboardId -> ATBaseCtx DashboardFull
@@ -1154,22 +1152,22 @@ apiLogPatternGet pid lpid = do
       }
 
 
-apiLogPatternAck :: Projects.ProjectId -> Int64 -> ATBaseCtx LogPatternFull
-apiLogPatternAck pid lpid =
+apiLogPatternAck :: ApiActor -> Projects.ProjectId -> Int64 -> ATBaseCtx LogPatternFull
+apiLogPatternAck principal pid lpid =
   fetchLogPattern pid lpid
-    *> LogPatterns.setLogPatternStatesByIds pid Nothing (V.singleton lpid) LogPatterns.LPSAcknowledged
+    *> LogPatterns.setLogPatternStatesByIds pid (principalUser principal) (V.singleton lpid) LogPatterns.LPSAcknowledged
     *> apiLogPatternGet pid lpid
 
 
-apiLogPatternsBulk :: Projects.ProjectId -> BulkAction Int64 -> ATBaseCtx (BulkResult Int64)
-apiLogPatternsBulk pid ba =
+apiLogPatternsBulk :: ApiActor -> Projects.ProjectId -> BulkAction Int64 -> ATBaseCtx (BulkResult Int64)
+apiLogPatternsBulk principal pid ba =
   bulkExec
     ba
     [ ("acknowledge", setState LogPatterns.LPSAcknowledged)
     , ("ignore", setState LogPatterns.LPSIgnored)
     ]
   where
-    setState st = BulkSucceeded <$> LogPatterns.setLogPatternStatesByIds pid Nothing (V.fromList ba.ids) st
+    setState st = BulkSucceeded <$> LogPatterns.setLogPatternStatesByIds pid (principalUser principal) (V.fromList ba.ids) st
 
 
 issueToSummary :: Issues.Issue -> IssueApiSummary
@@ -1314,17 +1312,17 @@ issueMutate pid iid op = fetchIssue pid iid *> op [iid] *> apiIssueGet pid iid
 
 -- | Acknowledge, silencing notifications for @duration_minutes@ — or
 -- indefinitely (until the issue regresses or is un-acked) when omitted.
-apiIssueAck :: Projects.ProjectId -> Issues.IssueId -> Maybe Int -> ATBaseCtx IssueApiFull
-apiIssueAck pid iid durationM =
-  mkAckSet durationM >>= \ack -> issueMutate pid iid \ids -> Issues.setAckState pid ids (Just ack)
+apiIssueAck :: ApiActor -> Projects.ProjectId -> Issues.IssueId -> Maybe Int -> ATBaseCtx IssueApiFull
+apiIssueAck principal pid iid durationM =
+  mkAckSet principal durationM >>= \ack -> issueMutate pid iid \ids -> Issues.setAckState pid ids (Just ack)
 
 
 -- | Build an 'Issues.AckSet' for @now@ from an optional duration in minutes.
--- API-key auth carries no user, so @by@ is always unattributed.
-mkAckSet :: Maybe Int -> ATBaseCtx Issues.AckSet
-mkAckSet durationM = do
+-- API-key callers have no member attribution.
+mkAckSet :: ApiActor -> Maybe Int -> ATBaseCtx Issues.AckSet
+mkAckSet principal durationM = do
   now <- Time.currentTime
-  pure Issues.AckSet{at = now, by = Nothing, window = maybe Issues.AckIndefinite Issues.AckFor durationM}
+  pure Issues.AckSet{at = now, by = principalUser principal, window = maybe Issues.AckIndefinite Issues.AckFor durationM}
 
 
 apiIssueUnack :: Projects.ProjectId -> Issues.IssueId -> ATBaseCtx IssueApiFull
@@ -1341,10 +1339,10 @@ apiIssueUnarchive :: Projects.ProjectId -> Issues.IssueId -> ATBaseCtx IssueApiF
 apiIssueUnarchive pid iid = issueMutate pid iid $ \ids -> Issues.setArchiveState pid ids Nothing
 
 
-apiIssuesBulk :: Projects.ProjectId -> BulkAction Issues.IssueId -> ATBaseCtx (BulkResult Issues.IssueId)
-apiIssuesBulk pid ba = do
+apiIssuesBulk :: ApiActor -> Projects.ProjectId -> BulkAction Issues.IssueId -> ATBaseCtx (BulkResult Issues.IssueId)
+apiIssuesBulk principal pid ba = do
   now <- Time.currentTime
-  ackSet <- mkAckSet ba.durationMinutes
+  ackSet <- mkAckSet principal ba.durationMinutes
   let ack = count $ Issues.setAckState pid ba.ids (Just ackSet)
       unack = count $ Issues.setAckState pid ba.ids Nothing
       archive = count $ Issues.setArchiveState pid ba.ids (Just (now, Issues.ArchiveIndefinite))

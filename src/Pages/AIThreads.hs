@@ -374,6 +374,7 @@ page pid convId = do
 routineInstallPostH :: Projects.ProjectId -> RoutineTemplateForm -> ATAuthCtx (RespHeaders (Html ()))
 routineInstallPostH pid form = do
   (_, project, _) <- mkAIPageCtx pid
+  (sess, _) <- Projects.sessionAndProject pid
   case find ((== form.templateKey) . (.key)) Issues.routineTemplates of
     Nothing -> reject "Unknown routine template."
     Just template -> do
@@ -386,7 +387,7 @@ routineInstallPostH pid form = do
           void $ Issues.getOrCreateConversation pid convId Issues.CTWeb (AE.object ["routine_template" AE..= template.key])
           Issues.renameConversation pid convId template.title
           Issues.insertChatMessage pid convId Issues.ChatUser template.prompt Nothing Nothing
-          whenJustM (Issues.installRoutineTemplate pid convId project.timeZone template) \routine ->
+          whenJustM (Issues.installRoutineTemplate sess.user.id pid convId project.timeZone template) \routine ->
             BackgroundJobs.enqueueAIRoutine appCtx routine.id routine.scheduledAt
           redirectToThread pid convId
 
@@ -489,7 +490,8 @@ routinePostH pid convId form = do
 schedule :: Projects.ProjectId -> UUIDId "conversation" -> Issues.RoutineInterval -> ATAuthCtx ()
 schedule pid convId interval = do
   appCtx <- ask @AuthContext
-  whenJustM (Issues.upsertRoutine pid convId interval) \routine ->
+  (sess, _) <- Projects.sessionAndProject pid
+  whenJustM (Issues.upsertRoutine sess.user.id pid convId interval) \routine ->
     BackgroundJobs.enqueueAIRoutine appCtx routine.id routine.scheduledAt
 
 
@@ -512,7 +514,8 @@ routineResumePostH :: Projects.ProjectId -> UUIDId "conversation" -> ATAuthCtx (
 routineResumePostH pid convId = do
   authorizeProject pid
   appCtx <- ask @AuthContext
-  whenJustM (Issues.resumeRoutine pid convId) \routine -> BackgroundJobs.enqueueAIRoutine appCtx routine.id routine.scheduledAt
+  (sess, _) <- Projects.sessionAndProject pid
+  whenJustM (Issues.resumeRoutine sess.user.id pid convId) \routine -> BackgroundJobs.enqueueAIRoutine appCtx routine.id routine.scheduledAt
   redirectCS $ "/p/" <> pid.toText <> "/ai/routines"
   addRespHeaders mempty
 
@@ -520,7 +523,8 @@ routineResumePostH pid convId = do
 routineDestinationPostH :: Projects.ProjectId -> UUIDId "conversation" -> RoutineDestinationForm -> ATAuthCtx (RespHeaders (Html ()))
 routineDestinationPostH pid convId form = do
   authorizeProject pid
-  Issues.setRoutineDestination pid convId form.destination
+  (sess, _) <- Projects.sessionAndProject pid
+  Issues.setRoutineDestination sess.user.id pid convId form.destination
   redirectCS $ "/p/" <> pid.toText <> "/ai/routines"
   addRespHeaders mempty
 

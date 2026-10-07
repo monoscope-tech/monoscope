@@ -71,6 +71,8 @@ Generate a coverage inventory from the MCP registry and CLI command tree. Every 
 
 ### Authorize each action
 
+Scheduled routines retain the member who installed or resumed them and recheck that member before tools and publication. Migration `0212` pauses legacy routines with no recorded requester; a member must explicitly resume them. Agent tool execution preserves the caller's clock, HTTP, UUID, and LLM interpreters, and member writes retain their attribution.
+
 Resolve the Slack user to a project member before work and again before each tool and reply. Include the member's permission, not only the project ID. Read tools use the current user's allowed project scope. Writes use the same domain permission rules as the product operation.
 
 An explicit user request is required for a write. Destructive or administrative actions, such as key management, member changes, and deletion, require a reviewable confirmation bound to the operation, arguments, project, and requester. Recheck permission after confirmation and before execution. Tool results must state what the server actually changed.

@@ -384,9 +384,10 @@ runAIRoutineWith timeoutMicros execute enqueueNext authCtx routineId scheduledAt
       deliveryContext = case routine.destination of
         Issues.DestinationSlack -> Just "\nROUTINE DELIVERY\nSend a concise copy of reportable findings to the project's configured Slack channel. Do not send a message when there are no findings.\n"
         Issues.DestinationConversation -> Nothing
-      config = (AI.defaultAgenticConfig routine.projectId){AI.conversationId = Just routine.conversationId, AI.conversationType = Just conversationType, AI.sourceConfig = Just authCtx.config, AI.customContext = deliveryContext, AI.useTimefusion = authCtx.env.enableTimefusionReads, AI.invocationMode = AI.ScheduledRoutine routineId routine.allowActions}
+      config = (AI.defaultAgenticConfig routine.projectId){AI.conversationId = Just routine.conversationId, AI.conversationType = Just conversationType, AI.sourceConfig = Just authCtx.config, AI.customContext = deliveryContext, AI.useTimefusion = authCtx.env.enableTimefusionReads, AI.invocationMode = AI.ScheduledRoutine routineId routine.allowActions, AI.access = AI.MemberAccess routine.requestedBy}
   outcome <- Timeout.timeout timeoutMicros $ tryAny do
     result <- execute config
+    AI.requireAgentAccess config.access routine.projectId
     Issues.routineRunCancelled routineId routine.claimedAt >>= \case
       True -> pure (Issues.CompletedCancelled, Nothing, Nothing, Nothing)
       False -> case result of

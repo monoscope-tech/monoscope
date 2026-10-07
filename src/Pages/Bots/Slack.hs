@@ -42,6 +42,7 @@ import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, type (:>))
 import Effectful.Concurrent (Concurrent)
+import Effectful.Concurrent qualified as Concurrent
 import Effectful.Concurrent.Async (concurrently, race_)
 import Effectful.Error.Static (runErrorNoCallStack, throwError)
 import Effectful.Log qualified as Log
@@ -959,7 +960,7 @@ processSlackEventWithTools projectTools receiptId =
             )
             ( \_ ->
                 race_
-                  (forever $ AI.requireAgentAccess access slackData.projectId >> liftIO (threadDelay 500_000))
+                  (forever $ AI.requireAgentAccess access slackData.projectId >> Concurrent.threadDelay 500_000)
                   (withInvestigationProgress slackData access deliverAnswer)
             )
         )

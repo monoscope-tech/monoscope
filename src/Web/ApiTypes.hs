@@ -3,6 +3,8 @@
 -- Wire format for /api/v1/{monitors,dashboards,api-keys,...}. Most handlers
 -- live in Web.ApiHandlers; Pages.Dashboards renders dashboard data.
 module Web.ApiTypes (
+  ApiActor (..),
+  principalUser,
   -- Monitor types
   MonitorInput (..),
   MonitorPatch (..),
@@ -81,6 +83,15 @@ import Pkg.DeriveUtils (CamelSchema (..), JsonValueSchema (..), SnakeSchema (..)
 import Relude
 import Servant (FromHttpApiData)
 import Web.Wire (Paged (..))
+
+
+data ApiActor = ApiKeyPrincipal | MemberPrincipal Projects.UserId
+  deriving stock (Eq, Show)
+
+
+principalUser :: ApiActor -> Maybe Projects.UserId
+principalUser ApiKeyPrincipal = Nothing
+principalUser (MemberPrincipal userId) = Just userId
 
 
 -- | Phantom-tagged team id.

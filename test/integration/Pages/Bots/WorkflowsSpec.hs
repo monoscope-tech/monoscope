@@ -19,13 +19,14 @@ import Data.Effectful.Wreq qualified as HTTP
 import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
 import Data.Text qualified as T
-import Data.Time (addUTCTime, getCurrentTime)
+import Data.Time (addUTCTime)
 import Data.UUID qualified as UUID
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.Dispatch.Dynamic (interpose, send)
 import Effectful.Error.Static (catchError)
+import Hasql.Interpolate qualified as HI
 import Langchain.LLM.Core qualified as Chat
 import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Integrations qualified as Slack
@@ -57,10 +58,11 @@ import System.Config qualified as Config
 import System.Timeout (timeout)
 import System.Types (ATBackgroundCtx)
 import Test.Hspec (Spec, anyException, around, describe, it, shouldBe, shouldSatisfy, shouldThrow)
-import Web.MCP qualified as MCP
-import Web.Routes qualified as Routes
 import UnliftIO.Async (concurrently, concurrently_, wait, withAsync)
 import UnliftIO.Exception (tryAny)
+import Web.ApiTypes (ApiActor (..))
+import Web.MCP qualified as MCP
+import Web.Routes qualified as Routes
 import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
@@ -1718,9 +1720,38 @@ spec = around withTestResources do
         networkResult `shouldSatisfy` isRight
         map fst networkRequests `shouldSatisfy` elem "https://slack.com/api/chat.postMessage"
 
-      it "lists only authorized project metrics with a bounded catalog page" \tr -> do
+      it "projectAdapter_routineRechecksAuthorizingMember" \tr -> do
+        let userId = (getResponse tr.trSessAndHeader).user.id
+            convId = UUIDId UUID.nil
+            interval = fromRightShow $ Issues.mkRoutineInterval 15
+        checked <- newIORef Nothing
+        let execute config = do
+              outcome <- tryAny $ AI.requireAgentAccess config.access testPid
+              writeIORef checked $ Just (show @Text config.access, isRight outcome)
+              pure $ Right $ AI.AgenticChatResult "Done" []
+        runTestBg frozenTime tr do
+          Hasql.interpExecute_ [HI.sql|INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type) VALUES (#{testPid}, #{convId}, #{Issues.CTWeb})|]
+          scheduled <- Issues.upsertRoutine (getResponse tr.trSessAndHeader).user.id testPid convId interval >>= maybe (liftIO $ throwIO $ ErrorCall "routine not scheduled") pure
+          Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET active = false WHERE project_id = #{testPid}|]
+          Jobs.runAIRoutineWith 1_000_000 execute (\_ _ -> pass) tr.trATCtx scheduled.id scheduled.scheduledAt
+        readIORef checked >>= (`shouldBe` Just (show (AI.MemberAccess userId), False))
+
+      it "projectAdapter_preservesLLMInterpreter_forNestedTranslation" \tr -> do
+        let provider = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat{} -> pure $ Right $ Chat.Message Chat.Assistant "{\"query\":\"level == ERROR\",\"explanation\":\"test translation\"}" Chat.defaultMessageData
+              ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
+              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+        (requests, result) <-
+          runTestBgRecordingHTTP frozenTime tr
+            $ provider
+            $ AI.invoke Routes.mcpProjectTools (MemberPrincipal (getResponse tr.trSessAndHeader).user.id) testPid "search_events_nl"
+            $ one ("input", AE.String "errors")
+        requests `shouldBe` []
+        (result ^? key "structuredContent" . key "query" . _String) `shouldBe` Just "level == ERROR"
+
+      it "projectAdapter_preservesFrozenClock_forMetricCatalog" \tr -> do
         setupLinkedSlackData tr testPid "T_METRIC_CATALOG"
-        now <- getCurrentTime
+        let now = frozenTime
         withResource tr.trPool \conn -> void $ PGS.execute conn [sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = ?|] (PGS.Only testPid)
         principal <- toBaseServantResponse tr $ Slack.resolveSlackPrincipal "T_METRIC_CATALOG" "U0123ABCDEF" (Just testPid)
         fmap (.permission) principal `shouldBe` Just PM.PView
@@ -1749,7 +1780,7 @@ spec = around withTestResources do
               ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
               ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
         receipt <- receiveSlackEvent tr $ slackEventCallback "T_METRIC_CATALOG" "G_METRICS" "What metrics can you access?" "1735689600.000001" Nothing & key "event" . key "type" . _String .~ "app_mention"
-        let backend = Routes.mcpProjectTools tr.trLogger tr.trATCtx tr.trTracerProvider
+        let backend = Routes.mcpProjectTools
         (_, outcome) <- runTestBgRecordingHTTP frozenTime tr $ withHTTPResponses (\_ _ -> pure $ Just "{\"ok\":true,\"ts\":\"1735689610.000001\"}") $ provider $ tryAny $ SlackPage.processSlackEventWithTools (Just backend) receipt
         outcome `shouldSatisfy` isRight
         catalogs <- readIORef toolResult
@@ -1791,13 +1822,14 @@ spec = around withTestResources do
         invoked <- newIORef ([] :: [Text])
         seen <- newIORef ([] :: [Text])
         let tool name = MCP.Tool name ("Project " <> name) (AE.object ["type" AE..= ("object" :: Text)]) (MCP.ViaComposite $ \_ _ -> pure AE.Null)
-            backend = AI.ProjectTools
-              { AI.catalog = Map.fromList [(name, tool name) | name <- ["get_dashboard_data", "create_monitor"]]
-              , AI.invoke = \pid name _ -> liftIO $ do
-                  pid `shouldBe` testPid
-                  modifyIORef' invoked (<> [name])
-                  pure $ AE.object ["isError" AE..= False, "structuredContent" AE..= AE.object ["title" AE..= ("Dashboard" :: Text)]]
-              }
+            backend =
+              AI.ProjectTools
+                { AI.catalog = Map.fromList [(name, tool name) | name <- ["get_dashboard_data", "create_monitor"]]
+                , AI.invoke = \_ pid name _ -> liftIO $ do
+                    pid `shouldBe` testPid
+                    modifyIORef' invoked (<> [name])
+                    pure $ AE.object ["isError" AE..= False, "structuredContent" AE..= AE.object ["title" AE..= ("Dashboard" :: Text)]]
+                }
             config = (AI.defaultAgenticConfig testPid){AI.projectTools = Just backend}
             calls = [Chat.ToolFunction "search_project_tools" $ one ("query", AE.String "show dashboard data"), Chat.ToolFunction "get_project_tool_schema" $ one ("name", AE.String "get_dashboard_data"), Chat.ToolFunction "get_dashboard_data" mempty, Chat.ToolFunction "create_monitor" mempty]
             provider = interpose @ELLM.LLM \_ -> \case
@@ -1823,10 +1855,11 @@ spec = around withTestResources do
         setupLinkedSlackData tr testPid "T_MCP_VIEW"
         withResource tr.trPool \conn -> void $ PGS.execute conn [sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = ?|] (PGS.Only testPid)
         invoked <- newIORef False
-        let backend = AI.ProjectTools
-              { AI.catalog = Map.singleton "get_api_key" $ MCP.Tool "get_api_key" "Read an API key" (AE.object []) (MCP.ViaComposite $ \_ _ -> pure AE.Null)
-              , AI.invoke = \_ _ _ -> liftIO (writeIORef invoked True) $> AE.Null
-              }
+        let backend =
+              AI.ProjectTools
+                { AI.catalog = Map.singleton "get_api_key" $ MCP.Tool "get_api_key" "Read an API key" (AE.object []) (MCP.ViaComposite $ \_ _ -> pure AE.Null)
+                , AI.invoke = \_ _ _ _ -> liftIO (writeIORef invoked True) $> AE.Null
+                }
             userId = (getResponse tr.trSessAndHeader).user.id
             config = (AI.defaultAgenticConfig testPid){AI.projectTools = Just backend, AI.access = AI.SlackAccess "T_MCP_VIEW" "U0123ABCDEF" userId}
             provider = interpose @ELLM.LLM \_ -> \case
@@ -1852,10 +1885,11 @@ spec = around withTestResources do
         let userId = (getResponse tr.trSessAndHeader).user.id
         withResource tr.trPool \conn -> void $ PGS.execute conn [sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = ? AND user_id = ?|] (testPid, userId)
         invoked <- newIORef False
-        let backend = AI.ProjectTools
-              { AI.catalog = Map.singleton "create_monitor" $ MCP.Tool "create_monitor" "Create a monitor" (AE.object []) (MCP.ViaComposite $ \_ _ -> pure AE.Null)
-              , AI.invoke = \_ _ _ -> liftIO (writeIORef invoked True) $> AE.Null
-              }
+        let backend =
+              AI.ProjectTools
+                { AI.catalog = Map.singleton "create_monitor" $ MCP.Tool "create_monitor" "Create a monitor" (AE.object []) (MCP.ViaComposite $ \_ _ -> pure AE.Null)
+                , AI.invoke = \_ _ _ _ -> liftIO (writeIORef invoked True) $> AE.Null
+                }
             config = (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess userId, AI.projectTools = Just backend, AI.invocationMode = AI.InteractiveWithActions}
             provider = interpose @ELLM.LLM \_ -> \case
               ELLM.CallAgenticChat history _ _ -> pure $ Right $ case [Chat.content message | message <- toList history, Chat.role message == Chat.Tool] of
@@ -1869,24 +1903,28 @@ spec = around withTestResources do
           Right answer -> T.isInfixOf "project role" answer.response
           _ -> False
 
-      it "executes an explicitly requested issue write through the MCP route" \tr -> do
-        [PGS.Only (issueId :: Issues.IssueId)] <- withResource tr.trPool \conn -> PGS.query conn
-          [sql|INSERT INTO apis.issues (project_id, issue_type, target_hash, service, environment)
+      it "projectAdapter_preservesRequester_onIssueAcknowledgment" \tr -> do
+        [PGS.Only (issueId :: Issues.IssueId)] <- withResource tr.trPool \conn ->
+          PGS.query
+            conn
+            [sql|INSERT INTO apis.issues (project_id, issue_type, target_hash, service, environment)
                 VALUES (?, 'runtime_exception'::apis.issue_type, gen_random_uuid()::text, 'checkout', 'production') RETURNING id|]
           (PGS.Only testPid)
         let userId = (getResponse tr.trSessAndHeader).user.id
-            backend = Routes.mcpProjectTools tr.trLogger tr.trATCtx tr.trTracerProvider
+            backend = Routes.mcpProjectTools
             config = (AI.defaultAgenticConfig testPid){AI.access = AI.MemberAccess userId, AI.projectTools = Just backend, AI.invocationMode = AI.InteractiveWithActions}
             provider = interpose @ELLM.LLM \_ -> \case
               ELLM.CallAgenticChat history _ _ -> pure $ Right $ case [Chat.content message | message <- toList history, Chat.role message == Chat.Tool] of
-                [] -> Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "ack" "function" (Chat.ToolFunction "ack_issue" $ one ("issue_id", AE.toJSON issueId))]}
+                [] -> Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "ack" "function" (Chat.ToolFunction "ack_issue" $ one ("issue_id", AE.toJSON issueId)), Chat.ToolCall "dashboard" "function" (Chat.ToolFunction "create_dashboard" $ one ("body", AE.object ["title" AE..= ("Agent attribution regression" :: Text)]))]}
                 _ -> Chat.Message Chat.Assistant "Issue acknowledged." Chat.defaultMessageData
               ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
               ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
         outcome <- runTestBg frozenTime tr $ provider $ AI.runAgenticChatWithHistory config "Acknowledge this issue" "model" "key"
         outcome `shouldSatisfy` isRight
-        [PGS.Only acknowledged] <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT acknowledged_at IS NOT NULL FROM apis.issues WHERE id = ?|] (PGS.Only issueId)
-        acknowledged `shouldBe` True
+        [acknowledged] <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT acknowledged_at IS NOT NULL, acknowledged_by FROM apis.issues WHERE id = ?|] (PGS.Only issueId)
+        acknowledged `shouldBe` (True, Just userId)
+        createdBy <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT created_by FROM projects.dashboards WHERE project_id = ? AND title = 'Agent attribution regression'|] (PGS.Only testPid)
+        createdBy `shouldBe` [PGS.Only userId]
 
       it "blocks a view-only Slack member from sending through an action tool" \tr -> do
         setupLinkedSlackData tr testPid "T_VIEW_ACTION"

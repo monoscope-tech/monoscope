@@ -9,8 +9,8 @@ import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.List qualified as List
 import Data.Map qualified as Map
-import Data.Set qualified as Set
 import Data.OpenApi (OpenApi, info, title, version)
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (addUTCTime)
 import Data.UUID qualified as UUID
@@ -402,7 +402,7 @@ spec = around withTestResources do
 
     describe "Dashboard CRUD" do
       it "returns an empty dashboard's title and widget list" $ \tr -> do
-        created <- runAsBase tr $ ApiH.apiDashboardCreate testPid ApiT.DashboardInput{ApiT.title = "empty dashboard", ApiT.tags = Nothing, ApiT.teams = Nothing, ApiT.filePath = Nothing, ApiT.schema = Nothing}
+        created <- runAsBase tr $ ApiH.apiDashboardCreate ApiT.ApiKeyPrincipal testPid ApiT.DashboardInput{ApiT.title = "empty dashboard", ApiT.tags = Nothing, ApiT.teams = Nothing, ApiT.filePath = Nothing, ApiT.schema = Nothing}
         rendered <- runAsBase tr $ DashPage.apiDashboardData testPid created.summary.id Nothing Nothing (Just "1h") Nothing Nothing []
         rendered.id `shouldBe` created.summary.id
         rendered.title `shouldBe` "empty dashboard"
@@ -412,7 +412,7 @@ spec = around withTestResources do
         let runB :: ATBaseCtx a -> IO a
             runB k = runAsBase tr k
             input = ApiT.DashboardInput{ApiT.title = "d1", ApiT.tags = Just ["a"], ApiT.teams = Nothing, ApiT.filePath = Nothing, ApiT.schema = Nothing}
-        created <- runB $ ApiH.apiDashboardCreate testPid input
+        created <- runB $ ApiH.apiDashboardCreate ApiT.ApiKeyPrincipal testPid input
         created.summary.title `shouldBe` "d1"
         everyone <- runB $ PM.getEveryoneTeam testPid
         V.length created.summary.teams `shouldBe` 1
@@ -427,8 +427,8 @@ spec = around withTestResources do
         let runB :: ATBaseCtx a -> IO a
             runB k = runAsBase tr k
             mkInput n = ApiT.DashboardInput{ApiT.title = "bulk-d-" <> n, ApiT.tags = Nothing, ApiT.teams = Nothing, ApiT.filePath = Nothing, ApiT.schema = Nothing}
-        d1 <- runB $ ApiH.apiDashboardCreate testPid (mkInput "a")
-        d2 <- runB $ ApiH.apiDashboardCreate testPid (mkInput "b")
+        d1 <- runB $ ApiH.apiDashboardCreate ApiT.ApiKeyPrincipal testPid (mkInput "a")
+        d2 <- runB $ ApiH.apiDashboardCreate ApiT.ApiKeyPrincipal testPid (mkInput "b")
         res <- runB $ ApiH.apiDashboardBulk testPid ApiT.BulkAction{ApiT.action = "delete", ApiT.ids = [d1.summary.id.unwrap, d2.summary.id.unwrap], ApiT.durationMinutes = Nothing}
         length res.succeeded `shouldBe` 2
 
@@ -436,8 +436,8 @@ spec = around withTestResources do
         let runB :: ATBaseCtx a -> IO a
             runB k = runAsBase tr k
             doc = ApiT.DashboardYAMLDoc{ApiT.filePath = "dashes/foo.yaml", ApiT.title = Just "foo", ApiT.tags = Nothing, ApiT.teams = Nothing, ApiT.schema = def}
-        d1 <- runB $ ApiH.apiDashboardApply testPid doc
-        d2 <- runB $ ApiH.apiDashboardApply testPid doc
+        d1 <- runB $ ApiH.apiDashboardApply ApiT.ApiKeyPrincipal testPid doc
+        d2 <- runB $ ApiH.apiDashboardApply ApiT.ApiKeyPrincipal testPid doc
         d1.summary.id `shouldBe` d2.summary.id -- same row updated, not inserted again
     describe "API keys CRUD" do
       it "create returns plaintext once; list includes it; delete deactivates" $ \tr -> do
@@ -533,7 +533,7 @@ spec = around withTestResources do
         res.totalCount `shouldSatisfy` (>= 0)
 
       it "issues bulk with empty ids succeeds with empty result" $ \tr -> do
-        res <- runAsBase tr (ApiH.apiIssuesBulk testPid ApiT.BulkAction{ApiT.action = "acknowledge", ApiT.ids = [], ApiT.durationMinutes = Nothing})
+        res <- runAsBase tr (ApiH.apiIssuesBulk ApiT.ApiKeyPrincipal testPid ApiT.BulkAction{ApiT.action = "acknowledge", ApiT.ids = [], ApiT.durationMinutes = Nothing})
         res.succeeded `shouldBe` []
 
       it "endpoints list returns a Paged envelope" $ \tr -> do
@@ -545,7 +545,7 @@ spec = around withTestResources do
         res.perPage `shouldSatisfy` (> 0)
 
       it "log patterns bulk with empty ids succeeds with empty result" $ \tr -> do
-        res <- runAsBase tr (ApiH.apiLogPatternsBulk testPid ApiT.BulkAction{ApiT.action = "acknowledge", ApiT.ids = [], ApiT.durationMinutes = Nothing})
+        res <- runAsBase tr (ApiH.apiLogPatternsBulk ApiT.ApiKeyPrincipal testPid ApiT.BulkAction{ApiT.action = "acknowledge", ApiT.ids = [], ApiT.durationMinutes = Nothing})
         res.succeeded `shouldBe` []
 
       it "incidents list and get stay inside the authorized project" $ \tr -> do
@@ -666,7 +666,7 @@ spec = around withTestResources do
           buildTestApp tr pid =
             genericServeTWithContext
               (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
-              (apiV1Server tr.trLogger tr.trATCtx tr.trTracerProvider (Authenticated pid))
+              (apiV1Server (Authenticated pid))
               Servant.EmptyContext
           mcpHttp tr authHdr body =
             let req =
@@ -694,8 +694,8 @@ spec = around withTestResources do
               ]
 
       it "runs the Agent project adapter through the same MCP route" \tr -> do
-        let backend = Routes.mcpProjectTools tr.trLogger tr.trATCtx tr.trTracerProvider
-        result <- runAsBase tr $ AI.invoke backend testPid "get_project" Map.empty
+        let backend = Routes.mcpProjectTools
+        result <- runAsBase tr $ AI.invoke backend ApiT.ApiKeyPrincipal testPid "get_project" Map.empty
         (result ^? key "isError") `shouldBe` Just (AE.Bool False)
         (result ^? key "structuredContent" . key "summary" . key "id" . _String) `shouldBe` Just testPid.toText
 
@@ -781,11 +781,11 @@ spec = around withTestResources do
           [HI.sql|INSERT INTO otel_metrics_meta
             (project_id, metric_name, metric_type, metric_unit, metric_description, service_name, scope_name, metric_labels, first_seen_at, last_seen_at, first_timestamp, last_timestamp)
             VALUES (#{testPid}, 'checkout.old', 'GAUGE', 'ms', 'old metric', 'checkout', 'test', '{}', #{oldTime}, #{oldTime}, #{oldTime}, #{oldTime})|]
-        resp <- runAsBase tr $ MCP.handleJsonRpc reg (buildTestApp tr) testPid
+        resp <- runAsBase tr $ MCP.handleJsonRpc reg (buildTestApp tr testPid) testPid
           (rpcCallNamed "list_metrics" $ AE.object ["service" AE..= ("checkout" :: Text), "limit" AE..= (1 :: Int)])
         (resp ^? key "result" . key "isError") `shouldBe` Just (AE.Bool False)
         (resp ^? key "result" . key "structuredContent" . key "metrics" . _Array . ix 0 . key "metricName" . _String) `shouldBe` Just "checkout.duration"
-        inactive <- runAsBase tr $ MCP.handleJsonRpc reg (buildTestApp tr) testPid
+        inactive <- runAsBase tr $ MCP.handleJsonRpc reg (buildTestApp tr testPid) testPid
           (rpcCallNamed "list_metrics" $ AE.object ["service" AE..= ("checkout" :: Text), "active" AE..= False])
         (inactive ^? key "result" . key "structuredContent" . key "active") `shouldBe` Just (AE.Bool False)
         (inactive ^? key "result" . key "structuredContent" . key "metrics" . _Array . ix 0 . key "metricName" . _String) `shouldBe` Just "checkout.old"
