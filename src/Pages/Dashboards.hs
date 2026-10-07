@@ -1910,8 +1910,8 @@ instance ToHtml DashboardsGet where
 renderDashboardListItem :: Bool -> Text -> Text -> Maybe Text -> Maybe Text -> Html ()
 renderDashboardListItem checked title value description icon = label_
   [ class_
-      [text| cursor-pointer group/it text-sm border border-transparent hover:bg-fillWeaker hover:border-strokeWeak rounded-lg flex p-1.5 gap-2 items-center group-has-[input:focus-visible]/it:outline-2 group-has-[input:focus-visible]/it:outline-offset-2
-      group-has-[input:checked]/it:bg-fillWeaker group-has-[input:checked]/it:border-strokeWeak dashboardListItem|]
+      [text| cursor-pointer group/it text-sm border border-transparent hover:bg-fillWeaker hover:border-strokeWeak rounded-lg flex p-1.5 gap-2 items-center has-[input:focus-visible]:outline-2 has-[input:focus-visible]:-outline-offset-2
+      has-[input:checked]:bg-fillBrand-weak has-[input:checked]:border-strokeBrand-weak dashboardListItem|]
   , term "data-title" title
   , term "data-description" $ maybeToMonoid description
   ]
@@ -1936,9 +1936,9 @@ renderDashboardListItem checked title value description icon = label_
           |]
         ]
       <> [checked_ | checked]
-    span_ [class_ "p-1 px-2 bg-fillWeak rounded-md"] $ faSprite_ (fromMaybe "square-dashed" icon) "regular" "w-3 h-3"
+    span_ [class_ "flex size-7 shrink-0 items-center justify-center bg-fillWeak rounded-md group-has-[input:checked]/it:bg-fillBrand-weak group-has-[input:checked]/it:text-textBrand"] $ faSprite_ (fromMaybe "square-dashed" icon) "regular" $ if icon == Just "cloudflare" then "w-5 h-5" else "w-4 h-4"
     span_ [class_ "grow"] $ toHtml title
-    span_ [class_ "px-2 p-1 invisible group-has-[input:checked]/it:visible"] $ faSprite_ "chevron-right" "regular" "w-3 h-3"
+    span_ [class_ "px-2 p-1 invisible text-textBrand group-has-[input:checked]/it:visible"] $ faSprite_ "chevron-right" "regular" "w-3 h-3"
 
 
 starButton_ :: Projects.ProjectId -> Dashboards.DashboardId -> Bool -> Html ()
@@ -1960,7 +1960,7 @@ starButton_ pid dashId isStarred =
 dashboardsGet_ :: DashboardsGetD -> Html ()
 dashboardsGet_ dg = do
   unless dg.embedded $ Components.modalWith_ "newDashboardMdl" def{autoOpen = dg.showNew, boxClass = "max-w-none", boxStyle = "width:min(92vw,76rem);max-width:none;overflow:clip"} Nothing $ form_
-    [ class_ "flex flex-col gap-5 overflow-y-auto md:min-h-0 md:flex-row md:overflow-hidden group/md"
+    [ class_ "-m-1 flex flex-col gap-5 overflow-y-auto p-1 md:min-h-0 md:flex-row md:overflow-hidden group/md"
     , style_ "height:min(80vh,48rem)"
     , hxPost_ $ "/p/" <> dg.projectId.toText <> "/dashboards"
     , hxVals_ "js:{ teams: window.getTagValues('#teamHandlesInput') }"
@@ -1983,7 +1983,7 @@ dashboardsGet_ dg = do
           forM_ dg.dashTemplates \dashTmpl ->
             renderDashboardListItem False (maybeToMonoid dashTmpl.title) (maybeToMonoid dashTmpl.file) dashTmpl.description dashTmpl.icon
 
-      div_ [class_ "flex min-w-0 shrink-0 flex-col gap-4 md:min-h-0 md:flex-1 md:overflow-hidden"] do
+      div_ [class_ "flex min-w-0 shrink-0 flex-col gap-4 md:min-h-0 md:flex-1"] do
         div_ [class_ "grid shrink-0 grid-cols-1 gap-3 sm:grid-cols-3 [&_.input]:h-12 [&_.tagify]:h-12 [&_.tagify]:min-h-12 [&_.tagify]:overflow-y-auto"] do
           formField_ FieldSm def{value = "Blank dashboard", extraAttrs = [data_ "template-title" "Blank dashboard"]} "Dashboard name" "title" True Nothing
           let teamList = encodeText $ (\x -> AE.object ["name" AE..= ("@" <> x.handle), "value" AE..= x.id]) <$> dg.teams

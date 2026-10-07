@@ -72,6 +72,36 @@ test("dashboard templates prefill the name and preview their own widgets", async
   await expect(page.locator('#dashboardTemplatePreviews [data-template="redis.yaml"]')).toBeVisible();
 });
 
+test("dashboard template selection stays visible and name focus ring is not clipped", async ({ page }) => {
+  await page.goto(`/p/${DEMO_PROJECT}/dashboards?new=true`);
+  const rows = page.locator("#dashListItemParent label");
+  const apache = rows.filter({ hasText: "Apache HTTP Server" });
+  await apache.click();
+  await page.mouse.move(0, 0);
+  const name = page.getByRole("textbox", { name: "Dashboard name *", exact: true });
+  for (const [theme, width] of [["light", 1440], ["dark", 1440], ["light", 390], ["dark", 390]] as const) {
+    await page.evaluate((theme) => document.body.setAttribute("data-theme", theme), theme);
+    await page.setViewportSize({ width, height: 900 });
+    const background = (row: HTMLElement) => getComputedStyle(row).backgroundColor;
+    expect.soft(await apache.evaluate(background), `${theme} selected template`).not.toBe(await rows.first().evaluate(background));
+    await name.focus();
+    const clipping = await name.evaluate((input) => {
+      const style = getComputedStyle(input);
+      const ring = Math.max(0, parseFloat(style.outlineWidth) + parseFloat(style.outlineOffset));
+      const rect = input.getBoundingClientRect();
+      const clipped: string[] = [];
+      for (let parent = input.parentElement; parent; parent = parent.parentElement) {
+        const css = getComputedStyle(parent);
+        const box = parent.getBoundingClientRect();
+        if (css.overflowX !== "visible" && (rect.left - ring < box.left - 0.5 || rect.right + ring > box.right + 0.5)) clipped.push("horizontal: " + parent.className);
+        if (css.overflowY !== "visible" && (rect.top - ring < box.top - 0.5 || rect.bottom + ring > box.bottom + 0.5)) clipped.push("vertical: " + parent.className);
+      }
+      return clipped;
+    });
+    expect.soft(clipping, `${theme} focus ring at ${width}px`).toEqual([]);
+  }
+});
+
 test.describe("adding widgets to a dashboard", () => {
   // Every test here writes to one shared dashboard.
   test.describe.configure({ mode: "serial" });
