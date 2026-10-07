@@ -553,39 +553,44 @@ test("dashboard teams default to @everyone and support bulk add and removal", as
 });
 
 test("dashboard team requests show progress and retain choices after failures", async ({ page }) => {
-  await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
-  await page.locator(".bulkactionItemCheckbox").first().check();
-  await page.getByRole("button", { name: "Manage teams", exact: true }).click();
-  const picker = page.locator("#dashboard-teams");
-  const everyone = picker.getByRole("checkbox", { name: "@everyone", exact: true });
-  await everyone.check();
-  for (const [action, pending] of [["Add teams", "Adding…"], ["Remove teams", "Removing…"]]) {
-    for (const failure of ["server", "network"]) {
-      let release!: () => void;
-      const held = new Promise<void>(resolve => { release = resolve; });
-      await page.route("**/bulk_action/*", async route => {
-        await held;
-        if (failure === "server") await route.fulfill({ status: 500, body: "Unavailable" });
-        else await route.abort("failed");
-      });
-      try {
-        await picker.getByRole("button", { name: action, exact: true }).click();
-        await expect(picker.getByRole("button", { name: pending, exact: true })).toBeDisabled();
-        for (const button of await picker.getByRole("button").all()) await expect(button).toBeDisabled();
-        await expect(picker.getByRole("alert")).toBeHidden();
-      } finally {
-        release();
+  const dashboard = await makeDashboard(page, `E2E Team Requests ${Date.now()}`);
+  try {
+    await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
+    await page.getByRole("checkbox", { name: `Select ${dashboard.title}`, exact: true }).check();
+    await page.getByRole("button", { name: "Manage teams", exact: true }).click();
+    const picker = page.locator("#dashboard-teams");
+    const everyone = picker.getByRole("checkbox", { name: "@everyone", exact: true });
+    await everyone.check();
+    for (const [action, pending] of [["Add teams", "Adding…"], ["Remove teams", "Removing…"]]) {
+      for (const failure of ["server", "network"]) {
+        let release!: () => void;
+        const held = new Promise<void>(resolve => { release = resolve; });
+        await page.route("**/bulk_action/*", async route => {
+          await held;
+          if (failure === "server") await route.fulfill({ status: 500, body: "Unavailable" });
+          else await route.abort("failed");
+        });
+        try {
+          await picker.getByRole("button", { name: action, exact: true }).click();
+          await expect(picker.getByRole("button", { name: pending, exact: true })).toBeDisabled();
+          for (const button of await picker.getByRole("button").all()) await expect(button).toBeDisabled();
+          await expect(picker.getByRole("alert")).toBeHidden();
+        } finally {
+          release();
+        }
+        await expect(picker.getByRole("alert")).toContainText("Try again");
+        await expect(everyone).toBeChecked();
+        for (const button of await picker.getByRole("button").all()) await expect(button).toBeEnabled();
+        await page.unroute("**/bulk_action/*");
       }
-      await expect(picker.getByRole("alert")).toContainText("Try again");
-      await expect(everyone).toBeChecked();
-      for (const button of await picker.getByRole("button").all()) await expect(button).toBeEnabled();
-      await page.unroute("**/bulk_action/*");
     }
+    await page.route("**/bulk_action/*", route => route.fulfill({ status: 204 }));
+    await picker.getByRole("button", { name: "Add teams", exact: true }).click();
+    await expect(picker.getByRole("alert")).toBeHidden();
+    await expect(picker.getByRole("button", { name: "Add teams", exact: true })).toBeEnabled();
+  } finally {
+    await deleteDashboard(page, dashboard);
   }
-  await page.route("**/bulk_action/*", route => route.fulfill({ status: 204 }));
-  await picker.getByRole("button", { name: "Add teams", exact: true }).click();
-  await expect(picker.getByRole("alert")).toBeHidden();
-  await expect(picker.getByRole("button", { name: "Add teams", exact: true })).toBeEnabled();
 });
 
 test("dashboard team selection has names, counts, and searchable choices", async ({ page }) => {
