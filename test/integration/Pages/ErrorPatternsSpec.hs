@@ -153,7 +153,7 @@ spec = sequential $ aroundAll withTestResources do
       -- The chart marks where each release began; a later event of the same release must not move it.
       emit "1.1" [] (-25)
       (fmap zonedTimeToUTC . (.lastReleaseSince) <$> current) `shouldReturn` Just (addUTCTime (-30) frozenTime)
-      issuePageText tr issue.id >>= (`shouldContainAll` ["markers: [{\"label\":\"1.0\",\"at\":", "\"label\":\"1.1\""])
+      issuePageText tr issue.id >>= (`shouldContainAll` ["&quot;markers&quot;:[{&quot;at&quot;:", "&quot;label&quot;:&quot;1.0&quot;", "&quot;label&quot;:&quot;1.1&quot;"])
 
     it "1d. bulk merge folds the newer errors into the oldest and archives their issues" \tr -> do
       apiKey <- createTestAPIKey tr pid "merge-key"

@@ -5,11 +5,10 @@ const mount = () => {
   document.body.innerHTML = '<input name="service" class="dash-variable-input" data-tagify-query="| distinct service" data-tagify-reload-on-change="true">';
   const input = document.querySelector('input')!;
   const tagify = {
-    settings: { whitelist: ['all', { value: 'checkout', name: 'Checkout' }] },
+    settings: { mode: 'select', whitelist: ['all', { value: 'checkout', name: 'Checkout' }] },
     value: [{ value: 'checkout' }],
     loading: vi.fn(),
-    removeAllTags: vi.fn(function (this: any) { this.value = []; }),
-    addTags: vi.fn(function (this: any, tags: any[]) { this.value = tags.map(tag => typeof tag === 'object' ? tag : { value: tag }); }),
+    loadOriginalValues: vi.fn(function (this: any, tags: any[]) { this.value = tags.map(tag => typeof tag === 'object' ? tag : { value: tag }); }),
   };
   (input as any)._tagifyInstance = tagify;
   return { input, tagify };
@@ -49,19 +48,18 @@ test('an HTMX swap restores a selected variable whose rendered tag was removed',
   const scope = document.createElement('div');
   document.body.append(scope);
   const tagify = {
-    settings: { whitelist: [{ value: 'api.example.com', name: 'api.example.com' }] },
+    settings: { mode: 'select', whitelist: [{ value: 'api.example.com', name: 'api.example.com' }] },
     value: [{ value: 'api.example.com', name: 'api.example.com' }],
     DOM: { scope },
-    removeAllTags: vi.fn(function (this: any) { this.value = []; }),
-    addTags: vi.fn(function (this: any, tags: any[]) { this.value = tags; }),
+    loadOriginalValues: vi.fn(function (this: any, tags: any[]) { this.value = tags; }),
   };
   (input as any)._tagifyInstance = tagify;
   history.replaceState({}, '', '/?var-host=api.example.com');
 
   document.dispatchEvent(new CustomEvent('htmx:after:swap', { detail: { elt: document.body } }));
 
-  expect(tagify.removeAllTags).toHaveBeenCalledOnce();
-  expect(tagify.addTags).toHaveBeenCalledWith([{ value: 'api.example.com', name: 'api.example.com' }]);
+  expect(tagify.loadOriginalValues).toHaveBeenCalledOnce();
+  expect(tagify.loadOriginalValues).toHaveBeenCalledWith([{ value: 'api.example.com', name: 'api.example.com' }]);
 });
 
 test('initializing a selected variable without options immediately resolves its label', async () => {
@@ -72,8 +70,7 @@ test('initializing a selected variable without options immediately resolves its 
     value: [{ value: 'api-endpoint' }],
     DOM: { scope: input },
     on: vi.fn(),
-    removeAllTags: vi.fn(function (this: any) { this.value = []; }),
-    addTags: vi.fn(function (this: any, tags: any[]) { this.value = tags; }),
+    loadOriginalValues: vi.fn(function (this: any, tags: any[]) { this.value = tags; }),
   };
   vi.stubGlobal('Tagify', vi.fn(function () { return tagify; }));
   const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(response([['api-endpoint', 'GET /v1/orders']]));
@@ -81,7 +78,7 @@ test('initializing a selected variable without options immediately resolves its 
   history.replaceState({}, '', '/?var-endpointHash=api-endpoint');
 
   document.dispatchEvent(new CustomEvent('htmx:after:swap', { detail: { elt: input } }));
-  await vi.waitFor(() => expect(tagify.addTags).toHaveBeenCalledWith([{ value: 'api-endpoint', name: 'GET /v1/orders' }]));
+  await vi.waitFor(() => expect(tagify.loadOriginalValues).toHaveBeenCalledWith([{ value: 'api-endpoint', name: 'GET /v1/orders' }]));
 
   expect(fetch).toHaveBeenCalledOnce();
   expect(new URL(location.href).searchParams.get('var-endpointHash')).toBe('api-endpoint');
@@ -167,8 +164,8 @@ test('a parent-variable change replaces stale dependent options and chooses a va
   await refreshed;
 
   expect(tagify.settings.whitelist).toEqual([{ value: 'api-endpoint', name: 'GET /v1/orders' }]);
-  expect(tagify.removeAllTags).toHaveBeenCalledOnce();
-  expect(tagify.addTags).toHaveBeenCalledWith([{ value: 'api-endpoint', name: 'GET /v1/orders' }]);
+  expect(tagify.loadOriginalValues).toHaveBeenCalledOnce();
+  expect(tagify.loadOriginalValues).toHaveBeenCalledWith([{ value: 'api-endpoint', name: 'GET /v1/orders' }]);
   expect(new URL(location.href).searchParams.get('var-endpointHash')).toBe('api-endpoint');
   expect(new URL(fetch.mock.calls[0][0], location.origin).searchParams.get('var-host')).toBe('api.example.com');
 });

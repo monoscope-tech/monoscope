@@ -6,7 +6,7 @@
 -- envelopes and behaviors the skills promise.
 module CLI.CLILifecycleSpec (spec) where
 
-import CLI.Harness (runCLILifecycle)
+import CLI.Harness (runCLILifecycle, runCLILifecycleLive)
 import Control.Concurrent (threadDelay)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
@@ -24,11 +24,13 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Hasql.Interpolate qualified as HI
 import Models.Apis.Issues qualified as Issues
+import Models.Projects.Projects qualified as Projects
 import Pages.Share qualified as Share
 import Pkg.TestUtils
 import Relude
 import System.Environment (setEnv, unsetEnv)
 import System.Exit (ExitCode (..))
+import Servant qualified
 import Test.Hspec
 import UnliftIO.Exception (finally)
 
@@ -398,6 +400,34 @@ spec = around withTestResources do
       chartOut `shouldSatisfy` (not . T.null)
 
   describe "send-event lifecycle (real OTLP/HTTP wire)" do
+    it "telemetrygen_afterBrowserLogin_deliversTracesWithoutExporterOverrides" \tr -> do
+      void $ createTestAPIKey tr testPid "telemetrygen-login-key"
+      runQueryEffect tr $ Projects.insertSession (Projects.PersistentSessionId $ UUID.fromWords 0 0 0 2) (Servant.getResponse tr.trSessAndHeader).user.id (Projects.SessionData mempty)
+      (ec, _) <- withLiveServer tr \port ->
+        do
+          setEnv "MONOSCOPE_TEST_API_KEY" "00000000-0000-0000-0000-000000000002"
+          setEnv "MONOSCOPE_API_URL" ("http://127.0.0.1:" <> show port)
+          unsetEnv "OTEL_EXPORTER_OTLP_ENDPOINT"
+          runCLILifecycleLive ["telemetrygen", "--kind=trace", "--count=3", "--rate=1000", "--service", "cli-login-regression", "--resource", "service.name:overridden"]
+          `finally` (unsetEnv "MONOSCOPE_TEST_API_KEY" >> unsetEnv "MONOSCOPE_API_URL")
+      ec `shouldBe` ExitSuccess
+      now <- getCurrentTime
+      (_, out) <- runCLILifecycle tr ["--json", "traces", "search", "resource.service.name == \"cli-login-regression\"", "--from", iso8601Show (addUTCTime (-60) now), "--to", iso8601Show (addUTCTime 60 now)]
+      v <- jsonOut out
+      length (eventsOf v) `shouldBe` 3
+
+    it "telemetryCommands_rejectedExport_exitNonzeroWithoutClaimingDelivery" \tr -> forM_ [["telemetrygen", "--kind=trace", "--count=1", "--rate=1000"], ["send-event", "-m", "rejected-event"]] \args -> do
+      apiKey <- createTestAPIKey tr testPid "telemetrygen-rejection-key"
+      (ec, out) <- withLiveServer tr \port ->
+        do
+          setEnv "MONOSCOPE_TEST_API_KEY" (toString apiKey)
+          setEnv "OTEL_EXPORTER_OTLP_ENDPOINT" ("http://127.0.0.1:" <> show port <> "/missing")
+          runCLILifecycleLive args
+          `finally` (unsetEnv "OTEL_EXPORTER_OTLP_ENDPOINT" >> unsetEnv "MONOSCOPE_TEST_API_KEY")
+      ec `shouldBe` ExitFailure 1
+      out `shouldSatisfy` (not . T.isInfixOf "Sent ")
+      out `shouldSatisfy` (not . T.isInfixOf "Event sent")
+
     it "ships a CLI-authored span through the live server into search" \tr -> do
       apiKey <- createTestAPIKey tr testPid "lifecycle-send-key"
       (ecSend, _) <- withLiveServer tr \port ->
@@ -407,9 +437,7 @@ spec = around withTestResources do
           runCLILifecycle tr ["send-event", "-m", "Deploy completed lifecycleping", "--service", "lifecycle-cli", "-t", "deploy.id:d1"]
           `finally` (unsetEnv "OTEL_EXPORTER_OTLP_ENDPOINT" >> unsetEnv "MONOSCOPE_TEST_API_KEY")
       ecSend `shouldBe` ExitSuccess
-      -- the real assertion: the span must land in search (send-event prints
-      -- "Event sent." even when the exporter fails, so exit code alone proves
-      -- nothing — the poll catches silent export failures)
+      -- Verify delivery in search as well as the command's exit code.
       -- absolute window: the span lands at real wall-clock time, while the
       -- in-process server resolves --since against the frozen test clock
       now <- getCurrentTime

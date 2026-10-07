@@ -137,6 +137,8 @@ import Web.HttpApiData (FromHttpApiData)
 -- when a preview is requested from the widget editor.
 dashboardHeadContent_ :: Html ()
 dashboardHeadContent_ = do
+  forM_ ["/public/assets/deps/echarts/echarts.min.js", "/public/assets/roma-echarts.js"] \path ->
+    link_ [rel_ "preload", term "as" "script", href_ $ assetUrl path]
   style_
     """
     .grid-stack{position:relative}
@@ -271,17 +273,7 @@ dashboardVariables_ pid dashId hasTabs variables extraAttrs = div_ ([id_ "dashbo
       legend_ [class_ "ml-1 px-1 text-xs leading-none text-textWeak whitespace-nowrap cursor-pointer", [__|on click call (next .tagify__input).focus()|]] do
         toHtml $ fromMaybe var.key var.title
         when (var.required == Just True) $ span_ [class_ "text-textError"] (span_ [Aria.hidden_ "true"] " *" >> span_ [class_ "sr-only"] " (required)")
-      let whitelist =
-            maybe
-              "[]"
-              ( decodeUtf8
-                  . fromLazy
-                  . AE.encode
-                  . map \opt ->
-                    let v = maybeToMonoid (opt !!? 0)
-                     in AE.object ["value" AE..= v, "name" AE..= fromMaybe v (opt !!? 1)]
-              )
-              var.options
+      let whitelist = encodeText $ map (\opt -> let v = maybeToMonoid (opt !!? 0) in AE.object ["value" AE..= v, "name" AE..= fromMaybe v (opt !!? 1)]) (fold var.options)
 
       div_ [class_ "flex items-center gap-2 h-7 max-md:h-9"] do
         input_
@@ -364,10 +356,10 @@ dashboardPage_ pid dashId dash dashVM allParams = do
     -- Variables section (pushed to the right, collapsible on mobile)
     whenJust dash.variables \variables -> dashboardVariables_ pid dashId (isJust dash.tabs) variables []
   let widgetOrderUrl = "/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/widgets_order" <> maybe "" ("?tab=" <>) renderTabSlug
-      constantsJson = encodeText $ HM.fromList [(k, fromMaybe "" v) | (k, v) <- allParams, "const-" `T.isPrefixOf` k]
+      constants = constantsJson allParams
 
   let visibleWidgetCount = maybe (length dash.widgets) (maybe 0 (length . (.widgets)) . (!!? activeTabIdx)) dash.tabs
-  section_ [class_ "h-full"] $ div_ [class_ "mx-auto mb-20 pt-2 pb-6 max-md:pb-20 max-md:px-2 px-4 gap-3.5 w-full flex flex-col group/pg", id_ "dashboardPage", data_ "constants" constantsJson, data_ "dashboard-id" dashIdText, data_ "widget-count" (show visibleWidgetCount), data_ "settled-url" ("/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/settled")] do
+  section_ [class_ "h-full"] $ div_ [class_ "mx-auto mb-20 pt-2 pb-6 max-md:pb-20 max-md:px-2 px-4 gap-3.5 w-full flex flex-col group/pg", id_ "dashboardPage", data_ "constants" constants, data_ "dashboard-id" dashIdText, data_ "widget-count" (show visibleWidgetCount), data_ "settled-url" ("/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/settled")] do
     -- Only warn when a constant actually ran and returned zero rows (Just []).
     -- result == Nothing means the query was skipped (nothing references it) or
     -- failed (logged separately) — neither is a "no data" condition.
@@ -383,6 +375,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
           div_
             [ class_ "dashboard-tabs-container"
             , id_ "dashboard-tabs-content"
+            , data_ "constants" constants
             ]
             $ whenJust (tabs !!? activeTabIdx) \activeTab ->
               -- An unanswered required variable IS the tab's content, not a modal over
@@ -854,10 +847,10 @@ variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
       opts = fold var.options
       optCount = length opts
   div_ oobAttr do
-    div_ [class_ "var-picker-page flex flex-col items-center px-4 py-12"] do
+    div_ [class_ "var-picker-page flex flex-col items-center px-4 py-12", term "hx-live:data-search" "this.querySelector('input')?.value.trim().toLowerCase() ?? ''"] do
       div_ [class_ "w-full max-w-lg flex items-center justify-between mb-2 px-3"] do
         span_ [class_ "text-2xs font-medium text-textWeak uppercase tracking-wider"] $ toHtml $ "Select " <> varTitle
-        span_ [class_ "var-picker-count text-xs text-textWeak", data_ "total" (show optCount)] $ toHtml $ show optCount <> " items"
+        span_ [class_ "var-picker-count text-xs text-textWeak", term "hx-live:text" "closest('.var-picker-page').q('a.var-opt').filter(a => a.textContent.toLowerCase().includes(closest('.var-picker-page').data.search)).length + ' items'"] $ toHtml $ show optCount <> " items"
       -- Nothing to choose from is a different answer than "search found nothing", and a
       -- search box over an empty list reads as a broken page. Say why instead.
       if optCount == 0
@@ -870,27 +863,16 @@ variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
         else div_ [class_ "var-picker group/picker w-full max-w-lg surface-raised rounded-lg border border-strokeWeak overflow-hidden"] do
           div_ [class_ "px-3 border-b border-base-300 flex items-center gap-2"] do
             input_
-              [ type_ "text"
+              [ id_ $ "var-picker-search-" <> var.key
+              , type_ "text"
               , class_ "flex-1 min-w-0 py-2.5 bg-transparent outline-none text-sm"
               , placeholder_ $ "Search " <> T.toLower varTitle <> "s..."
               , autofocus_
               , [__|on input
-                set :q to my value.toLowerCase()
-                show <.var-opt/> in closest .var-picker when its textContent.toLowerCase() contains :q
-                for opt in <a.var-opt/> in closest .var-picker remove .active from opt end
-                set :first to the first <a.var-opt:not([style*='display: none'])/> in closest .var-picker
-                if :first then add .active to :first end
-                set :visible to the <a.var-opt:not([style*='display: none'])/> in closest .var-picker
-                set :empty to the first <.var-picker-empty/> in closest .var-picker
-                set :counter to the first <.var-picker-count/> in closest .var-picker
-                if :visible.length === 0 then show :empty else hide :empty end
-                set :total to :counter.dataset.total
-                if :q.length > 0 then put `${:visible.length} of ${:total} items` into :counter
-                else put `${:total} items` into :counter end
-              end
-              on keydown[key=='Escape']
-                set :bd to closest .var-picker-backdrop
-                remove :bd
+                call htmx.live.refresh()
+                wait 0ms
+                remove .active from <a.var-opt/> in closest .var-picker
+                add .active to the first <a.var-opt:not([hidden])/> in closest .var-picker
               end
               on keydown[key=='Enter']
                 set :a to the first <a.active/> in closest .var-picker
@@ -900,10 +882,10 @@ variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
                 set :a to the first <a.active/> in closest .var-picker
                 if :a then
                   set :n to :a.nextElementSibling
-                  repeat while :n and :n.style.display === 'none' set :n to :n.nextElementSibling end
+                  repeat while :n and :n.hidden set :n to :n.nextElementSibling end
                   if :n then remove .active from :a then add .active to :n then call :n.scrollIntoView({block:'nearest'}) end
                 else
-                  set :f to the first <a.var-opt:not([style*='display: none'])/> in closest .var-picker
+                  set :f to the first <a.var-opt:not([hidden])/> in closest .var-picker
                   if :f then add .active to :f end
                 end
               end
@@ -911,7 +893,7 @@ variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
                 set :a to the first <a.active/> in closest .var-picker
                 if :a then
                   set :p to :a.previousElementSibling
-                  repeat while :p and :p.style.display === 'none' set :p to :p.previousElementSibling end
+                  repeat while :p and :p.hidden set :p to :p.previousElementSibling end
                   if :p then remove .active from :a then add .active to :p then call :p.scrollIntoView({block:'nearest'}) end
                 end
               |]
@@ -924,23 +906,29 @@ variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
               let optVal = maybeToMonoid (opt !!? 0)
                   optLbl = fromMaybe optVal (opt !!? 1)
                   isCurrent = var.value == Just optVal
-                  optUrl = urlPrefix <> optVal
+                  optUrl = urlPrefix <> decodeUtf8 (URI.urlEncode True $ encodeUtf8 optVal)
               -- Boosted, not a plain href: a full navigation paints nothing for the seconds
               -- this render takes. '.htmx-request' on the anchor drives the states above.
               a_
                 ( [ class_
-                      $ "var-opt flex items-center gap-2 px-3 py-2 rounded text-sm cursor-pointer transition-colors"
+                      $ "var-opt [&[hidden]]:hidden flex items-center gap-2 px-3 py-2 rounded text-sm cursor-pointer transition-colors"
                       <> bool "" " active" (idx == 0)
                       <> bool "" " var-opt-current" isCurrent
                   , href_ optUrl
                   , name_ "dashboard-variable-option"
+                  , data_ "variable-key" var.key
+                  , data_ "variable-value" optVal
+                  , data_ "variable-label" optLbl
+                  , term "hx-live:hidden" "!this.textContent.toLowerCase().includes(closest('.var-picker-page').data.search)"
+                  , term "hx-on:htmx:before:request" "syncDashboardVariable(this, true)"
+                  , term "hx-on:htmx:finally:request" "syncDashboardVariable(this, false)"
                   ]
                     <> maybe navTabAttrs (const $ dashboardContentNavAttrs optUrl) activeTabSlug
                 )
                 do
                   span_ [class_ "truncate flex-1"] $ toHtml optLbl
                   when isCurrent $ faSprite_ "check" "regular" "w-3 h-3 text-primary shrink-0"
-            div_ [class_ "var-picker-empty px-3 py-8 text-center", style_ "display:none"] $ emptyState_ def{size = ESCompact} "No matching results" ""
+            div_ [class_ "var-picker-empty px-3 py-8 text-center", hidden_ "", term "hx-live:hidden" "closest('.var-picker').q('a.var-opt:not([hidden])').count > 0"] $ emptyState_ def{size = ESCompact} "No matching results" ""
       -- Keyboard hints
       div_ [class_ "var-picker-hints flex items-center gap-6 mt-3 text-xs text-textWeak"]
         $ forM_ ([("Navigate", ["\x2191", "\x2193"]), ("Select", ["\x21B5"])] :: [(Text, [Text])]) \(label, keys) ->
@@ -1387,7 +1375,12 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr hxRequest allParams = do
               else (\ws -> dash' & #widgets .~ ws) <$> processDashWidgets prefill pid dashId now timeParams allParamsWithConstants dash'.widgets
 
           bwconf <- dashboardBWConf bw pid project.paymentPlan dashId dashVM.title Nothing currentRange <$> checkFreeTierStatus pid project.paymentPlan
-          addRespHeaders $ PageCtx bwconf $ DashboardGet pid dashId dash'' dashVM allParams
+          addRespHeaders $ PageCtx bwconf $ DashboardGet pid dashId dash'' dashVM allParamsWithConstants
+
+
+-- | The resolved @const-*@ params a swapped panel's widgets substitute into their queries.
+constantsJson :: [(Text, Maybe Text)] -> Text
+constantsJson params = encodeText $ HM.fromList [(k, fromMaybe "" v) | (k, v) <- params, "const-" `T.isPrefixOf` k]
 
 
 numberedStep_ :: Int -> Text -> Html () -> Html ()
@@ -2902,7 +2895,7 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr hxRequest hxT
             dashboardTabStrip_ pid.toText dashId.toText activeTabIdx (fold dash''.tabs) queryStr [hxSwapOob_ "outerMorph"]
             when (hxTriggerName == Just "dashboard-variable-option")
               $ whenJust dash''.variables \variables -> dashboardVariables_ pid dashId True variables [hxSwapOob_ "true"]
-            div_ [class_ "dashboard-tabs-container", id_ "dashboard-tabs-content"]
+            div_ [class_ "dashboard-tabs-container", id_ "dashboard-tabs-content", data_ "constants" $ constantsJson paramsWithTab]
               $ case findVarToPrompt (snd <$> activeTabInfo) (fold dash''.variables) of
                 Just v -> do
                   whenJust activeTabName breadcrumbSuffixOob_

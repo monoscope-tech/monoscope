@@ -7,6 +7,7 @@ import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.Lens (key, _Array, _Number, _Object, _String)
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
+import Data.List qualified as List
 import Data.Map qualified as Map
 import Data.OpenApi (OpenApi, info, title, version)
 import Data.Text qualified as T
@@ -26,7 +27,7 @@ import Pkg.Parser.Expr qualified as ParserExpr
 import Pkg.TestUtils
 import Relude
 import Servant (NoContent (..))
-import System.Types (ATBaseCtx)
+import System.Types (ATBaseCtx, ApiPrincipal (..))
 import Test.Hspec
 import Web.ApiHandlers qualified as ApiH
 import Web.ApiTypes qualified as ApiT
@@ -34,6 +35,7 @@ import Web.Auth (resolveApiKeyProject)
 import Web.MCP qualified as MCP
 import Web.Routes (apiV1OpenApiSpec, apiV1Server)
 import Web.Routes qualified as Routes
+import Web.Wire qualified as Wire
 
 import Data.Vector qualified as V
 import Network.GRPC.Common.Protobuf (Proto (..))
@@ -158,15 +160,29 @@ spec = around withTestResources do
         (specJson ^? key "components" . key "schemas" . key "QueryMonitor") `shouldSatisfy` isJust
 
     describe "API key auth" do
+      it "ingestionKey_demoProject_requiresCredentials_andDoesNotCacheSecrets" \tr -> do
+        apiKey <- createTestAPIKey tr testPid "ingestion-key-auth"
+        let request headers = WT.runSession (WT.srequest (WT.SRequest (WT.setPath Wai.defaultRequest{Wai.requestHeaders = ("X-Project-Id", "00000000-0000-0000-0000-000000000000") : headers} "/api/v1/ingestion-key") "")) (topApp tr)
+        forM_ ([[], [("Authorization", "Bearer invalid-key")]] :: [H.RequestHeaders]) \headers -> do
+          rejected <- request headers
+          H.statusCode (WT.simpleStatus rejected) `shouldBe` 401
+          WT.simpleBody rejected `shouldSatisfy` (not . T.isInfixOf apiKey . decodeUtf8)
+        accepted <- request [("Authorization", encodeUtf8 $ "Bearer " <> apiKey)]
+        H.statusCode (WT.simpleStatus accepted) `shouldBe` 200
+        List.lookup "Cache-Control" (WT.simpleHeaders accepted) `shouldBe` Just "no-store"
+        case AE.eitherDecode @Wire.IngestionKey (WT.simpleBody accepted) of
+          Left err -> expectationFailure err
+          Right returned -> runQueryEffect tr (resolveApiKeyProject returned.key Nothing) >>= (`shouldBe` Just testPid)
+
       it "resolves valid keys and rejects invalid ones" $ \tr -> do
         apiKey <- createTestAPIKey tr testPid "test-v1-key"
-        result <- runQueryEffect tr $ resolveApiKeyProject apiKey
+        result <- runQueryEffect tr $ resolveApiKeyProject apiKey Nothing
         result `shouldBe` Just testPid
 
-        invalidResult <- runQueryEffect tr $ resolveApiKeyProject "invalid-key"
+        invalidResult <- runQueryEffect tr $ resolveApiKeyProject "invalid-key" Nothing
         invalidResult `shouldBe` Nothing
 
-        emptyResult <- runQueryEffect tr $ resolveApiKeyProject ""
+        emptyResult <- runQueryEffect tr $ resolveApiKeyProject "" Nothing
         emptyResult `shouldBe` Nothing
 
       it "rejects API requests with no auth and no demo project header" $ \tr -> do
@@ -635,11 +651,11 @@ spec = around withTestResources do
 
     describe "MCP" do
       let reg = MCP.allTools apiV1OpenApiSpec
-          dummyApp _ = error "dummyApp invoked unexpectedly"
+          dummyApp = error "dummyApp invoked unexpectedly"
           buildTestApp tr pid =
             genericServeTWithContext
               (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
-              (apiV1Server tr.trLogger tr.trATCtx tr.trTracerProvider pid)
+              (apiV1Server tr.trLogger tr.trATCtx tr.trTracerProvider (Authenticated pid))
               Servant.EmptyContext
           mcpHttp tr authHdr body =
             let req =
@@ -716,7 +732,7 @@ spec = around withTestResources do
                   [ "name" AE..= ("get_schema" :: Text)
                   , "arguments" AE..= AE.object []
                   ]
-        resp <- runAsBase tr (MCP.handleJsonRpc reg (buildTestApp tr) testPid req)
+        resp <- runAsBase tr (MCP.handleJsonRpc reg (buildTestApp tr testPid) testPid req)
         let isErr = resp ^? key "result" . key "isError"
             content = resp ^? key "result" . key "content" . _Array . traverse . key "text"
         when (isErr /= Just (AE.Bool False))
@@ -833,6 +849,6 @@ spec = around withTestResources do
         teamHandle <- ("body-test-" <>) . UUID.toText <$> UUIDV4.nextRandom
         let body = AE.object ["name" AE..= teamHandle, "handle" AE..= teamHandle]
             req = rpcCallNamed "create_team" (AE.object ["body" AE..= body])
-        resp <- runAsBase tr (MCP.handleJsonRpc reg (buildTestApp tr) testPid req)
+        resp <- runAsBase tr (MCP.handleJsonRpc reg (buildTestApp tr testPid) testPid req)
         (resp ^? key "result" . key "isError") `shouldBe` Just (AE.Bool False)
         (resp ^? key "result" . key "structuredContent" . key "summary" . key "handle" . _String) `shouldBe` Just teamHandle

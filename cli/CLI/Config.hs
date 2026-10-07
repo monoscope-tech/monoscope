@@ -1,5 +1,8 @@
 module CLI.Config (
   CLIConfig (..),
+  Credential (..),
+  parseCredential,
+  credentialText,
   ConfigKey (..),
   allConfigKeys,
   configKeyText,
@@ -16,6 +19,8 @@ module CLI.Config (
 import Relude
 
 import Data.Map.Strict qualified as Map
+import Data.UUID (UUID)
+import Data.UUID qualified as UUID
 import Data.Yaml qualified as Yaml
 import Effectful
 import Effectful.Environment (Environment)
@@ -28,10 +33,33 @@ import System.Posix.Files (setFileMode)
 
 data CLIConfig = CLIConfig
   { apiUrl :: Text
-  , apiKey :: Maybe Text
+  , credential :: Maybe Credential
   , projectId :: Maybe Text
   }
   deriving stock (Show)
+
+
+-- | What the CLI authenticates with. Project API keys are base64 ciphertext, never
+-- UUID-shaped, so a UUID token is always a login session.
+--
+-- >>> parseCredential "00000000-0000-0000-0000-000000000002"
+-- Session 00000000-0000-0000-0000-000000000002
+-- >>> parseCredential "c2VjcmV0LWtleQ=="
+-- ApiKey "c2VjcmV0LWtleQ=="
+-- >>> credentialText (parseCredential "00000000-0000-0000-0000-000000000002")
+-- "00000000-0000-0000-0000-000000000002"
+data Credential = ApiKey Text | Session UUID
+  deriving stock (Eq, Show)
+
+
+parseCredential :: Text -> Credential
+parseCredential t = maybe (ApiKey t) Session (UUID.fromText t)
+
+
+credentialText :: Credential -> Text
+credentialText = \case
+  ApiKey k -> k
+  Session s -> UUID.toText s
 
 
 data ConfigKey = CKApiUrl | CKProject | CKApiKey
@@ -82,7 +110,7 @@ resolveConfig = do
   pure
     CLIConfig
       { apiUrl = fromMaybe "https://api.monoscope.tech" $ (toText <$> envApiUrl) <|> merged.api_url
-      , apiKey = (toText <$> envApiKey) <|> merged.api_key <|> storedKey
+      , credential = parseCredential <$> ((toText <$> envApiKey) <|> merged.api_key <|> storedKey)
       , projectId = (toText <$> envProject) <|> merged.project
       }
 

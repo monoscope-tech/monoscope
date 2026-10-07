@@ -7,8 +7,9 @@ test.describe("Onboarding flow", () => {
   test("loads integration docs with HTML negotiation and switches framework guides", async ({ page }) => {
     const initialDocs = page.waitForResponse(response => new URL(response.url()).pathname === "/proxy/docs/sdks/nodejs/expressjs");
     await page.goto(`${ONBOARDING_URL}?step=Integration`);
-    expect((await initialDocs).status()).toBe(200);
+    // Guides load when their panel scrolls into view, not with the page.
     await page.locator("#check-js").check();
+    expect((await initialDocs).status()).toBe(200);
     const article = page.locator("#fw-content-js #mainArticle");
     await expect(article.getByRole("heading", { level: 1 })).toContainText(/Express/i);
     const notice = page.locator("#toastsParent > div").filter({ hasText: "No events found yet" });

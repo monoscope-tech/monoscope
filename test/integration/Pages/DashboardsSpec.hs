@@ -94,7 +94,7 @@ spec = sequential $ aroundAll withTestResources do
           html = TL.toStrict $ renderText $ toHtml $ Dashboards.DashboardGet testPid (UUIDId UUID.nil) dash vm []
       T.count "data-tagify-mode" html `shouldBe` 1
       html `shouldSatisfy` T.isInfixOf "data-tagify-mode=\"select\""
-      html `shouldContainAll` ["sticky top-0 z-10", "dashboard-grid-wrapper relative isolate z-0", ".dashboard-grid-wrapper"]
+      html `shouldContainAll` ["sticky top-0 z-10", "dashboard-grid-wrapper relative isolate z-0"]
 
     it "table widget loading shell defers headings until data arrives" \_ -> do
       let column field title = (def :: Widget.TableColumn){Widget.field = field, Widget.title = title}

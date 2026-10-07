@@ -912,7 +912,7 @@ spec = sequential $ aroundAll withTestResources do
       html `shouldSatisfy` T.isInfixOf "Recorded value"
       html `shouldSatisfy` T.isInfixOf "At or below"
       -- The alert's own query is charted, carrying its threshold as a mark line.
-      html `shouldSatisfy` T.isInfixOf "alertThreshold: 5.0"
+      html `shouldSatisfy` T.isInfixOf "&quot;alertThreshold&quot;:5"
       -- The monitor id survives the `show` blob it is stored inside.
       html `shouldSatisfy` T.isInfixOf ("/monitors/" <> monitorId <> "/overview")
       -- ...and the void is gone: no trace panel, and no boilerplate subtitle.

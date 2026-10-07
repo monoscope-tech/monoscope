@@ -103,6 +103,8 @@ library
     , filepath
     , hs-opentelemetry-api
     , hs-opentelemetry-sdk
+    , hs-opentelemetry-exporter-in-memory
+    , hs-opentelemetry-exporter-otlp
     , http-client
     , http-client-tls
     , lens
@@ -115,6 +117,7 @@ library
     , text
     , time
     , unix
+    , uuid
     , unliftio
     , vty
     , unordered-containers

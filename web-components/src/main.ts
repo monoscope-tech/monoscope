@@ -570,8 +570,8 @@ function initTagifyElement(el: HTMLElement) {
 
     // Dashboard variable: sync tagify changes to URL params and fire update-query
     if (el.classList.contains('dash-variable-input')) {
+      reconcileVariableTag(el, tagify);
       tagify.on('change', (e: any) => {
-        if (suppressVarChange.has(el)) return;
         publishVarValue(el, e.detail?.tagify?.value[0]?.value || '');
       });
     }
@@ -603,31 +603,27 @@ let _cachedSearch = '',
   });
 };
 
-// Fetch a dashboard variable's option whitelist from /chart_data, resolving the
-// variable's SQL/KQL against the current URL params (so scoped/dependent vars
-// like Resource-by-Service stay correct). Server-side rendering skips computing
-// these to keep the multi-second DISTINCT scan off the page critical path, so we
-// load them client-side: lazily on first dropdown open, and again on update-query.
-// Writing a variable's value to the URL is what makes every widget refetch, so a
-// programmatic reconcile must publish once (the final value) rather than once per
-// tagify mutation — removeAllTags + addTags would otherwise send every widget on a
-// round trip for the empty value first.
-const suppressVarChange = new WeakSet<HTMLElement>();
-function reconcileVariableTag(input: HTMLElement, tagify: any) {
-  const name = input.getAttribute('name');
-  if (!name) return;
-  const expected = new URL(location.href).searchParams.get(`var-${name}`) || '';
+// Tagify's silent loader prevents intermediate tag mutations from refetching widgets.
+function reconcileVariableTag(input: HTMLElement, tagify: any, expected = new URLSearchParams(location.search).get(`var-${input.getAttribute('name')}`) || '', label?: string) {
+  if (tagify.settings.mode !== 'select') return;
   const selected = tagify.value?.[0];
   if (String(selected?.value ?? '') === expected && (!expected || tagify.DOM.scope.querySelector('tag'))) return;
-  const replacement = tagify.settings.whitelist?.find((option: any) => String(typeof option === 'object' ? option.value : option) === expected) ?? { value: expected, name: expected };
-  suppressVarChange.add(input);
+  const whitelist = tagify.settings.whitelist;
+  const replacement = whitelist.find((option: any) => String(typeof option === 'object' ? option.value : option) === expected) ?? { value: expected, name: label ?? expected };
+  tagify.settings.whitelist = expected ? [...whitelist, replacement] : whitelist;
   try {
-    tagify.removeAllTags();
-    if (expected) tagify.addTags([replacement]);
+    tagify.loadOriginalValues(expected ? [replacement] : []);
   } finally {
-    suppressVarChange.delete(input);
+    tagify.settings.whitelist = whitelist;
   }
 }
+
+(window as any).syncDashboardVariable = (option: HTMLElement, selecting: boolean) => {
+  const input = document.querySelector<HTMLElement>(`.dash-variable-input[name="${CSS.escape(option.dataset.variableKey || '')}"]`);
+  const tagify = (input as any)?._tagifyInstance;
+  const { variableValue, variableLabel } = selecting ? option.dataset : {};
+  if (input && tagify) reconcileVariableTag(input, tagify, variableValue, variableLabel);
+};
 
 function publishVarValue(input: HTMLElement, value: string) {
   const url = new URL(window.location.href);
@@ -701,13 +697,7 @@ function reloadVarWhitelist(input: HTMLElement, background = false): Promise<voi
         const matching = options.find((o: any) => valueOf(o) === String(held));
         if (held !== undefined && (!matching || Object.entries(matching).some(([key, value]) => selected[key] !== value))) {
           const replacement = matching ?? options[0];
-          suppressVarChange.add(input);
-          try {
-            tgfy.removeAllTags();
-            if (replacement) tgfy.addTags([replacement]);
-          } finally {
-            suppressVarChange.delete(input);
-          }
+          tgfy.loadOriginalValues(replacement ? [replacement] : []);
           if (!matching) publishVarValue(input, replacement ? valueOf(replacement) : '');
         }
         if (tgfy.state?.dropdown?.visible) tgfy.dropdown.show(tgfy.state.inputText || '');

@@ -1302,12 +1302,18 @@ unaryFuncSQL =
   M.fromList
     [ ("isnull", (<> " IS NULL"))
     , ("isnotnull", (<> " IS NOT NULL"))
-    , ("isempty", \v -> "(" <> v <> " IS NULL OR " <> v <> " = '')")
-    , ("isnotempty", \v -> "(" <> v <> " IS NOT NULL AND " <> v <> " != '')")
+    , ("isempty", \v -> "(" <> v <> " IS NULL OR (" <> v <> ")::text = '')")
+    , ("isnotempty", \v -> "(" <> v <> " IS NOT NULL AND (" <> v <> ")::text != '')")
     ]
 
 
--- | Map scalar function to SQL (consolidates all function->SQL logic)
+-- | Map scalar function to SQL (consolidates all function->SQL logic).
+-- Empty checks compare text so a numeric argument never coerces '' to Int64.
+--
+-- >>> display (ScalarFunc "isnotempty" [Num "42"])
+-- "(42 IS NOT NULL AND (42)::text != '')"
+-- >>> display (ScalarFunc "isempty" [Null])
+-- "(null IS NULL OR (null)::text = '')"
 scalarFuncToSQL :: Text -> [Values] -> Text
 scalarFuncToSQL "coalesce" args = "COALESCE(" <> T.intercalate ", " (map display args) <> ")"
 scalarFuncToSQL "strcat" args = "CONCAT(" <> T.intercalate ", " (map display args) <> ")"

@@ -550,10 +550,9 @@ spec = sequential $ aroundAll withTfChartResources do
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml html'
       html `shouldContainAll` ["Requests and limits", "vps-d6d7e318", "View logs", "resource.k8s.pod.name", "data-tippy-content=\"Pod: checkout-7fb5b4f859-nlcjs\""]
 
-      -- Escaped, because the chart options now ride in a JS *string literal* rather than a
-      -- template literal (6bfc9434f): the page carries \"bottom\":0, and asserting the bare
-      -- form would pass only for the shape that broke every chart's JSON.parse.
-      html `shouldContainAll` ["&quot;hide_value&quot;:true", "text-textWeak widget-subtitle", "\\\"bottom\\\":0", "\\\"tooltip\\\":{\\\"show\\\":true}"]
+      -- The chart options ride as a JSON string inside data-chart-config, so their quotes are
+      -- JSON-escaped and then attribute-escaped; the bare form would mean a broken JSON.parse.
+      html `shouldContainAll` ["&quot;hide_value&quot;:true", "text-textWeak widget-subtitle", "\\&quot;bottom\\&quot;:0", "\\&quot;tooltip\\&quot;:{\\&quot;show\\&quot;:true}"]
 
       -- A container that stopped reporting must say so, not render a blank panel.
       (_, gone) <- testServant tr $ Containers.containerDetailGetH testPid (Just "ghost") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing

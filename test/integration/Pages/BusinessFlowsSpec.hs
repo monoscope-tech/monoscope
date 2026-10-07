@@ -95,6 +95,21 @@ spec = around withTestProject do
 onboardingTests :: SpecWith TestContext
 onboardingTests =
   describe "should complete all onboarding steps in sequence" do
+    it "integrationCheck_emptyProject_doesNotToastForAutomaticChecks" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
+      (automaticHeaders, _) <- testServant tr $ Onboarding.checkIntegrationGet testPid (Just "Javascript")
+      lookupResponseHeader @"HX-Trigger" automaticHeaders `shouldBe` Header ("{}" :: Text)
+      lookupResponseHeader @"HX-Redirect" automaticHeaders `shouldBe` (MissingHeader :: ResponseHeader "HX-Redirect" Text)
+      (manualHeaders, _) <- testServant tr $ Onboarding.checkIntegrationGet testPid Nothing
+      case lookupResponseHeader @"HX-Trigger" manualHeaders of
+        Header triggerHeader -> triggerHeader `shouldSatisfy` T.isInfixOf "No events found yet"
+        _ -> fail "Expected error toast after Confirm & Proceed"
+      apiKey <- createTestAPIKey tr testPid "automatic-integration-check"
+      getCurrentTime >>= ingestTrace tr apiKey "onboarding-automatic-check"
+      (verifiedHeaders, verified) <- testServant tr $ Onboarding.checkIntegrationGet testPid (Just "Javascript")
+      lookupResponseHeader @"HX-Trigger" verifiedHeaders `shouldBe` Header ("{}" :: Text)
+      lookupResponseHeader @"HX-Redirect" verifiedHeaders `shouldBe` (MissingHeader :: ResponseHeader "HX-Redirect" Text)
+      renderText verified `shouldSatisfy` TL.isInfixOf "verified"
+
     it "moves one new project from profile setup to its first queryable event" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
       let infoForm =
             Onboarding.OnboardingInfoForm
