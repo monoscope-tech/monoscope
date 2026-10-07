@@ -1470,12 +1470,11 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
         let params = catMaybes [("widget_id=" <>) . maybeToMonoid . (.id) <$> existingWidgetM, ("tab=" <>) <$> tabSlugM]
          in "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> memptyIfFalse (not (null params)) ("?" <> T.intercalate "&" params)
 
-  -- Widget's legacy StripPrefix "w" JSON encoding calls warningThreshold "arning_threshold".
   form_
     [ class_ "hidden"
     , id_ widgetFormId
     , hxPut_ $ formAction <> if isNewWidget then (if "?" `T.isInfixOf` formAction then "&" else "?") <> "configure_monitor=true" else ""
-    , hxVals_ $ "js:{...widgetJSON, title: " <> widgetTitleValue <> ", query: document.querySelector('#filterElement').getValue()" <> if isThresholdChart then ", unit: document.getElementById('widgetUnit').value || null, arning_threshold: document.getElementById('widgetWarningThreshold').value === '' ? null : Number(document.getElementById('widgetWarningThreshold').value), alert_threshold: document.getElementById('widgetAlertThreshold').value === '' ? null : Number(document.getElementById('widgetAlertThreshold').value), show_threshold_lines: document.getElementById('widgetShowThresholdLines').value}" else "}"
+    , hxVals_ $ "js:{...widgetJSON, title: " <> widgetTitleValue <> ", query: document.querySelector('#filterElement').getValue()" <> if isThresholdChart then ", unit: document.getElementById('widgetUnit').value || null, warning_threshold: document.getElementById('widgetWarningThreshold').value === '' ? null : Number(document.getElementById('widgetWarningThreshold').value), alert_threshold: document.getElementById('widgetAlertThreshold').value === '' ? null : Number(document.getElementById('widgetAlertThreshold').value), show_threshold_lines: document.getElementById('widgetShowThresholdLines').value}" else "}"
     , hxExt_ "json-enc"
     , data_ "form-mode" $ if isNewWidget then "new" else "edit"
     , hxTarget_ ("#" <> widgetFormId)
@@ -1688,7 +1687,7 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
                 div_ [class_ "max-w-xs"]
                   $ Components.formField_ Components.FieldSm def{Components.value = fromMaybe "" widgetToUse.unit, Components.placeholder = "e.g. ms, requests/s", Components.extraAttrs = [term "hx-on:input" "widgetJSON.unit = this.value || null", term "hx-on:change" [text|htmx.trigger(document.getElementById('${widgetPreviewId}'), 'update-widget')|]] <> [term "hx-live:value" "widgetJSON.unit ?? ''" | not isNewWidget]} "Measurement unit" "widgetUnit" False Nothing
                 div_ [class_ "grid grid-cols-1 gap-3 sm:grid-cols-2"] do
-                  thresholdField_ "arning_threshold" "Warning threshold" "widgetWarningThreshold" widgetToUse.warningThreshold "bg-fillWarning-strong" False
+                  thresholdField_ "warning_threshold" "Warning threshold" "widgetWarningThreshold" widgetToUse.warningThreshold "bg-fillWarning-strong" False
                   thresholdField_ "alert_threshold" "Alert threshold" "widgetAlertThreshold" widgetToUse.alertThreshold "bg-fillError-strong" False
                 div_ [class_ "max-w-xs", term "hx-on:change" [text|widgetJSON.show_threshold_lines = event.target.value; htmx.trigger(document.getElementById('${widgetPreviewId}'), 'update-widget')|]]
                   $ Components.formSelectField_ Components.FieldSm "Show threshold lines" "widgetShowThresholdLines" False
@@ -1736,7 +1735,7 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
                 p_ [class_ "text-xs text-textWeak"] "These limits also appear on the widget chart. Saving the monitor updates both."
                 div_ [class_ "grid grid-cols-1 gap-3 sm:grid-cols-2"] do
                   thresholdField_ "alert_threshold" "Alert threshold" "alertThreshold" widgetToUse.alertThreshold "bg-fillError-strong" True
-                  thresholdField_ "arning_threshold" "Warning threshold" "warningThreshold" widgetToUse.warningThreshold "bg-fillWarning-strong" False
+                  thresholdField_ "warning_threshold" "Warning threshold" "warningThreshold" widgetToUse.warningThreshold "bg-fillWarning-strong" False
                 div_ [class_ "grid grid-cols-1 gap-3 sm:grid-cols-2"] do
                   Components.formField_ Components.FieldSm def{Components.value = fromMaybe "" widgetToUse.unit, Components.placeholder = "e.g. requests/s", Components.extraAttrs = [term "hx-on:input" "widgetJSON.unit = this.value || null", term "hx-on:change" [text|htmx.trigger(document.getElementById('${widgetPreviewId}'), 'update-widget')|]] <> [term "hx-live:value" "widgetJSON.unit ?? ''" | not isNewWidget]} "Measurement unit" "unit" False Nothing
                   Components.formSelectField_ Components.FieldSm "Trigger direction" "direction" False $ forM_ ([("above", "Above threshold"), ("below", "Below threshold")] :: [(Text, Text)]) \(v, lbl) -> option_ ([value_ v] <> [selected_ "" | v == bool "above" "below" (maybe False (.triggerLessThan) monitorM)]) $ toHtml lbl

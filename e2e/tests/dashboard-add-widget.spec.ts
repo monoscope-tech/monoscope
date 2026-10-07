@@ -678,7 +678,7 @@ test("widget thresholds save from Edit and remain visible in Monitors", async ({
       editor.getByRole("button", { name: "Save widget" }).click(),
     ]);
     expect(saveResponse.request().postDataJSON().unit).toBe("requests/s");
-    expect(saveResponse.request().postDataJSON().arning_threshold).toBe(7.5);
+    expect(saveResponse.request().postDataJSON().warning_threshold).toBe(7.5);
     await page.reload();
     await expect(page.locator(".widget-editor")).toBeVisible();
     await editor.getByRole("tab", { name: "Edit", exact: true }).click();

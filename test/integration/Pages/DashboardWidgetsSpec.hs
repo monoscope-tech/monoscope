@@ -414,7 +414,7 @@ spec = sequential $ aroundAll withTestResources do
       editHtml `shouldSatisfy` T.isInfixOf "Monitors"
       (_, monitorEditor) <- testServant tr $ Dashboards.dashboardWidgetExpandGetH testPid dashId wid (Just "alerts")
       T.take 180 (snd $ T.breakOn "page-drawer-tab-monitors" $ toStrict $ renderText monitorEditor) `shouldSatisfy` T.isInfixOf "checked"
-      for_ ["Measurement unit", "widgetJSON.alert_threshold", "widgetJSON.arning_threshold", "name=\"alertThreshold\"", "Create monitor"] \fragment ->
+      for_ ["Measurement unit", "widgetJSON.alert_threshold", "widgetJSON.warning_threshold", "name=\"alertThreshold\"", "Create monitor"] \fragment ->
         editHtml `shouldSatisfy` T.isInfixOf fragment
       editHtml `shouldNotSatisfy` T.isInfixOf "Save thresholds"
       fst (T.breakOn "widget-preview-container" editHtml) `shouldNotSatisfy` T.isInfixOf "Configure query"
