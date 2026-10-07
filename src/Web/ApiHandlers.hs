@@ -146,7 +146,7 @@ import Pkg.Parser qualified as Parser
 import Pkg.Parser.Expr qualified as ParserExpr
 import Pkg.SchemaLearning.Catalog qualified as Fields
 import Relude hiding (ask, id)
-import Servant (Capture, Delete, Get, HasServer (..), JSON, NamedRoutes, Header, Headers, NoContent (..), addHeader, Patch, Post, Put, QueryParam, ReqBody, ServerError (..), err400, err401, err403, err404, (:-), (:>))
+import Servant (Capture, Delete, Get, HasServer (..), Header, Headers, JSON, NamedRoutes, NoContent (..), Patch, Post, Put, QueryParam, ReqBody, ServerError (..), addHeader, err400, err401, err403, err404, (:-), (:>))
 import Servant.OpenApi (HasOpenApi (..), toOpenApi)
 import Servant.Server.Internal.Delayed (passToServer)
 import System.Config (AuthContext (..), EnvConfig (..))

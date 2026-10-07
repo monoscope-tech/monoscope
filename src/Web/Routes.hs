@@ -733,7 +733,7 @@ mcpProjectTools =
           Just tool -> withRunInIO \run ->
             run
               $ Error.runErrorNoCallStack @ServerError (Eff.inject $ MCP.runTool (apiV1App run principal (Authenticated pid)) pid tool $ KM.fromMapText args)
-                <&> either (MCP.toolError . decodeUtf8 . errBody) id
+              <&> either (MCP.toolError . decodeUtf8 . errBody) id
     }
 
 
