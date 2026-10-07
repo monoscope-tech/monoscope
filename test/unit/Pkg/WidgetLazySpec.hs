@@ -11,6 +11,8 @@
 module Pkg.WidgetLazySpec (spec) where
 
 import Control.Lens ((&), (.~), (?~))
+import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap qualified as KM
 import Data.Default (def)
 import Data.Generics.Labels ()
 import Data.Text qualified as T
@@ -41,6 +43,18 @@ selfFetches = T.isInfixOf "\"intersect once, update-query from:window" . render
 
 spec :: Spec
 spec = describe "lazyWidget (dashboard render-budget fallback)" do
+  it "writes the warning threshold key and reads dashboards saved with the old key" do
+    let widget = (def :: Widget.Widget){Widget.warningThreshold = Just 7}
+    case AE.toJSON widget of
+      AE.Object fields -> do
+        KM.lookup "warning_threshold" fields `shouldBe` Just (AE.toJSON (7 :: Double))
+        KM.lookup "arning_threshold" fields `shouldBe` Nothing
+        for_ [AE.Object fields, AE.Object $ KM.insert "arning_threshold" (AE.toJSON (7 :: Double)) $ KM.delete "warning_threshold" fields] \encoded ->
+          case AE.fromJSON encoded of
+            AE.Success decoded -> (decoded :: Widget.Widget).warningThreshold `shouldBe` Just 7
+            AE.Error err -> expectationFailure err
+      _ -> expectationFailure "Widget must encode as an object"
+
   it "strips every field that marks a widget as prefilled" do
     let prefilled =
           statWidget
