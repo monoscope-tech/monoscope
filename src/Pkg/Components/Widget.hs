@@ -4,9 +4,9 @@ import Codec.Compression.GZip qualified as GZip
 import Control.Exception.Safe qualified as Safe
 import Control.Lens
 import Data.Aeson qualified as AE
-import Data.Aeson.Types qualified as AET
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as AE.KeyMap
+import Data.Aeson.Types qualified as AET
 import Data.Base64.Types qualified as B64
 import Data.ByteArray qualified as BA
 import Data.ByteString.Base16 qualified as B16
@@ -301,9 +301,9 @@ data Widget = Widget
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
-  deriving (AE.ToJSON) via WidgetJSON
   -- Widget's nested types have no ToSchema; document it as an open JSON value.
   deriving (ToSchema) via JsonValueSchema Widget
+  deriving (AE.ToJSON) via WidgetJSON
 
 
 type WidgetJSON = DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "w", DAE.CamelToSnake, DAE.Rename "arning_threshold" "warning_threshold"]] Widget
