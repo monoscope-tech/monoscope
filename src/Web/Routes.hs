@@ -13,12 +13,16 @@ import Data.Effectful.Wreq qualified as Wreq
 import Data.List qualified as L
 import Data.OpenApi (OpenApi, SecurityDefinitions (..), SecurityScheme (..), SecuritySchemeType (..), components, description, info, security, securitySchemes, servers, title, version)
 import Data.OpenApi qualified as OA
+import Data.Map.Strict qualified as Map
 import Data.Ord (clamp)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.UUID qualified as UUID
 import Deriving.Aeson.Stock qualified as DAE
+import Effectful (Eff)
+import Effectful qualified as Eff
+import UnliftIO (withRunInIO)
 import Effectful.Error.Static qualified as Error
 import Effectful.Reader.Static (ask)
 import Effectful.State.Static.Local qualified as State
@@ -107,12 +111,13 @@ import System.Exit (ExitCode (..))
 import System.Logging qualified as Log
 import System.Process.Typed (byteStringInput, proc, readProcess, setStdin)
 import System.Timeout (timeout)
-import System.Types (ATAuthCtx, ATBaseCtx, ApiPrincipal (..), HXRedirectDest, HXReswap (..), RespHeaders, TriggerEvents, XWidgetJSON, addRespHeaders, atAuthToBase, effToServantHandler)
+import System.Types (ATAuthCtx, ATBaseCtx, ApiPrincipal (..), HXRedirectDest, HXReswap (..), ProjectToolCtx, RespHeaders, TriggerEvents, XWidgetJSON, addRespHeaders, atAuthToBase, effToServantHandler)
 import UnliftIO.Exception (handle)
 import Utils qualified
 import Web.ApiHandlers qualified as ApiH
 import Web.ApiHandlers (AllQueryParams, ApiV1Routes (..), apiV1OpenApiSpec)
 import Web.ApiHandlers qualified as ApiH
+import Web.ApiTypes (ApiActor (..))
 import Web.ApiTypes qualified as ApiT
 import Web.Auth (APItoolkitAuthContext, ApiKeyAuthContext, apiKeyAuthHandler, authHandler, htmlServerError)
 import Web.Auth qualified as Auth
@@ -626,7 +631,7 @@ data ProjectsRoutes' mode = ProjectsRoutes'
 
 server :: Logger -> AuthContext -> TracerProvider -> OtlpHttpHandler -> OtlpHttpHandler -> Routes (AsServerT ATBaseCtx)
 server logger env tp otlpTraces otlpLogs =
-  let projectTools = Just $ mcpProjectTools logger env tp
+  let projectTools = Just mcpProjectTools
    in Routes
     { public = Servant.serveDirectoryWebApp "./static/public"
     , ping = pure "pong"
@@ -675,7 +680,7 @@ server logger env tp otlpTraces otlpLogs =
     , deviceToken = Auth.deviceTokenH
     , emailPreviewList = emailPreviewListH
     , emailPreview = emailPreviewH
-    , apiV1 = apiV1Server logger env tp
+    , apiV1 = apiV1Server
     , apiV1OpenApi = pure apiV1OpenApiSpec
     , cookieProtected = \sessionWithCookies ->
         Servant.hoistServerWithContext
@@ -686,10 +691,22 @@ server logger env tp otlpTraces otlpLogs =
     }
 
 
-apiV1Server :: Logger -> AuthContext -> TracerProvider -> ApiPrincipal -> Servant.ServerT (NamedRoutes ApiV1Routes) ATBaseCtx
-apiV1Server logger env tp principal = ApiH.apiV1Server principal Log.queryEvents Dashboards.apiDashboardData (MCP.handleJsonRpc mcpToolRegistry mkApiV1App pid)
-  where
-    pid = principal.projectId
+-- API v1 server
+apiV1Server :: ApiPrincipal -> Servant.ServerT (NamedRoutes ApiV1Routes) ATBaseCtx
+apiV1Server = apiV1ServerAs ApiKeyPrincipal
+
+
+apiV1ServerAs :: ApiActor -> ApiPrincipal -> Servant.ServerT (NamedRoutes ApiV1Routes) ATBaseCtx
+apiV1ServerAs actor principal = ApiH.apiV1Server actor principal Log.queryEvents Dashboards.apiDashboardData \request ->
+  withRunInIO \run -> run $ MCP.handleJsonRpc mcpToolRegistry (apiV1App run actor principal) principal.projectId request
+
+
+apiV1App :: ProjectToolCtx es => (forall a. Eff es a -> IO a) -> ApiActor -> ApiPrincipal -> Servant.Application
+apiV1App run actor principal =
+  genericServeTWithContext
+    (Handler . ExceptT . run . Error.runErrorNoCallStack @ServerError . Eff.inject)
+    (apiV1ServerAs actor principal)
+    Servant.EmptyContext
 
 
 -- | MCP tool registry — REST tools (from OpenAPI) + composite workflow tools,
@@ -701,19 +718,17 @@ mcpToolRegistry = MCP.allTools apiV1OpenApiSpec $ \pid tz input -> do
   AI.runNlSearch pid authCtx.env tz input
 
 
-mcpProjectTools :: Logger -> AuthContext -> TracerProvider -> AI.ProjectTools
-mcpProjectTools logger env tp =
-  -- The Agent rechecks its member before this project-scoped Servant/MCP call.
+mcpProjectTools :: AI.ProjectTools
+mcpProjectTools =
   AI.ProjectTools
     { AI.catalog = mcpToolRegistry
-    , AI.invoke = \pid name args -> liftIO do
-        let app = genericServeTWithContext (effToServantHandler env logger tp) (apiV1Server logger env tp (Authenticated pid)) Servant.EmptyContext
-            request = (WT.setPath Wai.defaultRequest "/mcp"){Wai.requestMethod = "POST", Wai.requestHeaders = [("Content-Type", "application/json")]}
-            body = AE.object ["jsonrpc" AE..= ("2.0" :: Text), "id" AE..= (1 :: Int), "method" AE..= ("tools/call" :: Text), "params" AE..= AE.object ["name" AE..= name, "arguments" AE..= args]]
-        response <- WT.runSession (WT.srequest $ WT.SRequest request $ AE.encode body) app
-        pure $ fromMaybe (AE.object ["isError" AE..= True, "content" AE..= (decodeUtf8 (WT.simpleBody response) :: Text)]) $ AE.decode (WT.simpleBody response) >>= \case
-          AE.Object rpc -> KM.lookup "result" rpc
-          _ -> Nothing
+    , AI.invoke = \principal pid name args ->
+        case Map.lookup name mcpToolRegistry of
+          Nothing -> pure $ MCP.toolError $ "Unknown tool: " <> name
+          Just tool -> withRunInIO \run ->
+            run
+              $ Error.runErrorNoCallStack @ServerError (Eff.inject $ MCP.runTool (apiV1App run principal (Authenticated pid)) pid tool $ KM.fromMapText args)
+                <&> either (MCP.toolError . decodeUtf8 . errBody) id
     }
 
 

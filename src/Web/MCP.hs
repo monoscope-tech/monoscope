@@ -15,6 +15,8 @@ module Web.MCP (
   agentExclusions,
   allTools,
   handleJsonRpc,
+  runTool,
+  toolError,
 ) where
 
 import Control.Lens (preview, (^.))
@@ -154,7 +156,7 @@ agentPolicies =
       , "search_events_nl"
       , "analyze_issue"
       ]
-    adminReadTools = ["list_api_keys", "get_api_key"]
+    adminReadTools = ["list_api_keys", "get_api_key", "get_ingestion_key"]
     editTools =
       [ "create_monitor"
       , "update_monitor"
@@ -286,7 +288,8 @@ openApiTool p m op =
 toolNameOverrides :: Map (ByteString, Text) Text
 toolNameOverrides =
   Map.fromList
-    [ (("GET", "/events"), "list_events")
+    [ (("GET", "/ingestion-key"), "get_ingestion_key")
+    , (("GET", "/events"), "list_events")
     , (("GET", "/events/{event_id}/time/{timestamp}"), "get_event_context")
     , (("POST", "/events/query"), "search_events")
     , (("GET", "/metrics"), "query_metrics")

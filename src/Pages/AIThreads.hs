@@ -398,6 +398,7 @@ threadGetH pid convId docM hxTarget = do
 routineInstallPostH :: Projects.ProjectId -> RoutineTemplateForm -> ATAuthCtx (RespHeaders (Html ()))
 routineInstallPostH pid form = do
   (_, project, _) <- mkAIPageCtx pid
+  (sess, _) <- Projects.sessionAndProject pid
   case find ((== form.templateKey) . (.key)) Issues.routineTemplates of
     Nothing -> reject "Unknown routine template."
     Just template -> do
@@ -409,7 +410,7 @@ routineInstallPostH pid form = do
           void $ Issues.getOrCreateConversation pid convId Issues.CTWeb (AE.object ["routine_template" AE..= template.key])
           Issues.renameConversation pid convId template.title
           Issues.insertChatMessage pid convId Issues.ChatUser template.prompt Nothing Nothing
-          enqueue $ Issues.installRoutineTemplate pid convId project.timeZone template
+          enqueue $ Issues.installRoutineTemplate sess.user.id pid convId project.timeZone template
           redirectToThread pid convId
 
 
@@ -423,7 +424,7 @@ startThreadPostHWithTools projectTools pid form = do
       void $ Issues.getOrCreateConversation pid convId Issues.CTWeb (AE.object [])
       case request of
         NewChat prompt -> submitTurn projectTools (form.allowActions == Just True) pid convId prompt
-        NewRoutine prompt interval -> submitTurn projectTools (form.allowActions == Just True) pid convId prompt >> enqueue (Issues.upsertRoutine pid convId interval)
+        NewRoutine prompt interval -> submitTurn projectTools (form.allowActions == Just True) pid convId prompt >> enqueue (Issues.upsertRoutine sess.user.id pid convId interval)
       redirectToThread pid convId
 
 
@@ -513,8 +514,9 @@ enqueue write = do
 routinePostH :: Projects.ProjectId -> UUIDId "conversation" -> RoutineForm -> ATAuthCtx (RespHeaders (Html ()))
 routinePostH pid convId form = do
   authorizeProject pid
+  (sess, _) <- Projects.sessionAndProject pid
   whenJustM (Issues.getConversation pid convId) \conversation ->
-    when (conversation.conversationType == Issues.CTWeb) $ enqueue (Issues.upsertRoutine pid convId form.intervalMinutes)
+    when (conversation.conversationType == Issues.CTWeb) $ enqueue (Issues.upsertRoutine sess.user.id pid convId form.intervalMinutes)
   redirectToThread pid convId
 
 
@@ -524,9 +526,17 @@ routinePausePostH pid convId = authorizeProject pid >> Issues.pauseRoutine pid c
 
 routineCancelPostH, routineResumePostH, routineDeleteH :: Projects.ProjectId -> UUIDId "conversation" -> ATAuthCtx (RespHeaders (Html ()))
 routineCancelPostH pid convId = authorizeProject pid >> Issues.cancelRoutineRun pid convId >> redirect pid "/routines"
-routineResumePostH pid convId = authorizeProject pid >> enqueue (Issues.resumeRoutine pid convId) >> redirect pid "/routines"
+routineResumePostH pid convId = do
+  authorizeProject pid
+  (sess, _) <- Projects.sessionAndProject pid
+  enqueue (Issues.resumeRoutine sess.user.id pid convId)
+  redirect pid "/routines"
 routineDeleteH pid convId = authorizeProject pid >> Issues.deleteRoutine pid convId >> redirect pid "/routines"
 
 
 routineDestinationPostH :: Projects.ProjectId -> UUIDId "conversation" -> RoutineDestinationForm -> ATAuthCtx (RespHeaders (Html ()))
-routineDestinationPostH pid convId form = authorizeProject pid >> Issues.setRoutineDestination pid convId form.destination >> redirect pid "/routines"
+routineDestinationPostH pid convId form = do
+  authorizeProject pid
+  (sess, _) <- Projects.sessionAndProject pid
+  Issues.setRoutineDestination sess.user.id pid convId form.destination
+  redirect pid "/routines"
