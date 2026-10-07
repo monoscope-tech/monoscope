@@ -72,6 +72,36 @@ test("dashboard templates prefill the name and preview their own widgets", async
   await expect(page.locator('#dashboardTemplatePreviews [data-template="redis.yaml"]')).toBeVisible();
 });
 
+test("dashboard template selection stays visible and name focus ring is not clipped", async ({ page }) => {
+  await page.goto(`/p/${DEMO_PROJECT}/dashboards?new=true`);
+  const rows = page.locator("#dashListItemParent label");
+  const apache = rows.filter({ hasText: "Apache HTTP Server" });
+  await apache.click();
+  await page.mouse.move(0, 0);
+  const name = page.getByRole("textbox", { name: "Dashboard name *", exact: true });
+  for (const [theme, width] of [["light", 1440], ["dark", 1440], ["light", 390], ["dark", 390]] as const) {
+    await page.evaluate((theme) => document.body.setAttribute("data-theme", theme), theme);
+    await page.setViewportSize({ width, height: 900 });
+    const background = (row: HTMLElement) => getComputedStyle(row).backgroundColor;
+    expect.soft(await apache.evaluate(background), `${theme} selected template`).not.toBe(await rows.first().evaluate(background));
+    await name.focus();
+    const clipping = await name.evaluate((input) => {
+      const style = getComputedStyle(input);
+      const ring = Math.max(0, parseFloat(style.outlineWidth) + parseFloat(style.outlineOffset));
+      const rect = input.getBoundingClientRect();
+      const clipped: string[] = [];
+      for (let parent = input.parentElement; parent; parent = parent.parentElement) {
+        const css = getComputedStyle(parent);
+        const box = parent.getBoundingClientRect();
+        if (css.overflowX !== "visible" && (rect.left - ring < box.left - 0.5 || rect.right + ring > box.right + 0.5)) clipped.push("horizontal: " + parent.className);
+        if (css.overflowY !== "visible" && (rect.top - ring < box.top - 0.5 || rect.bottom + ring > box.bottom + 0.5)) clipped.push("vertical: " + parent.className);
+      }
+      return clipped;
+    });
+    expect.soft(clipping, `${theme} focus ring at ${width}px`).toEqual([]);
+  }
+});
+
 test.describe("adding widgets to a dashboard", () => {
   // Every test here writes to one shared dashboard.
   test.describe.configure({ mode: "serial" });
@@ -523,39 +553,44 @@ test("dashboard teams default to @everyone and support bulk add and removal", as
 });
 
 test("dashboard team requests show progress and retain choices after failures", async ({ page }) => {
-  await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
-  await page.locator(".bulkactionItemCheckbox").first().check();
-  await page.getByRole("button", { name: "Manage teams", exact: true }).click();
-  const picker = page.locator("#dashboard-teams");
-  const everyone = picker.getByRole("checkbox", { name: "@everyone", exact: true });
-  await everyone.check();
-  for (const [action, pending] of [["Add teams", "Adding…"], ["Remove teams", "Removing…"]]) {
-    for (const failure of ["server", "network"]) {
-      let release!: () => void;
-      const held = new Promise<void>(resolve => { release = resolve; });
-      await page.route("**/bulk_action/*", async route => {
-        await held;
-        if (failure === "server") await route.fulfill({ status: 500, body: "Unavailable" });
-        else await route.abort("failed");
-      });
-      try {
-        await picker.getByRole("button", { name: action, exact: true }).click();
-        await expect(picker.getByRole("button", { name: pending, exact: true })).toBeDisabled();
-        for (const button of await picker.getByRole("button").all()) await expect(button).toBeDisabled();
-        await expect(picker.getByRole("alert")).toBeHidden();
-      } finally {
-        release();
+  const dashboard = await makeDashboard(page, `E2E Team Requests ${Date.now()}`);
+  try {
+    await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
+    await page.getByRole("checkbox", { name: `Select ${dashboard.title}`, exact: true }).check();
+    await page.getByRole("button", { name: "Manage teams", exact: true }).click();
+    const picker = page.locator("#dashboard-teams");
+    const everyone = picker.getByRole("checkbox", { name: "@everyone", exact: true });
+    await everyone.check();
+    for (const [action, pending] of [["Add teams", "Adding…"], ["Remove teams", "Removing…"]]) {
+      for (const failure of ["server", "network"]) {
+        let release!: () => void;
+        const held = new Promise<void>(resolve => { release = resolve; });
+        await page.route("**/bulk_action/*", async route => {
+          await held;
+          if (failure === "server") await route.fulfill({ status: 500, body: "Unavailable" });
+          else await route.abort("failed");
+        });
+        try {
+          await picker.getByRole("button", { name: action, exact: true }).click();
+          await expect(picker.getByRole("button", { name: pending, exact: true })).toBeDisabled();
+          for (const button of await picker.getByRole("button").all()) await expect(button).toBeDisabled();
+          await expect(picker.getByRole("alert")).toBeHidden();
+        } finally {
+          release();
+        }
+        await expect(picker.getByRole("alert")).toContainText("Try again");
+        await expect(everyone).toBeChecked();
+        for (const button of await picker.getByRole("button").all()) await expect(button).toBeEnabled();
+        await page.unroute("**/bulk_action/*");
       }
-      await expect(picker.getByRole("alert")).toContainText("Try again");
-      await expect(everyone).toBeChecked();
-      for (const button of await picker.getByRole("button").all()) await expect(button).toBeEnabled();
-      await page.unroute("**/bulk_action/*");
     }
+    await page.route("**/bulk_action/*", route => route.fulfill({ status: 204 }));
+    await picker.getByRole("button", { name: "Add teams", exact: true }).click();
+    await expect(picker.getByRole("alert")).toBeHidden();
+    await expect(picker.getByRole("button", { name: "Add teams", exact: true })).toBeEnabled();
+  } finally {
+    await deleteDashboard(page, dashboard);
   }
-  await page.route("**/bulk_action/*", route => route.fulfill({ status: 204 }));
-  await picker.getByRole("button", { name: "Add teams", exact: true }).click();
-  await expect(picker.getByRole("alert")).toBeHidden();
-  await expect(picker.getByRole("button", { name: "Add teams", exact: true })).toBeEnabled();
 });
 
 test("dashboard team selection has names, counts, and searchable choices", async ({ page }) => {
