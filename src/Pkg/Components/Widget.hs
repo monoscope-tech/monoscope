@@ -38,6 +38,10 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.Components (headerRow_)
 import Pages.LogExplorer.LogItem (getServiceName, spanHasErrors)
 import Pkg.DeriveUtils (JsonValueSchema (..), WrappedEnumSC (..), encodeEnumSC)
+import Pkg.Parser (ToQueryText (..), parseQueryToAST)
+import Pkg.Parser.Expr (Subject (..))
+import Pkg.Parser.Stats (BinFunction (..), ByClauseItem (..), Section (..), SummarizeByClause (..))
+import Pkg.QueryCache qualified as QC
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
@@ -344,10 +348,8 @@ data WidgetDataset = WidgetDataset
 -- count, so shaping the query without picking the matching 'Charts.DataType'
 -- (or vice versa) fails the whole widget with a column-count mismatch.
 --
---   * plotted widgets need a series, so a widget whose KQL is only a filter
---     gets the same default aggregation the browser renderer applies
---     (@updateChartData@ in web-components/src/widgets.ts) — one count per
---     auto-sized time bin;
+--   * plotted widgets count filters per time bin, or add time bins to an
+--     existing aggregation without changing its measurement;
 --   * a stat reads one scalar, so it only needs an aggregation when the query
 --     has none; binning it would yield a three-column series;
 --   * row-oriented widgets project their own columns and are passed through.
@@ -356,6 +358,8 @@ data WidgetDataset = WidgetDataset
 -- (Just "severity==\"ERROR\" | summarize count(*) by bin_auto(timestamp)",DTMetric)
 -- >>> chartQuery (def & #query ?~ "summarize count(*) by bin_auto(timestamp)")
 -- (Just "summarize count(*) by bin_auto(timestamp)",DTMetric)
+-- >>> chartQuery (def & #query ?~ "metrics | summarize max(value)")
+-- (Just "metrics | summarize max(value)by bin_auto(timestamp)",DTMetric)
 -- >>> chartQuery (def & #wType .~ WTStat & #query ?~ "kind == \"server\"")
 -- (Just "kind == \"server\" | summarize count(*)",DTFloat)
 -- >>> chartQuery (def & #wType .~ WTStat & #query ?~ "name != null | summarize dcount(name)")
@@ -368,10 +372,17 @@ chartQuery :: Widget -> (Maybe Text, Charts.DataType)
 chartQuery w
   | w.wType == WTStat = (w.query <&> \q -> if hasSummarize q then q else q <> " | summarize count(*)", Charts.DTFloat)
   | w.wType `elem` [WTLogs, WTTable, WTTopList] = (w.query, Charts.DTText)
-  | otherwise = (w.query <&> \q -> if hasSummarize q && hasBinning q then q else q <> " | summarize count(*) by bin_auto(timestamp)", Charts.DTMetric)
+  | otherwise = (plot <$> w.query, Charts.DTMetric)
   where
     hasSummarize = T.isInfixOf "summarize" . T.toLower
-    hasBinning = T.isInfixOf " by bin" . T.toLower
+    plot q = either (const q) shape $ parseQueryToAST q
+      where
+        shape ast
+          | QC.hasSummarizeWithBin ast = q
+          | null [() | SummarizeCommand{} <- ast] = q <> " | summarize count(*) by bin_auto(timestamp)"
+          | otherwise = toQText $ map addBin ast
+        addBin (SummarizeCommand aggs by) = SummarizeCommand aggs $ Just $ SummarizeByClause $ ByBinFunc (BinAuto $ Subject "timestamp" "timestamp" []) : foldMap (\(SummarizeByClause cols) -> cols) by
+        addBin section = section
 
 
 -- | Convert MetricsData to WidgetDataset (timestamps already in ms from queryMetrics)
@@ -876,6 +887,35 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "mi
               $ Utils.faSprite_ iconType "regular" ("w-3.5 h-3.5 " <> iconColor)
 
     whenJust ctaM \(ctaTitle, uri) -> a_ [class_ "underline underline-offset-2 text-textBrand", href_ uri] $ toHtml ctaTitle
+    whenJust ((,) "SQL" <$> Utils.nonEmptyT widget.sql <|> (,) "KQL" <$> Utils.nonEmptyT widget.query) \(label, query) -> do
+      let popId = wId <> "-query-preview"
+      div_
+        [ class_ "inline-block"
+        , [__|on mouseleave or focusout wait 150ms then if not (me.matches(':hover') or me.matches(':focus-within')) call (the first <[popover]/> in me).hidePopover() end|]
+        ]
+        do
+          button_
+            ( [ type_ "button"
+              , class_ "p-2 cursor-pointer hover:bg-fillWeak rounded-lg tap-target opacity-0 group-hover/wgt:opacity-100 focus-visible:opacity-100 touch:opacity-100 transition-opacity"
+              , Aria.label_ "View widget query"
+              , [__|on mouseenter or focus or click call (the next <[popover]/>).showPopover() then if event.type is 'click' halt end|]
+              ]
+                <> Utils.popoverTrigger_ popId
+            )
+            $ Utils.faSprite_ "code" "regular" "w-3.5 h-3.5"
+          div_
+            ( [ class_ "dropdown bg-bgRaised text-textStrong border border-strokeWeak rounded-xl shadow-lg p-0 w-[min(36rem,calc(100vw-2rem))] max-h-[min(32rem,70vh)] overflow-auto text-left"
+              , role_ "region"
+              , Aria.label_ "Widget query"
+              ]
+                <> Utils.popoverPanel_ popId
+            )
+            do
+              div_ [class_ "px-4 py-2 border-b border-strokeWeak text-xs font-medium text-textWeak"] $ toHtml label
+              termWith "query-preview" [term "language" $ T.toLower label, class_ "block px-2"]
+                $ pre_ [class_ "p-2 font-mono text-xs whitespace-pre-wrap break-words leading-relaxed"]
+                $ toHtml query
+
     whenJust expandBtnFn \url ->
       button_
         ( Utils.drawerLoadAttrs_ url
@@ -1193,7 +1233,7 @@ renderChart widget = do
           , "echartOpt" AE..= encodeText (widgetToECharts widget)
           , "chartType" AE..= mapWidgetTypeToChartType widget.wType
           , "widgetType" AE..= widget.wType
-          , "query" AE..= widget.query
+          , "query" AE..= fst (chartQuery widget)
           , "querySQL" AE..= maybeToMonoid widget.sql
           , "rollupSQL" AE..= widget.rollupSql
           , "rollupFrom" AE..= widget.rollupFrom

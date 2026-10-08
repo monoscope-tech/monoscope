@@ -522,11 +522,9 @@ export const chartDataUrl = ({
   if (!query || query === 'null' || query === '') {
     params.set('query', DEFAULT_QUERY);
   } else {
-    // Only append the default summarization when the query doesn't already bin —
-    // otherwise preserve it exactly, so grouping by fields like 'kind' keeps working.
+    // Lucid supplies the plotted query; never replace its aggregation with a count.
     const hasSummarize = /summarize\s+/i.test(query);
-    const hasBinning = /\s+by\s+bin/i.test(query) || /\s+by\s+.*\(.*\)/i.test(query);
-    params.set('query', !hasSummarize || !hasBinning ? query + ' | ' + DEFAULT_QUERY : query);
+    params.set('query', hasSummarize ? query : query + ' | ' + DEFAULT_QUERY);
   }
 
   if (querySQL && querySQL !== 'null') params.set('query_sql', querySQL);

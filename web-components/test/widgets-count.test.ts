@@ -2,6 +2,11 @@ import { describe, expect, test } from 'vitest';
 import { chartDataUrl, hideNoDataOverlay, showChartError, showNoDataOverlay, sumTimeseriesValues } from '../src/widgets';
 
 describe('chartDataUrl', () => {
+  test('scalarMonitor_preservesMaxInsteadOfAppendingASecondSummarize', () => {
+    const query = 'metrics | where metric_name == "timefusion.mem_buffer.oldest_bucket_age_seconds" | summarize max(value)';
+    const url = new URL(chartDataUrl({ query, querySQL: '', pid: 'proj', chartType: 'timeseries' }), window.location.origin);
+    expect(url.searchParams.get('query')).toBe(query);
+  });
   test('inherits the page default when the URL has no explicit time range', () => {
     window.history.replaceState({}, '', '/p/proj/infrastructure/containers');
     document.body.innerHTML = '<div data-default-window="5M"></div>';
