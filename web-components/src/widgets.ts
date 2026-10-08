@@ -473,6 +473,7 @@ const setStatValue = (widgetData: WidGetData, stats: ChartDataResponse['stats'],
 // The /chart_data URL for a widget. Shared by the initial prefetch and every later
 // refetch, so the two can't drift — the prefetch is only honoured when the URL it was
 // issued against still matches (see takePrefetched).
+const DEFAULT_QUERY = 'summarize count(*) by bin_auto(timestamp)';
 export const chartDataUrl = ({
   chartId,
   query,
@@ -516,17 +517,8 @@ export const chartDataUrl = ({
     params.set(key, value as string);
   });
 
-  // Default query to use when no query is provided
-  const DEFAULT_QUERY = 'summarize count(*) by bin_auto(timestamp)';
-
-  if (!query || query === 'null' || query === '') {
-    params.set('query', DEFAULT_QUERY);
-  } else {
-    // Every production chart config comes from Widget.renderChart, which shapes its query.
-    // Preserve that aggregation when constructing refresh, prefetch, and retry URLs.
-    const hasSummarize = /summarize\s+/i.test(query);
-    params.set('query', hasSummarize ? query : query + ' | ' + DEFAULT_QUERY);
-  }
+  // Widget.renderChart shapes supplied queries; refresh, prefetch, and retry preserve them.
+  params.set('query', !query || query === 'null' ? DEFAULT_QUERY : query);
 
   if (querySQL && querySQL !== 'null') params.set('query_sql', querySQL);
   if (rollupSQL && rollupFrom) {
@@ -1049,7 +1041,7 @@ export const chartWidget = (widgetData: WidGetData) => {
   let baseQuery = widgetData.query;
   const updateQuery = () => {
     const uq = params().query;
-    widgetData.query = (uq && uq !== 'null') ? (baseQuery ? uq + ' | ' + baseQuery : uq) : baseQuery;
+    widgetData.query = (uq && uq !== 'null') ? uq + ' | ' + (baseQuery || DEFAULT_QUERY) : baseQuery;
   };
   updateQuery();
 
