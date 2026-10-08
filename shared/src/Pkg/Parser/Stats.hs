@@ -1001,7 +1001,7 @@ instance ToQueryText Section where
   toQText (SummarizeCommand funcs byClauseM) =
     "summarize "
       <> T.intercalate "," [foldMap (<> " = ") (view (typed @(Maybe Text)) f) <> toQText f | f <- funcs]
-      <> maybeToMonoid (toQText <$> byClauseM)
+      <> foldMap ((" " <>) . toQText) byClauseM
   toQText (ExtendCommand cols) =
     "extend " <> T.intercalate ", " [name <> " = " <> toQText expr | (name, expr) <- cols]
   toQText (ProjectCommand cols) =

@@ -699,10 +699,12 @@ spec = sequential $ aroundAll withTestResources do
       let widget = (widgetOf Widget.WTTimeseries "Query Results"){Widget.query = Just "metrics | where metric_name == \"timefusion.mem_buffer.oldest_bucket_age_seconds\" | summarize max(value)"}
           (query, decoder) = Widget.chartQuery widget
           rendered = toStrict $ renderText $ Widget.widget_ widget
-      rendered `shouldSatisfy` T.isInfixOf "by bin_auto(timestamp)"
+      rendered `shouldSatisfy` T.isInfixOf "max(value) by bin_auto(timestamp)"
       rendered `shouldSatisfy` T.isInfixOf "aria-label=\"View widget query\""
       Widget.chartQuery widget{Widget.query = Just "metrics | where metric_name == \"summarize\""}
         `shouldBe` (Just "metrics | where metric_name == \"summarize\" | summarize count(*) by bin_auto(timestamp)", decoder)
+      Widget.chartQuery widget{Widget.wType = Widget.WTStat, Widget.query = Just "metrics | where metric_name == \"summarize\""}
+        `shouldBe` (Just "metrics | where metric_name == \"summarize\" | summarize count(*)", Charts.DTFloat)
       md <- runQueryEffect tr $ Charts.queryMetrics (Just "postgres") (Just decoder) (Just testPid) query Nothing (Just "1H") Nothing Nothing Nothing Nothing []
       md.error `shouldBe` Nothing
       V.toList (md.dataset >>= V.catMaybes . V.drop 1) `shouldBe` [42]

@@ -359,7 +359,7 @@ data WidgetDataset = WidgetDataset
 -- >>> chartQuery (def & #query ?~ "summarize count(*) by bin_auto(timestamp)")
 -- (Just "summarize count(*) by bin_auto(timestamp)",DTMetric)
 -- >>> chartQuery (def & #query ?~ "metrics | summarize max(value)")
--- (Just "metrics | summarize max(value)by bin_auto(timestamp)",DTMetric)
+-- (Just "metrics | summarize max(value) by bin_auto(timestamp)",DTMetric)
 -- >>> chartQuery (def & #wType .~ WTStat & #query ?~ "kind == \"server\"")
 -- (Just "kind == \"server\" | summarize count(*)",DTFloat)
 -- >>> chartQuery (def & #wType .~ WTStat & #query ?~ "name != null | summarize dcount(name)")
@@ -370,19 +370,19 @@ data WidgetDataset = WidgetDataset
 -- (Nothing,DTMetric)
 chartQuery :: Widget -> (Maybe Text, Charts.DataType)
 chartQuery w
-  | w.wType == WTStat = (w.query <&> \q -> if hasSummarize q then q else q <> " | summarize count(*)", Charts.DTFloat)
   | w.wType `elem` [WTLogs, WTTable, WTTopList] = (w.query, Charts.DTText)
-  | otherwise = (plot <$> w.query, Charts.DTMetric)
+  | otherwise = (shape <$> w.query, bool Charts.DTMetric Charts.DTFloat isStat)
   where
-    hasSummarize = T.isInfixOf "summarize" . T.toLower
-    plot q = either (const q) shape $ parseQueryToAST q
-      where
-        shape ast
-          | QC.hasSummarizeWithBin ast = q
-          | null [() | SummarizeCommand{} <- ast] = q <> " | summarize count(*) by bin_auto(timestamp)"
-          | otherwise = toQText $ map addBin ast
-        addBin (SummarizeCommand aggs by) = SummarizeCommand aggs $ Just $ SummarizeByClause $ ByBinFunc (BinAuto $ Subject "timestamp" "timestamp" []) : foldMap (\(SummarizeByClause cols) -> cols) by
-        addBin section = section
+    isStat = w.wType == WTStat
+    shape q = case parseQueryToAST q of
+      -- Let the query handler report errors in the original malformed query.
+      Left _ -> q
+      Right ast
+        | null [() | SummarizeCommand{} <- ast] -> q <> " | summarize count(*)" <> bool " by bin_auto(timestamp)" "" isStat
+        | isStat || QC.hasSummarizeWithBin ast -> q
+        | otherwise -> toQText $ map addBin ast
+    addBin (SummarizeCommand aggs by) = SummarizeCommand aggs $ Just $ SummarizeByClause $ ByBinFunc (BinAuto $ Subject "timestamp" "timestamp" []) : foldMap (\(SummarizeByClause cols) -> cols) by
+    addBin section = section
 
 
 -- | Convert MetricsData to WidgetDataset (timestamps already in ms from queryMetrics)

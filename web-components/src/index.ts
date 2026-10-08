@@ -31,7 +31,8 @@ const components: Array<[string, () => Promise<unknown>]> = [
   ['[data-service-map]', () => import('./service-map').then(m => m.hydrateServiceMaps())],
 ];
 
-// The Lucid query remains readable while its highlighter loads on first open.
+// Hidden preview hosts arrive with the widget; load their highlighter only on opening.
+// Each host then mounts its editor lazily when its own popover opens.
 document.addEventListener('beforetoggle', event => {
   if ((event as ToggleEvent).newState === 'open' && (event.target as Element).querySelector('query-preview')) {
     void import('./query-preview');

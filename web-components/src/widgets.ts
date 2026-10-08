@@ -522,7 +522,8 @@ export const chartDataUrl = ({
   if (!query || query === 'null' || query === '') {
     params.set('query', DEFAULT_QUERY);
   } else {
-    // Lucid supplies the plotted query; never replace its aggregation with a count.
+    // Every production chart config comes from Widget.renderChart, which shapes its query.
+    // Preserve that aggregation when constructing refresh, prefetch, and retry URLs.
     const hasSummarize = /summarize\s+/i.test(query);
     params.set('query', hasSummarize ? query : query + ' | ' + DEFAULT_QUERY);
   }
