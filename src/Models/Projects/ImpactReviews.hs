@@ -6,6 +6,7 @@ module Models.Projects.ImpactReviews (
   PullRequestEvent (..),
   receiveEvent,
   decodeEvent,
+  EventDecodeError (..),
   recordFailure,
   getRun,
   claimRun,
@@ -38,6 +39,12 @@ import Pkg.Git qualified as Git
 import Relude
 import System.Types (DB)
 import Web.FormUrlEncoded (FromForm)
+
+
+-- $setup
+-- >>> import Relude
+-- >>> import Data.Aeson qualified as AE
+-- >>> import Data.Text qualified as T
 
 
 data ReviewState = Queued | Reviewing | Completed | Incomplete | Superseded
@@ -100,17 +107,35 @@ data GitHubEvent = GitHubEvent {action :: Text, repository :: Repository, instal
   deriving (AE.FromJSON) via DAE.Snake GitHubEvent
 
 
-decodeEvent :: ByteString -> Either Text PullRequestEvent
+data EventDecodeError = UnsupportedAction | InvalidPayload
+  deriving stock (Generic, Show)
+  deriving (AE.ToJSON) via WrappedEnumSC 'Nothing "" EventDecodeError
+
+
+-- | Decode the supported wire shape and refine its coordinates at the boundary.
+--
+-- >>> map AE.toJSON [UnsupportedAction, InvalidPayload]
+-- [String "unsupported_action",String "invalid_payload"]
+--
+-- >>> let body = "{\"action\":\"opened\",\"number\":1,\"installation\":{\"id\":1},\"repository\":{\"full_name\":\"acme/service\"},\"pull_request\":{\"state\":\"open\",\"draft\":false,\"updated_at\":\"2025-01-01T00:00:00Z\",\"head\":{\"sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}}" :: Text
+-- >>> fmap (.number) $ decodeEvent $ encodeUtf8 body
+-- Right 1
+-- >>> let reject before after = either (show @Text) (const "accepted") $ decodeEvent $ encodeUtf8 $ T.replace before after body
+-- >>> map (uncurry reject) [("\"number\":1", "\"number\":0"), ("\"number\":1", "\"number\":-1"), ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "a"), ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"), ("acme/service", "acme")]
+-- ["InvalidPayload","InvalidPayload","InvalidPayload","InvalidPayload","InvalidPayload"]
+-- >>> reject "opened" "edited"
+-- "UnsupportedAction"
+decodeEvent :: ByteString -> Either EventDecodeError PullRequestEvent
 decodeEvent body = do
-  event <- first toText $ AE.eitherDecodeStrict @GitHubEvent body
-  unless (event.action `elem` ["opened", "synchronize", "reopened", "ready_for_review", "closed", "converted_to_draft"]) $ Left "Unsupported PR action"
+  event <- first (const InvalidPayload) $ AE.eitherDecodeStrict @GitHubEvent body
+  unless (event.action `elem` ["opened", "synchronize", "reopened", "ready_for_review", "closed", "converted_to_draft"]) $ Left UnsupportedAction
   (owner, repo) <- case T.splitOn "/" event.repository.fullName of
     [owner, repo] | not (T.null owner || T.null repo) -> pure (T.toLower owner, T.toLower repo)
-    _ -> Left "Invalid repository"
-  unless (event.number > 0) $ Left "Invalid PR number"
+    _ -> Left InvalidPayload
+  unless (event.number > 0) $ Left InvalidPayload
   let pr = event.pullRequest
       revision = pr.head.revision
-  unless (T.length revision == 40 && T.all isHexDigit revision) $ Left "Invalid head revision"
+  unless (T.length revision == 40 && T.all isHexDigit revision) $ Left InvalidPayload
   pure PullRequestEvent{owner, repo, installationId = event.installation.id, number = event.number, revision = T.toLower revision, updatedAt = pr.updatedAt, reviewable = pr.state == "open" && not pr.draft}
 
 

@@ -220,6 +220,11 @@ spec = around withTestResources $ describe "Production impact reviews" do
       failedRun.error `shouldBe` Just "Review failed; retry to collect current evidence"
       runQueryEffect tr (Reviews.claimRun failedRun) `shouldReturn` True
       runQueryEffect tr $ Reviews.releaseRun failedRun
+    runQueryEffect tr $ Reviews.retryRun testPid run.id
+    (_, ()) <- runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ transport True $ fakeModel result $ Impact.reviewPullRequest run.id
+    retried <- maybe (fail "run missing") pure =<< runQueryEffect tr (Reviews.getRun run.id)
+    retried.state `shouldBe` Reviews.Completed
+    retried.error `shouldBe` Nothing
     void $ testServant tr $ CodeContextPage.impactReviewSettingsPostH testPid (Reviews.ReviewSettings "impact-org" "checkout" False False)
     void $ deliver tr $ payload "synchronize" (T.replicate 40 "b") "2025-01-01T00:01:00Z"
     runs <- runQueryEffect tr $ Reviews.latestRuns testPid

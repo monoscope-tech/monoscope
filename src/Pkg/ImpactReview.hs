@@ -4,7 +4,7 @@ import Data.Aeson qualified as AE
 import Data.Char (isDigit)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.LLM qualified as LLM
-import Data.List.Extra (nubOrd)
+import Data.List.Extra (lookup, nubOrd)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, nominalDay)
 import Data.Time.Format.ISO8601 (iso8601Show)
@@ -216,18 +216,18 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
           if documentationOnly
             then Reviews.finishRun run Nothing
             else do
-              result <- analyse ctx run mappings pr files
-              publish ctx run conn ref pr result
+              result <- analyse run mappings pr files
+              publish run conn ref pr result
 
     sameRevision :: Git.PullRequest -> Git.PullRequest -> Bool
     sameRevision expected actual = expected.head == actual.head && expected.base == actual.base && actual.state == "open" && not actual.draft
 
-    analyse :: AuthContext -> Reviews.ReviewRun -> [CodeContext.CodeMapping] -> Git.PullRequest -> [Git.PullRequestFile] -> ReviewCtx ReviewResult
-    analyse ctx run mappings pr files = do
-      let cfg = ctx.config
+    analyse :: Reviews.ReviewRun -> [CodeContext.CodeMapping] -> Git.PullRequest -> [Git.PullRequestFile] -> ReviewCtx ReviewResult
+    analyse run mappings pr files = do
+      cfg <- (.config) <$> ask @AuthContext
       until <- Time.currentTime
       let from = addUTCTime (negate $ nominalDay * 7) until
-      collected <- tryAny $ collectEvidence ctx run mappings from until
+      collected <- tryAny $ collectEvidence run mappings from until
       whenLeft_ collected $ \err -> Log.logAttention "Production impact evidence query failed" (run.id, show @Text err)
       let maxFiles = 30
           maxPatch = 2000
@@ -249,9 +249,9 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
       Reviews.saveResult run reviewed
       pure reviewed
 
-    publish :: AuthContext -> Reviews.ReviewRun -> Git.GitConn -> Git.RepoRef -> Git.PullRequest -> ReviewResult -> ReviewCtx ()
-    publish ctx run conn ref pr result = do
-      let cfg = ctx.config
+    publish :: Reviews.ReviewRun -> Git.GitConn -> Git.RepoRef -> Git.PullRequest -> ReviewResult -> ReviewCtx ()
+    publish run conn ref pr result = do
+      cfg <- (.config) <$> ask @AuthContext
       whenM (Reviews.currentRun run) do
         current <- require =<< Git.getPullRequest conn ref run.number
         unless (sameRevision pr current) $ throwError $ ReviewFailure "PR changed before publication"
@@ -267,8 +267,9 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
     require :: Either Text a -> ReviewCtx a
     require = either (throwError . ReviewFailure) pure
 
-    collectEvidence :: AuthContext -> Reviews.ReviewRun -> [CodeContext.CodeMapping] -> UTCTime -> UTCTime -> ReviewCtx ([Evidence], [Text])
-    collectEvidence ctx run mappings from until = do
+    collectEvidence :: Reviews.ReviewRun -> [CodeContext.CodeMapping] -> UTCTime -> UTCTime -> ReviewCtx ([Evidence], [Text])
+    collectEvidence run mappings from until = do
+      ctx <- ask @AuthContext
       let maxQueryChars = 2000
           maxEvidence = 20 :: Int
           evidenceLimit = maxEvidence + 1
@@ -362,14 +363,4 @@ renderReview host run includeEvidence result =
         <> ")"
         <> if includeEvidence then foldMap (\observed -> " · **Observed:** " <> show observed.events <> " events · " <> show observed.errors <> " errors") item.observed <> foldMap ((" · service: " <>) . plain) item.service <> foldMap ((" · environment: " <>) . plain) item.environment else ""
     plain = T.concatMap (\c -> (if c `elem` ("\\*_|#!" :: String) then "\\" else "") <> one c) . clean
-    clean =
-      T.replace "://" ":／／" . T.map \case
-        '[' -> '［'
-        ']' -> '］'
-        '@' -> '＠'
-        '<' -> '‹'
-        '>' -> '›'
-        '`' -> '\''
-        '\n' -> ' '
-        '\r' -> ' '
-        c -> c
+    clean = T.replace "://" ":／／" . T.map (\c -> fromMaybe c $ lookup c ([('[', '［'), (']', '］'), ('@', '＠'), ('<', '‹'), ('>', '›'), ('`', '\''), ('\n', ' '), ('\r', ' ')] :: [(Char, Char)]))
