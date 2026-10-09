@@ -141,6 +141,10 @@ spec = around withTestResources $ describe "Production impact reviews" do
     [run] <- runQueryEffect tr $ Reviews.latestRuns testPid
     apiKey <- createTestAPIKey tr testPid "Impact review telemetry"
     ingestLog tr apiKey "private-log-body-must-not-leave-monoscope" frozenTime
+    ingestErrorLog tr apiKey "private-error-body-must-not-leave-monoscope" [] frozenTime
+    otherPid <- createTestProject tr "Evidence isolation"
+    otherKey <- createTestAPIKey tr otherPid "Other project telemetry"
+    ingestLog tr otherKey "other-project-log" frozenTime
     -- Throwaway RSA fixture generated only for these JWT tests; never registered with a GitHub App.
     pem <- BS.readFile "test/fixtures/github-app-test.pem"
     let cfg = tr.trATCtx.config{githubAppId = "123", githubAppPrivateKey = extractBase64 $ B64.encodeBase64 pem}
@@ -169,15 +173,21 @@ spec = around withTestResources $ describe "Production impact reviews" do
                         if "/issues/comments/99" `T.isSuffixOf` toText endpoint || "/issues/7/comments" `T.isSuffixOf` toText endpoint
                           then AE.object ["id" AE..= (99 :: Int)]
                           else pr
-        result = Impact.ReviewResult Impact.WorthChecking [Impact.Finding (Impact.ChangedLine "checkout.hs" 1 Impact.Head) "The changed operation may stop emitting the signal used by the monitor. *check* @impact-review-test [outside](https://untrusted.invalid)\r#heading" "Check the monitor query before deploying." ["telemetry-1"]] [] [] frozenTime frozenTime
+        result = Impact.ReviewResult Impact.WorthChecking [Impact.Finding (Impact.ChangedLine "checkout.hs" 1 Impact.Head) "The changed operation may stop emitting the signal used by the monitor. *check* @impact-review-test [outside](https://untrusted.invalid)\r#heading" "Check the monitor query before deploying." ["query-1"]] [] [] frozenTime frozenTime
         fakeModel :: Impact.ReviewResult -> ATBackgroundCtx a -> ATBackgroundCtx a
         fakeModel answer = interpose @LLM.LLM \_ -> \case
           LLM.CallLLM _ prompt _ -> do
-            liftIO $ prompt `shouldNotSatisfy` T.isInfixOf "private-log-body-must-not-leave-monoscope"
-            pure $ Right $ decodeUtf8 $ AE.encode (answer :: Impact.ReviewResult)
+            liftIO $ for_ ["private-log-body-must-not-leave-monoscope", "private-error-body-must-not-leave-monoscope"] \body -> prompt `shouldNotSatisfy` T.isInfixOf body
+            pure
+              $ Right
+              $ decodeUtf8
+              $ AE.encode
+              $ if "Plan production evidence" `T.isPrefixOf` prompt
+                then AE.object ["queries" AE..= AE.toJSON @[AE.Value] [AE.object ["service" AE..= service, "condition" AE..= ("INFO severity is observed in production" :: Text), "predicate" AE..= predicate] | (service, predicate) <- [("test-service", "level == \"INFO\""), ("unmapped-service", "level == \"INFO\""), ("test-service", "| take 1")] :: [(Text, Text)]]]
+                else AE.toJSON (answer :: Impact.ReviewResult)
           LLM.CallAgenticChat history params token -> LLM.callAgenticChat history params token
           LLM.EmbedDocuments config docs -> LLM.embedDocuments config docs
-    let queryResult = result{Impact.evidence = [Impact.Evidence "telemetry-1" Impact.Monitor Nothing Nothing "/monitor" (Just "private-customer-query") Nothing]}
+    let queryResult = result{Impact.evidence = [Impact.Evidence "query-1" Impact.Monitor Nothing Nothing "/monitor" (Just "private-customer-query") Nothing Nothing]}
     for_ [False, True] \includeEvidence -> Impact.renderReview cfg.hostUrl run includeEvidence queryResult `shouldNotSatisfy` T.isInfixOf "private-customer-query"
     (requests, ()) <- runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ transport True $ fakeModel result $ Impact.reviewPullRequest run.id
     let comments = filter (T.isInfixOf "/issues/comments/99" . fst) requests
@@ -185,6 +195,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
     let published = T.intercalate " " $ map (decodeUtf8 . snd) comments
     published `shouldSatisfy` T.isInfixOf "Worth checking"
     published `shouldSatisfy` T.isInfixOf "Observed"
+    published `shouldSatisfy` T.isInfixOf "1 matching events / 2 observed events"
+    published `shouldSatisfy` T.isInfixOf "xychart-beta"
     published `shouldSatisfy` T.isInfixOf "\\\\*check"
     published `shouldNotSatisfy` T.isInfixOf "@impact-review-test"
     published `shouldNotSatisfy` T.isInfixOf "https://untrusted.invalid"
@@ -202,6 +214,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     let linksPublished = T.intercalate " " $ map (decodeUtf8 . snd) $ filter (T.isInfixOf "/issues/comments/99" . fst) linksRequests
     linksPublished `shouldSatisfy` T.isInfixOf "telemetry evidence"
     linksPublished `shouldNotSatisfy` T.isInfixOf "Observed"
+    linksPublished `shouldNotSatisfy` T.isInfixOf "xychart-beta"
     linksPublished `shouldNotSatisfy` T.isInfixOf "The changed operation"
     -- A fabricated location cannot become a finding, even if the model supplies a verdict.
     runQueryEffect tr $ Reviews.retryRun testPid run.id
