@@ -87,17 +87,17 @@ data PullRequestEvent = PullRequestEvent
 
 newtype Repository = Repository {fullName :: Text}
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Repository
+  deriving (AE.FromJSON) via DAE.Snake Repository
 
 
 data PullRequestStatus = PullRequestStatus {head :: Git.CommitRef, state :: Text, draft :: Bool, updatedAt :: UTCTime}
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake PullRequestStatus
+  deriving (AE.FromJSON) via DAE.Snake PullRequestStatus
 
 
-data GitHubEvent = GitHubEvent {action :: Text, repository :: Repository, installation :: Git.GitHubApp, number :: Int, pullRequest :: PullRequestStatus}
+data GitHubEvent = GitHubEvent {action :: Text, repository :: Repository, installation :: Git.GitHubObjectId, number :: Int, pullRequest :: PullRequestStatus}
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake GitHubEvent
+  deriving (AE.FromJSON) via DAE.Snake GitHubEvent
 
 
 decodeEvent :: ByteString -> Either Text PullRequestEvent
@@ -109,9 +109,9 @@ decodeEvent body = do
     _ -> Left "Invalid repository"
   unless (event.number > 0) $ Left "Invalid PR number"
   let pr = event.pullRequest
-      revision = pr.head.sha
+      revision = pr.head.revision
   unless (T.length revision == 40 && T.all isHexDigit revision) $ Left "Invalid head revision"
-  pure $ PullRequestEvent owner repo event.installation.id event.number (T.toLower revision) pr.updatedAt (pr.state == "open" && not pr.draft)
+  pure PullRequestEvent{owner, repo, installationId = event.installation.id, number = event.number, revision = T.toLower revision, updatedAt = pr.updatedAt, reviewable = pr.state == "open" && not pr.draft}
 
 
 -- | Grant resolution, receipt, and odd-job insertion are one statement. An

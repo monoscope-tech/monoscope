@@ -27,9 +27,10 @@ import Pkg.TestUtils
 import Relude
 import Servant (ServerError (..))
 import System.Config (AuthContext (..), EnvConfig (..))
+import System.IO.Error (userError)
 import System.Types (ATBackgroundCtx)
 import Test.Hspec
-import UnliftIO.Exception (tryAny)
+import UnliftIO.Exception (throwIO, tryAny)
 import "cryptonite" Crypto.Hash.Algorithms (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
@@ -75,6 +76,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
         next = T.replicate 40 "b"
     deliver tr firstEvent `shouldReturn` AE.object ["status" AE..= ("ok" :: Text)]
     deliver tr firstEvent `shouldReturn` AE.object ["status" AE..= ("ok" :: Text)]
+    for_ [AE.object [], payload "edited" revision "2025-01-01T00:00:00Z"] \ignored ->
+      deliver tr ignored `shouldReturn` AE.object ["status" AE..= ("ignored" :: Text)]
     queued <- withResource tr.trPool \conn -> query conn "SELECT count(*) FROM background_jobs WHERE payload->>'tag' = 'ReviewPullRequest'" () :: IO [Only Int]
     queued `shouldBe` [Only 1]
     [old] <- runQueryEffect tr $ Reviews.latestRuns testPid
@@ -207,14 +210,16 @@ spec = around withTestResources $ describe "Production impact reviews" do
     let created = T.intercalate " " $ map (decodeUtf8 . snd) $ filter (T.isSuffixOf "/issues/7/comments" . fst) newRequests
     created `shouldSatisfy` T.isInfixOf "Coverage unknown"
     created `shouldNotSatisfy` T.isInfixOf "Invented mechanism"
-    runQueryEffect tr $ Reviews.retryRun testPid run.id
-    failed <- tryAny $ runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg{githubAppPrivateKey = ""}}) $ Impact.reviewPullRequest run.id
-    failed `shouldSatisfy` isLeft
-    failedRun <- maybe (fail "run missing") pure =<< runQueryEffect tr (Reviews.getRun run.id)
-    failedRun.state `shouldBe` Reviews.Incomplete
-    failedRun.error `shouldSatisfy` isJust
-    runQueryEffect tr (Reviews.claimRun failedRun) `shouldReturn` True
-    runQueryEffect tr $ Reviews.releaseRun failedRun
+    for_ [True, False] \unexpected -> do
+      runQueryEffect tr $ Reviews.retryRun testPid run.id
+      let failing = if unexpected then withHTTPResponses (\_ _ -> throwIO $ userError "private-exception-detail") else Reader.local (\ctx -> ctx{config = cfg{githubAppPrivateKey = ""}})
+      failed <- tryAny $ runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ failing $ Impact.reviewPullRequest run.id
+      failed `shouldSatisfy` isLeft
+      failedRun <- maybe (fail "run missing") pure =<< runQueryEffect tr (Reviews.getRun run.id)
+      failedRun.state `shouldBe` Reviews.Incomplete
+      failedRun.error `shouldBe` Just "Review failed; retry to collect current evidence"
+      runQueryEffect tr (Reviews.claimRun failedRun) `shouldReturn` True
+      runQueryEffect tr $ Reviews.releaseRun failedRun
     void $ testServant tr $ CodeContextPage.impactReviewSettingsPostH testPid (Reviews.ReviewSettings "impact-org" "checkout" False False)
     void $ deliver tr $ payload "synchronize" (T.replicate 40 "b") "2025-01-01T00:01:00Z"
     runs <- runQueryEffect tr $ Reviews.latestRuns testPid

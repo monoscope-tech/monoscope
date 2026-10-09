@@ -181,15 +181,16 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
       | run.revision /= run.latestRevision = Reviews.supersedeRun run
       | otherwise = bracket (Reviews.claimRun run) (\claimed -> when claimed $ Reviews.releaseRun run) $ \claimed -> when claimed do
           outcome <- tryAny $ Timeout.timeout (120 * 1000000) $ runErrorNoCallStack $ execute run
-          let failure = case outcome of
-                Left err -> Just $ "Review failed: " <> show err
-                Right Nothing -> Just "Review exceeded its two-minute budget"
-                Right (Just (Left (ReviewFailure err))) -> Just err
+          let retryMessage = "Review failed; retry to collect current evidence"
+              failure = case outcome of
+                Left err -> Just (retryMessage, show err)
+                Right Nothing -> Just ("Review exceeded its two-minute budget", "Review timed out")
+                Right (Just (Left (ReviewFailure err))) -> Just (retryMessage, err)
                 Right (Just (Right ())) -> Nothing
-          whenJust failure \err -> do
-            Log.logAttention "Production impact review failed" (run.id, err)
-            Reviews.recordFailure run err
-            throwIO $ ReviewFailure err
+          whenJust failure \(message, detail) -> do
+            Log.logAttention "Production impact review failed" (run.id, detail)
+            Reviews.recordFailure run message
+            throwIO $ ReviewFailure message
     execute :: Reviews.ReviewRun -> ReviewCtx ()
     execute run = do
       ctx <- ask @AuthContext
@@ -202,9 +203,9 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
       token <- require =<< GitSync.githubToken cfg.githubAppId cfg.githubAppPrivateKey (GitSync.AppInstallation installationId)
       conn <- require $ GitSync.credentialConn credential token
       pr <- require =<< Git.getPullRequest conn ref run.number
-      if pr.head.sha /= run.revision || pr.state /= "open" || pr.draft
+      if pr.head.revision /= run.revision || pr.state /= "open" || pr.draft
         then do
-          Reviews.receiveEvent $ Reviews.PullRequestEvent run.owner run.repo installationId run.number pr.head.sha pr.updatedAt (pr.state == "open" && not pr.draft)
+          Reviews.receiveEvent Reviews.PullRequestEvent{owner = run.owner, repo = run.repo, installationId, number = run.number, revision = pr.head.revision, updatedAt = pr.updatedAt, reviewable = pr.state == "open" && not pr.draft}
           Reviews.supersedeRun run
         else do
           files <- require =<< Git.getPullRequestFiles conn ref run.number

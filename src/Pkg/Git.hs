@@ -52,7 +52,7 @@ module Pkg.Git (
   listDeployments,
   PullRequest (..),
   CommitRef (..),
-  GitHubApp (..),
+  GitHubObjectId (..),
   PullRequestFile (..),
   PullRequestComment (..),
   getPullRequest,
@@ -583,14 +583,14 @@ data DeploymentEvidence = DeploymentEvidence
 
 
 -- | Coordinates come from the verified installation, never from payload URLs.
-newtype CommitRef = CommitRef {sha :: Text}
+newtype CommitRef = CommitRef {revision :: Text}
   deriving stock (Eq, Generic, Show)
-  deriving anyclass (AE.FromJSON, AE.ToJSON)
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.Rename "revision" "sha"]] CommitRef
 
 
-newtype GitHubApp = GitHubApp {id :: Int64}
+newtype GitHubObjectId = GitHubObjectId {id :: Int64}
   deriving stock (Generic, Show)
-  deriving anyclass (AE.FromJSON, AE.ToJSON)
+  deriving anyclass (AE.FromJSON)
 
 
 data PullRequest = PullRequest
@@ -602,7 +602,7 @@ data PullRequest = PullRequest
   , updatedAt :: UTCTime
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake PullRequest
+  deriving (AE.FromJSON) via DAE.Snake PullRequest
 
 
 data PullRequestFile = PullRequestFile
@@ -617,10 +617,10 @@ data PullRequestFile = PullRequestFile
 data PullRequestComment = PullRequestComment
   { id :: Int64
   , body :: Text
-  , performedViaGithubApp :: Maybe GitHubApp
+  , performedViaGithubApp :: Maybe GitHubObjectId
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake PullRequestComment
+  deriving (AE.FromJSON) via DAE.Snake PullRequestComment
 
 
 getPullRequest :: (IOE :> es, W.HTTP :> es) => GitConn -> RepoRef -> Int -> Eff es (Either Text PullRequest)
@@ -749,7 +749,7 @@ fetchTree conn r prefix = runExceptT do
           sequence <$> forM es \e ->
             if not e.isBlob
               then pure $ Right e
-              else fmap (\blob -> (e{sha = Just (computeContentSha blob)} :: TreeEntry)) <$> fetchFile conn r e.path
+              else fmap (\blob -> e{sha = Just (computeContentSha blob)}) <$> fetchFile conn r e.path
 
 
 -- | The blob at @path@ in @r.ref@ — a branch name or a commit sha, since every host's read
