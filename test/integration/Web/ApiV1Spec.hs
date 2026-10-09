@@ -7,6 +7,8 @@ import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.Lens (key, _Array, _Number, _Object, _String)
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
+import Data.Effectful.Wreq (HTTP, runHTTPGolden, runHTTPRecord)
+import Data.List (lookup)
 import Data.List qualified as List
 import Data.Map qualified as Map
 import Data.OpenApi (OpenApi, info, title, version)
@@ -14,6 +16,7 @@ import Data.Text qualified as T
 import Data.Time (addUTCTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
+import Effectful (Eff, IOE, (:>))
 import Hasql.Interpolate qualified as HI
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.ProjectMembers qualified as PM
@@ -22,12 +25,13 @@ import Models.Telemetry.Schema qualified as Schema
 import Pages.Charts.Charts qualified as Charts
 import Pages.Charts.Types (MetricsData (..))
 import Pages.LogExplorer.Log qualified as Log
+import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Parser.Expr qualified as ParserExpr
 import Pkg.TestUtils
 import Relude
 import Servant (NoContent (..))
-import System.Types (ATBaseCtx, ApiPrincipal (..))
+import System.Types (ATBaseCtx, ApiPrincipal (..), effToServantHandlerTestHTTP)
 import Test.Hspec
 import Web.ApiHandlers qualified as ApiH
 import Web.ApiTypes qualified as ApiT
@@ -53,9 +57,13 @@ specJson = AE.toJSON apiV1OpenApiSpec
 
 -- | The whole server minus production's WAI middleware stack.
 topApp :: TestResources -> Wai.Application
-topApp tr =
+topApp = topAppWithHTTP (runHTTPGolden "./tests/golden/")
+
+
+topAppWithHTTP :: (forall x es. IOE :> es => Eff (HTTP ': es) x -> Eff es x) -> TestResources -> Wai.Application
+topAppWithHTTP http tr =
   genericServeTWithContext
-    (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
+    (effToServantHandlerTestHTTP http tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
     (Routes.server tr.trLogger tr.trATCtx tr.trTracerProvider (OtlpServer.httpTracesExport tr.trLogger tr.trATCtx tr.trTracerProvider) (OtlpServer.httpLogsExport tr.trLogger tr.trATCtx tr.trTracerProvider))
     (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
 
@@ -199,6 +207,34 @@ spec = around withTestResources do
                 "/api/v1/schema"
         resp <- WT.runSession (WT.srequest (WT.SRequest req "")) (topApp tr)
         H.statusCode (WT.simpleStatus resp) `shouldBe` 200
+
+    it "dashboardNew_returnsOnlyTheCreationForm" $ \tr -> do
+      resp <- WT.runSession (WT.srequest (WT.SRequest (WT.setPath Wai.defaultRequest "/p/00000000-0000-0000-0000-000000000000/dashboards/new") "")) (topApp tr)
+      H.statusCode (WT.simpleStatus resp) `shouldBe` 200
+      let body = decodeUtf8 @Text (WT.simpleBody resp)
+      for_ ["id=\"newDashboardForm\"", "data-template=\"nginx.yaml\""] $ \markup -> body `shouldSatisfy` T.isInfixOf markup
+      for_ ["<!DOCTYPE", "id=\"main-sidenav\"", "id=\"dashboardsTableContainer\""] $ \markup -> body `shouldSatisfy` (not . T.isInfixOf markup)
+
+    it "widgetJSON_rejectsLegacyAndUnknownFields" $ \tr -> do
+      for_ ([(Nothing, 200), (Just "arning_threshold", 400), (Just "unexpected_field", 400)] :: [(Maybe AEK.Key, Int)]) $ \(fieldM, status) -> do
+        let body = AE.encode $ case AE.toJSON ((def :: Widget.Widget){Widget.warningThreshold = Just 7}) of
+              AE.Object fields -> AE.Object $ fields <> foldMap (\field -> AEKM.singleton field (AE.toJSON (7 :: Double))) fieldM
+              value -> value
+            req = (WT.setPath Wai.defaultRequest "/p/00000000-0000-0000-0000-000000000000/widget"){Wai.requestMethod = H.methodPost, Wai.requestHeaders = [(H.hContentType, "application/json")]}
+        resp <- WT.runSession (WT.srequest (WT.SRequest req body)) (topApp tr)
+        H.statusCode (WT.simpleStatus resp) `shouldBe` status
+
+    it "avatar_usesLocalInitialsInsteadOfAnotherRemoteFallback" $ \tr -> do
+      let uid = (Servant.getResponse tr.trSessAndHeader).persistentSession.user.getUser.id
+      runHasqlEffect tr $ Hasql.interpExecute_ [HI.sql| UPDATE users.users SET display_image_url = '' WHERE id = #{uid} |]
+      requests <- newIORef []
+      resp <- WT.runSession (WT.srequest (WT.SRequest (WT.setPath Wai.defaultRequest (encodeUtf8 $ "/api/avatar/" <> uid.toText)) "")) (topAppWithHTTP (runHTTPRecord requests) tr)
+      H.statusCode (WT.simpleStatus resp) `shouldBe` 200
+      urls <- map fst <$> readIORef requests
+      urls `shouldSatisfy` \case
+        [url] -> "https://www.gravatar.com/avatar/" `T.isPrefixOf` url && "?d=404" `T.isSuffixOf` url
+        _ -> False
+      lookup H.hCacheControl (WT.simpleHeaders resp) `shouldBe` Just "public, max-age=604800"
 
     -- nginx keeps the first of duplicate Content-Type headers, which served the SVG
     -- fallback as application/octet-stream: a broken image in the sidebar.

@@ -1,4 +1,4 @@
-module Pages.BodyWrapper (bodyWrapper, BWConfig (..), PageCtx (..), NavigationResponse (..), navigationResponse, mkPageCtx, mkAIPageCtx, withSettingsPage, settingsContentTarget, navTabAttrs) where
+module Pages.BodyWrapper (bodyWrapper, BWConfig (..), PageCtx (..), NavigationResponse (..), navigationResponse, mkPageCtx, mkProjectPageCtx, mkAIPageCtx, withSettingsPage, settingsContentTarget, navTabAttrs) where
 
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default, def)
@@ -11,6 +11,7 @@ import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.Tuple.Extra (fst3, uncurry3)
 import Data.Vector qualified as V
 import Effectful (Eff, IOE, (:>))
+import Effectful.Concurrent.Async (concurrently)
 import Effectful.Reader.Static qualified as EffReader
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
@@ -38,20 +39,27 @@ import Web.I18n qualified as I18n
 -- a BWConfig with the always-set fields (sessM, currProject, config). Caller updates
 -- the returned BWConfig with handler-specific fields via record syntax.
 mkPageCtx :: Projects.ProjectId -> ATAuthCtx (Projects.Session, Projects.Project, BWConfig)
-mkPageCtx pid = do
-  (sess, project) <- Projects.sessionAndProject pid
-  appCtx <- EffReader.ask @AuthContext
-  now <- Time.currentTime
-  -- The learned facet values narrowed to the two pickers, so they offer exactly the
-  -- environments/services this project has reported. getFacetSummary ignores the time range.
-  facetsM <- SchemaCatalog.getFacetSummary (Just [envField, serviceField]) pid "otel_logs_and_spans" now now
-  activationProgressM <-
-    if V.elem "checklist_dismissed" project.onboardingStepsCompleted
-      then pure Nothing
-      else Just <$> activationProgress pid (V.elem "Integration" project.onboardingStepsCompleted)
-  conversations <- Issues.listConversations pid
+mkPageCtx = mkPageCtxWithScope True
+
+
+-- | Project lists have no telemetry scope; keep the checklist and conversation navigation.
+mkProjectPageCtx :: Projects.ProjectId -> ATAuthCtx (Projects.Session, Projects.Project, BWConfig)
+mkProjectPageCtx = mkPageCtxWithScope False
+
+
+mkPageCtxWithScope :: Bool -> Projects.ProjectId -> ATAuthCtx (Projects.Session, Projects.Project, BWConfig)
+mkPageCtxWithScope withScope pid = do
+  (sess, project, bw) <- mkAIPageCtx pid
+  let now = bw.shellNow
+  (facetsM, (activationProgressM, conversations)) <-
+    concurrently
+      (if withScope then SchemaCatalog.getFacetSummary (Just [envField, serviceField]) pid "otel_logs_and_spans" now now else pure Nothing)
+      ( concurrently
+          (if V.elem "checklist_dismissed" project.onboardingStepsCompleted then pure Nothing else Just <$> activationProgress pid (V.elem "Integration" project.onboardingStepsCompleted))
+          (Issues.listConversations pid)
+      )
   let options field = V.fromList $ sort [v.value | SchemaCatalog.FacetData m <- (.facetJson) <$> maybeToList facetsM, v <- HM.findWithDefault [] field m, not (T.null v.value)]
-  pure (sess, project, def{sessM = Just sess, currProject = Just project, config = appCtx.config, activationProgressM, conversations, envOptions = options envField, serviceOptions = options serviceField, needsTagify = True, shellNow = now})
+  pure (sess, project, bw{activationProgressM, conversations, envOptions = options envField, serviceOptions = options serviceField, needsTagify = True})
   where
     envField = "resource.deployment.environment.name"
     serviceField = "resource.service.name"
@@ -1023,7 +1031,9 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
             <> popoverTrigger_ "user-menu-pop"
         )
         do
-          img_ ([class_ "w-8 h-8 rounded-full bg-fillPress shrink-0 outline outline-1 outline-black/10 dark:outline-white/10", src_ $ "/api/avatar/" <> currUser.id.toText, alt_ userIdentifier] <> tippyRight_ userIdentifier)
+          span_ ([class_ "relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-fillPress text-xs font-medium text-textStrong outline outline-1 outline-black/10 dark:outline-white/10"] <> tippyRight_ userIdentifier) do
+            span_ [data_ "avatar-initials" "", Aria.hidden_ "true"] $ toHtml $ T.toUpper $ T.take 2 $ foldMap (T.take 1) $ words userIdentifier
+            img_ [class_ "absolute inset-0 h-8 w-8 rounded-full", src_ $ "/api/avatar/" <> currUser.id.toText, alt_ userIdentifier, loading_ "lazy", term "decoding" "async", width_ "32", height_ "32"]
           span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex items-center gap-1 overflow-hidden flex-1"] do
             span_ [class_ "truncate text-sm"] $ toHtml userIdentifier
             faSprite_ "chevron-down" "regular" "w-3 h-3 text-textWeak shrink-0 ml-auto transition-transform duration-150 rotate-180 group-focus-within/user:rotate-0"

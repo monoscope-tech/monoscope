@@ -45,9 +45,32 @@ async function openWidgetDrawer(page: Page) {
   await expect(page.locator("#visualizationTabs")).toBeVisible({ timeout: 20000 });
 }
 
-test("dashboard templates prefill the name and preview their own widgets", async ({ page }) => {
+test("a slow avatar does not block dashboard initialization", async ({ page }) => {
+  let releaseAvatar!: () => void;
+  const avatarReady = new Promise<void>((resolve) => { releaseAvatar = resolve; });
+  await page.route("**/api/avatar/**", async (route) => {
+    await avatarReady;
+    await route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="32" height="32" fill="red"/></svg>' });
+  });
+  try {
+    await page.goto(`/p/${DEMO_PROJECT}/dashboards`, { waitUntil: "load", timeout: 5000 });
+    await expect(page.locator("#dashboardsTableContainer")).toBeVisible();
+    await expect(page.locator('img[src^="/api/avatar/"]')).toHaveAttribute("loading", "lazy");
+    await expect(page.locator("[data-avatar-initials]")).toBeVisible();
+    await expect(page.locator("[data-avatar-initials]")).not.toBeEmpty();
+  } finally {
+    releaseAvatar();
+  }
+});
+
+test("dashboard templates load on opening, prefill the name and preview their own widgets", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto(`/p/${DEMO_PROJECT}/dashboards?new=true`);
+  await page.goto(`/p/${DEMO_PROJECT}/dashboards`);
+  await expect(page.locator("#dashboardTemplatePreviews")).toHaveCount(0);
+  const formResponse = page.waitForResponse((r) => r.url().endsWith(`/p/${DEMO_PROJECT}/dashboards/new`));
+  await page.locator('label[for="newDashboardMdl"]').first().click();
+  expect(await (await formResponse).text()).not.toContain("<!DOCTYPE");
+  await expect(page.locator("#dashboardTemplatePreviews")).toBeVisible();
   const modal = page.locator("#newDashboardMdl + .modal .modal-box");
   const preview = page.locator("#dashboardTemplatePreviews");
   const create = page.getByRole("button", { name: "Create", exact: true });
@@ -56,6 +79,7 @@ test("dashboard templates prefill the name and preview their own widgets", async
   const initial = { modal: await modal.boundingBox(), preview: await preview.boundingBox(), create: await create.boundingBox() };
   const name = page.getByRole("textbox", { name: "Dashboard name *", exact: true });
   await expect(name).toHaveValue("Blank dashboard");
+  await expect(name).toBeFocused();
   await page.locator("#dashListItemParent").getByText("Nginx", { exact: true }).click();
   await expect(name).toHaveValue("Nginx");
   await expect(page.locator('#dashboardTemplatePreviews [data-template="nginx.yaml"]')).toBeVisible();
@@ -70,6 +94,10 @@ test("dashboard templates prefill the name and preview their own widgets", async
   await page.locator("#dashListItemParent").getByText("Redis", { exact: true }).click();
   await expect(name).toHaveValue("My infrastructure");
   await expect(page.locator('#dashboardTemplatePreviews [data-template="redis.yaml"]')).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#newDashboardMdl")).not.toBeChecked();
+  await page.locator('label[for="newDashboardMdl"]').first().click();
+  await expect(name).toHaveValue("My infrastructure");
 });
 
 test("dashboard template selection stays visible and name focus ring is not clipped", async ({ page }) => {

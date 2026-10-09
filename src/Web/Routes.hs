@@ -508,6 +508,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , slackLinkProjectGet :: mode :- "slack" :> "oauth" :> "callback" :> QPT "code" :> QPT "state" :> LocationRedirect BotUtils.BotResponse
   , endpointDetailsRedirect :: mode :- "p" :> ProjectId :> "endpoints" :> "details" :> AllQueryParams :> LocationRedirect NoContent
   , rumDashboardRedirect :: mode :- "p" :> ProjectId :> "rum" :> "dashboard" :> AllQueryParams :> LocationRedirect NoContent
+  , dashboardNewGet :: mode :- "p" :> ProjectId :> "dashboards" :> "new" :> Get '[HTML] (RespHeaders Dashboards.DashboardNew)
   , dashboardsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> HXRequest :> AllQueryParams :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardGet))
   , dashboardsGetList :: mode :- "p" :> ProjectId :> "dashboards" :> QPT "sort" :> QPT "embedded" :> QueryParam "teamId" ApiT.TeamId :> QPT "copy_widget_id" :> QPUUId "source_dashboard_id" :> QPT "new" :> RecordParam KeepPrefixExp Dashboards.DashboardFilters :> Get '[HTML] (RespHeaders Dashboards.DashboardsGet)
   , dashboardsPost :: mode :- "p" :> ProjectId :> "dashboards" :> ReqBody '[FormUrlEncoded] Dashboards.DashboardForm :> Post '[HTML] (RespHeaders Dashboards.DashboardRes)
@@ -999,6 +1000,7 @@ cookieProtectedServer =
     , endpointDetailsRedirect = Dashboards.entrypointRedirectGetH "endpoint-stats.yaml" "Endpoint Analytics" ["endpoints", "http", "events"]
     , rumDashboardRedirect = Dashboards.entrypointRedirectGetH "rum.yaml" "Real User Monitoring" ["rum", "browser", "frontend", "web-vitals"]
     , dashboardsGet = Dashboards.dashboardGetH
+    , dashboardNewGet = Dashboards.dashboardNewGetH
     , dashboardsGetList = Dashboards.dashboardsGetH
     , dashboardsPost = Dashboards.dashboardsPostH
     , dashboardSettledPost = Dashboards.dashboardSettledPostH
@@ -1281,7 +1283,7 @@ avatarGetH userId _ send = do
   let name = foldMap (\u -> u.firstName <> " " <> u.lastName) userM
       initialsImg = pure ("image/svg+xml", "public, max-age=60", avatarInitialsSvg name)
       fetchImage url ct cache fallback = handle (\(_ :: SomeException) -> fallback) $ Wreq.get (toString url) <&> \r -> (ct, cache, r ^. Wreq.responseBody)
-      gravatar u = fetchImage (gravatarUrl (CI.original u.email) name) "image/png" "public, max-age=604800" initialsImg
+      gravatar u = fetchImage (gravatarUrl (CI.original u.email)) "image/png" "public, max-age=604800" initialsImg
   (ct, cache, body) <- case userM of
     Nothing -> initialsImg
     Just u
@@ -1290,13 +1292,13 @@ avatarGetH userId _ send = do
   liftIO $ send $ Wai.responseLBS H.status200 [(H.hContentType, ct), (H.hCacheControl, cache)] body
 
 
--- | Gravatar, defaulting to a ui-avatars initials image when the email has none.
+-- | Missing Gravatars fall back to locally rendered initials.
 --
--- >>> gravatarUrl "Foo@Example.com" "E2E Test"
--- "https://www.gravatar.com/avatar/b48def645758b95537d4424c84d1a9ff?d=https%3A%2F%2Fui-avatars.com%2Fapi%2FE2E%2BTest%2F128"
-gravatarUrl :: Text -> Text -> Text
-gravatarUrl email name =
-  "https://www.gravatar.com/avatar/" <> decodeUtf8 (B16.encode $ MD5.hash $ encodeUtf8 $ T.toLower email) <> "?d=" <> decodeUtf8 (H.urlEncode True $ encodeUtf8 $ "https://ui-avatars.com/api/" <> T.intercalate "+" (words name) <> "/128")
+-- >>> gravatarUrl "Foo@Example.com"
+-- "https://www.gravatar.com/avatar/b48def645758b95537d4424c84d1a9ff?d=404"
+gravatarUrl :: Text -> Text
+gravatarUrl email =
+  "https://www.gravatar.com/avatar/" <> decodeUtf8 (B16.encode $ MD5.hash $ encodeUtf8 $ T.toLower email) <> "?d=404"
 
 
 -- | Last-resort avatar, drawn locally so it renders when both remote sources fail.

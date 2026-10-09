@@ -373,7 +373,7 @@ slackActionsH action = do
       loadDashboard did = do
         requireAccess
         vm <- Dashboards.getDashboardByProjectId context.projectId did >>= maybe (throwError err403) pure
-        templates <- DashboardTemplates.getDashboardTemplates envCfg.liveReloadDashboards
+        templates <- DashboardTemplates.getDashboardTemplates envCfg
         maybe (throwError err400{errBody = "This dashboard is unavailable. Reopen /dashboard."}) pure $ DashboardTemplates.loadDashboardFromVM templates vm
       withWidget selected perform = do
         did <- maybe (throwError err400) pure context.dashboardId

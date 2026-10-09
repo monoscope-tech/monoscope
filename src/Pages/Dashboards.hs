@@ -8,6 +8,8 @@ module Pages.Dashboards (
   DashboardSettleSample (..),
   DashboardNavigation (..),
   dashboardsGetH,
+  dashboardNewGetH,
+  DashboardNew (..),
   DashboardsGet (..),
   DashboardFilters (..),
   dashboardsPostH,
@@ -73,7 +75,7 @@ import Data.Vector qualified as V
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, IOE, (:>))
 import Effectful.Concurrent (Concurrent)
-import Effectful.Concurrent.Async (pooledForConcurrently)
+import Effectful.Concurrent.Async (concurrently, pooledForConcurrently)
 import Effectful.Error.Static (Error, throwError)
 import Effectful.Labeled qualified
 import Effectful.Log (Log)
@@ -1318,7 +1320,7 @@ updateTabBySlug slug f dash = dash & #tabs %~ fmap (map updateTab)
 getDashAndVM :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, Wreq.HTTP :> es) => Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Eff es (Dashboards.DashboardVM, Dashboards.Dashboard)
 getDashAndVM pid dashId fileM = do
   appCtx <- ask @AuthContext
-  templates <- getDashboardTemplates appCtx.config.liveReloadDashboards
+  templates <- getDashboardTemplates appCtx.config
   dashVM <-
     Dashboards.getDashboardByProjectId pid dashId
       `whenNothingM` throwError err404{errBody = "Dashboard with ID not found. ID:" <> encodeUtf8 dashId.toText}
@@ -1956,81 +1958,109 @@ starButton_ pid dashId isStarred =
     <> if isStarred then "text-iconWarning" else "text-iconNeutral"
 
 
+data DashboardNew = DashboardNew
+  { projectId :: Projects.ProjectId
+  , teams :: V.Vector ManageMembers.Team
+  , dashTemplates :: [Dashboards.Dashboard]
+  }
+
+
+instance ToHtml DashboardNew where
+  toHtml = toHtml . dashboardNewForm_
+  toHtmlRaw = toHtml
+
+
+dashboardNewForm_ :: DashboardNew -> Html ()
+dashboardNewForm_ dg = form_
+  [ id_ "newDashboardForm"
+  , class_ "-m-1 flex flex-col gap-5 overflow-y-auto p-1 md:min-h-0 md:flex-row md:overflow-hidden group/md"
+  , style_ "height:min(80vh,48rem)"
+  , hxPost_ $ "/p/" <> dg.projectId.toText <> "/dashboards"
+  , hxVals_ "js:{ teams: window.getTagValues('#teamHandlesInput') }"
+  ]
+  do
+    div_ [class_ "flex max-h-48 shrink-0 flex-col gap-3 md:max-h-none md:w-72"] do
+      div_ [class_ "flex flex-col gap-2 border-b pb-4"] do
+        strong_ "Create dashboard"
+        label_ [class_ "input input-sm flex items-center "] do
+          faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
+          input_
+            [ type_ "search"
+            , class_ "grow pl-2"
+            , placeholder_ "Find a template"
+            , Aria.label_ "Find a dashboard template"
+            , filterInputAttr_ ".dashboardListItem in #dashListItemParent"
+            ]
+      div_ [class_ "min-h-0 space-y-1 overflow-auto", id_ "dashListItemParent"] do
+        renderDashboardListItem True "Blank dashboard" "" (Just "Start with an empty dashboard") (Just "cards-blank")
+        forM_ dg.dashTemplates \dashTmpl ->
+          renderDashboardListItem False (maybeToMonoid dashTmpl.title) (maybeToMonoid dashTmpl.file) dashTmpl.description dashTmpl.icon
+
+    div_ [class_ "flex min-w-0 shrink-0 flex-col gap-4 md:min-h-0 md:flex-1"] do
+      div_ [class_ "grid shrink-0 grid-cols-1 gap-3 sm:grid-cols-3 [&_.input]:h-12 [&_.tagify]:h-12 [&_.tagify]:min-h-12 [&_.tagify]:overflow-y-auto"] do
+        formField_ FieldSm def{value = "Blank dashboard", extraAttrs = [autofocus_, data_ "template-title" "Blank dashboard"]} "Dashboard name" "title" True Nothing
+        let teamList = encodeText $ (\x -> AE.object ["name" AE..= ("@" <> x.handle), "value" AE..= x.id]) <$> dg.teams
+        formField_ FieldSm def{placeholder = "Add teams"} "Teams" "teamHandlesInput" False $ Just $ tagInput_ "teamHandlesInput" "Add teams" [rows_ "1", data_ "tagify-text-prop" "name", data_ "tagify-whitelist" teamList, data_ "tagify-resolve" "", data_ "tagify-initial" $ encodeText $ V.map (.id) $ V.filter (.is_everyone) dg.teams]
+        formField_ FieldSm def{placeholder = "reports/"} "Folder" "fileDir" False Nothing
+      p_ [class_ "shrink-0 text-sm text-textWeak", id_ "dItemDescription"] "Start with an empty dashboard"
+      div_ [id_ "dashboardTemplatePreviews", class_ "h-80 shrink-0 md:min-h-0 md:h-auto md:flex-1"] do
+        div_ [data_ "template" "", class_ "h-full"] $ div_ [class_ "flex h-full min-h-80 flex-col overflow-hidden rounded-xl border border-strokeWeak bg-bgRaised"] do
+          div_ [class_ "flex items-center justify-between border-b border-strokeWeak px-4 py-3"] do
+            span_ [class_ "text-sm font-medium text-textStrong"] "Empty canvas"
+            span_ [class_ "text-xs text-textWeak"] "Layout preview"
+          div_ [class_ "flex flex-1 items-center justify-center bg-fillWeaker p-6"]
+            $ div_ [class_ "flex w-full max-w-sm flex-col items-center gap-3 rounded-xl border border-dashed border-strokeWeak bg-bgRaised px-6 py-10 text-center"] do
+              span_ [class_ "rounded-lg bg-fillBrand-weak p-3 text-textBrand"] $ faSprite_ "chart-line" "regular" "h-5 w-5"
+              span_ [class_ "text-sm font-medium text-textStrong"] "Your first chart goes here"
+              span_ [class_ "text-xs text-textWeak"] "Start with a blank canvas and add widgets after creating it."
+        forM_ dg.dashTemplates \dashTmpl -> do
+          let firstTab = dashTmpl.tabs >>= listToMaybe
+              widgets = filter ((/= Widget.WTGroup) . (.wType)) $ foldMap (universeOf (#children . _Just . folded)) $ maybe dashTmpl.widgets (.widgets) firstTab
+          div_ [data_ "template" $ maybeToMonoid dashTmpl.file, class_ "h-full", hidden_ ""]
+            $ div_ [class_ "flex h-full min-h-80 flex-col overflow-hidden rounded-xl border border-strokeWeak bg-bgRaised"] do
+              div_ [class_ "flex items-center justify-between gap-3 border-b border-strokeWeak px-4 py-3"] do
+                span_ [class_ "truncate text-sm font-medium text-textStrong"] $ toHtml $ fromMaybe "Dashboard" dashTmpl.title
+                span_ [class_ "shrink-0 text-xs text-textWeak"] "Layout preview · no live data"
+              div_ [class_ "min-h-0 flex-1 overflow-y-auto bg-fillWeaker p-3"] $ div_ [class_ "grid grid-cols-12 gap-2"] do
+                forM_ (take 24 widgets) \widget ->
+                  div_
+                    [ class_
+                        $ "col-span-6 flex min-h-28 min-w-0 flex-col rounded-lg border border-strokeWeak bg-bgRaised p-3 "
+                        <> ( case widget.layout >>= (.w) of
+                               Just w | w <= 3 -> "sm:col-span-3"
+                               Just w | w <= 4 -> "sm:col-span-4"
+                               Just w | w <= 6 -> "sm:col-span-6"
+                               _ -> "sm:col-span-12"
+                           )
+                    ]
+                    do
+                      p_ [class_ "truncate text-xs font-medium text-textStrong", title_ $ fromMaybe "Untitled widget" widget.title] $ toHtml $ fromMaybe "Untitled widget" widget.title
+                      p_ [class_ "mt-1 text-[10px] text-textWeak"] $ toHtml $ T.toTitle $ T.replace "_" " " $ toText $ encodeEnumSC @"WT" widget.wType
+                      if widget.wType `elem` [Widget.WTStat, Widget.WTTimeseriesStat]
+                        then div_ [class_ "mt-auto pt-3"] do
+                          div_ [class_ "h-5 w-16 rounded bg-fillBrand-weak"] ""
+                          div_ [class_ "mt-2 h-1.5 w-24 max-w-full rounded bg-fillWeak"] ""
+                        else div_ [class_ "mt-auto flex h-12 items-end gap-1 border-b border-strokeWeak pt-3"] do
+                          forM_ [5, 7, 4, 9, 6, 8, 5] \height ->
+                            div_ [class_ "max-w-4 flex-1 rounded-t bg-fillBrand-weak", style_ $ "height:" <> show (height * 10) <> "%"] ""
+                when (length widgets > 24) $ p_ [class_ "col-span-12 py-2 text-center text-xs text-textWeak"] $ toHtml $ "+ " <> show (length widgets - 24) <> " more widgets"
+      div_ [class_ "flex shrink-0 justify-end border-t border-strokeWeak pt-3"] $ primaryButton_ [type_ "submit"] "Create"
+
+
 dashboardsGet_ :: DashboardsGetD -> Html ()
 dashboardsGet_ dg = do
-  unless dg.embedded $ Components.modalWith_ "newDashboardMdl" def{autoOpen = dg.showNew, boxClass = "max-w-none", boxStyle = "width:min(92vw,76rem);max-width:none;overflow:clip"} Nothing $ form_
-    [ class_ "-m-1 flex flex-col gap-5 overflow-y-auto p-1 md:min-h-0 md:flex-row md:overflow-hidden group/md"
-    , style_ "height:min(80vh,48rem)"
-    , hxPost_ $ "/p/" <> dg.projectId.toText <> "/dashboards"
-    , hxVals_ "js:{ teams: window.getTagValues('#teamHandlesInput') }"
-    ]
-    do
-      div_ [class_ "flex max-h-48 shrink-0 flex-col gap-3 md:max-h-none md:w-72"] do
-        div_ [class_ "flex flex-col gap-2 border-b pb-4"] do
-          strong_ "Create dashboard"
-          label_ [class_ "input input-sm flex items-center "] do
-            faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
-            input_
-              [ type_ "search"
-              , class_ "grow pl-2"
-              , placeholder_ "Find a template"
-              , Aria.label_ "Find a dashboard template"
-              , filterInputAttr_ ".dashboardListItem in #dashListItemParent"
-              ]
-        div_ [class_ "min-h-0 space-y-1 overflow-auto", id_ "dashListItemParent"] do
-          renderDashboardListItem True "Blank dashboard" "" (Just "Start with an empty dashboard") (Just "cards-blank")
-          forM_ dg.dashTemplates \dashTmpl ->
-            renderDashboardListItem False (maybeToMonoid dashTmpl.title) (maybeToMonoid dashTmpl.file) dashTmpl.description dashTmpl.icon
-
-      div_ [class_ "flex min-w-0 shrink-0 flex-col gap-4 md:min-h-0 md:flex-1"] do
-        div_ [class_ "grid shrink-0 grid-cols-1 gap-3 sm:grid-cols-3 [&_.input]:h-12 [&_.tagify]:h-12 [&_.tagify]:min-h-12 [&_.tagify]:overflow-y-auto"] do
-          formField_ FieldSm def{value = "Blank dashboard", extraAttrs = [data_ "template-title" "Blank dashboard"]} "Dashboard name" "title" True Nothing
-          let teamList = encodeText $ (\x -> AE.object ["name" AE..= ("@" <> x.handle), "value" AE..= x.id]) <$> dg.teams
-          formField_ FieldSm def{placeholder = "Add teams"} "Teams" "teamHandlesInput" False $ Just $ tagInput_ "teamHandlesInput" "Add teams" [rows_ "1", data_ "tagify-text-prop" "name", data_ "tagify-whitelist" teamList, data_ "tagify-resolve" "", data_ "tagify-initial" $ encodeText $ V.map (.id) $ V.filter (.is_everyone) dg.teams]
-          formField_ FieldSm def{placeholder = "reports/"} "Folder" "fileDir" False Nothing
-        p_ [class_ "shrink-0 text-sm text-textWeak", id_ "dItemDescription"] "Start with an empty dashboard"
-        div_ [id_ "dashboardTemplatePreviews", class_ "h-80 shrink-0 md:min-h-0 md:h-auto md:flex-1"] do
-          div_ [data_ "template" "", class_ "h-full"] $ div_ [class_ "flex h-full min-h-80 flex-col overflow-hidden rounded-xl border border-strokeWeak bg-bgRaised"] do
-            div_ [class_ "flex items-center justify-between border-b border-strokeWeak px-4 py-3"] do
-              span_ [class_ "text-sm font-medium text-textStrong"] "Empty canvas"
-              span_ [class_ "text-xs text-textWeak"] "Layout preview"
-            div_ [class_ "flex flex-1 items-center justify-center bg-fillWeaker p-6"]
-              $ div_ [class_ "flex w-full max-w-sm flex-col items-center gap-3 rounded-xl border border-dashed border-strokeWeak bg-bgRaised px-6 py-10 text-center"] do
-                span_ [class_ "rounded-lg bg-fillBrand-weak p-3 text-textBrand"] $ faSprite_ "chart-line" "regular" "h-5 w-5"
-                span_ [class_ "text-sm font-medium text-textStrong"] "Your first chart goes here"
-                span_ [class_ "text-xs text-textWeak"] "Start with a blank canvas and add widgets after creating it."
-          forM_ dg.dashTemplates \dashTmpl -> do
-            let firstTab = dashTmpl.tabs >>= listToMaybe
-                widgets = filter ((/= Widget.WTGroup) . (.wType)) $ foldMap (universeOf (#children . _Just . folded)) $ maybe dashTmpl.widgets (.widgets) firstTab
-            div_ [data_ "template" $ maybeToMonoid dashTmpl.file, class_ "h-full", hidden_ ""]
-              $ div_ [class_ "flex h-full min-h-80 flex-col overflow-hidden rounded-xl border border-strokeWeak bg-bgRaised"] do
-                div_ [class_ "flex items-center justify-between gap-3 border-b border-strokeWeak px-4 py-3"] do
-                  span_ [class_ "truncate text-sm font-medium text-textStrong"] $ toHtml $ fromMaybe "Dashboard" dashTmpl.title
-                  span_ [class_ "shrink-0 text-xs text-textWeak"] "Layout preview · no live data"
-                div_ [class_ "min-h-0 flex-1 overflow-y-auto bg-fillWeaker p-3"] $ div_ [class_ "grid grid-cols-12 gap-2"] do
-                  forM_ (take 24 widgets) \widget ->
-                    div_
-                      [ class_
-                          $ "col-span-6 flex min-h-28 min-w-0 flex-col rounded-lg border border-strokeWeak bg-bgRaised p-3 "
-                          <> ( case widget.layout >>= (.w) of
-                                 Just w | w <= 3 -> "sm:col-span-3"
-                                 Just w | w <= 4 -> "sm:col-span-4"
-                                 Just w | w <= 6 -> "sm:col-span-6"
-                                 _ -> "sm:col-span-12"
-                             )
-                      ]
-                      do
-                        p_ [class_ "truncate text-xs font-medium text-textStrong", title_ $ fromMaybe "Untitled widget" widget.title] $ toHtml $ fromMaybe "Untitled widget" widget.title
-                        p_ [class_ "mt-1 text-[10px] text-textWeak"] $ toHtml $ T.toTitle $ T.replace "_" " " $ toText $ encodeEnumSC @"WT" widget.wType
-                        if widget.wType `elem` [Widget.WTStat, Widget.WTTimeseriesStat]
-                          then div_ [class_ "mt-auto pt-3"] do
-                            div_ [class_ "h-5 w-16 rounded bg-fillBrand-weak"] ""
-                            div_ [class_ "mt-2 h-1.5 w-24 max-w-full rounded bg-fillWeak"] ""
-                          else div_ [class_ "mt-auto flex h-12 items-end gap-1 border-b border-strokeWeak pt-3"] do
-                            forM_ [5, 7, 4, 9, 6, 8, 5] \height ->
-                              div_ [class_ "max-w-4 flex-1 rounded-t bg-fillBrand-weak", style_ $ "height:" <> show (height * 10) <> "%"] ""
-                  when (length widgets > 24) $ p_ [class_ "col-span-12 py-2 text-center text-xs text-textWeak"] $ toHtml $ "+ " <> show (length widgets - 24) <> " more widgets"
-        div_ [class_ "flex shrink-0 justify-end border-t border-strokeWeak pt-3"] $ primaryButton_ [type_ "submit"] "Create"
+  unless dg.embedded
+    $ Components.modalWith_ "newDashboardMdl" def{autoOpen = dg.showNew, boxClass = "max-w-none", boxStyle = "width:min(92vw,76rem);max-width:none;overflow:clip"} Nothing
+    $ if not dg.showNew
+      then
+        div_
+          [ id_ "newDashboardForm"
+          , hxGet_ $ "/p/" <> dg.projectId.toText <> "/dashboards/new"
+          , hxTrigger_ "change[target.checked] from:#newDashboardMdl"
+          , hxSwap_ "outerHTML"
+          ]
+          $ p_ [class_ "py-8 text-center text-sm text-textWeak", role_ "status"] "Loading dashboard templates…"
+      else dashboardNewForm_ $ DashboardNew dg.projectId dg.teams dg.dashTemplates
 
   div_ [id_ "itemsListPage", class_ "mx-auto gap-8 w-full flex flex-col group/pg"] do
     let getTeams x = mapMaybe (\xx -> find (\t -> t.id == xx) dg.teams) (V.toList x.teams)
@@ -2196,9 +2226,17 @@ activeFilters_ pid baseUrl filters = div_ [class_ "flex items-center gap-2 mb-4"
     "Clear all"
 
 
+dashboardNewGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders DashboardNew)
+dashboardNewGetH pid = do
+  void $ Projects.sessionAndProject pid
+  appCtx <- ask @AuthContext
+  (teams, templates) <- concurrently (V.fromList <$> ManageMembers.getTeams pid) (getDashboardTemplates appCtx.config)
+  addRespHeaders $ DashboardNew pid teams templates
+
+
 dashboardsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe ManageMembers.TeamId -> Maybe Text -> Maybe UUID.UUID -> Maybe Text -> DashboardFilters -> ATAuthCtx (RespHeaders DashboardsGet)
 dashboardsGetH pid sortM embeddedM teamIdM copyWidgetIdM sourceDashIdM newM filters = do
-  (_, project, bw) <- mkPageCtx pid
+  (_, project, bw) <- mkProjectPageCtx pid
 
   -- Sort and filter configuration
   let currentSort = fromMaybe "-updated_at" sortM
@@ -2208,17 +2246,19 @@ dashboardsGetH pid sortM embeddedM teamIdM copyWidgetIdM sourceDashIdM newM filt
       currentParams = "?sort=" <> toUriStr currentSort <> foldMap (\t -> "&tag=" <> toUriStr t) filters.tag
       baseUrl = basePath <> currentParams
 
-  dashboards' <- case teamIdM of
-    Just teamId -> V.fromList <$> Dashboards.selectDashboardsByTeam pid teamId
-    Nothing -> V.fromList <$> Dashboards.selectDashboardsSortedBy pid orderByClause
+  (dashboards', teams) <-
+    concurrently
+      ( case teamIdM of
+          Just teamId -> V.fromList <$> Dashboards.selectDashboardsByTeam pid teamId
+          Nothing -> V.fromList <$> Dashboards.selectDashboardsSortedBy pid orderByClause
+      )
+      (V.fromList <$> ManageMembers.getTeams pid)
 
   -- Collect all available tags from all dashboards (before filtering)
   let availableTags = ordNub $ concatMap (V.toList . (.tags)) (V.toList dashboards')
 
   -- Apply tag filtering
   let dashboards = if null filters.tag then dashboards' else V.filter (\d -> any (`elem` filters.tag) (V.toList d.tags)) dashboards'
-
-  teams <- V.fromList <$> ManageMembers.getTeams pid
 
   -- Check if we're requesting in embedded mode (for modals, etc.)
   let embedded = maybe False (`elem` ["true", "1", "yes"]) embeddedM
@@ -2227,7 +2267,7 @@ dashboardsGetH pid sortM embeddedM teamIdM copyWidgetIdM sourceDashIdM newM filt
       -- (an ad-hoc widget being added), not a reason to fall back to the plain list.
       copyMode = copyWidgetIdM <&> (,UUIDId <$> sourceDashIdM)
 
-  templates <- getDashboardTemplates bw.config.liveReloadDashboards
+  templates <- getDashboardTemplates bw.config
   if embedded || isTeamView
     then -- For embedded/team mode, use a minimal BWConfig that will still work with ToHtml instance
       addRespHeaders $ DashboardsGetSlim DashboardsGetD{dashboards, projectId = pid, embedded, hideActions = isTeamView, teams, tableActions = Nothing, filters, copyMode, dashTemplates = templates, showNew = False}
@@ -2238,7 +2278,6 @@ dashboardsGetH pid sortM embeddedM teamIdM copyWidgetIdM sourceDashIdM newM filt
               { pageTitle = "Dashboards"
               , freeTierStatus = freeTierStatus
               , headContent = Just dashboardHeadContent_
-              , serviceOptions = V.empty
               , pageActions = Just $ label_ [Lucid.for_ "newDashboardMdl", class_ "btn btn-sm btn-primary gap-2"] do
                   faSprite_ "plus" "regular" "h-4 w-4"
                   "New Dashboard"
@@ -2286,7 +2325,7 @@ dashboardsPostH pid form = do
   appCtx <- ask @AuthContext
   now <- Time.currentTime
   did <- UUIDId <$> UUID.genUUID
-  templates <- getDashboardTemplates appCtx.config.liveReloadDashboards
+  templates <- getDashboardTemplates appCtx.config
   if form.title == ""
     then toastError "Dashboard title is required" (DashboardPostError "Dashboard title is required")
     else do

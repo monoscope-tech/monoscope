@@ -21,7 +21,9 @@ import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PG
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ qualified as SqlQQ
+import Database.PostgreSQL.Simple.Types (Query (..))
 import GHC.Clock (getMonotonicTime)
 import Lucid (renderText, toHtml)
 import Models.Apis.Endpoints qualified as Endpoints
@@ -144,6 +146,22 @@ reorder wid x y w h = Map.singleton wid (def :: Dashboards.WidgetReorderItem){Da
 spec :: Spec
 spec = sequential $ aroundAll withTestResources do
   describe "Widget type contract" do
+    it "widgetWarningThresholdMigration_repairsNestedKeysAndPreservesCanonicalValues" \tr -> do
+      dashId <- newDashboard tr "" "Legacy warning thresholds"
+      let legacy = "{\"widgets\":[{\"type\":\"stat\",\"arning_threshold\":7,\"query\":\"arning_threshold\"},{\"type\":\"group\",\"children\":[{\"type\":\"stat\",\"warning_threshold\":9,\"arning_threshold\":4},{\"type\":\"stat\",\"arning_threshold\":null}]}],\"tabs\":[{\"name\":\"Nested\",\"widgets\":[{\"type\":\"stat\",\"arning_threshold\":3}]}]}" :: Text
+          expected = "{\"widgets\":[{\"type\":\"stat\",\"warning_threshold\":7,\"query\":\"arning_threshold\"},{\"type\":\"group\",\"children\":[{\"type\":\"stat\",\"warning_threshold\":9},{\"type\":\"stat\",\"warning_threshold\":null}]}],\"tabs\":[{\"name\":\"Nested\",\"widgets\":[{\"type\":\"stat\",\"warning_threshold\":3}]}]}"
+      migration <- Query <$> readFileBS "static/migrations/0212_widget_warning_threshold.sql"
+      withResource tr.trPool \conn -> PG.withTransaction conn do
+        void $ PG.execute conn "UPDATE projects.dashboards SET schema = ?::jsonb WHERE id = ?" (legacy, dashId)
+        AE.eitherDecodeStrict' @DashboardModel.Dashboard (encodeUtf8 legacy) `shouldSatisfy` isLeft
+        replicateM_ 2 do
+          void $ PG.execute_ conn migration
+          [PG.Only (Aeson actual)] <- PG.query conn "SELECT schema FROM projects.dashboards WHERE id = ?" (PG.Only dashId)
+          Right actual `shouldBe` AE.eitherDecode @AE.Value expected
+          AE.fromJSON @DashboardModel.Dashboard actual `shouldSatisfy` \case
+            AE.Success _ -> True
+            AE.Error _ -> False
+
     -- The wire tag is what every stored dashboard YAML and every saved widget already
     -- contains. Renaming a constructor silently orphans them, and nothing else notices.
     it "every widget type round-trips through its JSON tag" \_ -> do
