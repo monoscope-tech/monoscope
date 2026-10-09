@@ -114,6 +114,7 @@ listProjectsGetH = do
   let bwconf = bw{currProject = Nothing, pageTitle = "Projects", hideNavbar = True, pageActions = Nothing}
 
   projects <- V.fromList <$> Projects.selectProjectsForUser sess.persistentSession.userId
+  restrictedProjectTitles <- Projects.restrictedFreeProjectTitles sess.persistentSession.userId
   let demoProject =
         (def :: Projects.ProjectListItem)
           { Projects.title = project.title
@@ -121,22 +122,25 @@ listProjectsGetH = do
           , Projects.createdAt = project.createdAt
           }
 
-  if V.null projects && not appCtx.env.showDemoProject
+  if V.null projects && null restrictedProjectTitles && not appCtx.env.showDemoProject
     then throwError $ err302{errHeaders = [("Location", "/p/new")]}
-    else addRespHeaders $ ListProjectsGet $ PageCtx bwconf (projects, demoProject, appCtx.env.showDemoProject)
+    else addRespHeaders $ ListProjectsGet (PageCtx bwconf (projects, demoProject, appCtx.env.showDemoProject)) restrictedProjectTitles
 
 
-newtype ListProjectsGet = ListProjectsGet {unwrap :: PageCtx (V.Vector Projects.ProjectListItem, Projects.ProjectListItem, Bool)}
+data ListProjectsGet = ListProjectsGet
+  { unwrap :: PageCtx (V.Vector Projects.ProjectListItem, Projects.ProjectListItem, Bool)
+  , restrictedProjectTitles :: [Text]
+  }
   deriving stock (Show)
 
 
 instance ToHtml ListProjectsGet where
-  toHtml (ListProjectsGet (PageCtx bwconf (projects, demoProject, showDemoProject))) = toHtml $ PageCtx bwconf $ listProjectsBody bwconf.sessM projects demoProject showDemoProject
+  toHtml (ListProjectsGet (PageCtx bwconf (projects, demoProject, showDemoProject)) restrictedProjectTitles) = toHtml $ PageCtx bwconf $ listProjectsBody bwconf.sessM projects demoProject showDemoProject restrictedProjectTitles
   toHtmlRaw = toHtml
 
 
-listProjectsBody :: Maybe Projects.Session -> V.Vector Projects.ProjectListItem -> Projects.ProjectListItem -> Bool -> Html ()
-listProjectsBody sessM projects demoProject showDemoProject = do
+listProjectsBody :: Maybe Projects.Session -> V.Vector Projects.ProjectListItem -> Projects.ProjectListItem -> Bool -> [Text] -> Html ()
+listProjectsBody sessM projects demoProject showDemoProject restrictedProjectTitles = do
   nav_ [class_ "fixed top-0 left-0 right-0 bg-bgBase border-b border-strokeWeak z-50"] do
     div_ [class_ "flex items-center justify-between px-4 py-3"] do
       a_ [href_ "/", class_ "flex items-center"] do
@@ -161,6 +165,10 @@ listProjectsBody sessM projects demoProject showDemoProject = do
     div_ [class_ "flex justify-between items-center mb-8"] do
       h2_ [class_ "text-textStrong text-3xl font-semibold"] "Projects"
       a_ [class_ "btn btn-primary btn-sm", href_ "/p/new"] (faSprite_ "plus" "regular" "h-4 w-4 mr-2" >> "New Project")
+
+    forM_ restrictedProjectTitles \title -> div_ [class_ "mb-4"] $ infoBanner_ do
+      strong_ $ toHtml title
+      " is on the Free plan. Only the project owner can access it. Ask the owner to upgrade to enable team access."
 
     unless (V.null projects) $ div_ [class_ "mb-12"] do
       h3_ [class_ "text-textWeak text-lg font-medium mb-4"] "Your Projects"

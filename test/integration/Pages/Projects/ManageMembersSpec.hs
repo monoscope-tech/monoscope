@@ -22,6 +22,7 @@ import Pages.Projects qualified as ManageMembers
 import Pkg.TestUtils
 import Relude
 import Relude.Unsafe qualified as Unsafe
+import System.Config qualified as Config
 import Test.Hspec
 
 
@@ -53,6 +54,12 @@ spec = sequential $ aroundAll withTestResources do
       runQueryEffect tr $ Projects.insertSession sid invitee.userId def
       session <- runQueryEffect tr (Projects.getPersistentSession sid) >>= maybe (fail "Session missing") pure
       map (.id) (V.toList session.projects.getProjects) `shouldNotContain` [testPid]
+      let appCtx = tr.trATCtx
+          inviteeResources = tr{trATCtx = appCtx{Config.env = appCtx.env{Config.showDemoProject = True}}, trSessAndHeader = tr.trSessAndHeader <&> \s -> s{Projects.user = session.user.getUser, Projects.persistentSession = session}}
+      (_, restrictedPage) <- testServant inviteeResources ManageMembers.listProjectsGetH
+      LT.toStrict (renderText $ toHtml restrictedPage) `shouldSatisfy` T.isInfixOf "Only the project owner can access it. Ask the owner to upgrade to enable team access."
+      (_, withoutDemo) <- testServant inviteeResources{trATCtx = appCtx} ManageMembers.listProjectsGetH
+      withoutDemo.restrictedProjectTitles `shouldBe` restrictedPage.restrictedProjectTitles
       void $ withPool tr.trPool $ PGT.execute [sql|INSERT INTO apis.slack (project_id, team_id, channel_id, team_name, bot_token) VALUES (?, 'T_FREE', 'C_FREE', 'Free project', 'test-token') ON CONFLICT (project_id) DO UPDATE SET team_id = 'T_FREE'|] (Only testPid)
       slackProjects <- runQueryEffect tr $ Integrations.slackLinkProjects "T_FREE" invitee.userId
       length slackProjects `shouldBe` 0
@@ -65,6 +72,8 @@ spec = sequential $ aroundAll withTestResources do
       runQueryEffect tr (ProjectMembers.getUserPermission testPid invitee.userId) >>= (`shouldBe` Just ProjectMembers.PView)
       upgradedUsers <- runQueryEffect tr $ Projects.usersByProjectId testPid
       map (.email) upgradedUsers `shouldContain` ["free-invitee@example.com"]
+      (_, upgradedPage) <- testServant inviteeResources ManageMembers.listProjectsGetH
+      LT.toStrict (renderText $ toHtml upgradedPage) `shouldNotSatisfy` T.isInfixOf "Only the project owner can access it."
 
     it "invite form posts to the project members endpoint" \tr -> do
       (_, page) <- testServant tr $ ManageMembers.manageMembersGetH testPid

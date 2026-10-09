@@ -24,6 +24,7 @@ module Models.Projects.Projects (
   accessibleMembership,
   usersByIds,
   selectProjectsForUser,
+  restrictedFreeProjectTitles,
   getProjectByPhoneNumber,
   activeProjects,
   activeNonOnboardingProjectIds,
@@ -613,6 +614,17 @@ selectProjectsForUser uid = do
       |]
     <> accessibleMembership
     <> [HI.sql| ORDER BY p.updated_at DESC |]
+
+
+restrictedFreeProjectTitles :: DB es => UserId -> Eff es [Text]
+restrictedFreeProjectTitles uid =
+  EHasql.interp
+    [HI.sql| SELECT p.title FROM projects.projects p
+      JOIN projects.project_members pm ON pm.project_id = p.id
+      WHERE pm.user_id = #{uid} AND pm.deleted_at IS NULL AND p.deleted_at IS NULL
+        AND lower(p.payment_plan) = 'free' AND pm.user_id <> (
+          SELECT user_id FROM projects.project_members WHERE project_id = p.id ORDER BY created_at, id LIMIT 1)
+      ORDER BY p.updated_at DESC |]
 
 
 usersByProjectId :: DB es => ProjectId -> Eff es [User]
