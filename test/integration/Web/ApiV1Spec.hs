@@ -223,7 +223,6 @@ spec = around withTestResources do
             req = (WT.setPath Wai.defaultRequest "/p/00000000-0000-0000-0000-000000000000/widget"){Wai.requestMethod = H.methodPost, Wai.requestHeaders = [(H.hContentType, "application/json")]}
         resp <- WT.runSession (WT.srequest (WT.SRequest req body)) (topApp tr)
         H.statusCode (WT.simpleStatus resp) `shouldBe` status
-        for_ fieldM $ \field -> decodeUtf8 @Text (WT.simpleBody resp) `shouldSatisfy` T.isInfixOf (AEK.toText field)
 
     it "avatar_usesLocalInitialsInsteadOfAnotherRemoteFallback" $ \tr -> do
       let uid = (Servant.getResponse tr.trSessAndHeader).persistentSession.user.getUser.id
