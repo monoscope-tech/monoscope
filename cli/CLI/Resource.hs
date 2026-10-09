@@ -423,11 +423,11 @@ runApplyResource cfg k path mode = do
       )
   when (null paths)
     $ printError ("no applyable (.yaml/.yml/.json) files in " <> toText path)
-      >> liftIO exitFailure
+    >> liftIO exitFailure
   failures <- sum <$> forM paths (\p -> applyOne cfg k p mode)
   when (failures > 0)
     $ printError (show failures <> " file(s) failed to apply")
-      >> liftIO exitFailure
+    >> liftIO exitFailure
 
 
 isApplyable :: FilePath -> Bool
