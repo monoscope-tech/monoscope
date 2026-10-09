@@ -348,8 +348,8 @@ data WidgetDataset = WidgetDataset
 -- count, so shaping the query without picking the matching 'Charts.DataType'
 -- (or vice versa) fails the whole widget with a column-count mismatch.
 --
---   * plotted widgets count filters per time bin, or add time bins to an
---     existing aggregation without changing its measurement;
+--   * plotted widgets count filters per time bin, or add time bins to the
+--     final aggregation without changing its measurement;
 --   * a stat reads one scalar, so it only needs an aggregation when the query
 --     has none; binning it would yield a three-column series;
 --   * row-oriented widgets project their own columns and are passed through.
@@ -360,10 +360,16 @@ data WidgetDataset = WidgetDataset
 -- (Just "summarize count(*) by bin_auto(timestamp)",DTMetric)
 -- >>> chartQuery (def & #query ?~ "metrics | summarize max(value)")
 -- (Just "metrics | summarize max(value) by bin_auto(timestamp)",DTMetric)
+-- >>> chartQuery (def & #query ?~ "metrics | summarize max(value) | summarize min(value)")
+-- (Just "metrics | summarize max(value) | summarize min(value) by bin_auto(timestamp)",DTMetric)
+-- >>> chartQuery (def & #query ?~ "metrics | summarize max(value) by bin(timestamp, 60) | summarize min(value)")
+-- (Just "metrics | summarize max(value) by bin(timestamp, 60) | summarize min(value) by bin_auto(timestamp)",DTMetric)
 -- >>> chartQuery (def & #wType .~ WTStat & #query ?~ "kind == \"server\"")
 -- (Just "kind == \"server\" | summarize count(*)",DTFloat)
 -- >>> chartQuery (def & #wType .~ WTStat & #query ?~ "name != null | summarize dcount(name)")
 -- (Just "name != null | summarize dcount(name)",DTFloat)
+-- >>> chartQuery (def & #wType .~ WTStat & #query ?~ "metrics | where metric_name ==")
+-- (Just "metrics | where metric_name ==",DTFloat)
 -- >>> chartQuery (def & #wType .~ WTTable & #query ?~ "summarize count(*) by service")
 -- (Just "summarize count(*) by service",DTText)
 -- >>> chartQuery (def :: Widget)
@@ -371,18 +377,20 @@ data WidgetDataset = WidgetDataset
 chartQuery :: Widget -> (Maybe Text, Charts.DataType)
 chartQuery w
   | w.wType `elem` [WTLogs, WTTable, WTTopList] = (w.query, Charts.DTText)
-  | otherwise = (shape <$> w.query, bool Charts.DTMetric Charts.DTFloat isStat)
+  | otherwise = (shape <$> w.query, dataType)
   where
     isStat = w.wType == WTStat
+    (suffix, dataType) = if isStat then ("", Charts.DTFloat) else (" by bin_auto(timestamp)", Charts.DTMetric)
     shape q = case parseQueryToAST q of
       -- Let the query handler report errors in the original malformed query.
       Left _ -> q
-      Right ast
-        | null [() | SummarizeCommand{} <- ast] -> q <> " | summarize count(*)" <> bool " by bin_auto(timestamp)" "" isStat
-        | isStat || QC.hasSummarizeWithBin ast -> q
-        | otherwise -> toQText $ map addBin ast
-    addBin (SummarizeCommand aggs by) = SummarizeCommand aggs $ Just $ SummarizeByClause $ ByBinFunc (BinAuto $ Subject "timestamp" "timestamp" []) : foldMap (\(SummarizeByClause cols) -> cols) by
-    addBin section = section
+      Right ast ->
+        let (summarized, binned) = mapAccumR addBin False ast
+         in if not summarized then q <> " | summarize count(*)" <> suffix else if binned == ast then q else toQText binned
+    addBin False section@(SummarizeCommand aggs by)
+      | isStat || QC.hasSummarizeWithBin [section] = (True, section)
+      | otherwise = (True, SummarizeCommand aggs $ Just $ SummarizeByClause $ ByBinFunc (BinAuto $ Subject "timestamp" "timestamp" []) : foldMap coerce by)
+    addBin seen section = (seen, section)
 
 
 -- | Convert MetricsData to WidgetDataset (timestamps already in ms from queryMetrics)

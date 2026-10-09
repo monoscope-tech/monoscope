@@ -470,10 +470,12 @@ const setStatValue = (widgetData: WidGetData, stats: ChartDataResponse['stats'],
   value.classList.remove('hidden');
 };
 
+// Keep this aggregation in sync with Widget.chartQuery's plotted-query fallback.
+const DEFAULT_QUERY = 'summarize count(*) by bin_auto(timestamp)';
+
 // The /chart_data URL for a widget. Shared by the initial prefetch and every later
 // refetch, so the two can't drift — the prefetch is only honoured when the URL it was
 // issued against still matches (see takePrefetched).
-const DEFAULT_QUERY = 'summarize count(*) by bin_auto(timestamp)';
 export const chartDataUrl = ({
   chartId,
   query,
