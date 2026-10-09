@@ -90,7 +90,7 @@ import Pkg.Components.Table qualified as Table
 import Pkg.Components.Widget (Widget (..), WidgetType (..), widget_)
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.EmailTemplates qualified as ET
-import Pkg.Mail (addConvertKitUserOrganization, sendRenderedEmail)
+import Pkg.Mail (sendRenderedEmail)
 import Relude hiding (ask, asks)
 import Servant (addHeader)
 import Servant.API (Header)
@@ -114,6 +114,7 @@ listProjectsGetH = do
   let bwconf = bw{currProject = Nothing, pageTitle = "Projects", hideNavbar = True, pageActions = Nothing}
 
   projects <- V.fromList <$> Projects.selectProjectsForUser sess.persistentSession.userId
+  restrictedProjectTitles <- Projects.restrictedFreeProjectTitles sess.persistentSession.userId
   let demoProject =
         (def :: Projects.ProjectListItem)
           { Projects.title = project.title
@@ -121,22 +122,25 @@ listProjectsGetH = do
           , Projects.createdAt = project.createdAt
           }
 
-  if V.null projects && not appCtx.env.showDemoProject
+  if V.null projects && null restrictedProjectTitles && not appCtx.env.showDemoProject
     then throwError $ err302{errHeaders = [("Location", "/p/new")]}
-    else addRespHeaders $ ListProjectsGet $ PageCtx bwconf (projects, demoProject, appCtx.env.showDemoProject)
+    else addRespHeaders $ ListProjectsGet (PageCtx bwconf (projects, demoProject, appCtx.env.showDemoProject)) restrictedProjectTitles
 
 
-newtype ListProjectsGet = ListProjectsGet {unwrap :: PageCtx (V.Vector Projects.ProjectListItem, Projects.ProjectListItem, Bool)}
+data ListProjectsGet = ListProjectsGet
+  { unwrap :: PageCtx (V.Vector Projects.ProjectListItem, Projects.ProjectListItem, Bool)
+  , restrictedProjectTitles :: [Text]
+  }
   deriving stock (Show)
 
 
 instance ToHtml ListProjectsGet where
-  toHtml (ListProjectsGet (PageCtx bwconf (projects, demoProject, showDemoProject))) = toHtml $ PageCtx bwconf $ listProjectsBody bwconf.sessM projects demoProject showDemoProject
+  toHtml (ListProjectsGet (PageCtx bwconf (projects, demoProject, showDemoProject)) restrictedProjectTitles) = toHtml $ PageCtx bwconf $ listProjectsBody bwconf.sessM projects demoProject showDemoProject restrictedProjectTitles
   toHtmlRaw = toHtml
 
 
-listProjectsBody :: Maybe Projects.Session -> V.Vector Projects.ProjectListItem -> Projects.ProjectListItem -> Bool -> Html ()
-listProjectsBody sessM projects demoProject showDemoProject = do
+listProjectsBody :: Maybe Projects.Session -> V.Vector Projects.ProjectListItem -> Projects.ProjectListItem -> Bool -> [Text] -> Html ()
+listProjectsBody sessM projects demoProject showDemoProject restrictedProjectTitles = do
   nav_ [class_ "fixed top-0 left-0 right-0 bg-bgBase border-b border-strokeWeak z-50"] do
     div_ [class_ "flex items-center justify-between px-4 py-3"] do
       a_ [href_ "/", class_ "flex items-center"] do
@@ -161,6 +165,10 @@ listProjectsBody sessM projects demoProject showDemoProject = do
     div_ [class_ "flex justify-between items-center mb-8"] do
       h2_ [class_ "text-textStrong text-3xl font-semibold"] "Projects"
       a_ [class_ "btn btn-primary btn-sm", href_ "/p/new"] (faSprite_ "plus" "regular" "h-4 w-4 mr-2" >> "New Project")
+
+    forM_ restrictedProjectTitles \title -> div_ [class_ "mb-4"] $ infoBanner_ do
+      strong_ $ toHtml title
+      " is on the Free plan. Only the project owner can access it. Ask the owner to upgrade to enable team access."
 
     unless (V.null projects) $ div_ [class_ "mb-12"] do
       h3_ [class_ "text-textWeak text-lg font-medium mb-4"] "Your Projects"
@@ -1100,7 +1108,7 @@ manageMembersBody pid projMembers paymentPlan teamsCount =
         $ div_ [class_ "bg-fillWarning-weak border border-strokeWarning-weak rounded-xl p-4 flex items-start gap-3"] do
           faSprite_ "triangle-exclamation" "regular" "w-5 h-5 text-iconWarning flex-shrink-0 mt-0.5"
           div_ do
-            p_ [class_ "text-sm text-textStrong font-medium"] "Free plan allows only 1 team member"
+            p_ [class_ "text-sm text-textStrong font-medium"] "Free projects are limited to the project owner"
             p_ [class_ "text-sm text-textWeak mt-1"] "Additional team members are disabled and cannot access the project. Upgrade to enable team access."
 
       form_ [class_ "space-y-6", hxPost_ $ "/p/" <> pid.toText <> "/manage_members", hxTarget_ settingsContentTarget, hxSwap_ "innerHTML", hxIndicator_ "#submitIndicator"] do
@@ -1423,15 +1431,11 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = do
       updatePricing name sid fid oid = do
         n <- Projects.updateProjectPricing pid (Projects.PlanName name) (Projects.SubId sid) (Projects.SubItemId fid) (Projects.OrderId oid)
         n <$ Projects.completeOnboardingStep pid "Pricing"
-      handleOnboarding name = when (Projects.isOnboarding project.paymentPlan) $ do
-        _ <- liftIO $ withResource appCtx.pool \conn -> do
-          let fullName = sess.user.firstName <> " " <> sess.user.lastName
-              foundUsFrom = fromMaybe "" $ project.questions >>= (`lookupValueText` "foundUsFrom")
-          createJob conn "background_jobs" $ BackgroundJobs.SendDiscordData sess.user.id pid fullName [foundUsFrom] foundUsFrom
-        users <- ProjectMembers.selectActiveProjectMembers pid
-        unless (T.null envCfg.convertkitApiKey)
-          $ forM_ users
-          $ \user -> addConvertKitUserOrganization envCfg.convertkitApiKey (CI.original user.email) pid.toText project.title name
+      handleOnboarding = when (Projects.isOnboarding project.paymentPlan) $ void $ liftIO $ withResource appCtx.pool \conn -> do
+        let fullName = sess.user.firstName <> " " <> sess.user.lastName
+            foundUsFrom = fromMaybe "" $ project.questions >>= (`lookupValueText` "foundUsFrom")
+        _ <- createJob conn "background_jobs" $ BackgroundJobs.SendDiscordData sess.user.id pid fullName [foundUsFrom] foundUsFrom
+        createJob conn "background_jobs" $ BackgroundJobs.SyncProjectContacts pid
 
   let billingUrl = envCfg.hostUrl <> "p/" <> pid.toText <> "/manage_billing"
       auditPlan name =
@@ -1445,7 +1449,7 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = do
     Just "Open Source" | envCfg.basicAuthEnabled -> do
       _ <- updatePricing "Open Source" "" "" ""
       auditPlan ("Open Source" :: Text)
-      handleOnboarding "Open Source"
+      handleOnboarding
       void $ ProjectMembers.activateAllMembers pid
     _ -> case orderIdM of
       Just orderId ->
@@ -1456,14 +1460,14 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = do
                 productName = target.attributes.productName
             _ <- updatePricing productName subId firstSubId orderId
             auditPlan productName
-            handleOnboarding productName
+            handleOnboarding
             void $ ProjectMembers.activateAllMembers pid
             mailAllUsers $ ET.planUpgradedEmail project.title productName billingUrl
           _ -> addErrorToast "Something went wrong while fetching subscription id" Nothing
       Nothing -> do
         _ <- updatePricing "Free" "" "" ""
         auditPlan ("Free" :: Text)
-        handleOnboarding "Free"
+        handleOnboarding
         void $ ProjectMembers.deactivateNonOwnerMembers pid
         mailAllUsers $ ET.planDowngradedEmail project.title "was cancelled" billingUrl
   if Projects.isOnboarding project.paymentPlan || isOnboarding == Just True

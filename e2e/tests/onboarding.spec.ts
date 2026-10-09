@@ -4,6 +4,18 @@ import { DEMO_PROJECT, assertStripeCheckout } from "./helpers";
 const ONBOARDING_URL = `/p/${DEMO_PROJECT}/onboarding`;
 
 test.describe("Onboarding flow", () => {
+  test("free plan button submits once and follows the project redirect", async ({ page }) => {
+    let submissions = 0;
+    await page.route(`**/p/${DEMO_PROJECT}/onboarding/pricing`, async route => {
+      submissions++;
+      await route.fulfill({ status: 200, headers: { "HX-Redirect": `/p/${DEMO_PROJECT}/` }, body: "" });
+    });
+    await page.goto(`${ONBOARDING_URL}?step=Pricing`);
+    await page.locator("#freePricing").getByRole("button", { name: "Start free", exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`/p/${DEMO_PROJECT}/dashboards/`));
+    expect(submissions).toBe(1);
+  });
+
   test("loads integration docs with HTML negotiation and switches framework guides", async ({ page }) => {
     const initialDocs = page.waitForResponse(response => new URL(response.url()).pathname === "/proxy/docs/sdks/nodejs/expressjs");
     await page.goto(`${ONBOARDING_URL}?step=Integration`);

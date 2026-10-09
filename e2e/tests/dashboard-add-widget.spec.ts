@@ -295,7 +295,7 @@ test.describe("adding widgets to a dashboard", () => {
     }, previewId);
 
     await expect(tabs.locator('input[value="timeseries"]')).toBeChecked();
-    expect(await page.evaluate(() => (window as any).widgetJSON.type)).toBe("timeseries");
+    await expect.poll(() => page.evaluate(() => (window as any).widgetJSON.type)).toBe("timeseries");
   });
 
   test("the logs preview stays inside the preview frame", async ({ page }) => {

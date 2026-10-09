@@ -57,6 +57,10 @@ In both options, you bring your own S3 buckets—your data stays yours.
 
 → [Start free on Cloud](https://monoscope.tech) or continue below to self-host.
 
+The Cloud Free plan supports one user: the project owner (the first member added
+when the project is created). Other members can access the project after an
+upgrade. This limit does not apply to self-hosted Open Source projects.
+
 <br/>
 
 ## Quick Start

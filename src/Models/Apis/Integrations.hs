@@ -113,7 +113,9 @@ getSlackLink linkId =
 activeMembership :: HI.Sql
 activeMembership =
   [HI.sql| AND member.active AND member.deleted_at IS NULL AND account.active AND account.deleted_at IS NULL
-    AND project.active AND project.deleted_at IS NULL |]
+    AND project.active AND project.deleted_at IS NULL
+    AND (lower(project.payment_plan) <> 'free' OR member.user_id = (
+      SELECT user_id FROM projects.project_members WHERE project_id = project.id ORDER BY created_at, id LIMIT 1)) |]
 
 
 slackLinkProjects :: DB es => Text -> Projects.UserId -> Eff es [SlackLinkProject]
@@ -247,11 +249,14 @@ createSlackInstall :: DB es => UUIDId "slack_install" -> Projects.UserId -> Proj
 createSlackInstall stateId userId projectId onboarding = do
   affected <-
     Hasql.interpExecute
-      [HI.sql|INSERT INTO apis.slack_install_requests (id, user_id, project_id, onboarding)
+      $ [HI.sql|INSERT INTO apis.slack_install_requests (id, user_id, project_id, onboarding)
       SELECT #{stateId}, #{userId}, #{projectId}, #{onboarding}
-      FROM projects.project_members
-      WHERE project_id = #{projectId} AND user_id = #{userId}
-        AND active AND deleted_at IS NULL AND permission = 'admin'|]
+      FROM projects.project_members member
+      JOIN projects.projects project ON project.id = member.project_id
+      JOIN users.users account ON account.id = member.user_id
+      WHERE member.project_id = #{projectId} AND member.user_id = #{userId}
+        AND member.permission = 'admin'|]
+      <> activeMembership
   pure $ affected == 1
 
 
@@ -260,12 +265,13 @@ createSlackInstall stateId userId projectId onboarding = do
 consumeSlackInstall :: DB es => UUIDId "slack_install" -> Projects.UserId -> Eff es (Maybe SlackInstall)
 consumeSlackInstall stateId userId =
   Hasql.interpOne
-    [HI.sql|DELETE FROM apis.slack_install_requests request
-    USING projects.project_members member
+    $ [HI.sql|DELETE FROM apis.slack_install_requests request
+    USING projects.project_members member, projects.projects project, users.users account
     WHERE request.id = #{stateId} AND request.user_id = #{userId} AND request.expires_at > now()
       AND member.project_id = request.project_id AND member.user_id = request.user_id
-      AND member.active AND member.deleted_at IS NULL AND member.permission = 'admin'
-    RETURNING request.project_id, request.onboarding|]
+      AND project.id = member.project_id AND account.id = member.user_id AND member.permission = 'admin' |]
+    <> activeMembership
+    <> [HI.sql| RETURNING request.project_id, request.onboarding |]
 
 
 -- | OAuth-time Slack credentials + the channel the app was installed to.
