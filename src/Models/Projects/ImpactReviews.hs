@@ -196,7 +196,7 @@ releaseRun run err =
 repositorySettings :: DB es => ProjectId -> Eff es [ReviewSettings]
 repositorySettings pid =
   Hasql.interp
-    [HI.sql|SELECT DISTINCT lower(m.owner), lower(m.repo), coalesce(s.enabled, true), coalesce(s.include_evidence, true)
+    [HI.sql|SELECT DISTINCT lower(m.owner), lower(m.repo), coalesce(s.enabled, true), coalesce(s.include_evidence, false)
     FROM projects.code_mappings m JOIN projects.git_credentials c ON c.id = m.credential_id AND c.project_id = m.project_id
     LEFT JOIN projects.pr_review_settings s ON s.project_id = m.project_id AND s.owner = lower(m.owner) AND s.repo = lower(m.repo)
     WHERE m.project_id = #{pid} AND c.host = 'github' AND c.api_base IS NULL AND c.installation_id IS NOT NULL

@@ -19,6 +19,7 @@ import Data.Default (def)
 import Data.Effectful.Wreq qualified as W
 import Data.Pool (withResource)
 import Data.Text qualified as T
+import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Aria qualified as Aria
@@ -37,6 +38,7 @@ import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Git qualified as Git
 import Pkg.Metrics qualified as Metrics
 import Relude hiding (ask)
+import Servant (ServerError (..), err401, err503)
 import System.Config qualified as Config
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders)
@@ -70,9 +72,9 @@ gitWebhookPostH Git.GitHub req | req.event == Just "pull_request" = do
   ctx <- ask @Config.AuthContext
   let secret = ctx.config.githubAppWebhookSecret
   if T.null secret
-    then pure $ AE.object ["status" AE..= ("error" :: Text), "message" AE..= ("GitHub App webhook secret is not configured" :: Text)]
+    then throwError err503{errBody = "GitHub App webhook secret is not configured"}
     else case Git.verifyWebhook Git.GitHub (Just secret) req of
-      Left _ -> pure $ AE.object ["status" AE..= ("error" :: Text), "message" AE..= ("Invalid GitHub signature" :: Text)]
+      Left _ -> throwError err401{errBody = "Invalid GitHub signature"}
       Right () -> case AE.eitherDecodeStrict req.body of
         Left _ -> pure $ AE.object ["status" AE..= ("ignored" :: Text)]
         Right event -> ImpactReviews.receiveEvent event $> AE.object ["status" AE..= ("ok" :: Text)]

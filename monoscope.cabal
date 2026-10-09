@@ -244,6 +244,7 @@ extra-source-files:
     static/migrations/0211_error_last_event_at.sql
     static/migrations/0212_widget_warning_threshold.sql
     static/migrations/0213_pr_impact_reviews.sql
+    static/migrations/0214_pr_review_evidence_optin.sql
     test/fixtures/github-app-test.pem
 
 source-repository head

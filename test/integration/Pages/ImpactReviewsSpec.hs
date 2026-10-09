@@ -11,6 +11,7 @@ import Data.Pool (withResource)
 import Data.Text qualified as T
 import Database.PostgreSQL.Simple (Only (..), query)
 import Effectful.Dispatch.Dynamic (interpose)
+import Effectful.Error.Static (catchError)
 import Effectful.Reader.Static qualified as Reader
 import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.GitSync qualified as GitSync
@@ -22,6 +23,7 @@ import Pkg.Git qualified as Git
 import Pkg.ImpactReview qualified as Impact
 import Pkg.TestUtils
 import Relude
+import Servant (ServerError (..))
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATBackgroundCtx)
 import Test.Hspec
@@ -65,6 +67,7 @@ spec :: Spec
 spec = around withTestResources $ describe "Production impact reviews" do
   it "queues signed source-repository events once, rejects unverified events, and retains the latest revision" \tr -> do
     setup tr
+    runQueryEffect tr (Reviews.repositorySettings testPid) >>= \settings -> map (.includeEvidence) settings `shouldBe` [False]
     let firstEvent = payload "opened" revision "2025-01-01T00:00:00Z"
         next = T.replicate 40 "b"
     deliver tr firstEvent `shouldReturn` AE.object ["status" AE..= ("ok" :: Text)]
@@ -90,7 +93,12 @@ spec = around withTestResources $ describe "Production impact reviews" do
     reopened <- maybe (fail "run missing") pure =<< runQueryEffect tr (Reviews.getRun new.id)
     reopened.state `shouldBe` Reviews.Queued
     runQueryEffect tr $ Reviews.releaseRun new Nothing
-    void $ runAsBaseRecordingHTTP tr $ GitSyncPage.gitWebhookPostH Git.GitHub (Git.WebhookReq (Just "pull_request") Nothing Nothing Nothing Nothing (toStrict $ AE.encode $ payload "synchronize" (T.replicate 40 "c") "2025-01-01T00:04:00Z"))
+    (_, unsignedStatus) <-
+      runAsBaseRecordingHTTP tr
+        $ catchError @ServerError
+          (GitSyncPage.gitWebhookPostH Git.GitHub (Git.WebhookReq (Just "pull_request") Nothing Nothing Nothing Nothing (toStrict $ AE.encode $ payload "synchronize" (T.replicate 40 "c") "2025-01-01T00:04:00Z")) $> 200)
+          (\_ err -> pure err.errHTTPCode)
+    unsignedStatus `shouldBe` 503
     final <- runQueryEffect tr $ Reviews.latestRuns testPid
     length final `shouldBe` 2
     otherPid <- createTestProject tr "Other review project"
@@ -112,10 +120,12 @@ spec = around withTestResources $ describe "Production impact reviews" do
 
   it "publishes aggregate evidence, updates its own comment, and honors repository disable and links-only settings" \tr -> do
     setup tr
+    runQueryEffect tr $ Reviews.updateSettings testPid (Reviews.ReviewSettings "impact-org" "checkout" True True)
     void $ deliver tr $ payload "opened" revision "2025-01-01T00:00:00Z"
     [run] <- runQueryEffect tr $ Reviews.latestRuns testPid
     apiKey <- createTestAPIKey tr testPid "Impact review telemetry"
     ingestLog tr apiKey "private-log-body-must-not-leave-monoscope" frozenTime
+    -- Throwaway RSA fixture generated only for these JWT tests; never registered with a GitHub App.
     pem <- BS.readFile "test/fixtures/github-app-test.pem"
     let cfg = tr.trATCtx.config{githubAppId = "123", githubAppPrivateKey = extractBase64 $ B64.encodeBase64 pem}
         pr = AE.object ["head" AE..= AE.object ["sha" AE..= revision], "base" AE..= AE.object ["sha" AE..= T.replicate 40 "d"], "state" AE..= ("open" :: Text), "draft" AE..= False, "changed_files" AE..= (1 :: Int), "updated_at" AE..= ("2025-01-01T00:00:00Z" :: Text)]
@@ -143,7 +153,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                         if "/issues/comments/99" `T.isSuffixOf` toText endpoint || "/issues/7/comments" `T.isSuffixOf` toText endpoint
                           then AE.object ["id" AE..= (99 :: Int)]
                           else pr
-        result = Impact.ReviewResult Impact.WorthChecking [Impact.Finding (Impact.ChangedLine "checkout.hs" 1 Impact.Head) "The changed operation may stop emitting the signal used by the monitor." "Check the monitor query before deploying." ["telemetry-1"]] [] [] frozenTime frozenTime
+        result = Impact.ReviewResult Impact.WorthChecking [Impact.Finding (Impact.ChangedLine "checkout.hs" 1 Impact.Head) "The changed operation may stop emitting the signal used by the monitor. *check* @impact-review-test [outside](https://untrusted.invalid)\r#heading" "Check the monitor query before deploying." ["telemetry-1"]] [] [] frozenTime frozenTime
         fakeModel :: Impact.ReviewResult -> ATBackgroundCtx a -> ATBackgroundCtx a
         fakeModel answer = interpose @LLM.LLM \_ -> \case
           LLM.CallLLM _ prompt _ -> do
@@ -157,6 +167,9 @@ spec = around withTestResources $ describe "Production impact reviews" do
     let published = T.intercalate " " $ map (decodeUtf8 . snd) comments
     published `shouldSatisfy` T.isInfixOf "Worth checking"
     published `shouldSatisfy` T.isInfixOf "Observed"
+    published `shouldSatisfy` T.isInfixOf "\\\\*check"
+    published `shouldNotSatisfy` T.isInfixOf "@impact-review-test"
+    published `shouldNotSatisfy` T.isInfixOf "https://untrusted.invalid"
     published `shouldNotSatisfy` T.isInfixOf "private-log-body-must-not-leave-monoscope"
     published `shouldSatisfy` T.isInfixOf revision
     completed <- maybe (fail "run missing") pure =<< runQueryEffect tr (Reviews.getRun run.id)
@@ -182,3 +195,15 @@ spec = around withTestResources $ describe "Production impact reviews" do
     runs <- runQueryEffect tr $ Reviews.latestRuns testPid
     length runs `shouldBe` 1
     runQueryEffect tr (Reviews.repositorySettings testPid) >>= \settings -> map (\s -> (s.enabled, s.includeEvidence)) settings `shouldBe` [(False, False)]
+
+  it "reports invalid and unconfigured App webhook deliveries as HTTP failures" \tr -> do
+    let body = toStrict $ AE.encode $ payload "opened" revision "2025-01-01T00:00:00Z"
+        request = Git.WebhookReq (Just "pull_request") (Just $ "sha256=" <> T.replicate 64 "0") Nothing Nothing Nothing body
+    forM_ ([("", 503), ("impact-secret", 401)] :: [(Text, Int)]) \(secret, expected) -> do
+      let configured = tr{trATCtx = tr.trATCtx{config = tr.trATCtx.config{githubAppWebhookSecret = secret}}}
+      (_, status) <-
+        runAsBaseRecordingHTTP configured
+          $ catchError @ServerError
+            (GitSyncPage.gitWebhookPostH Git.GitHub request $> 200)
+            (\_ err -> pure err.errHTTPCode)
+      status `shouldBe` expected
