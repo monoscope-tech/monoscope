@@ -1328,7 +1328,10 @@ const chartConfigurations = new WeakMap<HTMLElement, string>();
 function initializeChartWidgets() {
   [...document.querySelectorAll<HTMLElement>('[data-chart-config]')].sort((a, b) => b.clientHeight - a.clientHeight).forEach(host => {
     const configJSON = host.dataset.chartConfig!;
-    const signature = configJSON + location.search + JSON.stringify(window.getDashboardConstants?.(host));
+    const pageParams = new URLSearchParams(location.search);
+    // Opening, resizing or closing log details leaves the widgets' data unchanged.
+    for (const key of ['target_event', 'details_width', 'showTrace']) pageParams.delete(key);
+    const signature = configJSON + pageParams.toString() + JSON.stringify(window.getDashboardConstants?.(host));
     if (chartConfigurations.get(host) === signature) return;
     chartConfigurations.set(host, signature);
     const config = JSON.parse(configJSON);
