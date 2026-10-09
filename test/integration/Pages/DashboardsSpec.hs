@@ -3,6 +3,7 @@ module Pages.DashboardsSpec (spec) where
 import Data.Aeson qualified as AE
 import Data.ByteString.Lazy qualified as LBS
 import Data.Default (def)
+import Data.HashMap.Strict qualified as HM
 import Data.List qualified as List
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
@@ -11,12 +12,15 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful.Concurrent (runConcurrent)
 import Lucid (renderText, toHtml)
+import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries qualified as LogQueries
+import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.Dashboards (DashboardVM (..))
 import Models.Projects.Dashboards qualified as DashboardModel
 import Models.Projects.ProjectMembers (TeamVM (..))
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
+import Pages.BodyWrapper qualified as BodyWrapper
 import Pages.Charts.Types (MetricsData (..), MetricsStats (..))
 import Pages.Dashboards (DashboardFilters (..))
 import Pages.Dashboards qualified as Dashboards
@@ -24,12 +28,16 @@ import Pages.Projects (TeamForm (..))
 import Pages.Projects qualified as ManageMembers
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), mkHasqlPool)
+import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Pkg.TestUtils
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant qualified
-import System.Config (AuthContext (..), EnvConfig (..))
+import System.Config (AuthContext (..), DeploymentEnv (Prod, Staging), EnvConfig (..))
+import System.Directory (withCurrentDirectory)
 import System.Environment qualified as Env
+import System.IO.Temp (withSystemTempDirectory)
+import System.Types (addRespHeaders)
 import Test.Hspec
 import Web.Routes qualified as Routes
 import "cryptonite" Crypto.Hash qualified as Crypto
@@ -360,13 +368,14 @@ spec = sequential $ aroundAll withTestResources do
       html `shouldSatisfy` T.isInfixOf "for=\"newDashboardMdl\""
       html `shouldSatisfy` (not . T.isInfixOf "href=\"newDashboardMdl\"")
 
-    it "dashboardTemplatePicker_prefillsNameAndPreviewsEveryTemplate" \tr -> do
-      (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters
+    it "dashboardTemplatePicker_defersHiddenPreviewsUntilOpened" \tr -> do
+      (_, initial) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters
+      let initialHtml = TL.toStrict $ renderText $ toHtml initial
+      initialHtml `shouldSatisfy` (not . T.isInfixOf "dashboardTemplatePreviews")
+      initialHtml `shouldContainAll` ["hx-get=\"/p/" <> testPid.toText <> "/dashboards/new\"", "hx-trigger=\"change[target.checked] from:#newDashboardMdl\""]
+      (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing (Just "true") filters
       let html = TL.toStrict $ renderText $ toHtml pg
-      html `shouldSatisfy` T.isInfixOf "value=\"Blank dashboard\""
-      html `shouldSatisfy` T.isInfixOf "data-title=\"Nginx\""
-      html `shouldSatisfy` T.isInfixOf "data-template=\"nginx.yaml\""
-      html `shouldSatisfy` T.isInfixOf "Requests"
+      html `shouldContainAll` ["value=\"Blank dashboard\"", "data-title=\"Nginx\"", "data-template=\"nginx.yaml\"", "Requests"]
       html `shouldSatisfy` (not . T.isInfixOf "http-stats.svg")
       case pg of
         Dashboards.DashboardsGet (PageCtx _ d) ->
@@ -374,10 +383,26 @@ spec = sequential $ aroundAll withTestResources do
             html `shouldSatisfy` T.isInfixOf ("data-template=\"" <> fromMaybe "" template.file <> "\"")
         _ -> fail "Expected full dashboard list response"
 
-    it "dashboard list omits the global service selector" \tr -> do
+    it "dashboardTemplates_deployedEnvironmentsDoNotReadYamlPerRequest" \tr ->
+      withSystemTempDirectory "dashboard-templates" $ \dir -> withCurrentDirectory dir $ for_ [Prod, Staging] \env -> do
+        let deployed = tr{trATCtx = tr.trATCtx{config = tr.trATCtx.config{environment = env, liveReloadDashboards = True}}}
+        (_, pg) <- testServant deployed $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters
+        case pg of
+          Dashboards.DashboardsGet (PageCtx _ d) -> d.dashTemplates `shouldSatisfy` (not . null)
+          _ -> fail "Expected full dashboard list response"
+
+    it "dashboardList_skipsUnusedTelemetryScopeButPreservesShellData" \tr -> do
+      let scopeFields = ["service.name", "deployment.environment.name"]
+          doc = Catalog.SummaryDoc (HM.fromList [(k, Catalog.FieldStruct mempty mempty Catalog.FCResource False) | k <- scopeFields]) (V.singleton "checkout") (HM.fromList [(k, Catalog.TopK 1 (HM.singleton "production" 1)) | k <- scopeFields])
+      runHasqlEffect tr $ SchemaCatalog.upsertSummary $ V.singleton (testPid, doc)
+      (_, (_, _, fullShell)) <- testServant tr $ BodyWrapper.mkPageCtx testPid >>= addRespHeaders
+      fullShell.envOptions `shouldBe` V.singleton "production"
       (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing filters
       case pg of
-        Dashboards.DashboardsGet (PageCtx bw _) -> V.null bw.serviceOptions `shouldBe` True
+        Dashboards.DashboardsGet (PageCtx bw _) -> do
+          (bw.envOptions, bw.serviceOptions) `shouldBe` (V.empty, V.empty)
+          map (.conversationId) bw.conversations `shouldBe` map (.conversationId) fullShell.conversations
+          isJust bw.activationProgressM `shouldBe` isJust fullShell.activationProgressM
         _ -> fail "Expected full dashboard list response"
 
     it "Should update a dashboard" \tr -> do
