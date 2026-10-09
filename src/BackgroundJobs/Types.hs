@@ -40,6 +40,7 @@ data BgJobs
   | ResetSlackSession Projects.ProjectId Projects.UserId (UUIDId "slack_event")
   | EnhanceIssuesWithLLM Projects.ProjectId (V.Vector Issues.IssueId)
   | ProcessIssuesEnhancement UTCTime
+  | ReviewPullRequest (UUIDId "pr_review")
   | GitSyncFromRepo Projects.ProjectId
   | GitSyncPushDashboard Projects.ProjectId UUID.UUID -- projectId, dashboardId
   | GitSyncPushAllDashboards Projects.ProjectId -- Push all existing dashboards to repo

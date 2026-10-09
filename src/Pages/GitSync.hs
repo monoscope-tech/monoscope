@@ -26,6 +26,7 @@ import Lucid.Htmx (hxDelete_, hxIndicator_, hxPost_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
+import Models.Projects.ImpactReviews qualified as ImpactReviews
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import OddJobs.Job (createJob)
@@ -65,6 +66,16 @@ data GitSyncForm = GitSyncForm
 -- name, find its row, verify the signature, and only then queue a job. Queueing before
 -- 'Git.verifyWebhook' returns is how a forged body gets to enqueue work.
 gitWebhookPostH :: Git.GitHost -> Git.WebhookReq -> ATBaseCtx AE.Value
+gitWebhookPostH Git.GitHub req | req.event == Just "pull_request" = do
+  ctx <- ask @Config.AuthContext
+  let secret = ctx.config.githubAppWebhookSecret
+  if T.null secret
+    then pure $ AE.object ["status" AE..= ("error" :: Text), "message" AE..= ("GitHub App webhook secret is not configured" :: Text)]
+    else case Git.verifyWebhook Git.GitHub (Just secret) req of
+      Left _ -> pure $ AE.object ["status" AE..= ("error" :: Text), "message" AE..= ("Invalid GitHub signature" :: Text)]
+      Right () -> case AE.eitherDecodeStrict req.body of
+        Left _ -> pure $ AE.object ["status" AE..= ("ignored" :: Text)]
+        Right event -> ImpactReviews.receiveEvent event $> AE.object ["status" AE..= ("ok" :: Text)]
 gitWebhookPostH host req = case Git.parseWebhookRepo host req.body of
   Nothing -> errResp "missing repository" <$ Log.logAttention "Git webhook without a repository name" (Git.hostSlug host)
   Just fullName -> do

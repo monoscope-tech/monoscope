@@ -50,6 +50,13 @@ module Pkg.Git (
   DeploymentReadError (..),
   EvidencePage (..),
   listDeployments,
+  PullRequest (..),
+  PullRequestFile (..),
+  PullRequestComment (..),
+  getPullRequest,
+  getPullRequestFiles,
+  listPullRequestComments,
+  publishPullRequestComment,
 
   -- * Webhooks
   WebhookReq (..),
@@ -571,6 +578,85 @@ data DeploymentEvidence = DeploymentEvidence
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.ToJSON)
+
+
+-- | Coordinates come from the verified installation, never from payload URLs.
+data PullRequest = PullRequest
+  { revision :: Text
+  , baseRevision :: Text
+  , state :: Text
+  , draft :: Bool
+  , changedFiles :: Int
+  , updatedAt :: UTCTime
+  }
+  deriving stock (Generic, Show)
+
+
+instance AE.FromJSON PullRequest where
+  parseJSON = AE.withObject "PullRequest" \o ->
+    PullRequest
+      <$> (o AE..: "head" >>= (AE..: "sha"))
+      <*> (o AE..: "base" >>= (AE..: "sha"))
+      <*> o AE..: "state"
+      <*> o AE..: "draft"
+      <*> o AE..: "changed_files"
+      <*> o AE..: "updated_at"
+
+
+data PullRequestFile = PullRequestFile
+  { filename :: Text
+  , status :: Text
+  , patch :: Maybe Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data PullRequestComment = PullRequestComment
+  { id :: Int64
+  , body :: Text
+  , appId :: Maybe Int64
+  }
+  deriving stock (Generic, Show)
+
+
+instance AE.FromJSON PullRequestComment where
+  parseJSON = AE.withObject "PullRequestComment" \o ->
+    PullRequestComment
+      <$> o AE..: "id"
+      <*> o AE..: "body"
+      <*> ((o AE..:? "performed_via_github_app") >>= traverse (AE..: "id"))
+
+
+getPullRequest :: (IOE :> es, W.HTTP :> es) => GitConn -> RepoRef -> Int -> Eff es (Either Text PullRequest)
+getPullRequest conn repo number = githubJson conn repo ("/pulls/" <> show number)
+
+
+-- | One bounded page. The caller compares its size with changed_files and
+-- reports omitted/binary patches explicitly instead of claiming full coverage.
+getPullRequestFiles :: (IOE :> es, W.HTTP :> es) => GitConn -> RepoRef -> Int -> Eff es (Either Text [PullRequestFile])
+getPullRequestFiles conn repo number = githubJson conn repo ("/pulls/" <> show number <> "/files?per_page=100")
+
+
+listPullRequestComments :: (IOE :> es, W.HTTP :> es) => GitConn -> RepoRef -> Int -> Eff es (Either Text [PullRequestComment])
+listPullRequestComments conn repo number = paginate 100 \page -> githubJson conn repo ("/issues/" <> show number <> "/comments?per_page=100&page=" <> show page)
+
+
+githubJson :: (AE.FromJSON a, IOE :> es, W.HTTP :> es) => GitConn -> RepoRef -> Text -> Eff es (Either Text a)
+githubJson conn repo path
+  | conn.host /= GitHub = pure $ Left "Pull request reviews require GitHub"
+  | otherwise = (>>= first toText . AE.eitherDecode) <$> get_ conn (repoUrl conn repo path)
+
+
+publishPullRequestComment :: (IOE :> es, W.HTTP :> es) => GitConn -> RepoRef -> Int -> Maybe Int64 -> Text -> Eff es (Either Text Int64)
+publishPullRequestComment conn repo number commentId body
+  | conn.host /= GitHub = pure $ Left "Pull request reviews require GitHub"
+  | otherwise = do
+      let payload = AE.object ["body" AE..= body]
+      result <- tryHttp $ case commentId of
+        Nothing -> W.postWith (gitOpts conn) (toString $ repoUrl conn repo ("/issues/" <> show number <> "/comments")) payload
+        Just cid -> W.patchWith (gitOpts conn) (toString $ repoUrl conn repo ("/issues/comments/" <> show cid)) payload
+      pure $ result >>= \response -> maybeToRight "GitHub did not return a comment ID" (response ^? W.responseBody . key "id" . _Integer <&> fromInteger)
 
 
 getJson :: (AE.FromJSON a, IOE :> es, W.HTTP :> es) => GitConn -> Text -> Eff es (Either DeploymentReadError a)

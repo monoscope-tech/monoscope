@@ -5,13 +5,15 @@
 -- which reaches @Pkg.Components.Widget@, which imports @LogItem@ — a cycle. The renderer in
 -- "Pages.Components" only ever builds the URL, so nothing on the rendering side has to know
 -- this module exists.
-module Pages.CodeContext (codeContextH, codeMappingsGetH, codeMappingsPostH, codeMappingsDeleteH, CodeMappingForm (..)) where
+module Pages.CodeContext (codeContextH, codeMappingsGetH, codeMappingsPostH, codeMappingsDeleteH, CodeMappingForm (..), impactReviewSettingsPostH, impactReviewRetryH) where
 
+import Data.Aeson qualified as AE
 import Data.Cache qualified as Cache
 import Data.Default (def)
 import Data.Effectful.Wreq qualified as W
 import Data.Text qualified as T
 import Effectful (Eff, IOE, (:>))
+import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static qualified
 import Lucid
 import Lucid.Aria qualified as Aria
@@ -19,15 +21,19 @@ import Lucid.Htmx (hxDelete_, hxIndicator_, hxPost_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.GitSync qualified as GitSync
+import Models.Projects.ImpactReviews qualified as ImpactReviews
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (withSettingsPage)
 import Pages.Components (FieldCfg (..), FieldSize (..), formField_, formSelectField_, installationSettingsLink_, settingsH2_, settingsSection_)
 import Pkg.Git qualified as Git
+import Pkg.ImpactReview qualified as ImpactReview
 import Relude
+import Servant (err403)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
-import Utils (LoadingSize (..), faSprite_, htmxIndicator_, nonEmptyT)
+import Utils (LoadingSize (..), faSprite_, htmxIndicator_, nonEmptyT, renderMarkdown)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -121,6 +127,9 @@ codeMappingsContent pid sampleM = do
   credM <- codeContextCredential pid
   mappings <- CodeContext.getCodeMappings pid
   repos <- maybe (pure []) credentialRepos credM
+  reviewSettings <- ImpactReviews.repositorySettings pid
+  reviewRuns <- ImpactReviews.latestRuns pid
+  authConfig <- (.config) <$> Effectful.Reader.Static.ask @AuthContext
   pure $ div_ [class_ "space-y-6"] case credM of
     Nothing -> do
       p_ [class_ "text-sm text-textWeak"] "Stack traces show the source around the failing line, read straight from your repositories. Install the GitHub App to turn it on — the same installation also powers dashboard sync, so this is the only authorisation either needs."
@@ -136,6 +145,33 @@ codeMappingsContent pid sampleM = do
         then p_ [class_ "text-sm text-textWeak italic"] "No repositories linked yet."
         else div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak"] $ forM_ mappings mappingRow_
       addMappingForm_ repos cred.installationId
+      section_ [class_ "pt-6 space-y-3 border-t border-strokeWeak"] do
+        h3_ [class_ "text-sm font-semibold text-textStrong"] "Production impact reviews"
+        p_ [class_ "text-xs text-textWeak"] "Linked GitHub repositories receive advisory PR comments based on this project's telemetry. Ready PRs are reviewed when opened or updated."
+        when (T.null authConfig.githubAppWebhookSecret) $ p_ [class_ "text-xs text-textError"] "Reviews need a GitHub App webhook secret. Ask your Monoscope administrator to configure it."
+        when (null reviewSettings) $ p_ [class_ "text-xs text-textWeak"] "Link a repository using a GitHub App installation to enable automatic reviews."
+        forM_ reviewSettings \settings -> form_ [class_ "flex flex-wrap items-end gap-3 rounded-lg border border-strokeWeak p-3", hxPost_ ("/p/" <> pid.toText <> "/settings/pr-reviews"), hxTarget_ "#code-mappings-content"] do
+          input_ [type_ "hidden", name_ "owner", value_ settings.owner]
+          input_ [type_ "hidden", name_ "repo", value_ settings.repo]
+          span_ [class_ "text-sm font-medium text-textStrong"] $ toHtml (settings.owner <> "/" <> settings.repo)
+          label_ [class_ "text-xs text-textWeak space-y-1"] do
+            span_ [class_ "block"] "PR reviews"
+            select_ [name_ "enabled", class_ "select select-sm"] do
+              option_ ([value_ "true"] <> [selected_ "selected" | settings.enabled]) "Enabled"
+              option_ ([value_ "false"] <> [selected_ "selected" | not settings.enabled]) "Disabled"
+          label_ [class_ "text-xs text-textWeak space-y-1"] do
+            span_ [class_ "block"] "Production evidence in GitHub"
+            select_ [name_ "includeEvidence", class_ "select select-sm"] do
+              option_ ([value_ "true"] <> [selected_ "selected" | settings.includeEvidence]) "Aggregates and links"
+              option_ ([value_ "false"] <> [selected_ "selected" | not settings.includeEvidence]) "Links only"
+          button_ [type_ "submit", class_ "btn btn-sm btn-secondary"] "Save review settings"
+        forM_ reviewRuns \run -> details_ [class_ "rounded-lg border border-strokeWeak p-3"] do
+          summary_ [class_ "cursor-pointer text-sm text-textStrong"] $ toHtml (run.owner <> "/" <> run.repo <> " #" <> show run.number <> " · " <> show run.state <> " · " <> T.take 8 run.revision)
+          whenJust run.error $ p_ [class_ "mt-2 text-xs text-textError"] . toHtml
+          whenJust run.result \value -> case AE.fromJSON value of
+            AE.Error _ -> p_ [class_ "mt-2 text-xs text-textWeak"] "The saved review could not be displayed. Rerun the review."
+            AE.Success result -> div_ [class_ "prose prose-sm mt-2 max-w-none"] $ renderMarkdown (ImpactReview.renderReview authConfig.hostUrl run True result)
+          when (run.revision == run.latestRevision && run.state /= ImpactReviews.Reviewing) $ button_ [class_ "btn btn-xs btn-secondary mt-2", hxPost_ ("/p/" <> pid.toText <> "/settings/pr-reviews/" <> run.id.toText <> "/rerun"), hxTarget_ "#code-mappings-content"] "Rerun review"
   where
     sample = fromMaybe "" sampleM
 
@@ -336,3 +372,25 @@ scopeLabel cm = from <> " → " <> to
   where
     from = if T.null cm.pathPrefix then "all frames" else "frames under " <> cm.pathPrefix
     to = if T.null cm.sourceRoot then "repo root" else T.dropWhileEnd (== '/') cm.sourceRoot <> "/"
+
+
+impactReviewSettingsPostH :: Projects.ProjectId -> ImpactReviews.ReviewSettings -> ATAuthCtx (RespHeaders (Html ()))
+impactReviewSettingsPostH pid settings = do
+  requireReviewWrite pid
+  ImpactReviews.updateSettings pid settings{ImpactReviews.owner = T.toLower settings.owner, ImpactReviews.repo = T.toLower settings.repo}
+  addSuccessToast "Review settings saved" Nothing
+  addRespHeaders =<< codeMappingsContent pid Nothing
+
+
+impactReviewRetryH :: Projects.ProjectId -> ImpactReviews.ReviewId -> ATAuthCtx (RespHeaders (Html ()))
+impactReviewRetryH pid rid = do
+  requireReviewWrite pid
+  ImpactReviews.retryRun pid rid
+  addRespHeaders =<< codeMappingsContent pid Nothing
+
+
+requireReviewWrite :: Projects.ProjectId -> ATAuthCtx ()
+requireReviewWrite pid = do
+  (session, _) <- Projects.sessionAndProject pid
+  permission <- ProjectMembers.getUserPermission pid session.user.id
+  unless (maybe False (>= ProjectMembers.PEdit) permission) $ throwError err403

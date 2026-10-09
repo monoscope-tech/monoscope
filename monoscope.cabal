@@ -239,6 +239,12 @@ extra-source-files:
     static/migrations/0206_error_tag_counts.sql
     static/migrations/0207_error_last_release_since.sql
     static/migrations/0208_user_feedback.sql
+    static/migrations/0209_overview_infra_stats_numeric.sql
+    static/migrations/0210_overview_infra_stat_units.sql
+    static/migrations/0211_error_last_event_at.sql
+    static/migrations/0212_widget_warning_threshold.sql
+    static/migrations/0213_pr_impact_reviews.sql
+    test/fixtures/github-app-test.pem
 
 source-repository head
   type: git
@@ -284,6 +290,7 @@ library
       Models.Projects.Dashboards
       Models.Projects.DashboardTemplates
       Models.Projects.GitSync
+      Models.Projects.ImpactReviews
       Models.Projects.ProjectApiKeys
       Models.Projects.ProjectMembers
       Models.Projects.Projects
@@ -342,6 +349,7 @@ library
       Pkg.Git
       Pkg.Icons
       Pkg.Icons.TH
+      Pkg.ImpactReview
       Pkg.IngestBudget
       Pkg.LiveTail
       Pkg.Mail
@@ -553,8 +561,8 @@ library
     , parser-combinators
     , pg-entity
     , pg-transact
-    , postgresql-libpq
     , postgresql-binary
+    , postgresql-libpq
     , postgresql-migration
     , postgresql-simple
     , pretty-relative-time
@@ -744,6 +752,7 @@ test-suite integration-tests
       Pages.ErrorPatternsSpec
       Pages.ExemplarsSpec
       Pages.GitSyncSpec
+      Pages.ImpactReviewsSpec
       Pages.IssuesSpec
       Pages.LogExplorer.LogSpec
       Pages.LogPatternsSpec
@@ -913,6 +922,7 @@ test-suite test-dev
       Models.Projects.Dashboards
       Models.Projects.DashboardTemplates
       Models.Projects.GitSync
+      Models.Projects.ImpactReviews
       Models.Projects.ProjectApiKeys
       Models.Projects.ProjectMembers
       Models.Projects.Projects
@@ -971,6 +981,7 @@ test-suite test-dev
       Pkg.Git
       Pkg.Icons
       Pkg.Icons.TH
+      Pkg.ImpactReview
       Pkg.IngestBudget
       Pkg.LiveTail
       Pkg.Mail
@@ -1050,6 +1061,7 @@ test-suite test-dev
       Pages.ErrorPatternsSpec
       Pages.ExemplarsSpec
       Pages.GitSyncSpec
+      Pages.ImpactReviewsSpec
       Pages.IssuesSpec
       Pages.LogExplorer.LogSpec
       Pages.LogPatternsSpec
@@ -1256,8 +1268,8 @@ test-suite test-dev
     , parser-combinators
     , pg-entity
     , pg-transact
-    , postgresql-libpq
     , postgresql-binary
+    , postgresql-libpq
     , postgresql-migration
     , postgresql-simple
     , pretty-relative-time

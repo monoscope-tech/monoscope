@@ -112,6 +112,7 @@ data EnvConfig = EnvConfig
   , discordWebhookUrl :: Text
   , githubAppId :: Text
   , githubAppPrivateKey :: Text
+  , githubAppWebhookSecret :: Text
   , githubAppName :: Text
   , githubClientId :: Text
   , githubClientSecret :: Text
