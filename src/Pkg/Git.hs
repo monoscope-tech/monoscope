@@ -597,10 +597,14 @@ instance AE.FromJSON PullRequest where
     PullRequest
       <$> (o AE..: "head" >>= (AE..: "sha"))
       <*> (o AE..: "base" >>= (AE..: "sha"))
-      <*> o AE..: "state"
-      <*> o AE..: "draft"
-      <*> o AE..: "changed_files"
-      <*> o AE..: "updated_at"
+      <*> o
+      AE..: "state"
+      <*> o
+      AE..: "draft"
+      <*> o
+      AE..: "changed_files"
+      <*> o
+      AE..: "updated_at"
 
 
 data PullRequestFile = PullRequestFile
@@ -623,8 +627,10 @@ data PullRequestComment = PullRequestComment
 instance AE.FromJSON PullRequestComment where
   parseJSON = AE.withObject "PullRequestComment" \o ->
     PullRequestComment
-      <$> o AE..: "id"
-      <*> o AE..: "body"
+      <$> o
+      AE..: "id"
+      <*> o
+      AE..: "body"
       <*> ((o AE..:? "performed_via_github_app") >>= traverse (AE..: "id"))
 
 

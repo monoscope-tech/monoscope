@@ -217,7 +217,8 @@ latestRuns pid =
   Hasql.interp
     [HI.sql|SELECT r.id FROM projects.pr_review_runs r JOIN projects.pr_review_threads t ON t.id = r.thread_id
     WHERE t.project_id = #{pid} ORDER BY r.created_at DESC LIMIT 20|]
-    >>= fmap catMaybes . traverse getRun
+    >>= fmap catMaybes
+    . traverse getRun
 
 
 retryRun :: DB es => ProjectId -> ReviewId -> Eff es ()

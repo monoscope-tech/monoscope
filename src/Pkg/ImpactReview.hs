@@ -309,9 +309,9 @@ renderReview host run includeEvidence result =
       , "Project `" <> run.projectId.toText <> "` · reviewed `" <> run.revision <> "` · advisory"
       , "Evidence window (UTC): " <> show result.windowStart <> " → " <> show result.windowEnd
       ]
-      <> concatMap findingText result.findings
-      <> ["**Coverage:** " <> (if includeEvidence then clean $ T.intercalate " " result.coverage else "Open Monoscope for evidence and coverage details.") | not $ null result.coverage]
-      <> ["[Review history and settings](" <> T.dropWhileEnd (== '/') host <> "/p/" <> run.projectId.toText <> "/settings/code-mappings)"]
+    <> concatMap findingText result.findings
+    <> ["**Coverage:** " <> (if includeEvidence then clean $ T.intercalate " " result.coverage else "Open Monoscope for evidence and coverage details.") | not $ null result.coverage]
+    <> ["[Review history and settings](" <> T.dropWhileEnd (== '/') host <> "/p/" <> run.projectId.toText <> "/settings/code-mappings)"]
   where
     label = \case
       WorthChecking -> "Worth checking"
