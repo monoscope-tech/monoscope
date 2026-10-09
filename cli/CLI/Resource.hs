@@ -7,6 +7,7 @@ module CLI.Resource (
   ResourceKind (..),
   WriteVerb (..),
   runList,
+  selectResourceId,
   runListVia,
   renderListPayload,
   runGet,
@@ -30,7 +31,8 @@ import Relude
 import CLI.Config (CLIConfig (..))
 import CLI.Core (APIError, OutputMode (..), apiDelete, apiGetJson, apiPatchJson, apiPostJson, apiPutJson, printError, renderAPIError, renderByMode, renderWith)
 import CLI.Table (Align (..), CellStyle (..), RichTableOpts (..), brand, defaultRichTableOpts, level, muted, numeric, paginationFooter, parseSeverity, plain, renderRichTableWith)
-import Control.Lens (has)
+import CLI.UI (Picker, pickItem, pickerAvailable)
+import Control.Lens (has, (^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AK
 import Data.Aeson.KeyMap qualified as AEKM
@@ -162,96 +164,95 @@ renderListPayload k mode payload =
 
 -- | Per-resource column set. Keep the default narrow (5-7 columns) so the
 -- TITLE-ish column has room to breathe on a typical 120-col terminal.
--- Unknown resource kinds fall back to a key/value dump of the first object.
 buildResourceTable :: ResourceKind -> [AE.Value] -> ([Text], [[(CellStyle, Text)]])
-buildResourceTable kind items = case kind of
-  Monitors ->
-    ( ["state", "name", "condition", "last_triggered"]
-    , [ [ pickLevelCell o ["state", "status"]
-        , brand (lookupText o "name")
-        , plain (lookupText o "condition")
-        , muted (lookupText o "last_triggered_at")
-        ]
-      | AE.Object o <- items
-      ]
-    )
-  Dashboards ->
-    ( ["name", "widgets", "updated"]
-    , [ [ brand (lookupText o "name")
-        , numeric (lookupText o "widget_count")
-        , muted (lookupText o "updated_at")
-        ]
-      | AE.Object o <- items
-      ]
-    )
-  ApiKeys ->
-    ( ["title", "status", "last_used"]
-    , [ [ brand (lookupText o "title")
-        , pickStatus o
-        , muted (lookupText o "last_used_at")
-        ]
-      | AE.Object o <- items
-      ]
-    )
-  Teams ->
-    ( ["name", "members", "created"]
-    , [ [ brand (lookupText o "name")
-        , numeric (lookupText o "member_count")
-        , muted (lookupText o "created_at")
-        ]
-      | AE.Object o <- items
-      ]
-    )
-  Members ->
-    ( ["user", "email", "permission"]
-    , [ [ plain (lookupText o "name")
-        , brand (lookupText o "email")
-        , plain (lookupText o "permission")
-        ]
-      | AE.Object o <- items
-      ]
-    )
-  Issues ->
-    ( ["level", "id", "count", "seen", "title"]
-    , [ [ pickLevelCell o ["severity", "level"]
-        , brand (firstNonEmpty [lookupText o "short_id", lookupText o "id"])
-        , numeric (lookupText o "event_count")
-        , muted (firstNonEmpty [lookupText o "last_seen", lookupText o "updated_at"])
-        , plain (firstNonEmpty [lookupText o "title", lookupText o "issue_type"])
-        ]
-      | AE.Object o <- items
-      ]
-    )
-  Incidents ->
-    ( ["phase", "started", "last_event", "id"]
-    , [ [ pickLevelCell o ["phase"]
-        , muted (lookupText o "started_at")
-        , muted (lookupText o "last_event_at")
-        , brand (lookupText o "id")
-        ]
-      | AE.Object o <- items
-      ]
-    )
-  Endpoints ->
-    ( ["method", "host", "url_path", "service"]
-    , [ [ plain (lookupText o "method")
-        , brand (lookupText o "host")
-        , plain (lookupText o "url_path")
-        , muted (lookupText o "service")
-        ]
-      | AE.Object o <- items
-      ]
-    )
-  LogPatterns ->
-    ( ["count", "last", "pattern"]
-    , [ [ numeric (firstNonEmpty [lookupText o "count", lookupText o "event_count"])
-        , muted (lookupText o "last_seen")
-        , plain (lookupText o "pattern")
-        ]
-      | AE.Object o <- items
-      ]
-    )
+buildResourceTable kind items =
+  let (headers, rows) = columns
+   in (identifierKey kind : headers, zipWith (\o row -> brand (lookupText o (identifierKey kind)) : row) [o | AE.Object o <- items] rows)
   where
+    columns = case kind of
+      Monitors ->
+        ( ["state", "title", "threshold", "last_triggered"]
+        , [ [ pickLevelCell o ["current_status"]
+            , brand (fromMaybe "" $ AE.Object o ^? AL.key "alert_config" . AL.key "title" . AL._String)
+            , numeric (lookupText o "alert_threshold")
+            , muted (lookupText o "alert_last_triggered")
+            ]
+          | AE.Object o <- items
+          ]
+        )
+      Dashboards ->
+        ( ["title", "updated"]
+        , [ [ brand (lookupText o "title")
+            , muted (lookupText o "updated_at")
+            ]
+          | AE.Object o <- items
+          ]
+        )
+      ApiKeys ->
+        ( ["title", "status", "created"]
+        , [ [ brand (lookupText o "title")
+            , pickStatus o
+            , muted (lookupText o "created_at")
+            ]
+          | AE.Object o <- items
+          ]
+        )
+      Teams ->
+        ( ["name", "members", "created"]
+        , [ [ brand (lookupText o "name")
+            , numeric (lookupText o "member_count")
+            , muted (lookupText o "created_at")
+            ]
+          | AE.Object o <- items
+          ]
+        )
+      Members ->
+        ( ["user", "email", "permission"]
+        , [ [ plain (unwords [lookupText o "first_name", lookupText o "last_name"])
+            , brand (lookupText o "email")
+            , plain (lookupText o "permission")
+            ]
+          | AE.Object o <- items
+          ]
+        )
+      Issues ->
+        ( ["level", "count", "seen", "title"]
+        , [ [ pickLevelCell o ["severity", "level"]
+            , numeric (lookupText o "event_count")
+            , muted (firstNonEmpty [lookupText o "last_seen", lookupText o "updated_at"])
+            , plain (firstNonEmpty [lookupText o "title", lookupText o "issue_type"])
+            ]
+          | AE.Object o <- items
+          ]
+        )
+      Incidents ->
+        ( ["phase", "started", "last_event"]
+        , [ [ pickLevelCell o ["phase"]
+            , muted (lookupText o "started_at")
+            , muted (lookupText o "last_event_at")
+            ]
+          | AE.Object o <- items
+          ]
+        )
+      Endpoints ->
+        ( ["method", "host", "url_path", "service"]
+        , [ [ plain (lookupText o "method")
+            , brand (lookupText o "host")
+            , plain (lookupText o "url_path")
+            , muted (lookupText o "service_name")
+            ]
+          | AE.Object o <- items
+          ]
+        )
+      LogPatterns ->
+        ( ["count", "last", "pattern"]
+        , [ [ numeric (lookupText o "occurrence_count")
+            , muted (lookupText o "last_seen_at")
+            , plain (lookupText o "pattern_hash")
+            ]
+          | AE.Object o <- items
+          ]
+        )
     pickLevelCell o keys =
       let v = T.toUpper $ firstNonEmpty [lookupText o k | k <- keys]
        in case parseSeverity v of
@@ -267,10 +268,46 @@ buildResourceTable kind items = case kind of
       _ -> plain (lookupText o "status")
 
 
+identifierKey :: ResourceKind -> Text
+identifierKey Members = "user_id"
+identifierKey _ = "id"
+
+
+selectResourceId :: (Environment :> es, HTTP :> es, IOE :> es, Picker :> es) => CLIConfig -> ResourceKind -> OutputMode -> Maybe Text -> Eff es Text
+selectResourceId _ _ _ (Just rid) = pure rid
+selectResourceId cfg kind mode Nothing = do
+  terminal <- pickerAvailable
+  unless (terminal && mode == OutputTable) do
+    printError "An ID is required outside an interactive terminal. Use the list command to find one."
+    liftIO exitFailure
+  items <- fetchPages 0
+  when (null items) do
+    printError "No items available to select."
+    liftIO exitFailure
+  let (_, rows) = buildResourceTable kind items
+      choices = [(lookupText o (identifierKey kind), T.intercalate " · " (map snd (drop 1 row) <> [lookupText o (identifierKey kind)])) | (AE.Object o, row) <- zip items rows]
+  pickItem ("Select " <> show kind) choices >>= maybe exitSuccess pure
+  where
+    fetchPages page = do
+      result <- apiGetJson @_ @AE.Value cfg (resourcePath kind) [("page", show (page :: Int))]
+      payload <- case result of
+        Left err -> printError (renderAPIError err) >> liftIO exitFailure
+        Right value -> case normalizeListE value of
+          Left (_, reason) -> printError reason >> liftIO exitFailure
+          Right value' -> pure value'
+      case payload of
+        AE.Object o | Just (AE.Array rows) <- AEKM.lookup "data" o -> do
+          more <- case AEKM.lookup "pagination" o of
+            Just (AE.Object p) | AEKM.lookup "has_more" p == Just (AE.Bool True) -> fetchPages (page + 1)
+            _ -> pure []
+          pure (toList rows <> more)
+        _ -> printError "List response has no data array." >> liftIO exitFailure
+
+
 lookupText :: AEKM.KeyMap AE.Value -> Text -> Text
 lookupText o k = case AEKM.lookup (AK.fromText k) o of
   Just (AE.String s) -> s
-  Just (AE.Number n) -> show n
+  Just (AE.Number n) -> decodeUtf8 (AE.encode n)
   Just (AE.Bool b) -> if b then "true" else "false"
   Just AE.Null -> ""
   Just (AE.Array _) -> "…"
