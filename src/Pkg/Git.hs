@@ -651,7 +651,7 @@ publishPullRequestComment conn repo number commentId body
       result <- tryHttp $ case commentId of
         Nothing -> W.postWith (gitOpts conn) (toString $ repoUrl conn repo ("/issues/" <> show number <> "/comments")) payload
         Just cid -> W.patchWith (gitOpts conn) (toString $ repoUrl conn repo ("/issues/comments/" <> show cid)) payload
-      pure $ result >>= \response -> maybeToRight "GitHub did not return a comment ID" (response ^? W.responseBody . key "id" . _Integer <&> fromInteger)
+      pure $ result >>= fmap (.id) . first (const "GitHub did not return a comment ID") . AE.eitherDecode @GitHubObjectId . (^. W.responseBody)
 
 
 getJson :: (AE.FromJSON a, IOE :> es, W.HTTP :> es) => GitConn -> Text -> Eff es (Either DeploymentReadError a)

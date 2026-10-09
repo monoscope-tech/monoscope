@@ -225,6 +225,13 @@ spec = around withTestResources $ describe "Production impact reviews" do
     retried <- maybe (fail "run missing") pure =<< runQueryEffect tr (Reviews.getRun run.id)
     retried.state `shouldBe` Reviews.Completed
     retried.error `shouldBe` Nothing
+    -- Unmapped repositories publish a coverage gap without calling the model.
+    void $ withResource tr.trPool \conn -> execute conn "UPDATE projects.code_mappings SET service = NULL WHERE project_id = ?" (Only testPid)
+    runQueryEffect tr $ Reviews.retryRun testPid run.id
+    (unmappedRequests, ()) <- runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ transport True $ interpose @LLM.LLM (\_ _ -> liftIO $ fail "LLM called without measured evidence") $ Impact.reviewPullRequest run.id
+    let unmapped = T.intercalate " " $ map (decodeUtf8 . snd) $ filter (T.isInfixOf "/issues/comments/99" . fst) unmappedRequests
+    unmapped `shouldSatisfy` T.isInfixOf "Coverage unknown"
+    unmapped `shouldNotSatisfy` T.isInfixOf "telemetry evidence"
     void $ testServant tr $ CodeContextPage.impactReviewSettingsPostH testPid (Reviews.ReviewSettings "impact-org" "checkout" False False)
     void $ deliver tr $ payload "synchronize" (T.replicate 40 "b") "2025-01-01T00:01:00Z"
     runs <- runQueryEffect tr $ Reviews.latestRuns testPid
