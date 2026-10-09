@@ -181,8 +181,8 @@ selectActiveProjectMembers pid =
            JOIN users.users us ON (pm.user_id=us.id)
            JOIN projects.projects p ON p.id = pm.project_id
            WHERE pm.project_id=#{pid}::uuid |]
-      <> Projects.accessibleMembership
-      <> [HI.sql| ORDER BY pm.created_at, pm.id |]
+    <> Projects.accessibleMembership
+    <> [HI.sql| ORDER BY pm.created_at, pm.id |]
 
 
 getActiveProjectMemberByUserId :: DB es => Projects.ProjectId -> Projects.UserId -> Eff es (Maybe ProjectMemberVM)
@@ -193,7 +193,7 @@ getActiveProjectMemberByUserId pid uid =
       FROM projects.project_members pm JOIN users.users us ON (pm.user_id = us.id)
       JOIN projects.projects p ON p.id = pm.project_id
       WHERE pm.project_id = #{pid} AND pm.user_id = #{uid} |]
-      <> Projects.accessibleMembership
+    <> Projects.accessibleMembership
 
 
 getUserPermission :: DB es => Projects.ProjectId -> Projects.UserId -> Eff es (Maybe Permissions)
@@ -202,7 +202,7 @@ getUserPermission pid uid =
     $ [HI.sql| SELECT pm.permission FROM projects.project_members pm
            JOIN projects.projects p ON p.id = pm.project_id
            WHERE pm.project_id = #{pid} AND pm.user_id = #{uid} |]
-      <> Projects.accessibleMembership
+    <> Projects.accessibleMembership
 
 
 updateProjectMembersPermissons :: DB es => [(ProjectMemberId, Permissions)] -> Eff es ()

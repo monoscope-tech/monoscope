@@ -611,8 +611,8 @@ selectProjectsForUser uid = do
         JOIN users.users AS us ON (us.id = pm.user_id)
         WHERE pm.user_id = #{uid} AND p.deleted_at IS NULL
       |]
-      <> accessibleMembership
-      <> [HI.sql| ORDER BY p.updated_at DESC |]
+    <> accessibleMembership
+    <> [HI.sql| ORDER BY p.updated_at DESC |]
 
 
 usersByProjectId :: DB es => ProjectId -> Eff es [User]
@@ -622,7 +622,7 @@ usersByProjectId pid =
                 from users.users u join projects.project_members pm on (pm.user_id=u.id)
                 JOIN projects.projects p ON p.id = pm.project_id
                 where pm.project_id=#{pid} and u.active IS True |]
-      <> accessibleMembership
+    <> accessibleMembership
 
 
 projectEmailRecipients :: DB es => ProjectId -> [Text] -> Eff es [Text]
@@ -1584,13 +1584,15 @@ insertSession psId uid sd = EHasql.interpExecute_ [HI.sql| insert into users.per
 
 getPersistentSession :: DB es => PersistentSessionId -> Eff es (Maybe PersistentSession)
 getPersistentSession sessionId =
-  EHasql.interpOne $
-    [HI.sql| select ps.id, ps.created_at, ps.updated_at, ps.user_id, ps.session_data, to_jsonb(u) as user, u.is_sudo,
+  EHasql.interpOne
+    $ [HI.sql| select ps.id, ps.created_at, ps.updated_at, ps.user_id, ps.session_data, to_jsonb(u) as user, u.is_sudo,
         COALESCE(jsonb_agg(to_jsonb(p.*) ORDER BY p.updated_at DESC) FILTER (WHERE p.id is not NULL AND p.deleted_at IS NULL),'[]') as projects
         from users.persistent_sessions as ps
         left join users.users u on (u.id=ps.user_id)
         left join projects.project_members pm on (ps.user_id=pm.user_id)
-        left join projects.projects p on (p.id=pm.project_id) |] <> accessibleMembership <> [HI.sql|
+        left join projects.projects p on (p.id=pm.project_id) |]
+    <> accessibleMembership
+    <> [HI.sql|
         where ps.id=#{sessionId}
         GROUP BY ps.created_at, ps.updated_at, ps.id, ps.user_id, ps.session_data, u.* ,u.is_sudo; |]
 

@@ -248,14 +248,15 @@ data SlackInstall = SlackInstall {projectId :: Projects.ProjectId, onboarding ::
 createSlackInstall :: DB es => UUIDId "slack_install" -> Projects.UserId -> Projects.ProjectId -> Bool -> Eff es Bool
 createSlackInstall stateId userId projectId onboarding = do
   affected <-
-    Hasql.interpExecute $
-      [HI.sql|INSERT INTO apis.slack_install_requests (id, user_id, project_id, onboarding)
+    Hasql.interpExecute
+      $ [HI.sql|INSERT INTO apis.slack_install_requests (id, user_id, project_id, onboarding)
       SELECT #{stateId}, #{userId}, #{projectId}, #{onboarding}
       FROM projects.project_members member
       JOIN projects.projects project ON project.id = member.project_id
       JOIN users.users account ON account.id = member.user_id
       WHERE member.project_id = #{projectId} AND member.user_id = #{userId}
-        AND member.permission = 'admin'|] <> activeMembership
+        AND member.permission = 'admin'|]
+      <> activeMembership
   pure $ affected == 1
 
 
@@ -263,13 +264,14 @@ createSlackInstall stateId userId projectId onboarding = do
 -- The callback must have the same authenticated Monoscope user as the initiator.
 consumeSlackInstall :: DB es => UUIDId "slack_install" -> Projects.UserId -> Eff es (Maybe SlackInstall)
 consumeSlackInstall stateId userId =
-  Hasql.interpOne $
-    [HI.sql|DELETE FROM apis.slack_install_requests request
+  Hasql.interpOne
+    $ [HI.sql|DELETE FROM apis.slack_install_requests request
     USING projects.project_members member, projects.projects project, users.users account
     WHERE request.id = #{stateId} AND request.user_id = #{userId} AND request.expires_at > now()
       AND member.project_id = request.project_id AND member.user_id = request.user_id
       AND project.id = member.project_id AND account.id = member.user_id AND member.permission = 'admin' |]
-      <> activeMembership <> [HI.sql| RETURNING request.project_id, request.onboarding |]
+    <> activeMembership
+    <> [HI.sql| RETURNING request.project_id, request.onboarding |]
 
 
 -- | OAuth-time Slack credentials + the channel the app was installed to.
