@@ -1,8 +1,75 @@
 # Production impact reviews — working scope (2026-09-30)
 
-Status: decision-ready draft pending launch order and shared-repository
-ownership. This document scopes automatic GitHub pull request reviews, a daily
-codebase scan, and an on-demand reliability check.
+Status: automatic advisory PR reviews implemented for linked GitHub App source
+repositories. The broader daily scan and on-demand reliability report remain planned.
+
+## First release implementation (2026-10-09)
+
+- Every GitHub App repository added through code mappings is eligible by default,
+  including mappings without a service. Dashboard sync configuration is not required.
+  A shared repository receives a separate, project-labelled comment per project;
+  evidence is never combined across projects.
+- Signed `opened`, `synchronize`, `reopened`, and `ready_for_review` events queue
+  background reviews. Draft and closed events invalidate pending publication.
+  Duplicate deliveries reuse a revision run; newer events supersede older work.
+- Each review reads a bounded diff (30 files, 2,000 characters per patch), seven
+  days of event/error aggregates for explicitly mapped services, and bounded monitor
+  and dashboard query references. Missing mappings, missing telemetry, query failures,
+  and truncated diffs produce explicit coverage gaps. No raw log bodies are collected.
+- Model findings must cite a changed line and server-supplied telemetry evidence.
+  The server derives the verdict. This release only publishes “Worth checking”,
+  “Coverage unknown”, or “No finding”; it does not claim a proven production break.
+  Service-level context does not prove a changed-path or deployed-revision match.
+- One App-owned summary comment per project is updated in place. Publication rechecks
+  the PR head, base, open/draft status, project grant, repository setting, and lease.
+  A retry discovers existing App-owned comments by project marker before posting.
+  Pure documentation-only revisions complete silently; an earlier comment still
+  identifies the revision it reviewed.
+- Settings → Integrations → Source Code exposes per-repository enable/disable, aggregates-and-links
+  versus links-only output, recent results, and rerun. Links-only is the default;
+  production aggregates require an explicit opt-in. Query text is never rendered in comments.
+  Writes require edit permission.
+  Links-only comments omit generated production prose, counts, service/environment
+  labels, and query text; evidence URLs still identify the linked Monoscope query.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Queued: verified event + linked repository
+    Queued --> Reviewing: acquire PR lease
+    Reviewing --> Completed: validated result + current revision published
+    Reviewing --> Incomplete: failure, timeout, or interrupted publication
+    Incomplete --> Queued: retry
+    Completed --> Queued: manual rerun
+    Queued --> Superseded: newer revision, closed, or draft
+    Reviewing --> Superseded: newer revision, closed, or draft
+    Superseded --> Queued: reopened or ready again
+```
+
+### Enable the GitHub App
+
+1. Apply migrations `0213_pr_impact_reviews.sql` and `0214_pr_review_evidence_optin.sql`
+   through the normal startup migrator.
+2. Configure `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` (base64 PEM), and
+   `GITHUB_APP_WEBHOOK_SECRET`. The secret must match the GitHub App webhook secret;
+   dashboard-sync repository secrets are separate.
+3. Set the App webhook URL to `/webhook/github` on the public Monoscope host, enable
+   pull request events, and grant repository **Contents: read** and
+   **Pull requests: read and write**. Existing installations must accept updated
+   permissions ([GitHub permission reference](https://docs.github.com/en/rest/issues/comments#create-an-issue-comment)). The App needs access to each source repository added to the project.
+4. Add source repositories in Source Code settings and map services when known. Open or
+   update a ready PR, then check its review history and GitHub comment. Existing
+   open PRs are not backfilled until an event is received.
+
+### Remaining scope
+
+- Automatic repository/service/path and deployed-revision discovery.
+- Direct instrumentation-name/attribute continuity proof and service-scoped monitor/dashboard references using parsed query dependencies.
+- Latency/metric, issue, trace, endpoint, and deployment evidence beyond service counts.
+- Optional GitHub check runs, user feedback, short-lived evidence caching, and retention/cost controls.
+- Daily scans, project memory, and on-demand reliability reports.
+
+The following sections retain the broader product contract and backlog. They are
+not a claim that those later stages are shipped.
 
 ## Outcome
 
@@ -43,8 +110,8 @@ that issue, with the same observed/inferred distinction.
    customers can make a check required is an open decision.
 5. A user can correct a mapping, disable reviews for a repository, and rerun a review.
 6. The project's settings control whether production evidence is included in
-   GitHub comments. It is included by default; the alternative posts the
-   verdict and links while keeping production details in Monoscope.
+   GitHub comments. Links-only output is the default;
+   projects can opt into aggregates. Rerun an existing review to apply a changed output mode.
 
 Existing code context mappings can seed step 2, but today they are entered by the
 customer and an optional service means a repository may match several services.
@@ -153,7 +220,7 @@ must suppress duplicate or weak claims and state its evidence limits.
   interactive chart, trace, or issue for deeper inspection.
 - A statement of what was observed versus inferred, plus missing coverage.
 
-The default GitHub output includes bounded production aggregates, a short
+Projects can opt into GitHub output with bounded production aggregates, a short
 sanitized trace excerpt when useful, and the relevant historical context.
 The project can switch to links-only output. Neither mode posts raw log bodies,
 secrets, or personal data. The embedded image is an immutable PNG chart snapshot,

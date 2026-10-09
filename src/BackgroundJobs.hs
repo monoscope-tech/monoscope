@@ -113,6 +113,7 @@ import Pkg.EmailTemplates qualified as ET
 import Pkg.ErrorFingerprint qualified as EF
 import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.Git qualified as Git
+import Pkg.ImpactReview qualified as ImpactReview
 import Pkg.Mail (NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlertWith, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlertWith, sendSlackMessage, sendWhatsAppAlert)
 import Pkg.Mail qualified as Mail
 import Pkg.Metrics qualified as Metrics
@@ -298,6 +299,7 @@ processBackgroundJob authCtx bgJob =
     ResetSlackSession pid uid receiptId -> Slack.resetSlackSession pid uid receiptId
     EnhanceIssuesWithLLM pid issueIds -> enhanceIssuesWithLLM pid issueIds
     ProcessIssuesEnhancement scheduledTime -> unlessStale "ProcessIssuesEnhancement" scheduledTime (2 * 3600) $ processIssuesEnhancement scheduledTime
+    ReviewPullRequest rid -> ImpactReview.reviewPullRequest rid
     GitSyncFromRepo pid -> gitSyncFromRepo pid
     GitSyncPushDashboard pid dashboardId -> gitSyncPushDashboard pid (UUIDId dashboardId)
     GitSyncPushAllDashboards pid -> gitSyncPushAllDashboards pid

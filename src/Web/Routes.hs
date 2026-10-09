@@ -91,6 +91,7 @@ import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.CodeContext qualified as CodeContext
+import Models.Projects.ImpactReviews qualified as ImpactReviews
 import Pages.AIThreads qualified as AIThreads
 import Pages.BodyWrapper (NavigationResponse, PageCtx (..))
 import Pages.Bots.Discord qualified as Discord
@@ -573,6 +574,8 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , gitSyncSettingsDelete :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Delete '[HTML] (RespHeaders (Html ()))
   , codeMappingsSettings :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> QueryParam "sample" Text :> Get '[HTML] (RespHeaders (Html ()))
   , codeMappingsPost :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> ReqBody '[FormUrlEncoded] PageCodeContext.CodeMappingForm :> Post '[HTML] (RespHeaders (Html ()))
+  , impactReviewSettingsPost :: mode :- "p" :> ProjectId :> "settings" :> "pr-reviews" :> ReqBody '[FormUrlEncoded] ImpactReviews.ReviewSettings :> Post '[HTML] (RespHeaders (Html ()))
+  , impactReviewRetry :: mode :- "p" :> ProjectId :> "settings" :> "pr-reviews" :> Capture "id" ImpactReviews.ReviewId :> "rerun" :> Post '[HTML] (RespHeaders (Html ()))
   , codeMappingsDelete :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> Capture "id" CodeContext.CodeMappingId :> Delete '[HTML] (RespHeaders (Html ()))
   , prometheusSettingsGet :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> Get '[HTML] (RespHeaders Settings.PrometheusGet)
   , prometheusSettingsPost :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> ReqBody '[FormUrlEncoded] Settings.PrometheusForm :> Post '[HTML] (RespHeaders Settings.PrometheusMut)
@@ -1050,6 +1053,8 @@ cookieProtectedServer =
     , gitSyncSettingsDelete = GitSync.gitSyncSettingsDeleteH
     , codeMappingsSettings = PageCodeContext.codeMappingsGetH
     , codeMappingsPost = PageCodeContext.codeMappingsPostH
+    , impactReviewSettingsPost = PageCodeContext.impactReviewSettingsPostH
+    , impactReviewRetry = PageCodeContext.impactReviewRetryH
     , codeMappingsDelete = PageCodeContext.codeMappingsDeleteH
     , prometheusSettingsGet = Settings.prometheusGetH
     , prometheusSettingsPost = Settings.prometheusPostH
