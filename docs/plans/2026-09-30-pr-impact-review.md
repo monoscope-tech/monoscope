@@ -25,7 +25,7 @@ repositories. The broader daily scan and on-demand reliability report remain pla
   A retry discovers existing App-owned comments by project marker before posting.
   Pure documentation-only revisions complete silently; an earlier comment still
   identifies the revision it reviewed.
-- Settings → Code mappings exposes per-repository enable/disable, aggregates-and-links
+- Settings → Integrations → Source Code exposes per-repository enable/disable, aggregates-and-links
   versus links-only output, recent results, and rerun. Writes require edit permission.
   Links-only comments omit generated production prose, counts, service/environment
   labels, and query text; evidence URLs still identify the linked Monoscope query.
@@ -53,7 +53,7 @@ stateDiagram-v2
    pull request events, and grant repository **Contents: read** and
    **Pull requests: read and write**. Existing installations must accept updated
    permissions ([GitHub permission reference](https://docs.github.com/en/rest/issues/comments#create-an-issue-comment)). The App needs access to each source repository added to the project.
-4. Add source repositories in Code mappings and map services when known. Open or
+4. Add source repositories in Source Code settings and map services when known. Open or
    update a ready PR, then check its review history and GitHub comment. Existing
    open PRs are not backfilled until an event is received.
 

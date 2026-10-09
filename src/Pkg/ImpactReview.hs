@@ -137,9 +137,9 @@ changedLines file = go Nothing $ lines $ fromMaybe "" file.patch
 -- >>> let result = ReviewResult NoFinding [finding] [] [] now now
 -- >>> fmap (.verdict) (validateResult [file] [measured] [] result)
 -- Right WorthChecking
--- >>> validateResult [file] [measured] [] result{findings = [finding{evidenceKeys = ["invented"]}]} & either id (const "accepted")
+-- >>> validateResult [file] [measured] [] (ReviewResult NoFinding [finding{evidenceKeys = ["invented"]}] [] [] now now) & either id (const "accepted")
 -- "Finding cites unavailable evidence"
--- >>> validateResult [file] [measured] [] result{findings = [finding{location = ChangedLine "a.hs" 2 Head}]} & either id (const "accepted")
+-- >>> validateResult [file] [measured] [] (ReviewResult NoFinding [finding{location = ChangedLine "a.hs" 2 Head}] [] [] now now) & either id (const "accepted")
 -- "Finding does not reference a changed line"
 validateResult :: [Git.PullRequestFile] -> [Evidence] -> [Text] -> ReviewResult -> Either Text ReviewResult
 validateResult files evidence gaps result = do

@@ -164,14 +164,14 @@ codeMappingsContent pid sampleM = do
             select_ [name_ "includeEvidence", class_ "select select-sm"] do
               option_ ([value_ "true"] <> [selected_ "selected" | settings.includeEvidence]) "Aggregates and links"
               option_ ([value_ "false"] <> [selected_ "selected" | not settings.includeEvidence]) "Links only"
-          button_ [type_ "submit", class_ "btn btn-sm btn-secondary"] "Save review settings"
+          button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save review settings"
         forM_ reviewRuns \run -> details_ [class_ "rounded-lg border border-strokeWeak p-3"] do
           summary_ [class_ "cursor-pointer text-sm text-textStrong"] $ toHtml (run.owner <> "/" <> run.repo <> " #" <> show run.number <> " · " <> show run.state <> " · " <> T.take 8 run.revision)
           whenJust run.error $ p_ [class_ "mt-2 text-xs text-textError"] . toHtml
           whenJust run.result \value -> case AE.fromJSON value of
             AE.Error _ -> p_ [class_ "mt-2 text-xs text-textWeak"] "The saved review could not be displayed. Rerun the review."
             AE.Success result -> div_ [class_ "prose prose-sm mt-2 max-w-none"] $ renderMarkdown (ImpactReview.renderReview authConfig.hostUrl run True result)
-          when (run.revision == run.latestRevision && run.state /= ImpactReviews.Reviewing) $ button_ [class_ "btn btn-xs btn-secondary mt-2", hxPost_ ("/p/" <> pid.toText <> "/settings/pr-reviews/" <> run.id.toText <> "/rerun"), hxTarget_ "#code-mappings-content"] "Rerun review"
+          when (run.revision == run.latestRevision && run.state /= ImpactReviews.Reviewing) $ button_ [class_ "btn btn-xs btn-ghost mt-2", hxPost_ ("/p/" <> pid.toText <> "/settings/pr-reviews/" <> run.id.toText <> "/rerun"), hxTarget_ "#code-mappings-content"] "Rerun review"
   where
     sample = fromMaybe "" sampleM
 
