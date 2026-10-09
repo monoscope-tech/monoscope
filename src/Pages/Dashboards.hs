@@ -1973,7 +1973,7 @@ instance ToHtml DashboardNew where
 dashboardNewForm_ :: DashboardNew -> Html ()
 dashboardNewForm_ dg = form_
   [ id_ "newDashboardForm"
-  , [__|on htmx:afterSettle if #newDashboardMdl.checked call #title.focus() end|]
+  , [__|on htmx:afterSettle wait 50ms then if #newDashboardMdl.checked call #title.focus() end|]
   , class_ "-m-1 flex flex-col gap-5 overflow-y-auto p-1 md:min-h-0 md:flex-row md:overflow-hidden group/md"
   , style_ "height:min(80vh,48rem)"
   , hxPost_ $ "/p/" <> dg.projectId.toText <> "/dashboards"
