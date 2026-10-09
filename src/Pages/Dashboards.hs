@@ -1973,7 +1973,6 @@ instance ToHtml DashboardNew where
 dashboardNewForm_ :: DashboardNew -> Html ()
 dashboardNewForm_ dg = form_
   [ id_ "newDashboardForm"
-  , [__|on htmx:afterSettle wait 50ms then if #newDashboardMdl.checked call #title.focus() end|]
   , class_ "-m-1 flex flex-col gap-5 overflow-y-auto p-1 md:min-h-0 md:flex-row md:overflow-hidden group/md"
   , style_ "height:min(80vh,48rem)"
   , hxPost_ $ "/p/" <> dg.projectId.toText <> "/dashboards"
@@ -1999,7 +1998,7 @@ dashboardNewForm_ dg = form_
 
     div_ [class_ "flex min-w-0 shrink-0 flex-col gap-4 md:min-h-0 md:flex-1"] do
       div_ [class_ "grid shrink-0 grid-cols-1 gap-3 sm:grid-cols-3 [&_.input]:h-12 [&_.tagify]:h-12 [&_.tagify]:min-h-12 [&_.tagify]:overflow-y-auto"] do
-        formField_ FieldSm def{value = "Blank dashboard", extraAttrs = [data_ "template-title" "Blank dashboard"]} "Dashboard name" "title" True Nothing
+        formField_ FieldSm def{value = "Blank dashboard", extraAttrs = [autofocus_, data_ "template-title" "Blank dashboard"]} "Dashboard name" "title" True Nothing
         let teamList = encodeText $ (\x -> AE.object ["name" AE..= ("@" <> x.handle), "value" AE..= x.id]) <$> dg.teams
         formField_ FieldSm def{placeholder = "Add teams"} "Teams" "teamHandlesInput" False $ Just $ tagInput_ "teamHandlesInput" "Add teams" [rows_ "1", data_ "tagify-text-prop" "name", data_ "tagify-whitelist" teamList, data_ "tagify-resolve" "", data_ "tagify-initial" $ encodeText $ V.map (.id) $ V.filter (.is_everyone) dg.teams]
         formField_ FieldSm def{placeholder = "reports/"} "Folder" "fileDir" False Nothing

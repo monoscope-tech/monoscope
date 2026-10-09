@@ -943,7 +943,7 @@ modalWith_ modalId cfg triggerM contentHtml = do
             add .overflow-hidden to <body/>
             wait 50ms then
             set :modal to the next <.modal/> then
-            set :focusable to :modal.querySelector('input:not([type=hidden]):not([type=checkbox]), textarea, select, [tabindex]:not([tabindex="-1"])') then
+            set :focusable to :modal.querySelector('[autofocus]') or :modal.querySelector('input:not([type=hidden]):not([type=checkbox]), textarea, select, [tabindex]:not([tabindex="-1"])') then
             if :focusable then call :focusable.focus() end
           else
             remove .overflow-hidden from <body/>
