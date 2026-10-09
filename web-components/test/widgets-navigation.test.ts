@@ -67,6 +67,46 @@ const shell = () => `<a id="explorer" href="/log_explorer">Explorer</a><main id=
   <section data-chart-config='${JSON.stringify({ ...config(id), echartOpt: JSON.stringify(config(id).opt) })}'><div id="${id}" data-chart-widget></div></section>
 `).join('')}</main>`;
 
+test('opening another log detail does not refetch the Explorer widgets', async () => {
+  const byEl = new Map<Element, any>();
+  (window as any).echarts = {
+    getInstanceByDom: (el: Element) => byEl.get(el),
+    init: (el: HTMLElement) => {
+      const chart = {
+        setOption: vi.fn(), hideLoading: vi.fn(), showLoading: vi.fn(),
+        dispatchAction: vi.fn(), isDisposed: () => false, dispose: vi.fn(), on: vi.fn(),
+      };
+      byEl.set(el, chart);
+      return chart;
+    },
+  };
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+    from: 0, to: 1, headers: ['timestamp', 'count'], dataset: [[0, 1]],
+  }), { headers: { 'Content-Type': 'application/json' } })));
+  history.replaceState({}, '', '/log_explorer?since=1H');
+  document.body.innerHTML = shell() + '<aside id="log_details_container"></aside>';
+  document.dispatchEvent(new CustomEvent('htmx:after:swap'));
+  await vi.waitFor(() => expect(byEl.size).toBe(2));
+  (globalThis as any).triggerIntersection();
+  await vi.waitFor(() => expect([...byEl.values()].every(c => c.hideLoading.mock.calls.length === 1)).toBe(true));
+  vi.mocked(fetch).mockClear();
+  byEl.forEach(c => c.showLoading.mockClear());
+
+  for (const selection of ['&target_event=first&details_width=550px', '&target_event=second&details_width=600px&showTrace=trace', '']) {
+    history.replaceState({}, '', `/log_explorer?since=1H${selection}`);
+    await htmx.swap({ text: `<p>Detail ${selection}</p>`, target: '#log_details_container', swap: 'innerHTML' });
+    expect(document.querySelector('#log_details_container')?.textContent).toBe(`Detail ${selection}`);
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect(fetch).not.toHaveBeenCalled();
+    byEl.forEach(c => expect(c.showLoading).not.toHaveBeenCalled());
+  }
+
+  history.replaceState({}, '', '/log_explorer?since=3H');
+  document.dispatchEvent(new CustomEvent('htmx:after:swap'));
+  await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+  expect(vi.mocked(fetch).mock.calls.every(([url]) => new URL(String(url), location.origin).searchParams.get('since') === '3H')).toBe(true);
+});
+
 test('Explorer morph navigation reinitializes identical widget configurations and loads the cleared query', async () => {
   const instances: any[] = [];
   (window as any).echarts = {
