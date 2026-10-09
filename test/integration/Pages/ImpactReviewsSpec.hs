@@ -161,6 +161,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
             pure $ Right $ decodeUtf8 $ AE.encode (answer :: Impact.ReviewResult)
           LLM.CallAgenticChat history params token -> LLM.callAgenticChat history params token
           LLM.EmbedDocuments config docs -> LLM.embedDocuments config docs
+    let queryResult = result{Impact.evidence = [Impact.Evidence "telemetry-1" Impact.Monitor Nothing Nothing "/monitor" (Just "private-customer-query") Nothing]}
+    for_ [False, True] \includeEvidence -> Impact.renderReview cfg.hostUrl run includeEvidence queryResult `shouldNotSatisfy` T.isInfixOf "private-customer-query"
     (requests, ()) <- runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ transport True $ fakeModel result $ Impact.reviewPullRequest run.id
     let comments = filter (T.isInfixOf "/issues/comments/99" . fst) requests
     length comments `shouldBe` 1

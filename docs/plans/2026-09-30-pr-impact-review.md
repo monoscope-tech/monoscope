@@ -27,7 +27,8 @@ repositories. The broader daily scan and on-demand reliability report remain pla
   identifies the revision it reviewed.
 - Settings → Integrations → Source Code exposes per-repository enable/disable, aggregates-and-links
   versus links-only output, recent results, and rerun. Links-only is the default;
-  production aggregates require an explicit opt-in. Writes require edit permission.
+  production aggregates require an explicit opt-in. Query text is never rendered in comments.
+  Writes require edit permission.
   Links-only comments omit generated production prose, counts, service/environment
   labels, and query text; evidence URLs still identify the linked Monoscope query.
 
@@ -62,7 +63,7 @@ stateDiagram-v2
 ### Remaining scope
 
 - Automatic repository/service/path and deployed-revision discovery.
-- Direct instrumentation-name/attribute continuity proof using parsed query dependencies.
+- Direct instrumentation-name/attribute continuity proof and service-scoped monitor/dashboard references using parsed query dependencies.
 - Latency/metric, issue, trace, endpoint, and deployment evidence beyond service counts.
 - Optional GitHub check runs, user feedback, short-lived evidence caching, and retention/cost controls.
 - Daily scans, project memory, and on-demand reliability reports.
