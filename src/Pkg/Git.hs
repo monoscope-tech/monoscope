@@ -51,6 +51,8 @@ module Pkg.Git (
   EvidencePage (..),
   listDeployments,
   PullRequest (..),
+  CommitRef (..),
+  GitHubApp (..),
   PullRequestFile (..),
   PullRequestComment (..),
   getPullRequest,
@@ -581,30 +583,26 @@ data DeploymentEvidence = DeploymentEvidence
 
 
 -- | Coordinates come from the verified installation, never from payload URLs.
+newtype CommitRef = CommitRef {sha :: Text}
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+newtype GitHubApp = GitHubApp {id :: Int64}
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
 data PullRequest = PullRequest
-  { revision :: Text
-  , baseRevision :: Text
+  { head :: CommitRef
+  , base :: CommitRef
   , state :: Text
   , draft :: Bool
   , changedFiles :: Int
   , updatedAt :: UTCTime
   }
   deriving stock (Generic, Show)
-
-
-instance AE.FromJSON PullRequest where
-  parseJSON = AE.withObject "PullRequest" \o ->
-    PullRequest
-      <$> (o AE..: "head" >>= (AE..: "sha"))
-      <*> (o AE..: "base" >>= (AE..: "sha"))
-      <*> o
-      AE..: "state"
-      <*> o
-      AE..: "draft"
-      <*> o
-      AE..: "changed_files"
-      <*> o
-      AE..: "updated_at"
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake PullRequest
 
 
 data PullRequestFile = PullRequestFile
@@ -619,19 +617,10 @@ data PullRequestFile = PullRequestFile
 data PullRequestComment = PullRequestComment
   { id :: Int64
   , body :: Text
-  , appId :: Maybe Int64
+  , performedViaGithubApp :: Maybe GitHubApp
   }
   deriving stock (Generic, Show)
-
-
-instance AE.FromJSON PullRequestComment where
-  parseJSON = AE.withObject "PullRequestComment" \o ->
-    PullRequestComment
-      <$> o
-      AE..: "id"
-      <*> o
-      AE..: "body"
-      <*> ((o AE..:? "performed_via_github_app") >>= traverse (AE..: "id"))
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake PullRequestComment
 
 
 getPullRequest :: (IOE :> es, W.HTTP :> es) => GitConn -> RepoRef -> Int -> Eff es (Either Text PullRequest)
@@ -760,7 +749,7 @@ fetchTree conn r prefix = runExceptT do
           sequence <$> forM es \e ->
             if not e.isBlob
               then pure $ Right e
-              else fmap (\blob -> e{sha = Just (computeContentSha blob)}) <$> fetchFile conn r e.path
+              else fmap (\blob -> (e{sha = Just (computeContentSha blob)} :: TreeEntry)) <$> fetchFile conn r e.path
 
 
 -- | The blob at @path@ in @r.ref@ — a branch name or a commit sha, since every host's read

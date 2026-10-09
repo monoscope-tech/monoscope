@@ -1,5 +1,6 @@
 module Pages.ImpactReviewsSpec (spec) where
 
+import BackgroundJobs.Types qualified as Jobs
 import Data.Aeson qualified as AE
 import Data.Base64.Types (extractBase64)
 import Data.ByteArray qualified as BA
@@ -9,7 +10,8 @@ import Data.ByteString.Base64 qualified as B64
 import Data.Effectful.LLM qualified as LLM
 import Data.Pool (withResource)
 import Data.Text qualified as T
-import Database.PostgreSQL.Simple (Only (..), query)
+import Database.PostgreSQL.Simple (Only (..), execute, query)
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Effectful.Dispatch.Dynamic (interpose)
 import Effectful.Error.Static (catchError)
 import Effectful.Reader.Static qualified as Reader
@@ -27,6 +29,7 @@ import Servant (ServerError (..))
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATBackgroundCtx)
 import Test.Hspec
+import UnliftIO.Exception (tryAny)
 import "cryptonite" Crypto.Hash.Algorithms (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
@@ -77,6 +80,9 @@ spec = around withTestResources $ describe "Production impact reviews" do
     [old] <- runQueryEffect tr $ Reviews.latestRuns testPid
     runQueryEffect tr (Reviews.claimRun old) `shouldReturn` True
     runQueryEffect tr (Reviews.currentRun old) `shouldReturn` True
+    queuedPayload <- withResource tr.trPool \conn -> query conn "SELECT payload FROM background_jobs WHERE payload->>'tag' = 'ReviewPullRequest'" () :: IO [Only (Aeson AE.Value)]
+    queuedPayload `shouldBe` [Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest old.id]
+    (_, ()) <- runTestBgRecordingHTTP frozenTime tr $ Impact.reviewPullRequest old.id
     void $ deliver tr $ payload "synchronize" next "2025-01-01T00:01:00Z"
     void $ deliver tr firstEvent
     runQueryEffect tr (Reviews.currentRun old) `shouldReturn` False
@@ -84,15 +90,22 @@ spec = around withTestResources $ describe "Production impact reviews" do
     map (.latestRevision) runs `shouldBe` [next, next]
     new <- maybe (fail "new revision missing") pure $ find ((== next) . (.revision)) runs
     runQueryEffect tr (Reviews.claimRun new) `shouldReturn` False
-    runQueryEffect tr $ Reviews.releaseRun old Nothing
+    deferred <- withResource tr.trPool \conn -> query conn "SELECT payload FROM background_jobs WHERE run_at > now() AND payload->>'tag' = 'ReviewPullRequest'" () :: IO [Only (Aeson AE.Value)]
+    deferred `shouldBe` [Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest new.id]
+    runQueryEffect tr $ Reviews.releaseRun old
     runQueryEffect tr (Reviews.claimRun new) `shouldReturn` True
     runQueryEffect tr (Reviews.currentRun new) `shouldReturn` True
+    void $ withResource tr.trPool \conn -> execute conn "UPDATE projects.pr_review_threads SET lease_until = now() - interval '1 second' WHERE id = ?" (Only new.threadId)
+    runQueryEffect tr (Reviews.currentRun new) `shouldReturn` False
+    runQueryEffect tr (Reviews.claimRun new) `shouldReturn` True
+    void $ deliver tr $ payload "converted_to_draft" next "2025-01-01T00:01:30Z"
+    runQueryEffect tr (Reviews.currentRun new) `shouldReturn` False
     void $ deliver tr $ payload "closed" next "2025-01-01T00:02:00Z"
     runQueryEffect tr (Reviews.currentRun new) `shouldReturn` False
     void $ deliver tr $ payload "reopened" next "2025-01-01T00:03:00Z"
     reopened <- maybe (fail "run missing") pure =<< runQueryEffect tr (Reviews.getRun new.id)
     reopened.state `shouldBe` Reviews.Queued
-    runQueryEffect tr $ Reviews.releaseRun new Nothing
+    runQueryEffect tr $ Reviews.releaseRun new
     (_, unsignedStatus) <-
       runAsBaseRecordingHTTP tr
         $ catchError @ServerError
@@ -114,7 +127,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     runQueryEffect tr (Reviews.claimRun otherRun) `shouldReturn` True
     runQueryEffect tr $ Reviews.updateSettings otherPid (Reviews.ReviewSettings "impact-org" "checkout" False True)
     runQueryEffect tr (Reviews.currentRun otherRun) `shouldReturn` False
-    runQueryEffect tr $ Reviews.releaseRun otherRun Nothing
+    runQueryEffect tr $ Reviews.releaseRun otherRun
     released <- maybe (fail "run missing") pure =<< runQueryEffect tr (Reviews.getRun otherRun.id)
     released.state `shouldBe` Reviews.Incomplete
 
@@ -180,6 +193,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
     -- Reruns recover the app-owned comment and keep production prose out of links-only output.
     void $ testServant tr $ CodeContextPage.impactReviewSettingsPostH testPid (Reviews.ReviewSettings "impact-org" "checkout" True False)
     void $ testServant tr $ CodeContextPage.impactReviewRetryH testPid run.id
+    retryPayloads <- withResource tr.trPool \conn -> query conn "SELECT payload FROM background_jobs WHERE payload->>'tag' = 'ReviewPullRequest' AND payload->>'contents' = ?" (Only run.id.toText) :: IO [Only (Aeson AE.Value)]
+    retryPayloads `shouldBe` replicate 2 (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest run.id)
     (linksRequests, ()) <- runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ transport True $ fakeModel result $ Impact.reviewPullRequest run.id
     let linksPublished = T.intercalate " " $ map (decodeUtf8 . snd) $ filter (T.isInfixOf "/issues/comments/99" . fst) linksRequests
     linksPublished `shouldSatisfy` T.isInfixOf "telemetry evidence"
@@ -192,6 +207,14 @@ spec = around withTestResources $ describe "Production impact reviews" do
     let created = T.intercalate " " $ map (decodeUtf8 . snd) $ filter (T.isSuffixOf "/issues/7/comments" . fst) newRequests
     created `shouldSatisfy` T.isInfixOf "Coverage unknown"
     created `shouldNotSatisfy` T.isInfixOf "Invented mechanism"
+    runQueryEffect tr $ Reviews.retryRun testPid run.id
+    failed <- tryAny $ runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg{githubAppPrivateKey = ""}}) $ Impact.reviewPullRequest run.id
+    failed `shouldSatisfy` isLeft
+    failedRun <- maybe (fail "run missing") pure =<< runQueryEffect tr (Reviews.getRun run.id)
+    failedRun.state `shouldBe` Reviews.Incomplete
+    failedRun.error `shouldSatisfy` isJust
+    runQueryEffect tr (Reviews.claimRun failedRun) `shouldReturn` True
+    runQueryEffect tr $ Reviews.releaseRun failedRun
     void $ testServant tr $ CodeContextPage.impactReviewSettingsPostH testPid (Reviews.ReviewSettings "impact-org" "checkout" False False)
     void $ deliver tr $ payload "synchronize" (T.replicate 40 "b") "2025-01-01T00:01:00Z"
     runs <- runQueryEffect tr $ Reviews.latestRuns testPid

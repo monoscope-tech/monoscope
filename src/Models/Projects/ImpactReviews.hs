@@ -5,6 +5,8 @@ module Models.Projects.ImpactReviews (
   ReviewSettings (..),
   PullRequestEvent (..),
   receiveEvent,
+  decodeEvent,
+  recordFailure,
   getRun,
   claimRun,
   currentRun,
@@ -24,11 +26,15 @@ import Data.Char (isHexDigit)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Text qualified as T
 import Data.Time (UTCTime)
+import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
+import Database.PostgreSQL.Simple.ToField (ToField)
+import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff)
 import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects (ProjectId)
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
+import Pkg.Git qualified as Git
 import Relude
 import System.Types (DB)
 import Web.FormUrlEncoded (FromForm)
@@ -36,7 +42,7 @@ import Web.FormUrlEncoded (FromForm)
 
 data ReviewState = Queued | Reviewing | Completed | Incomplete | Superseded
   deriving stock (Eq, Generic, Read, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via WrappedEnumSC 'Nothing "" ReviewState
+  deriving (AE.FromJSON, AE.ToJSON, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "" ReviewState
 
 
 type ReviewId = UUIDId "pr_review"
@@ -57,7 +63,7 @@ data ReviewRun = ReviewRun
   , latestRevision :: Text
   }
   deriving stock (Generic, Show)
-  deriving anyclass (AE.FromJSON)
+  deriving anyclass (AE.FromJSON, HI.DecodeRow)
 
 
 data ReviewSettings = ReviewSettings {owner :: Text, repo :: Text, enabled :: Bool, includeEvidence :: Bool}
@@ -79,24 +85,33 @@ data PullRequestEvent = PullRequestEvent
   deriving stock (Generic, Show)
 
 
-instance AE.FromJSON PullRequestEvent where
-  parseJSON = AE.withObject "PullRequestEvent" \o -> do
-    action <- o AE..: "action"
-    unless (action `elem` (["opened", "synchronize", "reopened", "ready_for_review", "closed", "converted_to_draft"] :: [Text])) $ fail "Unsupported PR action"
-    fullName <- o AE..: "repository" >>= (AE..: "full_name")
-    (owner, repo) <- case T.splitOn "/" fullName of
-      [owner, repo] | not (T.null owner || T.null repo) -> pure (T.toLower owner, T.toLower repo)
-      _ -> fail "Invalid repository"
-    installationId <- o AE..: "installation" >>= (AE..: "id")
-    number <- o AE..: "number"
-    unless (number > 0) $ fail "Invalid PR number"
-    pr <- o AE..: "pull_request"
-    revision <- pr AE..: "head" >>= (AE..: "sha")
-    unless (T.length revision == 40 && T.all isHexDigit revision) $ fail "Invalid head revision"
-    updatedAt <- pr AE..: "updated_at"
-    prState <- pr AE..: "state"
-    draft <- pr AE..: "draft"
-    pure PullRequestEvent{owner, repo, installationId, number, revision = T.toLower revision, updatedAt, reviewable = prState == ("open" :: Text) && not draft}
+newtype Repository = Repository {fullName :: Text}
+  deriving stock (Generic, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Repository
+
+
+data PullRequestStatus = PullRequestStatus {head :: Git.CommitRef, state :: Text, draft :: Bool, updatedAt :: UTCTime}
+  deriving stock (Generic, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake PullRequestStatus
+
+
+data GitHubEvent = GitHubEvent {action :: Text, repository :: Repository, installation :: Git.GitHubApp, number :: Int, pullRequest :: PullRequestStatus}
+  deriving stock (Generic, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake GitHubEvent
+
+
+decodeEvent :: ByteString -> Either Text PullRequestEvent
+decodeEvent body = do
+  event <- first toText $ AE.eitherDecodeStrict @GitHubEvent body
+  unless (event.action `elem` ["opened", "synchronize", "reopened", "ready_for_review", "closed", "converted_to_draft"]) $ Left "Unsupported PR action"
+  (owner, repo) <- case T.splitOn "/" event.repository.fullName of
+    [owner, repo] | not (T.null owner || T.null repo) -> pure (T.toLower owner, T.toLower repo)
+    _ -> Left "Invalid repository"
+  unless (event.number > 0) $ Left "Invalid PR number"
+  let pr = event.pullRequest
+      revision = pr.head.sha
+  unless (T.length revision == 40 && T.all isHexDigit revision) $ Left "Invalid head revision"
+  pure $ PullRequestEvent owner repo event.installation.id event.number (T.toLower revision) pr.updatedAt (pr.state == "open" && not pr.draft)
 
 
 -- | Grant resolution, receipt, and odd-job insertion are one statement. An
@@ -119,39 +134,54 @@ receiveEvent event =
     RETURNING id
   ), runs AS (
     INSERT INTO projects.pr_review_runs (thread_id, revision, state)
-    SELECT id, #{event.revision}, CASE WHEN #{event.reviewable} THEN 'queued' ELSE 'superseded' END FROM threads
+    SELECT id, #{event.revision}, CASE WHEN #{event.reviewable} THEN #{Queued} ELSE #{Superseded} END FROM threads
     ON CONFLICT (thread_id, revision) DO UPDATE SET state = CASE
-      WHEN NOT #{event.reviewable} THEN 'superseded'
-      WHEN projects.pr_review_runs.state = 'superseded' THEN 'queued'
+      WHEN NOT #{event.reviewable} THEN #{Superseded}
+      WHEN projects.pr_review_runs.state = #{Superseded} THEN #{Queued}
       ELSE projects.pr_review_runs.state END
-    WHERE NOT #{event.reviewable} OR projects.pr_review_runs.state = 'superseded'
+    WHERE NOT #{event.reviewable} OR projects.pr_review_runs.state = #{Superseded}
     RETURNING id, state
   ) INSERT INTO background_jobs (run_at, status, payload)
     SELECT now(), 'queued', jsonb_build_object('tag', 'ReviewPullRequest', 'contents', id)
-    FROM runs WHERE state = 'queued'|]
+    FROM runs WHERE state = #{Queued}|]
 
 
 getRun :: DB es => ReviewId -> Eff es (Maybe ReviewRun)
-getRun rid =
-  Hasql.interpOneJson
-    [HI.sql|SELECT jsonb_build_object('id', r.id, 'threadId', t.id, 'projectId', t.project_id,
-    'owner', t.owner, 'repo', t.repo, 'number', t.number, 'revision', r.revision,
-    'state', r.state, 'result', r.result, 'error', r.error, 'commentId', t.comment_id, 'latestRevision', t.latest_revision)
-    FROM projects.pr_review_runs r JOIN projects.pr_review_threads t ON t.id = r.thread_id WHERE r.id = #{rid}|]
+getRun rid = listToMaybe <$> selectRuns Nothing (Just rid)
+
+
+selectRuns :: DB es => Maybe ProjectId -> Maybe ReviewId -> Eff es [ReviewRun]
+selectRuns pid rid =
+  Hasql.interp
+    [HI.sql|SELECT r.id, t.id, t.project_id, t.owner, t.repo, t.number::bigint, r.revision,
+    r.state, r.result, r.error, t.comment_id, t.latest_revision
+    FROM projects.pr_review_runs r JOIN projects.pr_review_threads t ON t.id = r.thread_id
+    WHERE (#{pid}::uuid IS NULL OR t.project_id = #{pid}) AND (#{rid}::uuid IS NULL OR r.id = #{rid})
+    ORDER BY r.created_at DESC LIMIT 20|]
 
 
 claimRun :: DB es => ReviewRun -> Eff es Bool
-claimRun run =
-  (> 0)
-    <$> Hasql.interpExecute
+claimRun run = do
+  let payload = Aeson $ AE.toJSON $ Jobs.ReviewPullRequest run.id
+  fromMaybe False
+    <$> Hasql.interpOne
       [HI.sql|WITH leased AS (
-    UPDATE projects.pr_review_threads t SET lease_owner = #{run.id}, lease_until = now() + interval '10 minutes'
+    UPDATE projects.pr_review_threads t SET lease_owner = #{run.id}, lease_until = now() + interval '3 minutes'
     WHERE t.id = #{run.threadId} AND t.latest_revision = #{run.revision}
       AND (t.lease_until IS NULL OR t.lease_until < now())
-      AND EXISTS (SELECT 1 FROM projects.pr_review_runs r WHERE r.id = #{run.id} AND r.state IN ('queued', 'reviewing', 'incomplete'))
+      AND EXISTS (SELECT 1 FROM projects.pr_review_runs r WHERE r.id = #{run.id} AND r.state IN (#{Queued}, #{Reviewing}, #{Incomplete}))
     RETURNING t.id
-  ) UPDATE projects.pr_review_runs SET state = 'reviewing', error = NULL
-    WHERE id = #{run.id} AND thread_id IN (SELECT id FROM leased)|]
+  ), claimed AS (
+    UPDATE projects.pr_review_runs SET state = #{Reviewing}, error = NULL
+    WHERE id = #{run.id} AND thread_id IN (SELECT id FROM leased) RETURNING id
+  ), deferred AS (
+    INSERT INTO background_jobs (run_at, status, payload)
+    SELECT t.lease_until + interval '1 second', 'queued', #{payload}
+    FROM projects.pr_review_threads t JOIN projects.pr_review_runs r ON r.thread_id = t.id
+    WHERE r.id = #{run.id} AND t.latest_revision = r.revision AND t.lease_owner <> r.id AND t.lease_until > now()
+      AND r.state IN (#{Queued}, #{Incomplete}) AND NOT EXISTS (SELECT 1 FROM claimed)
+    RETURNING id
+  ) SELECT EXISTS (SELECT 1 FROM claimed)|]
 
 
 currentRun :: DB es => ReviewRun -> Eff es Bool
@@ -159,7 +189,7 @@ currentRun run =
   fromMaybe False
     <$> Hasql.interpOne
       [HI.sql|SELECT t.latest_revision = r.revision AND t.lease_owner = r.id AND t.lease_until > now()
-    AND r.state = 'reviewing'
+    AND r.state = #{Reviewing}
     AND coalesce(s.enabled, true)
     AND EXISTS (SELECT 1 FROM projects.code_mappings m JOIN projects.git_credentials c ON c.id = m.credential_id AND c.project_id = m.project_id
       WHERE m.project_id = t.project_id AND lower(m.owner) = t.owner AND lower(m.repo) = t.repo AND c.host = 'github' AND c.api_base IS NULL AND c.installation_id IS NOT NULL)
@@ -175,21 +205,25 @@ saveResult run result = Hasql.interpExecute_ [HI.sql|UPDATE projects.pr_review_r
 finishRun :: DB es => ReviewRun -> Maybe Int64 -> Eff es ()
 finishRun run commentId =
   Hasql.interpExecute_
-    [HI.sql|WITH finished AS (UPDATE projects.pr_review_runs SET state = 'completed', finished_at = now()
-    WHERE id = #{run.id} AND state = 'reviewing' RETURNING thread_id)
+    [HI.sql|WITH finished AS (UPDATE projects.pr_review_runs SET state = #{Completed}, finished_at = now()
+    WHERE id = #{run.id} AND state = #{Reviewing} RETURNING thread_id)
     UPDATE projects.pr_review_threads SET comment_id = coalesce(#{commentId}, comment_id)
     WHERE id IN (SELECT thread_id FROM finished) AND lease_owner = #{run.id}|]
 
 
-releaseRun :: DB es => ReviewRun -> Maybe Text -> Eff es ()
-releaseRun run err =
+recordFailure :: DB es => ReviewRun -> Text -> Eff es ()
+recordFailure run err = Hasql.interpExecute_ [HI.sql|UPDATE projects.pr_review_runs SET error = #{err} WHERE id = #{run.id}|]
+
+
+releaseRun :: DB es => ReviewRun -> Eff es ()
+releaseRun run =
   Hasql.interpExecute_
     [HI.sql|WITH released AS (UPDATE projects.pr_review_threads SET lease_owner = NULL, lease_until = NULL
     WHERE id = #{run.threadId} AND lease_owner = #{run.id} RETURNING latest_revision)
     UPDATE projects.pr_review_runs SET state = CASE
-      WHEN revision <> (SELECT latest_revision FROM released) THEN 'superseded'
-      WHEN #{err}::text IS NOT NULL OR state = 'reviewing' THEN 'incomplete' ELSE state END,
-      error = coalesce(#{err}, CASE WHEN state = 'reviewing' THEN 'Review interrupted before publication; rerun when ready' ELSE error END)
+      WHEN revision <> (SELECT latest_revision FROM released) THEN #{Superseded}
+      WHEN state = #{Reviewing} THEN #{Incomplete} ELSE state END,
+      error = coalesce(error, CASE WHEN state = #{Reviewing} THEN 'Review interrupted before publication; rerun when ready' ELSE NULL END)
     WHERE id = #{run.id} AND EXISTS (SELECT 1 FROM released)|]
 
 
@@ -213,19 +247,14 @@ updateSettings pid settings =
 
 
 latestRuns :: DB es => ProjectId -> Eff es [ReviewRun]
-latestRuns pid =
-  Hasql.interp
-    [HI.sql|SELECT r.id FROM projects.pr_review_runs r JOIN projects.pr_review_threads t ON t.id = r.thread_id
-    WHERE t.project_id = #{pid} ORDER BY r.created_at DESC LIMIT 20|]
-    >>= fmap catMaybes
-    . traverse getRun
+latestRuns pid = selectRuns (Just pid) Nothing
 
 
 retryRun :: DB es => ProjectId -> ReviewId -> Eff es ()
 retryRun pid rid = do
   let payload = Aeson $ AE.toJSON $ Jobs.ReviewPullRequest rid
   Hasql.interpExecute_
-    [HI.sql|WITH retried AS (UPDATE projects.pr_review_runs r SET state = 'queued', result = NULL, error = NULL
+    [HI.sql|WITH retried AS (UPDATE projects.pr_review_runs r SET state = #{Queued}, result = NULL, error = NULL
       FROM projects.pr_review_threads t WHERE r.id = #{rid} AND r.thread_id = t.id AND t.project_id = #{pid}
         AND r.revision = t.latest_revision AND (t.lease_until IS NULL OR t.lease_until < now())
       RETURNING r.id)
@@ -233,4 +262,4 @@ retryRun pid rid = do
 
 
 supersedeRun :: DB es => ReviewRun -> Eff es ()
-supersedeRun run = Hasql.interpExecute_ [HI.sql|UPDATE projects.pr_review_runs SET state = 'superseded', finished_at = now() WHERE id = #{run.id}|]
+supersedeRun run = Hasql.interpExecute_ [HI.sql|UPDATE projects.pr_review_runs SET state = #{Superseded}, finished_at = now() WHERE id = #{run.id}|]
