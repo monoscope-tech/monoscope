@@ -28,7 +28,7 @@ import UnliftIO.Exception (bracket, throwIO, tryAny)
 -- $setup
 -- >>> import Pkg.Git qualified as Git
 -- >>> import Relude
--- >>> import Data.Time (UTCTime)
+-- >>> import Data.Time (UTCTime (..), fromGregorian)
 
 
 data Verdict = WorthChecking | CoverageUnknown | NoFinding
@@ -130,7 +130,7 @@ changedLines file = go Nothing $ lines $ fromMaybe "" file.patch
 -- | The model cannot introduce evidence or links. Every finding must cite a
 -- changed location and measured service evidence. Verdicts are derived here.
 --
--- >>> let now = read "2025-01-01 00:00:00 UTC" :: UTCTime
+-- >>> let now = UTCTime (fromGregorian 2025 1 1) 0
 -- >>> let file = Git.PullRequestFile "a.hs" "modified" (Just "@@ -1 +1 @@\n-old\n+new")
 -- >>> let measured = Evidence "t1" Telemetry Nothing Nothing "/evidence" Nothing (Just (Observation 10 1))
 -- >>> let finding = Finding (ChangedLine "a.hs" 1 Head) "Risk" "Check" ["t1"]
