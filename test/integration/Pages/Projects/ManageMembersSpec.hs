@@ -1,14 +1,20 @@
 module Pages.Projects.ManageMembersSpec (spec) where
 
-import Data.UUID qualified as UUID
+import BackgroundJobs qualified as BJ
+import Data.CaseInsensitive qualified as CI
+import Data.Default (def)
+import Data.Effectful.Notify qualified as Notify
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as LT
+import Data.UUID qualified as UUID
+import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact qualified as PGT
 import Lucid (renderText, toHtml)
+import Models.Apis.Integrations qualified as Integrations
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
@@ -31,6 +37,35 @@ userID = Projects.UserId (Unsafe.fromJust $ UUID.fromText "00000000-0000-0000-00
 spec :: Spec
 spec = sequential $ aroundAll withTestResources do
   describe "Members Creation, Update and Consumption" do
+    it "freeTier_existingActiveInvitee_hasNoPermissionOrEmailAudience" \_ -> withTestResources \tr -> do
+      owner <- runQueryEffect tr (ProjectMembers.selectActiveProjectMembers testPid) >>= maybe (fail "Owner missing") pure . listToMaybe
+      void $ withPool tr.trPool $ PGT.execute [sql|UPDATE projects.projects SET payment_plan = 'PAID' WHERE id = ?|] (Only testPid)
+      members <- postMembers . snd =<< testServant tr (ManageMembers.manageMembersPostH testPid Nothing ManageMembers.ManageMembersForm{emails = [CI.original owner.email, "free-invitee@example.com"], permissions = [owner.permission, ProjectMembers.PView]})
+      invitee <- maybe (fail "Invitee missing") pure $ find ((== "free-invitee@example.com") . (.email)) (V.toList members)
+      void $ withPool tr.trPool $ PGT.execute [sql|UPDATE projects.projects SET payment_plan = 'Free' WHERE id = ?|] (Only testPid)
+      (notifications, _) <- captureNotifs tr $ BJ.processBackgroundJob tr.trATCtx (BJ.InviteUserToProject owner.userId testPid "free-invitee@example.com" "Free project")
+      [email.receiver | Notify.EmailNotification email <- notifications] `shouldBe` []
+      runQueryEffect tr (ProjectMembers.getUserPermission testPid invitee.userId) >>= (`shouldBe` Nothing)
+      runQueryEffect tr (ProjectMembers.getActiveProjectMemberByUserId testPid invitee.userId) >>= (`shouldBe` Nothing)
+      visibleProjects <- runQueryEffect tr $ Projects.selectProjectsForUser invitee.userId
+      map (.id) visibleProjects `shouldNotContain` [testPid]
+      sid <- Projects.PersistentSessionId <$> UUIDV4.nextRandom
+      runQueryEffect tr $ Projects.insertSession sid invitee.userId def
+      session <- runQueryEffect tr (Projects.getPersistentSession sid) >>= maybe (fail "Session missing") pure
+      map (.id) (V.toList session.projects.getProjects) `shouldNotContain` [testPid]
+      void $ withPool tr.trPool $ PGT.execute [sql|INSERT INTO apis.slack (project_id, team_id, channel_id, team_name, bot_token) VALUES (?, 'T_FREE', 'C_FREE', 'Free project', 'test-token') ON CONFLICT (project_id) DO UPDATE SET team_id = 'T_FREE'|] (Only testPid)
+      slackProjects <- runQueryEffect tr $ Integrations.slackLinkProjects "T_FREE" invitee.userId
+      length slackProjects `shouldBe` 0
+      activeMembers <- runQueryEffect tr $ ProjectMembers.selectActiveProjectMembers testPid
+      map (.userId) activeMembers `shouldBe` [owner.userId]
+      runQueryEffect tr (ProjectMembers.getUserPermission testPid owner.userId) >>= (`shouldBe` Just owner.permission)
+      users <- runQueryEffect tr $ Projects.usersByProjectId testPid
+      map (.id) users `shouldBe` [owner.userId]
+      void $ withPool tr.trPool $ PGT.execute [sql|UPDATE projects.projects SET payment_plan = 'PAID' WHERE id = ?|] (Only testPid)
+      runQueryEffect tr (ProjectMembers.getUserPermission testPid invitee.userId) >>= (`shouldBe` Just ProjectMembers.PView)
+      upgradedUsers <- runQueryEffect tr $ Projects.usersByProjectId testPid
+      map (.email) upgradedUsers `shouldContain` ["free-invitee@example.com"]
+
     it "invite form posts to the project members endpoint" \tr -> do
       (_, page) <- testServant tr $ ManageMembers.manageMembersGetH testPid
       LT.toStrict (renderText $ toHtml page) `shouldSatisfy` T.isInfixOf ("hx-post=\"/p/" <> testPid.toText <> "/manage_members\"")

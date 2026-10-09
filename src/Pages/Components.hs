@@ -407,7 +407,7 @@ freePricing pid isCurrent =
         "Free forever"
         (priceDisplay_ [] "0" "/per month")
         (div_ [[__|on click halt|]] $ pricingButton_ isCurrent "bg-fillStrong text-textInverse-strong" [term "hx-on:click" "htmx.trigger('#freePricing', 'click')", type_ "button"] "Start free")
-        ["10K events per day", "1 team member", "Opentelemetry Logs, Traces and Metrics", "Last 30 days data retention"]
+        ["10K events per day", "1 user: project owner only", "Opentelemetry Logs, Traces and Metrics", "Last 30 days data retention"]
         "What's included:"
 
 

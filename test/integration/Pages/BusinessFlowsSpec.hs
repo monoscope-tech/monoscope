@@ -8,6 +8,7 @@ import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Lazy qualified as BL
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
+import Data.Effectful.Wreq (HTTP)
 import Data.Pool (Pool, withResource)
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
@@ -20,6 +21,7 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (Connection, Only (..))
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Effectful.Dispatch.Dynamic (interpose)
 import Hasql.Interpolate qualified as HI
 import Lucid (renderText)
 import Models.Projects.Projects qualified as Projects
@@ -40,7 +42,9 @@ import Relude
 import Servant.API (ResponseHeader (..), getResponse, lookupResponseHeader)
 import Servant.Server qualified as ServantS
 import System.Config qualified
+import System.IO.Error (userError)
 import Test.Hspec
+import UnliftIO.Exception (throwIO)
 import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
@@ -95,6 +99,19 @@ spec = around withTestProject do
 onboardingTests :: SpecWith TestContext
 onboardingTests =
   describe "should complete all onboarding steps in sequence" do
+    it "freeTier_pricing_conversionServiceFailure_doesNotBlockTheProjectRedirect" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
+      let ctx = tr.trATCtx
+          configured = tr{trATCtx = ctx{System.Config.config = ctx.config{System.Config.convertkitApiKey = "test-key"}}}
+      (_, (headers, _)) <- testServantWithNotifications configured $ interpose @HTTP (\_ _ -> throwIO $ userError "conversion service unavailable") $ CreateProject.pricingUpdateH testPid def{CreateProject.isOnboarding = Just True}
+      lookupResponseHeader @"HX-Redirect" headers `shouldBe` Header ("/p/" <> testPid.toText <> "/")
+      project <- runQueryEffect tr (Projects.projectById testPid) >>= maybe (fail "Project missing") pure
+      project.paymentPlan `shouldBe` "Free"
+      V.toList project.onboardingStepsCompleted `shouldContain` ["Pricing"]
+      landing <- runAsBase tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.entrypointRedirectGetH "_overview.yaml" "Overview" [] testPid []
+      case lookupResponseHeader @"Location" landing of
+        Header location -> location `shouldSatisfy` T.isPrefixOf ("/p/" <> testPid.toText <> "/dashboards/")
+        _ -> expectationFailure "Expected the project to redirect to its dashboard"
+
     it "integrationCheck_emptyProject_doesNotToastForAutomaticChecks" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
       (automaticHeaders, _) <- testServant tr $ Onboarding.checkIntegrationGet testPid (Just "Javascript")
       lookupResponseHeader @"HX-Trigger" automaticHeaders `shouldBe` Header ("{}" :: Text)

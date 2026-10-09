@@ -114,7 +114,7 @@ import Pkg.ErrorFingerprint qualified as EF
 import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.Git qualified as Git
 import Pkg.ImpactReview qualified as ImpactReview
-import Pkg.Mail (NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlertWith, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlertWith, sendSlackMessage, sendWhatsAppAlert)
+import Pkg.Mail (NotificationAlerts (..), RuntimeAlertType (..), addConvertKitUserOrganization, sendDiscordAlertWith, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlertWith, sendSlackMessage, sendWhatsAppAlert)
 import Pkg.Mail qualified as Mail
 import Pkg.Metrics qualified as Metrics
 import Pkg.Parser
@@ -240,8 +240,13 @@ processBackgroundJob authCtx bgJob =
         -- signup + email hints so they land on the sign-up tab, pre-filled.
         let enc = decodeUtf8 . urlEncode True . encodeUtf8
             inviteUrl = authCtx.env.hostUrl <> "login?screen_hint=signup&login_hint=" <> enc reciever <> "&redirect_to=" <> enc ("/p/" <> projectId.toText)
-        renderAndSend reciever (ET.projectInviteEmail user.firstName projectTitle' inviteUrl)
+        recipients <- Projects.projectEmailRecipients projectId [reciever]
+        forM_ recipients \to -> renderAndSend to (ET.projectInviteEmail user.firstName projectTitle' inviteUrl)
     SendDiscordData userId projectId fullName stack foundUsFrom -> sendDiscordData authCtx userId projectId fullName stack foundUsFrom
+    SyncProjectContacts pid -> whenJustM (Projects.projectById pid) \project ->
+      unless (T.null authCtx.config.convertkitApiKey) $ do
+        users <- Projects.usersByProjectId pid
+        forM_ users \user -> addConvertKitUserOrganization authCtx.config.convertkitApiKey (CI.original user.email) pid.toText project.title project.paymentPlan
     CreatedProjectSuccessfully userId projectId reciever projectTitle ->
       whenJustM (Projects.userById userId) \user ->
         renderAndSend reciever (ET.projectCreatedEmail user.firstName projectTitle (projectUrl authCtx projectId))
@@ -262,7 +267,8 @@ processBackgroundJob authCtx bgJob =
                 Just issue -> (issue.title, issue.id.toText)
                 Nothing -> (err.errorType <> ": " <> err.message, "by_hash/" <> err.hash)
               issueUrl = projectUrl authCtx pid <> "/issues/" <> issuePath
-          renderAndSend userEmail (ET.issueAssignedEmail userName project.title issueTitle issueUrl err.errorType err.message)
+          recipients <- Projects.projectEmailRecipients pid [userEmail]
+          forM_ recipients \to -> renderAndSend to (ET.issueAssignedEmail userName project.title issueTitle issueUrl err.errorType err.message)
         -- The error exists but belongs to a different project than the job names. That is
         -- not a missing-row case: something addressed an assignment across a tenant
         -- boundary. Silently passing is exactly how that stays invisible.
@@ -1604,8 +1610,9 @@ data Fanout = Fanout
 fanOutToTeam :: ProjectMembers.Team -> Fanout -> NotificationAlerts -> Projects.ProjectId -> Text -> Text -> ATBackgroundCtx ThreadRefs
 fanOutToTeam team fan alert pid title alertUrl = do
   whenJust fan.email \e ->
-    when (ProjectMembers.isChannelEnabled ProjectMembers.Email team)
-      $ forM_ e.recipients \to -> sendRenderedEmail to e.subject e.body
+    when (ProjectMembers.isChannelEnabled ProjectMembers.Email team) $ do
+      recipients <- Projects.projectEmailRecipients pid e.recipients
+      forM_ recipients \to -> sendRenderedEmail to e.subject e.body
   slackTs <- case fan.slack of
     QueuedSlack -> pure Nothing
     InlineSlack -> fanChannel ProjectMembers.Slack team.slack_channels (.slackTs) \parent cid -> sendSlackAlertWith parent alert pid title (Just cid)

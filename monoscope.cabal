@@ -819,6 +819,7 @@ test-suite integration-tests
     , base64
     , bytestring
     , cache
+    , case-insensitive
     , clock
     , conduit
     , containers

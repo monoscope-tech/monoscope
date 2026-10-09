@@ -16,6 +16,7 @@ data BgJobs
   = InviteUserToProject Projects.UserId Projects.ProjectId Text Text
   | CreatedProjectSuccessfully Projects.UserId Projects.ProjectId Text Text
   | SendDiscordData Projects.UserId Projects.ProjectId Text [Text] Text
+  | SyncProjectContacts Projects.ProjectId
   | NewAnomaly
       { projectId :: Projects.ProjectId
       , createdAt :: ZonedTime

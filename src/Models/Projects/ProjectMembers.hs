@@ -177,26 +177,32 @@ data ProjectMemberVM = ProjectMemberVM
 selectActiveProjectMembers :: DB es => Projects.ProjectId -> Eff es [ProjectMemberVM]
 selectActiveProjectMembers pid =
   Hasql.interp
-    [HI.sql| SELECT pm.id, pm.user_id, pm.permission, us.email, us.first_name, us.last_name FROM projects.project_members pm
+    $ [HI.sql| SELECT pm.id, pm.user_id, pm.permission, us.email, us.first_name, us.last_name FROM projects.project_members pm
            JOIN users.users us ON (pm.user_id=us.id)
-           WHERE pm.project_id=#{pid}::uuid AND pm.active=TRUE
-           ORDER BY pm.created_at ASC |]
+           JOIN projects.projects p ON p.id = pm.project_id
+           WHERE pm.project_id=#{pid}::uuid |]
+      <> Projects.accessibleMembership
+      <> [HI.sql| ORDER BY pm.created_at, pm.id |]
 
 
 getActiveProjectMemberByUserId :: DB es => Projects.ProjectId -> Projects.UserId -> Eff es (Maybe ProjectMemberVM)
 getActiveProjectMemberByUserId pid uid =
   Hasql.interpOne
-    [HI.sql|
+    $ [HI.sql|
       SELECT pm.id, pm.user_id, pm.permission, us.email, us.first_name, us.last_name
       FROM projects.project_members pm JOIN users.users us ON (pm.user_id = us.id)
-      WHERE pm.project_id = #{pid} AND pm.user_id = #{uid} AND pm.active = TRUE |]
+      JOIN projects.projects p ON p.id = pm.project_id
+      WHERE pm.project_id = #{pid} AND pm.user_id = #{uid} |]
+      <> Projects.accessibleMembership
 
 
 getUserPermission :: DB es => Projects.ProjectId -> Projects.UserId -> Eff es (Maybe Permissions)
 getUserPermission pid uid =
   Hasql.interp
-    [HI.sql| SELECT permission FROM projects.project_members
-           WHERE project_id = #{pid} AND user_id = #{uid} AND active = TRUE |]
+    $ [HI.sql| SELECT pm.permission FROM projects.project_members pm
+           JOIN projects.projects p ON p.id = pm.project_id
+           WHERE pm.project_id = #{pid} AND pm.user_id = #{uid} |]
+      <> Projects.accessibleMembership
 
 
 updateProjectMembersPermissons :: DB es => [(ProjectMemberId, Permissions)] -> Eff es ()
@@ -246,7 +252,7 @@ deactivateNonOwnerMembers pid =
       WITH del AS (
         UPDATE projects.project_members SET active = FALSE
         WHERE project_id = #{pid}
-          AND user_id != (SELECT user_id FROM projects.project_members WHERE project_id = #{pid} ORDER BY created_at LIMIT 1)
+          AND user_id != (SELECT user_id FROM projects.project_members WHERE project_id = #{pid} ORDER BY created_at, id LIMIT 1)
         RETURNING user_id
       ),
       removed AS (SELECT lower(u.email::text) AS email FROM del JOIN users.users u ON u.id = del.user_id)

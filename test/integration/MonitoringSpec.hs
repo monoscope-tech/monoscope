@@ -6,6 +6,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Base64.URL qualified as B64URL
 import Data.ByteString.Lazy qualified as LBS
+import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
 import Data.Effectful.Notify (Notification (..))
 import Data.Effectful.Notify qualified as Notify
@@ -27,11 +28,13 @@ import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Dashboards (DashboardVM (..))
 import Models.Projects.Dashboards qualified as DashboardModel
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Bots.BotTestHelpers (receiveSlackEvent, setupDiscordData, setupSlackData, slackRootEvent)
 import Pages.Dashboards qualified as Dashboards
 import Pages.Monitors (AlertUpsertForm (..), alertUpsertPostH, convertToQueryMonitor, unifiedMonitorOverviewH)
 import Pages.Projects qualified as ProjectPages
+import Pages.Settings qualified as Settings
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Mail qualified as Mail
@@ -432,6 +435,21 @@ spec = sequential $ aroundAll withTestResources do
   describe "Query Monitor Pipeline" do
     let pipelineMonId = Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "22222222-2222-2222-2222-222222222222"
         t0 = Unsafe.read "2025-06-01 12:00:00 UTC" :: UTCTime
+
+    it "freeTier_teamMonitor_onlyEmailsOwner_andPreservesPaidRecipients" \_ -> withTestResources \tr -> do
+      insertPipelineMonitor tr pipelineMonId "" 100 Nothing "above" Nothing Nothing
+      withResource tr.trPool \conn -> void $ PGS.execute conn [sql|UPDATE projects.projects SET payment_plan = 'Free' WHERE id = ?|] (PGS.Only testPid)
+      owner <- runQueryEffect tr (ProjectMembers.selectActiveProjectMembers testPid) >>= maybe (fail "Owner missing") pure . listToMaybe
+      let ownerEmail = CI.original owner.email
+      withResource tr.trPool \conn -> void $ PGS.execute conn [sql|UPDATE projects.teams SET notify_emails = ARRAY[?, 'nonowner@example.com'], disabled_channels = '{}' WHERE project_id = ? AND is_everyone|] (ownerEmail, testPid)
+      (testEmails, _) <- testServantWithNotifications tr $ Settings.notificationsTestPostH testPid (Settings.TestForm "new_endpoint" Settings.TCEmail Nothing)
+      [email.receiver | EmailNotification email <- testEmails] `shouldBe` [ownerEmail]
+      free <- evalMonitorValueWithNotifs t0 tr pipelineMonId 150
+      [email.receiver | EmailNotification email <- free] `shouldBe` [ownerEmail]
+      void $ evalMonitorValueWithNotifs (addUTCTime 60 t0) tr pipelineMonId 50
+      withResource tr.trPool \conn -> void $ PGS.execute conn [sql|UPDATE projects.projects SET payment_plan = 'PAID' WHERE id = ?|] (PGS.Only testPid)
+      paid <- evalMonitorValueWithNotifs (addUTCTime 120 t0) tr pipelineMonId 150
+      [email.receiver | EmailNotification email <- paid] `shouldMatchList` [ownerEmail, "nonowner@example.com"]
 
     it "records actual scalar readings once, scopes history to the project, and prunes old samples" \tr -> do
       let mid = Monitors.QueryMonitorId $ UUID.fromWords 0 0 0 902

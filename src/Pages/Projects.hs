@@ -90,7 +90,7 @@ import Pkg.Components.Table qualified as Table
 import Pkg.Components.Widget (Widget (..), WidgetType (..), widget_)
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.EmailTemplates qualified as ET
-import Pkg.Mail (addConvertKitUserOrganization, sendRenderedEmail)
+import Pkg.Mail (sendRenderedEmail)
 import Relude hiding (ask, asks)
 import Servant (addHeader)
 import Servant.API (Header)
@@ -1100,7 +1100,7 @@ manageMembersBody pid projMembers paymentPlan teamsCount =
         $ div_ [class_ "bg-fillWarning-weak border border-strokeWarning-weak rounded-xl p-4 flex items-start gap-3"] do
           faSprite_ "triangle-exclamation" "regular" "w-5 h-5 text-iconWarning flex-shrink-0 mt-0.5"
           div_ do
-            p_ [class_ "text-sm text-textStrong font-medium"] "Free plan allows only 1 team member"
+            p_ [class_ "text-sm text-textStrong font-medium"] "Free projects are limited to the project owner"
             p_ [class_ "text-sm text-textWeak mt-1"] "Additional team members are disabled and cannot access the project. Upgrade to enable team access."
 
       form_ [class_ "space-y-6", hxPost_ $ "/p/" <> pid.toText <> "/manage_members", hxTarget_ settingsContentTarget, hxSwap_ "innerHTML", hxIndicator_ "#submitIndicator"] do
@@ -1423,15 +1423,11 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = do
       updatePricing name sid fid oid = do
         n <- Projects.updateProjectPricing pid (Projects.PlanName name) (Projects.SubId sid) (Projects.SubItemId fid) (Projects.OrderId oid)
         n <$ Projects.completeOnboardingStep pid "Pricing"
-      handleOnboarding name = when (Projects.isOnboarding project.paymentPlan) $ do
-        _ <- liftIO $ withResource appCtx.pool \conn -> do
-          let fullName = sess.user.firstName <> " " <> sess.user.lastName
-              foundUsFrom = fromMaybe "" $ project.questions >>= (`lookupValueText` "foundUsFrom")
-          createJob conn "background_jobs" $ BackgroundJobs.SendDiscordData sess.user.id pid fullName [foundUsFrom] foundUsFrom
-        users <- ProjectMembers.selectActiveProjectMembers pid
-        unless (T.null envCfg.convertkitApiKey)
-          $ forM_ users
-          $ \user -> addConvertKitUserOrganization envCfg.convertkitApiKey (CI.original user.email) pid.toText project.title name
+      handleOnboarding = when (Projects.isOnboarding project.paymentPlan) $ void $ liftIO $ withResource appCtx.pool \conn -> do
+        let fullName = sess.user.firstName <> " " <> sess.user.lastName
+            foundUsFrom = fromMaybe "" $ project.questions >>= (`lookupValueText` "foundUsFrom")
+        _ <- createJob conn "background_jobs" $ BackgroundJobs.SendDiscordData sess.user.id pid fullName [foundUsFrom] foundUsFrom
+        createJob conn "background_jobs" $ BackgroundJobs.SyncProjectContacts pid
 
   let billingUrl = envCfg.hostUrl <> "p/" <> pid.toText <> "/manage_billing"
       auditPlan name =
@@ -1445,7 +1441,7 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = do
     Just "Open Source" | envCfg.basicAuthEnabled -> do
       _ <- updatePricing "Open Source" "" "" ""
       auditPlan ("Open Source" :: Text)
-      handleOnboarding "Open Source"
+      handleOnboarding
       void $ ProjectMembers.activateAllMembers pid
     _ -> case orderIdM of
       Just orderId ->
@@ -1456,14 +1452,14 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = do
                 productName = target.attributes.productName
             _ <- updatePricing productName subId firstSubId orderId
             auditPlan productName
-            handleOnboarding productName
+            handleOnboarding
             void $ ProjectMembers.activateAllMembers pid
             mailAllUsers $ ET.planUpgradedEmail project.title productName billingUrl
           _ -> addErrorToast "Something went wrong while fetching subscription id" Nothing
       Nothing -> do
         _ <- updatePricing "Free" "" "" ""
         auditPlan ("Free" :: Text)
-        handleOnboarding "Free"
+        handleOnboarding
         void $ ProjectMembers.deactivateNonOwnerMembers pid
         mailAllUsers $ ET.planDowngradedEmail project.title "was cancelled" billingUrl
   if Projects.isOnboarding project.paymentPlan || isOnboarding == Just True

@@ -20,6 +20,8 @@ module Models.Projects.Projects (
   projectIdFromText,
   demoProjectId,
   usersByProjectId,
+  projectEmailRecipients,
+  accessibleMembership,
   usersByIds,
   selectProjectsForUser,
   getProjectByPhoneNumber,
@@ -583,32 +585,54 @@ newProjectsSince :: DB es => UTCTime -> Eff es [Project]
 newProjectsSince since = EHasql.interp [HI.sql|SELECT p.* FROM projects.projects p WHERE p.created_at >= #{since}::timestamptz AND p.deleted_at IS NULL ORDER BY p.created_at DESC|]
 
 
+-- | Membership queries alias the member as @pm@ and project as @p@.
+accessibleMembership :: HI.Sql
+accessibleMembership =
+  [HI.sql| AND pm.active AND pm.deleted_at IS NULL
+    AND (lower(p.payment_plan) <> 'free' OR pm.user_id = (
+      SELECT user_id FROM projects.project_members WHERE project_id = p.id ORDER BY created_at, id LIMIT 1)) |]
+
+
 selectProjectsForUser :: (DB es, Time :> es) => UserId -> Eff es [ProjectListItem]
 selectProjectsForUser uid = do
   now <- currentTime
   EHasql.interp
-    [HI.sql|
-        SELECT pp.*,
+    $ [HI.sql|
+        SELECT p.*,
                EXISTS (
                     SELECT 1 FROM otel_logs_and_spans ols
-                    WHERE ols.project_id = pp.id::text
+                    WHERE ols.project_id = p.id::text
                     AND ols.timestamp >= #{now}::timestamptz - INTERVAL '30 days'
                     LIMIT 1
                 ) as has_integrated,
-               ARRAY_AGG('/api/avatar/' || us.id::text) OVER (PARTITION BY pp.id)
-        FROM projects.projects AS pp
-        JOIN projects.project_members AS ppm ON (pp.id = ppm.project_id)
-        JOIN users.users AS us ON (us.id = ppm.user_id)
-        WHERE ppm.user_id = #{uid} AND pp.deleted_at IS NULL AND ppm.active = TRUE
-        ORDER BY updated_at DESC
+               ARRAY_AGG('/api/avatar/' || us.id::text) OVER (PARTITION BY p.id)
+        FROM projects.projects AS p
+        JOIN projects.project_members AS pm ON (p.id = pm.project_id)
+        JOIN users.users AS us ON (us.id = pm.user_id)
+        WHERE pm.user_id = #{uid} AND p.deleted_at IS NULL
       |]
+      <> accessibleMembership
+      <> [HI.sql| ORDER BY p.updated_at DESC |]
 
 
 usersByProjectId :: DB es => ProjectId -> Eff es [User]
 usersByProjectId pid =
   EHasql.interp
-    [HI.sql| select u.id, u.created_at, u.updated_at, u.deleted_at, u.active, u.first_name, u.last_name, u.display_image_url, u.email, u.is_sudo, u.phone_number
-                from users.users u join projects.project_members pm on (pm.user_id=u.id) where project_id=#{pid} and u.active IS True and pm.active = TRUE;|]
+    $ [HI.sql| select u.id, u.created_at, u.updated_at, u.deleted_at, u.active, u.first_name, u.last_name, u.display_image_url, u.email, u.is_sudo, u.phone_number
+                from users.users u join projects.project_members pm on (pm.user_id=u.id)
+                JOIN projects.projects p ON p.id = pm.project_id
+                where pm.project_id=#{pid} and u.active IS True |]
+      <> accessibleMembership
+
+
+projectEmailRecipients :: DB es => ProjectId -> [Text] -> Eff es [Text]
+projectEmailRecipients pid recipients =
+  projectById pid >>= \case
+    Just project | isFreeTier project.paymentPlan -> do
+      users <- usersByProjectId pid
+      pure $ filter ((`elem` map (.email) users) . CI.mk) recipients
+    Just _ -> pure recipients
+    Nothing -> pure []
 
 
 usersByIds :: DB es => V.Vector UserId -> Eff es [User]
@@ -1560,13 +1584,13 @@ insertSession psId uid sd = EHasql.interpExecute_ [HI.sql| insert into users.per
 
 getPersistentSession :: DB es => PersistentSessionId -> Eff es (Maybe PersistentSession)
 getPersistentSession sessionId =
-  EHasql.interpOne
+  EHasql.interpOne $
     [HI.sql| select ps.id, ps.created_at, ps.updated_at, ps.user_id, ps.session_data, to_jsonb(u) as user, u.is_sudo,
-        COALESCE(jsonb_agg(to_jsonb(pp.*) ORDER BY pp.updated_at DESC) FILTER (WHERE pp.id is not NULL AND pp.deleted_at IS NULL),'[]') as projects
+        COALESCE(jsonb_agg(to_jsonb(p.*) ORDER BY p.updated_at DESC) FILTER (WHERE p.id is not NULL AND p.deleted_at IS NULL),'[]') as projects
         from users.persistent_sessions as ps
         left join users.users u on (u.id=ps.user_id)
-        left join projects.project_members ppm on (ps.user_id=ppm.user_id AND ppm.active = TRUE)
-        left join projects.projects pp on (pp.id=ppm.project_id)
+        left join projects.project_members pm on (ps.user_id=pm.user_id)
+        left join projects.projects p on (p.id=pm.project_id) |] <> accessibleMembership <> [HI.sql|
         where ps.id=#{sessionId}
         GROUP BY ps.created_at, ps.updated_at, ps.id, ps.user_id, ps.session_data, u.* ,u.is_sudo; |]
 

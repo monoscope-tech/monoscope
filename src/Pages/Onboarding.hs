@@ -788,7 +788,7 @@ inviteTeamMemberModal pid emails enableFreetier =
         div_ [class_ "flex-col gap-3 flex pt-3"] $ do
           when enableFreetier $ div_ [class_ "bg-fillInformation-weak border border-strokeInformation-weak rounded-lg p-3 flex items-start gap-2"] do
             faSprite_ "circle-info" "regular" "w-4 h-4 text-textInformation flex-shrink-0 mt-0.5"
-            p_ [class_ "text-sm text-textWeak"] "Free plan members will be invited but disabled until you upgrade."
+            p_ [class_ "text-sm text-textWeak"] "Only the project owner can access a Free project. Invited members remain disabled until you upgrade."
           div_ [class_ "w-full gap-2 flex items-center"] $ do
             input_ [class_ "input input-sm w-full", placeholder_ "email@example.com", type_ "email", id_ "add-member-input"]
             button_ [class_ "btn-primary rounded-xl px-4 py-2 text-white text-sm cursor-pointer whitespace-nowrap", onpointerdown_ "appendMember()"] "Invite"
