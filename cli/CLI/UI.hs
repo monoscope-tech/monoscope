@@ -1,5 +1,10 @@
 module CLI.UI (
   selectFromList,
+  Picker,
+  pickerAvailable,
+  pickItem,
+  runPicker,
+  runPickerWith,
   inputForm,
   withSpinner,
 ) where
@@ -14,9 +19,41 @@ import Brick.Widgets.Edit qualified as BE
 import Brick.Widgets.List qualified as BL
 import Data.Text qualified as T
 import Data.Vector qualified as V
+import Effectful
+import Effectful.Dispatch.Dynamic
 import Graphics.Vty qualified as Vty
+import System.IO (hIsTerminalDevice)
 import UnliftIO.Async (withAsync)
 import UnliftIO.Concurrent (threadDelay)
+
+
+data Picker :: Effect where
+  PickerAvailable :: Picker m Bool
+  PickItem :: Text -> [(Text, Text)] -> Picker m (Maybe Text)
+
+
+type instance DispatchOf Picker = 'Dynamic
+
+
+pickerAvailable :: Picker :> es => Eff es Bool
+pickerAvailable = send PickerAvailable
+
+
+pickItem :: Picker :> es => Text -> [(Text, Text)] -> Eff es (Maybe Text)
+pickItem title items = send (PickItem title items)
+
+
+runPicker :: IOE :> es => Eff (Picker ': es) a -> Eff es a
+runPicker =
+  runPickerWith
+    (liftIO $ (&&) <$> hIsTerminalDevice stdin <*> hIsTerminalDevice stdout)
+    (\title items -> liftIO $ selectFromList True title items)
+
+
+runPickerWith :: Eff es Bool -> (Text -> [(Text, Text)] -> Eff es (Maybe Text)) -> Eff (Picker ': es) a -> Eff es a
+runPickerWith available choose = interpret $ \_ -> \case
+  PickerAvailable -> available
+  PickItem title items -> choose title items
 
 
 -- Arrow-key list picker. Returns selected value or Nothing on Esc.

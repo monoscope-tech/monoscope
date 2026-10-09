@@ -6,7 +6,7 @@
 -- envelopes and behaviors the skills promise.
 module CLI.CLILifecycleSpec (spec) where
 
-import CLI.Harness (runCLILifecycle, runCLILifecycleLive)
+import CLI.Harness (runCLILifecycle, runCLILifecycleLive, runCLILifecyclePicking)
 import Control.Concurrent (threadDelay)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
@@ -75,6 +75,27 @@ shouldHaveKeys other _ = expectationFailure $ "expected JSON object, got: " <> s
 spec :: Spec
 spec = around withTestResources do
   describe "CLI lifecycle (in-process, real parser + handlers)" do
+    it "missing_resource_id_fails_without_prompting_in_scripts" \tr -> do
+      forM_ [["dashboards", "render"], ["dashboards", "get"], ["monitors", "get"], ["issues", "get"], ["incidents", "get"], ["endpoints", "get"], ["log-patterns", "get"], ["teams", "get"], ["members", "get"], ["api-keys", "get"], ["dashboards", "patch", "dashboard.yaml"], ["members", "patch", "view"], ["dashboards", "widget", "delete", "widget-id"]] \args -> do
+        (ec, out) <- runCLILifecycle tr ("--json" : args)
+        ec `shouldBe` ExitFailure 1
+        out `shouldBe` ""
+
+    it "empty_resource_list_does_not_open_a_picker" \tr -> do
+      (ec, _) <- runCLILifecyclePicking tr (\_ _ -> expectationFailure "opened an empty picker" >> pure Nothing) ["--table", "dashboards", "get"]
+      ec `shouldBe` ExitFailure 1
+
+    it "picked_log_pattern_uses_an_integer_id" \tr -> do
+      withPool tr.trPool $ void $ DBT.execute
+        [sql| INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash) VALUES (?, 'picker test', 'picker-pattern') |]
+        (Only testPid)
+      let choosePattern _ choices = do
+            map fst choices `shouldSatisfy` all (T.all (`elem` ['0' .. '9']))
+            pure (fst <$> viaNonEmpty head choices)
+      (ec, out) <- runCLILifecyclePicking tr choosePattern ["--table", "log-patterns", "get"]
+      ec `shouldBe` ExitSuccess
+      toString out `shouldContain` "picker test"
+
     it "version prints and exits zero (harness smoke)" \tr -> do
       (ec, out) <- runCLILifecycle tr ["version"]
       ec `shouldBe` ExitSuccess
@@ -110,6 +131,10 @@ spec = around withTestResources do
       (humanEc, humanOut) <- runCLILifecycle tr ["--table", "status"]
       humanEc `shouldBe` ExitSuccess
       toString humanOut `shouldContain` "CLI status issue"
+      (pickedEc, _) <- runCLILifecyclePicking tr (\_ choices -> do
+        length choices `shouldSatisfy` (>= 6)
+        pure (fst <$> viaNonEmpty last choices)) ["--table", "issues", "get"]
+      pickedEc `shouldBe` ExitSuccess
 
     it "issues_get_uses_latest_pattern_event_for_runtime_last_seen" \tr ->
       forM_ [False, True] \grouped -> do
@@ -206,6 +231,11 @@ spec = around withTestResources do
       let mid = case listRows listV of
             [row] -> rowId row
             _ -> error "expected exactly one monitor"
+
+      (tableEc, tableOut) <- runCLILifecycle tr ["--table", "monitors", "list"]
+      tableEc `shouldBe` ExitSuccess
+      toString tableOut `shouldContain` "Lifecycle error-rate alert"
+      toString tableOut `shouldContain` mid
 
       -- yaml dump round-trips through apply without creating a duplicate
       (ecY, yamlDump) <- runCLILifecycle tr ["monitors", "yaml", mid]
@@ -310,6 +340,23 @@ spec = around withTestResources do
         jsonOut listOut >>= \v -> case listRows v of
           [row] -> pure (rowId row)
           rows -> expectationFailure ("expected exactly one dashboard, got " <> show (length rows)) >> error "unreachable"
+
+      (tableEc, tableOut) <- runCLILifecycle tr ["--table", "dashboards", "list"]
+      tableEc `shouldBe` ExitSuccess
+      toString tableOut `shouldContain` "Lifecycle dashboard"
+      toString tableOut `shouldContain` did
+
+      let chooseDashboard title choices = do
+            title `shouldBe` "Select Dashboards"
+            map fst choices `shouldBe` [toText did]
+            map snd choices `shouldSatisfy` any ("Lifecycle dashboard" `T.isInfixOf`)
+            pure (Just $ toText did)
+      (pickEc, pickedOut) <- runCLILifecyclePicking tr chooseDashboard ["--table", "dashboards", "get"]
+      pickEc `shouldBe` ExitSuccess
+      jsonOut pickedOut >>= (`shouldHaveKeys` ["summary", "schema"])
+      (cancelEc, cancelOut) <- runCLILifecyclePicking tr (\_ _ -> pure Nothing) ["--table", "dashboards", "delete"]
+      cancelEc `shouldBe` ExitSuccess
+      cancelOut `shouldBe` ""
 
       -- the canonical as-code loop: dump → apply (twice) → still exactly one
       (ecY, yamlDump) <- runCLILifecycle tr ["dashboards", "yaml", did]
