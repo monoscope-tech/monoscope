@@ -31,6 +31,14 @@ const components: Array<[string, () => Promise<unknown>]> = [
   ['[data-service-map]', () => import('./service-map').then(m => m.hydrateServiceMaps())],
 ];
 
+// Hidden preview hosts arrive with the widget; load their highlighter only on opening.
+// Each host then mounts its editor lazily when its own popover opens.
+document.addEventListener('beforetoggle', event => {
+  if ((event as ToggleEvent).newState === 'open' && (event.target as Element).querySelector('query-preview')) {
+    void import('./query-preview');
+  }
+}, true);
+
 // rrweb's replayer is ~84KB and the log explorer renders a (hidden) <session-replay> on
 // every page view, so it used to load for everyone who never opened a recording. Hold the
 // opening event, load the module, then re-dispatch so the now-upgraded element sees it.

@@ -42,6 +42,31 @@ test("a loading chart does not look blank", async ({ page }) => {
   await expect(chart.locator("canvas")).toHaveCount(1, { timeout: 15000 });
 });
 
+test("widget query preview opens on hover and focus and dismisses with Escape", async ({ page }) => {
+  await openFirstDashboard(page);
+  const trigger = page.getByRole("button", { name: "View widget query" }).first();
+  const widget = trigger.locator("xpath=ancestor::*[@data-widget][1]");
+  const query = await widget.evaluate(el => {
+    const widget = JSON.parse(el.getAttribute("data-widget")!);
+    return widget.sql || widget.query;
+  });
+  const panel = page.getByRole("region", { name: "Widget query" }).first();
+  await trigger.hover();
+  await expect(panel).toBeVisible();
+  await expect(panel.locator(".cm-content")).toHaveText(query);
+  await expect(panel.locator(".cm-content")).toHaveAttribute("contenteditable", "false");
+  await panel.hover();
+  await expect(panel).toBeVisible();
+  await page.mouse.move(0, 0);
+  await expect(panel).not.toBeVisible();
+  await trigger.focus();
+  await expect(panel).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(panel).not.toBeVisible();
+  await trigger.click();
+  await expect(panel).toBeVisible();
+});
+
 type Layout = { id: string; x: number; y: number; w: number; h: number };
 
 test("a dashboard can be created without assigning a team", async ({ page }) => {

@@ -196,8 +196,11 @@ spec = sequential $ aroundAll withTestResources do
       let html = toStrict $ renderText $ Widget.widget_ (widgetOf Widget.WTTimeseriesLine "requests"){Widget.id = Just "requests-chart"}
       html `shouldSatisfy` T.isInfixOf "gap-0.5 flex flex-col"
       html `shouldNotSatisfy` T.isInfixOf "gap-1.5 flex flex-col"
-      for_ ["id=\"requests-chart_empty\"", "role=\"status\"", "No data in this time range", "Try a wider time range or adjust the filters."] \fragment ->
+      for_ ["id=\"requests-chart_empty\"", "role=\"status\"", "No data in this time range", "Try a wider time range or adjust the filters.", "aria-label=\"View widget query\"", "language=\"kql\""] \fragment ->
         html `shouldSatisfy` T.isInfixOf fragment
+      let sqlHtml = toStrict $ renderText $ Widget.widget_ (widgetOf Widget.WTTimeseriesLine "requests"){Widget.sql = Just "SELECT '<script>'", Widget.expandBtnFn = Just "/details"}
+      sqlHtml `shouldSatisfy` T.isInfixOf "language=\"sql\""
+      sqlHtml `shouldSatisfy` T.isInfixOf "SELECT &#39;&lt;script&gt;&#39;"
 
   -- The full canvas lifecycle, once per widget type, in one example: add it, drag it,
   -- resize it, then re-read the dashboard the way the next page load does. Every type goes
@@ -682,6 +685,32 @@ spec = sequential $ aroundAll withTestResources do
           total coveredFor since = testServant tr (addRespHeaders =<< Routes.chartsDataGetH Nothing (Just Charts.DTMetric) (Just testPid) (Just "hashes[*]==\"pat:rollup-route\" | summarize count(*) by bin_auto(timestamp)") Nothing (Just since) Nothing Nothing Nothing Nothing [("rollup_sql", Just rollup), ("rollup_from", Just $ Utils.isoT $ addUTCTime (-coveredFor) now)]) <&> \(_, md) -> sum (md.dataset >>= V.catMaybes . V.drop 1)
       -- A window reaching before the rollup's coverage (pruned hours) must not read it as zero.
       (,,) <$> total 172800 "24H" <*> total 172800 "3H" <*> total 3600 "24H" >>= (`shouldBe` (7, 7, 0))
+
+  describe "Scalar monitor charts" do
+    it "scalarMonitor_plotsMaxPerBucketInsteadOfCountingTheAggregate" \tr -> do
+      now <- getTestTime tr.trTestClock
+      withResource tr.trPool \conn ->
+        void
+          $ PG.execute
+            conn
+            [SqlQQ.sql| INSERT INTO otel_metrics (project_id, timestamp, id, series_id, metric_name, metric_type, value)
+                    VALUES (?, ?, gen_random_uuid(), 'monitor-chart', 'timefusion.mem_buffer.oldest_bucket_age_seconds', 'GAUGE', 42) |]
+            (testPid, now)
+      let widget = (widgetOf Widget.WTTimeseries "Query Results"){Widget.query = Just "metrics | where metric_name == \"timefusion.mem_buffer.oldest_bucket_age_seconds\" | summarize max(value)"}
+          (query, decoder) = Widget.chartQuery widget
+          rendered = toStrict $ renderText $ Widget.widget_ widget
+      rendered `shouldSatisfy` T.isInfixOf "max(value) by bin_auto(timestamp)"
+      rendered `shouldSatisfy` T.isInfixOf "aria-label=\"View widget query\""
+      Widget.chartQuery widget{Widget.query = Just "metrics | where metric_name == \"summarize\""}
+        `shouldBe` (Just "metrics | where metric_name == \"summarize\" | summarize count(*) by bin_auto(timestamp)", decoder)
+      Widget.chartQuery widget{Widget.wType = Widget.WTStat, Widget.query = Just "metrics | where metric_name == \"summarize\""}
+        `shouldBe` (Just "metrics | where metric_name == \"summarize\" | summarize count(*)", Charts.DTFloat)
+      md <- runQueryEffect tr $ Charts.queryMetrics (Just "postgres") (Just decoder) (Just testPid) query Nothing (Just "1H") Nothing Nothing Nothing Nothing []
+      md.error `shouldBe` Nothing
+      V.toList (md.dataset >>= V.catMaybes . V.drop 1) `shouldBe` [42]
+      response <- runQueryEffect tr $ Charts.queryMetricsStream (Just "postgres") (Just decoder) (Just testPid) query Nothing (Just "1H") Nothing Nothing Nothing Nothing []
+      frames <- runExceptT $ Source.runSourceT $ Servant.getResponse response
+      fmap (viaNonEmpty last) frames `shouldBe` Right (Just $ AE.object ["type" AE..= ("complete" :: Text), "data" AE..= md])
 
   describe "Streaming chart results" do
     let sql = "SELECT i::bigint, 'value'::text, i::double precision FROM generate_series(1, 3) i"

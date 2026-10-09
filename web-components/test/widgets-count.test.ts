@@ -2,6 +2,14 @@ import { describe, expect, test } from 'vitest';
 import { chartDataUrl, hideNoDataOverlay, showChartError, showNoDataOverlay, sumTimeseriesValues } from '../src/widgets';
 
 describe('chartDataUrl', () => {
+  test.each([
+    'metrics | where metric_name == "timefusion.mem_buffer.oldest_bucket_age_seconds" | summarize max(value)',
+    'metrics | where metric_name == "cpu"',
+    'metrics | where metric_name == "summarize x"',
+  ])('refresh_preservesSuppliedQueryWithoutAddingAnotherAggregation: %s', query => {
+    const url = new URL(chartDataUrl({ query, querySQL: '', pid: 'proj', chartType: 'timeseries' }), window.location.origin);
+    expect(url.searchParams.get('query')).toBe(query);
+  });
   test('inherits the page default when the URL has no explicit time range', () => {
     window.history.replaceState({}, '', '/p/proj/infrastructure/containers');
     document.body.innerHTML = '<div data-default-window="5M"></div>';

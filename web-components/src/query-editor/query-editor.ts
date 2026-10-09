@@ -17,49 +17,14 @@ import {
   type Completion,
 } from '@codemirror/autocomplete';
 import { setDiagnostics } from '@codemirror/lint';
-import { StreamLanguage, syntaxHighlighting, defaultHighlightStyle, HighlightStyle } from '@codemirror/language';
-import { tags } from '@lezer/highlight';
+import { syntaxHighlighting, defaultHighlightStyle } from '@codemirror/language';
+import { language, darkHighlightStyle } from './language';
 import { schemaManager, type SchemaData, type FieldInfo } from './schema-manager';
 import { wordAtCursor, DATA_SOURCES, AGGREGATION_COMMANDS, STATS_FUNCTIONS } from './completion';
 import { completionChrome, completionTheme, completionIcon, completionSection } from './completion-dropdown';
 import { unclosedQuote, verdictToError, type Verdict, type QueryError } from './validation';
 export { schemaManager, unclosedQuote, verdictToError, type Verdict, type SchemaData };
 
-const keywords = new Set([...DATA_SOURCES, ...AGGREGATION_COMMANDS, ...STATS_FUNCTIONS, 'and', 'or', 'not', 'by', 'as']);
-const language = StreamLanguage.define<{ quote: string; comment: boolean }>({
-  startState: () => ({ quote: '', comment: false }),
-  token(stream, state) {
-    if (!state.quote && (state.comment || stream.match('/_'))) {
-      state.comment = true;
-      while (!stream.eol()) { if (stream.match('_/')) { state.comment = false; break; } stream.next(); }
-      return 'comment';
-    }
-    if (stream.eatSpace()) return null;
-    if (!state.quote && stream.match('//')) {
-      stream.skipToEnd();
-      return 'comment';
-    }
-    if (!state.quote && (stream.peek() === '"' || stream.peek() === "'")) state.quote = stream.next()!;
-    if (state.quote) {
-      let escaped = false,
-        c;
-      while ((c = stream.next()) != null) {
-        if (!escaped && c === state.quote) {
-          state.quote = '';
-          break;
-        }
-        if (!escaped && c === '\\') escaped = true;
-        else escaped = false;
-      }
-      return 'string';
-    }
-    if (stream.match(/^\d+(?:\.\d+)?(?:[eE][+-]?\d+)?(?:ns|µs|us|ms|s|m|h|d|w)?/)) return 'number';
-    if (stream.match(/^[a-zA-Z_][\w.]*/)) return keywords.has(stream.current().toLowerCase()) ? 'keyword' : 'variableName';
-    if (stream.match(/^[=><!~|]+/)) return 'operator';
-    stream.next();
-    return null;
-  },
-});
 const REGEX_PATTERNS = {
   hasSummarize: /summarize\s+/i,
   hasBinFunction: /summarize.*by\s+.*bin(_auto)?\s*\(\s*\w+\s*[,)].*$/i,
@@ -81,12 +46,6 @@ interface QueryLibItem {
   byMe: boolean;
 }
 let nextClient = 0;
-const darkHighlightStyle = HighlightStyle.define([
-  { tag: tags.keyword, color: '#569cd6' },
-  { tag: tags.string, color: '#ce9178' },
-  { tag: tags.number, color: '#b5cea8' },
-  { tag: tags.comment, color: '#6a9955' },
-]);
 const editorTheme = EditorView.theme({
   '&': { width: '100%', color: 'inherit', backgroundColor: 'transparent', fontSize: '14px' },
   '&.cm-focused': { outline: 'none' },

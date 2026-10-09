@@ -470,6 +470,9 @@ const setStatValue = (widgetData: WidGetData, stats: ChartDataResponse['stats'],
   value.classList.remove('hidden');
 };
 
+// Keep this aggregation in sync with Widget.chartQuery's plotted-query fallback.
+const DEFAULT_QUERY = 'summarize count(*) by bin_auto(timestamp)';
+
 // The /chart_data URL for a widget. Shared by the initial prefetch and every later
 // refetch, so the two can't drift — the prefetch is only honoured when the URL it was
 // issued against still matches (see takePrefetched).
@@ -516,18 +519,8 @@ export const chartDataUrl = ({
     params.set(key, value as string);
   });
 
-  // Default query to use when no query is provided
-  const DEFAULT_QUERY = 'summarize count(*) by bin_auto(timestamp)';
-
-  if (!query || query === 'null' || query === '') {
-    params.set('query', DEFAULT_QUERY);
-  } else {
-    // Only append the default summarization when the query doesn't already bin —
-    // otherwise preserve it exactly, so grouping by fields like 'kind' keeps working.
-    const hasSummarize = /summarize\s+/i.test(query);
-    const hasBinning = /\s+by\s+bin/i.test(query) || /\s+by\s+.*\(.*\)/i.test(query);
-    params.set('query', !hasSummarize || !hasBinning ? query + ' | ' + DEFAULT_QUERY : query);
-  }
+  // Widget.renderChart shapes supplied queries; refresh, prefetch, and retry preserve them.
+  params.set('query', !query || query === 'null' ? DEFAULT_QUERY : query);
 
   if (querySQL && querySQL !== 'null') params.set('query_sql', querySQL);
   if (rollupSQL && rollupFrom) {
@@ -1050,7 +1043,7 @@ export const chartWidget = (widgetData: WidGetData) => {
   let baseQuery = widgetData.query;
   const updateQuery = () => {
     const uq = params().query;
-    widgetData.query = (uq && uq !== 'null') ? (baseQuery ? uq + ' | ' + baseQuery : uq) : baseQuery;
+    widgetData.query = (uq && uq !== 'null') ? uq + ' | ' + (baseQuery || DEFAULT_QUERY) : baseQuery;
   };
   updateQuery();
 

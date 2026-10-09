@@ -81,6 +81,8 @@ import Text.Megaparsec.Char.Lexer qualified as L
 -- $setup
 -- >>> import Text.Megaparsec (parse)
 -- >>> import Pkg.Parser.Expr (FieldKey(..))
+-- >>> import Pkg.Parser.Expr (ToQueryText(..))
+-- >>> import Data.Text (Text)
 -- >>> import Pkg.Parser.Stats
 -- >>> :set -XOverloadedStrings
 
@@ -1001,7 +1003,7 @@ instance ToQueryText Section where
   toQText (SummarizeCommand funcs byClauseM) =
     "summarize "
       <> T.intercalate "," [foldMap (<> " = ") (view (typed @(Maybe Text)) f) <> toQText f | f <- funcs]
-      <> maybeToMonoid (toQText <$> byClauseM)
+      <> foldMap ((" " <>) . toQText) byClauseM
   toQText (ExtendCommand cols) =
     "extend " <> T.intercalate ", " [name <> " = " <> toQText expr | (name, expr) <- cols]
   toQText (ProjectCommand cols) =
@@ -1446,6 +1448,17 @@ extractPercentilesInfo secs = listToMaybe $ mapMaybe pcts [agg | SummarizeComman
 -- Left "Unknown field \"attribute\". Did you mean \"attributes\"?"
 -- >>> parseQueryToAST "attributes contains ddd"
 -- Left "Syntax error at column 12: unexpected 'c', expecting '|' or white space"
+--
+-- Serializing a normalized multi-stage AST preserves its meaning, including
+-- quoted strings and extended fields used by aggregations and grouping.
+--
+-- >>> let roundTrip :: Text -> Bool; roundTrip q = case parseQueryToAST q of Left _ -> False; Right ast -> parseQueryToAST (toQText ast) == Right ast
+-- >>> roundTrip "metrics | where metric_name == \"cpu\" | extend label = tostring(metric_name) | summarize peak = max(value) by label"
+-- True
+-- >>> roundTrip "metrics | where metric_name == 'cpu \"peak\"' | extend half = value / 2 | summarize max(half) by metric_name | sort by metric_name"
+-- True
+-- >>> roundTrip "metrics | where metric_name == 'cpu' | extend label = tostring(metric_name) | summarize avg(value) by label | take 5"
+-- True
 parseQueryToAST :: Text -> Either Text [Section]
 parseQueryToAST = first (.message) . parseQueryDiagnosed Nothing
 

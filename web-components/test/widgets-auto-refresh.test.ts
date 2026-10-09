@@ -50,6 +50,19 @@ describe('Log Explorer chart auto-refresh', () => {
     history.replaceState({}, '', '/');
   });
 
+  test.each(['', 'metrics | summarize max(value) by bin_auto(timestamp)'])('pageFilter_preservesTheBaseAggregation: %s', async query => {
+    (window as any).echarts = { getInstanceByDom: () => null, init: () => chart() };
+    document.body.innerHTML = '<div id="filtered" data-chart-widget></div>';
+    const filter = 'metric_name == "summarize x"';
+    history.replaceState({}, '', '/?query=' + encodeURIComponent(filter));
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify(chartData), { headers: { 'Content-Type': 'application/json' } })) as any;
+    chartWidget({ ...widget('filtered'), query });
+    (globalThis as any).triggerIntersection();
+    await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
+    const sent = new URL(String(vi.mocked(fetch).mock.calls[0][0]), location.origin);
+    expect(sent.searchParams.get('query')).toBe(filter + ' | ' + (query || 'summarize count(*) by bin_auto(timestamp)'));
+  });
+
   // The data response replaces the whole option (notMerge), so layout and markers must be reapplied.
   test('release markers and compact spacing survive the data response', async () => {
     const instance = chart();
