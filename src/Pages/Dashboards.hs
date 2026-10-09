@@ -2027,12 +2027,12 @@ dashboardNewForm_ dg = form_
                   div_
                     [ class_
                         $ "col-span-6 flex min-h-28 min-w-0 flex-col rounded-lg border border-strokeWeak bg-bgRaised p-3 "
-                          <> ( case widget.layout >>= (.w) of
-                                 Just w | w <= 3 -> "sm:col-span-3"
-                                 Just w | w <= 4 -> "sm:col-span-4"
-                                 Just w | w <= 6 -> "sm:col-span-6"
-                                 _ -> "sm:col-span-12"
-                             )
+                        <> ( case widget.layout >>= (.w) of
+                               Just w | w <= 3 -> "sm:col-span-3"
+                               Just w | w <= 4 -> "sm:col-span-4"
+                               Just w | w <= 6 -> "sm:col-span-6"
+                               _ -> "sm:col-span-12"
+                           )
                     ]
                     do
                       p_ [class_ "truncate text-xs font-medium text-textStrong", title_ $ fromMaybe "Untitled widget" widget.title] $ toHtml $ fromMaybe "Untitled widget" widget.title
