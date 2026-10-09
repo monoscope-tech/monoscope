@@ -75,8 +75,8 @@ gitWebhookPostH Git.GitHub req | req.event == Just "pull_request" = do
     then throwError err503{errBody = "GitHub App webhook secret is not configured"}
     else case Git.verifyWebhook Git.GitHub (Just secret) req of
       Left _ -> throwError err401{errBody = "Invalid GitHub signature"}
-      Right () -> case AE.eitherDecodeStrict req.body of
-        Left _ -> pure $ AE.object ["status" AE..= ("ignored" :: Text)]
+      Right () -> case ImpactReviews.decodeEvent req.body of
+        Left err -> AE.object ["status" AE..= ("ignored" :: Text)] <$ Log.logInfo "Ignoring GitHub PR event" err
         Right event -> ImpactReviews.receiveEvent event $> AE.object ["status" AE..= ("ok" :: Text)]
 gitWebhookPostH host req = case Git.parseWebhookRepo host req.body of
   Nothing -> errResp "missing repository" <$ Log.logAttention "Git webhook without a repository name" (Git.hostSlug host)
