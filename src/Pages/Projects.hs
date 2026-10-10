@@ -692,7 +692,7 @@ data ManageMembersForm = ManageMembersForm
 
 manageMembersPostH :: Projects.ProjectId -> Maybe Text -> ManageMembersForm -> ATAuthCtx (RespHeaders ManageMembers)
 manageMembersPostH pid onboardingM form = do
-  (sess, project) <- Projects.sessionAndProject pid
+  (sess, project) <- requireProjectPermission pid ProjectMembers.PAdmin
   appCtx <- ask @AuthContext
   let currUserId = sess.persistentSession.userId
   projMembers <- ProjectMembers.selectActiveProjectMembers pid
@@ -753,7 +753,7 @@ manageMembersPostH pid onboardingM form = do
             else "Updated Members List Successfully"
         )
         Nothing
-  addRespHeaders $ ManageMembersPost (pid, projMembersLatest, project.paymentPlan, teamsCount)
+  addRespHeaders $ ManageMembersPost (pid, projMembersLatest, project.paymentPlan, teamsCount, Just ProjectMembers.PAdmin)
 
 
 data TeamForm = TeamForm
@@ -1062,21 +1062,22 @@ teamPageNF pid handle = do
 
 manageMembersGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders ManageMembers)
 manageMembersGetH pid = do
-  (_, project, bw) <- mkPageCtx pid
+  (sess, project, bw) <- mkPageCtx pid
+  permission <- ProjectMembers.getUserPermission pid sess.user.id
   projMembers <- V.fromList <$> ProjectMembers.selectAllProjectMembers pid
   teamsCount <- length <$> ProjectMembers.getTeamsVM pid
   let bwconf = bw{pageTitle = "Team", isSettingsPage = True}
-  addRespHeaders $ ManageMembersGet $ PageCtx bwconf (pid, projMembers, project.paymentPlan, teamsCount)
+  addRespHeaders $ ManageMembersGet $ PageCtx bwconf (pid, projMembers, project.paymentPlan, teamsCount, permission)
 
 
 data ManageMembers
-  = ManageMembersGet {unwrapGet :: PageCtx (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberWithStatusVM, Text, Int)}
-  | ManageMembersPost {unwrapPost :: (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberWithStatusVM, Text, Int)}
+  = ManageMembersGet {unwrapGet :: PageCtx (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberWithStatusVM, Text, Int, Maybe ProjectMembers.Permissions)}
+  | ManageMembersPost {unwrapPost :: (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberWithStatusVM, Text, Int, Maybe ProjectMembers.Permissions)}
 
 
 instance ToHtml ManageMembers where
-  toHtml (ManageMembersGet (PageCtx bwconf (pid, members, plan, teamsCount))) = toHtml $ PageCtx bwconf $ manageMembersBody pid members plan teamsCount
-  toHtml (ManageMembersPost (pid, members, plan, teamsCount)) = toHtml $ manageMembersBody pid members plan teamsCount
+  toHtml (ManageMembersGet (PageCtx bwconf (pid, members, plan, teamsCount, permission))) = toHtml $ PageCtx bwconf $ manageMembersBody pid members plan teamsCount permission
+  toHtml (ManageMembersPost (pid, members, plan, teamsCount, permission)) = toHtml $ manageMembersBody pid members plan teamsCount permission
   toHtmlRaw = toHtml
 
 
@@ -1101,11 +1102,12 @@ teamTabsHeader_ pid active membersCount teamsCount = do
     tab "Teams" "teams" teamsCount
 
 
-manageMembersBody :: Projects.ProjectId -> V.Vector ProjectMembers.ProjectMemberWithStatusVM -> Text -> Int -> Html ()
-manageMembersBody pid projMembers paymentPlan teamsCount =
+manageMembersBody :: Projects.ProjectId -> V.Vector ProjectMembers.ProjectMemberWithStatusVM -> Text -> Int -> Maybe ProjectMembers.Permissions -> Html ()
+manageMembersBody pid projMembers paymentPlan teamsCount permission =
   settingsSection_ do
     settingsH2_ "Team"
     teamTabsHeader_ pid "members" (V.length projMembers) teamsCount
+    unless canManage $ p_ [class_ "mb-4 text-sm text-textWeak"] "A project admin can invite members, change roles, and remove members."
 
     div_ [class_ "space-y-6"] do
       when (Projects.isFreeTier paymentPlan && V.length projMembers > 1)
@@ -1116,7 +1118,7 @@ manageMembersBody pid projMembers paymentPlan teamsCount =
             p_ [class_ "text-sm text-textWeak mt-1"] "Additional team members are disabled and cannot access the project. Upgrade to enable team access."
 
       form_ [class_ "space-y-6", hxPost_ $ "/p/" <> pid.toText <> "/manage_members", hxTarget_ settingsContentTarget, hxSwap_ "innerHTML", hxIndicator_ "#submitIndicator"] do
-        div_ [class_ "space-y-2"] do
+        when canManage $ div_ [class_ "space-y-2"] do
           label_ [class_ "text-sm font-medium text-textStrong block", Lucid.for_ "new-member-email"] "Invite new member"
           div_ [class_ "flex flex-wrap gap-2"] do
             input_ [type_ "email", name_ "emails", id_ "new-member-email", Aria.label_ "Invite new member email", class_ "input input-sm input-bordered min-w-0 w-full sm:w-auto sm:flex-1", placeholder_ "colleague@company.com", required_ "true"]
@@ -1133,7 +1135,7 @@ manageMembersBody pid projMembers paymentPlan teamsCount =
         div_ [class_ "space-y-3"] do
           headerRow_ [] do
             h3_ [class_ "text-sm font-medium text-textStrong"] $ toHtml $ "Members (" <> show (V.length projMembers) <> ")"
-            unless (V.null projMembers) $ button_
+            when (canManage && not (V.null projMembers)) $ button_
               [ class_ "btn btn-sm gap-1.5"
               , disabled_ "true"
               , id_ "saveMembersBtn"
@@ -1146,14 +1148,15 @@ manageMembersBody pid projMembers paymentPlan teamsCount =
           div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak overflow-hidden"]
             $ if V.null projMembers
               then emptyState_ def{size = ESCompact} "No members yet" "Invite someone to get started."
-              else V.imapM_ (memberRowWithStatus pid) projMembers
+              else V.imapM_ (memberRowWithStatus pid canManage) projMembers
   where
+    canManage = permission == Just ProjectMembers.PAdmin
     roleTooltip :: Text
     roleTooltip = "Admin: manage team, billing, and settings · Editor: create dashboards and alerts · Viewer: read-only"
 
 
-memberRowWithStatus :: Projects.ProjectId -> Int -> ProjectMembers.ProjectMemberWithStatusVM -> Html ()
-memberRowWithStatus pid idx prM = do
+memberRowWithStatus :: Projects.ProjectId -> Bool -> Int -> ProjectMembers.ProjectMemberWithStatusVM -> Html ()
+memberRowWithStatus pid canManage idx prM = do
   let email = CI.original prM.email
       memberId = prM.id.toText
       isOwner = idx == 0
@@ -1164,16 +1167,16 @@ memberRowWithStatus pid idx prM = do
       when isOwner $ span_ [class_ "badge badge-sm bg-fillBrand-weak text-textBrand border-strokeBrand-weak"] "Owner"
       when isDisabled $ span_ [class_ "badge badge-sm bg-fillWarning-weak text-textWarning border-strokeWarning-weak"] "Disabled"
     div_ [class_ "flex items-center gap-2"] do
-      select_ [name_ "permissions", Aria.label_ ("Role for " <> email), class_ $ "select select-sm select-bordered text-sm" <> if isDisabled then " opacity-50" else ""] do
+      select_ ([name_ "permissions", Aria.label_ ("Role for " <> email), class_ $ "select select-sm select-bordered text-sm" <> if isDisabled then " opacity-50" else ""] <> [disabled_ "" | not canManage]) do
         option_ ([value_ "admin"] <> [selected_ "" | prM.permission == ProjectMembers.PAdmin]) "Admin"
         option_ ([value_ "edit"] <> [selected_ "" | prM.permission == ProjectMembers.PEdit]) "Editor"
         option_ ([value_ "view"] <> [selected_ "" | prM.permission == ProjectMembers.PView]) "Viewer"
-      unless isOwner $ button_ [class_ "btn btn-sm btn-ghost text-iconNeutral hover:text-iconError hover:bg-fillError-weak", Aria.label_ "Remove member", hxDelete_ $ "/p/" <> pid.toText <> "/manage_members/" <> memberId, hxTarget_ $ "#member-" <> memberId, hxSwap_ "outerHTML", hxConfirm_ "Remove this member from the project?"] $ faSprite_ "trash" "regular" "w-4 h-4"
+      when (canManage && not isOwner) $ button_ [class_ "btn btn-sm btn-ghost text-iconNeutral hover:text-iconError hover:bg-fillError-weak", Aria.label_ "Remove member", hxDelete_ $ "/p/" <> pid.toText <> "/manage_members/" <> memberId, hxTarget_ $ "#member-" <> memberId, hxSwap_ "outerHTML", hxConfirm_ "Remove this member from the project?"] $ faSprite_ "trash" "regular" "w-4 h-4"
 
 
 deleteMemberH :: Projects.ProjectId -> ProjectMembers.ProjectMemberId -> ATAuthCtx (RespHeaders (Html ()))
 deleteMemberH pid memberId = do
-  (sess, _) <- Projects.sessionAndProject pid
+  (sess, _) <- requireProjectPermission pid ProjectMembers.PAdmin
   let currUserId = sess.persistentSession.userId
   projMembers <- ProjectMembers.selectActiveProjectMembers pid
   case find (\m -> m.id == memberId) projMembers of

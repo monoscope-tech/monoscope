@@ -13,6 +13,7 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact qualified as PGT
+import Effectful.Error.Static (catchError)
 import Lucid (renderText, toHtml)
 import Models.Apis.Integrations qualified as Integrations
 import Models.Projects.ProjectMembers qualified as ProjectMembers
@@ -22,12 +23,14 @@ import Pages.Projects qualified as ManageMembers
 import Pkg.TestUtils
 import Relude
 import Relude.Unsafe qualified as Unsafe
+import Servant (ServerError (..), getResponse)
 import System.Config qualified as Config
 import Test.Hspec
+import UnliftIO.Exception (bracket_)
 
 
 postMembers :: ManageMembers.ManageMembers -> IO (V.Vector ProjectMembers.ProjectMemberWithStatusVM)
-postMembers (ManageMembers.ManageMembersPost (_, members, _, _)) = pure members
+postMembers (ManageMembers.ManageMembersPost (_, members, _, _, _)) = pure members
 postMembers _ = fail "Expected ManageMembersPost response"
 
 
@@ -38,6 +41,29 @@ userID = Projects.UserId (Unsafe.fromJust $ UUID.fromText "00000000-0000-0000-00
 spec :: Spec
 spec = sequential $ aroundAll withTestResources do
   describe "Members Creation, Update and Consumption" do
+    it "nonAdminMembers_cannotPromoteRolesInviteOrRemoveMembers" \_ -> withTestResources \tr -> do
+      owner <- runQueryEffect tr (ProjectMembers.selectActiveProjectMembers testPid) >>= maybe (fail "Owner missing") pure . listToMaybe
+      let emails = [CI.original owner.email, "permission-guard@example.com"]
+          form permissions = ManageMembers.ManageMembersForm{emails, permissions}
+          uid = (getResponse tr.trSessAndHeader).user.id
+          setPermission permission = void $ withPool tr.trPool $ PGT.execute [sql|UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?|] (permission :: Text, testPid, uid)
+      members <- postMembers . snd =<< testServant tr (ManageMembers.manageMembersPostH testPid Nothing (form [ProjectMembers.PAdmin, ProjectMembers.PView]))
+      invitee <- maybe (fail "Invitee missing") pure $ V.find ((== "permission-guard@example.com") . (.email)) members
+      forM_ ["view", "edit"] \permission -> bracket_ (setPermission permission) (setPermission "admin") do
+        (_, page) <- testServant tr $ ManageMembers.manageMembersGetH testPid
+        let html = LT.toStrict $ renderText $ toHtml page
+            controls = filter (`T.isInfixOf` html) ["id=\"new-member-email\"", "id=\"saveMembersBtn\"", "aria-label=\"Remove member\""]
+        statuses <- forM
+          [ void $ ManageMembers.manageMembersPostH testPid Nothing (form [ProjectMembers.PAdmin, ProjectMembers.PAdmin])
+          , void $ ManageMembers.deleteMemberH testPid invitee.id
+          ]
+          \mutation -> do
+            setPermission permission
+            runAuthHandler tr $ catchError @ServerError (mutation $> 200) (\_ err -> pure err.errHTTPCode)
+        (statuses, controls) `shouldBe` ([403, 403], [])
+        retained <- runQueryEffect tr $ ProjectMembers.selectActiveProjectMembers testPid
+        (find ((== invitee.id) . (.id)) retained <&> (.permission)) `shouldBe` Just ProjectMembers.PView
+
     it "freeTier_existingActiveInvitee_hasNoPermissionOrEmailAudience" \_ -> withTestResources \tr -> do
       owner <- runQueryEffect tr (ProjectMembers.selectActiveProjectMembers testPid) >>= maybe (fail "Owner missing") pure . listToMaybe
       void $ withPool tr.trPool $ PGT.execute [sql|UPDATE projects.projects SET payment_plan = 'PAID' WHERE id = ?|] (Only testPid)
@@ -89,7 +115,7 @@ spec = sequential $ aroundAll withTestResources do
       updated <- saveWith [ProjectMembers.PView]
       (find ((== "example@gmail.com") . (.email)) (V.toList updated) <&> (.permission)) `shouldBe` Just ProjectMembers.PView
 
-      (_, ManageMembers.ManageMembersGet (PageCtx _ (_, listed, _, _))) <- testServant tr $ ManageMembers.manageMembersGetH testPid
+      (_, ManageMembers.ManageMembersGet (PageCtx _ (_, listed, _, _, _))) <- testServant tr $ ManageMembers.manageMembersGetH testPid
       listed `shouldSatisfy` hasExample
       length listed `shouldBe` 2
 

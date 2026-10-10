@@ -219,6 +219,19 @@ test('member permission edits save without requiring a new invitation', async ({
     await expect(page.getByRole('textbox', { name: 'Invite new member email', exact: true })).toBeVisible();
     await expect(page.getByRole('combobox', { name: 'New member role', exact: true })).toBeVisible();
     expect(await page.locator('input[type="email"]').evaluate(element => element.getBoundingClientRect().right <= innerWidth)).toBe(true);
+    for (const role of ['view', 'edit']) {
+      sql(`UPDATE projects.project_members SET permission = '${role}' WHERE project_id = '${pid}' AND user_id = '${uid}';`);
+      for (const theme of ['light', 'dark']) {
+        await page.context().addCookies([{ name: 'theme', value: theme, url: baseURL! }]);
+        await page.goto(`/p/${pid}/manage_members`);
+        await expect(page.getByText('A project admin can invite members, change roles, and remove members.', { exact: true })).toBeVisible();
+        await expect(page.getByRole('textbox', { name: 'Invite new member email', exact: true })).toHaveCount(0);
+        await expect(page.getByRole('button', { name: 'Save changes', exact: true })).toHaveCount(0);
+        await expect(page.getByRole('button', { name: 'Remove member', exact: true })).toHaveCount(0);
+        await expect(page.locator(`#member-${member} select[name="permissions"]`)).toBeDisabled();
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      }
+    }
   } finally {
     sql(`DELETE FROM projects.projects WHERE id = '${pid}'; DELETE FROM users.users WHERE id IN ('${uid}', '${other}') OR email = '${invalidEmail}';`);
   }
