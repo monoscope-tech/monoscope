@@ -273,7 +273,7 @@ paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled basicA
     unless basicAuthEnabled $ div_ [class_ "flex flex-col gap-2 w-full"] do
       div_ [class_ "flex items-center justify-between w-full gap-4"] do
         p_ [class_ " text-textStrong"] "Total events"
-        p_ [class_ " text-textWeak", id_ "num_requests"] "25 Million"
+        p_ [class_ " text-textWeak", term "hx-live:text" "Math.floor(q('#price_range').value / 1e6) + ' Million'"] "20 Million"
       input_ [type_ "range", min_ "20000000", max_ "500000000", step_ "10000000", value_ "20000000", class_ "range range-primary range-sm w-full", id_ "price_range"]
     div_ [class_ "flex flex-col gap-8 mt-6 w-full"] do
       div_ [class_ $ "grid gap-8 w-full " <> bool "grid-cols-1 md:grid-cols-2" "grid-cols-1 md:grid-cols-3" (freePricingEnabled && not basicAuthEnabled)] do
@@ -310,27 +310,6 @@ paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled basicA
              })
               LemonSqueezy.Url.Open(url);
              };
-            |]
-    -- Guarded: #price_range/#price only exist when the usage slider is rendered.
-    unless basicAuthEnabled
-      $ script_
-        [text|
-               const price_indicator = document.querySelector("#price_range");
-               const priceContainer = document.querySelector("#price")
-               const criticalContainer = document.querySelector("#critical_price")
-               const reqsContainer = document.querySelector("#num_requests")
-
-               function priceChange() {
-                 const value = price_indicator.value
-                 let num_reqs = Math.floor(value/1000000)
-                 let calculatedPrice = value <= 20_000_000 ? 29 : 29 + ((value- 20_000_000)/1_000_000)
-                 let calculatedPriceCritical = value <= 100_000_000 ? 199 : 199 + ((value - 100_000_000)/1_000_000)
-                 priceContainer.innerText = calculatedPrice
-                 criticalContainer.innerText = calculatedPriceCritical
-                 reqsContainer.innerText = num_reqs + " Million"
-               }
-
-               price_indicator.addEventListener('input', priceChange)
             |]
 
 
@@ -421,7 +400,7 @@ popularPricing pid lemonUrl isCurrent freeTierEnabled useStripe =
         pricingContent_
           "Bring nothing"
           "This plan can be adjusted"
-          (priceDisplay_ [id_ "price"] "29" "/per month")
+          (priceDisplay_ [term "hx-live:text" "(v => v <= 2e7 ? 29 : 29 + (v - 2e7) / 1e6)(+q('#price_range').value)"] "29" "/per month")
           (pricingCta_ pid "GraduatedPricing" "btn-primary" lemonUrl isCurrent useStripe)
           ["Fully managed cloud service", "Predictable usage-based pricing", "Intelligent incident alerts", "Query your data in english", "30 days data retention included"]
           (span_ [] $ when freeTierEnabled $ "Everything in " >> span_ [class_ "text-textBrand"] "free" >> " plus...")
@@ -437,7 +416,7 @@ systemsPricing pid critical isCurrent useStripe =
       pricingContent_
         "Bring your own storage"
         "Business plan"
-        (priceDisplay_ [id_ "critical_price"] "199" "/per month")
+        (priceDisplay_ [term "hx-live:text" "(v => v <= 1e8 ? 199 : 199 + (v - 1e8) / 1e6)(+q('#price_range').value)"] "199" "/per month")
         (pricingCta_ pid "SystemsPricing" "bg-fillStrong text-textInverse-strong" critical isCurrent useStripe)
         ["Own and control all your data", "Save all your data to any S3-compatible bucket", "Unlimited data retention period", "Query years of data via monoscope", "No extra cost for data retention"]
         (span_ [] $ "Everything in " >> span_ [class_ "text-textBrand"] "bring nothing" >> " plus...")
