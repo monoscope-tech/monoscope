@@ -18,7 +18,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.ServiceGraph (MapStats (..), NodeKind (..), ServiceEdge (..), ServiceGraph (..), ServiceNode (..), drawnEdges, drawnNodes)
 import Pages.Components (EmptyStateCfg (..), EmptyStateSize (..), emptyState_)
 import Relude
-import Utils (faSprite_, getDurationNSMS, prettyPrintCount)
+import Utils (faSprite_, getDurationNSMS, prettyPrintCount, showFFloat')
 
 
 -- | Render the map shell for @graph@ into a container with id @elId@. The graph travels
@@ -299,7 +299,7 @@ dependencyTable_ graph = details_ [class_ "group border border-strokeStrong roun
 
 
 pct :: Double -> Text
-pct r = T.take 4 (show (r * 100)) <> "%"
+pct r = showFFloat' 1 (r * 100) <> "%"
 
 
 -- | The map's empty/error slot: the shared compact empty state inside the fixed-height

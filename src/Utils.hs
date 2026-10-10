@@ -1149,7 +1149,7 @@ extractMessageFromLog :: Value -> Maybe T.Text
 extractMessageFromLog (AE.Object obj) =
   asum [render <$> AEKM.lookup (AEK.fromText key) obj | key <- messageKeys]
   where
-    render = \case AE.String s -> s; v -> T.show v
+    render = \case AE.String s -> s; v -> decodeUtf8 (AE.encode v)
 extractMessageFromLog _ = Nothing
 
 

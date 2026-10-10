@@ -10,6 +10,7 @@ import Data.Base64.Types qualified as B64
 import Data.ByteArray qualified as BA
 import Data.ByteString.Base16 qualified as B16
 import Data.Char (isDigit)
+import Data.List (lookup)
 import Data.Default
 import Data.Generics.Labels ()
 import Data.Map.Strict qualified as M
@@ -800,13 +801,10 @@ statScalar summarize fromM toM stats
 formatStatValue :: Double -> Text -> Text
 formatStatValue value unit
   | isNaN value || isInfinite value = "N/A"
-  | Just factor <- snd <$> find ((== unit) . fst) durationFactors = formatDuration $ value * factor
+  | Just factor <- unitNanos unit = formatDuration $ value * factor
   | unit `elem` ["By", "by", "bytes", "byte", "B"] = formatBytes value
   | otherwise = formatNumber value <> displayUnit unit
   where
-    durationFactors :: [(Text, Double)]
-    durationFactors = [("h", 3.6e12), ("m", 6e10), ("s", 1e9), ("ms", 1e6), ("μs", 1e3), ("us", 1e3), ("ns", 1)]
-
     durationSteps :: [(Double, Text)]
     durationSteps = [(3.6e12, "h"), (6e10, "m"), (1e9, "s"), (1e6, "ms"), (1e3, "μs")]
     formatDuration ns = case find ((<= ns) . fst) durationSteps of
@@ -1678,16 +1676,15 @@ formatColumnValue col value = case col.columnType of
 
 
 durationNanoseconds :: Maybe Text -> Double -> Maybe Integer
-durationNanoseconds unit value =
-  round . (value *) <$> case unit of
-    Nothing -> Just 1
-    Just "ns" -> Just 1
-    Just "us" -> Just 1e3
-    Just "µs" -> Just 1e3
-    Just "ms" -> Just 1e6
-    Just "s" -> Just 1e9
-    Just "m" -> Just 6e10
-    _ -> Nothing
+durationNanoseconds unit value = round . (value *) <$> maybe (Just 1) unitNanos unit
+
+
+-- | Nanoseconds per duration unit; micro accepts both the micro sign and Greek mu.
+--
+-- >>> map unitNanos ["ms", "\181s", "\956s", "parsecs"]
+-- [Just 1000000.0,Just 1000.0,Just 1000.0,Nothing]
+unitNanos :: Text -> Maybe Double
+unitNanos = (`lookup` [("h", 3.6e12), ("m", 6e10), ("s", 1e9), ("ms", 1e6), ("\181s", 1e3), ("\956s", 1e3), ("us", 1e3), ("ns", 1)])
 
 
 -- | Try to parse a PostgreSQL timestamp and format as "Mar 19, 09:05"
