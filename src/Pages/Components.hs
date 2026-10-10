@@ -74,7 +74,7 @@ emptyState_ cfg title subTxt =
 searchInput_ :: Text -> Text -> [Attribute] -> Html ()
 searchInput_ extra ph attrs = label_ [class_ $ "input input-sm flex items-center gap-2 " <> extra] do
   faSprite_ "magnifying-glass" "regular" "h-3.5 w-3.5 shrink-0 text-iconNeutral"
-  input_ $ [type_ "search", class_ "min-w-0 grow bg-transparent", placeholder_ ph, Aria.label_ ph] <> attrs
+  input_ $ [type_ "search", class_ "min-w-0 grow bg-transparent max-md:text-base", placeholder_ ph, Aria.label_ ph] <> attrs
 
 
 -- | Shared shell for searchable facet trees. The content decides how filters change
