@@ -71,6 +71,7 @@ module Utils (
   formatOffset,
   navTabAttrs,
   explorerNavTabs_,
+  navTabStrip_,
   explorerTabs,
   infrastructureNavTabs_,
   infrastructureTabs,
@@ -1719,25 +1720,18 @@ navTabAttrs =
   ]
 
 
+-- | The one link-based tab strip: each tab is (label, href, active) and navigates with
+-- 'navTabAttrs'. @extra@ adds nav classes such as a size modifier.
+navTabStrip_ :: Monad m => Text -> Text -> [(HtmlT m (), Text, Bool)] -> HtmlT m ()
+navTabStrip_ label extra tabs =
+  nav_ [class_ $ "tabs tabs-box tabs-outline flex-nowrap items-center " <> extra, Aria.label_ label, term "hx-preload" "mouseover"] $ forM_ tabs \(name, href, active) ->
+    a_ ([href_ href, class_ $ "tab h-auto! whitespace-nowrap" <> bool "" " tab-active font-semibold text-textStrong" active] <> [term "aria-current" "page" | active] <> navTabAttrs) name
+
+
 -- | The Explorer section's tab strip, shared by every page in the section so a new tab is
 -- added in one place. @active@ is the label of the current page.
 explorerNavTabs_ :: Projects.ProjectId -> Text -> Html ()
-explorerNavTabs_ pid active =
-  nav_ [class_ "tabs tabs-box tabs-outline flex-nowrap items-center bg-fillWeaker", Aria.label_ "Explorer views", term "hx-preload" "mouseover"]
-    $ forM_ explorerTabs
-    $ \(label, path) ->
-      let isActive = label == active
-       in a_
-            ( [ href_ $ "/p/" <> pid.toText <> path
-              , class_ $ "tab h-auto! whitespace-nowrap" <> bool "" " tab-active font-semibold text-textStrong" isActive
-              ]
-                <> [term "aria-current" "page" | isActive]
-                -- The href picks up the page's current from/to/since before it is followed; the
-                -- rewrite lives in the bundle (@preserve-page-context@ in main.ts) — real imperative
-                -- URL work, and inlining it re-serialized 200 chars of JS onto every nav link.
-                <> navTabAttrs
-            )
-            (toHtml label)
+explorerNavTabs_ pid active = navTabStrip_ "Explorer views" "bg-fillWeaker" [(toHtml label, "/p/" <> pid.toText <> path, label == active) | (label, path) <- explorerTabs]
 
 
 -- | Single source of truth for the Explorer section, used by both the tab strip and the
@@ -1751,18 +1745,7 @@ explorerTabs = [("Events", "/log_explorer"), ("Live Tail", "/live_tail"), ("Metr
 -- | Infrastructure is one inventory with sibling views. Keeping this list shared by the
 -- page tabs and sidebar flyout prevents Containers drifting back into Explorer.
 infrastructureNavTabs_ :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Html ()
-infrastructureNavTabs_ pid active fromM toM sinceM =
-  nav_ [class_ "tabs tabs-box tabs-outline flex-nowrap items-center", Aria.label_ "Infrastructure views", term "hx-preload" "mouseover"]
-    $ forM_ infrastructureTabs
-    $ \(label, path) ->
-      a_
-        ( [ href_ $ timeScopedUrl ("/p/" <> pid.toText <> path) [] fromM toM sinceM
-          , class_ $ "tab h-auto! whitespace-nowrap" <> bool "" " tab-active font-semibold text-textStrong" (label == active)
-          , term "aria-current" $ bool "false" "page" (label == active)
-          ]
-            <> navTabAttrs
-        )
-        (toHtml label)
+infrastructureNavTabs_ pid active fromM toM sinceM = navTabStrip_ "Infrastructure views" "" [(toHtml label, timeScopedUrl ("/p/" <> pid.toText <> path) [] fromM toM sinceM, label == active) | (label, path) <- infrastructureTabs]
 
 
 infrastructureTabs :: [(Text, Text)]

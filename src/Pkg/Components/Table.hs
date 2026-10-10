@@ -49,7 +49,7 @@ import Lucid.Hyperscript (__)
 import NeatInterpolation (text)
 import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), detailsClosedBelowAttr_, emptyState_, facetOption_, facetRail_, facetSection_, keyboardActivateAttr_)
 import Relude
-import Utils (deleteParam, faSprite_, navTabAttrs, popoverPanel_, popoverTrigger_, toUriStr)
+import Utils (deleteParam, faSprite_, navTabAttrs, navTabStrip_, popoverPanel_, popoverTrigger_, toUriStr)
 
 
 -- Core Types
@@ -380,19 +380,12 @@ renderTableRows tr = do
 instance ToHtml TabFilter where
   toHtmlRaw = toHtml
   toHtml tf =
-    div_ [class_ "tabs tabs-box tabs-outline tabs-xs md:tabs-sm items-center"] do
-      let uri = deleteParam "filter" tf.currentURL
-      forM_ tf.options \opt ->
-        a_
-          ( [ href_ $ withQuery uri ("filter=" <> toUriStr opt.name)
-            , role_ "tab"
-            , class_ $ "tab h-auto! " <> if opt.name == tf.current then "tab-active text-textStrong" else ""
-            ]
-              <> navTabAttrs
-          )
-          do
-            span_ $ toHtml opt.name
-            whenJust opt.count \c -> when (c > 0) $ span_ [class_ "absolute top-[1px] -right-[5px] text-textInverse-strong text-xs font-medium rounded-full px-1 bg-fillError-strong"] $ show c
+    navTabStrip_ "Filter" "tabs-xs md:tabs-sm" [(tabLabel opt, withQuery (deleteParam "filter" tf.currentURL) ("filter=" <> toUriStr opt.name), opt.name == tf.current) | opt <- tf.options]
+    where
+      tabLabel :: Monad m => TabFilterOpt -> HtmlT m ()
+      tabLabel opt = do
+        span_ $ toHtml opt.name
+        whenJust opt.count \c -> when (c > 0) $ span_ [class_ "absolute top-[1px] -right-[5px] text-textInverse-strong text-xs font-medium rounded-full px-1 bg-fillError-strong"] $ show c
 
 
 -- Shared bits

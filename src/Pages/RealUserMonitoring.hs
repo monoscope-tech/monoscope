@@ -48,7 +48,7 @@ import Lucid.Htmx (hxGet_, hxIndicator_, hxPushUrl_, hxSelect_, hxSwap_, hxTarge
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.RUM (PageVitalPoint (..), ReplaySession (..), RumBreakdown (..), RumBucket (..), RumCacheKey (..), RumError (..), RumPage (..), RumPulse (..), RumQuery (..), RumQueryResult (..), RumSession (..), SessionFilter (..), VitalEstimate (..), VitalGrouping (..), VitalMeasurement (..), VitalPopulation (..), VitalTrendPoint (..), rumCacheDbKey, rumPanelCacheGetStale, rumPanelCacheSet)
 import Models.Telemetry.RUM qualified as RUM
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
 import Pages.Components (Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), withDeferredBody)
 import Pages.Components qualified as Components
 import Pkg.Components.Table qualified as Table
@@ -65,7 +65,7 @@ import System.Config (AuthContext (..), EnvConfig (enableTimefusionReads))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import UnliftIO (tryAny, withRunInIO)
-import Utils (classifyUserAgent, countNoun, faSprite_, getDurationNSMS, nonEmptyT, prettyTimeShort, replaceAllFormats, showFFloat', toXXHash)
+import Utils (classifyUserAgent, countNoun, faSprite_, navTabStrip_, getDurationNSMS, nonEmptyT, prettyTimeShort, replaceAllFormats, showFFloat', toXXHash)
 
 
 data RumTab = Overview | Sessions | Performance
@@ -831,18 +831,7 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
 
 
 rumNavTabs_ :: RumLinks -> RumTab -> Html ()
-rumNavTabs_ links active = nav_ [class_ "tabs tabs-box tabs-outline flex-nowrap items-center", Aria.label_ "Real User Monitoring views", term "hx-preload" "mouseover"] do
-  forM_ [minBound .. maxBound] \tab -> do
-    let url = rumUrl links [("tab", tabParam tab)]
-    a_
-      ( [ href_ url
-        , class_ $ "tab h-auto! whitespace-nowrap" <> bool "" " tab-active text-textStrong" (tab == active)
-        , term "aria-current" $ bool "false" "page" (tab == active)
-        ]
-          <> navTabAttrs
-      )
-      $ toHtml
-      $ tabLabel tab
+rumNavTabs_ links active = navTabStrip_ "Real User Monitoring views" "" [(toHtml $ tabLabel tab, rumUrl links [("tab", tabParam tab)], tab == active) | tab <- [minBound .. maxBound]]
 
 
 rumActions_ :: RumLinks -> Html ()

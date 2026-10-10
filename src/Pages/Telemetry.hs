@@ -66,7 +66,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Tracing (withSpan_)
 import System.Types (ATAuthCtx, DB, RespHeaders, addRespHeaders)
-import Utils (LoadingSize (..), LoadingType (..), countNoun, drawerLoadAttrs_, encodeText, explorerNavTabs_, faSprite_, faSymbolDefs_, faUse_, formatUTC, getDurationNSMS, getServiceColors, loadingIndicator_, onpointerdown_, parseTime, prettyPrintCount, toUriStr, utcTimeToNanoseconds)
+import Utils (LoadingSize (..), LoadingType (..), countNoun, drawerLoadAttrs_, encodeText, explorerNavTabs_, faSprite_, faSymbolDefs_, navTabStrip_, faUse_, formatUTC, getDurationNSMS, getServiceColors, loadingIndicator_, onpointerdown_, parseTime, prettyPrintCount, toUriStr, utcTimeToNanoseconds)
 
 
 -- Shared URL/form state: search is applied before pagination in both views.
@@ -666,11 +666,7 @@ overViewTabs :: Projects.ProjectId -> MetricFilters -> Text -> Html ()
 overViewTabs pid filters tab =
   div_ [class_ "flex items-center gap-2 shrink-0"] do
     span_ [class_ "text-xs font-medium text-textWeak"] "View"
-    div_ [class_ "tabs tabs-box tabs-outline", role_ "tablist", Aria.label_ "Metric view"] do
-      let viewTab label view =
-            a_ ([href_ $ metricPageUrl pid view filters, role_ "tab", Aria.selected_ $ bool "false" "true" (tab == view), class_ $ "tab h-8 min-h-8 px-3 text-xs " <> bool "" "tab-active" (tab == view)] <> navTabAttrs) label
-      viewTab "Charts" "charts"
-      viewTab "Table" "datapoints"
+    navTabStrip_ "Metric view" "tabs-sm" [(label, metricPageUrl pid view filters, tab == view) | (label, view) <- [("Charts", "charts"), ("Table", "datapoints")]]
 
 
 metricsToolbar_ :: Projects.ProjectId -> Text -> MetricFilters -> Html () -> Html ()
