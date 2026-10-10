@@ -1,4 +1,4 @@
-module Pages.Bots.Utils (BotEmoji (..), BotType (..), BotReply (..), botReplyPayload, BotResponse (..), Channel (..), authHeader, contentTypeHeader, mrkdwn, plainTxt, textBlock, imageBlock, dcContainer, dcText, dcGallery, dcLinkButton, processAIQuery, processAIQueryWithMode, storeAgenticResponse, verifyWidgetSignature, QueryIntent (..), detectReportIntent, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, runBotQuery, withBotThread, withDashboardTemplate, parseInstallState, installedResponse) where
+module Pages.Bots.Utils (BotEmoji (..), BotType (..), BotReply (..), botReplyPayload, BotResponse (..), Channel (..), authHeader, contentTypeHeader, dcContainer, dcText, dcGallery, dcLinkButton, processAIQuery, processAIQueryWithMode, storeAgenticResponse, verifyWidgetSignature, QueryIntent (..), detectReportIntent, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, runBotQuery, slackResponse, withBotThread, withDashboardTemplate, parseInstallState, installedResponse) where
 
 import Control.Lens ((.~), (^?))
 import Data.Aeson qualified as AE
@@ -33,6 +33,7 @@ import Pkg.AI qualified as AI
 import Pkg.Components.TimePicker qualified as TP
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId, idFromText)
+import Pkg.Mail (arr, plainTxt, slackActions, slackContext, slackHeader, slackImage, slackSection)
 import Pkg.Parser (parseQueryToAST)
 import Relude
 import Servant.API (Header)
@@ -117,29 +118,8 @@ contentTypeHeader contentType = header "Content-Type" .~ [encodeUtf8 contentType
 -- Slack Block Kit / Discord component builders
 
 -- | JSON array literal; pins the element type, which OverloadedLists would otherwise leave ambiguous.
-arr :: [AE.Value] -> AE.Value
-arr = AE.toJSON
-
-
-mrkdwn, plainTxt :: Text -> AE.Value
-mrkdwn t = AE.object ["type" AE..= ("mrkdwn" :: Text), "text" AE..= t]
-plainTxt t = AE.object ["type" AE..= ("plain_text" :: Text), "text" AE..= t, "emoji" AE..= True]
-
-
-textBlock :: Text -> AE.Value -> AE.Value
-textBlock ty t = AE.object ["type" AE..= ty, "text" AE..= t]
-
-
-elemsBlock :: Text -> [AE.Value] -> AE.Value
-elemsBlock ty es = AE.object ["type" AE..= ty, "elements" AE..= es]
-
-
 linkButton :: Text -> Text -> Text -> AE.Value
 linkButton actionId label url = AE.object ["type" AE..= ("button" :: Text), "action_id" AE..= actionId, "text" AE..= plainTxt label, "url" AE..= url]
-
-
-imageBlock :: Text -> Text -> AE.Value
-imageBlock url alt = AE.object ["type" AE..= ("image" :: Text), "image_url" AE..= url, "alt_text" AE..= alt]
 
 
 -- | Slack in-channel response replacing the ephemeral loading message.
@@ -186,12 +166,12 @@ handleTableResponse target tableAsVecE envCfg projectId query =
                 WhatsApp -> AE.object ["body" AE..= (content <> "\n" <> url')]
                 Slack ->
                   slackResponse
-                    [ textBlock "header" (plainTxt $ headerEmoji <> " Query Results")
-                    , elemsBlock "context" [mrkdwn $ "Showing *" <> show shownCount <> "* of *" <> show resultCount <> "* events"]
-                    , textBlock "section" (mrkdwn $ "`" <> query <> "`")
+                    [ slackHeader $ headerEmoji <> " Query Results"
+                    , slackContext ["Showing *" <> show shownCount <> "* of *" <> show resultCount <> "* events"]
+                    , slackSection $ "`" <> query <> "`"
                     , AE.object ["type" AE..= ("divider" :: Text)]
-                    , textBlock "section" (mrkdwn tableData)
-                    , elemsBlock "actions" [linkButton "view-log-explorer" (botEmoji EmojiSearch <> " View in Log Explorer") url']
+                    , slackSection tableData
+                    , slackActions [linkButton "view-log-explorer" (botEmoji EmojiSearch <> " View in Log Explorer") url']
                     ]
 
 
@@ -396,13 +376,13 @@ formatReport :: BotType -> Issues.Report -> Projects.ProjectId -> EnvConfig -> T
 formatReport target report pid envCfg eventsUrl errorsUrl = case target of
   Slack ->
     slackResponse
-      [ textBlock "header" (plainTxt $ title " Report")
-      , elemsBlock "context" [mrkdwn $ "*Period:* " <> period " → "]
-      , textBlock "section" (mrkdwn $ "Total Events: *" <> show totalEvents <> "*  •  Total Errors: *" <> show totalErrors <> "*")
+      [ slackHeader $ title " Report"
+      , slackContext ["*Period:* " <> period " → "]
+      , slackSection $ "Total Events: *" <> show totalEvents <> "*  •  Total Errors: *" <> show totalErrors <> "*"
       , AE.object ["type" AE..= ("divider" :: Text)]
-      , imageBlock eventsUrl $ chartAlt "Events" " showing " totalEvents
-      , imageBlock errorsUrl $ chartAlt "Errors" " showing " totalErrors
-      , elemsBlock "actions" [linkButton "view-full-report" (botEmoji EmojiSearch <> " View Full Report") reportUrl]
+      , slackImage (chartAlt "Events" " showing " totalEvents) Nothing eventsUrl
+      , slackImage (chartAlt "Errors" " showing " totalErrors) Nothing errorsUrl
+      , slackActions [linkButton "view-full-report" (botEmoji EmojiSearch <> " View Full Report") reportUrl]
       ]
   Discord ->
     dcContainer
@@ -434,13 +414,7 @@ parseReportStats json = (getTotal "events", getTotal "errors")
 formatTextResponse :: BotType -> Text -> AE.Value
 formatTextResponse Discord txt = AE.object ["content" AE..= txt]
 formatTextResponse WhatsApp txt = AE.object ["body" AE..= txt]
-formatTextResponse Slack txt =
-  AE.object
-    [ "blocks" AE..= arr [textBlock "section" (mrkdwn txt)]
-    , "response_type" AE..= ("in_channel" :: Text)
-    , "replace_original" AE..= True
-    , "delete_original" AE..= True
-    ]
+formatTextResponse Slack txt = slackResponse [slackSection txt]
 
 
 -- | Everything a per-platform chart message can be built from. Slack and
@@ -465,10 +439,10 @@ formatChart target c = case target of
     AE.object
       [ "blocks"
           AE..= arr
-            [ textBlock "header" $ plainTxt (botEmoji EmojiChart <> " " <> c.question)
-            , imageBlock c.imageUrl ("Chart: " <> c.question)
-            , elemsBlock "context" [mrkdwn ("*Query:* `" <> c.query <> "`")]
-            , elemsBlock "actions" [linkButton "view-log-explorer" (botEmoji EmojiSearch <> " View in Log Explorer") c.queryUrl]
+            [ slackHeader (botEmoji EmojiChart <> " " <> c.question)
+            , slackImage ("Chart: " <> c.question) Nothing c.imageUrl
+            , slackContext ["*Query:* `" <> c.query <> "`"]
+            , slackActions [linkButton "view-log-explorer" (botEmoji EmojiSearch <> " View in Log Explorer") c.queryUrl]
             ]
       , "response_type" AE..= ("in_channel" :: Text)
       , "replace_original" AE..= True

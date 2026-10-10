@@ -1,4 +1,4 @@
-module Pkg.Mail (AlertImpact (..), monitorDataUnavailableMessage, errorIncidentMessages, resolvedErrorMessage, monitorIncidentMessages, retainSlackSnapshot, sendSlackMessage, sendRenderedEmail, sendWhatsAppAlert, sendSlackAlert, NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendPagerdutyAlertToService, sampleAlertByIssueTypeText, sampleReport, addConvertKitUser, addConvertKitUserOrganization) where
+module Pkg.Mail (AlertImpact (..), monitorDataUnavailableMessage, errorIncidentMessages, resolvedErrorMessage, monitorIncidentMessages, retainSlackSnapshot, sendSlackMessage, sendRenderedEmail, sendWhatsAppAlert, sendSlackAlert, NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendPagerdutyAlertToService, sampleAlertByIssueTypeText, sampleReport, addConvertKitUser, addConvertKitUserOrganization, arr, mrkdwn, plainTxt, slackSection, slackHeader, slackContext, slackImage, slackActions) where
 
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
@@ -855,12 +855,17 @@ snippet :: Int -> Text -> Text
 snippet n t = "```" <> T.take n (stripSummaryBadges t) <> "```"
 
 
-mrkdwn :: Text -> AE.Value
+mrkdwn, plainTxt :: Text -> AE.Value
 mrkdwn t = AE.object ["type" AE..= "mrkdwn", "text" AE..= t]
+plainTxt t = AE.object ["type" AE..= "plain_text", "text" AE..= t, "emoji" AE..= True]
 
 
 slackSection :: Text -> AE.Value
 slackSection t = AE.object ["type" AE..= "section", "text" AE..= mrkdwn t]
+
+
+slackHeader :: Text -> AE.Value
+slackHeader t = AE.object ["type" AE..= "header", "text" AE..= plainTxt t]
 
 
 slackContext :: [Text] -> AE.Value
@@ -887,7 +892,7 @@ slackActions bs = AE.object ["type" AE..= "actions", "elements" AE..= arr bs]
 slackButton :: Text -> Maybe Text -> Text -> AE.Value
 slackButton label styleM url =
   AE.object
-    $ ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= label, "emoji" AE..= True], "url" AE..= url]
+    $ ["type" AE..= "button", "text" AE..= plainTxt label, "url" AE..= url]
     <> maybeToList (("style" AE..=) <$> styleM)
 
 

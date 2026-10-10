@@ -62,10 +62,11 @@ import Network.Wreq.Types (FormParam)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig, PageCtx (..), bodyWrapper, currProject, pageTitle, sessM)
 import Pages.Bots.SlackProgress qualified as Progress
-import Pages.Bots.Utils (BotEmoji (..), BotResponse (..), BotType (..), Channel, authHeader, botEmoji, botReplyPayload, contentTypeHeader, detectReportIntent, getLoadingMessage, imageBlock, installedResponse, mrkdwn, plainTxt, runBotQuery, textBlock, withBotThread)
+import Pages.Bots.Utils (BotEmoji (..), BotResponse (..), BotType (..), Channel, authHeader, botEmoji, botReplyPayload, contentTypeHeader, detectReportIntent, getLoadingMessage, installedResponse, runBotQuery, slackResponse, withBotThread)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget (Widget (..), widgetPngUrl)
 import Pkg.DeriveUtils (UUIDId (..), idFromText)
+import Pkg.Mail (arr, mrkdwn, slackHeader, slackImage, slackSection)
 import Pkg.SlackRateLimit qualified as RateLimit
 import PyF
 import Relude hiding (ask, asks)
@@ -286,18 +287,10 @@ slackInteractionsH interaction = do
           Just project -> flip whenLeft_ (logWelcomeMessageFailure inter.channel_id) =<< tryAny (sendSlackWelcomeMessage slackData.botToken inter.channel_id project.title)
       let channelDisplay = if T.null inter.channel_name then "this channel" else "#" <> inter.channel_name
       pure
-        $ AE.object
-          [ "response_type" AE..= ("in_channel" :: Text)
-          , "blocks"
-              AE..= AE.Array
-                ( V.fromList
-                    [ textBlock "header" $ plainTxt (botEmoji EmojiSuccess <> " Notification channel set")
-                    , textBlock "section" $ mrkdwn ("*" <> channelDisplay <> "* will now receive:")
-                    , textBlock "section" $ mrkdwn ("• " <> botEmoji EmojiError <> " Error alerts\n• " <> botEmoji EmojiChart <> " Daily & weekly reports\n• " <> botEmoji EmojiWarning <> " Anomaly detections\n\nYou can also configure channels on the web dashboard.")
-                    ]
-                )
-          , "replace_original" AE..= True
-          , "delete_original" AE..= True
+        $ slackResponse
+          [ slackHeader (botEmoji EmojiSuccess <> " Notification channel set")
+          , slackSection ("*" <> channelDisplay <> "* will now receive:")
+          , slackSection ("• " <> botEmoji EmojiError <> " Error alerts\n• " <> botEmoji EmojiChart <> " Daily & weekly reports\n• " <> botEmoji EmojiWarning <> " Anomaly detections\n\nYou can also configure channels on the web dashboard.")
           ]
 
 
@@ -393,7 +386,7 @@ slackActionsH action = do
       Just a | a.action_id == "widget-select" -> do
         selected <- maybe (throwError err400) (pure . (.value)) a.selected_option
         withWidget selected \_ dashboard title chartUrl ->
-          updateModal context $ selectBlocks dashboard.widgets $ V.singleton $ imageBlock chartUrl title
+          updateModal context $ selectBlocks dashboard.widgets $ V.singleton $ slackImage title Nothing chartUrl
       _ -> pass
     "view_submission" -> do
       selected <- maybe (throwError err400) pure $ slackAction.view.state >>= lookupSelectedValueByKey "widget-select"
@@ -403,13 +396,11 @@ slackActionsH action = do
           $ AE.object
             [ "channel" AE..= context.channelId
             , "blocks"
-                AE..= AE.Array
-                  ( V.fromList
-                      [ textBlock "section" $ mrkdwn $ "<" <> envCfg.hostUrl <> "p/" <> context.projectId.toText <> "/dashboards/" <> did.toText <> "|" <> title <> ">"
-                      , textBlock "section" $ mrkdwn $ "Shared by <@" <> slackAction.user.id <> "> using /dashboard"
-                      , imageBlock chartUrl title
-                      ]
-                  )
+                AE..= arr
+                  [ slackSection $ "<" <> envCfg.hostUrl <> "p/" <> context.projectId.toText <> "/dashboards/" <> did.toText <> "|" <> title <> ">"
+                  , slackSection $ "Shared by <@" <> slackAction.user.id <> "> using /dashboard"
+                  , slackImage title Nothing chartUrl
+                  ]
             ]
     _ -> pass
   pure $ AE.object []
@@ -512,7 +503,7 @@ dashboardSelectBlock selectId heading options =
   AE.object
     [ "type" AE..= "section"
     , "block_id" AE..= selectId
-    , "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= heading]
+    , "text" AE..= mrkdwn heading
     , "accessory"
         AE..= AE.object
           [ "action_id" AE..= selectId
@@ -579,21 +570,12 @@ welcomeBlocks :: Text -> AE.Object
 welcomeBlocks projectTitle =
   AEKM.fromList
     [ "blocks"
-        AE..= AE.Array
-          ( V.fromList
-              [ AE.object
-                  [ "type" AE..= "section"
-                  , "text"
-                      AE..= AE.object
-                        [ "type" AE..= "mrkdwn"
-                        , "text"
-                            AE..= [fmt|🟢 *Monoscope connected!*
+        AE..= arr
+          [ slackSection
+              [fmt|🟢 *Monoscope connected!*
 
 This channel will now receive notifications for *{projectTitle}*.|]
-                        ]
-                  ]
-              ]
-          )
+          ]
     ]
 
 
