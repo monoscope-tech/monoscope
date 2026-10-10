@@ -1194,26 +1194,27 @@ metricRefCounts dashboards monitors = Map.fromList . map countRefs
   where
     countRefs metricName =
       let (matchingDashboards, matchingMonitors) = metricReferences metricName dashboards monitors
-       in (metricName, (length matchingDashboards, sum (countWidgetsWithMetric metricName <$> matchingDashboards), length matchingMonitors))
+       in (metricName, (length matchingDashboards, sum (maybe 0 (countWidgetsWithMetric metricName) . (.schema) <$> matchingDashboards), length matchingMonitors))
 
 
 metricReferences :: Text -> [Dashboards.DashboardVM] -> [Monitors.QueryMonitor] -> ([Dashboards.DashboardVM], [Monitors.QueryMonitor])
-metricReferences metricName dashboards monitors = (filter ((> 0) . countWidgetsWithMetric metricName) dashboards, filter (monitorHasMetric metricName) monitors)
+metricReferences metricName dashboards monitors = (filter (any ((> 0) . countWidgetsWithMetric metricName) . (.schema)) dashboards, filter (monitorHasMetric metricName) monitors)
 
 
-countWidgetsWithMetric :: Text -> Dashboards.DashboardVM -> Int
-countWidgetsWithMetric metricName dashboard =
-  sum $ map (fromEnum . widgetRefsMetric metricName) $ foldMap Dashboards.allWidgets dashboard.schema
+-- | A group whose child uses the metric is one widget, not two.
+--
+-- >>> :set -Wno-ambiguous-fields
+-- >>> let leaf = def{Widget.query = Just "metrics | where metric_name == \"m\""}
+-- >>> countWidgetsWithMetric "m" def{Dashboards.widgets = [def{Widget.wType = Widget.WTGroup, Widget.children = Just [leaf, def]}, leaf]}
+-- 2
+-- >>> countWidgetsWithMetric "m" def{Dashboards.widgets = [def{Widget.wType = Widget.WTGroup, Widget.children = Just [def]}]}
+-- 0
+countWidgetsWithMetric :: Text -> Dashboards.Dashboard -> Int
+countWidgetsWithMetric metricName = length . filter (\w -> any (T.isInfixOf $ "\"" <> metricName <> "\"") $ catMaybes [w.query, w.sql]) . Dashboards.allWidgets
 
 
 monitorHasMetric :: Text -> Monitors.QueryMonitor -> Bool
 monitorHasMetric metricName monitor = any (`T.isInfixOf` monitor.logQuery) (["\"" <> metricName <> "\"", "'" <> metricName <> "'", "metric=" <> metricName, "metric_name=" <> metricName] :: [Text])
-
-
-widgetRefsMetric :: Text -> Widget.Widget -> Bool
-widgetRefsMetric metricName widget =
-  any (T.isInfixOf ("\"" <> metricName <> "\"")) (maybeToList widget.query <> maybeToList widget.sql)
-    || any (widgetRefsMetric metricName) (fold widget.children)
 
 
 -- | @moreUrl@ is present when the trace continues past the spans given here;
@@ -1315,7 +1316,7 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
                   , Aria.label_ "Search spans"
                   , placeholder_ "Search spans"
                   , id_ "search-input"
-                  , Components.filterInputAttr_ ".span-filterble in #trace_span_container"
+                  , Components.filterInputAttr_ "#trace_span_container .span-filterble"
                   ]
                 -- Span ids live on the container so the two buttons don't each embed the whole list.
                 div_ [class_ "flex items-center gap-1", id_ "currentSpanIndex", term "data-span" "0", term "data-span-ids" $ encodeText $ (.spanId) <$> spanRecords]
