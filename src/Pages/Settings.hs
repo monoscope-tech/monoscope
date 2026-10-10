@@ -1244,9 +1244,7 @@ manageBillingGetH pid = do
       bwconf = bw{pageTitle = "Billing", isSettingsPage = True}
       lemonUrl = envCfg.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
       critical = envCfg.lemonSqueezyCriticalUrl <> "&checkout[custom][project_id]=" <> pid.toText
-      -- Free-tier display shows no provider even for a historically-paid-then-downgraded project
-      -- (which keeps its stored provider so trial-reminder/auto-migration logic still works).
-      provider = bool (Projects.projectProvider project) Projects.NoBillingProvider (Projects.isFreeTier project.paymentPlan)
+      provider = Projects.projectProvider project
   addRespHeaders $ BillingGet $ PageCtx bwconf BillingData{pid, totalReqs = totalRequests, totalBytes, aiInputTokens, aiOutputTokens, aiCostMicrousd, aiInputRate = envCfg.aiInputMicrousdPerMillionTokens, aiOutputRate = envCfg.aiOutputMicrousdPerMillionTokens, lastReported, lemonUrl, critical, paymentPlan = project.paymentPlan, enableFreetier = envCfg.enableFreetier, basicAuthEnabled = envCfg.basicAuthEnabled, provider, dailyUsage, cycleStart = utctDay cycleStart, cycleEnd, currentInvoice, pastCycles}
   where
     epochDay :: Int -> Day
@@ -1342,7 +1340,7 @@ billingPage d = div_ [] do
     -- Actions (kept above the breakdown so they remain near the headline numbers)
     div_ [class_ "border-t border-strokeWeak pt-6 flex items-center gap-3"] do
       label_ [Lucid.for_ "pricing-modal", class_ "btn btn-sm btn-primary cursor-pointer"] "Change plan"
-      unless isFree
+      when (d.provider /= Projects.NoBillingProvider)
         $ a_ [class_ "btn btn-sm btn-ghost text-textBrand", term "hx-preload" "false", hxGet_ $ "/p/" <> d.pid.toText <> "/manage_subscription"] "Manage subscription"
 
     -- Daily breakdown
@@ -1355,7 +1353,8 @@ billingPage d = div_ [] do
     div_ [class_ "text-center text-sm text-textWeak w-full mx-auto max-w-96"] do
       span_ [class_ "text-textStrong text-2xl font-semibold"] "Compare Plans"
       p_ [class_ "mt-2 mb-4"] "Drag the slider to estimate costs at different usage levels."
-    paymentPlanPicker d.pid d.lemonUrl d.critical d.paymentPlan d.enableFreetier d.basicAuthEnabled False d.provider
+    -- Free upgrades use Stripe; billing recovery keeps the existing provider.
+    paymentPlanPicker d.pid d.lemonUrl d.critical d.paymentPlan d.enableFreetier d.basicAuthEnabled False (bool d.provider Projects.NoBillingProvider isFree)
 
 
 usd :: Double -> Text
