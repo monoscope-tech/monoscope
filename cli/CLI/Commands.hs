@@ -51,7 +51,7 @@ module CLI.Commands (
 import Relude
 
 import CLI.Chart qualified as Chart
-import CLI.Config (CLIConfig (..), ConfigKey (..), allConfigKeys, configDir, configFilePath, configKeyText, credentialText, parseConfigKey, removeToken, resolveConfig, saveToken, setConfigValue)
+import CLI.Config (CLIConfig (..), ConfigKey (..), allConfigKeys, configDir, configFilePath, configKeyText, parseConfigKey, removeToken, resolveConfig, saveToken, setConfigValue)
 import CLI.Core (Ingestion, OutputMode (..), apiGet, apiGetJson, apiPostUnauth, dieWith, ingestionKey, isInteractiveTTY, isJsonOutput, printDebug, printError, renderAPIError, renderJSON, renderTable, renderWith, withAPIResult)
 import CLI.Dashboard qualified as Dash
 import CLI.LogView (EventRow (..), LogFormat (..), eventRows, parseLogFormat, renderEventLine, renderLogfmt, renderWaterfall)
@@ -70,7 +70,7 @@ import Data.Char (isAsciiLower, isAsciiUpper, isDigit, isHexDigit)
 import Data.Default (def)
 import Data.Effectful.Wreq (HTTP, runHTTPWreq)
 import Data.HashMap.Strict qualified as HM
-import Data.List.Extra (chunksOf, lookup)
+import Data.List.Extra (chunksOf)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as S
 import Data.Text qualified as T
@@ -97,6 +97,7 @@ import OpenTelemetry.Trace.Id.Generator.Default (defaultIdGenerator)
 import Options.Applicative (Parser, help, long, maybeReader, metavar, option)
 import Pages.Charts.Types (MetricsData (..))
 import Pkg.CLIFormat (cleanSummaryValue, evalCond, extractColIdxMap, extractInt, extractRawRows, extractRows, extractTextArray, renderSummaryCell, valToText)
+import Pkg.Deriving (decodeEnumSC)
 import System.IO (hPutStrLn)
 import System.Process (spawnProcess)
 import UnliftIO.Concurrent (threadDelay)
@@ -225,8 +226,11 @@ runConfigSet :: (FileSystem :> es, IOE :> es) => ConfigSetOpts -> OutputMode -> 
 runConfigSet opts mode = case parseConfigKey opts.key of
   Just ck -> do
     setConfigValue ck opts.value
-    let displayed = redact ck opts.value
-    renderWith mode (AE.object [AK.fromText opts.key AE..= displayed]) (putTextLn $ opts.key <> " = " <> displayed)
+    let displayed = case ck of
+          CKApiKey -> "********"
+          CKApiUrl -> opts.value
+          CKProject -> opts.value
+    renderWith mode (AE.toJSON (one (opts.key, displayed) :: Map Text Text)) (putTextLn $ opts.key <> " = " <> displayed)
   Nothing -> dieWith $ "Unknown key: " <> opts.key <> "; valid keys: " <> T.intercalate ", " (map configKeyText allConfigKeys)
 
 
@@ -236,7 +240,7 @@ runConfigSet opts mode = case parseConfigKey opts.key of
 runConfigGet :: (Environment :> es, FileSystem :> es, IOE :> es) => ConfigGetOpts -> OutputMode -> Eff es ()
 runConfigGet opts mode = do
   cfg <- resolveConfig
-  let redactedKey = redact CKApiKey . credentialText <$> cfg.credential
+  let redactedKey = "********" <$ cfg.credential
       asJson =
         ConfigGetJson
           { apiUrl = cfg.apiUrl
@@ -252,11 +256,6 @@ runConfigGet opts mode = do
     Just "project" -> putTextLn $ fromMaybe "(not set)" cfg.projectId
     Just "api_key" -> putTextLn $ fromMaybe "(not set)" redactedKey
     Just k -> dieWith ("Unknown key: " <> k)
-
-
-redact :: ConfigKey -> Text -> Text
-redact CKApiKey = const "********"
-redact _ = Relude.id
 
 
 -- Services
@@ -708,14 +707,15 @@ runEventsContext cfg opts kindOverride mode = do
   center <- validateOrDie $ maybeToRight "--at: invalid ISO-8601 timestamp" (iso8601ParseM (toString opts.timestamp))
   kindNorm <- validateAndNormalizeKind (opts.kind <|> kindOverride)
   let halfWindow = realToFrac (parseDurationMs (fromMaybe "5m" opts.window)) / 2000 :: NominalDiffTime
-      (from, to) = bimap renderTime renderTime (negate halfWindow, halfWindow)
+      windowStart = renderTime (negate halfWindow)
+      windowEnd = renderTime halfWindow
       renderTime = toText . iso8601Show . (`addUTCTime` center)
       q = foldFiltersIntoQuery "" (maybeToList opts.service) Nothing
       params =
         catMaybes
           [ if T.null q then Nothing else Just ("query", q)
-          , Just ("from", from)
-          , Just ("to", to)
+          , Just ("from", windowStart)
+          , Just ("to", windowEnd)
           , ("source",) <$> kindNorm
           ]
   fmt <- resolveFormat opts.format
@@ -1062,14 +1062,13 @@ runMetricsChart cfg opts =
 
 
 data ChartKind = Line | Bar | Stat | Table
-  deriving stock (Bounded, Enum, Eq, Show)
+  deriving stock (Bounded, Enum, Eq, Read, Show)
 
 
 chartKindOption :: Parser ChartKind
-chartKindOption = option (maybeReader (`lookup` kinds)) (long "type" <> metavar choices <> help (choices <> " (default: inferred from the result)"))
+chartKindOption = option (maybeReader (decodeEnumSC @"")) (long "type" <> metavar (toString choices) <> help (toString choices <> " (default: inferred from the result)"))
   where
-    kinds = [(toString (T.toLower (show kind)), kind) | kind <- universe]
-    choices = intercalate "|" (map fst kinds)
+    choices = T.intercalate "|" (map (T.toLower . show) (universe @ChartKind))
 
 
 -- | Ad-hoc charting of any KQL query, and the engine behind @metrics chart@.

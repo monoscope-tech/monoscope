@@ -12,7 +12,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Text qualified as T
-import Data.Time (addUTCTime, getCurrentTime)
+import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID4
@@ -278,7 +278,8 @@ spec = around withTestResources do
       (ec, out) <- runCLILifecycle tr ["--json", "events", "context", "--at", iso8601Show center, "--window", "5m"]
       ec `shouldBe` ExitSuccess
       rows <- eventsOf <$> jsonOut out
-      length rows `shouldBe` 2
+      [AE.fromJSON @UTCTime timestamp | AE.Object row <- rows, Just timestamp <- [KM.lookup "timestamp" row]]
+        `shouldMatchList` [AE.Success (addUTCTime offset center) | offset <- [-60, 60]]
       (badTime, badOut) <- runCLILifecycle tr ["--json", "events", "context", "--at", "not-a-timestamp"]
       badTime `shouldBe` ExitFailure 1
       badOut `shouldBe` ""
