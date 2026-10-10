@@ -225,6 +225,7 @@ data SyncAction
   | SyncUpdate {path :: Text, sha :: Text, resourceId :: DashboardId}
   | SyncDelete {path :: Text, resourceId :: DashboardId}
   | SyncRename {path :: Text, sha :: Text, resourceId :: DashboardId} -- File moved/renamed, same content
+  | SyncConflict {path :: Text, resourceId :: DashboardId}
   deriving stock (Generic, Show)
 
 
@@ -499,10 +500,10 @@ recordPushSuccess sid = do
   Hasql.interpExecute [HI.sql| UPDATE projects.git_sync SET last_synced_at = #{now}, updated_at = #{now} WHERE id = #{sid} |]
 
 
-getRepositoryDashboardState :: DB es => ProjectId -> GitHubSyncId -> Eff es (M.Map Text (DashboardId, Text))
+getRepositoryDashboardState :: DB es => ProjectId -> GitHubSyncId -> Eff es (M.Map Text (DashboardId, Maybe Text))
 getRepositoryDashboardState pid sid =
   M.fromList . map (\(did, path, sha) -> (path, (did, sha)))
-    <$> Hasql.interp [HI.sql| SELECT id, file_path, file_sha FROM projects.dashboards WHERE project_id = #{pid} AND git_sync_id = #{sid} AND file_path IS NOT NULL AND file_sha IS NOT NULL |]
+    <$> Hasql.interp [HI.sql| SELECT id, file_path, file_sha FROM projects.dashboards WHERE project_id = #{pid} AND git_sync_id = #{sid} AND file_path IS NOT NULL |]
 
 
 data DashboardRepositoryError = DashboardMissing | RepositoryMissing | OwnedByRepository GitHubSyncId | FileOwnedByDashboard DashboardId
@@ -549,22 +550,22 @@ isDashboardFile prefix e = e.isBlob && isJust e.sha && prefix `T.isPrefixOf` e.p
 
 
 -- Sync Logic
-buildSyncPlan :: Text -> [Git.TreeEntry] -> M.Map Text (DashboardId, Text) -> [SyncAction]
-buildSyncPlan prefix entries dbState = renames <> creates <> updates <> deletes
+buildSyncPlan :: Text -> [Git.TreeEntry] -> M.Map Text (DashboardId, Maybe Text) -> [SyncAction]
+buildSyncPlan prefix entries dbState = renames <> creates <> updates <> deletes <> conflicts
   where
-    -- `isDashboardFile` has already established the sha is present, so the fold below is
-    -- total; the fromMaybe is unreachable and only there to keep the pattern irrefutable.
-    gitFiles = M.fromList [(fromMaybe e.path $ T.stripPrefix prefix e.path, (e.path, fromMaybe "" e.sha)) | e <- entries, isDashboardFile prefix e]
+    gitFiles = M.fromList [(fromMaybe e.path $ T.stripPrefix prefix e.path, (e.path, sha)) | e <- entries, isDashboardFile prefix e, Just sha <- [e.sha]]
     newFiles = gitFiles `M.difference` dbState
     removedFiles = dbState `M.difference` gitFiles
-    removedBySha = M.fromList [(sha, rid) | (rid, sha) <- M.elems removedFiles]
+    removedBySha = M.fromList [(sha, rid) | (rid, Just sha) <- M.elems removedFiles]
     -- A new file whose SHA matches a removed file is a rename, not a create+delete
     (renames, creates) =
       partitionEithers
         [maybe (Right $ SyncCreate p s) (Left . SyncRename p s) (M.lookup s removedBySha) | (p, s) <- M.elems newFiles]
     renamedIds = [rid | SyncRename _ _ rid <- renames]
-    deletes = [SyncDelete p rid | (p, (rid, _)) <- M.toList removedFiles, rid `notElem` renamedIds]
-    updates = [SyncUpdate fullPath s rid | (relPath, (fullPath, s)) <- M.toList gitFiles, Just (rid, oldSha) <- [M.lookup relPath dbState], s /= oldSha]
+    deletes = [SyncDelete p rid | (p, (rid, Just _)) <- M.toList removedFiles, rid `notElem` renamedIds]
+    updates = [SyncUpdate fullPath s rid | (relPath, (fullPath, s)) <- M.toList gitFiles, Just (rid, Just oldSha) <- [M.lookup relPath dbState], s /= oldSha]
+
+    conflicts = [SyncConflict fullPath rid | (relPath, (fullPath, _)) <- M.toList gitFiles, Just (rid, Nothing) <- [M.lookup relPath dbState]]
 
 
 dashboardToYaml :: Dashboard -> ByteString

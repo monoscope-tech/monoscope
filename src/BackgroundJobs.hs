@@ -4851,7 +4851,7 @@ gitSyncFromRepo pid sidM = do
                     deletes = [(path, dashId) | GitSync.SyncDelete path dashId <- actions]
                 Log.logInfo "Git sync plan" ("creates" :: Text, length creates, "updates" :: Text, length updates, "deletes" :: Text, length deletes)
                 failures <- Ki.scoped \scope -> do
-                  threads <- forM (creates <> updates <> [a | a@GitSync.SyncRename{} <- actions]) $ forkWithCtx scope . processGitSyncAction pid conn sync teamMap
+                  threads <- forM (filter (\case GitSync.SyncDelete{} -> False; _ -> True) actions) $ forkWithCtx scope . processGitSyncAction pid conn sync teamMap
                   lefts <$> Ki.atomically (traverse Ki.await threads)
                 case failures of
                   [] -> do
@@ -4905,6 +4905,7 @@ processGitSyncAction pid conn sync teamMap = \case
     _ <- GitSync.updateDashboardGitInfo dashId relativePath sha
     Log.logInfo "Renamed dashboard path from git" (relativePath, dashId)
     pure $ Right ()
+  GitSync.SyncConflict path _ -> pure $ Left $ path <> ": This file already exists remotely while its local dashboard is waiting for its first push. Move or remove the remote file, then retry import."
   GitSync.SyncDelete{} -> pure $ Right () -- Handled separately
 
 

@@ -290,12 +290,12 @@ spec = sequential do
       it "updates for changed SHAs" \_ -> do
         let did = UUIDId [uuid|11111111-1111-1111-1111-111111111111|]
             entries = [GitSync.TreeEntry "dashboards/x.yaml" True (Just "newsha") (Just 100)]
-            plan = GitSync.buildSyncPlan "dashboards/" entries (one ("x.yaml", (did, "oldsha")))
+            plan = GitSync.buildSyncPlan "dashboards/" entries (one ("x.yaml", (did, Just "oldsha")))
         length [() | GitSync.SyncUpdate{} <- plan] `shouldBe` 1
 
       it "deletes for removed files" \_ -> do
         let did = UUIDId [uuid|22222222-2222-2222-2222-222222222222|]
-            plan = GitSync.buildSyncPlan "dashboards/" [] (one ("gone.yaml", (did, "sha")))
+            plan = GitSync.buildSyncPlan "dashboards/" [] (one ("gone.yaml", (did, Just "sha")))
         length [() | GitSync.SyncDelete{} <- plan] `shouldBe` 1
 
       it "ignores non-dashboard files" \_ -> do
@@ -367,8 +367,8 @@ spec = sequential do
             _ <- runTestBg frozenTime tr $ GitSync.updateDashboardGitInfo d1 "a.yaml" "sha-a"
             _ <- runTestBg frozenTime tr $ GitSync.updateDashboardGitInfo d2 "b.yaml" "sha-b"
             gitState <- runTestBg frozenTime tr $ GitSync.getRepositoryDashboardState testPid sync.id
-            M.lookup "a.yaml" gitState `shouldBe` Just (d1, "sha-a")
-            M.lookup "b.yaml" gitState `shouldBe` Just (d2, "sha-b")
+            M.lookup "a.yaml" gitState `shouldBe` Just (d1, Just "sha-a")
+            M.lookup "b.yaml" gitState `shouldBe` Just (d2, Just "sha-b")
 
     describe "Job Queuing" do
       it "queues push job when sync enabled" \tr -> do

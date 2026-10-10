@@ -45,7 +45,7 @@ import Relude
 import Servant (getHeaders, getResponse)
 import System.Config (AuthContext (..), EnvConfig (..))
 import Test.Hspec
-import UnliftIO.Exception (throwIO)
+import UnliftIO.Exception (throwIO, try)
 
 
 render :: Lucid.Html () -> Text
@@ -577,8 +577,8 @@ spec = do
         _ <- runQueryEffect tr $ GitSync.updateDashboardGitInfo dashB.id "overview.yaml" "sha-b"
         stateA <- runQueryEffect tr $ GitSync.getRepositoryDashboardState testPid syncA.id
         stateB <- runQueryEffect tr $ GitSync.getRepositoryDashboardState testPid syncB.id
-        M.toList stateA `shouldBe` [("overview.yaml", (dashA.id, "sha-a"))]
-        M.toList stateB `shouldBe` [("overview.yaml", (dashB.id, "sha-b"))]
+        M.toList stateA `shouldBe` [("overview.yaml", (dashA.id, Just "sha-a"))]
+        M.toList stateB `shouldBe` [("overview.yaml", (dashB.id, Just "sha-b"))]
         runAuthHandler tr $ GitSyncPage.queueGitSyncPush testPid dashB.id
         jobs <- getPendingBackgroundJobs tr.trATCtx
         jobs
@@ -704,6 +704,46 @@ spec = do
         _ <- testServant tr $ GitSyncPage.githubAppSelectRepoH testPid selection{GitSyncPage.branch = "different", GitSyncPage.pathPrefix = Just "other"}
         unchanged <- runQueryEffect tr $ GitSync.getGitSyncs testPid
         sort [(s.id, s.branch, s.pathPrefix) | s <- unchanged] `shouldBe` sort [(s.id, s.branch, s.pathPrefix) | s <- syncs]
+
+      it "repositoryPull_preservesAnAssignedDashboardBeforeFirstPushAndReportsRemotePathConflicts" \tr -> do
+        Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync (encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey) testPid Git.GitHub (Just "https://127.0.0.1:1") "team" "dashboards" "main" (GitSync.PersonalToken "fixture") Nothing ""
+        did <- UUIDId <$> UUID.nextRandom
+        _ <- runQueryEffect tr $ Dashboards.insert (Dashboards.mkDashboardVM did testPid frozenTime (Projects.UserId UUID.nil)){Dashboards.title = "Local overview", Dashboards.schema = Just def, Dashboards.gitSyncId = Just sync.id, Dashboards.filePath = Just "overview.yaml"}
+        let pull :: Text -> LBS.ByteString -> IO ([(Text, LBS.ByteString)], ())
+            pull revision tree = runTestBgRecordingHTTP frozenTime tr $ withHTTPResponses (\_ endpoint -> pure $ Just $ if "/git/trees/" `T.isInfixOf` toText endpoint then tree else if "/contents/" `T.isInfixOf` toText endpoint then AE.encode $ AE.object ["content" AE..= extractBase64 (B64.encodeBase64 "title: Remote overview\nwidgets: []\n")] else AE.encode $ AE.object ["sha" AE..= revision]) $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.GitSyncRepository testPid sync.id)
+        _ <- pull "before-first-push" "{\"tree\":[]}"
+        Just awaiting <- runQueryEffect tr $ Dashboards.getDashboardByProjectId testPid did
+        (awaiting.title, awaiting.fileSha) `shouldBe` ("Local overview", Nothing)
+        outcome <- try @_ @SomeException $ pull "remote-conflict" "{\"tree\":[{\"path\":\"dashboards/overview.yaml\",\"sha\":\"remote-blob\",\"type\":\"blob\"}]}"
+        either (expectationFailure . ("Pull must report a first-push conflict rather than attempt a duplicate insert: " <>) . show) (const $ pure ()) outcome
+        Just conflicted <- runQueryEffect tr $ GitSync.getGitSyncById testPid sync.id
+        conflicted.lastRevision `shouldBe` Just "before-first-push"
+        conflicted.lastError `shouldSatisfy` maybe False (T.isInfixOf "overview.yaml")
+        [repository] <- runQueryEffect tr $ GitSync.getRepositories testPid
+        (_, status) <- testServant tr $ GitSyncPage.repositoryDashboardGetH testPid repository.id
+        T.isInfixOf "overview.yaml:" (render $ Lucid.toHtml status.content) `shouldBe` True
+        T.isInfixOf "Retry import" (render $ Lucid.toHtml status.content) `shouldBe` True
+        let queued = getPendingBackgroundJobs tr.trATCtx <&> length . filter (\(_, job) -> case job of BackgroundJobs.GitSyncRepository project sid -> project == testPid && sid == sync.id; _ -> False) . toList
+        beforeRetry <- queued
+        (_, retried) <- testServant tr $ GitSyncPage.gitSyncRepositoryRetryH testPid sync.id
+        T.isInfixOf "overview.yaml:" (render retried) `shouldBe` True
+        queued `shouldReturn` beforeRetry + 1
+        runQueryEffect tr $ Hasql.interpExecute_ [HI.sql| UPDATE projects.git_sync SET sync_enabled = false WHERE id = #{sync.id} |]
+        _ <- testServant tr $ GitSyncPage.gitSyncRepositoryRetryH testPid sync.id
+        queued `shouldReturn` beforeRetry + 1
+        let resume = testServant tr $ GitSyncPage.gitSyncSettingsUpdateH testPid sync.id (GitSyncPage.GitSyncForm (Just sync.host) sync.apiBase sync.owner sync.repo sync.branch "" sync.webhookSecret (Just sync.pathPrefix))
+        _ <- resume
+        queued `shouldReturn` beforeRetry + 2
+        _ <- resume
+        queued `shouldReturn` beforeRetry + 2
+        Just retained <- runQueryEffect tr $ Dashboards.getDashboardByProjectId testPid did
+        (retained.title, retained.fileSha) `shouldBe` ("Local overview", Nothing)
+        owned <- runQueryEffect tr $ Dashboards.selectDashboardsSortedBy testPid "updated_at"
+        length (filter ((== Just sync.id) . (.gitSyncId)) owned) `shouldBe` 1
+        _ <- pull "conflict-removed" "{\"tree\":[]}"
+        Just recovered <- runQueryEffect tr $ GitSync.getGitSyncById testPid sync.id
+        (recovered.lastRevision, recovered.lastError) `shouldBe` (Just "conflict-removed", Nothing)
+        runQueryEffect tr (Dashboards.getDashboardByProjectId testPid did) >>= (`shouldSatisfy` isJust)
 
       it "repositoryPull_renamesAnOwnedDashboardWithoutLosingItsIdentity" \tr -> do
         let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey

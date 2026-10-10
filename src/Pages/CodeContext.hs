@@ -421,6 +421,7 @@ codeMappingsContent pid sampleM credentialM repositoryM = do
           , hxTrigger_ "change"
           , hxTarget_ "#code-mappings-content"
           , hxIndicator_ "#code-account-indicator"
+          , term "hx-disable" "#code-mappings-content input, #code-mappings-content select, #code-mappings-content button"
           , class_ "space-y-2"
           ]
             <> scopedSwap
@@ -447,7 +448,7 @@ codeMappingsContent pid sampleM credentialM repositoryM = do
         case repoResult of
           Left _ -> div_ [role_ "alert", class_ "space-y-2"] do
             p_ [class_ "text-sm text-textError"] "Could not load repositories from this account. Check its access or retry; you can still enter a repository name below."
-            button_ ([type_ "button", hxGet_ editorUrl, hxInclude_ "#code-mappings-content form[action]", hxTarget_ "#code-mappings-content", class_ "btn btn-sm btn-ghost"] <> scopedSwap) "Retry"
+            button_ ([type_ "button", hxGet_ editorUrl, hxInclude_ "#code-mappings-content form[action]", hxTarget_ "#code-mappings-content", hxIndicator_ "#code-account-indicator", term "hx-disable" "#code-mappings-content input, #code-mappings-content select, #code-mappings-content button", class_ "btn btn-sm btn-ghost"] <> scopedSwap) "Retry"
           Right _ -> pass
         addMappingForm_ (either (const []) id repoResult) cred
     section_ [class_ "pt-6 space-y-3 border-t border-strokeWeak"] do

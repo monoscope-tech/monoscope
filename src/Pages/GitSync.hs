@@ -9,6 +9,7 @@ module Pages.GitSync (
   gitSyncSettingsDeleteH,
   gitSyncSettingsUpdateH,
   gitSyncRepositoryDeleteH,
+  gitSyncRepositoryRetryH,
   GitSyncForm (..),
   RepoSelectForm (..),
   queueGitSyncPush,
@@ -46,7 +47,7 @@ import NeatInterpolation (text)
 import OddJobs.Job (createJob)
 import OpenTelemetry.Attributes qualified as Otel
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, mkPageCtx, withSettingsPage)
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), confirmModal_, connectionBadge_, copyButton_, emptyState_, filterInputAttr_, formField_, formSelectField_, headerRow_, iconBadgeLg_, iconBadge_, installationSettingsLink_, primaryButton_, sectionLabel_, settingsH2_, settingsSection_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), colorChip_, confirmModal_, connectionBadge_, copyButton_, emptyState_, filterInputAttr_, formField_, formSelectField_, headerRow_, iconBadgeLg_, iconBadge_, installationSettingsLink_, primaryButton_, sectionLabel_, settingsH2_, settingsSection_)
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Git qualified as Git
 import Pkg.Metrics qualified as Metrics
@@ -54,7 +55,7 @@ import Relude hiding (ask)
 import Servant (ServerError (..), err401, err403, err404, err503)
 import System.Config qualified as Config
 import System.Logging qualified as Log
-import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders)
+import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
 import Utils (LoadingSize (..), faSprite_, htmxIndicator_, renderMarkdown)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (parseUrlPiece)
@@ -174,7 +175,9 @@ saveGitSyncH pid existingM form = do
         Nothing -> GitSync.insertGitHubSync encKey pid host apiBase form.owner form.repo branch (GitSync.PersonalToken form.accessToken) form.webhookSecret (fromMaybe "" form.pathPrefix)
         -- An empty token box means "keep the stored one", not "clear it".
         Just existing -> GitSync.updateGitHubSync encKey existing.id form.owner form.repo branch (guarded (not . T.null) form.accessToken) form.pathPrefix
-      whenJust syncM \sync ->
+      whenJust syncM \sync -> do
+        when (maybe False (not . (.syncEnabled)) existingM) $ liftIO $ withResource ctx.jobsPool \conn ->
+          void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncRepository pid sync.id
         unless (T.null form.accessToken)
           $ void
           $ GitSync.upsertGitHubCredential encKey pid sync.host sync.apiBase sync.owner Nothing (Just form.accessToken)
@@ -198,6 +201,19 @@ gitSyncRepositoryDeleteH pid sid = do
   _ <- GitSync.getGitSyncById pid sid >>= maybe (throwError err404) pure
   void $ GitSync.deleteGitHubSync sid
   addRespHeaders $ div_ [id_ ("git-sync-" <> sid.toText), class_ "rounded-lg bg-fillWeak p-4 text-sm text-textWeak"] "Dashboard sync disconnected. Dashboards are retained as local dashboards."
+
+
+gitSyncRepositoryRetryH :: Projects.ProjectId -> GitSync.GitHubSyncId -> ATAuthCtx (RespHeaders (Html ()))
+gitSyncRepositoryRetryH pid sid = do
+  requireGitWrite pid
+  sync <- GitSync.getGitSyncById pid sid >>= maybe (throwError err404) pure
+  ctx <- ask @Config.AuthContext
+  if sync.syncEnabled
+    then do
+      liftIO $ withResource ctx.jobsPool \conn -> void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncRepository pid sid
+      addSuccessToast "Import queued" (Just "The current error stays visible until the dashboard import succeeds.")
+    else addErrorToast "Sync is paused" (Just "Enable sync before retrying.")
+  addRespHeaders $ gitSyncSettingsView ctx.env.hostUrl pid (Just sync)
 
 
 requireGitWrite :: Projects.ProjectId -> ATAuthCtx ()
@@ -296,7 +312,14 @@ gitSyncSettingsView hostUrl pid syncM =
             faSprite_ "code-branch" "regular" "mt-0.5 w-3.5 h-3.5 shrink-0 text-iconNeutral"
             span_ [class_ "break-all"] $ toHtml $ sync.owner <> "/" <> sync.repo
           p_ [class_ "text-xs text-textWeak break-words"] $ toHtml $ Git.hostLabel sync.host <> " · " <> sync.branch <> " · " <> (if isViaApp then "GitHub App" else "Token account")
-        connectionBadge_ "Connected"
+        if not sync.syncEnabled
+          then connectionBadge_ "Paused"
+          else if isJust sync.lastError then colorChip_ "text-textError bg-fillError-weak" "circle-exclamation" "Sync failed" else connectionBadge_ "Connected"
+      whenJust sync.lastError \err -> div_ [class_ "space-y-2"] do
+        p_ [role_ "status", class_ "text-sm text-textError break-words"] $ toHtml err
+        when sync.syncEnabled $ button_ [type_ "button", hxPost_ (actionUrl <> "/retry"), hxTarget_ ("#" <> targetId), hxSwap_ "outerMorph", hxIndicator_ ("#" <> targetId <> "-retry-indicator"), class_ "btn btn-sm btn-ghost gap-2"] do
+          "Retry import"
+          htmxIndicator_ (targetId <> "-retry-indicator") LdXS
 
       -- Repository settings
       form_ [class_ "space-y-4", hxPost_ actionUrl, hxSwap_ "outerMorph", hxTarget_ ("#" <> targetId), hxIndicator_ ("#" <> targetId <> "-indicator")] do
@@ -332,7 +355,7 @@ gitSyncSettingsView hostUrl pid syncM =
         -- Actions
         div_ [class_ "flex items-center justify-between pt-2"] do
           button_ [class_ "btn btn-sm btn-primary gap-1", type_ "submit"] do
-            "Save"
+            if sync.syncEnabled then "Save" else "Resume sync"
             htmxIndicator_ (targetId <> "-indicator") LdXS
           label_ [class_ "btn btn-sm btn-ghost text-textError hover:bg-fillError-weak", Lucid.for_ ("disconnect-modal-" <> sync.id.toText)] do
             faSprite_ "link-slash" "regular" "w-3 h-3"
