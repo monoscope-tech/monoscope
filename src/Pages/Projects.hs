@@ -98,7 +98,7 @@ import Servant.API.ResponseHeaders (Headers)
 import Servant.Server (err302, err500, errBody, errHeaders)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent, redirectCS, toastError)
-import UnliftIO.Exception (tryAny)
+import Effectful.Exception (trySync)
 import Utils (LoadingSize (..), encodeText, faSprite_, htmxIndicator_, isDemoAndNotSudo, lookupValueText)
 import Web.FormUrlEncoded (FromForm)
 
@@ -336,7 +336,7 @@ updateNotificationsChannel pid NotifListForm{enabledChannels, phones, emails, sl
               -- Other channels: probe via chat.postMessage (needs bot membership).
               -- A dead OAuth webhook (uninstalled app, revoked token) shouldn't
               -- persist as a routing target any more than an un-invited channel.
-              r <- tryAny $ case (cid == slackInfo.channelId, slackInfo.webhookUrl) of
+              r <- trySync $ case (cid == slackInfo.channelId, slackInfo.webhookUrl) of
                 (True, Just url) -> SlackP.sendSlackWelcomeViaWebhook url project.title
                 _ -> SlackP.sendSlackWelcomeMessage slackInfo.botToken cid project.title
               case r of

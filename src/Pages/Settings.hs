@@ -114,7 +114,7 @@ import Servant (FromHttpApiData (..), err400, errBody)
 import System.Config
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Text.Printf (printf)
-import UnliftIO.Exception (throwIO, try, tryAny)
+import Effectful.Exception (throwIO, try, trySync)
 import Utils (LoadingSize (..), calculateCycleStartDate, faSprite_, fmtDate, formatBytes, htmxIndicator_)
 import Web.FormUrlEncoded (FromForm)
 import "cryptonite" Crypto.Hash (SHA256)
@@ -631,7 +631,7 @@ prometheusTestH pid form = do
     Right url -> do
       let opts = PromCfg.prometheusScrapeOpts (mfilter (not . T.null) (T.strip <$> form.authHeader))
       t0 <- Time.currentTime
-      res <- tryAny (W.getWith opts (toString url))
+      res <- trySync (W.getWith opts (toString url))
       t1 <- Time.currentTime
       let ms = round (realToFrac (diffUTCTime t1 t0) * 1000 :: Double) :: Int
       addRespHeaders $ prometheusTestResult $ Just $ case res of
@@ -1616,9 +1616,9 @@ lemonSqueezyOpts apiKey =
 -- customer for something they can no longer see, and the next signup starts a
 -- second subscription on its own fresh trial. Best-effort — a provider outage must
 -- not block the deletion the user asked for, so failures are logged, not thrown.
-cancelProjectSubscription :: (IOE :> es, Log.Log :> es, W.HTTP :> es) => EnvConfig -> Projects.Project -> Eff es ()
+cancelProjectSubscription :: (Log.Log :> es, W.HTTP :> es) => EnvConfig -> Projects.Project -> Eff es ()
 cancelProjectSubscription envConfig project = whenJust target \(opts, url) -> do
-  res <- tryAny $ W.deleteWith opts url
+  res <- trySync $ W.deleteWith opts url
   whenLeft_ res \e ->
     Log.logAttention "Subscription cancellation failed; subscription may still be billing" (project.id.toText, project.subId, show @Text e)
   where

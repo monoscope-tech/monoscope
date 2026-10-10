@@ -188,7 +188,7 @@ dedupTemplates = V.fromList . HM.elems . V.foldl' step HM.empty
 -- staleness window, one batched @UPSERT@. No per-project catalog read; no
 -- per-project upsert.
 regenerateSummaries
-  :: (IOE :> es, DB es) => HS.HashSet Projects.ProjectId
+  :: (DB es) => HS.HashSet Projects.ProjectId
   -> HM.HashMap SchemaKey CatalogEntry
   -> HM.HashMap Projects.ProjectId Text
   -- ^ Per-replica content-hash gate; skips unchanged-doc rewrites.

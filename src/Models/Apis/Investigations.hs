@@ -53,7 +53,7 @@ import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Deriving.Aeson.Stock qualified as DAE
-import Effectful (IOE, (:>), Eff)
+import Effectful (Eff)
 import Hasql.Interpolate qualified as HI
 import Hasql.Transaction.Sessions qualified as TxS
 import Langchain.LLM.Core qualified as LLM
@@ -63,7 +63,7 @@ import OpenAI.V1.Chat.Completions qualified as OpenAIV1
 import Pkg.DeriveUtils (UUIDId)
 import Relude
 import System.Types (DB)
-import UnliftIO.Exception (throwIO)
+import Effectful.Exception (throwIO)
 
 
 data Scope = Scope
@@ -441,7 +441,7 @@ startCheckpoint turn checkpoint =
 -- | A stale worker cannot replace newer progress. Updating the checkpoint and
 -- appending its activity event commit together. Accepted follow-ups also save
 -- their conversation messages and receipt completion in this transaction.
-commitProgress :: (IOE :> es, DB es) => Maybe CheckpointCursor -> Maybe Scope -> Checkpoint -> Maybe Event -> Eff es (Maybe CheckpointCursor)
+commitProgress :: (DB es) => Maybe CheckpointCursor -> Maybe Scope -> Checkpoint -> Maybe Event -> Eff es (Maybe CheckpointCursor)
 commitProgress cursor scope checkpoint event
   | isNothing cursor && (isNothing scope || isNothing event) = pure Nothing
   | otherwise = do

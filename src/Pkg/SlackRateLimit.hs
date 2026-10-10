@@ -6,14 +6,14 @@ import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Wreq qualified as HTTP
 import Data.Text qualified as T
 import Data.Time (UTCTime)
-import Effectful (IOE, Eff, type (:>))
+import Effectful (Eff, type (:>))
 import Effectful.Dispatch.Dynamic (interpose, send)
 import Hasql.Interpolate qualified as HI
 import Network.HTTP.Types (statusCode, statusIsSuccessful)
 import Network.Wreq qualified as Wreq
 import Relude
 import System.Types (DB)
-import UnliftIO.Exception (throwIO)
+import Effectful.Exception (throwIO)
 
 
 newtype SlackRateLimited = SlackRateLimited UTCTime
@@ -23,14 +23,14 @@ newtype SlackRateLimited = SlackRateLimited UTCTime
 
 -- | Cooldowns are shared by workers and survive process restarts. Non-Slack
 -- requests retain their original transport options and error handling.
-withRateLimits :: (IOE :> es, DB es, HTTP.HTTP :> es) => Text -> Eff es a -> Eff es a
+withRateLimits :: (DB es, HTTP.HTTP :> es) => Text -> Eff es a -> Eff es a
 withRateLimits workspace = interpose @HTTP.HTTP $ \_ request -> case request of
   HTTP.PostWith options url body -> limited workspace options url $ \opts -> send $ HTTP.PostWith opts url body
   HTTP.GetWith options url -> limited workspace options url $ \opts -> send $ HTTP.GetWith opts url
   _ -> send @HTTP.HTTP $ coerce request
 
 
-limited :: (IOE :> es, DB es) => Text -> HTTP.Options -> String -> (HTTP.Options -> Eff es (HTTP.Response LByteString)) -> Eff es (HTTP.Response LByteString)
+limited :: (DB es) => Text -> HTTP.Options -> String -> (HTTP.Options -> Eff es (HTTP.Response LByteString)) -> Eff es (HTTP.Response LByteString)
 limited workspace options url request = case T.stripPrefix "https://slack.com/api/" $ toText url of
   Nothing -> request options
   Just path -> do

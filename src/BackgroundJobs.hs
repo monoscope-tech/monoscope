@@ -4891,7 +4891,7 @@ processGitSyncAction pid conn sync teamMap = \case
   GitSync.SyncDelete{} -> pass -- Handled separately
 
 
-fetchAndParseDashboard :: (IOE :> es, W.HTTP :> es) => Git.GitConn -> GitSync.RepoRef -> Text -> Eff es (Either Text Dashboards.Dashboard)
+fetchAndParseDashboard :: (W.HTTP :> es) => Git.GitConn -> GitSync.RepoRef -> Text -> Eff es (Either Text Dashboards.Dashboard)
 fetchAndParseDashboard conn repoRef path = Git.fetchFile conn repoRef path <&> (>>= GitSync.yamlToDashboard)
 
 

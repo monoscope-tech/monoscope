@@ -47,7 +47,7 @@ import Pkg.Prometheus qualified as Prom
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (DB)
-import UnliftIO (throwIO)
+import Effectful.Exception (throwIO)
 
 
 type PrometheusScrapeConfigId = UUIDId "prometheus_scrape_config"
@@ -191,7 +191,7 @@ ingestScrapedBody cfg now body = do
       target = Telemetry.writeTargetFor appCtx.env.enablePostgresTelemetryWrites appCtx.env.enableTimefusionWrites Nothing
   unless (null nonFinite) $ Log.logInfo "Prometheus scrape dropped non-finite samples" (AE.object ["config_id" AE..= cfg.id.toText, "dropped" AE..= length nonFinite])
   Telemetry.bulkInsertOtelMetrics appCtx.metricCatalogBuffer appCtx.hasqlTimefusionUsesPgTypes target records >>= \case
-    Left failure -> liftIO $ throwIO $ These.mergeThese const failure
+    Left failure -> throwIO $ These.mergeThese const failure
     Right () -> pure (V.length records)
 
 

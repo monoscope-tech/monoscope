@@ -157,7 +157,7 @@ import Relude.Extra.Foldable1 (maximum1, minimum1)
 import System.IO (hPutStrLn)
 import System.Logging qualified as Log
 import System.Tracing (forkWithCtx)
-import UnliftIO (throwIO, tryAny)
+import Effectful.Exception (throwIO, trySync)
 import Utils (classifyUserAgent, encodeText, extractMessageFromLog, formatBytes, getDurationNSMS, jsonToMap, lookupValueText, nonEmptyT, scrubNulText, scrubNulValue)
 import Web.HttpApiData (FromHttpApiData)
 
@@ -1602,7 +1602,7 @@ retryHasqlWrite
   -> Eff es (Either SomeException a)
 retryHasqlWrite maxAttempts store act =
   retryTransientLoop maxAttempts "retryHasqlWrite: transient error, retrying" "store" store
-    $ tryAny act
+    $ trySync act
     >>= \case
       Right a -> pure a
       Left e
@@ -2184,7 +2184,7 @@ otelColumns =
 -- unparseable is_remote is logged, not fatal.
 mkOtelRow :: (IOE :> es, Log :> es) => OtelLogsAndSpans -> Eff es OtelRow
 mkOtelRow e = do
-  when (isNothing (UUID.fromText e.id)) $ liftIO $ throwIO (InvalidOtelRowIdException e.id)
+  when (isNothing (UUID.fromText e.id)) $ throwIO (InvalidOtelRowIdException e.id)
   isRemote <- case e.context >>= (.is_remote) of
     Nothing -> pure Nothing
     Just t
@@ -2898,7 +2898,7 @@ bulkInsertOtelMetrics catalogBuffer tfPgTypes target records0 = do
   -- Raw storage is authoritative. Catalog work is buffered and only a full
   -- threshold batch is flushed on the ingestion path.
   when rawPersisted $ whenJustM (liftIO $ enqueueMetricCatalog catalogBuffer records) \batch ->
-    whenLeftM_ (tryAny $ upsertMetricMetadata batch) \e ->
+    whenLeftM_ (trySync $ upsertMetricMetadata batch) \e ->
       Log.logAttention "OTEL_METRICS_META_WRITE_FAILED" (AE.object ["record_count" AE..= V.length batch, "error" AE..= show @Text e])
   pure result
 

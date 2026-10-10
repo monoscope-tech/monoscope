@@ -104,7 +104,7 @@ import Pkg.DeriveUtils (CamelSchema (..), SnakeSchema (..))
 import System.Logging qualified as Log
 import System.Tracing (Tracing, withSpan_)
 import Text.Slugify (slugify)
-import UnliftIO.Exception (tryAny)
+import Effectful.Exception (trySync)
 
 
 data TraceTreeEntry = TraceTreeEntry
@@ -812,7 +812,7 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
   let effectiveVizType = vizTypeM <|> ((.visualizationType) <$> alertDM)
 
   -- Non-common facets and the Query Library lazy-load through their own HTMX endpoints.
-  freeTierStatusE <- tryAny $ checkFreeTierStatus pid project.paymentPlan
+  freeTierStatusE <- trySync $ checkFreeTierStatus pid project.paymentPlan
 
   -- The initial HTMX facet request used to enqueue this job. Common facets now render
   -- with the page, so preserve the missing-summary recovery without restoring that
