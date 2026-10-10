@@ -1,4 +1,3 @@
-{-# OPTIONS_GHC -Wno-redundant-constraints #-}
 
 module Data.Effectful.Notify (
   -- * Effect

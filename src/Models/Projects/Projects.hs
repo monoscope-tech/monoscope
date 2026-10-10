@@ -1115,10 +1115,7 @@ data UsageTotals = UsageTotals
   , aiCostMicrousd :: Int
   }
   deriving stock (Eq, Generic, Show)
-
-
-instance Default UsageTotals where
-  def = UsageTotals 0 0 0 0 0 0 0 0
+  deriving anyclass (Default)
 
 
 -- | The billable count for one dimension. Single mapping from meter to number,

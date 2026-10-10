@@ -1,7 +1,5 @@
 {-# LANGUAGE OverloadedRecordDot #-}
 
-{- HLINT ignore "Use unstableNub" -}
-{- HLINT ignore "Use atomicModifyIORef'_" -}
 
 -- | Periodic flush worker for the schema-learning catalog.
 --
@@ -286,4 +284,4 @@ runSchemaFlusher intervalSecs refs flushOne = forever do
     -- grew past its cap. Without this the entries map grows unboundedly with
     -- every distinct (project, keyHash) the shard has ever seen and eventually
     -- exhausts the heap.
-    atomicModifyIORef' ref \st -> (Hot.evictLRU Hot.defaultPolicy st, ())
+    atomicModifyIORef'_ ref (Hot.evictLRU Hot.defaultPolicy)

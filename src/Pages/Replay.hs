@@ -47,7 +47,7 @@ import Relude.Extra.Tuple (traverseToFst)
 import System.Config (AuthContext (config, jobsPool, s3HttpManager), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, DB, RespHeaders, addRespHeaders)
-import UnliftIO.Exception (finally, tryAny)
+import UnliftIO.Exception (finally, tryAny, withException)
 
 
 data ReplayPost = ReplayPost
@@ -743,7 +743,6 @@ maxFilesPerMerge = 25
 -- | Upload the events for one replay message. Takes the events sub-tree as
 -- raw JSON bytes (already validated as a JSON value by the splitter) and
 -- streams them straight into MinIO with no AE.encode round-trip.
-{-# ANN saveReplayMinio ("HLint: ignore Use alternative" :: String) #-}
 saveReplayMinio :: (IOE :> es, DB es, Log :> es, Time :> es) => Manager -> EnvConfig -> Pool Connection -> Text -> ReplayPayload -> Eff es (Maybe Text)
 saveReplayMinio manager envCfg jobsPool ackId payload =
   Projects.projectById payload.projectId >>= \case
@@ -757,7 +756,7 @@ saveReplayMinio manager envCfg jobsPool ackId payload =
               timeStr = toText $ formatTime defaultTimeLocale "%Y%m%dT%H%M%S%q" now
               objKeyText = replayObjectPrefix payload.projectId now payload.sessionId <> timeStr <> ".json"
               body = payload.eventsBytes
-          liftIO (Storage.runMinio manager conn $ Minio.putObject bucket objKeyText (CC.sourceLazy (BL.fromStrict body)) (Just $ fromIntegral $ BS.length body) Minio.defaultPutObjectOptions) >>= \case
+          liftIO (Storage.runMinio manager conn $ Minio.putObject bucket objKeyText (CC.sourceLazy (fromStrict body)) (Just $ fromIntegral $ BS.length body) Minio.defaultPutObjectOptions) >>= \case
             Right _ -> do
               let ReplayPayload{sessionId, projectId, userId, userEmail, userName} = payload
               -- The object is durable BEFORE anything records its key, so a failure
@@ -768,17 +767,8 @@ saveReplayMinio manager envCfg jobsPool ackId payload =
               -- scripts/local/replay-repair-untracked.sh takes exactly this input.
               -- Re-thrown, so the nack/retry path is unchanged (never silent-ack).
               countRows :: [Int] <-
-                either
-                  ( \(e :: SomeException) -> do
-                      Log.logAttention
-                        "Replay object saved but recording its key failed; object is orphaned"
-                        (HM.fromList [("session", session), ("projectId", payload.projectId.toText), ("orphaned_key", objKeyText), ("error", toText (displayException e))])
-                      liftIO $ throwIO e
-                  )
-                  pure
-                  =<< tryAny
-                    ( Hasql.interp
-                        [HI.sql|
+                Hasql.interp
+                    [HI.sql|
                 INSERT INTO projects.replay_sessions (session_id, project_id, last_event_at, event_file_count, file_keys, user_id, user_email, user_name)
                 VALUES (#{sessionId}, #{projectId}, #{now}, 1, ARRAY[#{objKeyText}]::text[], #{userId}, #{userEmail}, #{userName})
                 ON CONFLICT (session_id) DO UPDATE SET
@@ -791,7 +781,10 @@ saveReplayMinio manager envCfg jobsPool ackId payload =
                   updated_at = #{now}
                 RETURNING event_file_count
               |]
-                    )
+                  `withException` \(e :: SomeException) ->
+                    Log.logAttention
+                      "Replay object saved but recording its key failed; object is orphaned"
+                      (HM.fromList [("session", session), ("projectId", payload.projectId.toText), ("orphaned_key", objKeyText), ("error", toText (displayException e))])
               let fileCount = fromMaybe 0 (listToMaybe countRows)
               -- Enqueue at exact multiples of the threshold so a busy session
               -- with N events past 14/28/42/... fires at most one merge per
