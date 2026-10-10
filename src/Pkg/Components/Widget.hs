@@ -497,8 +497,6 @@ decodeWidgetZ z = case B64URL.decodeBase64Untyped (encodeUtf8 z) of
 
 
 -- | Data attributes for table row click handling (delegated via global JS handler in widgets.ts)
-rowClickTableAttrs :: Widget -> [Attribute]
-rowClickTableAttrs widget = foldMap (\action -> [data_ "on-row-click" (encodeText action)]) widget.onRowClick
 
 
 -- Used when converting a widget json to its html representation. Eg in a query chart builder
@@ -1585,12 +1583,22 @@ renderTableWithDataAndParams widget dataRows params = do
   let columns = fromMaybe [] widget.columns
       tableId = maybeToMonoid widget.id
       currentVar = widget.onRowClick >>= (.setVariable) >>= \var -> find ((== "var-" <> var) . fst) params >>= snd
+      -- Rows navigate server-side: a tab named by @navigate_to_tab@, else the current tab
+      -- (a query-only URL resolves against the page path), with the row's variable set.
+      rowNavAttrs value = fold do
+        action <- widget.onRowClick
+        pid <- widget._projectId
+        dashId <- widget._dashboardId
+        guard $ isJust action.setVariable || isJust action.navigateToTab
+        let varKey = ("var-" <>) <$> action.setVariable
+            vars = [(k, v) | (k, Just v) <- params, "var-" `T.isPrefixOf` k, Just k /= varKey] <> [(k, value) | k <- toList varKey]
+            path = foldMap (\tab -> "/p/" <> pid.toText <> "/dashboards/" <> dashId <> "/tab/" <> slugify tab) action.navigateToTab
+        pure
+          $ dashboardContentNavAttrs (path <> "?" <> T.intercalate "&" [k <> "=" <> toUriStr v | (k, v) <- vars])
+          <> [term "hx-preload" "mousedown"]
+          <> foldMap (\var -> [name_ "dashboard-variable-option", data_ "variable-key" var, data_ "variable-value" value, data_ "variable-label" value, term "hx-on:htmx:before:request" "syncDashboardVariable(this, true)", term "hx-on:htmx:finally:request" "syncDashboardVariable(this, false)"]) action.setVariable
 
-  table_
-    ( [class_ "table table-zebra table-sm w-full relative", id_ tableId]
-        <> rowClickTableAttrs widget
-    )
-    do
+  table_ [class_ "table table-zebra table-sm w-full relative", id_ tableId] do
       sortableTableHead_ widget (find ((== "table-sort") . fst) params >>= snd)
       tbody_ [] do
         let maxValues = calculateMaxValues columns dataRows
@@ -1603,13 +1611,12 @@ renderTableWithDataAndParams widget dataRows params = do
                 ]
         V.forM_ dataRows \row -> do
           let firstColValue = memptyIfFalse (not $ null columns) (getRowValue 0 row)
-              rowValue = maybe firstColValue (T.replace "{{row.resource_name}}" firstColValue) (widget.onRowClick >>= (.value))
+              rowValue = maybe firstColValue (\tpl -> foldl' (\t (col, idx) -> T.replace ("{{row." <> col.field <> "}}") (getRowValue idx row) t) tpl (zip columns [0 ..])) (widget.onRowClick >>= (.value))
               isCurrent = Just rowValue == currentVar
           tr_
-            ( [ class_ $ "hover cursor-pointer" <> memptyIfFalse isCurrent " bg-fillBrand-weak font-semibold"
-              , data_ "row" $ encodeText $ AE.object [(K.fromText col.field, AE.String $ getRowValue idx row) | (col, idx) <- zip columns [0 ..]]
-              ]
+            ( [class_ $ "hover cursor-pointer" <> memptyIfFalse isCurrent " bg-fillBrand-weak font-semibold"]
                 <> [term "aria-current" "true" | isCurrent]
+                <> rowNavAttrs rowValue
             )
             $ ifor_ columns \idx col ->
               td_ [class_ $ cellClass col]

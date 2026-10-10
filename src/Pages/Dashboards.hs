@@ -836,7 +836,7 @@ variablePickerModal_ pid dashId activeTabSlug allParams var = do
             def{size = ESCompact}
             ("No " <> T.toLower varTitle <> " to choose from yet")
             "This dashboard reports on one at a time, so it has nothing to show until data arrives."
-      else div_ [class_ "var-picker group/picker w-full max-w-lg surface-raised rounded-lg border border-strokeWeak overflow-hidden"] do
+      else div_ [class_ "var-picker group/picker w-full max-w-lg surface-raised rounded-lg border border-strokeWeak overflow-hidden", Components.listboxNavAttr_] do
         div_ [class_ "px-3 border-b border-base-300 flex items-center gap-2"] do
           input_
             [ id_ $ "var-picker-search-" <> var.key
@@ -844,40 +844,11 @@ variablePickerModal_ pid dashId activeTabSlug allParams var = do
             , class_ "flex-1 min-w-0 py-2.5 bg-transparent outline-none text-sm"
             , placeholder_ $ "Search " <> T.toLower varTitle <> "s..."
             , autofocus_
-            , [__|on input
-              call htmx.live.refresh()
-              wait 0ms
-              remove .active from <a.var-opt/> in closest .var-picker
-              add .active to the first <a.var-opt:not([hidden])/> in closest .var-picker
-            end
-            on keydown[key=='Enter']
-              set :a to the first <a.active/> in closest .var-picker
-              if :a then call :a.click() end
-            end
-            on keydown[key=='ArrowDown'] halt the event
-              set :a to the first <a.active/> in closest .var-picker
-              if :a then
-                set :n to :a.nextElementSibling
-                repeat while :n and :n.hidden set :n to :n.nextElementSibling end
-                if :n then remove .active from :a then add .active to :n then call :n.scrollIntoView({block:'nearest'}) end
-              else
-                set :f to the first <a.var-opt:not([hidden])/> in closest .var-picker
-                if :f then add .active to :f end
-              end
-            end
-            on keydown[key=='ArrowUp'] halt the event
-              set :a to the first <a.active/> in closest .var-picker
-              if :a then
-                set :p to :a.previousElementSibling
-                repeat while :p and :p.hidden set :p to :p.previousElementSibling end
-                if :p then remove .active from :a then add .active to :p then call :p.scrollIntoView({block:'nearest'}) end
-              end
-            |]
             ]
           -- At the end of the search field: the global progress bar is too far away to register.
           span_ [class_ "hidden group-has-[.htmx-request]/picker:inline-flex shrink-0 text-iconNeutral", role_ "status", Aria.label_ "Loading"] reloadSpinner_
         -- While a choice is in flight: no further clicks, and only the chosen row stays lit.
-        div_ [class_ "max-h-80 overflow-y-auto p-1 has-[.htmx-request]:pointer-events-none has-[.htmx-request]:[&_.var-opt:not(.htmx-request)]:opacity-40"] do
+        div_ [role_ "listbox", class_ "max-h-80 overflow-y-auto p-1 has-[.htmx-request]:pointer-events-none has-[.htmx-request]:[&_.var-opt:not(.htmx-request)]:opacity-40"] do
           forM_ (zip [0 :: Int ..] opts) \(idx, opt) -> do
             let optVal = maybeToMonoid (opt !!? 0)
                 optLbl = fromMaybe optVal (opt !!? 1)
@@ -890,6 +861,7 @@ variablePickerModal_ pid dashId activeTabSlug allParams var = do
                     $ "var-opt [&[hidden]]:hidden flex items-center gap-2 px-3 py-2 rounded text-sm cursor-pointer transition-colors"
                     <> bool "" " active" (idx == 0)
                     <> bool "" " var-opt-current" isCurrent
+                , role_ "option"
                 , href_ optUrl
                 , name_ "dashboard-variable-option"
                 , data_ "variable-key" var.key
@@ -2130,8 +2102,7 @@ dashboardsGet_ dg = do
                       Just (widgetId, sourceDashIdM) ->
                         [ class_ "cursor-pointer hover:bg-fillWeak tap-target"
                         , hxSwap_ "none"
-                        , data_ "success-message" $ bool "Widget added to " "Widget copied to " (isJust sourceDashIdM) <> dash.title
-                        , term "hx-on:htmx:after:request" "const s = event.detail.ctx.response.status; if (s >= 200 && s < 300) { document.getElementById('dashboards-modal').checked = false; htmx.trigger(document.body, 'successToast', {value: [this.dataset.successMessage]}) }"
+                        , term "hx-on:htmx:after:request" "const s = event.detail.ctx.response.status; if (s >= 200 && s < 300) document.getElementById('dashboards-modal').checked = false"
                         ]
                           <> case sourceDashIdM of
                             -- The widget already exists server-side; copy it across.
@@ -2824,7 +2795,7 @@ processDashWidgets
   -> ATAuthCtx [Widget.Widget]
 processDashWidgets prefill pid dashId now timeParams paramsWithConstants widgets = do
   appCtx <- ask @AuthContext
-  pooledForConcurrently widgets (fmap (#_dashboardId ?~ dashId.toText) . processWidget prefill pid now timeParams paramsWithConstants)
+  pooledForConcurrently widgets (processWidget prefill pid now timeParams paramsWithConstants . (#_dashboardId ?~ dashId.toText))
     >>= populateWidgetAlertStatuses
     >>= populateWidgetPngUrls appCtx.env.apiKeyEncryptionSecretKey appCtx.config.hostUrl pid timeParams
   where
@@ -2934,22 +2905,6 @@ dashboardTabStrip_ pidText dashIdText activeTabIdx tabs queryStr extraAttrs =
           whenJust tab.icon \icon -> faSprite_ icon "regular" "w-4 h-4 group-[.htmx-request]/tab:hidden"
           span_ [class_ "hidden group-[.htmx-request]/tab:inline-flex", role_ "status", Aria.label_ "Loading"] reloadSpinner_
           toHtml tab.name
-
-
--- | The range comes from the live picker, not @url@: a range picked client-side leaves every
--- server-rendered link's @since@/@from@/@to@ stale, and a duplicate key resolves to the first.
-dashboardContentNavAttrs :: Text -> [Attribute]
-dashboardContentNavAttrs url =
-  [ hxGet_ $ path <> foldMap (("?" <>) . T.intercalate "&" . toList) (nonEmpty kept)
-  , hxVals_ "js:{...getTimeRange()}"
-  , hxTarget_ "#dashboard-tabs-content"
-  , hxSwap_ "outerMorph"
-  , hxPushUrl_ "true"
-  , [__|on click set my.preloadState to 'DONE'|]
-  ]
-  where
-    (path, qs) = T.breakOn "?" url
-    kept = filter ((`notElem` ["", "since", "from", "to"]) . T.takeWhile (/= '=')) $ T.splitOn "&" $ T.drop 1 qs
 
 
 -- | Render a single tab content panel.

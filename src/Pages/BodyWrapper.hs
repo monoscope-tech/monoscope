@@ -17,7 +17,6 @@ import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Aria qualified as Aria
-import Lucid.Base (makeElement)
 import Lucid.Htmx (hxConfirm_, hxDelete_, hxGet_, hxIndicator_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Issues qualified as Issues
@@ -330,10 +329,10 @@ bodyWrapper bcfg child = do
       meta_ [name_ "tagify-css", content_ $ assetUrl "/public/assets/css/thirdparty/tagify.min.css"]
       mapM_ css
         $ [assetUrl "/public/assets/css/thirdparty/tagify.min.css" | bcfg.needsTagify]
-        <> [assetUrl "/public/assets/deps/gridstack/gridstack.min.css" | bcfg.needsGridStack]
-        <> [ assetUrl "/public/assets/css/tailwind.min.css"
-           , assetUrl "/public/assets/web-components/dist/css/index.css"
-           ]
+          <> [assetUrl "/public/assets/deps/gridstack/gridstack.min.css" | bcfg.needsGridStack]
+          <> [ assetUrl "/public/assets/css/tailwind.min.css"
+             , assetUrl "/public/assets/web-components/dist/css/index.css"
+             ]
 
       fold bcfg.headContent
 
@@ -357,7 +356,7 @@ bodyWrapper bcfg child = do
             -- forward-page-params are re-registered in main.ts via registerExtension).
             assetUrl "/public/assets/js/thirdparty/_hyperscript_web0_9_93.min.js"
           ]
-        <> [assetUrl "/public/assets/deps/tagify/tagify.min.js" | bcfg.needsTagify]
+          <> [assetUrl "/public/assets/deps/tagify/tagify.min.js" | bcfg.needsTagify]
       script_ [src_ (assetUrl "/public/assets/deps/lit/lit-html.js"), type_ "module", defer_ "true"] ("" :: Text)
       when bcfg.needsGridStack $ gridStackScript $ assetUrl "/public/assets/deps/gridstack/gridstack-all.js"
       mapM_
@@ -622,88 +621,45 @@ bodyWrapper bcfg child = do
                   });
               |]
   where
-    dialog_ :: [Attribute] -> Html () -> Html ()
-    dialog_ = with (makeElement "dialog")
-
     -- Focused prompt capture shared by the sidebar's chat and routine launchers.
     -- A conversation is created only after submission, so abandoned drafts never pollute
     -- the thread list. The resulting page uses the same history renderer as issue chat.
     aiComposerShell_ :: Projects.ProjectId -> Html ()
     aiComposerShell_ pid =
-      dialog_ [id_ "ai-composer-modal", class_ "modal !items-start px-4 pt-[15vh] backdrop:backdrop-blur-sm", term "aria-labelledby" "ai-composer-title"] do
-        form_ [method_ "dialog", class_ "modal-backdrop"] $ button_ [Aria.label_ "Close composer"] "close"
-        form_
-          [ id_ "ai-composer-panel"
-          , hxPost_ $ "/p/" <> pid.toText <> "/ai"
-          , hxSwap_ "none"
-          , term "hx-disabled-elt" "find button[type='submit']"
-          , class_ "modal-box group/composer !w-full !max-w-lg !overflow-visible !rounded-none !border-0 !bg-transparent !p-0 !shadow-none flex flex-col"
-          ]
-          do
-            div_ [class_ "mb-2 flex items-center justify-between px-3"] do
-              h2_ [id_ "ai-composer-title", class_ "text-xs font-medium uppercase tracking-wider text-white"] do
-                span_ [class_ "group-has-[#ai-composer-routine:checked]/composer:hidden"] "New chat"
-                span_ [class_ "hidden group-has-[#ai-composer-routine:checked]/composer:inline"] "New routine"
-              button_ [type_ "button", Aria.label_ "Close composer", class_ "inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-white/70 hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-white active:scale-[0.96] transition-[color,background-color,scale]", onclick_ "this.closest('dialog').close()"]
-                $ faSprite_ "xmark" "regular" "h-3.5 w-3.5"
-            div_ [class_ "w-full overflow-hidden rounded-lg border border-base-300 bg-bgBase shadow-2xl"] do
-              fieldset_ [class_ "m-2 grid w-fit grid-cols-2 rounded-lg bg-fillWeak p-0.5 text-xs", Aria.label_ "Conversation type"] do
-                input_ [type_ "radio", name_ "mode", value_ "chat", id_ "ai-composer-chat", class_ "sr-only peer/chat", checked_]
-                label_ [Lucid.for_ "ai-composer-chat", class_ "cursor-pointer rounded-md px-3 py-1.5 text-center font-medium text-textWeak peer-checked/chat:bg-bgRaised peer-checked/chat:text-textStrong peer-checked/chat:shadow-xs peer-focus-visible/chat:outline-2 peer-focus-visible/chat:outline-offset-2 transition-[color,background-color,box-shadow] duration-100"] "Chat"
-                input_ [type_ "radio", name_ "mode", value_ "routine", id_ "ai-composer-routine", class_ "sr-only peer/routine"]
-                label_ [Lucid.for_ "ai-composer-routine", class_ "cursor-pointer rounded-md px-3 py-1.5 text-center font-medium text-textWeak peer-checked/routine:bg-bgRaised peer-checked/routine:text-textStrong peer-checked/routine:shadow-xs peer-focus-visible/routine:outline-2 peer-focus-visible/routine:outline-offset-2 transition-[color,background-color,box-shadow] duration-100"] "Routine"
-              div_ [class_ "border-b border-base-300 px-3"] do
-                textarea_
-                  [ id_ "ai-composer-input"
-                  , name_ "query"
-                  , rows_ "3"
-                  , maxlength_ "4000"
-                  , required_ "required"
-                  , autofocus_
-                  , placeholder_ "Describe what you want Monoscope to investigate…"
-                  , Aria.label_ "Instructions"
-                  , class_ "no-focus-ring min-h-24 w-full resize-none bg-transparent py-3 text-sm leading-5 text-textStrong outline-none placeholder:text-textDisabled"
-                  , [__|on keydown[key=='Enter' and (metaKey or ctrlKey)] halt the event then call my form.requestSubmit()|]
-                  ]
-                  ""
-              div_ [class_ "hidden group-has-[#ai-composer-routine:checked]/composer:flex items-center justify-between gap-3 border-b border-base-300 px-4 py-3"] do
-                label_ [Lucid.for_ "ai-routine-interval", class_ "text-xs font-medium text-textStrong"] "Run every"
-                select_ [id_ "ai-routine-interval", name_ "intervalMinutes", class_ "select select-sm h-8 min-h-8 border-strokeWeak bg-bgRaised text-xs text-textStrong"] do
-                  option_ [value_ "60", class_ "bg-bgRaised text-textStrong"] "Hour"
-                  option_ [value_ "1440", selected_ "selected", class_ "bg-bgRaised text-textStrong"] "Day"
-                  option_ [value_ "10080", class_ "bg-bgRaised text-textStrong"] "Week"
-              div_ [class_ "flex justify-end gap-1.5 p-2"] do
-                button_ [type_ "button", class_ "btn btn-sm btn-ghost cursor-pointer shadow-none active:scale-[0.96] transition-transform", onclick_ "this.closest('dialog').close()"] "Cancel"
-                button_ [type_ "submit", class_ "btn btn-sm btn-primary cursor-pointer gap-1.5 shadow-none active:scale-[0.96] transition-transform"] do
-                  span_ [class_ "group-has-[#ai-composer-routine:checked]/composer:hidden"] "Start chat"
-                  span_ [class_ "hidden group-has-[#ai-composer-routine:checked]/composer:inline"] "Start routine"
-                  faSprite_ "arrow-right" "regular" "h-3 w-3"
-            div_ [class_ "cmd-palette-hints mt-3 flex items-center justify-center gap-6 text-xs text-white drop-shadow dark:text-white/80"] do
-              div_ [class_ "flex items-center gap-1.5"] do
-                "Start"
-                kbd_ [class_ "kbd kbd-xs"] "⌘/Ctrl"
-                kbd_ [class_ "kbd kbd-xs"] "↵"
-              div_ [class_ "flex items-center gap-1.5"] do
-                "Close"
-                kbd_ [class_ "kbd kbd-xs"] "esc"
+      Components.floatingDialog_
+        "ai-composer-modal"
+        (span_ [class_ "group-has-[#ai-composer-routine:checked]/dialog:hidden"] "New chat" >> span_ [class_ "hidden group-has-[#ai-composer-routine:checked]/dialog:inline"] "New routine")
+        ("Start", ["⌘/Ctrl", "↵"])
+        [id_ "ai-composer-panel", hxPost_ $ "/p/" <> pid.toText <> "/ai", hxSwap_ "none", term "hx-disabled-elt" "find button[type='submit']"]
+        do
+          Components.segmented_ "m-2 grid w-fit grid-cols-2 rounded-lg bg-fillWeak p-0.5 text-xs" "Conversation type" "mode" "ai-composer-" [("chat", "Chat"), ("routine", "Routine")]
+          div_ [class_ "border-b border-base-300 px-3"] do
+            textarea_
+              [ id_ "ai-composer-input"
+              , name_ "query"
+              , rows_ "3"
+              , maxlength_ "4000"
+              , required_ "required"
+              , autofocus_
+              , placeholder_ "Describe what you want Monoscope to investigate…"
+              , Aria.label_ "Instructions"
+              , class_ "no-focus-ring min-h-24 w-full resize-none bg-transparent py-3 text-sm leading-5 text-textStrong outline-none placeholder:text-textDisabled"
+              ]
+              ""
+          div_ [class_ "hidden group-has-[#ai-composer-routine:checked]/dialog:flex items-center justify-between gap-3 border-b border-base-300 px-4 py-3"] do
+            label_ [Lucid.for_ "ai-routine-interval", class_ "text-xs font-medium text-textStrong"] "Run every"
+            select_ [id_ "ai-routine-interval", name_ "intervalMinutes", class_ "select select-sm h-8 min-h-8 border-strokeWeak bg-bgRaised text-xs text-textStrong"] do
+              option_ [value_ "60", class_ "bg-bgRaised text-textStrong"] "Hour"
+              option_ [value_ "1440", selected_ "selected", class_ "bg-bgRaised text-textStrong"] "Day"
+              option_ [value_ "10080", class_ "bg-bgRaised text-textStrong"] "Week"
+        do
+          span_ [class_ "group-has-[#ai-composer-routine:checked]/dialog:hidden"] "Start chat"
+          span_ [class_ "hidden group-has-[#ai-composer-routine:checked]/dialog:inline"] "Start routine"
+          faSprite_ "arrow-right" "regular" "h-3 w-3"
 
     aiThreadRenameShell_ :: Html ()
     aiThreadRenameShell_ =
-      dialog_ [id_ "ai-thread-rename-modal", class_ "modal !items-start px-4 pt-[15vh] backdrop:backdrop-blur-sm", term "aria-labelledby" "ai-thread-rename-title"] do
-        form_ [method_ "dialog", class_ "modal-backdrop"] $ button_ [Aria.label_ "Close rename dialog"] "close"
-        form_ [id_ "ai-thread-rename-form", hxPost_ "#", hxSwap_ "none", class_ "modal-box !w-full !max-w-lg !overflow-visible !rounded-none !border-0 !bg-transparent !p-0 !shadow-none flex flex-col"] do
-          div_ [class_ "mb-2 flex items-center justify-between px-3"] do
-            h2_ [id_ "ai-thread-rename-title", class_ "text-xs font-medium uppercase tracking-wider text-white"] "Rename chat"
-            button_ [type_ "button", Aria.label_ "Close rename dialog", class_ "inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-white/70 hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-white active:scale-[0.96] transition-[color,background-color,scale]", onclick_ "this.closest('dialog').close()"]
-              $ faSprite_ "xmark" "regular" "h-3.5 w-3.5"
-          div_ [class_ "w-full overflow-hidden rounded-lg border border-base-300 bg-bgBase shadow-2xl"] do
-            div_ [class_ "border-b border-base-300 px-4 py-3"]
-              $ label_ [Lucid.for_ "ai-thread-rename-input", class_ "flex flex-col gap-1.5 text-xs font-medium text-textStrong"] do
-                span_ "Chat title"
-                input_ [id_ "ai-thread-rename-input", name_ "conversationTitle", maxlength_ "100", required_ "required", autofocus_, autocomplete_ "off", class_ "no-focus-ring w-full bg-transparent py-2 text-sm font-normal outline-none placeholder:text-textDisabled", placeholder_ "Production changes today"]
-            div_ [class_ "flex justify-end gap-1.5 p-2"] do
-              button_ [type_ "button", class_ "btn btn-sm btn-ghost cursor-pointer shadow-none active:scale-[0.96] transition-transform", onclick_ "this.closest('dialog').close()"] "Cancel"
-              button_ [type_ "submit", class_ "btn btn-sm btn-primary cursor-pointer shadow-none active:scale-[0.96] transition-transform"] "Save"
+      Components.floatingDialog_ "ai-thread-rename-modal" "Rename chat" ("Save", ["↵"]) [id_ "ai-thread-rename-form", hxPost_ "#", hxSwap_ "none"] (Components.dialogField_ "ai-thread-rename-input" "conversationTitle" "Chat title" "Production changes today" [maxlength_ "100", required_ "required"]) "Save"
 
 
 projectsDropDown :: Projects.Project -> V.Vector Projects.Project -> Html ()
@@ -784,12 +740,7 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
       -- Collapsed: search icon
       button_ ([class_ "group-has-[#sidenav-toggle:checked]/pg:hidden flex items-center justify-center p-2 rounded-lg hover:bg-fillHover text-textWeak hover:text-textStrong cursor-pointer transition-colors duration-100", searchScript, Aria.label_ "Search"] <> tippyRight_ "Search (\x2318K)") do
         faSprite_ "sidebar-search" "regular" "w-4 h-4"
-    fieldset_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:grid grid-cols-2 rounded-lg bg-fillWeak p-0.5 text-xs"] do
-      legend_ [class_ "sr-only"] "Sidebar view"
-      input_ [type_ "radio", name_ "nav-view", id_ "nav-view-menu", class_ "sr-only peer/menu", checked_]
-      label_ [term "for" "nav-view-menu", class_ "cursor-pointer rounded-md px-2 py-1 text-center text-textWeak peer-checked/menu:bg-bgRaised peer-checked/menu:text-textStrong peer-checked/menu:shadow-xs peer-focus-visible/menu:outline-2 peer-focus-visible/menu:outline-offset-2 transition-[color,background-color,box-shadow] duration-100"] "Navigate"
-      input_ [type_ "radio", name_ "nav-view", id_ "nav-view-ai", class_ "sr-only peer/ai"]
-      label_ [term "for" "nav-view-ai", class_ "cursor-pointer rounded-md px-2 py-1 text-center text-textWeak peer-checked/ai:bg-bgRaised peer-checked/ai:text-textStrong peer-checked/ai:shadow-xs peer-focus-visible/ai:outline-2 peer-focus-visible/ai:outline-offset-2 transition-[color,background-color,box-shadow] duration-100"] "Assistant"
+    Components.segmented_ "hidden group-has-[#sidenav-toggle:checked]/pg:grid grid-cols-2 rounded-lg bg-fillWeak p-0.5 text-xs" "Sidebar view" "nav-view" "nav-view-" [("menu", "Navigate"), ("ai", "Assistant")]
     nav_ [id_ "main-sidenav", class_ "mt-2 min-h-0 overflow-x-hidden overflow-y-auto flex flex-col gap-1 text-textWeak group-has-[#nav-view-ai:checked]/nav:hidden [&_.main-nav-link.active]:bg-fillBrand-weak [&_.main-nav-link.active]:text-textStrong [&_.main-nav-link.active]:font-medium [&_.main-nav-link.active]:border-l-strokeBrand-strong [&_.main-nav-link.active]:border-y-transparent [&_.main-nav-link.active]:border-r-transparent [&_.main-nav-link.active_.nav-icon]:text-textBrand", [__|on click set #mobile-nav-toggle.checked to false end|]] do
       let pidTxt = project.id.toText
           flyoutLink (linkText, link) =
@@ -973,10 +924,10 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
                     span_
                       [ class_
                           $ "h-1.5 w-1.5 shrink-0 rounded-full "
-                          <> if
-                            | isJust c.routineRunningSince -> "bg-fillBrand-strong"
-                            | c.routineActive -> "bg-fillSuccess-strong"
-                            | otherwise -> "bg-fillWeak border border-strokeWeak"
+                            <> if
+                              | isJust c.routineRunningSince -> "bg-fillBrand-strong"
+                              | c.routineActive -> "bg-fillSuccess-strong"
+                              | otherwise -> "bg-fillWeak border border-strokeWeak"
                       , Aria.hidden_ "true"
                       ]
                       ""
@@ -1090,8 +1041,8 @@ navbar bcfg menuL =
       whenJust bcfg.navTabs $ div_ [class_ "min-w-0 max-w-full overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden data-[overflowing=true]:[mask-image:linear-gradient(to_right,transparent,black_1rem,black_calc(100%-1rem),transparent)]", data_ "nav-tab-strip" ""]
     div_ [class_ $ "ms-auto flex shrink-0 items-center justify-end gap-0 text-sm" <> bool " max-md:hidden" "" (isJust bcfg.pageActions)] do
       unless (V.null bcfg.envOptions && V.null bcfg.serviceOptions) $ div_ [class_ "flex items-center gap-2", data_ "header-scope" "", role_ "group", Aria.label_ "Global telemetry scope"] do
-        envPicker_ (bcfg.sessM >>= (.environment)) bcfg.envOptions
-        servicePicker_ (bcfg.sessM >>= (.service)) bcfg.serviceOptions
+        scopePicker_ EnvScope (bcfg.sessM >>= (.environment)) bcfg.envOptions
+        scopePicker_ ServiceScope (bcfg.sessM >>= (.service)) bcfg.serviceOptions
       when
         (not (V.null bcfg.envOptions && V.null bcfg.serviceOptions) && isJust bcfg.pageActions)
         headerDivider_
@@ -1119,50 +1070,40 @@ navbar bcfg menuL =
     headerDivider_ = div_ [class_ "mx-4 hidden h-4 w-px shrink-0 bg-strokeWeak opacity-70 md:block", Aria.hidden_ "true"] ""
 
 
--- | The app-wide environment selector, in the shape Datadog puts in its top bar: pick prod
--- or staging once and every telemetry surface stays scoped to it until you change it.
---
--- The selection lives in the URL so navigation and shared links preserve the active scope.
---
--- Hidden entirely when the project has never reported an environment: a picker whose only
--- option is "All" is furniture, not a control.
-envPicker_ :: Maybe Text -> V.Vector Text -> Html ()
-envPicker_ selected options =
+data Scope = EnvScope | ServiceScope
+
+
+-- | App-wide environment/service selector, in the shape Datadog puts in its top bar: pick it
+-- once and every telemetry surface stays scoped to it. The selection lives in the URL so
+-- navigation and shared links preserve it. Hidden when the project has never reported a value:
+-- a picker whose only option is "All" is furniture, not a control.
+scopePicker_ :: Scope -> Maybe Text -> V.Vector Text -> Html ()
+scopePicker_ scope selected options =
   unless (V.null options) $ div_ [class_ "relative", data_ "scope-picker" ""] do
-    let current = fromMaybe "All environments" selected
+    let current = fromMaybe fallback selected
     button_
       ( [ class_ "group inline-flex h-8 items-center gap-1.5 rounded-lg border border-strokeWeak bg-bgRaised px-2.5 shadow-xs hover:border-strokeStrong hover:bg-fillWeak focus-visible:border-strokeFocus cursor-pointer aria-busy:opacity-60"
         , type_ "button"
-        , id_ "env-picker-trigger"
-        , Aria.label_ $ "Deployment environment: " <> current
-        , term "data-tippy-content" "Global scope: apply this deployment environment to every telemetry page"
+        , id_ $ popId <> "-trigger"
+        , Aria.label_ $ "Global " <> noun <> " scope: " <> current
+        , term "data-tippy-content" $ "Global scope: apply this " <> noun <> " to every telemetry page"
         ]
-          <> popoverTrigger_ "env-picker"
+          <> popoverTrigger_ popId
       )
       do
-        span_ [class_ "group-aria-busy:hidden"] $ faSprite_ "layer-group" "regular" "w-3.5 h-3.5 text-iconNeutral"
+        span_ [class_ "group-aria-busy:hidden"] $ faSprite_ icon "regular" "w-3.5 h-3.5 text-iconNeutral"
         span_ [class_ "hidden group-aria-busy:block"] $ faSprite_ "spinner" "regular" "w-3.5 h-3.5 animate-spin text-iconBrand"
-        span_ [class_ "max-w-32 truncate font-normal text-textWeak max-md:hidden", id_ "env-picker-label"] $ toHtml $ fromMaybe "All envs" selected
+        span_ [class_ "max-w-32 truncate font-normal text-textWeak max-md:hidden", id_ $ popId <> "-label"] $ toHtml $ fromMaybe shortFallback selected
         faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral"
-    ul_ (popoverPanel_ "env-picker" <> [class_ "dropdown menu flex flex-col bg-bgBase border border-strokeWeak w-56 p-1 text-sm rounded-lg shadow"])
-      -- Nothing is "all environments" and is always offered: an environment that has gone
-      -- quiet must not be able to strand a reader in a view with no data and no way out.
+    ul_ (popoverPanel_ popId <> [class_ "dropdown menu flex flex-col bg-bgBase border border-strokeWeak w-56 p-1 text-sm rounded-lg shadow"])
+      -- Nothing (all) is always offered: a scope value that has gone quiet must not be able
+      -- to strand a reader in a view with no data and no way out.
       $ forM_ (Nothing : (Just <$> V.toList options))
-      $ scopeOption_ "environment" "All environments" selected
-
-
-servicePicker_ :: Maybe Text -> V.Vector Text -> Html ()
-servicePicker_ selected options =
-  unless (V.null options) $ div_ [class_ "relative", data_ "scope-picker" ""] do
-    let current = fromMaybe "All services" selected
-    button_ ([class_ "group inline-flex h-8 items-center gap-1.5 rounded-lg border border-strokeWeak bg-bgRaised px-2.5 shadow-xs hover:border-strokeStrong hover:bg-fillWeak focus-visible:border-strokeFocus cursor-pointer aria-busy:opacity-60", type_ "button", id_ "service-picker-trigger", Aria.label_ $ "Global service scope: " <> current, term "data-tippy-content" "Global scope: apply this service to every telemetry page"] <> popoverTrigger_ "service-picker") do
-      span_ [class_ "group-aria-busy:hidden"] $ faSprite_ "cube" "regular" "w-3.5 h-3.5 text-iconNeutral"
-      span_ [class_ "hidden group-aria-busy:block"] $ faSprite_ "spinner" "regular" "w-3.5 h-3.5 animate-spin text-iconBrand"
-      span_ [class_ "max-w-32 truncate font-normal text-textWeak max-md:hidden", id_ "service-picker-label"] $ toHtml current
-      faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral"
-    ul_ (popoverPanel_ "service-picker" <> [class_ "dropdown menu flex flex-col bg-bgBase border border-strokeWeak w-56 p-1 text-sm rounded-lg shadow"])
-      $ forM_ (Nothing : (Just <$> V.toList options))
-      $ scopeOption_ "service_scope" "All services" selected
+      $ scopeOption_ key fallback selected
+  where
+    (popId, icon, noun, key, fallback, shortFallback) = case scope of
+      EnvScope -> ("env-picker", "layer-group", "deployment environment", "environment", "All environments", "All envs")
+      ServiceScope -> ("service-picker", "cube", "service", "service_scope", "All services", "All services")
 
 
 -- The URL is the scope store. The dataset carries arbitrary service/environment names

@@ -423,10 +423,10 @@ data ApiV1Routes mode = ApiV1Routes
   , teamDelete :: mode :- "teams" :> Capture "team_id" ApiT.TeamId :> Delete '[JSON] NoContent
   , teamsBulk :: mode :- "teams" :> "bulk" :> ReqBody '[JSON] (ApiT.BulkAction ApiT.TeamId) :> Post '[JSON] (ApiT.BulkResult ApiT.TeamId)
   , membersList :: mode :- "members" :> Get '[JSON] [ApiT.MemberSummary]
-  , memberGet :: mode :- "members" :> Capture "user_id" UUID.UUID :> Get '[JSON] ApiT.MemberSummary
+  , memberGet :: mode :- "members" :> Capture "user_id" Projects.UserId :> Get '[JSON] ApiT.MemberSummary
   , memberAdd :: mode :- "members" :> ReqBody '[JSON] ApiT.MemberAdd :> Post '[JSON] ApiT.MemberSummary
-  , memberPatch :: mode :- "members" :> Capture "user_id" UUID.UUID :> ReqBody '[JSON] ApiT.MemberPatch :> Patch '[JSON] ApiT.MemberSummary
-  , memberRemove :: mode :- "members" :> Capture "user_id" UUID.UUID :> Delete '[JSON] NoContent
+  , memberPatch :: mode :- "members" :> Capture "user_id" Projects.UserId :> ReqBody '[JSON] ApiT.MemberPatch :> Patch '[JSON] ApiT.MemberSummary
+  , memberRemove :: mode :- "members" :> Capture "user_id" Projects.UserId :> Delete '[JSON] NoContent
   , -- Model Context Protocol endpoint (JSON-RPC; tools derived from this OpenAPI spec)
     mcp :: mode :- "mcp" :> ReqBody '[JSON] AE.Value :> Post '[JSON] AE.Value
   }

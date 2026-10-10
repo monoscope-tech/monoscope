@@ -28,27 +28,16 @@ import Data.Text qualified as T
 import Data.Text.Display (Display)
 import Data.Time
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
-import Database.PostgreSQL.Simple (FromRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (ToField)
-import Effectful (Eff, type (:>))
-import Effectful.Time (Time)
-import Effectful.Time qualified as Time
+import Effectful (Eff)
 import Hasql.Interpolate qualified as HI
-import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), decodeEnumSC)
-import Pkg.SchemaLearning.Catalog qualified as Fields (
-  FieldCategoryEnum,
-  FieldId,
-  FieldTypes,
-  FormatId,
-  ShapeId,
- )
+import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Relude hiding (id)
 import System.Types (DB)
+import Web.HttpApiData (FromHttpApiData (..))
 
 
 type AnomalyId = UUIDId "anomaly"
@@ -63,7 +52,7 @@ data AnomalyTypes
   | ATRuntimeException
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (Default, NFData)
-  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC ('Just "apis.anomaly_type") "AT" AnomalyTypes
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC ('Just "apis.anomaly_type") "AT" AnomalyTypes
 
 
 -- | The stored spelling back into the enum — the exact inverse of the @WrappedEnumSC@
@@ -74,7 +63,7 @@ data AnomalyTypes
 -- >>> parseAnomalyTypes "not_a_type"
 -- Nothing
 parseAnomalyTypes :: Text -> Maybe AnomalyTypes
-parseAnomalyTypes = decodeEnumSC @"AT" . toString
+parseAnomalyTypes = rightToMaybe . parseUrlPiece
 
 
 data AnomalyActions
@@ -85,45 +74,18 @@ data AnomalyActions
   deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC ('Just "apis.anomaly_action") "AA" AnomalyActions
 
 
+-- | The live columns of an anomaly row the API-change rollup reads. Shape\/field\/format
+-- drift detail is never populated by the writer, so it is not read either.
 data AnomalyVM = AnomalyVM
-  { id :: AnomalyId
-  , createdAt :: ZonedTime
-  , updatedAt :: ZonedTime
-  , projectId :: Projects.ProjectId
+  { createdAt :: ZonedTime
   , anomalyType :: AnomalyTypes
-  , action :: AnomalyActions
   , targetHash :: Text
-  , --
-    shapeId :: Maybe Fields.ShapeId
-  , shapeNewUniqueFields :: V.Vector Text
-  , shapeDeletedFields :: V.Vector Text
-  , shapeUpdatedFieldFormats :: V.Vector Text
-  , --
-    fieldId :: Maybe Fields.FieldId
-  , fieldKey :: Maybe Text
-  , fieldKeyPath :: Maybe Text
-  , fieldCategory :: Maybe Fields.FieldCategoryEnum
-  , fieldFormat :: Maybe Text
-  , --
-    formatId :: Maybe Fields.FormatId
-  , formatType :: Maybe Fields.FieldTypes -- fieldFormat in the formats table
-  , formatExamples :: Maybe (V.Vector Text)
-  , --
-    endpointId :: Maybe Endpoints.EndpointId
   , endpointMethod :: Maybe Text
   , endpointUrlPath :: Maybe Text
-  , endpointServiceName :: Maybe Text
-  , endpointEnvironment :: Maybe Text
   , endpointHost :: Maybe Text
-  , --
-    eventsCount14d :: Int
-  , lastSeen :: ZonedTime
   }
   deriving stock (Generic, Show)
-  deriving anyclass (Default, FromRow, HI.DecodeRow, NFData)
-  deriving
-    (Entity)
-    via (GenericEntity '[Schema "apis", TableName "anomalies_vm", PrimaryKey "id", FieldModifiers '[CamelToSnake]] AnomalyVM)
+  deriving anyclass (HI.DecodeRow)
 
 
 -- | Read VM rows for the anomalies UI.
@@ -135,49 +97,24 @@ data AnomalyVM = AnomalyVM
 --   * format   → @keyHash:fmt:<xxhash(fieldPath)[:8]>@
 --
 -- Endpoint metadata joins via @endpoints.hash = split_part(target_hash,':',1)@.
--- Per-field detail (key path, format) is fetched lazily by the caller —
--- encoding the full path into target_hash would blow the unique-index size
--- budget, and Postgres has no built-in xxhash.
-getAnomaliesVM :: (DB es, Time :> es) => Projects.ProjectId -> V.Vector Text -> Eff es [AnomalyVM]
+getAnomaliesVM :: DB es => Projects.ProjectId -> V.Vector Text -> Eff es [AnomalyVM]
 getAnomaliesVM pid hash
   | V.null hash = pure []
-  | otherwise = do
-      now <- Time.currentTime
+  | otherwise =
       Hasql.interp
         [HI.sql|
 SELECT
-    an.id,
     an.created_at,
-    an.updated_at,
-    an.project_id,
     an.anomaly_type,
-    an.action,
     an.target_hash,
-    NULL::uuid     shape_id,
-    '{}'::TEXT[]   new_unique_fields,
-    '{}'::TEXT[]   deleted_fields,
-    '{}'::TEXT[]   updated_field_formats,
-    NULL::uuid     field_id,
-    NULL::text     field_key,
-    NULL::text     field_key_path,
-    NULL::text     field_category,
-    NULL::text     field_format,
-    NULL::uuid     format_id,
-    NULL::text     format_type,
-    '{}'::TEXT[]   format_examples,
-    endpoints.id   endpoint_id,
     -- Prefer values stored directly on the anomaly row (populated by the
     -- schema-learning writer from the catalog 'Scope'); fall back to the
     -- 'apis.endpoints' join for legacy rows written before migration 0092.
-    COALESCE(an.method, endpoints.method) endpoint_method,
-    COALESCE(an.url_path, endpoints.url_path) endpoint_url_path,
-    endpoints.service_name endpoint_service_name,
-    endpoints.environment endpoint_environment,
-    COALESCE(an.host, endpoints.host) endpoint_host,
-    COALESCE(iss.affected_requests, 0),#{now}::timestamptz
+    COALESCE(an.method, endpoints.method),
+    COALESCE(an.url_path, endpoints.url_path),
+    COALESCE(an.host, endpoints.host)
 from
     apis.anomalies an
-    LEFT JOIN apis.issues iss ON iss.target_hash = an.target_hash AND iss.project_id = an.project_id
     LEFT JOIN apis.endpoints ON an.project_id = endpoints.project_id
                             AND endpoints.hash = split_part(an.target_hash, ':', 1)
 where

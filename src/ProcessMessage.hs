@@ -12,6 +12,7 @@ module ProcessMessage (
   stampHashesAtIngest,
   extractObservation,
   RequestMessage (..),
+  Referer (..),
   valueToFormatStr,
   valueToFields,
   ensureUrlParams,
@@ -63,6 +64,7 @@ import Data.Text qualified as T
 import Data.Time (addUTCTime, zonedTimeToUTC)
 import Data.Time.LocalTime (ZonedTime)
 import Data.Vector qualified as V
+import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 import Effectful.Ki qualified as Ki
@@ -135,7 +137,7 @@ processMessages msgs attrs =
       Nothing -> pure (Right ())
       Just (projectCaches, paired) ->
         Metrics.timed Metrics.ingestWriteHist []
-          $ Telemetry.insertAndHandOff appCtx.hasqlTimefusionUsesPgTypes (Telemetry.writeTargetFor appCtx.env.enablePostgresTelemetryWrites appCtx.env.enableTimefusionWrites Nothing) appCtx.extractionWorker projectCaches (stampHashesAtIngest projectCaches $ V.map (\(_, _, s) -> s) paired)
+          $ Telemetry.insertAndHandOff appCtx.hasqlTimefusionUsesPgTypes (Telemetry.writeTargetFor appCtx.env Nothing) appCtx.extractionWorker projectCaches (stampHashesAtIngest projectCaches $ V.map (\(_, _, s) -> s) paired)
 
     -- On success the whole batch landed on every store (no per-row poison); the
     -- only DLQ entries are the decode failures collected upstream in `poison`.
@@ -238,7 +240,7 @@ httpKeyOf canonicalTemplates otelSpan =
       -- 'pathMatchesTemplate' treats either spelling as a wildcard, so once a
       -- template exists ingest settles on it.
       !candidate = bool urlPath' urlPathDyn hasDyn
-      hashFor p = toXXHash $ otelSpan.project_id <> host <> method <> p
+      hashFor = Endpoints.hashEndpoint otelSpan.project_id host method
       known p = HashSet.member (hashFor p) canonicalTemplates.knownHashes
       -- An authoritative route skips the id heuristics — there is nothing left to
       -- infer, and inferring anyway would let a literal segment that merely looks
@@ -288,7 +290,7 @@ processSpanToEntities canonicalTemplates pjc projectId otelSpan =
       !environment = asum $ lookupAttr <$> ["deployment.environment.name", "deployment.environment", "service.namespace", "k8s.namespace.name"]
 
       -- Generate endpoint hash - this uniquely identifies an API endpoint.
-      !endpointHash = toXXHash $ projectId.toText <> host <> method <> urlPath
+      !endpointHash = Endpoints.hashEndpoint projectId.toText host method urlPath
 
       -- knownHashes is the same set, built once per batch. The vector scan this replaces
       -- ran per span, over a catalog that reaches 7k entries on a busy project.
@@ -339,7 +341,7 @@ stampHashesAtIngest caches spans = V.map stamp spans
       let classifier = HM.lookupDefault (mkPathClassifier pjc) pid templatesByPid
           (_, spanHashes, normalizedPath, _) = processSpanToEntities classifier pjc pid r
           HttpKey{method = canonicalMethod, host = canonicalHost, pathSource} = httpKeyOf classifier r
-          errHashes = V.map (\e -> "err:" <> e.hash) (Telemetry.getAllATErrors (V.singleton r))
+          errHashes = V.map ((LogQueries.errHashPrefix <>) . (.hash)) (Telemetry.getAllATErrors (V.singleton r))
           attrs = AEKM.fromMapText $ maybeToMonoid $ unAesonTextMaybe r.attributes
           originalMethod = AE.Object attrs ^? key "http" . key "request" . key "method" . _String
           hasOriginalMethod = isJust $ AE.Object attrs ^? key "http" . key "request" . key "method_original" . _String
@@ -393,7 +395,7 @@ extractObservation canonicalTemplates otelSpan =
       -- HTTP spans key on the endpoint hash; everything else on service|name|kind.
       !(keyKind, keyHash) =
         if isHttpSpan
-          then (Catalog.HttpEndpoint, toXXHash $ projectIdText <> host <> method <> canonicalPath)
+          then (Catalog.HttpEndpoint, Endpoints.hashEndpoint projectIdText host method canonicalPath)
           else (Catalog.SpanIdentity, toXXHash $ T.intercalate "|" (projectIdText : map (fromMaybe "") [service, spanName, spanKind]))
       !scope =
         Catalog.Scope
@@ -580,7 +582,7 @@ createSpanAttributes rm =
 
     tagsObj = maybe (AE.object []) (\tags -> nestedJsonFromDotNotation [("monoscope.tags", AE.Array $ V.fromList $ map AE.String tags)]) rm.tags
 
-    refererObj = maybe (AE.object []) (\r -> nestedJsonFromDotNotation [("http.request.headers.referer", AE.String $ either identity (T.intercalate ",") r)]) rm.referer
+    refererObj = maybe (AE.object []) (\r -> nestedJsonFromDotNotation [("http.request.headers.referer", AE.String $ case r of Referer t -> t; Referers ts -> T.intercalate "," ts)]) rm.referer
 
     headersObj =
       let extractHeaders prefix = maybe (AE.object []) (nestedJsonFromDotNotation . map (first ((prefix <>) . AEK.toText)) . AEKM.toList) . (^? _Object)
@@ -632,7 +634,7 @@ data RequestMessage = RequestMessage
   , protoMinor :: Int
   , queryParams :: AE.Value -- key value map of a key to a list of text values map[string][]string
   , rawUrl :: Text -- raw request uri: path?query combination
-  , referer :: Maybe (Either Text [Text])
+  , referer :: Maybe Referer
   , requestBody :: Text
   , requestHeaders :: AE.Value -- key value map of a key to a list of text values map[string][]string
   , responseBody :: Text
@@ -669,17 +671,15 @@ requestEventIds request =
       maybe (AE.toJSON request) (\msgId -> AE.object ["project_id" AE..= request.projectId, "msg_id" AE..= msgId]) request.msgId
 
 
--- Untagged codec for the SDK's referer field: a bare string or an array of strings
--- (aeson's stock Either instance is @{"Left": …}@-tagged, hence the override).
-instance {-# OVERLAPPING #-} AE.ToJSON (Either Text [Text]) where
-  toJSON = either AE.toJSON AE.toJSON
-
-
-instance {-# OVERLAPPING #-} AE.FromJSON (Either Text [Text]) where
-  parseJSON v = case v of
-    AE.String txt -> pure $ Left txt
-    AE.Array{} -> Right <$> AE.parseJSON v
-    _ -> fail "Expected either a single string or an array of strings"
+-- | The SDK's referer: a bare string or an array of strings, untagged on the wire.
+--
+-- >>> (AE.decode "\"https://a\"" :: Maybe Referer, AE.decode "[\"a\",\"b\"]" :: Maybe Referer, AE.decode "1" :: Maybe Referer)
+-- (Just (Referer "https://a"),Just (Referers ["a","b"]),Nothing)
+-- >>> AE.encode [Referer "a", Referers ["a", "b"]]
+-- "[\"a\",[\"a\",\"b\"]]"
+data Referer = Referer Text | Referers [Text]
+  deriving stock (Generic, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.SumUntaggedValue] Referer
 
 
 -- valueToFields takes an aeson object and converts it into a vector of paths to

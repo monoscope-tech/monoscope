@@ -1822,7 +1822,6 @@ apiLogsPage page = do
                     put #trace-loading-skeleton.innerHTML into me then remove .hidden from me
                     send toggleFullscreen(mode: 'trace', active: true) to #apiLogsPage
                     call htmx.ajax('GET', url, {target: me, swap: 'innerHTML'})
-                    then call window.evalScriptsFromContent(me)
                   end
                   on openTraceFullscreen(traceId, timestamp) from window
                     call updateUrlState('showTrace', traceId + '/?timestamp=' + timestamp)

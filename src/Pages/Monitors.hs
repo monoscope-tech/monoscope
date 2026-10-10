@@ -84,7 +84,7 @@ import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (FormWithOptional (..), checkFreeTierStatus, encodeText, faSprite_, formatWithCommas, popoverTrigger_, prettyTimeShort, toUriStr)
+import Utils (FormWithOptional (..), checkFreeTierStatus, encodeText, faSprite_, formatWithCommas, popoverPanel_, popoverTrigger_, prettyTimeShort, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -134,20 +134,17 @@ data AlertUpsertForm = AlertUpsertForm
 -- | 'Left' carries the parse error of a query the monitor could never evaluate.
 convertToQueryMonitor :: Projects.ProjectId -> UTCTime -> Monitors.QueryMonitorId -> AlertUpsertForm -> Either Text Monitors.QueryMonitor
 convertToQueryMonitor projectId now queryMonitorId alertForm =
-  let environment = mfilter (not . T.null) $ T.strip <$> alertForm.environment
-      service = mfilter (not . T.null) $ T.strip <$> alertForm.service
+  let nonBlank = mfilter (not . T.null) . fmap T.strip
+      isThreshold = alertForm.conditionType == Just "threshold_exceeded"
+      thresholdOf = (guard isThreshold >>) . (readMaybe . toString =<<)
+      environment = nonBlank alertForm.environment
+      service = nonBlank alertForm.service
       scope = mkScopedQuery projectId (Nothing, Nothing) environment service
       sqlQueryCfg = (applyScopedQuery scope $ defSqlQueryCfg projectId fixedUTCTime Nothing Nothing){alertLookbackMins = timeWindowMins}
-      warningThresholdD = readMaybe . toString =<< alertForm.warningThreshold
-
-      checkInterval = maybe 5 (max 1 . fromMaybe 5 . readMaybe . toString . T.dropEnd 1) alertForm.frequency
       timeWindowMins = maybe 60 (max 1 . parseIntervalToMins) alertForm.timeWindow
-
-      isThresholdAlert = alertForm.conditionType == Just "threshold_exceeded"
-
       alertConfig =
         Monitors.MonitorAlertConfig
-          { unit = mfilter (not . T.null) $ T.strip <$> alertForm.unit
+          { unit = nonBlank alertForm.unit
           , severity = alertForm.severity
           , title = alertForm.title
           , subject = alertForm.subject
@@ -156,20 +153,15 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
           , emailAll = fromMaybe False alertForm.recipientEmailAll
           , slackChannels = V.fromList alertForm.recipientSlacks
           }
-      alertRecoveryD = readMaybe . toString =<< alertForm.alertRecoveryThreshold
-      warningRecoveryD = readMaybe . toString =<< alertForm.warningRecoveryThreshold
-      dashboardUuid = UUID.fromText =<< alertForm.dashboardId
-      renotifyMins = if fromMaybe False alertForm.notifyAfterCheck then Just (parseIntervalToMins $ fromMaybe "30m" alertForm.notifyAfter) else Nothing
-      stopCount = if fromMaybe False alertForm.stopAfterCheck then alertForm.stopAfter <|> Just 5 else Nothing
    in parseQueryToComponents sqlQueryCfg alertForm.query <&> \(_, qc) ->
         Monitors.QueryMonitor
           { id = queryMonitorId
           , createdAt = now
           , updatedAt = now
           , projectId = projectId
-          , checkIntervalMins = checkInterval
-          , alertThreshold = if isThresholdAlert then alertForm.alertThreshold else 0
-          , warningThreshold = if isThresholdAlert then warningThresholdD else Nothing
+          , checkIntervalMins = maybe 5 (max 1 . fromMaybe 5 . readMaybe . toString . T.dropEnd 1) alertForm.frequency
+          , alertThreshold = bool 0 alertForm.alertThreshold isThreshold
+          , warningThreshold = thresholdOf alertForm.warningThreshold
           , logQuery = alertForm.query
           , logQueryAsSql = fromMaybe "" qc.finalAlertQuery
           , lastEvaluated = Just now
@@ -184,13 +176,13 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
           , visualizationType = fromMaybe "timeseries" alertForm.vizType
           , teams = V.fromList alertForm.teams
           , widgetId = alertForm.widgetId
-          , dashboardId = dashboardUuid
-          , alertRecoveryThreshold = if isThresholdAlert then alertRecoveryD else Nothing
-          , warningRecoveryThreshold = if isThresholdAlert then warningRecoveryD else Nothing
+          , dashboardId = UUID.fromText =<< alertForm.dashboardId
+          , alertRecoveryThreshold = thresholdOf alertForm.alertRecoveryThreshold
+          , warningRecoveryThreshold = thresholdOf alertForm.warningRecoveryThreshold
           , currentStatus = Monitors.MSNormal
           , currentValue = 0
-          , renotifyIntervalMins = renotifyMins
-          , stopAfterCount = stopCount
+          , renotifyIntervalMins = parseIntervalToMins (fromMaybe "30m" alertForm.notifyAfter) <$ guard (alertForm.notifyAfterCheck == Just True)
+          , stopAfterCount = fromMaybe 5 alertForm.stopAfter <$ guard (alertForm.stopAfterCheck == Just True)
           , notificationCount = 0
           , timeWindowMins
           , environment
@@ -265,14 +257,8 @@ data Alert
 
 
 instance ToHtml Alert where
-  toHtml (AlertSingle pid monitor) = toHtml $ alertSingleComp pid monitor
   toHtml (AlertNoContent msg) = toHtml msg
-  toHtmlRaw = toHtml
-
-
-alertSingleComp :: Projects.ProjectId -> Maybe Monitors.QueryMonitor -> Html ()
-alertSingleComp pid monitor = do
-  div_ [class_ "p-3 flex flex-col gap-3"] do
+  toHtml (AlertSingle pid monitor) = div_ [class_ "p-3 flex flex-col gap-3"] do
     a_
       [ class_ "text-sm text-textWeak hover:text-textStrong cursor-pointer"
       , hxGet_ $ "/p/" <> pid.toText <> "/monitors/alerts"
@@ -296,6 +282,7 @@ alertSingleComp pid monitor = do
           , class_ "btn btn-primary btn-sm self-start"
           ]
           "Open monitor overview"
+  toHtmlRaw = toHtml
 
 
 alertTeamDeleteH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ManageMembers.TeamId -> ATAuthCtx (RespHeaders Alert)
@@ -313,22 +300,14 @@ monitorScheduleSection_ :: Text -> Int -> Int -> ScheduleCondition -> Html ()
 monitorScheduleSection_ paymentPlan defaultFrequency defaultTimeWindow conditionType = do
   let timeOpts :: [(Int, Text)]
       timeOpts = [(1, "minute"), (2, "2 minutes"), (5, "5 minutes"), (10, "10 minutes"), (15, "15 minutes"), (30, "30 minutes"), (60, "hour"), (360, "6 hours"), (720, "12 hours"), (1440, "day")]
-      isByos = Projects.isByosPlan paymentPlan
       isFree = Projects.isFreeTier paymentPlan
       minFreq
         | isFree = 60
-        | isByos = 1
+        | Projects.isByosPlan paymentPlan = 1
         | otherwise = 5
-      clampedFreq = max minFreq defaultFrequency
-      mkFreqOpt (m, l) =
-        let isDisabled = m < minFreq
-            attrs = [value_ (show m <> "m")] <> [disabled_ "" | isDisabled] <> [selected_ "" | m == clampedFreq]
-         in option_ attrs ("every " <> toHtml l)
+      mkFreqOpt (m, l) = option_ ([value_ (show m <> "m")] <> [disabled_ "" | m < minFreq] <> [selected_ "" | m == max minFreq defaultFrequency]) ("every " <> toHtml l)
       mkTimeOpt (m, l) = option_ ([value_ (show m <> "m")] <> [selected_ "" | m == defaultTimeWindow]) ("the last " <> toHtml l)
-      -- Both flows retune the bin through the query builder. The widget flow used to call
-      -- chart.updateRollup, which is implemented nowhere — and since `if chart exists`
-      -- tests the element rather than the method, it threw on every change instead of
-      -- degrading. Charts only carry the `applyThresholds` expando (web-components/src/widgets.ts).
+      -- Charts only expose `applyThresholds` (web-components/src/widgets.ts), so the bin is retuned via the query builder.
       chartUpdateAttr = term "hx-on:change" "document.querySelector('query-builder')?.updateBinInQuery('timestamp', this.value)"
   panel_ def{icon = Just "clock", collapsible = Just True} "Monitor Schedule" do
     when isFree $ p_ [class_ "text-xs text-textWeak mt-1"] "Free plan: hourly minimum frequency. Upgrade for faster checks."
@@ -384,10 +363,9 @@ notificationSettingsSection_ allTeams selectedTeamIds formId monitorM = do
       stopEnabled = maybe False (isJust . (.stopAfterCount)) monitorM
       stopVal = maybe "5" show $ monitorM >>= (.stopAfterCount)
   panel_ def{icon = Just "envelope", collapsible = Just False} "Notification Settings" do
-    div_ [class_ "flex flex-col gap-1"] do
-      label_ [Lucid.for_ $ formId <> "-teams", class_ "text-sm text-textStrong"] "Teams"
-      span_ [class_ "text-xs text-textWeak"] "@everyone includes all project members and project notification channels."
-    tagInput_ (formId <> "-teams") "" [name_ "teams", data_ "tagify-text-prop" "name", data_ "tagify-whitelist" teamList, data_ "tagify-initial" existingTeams]
+    formField_ FieldSm def{hint = Just "@everyone includes all project members and project notification channels."} "Teams" (formId <> "-teams") False
+      $ Just
+      $ tagInput_ (formId <> "-teams") "" [name_ "teams", data_ "tagify-text-prop" "name", data_ "tagify-whitelist" teamList, data_ "tagify-initial" existingTeams, Aria.describedby_ (formId <> "-teams-hint")]
     details_ [class_ "mt-4 border-t border-strokeWeak pt-3"] do
       summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] "Advanced notification settings"
       div_ [class_ "space-y-3 pt-3"] do
@@ -414,22 +392,17 @@ data UnifiedMonitorItem = UnifiedMonitorItem
   { monitorId :: Text
   , projectId :: Text
   , title :: Text
-  , status :: Text -- "Active", "Inactive"
+  , active :: Bool
   , currentStatus :: Monitors.MonitorStatus
   , mutedUntil :: Maybe UTCTime
   , schedule :: Text
   , lastRun :: Maybe UTCTime
   , now :: UTCTime
-  , details :: UnifiedMonitorDetails
-  , teamBadges :: [(Text, Text)] -- [(teamId, teamHandle)]
-  }
-
-
-data UnifiedMonitorDetails = AlertDetails
-  { query :: Text
+  , query :: Text
   , alertThreshold :: Double
   , warningThreshold :: Maybe Double
   , triggerDirection :: Issues.ThresholdDirection
+  , teamHandles :: [Text]
   }
 
 
@@ -439,30 +412,7 @@ teamAlertsGetH pid teamId = do
   alerts <- Monitors.getAlertsByTeam pid teamId
   currTime <- Time.currentTime
   teamMap <- buildTeamMap pid
-  let alerts' = V.fromList $ map (toUnifiedMonitorItem teamMap pid currTime) alerts
-
-  addRespHeaders $ TableRows [] alerts' False Nothing Nothing Nothing
-
-
--- | A bulk action on the monitors list.
---
--- This was 'Text', matched against six string literals with a @_ -> pass@ fall-through —
--- so an unknown action returned 200 and fired the list-refresh event while doing nothing,
--- and the UI reported success. The action URLs are *generated* by 'bulkActionsFor', so
--- producer and consumer were two literal lists that had to agree by hand. Capturing this
--- in the route makes Servant reject an unknown action and the dispatch exhaustive.
-
--- | Which tab to land on after a bulk action — deactivating moves the monitors to
--- Inactive, everything else leaves them on Active. Spelled out rather than defaulted so a
--- new action has to state where the user ends up instead of silently landing on Active.
-tabAfter :: MonitorBulkAction -> MonitorTab
-tabAfter = \case
-  BADeactivate -> TabInactive
-  BAReactivate -> TabActive
-  BAMute -> TabActive
-  BAUnmute -> TabActive
-  BAResolve -> TabActive
-  BADelete -> TabActive
+  addRespHeaders $ TableRows [] (V.fromList $ map (toUnifiedMonitorItem teamMap pid currTime) alerts) False Nothing Nothing Nothing
 
 
 alertBulkActionH :: Projects.ProjectId -> MonitorBulkAction -> TBulkActionForm -> ATAuthCtx (RespHeaders (PageCtx (Table UnifiedMonitorItem)))
@@ -472,7 +422,16 @@ alertBulkActionH pid action form = do
   unless (null monitorIds) do
     void $ Monitors.monitorsBulkUpdate pid action Nothing monitorIds
     addTriggerEvent "monitorsListChanged" AE.Null
-  unifiedMonitorsGetH pid (Just $ monitorTabParam $ tabAfter action) Nothing
+  unifiedMonitorsGetH pid (Just $ monitorTabParam tabAfter) Nothing
+  where
+    -- Spelled out so a new action has to state which tab the user lands on.
+    tabAfter = case action of
+      BADeactivate -> TabInactive
+      BAReactivate -> TabActive
+      BAMute -> TabActive
+      BAUnmute -> TabActive
+      BAResolve -> TabActive
+      BADelete -> TabActive
 
 
 unifiedMonitorsGetH
@@ -501,10 +460,10 @@ unifiedMonitorsGetH pid filterTM _sinceM = do
           { config = def{elemID = "monitorsListForm", containerId = Just "monitorsListContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0, refreshOnEvent = Just ("monitorsListChanged", currentURL <> "filter=" <> filterType)}
           , columns =
               [ col "Name" renderNameCol & withAttrs [class_ "min-w-0"]
-              , col "Teams" (\i -> forM_ i.teamBadges \(_, handle) -> span_ [class_ "badge badge-sm badge-neutral mr-1"] $ toHtml handle) & withAttrs [class_ "w-48 max-md:hidden"]
+              , col "Teams" (\i -> forM_ i.teamHandles \handle -> span_ [class_ "badge badge-sm badge-neutral mr-1"] $ toHtml handle) & withAttrs [class_ "w-48 max-md:hidden"]
               , col "Schedule" (\i -> span_ [class_ "text-xs text-textWeak whitespace-nowrap tabular-nums"] $ toHtml i.schedule) & withAttrs [class_ "w-28 max-md:hidden"]
               , col "Last Run" (\i -> span_ [class_ "text-xs text-textWeak whitespace-nowrap tabular-nums"] $ maybe "Never" (toHtml . prettyTimeShort i.now) i.lastRun) & withAttrs [class_ "w-28 max-md:hidden"]
-              , col "Threshold" renderThresholdCol & withAttrs [class_ "w-40 max-md:hidden"]
+              , col "Threshold" thresholdCol & withAttrs [class_ "w-40 max-md:hidden"]
               ]
           , rows = allItems
           , features =
@@ -512,7 +471,12 @@ unifiedMonitorsGetH pid filterTM _sinceM = do
                 { search = Just ClientSide
                 , rowId = Just (.monitorId)
                 , rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]
-                , bulkActions = bulkActionsFor tab pid
+                , bulkActions =
+                    [ BulkAction (Just icon) label ("/p/" <> pid.toText <> "/monitors/alerts/bulk_action/" <> bulkActionSlug act) []
+                    | (icon, label, act) <- case tab of
+                        TabActive -> [("pause", "Deactivate", BADeactivate), ("bell-slash", "Mute", BAMute), ("bell", "Unmute", BAUnmute), ("check", "Resolve", BAResolve), ("trash", "Delete", BADelete)]
+                        TabInactive -> [("play", "Reactivate", BAReactivate), ("trash", "Delete", BADelete)]
+                    ]
                 , zeroState =
                     Just
                       $ ZeroState
@@ -554,56 +518,57 @@ unifiedMonitorsGetH pid filterTM _sinceM = do
           }
 
   addRespHeaders $ PageCtx bwconf monitorsTable
+  where
+    thresholdCol :: UnifiedMonitorItem -> Html ()
+    thresholdCol i = div_ [class_ "flex flex-col gap-1"] do
+      span_ [class_ "text-xs tabular-nums whitespace-nowrap bg-fillError-weak text-iconError rounded-full px-2 py-0.5 w-fit"] $ toHtml $ formatWithCommas i.alertThreshold <> " (" <> Display.display i.triggerDirection <> ")"
+      whenJust i.warningThreshold \w -> span_ [class_ "text-xs tabular-nums whitespace-nowrap bg-fillWarning-weak text-iconWarning rounded-full px-2 py-0.5 w-fit"] $ toHtml $ formatWithCommas w <> " (warn)"
+    renderNameCol :: UnifiedMonitorItem -> Html ()
+    renderNameCol item = do
+      let base = "/p/" <> item.projectId <> "/monitors"
+          alertBase = base <> "/alerts/" <> item.monitorId
+          si = statusInfo item.currentStatus
+          actionBtns suffix = do
+            inlineIconBtn_ (bool "Activate" "Deactivate" item.active) (bool "play" "pause" item.active) [hxPost_ $ alertBase <> "/toggle_active"]
+            if isJust item.mutedUntil
+              then inlineIconBtn_ "Unmute" "bell" [hxPost_ $ alertBase <> "/unmute"]
+              else durationMenu_ ("mute-pop-" <> item.monitorId <> suffix) "Mute for…" [] (\q -> [hxPost_ $ alertBase <> "/mute" <> durationQuery "duration" q, hxSwap_ "none"]) $ inlineIconBtn_ "Mute" "bell-slash" . popoverTrigger_
+            when (item.currentStatus /= Monitors.MSNormal) $ inlineIconBtn_ "Resolve" "check" [hxPost_ $ alertBase <> "/resolve"]
+            inlineIconBtn_ "Delete" "trash" [hxDelete_ alertBase, hxConfirm_ "Are you sure you want to delete this monitor?"]
+      div_ [class_ "flex flex-col gap-1 py-0.5"] do
+        div_ [class_ "flex items-center gap-2"] do
+          span_ [class_ $ "inline-block w-2 h-2 rounded-full shrink-0 tooltip tooltip-right " <> si.dotColor <> bool "" " alert-dot" (item.currentStatus == Monitors.MSAlerting), data_ "tip" $ bool "Inactive" "Active" item.active] ""
+          a_ ([href_ $ base <> "/" <> item.monitorId <> "/overview", class_ "text-sm font-medium text-textStrong hover:text-textBrand transition-colors truncate"] <> navTabAttrs) $ toHtml $ bool item.title "(Untitled)" (T.null item.title)
+          when (item.currentStatus /= Monitors.MSNormal) $ statusBadge_ False (MDStatus item.currentStatus)
+          whenJust item.mutedUntil $ silenceBadge_ "Muted" "Muted" item.now
+          div_ [class_ "flex gap-1 items-center shrink-0 opacity-0 max-md:hidden group-hover/row:opacity-100 has-[:focus-within]:opacity-100 transition-opacity"] $ actionBtns "-desktop"
+        div_ [class_ "flex items-center gap-1.5"]
+          $ span_ [class_ "text-xs text-textStrong/70 font-mono max-md:line-clamp-1 line-clamp-2 bg-fillWeaker border border-strokeWeak rounded px-1.5 py-0.5", term "data-tippy-content" item.query]
+          $ toHtml item.query
+        div_ [class_ "hidden max-md:flex items-center justify-between gap-2"] do
+          div_ [class_ "flex items-center gap-x-1.5 gap-y-0.5 text-xs text-textWeak flex-wrap min-w-0"] do
+            span_ [class_ "tabular-nums"] $ toHtml item.schedule
+            span_ [class_ "text-textWeak/40"] "\xb7"
+            span_ [class_ "tabular-nums"] $ maybe "Never run" (toHtml . prettyTimeShort item.now) item.lastRun
+            when (item.alertThreshold > 0) do
+              span_ [class_ "text-textWeak/40"] "\xb7"
+              span_ [class_ "tabular-nums text-iconError bg-fillError-weak rounded-full px-1.5 py-px text-2xs"] $ toHtml $ formatWithCommas item.alertThreshold <> " " <> Display.display item.triggerDirection
+            forM_ item.teamHandles \handle -> span_ [class_ "badge badge-sm badge-neutral"] $ toHtml handle
+          div_ [class_ "flex gap-1 items-center shrink-0"] $ actionBtns "-mobile"
 
 
-renderNameCol :: UnifiedMonitorItem -> Html ()
-renderNameCol item = do
-  let base = "/p/" <> item.projectId <> "/monitors"
-      alertBase = base <> "/alerts/" <> item.monitorId
-      si = statusInfo item.currentStatus
-      isActive = item.status == "Active"
-      actionBtns suffix = do
-        inlineIconBtn_ (bool "Activate" "Deactivate" isActive) (bool "play" "pause" isActive) [hxPost_ $ alertBase <> "/toggle_active"]
-        if isJust item.mutedUntil
-          then inlineIconBtn_ "Unmute" "bell" [hxPost_ $ alertBase <> "/unmute"]
-          else durationMenu_ ("mute-pop-" <> item.monitorId <> suffix) "Mute for…" [] (\q -> [hxPost_ $ alertBase <> "/mute" <> durationQuery "duration" q, hxSwap_ "none"]) $ inlineIconBtn_ "Mute" "bell-slash" . popoverTrigger_
-        when (item.currentStatus /= Monitors.MSNormal) $ inlineIconBtn_ "Resolve" "check" [hxPost_ $ alertBase <> "/resolve"]
-        inlineIconBtn_ "Delete" "trash" [hxDelete_ alertBase, hxConfirm_ "Are you sure you want to delete this monitor?"]
-  div_ [class_ "flex flex-col gap-1 py-0.5"] do
-    div_ [class_ "flex items-center gap-2"] do
-      span_ [class_ $ "inline-block w-2 h-2 rounded-full shrink-0 tooltip tooltip-right " <> si.dotColor <> bool "" " alert-dot" (item.currentStatus == Monitors.MSAlerting), data_ "tip" $ bool "Inactive" "Active" isActive] ""
-      a_ ([href_ $ base <> "/" <> item.monitorId <> "/overview", class_ "text-sm font-medium text-textStrong hover:text-textBrand transition-colors truncate"] <> navTabAttrs) $ toHtml $ bool item.title "(Untitled)" (T.null item.title)
-      when (item.currentStatus /= Monitors.MSNormal) $ statusBadge_ False (MDStatus item.currentStatus)
-      whenJust item.mutedUntil $ silenceBadge_ "Muted" "Muted" item.now
-      div_ [class_ "flex gap-1 items-center shrink-0 opacity-0 max-md:hidden group-hover/row:opacity-100 has-[:focus-within]:opacity-100 transition-opacity"] $ actionBtns "-desktop"
-    div_ [class_ "flex items-center gap-1.5"]
-      $ span_ [class_ "text-xs text-textStrong/70 font-mono max-md:line-clamp-1 line-clamp-2 bg-fillWeaker border border-strokeWeak rounded px-1.5 py-0.5", term "data-tippy-content" item.details.query]
-      $ toHtml item.details.query
-    div_ [class_ "hidden max-md:flex items-center justify-between gap-2"] do
-      div_ [class_ "flex items-center gap-x-1.5 gap-y-0.5 text-xs text-textWeak flex-wrap min-w-0"] do
-        span_ [class_ "tabular-nums"] $ toHtml item.schedule
-        span_ [class_ "text-textWeak/40"] "\xb7"
-        span_ [class_ "tabular-nums"] $ maybe "Never run" (toHtml . prettyTimeShort item.now) item.lastRun
-        when (item.details.alertThreshold > 0) do
-          span_ [class_ "text-textWeak/40"] "\xb7"
-          span_ [class_ "tabular-nums text-iconError bg-fillError-weak rounded-full px-1.5 py-px text-2xs"] $ toHtml $ formatWithCommas item.details.alertThreshold <> " " <> Display.display item.details.triggerDirection
-        forM_ item.teamBadges \(_, handle) -> span_ [class_ "badge badge-sm badge-neutral"] $ toHtml handle
-      div_ [class_ "flex gap-1 items-center shrink-0"] $ actionBtns "-mobile"
-
-
-data StatusInfo = StatusInfo {dotColor :: Text, statusLabel :: Text, rank :: Int, textColor :: Text}
+data StatusInfo = StatusInfo {dotColor :: Text, rank :: Int, textColor :: Text}
 
 
 statusInfo :: Monitors.MonitorStatus -> StatusInfo
 statusInfo = \case
-  Monitors.MSAlerting -> StatusInfo "bg-fillError-strong" "Alerting" 0 "text-textError"
-  Monitors.MSWarning -> StatusInfo "bg-fillWarning-strong" "Warning" 1 "text-textWarning"
-  Monitors.MSNormal -> StatusInfo "bg-fillSuccess-strong" "Normal" 2 "text-textSuccess"
+  Monitors.MSAlerting -> StatusInfo "bg-fillError-strong" 0 "text-textError"
+  Monitors.MSWarning -> StatusInfo "bg-fillWarning-strong" 1 "text-textWarning"
+  Monitors.MSNormal -> StatusInfo "bg-fillSuccess-strong" 2 "text-textSuccess"
 
 
--- | Which monitors tab is being viewed. Was 'Text' compared against @"Active"@ in two
--- places with a silent fall-through; the wire spelling stays capitalised because live
--- @?filter=Active@ URLs carry it. 'monitorTabParam' is the single source of it.
+-- | Which monitors tab is being viewed; the wire spelling stays capitalised because live
+-- @?filter=Active@ URLs carry it.
 --
 -- >>> map monitorTabParam [minBound .. maxBound]
 -- ["Active","Inactive"]
@@ -621,23 +586,6 @@ monitorTabParam = \case
 
 parseMonitorTab :: Maybe Text -> MonitorTab
 parseMonitorTab = fromMaybe TabActive . (inverseMap monitorTabParam =<<)
-
-
-bulkActionsFor :: MonitorTab -> Projects.ProjectId -> [BulkAction]
-bulkActionsFor tab pid =
-  let bulkBase = "/p/" <> pid.toText <> "/monitors/alerts/bulk_action/"
-   in case tab of
-        TabActive ->
-          [ BulkAction (Just "pause") "Deactivate" (bulkBase <> bulkActionSlug BADeactivate) []
-          , BulkAction (Just "bell-slash") "Mute" (bulkBase <> bulkActionSlug BAMute) []
-          , BulkAction (Just "bell") "Unmute" (bulkBase <> bulkActionSlug BAUnmute) []
-          , BulkAction (Just "check") "Resolve" (bulkBase <> bulkActionSlug BAResolve) []
-          , BulkAction (Just "trash") "Delete" (bulkBase <> bulkActionSlug BADelete) []
-          ]
-        TabInactive ->
-          [ BulkAction (Just "play") "Reactivate" (bulkBase <> bulkActionSlug BAReactivate) []
-          , BulkAction (Just "trash") "Delete" (bulkBase <> bulkActionSlug BADelete) []
-          ]
 
 
 buildTeamMap :: Projects.ProjectId -> ATAuthCtx (Map.Map ManageMembers.TeamId Text)
@@ -665,81 +613,40 @@ alertResolveH = monitorActionH BAResolve Nothing "Monitor resolved"
 alertDeleteH = monitorActionH BADelete Nothing "Monitor deleted"
 
 
-renderThresholdCol :: UnifiedMonitorItem -> Html ()
-renderThresholdCol item =
-  div_ [class_ "flex flex-col gap-1"] do
-    span_ [class_ "text-xs tabular-nums whitespace-nowrap bg-fillError-weak text-iconError rounded-full px-2 py-0.5 w-fit"] $ toHtml $ formatWithCommas item.details.alertThreshold <> " (" <> Display.display item.details.triggerDirection <> ")"
-    whenJust item.details.warningThreshold \w ->
-      span_ [class_ "text-xs tabular-nums whitespace-nowrap bg-fillWarning-weak text-iconWarning rounded-full px-2 py-0.5 w-fit"] $ toHtml $ formatWithCommas w <> " (warn)"
-
-
 toUnifiedMonitorItem :: Map.Map ManageMembers.TeamId Text -> Projects.ProjectId -> UTCTime -> Monitors.QueryMonitor -> UnifiedMonitorItem
 toUnifiedMonitorItem teamMap pid currTime alert =
   UnifiedMonitorItem
     { monitorId = alert.id.toText
     , projectId = pid.toText
     , title = alert.alertConfig.title
-    , status = bool "Active" "Inactive" $ isJust alert.deactivatedAt
+    , active = isNothing alert.deactivatedAt
     , currentStatus = alert.currentStatus
     , mutedUntil = mfilter (> currTime) alert.mutedUntil
     , schedule = "every " <> show alert.checkIntervalMins <> " min"
     , lastRun = alert.lastEvaluated
     , now = currTime
-    , details =
-        AlertDetails
-          { query = alert.logQuery
-          , alertThreshold = alert.alertThreshold
-          , warningThreshold = alert.warningThreshold
-          , triggerDirection = bool Issues.Above Issues.Below alert.triggerLessThan
-          }
-    , teamBadges = mapMaybe (\tid -> (tid.toText,) <$> Map.lookup tid teamMap) $ V.toList alert.teams
+    , query = alert.logQuery
+    , alertThreshold = alert.alertThreshold
+    , warningThreshold = alert.warningThreshold
+    , triggerDirection = bool Issues.Above Issues.Below alert.triggerLessThan
+    , teamHandles = mapMaybe (`Map.lookup` teamMap) $ V.toList alert.teams
     }
 
 
--- | What the status badge shows: a monitor's evaluated status, or that it has been
--- deactivated, which overrides the status entirely.
---
--- Was a 'Text' matched against eight spellings. Five of them (@Passing@, @Failing@,
--- @Healthy@, @Pending@, @NoData@) were produced nowhere in the tree, and the one live
--- value the list omitted — @Normal@ — fell through to the grey default while 'statusInfo'
--- already coloured that same state green, so a healthy monitor rendered a green dot beside
--- a grey badge. Taking the status instead of its label makes both halves unrepresentable.
+-- | What the status badge shows: deactivation overrides the evaluated status entirely.
 data MonitorDisplay = MDDeactivated | MDStatus Monitors.MonitorStatus
-  deriving stock (Eq, Show)
-
-
--- | Deactivation wins over whatever the last evaluation left in @currentStatus@.
-monitorDisplay :: Monitors.QueryMonitor -> MonitorDisplay
-monitorDisplay alert = maybe (MDStatus alert.currentStatus) (const MDDeactivated) alert.deactivatedAt
-
-
-displayLabel :: MonitorDisplay -> Text
-displayLabel MDDeactivated = "Inactive"
-displayLabel (MDStatus s) = (statusInfo s).statusLabel
 
 
 statusBadge_ :: Bool -> MonitorDisplay -> Html ()
 statusBadge_ isLarge st = do
-  let isAlerting = st == MDStatus Monitors.MSAlerting
-      (badgeClass, icon) = case st of
-        MDDeactivated -> ("badge-ghost", "circle-pause")
-        MDStatus Monitors.MSAlerting -> ("badge-error", "bell-exclamation")
-        MDStatus Monitors.MSWarning -> ("badge-warning", "triangle-exclamation")
-        MDStatus Monitors.MSNormal -> ("badge-success", "circle-check")
-      sizeClass = bool "badge-sm" "" isLarge
-      iconSize = bool "h-3 w-3" "h-4 w-4" isLarge
-  span_ [class_ $ "badge gap-1 " <> sizeClass <> " " <> badgeClass <> bool "" " alert-badge" isAlerting] do
-    faSprite_ icon "regular" iconSize
-    toHtml $ displayLabel st
-
-
--- | Rewrite @bin_auto@ to a fixed @<mins>m@ interval via the KQL AST so the monitor
--- overview chart bins match the evaluation window rather than the viewer's time range.
--- Falls back to the original query on parse failure or when @mins <= 0@.
-rewriteBinAutoMins :: Int -> Text -> Text
-rewriteBinAutoMins mins q
-  | mins <= 0 = q
-  | otherwise = either (const q) (toQText . rewriteBinAutoToFixed (show mins <> "m")) $ parseQueryToAST q
+  let (badgeClass, icon, label) = case st of
+        MDDeactivated -> ("badge-ghost", "circle-pause", "Inactive")
+        MDStatus Monitors.MSAlerting -> ("badge-error alert-badge", "bell-exclamation", "Alerting")
+        MDStatus Monitors.MSWarning -> ("badge-warning", "triangle-exclamation", "Warning")
+        MDStatus Monitors.MSNormal -> ("badge-success", "circle-check", "Normal")
+  span_ [class_ $ "badge gap-1 " <> bool "badge-sm " "" isLarge <> badgeClass] do
+    faSprite_ icon "regular" (bool "h-3 w-3" "h-4 w-4" isLarge)
+    toHtml @Text label
 
 
 unifiedMonitorOverviewH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
@@ -787,7 +694,7 @@ unifiedMonitorOverviewH pid monitorId = do
                     case alert.mutedUntil of
                       Just _ -> actionBtn_ "bell" "Unmute" "Resume notifications for this monitor" "/unmute"
                       Nothing -> durationMenu_ ("mute-btn-pop-" <> alert.id.toText) "Mute for\x2026" [] (\q -> [hxPost_ $ muteBase <> "/mute" <> durationQuery "duration" q, hxSwap_ "none"]) \popId ->
-                        button_ [type_ "button", class_ "btn btn-sm btn-ghost border border-strokeWeak tooltip tooltip-bottom", Aria.label_ "Mute", data_ "tip" "Silence notifications for a period", term "popovertarget" popId, style_ $ "anchor-name: --anchor-" <> popId] do
+                        button_ ([type_ "button", class_ "btn btn-sm btn-ghost border border-strokeWeak tooltip tooltip-bottom", Aria.label_ "Mute", data_ "tip" "Silence notifications for a period"] <> popoverTrigger_ popId) do
                           faSprite_ "bell-slash" "regular" "h-4 w-4"
                           span_ [class_ "max-md:hidden"] "Mute"
                     when needsResolve $ actionBtn_ "check" "Resolve" "Mark as resolved and reset status to normal" "/resolve"
@@ -800,9 +707,9 @@ unifiedMonitorOverviewH pid monitorId = do
                           faSprite_ icon "regular" "h-3.5 w-3.5"
                           toHtml label
                   div_ [class_ "md:hidden inline-block"] do
-                    button_ [type_ "button", class_ "btn btn-sm btn-ghost border border-strokeWeak", Aria.label_ "Actions", term "popovertarget" mobilePopId, style_ $ "anchor-name: --anchor-" <> mobilePopId] do
+                    button_ ([type_ "button", class_ "btn btn-sm btn-ghost border border-strokeWeak", Aria.label_ "Actions"] <> popoverTrigger_ mobilePopId) do
                       faSprite_ "ellipsis-vertical" "regular" "h-4 w-4"
-                    div_ [id_ mobilePopId, term "popover" "auto", class_ "dropdown dropdown-end menu bg-bgRaised p-1 text-sm border border-strokeWeak z-50 min-w-44 rounded-md shadow-lg mt-1", style_ $ "position-try: flip-block; position-anchor: --anchor-" <> mobilePopId] do
+                    div_ (popoverPanel_ mobilePopId <> [class_ "dropdown dropdown-end menu bg-bgRaised p-1 text-sm border border-strokeWeak z-50 min-w-44 rounded-md shadow-lg mt-1"]) do
                       maybe (mobItem_ "bell-slash" "/mute" "Mute") (const $ mobItem_ "bell" "/unmute" "Unmute") alert.mutedUntil
                       when needsResolve $ mobItem_ "check" "/resolve" "Resolve"
                       mobItem_ deactIcon "/toggle_active" deactLabel
@@ -812,12 +719,12 @@ unifiedMonitorOverviewH pid monitorId = do
               }
       let nameOf cs x = maybe x (.channelName) $ find ((== x) . (.channelId)) cs
           teams' = (\t -> t{slack_channels = nameOf channels <$> t.slack_channels, discord_channels = nameOf discordChannels <$> t.discord_channels}) <$> teams
-      addRespHeaders $ PageCtx bwconf $ unifiedOverviewPage pid alert currTime (V.fromList teams') slackDataM discordDataM
+      addRespHeaders $ PageCtx bwconf $ unifiedOverviewPage pid alert currTime (V.fromList teams')
     Nothing -> addRespHeaders $ PageCtx baseBwconf $ emptyState_ def "Monitor not found" ""
 
 
-unifiedOverviewPage :: Projects.ProjectId -> Monitors.QueryMonitor -> UTCTime -> V.Vector ManageMembers.Team -> Maybe Slack.SlackData -> Maybe Slack.DiscordData -> Html ()
-unifiedOverviewPage pid alert currTime teams slackDataM discordDataM = do
+unifiedOverviewPage :: Projects.ProjectId -> Monitors.QueryMonitor -> UTCTime -> V.Vector ManageMembers.Team -> Html ()
+unifiedOverviewPage pid alert currTime teams = do
   section_ [class_ "pt-2 mx-auto max-md:px-2 px-4 w-full flex flex-col gap-4 pb-4"] do
     div_ [class_ "flex items-center gap-3"] do
       h1_ [class_ "text-2xl font-semibold text-textStrong"] $ toHtml $ bool alert.alertConfig.title "(Untitled)" (T.null alert.alertConfig.title)
@@ -845,7 +752,7 @@ unifiedOverviewPage pid alert currTime teams slackDataM discordDataM = do
           Widget.widget_
             $ (def :: Widget)
               { Widget.wType = Widget.mapChartTypeToWidgetType alert.visualizationType
-              , Widget.query = Just (rewriteBinAutoMins alert.timeWindowMins alert.logQuery)
+              , Widget.query = Just binnedQuery
               , Widget.title = Just "Query Results"
               , Widget.standalone = Just True
               , Widget._projectId = Just pid
@@ -861,18 +768,17 @@ unifiedOverviewPage pid alert currTime teams slackDataM discordDataM = do
       div_ [class_ "w-full flex border-b border-strokeWeak"] do
         detailTab_ "monitor-tabs" "tab-exec-history" "shrink-0 font-medium text-textWeak" True "Execution History"
         detailTab_ "monitor-tabs" "tab-notif-channels" "shrink-0 font-medium text-textWeak" False "Notification Channels"
-      div_ [role_ "tabpanel", class_ "overflow-y-auto hidden group-has-[.tab-exec-history:checked]/mt:block"] $ monitorHistoryTab_ pid alert.id
+      div_ [role_ "tabpanel", class_ "overflow-y-auto hidden group-has-[.tab-exec-history:checked]/mt:block"]
+        $ div_ [class_ "mt-2 p-2 border border-strokeWeak rounded-lg overflow-x-auto flex flex-col max-h-[400px] max-md:max-h-[300px]"]
+        $ termRaw "log-list" [id_ "resultTable", class_ "w-full divide-y shrink-1 flex flex-col h-full min-h-0 min-w-0 rr-block", term "windowTarget" "logList", term "projectId" pid.toText, term "initialFetchUrl" historyUrl] ("" :: Text)
       div_ [role_ "tabpanel", class_ "overflow-y-auto hidden group-has-[.tab-notif-channels:checked]/mt:block"] $ alertNotificationsTab_ alert teams
   where
-    display = monitorDisplay alert
-
-
-monitorHistoryTab_ :: Projects.ProjectId -> Monitors.QueryMonitorId -> Html ()
-monitorHistoryTab_ pid alertId = do
-  let query = "kind==\"alert\" and parent_id==\"" <> alertId.toText <> "\""
-      initialUrl = "/p/" <> pid.toText <> "/log_explorer/data?json=true&query=" <> toUriStr query
-  div_ [class_ "mt-2 p-2 border border-strokeWeak rounded-lg overflow-x-auto flex flex-col max-h-[400px] max-md:max-h-[300px]"] do
-    termRaw "log-list" [id_ "resultTable", class_ "w-full divide-y shrink-1 flex flex-col h-full min-h-0 min-w-0 rr-block", term "windowTarget" "logList", term "projectId" pid.toText, term "initialFetchUrl" initialUrl] ("" :: Text)
+    display = maybe (MDStatus alert.currentStatus) (const MDDeactivated) alert.deactivatedAt
+    historyUrl = "/p/" <> pid.toText <> "/log_explorer/data?json=true&query=" <> toUriStr ("kind==\"alert\" and parent_id==\"" <> alert.id.toText <> "\"")
+    -- Fixed bins matching the evaluation window rather than the viewer's time range; the raw query on parse failure.
+    binnedQuery
+      | alert.timeWindowMins <= 0 = alert.logQuery
+      | otherwise = either (const alert.logQuery) (toQText . rewriteBinAutoToFixed (show alert.timeWindowMins <> "m")) $ parseQueryToAST alert.logQuery
 
 
 alertSidebar_ :: MonitorDisplay -> Monitors.QueryMonitor -> UTCTime -> Html ()
@@ -888,8 +794,8 @@ alertSidebar_ display alert currTime = do
         input_ [type_ "checkbox", class_ "peer sr-only"]
         span_ [class_ "text-xs text-textWeak"] "Query \x203a"
         pre_ [class_ "text-xs font-mono text-textStrong/70 whitespace-pre-wrap break-all line-clamp-1 peer-checked:line-clamp-none"] $ toHtml alert.logQuery
-      mobileRow_ "Last eval" $ span_ [] $ toHtml $ maybe "Never" (toText . prettyTimeAuto currTime) alert.lastEvaluated
-      mobileRow_ "Last triggered" $ span_ [class_ "text-textWeak"] $ toHtml $ maybe "Never" (toText . prettyTimeAuto currTime) alert.alertLastTriggered
+      mobileRow_ "Last eval" $ span_ [] $ toHtml $ ago alert.lastEvaluated
+      mobileRow_ "Last triggered" $ span_ [class_ "text-textWeak"] $ toHtml $ ago alert.alertLastTriggered
     div_ [class_ "max-md:hidden divide-y divide-strokeWeak"] do
       sidebarItem_ "Status" $ statusBadge_ True display
       sidebarItem_ "Current Value" $ span_ [class_ $ statusColor <> " tabular-nums text-lg font-semibold"] $ toHtml $ formatWithCommas alert.currentValue
@@ -899,13 +805,14 @@ alertSidebar_ display alert currTime = do
         whenJust alert.warningThreshold \w -> span_ [class_ "text-textWarning tabular-nums"] $ toHtml $ "Warning: " <> direction <> " " <> formatWithCommas w
         whenJust alert.alertRecoveryThreshold \r -> span_ [class_ "text-textWeak tabular-nums"] $ toHtml $ "Recovery: " <> formatWithCommas r
       sidebarItem_ "Evaluation" $ div_ [class_ "flex flex-col gap-1 text-sm"] do
-        span_ [class_ "text-textStrong"] $ toHtml $ "Last: " <> maybe "Never" (toText . prettyTimeAuto currTime) alert.lastEvaluated
-        span_ [class_ "text-textWeak"] $ toHtml $ "Last Triggered: " <> maybe "Never" (toText . prettyTimeAuto currTime) alert.alertLastTriggered
+        span_ [class_ "text-textStrong"] $ toHtml $ "Last: " <> ago alert.lastEvaluated
+        span_ [class_ "text-textWeak"] $ toHtml $ "Last Triggered: " <> ago alert.alertLastTriggered
       sidebarItem_ "Notifications" $ div_ [class_ "flex flex-col gap-1 text-sm"] do
         span_ [class_ "text-textStrong tabular-nums"] $ toHtml $ "Sent: " <> show @Text alert.notificationCount
         whenJust alert.renotifyIntervalMins \mins -> span_ [class_ "text-textWeak"] $ toHtml $ "Renotify: " <> show @Text mins <> " min"
         whenJust alert.stopAfterCount \count -> span_ [class_ "text-textWeak"] $ toHtml $ "Stop after: " <> show @Text count
   where
+    ago = maybe "Never" (toText . prettyTimeAuto currTime)
     direction = bool ">" "<" alert.triggerLessThan
     statusColor = (statusInfo alert.currentStatus).textColor
     mobileRow_ :: Html () -> Html () -> Html ()
@@ -948,7 +855,7 @@ alertNotificationsTab_ alert teams = do
                 div_ [class_ "flex items-center gap-2"]
                   $ span_ [class_ "text-sm text-textWeak"]
                   $ faSprite_ icon style "h-3 w-3 mr-2 text-iconNeutral"
-                  >> toHtml entry
+                    >> toHtml entry
 
     div_ [class_ "pt-6 pb-3"] do
       h4_ [class_ "font-medium text-textStrong mb-2"] "Notification Template"
@@ -979,8 +886,8 @@ instance ToHtml UptimeChecks where
 -- | The add form and the list, swapped together: a successful add returns the form blank,
 -- a rejected one swaps nothing so the form keeps what was typed.
 uptimeChecksList_ :: Projects.ProjectId -> V.Vector PromCfg.PrometheusScrapeConfig -> Html ()
-uptimeChecksList_ pid checks = div_ [id_ "uptime-checks", class_ "space-y-4"] do
-  form_ [class_ "surface-raised rounded-xl p-4 grid md:grid-cols-[1fr_2fr_auto_auto_auto] gap-2 items-end", hxPost_ ("/p/" <> pid.toText <> "/monitors/uptime"), hxTarget_ "#uptime-checks", hxSwap_ "outerHTML"] do
+uptimeChecksList_ pid checks = div_ [id_ "uptime-checks", class_ "space-y-4", hxTarget_ "this", hxSwap_ "outerHTML"] do
+  form_ [class_ "surface-raised rounded-xl p-4 grid md:grid-cols-[1fr_2fr_auto_auto_auto] gap-2 items-end", hxPost_ ("/p/" <> pid.toText <> "/monitors/uptime")] do
     formField_ FieldSm def{placeholder = "Checkout API"} "Name" "name" True Nothing
     formField_ FieldSm def{inputType = "url", placeholder = "https://shop.example.com/health"} "URL" "url" True Nothing
     formSelectField_ FieldSm "Every" "interval" False $ options_ Nothing [("60", "1 min"), ("300", "5 min"), ("900", "15 min"), ("3600", "1 hour")]
@@ -997,8 +904,8 @@ uptimeChecksList_ pid checks = div_ [id_ "uptime-checks", class_ "space-y-4"] do
           div_ [class_ "font-medium text-textStrong truncate"] $ toHtml c.name
           div_ [class_ "text-xs text-textWeak truncate"] $ toHtml $ c.url <> " \x00b7 expects " <> show (fromMaybe 200 c.expectedStatus) <> " \x00b7 every " <> show (c.scrapeIntervalSeconds `div` 60) <> " min"
         span_ [class_ "text-xs text-textWeak truncate max-w-64"] $ toHtml $ fromMaybe "Not checked yet" c.lastStatus
-        button_ [type_ "button", class_ "btn btn-xs btn-ghost", hxPost_ (base <> "/toggle"), hxTarget_ "#uptime-checks", hxSwap_ "outerHTML"] $ bool "Resume" "Pause" c.enabled
-        button_ [type_ "button", class_ "btn btn-xs btn-ghost text-textError", hxPost_ (base <> "/delete"), hxTarget_ "#uptime-checks", hxSwap_ "outerHTML", hxConfirm_ ("Delete the check for " <> c.url <> "?")] "Delete"
+        button_ [type_ "button", class_ "btn btn-xs btn-ghost", hxPost_ (base <> "/toggle")] $ bool "Resume" "Pause" c.enabled
+        button_ [type_ "button", class_ "btn btn-xs btn-ghost text-textError", hxPost_ (base <> "/delete"), hxConfirm_ ("Delete the check for " <> c.url <> "?")] "Delete"
 
 
 data UptimeForm = UptimeForm {name :: Text, url :: Text, interval :: Maybe Int, expectedStatus :: Maybe Int}
@@ -1062,8 +969,8 @@ instance ToHtml CronMonitors where
 
 
 cronMonitorsList_ :: Projects.ProjectId -> [Monitors.CronMonitor] -> Html ()
-cronMonitorsList_ pid mons = div_ [id_ "cron-monitors", class_ "space-y-4"] do
-  form_ [class_ "surface-raised rounded-xl p-4 grid md:grid-cols-[1fr_1fr_auto_auto_auto] gap-2 items-end", hxPost_ ("/p/" <> pid.toText <> "/monitors/cron"), hxTarget_ "#cron-monitors", hxSwap_ "outerHTML"] do
+cronMonitorsList_ pid mons = div_ [id_ "cron-monitors", class_ "space-y-4", hxTarget_ "this", hxSwap_ "outerHTML"] do
+  form_ [class_ "surface-raised rounded-xl p-4 grid md:grid-cols-[1fr_1fr_auto_auto_auto] gap-2 items-end", hxPost_ ("/p/" <> pid.toText <> "/monitors/cron")] do
     -- `-` last: browsers compile `pattern` with the v flag, where a bare `-` mid-class is a syntax error.
     formField_ FieldSm def{placeholder = "nightly-billing", extraAttrs = [pattern_ "[a-z0-9_.\\-]+"]} "Slug" "slug" True Nothing
     formField_ FieldSm def{placeholder = "Nightly billing run"} "Name" "name" True Nothing
@@ -1078,7 +985,7 @@ cronMonitorsList_ pid mons = div_ [id_ "cron-monitors", class_ "space-y-4"] do
         div_ [class_ "font-medium text-textStrong truncate"] $ toHtml m.name
         div_ [class_ "text-xs text-textWeak truncate font-mono"] $ toHtml $ m.slug <> " \x00b7 every " <> show (m.intervalSecs `div` 60) <> " min"
       span_ [class_ "text-xs text-textWeak"] $ toHtml $ maybe "No check-in yet" (("Last: " <>) . toText . formatTime defaultTimeLocale "%F %R UTC") m.lastCheckinAt
-      button_ [type_ "button", class_ "btn btn-xs btn-ghost text-textError", hxPost_ ("/p/" <> pid.toText <> "/monitors/cron/" <> UUID.toText m.id <> "/delete"), hxTarget_ "#cron-monitors", hxSwap_ "outerHTML", hxConfirm_ ("Delete the monitor " <> m.slug <> "?")] "Delete"
+      button_ [type_ "button", class_ "btn btn-xs btn-ghost text-textError", hxPost_ ("/p/" <> pid.toText <> "/monitors/cron/" <> UUID.toText m.id <> "/delete"), hxConfirm_ ("Delete the monitor " <> m.slug <> "?")] "Delete"
 
 
 data CronForm = CronForm {slug :: Text, name :: Text, interval :: Int, grace :: Int}

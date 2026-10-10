@@ -51,6 +51,8 @@ module Pages.Settings (
   cancelProjectSubscription,
   lemonSqueezyOpts,
   verifyLemonSqueezySignature,
+  notifyPlanChange,
+  billingUrl,
 ) where
 
 import Control.Lens ((.~), (^.))
@@ -69,7 +71,6 @@ import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time (Day, UTCTime (..), addDays, addUTCTime, diffUTCTime, utc, utcToZonedTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
-import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
@@ -105,9 +106,9 @@ import Network.Minio qualified as Minio
 import Network.URI (parseURI, uriAuthority, uriRegName, uriScheme)
 import Network.Wreq qualified as Wreq
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, settingsContentTarget, withSettingsPage)
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), confirmModal_, connectionBadge_, copySourceAttr_, emptyState_, filterInputAttr_, formActionsModal_, formField_, headerRow_, iconBadgeLg_, keyboardActivateAttr_, localTimeFmt_, modalWith_, options_, paymentPlanPicker, searchInput_, sectionLabel_, settingsH2_, settingsSection_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), callout_, connectionBadge_, copyField_, copySourceAttr_, dangerAction_, disclosure_, emptyState_, filterInputAttr_, formActionsModal_, formCheckbox_, formField_, headerRow_, iconBadgeLg_, keyboardActivateAttr_, localTimeFmt_, modalWith_, options_, paymentPlanPicker, searchInput_, sectionLabel_, settingsH2_, settingsSection_, tonePill_)
 import Pkg.Components.Table qualified as Table
-import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
+import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..))
 import Pkg.EmailTemplates qualified as ET
 import Pkg.Mail (NotificationAlerts (..), sampleAlertByIssueTypeText, sampleReport, sendDiscordAlert, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendWhatsAppAlert)
 import Pkg.Prometheus qualified as Prom
@@ -125,13 +126,6 @@ import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 ----------------------------------------------------------------------
 -- S3
 ----------------------------------------------------------------------
-
-getMinioConnectInfo :: Text -> Text -> Text -> Text -> Minio.ConnectInfo
-getMinioConnectInfo accessKey secretKey region endpoint =
-  Minio.setCreds (Minio.CredentialValue (fromString $ toString accessKey) (fromString $ toString secretKey) Nothing)
-    $ Minio.setRegion (fromString $ toString region)
-    $ bool (fromString $ toString endpoint) Minio.awsCI (T.null endpoint)
-
 
 -- | Turn a minio-hs error into something a user can act on, instead of leaking
 -- the library's raw @Show@ (e.g. @MErrValidation (MErrVRegionNotSupported "EU")@).
@@ -162,7 +156,10 @@ humanizeMinioErr = \case
 
 brings3PostH :: Projects.ProjectId -> Projects.ProjectS3Bucket -> ATAuthCtx (RespHeaders (Html ()))
 brings3PostH pid s3Form = do
-  let connectInfo = getMinioConnectInfo s3Form.accessKey s3Form.secretKey s3Form.region s3Form.endpointUrl
+  let connectInfo =
+        Minio.setCreds (Minio.CredentialValue (Minio.AccessKey s3Form.accessKey) (fromString $ toString s3Form.secretKey) Nothing)
+          $ Minio.setRegion s3Form.region
+          $ bool (fromString $ toString s3Form.endpointUrl) Minio.awsCI (T.null s3Form.endpointUrl)
   res <- liftIO $ Minio.runMinio connectInfo $ Minio.bucketExists s3Form.bucket
   let notConnected msg = addErrorToast msg Nothing >> addRespHeaders (connectionBadge_ False)
   case res of
@@ -202,19 +199,14 @@ bringS3Page pid s3BucketM = settingsSection_ do
       formField_ FieldSm def{value = maybe "us-east-1" (.region) s3BucketM, placeholder = "us-east-1", extraAttrs = [term "list" "aws-regions"]} "Region" "region" True Nothing
       formField_ FieldSm def{value = maybe "" (.bucket) s3BucketM, placeholder = "Bucket Name"} "Bucket Name" "bucket" True Nothing
     datalist_ [id_ "aws-regions"] $ options_ Nothing awsRegions
-    formField_ FieldSm def{value = maybe "" (.endpointUrl) s3BucketM, placeholder = "https://s3.example.com", extraAttrs = [pattern_ "https?://.*"]} "Custom Endpoint" "endpointUrl" False Nothing
-    p_ [class_ "text-xs text-textWeak"] "Leave blank for AWS S3. For S3-compatible providers (MinIO, DigitalOcean Spaces, Cloudflare R2, Backblaze, OVH), set the endpoint URL and enter the region your provider expects — e.g. auto for R2, nyc3 for DigitalOcean, or us-east-1 for MinIO."
+    formField_ FieldSm def{value = maybe "" (.endpointUrl) s3BucketM, placeholder = "https://s3.example.com", extraAttrs = [pattern_ "https?://.*"], hint = Just "Leave blank for AWS S3. For S3-compatible providers (MinIO, DigitalOcean Spaces, Cloudflare R2, Backblaze, OVH), set the endpoint URL and enter the region your provider expects — e.g. auto for R2, nyc3 for DigitalOcean, or us-east-1 for MinIO."} "Custom Endpoint" "endpointUrl" False Nothing
 
     div_ [class_ "flex items-center justify-between pt-2"] do
       div_ [class_ "flex items-center gap-3"] do
         button_ [class_ "btn btn-sm btn-primary gap-1"] do
           "Validate & Save"
           htmxIndicator_ "indicator" LdXS
-      when (isJust s3BucketM) $ label_ [class_ "btn btn-sm btn-ghost text-textError hover:bg-fillError-weak", Lucid.for_ "remove-modal"] do
-        faSprite_ "trash" "regular" "w-3 h-3"
-        span_ "Remove"
-
-  confirmModal_ "remove-modal" "Remove bucket?" "This will disconnect your S3 bucket. Data already stored will remain in your bucket." [hxDelete_ "", hxSwap_ "innerHTML", hxTarget_ "#connectedInd"] "Remove bucket"
+      when (isJust s3BucketM) $ dangerAction_ "remove-modal" "trash" "Remove" "Remove bucket?" "This will disconnect your S3 bucket. Data already stored will remain in your bucket." [hxDelete_ "", hxSwap_ "innerHTML", hxTarget_ "#connectedInd"] "Remove bucket"
   where
     -- Suggestions only: free text stays allowed so S3-compatible providers (which
     -- ignore the region) can pass anything.
@@ -254,7 +246,7 @@ apiPostH :: Projects.ProjectId -> GenerateAPIKeyForm -> ATAuthCtx (RespHeaders A
 apiPostH pid apiKeyForm = do
   (sess, _) <- Projects.sessionAndProject pid
   authCtx <- ask @AuthContext
-  projectKeyUUID <- liftIO UUIDV4.nextRandom
+  projectKeyUUID <- UUIDEff.genUUID
   let encryptedKeyB64 = ProjectApiKeys.encodeApiKeyB64 authCtx.config.apiKeyEncryptionSecretKey projectKeyUUID
   pApiKey <- ProjectApiKeys.newProjectApiKeys pid projectKeyUUID apiKeyForm.title encryptedKeyB64
   ProjectApiKeys.insertProjectApiKey pApiKey
@@ -264,8 +256,8 @@ apiPostH pid apiKeyForm = do
     $ AE.object ["key_title" AE..= apiKeyForm.title]
   addSuccessToast "Created API Key successfully" Nothing
   addTriggerEvent "closeModal" ""
-  let newKey = Just (pApiKey, encryptedKeyB64)
-  addRespHeaders $ maybe (ApiPost pid apiKeys newKey) (const $ ApiPostCopy newKey True) apiKeyForm.from
+  let newKey = (pApiKey, encryptedKeyB64)
+  addRespHeaders $ maybe (ApiPost pid apiKeys (Just newKey)) (const $ ApiPostCopy newKey) apiKeyForm.from
 
 
 apiDeleteH :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (RespHeaders ApiMut)
@@ -301,12 +293,12 @@ apiKeySetActive pid mutation keyid = do
 
 data ApiMut
   = ApiPost Projects.ProjectId (V.Vector ProjectApiKeys.ProjectApiKey) (Maybe (ProjectApiKeys.ProjectApiKey, Text))
-  | ApiPostCopy (Maybe (ProjectApiKeys.ProjectApiKey, Text)) Bool
+  | ApiPostCopy (ProjectApiKeys.ProjectApiKey, Text)
 
 
 instance ToHtml ApiMut where
   toHtml (ApiPost pid apiKeys m) = toHtml $ apiMainContent pid apiKeys m
-  toHtml (ApiPostCopy m b) = toHtml $ copyNewApiKey m b
+  toHtml (ApiPostCopy k) = toHtml $ copyNewApiKey True k
   toHtmlRaw = toHtml
 
 
@@ -333,7 +325,7 @@ instance ToHtml ApiGet where
 apiKeysPage :: Projects.ProjectId -> V.Vector ProjectApiKeys.ProjectApiKey -> Html ()
 apiKeysPage pid apiKeys = do
   settingsSection_ do
-    div_ [class_ "flex justify-between items-center"] do
+    headerRow_ [] do
       settingsH2_ "API Keys"
       modalWith_ "apikey-modal" def{boxClass = "w-full max-w-md p-6"} (Just $ span_ [class_ "btn btn-sm btn-primary gap-1.5"] $ do faSprite_ "plus" "regular" "w-3 h-3"; "New Key") do
         div_ [class_ "flex flex-col gap-3"] do
@@ -352,7 +344,7 @@ apiKeysPage pid apiKeys = do
 
 apiMainContent :: Projects.ProjectId -> V.Vector ProjectApiKeys.ProjectApiKey -> Maybe (ProjectApiKeys.ProjectApiKey, Text) -> Html ()
 apiMainContent pid apiKeys newKeyM = section_ [] do
-  copyNewApiKey newKeyM False
+  whenJust newKeyM $ copyNewApiKey False
   let (activeKeys, revokedKeys) = V.partition (.active) apiKeys
   -- DaisyUI radio tabs: each input and the panel it reveals are adjacent
   -- siblings, so which tab is open is DOM state that CSS reads directly.
@@ -391,12 +383,10 @@ makeApiKeysTable pid apiKeys elemId =
             span_ [id_ ("key-value-" <> apiKey.id.toText), class_ "min-w-0 font-mono text-textStrong hidden group-has-[:checked]:inline"] $ toHtml apiKey.keyPrefix
             div_ [class_ "flex items-center gap-1.5 shrink-0 ml-auto"] do
               -- Wrappers carry the toggle: .tap-target's display (custom layer) outranks `hidden`.
-              span_ [class_ "group-has-[:checked]:hidden"]
-                $ label_ [Lucid.for_ revealId, role_ "button", tabindex_ "0", Aria.label_ $ "Show value for " <> apiKey.title, class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer tooltip tooltip-left tap-target focus-visible:outline-2 focus-visible:outline-offset-2", data_ "tip" "Show key", keyboardActivateAttr_]
-                $ faSprite_ "eye" "regular" "h-3.5 w-3.5 text-iconNeutral"
-              span_ [class_ "hidden group-has-[:checked]:inline"]
-                $ label_ [Lucid.for_ revealId, role_ "button", tabindex_ "0", Aria.label_ $ "Hide value for " <> apiKey.title, class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer tooltip tooltip-left tap-target focus-visible:outline-2 focus-visible:outline-offset-2", data_ "tip" "Hide key", keyboardActivateAttr_]
-                $ faSprite_ "eye" "regular" "h-3.5 w-3.5 text-iconNeutral"
+              forM_ [("group-has-[:checked]:hidden", "Show"), ("hidden group-has-[:checked]:inline", "Hide") :: (Text, Text)] \(wrapCls, verb) ->
+                span_ [class_ wrapCls]
+                  $ label_ [Lucid.for_ revealId, role_ "button", tabindex_ "0", Aria.label_ $ verb <> " value for " <> apiKey.title, class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer tooltip tooltip-left tap-target focus-visible:outline-2 focus-visible:outline-offset-2", data_ "tip" (verb <> " key"), keyboardActivateAttr_]
+                  $ faSprite_ "eye" "regular" "h-3.5 w-3.5 text-iconNeutral"
               button_
                 [ class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer tooltip tooltip-left tap-target"
                 , type_ "button"
@@ -421,32 +411,18 @@ makeApiKeysTable pid apiKeys elemId =
                 ]
                 $ faSprite_ icon "regular"
                 $ "h-3.5 w-3.5 text-iconNeutral "
-                <> iconCls
+                  <> iconCls
       ]
 
 
-copyNewApiKey :: Maybe (ProjectApiKeys.ProjectApiKey, Text) -> Bool -> Html ()
-copyNewApiKey newKeyM hasNext = whenJust newKeyM \(_, newKey) ->
+copyNewApiKey :: Bool -> (ProjectApiKeys.ProjectApiKey, Text) -> Html ()
+copyNewApiKey hasNext (_, newKey) =
   div_ [id_ "apiFeedbackSection", class_ "pb-8"] do
-    div_ [class_ "rounded-md bg-fillSuccess-weak p-4"] do
-      div_ [class_ "flex"] do
-        div_ [class_ "shrink-0"] do
-          faSprite_ "circle-check" "regular" "h-5 w-5 text-iconSuccess"
-        div_ [class_ "ml-3"] do
-          h3_ [class_ " font-medium text-textSuccess"] "API Key was generated successfully"
-          div_ [class_ "mt-2  text-textSuccess py-2"] do
-            strong_ [class_ "block pt-2", id_ "newKey"] $ toHtml newKey
-          div_ [class_ "mt-4"] do
-            div_ [class_ "-mx-2 -my-1.5 flex"] do
-              button_
-                [ type_ "button"
-                , class_ "btn btn-sm btn-success"
-                , copySourceAttr_ "document.getElementById('newKey')"
-                ]
-                "Copy Key"
-              if hasNext
-                then button_ [type_ "button", class_ "btn btn-sm btn-ghost text-textBrand ml-4", onclick_ "window.location.reload()"] "Next"
-                else button_ [type_ "button", class_ "btn btn-sm btn-ghost text-textSuccess ml-2", [__|on click remove #apiFeedbackSection|]] "Dismiss"
+    callout_ SuccessBadge (Just "API Key was generated successfully") $ div_ [class_ "mt-2 space-y-2"] do
+      copyField_ "newKey" newKey
+      if hasNext
+        then button_ [type_ "button", class_ "btn btn-sm btn-ghost text-textBrand", onclick_ "window.location.reload()"] "Next"
+        else button_ [type_ "button", class_ "btn btn-sm btn-ghost", [__|on click remove #apiFeedbackSection|]] "Dismiss"
 
 
 ----------------------------------------------------------------------
@@ -535,7 +511,7 @@ safeScrapeUrl u = case parseURI (toString (T.strip u)) of
           ip6 = fromMaybe h (T.stripPrefix "[" h >>= T.stripSuffix "]") -- inside of a [..] literal
        in T.null h
             || h
-            == "localhost"
+              == "localhost"
             || any (`T.isPrefixOf` ip6) ["::1", "fc", "fd", "fe8", "fe9", "fea", "feb", "::ffff:"] -- fc/fd = ULA fc00::/7; fe8-feb = link-local fe80::/10
             || internalIPv4 h
             || obfuscatedNumericHost h
@@ -684,7 +660,7 @@ parseLabelsText t =
 
 prometheusPage :: Projects.ProjectId -> V.Vector PromCfg.PrometheusScrapeConfig -> Html ()
 prometheusPage pid cfgs = settingsSection_ do
-  div_ [class_ "flex justify-between items-center"] do
+  headerRow_ [] do
     settingsH2_ "Prometheus targets"
     promTargetModal_ pid (span_ [class_ "btn btn-sm btn-primary gap-1.5"] $ do faSprite_ "plus" "regular" "w-3 h-3"; "Add target") Nothing
   prometheusTargetsList pid cfgs
@@ -699,8 +675,8 @@ promTargetModal_ pid trigger mcfg =
       h2_ [class_ "text-textStrong text-xl font-semibold"] $ toHtml heading
       p_ [class_ "text-sm text-textWeak mt-1"] $ toHtml desc
     form_ [hxPost_ action, class_ "flex flex-col gap-4", hxTarget_ "#prometheus-targets", hxSwap_ "outerHTML"] do
-      field_ "name" "Name" "api-gateway" "text" True Nothing (maybe "" (.name) mcfg)
-      field_ "url" "Metrics URL" "http://service:9090/metrics" "url" True (Just "Must be reachable from Monoscope and return the Prometheus text exposition format.") (maybe "" (.url) mcfg)
+      field_ "name" "Name" True def{placeholder = "api-gateway", value = maybe "" (.name) mcfg}
+      field_ "url" "Metrics URL" True def{inputType = "url", placeholder = "http://service:9090/metrics", value = maybe "" (.url) mcfg, hint = Just "Must be reachable from Monoscope and return the Prometheus text exposition format."}
       label_ [class_ "flex flex-col gap-1 text-sm"] do
         span_ [class_ "text-textWeak"] "Scrape interval"
         -- No sub-minute options: the dispatcher ticks once per minute, so a shorter
@@ -713,11 +689,8 @@ promTargetModal_ pid trigger mcfg =
       -- Optional fields stay collapsed until needed; auto-expanded when editing a target
       -- that already has them set, so existing values are never hidden behind the toggle.
       let hasAdvanced = maybe False (\c -> isJust c.authHeader || not (T.null (labelsToText c.extraLabels))) mcfg
-      details_ ([class_ "group"] <> [term "open" "open" | hasAdvanced]) do
-        summary_ [class_ "cursor-pointer select-none text-sm text-textWeak flex items-center gap-1.5"] do
-          faSprite_ "chevron-right" "solid" "w-3 h-3 transition-transform group-open:rotate-90"
-          "Advanced"
-        div_ [class_ "flex flex-col gap-3 mt-3"] do
+      disclosure_ [open_ "" | hasAdvanced] "text-sm text-textWeak" "Advanced"
+        $ div_ [class_ "flex flex-col gap-3 mt-3"] do
           -- Never echo the saved token into the HTML (it would sit in the page source / proxy
           -- caches): show an empty field, and on edit treat blank as "keep the saved token".
           let hasToken = maybe False (isJust . (.authHeader)) mcfg
@@ -725,11 +698,9 @@ promTargetModal_ pid trigger mcfg =
                 if hasToken
                   then ("Leave blank to keep the saved token", "A token is saved. Enter a new value to replace it.")
                   else ("Bearer <token>", "Sent as the Authorization header on every scrape.")
-          field_ "authHeader" "Authorization header" authPh "password" False (Just authHelp) ""
-          when hasToken $ label_ [class_ "flex items-center gap-2 text-sm text-textWeak -mt-1"] do
-            input_ [type_ "checkbox", name_ "clearAuth", class_ "checkbox checkbox-sm"]
-            "Clear saved token"
-          field_ "extraLabels" "Static labels" "env=prod, team=core" "text" False (Just "Comma-separated key=value pairs, added to every series from this target.") (maybe "" (labelsToText . (.extraLabels)) mcfg)
+          field_ "authHeader" "Authorization header" False def{inputType = "password", placeholder = authPh, hint = Just authHelp}
+          when hasToken $ formCheckbox_ FieldMd "Clear saved token" "clearAuth" []
+          field_ "extraLabels" "Static labels" False def{placeholder = "env=prod, team=core", value = maybe "" (labelsToText . (.extraLabels)) mcfg, hint = Just "Comma-separated key=value pairs, added to every series from this target."}
       div_ [class_ "flex items-center gap-2 border-t border-strokeWeak pt-4"] do
         button_
           [ type_ "button"
@@ -753,18 +724,21 @@ promTargetModal_ pid trigger mcfg =
     labelsToText :: AE.Value -> Text
     labelsToText (AE.Object o) = T.intercalate ", " [AEK.toText k <> "=" <> v | (k, AE.String v) <- AEKM.toList o]
     labelsToText _ = ""
-    field_ :: Text -> Text -> Text -> Text -> Bool -> Maybe Text -> Text -> Html ()
-    field_ nm lbl ph ty req helpM val = label_ [class_ "flex flex-col gap-1 text-sm"] do
-      span_ [class_ "text-textWeak"] (toHtml lbl)
-      input_ $ [class_ "input input-bordered w-full", type_ ty, name_ nm, placeholder_ ph, value_ val] <> [required_ "true" | req]
-      whenJust helpM $ span_ [class_ "text-xs text-textWeak"] . toHtml
+    -- One modal per target plus the add modal share a page, so ids are scoped to the modal.
+    field_ :: Text -> Text -> Bool -> FieldCfg -> Html ()
+    field_ nm lbl req cfg = formField_ FieldSm cfg{inputId = Just (modalId <> "-" <> nm)} lbl nm req Nothing
 
 
 -- | @Nothing@ is the not-yet-tested placeholder the form renders on first paint.
 prometheusTestResult :: Maybe (Either Text (Int, Int)) -> Html ()
 prometheusTestResult res = div_ [class_ "prom-test-result text-sm"] $ whenJust res \case
-  Right (n, ms) -> span_ [class_ "cbadge-sm badge-success inline-flex items-center gap-1"] $ faSprite_ "circle-check" "solid" "w-3 h-3" >> toHtml ("Scraped " <> show n <> " samples · " <> show ms <> "ms" :: Text)
-  Left err -> span_ [class_ "cbadge-sm badge-error inline-flex items-center gap-1 max-w-full"] $ faSprite_ "circle-exclamation" "solid" "w-3 h-3 shrink-0" >> span_ [class_ "break-all"] (toHtml err)
+  Right (n, ms) -> statusBadge_ True $ toHtml ("Scraped " <> show n <> " samples · " <> show ms <> "ms" :: Text)
+  Left err -> statusBadge_ False $ span_ [class_ "break-all"] (toHtml err)
+
+
+-- | Success/error pill; the icon repeats the state so colour is never the only signal.
+statusBadge_ :: Bool -> Html () -> Html ()
+statusBadge_ ok = span_ [class_ $ "cbadge-sm inline-flex items-center gap-1 max-w-full " <> bool "badge-error" "badge-success" ok] . (faSprite_ (bool "circle-exclamation" "circle-check" ok) "solid" "w-3 h-3 shrink-0" <>)
 
 
 prometheusTargetsList :: Projects.ProjectId -> V.Vector PromCfg.PrometheusScrapeConfig -> Html ()
@@ -803,8 +777,8 @@ prometheusTargetRow pid cfg = div_ [class_ "itemsListItem flex items-center just
     -- on/off state so a target that's enabled-but-failing never shows a reassuring green.
     healthBadge_ = case T.toLower . T.strip <$> cfg.lastStatus of
       Just s
-        | "ok" `T.isPrefixOf` s -> span_ [class_ "cbadge-sm badge-success inline-flex items-center gap-1"] $ faSprite_ "circle-check" "solid" "w-3 h-3" >> "healthy"
-        | "error" `T.isPrefixOf` s -> span_ [class_ "cbadge-sm badge-error inline-flex items-center gap-1"] $ faSprite_ "circle-exclamation" "solid" "w-3 h-3" >> "failing"
+        | "ok" `T.isPrefixOf` s -> statusBadge_ True "healthy"
+        | "error" `T.isPrefixOf` s -> statusBadge_ False "failing"
       _ -> span_ [class_ "cbadge-sm badge-neutral"] "pending"
 
 
@@ -957,7 +931,7 @@ historyHtml_ :: [TestHistory] -> Html ()
 historyHtml_ [] = emptyState_ def{size = ESCompact} "No test notifications sent yet" "Test your integrations to see results here"
 historyHtml_ tests = div_ [class_ "bg-bgRaised rounded-lg border border-strokeWeak overflow-hidden"] $ table_ [class_ "table table-sm w-full"] (thead_ [class_ "text-xs text-left text-textStrong font-semibold uppercase bg-fillWeaker border-b border-strokeWeak"] (tr_ (th_ [class_ "p-3"] "Status" <> th_ [class_ "p-3"] "Channel" <> th_ [class_ "p-3"] "Alert Type" <> th_ [class_ "p-3 text-right"] "Time")) <> tbody_ [class_ "text-sm divide-y divide-strokeWeak"] (foldMap' renderRow tests))
   where
-    renderRow t = tr_ [class_ "hover-only:hover:bg-fillWeaker transition-colors"] (td_ [class_ "p-3"] (if t.status == TSSent then span_ [class_ "badge badge-success badge-sm gap-1"] (faSprite_ "check" "solid" "h-3 w-3" >> "Sent") else span_ [class_ "badge badge-error badge-sm gap-1"] (faSprite_ "xmark" "solid" "h-3 w-3" >> "Failed")) <> td_ [class_ "p-3 capitalize font-medium"] (toHtml $ if t.channel == TCAll then "All channels" else display t.channel) <> td_ [class_ "p-3 text-textWeak"] (toHtml $ T.replace "_" " " t.issueType) <> td_ [class_ "p-3 text-right tabular-nums text-textWeak"] (localTimeFmt_ "MMM dd, HH:mm" t.createdAt))
+    renderRow t = tr_ [class_ "hover-only:hover:bg-fillWeaker transition-colors"] (td_ [class_ "p-3"] (case t.status of TSSent -> statusBadge_ True "Sent"; TSSkipped -> statusBadge_ False "Failed") <> td_ [class_ "p-3 capitalize font-medium"] (toHtml $ if t.channel == TCAll then "All channels" else display t.channel) <> td_ [class_ "p-3 text-textWeak"] (toHtml $ T.replace "_" " " t.issueType) <> td_ [class_ "p-3 text-right tabular-nums text-textWeak"] (localTimeFmt_ "MMM dd, HH:mm" t.createdAt))
 
 
 ----------------------------------------------------------------------
@@ -1062,11 +1036,12 @@ verifyLemonSqueezySignature sigHeader payload secret =
     expected = BA.convert (HMAC.hmac secret payload :: HMAC.HMAC SHA256) :: ByteString
 
 
--- | Email every member of a project. Shared by the LemonSqueezy and Stripe webhooks.
-notifyMembers :: Projects.ProjectId -> (Text, Html ()) -> ATBaseCtx ()
-notifyMembers pid (subj, html) = Notify.runNotifyProduction do
-  users <- Projects.usersByProjectId pid
-  forM_ users \u -> sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
+-- | Email every member about a plan change; @mk@ is 'ET.planUpgradedEmail' or 'ET.planDowngradedEmail',
+-- @detail@ the new plan or the downgrade reason.
+notifyPlanChange :: (DB es, Notify.Notify :> es) => EnvConfig -> Projects.Project -> (Text -> Text -> Text -> (Text, Html ())) -> Text -> Eff es ()
+notifyPlanChange envCfg project mk detail = do
+  let (subj, html) = mk project.title detail (billingUrl envCfg project.id)
+  Projects.usersByProjectId project.id >>= traverse_ \u -> sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
 
 
 billingUrl :: EnvConfig -> Projects.ProjectId -> Text
@@ -1095,7 +1070,7 @@ webhookPostH sigHeaderM rawBody = do
             rows <- Projects.downgradeToFree orderId
             when (rows == 0) $ Log.logAttention "LS downgrade touched 0 rows" (show orderId :: Text, reason)
             when (rows > 1) $ Log.logAttention "LS downgrade touched multiple rows" (show orderId :: Text, rows)
-            notifyMembers project.id $ ET.planDowngradedEmail project.title reason (billingUrl envConfig project.id)
+            Notify.runNotifyProduction $ notifyPlanChange envConfig project ET.planDowngradedEmail reason
           Nothing ->
             Log.logAttention "LS downgrade: no project for order_id" (show orderId :: Text, dat.meta.eventName, reason)
         pure "downgraded"
@@ -1104,7 +1079,7 @@ webhookPostH sigHeaderM rawBody = do
         when (rows == 0) $ Log.logAttention "LS upgrade touched 0 rows" (show orderId :: Text, subItem.subscriptionId, plan)
         when (rows > 1) $ Log.logAttention "LS upgrade touched multiple rows" (show orderId :: Text, rows)
         Projects.projectBySubId (show subItem.subscriptionId) >>= \case
-          Just project -> notifyMembers project.id $ ET.planUpgradedEmail project.title plan (billingUrl envConfig project.id)
+          Just project -> Notify.runNotifyProduction $ notifyPlanChange envConfig project ET.planUpgradedEmail plan
           Nothing -> Log.logAttention "LS upgrade: no project for sub_id" (show orderId :: Text, subItem.subscriptionId, plan)
         pure "upgraded"
   case parseUrlPiece dat.meta.eventName of
@@ -1129,7 +1104,7 @@ webhookPostH sigHeaderM rawBody = do
       whenJust (Projects.projectIdFromText projectId) \pid -> do
         void $ Projects.updateProjectBilling pid (Projects.PlanName plan) (Projects.SubId $ show subItem.subscriptionId) (Projects.SubItemId $ show subItem.id) (Projects.OrderId $ show orderId)
         whenJustM (Projects.projectById pid) \project ->
-          notifyMembers pid $ ET.planUpgradedEmail project.title plan (billingUrl envConfig pid)
+          Notify.runNotifyProduction $ notifyPlanChange envConfig project ET.planUpgradedEmail plan
       pure "subscription created"
     Right LSSubscriptionCancelled -> downgrade "was cancelled"
     Right LSSubscriptionExpired -> downgrade "has expired"
@@ -1137,7 +1112,7 @@ webhookPostH sigHeaderM rawBody = do
     -- subscription_expired/_cancelled will downgrade if retries ultimately fail.
     Right LSSubscriptionPaymentFailed -> do
       whenJustM (Projects.projectByOrderId (show orderId)) \project ->
-        notifyMembers project.id $ ET.planDowngradedEmail project.title "payment failed" (billingUrl envConfig project.id)
+        Notify.runNotifyProduction $ notifyPlanChange envConfig project ET.planDowngradedEmail "payment failed"
       Log.logAttention "LS subscription_payment_failed (no downgrade)" (show orderId :: Text, subItem.subscriptionId)
       pure "payment failed notified"
     Right LSSubscriptionPaused -> downgrade "was paused"
@@ -1239,22 +1214,15 @@ manageBillingGetH pid = do
       -- computed over a window Stripe never billed is a number the customer's
       -- invoice will never match. Otherwise pair each locally-derived cycle's
       -- start with the next-newer boundary (pastBoundaries is newest-first).
-      pastCycles = case stripeM of
-        Just _ ->
-          [ BillingCycle{start, end, requests, bytes, aiCostMicrousd = pastAICost, invoice = Just inv}
-          | inv <- billed
-          , let start = epochDay inv.periodStart
-                end = epochDay inv.periodEnd
-                (requests, bytes, pastAICost, _) = usageIn start end
-          ]
-        Nothing ->
-          [ BillingCycle{start, end, requests, bytes, aiCostMicrousd = pastAICost, invoice = Nothing}
-          | (cEnd, cStart) <- zip pastBoundaries (drop 1 pastBoundaries)
-          , let start = utctDay cStart
-                end = utctDay cEnd
-                (requests, bytes, pastAICost, hasRows) = usageIn start end
-          , hasRows
-          ]
+      windows = case stripeM of
+        Just _ -> [(epochDay inv.periodStart, epochDay inv.periodEnd, Just inv) | inv <- billed]
+        Nothing -> [(utctDay cStart, utctDay cEnd, Nothing) | (cEnd, cStart) <- zip pastBoundaries (drop 1 pastBoundaries)]
+      pastCycles =
+        [ BillingCycle{start, end, requests, bytes, aiCostMicrousd = pastAICost, invoice}
+        | (start, end, invoice) <- windows
+        , let (requests, bytes, pastAICost, hasRows) = usageIn start end
+        , hasRows || isJust invoice
+        ]
       currentInvoice = find (\i -> i.status /= "void" && epochDay i.periodEnd > utctDay cycleStart) $ foldMap (.invoices) stripeM
       cycleRows = filter ((>= utctDay cycleStart) . (.day)) allDaily
       aiInputTokens = sum $ map (.aiInputTokens) cycleRows
@@ -1311,7 +1279,6 @@ billingPage d = div_ [] do
           | isFree -> 0
           | Projects.isByosPlan d.paymentPlan -> 199
           | otherwise -> 29 :: Int64
-      planPrice = show basePriceNum
       overageNum = overageReqs reqs
       overageCost = fromIntegral overageNum / 1_000_000 :: Double
       aiCost = fromIntegral d.aiCostMicrousd / 1_000_000 :: Double
@@ -1329,9 +1296,9 @@ billingPage d = div_ [] do
     headerRow_ [] do
       div_ [class_ "flex items-center gap-3"] do
         span_ [class_ "text-sm font-medium text-textStrong"] $ toHtml d.paymentPlan
-        span_ [class_ "rounded-md text-textWeak bg-fillWeak border border-strokeWeak py-0.5 px-2 text-xs"] "Active"
+        tonePill_ NeutralBadge "Active"
       div_ [class_ "flex items-baseline gap-0.5"] do
-        span_ [class_ "text-2xl text-textStrong font-bold tabular-nums"] $ toHtml $ "$" <> planPrice
+        span_ [class_ "text-2xl text-textStrong font-bold tabular-nums"] $ toHtml $ "$" <> show @Text basePriceNum
         span_ [class_ "text-textWeak text-sm"] "/mo"
 
     -- Usage section
@@ -1419,23 +1386,12 @@ dailyUsageBreakdown_ isFree cycleStartDay inputRate outputRate rows = div_ [clas
           cycleStartText = fmtDate "%b %-d" cycleStartDay
           maxDay = foldr (max . (.requests)) 1 rows
           hasMetrics = any ((> 0) . (.metrics)) rows
-          ascending = sortWith (.day) rows
           -- Newest first, each row paired with the cumulative requests before/after it.
           -- The cumulative resets at cycleStartDay so pre-cycle context rows can't
           -- inflate the included-tier counter and skew "Est. cost".
-          withRunning =
-            fst
-              $ foldl'
-                ( \(xs, acc) u ->
-                    let acc' = bool acc 0 (u.day < cycleStartDay) + u.requests
-                     in ((u, acc' - u.requests, acc') : xs, acc')
-                )
-                ([], 0 :: Int64)
-                ascending
+          withRunning = reverse $ snd $ mapAccumL (\acc u -> let acc' = bool acc 0 (u.day < cycleStartDay) + u.requests in (acc', (u, acc' - u.requests, acc'))) (0 :: Int64) (sortWith (.day) rows)
       unless hasMetrics
-        $ div_ [class_ "flex items-center gap-2 text-xs text-textWeak bg-fillWeak/40 border border-strokeWeak rounded-md px-3 py-2"] do
-          span_ [class_ "text-textStrong"] "No metric ingestion this cycle."
-          span_ [] "Only logs and traces have been ingested."
+        $ callout_ NeutralBadge (Just "No metric ingestion this cycle.") "Only logs and traces have been ingested."
       div_ [class_ "border border-strokeWeak rounded-md overflow-hidden max-h-96 overflow-y-auto"] do
         table_ [class_ "w-full text-sm tabular-nums border-separate border-spacing-0"] do
           -- `border-separate` keeps the header's border-bottom from being clipped
@@ -1479,10 +1435,10 @@ dailyUsageBreakdown_ isFree cycleStartDay inputRate outputRate rows = div_ [clas
           -- everything. Mirrors the graduated Stripe prices exactly.
             toHtml
               $ "Cycle started "
-              <> cycleStartText
-              <> ". First 20M requests are included in the $29 plan price. Overage is $1 per 1M requests. "
-              <> "Also included: 20M metric datapoints (then $1 per 10M) and 2,000 session replays (then $1 per 1,000)."
-              <> aiRateCopy
+                <> cycleStartText
+                <> ". First 20M requests are included in the $29 plan price. Overage is $1 per 1M requests. "
+                <> "Also included: 20M metric datapoints (then $1 per 10M) and 2,000 session replays (then $1 per 1,000)."
+                <> aiRateCopy
   where
     aiRateCopy
       | aiPriceMicrousd inputRate == 0 && aiPriceMicrousd outputRate == 0 = " AI usage is tracked and currently included at no extra charge."
@@ -1537,24 +1493,6 @@ pastCyclesSection_ isFree basePrice cycles = div_ [class_ "border-t border-strok
 ----------------------------------------------------------------------
 -- Stripe
 ----------------------------------------------------------------------
-
-verifyStripeSignature :: UTCTime -> Text -> ByteString -> ByteString -> Bool
-verifyStripeSignature now sigHeader payload secret =
-  case (parseTimestamp sigHeader, parseSignatures sigHeader) of
-    (Just ts, sigs)
-      | not (null sigs)
-      , Just epoch <- readMaybe @Integer (decodeUtf8 ts)
-      , abs (round (utcTimeToPOSIXSeconds now) - epoch) <= (300 :: Integer) ->
-          let signedPayload = ts <> "." <> payload
-              expected = BA.convert (HMAC.hmac secret signedPayload :: HMAC.HMAC SHA256) :: ByteString
-           in any (BA.constEq expected) (mapMaybe decodeHexSig sigs)
-    _ -> False
-  where
-    parts = T.splitOn ","
-    parseTimestamp h = listToMaybe [encodeUtf8 v | p <- parts h, Just v <- [T.stripPrefix "t=" p]]
-    parseSignatures h = [v | p <- parts h, Just v <- [T.stripPrefix "v1=" p]]
-    decodeHexSig = rightToMaybe . B16.decode . encodeUtf8
-
 
 stripeOpts :: Text -> Wreq.Options
 stripeOpts apiKey =
@@ -1652,7 +1590,7 @@ stripeWebhookPostH sigHeaderM rawBody = do
       Log.logAttention "Stripe webhook missing signature header" ()
       throwError err400{errBody = "missing signature"}
     Just sigHeader
-      | not (verifyStripeSignature now sigHeader rawBody (encodeUtf8 envConfig.stripeWebhookSecret)) -> do
+      | not (verifyStripeSignature now sigHeader (encodeUtf8 envConfig.stripeWebhookSecret)) -> do
           Log.logAttention "Stripe webhook invalid signature" ()
           throwError err400{errBody = "invalid signature"}
     Just _ -> case AE.eitherDecodeStrict rawBody of
@@ -1675,6 +1613,16 @@ stripeWebhookPostH sigHeaderM rawBody = do
           Nothing -> do
             Log.logInfo "Stripe webhook unhandled event" (eventType, isJust sessionObj)
             pure ""
+  where
+    -- @t=<epoch>,v1=<hex hmac>[,v1=…]@ over @"<t>.<body>"@, accepted within 5 minutes.
+    verifyStripeSignature :: UTCTime -> Text -> ByteString -> Bool
+    verifyStripeSignature now sigHeader secret = fromMaybe False do
+      let parts = T.splitOn "," sigHeader
+      ts <- listToMaybe $ mapMaybe (T.stripPrefix "t=") parts
+      epoch <- readMaybe @Integer (toString ts)
+      guard $ abs (round (utcTimeToPOSIXSeconds now) - epoch) <= 300
+      let expected = BA.convert (HMAC.hmac secret (encodeUtf8 ts <> "." <> rawBody) :: HMAC.HMAC SHA256) :: ByteString
+      pure $ any (BA.constEq expected) [sig | Right sig <- B16.decode . encodeUtf8 <$> mapMaybe (T.stripPrefix "v1=") parts]
 
 
 handleStripeCheckout :: EnvConfig -> AE.Value -> ATBaseCtx (Html ())
@@ -1707,7 +1655,7 @@ handleStripeCheckout envConfig obj = do
             Just BJ.StripeSubDetails{status = "trialing"} -> Log.logAttention "Stripe sub trialing but trial_end missing; no reminders scheduled" (pid.toText, subId)
             _ -> pass
           whenJust projectM \project ->
-            notifyMembers pid $ ET.planUpgradedEmail project.title plan (billingUrl envConfig pid)
+            Notify.runNotifyProduction $ notifyPlanChange envConfig project ET.planUpgradedEmail plan
           pure "checkout processed"
     _ -> do
       Log.logAttention "Stripe checkout missing project/sub/customer" (pidM, subIdM, customerIdM)
@@ -1724,7 +1672,7 @@ handleStripeDowngrade envConfig event reason obj =
       when (rows == 0) $ Log.logAttention ("Stripe " <> event <> ": no project for sub_id") subId
       when (rows > 1) $ Log.logAttention ("Stripe " <> event <> " touched multiple rows") (subId, rows)
       whenJustM (Projects.projectBySubId subId) \project ->
-        notifyMembers project.id $ ET.planDowngradedEmail project.title reason (billingUrl envConfig project.id)
+        Notify.runNotifyProduction $ notifyPlanChange envConfig project ET.planDowngradedEmail reason
       pure $ toHtml $ T.replace "." " " event
     Nothing -> do
       Log.logAttention ("Stripe " <> event <> ": missing sub id") ()
@@ -1751,7 +1699,7 @@ handleStripePaymentFailed envConfig obj = do
   whenJust (jsonField "customer" obj :: Maybe Text) \customerId ->
     whenJustM (Projects.projectByCustomerId customerId) \project -> do
       Log.logAttention "Stripe invoice.payment_failed" (project.id, attemptCount, nextAttempt)
-      notifyMembers project.id $ ET.planDowngradedEmail project.title "payment failed" (billingUrl envConfig project.id)
+      Notify.runNotifyProduction $ notifyPlanChange envConfig project ET.planDowngradedEmail "payment failed"
   pure "payment failed handled"
 
 
@@ -1773,7 +1721,7 @@ handleStripeSubResumed envConfig obj =
           when (rows > 1) $ Log.logAttention "Stripe subscription.resumed touched multiple rows" (subId, rows)
           when (rows > 0)
             $ whenJustM (Projects.projectBySubId subId) \project ->
-              notifyMembers project.id $ ET.planUpgradedEmail project.title plan (billingUrl envConfig project.id)
+              Notify.runNotifyProduction $ notifyPlanChange envConfig project ET.planUpgradedEmail plan
           pure "subscription resumed"
         Nothing -> do
           Log.logAttention "Stripe subscription.resumed: could not fetch sub items" subId

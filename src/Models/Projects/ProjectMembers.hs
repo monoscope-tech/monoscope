@@ -97,6 +97,7 @@ data Permissions
   deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC ('Just "projects.project_permissions") "P" Permissions
 
 
+-- Hand-written: hasql's 'Row' has a nominal role, so DecodeRow cannot be derived via a wrapper.
 instance HI.DecodeRow Permissions where
   decodeRow = HI.getOneColumn <$> HI.decodeRow
 

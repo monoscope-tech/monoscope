@@ -1,13 +1,15 @@
 module Models.Apis.PatternMerge (
+  -- Operations shared by error and log patterns
+  MergeKey (..),
+  getUnembeddedPatterns,
+  getCanonicalPatterns,
+  updatePatternEmbeddings,
+  assignPatternsToCanonical,
+  unmergePattern,
+  getPatternGroupMembers,
+  fetchPatternTexts,
   -- Error pattern operations
-  getUnembeddedErrorPatterns,
-  getCanonicalErrorPatterns,
-  updateErrorEmbeddings,
-  assignErrorsToCanonical,
-  unmergeErrorPattern,
   mergeErrorPatterns,
-  getErrorPatternGroupMembers,
-  fetchErrorTexts,
   setCanonicalId,
   -- Shape-keyed review loop
   ErrorGroupReview (..),
@@ -29,13 +31,6 @@ module Models.Apis.PatternMerge (
   rekeyErrorReviewShape,
   setReviewCursor,
   -- Log pattern operations
-  getUnembeddedLogPatterns,
-  getCanonicalLogPatterns,
-  updateLogEmbeddings,
-  assignLogsToCanonical,
-  getLogPatternGroupMembers,
-  unmergeLogPattern,
-  fetchLogTexts,
   fetchLogSamples,
 )
 where
@@ -47,6 +42,7 @@ import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime)
 import Data.Vector qualified as V
 import Data.Vector.Unboxed qualified as VU
+import Database.PostgreSQL.Entity.Types (Entity)
 import Effectful (Eff, (:>))
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
@@ -55,27 +51,49 @@ import Models.Apis.LogPatterns (LogPattern, LogPatternId)
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (selectFrom, showPGFloatArray)
 import Pkg.ErrorFingerprint qualified as EF
-import Pkg.PatternMerge (embeddingTextForError)
 import PostgreSQL.Binary.Decoding qualified as PB
 import Relude
 import System.Types (DB)
 
 
-getUnembeddedErrorPatterns :: DB es => Projects.ProjectId -> Eff es [(ErrorPatternId, Text, Text)]
-getUnembeddedErrorPatterns pid =
+-- | The error and log pattern tables share every merge column. An instance supplies only
+-- what differs: table, key type, row type, the text a row embeds as, and its recency column.
+class (Entity (PatternRow k), HI.DecodeField k, HI.DecodeRow (PatternRow k), HI.EncodeField k, HI.EncodeValue k) => MergeKey k where
+  type PatternRow k
+  patternTable, keyArray, embedText, recency :: HI.Sql
+
+
+instance MergeKey ErrorPatternId where
+  type PatternRow ErrorPatternId = ErrorPattern
+  patternTable = "apis.error_patterns"
+  keyArray = "uuid[]"
+  embedText = "CASE WHEN error_type = '' THEN message ELSE error_type || ': ' || message END"
+  recency = "updated_at"
+
+
+instance MergeKey LogPatternId where
+  type PatternRow LogPatternId = LogPattern
+  patternTable = "apis.log_patterns"
+  keyArray = "bigint[]"
+  embedText = "log_pattern"
+  recency = "last_seen_at"
+
+
+getUnembeddedPatterns :: forall k es. (DB es, MergeKey k) => Projects.ProjectId -> Eff es [(k, Text)]
+getUnembeddedPatterns pid =
   Hasql.interp
-    [HI.sql| SELECT id, error_type, message FROM apis.error_patterns
+    [HI.sql| SELECT id, ^{embedText @k} FROM ^{patternTable @k}
         WHERE project_id = #{pid} AND embedding IS NULL AND merge_override = FALSE
-        LIMIT 500 |]
+        ORDER BY id LIMIT 500 |]
 
 
-updateErrorEmbeddings :: DB es => [(ErrorPatternId, [Float])] -> Eff es Int64
-updateErrorEmbeddings [] = pure 0
-updateErrorEmbeddings pairs =
+updatePatternEmbeddings :: forall k es. (DB es, MergeKey k) => [(k, [Float])] -> Eff es Int64
+updatePatternEmbeddings [] = pure 0
+updatePatternEmbeddings pairs =
   Hasql.interpExecute
-    [HI.sql| UPDATE apis.error_patterns SET embedding = u.emb::float4[], embedding_at = NOW()
-        FROM ROWS FROM (unnest(#{ids}::uuid[]), unnest(#{embs}::text[])) AS u(id, emb)
-        WHERE apis.error_patterns.id = u.id |]
+    [HI.sql| UPDATE ^{patternTable @k} p SET embedding = u.emb::float4[], embedding_at = NOW()
+        FROM ROWS FROM (unnest(#{ids}::^{keyArray @k}), unnest(#{embs}::text[])) AS u(id, emb)
+        WHERE p.id = u.id |]
   where
     (ids, embs) = second (map showPGFloatArray) $ unzip pairs
 
@@ -93,24 +111,24 @@ decodeEmbedding bytes = do
     else first InvalidEmbedding $ PB.valueParser (PB.array $ PB.dimensionArray VU.replicateM $ PB.valueArray PB.float4) bytes
 
 
-getCanonicalErrorPatterns :: DB es => Projects.ProjectId -> Eff es [(ErrorPatternId, VU.Vector Float)]
-getCanonicalErrorPatterns pid =
+getCanonicalPatterns :: forall k es. (DB es, MergeKey k) => Projects.ProjectId -> Eff es [(k, VU.Vector Float)]
+getCanonicalPatterns pid =
   Hasql.interp
-    [HI.sql| SELECT id, array_send(embedding) FROM apis.error_patterns
+    [HI.sql| SELECT id, array_send(embedding) FROM ^{patternTable @k}
         WHERE project_id = #{pid} AND canonical_id IS NULL
           AND embedding IS NOT NULL AND merge_override = FALSE
         LIMIT 10000 |]
     >>= traverse (traverse $ either CE.throwM pure . decodeEmbedding)
 
 
-assignErrorsToCanonical :: DB es => [(ErrorPatternId, ErrorPatternId)] -> Eff es Int64
-assignErrorsToCanonical [] = pure 0
-assignErrorsToCanonical pairs = do
+assignPatternsToCanonical :: forall k es. (DB es, MergeKey k) => [(k, k)] -> Eff es Int64
+assignPatternsToCanonical [] = pure 0
+assignPatternsToCanonical pairs = do
   let (pids, cids) = unzip pairs
   Hasql.interpExecute
-    [HI.sql| UPDATE apis.error_patterns SET canonical_id = u.canonical
-        FROM (SELECT unnest(#{pids}::uuid[]) AS id, unnest(#{cids}::uuid[]) AS canonical) u
-        WHERE apis.error_patterns.id = u.id |]
+    [HI.sql| UPDATE ^{patternTable @k} p SET canonical_id = u.canonical
+        FROM (SELECT unnest(#{pids}::^{keyArray @k}) AS id, unnest(#{cids}::^{keyArray @k}) AS canonical) u
+        WHERE p.id = u.id |]
 
 
 setCanonicalId :: DB es => ErrorPatternId -> ErrorPatternId -> Eff es Int64
@@ -118,104 +136,34 @@ setCanonicalId patternId canonicalId =
   Hasql.interpExecute [HI.sql| UPDATE apis.error_patterns SET canonical_id = #{canonicalId} WHERE id = #{patternId} AND merge_override = FALSE |]
 
 
--- | Detach an error pattern from its canonical group.
+-- | Detach a pattern from its canonical group.
 --
 -- Scoped by project: keyed on @id@ alone, a caller authorised on one project could
--- unmerge another project's pattern and corrupt its error grouping. The web route
--- (@errorUnmergePostH@) did exactly that, unlike its sibling handlers which each
--- guard with @err.projectId /= pid@. Scoping here covers every caller.
---
--- NB the parameter was named @pid@ for the *pattern* id, which is what a project id
--- is called everywhere else in this codebase — renamed to @epid@ to remove the trap.
-unmergeErrorPattern :: DB es => Projects.ProjectId -> ErrorPatternId -> Eff es Int64
-unmergeErrorPattern pid epid =
-  Hasql.interpExecute [HI.sql| UPDATE apis.error_patterns SET merge_override = TRUE, canonical_id = NULL WHERE id = #{epid} AND project_id = #{pid} |]
+-- unmerge another project's pattern and corrupt its grouping.
+unmergePattern :: forall k es. (DB es, MergeKey k) => Projects.ProjectId -> k -> Eff es Int64
+unmergePattern pid patId =
+  Hasql.interpExecute [HI.sql| UPDATE ^{patternTable @k} SET merge_override = TRUE, canonical_id = NULL WHERE id = #{patId} AND project_id = #{pid} |]
 
 
--- | A person's merge, the inverse of 'unmergeErrorPattern': @merge_override@ keeps the model from undoing it.
+-- | A person's merge, the inverse of 'unmergePattern': @merge_override@ keeps the model from undoing it.
 mergeErrorPatterns :: DB es => Projects.ProjectId -> ErrorPatternId -> [ErrorPatternId] -> Eff es Int64
 mergeErrorPatterns pid canonical members =
   Hasql.interpExecute [HI.sql| UPDATE apis.error_patterns SET canonical_id = #{canonical}, merge_override = TRUE WHERE project_id = #{pid} AND id = ANY(#{members}::uuid[]) |]
 
 
--- | Members of an error pattern's merge group.
+-- | Members of a pattern's merge group.
 --
 -- Scoped by project: keyed on @canonical_id@ alone this disclosed another project's
--- error types and messages to any caller who knew (or guessed) a canonical id, and the
--- rendering handler built unmerge links for them under the *caller's* project path.
--- Scoping here covers every caller, not just the one that had the bug.
-getErrorPatternGroupMembers :: DB es => Projects.ProjectId -> ErrorPatternId -> Eff es [ErrorPattern]
-getErrorPatternGroupMembers pid eid =
-  Hasql.interp (selectFrom @ErrorPattern <> [HI.sql| WHERE canonical_id = #{eid} AND project_id = #{pid} ORDER BY updated_at DESC |])
+-- patterns to any caller who knew (or guessed) a canonical id.
+getPatternGroupMembers :: forall k es. (DB es, MergeKey k) => Projects.ProjectId -> k -> Eff es [PatternRow k]
+getPatternGroupMembers pid cid =
+  Hasql.interp (selectFrom @(PatternRow k) <> [HI.sql| WHERE canonical_id = #{cid} AND project_id = #{pid} ORDER BY ^{recency @k} DESC |])
 
 
-fetchErrorTexts :: DB es => [ErrorPatternId] -> Eff es (Map ErrorPatternId Text)
-fetchErrorTexts [] = pure mempty
-fetchErrorTexts ids =
-  Map.fromList
-    . map (\(eid, et, msg) -> (eid, embeddingTextForError et msg))
-    <$> Hasql.interp [HI.sql| SELECT id, error_type, message FROM apis.error_patterns WHERE id = ANY(#{ids}) |]
-
-
-getUnembeddedLogPatterns :: DB es => Projects.ProjectId -> Eff es [(LogPatternId, Text)]
-getUnembeddedLogPatterns pid =
-  Hasql.interp
-    [HI.sql| SELECT id, log_pattern FROM apis.log_patterns
-        WHERE project_id = #{pid} AND embedding IS NULL AND merge_override = FALSE
-        ORDER BY id LIMIT 500 |]
-
-
-updateLogEmbeddings :: DB es => [(LogPatternId, [Float])] -> Eff es Int64
-updateLogEmbeddings [] = pure 0
-updateLogEmbeddings pairs =
-  Hasql.interpExecute
-    [HI.sql| UPDATE apis.log_patterns SET embedding = u.emb::float4[], embedding_at = NOW()
-        FROM ROWS FROM (unnest(#{ids}::bigint[]), unnest(#{embs}::text[])) AS u(id, emb)
-        WHERE apis.log_patterns.id = u.id |]
-  where
-    (ids, embs) = second (map showPGFloatArray) $ unzip pairs
-
-
-getCanonicalLogPatterns :: DB es => Projects.ProjectId -> Eff es [(LogPatternId, VU.Vector Float)]
-getCanonicalLogPatterns pid =
-  Hasql.interp
-    [HI.sql| SELECT id, array_send(embedding) FROM apis.log_patterns
-        WHERE project_id = #{pid} AND canonical_id IS NULL
-          AND embedding IS NOT NULL AND merge_override = FALSE
-        LIMIT 10000 |]
-    >>= traverse (traverse $ either CE.throwM pure . decodeEmbedding)
-
-
-assignLogsToCanonical :: DB es => [(LogPatternId, LogPatternId)] -> Eff es Int64
-assignLogsToCanonical [] = pure 0
-assignLogsToCanonical pairs = do
-  let (pids, cids) = unzip pairs
-  Hasql.interpExecute
-    [HI.sql| UPDATE apis.log_patterns SET canonical_id = u.canonical
-        FROM (SELECT unnest(#{pids}::bigint[]) AS id, unnest(#{cids}::bigint[]) AS canonical) u
-        WHERE apis.log_patterns.id = u.id |]
-
-
--- | Members of a log pattern's merge group. Scoped by project for the same reason as
--- 'getErrorPatternGroupMembers': keyed on @canonical_id@ alone it would disclose another
--- project's log patterns to anyone who knew a canonical id. No production caller today
--- (only 'LogPatternsSpec' asserts on it), so scoping it now means the first production
--- use is safe by construction rather than repeating the error-pattern bug.
-getLogPatternGroupMembers :: DB es => Projects.ProjectId -> LogPatternId -> Eff es [LogPattern]
-getLogPatternGroupMembers pid lid =
-  Hasql.interp (selectFrom @LogPattern <> [HI.sql| WHERE canonical_id = #{lid} AND project_id = #{pid} ORDER BY last_seen_at DESC |])
-
-
-unmergeLogPattern :: DB es => LogPatternId -> Eff es Int64
-unmergeLogPattern lid =
-  Hasql.interpExecute [HI.sql| UPDATE apis.log_patterns SET merge_override = TRUE, canonical_id = NULL WHERE id = #{lid} |]
-
-
-fetchLogTexts :: DB es => [LogPatternId] -> Eff es (Map LogPatternId Text)
-fetchLogTexts [] = pure mempty
-fetchLogTexts ids =
-  Map.fromList
-    <$> Hasql.interp [HI.sql| SELECT id, log_pattern FROM apis.log_patterns WHERE id = ANY(#{ids}) |]
+fetchPatternTexts :: forall k es. (DB es, MergeKey k, Ord k) => [k] -> Eff es (Map k Text)
+fetchPatternTexts [] = pure mempty
+fetchPatternTexts ids =
+  Map.fromList <$> Hasql.interp [HI.sql| SELECT id, ^{embedText @k} FROM ^{patternTable @k} WHERE id = ANY(#{ids}) |]
 
 
 fetchLogSamples :: DB es => [LogPatternId] -> Eff es (Map LogPatternId Text)

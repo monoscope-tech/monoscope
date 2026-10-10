@@ -32,6 +32,7 @@ module Models.Apis.Issues (
 
   -- * Issue Data Types
   APIChangeData (..),
+  apiChangeDataFrom,
   RuntimeExceptionData (..),
   QueryAlertData (..),
   ThresholdDirection (..),
@@ -237,8 +238,9 @@ import Models.Apis.ApiChanges qualified as ApiChanges
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.LogPatterns (RateChangeDirection (..))
 import Models.Apis.LogPatterns qualified as LogPatterns
+import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), decodeEnumSC, rawSql, selectFrom)
+import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), enumLit, rawSql, selectFrom)
 import Pkg.Parser (ScopedQuery (..))
 import Relude hiding (id)
 import Servant (FromHttpApiData (..), ServerError, err500, errBody)
@@ -374,9 +376,9 @@ data PerformanceData = PerformanceData
 -- | Hash prefix used in otel_logs_and_spans hashes column
 hashPrefix :: IssueType -> Maybe Text
 hashPrefix = \case
-  LogPattern -> Just "pat:"
-  LogPatternRateChange -> Just "pat:"
-  RuntimeException -> Just "err:"
+  LogPattern -> Just LogQueries.patHashPrefix
+  LogPatternRateChange -> Just LogQueries.patHashPrefix
+  RuntimeException -> Just LogQueries.errHashPrefix
   ApiChange -> Just "" -- endpoint hash is stored unprefixed on span hashes
   QueryAlert -> Nothing
   Performance -> Nothing -- detected over span shapes; spans carry no issue hash
@@ -829,7 +831,7 @@ selectIssues pid projection f = do
       lastSeenAt pfx =
         let col = rawSql pfx
          in [HI.sql| COALESCE(
-               CASE WHEN ^{col}issue_type = 'runtime_exception' THEN GREATEST(
+               CASE WHEN ^{col}issue_type = ^{enumLit RuntimeException} THEN GREATEST(
                  (SELECT MAX(GREATEST(ep.last_event_at, ep.recent_trace_at))
                   FROM apis.error_patterns ep
                   WHERE ep.project_id = ^{col}project_id
@@ -874,14 +876,14 @@ selectIssues pid projection f = do
           NULL::timestamp with time zone, NULL::bigint,
           i.target_hash, i.environment, i.seq_num::bigint, i.parent_hash, i.is_framework, i.cooldown_until, i.last_notified_at, i.acknowledged_until, i.assignee_id, i.archived_until, i.archive_until_escalating,
           CASE
-            WHEN i.issue_type = 'runtime_exception' THEN COALESCE(err_ev.cnt, 0)
-            WHEN i.issue_type IN ('log_pattern', 'log_pattern_rate_change') THEN COALESCE(lp_ev.cnt, 0)
+            WHEN i.issue_type = ^{enumLit RuntimeException} THEN COALESCE(err_ev.cnt, 0)
+            WHEN i.issue_type IN (^{enumLit LogPattern}, ^{enumLit LogPatternRateChange}) THEN COALESCE(lp_ev.cnt, 0)
             ELSE i.affected_requests
           END::bigint AS event_count,
           ^{lastSeenAt "i."}, lat.event,
           CASE
-            WHEN i.issue_type = 'runtime_exception' THEN COALESCE(err_ev.buckets, '{}'::bigint[])
-            WHEN i.issue_type IN ('log_pattern', 'log_pattern_rate_change') THEN COALESCE(lp_ev.buckets, '{}'::bigint[])
+            WHEN i.issue_type = ^{enumLit RuntimeException} THEN COALESCE(err_ev.buckets, '{}'::bigint[])
+            WHEN i.issue_type IN (^{enumLit LogPattern}, ^{enumLit LogPatternRateChange}) THEN COALESCE(lp_ev.buckets, '{}'::bigint[])
             ELSE '{}'::bigint[]
           END,
           COALESCE((SELECT ep.users_count FROM apis.error_patterns ep WHERE ep.project_id = i.project_id AND ep.hash = i.target_hash), 0)::bigint AS users_count
@@ -898,7 +900,7 @@ selectIssues pid projection f = do
             ) ON ehs.hour_bucket >= d AND ehs.hour_bucket < d + ^{stepSql}
             GROUP BY d
           ) sub
-        ) err_ev ON i.issue_type = 'runtime_exception'
+        ) err_ev ON i.issue_type = ^{enumLit RuntimeException}
         LEFT JOIN LATERAL (
           SELECT SUM(day_cnt)::bigint AS cnt, array_agg(day_cnt ORDER BY day) AS buckets FROM (
             SELECT d AS day, COALESCE(SUM(lhs.event_count), 0)::bigint AS day_cnt
@@ -908,7 +910,7 @@ selectIssues pid projection f = do
               AND lhs.hour_bucket >= d AND lhs.hour_bucket < d + ^{stepSql}
             GROUP BY d
           ) sub
-        ) lp_ev ON i.issue_type IN ('log_pattern', 'log_pattern_rate_change')
+        ) lp_ev ON i.issue_type IN (^{enumLit LogPattern}, ^{enumLit LogPatternRateChange})
         LEFT JOIN LATERAL (
           SELECT a.event FROM apis.issue_activity_log a
           WHERE a.issue_id = i.id AND a.event IN ('resolved', 'auto_resolved', 'reopened', 'regressed', 'escalated', 'ack_expired')
@@ -1244,7 +1246,7 @@ expireArchives now = liftArchives [HI.sql| i.archived_until <= #{now} |]
 
 -- | Runtime-exception issues archived "until escalating" for an error that just escalated.
 wakeOnEscalation :: DB es => Projects.ProjectId -> Text -> Eff es [IssueId]
-wakeOnEscalation pid errHash = liftArchives [HI.sql| i.archive_until_escalating AND i.project_id = #{pid} AND i.target_hash = #{errHash} AND i.issue_type = 'runtime_exception' |]
+wakeOnEscalation pid errHash = liftArchives [HI.sql| i.archive_until_escalating AND i.project_id = #{pid} AND i.target_hash = #{errHash} AND i.issue_type = ^{enumLit RuntimeException} |]
 
 
 -- | A saved issue-list view: a name for a query string of list parameters.
@@ -1296,22 +1298,29 @@ autoArchiveStaleDiscoveryIssues pid now days =
         AND updated_at < #{now} - (INTERVAL '1 day' * #{days}) |]
 
 
+-- | The issue payload for one endpoint's anomaly group; endpoint metadata comes from the
+-- first anomaly since all rows in a group join the same endpoint. Shape\/field\/format
+-- detail stays empty: the anomaly writer never records it.
+apiChangeDataFrom :: NonEmpty ApiChanges.AnomalyVM -> APIChangeData
+apiChangeDataFrom anomalies@(a :| _) =
+  APIChangeData
+    { endpointMethod = fromMaybe "UNKNOWN" a.endpointMethod
+    , endpointPath = fromMaybe "/" a.endpointUrlPath
+    , endpointHost = fromMaybe "Unknown" a.endpointHost
+    , anomalyHashes = V.fromList $ toList $ fmap (.targetHash) anomalies
+    , shapeChanges = V.empty
+    , formatChanges = V.empty
+    , newFields = V.empty
+    , deletedFields = V.empty
+    , modifiedFields = V.empty
+    }
+
+
 -- | Create API Change issue from anomalies
 createAPIChangeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Text -> NonEmpty ApiChanges.AnomalyVM -> Eff es Issue
 createAPIChangeIssue projectId endpointHash anomalies = do
   let firstAnomaly = head anomalies
-      apiChangeData =
-        APIChangeData
-          { endpointMethod = fromMaybe "UNKNOWN" firstAnomaly.endpointMethod
-          , endpointPath = fromMaybe "/" firstAnomaly.endpointUrlPath
-          , endpointHost = fromMaybe "Unknown" firstAnomaly.endpointHost
-          , anomalyHashes = V.fromList $ toList $ fmap (.targetHash) anomalies
-          , shapeChanges = V.empty
-          , formatChanges = V.empty
-          , newFields = foldMap (.shapeNewUniqueFields) anomalies
-          , deletedFields = foldMap (.shapeDeletedFields) anomalies
-          , modifiedFields = foldMap (.shapeUpdatedFieldFormats) anomalies
-          }
+      apiChangeData = apiChangeDataFrom anomalies
       breakingChanges = V.length apiChangeData.deletedFields + V.length apiChangeData.modifiedFields
       isCritical = breakingChanges > 0
   mkIssue
@@ -2313,7 +2322,7 @@ data IssueEvent
 data EpisodeKind = EKAlert | EKObservation | EKReminder | EKDataUnavailable | EKRecovered | EKResolved
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "EK" EpisodeKind
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "EK" EpisodeKind
 
 
 -- | One thing that happened to an issue: a lifecycle transition someone (or the
@@ -2338,7 +2347,7 @@ data ActivityEvent = Lifecycle IssueEvent | Episode EpisodeKind
 -- (Nothing,Nothing)
 parseActivityEvent :: Text -> Maybe ActivityEvent
 parseActivityEvent raw = case T.stripPrefix "episode:" raw of
-  Just kind -> Episode <$> decodeEnumSC @"EK" (toString kind)
+  Just kind -> Episode <$> rightToMaybe (parseUrlPiece kind)
   Nothing -> Lifecycle <$> rightToMaybe (parseUrlPiece raw)
 
 

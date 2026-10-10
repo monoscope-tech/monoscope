@@ -1,6 +1,7 @@
 module Models.Apis.Endpoints (
   Endpoint (..),
   EndpointId,
+  hashEndpoint,
   EndpointRequestStats (..),
   Host (..),
   HostEvents (..),
@@ -82,6 +83,7 @@ import Models.Apis.LogQueries (densifyBuckets)
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..), rawSql)
 import Relude
+import Utils (toXXHash)
 import Web.HttpApiData (FromHttpApiData (..))
 
 
@@ -270,6 +272,15 @@ denseBuckets n = V.fromList . densifyBuckets (0, n - 1) . map (second fromIntegr
 -- Integer epoch seconds of a window start, for engine-portable time bucketing.
 epochSecs :: UTCTime -> Int64
 epochSecs = floor . utcTimeToPOSIXSeconds
+
+
+-- | An endpoint's identity, stored as @apis.endpoints.hash@ and used as the anomaly and
+-- issue key, so the formula is frozen. The project id is the text the span carries.
+--
+-- >>> hashEndpoint "pid" "api.example.com" "GET" "/v1/users" == toXXHash "pidapi.example.comGET/v1/users"
+-- True
+hashEndpoint :: Text -> Text -> Text -> Text -> Text
+hashEndpoint pid host method path = toXXHash $ pid <> host <> method <> path
 
 
 -- | Quoted ISO8601 timestamp literal, inlined into the SQL text rather than bound.

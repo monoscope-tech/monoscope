@@ -1013,9 +1013,9 @@ spec = sequential $ aroundAll withTestResources do
       -- Merge: first TypeError becomes canonical, second gets assigned to it
       case typeErrPatterns of
         (PGS.Only canonId : PGS.Only childId : _) -> do
-          canonicals <- runTestBg frozenTime tr $ PatternMerge.getCanonicalErrorPatterns pid
+          canonicals <- runTestBg frozenTime tr $ PatternMerge.getCanonicalPatterns @ErrorPatterns.ErrorPatternId pid
           Map.lookup canonId (Map.fromList canonicals) `shouldBe` Just (VU.fromList typeEmb)
-          void $ runTestBg frozenTime tr $ PatternMerge.assignErrorsToCanonical [(childId, canonId)]
+          void $ runTestBg frozenTime tr $ PatternMerge.assignPatternsToCanonical [(childId, canonId)]
 
           -- Verify the specific child got assigned to the specific canonical.
           -- Earlier tests may have merged unrelated TypeErrors, so assert on
@@ -1051,16 +1051,16 @@ spec = sequential $ aroundAll withTestResources do
         ((mergedId, _canonId) : _) -> do
           patternsBefore <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 100 0
           -- Unmerge
-          void $ runTestBg frozenTime tr $ PatternMerge.unmergeErrorPattern pid mergedId
+          void $ runTestBg frozenTime tr $ PatternMerge.unmergePattern pid mergedId
           -- Pattern reappears in getErrorPatterns (canonical_id = NULL)
           patternsAfter <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 100 0
           length patternsAfter `shouldBe` (length patternsBefore + 1)
           -- Verify merge_override = TRUE prevents re-embedding
-          unembedded <- runTestBg frozenTime tr $ PatternMerge.getUnembeddedErrorPatterns pid
-          let unembeddedIds = map (\(eid, _, _) -> eid) unembedded
+          unembedded <- runTestBg frozenTime tr $ PatternMerge.getUnembeddedPatterns @ErrorPatterns.ErrorPatternId pid
+          let unembeddedIds = map fst unembedded
           mergedId `shouldSatisfy` (`notElem` unembeddedIds)
           -- Verify merge_override = TRUE excludes from canonical candidates
-          canonicals <- runTestBg frozenTime tr $ PatternMerge.getCanonicalErrorPatterns pid
+          canonicals <- runTestBg frozenTime tr $ PatternMerge.getCanonicalPatterns @ErrorPatterns.ErrorPatternId pid
           let canonicalIds = map fst canonicals
           mergedId `shouldSatisfy` (`notElem` canonicalIds)
         [] -> expectationFailure "no merged patterns found (test 12 may have failed)"

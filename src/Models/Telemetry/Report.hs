@@ -35,7 +35,10 @@ module Models.Telemetry.Report (
 import Data.Aeson qualified as AE
 import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
+import Data.List (elemIndex)
 import Data.Map.Strict qualified as M
+import Data.Text qualified as T
+import Data.Text.Display (display)
 import Data.Time (UTCTime, addUTCTime)
 import Data.Vector qualified as V
 import Effectful (Eff, (:>))
@@ -44,7 +47,7 @@ import Hasql.Interpolate qualified as HI
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Containers qualified as Containers
-import Pkg.DeriveUtils (AesonText (..), DB)
+import Pkg.DeriveUtils (AesonText (..), DB, unAesonText)
 import Relude
 
 
@@ -87,8 +90,8 @@ data TrendPoint = TrendPoint
 -- Adjacent slices can share an hourly bucket; add their disjoint counts.
 trendStats :: forall es. (DB es, Labeled "timefusion" Hasql :> es) => Bool -> Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [TrendPoint]
 trendStats useTf pid start end = do
-  points <- concat <$> traverse fetch (takeWhile (< end) $ iterate (addUTCTime 86400) start)
-  pure [TrendPoint epoch events errors | (epoch, (events, errors)) <- M.toAscList $ M.fromListWith (\(a, b) (c, d) -> (a + c, b + d)) [(p.epochSeconds, (p.events, p.errors)) | p <- points]]
+  points <- foldMapM fetch (takeWhile (< end) $ iterate (addUTCTime 86400) start)
+  pure $ M.elems $ M.fromListWith (\a b -> a{events = a.events + b.events, errors = a.errors + b.errors}) [(p.epochSeconds, p) | p <- points]
   where
     fetch :: UTCTime -> Eff es [TrendPoint]
     fetch sliceStart =
@@ -306,10 +309,7 @@ infrastructureStats start end rows = InfrastructureStats (count Containers.Scope
       take 10 $ sortOn (\r -> (r.ready /= Just False, Down $ foldl' max 0 (catMaybes [r.cpuRatio, r.memoryRatio, r.storageRatio]), r.name)) $ V.toList rows <&> \r ->
         InfrastructureResource
           { name = r.containerName
-          , scope = case r.scope of
-              Containers.ScopeHost -> "Host"
-              Containers.ScopeContainer -> "Container"
-              Containers.ScopePod -> "Pod"
+          , scope = T.toTitle (display r.scope)
           , host = r.nodeName
           , cluster = r.cluster
           , namespace = r.namespace
@@ -349,30 +349,17 @@ monitorStats rows = MonitorStats (count "Normal") (count "Warning") (count "Aler
   where
     count label = length $ filter ((== label) . (.status)) observations
     observations =
-      sortOn (\m -> (rank m.status, m.title)) $ rows <&> \m ->
+      sortOn (\m -> (elemIndex m.status ["Alerting", "Warning", "Not evaluated", "Paused", "Normal"], m.title)) $ rows <&> \m ->
         MonitorObservation
           { id = m.id.toText
           , title = m.alertConfig.title
-          , status =
-              if isJust m.deactivatedAt
-                then "Paused"
-                else
-                  if isNothing m.lastEvaluated
-                    then "Not evaluated"
-                    else case m.currentStatus of
-                      Monitors.MSNormal -> "Normal"
-                      Monitors.MSWarning -> "Warning"
-                      Monitors.MSAlerting -> "Alerting"
+          , status = if
+              | isJust m.deactivatedAt -> "Paused"
+              | isNothing m.lastEvaluated -> "Not evaluated"
+              | otherwise -> T.toTitle (display m.currentStatus)
           , value = m.lastEvaluated $> m.currentValue
           , lastEvaluated = m.lastEvaluated
           }
-    rank :: Text -> Int
-    rank = \case
-      "Alerting" -> 0
-      "Warning" -> 1
-      "Not evaluated" -> 2
-      "Paused" -> 3
-      _ -> 4
 
 
 data IssueObservation = IssueObservation
@@ -404,8 +391,9 @@ data IssueStats = IssueStats
 -- does not establish that the underlying failure recovered.
 issueStats :: DB es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es IssueStats
 issueStats pid start end = do
-  totals <-
-    Hasql.interpOne
+  (newIssues, openIssues, criticalOpen, acknowledged, archivedInPeriod) <-
+    Hasql.interpOneOrThrow
+      "issue totals"
       [HI.sql|
       SELECT COUNT(*) FILTER (WHERE created_at >= #{start} AND created_at < #{end})::bigint,
         COUNT(*) FILTER (WHERE archived_at IS NULL AND acknowledged_at IS NULL)::bigint,
@@ -422,7 +410,6 @@ issueStats pid start end = do
       FROM apis.issues WHERE project_id = #{pid} AND archived_at IS NULL AND acknowledged_at IS NULL
       ORDER BY (critical OR severity = 'critical') DESC NULLS LAST, affected_requests DESC, created_at DESC LIMIT 10
     |]
-  let (newIssues, openIssues, criticalOpen, acknowledged, archivedInPeriod) = fromMaybe (0, 0, 0, 0, 0) totals
   pure IssueStats{newIssues, openIssues, criticalOpen, acknowledged, archivedInPeriod, priorities}
 
 
@@ -436,9 +423,8 @@ data PreviewStatus = PreviewBuilding | PreviewReady ReportSnapshot | PreviewFail
 claimPreview :: DB es => Projects.ProjectId -> Eff es (Maybe UTCTime)
 claimPreview pid = do
   let payload = AesonText PreviewBuilding
-  fmap (\(HI.OneColumn token) -> token)
-    . listToMaybe
-    <$> Hasql.interp
+  fmap HI.getOneColumn
+    <$> Hasql.interpOne
       [HI.sql|
         INSERT INTO apis.report_previews (project_id, requested_at, expires_at, payload)
         VALUES (#{pid}, clock_timestamp(), now() + interval '6 minutes', #{payload})
@@ -450,10 +436,7 @@ claimPreview pid = do
 
 
 getPreview :: DB es => Projects.ProjectId -> Eff es (Maybe PreviewStatus)
-getPreview pid =
-  fmap (\(HI.OneColumn (AesonText payload)) -> payload)
-    . listToMaybe
-    <$> Hasql.interp [HI.sql|SELECT payload FROM apis.report_previews WHERE project_id = #{pid}|]
+getPreview pid = fmap (unAesonText . HI.getOneColumn) <$> Hasql.interpOne [HI.sql|SELECT payload FROM apis.report_previews WHERE project_id = #{pid}|]
 
 
 finishPreview :: DB es => Projects.ProjectId -> UTCTime -> PreviewStatus -> Eff es ()

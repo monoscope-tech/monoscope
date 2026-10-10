@@ -70,18 +70,15 @@ import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
+import Models.Projects.ProjectMembers (TeamId)
 import Models.Projects.ProjectMembers qualified as PM
 import Models.Projects.Projects qualified as Projects
 import Pages.Charts.Types qualified as Charts
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (JsonValueSchema (..), SnakeSchema (..), UUIDId, WrappedEnumSC (..))
+import Pkg.DeriveUtils (JsonValueSchema (..), SnakeSchema (..), WrappedEnumSC (..))
 import Relude
 import Servant (FromHttpApiData)
 import Web.Wire (Paged (..))
-
-
--- | Phantom-tagged team id.
-type TeamId = UUIDId "team"
 
 
 -- | Input for creating or replacing (PUT) a monitor. Maps onto `QueryMonitor`
@@ -619,8 +616,8 @@ data TeamPatch = TeamPatch
 
 
 data MemberSummary = MemberSummary
-  { id :: UUID.UUID
-  , userId :: UUID.UUID
+  { id :: PM.ProjectMemberId
+  , userId :: Projects.UserId
   , email :: Text
   , firstName :: Text
   , lastName :: Text
@@ -636,7 +633,7 @@ data MemberSummary = MemberSummary
 -- defaults to @view@ when omitted.
 data MemberAdd = MemberAdd
   { email :: Maybe Text
-  , userId :: Maybe UUID.UUID
+  , userId :: Maybe Projects.UserId
   , permission :: Maybe PM.Permissions
   }
   deriving stock (Generic, Show)

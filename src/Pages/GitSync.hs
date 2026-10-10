@@ -17,7 +17,6 @@ import BackgroundJobs qualified
 import Data.Aeson qualified as AE
 import Data.Default (def)
 import Data.Effectful.Wreq qualified as W
-import Data.Pool (withResource)
 import Data.Text qualified as T
 import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static (ask)
@@ -29,10 +28,9 @@ import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ImpactReviews qualified as ImpactReviews
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
-import OddJobs.Job (createJob)
 import OpenTelemetry.Attributes qualified as Otel
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper, withSettingsPage)
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), confirmModal_, connectionBadge_, copyButton_, emptyState_, filterInputAttr_, formField_, formSelectField_, headerRow_, iconBadgeLg_, iconBadge_, installationSettingsLink_, primaryButton_, searchInput_, sectionLabel_, settingsH2_, settingsSection_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), connectionBadge_, copyField_, dangerAction_, disclosure_, emptyState_, filterInputAttr_, formField_, formSelectField_, headerRow_, iconBadgeLg_, iconBadge_, installationSettingsLink_, primaryButton_, searchInput_, sectionLabel_, settingsH2_, settingsSection_)
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Git qualified as Git
 import Pkg.Metrics qualified as Metrics
@@ -99,11 +97,8 @@ gitWebhookPostH host req = case Git.parseWebhookRepo host req.body of
               -- Record the announced head BEFORE queueing, not after: the job can start before
               -- a later write lands, and a job that runs without the announcement is exactly
               -- the job that mistakes a stale read for "nothing changed".
-              whenJust (Git.parseWebhookRevision host req.body)
-                $ void
-                . GitSync.setAnnouncedRevision sync.id
-              liftIO $ withResource ctx.jobsPool \conn ->
-                void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncFromRepo sync.projectId
+              whenJust (Git.parseWebhookRevision host req.body) (void . GitSync.setAnnouncedRevision sync.id)
+              BackgroundJobs.enqueueJobs ctx [BackgroundJobs.GitSyncFromRepo sync.projectId]
               statusResp "ok" <$ Log.logTrace "Triggered git sync from webhook" (sync.projectId, Git.hostSlug host, fullName)
             else AE.object ["status" AE..= ("ignored" :: Text), "event" AE..= req.event] <$ Log.logTrace "Ignoring non-push git event" req.event
   where
@@ -180,18 +175,11 @@ gitSyncSettingsDeleteH pid = do
 
 gitSyncSettingsView :: Text -> Projects.ProjectId -> Maybe GitSync.GitHubSync -> Html ()
 gitSyncSettingsView hostUrl pid syncM =
-  div_ [class_ "space-y-6"] $ maybe notConnectedView (\sync -> connectedView sync (webhookUrlFor sync.host)) syncM
+  div_ [class_ "space-y-6"] $ maybe notConnectedView connectedView syncM
   where
     actionUrl = "/p/" <> pid.toText <> "/settings/git-sync"
-    -- GitHub keeps the original path so hooks configured before this change keep working; every
-    -- other host gets the per-host route, which tells the handler whose signature scheme to check.
-    webhookUrlFor :: Git.GitHost -> Text
-    webhookUrlFor = \case
-      Git.GitHub -> hostUrl <> "webhook/github"
-      h -> hostUrl <> "webhook/git/" <> Git.hostSlug h
     notConnectedView :: Html ()
     notConnectedView = do
-      -- GitHub App (primary)
       div_ [class_ "space-y-3"] do
         p_ [class_ "text-sm text-textWeak"] "Install the GitHub App to sync dashboards with your repository. Webhooks are configured automatically."
         a_ [href_ (actionUrl <> "/install"), class_ "btn btn-sm btn-primary gap-2"] do
@@ -201,11 +189,8 @@ gitSyncSettingsView hostUrl pid syncM =
       -- Token connection: the only option on GitLab, Gitea and Bitbucket, and still available on
       -- GitHub for anyone who cannot install an App.
       div_ [class_ "pt-6 border-t border-strokeWeak"] do
-        details_ [class_ "group/host"] do
-          summary_ [class_ "text-xs font-medium text-textWeak cursor-pointer list-none flex items-center gap-1.5 hover:text-textStrong"] do
-            faSprite_ "chevron-right" "solid" "w-3 h-3 transition-transform group-open/host:rotate-90"
-            toHtml $ "Or connect " <> T.intercalate ", " (map Git.hostLabel universe) <> " with a token"
-          form_ [class_ "pt-4 space-y-3", hxPost_ actionUrl, hxSwap_ "innerHTML", hxTarget_ "#git-sync-content", hxIndicator_ "#indicator"] do
+        disclosure_ [] "text-xs font-medium text-textWeak hover:text-textStrong" (toHtml $ "Or connect " <> T.intercalate ", " (map Git.hostLabel universe) <> " with a token")
+          $ form_ [class_ "pt-4 space-y-3", hxPost_ actionUrl, hxSwap_ "innerHTML", hxTarget_ "#git-sync-content", hxIndicator_ "#indicator"] do
             div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2"] do
               -- Picking a host rewrites the token label and shows the server-URL field only for
               -- the hosts that can have one, so nobody is asked for a Bitbucket server address.
@@ -256,17 +241,19 @@ gitSyncSettingsView hostUrl pid syncM =
               "Connect with token"
               htmxIndicator_ "indicator" LdXS
 
-    connectedView :: GitSync.GitHubSync -> Text -> Html ()
-    connectedView sync webhookUrl = do
+    connectedView :: GitSync.GitHubSync -> Html ()
+    connectedView sync = do
       let isViaApp = isJust sync.installationId
+          -- GitHub keeps the original path so hooks configured before this change keep working; every
+          -- other host gets the per-host route, which tells the handler whose signature scheme to check.
+          webhookUrl = hostUrl <> bool ("webhook/git/" <> Git.hostSlug sync.host) "webhook/github" (sync.host == Git.GitHub)
       headerRow_ [] do
         div_ [class_ "flex items-center gap-2 text-sm"] do
           faSprite_ "circle-check" "solid" "w-3.5 h-3.5 text-iconSuccess"
           span_ [class_ "font-medium text-textStrong"] $ toHtml $ sync.owner <> "/" <> sync.repo
-          span_ [class_ "text-textWeak"] $ toHtml $ "(" <> Git.hostLabel sync.host <> ", " <> sync.branch <> ", " <> (if isViaApp then "App" else "token") <> ")"
+          span_ [class_ "text-textWeak"] $ toHtml $ "(" <> Git.hostLabel sync.host <> ", " <> sync.branch <> ", " <> bool "token" "App" isViaApp <> ")"
         connectionBadge_ True
 
-      -- Repository settings
       form_ [class_ "space-y-4", hxPost_ actionUrl, hxSwap_ "innerHTML", hxTarget_ "#git-sync-content", hxIndicator_ "#indicator"] do
         -- An App installation knows which repositories it reaches, so changing one is picking from
         -- that list; a PAT's scope cannot be enumerated, so those keep the text boxes.
@@ -289,24 +276,16 @@ gitSyncSettingsView hostUrl pid syncM =
           "Dashboards stored in "
           code_ [class_ "text-textBrand"] $ toHtml $ if T.null sync.pathPrefix then "dashboards/" else sync.pathPrefix <> "/dashboards/"
 
-        -- Webhook URL
         div_ [class_ "pt-4 border-t border-strokeWeak space-y-2"] do
-          headerRow_ [] do
-            sectionLabel_ "Webhook URL"
-            copyButton_ "btn btn-xs btn-ghost gap-1" "w-3 h-3" "my @data-url" [term "data-url" webhookUrl]
-          div_ [class_ "bg-fillWeak rounded-lg px-3 py-1.5 font-mono text-xs text-textWeak break-all"] $ toHtml webhookUrl
+          sectionLabel_ "Webhook URL"
+          copyField_ "webhook-url" webhookUrl
           unless isViaApp $ p_ [class_ "text-xs text-textWeak"] "Add this to your repository for automatic syncing."
 
-        -- Actions
         div_ [class_ "flex items-center justify-between pt-2"] do
           button_ [class_ "btn btn-sm btn-primary gap-1", type_ "submit"] do
             "Save"
             htmxIndicator_ "indicator" LdXS
-          label_ [class_ "btn btn-sm btn-ghost text-textError hover:bg-fillError-weak", Lucid.for_ "disconnect-modal"] do
-            faSprite_ "link-slash" "regular" "w-3 h-3"
-            span_ "Disconnect"
-
-      confirmModal_ "disconnect-modal" "Disconnect GitHub?" "This will stop syncing dashboards with your repository. Dashboards will remain unchanged." [hxDelete_ actionUrl, hxSwap_ "innerHTML", hxTarget_ "#git-sync-content"] "Disconnect"
+          dangerAction_ "disconnect-modal" "link-slash" "Disconnect" "Disconnect GitHub?" "This will stop syncing dashboards with your repository. Dashboards will remain unchanged." [hxDelete_ actionUrl, hxSwap_ "innerHTML", hxTarget_ "#git-sync-content"] "Disconnect"
 
       unless isViaApp $ div_ [class_ "pt-6 border-t border-strokeWeak"] do
         div_ [class_ "prose prose-sm max-w-none"] $ renderMarkdown $ setupInstructions sync.host webhookUrl
@@ -391,8 +370,7 @@ queueGitSyncPush :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx ()
 queueGitSyncPush pid dashboardId = do
   ctx <- ask @Config.AuthContext
   whenJustM (GitSync.getGitHubSync pid) \sync -> when sync.syncEnabled do
-    liftIO $ withResource ctx.jobsPool \conn ->
-      void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncPushDashboard pid (unUUIDId dashboardId)
+    BackgroundJobs.enqueueJobs ctx [BackgroundJobs.GitSyncPushDashboard pid (unUUIDId dashboardId)]
     Log.logTrace "Queued git sync push for dashboard" (pid, dashboardId)
 
 
@@ -435,10 +413,10 @@ githubAppInstallH pid toM = do
   addRespHeaders
     $ redirectPage "Redirecting to GitHub..."
     $ "https://github.com/apps/"
-    <> ctx.config.githubAppName
-    <> "/installations/new?state="
-    <> pid.toText
-    <> maybe "" (":" <>) (toM >>= guarded (not . T.null))
+      <> ctx.config.githubAppName
+      <> "/installations/new?state="
+      <> pid.toText
+      <> maybe "" (":" <>) (toM >>= guarded (not . T.null))
 
 
 -- | Which half of the installation the user started from: the same grant powers dashboard sync
@@ -528,10 +506,11 @@ githubAppReposH pid instIdParam = withSettingsPage pid "Integrations" \_ -> do
       -- Idempotent, and this is the first point at which grant and project are known together
       -- when the callback carried no project and the user picked one here.
       recordInstallation pid instId
-      W.runHTTPWreq $ either errBox (repoSelectionView instId) <$> runExceptT do
-        tok <- ExceptT $ first ("Failed to get token: " <>) <$> GitSync.getInstallationToken ctx.config.githubAppId ctx.config.githubAppPrivateKey instId
-        conn <- hoistEither $ Git.mkGitConn Git.GitHub Nothing tok.token
-        ExceptT $ first ("Failed to list repos: " <>) <$> Git.listRepos conn
+      W.runHTTPWreq
+        $ either errBox (repoSelectionView instId) <$> runExceptT do
+          tok <- ExceptT $ first ("Failed to get token: " <>) <$> GitSync.getInstallationToken ctx.config.githubAppId ctx.config.githubAppPrivateKey instId
+          conn <- hoistEither $ Git.mkGitConn Git.GitHub Nothing tok.token
+          ExceptT $ first ("Failed to list repos: " <>) <$> Git.listRepos conn
   pure $ settingsSection_ do
     settingsH2_ "GitHub Sync"
     p_ [class_ "text-textWeak text-sm -mt-4"] "Select a repository to sync dashboards with."
@@ -544,7 +523,8 @@ githubAppReposH pid instIdParam = withSettingsPage pid "Integrations" \_ -> do
       p_ [class_ "text-sm text-textWeak"] "Choose which repository to sync dashboards with."
       form_ [class_ "space-y-4", hxPost_ ("/p/" <> pid.toText <> "/settings/git-sync/select"), hxSwap_ "innerHTML", hxTarget_ "#git-sync-content"] do
         input_ [type_ "hidden", name_ "installationId", value_ (show instId)]
-        repoFilter_ (length repos)
+        -- Only once the list is long enough that scanning it is the slower option.
+        when (length repos > 8) $ searchInput_ "w-full" ("Filter " <> show (length repos) <> " repositories") [filterInputAttr_ ".repo-row"]
         -- Each repo carries its own default branch, so choosing one fills the branch field in
         -- rather than leaving "main" to be wrong on every repo that renamed its trunk.
         div_ [class_ "space-y-2 max-h-80 overflow-y-auto c-scroll", id_ "repo-list"] $ forM_ (zip [0 :: Int ..] repos) \(idx, repo) ->
@@ -558,7 +538,7 @@ githubAppReposH pid instIdParam = withSettingsPage pid "Integrations" \_ -> do
                 , term "data-branch" repo.defaultBranch
                 , [__| on change set #branch.value to my @data-branch |]
                 ]
-              <> [checked_ | idx == 0]
+                <> [checked_ | idx == 0]
             span_ [class_ "font-medium text-textStrong truncate"] $ toHtml repo.fullName
             when repo.private $ span_ [class_ "shrink-0 rounded-sm border border-strokeWeak px-1 text-2xs text-textWeak"] "private"
         installationSettingsLink_ (GitSync.installationSettingsUrl instId)
@@ -566,11 +546,6 @@ githubAppReposH pid instIdParam = withSettingsPage pid "Integrations" \_ -> do
           formField_ FieldSm def{value = maybe "main" (.defaultBranch) (viaNonEmpty head repos), placeholder = "main"} "Branch" "branch" False Nothing
           formField_ FieldSm def{placeholder = "monoscope"} "Folder in repo (optional)" "pathPrefix" False Nothing
         primaryButton_ [type_ "submit"] "Connect Repository"
-
-    -- Type-to-filter over a repo list. Only rendered once the list is long enough that scanning
-    -- it is the slower option — an account with four repos does not need a search box.
-    repoFilter_ :: Int -> Html ()
-    repoFilter_ n = when (n > 8) $ searchInput_ "w-full" ("Filter " <> show n <> " repositories") [filterInputAttr_ ".repo-row"]
 
 
 -- | Handle repo selection from GitHub App
@@ -586,6 +561,5 @@ githubAppSelectRepoH pid form = do
       Just existing -> GitSync.updateGitHubSync encKey existing.id ownerVal repoVal form.branch Nothing form.pathPrefix
   recordInstallation pid form.installationId
   Log.logInfo "GitHub App repo selected" (pid, form.repoFullName)
-  liftIO $ withResource ctx.jobsPool \conn ->
-    void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncPushAllDashboards pid
+  BackgroundJobs.enqueueJobs ctx [BackgroundJobs.GitSyncPushAllDashboards pid]
   addRespHeaders $ gitSyncSettingsView ctx.env.hostUrl pid result

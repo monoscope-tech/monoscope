@@ -39,7 +39,7 @@ import Hasql.Decoders qualified as D
 import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
 import Pkg.Components.TimePicker qualified as TimePicker
-import Pkg.DeriveUtils (AesonText (..), DB, WrappedEnumSC (..))
+import Pkg.DeriveUtils (AesonText (..), DB, WrappedEnumSC (..), unAesonText)
 import Pkg.Parser (ScopedQuery (..))
 import Relude
 import Relude.Extra.Foldable1 (minimum1)
@@ -569,9 +569,7 @@ rumCacheDbKey key = toXXHash $ show key <> ":v" <> show (queryVersion key.query)
 -- and endpoint stats share the table with the RUM panels.
 rumPanelCacheGet :: (AE.FromJSON a, DB es) => Text -> Eff es (Maybe a)
 rumPanelCacheGet key =
-  fmap (\(HI.OneColumn (AesonText value)) -> value)
-    . listToMaybe
-    <$> Hasql.interp [HI.sql|SELECT payload FROM rum_panel_cache WHERE cache_key = #{key} AND expires_at > now()|]
+  fmap (unAesonText . HI.getOneColumn) <$> Hasql.interpOne [HI.sql|SELECT payload FROM rum_panel_cache WHERE cache_key = #{key} AND expires_at > now()|]
 
 
 -- | Payload plus staleness: 'True' when the entry is past its freshness expiry but still
@@ -581,9 +579,7 @@ rumPanelCacheGet key =
 -- refreshes it instead of paying a cold 24h scan. Older entries are treated as absent.
 rumPanelCacheGetStale :: (AE.FromJSON a, DB es) => Text -> Eff es (Maybe (a, Bool))
 rumPanelCacheGetStale key =
-  fmap (\(AesonText value, isStale) -> (value, isStale))
-    . listToMaybe
-    <$> Hasql.interp [HI.sql|SELECT payload, expires_at <= now() FROM rum_panel_cache WHERE cache_key = #{key} AND expires_at > now() - interval '12 hours'|]
+  fmap (first unAesonText) <$> Hasql.interpOne [HI.sql|SELECT payload, expires_at <= now() FROM rum_panel_cache WHERE cache_key = #{key} AND expires_at > now() - interval '12 hours'|]
 
 
 -- | Memory-miss path in one step: read the shared table, else compute and publish for
@@ -591,10 +587,7 @@ rumPanelCacheGetStale key =
 withSharedCache :: (AE.FromJSON a, AE.ToJSON a, DB es) => Text -> Int64 -> Eff es a -> Eff es a
 withSharedCache rawKey ttl compute = do
   let key = toXXHash rawKey
-  rumPanelCacheGet key >>= flip maybe pure do
-    fresh <- compute
-    rumPanelCacheSet key ttl fresh
-    pure fresh
+  rumPanelCacheGet key >>= flip maybe pure (compute >>= \fresh -> fresh <$ rumPanelCacheSet key ttl fresh)
 
 
 rumPanelCacheSet :: (AE.ToJSON a, DB es) => Text -> Int64 -> a -> Eff es ()

@@ -1,44 +1,38 @@
 module Pages.Bots.Discord (linkDiscordGetH, discordInteractionsH, getDiscordChannels, DiscordInteraction) where
 
+import Control.Lens ((^.))
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as Base16
 import Data.Default (Default (def))
+import Data.Effectful.Wreq (HTTP, defaults, getWith, postWith, responseBody)
 import Data.Text qualified as T
 import Deriving.Aeson qualified as DAE
+import Effectful (Eff, type (:>))
 import Effectful.Error.Static (throwError)
 import Effectful.Ki qualified as Ki
+import Effectful.Log qualified as Log
 import Effectful.Reader.Static (asks)
 import Models.Apis.Integrations (DiscordData (..), getDashboardsForDiscord, getDiscordData, insertDiscordData)
-import Models.Projects.ProjectMembers qualified as ProjectMembers
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pkg.AI qualified as AI
-import Relude hiding (ask, asks)
-import "cryptonite" Crypto.Error qualified as Crypto
-import "cryptonite" Crypto.PubKey.Ed25519 qualified as Ed25519
-
-import Control.Lens ((.~), (^.))
-import Data.Effectful.Wreq (
-  HTTP,
-  defaults,
-  getWith,
-  header,
-  postWith,
-  responseBody,
- )
-import Effectful (Eff, type (:>))
-import Effectful.Log qualified as Log
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Dashboards (Dashboard (..))
+import Models.Projects.ProjectMembers qualified as ProjectMembers
+import Network.HTTP.Types (statusIsSuccessful)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Bots.Utils (BotEmoji (..), BotErrorType (..), BotResponse (..), BotType (..), Channel, authHeader, botEmoji, botReplyPayload, contentTypeHeader, dcContainer, dcGallery, dcLinkButton, dcText, formatBotError, installedResponse, parseInstallState, runBotQuery, withBotThread, withDashboardTemplate)
+import Pkg.AI qualified as AI
 import Pkg.Components.Widget (Widget (..), widgetPngUrl)
+import Pkg.Mail (arr)
+import Relude hiding (ask, asks)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
 import Servant.Server (ServerError (errBody), err400, err401, err404)
 import System.Config (AuthContext (env), EnvConfig (..))
 import System.Types (ATBaseCtx)
+import "cryptonite" Crypto.Error qualified as Crypto
+import "cryptonite" Crypto.PubKey.Ed25519 qualified as Ed25519
 
 
 linkDiscordGetH :: Maybe Text -> Maybe Text -> Maybe Text -> ATBaseCtx (Headers '[Header "Location" Text] BotResponse)
@@ -49,29 +43,22 @@ linkDiscordGetH pidM' codeM guildIdM = do
       discordErr = addHeader "" $ DiscordError $ PageCtx def ()
   case (pidM, codeM, guildIdM) of
     (Just pid, Just code, Just guildId) -> do
-      ok <- exchangeCodeForTokenDiscord envCfg.discordClientId envCfg.discordClientSecret code envCfg.discordRedirectUri
-      if not ok
+      let body :: [FormParam]
+          body =
+            [ "client_id" Wreq.:= envCfg.discordClientId
+            , "client_secret" Wreq.:= envCfg.discordClientSecret
+            , "grant_type" Wreq.:= ("authorization_code" :: Text)
+            , "code" Wreq.:= code
+            , "redirect_uri" Wreq.:= envCfg.discordRedirectUri
+            ]
+      res <- postWith (defaults & contentTypeHeader "application/x-www-form-urlencoded") "https://discord.com/api/oauth2/token" body
+      if not $ statusIsSuccessful (res ^. Wreq.responseStatus)
         then pure discordErr
         else do
           _ <- insertDiscordData pid guildId
           registerDiscordCommands envCfg.discordClientId envCfg.discordBotToken guildId
           pure $ installedResponse "Discord" pid isOnboarding bwconf
     _ -> pure discordErr
-
-
-exchangeCodeForTokenDiscord :: HTTP :> es => Text -> Text -> Text -> Text -> Eff es Bool
-exchangeCodeForTokenDiscord clientId clientSecret code redirectUri = do
-  let body :: [FormParam]
-      body =
-        [ "client_id" Wreq.:= clientId
-        , "client_secret" Wreq.:= clientSecret
-        , "grant_type" Wreq.:= ("authorization_code" :: Text)
-        , "code" Wreq.:= code
-        , "redirect_uri" Wreq.:= redirectUri
-        ]
-  res <- postWith (defaults & header "Content-Type" .~ ["application/x-www-form-urlencoded"]) "https://discord.com/api/oauth2/token" body
-  let status = res ^. Wreq.responseStatus . Wreq.statusCode
-  pure $ status >= 200 && status < 300
 
 
 -- | Discord interaction type. Discord sends 1 for PING; every other numeric type
@@ -138,7 +125,7 @@ instance AE.FromJSON InteractionData where
 
 getDiscordChannels :: (HTTP :> es, Log.Log :> es) => Text -> Text -> Eff es [Channel]
 getDiscordChannels token guildId = do
-  r <- getWith (defaults & header "Authorization" .~ ["Bot " <> encodeUtf8 token]) (toString $ "https://discord.com/api/v10/guilds/" <> guildId <> "/channels")
+  r <- getWith (defaults & authHeader "Bot" token) (toString $ "https://discord.com/api/v10/guilds/" <> guildId <> "/channels")
   either (\err -> [] <$ Log.logAttention ("Error decoding discord channels response: " <> toText err) ()) pure $ AE.eitherDecode (r ^. responseBody)
 
 
@@ -161,7 +148,7 @@ discordInteractionsH rawBody signatureM timestampM = do
     handleApplicationCommand interaction envCfg = do
       cmdData <- maybe (throwError err400{errBody = "No command data provided"}) pure interaction.data_i
       guildId <- maybe (throwError err400{errBody = "Missing guild_id in interaction"}) pure $ maybe interaction.guild_id (.guild_id) interaction.channel
-      maybe (pure $ AE.object ["type" AE..= (4 :: Int), "data" AE..= formatBotError Discord ServiceError]) (handleCommand cmdData interaction envCfg) =<< getDiscordData guildId
+      maybe (pure $ reply $ formatBotError Discord ServiceError) (handleCommand cmdData interaction envCfg) =<< getDiscordData guildId
 
     handleCommand :: InteractionData -> DiscordInteraction -> EnvConfig -> DiscordData -> ATBaseCtx AE.Value
     handleCommand cmdData interaction envCfg discordData = case cmdData of
@@ -170,7 +157,7 @@ discordInteractionsH rawBody signatureM timestampM = do
         -- The guild is implicit: `discordData` was resolved from interaction.guild_id above,
         -- so discordData.projectId IS this guild's project. We only need the channel used.
         "here" -> case interaction.channel_id of
-          Just channelId -> hereSuccessResponse <$ ProjectMembers.addDiscordChannelToEveryoneTeam discordData.projectId channelId
+          Just channelId -> hereSuccess <$ ProjectMembers.addDiscordChannelToEveryoneTeam discordData.projectId channelId
           Nothing -> pure $ contentResponse "No channel ID provided"
         "dashboard" -> do
           deferAck envCfg interaction
@@ -210,57 +197,32 @@ discordInteractionsH rawBody signatureM timestampM = do
                   (AE.object ["channel_id" AE..= interaction.channel_id, "guild_id" AE..= interaction.guild_id])
                   (fmap (map \m -> (if m.author.username `elem` ["APItoolkit", "Monoscope"] then Issues.ChatAssistant else Issues.ChatUser, m.content)) <$> getThreadStarterMessage interaction envCfg.discordBotToken)
             _ -> pure Nothing
-      runBotQuery Discord (followup envCfg interaction . botReplyPayload) envCfg AI.ServiceAccess discordData.projectId (optionText options "") resolveThread
+      let question = case options of
+            Just (InteractionOption{value = AE.String q} : _) -> q
+            _ -> ""
+      runBotQuery Discord (followup envCfg interaction . botReplyPayload) envCfg AI.ServiceAccess discordData.projectId question resolveThread
 
-
--- | First slash-command option's string value, or a fallback.
-optionText :: Maybe [InteractionOption] -> Text -> Text
-optionText options fallback = case options of
-  Just (InteractionOption{value = AE.String q} : _) -> q
-  _ -> fallback
-
-
-contentResponse :: Text -> AE.Value
-contentResponse msg = AE.object ["type" AE..= 4, "data" AE..= AE.object ["content" AE..= msg]]
-
-
-hereSuccessResponse :: AE.Value
-hereSuccessResponse =
-  AE.object
-    [ "type" AE..= (4 :: Int)
-    , "data"
-        AE..= dcContainer
+    -- Interaction response type 4: CHANNEL_MESSAGE_WITH_SOURCE.
+    reply d = AE.object ["type" AE..= (4 :: Int), "data" AE..= d]
+    contentResponse msg = reply $ AE.object ["content" AE..= msg]
+    hereSuccess =
+      reply
+        $ dcContainer
           5763719 -- Green accent
           [ dcText $ botEmoji EmojiSuccess <> " **Notification channel set**"
           , dcText "This channel will now receive:"
           , dcText $ "• " <> botEmoji EmojiError <> " Error alerts\n• " <> botEmoji EmojiChart <> " Daily & weekly reports\n• " <> botEmoji EmojiWarning <> " Anomaly detections"
           ]
-    ]
-
-
-sharedWidgetContent :: Text -> Text -> Text -> AE.Value
-sharedWidgetContent widgetTitle chartUrl dashboardUrl =
-  dcContainer
-    26879
-    [ dcText $ botEmoji EmojiChart <> " **" <> widgetTitle <> "**"
-    , dcGallery [(chartUrl, "Dashboard widget: " <> widgetTitle)]
-    , dcLinkButton "Open dashboard" dashboardUrl
-    ]
-
-
-discordSelectContent :: [(Text, Text)] -> Text -> Text -> AE.Value
-discordSelectContent choices sId placeholder =
-  AE.object
-    [ "flags" AE..= 64
-    , "components"
-        AE..= ( [ AE.object
-                    [ "type" AE..= (1 :: Int)
-                    , "components" AE..= ([AE.object ["type" AE..= (3 :: Int), "custom_id" AE..= sId, "placeholder" AE..= placeholder, "options" AE..= map (\(t, v) -> AE.object ["label" AE..= t, "value" AE..= v]) choices]] :: [AE.Value])
-                    ]
-                ]
-                  :: [AE.Value]
-              )
-    ]
+    sharedWidgetContent widgetTitle chartUrl dashboardUrl =
+      dcContainer
+        26879
+        [ dcText $ botEmoji EmojiChart <> " **" <> widgetTitle <> "**"
+        , dcGallery [(chartUrl, "Dashboard widget: " <> widgetTitle)]
+        , dcLinkButton "Open dashboard" dashboardUrl
+        ]
+    discordSelectContent :: [(Text, Text)] -> Text -> Text -> AE.Value
+    discordSelectContent choices sId placeholder =
+      AE.object ["flags" AE..= (64 :: Int), "components" AE..= arr [AE.object ["type" AE..= (1 :: Int), "components" AE..= arr [AE.object ["type" AE..= (3 :: Int), "custom_id" AE..= sId, "placeholder" AE..= placeholder, "options" AE..= map (\(t, v) -> AE.object ["label" AE..= t, "value" AE..= v]) choices]]]]]
 
 
 discordJsonPost :: HTTP :> es => Text -> Text -> AE.Value -> Eff es ()
@@ -324,17 +286,12 @@ getThreadStarterMessage interaction botToken = case (interaction.channel_id, int
 
 registerDiscordCommands :: HTTP :> es => Text -> Text -> Text -> Eff es ()
 registerDiscordCommands appId botToken guildId =
-  for_ commands
+  for_
+    [ cmd "monoscope" "Ask about your project or get reports" ["options" AE..= arr [AE.object ["name" AE..= ("question" :: Text), "description" AE..= ("Your question in natural language" :: Text), "type" AE..= (3 :: Int), "required" AE..= True]]]
+    , cmd "here" "Channel for monoscope to send notifications" []
+    , cmd "dashboard" "Select and share dashboard widget" []
+    ]
     $ discordJsonPost botToken ("https://discord.com/api/v10/applications/" <> appId <> "/guilds/" <> guildId <> "/commands")
   where
-    commands :: [AE.Value]
-    commands =
-      [ AE.object
-          [ "name" AE..= ("monoscope" :: Text)
-          , "description" AE..= ("Ask about your project or get reports" :: Text)
-          , "type" AE..= (1 :: Int)
-          , "options" AE..= ([AE.object ["name" AE..= ("question" :: Text), "description" AE..= ("Your question in natural language" :: Text), "type" AE..= (3 :: Int), "required" AE..= True]] :: [AE.Value])
-          ]
-      , AE.object ["name" AE..= ("here" :: Text), "description" AE..= ("Channel for monoscope to send notifications" :: Text), "type" AE..= (1 :: Int)]
-      , AE.object ["name" AE..= ("dashboard" :: Text), "description" AE..= ("Select and share dashboard widget" :: Text), "type" AE..= (1 :: Int)]
-      ]
+    cmd :: Text -> Text -> [(AE.Key, AE.Value)] -> AE.Value
+    cmd name description extra = AE.object $ ["name" AE..= name, "description" AE..= description, "type" AE..= (1 :: Int)] <> extra

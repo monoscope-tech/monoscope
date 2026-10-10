@@ -188,7 +188,7 @@ ingestScrapedBody cfg now body = do
   appCtx :: AuthContext <- Eff.ask
   let (finite, nonFinite) = partition Prom.isFiniteSample (Prom.parsePrometheus (decodeUtf8 body))
       records = V.fromList (sampleToMetricRecord cfg now <$> finite)
-      target = Telemetry.writeTargetFor appCtx.env.enablePostgresTelemetryWrites appCtx.env.enableTimefusionWrites Nothing
+      target = Telemetry.writeTargetFor appCtx.env Nothing
   unless (null nonFinite) $ Log.logInfo "Prometheus scrape dropped non-finite samples" (AE.object ["config_id" AE..= cfg.id.toText, "dropped" AE..= length nonFinite])
   Telemetry.bulkInsertOtelMetrics appCtx.metricCatalogBuffer appCtx.hasqlTimefusionUsesPgTypes target records >>= \case
     Left failure -> throwIO $ These.mergeThese const failure

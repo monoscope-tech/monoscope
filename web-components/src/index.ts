@@ -9,6 +9,7 @@ import './charts';
 // Page chrome (tabs, cookies, tooltips, toasts, HTMX progress). Needed on every page, and
 // publishes globals that inline Lucid attributes call, so it must be eager too.
 import './page-chrome';
+import './resizer';
 import { installStaleChunkReload } from './stale-chunk-reload';
 
 // Must be armed before the first loadComponents() below, or the very import that
@@ -84,10 +85,8 @@ const queryEditorCallFor = async (el: (HTMLElement & Record<string, any>) | null
 (window as any).queryEditorCall = (method: string, ...args: unknown[]) =>
   queryEditorCallFor(document.getElementById('filterElement') as HTMLElement & Record<string, any>, method, ...args);
 
-// The trace page's inline initTraceCharts and the map's filter input can call these before
-// the lazy module has loaded, so forward through shims; service-map.ts replaces them on load.
-(window as any).serviceMapChart = (...args: unknown[]) =>
-  void import('./service-map').then(m => (m.serviceMapChart as (...a: any[]) => void)(...args));
+// The map's filter input can fire before the lazy module has loaded, so forward through a
+// shim; service-map.ts replaces it on load.
 (window as any).serviceMapFilter = (...args: unknown[]) =>
   void import('./service-map').then(m => (m.serviceMapFilter as (...a: any[]) => void)(...args));
 

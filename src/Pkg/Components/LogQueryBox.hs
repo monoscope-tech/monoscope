@@ -1,7 +1,6 @@
 module Pkg.Components.LogQueryBox (logQueryBox_, VizType (..), VizSurface (..), visTypes, queryLibraryContent_, enrichSchemaWithFacets, LogQueryBoxConfig (..)) where
 
 import Data.Aeson qualified as AE
-import Data.Default (def)
 import Data.HashMap.Strict qualified as HM
 import Data.Map qualified as Map
 import Data.Text qualified as T
@@ -16,10 +15,10 @@ import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import NeatInterpolation (text)
-import Pages.Components (ModalCfg (..), filterInputAttr_, keyboardActivateAttr_, modalWith_, options_, searchInput_)
+import Pages.Components (dialogField_, filterInputAttr_, floatingDialog_, keyboardActivateAttr_, options_, searchInput_)
 import Pkg.SchemaLearning.Catalog (FacetData (..), FacetValue (..))
 import Relude
-import Utils (displayTimestamp, faSprite_, formatUTC, onpointerdown_)
+import Utils (copyToClipboardAttr_, displayTimestamp, faSprite_, formatUTC, onpointerdown_)
 
 
 -- | Configuration record for the log query box component
@@ -49,9 +48,11 @@ data LogQueryBoxConfig = LogQueryBoxConfig
 -- This component provides a unified interface for querying logs and visualizing data
 logQueryBox_ :: LogQueryBoxConfig -> Html ()
 logQueryBox_ config = do
-  modalWith_ "saveQueryMdl" def{boxClass = "!w-full !max-w-lg !overflow-visible !rounded-none !border-0 !bg-transparent !p-0 !shadow-none", wrapperClass = "!items-start pt-[15vh] px-4 [&_.modal-backdrop]:backdrop-blur-sm", hideClose = True} Nothing $ form_
-    [ class_ "flex flex-col"
-    , id_ "saveQueryForm"
+  floatingDialog_
+    "saveQueryMdl"
+    "Save query"
+    ("Save", ["↵"])
+    [ id_ "saveQueryForm"
     , hxPost_ $ "/p/" <> config.pid.toText <> "/log_explorer/queries"
     , hxVals_ "js:{query: document.getElementById('saveQueryMdl').dataset.pendingQuery || window.getQueryFromEditor()}"
     , hxTarget_ "#queryLibraryPopover"
@@ -61,28 +62,14 @@ logQueryBox_ config = do
         set :status to event.detail.ctx.response.status
         if :status >= 200 and :status < 300
           set #saveQueryMdl.dataset.pendingQuery to null
-          set #saveQueryMdl.checked to false
-          trigger change on #saveQueryMdl
+          call #saveQueryMdl.close()
           set #query-title.value to ''
           set #queryLibId.value to ''
-          send successToast(value:['Query saved to library']) to <body/>
         end
       |]
     ]
-    do
-      div_ [class_ "mb-2 flex items-center justify-between px-3"] do
-        h2_ [class_ "text-xs font-medium uppercase tracking-wider text-white"] "Save query"
-        label_ [Lucid.for_ "saveQueryMdl", Aria.label_ "Close modal", class_ "inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-white/70 hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-white active:scale-[0.96] transition-[color,background-color,scale]"]
-          $ faSprite_ "xmark" "regular" "h-3.5 w-3.5"
-      div_ [class_ "w-full overflow-hidden rounded-lg border border-base-300 bg-bgBase shadow-2xl"] do
-        input_ [type_ "hidden", value_ "", name_ "queryLibId", id_ "queryLibId"]
-        div_ [class_ "border-b border-base-300 px-4 py-3"]
-          $ label_ [Lucid.for_ "query-title", class_ "flex flex-col gap-1.5 text-xs font-medium text-textStrong"] do
-            span_ "Query name"
-            input_ [class_ "no-focus-ring w-full bg-transparent py-2 text-sm font-normal outline-none placeholder:text-textDisabled", id_ "query-title", placeholder_ "Checkout errors", name_ "queryTitle", autocomplete_ "off"]
-        div_ [class_ "flex justify-end gap-1.5 p-2"] do
-          label_ [Lucid.for_ "saveQueryMdl", class_ "btn btn-sm btn-ghost cursor-pointer shadow-none active:scale-[0.96] transition-transform"] "Cancel"
-          button_ [type_ "submit", class_ "btn btn-sm btn-primary cursor-pointer shadow-none active:scale-[0.96] transition-transform"] "Save query"
+    (input_ [type_ "hidden", value_ "", name_ "queryLibId", id_ "queryLibId"] >> dialogField_ "query-title" "queryTitle" "Query name" "Checkout errors" [])
+    "Save query"
   form_
     [ id_ "log_explorer_form"
     , class_ "flex flex-col gap-1 w-full max-w-full"
@@ -118,7 +105,7 @@ logQueryBox_ config = do
                     end
                   |]
               ]
-            <> [checked_ | isJust config.targetWidgetPreview || noActiveQuery]
+              <> [checked_ | isJust config.targetWidgetPreview || noActiveQuery]
           -- Whether AI search or the KQL bar leads is a per-user preference, so it lives in
           -- localStorage and overrides the `noActiveQuery` default above. Applied by a
           -- synchronous script rather than a hyperscript `init` so the AI panel never flashes
@@ -224,15 +211,12 @@ logQueryBox_ config = do
                     ]
                     $ options_ (Just $ fromMaybe "all-spans" config.targetSpan) [("all-spans", "All spans"), ("root-spans", "Root spans"), ("service-entry-spans", "Service entry spans")]
 
-                label_
-                  [ Lucid.for_ "saveQueryMdl"
+                button_
+                  [ type_ "button"
                   , class_ "hidden h-8 w-8 items-center justify-center rounded-md text-iconNeutral hover:bg-fillWeak hover:text-iconBrand focus-visible:outline-2 focus-visible:outline-offset-1 active:scale-[0.96] transition-transform md:inline-flex"
                   , Aria.label_ "Save query"
                   , data_ "tippy-content" "Save query"
-                  , role_ "button"
-                  , tabindex_ "0"
-                  , keyboardActivateAttr_
-                  , [__|on click set #saveQueryMdl.dataset.pendingQuery to null then call #saveQueryForm.reset() then set #queryLibId.value to ''|]
+                  , [__|on click set #saveQueryMdl.dataset.pendingQuery to null then call #saveQueryForm.reset() then set #queryLibId.value to '' then call #saveQueryMdl.showModal()|]
                   ]
                   $ faSprite_ "floppy-disk" "regular" "h-4 w-4"
               button_
@@ -318,7 +302,7 @@ logQueryBox_ config = do
                      end
                    end|]
                 ]
-              <> [checked_ | config.alert]
+                <> [checked_ | config.alert]
             span_ "Create monitor"
 
   queryEditorInitializationCode config.vizType
@@ -398,7 +382,7 @@ logQueryBox_ config = do
                             end
                          |]
                 ]
-              <> [checked_ | vizType == defaultVizType]
+                <> [checked_ | vizType == defaultVizType]
             -- Emojis only in widget mode, not in the log explorer
             when inWidgetEditor $ span_ [class_ "text-iconNeutral leading-none"] $ toHtml v.emoji
             span_ $ toHtml v.label
@@ -512,24 +496,24 @@ queryLibraryContent_ queryLibSaved queryLibRecent =
               whenJust qli.title (\title -> span_ [class_ "font-medium text-sm"] $ toHtml title <> " •")
               small_ [class_ "text-textWeak text-xs whitespace-nowrap"]
                 $ toHtml (displayTimestamp $ formatUTC qli.createdAt)
-                >> when qli.byMe " • by me"
+                  >> when qli.byMe " • by me"
             code_ [class_ "queryText text-xs block whitespace-pre-wrap break-words opacity-75"] $ toHtml qli.queryText
 
           div_ [class_ "query-actions absolute right-2 top-2 flex gap-1 rounded-md bg-bgRaised/95 p-0.5 opacity-0 shadow-sm group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100 transition-opacity"] do
             actionBtn_ "Run this query" "play" [onclick_ $ "event.preventDefault(); window.queryEditorCall('handleAddQuery', this.closest('.query-item').dataset.query, true); " <> hidePopoverJS]
-            actionBtn_ "Copy query to clipboard" "copy" [onclick_ "event.preventDefault(); navigator.clipboard.writeText(this.closest('.query-item').dataset.query).then(() => { document.body.dispatchEvent(new CustomEvent('successToast', {detail: {value: ['Query copied to clipboard']}})); })"]
+            actionBtn_ "Copy query to clipboard" "copy" [copyToClipboardAttr_ "this.closest('.query-item').dataset.query" "Query copied to clipboard"]
             when qli.byMe
               $ if isRecent
                 then
                   actionBtn_
                     "Save as named query"
                     "floppy-disk"
-                    [onclick_ "event.preventDefault(); document.getElementById('saveQueryMdl').dataset.pendingQuery = this.closest('.query-item').dataset.query; document.getElementById('queryLibId').value = ''; document.getElementById('saveQueryMdl').checked = true;"]
+                    [onclick_ "event.preventDefault(); document.getElementById('saveQueryMdl').dataset.pendingQuery = this.closest('.query-item').dataset.query; document.getElementById('queryLibId').value = ''; document.getElementById('saveQueryMdl').showModal();"]
                 else do
                   actionBtn_
                     "Edit query title"
                     "pen-to-square"
-                    [onclick_ $ "event.preventDefault(); document.getElementById('queryLibId').value = '" <> qli.id.toText <> "'; document.getElementById('saveQueryMdl').checked = true;"]
+                    [onclick_ $ "event.preventDefault(); document.getElementById('queryLibId').value = '" <> qli.id.toText <> "'; document.getElementById('saveQueryMdl').showModal();"]
                   actionBtn_
                     "Delete query"
                     "trash"

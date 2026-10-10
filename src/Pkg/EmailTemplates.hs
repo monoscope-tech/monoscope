@@ -471,12 +471,7 @@ patternIssueEmail subject heading issueUrl stats blocks =
 digestEmail :: Text -> Text -> Text -> Int -> Html ()
 digestEmail projectName inboxUrl summary total = emailBody do
   h1_ "Batched notifications"
-  p_ do
-    "We batched "
-    b_ $ toHtml (show @Text total <> " notifications")
-    " for "
-    b_ $ toHtml projectName
-    " to avoid spam. A sample is below."
+  richP_ ["We batched ", show total <> " notifications", " for ", projectName, " to avoid spam. A sample is below."]
   emailDivider
   monoPre $ unlines $ map stripSummaryBadges (lines summary)
   emailButton inboxUrl "Open inbox"
@@ -490,13 +485,10 @@ runtimeErrorVariantEmail heading subjectPrefix intro projectName projectUrl erro
   ( subject
   , emailBody do
       h1_ $ toHtml $ maybe heading ("Still firing: " <>) ongoingForM
-      p_ do
-        toHtml $ maybe intro (const ("This error is still firing in your " :: Text)) ongoingForM
-        b_ $ toHtml projectName
-        "."
+      richP_ [maybe intro (const "This error is still firing in your ") ongoingForM, projectName, "."]
       forM_ (catMaybes [("⏳ Still firing · " <>) <$> ongoingForM, occTextM])
         $ p_ [style_ "margin: 8px 0; font-size: 14px; font-weight: 600; color: #57606a;"]
-        . toHtml @Text
+          . toHtml @Text
       emailDivider
       forM_ (zip [0 :: Int ..] (take maxErrorCards errors)) \(i, err) ->
         errorCard projectUrl errorsUrl (if i == 0 then chartUrlM else Nothing) err
@@ -504,8 +496,8 @@ runtimeErrorVariantEmail heading subjectPrefix intro projectName projectUrl erro
         $ p_ [style_ "text-align: center; color: #57606a; font-size: 14px; margin: 16px 0;"]
         $ toHtml
         $ "and "
-        <> show (length errors - maxErrorCards)
-        <> " more error(s)…"
+          <> show (length errors - maxErrorCards)
+          <> " more error(s)…"
       emailButton errorsUrl "View all errors"
   )
   where
@@ -556,7 +548,7 @@ errorCard projectUrl errorsUrl chartUrlM e =
         mconcat
           $ intersperse (span_ [style_ "color: #c0c5cc; padding: 0 6px;"] "\183")
           $ [span_ [class_ "monoscope-code", style_ "font-size: 12px;"] $ toHtml routeText | routeText /= ""]
-          <> map toHtml ctxMeta
+            <> map toHtml ctxMeta
     when (e.stackTrace /= "") $ tr_ $ td_ [style_ "padding: 0 0 12px 0;"] do
       let traceLines = lines e.stackTrace
       div_ [class_ "error-card-stack"] $ toHtml $ T.intercalate "\n" $ drop (length traceLines - 2) traceLines
@@ -595,10 +587,7 @@ anomalyEndpointEmail userName projectName anomalyUrl endpointRows =
     True
     ( do
         emailGreeting (Just userName)
-        p_ do
-          "We detected new endpoints on your "
-          b_ $ toHtml projectName
-          " project:"
+        richP_ ["We detected new endpoints on your ", projectName, " project:"]
         div_ [class_ "highlight-box"]
           $ table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
             tr_ $ td_ [style_ "padding-bottom: 8px; font-weight: 600; font-size: 15px;"] "New Endpoints:"
@@ -625,10 +614,7 @@ hostsUnarchivedEmail userName projectName catalogUrl hosts =
     True
     ( do
         emailGreeting (Just userName)
-        p_ do
-          "These hosts on your "
-          b_ $ toHtml projectName
-          " project had been auto-archived after 30 days without traffic, but are now receiving events again, so we unarchived them:"
+        richP_ ["These hosts on your ", projectName, " project had been auto-archived after 30 days without traffic, but are now receiving events again, so we unarchived them:"]
         div_ [class_ "highlight-box"]
           $ table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"]
           $ forM_ hosts (tr_ . td_ [style_ "padding: 3px 0;"] . span_ [class_ "monoscope-code"] . toHtml)
@@ -649,10 +635,7 @@ issueAssignedEmail userName projectName issueTitleRaw issueUrl errorType errorMe
         False
         ( do
             emailGreeting (Just userName)
-            p_ do
-              "You have been assigned to an issue in the "
-              b_ $ toHtml projectName
-              " project."
+            richP_ ["You have been assigned to an issue in the ", projectName, " project."]
             table_ [class_ "error-card", width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
               tr_ $ td_ [style_ "padding: 15px 20px 5px 20px;"] do
                 p_ [class_ "error-card-header"] $ toHtml errorType
@@ -1170,12 +1153,7 @@ monitorAlertEmail projectName monitorTitle monitorUrl currentValue threshold dir
     True
     ( do
         h1_ "Monitor Alert Triggered"
-        p_ do
-          "The monitor "
-          b_ $ toHtml monitorTitle
-          " in your "
-          b_ $ toHtml projectName
-          " project has breached its threshold."
+        richP_ ["The monitor ", monitorTitle, " in your ", projectName, " project has breached its threshold."]
         emailDivider
         emailStatRow
           [ ("Current Value", show (round currentValue :: Int), Just "#cf222e")
@@ -1195,12 +1173,7 @@ monitorRecoveryEmail projectName monitorTitle =
     True
     ( do
         h1_ [style_ "color: #1a7f37;"] "Monitor Recovered"
-        p_ do
-          "The monitor "
-          b_ $ toHtml monitorTitle
-          " in your "
-          b_ $ toHtml projectName
-          " project has recovered and is back to normal."
+        richP_ ["The monitor ", monitorTitle, " in your ", projectName, " project has recovered and is back to normal."]
     )
     "View Monitor"
 
@@ -1212,12 +1185,7 @@ freeTierUsageEmail projectName billingUrl used limit exceeded =
     True
     ( do
         h1_ $ if exceeded then "Daily Event Limit Reached" else "Approaching Daily Event Limit"
-        p_ do
-          "Your "
-          b_ $ toHtml projectName
-          if exceeded
-            then " project has hit its daily free tier limit. New events are being dropped."
-            else " project is approaching its daily free tier limit."
+        richP_ ["Your ", projectName, bool " project is approaching its daily free tier limit." " project has hit its daily free tier limit. New events are being dropped." exceeded]
         emailStatRow
           [ ("Events Today", formatWithCommas (fromIntegral used), if exceeded then Just "#cf222e" else Just "#bf8700")
           , ("Daily Limit", formatWithCommas (fromIntegral limit), Nothing)
@@ -1226,6 +1194,11 @@ freeTierUsageEmail projectName billingUrl used limit exceeded =
     )
     "Upgrade Plan"
     billingUrl
+
+
+-- | Paragraph alternating plain and bold runs: @richP_ ["Your ", project, " is ready."]@.
+richP_ :: [Text] -> Html ()
+richP_ = p_ . zipWithM_ ($) (cycle [toHtml, b_ . toHtml])
 
 
 -- | Shared skeleton for every notification email that ends in a CTA: content,
@@ -1250,12 +1223,7 @@ planUpgradedEmail projectName newPlan =
     True
     ( do
         h1_ "Plan Upgraded"
-        p_ do
-          "Your "
-          b_ $ toHtml projectName
-          " project has been upgraded to the "
-          b_ $ toHtml newPlan
-          " plan. Thank you for your support!"
+        richP_ ["Your ", projectName, " project has been upgraded to the ", newPlan, " plan. Thank you for your support!"]
     )
     "View Billing"
 
@@ -1267,12 +1235,7 @@ trialEndingEmail projectName daysLeft =
     True
     ( do
         h1_ $ toHtml $ "Your trial ends in " <> show @Text daysLeft <> " days"
-        p_ do
-          "The 30-day free trial on "
-          b_ $ toHtml projectName
-          " ends in "
-          b_ $ toHtml (show @Text daysLeft)
-          " days. Your subscription will renew automatically and you'll be billed for usage accrued during the trial."
+        richP_ ["The 30-day free trial on ", projectName, " ends in ", show daysLeft, " days. Your subscription will renew automatically and you'll be billed for usage accrued during the trial."]
         p_ "If you'd like to cancel before the trial ends, you can do so from the billing page."
     )
     "Manage Billing"
@@ -1285,12 +1248,7 @@ planDowngradedEmail projectName reason =
     True
     ( do
         h1_ "Plan Downgraded to Free"
-        p_ do
-          "Your "
-          b_ $ toHtml projectName
-          " project has been downgraded to the Free plan because your subscription "
-          toHtml reason
-          "."
+        richP_ ["Your ", projectName, " project has been downgraded to the Free plan because your subscription " <> reason <> "."]
         p_ "On the Free plan, daily event limits apply and additional team members will be deactivated. You can re-subscribe at any time to restore full access."
     )
     "Upgrade Plan"

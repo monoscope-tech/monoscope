@@ -20,9 +20,10 @@ where
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (Display)
-import Pkg.Deriving (WrappedEnumSC (..), decodeEnumSC)
+import Pkg.Deriving (WrappedEnumSC (..))
 import Relude
 import Utils (replaceAllFormats, toXXHash)
+import Web.HttpApiData (FromHttpApiData (..))
 
 
 -- =============================================================================
@@ -68,12 +69,12 @@ data StackFrame = StackFrame
 data Runtime = RGo | RNodejs | RWebjs | RPython | RJava | RPhp | RDotnet | RGeneric
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (Display) via WrappedEnumSC 'Nothing "R" Runtime
+  deriving (Display, FromHttpApiData) via WrappedEnumSC 'Nothing "R" Runtime
 
 
 -- | Total parse of the SDK language attribute. Unknown values are 'RGeneric'.
 parseRuntime :: Text -> Runtime
-parseRuntime = fromMaybe RGeneric . decodeEnumSC @"R" . toString
+parseRuntime = fromMaybe RGeneric . rightToMaybe . parseUrlPiece
 
 
 -- | Parse a stack trace into a list of stack frames based on runtime

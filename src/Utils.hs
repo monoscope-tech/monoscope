@@ -7,7 +7,6 @@ module Utils (
   freeTierDailyMaxEvents,
   JSONHttpApiData (..),
   parseTime,
-  DBField (..),
   copyToClipboardAttr_,
   faSprite_,
   faSymbolDefs_,
@@ -70,6 +69,7 @@ module Utils (
   prettyTimeShort,
   formatOffset,
   navTabAttrs,
+  dashboardContentNavAttrs,
   explorerNavTabs_,
   navTabStrip_,
   TabStrip (..),
@@ -122,7 +122,6 @@ import Data.Time.Format (FormatTime, formatTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Time.LocalTime (timeOfDayToTime, timeToTimeOfDay)
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple.ToField (ToField (..))
 import Effectful (Eff, type (:>))
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
@@ -132,7 +131,7 @@ import GHC.TypeLits (KnownSymbol, Symbol, symbolVal)
 import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Aria qualified as Aria
-import Lucid.Htmx (hxBoost_, hxGet_, hxIndicator_, hxSelect_, hxSwap_, hxTarget_)
+import Lucid.Htmx (hxBoost_, hxGet_, hxIndicator_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxVals_)
 import Lucid.Hyperscript (__)
 import Lucid.Svg qualified as Svg
 import Models.Projects.Projects qualified as Projects
@@ -189,17 +188,6 @@ timeScopedUrl base extras fromM toM sinceM =
     params -> base <> "?" <> T.intercalate "&" params
   where
     pair (key, valueM) = (\value -> key <> "=" <> toUriStr value) <$> nonEmptyT valueM
-
-
-data DBField = forall a. (Show a, ToField a) => MkDBField a
-
-
--- Standalone: GHC rejects an inline @deriving@ on an existential constructor.
-deriving stock instance Show DBField
-
-
-instance ToField DBField where
-  toField (MkDBField a) = toField a
 
 
 onpointerdown_ :: Text -> Attribute
@@ -261,20 +249,9 @@ fieldContextMenuItems_ ctx = traverse_ \case
   FGroupBy ->
     menuItem_
       "layer-group"
-      (span_ [class_ "gb-verb"] "Group by " <> key_)
+      (span_ [class_ "gb-verb", term "hx-live:text" "['summarize', 'by', this.closest('[data-field-path]')?.dataset.fieldPath.toLowerCase()].every(s => (document.querySelector('#filterElement')?.getValue?.().toLowerCase() ?? '').includes(s)) ? 'Remove group by ' : 'Group by '"] "Group by " <> key_)
       keyTip
-      [__|
-        init if document.querySelector('query-builder') call window.updateGroupByButtonText(event, me) end
-        on refreshItem if document.querySelector('query-builder') call window.updateGroupByButtonText(event, me) end
-
-        on click
-          set qb to document.querySelector('query-builder')
-          if qb
-            call qb.toggleGroupByField(closest @data-field-path)
-            trigger refreshItem on me
-          end
-        end
-      |]
+      [__|on click set qb to document.querySelector('query-builder') if qb call qb.toggleGroupByField(closest @data-field-path) end|]
   FViewPatterns -> menuItem_ "chart-simple" ("Show patterns for " <> key_) keyTip $ onpointerdown_ "viewFieldPatterns(event.target.closest('[data-field-path]').dataset.fieldPath)"
   FAddColumn ->
     -- Label reflects current state; refreshed when the popover opens (by which point the
@@ -1548,6 +1525,22 @@ navTabAttrs =
     data_ "preserve-page-context" ""
   , [__|on click set my.preloadState to 'DONE'|]
   ]
+
+
+-- | The range comes from the live picker, not @url@: a range picked client-side leaves every
+-- server-rendered link's @since@/@from@/@to@ stale, and a duplicate key resolves to the first.
+dashboardContentNavAttrs :: Text -> [Attribute]
+dashboardContentNavAttrs url =
+  [ hxGet_ $ path <> foldMap (("?" <>) . T.intercalate "&" . toList) (nonEmpty kept)
+  , hxVals_ "js:{...getTimeRange()}"
+  , hxTarget_ "#dashboard-tabs-content"
+  , hxSwap_ "outerMorph"
+  , hxPushUrl_ "true"
+  , [__|on click set my.preloadState to 'DONE'|]
+  ]
+  where
+    (path, qs) = T.breakOn "?" url
+    kept = filter (not . (`elem` ["", "since", "from", "to"]) . T.takeWhile (/= '=')) $ T.splitOn "&" $ T.drop 1 qs
 
 
 -- | The one link-based tab strip: each tab is (label, href, active) and navigates with

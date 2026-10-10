@@ -101,6 +101,7 @@ import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
 import Data.Effectful.UUID qualified as UUID
 import Data.Generics.Labels ()
+import Data.Generics.Product.Subtype (upcast)
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.OpenApi (ToSchema (..))
@@ -552,7 +553,7 @@ apiDashboardCreate pid inp = do
   now <- Time.currentTime
   did <- UUIDId <$> UUID.genUUID
   -- API creation has no session so createdBy is a synthetic nil; git sync is skipped
-  insertDashboard pid (Projects.UserId UUID.nil) now did inp.title inp.tags inp.teams inp.filePath inp.schema
+  insertDashboard pid Projects.systemUserId now did inp.title inp.tags inp.teams inp.filePath inp.schema
 
 
 -- | Upsert keyed by file_path.
@@ -569,7 +570,7 @@ apiDashboardApply pid doc = do
       apiDashboardGet pid existing.id
     Nothing -> do
       did <- UUIDId <$> UUID.genUUID
-      insertDashboard pid (Projects.UserId UUID.nil) now did newTitle doc.tags doc.teams (Just doc.filePath) (Just doc.schema)
+      insertDashboard pid Projects.systemUserId now did newTitle doc.tags doc.teams (Just doc.filePath) (Just doc.schema)
 
 
 apiDashboardUpdate :: Projects.ProjectId -> Dashboards.DashboardId -> DashboardInput -> ATBaseCtx DashboardFull
@@ -598,7 +599,7 @@ apiDashboardDuplicate pid did = do
   newId <- UUIDId <$> UUID.genUUID
   let copyTitle = existing.summary.title <> " (Copy)"
       copySchema = existing.schema & _Just . #title %~ fmap (<> " (Copy)") . (<|> Just "Untitled")
-  insertDashboard pid (Projects.UserId UUID.nil) now newId copyTitle (Just $ V.toList existing.summary.tags) (Just $ V.toList existing.summary.teams) Nothing copySchema
+  insertDashboard pid Projects.systemUserId now newId copyTitle (Just $ V.toList existing.summary.tags) (Just $ V.toList existing.summary.teams) Nothing copySchema
 
 
 apiDashboardStar :: Projects.ProjectId -> Dashboards.DashboardId -> ATBaseCtx DashboardFull
@@ -741,23 +742,10 @@ apiShareLinkCreate pid req = do
   pure ShareLinkCreated{id = shareId, url}
 
 
-toProjectSummary :: Projects.Project -> ProjectSummary
-toProjectSummary p =
-  ProjectSummary
-    { id = p.id
-    , title = p.title
-    , description = p.description
-    , paymentPlan = p.paymentPlan
-    , timeZone = p.timeZone
-    , createdAt = p.createdAt
-    , updatedAt = p.updatedAt
-    }
-
-
 toProjectFull :: Projects.Project -> [Text] -> ProjectFull
 toProjectFull p emails =
   ProjectFull
-    { summary = toProjectSummary p
+    { summary = upcast p
     , dailyNotif = p.dailyNotif
     , weeklyNotif = p.weeklyNotif
     , notifyEmails = emails
@@ -770,7 +758,7 @@ apiMe :: Projects.ProjectId -> ATBaseCtx MeResponse
 apiMe pid = do
   p <- notFoundOr "Project not found" =<< Projects.projectById pid
   ctx <- ask @AuthContext
-  pure MeResponse{projectId = pid, project = toProjectSummary p, hostUrl = ctx.config.hostUrl}
+  pure MeResponse{projectId = pid, project = upcast p, hostUrl = ctx.config.hostUrl}
 
 
 apiIngestionKey :: ApiPrincipal -> ATBaseCtx (Headers '[Header "Cache-Control" Text] Wire.IngestionKey)
@@ -1231,8 +1219,8 @@ apiTeamsBulk pid ba = bulkExec ba [("delete", del)]
 toMemberSummary :: PM.ProjectMemberVM -> MemberSummary
 toMemberSummary m =
   MemberSummary
-    { id = m.id.unwrap
-    , userId = m.userId.unwrap
+    { id = m.id
+    , userId = m.userId
     , email = CI.original m.email
     , firstName = m.first_name
     , lastName = m.last_name
@@ -1245,11 +1233,11 @@ apiMembersList pid = fmap toMemberSummary <$> PM.selectActiveProjectMembers pid
 
 
 -- | Locate a single member row via its user_id (project-scoped).
-fetchMemberByUserId :: Projects.ProjectId -> UUID.UUID -> ATBaseCtx PM.ProjectMemberVM
-fetchMemberByUserId pid uid = notFoundOr "Member not found" =<< PM.getActiveProjectMemberByUserId pid (Projects.UserId uid)
+fetchMemberByUserId :: Projects.ProjectId -> Projects.UserId -> ATBaseCtx PM.ProjectMemberVM
+fetchMemberByUserId pid uid = notFoundOr "Member not found" =<< PM.getActiveProjectMemberByUserId pid uid
 
 
-apiMemberGet :: Projects.ProjectId -> UUID.UUID -> ATBaseCtx MemberSummary
+apiMemberGet :: Projects.ProjectId -> Projects.UserId -> ATBaseCtx MemberSummary
 apiMemberGet pid uid = toMemberSummary <$> fetchMemberByUserId pid uid
 
 
@@ -1258,25 +1246,23 @@ apiMemberGet pid uid = toMemberSummary <$> fetchMemberByUserId pid uid
 apiMemberAdd :: Projects.ProjectId -> MemberAdd -> ATBaseCtx MemberSummary
 apiMemberAdd pid req = do
   uid <- case (req.userId, req.email) of
-    (Just u, _) -> do
-      _ <- notFoundOr "User not found" =<< Projects.userById (Projects.UserId u)
-      pure (Projects.UserId u)
+    (Just u, _) -> u <$ (notFoundOr "User not found" =<< Projects.userById u)
     (Nothing, Just e) ->
       maybe (notFoundOr "Could not create user" =<< Projects.createEmptyUser e) pure =<< Projects.userIdByEmail e
     (Nothing, Nothing) ->
       throwError err400{errBody = "Either email or user_id is required"}
   _ <- PM.insertProjectMembers [PM.CreateProjectMembers{projectId = pid, userId = uid, permission = fromMaybe PM.PView req.permission}]
-  apiMemberGet pid uid.unwrap
+  apiMemberGet pid uid
 
 
-apiMemberPatch :: Projects.ProjectId -> UUID.UUID -> MemberPatch -> ATBaseCtx MemberSummary
+apiMemberPatch :: Projects.ProjectId -> Projects.UserId -> MemberPatch -> ATBaseCtx MemberSummary
 apiMemberPatch pid uid p = do
   m <- fetchMemberByUserId pid uid
   PM.updateProjectMembersPermissons [(m.id, p.permission)]
   apiMemberGet pid uid
 
 
-apiMemberRemove :: Projects.ProjectId -> UUID.UUID -> ATBaseCtx NoContent
+apiMemberRemove :: Projects.ProjectId -> Projects.UserId -> ATBaseCtx NoContent
 apiMemberRemove pid uid = do
   m <- fetchMemberByUserId pid uid
   NoContent <$ PM.softDeleteProjectMembers (m.id :| [])

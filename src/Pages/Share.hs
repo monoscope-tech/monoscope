@@ -16,7 +16,7 @@ import Models.Apis.ShareEvents qualified as ShareEvents
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), ModalCfg (..), emptyState_, modalWith_)
+import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), ModalCfg (..), emptyState_, fieldLabel_, modalWith_, sectionLabel_, tonePill_)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Replay qualified as Replay
 import Pages.Telemetry qualified as PTelemetry
@@ -174,7 +174,7 @@ sharePage v = do
       whenJust replay \(shareId, projectId, sessionId) ->
         div_ [class_ "flex flex-col gap-2"] do
           div_ [class_ "flex items-center gap-2 px-1"] do
-            span_ [class_ "text-xs uppercase tracking-wider text-textWeak font-medium"] "Session replay"
+            sectionLabel_ "Session replay"
             span_ [class_ "text-xs text-textWeak truncate"] $ toHtml $ UUID.toText sessionId
           termWith
             "session-replay"
@@ -200,10 +200,8 @@ sharePage v = do
               img_ [class_ "h-5 w-auto dark:hidden", src_ "/public/assets/svgs/logo_black.svg"]
               img_ [class_ "h-5 w-auto hidden dark:block", src_ "/public/assets/svgs/logo_white.svg"]
             span_ [class_ "hidden sm:inline-block h-4 w-px bg-strokeWeak shrink-0"] ""
-            span_ [class_ "text-2xs uppercase tracking-wider text-textWeak font-medium whitespace-nowrap shrink-0"] "Shared event"
-            whenJust hoursLeftM \h ->
-              span_ [class_ $ "text-2xs px-2 py-0.5 rounded-full border whitespace-nowrap shrink-0 " <> bool "text-textWeak border-strokeWeak bg-fillWeaker" "text-textError border-strokeError-strong/40 bg-fillError-weak" (h <= 6)]
-                $ toHtml @Text ("Expires in " <> show h <> "h")
+            fieldLabel_ "whitespace-nowrap shrink-0" "Shared event"
+            whenJust hoursLeftM \h -> tonePill_ (bool NeutralBadge ErrorBadge (h <= 6)) ("Expires in " <> show h <> "h")
           a_
             [href_ "https://monoscope.tech", target_ "_blank", class_ "text-xs font-medium text-textBrand hover:underline shrink-0 whitespace-nowrap"]
             "About Monoscope ↗"

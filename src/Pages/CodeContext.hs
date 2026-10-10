@@ -25,7 +25,7 @@ import Models.Projects.ImpactReviews qualified as ImpactReviews
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (withSettingsPage)
-import Pages.Components (FieldCfg (..), FieldSize (..), formField_, formSelectField_, installationSettingsLink_, settingsH2_, settingsSection_)
+import Pages.Components (FieldCfg (..), FieldSize (..), disclosure_, formField_, formSelectField_, installationSettingsLink_, options_, settingsH2_, settingsSection_)
 import Pkg.Git qualified as Git
 import Pkg.ImpactReview qualified as ImpactReview
 import Relude
@@ -53,7 +53,7 @@ codeContextH pid fileM lineM svcM revM = do
     (Just path, Just n) ->
       W.runHTTPWreq (CodeContext.fetchSnippet authCtx.codeBlobCache authCtx.config pid svcM (nonEmptyT revM) path n)
         >>= addRespHeaders
-        . either reason_ snippet_
+          . either reason_ snippet_
     _ -> addRespHeaders $ note_ "This frame has no file and line to look up." Nothing
   where
     -- An unmapped frame is the one failure the reader can act on from here, so it is the one
@@ -156,14 +156,10 @@ codeMappingsContent pid sampleM = do
           span_ [class_ "text-sm font-medium text-textStrong"] $ toHtml (settings.owner <> "/" <> settings.repo)
           label_ [class_ "text-xs text-textWeak space-y-1"] do
             span_ [class_ "block"] "PR reviews"
-            select_ [name_ "enabled", class_ "select select-sm"] do
-              option_ ([value_ "true"] <> [selected_ "selected" | settings.enabled]) "Enabled"
-              option_ ([value_ "false"] <> [selected_ "selected" | not settings.enabled]) "Disabled"
+            select_ [name_ "enabled", class_ "select select-sm"] $ options_ (Just $ bool "false" "true" settings.enabled) [("true", "Enabled"), ("false", "Disabled")]
           label_ [class_ "text-xs text-textWeak space-y-1"] do
             span_ [class_ "block"] "Production evidence in GitHub"
-            select_ [name_ "includeEvidence", class_ "select select-sm"] do
-              option_ ([value_ "true"] <> [selected_ "selected" | settings.includeEvidence]) "Aggregates and links"
-              option_ ([value_ "false"] <> [selected_ "selected" | not settings.includeEvidence]) "Links only"
+            select_ [name_ "includeEvidence", class_ "select select-sm"] $ options_ (Just $ bool "false" "true" settings.includeEvidence) [("true", "Aggregates and links"), ("false", "Links only")]
           button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save review settings"
         forM_ reviewRuns \run -> details_ [class_ "rounded-lg border border-strokeWeak p-3"] do
           summary_ [class_ "cursor-pointer text-sm text-textStrong"] $ toHtml (run.owner <> "/" <> run.repo <> " #" <> show run.number <> " · " <> show run.state <> " · " <> T.take 8 run.revision)
@@ -254,11 +250,8 @@ codeMappingsContent pid sampleM = do
             False
             Nothing
           p_ [class_ "text-xs text-textWeak"] "Paste one line's path and we work out how it lines up with the repository. Leave it blank if your traces already print repo-relative paths."
-          details_ [class_ "group"] do
-            summary_ [class_ "text-xs font-medium text-textWeak cursor-pointer list-none flex items-center gap-1.5 hover:text-textStrong"] do
-              faSprite_ "chevron-right" "solid" "w-3 h-3 transition-transform group-open:rotate-90"
-              "Advanced: set the paths myself"
-            div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2 pt-3"] do
+          disclosure_ [] "text-xs font-medium text-textWeak hover:text-textStrong" "Advanced: set the paths myself"
+            $ div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2 pt-3"] do
               formField_ FieldSm def{placeholder = "/srv/app/"} "Strip from frame path" "pathPrefix" False Nothing
               formField_ FieldSm def{placeholder = "src"} "Directory inside the repo" "sourceRoot" False Nothing
           div_ [class_ "flex items-center gap-2"] do
@@ -351,7 +344,7 @@ codeMappingsPostH pid form = do
         hoistEither
           $ maybeToRight ("No file in " <> repoRef.repo <> "@" <> repoRef.ref <> " lines up with " <> sample <> ". Check the branch, or fill the paths in under Advanced.")
           $ (\(prefix, root, _) -> (prefix, root))
-          <$> CodeContext.deriveMapping (map (.path) entries) sample
+            <$> CodeContext.deriveMapping (map (.path) entries) sample
 
 
 codeMappingsDeleteH :: Projects.ProjectId -> CodeContext.CodeMappingId -> ATAuthCtx (RespHeaders (Html ()))

@@ -11,10 +11,10 @@ import Data.Time (addUTCTime)
 import Data.Vector qualified as V
 import Effectful.Time qualified as Time
 import Lucid
-import Lucid.Aria qualified as Aria
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.ServiceGraph (ServiceGraph (..), ServiceNode (..), drawnEdges, drawnNodes, endpointDependencyGraphForRange, serviceGraphForRange)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
+import Pages.Components (searchInput_)
 import Pkg.Components.ServiceMap (endpointDependencyMapPanel_, serviceMapPanel_)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Relude
@@ -73,13 +73,7 @@ serviceMapPage_ pd = div_ [class_ "w-full h-full overflow-y-auto c-scroll p-4 pt
       EndpointServiceMap{} -> show (V.length (drawnEdges pd.graph)) <> " direct dependencies"
       GlobalServiceMap{} -> show (V.length (drawnNodes pd.graph)) <> " services · " <> show (V.length (drawnEdges pd.graph)) <> " dependencies"
     -- Search dims rather than removes, so a filtered view never silently severs a path.
-    input_
-      [ type_ "search"
-      , class_ "ml-auto input input-sm border border-strokeWeak bg-fillWeaker rounded-lg w-56 max-md:w-32"
-      , Aria.label_ "Filter services"
-      , placeholder_ "Filter services"
-      , term "hx-on:input" "window.serviceMapFilter(this.value)"
-      ]
+    searchInput_ "ml-auto border-strokeWeak bg-fillWeaker w-56 max-md:w-32" "Filter services" [term "hx-on:input" "window.serviceMapFilter(this.value)"]
   case pd.scope of
     EndpointServiceMap{} -> endpointDependencyMapPanel_ pd.pid "endpoint-service-map" pd.graph serviceColors
     GlobalServiceMap selectedEnv -> serviceMapPanel_ pd.pid "global-service-map" pd.graph serviceColors selectedEnv

@@ -29,7 +29,7 @@ import Lucid.Aria qualified as Aria
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), Scope (..), containersInWindowCached, cpuPctOfLimit, memPctOfLimit, ratio, runtimeOf)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
-import Pages.Components (Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), RefreshingDeferred (..), emptyState_, factGrid_, metaChip_, tableSkeleton_, timeRefreshListener_, withDeferredBody)
+import Pages.Components (BadgeColor (..), Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), RefreshingDeferred (..), callout_, detailSection_, emptyState_, entityHeader_, factGrid_, metaChip_, pivotLinks_, tableSkeleton_, timeRefreshListener_, tonePill_, withDeferredBody)
 import Pages.Containers qualified as Containers
 import Pages.LogExplorer.Log qualified as Log
 import Pkg.Components.Table (Column, Config (..), Features (..), SearchMode (..), Table (..), ZeroState (..), col, facetActions, facetValues, singleSelectFilter, withAttrs)
@@ -327,53 +327,35 @@ hostDetailGetH pid hostM fromParam toParam sinceParam = do
 
 hostDetail_ :: Projects.ProjectId -> TimePicker.TimeWindow -> HostRow -> Html ()
 hostDetail_ pid window host = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
-  header_ [class_ "border-b border-strokeWeak px-5 py-4 pr-14"] do
-    div_ [class_ "flex flex-wrap items-start justify-between gap-3"] do
-      div_ [class_ "min-w-0"] do
-        div_ [class_ "flex items-center gap-2"] do
-          faSprite_ "server" "solid" "h-4 w-4 text-iconNeutral"
-          h2_ [id_ "host-detail-title", data_ "drawer-title" "true", class_ "break-words text-lg font-semibold text-textStrong"] $ toHtml host.name
-        div_ [class_ "mt-1.5 flex flex-wrap gap-1.5"] do
-          forM_ metadata $ uncurry metaChip_
-          forM_ host.integrations $ span_ [class_ "badge badge-sm badge-ghost"] . toHtml . integrationLabel
-      a_ ([href_ containersUrl, class_ "btn btn-xs gap-1.5 text-textBrand max-sm:h-11"] <> navTabAttrs) do
+  entityHeader_ (faSprite_ "server" "solid" "h-4 w-4 text-iconNeutral") host.name
+    ( a_ ([href_ containersUrl, class_ "btn btn-xs ms-auto gap-1.5 text-textBrand max-sm:h-11"] <> navTabAttrs) do
         faSprite_ "cube" "regular" "h-3.5 w-3.5"
         "View containers"
+    )
+    do
+      forM_ metadata $ uncurry metaChip_
+      forM_ host.integrations $ span_ [class_ "badge badge-sm badge-ghost"] . toHtml . integrationLabel
   nav_ [class_ "sticky top-0 z-20 border-b border-strokeWeak bg-bgRaised px-4 py-2", Aria.label_ "Host detail sections"] do
     div_ [class_ "flex gap-1 overflow-x-auto"] do
       sectionLink "host-summary" "server" "Summary"
       sectionLink "host-logs" "file-lines" "Recent logs"
       sectionLink "host-metrics" "chart-line" "Metrics"
-  main_ [class_ "min-w-0 space-y-5 px-5 py-4"] do
-    section_ [id_ "host-summary", class_ "space-y-3"] do
-      div_ [class_ "flex flex-wrap items-center justify-between gap-2"] do
-        h3_ [class_ "font-semibold text-textStrong"] "Host summary"
-        span_ [class_ $ "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium " <> bool "bg-fillWarning-weak text-textWarning" "bg-fillSuccess-weak text-textSuccess" (availableSignals == 4)] do
-          span_ [class_ $ "h-2 w-2 rounded-full " <> bool "bg-fillWarning-strong" "bg-fillSuccess-strong" (availableSignals == 4), Aria.hidden_ "true"] ""
-          toHtml $ "Metrics coverage: " <> show availableSignals <> " of 4"
+  main_ [class_ "min-w-0 space-y-5 p-5 [&>*+*]:border-t [&>*+*]:border-strokeWeak [&>*+*]:pt-4"] do
+    detailSection_ [id_ "host-summary"] "Host summary" (tonePill_ (bool WarningBadge SuccessBadge (availableSignals == 4)) $ "Metrics coverage: " <> show availableSignals <> " of 4") do
       factGrid_
         (bool "grid-cols-2 bg-bgBase max-sm:grid-cols-1" "grid-cols-6 bg-bgBase max-xl:grid-cols-3 max-sm:grid-cols-2" (availableSignals > 0))
         summaryFacts
-      when (availableSignals > 0 && availableSignals < 4) $ div_ [class_ "flex flex-wrap items-center justify-between gap-3 rounded-md border border-strokeWarning-weak bg-fillWarning-weak px-3 py-2 text-xs text-textWeak"] do
-        span_ [class_ "flex min-w-0 items-start gap-2"] do
-          faSprite_ "triangle-exclamation" "regular" "mt-0.5 h-3.5 w-3.5 shrink-0 text-iconWarning"
-          span_ [class_ "max-w-3xl"] "Some host metrics are missing from this time range. Available signals remain visible below."
-        a_ [href_ "https://monoscope.tech/docs/sdks/infrastructure/", target_ "_blank", rel_ "noopener noreferrer", class_ "shrink-0 font-medium text-textBrand hover:underline"] "Set up host metrics"
-    section_ [id_ "host-logs", class_ "space-y-3 border-t border-strokeWeak pt-5"] do
-      div_ [class_ "flex flex-wrap items-start justify-between gap-3"] do
-        div_ [class_ "space-y-0.5"] do
-          h3_ [class_ "font-semibold text-textStrong"] "Recent logs"
-          p_ [class_ "text-xs text-textWeak"] "Latest events reported by this host."
-        a_ ([href_ logExplorerUrl, class_ "btn btn-xs max-sm:hidden"] <> navTabAttrs) "View logs in Explorer"
+      when (availableSignals > 0 && availableSignals < 4) $ callout_ WarningBadge Nothing do
+        "Some host metrics are missing from this time range. Available signals remain visible below. "
+        a_ [href_ "https://monoscope.tech/docs/sdks/infrastructure/", target_ "_blank", rel_ "noopener noreferrer", class_ "font-medium text-textBrand hover:underline"] "Set up host metrics"
+    detailSection_ [id_ "host-logs"] "Recent logs" (a_ ([href_ logExplorerUrl, class_ "btn btn-xs max-sm:hidden"] <> navTabAttrs) "View logs in Explorer") do
+      p_ [class_ "text-xs text-textWeak"] "Latest events reported by this host."
       div_ [class_ "flex flex-col max-h-64 overflow-auto rounded-lg border border-strokeWeak bg-bgBase max-sm:hidden"] $ Log.virtualTable pid (Just logDataUrl) Nothing
       div_ [class_ "hidden flex-col items-start gap-3 rounded-lg border border-strokeWeak bg-bgBase p-4 max-sm:flex"] do
         p_ [class_ "text-sm text-textWeak"] "Open this host in Explorer to search, filter, and inspect its logs."
         a_ ([href_ logExplorerUrl, class_ "btn btn-sm btn-outline max-sm:h-11"] <> navTabAttrs) "Open logs in Explorer"
-    section_ [id_ "host-metrics", class_ "space-y-3 border-t border-strokeWeak pt-4"] do
-      div_ [class_ "flex flex-wrap items-center justify-between gap-2"] do
-        h3_ [class_ "font-semibold text-textStrong"] "Metrics"
-        when (availableSignals > 0) $ a_ ([href_ metricsUrl, class_ "btn btn-xs"] <> navTabAttrs) "View in Metrics"
-      if availableSignals == 0
+    detailSection_ [id_ "host-metrics"] "Metrics" (when (availableSignals > 0) $ a_ ([href_ metricsUrl, class_ "btn btn-xs"] <> navTabAttrs) "View in Metrics")
+      $ if availableSignals == 0
         then div_ [role_ "status"] do
           emptyState_
             def
@@ -528,31 +510,21 @@ imageDetailGetH pid imageM fromParam toParam sinceParam = do
 
 imageDetail_ :: Projects.ProjectId -> TimePicker.TimeWindow -> ImageRow -> Html ()
 imageDetail_ pid window image = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
-  header_ [class_ "border-b border-strokeWeak px-5 py-4 pr-14"] do
-    div_ [class_ "flex items-center gap-2"] $ faSprite_ "layer-group" "solid" "h-4 w-4 text-iconNeutral" >> h2_ [class_ "break-words text-lg font-semibold text-textStrong"] (toHtml image.image)
-    div_ [class_ "mt-2 flex flex-wrap gap-1.5"] do
-      span_ [class_ "badge badge-sm badge-ghost"] $ toHtml image.registry
-      forM_ image.runtimes $ \runtime -> span_ [class_ "badge badge-sm badge-ghost"] $ toHtml $ Containers.runtimeLabel runtime
-  main_ [class_ "space-y-5 p-5"] do
-    section_ [class_ "space-y-3"] do
-      h3_ [class_ "font-semibold text-textStrong"] "Image summary"
-      factGrid_
+  entityHeader_ (faSprite_ "layer-group" "solid" "h-4 w-4 text-iconNeutral") image.image pass do
+    span_ [class_ "badge badge-sm badge-ghost"] $ toHtml image.registry
+    forM_ image.runtimes $ \runtime -> span_ [class_ "badge badge-sm badge-ghost"] $ toHtml $ Containers.runtimeLabel runtime
+  main_ [class_ "space-y-5 p-5 [&>*+*]:border-t [&>*+*]:border-strokeWeak [&>*+*]:pt-4"] do
+    detailSection_ [] "Image summary" pass
+      $ factGrid_
         "grid-cols-3 max-sm:grid-cols-1 max-sm:divide-x-0 max-sm:divide-y"
         [ ("Running containers", show image.running)
         , ("CPU used", maybe "—" Containers.coresText image.cpuCores)
         , ("Memory used", maybe "—" formatBytes image.memoryBytes)
         ]
-    section_ [class_ "space-y-2 border-t border-strokeWeak pt-4"] do
-      h3_ [class_ "font-semibold text-textStrong"] "Image tags"
-      if null image.tags then emptyState_ def{size = ESCompact, icon = Just "hashtag"} "No image tags were reported." "" else div_ [class_ "flex flex-wrap gap-1.5"] $ forM_ image.tags $ \tag -> span_ [class_ "badge badge-sm badge-ghost"] $ toHtml tag
-    section_ [class_ "space-y-2 border-t border-strokeWeak pt-4"] do
-      h3_ [class_ "font-semibold text-textStrong"] "Security coverage"
-      p_ [class_ "flex items-start gap-2 rounded-md bg-fillInformation-weak px-3 py-2 text-sm text-textWeak"] do
-        faSprite_ "shield-check" "regular" "mt-0.5 h-4 w-4 shrink-0 text-iconInformation"
-        "No SBOM or vulnerability findings are connected for this image. Monoscope will not infer a clean result from missing scanner data."
-    div_ [class_ "flex flex-wrap gap-2 border-t border-strokeWeak pt-4"] do
-      a_ [href_ $ infraUrl pid "/infrastructure/containers" [("image", image.image)] window, class_ "btn btn-sm"] "View containers"
-      a_ [href_ $ infraUrl pid "/metrics" [("metric_prefix", "container.")] window, class_ "btn btn-sm"] "View metrics"
+    detailSection_ [] "Image tags" pass
+      $ if null image.tags then emptyState_ def{size = ESCompact, icon = Just "hashtag"} "No image tags were reported." "" else div_ [class_ "flex flex-wrap gap-1.5"] $ forM_ image.tags $ \tag -> span_ [class_ "badge badge-sm badge-ghost"] $ toHtml tag
+    detailSection_ [] "Security coverage" pass $ callout_ BrandBadge Nothing "No SBOM or vulnerability findings are connected for this image. Monoscope will not infer a clean result from missing scanner data."
+    pivotLinks_ [("View containers", infraUrl pid "/infrastructure/containers" [("image", image.image)] window), ("View metrics", infraUrl pid "/metrics" [("metric_prefix", "container.")] window)]
 
 
 -- | Constructor order is tab order: @[minBound ..]@ is what the resource tab strip renders,
@@ -730,15 +702,9 @@ kubernetesDetailGetH pid resourceM nameM clusterM namespaceM fromParam toParam s
 
 kubernetesDetail_ :: Projects.ProjectId -> TimePicker.TimeWindow -> KubeResource -> KubeRow -> Html ()
 kubernetesDetail_ pid window resource row = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
-  header_ [class_ "border-b border-strokeWeak px-5 py-4 pr-14"] do
-    div_ [class_ "flex flex-wrap items-center gap-2"] do
-      faSprite_ (kubeIcon resource) "solid" "h-4 w-4 text-iconNeutral"
-      h2_ [class_ "break-words text-lg font-semibold text-textStrong"] $ toHtml row.name
-      statusBadge row.status
-    div_ [class_ "mt-2 flex flex-wrap gap-1.5"] $ forM_ metadata $ uncurry metaChip_
-  main_ [class_ "space-y-5 p-5"] do
-    section_ [class_ "space-y-3"] do
-      h3_ [class_ "font-semibold text-textStrong"] $ toHtml $ resourceLabel resource <> " summary"
+  entityHeader_ (faSprite_ (kubeIcon resource) "solid" "h-4 w-4 text-iconNeutral") row.name (statusBadge row.status) $ forM_ metadata $ uncurry metaChip_
+  main_ [class_ "space-y-5 p-5 [&>*+*]:border-t [&>*+*]:border-strokeWeak [&>*+*]:pt-4"] do
+    detailSection_ [] (resourceLabel resource <> " summary") pass do
       factGrid_
         "grid-cols-5 max-lg:grid-cols-3 max-sm:grid-cols-2"
         [ ("Containers", show row.containers)
@@ -747,11 +713,10 @@ kubernetesDetail_ pid window resource row = div_ [class_ "-mx-8 -mb-4 min-h-full
         , ("Memory", maybe "—" formatBytes row.memoryBytes)
         , ("Restarts", maybe "—" (showFFloat' 0) row.restarts)
         ]
-      when (isNothing row.cpuCores || isNothing row.memoryBytes) $ p_ [class_ "rounded-md bg-fillInformation-weak px-3 py-2 text-sm text-textWeak"] "Usage is incomplete in this time range. Enable the kubeletstats receiver's node, pod, and container metric groups to fill the missing signals."
-    div_ [class_ "flex flex-wrap gap-2 border-t border-strokeWeak pt-4"] do
-      whenJust row.namespace $ \namespace -> a_ [href_ $ infraUrl pid "/infrastructure/containers" ([("namespace", namespace)] <> [("cluster", cluster) | cluster <- toList row.cluster]) window, class_ "btn btn-sm"] "View containers"
-      a_ [href_ $ infraUrl pid "/log_explorer" [("query", kubeQuery)] window, class_ "btn btn-sm"] "View logs"
-      a_ [href_ $ infraUrl pid "/metrics" [("metric_prefix", "k8s.")] window, class_ "btn btn-sm"] "View metrics"
+      when (isNothing row.cpuCores || isNothing row.memoryBytes) $ callout_ BrandBadge Nothing "Usage is incomplete in this time range. Enable the kubeletstats receiver's node, pod, and container metric groups to fill the missing signals."
+    pivotLinks_
+      $ [("View containers", infraUrl pid "/infrastructure/containers" ([("namespace", namespace)] <> [("cluster", cluster) | cluster <- toList row.cluster]) window) | namespace <- toList row.namespace]
+      <> [("View logs", infraUrl pid "/log_explorer" [("query", kubeQuery)] window), ("View metrics", infraUrl pid "/metrics" [("metric_prefix", "k8s.")] window)]
   where
     metadata = [(label, value) | (label, Just value) <- [("Cluster", row.cluster), ("Namespace", row.namespace), ("Node", row.node), ("Workload", row.workload)]]
     kubeQuery =

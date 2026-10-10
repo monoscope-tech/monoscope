@@ -39,8 +39,9 @@ import Deriving.Aeson qualified as AE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 import Hasql.Interpolate qualified as HI
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (UUIDId)
+import Pkg.DeriveUtils (UUIDId, enumLit)
 import Relude
 import System.Types (DB)
 
@@ -255,8 +256,8 @@ createSlackInstall stateId userId projectId onboarding = do
       JOIN projects.projects project ON project.id = member.project_id
       JOIN users.users account ON account.id = member.user_id
       WHERE member.project_id = #{projectId} AND member.user_id = #{userId}
-        AND member.permission = 'admin'|]
-      <> activeMembership
+        AND member.permission = ^{enumLit ProjectMembers.PAdmin}|]
+        <> activeMembership
   pure $ affected == 1
 
 
@@ -269,9 +270,9 @@ consumeSlackInstall stateId userId =
     USING projects.project_members member, projects.projects project, users.users account
     WHERE request.id = #{stateId} AND request.user_id = #{userId} AND request.expires_at > now()
       AND member.project_id = request.project_id AND member.user_id = request.user_id
-      AND project.id = member.project_id AND account.id = member.user_id AND member.permission = 'admin' |]
-    <> activeMembership
-    <> [HI.sql| RETURNING request.project_id, request.onboarding |]
+      AND project.id = member.project_id AND account.id = member.user_id AND member.permission = ^{enumLit ProjectMembers.PAdmin} |]
+      <> activeMembership
+      <> [HI.sql| RETURNING request.project_id, request.onboarding |]
 
 
 -- | OAuth-time Slack credentials + the channel the app was installed to.

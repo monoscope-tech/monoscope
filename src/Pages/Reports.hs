@@ -7,7 +7,6 @@ module Pages.Reports (
   PerformanceReport (..),
   ReportsGet (..),
   ReportsPost (..),
-  pctChange,
   eventsWidget,
   errorsWidget,
   renderWeeklyEmail,
@@ -44,7 +43,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Containers qualified as Containers
 import Models.Telemetry.Report qualified as Report
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
-import Pages.Components (EmptyStateCfg (..), emptyState_)
+import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), emptyState_)
 import Pkg.Components.Widget (WidgetType (..))
 import Pkg.Components.Widget qualified as Widget
 import Pkg.EmailTemplates qualified as ET
@@ -55,7 +54,7 @@ import System.Tracing (forkWithCtx)
 import System.Types (ATAuthCtx, DB, RespHeaders, addRespHeaders, addSuccessToast)
 import UnliftIO (tryAny)
 import UnliftIO qualified
-import Utils (FreeTierStatus, LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, formatUTCMicros, freeTierDailyMaxEvents, hostPath, loadingIndicatorWith_)
+import Utils (LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, formatUTCMicros, freeTierDailyMaxEvents, hostPath, loadingIndicatorWith_)
 
 
 data PerformanceReport = PerformanceReport
@@ -126,23 +125,17 @@ buildReportJson' snapshot = AE.object ["systemSnapshot" AE..= snapshot]
 
 
 snapshotTotals :: Report.ReportSnapshot -> (Int, Int, Double, Double)
-snapshotTotals snapshot = (events, errors, pctChange events (fromIntegral oldEvents), pctChange errors (fromIntegral oldErrors))
+snapshotTotals snapshot = (events, errors, pctChange events (total (.previous) (.events)), pctChange errors (total (.previous) (.errorEvents)))
   where
-    current = mapMaybe (.current) snapshot.services
-    previous = mapMaybe (.previous) snapshot.services
-    events = fromIntegral $ sum $ map (.events) current
-    errors = fromIntegral $ sum $ map (.errorEvents) current
-    oldEvents = sum $ map (.events) previous
-    oldErrors = sum $ map (.errorEvents) previous
-
-
--- | Percent change of @cur@ over @prev@, rounded to 2dp; 0 when there's no baseline.
-pctChange :: Integral a => a -> a -> Double
-pctChange cur prev
-  | prev == 0 = 0
-  | otherwise = fromIntegral (round (ratio * 10000) :: Int) / 100
-  where
-    ratio = fromIntegral (cur - prev) / fromIntegral prev :: Double
+    events = total (.current) (.events)
+    errors = total (.current) (.errorEvents)
+    total :: (Report.ServiceComparison -> Maybe Report.ServiceStats) -> (Report.ServiceStats -> Int64) -> Int
+    total period field = fromIntegral $ sum $ map field $ mapMaybe period snapshot.services
+    -- Percent change rounded to 2dp; 0 when there's no baseline.
+    pctChange :: Int -> Int -> Double
+    pctChange cur prev
+      | prev == 0 = 0
+      | otherwise = fromIntegral (round (fromIntegral (cur - prev) / fromIntegral prev * 10000 :: Double) :: Int) / 100
 
 
 -- $setup
@@ -236,23 +229,22 @@ renderWeeklyEmail reportType reportUrl project userName startTime endTime fullRe
       stmTxt = formatUTCMicros startTime
       endTxt = formatUTCMicros endTime
       savedTrends = case evidence of ET.SystemEvidence snapshot -> snapshot.trends; ET.HistoricalEvidence _ -> Nothing
+      pngUrl w = Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid w Nothing (Just stmTxt) (Just endTxt)
       chartUrl label value widget = case savedTrends of
         Just Report.Unavailable -> pure ""
-        _ ->
-          let prepared = case savedTrends of
-                Just (Report.Available points) ->
-                  widget
-                    { Widget.query = Nothing
-                    , Widget.dataset =
-                        Just
-                          def
-                            { Widget.source = AE.toJSON $ AE.toJSON (["Time", label] :: [Text]) : [AE.toJSON ([p.epochSeconds * 1000, value p] :: [Int64]) | p <- points]
-                            , Widget.from = Just $ floor $ utcTimeToPOSIXSeconds startTime * 1000
-                            , Widget.to = Just $ floor $ utcTimeToPOSIXSeconds endTime * 1000
-                            }
-                    }
-                _ -> widget
-           in Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid prepared Nothing (Just stmTxt) (Just endTxt)
+        Nothing -> pngUrl widget
+        Just (Report.Available points) ->
+          pngUrl
+            widget
+              { Widget.query = Nothing
+              , Widget.dataset =
+                  Just
+                    def
+                      { Widget.source = AE.toJSON $ AE.toJSON (["Time", label] :: [Text]) : [AE.toJSON ([p.epochSeconds * 1000, value p] :: [Int64]) | p <- points]
+                      , Widget.from = Just $ floor $ utcTimeToPOSIXSeconds startTime * 1000
+                      , Widget.to = Just $ floor $ utcTimeToPOSIXSeconds endTime * 1000
+                      }
+              }
   eventsUrl <- chartUrl ("Events" :: Text) (.events) eventsWidget
   errorsUrl <- chartUrl "Errors" (.errors) errorsWidget
   let projectUrl = hostPath ctx.env.hostUrl ("p/" <> pid.toText)
@@ -347,11 +339,6 @@ instance ToHtml ReportsPost where
   toHtmlRaw = toHtml
 
 
-wrapSingleResponse :: BWConfig -> FreeTierStatus -> Text -> Maybe Text -> (Text, Text, Text) -> ATAuthCtx (RespHeaders ReportsGet)
-wrapSingleResponse bw freeTierStatus pageTitle hxRequestM content =
-  addRespHeaders $ maybe (ReportsGetSingle $ PageCtx bw{pageTitle, menuItem = Just "Reports", freeTierStatus} content) (const $ ReportsGetSingle' content) hxRequestM
-
-
 singleReportGetH :: Projects.ProjectId -> Issues.ReportId -> Maybe Text -> ATAuthCtx (RespHeaders ReportsGet)
 singleReportGetH pid rid hxRequestM = do
   (sess, project, bw) <- mkPageCtx pid
@@ -362,7 +349,7 @@ singleReportGetH pid rid hxRequestM = do
     Just report -> do
       (dateLabel, emailHtml) <- reportToEmailHtml report project sess.user.firstName
       pure (display report.reportType, dateLabel, emailHtml)
-  wrapSingleResponse bw freeTierStatus "Report" hxRequestM content
+  addRespHeaders $ maybe (ReportsGetSingle $ PageCtx bw{pageTitle = "Report", menuItem = Just "Reports", freeTierStatus} content) (const $ ReportsGetSingle' content) hxRequestM
 
 
 reportsLiveGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders ReportsGet)
@@ -372,12 +359,12 @@ reportsLiveGetH pid hxRequestM = do
   view <- case claimed of
     Just token -> LiveReportBuilding pid <$ startLivePreview pid token
     Nothing ->
-      Report.getPreview pid >>= \case
-        Just (Report.PreviewReady snapshot) -> do
+      (fromMaybe Report.PreviewBuilding <$> Report.getPreview pid) >>= \case
+        Report.PreviewReady snapshot -> do
           (dateLabel, emailHtml) <- dropSubject <$> renderSystemEmail Projects.RTWeekly ("/p/" <> pid.toText <> "/reports/live") project sess.user.firstName True snapshot
           pure $ LiveReportReady ("weekly", dateLabel, emailHtml)
-        Just Report.PreviewFailed -> pure $ LiveReportFailed pid
-        _ -> pure $ LiveReportBuilding pid
+        Report.PreviewFailed -> pure $ LiveReportFailed pid
+        Report.PreviewBuilding -> pure $ LiveReportBuilding pid
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
   addRespHeaders
     $ maybe
@@ -392,10 +379,7 @@ reportsGetH pid page hxRequest hxBoosted = do
   let pg = fromMaybe 0 (readMaybe . toString =<< page) :: Int
   reports <- V.fromList <$> Issues.reportHistoryByProject pid pg
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
-  let nextUrl =
-        if V.length reports < 20
-          then Nothing
-          else Just $ "/p/" <> pid.toText <> "/reports?page=" <> show (pg + 1)
+  let nextUrl = ("/p/" <> pid.toText <> "/reports?page=" <> show (pg + 1)) <$ guard (V.length reports >= 20)
   case (hxRequest, hxBoosted) of
     (Just "true", Nothing) -> addRespHeaders $ ReportsGetList pid reports nextUrl
     _ -> addRespHeaders $ ReportsGetMain $ PageCtx bw{pageTitle = "Reports", freeTierStatus} (pid, reports, nextUrl)
@@ -430,10 +414,7 @@ liveReportPage view = div_ ([id_ "live-report-preview", class_ "w-full h-full mi
     span_ [class_ "loading loading-spinner text-textBrand"] ""
     h3_ [class_ "font-medium text-textStrong"] "Preparing your system report"
     p_ [class_ "text-sm text-textWeak max-w-md"] "Collecting the last seven days across your services, infrastructure, issues, and monitors. This page will update when the report is ready."
-  LiveReportFailed pid -> div_ [class_ "flex h-full flex-col items-center justify-center gap-3 p-6 text-center", role_ "status"] do
-    h3_ [class_ "font-medium text-textStrong"] "The report could not be prepared"
-    p_ [class_ "text-sm text-textWeak max-w-md"] "Some report data could not be collected. We’ll retry in a minute. Your saved reports are still available."
-    a_ [href_ $ "/p/" <> pid.toText <> "/reports", class_ "text-sm text-textBrand underline"] "View saved reports"
+  LiveReportFailed pid -> emptyState_ def{icon = Just "circle-exclamation", action = ESLink ("/p/" <> pid.toText <> "/reports") "View saved reports"} "The report could not be prepared" "Some report data could not be collected. We’ll retry in a minute. Your saved reports are still available."
   where
     polling = case view of
       LiveReportReady{} -> []
@@ -486,10 +467,9 @@ reportsPage :: Projects.ProjectId -> V.Vector Issues.ReportListItem -> Maybe Tex
 reportsPage pid reports nextUrl =
   div_ [class_ "flex flex-col md:flex-row h-full w-full border-t"] do
     if V.null reports
-      then div_ [class_ "flex h-full w-full justify-center items-center"]
-        $ div_ [class_ "flex flex-col items-center gap-4"] do
-          emptyState_ def{icon = Just "empty"} "No reports generated yet" "Scheduled reports will appear here after the first report is generated."
-          a_ [href_ $ "/p/" <> pid.toText <> "/reports/live", class_ "btn btn-primary", term "hx-preload" "false"] "Generate live report"
+      then
+        div_ [class_ "flex h-full w-full justify-center items-center"]
+          $ emptyState_ def{action = ESCustom $ a_ [href_ $ "/p/" <> pid.toText <> "/reports/live", class_ "btn btn-primary w-max mx-auto", term "hx-preload" "false"] "Generate live report"} "No reports generated yet" "Scheduled reports will appear here after the first report is generated."
       else do
         div_ [class_ "w-full md:w-1/3 md:border-r border-b md:border-b-0 border-strokeWeak p-4 overflow-x-auto md:overflow-y-auto"]
           $ div_ [class_ "mt-4 flex flex-row md:flex-col gap-4 w-full"] do

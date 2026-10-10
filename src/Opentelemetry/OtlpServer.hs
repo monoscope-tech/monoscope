@@ -392,7 +392,7 @@ processList msgs !attrs =
       appCtx <- ask @AuthContext
       -- DLQ replay stamps monoscope-write-failure; rewrite only the failed leg
       -- so the durable store isn't duplicated. Live ingest has no header → both.
-      let target = Telemetry.writeTargetFor appCtx.env.enablePostgresTelemetryWrites appCtx.env.enableTimefusionWrites (HM.lookup "monoscope-write-failure" attrs)
+      let target = Telemetry.writeTargetFor appCtx.env (HM.lookup "monoscope-write-failure" attrs >>= Telemetry.parseWriteFailureKind)
       case HM.lookup "ce-type" attrs of
         Just "org.opentelemetry.otlp.logs.v1" ->
           processBatchPipeline @LS.ExportLogsServiceRequest
@@ -1564,7 +1564,7 @@ processSignalRequest label signal receivedMsg noun countKey metadataApiKey proje
     -- and no record was ever offered to a filter, because every record arrived through the one
     -- ingest path with no hook in it.
     fanOutToLiveTail appCtx $ Telemetry.redactOtelSpan <$> minted
-    Telemetry.insertAndHandOff appCtx.hasqlTimefusionUsesPgTypes (Telemetry.writeTargetFor appCtx.env.enablePostgresTelemetryWrites appCtx.env.enableTimefusionWrites Nothing) appCtx.extractionWorker projectCaches minted
+    Telemetry.insertAndHandOff appCtx.hasqlTimefusionUsesPgTypes (Telemetry.writeTargetFor appCtx.env Nothing) appCtx.extractionWorker projectCaches minted
       >>= throwOnWriteFailure
     Log.logTrace
       (label <> ": Successfully inserted " <> noun <> " into database")
@@ -1634,7 +1634,7 @@ processMetricsRequest metadataApiKey req = do
 
       unless (null metricRecords) do
         let records = Telemetry.mintMetricIds $ V.fromList metricRecords
-            target = Telemetry.writeTargetFor appCtx.env.enablePostgresTelemetryWrites appCtx.env.enableTimefusionWrites Nothing
+            target = Telemetry.writeTargetFor appCtx.env Nothing
         Telemetry.bulkInsertOtelMetrics appCtx.metricCatalogBuffer appCtx.hasqlTimefusionUsesPgTypes target records >>= throwOnWriteFailure
         Log.logTrace
           "Metrics: Successfully inserted metrics into database"

@@ -21,8 +21,8 @@ import Effectful.Time qualified as Time
 import Lucid
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Containers (ContainerRow (..), Runtime (..), Scope (..), containersInWindowCached, cpuPctOfLimit, freshnessWindow, memPctOfLimit, runtimeOf)
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
-import Pages.Components (Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), RefreshingDeferred (..), emptyState_, factGrid_, metaChip_, tableSkeleton_, timeRefreshListener_, withDeferredBody)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
+import Pages.Components (BadgeColor (..), Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), RefreshingDeferred (..), callout_, detailSection_, emptyState_, entityHeader_, factGrid_, metaChip_, pivotLinks_, tableSkeleton_, timeRefreshListener_, withDeferredBody)
 import Pkg.Components.Table (Column, Config (..), Features (..), SearchMode (..), Table (..), ZeroState (..), col, facetActions, facetValues, singleSelectFilter, withAttrs, withColHeaderExtra)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
@@ -289,19 +289,12 @@ containerDetailGetH pid containerM podM scopeM clusterM namespaceM nodeM fromPar
     _ -> emptyState_ def{icon = Just "cube", action = ESLink (TimePicker.windowUrl ("/p/" <> pid.toText <> "/infrastructure/containers") [] window) "View containers"} "Several containers match this link." "Select a container from the list to view its metrics."
   where
     containerDetail_ :: TimePicker.TimeWindow -> ContainerRow -> Html ()
-    containerDetail_ window r = div_ [class_ "min-h-full"] do
-      header_ [class_ "border-b border-strokeWeak px-5 py-4"] do
-        div_ [class_ "flex flex-wrap items-center gap-2"] do
-          runtimeIcon_ r "h-4 w-4 text-iconNeutral"
-          h2_ [class_ "break-all text-lg font-semibold text-textStrong"] $ toHtml r.containerName
-          readyCell r
-        whenJust r.image \image -> div_ [class_ "mt-1 break-all text-xs text-textWeak"] $ toHtml $ image <> maybe "" (":" <>) r.imageTag
-        div_ [class_ "mt-2 flex flex-wrap gap-1.5"] $ forM_ metadata $ uncurry metaChip_
-      main_ [class_ "space-y-5 p-5"] do
-        section_ [class_ "space-y-3"] do
-          div_ [class_ "flex flex-wrap items-center justify-between gap-2"] do
-            h3_ [class_ "font-semibold text-textStrong"] "Container summary"
-            span_ [class_ "text-xs text-textWeak"] $ toHtml $ "Signal coverage " <> show availableSignals <> "/4"
+    containerDetail_ window r = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
+      entityHeader_ (runtimeIcon_ r "h-4 w-4 text-iconNeutral") r.containerName (readyCell r) do
+        whenJust r.image \image -> span_ [class_ "basis-full break-all text-xs text-textWeak"] $ toHtml $ image <> maybe "" (":" <>) r.imageTag
+        forM_ metadata $ uncurry metaChip_
+      main_ [class_ "space-y-5 p-5 [&>*+*]:border-t [&>*+*]:border-strokeWeak [&>*+*]:pt-4"] do
+        detailSection_ [] "Container summary" (span_ [class_ "text-xs text-textWeak"] $ toHtml $ "Signal coverage " <> show availableSignals <> "/4") do
           factGrid_
             "grid-cols-4 max-sm:grid-cols-2"
             [ ("CPU used", dash $ coresText <$> r.cpuCores)
@@ -309,21 +302,20 @@ containerDetailGetH pid containerM podM scopeM clusterM namespaceM nodeM fromPar
             , ("Memory used", dash $ formatBytes <$> r.memBytes)
             , ("Memory / limit", pct $ memPctOfLimit r)
             ]
-          when (availableSignals < 4) $ p_ [class_ "rounded-md bg-fillInformation-weak px-3 py-2 text-sm text-textWeak"] "Usage or limit telemetry is missing in this time range. A dash means the collector did not report that signal; it is never treated as zero."
-        section_ [class_ "space-y-2 border-t border-strokeWeak pt-4"] do
-          h3_ [class_ "font-semibold text-textStrong"] "Requests and limits"
-          table_ [class_ "table table-xs rounded-lg border border-strokeWeak"] do
-            thead_ $ tr_ $ mapM_ (th_ . toHtml) (["", "Request", "Limit"] :: [Text])
-            tbody_ do
-              tr_ $ mapM_ (td_ . toHtml) ["CPU (cores)", dash (showFFloat' 3 <$> r.cpuRequest), dash (showFFloat' 3 <$> r.cpuLimit)]
-              tr_ $ mapM_ (td_ . toHtml) ["Memory", dash (formatBytes <$> r.memRequest), dash (formatBytes <$> r.memLimit)]
-        section_ [class_ "space-y-3 border-t border-strokeWeak pt-4"] do
-          h3_ [class_ "font-semibold text-textStrong"] "Metrics"
-          div_ [class_ "grid grid-cols-2 gap-3 max-xl:grid-cols-1"]
-            $ forM_ ([("container-detail-cpu", "CPU usage", "cores", "container.cpu.usage"), ("container-detail-memory", "Memory working set", "bytes", "container.memory.working_set")] :: [(Text, Text, Text, Text)]) \(wid, title, unit, metric) ->
-              div_ [class_ "min-h-56"] $ Widget.widget_ $ infrastructureWidget pid wid title unit (metricQuery metric)
-        div_ [class_ "flex flex-wrap gap-2 border-t border-strokeWeak pt-4"] $ forM_ pivots \(label, url) ->
-          a_ ([href_ url, class_ "btn btn-sm"] <> navTabAttrs) $ toHtml label
+          when (availableSignals < 4) $ callout_ BrandBadge Nothing "Usage or limit telemetry is missing in this time range. A dash means the collector did not report that signal; it is never treated as zero."
+        detailSection_ [] "Requests and limits" pass
+          $ factGrid_
+            "grid-cols-4 max-sm:grid-cols-2"
+            [ ("CPU request (cores)", dash $ showFFloat' 3 <$> r.cpuRequest)
+            , ("CPU limit (cores)", dash $ showFFloat' 3 <$> r.cpuLimit)
+            , ("Memory request", dash $ formatBytes <$> r.memRequest)
+            , ("Memory limit", dash $ formatBytes <$> r.memLimit)
+            ]
+        detailSection_ [] "Metrics" pass
+          $ div_ [class_ "grid grid-cols-2 gap-3 max-xl:grid-cols-1"]
+          $ forM_ ([("container-detail-cpu", "CPU usage", "cores", "container.cpu.usage"), ("container-detail-memory", "Memory working set", "bytes", "container.memory.working_set")] :: [(Text, Text, Text, Text)]) \(wid, title, unit, metric) ->
+            div_ [class_ "min-h-56"] $ Widget.widget_ $ infrastructureWidget pid wid title unit (metricQuery metric)
+        pivotLinks_ pivots
       where
         dash = fromMaybe "—"
         pct = dash . fmap (\value -> showFFloat' 0 (value * 100) <> "%")

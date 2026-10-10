@@ -1,5 +1,4 @@
 module Pkg.PatternMerge (
-  embeddingTextForError,
   assignToCentroids,
   autoMergeThreshold,
   ambiguousThreshold,
@@ -45,19 +44,6 @@ import Text.Regex.TDFA ((=~))
 
 -- $setup
 -- >>> import Data.Text.Display (display)
-
-
--- | Construct embedding text for an error pattern.
---
--- >>> embeddingTextForError "TypeError" "Cannot read property 'x' of undefined"
--- "TypeError: Cannot read property 'x' of undefined"
---
--- >>> embeddingTextForError "" "some message"
--- "some message"
-embeddingTextForError :: Text -> Text -> Text
-embeddingTextForError errType msg
-  | T.null errType = msg
-  | otherwise = errType <> ": " <> msg
 
 
 -- | Cosine similarity using pre-computed norms for both vectors.

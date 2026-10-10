@@ -56,16 +56,16 @@ onboardingUrl :: Projects.ProjectId -> Text -> Text
 onboardingUrl pid path = "/p/" <> pid.toText <> "/onboarding" <> path
 
 
--- 'Info', 'Survey', 'CreateMonitor','NotifChannel','Integration', 'Pricing', 'Complete'
 onboardingGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders OnboardingGet)
 onboardingGetH pid onboardingStepM = do
   (sess, project, bw) <- mkPageCtx pid
   appCtx <- ask @AuthContext
   let questions = fromMaybe (AE.Object []) project.questions
+      q = fromMaybe "" . lookupValueText questions
       onboardingStep = fromMaybe "Info" onboardingStepM
   stepData <- case onboardingStep of
     "Complete" -> pure $ CompleteStep pid
-    "Survey" -> pure $ SurveyStep pid (fromMaybe "" $ lookupValueText questions "location") (questions L.^.. key "functionality" . _Array . traverse . _String)
+    "Survey" -> pure $ SurveyStep pid (q "location") (questions L.^.. key "functionality" . _Array . traverse . _String)
     "NotifChannel" -> do
       hasSlack <- isJust <$> getProjectSlackData pid
       hasDiscord <- isJust <$> getDiscordDataByProjectId pid
@@ -78,9 +78,7 @@ onboardingGetH pid onboardingStepM = do
     "Pricing" ->
       let checkout u = u <> "&checkout[custom][project_id]=" <> pid.toText
        in pure $ PricingStep pid (checkout appCtx.config.lemonSqueezyUrl) (checkout appCtx.config.lemonSqueezyCriticalUrl) project.paymentPlan appCtx.config.enableFreetier appCtx.config.basicAuthEnabled
-    _ ->
-      let q = fromMaybe "" . lookupValueText questions
-       in pure $ InfoStep pid sess.user.firstName sess.user.lastName (q "companyName") (q "companySize") (q "foundUsFrom")
+    _ -> pure $ InfoStep pid sess.user.firstName sess.user.lastName (q "companyName") (q "companySize") (q "foundUsFrom")
   addRespHeaders $ OnboardingGet $ PageCtx bw{currProject = Nothing, hideNavbar = True} stepData
 
 
@@ -251,18 +249,11 @@ checkIntegrationGet pid languageM = do
 
 onboardingInfoPostH :: Projects.ProjectId -> OnboardingInfoForm -> ATAuthCtx (RespHeaders OnboardingInfoPost)
 onboardingInfoPostH pid form = do
-  (sess, _project) <- Projects.sessionAndProject pid
-  let answers =
-        HI.AsJsonb
-          $ AE.object
-            [ ("companyName", AE.toJSON form.companyName)
-            , ("companySize", AE.toJSON form.companySize)
-            , ("foundUsFrom", AE.toJSON form.whereDidYouHearAboutUs)
-            ]
-      userId = sess.user.id
+  (sess, _) <- Projects.sessionAndProject pid
+  let answers = HI.AsJsonb $ AE.object ["companyName" AE..= form.companyName, "companySize" AE..= form.companySize, "foundUsFrom" AE..= form.whereDidYouHearAboutUs]
   Hasql.interpExecute_ [HI.sql| update projects.projects set title=#{form.companyName}, questions = COALESCE(questions, '{}'::jsonb) || #{answers} where id=#{pid} |]
   markStepCompleted pid "Info"
-  Hasql.interpExecute_ [HI.sql| update users.users set first_name=#{form.firstName}, last_name=#{form.lastName} where id=#{userId} |]
+  Hasql.interpExecute_ [HI.sql| update users.users set first_name=#{form.firstName}, last_name=#{form.lastName} where id=#{sess.user.id} |]
   redirectCS $ onboardingUrl pid "?step=Survey"
   addRespHeaders $ OnboardingInfoPost ()
 
@@ -270,7 +261,7 @@ onboardingInfoPostH pid form = do
 onboardingConfPostH :: Projects.ProjectId -> OnboardingConfForm -> ATAuthCtx (RespHeaders OnboardingConfPost)
 onboardingConfPostH pid form = do
   void $ Projects.sessionAndProject pid -- membership check
-  let answers = HI.AsJsonb $ AE.object [("functionality", AE.toJSON form.functionality), ("location", AE.toJSON form.location)]
+  let answers = HI.AsJsonb $ AE.object ["functionality" AE..= form.functionality, "location" AE..= form.location]
   Hasql.interpExecute_ [HI.sql| update projects.projects set questions = COALESCE(questions, '{}'::jsonb) || #{answers} where id=#{pid} |]
   markStepCompleted pid "Survey"
   redirectCS $ onboardingUrl pid "?step=NotifChannel"
@@ -294,8 +285,7 @@ pricingPage :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Htm
 pricingPage pid lemon critical paymentPlan freeTierEnabled basicAuthEnabled =
   div_ [class_ "w-full max-w-[1100px] mx-auto mt-[70px] mb-10 px-4 md:px-0"] $ do
     div_ [class_ "flex-col gap-4 flex w-full"] $ do
-      div_ [class_ "w-full md:w-1/2"] $ do
-        stepIndicator 5 "Please pick a plan" $ onboardingUrl pid "?step=Integration"
+      div_ [class_ "w-full md:w-1/2"] $ stepIndicator 5 "Please pick a plan" $ onboardingUrl pid "?step=Integration"
       paymentPlanPicker pid lemon critical paymentPlan freeTierEnabled basicAuthEnabled True Projects.NoBillingProvider
       div_ [class_ "flex flex-col gap-2 w-full pb-20"] do
         span_ [class_ "text-textStrong text-2xl mt-20"] "FAQ"
@@ -401,9 +391,7 @@ integrationsPage pid apikey =
 
         div_ [class_ "mt-2 md:mt-6 mb-0 p-3 md:p-4 bg-fillWeak border border-strokeWeak rounded-xl"] do
           div_ [class_ "mb-1.5 md:mb-2 text-textWeak text-sm"] "Your API Key"
-          div_ [class_ "flex items-center gap-2"] do
-            div_ [class_ "flex-1 monospace bg-bgBase p-3 border border-strokeWeak rounded-lg overflow-x-auto", id_ "api-key-display"] $ toHtml apikey
-            copyButton_ "px-4 py-2 bg-fillBrand-strong rounded-xl text-textInverse-strong flex items-center gap-1 hover:bg-fillBrand-strong/90 cursor-pointer" "h-4 w-4" "#api-key-display's innerText" []
+          copyField_ "api-key-display" apikey
 
         div_ [class_ "mb-4 px-4 py-2.5 bg-gradient-to-r from-fillInformation-weak to-transparent border border-strokeInformation-weak rounded-lg"] do
           p_ [class_ "text-sm text-textStrong"] do
@@ -458,7 +446,7 @@ integrationsPage pid apikey =
                         , hxSelect_ "#mainArticle"
                         , hxIndicator_ $ "#fw-indicator-" <> l.slug
                         ]
-                      <> [checked_ | idx == 0]
+                        <> [checked_ | idx == 0]
                     unless (T.null fw.icon) $ img_ [class_ "h-5 w-5", src_ $ "https://monoscope.tech/assets/img/framework-logos/" <> fw.icon]
                     span_ $ toHtml fw.name
 
@@ -488,26 +476,16 @@ integrationsPage pid apikey =
           div_ [class_ "text-textStrong font-medium mb-2 flex items-center gap-2"] do
             span_ [class_ "inline-flex items-center justify-center w-6 h-6 rounded-full bg-fillBrand-weak text-textBrand text-sm font-bold"] "1"
             span_ "Install & authenticate (if you haven't)"
-          div_
-            [class_ "bg-bgBase p-3 rounded monospace text-sm overflow-x-auto border border-strokeWeak"]
-            "curl https://monoscope.tech/install.sh | sh && monoscope auth login"
+          copyField_ "install-cmd" "curl https://monoscope.tech/install.sh | sh && monoscope auth login"
 
         div_ [class_ "p-4 bg-fillWeak rounded-lg"] do
           div_ [class_ "text-textStrong font-medium mb-2 flex items-center gap-2"] do
             span_ [class_ "inline-flex items-center justify-center w-6 h-6 rounded-full bg-fillBrand-weak text-textBrand text-sm font-bold"] "2"
             span_ "Send a test event"
-          div_ [class_ "relative"] do
-            pre_ [class_ "bg-bgBase p-3 rounded monospace text-sm overflow-x-auto border border-strokeWeak", id_ "telemetrygen-cmd"]
-              $ code_
-              $ toHtml
-                "monoscope send-event -m \"hello world\""
-            copyButton_ "absolute top-2 right-2 px-3 py-1 text-xs bg-fillBrand-strong rounded text-textInverse-strong flex items-center gap-1 hover:bg-fillBrand-strong/90" "h-3 w-3" "#telemetrygen-cmd's innerText" []
+          copyField_ "telemetrygen-cmd" "monoscope send-event -m \"hello world\""
 
-      div_ [class_ "mt-6 p-4 bg-fillSuccess-weak border border-strokeSuccess-weak rounded-lg flex items-start gap-3"] do
-        faSprite_ "circle-check" "regular" "h-5 w-5 text-iconSuccess flex-shrink-0 mt-0.5"
-        div_ do
-          p_ [class_ "text-textSuccess text-sm font-medium leading-relaxed"] "What happens next?"
-          p_ [class_ "text-textSuccess text-sm mt-1 leading-relaxed"] "After running the command, look for \"hello world\" in your dashboard. You can then proceed with the full SDK integration."
+      div_ [class_ "mt-6"]
+        $ callout_ SuccessBadge (Just "What happens next?") "After running the command, look for \"hello world\" in your dashboard. You can then proceed with the full SDK integration."
 
       div_ [class_ "modal-action"] $ label_ [Lucid.for_ "telemetrygen-modal", class_ "btn"] "Close"
 
@@ -607,7 +585,6 @@ integrationsPage pid apikey =
       |]
   where
     -- The video half of the docs-panel placeholder, handed to 'emptyState_' as its action slot.
-    walkthroughs :: Html ()
     walkthroughs = div_ [class_ "flex flex-col gap-3 w-full max-w-md"] do
       div_ [class_ "grid grid-cols-2 gap-4 w-full"]
         $ forM_ ["Q-tGuIkDmyk?si=BIHn2vN1m9gDs_9v", "OALS4ckfOdI"] \vid ->
@@ -625,30 +602,25 @@ integrationsPage pid apikey =
       a_ [href_ "https://www.youtube.com/@monoscope", target_ "_blank", class_ "text-textBrand hover:underline text-sm font-medium"] "Watch more tutorials →"
 
     -- "Confirm & Proceed" + "Skip" pair; classes differ between the desktop inline and mobile sticky bars.
-    integrationCta_ :: Text -> Text -> Text -> Html ()
     integrationCta_ wrapCls btnCls skipCls = div_ [class_ wrapCls] do
       button_ [class_ btnCls, hxGet_ $ onboardingUrl pid "/integration-check", hxSwap_ "none", hxIndicator_ "#loadingIndicator"] "Confirm & Proceed"
       a_ [class_ skipCls, type_ "button", hxPost_ $ onboardingUrl pid "/skip?step=Integration"] "Skip"
 
-    languageItem :: Language -> Html ()
     languageItem l =
-      label_
-        [ class_ "group/li cols-span-1 h-12 px-3 py-2 bg-transparent rounded-xl border border-strokeWeak justify-start items-center gap-3 inline-flex cursor-pointer"
-        ]
-        do
-          input_
-            [ type_ "checkbox"
-            , class_ "checkbox shrink-0"
-            , id_ $ "check-" <> l.slug
-            , value_ l.slug
-            , onchange_ $ "if(this.checked){var dp=document.getElementById('docs-panel');if(window.innerWidth<768){dp.classList.add('open');requestAnimationFrame(function(){dp.scrollTop=0});}else{requestAnimationFrame(function(){document.getElementById('" <> l.slug <> "_main').scrollIntoView({behavior:'smooth'})});}}"
-            ]
-          div_ [class_ "flex w-full items-center justify-between overflow-hidden"] do
-            div_ [class_ "flex items-center gap-2 text-sm min-w-0"] do
-              img_ [class_ "h-5 w-5", src_ $ "/public/assets/svgs/" <> l.slug <> ".svg"]
-              span_ $ toHtml l.label
-            div_ [class_ "hidden group-has-[.checkbox:checked]/li:block text-sm toggle-target", id_ $ "integration-check-container" <> T.replace "#" "" l.label] do
-              integrationPoller_ pid $ T.replace "#" "sharp" l.label
+      label_ [class_ "group/li h-12 px-3 py-2 bg-transparent rounded-xl border border-strokeWeak justify-start items-center gap-3 inline-flex cursor-pointer"] do
+        input_
+          [ type_ "checkbox"
+          , class_ "checkbox shrink-0"
+          , id_ $ "check-" <> l.slug
+          , value_ l.slug
+          , onchange_ $ "if(this.checked){var dp=document.getElementById('docs-panel');if(window.innerWidth<768){dp.classList.add('open');requestAnimationFrame(function(){dp.scrollTop=0});}else{requestAnimationFrame(function(){document.getElementById('" <> l.slug <> "_main').scrollIntoView({behavior:'smooth'})});}}"
+          ]
+        div_ [class_ "flex w-full items-center justify-between overflow-hidden"] do
+          div_ [class_ "flex items-center gap-2 text-sm min-w-0"] do
+            img_ [class_ "h-5 w-5", src_ $ "/public/assets/svgs/" <> l.slug <> ".svg"]
+            span_ $ toHtml l.label
+          div_ [class_ "hidden group-has-[.checkbox:checked]/li:block text-sm"]
+            $ integrationPoller_ pid (T.replace "#" "sharp" l.label)
 
 
 -- | Re-checks every 5s while its language row is on screen: a hidden row never intersects,
@@ -669,53 +641,45 @@ integrationPoller_ pid language =
 
 onboardingStepWrapper_ :: Int -> Text -> Text -> Html () -> Html ()
 onboardingStepWrapper_ step title prevUrl content =
-  div_ [class_ "w-full max-w-xl mx-auto mt-20 md:mt-[156px] px-4 md:px-0"]
-    $ div_ [class_ "flex-col gap-4 flex w-full"] do
-      stepIndicator step title prevUrl
-      content
+  div_ [class_ "w-full max-w-xl mx-auto mt-20 md:mt-[156px] mb-10 px-4 md:px-0"]
+    $ div_ [class_ "flex-col gap-4 flex w-full"] (stepIndicator step title prevUrl >> content)
 
 
 notifChannelsWithUrls :: Text -> Text -> Projects.ProjectId -> Text -> V.Vector Text -> Bool -> Bool -> Html ()
 notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack =
-  div_ [class_ "w-full max-w-xl mx-auto mt-20 md:mt-[156px] mb-10 px-4 md:px-0"] $ do
+  onboardingStepWrapper_ 3 "How should we notify you about issues?" (onboardingUrl pid "?step=Survey") do
+    div_ [class_ "flex-col w-full gap-8 flex mt-4"] do
+      div_ [class_ "w-full gap-2 grid grid-cols-1 md:grid-cols-2"] do
+        integrationCard "Slack" "/public/assets/svgs/slack.svg" hasSlack slackUrl
+        integrationCard "Discord" "/public/assets/svgs/discord.svg" hasDiscord discordUrl
+      form_
+        [ class_ "flex flex-col gap-8"
+        , hxPost_ $ onboardingUrl pid "/phone-emails"
+        , hxExt_ "json-enc"
+        , hxVals_ "js:{phoneNumber: document.getElementById('phoneNumber').value , emails: window.getTagValues('#emails')}"
+        , hxTarget_ "#inviteModalContainer"
+        , hxSwap_ "innerHTML"
+        , hxIndicator_ "#loadingIndicator"
+        ]
+        do
+          formField_ FieldMd def{inputType = "tel", value = phone} "Notify phone number" "phoneNumber" False Nothing
+          formField_ FieldMd def "Notify the following email address" "emails" False $ Just $ tagInput_ "emails" "" [data_ "tagify-initial" $ decodeUtf8 $ AE.encode emails]
+          div_ [class_ "items-center gap-4 flex"] $ button_ [class_ "btn-primary px-8 py-3 text-xl rounded-xl cursor-pointer flex items-center"] "Proceed"
     div_ [id_ "inviteModalContainer"] pass
-    div_ [class_ "flex-col gap-4 flex w-full"] $ do
-      stepIndicator 3 "How should we notify you about issues?" $ onboardingUrl pid "?step=Survey"
-      div_ [class_ "flex-col w-full gap-8 flex mt-4"] $ do
-        div_ [class_ "w-full flex flex-col gap-8"] $ do
-          div_ [class_ "w-full gap-2 grid grid-cols-1 md:grid-cols-2"] $ do
-            integrationCard "Slack" "/public/assets/svgs/slack.svg" hasSlack slackUrl
-            integrationCard "Discord" "/public/assets/svgs/discord.svg" hasDiscord discordUrl
-          form_
-            [ class_ "flex flex-col gap-8"
-            , hxPost_ $ onboardingUrl pid "/phone-emails"
-            , hxExt_ "json-enc"
-            , hxVals_ "js:{phoneNumber: document.getElementById('phoneNumber').value , emails: window.getTagValues('#emails')}"
-            , hxTarget_ "#inviteModalContainer"
-            , hxSwap_ "innerHTML"
-            , hxIndicator_ "#loadingIndicator"
-            ]
-            $ do
-              formField_ FieldMd def{inputType = "tel", value = phone} "Notify phone number" "phoneNumber" False Nothing
-              formField_ FieldMd def "Notify the following email address" "emails" False $ Just $ tagInput_ "emails" "" [data_ "tagify-initial" $ decodeUtf8 $ AE.encode emails]
-              div_ [class_ "items-center gap-4 flex"] $ do
-                button_ [class_ "btn-primary px-8 py-3 text-xl rounded-xl cursor-pointer flex items-center"] "Proceed"
-      script_
-        """
-        function appendMember() {
-          const email = document.querySelector('#add-member-input').value
-          if(email.length < 1) return
-          const node = document.querySelector("#member-template").cloneNode(true)
-          node.removeAttribute('id')
-          node.querySelector('input').value = email
-          node.querySelector('input').setAttribute('name', 'emails')
-          node.querySelector('span').textContent = email
-          node.classList.remove('hidden')
-          document.querySelector('#members-container').appendChild(node)
-           _hyperscript.processNode(node)
-           document.querySelector('#add-member-input').value = ''
-        }
-        """
+    script_
+      """
+      function appendMember() {
+        const input = document.querySelector('#add-member-input'), email = input.value
+        if (!email) return
+        const node = document.querySelector('#member-template').cloneNode(true)
+        node.removeAttribute('id')
+        node.classList.remove('hidden')
+        Object.assign(node.querySelector('input'), {value: email, name: 'emails'})
+        node.querySelector('span').textContent = email
+        document.querySelector('#members-container').appendChild(node)
+        input.value = ''
+      }
+      """
   where
     integrationCard :: Text -> Text -> Bool -> Text -> Html ()
     integrationCard serviceName iconPath isConnected connectUrl =
@@ -739,8 +703,7 @@ onboardingInfoBody pid firstName lastName cName cSize fUsFrm =
         let createSelectField selected label name opts = formSelectField_ FieldMd label name True $ options_ (Just selected) (("", "") : opts)
         createSelectField cSize "Company Size" "companySize" [("1 - 4", "1 to 4"), ("5 - 10", "5 to 10"), ("11 - 25", "11 to 25"), ("26+", "26 and above")]
         createSelectField fUsFrm "How Did You Hear About Us" "whereDidYouHearAboutUs" [("google", "Google"), ("twitter", "Twitter"), ("linkedin", "LinkedIn"), ("friend", "Friend"), ("other", "Other")]
-      div_ [class_ "items-center gap-1 flex"] $ do
-        button_ [class_ "btn-primary px-6 py-4 text-xl rounded-lg cursor-pointer flex items-center"] "Proceed"
+      div_ [class_ "items-center gap-1 flex"] $ button_ [class_ "btn-primary px-6 py-4 text-xl rounded-lg cursor-pointer flex items-center"] "Proceed"
 
 
 onboardingConfigBody :: Projects.ProjectId -> Text -> [Text] -> Html ()
@@ -749,20 +712,11 @@ onboardingConfigBody pid loca func =
     $ form_ [class_ "flex-col w-full gap-8 flex", hxPost_ $ onboardingUrl pid "/survey", hxIndicator_ "#loadingIndicator"]
     $ do
       div_ [class_ "flex-col w-full gap-14 mt-4 flex"] $ do
-        div_ [class_ "flex-col gap-2 flex"] $ do
-          div_ [class_ "items-center gap-[2px] flex"] $ do
-            span_ [class_ " text-textStrong"] "Where should your project be hosted?"
-            span_ [class_ " text-textWeak"] "*"
-          div_ [class_ "pt-2 flex-col gap-4 flex text-sm  text-textStrong"] $ do
-            forM_ locations $ createBinaryField "radio" "location" [loca]
-        div_ [class_ "flex-col gap-2 flex"] $ do
-          div_ [class_ "items-center flex gap-[2px]"] $ do
-            span_ [class_ " text-textStrong"] "Which Monoscope features will you be using?"
-            span_ [class_ " text-textWeak"] "*"
-          div_ [class_ "pt-2 flex-col gap-4 flex"] $ do
-            forM_ functionalities $ createBinaryField "checkbox" "functionality" func
-      div_ [class_ "items-center gap-1 flex"] $ do
-        button_ [class_ "btn-primary px-6 py-4 text-xl rounded-lg cursor-pointer flex items-center"] "Proceed"
+        formField_ FieldMd def "Where should your project be hosted?" "location" True $ Just $ div_ [class_ "pt-2 flex-col gap-4 flex"] do
+          forM_ locations $ createBinaryField "radio" "location" [loca]
+        formField_ FieldMd def "Which Monoscope features will you be using?" "functionality" True $ Just $ div_ [class_ "pt-2 flex-col gap-4 flex"] do
+          forM_ functionalities $ createBinaryField "checkbox" "functionality" func
+      div_ [class_ "items-center gap-1 flex"] $ button_ [class_ "btn-primary px-6 py-4 text-xl rounded-lg cursor-pointer flex items-center"] "Proceed"
   where
     locations :: [(Text, Text)]
     locations = [("usa", "USA"), ("eu", "EU"), ("asia", "Asia")]
@@ -794,9 +748,7 @@ inviteTeamMemberModal pid emails enableFreetier =
       details_ [class_ "w-full border-t border-strokeWeak pt-3"] $ do
         summary_ [class_ "text-textBrand text-sm cursor-pointer"] "Invite team members"
         div_ [class_ "flex-col gap-3 flex pt-3"] $ do
-          when enableFreetier $ div_ [class_ "bg-fillInformation-weak border border-strokeInformation-weak rounded-lg p-3 flex items-start gap-2"] do
-            faSprite_ "circle-info" "regular" "w-4 h-4 text-textInformation flex-shrink-0 mt-0.5"
-            p_ [class_ "text-sm text-textWeak"] "Only the project owner can access a Free project. Invited members remain disabled until you upgrade."
+          when enableFreetier $ infoBanner_ "Only the project owner can access a Free project. Invited members remain disabled until you upgrade."
           div_ [class_ "w-full gap-2 flex items-center"] $ do
             input_ [class_ "input input-sm w-full", placeholder_ "email@example.com", type_ "email", id_ "add-member-input"]
             button_ [class_ "btn-primary rounded-xl px-4 py-2 text-white text-sm cursor-pointer whitespace-nowrap", onpointerdown_ "appendMember()"] "Invite"
@@ -821,10 +773,9 @@ inviteTeamMemberModal pid emails enableFreetier =
         div_ [class_ "pr-6 py-1  w-full justify-start items-center inline-flex"] do
           input_ ([type_ "hidden", value_ email] <> [name_ "emails" | not isTemplate])
           span_ [class_ "text-textStrong text-sm font-normal"] $ toHtml email
-        select_ [name_ "permissions", class_ "select select-xs"]
-          $ options_ Nothing [("admin", "Admin"), ("edit", "Can Edit"), ("view", "Can View")]
+        select_ [name_ "permissions", class_ "select select-xs"] $ roleOptions_ Nothing
         button_
-          [ term "hx-on:click" "this.closest('div').remove()"
+          [ onclick_ "this.closest('div').remove()"
           , class_ "text-textBrand ml-4 text-sm underline"
           , type_ "button"
           ]
@@ -835,22 +786,20 @@ stepIndicator :: Int -> Text -> Text -> Html ()
 stepIndicator step title prevUrl = do
   div_ [class_ "fixed  htmx-indicator top-0 left-0 right-0 bottom-0 flex items-center justify-center z-9999", id_ "loadingIndicator"] $ loadingIndicator_ LdLG LdDots
   div_ [class_ "flex-col gap-2 md:gap-4 flex w-full"] $ do
-    a_ [href_ "/", class_ "absolute top-4 left-4 md:top-10 md:left-10 py-2 pr-2 rounded-xs"] do
-      img_ [class_ "h-7 dark:hidden", src_ "/public/assets/svgs/logo_black.svg"]
-      img_ [class_ "h-7 hidden dark:block", src_ "/public/assets/svgs/logo_white.svg"]
+    a_ [href_ "/", class_ "absolute top-4 left-4 md:top-10 md:left-10 py-2 pr-2 rounded-xs"] $ brandLogo_ "h-7"
     div_ [class_ "flex-col gap-1.5 md:gap-2 flex w-full"] $ do
       headerRow_ [] do
         div_ [class_ "text-textStrong text-sm md:text-base"] $ "Step " <> show step <> " of 5"
         when (step > 1)
           $ a_ [class_ "flex items-center gap-1.5 text-textBrand text-sm md:hidden", href_ prevUrl] do
             faSprite_ "arrow-left" "regular" "h-3.5 w-3.5"
-            span_ [] "Back"
+            span_ "Back"
       div_ [class_ "grid grid-cols-5 w-full gap-1"] $ do
         forM_ [1 .. 5] $ \i -> div_ [class_ $ "h-1.5 md:h-2 w-full rounded-sm " <> if step >= i then "btn-primary rounded-sm" else " bg-fillWeak shadow-sm border border-strokeWeak"] pass
       when (step > 1)
         $ a_ [class_ "max-md:hidden flex items-center gap-3 text-textBrand w-full mt-2", href_ prevUrl] do
           faSprite_ "arrow-left" "regular" "h-4 w-4"
-          span_ [] "Back"
+          span_ "Back"
     span_ [class_ "text-textStrong text-xl md:text-4xl mt-1 md:mt-4"] $ toHtml title
 
 

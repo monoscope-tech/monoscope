@@ -86,23 +86,6 @@ const getErrorGlyph = () =>
     '!'
   );
 
-// Tooltip for hovering over small spans
-let tooltipEl: HTMLElement | null = null;
-function showTooltip(e: MouseEvent, text: string) {
-  if (!tooltipEl) {
-    tooltipEl = document.createElement('div');
-    tooltipEl.className = 'fixed z-[9999] px-2 py-1 text-xs rounded bg-bgOverlay text-textStrong border border-strokeWeak shadow-md pointer-events-none whitespace-nowrap';
-    document.body.appendChild(tooltipEl);
-  }
-  tooltipEl.textContent = text;
-  tooltipEl.style.display = 'block';
-  tooltipEl.style.left = `${e.clientX + 12}px`;
-  tooltipEl.style.top = `${e.clientY - 8}px`;
-}
-function hideTooltip() {
-  if (tooltipEl) tooltipEl.style.display = 'none';
-}
-
 type FlameGraphItem = {
   spanId: string;
   value: number;
@@ -221,9 +204,7 @@ function flameGraphChart(data: FlameGraphItem[], renderAt: string, colorsMap: Re
         resetBtn?.classList.remove('hidden');
         window.htmx.trigger('#trigger-span-' + item.spanId, 'click');
       },
-      onmouseenter: (e: MouseEvent) =>
-        showTooltip(e, `${item.serviceName ? item.serviceName + ' · ' : ''}${item.label} — ${t} ${u} (${pct.toFixed(1)}%)${item.hasErrors ? ' · error' : ''}`),
-      onmouseleave: () => hideTooltip(),
+      'data-tippy-content': `${item.serviceName ? item.serviceName + ' · ' : ''}${item.label} — ${t} ${u} (${pct.toFixed(1)}%)${item.hasErrors ? ' · error' : ''}`,
     });
     div.style.left = `${startPix}px`;
     div.style.top = `${yStart}px`;
@@ -472,12 +453,11 @@ function waterFallGraphChart(renderAt: string, serviceColors: Record<string, str
       const pct = (duration / maxDuration) * 100;
 
       el.innerHTML = '';
-      const tip = (e: MouseEvent) => showTooltip(e, `${service} · ${spanName} — ${label} (${pct.toFixed(1)}%)${hasErrors ? ' · error' : ''}`);
+      const tip = `${service} · ${spanName} — ${label} (${pct.toFixed(1)}%)${hasErrors ? ' · error' : ''}`;
       const bar = elt('div', {
         class: 'absolute top-1 bottom-1 rounded-sm flex items-center overflow-hidden',
         style: `left:${leftPx}px;width:${widthPx}px;background-color:${color};`,
-        onmouseenter: tip,
-        onmouseleave: () => hideTooltip(),
+        'data-tippy-content': tip,
       });
       if (hasErrors) {
         bar.setAttribute('aria-label', `${spanName} errored`);
@@ -500,8 +480,7 @@ function waterFallGraphChart(renderAt: string, serviceColors: Record<string, str
         el.appendChild(elt('span', {
           class: 'absolute top-1/2 -translate-y-1/2 text-xs tabular-nums text-textWeak whitespace-nowrap pointer-events-auto',
           style: `left:${lx}px;`,
-          onmouseenter: tip,
-          onmouseleave: () => hideTooltip(),
+          'data-tippy-content': tip,
         }, label));
       }
     }

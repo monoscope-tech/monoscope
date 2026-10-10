@@ -205,7 +205,7 @@ import System.Clock (TimeSpec (TimeSpec))
 import System.Config (AuthContext (..), EnvConfig (..), mkTwilioContentSid)
 import System.Config qualified as Config
 import System.Directory (getFileSize, listDirectory)
-import System.Envy (DefConfig (..), decodeWithDefaults)
+import System.Envy (DefConfig (..), decodeWithDefaults, fromVar)
 import System.IO.Unsafe (unsafePerformIO)
 import System.Logging qualified as Logging
 import System.Server qualified as Server
@@ -634,7 +634,7 @@ runTestBackgroundWithLogger t logger appCtx process = do
 -- | Run an effect action in test context (for non-servant handlers like Auth.sessionByID)
 runTestEffect :: Pool Connection -> OHasql.TracedPool -> Log.Logger -> TracerProvider -> (forall es. (DB es, Error ServantS.ServerError :> es, HTTP :> es, Log :> es, Time :> es, Tracing :> es, UUIDEff :> es) => Eff es a) -> IO (Either ServantS.ServerError a)
 runTestEffect pool hpool logger tp action = do
-  logLevel <- Logging.getLogLevelFromEnv
+  logLevel <- fromMaybe Log.LogTrace . (>>= fromVar) <$> lookupEnv "LOG_LEVEL"
   action
     & runErrorNoCallStack @ServantS.ServerError
     & runHasqlPool hpool
@@ -1186,7 +1186,7 @@ getPendingBackgroundJobs authCtx = do
 -- | Log background jobs info for debugging (respects LOG_LEVEL)
 logBackgroundJobsInfo :: Log.Logger -> V.Vector (Job, BackgroundJobs.BgJobs) -> IO ()
 logBackgroundJobsInfo logger jobs = do
-  logLevel <- Logging.getLogLevelFromEnv
+  logLevel <- fromMaybe Log.LogTrace . (>>= fromVar) <$> lookupEnv "LOG_LEVEL"
   let jobsList =
         V.toList jobs <&> \(job, bgJob) ->
           AE.object

@@ -62,7 +62,7 @@ import Effectful (Eff)
 import Hasql.Interpolate qualified as HI
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (BaselineState (..), DB, WrappedEnumSC (..), selectFrom)
+import Pkg.DeriveUtils (BaselineState (..), DB, WrappedEnumSC (..), enumLit, selectFrom)
 import Relude hiding (id)
 import Utils (truncateHour)
 
@@ -481,7 +481,7 @@ bulkCalculateAndUpdateBaselines pid now =
         baseline_error_rate_mean = s.median_val,
         baseline_error_rate_stddev = COALESCE(m.mad_scaled, 0),
         baseline_samples = s.total_hours::BIGINT,
-        baseline_state = CASE WHEN s.total_hours >= 24 THEN 'established' ELSE 'learning' END,
+        baseline_state = CASE WHEN s.total_hours >= 24 THEN ^{enumLit BSEstablished} ELSE ^{enumLit BSLearning} END,
         baseline_updated_at = #{now}
       FROM stats s LEFT JOIN mad m ON m.error_id = s.error_id
       WHERE apis.error_patterns.id = s.error_id AND apis.error_patterns.project_id = #{pid}

@@ -12,6 +12,7 @@ import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple qualified as SimplePG
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
@@ -36,7 +37,7 @@ insertTestEndpoints tr endpoints = forM_ endpoints \(method, host, path) ->
       [sql| INSERT INTO apis.endpoints (project_id, url_path, url_params, method, host, hash, outgoing)
           VALUES (?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT (hash) DO NOTHING |]
-      (pid, path, AE.object [], method, host, toXXHash (pid.toText <> host <> method <> path), False :: Bool)
+      (pid, path, AE.object [], method, host, Endpoints.hashEndpoint pid.toText host method path, False :: Bool)
 
 
 -- | An open api_change issue pinned to one endpoint hash. Four of these across
@@ -365,7 +366,7 @@ spec = around withTestResources do
         insertTestEndpoints tr [("GET", "api.example.com", "/v1/ship/" <> h) | h <- hashes]
         -- One open api_change issue per endpoint: 4 rows that all want the same
         -- (project_id, target_hash, issue_type) once their endpoints merge.
-        forM_ hashes \h -> insertOpenIssue tr $ toXXHash (pid.toText <> "api.example.com" <> "GET" <> "/v1/ship/" <> h)
+        forM_ hashes \h -> insertOpenIssue tr $ Endpoints.hashEndpoint pid.toText "api.example.com" "GET" ("/v1/ship/" <> h)
         runTestBg frozenTime tr $ BackgroundJobs.endpointTemplateDiscovery pid
         runTestBg frozenTime tr $ BackgroundJobs.endpointMergeCleanup pid
 
@@ -374,7 +375,7 @@ spec = around withTestResources do
         -- Survives as exactly one issue, pointed at the canonical endpoint.
         issues <- queryOpenIssueTargets tr
         V.length issues `shouldBe` 1
-        issues V.!? 0 `shouldBe` Just (toXXHash (pid.toText <> "api.example.com" <> "GET" <> "/v1/ship/{param}"))
+        issues V.!? 0 `shouldBe` Just (Endpoints.hashEndpoint pid.toText "api.example.com" "GET" "/v1/ship/{param}")
 
       -- The ordering bug this guards: a concrete path is announced by mail the
       -- moment it is ingested, and merged away hours later. Discovery is what
@@ -384,7 +385,7 @@ spec = around withTestResources do
         let ids = ["SB-" <> h | h <- ["91673E0634FB", "5A3469F964B1", "F76B055211BA"]]
         insertTestEndpoints tr $ ("GET", "api.example.com", "/v1/ship/status") : [("GET", "api.example.com", "/v1/ship/" <> h) | h <- ids]
         -- Every endpoint arrives with an un-notified issue, exactly as ingest leaves them.
-        forM_ ("status" : ids) \h -> insertOpenIssue tr $ toXXHash (pid.toText <> "api.example.com" <> "GET" <> "/v1/ship/" <> h)
+        forM_ ("status" : ids) \h -> insertOpenIssue tr $ Endpoints.hashEndpoint pid.toText "api.example.com" "GET" ("/v1/ship/" <> h)
         (notifiedBefore, deferredBefore) <- queryNotifiedSplit tr
         notifiedBefore `shouldBe` 0
         deferredBefore `shouldBe` 4

@@ -1,4 +1,6 @@
 module Models.Apis.LogQueries (
+  errHashPrefix,
+  patHashPrefix,
   cursorEpsilon,
   nudgeCursorBy,
   SDKTypes (..),
@@ -45,6 +47,7 @@ import Data.HashMap.Strict qualified as HM
 import Data.List (elemIndex)
 import Data.Set qualified as S
 import Data.Text qualified as T
+import Data.Text.Display (Display, display)
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime, diffUTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
@@ -64,7 +67,7 @@ import Hasql.Interpolate qualified as HI
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Projects.Projects qualified as Projects
 import OpenTelemetry.Attributes qualified as OA
-import Pkg.DeriveUtils (DB, WrappedEnumSC (..), WrappedEnumShow (..), encodeEnumSC, rawSql)
+import Pkg.DeriveUtils (DB, WrappedEnumSC (..), WrappedEnumShow (..), rawSql)
 import Pkg.Drain qualified as Drain
 import Pkg.Parser
 import Pkg.Parser.Expr (flattenedOtelAttributes, severityIsErrorSql, transformFlattenedAttribute)
@@ -183,14 +186,15 @@ nudgeCursorBy delta = fmap (toText . iso8601Show . addUTCTime delta) . iso8601Pa
 
 -- | Which log-explorer data endpoint a URL targets. 'Data' serves logs/spans;
 -- 'Sessions'/'Patterns' serve their respective aggregate views. The URL segment
--- is derived from the constructor name via 'encodeEnumSC' (snake_case), so it
+-- is derived from the constructor name via 'WrappedEnumSC' (snake_case), so it
 -- can't drift from the constructor.
 data LogEndpoint = Data | Sessions | Patterns
   deriving stock (Eq, Show)
+  deriving (Display) via WrappedEnumSC 'Nothing "" LogEndpoint
 
 
 logExplorerUrlPath :: Projects.ProjectId -> LogEndpoint -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Bool -> Text
-logExplorerUrlPath pid endpoint q cols cursor since fromV toV layout source recent = "/p/" <> pid.toText <> "/log_explorer/" <> toText (encodeEnumSC @"" endpoint) <> "?" <> T.intercalate "&" params
+logExplorerUrlPath pid endpoint q cols cursor since fromV toV layout source recent = "/p/" <> pid.toText <> "/log_explorer/" <> display endpoint <> "?" <> T.intercalate "&" params
   where
     param k v = ((k <> "=") <>) . toUriStr <$> v
     unlessRecent v = if recent then Nothing else v
@@ -707,7 +711,7 @@ data SessionSort = SortLastSeen | SortFirstSeen | SortDuration | SortErrors | So
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
   -- ToJSON is for the trace line below: it logs the *parsed* ordering, so an
   -- unrecognised sort_by shows as null — which is the signal that the fallback fired.
-  deriving (AE.ToJSON, FromHttpApiData) via WrappedEnumSC 'Nothing "Sort" SessionSort
+  deriving (AE.ToJSON, Display, FromHttpApiData) via WrappedEnumSC 'Nothing "Sort" SessionSort
 
 
 -- | The wire value the sort dropdown emits and 'parseUrlPiece' reads back. Named to match
@@ -716,7 +720,7 @@ data SessionSort = SortLastSeen | SortFirstSeen | SortDuration | SortErrors | So
 -- >>> map sessionSortParam [minBound .. maxBound]
 -- ["last_seen","first_seen","duration","errors","events"]
 sessionSortParam :: SessionSort -> Text
-sessionSortParam = toText . encodeEnumSC @"Sort"
+sessionSortParam = display
 
 
 -- | The dropdown's visible label.
@@ -957,6 +961,13 @@ aggregatePageSize :: Int
 aggregatePageSize = 100
 
 
+-- | Prefixes of the span @hashes@ entries linking a span to its error pattern or log
+-- pattern; 'Models.Apis.Issues.hashPrefix' is defined from these.
+errHashPrefix, patHashPrefix :: Text
+errHashPrefix = "err:"
+patHashPrefix = "pat:"
+
+
 -- | Interpret an expand key as pattern @pat:\<hash\>@ tags. The frontend sends the
 -- comma-joined 'PatternRow.hashes' (8-char lowercase-hex 'toXXHash' values) as the
 -- key; a hash-shaped key means tag match, anything else (a summary template from an
@@ -975,7 +986,7 @@ patternKeyHashes :: Text -> Maybe (NonEmpty Text)
 patternKeyHashes key =
   let parts = T.splitOn "," key
       isHash t = T.length t == 8 && T.all (\c -> isDigit c || (c >= 'a' && c <= 'f')) t
-   in if all isHash parts then nonEmpty (map ("pat:" <>) parts) else Nothing
+   in if all isHash parts then nonEmpty (map (patHashPrefix <>) parts) else Nothing
 
 
 -- | Convert a Drain template to a SQL LIKE pattern: @\<*\>@ becomes @%@,

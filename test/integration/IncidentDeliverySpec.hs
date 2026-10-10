@@ -401,7 +401,7 @@ spec = around withTestResources do
       Just unchanged <- runTestBgNoReset tr $ Monitors.queryMonitorById mid
       (unchanged.currentStatus, unchanged.notificationCount, unchanged.lastEvaluated) `shouldBe` (Monitors.MSNormal, 0, Nothing)
       runTestBgNoReset tr (Monitors.getEvaluations testPid mid frozenTime frozenTime) `shouldReturn` []
-      counts <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT count(*) FROM apis.issues WHERE project_id = ? AND target_hash = ?|] (testPid, show @Text mid)
+      counts <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT count(*) FROM apis.issues WHERE project_id = ? AND target_hash = ?|] (testPid, Monitors.queryAlertKey mid)
       (counts :: [PGS.Only Int64]) `shouldBe` [PGS.Only 0]
       void $ withResource tr.trPool \conn -> PGS.execute_ conn [sql|ALTER TABLE apis.slack_incident_deliveries DROP CONSTRAINT reject_test_delivery|]
       runTestBgNoReset tr $ evaluateQueryMonitorValue unchanged frozenTime 84
@@ -514,7 +514,7 @@ spec = around withTestResources do
       setupSlackData tr testPid "T1"
       let issueRows :: IO [(Issues.IssueId, Maybe UTCTime, Maybe UTCTime)]
           issueRows = withResource tr.trPool \conn ->
-            PGS.query conn [sql|SELECT id, acknowledged_until, archived_at FROM apis.issues WHERE project_id = ? AND target_hash = ?|] (testPid, show @Text mid)
+            PGS.query conn [sql|SELECT id, acknowledged_until, archived_at FROM apis.issues WHERE project_id = ? AND target_hash = ?|] (testPid, Monitors.queryAlertKey mid)
       void $ evaluateMonitor tr mid 84
       [(firstIssue, _, _)] <- issueRows
       -- Archived, then firing again: the same row comes back rather than a second one.
@@ -546,7 +546,7 @@ spec = around withTestResources do
       setupSlackData tr testPid "T1"
       let affected :: IO [PGS.Only Int64]
           affected = withResource tr.trPool \conn ->
-            PGS.query conn [sql|SELECT affected_requests FROM apis.issues WHERE project_id = ? AND target_hash = ?|] (testPid, show @Text mid)
+            PGS.query conn [sql|SELECT affected_requests FROM apis.issues WHERE project_id = ? AND target_hash = ?|] (testPid, Monitors.queryAlertKey mid)
       void $ evaluateMonitor tr mid 84
       firstCount <- affected
       -- Three more ticks, all still alerting: the status never changes, so none
@@ -765,7 +765,7 @@ setupWithIssue tr = do
   update <- setup tr
   I.MonitorIncident mid <- pure update.source
   issue <- runTestBgNoReset tr do
-    created <- Issues.createQueryAlertIssue testPid (show mid) "Measured threshold exceeded" "" 60 84 Issues.Above
+    created <- Issues.createQueryAlertIssue testPid (Monitors.queryAlertKey mid) "Measured threshold exceeded" "" 60 84 Issues.Above
     Issues.insertIssue created
     pure created
   pure (update{I.issueId = Just issue.id} :: I.IncidentUpdate)

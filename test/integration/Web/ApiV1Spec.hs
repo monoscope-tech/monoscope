@@ -387,7 +387,7 @@ spec = around withTestResources do
             mkInput n = (def :: ApiT.MonitorInput){ApiT.title = "bulk-" <> n, ApiT.query = "count(*)", ApiT.alertThreshold = 1, ApiT.checkIntervalMins = 5, ApiT.timeWindowMins = 15}
         m1 <- runB $ ApiH.apiMonitorCreate testPid (mkInput "a")
         m2 <- runB $ ApiH.apiMonitorCreate testPid (mkInput "b")
-        res <- runB $ ApiH.apiMonitorBulk testPid ApiT.BulkAction{ApiT.action = "delete", ApiT.ids = [m1.id.unQueryMonitorId, m2.id.unQueryMonitorId], ApiT.durationMinutes = Nothing}
+        res <- runB $ ApiH.apiMonitorBulk testPid ApiT.BulkAction{ApiT.action = "delete", ApiT.ids = [m1.id.unwrap, m2.id.unwrap], ApiT.durationMinutes = Nothing}
         length res.succeeded `shouldBe` 2
         res.failed `shouldBe` []
 

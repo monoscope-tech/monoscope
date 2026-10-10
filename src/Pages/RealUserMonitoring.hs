@@ -32,6 +32,7 @@ import Data.Fixed (mod')
 import Data.List (lookup)
 import Data.Map.Strict qualified as M
 import Data.Text qualified as T
+import Data.Text.Display (Display, display)
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime, diffUTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.UUID qualified as UUID
@@ -55,7 +56,7 @@ import Pages.Components qualified as Components
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (DB, decodeEnumSC, encodeEnumSC, escapeRegex, rawSql)
+import Pkg.DeriveUtils (DB, WrappedEnumSC (..), escapeRegex, rawSql)
 import Pkg.ErrorFingerprint (normalizeMessage)
 import Pkg.Parser (ScopedQuery (..), applyScopedKqlContext, mkScopedQuery)
 import Pkg.QueryCache qualified as QueryCache
@@ -66,23 +67,17 @@ import System.Config (AuthContext (..), EnvConfig (enableTimefusionReads))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import UnliftIO (tryAny, withRunInIO)
+import Web.HttpApiData (FromHttpApiData (..))
 import Utils (TabStrip (..), classifyUserAgent, countNoun, faSprite_, getDurationNSMS, kqlQuoted, navTabStrip_, nonEmptyT, prettyTimeShort, replaceAllFormats, showFFloat', toXXHash)
 
 
 data RumTab = Overview | Sessions | Performance
   deriving stock (Bounded, Enum, Eq, Read, Show)
-
-
-parseTab :: Maybe Text -> RumTab
-parseTab tabM = fromMaybe Overview $ decodeEnumSC @"" . toString =<< tabM
-
-
-tabParam :: RumTab -> Text
-tabParam = toText . encodeEnumSC @""
+  deriving (Display, FromHttpApiData) via WrappedEnumSC 'Nothing "" RumTab
 
 
 tabLabel :: RumTab -> Text
-tabLabel = T.toTitle . tabParam
+tabLabel = T.toTitle . display
 
 
 -- | Accepts both the canonical short values this page links with ("errors", "replays") and
@@ -596,21 +591,14 @@ data RumLinks = RumLinks
 -- slowest; each panel now fetches itself, so a panel appears as soon as /its/ query lands.
 data RumPanel = PanelPulse | PanelPages | PanelVitals | PanelVitalTrend | PanelErrors | PanelSessions | PanelSessionDetail | PanelAudience
   deriving stock (Eq, Read, Show)
-
-
-panelParam :: RumPanel -> Text
-panelParam = toText . encodeEnumSC @"Panel"
+  deriving (Display, FromHttpApiData) via WrappedEnumSC 'Nothing "Panel" RumPanel
 
 
 -- | Ids are the swap contract: 'deferredShell_' selects @#id@ out of the panel response, so
 -- the shell and the rendered panel must agree on it.
 panelId :: RumPanel -> Text
 panelId PanelSessionDetail = "rum-replay-workspace"
-panelId panel = "rum-panel-" <> panelParam panel
-
-
-parsePanel :: Text -> Maybe RumPanel
-parsePanel = decodeEnumSC @"Panel" . toString
+panelId panel = "rum-panel-" <> display panel
 
 
 data RumData = RumData
@@ -688,8 +676,8 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
   (session, _, bw) <- mkPageCtx pid
   appCtx <- Reader.ask @AuthContext
   now <- Time.currentTime
-  let tab = parseTab tabM
-      panel = panelM >>= parsePanel
+  let tab = fromMaybe Overview $ rightToMaybe . parseUrlPiece =<< tabM
+      panel = rightToMaybe . parseUrlPiece =<< panelM
       sessionFilter = parseSessionFilter sessionFilterM
       searchQuery = mfilter (not . T.null) $ T.strip <$> queryM
       since = sinceM <|> ("24H" <$ guard (all (isNothing . nonEmptyT) [fromM, toM]))
@@ -832,7 +820,7 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
 
 
 rumNavTabs_ :: RumLinks -> RumTab -> Html ()
-rumNavTabs_ links active = navTabStrip_ NavLinks "Real User Monitoring views" "" [(toHtml $ tabLabel tab, rumUrl links [("tab", tabParam tab)], tab == active) | tab <- [minBound .. maxBound]]
+rumNavTabs_ links active = navTabStrip_ NavLinks "Real User Monitoring views" "" [(toHtml $ tabLabel tab, rumUrl links [("tab", display tab)], tab == active) | tab <- [minBound .. maxBound]]
 
 
 rumActions_ :: RumLinks -> Html ()
@@ -906,7 +894,7 @@ panelSwapAttrs page panel refresh trigger syncMode =
     refreshTarget = if sessionList then "#rum-sessions-list" else "#" <> panelId panel
     url =
       rumUrl page.links
-        $ [("tab", tabParam page.tab), ("panel", panelParam panel), ("deferred", "1")]
+        $ [("tab", display page.tab), ("panel", display panel), ("deferred", "1")]
         <> [(key, value) | (key, Just value) <- [("q", page.query), ("filter", sessionFilterParam page.sessionFilter), ("session", page.selectedSession)]]
         <> [("refresh", "1") | refresh]
 
@@ -946,23 +934,19 @@ sessionSearch_ page = form_
     forM_ page.links.queryScope.environment $ \environment -> input_ [type_ "hidden", name_ "environment", value_ environment]
     forM_ page.links.queryScope.service $ \service -> input_ [type_ "hidden", name_ "service_scope", value_ service]
     input_ [id_ "rum-session-filter", type_ "hidden", name_ "filter", value_ $ fromMaybe "" $ sessionFilterParam page.sessionFilter]
-    label_ [class_ "input input-sm flex min-w-0 flex-1 items-center gap-2 border-strokeWeak bg-bgBase shadow-none max-sm:h-11"] do
-      faSprite_ "magnifying-glass" "regular" "h-4 w-4 shrink-0 text-textWeak"
-      input_
-        [ id_ "rum-session-search"
-        , type_ "search"
-        , name_ "q"
-        , value_ $ fromMaybe "" page.query
-        , placeholder_ "User, session, page, or service"
-        , Aria.label_ "Search sessions"
-        , term "aria-keyshortcuts" "/"
-        , class_ "min-w-0 grow"
-        , onkeydown_ "if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); this.blur(); }"
-        , term "_" "on keydown[key == '/' and not ctrlKey and not metaKey and not altKey and not (the event's target matches <input, textarea, select, [contenteditable]/>) and no <dialog[open]/> and no <[popover]:popover-open/>] from window halt the event then call me.focus() end"
-        ]
-      span_ [class_ "flex shrink-0 items-center gap-1 text-xs text-textWeak max-sm:hidden"] do
-        kbd_ [class_ "kbd kbd-xs"] "/"
-        "to focus"
+    Components.searchInput_
+      "min-w-0 flex-1 border-strokeWeak bg-bgBase shadow-none max-sm:h-11"
+      "Search sessions by user, session, page, or service"
+      [ id_ "rum-session-search"
+      , name_ "q"
+      , value_ $ fromMaybe "" page.query
+      , term "aria-keyshortcuts" "/"
+      , onkeydown_ "if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); this.blur(); }"
+      , term "_" "on keydown[key == '/' and not ctrlKey and not metaKey and not altKey and not (the event's target matches <input, textarea, select, [contenteditable]/>) and no <dialog[open]/> and no <[popover]:popover-open/>] from window halt the event then call me.focus() end"
+      ]
+    span_ [class_ "flex shrink-0 items-center gap-1 text-xs text-textWeak max-sm:hidden"] do
+      kbd_ [class_ "kbd kbd-xs"] "/"
+      "to focus"
   where
     route = "/p/" <> page.links.queryScope.projectId.toText <> "/rum"
 
@@ -1789,26 +1773,24 @@ pageVitalsTable_ links points = rumPanel_ "Web Vitals by page" "Exact page URLs;
 
 
 vitalsTable_ :: [Vital] -> Html ()
-vitalsTable_ vitals = do
-  rumPanel_ "Web Vitals field performance" "Intervals ending in this range can include earlier observations. Histogram estimates assume uniform values within a bucket." Nothing do
-    div_ [class_ "overflow-x-auto"] $ table_ [class_ "table table-sm w-full max-sm:[&_td]:block max-sm:[&_td]:min-w-0 max-sm:[&_td]:border-0 max-sm:[&_td]:py-1"] do
-      thead_ [class_ "max-sm:sr-only"] $ tr_ $ th_ "Metric" >> th_ [class_ "text-right"] "P75" >> th_ [class_ "text-right"] "Good" >> th_ [class_ "text-right"] "Poor" >> th_ "Assessment" >> th_ "Coverage" >> th_ [class_ "text-right"] "Observations"
-      tbody_ $ forM_ vitals \vital -> tr_ [class_ "max-sm:grid max-sm:grid-cols-2 max-sm:border-b max-sm:border-strokeWeak max-sm:py-3 max-sm:last:border-0"] do
-        let style = ratingStyle $ vitalRating vital
-        td_ [class_ "max-sm:col-span-2"] do
-          strong_ [class_ "block text-sm font-medium text-textStrong"] $ toHtml vital.label
-          span_ [class_ "text-xs text-textWeak"] $ toHtml vital.description
-        td_ [class_ $ "text-right font-semibold tabular-nums max-sm:order-1 max-sm:text-left " <> style.textClass] do
-          span_ [class_ "mr-2 text-xs font-normal text-textWeak sm:hidden", Aria.hidden_ "true"] "P75"
-          toHtml $ formatVital vital
-        forM_ ([("Good", vital.goodAt, False), ("Poor", vital.poorAt, True)] :: [(Text, Double, Bool)]) \(label, threshold, poor) -> td_ [class_ $ "text-right tabular-nums text-textWeak max-sm:text-left " <> bool "max-sm:order-5" "max-sm:order-6" poor] do
-          span_ [class_ "mr-2 text-xs sm:hidden", Aria.hidden_ "true"] $ toHtml label
-          toHtml $ formatVitalThreshold vital threshold
-        td_ [class_ "max-sm:order-2 max-sm:text-right"] $ span_ [class_ $ "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium " <> style.badgeClass] do
-          span_ [class_ $ "h-2 w-2 rounded-full " <> style.fillClass, Aria.hidden_ "true"] ""
-          toHtml style.label
-        td_ [class_ "text-xs text-textWeak max-sm:order-4 max-sm:col-span-2"] $ toHtml $ measurementNote vital
-        td_ [class_ "text-right tabular-nums text-textWeak max-sm:order-3 max-sm:col-span-2 max-sm:text-left"] $ toHtml $ observationLabel vital.measurement
+vitalsTable_ vitals = rumPanel_ "Web Vitals field performance" "Intervals ending in this range can include earlier observations. Histogram estimates assume uniform values within a bucket." Nothing do
+  toHtml
+    Table.Table
+      { config = (rumTableConfig "rumVitals"){Table.tableClasses = "table table-sm w-full max-sm:[&_thead]:sr-only max-sm:[&_td]:block max-sm:[&_td]:min-w-0 max-sm:[&_td]:border-0 max-sm:[&_td]:py-1"}
+      , columns =
+          [ (Table.col "Metric" \vital -> strong_ [class_ "block text-sm font-medium text-textStrong"] (toHtml vital.label) >> span_ [class_ "text-xs text-textWeak"] (toHtml vital.description)){Table.attrs = [class_ "max-sm:col-span-2"]}
+          , (rightCol "P75" \vital -> span_ [class_ "mr-2 text-xs text-textWeak sm:hidden", Aria.hidden_ "true"] "P75" >> span_ [class_ $ "font-semibold " <> (ratingStyle $ vitalRating vital).textClass] (toHtml $ formatVital vital)){Table.attrs = [class_ "max-sm:order-1 max-sm:text-left"]}
+          , threshold "Good" (.goodAt) "max-sm:order-5"
+          , threshold "Poor" (.poorAt) "max-sm:order-6"
+          , (Table.col "Assessment" \vital -> let style = ratingStyle $ vitalRating vital in Components.tonePill_ style.tone style.label){Table.attrs = [class_ "max-sm:order-2 max-sm:text-right"]}
+          , (Table.col "Coverage" $ toHtml . measurementNote){Table.attrs = [class_ "text-xs text-textWeak max-sm:order-4 max-sm:col-span-2"]}
+          , (rightCol "Observations" $ toHtml . observationLabel . (.measurement)){Table.attrs = [class_ "text-textWeak max-sm:order-3 max-sm:col-span-2 max-sm:text-left"]}
+          ]
+      , rows = V.fromList vitals
+      , features = def{Table.rowAttrs = Just $ const [class_ " max-sm:grid max-sm:grid-cols-2 max-sm:border-b max-sm:border-strokeWeak max-sm:py-3 max-sm:last:border-0"]}
+      }
+  where
+    threshold label at order = (rightCol label \vital -> span_ [class_ "mr-2 text-xs sm:hidden", Aria.hidden_ "true"] (toHtml label) >> toHtml (formatVitalThreshold vital $ at vital)){Table.attrs = [class_ $ "text-textWeak max-sm:text-left " <> order]}
 
 
 -- | Every RUM card is the shared 'Components.panel_' flush-card variant.
@@ -1938,7 +1920,7 @@ formatVitalThreshold vital value
   | otherwise = showFFloat' 3 value
 
 
-data RatingStyle = RatingStyle {label :: Text, textClass :: Text, fillClass :: Text, badgeClass :: Text}
+data RatingStyle = RatingStyle {label :: Text, textClass :: Text, fillClass :: Text, tone :: Components.BadgeColor}
 
 
 -- | A rated number carries its rating as a dot and as text, never as colour alone.
@@ -1951,10 +1933,10 @@ ratedValue_ style title value = span_ [class_ $ "inline-flex items-center gap-1.
 
 ratingStyle :: VitalRating -> RatingStyle
 ratingStyle = \case
-  Good -> RatingStyle "Good" "text-textSuccess" "bg-fillSuccess-strong" "bg-fillSuccess-weak text-textSuccess"
-  NeedsImprovement -> RatingStyle "Needs improvement" "text-textWarning" "bg-fillWarning-strong" "bg-fillWarning-weak text-textWarning"
-  Poor -> RatingStyle "Poor" "text-textError" "bg-fillError-strong" "bg-fillError-weak text-textError"
-  Unknown -> RatingStyle "Not assessed" "text-textWeak" "bg-fillNeutral-strong" "bg-fillWeak text-textWeak"
+  Good -> RatingStyle "Good" "text-textSuccess" "bg-fillSuccess-strong" Components.SuccessBadge
+  NeedsImprovement -> RatingStyle "Needs improvement" "text-textWarning" "bg-fillWarning-strong" Components.WarningBadge
+  Poor -> RatingStyle "Poor" "text-textError" "bg-fillError-strong" Components.ErrorBadge
+  Unknown -> RatingStyle "Not assessed" "text-textWeak" "bg-fillNeutral-strong" Components.NeutralBadge
 
 
 -- | The KQL counterparts of 'browserScope' and 'pageViewPredicate'. A link that filtered on

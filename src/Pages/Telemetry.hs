@@ -64,7 +64,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Tracing (withSpan_)
 import System.Types (ATAuthCtx, DB, RespHeaders, addRespHeaders)
-import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), countNoun, drawerLoadAttrs_, encodeText, explorerNavTabs_, faSprite_, faSymbolDefs_, faUse_, formatUTC, getDurationNSMS, getServiceColors, loadingIndicator_, navTabStrip_, onpointerdown_, parseTime, prettyPrintCount, toUriStr, utcTimeToNanoseconds)
+import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), countNoun, drawerLoadAttrs_, encodeText, explorerNavTabs_, faSprite_, faSymbolDefs_, faUse_, formatUTC, getDurationNSMS, getServiceColors, loadingIndicator_, navTabStrip_, onpointerdown_, parseTime, popoverPanel_, popoverTrigger_, prettyPrintCount, toUriStr, utcTimeToNanoseconds)
 
 
 -- Shared URL/form state: search is applied before pagination in both views.
@@ -461,26 +461,31 @@ exemplarList_ :: Projects.ProjectId -> Text -> [Telemetry.MetricExemplar] -> Htm
 exemplarList_ pid metricName = \case
   [] ->
     Components.emptyState_ def{icon = Just "chart-line", size = ESCompact} ("No exemplars for " <> metricName <> " in this time range") "Only metrics recorded inside a sampled span carry one — collector-scraped metrics never do."
-  exemplars -> do
-    div_ [class_ "px-5 pb-3 pt-5"] do
-      span_ [class_ "block text-sm font-semibold text-textStrong"] "Representative traces"
-      span_ [class_ "mt-1 block text-xs leading-5 text-textWeak"] "Traces this metric recorded a datapoint in, slowest first."
-    div_ [class_ "flex flex-col divide-y divide-strokeWeak border-y border-strokeWeak"] $ forM_ exemplars \x ->
-      a_
-        [ class_ "group flex cursor-pointer items-center justify-between gap-4 px-5 py-3 transition-colors hover:bg-fillWeak focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus"
-        , href_ $ traceOverlayUrl pid x.point.traceId x.point.timestamp
-        ]
-        do
-          div_ [class_ "min-w-0"] do
-            span_ [class_ "block font-mono text-xs text-textStrong"] $ toHtml x.point.traceId
-            div_ [class_ "mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-textWeak"] do
-              Components.dateTime x.point.timestamp Nothing
-              unless (T.null $ T.strip x.serviceName) do
-                span_ [class_ "text-textDisabled"] "•"
-                span_ $ toHtml x.serviceName
-          div_ [class_ "flex shrink-0 items-center gap-3"] do
-            span_ [class_ "text-sm font-medium text-textStrong"] $ toHtml $ exemplarValueText x
-            faSprite_ "arrow-right" "regular" "w-3 shrink-0 text-iconNeutral transition-transform group-hover:translate-x-0.5"
+  exemplars -> linkList_ (Just ("Representative traces", "Traces this metric recorded a datapoint in, slowest first.")) $ exemplars <&> \x ->
+    ( [href_ $ traceOverlayUrl pid x.point.traceId x.point.timestamp]
+    , do
+        span_ [class_ "block font-mono text-xs text-textStrong"] $ toHtml x.point.traceId
+        div_ [class_ "mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-textWeak"] do
+          Components.dateTime x.point.timestamp Nothing
+          unless (T.null $ T.strip x.serviceName) do
+            span_ [class_ "text-textDisabled"] "•"
+            span_ $ toHtml x.serviceName
+    , span_ [class_ "font-medium text-textStrong"] $ toHtml $ exemplarValueText x
+    )
+
+
+-- | Divided list of link rows @(attrs, body, trailing)@, under an optional (title, subtitle).
+linkList_ :: Maybe (Text, Text) -> [([Attribute], Html (), Html ())] -> Html ()
+linkList_ headerM rows = do
+  whenJust headerM \(title, subtitle) -> div_ [class_ "px-5 pb-3 pt-5"] do
+    span_ [class_ "block text-sm font-semibold text-textStrong"] $ toHtml title
+    span_ [class_ "mt-1 block text-xs leading-5 text-textWeak"] $ toHtml subtitle
+  div_ [class_ "flex flex-col divide-y divide-strokeWeak border-y border-strokeWeak"] $ forM_ rows \(attrs, body, trailing) ->
+    a_ ([class_ "group flex cursor-pointer items-center justify-between gap-4 px-5 py-3 text-sm transition-colors hover:bg-fillWeak focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus"] <> attrs) do
+      div_ [class_ "min-w-0"] body
+      div_ [class_ "flex shrink-0 items-center gap-3 text-textWeak"] do
+        trailing
+        faSprite_ "arrow-right" "regular" "w-3 shrink-0 text-iconNeutral transition-transform group-hover:translate-x-0.5"
 
 
 metricExemplarsGetH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders MetricExemplarsGet)
@@ -538,14 +543,7 @@ relatedMetrics_ :: Projects.ProjectId -> Text -> (UTCTime, UTCTime) -> (UTCTime,
 relatedMetrics_ pid service (lo, hi) (subLo, subHi) exemplars serviceMetrics = div_ [class_ "flex flex-col gap-6 py-2"] do
   section "Recorded in this trace" $ case exemplars of
     [] -> hint "No metric reported a datapoint from this trace. Only metrics recorded inside a sampled span carry an exemplar."
-    xs -> div_ [class_ "flex flex-col divide-y divide-strokeWeak border-y border-strokeWeak"] $ forM_ xs \x ->
-      a_
-        [ class_ "flex items-center justify-between gap-4 px-3 py-2 text-sm hover:bg-fillWeak focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus"
-        , href_ $ metricDetailUrl pid x.metricName "all" Nothing
-        ]
-        do
-          span_ [class_ "truncate text-textStrong"] $ toHtml x.metricName
-          span_ [class_ "shrink-0 text-textWeak"] $ toHtml $ exemplarValueText x
+    xs -> linkList_ Nothing $ xs <&> \x -> ([href_ $ metricDetailUrl pid x.metricName "all" Nothing], span_ [class_ "block truncate text-textStrong"] $ toHtml x.metricName, toHtml $ exemplarValueText x)
   section (if T.null service then "Service metrics" else "Metrics from " <> service) $ case serviceMetrics of
     [] -> hint $ if T.null service then "This record names no service, so there is nothing to scope metrics to." else "No metrics reported by " <> service <> "."
     ms -> div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2"] $ forM_ ms \m ->
@@ -667,7 +665,7 @@ metricsToolbar_ pid tab filters status =
         servicePicker_ pid filters.source
         select_ [name_ "metric_prefix", Aria.label_ "Filter by metric group", class_ "select select-sm bg-bgBase max-w-48"] do
           Components.options_ (Just filters.prefix) $ ("all", "All metric groups") : [(g, T.dropWhileEnd (`elem` ['.', '_']) g) | g <- filters.groups]
-        input_ [type_ "search", name_ "q", id_ "search-input", value_ filters.query, placeholder_ "Search metrics", Aria.label_ "Search metrics", class_ "input input-sm grow min-w-32 bg-bgBase"]
+        Components.searchInput_ "grow min-w-32 bg-bgBase" "Search metrics" [name_ "q", id_ "search-input", value_ filters.query]
         button_ [type_ "submit", class_ "btn btn-sm"] "Search"
         when (hasMetricFilters filters) $ a_ ([href_ $ metricPageUrl pid tab (clearedFilters filters), class_ "text-sm link"] <> navTabAttrs) "Clear filters"
     status
@@ -677,30 +675,27 @@ metricsToolbar_ pid tab filters status =
 -- the list is searched server-side and capped rather than rendered up front — the options
 -- only exist once the popover is opened, and only the matching ones.
 servicePicker_ :: Projects.ProjectId -> Text -> Html ()
-servicePicker_ pid current =
-  details_ [class_ "relative", id_ "metric-service-picker"] do
-    summary_ [class_ "btn btn-sm min-w-36 justify-between gap-2 font-normal", Aria.label_ "Filter by service"] do
-      span_ [class_ "flex items-center gap-1.5 truncate"] do
-        faSprite_ "filter" "regular" $ "w-3 h-3 " <> bool "text-iconNeutral" "text-iconBrand" (current /= "all")
-        toHtml $ if current == "all" then "All Services" else current
-      faSprite_ "chevron-down" "regular" "w-2.5 h-2.5 text-iconNeutral"
-    div_ [class_ "absolute left-0 top-full z-30 w-72 bg-bgRaised border border-strokeWeak rounded-lg shadow-lg p-2"] do
-      input_
-        [ class_ "input input-sm w-full"
-        , type_ "search"
-        , placeholder_ "Search services"
-        , Aria.label_ "Search services"
-        , hxGet_ $ "/p/" <> pid.toText <> "/metrics/services"
-        , hxTrigger_ "input changed delay:200ms, toggle from:#metric-service-picker once"
-        , hxTarget_ "#metric-service-options"
-        , hxSwap_ "outerHTML"
-        , hxInclude_ "closest form"
-        , hxSelect_ "#metric-service-options"
-        , hxPushUrl_ "false"
-        , name_ "service_search"
-        ]
-      serviceOptions_ current [current | current /= "all"]
-      p_ [class_ "text-xs text-textWeak mt-2"] "Choose a service, then Search to apply."
+servicePicker_ pid current = do
+  button_ ([type_ "button", class_ "btn btn-sm min-w-36 justify-between gap-2 font-normal", Aria.label_ "Filter by service"] <> popoverTrigger_ "metric-service-picker") do
+    span_ [class_ "flex items-center gap-1.5 truncate"] do
+      faSprite_ "filter" "regular" $ "w-3 h-3 " <> bool "text-iconNeutral" "text-iconBrand" (current /= "all")
+      toHtml $ if current == "all" then "All Services" else current
+    faSprite_ "chevron-down" "regular" "w-2.5 h-2.5 text-iconNeutral"
+  div_ (popoverPanel_ "metric-service-picker" <> [class_ "dropdown dropdown-start z-30 w-72 bg-bgRaised border border-strokeWeak rounded-lg shadow-lg p-2 mt-1"]) do
+    Components.searchInput_
+      "w-full"
+      "Search services"
+      [ hxGet_ $ "/p/" <> pid.toText <> "/metrics/services"
+      , hxTrigger_ "input changed delay:200ms, toggle from:#metric-service-picker once"
+      , hxTarget_ "#metric-service-options"
+      , hxSwap_ "outerHTML"
+      , hxInclude_ "closest form"
+      , hxSelect_ "#metric-service-options"
+      , hxPushUrl_ "false"
+      , name_ "service_search"
+      ]
+    serviceOptions_ current [current | current /= "all"]
+    p_ [class_ "text-xs text-textWeak mt-2"] "Choose a service, then Search to apply."
 
 
 -- | Options for 'servicePicker_'. Rendered by the server so the picker ships no markup
@@ -768,12 +763,11 @@ spanDetailAttrs_ loading pidT spanUuid ts =
   [ hxGet_ $ "/p/" <> pidT <> "/log_explorer/" <> spanUuid <> "/" <> toText (iso8601Show ts) <> "/detailed?source=spans"
   , hxTarget_ "#trace_details_content"
   , hxSwap_ "innerHTML"
-  , hxIndicator_ "#loading-span-list"
   ]
     <> case loading of
-      ShowSkeleton -> [term "hx-on::before:request" "window.showTraceDetailsLoading()"]
-      -- Nothing extra: the panel opens from #trace_details_content's own after:settle hook.
-      KeepCurrent -> []
+      ShowSkeleton -> [hxIndicator_ "#trace_details_container", term "hx-on::before:request" "htmx.find('#trace-details-open').checked = true"]
+      -- The panel opens from #trace_details_content's own after:settle hook.
+      KeepCurrent -> [hxIndicator_ "#loading-span-list"]
 
 
 -- | Shared WTTimeseriesLine widget for a metric. @mTitle@/@mId@/@mExpandBtn@
@@ -858,16 +852,16 @@ inactiveMetricsList pid source metrics = do
       $ toHtml
       $ countNoun (V.length metrics) "inactive metric"
       <> " (no data in 7 days)"
-    div_ [class_ "collapse-content px-3 pb-2"] do
-      div_ [class_ "flex flex-col divide-y divide-strokeWeak"] do
-        forM_ metrics $ \metric ->
-          a_
-            ([class_ "flex items-center justify-between py-1.5 px-2 hover:bg-fillWeak rounded focus-visible:outline focus-visible:outline-strokeFocus", href_ $ metricExpandUrl pid metric.metricName source Nothing] <> drawerLoadAttrs_ (metricDetailUrl pid metric.metricName source Nothing))
-            do
-              div_ [class_ "flex items-center gap-2"] do
-                faSprite_ "chart-line" "regular" "w-3.5 h-3.5 text-textWeak"
-                span_ [class_ "text-sm font-mono"] $ toHtml metric.metricName
-              span_ [class_ "text-xs text-textWeak"] $ toHtml $ "Last seen " <> formatTime defaultTimeLocale "%b %d, %Y" metric.lastSeen
+    div_ [class_ "collapse-content px-0 pb-0"]
+      $ linkList_ Nothing
+      $ V.toList metrics
+      <&> \metric ->
+        ( [href_ $ metricExpandUrl pid metric.metricName source Nothing] <> drawerLoadAttrs_ (metricDetailUrl pid metric.metricName source Nothing)
+        , div_ [class_ "flex items-center gap-2"] do
+            faSprite_ "chart-line" "regular" "w-3.5 h-3.5 text-textWeak"
+            span_ [class_ "truncate font-mono"] $ toHtml metric.metricName
+        , span_ [class_ "text-xs"] $ toHtml $ "Last seen " <> formatTime defaultTimeLocale "%b %d, %Y" metric.lastSeen
+        )
 
 
 dataPointsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricDataPoint -> Map Text (Int, Int, Int) -> Text -> Int -> Text -> MetricFilters -> Html ()
@@ -917,15 +911,9 @@ dataPointsPage pid metrics refCounts countsUrl page pageUrl filters = do
                             , -- Carries the cursor, so a middle-click or reload from a deep
                               -- page lands back on that page rather than at the top.
                               href_ $ metricRowUrl r.fullPath
-                            , -- A real href, so middle-click and ⌘-click open a tab and the
-                              -- keyboard activates it like any anchor. A plain click is ours:
-                              -- the drawer loads over the current page, and pushState puts the
-                              -- metric in the URL so reload and Back agree with what is open.
-                              [__|on click
-      if not event.metaKey and not event.ctrlKey and not event.shiftKey and not event.altKey
-        call event.preventDefault()
-        call history.pushState({}, '', my.href)
-      end|]
+                            , -- A real href, so modifier-clicks open a tab (htmx skips them); a plain
+                              -- click loads the drawer and pushes the metric so reload and Back agree.
+                              hxPushUrl_ $ metricRowUrl r.fullPath
                             ]
                               <> drawerLoadAttrs_ (metricDetailUrl pid r.fullPath "all" Nothing)
                           )
@@ -1036,9 +1024,7 @@ metricsDetailsPage pid allDashboards allMonitors source labelM currentRange metr
       dimensionChips ds = div_ [class_ "mt-2 flex flex-wrap gap-1.5"] $ forM_ ds $ metricDimension pid metric.metricName source selected
       lazyTab tabId contentId path lbl = do
         input_ [type_ "radio", name_ "metric-tabs", role_ "tab", class_ "tab", Aria.label_ lbl, id_ tabId]
-        div_ [class_ "tab-content px-4 pb-4 mt-2 text-textWeak font-normal", id_ contentId, hxGet_ $ detailsBase <> path, hxTrigger_ $ "change from:#" <> tabId <> " once", hxTarget_ "this", hxSwap_ "innerHTML", term "hx-ext" "forward-page-params", Aria.busy_ "true"]
-          $ div_ [class_ "flex justify-center py-8", role_ "status", Aria.label_ $ "Loading " <> T.toLower lbl]
-          $ loadingIndicator_ LdSM LdDots
+        Components.lazyPanel_ (detailsBase <> path) ("change from:#" <> tabId <> " once") ("Loading " <> T.toLower lbl) [class_ "tab-content px-4 pb-4 mt-2 text-textWeak font-normal", id_ contentId, term "hx-ext" "forward-page-params"]
   div_
     ( [ id_ "metric-details-content"
       , class_ "flex flex-col gap-5 h-full"
@@ -1078,11 +1064,7 @@ metricsDetailsPage pid allDashboards allMonitors source labelM currentRange metr
           input_ [type_ "radio", name_ "metric-tabs", role_ "tab", class_ "tab", Aria.label_ "Overview", checked_]
           div_ [class_ "tab-content px-4 pb-4 mt-2 text-textWeak font-normal", id_ "ov-content"] $ do
             div_ [class_ "flex flex-col gap-4"] do
-              div_ [class_ "flex flex-wrap gap-x-6 gap-y-3 text-sm"]
-                $ forM_ ([("Type", metric.metricType), ("Unit", if metric.metricUnit == "" then "Unit not reported" else metric.metricUnit), ("Reporting services", prettyPrintCount (V.length sources)), ("Available dimensions", prettyPrintCount (V.length metric.metricLabels))] :: [(Text, Text)]) \(k, v) ->
-                  div_ [class_ "flex flex-col gap-0.5"] do
-                    span_ [class_ "text-xs font-medium text-textWeak"] $ toHtml k
-                    span_ [class_ "text-textStrong"] $ toHtml v
+              Components.factGrid_ "grid-cols-2 md:grid-cols-4 text-sm" [("Type", metric.metricType), ("Unit", if metric.metricUnit == "" then "Unit not reported" else metric.metricUnit), ("Reporting services", prettyPrintCount (V.length sources)), ("Available dimensions", prettyPrintCount (V.length metric.metricLabels))]
               when (metric.metricDescription /= "")
                 $ div_ [class_ "border-t border-strokeWeak pt-3 text-sm leading-6"]
                 $ toHtml metric.metricDescription
@@ -1105,12 +1087,10 @@ metricsDetailsPage pid allDashboards allMonitors source labelM currentRange metr
               unless (null dashboards && null monitors)
                 $ div_ [class_ "border-t border-strokeWeak pt-4"] do
                   span_ [class_ "text-xs font-medium text-textWeak"] "Used by"
-                  div_ [class_ "mt-2 flex flex-col divide-y divide-strokeWeak border-y border-strokeWeak"]
-                    $ forM_ (map (\d -> ("dashboards/" <> d.id.toText, d.title)) dashboards <> map (\m -> ("monitors/alerts/" <> m.id.toText, "Monitor")) monitors)
-                    $ \(path, label) ->
-                      a_ [class_ "flex cursor-pointer items-center justify-between gap-3 px-1 py-2 text-sm hover:text-textBrand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus", href_ $ "/p/" <> pid.toText <> "/" <> path] do
-                        span_ [class_ "truncate text-textStrong"] $ toHtml label
-                        faSprite_ "arrow-up-right-from-square" "regular" "w-3 shrink-0 text-iconNeutral"
+                  div_ [class_ "mt-2"]
+                    $ linkList_ Nothing
+                    $ (map (\d -> ("dashboards/" <> d.id.toText, d.title)) dashboards <> map (\m -> ("monitors/alerts/" <> m.id.toText, "Monitor")) monitors)
+                    <&> \(path, label) -> ([href_ $ "/p/" <> pid.toText <> "/" <> path], span_ [class_ "block truncate text-textStrong"] $ toHtml label, pass)
           -- Each fetch hangs off its radio's own `change` (htmx `from:`): an unselected
           -- `.tab-content` is display:none and never fires `intersect`. Fetched on first
           -- reveal: an exemplar lookup is a text scan over raw metric rows.
@@ -1134,29 +1114,19 @@ relatedMetrics :: Projects.ProjectId -> Text -> Telemetry.MetricDataPoint -> V.V
 relatedMetrics pid source metric candidates =
   case take 6 $ map snd $ sortWith (Down . fst) [(score, c) | c <- V.toList candidates, c.metricName /= metric.metricName, let score = relatedScore c, score > 0] of
     [] -> Components.emptyState_ def{size = ESCompact} (if source == "all" then "No metrics with a similar name or dimensions were found." else "No similar metrics in this source. Try All sources.") ""
-    related -> do
-      div_ [class_ "px-5 pb-3 pt-5"] do
-        span_ [class_ "block text-sm font-semibold text-textStrong"] "Related metrics"
-        span_ [class_ "mt-1 block text-xs leading-5 text-textWeak"] "Metrics with a similar name or dimensions."
-      div_ [class_ "flex flex-col divide-y divide-strokeWeak border-y border-strokeWeak"] $ forM_ related $ \candidate ->
-        a_
-          ( [ class_ "group flex cursor-pointer items-center justify-between gap-4 px-5 py-4 transition-colors hover:bg-fillWeak focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus"
-            , href_ $ metricDetailUrl pid candidate.metricName source Nothing
-            , hxGet_ $ metricDetailUrl pid candidate.metricName source Nothing
-            ]
-              <> metricDetailSwap_
-          )
-          do
-            div_ [class_ "min-w-0"] do
-              span_ [class_ "block truncate font-medium text-textStrong"] $ toHtml candidate.metricName
-              div_ [class_ "mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-textWeak"] do
-                span_ $ toHtml $ candidate.metricType <> if candidate.metricUnit == "" then "" else " · " <> candidate.metricUnit
-                span_ [class_ "text-textDisabled"] "•"
-                span_ $ toHtml $ relatedContext candidate
-              when (candidate.metricDescription /= "")
-                $ span_ [class_ "mt-1 block truncate text-xs text-textWeak"]
-                $ toHtml candidate.metricDescription
-            faSprite_ "arrow-right" "regular" "w-3 shrink-0 text-iconNeutral transition-transform group-hover:translate-x-0.5"
+    related -> linkList_ (Just ("Related metrics", "Metrics with a similar name or dimensions.")) $ related <&> \candidate ->
+      ( [href_ $ metricDetailUrl pid candidate.metricName source Nothing, hxGet_ $ metricDetailUrl pid candidate.metricName source Nothing] <> metricDetailSwap_
+      , do
+          span_ [class_ "block truncate font-medium text-textStrong"] $ toHtml candidate.metricName
+          div_ [class_ "mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-textWeak"] do
+            span_ $ toHtml $ candidate.metricType <> if candidate.metricUnit == "" then "" else " · " <> candidate.metricUnit
+            span_ [class_ "text-textDisabled"] "•"
+            span_ $ toHtml $ relatedContext candidate
+          when (candidate.metricDescription /= "")
+            $ span_ [class_ "mt-1 block truncate text-xs text-textWeak"]
+            $ toHtml candidate.metricDescription
+      , pass
+      )
   where
     -- Common leading dot-segments of the two names, shared by scoring and display.
     sharedSegments :: Telemetry.MetricChartListData -> [Text]
@@ -1308,16 +1278,8 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
                   ]
                   "Load more spans"
             div_ [class_ "flex gap-2 w-full items-center"] do
-              div_ [class_ "flex items-center gap-2 w-full rounded-lg px-3 grow-1 h-9 border border-strokeWeak bg-fillWeaker"] do
-                faSprite_ "magnifying-glass" "regular" "w-3 h-3 text-iconNeutral"
-                input_
-                  [ class_ "w-full text-textStrong bg-transparent hover:outline-hidden focus:outline-hidden focus:ring-0"
-                  , type_ "search"
-                  , Aria.label_ "Search spans"
-                  , placeholder_ "Search spans"
-                  , id_ "search-input"
-                  , Components.filterInputAttr_ "#trace_span_container .span-filterble"
-                  ]
+              div_ [class_ "flex items-center gap-2 grow"] do
+                Components.searchInput_ "grow h-9 border-strokeWeak bg-fillWeaker" "Search spans" [id_ "search-input", Components.filterInputAttr_ "#trace_span_container .span-filterble"]
                 -- Span ids live on the container so the two buttons don't each embed the whole list.
                 div_ [class_ "flex items-center gap-1", id_ "currentSpanIndex", term "data-span" "0", term "data-span-ids" $ encodeText $ (.spanId) <$> spanRecords]
                   $ forM_ ([("prev", "chevron-up", "Previous matching span"), ("next", "chevron-down", "Next matching span")] :: [(Text, Text, Text)]) \(dir, icon, lbl) ->
@@ -1391,28 +1353,23 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
           -- are already on the page).
           div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden group-has-[#tab-map:checked]/tt:block", id_ "service_map"] do
             serviceMapPanel_ pid ("trace-service-map-" <> traceItem.traceId) traceGraph serviceColors Nothing
-    -- Same grip affordance as resizer_ (border + centred dots, brand-coloured on hover):
-    -- the drag target was invisible without it, so the panel read as unresizable.
-    div_ [class_ "hidden shrink-0 max-md:hidden", id_ "trace-details-resizer-wrapper"]
-      $ div_
-        [ class_ "group relative w-3 h-full flex items-center justify-center cursor-ew-resize overflow-visible select-none touch-none"
-        , id_ "trace_details_resizer"
-        , role_ "separator"
-        , Aria.label_ "Resize span details"
-        ]
-      $ div_ [class_ "h-full border-l border-strokeWeak group-hover:border-strokeBrand-strong"]
-      $ div_ [class_ "absolute left-1/2 top-1/2 z-10 -translate-x-1/2 leading-none py-1 -translate-y-1/2 bg-bgBase rounded-sm border border-strokeBrand-weak group-hover:border-strokeBrand-strong text-iconNeutral group-hover:text-iconBrand"]
-      $ faSprite_ "grip-dots-vertical" "regular" "w-4 h-5"
+    -- Open state is this checkbox: rows check it before loading a span, close unchecks it.
+    -- `.open` mirrors it for the Escape handlers in LogItem/Issues.
+    input_ [type_ "checkbox", class_ "hidden peer/trace", id_ "trace-details-open"]
+    div_ [class_ "hidden md:peer-checked/trace:block", id_ "trace-details-resizer-wrapper"]
+      $ Components.resizerWith_ [data_ "min" "260", data_ "max" "70vw"] "trace_details_container" "trace_details_width" False
     div_
-      [ class_ "details-panel shrink-0 h-full overflow-hidden overflow-y-auto c-scroll bg-bgBase border-l border-strokeWeak max-md:fixed max-md:inset-0 max-md:z-50"
+      [ class_ "details-panel group/tdp shrink-0 h-full w-1/3 max-w-0 overflow-hidden overflow-y-auto c-scroll bg-bgBase peer-checked/trace:max-w-[70vw] peer-checked/trace:border-l border-strokeWeak max-md:fixed max-md:inset-0 max-md:z-50 max-md:w-full! max-md:peer-checked/trace:max-w-full"
       , id_ "trace_details_container"
-      , style_ "width:0"
-      , -- Close buttons in the shared detail view send closeDetailPanel to their
-        -- .details-panel; in the trace view that's this container.
-        [__|on closeDetailPanel call window.closeTraceDetails(me)|]
+      , term "hx-live:.open" "q('#trace-details-open').checked"
+      , -- Close buttons in the shared detail view send closeDetailPanel to their .details-panel.
+        [__|init set my *width to localStorage.getItem('resizer-trace_details_width') or '' end
+          on closeDetailPanel
+            set #trace-details-open's checked to false then put '' into #trace_details_content
+            remove .bg-fillBrand-weak .waterfall-active from .waterfall-active then send loglist-resize to window|]
       ]
       do
-        div_ [class_ "trace-details-loading hidden p-4", role_ "status", Aria.live_ "polite"] do
+        div_ [class_ "hidden group-[.htmx-request]/tdp:block p-4", role_ "status", Aria.live_ "polite"] do
           div_ [class_ "flex items-center gap-2 text-sm font-medium text-textStrong"] do
             loadingIndicator_ LdSM LdSpinner
             "Loading span details…"
@@ -1423,7 +1380,7 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
             div_ [class_ "h-4 w-full rounded skeleton-shimmer"] ""
         -- `after:settle`, not `after:swap`: htmx fires its swap events on the requesting
         -- element, and only the settle pair reaches the swap target — which is this element.
-        div_ [id_ "trace_details_content", term "hx-on::after:settle" "window.traceDetailsLoaded(this)"] pass
+        div_ [id_ "trace_details_content", class_ "group-[.htmx-request]/tdp:hidden", term "hx-on::after:settle" "htmx.find('#trace-details-open').checked = true; dispatchEvent(new Event('loglist-resize'))"] pass
 
   -- Use skew-adjusted SpanMin from the span tree so flame/timeline matches the waterfall.
   let flattenTrees = concatMap (\t -> t.spanRecord : flattenTrees t.children)
@@ -1470,64 +1427,6 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
           flameGraphChart($spanJson, "$trId", $colorsJson);
         }, {once: true});
       }
-    }
-    window.openTraceDetails = function(panel) {
-      if (panel.offsetWidth > 5) return;
-      const storedWidth = localStorage.getItem('resizer-trace_details_width');
-      panel.style.width = window.innerWidth < 768 ? '100%' : (storedWidth || '33.333%');
-      panel.classList.add('open');
-      document.getElementById('trace-details-resizer-wrapper')?.classList.remove('hidden');
-      window.dispatchEvent(new Event('loglist-resize'));
-    };
-    window.showTraceDetailsLoading = function() {
-      const panel = document.getElementById('trace_details_container');
-      if (!panel) return;
-      window.openTraceDetails(panel);
-      panel.querySelector('.trace-details-loading')?.classList.remove('hidden');
-      document.getElementById('trace_details_content')?.classList.add('hidden');
-    };
-    window.traceDetailsLoaded = function(content) {
-      const panel = content.closest('#trace_details_container');
-      if (!panel) return;
-      window.openTraceDetails(panel);
-      panel.querySelector('.trace-details-loading')?.classList.add('hidden');
-      content.classList.remove('hidden');
-    };
-    window.closeTraceDetails = function(trigger) {
-      const panel = trigger.closest('#trace_details_container');
-      if (!panel) return;
-      panel.style.width = '0';
-      panel.classList.remove('open');
-      panel.querySelector('.trace-details-loading')?.classList.add('hidden');
-      const content = document.getElementById('trace_details_content');
-      if (content) content.innerHTML = '';
-      document.getElementById('trace-details-resizer-wrapper')?.classList.add('hidden');
-      document.querySelectorAll('.waterfall-active').forEach((row) => row.classList.remove('bg-fillBrand-weak', 'waterfall-active'));
-      window.dispatchEvent(new Event('loglist-resize'));
-    };
-    var traceDetailsResizer = document.getElementById('trace_details_resizer');
-    if (traceDetailsResizer) {
-      traceDetailsResizer.onpointerdown = (event) => {
-        const panel = document.getElementById('trace_details_container');
-        if (!panel) return;
-        const startX = event.clientX;
-        const startWidth = panel.offsetWidth;
-        traceDetailsResizer.setPointerCapture(event.pointerId);
-        const move = (moveEvent) => {
-          const width = Math.min(window.innerWidth * 0.7, Math.max(260, startWidth - (moveEvent.clientX - startX)));
-          panel.style.width = width + 'px';
-          window.dispatchEvent(new Event('loglist-resize'));
-        };
-        const end = () => {
-          localStorage.setItem('resizer-trace_details_width', panel.offsetWidth + 'px');
-          traceDetailsResizer.removeEventListener('pointermove', move);
-          traceDetailsResizer.removeEventListener('pointerup', end);
-          traceDetailsResizer.removeEventListener('pointercancel', end);
-        };
-        traceDetailsResizer.addEventListener('pointermove', move);
-        traceDetailsResizer.addEventListener('pointerup', end);
-        traceDetailsResizer.addEventListener('pointercancel', end);
-      };
     }
     function scheduleTraceCharts() {
       requestAnimationFrame(() => {

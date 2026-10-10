@@ -16,7 +16,7 @@ import Data.Vector qualified as V
 import Lucid
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.ServiceGraph (MapStats (..), NodeKind (..), ServiceEdge (..), ServiceGraph (..), ServiceNode (..), drawnEdges, drawnNodes)
-import Pages.Components (EmptyStateCfg (..), EmptyStateSize (..), emptyState_)
+import Pages.Components (EmptyStateCfg (..), EmptyStateSize (..), disclosure_, emptyState_)
 import Relude
 import Utils (faSprite_, getDurationNSMS, prettyPrintCount, showFFloat')
 
@@ -53,8 +53,8 @@ serviceMapPanelWith_ panel pid elId graph colors = div_ [class_ "w-full flex fle
               faSprite_ "circle-info" "regular" "w-3.5 h-3.5 text-iconNeutral"
               toHtml
                 $ "Showing the "
-                <> show (V.length (drawnNodes graph))
-                <> " busiest dependencies. Quieter ones are folded away — search to find a specific one."
+                  <> show (V.length (drawnNodes graph))
+                  <> " busiest dependencies. Quieter ones are folded away — search to find a specific one."
           serviceMapLegend_ graph colors
           envFacet_ pid graph (case panel of GlobalPanel selectedEnv -> selectedEnv; EndpointPanel -> Nothing)
           scopeChip_
@@ -120,7 +120,7 @@ envFacet_ pid graph selected =
       a_
         [ class_
             $ "rounded-md border px-2 py-0.5 "
-            <> bool "border-strokeWeak text-textWeak hover:bg-fillWeak" "border-strokeBrand-strong bg-fillBrand-weak text-textStrong font-medium" (opt == selected)
+              <> bool "border-strokeWeak text-textWeak hover:bg-fillWeak" "border-strokeBrand-strong bg-fillBrand-weak text-textStrong font-medium" (opt == selected)
         , href_ $ "/p/" <> pid.toText <> "/service_map" <> maybe "" ("?env=" <>) opt
         ]
         $ toHtml
@@ -274,11 +274,9 @@ serviceMapLegend_ graph colors = div_ [class_ "flex flex-col gap-2"] do
 
 -- | The no-JS, screen-reader and small-screen representation of the same graph.
 dependencyTable_ :: ServiceGraph -> Html ()
-dependencyTable_ graph = details_ [class_ "group border border-strokeStrong rounded-2xl overflow-hidden"] do
-  summary_ [class_ "flex items-center gap-2 px-3 py-2 text-sm text-textStrong cursor-pointer select-none"] do
-    faSprite_ "chevron-right" "regular" "w-3 h-3 text-iconNeutral transition-transform group-open:rotate-90"
-    toHtml $ "Dependencies (" <> show (V.length (drawnEdges graph)) <> ")"
-  div_ [class_ "overflow-x-auto"] $ table_ [class_ "w-full text-xs"] do
+dependencyTable_ graph = disclosure_ [class_ "border border-strokeStrong rounded-2xl overflow-hidden"] "px-3 py-2 text-sm text-textStrong" (toHtml $ "Dependencies (" <> show (V.length (drawnEdges graph)) <> ")")
+  $ div_ [class_ "overflow-x-auto"]
+  $ table_ [class_ "w-full text-xs"] do
     thead_ [class_ "text-textWeak border-b border-strokeWeak"]
       $ tr_
       $ forM_ ["Caller", "Callee", "Requests", "Errors", "p95 latency"]

@@ -81,24 +81,21 @@ snapshot messageTs history = do
             Investigations.InvestigationFinished -> tasks
             Investigations.InvestigationFailed -> stop
             Investigations.InvestigationInterrupted -> stop
-
-
-toolTitle :: LLM.ToolCall -> Text
-toolTitle tool = case LLM.toolFunctionName $ LLM.toolCallFunction tool of
-  "get_incident_context" -> "Read the incident record"
-  "get_investigation_history" -> "Read prior investigation activity"
-  "get_linked_repositories" -> "Find linked repositories"
-  "get_deployments" -> "Check deployment history"
-  "get_code_context" -> "Inspect source at the requested revision"
-  "get_services" -> "Find services in telemetry"
-  "get_schema" -> "Check available telemetry fields"
-  "get_field_values" -> "Read telemetry field values"
-  "get_facets" -> "Read telemetry summaries"
-  "count_query" -> "Count matching telemetry"
-  "sample_logs" -> "Inspect a sample of logs"
-  "run_query" -> "Query telemetry"
-  "run_sql_query" -> "Query telemetry"
-  _ -> "Check an evidence request"
+    toolTitle tool = case LLM.toolFunctionName $ LLM.toolCallFunction tool of
+      "get_incident_context" -> "Read the incident record"
+      "get_investigation_history" -> "Read prior investigation activity"
+      "get_linked_repositories" -> "Find linked repositories"
+      "get_deployments" -> "Check deployment history"
+      "get_code_context" -> "Inspect source at the requested revision"
+      "get_services" -> "Find services in telemetry"
+      "get_schema" -> "Check available telemetry fields"
+      "get_field_values" -> "Read telemetry field values"
+      "get_facets" -> "Read telemetry summaries"
+      "count_query" -> "Count matching telemetry"
+      "sample_logs" -> "Inspect a sample of logs"
+      "run_query" -> "Query telemetry"
+      "run_sql_query" -> "Query telemetry"
+      _ -> "Check an evidence request"
 
 
 -- | Slack plan blocks accept at most fifty tasks. The journal reader bounds the

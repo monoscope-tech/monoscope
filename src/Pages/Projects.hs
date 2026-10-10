@@ -62,6 +62,7 @@ import Data.Valor (Valor, check1, failIf, validateM)
 import Data.Valor qualified as Valor
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
+import Deriving.Aeson.Stock qualified as DAES
 import Effectful
 import Effectful.Error.Static (throwError)
 import Effectful.Exception (trySync)
@@ -84,14 +85,13 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, mkPageCtx, s
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as SlackP
 import Pages.Bots.Utils qualified as BotUtils
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), PanelCfg (..), confirmModal_, dirtyFormSaveAttr_, emptyState_, filterInputAttr_, formActionsModal_, formField_, formSelectField_, headerRow_, iconBadgeXs_, iconBadge_, infoBanner_, modalWith_, panel_, searchInput_, sectionLabel_, settingsH2_, settingsNavLink_, settingsSection_, tagInput_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), PanelCfg (..), brandLogo_, callout_, connectionBadge_, dangerAction_, dirtyFormSaveAttr_, disclosure_, emptyState_, filterInputAttr_, formActionsModal_, formField_, formSelectField_, headerRow_, iconBadgeXs_, iconBadge_, infoBanner_, modalWith_, panel_, roleOptions_, searchInput_, sectionLabel_, settingsH2_, settingsNavLink_, settingsSection_, tagInput_, toggleRow_, tonePill_)
 import Pages.Settings qualified as Settings
 import Pkg.Components.Table (Table (..))
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.Widget (Widget (..), WidgetType (..), widget_)
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.EmailTemplates qualified as ET
-import Pkg.Mail (sendRenderedEmail)
 import Relude hiding (ask, asks)
 import Servant (addHeader)
 import Servant.API (Header)
@@ -143,9 +143,7 @@ listProjectsBody :: Maybe Projects.Session -> V.Vector Projects.ProjectListItem 
 listProjectsBody sessM projects demoProject showDemoProject restrictedProjectTitles = do
   nav_ [class_ "fixed top-0 left-0 right-0 bg-bgBase border-b border-strokeWeak z-50"] do
     div_ [class_ "flex items-center justify-between px-4 py-3"] do
-      a_ [href_ "/", class_ "flex items-center"] do
-        img_ [class_ "h-6 dark:hidden", src_ "/public/assets/svgs/logo_black.svg"]
-        img_ [class_ "h-6 hidden dark:block", src_ "/public/assets/svgs/logo_white.svg"]
+      a_ [href_ "/", class_ "flex items-center"] $ brandLogo_ "h-6"
       div_ [class_ "flex items-center gap-3"] do
         label_ [class_ "swap swap-rotate"] do
           input_
@@ -162,7 +160,7 @@ listProjectsBody sessM projects demoProject showDemoProject restrictedProjectTit
         a_ [class_ "btn btn-ghost btn-sm text-textError", href_ "/logout"] "Logout"
 
   section_ [id_ "main-content", class_ "mx-auto max-md:px-2 px-4 py-6 pb-36 pt-20 overflow-y-auto h-full"] do
-    div_ [class_ "flex justify-between items-center mb-8"] do
+    headerRow_ [class_ "mb-8"] do
       h2_ [class_ "text-textStrong text-3xl font-semibold"] "Projects"
       a_ [class_ "btn btn-primary btn-sm", href_ "/p/new"] (faSprite_ "plus" "regular" "h-4 w-4 mr-2" >> "New Project")
 
@@ -523,15 +521,10 @@ integrationsBody IntegrationsConfig{..} = do
           forM_ integrations \(val, testCh, title, configured, icon, content) ->
             renderNotificationOption pid everyoneTeamId title val testCh (S.notMember val disabledSet) configured icon content
 
-        div_ [class_ "mt-4 rounded-xl border border-strokeWeak p-3"] do
-          div_ [class_ "flex items-start gap-3"] do
-            input_
-              ( [id_ "include-user-identity-in-alerts", name_ "includeUserIdentityInAlerts", type_ "checkbox", class_ "toggle toggle-sm toggle-primary mt-0.5"]
-                  <> [checked_ | includeUserIdentityInAlerts]
-              )
-            label_ [Lucid.for_ "include-user-identity-in-alerts", class_ "cursor-pointer"] do
-              span_ [class_ "block text-sm font-medium text-textStrong"] "Include affected user identity in alerts"
-              span_ [class_ "block mt-1 text-xs text-textWeak"] "Includes the telemetry user name and email in Slack error alerts. Enabled by default; turn it off if alerts for this project must not contain PII. Tenant or project context is always included."
+        div_ [class_ "mt-4 rounded-xl border border-strokeWeak p-3"]
+          $ toggleRow_ "include-user-identity-in-alerts" "Include affected user identity in alerts" "Includes the telemetry user name and email in Slack error alerts. Enabled by default; turn it off if alerts for this project must not contain PII. Tenant or project context is always included."
+          $ name_ "includeUserIdentityInAlerts"
+            : [checked_ | includeUserIdentityInAlerts]
 
     -- Developer tools
     div_ [class_ "pt-6 border-t border-strokeWeak space-y-2"] do
@@ -558,13 +551,14 @@ integrationsSwapAttrs_ :: [Attribute]
 integrationsSwapAttrs_ = [hxTarget_ "#integrations-form-section", hxSelect_ "#integrations-form-section", hxSwap_ "outerHTML swap:0.3s"]
 
 
-renderInlineTestButton :: Text -> Settings.TestChannel -> Maybe ProjectMembers.TeamId -> Html ()
-renderInlineTestButton pid channel teamIdM =
+-- | @attrs@ extend the submit button (e.g. @disabled_@ until a channel is configured).
+renderInlineTestButton :: Text -> Settings.TestChannel -> Maybe ProjectMembers.TeamId -> [Attribute] -> Html ()
+renderInlineTestButton pid channel teamIdM attrs =
   form_ [hxPost_ [text|/p/$pid/settings/integrations/test|], hxSwap_ "none", hxTrigger_ "submit", class_ "inline"] do
     input_ [type_ "hidden", name_ "channel", value_ (display channel)]
     input_ [type_ "hidden", name_ "issueType", value_ "runtime_exception"]
     whenJust teamIdM \tid -> input_ [type_ "hidden", name_ "teamId", value_ tid.toText]
-    button_ [type_ "submit", class_ "btn btn-xs gap-1", testSentAttr_] do
+    button_ ([type_ "submit", class_ "btn btn-xs gap-1", testSentAttr_] <> attrs) do
       faSprite_ "flask-vial" "regular" "h-3 w-3"
       "Test"
 
@@ -579,12 +573,8 @@ renderNotificationOption pid teamIdM title value testCh isChecked isConfigured i
     div_ [class_ "flex items-center gap-3 p-3"] do
       div_ [class_ $ "flex items-center justify-center shrink-0 w-7 h-7 rounded-md " <> bool "bg-fillWeak" "bg-fillBrand-weak" isActive] icon
       span_ [class_ "text-sm font-medium text-textStrong flex-1 min-w-0"] $ toHtml title
-      div_ [class_ "flex items-center gap-2 shrink-0", id_ $ value <> "-test-button"] do
-        if isActive
-          then renderInlineTestButton pid testCh teamIdM
-          else button_ [type_ "button", disabled_ "", class_ "btn btn-xs btn-neutral gap-1 cursor-not-allowed opacity-40", Aria.label_ "Enable first"] do
-            faSprite_ "flask-vial" "regular" "h-3 w-3"
-            "Test"
+      div_ [class_ "flex items-center gap-2 shrink-0", id_ $ value <> "-test-button"]
+        $ renderInlineTestButton pid testCh teamIdM [disabled_ "" | not isActive]
       label_ [class_ "relative inline-flex items-center cursor-pointer tap-target", Aria.label_ $ if isChecked then "Disable " <> title else "Enable " <> title] do
         input_ [type_ "checkbox", value_ value, name_ "notifChannel", if isChecked then checked_ else title_ $ "Enable " <> title, class_ "toggle toggle-sm toggle-primary"]
 
@@ -663,11 +653,10 @@ renderPagerdutyIntegration pid = div_ [id_ "pagerduty-integration"] . bool disco
   where
     connectedUI = do
       div_ [class_ "flex items-center gap-2"] do
-        span_ [class_ "text-xs text-textSuccess flex items-center gap-1.5"] $ faSprite_ "circle-check" "regular" "h-3.5 w-3.5 text-iconSuccess" >> "Connected"
+        connectionBadge_ True
         button_ ([class_ "btn btn-xs btn-ghost text-textError", hxPost_ [text|/p/$pid/settings/integrations/pagerduty/disconnect|]] <> integrationsSwapAttrs_) "Disconnect"
     disconnectedUI = form_ ([class_ "flex flex-col gap-2", hxPost_ [text|/p/$pid/settings/integrations/pagerduty|]] <> integrationsSwapAttrs_) do
-      formField_ FieldSm def{placeholder = "Events API v2 Integration Key"} "Integration Key" "integrationKey" False Nothing
-      p_ [class_ "text-xs text-textWeak"] "Get from: PagerDuty → Services → Integrations → Events API v2"
+      formField_ FieldSm def{placeholder = "Events API v2 Integration Key", hint = Just "Get from: PagerDuty → Services → Integrations → Events API v2"} "Integration Key" "integrationKey" False Nothing
       button_ [class_ "btn btn-sm w-max", type_ "submit"] "Connect"
 
 
@@ -720,8 +709,8 @@ manageMembersPostH pid onboardingM form = do
   _ <-
     ProjectMembers.insertProjectMembers
       $ newProjectMembers
-      & filter (\(_, _, id') -> id' /= currUserId)
-      & map \(_, permission, id') -> ProjectMembers.CreateProjectMembers pid id' permission
+        & filter (\(_, _, id') -> id' /= currUserId)
+        & map \(_, permission, id') -> ProjectMembers.CreateProjectMembers pid id' permission
 
   unless (null uAndPOldAndChanged)
     $ void
@@ -873,26 +862,12 @@ channelJSON :: BotUtils.Channel -> AE.Value
 channelJSON x = AE.object ["name" AE..= ("#" <> x.channelName), "value" AE..= x.channelId]
 
 
-encodeChannels :: [BotUtils.Channel] -> Text
-encodeChannels = encodeText . map channelJSON
-
-
--- | Tagify whitelists for the team modal: (members by user id, members by email).
-memberWhitelists :: V.Vector ProjectMembers.ProjectMemberVM -> (Text, Text)
-memberWhitelists projMembers =
-  ( encodeText $ (\x -> AE.object ["name" AE..= (x.first_name <> " " <> x.last_name), "email" AE..= x.email, "value" AE..= x.userId]) <$> projMembers
-  , encodeText $ (\x -> AE.object ["name" AE..= x.email, "value" AE..= x.email]) <$> projMembers
-  )
-
-
 manageTeamsPage :: Projects.ProjectId -> V.Vector ProjectMembers.ProjectMemberVM -> [BotUtils.Channel] -> [BotUtils.Channel] -> V.Vector ProjectMembers.TeamVM -> Html ()
 manageTeamsPage pid projMembers channels discordChannels teams = do
-  let (whiteList, emailWhiteList) = memberWhitelists projMembers
-      (channelWhiteList, discordWhiteList) = (encodeChannels channels, encodeChannels discordChannels)
-  div_ [class_ "w-full h-full overflow-y-auto"] $ section_ [class_ "py-6 px-4 sm:py-8 sm:px-8 lg:px-12 space-y-6"] do
-    div_ [class_ "flex justify-between items-center max-w-2xl"] do
+  settingsSection_ do
+    headerRow_ [class_ "max-w-2xl"] do
       settingsH2_ "Team"
-      teamModal pid Nothing whiteList emailWhiteList channelWhiteList discordWhiteList False $ span_ [class_ "btn btn-sm btn-primary gap-1.5 whitespace-nowrap"] $ do faSprite_ "plus" "regular" "w-3 h-3"; "New Team"
+      teamModal pid Nothing projMembers channels discordChannels False $ span_ [class_ "btn btn-sm btn-primary gap-1.5 whitespace-nowrap"] $ do faSprite_ "plus" "regular" "w-3 h-3"; "New Team"
     div_ [class_ "max-w-2xl"] $ teamTabsHeader_ pid "teams" (V.length projMembers) (V.length teams)
 
     if V.null teams
@@ -921,7 +896,7 @@ nameCell :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Html ()
 nameCell pid name description handle isEveryone = do
   span_ [class_ "flex items-center gap-2 min-w-0"] do
     a_ [href_ ("/p/" <> pid.toText <> "/manage_teams/" <> handle), class_ "font-medium text-textStrong hover:text-textBrand hover:underline underline-offset-2"] $ toHtml name
-    when isEveryone $ span_ [class_ "badge badge-sm bg-fillBrand-weak text-textBrand border-strokeBrand-weak shrink-0"] "Default"
+    when isEveryone $ tonePill_ BrandBadge "Default"
     span_ [class_ "text-textWeak text-sm overflow-ellipsis truncate"] $ toHtml description
 
 
@@ -971,11 +946,9 @@ teamGetH pid handle layoutM = do
 
 teamPage :: Projects.ProjectId -> ProjectMembers.TeamVM -> V.Vector ProjectMembers.ProjectMemberVM -> [BotUtils.Channel] -> [BotUtils.Channel] -> Html ()
 teamPage pid team projMembers slackChannels discordChannels = do
-  let (whiteList, emailWhiteList) = memberWhitelists projMembers
-      (channelWhiteList, discordWhiteList) = (encodeChannels slackChannels, encodeChannels discordChannels)
-      isEveryone = team.is_everyone
+  let isEveryone = team.is_everyone
       notifRow_ :: Text -> Text -> Html () -> [Text] -> Bool -> Html ()
-      notifRow_ icon iconType lbl vals inherited = div_ [class_ "flex items-start gap-3 py-2.5"] do
+      notifRow_ icon iconType lbl vals inherited = div_ [class_ "flex items-start gap-3 py-2.5 px-4"] do
         span_ [class_ "w-5 h-5 flex items-center justify-center shrink-0"] $ faSprite_ icon iconType "h-4 w-4 text-iconNeutral"
         div_ [class_ "flex-1 min-w-0"] do
           div_ [class_ "text-sm font-medium text-textStrong"] lbl
@@ -1010,39 +983,28 @@ teamPage pid team projMembers slackChannels discordChannels = do
           div_ [class_ "space-y-2 text-sm"] do
             div_ [class_ "flex gap-2"] $ span_ [class_ "text-textWeak w-16"] "Handle" >> span_ [class_ "text-textStrong"] (toHtml $ "@" <> team.handle)
             unless (T.null team.description) $ div_ [class_ "flex gap-2"] $ span_ [class_ "text-textWeak w-16"] "About" >> span_ [class_ "text-textStrong"] (toHtml team.description)
-        let memberRow_ avatar name email = div_ [class_ "flex items-center gap-3 py-2.5"] $ img_ [src_ avatar, class_ "w-8 h-8 rounded-full border border-strokeWeak", term "loading" "lazy", term "decoding" "async"] >> div_ [] (div_ [class_ "text-sm font-medium text-textStrong"] (toHtml name) >> div_ [class_ "text-xs text-textWeak"] (toHtml email))
-            members = if isEveryone then (\m -> ("/api/avatar/" <> m.userId.toText, m.first_name <> " " <> m.last_name, CI.original m.email)) <$> projMembers else (\m -> (m.memberAvatar, m.memberName, m.memberEmail)) <$> team.members
+        let members = if isEveryone then (\m -> ("/api/avatar/" <> m.userId.toText, m.first_name <> " " <> m.last_name, CI.original m.email)) <$> projMembers else (\m -> (m.memberAvatar, m.memberName, m.memberEmail)) <$> team.members
         panel_ def{raised = True, icon = Just "users", subtitle = Just $ " (" <> show (V.length members) <> ")"} "Members" do
-          div_ [class_ "divide-y divide-strokeWeak -mx-4"] $ forM_ members \(avatar, name, email) -> div_ [class_ "px-4"] $ memberRow_ avatar name email
+          div_ [class_ "divide-y divide-strokeWeak -mx-4"] $ forM_ members \(avatar, name, email) ->
+            div_ [class_ "flex items-center gap-3 py-2.5 px-4"] $ img_ [src_ avatar, class_ "w-8 h-8 rounded-full border border-strokeWeak", term "loading" "lazy", term "decoding" "async"] >> div_ [] (div_ [class_ "text-sm font-medium text-textStrong"] (toHtml name) >> div_ [class_ "text-xs text-textWeak"] (toHtml email))
         panel_ def{raised = True, icon = Just "bell"} "Notifications" $ div_ [class_ "divide-y divide-strokeWeak -mx-4"] do
-          div_ [class_ "px-4"] $ notifRow_ "envelope" "regular" "Email" (V.toList team.notify_emails) isEveryone
-          div_ [class_ "px-4"] $ notifRow_ "slack" "solid" "Slack" (V.toList $ V.map (resolveChannel slackChannels) team.slack_channels) isEveryone
-          div_ [class_ "px-4"] $ notifRow_ "discord" "solid" "Discord" (V.toList $ V.map (resolveChannel discordChannels) team.discord_channels) isEveryone
-          div_ [class_ "px-4"] $ notifRow_ "whatsapp" "solid" "WhatsApp" (V.toList team.phone_numbers) False
-          div_ [class_ "px-4"] $ notifRow_ "pager" "solid" "PagerDuty" (V.toList team.pagerduty_services) False
+          notifRow_ "envelope" "regular" "Email" (V.toList team.notify_emails) isEveryone
+          notifRow_ "slack" "solid" "Slack" (V.toList $ V.map (resolveChannel slackChannels) team.slack_channels) isEveryone
+          notifRow_ "discord" "solid" "Discord" (V.toList $ V.map (resolveChannel discordChannels) team.discord_channels) isEveryone
+          notifRow_ "whatsapp" "solid" "WhatsApp" (V.toList team.phone_numbers) False
+          notifRow_ "pager" "solid" "PagerDuty" (V.toList team.pagerduty_services) False
           unless isEveryone do
             let hasAnyChannel = not (V.null team.notify_emails && V.null team.slack_channels && V.null team.discord_channels && V.null team.phone_numbers && V.null team.pagerduty_services)
             div_ [class_ "px-4 pt-3 pb-2"] do
-              div_ [class_ "rounded-lg bg-fillBrand-weak/10 border border-strokeBrand-weak p-3"] do
-                div_ [class_ "flex items-start justify-between gap-3"] do
-                  div_ [class_ "flex items-start gap-2 flex-1"] do
-                    faSprite_ "circle-info" "regular" "h-4 w-4 text-iconBrand shrink-0"
-                    div_ [class_ "text-xs"] do
-                      div_ [class_ "font-medium text-textStrong"] "Test your notification setup"
-                      div_ [class_ "text-textWeak mt-0.5"] "Sends a test alert to all configured channels"
-                  form_ [hxPost_ ("/p/" <> pid.toText <> "/settings/integrations/test"), hxSwap_ "none", hxTrigger_ "submit", class_ "shrink-0"] do
-                    input_ [type_ "hidden", name_ "channel", value_ "all"]
-                    input_ [type_ "hidden", name_ "teamId", value_ team.id.toText]
-                    input_ [type_ "hidden", name_ "issueType", value_ "runtime_exception"]
-                    button_ ([type_ "submit", class_ "btn btn-xs btn-primary tap-target", testSentAttr_] <> [disabled_ "" | not hasAnyChannel]) do
-                      faSprite_ "flask-vial" "regular" "h-3.5 w-3.5"
-                      " Send Test"
+              callout_ BrandBadge (Just "Test your notification setup") $ div_ [class_ "flex items-center justify-between gap-3"] do
+                "Sends a test alert to all configured channels"
+                renderInlineTestButton pid.toText Settings.TCAll (Just team.id) $ class_ "btn-primary tap-target" : [disabled_ "" | not hasAnyChannel]
               div_ [id_ $ "team-test-history-" <> team.id.toText, hxGet_ ("/p/" <> pid.toText <> "/settings/integrations/history"), hxTrigger_ "testSent from:body", hxSwap_ "innerHTML", class_ "mt-3"] mempty
       div_ [class_ "flex-1 space-y-4"] do
         lazySection_ "monitors-section" "bell" "Monitors" "Search monitors..." ("/p/" <> pid.toText <> "/monitors/alerts/team/" <> team.id.toText)
         lazySection_ "dashboards-section" "chart-area" "Dashboards" "Search dashboards..." ("/p/" <> pid.toText <> "/dashboards/?teamId=" <> team.id.toText)
         lazySection_ "services-section" "server" "Services" "Search services..." ""
-    unless isEveryone $ teamModal pid (Just team) whiteList emailWhiteList channelWhiteList discordWhiteList True mempty
+    unless isEveryone $ teamModal pid (Just team) projMembers slackChannels discordChannels True mempty
 
 
 teamPageNF :: Projects.ProjectId -> Text -> Html ()
@@ -1100,21 +1062,14 @@ manageMembersBody pid projMembers paymentPlan teamsCount =
 
     div_ [class_ "space-y-6"] do
       when (Projects.isFreeTier paymentPlan && V.length projMembers > 1)
-        $ div_ [class_ "bg-fillWarning-weak border border-strokeWarning-weak rounded-xl p-4 flex items-start gap-3"] do
-          faSprite_ "triangle-exclamation" "regular" "w-5 h-5 text-iconWarning flex-shrink-0 mt-0.5"
-          div_ do
-            p_ [class_ "text-sm text-textStrong font-medium"] "Free projects are limited to the project owner"
-            p_ [class_ "text-sm text-textWeak mt-1"] "Additional team members are disabled and cannot access the project. Upgrade to enable team access."
+        $ callout_ WarningBadge (Just "Free projects are limited to the project owner") "Additional team members are disabled and cannot access the project. Upgrade to enable team access."
 
       form_ [class_ "space-y-6", hxPost_ $ "/p/" <> pid.toText <> "/manage_members", hxTarget_ settingsContentTarget, hxSwap_ "innerHTML", hxIndicator_ "#submitIndicator"] do
         div_ [class_ "space-y-2"] do
           label_ [class_ "text-sm font-medium text-textStrong block"] "Invite new member"
           div_ [class_ "flex gap-2"] do
             input_ [type_ "email", name_ "emails", class_ "input input-sm input-bordered flex-1", placeholder_ "colleague@company.com", required_ "true"]
-            select_ [name_ "permissions", class_ "select select-sm select-bordered w-28", data_ "tippy-content" roleTooltip] do
-              option_ [value_ "admin"] "Admin"
-              option_ [value_ "edit"] "Editor"
-              option_ [value_ "view"] "Viewer"
+            select_ [name_ "permissions", class_ "select select-sm select-bordered w-28", data_ "tippy-content" roleTooltip] $ roleOptions_ Nothing
             button_ [class_ "btn btn-sm btn-primary gap-1", hxIndicator_ "#inviteIndicator"] do
               htmxIndicator_ "inviteIndicator" LdXS
               faSprite_ "paper-plane" "regular" "w-3 h-3"
@@ -1144,13 +1099,10 @@ memberRowWithStatus pid idx prM = do
   div_ [class_ $ "px-4 py-3 flex items-center gap-3" <> if isDisabled then " opacity-60" else "", id_ $ "member-" <> memberId] do
     div_ [class_ "flex-1 min-w-0"] $ div_ [class_ "flex items-center gap-2"] do
       input_ [type_ "text", name_ "emails", value_ email, readonly_ "true", class_ $ "bg-transparent w-full text-sm truncate focus:outline-none cursor-default" <> if isDisabled then " text-textWeak" else " text-textStrong"]
-      when isOwner $ span_ [class_ "badge badge-sm bg-fillBrand-weak text-textBrand border-strokeBrand-weak"] "Owner"
-      when isDisabled $ span_ [class_ "badge badge-sm bg-fillWarning-weak text-textWarning border-strokeWarning-weak"] "Disabled"
+      when isOwner $ tonePill_ BrandBadge "Owner"
+      when isDisabled $ tonePill_ WarningBadge "Disabled"
     div_ [class_ "flex items-center gap-2"] do
-      select_ [name_ "permissions", class_ $ "select select-sm select-bordered text-sm" <> if isDisabled then " opacity-50" else ""] do
-        option_ ([value_ "admin"] <> [selected_ "" | prM.permission == ProjectMembers.PAdmin]) "Admin"
-        option_ ([value_ "edit"] <> [selected_ "" | prM.permission == ProjectMembers.PEdit]) "Editor"
-        option_ ([value_ "view"] <> [selected_ "" | prM.permission == ProjectMembers.PView]) "Viewer"
+      select_ [name_ "permissions", class_ $ "select select-sm select-bordered text-sm" <> if isDisabled then " opacity-50" else ""] $ roleOptions_ (Just $ display prM.permission)
       unless isOwner $ button_ [class_ "btn btn-sm btn-ghost text-iconNeutral hover:text-iconError hover:bg-fillError-weak", Aria.label_ "Remove member", hxDelete_ $ "/p/" <> pid.toText <> "/manage_members/" <> memberId, hxTarget_ $ "#member-" <> memberId, hxSwap_ "outerHTML", hxConfirm_ "Remove this member from the project?"] $ faSprite_ "trash" "regular" "w-4 h-4"
 
 
@@ -1183,8 +1135,7 @@ manageSubGetH pid = do
     Projects.StripeProvider ->
       case project.customerId <|> project.orderId of
         Just customerId | not (T.null customerId) -> do
-          let returnUrl = envCfg.hostUrl <> "p/" <> pid.toText <> "/manage_billing"
-          Settings.createStripePortalSession envCfg.stripeSecretKey customerId returnUrl
+          Settings.createStripePortalSession envCfg.stripeSecretKey customerId (Settings.billingUrl envCfg pid)
             >>= redirectOrToast "Failed to create billing portal"
         _ -> toastError "Customer ID not found" mempty
     Projects.LemonSqueezyProvider -> do
@@ -1236,17 +1187,17 @@ lsGet apiKey url = do
 
 newtype SubUrls = SubUrls {customerPortal :: Text}
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SubUrls
+  deriving (AE.FromJSON) via DAES.Snake SubUrls
 
 
 newtype SubPortalAttributes = SubPortalAttributes {urls :: SubUrls}
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SubPortalAttributes
+  deriving (AE.FromJSON) via DAES.Snake SubPortalAttributes
 
 
 newtype SubPortalDataVals = SubPortalDataVals {attributes :: SubPortalAttributes}
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SubPortalDataVals
+  deriving (AE.FromJSON) via DAES.Snake SubPortalDataVals
 
 
 --------------------------------------------------------------------------------
@@ -1262,13 +1213,9 @@ data CreateProjectFormError = CreateProjectFormError
 
 
 createProjectFormToModel :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Text -> CreateProjectForm -> Projects.CreateProject
-createProjectFormToModel pid subId firstSubId orderId paymentPlan CreateProjectForm{..} =
+createProjectFormToModel pid subId firstSubItemId orderId paymentPlan CreateProjectForm{..} =
   Projects.CreateProject
     { id = pid
-    , subId = subId
-    , firstSubItemId = firstSubId
-    , paymentPlan = paymentPlan
-    , orderId = orderId
     , weeklyNotif = isJust weeklyNotifs
     , dailyNotif = isJust dailyNotifs
     , endpointAlerts = isJust endpointAlerts
@@ -1396,12 +1343,12 @@ data SubAttributes = SubAttributes
   , productName :: Text
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SubAttributes
+  deriving (AE.FromJSON) via DAES.Snake SubAttributes
 
 
 newtype SubDataVals = SubDataVals {attributes :: SubAttributes}
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SubDataVals
+  deriving (AE.FromJSON) via DAES.Snake SubDataVals
 
 
 data PricingUpdateForm = PricingUpdateForm
@@ -1428,14 +1375,10 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = do
         _ <- createJob conn "background_jobs" $ BackgroundJobs.SendDiscordData sess.user.id pid fullName [foundUsFrom] foundUsFrom
         createJob conn "background_jobs" $ BackgroundJobs.SyncProjectContacts pid
 
-  let billingUrl = envCfg.hostUrl <> "p/" <> pid.toText <> "/manage_billing"
-      auditPlan name =
+  let auditPlan name =
         Projects.logAuditS pid Projects.AEPlanChanged sess
           $ Just
           $ AE.object ["plan" AE..= name]
-      mailAllUsers (subj, html) = do
-        users <- Projects.usersByProjectId pid
-        forM_ users \u -> sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
   case plan of
     Just "Open Source" | envCfg.basicAuthEnabled -> do
       _ <- updatePricing "Open Source" "" "" ""
@@ -1453,14 +1396,14 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = do
             auditPlan productName
             handleOnboarding
             void $ ProjectMembers.activateAllMembers pid
-            mailAllUsers $ ET.planUpgradedEmail project.title productName billingUrl
+            Settings.notifyPlanChange envCfg project ET.planUpgradedEmail productName
           _ -> addErrorToast "Something went wrong while fetching subscription id" Nothing
       Nothing -> do
         _ <- updatePricing "Free" "" "" ""
         auditPlan ("Free" :: Text)
         handleOnboarding
         void $ ProjectMembers.deactivateNonOwnerMembers pid
-        mailAllUsers $ ET.planDowngradedEmail project.title "was cancelled" billingUrl
+        Settings.notifyPlanChange envCfg project ET.planDowngradedEmail "was cancelled"
   if Projects.isOnboarding project.paymentPlan || isOnboarding == Just True
     then redirectCS $ "/p/" <> pid.toText <> "/"
     else do
@@ -1524,19 +1467,7 @@ createProjectBody pid cp = do
         div_ [class_ "min-w-0"] do
           h3_ [class_ "text-sm font-medium text-textStrong"] "Delete project"
           p_ [class_ "text-xs text-textWeak"] "Permanently remove this project and all associated data."
-      label_
-        [ class_ "btn btn-sm bg-fillError-weak text-textError hover:bg-fillError-strong hover:text-white gap-1 shrink-0 max-sm:w-full"
-        , Lucid.for_ "delete-project-modal"
-        ]
-        do
-          faSprite_ "trash" "regular" "w-3 h-3"
-          span_ "Delete Project"
-    confirmModal_
-      "delete-project-modal"
-      "Delete project?"
-      "This permanently removes the project and all associated data. This action cannot be undone."
-      [type_ "button", hxDelete_ $ "/p/" <> pid.toText <> "/delete"]
-      "Delete project"
+      dangerAction_ "delete-project-modal" "trash" "Delete Project" "Delete project?" "This permanently removes the project and all associated data. This action cannot be undone." [hxDelete_ $ "/p/" <> pid.toText <> "/delete"] "Delete project"
 
 
 alertConfiguration :: CreateProjectForm -> Html ()
@@ -1554,18 +1485,17 @@ alertConfiguration cp =
           ]
             :: [(Text, Text, Text, Bool)]
         )
-        \(lbl, forId, descr, checked) ->
-          div_ [class_ "flex items-center justify-between py-3 first:pt-0 last:pb-0"] do
-            div_ [class_ "space-y-0.5"] do
-              label_ [Lucid.for_ forId, class_ "text-sm font-medium text-textStrong cursor-pointer"] $ toHtml lbl
-              p_ [class_ "text-xs text-textWeak"] $ toHtml descr
-            input_ $ [type_ "checkbox", id_ forId, class_ "toggle toggle-sm", name_ forId] <> [checked_ | checked]
+        \(lbl, forId, descr, checked) -> div_ [class_ "py-3 first:pt-0 last:pb-0"] $ toggleRow_ forId lbl descr $ name_ forId : [checked_ | checked]
 
 
 -- Main Modal Component
-teamModal :: Projects.ProjectId -> Maybe ProjectMembers.TeamVM -> Text -> Text -> Text -> Text -> Bool -> Html () -> Html ()
-teamModal pid team whiteList emailWhiteList channelWhiteList discordWhiteList isInTeamView trigger = do
+teamModal :: Projects.ProjectId -> Maybe ProjectMembers.TeamVM -> V.Vector ProjectMembers.ProjectMemberVM -> [BotUtils.Channel] -> [BotUtils.Channel] -> Bool -> Html () -> Html ()
+teamModal pid team projMembers slackChans discordChans isInTeamView trigger = do
   let encodeField f = encodeText $ maybe [] f team
+      -- Tagify whitelists: members by user id and by email, channels by id.
+      whiteList = encodeText $ (\x -> AE.object ["name" AE..= (x.first_name <> " " <> x.last_name), "email" AE..= x.email, "value" AE..= x.userId]) <$> projMembers
+      emailWhiteList = encodeText $ (\x -> AE.object ["name" AE..= x.email, "value" AE..= x.email]) <$> projMembers
+      (channelWhiteList, discordWhiteList) = (encodeText $ map channelJSON slackChans, encodeText $ map channelJSON discordChans)
       name = maybe "" (.name) team
       handle = maybe "" (.handle) team
       description = maybe "" (.description) team
@@ -1626,11 +1556,8 @@ teamModal pid team whiteList emailWhiteList channelWhiteList discordWhiteList is
               \(ic, lbl, fid, ph, attrs) -> formField_ FieldSm def{icon = Just ic} lbl (mkId fid) False $ Just $ tagInput_ (mkId fid) ph attrs
             formField_ FieldSm def{icon = Just "pager"} "PagerDuty" (mkId "pagerduty-services-input") False $ Just do
               tagInput_ (mkId "pagerduty-services-input") "Add integration keys..." [data_ "tagify-text-prop" "name", data_ "tagify-initial" pagerdutyServicesTags]
-              details_ [class_ "group mt-1.5"] do
-                summary_ [class_ "text-xs text-textWeak hover:text-textStrong cursor-pointer list-none flex items-center gap-1.5"] do
-                  faSprite_ "chevron-right" "solid" "w-3 h-3 transition-transform rotate-180 group-open:rotate-270"
-                  "How to get your integration key"
-                ol_ [class_ "text-xs text-textWeak space-y-1 mt-2 ml-4 list-decimal list-inside"] do
+              disclosure_ [class_ "mt-1.5"] "text-xs text-textWeak hover:text-textStrong" "How to get your integration key"
+                $ ol_ [class_ "text-xs text-textWeak space-y-1 mt-2 ml-4 list-decimal list-inside"] do
                   li_ "Open PagerDuty → Services"
                   li_ "Select your service → Integrations tab"
                   li_ "Add 'Events API v2' integration"
