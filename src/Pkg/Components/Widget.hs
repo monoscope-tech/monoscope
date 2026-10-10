@@ -10,9 +10,9 @@ import Data.Base64.Types qualified as B64
 import Data.ByteArray qualified as BA
 import Data.ByteString.Base16 qualified as B16
 import Data.Char (isDigit)
-import Data.List (lookup)
 import Data.Default
 import Data.Generics.Labels ()
+import Data.List (lookup)
 import Data.Map.Strict qualified as M
 import Data.OpenApi (ToSchema)
 import Data.Text qualified as T
@@ -989,19 +989,7 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "mi
           "Copy SQL"
         menuItem_
           "Copy KQL query to clipboard"
-          [ term
-              "_"
-              [text|
-              on click
-              set widgetEl to the closest <[data-widget]/>
-              set widgetData to JSON.parse(widgetEl.dataset.widget)
-              set txt to widgetData.query or 'No KQL available'
-              if 'clipboard' in window.navigator then
-                call navigator.clipboard.writeText(txt)
-                send successToast(value:['KQL copied to clipboard']) to <body/>
-              end
-            |]
-          ]
+          [copyToClipboardAttr_ "JSON.parse(this.closest('[data-widget]').dataset.widget).query || 'No KQL available'" "KQL copied to clipboard"]
           "Copy KQL"
         whenJust widget.pngUrl \url ->
           menuItem_

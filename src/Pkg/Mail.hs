@@ -36,7 +36,7 @@ sendRenderedEmail receiver subject htmlBody =
   Notify.sendNotification $ Notify.emailNotification receiver subject htmlBody
 
 
-sendSlackMessage :: (IOE :> es, DB es, Log :> es, Notify.Notify :> es) => Projects.ProjectId -> Text -> Eff es ()
+sendSlackMessage :: (DB es, IOE :> es, Log :> es, Notify.Notify :> es) => Projects.ProjectId -> Text -> Eff es ()
 sendSlackMessage pid message = do
   slackData <- getProjectSlackData pid
   maybe
@@ -114,12 +114,12 @@ data AlertImpact = AlertImpact
 
 -- | Send a Discord alert, optionally threading replies under a parent message.
 -- Returns the message ID if threading is enabled and the send succeeds.
-sendDiscordAlert :: (IOE :> es, DB es, Log :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
+sendDiscordAlert :: (DB es, IOE :> es, Log :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
 sendDiscordAlert = sendDiscordAlertWith Nothing
 
 
 -- | Internal: send Discord alert with optional reply-to threading
-sendDiscordAlertWith :: (IOE :> es, DB es, Log :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => Maybe Text -> NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
+sendDiscordAlertWith :: (DB es, IOE :> es, Log :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => Maybe Text -> NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
 sendDiscordAlertWith replyToMsgIdM alert pid pTitle channelIdM' = do
   appCtx <- ask @Config.AuthContext
   -- When no explicit channel is supplied, fall back to the first entry of
@@ -143,7 +143,7 @@ sendDiscordAlertWith replyToMsgIdM alert pid pTitle channelIdM' = do
 
 -- | Send a Slack alert, optionally threading replies under a parent message.
 -- Returns the thread timestamp if the send succeeds.
-sendSlackAlert :: (IOE :> es, DB es, Log :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
+sendSlackAlert :: (DB es, IOE :> es, Log :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
 sendSlackAlert = sendSlackAlertWith Nothing
 
 
@@ -156,7 +156,7 @@ sendSlackAlert = sendSlackAlertWith Nothing
 --
 -- Both transports preserve thread context. Webhook root timestamps require
 -- separate capture through Slack events or message retrieval.
-sendSlackAlertWith :: (IOE :> es, DB es, Log :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => Maybe Text -> NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
+sendSlackAlertWith :: (DB es, IOE :> es, Log :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => Maybe Text -> NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
 sendSlackAlertWith threadTsM alert pid pTitle channelM = do
   appCtx <- ask @Config.AuthContext
   slackData <- getProjectSlackData pid

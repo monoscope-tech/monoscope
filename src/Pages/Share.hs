@@ -7,11 +7,11 @@ import Data.Time (UTCTime, addUTCTime, diffUTCTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
+import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Lucid
-import Lucid.Hyperscript (__)
 import Models.Apis.ShareEvents qualified as ShareEvents
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -25,7 +25,7 @@ import Relude
 import Servant (err404)
 import System.Config (AuthContext (..))
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders, useTfReads)
-import Effectful.Error.Static (throwError)
+import Utils (copyToClipboardAttr_)
 
 
 -- | Result of resolving a share id: missing entirely, expired, or live with hours-remaining + body.
@@ -73,13 +73,7 @@ instance ToHtml ShareLinkPost where
         button_
           [ type_ "button"
           , class_ "shrink-0 bg-fillSuccess-weak text-textSuccess px-3 py-1.5 rounded-md text-sm font-medium hover:bg-fillSuccess-strong hover:text-white transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-strokeBrand-strong focus-visible:ring-offset-2"
-          , [__|
-             on click
-               if 'clipboard' in window.navigator then
-                 call navigator.clipboard.writeText(#shareURL.value)
-                 send successToast(value:['URL copied to clipboard']) to <body/>
-               end
-               |]
+          , copyToClipboardAttr_ "document.getElementById('shareURL').value" "URL copied to clipboard"
           ]
           "Copy link"
   toHtmlRaw = toHtml

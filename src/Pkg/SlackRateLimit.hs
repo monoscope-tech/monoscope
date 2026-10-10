@@ -8,12 +8,12 @@ import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Effectful (Eff, type (:>))
 import Effectful.Dispatch.Dynamic (interpose, send)
+import Effectful.Exception (throwIO)
 import Hasql.Interpolate qualified as HI
 import Network.HTTP.Types (statusCode, statusIsSuccessful)
 import Network.Wreq qualified as Wreq
 import Relude
 import System.Types (DB)
-import Effectful.Exception (throwIO)
 
 
 newtype SlackRateLimited = SlackRateLimited UTCTime
@@ -30,7 +30,7 @@ withRateLimits workspace = interpose @HTTP.HTTP $ \_ request -> case request of
   _ -> send @HTTP.HTTP $ coerce request
 
 
-limited :: (DB es) => Text -> HTTP.Options -> String -> (HTTP.Options -> Eff es (HTTP.Response LByteString)) -> Eff es (HTTP.Response LByteString)
+limited :: DB es => Text -> HTTP.Options -> String -> (HTTP.Options -> Eff es (HTTP.Response LByteString)) -> Eff es (HTTP.Response LByteString)
 limited workspace options url request = case T.stripPrefix "https://slack.com/api/" $ toText url of
   Nothing -> request options
   Just path -> do

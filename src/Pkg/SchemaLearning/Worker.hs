@@ -1,6 +1,5 @@
 {-# LANGUAGE OverloadedRecordDot #-}
 
-
 -- | Periodic flush worker for the schema-learning catalog.
 --
 -- Once per shard, every 'flushIntervalSecs', the worker:
@@ -30,7 +29,7 @@ import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HS
 import Data.Time (UTCTime)
 import Data.Vector qualified as V
-import Effectful (IOE, Eff, type (:>))
+import Effectful (Eff, IOE, type (:>))
 import Effectful.Time qualified as Time
 import Models.Apis.ApiChanges qualified as ApiChanges
 import Models.Apis.SchemaCatalog qualified as SC
@@ -64,7 +63,7 @@ data FlushResult = FlushResult
 -- so we don't see our own write back as the "prior". Anomaly inserts race-
 -- safely on the @(project_id, target_hash)@ unique index.
 flushDirty
-  :: (IOE :> es, DB es, Time.Time :> es)
+  :: (DB es, IOE :> es, Time.Time :> es)
   => IORef SchemaShardState
   -> Eff es FlushResult
 flushDirty ref = do
@@ -186,7 +185,8 @@ dedupTemplates = V.fromList . HM.elems . V.foldl' step HM.empty
 -- staleness window, one batched @UPSERT@. No per-project catalog read; no
 -- per-project upsert.
 regenerateSummaries
-  :: (DB es) => HS.HashSet Projects.ProjectId
+  :: DB es
+  => HS.HashSet Projects.ProjectId
   -> HM.HashMap SchemaKey CatalogEntry
   -> HM.HashMap Projects.ProjectId Text
   -- ^ Per-replica content-hash gate; skips unchanged-doc rewrites.

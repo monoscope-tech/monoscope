@@ -136,6 +136,7 @@ import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Simple.ToRow
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
+import Effectful.Exception (throwIO, trySync)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled, labeled)
 import Effectful.Log (Log)
@@ -157,7 +158,6 @@ import Relude.Extra.Foldable1 (maximum1, minimum1)
 import System.IO (hPutStrLn)
 import System.Logging qualified as Log
 import System.Tracing (forkWithCtx)
-import Effectful.Exception (throwIO, trySync)
 import Utils (classifyUserAgent, encodeText, extractMessageFromLog, formatBytes, getDurationNSMS, jsonToMap, lookupValueText, nonEmptyT, scrubNulText, scrubNulValue)
 import Web.HttpApiData (FromHttpApiData)
 
@@ -420,7 +420,7 @@ enqueueMetricCatalog (MetricCatalogBuffer ref) rows = STM.atomically do
     else Just . V.fromList . Map.elems <$> STM.swapTVar ref mempty
 
 
-flushMetricCatalog :: (IOE :> es, DB es) => MetricCatalogBuffer -> Eff es ()
+flushMetricCatalog :: (DB es, IOE :> es) => MetricCatalogBuffer -> Eff es ()
 flushMetricCatalog (MetricCatalogBuffer ref) = do
   rows <- liftIO $ V.fromList . Map.elems <$> STM.atomically (STM.swapTVar ref mempty)
   upsertMetricMetadata rows
@@ -639,7 +639,7 @@ mkTrace trId startOf endOf svcOf ne =
 
 -- | Fetch a trace's spans once and return both the aggregate 'Trace' and the
 -- spans, so callers rendering the waterfall don't re-query the same trace.
-getTraceDetails :: (IOE :> es, DB es, Labeled "timefusion" Hasql :> es, Log :> es) => Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es (Maybe (Trace, [OtelLogsAndSpans]))
+getTraceDetails :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es) => Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es (Maybe (Trace, [OtelLogsAndSpans]))
 getTraceDetails useTf pid trId tme now = do
   spans <- getSpanRecordsByTraceId useTf pid trId tme now Nothing
   pure $ viaNonEmpty (\ne -> (mkTrace trId (.start_time) (.end_time) spanServiceName ne, toList ne)) spans
@@ -654,7 +654,7 @@ getTraceDetails useTf pid trId tme now = do
 -- past this page, so the caller can offer the next one. The 'Trace' aggregate
 -- (span count, duration, services) describes the page, not the whole trace —
 -- it is what the header reports, and the header reports what is on screen.
-getTraceDetailsForView :: (IOE :> es, DB es, Labeled "timefusion" Hasql :> es, Log :> es) => Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Maybe Int -> Eff es (Maybe (Trace, V.Vector SpanRecord, Bool))
+getTraceDetailsForView :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es) => Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Maybe Int -> Eff es (Maybe (Trace, V.Vector SpanRecord, Bool))
 getTraceDetailsForView useTf pid trId tme now limitM = do
   (rows, hasMore) <- getTraceRowsWith selectTraceSpanRows (.spanId) (.parentSpanId) useTf pid trId tme now limitM
   pure $ viaNonEmpty (\ne -> (mkTrace trId (.startTime) (.endTime) (resourceServiceName . unAesonTextMaybe . (.resource)) ne, V.mapMaybe (traceSpanRecord trId) (V.fromList (toList ne)), hasMore)) rows
@@ -792,7 +792,7 @@ defaultTraceSpanPage = 300
 --
 -- Parameterized by SELECT builder and id accessors so the full-record and
 -- overlay-projection row types share one implementation.
-getTraceRowsWith :: (IOE :> es, DB es, HI.DecodeRow a, Labeled "timefusion" Hasql :> es, Log :> es) => (Text -> UTCTime -> UTCTime -> HI.Sql -> HI.Sql) -> (a -> Maybe Text) -> (a -> Maybe Text) -> Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Maybe Int -> Eff es ([a], Bool)
+getTraceRowsWith :: (DB es, HI.DecodeRow a, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es) => (Text -> UTCTime -> UTCTime -> HI.Sql -> HI.Sql) -> (a -> Maybe Text) -> (a -> Maybe Text) -> Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Maybe Int -> Eff es ([a], Bool)
 getTraceRowsWith select spanIdOf parentIdOf useTf pid trId tme now limitM = Hasql.withHasqlTimefusion useTf do
   let baseT = fromMaybe now tme
       (start, end) = case tme of
@@ -1004,7 +1004,7 @@ resolveTraceOrphans pid trId fetch spanIdOf parentIdOf initial = do
 -- drawing the whole trace, so they should pass a limit generous enough to
 -- contain the span they are searching for — a render-sized page would silently
 -- anchor them on the first span instead.
-getSpanRecordsByTraceId :: (IOE :> es, DB es, Labeled "timefusion" Hasql :> es, Log :> es) => Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Maybe Int -> Eff es [OtelLogsAndSpans]
+getSpanRecordsByTraceId :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es) => Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Maybe Int -> Eff es [OtelLogsAndSpans]
 getSpanRecordsByTraceId useTf pid trId tme now limitM =
   fst <$> getTraceRowsWith selectOtelSpans (\r -> r.context >>= (.span_id)) (.parent_id) useTf pid trId tme now limitM
 
@@ -1850,7 +1850,7 @@ handOffBatches worker caches records = do
 -- 0x1F-joined and are rebuilt with @string_to_array(_, chr(31))@.
 -- @usePgTypes@: 'True' for PostgreSQL/TimescaleDB (cast id/JSON to
 -- uuid/jsonb), 'False' for TimeFusion (bare text→Variant). See 'insertUnnestStmt'.
-bulkInsertOtelLogsAndSpans :: (IOE :> es, DB es, Log :> es) => Bool -> V.Vector OtelLogsAndSpans -> Eff es BulkInsertResult
+bulkInsertOtelLogsAndSpans :: (DB es, IOE :> es, Log :> es) => Bool -> V.Vector OtelLogsAndSpans -> Eff es BulkInsertResult
 bulkInsertOtelLogsAndSpans usePgTypes records
   | V.null records = pure mempty
   | otherwise = do

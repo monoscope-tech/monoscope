@@ -72,7 +72,7 @@ import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
-import Effectful (IOE, Eff, (:>))
+import Effectful (Eff, IOE, (:>))
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
 import Effectful.Log qualified as Log
@@ -475,7 +475,7 @@ data AgentAccessDenied = AgentAccessDenied
 
 -- | ServiceAccess leaves authorization to its caller. Slack investigations
 -- retain the requesting identity and revalidate it at each data-use boundary.
-requireAgentAccess :: (IOE :> es, DB es) => AgentAccess -> Projects.ProjectId -> Eff es ()
+requireAgentAccess :: (DB es, IOE :> es) => AgentAccess -> Projects.ProjectId -> Eff es ()
 requireAgentAccess ServiceAccess _ = pass
 requireAgentAccess (SlackAccess teamId slackUserId userId) projectId = do
   principal <- Integrations.resolveSlackPrincipal teamId slackUserId (Just projectId)
@@ -587,7 +587,7 @@ nlSearchConfig pid useTf facets tzRaw =
 -- @search_events_nl@ tool; each maps 'Left' onto its own error shape (a toast
 -- plus 502, or an MCP tool error) and returns the 'Right' payload verbatim.
 runNlSearch
-  :: (IOE :> es, DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es, W.HTTP :> es)
+  :: (DB es, ELLM.LLM :> es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es, W.HTTP :> es)
   => Projects.ProjectId -> Config.EnvConfig -> Maybe Text -> Text -> Eff es (Either Text AE.Value)
 runNlSearch pid config tzRaw input = do
   now <- Time.currentTime
@@ -782,7 +782,7 @@ stripCodeBlock t
     stripped = T.strip t
 
 
-runAgenticQuery :: (IOE :> es, DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es, W.HTTP :> es) => AgenticConfig -> Text -> Text -> Text -> Eff es (Either Text LLMResponse)
+runAgenticQuery :: (DB es, ELLM.LLM :> es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es, W.HTTP :> es) => AgenticConfig -> Text -> Text -> Text -> Eff es (Either Text LLMResponse)
 runAgenticQuery config userQuery model apiKey = do
   (systemMsg, userMsg, params) <- agenticSetup config userQuery model
   -- Text only: these consumers (MCP, bots, log explorer) never read toolCalls; the
@@ -835,7 +835,7 @@ dbMessageToLLMMessage msg = do
 -- | Run agentic chat with DB-persisted history; returns the raw response plus tool call info
 -- (unlike runAgenticQuery, which parses the response and drops tool metadata)
 runAgenticChatWithHistory
-  :: (IOE :> es, DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es, W.HTTP :> es)
+  :: (DB es, ELLM.LLM :> es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es, W.HTTP :> es)
   => AgenticConfig
   -> Text
   -> Text
@@ -874,7 +874,7 @@ runAgenticChatWithHistory config userQuery model apiKey = do
 
 -- | Each attempt gets its own journal; a retry never overwrites partial evidence.
 -- Persisted Slack turns resume their checkpoint while each worker attempt retains its own activity log.
-withInvestigationJournal :: (IOE :> es, DB es) => AgenticConfig -> Text -> Text -> (Maybe Investigations.Scope -> Eff es (Either Text a)) -> Eff es (Either Text a)
+withInvestigationJournal :: (DB es, IOE :> es) => AgenticConfig -> Text -> Text -> (Maybe Investigations.Scope -> Eff es (Either Text a)) -> Eff es (Either Text a)
 withInvestigationJournal config userQuery model action = do
   requireAgentAccess config.access config.projectId
   case config.access of
@@ -890,7 +890,7 @@ withInvestigationJournal config userQuery model action = do
 
 -- | Save each completed decision/read before advancing. Pending read tools may
 -- run again after an interrupted call; completed tools and model responses replay.
-runAgenticLoopRaw :: (IOE :> es, DB es, ELLM.LLM :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es, W.HTTP :> es) => Maybe Investigations.CheckpointCursor -> Maybe Investigations.Scope -> AgenticConfig -> Text -> Investigations.Checkpoint -> Eff es (Either Text AgenticChatResult)
+runAgenticLoopRaw :: (DB es, ELLM.LLM :> es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es, W.HTTP :> es) => Maybe Investigations.CheckpointCursor -> Maybe Investigations.Scope -> AgenticConfig -> Text -> Investigations.Checkpoint -> Eff es (Either Text AgenticChatResult)
 runAgenticLoopRaw turn journal config apiKey checkpoint = do
   requireAgentAccess config.access config.projectId
   case checkpoint of
@@ -1007,7 +1007,7 @@ pricedUsage config inputTokens outputTokens =
         charge cfg = (toInteger tokens * toInteger (Config.aiPriceMicrousd $ rate cfg) + 999_999) `div` 1_000_000
 
 
-executeToolCall :: (IOE :> es, DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es, W.HTTP :> es) => AgenticConfig -> LLM.ToolCall -> Eff es ToolResult
+executeToolCall :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es, W.HTTP :> es) => AgenticConfig -> LLM.ToolCall -> Eff es ToolResult
 executeToolCall config tc = do
   requireAgentAccess config.access config.projectId
   let funcName = LLM.toolFunctionName (LLM.toolCallFunction tc)
@@ -1131,7 +1131,7 @@ listProjectIssues config args = case parseStatus $ fromMaybe "open" $ getTextArg
       _ -> Nothing
 
 
-getProjectIssue :: (IOE :> es, DB es, Log :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
+getProjectIssue :: (DB es, IOE :> es, Log :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
 getProjectIssue config args = withToolId "get_issue" "issue_id" args \issueId ->
   Issues.selectIssueById config.projectId issueId >>= \case
     Nothing -> pure "Issue not found in the authorized project."
@@ -1288,7 +1288,7 @@ issueJson issue =
 
 -- | Source reads retain the tool loop's before/after access checks and use only
 -- project-linked credentials. No caller-supplied repository URL or token is accepted.
-executeGetCodeContext :: (IOE :> es, DB es, Log :> es, W.HTTP :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
+executeGetCodeContext :: (DB es, IOE :> es, Log :> es, W.HTTP :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
 executeGetCodeContext config args = case config.sourceConfig of
   Just cfg -> withArg "get_code_context" "path" args \path ->
     withArg "get_code_context" "revision" args \revision ->
@@ -1332,7 +1332,7 @@ withArg tool k args f = maybe (pure $ toolError tool ("missing '" <> k <> "'") a
 
 
 -- | KQL tool whose raw results are never surfaced to the caller
-runKqlText :: (IOE :> es, DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Text -> [Text] -> ((V.Vector (V.Vector AE.Value), [Text], Int) -> Text) -> Eff es Text
+runKqlText :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Text -> [Text] -> ((V.Vector (V.Vector AE.Value), [Text], Int) -> Text) -> Eff es Text
 runKqlText config kqlQuery cols f = (.formatted) <$> runKqlWithRawData config kqlQuery cols ((,AE.Null) . f)
 
 
@@ -1340,7 +1340,7 @@ withTake :: Int -> Text -> Text
 withTake lim q = if "| take" `T.isInfixOf` q then q else q <> " | take " <> show lim
 
 
-executeGetFieldValues :: (IOE :> es, DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
+executeGetFieldValues :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
 executeGetFieldValues config args = withArg "get_field_values" "field" args \field ->
   runKqlText
     config
@@ -1349,7 +1349,7 @@ executeGetFieldValues config args = withArg "get_field_values" "field" args \fie
     \(results, _, _) -> "Values for '" <> field <> "': " <> formatSummarizeResults results
 
 
-executeGetServices :: (IOE :> es, DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Eff es Text
+executeGetServices :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Eff es Text
 executeGetServices config =
   runKqlText
     config
@@ -1358,12 +1358,12 @@ executeGetServices config =
     \(results, _, _) -> "Available services: " <> formatSummarizeResults results
 
 
-executeCountQuery :: (IOE :> es, DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
+executeCountQuery :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
 executeCountQuery config args = withArg "count_query" "query" args \kqlQuery ->
   runKqlText config kqlQuery [] \(_, _, count) -> "Query '" <> kqlQuery <> "' matches " <> show count <> " entries"
 
 
-executeSampleLogs :: (IOE :> es, DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
+executeSampleLogs :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
 executeSampleLogs config args = withArg "sample_logs" "query" args \kqlQuery ->
   runKqlText
     config
@@ -1376,7 +1376,7 @@ executeGetFacets :: AgenticConfig -> Text
 executeGetFacets config = maybe "No facet data available" formatFacetSummary config.facetContext
 
 
-runKqlWithRawData :: (IOE :> es, DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Text -> [Text] -> ((V.Vector (V.Vector AE.Value), [Text], Int) -> (Text, AE.Value)) -> Eff es ToolResult
+runKqlWithRawData :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Text -> [Text] -> ((V.Vector (V.Vector AE.Value), [Text], Int) -> (Text, AE.Value)) -> Eff es ToolResult
 runKqlWithRawData config kqlQuery cols formatResult = case parseQueryToAST kqlQuery of
   Left parseErr -> pure $ ToolResult ("Error: Query parse failed - " <> show parseErr) Nothing
   Right queryAST -> do
@@ -1390,7 +1390,7 @@ runKqlWithRawData config kqlQuery cols formatResult = case parseQueryToAST kqlQu
       Right res -> let (txt, raw) = formatResult res in ToolResult txt (Just raw)
 
 
-executeRunQuery :: (IOE :> es, DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es ToolResult
+executeRunQuery :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es ToolResult
 executeRunQuery config args = case getTextArg "query" args of
   Just query ->
     runKqlWithRawData config (withTake (getLimitArg "limit" config.limits.maxQueryResults config.limits.maxDisplayRows args) query) [] \(results, headers, count) ->

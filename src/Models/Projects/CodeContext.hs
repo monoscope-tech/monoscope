@@ -47,7 +47,7 @@ import Data.UUID qualified as UUID
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Deriving.Aeson qualified as DAE
-import Effectful (IOE, Eff, (:>))
+import Effectful (Eff, IOE, (:>))
 import Effectful.Log (Log)
 import Hasql.Interpolate qualified as HI
 import Models.Projects.GitSync (GitHubCredentialId, credentialConn, credentialCreds, getGitHubCredential, githubToken)
@@ -184,7 +184,7 @@ data DeploymentError
   deriving anyclass (AE.ToJSON)
 
 
-fetchDeployments :: (IOE :> es, DB es, Log :> es, W.HTTP :> es) => Config.EnvConfig -> ProjectId -> CodeMappingId -> Maybe Text -> Eff es (Either DeploymentError (Git.EvidencePage Git.DeploymentEvidence))
+fetchDeployments :: (DB es, IOE :> es, Log :> es, W.HTTP :> es) => Config.EnvConfig -> ProjectId -> CodeMappingId -> Maybe Text -> Eff es (Either DeploymentError (Git.EvidencePage Git.DeploymentEvidence))
 fetchDeployments cfg pid mappingId environment = runExceptT do
   mapping <- ExceptT $ maybeToRight (DeploymentMappingMissing mappingId) . find ((== mappingId) . (.id)) <$> getCodeMappings pid
   (_, conn) <- ExceptT $ first DeploymentConnectionFailed <$> mappingConnection cfg pid mapping
@@ -238,7 +238,7 @@ data RunbookPage = RunbookPage
   deriving anyclass (AE.ToJSON)
 
 
-runbookRepository :: (IOE :> es, DB es, Log :> es, W.HTTP :> es) => Config.EnvConfig -> ProjectId -> CodeMappingId -> Text -> ExceptT RunbookError (Eff es) (CodeMapping, GitSync.GitHubCredential, Git.GitConn)
+runbookRepository :: (DB es, IOE :> es, Log :> es, W.HTTP :> es) => Config.EnvConfig -> ProjectId -> CodeMappingId -> Text -> ExceptT RunbookError (Eff es) (CodeMapping, GitSync.GitHubCredential, Git.GitConn)
 runbookRepository cfg pid mappingId revision = do
   unless (T.length revision `elem` [40, 64] && T.all isHexDigit revision) $ throwE RunbookRevisionInvalid
   mapping <- ExceptT $ maybeToRight (RunbookMappingMissing mappingId) . find ((== mappingId) . (.id)) <$> getCodeMappings pid
@@ -260,7 +260,7 @@ validRunbookPath path =
 -- | Discover candidates by conventional path names, not by assuming their contents.
 -- Provider truncation remains an error through fetchTree; only the returned candidates
 -- are capped here. No per-file reads are needed for discovery.
-listRunbooks :: (IOE :> es, DB es, Log :> es, W.HTTP :> es) => Config.EnvConfig -> ProjectId -> RunbookQuery -> Eff es (Either RunbookError (Git.EvidencePage Text))
+listRunbooks :: (DB es, IOE :> es, Log :> es, W.HTTP :> es) => Config.EnvConfig -> ProjectId -> RunbookQuery -> Eff es (Either RunbookError (Git.EvidencePage Text))
 listRunbooks cfg pid query = runExceptT do
   (mapping, _, connection) <- runbookRepository cfg pid query.mappingId query.revision
   (_, entries) <- ExceptT $ first RunbookProviderFailed <$> Git.fetchTree connection (Git.RepoRef mapping.owner mapping.repo query.revision) ""
@@ -269,7 +269,7 @@ listRunbooks cfg pid query = runExceptT do
 
 
 -- | Read numbered pages at a pinned commit, without sharing another credential's cache.
-readRunbook :: (IOE :> es, DB es, Log :> es, W.HTTP :> es) => Config.EnvConfig -> ProjectId -> RunbookRead -> Eff es (Either RunbookError RunbookPage)
+readRunbook :: (DB es, IOE :> es, Log :> es, W.HTTP :> es) => Config.EnvConfig -> ProjectId -> RunbookRead -> Eff es (Either RunbookError RunbookPage)
 readRunbook cfg pid query = runExceptT do
   unless (validRunbookPath query.path) $ throwE $ RunbookPathInvalid query.path
   let start = fromMaybe 1 query.startLine
@@ -298,7 +298,7 @@ readRunbook cfg pid query = runExceptT do
       }
 
 
-mappingConnection :: (IOE :> es, DB es, Log :> es, W.HTTP :> es) => Config.EnvConfig -> ProjectId -> CodeMapping -> Eff es (Either SnippetError (GitSync.GitHubCredential, Git.GitConn))
+mappingConnection :: (DB es, IOE :> es, Log :> es, W.HTTP :> es) => Config.EnvConfig -> ProjectId -> CodeMapping -> Eff es (Either SnippetError (GitSync.GitHubCredential, Git.GitConn))
 mappingConnection cfg pid mapping = runExceptT do
   cred <- ExceptT $ maybeToRight CredentialGone <$> getGitHubCredential (encodeUtf8 cfg.apiKeyEncryptionSecretKey) pid mapping.credentialId
   creds <- hoistEither $ maybeToRight CredentialGone $ credentialCreds cred
@@ -467,7 +467,7 @@ sliceAround ctx focus ls
 -- and a panel that renders both as silence sends the reader to configure something that is
 -- already configured.
 fetchSnippet
-  :: (IOE :> es, DB es, Log :> es, W.HTTP :> es)
+  :: (DB es, IOE :> es, Log :> es, W.HTTP :> es)
   => Cache Config.CodeBlobKey ByteString
   -- ^ Blob cache. One git-host API call per frame opened without it, and a hot issue viewed
   -- repeatedly re-fetches every time; a rate-limit stall then presents as the panel silently
@@ -487,7 +487,7 @@ fetchSnippet blobCache cfg pid svc revM path lineNo = fmap (.snippet) <$> fetchS
 
 
 fetchSourceEvidence
-  :: (IOE :> es, DB es, Log :> es, W.HTTP :> es)
+  :: (DB es, IOE :> es, Log :> es, W.HTTP :> es)
   => Cache Config.CodeBlobKey ByteString
   -> Config.EnvConfig
   -> ProjectId

@@ -48,13 +48,13 @@ import Data.UUID (UUID)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful
+import Effectful.Exception (trySync)
 import Hasql.Interpolate qualified as HI
 import Models.Apis.ApiChanges (AnomalyTypes)
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (DB, UUIDId (..))
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Relude
-import Effectful.Exception (trySync)
 import Utils (scrubNulValue)
 
 
@@ -294,7 +294,7 @@ getSummary keysM pid =
 -- forever). 'scrubNulValue' strips NULs throughout the doc; if the sanitised
 -- batch still fails, we fall back to per-row inserts so a single hostile
 -- project can't block the rest.
-upsertSummary :: (DB es) => V.Vector (Projects.ProjectId, Catalog.SummaryDoc) -> Eff es ()
+upsertSummary :: DB es => V.Vector (Projects.ProjectId, Catalog.SummaryDoc) -> Eff es ()
 upsertSummary rows0 = unless (V.null rows0) $ do
   let rows = V.map (second asScrubbedJsonb) rows0
   whenLeftM_ (trySync (batch rows)) \_ -> V.forM_ rows (void . trySync . batch . V.singleton)

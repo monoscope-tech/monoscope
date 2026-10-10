@@ -82,6 +82,7 @@ import Database.PostgreSQL.Simple.ToField (ToField (..))
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, (:>))
+import Effectful.Exception (try)
 import Hasql.Interpolate qualified as HI
 import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), responseStatus)
 import Network.HTTP.Types.Header (HeaderName)
@@ -96,7 +97,6 @@ import Relude.Extra.Bifunctor (firstF)
 -- Relude re-exports 'Show' without its methods, so the redacting instance below has to name
 -- 'showsPrec' from its defining module.
 import Text.Show (showString, showsPrec)
-import Effectful.Exception (try)
 import Web.HttpApiData (FromHttpApiData (..), ToHttpApiData (..))
 import "base64" Data.ByteString.Base64 qualified as B64
 import "cryptonite" Crypto.Hash (Digest, SHA1, hash)
@@ -497,7 +497,7 @@ formatHttpError (HttpExceptionRequest _ content) = case content of
 formatHttpError (InvalidUrlException u reason) = "invalid URL (" <> toText u <> "): " <> toText reason
 
 
-get_ :: (W.HTTP :> es) => GitConn -> Text -> Eff es (Either Text LByteString)
+get_ :: W.HTTP :> es => GitConn -> Text -> Eff es (Either Text LByteString)
 get_ conn u = fmap (^. W.responseBody) <$> tryHttp (W.getWith (gitOpts conn) (toString u))
 
 
@@ -522,7 +522,7 @@ paginate size fetchPage = go 1 []
 
 -- | Every page of a paginated JSON list: @items@ picks the array out of one response body,
 -- @dec@ decodes an element and drops the ones missing a field we need.
-pagedJson :: (W.HTTP :> es) => GitConn -> Int -> (LByteString -> [AE.Value]) -> (AE.Value -> Maybe a) -> (Int -> Text) -> Eff es (Either Text [a])
+pagedJson :: W.HTTP :> es => GitConn -> Int -> (LByteString -> [AE.Value]) -> (AE.Value -> Maybe a) -> (Int -> Text) -> Eff es (Either Text [a])
 pagedJson conn size items dec mkUrl = paginate size \p -> fmap (mapMaybe dec . items) <$> get_ conn (mkUrl p)
 
 
@@ -623,17 +623,17 @@ data PullRequestComment = PullRequestComment
   deriving (AE.FromJSON) via DAE.Snake PullRequestComment
 
 
-getPullRequest :: (W.HTTP :> es) => GitConn -> RepoRef -> Int -> Eff es (Either Text PullRequest)
+getPullRequest :: W.HTTP :> es => GitConn -> RepoRef -> Int -> Eff es (Either Text PullRequest)
 getPullRequest conn repo number = githubJson conn repo ("/pulls/" <> show number)
 
 
 -- | One bounded page. The caller compares its size with changed_files and
 -- reports omitted/binary patches explicitly instead of claiming full coverage.
-getPullRequestFiles :: (W.HTTP :> es) => GitConn -> RepoRef -> Int -> Eff es (Either Text [PullRequestFile])
+getPullRequestFiles :: W.HTTP :> es => GitConn -> RepoRef -> Int -> Eff es (Either Text [PullRequestFile])
 getPullRequestFiles conn repo number = githubJson conn repo ("/pulls/" <> show number <> "/files?per_page=100")
 
 
-listPullRequestComments :: (W.HTTP :> es) => GitConn -> RepoRef -> Int -> Eff es (Either Text [PullRequestComment])
+listPullRequestComments :: W.HTTP :> es => GitConn -> RepoRef -> Int -> Eff es (Either Text [PullRequestComment])
 listPullRequestComments conn repo number = paginate 100 \page -> githubJson conn repo ("/issues/" <> show number <> "/comments?per_page=100&page=" <> show page)
 
 
@@ -643,7 +643,7 @@ githubJson conn repo path
   | otherwise = (>>= first toText . AE.eitherDecode) <$> get_ conn (repoUrl conn repo path)
 
 
-publishPullRequestComment :: (W.HTTP :> es) => GitConn -> RepoRef -> Int -> Maybe Int64 -> Text -> Eff es (Either Text Int64)
+publishPullRequestComment :: W.HTTP :> es => GitConn -> RepoRef -> Int -> Maybe Int64 -> Text -> Eff es (Either Text Int64)
 publishPullRequestComment conn repo number commentId body
   | conn.host /= GitHub = pure $ Left "Pull request reviews require GitHub"
   | otherwise = do
@@ -660,7 +660,7 @@ getJson conn endpoint = (first DeploymentRequestFailed >=> first (InvalidDeploym
 
 -- | GitHub deployment requests plus reported execution states. A status lookup
 -- failure stays explicit for its deployment; it is not an empty successful history.
-listDeployments :: (W.HTTP :> es) => GitConn -> RepoRef -> Maybe Text -> Eff es (Either DeploymentReadError (EvidencePage DeploymentEvidence))
+listDeployments :: W.HTTP :> es => GitConn -> RepoRef -> Maybe Text -> Eff es (Either DeploymentReadError (EvidencePage DeploymentEvidence))
 listDeployments conn repo environment
   | conn.host /= GitHub = pure $ Left $ UnsupportedDeploymentHost conn.host
   | otherwise = runExceptT do
@@ -676,7 +676,7 @@ listDeployments conn repo environment
 --
 -- The commits endpoint rather than the branches one, because @ref@ may already be a commit
 -- sha and only the former accepts both.
-headRevision :: (W.HTTP :> es) => GitConn -> RepoRef -> Eff es (Either Text Text)
+headRevision :: W.HTTP :> es => GitConn -> RepoRef -> Eff es (Either Text Text)
 headRevision conn r = via $ case conn.host of
   GitHub -> ("/commits/" <> enc r.ref, key "sha" . _String)
   Gitea -> ("/git/commits/" <> enc r.ref, key "sha" . _String)
@@ -699,7 +699,7 @@ headRevision conn r = via $ case conn.host of
 -- empty prefix that would be one request per file in the repository, so it is skipped and
 -- those entries keep @sha = Nothing@ — which 'TreeEntry' makes impossible to mistake for
 -- "unchanged".
-fetchTree :: (W.HTTP :> es) => GitConn -> RepoRef -> Text -> Eff es (Either Text (Text, [TreeEntry]))
+fetchTree :: W.HTTP :> es => GitConn -> RepoRef -> Text -> Eff es (Either Text (Text, [TreeEntry]))
 fetchTree conn r prefix = runExceptT do
   entries <- ExceptT rawEntries
   let scoped = filter (\e -> T.null prefix || prefix `T.isPrefixOf` e.path) entries
@@ -755,7 +755,7 @@ fetchTree conn r prefix = runExceptT do
 -- | The blob at @path@ in @r.ref@ — a branch name or a commit sha, since every host's read
 -- endpoint takes either. Reading at the sha the telemetry reported is the difference between
 -- the source that threw and the source as it is today.
-fetchFile :: (W.HTTP :> es) => GitConn -> RepoRef -> Text -> Eff es (Either Text ByteString)
+fetchFile :: W.HTTP :> es => GitConn -> RepoRef -> Text -> Eff es (Either Text ByteString)
 fetchFile conn r path = case conn.host of
   GitHub -> contents
   Gitea -> contents
@@ -779,7 +779,7 @@ fetchFile conn r path = case conn.host of
 -- GitLab and Bitbucket return no sha at all, so the blob sha is computed locally with
 -- 'computeContentSha' — the same value git stores and the same value GitLab's own tree
 -- listing reports, so the two agree on the next pull.
-pushFile :: (W.HTTP :> es) => GitConn -> RepoRef -> Text -> ByteString -> Maybe Text -> Text -> Eff es (Either Text (Text, Text))
+pushFile :: W.HTTP :> es => GitConn -> RepoRef -> Text -> ByteString -> Maybe Text -> Text -> Eff es (Either Text (Text, Text))
 pushFile conn r path content existingSha message = runExceptT do
   shaM <- ExceptT $ case conn.host of
     GitHub -> contentsPut
@@ -829,7 +829,7 @@ pushFile conn r path content existingSha message = runExceptT do
 --
 -- A repository-scoped token legitimately reaches one repository, or none it can enumerate, so
 -- an empty list is a valid answer and the caller keeps manual entry available.
-listRepos :: (W.HTTP :> es) => GitConn -> Eff es (Either Text [GitRepo])
+listRepos :: W.HTTP :> es => GitConn -> Eff es (Either Text [GitRepo])
 listRepos conn = case conn.host of
   GitHub -> pagedJson conn 100 (toListOf (key "repositories" . values)) ghRepo \p -> url conn ("installation/repositories?per_page=100&page=" <> show p)
   Gitea -> pagedJson conn 50 (toListOf values) ghRepo \p -> url conn ("user/repos?limit=50&page=" <> show p)
@@ -848,7 +848,7 @@ listRepos conn = case conn.host of
 
 
 -- | The repository's default branch, or @main@ when the host will not say.
-defaultBranchOf :: (W.HTTP :> es) => GitConn -> RepoRef -> Eff es Text
+defaultBranchOf :: W.HTTP :> es => GitConn -> RepoRef -> Eff es Text
 defaultBranchOf conn r = get_ conn (repoUrl conn r "") <&> either (const "main") (fromMaybe "main" . pick)
   where
     pick body = case conn.host of

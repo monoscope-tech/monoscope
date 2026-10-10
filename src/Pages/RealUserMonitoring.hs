@@ -65,7 +65,7 @@ import System.Config (AuthContext (..), EnvConfig (enableTimefusionReads))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import UnliftIO (tryAny, withRunInIO)
-import Utils (classifyUserAgent, countNoun, faSprite_, navTabStrip_, getDurationNSMS, nonEmptyT, prettyTimeShort, replaceAllFormats, showFFloat', toXXHash)
+import Utils (classifyUserAgent, countNoun, faSprite_, getDurationNSMS, navTabStrip_, nonEmptyT, prettyTimeShort, replaceAllFormats, showFFloat', toXXHash)
 
 
 data RumTab = Overview | Sessions | Performance

@@ -1074,7 +1074,7 @@ refreshSlackProgress publicationId = do
 
 -- | Search one page per retry so a rate limit does not discard pagination progress.
 -- No match is never treated as proof that Slack rejected the original send.
-reconcileReplyHistory :: (IOE :> es, DB es, HTTP :> es, Log.Log :> es) => Text -> AI.AgentAccess -> SlackData -> Investigations.Turn -> Int -> Eff es ()
+reconcileReplyHistory :: (DB es, HTTP :> es, IOE :> es, Log.Log :> es) => Text -> AI.AgentAccess -> SlackData -> Investigations.Turn -> Int -> Eff es ()
 reconcileReplyHistory appId access slackData turn part =
   unless (T.null appId) $ Investigations.loadReplySearch turn part >>= traverse_ \search -> do
     AI.requireAgentAccess access turn.projectId
@@ -1224,7 +1224,7 @@ data SlackPublishedMessage = SlackPublishedMessage
 -- | Poll only committed activity. The thread lock serializes publication and
 -- retries reuse an acknowledged progress message. Progress failure does not
 -- discard a completed investigation answer.
-withInvestigationProgress :: (IOE :> es, Concurrent :> es, DB es, HTTP :> es, Log.Log :> es) => SlackData -> AI.AgentAccess -> Eff es () -> Eff es ()
+withInvestigationProgress :: (Concurrent :> es, DB es, HTTP :> es, IOE :> es, Log.Log :> es) => SlackData -> AI.AgentAccess -> Eff es () -> Eff es ()
 withInvestigationProgress slackData access action = case access of
   AI.SlackInvestigationAccess run -> do
     previous <- newIORef Nothing
@@ -1272,7 +1272,7 @@ withInvestigationProgress slackData access action = case access of
 
 -- | Late observations can arrive after the answer receipt is complete. Refresh
 -- that turn directly, checking its original requester's current authorization.
-refreshObservedProgress :: (IOE :> es, DB es, HTTP :> es) => Investigations.ProgressTarget -> Text -> Eff es ()
+refreshObservedProgress :: (DB es, HTTP :> es, IOE :> es) => Investigations.ProgressTarget -> Text -> Eff es ()
 refreshObservedProgress target timestamp = do
   AI.requireAgentAccess (AI.SlackAccess target.teamId target.slackUserId target.userId) target.projectId
   slackData <- getProjectSlackData target.projectId
@@ -1379,7 +1379,7 @@ saveAppContext workspaceId event =
 
 -- | Slack navigation context is untrusted input, not project authorization.
 -- Compare event timestamps so a delayed start cannot overwrite newer context.
-saveAssistantContext :: (IOE :> es, DB es) => Text -> SlackAssistantEvent -> Eff es ()
+saveAssistantContext :: (DB es, IOE :> es) => Text -> SlackAssistantEvent -> Eff es ()
 saveAssistantContext workspaceId event = do
   let session = event.assistant_thread
   accepted <-
@@ -1466,7 +1466,7 @@ newtype SlackResponseMetadata = SlackResponseMetadata {next_cursor :: Maybe Text
   deriving anyclass (AE.FromJSON)
 
 
-getChannelMessages :: (IOE :> es, DB es, HTTP :> es, Log.Log :> es) => AI.AgentAccess -> Projects.ProjectId -> Text -> Text -> Text -> Text -> Eff es (Maybe [SlackThreadedMessage])
+getChannelMessages :: (DB es, HTTP :> es, IOE :> es, Log.Log :> es) => AI.AgentAccess -> Projects.ProjectId -> Text -> Text -> Text -> Text -> Eff es (Maybe [SlackThreadedMessage])
 getChannelMessages access pid token channelId ts latest = page [] Nothing
   where
     requireAccess = AI.requireAgentAccess access pid

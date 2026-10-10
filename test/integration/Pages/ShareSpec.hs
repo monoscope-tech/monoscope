@@ -27,11 +27,13 @@ spec = around withTestResources do
       apiKey <- createTestAPIKey tr testPid "shared-event"
       ingestTrace tr apiKey "shared-checkout" frozenTime
       (eventId, eventTime) <- withResource tr.trPool \conn -> do
-        rows <- PGS.query conn
-          [sql|SELECT id, timestamp FROM otel_logs_and_spans
+        rows <-
+          PGS.query
+            conn
+            [sql|SELECT id, timestamp FROM otel_logs_and_spans
                WHERE project_id = ? AND name = 'shared-checkout'
                ORDER BY timestamp DESC LIMIT 1|]
-          (PGS.Only testPid)
+            (PGS.Only testPid)
         maybe (fail "the shared event was not ingested") pure $ listToMaybe rows
 
       missingEventId <- nextRandom

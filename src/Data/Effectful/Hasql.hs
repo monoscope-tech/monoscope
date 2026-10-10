@@ -268,11 +268,11 @@ runHasqlPool pool = interpret \_ -> \case
 
 -- | Run a `Session`, throwing `HasqlException` on `UsageError`. Mirrors
 -- `Hasql.Pool.use` — opaque sessions get the generic `hasql.session <db>` span.
-use :: (Hasql :> es) => Session a -> Eff es a
+use :: Hasql :> es => Session a -> Eff es a
 use s = send (UseSession s) >>= either (EE.throwIO . HasqlException) pure
 
 
-statement :: (Hasql :> es) => params -> Statement params a -> Eff es a
+statement :: Hasql :> es => params -> Statement params a -> Eff es a
 statement p st = send (UseStatement p st) >>= either (EE.throwIO . HasqlException) pure
 
 
@@ -329,12 +329,12 @@ executeTx s = void (queryTx s :: Tx.Transaction HI.RowsAffected)
 
 
 -- | Run an INSERT/UPDATE/DELETE and return the number of rows affected.
-interpExecute :: (Hasql :> es) => HI.Sql -> Eff es Int64
+interpExecute :: Hasql :> es => HI.Sql -> Eff es Int64
 interpExecute s = HI.getRowsAffected <$> interp s
 
 
 -- | Run an INSERT/UPDATE/DELETE, discarding the row count.
-interpExecute_ :: (Hasql :> es) => HI.Sql -> Eff es ()
+interpExecute_ :: Hasql :> es => HI.Sql -> Eff es ()
 interpExecute_ s = void $ interpExecute s
 
 
@@ -350,12 +350,12 @@ guardWriteTx TxS.Write tx = Tx.sql "SET LOCAL idle_in_transaction_session_timeou
 guardWriteTx TxS.Read tx = tx
 
 
-transaction :: (Hasql :> es) => TxS.IsolationLevel -> TxS.Mode -> Tx.Transaction a -> Eff es a
+transaction :: Hasql :> es => TxS.IsolationLevel -> TxS.Mode -> Tx.Transaction a -> Eff es a
 transaction iso mode tx = use (TxS.transaction iso mode (guardWriteTx mode tx))
 
 
 -- | Like 'session' but carries a caller-chosen span name + extra attributes.
-labeledSession :: (Hasql :> es) => Text -> HM.HashMap Text Attribute -> Session a -> Eff es a
+labeledSession :: Hasql :> es => Text -> HM.HashMap Text Attribute -> Session a -> Eff es a
 labeledSession name attrs s =
   send (UseLabeledSession name attrs s) >>= either (EE.throwIO . HasqlException) pure
 

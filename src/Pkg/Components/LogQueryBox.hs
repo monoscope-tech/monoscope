@@ -16,7 +16,7 @@ import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import NeatInterpolation (text)
-import Pages.Components (ModalCfg (..), filterInputAttr_, searchInput_, keyboardActivateAttr_, modalWith_, options_)
+import Pages.Components (ModalCfg (..), filterInputAttr_, keyboardActivateAttr_, modalWith_, options_, searchInput_)
 import Pkg.SchemaLearning.Catalog (FacetData (..), FacetValue (..))
 import Relude
 import Utils (displayTimestamp, faSprite_, formatUTC, onpointerdown_)

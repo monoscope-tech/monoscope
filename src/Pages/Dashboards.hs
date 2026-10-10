@@ -1316,7 +1316,7 @@ updateTabBySlug slug f dash = dash & #tabs %~ fmap (map updateTab)
     updateTab tab = if slugify tab.name == slug then f tab else tab
 
 
-getDashAndVM :: (IOE :> es, DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, Wreq.HTTP :> es) => Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Eff es (Dashboards.DashboardVM, Dashboards.Dashboard)
+getDashAndVM :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, IOE :> es, Wreq.HTTP :> es) => Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Eff es (Dashboards.DashboardVM, Dashboards.Dashboard)
 getDashAndVM pid dashId fileM = do
   appCtx <- ask @AuthContext
   templates <- getDashboardTemplates appCtx.config
@@ -2707,16 +2707,15 @@ widgetSqlPreviewGetH pid queryM dashboardIdM sinceStr fromDStr toDStr = do
   where
     sqlBlock_ :: Text -> Text -> Html ()
     sqlBlock_ label sql =
-      let sqlEsc = T.replace "`" "\\`" sql
-       in div_ [class_ "space-y-1"] do
-            div_ [class_ "flex justify-between items-center"] do
-              span_ [class_ "text-textWeak font-sans"] $ toHtml label
-              button_
-                [ class_ "text-textBrand hover:underline font-sans text-xs"
-                , term "_" [text| on click writeText(`${sqlEsc}`) to the navigator's clipboard then set my.innerText to 'Copied!' then wait 1.5s then set my.innerText to 'Copy' |]
-                ]
-                "Copy"
-            pre_ [class_ "bg-fillWeak p-2 rounded overflow-x-auto max-h-48"] $ code_ [class_ "language-sql text-xs !bg-transparent"] $ toHtml sql
+      div_ [class_ "space-y-1"] do
+        div_ [class_ "flex justify-between items-center"] do
+          span_ [class_ "text-textWeak font-sans"] $ toHtml label
+          button_
+            [ class_ "text-textBrand hover:underline font-sans text-xs"
+            , Components.copySourceAttr_ "this.parentElement.nextElementSibling"
+            ]
+            "Copy"
+        pre_ [class_ "bg-fillWeak p-2 rounded overflow-x-auto max-h-48"] $ code_ [class_ "language-sql text-xs !bg-transparent"] $ toHtml sql
 
 
 -- | Find a tab by its slug, returns (index, tab) if found

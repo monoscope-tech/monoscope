@@ -58,6 +58,7 @@ import Data.Time (UTCTime, addUTCTime)
 import Data.UUID qualified as UUID
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Effectful (Eff)
+import Effectful.Exception (throwIO)
 import Hasql.Interpolate qualified as HI
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
@@ -70,7 +71,6 @@ import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Relude
 import Servant (FromHttpApiData)
 import System.Types (DB)
-import Effectful.Exception (throwIO)
 
 
 type EpisodeId = UUIDId "incident_episode"
@@ -638,7 +638,7 @@ data DeliveryOutcome
 -- | An expired send lease is ambiguous, not permission to post another message.
 -- Its owner can still confirm it, or a Slack event can reconcile its root.
 -- Only the first unsettled delivery for a root is eligible, across all workers.
-claimSlackDeliveries :: (DB es) => UTCTime -> Eff es [SlackDelivery]
+claimSlackDeliveries :: DB es => UTCTime -> Eff es [SlackDelivery]
 claimSlackDeliveries = decodeClaimed . claimSlackDeliveriesTx
 
 
@@ -795,7 +795,7 @@ data IncidentSearchF timestamp = IncidentSearch
   deriving anyclass (HI.DecodeRow)
 
 
-claimIncidentSearches :: (DB es) => UTCTime -> Eff es [IncidentSearch]
+claimIncidentSearches :: DB es => UTCTime -> Eff es [IncidentSearch]
 claimIncidentSearches now =
   decodeClaimed
     $ queryTx @[IncidentSearchF Text]

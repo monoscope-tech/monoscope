@@ -82,10 +82,11 @@ import BackgroundJobs (errorTrendChartUrl)
 import BackgroundJobs qualified as BJ
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
+import Data.Effectful.UUID qualified as UUIDEff
 import Data.Effectful.Wreq qualified as W
 import Data.Text.Display (Display, display)
+import Effectful.Exception (throwIO, try, trySync)
 import Effectful.Reader.Static (ask, asks)
-import Data.Effectful.UUID qualified as UUIDEff
 import Effectful.Time qualified as Time
 import Fmt (commaizeF, fmt)
 import Lucid
@@ -115,7 +116,6 @@ import Servant (FromHttpApiData (..), err400, errBody)
 import System.Config
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Text.Printf (printf)
-import Effectful.Exception (throwIO, try, trySync)
 import Utils (LoadingSize (..), calculateCycleStartDate, faSprite_, fmtDate, formatBytes, htmxIndicator_)
 import Web.FormUrlEncoded (FromForm)
 import "cryptonite" Crypto.Hash (SHA256)

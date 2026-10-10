@@ -51,7 +51,7 @@ import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime)
 import Data.Vector qualified as V
-import Effectful (IOE, Eff, (:>))
+import Effectful (Eff, IOE, (:>))
 import Effectful.Labeled (Labeled)
 import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
@@ -279,7 +279,7 @@ normalizeRow r = withWorkload $ case r.imageTag of
 -- | Reuse the expensive wide metrics pivot across infrastructure views. Empty results stay
 -- uncached so a newly connected collector appears immediately on the next refresh.
 containersInWindowCached
-  :: (IOE :> es, DB es, Labeled "timefusion" Hasql :> es)
+  :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es)
   => Cache ContainerSnapshotKey (V.Vector ContainerRow)
   -> ContainerSnapshotKey
   -> TimeSpec

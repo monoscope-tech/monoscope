@@ -40,6 +40,7 @@ import Data.Aeson qualified as AE
 import Data.CaseInsensitive qualified as CI
 import Data.Char (isAsciiLower, isDigit)
 import Data.Default (def)
+import Data.Effectful.UUID qualified as UUIDEff
 import Data.List (partition)
 import Data.Map.Strict qualified as Map
 import Data.Ord (clamp)
@@ -49,7 +50,6 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful.Concurrent.Async (concurrently)
 import Effectful.Reader.Static (ask)
-import Data.Effectful.UUID qualified as UUIDEff
 import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Aria qualified as Aria
@@ -161,39 +161,39 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
       stopCount = if fromMaybe False alertForm.stopAfterCheck then alertForm.stopAfter <|> Just 5 else Nothing
    in parseQueryToComponents sqlQueryCfg alertForm.query <&> \(_, qc) ->
         Monitors.QueryMonitor
-        { id = queryMonitorId
-        , createdAt = now
-        , updatedAt = now
-        , projectId = projectId
-        , checkIntervalMins = checkInterval
-        , alertThreshold = if isThresholdAlert then alertForm.alertThreshold else 0
-        , warningThreshold = if isThresholdAlert then warningThresholdD else Nothing
-        , logQuery = alertForm.query
-        , logQueryAsSql = fromMaybe "" qc.finalAlertQuery
-        , lastEvaluated = Just now
-        , warningLastTriggered = Nothing
-        , alertLastTriggered = Nothing
-        , triggerLessThan = alertForm.direction == "below"
-        , thresholdSustainedForMins = 0
-        , alertConfig
-        , deletedAt = Nothing
-        , deactivatedAt = Nothing
-        , mutedUntil = Nothing
-        , visualizationType = fromMaybe "timeseries" alertForm.vizType
-        , teams = V.fromList alertForm.teams
-        , widgetId = alertForm.widgetId
-        , dashboardId = dashboardUuid
-        , alertRecoveryThreshold = if isThresholdAlert then alertRecoveryD else Nothing
-        , warningRecoveryThreshold = if isThresholdAlert then warningRecoveryD else Nothing
-        , currentStatus = Monitors.MSNormal
-        , currentValue = 0
-        , renotifyIntervalMins = renotifyMins
-        , stopAfterCount = stopCount
-        , notificationCount = 0
-        , timeWindowMins
-        , environment
-        , service
-        }
+          { id = queryMonitorId
+          , createdAt = now
+          , updatedAt = now
+          , projectId = projectId
+          , checkIntervalMins = checkInterval
+          , alertThreshold = if isThresholdAlert then alertForm.alertThreshold else 0
+          , warningThreshold = if isThresholdAlert then warningThresholdD else Nothing
+          , logQuery = alertForm.query
+          , logQueryAsSql = fromMaybe "" qc.finalAlertQuery
+          , lastEvaluated = Just now
+          , warningLastTriggered = Nothing
+          , alertLastTriggered = Nothing
+          , triggerLessThan = alertForm.direction == "below"
+          , thresholdSustainedForMins = 0
+          , alertConfig
+          , deletedAt = Nothing
+          , deactivatedAt = Nothing
+          , mutedUntil = Nothing
+          , visualizationType = fromMaybe "timeseries" alertForm.vizType
+          , teams = V.fromList alertForm.teams
+          , widgetId = alertForm.widgetId
+          , dashboardId = dashboardUuid
+          , alertRecoveryThreshold = if isThresholdAlert then alertRecoveryD else Nothing
+          , warningRecoveryThreshold = if isThresholdAlert then warningRecoveryD else Nothing
+          , currentStatus = Monitors.MSNormal
+          , currentValue = 0
+          , renotifyIntervalMins = renotifyMins
+          , stopAfterCount = stopCount
+          , notificationCount = 0
+          , timeWindowMins
+          , environment
+          , service
+          }
 
 
 parseIntervalToMins :: Text -> Int
@@ -227,11 +227,12 @@ alertUpsertPostH pid form = do
   case convertToQueryMonitor pid now queryMonitorId form{recipientEmailAll = Just emailAll} of
     Left err -> addToast "error" "Monitor query is invalid" (Just err) >> addRespHeaders (AlertNoContent "")
     Right baseMonitor -> do
-      let -- The form has no active/inactive control, and convertToQueryMonitor defaults
-          -- deactivatedAt to Nothing — so carry the stored value or editing a deactivated
-          -- monitor here would silently re-activate it.
-          withStoredState m = maybe m (\e -> m{Monitors.deactivatedAt = e.deactivatedAt}) existingMonitor
-          queryMonitor = withStoredState $ maybe baseMonitor (\e -> baseMonitor{Monitors.logQuery = e.logQuery, Monitors.logQueryAsSql = e.logQueryAsSql, Monitors.environment = e.environment, Monitors.service = e.service, Monitors.alertConfig = baseMonitor.alertConfig{Monitors.title = e.alertConfig.title}}) $ mfilter (isJust . (.widgetId)) existingMonitor
+      let
+        -- The form has no active/inactive control, and convertToQueryMonitor defaults
+        -- deactivatedAt to Nothing — so carry the stored value or editing a deactivated
+        -- monitor here would silently re-activate it.
+        withStoredState m = maybe m (\e -> m{Monitors.deactivatedAt = e.deactivatedAt}) existingMonitor
+        queryMonitor = withStoredState $ maybe baseMonitor (\e -> baseMonitor{Monitors.logQuery = e.logQuery, Monitors.logQueryAsSql = e.logQueryAsSql, Monitors.environment = e.environment, Monitors.service = e.service, Monitors.alertConfig = baseMonitor.alertConfig{Monitors.title = e.alertConfig.title}}) $ mfilter (isJust . (.widgetId)) existingMonitor
 
       _ <- Monitors.queryMonitorUpsert queryMonitor
       when (isNothing alertId)

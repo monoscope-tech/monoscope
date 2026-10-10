@@ -83,40 +83,40 @@ spec = sequential $ aroundAll withTestResources do
       queryMonitor <-
         either (fail . toString) pure
           $ convertToQueryMonitor (UUIDId UUID.nil) currentTime (Monitors.QueryMonitorId UUID.nil)
-              $ AlertUpsertForm
-                { unit = Nothing
-                , alertId = Nothing
-                , warningThreshold = Just "3"
-                , alertThreshold = 4
-                , recipientEmails = ["test@monoscope.tech"]
-                , recipientSlacks = ["default"]
-                , recipientEmailAll = Just True
-                , direction = "above"
-                , title = "Test Query Monitor"
-                , severity = "Warning"
-                , subject = "Test Query Subject"
-                , message = "Test Query Message"
-                , query = "status_code==200"
-                , since = "7d"
-                , from = ""
-                , to = ""
-                , frequency = Nothing
-                , timeWindow = Nothing
-                , conditionType = Nothing
-                , source = Nothing
-                , vizType = Nothing
-                , teams = []
-                , alertRecoveryThreshold = Nothing
-                , warningRecoveryThreshold = Nothing
-                , widgetId = Nothing
-                , dashboardId = Nothing
-                , notifyAfterCheck = Nothing
-                , notifyAfter = Nothing
-                , stopAfterCheck = Nothing
-                , stopAfter = Nothing
-                , environment = Just "production"
-                , service = Just "checkout"
-                }
+          $ AlertUpsertForm
+            { unit = Nothing
+            , alertId = Nothing
+            , warningThreshold = Just "3"
+            , alertThreshold = 4
+            , recipientEmails = ["test@monoscope.tech"]
+            , recipientSlacks = ["default"]
+            , recipientEmailAll = Just True
+            , direction = "above"
+            , title = "Test Query Monitor"
+            , severity = "Warning"
+            , subject = "Test Query Subject"
+            , message = "Test Query Message"
+            , query = "status_code==200"
+            , since = "7d"
+            , from = ""
+            , to = ""
+            , frequency = Nothing
+            , timeWindow = Nothing
+            , conditionType = Nothing
+            , source = Nothing
+            , vizType = Nothing
+            , teams = []
+            , alertRecoveryThreshold = Nothing
+            , warningRecoveryThreshold = Nothing
+            , widgetId = Nothing
+            , dashboardId = Nothing
+            , notifyAfterCheck = Nothing
+            , notifyAfter = Nothing
+            , stopAfterCheck = Nothing
+            , stopAfter = Nothing
+            , environment = Just "production"
+            , service = Just "checkout"
+            }
       queryMonitor.environment `shouldBe` Just "production"
       queryMonitor.service `shouldBe` Just "checkout"
       queryMonitor.logQueryAsSql `shouldContainAll` ["resource___deployment___environment___name = 'production'", "resource___service___name = 'checkout'"]
@@ -219,40 +219,44 @@ spec = sequential $ aroundAll withTestResources do
       renamedDashboardMonitor <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId testPid (Just $ unUUIDId dashboardId) widgetId
       ((.alertConfig.title) <$> renamedDashboardMonitor) `shouldBe` Just "Checkout failures · Renamed Dashboard"
       monitorId <- maybe (fail "the widget monitor was not saved") (pure . (.id)) renamedDashboardMonitor
-      void $ testServant tr $ alertUpsertPostH testPid AlertUpsertForm
-        { unit = Just "events"
-        , alertId = Just monitorId.toText
-        , alertThreshold = 1
-        , warningThreshold = Nothing
-        , recipientEmails = []
-        , recipientSlacks = []
-        , recipientEmailAll = Nothing
-        , direction = "above"
-        , title = "Stale hidden title"
-        , severity = "Error"
-        , subject = "Checkout errors"
-        , message = "A checkout request failed"
-        , query = "name == \"checkout\""
-        , since = "1h"
-        , from = ""
-        , to = ""
-        , frequency = Just "1m"
-        , timeWindow = Just "1h"
-        , conditionType = Just "threshold_exceeded"
-        , source = Just "widget"
-        , vizType = Just "timeseries"
-        , teams = []
-        , alertRecoveryThreshold = Nothing
-        , warningRecoveryThreshold = Nothing
-        , widgetId = Just widgetId
-        , dashboardId = Just dashboardId.toText
-        , notifyAfterCheck = Nothing
-        , notifyAfter = Nothing
-        , stopAfterCheck = Nothing
-        , stopAfter = Nothing
-        , environment = Nothing
-        , service = Nothing
-        }
+      void
+        $ testServant tr
+        $ alertUpsertPostH
+          testPid
+          AlertUpsertForm
+            { unit = Just "events"
+            , alertId = Just monitorId.toText
+            , alertThreshold = 1
+            , warningThreshold = Nothing
+            , recipientEmails = []
+            , recipientSlacks = []
+            , recipientEmailAll = Nothing
+            , direction = "above"
+            , title = "Stale hidden title"
+            , severity = "Error"
+            , subject = "Checkout errors"
+            , message = "A checkout request failed"
+            , query = "name == \"checkout\""
+            , since = "1h"
+            , from = ""
+            , to = ""
+            , frequency = Just "1m"
+            , timeWindow = Just "1h"
+            , conditionType = Just "threshold_exceeded"
+            , source = Just "widget"
+            , vizType = Just "timeseries"
+            , teams = []
+            , alertRecoveryThreshold = Nothing
+            , warningRecoveryThreshold = Nothing
+            , widgetId = Just widgetId
+            , dashboardId = Just dashboardId.toText
+            , notifyAfterCheck = Nothing
+            , notifyAfter = Nothing
+            , stopAfterCheck = Nothing
+            , stopAfter = Nothing
+            , environment = Nothing
+            , service = Nothing
+            }
       afterExplorerEdit <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId testPid (Just $ unUUIDId dashboardId) widgetId
       ((.alertConfig.title) <$> afterExplorerEdit) `shouldBe` Just "Checkout failures · Renamed Dashboard"
       savedDash <- runTestBgNoReset tr $ DashboardModel.getDashboardByProjectId testPid dashboardId
@@ -284,7 +288,9 @@ spec = sequential $ aroundAll withTestResources do
                    ]
       let assertWidgetLink notification =
             unless (widgetUrl `T.isInfixOf` (decodeUtf8 @Text $ toStrict $ AE.encode notification))
-              $ expectationFailure $ "Missing widget link in " <> show (deliverySummary [notification])
+              $ expectationFailure
+              $ "Missing widget link in "
+              <> show (deliverySummary [notification])
       mapM_ assertWidgetLink fired
 
       advanceMinutes tr 1
@@ -347,7 +353,9 @@ spec = sequential $ aroundAll withTestResources do
       let copyWidgetUrl = "/p/" <> testPid.toText <> "/dashboards/" <> copyDashboardId.toText <> "?expand=" <> copyWidgetId
       for_ copyNotifs \notification ->
         unless (copyWidgetUrl `T.isInfixOf` (decodeUtf8 @Text $ toStrict $ AE.encode notification))
-          $ expectationFailure $ "Missing copied widget link in " <> show (deliverySummary [notification])
+          $ expectationFailure
+          $ "Missing copied widget link in "
+          <> show (deliverySummary [notification])
       copyMonitor.alertConfig.title `shouldBe` "Checkout errors · Widget Monitor Copy"
       void $ testServant tr $ Dashboards.dashboardWidgetReorderPatchH testPid copyDashboardId Nothing Map.empty
 
@@ -374,40 +382,40 @@ spec = sequential $ aroundAll withTestResources do
       queryMonitor <-
         either (fail . toString) pure
           $ convertToQueryMonitor testPid currentTime (Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "11111111-1111-1111-1111-111111111111")
-              $ AlertUpsertForm
-                { unit = Nothing
-                , alertId = Just "11111111-1111-1111-1111-111111111111"
-                , warningThreshold = Just "80"
-                , alertThreshold = 100
-                , recipientEmails = []
-                , recipientSlacks = []
-                , recipientEmailAll = Nothing
-                , direction = "above"
-                , title = "Hysteresis Test Monitor"
-                , severity = "Error"
-                , subject = "Hysteresis Test"
-                , message = "Testing hysteresis"
-                , query = ""
-                , since = "1h"
-                , from = ""
-                , to = ""
-                , frequency = Just "1m"
-                , timeWindow = Nothing
-                , conditionType = Just "threshold_exceeded"
-                , source = Nothing
-                , vizType = Nothing
-                , teams = []
-                , alertRecoveryThreshold = Just "60"
-                , warningRecoveryThreshold = Just "50"
-                , widgetId = Nothing
-                , dashboardId = Nothing
-                , notifyAfterCheck = Nothing
-                , notifyAfter = Nothing
-                , stopAfterCheck = Nothing
-                , stopAfter = Nothing
-                , environment = Nothing
-                , service = Nothing
-                }
+          $ AlertUpsertForm
+            { unit = Nothing
+            , alertId = Just "11111111-1111-1111-1111-111111111111"
+            , warningThreshold = Just "80"
+            , alertThreshold = 100
+            , recipientEmails = []
+            , recipientSlacks = []
+            , recipientEmailAll = Nothing
+            , direction = "above"
+            , title = "Hysteresis Test Monitor"
+            , severity = "Error"
+            , subject = "Hysteresis Test"
+            , message = "Testing hysteresis"
+            , query = ""
+            , since = "1h"
+            , from = ""
+            , to = ""
+            , frequency = Just "1m"
+            , timeWindow = Nothing
+            , conditionType = Just "threshold_exceeded"
+            , source = Nothing
+            , vizType = Nothing
+            , teams = []
+            , alertRecoveryThreshold = Just "60"
+            , warningRecoveryThreshold = Just "50"
+            , widgetId = Nothing
+            , dashboardId = Nothing
+            , notifyAfterCheck = Nothing
+            , notifyAfter = Nothing
+            , stopAfterCheck = Nothing
+            , stopAfter = Nothing
+            , environment = Nothing
+            , service = Nothing
+            }
       -- Insert the monitor
       _ <- runTestBg frozenTime tr $ Monitors.queryMonitorUpsert queryMonitor
 

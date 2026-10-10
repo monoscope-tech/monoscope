@@ -2372,12 +2372,12 @@ safetyNetReprocess pid = do
 
 
 -- | Dual-fork an UPDATE to Postgres (blocking, deadlock-retried) + TimeFusion (best-effort, circuit-broken).
-dualExecPgTf :: (IOE :> es, DB es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Config.AuthContext -> HI.Sql -> Eff es Int64
+dualExecPgTf :: (DB es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Config.AuthContext -> HI.Sql -> Eff es Int64
 dualExecPgTf ctx sql' = dualExecPgTfWithSql ctx sql' sql'
 
 
 -- | Keep native PostgreSQL comparisons when TimeFusion needs a different cast.
-dualExecPgTfWithSql :: (IOE :> es, DB es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Config.AuthContext -> HI.Sql -> HI.Sql -> Eff es Int64
+dualExecPgTfWithSql :: (DB es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Config.AuthContext -> HI.Sql -> HI.Sql -> Eff es Int64
 dualExecPgTfWithSql ctx pgSql tfSql = Ki.scoped \scope -> do
   mainThread <- forkWithCtx scope $ pgExecLabeled "UPDATE-1" pgSql
   _ <- forkWithCtx scope $ when ctx.config.enableTimefusionWrites $ do
@@ -2399,11 +2399,11 @@ dualExecPgTfWithSql ctx pgSql tfSql = Ki.scoped \scope -> do
 -- (e.g. those using `jsonb_build_object`, `jsonb_array_elements_text`, or
 -- `now()` in SET expressions). Same retry-on-deadlock and locking guards as
 -- the PG arm of `dualExecPgTf`, but no TF fork.
-pgOnlyExec :: (IOE :> es, DB es, Log :> es) => HI.Sql -> Eff es Int64
+pgOnlyExec :: (DB es, IOE :> es, Log :> es) => HI.Sql -> Eff es Int64
 pgOnlyExec = pgExecLabeled "pgOnlyExec"
 
 
-pgExecLabeled :: (IOE :> es, DB es, Log :> es) => Text -> HI.Sql -> Eff es Int64
+pgExecLabeled :: (DB es, IOE :> es, Log :> es) => Text -> HI.Sql -> Eff es Int64
 pgExecLabeled label sql' = retryOnDeadlock label $ Hasql.transaction TxS.ReadCommitted TxS.Write $ do
   Tx.sql "SET LOCAL lock_timeout = '30s'"
   Tx.sql "SET LOCAL statement_timeout = '5min'"
@@ -2428,7 +2428,7 @@ pgExecLabeled label sql' = retryOnDeadlock label $ Hasql.transaction TxS.ReadCom
 -- rows UPDATE-1/UPDATE-2 are actively writing; residual lock-order overlap is
 -- absorbed by 'dualExecPgTf''s @retryOnDeadlock@ (same discipline as UPDATE-1/2).
 backfillSessionAttributes
-  :: (IOE :> es, DB es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es)
+  :: (DB es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es)
   => Config.AuthContext -> Eff es Int64
 backfillSessionAttributes ctx = do
   now <- Time.currentTime
@@ -2836,7 +2836,8 @@ rehydrateTree shard key@(pid, svcName) now existing = do
 
 -- | Seed a drain tree from DB patterns and insert it into the shard's IORef.
 seedDrainTreeFromDB
-  :: (IOE :> es, DB es) => ExtractionWorker.ShardState Telemetry.OtelLogsAndSpans
+  :: (DB es, IOE :> es)
+  => ExtractionWorker.ShardState Telemetry.OtelLogsAndSpans
   -> (Projects.ProjectId, Text)
   -> UTCTime
   -> Eff es Drain.DrainTree
@@ -3108,7 +3109,7 @@ getStripeInvoices apiKey subId = do
 
 -- | Enqueues TrialEndingReminder jobs at T-7d and T-3d. Enqueue failures are
 -- logged but never raised — checkout billing state is already committed.
-scheduleTrialReminders :: (IOE :> es, DB es, Log :> es, Time.Time :> es) => Projects.ProjectId -> Int -> Eff es ()
+scheduleTrialReminders :: (DB es, IOE :> es, Log :> es, Time.Time :> es) => Projects.ProjectId -> Int -> Eff es ()
 scheduleTrialReminders pid trialEndEpoch = do
   now <- Time.currentTime
   let trialEnd = posixSecondsToUTCTime (fromIntegral trialEndEpoch)
@@ -4852,7 +4853,7 @@ gitSyncFromRepo pid = do
               Log.logInfo "Completed git sync for project" pid
 
 
-processGitSyncAction :: (IOE :> es, DB es, Log :> es, Time.Time :> es, W.HTTP :> es) => Projects.ProjectId -> Git.GitConn -> GitSync.GitHubSync -> Map.Map Text ProjectMembers.TeamId -> GitSync.SyncAction -> Eff es ()
+processGitSyncAction :: (DB es, IOE :> es, Log :> es, Time.Time :> es, W.HTTP :> es) => Projects.ProjectId -> Git.GitConn -> GitSync.GitHubSync -> Map.Map Text ProjectMembers.TeamId -> GitSync.SyncAction -> Eff es ()
 processGitSyncAction pid conn sync teamMap = \case
   GitSync.SyncCreate path sha ->
     fetchAndParseDashboard conn (GitSync.syncRepoRef sync) path >>= either (Log.logAttention "Failed to sync dashboard from git" . (path,)) \schema -> do
@@ -4891,7 +4892,7 @@ processGitSyncAction pid conn sync teamMap = \case
   GitSync.SyncDelete{} -> pass -- Handled separately
 
 
-fetchAndParseDashboard :: (W.HTTP :> es) => Git.GitConn -> GitSync.RepoRef -> Text -> Eff es (Either Text Dashboards.Dashboard)
+fetchAndParseDashboard :: W.HTTP :> es => Git.GitConn -> GitSync.RepoRef -> Text -> Eff es (Either Text Dashboards.Dashboard)
 fetchAndParseDashboard conn repoRef path = Git.fetchFile conn repoRef path <&> (>>= GitSync.yamlToDashboard)
 
 
@@ -4907,7 +4908,7 @@ gitSyncPushDashboard pid dashId = do
 
 
 -- | Render one dashboard to YAML, push it to the repo and record the new shas.
-pushDashboardToGit :: (IOE :> es, DB es, Log :> es, Time.Time :> es, W.HTTP :> es) => Git.GitConn -> GitSync.GitHubSync -> Projects.ProjectId -> Dashboards.DashboardVM -> Text -> Eff es ()
+pushDashboardToGit :: (DB es, IOE :> es, Log :> es, Time.Time :> es, W.HTTP :> es) => Git.GitConn -> GitSync.GitHubSync -> Projects.ProjectId -> Dashboards.DashboardVM -> Text -> Eff es ()
 pushDashboardToGit conn sync pid dash message = do
   teams <- ProjectMembers.getTeamsById pid dash.teams
   let schema = GitSync.buildSchemaWithMeta dash.schema dash.title (V.toList dash.tags) (map (.handle) teams)

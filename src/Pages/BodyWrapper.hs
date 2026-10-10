@@ -90,7 +90,7 @@ data ActivationProgress = ActivationProgress
   deriving stock (Show)
 
 
-activationProgress :: (Hasql.Hasql :> es) => Projects.ProjectId -> Bool -> Eff es ActivationProgress
+activationProgress :: Hasql.Hasql :> es => Projects.ProjectId -> Bool -> Eff es ActivationProgress
 activationProgress pid ingestionVerified = do
   rows :: [(Bool, Bool, Bool)] <-
     Hasql.interp

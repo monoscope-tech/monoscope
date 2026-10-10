@@ -1,4 +1,3 @@
-
 module Data.Effectful.Notify (
   -- * Effect
   Notify,

@@ -217,7 +217,7 @@ dismissChecklistH pid = do
 
 
 -- | Appends atomically, so concurrent step completions can't lose one.
-markStepCompleted :: (Hasql.Hasql :> es) => Projects.ProjectId -> Text -> Eff es ()
+markStepCompleted :: Hasql.Hasql :> es => Projects.ProjectId -> Text -> Eff es ()
 markStepCompleted pid = void . Projects.completeOnboardingStep pid
 
 
