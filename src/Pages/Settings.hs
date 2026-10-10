@@ -103,7 +103,7 @@ import Network.Minio qualified as Minio
 import Network.URI (parseURI, uriAuthority, uriRegName, uriScheme)
 import Network.Wreq qualified as Wreq
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, settingsContentTarget, withSettingsPage)
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), confirmModal_, connectionBadge_, copySourceAttr_, emptyState_, filterInputAttr_, formField_, headerRow_, iconBadgeLg_, keyboardActivateAttr_, localTimeFmt_, modalWith_, options_, paymentPlanPicker, sectionLabel_, settingsH2_, settingsSection_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), confirmModal_, connectionBadge_, copySourceAttr_, emptyState_, filterInputAttr_, formField_, headerRow_, iconBadgeLg_, keyboardActivateAttr_, localTimeFmt_, modalWith_, options_, paymentPlanPicker, searchInput_, sectionLabel_, settingsH2_, settingsSection_)
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Pkg.EmailTemplates qualified as ET
@@ -775,12 +775,7 @@ prometheusTargetsList pid cfgs = div_ [id_ "prometheus-targets", class_ "mt-4"] 
   if V.null cfgs
     then emptyState_ def{icon = Just "objects-column"} "Scrape your Prometheus endpoints" "Point Monoscope at any /metrics endpoint. We poll it on your schedule, parse the exposition format, and ingest the samples as metrics you can chart and alert on — grouped under the name you give each target. Use “Add target” to start."
     else do
-      input_
-        [ class_ "input input-bordered input-sm w-full mb-3"
-        , type_ "search"
-        , placeholder_ "Filter targets…"
-        , filterInputAttr_ ".itemsListItem in #prometheus-targets"
-        ]
+      searchInput_ "w-full mb-3" "Filter targets…" [filterInputAttr_ ".itemsListItem in #prometheus-targets"]
       div_ [class_ "flex flex-col gap-2"] $ V.forM_ cfgs (prometheusTargetRow pid)
 
 

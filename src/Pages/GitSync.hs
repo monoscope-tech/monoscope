@@ -22,7 +22,6 @@ import Data.Text qualified as T
 import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static (ask)
 import Lucid
-import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxDelete_, hxIndicator_, hxPost_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Dashboards qualified as Dashboards
@@ -33,7 +32,7 @@ import NeatInterpolation (text)
 import OddJobs.Job (createJob)
 import OpenTelemetry.Attributes qualified as Otel
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper, withSettingsPage)
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), confirmModal_, connectionBadge_, copyButton_, emptyState_, filterInputAttr_, formField_, formSelectField_, headerRow_, iconBadgeLg_, iconBadge_, installationSettingsLink_, primaryButton_, sectionLabel_, settingsH2_, settingsSection_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), confirmModal_, connectionBadge_, copyButton_, emptyState_, filterInputAttr_, searchInput_, formField_, formSelectField_, headerRow_, iconBadgeLg_, iconBadge_, installationSettingsLink_, primaryButton_, sectionLabel_, settingsH2_, settingsSection_)
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Git qualified as Git
 import Pkg.Metrics qualified as Metrics
@@ -571,15 +570,7 @@ githubAppReposH pid instIdParam = withSettingsPage pid "Integrations" \_ -> do
     -- Type-to-filter over a repo list. Only rendered once the list is long enough that scanning
     -- it is the slower option — an account with four repos does not need a search box.
     repoFilter_ :: Int -> Html ()
-    repoFilter_ n = when (n > 8) $ label_ [class_ "input input-sm w-full flex items-center gap-2"] do
-      faSprite_ "magnifying-glass" "regular" "w-3.5 h-3.5 text-iconNeutral shrink-0"
-      input_
-        [ type_ "search"
-        , class_ "grow"
-        , placeholder_ ("Filter " <> show n <> " repositories")
-        , Aria.label_ "Filter repositories"
-        , filterInputAttr_ ".repo-row"
-        ]
+    repoFilter_ n = when (n > 8) $ searchInput_ "w-full" ("Filter " <> show n <> " repositories") [filterInputAttr_ ".repo-row"]
 
 
 -- | Handle repo selection from GitHub App

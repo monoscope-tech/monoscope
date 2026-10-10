@@ -83,7 +83,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, mkPageCtx, s
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as SlackP
 import Pages.Bots.Utils qualified as BotUtils
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), PanelCfg (..), confirmModal_, dirtyFormSaveAttr_, emptyState_, formActionsModal_, formField_, formSelectField_, headerRow_, iconBadgeXs_, iconBadge_, infoBanner_, modalWith_, panel_, sectionLabel_, settingsH2_, settingsNavLink_, settingsSection_, tagInput_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), PanelCfg (..), confirmModal_, dirtyFormSaveAttr_, emptyState_, filterInputAttr_, searchInput_, formActionsModal_, formField_, formSelectField_, headerRow_, iconBadgeXs_, iconBadge_, infoBanner_, modalWith_, panel_, sectionLabel_, settingsH2_, settingsNavLink_, settingsSection_, tagInput_)
 import Pages.Settings qualified as Settings
 import Pkg.Components.Table (Table (..))
 import Pkg.Components.Table qualified as Table
@@ -990,9 +990,7 @@ teamPage pid team projMembers slackChannels discordChannels = do
       lazySection_ secId icon title searchPh url = div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
         div_ [class_ "flex items-center justify-between w-full p-4 border-b border-strokeWeak"] do
           span_ [class_ "flex items-center gap-2 text-sm font-semibold text-textStrong"] (faSprite_ icon "regular" "h-4 w-4" >> toHtml title)
-          label_ [class_ "input input-sm w-64 bg-fillWeak border-0"] do
-            faSprite_ "magnifying-glass" "regular" "h-3.5 w-3.5 text-iconNeutral"
-            input_ [type_ "text", placeholder_ searchPh, term "_" [text|on input show <tr/> in #${secId} when its textContent.toLowerCase() contains my value.toLowerCase()|]]
+          searchInput_ "w-64 bg-fillWeak border-0" searchPh [filterInputAttr_ $ "tr in #" <> secId]
         div_ [class_ "w-full max-h-96 overflow-y-auto", id_ secId] do
           unless (T.null url) $ a_ [hxGet_ url, hxTrigger_ "intersect once", hxTarget_ $ "#" <> secId, hxSwap_ "outerHTML"] ""
           emptyState_ def{icon = Just icon, size = ESCompact} ("No " <> T.toLower title <> " linked") ""

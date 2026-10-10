@@ -16,7 +16,7 @@ import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import NeatInterpolation (text)
-import Pages.Components (ModalCfg (..), filterInputAttr_, keyboardActivateAttr_, modalWith_, options_)
+import Pages.Components (ModalCfg (..), filterInputAttr_, searchInput_, keyboardActivateAttr_, modalWith_, options_)
 import Pkg.SchemaLearning.Catalog (FacetData (..), FacetValue (..))
 import Relude
 import Utils (displayTimestamp, faSprite_, formatUTC, onpointerdown_)
@@ -502,15 +502,7 @@ queryLibraryContent_ queryLibSaved queryLibRecent =
 
     searchBar_ :: Text -> Html ()
     searchBar_ label = div_ [class_ "flex gap-2 sticky top-0 px-2 py-2 bg-bgRaised border-b border-strokeWeak z-20"] do
-      label_ [class_ "flex h-9 flex-1 items-center gap-2 rounded-md bg-fillWeaker px-3 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-strokeBrand-weak"] do
-        faSprite_ "magnifying-glass" "regular" "h-3.5 w-3.5 opacity-70"
-        input_
-          [ type_ "search"
-          , class_ "min-w-0 grow bg-transparent text-sm outline-none"
-          , placeholder_ "Search"
-          , Aria.label_ $ "Search " <> T.toLower label <> " queries"
-          , filterInputAttr_ $ ".query-item in .dataLibContent" <> label
-          ]
+      searchInput_ "h-9 flex-1 border-0 bg-fillWeaker" ("Search " <> T.toLower label <> " queries") [filterInputAttr_ $ ".query-item in .dataLibContent" <> label]
       when (label == "Saved")
         $ label_ [class_ "tabs tabs-sm tabs-box tabs-outline bg-fillWeak text-textWeak shrink items-center h-8 cursor-pointer has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2"] do
           input_ [class_ "sr-only", type_ "checkbox", id_ "queryLibraryGroup", Aria.label_ "Show all team queries"]

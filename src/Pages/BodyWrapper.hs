@@ -704,15 +704,7 @@ projectsDropDown currProject projects = do
     do
       when (V.length projects > 1)
         $ div_ [class_ "p-1 pb-2"] do
-          div_ [class_ "relative"] do
-            div_ [class_ "absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"] $ faSprite_ "magnifying-glass" "regular" "h-4 w-4 text-textWeak"
-            input_
-              [ type_ "search"
-              , Aria.label_ "Search projects"
-              , class_ "pl-10 w-full bg-fillWeak rounded-lg border-0 py-2 px-3 text-sm"
-              , placeholder_ "Search..."
-              , Components.filterInputAttr_ ".project_item in #projectsContainer"
-              ]
+          Components.searchInput_ "w-full bg-fillWeak border-0" "Search projects" [Components.filterInputAttr_ ".project_item in #projectsContainer"]
       div_ [class_ "space-y-0.5 max-h-[50vh] overflow-y-auto", id_ "projectsContainer"] do
         projects & mapM_ \project -> do
           let isActive = currProject.id == project.id

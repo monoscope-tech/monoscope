@@ -1,4 +1,4 @@
-module Pages.Components (drawer_, drawerLoadingSkeleton_, tableSkeleton_, deferredShell_, Deferred (..), RefreshingDeferred (..), timeRefreshListener_, timeWindowVals_, withDeferredBody, emptyState_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), facetRail_, facetSection_, facetOption_, factGrid_, metaChip_, resizer_, detailTab_, httpTab_, tabPanel_, dateTime, localTimeFmt_, paymentPlanPicker, navBar, modal_, primaryButton_, headerRow_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, copyButton_, RowAction (..), rowActions_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, detailsClosedBelowAttr_, installationSettingsLink_, keyboardActivateAttr_, copySourceAttr_, filterInputAttr_, sparkline_, periodToggle_, abbreviateUnit, agoText, stackTrace_, durationMenu_, durationQuery, untilLabel) where
+module Pages.Components (drawer_, drawerLoadingSkeleton_, tableSkeleton_, deferredShell_, Deferred (..), RefreshingDeferred (..), timeRefreshListener_, timeWindowVals_, withDeferredBody, emptyState_, searchInput_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), facetRail_, facetSection_, facetOption_, factGrid_, metaChip_, resizer_, detailTab_, httpTab_, tabPanel_, dateTime, localTimeFmt_, paymentPlanPicker, navBar, modal_, primaryButton_, headerRow_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, copyButton_, RowAction (..), rowActions_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, detailsClosedBelowAttr_, installationSettingsLink_, keyboardActivateAttr_, copySourceAttr_, filterInputAttr_, sparkline_, periodToggle_, abbreviateUnit, agoText, stackTrace_, durationMenu_, durationQuery, untilLabel) where
 
 import Data.Default (Default (..))
 import Data.List (elemIndex, lookup)
@@ -69,23 +69,27 @@ emptyState_ cfg title subTxt =
       ESCompact -> ("max-w-sm my-2 p-4", "h-6 w-6 text-iconNeutral", "text-sm text-textWeak")
 
 
+-- | The search box: magnifying glass + @type=search@ input labelled @ph@. @extra@ sizes
+-- the wrapper; @attrs@ carry the behavior (a 'filterInputAttr_', a form name, htmx).
+searchInput_ :: Text -> Text -> [Attribute] -> Html ()
+searchInput_ extra ph attrs = label_ [class_ $ "input input-sm flex items-center gap-2 " <> extra] do
+  faSprite_ "magnifying-glass" "regular" "h-3.5 w-3.5 shrink-0 text-iconNeutral"
+  input_ $ [type_ "search", class_ "min-w-0 grow bg-transparent", placeholder_ ph, Aria.label_ ph] <> attrs
+
+
 -- | Shared shell for searchable facet trees. The content decides how filters change
 -- (query-editor operations in Explorer, URL parameters in inventories); search,
 -- accessibility, and disclosure markers stay identical.
 facetRail_ :: Maybe Text -> Text -> Text -> Maybe (Html ()) -> Html () -> Html ()
 facetRail_ elemId extraClass searchLabel actions content =
   div_ ([class_ $ "facet-rail flex flex-col gap-2 " <> extraClass, data_ "component" "facet-rail"] <> [id_ x | x <- maybeToList elemId]) do
-    label_ [class_ "input input-sm sticky top-0 z-10 flex h-9 w-[calc(100%-1rem)] mx-2 items-center gap-2 border-strokeStrong bg-bgBase"] do
-      faSprite_ "magnifying-glass" "regular" "h-3.5 w-3.5 text-iconNeutral"
-      input_
-        [ type_ "search"
-        , name_ "facet-search"
-        , class_ "grow py-1"
-        , placeholder_ searchLabel
-        , Aria.label_ searchLabel
-        , oninput_ "const root=this.closest('[data-component=\"facet-rail\"]'),q=this.value.toLowerCase();root.querySelectorAll('[data-component=\"facet-option\"]').forEach(el=>el.classList.toggle('hidden',!el.textContent.toLowerCase().includes(q)));root.querySelectorAll('[data-component=\"facet-section\"]').forEach(el=>el.classList.toggle('hidden',!el.textContent.toLowerCase().includes(q)))"
-        , onkeydown_ "if(event.key==='Escape'){this.value='';this.dispatchEvent(new Event('input',{bubbles:true}))}"
-        ]
+    searchInput_
+      "sticky top-0 z-10 h-9 w-[calc(100%-1rem)] mx-2 border-strokeStrong bg-bgBase"
+      searchLabel
+      [ name_ "facet-search"
+      , oninput_ "const root=this.closest('[data-component=\"facet-rail\"]'),q=this.value.toLowerCase();root.querySelectorAll('[data-component=\"facet-option\"]').forEach(el=>el.classList.toggle('hidden',!el.textContent.toLowerCase().includes(q)));root.querySelectorAll('[data-component=\"facet-section\"]').forEach(el=>el.classList.toggle('hidden',!el.textContent.toLowerCase().includes(q)))"
+      , onkeydown_ "if(event.key==='Escape'){this.value='';this.dispatchEvent(new Event('input',{bubbles:true}))}"
+      ]
     whenJust actions id
     content
 

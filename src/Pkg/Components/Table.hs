@@ -46,8 +46,7 @@ import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
-import NeatInterpolation (text)
-import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), detailsClosedBelowAttr_, emptyState_, facetOption_, facetRail_, facetSection_, keyboardActivateAttr_)
+import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), detailsClosedBelowAttr_, emptyState_, facetOption_, facetRail_, facetSection_, filterInputAttr_, keyboardActivateAttr_, searchInput_)
 import Relude
 import Utils (deleteParam, faSprite_, navTabAttrs, navTabStrip_, popoverPanel_, popoverTrigger_, toUriStr)
 
@@ -726,13 +725,9 @@ renderToolbar tbl =
 
 renderSearch :: Text -> Text -> SearchMode -> Html ()
 renderSearch elemID searchPlaceholder searchMode =
-  label_ [class_ "input input-sm flex w-full h-9 bg-transparent border border-strokeWeak shadow-none overflow-hidden items-center gap-2"] do
-    faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
-    input_
-      $ [type_ "text", class_ "grow max-md:text-base", placeholder_ searchPlaceholder, Aria.label_ searchPlaceholder]
-      <> case searchMode of
-        ServerSide url -> [name_ "search", id_ "search_box", hxTrigger_ "keyup changed delay:500ms", hxGet_ url, hxTarget_ "#rowsContainer", hxSwap_ "innerHTML", hxIndicator_ "#searchIndicator"]
-        ClientSide -> [term "_" [text|on input show .itemsListItem in #${elemID}_page when its textContent.toLowerCase() contains my value.toLowerCase()|]]
+  searchInput_ "w-full h-9 bg-transparent border-strokeWeak shadow-none max-md:text-base" searchPlaceholder case searchMode of
+    ServerSide url -> [name_ "search", id_ "search_box", hxTrigger_ "keyup changed delay:500ms", hxGet_ url, hxTarget_ "#rowsContainer", hxSwap_ "innerHTML", hxIndicator_ "#searchIndicator"]
+    ClientSide -> [filterInputAttr_ $ ".itemsListItem in #" <> elemID <> "_page"]
 
 
 renderSortMenu :: SortConfig -> Html ()

@@ -1982,15 +1982,7 @@ dashboardNewForm_ dg = form_
     div_ [class_ "flex max-h-48 shrink-0 flex-col gap-3 md:max-h-none md:w-72"] do
       div_ [class_ "flex flex-col gap-2 border-b pb-4"] do
         strong_ "Create dashboard"
-        label_ [class_ "input input-sm flex items-center "] do
-          faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
-          input_
-            [ type_ "search"
-            , class_ "grow pl-2"
-            , placeholder_ "Find a template"
-            , Aria.label_ "Find a dashboard template"
-            , filterInputAttr_ ".dashboardListItem in #dashListItemParent"
-            ]
+        Components.searchInput_ "" "Find a template" [filterInputAttr_ ".dashboardListItem in #dashListItemParent"]
       div_ [class_ "min-h-0 space-y-1 overflow-auto", id_ "dashListItemParent"] do
         renderDashboardListItem True "Blank dashboard" "" (Just "Start with an empty dashboard") (Just "cards-blank")
         forM_ dg.dashTemplates \dashTmpl ->
