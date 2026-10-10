@@ -115,7 +115,7 @@ processMessages msgs attrs =
           projectCaches <-
             liftIO $ HM.fromList <$> forM (ordNub $ (\(_, _, m) -> UUIDId m.projectId) <$> rMsgs) \pid ->
               (pid,)
-                <$> Cache.fetchWithCache appCtx.projectCache pid (fmap (fromMaybe Projects.defaultProjectCache) . Projects.projectCacheByIdIO appCtx.hasqlJobsPool)
+                <$> Cache.fetchWithCache appCtx.projectCache pid (Projects.projectCacheByIdIO appCtx.hasqlJobsPool)
 
           -- Track (ackId, raw) alongside each emitted span so we can map any
           -- per-row write poison back to the source message for DLQ routing.

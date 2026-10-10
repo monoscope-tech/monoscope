@@ -1433,9 +1433,8 @@ checkFreeTierUsageNotifications :: [Projects.ProjectId] -> UTCTime -> ATBackgrou
 checkFreeTierUsageNotifications pids now = forM_ pids \pid -> tryStep "free-tier-check" do
   whenJustM (Projects.projectById pid) \project -> when (Projects.isFreeTier project.paymentPlan) do
     -- Use the TTL-cached daily event count to avoid a full 24-hour count(*) scan.
-    cacheM <- Projects.projectCacheById pid
-    let count = maybe 0 (.dailyEventCount) cacheM :: Int
-        limit = fromInteger freeTierDailyMaxEvents
+    count <- (.dailyEventCount) <$> Projects.projectCacheById pid
+    let limit = fromInteger freeTierDailyMaxEvents
         exceeded = count >= limit
         warning = count >= (limit * 80) `div` 100
         eventName :: Text = if exceeded then "system.free_tier.exceeded" else "system.free_tier.warning"
@@ -2293,9 +2292,7 @@ safetyNetReprocess pid = do
   ctx <- ask @Config.AuthContext
   let cutoff = ctx.config.processedAtCutoff
       maxAgeSecs = fromIntegral ctx.config.hashUpdateMaxAgeSecs :: Double
-  projectCacheVal <- liftIO $ Cache.fetchWithCache ctx.projectCache pid \pid' -> do
-    mpjCache <- Projects.projectCacheByIdIO ctx.hasqlJobsPool pid'
-    pure $ fromMaybe Projects.defaultProjectCache mpjCache
+  projectCacheVal <- liftIO $ Cache.fetchWithCache ctx.projectCache pid (Projects.projectCacheByIdIO ctx.hasqlJobsPool)
   let caches = one (pid, projectCacheVal)
   -- Single page per tick (1000 rows); next hourly tick picks up any remainder.
   rows <-

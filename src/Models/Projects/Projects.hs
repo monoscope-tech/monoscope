@@ -5,7 +5,6 @@ module Models.Projects.Projects (
   pattern UserId,
   createUser,
   userIdByEmail,
-  createUserId,
   insertUser,
   userById,
   userByEmail,
@@ -134,7 +133,6 @@ module Models.Projects.Projects (
   newPersistentSessionId,
   -- Audit Log
   AuditEvent (..),
-  logAudit,
   logAuditS,
 )
 where
@@ -220,13 +218,9 @@ data User = User
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake User
 
 
-createUserId :: UUIDEff :> es => Eff es UserId
-createUserId = UserId <$> genUUID
-
-
 createUser :: (Time :> es, UUIDEff :> es) => Text -> Text -> Text -> Text -> Eff es User
 createUser firstName lastName picture email = do
-  uid <- createUserId
+  uid <- UserId <$> genUUID
   now <- currentTime
   pure
     $ User
@@ -426,12 +420,12 @@ data CreateProject = CreateProject
     via (GenericEntity '[Schema "projects", TableName "projects", PrimaryKey "id", FieldModifiers '[CamelToSnake]] CreateProject)
 
 
--- FIXME: We currently return an object with empty vectors when nothing was found.
-projectCacheById :: (DB es, Time :> es) => ProjectId -> Eff es (Maybe ProjectCache)
+projectCacheById :: (DB es, Time :> es) => ProjectId -> Eff es ProjectCache
 projectCacheById pid = do
   now <- currentTime
-  EHasql.interpOne
-    [HI.sql|
+  fromMaybe defaultProjectCache
+    <$> EHasql.interpOne
+      [HI.sql|
     select  coalesce(ARRAY_AGG(DISTINCT hosts ORDER BY hosts ASC),'{}') hosts,
             coalesce(ARRAY_AGG(DISTINCT endpoint_hashes ORDER BY endpoint_hashes ASC),'{}') endpoint_hashes,
             ( SELECT count(*)::bigint FROM otel_logs_and_spans
@@ -454,7 +448,7 @@ projectCacheById pid = do
        ) enp; |]
 
 
-projectCacheByIdIO :: OHasql.TracedPool -> ProjectId -> IO (Maybe ProjectCache)
+projectCacheByIdIO :: OHasql.TracedPool -> ProjectId -> IO ProjectCache
 projectCacheByIdIO hpool pid = runEff $ EHasql.runHasqlPool hpool $ runTime $ projectCacheById pid
 
 
@@ -1234,15 +1228,11 @@ isByosPlan = (== "bring your own storage") . T.toLower
 -- | Payment provider for a project. Stored authoritatively in the
 -- @billing_provider@ column (written by the webhook that knows which provider
 -- fired) rather than guessed at every read from the shape of @sub_id@.
-data BillingProvider = StripeProvider | LemonSqueezyProvider | NoBillingProvider
+-- 'NoBillingProvider' is first so the generic 'Default' picks it.
+data BillingProvider = NoBillingProvider | StripeProvider | LemonSqueezyProvider
   deriving stock (Eq, Generic, Read, Show)
-  deriving anyclass (NFData)
+  deriving anyclass (Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "" BillingProvider
-
-
--- Semantic default is NoBillingProvider; generic Default would pick the first constructor.
-instance Default BillingProvider where
-  def = NoBillingProvider
 
 
 -- | Provider inferred from the shape of @sub_id@. Only used to backfill the
@@ -1445,15 +1435,13 @@ resolveMeterTarget cfg kind = case cfg.provider of
   NoBillingProvider -> Left ProviderUnusable
   -- Stripe meter events key off customer + event_name; the subscription item
   -- id is not part of the call, so no per-meter item is needed.
-  StripeProvider -> maybe (Left NoStripeCustomer) (Right . (`StripeMeter` stripeMeterEventName kind)) cfg.stripeCustomerId
+  StripeProvider -> maybeToRight NoStripeCustomer ((`StripeMeter` stripeMeterEventName kind) <$> cfg.stripeCustomerId)
   -- LS usage records are addressed ONLY by subscription item, and an LS
   -- subscription carries exactly one — the API cannot add a second. So every
   -- dimension rides the events item, converted into that meter's units first by
   -- 'lemonSqueezyEventsEquivalent'. The price the customer pays is the intended
   -- one; only the unit it is expressed in differs.
-  LemonSqueezyProvider -> case Map.lookup kind cfg.subItemIds of
-    Just sid -> Right (LemonSqueezyMeter sid)
-    Nothing -> maybe (Left NoSubscriptionItem) (Right . LemonSqueezyEventsItem) cfg.eventsSubItemId
+  LemonSqueezyProvider -> maybeToRight NoSubscriptionItem (LemonSqueezyMeter <$> Map.lookup kind cfg.subItemIds <|> LemonSqueezyEventsItem <$> cfg.eventsSubItemId)
 
 
 -- | Per-meter Lemon Squeezy subscription items. Empty for every project until
@@ -1702,10 +1690,6 @@ data AuditEvent
   deriving (Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "AE" AuditEvent
 
 
-logAudit :: DB es => ProjectId -> AuditEvent -> Maybe UserId -> Maybe Text -> Maybe AE.Value -> Eff es ()
-logAudit pid event actorId actorEmail metadataM =
-  EHasql.interpExecute_ [HI.sql| INSERT INTO projects.audit_log (project_id, event, actor_id, actor_email, metadata) VALUES (#{pid}, #{event}, #{actorId}, #{actorEmail}, #{HI.AsJsonb <$> metadataM}) |]
-
-
 logAuditS :: DB es => ProjectId -> AuditEvent -> Session -> Maybe AE.Value -> Eff es ()
-logAuditS pid event sess = logAudit pid event (Just sess.user.id) (Just $ CI.original sess.user.email)
+logAuditS pid event sess metadataM =
+  EHasql.interpExecute_ [HI.sql| INSERT INTO projects.audit_log (project_id, event, actor_id, actor_email, metadata) VALUES (#{pid}, #{event}, #{sess.user.id}, #{CI.original sess.user.email}, #{HI.AsJsonb <$> metadataM}) |]

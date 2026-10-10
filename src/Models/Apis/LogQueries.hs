@@ -111,7 +111,7 @@ data SDKTypes
   | SDKUnknown
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SDKTypes
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake SDKTypes
   deriving (FromField, ToField) via WrappedEnumShow SDKTypes
 
 

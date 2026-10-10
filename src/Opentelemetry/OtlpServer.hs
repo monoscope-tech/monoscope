@@ -351,8 +351,7 @@ fetchProjectCache :: MonadIO m => AuthContext -> Projects.ProjectId -> m Project
 fetchProjectCache appCtx pid =
   liftIO
     $ Cache.fetchWithCache appCtx.projectCache pid
-    $ fmap (fromMaybe Projects.defaultProjectCache)
-    . Projects.projectCacheByIdIO appCtx.hasqlJobsPool
+    $ Projects.projectCacheByIdIO appCtx.hasqlJobsPool
 
 
 -- | Boundary adapter: convert a 'WriteFailure' to a gRPC INTERNAL error.
