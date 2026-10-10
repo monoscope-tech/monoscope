@@ -2,6 +2,7 @@
 
 module Models.Telemetry.Telemetry (
   otelRecordByProjectAndId,
+  methodStyle,
   getSpanRecordsByTraceId,
   getSpanRecordsByTraceIds,
   convertOtelLogsAndSpansToSpanRecord,

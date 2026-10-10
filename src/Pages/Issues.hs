@@ -1258,7 +1258,7 @@ issueAggregate_ v@IssueView{..} = do
       sideBySide_ (issueVolumeChart_ v "Error Frequency")
         $ whenJust ((,) <$> d.requestMethod <*> d.requestPath) \(method, path) ->
           contextCard_ "p-4" "Request" do
-            span_ [class_ $ "relative cbadge-sm badge-" <> method <> " whitespace-nowrap"] $ toHtml method
+            span_ [class_ $ "relative cbadge-sm whitespace-nowrap " <> Telemetry.methodStyle method] $ toHtml method
             span_ [class_ "ml-2 text-sm text-textWeak break-all"] $ toHtml path
     Just (Issues.QueryAlertP d) -> do
       let below = d.thresholdType == Issues.Below
@@ -1286,7 +1286,7 @@ issueAggregate_ v@IssueView{..} = do
               "View monitor"
     Just (Issues.ApiChangeP d) -> do
       div_ [class_ "flex flex-wrap items-center gap-3"] do
-        span_ [class_ $ "cbadge-sm whitespace-nowrap badge-" <> d.endpointMethod] $ toHtml d.endpointMethod
+        span_ [class_ $ "cbadge-sm whitespace-nowrap " <> Telemetry.methodStyle d.endpointMethod] $ toHtml d.endpointMethod
         span_ [class_ "font-mono bg-fillWeaker px-2 py-1 rounded text-sm text-textStrong"] $ toHtml d.endpointPath
         span_ [class_ "flex items-center gap-1.5 text-sm text-textWeak"] do
           faSprite_ "server" "regular" "h-3 w-3"
@@ -1470,7 +1470,7 @@ eventCard_ IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflow-cli
                          shellQuote t = "'" <> T.replace "'" "'\\''" t <> "'"
                      div_ [class_ "max-md:px-3 px-4 space-y-3"] do
                        div_ [class_ "flex items-center gap-2 min-w-0"] do
-                         span_ [class_ $ "cbadge-sm badge-" <> method] $ toHtml method
+                         span_ [class_ $ "cbadge-sm " <> Telemetry.methodStyle method] $ toHtml method
                          span_ [class_ "font-mono text-sm text-textStrong break-all"] $ toHtml url
                        forM_ ([("Query string", query), ("Headers", headers)] :: [(Text, [(Text, Text)])]) \(lbl, rows) -> unless (null rows) do
                          div_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide mb-1"] $ toHtml lbl
