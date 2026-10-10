@@ -122,7 +122,7 @@ import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Time.LocalTime (timeOfDayToTime, timeToTimeOfDay)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.ToField (ToField (..))
-import Effectful (Eff, IOE, type (:>))
+import Effectful (Eff, type (:>))
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Fmt (commaizeF, fmt)
@@ -750,7 +750,7 @@ freeTierUsageBanner pid = \case
   FreeTierOk -> pass
 
 
-checkFreeTierStatus :: (Hasql.Hasql :> es, IOE :> es, Time :> es) => Projects.ProjectId -> Text -> Eff es FreeTierStatus
+checkFreeTierStatus :: (Hasql.Hasql :> es, Time :> es) => Projects.ProjectId -> Text -> Eff es FreeTierStatus
 checkFreeTierStatus pid paymentPlan =
   if Projects.isFreeTier paymentPlan
     then do

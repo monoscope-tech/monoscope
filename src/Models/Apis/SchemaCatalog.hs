@@ -294,7 +294,7 @@ getSummary keysM pid =
 -- forever). 'scrubNulValue' strips NULs throughout the doc; if the sanitised
 -- batch still fails, we fall back to per-row inserts so a single hostile
 -- project can't block the rest.
-upsertSummary :: DB es => V.Vector (Projects.ProjectId, Catalog.SummaryDoc) -> Eff es ()
+upsertSummary :: (IOE :> es, DB es) => V.Vector (Projects.ProjectId, Catalog.SummaryDoc) -> Eff es ()
 upsertSummary rows0 = unless (V.null rows0) $ do
   let rows = V.map (second asScrubbedJsonb) rows0
   whenLeftM_ (tryAny (batch rows)) \_ -> V.forM_ rows (void . tryAny . batch . V.singleton)

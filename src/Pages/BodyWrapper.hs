@@ -10,7 +10,7 @@ import Data.Time (UTCTime, diffDays, diffUTCTime, utctDay)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.Tuple.Extra (fst3, uncurry3)
 import Data.Vector qualified as V
-import Effectful (Eff, IOE, (:>))
+import Effectful (Eff, (:>))
 import Effectful.Concurrent.Async (concurrently)
 import Effectful.Reader.Static qualified as EffReader
 import Effectful.Time qualified as Time
@@ -90,7 +90,7 @@ data ActivationProgress = ActivationProgress
   deriving stock (Show)
 
 
-activationProgress :: (Hasql.Hasql :> es, IOE :> es) => Projects.ProjectId -> Bool -> Eff es ActivationProgress
+activationProgress :: (Hasql.Hasql :> es) => Projects.ProjectId -> Bool -> Eff es ActivationProgress
 activationProgress pid ingestionVerified = do
   rows :: [(Bool, Bool, Bool)] <-
     Hasql.interp

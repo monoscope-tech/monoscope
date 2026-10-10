@@ -57,7 +57,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
 import Data.UUID qualified as UUID
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
-import Effectful (Eff)
+import Effectful (Eff, IOE, (:>))
 import Hasql.Interpolate qualified as HI
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
@@ -638,7 +638,7 @@ data DeliveryOutcome
 -- | An expired send lease is ambiguous, not permission to post another message.
 -- Its owner can still confirm it, or a Slack event can reconcile its root.
 -- Only the first unsettled delivery for a root is eligible, across all workers.
-claimSlackDeliveries :: DB es => UTCTime -> Eff es [SlackDelivery]
+claimSlackDeliveries :: (IOE :> es, DB es) => UTCTime -> Eff es [SlackDelivery]
 claimSlackDeliveries = decodeClaimed . claimSlackDeliveriesTx
 
 
@@ -649,7 +649,7 @@ data IncidentDecodeError = InvalidStoredSlackTimestamp
 
 -- | A stored timestamp that no longer parses aborts the claim rather than
 -- leasing a delivery whose thread coordinates cannot be trusted.
-decodeClaimed :: (DB es, Traversable f, Traversable t) => Tx.Transaction (t (f Text)) -> Eff es (t (f SlackTimestamp))
+decodeClaimed :: (IOE :> es, DB es, Traversable f, Traversable t) => Tx.Transaction (t (f Text)) -> Eff es (t (f SlackTimestamp))
 decodeClaimed claim = do
   decoded <- Hasql.transaction TxS.ReadCommitted TxS.Write do
     stored <- claim
@@ -795,7 +795,7 @@ data IncidentSearchF timestamp = IncidentSearch
   deriving anyclass (HI.DecodeRow)
 
 
-claimIncidentSearches :: DB es => UTCTime -> Eff es [IncidentSearch]
+claimIncidentSearches :: (IOE :> es, DB es) => UTCTime -> Eff es [IncidentSearch]
 claimIncidentSearches now =
   decodeClaimed
     $ queryTx @[IncidentSearchF Text]

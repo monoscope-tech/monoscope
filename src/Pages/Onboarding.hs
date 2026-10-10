@@ -27,7 +27,7 @@ import Data.Effectful.Wreq (HTTP)
 import Data.Effectful.Wreq qualified as W (get, responseBody)
 import Data.Text qualified as T
 import Data.Vector qualified as V (Vector, fromList, (!?))
-import Effectful (Eff, IOE, (:>))
+import Effectful (Eff, (:>))
 import Effectful.Reader.Static (ask)
 import Effectful.State.Static.Local qualified as State
 import Hasql.Interpolate qualified as HI
@@ -217,7 +217,7 @@ dismissChecklistH pid = do
 
 
 -- | Appends atomically, so concurrent step completions can't lose one.
-markStepCompleted :: (Hasql.Hasql :> es, IOE :> es) => Projects.ProjectId -> Text -> Eff es ()
+markStepCompleted :: (Hasql.Hasql :> es) => Projects.ProjectId -> Text -> Eff es ()
 markStepCompleted pid = void . Projects.completeOnboardingStep pid
 
 

@@ -38,7 +38,7 @@ module Data.Effectful.Hasql (
 ) where
 
 import Control.Concurrent (threadDelay)
-import Control.Exception (ErrorCall (..), throwIO)
+import Control.Exception (ErrorCall (..))
 import Control.Exception.Annotated qualified as Ann
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
@@ -49,6 +49,7 @@ import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
+import Effectful.Exception qualified as EE
 import Effectful.Labeled (Labeled, labeled)
 import Effectful.Log (Log)
 import Effectful.Log qualified as Log
@@ -267,48 +268,48 @@ runHasqlPool pool = interpret \_ -> \case
 
 -- | Run a `Session`, throwing `HasqlException` on `UsageError`. Mirrors
 -- `Hasql.Pool.use` — opaque sessions get the generic `hasql.session <db>` span.
-use :: (Hasql :> es, IOE :> es) => Session a -> Eff es a
-use s = send (UseSession s) >>= either (liftIO . throwIO . HasqlException) pure
+use :: (Hasql :> es) => Session a -> Eff es a
+use s = send (UseSession s) >>= either (EE.throwIO . HasqlException) pure
 
 
-statement :: (Hasql :> es, IOE :> es) => params -> Statement params a -> Eff es a
-statement p st = send (UseStatement p st) >>= either (liftIO . throwIO . HasqlException) pure
+statement :: (Hasql :> es) => params -> Statement params a -> Eff es a
+statement p st = send (UseStatement p st) >>= either (EE.throwIO . HasqlException) pure
 
 
 -- | Run a `hasql-interpolate` `Sql` value as a prepared statement.
-interp :: (HI.DecodeResult a, Hasql :> es, IOE :> es) => HI.Sql -> Eff es a
+interp :: (HI.DecodeResult a, Hasql :> es) => HI.Sql -> Eff es a
 interp s = statement () (HI.interp True s)
 
 
 -- | TimeFusion plans named prepared statements before seeing parameters, missing partition
 -- pruning and cache admission. PostgreSQL still needs preparation for parameter inference.
-interpTimefusion :: (HI.DecodeResult a, Hasql :> es, IOE :> es, Labeled "timefusion" Hasql :> es) => Bool -> HI.Sql -> Eff es a
+interpTimefusion :: (HI.DecodeResult a, Hasql :> es, Labeled "timefusion" Hasql :> es) => Bool -> HI.Sql -> Eff es a
 interpTimefusion useTf = withHasqlTimefusion useTf . statement () . HI.interp (not useTf)
 
 
 -- | Run a query expecting at most one row.
-interpOne :: (HI.DecodeRow a, Hasql :> es, IOE :> es) => HI.Sql -> Eff es (Maybe a)
+interpOne :: (HI.DecodeRow a, Hasql :> es) => HI.Sql -> Eff es (Maybe a)
 interpOne s = listToMaybe <$> interp s
 
 
 -- | Decode a single JSON column, dropping both wrappers the call sites repeat.
 -- The decoder comes from @Pkg.DeriveUtils@'s @Aeson@ instance, so the constraint
 -- is stated rather than imported — this module stays free of that dependency.
-interpOneJson :: (HI.DecodeRow (HI.OneColumn (Aeson a)), Hasql :> es, IOE :> es) => HI.Sql -> Eff es (Maybe a)
+interpOneJson :: (HI.DecodeRow (HI.OneColumn (Aeson a)), Hasql :> es) => HI.Sql -> Eff es (Maybe a)
 interpOneJson s = fmap (\(HI.OneColumn (Aeson value)) -> value) <$> interpOne s
 
 
 -- | Demand a row the caller cannot proceed without. @what@ names the read or
 -- write, so the failure says which statement returned nothing.
-orThrow :: IOE :> es => Text -> Eff es (Maybe a) -> Eff es a
-orThrow what = (>>= maybe (liftIO $ throwIO $ ErrorCall $ toString what <> " returned no row") pure)
+orThrow :: Text -> Eff es (Maybe a) -> Eff es a
+orThrow what = (>>= maybe (EE.throwIO $ ErrorCall $ toString what <> " returned no row") pure)
 
 
-interpOneOrThrow :: (HI.DecodeRow a, Hasql :> es, IOE :> es) => Text -> HI.Sql -> Eff es a
+interpOneOrThrow :: (HI.DecodeRow a, Hasql :> es) => Text -> HI.Sql -> Eff es a
 interpOneOrThrow what = orThrow what . interpOne
 
 
-interpOneJsonOrThrow :: (HI.DecodeRow (HI.OneColumn (Aeson a)), Hasql :> es, IOE :> es) => Text -> HI.Sql -> Eff es a
+interpOneJsonOrThrow :: (HI.DecodeRow (HI.OneColumn (Aeson a)), Hasql :> es) => Text -> HI.Sql -> Eff es a
 interpOneJsonOrThrow what = orThrow what . interpOneJson
 
 
@@ -328,12 +329,12 @@ executeTx s = void (queryTx s :: Tx.Transaction HI.RowsAffected)
 
 
 -- | Run an INSERT/UPDATE/DELETE and return the number of rows affected.
-interpExecute :: (Hasql :> es, IOE :> es) => HI.Sql -> Eff es Int64
+interpExecute :: (Hasql :> es) => HI.Sql -> Eff es Int64
 interpExecute s = HI.getRowsAffected <$> interp s
 
 
 -- | Run an INSERT/UPDATE/DELETE, discarding the row count.
-interpExecute_ :: (Hasql :> es, IOE :> es) => HI.Sql -> Eff es ()
+interpExecute_ :: (Hasql :> es) => HI.Sql -> Eff es ()
 interpExecute_ s = void $ interpExecute s
 
 
@@ -349,19 +350,19 @@ guardWriteTx TxS.Write tx = Tx.sql "SET LOCAL idle_in_transaction_session_timeou
 guardWriteTx TxS.Read tx = tx
 
 
-transaction :: (Hasql :> es, IOE :> es) => TxS.IsolationLevel -> TxS.Mode -> Tx.Transaction a -> Eff es a
+transaction :: (Hasql :> es) => TxS.IsolationLevel -> TxS.Mode -> Tx.Transaction a -> Eff es a
 transaction iso mode tx = use (TxS.transaction iso mode (guardWriteTx mode tx))
 
 
 -- | Like 'session' but carries a caller-chosen span name + extra attributes.
-labeledSession :: (Hasql :> es, IOE :> es) => Text -> HM.HashMap Text Attribute -> Session a -> Eff es a
+labeledSession :: (Hasql :> es) => Text -> HM.HashMap Text Attribute -> Session a -> Eff es a
 labeledSession name attrs s =
-  send (UseLabeledSession name attrs s) >>= either (liftIO . throwIO . HasqlException) pure
+  send (UseLabeledSession name attrs s) >>= either (EE.throwIO . HasqlException) pure
 
 
 -- | Like 'transaction' but tags the span with a name describing the unit of work.
 labeledTransaction
-  :: (Hasql :> es, IOE :> es)
+  :: Hasql :> es
   => Text -> TxS.IsolationLevel -> TxS.Mode -> Tx.Transaction a -> Eff es a
 labeledTransaction name iso mode tx = labeledSession name mempty (TxS.transaction iso mode (guardWriteTx mode tx))
 

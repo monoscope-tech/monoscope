@@ -271,7 +271,7 @@ getGitHubCredentials pid = Hasql.interp (selectFrom @GitHubCredential <> [HI.sql
 
 
 -- | One credential, with its PAT decrypted.
-getGitHubCredential :: (DB es, Log :> es) => ByteString -> ProjectId -> GitHubCredentialId -> Eff es (Maybe GitHubCredential)
+getGitHubCredential :: (IOE :> es, DB es, Log :> es) => ByteString -> ProjectId -> GitHubCredentialId -> Eff es (Maybe GitHubCredential)
 getGitHubCredential encKey pid cid =
   Hasql.interp (selectFrom @GitHubCredential <> [HI.sql| WHERE project_id = #{pid} AND id = #{cid} |])
     >>= maybe (pure Nothing) (decryptedOr "credential" pid . decryptAccessToken encKey)
@@ -298,7 +298,7 @@ getGitHubSync pid =
     (selectFrom @GitHubSync <> [HI.sql| WHERE project_id = #{pid} |])
 
 
-getGitHubSyncDecrypted :: (DB es, Log :> es) => ByteString -> ProjectId -> Eff es (Maybe GitHubSync)
+getGitHubSyncDecrypted :: (IOE :> es, DB es, Log :> es) => ByteString -> ProjectId -> Eff es (Maybe GitHubSync)
 getGitHubSyncDecrypted encKey pid =
   getGitHubSync pid >>= maybe (pure Nothing) (decryptedOr "sync" pid . decryptAccessToken encKey)
 

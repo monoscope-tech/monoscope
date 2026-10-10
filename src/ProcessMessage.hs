@@ -93,7 +93,7 @@ import Utils (b64ToJson, freeTierDailyMaxEvents, jsonToMap, nestedJsonFromDotNot
 
 
 processMessages
-  :: (DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Tracing :> es)
+  :: (IOE :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Tracing :> es)
   => [(Text, ByteString)]
   -> HM.HashMap Text Text
   -> Eff es (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))

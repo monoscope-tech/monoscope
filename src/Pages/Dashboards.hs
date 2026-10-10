@@ -1317,7 +1317,7 @@ updateTabBySlug slug f dash = dash & #tabs %~ fmap (map updateTab)
     updateTab tab = if slugify tab.name == slug then f tab else tab
 
 
-getDashAndVM :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, Wreq.HTTP :> es) => Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Eff es (Dashboards.DashboardVM, Dashboards.Dashboard)
+getDashAndVM :: (IOE :> es, DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, Wreq.HTTP :> es) => Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Eff es (Dashboards.DashboardVM, Dashboards.Dashboard)
 getDashAndVM pid dashId fileM = do
   appCtx <- ask @AuthContext
   templates <- getDashboardTemplates appCtx.config

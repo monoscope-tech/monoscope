@@ -143,7 +143,7 @@ usesTimefusionBackend enableTimefusionReads = \case
   _ -> enableTimefusionReads
 
 
-queryMetrics :: (DB es, Effectful.Error.Static.Error ServerError :> es, Effectful.Reader.Static.Reader AuthContext :> es, Log :> es, Time.Time :> es, Tracing :> es) => M Text -> M DataType -> M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> M BinDensity -> [(Text, Maybe Text)] -> Eff es MetricsData
+queryMetrics :: (IOE :> es, DB es, Effectful.Error.Static.Error ServerError :> es, Effectful.Reader.Static.Reader AuthContext :> es, Log :> es, Time.Time :> es, Tracing :> es) => M Text -> M DataType -> M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> M BinDensity -> [(Text, Maybe Text)] -> Eff es MetricsData
 queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (Utils.nonEmptyT -> queryM) (Utils.nonEmptyT -> querySQLM) (Utils.nonEmptyT -> sinceM) (Utils.nonEmptyT -> fromM) (Utils.nonEmptyT -> toM) (Utils.nonEmptyT -> sourceM) binDensityM allParams = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   now <- Time.currentTime
@@ -173,7 +173,7 @@ queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (Utils.nonEmptyT -> q
 
 -- | Run a parsed chart query, either through the caller's raw SQL template or
 -- the KQL-generated query.
-runQueryAST :: (DB es, Log :> es, Time.Time :> es, Tracing :> es) => AuthContext -> Maybe Text -> DataType -> Projects.ProjectId -> Maybe Sources -> BinDensity -> Maybe Text -> Maybe Text -> Bool -> [Section] -> Text -> Maybe Text -> M.Map Text Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> Eff es MetricsData
+runQueryAST :: (IOE :> es, DB es, Log :> es, Time.Time :> es, Tracing :> es) => AuthContext -> Maybe Text -> DataType -> Projects.ProjectId -> Maybe Sources -> BinDensity -> Maybe Text -> Maybe Text -> Bool -> [Section] -> Text -> Maybe Text -> M.Map Text Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> Eff es MetricsData
 runQueryAST authCtx dbSource respDataType pid source binDensity environment service liveRange queryAST queryM querySQLM mappngSQL now fromD toD = do
   let scope = mkScopedQuery pid (fromD, toD) environment service
       sqlQueryCfg =
@@ -213,7 +213,7 @@ runQueryAST authCtx dbSource respDataType pid source binDensity environment serv
 
 -- | Both JSON and streaming raw SQL use exactly the same bounds and cache key.
 -- Only the leader emits partial rows; followers receive the complete shared result.
-runRawQuery :: DB es => AuthContext -> Maybe Text -> DataType -> SqlQueryCfg -> [Section] -> Text -> Text -> M.Map Text Text -> Bool -> Maybe (MetricsData -> IO ()) -> Eff es MetricsData
+runRawQuery :: (IOE :> es, DB es) => AuthContext -> Maybe Text -> DataType -> SqlQueryCfg -> [Section] -> Text -> Text -> M.Map Text Text -> Bool -> Maybe (MetricsData -> IO ()) -> Eff es MetricsData
 runRawQuery authCtx dbSource decoder cfg ast kql template mapping liveRange progress = do
   let endpoint = Utils.nonEmptyT $ M.lookup "var-endpointHash" mapping
       bounds = case (endpoint, liveRange, cfg.dateRange) of
@@ -338,7 +338,7 @@ isScalarSummarize = any \case
 
 -- | Execute query with caching support for timeseries queries
 queryMetricsWithCache
-  :: (DB es, Log :> es, Time.Time :> es, Tracing :> es)
+  :: (IOE :> es, DB es, Log :> es, Time.Time :> es, Tracing :> es)
   => AuthContext
   -> Maybe Text
   -> DataType
@@ -371,7 +371,7 @@ queryMetricsWithCache authCtx dbSource respDataType pid source queryAST sqlQuery
 -- | Shared cache policy for complete and streaming responses. Only successful
 -- complete queries advance the cache watermark; progress is never persisted.
 queryMetricsWithCacheUsing
-  :: (DB es, Time.Time :> es)
+  :: (IOE :> es, DB es, Time.Time :> es)
   => (SqlQueryCfg -> [Section] -> Maybe (MetricsData -> IO ()) -> Eff es MetricsData)
   -> Maybe (MetricsData -> IO ())
   -> DataType

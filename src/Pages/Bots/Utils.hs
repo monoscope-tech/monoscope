@@ -15,7 +15,7 @@ import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
-import Effectful (Eff, (:>))
+import Effectful (IOE, Eff, (:>))
 import Effectful.Error.Static (Error, throwError)
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
@@ -291,15 +291,15 @@ data Channel = Channel
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "channel", DAE.CamelToSnake]] Channel
 
 
-processAIQuery :: (DB es, ELLM.LLM :> es, HTTP :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Maybe EnvConfig -> Bool -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe (UUIDId "conversation") -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
+processAIQuery :: (IOE :> es, DB es, ELLM.LLM :> es, HTTP :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Maybe EnvConfig -> Bool -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe (UUIDId "conversation") -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
 processAIQuery sourceConfig useTf = processAIQueryWithMode sourceConfig useTf AI.InteractiveReadOnly
 
 
-processActionableAIQuery :: (DB es, ELLM.LLM :> es, HTTP :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Maybe EnvConfig -> Bool -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe (UUIDId "conversation") -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
+processActionableAIQuery :: (IOE :> es, DB es, ELLM.LLM :> es, HTTP :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Maybe EnvConfig -> Bool -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe (UUIDId "conversation") -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
 processActionableAIQuery sourceConfig useTf = processAIQueryWithMode sourceConfig useTf AI.InteractiveWithActions
 
 
-processAIQueryWithMode :: (DB es, ELLM.LLM :> es, HTTP :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Maybe EnvConfig -> Bool -> AI.InvocationMode -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe (UUIDId "conversation") -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
+processAIQueryWithMode :: (IOE :> es, DB es, ELLM.LLM :> es, HTTP :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Maybe EnvConfig -> Bool -> AI.InvocationMode -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe (UUIDId "conversation") -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
 processAIQueryWithMode sourceConfig useTf invocationMode access pid userQuery conversationId model apiKey = do
   AI.requireAgentAccess access pid
   now <- Time.currentTime
@@ -523,7 +523,7 @@ botReplyPayload = \case
 -- differs per platform *and* per call site: Slack response_url vs chat.postMessage,
 -- Discord interaction followup, Twilio).
 runBotQuery
-  :: (DB es, ELLM.LLM :> es, HTTP :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es)
+  :: (IOE :> es, DB es, ELLM.LLM :> es, HTTP :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es)
   => BotType
   -> (BotReply -> Eff es ())
   -> EnvConfig
@@ -592,7 +592,7 @@ runBotQuery target deliver envCfg access pid userQuery resolveThread =
 -- @backfill@ is the only platform-specific part: it fetches the platform's
 -- messages and classifies their roles (@Nothing@ = fetch failed).
 withBotThread
-  :: (DB es, Error ServerError :> es, Log :> es, Time.Time :> es)
+  :: (IOE :> es, DB es, Error ServerError :> es, Log :> es, Time.Time :> es)
   => BotType
   -> Projects.ProjectId
   -> UUIDId "conversation"
@@ -618,7 +618,7 @@ withBotThread target pid convId convType meta backfill = do
 -- | Resolve a dashboard id to its on-disk template, scoped to @pid@. The id
 -- arrives inside client-controlled payloads (component custom_id, message
 -- body), so an unscoped lookup would render another tenant's dashboard.
-withDashboardTemplate :: DB es => Projects.ProjectId -> Text -> (Dashboards.Dashboard -> Eff es ()) -> Eff es ()
+withDashboardTemplate :: (IOE :> es, DB es) => Projects.ProjectId -> Text -> (Dashboards.Dashboard -> Eff es ()) -> Eff es ()
 withDashboardTemplate pid dashboardId act = whenJust (idFromText dashboardId) \did ->
   whenJustM (Dashboards.getDashboardByProjectId pid did) \dashboardVM -> do
     dashboardM <- liftIO $ Dashboards.readDashboardFile "static/public/dashboards" (toString $ fromMaybe "_overview.yaml" dashboardVM.baseTemplate)

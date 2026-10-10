@@ -180,7 +180,7 @@ reportDayLabels zone startTime endTime =
 
 -- | Collect once per report; each optional source preserves absence versus failure.
 collectSystemReport
-  :: (Concurrent :> es, DB es, Labeled "timefusion" Hasql :> es, Log :> es, Reader AuthContext :> es)
+  :: (IOE :> es, Concurrent :> es, DB es, Labeled "timefusion" Hasql :> es, Log :> es, Reader AuthContext :> es)
   => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es Report.ReportSnapshot
 collectSystemReport pid start end = do
   ctx <- ask @AuthContext

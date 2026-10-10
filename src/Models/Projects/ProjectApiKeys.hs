@@ -29,7 +29,7 @@ import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, G
 import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.ToField (ToField)
-import Effectful (Eff, type (:>))
+import Effectful (IOE, Eff, type (:>))
 import Effectful.Log (Log)
 import Effectful.Reader.Static qualified as Effectful
 import Effectful.Time (Time)
@@ -120,7 +120,7 @@ getProjectApiKey kid = Hasql.interp (selectFrom @ProjectApiKey <> [HI.sql| WHERE
 -- nothing for 17 days behind this @Nothing@ while its subscription kept billing.
 -- The log is emitted on the cache miss, so a rejected key costs one line per key
 -- per TTL rather than one per request.
-getProjectIdByApiKey :: (DB es, Effectful.Reader Config.AuthContext :> es, Log :> es) => Text -> Eff es (Maybe Projects.ProjectId)
+getProjectIdByApiKey :: (IOE :> es, Effectful.Reader Config.AuthContext :> es, Log :> es) => Text -> Eff es (Maybe Projects.ProjectId)
 getProjectIdByApiKey projectKey = do
   appCtx <- Effectful.ask @Config.AuthContext
   liftIO (Cache.lookup appCtx.projectKeyCache projectKey) >>= \case
@@ -150,7 +150,7 @@ getProjectIdByApiKey projectKey = do
       pure pidM
 
 
-projectIdsByProjectApiKeys :: (DB es, Effectful.Reader Config.AuthContext :> es, Log :> es) => V.Vector Text -> Eff es (V.Vector (Text, Projects.ProjectId))
+projectIdsByProjectApiKeys :: (IOE :> es, Effectful.Reader Config.AuthContext :> es, Log :> es) => V.Vector Text -> Eff es (V.Vector (Text, Projects.ProjectId))
 projectIdsByProjectApiKeys projectKeys =
   V.catMaybes <$> forM projectKeys \key -> fmap (key,) <$> getProjectIdByApiKey key
 
