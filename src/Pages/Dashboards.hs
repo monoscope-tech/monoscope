@@ -1851,10 +1851,12 @@ widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = do
           , service = session.service
           }
 
-  let queryMonitor = (Alerts.convertToQueryMonitor pid now queryMonitorId alertForm){Monitors.deactivatedAt = existingMonitor >>= (.deactivatedAt)}
-  _ <- Monitors.queryMonitorUpsert queryMonitor
-  addSuccessToast "Widget monitor configured successfully" Nothing
-  addTriggerEvent "closeModal" ""
+  case Alerts.convertToQueryMonitor pid now queryMonitorId alertForm of
+    Left err -> addToast "error" "Monitor query is invalid" (Just err)
+    Right monitor -> do
+      _ <- Monitors.queryMonitorUpsert monitor{Monitors.deactivatedAt = existingMonitor >>= (.deactivatedAt)}
+      addSuccessToast "Widget monitor configured successfully" Nothing
+      addTriggerEvent "closeModal" ""
   addRespHeaders $ toHtml ("" :: Text)
 
 

@@ -80,8 +80,9 @@ spec = sequential $ aroundAll withTestResources do
 
     it "should create monitor with no triggers" $ \tr -> do
       currentTime <- getCurrentTime
-      let queryMonitor =
-            convertToQueryMonitor (UUIDId UUID.nil) currentTime (Monitors.QueryMonitorId UUID.nil)
+      queryMonitor <-
+        either (fail . toString) pure
+          $ convertToQueryMonitor (UUIDId UUID.nil) currentTime (Monitors.QueryMonitorId UUID.nil)
               $ AlertUpsertForm
                 { unit = Nothing
                 , alertId = Nothing
@@ -370,8 +371,9 @@ spec = sequential $ aroundAll withTestResources do
     it "should store and retrieve monitors with recovery thresholds" \tr -> do
       currentTime <- getCurrentTime
       -- Create monitor with recovery thresholds for hysteresis
-      let queryMonitor =
-            convertToQueryMonitor testPid currentTime (Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "11111111-1111-1111-1111-111111111111")
+      queryMonitor <-
+        either (fail . toString) pure
+          $ convertToQueryMonitor testPid currentTime (Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "11111111-1111-1111-1111-111111111111")
               $ AlertUpsertForm
                 { unit = Nothing
                 , alertId = Just "11111111-1111-1111-1111-111111111111"

@@ -40,7 +40,6 @@ import Data.Aeson qualified as AE
 import Data.CaseInsensitive qualified as CI
 import Data.Char (isAsciiLower, isDigit)
 import Data.Default (def)
-import Data.Either.Extra (fromRight')
 import Data.List (partition)
 import Data.Map.Strict qualified as Map
 import Data.Ord (clamp)
@@ -130,13 +129,13 @@ data AlertUpsertForm = AlertUpsertForm
   deriving (FromForm) via (FormWithOptional "teams" AlertUpsertForm)
 
 
-convertToQueryMonitor :: Projects.ProjectId -> UTCTime -> Monitors.QueryMonitorId -> AlertUpsertForm -> Monitors.QueryMonitor
+-- | 'Left' carries the parse error of a query the monitor could never evaluate.
+convertToQueryMonitor :: Projects.ProjectId -> UTCTime -> Monitors.QueryMonitorId -> AlertUpsertForm -> Either Text Monitors.QueryMonitor
 convertToQueryMonitor projectId now queryMonitorId alertForm =
   let environment = mfilter (not . T.null) $ T.strip <$> alertForm.environment
       service = mfilter (not . T.null) $ T.strip <$> alertForm.service
       scope = mkScopedQuery projectId (Nothing, Nothing) environment service
       sqlQueryCfg = (applyScopedQuery scope $ defSqlQueryCfg projectId fixedUTCTime Nothing Nothing){alertLookbackMins = timeWindowMins}
-      (_, qc) = fromRight' $ parseQueryToComponents sqlQueryCfg alertForm.query
       warningThresholdD = readMaybe . toString =<< alertForm.warningThreshold
 
       checkInterval = maybe 5 (max 1 . fromMaybe 5 . readMaybe . toString . T.dropEnd 1) alertForm.frequency
@@ -160,7 +159,8 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
       dashboardUuid = UUID.fromText =<< alertForm.dashboardId
       renotifyMins = if fromMaybe False alertForm.notifyAfterCheck then Just (parseIntervalToMins $ fromMaybe "30m" alertForm.notifyAfter) else Nothing
       stopCount = if fromMaybe False alertForm.stopAfterCheck then alertForm.stopAfter <|> Just 5 else Nothing
-   in Monitors.QueryMonitor
+   in parseQueryToComponents sqlQueryCfg alertForm.query <&> \(_, qc) ->
+        Monitors.QueryMonitor
         { id = queryMonitorId
         , createdAt = now
         , updatedAt = now
@@ -224,19 +224,21 @@ alertUpsertPostH pid form = do
   -- For widget-tied alerts, preserve the query from the widget (can't edit directly)
   existingMonitor <- maybe (pure Nothing) (Monitors.queryMonitorById . Monitors.QueryMonitorId) alertId
 
-  let baseMonitor = convertToQueryMonitor pid now queryMonitorId form{recipientEmailAll = Just emailAll}
-      -- The form has no active/inactive control, and convertToQueryMonitor defaults
-      -- deactivatedAt to Nothing — so carry the stored value or editing a deactivated
-      -- monitor here would silently re-activate it.
-      withStoredState m = maybe m (\e -> m{Monitors.deactivatedAt = e.deactivatedAt}) existingMonitor
-      queryMonitor = withStoredState $ maybe baseMonitor (\e -> baseMonitor{Monitors.logQuery = e.logQuery, Monitors.logQueryAsSql = e.logQueryAsSql, Monitors.environment = e.environment, Monitors.service = e.service, Monitors.alertConfig = baseMonitor.alertConfig{Monitors.title = e.alertConfig.title}}) $ mfilter (isJust . (.widgetId)) existingMonitor
+  case convertToQueryMonitor pid now queryMonitorId form{recipientEmailAll = Just emailAll} of
+    Left err -> addToast "error" "Monitor query is invalid" (Just err) >> addRespHeaders (AlertNoContent "")
+    Right baseMonitor -> do
+      let -- The form has no active/inactive control, and convertToQueryMonitor defaults
+          -- deactivatedAt to Nothing — so carry the stored value or editing a deactivated
+          -- monitor here would silently re-activate it.
+          withStoredState m = maybe m (\e -> m{Monitors.deactivatedAt = e.deactivatedAt}) existingMonitor
+          queryMonitor = withStoredState $ maybe baseMonitor (\e -> baseMonitor{Monitors.logQuery = e.logQuery, Monitors.logQueryAsSql = e.logQueryAsSql, Monitors.environment = e.environment, Monitors.service = e.service, Monitors.alertConfig = baseMonitor.alertConfig{Monitors.title = e.alertConfig.title}}) $ mfilter (isJust . (.widgetId)) existingMonitor
 
-  _ <- Monitors.queryMonitorUpsert queryMonitor
-  when (isNothing alertId)
-    $ void
-    $ Projects.completeOnboardingStep pid "created_monitor"
-  addSuccessToast "Monitor was updated successfully" Nothing
-  addRespHeaders $ AlertNoContent ""
+      _ <- Monitors.queryMonitorUpsert queryMonitor
+      when (isNothing alertId)
+        $ void
+        $ Projects.completeOnboardingStep pid "created_monitor"
+      addSuccessToast "Monitor was updated successfully" Nothing
+      addRespHeaders $ AlertNoContent ""
 
 
 alertSingleToggleActiveH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders Alert)
