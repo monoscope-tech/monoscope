@@ -78,6 +78,7 @@ import System.Tracing (forkBackground)
 import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, DB, RespHeaders, addRespHeaders)
 import UnliftIO (timeout, withRunInIO)
 import UnliftIO.Exception (bracket_, catch, finally, throwIO, tryAny)
+import Utils (encodeText)
 import Web.FormUrlEncoded (FromForm, urlDecodeAsForm)
 
 
@@ -829,7 +830,7 @@ processSlackEvent receiptId =
           case kind of
             UserMessage message -> withThreadLock team_id message process
             AppMention message -> withThreadLock team_id message process
-            AppHomeOpened home -> withEventLock ("slack-onboarding:" <> decodeUtf8 (AE.encode ([team_id, home.channel, home.user] :: [Text]))) process
+            AppHomeOpened home -> withEventLock ("slack-onboarding:" <> encodeText ([team_id, home.channel, home.user] :: [Text])) process
             _ -> process
     withThreadLock workspaceId message = withInvestigationLock workspaceId message.channel (fromMaybe message.ts message.thread_ts)
 
@@ -952,7 +953,7 @@ processSlackEvent receiptId =
 
 
 withInvestigationLock :: Text -> Text -> Text -> ATBackgroundCtx () -> ATBackgroundCtx ()
-withInvestigationLock workspace channel thread = withEventLock $ "slack-investigation:" <> decodeUtf8 (AE.encode ([workspace, channel, thread] :: [Text]))
+withInvestigationLock workspace channel thread = withEventLock $ "slack-investigation:" <> encodeText ([workspace, channel, thread] :: [Text])
 
 
 -- | Keep the transaction-scoped lock on one checked-out connection and interrupt

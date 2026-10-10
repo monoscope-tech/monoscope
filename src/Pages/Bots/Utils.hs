@@ -43,7 +43,7 @@ import System.Logging qualified as Log
 import System.Tracing (Tracing)
 import System.Types (DB)
 import UnliftIO.Exception (onException)
-import Utils (faSprite_, getDurationNSMS, listToIndexHashMap, lookupVecBoolByKey, lookupVecIntByKey, lookupVecTextByKey, toUriStr)
+import Utils (faSprite_, getDurationNSMS, listToIndexHashMap, lookupVecBoolByKey, lookupVecIntByKey, lookupVecTextByKey, nonEmptyT, toUriStr)
 
 
 data BotType = Discord | Slack | WhatsApp
@@ -65,7 +65,7 @@ botEmoji = \case
 
 
 -- | Error types for contextual error messages
-data BotErrorType = QueryParseError Text | NoDataError | ServiceError | TimeoutError
+data BotErrorType = QueryParseError Text | NoDataError | ServiceError
   deriving (Eq, Show)
 
 
@@ -80,7 +80,6 @@ formatBotError target err = case target of
       QueryParseError snippet -> botEmoji "warning" <> " Couldn't parse query\n`" <> T.take 50 snippet <> "`\nTry: 'show errors in last hour'"
       NoDataError -> botEmoji "search" <> " No data found for your query\nTry expanding the time range or adjusting filters."
       ServiceError -> botEmoji "error" <> " Something went wrong\nPlease try again in a moment."
-      TimeoutError -> botEmoji "error" <> " Query timed out\nThe data range might be too large. Try narrowing to last 24h."
 
 
 -- | Get loading message based on detected query intent
@@ -342,7 +341,7 @@ storeAgenticResponse pid convId answer = do
     Left _ -> Issues.insertChatMessage pid convId Issues.ChatAssistant answer.response Nothing (Just $ AE.toJSON answer.toolCalls)
     Right response -> do
       let widgets = guarded (not . null) $ take 10 $ AI.responseWidgets response
-          explanation = fromMaybe (bool answer.response "Here are the requested visualizations:" $ isJust widgets) $ mfilter (not . T.null) response.explanation
+          explanation = fromMaybe (bool answer.response "Here are the requested visualizations:" $ isJust widgets) $ nonEmptyT response.explanation
       Issues.insertChatMessage pid convId Issues.ChatAssistant explanation (AE.toJSON <$> widgets) (Just $ AE.toJSON answer.toolCalls)
   pure parsed
 
@@ -605,11 +604,7 @@ withBotThread target pid convId convType meta backfill = do
   existingHistory <- Issues.selectChatHistory pid convId
   when (null existingHistory) do
     result <- backfill `onException` Log.logAttention "Bot thread backfill failed" ctx
-    case result of
-      Just messages -> Issues.seedChatHistory pid convId messages
-      Nothing -> do
-        Log.logAttention "Bot thread backfill failed" ctx
-        throwError err503
+    maybe (Log.logAttention "Bot thread backfill failed" ctx >> throwError err503) (Issues.seedChatHistory pid convId) result
   pure convId
   where
     ctx = AE.object ["platform" AE..= show @Text target, "conv_id" AE..= show @Text convId]

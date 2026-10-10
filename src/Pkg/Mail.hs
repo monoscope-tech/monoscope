@@ -22,13 +22,13 @@ import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
-import Network.HTTP.Types (urlEncode)
 import Pkg.EmailTemplates (EndpointAlertRow (..), groupedByContext, stripSummaryBadges, traceExplorerUrl)
 import Relude hiding (Reader, ask)
 import System.Config (AuthContext (env))
 import System.Config qualified as Config
 import System.Logging qualified as Log
 import System.Types (DB)
+import Utils (countNoun, fmtDate, nonEmptyT, toUriStr)
 
 
 sendRenderedEmail :: Notify.Notify :> es => Text -> Text -> Text -> Eff es ()
@@ -275,7 +275,7 @@ slackErrorAlert alertType err project channelId projectUrl chartUrlM occTextM fi
     title = "<" <> targetUrl <> "|" <> titleEmoji <> " *" <> titleLabel <> "* · " <> errorAlertTitle err <> " in " <> slackEscape project <> ">"
     body = errorSnippet 600 err
     firstSeen = fromMaybe (errFirstSeen err) firstSeenM
-    tidM = err.traceId >>= guarded (not . T.null)
+    tidM = nonEmptyT err.traceId
     inlineMeta = errorMetaLine err occTextM ("First seen " <> firstSeen)
     chartBlock =
       maybe
@@ -302,7 +302,7 @@ errRoute err = case filter (not . T.null) (catMaybes [err.requestMethod, err.req
 
 
 errFirstSeen :: ErrorPatterns.ATError -> Text
-errFirstSeen err = toText $ formatTime defaultTimeLocale "%b %-e · %-l:%M %p" err.when
+errFirstSeen err = fmtDate "%b %-e · %-l:%M %p" err.when
 
 
 slackMonitorAlert :: Text -> Text -> Maybe Text -> Text -> AE.Value
@@ -409,7 +409,7 @@ incidentMessage text blocks = Incidents.SlackPayload $ KEM.fromList ["text" AE..
 
 
 atUtc :: UTCTime -> Text
-atUtc = toText . formatTime defaultTimeLocale "%Y-%m-%d %H:%M UTC"
+atUtc = fmtDate "%Y-%m-%d %H:%M UTC"
 
 
 -- | Titles reach Slack escaped and bounded, whatever the source produced.
@@ -513,7 +513,7 @@ slackNewEndpointsAlert projectName endpoints channelId hash projectUrl =
   slackAttachment channelId "#3b82f6" $ [headlineBlock] <> bodyBlocks <> [actionsBlock]
   where
     n = V.length endpoints
-    headline = if n == 1 then "1 new endpoint" else show n <> " new endpoints"
+    headline = countNoun n "new endpoint"
     targetUrl = projectUrl <> "/issues/by_hash/" <> hash
     explorerUrl = newEndpointsExplorerUrl projectUrl ((.label) <$> endpoints)
     headlineBlock = slackSection ("<" <> targetUrl <> "|:large_blue_circle: *" <> headline <> "* · " <> projectName <> ">")
@@ -547,7 +547,7 @@ slackNewEndpointsAlert projectName endpoints channelId hash projectUrl =
 -- "(attributes.http.route in (\"/home\",\"/users\") OR attributes.url.path in (\"/home\",\"/users\"))"
 newEndpointsExplorerUrl :: Text -> V.Vector Text -> Text
 newEndpointsExplorerUrl projectUrl endpoints =
-  projectUrl <> "/log_explorer?query=" <> decodeUtf8 (urlEncode True $ encodeUtf8 expr)
+  projectUrl <> "/log_explorer?query=" <> toUriStr expr
   where
     paths = (\x -> "\"" <> T.drop 1 (T.dropWhile (/= ' ') x) <> "\"") <$> V.toList endpoints
     clause field = case paths of
@@ -686,7 +686,7 @@ discordNewEndpointAlert projectName endpoints hash projectUrl =
       ]
   where
     n = V.length endpoints
-    title = (if n == 1 then "🔵 1 new endpoint" else "🔵 " <> show n <> " new endpoints") <> " · " <> projectName
+    title = "🔵 " <> countNoun n "new endpoint" <> " · " <> projectName
     content = if n == 1 then "🔵 **New endpoint detected**" else "🔵 **" <> show n <> " new endpoints detected**"
     url = projectUrl <> "/issues/by_hash/" <> hash
     explorerLink = "[View in Explorer](" <> newEndpointsExplorerUrl projectUrl ((.label) <$> endpoints) <> ")"
