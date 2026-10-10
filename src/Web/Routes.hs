@@ -811,7 +811,7 @@ server :: Logger -> AuthContext -> TracerProvider -> OtlpHttpHandler -> OtlpHttp
 server logger env tp otlpTraces otlpLogs =
   Routes
     { public = Servant.serveDirectoryWebApp "./static/public"
-    , ping = pingH
+    , ping = pure "pong"
     , status = statusH
     , login = Auth.loginH
     , toLogin = Auth.loginRedirectH
@@ -1276,10 +1276,6 @@ statusH = Status <$> Hasql.interpOne [HI.sql| select version() |] <*> envOr "GIT
     envOr k = maybe "dev" toText <$> lookupEnv k
 
 
-pingH :: ATBaseCtx Text
-pingH = pure "pong"
-
-
 -- | 'RawM' so the response carries the image's own Content-Type: a route content type
 -- adds a second header, and nginx keeps the first (an SVG served as octet-stream is a
 -- broken image).
@@ -1345,11 +1341,6 @@ clientPostgresSqlRejection dbSource pidM querySqlM = case (dbSource, pidM, Utils
   _ -> Nothing
 
 
-guardClientPostgresSql :: Maybe Hasql.SqlSource -> Maybe Projects.ProjectId -> Maybe Text -> ATAuthCtx ()
-guardClientPostgresSql dbSource pidM querySqlM =
-  whenJust (clientPostgresSqlRejection dbSource pidM querySqlM) \msg -> Error.throwError err400{errBody = toLazy (encodeUtf8 msg)}
-
-
 -- | @rollup_sql@ is a Postgres statement over an hourly rollup that answers the same
 -- series as the chart's KQL query, for hours from @rollup_from@ on. It replaces the
 -- query whenever the window starts inside that coverage and no environment or service
@@ -1375,22 +1366,27 @@ rollupRoute now tp params source = case (param "rollup_sql", iso8601ParseM . toS
     (fromM, _, _) = TimePicker.parseTimeRange now tp
 
 
-chartsDataGetH :: Maybe Hasql.SqlSource -> Maybe Charts.DataType -> Maybe Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Parser.BinDensity -> [(Text, Maybe Text)] -> ATAuthCtx Charts.MetricsData
-chartsDataGetH dbSource0 dt pid q qSql0 since fromD toD src density params = do
+-- | The @/chart_data@ handler shape, shared by the buffered and the streamed route.
+type ChartDataH a = Maybe Hasql.SqlSource -> Maybe Charts.DataType -> Maybe Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Parser.BinDensity -> [(Text, Maybe Text)] -> ATAuthCtx a
+
+
+chartsDataGetH :: ChartDataH Charts.MetricsData
+chartsDataGetH = chartDataH Charts.queryMetrics
+
+
+chartsDataStreamGetH :: ChartDataH (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceIO AE.Value))
+chartsDataStreamGetH = chartDataH Charts.queryMetricsStream
+
+
+-- | Scope the request, route it to the rollup when one covers the window, and gate
+-- client SQL (see 'clientPostgresSqlRejection') before either runner sees it.
+chartDataH :: ChartDataH a -> ChartDataH a
+chartDataH run dbSource0 dt pid q qSql0 since fromD toD src density params = do
   scopedParams <- chartScopeParams pid params
   now <- Time.currentTime
   let (dbSource, qSql) = rollupRoute now (TimePicker.TimePicker since fromD toD) scopedParams (dbSource0, qSql0)
-  guardClientPostgresSql dbSource pid qSql
-  Charts.queryMetrics dbSource dt pid q qSql since fromD toD src density scopedParams
-
-
-chartsDataStreamGetH :: Maybe Hasql.SqlSource -> Maybe Charts.DataType -> Maybe Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Parser.BinDensity -> [(Text, Maybe Text)] -> ATAuthCtx (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceIO AE.Value))
-chartsDataStreamGetH dbSource0 dt pid q qSql0 since fromD toD src density params = do
-  scopedParams <- chartScopeParams pid params
-  now <- Time.currentTime
-  let (dbSource, qSql) = rollupRoute now (TimePicker.TimePicker since fromD toD) scopedParams (dbSource0, qSql0)
-  guardClientPostgresSql dbSource pid qSql
-  Charts.queryMetricsStream dbSource dt pid q qSql since fromD toD src density scopedParams
+  whenJust (clientPostgresSqlRejection dbSource pid qSql) \msg -> Error.throwError err400{errBody = toLazy (encodeUtf8 msg)}
+  run dbSource dt pid q qSql since fromD toD src density scopedParams
 
 
 -- | The environment cookie is an authenticated, sticky project selection. Service is sticky

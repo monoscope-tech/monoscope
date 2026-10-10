@@ -38,7 +38,7 @@ import Models.Projects.Projects qualified as Projects
 import NeatInterpolation
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (headerRow_)
-import Pkg.DeriveUtils (JsonValueSchema (..), WrappedEnumSC (..), encodeEnumSC)
+import Pkg.DeriveUtils (JsonValueSchema (..), WrappedEnumSC (..))
 import Pkg.Parser (ToQueryText (..), parseQueryToAST)
 import Pkg.Parser.Expr (Subject (..))
 import Pkg.Parser.Stats (BinFunction (..), ByClauseItem (..), Section (..), SummarizeByClause (..))
@@ -1145,12 +1145,12 @@ sortableTableHead_ widget selected =
   thead_ [class_ "sticky top-0 z-10 before:content-[''] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak"]
     $ tr_ []
     $ forM_ (fold widget.columns) \col -> do
-      let direction
-            | selected == Just ("+" <> col.field) = "asc"
-            | selected == Just ("-" <> col.field) = "desc"
-            | otherwise = "none"
+      let (direction, ariaSort, glyph)
+            | selected == Just ("+" <> col.field) = ("asc", "ascending", "↑")
+            | selected == Just ("-" <> col.field) = ("desc", "descending", "↓")
+            | otherwise = ("none", "none", "↕") :: (Text, Text, Text)
           sortable = sortableColumn widget col
-      th_ [class_ $ "text-left bg-bgRaised sticky top-0 " <> fromMaybe "" col.align, term "aria-sort" (if direction == "asc" then "ascending" else if direction == "desc" then "descending" else "none")]
+      th_ [class_ $ "text-left bg-bgRaised sticky top-0 " <> fromMaybe "" col.align, term "aria-sort" ariaSort]
         $ if sortable
           then button_
             [ type_ "button"
@@ -1168,7 +1168,7 @@ sortableTableHead_ widget selected =
             ]
             $ headerRow_ [] do
               toHtml col.title
-              span_ [class_ "sort-arrow ml-1 text-iconNeutral"] $ toHtml (if direction == "asc" then "↑" else if direction == "desc" then "↓" else "↕" :: Text)
+              span_ [class_ "sort-arrow ml-1 text-iconNeutral"] $ toHtml glyph
           else headerRow_ [] $ toHtml col.title
 
 
@@ -1250,7 +1250,7 @@ renderChart widget = do
           , "theme" AE..= fromMaybe "default" widget.theme
           , "yAxisLabel" AE..= fromMaybe (maybeToMonoid widget.unit) (widget.yAxis >>= (.label))
           , "pid" AE..= (widget._projectId <&> (.toText))
-          , "summarizeBy" AE..= toText (encodeEnumSC @"SB" $ fromMaybe SBSum widget.summarizeBy)
+          , "summarizeBy" AE..= fromMaybe SBSum widget.summarizeBy
           , "summarizeByPrefix" AE..= summarizeByPrefix (fromMaybe SBSum widget.summarizeBy)
           , "legendPosition" AE..= fromMaybe "bottom" widget.legendPosition
           , "unit" AE..= maybeToMonoid widget.unit
