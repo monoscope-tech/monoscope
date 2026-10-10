@@ -985,6 +985,30 @@ data MetaData = MetaData
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MetaData
 
 
+-- | LemonSqueezy @meta.event_name@ values the webhook acts on. Parsed from 'MetaData''s raw
+-- text so events we ignore (orders, license keys) still decode and get a 200.
+--
+-- >>> parseUrlPiece @LSEvent "subscription_payment_failed"
+-- Right LSSubscriptionPaymentFailed
+-- >>> isLeft (parseUrlPiece @LSEvent "order_created")
+-- True
+data LSEvent
+  = LSSubscriptionCreated
+  | LSSubscriptionCancelled
+  | LSSubscriptionExpired
+  | LSSubscriptionPaymentFailed
+  | LSSubscriptionPaused
+  | LSSubscriptionPaymentRefunded
+  | LSSubscriptionResumed
+  | LSSubscriptionUnpaused
+  | LSSubscriptionPaymentSuccess
+  | LSSubscriptionPaymentRecovered
+  | LSSubscriptionPlanChanged
+  | LSSubscriptionUpdated
+  deriving stock (Read, Show)
+  deriving (FromHttpApiData) via WrappedEnumSC 'Nothing "LS" LSEvent
+
+
 data Attributes = Attributes
   { firstSubscriptionItem :: FirstSubItem
   , productName :: Text
@@ -1083,8 +1107,8 @@ webhookPostH sigHeaderM rawBody = do
           Just project -> notifyMembers project.id $ ET.planUpgradedEmail project.title plan (billingUrl envConfig project.id)
           Nothing -> Log.logAttention "LS upgrade: no project for sub_id" (show orderId :: Text, subItem.subscriptionId, plan)
         pure "upgraded"
-  case dat.meta.eventName of
-    "subscription_created" -> do
+  case parseUrlPiece dat.meta.eventName of
+    Right LSSubscriptionCreated -> do
       currentTime <- utcToZonedTime utc <$> Time.currentTime
       subId <- Projects.LemonSubId <$> UUIDEff.genUUID
       let projectId = fromMaybe "" (dat.meta.customData >>= (.projectId))
@@ -1107,23 +1131,27 @@ webhookPostH sigHeaderM rawBody = do
         whenJustM (Projects.projectById pid) \project ->
           notifyMembers pid $ ET.planUpgradedEmail project.title plan (billingUrl envConfig pid)
       pure "subscription created"
-    "subscription_cancelled" -> downgrade "was cancelled"
-    "subscription_expired" -> downgrade "has expired"
+    Right LSSubscriptionCancelled -> downgrade "was cancelled"
+    Right LSSubscriptionExpired -> downgrade "has expired"
     -- Dunning retry: notify only, don't downgrade. Mirrors Stripe's invoice.payment_failed policy.
     -- subscription_expired/_cancelled will downgrade if retries ultimately fail.
-    "subscription_payment_failed" -> do
+    Right LSSubscriptionPaymentFailed -> do
       whenJustM (Projects.projectByOrderId (show orderId)) \project ->
         notifyMembers project.id $ ET.planDowngradedEmail project.title "payment failed" (billingUrl envConfig project.id)
       Log.logAttention "LS subscription_payment_failed (no downgrade)" (show orderId :: Text, subItem.subscriptionId)
       pure "payment failed notified"
-    "subscription_paused" -> downgrade "was paused"
-    "subscription_payment_refunded" -> downgrade "payment refunded"
-    e | e `elem` ["subscription_resumed", "subscription_unpaused", "subscription_payment_success", "subscription_payment_recovered", "subscription_plan_changed"] -> upgrade
-    "subscription_updated" -> do
+    Right LSSubscriptionPaused -> downgrade "was paused"
+    Right LSSubscriptionPaymentRefunded -> downgrade "payment refunded"
+    Right LSSubscriptionResumed -> upgrade
+    Right LSSubscriptionUnpaused -> upgrade
+    Right LSSubscriptionPaymentSuccess -> upgrade
+    Right LSSubscriptionPaymentRecovered -> upgrade
+    Right LSSubscriptionPlanChanged -> upgrade
+    Right LSSubscriptionUpdated -> do
       Log.logInfo "LS subscription_updated (no-op)" (show orderId :: Text, subItem.subscriptionId, plan)
       pure "updated"
-    other -> do
-      Log.logInfo "LS webhook unhandled event" other
+    Left _ -> do
+      Log.logInfo "LS webhook unhandled event" dat.meta.eventName
       pure ""
 
 
