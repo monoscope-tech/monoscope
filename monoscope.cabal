@@ -837,6 +837,7 @@ test-suite integration-tests
     , hasql-pool
     , hasql-transaction
     , hs-opentelemetry-instrumentation-auto
+    , hs-opentelemetry-instrumentation-hasql
     , hspec
     , http-client
     , http-client-tls
