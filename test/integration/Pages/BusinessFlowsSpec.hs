@@ -158,7 +158,7 @@ onboardingTests =
               }
       (infoHeaders, _) <- testServant tr $ Onboarding.onboardingInfoPostH testPid infoForm
       lookupResponseHeader @"HX-Redirect" infoHeaders `shouldBe` Header ("/p/" <> testPid.toText <> "/onboarding?step=Survey")
-      (_, infoResult) <- testServant tr $ Onboarding.onboardingGetH testPid (Just "Info")
+      (_, infoResult) <- testServant tr $ Onboarding.onboardingGetH testPid (Just Onboarding.Info)
       case infoResult of
         Onboarding.OnboardingGet (PageCtx _ stepData) -> case stepData of
           Onboarding.InfoStep{..} -> do
@@ -174,7 +174,7 @@ onboardingTests =
               }
       (surveyHeaders, _) <- testServant tr $ Onboarding.onboardingConfPostH testPid surveyForm
       lookupResponseHeader @"HX-Redirect" surveyHeaders `shouldBe` Header ("/p/" <> testPid.toText <> "/onboarding?step=NotifChannel")
-      (_, surveyResult) <- testServant tr $ Onboarding.onboardingGetH testPid (Just "Survey")
+      (_, surveyResult) <- testServant tr $ Onboarding.onboardingGetH testPid (Just Onboarding.Survey)
       case surveyResult of
         Onboarding.OnboardingGet (PageCtx _ stepData) -> case stepData of
           Onboarding.SurveyStep{..} -> do
@@ -185,7 +185,7 @@ onboardingTests =
       -- The survey writes the same `questions` blob the info step filled in, so the
       -- earlier answers have to survive it. Pins the merge itself, which moved from a
       -- Haskell read-modify-write into a jsonb `||` in the statement.
-      (_, afterSurvey) <- testServant tr $ Onboarding.onboardingGetH testPid (Just "Info")
+      (_, afterSurvey) <- testServant tr $ Onboarding.onboardingGetH testPid (Just Onboarding.Info)
       case afterSurvey of
         Onboarding.OnboardingGet (PageCtx _ stepData) -> case stepData of
           Onboarding.InfoStep{..} -> do
@@ -204,7 +204,7 @@ onboardingTests =
         Onboarding.OnboardingPhoneEmailsPost pid emails _ -> do
           pid `shouldBe` testPid
           V.length emails `shouldSatisfy` (> 0) -- Should include at least the submitted emails
-      (_, notifResult) <- testServant tr $ Onboarding.onboardingGetH testPid (Just "NotifChannel")
+      (_, notifResult) <- testServant tr $ Onboarding.onboardingGetH testPid (Just Onboarding.NotifChannel)
       case notifResult of
         Onboarding.OnboardingGet (PageCtx _ stepData) -> case stepData of
           Onboarding.NotifChannelStep{..} -> do
@@ -223,7 +223,7 @@ onboardingTests =
 
       (integratedHeaders, _) <- testServant tr $ Onboarding.checkIntegrationGet testPid Nothing
       lookupResponseHeader @"HX-Redirect" integratedHeaders `shouldBe` Header ("/p/" <> testPid.toText <> "/onboarding?step=Pricing")
-      (_, integrationResult) <- testServant tr $ Onboarding.onboardingGetH testPid (Just "Integration")
+      (_, integrationResult) <- testServant tr $ Onboarding.onboardingGetH testPid (Just Onboarding.Integration)
       case integrationResult of
         Onboarding.OnboardingGet (PageCtx _ stepData) -> case stepData of
           Onboarding.IntegrationStep _stepPid stepApiKey -> do

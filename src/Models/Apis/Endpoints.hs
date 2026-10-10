@@ -125,19 +125,11 @@ bulkInsertEndpoints eps | V.null eps = pass
 bulkInsertEndpoints eps = do
   Hasql.interpExecute_
     [HI.sql| INSERT INTO apis.endpoints (project_id, url_path, url_params, method, host, hash, outgoing, service_name, environment)
-           SELECT * FROM unnest(#{pids}::uuid[], #{paths}::text[], #{params}::jsonb[], #{methods}::text[], #{hosts}::text[], #{hashes}::text[], #{outs}::bool[], #{svcs}::text[], #{envs}::text[])
+           SELECT * FROM unnest(#{V.map (.projectId) eps}::uuid[], #{V.map (.urlPath) eps}::text[], #{V.map (.urlParams) eps}::jsonb[],
+             #{V.map (.method) eps}::text[], #{V.map (.host) eps}::text[], #{V.map (.hash) eps}::text[], #{V.map (.outgoing) eps}::bool[],
+             #{V.map (.serviceName) eps}::text[], #{V.map (.environment) eps}::text[])
            ON CONFLICT (hash) DO NOTHING |]
   bulkInsertHosts eps
-  where
-    pids = V.map (.projectId) eps
-    paths = V.map (.urlPath) eps
-    params = V.map (.urlParams) eps
-    methods = V.map (.method) eps
-    hosts = V.map (.host) eps
-    hashes = V.map (.hash) eps
-    outs = V.map (.outgoing) eps
-    svcs = V.map (.serviceName) eps
-    envs = V.map (.environment) eps
 
 
 -- | Upsert one row in apis.hosts per (project_id, host, outgoing) seen in the
@@ -147,13 +139,9 @@ bulkInsertHosts eps | V.null eps = pass
 bulkInsertHosts eps =
   Hasql.interpExecute_
     [HI.sql| INSERT INTO apis.hosts (project_id, host, outgoing)
-           SELECT p, h, o FROM unnest(#{pids}::uuid[], #{hosts}::text[], #{outs}::bool[]) AS t(p, h, o)
+           SELECT p, h, o FROM unnest(#{V.map (.projectId) eps}::uuid[], #{V.map (.host) eps}::text[], #{V.map (.outgoing) eps}::bool[]) AS t(p, h, o)
            WHERE h <> ''
            ON CONFLICT (project_id, host, outgoing) DO NOTHING |]
-  where
-    pids = V.map (.projectId) eps
-    hosts = V.map (.host) eps
-    outs = V.map (.outgoing) eps
 
 
 -- Based of a view which is generated every 5minutes.
@@ -605,7 +593,7 @@ hostRetentionSweep pid traffic = do
            SET archived_at = NOW(), archived_by = NULL, updated_at = NOW()
          WHERE project_id = #{pid} AND archived_at IS NULL
            AND last_seen_at < NOW() - INTERVAL '30 days'|]
-  pure (V.map HI.getOneColumn unarchived, archivedCount)
+  pure (unarchived, archivedCount)
   where
     (hs, os, tss) = V.unzip3 $ V.fromList traffic
 
@@ -665,10 +653,6 @@ getUnmergedEndpoints pid =
         ORDER BY created_at ASC LIMIT #{unmergedScanLimit} |]
 
 
--- | (method, host, canonical_path) for templates this project already has, so
--- discovery can assign a lone straggler to a template the population already
--- proved — without which a project re-inflates one row at a time after the
--- bulk merge.
 -- | The identity of a canonical template: same three columns, in the one order
 -- the SQL and every caller agree on.
 data TemplateKey = TemplateKey
@@ -680,6 +664,9 @@ data TemplateKey = TemplateKey
   deriving anyclass (HI.DecodeRow, Hashable)
 
 
+-- | Templates this project already has, so discovery can assign a lone straggler to a
+-- template the population already proved — without which a project re-inflates one row
+-- at a time after the bulk merge.
 getCanonicalTemplateKeys :: DB es => Projects.ProjectId -> Eff es (V.Vector TemplateKey)
 getCanonicalTemplateKeys pid =
   V.fromList
@@ -727,10 +714,6 @@ getMergedEndpointPairs pid = do
           LIMIT 10000 |]
 
 
--- | Remap anomalies/issues from merged endpoints to their canonical hashes, then delete old endpoints.
--- Legacy apis.shapes/fields/formats migration steps removed (tables dropped in 0090);
--- the schema-learning catalog (apis.schema_catalog) re-derives structure on the fly per
--- canonical key, so no explicit row migration is needed for the new model.
 -- | A stored verdict plus the evidence accumulated for it.
 data GroupReview = GroupReview
   { groupKey :: Text
@@ -780,9 +763,6 @@ revertGroupApply pid gkey chashes = do
              WHERE project_id = #{pid} AND canonical_hash = ANY(#{chashes}) AND hash <> canonical_hash |]
 
 
--- | Canonical hashes from LLM-applied merges still inside their quarantine.
--- Cleanup must not delete their sources yet: deletion is what makes a wrong
--- merge permanent.
 -- | Is this review still inside its quarantine? One predicate, because the
 -- window is a policy: the cleanup that deletes merged-out rows and the re-check
 -- that can still take a merge back have to disagree about nothing.
@@ -790,6 +770,8 @@ inQuarantineSql :: HI.Sql
 inQuarantineSql = [HI.sql| r.applied_at IS NOT NULL AND r.reverted_at IS NULL AND r.applied_at > NOW() - INTERVAL '24 hours' |]
 
 
+-- | Canonical hashes from LLM-applied merges still inside their quarantine: cleanup must
+-- not delete their sources yet.
 quarantinedCanonicalHashes :: DB es => Projects.ProjectId -> Eff es (V.Vector Text)
 quarantinedCanonicalHashes pid =
   V.fromList
@@ -983,7 +965,7 @@ recordGroupReviews pid rows =
   Hasql.interpExecute_
     [HI.sql| INSERT INTO apis.endpoint_group_reviews (project_id, group_key, members_hash, member_count, verdict, shape, confirmations, first_member_count)
            SELECT #{pid}, k, h, n, v, s, 1, n
-           FROM unnest(#{keys}::text[], #{hashes}::text[], #{counts}::int8[], #{verdicts}::text[], #{shapes}::text[]) AS t(k, h, n, v, s)
+           FROM unnest(#{keys}::text[], #{hashes}::text[], #{counts64}::int8[], #{verdicts}::text[], #{shapes}::text[]) AS t(k, h, n, v, s)
            ON CONFLICT (project_id, group_key)
            DO UPDATE SET members_hash = EXCLUDED.members_hash, member_count = EXCLUDED.member_count,
                          verdict = EXCLUDED.verdict, shape = EXCLUDED.shape, created_at = NOW(),
@@ -1001,11 +983,8 @@ recordGroupReviews pid rows =
                            ELSE EXCLUDED.member_count END
            WHERE apis.endpoint_group_reviews.applied_at IS NULL |]
   where
-    keys = V.fromList [k | (k, _, _, _, _) <- rows]
-    hashes = V.fromList [h | (_, h, _, _, _) <- rows]
-    counts = V.fromList [fromIntegral n :: Int64 | (_, _, n, _, _) <- rows]
-    verdicts = V.fromList [v | (_, _, _, v, _) <- rows]
-    shapes = V.fromList [s | (_, _, _, _, s) <- rows]
+    (keys, hashes, counts, verdicts, shapes) = L.unzip5 rows
+    counts64 = map fromIntegral counts :: [Int64]
 
 
 -- | Fold merged-out endpoints' anomalies and issues onto their canonical

@@ -256,6 +256,10 @@ instance Read a => HI.DecodeValue (WrappedEnumShow a) where
   decodeValue = refineText "WrappedEnumShow" (fmap WrappedEnumShow . readMaybe . toString)
 
 
+instance Read a => FromHttpApiData (WrappedEnumShow a) where
+  parseUrlPiece t = maybeToRight ("Invalid value: " <> t) $ WrappedEnumShow <$> readMaybe (toString t)
+
+
 data BaselineState = BSLearning | BSEstablished
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (Default, NFData)

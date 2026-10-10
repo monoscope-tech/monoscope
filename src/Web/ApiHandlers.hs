@@ -533,11 +533,14 @@ renderWidgetTree pid timeParams params w = do
       }
 
 
--- | Insert a new dashboard row from an input.
-insertDashboard :: Projects.ProjectId -> Projects.UserId -> UTCTime -> Dashboards.DashboardId -> Text -> Maybe [Text] -> Maybe [PM.TeamId] -> Maybe Text -> Maybe Dashboards.Dashboard -> ATBaseCtx DashboardFull
-insertDashboard pid uid now did title tags teams filePath schema = do
+-- | Insert a new dashboard row. API calls have no session, so createdBy is the
+-- synthetic system user and git sync is skipped.
+insertDashboard :: Projects.ProjectId -> Text -> Maybe [Text] -> Maybe [PM.TeamId] -> Maybe Text -> Maybe Dashboards.Dashboard -> ATBaseCtx DashboardFull
+insertDashboard pid title tags teams filePath schema = do
+  now <- Time.currentTime
+  did <- UUIDId <$> UUID.genUUID
   let d =
-        (Dashboards.mkDashboardVM did pid now uid)
+        (Dashboards.mkDashboardVM did pid now Projects.systemUserId)
           { Dashboards.schema = schema
           , Dashboards.tags = V.fromList (fromMaybe [] tags)
           , Dashboards.title = title
@@ -550,27 +553,22 @@ insertDashboard pid uid now did title tags teams filePath schema = do
 apiDashboardCreate :: Projects.ProjectId -> DashboardInput -> ATBaseCtx DashboardFull
 apiDashboardCreate pid inp = do
   when (T.null inp.title) $ throwError err400{errBody = "title is required"}
-  now <- Time.currentTime
-  did <- UUIDId <$> UUID.genUUID
-  -- API creation has no session so createdBy is a synthetic nil; git sync is skipped
-  insertDashboard pid Projects.systemUserId now did inp.title inp.tags inp.teams inp.filePath inp.schema
+  insertDashboard pid inp.title inp.tags inp.teams inp.filePath inp.schema
 
 
 -- | Upsert keyed by file_path.
 apiDashboardApply :: Projects.ProjectId -> DashboardYAMLDoc -> ATBaseCtx DashboardFull
 apiDashboardApply pid doc = do
-  now <- Time.currentTime
   existingM <- Dashboards.getDashboardByFilePath pid doc.filePath
   let newTitle = fromMaybe (T.takeWhileEnd (/= '/') doc.filePath) doc.title
   case existingM of
     Just existing -> do
+      now <- Time.currentTime
       _ <- Dashboards.updateSchema existing.id doc.schema (Just now)
       _ <- Dashboards.updateTitle pid existing.id newTitle
       whenJust doc.tags (void . Dashboards.updateTags pid existing.id . V.fromList)
       apiDashboardGet pid existing.id
-    Nothing -> do
-      did <- UUIDId <$> UUID.genUUID
-      insertDashboard pid Projects.systemUserId now did newTitle doc.tags doc.teams (Just doc.filePath) (Just doc.schema)
+    Nothing -> insertDashboard pid newTitle doc.tags doc.teams (Just doc.filePath) (Just doc.schema)
 
 
 apiDashboardUpdate :: Projects.ProjectId -> Dashboards.DashboardId -> DashboardInput -> ATBaseCtx DashboardFull
@@ -595,11 +593,8 @@ apiDashboardDelete pid did = withRefetchNoContent (apiDashboardGet pid did) (Das
 apiDashboardDuplicate :: Projects.ProjectId -> Dashboards.DashboardId -> ATBaseCtx DashboardFull
 apiDashboardDuplicate pid did = do
   existing <- apiDashboardGet pid did
-  now <- Time.currentTime
-  newId <- UUIDId <$> UUID.genUUID
-  let copyTitle = existing.summary.title <> " (Copy)"
-      copySchema = existing.schema & _Just . #title %~ fmap (<> " (Copy)") . (<|> Just "Untitled")
-  insertDashboard pid Projects.systemUserId now newId copyTitle (Just $ V.toList existing.summary.tags) (Just $ V.toList existing.summary.teams) Nothing copySchema
+  let copySchema = existing.schema & _Just . #title %~ fmap (<> " (Copy)") . (<|> Just "Untitled")
+  insertDashboard pid (existing.summary.title <> " (Copy)") (Just $ V.toList existing.summary.tags) (Just $ V.toList existing.summary.teams) Nothing copySchema
 
 
 apiDashboardStar :: Projects.ProjectId -> Dashboards.DashboardId -> ATBaseCtx DashboardFull
@@ -812,13 +807,7 @@ apiEndpointsList pid searchM outgoingM pageM perPageM = paged pageM perPageM 100
 apiEndpointGet :: Projects.ProjectId -> Endpoints.EndpointId -> ATBaseCtx EndpointFull
 apiEndpointGet pid eid = do
   e <- notFoundOr "Endpoint not found" =<< Endpoints.getEndpointById pid eid
-  pure
-    EndpointFull
-      { summary = endpointToSummary e
-      , urlParams = e.urlParams
-      , createdAt = e.createdAt
-      , updatedAt = e.updatedAt
-      }
+  pure EndpointFull{summary = endpointToSummary e, urlParams = e.urlParams, createdAt = e.createdAt, updatedAt = e.updatedAt}
 
 
 logPatternToSummary :: LogPatterns.LogPattern -> LogPatternSummary
@@ -853,12 +842,7 @@ fetchLogPattern pid lpid = notFoundOr "Log pattern not found" =<< LogPatterns.ge
 apiLogPatternGet :: Projects.ProjectId -> Int64 -> ATBaseCtx LogPatternFull
 apiLogPatternGet pid lpid = do
   lp <- fetchLogPattern pid lpid
-  pure
-    LogPatternFull
-      { summary = logPatternToSummary lp
-      , logPattern = lp.logPattern
-      , sampleMessage = lp.sampleMessage
-      }
+  pure LogPatternFull{summary = logPatternToSummary lp, logPattern = lp.logPattern, sampleMessage = lp.sampleMessage}
 
 
 apiLogPatternAck :: Projects.ProjectId -> Int64 -> ATBaseCtx LogPatternFull
@@ -896,16 +880,6 @@ issueToSummary i =
     , archived = isJust i.archivedAt
     , createdAt = zonedTimeToUTC i.createdAt
     , updatedAt = zonedTimeToUTC i.updatedAt
-    }
-
-
-issueToFull :: Issues.Issue -> IssueApiFull
-issueToFull i =
-  IssueApiFull
-    { summary = issueToSummary i
-    , recommendedAction = i.recommendedAction
-    , migrationComplexity = i.migrationComplexity
-    , issueData = coerce i.issueData
     }
 
 
@@ -967,7 +941,9 @@ fetchIssue pid iid = notFoundOr "Issue not found" =<< Issues.selectIssueById pid
 
 
 apiIssueGet :: Projects.ProjectId -> Issues.IssueId -> ATBaseCtx IssueApiFull
-apiIssueGet pid iid = issueToFull <$> (enrichIssue pid =<< fetchIssue pid iid)
+apiIssueGet pid iid =
+  fetchIssue pid iid >>= enrichIssue pid <&> \i ->
+    IssueApiFull{summary = issueToSummary i, recommendedAction = i.recommendedAction, migrationComplexity = i.migrationComplexity, issueData = coerce i.issueData}
 
 
 -- | Fill an empty @stack_trace@ on a runtime-exception issue with a synthesised
@@ -1081,26 +1057,15 @@ toTeamSummary t =
     }
 
 
--- | Project the team's member UUIDs to 'UserRef's via a single users lookup.
--- ('Projects.usersByIds' already short-circuits on an empty vector.)
-resolveTeamMembers :: V.Vector Projects.UserId -> ATBaseCtx [UserRef]
-resolveTeamMembers uids = fmap toUserRef <$> Projects.usersByIds uids
-  where
-    toUserRef u =
-      UserRef
-        { id = u.id.unwrap
-        , email = CI.original u.email
-        , name = guarded (not . T.null) (T.strip (u.firstName <> " " <> u.lastName))
-        }
-
-
-toTeamFull :: PM.Team -> ATBaseCtx TeamFull
-toTeamFull t = do
-  members <- resolveTeamMembers t.members
+apiTeamGet :: Projects.ProjectId -> TeamId -> ATBaseCtx TeamFull
+apiTeamGet pid tid = do
+  t <- fetchTeam pid tid
+  -- One users lookup for every member ('Projects.usersByIds' short-circuits on an empty vector).
+  members <- Projects.usersByIds t.members <&> fmap \u -> UserRef{id = u.id.unwrap, email = CI.original u.email, name = guarded (not . T.null) (T.strip (u.firstName <> " " <> u.lastName))}
   pure
     TeamFull
       { summary = toTeamSummary t
-      , members = members
+      , members
       , notifyEmails = V.toList t.notify_emails
       , slackChannels = V.toList t.slack_channels
       , discordChannels = V.toList t.discord_channels
@@ -1125,31 +1090,30 @@ apiTeamsList :: Projects.ProjectId -> ATBaseCtx [TeamSummary]
 apiTeamsList pid = fmap toTeamSummary <$> PM.getTeams pid
 
 
-apiTeamGet :: Projects.ProjectId -> TeamId -> ATBaseCtx TeamFull
-apiTeamGet pid tid = fetchTeam pid tid >>= toTeamFull
-
-
--- | Build 'PM.TeamDetails' from an input, resolving optional collections to empty.
-teamDetailsFromInput :: TeamInput -> PM.TeamDetails
-teamDetailsFromInput inp =
-  PM.TeamDetails
-    { name = inp.name
-    , description = fromMaybe "" inp.description
-    , handle = inp.handle
-    , members = vml (fmap Projects.UserId <$> inp.members)
-    , notifyEmails = vml inp.notifyEmails
-    , slackChannels = vml inp.slackChannels
-    , discordChannels = vml inp.discordChannels
-    , phoneNumbers = vml inp.phoneNumbers
-    , pagerdutyServices = vml inp.pagerdutyServices
-    , disabledChannels = V.empty
-    }
+-- | Validate an input and build 'PM.TeamDetails', resolving optional collections to empty.
+teamDetailsFromInput :: TeamInput -> ATBaseCtx PM.TeamDetails
+teamDetailsFromInput inp = do
+  when (T.null inp.name) $ throwError err400{errBody = "name is required"}
+  assertHandleAllowed inp.handle
+  pure
+    PM.TeamDetails
+      { name = inp.name
+      , description = fromMaybe "" inp.description
+      , handle = inp.handle
+      , members = vml (fmap Projects.UserId <$> inp.members)
+      , notifyEmails = vml inp.notifyEmails
+      , slackChannels = vml inp.slackChannels
+      , discordChannels = vml inp.discordChannels
+      , phoneNumbers = vml inp.phoneNumbers
+      , pagerdutyServices = vml inp.pagerdutyServices
+      , disabledChannels = V.empty
+      }
   where
     vml :: Maybe [a] -> V.Vector a
     vml = V.fromList . fromMaybe []
 
 
--- | Rejects the reserved "everyone" handle. Caller owns validation of @name@.
+-- | Rejects the reserved "everyone" handle.
 assertHandleAllowed :: Text -> ATBaseCtx ()
 assertHandleAllowed h
   | T.toLower h == "everyone" =
@@ -1160,18 +1124,14 @@ assertHandleAllowed h
 
 apiTeamCreate :: Projects.ProjectId -> TeamInput -> ATBaseCtx TeamFull
 apiTeamCreate pid inp = do
-  when (T.null inp.name) $ throwError err400{errBody = "name is required"}
-  assertHandleAllowed inp.handle
-  createdM <- PM.createTeam pid Nothing (teamDetailsFromInput inp)
+  createdM <- PM.createTeam pid Nothing =<< teamDetailsFromInput inp
   maybe (throwError err400{errBody = encodeUtf8 $ "Handle \"" <> inp.handle <> "\" is already in use"}) (apiTeamGet pid) createdM
 
 
 apiTeamUpdate :: Projects.ProjectId -> TeamId -> TeamInput -> ATBaseCtx TeamFull
 apiTeamUpdate pid tid inp = do
   _ <- fetchEditableTeam pid tid
-  when (T.null inp.name) $ throwError err400{errBody = "name is required"}
-  assertHandleAllowed inp.handle
-  _ <- PM.updateTeam pid tid (teamDetailsFromInput inp)
+  _ <- PM.updateTeam pid tid =<< teamDetailsFromInput inp
   apiTeamGet pid tid
 
 

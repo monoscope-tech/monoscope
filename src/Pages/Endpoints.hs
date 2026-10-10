@@ -324,8 +324,7 @@ endpointListGetH pid pageM perPageM _layoutM filterTM hostM currentTabM sortM pe
                 $ TabFilter
                   { current = currentFilterTab
                   , currentURL = baseUrl
-                  , options =
-[TabFilterOpt{name, count = Nothing} | name <- ["Endpoints", "Archived"]]
+                  , options = [TabFilterOpt{name, count = Nothing} | name <- ["Endpoints", "Archived"]]
                   }
           }
 
@@ -474,8 +473,8 @@ learnedSpec pid hostM reqTypeM endpointM = do
   -- user could read another tenant's learned schema by project id.
   (_, project) <- Projects.sessionAndProject pid
   let scopeHost = guarded (not . T.null) =<< hostM
-  -- Span kind: Archived spans both directions, so it filters on neither.
-  let kindM = fst . directionLabels . (== Endpoints.Outgoing) <$> directionOf (parseTab reqTypeM)
+      -- Span kind: Archived spans both directions, so it filters on neither.
+      kindM = fst . directionLabels . (== Endpoints.Outgoing) <$> directionOf (parseTab reqTypeM)
   entries <- SchemaCatalog.endpointCatalog pid scopeHost kindM endpointM docsCap
   pure (OpenApi.buildSpec (fromMaybe project.title scopeHost) (V.toList entries), V.length entries)
 

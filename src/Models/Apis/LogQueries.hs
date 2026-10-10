@@ -49,7 +49,7 @@ import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (Display, display)
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime, diffUTCTime)
-import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
+import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -76,7 +76,7 @@ import Relude hiding (many, some)
 import Relude.Extra.Foldable1 (maximum1, minimum1)
 import System.Logging qualified as Log
 import System.Tracing (Tracing, forkWithCtx, withSpan_)
-import Utils (listToIndexHashMap, lookupVecNonEmptyText, replaceAllFormats, toUriStr)
+import Utils (listToIndexHashMap, lookupVecNonEmptyText, replaceAllFormats, toUriStr, truncateHour)
 import Web.HttpApiData (FromHttpApiData (..))
 
 
@@ -231,9 +231,7 @@ executeSecuredQuery useTimefusion pid (SecuredSql source userQuery) limit
           routeToTimefusion = case source of
             SqlPostgres -> False
             SqlTimefusion -> useTimefusion
-      resultE <- try @Hasql.HasqlException $ Hasql.withHasqlTimefusion routeToTimefusion do
-        rows :: [AE.Value] <- Hasql.interp wrapped
-        pure $ jsonArrayRows rows
+      resultE <- try @Hasql.HasqlException $ Hasql.withHasqlTimefusion routeToTimefusion (jsonArrayRows <$> Hasql.interp wrapped)
       pure $ first (\e -> "Query execution failed: " <> toText (displayException e)) resultE
 
 
@@ -241,33 +239,22 @@ executeSecuredQuery useTimefusion pid (SecuredSql source userQuery) limit
 -- inlined @jsonb_build_array(...)@); this decodes that wire shape into
 -- the positional 'V.Vector AE.Value' rows callers index into.
 jsonArrayRows :: [AE.Value] -> V.Vector (V.Vector AE.Value)
-jsonArrayRows =
-  V.fromList . mapMaybe \case
-    AE.Array arr -> Just arr
-    _ -> Nothing
+jsonArrayRows rows = V.fromList [arr | AE.Array arr <- rows]
 
 
 -- | Check that query contains a project_id filter with the correct project ID
 -- This validates that the query has been properly prepared with the project_id substituted
 hasProjectIdFilter :: Text -> Projects.ProjectId -> Bool
-hasProjectIdFilter query pid = any (`T.isInfixOf` query) (["project_id='" <> pidTxt <> "'", "project_id = '" <> pidTxt <> "'"] :: [Text])
-  where
-    pidTxt :: Text
-    pidTxt = pid.toText
+hasProjectIdFilter query pid = any (`T.isInfixOf` query) ["project_id='" <> pid.toText <> "'", "project_id = '" <> pid.toText <> "'"]
 
 
 -- | Validate SQL query: must be a SELECT and must not contain any statement
 -- terminator, comment marker, DDL/DML keyword, or catalog reference.
 validateSqlQuery :: Text -> Bool
-validateSqlQuery query =
-  let lowerQuery = T.toLower query
-   in "select"
-        `T.isInfixOf` lowerQuery
-        && not
-          ( any
-              (`T.isInfixOf` lowerQuery)
-              ["insert ", "update ", "delete ", "drop ", "truncate ", "alter ", "create ", "grant ", "revoke ", "copy ", "execute ", "explain ", "set ", "; ", "--", "/*", "*/", "information_schema", "pg_catalog", "pg_"]
-          )
+validateSqlQuery query = "select" `T.isInfixOf` q && not (any (`T.isInfixOf` q) forbidden)
+  where
+    q = T.toLower query
+    forbidden = ["insert ", "update ", "delete ", "drop ", "truncate ", "alter ", "create ", "grant ", "revoke ", "copy ", "execute ", "explain ", "set ", "; ", "--", "/*", "*/", "information_schema", "pg_catalog", "pg_"] :: [Text]
 
 
 -- | @useTimefusion@ (from @env.enableTimefusionReads@) routes the read to the TimeFusion
@@ -314,9 +301,7 @@ selectLogTable useTimefusion pid queryAST queryText cursorM dateRange projectedC
       $ try @SomeException
       $ Hasql.retryTransientEff 3 "log-explorer.data"
       $ checkpoint (toAnnotation ("selectLogTable", q))
-      $ Hasql.withHasqlTimefusion useTimefusion do
-        rows :: [AE.Value] <- Hasql.interp (rawSql q)
-        pure $ jsonArrayRows rows
+      $ Hasql.withHasqlTimefusion useTimefusion (jsonArrayRows <$> Hasql.interp (rawSql q))
   let paged :: Either Text (V.Vector (V.Vector AE.Value), [Text], Int)
       paged = case result of
         Left e -> Left $ show e
@@ -351,7 +336,7 @@ selectLogTable useTimefusion pid queryAST queryText cursorM dateRange projectedC
 gateReplayTags :: DB es => Projects.ProjectId -> [Text] -> V.Vector (V.Vector AE.Value) -> Eff es (V.Vector (V.Vector AE.Value))
 gateReplayTags pid colNames rows = case elemIndex "summary" (listToColNames colNames) of
   Nothing -> pure rows
-  Just i -> case ordNub [sid | r <- V.toList rows, Just cell <- [r V.!? i], sid <- summarySessionIds cell] of
+  Just i -> case ordNub [sid | r <- V.toList rows, Just (AE.Array els) <- [r V.!? i], AE.String s <- V.toList els, Just sid <- [sessionTagId s]] of
     [] -> pure rows
     sids -> do
       ok <- replayedSessionIds pid sids
@@ -369,12 +354,6 @@ gateReplayTags pid colNames rows = case elemIndex "summary" (listToColNames colN
 replayedSessionIds :: DB es => Projects.ProjectId -> [UUID.UUID] -> Eff es (S.Set UUID.UUID)
 replayedSessionIds _ [] = pure S.empty
 replayedSessionIds pid sids = S.fromList <$> Hasql.interp [HI.sql| SELECT session_id FROM projects.replay_sessions WHERE project_id = #{pid} AND session_id = ANY(#{sids}::uuid[]) |]
-
-
--- | Session ids carried by a row's @to_json(summary)@ cell.
-summarySessionIds :: AE.Value -> [UUID.UUID]
-summarySessionIds (AE.Array els) = mapMaybe (\case AE.String s -> sessionTagId s; _ -> Nothing) (V.toList els)
-summarySessionIds _ = []
 
 
 -- | The id in a @session;\<style\>⇒\<id\>@ summary element, when it is a UUID.
@@ -1047,6 +1026,5 @@ densifyBuckets (minB, maxB) bs =
 buildHourlyBuckets :: UTCTime -> [(UTCTime, Int)] -> [Int]
 buildHourlyBuckets now pairs = densifyBuckets (0, 23) [(idx, c) | (t, c) <- pairs, let idx = hourIndex t, idx >= 0, idx < 24]
   where
-    startHour = addUTCTime (-(23 * 3600)) $ truncateToHour now
-    hourIndex t = floor (diffUTCTime (truncateToHour t) startHour / 3600) :: Int
-    truncateToHour t = let s = utcTimeToPOSIXSeconds t in posixSecondsToUTCTime $ fromIntegral (floor s `div` 3600 * 3600 :: Int)
+    startHour = addUTCTime (-(23 * 3600)) $ truncateHour now
+    hourIndex t = floor (diffUTCTime (truncateHour t) startHour / 3600) :: Int

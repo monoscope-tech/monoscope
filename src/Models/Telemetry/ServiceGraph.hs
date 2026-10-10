@@ -42,6 +42,7 @@ import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.IntMap.Strict qualified as IntMap
 import Data.Map.Strict qualified as Map
+import Data.Semigroup (Max (..))
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (Display, display)
@@ -612,7 +613,7 @@ data EndpointSliceRow = EndpointSliceRow
 -- round-trip doctest below is here to catch. An unrecognised value degrades to 'NKUnknown'
 -- rather than failing the whole query.
 --
--- >>> map (display @NodeKind) [minBound .. maxBound]
+-- >>> map display [minBound .. maxBound :: NodeKind]
 -- ["entry","service","database","queue","external","unknown"]
 -- >>> all (\k -> parseNodeKind (display k) == k) [minBound .. maxBound]
 -- True
@@ -679,58 +680,21 @@ projectsWithSpansInRange useTf lo hi =
 -- place the expensive self-join runs, and it runs once per project per slice rather than
 -- once per page view.
 --
--- @kind IN (…)@ rather than an OR-of-equalities. The wrong-rows bug behind that is fixed
--- (TimeFusion @e0bf291@; its @monoscope_query_shapes.slt@ §11b asserts the two agree), so
--- @IN@ is now a speed choice — @kind@ is raw-indexed and @IN@ routes through the index.
--- Changing it wants a measurement.
---
--- Every column @sp@ projects is aliased, including the ones whose base name would do. @sp@
--- is self-joined, and DataFusion cannot resolve @c.kind@\/@p.kind@ when both sides carry the
--- unqualified base-table name — the whole query fails to plan with \"Ambiguous reference to
--- unqualified field kind\". Renaming to @knd@\/@stc@\/@dur@\/@nm@ is what makes the qualifiers
--- bind. Do not \"tidy\" an alias away.
---
--- @ORDER BY COUNT(*)@ rather than the ordinal @ORDER BY 6@ for the same reason: DataFusion
--- rejects an ordinal that points at an aggregate.
+-- @ORDER BY COUNT(*)@ rather than the ordinal @ORDER BY 6@: DataFusion rejects an ordinal
+-- that points at an aggregate.
 rollupServiceEdges :: (DB es, Labeled "timefusion" Hasql :> es) => Bool -> Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [RollupEdge]
 rollupServiceEdges useTf pid lo hi =
   fmap sliceRowsToEdges
     $ Hasql.withHasqlTimefusion useTf
     $ Hasql.interp
       [HI.sql|
-      WITH sp AS (
-        SELECT context___trace_id tid, context___span_id sid, parent_id par,
-               COALESCE(resource___service___name, 'unknown') svc,
-               -- `resource` is nested JSON, not dot-keyed: resource->>'deployment.environment.name'
-               -- silently yields NULL. The precedence mirrors ProcessMessage's own lookup, so a
-               -- span's environment means the same thing here as everywhere else. Verified against
-               -- both Postgres and TimeFusion; there is no flat column for this in either.
-               COALESCE(resource->'deployment'->'environment'->>'name',
-                        resource->'deployment'->>'environment',
-                        resource->'service'->>'namespace',
-                        resource->'k8s'->'namespace'->>'name', '') env,
-               kind knd, status_code stc, duration dur, name nm,
-               attributes___db___system___name db_sys, attributes___db___namespace db_ns,
-               attributes___server___address srv, attributes___network___peer___address peer
-        FROM otel_logs_and_spans
-        WHERE project_id = #{pid.toText} AND timestamp >= #{lo} AND timestamp < #{hi}
-          AND kind IN ('server','client','producer','consumer')
-      ),
+      ^{rollupSpans mempty pid lo hi}
       hops AS (
         SELECT p.env env, p.svc src, 'service' src_kind, c.svc tgt, 'service' tgt_kind, c.stc st, c.dur dur
         FROM sp c JOIN sp p ON c.tid = p.tid AND c.par = p.sid
         WHERE c.knd IN ('server','consumer') AND p.knd IN ('client','producer')
         UNION ALL
-        SELECT p.env, p.svc, 'service',
-               -- A purely numeric db.namespace is a Redis database index, not a name.
-               CASE WHEN p.db_ns IS NOT NULL AND p.db_ns <> '' AND p.db_ns !~ '^[0-9]+$' THEN 'db:' || p.db_ns
-                    WHEN p.db_sys IS NOT NULL AND p.db_sys <> '' THEN 'db:' || p.db_sys
-                    WHEN p.db_ns IS NOT NULL AND p.db_ns <> '' THEN 'db:' || p.db_ns
-                    WHEN p.knd = 'producer' THEN 'queue:' || COALESCE(NULLIF(LOWER(p.srv), ''), p.nm)
-                    ELSE 'http:' || COALESCE(NULLIF(LOWER(p.srv), ''), NULLIF(LOWER(p.peer), ''), p.nm) END,
-               CASE WHEN (p.db_ns IS NOT NULL AND p.db_ns <> '') OR (p.db_sys IS NOT NULL AND p.db_sys <> '') THEN 'database'
-                    WHEN p.knd = 'producer' THEN 'queue' ELSE 'external' END,
-               p.stc, p.dur
+        SELECT p.env, p.svc, 'service', ^{inferredTargetSql}, p.stc, p.dur
         FROM sp p
         WHERE p.knd IN ('client','producer')
           AND NOT EXISTS (SELECT 1 FROM sp c WHERE c.tid = p.tid AND c.par = p.sid AND c.knd IN ('server','consumer'))
@@ -754,19 +718,28 @@ rollupServiceEdges useTf pid lo hi =
       LIMIT 20000|]
 
 
--- | Direct endpoint dependencies for one closed slice.  This has the same bounded,
--- scheduled raw-span join as the service map; endpoint pages read the compact Postgres
--- result instead of repeating it for every tab visit.  Error hashes share the span's
--- @hashes@ array, so they must be excluded before exploding endpoint identity.
-rollupEndpointDependencyEdges :: (DB es, Labeled "timefusion" Hasql :> es) => Bool -> Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [EndpointRollupEdge]
-rollupEndpointDependencyEdges useTf pid lo hi =
-  fmap endpointSliceRowsToEdges
-    $ Hasql.withHasqlTimefusion useTf
-    $ Hasql.interp
-      [HI.sql|
+-- | The @sp@ CTE both rollups self-join over a slice, with @extra@ columns ahead of the shared ones.
+--
+-- @kind IN (…)@ rather than an OR-of-equalities. The wrong-rows bug behind that is fixed
+-- (TimeFusion @e0bf291@; its @monoscope_query_shapes.slt@ §11b asserts the two agree), so
+-- @IN@ is now a speed choice — @kind@ is raw-indexed and @IN@ routes through the index.
+-- Changing it wants a measurement.
+--
+-- Every column @sp@ projects is aliased, including the ones whose base name would do. @sp@
+-- is self-joined, and DataFusion cannot resolve @c.kind@\/@p.kind@ when both sides carry the
+-- unqualified base-table name — the whole query fails to plan with \"Ambiguous reference to
+-- unqualified field kind\". Renaming to @knd@\/@stc@\/@dur@\/@nm@ is what makes the qualifiers
+-- bind. Do not \"tidy\" an alias away.
+rollupSpans :: HI.Sql -> Projects.ProjectId -> UTCTime -> UTCTime -> HI.Sql
+rollupSpans extra pid lo hi =
+  [HI.sql|
       WITH sp AS (
-        SELECT context___trace_id tid, context___span_id sid, parent_id par, hashes,
+        SELECT context___trace_id tid, context___span_id sid, parent_id par, ^{extra}
                COALESCE(resource___service___name, 'unknown') svc,
+               -- `resource` is nested JSON, not dot-keyed: resource->>'deployment.environment.name'
+               -- silently yields NULL. The precedence mirrors ProcessMessage's own lookup, so a
+               -- span's environment means the same thing here as everywhere else. Verified against
+               -- both Postgres and TimeFusion; there is no flat column for this in either.
                COALESCE(resource->'deployment'->'environment'->>'name',
                         resource->'deployment'->>'environment',
                         resource->'service'->>'namespace',
@@ -777,7 +750,33 @@ rollupEndpointDependencyEdges useTf pid lo hi =
         FROM otel_logs_and_spans
         WHERE project_id = #{pid.toText} AND timestamp >= #{lo} AND timestamp < #{hi}
           AND kind IN ('server','client','producer','consumer')
-      ),
+      ),|]
+
+
+-- | Target key and kind of the uninstrumented peer a client/producer span @p@ called.
+-- A purely numeric db.namespace is a Redis database index, not a name.
+inferredTargetSql :: HI.Sql
+inferredTargetSql =
+  [HI.sql|CASE WHEN p.db_ns IS NOT NULL AND p.db_ns <> '' AND p.db_ns !~ '^[0-9]+$' THEN 'db:' || p.db_ns
+                    WHEN p.db_sys IS NOT NULL AND p.db_sys <> '' THEN 'db:' || p.db_sys
+                    WHEN p.db_ns IS NOT NULL AND p.db_ns <> '' THEN 'db:' || p.db_ns
+                    WHEN p.knd = 'producer' THEN 'queue:' || COALESCE(NULLIF(LOWER(p.srv), ''), p.nm)
+                    ELSE 'http:' || COALESCE(NULLIF(LOWER(p.srv), ''), NULLIF(LOWER(p.peer), ''), p.nm) END,
+               CASE WHEN (p.db_ns IS NOT NULL AND p.db_ns <> '') OR (p.db_sys IS NOT NULL AND p.db_sys <> '') THEN 'database'
+                    WHEN p.knd = 'producer' THEN 'queue' ELSE 'external' END|]
+
+
+-- | Direct endpoint dependencies for one closed slice.  This has the same bounded,
+-- scheduled raw-span join as the service map; endpoint pages read the compact Postgres
+-- result instead of repeating it for every tab visit.  Error hashes share the span's
+-- @hashes@ array, so they must be excluded before exploding endpoint identity.
+rollupEndpointDependencyEdges :: (DB es, Labeled "timefusion" Hasql :> es) => Bool -> Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [EndpointRollupEdge]
+rollupEndpointDependencyEdges useTf pid lo hi =
+  fmap endpointSliceRowsToEdges
+    $ Hasql.withHasqlTimefusion useTf
+    $ Hasql.interp
+      [HI.sql|
+      ^{rollupSpans hashesCol pid lo hi}
       endpoints AS (
         SELECT tid, sid, env, endpoint_hash
         FROM (
@@ -793,15 +792,7 @@ rollupEndpointDependencyEdges useTf pid lo hi =
         JOIN sp c ON c.tid = p.tid AND c.par = p.sid
         WHERE p.knd IN ('client','producer') AND c.knd IN ('server','consumer')
         UNION ALL
-        SELECT e.env, e.endpoint_hash, p.tid,
-               CASE WHEN p.db_ns IS NOT NULL AND p.db_ns <> '' AND p.db_ns !~ '^[0-9]+$' THEN 'db:' || p.db_ns
-                    WHEN p.db_sys IS NOT NULL AND p.db_sys <> '' THEN 'db:' || p.db_sys
-                    WHEN p.db_ns IS NOT NULL AND p.db_ns <> '' THEN 'db:' || p.db_ns
-                    WHEN p.knd = 'producer' THEN 'queue:' || COALESCE(NULLIF(LOWER(p.srv), ''), p.nm)
-                    ELSE 'http:' || COALESCE(NULLIF(LOWER(p.srv), ''), NULLIF(LOWER(p.peer), ''), p.nm) END,
-               CASE WHEN (p.db_ns IS NOT NULL AND p.db_ns <> '') OR (p.db_sys IS NOT NULL AND p.db_sys <> '') THEN 'database'
-                    WHEN p.knd = 'producer' THEN 'queue' ELSE 'external' END,
-               p.stc, p.dur
+        SELECT e.env, e.endpoint_hash, p.tid, ^{inferredTargetSql}, p.stc, p.dur
         FROM endpoints e JOIN sp p ON e.tid = p.tid AND p.par = e.sid
         WHERE p.knd IN ('client','producer')
           AND NOT EXISTS (SELECT 1 FROM sp c WHERE c.tid = p.tid AND c.par = p.sid AND c.knd IN ('server','consumer'))
@@ -825,6 +816,8 @@ rollupEndpointDependencyEdges useTf pid lo hi =
       GROUP BY env, endpoint_hash, tgt, tgt_kind, bkt
       ORDER BY COUNT(*) DESC
       LIMIT 20000|]
+  where
+    hashesCol = [HI.sql|hashes,|]
 
 
 -- | Replace-on-conflict so re-rolling a bucket (the hourly catch-up pass, or a DLQ replay
@@ -847,14 +840,14 @@ upsertEndpointDependencyEdges = upsertEdges "apis.endpoint_dependency_edges" [co
 -- | One unnest upsert per bucket: the conflict target is every identity column, and every
 -- measure column is overwritten from the re-rolled value.
 upsertEdges
-  :: (DB es, HasField "env" r (Maybe Text), HasField "targetKey" r Text, HasField "targetKind" r NodeKind, HasField "reqCount" r Int64, HasField "errorCount" r Int64, HasField "sumDurationNs" r Int64, HasField "latHist" r LatencyHist)
+  :: (DB es, HasField "env" r (Maybe Text), HasField "errorCount" r Int64, HasField "latHist" r LatencyHist, HasField "reqCount" r Int64, HasField "sumDurationNs" r Int64, HasField "targetKey" r Text, HasField "targetKind" r NodeKind)
   => Text -> [BulkCol r] -> [BulkCol r] -> Projects.ProjectId -> UTCTime -> [r] -> Eff es ()
 upsertEdges _ _ _ _ _ [] = pass
-upsertEdges table keys measures pid bucket es = void $ Hasql.use $ HSession.statement () $ unnestInsert table (identity <> values) conflict True (V.fromList es)
+upsertEdges table keys measures pid bucket es = void $ Hasql.use $ HSession.statement () $ unnestInsert table (idCols <> values) conflict True (V.fromList es)
   where
-    identity = [column "project_id" (const $ Just pid.unUUIDId), tsColumn "bucket" (const $ Just bucket), column "env" (Just . fromMaybe "" . (.env))] <> keys <> [column "target_key" (Just . (.targetKey)), column "target_kind" (Just . display . (.targetKind))]
+    idCols = [column "project_id" (const $ Just pid.unUUIDId), tsColumn "bucket" (const $ Just bucket), column "env" (Just . fromMaybe "" . (.env))] <> keys <> [column "target_key" (Just . (.targetKey)), column "target_kind" (Just . display . (.targetKind))]
     values = [column "req_count" (Just . (.reqCount)), column "error_count" (Just . (.errorCount)), column "sum_duration_ns" (Just . (.sumDurationNs)), castColumn "lat_hist" "jsonb" (Just . decodeUtf8 . AE.encode . histObject . (.latHist))] <> measures
-    conflict = " ON CONFLICT (" <> T.intercalate ", " (map (.name) identity) <> ") DO UPDATE SET " <> foldMap (\c -> c.name <> " = EXCLUDED." <> c.name <> ", ") values <> "updated_at = now()"
+    conflict = " ON CONFLICT (" <> T.intercalate ", " (map (.name) idCols) <> ") DO UPDATE SET " <> foldMap (\c -> c.name <> " = EXCLUDED." <> c.name <> ", ") values <> "updated_at = now()"
 
 
 histObject :: LatencyHist -> AE.Value

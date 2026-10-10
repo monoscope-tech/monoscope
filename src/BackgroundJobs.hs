@@ -5,7 +5,6 @@ module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, proc
 import BackgroundJobs.Types (BgJobs (..))
 import BackgroundJobs.Types qualified as Jobs
 import Control.Concurrent (threadDelay)
-import Control.Concurrent.Async (async)
 import Control.Concurrent.STM.TBQueue (isFullTBQueue, readTBQueue, writeTBQueue)
 import Control.Exception qualified as CE
 import Control.Lens (view, (.~), (?~), (^.), (^..), (^?), _1, _3)
@@ -35,18 +34,15 @@ import Data.Pool (withResource)
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (display)
-import Data.Time (DayOfWeek (Monday), UTCTime (..), ZonedTime, addDays, addUTCTime, dayOfWeek, formatTime)
+import Data.Time (DayOfWeek (Monday), UTCTime (..), addDays, addUTCTime, dayOfWeek, formatTime)
 import Data.Time.Clock (NominalDiffTime, diffUTCTime, getCurrentTime)
 import Data.Time.Clock.POSIX (POSIXTime, posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.Time.Format (defaultTimeLocale)
 import Data.Time.LocalTime (utc, utcToZonedTime)
 import Data.Vector qualified as V
 import Data.Vector.Algorithms.Intro qualified as VA
-import Database.PostgreSQL.Simple (FromRow)
 import Database.PostgreSQL.Simple qualified as SimplePG
-import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Simple.Types
 import Effectful (Eff, IOE, (:>))
 import Effectful.Concurrent.Async (concurrently, concurrently_, forConcurrently, forConcurrently_)
 import Effectful.Ki qualified as Ki
@@ -216,7 +212,7 @@ processBackgroundJob authCtx bgJob =
   case bgJob of
     GenerateOtelFacetsBatch pids timestamp -> generateOtelFacetsBatch pids timestamp
     DashboardsAutoProvision scheduledTime -> autoProvisionDashboards scheduledTime
-    NewAnomaly{projectId, createdAt, anomalyType, anomalyAction, targetHashes} -> newAnomalyJob projectId createdAt anomalyType anomalyAction (V.fromList targetHashes)
+    NewAnomaly{projectId, anomalyType, targetHashes} -> newAnomalyJob projectId anomalyType (V.fromList targetHashes)
     InviteUserToProject userId projectId reciever projectTitle' ->
       whenJustM (Projects.userById userId) \user -> do
         -- Invitees usually have no Auth0 identity yet: send them to /login with
@@ -391,20 +387,17 @@ runAIRoutineWith timeoutMicros execute enqueueNext authCtx routineId scheduledAt
         (recordRun routine Issues.CompletedCancelled Nothing Nothing Nothing)
         do
           Log.logAttention "AI routine run timed out" $ AE.object ["routine_id" AE..= routineId, "timeout_micros" AE..= timeoutMicros]
-          recorded <- tryAny $ Issues.insertChatMessage routine.projectId routine.conversationId Issues.ChatExecutionEvent "Routine timed out. It will run again at the next interval." Nothing Nothing
-          whenLeft_ recorded \err -> Log.logAttention "AI routine timeout event was not recorded" $ AE.object ["error" AE..= show @Text err]
+          noteFailure "AI routine timeout event was not recorded" $ Issues.insertChatMessage routine.projectId routine.conversationId Issues.ChatExecutionEvent "Routine timed out. It will run again at the next interval." Nothing Nothing
           recordRun routine Issues.CompletedTimedOut Nothing Nothing (Just "Routine execution timed out")
     Just (Left err) -> do
       Log.logAttention "AI routine run failed" $ AE.object ["routine_id" AE..= routineId, "error" AE..= show @Text err]
-      recorded <- tryAny $ Issues.insertChatMessage routine.projectId routine.conversationId Issues.ChatExecutionEvent "Routine failed unexpectedly. It will run again at the next interval." Nothing Nothing
-      whenLeft_ recorded \insertErr -> Log.logAttention "AI routine failure event was not recorded" $ AE.object ["error" AE..= show @Text insertErr]
+      noteFailure "AI routine failure event was not recorded" $ Issues.insertChatMessage routine.projectId routine.conversationId Issues.ChatExecutionEvent "Routine failed unexpectedly. It will run again at the next interval." Nothing Nothing
       recordRun routine Issues.CompletedFailed Nothing Nothing (Just $ show @Text err)
     Just (Right (status, findings, actions, err)) -> recordRun routine status findings actions err
   whenJustM (Issues.completeRoutine routineId scheduledAt routine.claimedAt) $ enqueueNext routineId
   where
-    recordRun routine status findings actions err = do
-      recorded <- tryAny $ Issues.finishRoutineRun routine.runId routine.claimedAt status findings actions err
-      whenLeft_ recorded \recordErr -> Log.logAttention "AI routine run result was not recorded" $ AE.object ["routine_id" AE..= routineId, "error" AE..= show @Text recordErr]
+    recordRun routine status findings actions err = noteFailure "AI routine run result was not recorded" $ Issues.finishRoutineRun routine.runId routine.claimedAt status findings actions err
+    noteFailure msg action = whenLeftM_ (tryAny action) \e -> Log.logAttention msg $ AE.object ["routine_id" AE..= routineId, "error" AE..= show @Text e]
 
 
 -- | Post the daily internal admin digest (usage, new projects, issues, alerts, job health) to Discord.
@@ -670,10 +663,8 @@ sendTrialEndingReminder authCtx pid scheduledDaysLeft =
                         maybe scheduledDaysLeft (\epoch -> max 0 $ ceiling $ (fromIntegral epoch - utcTimeToPOSIXSeconds now :: POSIXTime) / 86400) trialEnd
                   users <- Projects.usersByProjectId pid
                   let mail = ET.trialEndingEmail project.title actualDaysLeft (projectUrl authCtx pid <> "/manage_billing")
-                  forM_ users \u -> do
-                    sendRes <- tryAny $ renderAndSend (CI.original u.email) mail
-                    whenLeft_ sendRes \e ->
-                      Log.logAttention "TrialEndingReminder: email send failed" (pid.toText, CI.original u.email, displayException e)
+                  forM_ users \u -> whenLeftM_ (tryAny $ renderAndSend (CI.original u.email) mail) \e ->
+                    Log.logAttention "TrialEndingReminder: email send failed" (pid.toText, CI.original u.email, displayException e)
                 _ -> Log.logInfo "TrialEndingReminder: sub not trialing, skipping" (pid.toText, scheduledDaysLeft, subId, status)
 
 
@@ -763,9 +754,8 @@ reportProjectUsage authCtx pid =
             -- (rather than being quietly marked 'submitted' by the happy path).
             Projects.NoBillingProvider -> do
               Log.logAttention "ReportUsage: NoBillingProvider for paid project" ("project_id", pid.toText, "sub_id", project.subId, "plan", project.paymentPlan, "pending_chunks", length pending)
-              for_ pending \row -> do
-                mr <- tryAny $ Projects.markUsageSubmissionFailed row.id "NoBillingProvider: paid plan has no usable billing provider"
-                whenLeft_ mr \e ->
+              for_ pending \row ->
+                whenLeftM_ (tryAny $ Projects.markUsageSubmissionFailed row.id "NoBillingProvider: paid plan has no usable billing provider") \e ->
                   Log.logAttention "NoBillingProvider mark failed — backlog stuck" ("project_id", pid.toText, "chunk_id", show row.id :: Text, "error", toText (displayException e))
             _ -> for_ pending \row -> do
               let chunkId = show row.id :: Text
@@ -799,8 +789,7 @@ reportProjectUsage authCtx pid =
                     ( \e -> do
                         let errText = toText (displayException e)
                         Log.logAttention "Usage chunk submission FAILED — will retry next tick" $ logFields [("provider", show provider :: Text), ("error", errText)]
-                        markRes <- tryAny $ Projects.markUsageSubmissionFailed row.id errText
-                        whenLeft_ markRes \e2 ->
+                        whenLeftM_ (tryAny $ Projects.markUsageSubmissionFailed row.id errText) \e2 ->
                           Log.logAttention "Usage chunk status=failed UPDATE failed — row may retry on next tick" $ logFields [("error", toText (displayException e2))]
                     )
                     ( \() -> do
@@ -896,7 +885,7 @@ runDailyJobScheduling authCtx =
           (Log.logInfo "Jobs already scheduled for project today, skipping" ("project_id", p.toText))
           $ liftIO
           $ withResource authCtx.jobsPool \conn -> do
-            traverse_ (void . createJob conn "background_jobs") [Jobs.ReportUsage p, Jobs.HostRetentionSweep p]
+            traverse_ (void . createJob conn "background_jobs") ([Jobs.ReportUsage p, Jobs.HostRetentionSweep p] :: [BgJobs])
             let sched = seedJobs conn currentTime
             -- Derived-table maintenance jobs read from `apis.*` tables, not
             -- the hypertable, and are unaffected by the derivation path.
@@ -1345,14 +1334,10 @@ runHourlyJob scheduledTime hour = do
 
   -- Cleanup expired query cache entries
   tryStep "monitor-evaluation-retention" $ Monitors.pruneEvaluations (addUTCTime (-(7 * 86400)) scheduledTime)
-  deletedCount <- QueryCache.cleanupExpiredCache
-  when (deletedCount > 0) $ Log.logInfo "Cleaned up expired query cache entries" ("deleted_count", AE.toJSON deletedCount)
-
-  deviceCodesDeleted <- Hasql.interpExecute [HI.sql| DELETE FROM users.device_auth_codes WHERE expires_at < now() - interval '1 hour' |]
-  when (deviceCodesDeleted > 0) $ Log.logInfo "Cleaned up expired device auth codes" ("deleted_count", AE.toJSON deviceCodesDeleted)
-
-  staleMetricsDeleted <- Hasql.interpExecute [HI.sql| DELETE FROM otel_metrics_meta WHERE last_seen_at < now() - interval '3 months' |]
-  when (staleMetricsDeleted > 0) $ Log.logInfo "Cleaned up stale metrics metadata" ("deleted_count", AE.toJSON staleMetricsDeleted)
+  let logDeleted msg n = when (n > 0) $ Log.logInfo msg ("deleted_count", AE.toJSON n)
+  QueryCache.cleanupExpiredCache >>= logDeleted "Cleaned up expired query cache entries"
+  Hasql.interpExecute [HI.sql| DELETE FROM users.device_auth_codes WHERE expires_at < now() - interval '1 hour' |] >>= logDeleted "Cleaned up expired device auth codes"
+  Hasql.interpExecute [HI.sql| DELETE FROM otel_metrics_meta WHERE last_seen_at < now() - interval '3 months' |] >>= logDeleted "Cleaned up stale metrics metadata"
 
   enqueueJobs ctx [Jobs.CompressReplaySessions, Jobs.DashboardsAutoProvision scheduledTime]
 
@@ -1446,26 +1431,17 @@ generateOtelFacetsBatch projectIds _timestamp = do
 data DrainInput = SeedPattern Text | NewEvent Text Text
 
 
-processDrainBatch :: Bool -> V.Vector DrainInput -> UTCTime -> Drain.DrainTree -> (Drain.DrainTree, V.Vector Drain.DrainResult)
-processDrainBatch isSummary batch now initial = Drain.buildDrainBatch tokenize logId sampleContent initial batch now
+processDrainBatch :: V.Vector DrainInput -> UTCTime -> Drain.DrainTree -> (Drain.DrainTree, V.Vector Drain.DrainResult)
+processDrainBatch batch now initial = Drain.buildDrainBatch tokenize logId sampleContent initial batch now
   where
-    tok = if isSummary then Drain.generateSummaryDrainTokens else Drain.generateDrainTokens
-    tokenize = tok . \case SeedPattern c -> c; NewEvent _ c -> c
+    tokenize = Drain.generateSummaryDrainTokens . \case SeedPattern c -> c; NewEvent _ c -> c
     logId = \case SeedPattern _ -> ""; NewEvent lid _ -> lid
     sampleContent = \case SeedPattern _ -> Nothing; NewEvent _ c -> Just c
 
 
--- | Process errors from OpenTelemetry spans to detect runtime exceptions
--- This job runs every minute to extract errors from span data and create
--- runtime exception issues for tracking and notification.
---
--- Error Detection Strategy:
--- 1. Query spans with error indicators (status, events, attributes)
--- 2. Extract error details from span events using OpenTelemetry conventions
 data ActiveErrorState = AESNew | AESEscalating | AESOngoing | AESRegressed
   deriving stock (Eq, Generic, Read, Show)
-  deriving anyclass (NFData)
-  deriving (FromField, HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "AES" ActiveErrorState
+  deriving (HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "AES" ActiveErrorState
 
 
 data ErrorSubscriptionDue = ErrorSubscriptionDue
@@ -1480,7 +1456,7 @@ data ErrorSubscriptionDue = ErrorSubscriptionDue
   , lastNotifiedAt :: Maybe UTCTime
   }
   deriving stock (Generic, Show)
-  deriving anyclass (FromRow, HI.DecodeRow, NFData)
+  deriving anyclass (HI.DecodeRow)
 
 
 -- | Dispatch an alert to the project's @everyone team (see 'fanOutToTeam' for the
@@ -2158,9 +2134,7 @@ processProjectErrors pid rawErrors now = do
         Log.logTrace "Successfully inserted errors for project"
           $ AE.object [("project_id", AE.toJSON pid.toText), ("error_count", AE.toJSON $ V.length errors)]
         -- Upsert hourly rollup stats (must follow batchUpsertErrorPatterns which creates the FK rows)
-        let addErrCounts (c1, u1) (c2, u2) = (c1 + c2, u1 + u2)
-            errorRollupGroups = HM.toList $ V.foldl' (\acc e -> HM.insertWith addErrCounts e.hash (1 :: Int, bool 0 1 (isJust e.userId)) acc) HM.empty errors
-            errorRollupStats = V.fromList [(h, cnt, users) | (h, (cnt, users)) <- errorRollupGroups]
+        let errorRollupStats = V.fromList [(h, cnt, users) | (h, (Sum cnt, Sum users)) <- HM.toList $ HM.fromListWith (<>) [(e.hash, (Sum (1 :: Int), Sum (bool 0 1 (isJust e.userId)))) | e <- V.toList errors]]
         void $ ErrorPatterns.upsertErrorPatternHourlyStats pid now errorRollupStats
         void $ ErrorPatterns.upsertErrorPatternUsers pid errors
         void $ ErrorPatterns.upsertErrorTagCounts pid errors
@@ -2503,11 +2477,6 @@ processEagerBatch batch shard
         -- never touch already-compressed chunks (which would force decompression).
         let hashCutoff = addUTCTime (negate $ fromIntegral ctx.config.hashUpdateMaxAgeSecs) now
             effectiveMinTs = max batchMinTs hashCutoff
-            dbSpanIds = V.toList spanIdsV
-            dbTraceIds = V.toList traceIdsV
-            dbHashesJson = V.toList perRowHashesJson
-            dbErrorsJson = V.toList perRowErrorsJson
-            dbNormPaths = V.toList normalizedPaths
             -- Rows stamped at ingest ('stampHashesAtIngest') already carry the derived
             -- set; re-merging them mints a duplicate row version in TimeFusion's
             -- merge-on-read store for zero data change. Only rows whose stored hashes
@@ -2555,11 +2524,11 @@ processEagerBatch batch shard
                       SELECT span_id, trace_id, errors, norm_path,
                              ARRAY(SELECT jsonb_array_elements_text(hashes_json)) AS new_hashes
                       FROM (
-                        SELECT unnest(#{dbSpanIds}::text[])  AS span_id,
-                               unnest(#{dbTraceIds}::text[])  AS trace_id,
-                               unnest(#{dbHashesJson}::jsonb[]) AS hashes_json,
-                               unnest(#{dbErrorsJson}::jsonb[]) AS errors,
-                               unnest(#{dbNormPaths}::text[])  AS norm_path
+                        SELECT unnest(#{spanIdsV}::text[])  AS span_id,
+                               unnest(#{traceIdsV}::text[])  AS trace_id,
+                               unnest(#{perRowHashesJson}::jsonb[]) AS hashes_json,
+                               unnest(#{perRowErrorsJson}::jsonb[]) AS errors,
+                               unnest(#{normalizedPaths}::text[])  AS norm_path
                       ) raw
                       ORDER BY span_id, trace_id
                     ) u
@@ -2580,8 +2549,8 @@ processEagerBatch batch shard
                     FROM (
                       SELECT span_id, trace_id
                       FROM (
-                        SELECT unnest(#{dbSpanIds}::text[]) AS span_id,
-                               unnest(#{dbTraceIds}::text[]) AS trace_id
+                        SELECT unnest(#{spanIdsV}::text[]) AS span_id,
+                               unnest(#{traceIdsV}::text[]) AS trace_id
                       ) raw
                       ORDER BY span_id, trace_id
                     ) u
@@ -2741,7 +2710,7 @@ seedFromPatterns
   -> Maybe UTCTime
   -> Eff es Drain.DrainTree
 seedFromPatterns shard key now texts maxSeen = do
-  let freshTree = fst $ processDrainBatch True (V.fromList $ map SeedPattern texts) now Drain.emptyDrainTree
+  let freshTree = fst $ processDrainBatch (V.fromList $ map SeedPattern texts) now Drain.emptyDrainTree
       newEntry = ExtractionWorker.ServiceDrainTree{tree = freshTree, lastSeededAt = now, maxPatternSeenAt = maxSeen}
   atomicModifyIORef'_ shard.drainTrees (HM.insert key newEntry)
   pure freshTree
@@ -2770,7 +2739,7 @@ flushDrainTask shard task
 
       -- Build NewEvent inputs from the buffered spans.
       let events = V.fromList [NewEvent bs.eventId bs.summary | bs <- task.spans]
-          (!mergedTree, allPatternsRaw) = processDrainBatch True events now seededTree
+          (!mergedTree, allPatternsRaw) = processDrainBatch events now seededTree
 
       -- Swap the merged tree back. Preserve lastSeededAt/maxPatternSeenAt from
       -- the existing entry (async rehydration owns those fields).
@@ -2786,11 +2755,8 @@ flushDrainTask shard task
           prepared = flip mapMaybe (V.toList allPatterns) \dp ->
             let eventCount = fromIntegral dp.frequency :: Int64
                 patternHash = toXXHash dp.templateStr
-             in if eventCount <= 0 || T.null dp.templateStr
-                  then Nothing
-                  else
-                    Just
-                      ( LogPatterns.UpsertPattern
+             in guard (eventCount > 0 && not (T.null dp.templateStr))
+                  $> ( LogPatterns.UpsertPattern
                           { projectId = pid
                           , logPattern = dp.templateStr
                           , hash = patternHash
@@ -2954,7 +2920,7 @@ getStripeSubDetails apiKey subId = do
         trialEnd = v ^? AL.key "trial_end" . AL._Integer <&> fromInteger
         -- API version 2025-03-31.basil moved these off the subscription and onto
         -- each item; read the item first and fall back for older-versioned accounts.
-        epochAt k = fmap fromInteger $ v ^? item0 . AL.key k . AL._Integer <|> v ^? AL.key k . AL._Integer
+        epochAt k = fmap fromInteger $ v ^? AL.key "items" . AL.key "data" . AL.nth 0 . AL.key k . AL._Integer <|> v ^? AL.key k . AL._Integer
         currentPeriodStart = epochAt "current_period_start"
         currentPeriodEnd = epochAt "current_period_end"
     pure StripeSubDetails{..}
@@ -2996,13 +2962,7 @@ scheduleTrialReminders pid trialEndEpoch = do
     Log.logAttention "Trial reminder runAt already past; skipping" (pid.toText, daysLeft, runAt)
   forM_ due \(runAt, daysLeft) -> do
     let payload = AE.toJSON (TrialEndingReminder pid daysLeft)
-    res <-
-      tryAny
-        $ void
-        $ Hasql.interpExecute
-          [HI.sql|INSERT INTO background_jobs (run_at, status, payload)
-             VALUES (#{runAt}, 'queued', #{HI.AsJsonb payload})|]
-    whenLeft_ res \e ->
+    whenLeftM_ (tryAny $ Hasql.interpExecute_ [HI.sql|INSERT INTO background_jobs (run_at, status, payload) VALUES (#{runAt}, 'queued', #{HI.AsJsonb payload})|]) \e ->
       Log.logAttention "Trial reminder enqueue failed" (pid.toText, daysLeft, displayException e)
 
 
@@ -3132,12 +3092,14 @@ dispatchTeamNotifications team alert projectId projectTitle monitorUrl subj rend
 
 jobsWorkerInit :: Logger -> Config.AuthContext -> TracerProvider -> IO ()
 jobsWorkerInit logger appCtx tp = when appCtx.config.enableBackgroundJobs do
-  when appCtx.config.enableDailyJobScheduling do
-    ensureDailyJobScheduled appCtx
-    void $ async $ forever do
-      threadDelay (30 * 60 * 1_000_000) -- 30 minutes
-      ensureDailyJobScheduled appCtx
-  startJobRunner
+  when appCtx.config.enableDailyJobScheduling $ ensureDailyJobScheduled appCtx
+  -- Scoped to the runner so a supervisor restart does not leak another backstop loop.
+  UIO.concurrently_
+    ( when appCtx.config.enableDailyJobScheduling $ forever do
+        threadDelay (30 * 60 * 1_000_000)
+        tryStepIO logger appCtx "ensureDailyJobScheduled" $ ensureDailyJobScheduled appCtx
+    )
+    $ startJobRunner
     $ mkConfig jobLogger "background_jobs" appCtx.jobsPool (MaxConcurrentJobs appCtx.config.maxConcurrentJobs) (jobsRunner logger appCtx tp) (\cfg -> cfg{cfgJobOrdering = EarliestRunAtFirst})
   where
     -- Drop the poll chatter. odd-jobs emits 'LogPoll' on every poll of the job
@@ -3173,7 +3135,7 @@ jobsWorkerInit logger appCtx tp = when appCtx.config.enableBackgroundJobs do
 -- row is what holds this guard shut for the rest of the day.
 ensureDailyJobScheduled :: Config.AuthContext -> IO ()
 ensureDailyJobScheduled appCtx = withResource appCtx.jobsPool \conn -> do
-  [Only (inserted :: Int)] <-
+  [SimplePG.Only (inserted :: Int)] <-
     SimplePG.query_
       conn
       [sql|WITH ins AS (
@@ -3241,24 +3203,15 @@ sendReportForProject pid rType = do
       Log.logInfo "Completed sending report notifications for" pid
 
 
--- | Process new anomalies detected by database triggers
--- This job is created by the apis.new_anomaly_proc() stored procedure
--- when new entities (endpoints, shapes, fields, formats, errors) are inserted.
---
--- Anomaly Processing Strategy:
--- 1. API Changes (endpoint/shape/format) -> Group by endpoint into single issue
--- 2. Runtime Exceptions -> Create individual issues for each error
--- 3. All issues are queued for LLM enhancement if configured
--- 4. Notifications are sent based on project settings
-newAnomalyJob :: Projects.ProjectId -> ZonedTime -> Text -> Text -> V.Vector Text -> ATBackgroundCtx ()
-newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes =
+-- | Process new anomalies raised by the apis.new_anomaly_proc() trigger. Only API
+-- changes (endpoint, shape, format) do work here: they group into a single issue per
+-- endpoint so related changes don't spam notifications. Other types are ignored.
+newAnomalyJob :: Projects.ProjectId -> Text -> V.Vector Text -> ATBackgroundCtx ()
+newAnomalyJob pid anomalyTypesT targetHashes =
   case ApiChanges.parseAnomalyTypes anomalyTypesT of
     Nothing -> Log.logAttention "newAnomalyJob: unrecognized anomaly type, skipping" anomalyTypesT
     Just anomalyType -> do
       Log.logTrace "Processing new anomalies" ()
-      -- API changes (endpoint, shape, format) group into a single issue per
-      -- endpoint, so multiple related changes don't spam notifications.
-      -- Runtime exceptions get individual issues; unknown types are ignored.
       when (anomalyType `elem` ([ApiChanges.ATEndpoint, ApiChanges.ATShape, ApiChanges.ATFormat] :: [ApiChanges.AnomalyTypes]))
         $ processAPIChangeAnomalies pid targetHashes
 
@@ -3286,10 +3239,7 @@ processAPIChangeAnomalies pid targetHashes = do
       let firstAnom = head anomalies
           hasChanges = any ((== ApiChanges.ATEndpoint) . (.anomalyType)) anomalies
       case existingIssueM of
-        Just existingIssue -> do
-          when hasChanges do
-            Issues.updateIssueWithNewAnomaly existingIssue.id (Issues.apiChangeDataFrom anomalies)
-          pure Nothing
+        Just existingIssue -> Nothing <$ when hasChanges (Issues.updateIssueWithNewAnomaly existingIssue.id (Issues.apiChangeDataFrom anomalies))
         Nothing -> do
           -- "unresolved" tags whether this row should produce a customer
           -- notification. The issue itself is always created (the UI shows

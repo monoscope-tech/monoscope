@@ -224,7 +224,6 @@ data DashboardFull = DashboardFull
   deriving (ToSchema) via JsonValueSchema DashboardFull
 
 
--- | Input for create/replace.
 data DashboardInput = DashboardInput
   { title :: Text
   , tags :: Maybe [Text]
@@ -237,7 +236,6 @@ data DashboardInput = DashboardInput
   deriving (ToSchema) via JsonValueSchema DashboardInput
 
 
--- | PATCH — all fields optional.
 data DashboardPatch = DashboardPatch
   { title :: Maybe Text
   , tags :: Maybe [Text]
@@ -360,10 +358,6 @@ data BulkResult a = BulkResult
   deriving (ToSchema) via JsonValueSchema (BulkResult a)
 
 
--- =============================================================================
--- Shared paginated envelope + lightweight user reference
--- =============================================================================
-
 data UserRef = UserRef
   { id :: UUID.UUID
   , email :: Text
@@ -373,10 +367,6 @@ data UserRef = UserRef
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake UserRef
   deriving (ToSchema) via SnakeSchema UserRef
 
-
--- =============================================================================
--- Project (singular)
--- =============================================================================
 
 data ProjectSummary = ProjectSummary
   { id :: Projects.ProjectId
@@ -405,10 +395,6 @@ data ProjectFull = ProjectFull
   deriving (ToSchema) via SnakeSchema ProjectFull
 
 
--- =============================================================================
--- /me
--- =============================================================================
-
 data MeResponse = MeResponse
   { projectId :: Projects.ProjectId
   , project :: ProjectSummary
@@ -421,10 +407,6 @@ data MeResponse = MeResponse
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MeResponse
   deriving (ToSchema) via SnakeSchema MeResponse
 
-
--- =============================================================================
--- Endpoints — catalog surfacing
--- =============================================================================
 
 data EndpointSummary = EndpointSummary
   { id :: Endpoints.EndpointId
@@ -456,10 +438,6 @@ data EndpointFull = EndpointFull
   deriving (ToSchema) via JsonValueSchema EndpointFull
 
 
--- =============================================================================
--- Log patterns
--- =============================================================================
-
 data LogPatternSummary = LogPatternSummary
   { id :: Int64
   , projectId :: Projects.ProjectId
@@ -487,10 +465,6 @@ data LogPatternFull = LogPatternFull
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake LogPatternFull
   deriving (ToSchema) via SnakeSchema LogPatternFull
 
-
--- =============================================================================
--- Issues — triage surface
--- =============================================================================
 
 -- | Query-param filter for /issues. Derives 'FromHttpApiData' via @WrappedEnumSC@
 -- so the server rejects unknown statuses rather than silently falling through.
@@ -549,10 +523,6 @@ data IncidentSummary = IncidentSummary
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake IncidentSummary
   deriving (ToSchema) via SnakeSchema IncidentSummary
 
-
--- =============================================================================
--- Teams + Members
--- =============================================================================
 
 data TeamSummary = TeamSummary
   { id :: TeamId

@@ -86,7 +86,7 @@ import Data.UUID qualified as UUID
 import Models.Apis.Monitors (MonitorAlertConfig (..))
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.ProjectMembers qualified as ManageMembers
-import Pages.Components (FieldCfg (..), FieldSize (..), facetOption_, facetRail_, facetSection_, formField_, keyboardActivateAttr_, localTimeFmt_, resetFormOnSuccessAttr_, resizer_)
+import Pages.Components (FieldCfg (..), FieldSize (..), facetOption_, facetRail_, facetSection_, formField_, keyboardActivateAttr_, lazyPanel_, localTimeFmt_, resetFormOnSuccessAttr_, resizer_)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Monitors qualified as AlertUI
 import Pkg.AI qualified as AI
@@ -1525,19 +1525,6 @@ virtualTable pid initialFetchUrl modeM = do
     ("" :: Text)
 
 
--- | Inner div that lazily HTMX-loads @url@ into @#target@ once @trigger@ fires.
--- Shared by the details and alert-form side panels; @extra@ carries per-panel bits.
--- Deliberately innerHTML, not morph. Measured: the swap is ~7ms of a ~200ms click, so
--- morph optimises 4% of the interaction — and idiomorph mutates nodes in place, so
--- hyperscript never processes `install FieldMenuDelegate` on morphed-in content and the
--- field context menu silently stops opening. Revisit only with an explicit
--- `_hyperscript.processNode` on htmx:after:swap (see the LogItemMenuable behavior, which
--- already has to do this by hand).
-lazyLoad_ :: Text -> Text -> Text -> [Attribute] -> Html ()
-lazyLoad_ target url trigger extra =
-  div_ ([hxGet_ url, hxTarget_ ("#" <> target), hxSwap_ "innerHTML", hxTrigger_ trigger, term "hx-sync" "this:replace"] <> extra) pass
-
-
 traceLoadingSkeleton_ :: Html ()
 traceLoadingSkeleton_ =
   div_ [class_ "w-full h-full p-2 flex flex-col gap-4", role_ "status", Aria.live_ "polite"] do
@@ -1839,10 +1826,12 @@ apiLogsPage page = do
       let aurl = "/p/" <> pidTxt <> "/log_explorer/alert_form" <> maybe "" (\a -> "?alert=" <> a.id.toText) page.alert
       -- Container is display:none until checked, so IntersectionObserver can't drive
       -- the load — fire off the toggle's change instead (and at init if deep-linked open).
-      lazyLoad_
-        "alert_container"
+      -- innerHTML, not morph: idiomorph mutates nodes in place, so hyperscript never
+      -- processes `install FieldMenuDelegate` on morphed-in content.
+      lazyPanel_
         aurl
         "loadAlertForm once"
+        "Loading alert form"
         [ [__|init if #create-alert-toggle.checked then trigger loadAlertForm on me end
               on change[#create-alert-toggle.checked] from #create-alert-toggle trigger loadAlertForm on me|]
         ]

@@ -403,19 +403,6 @@ newMetricCatalogBuffer :: IO MetricCatalogBuffer
 newMetricCatalogBuffer = MetricCatalogBuffer <$> STM.newTVarIO mempty
 
 
-metricCatalogKey :: MetricRecord -> Text
-metricCatalogKey r =
-  T.intercalate
-    "\x1f"
-    [ UUID.toText r.projectId
-    , r.metricName
-    , show r.metricType
-    , r.metricUnit
-    , metricServiceNameFromResource r.metricName r.resource
-    , fromMaybe "" $ scopeField "name" r.instrumentationScope
-    ]
-
-
 -- | Return a flush batch only when the bounded buffer reaches its threshold.
 enqueueMetricCatalog :: MetricCatalogBuffer -> V.Vector MetricRecord -> IO (Maybe (V.Vector MetricRecord))
 enqueueMetricCatalog (MetricCatalogBuffer ref) rows = STM.atomically do
@@ -424,6 +411,8 @@ enqueueMetricCatalog (MetricCatalogBuffer ref) rows = STM.atomically do
   if Map.size pending < 256
     then pure Nothing
     else Just . V.fromList . Map.elems <$> STM.swapTVar ref mempty
+  where
+    metricCatalogKey r = T.intercalate "\x1f" [UUID.toText r.projectId, r.metricName, show r.metricType, r.metricUnit, metricServiceNameFromResource r.metricName r.resource, fromMaybe "" $ scopeField "name" r.instrumentationScope]
 
 
 flushMetricCatalog :: (DB es, IOE :> es) => MetricCatalogBuffer -> Eff es ()
@@ -1343,8 +1332,7 @@ getMetricCatalogPage pid sourceM prefixM queryM cutoff limit offset withInactive
       COALESCE(labs, '{}'::text[]), FALSE, (SELECT COUNT(*)::int8 FROM act)
     FROM meta LEFT JOIN labels USING (metric_name) WHERE #{withInactive} AND last_seen < #{cutoff}
     ORDER BY 7 DESC, 1 |]
-  let metric :: MetricCatalogRow -> MetricChartListData
-      metric r = MetricChartListData r.metricName r.metricType r.metricUnit r.metricDescription r.lastSeen r.metricLabels
+  let metric (r :: MetricCatalogRow) = MetricChartListData r.metricName r.metricType r.metricUnit r.metricDescription r.lastSeen r.metricLabels
   pure
     MetricCatalogPage
       { active = V.fromList $ metric <$> filter (.isActive) rows

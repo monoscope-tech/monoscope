@@ -1,98 +1,54 @@
 module Web.Routes (server, genAuthServerContext, KeepPrefixExp, LogDataFieldExp, widgetPngGetH, widgetGetH, chartsDataGetH, ApiV1Routes, apiV1Server, apiV1OpenApiSpec) where
 
--- Standard library imports
 import Control.Lens
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
+import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Builder (Builder)
+import Data.ByteString.Lazy qualified as LBS
+import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
+import Data.Effectful.Hasql qualified as Hasql
+import Data.Effectful.Notify qualified as Notify
+import Data.Effectful.Wreq qualified as Wreq
 import Data.List qualified as L
+import Data.OpenApi (OpenApi, SecurityDefinitions (..), SecurityScheme (..), SecuritySchemeType (..), components, description, info, security, securitySchemes, servers, title, version)
+import Data.OpenApi qualified as OA
 import Data.Ord (clamp)
+import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.UUID qualified as UUID
 import Deriving.Aeson.Stock qualified as DAE
-import GHC.TypeLits (Symbol)
-import Pkg.DeriveUtils (UUIDId (..))
-import Relude hiding (ask)
-
--- Database imports
-import Data.Effectful.Hasql qualified as Hasql
-import Hasql.Interpolate qualified as HI
-import Models.Apis.ShareEvents qualified as ShareEvents
-
--- Effectful imports
-import Data.Effectful.Notify qualified as Notify
 import Effectful.Error.Static qualified as Error
 import Effectful.Reader.Static (ask)
 import Effectful.Reader.Static qualified as Reader
 import Effectful.State.Static.Local qualified as State
 import Effectful.Time qualified as Time
-
--- Web and server imports
+import GHC.TypeLits (Symbol)
+import Hasql.Interpolate qualified as HI
 import Log (Logger)
 import Lucid
-import Network.HTTP.Types qualified as H
-import Network.Wai (Request, queryString)
-import Network.Wai qualified as Wai
-import Servant
-import Servant.HTML.Lucid (HTML)
-import Servant.Htmx
-import Servant.QueryParam.Record (RecordParam)
-import Servant.QueryParam.Server.Record ()
-import Servant.QueryParam.TypeLevel (Eval, Exp)
-import Servant.Server.Generic (AsServerT, genericServeTWithContext)
-import Servant.Server.Internal.Delayed (passToServer)
-import Web.Cookie (SetCookie)
-
--- System and configuration imports
-
-import Data.OpenApi (OpenApi, SecurityDefinitions (..), SecurityScheme (..), SecuritySchemeType (..), components, description, info, security, securitySchemes, servers, title, version)
-import Data.OpenApi qualified as OA
-import OpenTelemetry.Trace (TracerProvider)
-import Pages.CommandPalette qualified as CommandPalette
-import Servant.OpenApi (HasOpenApi (..), toOpenApi)
-import System.Config (AuthContext (..), DeploymentEnv (..), EnvConfig (..))
-import System.Exit (ExitCode (..))
-import System.Logging qualified as Log
-import System.Process.Typed (byteStringInput, proc, readProcess, setStdin)
-import System.Timeout (timeout)
-import System.Types (ATAuthCtx, ATBaseCtx, ApiPrincipal (..), HXRedirectDest, RespHeaders, TriggerEvents, XWidgetJSON, addRespHeaders, effToServantHandler)
-import Web.Auth (APItoolkitAuthContext, ApiKeyAuthContext, apiKeyAuthHandler, authHandler, htmlServerError)
-import Web.Auth qualified as Auth
-import Web.MCP qualified as MCP
-import Web.Wire qualified as Wire
-
--- Model imports
-
-import Data.ByteString.Base16 qualified as B16
-import Data.ByteString.Lazy qualified as LBS
-import Data.CaseInsensitive qualified as CI
-import Data.Effectful.Wreq qualified as Wreq
-import Data.Text qualified as T
+import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.Incidents qualified as Incidents
+import Models.Apis.Issues qualified as Issues
+import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
+import Models.Apis.ShareEvents qualified as ShareEvents
+import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.Dashboards qualified as Dashboards
+import Models.Projects.ImpactReviews qualified as ImpactReviews
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.ContainerTypes (Scope)
 import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
-import Pkg.Parser qualified as Parser
-import Pkg.Parser.Expr qualified as ParserExpr
-import UnliftIO.Exception (handle)
-import Utils qualified
-import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
-
--- Page imports
-
-import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.Incidents qualified as Incidents
-import Models.Apis.Issues qualified as Issues
-import Models.Apis.LogQueries qualified as LogQueries
-import Models.Projects.CodeContext qualified as CodeContext
-import Models.Projects.ImpactReviews qualified as ImpactReviews
+import Network.HTTP.Types qualified as H
+import Network.Wai (Request, queryString)
+import Network.Wai qualified as Wai
+import OpenTelemetry.Trace (TracerProvider)
 import Pages.AIThreads qualified as AIThreads
 import Pages.BodyWrapper (NavigationResponse, PageCtx (..))
 import Pages.Bots.Discord qualified as Discord
@@ -101,6 +57,7 @@ import Pages.Bots.Utils qualified as BotUtils
 import Pages.Bots.Whatsapp qualified as Whatsapp
 import Pages.Charts.Charts qualified as Charts
 import Pages.CodeContext qualified as PageCodeContext
+import Pages.CommandPalette qualified as CommandPalette
 import Pages.Containers qualified as Containers
 import Pages.Dashboards qualified as Dashboards
 import Pages.Endpoints qualified as ApiCatalog
@@ -129,16 +86,39 @@ import Pages.Telemetry qualified as Trace
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
+import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.EmailTemplates qualified as ET
 import Pkg.Git qualified as Git
 import Pkg.LiveTail qualified as LT
+import Pkg.Parser qualified as Parser
+import Pkg.Parser.Expr qualified as ParserExpr
+import Relude hiding (ask)
+import Servant
+import Servant.HTML.Lucid (HTML)
+import Servant.Htmx
+import Servant.OpenApi (HasOpenApi (..), toOpenApi)
+import Servant.QueryParam.Record (RecordParam)
+import Servant.QueryParam.Server.Record ()
+import Servant.QueryParam.TypeLevel (Eval, Exp)
+import Servant.Server.Generic (AsServerT, genericServeTWithContext)
+import Servant.Server.Internal.Delayed (passToServer)
+import System.Config (AuthContext (..), DeploymentEnv (..), EnvConfig (..))
+import System.Exit (ExitCode (..))
+import System.Logging qualified as Log
+import System.Process.Typed (byteStringInput, proc, readProcess, setStdin)
+import System.Timeout (timeout)
+import System.Types (ATAuthCtx, ATBaseCtx, ApiPrincipal (..), HXRedirectDest, RespHeaders, TriggerEvents, XWidgetJSON, addRespHeaders, effToServantHandler)
+import UnliftIO.Exception (handle)
+import Utils qualified
 import Web.ApiHandlers qualified as ApiH
 import Web.ApiTypes qualified as ApiT
+import Web.Auth (APItoolkitAuthContext, ApiKeyAuthContext, apiKeyAuthHandler, authHandler, htmlServerError)
+import Web.Auth qualified as Auth
+import Web.Cookie (SetCookie)
+import Web.MCP qualified as MCP
+import Web.Wire qualified as Wire
+import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
 
-
--- =============================================================================
--- Common query parameter type aliases
--- =============================================================================
 
 type ProjectId = Capture "projectID" Projects.ProjectId
 type GetRedirect = Verb 'GET 302
@@ -148,7 +128,6 @@ type LocationRedirect a = GetRedirect '[HTML] (Headers '[Header "Location" Text]
 type SessionRedirect a = GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] a)
 
 
--- Query parameter types
 type QPT a = QueryParam a Text
 
 
@@ -157,7 +136,6 @@ type QPI a = QueryParam a Int
 type QPUUId a = QueryParam a UUID.UUID
 
 
--- Custom type for handling all query parameters
 data AllQueryParams
 
 
@@ -175,11 +153,6 @@ data LogDataFieldExp :: Symbol -> Exp Symbol
 type instance Eval (LogDataFieldExp sym) = LogDataField sym
 
 
--- =============================================================================
--- Custom content types
--- =============================================================================
-
--- Define custom RawJSON content type
 data RawJSON
 
 
@@ -257,14 +230,9 @@ otlpHttpH export keyM body =
   liftIO (export keyM body) >>= either (\e -> Error.throwError err400{errBody = fromStrict (encodeUtf8 e)}) pure
 
 
--- When bytestring is returned for json, simply return the bytestring
 instance Servant.MimeRender JSON ByteString where
   mimeRender _ = fromStrict
 
-
--- =============================================================================
--- Public API v1 Routes
--- =============================================================================
 
 type ApiV1Routes :: Type -> Type
 data ApiV1Routes mode = ApiV1Routes
@@ -433,11 +401,6 @@ data ApiV1Routes mode = ApiV1Routes
   deriving stock (Generic)
 
 
--- =============================================================================
--- Route Definitions
--- =============================================================================
-
--- Root routes
 type Routes :: Type -> Type
 data Routes mode = Routes
   { public :: mode :- "public" :> Servant.Raw
@@ -499,7 +462,6 @@ data Routes mode = Routes
   deriving stock (Generic)
 
 
--- Cookie Protected Routes
 type CookieProtectedRoutes :: Type -> Type
 data CookieProtectedRoutes mode = CookieProtectedRoutes
   { -- Dashboard routes
@@ -619,7 +581,6 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   deriving stock (Generic)
 
 
--- Log Explorer Routes
 type LogExplorerRoutes = NamedRoutes LogExplorerRoutes'
 
 
@@ -659,7 +620,6 @@ data LogExplorerRoutes' mode = LogExplorerRoutes'
   deriving stock (Generic)
 
 
--- Issues Routes
 type IssuesRoutes = NamedRoutes IssuesRoutes'
 
 
@@ -694,7 +654,6 @@ data IssuesRoutes' mode = IssuesRoutes'
   deriving stock (Generic)
 
 
--- Telemetry Routes
 type TelemetryRoutes = NamedRoutes TelemetryRoutes'
 
 
@@ -729,7 +688,6 @@ data TelemetryRoutes' mode = TelemetryRoutes'
   deriving stock (Generic)
 
 
--- Monitors Routes
 type MonitorsRoutes = NamedRoutes MonitorsRoutes'
 
 
@@ -758,7 +716,6 @@ data MonitorsRoutes' mode = MonitorsRoutes'
   deriving stock (Generic)
 
 
--- Projects Routes
 type ProjectsRoutes = NamedRoutes ProjectsRoutes'
 
 
@@ -789,24 +746,19 @@ data ProjectsRoutes' mode = ProjectsRoutes'
   , notificationsTestPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "settings" :> "integrations" :> "test" :> ReqBody '[FormUrlEncoded] Settings.TestForm :> Post '[HTML] (RespHeaders (Html ()))
   , notificationsTestHistoryGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "settings" :> "integrations" :> "history" :> Get '[HTML] (RespHeaders Settings.NotificationTestHistoryGet)
   , -- Onboarding routes
-    onboading :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> QPT "step" :> Get '[HTML] (RespHeaders Onboarding.OnboardingGet)
-  , onboardingInfoPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "info" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingInfoForm :> Post '[HTML] (RespHeaders Onboarding.OnboardingInfoPost)
-  , onboardingConfPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "survey" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingConfForm :> Post '[HTML] (RespHeaders Onboarding.OnboardingConfPost)
+    onboading :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> QueryParam "step" Onboarding.OnboardingStep :> Get '[HTML] (RespHeaders Onboarding.OnboardingGet)
+  , onboardingInfoPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "info" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingInfoForm :> Post '[HTML] (RespHeaders Onboarding.OnboardingStepPost)
+  , onboardingConfPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "survey" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingConfForm :> Post '[HTML] (RespHeaders Onboarding.OnboardingStepPost)
   , onboardingPhoneEmailsPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "phone-emails" :> ReqBody '[JSON] Onboarding.NotifChannelForm :> Post '[HTML] (RespHeaders Onboarding.OnboardingPhoneEmailsPost)
   , onboardingIntegrationCheck :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "integration-check" :> QPT "language" :> Get '[HTML] (RespHeaders (Html ()))
   , onboardingDismissChecklist :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "dismiss-checklist" :> Post '[HTML] (RespHeaders (Html ()))
-  , onboardingSkipped :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "skip" :> QPT "step" :> Post '[HTML] (RespHeaders (Html ()))
+  , onboardingSkipped :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "skip" :> QueryParam "step" Onboarding.OnboardingStep :> Post '[HTML] (RespHeaders (Html ()))
   , -- Pricing routes
     onboardingPricingUpdate :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "pricing" :> ReqBody '[FormUrlEncoded] CreateProject.PricingUpdateForm :> Post '[HTML] (RespHeaders (Html ()))
   }
   deriving stock (Generic)
 
 
--- =============================================================================
--- Server Implementations
--- =============================================================================
-
--- Main server for the root routes
 server :: Logger -> AuthContext -> TracerProvider -> OtlpHttpHandler -> OtlpHttpHandler -> Routes (AsServerT ATBaseCtx)
 server logger env tp otlpTraces otlpLogs =
   Routes
@@ -874,7 +826,6 @@ server logger env tp otlpTraces otlpLogs =
     }
 
 
--- API v1 server
 apiV1Server :: Logger -> AuthContext -> TracerProvider -> ApiPrincipal -> Servant.ServerT (NamedRoutes ApiV1Routes) ATBaseCtx
 apiV1Server logger env tp principal =
   ApiV1Routes
@@ -991,7 +942,6 @@ apiV1OpenApiSpec =
     & security .~ [OA.SecurityRequirement (fromList [("BearerAuth", [])])]
 
 
--- Cookie Protected server
 cookieProtectedServer :: Servant.ServerT (Servant.NamedRoutes CookieProtectedRoutes) ATAuthCtx
 cookieProtectedServer =
   CookieProtectedRoutes
@@ -1105,7 +1055,6 @@ cookieProtectedServer =
     }
 
 
--- Log Explorer server
 logExplorerServer :: Projects.ProjectId -> Servant.ServerT LogExplorerRoutes ATAuthCtx
 logExplorerServer pid =
   LogExplorerRoutes'
@@ -1134,7 +1083,6 @@ logExplorerServer pid =
     }
 
 
--- Issues server
 issuesServer :: Projects.ProjectId -> Servant.ServerT IssuesRoutes ATAuthCtx
 issuesServer pid =
   IssuesRoutes'
@@ -1166,7 +1114,6 @@ issuesServer pid =
     }
 
 
--- Telemetry server
 telemetryServer :: Projects.ProjectId -> Servant.ServerT TelemetryRoutes ATAuthCtx
 telemetryServer pid =
   TelemetryRoutes'
@@ -1195,7 +1142,6 @@ telemetryServer pid =
     }
 
 
--- Monitors server
 monitorsServer :: Projects.ProjectId -> Servant.ServerT MonitorsRoutes ATAuthCtx
 monitorsServer pid =
   MonitorsRoutes'
@@ -1221,7 +1167,6 @@ monitorsServer pid =
     }
 
 
--- Projects server
 projectsServer :: Servant.ServerT ProjectsRoutes ATAuthCtx
 projectsServer =
   ProjectsRoutes'
@@ -1256,10 +1201,6 @@ projectsServer =
     , onboardingSkipped = Onboarding.onboardingStepSkipped
     }
 
-
--- =============================================================================
--- Utility handlers and helpers
--- =============================================================================
 
 data Status = Status
   { dbVersion :: Maybe Text
@@ -1481,10 +1422,6 @@ widgetPngGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr widthM heightM s
   pure $ addHeader @"Cache-Control" (if isLeft chart then "no-store" else bool "public, max-age=300" "public, max-age=31536000, immutable" $ isJust fromDStr && isJust toDStr) pngBytes
 
 
--- =============================================================================
--- Email Preview Handlers (dev only)
--- =============================================================================
-
 guardDevOnly :: ATBaseCtx ()
 guardDevOnly = do
   ctx <- ask @AuthContext
@@ -1535,10 +1472,6 @@ emailPreviewH templateName = do
   uncurry ET.emailWrapper <$> fromMaybe (pure ("Unknown", p_ "Template not found")) (L.lookup templateName emailTemplates)
 
 
--- =============================================================================
--- Authentication and error handling
--- =============================================================================
-
 -- | The context that will be made available to request handlers. We supply the
 -- "cookie-auth"-tagged request handler defined above, so that the 'HasServer' instance
 -- of 'AuthProtect' can extract the handler and run it on the request.
@@ -1555,10 +1488,6 @@ errorFormatters env =
     }
 
 
--- =============================================================================
--- Custom HasServer instances
--- =============================================================================
-
 -- | We add a HasServer instance that says:
 --   - The handler will receive a list of (Text, Maybe Text).
 --   - We pull that out of the WAI `Request` in `route`.
@@ -1568,17 +1497,10 @@ instance HasServer api ctx => HasServer (AllQueryParams :> api) ctx where
 
   route _ ctx subserver = route (Proxy :: Proxy api) ctx $ passToServer subserver grabAllParams
     where
-      grabAllParams :: Request -> [(Text, Maybe Text)]
       grabAllParams = map (bimap dec (fmap dec)) . queryString
       dec = decodeUtf8With lenientDecode
 
 
-  hoistServerWithContext
-    :: Proxy (AllQueryParams :> api)
-    -> Proxy ctx
-    -> (forall x. m x -> n x)
-    -> ([(Text, Maybe Text)] -> ServerT api m)
-    -> ([(Text, Maybe Text)] -> ServerT api n)
   hoistServerWithContext _ pc nat s = hoistServerWithContext (Proxy :: Proxy api) pc nat . s
 
 

@@ -604,7 +604,7 @@ insertIssueReturningId = fmap HI.getOneRow . Hasql.interp . insertIssueSql
 
 
 insertIssueReturningIdTx :: Issue -> Tx.Transaction IssueId
-insertIssueReturningIdTx = fmap HI.getOneRow . Tx.statement () . HI.interp True . insertIssueSql
+insertIssueReturningIdTx = Hasql.oneTx . insertIssueSql
 
 
 -- | The issue a recurring signal belongs to: the existing one, reopened, or a
@@ -913,7 +913,7 @@ selectIssues pid projection f = do
         ) lp_ev ON i.issue_type IN (^{enumLit LogPattern}, ^{enumLit LogPatternRateChange})
         LEFT JOIN LATERAL (
           SELECT a.event FROM apis.issue_activity_log a
-          WHERE a.issue_id = i.id AND a.event IN ('resolved', 'auto_resolved', 'reopened', 'regressed', 'escalated', 'ack_expired')
+          WHERE a.issue_id = i.id AND ^{stateEventSql}
           ORDER BY a.created_at DESC LIMIT 1
         ) lat ON TRUE
         WHERE i.project_id = #{pid} ^{iFilters}
@@ -1018,8 +1018,7 @@ setAckState pid iids ackM
             WHERE project_id = #{pid} AND id = ANY(#{iids}::uuid[])
             ORDER BY project_id, target_hash, issue_type, updated_at DESC, id DESC
           )|]
-      void
-        $ Hasql.interpExecute
+      Hasql.interpExecute_
           ( keepers
               <> [HI.sql|
           UPDATE apis.issues i
@@ -1127,8 +1126,7 @@ expireAcks now = do
         FROM expired
         ORDER BY project_id, target_hash, issue_type, updated_at DESC, id DESC
       )|]
-  void
-    $ Hasql.interpExecute
+  Hasql.interpExecute_
       ( expiredKeepers
           <> [HI.sql|
       UPDATE apis.issues i
@@ -1143,8 +1141,7 @@ expireAcks now = do
       )
   -- The losers are archived above, so re-deriving keepers here yields exactly the
   -- rows that must be reopened.
-  HI.getOneColumn
-    <<$>> Hasql.interp
+  Hasql.interp
       ( expiredKeepers
           <> [HI.sql|
         UPDATE apis.issues i
@@ -1290,11 +1287,7 @@ autoArchiveStaleDiscoveryIssues pid now days =
       WHERE project_id = #{pid}
         AND acknowledged_at IS NULL
         AND archived_at IS NULL
-        AND issue_type IN (
-          'log_pattern'::apis.issue_type,
-          'log_pattern_rate_change'::apis.issue_type,
-          'api_change'::apis.issue_type
-        )
+        AND issue_type IN (^{enumLit LogPattern}, ^{enumLit LogPatternRateChange}, ^{enumLit ApiChange})
         AND updated_at < #{now} - (INTERVAL '1 day' * #{days}) |]
 
 
@@ -1610,29 +1603,18 @@ getOrCreateConversation pid convId convType ctx = do
 
 
 listConversations :: DB es => Projects.ProjectId -> Eff es [ConversationSummary]
-listConversations pid =
-  Hasql.interp
-    [HI.sql|SELECT c.conversation_id,
-      COALESCE(NULLIF(c.title, ''), NULLIF(i.title, ''), NULLIF(first_message.content, ''), 'AI conversation'),
-      c.conversation_type, c.updated_at, r.template_key,
-      COALESCE(r.active, FALSE), r.interval_minutes, r.next_run_at, r.running_since, r.destination
-      FROM apis.ai_conversations c
-      LEFT JOIN apis.issues i ON i.project_id = c.project_id AND i.id = c.conversation_id
-      LEFT JOIN apis.ai_routines r ON r.project_id = c.project_id AND r.conversation_id = c.conversation_id
-      LEFT JOIN LATERAL (
-        SELECT LEFT(m.content, 100) AS content FROM apis.ai_chat_messages m
-        WHERE m.project_id = c.project_id AND m.conversation_id = c.conversation_id AND m.role = 'user'
-        ORDER BY m.created_at LIMIT 1
-      ) first_message ON TRUE
-      WHERE c.project_id = #{pid}
-      ORDER BY (r.id IS NOT NULL) DESC, c.updated_at DESC|]
+listConversations pid = Hasql.interp $ conversationSummarySql "AI conversation" [HI.sql|WHERE c.project_id = #{pid} ORDER BY (r.id IS NOT NULL) DESC, c.updated_at DESC|]
 
 
 getConversation :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Eff es (Maybe ConversationSummary)
-getConversation pid convId =
-  Hasql.interpOne
-    [HI.sql|SELECT c.conversation_id,
-      COALESCE(NULLIF(c.title, ''), NULLIF(i.title, ''), NULLIF(first_message.content, ''), 'New chat'),
+getConversation pid convId = Hasql.interpOne $ conversationSummarySql "New chat" [HI.sql|WHERE c.project_id = #{pid} AND c.conversation_id = #{convId}|]
+
+
+-- | 'ConversationSummary' columns, titled by @fallback@ when nothing better exists.
+conversationSummarySql :: Text -> HI.Sql -> HI.Sql
+conversationSummarySql fallback filters =
+  [HI.sql|SELECT c.conversation_id,
+      COALESCE(NULLIF(c.title, ''), NULLIF(i.title, ''), NULLIF(first_message.content, ''), #{fallback}),
       c.conversation_type, c.updated_at, r.template_key,
       COALESCE(r.active, FALSE), r.interval_minutes, r.next_run_at, r.running_since, r.destination
       FROM apis.ai_conversations c
@@ -1642,8 +1624,8 @@ getConversation pid convId =
         SELECT LEFT(m.content, 100) AS content FROM apis.ai_chat_messages m
         WHERE m.project_id = c.project_id AND m.conversation_id = c.conversation_id AND m.role = 'user'
         ORDER BY m.created_at LIMIT 1
-      ) first_message ON TRUE
-      WHERE c.project_id = #{pid} AND c.conversation_id = #{convId}|]
+      ) first_message ON TRUE |]
+    <> filters
 
 
 -- | Recover the typed anomaly subject at the persistence boundary. Other
@@ -1661,9 +1643,8 @@ conversationNeedsTitle pid convId =
 
 setConversationTitle :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Text -> Eff es ()
 setConversationTitle pid convId title =
-  void
-    $ Hasql.interpExecute
-      [HI.sql|UPDATE apis.ai_conversations SET title = #{T.take 100 $ T.strip title}
+  Hasql.interpExecute_
+    [HI.sql|UPDATE apis.ai_conversations SET title = #{T.take 100 $ T.strip title}
       WHERE project_id = #{pid} AND conversation_id = #{convId} AND title IS NULL|]
 
 
@@ -1826,9 +1807,8 @@ listDueRoutines limit =
 
 pauseRoutine :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Eff es ()
 pauseRoutine pid convId =
-  void
-    $ Hasql.interpExecute
-      [HI.sql|UPDATE apis.ai_routines SET active = FALSE,
+  Hasql.interpExecute_
+    [HI.sql|UPDATE apis.ai_routines SET active = FALSE,
         next_run_at = CASE WHEN running_since IS NULL THEN NULL ELSE next_run_at END
         WHERE project_id = #{pid} AND conversation_id = #{convId}|]
 
@@ -2181,17 +2161,7 @@ payloadType = \case
 -- fields a level deeper, so those merges would write keys at the wrong level and
 -- every row already in the table would stop parsing.
 payloadJson :: IssuePayload -> AE.Value
-payloadJson = \case
-  ApiChangeP d -> AE.toJSON d
-  RuntimeExceptionP d -> AE.toJSON d
-  QueryAlertP d -> AE.toJSON d
-  LogPatternP d -> AE.toJSON d
-  LogPatternRateChangeP d -> AE.toJSON d
-  PerformanceP d -> AE.toJSON d
-  FrontendP d -> AE.toJSON d
-  FeedbackP d -> AE.toJSON d
-  UptimeP d -> AE.toJSON d
-  CronP d -> AE.toJSON d
+payloadJson = AE.genericToJSON AE.defaultOptions{AE.sumEncoding = AE.UntaggedValue}
 
 
 -- | Pair a stored @issue_type@ with its @issue_data@. 'Nothing' means the two
@@ -2366,10 +2336,8 @@ data IssueActivity = IssueActivity
 --
 -- The list view derives the same thing as a LATERAL inside its paged query
 -- ('selectIssues'); pulling that out into a shared helper would turn one join
--- into an N+1 across the page, so the single-issue case gets its own scalar. The
--- event set is the one that matters — the two must agree on *which* events count
--- as a state change, or the list and the detail page will disagree about whether
--- an issue has regressed.
+-- into an N+1 across the page, so the single-issue case gets its own scalar; the
+-- two share 'stateEventSql' so they agree on which events count as a state change.
 selectLatestStateEvent :: DB es => IssueId -> Eff es (Maybe IssueEvent)
 selectLatestStateEvent iid =
   -- Decoded as Text then parsed, the same way 'parseIssueType' handles its column:
@@ -2378,8 +2346,12 @@ selectLatestStateEvent iid =
     . listToMaybe @Text
     <$> Hasql.interp
       [HI.sql| SELECT a.event FROM apis.issue_activity_log a
-               WHERE a.issue_id = #{iid} AND a.event IN ('resolved', 'auto_resolved', 'reopened', 'regressed', 'escalated', 'ack_expired')
+               WHERE a.issue_id = #{iid} AND ^{stateEventSql}
                ORDER BY a.created_at DESC LIMIT 1 |]
+
+
+stateEventSql :: HI.Sql
+stateEventSql = [HI.sql|a.event IN ('resolved', 'auto_resolved', 'reopened', 'regressed', 'escalated', 'ack_expired')|]
 
 
 logIssueActivity :: (DB es, Time :> es) => IssueId -> IssueEvent -> Maybe Projects.UserId -> Maybe AE.Value -> Eff es ()
@@ -2463,7 +2435,7 @@ data ReportListItem = ReportListItem
 
 
 addReport :: DB es => Report -> Eff es ()
-addReport (r :: Report) =
+addReport r =
   Hasql.interpExecute_
     [HI.sql| INSERT INTO apis.reports (id, created_at, updated_at, project_id, report_type, report_json, start_time, end_time)
       VALUES (#{r.id}, #{r.createdAt}, #{r.updatedAt}, #{r.projectId}, #{r.reportType}, #{r.reportJson}, #{r.startTime}, #{r.endTime}) |]

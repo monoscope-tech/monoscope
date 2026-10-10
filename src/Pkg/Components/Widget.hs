@@ -295,6 +295,7 @@ data Widget = Widget
   , markers :: Maybe [WidgetMarker]
   , _projectId :: Maybe Projects.ProjectId
   , _dashboardId :: Maybe Text -- Dashboard ID for context
+  , _tabSlug :: Maybe Text -- Slug of the dashboard tab holding the widget
   , _isNested :: Maybe Bool
   , _centerTitle :: Maybe Bool
   , expandBtnFn :: Maybe Text
@@ -497,7 +498,6 @@ decodeWidgetZ z = case B64URL.decodeBase64Untyped (encodeUtf8 z) of
 
 
 -- | Data attributes for table row click handling (delegated via global JS handler in widgets.ts)
-
 
 -- Used when converting a widget json to its html representation. Eg in a query chart builder
 widgetPostH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Widget -> ATAuthCtx (RespHeaders Widget)
@@ -1583,46 +1583,45 @@ renderTableWithDataAndParams widget dataRows params = do
   let columns = fromMaybe [] widget.columns
       tableId = maybeToMonoid widget.id
       currentVar = widget.onRowClick >>= (.setVariable) >>= \var -> find ((== "var-" <> var) . fst) params >>= snd
-      -- Rows navigate server-side: a tab named by @navigate_to_tab@, else the current tab
-      -- (a query-only URL resolves against the page path), with the row's variable set.
+      -- Rows navigate server-side to the @navigate_to_tab@ tab, else the widget's own tab,
+      -- with the row's variable set. Tabless dashboards have no content target: rows stay inert.
       rowNavAttrs value = fold do
         action <- widget.onRowClick
         pid <- widget._projectId
         dashId <- widget._dashboardId
-        guard $ isJust action.setVariable || isJust action.navigateToTab
+        tab <- slugify <$> action.navigateToTab <|> widget._tabSlug
         let varKey = ("var-" <>) <$> action.setVariable
             vars = [(k, v) | (k, Just v) <- params, "var-" `T.isPrefixOf` k, Just k /= varKey] <> [(k, value) | k <- toList varKey]
-            path = foldMap (\tab -> "/p/" <> pid.toText <> "/dashboards/" <> dashId <> "/tab/" <> slugify tab) action.navigateToTab
         pure
-          $ dashboardContentNavAttrs (path <> "?" <> T.intercalate "&" [k <> "=" <> toUriStr v | (k, v) <- vars])
-          <> [term "hx-preload" "mousedown"]
-          <> foldMap (\var -> [name_ "dashboard-variable-option", data_ "variable-key" var, data_ "variable-value" value, data_ "variable-label" value, term "hx-on:htmx:before:request" "syncDashboardVariable(this, true)", term "hx-on:htmx:finally:request" "syncDashboardVariable(this, false)"]) action.setVariable
+          $ dashboardContentNavAttrs ("/p/" <> pid.toText <> "/dashboards/" <> dashId <> "/tab/" <> tab <> "?" <> T.intercalate "&" [k <> "=" <> toUriStr v | (k, v) <- vars])
+            <> [term "hx-preload" "mousedown"]
+            <> foldMap (\var -> [name_ "dashboard-variable-option", data_ "variable-key" var, data_ "variable-value" value, data_ "variable-label" value, term "hx-on:htmx:before:request" "syncDashboardVariable(this, true)", term "hx-on:htmx:finally:request" "syncDashboardVariable(this, false)"]) action.setVariable
 
   table_ [class_ "table table-zebra table-sm w-full relative", id_ tableId] do
-      sortableTableHead_ widget (find ((== "table-sort") . fst) params >>= snd)
-      tbody_ [] do
-        let maxValues = calculateMaxValues columns dataRows
-            -- max formatted width per progress column, so bars line up
-            valueWidths =
-              M.fromList
-                [ (col.field, V.foldl' (\acc row -> max acc (T.length $ formatColumnValue col (getRowValue idx row))) 5 dataRows)
-                | (col, idx) <- zip columns [0 ..]
-                , isJust col.progress
-                ]
-        V.forM_ dataRows \row -> do
-          let firstColValue = memptyIfFalse (not $ null columns) (getRowValue 0 row)
-              rowValue = maybe firstColValue (\tpl -> foldl' (\t (col, idx) -> T.replace ("{{row." <> col.field <> "}}") (getRowValue idx row) t) tpl (zip columns [0 ..])) (widget.onRowClick >>= (.value))
-              isCurrent = Just rowValue == currentVar
-          tr_
-            ( [class_ $ "hover cursor-pointer" <> memptyIfFalse isCurrent " bg-fillBrand-weak font-semibold"]
-                <> [term "aria-current" "true" | isCurrent]
-                <> rowNavAttrs rowValue
-            )
-            $ ifor_ columns \idx col ->
-              td_ [class_ $ cellClass col]
-                $ if isJust col.progress
-                  then renderProgressCell col (getRowValue idx row) maxValues valueWidths
-                  else renderLongTextOr widget col (getRowValue idx row)
+    sortableTableHead_ widget (find ((== "table-sort") . fst) params >>= snd)
+    tbody_ [] do
+      let maxValues = calculateMaxValues columns dataRows
+          -- max formatted width per progress column, so bars line up
+          valueWidths =
+            M.fromList
+              [ (col.field, V.foldl' (\acc row -> max acc (T.length $ formatColumnValue col (getRowValue idx row))) 5 dataRows)
+              | (col, idx) <- zip columns [0 ..]
+              , isJust col.progress
+              ]
+      V.forM_ dataRows \row -> do
+        let firstColValue = memptyIfFalse (not $ null columns) (getRowValue 0 row)
+            rowValue = maybe firstColValue (\tpl -> foldl' (\t (col, idx) -> T.replace ("{{row." <> col.field <> "}}") (getRowValue idx row) t) tpl (zip columns [0 ..])) (widget.onRowClick >>= (.value))
+            isCurrent = Just rowValue == currentVar
+        tr_
+          ( [class_ $ "hover cursor-pointer" <> memptyIfFalse isCurrent " bg-fillBrand-weak font-semibold"]
+              <> [term "aria-current" "true" | isCurrent]
+              <> rowNavAttrs rowValue
+          )
+          $ ifor_ columns \idx col ->
+            td_ [class_ $ cellClass col]
+              $ if isJust col.progress
+                then renderProgressCell col (getRowValue idx row) maxValues valueWidths
+                else renderLongTextOr widget col (getRowValue idx row)
 
 
 getRowValue :: Int -> V.Vector Text -> Text

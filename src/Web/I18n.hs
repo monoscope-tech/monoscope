@@ -64,9 +64,7 @@ dict Es = es
 -- subsequent lookups are pure map reads. If a YAML file is malformed the
 -- binary fails to start with a clear error rather than serving wrong text.
 decodeEmbedded :: ByteString -> Map.Map Text Text
-decodeEmbedded raw = case Yaml.decodeEither' raw of
-  Right m -> m
-  Left err -> error $ "Web.I18n: failed to decode embedded translations: " <> show err
+decodeEmbedded = either (error . ("Web.I18n: failed to decode embedded translations: " <>) . show) id . Yaml.decodeEither'
 
 
 en :: Map.Map Text Text
@@ -88,6 +86,4 @@ languageSetCookieBS lang =
     , setCookieValue = encodeUtf8 (languageCode lang)
     , setCookiePath = Just "/"
     , setCookieMaxAge = Just (secondsToDiffTime $ 365 * 24 * 60 * 60)
-    , setCookieHttpOnly = False
-    , setCookieSecure = False
     }

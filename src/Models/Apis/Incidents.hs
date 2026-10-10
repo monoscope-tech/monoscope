@@ -492,84 +492,84 @@ recordIncidentEventTx update = do
     | not validSource -> pure UnknownIncidentSource
     | not validIssue -> pure IncidentIssueMismatch
     | otherwise -> do
-          duplicate <-
-            queryTx @[(EpisodeId, IncidentEventId)]
-              [HI.sql|SELECT episode_id, id FROM apis.incident_events
-        WHERE project_id = #{pid} AND source_kind = #{sourceKind} AND source_id = #{sourceId}
-          AND observed_at = #{at} AND event_kind = #{eventKind}|]
-          case listToMaybe duplicate of
-            Just (eid, eventId) -> pure $ AlreadyRecorded eid eventId
-            Nothing | not sourceActionable -> pure InactiveIncidentSource
-            Nothing -> do
-              latest <- latestEpisodeTx pid update.source
-              case latest of
-                Just episode | at < episode.lastEventAt -> pure OlderThanCurrentEpisode
-                _ | (nextPhase /= EpisodeActive || update.change == IncidentDataUnavailable) && maybe True ((/= EpisodeActive) . (.phase)) latest -> pure NoOpenEpisode
-                _ -> do
-                  episodeM <- case latest of
-                    Just existing | existing.phase == EpisodeActive -> pure $ Just existing
-                    -- A new episode without an issue would be unreachable: the
-                    -- issue page is the only surface an episode is read from.
-                    _ | isNothing issueId -> pure Nothing
-                    _ ->
-                      Just
-                        <$> oneTx @Episode
-                          ( [HI.sql|INSERT INTO apis.incident_episodes
-                (project_id, source_kind, source_id, issue_id, phase, started_at, last_event_at)
-                VALUES (#{pid}, #{sourceKind}, #{sourceId}, #{issueId}, 'active', #{at}, #{at})
-                RETURNING |]
-                              <> episodeColumns
-                          )
-                  case episodeM of
-                    Nothing -> pure EpisodeWithoutIssue
-                    Just episode -> do
-                      let eid = episode.id
-                          closedAt = if nextPhase == EpisodeActive then Nothing else Just at
-                      current <-
-                        oneTx @Episode
-                          $ [HI.sql|UPDATE apis.incident_episodes
-                    SET phase = #{nextPhase}, last_event_at = #{at}, closed_at = #{closedAt},
-                        issue_id = COALESCE(issue_id, #{issueId}) WHERE id = #{eid}
-                    RETURNING |]
-                          <> episodeColumns
-                      eventId <-
-                        oneTx @IncidentEventId
-                          [HI.sql|INSERT INTO apis.incident_events
-                    (episode_id, project_id, source_kind, source_id, event_kind, observed_at, actor_id, root_payload, reply_payload)
-                    VALUES (#{eid}, #{pid}, #{sourceKind}, #{sourceId}, #{eventKind}, #{at}, #{actorId}, #{update.rootPayload}, #{update.replyPayload})
-                    RETURNING id|]
-                      existingDestinations <-
-                        queryTx @[SlackDestination]
-                          [HI.sql|SELECT team_id, channel_id FROM apis.slack_incident_roots WHERE episode_id = #{eid}|]
-                      let destinations = case update.delivery of
-                            RefreshIncident -> existingDestinations
-                            PublishIncident -> existingDestinations <> [destination | nextPhase == EpisodeActive, destination <- update.destinations]
-                      forM_ (ordNub destinations) \destination -> do
-                        rootId <-
-                          oneTx @SlackRootId
-                            [HI.sql|INSERT INTO apis.slack_incident_roots
-                              (episode_id, team_id, channel_id, first_event_id)
-                              VALUES (#{eid}, #{destination.teamId}, #{destination.channelId}, #{eventId})
-                              ON CONFLICT (episode_id, team_id, channel_id) DO UPDATE SET channel_id = EXCLUDED.channel_id
-                              RETURNING id|]
+        duplicate <-
+          queryTx @[(EpisodeId, IncidentEventId)]
+            [HI.sql|SELECT episode_id, id FROM apis.incident_events
+      WHERE project_id = #{pid} AND source_kind = #{sourceKind} AND source_id = #{sourceId}
+        AND observed_at = #{at} AND event_kind = #{eventKind}|]
+        case listToMaybe duplicate of
+          Just (eid, eventId) -> pure $ AlreadyRecorded eid eventId
+          Nothing | not sourceActionable -> pure InactiveIncidentSource
+          Nothing -> do
+            latest <- latestEpisodeTx pid update.source
+            case latest of
+              Just episode | at < episode.lastEventAt -> pure OlderThanCurrentEpisode
+              _ | (nextPhase /= EpisodeActive || update.change == IncidentDataUnavailable) && maybe True ((/= EpisodeActive) . (.phase)) latest -> pure NoOpenEpisode
+              _ -> do
+                episodeM <- case latest of
+                  Just existing | existing.phase == EpisodeActive -> pure $ Just existing
+                  -- A new episode without an issue would be unreachable: the
+                  -- issue page is the only surface an episode is read from.
+                  _ | isNothing issueId -> pure Nothing
+                  _ ->
+                    Just
+                      <$> oneTx @Episode
+                        ( [HI.sql|INSERT INTO apis.incident_episodes
+              (project_id, source_kind, source_id, issue_id, phase, started_at, last_event_at)
+              VALUES (#{pid}, #{sourceKind}, #{sourceId}, #{issueId}, 'active', #{at}, #{at})
+              RETURNING |]
+                            <> episodeColumns
+                        )
+                case episodeM of
+                  Nothing -> pure EpisodeWithoutIssue
+                  Just episode -> do
+                    let eid = episode.id
+                        closedAt = if nextPhase == EpisodeActive then Nothing else Just at
+                    current <-
+                      oneTx @Episode
+                        $ [HI.sql|UPDATE apis.incident_episodes
+                  SET phase = #{nextPhase}, last_event_at = #{at}, closed_at = #{closedAt},
+                      issue_id = COALESCE(issue_id, #{issueId}) WHERE id = #{eid}
+                  RETURNING |]
+                        <> episodeColumns
+                    eventId <-
+                      oneTx @IncidentEventId
+                        [HI.sql|INSERT INTO apis.incident_events
+                  (episode_id, project_id, source_kind, source_id, event_kind, observed_at, actor_id, root_payload, reply_payload)
+                  VALUES (#{eid}, #{pid}, #{sourceKind}, #{sourceId}, #{eventKind}, #{at}, #{actorId}, #{update.rootPayload}, #{update.replyPayload})
+                  RETURNING id|]
+                    existingDestinations <-
+                      queryTx @[SlackDestination]
+                        [HI.sql|SELECT team_id, channel_id FROM apis.slack_incident_roots WHERE episode_id = #{eid}|]
+                    let destinations = case update.delivery of
+                          RefreshIncident -> existingDestinations
+                          PublishIncident -> existingDestinations <> [destination | nextPhase == EpisodeActive, destination <- update.destinations]
+                    forM_ (ordNub destinations) \destination -> do
+                      rootId <-
+                        oneTx @SlackRootId
+                          [HI.sql|INSERT INTO apis.slack_incident_roots
+                            (episode_id, team_id, channel_id, first_event_id)
+                            VALUES (#{eid}, #{destination.teamId}, #{destination.channelId}, #{eventId})
+                            ON CONFLICT (episode_id, team_id, channel_id) DO UPDATE SET channel_id = EXCLUDED.channel_id
+                            RETURNING id|]
+                      executeTx
+                        [HI.sql|INSERT INTO apis.slack_incident_deliveries
+                            (root_id, episode_id, event_id, operation, available_at)
+                            SELECT #{rootId}, #{eid}, #{eventId}, 'post_root', #{at}
+                            FROM apis.slack_incident_roots WHERE id = #{rootId} AND first_event_id = #{eventId}
+                            ON CONFLICT (root_id, event_id, operation) DO NOTHING|]
+                      let operations :: [Text]
+                          operations = case update.delivery of
+                            PublishIncident -> ["post_reply", "update_root"]
+                            RefreshIncident -> ["update_root"]
+                      forM_ operations \operation ->
                         executeTx
                           [HI.sql|INSERT INTO apis.slack_incident_deliveries
                               (root_id, episode_id, event_id, operation, available_at)
-                              SELECT #{rootId}, #{eid}, #{eventId}, 'post_root', #{at}
-                              FROM apis.slack_incident_roots WHERE id = #{rootId} AND first_event_id = #{eventId}
+                              SELECT #{rootId}, #{eid}, #{eventId}, #{operation}, #{at}
+                              FROM apis.slack_incident_roots WHERE id = #{rootId} AND first_event_id <> #{eventId}
                               ON CONFLICT (root_id, event_id, operation) DO NOTHING|]
-                        let operations :: [Text]
-                            operations = case update.delivery of
-                              PublishIncident -> ["post_reply", "update_root"]
-                              RefreshIncident -> ["update_root"]
-                        forM_ operations \operation ->
-                          executeTx
-                            [HI.sql|INSERT INTO apis.slack_incident_deliveries
-                                (root_id, episode_id, event_id, operation, available_at)
-                                SELECT #{rootId}, #{eid}, #{eventId}, #{operation}, #{at}
-                                FROM apis.slack_incident_roots WHERE id = #{rootId} AND first_event_id <> #{eventId}
-                                ON CONFLICT (root_id, event_id, operation) DO NOTHING|]
-                      pure $ Recorded current eventId
+                    pure $ Recorded current eventId
 
 
 newtype SlackTimestamp = SlackTimestamp Text

@@ -353,10 +353,11 @@ monitorStats rows = MonitorStats (count "Normal") (count "Warning") (count "Aler
         MonitorObservation
           { id = m.id.toText
           , title = m.alertConfig.title
-          , status = if
-              | isJust m.deactivatedAt -> "Paused"
-              | isNothing m.lastEvaluated -> "Not evaluated"
-              | otherwise -> T.toTitle (display m.currentStatus)
+          , status =
+              if
+                | isJust m.deactivatedAt -> "Paused"
+                | isNothing m.lastEvaluated -> "Not evaluated"
+                | otherwise -> T.toTitle (display m.currentStatus)
           , value = m.lastEvaluated $> m.currentValue
           , lastEvaluated = m.lastEvaluated
           }

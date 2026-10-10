@@ -1,3 +1,5 @@
+{-# LANGUAGE OrPatterns #-}
+
 -- | The source behind one stack frame.
 --
 -- Its own module rather than a function in "Pages.LogExplorer.LogItem", because the model it
@@ -58,12 +60,9 @@ codeContextH pid fileM lineM svcM revM = do
   where
     -- An unmapped frame is the one failure the reader can act on from here, so it is the one
     -- that gets a control — carrying the path, so the form it opens is already filled in.
-    reason_ :: CodeContext.SnippetError -> Html ()
     reason_ err = note_ (CodeContext.snippetErrorMessage err) case err of
       CodeContext.NoMapping path -> Just path
-      CodeContext.CredentialGone -> Nothing
-      CodeContext.ReadFailed{} -> Nothing
-      CodeContext.LineOutOfRange{} -> Nothing
+      (CodeContext.CredentialGone; CodeContext.ReadFailed{}; CodeContext.LineOutOfRange{}) -> Nothing
     note_ :: Text -> Maybe Text -> Html ()
     note_ msg fixPathM = div_ [class_ "pl-5 py-1 text-2xs text-textWeak italic flex items-center gap-2"] do
       toHtml msg
@@ -169,8 +168,6 @@ codeMappingsContent pid sampleM = do
             AE.Success result -> div_ [class_ "prose prose-sm mt-2 max-w-none"] $ renderMarkdown (ImpactReview.renderReview authConfig.hostUrl run True result)
           when (run.revision == run.latestRevision && run.state /= ImpactReviews.Reviewing) $ button_ [class_ "btn btn-xs btn-ghost mt-2", hxPost_ ("/p/" <> pid.toText <> "/settings/pr-reviews/" <> run.id.toText <> "/rerun"), hxTarget_ "#code-mappings-content"] "Rerun review"
   where
-    sample = fromMaybe "" sampleM
-
     -- The repositories a credential reaches, for the picker.
     --
     -- Every host can answer this, but not always usefully: a repository-scoped GitLab or Bitbucket
@@ -244,7 +241,7 @@ codeMappingsContent pid sampleM = do
           whenJust instIdM $ installationSettingsLink_ . GitSync.installationSettingsUrl
           formField_
             FieldSm
-            def{value = sample, placeholder = "/srv/app/services/checkout.py"}
+            def{value = maybeToMonoid sampleM, placeholder = "/srv/app/services/checkout.py"}
             "A file path from one of your stack traces"
             "samplePath"
             False
@@ -386,4 +383,4 @@ requireReviewWrite :: Projects.ProjectId -> ATAuthCtx ()
 requireReviewWrite pid = do
   (session, _) <- Projects.sessionAndProject pid
   permission <- ProjectMembers.getUserPermission pid session.user.id
-  unless (maybe False (>= ProjectMembers.PEdit) permission) $ throwError err403
+  unless (any (>= ProjectMembers.PEdit) permission) $ throwError err403

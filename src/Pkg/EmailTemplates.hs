@@ -114,7 +114,6 @@ cellspacing_ = term "cellspacing"
 align_ = term "align"
 
 
--- | Render a template to HTML text
 renderEmail :: Text -> Html () -> Text
 renderEmail subject content = toStrict $ renderText $ emailWrapper subject content
 
@@ -268,11 +267,7 @@ emailWrapper subject content = doctypehtml_ do
           tr_
             $ td_ [align_ "center", style_ "padding: 0 20px 19px;"]
             $ p_ [style_ "font-size: 12px; line-height: 1.5; text-align: center; color: #57606a; margin: 0;"] do
-              a_ [href_ "https://monoscope.tech/changelog?utm_source=transac_emails", style_ "color: #57606a; text-decoration: none;"] "Changelog"
-              toHtmlRaw @Text " &nbsp;\183&nbsp; "
-              a_ [href_ "https://monoscope.tech/docs?utm_source=transac_emails", style_ "color: #57606a; text-decoration: none;"] "Docs"
-              toHtmlRaw @Text " &nbsp;\183&nbsp; "
-              a_ [href_ "https://monoscope.tech/legal/privacy?utm_source=transac_emails", style_ "color: #57606a; text-decoration: none;"] "Privacy"
+              sequence_ $ intersperse (toHtmlRaw @Text " &nbsp;\183&nbsp; ") [a_ [href_ $ "https://monoscope.tech/" <> path <> "?utm_source=transac_emails", style_ "color: #57606a; text-decoration: none;"] $ toHtml @Text label | (path, label) <- [("changelog", "Changelog"), ("docs", "Docs"), ("legal/privacy", "Privacy")]]
 
 
 emailBody :: Html () -> Html ()
@@ -347,13 +342,13 @@ emailGreeting = maybe (p_ "Hi there!") \name -> p_ do "Hi "; b_ (toHtml name); "
 -- Simple Project Templates
 -- =============================================================================
 
--- | @message@ is raw HTML; the CTA doubles as the fallback URL shown at the foot.
-projectNotifEmail :: Text -> Text -> Maybe Text -> (Text, Text) -> (Text, Html ())
+-- | @message@ is 'richP_' runs; the CTA doubles as the fallback URL shown at the foot.
+projectNotifEmail :: Text -> [Text] -> Maybe Text -> (Text, Text) -> (Text, Html ())
 projectNotifEmail subject message userNameM (url, ctaLabel) =
   ( subject
   , emailBody do
       emailGreeting userNameM
-      p_ $ toHtmlRaw message
+      richP_ message
       emailButton url ctaLabel
       emailHelpLinks
       br_ []
@@ -364,17 +359,17 @@ projectNotifEmail subject message userNameM (url, ctaLabel) =
 
 projectInviteEmail :: Text -> Text -> Text -> (Text, Html ())
 projectInviteEmail userName projectName projectUrl =
-  projectNotifEmail "[···] Project Invitation" ("<b>" <> userName <> "</b> has invited you to the <b>" <> projectName <> "</b> project on Monoscope. We're excited to have you on board! Click the button below and <b>sign up using this email address</b> (or sign in with Google/GitHub if it's already linked to one) to access the project.") (Just userName) (projectUrl, "Access Project")
+  projectNotifEmail "[···] Project Invitation" ["", userName, " has invited you to the ", projectName, " project on Monoscope. We're excited to have you on board! Click the button below and ", "sign up using this email address", " (or sign in with Google/GitHub if it's already linked to one) to access the project."] (Just userName) (projectUrl, "Access Project")
 
 
 projectCreatedEmail :: Text -> Text -> Text -> (Text, Html ())
 projectCreatedEmail userName projectName projectUrl =
-  projectNotifEmail "[···] New Project Created" ("You have created a new <b>" <> projectName <> "</b> project on Monoscope.") (Just userName) (projectUrl, "Access Project")
+  projectNotifEmail "[···] New Project Created" ["You have created a new ", projectName, " project on Monoscope."] (Just userName) (projectUrl, "Access Project")
 
 
 projectDeletedEmail :: Text -> Text -> (Text, Html ())
 projectDeletedEmail userName projectName =
-  projectNotifEmail "[···] Project Deleted" ("You have successfully deleted the <b>" <> projectName <> "</b> project.") (Just userName) ("https://app.monoscope.tech/p/new", "Create a New Project")
+  projectNotifEmail "[···] Project Deleted" ["You have successfully deleted the ", projectName, " project."] (Just userName) ("https://app.monoscope.tech/p/new", "Create a New Project")
 
 
 -- =============================================================================
@@ -490,8 +485,7 @@ runtimeErrorVariantEmail heading subjectPrefix intro projectName projectUrl erro
         $ p_ [style_ "margin: 8px 0; font-size: 14px; font-weight: 600; color: #57606a;"]
           . toHtml @Text
       emailDivider
-      forM_ (zip [0 :: Int ..] (take maxErrorCards errors)) \(i, err) ->
-        errorCard projectUrl errorsUrl (if i == 0 then chartUrlM else Nothing) err
+      zipWithM_ (errorCard projectUrl errorsUrl) (chartUrlM : repeat Nothing) (take maxErrorCards errors)
       when (length errors > maxErrorCards)
         $ p_ [style_ "text-align: center; color: #57606a; font-size: 14px; margin: 16px 0;"]
         $ toHtml
@@ -719,15 +713,9 @@ weeklyReportEmail d =
               toHtml $ "; " <> reportCount issues.criticalOpen <> " critical. " <> reportCount issues.newIssues <> " issues created in this period."
             Report.Unavailable -> reportNote "Issue status is unavailable for this report."
         forM_ systemSnapshot $ \snapshot -> do
-          case snapshot.issues of
-            Report.Available issues | issues.criticalOpen > 0 -> reportFinding (d.projectUrl <> "/issues") $ reportCount issues.criticalOpen <> " critical issues need review"
-            _ -> pass
-          case snapshot.monitors of
-            Report.Available monitors | monitors.alerting > 0 -> reportFinding (d.projectUrl <> "/monitors") $ show monitors.alerting <> " monitors are alerting"
-            _ -> pass
-          case snapshot.infrastructure of
-            Report.Available infra | infra.unready > 0 -> reportFinding (d.projectUrl <> "/infrastructure/containers" <> windowQuery) $ show infra.unready <> " infrastructure resources report not ready"
-            _ -> pass
+          whenJust (available snapshot.issues) \issues -> when (issues.criticalOpen > 0) $ reportFinding (d.projectUrl <> "/issues") $ reportCount issues.criticalOpen <> " critical issues need review"
+          whenJust (available snapshot.monitors) \monitors -> when (monitors.alerting > 0) $ reportFinding (d.projectUrl <> "/monitors") $ show monitors.alerting <> " monitors are alerting"
+          whenJust (available snapshot.infrastructure) \infra -> when (infra.unready > 0) $ reportFinding (d.projectUrl <> "/infrastructure/containers" <> windowQuery) $ show infra.unready <> " infrastructure resources report not ready"
         case systemSnapshot of
           Nothing -> reportNotice "Historical report" "Service, infrastructure and monitor snapshots were not recorded for this report. The original metrics and issue list are shown below."
           Just snapshot -> do
@@ -849,10 +837,10 @@ weeklyReportEmail d =
                   [("Avg duration", reportMs (fromIntegral durationNs / 1000000), ""), ("Operations", reportCount $ fromIntegral count, "Recorded spans")]
               reportViewAll (queryUrl "attributes.db.query.text != null and duration > 500000000") "slow queries"
         forM_ systemSnapshot $ \snapshot -> when (snapshot.topPatterns == Report.Unavailable) $ reportNotice "Log patterns unavailable" "This section could not be loaded for the report."
-        unless (V.null topPatterns)
+        unless (null topPatterns)
           $ reportSection "Log patterns" "Most frequent stored patterns. Counts are lifetime totals, not limited to this reporting period."
           $ do
-            forM_ (reportRows 5 $ V.toList topPatterns) $ \(patternText, count, source) -> reportItem (d.projectUrl <> "/log_explorer" <> windowQuery) (truncateText 180 $ stripSummaryBadges patternText) source [("Occurrences", reportCount count, "Lifetime total")]
+            forM_ (reportRows 5 topPatterns) $ \(patternText, count, source) -> reportItem (d.projectUrl <> "/log_explorer" <> windowQuery) (truncateText 180 $ stripSummaryBadges patternText) source [("Occurrences", reportCount count, "Lifetime total")]
             reportViewAll (d.projectUrl <> "/log_explorer" <> windowQuery) "log patterns"
         reportSection "Activity trends" "Charts are supplemental; the measured totals are above." do
           forM_ systemSnapshot $ \snapshot -> when (snapshot.trends == Just Report.Unavailable) $ reportNotice "Activity trends unavailable" "This section could not be loaded for the report."
@@ -876,10 +864,8 @@ weeklyReportEmail d =
     reportViewAll url label = p_ [style_ "margin:10px 0 0;font-size:14px;"] $ a_ [target_ "_top", href_ url] $ toHtml $ "View all " <> label
     systemSnapshot = case d.evidence of SystemEvidence snapshot -> Just snapshot; HistoricalEvidence _ -> Nothing
     historicalEvidence = case d.evidence of HistoricalEvidence historical -> Just historical; SystemEvidence _ -> Nothing
-    freeTierExceeded = maybe False ((== Just True) . (.ingestionCapped)) systemSnapshot
-    topPatterns = case systemSnapshot of
-      Just snapshot -> case snapshot.topPatterns of Report.Available rows -> V.fromList rows; Report.Unavailable -> V.empty
-      Nothing -> V.empty
+    freeTierExceeded = any ((== Just True) . (.ingestionCapped)) systemSnapshot
+    topPatterns = fold $ available . (.topPatterns) =<< systemSnapshot
     currentServices = maybe [] (mapMaybe (.current) . (.services)) systemSnapshot
     events = case d.evidence of SystemEvidence _ -> sum $ map (.events) currentServices; HistoricalEvidence historical -> fromIntegral historical.totalEvents
     errors = case d.evidence of SystemEvidence _ -> sum $ map (.errorEvents) currentServices; HistoricalEvidence historical -> fromIntegral historical.totalErrors
@@ -888,7 +874,6 @@ weeklyReportEmail d =
     windowQuery = "?from=" <> toUriStr d.fromTime <> "&to=" <> toUriStr d.toTime
     queryUrl query = if T.length query > 2000 then d.reportUrl else d.projectUrl <> "/log_explorer" <> windowQuery <> "&query=" <> toUriStr query
     serviceUrl service environment = queryUrl $ serviceFilter service environment
-    servicePredicate :: Maybe Text -> Text
     servicePredicate = maybe "(service.name == null or service.name == \"\")" (\name -> "service.name == " <> kqlQuoted name)
     serviceFilter service environment = servicePredicate service <> " and " <> maybe "(resource.deployment.environment.name == null or resource.deployment.environment.name == \"\")" (\e -> "resource.deployment.environment.name == " <> kqlQuoted e) environment
     endpointHostFilter host = " and (attributes.server.address == " <> kqlQuoted host <> " or (attributes.server.address == null and " <> (if T.null host then "(service.name == null or service.name == \"\")" else "service.name == " <> kqlQuoted host) <> "))"
@@ -899,9 +884,11 @@ reportFinding url label = p_ [class_ "report-attention", style_ "font-size:14px;
 
 
 reportObserved :: Report.ReportSection a -> (a -> Html ()) -> Html ()
-reportObserved section render = case section of
-  Report.Available value -> render value
-  Report.Unavailable -> reportNote "This section could not be loaded for the report. Open the linked workspace to investigate."
+reportObserved section render = maybe (reportNote "This section could not be loaded for the report. Open the linked workspace to investigate.") render (available section)
+
+
+available :: Report.ReportSection a -> Maybe a
+available = \case Report.Available a -> Just a; Report.Unavailable -> Nothing
 
 
 reportSection :: Text -> Text -> Html () -> Html ()
@@ -993,7 +980,7 @@ stripSummaryBadges = unwords . mapMaybe extractValue . words
   where
     extractValue token = case T.breakOn "\8658" token of
       (_, "") -> Just token
-      (_, rest) -> let v = T.drop 1 rest in if T.null v then Nothing else Just v
+      (_, rest) -> guarded (not . T.null) (T.drop 1 rest)
 
 
 -- =============================================================================

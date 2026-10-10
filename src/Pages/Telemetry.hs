@@ -337,7 +337,7 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM expandM la
                   (filters.source == "all" || filters.source `V.elem` m.serviceNames)
                     && (filters.prefix == "all" || filters.prefix `T.isPrefixOf` m.metricName)
                     && T.toCaseFold filters.query
-                    `T.isInfixOf` T.toCaseFold m.metricName
+                      `T.isInfixOf` T.toCaseFold m.metricName
               )
               catalog
       dashboards <- Dashboards.selectDashboardsSortedBy pid "updated_at"
@@ -461,17 +461,19 @@ exemplarList_ :: Projects.ProjectId -> Text -> [Telemetry.MetricExemplar] -> Htm
 exemplarList_ pid metricName = \case
   [] ->
     Components.emptyState_ def{icon = Just "chart-line", size = ESCompact} ("No exemplars for " <> metricName <> " in this time range") "Only metrics recorded inside a sampled span carry one — collector-scraped metrics never do."
-  exemplars -> linkList_ (Just ("Representative traces", "Traces this metric recorded a datapoint in, slowest first.")) $ exemplars <&> \x ->
-    ( [href_ $ traceOverlayUrl pid x.point.traceId x.point.timestamp]
-    , do
-        span_ [class_ "block font-mono text-xs text-textStrong"] $ toHtml x.point.traceId
-        div_ [class_ "mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-textWeak"] do
-          Components.dateTime x.point.timestamp Nothing
-          unless (T.null $ T.strip x.serviceName) do
-            span_ [class_ "text-textDisabled"] "•"
-            span_ $ toHtml x.serviceName
-    , span_ [class_ "font-medium text-textStrong"] $ toHtml $ exemplarValueText x
-    )
+  exemplars ->
+    linkList_ (Just ("Representative traces", "Traces this metric recorded a datapoint in, slowest first."))
+      $ exemplars <&> \x ->
+        ( [href_ $ traceOverlayUrl pid x.point.traceId x.point.timestamp]
+        , do
+            span_ [class_ "block font-mono text-xs text-textStrong"] $ toHtml x.point.traceId
+            div_ [class_ "mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-textWeak"] do
+              Components.dateTime x.point.timestamp Nothing
+              unless (T.null $ T.strip x.serviceName) do
+                span_ [class_ "text-textDisabled"] "•"
+                span_ $ toHtml x.serviceName
+        , span_ [class_ "font-medium text-textStrong"] $ toHtml $ exemplarValueText x
+        )
 
 
 -- | Divided list of link rows @(attrs, body, trailing)@, under an optional (title, subtitle).
@@ -481,7 +483,7 @@ linkList_ headerM rows = do
     span_ [class_ "block text-sm font-semibold text-textStrong"] $ toHtml title
     span_ [class_ "mt-1 block text-xs leading-5 text-textWeak"] $ toHtml subtitle
   div_ [class_ "flex flex-col divide-y divide-strokeWeak border-y border-strokeWeak"] $ forM_ rows \(attrs, body, trailing) ->
-    a_ ([class_ "group flex cursor-pointer items-center justify-between gap-4 px-5 py-3 text-sm transition-colors hover:bg-fillWeak focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus"] <> attrs) do
+    a_ ([class_ "group flex cursor-pointer items-center justify-between gap-4 px-5 py-2.5 text-sm transition-colors hover:bg-fillWeak focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus"] <> attrs) do
       div_ [class_ "min-w-0"] body
       div_ [class_ "flex shrink-0 items-center gap-3 text-textWeak"] do
         trailing
@@ -851,17 +853,17 @@ inactiveMetricsList pid source metrics = do
     summary_ [class_ "collapse-title min-h-0 py-2 pl-3 font-medium text-sm text-textWeak"]
       $ toHtml
       $ countNoun (V.length metrics) "inactive metric"
-      <> " (no data in 7 days)"
+        <> " (no data in 7 days)"
     div_ [class_ "collapse-content px-0 pb-0"]
       $ linkList_ Nothing
       $ V.toList metrics
-      <&> \metric ->
-        ( [href_ $ metricExpandUrl pid metric.metricName source Nothing] <> drawerLoadAttrs_ (metricDetailUrl pid metric.metricName source Nothing)
-        , div_ [class_ "flex items-center gap-2"] do
-            faSprite_ "chart-line" "regular" "w-3.5 h-3.5 text-textWeak"
-            span_ [class_ "truncate font-mono"] $ toHtml metric.metricName
-        , span_ [class_ "text-xs"] $ toHtml $ "Last seen " <> formatTime defaultTimeLocale "%b %d, %Y" metric.lastSeen
-        )
+        <&> \metric ->
+          ( [href_ $ metricExpandUrl pid metric.metricName source Nothing] <> drawerLoadAttrs_ (metricDetailUrl pid metric.metricName source Nothing)
+          , div_ [class_ "flex items-center gap-2"] do
+              faSprite_ "chart-line" "regular" "w-3.5 h-3.5 text-textWeak"
+              span_ [class_ "truncate font-mono"] $ toHtml metric.metricName
+          , span_ [class_ "text-xs"] $ toHtml $ "Last seen " <> formatTime defaultTimeLocale "%b %d, %Y" metric.lastSeen
+          )
 
 
 dataPointsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricDataPoint -> Map Text (Int, Int, Int) -> Text -> Int -> Text -> MetricFilters -> Html ()
@@ -934,8 +936,8 @@ dataPointsPage pid metrics refCounts countsUrl page pageUrl filters = do
                               <> drawerLoadAttrs_ (metricDetailUrl pid r.fullPath "all" Nothing)
                           )
                         $ "View "
-                        <> toHtml (countNoun (V.length moreSources) "more source")
-                        <> " in details"
+                          <> toHtml (countNoun (V.length moreSources) "more source")
+                          <> " in details"
                 )
                 & Table.withAttrs [class_ "w-48"]
             , Table.col "Datapoints" (\r -> whenJust r.metric \m -> metricDataPointCount_ False m.metricName m.dataPointsCount) & Table.withAttrs [class_ "w-28"]
@@ -1090,7 +1092,7 @@ metricsDetailsPage pid allDashboards allMonitors source labelM currentRange metr
                   div_ [class_ "mt-2"]
                     $ linkList_ Nothing
                     $ (map (\d -> ("dashboards/" <> d.id.toText, d.title)) dashboards <> map (\m -> ("monitors/alerts/" <> m.id.toText, "Monitor")) monitors)
-                    <&> \(path, label) -> ([href_ $ "/p/" <> pid.toText <> "/" <> path], span_ [class_ "block truncate text-textStrong"] $ toHtml label, pass)
+                      <&> \(path, label) -> ([href_ $ "/p/" <> pid.toText <> "/" <> path], span_ [class_ "block truncate text-textStrong"] $ toHtml label, pass)
           -- Each fetch hangs off its radio's own `change` (htmx `from:`): an unselected
           -- `.tab-content` is display:none and never fires `intersect`. Fetched on first
           -- reveal: an exemplar lookup is a text scan over raw metric rows.
@@ -1114,19 +1116,21 @@ relatedMetrics :: Projects.ProjectId -> Text -> Telemetry.MetricDataPoint -> V.V
 relatedMetrics pid source metric candidates =
   case take 6 $ map snd $ sortWith (Down . fst) [(score, c) | c <- V.toList candidates, c.metricName /= metric.metricName, let score = relatedScore c, score > 0] of
     [] -> Components.emptyState_ def{size = ESCompact} (if source == "all" then "No metrics with a similar name or dimensions were found." else "No similar metrics in this source. Try All sources.") ""
-    related -> linkList_ (Just ("Related metrics", "Metrics with a similar name or dimensions.")) $ related <&> \candidate ->
-      ( [href_ $ metricDetailUrl pid candidate.metricName source Nothing, hxGet_ $ metricDetailUrl pid candidate.metricName source Nothing] <> metricDetailSwap_
-      , do
-          span_ [class_ "block truncate font-medium text-textStrong"] $ toHtml candidate.metricName
-          div_ [class_ "mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-textWeak"] do
-            span_ $ toHtml $ candidate.metricType <> if candidate.metricUnit == "" then "" else " · " <> candidate.metricUnit
-            span_ [class_ "text-textDisabled"] "•"
-            span_ $ toHtml $ relatedContext candidate
-          when (candidate.metricDescription /= "")
-            $ span_ [class_ "mt-1 block truncate text-xs text-textWeak"]
-            $ toHtml candidate.metricDescription
-      , pass
-      )
+    related ->
+      linkList_ (Just ("Related metrics", "Metrics with a similar name or dimensions."))
+        $ related <&> \candidate ->
+          ( [href_ $ metricDetailUrl pid candidate.metricName source Nothing, hxGet_ $ metricDetailUrl pid candidate.metricName source Nothing] <> metricDetailSwap_
+          , do
+              span_ [class_ "block truncate font-medium text-textStrong"] $ toHtml candidate.metricName
+              div_ [class_ "mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-textWeak"] do
+                span_ $ toHtml $ candidate.metricType <> if candidate.metricUnit == "" then "" else " · " <> candidate.metricUnit
+                span_ [class_ "text-textDisabled"] "•"
+                span_ $ toHtml $ relatedContext candidate
+              when (candidate.metricDescription /= "")
+                $ span_ [class_ "mt-1 block truncate text-xs text-textWeak"]
+                $ toHtml candidate.metricDescription
+          , pass
+          )
   where
     -- Common leading dot-segments of the two names, shared by scoring and display.
     sharedSegments :: Telemetry.MetricChartListData -> [Text]
@@ -1366,7 +1370,7 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
         [__|init set my *width to localStorage.getItem('resizer-trace_details_width') or '' end
           on closeDetailPanel
             set #trace-details-open's checked to false then put '' into #trace_details_content
-            remove .bg-fillBrand-weak .waterfall-active from .waterfall-active then send loglist-resize to window|]
+            remove .bg-fillBrand-weak .waterfall-active from .waterfall-active then send "loglist-resize" to window|]
       ]
       do
         div_ [class_ "hidden group-[.htmx-request]/tdp:block p-4", role_ "status", Aria.live_ "polite"] do

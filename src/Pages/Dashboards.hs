@@ -2848,7 +2848,7 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr hxRequest hxT
           else forOf (#tabs . _Just) dash' \tabs ->
             forM (zip [0 ..] tabs) \(idx, tab) ->
               if idx == activeTabIdx
-                then (\ws -> tab & #widgets .~ ws) <$> processDashWidgets prefill pid dashId now timeParams allParamsWithConstants tab.widgets
+                then (\ws -> tab & #widgets .~ ws) <$> processDashWidgets prefill pid dashId now timeParams allParamsWithConstants ((#_tabSlug ?~ slugify tab.name) <$> tab.widgets)
                 else pure tab
 
       bwconf <- dashboardBWConf bw pid dashId dashVM.title (Just (tabSlug, activeTabName)) currentRange <$> checkFreeTierStatus pid project.paymentPlan

@@ -27,6 +27,7 @@ import Pkg.ErrorFingerprint qualified as EF
 import Pkg.TestUtils
 import Relude
 import Servant qualified
+import Servant.API (ResponseHeader (..), lookupResponseHeader)
 import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, sequential, shouldBe, shouldReturn, shouldSatisfy)
 
 
@@ -639,6 +640,21 @@ spec = sequential $ aroundAll withTestResources do
           void $ testServant tr $ Pages.Issues.errorSubscriptionPostH pid errUuid (Pages.Issues.ErrorSubscriptionForm Nothing)
           unsubPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
           fmap (.subscribed) unsubPat `shouldBe` Just False
+
+    it "assignErrorPostH_malformedAssigneeId_rejectsInsteadOfUnassigning" \tr -> do
+      apiKey <- createTestAPIKey tr pid "malformed-assignee-key"
+      ingestTraceWithException tr apiKey "GET /api/assignee" "AssigneeProbeError" "assignee probe" "AssigneeProbeError: assignee probe\n    at probe (/app/src/assignee.js:1:1)" (addUTCTime (-20) frozenTime)
+      drainExtractionWorker tr
+      void $ runAllBackgroundJobs frozenTime tr.trATCtx
+      pat <- maybe (fail "no AssigneeProbeError pattern") pure . find ((== "AssigneeProbeError") . (.errorType)) =<< runTestBg frozenTime tr (ErrorPatterns.getErrorPatterns pid Nothing 200 0)
+      let sess = Servant.getResponse tr.trSessAndHeader
+          assign = testServant tr . Pages.Issues.assignErrorPostH pid pat.id.unErrorPatternId . Pages.Issues.AssignErrorForm . Just
+      void $ assign sess.user.id.toText
+      (hdrs, _) <- assign "bob"
+      case lookupResponseHeader @"HX-Trigger" hdrs of
+        Header t -> t `shouldSatisfy` T.isInfixOf "Not a user id: bob"
+        _ -> expectationFailure "expected an error toast"
+      ((.assigneeId) <$>) <$> runTestBg frozenTime tr (ErrorPatterns.getErrorPatternById pat.id) `shouldReturn` Just (Just sess.user.id)
 
     it "7. Occurrence count decay does not infer resolution from silence" \tr -> do
       patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 10 0

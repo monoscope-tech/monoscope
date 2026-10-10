@@ -92,6 +92,7 @@ import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns (sourceFieldLabel)
 import Models.Apis.LogPatterns qualified as LogPatterns
+import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.PatternMerge qualified as PatternMerge
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
@@ -577,36 +578,35 @@ issueSampleGetH pid issueId sinceM fromM toM = do
   now <- Time.currentTime
   appCtx <- ask @AuthContext
   case issueM of
-    Just issue
-      | issue.issueType `elem` [Issues.LogPattern, Issues.LogPatternRateChange]
-      , Just patHash <- issueHashKey issue -> do
-          let (rangeStart, rangeEnd, _) = TimePicker.parseTimeRange now $ TimePicker.TimePicker sinceM fromM toM
-              from = fromMaybe (addUTCTime (-3600) now) rangeStart
-              to = fromMaybe now rangeEnd
-              snapshot = case Issues.issuePayload issue of
-                Just (Issues.LogPatternP d) -> d.sampleMessage
-                Just (Issues.LogPatternRateChangeP d) -> d.sampleMessage
-                _ -> Nothing
-          result <-
-            tryWithin (Just 5_000_000) "ISSUE_SAMPLE" ["issue_id" AE..= issueId]
-              $ liftIO
-              $ withResource (if appCtx.env.enableTimefusionReads then appCtx.timefusionPgPool else appCtx.pool) \conn -> do
-                previous <- PG.query_ conn "SHOW statement_timeout" :: IO [PG.Only Text]
-                case previous of
-                  [PG.Only previousTimeout] ->
-                    -- Restore even when the query fails; SET LOCAL is ignored by TimeFusion.
-                    Exception.bracket_
-                      (void $ PG.execute conn "SET statement_timeout = ?" (PG.Only ("4s" :: Text)))
-                      (void $ PG.execute conn "SET statement_timeout = ?" (PG.Only previousTimeout))
-                      ( listToMaybe @(UTCTime, PGArray Text, Maybe Text)
-                          <$> PG.query
-                            conn
-                            "SELECT timestamp, summary, context___trace_id FROM otel_logs_and_spans WHERE project_id = ? AND timestamp BETWEEN ? AND ? AND ? = ANY(hashes) ORDER BY timestamp DESC LIMIT 1"
-                            (pid.toText, from, to, patHash)
-                      )
-                  _ -> Exception.throwIO $ userError "Unable to read telemetry statement timeout"
-          let sample = maybe SampleUnavailable (maybe SampleEmpty \(at, PGArray summary, sampleTraceId) -> SampleFound at (V.fromList summary) sampleTraceId) result
-          addRespHeaders $ issueSampleCard_ pid snapshot sample
+    Just issue | issue.issueType `elem` [Issues.LogPattern, Issues.LogPatternRateChange] -> do
+      let (rangeStart, rangeEnd, _) = TimePicker.parseTimeRange now $ TimePicker.TimePicker sinceM fromM toM
+          from = fromMaybe (addUTCTime (-3600) now) rangeStart
+          to = fromMaybe now rangeEnd
+          patHash = LogQueries.patHashPrefix <> issue.targetHash
+          snapshot = case Issues.issuePayload issue of
+            Just (Issues.LogPatternP d) -> d.sampleMessage
+            Just (Issues.LogPatternRateChangeP d) -> d.sampleMessage
+            _ -> Nothing
+      result <-
+        tryWithin (Just 5_000_000) "ISSUE_SAMPLE" ["issue_id" AE..= issueId]
+          $ liftIO
+          $ withResource (if appCtx.env.enableTimefusionReads then appCtx.timefusionPgPool else appCtx.pool) \conn -> do
+            previous <- PG.query_ conn "SHOW statement_timeout" :: IO [PG.Only Text]
+            case previous of
+              [PG.Only previousTimeout] ->
+                -- Restore even when the query fails; SET LOCAL is ignored by TimeFusion.
+                Exception.bracket_
+                  (void $ PG.execute conn "SET statement_timeout = ?" (PG.Only ("4s" :: Text)))
+                  (void $ PG.execute conn "SET statement_timeout = ?" (PG.Only previousTimeout))
+                  ( listToMaybe @(UTCTime, PGArray Text, Maybe Text)
+                      <$> PG.query
+                        conn
+                        "SELECT timestamp, summary, context___trace_id FROM otel_logs_and_spans WHERE project_id = ? AND timestamp BETWEEN ? AND ? AND ? = ANY(hashes) ORDER BY timestamp DESC LIMIT 1"
+                        (pid.toText, from, to, patHash)
+                  )
+              _ -> Exception.throwIO $ userError "Unable to read telemetry statement timeout"
+      let sample = maybe SampleUnavailable (maybe SampleEmpty \(at, PGArray summary, sampleTraceId) -> SampleFound at (V.fromList summary) sampleTraceId) result
+      addRespHeaders $ issueSampleCard_ pid snapshot sample
     _ -> addRespHeaders $ p_ [class_ "px-4 text-sm text-textWeak"] "This issue has no event sample."
 
 

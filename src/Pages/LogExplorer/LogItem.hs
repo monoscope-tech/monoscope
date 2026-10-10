@@ -288,7 +288,7 @@ instance ToHtml ApiItemDetailed where
             Just _ -> Nothing
             Nothing -> find ((== marker) . (.marker)) (detailTabs pid item aptSpan)
         )
-        renderDetailPanel
+        \t -> tabPanel_ t.panelClass t.panelId t.content
   toHtml (ItemDetailedNotFound message) =
     toHtml $ emptyState_ def{icon = Just "circle-exclamation", action = ESCustom closeBtn} "Record not found" message
     where
@@ -331,27 +331,25 @@ data DetailTab = DetailTab
   }
 
 
-renderDetailPanel :: DetailTab -> Html ()
-renderDetailPanel tab = tabPanel_ tab.panelClass tab.panelId tab.content
-
-
--- | A hidden panel that fetches itself the first time its radio reveals it.
--- @tabQuery@ names the tab server-side: a top-level tab is @tab=\<marker\>@, an
--- HTTP sub-tab is @tab=tab-req&subtab=\<marker\>@.
-lazyPanel :: Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> (Text -> Text) -> DetailTab -> Html ()
-lazyPanel pid item tabQuery tab =
-  div_
-    [ class_ $ "hidden " <> tab.panelClass
-    , id_ tab.panelId
-    , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer/" <> item.id <> "/" <> formatUTC item.timestamp <> "/detailed?" <> tabQuery tab.marker <> "&partial=true"
-    , hxTrigger_ "intersect once"
-    , hxTarget_ "this"
-    , hxSwap_ "outerHTML"
-    , term "hx-sync" "this:replace"
-    , Aria.busy_ "true"
-    ]
-    $ div_ [class_ "flex justify-center py-8", role_ "status", Aria.label_ "Loading details"]
-    $ loadingIndicator_ LdSM LdDots
+-- | The @active@ tab renders now; any other is a hidden panel that fetches itself the
+-- first time its radio reveals it. @tabQuery@ names the tab server-side: a top-level
+-- tab is @tab=\<marker\>@, an HTTP sub-tab is @tab=tab-req&subtab=\<marker\>@.
+detailPanel_ :: Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> (Text -> Text) -> Text -> DetailTab -> Html ()
+detailPanel_ pid item tabQuery active tab
+  | tab.marker == active = tabPanel_ tab.panelClass tab.panelId tab.content
+  | otherwise =
+      div_
+        [ class_ $ "hidden " <> tab.panelClass
+        , id_ tab.panelId
+        , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer/" <> item.id <> "/" <> formatUTC item.timestamp <> "/detailed?" <> tabQuery tab.marker <> "&partial=true"
+        , hxTrigger_ "intersect once"
+        , hxTarget_ "this"
+        , hxSwap_ "outerHTML"
+        , term "hx-sync" "this:replace"
+        , Aria.busy_ "true"
+        ]
+        $ div_ [class_ "flex justify-center py-8", role_ "status", Aria.label_ "Loading details"]
+        $ loadingIndicator_ LdSM LdDots
 
 
 -- Unified view for both logs and spans
@@ -417,7 +415,7 @@ expandedItemView pid item aptSp selectedTabM = do
       -- The selected panel renders now; hidden placeholders fetch and replace
       -- themselves when their radio makes them visible for the first time.
       div_ [class_ "mt-2 py-1 text-textWeak"]
-        $ traverse_ (\tab -> if tab.marker == activeMarker then renderDetailPanel tab else lazyPanel pid item ("tab=" <>) tab) tabs
+        $ traverse_ (detailPanel_ pid item ("tab=" <>) activeMarker) tabs
   where
     isLog = item.kind == Just "log"
     isAlert = item.kind == Just "alert"
@@ -428,8 +426,7 @@ expandedItemView pid item aptSp selectedTabM = do
     dgrp = "dtab-" <> item.id
     -- Clamp the ?tab= deep link to a marker that actually exists — an unknown
     -- value would check no radio and leave every panel hidden.
-    firstMarker = case tabs of [] -> "tab-raw"; t : _ -> t.marker
-    activeMarker = maybe firstMarker (.marker) $ selectedTabM >>= \s -> find ((== s) . (.marker)) tabs
+    activeMarker = maybe "tab-raw" (.marker) $ (selectedTabM >>= \s -> find ((== s) . (.marker)) tabs) <|> listToMaybe tabs
     detailTabRadio_ t = detailTab_ dgrp t.marker t.cls (t.marker == activeMarker) t.label
     tabs = detailTabs pid item aptSp
 
@@ -447,9 +444,7 @@ expandedItemView pid item aptSp selectedTabM = do
             AE.String s -> s
             AE.Array xs -> T.intercalate ", " [s | AE.String s <- toList xs]
             v -> decodeUtf8 (AE.encode v)
-          headers = case attrsM >>= Map.lookup "http" >>= (^? key "request" . key "header") of
-            Just (AE.Object km) -> [(AEKey.toText k, hdrVal v) | (k, v) <- KEM.toList km]
-            _ -> []
+          headers = [(AEKey.toText k, hdrVal v) | Just (AE.Object km) <- [attrsM >>= Map.lookup "http" >>= (^? key "request" . key "header")], (k, v) <- KEM.toList km]
           bodyTxtM = case unAesonTextMaybe cSp.body >>= (^? key "request_body") of
             Just (AE.String s) -> guarded (not . T.null) s
             Just v | v /= AE.Null -> Just (decodeUtf8 (AE.encode v))
@@ -590,7 +585,7 @@ renderHttpDetails pid item aptSp = div_ [id_ "http-content-container", class_ "g
   div_ [class_ "bg-fillWeaker w-max rounded-lg border border-strokeWeak justify-start items-start inline-flex"]
     $ div_ [class_ "justify-start items-start flex text-sm"]
     $ forM_ tabs \tab -> httpTab_ ("htab-" <> item.id) tab.marker (tab.marker == activeMarker) tab.label
-  div_ [] $ forM_ tabs \tab -> if tab.marker == activeMarker then renderDetailPanel tab else lazyPanel pid item ("tab=tab-req&subtab=" <>) tab
+  div_ [] $ traverse_ (detailPanel_ pid item ("tab=tab-req&subtab=" <>) activeMarker) tabs
 
 
 httpDetailTabs :: Telemetry.OtelLogsAndSpans -> Maybe Telemetry.OtelLogsAndSpans -> (Text, [DetailTab])
@@ -629,9 +624,9 @@ renderErrors :: Projects.ProjectId -> Maybe Text -> (Text -> Maybe Text) -> (Tex
 renderErrors pid svcM attr resAttr errs =
   div_ [class_ "flex flex-col mt-4 gap-3 w-full"] $ ifor_ errs \idx err ->
     div_ [class_ "w-full border border-strokeError-strong/40 rounded-lg overflow-hidden bg-fillError-weak/30"] do
-      let (tye, message, stacktrace) = getErrorDetails err
+      let fld k = fromMaybe "" $ err ^? key "event_attributes" . key "exception" . key k . _String
+          (tye, message, stacktrace) = (fld "type", fld "message", fld "stacktrace")
           copyId = "exc-msg-" <> show idx
-      -- Header: red strip with type, position, copy
       div_ [class_ "flex items-center justify-between gap-3 px-3 py-2 bg-fillError-weak border-b border-strokeError-strong/40"] do
         div_ [class_ "flex items-center gap-2 min-w-0"] do
           faSprite_ "circle-exclamation" "solid" "w-4 h-4 text-iconError shrink-0"
@@ -654,8 +649,3 @@ renderErrors pid svcM attr resAttr errs =
         $ disclosure_ [open_ "" | idx == 0] "px-3 py-2 text-xs font-medium text-textWeak hover:text-textStrong" ("Stack trace" >> span_ [class_ "text-2xs text-textWeak/70"] (toHtml @Text $ "(" <> show (length frames) <> " frames)"))
         $ div_ [class_ "mx-3 mb-3 max-h-96 overflow-auto c-scroll rounded-md border border-strokeWeak bg-bgBase"]
         $ stackTrace_ pid svcM attr resAttr stacktrace
-  where
-    getErrorDetails :: AE.Value -> (Text, Text, Text)
-    getErrorDetails ae = (fld "type", fld "message", fld "stacktrace")
-      where
-        fld k = fromMaybe "" $ ae ^? key "event_attributes" . key "exception" . key k . _String

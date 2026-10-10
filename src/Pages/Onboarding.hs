@@ -12,8 +12,8 @@ module Pages.Onboarding (
   OnboardingConfForm (..),
   OnboardingGet (..),
   OnboardingStepData (..),
-  OnboardingInfoPost (..),
-  OnboardingConfPost (..),
+  OnboardingStep (..),
+  OnboardingStepPost (..),
   OnboardingPhoneEmailsPost (..),
 ) where
 
@@ -43,12 +43,13 @@ import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
 import Pages.Components
-import Pkg.DeriveUtils (assetUrl)
+import Pkg.DeriveUtils (WrappedEnumShow (..), assetUrl)
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, HXRedirectDest, RespHeaders, TriggerEvents, XWidgetJSON, addErrorToast, addRespHeaders, redirectCS)
 import Utils (LoadingSize (..), LoadingType (..), faSprite_, loadingIndicator_, lookupValueText, onpointerdown_)
 import Web.FormUrlEncoded
+import Web.HttpApiData (FromHttpApiData)
 
 
 -- | Builds a @/p/PID/onboarding@-rooted path; @path@ is the suffix (@?step=X@, @/info@, …).
@@ -56,17 +57,26 @@ onboardingUrl :: Projects.ProjectId -> Text -> Text
 onboardingUrl pid path = "/p/" <> pid.toText <> "/onboarding" <> path
 
 
-onboardingGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders OnboardingGet)
-onboardingGetH pid onboardingStepM = do
+-- | Constructor names are the @?step=@ URL values and the stored @onboarding_steps_completed@ entries.
+data OnboardingStep = Info | Survey | NotifChannel | Integration | Pricing | Complete
+  deriving stock (Eq, Read, Show)
+  deriving (FromHttpApiData) via WrappedEnumShow OnboardingStep
+
+
+stepUrl :: Projects.ProjectId -> OnboardingStep -> Text
+stepUrl pid step = onboardingUrl pid $ "?step=" <> show step
+
+
+onboardingGetH :: Projects.ProjectId -> Maybe OnboardingStep -> ATAuthCtx (RespHeaders OnboardingGet)
+onboardingGetH pid stepM = do
   (sess, project, bw) <- mkPageCtx pid
   appCtx <- ask @AuthContext
   let questions = fromMaybe (AE.Object []) project.questions
       q = fromMaybe "" . lookupValueText questions
-      onboardingStep = fromMaybe "Info" onboardingStepM
-  stepData <- case onboardingStep of
-    "Complete" -> pure $ CompleteStep pid
-    "Survey" -> pure $ SurveyStep pid (q "location") (questions L.^.. key "functionality" . _Array . traverse . _String)
-    "NotifChannel" -> do
+  stepData <- case fromMaybe Info stepM of
+    Complete -> pure $ CompleteStep pid
+    Survey -> pure $ SurveyStep pid (q "location") (questions L.^.. key "functionality" . _Array . traverse . _String)
+    NotifChannel -> do
       hasSlack <- isJust <$> getProjectSlackData pid
       hasDiscord <- isJust <$> getDiscordDataByProjectId pid
       everyoneTeamM <- ProjectMembers.getEveryoneTeam pid
@@ -74,11 +84,11 @@ onboardingGetH pid onboardingStepM = do
           slackUrl = "/p/" <> pid.toText <> "/slack/install?onboarding"
           discordUrl = "https://discord.com/oauth2/authorize?response_type=code&client_id=" <> appCtx.config.discordClientId <> "&permissions=277025392640&integration_type=0&scope=bot+applications.commands&state=" <> pid.toText <> "__onboarding&redirect_uri=" <> appCtx.env.discordRedirectUri
       pure $ NotifChannelStep pid slackUrl discordUrl phone (maybe mempty (.notify_emails) everyoneTeamM) hasSlack hasDiscord
-    "Integration" -> IntegrationStep pid . maybe "<API_KEY>" (.keyPrefix) . listToMaybe <$> ProjectApiKeys.projectApiKeysByProjectId pid
-    "Pricing" ->
+    Integration -> IntegrationStep pid . maybe "<API_KEY>" (.keyPrefix) . listToMaybe <$> ProjectApiKeys.projectApiKeysByProjectId pid
+    Pricing ->
       let checkout u = u <> "&checkout[custom][project_id]=" <> pid.toText
        in pure $ PricingStep pid (checkout appCtx.config.lemonSqueezyUrl) (checkout appCtx.config.lemonSqueezyCriticalUrl) project.paymentPlan appCtx.config.enableFreetier appCtx.config.basicAuthEnabled
-    _ -> pure $ InfoStep pid sess.user.firstName sess.user.lastName (q "companyName") (q "companySize") (q "foundUsFrom")
+    Info -> pure $ InfoStep pid sess.user.firstName sess.user.lastName (q "companyName") (q "companySize") (q "foundUsFrom")
   addRespHeaders $ OnboardingGet $ PageCtx bw{currProject = Nothing, hideNavbar = True} stepData
 
 
@@ -168,20 +178,12 @@ instance ToHtml OnboardingGet where
   toHtmlRaw = toHtml
 
 
-newtype OnboardingInfoPost = OnboardingInfoPost ()
+-- | Response of the info/survey form posts, which only redirect to the next step.
+data OnboardingStepPost = OnboardingStepPost
   deriving stock (Generic, Show)
 
 
-instance ToHtml OnboardingInfoPost where
-  toHtml _ = ""
-  toHtmlRaw = toHtml
-
-
-newtype OnboardingConfPost = OnboardingConfPost ()
-  deriving stock (Generic, Show)
-
-
-instance ToHtml OnboardingConfPost where
+instance ToHtml OnboardingStepPost where
   toHtml _ = ""
   toHtmlRaw = toHtml
 
@@ -199,11 +201,11 @@ instance ToHtml OnboardingPhoneEmailsPost where
   toHtmlRaw = toHtml
 
 
-onboardingStepSkipped :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+onboardingStepSkipped :: Projects.ProjectId -> Maybe OnboardingStep -> ATAuthCtx (RespHeaders (Html ()))
 onboardingStepSkipped pid stepM = do
   void $ Projects.sessionAndProject pid -- membership check
-  whenJust stepM $ markStepCompleted pid
-  redirectCS $ onboardingUrl pid $ "?step=" <> bool "Info" "Pricing" (stepM == Just "Integration")
+  whenJust stepM $ markStepCompleted pid . show
+  redirectCS $ stepUrl pid $ bool Info Pricing (stepM == Just Integration)
   addRespHeaders ""
 
 
@@ -224,7 +226,7 @@ phoneEmailPostH pid form = do
   void $ Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   memberEmails <- map (CI.original . (.email)) <$> Projects.usersByProjectId pid
-  markStepCompleted pid "NotifChannel"
+  markStepCompleted pid $ show NotifChannel
   ProjectMembers.setEveryoneTeamEmails pid (V.fromList form.emails)
   unless (T.null form.phoneNumber) $ ProjectMembers.setEveryoneTeamPhones pid (V.fromList [form.phoneNumber])
   addRespHeaders $ OnboardingPhoneEmailsPost pid (V.fromList $ ordNub $ form.emails <> memberEmails) appCtx.config.enableFreetier
@@ -238,34 +240,34 @@ checkIntegrationGet pid languageM = do
   case v of
     Nothing -> maybe (addErrorToast "No events found yet" Nothing >> addRespHeaders "") (addRespHeaders . integrationPoller_ pid) languageM
     Just _ -> do
-      markStepCompleted pid "Integration"
+      markStepCompleted pid $ show Integration
       Activation.recordActivationMilestone pid Activation.IngestVerified
       if isJust languageM
         then addRespHeaders $ div_ [class_ "flex items-center gap-2 text-textSuccess"] do
           span_ "verified"
           faSprite_ "circle-check" "regular" "h-4 w-4"
-        else redirectCS (onboardingUrl pid "?step=Pricing") >> addRespHeaders ""
+        else redirectCS (stepUrl pid Pricing) >> addRespHeaders ""
 
 
-onboardingInfoPostH :: Projects.ProjectId -> OnboardingInfoForm -> ATAuthCtx (RespHeaders OnboardingInfoPost)
+onboardingInfoPostH :: Projects.ProjectId -> OnboardingInfoForm -> ATAuthCtx (RespHeaders OnboardingStepPost)
 onboardingInfoPostH pid form = do
   (sess, _) <- Projects.sessionAndProject pid
   let answers = HI.AsJsonb $ AE.object ["companyName" AE..= form.companyName, "companySize" AE..= form.companySize, "foundUsFrom" AE..= form.whereDidYouHearAboutUs]
   Hasql.interpExecute_ [HI.sql| update projects.projects set title=#{form.companyName}, questions = COALESCE(questions, '{}'::jsonb) || #{answers} where id=#{pid} |]
-  markStepCompleted pid "Info"
+  markStepCompleted pid $ show Info
   Hasql.interpExecute_ [HI.sql| update users.users set first_name=#{form.firstName}, last_name=#{form.lastName} where id=#{sess.user.id} |]
-  redirectCS $ onboardingUrl pid "?step=Survey"
-  addRespHeaders $ OnboardingInfoPost ()
+  redirectCS $ stepUrl pid Survey
+  addRespHeaders OnboardingStepPost
 
 
-onboardingConfPostH :: Projects.ProjectId -> OnboardingConfForm -> ATAuthCtx (RespHeaders OnboardingConfPost)
+onboardingConfPostH :: Projects.ProjectId -> OnboardingConfForm -> ATAuthCtx (RespHeaders OnboardingStepPost)
 onboardingConfPostH pid form = do
   void $ Projects.sessionAndProject pid -- membership check
   let answers = HI.AsJsonb $ AE.object ["functionality" AE..= form.functionality, "location" AE..= form.location]
   Hasql.interpExecute_ [HI.sql| update projects.projects set questions = COALESCE(questions, '{}'::jsonb) || #{answers} where id=#{pid} |]
-  markStepCompleted pid "Survey"
-  redirectCS $ onboardingUrl pid "?step=NotifChannel"
-  addRespHeaders $ OnboardingConfPost ()
+  markStepCompleted pid $ show Survey
+  redirectCS $ stepUrl pid NotifChannel
+  addRespHeaders OnboardingStepPost
 
 
 onboardingCompleteBody :: Projects.ProjectId -> Html ()
@@ -285,7 +287,7 @@ pricingPage :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Htm
 pricingPage pid lemon critical paymentPlan freeTierEnabled basicAuthEnabled =
   div_ [class_ "w-full max-w-[1100px] mx-auto mt-[70px] mb-10 px-4 md:px-0"] $ do
     div_ [class_ "flex-col gap-4 flex w-full"] $ do
-      div_ [class_ "w-full md:w-1/2"] $ stepIndicator 5 "Please pick a plan" $ onboardingUrl pid "?step=Integration"
+      div_ [class_ "w-full md:w-1/2"] $ stepIndicator 5 "Please pick a plan" $ stepUrl pid Integration
       paymentPlanPicker pid lemon critical paymentPlan freeTierEnabled basicAuthEnabled True Projects.NoBillingProvider
       div_ [class_ "flex flex-col gap-2 w-full pb-20"] do
         span_ [class_ "text-textStrong text-2xl mt-20"] "FAQ"
@@ -384,7 +386,7 @@ integrationsPage pid apikey =
   div_ [class_ "w-full flex flex-col md:flex-row min-h-screen md:h-screen md:overflow-hidden group/pg"] do
     div_ [class_ "w-full md:w-1/2 bg-bgRaised md:h-full flex flex-col"] do
       div_ [class_ "pt-14 md:pt-[156px] px-4 md:px-12 flex-shrink-0"]
-        $ div_ [class_ "max-w-xl"] (stepIndicator 4 "Instrument your apps or servers" (onboardingUrl pid "?step=NotifChannel"))
+        $ div_ [class_ "max-w-xl"] (stepIndicator 4 "Instrument your apps or servers" (stepUrl pid NotifChannel))
       div_ [class_ "flex-col w-full gap-3 md:gap-4 flex mt-3 md:mt-4 px-4 md:px-12 overflow-y-auto flex-grow pb-20 md:pb-4"] do
         p_ [class_ "text-textWeak leading-relaxed text-sm md:text-base"] do
           "Select your stack below for integration instructions."
@@ -604,7 +606,7 @@ integrationsPage pid apikey =
     -- "Confirm & Proceed" + "Skip" pair; classes differ between the desktop inline and mobile sticky bars.
     integrationCta_ wrapCls btnCls skipCls = div_ [class_ wrapCls] do
       button_ [class_ btnCls, hxGet_ $ onboardingUrl pid "/integration-check", hxSwap_ "none", hxIndicator_ "#loadingIndicator"] "Confirm & Proceed"
-      a_ [class_ skipCls, type_ "button", hxPost_ $ onboardingUrl pid "/skip?step=Integration"] "Skip"
+      a_ [class_ skipCls, type_ "button", hxPost_ $ onboardingUrl pid $ "/skip?step=" <> show Integration] "Skip"
 
     languageItem l =
       label_ [class_ "group/li h-12 px-3 py-2 bg-transparent rounded-xl border border-strokeWeak justify-start items-center gap-3 inline-flex cursor-pointer"] do
@@ -647,7 +649,7 @@ onboardingStepWrapper_ step title prevUrl content =
 
 notifChannelsWithUrls :: Text -> Text -> Projects.ProjectId -> Text -> V.Vector Text -> Bool -> Bool -> Html ()
 notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack =
-  onboardingStepWrapper_ 3 "How should we notify you about issues?" (onboardingUrl pid "?step=Survey") do
+  onboardingStepWrapper_ 3 "How should we notify you about issues?" (stepUrl pid Survey) do
     div_ [class_ "flex-col w-full gap-8 flex mt-4"] do
       div_ [class_ "w-full gap-2 grid grid-cols-1 md:grid-cols-2"] do
         integrationCard "Slack" "/public/assets/svgs/slack.svg" hasSlack slackUrl
@@ -708,7 +710,7 @@ onboardingInfoBody pid firstName lastName cName cSize fUsFrm =
 
 onboardingConfigBody :: Projects.ProjectId -> Text -> [Text] -> Html ()
 onboardingConfigBody pid loca func =
-  onboardingStepWrapper_ 2 "Let's configure your project" (onboardingUrl pid "?step=Info")
+  onboardingStepWrapper_ 2 "Let's configure your project" (stepUrl pid Info)
     $ form_ [class_ "flex-col w-full gap-8 flex", hxPost_ $ onboardingUrl pid "/survey", hxIndicator_ "#loadingIndicator"]
     $ do
       div_ [class_ "flex-col w-full gap-14 mt-4 flex"] $ do

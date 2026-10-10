@@ -110,7 +110,7 @@ spec = sequential $ aroundAll withTestResources do
         tr
         [ ("m1", encMsg $ testRequestMsgs.reqMsg1 nowTxt)
         , ("m2", reqMsg2)
-        , ("m3", encMsg $ msgWithBody shapeBody nowTxt) -- same endpoint, different shape
+        , ("m3", encMsg $ msgWithBody "/" shapeBody nowTxt) -- same endpoint, different shape
         , ("m4", reqMsg2)
         ]
       createTestSpans tr testPid 10
@@ -130,7 +130,7 @@ spec = sequential $ aroundAll withTestResources do
       runTestBg frozenTime tr $ ackIssue testPid sess.user.id issueId
 
       -- Now send a message with a different format
-      processMessagesAndBackgroundJobs tr [("m4", encMsg $ msgWithBody formatBody nowTxt)]
+      processMessagesAndBackgroundJobs tr [("m4", encMsg $ msgWithBody "/" formatBody nowTxt)]
       runAnomalyJobs tr \case
         BackgroundJobs.NewAnomaly{anomalyType = "format"} -> True
         _ -> False
@@ -145,6 +145,35 @@ spec = sequential $ aroundAll withTestResources do
       -- We acknowledged at least one API change issue in the previous test
       length (V.filter isApiChange rows) `shouldSatisfy` (>= 1)
       length rows `shouldSatisfy` (> 0)
+
+    -- Regression: since #376 dropped apis.shapes/fields/formats, getAnomaliesVM selected
+    -- NULL drift detail, so new/changed fields never reached the issue, never updated an
+    -- open one, and a breaking change never made it critical.
+    it "apiChangeIssue_fieldDrift_neverReachedIssuePayload" \tr -> do
+      nowTxt <- nowText
+      let ingest body = do
+            processMessagesAndBackgroundJobs tr [("drift", encMsg $ msgWithBody "/v1/drift" body nowTxt)]
+            runAnomalyJobs tr \case
+              BackgroundJobs.NewAnomaly{} -> True
+              _ -> False
+          driftIssue = do
+            h <- withResource tr.trPool \conn -> PGS.query conn [sql| SELECT hash FROM apis.endpoints WHERE project_id=? AND url_path='/v1/drift' |] (Only testPid)
+            iM <- maybe (pure Nothing) (\(Only eh) -> runTestBg frozenTime tr $ Issues.selectIssueByHash testPid eh (Issues.OpenOfType Issues.ApiChange)) (listToMaybe h)
+            i <- maybe (fail "no open api_change issue for /v1/drift") pure iM
+            case Issues.issuePayload i of
+              Just (Issues.ApiChangeP d) -> pure (i, d)
+              _ -> fail "api_change issue without an ApiChangeP payload"
+          hasField f = V.any (f `T.isSuffixOf`)
+      ingest "eyJ1c2VybmFtZSI6ImFAYi5jbyJ9" -- {"username":"a@b.co"}
+      (i0, _) <- driftIssue
+      Issues.isNewEndpointOnly i0 `shouldBe` True
+      ingest "eyJ1c2VybmFtZSI6ImFAYi5jbyIsInBhc3N3b3JkIjoieCJ9" -- + "password"
+      (i1, d1) <- driftIssue
+      (hasField "password" d1.newFields, V.null d1.modifiedFields, i1.critical) `shouldBe` (True, True, False)
+      ingest "eyJ1c2VybmFtZSI6MiwicGFzc3dvcmQiOiJ4In0=" -- username: string -> number
+      (i2, d2) <- driftIssue
+      (hasField "password" d2.newFields, hasField "username" d2.modifiedFields, hasField "password" d2.modifiedFields) `shouldBe` (True, True, False)
+      (i2.id == i0.id, i2.critical) `shouldBe` (True, True)
 
     it "filters, paginates, and renders an empty anomaly list through the page handler" \tr -> do
       -- Put the issues created above back in one customer-visible list. The bulk handler
@@ -690,6 +719,12 @@ spec = sequential $ aroundAll withTestResources do
       bulk IssuesPage.BAResolve Nothing
       all (isJust . (.archivedAt)) <$> issues `shouldReturn` True
       forM iids (runTestBg frozenTime tr . Issues.selectLatestStateEvent) `shouldReturn` replicate 2 (Just Issues.IEResolved)
+
+    it "issueList_mobileEventCount_labelsPeriodNotTimeFilter" \tr -> do
+      void $ seedIssue tr Issues.LogPattern "mobile count probe" "mobile-count"
+      (_, page) <- testServant tr $ IssuesPage.issueListGetH testPid (Just "Inbox") Nothing (Just "7d") Nothing (Just "100") Nothing (Just "24h") [] []
+      renderPage page `shouldSatisfy` T.isInfixOf "0 events (24h)"
+      renderPage page `shouldNotSatisfy` T.isInfixOf "(7d)"
 
     it "the user journey offers search, newest-first ordering and copy, and skips contentless events" \tr -> do
       traceIdText <- T.replace "-" "" . DataUUID.toText <$> UUID.nextRandom
@@ -1353,9 +1388,9 @@ shapeBody = "eyJwYXNzd29yZCI6IltDTElFTlRfUkVEQUNURURdIiwidXNlcm5hbWUiOiJhZG1pbkB
 formatBody = "eyJwYXNzd29yZCI6IltDTElFTlRfUkVEQUNURURdIiwidXNlcm5hbWUiOjJ9"
 
 
--- Same endpoint as msg1, with a caller-supplied request body.
-msgWithBody :: Text -> Text -> AE.Value
-msgWithBody body timestamp =
+-- msg1 (at path @/@), with a caller-supplied path and request body.
+msgWithBody :: Text -> Text -> Text -> AE.Value
+msgWithBody path body timestamp =
   [aesonQQ|{"duration":476434,
             "host":"172.31.29.11",
             "method":"GET",
@@ -1363,7 +1398,7 @@ msgWithBody body timestamp =
             "project_id":"00000000-0000-0000-0000-000000000000",
             "proto_minor":1,
             "proto_major":1,"query_params":{},
-            "raw_url":"/","referer":"","request_body": #{body},
+            "raw_url": #{path},"referer":"","request_body": #{body},
             "request_headers":{
               "connection":["upgrade"],"host":["172.31.29.11"],
               "x-real-ip":["172.31.81.1"],"x-forwarded-for":["172.31.81.1"],
@@ -1375,5 +1410,5 @@ msgWithBody body timestamp =
             "sdk_type":"JsExpress",
             "status_code":200,
             "timestamp": #{timestamp},
-            "url_path":"/","errors":[],"tags":[]}
+            "url_path": #{path},"errors":[],"tags":[]}
       |]
