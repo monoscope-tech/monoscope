@@ -397,7 +397,7 @@ threadDeleteH pid convId = do
 submitTurn :: Projects.ProjectId -> UUIDId "conversation" -> Text -> ATAuthCtx ()
 submitTurn pid convId prompt = do
   appCtx <- ask @AuthContext
-  result <- Bots.processActionableAIQuery (Just appCtx.config) appCtx.env.enableTimefusionReads AI.ServiceAccess pid prompt (Just convId) appCtx.config.openaiModel appCtx.config.openaiApiKey
+  result <- Bots.processAIQueryWithMode (Just appCtx.config) appCtx.env.enableTimefusionReads AI.InteractiveWithActions AI.ServiceAccess pid prompt (Just convId) appCtx.config.openaiModel appCtx.config.openaiApiKey
   case result of
     Left err -> Issues.insertChatMessage pid convId Issues.ChatAssistant ("I couldn't complete that request: " <> err) Nothing Nothing
     Right _ -> pass

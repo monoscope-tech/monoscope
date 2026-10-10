@@ -115,7 +115,7 @@ import Pkg.ErrorFingerprint qualified as EF
 import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.Git qualified as Git
 import Pkg.ImpactReview qualified as ImpactReview
-import Pkg.Mail (NotificationAlerts (..), RuntimeAlertType (..), addConvertKitUserOrganization, sendDiscordAlertWith, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlertWith, sendSlackMessage, sendWhatsAppAlert)
+import Pkg.Mail (NotificationAlerts (..), RuntimeAlertType (..), addConvertKitUserOrganization, sendDiscordAlert, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendSlackMessage, sendWhatsAppAlert)
 import Pkg.Mail qualified as Mail
 import Pkg.Metrics qualified as Metrics
 import Pkg.Parser
@@ -1588,8 +1588,8 @@ fanOutToTeam team fan alert pid title alertUrl = do
       forM_ recipients \to -> sendRenderedEmail to e.subject e.body
   slackTs <- case fan.slack of
     QueuedSlack -> pure Nothing
-    InlineSlack -> fanChannel ProjectMembers.Slack team.slack_channels (.slackTs) \parent cid -> sendSlackAlertWith parent alert pid title (Just cid)
-  discordMsgId <- fanChannel ProjectMembers.Discord team.discord_channels (.discordMsgId) \parent cid -> sendDiscordAlertWith parent alert pid title (Just cid)
+    InlineSlack -> fanChannel ProjectMembers.Slack team.slack_channels (.slackTs) \parent cid -> sendSlackAlert parent alert pid title (Just cid)
+  discordMsgId <- fanChannel ProjectMembers.Discord team.discord_channels (.discordMsgId) \parent cid -> sendDiscordAlert parent alert pid title (Just cid)
   ProjectMembers.whenChannelEnabled ProjectMembers.Phone team $ sendWhatsAppAlert alert pid title team.phone_numbers
   ProjectMembers.whenChannelEnabled ProjectMembers.Pagerduty team $ forM_ team.pagerduty_services \k -> sendPagerdutyAlertToService k alert title alertUrl
   pure ThreadRefs{slackTs, discordMsgId}

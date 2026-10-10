@@ -1,4 +1,4 @@
-module Pkg.Mail (AlertImpact (..), monitorDataUnavailableMessage, errorIncidentMessages, resolvedErrorMessage, monitorIncidentMessages, retainSlackSnapshot, sendSlackMessage, sendRenderedEmail, sendWhatsAppAlert, sendSlackAlert, sendSlackAlertWith, NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendDiscordAlertWith, sendPagerdutyAlertToService, sampleAlertByIssueTypeText, sampleReport, addConvertKitUser, addConvertKitUserOrganization) where
+module Pkg.Mail (AlertImpact (..), monitorDataUnavailableMessage, errorIncidentMessages, resolvedErrorMessage, monitorIncidentMessages, retainSlackSnapshot, sendSlackMessage, sendRenderedEmail, sendWhatsAppAlert, sendSlackAlert, NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendPagerdutyAlertToService, sampleAlertByIssueTypeText, sampleReport, addConvertKitUser, addConvertKitUserOrganization) where
 
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
@@ -112,15 +112,10 @@ data AlertImpact = AlertImpact
   deriving stock (Eq, Generic, Show)
 
 
--- | Send a Discord alert, optionally threading replies under a parent message.
+-- | Send a Discord alert, optionally as a reply under a parent message.
 -- Returns the message ID if threading is enabled and the send succeeds.
-sendDiscordAlert :: (DB es, IOE :> es, Log :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
-sendDiscordAlert = sendDiscordAlertWith Nothing
-
-
--- | Internal: send Discord alert with optional reply-to threading
-sendDiscordAlertWith :: (DB es, IOE :> es, Log :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => Maybe Text -> NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
-sendDiscordAlertWith replyToMsgIdM alert pid pTitle channelIdM' = do
+sendDiscordAlert :: (DB es, IOE :> es, Log :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => Maybe Text -> NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
+sendDiscordAlert replyToMsgIdM alert pid pTitle channelIdM' = do
   appCtx <- ask @Config.AuthContext
   -- When no explicit channel is supplied, fall back to the first entry of
   -- @everyone.discord_channels (insertion order; see addDiscordChannelToEveryoneTeam).
@@ -141,13 +136,8 @@ sendDiscordAlertWith replyToMsgIdM alert pid pTitle channelIdM' = do
       maybe (pure Nothing) (\payload -> Notify.sendNotificationWithReply $ Notify.discordThreadedNotification cid payload replyToMsgIdM) (mkPayload alert)
 
 
--- | Send a Slack alert, optionally threading replies under a parent message.
--- Returns the thread timestamp if the send succeeds.
-sendSlackAlert :: (DB es, IOE :> es, Log :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
-sendSlackAlert = sendSlackAlertWith Nothing
-
-
--- | Internal: send Slack alert with optional thread-ts for threading.
+-- | Send a Slack alert, optionally threaded under @threadTsM@; returns the thread
+-- timestamp if the send succeeds.
 -- Routing: if the target channel matches the project's OAuth-time default
 -- (apis.slack.channel_id) AND a webhook URL is on file, post via the
 -- channel-bound incoming webhook — works without bot membership, essential
@@ -156,8 +146,8 @@ sendSlackAlert = sendSlackAlertWith Nothing
 --
 -- Both transports preserve thread context. Webhook root timestamps require
 -- separate capture through Slack events or message retrieval.
-sendSlackAlertWith :: (DB es, IOE :> es, Log :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => Maybe Text -> NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
-sendSlackAlertWith threadTsM alert pid pTitle channelM = do
+sendSlackAlert :: (DB es, IOE :> es, Log :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => Maybe Text -> NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
+sendSlackAlert threadTsM alert pid pTitle channelM = do
   appCtx <- ask @Config.AuthContext
   slackData <- getProjectSlackData pid
   case (channelM, slackData) of

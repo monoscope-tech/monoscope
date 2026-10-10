@@ -919,8 +919,8 @@ notificationsTestPostH pid TestForm{..} = do
                 emails <- Projects.projectEmailRecipients pid $ map CI.original (resolveTeamEmails t)
                 forM_ emails sendTestEmail $> length emails
             )
-        TCSlack -> Just (Just ProjectMembers.Slack, \t -> forM_ t.slack_channels (sendSlackAlert alert pid project.title . Just) $> V.length t.slack_channels)
-        TCDiscord -> Just (Just ProjectMembers.Discord, \t -> forM_ t.discord_channels (sendDiscordAlert alert pid project.title . Just) $> V.length t.discord_channels)
+        TCSlack -> Just (Just ProjectMembers.Slack, \t -> forM_ t.slack_channels (sendSlackAlert Nothing alert pid project.title . Just) $> V.length t.slack_channels)
+        TCDiscord -> Just (Just ProjectMembers.Discord, \t -> forM_ t.discord_channels (sendDiscordAlert Nothing alert pid project.title . Just) $> V.length t.discord_channels)
         TCWhatsapp -> Just (Just ProjectMembers.Phone, \t -> if V.null t.phone_numbers then pure 0 else sendWhatsAppAlert alert pid project.title t.phone_numbers $> V.length t.phone_numbers)
         TCPagerduty -> Just (Just ProjectMembers.Pagerduty, \t -> forM_ t.pagerduty_services (\k -> sendPagerdutyAlertToService k alert project.title projectUrl) $> V.length t.pagerduty_services)
 

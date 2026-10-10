@@ -1,4 +1,4 @@
-module Pages.Bots.Utils (BotType (..), BotReply (..), botReplyPayload, BotResponse (..), Channel (..), authHeader, contentTypeHeader, mrkdwn, plainTxt, textBlock, imageBlock, dcContainer, dcText, dcGallery, dcLinkButton, processAIQuery, processActionableAIQuery, storeAgenticResponse, verifyWidgetSignature, QueryIntent (..), detectReportIntent, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, runBotQuery, withBotThread, withDashboardTemplate, parseInstallState, installedResponse) where
+module Pages.Bots.Utils (BotType (..), BotReply (..), botReplyPayload, BotResponse (..), Channel (..), authHeader, contentTypeHeader, mrkdwn, plainTxt, textBlock, imageBlock, dcContainer, dcText, dcGallery, dcLinkButton, processAIQuery, processAIQueryWithMode, storeAgenticResponse, verifyWidgetSignature, QueryIntent (..), detectReportIntent, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, runBotQuery, withBotThread, withDashboardTemplate, parseInstallState, installedResponse) where
 
 import Control.Lens ((.~), (^?))
 import Data.Aeson qualified as AE
@@ -292,10 +292,6 @@ data Channel = Channel
 
 processAIQuery :: (DB es, ELLM.LLM :> es, HTTP :> es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Maybe EnvConfig -> Bool -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe (UUIDId "conversation") -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
 processAIQuery sourceConfig useTf = processAIQueryWithMode sourceConfig useTf AI.InteractiveReadOnly
-
-
-processActionableAIQuery :: (DB es, ELLM.LLM :> es, HTTP :> es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Maybe EnvConfig -> Bool -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe (UUIDId "conversation") -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
-processActionableAIQuery sourceConfig useTf = processAIQueryWithMode sourceConfig useTf AI.InteractiveWithActions
 
 
 processAIQueryWithMode :: (DB es, ELLM.LLM :> es, HTTP :> es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Maybe EnvConfig -> Bool -> AI.InvocationMode -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe (UUIDId "conversation") -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
