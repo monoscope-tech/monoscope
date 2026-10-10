@@ -11,6 +11,7 @@ import Data.ByteArray qualified as BA
 import Data.ByteString.Base16 qualified as B16
 import Data.Char (isDigit)
 import Data.Default
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Generics.Labels ()
 import Data.List (lookup)
 import Data.Map.Strict qualified as M
@@ -300,7 +301,7 @@ data Widget = Widget
   , pngUrl :: Maybe Text -- Pre-signed PNG download URL (runtime)
   , pngProfile :: Maybe PngProfile
   , _staticRender :: Maybe Bool -- For PNG export: disables scroll legend
-  , dbSource :: Maybe Text -- "postgres" or "timefusion"; Nothing = default routing
+  , dbSource :: Maybe Hasql.SqlSource -- Nothing = default routing
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)

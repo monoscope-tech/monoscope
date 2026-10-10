@@ -132,18 +132,15 @@ sourceTable = \case
 --
 -- >>> usesTimefusionBackend False Nothing
 -- False
--- >>> usesTimefusionBackend True (Just "postgres")
+-- >>> usesTimefusionBackend True (Just SqlPostgres)
 -- False
--- >>> usesTimefusionBackend False (Just "timefusion")
+-- >>> usesTimefusionBackend False (Just SqlTimefusion)
 -- True
-usesTimefusionBackend :: Bool -> Maybe Text -> Bool
-usesTimefusionBackend enableTimefusionReads = \case
-  Just "postgres" -> False
-  Just "timefusion" -> True
-  _ -> enableTimefusionReads
+usesTimefusionBackend :: Bool -> Maybe SqlSource -> Bool
+usesTimefusionBackend enableTimefusionReads = maybe enableTimefusionReads (== SqlTimefusion)
 
 
-queryMetrics :: (DB es, Effectful.Error.Static.Error ServerError :> es, Effectful.Reader.Static.Reader AuthContext :> es, IOE :> es, Log :> es, Time.Time :> es, Tracing :> es) => M Text -> M DataType -> M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> M BinDensity -> [(Text, Maybe Text)] -> Eff es MetricsData
+queryMetrics :: (DB es, Effectful.Error.Static.Error ServerError :> es, Effectful.Reader.Static.Reader AuthContext :> es, IOE :> es, Log :> es, Time.Time :> es, Tracing :> es) => M SqlSource -> M DataType -> M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> M BinDensity -> [(Text, Maybe Text)] -> Eff es MetricsData
 queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (Utils.nonEmptyT -> queryM) (Utils.nonEmptyT -> querySQLM) (Utils.nonEmptyT -> sinceM) (Utils.nonEmptyT -> fromM) (Utils.nonEmptyT -> toM) (Utils.nonEmptyT -> sourceM) binDensityM allParams = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   now <- Time.currentTime
@@ -173,7 +170,7 @@ queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (Utils.nonEmptyT -> q
 
 -- | Run a parsed chart query, either through the caller's raw SQL template or
 -- the KQL-generated query.
-runQueryAST :: (DB es, IOE :> es, Log :> es, Time.Time :> es, Tracing :> es) => AuthContext -> Maybe Text -> DataType -> Projects.ProjectId -> Maybe Sources -> BinDensity -> Maybe Text -> Maybe Text -> Bool -> [Section] -> Text -> Maybe Text -> M.Map Text Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> Eff es MetricsData
+runQueryAST :: (DB es, IOE :> es, Log :> es, Time.Time :> es, Tracing :> es) => AuthContext -> Maybe SqlSource -> DataType -> Projects.ProjectId -> Maybe Sources -> BinDensity -> Maybe Text -> Maybe Text -> Bool -> [Section] -> Text -> Maybe Text -> M.Map Text Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> Eff es MetricsData
 runQueryAST authCtx dbSource respDataType pid source binDensity environment service liveRange queryAST queryM querySQLM mappngSQL now fromD toD = do
   let scope = mkScopedQuery pid (fromD, toD) environment service
       sqlQueryCfg =
@@ -213,7 +210,7 @@ runQueryAST authCtx dbSource respDataType pid source binDensity environment serv
 
 -- | Both JSON and streaming raw SQL use exactly the same bounds and cache key.
 -- Only the leader emits partial rows; followers receive the complete shared result.
-runRawQuery :: (DB es, IOE :> es) => AuthContext -> Maybe Text -> DataType -> SqlQueryCfg -> [Section] -> Text -> Text -> M.Map Text Text -> Bool -> Maybe (MetricsData -> IO ()) -> Eff es MetricsData
+runRawQuery :: (DB es, IOE :> es) => AuthContext -> Maybe SqlSource -> DataType -> SqlQueryCfg -> [Section] -> Text -> Text -> M.Map Text Text -> Bool -> Maybe (MetricsData -> IO ()) -> Eff es MetricsData
 runRawQuery authCtx dbSource decoder cfg ast kql template mapping liveRange progress = do
   let endpoint = Utils.nonEmptyT $ M.lookup "var-endpointHash" mapping
       bounds = case (endpoint, liveRange, cfg.dateRange) of
@@ -340,7 +337,7 @@ isScalarSummarize = any \case
 queryMetricsWithCache
   :: (DB es, IOE :> es, Log :> es, Time.Time :> es, Tracing :> es)
   => AuthContext
-  -> Maybe Text
+  -> Maybe SqlSource
   -> DataType
   -> Projects.ProjectId
   -> Maybe Sources
@@ -468,7 +465,7 @@ queryMetricsWithCacheUsing fetch progress respDataType pid source queryAST sqlQu
 -- The outer 'withChartSpan' catches and produces a user-visible error payload.
 runFetchMetrics
   :: IOE :> es
-  => DataType -> Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> AuthContext -> Maybe Text -> Eff es MetricsData
+  => DataType -> Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> AuthContext -> Maybe SqlSource -> Eff es MetricsData
 runFetchMetrics respDataType sqlQuery now fromD toD authCtx dbSource = liftIO do
   fetchMetricsData respDataType sqlQuery now fromD toD authCtx dbSource >>= either throwIO pure
 
@@ -527,7 +524,7 @@ withChartSpan tbl attrs sqlQuery fallback action =
       pure fallback{error = Just userMsg}
 
 
-fetchMetricsData :: DataType -> Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> AuthContext -> Maybe Text -> IO (Either SomePostgreSqlException MetricsData)
+fetchMetricsData :: DataType -> Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> AuthContext -> Maybe SqlSource -> IO (Either SomePostgreSqlException MetricsData)
 fetchMetricsData = fetchMetricsDataWithProgress Nothing
 
 
@@ -568,14 +565,11 @@ retryOnPoolExhaustion act = go (0 :: Int)
         result -> pure result
 
 
-metricsPool :: AuthContext -> Maybe Text -> Pool Connection
-metricsPool authCtx dbSource = case dbSource of
-  Just "postgres" -> authCtx.pool
-  Just "timefusion" -> authCtx.timefusionPgPool
-  _ -> if usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource then authCtx.timefusionPgPool else authCtx.pool
+metricsPool :: AuthContext -> Maybe SqlSource -> Pool Connection
+metricsPool authCtx dbSource = bool authCtx.pool authCtx.timefusionPgPool $ usesTimefusionBackend authCtx.env.enableTimefusionReads dbSource
 
 
-fetchMetricsDataWithProgress :: Maybe (MetricsData -> IO ()) -> DataType -> Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> AuthContext -> Maybe Text -> IO (Either SomePostgreSqlException MetricsData)
+fetchMetricsDataWithProgress :: Maybe (MetricsData -> IO ()) -> DataType -> Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> AuthContext -> Maybe SqlSource -> IO (Either SomePostgreSqlException MetricsData)
 fetchMetricsDataWithProgress progress respDataType sqlQuery now fromD toD authCtx dbSource = do
   let pool = metricsPool authCtx dbSource
   let baseMetricsData = emptyMetricsFor now fromD toD
@@ -743,7 +737,7 @@ streamQuery_ conn (Query sql) emit = run `E.onException` cancel
 -- | A separate framed endpoint preserves the existing complete JSON contract.
 -- Only IO values escape the handler. The producer exists only while the response
 -- is consumed, and the bounded queue propagates browser backpressure to libpq.
-queryMetricsStream :: (Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, Time.Time :> es) => M Text -> M DataType -> M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> M BinDensity -> [(Text, Maybe Text)] -> Eff es (Servant.Headers '[Servant.Header "Cache-Control" Text, Servant.Header "X-Accel-Buffering" Text] (Servant.SourceIO AE.Value))
+queryMetricsStream :: (Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, Time.Time :> es) => M SqlSource -> M DataType -> M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> M BinDensity -> [(Text, Maybe Text)] -> Eff es (Servant.Headers '[Servant.Header "Cache-Control" Text, Servant.Header "X-Accel-Buffering" Text] (Servant.SourceIO AE.Value))
 queryMetricsStream dbSource dataTypeM pidM queryM querySQLM sinceM fromM toM sourceM densityM allParams = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   now <- Time.currentTime

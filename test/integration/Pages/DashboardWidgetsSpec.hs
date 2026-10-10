@@ -10,6 +10,7 @@ module Pages.DashboardWidgetsSpec (spec) where
 
 import Control.Concurrent (threadDelay)
 import Control.Exception qualified as E
+import Data.Effectful.Hasql qualified as Hasql
 import Control.Monad.Trans.Except (runExceptT)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
@@ -785,7 +786,7 @@ spec = sequential $ aroundAll withTestResources do
       let widget =
             (def :: Widget.Widget)
               { Widget.wType = Widget.WTTable
-              , Widget.dbSource = Just "postgres"
+              , Widget.dbSource = Just Hasql.SqlPostgres
               , Widget.columns = Just [def{Widget.field = "duration", Widget.title = "Duration", Widget.sortable = Just True}]
               , Widget.sql = Just "SELECT n AS duration FROM generate_series(1, 25) n ORDER BY {{table_sort}} LIMIT 20"
               , Widget.defaultSort = Widget.mkSqlOrder "duration ASC"
@@ -804,7 +805,7 @@ spec = sequential $ aroundAll withTestResources do
       let widget =
             (def :: Widget.Widget)
               { Widget.wType = Widget.WTTable
-              , Widget.dbSource = Just "postgres"
+              , Widget.dbSource = Just Hasql.SqlPostgres
               , Widget.columns = Just [def{Widget.field = "duration", Widget.title = "Duration", Widget.sortable = Just True}]
               , Widget.sql = Just "SELECT n AS duration FROM generate_series(1, 25) n ORDER BY {{table_sort}} LIMIT 20"
               , Widget.defaultSort = Widget.mkSqlOrder "duration ASC"

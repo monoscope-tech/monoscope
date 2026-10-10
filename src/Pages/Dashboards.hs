@@ -67,6 +67,7 @@ import Data.List (lookup)
 import Data.Map qualified as Map
 import Data.Set qualified as S
 import Data.Text qualified as T
+import Data.Text.Display (display)
 import Data.Time (UTCTime)
 import Data.Vector qualified as V
 import Deriving.Aeson.Stock qualified as DAE
@@ -292,7 +293,7 @@ dashboardVariables_ pid dashId hasTabs variables extraAttrs = div_ ([id_ "dashbo
             , -- Which store the statement belongs to. Without it the client-side
               -- refresh below re-runs a postgres-only statement (apis.endpoints)
               -- against TimeFusion and the variable silently stops updating.
-              data_ "tagify-db-source" $ foldMap (Data.Effectful.Hasql.sqlSourceParam . (.source)) var.sql
+              data_ "tagify-db-source" $ foldMap (display . (.source)) var.sql
             , data_ "tagify-query" $ maybeToMonoid var.query
             , data_ "tagify-reload-on-change" $ maybe "false" (T.toLower . show) var.reloadOnChange
             , value_ $ maybeToMonoid var.value

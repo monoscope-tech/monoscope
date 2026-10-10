@@ -1,6 +1,7 @@
 module Models.DashboardTemplatesSpec (spec) where
 
 import Data.List qualified as L (isSuffixOf)
+import Data.Effectful.Hasql (SqlSource (..))
 import Data.Text qualified as T
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
@@ -102,18 +103,18 @@ spec = describe "dashboard templates" do
 
   it "endpoint analytics only advertises replay when its session index has a recording" $ withEndpointTemplate \d -> do
     let sessionWidget = find (\w -> w.title == Just "Endpoint Sessions") (Dashboards.allWidgets d)
-    (sessionWidget >>= (.dbSource)) `shouldBe` Just "postgres"
+    (sessionWidget >>= (.dbSource)) `shouldBe` Just SqlPostgres
     (sessionWidget >>= (.sql)) `shouldSatisfy` maybe False (T.isInfixOf "projects.replay_sessions")
     (sessionWidget >>= (.sql)) `shouldSatisfy` maybe False (T.isInfixOf "'Available'")
 
   it "endpoint analytics only joins Web Vitals with an explicit browser session correlation" $ withEndpointTemplate \d -> do
     let vitalsWidget = find (\w -> w.title == Just "Request-linked Web Vitals") (Dashboards.allWidgets d)
-    (vitalsWidget >>= (.dbSource)) `shouldBe` Just "postgres"
+    (vitalsWidget >>= (.dbSource)) `shouldBe` Just SqlPostgres
     (vitalsWidget >>= (.sql)) `shouldSatisfy` maybe False (T.isInfixOf "endpoint_sessions")
     (vitalsWidget >>= (.sql)) `shouldSatisfy` maybe False (T.isInfixOf "endpoint_sessions.session_id = vital_samples.session_id")
 
   it "endpoint analytics derives browser cohorts only from observed browser telemetry" $ withEndpointTemplate \d -> do
     let cohortWidget = find (\w -> w.title == Just "Browser Cohorts") (Dashboards.allWidgets d)
-    (cohortWidget >>= (.dbSource)) `shouldBe` Just "postgres"
+    (cohortWidget >>= (.dbSource)) `shouldBe` Just SqlPostgres
     (cohortWidget >>= (.sql)) `shouldSatisfy` maybe False (T.isInfixOf "resource___user_agent___original")
     (cohortWidget >>= (.sql)) `shouldSatisfy` maybe False (T.isInfixOf "COUNT(DISTINCT NULLIF(attributes___session___id, ''))")

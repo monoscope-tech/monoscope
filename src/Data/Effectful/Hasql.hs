@@ -5,7 +5,6 @@ module Data.Effectful.Hasql (
   Hasql (..),
   HasqlException (..),
   SqlSource (..),
-  sqlSourceParam,
   SecuredSql (..),
   isTransientHasqlError,
   isTransientException,
@@ -45,7 +44,10 @@ import Data.Aeson.Key qualified as AEK
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
+import Data.Text.Display (Display)
 import Deriving.Aeson qualified as DAE
+import Pkg.Deriving (WrappedEnumSC (..))
+import Web.HttpApiData (FromHttpApiData)
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
@@ -69,21 +71,16 @@ import Text.Show (showString, showsPrec)
 import UnliftIO qualified
 
 
+-- | Which store a statement runs on. One spelling serves the JSON tag, the @db_source@
+-- query parameter and dashboard YAML.
+--
+-- >>> import Data.Text.Display (display)
+-- >>> map display [SqlPostgres, SqlTimefusion]
+-- ["postgres","timefusion"]
 data SqlSource = SqlPostgres | SqlTimefusion
   deriving stock (Eq, Generic, Ord, Read, Show, THS.Lift)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "Sql", DAE.CamelToSnake]] SqlSource
-
-
--- | The wire spelling of a source, shared by its JSON tag and the @db_source@
--- query parameter the client sends back when it re-runs a dashboard statement.
---
--- >>> map sqlSourceParam [SqlPostgres, SqlTimefusion]
--- ["postgres","timefusion"]
-sqlSourceParam :: SqlSource -> Text
-sqlSourceParam = \case
-  SqlPostgres -> "postgres"
-  SqlTimefusion -> "timefusion"
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromHttpApiData) via WrappedEnumSC 'Nothing "Sql" SqlSource
 
 
 data SecuredSql = SecuredSql

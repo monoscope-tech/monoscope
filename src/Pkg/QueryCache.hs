@@ -166,7 +166,7 @@ coalesceQuery (QueryFlights flights) key action = E.mask \restore -> do
 cachedRawQuery :: (DB es, IOE :> es) => RawQueryFlights -> UTCTime -> RawCacheKey -> Eff es MetricsData -> Eff es MetricsData
 cachedRawQuery flights now key fetch = do
   started <- liftIO getMonotonicTime
-  let backend = [("backend", OA.toAttribute $ Hasql.sqlSourceParam key.backend)]
+  let backend = [("backend", OA.toAttribute $ display key.backend)]
       finish outcome value = do
         ended <- liftIO getMonotonicTime
         let attrs = ("outcome", OA.toAttribute outcome) : backend

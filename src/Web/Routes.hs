@@ -540,8 +540,8 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , apiPatch :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Patch '[HTML] (RespHeaders Settings.ApiMut)
   , apiPost :: mode :- "p" :> ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Settings.GenerateAPIKeyForm :> Post '[HTML] (RespHeaders Settings.ApiMut)
   , -- Charts and widgets
-    chartsDataGet :: mode :- "chart_data" :> QPT "db_source" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QueryParam "chart_type" Parser.BinDensity :> AllQueryParams :> Get '[JSON] Charts.MetricsData
-  , chartsDataStreamGet :: mode :- "chart_data" :> "stream" :> QPT "db_source" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QueryParam "chart_type" Parser.BinDensity :> AllQueryParams :> StreamGet NewlineFraming Charts.ChartStream (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceIO AE.Value))
+    chartsDataGet :: mode :- "chart_data" :> QueryParam "db_source" Hasql.SqlSource :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QueryParam "chart_type" Parser.BinDensity :> AllQueryParams :> Get '[JSON] Charts.MetricsData
+  , chartsDataStreamGet :: mode :- "chart_data" :> "stream" :> QueryParam "db_source" Hasql.SqlSource :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QueryParam "chart_type" Parser.BinDensity :> AllQueryParams :> StreamGet NewlineFraming Charts.ChartStream (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceIO AE.Value))
   , widgetPost :: mode :- "p" :> ProjectId :> "widget" :> QPT "since" :> QPT "from" :> QPT "to" :> ReqBody '[JSON, FormUrlEncoded] Widget.Widget :> Post '[HTML] (RespHeaders Widget.Widget)
   , widgetGet :: mode :- "p" :> ProjectId :> "widget" :> QPT "widgetJSON" :> QPT "widgetZ" :> QPT "since" :> QPT "from" :> QPT "to" :> AllQueryParams :> Get '[HTML] (RespHeaders Widget.Widget)
   , widgetSqlPreview :: mode :- "p" :> ProjectId :> "widget" :> "sql-preview" :> QPT "query" :> QPT "dashboard_id" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders (Html ()))
@@ -1328,15 +1328,15 @@ avatarInitialsSvg name =
 -- 'Charts.queryMetrics' is about to and ask the question of the result.
 --
 -- >>> let pid = UUIDId UUID.nil :: Projects.ProjectId
--- >>> clientPostgresSqlRejection (Just "timefusion") (Just pid) (Just "select 1 from otel_logs_and_spans")
+-- >>> clientPostgresSqlRejection (Just Hasql.SqlTimefusion) (Just pid) (Just "select 1 from otel_logs_and_spans")
 -- Nothing
--- >>> clientPostgresSqlRejection (Just "postgres") (Just pid) (Just "select hash::text from apis.endpoints limit 5")
+-- >>> clientPostgresSqlRejection (Just Hasql.SqlPostgres) (Just pid) (Just "select hash::text from apis.endpoints limit 5")
 -- Just "Query must filter by project_id"
--- >>> clientPostgresSqlRejection (Just "postgres") (Just pid) (Just "select hash::text from apis.endpoints where project_id='{{project_id}}'")
+-- >>> clientPostgresSqlRejection (Just Hasql.SqlPostgres) (Just pid) (Just "select hash::text from apis.endpoints where project_id='{{project_id}}'")
 -- Nothing
-clientPostgresSqlRejection :: Maybe Text -> Maybe Projects.ProjectId -> Maybe Text -> Maybe Text
+clientPostgresSqlRejection :: Maybe Hasql.SqlSource -> Maybe Projects.ProjectId -> Maybe Text -> Maybe Text
 clientPostgresSqlRejection dbSource pidM querySqlM = case (dbSource, pidM, Utils.nonEmptyT querySqlM) of
-  (Just "postgres", Just pid, Just sql)
+  (Just Hasql.SqlPostgres, Just pid, Just sql)
     | let resolved = T.replace "{{project_id}}" pid.toText sql ->
         if
           | not (LogQueries.validateSqlQuery resolved) -> Just "Query contains disallowed operations"
@@ -1345,7 +1345,7 @@ clientPostgresSqlRejection dbSource pidM querySqlM = case (dbSource, pidM, Utils
   _ -> Nothing
 
 
-guardClientPostgresSql :: Maybe Text -> Maybe Projects.ProjectId -> Maybe Text -> ATAuthCtx ()
+guardClientPostgresSql :: Maybe Hasql.SqlSource -> Maybe Projects.ProjectId -> Maybe Text -> ATAuthCtx ()
 guardClientPostgresSql dbSource pidM querySqlM =
   whenJust (clientPostgresSqlRejection dbSource pidM querySqlM) \msg -> Error.throwError err400{errBody = toLazy (encodeUtf8 msg)}
 
@@ -1360,22 +1360,22 @@ guardClientPostgresSql dbSource pidM querySqlM =
 -- >>> let now = Parser.fixedUTCTime; t = Utils.isoT . (`addUTCTime` now) . (* 3600); since s = TimePicker.TimePicker (Just s) Nothing Nothing; abs' a b = TimePicker.TimePicker Nothing (Just $ t a) (Just $ t b)
 -- >>> let r from = [("rollup_sql", Just "R"), ("rollup_from", Just $ t from)]; route tp ps = fst $ rollupRoute now tp ps (Nothing, Nothing)
 -- >>> (route (since "24H") (r (-72)), route (since "3H") (r (-72)), route (abs' (-30) (-26)) (r (-72)))
--- (Just "postgres",Just "postgres",Just "postgres")
+-- (Just SqlPostgres,Just SqlPostgres,Just SqlPostgres)
 -- >>> (route (since "24H") (r (-12)), route (since "24H") (("environment", Just "prod") : r (-72)), route (since "24H") (take 1 $ r (-72)))
 -- (Nothing,Nothing,Nothing)
-rollupRoute :: UTCTime -> TimePicker.TimePicker -> [(Text, Maybe Text)] -> (Maybe Text, Maybe Text) -> (Maybe Text, Maybe Text)
+rollupRoute :: UTCTime -> TimePicker.TimePicker -> [(Text, Maybe Text)] -> (Maybe Hasql.SqlSource, Maybe Text) -> (Maybe Hasql.SqlSource, Maybe Text)
 rollupRoute now tp params source = case (param "rollup_sql", iso8601ParseM . toString =<< param "rollup_from", fromM) of
   (Just rollup, Just covered, Just start)
     | all (isNothing . param) ["environment", "service"]
     , start >= covered ->
-        (Just "postgres", Just rollup)
+        (Just Hasql.SqlPostgres, Just rollup)
   _ -> source
   where
     param k = Utils.nonEmptyT $ join $ L.lookup k params
     (fromM, _, _) = TimePicker.parseTimeRange now tp
 
 
-chartsDataGetH :: Maybe Text -> Maybe Charts.DataType -> Maybe Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Parser.BinDensity -> [(Text, Maybe Text)] -> ATAuthCtx Charts.MetricsData
+chartsDataGetH :: Maybe Hasql.SqlSource -> Maybe Charts.DataType -> Maybe Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Parser.BinDensity -> [(Text, Maybe Text)] -> ATAuthCtx Charts.MetricsData
 chartsDataGetH dbSource0 dt pid q qSql0 since fromD toD src density params = do
   scopedParams <- chartScopeParams pid params
   now <- Time.currentTime
@@ -1384,7 +1384,7 @@ chartsDataGetH dbSource0 dt pid q qSql0 since fromD toD src density params = do
   Charts.queryMetrics dbSource dt pid q qSql since fromD toD src density scopedParams
 
 
-chartsDataStreamGetH :: Maybe Text -> Maybe Charts.DataType -> Maybe Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Parser.BinDensity -> [(Text, Maybe Text)] -> ATAuthCtx (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceIO AE.Value))
+chartsDataStreamGetH :: Maybe Hasql.SqlSource -> Maybe Charts.DataType -> Maybe Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Parser.BinDensity -> [(Text, Maybe Text)] -> ATAuthCtx (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceIO AE.Value))
 chartsDataStreamGetH dbSource0 dt pid q qSql0 since fromD toD src density params = do
   scopedParams <- chartScopeParams pid params
   now <- Time.currentTime
