@@ -874,7 +874,7 @@ prometheusTargetsList settings = div_ [id_ "prometheus-targets", class_ "mt-4"] 
         , type_ "search"
         , Aria.label_ "Filter targets"
         , placeholder_ "Filter targets…"
-        , filterInputAttr_ ".itemsListItem in #prometheus-targets"
+        , filterInputAttr_ "#prometheus-targets .itemsListItem"
         ]
       div_ [class_ "flex flex-col gap-2"] $ V.forM_ cfgs (prometheusTargetRow settings.projectId canEdit)
   where
