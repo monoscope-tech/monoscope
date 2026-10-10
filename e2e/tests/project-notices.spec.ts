@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { test, expect } from "@playwright/test";
 import { sql } from "./helpers";
 
-test("customer notices stay above fullscreen Explorer on desktop and mobile", async ({ page, baseURL }) => {
+test("customer notices keep fullscreen panels and sidebar flyouts aligned", async ({ page, baseURL }) => {
   const uid = randomUUID(), sid = randomUUID(), pid = randomUUID();
   sql(`INSERT INTO users.users (id, email, is_sudo) VALUES ('${uid}', '${uid}@example.com', true);
        INSERT INTO users.persistent_sessions (id, user_id) VALUES ('${sid}', '${uid}');
@@ -30,6 +30,16 @@ test("customer notices stay above fullscreen Explorer on desktop and mobile", as
       await billing.getByRole("link", { name: "Review billing or change plan" }).click();
       await expect(page).toHaveURL(new RegExp(`/p/${pid}/manage_billing$`));
       await expect(page.getByText("Manage subscription", { exact: true })).toBeVisible();
+      if (width === 1280) {
+        const issues = page.locator(`#main-sidenav .main-nav-link[href="/p/${pid}/issues"]`);
+        for (const _ of [0, 1]) {
+          await issues.hover();
+          const flyout = issues.locator("..").locator(".nav-flyout");
+          await expect(flyout).toBeVisible();
+          expect((await flyout.boundingBox())!.y).toBeCloseTo((await issues.boundingBox())!.y, 0);
+          await page.getByRole("button", { name: "Toggle sidebar", exact: true }).click();
+        }
+      }
     }
   } finally {
     sql(`DELETE FROM projects.projects WHERE id = '${pid}'; DELETE FROM users.users WHERE id = '${uid}';`);
