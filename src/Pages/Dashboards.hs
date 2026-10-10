@@ -23,7 +23,6 @@ module Pages.Dashboards (
   DashboardRenameForm (..),
   dashboardDuplicatePostH,
   dashboardStarPostH,
-  WidgetMoveForm (..),
   DashboardBulkActionForm (..),
   DashboardBulkAction (..),
   DashboardRes (..),
@@ -31,7 +30,6 @@ module Pages.Dashboards (
   dashboardDuplicateWidgetPostH,
   dashboardWidgetNewGetH,
   dashboardWidgetExpandGetH,
-  visTypes,
   processEagerWidget,
   lazyWidget,
   widgetMetrics,
@@ -69,7 +67,7 @@ import Data.List (lookup)
 import Data.Map qualified as Map
 import Data.Set qualified as S
 import Data.Text qualified as T
-import Data.Time (UTCTime, defaultTimeLocale, formatTime)
+import Data.Time (UTCTime)
 import Data.Vector qualified as V
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, IOE, (:>))
@@ -106,7 +104,7 @@ import Pages.GitSync qualified as GitSyncPage
 import Pages.Issues qualified as IssuesPage
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Monitors qualified as Alerts
-import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_, visTypes)
+import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_)
 import Pkg.Components.ServiceMap (endpointDependencyMapPanel_)
 import Pkg.Components.Table (Table (..))
 import Pkg.Components.Table qualified as Table
@@ -241,23 +239,26 @@ dashboardSettledPostH pid dashId sample = do
   pure NoContent
 
 
-actionPickerHeader_ :: Text -> Text -> Html ()
-actionPickerHeader_ modalId title = div_ [class_ "mb-2 flex items-center justify-between px-3"] do
-  h2_ [class_ "text-xs font-medium uppercase tracking-wider text-white"] $ toHtml title
-  label_ [Lucid.for_ modalId, Aria.label_ "Close modal", class_ "inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-white/70 hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-white active:scale-[0.96] transition-[color,background-color,scale]"]
-    $ faSprite_ "xmark" "regular" "h-3.5 w-3.5"
+-- | The dark rename prompt: a titled card of fields over Cancel / Save.
+actionPickerModal_ :: Text -> Text -> [Attribute] -> Html () -> Html ()
+actionPickerModal_ modalId title formAttrs fields =
+  Components.modalWith_ modalId def{boxClass = "!w-full !max-w-lg !overflow-visible !rounded-none !border-0 !bg-transparent !p-0 !shadow-none", wrapperClass = "!items-start pt-[15vh] px-4 [&_.modal-backdrop]:backdrop-blur-sm", hideClose = True} Nothing
+    $ form_ ([class_ "flex flex-col", hxTrigger_ "submit"] <> formAttrs) do
+      div_ [class_ "mb-2 flex items-center justify-between px-3"] do
+        h2_ [class_ "text-xs font-medium uppercase tracking-wider text-white"] $ toHtml title
+        label_ [Lucid.for_ modalId, Aria.label_ "Close modal", class_ "inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-white/70 hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-white active:scale-[0.96] transition-[color,background-color,scale]"]
+          $ faSprite_ "xmark" "regular" "h-3.5 w-3.5"
+      div_ [class_ "w-full overflow-hidden rounded-lg border border-base-300 bg-bgBase shadow-2xl"] do
+        fields
+        div_ [class_ "flex justify-end gap-1.5 border-t border-strokeWeak p-2"] do
+          label_ [Lucid.for_ modalId, class_ "btn btn-sm btn-ghost cursor-pointer shadow-none active:scale-[0.96] transition-transform"] "Cancel"
+          button_ [type_ "submit", class_ "btn btn-sm btn-primary shadow-none active:scale-[0.96] transition-transform"] "Save changes"
 
 
 actionPickerField_ :: Text -> Text -> Text -> Text -> Html ()
 actionPickerField_ label name placeholder value = label_ [Lucid.for_ name, class_ "flex flex-col gap-1.5 text-xs font-medium text-textStrong"] do
   toHtml label
   input_ [class_ "no-focus-ring h-10 w-full rounded-md border border-base-300 bg-transparent px-3 text-sm font-normal outline-none transition-[border-color,box-shadow] duration-150 placeholder:text-textDisabled focus:border-strokeBrand-strong focus:ring-2 focus:ring-strokeBrand-weak", id_ name, name_ name, placeholder_ placeholder, value_ value]
-
-
-actionPickerActions_ :: Text -> Html ()
-actionPickerActions_ modalId = div_ [class_ "flex justify-end gap-1.5 border-t border-strokeWeak p-2"] do
-  label_ [Lucid.for_ modalId, class_ "btn btn-sm btn-ghost cursor-pointer shadow-none active:scale-[0.96] transition-transform"] "Cancel"
-  button_ [type_ "submit", class_ "btn btn-sm btn-primary shadow-none active:scale-[0.96] transition-transform"] "Save changes"
 
 
 dashboardVariables_ :: Projects.ProjectId -> Dashboards.DashboardId -> Bool -> [Dashboards.Variable] -> [Attribute] -> Html ()
@@ -313,38 +314,15 @@ dashboardPage_ pid dashId dash dashVM allParams = do
       -- Slug used for content/widget-order, falling back to the first tab when unset
       renderTabSlug = dash.tabs *> (activeTabSlug <|> (slugify . (.name) <$> listToMaybe allTabs))
       renderTab = renderTabSlug >>= findTabBySlug allTabs <&> snd
-  -- Modal for renaming dashboard
-  Components.modalWith_ "pageTitleModalId" def{boxClass = "!w-full !max-w-lg !overflow-visible !rounded-none !border-0 !bg-transparent !p-0 !shadow-none", wrapperClass = "!items-start pt-[15vh] px-4 [&_.modal-backdrop]:backdrop-blur-sm", hideClose = True} Nothing
-    $ form_
-      [ class_ "flex flex-col"
-      , hxPatch_ ("/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/rename")
-      , hxSwap_ "innerHTML"
-      , hxTrigger_ "submit"
-      , hxTarget_ "#pageTitleText"
-      ]
-    $ do
-      actionPickerHeader_ "pageTitleModalId" "Rename dashboard"
-      div_ [class_ "w-full overflow-hidden rounded-lg border border-base-300 bg-bgBase shadow-2xl"] do
-        div_ [class_ "flex flex-col gap-3 p-3"] do
-          actionPickerField_ "Dashboard title" "title" "Insert new title" (dashTitle dashVM.title)
-          actionPickerField_ "Folder" "fileDir" "reports/" (folderFromPath dashVM.filePath)
-        actionPickerActions_ "pageTitleModalId"
+  actionPickerModal_ "pageTitleModalId" "Rename dashboard" [hxPatch_ ("/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/rename"), hxSwap_ "innerHTML", hxTarget_ "#pageTitleText"]
+    $ div_ [class_ "flex flex-col gap-3 p-3"] do
+      actionPickerField_ "Dashboard title" "title" "Insert new title" (dashTitle dashVM.title)
+      actionPickerField_ "Folder" "fileDir" "reports/" (folderFromPath dashVM.filePath)
 
-  -- Modal for renaming tab (only shown for dashboards with tabs)
   when (isJust dash.tabs)
-    $ Components.modalWith_ "tabRenameModalId" def{boxClass = "!w-full !max-w-lg !overflow-visible !rounded-none !border-0 !bg-transparent !p-0 !shadow-none", wrapperClass = "!items-start pt-[15vh] px-4 [&_.modal-backdrop]:backdrop-blur-sm", hideClose = True} Nothing
-    $ form_
-      [ class_ "flex flex-col"
-      , hxPatch_ ("/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/tab/" <> fromMaybe "" activeTabSlug <> "/rename")
-      , hxSwap_ "none"
-      , hxTrigger_ "submit"
-      ]
-    $ do
-      actionPickerHeader_ "tabRenameModalId" "Rename tab"
-      div_ [class_ "w-full overflow-hidden rounded-lg border border-base-300 bg-bgBase shadow-2xl"] do
-        div_ [class_ "p-3"]
-          $ actionPickerField_ "Tab name" "newName" "Enter tab name" (maybe "" ((.name) . snd) activeTabInfo)
-        actionPickerActions_ "tabRenameModalId"
+    $ actionPickerModal_ "tabRenameModalId" "Rename tab" [hxPatch_ ("/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/tab/" <> fromMaybe "" activeTabSlug <> "/rename"), hxSwap_ "none"]
+    $ div_ [class_ "p-3"]
+    $ actionPickerField_ "Tab name" "newName" "Enter tab name" (maybe "" ((.name) . snd) activeTabInfo)
 
   -- Render variables and tabs in the same container
   when (isJust dash.variables || isJust dash.tabs) $ div_ [class_ "flex bg-bgRaised backdrop-blur-xs max-md:px-2 px-4 py-1 max-md:py-0.5 gap-4 max-md:gap-2 items-center flex-wrap sticky top-0 z-10"] do
@@ -385,10 +363,10 @@ dashboardPage_ pid dashId dash dashVM allParams = do
               -- time range" — a lie about the data rather than a prompt — and dismissing
               -- the modal left that as the whole page.
               case findVarToPrompt renderTab (fold dash.variables) of
-                Just v -> variablePickerModal_ pid dashId renderTabSlug allParams v False
+                Just v -> variablePickerModal_ pid dashId renderTabSlug allParams v
                 Nothing -> tabContentPanel_ pid dashIdText activeTabIdx activeTab.name activeTab.widgets False
         -- Fall back to old behavior for dashboards without tabs
-        Nothing | Just v <- findVarToPrompt Nothing (fold dash.variables) -> variablePickerModal_ pid dashId activeTabSlug allParams v False
+        Nothing | Just v <- findVarToPrompt Nothing (fold dash.variables) -> variablePickerModal_ pid dashId activeTabSlug allParams v
         Nothing -> do
           let rootWidgets = Widget.normalizeWidgetLayouts (dash :: Dashboards.Dashboard).widgets
           div_ (class_ "grid-stack grid-stack-preloaded -m-2" : Widget.gridStackAttrs rootWidgets) do
@@ -567,9 +545,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
                 if (collapseInput?.checked) return;
 
                 const isFullWidth = node.w === 12;
-                const maxRow = items.length
-                  ? Math.max(1, ...items.map(item => (item.gridstackNode?.y || 0) + (item.gridstackNode?.h || 1)))
-                  : 1;
+                const maxRow = Math.max(1, ...items.map(item => (item.gridstackNode?.y || 0) + (item.gridstackNode?.h || 1)));
 
                 const requiredHeight = 1 + maxRow;  // 1 for header + content
                 const yamlHeight = parseInt(parentWidget.dataset.originalH) || requiredHeight;
@@ -726,7 +702,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
           } else {
             const nestedInstance = parentWidget.querySelector('.nested-grid')?.gridstack;
             const items = nestedInstance?.getGridItems() || [];
-            const maxRow = items.length ? Math.max(1, ...items.map(item => (item.gridstackNode?.y || 0) + (item.gridstackNode?.h || 1))) : 1;
+            const maxRow = Math.max(1, ...items.map(item => (item.gridstackNode?.y || 0) + (item.gridstackNode?.h || 1)));
             grid.update(parentWidget, { h: 1 + maxRow });
           }
           compactGrid(grid, mainGridEl);
@@ -837,105 +813,103 @@ findVarToPrompt activeTab variables =
 
 
 -- | Render inline variable picker (command-palette style selector)
-variablePickerModal_ :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> [(Text, Maybe Text)] -> Dashboards.Variable -> Bool -> Html ()
-variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
+variablePickerModal_ :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> [(Text, Maybe Text)] -> Dashboards.Variable -> Html ()
+variablePickerModal_ pid dashId activeTabSlug allParams var = do
   let varTitle = fromMaybe var.key var.title
       varKey = "var-" <> var.key
       queryBase = queryStringFrom $ filter (\(k, _) -> k /= varKey && k /= activeTabSlugKey) allParams
       tabPath = maybe "" ("/tab/" <>) activeTabSlug
       urlPrefix = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> tabPath <> queryBase <> (if T.null queryBase then "?" else "&") <> varKey <> "="
-      oobAttr = if useOob then [id_ $ "varPicker-" <> var.key <> "-container", hxSwapOob_ "beforeend:body"] else []
       opts = fold var.options
       optCount = length opts
-  div_ oobAttr do
-    div_ [class_ "var-picker-page flex flex-col items-center px-4 py-12", term "hx-live:data-search" "this.querySelector('input')?.value.trim().toLowerCase() ?? ''"] do
-      div_ [class_ "w-full max-w-lg flex items-center justify-between mb-2 px-3"] do
-        span_ [class_ "text-2xs font-medium text-textWeak uppercase tracking-wider"] $ toHtml $ "Select " <> varTitle
-        span_ [class_ "var-picker-count text-xs text-textWeak", term "hx-live:text" "closest('.var-picker-page').q('a.var-opt').filter(a => a.textContent.toLowerCase().includes(closest('.var-picker-page').data.search)).length + ' items'"] $ toHtml $ show optCount <> " items"
-      -- Nothing to choose from is a different answer than "search found nothing", and a
-      -- search box over an empty list reads as a broken page. Say why instead.
-      if optCount == 0
-        then
-          div_ [class_ "var-picker-none w-full max-w-lg surface-raised rounded-lg border border-strokeWeak px-6 py-10 text-center"]
-            $ emptyState_
-              def{size = ESCompact}
-              ("No " <> T.toLower varTitle <> " to choose from yet")
-              "This dashboard reports on one at a time, so it has nothing to show until data arrives."
-        else div_ [class_ "var-picker group/picker w-full max-w-lg surface-raised rounded-lg border border-strokeWeak overflow-hidden"] do
-          div_ [class_ "px-3 border-b border-base-300 flex items-center gap-2"] do
-            input_
-              [ id_ $ "var-picker-search-" <> var.key
-              , type_ "text"
-              , class_ "flex-1 min-w-0 py-2.5 bg-transparent outline-none text-sm"
-              , placeholder_ $ "Search " <> T.toLower varTitle <> "s..."
-              , autofocus_
-              , [__|on input
-                call htmx.live.refresh()
-                wait 0ms
-                remove .active from <a.var-opt/> in closest .var-picker
-                add .active to the first <a.var-opt:not([hidden])/> in closest .var-picker
+  div_ [class_ "var-picker-page flex flex-col items-center px-4 py-12", term "hx-live:data-search" "this.querySelector('input')?.value.trim().toLowerCase() ?? ''"] do
+    div_ [class_ "w-full max-w-lg flex items-center justify-between mb-2 px-3"] do
+      span_ [class_ "text-2xs font-medium text-textWeak uppercase tracking-wider"] $ toHtml $ "Select " <> varTitle
+      span_ [class_ "var-picker-count text-xs text-textWeak", term "hx-live:text" "closest('.var-picker-page').q('a.var-opt').filter(a => a.textContent.toLowerCase().includes(closest('.var-picker-page').data.search)).length + ' items'"] $ toHtml $ show optCount <> " items"
+    -- Nothing to choose from is a different answer than "search found nothing", and a
+    -- search box over an empty list reads as a broken page. Say why instead.
+    if optCount == 0
+      then
+        div_ [class_ "var-picker-none w-full max-w-lg surface-raised rounded-lg border border-strokeWeak px-6 py-10 text-center"]
+          $ emptyState_
+            def{size = ESCompact}
+            ("No " <> T.toLower varTitle <> " to choose from yet")
+            "This dashboard reports on one at a time, so it has nothing to show until data arrives."
+      else div_ [class_ "var-picker group/picker w-full max-w-lg surface-raised rounded-lg border border-strokeWeak overflow-hidden"] do
+        div_ [class_ "px-3 border-b border-base-300 flex items-center gap-2"] do
+          input_
+            [ id_ $ "var-picker-search-" <> var.key
+            , type_ "text"
+            , class_ "flex-1 min-w-0 py-2.5 bg-transparent outline-none text-sm"
+            , placeholder_ $ "Search " <> T.toLower varTitle <> "s..."
+            , autofocus_
+            , [__|on input
+              call htmx.live.refresh()
+              wait 0ms
+              remove .active from <a.var-opt/> in closest .var-picker
+              add .active to the first <a.var-opt:not([hidden])/> in closest .var-picker
+            end
+            on keydown[key=='Enter']
+              set :a to the first <a.active/> in closest .var-picker
+              if :a then call :a.click() end
+            end
+            on keydown[key=='ArrowDown'] halt the event
+              set :a to the first <a.active/> in closest .var-picker
+              if :a then
+                set :n to :a.nextElementSibling
+                repeat while :n and :n.hidden set :n to :n.nextElementSibling end
+                if :n then remove .active from :a then add .active to :n then call :n.scrollIntoView({block:'nearest'}) end
+              else
+                set :f to the first <a.var-opt:not([hidden])/> in closest .var-picker
+                if :f then add .active to :f end
               end
-              on keydown[key=='Enter']
-                set :a to the first <a.active/> in closest .var-picker
-                if :a then call :a.click() end
+            end
+            on keydown[key=='ArrowUp'] halt the event
+              set :a to the first <a.active/> in closest .var-picker
+              if :a then
+                set :p to :a.previousElementSibling
+                repeat while :p and :p.hidden set :p to :p.previousElementSibling end
+                if :p then remove .active from :a then add .active to :p then call :p.scrollIntoView({block:'nearest'}) end
               end
-              on keydown[key=='ArrowDown'] halt the event
-                set :a to the first <a.active/> in closest .var-picker
-                if :a then
-                  set :n to :a.nextElementSibling
-                  repeat while :n and :n.hidden set :n to :n.nextElementSibling end
-                  if :n then remove .active from :a then add .active to :n then call :n.scrollIntoView({block:'nearest'}) end
-                else
-                  set :f to the first <a.var-opt:not([hidden])/> in closest .var-picker
-                  if :f then add .active to :f end
-                end
-              end
-              on keydown[key=='ArrowUp'] halt the event
-                set :a to the first <a.active/> in closest .var-picker
-                if :a then
-                  set :p to :a.previousElementSibling
-                  repeat while :p and :p.hidden set :p to :p.previousElementSibling end
-                  if :p then remove .active from :a then add .active to :p then call :p.scrollIntoView({block:'nearest'}) end
-                end
-              |]
-              ]
-            -- At the end of the search field: the global progress bar is too far away to register.
-            span_ [class_ "hidden group-has-[.htmx-request]/picker:inline-flex shrink-0 text-iconNeutral", role_ "status", Aria.label_ "Loading"] reloadSpinner_
-          -- While a choice is in flight: no further clicks, and only the chosen row stays lit.
-          div_ [class_ "max-h-80 overflow-y-auto p-1 has-[.htmx-request]:pointer-events-none has-[.htmx-request]:[&_.var-opt:not(.htmx-request)]:opacity-40"] do
-            forM_ (zip [0 :: Int ..] opts) \(idx, opt) -> do
-              let optVal = maybeToMonoid (opt !!? 0)
-                  optLbl = fromMaybe optVal (opt !!? 1)
-                  isCurrent = var.value == Just optVal
-                  optUrl = urlPrefix <> decodeUtf8 (URI.urlEncode True $ encodeUtf8 optVal)
-              -- Boosted, not a plain href: a full navigation paints nothing for the seconds
-              -- this render takes. '.htmx-request' on the anchor drives the states above.
-              a_
-                ( [ class_
-                      $ "var-opt [&[hidden]]:hidden flex items-center gap-2 px-3 py-2 rounded text-sm cursor-pointer transition-colors"
-                      <> bool "" " active" (idx == 0)
-                      <> bool "" " var-opt-current" isCurrent
-                  , href_ optUrl
-                  , name_ "dashboard-variable-option"
-                  , data_ "variable-key" var.key
-                  , data_ "variable-value" optVal
-                  , data_ "variable-label" optLbl
-                  , term "hx-live:hidden" "!this.textContent.toLowerCase().includes(closest('.var-picker-page').data.search)"
-                  , term "hx-on:htmx:before:request" "syncDashboardVariable(this, true)"
-                  , term "hx-on:htmx:finally:request" "syncDashboardVariable(this, false)"
-                  ]
-                    <> maybe navTabAttrs (const $ dashboardContentNavAttrs optUrl) activeTabSlug
-                )
-                do
-                  span_ [class_ "truncate flex-1"] $ toHtml optLbl
-                  when isCurrent $ faSprite_ "check" "regular" "w-3 h-3 text-primary shrink-0"
-            div_ [class_ "var-picker-empty px-3 py-8 text-center", hidden_ "", term "hx-live:hidden" "closest('.var-picker').q('a.var-opt:not([hidden])').count > 0"] $ emptyState_ def{size = ESCompact} "No matching results" ""
-      -- Keyboard hints
-      div_ [class_ "var-picker-hints flex items-center gap-6 mt-3 text-xs text-textWeak"]
-        $ forM_ ([("Navigate", ["\x2191", "\x2193"]), ("Select", ["\x21B5"])] :: [(Text, [Text])]) \(label, keys) ->
-          div_ [class_ "flex items-center gap-1.5"] do
-            toHtml label
-            forM_ keys $ kbd_ [class_ "kbd kbd-xs"] . toHtml
+            |]
+            ]
+          -- At the end of the search field: the global progress bar is too far away to register.
+          span_ [class_ "hidden group-has-[.htmx-request]/picker:inline-flex shrink-0 text-iconNeutral", role_ "status", Aria.label_ "Loading"] reloadSpinner_
+        -- While a choice is in flight: no further clicks, and only the chosen row stays lit.
+        div_ [class_ "max-h-80 overflow-y-auto p-1 has-[.htmx-request]:pointer-events-none has-[.htmx-request]:[&_.var-opt:not(.htmx-request)]:opacity-40"] do
+          forM_ (zip [0 :: Int ..] opts) \(idx, opt) -> do
+            let optVal = maybeToMonoid (opt !!? 0)
+                optLbl = fromMaybe optVal (opt !!? 1)
+                isCurrent = var.value == Just optVal
+                optUrl = urlPrefix <> toUriStr optVal
+            -- Boosted, not a plain href: a full navigation paints nothing for the seconds
+            -- this render takes. '.htmx-request' on the anchor drives the states above.
+            a_
+              ( [ class_
+                    $ "var-opt [&[hidden]]:hidden flex items-center gap-2 px-3 py-2 rounded text-sm cursor-pointer transition-colors"
+                    <> bool "" " active" (idx == 0)
+                    <> bool "" " var-opt-current" isCurrent
+                , href_ optUrl
+                , name_ "dashboard-variable-option"
+                , data_ "variable-key" var.key
+                , data_ "variable-value" optVal
+                , data_ "variable-label" optLbl
+                , term "hx-live:hidden" "!this.textContent.toLowerCase().includes(closest('.var-picker-page').data.search)"
+                , term "hx-on:htmx:before:request" "syncDashboardVariable(this, true)"
+                , term "hx-on:htmx:finally:request" "syncDashboardVariable(this, false)"
+                ]
+                  <> maybe navTabAttrs (const $ dashboardContentNavAttrs optUrl) activeTabSlug
+              )
+              do
+                span_ [class_ "truncate flex-1"] $ toHtml optLbl
+                when isCurrent $ faSprite_ "check" "regular" "w-3 h-3 text-primary shrink-0"
+          div_ [class_ "var-picker-empty px-3 py-8 text-center", hidden_ "", term "hx-live:hidden" "closest('.var-picker').q('a.var-opt:not([hidden])').count > 0"] $ emptyState_ def{size = ESCompact} "No matching results" ""
+    -- Keyboard hints
+    div_ [class_ "var-picker-hints flex items-center gap-6 mt-3 text-xs text-textWeak"]
+      $ forM_ ([("Navigate", ["\x2191", "\x2193"]), ("Select", ["\x21B5"])] :: [(Text, [Text])]) \(label, keys) ->
+        div_ [class_ "flex items-center gap-1.5"] do
+          toHtml label
+          forM_ keys $ kbd_ [class_ "kbd kbd-xs"] . toHtml
 
 
 -- | Wall-clock budget for a single TimeFusion-backed query run *during page render*
@@ -1105,7 +1079,7 @@ processEagerWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widg
         ?~ renderText
           (div_ [class_ "flex flex-col gap-3 h-full w-full overflow-hidden"] $ forM_ issues $ IssuesPage.issueCardCompact_ pid now)
   Widget.WTTable -> do
-    let sortParam = find ((== "table-sort") . fst) allParams >>= snd
+    let sortParam = join $ lookup "table-sort" allParams
         (query, sql) = Widget.tableQuery widget sortParam
     -- Fetch table data
     tableData <- Charts.queryMetrics widget.dbSource (Just Charts.DTText) (Just pid) query sql sinceStr fromDStr toDStr Nothing Nothing allParams
@@ -1329,8 +1303,8 @@ getDashAndVM pid dashId fileM = do
 
 -- | Page shell shared by the dashboard and dashboard-tab handlers.
 -- @tabM@ is @Just (slug, name)@ on tab pages, enabling the tab breadcrumb + rename modal.
-dashboardBWConf :: BWConfig -> Projects.ProjectId -> Text -> Dashboards.DashboardId -> Text -> Maybe (Text, Maybe Text) -> Maybe (Text, Text) -> FreeTierStatus -> BWConfig
-dashboardBWConf bw pid paymentPlan dashId title tabM currentRange freeTierStatus =
+dashboardBWConf :: BWConfig -> Projects.ProjectId -> Dashboards.DashboardId -> Text -> Maybe (Text, Maybe Text) -> Maybe (Text, Text) -> FreeTierStatus -> BWConfig
+dashboardBWConf bw pid dashId title tabM currentRange freeTierStatus =
   bw
     { prePageTitle = Just "Dashboards"
     , pageTitle = dashTitle title
@@ -1343,7 +1317,7 @@ dashboardBWConf bw pid paymentPlan dashId title tabM currentRange freeTierStatus
     , serviceOptions = V.empty
     , pageActions = Just $ div_ [class_ "flex gap-3 max-md:gap-1 items-center"] do
         TimePicker.liveDataControls_ Nothing currentRange Nothing TimePicker.RefreshOnly
-        dashboardActions_ pid paymentPlan dashId (fst <$> tabM) currentRange
+        dashboardActions_ pid dashId (fst <$> tabM) currentRange
     , docsLink = Just "https://monoscope.tech/docs/dashboard/dashboard-pages/dashboard/"
     }
 
@@ -1375,7 +1349,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr hxRequest allParams = do
               then pure dash'
               else (\ws -> dash' & #widgets .~ ws) <$> processDashWidgets prefill pid dashId now timeParams allParamsWithConstants dash'.widgets
 
-          bwconf <- dashboardBWConf bw pid project.paymentPlan dashId dashVM.title Nothing currentRange <$> checkFreeTierStatus pid project.paymentPlan
+          bwconf <- dashboardBWConf bw pid dashId dashVM.title Nothing currentRange <$> checkFreeTierStatus pid project.paymentPlan
           addRespHeaders $ PageCtx bwconf $ DashboardGet pid dashId dash'' dashVM allParamsWithConstants
 
 
@@ -1692,7 +1666,7 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
                   thresholdField_ "alert_threshold" "Alert threshold" "widgetAlertThreshold" widgetToUse.alertThreshold "bg-fillError-strong" False
                 div_ [class_ "max-w-xs", term "hx-on:change" [text|widgetJSON.show_threshold_lines = event.target.value; htmx.trigger(document.getElementById('${widgetPreviewId}'), 'update-widget')|]]
                   $ Components.formSelectField_ Components.FieldSm "Show threshold lines" "widgetShowThresholdLines" False
-                  $ forM_ ([("always", "Always"), ("on_breach", "Only when breached"), ("never", "Never")] :: [(Text, Text)]) \(v, lbl) -> option_ ([value_ v] <> [selected_ "" | v == fromMaybe "always" widgetToUse.showThresholdLines]) $ toHtml lbl
+                  $ Components.options_ (Just $ fromMaybe "always" widgetToUse.showThresholdLines) [("always", "Always"), ("on_breach", "Only when breached"), ("never", "Never")]
 
           when isNewWidget $ label_ [Lucid.for_ monitorToggleId, class_ "flex cursor-pointer items-center justify-between gap-4 rounded-xl border border-strokeWeak bg-fillWeaker p-4 hover:bg-fillWeak has-[:checked]:border-strokeBrand-strong has-[:checked]:bg-fillBrand-weak"] do
             div_ [class_ "space-y-1"] do
@@ -1739,7 +1713,7 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
                   thresholdField_ "warning_threshold" "Warning threshold" "warningThreshold" widgetToUse.warningThreshold "bg-fillWarning-strong" False
                 div_ [class_ "grid grid-cols-1 gap-3 sm:grid-cols-2"] do
                   Components.formField_ Components.FieldSm def{Components.value = fromMaybe "" widgetToUse.unit, Components.placeholder = "e.g. requests/s", Components.extraAttrs = [term "hx-on:input" "widgetJSON.unit = this.value || null", term "hx-on:change" [text|htmx.trigger(document.getElementById('${widgetPreviewId}'), 'update-widget')|]] <> [term "hx-live:value" "widgetJSON.unit ?? ''" | not isNewWidget]} "Measurement unit" "unit" False Nothing
-                  Components.formSelectField_ Components.FieldSm "Trigger direction" "direction" False $ forM_ ([("above", "Above threshold"), ("below", "Below threshold")] :: [(Text, Text)]) \(v, lbl) -> option_ ([value_ v] <> [selected_ "" | v == bool "above" "below" (maybe False (.triggerLessThan) monitorM)]) $ toHtml lbl
+                  Components.formSelectField_ Components.FieldSm "Trigger direction" "direction" False $ Components.options_ (Just $ bool "above" "below" (maybe False (.triggerLessThan) monitorM)) [("above", "Above threshold"), ("below", "Below threshold")]
                 div_ [class_ "grid grid-cols-1 gap-3 sm:grid-cols-2"] do
                   Components.formField_ Components.FieldSm def{Components.inputType = "number", Components.value = maybe "" show (monitorM >>= (.alertRecoveryThreshold)), Components.placeholder = "Same as alert threshold", Components.extraAttrs = [step_ "any"]} "Alert recovery (optional)" "alertRecoveryThreshold" False Nothing
                   Components.formField_ Components.FieldSm def{Components.inputType = "number", Components.value = maybe "" show (monitorM >>= (.warningRecoveryThreshold)), Components.placeholder = "Same as warning threshold", Components.extraAttrs = [step_ "any"]} "Warning recovery (optional)" "warningRecoveryThreshold" False Nothing
@@ -2072,7 +2046,7 @@ dashboardsGet_ dg = do
               else a_ [href_ dashUrl, class_ "font-medium text-textStrong hover:text-textBrand hover:underline underline-offset-2"] $ toHtml $ dashTitle dash.title
             unless inCopyMode $ starButton_ dg.projectId dash.id (isJust dash.starredSince)
           div_ [class_ "hidden max-md:flex items-center gap-2 mt-1 text-xs text-textWeak flex-wrap"] do
-            span_ [class_ "tabular-nums"] $ toHtml $ toText $ formatTime defaultTimeLocale "%b %-e" dash.updatedAt
+            span_ [class_ "tabular-nums"] $ toHtml $ fmtDate "%b %-e" dash.updatedAt
             forM_ (getTeams dash) \team -> span_ [class_ "badge badge-sm badge-neutral"] $ toHtml $ "@" <> team.handle
             forM_ (V.toList dash.tags) $ span_ [class_ "badge badge-sm badge-neutral"] . toHtml
 
@@ -2085,7 +2059,7 @@ dashboardsGet_ dg = do
 
         renderWidgetsCol dash = do
           let count = getWidgetCount dash
-          span_ [class_ "flex items-center gap-1.5 text-textWeak", data_ "tippy-content" $ show count <> " widget" <> if count == 1 then "" else "s"] do
+          span_ [class_ "flex items-center gap-1.5 text-textWeak", data_ "tippy-content" $ countNoun count "widget"] do
             faSprite_ "grid" "regular" "w-3.5 h-3.5 text-iconNeutral"
             span_ [class_ "leading-none tabular-nums"] $ toHtml $ show count
 
@@ -2513,16 +2487,6 @@ dashboardBulkActionPostH pid action DashboardBulkActionForm{..} = do
                 _ -> addErrorToast "No dashboards were updated" Nothing
 
 
--- | Form data for moving a widget between dashboards
-data WidgetMoveForm = WidgetMoveForm
-  { widgetId :: Text
-  , sourceDashboardId :: Dashboards.DashboardId
-  , targetDashboardId :: Dashboards.DashboardId
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (AE.FromJSON, AE.ToJSON)
-
-
 -- | Handler for duplicating a widget within the same dashboard.
 -- It creates a copy of the widget with "(Copy)" appended to the title.
 -- Returns the duplicated widget that will be converted to HTML automatically.
@@ -2913,7 +2877,7 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr hxRequest hxT
                 then (\ws -> tab & #widgets .~ ws) <$> processDashWidgets prefill pid dashId now timeParams allParamsWithConstants tab.widgets
                 else pure tab
 
-      bwconf <- dashboardBWConf bw pid project.paymentPlan dashId dashVM.title (Just (tabSlug, activeTabName)) currentRange <$> checkFreeTierStatus pid project.paymentPlan
+      bwconf <- dashboardBWConf bw pid dashId dashVM.title (Just (tabSlug, activeTabName)) currentRange <$> checkFreeTierStatus pid project.paymentPlan
       -- Pass the active tab slug and computed constants in params for rendering
       -- Including constants allows HTMX tab switches to skip re-executing constant queries
       let paramsWithTab = (activeTabSlugKey, Just tabSlug) : allParamsWithConstants
@@ -2927,7 +2891,7 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr hxRequest hxT
               $ case findVarToPrompt (snd <$> activeTabInfo) (fold dash''.variables) of
                 Just v -> do
                   whenJust activeTabName breadcrumbSuffixOob_
-                  variablePickerModal_ pid dashId (Just tabSlug) paramsWithTab v False
+                  variablePickerModal_ pid dashId (Just tabSlug) paramsWithTab v
                 Nothing -> whenJust (dash''.tabs >>= (!!? activeTabIdx)) \activeTab ->
                   tabContentPanel_ pid dashId.toText activeTabIdx activeTab.name activeTab.widgets True
       addRespHeaders $ navigationResponse hxRequest page fragment
@@ -3046,8 +3010,8 @@ dashboardTabRenamePatchH pid dashId tabSlug form = do
 
 
 -- | Unified dashboard actions (add widget button, yaml drawer, context menu)
-dashboardActions_ :: Projects.ProjectId -> Text -> Dashboards.DashboardId -> Maybe Text -> Maybe (Text, Text) -> Html ()
-dashboardActions_ pid _paymentPlan dashId tabSlugM currentRange = div_ [class_ "flex items-center"] do
+dashboardActions_ :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe (Text, Text) -> Html ()
+dashboardActions_ pid dashId tabSlugM currentRange = div_ [class_ "flex items-center"] do
   span_ [class_ "text-fillDisabled mr-2 max-md:hidden"] "|"
   let rangeParams = maybe [] (\(rangeStart, rangeEnd) -> [("range_start", Just rangeStart), ("range_end", Just rangeEnd)]) currentRange
       editorUrl = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/widgets/new" <> queryStringFrom (("tab", tabSlugM) : rangeParams)
@@ -3106,13 +3070,7 @@ dashboardYamlGetH pid dashId = do
   (dashVM, dash) <- getDashAndVM pid dashId Nothing
   teams <- ManageMembers.getTeamsById pid (coerce dashVM.teams)
   let schema = GitSync.buildSchemaWithMeta (Just dash) dashVM.title (V.toList dashVM.tags) (map (.handle) teams)
-      yamlText = decodeUtf8 $ GitSync.dashboardToYaml schema
-  addRespHeaders $ yamlEditorContent_ yamlText
-
-
--- | Render the yaml-editor component with initial content
-yamlEditorContent_ :: Text -> Html ()
-yamlEditorContent_ yamlText = term "yaml-editor" [class_ "h-full w-full block", id_ "yaml-editor-instance", data_ "initial-value" yamlText] ""
+  addRespHeaders $ term "yaml-editor" [class_ "h-full w-full block", id_ "yaml-editor-instance", data_ "initial-value" $ decodeUtf8 $ GitSync.dashboardToYaml schema] ""
 
 
 -- | Save dashboard schema from YAML (validates and saves)

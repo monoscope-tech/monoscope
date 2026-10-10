@@ -65,7 +65,7 @@ import Data.Ord (clamp)
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Text.Display (display)
-import Data.Time (NominalDiffTime, UTCTime, addUTCTime, defaultTimeLocale, diffUTCTime, formatTime)
+import Data.Time (NominalDiffTime, UTCTime, addUTCTime, diffUTCTime)
 import Data.Time.Clock.POSIX qualified as POSIX
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Time.LocalTime (zonedTimeToUTC)
@@ -124,7 +124,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.IO.Error (userError)
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent, redirectCS, useTfReads)
-import Utils (LoadingSize (..), LoadingType (..), checkFreeTierStatus, countNoun, faSprite_, formatOffset, formatUTC, formatWithCommas, hostPath, isoT, loadingIndicator_, lookupValueText, popoverPanel_, popoverTrigger_, renderMarkdown, summaryWords, timeScopedUrl, toUriStr)
+import Utils (LoadingSize (..), LoadingType (..), checkFreeTierStatus, countNoun, faSprite_, fmtDate, formatOffset, formatUTC, formatWithCommas, hostPath, isoT, loadingIndicator_, lookupValueText, popoverPanel_, popoverTrigger_, renderMarkdown, summaryWords, timeScopedUrl, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData (..), parseQueryParamMaybe)
 
@@ -192,11 +192,6 @@ setArchived pid issueId windowM event toast = do
   addSuccessToast toast Nothing
   addTriggerEvent "issuesListChanged" AE.Null
   addRespHeaders $ Archive pid issueId (isJust windowM)
-
-
--- | The error pattern behind a runtime-exception issue.
-issueErrorPattern :: Projects.ProjectId -> Issues.Issue -> ATAuthCtx (Maybe ErrorPatterns.ErrorPattern)
-issueErrorPattern pid i = bool (pure Nothing) (ErrorPatterns.getErrorPatternByHash pid i.targetHash) (i.issueType == Issues.RuntimeException)
 
 
 data TriageForm = TriageForm {severity :: Maybe Issues.IssueSeverity, assigneeId :: Maybe Text}
@@ -268,7 +263,7 @@ parseAssignee = \case
 
 -- | The runtime-exception issues among these, each with its error pattern.
 issueErrors :: Projects.ProjectId -> [Issues.Issue] -> ATAuthCtx [(Issues.Issue, ErrorPatterns.ErrorPattern)]
-issueErrors pid issues = catMaybes <$> forM issues \i -> fmap (i,) <$> issueErrorPattern pid i
+issueErrors pid issues = catMaybes <$> forM [i | i <- issues, i.issueType == Issues.RuntimeException] \i -> fmap (i,) <$> ErrorPatterns.getErrorPatternByHash pid i.targetHash
 
 
 memberLabel :: ProjectMembers.ProjectMemberVM -> Text
@@ -609,7 +604,7 @@ issueSampleCard_ pid snapshot result = case result of
   SampleFound at summary sampleTraceId -> do
     div_ [class_ "px-4 pt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-textWeak"] do
       span_ "Latest event in range"
-      time_ [datetime_ $ formatUTC at] $ toHtml $ formatTime defaultTimeLocale "%F %T UTC" at
+      time_ [datetime_ $ formatUTC at] $ toHtml $ fmtDate "%F %T UTC" at
       whenJust (mfilter (not . T.null) sampleTraceId) \tid ->
         a_ [href_ $ "/p/" <> pid.toText <> "/traces/" <> toUriStr tid <> "?timestamp=" <> toUriStr (formatUTC at), class_ "text-textBrand underline underline-offset-2"] "View trace"
     div_ [class_ "flex flex-wrap items-center gap-1 p-4 max-h-80 overflow-y-auto"] $ V.mapM_ (summaryToken_ True) summary
@@ -800,7 +795,7 @@ userJourneySection_ spans = whenJust (extractBreadcrumbs spans) \crumbs -> do
         let (icn, iconColor) = breadcrumbVisual bc.kind
             isTerminal = idx == lastIdx
             timeLabel
-              | idx == 0 = toText $ formatTime defaultTimeLocale "%b %-e, %H:%M:%S" $ POSIX.posixSecondsToUTCTime $ realToFrac (fromIntegral bc.timestamp / 1000 :: Double)
+              | idx == 0 = fmtDate "%b %-e, %H:%M:%S" $ POSIX.posixSecondsToUTCTime $ realToFrac (fromIntegral bc.timestamp / 1000 :: Double)
               | otherwise = formatOffset base bc.timestamp
         div_ [class_ $ bool "crumb relative flex gap-2.5 px-4 py-2 border-l-2 border-transparent hover:bg-fillWeaker" "crumb relative flex gap-2.5 px-4 py-2 border-l-2 border-strokeError-strong bg-fillError-weak" isTerminal] do
           div_ [class_ "flex flex-col items-center pt-0.5 shrink-0"] do
@@ -2724,11 +2719,11 @@ renderIssueMainCol pid names (IssueVM currTime period issue) = do
         a_ ([href_ issueUrl, class_ "font-medium text-textStrong hover:text-textBrand transition-colors"] <> navTabAttrs) $ renderIssueTitle_ issue
       span_ [class_ "shrink-0 flex items-center gap-1.5 max-md:hidden"] stateBadges
       div_ [class_ "shrink-0 flex gap-1 items-center opacity-0 pointer-events-none group-hover/row:opacity-100 group-hover/row:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto transition-opacity max-md:hidden"] do
-        inlineBtn (bool "Acknowledge \x2014 pause notifications" "Unacknowledge \x2014 resume notifications" isAcknowledged) (bool "check" "arrow-rotate-left" isAcknowledged) (hxPost_ $ issueUrl <> bool "/acknowledge" "/unacknowledge" isAcknowledged) []
+        inlineBtn (bool "Acknowledge \x2014 pause notifications" "Unacknowledge \x2014 resume notifications" isAcknowledged) (bool "check" "arrow-rotate-left" isAcknowledged) [hxPost_ $ issueUrl <> bool "/acknowledge" "/unacknowledge" isAcknowledged]
         unless isAcknowledged
           $ durationMenu_ ("ack-pop-" <> b.id.toText) "Acknowledge for\x2026" [] (\q -> [hxPost_ $ issueUrl <> "/acknowledge" <> durationQuery "duration" q, hxSwap_ "none"]) \popId ->
-            inlineBtn "Acknowledge for a set time" "clock" (term "popovertarget" popId) [style_ $ "anchor-name: --anchor-" <> popId]
-        inlineBtn (bool "Archive \x2014 hide it and stop notifying" "Unarchive \x2014 move back to the Inbox" isArchived) "archive" (hxPost_ $ issueUrl <> bool "/archive" "/unarchive" isArchived) []
+            inlineBtn "Acknowledge for a set time" "clock" (popoverTrigger_ popId)
+        inlineBtn (bool "Archive \x2014 hide it and stop notifying" "Unarchive \x2014 move back to the Inbox" isArchived) "archive" [hxPost_ $ issueUrl <> bool "/archive" "/unarchive" isArchived]
     div_ [class_ "hidden max-md:flex items-center gap-1.5 flex-wrap"] stateBadges
     div_ [class_ "max-md:hidden"] $ issuePreview_ (Just currTime) issue
     div_ [class_ "hidden max-md:flex items-center justify-between text-xs text-textWeak"] do
@@ -2742,8 +2737,8 @@ renderIssueMainCol pid names (IssueVM currTime period issue) = do
   where
     -- Rows swap nothing: the handler fires `issuesListChanged` and the table
     -- reloads, so an acknowledged row actually leaves the Inbox.
-    inlineBtn tip icon hxAction extraAttrs =
-      button_ ([type_ "button", term "data-tippy-content" tip, Aria.label_ tip, class_ "cursor-pointer hover:text-textBrand transition-colors tap-target", hxSwap_ "none", hxAction] <> extraAttrs)
+    inlineBtn tip icon attrs =
+      button_ ([type_ "button", term "data-tippy-content" tip, Aria.label_ tip, class_ "cursor-pointer hover:text-textBrand transition-colors tap-target", hxSwap_ "none"] <> attrs)
         $ faSprite_ icon "regular" "h-3.5 w-3.5"
 
 
@@ -2861,7 +2856,7 @@ issueAcknowledgeButton pid aid now untilM = div_ [id_ ctlId, class_ "inline-flex
         faSprite_ "check" "regular" "w-4 h-4"
         span_ [class_ "max-md:hidden"] "Acknowledge"
     durationMenu_ (ctlId <> "-menu") "Acknowledge for\x2026" [] (\q -> req $ "/acknowledge" <> durationQuery "duration" q) \popId ->
-      button_ [type_ "button", class_ "btn btn-sm btn-primary join-item px-2", term "popovertarget" popId, style_ $ "anchor-name: --anchor-" <> popId, Aria.label_ "Acknowledge for a set time"]
+      button_ ([type_ "button", class_ "btn btn-sm btn-primary join-item px-2", Aria.label_ "Acknowledge for a set time"] <> popoverTrigger_ popId)
         $ faSprite_ "chevron-down" "regular" "w-3 h-3"
   where
     ctlId = "ack-ctl-" <> aid.toText
@@ -2879,7 +2874,7 @@ issueArchiveButton pid aid archived = div_ [id_ ctlId, class_ "inline-flex"] do
         faSprite_ "archive" "regular" "w-4 h-4"
         span_ [class_ "max-md:hidden"] "Archive"
       durationMenu_ (ctlId <> "-menu") "Archive for\x2026" [("Until it escalates", "escalating")] (\q -> req $ "/archive" <> durationQuery "window" q) \popId ->
-        button_ [type_ "button", class_ "btn btn-sm btn-ghost join-item px-2", term "popovertarget" popId, style_ $ "anchor-name: --anchor-" <> popId, Aria.label_ "Archive for a set time"]
+        button_ ([type_ "button", class_ "btn btn-sm btn-ghost join-item px-2", Aria.label_ "Archive for a set time"] <> popoverTrigger_ popId)
           $ faSprite_ "chevron-down" "regular" "w-3 h-3"
   where
     ctlId = "archive-ctl-" <> aid.toText
