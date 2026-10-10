@@ -695,7 +695,7 @@ sendTrialEndingReminder authCtx pid scheduledDaysLeft =
                 "trialing" -> do
                   -- Re-derive days left from Stripe's current trial_end so email copy
                   -- reflects any mid-trial extension rather than the scheduled value.
-                  now <- liftIO getCurrentTime
+                  now <- Time.currentTime
                   let actualDaysLeft =
                         maybe scheduledDaysLeft (\epoch -> max 0 $ ceiling $ (fromIntegral epoch - utcTimeToPOSIXSeconds now :: POSIXTime) / 86400) trialEnd
                   users <- Projects.usersByProjectId pid

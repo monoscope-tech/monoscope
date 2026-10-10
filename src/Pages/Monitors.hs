@@ -46,10 +46,10 @@ import Data.Ord (clamp)
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Data.UUID qualified as UUID
-import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
 import Effectful.Concurrent.Async (concurrently)
 import Effectful.Reader.Static (ask)
+import Data.Effectful.UUID qualified as UUIDEff
 import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Aria qualified as Aria
@@ -218,7 +218,7 @@ alertUpsertPostH pid form = do
   everyoneM <- ManageMembers.getEveryoneTeam pid
   let alertId = form.alertId >>= UUID.fromText
       emailAll = null form.teams || maybe False (\team -> team.id `elem` form.teams) everyoneM
-  queryMonitorId <- Monitors.QueryMonitorId <$> maybe (liftIO UUID.nextRandom) pure alertId
+  queryMonitorId <- Monitors.QueryMonitorId <$> maybe UUIDEff.genUUID pure alertId
   now <- Time.currentTime
 
   -- For widget-tied alerts, preserve the query from the widget (can't edit directly)

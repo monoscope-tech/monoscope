@@ -67,7 +67,7 @@ import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Notify qualified as Notify
 import Data.List (lookup)
 import Data.Text qualified as T
-import Data.Time (Day, UTCTime (..), addDays, addUTCTime, diffUTCTime, getZonedTime)
+import Data.Time (Day, UTCTime (..), addDays, addUTCTime, diffUTCTime, utc, utcToZonedTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
@@ -85,6 +85,7 @@ import Data.Aeson.KeyMap qualified as AEKM
 import Data.Effectful.Wreq qualified as W
 import Data.Text.Display (Display, display)
 import Effectful.Reader.Static (ask, asks)
+import Data.Effectful.UUID qualified as UUIDEff
 import Effectful.Time qualified as Time
 import Fmt (commaizeF, fmt)
 import Lucid
@@ -1088,8 +1089,8 @@ webhookPostH sigHeaderM rawBody = do
         pure "upgraded"
   case dat.meta.eventName of
     "subscription_created" -> do
-      currentTime <- liftIO getZonedTime
-      subId <- Projects.LemonSubId <$> liftIO UUIDV4.nextRandom
+      currentTime <- utcToZonedTime utc <$> Time.currentTime
+      subId <- Projects.LemonSubId <$> UUIDEff.genUUID
       let projectId = fromMaybe "" (dat.meta.customData >>= (.projectId))
           sub =
             Projects.LemonSub
