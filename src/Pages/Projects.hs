@@ -95,7 +95,7 @@ import Relude hiding (ask, asks)
 import Servant (addHeader)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers)
-import Servant.Server (err302, err500, errBody, errHeaders)
+import Servant.Server (err302, err403, err500, errBody, errHeaders)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent, redirectCS, toastError)
 import UnliftIO.Exception (tryAny)
@@ -309,8 +309,17 @@ allChannels :: [Text]
 allChannels = map display [minBound .. maxBound :: ProjectMembers.NotificationChannel]
 
 
+requireProjectPermission :: Projects.ProjectId -> ProjectMembers.Permissions -> ATAuthCtx (Projects.Session, Projects.Project)
+requireProjectPermission pid required = do
+  result@(session, _) <- Projects.sessionAndProject pid
+  permission <- ProjectMembers.getUserPermission pid session.user.id
+  unless (maybe False (>= required) permission) $ throwError err403
+  pure result
+
+
 updateNotificationsChannel :: Projects.ProjectId -> NotifListForm -> ATAuthCtx (RespHeaders (Html ()))
 updateNotificationsChannel pid NotifListForm{enabledChannels, phones, emails, slackChannels, includeUserIdentityInAlerts} = do
+  void $ requireProjectPermission pid ProjectMembers.PEdit
   validateNotificationChannels pid enabledChannels phones >>= \case
     Left errorMessage -> addErrorToast errorMessage Nothing
     Right () -> do
@@ -1374,7 +1383,7 @@ projectSettingsGetH pid = do
 
 deleteProjectGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders CreateProject)
 deleteProjectGetH pid = do
-  sess <- Projects.getSession
+  (sess, _) <- requireProjectPermission pid ProjectMembers.PAdmin
   appCtx <- ask @AuthContext
   if isDemoAndNotSudo pid sess.user.isSudo
     then addSuccessToast "Can't perform this action on the demo project" Nothing
@@ -1395,7 +1404,7 @@ deleteProjectGetH pid = do
 
 createProjectPostH :: Projects.ProjectId -> CreateProjectForm -> ATAuthCtx (RespHeaders CreateProject)
 createProjectPostH pid createP = do
-  (sess, project) <- Projects.sessionAndProject pid
+  (sess, project) <- requireProjectPermission pid ProjectMembers.PEdit
   appCtx <- ask @AuthContext
   validationRes <- validateM createProjectFormV createP
   case validationRes of
