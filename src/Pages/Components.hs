@@ -1031,13 +1031,14 @@ copyButton_ cls iconCls src attrs =
 
 
 -- | Type-to-filter attribute for a text input: hides each element matched by @sel@
--- (hx-live query syntax, e.g. @".row in #list"@) whose @data-filter@ — or, absent
--- that, textContent — lacks the input's value. Pair with @type_ "search"@ so Escape
--- clears the box and refilters natively.
+-- (a CSS selector, e.g. @"#list .row"@) whose @data-filter@ — or, absent that,
+-- textContent — lacks the input's value. An input handler, not an hx-live binding:
+-- a binding re-scans every row on any DOM mutation, which stalls large span trees.
+-- Pair with @type_ "search"@ so Escape clears the box and refilters natively.
 filterInputAttr_ :: Text -> Attribute
 filterInputAttr_ sel =
-  term "hx-live"
-    $ "const v = this.value.toLowerCase(); q('"
+  term "hx-on:input"
+    $ "const v = this.value.toLowerCase(); document.querySelectorAll('"
     <> sel
     <> "').forEach(el => el.classList.toggle('hidden', !(el.dataset.filter ?? el.textContent).toLowerCase().includes(v)))"
 

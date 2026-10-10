@@ -704,7 +704,7 @@ projectsDropDown currProject projects = do
     do
       when (V.length projects > 1)
         $ div_ [class_ "p-1 pb-2"] do
-          Components.searchInput_ "w-full bg-fillWeak border-0" "Search projects" [Components.filterInputAttr_ ".project_item in #projectsContainer"]
+          Components.searchInput_ "w-full bg-fillWeak border-0" "Search projects" [Components.filterInputAttr_ "#projectsContainer .project_item"]
       div_ [class_ "space-y-0.5 max-h-[50vh] overflow-y-auto", id_ "projectsContainer"] do
         projects & mapM_ \project -> do
           let isActive = currProject.id == project.id
@@ -865,7 +865,7 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
             , Aria.label_ "Filter conversations"
             , placeholder_ "Filter conversations…"
             , class_ "h-7 w-full rounded-md border border-strokeWeak bg-bgBase ps-7 pe-2 text-xs placeholder:text-textWeak focus:border-strokeFocus focus:outline-none"
-            , Components.filterInputAttr_ ".ai-thread-item in #ai-conversation-nav"
+            , Components.filterInputAttr_ "#ai-conversation-nav .ai-thread-item"
             ]
         p_ [class_ "hidden px-2 py-2 text-xs text-textWeak", term "hx-live:.hidden" "q('.ai-thread-item:not(.hidden) in #ai-conversation-nav').count > 0"] "No matching conversations"
       let (routines, chats) = partition (isJust . (.routineInterval)) conversations

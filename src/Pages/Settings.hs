@@ -772,7 +772,7 @@ prometheusTargetsList pid cfgs = div_ [id_ "prometheus-targets", class_ "mt-4"] 
   if V.null cfgs
     then emptyState_ def{icon = Just "objects-column"} "Scrape your Prometheus endpoints" "Point Monoscope at any /metrics endpoint. We poll it on your schedule, parse the exposition format, and ingest the samples as metrics you can chart and alert on — grouped under the name you give each target. Use “Add target” to start."
     else do
-      searchInput_ "w-full mb-3" "Filter targets…" [filterInputAttr_ ".itemsListItem in #prometheus-targets"]
+      searchInput_ "w-full mb-3" "Filter targets…" [filterInputAttr_ "#prometheus-targets .itemsListItem"]
       div_ [class_ "flex flex-col gap-2"] $ V.forM_ cfgs (prometheusTargetRow pid)
 
 

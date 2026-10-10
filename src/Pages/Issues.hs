@@ -822,7 +822,7 @@ userJourneySection_ spans = whenJust (extractBreadcrumbs spans) \crumbs -> do
       span_ [class_ "text-2xs font-semibold text-textWeak uppercase tracking-wide"] "User journey"
       span_ [class_ "text-2xs text-textWeak"] $ toHtml $ countNoun total "event" <> " before error"
       div_ [class_ "ml-auto flex items-center gap-2"] do
-        input_ [type_ "search", placeholder_ "Search", Aria.label_ "Search the user journey", class_ "input input-xs w-32", filterInputAttr_ ".crumb in #issue-journey"]
+        input_ [type_ "search", placeholder_ "Search", Aria.label_ "Search the user journey", class_ "input input-xs w-32", filterInputAttr_ "#issue-journey .crumb"]
         label_ [class_ "btn btn-xs btn-ghost gap-1 has-[:checked]:text-textBrand", term "data-tippy-content" "Newest first"] do
           input_ [type_ "checkbox", class_ "crumb-rev sr-only"]
           faSprite_ "arrows-up-down" "regular" "w-3 h-3"

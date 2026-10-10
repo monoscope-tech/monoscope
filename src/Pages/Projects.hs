@@ -987,7 +987,7 @@ teamPage pid team projMembers slackChannels discordChannels = do
       lazySection_ secId icon title searchPh url = div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
         div_ [class_ "flex items-center justify-between w-full p-4 border-b border-strokeWeak"] do
           span_ [class_ "flex items-center gap-2 text-sm font-semibold text-textStrong"] (faSprite_ icon "regular" "h-4 w-4" >> toHtml title)
-          searchInput_ "w-64 bg-fillWeak border-0" searchPh [filterInputAttr_ $ "tr in #" <> secId]
+          searchInput_ "w-64 bg-fillWeak border-0" searchPh [filterInputAttr_ $ "#" <> secId <> " tr"]
         div_ [class_ "w-full max-h-96 overflow-y-auto", id_ secId] do
           unless (T.null url) $ a_ [hxGet_ url, hxTrigger_ "intersect once", hxTarget_ $ "#" <> secId, hxSwap_ "outerHTML"] ""
           emptyState_ def{icon = Just icon, size = ESCompact} ("No " <> T.toLower title <> " linked") ""

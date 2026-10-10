@@ -728,7 +728,7 @@ renderSearch :: Text -> Text -> SearchMode -> Html ()
 renderSearch elemID searchPlaceholder searchMode =
   searchInput_ "w-full h-9 bg-transparent border-strokeWeak shadow-none" searchPlaceholder case searchMode of
     ServerSide url -> [name_ "search", id_ "search_box", hxTrigger_ "keyup changed delay:500ms", hxGet_ url, hxTarget_ "#rowsContainer", hxSwap_ "innerHTML", hxIndicator_ "#searchIndicator"]
-    ClientSide -> [filterInputAttr_ $ ".itemsListItem in #" <> elemID <> "_page"]
+    ClientSide -> [filterInputAttr_ $ "#" <> elemID <> "_page .itemsListItem"]
 
 
 renderSortMenu :: SortConfig -> Html ()

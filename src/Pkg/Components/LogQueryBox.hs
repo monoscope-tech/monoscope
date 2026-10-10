@@ -493,7 +493,7 @@ queryLibraryContent_ queryLibSaved queryLibRecent =
 
     searchBar_ :: Text -> Html ()
     searchBar_ label = div_ [class_ "flex gap-2 sticky top-0 px-2 py-2 bg-bgRaised border-b border-strokeWeak z-20"] do
-      searchInput_ "h-9 flex-1 border-0 bg-fillWeaker" ("Search " <> T.toLower label <> " queries") [filterInputAttr_ $ ".query-item in .dataLibContent" <> label]
+      searchInput_ "h-9 flex-1 border-0 bg-fillWeaker" ("Search " <> T.toLower label <> " queries") [filterInputAttr_ $ ".dataLibContent" <> label <> " .query-item"]
       when (label == "Saved")
         $ label_ [class_ "tabs tabs-sm tabs-box tabs-outline bg-fillWeak text-textWeak shrink items-center h-8 cursor-pointer has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2"] do
           input_ [class_ "sr-only", type_ "checkbox", id_ "queryLibraryGroup", Aria.label_ "Show all team queries"]
