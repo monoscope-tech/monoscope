@@ -9,9 +9,13 @@ import Data.UUID.V4 (nextRandom)
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Lucid (renderText, toHtml)
+import Network.HTTP.Types qualified as H
+import Network.Wai qualified as Wai
+import Network.Wai.Test qualified as WT
 import Pages.Share qualified as Share
 import Pkg.TestUtils
 import Relude
+import System.Server qualified as Server
 import Test.Hspec
 import Web.ApiHandlers qualified as ApiH
 
@@ -59,6 +63,12 @@ spec = around withTestResources do
       let expiredHtml = TL.toStrict $ renderText $ toHtml expired
       expiredHtml `shouldSatisfy` T.isInfixOf "Link expired"
       expiredHtml `shouldSatisfy` not . T.isInfixOf "shared-checkout"
+
+    -- A 404 thrown as an IO exception skipped the handler's Error ServerError channel.
+    it "shareReplaySession_unknownShare_returns404" \tr -> do
+      path <- (\a b -> "/share/r/" <> UUID.toASCIIBytes a <> "/replay_session/" <> UUID.toASCIIBytes b) <$> nextRandom <*> nextRandom
+      resp <- WT.runSession (WT.srequest $ WT.SRequest (WT.setPath Wai.defaultRequest path) "") (Server.mkServer tr.trLogger tr.trATCtx tr.trTracerProvider)
+      H.statusCode resp.simpleStatus `shouldBe` 404
 
 
 countShares :: TestResources -> IO Int

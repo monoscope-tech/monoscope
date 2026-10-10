@@ -25,7 +25,7 @@ import Relude
 import Servant (err404)
 import System.Config (AuthContext (..))
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders, useTfReads)
-import UnliftIO.Exception (throwIO)
+import Effectful.Error.Static (throwError)
 
 
 -- | Result of resolving a share id: missing entirely, expired, or live with hours-remaining + body.
@@ -44,7 +44,7 @@ shareLinkPostH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe Text -> AT
 shareLinkPostH pid eventId createdAt reqTypeM = do
   _ <- Projects.sessionAndProject pid
   useTf <- useTfReads
-  _ <- Telemetry.otelRecordByProjectAndId useTf pid createdAt eventId `whenNothingM` throwIO err404
+  _ <- Telemetry.otelRecordByProjectAndId useTf pid createdAt eventId `whenNothingM` throwError err404
   -- Random on purpose, not genUUID: the test interpreter restarts its static sequence per
   -- effect run, and ShareSpec creates a second link via apiShareLinkCreate — the same
   -- deterministic id twice is a share_events pkey collision.
@@ -154,14 +154,14 @@ instance ToHtml ShareLinkGet where
 shareReplaySessionGetH :: UUID.UUID -> UUID.UUID -> ATBaseCtx Replay.ReplaySessionResp
 shareReplaySessionGetH sid sessionId = do
   now <- Time.currentTime
-  row <- resolveShare sid now `whenNothingM` throwIO err404
-  when (row.hoursLeft <= 0 || row.eventType == "log") $ throwIO err404
+  row <- resolveShare sid now `whenNothingM` throwError err404
+  when (row.hoursLeft <= 0 || row.eventType == "log") $ throwError err404
   useTf <- useTfReads
-  anchor <- Telemetry.otelRecordByProjectAndId useTf row.pid row.eventCreatedAt row.eventId `whenNothingM` throwIO err404
-  when (sessionIdOf anchor /= Just sessionId) $ throwIO err404
+  anchor <- Telemetry.otelRecordByProjectAndId useTf row.pid row.eventCreatedAt row.eventId `whenNothingM` throwError err404
+  when (sessionIdOf anchor /= Just sessionId) $ throwError err404
   -- Unauthenticated surface: a share link must die with its project, so this
   -- asks for an ACTIVE one rather than any row bearing the id.
-  project <- Projects.activeProjectById row.pid `whenNothingM` throwIO err404
+  project <- Projects.activeProjectById row.pid `whenNothingM` throwError err404
   Replay.fetchReplaySession project sessionId
 
 

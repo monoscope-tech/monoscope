@@ -80,7 +80,7 @@ import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pkg.Parser qualified as Parser
 import Pkg.Parser.Expr qualified as ParserExpr
-import UnliftIO.Exception (handle, throwIO)
+import UnliftIO.Exception (handle)
 import Utils qualified
 import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
 
@@ -253,7 +253,7 @@ type OtlpHttpHandler = Maybe Text -> BS.ByteString -> IO (Either Text BS.ByteStr
 -- | Run an OTLP/HTTP export handler; protobuf decode failures surface as 400.
 otlpHttpH :: OtlpHttpHandler -> Maybe Text -> BS.ByteString -> ATBaseCtx BS.ByteString
 otlpHttpH export keyM body =
-  liftIO (export keyM body) >>= either (\e -> throwIO err400{errBody = fromStrict (encodeUtf8 e)}) pure
+  liftIO (export keyM body) >>= either (\e -> Error.throwError err400{errBody = fromStrict (encodeUtf8 e)}) pure
 
 
 -- When bytestring is returned for json, simply return the bytestring
