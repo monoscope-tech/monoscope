@@ -1034,9 +1034,9 @@ metricsDetailsPage pid allDashboards allMonitors source labelM currentRange metr
       dimensions = maybe sortedLabels (\label -> label : filter (/= label) sortedLabels) selected
       (topDimensions, moreDimensions) = splitAt 4 dimensions
       dimensionChips ds = div_ [class_ "mt-2 flex flex-wrap gap-1.5"] $ forM_ ds $ metricDimension pid metric.metricName source selected
-      lazyTab tabId contentId path lbl extra = do
+      lazyTab tabId contentId path lbl = do
         input_ [type_ "radio", name_ "metric-tabs", role_ "tab", class_ "tab", Aria.label_ lbl, id_ tabId]
-        div_ ([class_ "tab-content px-4 pb-4 mt-2 text-textWeak font-normal", id_ contentId, hxGet_ $ detailsBase <> path, hxTrigger_ $ "change from:#" <> tabId <> " once", hxTarget_ "this", hxSwap_ "innerHTML", term "hx-ext" "forward-page-params"] <> extra)
+        div_ [class_ "tab-content px-4 pb-4 mt-2 text-textWeak font-normal", id_ contentId, hxGet_ $ detailsBase <> path, hxTrigger_ $ "change from:#" <> tabId <> " once", hxTarget_ "this", hxSwap_ "innerHTML", term "hx-ext" "forward-page-params", Aria.busy_ "true"]
           $ div_ [class_ "flex justify-center py-8", role_ "status", Aria.label_ $ "Loading " <> T.toLower lbl]
           $ loadingIndicator_ LdSM LdDots
   div_
@@ -1114,8 +1114,8 @@ metricsDetailsPage pid allDashboards allMonitors source labelM currentRange metr
           -- Each fetch hangs off its radio's own `change` (htmx `from:`): an unselected
           -- `.tab-content` is display:none and never fires `intersect`. Fetched on first
           -- reveal: an exemplar lookup is a text scan over raw metric rows.
-          lazyTab "metric-tab-related" "metric-related-content" "related" "Related metrics" []
-          lazyTab "metric-tab-ex" "ex-content" "exemplars" "Exemplars" [term "hx-on::after-request" "this.removeAttribute('aria-busy')", Aria.busy_ "true"]
+          lazyTab "metric-tab-related" "metric-related-content" "related" "Related metrics"
+          lazyTab "metric-tab-ex" "ex-content" "exemplars" "Exemplars"
 
 
 metricDimension :: Projects.ProjectId -> Text -> Text -> Maybe Text -> Text -> Html ()

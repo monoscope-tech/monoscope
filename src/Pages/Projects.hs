@@ -1503,7 +1503,7 @@ createProjectBody pid cp = do
         div_ [class_ "space-y-4"] do
           formField_ FieldSm def{value = cp.title, placeholder = "My Project"} "Project Name" "title" True Nothing
           formSelectField_ FieldSm "Timezone" "timeZone" False do
-            option_ [value_ cp.timeZone] $ toHtml cp.timeZone
+            option_ [value_ cp.timeZone, [__|init repeat for tz in Intl.supportedValuesOf('timeZone') make an Option from tz, tz then call my parentElement.add(it) end|]] $ toHtml cp.timeZone
           formField_ FieldSm def{inputType = "textarea", value = cp.description, placeholder = "What is this project about?", extraAttrs = [rows_ "3"]} "Description" "description" False Nothing
 
         -- Alert configuration
@@ -1516,8 +1516,6 @@ createProjectBody pid cp = do
             htmxIndicator_ "createIndicator" LdXS
             faSprite_ "floppy-disk" "regular" "w-3 h-3"
             span_ "Save Changes"
-
-    script_ "Intl.supportedValuesOf('timeZone').forEach(tz => document.getElementById('timeZone').add(new Option(tz, tz)))"
 
     -- Danger zone — compact
     div_ [class_ "border border-strokeError-weak rounded-xl p-4 flex max-sm:flex-col sm:items-center sm:justify-between gap-4"] do

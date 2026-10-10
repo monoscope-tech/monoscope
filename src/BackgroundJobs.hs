@@ -27,7 +27,7 @@ import Data.Effectful.Wreq qualified as W
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HashSet
 import Data.List (partition)
-import Data.List.Extra (chunksOf, headDef)
+import Data.List.Extra (chunksOf, headDef, nubOrdOn)
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Ord (clamp)
@@ -647,9 +647,9 @@ runUsageAuditReport authCtx = do
   forM_ sorted \(pid, title, plan, reported, ingested, delta, pct) ->
     Log.logAttention "usage_audit_mismatch" (pid.toText, title, plan, reported, ingested, delta, pct)
   unless (null sorted) do
-    let row title plan nums pctCol = T.justifyLeft 25 ' ' title <> T.justifyLeft 12 ' ' plan <> foldMap (T.justifyRight 10 ' ') nums <> T.justifyRight 6 ' ' pctCol
-        fmtRow (_, title, plan, reported, ingested, delta, pct) = row title plan (map show [reported, ingested, delta]) (show pct <> "%")
-        hdr = row "Project" "Plan" ["Reported", "Ingested", "Delta"] "Pct"
+    let row = T.concat . zipWith ($) [T.justifyLeft 25 ' ', T.justifyLeft 12 ' ', T.justifyRight 10 ' ', T.justifyRight 10 ' ', T.justifyRight 10 ' ', T.justifyRight 6 ' ']
+        fmtRow (_, title, plan, reported, ingested, delta, pct) = row $ [title, plan] <> map show [reported, ingested, delta] <> [show pct <> "%"]
+        hdr = row ["Project", "Plan", "Reported", "Ingested", "Delta", "Pct"]
         top = take 20 sorted
         heading =
           "**Usage Audit** (last 24h) — "
@@ -862,9 +862,7 @@ runDailyJobScheduling authCtx =
       enqueueAt authCtx (UTCTime (addDays 1 currentDay) 0) [Jobs.DailyJob]
       hourlyJobsExist <-
         (>= (24 :: Int64))
-          . HI.getOneColumn
-          . HI.getOneRow
-          <$> Hasql.interp
+          <$> Hasql.interpScalar
             [HI.sql|SELECT COUNT(*)::int8 FROM background_jobs
            WHERE payload->>'tag' = 'HourlyJob'
              AND run_at >= date_trunc('day', #{currentTime}::timestamptz)
@@ -902,10 +900,8 @@ runDailyJobScheduling authCtx =
           guardThreshold = 24 :: Int64
       forM_ projects \p -> do
         projectJobsExistCount <-
-          HI.getOneColumn
-            . HI.getOneRow
-            <$> Hasql.interp
-              [HI.sql|SELECT COUNT(*)::int8 FROM background_jobs
+          Hasql.interpScalar
+            [HI.sql|SELECT COUNT(*)::int8 FROM background_jobs
              WHERE payload->>'tag' = #{guardTag}
                AND payload->>'projectId' = #{p.toText}
                AND run_at >= date_trunc('day', #{currentTime}::timestamptz)
@@ -1049,11 +1045,9 @@ checkParity start end = do
     -- project_id filter is mandatory for TF multi-tenant routing.
     r <-
       tryAny
-        $ HI.getOneColumn
-        . HI.getOneRow
-        <$> withHasqlTimefusion
+        $ withHasqlTimefusion
           True
-          ( Hasql.interp
+          ( Hasql.interpScalar
               [HI.sql|SELECT count(*)::int8 FROM otel_logs_and_spans
                  WHERE project_id = #{pid}::text AND timestamp >= #{start}::timestamptz AND timestamp < #{end}::timestamptz|]
           )
@@ -2311,10 +2305,8 @@ safetyNetReprocess pid = do
         )
   -- Bounded count so an unbounded backlog can't turn visibility into a seq scan.
   abandoned <-
-    HI.getOneColumn
-      . HI.getOneRow
-      <$> Hasql.interp
-        [HI.sql| SELECT count(*)::int8 FROM (
+    Hasql.interpScalar
+      [HI.sql| SELECT count(*)::int8 FROM (
                    SELECT 1 FROM otel_logs_and_spans
                    WHERE project_id = #{pid.toText}
                      AND processed_at IS NULL
@@ -2467,7 +2459,7 @@ processEagerBatch batch shard
             !results = V.zipWith (\sp eid -> let (mkEp, hs, np, fwh) = processSpanToEntities canonicalTemplates projectCache pid sp in (mkEp eid, hs, np, fwh)) spans entityIds
             !(endpoints, spanHashes, normalizedPaths, frameworkHashes) = V.unzip4 results
             !observations = V.map (extractObservation canonicalTemplates) spans
-            !endpointsFinal = V.fromList $ HM.elems $ HM.fromList [(e.hash, e) | e <- V.toList $ V.catMaybes endpoints]
+            !endpointsFinal = V.fromList $ nubOrdOn (.hash) $ V.toList $ V.catMaybes endpoints
 
         -- Stream into the in-memory schema catalog. Single-writer per shard;
         -- the schema-flusher fiber persists the dirty subset on its own tick.

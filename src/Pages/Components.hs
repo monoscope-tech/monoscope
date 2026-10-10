@@ -1034,13 +1034,15 @@ copyButton_ cls iconCls src attrs =
 -- (a CSS selector, e.g. @"#list .row"@) whose @data-filter@ — or, absent that,
 -- textContent — lacks the input's value. An input handler, not an hx-live binding:
 -- a binding re-scans every row on any DOM mutation, which stalls large span trees.
--- Pair with @type_ "search"@ so Escape clears the box and refilters natively.
+-- @sel@ is spliced into hyperscript source, so it must be a constant or built from
+-- server-generated ids, never from user input. Pair with @type_ "search"@ so Escape
+-- clears the box and refilters natively.
 filterInputAttr_ :: Text -> Attribute
 filterInputAttr_ sel =
-  term "hx-on:input"
-    $ "const v = this.value.toLowerCase(); document.querySelectorAll('"
+  term "_"
+    $ "on input set v to my value.toLowerCase() then repeat for el in <"
     <> sel
-    <> "').forEach(el => el.classList.toggle('hidden', !(el.dataset.filter ?? el.textContent).toLowerCase().includes(v)))"
+    <> "/> if (el.dataset.filter or el.textContent).toLowerCase().includes(v) remove .hidden from el else add .hidden to el end end"
 
 
 colorChip_ :: Monad m => Text -> Text -> Text -> HtmlT m ()

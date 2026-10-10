@@ -1884,13 +1884,12 @@ instance ToHtml DashboardsGet where
   toHtmlRaw = toHtml
 
 
-renderDashboardListItem :: Bool -> Text -> Text -> Maybe Text -> Maybe Text -> Html ()
-renderDashboardListItem checked title value description icon = label_
+renderDashboardListItem :: Bool -> Text -> Text -> Maybe Text -> Html ()
+renderDashboardListItem checked title value icon = label_
   [ class_
       [text| cursor-pointer group/it text-sm border border-transparent hover:bg-fillWeaker hover:border-strokeWeak rounded-lg flex p-1.5 gap-2 items-center has-[input:focus-visible]:outline-2 has-[input:focus-visible]:-outline-offset-2
       has-[input:checked]:bg-fillBrand-weak has-[input:checked]:border-strokeBrand-weak dashboardListItem|]
   , term "data-title" title
-  , term "data-description" $ maybeToMonoid description
   ]
   do
     input_
@@ -1949,6 +1948,7 @@ dashboardNewForm_ dg = form_
   , style_ "height:min(80vh,48rem)"
   , hxPost_ $ "/p/" <> dg.projectId.toText <> "/dashboards"
   , hxVals_ "js:{ teams: window.getTagValues('#teamHandlesInput') }"
+  , term "hx-live:data-template" "this.querySelector('input[name=file]:checked')?.value ?? ''"
   ]
   do
     div_ [class_ "flex max-h-48 shrink-0 flex-col gap-3 md:max-h-none md:w-72"] do
@@ -1956,9 +1956,9 @@ dashboardNewForm_ dg = form_
         strong_ "Create dashboard"
         Components.searchInput_ "" "Find a template" [filterInputAttr_ "#dashListItemParent .dashboardListItem"]
       div_ [class_ "min-h-0 space-y-1 overflow-auto", id_ "dashListItemParent"] do
-        renderDashboardListItem True "Blank dashboard" "" (Just "Start with an empty dashboard") (Just "cards-blank")
+        renderDashboardListItem True "Blank dashboard" "" (Just "cards-blank")
         forM_ dg.dashTemplates \dashTmpl ->
-          renderDashboardListItem False (maybeToMonoid dashTmpl.title) (maybeToMonoid dashTmpl.file) dashTmpl.description dashTmpl.icon
+          renderDashboardListItem False (maybeToMonoid dashTmpl.title) (maybeToMonoid dashTmpl.file) dashTmpl.icon
 
     div_ [class_ "flex min-w-0 shrink-0 flex-col gap-4 md:min-h-0 md:flex-1"] do
       div_ [class_ "grid shrink-0 grid-cols-1 gap-3 sm:grid-cols-3 [&_.input]:h-12 [&_.tagify]:h-12 [&_.tagify]:min-h-12 [&_.tagify]:overflow-y-auto"] do
@@ -1966,9 +1966,8 @@ dashboardNewForm_ dg = form_
         let teamList = encodeText $ (\x -> AE.object ["name" AE..= ("@" <> x.handle), "value" AE..= x.id]) <$> dg.teams
         formField_ FieldSm def{placeholder = "Add teams"} "Teams" "teamHandlesInput" False $ Just $ tagInput_ "teamHandlesInput" "Add teams" [rows_ "1", data_ "tagify-text-prop" "name", data_ "tagify-whitelist" teamList, data_ "tagify-resolve" "", data_ "tagify-initial" $ encodeText $ V.map (.id) $ V.filter (.is_everyone) dg.teams]
         formField_ FieldSm def{placeholder = "reports/"} "Folder" "fileDir" False Nothing
-      p_ [class_ "shrink-0 text-sm text-textWeak", term "hx-live:text" "document.querySelector('input[name=file]:checked')?.closest('label').dataset.description ?? ''"] "Start with an empty dashboard"
       div_ [id_ "dashboardTemplatePreviews", class_ "h-80 shrink-0 md:min-h-0 md:h-auto md:flex-1"] do
-        div_ [data_ "template" "", class_ "h-full", templatePreviewAttr] $ div_ [class_ "flex h-full min-h-80 flex-col overflow-hidden rounded-xl border border-strokeWeak bg-bgRaised"] do
+        templatePreview_ "" (Just "Start with an empty dashboard") False $ div_ [class_ "flex min-h-80 flex-1 flex-col overflow-hidden rounded-xl border border-strokeWeak bg-bgRaised"] do
           div_ [class_ "flex items-center justify-between border-b border-strokeWeak px-4 py-3"] do
             span_ [class_ "text-sm font-medium text-textStrong"] "Empty canvas"
             span_ [class_ "text-xs text-textWeak"] "Layout preview"
@@ -1980,8 +1979,8 @@ dashboardNewForm_ dg = form_
         forM_ dg.dashTemplates \dashTmpl -> do
           let firstTab = dashTmpl.tabs >>= listToMaybe
               widgets = filter ((/= Widget.WTGroup) . (.wType)) $ foldMap (universeOf (#children . _Just . folded)) $ maybe dashTmpl.widgets (.widgets) firstTab
-          div_ [data_ "template" $ maybeToMonoid dashTmpl.file, class_ "h-full", hidden_ "", templatePreviewAttr]
-            $ div_ [class_ "flex h-full min-h-80 flex-col overflow-hidden rounded-xl border border-strokeWeak bg-bgRaised"] do
+          templatePreview_ (maybeToMonoid dashTmpl.file) dashTmpl.description True
+            $ div_ [class_ "flex min-h-80 flex-1 flex-col overflow-hidden rounded-xl border border-strokeWeak bg-bgRaised"] do
               div_ [class_ "flex items-center justify-between gap-3 border-b border-strokeWeak px-4 py-3"] do
                 span_ [class_ "truncate text-sm font-medium text-textStrong"] $ toHtml $ fromMaybe "Dashboard" dashTmpl.title
                 span_ [class_ "shrink-0 text-xs text-textWeak"] "Layout preview · no live data"
@@ -2010,7 +2009,10 @@ dashboardNewForm_ dg = form_
                 when (length widgets > 24) $ p_ [class_ "col-span-12 py-2 text-center text-xs text-textWeak"] $ toHtml $ "+ " <> show (length widgets - 24) <> " more widgets"
       div_ [class_ "flex shrink-0 justify-end border-t border-strokeWeak pt-3"] $ primaryButton_ [type_ "submit"] "Create"
   where
-    templatePreviewAttr = term "hx-live:hidden" "(document.querySelector('input[name=file]:checked')?.value ?? '') != this.dataset.template"
+    templatePreview_ file description hidden card =
+      div_ ([data_ "template" file, class_ "flex h-full flex-col gap-4", term "hx-live:hidden" "closest('form').data.template != this.dataset.template"] <> [hidden_ "" | hidden]) do
+        whenJust description $ p_ [class_ "shrink-0 text-sm text-textWeak"] . toHtml
+        card
 
 
 dashboardsGet_ :: DashboardsGetD -> Html ()

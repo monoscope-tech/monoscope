@@ -17,6 +17,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.UUID qualified as UUID
+import Data.UUID.Quasi (uuid)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
@@ -360,7 +361,7 @@ spec = sequential $ aroundAll withTestResources do
       void $ testServant tr $ Dashboards.dashboardWidgetReorderPatchH testPid copyDashboardId Nothing Map.empty
 
       currentMonitor <- maybe (fail "the widget monitor disappeared before deletion") pure firedMonitor
-      let otherMonitorId = Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "a11e7ed0-0000-0000-0000-000000000001"
+      let otherMonitorId = Monitors.QueryMonitorId [uuid|a11e7ed0-0000-0000-0000-000000000001|]
           otherMonitor =
             currentMonitor
               { Monitors.id = otherMonitorId
@@ -381,7 +382,7 @@ spec = sequential $ aroundAll withTestResources do
       -- Create monitor with recovery thresholds for hysteresis
       queryMonitor <-
         either (fail . toString) pure
-          $ convertToQueryMonitor testPid currentTime (Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "11111111-1111-1111-1111-111111111111")
+          $ convertToQueryMonitor testPid currentTime (Monitors.QueryMonitorId [uuid|11111111-1111-1111-1111-111111111111|])
           $ AlertUpsertForm
             { unit = Nothing
             , alertId = Just "11111111-1111-1111-1111-111111111111"
@@ -420,7 +421,7 @@ spec = sequential $ aroundAll withTestResources do
       _ <- runTestBg frozenTime tr $ Monitors.queryMonitorUpsert queryMonitor
 
       -- Verify monitor was created with correct thresholds
-      monitorM <- runTestBg frozenTime tr $ Monitors.queryMonitorById (Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "11111111-1111-1111-1111-111111111111")
+      monitorM <- runTestBg frozenTime tr $ Monitors.queryMonitorById (Monitors.QueryMonitorId [uuid|11111111-1111-1111-1111-111111111111|])
       case monitorM of
         Just m -> do
           m.alertThreshold `shouldBe` 100
@@ -435,7 +436,7 @@ spec = sequential $ aroundAll withTestResources do
         PGS.execute conn [sql|UPDATE monitors.query_monitors SET current_status = 'alerting', current_value = 110 WHERE id = '11111111-1111-1111-1111-111111111111'|] ()
 
       -- Verify status was updated
-      monitorM' <- runTestBg frozenTime tr $ Monitors.queryMonitorById (Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "11111111-1111-1111-1111-111111111111")
+      monitorM' <- runTestBg frozenTime tr $ Monitors.queryMonitorById (Monitors.QueryMonitorId [uuid|11111111-1111-1111-1111-111111111111|])
       case monitorM' of
         Just m -> do
           m.currentStatus `shouldBe` Monitors.MSAlerting
@@ -443,7 +444,7 @@ spec = sequential $ aroundAll withTestResources do
         Nothing -> error "Monitor not found after status update"
 
   describe "Query Monitor Pipeline" do
-    let pipelineMonId = Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "22222222-2222-2222-2222-222222222222"
+    let pipelineMonId = Monitors.QueryMonitorId [uuid|22222222-2222-2222-2222-222222222222|]
         t0 = Unsafe.read "2025-06-01 12:00:00 UTC" :: UTCTime
 
     it "freeTier_teamMonitor_onlyEmailsOwner_andPreservesPaidRecipients" \_ -> withTestResources \tr -> do
@@ -573,7 +574,7 @@ spec = sequential $ aroundAll withTestResources do
       recovered.warningLastTriggered `shouldBe` Nothing
 
     it "Warning → Alerting transition with hysteresis" \tr -> do
-      let hystMonId = Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "33333333-3333-3333-3333-333333333333"
+      let hystMonId = Monitors.QueryMonitorId [uuid|33333333-3333-3333-3333-333333333333|]
       let assertIssue expectedThreshold expectedValue notifications = do
             rows <- withResource tr.trPool \conn ->
               PGS.query
@@ -617,7 +618,7 @@ spec = sequential $ aroundAll withTestResources do
       m4.currentStatus `shouldBe` Monitors.MSNormal
 
     it "Monitor with interval not yet elapsed is skipped" \tr -> do
-      let skipMonId = Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "44444444-4444-4444-4444-444444444444"
+      let skipMonId = Monitors.QueryMonitorId [uuid|44444444-4444-4444-4444-444444444444|]
       insertPipelineMonitor tr skipMonId "SELECT 150::float8" 100 Nothing "above" Nothing Nothing
       void $ withResource tr.trPool \conn ->
         PGS.execute
@@ -645,7 +646,7 @@ spec = sequential $ aroundAll withTestResources do
     -- backend is already failing. checkTriggeredQueryMonitors catches per monitor and
     -- updates lastEvaluated on that path specifically.
     it "a monitor whose evaluation throws still advances lastEvaluated" \tr -> do
-      let brokenMonId = Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "66666666-6666-6666-6666-666666666666"
+      let brokenMonId = Monitors.QueryMonitorId [uuid|66666666-6666-6666-6666-666666666666|]
       insertPipelineMonitor tr brokenMonId "SELECT 1::float8" 100 Nothing "above" Nothing Nothing
       setMonitorQuery tr brokenMonId "SELECT * FROM a_table_that_does_not_exist"
 
@@ -659,8 +660,8 @@ spec = sequential $ aroundAll withTestResources do
 
     -- ...and one broken monitor must not stop the ones after it in the same tick.
     it "a broken monitor does not prevent the others from being evaluated" \tr -> do
-      let brokenId = Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "77777777-7777-7777-7777-777777777777"
-          healthyId = Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "88888888-8888-8888-8888-888888888888"
+      let brokenId = Monitors.QueryMonitorId [uuid|77777777-7777-7777-7777-777777777777|]
+          healthyId = Monitors.QueryMonitorId [uuid|88888888-8888-8888-8888-888888888888|]
       insertPipelineMonitor tr brokenId "SELECT 1::float8" 100 Nothing "above" Nothing Nothing
       setMonitorQuery tr brokenId "SELECT * FROM another_missing_table"
       insertPipelineMonitor tr healthyId "" 0 Nothing "above" Nothing Nothing
@@ -676,8 +677,8 @@ spec = sequential $ aroundAll withTestResources do
     -- so a single never-evaluated monitor silently stopped every monitor in the deployment
     -- from being checked — 10,384 failed QueryMonitorsCheck jobs from 2026-08-07 onward.
     it "neverEvaluatedMonitor_isDueImmediatelyAndDoesNotBlindTheOthers" \tr -> do
-      let neverId = Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "99999999-9999-9999-9999-999999999999"
-          siblingId = Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "aaaaaaaa-9999-4999-8999-999999999999"
+      let neverId = Monitors.QueryMonitorId [uuid|99999999-9999-9999-9999-999999999999|]
+          siblingId = Monitors.QueryMonitorId [uuid|aaaaaaaa-9999-4999-8999-999999999999|]
       insertPipelineMonitor tr neverId "" 0 Nothing "above" Nothing Nothing
       insertPipelineMonitor tr siblingId "" 0 Nothing "above" Nothing Nothing
       void $ withResource tr.trPool \conn ->
@@ -696,7 +697,7 @@ spec = sequential $ aroundAll withTestResources do
       never.lastEvaluated `shouldSatisfy` isJust
 
     describe "Renotify and Stop-After" do
-      let renotifyMonId = Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "55555555-5555-5555-5555-555555555555"
+      let renotifyMonId = Monitors.QueryMonitorId [uuid|55555555-5555-5555-5555-555555555555|]
 
       it "delivers reminders only when due, stops at the limit, and always reports recovery" \tr -> do
         void $ withResource tr.trPool \conn ->
@@ -752,7 +753,7 @@ spec = sequential $ aroundAll withTestResources do
         length recoveryNotifs `shouldSatisfy` (> 0)
 
       it "suppresses delivery while muted and resumes after the window" \tr -> do
-        let muteMonId = Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "66666666-6666-6666-6666-666666666666"
+        let muteMonId = Monitors.QueryMonitorId [uuid|66666666-6666-6666-6666-666666666666|]
             evalT = addUTCTime (200 * 60) t0
         void $ withResource tr.trPool \conn ->
           PGS.execute conn [sql|UPDATE monitors.query_monitors SET check_interval_mins = 99999 WHERE id != ?|] (PGS.Only muteMonId)
