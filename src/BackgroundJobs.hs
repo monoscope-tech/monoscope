@@ -647,7 +647,7 @@ runUsageAuditReport authCtx = do
   forM_ sorted \(pid, title, plan, reported, ingested, delta, pct) ->
     Log.logAttention "usage_audit_mismatch" (pid.toText, title, plan, reported, ingested, delta, pct)
   unless (null sorted) do
-    let row title plan nums pctCol = T.justifyLeft 25 ' ' title <> T.justifyLeft 12 ' ' plan <> mconcat (map (T.justifyRight 10 ' ') nums) <> T.justifyRight 6 ' ' pctCol
+    let row title plan nums pctCol = T.justifyLeft 25 ' ' title <> T.justifyLeft 12 ' ' plan <> foldMap (T.justifyRight 10 ' ') nums <> T.justifyRight 6 ' ' pctCol
         fmtRow (_, title, plan, reported, ingested, delta, pct) = row title plan (map show [reported, ingested, delta]) (show pct <> "%")
         hdr = row "Project" "Plan" ["Reported", "Ingested", "Delta"] "Pct"
         top = take 20 sorted

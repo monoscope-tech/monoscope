@@ -141,6 +141,7 @@ import Network.URI (escapeURIString, isUnescapedInURI)
 import Numeric (showFFloat, showHex)
 import Pkg.Icons qualified as Icons
 import Relude hiding (notElem)
+import Relude.Extra.Tuple (toSnd)
 import Servant hiding ((:>))
 import Text.MMark qualified as MMark
 import Text.Printf (printf)
@@ -772,7 +773,7 @@ serviceColors =
 
 
 getServiceColors :: V.Vector Text -> HashMap Text Text
-getServiceColors = HM.fromList . V.toList . V.map (\s -> (s, serviceFillColor s))
+getServiceColors = HM.fromList . V.toList . V.map (toSnd serviceFillColor)
 
 
 -- | Light-theme ECharts colors; matches colorMapping.ts LIGHT_THEME_COLORS.

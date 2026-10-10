@@ -1888,7 +1888,7 @@ routineTiming predicate =
         ScheduleInterval -> Just $ Every interval
         ScheduleDaily -> Daily <$> timeOfDay hour minute
         ScheduleWeekdays -> Weekdays <$> timeOfDay hour minute
-        ScheduleWeekly -> Weekly <$> (weekday >>= \d -> toEnum d <$ guard (d >= 1 && d <= 7)) <*> timeOfDay hour minute
+        ScheduleWeekly -> Weekly <$> (weekday >>= \d -> [Monday .. Sunday] !!? (d - 1)) <*> timeOfDay hour minute
       pure (schedule, timezone)
     timeOfDay hour minute = TimeOfDay <$> hour <*> minute <*> pure 0
 

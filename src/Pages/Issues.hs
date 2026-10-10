@@ -2721,8 +2721,7 @@ renderIssueMainCol pid names (IssueVM currTime period issue) = do
       div_ [class_ "shrink-0 flex gap-1 items-center opacity-0 pointer-events-none group-hover/row:opacity-100 group-hover/row:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto transition-opacity max-md:hidden"] do
         inlineIconBtn_ (bool "Acknowledge \x2014 pause notifications" "Unacknowledge \x2014 resume notifications" isAcknowledged) (bool "check" "arrow-rotate-left" isAcknowledged) [hxPost_ $ issueUrl <> bool "/acknowledge" "/unacknowledge" isAcknowledged]
         unless isAcknowledged
-          $ durationMenu_ ("ack-pop-" <> b.id.toText) "Acknowledge for\x2026" [] (\q -> [hxPost_ $ issueUrl <> "/acknowledge" <> durationQuery "duration" q, hxSwap_ "none"]) \popId ->
-            inlineIconBtn_ "Acknowledge for a set time" "clock" (popoverTrigger_ popId)
+          $ durationMenu_ ("ack-pop-" <> b.id.toText) "Acknowledge for\x2026" [] (\q -> [hxPost_ $ issueUrl <> "/acknowledge" <> durationQuery "duration" q, hxSwap_ "none"]) (inlineIconBtn_ "Acknowledge for a set time" "clock" . popoverTrigger_)
         inlineIconBtn_ (bool "Archive \x2014 hide it and stop notifying" "Unarchive \x2014 move back to the Inbox" isArchived) "archive" [hxPost_ $ issueUrl <> bool "/archive" "/unarchive" isArchived]
     div_ [class_ "hidden max-md:flex items-center gap-1.5 flex-wrap"] stateBadges
     div_ [class_ "max-md:hidden"] $ issuePreview_ (Just currTime) issue
@@ -2734,7 +2733,6 @@ renderIssueMainCol pid names (IssueVM currTime period issue) = do
       div_ [class_ "flex items-center gap-3"] do
         button_ [type_ "button", class_ "cursor-pointer text-textBrand tap-target font-medium", hxSwap_ "none", hxPost_ $ issueUrl <> bool "/acknowledge" "/unacknowledge" isAcknowledged] $ toHtml $ bool "Ack" "Unack" isAcknowledged
         button_ [type_ "button", class_ "cursor-pointer text-textBrand tap-target font-medium", hxSwap_ "none", hxPost_ $ issueUrl <> bool "/archive" "/unarchive" isArchived] $ toHtml $ bool "Archive" "Unarchive" isArchived
-  where
 
 
 issueCardCompact_ :: Projects.ProjectId -> UTCTime -> Issues.IssueL -> Html ()

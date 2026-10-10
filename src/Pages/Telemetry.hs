@@ -225,7 +225,7 @@ buildMetricTree metrics = buildTree_ Nothing
   where
     -- A Set per parent dedupes shared prefixes and orders siblings by name (derived Ord;
     -- siblings share @parent@), so a catalogue page boundary is stable run to run.
-    nodeMap = Map.fromListWith (<>) [(nd.parent, S.singleton nd) | path <- metrics, let segments = T.splitOn "." path, nd <- zipWith MetricNode (Nothing : map Just (scanl1 (\acc s -> acc <> "." <> s) segments)) segments]
+    nodeMap = Map.fromListWith (<>) [(nd.parent, one nd) | path <- metrics, let segments = T.splitOn "." path, nd <- zipWith MetricNode (Nothing : map Just (scanl1 (\acc s -> acc <> "." <> s) segments)) segments]
     buildTree_ parentId = [MetricTree mt (buildTree_ (Just $ nodePath mt)) | mt <- S.toList $ Map.findWithDefault S.empty parentId nodeMap]
 
 
