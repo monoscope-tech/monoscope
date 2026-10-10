@@ -489,7 +489,8 @@ renderTable tbl =
         (Nothing, Just (evt, url)) -> swapSelf url $ evt <> " from:body"
         (Nothing, Nothing) -> []
         where
-          swapSelf url trig = [hxGet_ url, hxTrigger_ trig, hxTarget_ "this", hxSwap_ "outerHTML", hxSelect_ $ "#" <> cid]
+          -- hx-preload off: the body preloads on hover, which would refetch this container.
+          swapSelf url trig = [hxGet_ url, hxTrigger_ trig, hxTarget_ "this", hxSwap_ "outerHTML", hxSelect_ $ "#" <> cid, term "hx-preload" "false"]
    in maybe paddedContent (\cid -> div_ ([class_ "w-full table-refresh", id_ cid] <> refreshAttrs cid) paddedContent) tbl.config.containerId
 
 

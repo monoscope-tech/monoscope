@@ -232,7 +232,7 @@ logQueryBox_ config = do
                   , role_ "button"
                   , tabindex_ "0"
                   , keyboardActivateAttr_
-                  , [__|on click set #saveQueryMdl.dataset.pendingQuery to null then call #saveQueryForm.reset()|]
+                  , [__|on click set #saveQueryMdl.dataset.pendingQuery to null then call #saveQueryForm.reset() then set #queryLibId.value to ''|]
                   ]
                   $ faSprite_ "floppy-disk" "regular" "h-4 w-4"
               button_

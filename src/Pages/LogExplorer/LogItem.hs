@@ -235,15 +235,8 @@ detailsPanel_ pid targetEventM layout = div_ [class_ $ "contents group/details "
         init
           if my @data-has-target is '1' and no <#details-drawer-mode:checked/>
             send checkMobileOpen to me
-            set queryWidth to params().details_width
-            set storedWidth to localStorage.getItem('resizer-details_width')
-            if queryWidth and queryWidth.endsWith('%') set my *width to queryWidth
-            else if queryWidth and queryWidth.endsWith('px') set my *width to queryWidth
-            else if queryWidth set my *width to queryWidth + 'px'
-            else if storedWidth and not storedWidth.endsWith('px') set my *width to storedWidth + 'px'
-            else if storedWidth set my *width to storedWidth
-            else set my *width to '30%'
-            end
+            set w to params().details_width or localStorage.getItem('resizer-details_width') or '30%'
+            if w.endsWith('%') or w.endsWith('px') set my *width to w else set my *width to w + 'px' end
           end
         end
         on htmx:after:swap send checkMobileOpen to me end
