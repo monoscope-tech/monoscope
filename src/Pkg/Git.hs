@@ -41,7 +41,10 @@ module Pkg.Git (
   fetchFile,
   pushFile,
   listRepos,
+  listTokenRepos,
+  fetchRepository,
   defaultBranchOf,
+  fetchDefaultBranch,
   computeContentSha,
   Deployment (..),
   DeploymentStatus (..),
@@ -688,7 +691,7 @@ headRevision conn r = via $ case conn.host of
         <&> (>>= maybeToRight (hostLabel conn.host <> " reported no commit for " <> r.ref <> ".") . (^? pick))
 
 
--- | List a repository at @ref@, scoped to @prefix@, with the head revision.
+-- | Resolve @ref@ once and list that commit, scoped to @prefix@, with its revision.
 --
 -- @prefix@ is not a convenience: it is what keeps the Bitbucket sha backfill bounded (see
 -- below) and it lets GitLab and Bitbucket filter server-side. Pass @""@ for the whole tree
@@ -701,19 +704,20 @@ headRevision conn r = via $ case conn.host of
 -- "unchanged".
 fetchTree :: W.HTTP :> es => GitConn -> RepoRef -> Text -> Eff es (Either Text (Text, [TreeEntry]))
 fetchTree conn r prefix = runExceptT do
-  entries <- ExceptT rawEntries
-  let scoped = filter (\e -> T.null prefix || prefix `T.isPrefixOf` e.path) entries
-  filled <- ExceptT $ backfill scoped
   rev <- ExceptT $ headRevision conn r
+  let pinned = (r :: RepoRef){ref = rev}
+  entries <- ExceptT $ rawEntries pinned
+  let scoped = filter (\e -> T.null prefix || prefix `T.isPrefixOf` e.path) entries
+  filled <- ExceptT $ backfill pinned scoped
   pure (rev, filled)
   where
-    rawEntries = case conn.host of
-      GitHub -> githubish ("/git/trees/" <> enc r.ref <> "?recursive=1")
-      Gitea -> githubish ("/git/trees/" <> enc r.ref <> "?recursive=true&per_page=1000")
+    rawEntries pinned = case conn.host of
+      GitHub -> githubish ("/git/trees/" <> enc pinned.ref <> "?recursive=1")
+      Gitea -> githubish ("/git/trees/" <> enc pinned.ref <> "?recursive=true&per_page=1000")
       GitLab -> pagedJson conn 100 (toListOf values) gitlabEntry \p ->
-        repoUrl conn r ("/repository/tree?ref=" <> enc r.ref <> "&recursive=true&per_page=100&page=" <> show p <> pathQ)
+        repoUrl conn pinned ("/repository/tree?ref=" <> enc pinned.ref <> "&recursive=true&per_page=100&page=" <> show p <> pathQ)
       Bitbucket -> pagedJson conn 100 (toListOf (key "values" . values)) bitbucketEntry \p ->
-        repoUrl conn r ("/src/" <> enc r.ref <> "/" <> encPath prefix <> "?max_depth=100&pagelen=100&page=" <> show p)
+        repoUrl conn pinned ("/src/" <> enc pinned.ref <> "/" <> encPath prefix <> "?max_depth=100&pagelen=100&page=" <> show p)
 
     pathQ = if T.null prefix then "" else "&path=" <> enc (T.dropWhileEnd (== '/') prefix)
 
@@ -743,13 +747,13 @@ fetchTree conn r prefix = runExceptT do
       ty <- v ^? key "type" . _String
       pure $ TreeEntry p (ty == "commit_file") Nothing (fromIntegral <$> v ^? key "size" . _Integer)
 
-    backfill es
+    backfill pinned es
       | conn.host /= Bitbucket || T.null prefix = pure $ Right es
       | otherwise =
           sequence <$> forM es \e ->
             if not e.isBlob
               then pure $ Right e
-              else fmap (\blob -> e{sha = Just (computeContentSha blob)}) <$> fetchFile conn r e.path
+              else fmap (\blob -> e{sha = Just (computeContentSha blob)}) <$> fetchFile conn pinned e.path
 
 
 -- | The blob at @path@ in @r.ref@ — a branch name or a commit sha, since every host's read
@@ -825,31 +829,52 @@ pushFile conn r path content existingSha message = runExceptT do
       pure $ (^? W.responseBody . key "content" . key "sha" . _String) <$> resp
 
 
--- | The repositories this token reaches.
+-- | Repositories granted to a GitHub App installation, or an account on other hosts.
 --
 -- A repository-scoped token legitimately reaches one repository, or none it can enumerate, so
 -- an empty list is a valid answer and the caller keeps manual entry available.
 listRepos :: W.HTTP :> es => GitConn -> Eff es (Either Text [GitRepo])
 listRepos conn = case conn.host of
-  GitHub -> pagedJson conn 100 (toListOf (key "repositories" . values)) ghRepo \p -> url conn ("installation/repositories?per_page=100&page=" <> show p)
-  Gitea -> pagedJson conn 50 (toListOf values) ghRepo \p -> url conn ("user/repos?limit=50&page=" <> show p)
-  GitLab -> pagedJson conn 100 (toListOf values) glRepo \p -> url conn ("projects?membership=true&simple=true&per_page=100&page=" <> show p)
-  Bitbucket -> pagedJson conn 100 (toListOf (key "values" . values)) bbRepo \p -> url conn ("repositories?role=member&pagelen=100&page=" <> show p)
-  where
-    ghRepo v = do
-      full <- v ^? key "full_name" . _String
-      pure $ GitRepo full (snd $ splitFullName full) (v ^? key "private" . _Bool == Just True) (fromMaybe "main" $ v ^? key "default_branch" . _String)
-    glRepo v = do
-      full <- v ^? key "path_with_namespace" . _String
-      pure $ GitRepo full (snd $ splitFullName full) (v ^? key "visibility" . _String /= Just "public") (fromMaybe "main" $ v ^? key "default_branch" . _String)
-    bbRepo v = do
-      full <- v ^? key "full_name" . _String
-      pure $ GitRepo full (snd $ splitFullName full) (v ^? key "is_private" . _Bool == Just True) (fromMaybe "main" $ v ^? key "mainbranch" . key "name" . _String)
+  GitHub -> pagedJson conn 100 (toListOf (key "repositories" . values)) (parseRepository conn.host) \p -> url conn ("installation/repositories?per_page=100&page=" <> show p)
+  Gitea -> pagedJson conn 50 (toListOf values) (parseRepository conn.host) \p -> url conn ("user/repos?limit=50&page=" <> show p)
+  GitLab -> pagedJson conn 100 (toListOf values) (parseRepository conn.host) \p -> url conn ("projects?membership=true&simple=true&per_page=100&page=" <> show p)
+  Bitbucket -> pagedJson conn 100 (toListOf (key "values" . values)) (parseRepository conn.host) \p -> url conn ("repositories?role=member&pagelen=100&page=" <> show p)
+
+
+-- | Repositories visible to a personal or repository token.
+listTokenRepos :: W.HTTP :> es => GitConn -> Eff es (Either Text [GitRepo])
+listTokenRepos conn = case conn.host of
+  GitHub -> pagedJson conn 100 (toListOf values) (parseRepository conn.host) \p -> url conn ("user/repos?per_page=100&page=" <> show p)
+  GitLab -> listRepos conn
+  Gitea -> listRepos conn
+  Bitbucket -> listRepos conn
+
+
+fetchRepository :: W.HTTP :> es => GitConn -> RepoRef -> Eff es (Either Text GitRepo)
+fetchRepository conn r = get_ conn (repoUrl conn r "") <&> (>>= \body -> first toText (AE.eitherDecode body) >>= maybeToRight "The Git host returned incomplete repository details." . parseRepository conn.host)
+
+
+parseRepository :: GitHost -> AE.Value -> Maybe GitRepo
+parseRepository host v = do
+  full <- v ^? key (if host == GitLab then "path_with_namespace" else "full_name") . _String
+  let (owner, name) = splitFullName full
+  guard $ not (T.null owner || T.null name)
+  let private = case host of
+        GitLab -> v ^? key "visibility" . _String /= Just "public"
+        Bitbucket -> v ^? key "is_private" . _Bool == Just True
+        GitHub -> v ^? key "private" . _Bool == Just True
+        Gitea -> v ^? key "private" . _Bool == Just True
+      branch = if host == Bitbucket then v ^? key "mainbranch" . key "name" . _String else v ^? key "default_branch" . _String
+  pure $ GitRepo full name private (fromMaybe "main" branch)
 
 
 -- | The repository's default branch, or @main@ when the host will not say.
 defaultBranchOf :: W.HTTP :> es => GitConn -> RepoRef -> Eff es Text
-defaultBranchOf conn r = get_ conn (repoUrl conn r "") <&> either (const "main") (fromMaybe "main" . pick)
+defaultBranchOf conn r = fromRight "main" <$> fetchDefaultBranch conn r
+
+
+fetchDefaultBranch :: W.HTTP :> es => GitConn -> RepoRef -> Eff es (Either Text Text)
+fetchDefaultBranch conn r = get_ conn (repoUrl conn r "") <&> (>>= maybeToRight "This repository has no default branch. Choose a branch before enabling sync." . pick)
   where
     pick body = case conn.host of
       Bitbucket -> body ^? key "mainbranch" . key "name" . _String

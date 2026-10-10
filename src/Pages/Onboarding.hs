@@ -46,7 +46,7 @@ import Pages.Components
 import Pkg.DeriveUtils (assetUrl)
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
-import System.Types (ATAuthCtx, HXRedirectDest, RespHeaders, TriggerEvents, XWidgetJSON, addErrorToast, addRespHeaders, redirectCS)
+import System.Types (ATAuthCtx, HXRedirectDest, HXReswap, RespHeaders, TriggerEvents, XWidgetJSON, addErrorToast, addRespHeaders, redirectCS)
 import Utils (LoadingSize (..), LoadingType (..), faSprite_, loadingIndicator_, lookupValueText, onpointerdown_)
 import Web.FormUrlEncoded
 
@@ -856,7 +856,7 @@ stepIndicator step title prevUrl = do
 
 -- | Proxy handler for fetching documentation from monoscope.tech
 -- This bypasses CORS restrictions by fetching the content server-side
-proxyLandingH :: (HTTP :> es, State.State HXRedirectDest :> es, State.State TriggerEvents :> es, State.State XWidgetJSON :> es) => [Text] -> Eff es (RespHeaders (Html ()))
+proxyLandingH :: (HTTP :> es, State.State HXRedirectDest :> es, State.State HXReswap :> es, State.State TriggerEvents :> es, State.State XWidgetJSON :> es) => [Text] -> Eff es (RespHeaders (Html ()))
 proxyLandingH path = do
   response <- W.get $ toString $ "https://monoscope.tech/" <> T.intercalate "/" path
   addRespHeaders $ toHtmlRaw $ T.replace "href=\"/" "href=\"https://monoscope.tech/" $ decodeUtf8 @Text $ fromMaybe "" $ response L.^? W.responseBody

@@ -97,6 +97,7 @@ spec = sequential $ aroundAll withTestResources do
               , title = "t"
               , teams = V.empty
               , filePath = Nothing
+              , gitSyncId = Nothing
               , fileSha = Nothing
               }
           html = TL.toStrict $ renderText $ toHtml $ Dashboards.DashboardGet testPid (UUIDId UUID.nil) dash vm []
@@ -136,6 +137,7 @@ spec = sequential $ aroundAll withTestResources do
               , title = "t"
               , teams = V.empty
               , filePath = Nothing
+              , gitSyncId = Nothing
               , fileSha = Nothing
               }
           html = TL.toStrict $ renderText $ toHtml $ Dashboards.DashboardGet testPid (UUIDId UUID.nil) dash vm []
@@ -165,6 +167,7 @@ spec = sequential $ aroundAll withTestResources do
               , title = "Performance sample"
               , teams = V.empty
               , filePath = Nothing
+              , gitSyncId = Nothing
               , fileSha = Nothing
               }
           html = TL.toStrict $ renderText $ toHtml $ Dashboards.DashboardGet testPid (UUIDId UUID.nil) dash vm []

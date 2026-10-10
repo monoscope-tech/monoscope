@@ -1,0 +1,1 @@
+CREATE INDEX github_installation_attempts_expires_at ON projects.github_installation_attempts (expires_at);

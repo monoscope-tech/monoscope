@@ -20,6 +20,9 @@ import Effectful (Eff, IOE, (:>))
 import Hasql.Interpolate qualified as HI
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.ProjectMembers qualified as PM
+import Models.Projects.Dashboards qualified as Dashboards
+import Models.Projects.GitSync qualified as GitSync
+import Pkg.Git qualified as Git
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import Pages.Charts.Charts qualified as Charts
@@ -32,6 +35,7 @@ import Pkg.TestUtils
 import Relude
 import Servant (NoContent (..))
 import System.Types (ATBaseCtx, ApiPrincipal (..), effToServantHandlerTestHTTP)
+import System.Config (AuthContext (..), EnvConfig (..))
 import Test.Hspec
 import Web.ApiHandlers qualified as ApiH
 import Web.ApiTypes qualified as ApiT
@@ -464,6 +468,17 @@ spec = around withTestResources do
         d1 <- runB $ ApiH.apiDashboardApply testPid doc
         d2 <- runB $ ApiH.apiDashboardApply testPid doc
         d1.summary.id `shouldBe` d2.summary.id -- same row updated, not inserted again
+
+      it "apply_doesNotOverwriteARepositoryOwnedDashboardWithTheSamePath" $ \tr -> do
+        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
+            doc = ApiT.DashboardYAMLDoc{ApiT.filePath = "overview.yaml", ApiT.title = Just "Repository overview", ApiT.tags = Nothing, ApiT.teams = Nothing, ApiT.schema = def}
+        Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub Nothing "team" "dashboards" "main" (GitSync.AppInstallation 42) Nothing ""
+        remote <- runAsBase tr $ ApiH.apiDashboardApply testPid doc
+        runQueryEffect tr (GitSync.assignDashboardRepository testPid remote.summary.id sync.id) `shouldReturn` Right ()
+        applied <- runAsBase tr $ ApiH.apiDashboardApply testPid doc{ApiT.title = Just "Local overview"}
+        applied.summary.id `shouldNotBe` remote.summary.id
+        Just retained <- runQueryEffect tr $ Dashboards.getDashboardByProjectId testPid remote.summary.id
+        retained.title `shouldBe` "Repository overview"
     describe "API keys CRUD" do
       it "create returns plaintext once; list includes it; delete deactivates" $ \tr -> do
         let runB :: ATBaseCtx a -> IO a

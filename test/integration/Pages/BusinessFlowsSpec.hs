@@ -22,6 +22,7 @@ import Database.PostgreSQL.Simple (Connection, Only (..))
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.Dispatch.Dynamic (interpose)
+import Effectful.Error.Static (catchError)
 import Hasql.Interpolate qualified as HI
 import Lucid (renderText, toHtml)
 import Models.Apis.Issues qualified as Issues
@@ -379,7 +380,7 @@ settingsTests = do
   it "should load manage members page" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
     result <- testServant tr $ ManageMembers.manageMembersGetH testPid
     case result of
-      (_, ManageMembers.ManageMembersGet (PageCtx _ (_, members, _, _))) -> do
+      (_, ManageMembers.ManageMembersGet (PageCtx _ (_, members, _, _, _))) -> do
         V.length members `shouldSatisfy` (>= 0)
       _ -> fail "Expected ManageMembersGet response"
 
@@ -747,7 +748,49 @@ replayTests = do
 
 -- | S3 settings use the same real MinIO instance as the replay integration tier.
 s3ConfigTests :: SpecWith TestContext
-s3ConfigTests =
+s3ConfigTests = do
+  it "storageViewer_cannotReadCredentialsOrChangeTheConnection" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
+    let saved = Projects.ProjectS3Bucket "fixture-access" "fixture-secret" "us-east-1" "fixture-bucket" ""
+        uid = (getResponse tr.trSessAndHeader).user.id
+    _ <- runQueryEffect tr $ Projects.updateProjectS3Bucket testPid (Just saved)
+    _ <- runQueryEffect tr $ Hasql.interpExecute_ [HI.sql| UPDATE projects.project_members SET permission = 'view' WHERE project_id = #{testPid} AND user_id = #{uid} |]
+    (_, page) <- testServant tr $ S3.bringS3GetH testPid
+    let html = renderText $ toHtml page
+    html `shouldSatisfy` TL.isInfixOf "fixture-bucket"
+    for_ ["fixture-access", "fixture-secret", "Validate &amp; Save", "<span>Remove</span>"] \private -> html `shouldNotSatisfy` TL.isInfixOf private
+    for_ [void $ S3.brings3PostH testPid saved{Projects.bucket = "INVALID_bucket"}, void $ S3.brings3RemoveH testPid] \mutation -> do
+      status <- runAuthHandler tr $ catchError @ServantS.ServerError (mutation $> 200) (\_ err -> pure err.errHTTPCode)
+      status `shouldBe` 403
+    project <- runQueryEffect tr (Projects.projectById testPid) >>= maybe (fail "the project was not found") pure
+    (project.s3Bucket <&> (.bucket)) `shouldBe` Just saved.bucket
+
+  it "storageReplacementFailure_preservesTheSavedConnectionAndEnteredValues" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
+    let saved = Projects.ProjectS3Bucket "fixture-access" "fixture-secret" "us-east-1" "fixture-bucket" ""
+        replacement = saved{Projects.bucket = "INVALID_bucket", Projects.secretKey = "replacement-secret"}
+    _ <- runQueryEffect tr $ Projects.updateProjectS3Bucket testPid (Just saved)
+    (_, response) <- testServant tr $ S3.brings3PostH testPid replacement
+    (response.savedBucket <&> (.bucket)) `shouldBe` Just saved.bucket
+    (response.rejected <&> (\(form, _) -> form.secretKey)) `shouldBe` Just "replacement-secret"
+    let html = renderText $ toHtml response
+    html `shouldSatisfy` TL.isInfixOf "id=\"storage-connection-content\""
+    html `shouldSatisfy` TL.isInfixOf ">Connected</span>"
+    html `shouldSatisfy` TL.isInfixOf "replacement-secret"
+    html `shouldSatisfy` TL.isInfixOf "role=\"alert\""
+    project <- runQueryEffect tr (Projects.projectById testPid) >>= maybe (fail "the project was not found") pure
+    (project.s3Bucket <&> (.bucket)) `shouldBe` Just saved.bucket
+
+  it "storageRemoval_clearsSavedCredentialsAndReturnsTheDisconnectedForm" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
+    let bucket = Projects.ProjectS3Bucket "fixture-access" "fixture-secret" "us-east-1" "fixture-bucket" ""
+    _ <- runQueryEffect tr $ Projects.updateProjectS3Bucket testPid (Just bucket)
+    (_, removed) <- testServant tr $ S3.brings3RemoveH testPid
+    let html = renderText $ toHtml removed
+    html `shouldSatisfy` TL.isInfixOf "id=\"storage-connection-content\""
+    html `shouldSatisfy` TL.isInfixOf "name=\"secretKey\""
+    html `shouldSatisfy` TL.isInfixOf ("hx-post=\"/p/" <> toLazy testPid.toText <> "/byob_s3\"")
+    for_ ["fixture-access", "fixture-secret", "fixture-bucket", "<span>Remove</span>"] \stale -> html `shouldNotSatisfy` TL.isInfixOf stale
+    project <- runQueryEffect tr (Projects.projectById testPid) >>= maybe (fail "the project was not found") pure
+    project.s3Bucket `shouldSatisfy` isNothing
+
   it "connects real S3 storage, renders it, and removes it" \TestContext{tcResources = tr, tcProjectId = testPid} ->
     requireMinio tr pendingWith do
       -- The endpoint/credentials must be the ones `withTestResources` actually probed
@@ -763,14 +806,15 @@ s3ConfigTests =
               , endpointUrl = env.s3Endpoint
               }
       (_, connected) <- testServant tr $ S3.brings3PostH testPid s3Form
-      TL.toStrict (renderText connected) `shouldSatisfy` T.isInfixOf "Connected"
+      TL.toStrict (renderText $ toHtml connected) `shouldSatisfy` T.isInfixOf "Connected"
+      renderText (toHtml connected) `shouldSatisfy` TL.isInfixOf "<span>Remove</span>"
 
       (_, savedPage) <- testServant tr $ S3.bringS3GetH testPid
-      let savedHtml = TL.toStrict $ renderText savedPage
+      let savedHtml = TL.toStrict $ renderText $ toHtml savedPage
       savedHtml `shouldSatisfy` T.isInfixOf env.s3Bucket
       savedHtml `shouldSatisfy` T.isInfixOf "Connected"
 
       (_, removed) <- testServant tr $ S3.brings3RemoveH testPid
-      TL.toStrict (renderText removed) `shouldSatisfy` T.isInfixOf "Not connected"
+      TL.toStrict (renderText $ toHtml removed) `shouldSatisfy` T.isInfixOf "Not connected"
       project <- runTestBg frozenTime tr (Projects.projectById testPid) >>= maybe (fail "the project was not found") pure
       project.s3Bucket `shouldSatisfy` isNothing

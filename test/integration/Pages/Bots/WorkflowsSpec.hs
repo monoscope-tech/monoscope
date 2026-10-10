@@ -1405,7 +1405,7 @@ spec = around withTestResources do
               ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
         (requests, result) <- runTestBgRecordingHTTP frozenTime tr $ transport $ provider $ Bot.processAIQuery (Just cfg) False access testPid "Is there a runbook for checkout latency?" Nothing "model" "key"
         result `shouldSatisfy` isRight
-        map fst requests `shouldBe` map ("https://api.github.com/repos/acme/checkout-service" <>) (["/git/trees/" <> revision <> "?recursive=1", "/commits/" <> revision] <> replicate 3 ("/contents/" <> runbookPath <> "?ref=" <> revision))
+        map fst requests `shouldBe` map ("https://api.github.com/repos/acme/checkout-service" <>) (["/commits/" <> revision, "/git/trees/" <> revision <> "?recursive=1"] <> replicate 3 ("/contents/" <> runbookPath <> "?ref=" <> revision))
         evidence <- readIORef observed
         case evidence of
           [repositories, discovered, firstPage, secondPage, traversal, outOfRange, mutableRef] -> do
