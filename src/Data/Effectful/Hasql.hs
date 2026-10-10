@@ -43,11 +43,9 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
-import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Data.Text.Display (Display)
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Deriving.Aeson qualified as DAE
-import Pkg.Deriving (WrappedEnumSC (..))
-import Web.HttpApiData (FromHttpApiData)
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
@@ -66,9 +64,11 @@ import Language.Haskell.TH.Syntax qualified as THS
 import OpenTelemetry.Attributes (Attribute)
 import OpenTelemetry.Instrumentation.Hasql (TracedPool)
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
+import Pkg.Deriving (WrappedEnumSC (..))
 import Relude
 import Text.Show (showString, showsPrec)
 import UnliftIO qualified
+import Web.HttpApiData (FromHttpApiData)
 
 
 -- | Which store a statement runs on. One spelling serves the JSON tag, the @db_source@
