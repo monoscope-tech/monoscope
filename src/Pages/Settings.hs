@@ -164,7 +164,7 @@ brings3PostH :: Projects.ProjectId -> Projects.ProjectS3Bucket -> ATAuthCtx (Res
 brings3PostH pid s3Form = do
   let connectInfo = getMinioConnectInfo s3Form.accessKey s3Form.secretKey s3Form.region s3Form.endpointUrl
   res <- liftIO $ Minio.runMinio connectInfo $ Minio.bucketExists s3Form.bucket
-  let notConnected msg = addErrorToast msg Nothing >> addRespHeaders (connectionBadge_ "Not connected")
+  let notConnected msg = addErrorToast msg Nothing >> addRespHeaders (connectionBadge_ False)
   case res of
     Left err -> notConnected $ humanizeMinioErr err
     Right False -> notConnected "Bucket does not exist"
@@ -173,7 +173,7 @@ brings3PostH pid s3Form = do
       sess <- Projects.getSession
       Projects.logAuditS pid Projects.AES3Configured sess Nothing
       addSuccessToast "Connected successfully" Nothing
-      addRespHeaders $ connectionBadge_ "Connected"
+      addRespHeaders $ connectionBadge_ True
 
 
 brings3RemoveH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
@@ -182,7 +182,7 @@ brings3RemoveH pid = do
   void $ Projects.updateProjectS3Bucket pid Nothing
   Projects.logAuditS pid Projects.AES3Removed sess Nothing
   addSuccessToast "Removed S3 bucket" Nothing
-  addRespHeaders $ connectionBadge_ "Not connected"
+  addRespHeaders $ connectionBadge_ False
 
 
 bringS3GetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
@@ -193,7 +193,7 @@ bringS3Page :: Projects.ProjectId -> Maybe Projects.ProjectS3Bucket -> Html ()
 bringS3Page pid s3BucketM = settingsSection_ do
   headerRow_ [] do
     settingsH2_ "S3 Bucket"
-    div_ [id_ "connectedInd"] $ connectionBadge_ $ bool "Not connected" "Connected" (isJust s3BucketM)
+    div_ [id_ "connectedInd"] $ connectionBadge_ (isJust s3BucketM)
 
   form_ [class_ "space-y-4", hxPost_ "", hxSwap_ "innerHTML", hxTarget_ "#connectedInd", hxIndicator_ "#indicator"] do
     div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2"] do

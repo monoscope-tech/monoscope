@@ -264,7 +264,7 @@ gitSyncSettingsView hostUrl pid syncM =
           faSprite_ "circle-check" "solid" "w-3.5 h-3.5 text-iconSuccess"
           span_ [class_ "font-medium text-textStrong"] $ toHtml $ sync.owner <> "/" <> sync.repo
           span_ [class_ "text-textWeak"] $ toHtml $ "(" <> Git.hostLabel sync.host <> ", " <> sync.branch <> ", " <> (if isViaApp then "App" else "token") <> ")"
-        connectionBadge_ "Connected"
+        connectionBadge_ True
 
       -- Repository settings
       form_ [class_ "space-y-4", hxPost_ actionUrl, hxSwap_ "innerHTML", hxTarget_ "#git-sync-content", hxIndicator_ "#indicator"] do

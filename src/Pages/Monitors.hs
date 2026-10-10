@@ -69,7 +69,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as Slack
 import Pages.Bots.Utils (Channel (channelId, channelName))
-import Pages.Components (EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), PanelCfg (..), detailTab_, durationMenu_, durationQuery, emptyState_, formCheckbox_, formField_, formSelectField_, metadataChip_, options_, panel_, tagInput_, untilLabel)
+import Pages.Components (EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), PanelCfg (..), detailTab_, durationMenu_, durationQuery, emptyState_, formCheckbox_, formField_, formSelectField_, inlineIconBtn_, metadataChip_, options_, panel_, silenceBadge_, tagInput_, untilLabel)
 import Pages.Projects (TBulkActionForm (..))
 import Pages.Settings (safeScrapeUrl)
 import Pkg.Components.Table (BulkAction (..), Config (..), EmptyStateAction (..), Features (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, withAttrs)
@@ -84,7 +84,7 @@ import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (FormWithOptional (..), checkFreeTierStatus, encodeText, faSprite_, formatWithCommas, prettyTimeShort, toUriStr)
+import Utils (FormWithOptional (..), checkFreeTierStatus, encodeText, faSprite_, formatWithCommas, popoverTrigger_, prettyTimeShort, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -562,27 +562,19 @@ renderNameCol item = do
       alertBase = base <> "/alerts/" <> item.monitorId
       si = statusInfo item.currentStatus
       isActive = item.status == "Active"
-      inlineBtn tip icon hxAction extraAttrs =
-        button_ ([type_ "button", Aria.label_ tip, data_ "tip" tip, class_ "cursor-pointer hover:text-textBrand transition-colors tap-target tooltip tooltip-top", hxSwap_ "none", hxAction] <> extraAttrs)
-          $ faSprite_ icon "regular" "h-3.5 w-3.5"
       actionBtns suffix = do
-        inlineBtn (bool "Activate" "Deactivate" isActive) (bool "play" "pause" isActive) (hxPost_ $ alertBase <> "/toggle_active") []
+        inlineIconBtn_ (bool "Activate" "Deactivate" isActive) (bool "play" "pause" isActive) [hxPost_ $ alertBase <> "/toggle_active"]
         if isJust item.mutedUntil
-          then inlineBtn "Unmute" "bell" (hxPost_ $ alertBase <> "/unmute") []
-          else durationMenu_ ("mute-pop-" <> item.monitorId <> suffix) "Mute for…" [] (\q -> [hxPost_ $ alertBase <> "/mute" <> durationQuery "duration" q, hxSwap_ "none"]) \popId ->
-            inlineBtn "Mute" "bell-slash" (term "popovertarget" popId) [style_ $ "anchor-name: --anchor-" <> popId]
-        when (item.currentStatus /= Monitors.MSNormal) $ inlineBtn "Resolve" "check" (hxPost_ $ alertBase <> "/resolve") []
-        inlineBtn "Delete" "trash" (hxDelete_ alertBase) [hxConfirm_ "Are you sure you want to delete this monitor?"]
+          then inlineIconBtn_ "Unmute" "bell" [hxPost_ $ alertBase <> "/unmute"]
+          else durationMenu_ ("mute-pop-" <> item.monitorId <> suffix) "Mute for…" [] (\q -> [hxPost_ $ alertBase <> "/mute" <> durationQuery "duration" q, hxSwap_ "none"]) $ inlineIconBtn_ "Mute" "bell-slash" . popoverTrigger_
+        when (item.currentStatus /= Monitors.MSNormal) $ inlineIconBtn_ "Resolve" "check" [hxPost_ $ alertBase <> "/resolve"]
+        inlineIconBtn_ "Delete" "trash" [hxDelete_ alertBase, hxConfirm_ "Are you sure you want to delete this monitor?"]
   div_ [class_ "flex flex-col gap-1 py-0.5"] do
     div_ [class_ "flex items-center gap-2"] do
       span_ [class_ $ "inline-block w-2 h-2 rounded-full shrink-0 tooltip tooltip-right " <> si.dotColor <> bool "" " alert-dot" (item.currentStatus == Monitors.MSAlerting), data_ "tip" $ bool "Inactive" "Active" isActive] ""
       a_ ([href_ $ base <> "/" <> item.monitorId <> "/overview", class_ "text-sm font-medium text-textStrong hover:text-textBrand transition-colors truncate"] <> navTabAttrs) $ toHtml $ bool item.title "(Untitled)" (T.null item.title)
       when (item.currentStatus /= Monitors.MSNormal) $ statusBadge_ False (MDStatus item.currentStatus)
-      whenJust item.mutedUntil \until' ->
-        let muteLabel = untilLabel "Muted" item.now until'
-         in span_ [class_ "badge badge-sm badge-ghost gap-1 shrink-0 tooltip tooltip-top", data_ "tip" muteLabel] do
-              faSprite_ "bell-slash" "regular" "h-3 w-3"
-              toHtml muteLabel
+      whenJust item.mutedUntil $ silenceBadge_ "Muted" "Muted" item.now
       div_ [class_ "flex gap-1 items-center shrink-0 opacity-0 max-md:hidden group-hover/row:opacity-100 has-[:focus-within]:opacity-100 transition-opacity"] $ actionBtns "-desktop"
     div_ [class_ "flex items-center gap-1.5"]
       $ span_ [class_ "text-xs text-textStrong/70 font-mono max-md:line-clamp-1 line-clamp-2 bg-fillWeaker border border-strokeWeak rounded px-1.5 py-0.5", term "data-tippy-content" item.details.query]
@@ -652,30 +644,25 @@ buildTeamMap :: Projects.ProjectId -> ATAuthCtx (Map.Map ManageMembers.TeamId Te
 buildTeamMap pid = Map.fromList . map (\t -> (t.id, t.handle)) <$> ManageMembers.getTeams pid
 
 
-monitorActionH :: (Projects.ProjectId -> [Monitors.QueryMonitorId] -> ATAuthCtx Int64) -> Text -> Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders (Html ()))
-monitorActionH action msg pid monitorId = do
-  _ <- Projects.sessionAndProject pid
-  void $ action pid [monitorId]
+-- | One bulk action on a single monitor; deletes are also audited.
+monitorActionH :: MonitorBulkAction -> Maybe Int -> Text -> Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders (Html ()))
+monitorActionH action durationM msg pid monitorId = do
+  (sess, _) <- Projects.sessionAndProject pid
+  void $ Monitors.monitorsBulkUpdate pid action durationM [monitorId]
+  when (action == BADelete) $ Projects.logAuditS pid Projects.AEMonitorDeleted sess Nothing
   addSuccessToast msg Nothing
   redirectCS $ "/p/" <> pid.toText <> "/monitors"
   addRespHeaders ""
 
 
 alertMuteH :: Projects.ProjectId -> Monitors.QueryMonitorId -> Maybe Int -> ATAuthCtx (RespHeaders (Html ()))
-alertMuteH pid monitorId durationMinsM =
-  monitorActionH (\p -> Monitors.monitorsBulkUpdate p BAMute durationMinsM) (maybe "Monitor muted indefinitely" (const "Monitor muted") durationMinsM) pid monitorId
+alertMuteH pid monitorId durationMinsM = monitorActionH BAMute durationMinsM (maybe "Monitor muted indefinitely" (const "Monitor muted") durationMinsM) pid monitorId
 
 
 alertUnmuteH, alertResolveH, alertDeleteH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders (Html ()))
-alertUnmuteH = monitorActionH (\p -> Monitors.monitorsBulkUpdate p BAUnmute Nothing) "Monitor unmuted"
-alertResolveH = monitorActionH (\p -> Monitors.monitorsBulkUpdate p BAResolve Nothing) "Monitor resolved"
-alertDeleteH pid monitorId = do
-  (sess, _) <- Projects.sessionAndProject pid
-  void $ Monitors.monitorsBulkUpdate pid BADelete Nothing [monitorId]
-  Projects.logAuditS pid Projects.AEMonitorDeleted sess Nothing
-  addSuccessToast "Monitor deleted" Nothing
-  redirectCS $ "/p/" <> pid.toText <> "/monitors"
-  addRespHeaders ""
+alertUnmuteH = monitorActionH BAUnmute Nothing "Monitor unmuted"
+alertResolveH = monitorActionH BAResolve Nothing "Monitor resolved"
+alertDeleteH = monitorActionH BADelete Nothing "Monitor deleted"
 
 
 renderThresholdCol :: UnifiedMonitorItem -> Html ()

@@ -716,7 +716,7 @@ notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack =
           img_ [src_ iconPath]
           span_ [class_ "text-center text-textStrong text-xl"] $ toHtml serviceName
         if isConnected
-          then connectionBadge_ "Connected"
+          then connectionBadge_ True
           else a_ [target_ "_blank", class_ "border px-3 h-8 flex items-center shadow-xs border-[var(--brand-color)] rounded-lg text-textBrand ", href_ connectUrl] "Connect"
 
 

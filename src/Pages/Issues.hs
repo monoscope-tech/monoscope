@@ -103,7 +103,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Charts.Charts qualified as Charts
-import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), agoText, colorChip_, copyButton_, detailsClosedBelowAttr_, durationMenu_, durationQuery, emptyState_, filterInputAttr_, metadataChip_, periodToggle_, resizer_, sectionLabel_, sparkline_, untilLabel)
+import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), agoText, colorChip_, copyButton_, detailsClosedBelowAttr_, durationMenu_, durationQuery, emptyState_, filterInputAttr_, inlineIconBtn_, metadataChip_, periodToggle_, resizer_, sectionLabel_, silenceBadge_, sparkline_, untilLabel)
 import Pages.LogExplorer.Log (virtualTable)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Telemetry (traceFragmentUrl)
@@ -2719,11 +2719,11 @@ renderIssueMainCol pid names (IssueVM currTime period issue) = do
         a_ ([href_ issueUrl, class_ "font-medium text-textStrong hover:text-textBrand transition-colors"] <> navTabAttrs) $ renderIssueTitle_ issue
       span_ [class_ "shrink-0 flex items-center gap-1.5 max-md:hidden"] stateBadges
       div_ [class_ "shrink-0 flex gap-1 items-center opacity-0 pointer-events-none group-hover/row:opacity-100 group-hover/row:pointer-events-auto focus-within:opacity-100 focus-within:pointer-events-auto transition-opacity max-md:hidden"] do
-        inlineBtn (bool "Acknowledge \x2014 pause notifications" "Unacknowledge \x2014 resume notifications" isAcknowledged) (bool "check" "arrow-rotate-left" isAcknowledged) [hxPost_ $ issueUrl <> bool "/acknowledge" "/unacknowledge" isAcknowledged]
+        inlineIconBtn_ (bool "Acknowledge \x2014 pause notifications" "Unacknowledge \x2014 resume notifications" isAcknowledged) (bool "check" "arrow-rotate-left" isAcknowledged) [hxPost_ $ issueUrl <> bool "/acknowledge" "/unacknowledge" isAcknowledged]
         unless isAcknowledged
           $ durationMenu_ ("ack-pop-" <> b.id.toText) "Acknowledge for\x2026" [] (\q -> [hxPost_ $ issueUrl <> "/acknowledge" <> durationQuery "duration" q, hxSwap_ "none"]) \popId ->
-            inlineBtn "Acknowledge for a set time" "clock" (popoverTrigger_ popId)
-        inlineBtn (bool "Archive \x2014 hide it and stop notifying" "Unarchive \x2014 move back to the Inbox" isArchived) "archive" [hxPost_ $ issueUrl <> bool "/archive" "/unarchive" isArchived]
+            inlineIconBtn_ "Acknowledge for a set time" "clock" (popoverTrigger_ popId)
+        inlineIconBtn_ (bool "Archive \x2014 hide it and stop notifying" "Unarchive \x2014 move back to the Inbox" isArchived) "archive" [hxPost_ $ issueUrl <> bool "/archive" "/unarchive" isArchived]
     div_ [class_ "hidden max-md:flex items-center gap-1.5 flex-wrap"] stateBadges
     div_ [class_ "max-md:hidden"] $ issuePreview_ (Just currTime) issue
     div_ [class_ "hidden max-md:flex items-center justify-between text-xs text-textWeak"] do
@@ -2735,11 +2735,6 @@ renderIssueMainCol pid names (IssueVM currTime period issue) = do
         button_ [type_ "button", class_ "cursor-pointer text-textBrand tap-target font-medium", hxSwap_ "none", hxPost_ $ issueUrl <> bool "/acknowledge" "/unacknowledge" isAcknowledged] $ toHtml $ bool "Ack" "Unack" isAcknowledged
         button_ [type_ "button", class_ "cursor-pointer text-textBrand tap-target font-medium", hxSwap_ "none", hxPost_ $ issueUrl <> bool "/archive" "/unarchive" isArchived] $ toHtml $ bool "Archive" "Unarchive" isArchived
   where
-    -- Rows swap nothing: the handler fires `issuesListChanged` and the table
-    -- reloads, so an acknowledged row actually leaves the Inbox.
-    inlineBtn tip icon attrs =
-      button_ ([type_ "button", term "data-tippy-content" tip, Aria.label_ tip, class_ "cursor-pointer hover:text-textBrand transition-colors tap-target", hxSwap_ "none"] <> attrs)
-        $ faSprite_ icon "regular" "h-3.5 w-3.5"
 
 
 issueCardCompact_ :: Projects.ProjectId -> UTCTime -> Issues.IssueL -> Html ()
@@ -2819,11 +2814,7 @@ issuePreview_ nowM Issues.IssueL{base} = div_ [class_ "flex items-center gap-2 m
 -- | "Ack'd · 6h left" / "Acknowledged indefinitely" chip. Silence has an end, and
 -- the list is where you need to see it without opening anything.
 ackBadge_ :: UTCTime -> Issues.Issue -> Html ()
-ackBadge_ now b = whenJust (zonedTimeToUTC <$> b.acknowledgedUntil <* b.acknowledgedAt) \until' ->
-  let lbl = untilLabel "Ack'd" now until'
-   in span_ [class_ "badge badge-sm badge-ghost gap-1 shrink-0", term "data-tippy-content" $ untilLabel "Acknowledged" now until' <> " \x2014 notifications are paused"] do
-        faSprite_ "bell-slash" "regular" "h-3 w-3"
-        toHtml lbl
+ackBadge_ now b = whenJust (zonedTimeToUTC <$> b.acknowledgedUntil <* b.acknowledgedAt) $ silenceBadge_ "Ack'd" "Acknowledged" now
 
 
 -- | Acknowledge control for the issue detail header. Unacknowledged: a primary

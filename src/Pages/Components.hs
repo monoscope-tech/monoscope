@@ -1,4 +1,4 @@
-module Pages.Components (drawer_, drawerLoadingSkeleton_, tableSkeleton_, deferredShell_, Deferred (..), RefreshingDeferred (..), timeRefreshListener_, timeWindowVals_, withDeferredBody, emptyState_, searchInput_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), facetRail_, facetSection_, facetOption_, factGrid_, metaChip_, resizer_, detailTab_, httpTab_, tabPanel_, dateTime, localTimeFmt_, paymentPlanPicker, navBar, modal_, primaryButton_, headerRow_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, copyButton_, RowAction (..), rowActions_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, detailsClosedBelowAttr_, installationSettingsLink_, keyboardActivateAttr_, copySourceAttr_, filterInputAttr_, sparkline_, periodToggle_, abbreviateUnit, agoText, stackTrace_, durationMenu_, durationQuery, untilLabel) where
+module Pages.Components (drawer_, drawerLoadingSkeleton_, tableSkeleton_, deferredShell_, Deferred (..), RefreshingDeferred (..), timeRefreshListener_, timeWindowVals_, withDeferredBody, emptyState_, searchInput_, inlineIconBtn_, silenceBadge_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), facetRail_, facetSection_, facetOption_, factGrid_, metaChip_, resizer_, detailTab_, httpTab_, tabPanel_, dateTime, localTimeFmt_, paymentPlanPicker, navBar, modal_, primaryButton_, headerRow_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, copyButton_, RowAction (..), rowActions_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, detailsClosedBelowAttr_, installationSettingsLink_, keyboardActivateAttr_, copySourceAttr_, filterInputAttr_, sparkline_, periodToggle_, abbreviateUnit, agoText, stackTrace_, durationMenu_, durationQuery, untilLabel) where
 
 import Data.Default (Default (..))
 import Data.List (elemIndex, lookup)
@@ -16,7 +16,7 @@ import Pkg.StackTrace qualified as StackTrace
 import PyF qualified
 import Relude
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (LoadingSize (..), LoadingType (..), copyToClipboardAttr_, deleteParam, faSprite_, loadingIndicator_, toUriStr)
+import Utils (LoadingSize (..), LoadingType (..), copyToClipboardAttr_, deleteParam, faSprite_, loadingIndicator_, popoverPanel_, toUriStr)
 
 
 data EmptyStateSize = ESFull | ESCompact
@@ -87,7 +87,7 @@ facetRail_ elemId extraClass searchLabel actions content =
       "sticky top-0 z-10 h-9 w-[calc(100%-1rem)] mx-2 border-strokeStrong bg-bgBase"
       searchLabel
       [ name_ "facet-search"
-      , oninput_ "const root=this.closest('[data-component=\"facet-rail\"]'),q=this.value.toLowerCase();root.querySelectorAll('[data-component=\"facet-option\"]').forEach(el=>el.classList.toggle('hidden',!el.textContent.toLowerCase().includes(q)));root.querySelectorAll('[data-component=\"facet-section\"]').forEach(el=>el.classList.toggle('hidden',!el.textContent.toLowerCase().includes(q)))"
+      , oninput_ "const q=this.value.toLowerCase();this.closest('[data-component=\"facet-rail\"]').querySelectorAll('[data-component=\"facet-option\"],[data-component=\"facet-section\"]').forEach(el=>el.classList.toggle('hidden',!el.textContent.toLowerCase().includes(q)))"
       , onkeydown_ "if(event.key==='Escape'){this.value='';this.dispatchEvent(new Event('input',{bubbles:true}))}"
       ]
     whenJust actions id
@@ -182,10 +182,7 @@ drawer_ drawerId startOpen urlM content trigger = div_ [class_ "drawer drawer-en
               if window.matchMedia('(max-width: 767px)').matches then
                 add .overflow-hidden to <body/>
                 set my._focusTrapCleanup to window.createFocusTrap(my.closest('.drawer').querySelector('.drawer-side > [role=dialog]'))
-                set :closeBtn to my.closest('.drawer').querySelector('[data-drawer-close-primary]')
-                if not :closeBtn
-                  set :closeBtn to my.closest('.drawer').querySelector('button[aria-label="Close drawer"]')
-                end
+                set :closeBtn to my.closest('.drawer').querySelector('[data-drawer-close-primary]') or my.closest('.drawer').querySelector('button[aria-label="Close drawer"]')
                 if :closeBtn then call :closeBtn.focus() end
               end
             else
@@ -867,15 +864,10 @@ formActionsModal_ modalId submitBtn = div_ [class_ "mt-3 flex justify-end gap-2"
   submitBtn
 
 
-connectionBadge_ :: Monad m => Text -> HtmlT m ()
-connectionBadge_ status = span_ [class_ $ "badge badge-sm gap-1 " <> badgeCls] do
-  whenJust iconM \icon -> faSprite_ icon "regular" "h-3 w-3"
-  toHtml status
-  where
-    (badgeCls, iconM)
-      | status `elem` ["Active", "Connected"] = ("badge-soft badge-success", Just "circle-check")
-      | status == "Not connected" = ("badge-soft badge-secondary", Just "circle-info")
-      | otherwise = ("badge-soft badge-secondary", Nothing)
+connectionBadge_ :: Monad m => Bool -> HtmlT m ()
+connectionBadge_ connected = span_ [class_ $ "badge badge-sm badge-soft gap-1 " <> bool "badge-secondary" "badge-success" connected] do
+  faSprite_ (bool "circle-info" "circle-check" connected) "regular" "h-3 w-3"
+  bool "Not connected" "Connected" connected
 
 
 data BadgeColor = BrandBadge | SuccessBadge | ErrorBadge | NeutralBadge
@@ -1006,6 +998,20 @@ rowActions_ acts = div_ [class_ "flex items-center gap-0.5 shrink-0 max-md:gap-1
       span_ [class_ "max-md:hidden"] $ toHtml a.label
 
 
+-- | Quiet icon-only row action; @attrs@ carries the request (or a 'popoverTrigger_'), the response swaps nothing.
+inlineIconBtn_ :: Text -> Text -> [Attribute] -> Html ()
+inlineIconBtn_ tip icon attrs =
+  button_ ([type_ "button", term "data-tippy-content" tip, Aria.label_ tip, class_ "cursor-pointer hover:text-textBrand transition-colors tap-target", hxSwap_ "none"] <> attrs)
+    $ faSprite_ icon "regular" "h-3.5 w-3.5"
+
+
+-- | Bell-slash chip for a silenced monitor or issue: @short@ labels the chip, @long@ the tooltip.
+silenceBadge_ :: Text -> Text -> UTCTime -> UTCTime -> Html ()
+silenceBadge_ short long now until' = span_ [class_ "badge badge-sm badge-ghost gap-1 shrink-0", term "data-tippy-content" $ untilLabel long now until' <> " \x2014 notifications are paused"] do
+  faSprite_ "bell-slash" "regular" "h-3 w-3"
+  toHtml $ untilLabel short now until'
+
+
 -- | Copy-to-clipboard button. @src@ is the hyperscript expression naming what to copy — an
 -- element's text (@#api-key's innerText@) or one of the button's own attributes
 -- (@my \@data-url@, paired with that attribute in @attrs@). The label reverts after two
@@ -1129,14 +1135,9 @@ abbreviateUnit :: Text -> Text
 abbreviateUnit w = fromMaybe w $ lookup w [("hours", "hrs"), ("hour", "hr"), ("minutes", "mins"), ("minute", "min"), ("seconds", "secs"), ("second", "sec")]
 
 
--- | Compact time ago display (e.g., "23 hrs ago" instead of "23 hours ago")
-compactTimeAgo :: Text -> Text
-compactTimeAgo = unwords . map abbreviateUnit . words
-
-
--- | The compact form of "how long ago was this", relative to the render clock.
+-- | The compact form of "how long ago was this" ("23 hrs ago"), relative to the render clock.
 agoText :: UTCTime -> UTCTime -> Text
-agoText now = compactTimeAgo . toText . prettyTimeAuto now
+agoText now = unwords . map abbreviateUnit . words . toText . prettyTimeAuto now
 
 
 -- | Popover offering silence durations plus an indefinite option — the shared
@@ -1149,7 +1150,7 @@ durationMenu_ popId heading extras req trigger = div_ [class_ "inline-block"] do
   trigger popId
   -- The options read as bare durations ("4 hours") once focus lands inside, so
   -- the heading has to be the group's accessible name, not just visible text.
-  div_ [id_ popId, term "popover" "auto", role_ "group", Aria.label_ heading, class_ "dropdown dropdown-start menu bg-bgRaised p-1 text-sm border border-strokeWeak z-50 min-w-36 rounded-md shadow-lg mt-1", style_ $ "position-try: flip-block; position-anchor: --anchor-" <> popId] do
+  div_ (popoverPanel_ popId <> [role_ "group", Aria.label_ heading, class_ "dropdown dropdown-start menu bg-bgRaised p-1 text-sm border border-strokeWeak z-50 min-w-36 rounded-md shadow-lg mt-1"]) do
     span_ [class_ "px-3 py-1 text-xs font-medium text-textWeak", Aria.hidden_ "true"] $ toHtml heading
     forM_ @[] @_ @(Int, Text) [(60, "1 hour"), (240, "4 hours"), (480, "8 hours"), (1440, "1 day"), (4320, "3 days"), (10080, "1 week")] \(mins, label) ->
       button_ ([type_ "button", class_ "px-3 py-1.5 text-sm text-left hover:bg-fillWeaker rounded cursor-pointer w-full"] <> req (show mins)) $ toHtml label
