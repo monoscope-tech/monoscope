@@ -31,6 +31,7 @@ import Lucid.Aria qualified as Aria
 import Lucid.Base (termRaw)
 import Lucid.Htmx (hxGet_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
 import Lucid.Hyperscript (__)
+import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation
 import Pages.Charts.Charts qualified as Charts
@@ -294,7 +295,7 @@ data Widget = Widget
   -- widget cannot tell them apart from the name — so red was being applied by a hash of
   -- the string. @\"error\"@ opts a chart into the error colour; anything else stays brand.
   -- Grouped series are named by their group value and keep their own mapping.
-  , alertStatus :: Maybe Text -- 'normal' | 'warning' | 'alerting' (runtime)
+  , alertStatus :: Maybe Monitors.MonitorStatus -- runtime
   , description :: Maybe Text -- Help text shown in info icon tooltip
   , pngUrl :: Maybe Text -- Pre-signed PNG download URL (runtime)
   , pngProfile :: Maybe PngProfile
@@ -866,9 +867,10 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "mi
     -- Alert status indicator (visible on hover, always visible when alerting/warning)
     when (isJust widget.alertId)
       $ let (iconColor, iconType, tooltip, visibilityClass) = case widget.alertStatus of
-              Just "alerting" -> ("text-fillError-strong", "bell-exclamation", "Monitor triggered", "")
-              Just "warning" -> ("text-fillWarning-strong", "bell", "Warning threshold exceeded", "")
-              _ -> ("text-iconNeutral", "bell", "Monitor configured", "opacity-0 group-hover/wgt:opacity-100 touch:opacity-50")
+              Just Monitors.MSAlerting -> ("text-fillError-strong", "bell-exclamation", "Monitor triggered", "")
+              Just Monitors.MSWarning -> ("text-fillWarning-strong", "bell", "Warning threshold exceeded", "")
+              Just Monitors.MSNormal -> configured
+              Nothing -> configured
          in span_
               [ class_ $ "p-1 transition-opacity " <> visibilityClass
               , data_ "tippy-content" tooltip
@@ -1041,6 +1043,7 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "mi
               "Delete widget"
   where
     wId = maybeToMonoid widget.id
+    configured = ("text-iconNeutral", "bell", "Monitor configured", "opacity-0 group-hover/wgt:opacity-100 touch:opacity-50")
     menuItem_ :: Text -> [Attribute] -> Html () -> Html ()
     menuItem_ tip extraAttrs = li_ . a_ ([class_ "p-2 w-full text-left block cursor-pointer", data_ "tippy-content" tip] <> extraAttrs)
 
@@ -1484,7 +1487,7 @@ addMarkLinesToFirstSeries widget series
   where
     shouldShowLines = case widget.showThresholdLines of
       Just "never" -> False
-      Just "on_breach" -> widget.alertStatus == Just "warning" || widget.alertStatus == Just "alerting"
+      Just "on_breach" -> maybe False (/= Monitors.MSNormal) widget.alertStatus
       _ -> isJust widget.alertThreshold || isJust widget.warningThreshold
 
     mkMarkLine color label threshold =

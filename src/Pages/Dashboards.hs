@@ -69,7 +69,6 @@ import Data.List (lookup)
 import Data.Map qualified as Map
 import Data.Set qualified as S
 import Data.Text qualified as T
-import Data.Text.Display (display)
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Data.Vector qualified as V
 import Deriving.Aeson.Stock qualified as DAE
@@ -2879,7 +2878,7 @@ processDashWidgets prefill pid dashId now timeParams paramsWithConstants widgets
               { Widget.alertId = Just $ Monitors.unQueryMonitorId status.monitorId & UUID.toText
               , Widget.alertThreshold = Just status.alertThreshold
               , Widget.warningThreshold = status.warningThreshold
-              , Widget.alertStatus = Just $ display status.alertStatus
+              , Widget.alertStatus = Just status.alertStatus
               }
 
 
