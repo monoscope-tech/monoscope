@@ -1,4 +1,4 @@
-module Pkg.Mail (AlertImpact (..), monitorDataUnavailableMessage, errorIncidentMessages, resolvedErrorMessage, monitorIncidentMessages, retainSlackSnapshot, sendSlackMessage, sendRenderedEmail, sendWhatsAppAlert, sendSlackAlert, sendSlackAlertWith, NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendDiscordAlertWith, sendPagerdutyAlertToService, sampleAlertByIssueTypeText, sampleReport, addConvertKitUser, addConvertKitUserOrganization) where
+module Pkg.Mail (AlertImpact (..), monitorDataUnavailableMessage, errorIncidentMessages, resolvedErrorMessage, monitorIncidentMessages, retainSlackSnapshot, sendSlackMessage, sendRenderedEmail, sendWhatsAppAlert, sendSlackAlert, NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendPagerdutyAlertToService, sampleAlertByIssueTypeText, sampleReport, addConvertKitUser, addConvertKitUserOrganization, arr, mrkdwn, plainTxt, slackSection, slackHeader, slackContext, slackImage, slackActions) where
 
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
@@ -22,13 +22,13 @@ import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
-import Network.HTTP.Types (urlEncode)
 import Pkg.EmailTemplates (EndpointAlertRow (..), groupedByContext, stripSummaryBadges, traceExplorerUrl)
 import Relude hiding (Reader, ask)
 import System.Config (AuthContext (env))
 import System.Config qualified as Config
 import System.Logging qualified as Log
 import System.Types (DB)
+import Utils (countNoun, fmtDate, nonEmptyT, toUriStr)
 
 
 sendRenderedEmail :: Notify.Notify :> es => Text -> Text -> Text -> Eff es ()
@@ -36,7 +36,7 @@ sendRenderedEmail receiver subject htmlBody =
   Notify.sendNotification $ Notify.emailNotification receiver subject htmlBody
 
 
-sendSlackMessage :: (DB es, Log :> es, Notify.Notify :> es) => Projects.ProjectId -> Text -> Eff es ()
+sendSlackMessage :: (DB es, IOE :> es, Log :> es, Notify.Notify :> es) => Projects.ProjectId -> Text -> Eff es ()
 sendSlackMessage pid message = do
   slackData <- getProjectSlackData pid
   maybe
@@ -112,15 +112,10 @@ data AlertImpact = AlertImpact
   deriving stock (Eq, Generic, Show)
 
 
--- | Send a Discord alert, optionally threading replies under a parent message.
+-- | Send a Discord alert, optionally as a reply under a parent message.
 -- Returns the message ID if threading is enabled and the send succeeds.
-sendDiscordAlert :: (DB es, Log :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
-sendDiscordAlert = sendDiscordAlertWith Nothing
-
-
--- | Internal: send Discord alert with optional reply-to threading
-sendDiscordAlertWith :: (DB es, Log :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => Maybe Text -> NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
-sendDiscordAlertWith replyToMsgIdM alert pid pTitle channelIdM' = do
+sendDiscordAlert :: (DB es, IOE :> es, Log :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => Maybe Text -> NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
+sendDiscordAlert replyToMsgIdM alert pid pTitle channelIdM' = do
   appCtx <- ask @Config.AuthContext
   -- When no explicit channel is supplied, fall back to the first entry of
   -- @everyone.discord_channels (insertion order; see addDiscordChannelToEveryoneTeam).
@@ -141,13 +136,8 @@ sendDiscordAlertWith replyToMsgIdM alert pid pTitle channelIdM' = do
       maybe (pure Nothing) (\payload -> Notify.sendNotificationWithReply $ Notify.discordThreadedNotification cid payload replyToMsgIdM) (mkPayload alert)
 
 
--- | Send a Slack alert, optionally threading replies under a parent message.
--- Returns the thread timestamp if the send succeeds.
-sendSlackAlert :: (DB es, Log :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
-sendSlackAlert = sendSlackAlertWith Nothing
-
-
--- | Internal: send Slack alert with optional thread-ts for threading.
+-- | Send a Slack alert, optionally threaded under @threadTsM@; returns the thread
+-- timestamp if the send succeeds.
 -- Routing: if the target channel matches the project's OAuth-time default
 -- (apis.slack.channel_id) AND a webhook URL is on file, post via the
 -- channel-bound incoming webhook — works without bot membership, essential
@@ -156,8 +146,8 @@ sendSlackAlert = sendSlackAlertWith Nothing
 --
 -- Both transports preserve thread context. Webhook root timestamps require
 -- separate capture through Slack events or message retrieval.
-sendSlackAlertWith :: (DB es, Log :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => Maybe Text -> NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
-sendSlackAlertWith threadTsM alert pid pTitle channelM = do
+sendSlackAlert :: (DB es, IOE :> es, Log :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => Maybe Text -> NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
+sendSlackAlert threadTsM alert pid pTitle channelM = do
   appCtx <- ask @Config.AuthContext
   slackData <- getProjectSlackData pid
   case (channelM, slackData) of
@@ -275,7 +265,7 @@ slackErrorAlert alertType err project channelId projectUrl chartUrlM occTextM fi
     title = "<" <> targetUrl <> "|" <> titleEmoji <> " *" <> titleLabel <> "* · " <> errorAlertTitle err <> " in " <> slackEscape project <> ">"
     body = errorSnippet 600 err
     firstSeen = fromMaybe (errFirstSeen err) firstSeenM
-    tidM = err.traceId >>= guarded (not . T.null)
+    tidM = nonEmptyT err.traceId
     inlineMeta = errorMetaLine err occTextM ("First seen " <> firstSeen)
     chartBlock =
       maybe
@@ -302,7 +292,7 @@ errRoute err = case filter (not . T.null) (catMaybes [err.requestMethod, err.req
 
 
 errFirstSeen :: ErrorPatterns.ATError -> Text
-errFirstSeen err = toText $ formatTime defaultTimeLocale "%b %-e · %-l:%M %p" err.when
+errFirstSeen err = fmtDate "%b %-e · %-l:%M %p" err.when
 
 
 slackMonitorAlert :: Text -> Text -> Maybe Text -> Text -> AE.Value
@@ -409,7 +399,7 @@ incidentMessage text blocks = Incidents.SlackPayload $ KEM.fromList ["text" AE..
 
 
 atUtc :: UTCTime -> Text
-atUtc = toText . formatTime defaultTimeLocale "%Y-%m-%d %H:%M UTC"
+atUtc = fmtDate "%Y-%m-%d %H:%M UTC"
 
 
 -- | Titles reach Slack escaped and bounded, whatever the source produced.
@@ -513,7 +503,7 @@ slackNewEndpointsAlert projectName endpoints channelId hash projectUrl =
   slackAttachment channelId "#3b82f6" $ [headlineBlock] <> bodyBlocks <> [actionsBlock]
   where
     n = V.length endpoints
-    headline = if n == 1 then "1 new endpoint" else show n <> " new endpoints"
+    headline = countNoun n "new endpoint"
     targetUrl = projectUrl <> "/issues/by_hash/" <> hash
     explorerUrl = newEndpointsExplorerUrl projectUrl ((.label) <$> endpoints)
     headlineBlock = slackSection ("<" <> targetUrl <> "|:large_blue_circle: *" <> headline <> "* · " <> projectName <> ">")
@@ -547,7 +537,7 @@ slackNewEndpointsAlert projectName endpoints channelId hash projectUrl =
 -- "(attributes.http.route in (\"/home\",\"/users\") OR attributes.url.path in (\"/home\",\"/users\"))"
 newEndpointsExplorerUrl :: Text -> V.Vector Text -> Text
 newEndpointsExplorerUrl projectUrl endpoints =
-  projectUrl <> "/log_explorer?query=" <> decodeUtf8 (urlEncode True $ encodeUtf8 expr)
+  projectUrl <> "/log_explorer?query=" <> toUriStr expr
   where
     paths = (\x -> "\"" <> T.drop 1 (T.dropWhile (/= ' ') x) <> "\"") <$> V.toList endpoints
     clause field = case paths of
@@ -686,7 +676,7 @@ discordNewEndpointAlert projectName endpoints hash projectUrl =
       ]
   where
     n = V.length endpoints
-    title = (if n == 1 then "🔵 1 new endpoint" else "🔵 " <> show n <> " new endpoints") <> " · " <> projectName
+    title = "🔵 " <> countNoun n "new endpoint" <> " · " <> projectName
     content = if n == 1 then "🔵 **New endpoint detected**" else "🔵 **" <> show n <> " new endpoints detected**"
     url = projectUrl <> "/issues/by_hash/" <> hash
     explorerLink = "[View in Explorer](" <> newEndpointsExplorerUrl projectUrl ((.label) <$> endpoints) <> ")"
@@ -865,12 +855,17 @@ snippet :: Int -> Text -> Text
 snippet n t = "```" <> T.take n (stripSummaryBadges t) <> "```"
 
 
-mrkdwn :: Text -> AE.Value
+mrkdwn, plainTxt :: Text -> AE.Value
 mrkdwn t = AE.object ["type" AE..= "mrkdwn", "text" AE..= t]
+plainTxt t = AE.object ["type" AE..= "plain_text", "text" AE..= t, "emoji" AE..= True]
 
 
 slackSection :: Text -> AE.Value
 slackSection t = AE.object ["type" AE..= "section", "text" AE..= mrkdwn t]
+
+
+slackHeader :: Text -> AE.Value
+slackHeader t = AE.object ["type" AE..= "header", "text" AE..= plainTxt t]
 
 
 slackContext :: [Text] -> AE.Value
@@ -897,7 +892,7 @@ slackActions bs = AE.object ["type" AE..= "actions", "elements" AE..= arr bs]
 slackButton :: Text -> Maybe Text -> Text -> AE.Value
 slackButton label styleM url =
   AE.object
-    $ ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= label, "emoji" AE..= True], "url" AE..= url]
+    $ ["type" AE..= "button", "text" AE..= plainTxt label, "url" AE..= url]
     <> maybeToList (("style" AE..=) <$> styleM)
 
 

@@ -15,7 +15,6 @@ module Models.Apis.LogQueries (
   hasProjectIdFilter,
   LogEndpoint (..),
   logExplorerUrlPath,
-  getLastSevenDaysTotalRequest,
   fetchLogPatterns,
   fetchSessions,
   SessionSort (..),
@@ -112,7 +111,7 @@ data SDKTypes
   | SDKUnknown
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SDKTypes
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake SDKTypes
   deriving (FromField, ToField) via WrappedEnumShow SDKTypes
 
 
@@ -270,7 +269,7 @@ validateSqlQuery query =
 -- | @useTimefusion@ (from @env.enableTimefusionReads@) routes the read to the TimeFusion
 -- pool, as in 'executeSecuredQuery'. It is a parameter, not a wrapper the callers apply,
 -- because callers that forgot it silently read the empty Postgres side.
-selectLogTable :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Bool -> Projects.ProjectId -> [Section] -> Text -> Maybe PageCursor -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Maybe Text -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))
+selectLogTable :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Bool -> Projects.ProjectId -> [Section] -> Text -> Maybe PageCursor -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Maybe Text -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))
 selectLogTable useTimefusion pid queryAST queryText cursorM dateRange projectedColsByUser source targetSpansM environment service = do
   now <- Time.currentTime
   let scope = mkScopedQuery pid dateRange environment service
@@ -577,7 +576,7 @@ data PrecomputedPattern = PrecomputedPattern
 
 
 fetchLogPatterns
-  :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es)
+  :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es)
   => Bool
   -- ^ enableTimefusionReads (caller threads it through — keeps this module a
   -- leaf of `System.Config` so `Telemetry.OtelLogsAndSpans` can be named in
@@ -730,7 +729,7 @@ sessionSortLabel ordering = T.toUpper (T.take 1 label) <> T.drop 1 label
     label = T.replace "_" " " $ sessionSortParam ordering
 
 
-fetchSessions :: (DB es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Bool -> Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Text -> Maybe Text -> Maybe SessionSort -> Int -> SessionsRead -> Eff es (Maybe SessionSummary, Int, [SessionRow])
+fetchSessions :: (DB es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Bool -> Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Text -> Maybe Text -> Maybe SessionSort -> Int -> SessionsRead -> Eff es (Maybe SessionSummary, Int, [SessionRow])
 fetchSessions enableTfReads pid queryAST dateRange environment service sortByM skip readKind = do
   now <- Time.currentTime
   let scope = mkScopedQuery pid dateRange environment service
@@ -898,7 +897,7 @@ data ExpandKind = ExpandSession Text | ExpandPattern Text
 -- projected with the same default-select columns as logs mode so the web
 -- component can render them with the existing logs-mode row template.
 fetchEventExamples
-  :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es)
+  :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es)
   => Bool
   -> Projects.ProjectId
   -> [Section]
@@ -1040,9 +1039,3 @@ buildHourlyBuckets now pairs = densifyBuckets (0, 23) [(idx, c) | (t, c) <- pair
     startHour = addUTCTime (-(23 * 3600)) $ truncateToHour now
     hourIndex t = floor (diffUTCTime (truncateToHour t) startHour / 3600) :: Int
     truncateToHour t = let s = utcTimeToPOSIXSeconds t in posixSecondsToUTCTime $ fromIntegral (floor s `div` 3600 * 3600 :: Int)
-
-
-getLastSevenDaysTotalRequest :: (DB es, Time.Time :> es) => Projects.ProjectId -> Eff es Int
-getLastSevenDaysTotalRequest pid = do
-  now <- Time.currentTime
-  fromMaybe 0 <$> Hasql.interpOne [HI.sql| SELECT count(*)::BIGINT FROM otel_logs_and_spans WHERE project_id=#{pid.toText}::text AND timestamp > #{now}::timestamptz - interval '7 days'|]

@@ -19,6 +19,7 @@ import Relude hiding (ask)
 -- Database imports
 import Data.Effectful.Hasql qualified as Hasql
 import Hasql.Interpolate qualified as HI
+import Models.Apis.ShareEvents qualified as ShareEvents
 
 -- Effectful imports
 import Effectful.Error.Static qualified as Error
@@ -27,7 +28,7 @@ import Effectful.State.Static.Local qualified as State
 import Effectful.Time qualified as Time
 
 -- Web and server imports
-import Log (Logger, UTCTime)
+import Log (Logger)
 import Lucid
 import Network.HTTP.Types qualified as H
 import Network.Wai (Request, queryString)
@@ -78,7 +79,7 @@ import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pkg.Parser qualified as Parser
 import Pkg.Parser.Expr qualified as ParserExpr
-import UnliftIO.Exception (handle, throwIO)
+import UnliftIO.Exception (handle)
 import Utils qualified
 import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
 
@@ -252,7 +253,7 @@ type OtlpHttpHandler = Maybe Text -> BS.ByteString -> IO (Either Text BS.ByteStr
 -- | Run an OTLP/HTTP export handler; protobuf decode failures surface as 400.
 otlpHttpH :: OtlpHttpHandler -> Maybe Text -> BS.ByteString -> ATBaseCtx BS.ByteString
 otlpHttpH export keyM body =
-  liftIO (export keyM body) >>= either (\e -> throwIO err400{errBody = fromStrict (encodeUtf8 e)}) pure
+  liftIO (export keyM body) >>= either (\e -> Error.throwError err400{errBody = fromStrict (encodeUtf8 e)}) pure
 
 
 -- When bytestring is returned for json, simply return the bytestring
@@ -540,8 +541,8 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , apiPatch :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Patch '[HTML] (RespHeaders Settings.ApiMut)
   , apiPost :: mode :- "p" :> ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Settings.GenerateAPIKeyForm :> Post '[HTML] (RespHeaders Settings.ApiMut)
   , -- Charts and widgets
-    chartsDataGet :: mode :- "chart_data" :> QPT "db_source" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QueryParam "chart_type" Parser.BinDensity :> AllQueryParams :> Get '[JSON] Charts.MetricsData
-  , chartsDataStreamGet :: mode :- "chart_data" :> "stream" :> QPT "db_source" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QueryParam "chart_type" Parser.BinDensity :> AllQueryParams :> StreamGet NewlineFraming Charts.ChartStream (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceIO AE.Value))
+    chartsDataGet :: mode :- "chart_data" :> QueryParam "db_source" Hasql.SqlSource :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QueryParam "chart_type" Parser.BinDensity :> AllQueryParams :> Get '[JSON] Charts.MetricsData
+  , chartsDataStreamGet :: mode :- "chart_data" :> "stream" :> QueryParam "db_source" Hasql.SqlSource :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> QueryParam "chart_type" Parser.BinDensity :> AllQueryParams :> StreamGet NewlineFraming Charts.ChartStream (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceIO AE.Value))
   , widgetPost :: mode :- "p" :> ProjectId :> "widget" :> QPT "since" :> QPT "from" :> QPT "to" :> ReqBody '[JSON, FormUrlEncoded] Widget.Widget :> Post '[HTML] (RespHeaders Widget.Widget)
   , widgetGet :: mode :- "p" :> ProjectId :> "widget" :> QPT "widgetJSON" :> QPT "widgetZ" :> QPT "since" :> QPT "from" :> QPT "to" :> AllQueryParams :> Get '[HTML] (RespHeaders Widget.Widget)
   , widgetSqlPreview :: mode :- "p" :> ProjectId :> "widget" :> "sql-preview" :> QPT "query" :> QPT "dashboard_id" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders (Html ()))
@@ -561,7 +562,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , reportsLiveGet :: mode :- "p" :> ProjectId :> "reports" :> "live" :> HXRequest :> Get '[HTML] (RespHeaders Reports.ReportsGet)
   , reportsSingleGet :: mode :- "p" :> ProjectId :> "reports" :> Capture "report_id" Issues.ReportId :> HXRequest :> Get '[HTML] (RespHeaders Reports.ReportsGet)
   , reportsPost :: mode :- "p" :> ProjectId :> "reports_notif" :> Capture "report_type" Projects.ReportType :> Post '[HTML] (RespHeaders Reports.ReportsPost)
-  , shareLinkPost :: mode :- "p" :> ProjectId :> "share" :> Capture "event_id" UUID.UUID :> Capture "createdAt" UTCTime :> QPT "event_type" :> Post '[HTML] (RespHeaders Share.ShareLinkPost)
+  , shareLinkPost :: mode :- "p" :> ProjectId :> "share" :> Capture "event_id" UUID.UUID :> Capture "createdAt" UTCTime :> QueryParam "event_type" ShareEvents.ShareKind :> Post '[HTML] (RespHeaders Share.ShareLinkPost)
   , -- Billing
     manageBillingGet :: mode :- "p" :> ProjectId :> "manage_billing" :> Get '[HTML] (RespHeaders Settings.BillingGet)
   , replaySessionGet :: mode :- "p" :> ProjectId :> "replay_session" :> Capture "sessionId" UUID.UUID :> Get '[JSON] (RespHeaders Replay.ReplaySessionResp)
@@ -830,7 +831,7 @@ server :: Logger -> AuthContext -> TracerProvider -> OtlpHttpHandler -> OtlpHttp
 server logger env tp otlpTraces otlpLogs =
   Routes
     { public = Servant.serveDirectoryWebApp "./static/public"
-    , ping = pingH
+    , ping = pure "pong"
     , status = statusH
     , login = Auth.loginH
     , toLogin = Auth.loginRedirectH
@@ -1310,10 +1311,6 @@ statusH = Status <$> Hasql.interpOne [HI.sql| select version() |] <*> envOr "GIT
     envOr k = maybe "dev" toText <$> lookupEnv k
 
 
-pingH :: ATBaseCtx Text
-pingH = pure "pong"
-
-
 -- | 'RawM' so the response carries the image's own Content-Type: a route content type
 -- adds a second header, and nginx keeps the first (an SVG served as octet-stream is a
 -- broken image).
@@ -1362,26 +1359,21 @@ avatarInitialsSvg name =
 -- 'Charts.queryMetrics' is about to and ask the question of the result.
 --
 -- >>> let pid = UUIDId UUID.nil :: Projects.ProjectId
--- >>> clientPostgresSqlRejection (Just "timefusion") (Just pid) (Just "select 1 from otel_logs_and_spans")
+-- >>> clientPostgresSqlRejection (Just Hasql.SqlTimefusion) (Just pid) (Just "select 1 from otel_logs_and_spans")
 -- Nothing
--- >>> clientPostgresSqlRejection (Just "postgres") (Just pid) (Just "select hash::text from apis.endpoints limit 5")
+-- >>> clientPostgresSqlRejection (Just Hasql.SqlPostgres) (Just pid) (Just "select hash::text from apis.endpoints limit 5")
 -- Just "Query must filter by project_id"
--- >>> clientPostgresSqlRejection (Just "postgres") (Just pid) (Just "select hash::text from apis.endpoints where project_id='{{project_id}}'")
+-- >>> clientPostgresSqlRejection (Just Hasql.SqlPostgres) (Just pid) (Just "select hash::text from apis.endpoints where project_id='{{project_id}}'")
 -- Nothing
-clientPostgresSqlRejection :: Maybe Text -> Maybe Projects.ProjectId -> Maybe Text -> Maybe Text
+clientPostgresSqlRejection :: Maybe Hasql.SqlSource -> Maybe Projects.ProjectId -> Maybe Text -> Maybe Text
 clientPostgresSqlRejection dbSource pidM querySqlM = case (dbSource, pidM, Utils.nonEmptyT querySqlM) of
-  (Just "postgres", Just pid, Just sql)
+  (Just Hasql.SqlPostgres, Just pid, Just sql)
     | let resolved = T.replace "{{project_id}}" pid.toText sql ->
         if
           | not (LogQueries.validateSqlQuery resolved) -> Just "Query contains disallowed operations"
           | not (LogQueries.hasProjectIdFilter resolved pid) -> Just "Query must filter by project_id"
           | otherwise -> Nothing
   _ -> Nothing
-
-
-guardClientPostgresSql :: Maybe Text -> Maybe Projects.ProjectId -> Maybe Text -> ATAuthCtx ()
-guardClientPostgresSql dbSource pidM querySqlM =
-  whenJust (clientPostgresSqlRejection dbSource pidM querySqlM) \msg -> Error.throwError err400{errBody = toLazy (encodeUtf8 msg)}
 
 
 -- | @rollup_sql@ is a Postgres statement over an hourly rollup that answers the same
@@ -1394,37 +1386,42 @@ guardClientPostgresSql dbSource pidM querySqlM =
 -- >>> let now = Parser.fixedUTCTime; t = Utils.isoT . (`addUTCTime` now) . (* 3600); since s = TimePicker.TimePicker (Just s) Nothing Nothing; abs' a b = TimePicker.TimePicker Nothing (Just $ t a) (Just $ t b)
 -- >>> let r from = [("rollup_sql", Just "R"), ("rollup_from", Just $ t from)]; route tp ps = fst $ rollupRoute now tp ps (Nothing, Nothing)
 -- >>> (route (since "24H") (r (-72)), route (since "3H") (r (-72)), route (abs' (-30) (-26)) (r (-72)))
--- (Just "postgres",Just "postgres",Just "postgres")
+-- (Just SqlPostgres,Just SqlPostgres,Just SqlPostgres)
 -- >>> (route (since "24H") (r (-12)), route (since "24H") (("environment", Just "prod") : r (-72)), route (since "24H") (take 1 $ r (-72)))
 -- (Nothing,Nothing,Nothing)
-rollupRoute :: UTCTime -> TimePicker.TimePicker -> [(Text, Maybe Text)] -> (Maybe Text, Maybe Text) -> (Maybe Text, Maybe Text)
+rollupRoute :: UTCTime -> TimePicker.TimePicker -> [(Text, Maybe Text)] -> (Maybe Hasql.SqlSource, Maybe Text) -> (Maybe Hasql.SqlSource, Maybe Text)
 rollupRoute now tp params source = case (param "rollup_sql", iso8601ParseM . toString =<< param "rollup_from", fromM) of
   (Just rollup, Just covered, Just start)
     | all (isNothing . param) ["environment", "service"]
     , start >= covered ->
-        (Just "postgres", Just rollup)
+        (Just Hasql.SqlPostgres, Just rollup)
   _ -> source
   where
     param k = Utils.nonEmptyT $ join $ L.lookup k params
     (fromM, _, _) = TimePicker.parseTimeRange now tp
 
 
-chartsDataGetH :: Maybe Text -> Maybe Charts.DataType -> Maybe Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Parser.BinDensity -> [(Text, Maybe Text)] -> ATAuthCtx Charts.MetricsData
-chartsDataGetH dbSource0 dt pid q qSql0 since fromD toD src density params = do
+-- | The @/chart_data@ handler shape, shared by the buffered and the streamed route.
+type ChartDataH a = Maybe Hasql.SqlSource -> Maybe Charts.DataType -> Maybe Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Parser.BinDensity -> [(Text, Maybe Text)] -> ATAuthCtx a
+
+
+chartsDataGetH :: ChartDataH Charts.MetricsData
+chartsDataGetH = chartDataH Charts.queryMetrics
+
+
+chartsDataStreamGetH :: ChartDataH (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceIO AE.Value))
+chartsDataStreamGetH = chartDataH Charts.queryMetricsStream
+
+
+-- | Scope the request, route it to the rollup when one covers the window, and gate
+-- client SQL (see 'clientPostgresSqlRejection') before either runner sees it.
+chartDataH :: ChartDataH a -> ChartDataH a
+chartDataH run dbSource0 dt pid q qSql0 since fromD toD src density params = do
   scopedParams <- chartScopeParams pid params
   now <- Time.currentTime
   let (dbSource, qSql) = rollupRoute now (TimePicker.TimePicker since fromD toD) scopedParams (dbSource0, qSql0)
-  guardClientPostgresSql dbSource pid qSql
-  Charts.queryMetrics dbSource dt pid q qSql since fromD toD src density scopedParams
-
-
-chartsDataStreamGetH :: Maybe Text -> Maybe Charts.DataType -> Maybe Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Parser.BinDensity -> [(Text, Maybe Text)] -> ATAuthCtx (Headers '[Header "Cache-Control" Text, Header "X-Accel-Buffering" Text] (SourceIO AE.Value))
-chartsDataStreamGetH dbSource0 dt pid q qSql0 since fromD toD src density params = do
-  scopedParams <- chartScopeParams pid params
-  now <- Time.currentTime
-  let (dbSource, qSql) = rollupRoute now (TimePicker.TimePicker since fromD toD) scopedParams (dbSource0, qSql0)
-  guardClientPostgresSql dbSource pid qSql
-  Charts.queryMetricsStream dbSource dt pid q qSql since fromD toD src density scopedParams
+  whenJust (clientPostgresSqlRejection dbSource pid qSql) \msg -> Error.throwError err400{errBody = toLazy (encodeUtf8 msg)}
+  run dbSource dt pid q qSql since fromD toD src density scopedParams
 
 
 -- | The environment cookie is an authenticated, sticky project selection. Service is sticky

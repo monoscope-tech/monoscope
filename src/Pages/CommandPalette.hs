@@ -98,7 +98,7 @@ paletteShell_ pid = do
       -- Header
       div_ [class_ "w-full max-w-lg flex items-center justify-between mb-2 px-3"] do
         span_ [class_ "text-xs font-medium text-white dark:text-white/70 uppercase tracking-wider"] "Quick Search"
-        span_ [class_ "cmd-palette-count text-xs text-white/80 dark:text-white/50"] ""
+        span_ [class_ "cmd-palette-count text-xs text-white/80 dark:text-white/50", term "hx-live:text" "(n => (q('#cmd-palette-input').value ? q(\"#cmd-palette-results a.cmd-item:not([style*='display: none']):not([style*='display:none'])\").count + ' of ' : '') + n + ' items')(q('#cmd-palette-results a.cmd-item').count)"] ""
       -- Panel
       div_ [class_ "cmd-palette w-full max-w-lg bg-base-100 rounded-lg shadow-2xl border border-base-300 overflow-hidden", data_ "pid" pidTxt, data_ "current-category" "", [__|on click halt the event's bubbling|]] do
         -- Search input
@@ -108,12 +108,13 @@ paletteShell_ pid = do
             , id_ "cmd-palette-input"
             , class_ "w-full py-2.5 bg-transparent outline-none text-sm"
             , placeholder_ "Search pages, issues, actions\x2026"
+            , term "hx-live:placeholder" "(c => c ? 'Search ' + c + '\x2026' : 'Search pages, issues, actions\x2026')(closest('.cmd-palette').data.currentCategory)"
             , filterScript
             ]
         -- Back breadcrumb (hidden by default)
-        div_ [class_ "cmd-breadcrumb hidden items-center gap-1.5 px-3 py-1.5 border-b border-base-300 text-xs text-base-content/60 cursor-pointer hover:text-base-content/80", [__|on click call cmdPaletteNav(closest .cmd-palette, '')|]] do
+        div_ [hidden_ "", term "hx-live:hidden" "!closest('.cmd-palette').data.currentCategory", class_ "cmd-breadcrumb flex [&[hidden]]:hidden items-center gap-1.5 px-3 py-1.5 border-b border-base-300 text-xs text-base-content/60 cursor-pointer hover:text-base-content/80", [__|on click call cmdPaletteNav(closest .cmd-palette, '')|]] do
           faSprite_ "chevron-left" "regular" "w-3 h-3"
-          span_ [class_ "cmd-breadcrumb-label"] ""
+          span_ [term "hx-live:text" "(c => c.charAt(0).toUpperCase() + c.slice(1))(closest('.cmd-palette').data.currentCategory || '')"] ""
         -- Results container
         div_ [id_ "cmd-palette-results", class_ "max-h-80 overflow-y-auto p-1"] do
           -- Lazy-loaded dynamic items placeholder
@@ -122,21 +123,21 @@ paletteShell_ pid = do
           forM_ ([("log_explorer", "explore", "Log Explorer"), ("api_catalog", "swap", "API Catalog"), ("reports", "chart-simple", "Reports"), ("repositories", "code-branch", "Repositories"), ("settings", "gear", "Settings")] :: [(Text, Text, Text)]) \(path, icon, label) ->
             cmdItem pidTxt "direct" path [] icon label "Page"
           -- Logs shortcut
-          cmdLink_ "search logs" "direct" [href_ $ "/p/" <> pidTxt <> "/log_explorer", data_ "log-shortcut" "true"]
-            $ itemBody_ "explore" "cmd-log-label" "Search logs for: \"\"" "Logs"
+          cmdLink_ "search logs" "direct" [href_ $ "/p/" <> pidTxt <> "/log_explorer", data_ "log-shortcut" "true", term "hx-live:href" "'/p/' + closest('.cmd-palette').dataset.pid + '/log_explorer?query=' + encodeURIComponent(q('#cmd-palette-input').value)"]
+            $ itemBody_ "explore" [term "hx-live:text" "'Search logs for: \"' + q('#cmd-palette-input').value + '\"'"] "Search logs for: \"\"" "Logs"
           -- Actions
           cmdItem pidTxt "direct" "log_explorer#create-alert-toggle" [] "plus" "Create monitor" "Action"
           cmdItem pidTxt "direct" "dashboards?new=true" [] "plus" "Create dashboard" "Action"
-          cmdLink_ "switch project" "direct" [href_ "/"] $ itemBody_ "grid" "" "Switch project" "Action"
+          cmdLink_ "switch project" "direct" [href_ "/"] $ itemBody_ "grid" [] "Switch project" "Action"
           cmdLink_
             "copy current url"
             "direct"
             [ data_ "action" "copy-url"
             , [__|on click call navigator.clipboard.writeText(window.location.href) then add .hidden to #cmd-palette-backdrop|]
             ]
-            $ itemBody_ "copy" "" "Copy current URL" "Action"
+            $ itemBody_ "copy" [] "Copy current URL" "Action"
           -- AI row (hidden initially)
-          div_ [class_ "cmd-ai-row", style_ "display:none"]
+          div_ [class_ "cmd-ai-row", hidden_ "", term "hx-live:hidden" "q('#cmd-palette-input').value.length <= 10 || !!closest('.cmd-palette').data.currentCategory"]
             $ cmdLink_
               ""
               "direct"
@@ -149,10 +150,10 @@ paletteShell_ pid = do
                   then set window.location to `/p/${me.closest('.cmd-palette').dataset.pid}/log_explorer?query=${encodeURIComponent(:r.query or '')}&since=${tr.since or ''}&from=${encodeURIComponent(tr.from or '')}&to=${encodeURIComponent(tr.to or '')}`
                |]
               ]
-            $ itemBody_ "sparkles" "cmd-ai-label" "Ask AI: \"\"" "AI"
+            $ itemBody_ "sparkles" [term "hx-live:text" "'Ask AI: \"' + q('#cmd-palette-input').value + '\"'"] "Ask AI: \"\"" "AI"
           -- Empty state
           div_
-            [class_ "cmd-palette-empty px-3 py-8 text-center text-sm text-base-content/40", style_ "display:none"]
+            [class_ "px-3 py-8 text-center text-sm text-base-content/40", hidden_ "", term "hx-live:hidden" "!q('#cmd-palette-input').value || q(\"#cmd-palette-results a.cmd-item:not([style*='display: none']):not([style*='display:none'])\").count > 0"]
             "No matching results"
       -- Keyboard hints
       div_ [class_ "cmd-palette-hints flex items-center gap-6 mt-3 text-xs text-white dark:text-white/80 drop-shadow"]
@@ -182,14 +183,8 @@ paletteShell_ pid = do
             palette.dataset.currentCategory = category;
             palette.querySelectorAll('[data-cmd-type="direct"], [data-cmd-type="category"], .cmd-palette-recents').forEach(function(el) { el.style.display = category ? 'none' : ''; });
             palette.querySelectorAll('[data-cmd-type="child"]').forEach(function(el) { el.style.display = category && el.dataset.cmdCategory === category ? '' : 'none'; });
-            var bc = palette.querySelector('.cmd-breadcrumb');
-            if (bc) {
-              bc.classList.toggle('hidden', !category); bc.classList.toggle('flex', !!category);
-              var lbl = bc.querySelector('.cmd-breadcrumb-label');
-              if (lbl) lbl.textContent = category.charAt(0).toUpperCase() + category.slice(1);
-            }
             var input = palette.querySelector('#cmd-palette-input');
-            if (input) { input.value = ''; input.placeholder = category ? 'Search ' + category + '…' : 'Search pages, issues, actions…'; input.focus(); }
+            if (input) { input.value = ''; input.focus(); }
             palette.querySelectorAll('a.cmd-item').forEach(function(el) { el.classList.remove('active'); });
             var first = palette.querySelector('a.cmd-item' + (category ? '[data-cmd-category="' + category + '"]' : '') + vis);
             if (first) first.classList.add('active');
@@ -247,21 +242,6 @@ paletteShell_ pid = do
           for item in <a.cmd-item/> in :palette remove .active from item end
           set :visible to <a.cmd-item:not([style*='display: none']):not([style*='display:none'])/> in :palette
           if :visible.length > 0 then add .active to :visible[0] end
-          -- Update result count
-          set :counter to the first <.cmd-palette-count/>
-          set :total to :counter.dataset.total
-          if :q.length > 0 then put `${:visible.length} of ${:total} items` into :counter
-          else put `${:total} items` into :counter end
-          -- AI row: show when query > 10 chars (root only)
-          if :q.length > 10 and :cat === '' then show <.cmd-ai-row/> else hide <.cmd-ai-row/> end
-          set :aiLabel to the first <.cmd-ai-label/>
-          if :aiLabel then put `Ask AI: "${my value}"` into :aiLabel end
-          -- Log shortcut: label + href
-          for el in <.cmd-log-label/> put `Search logs for: "${my value}"` into el end
-          for el in <[data-log-shortcut]/> set el.href to `/p/${el.closest('.cmd-palette').dataset.pid}/log_explorer?query=${encodeURIComponent(my value)}` end
-          -- Empty state
-          set :empty to the first <.cmd-palette-empty/> in :palette
-          if :visible.length === 0 and :q.length > 0 then show :empty else hide :empty end
         end
         on keydown[key=='Escape']
           set :palette to closest .cmd-palette
@@ -316,12 +296,6 @@ renderDynamicItems pid recents issues monitors dashboards =
     [ id_ "cmd-palette-dynamic"
     , [__|init
       set :palette to closest .cmd-palette
-      set :counter to the first <.cmd-palette-count/>
-      if :counter then
-        set :total to (<a.cmd-item/> in :palette).length
-        set :counter.dataset.total to :total
-        put `${:total} items` into :counter
-      end
       for item in <a.cmd-item/> in :palette remove .active from item end
       set :f to the first <a.cmd-item:not([style*='display: none']):not([style*='display:none'])/> in :palette
       if :f then add .active to :f end
@@ -367,7 +341,7 @@ renderDynamicItems pid recents issues monitors dashboards =
     recentItem :: PaletteRecent -> Html ()
     recentItem r =
       cmdLink_ (T.toLower r.label) "direct" (href_ r.url : recentAttrs pidTxt r.label r.itemType)
-        $ itemBody_ icon "" (toHtml r.label) (T.toTitle r.itemType)
+        $ itemBody_ icon [] (toHtml r.label) (T.toTitle r.itemType)
       where
         icon = fromMaybe "clock" $ lookup r.itemType [("page", "file-lines"), ("issue", "bug"), ("monitor", "list-check"), ("dashboard", "dashboard")]
 
@@ -391,11 +365,10 @@ cmdLink_ search cmdType attrs =
   a_ $ [class_ "cmd-item flex items-center gap-2 px-3 py-2 rounded text-sm cursor-pointer transition-colors", data_ "search" search, data_ "cmd-type" cmdType] <> attrs
 
 
--- | @hook@ is a JS-only marker class (not a utility), appended to the literal label classes.
-itemBody_ :: Text -> Text -> Html () -> Text -> Html ()
-itemBody_ icon hook label badgeText = do
+itemBody_ :: Text -> [Attribute] -> Html () -> Text -> Html ()
+itemBody_ icon labelAttrs label badgeText = do
   faSprite_ icon "regular" "w-3.5 h-3.5 text-textWeak shrink-0"
-  span_ [class_ $ "truncate flex-1 " <> hook] label
+  span_ (class_ "truncate flex-1" : labelAttrs) label
   span_ [class_ "badge badge-ghost badge-xs text-2xs"] $ toHtml badgeText
 
 
@@ -403,4 +376,4 @@ itemBody_ icon hook label badgeText = do
 cmdItem :: Text -> Text -> Text -> [Attribute] -> Text -> Text -> Text -> Html ()
 cmdItem pidTxt cmdType path extraAttrs icon label badgeText =
   cmdLink_ (T.toLower label) cmdType (href_ ("/p/" <> pidTxt <> "/" <> path) : recentAttrs pidTxt label (T.toLower badgeText) <> extraAttrs)
-    $ itemBody_ icon "" (toHtml label) badgeText
+    $ itemBody_ icon [] (toHtml label) badgeText

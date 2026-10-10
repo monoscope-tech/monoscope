@@ -15,10 +15,11 @@ import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy qualified as LBS
 import Data.Default (def)
-import Data.Time (addUTCTime)
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
 import Data.Text qualified as T
+import Data.Time (addUTCTime)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PG
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
@@ -668,7 +669,7 @@ spec = sequential $ aroundAll withTestResources do
     -- in extract(epoch …) — is a timestamptz, and took the whole widget down with
     -- `Incompatible {errSQLType = "timestamptz", errSQLField = "timestamp", errHaskellType = "Int"}`.
     it "plots a timestamptz bucket column, not just an epoch number" \tr -> do
-      let plotSql q = runQueryEffect tr $ Charts.queryMetrics (Just "postgres") (Just Charts.DTMetric) (Just testPid) Nothing (Just q) (Just "24H") Nothing Nothing Nothing Nothing []
+      let plotSql q = runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTMetric) (Just testPid) Nothing (Just q) (Just "24H") Nothing Nothing Nothing Nothing []
       stamped <- plotSql "SELECT '2026-01-02 03:04:05+00'::timestamptz AS timestamp, 'value'::text, 7::double precision"
       stamped.error `shouldBe` Nothing
       -- Epoch milliseconds, the same wire shape an epoch-number bucket lands in.
@@ -690,7 +691,7 @@ spec = sequential $ aroundAll withTestResources do
     -- being dropped. (The guard the same route applies to client SQL is doctested on
     -- 'Web.Routes.clientPostgresSqlRejection'.)
     it "routes the statement at the store the variable declared" \tr -> do
-      (_, md) <- testServant tr $ addRespHeaders =<< Routes.chartsDataGetH (Just "postgres") (Just Charts.DTText) (Just testPid) Nothing (Just endpointsSql) (Just "24H") Nothing Nothing Nothing Nothing []
+      (_, md) <- testServant tr $ addRespHeaders =<< Routes.chartsDataGetH (Just Hasql.SqlPostgres) (Just Charts.DTText) (Just testPid) Nothing (Just endpointsSql) (Just "24H") Nothing Nothing Nothing Nothing []
       md.error `shouldBe` Nothing
 
     -- The issue volume chart's KQL scans every row of its window on TimeFusion (4-27s
@@ -723,18 +724,18 @@ spec = sequential $ aroundAll withTestResources do
         `shouldBe` (Just "metrics | where metric_name == \"summarize\" | summarize count(*) by bin_auto(timestamp)", decoder)
       Widget.chartQuery widget{Widget.wType = Widget.WTStat, Widget.query = Just "metrics | where metric_name == \"summarize\""}
         `shouldBe` (Just "metrics | where metric_name == \"summarize\" | summarize count(*)", Charts.DTFloat)
-      md <- runQueryEffect tr $ Charts.queryMetrics (Just "postgres") (Just decoder) (Just testPid) query Nothing (Just "1H") Nothing Nothing Nothing Nothing []
+      md <- runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just decoder) (Just testPid) query Nothing (Just "1H") Nothing Nothing Nothing Nothing []
       md.error `shouldBe` Nothing
       V.toList (md.dataset >>= V.catMaybes . V.drop 1) `shouldBe` [42]
-      response <- runQueryEffect tr $ Charts.queryMetricsStream (Just "postgres") (Just decoder) (Just testPid) query Nothing (Just "1H") Nothing Nothing Nothing Nothing []
+      response <- runQueryEffect tr $ Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just decoder) (Just testPid) query Nothing (Just "1H") Nothing Nothing Nothing Nothing []
       frames <- runExceptT $ Source.runSourceT $ Servant.getResponse response
       fmap (viaNonEmpty last) frames `shouldBe` Right (Just $ AE.object ["type" AE..= ("complete" :: Text), "data" AE..= md])
 
   describe "Streaming chart results" do
     let sql = "SELECT i::bigint, 'value'::text, i::double precision FROM generate_series(1, 3) i"
     it "emits partial data and the same final chart as the JSON endpoint" \tr -> do
-      expected <- runQueryEffect tr $ Charts.queryMetrics (Just "postgres") (Just Charts.DTMetric) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing []
-      response <- runQueryEffect tr $ Charts.queryMetricsStream (Just "postgres") (Just Charts.DTMetric) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing []
+      expected <- runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTMetric) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing []
+      response <- runQueryEffect tr $ Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just Charts.DTMetric) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing []
       frames <- runExceptT $ Source.runSourceT $ Servant.getResponse response
       case frames of
         Right values -> do
@@ -745,17 +746,17 @@ spec = sequential $ aroundAll withTestResources do
 
     it "renders rounded numeric chart and stat values from widget SQL" \tr -> do
       let numericSql = "SELECT 1::bigint, 'cpu'::text, ROUND(AVG(1.25::numeric), 2)"
-      expected <- runQueryEffect tr $ Charts.queryMetrics (Just "postgres") (Just Charts.DTMetric) (Just testPid) Nothing (Just numericSql) (Just "24H") Nothing Nothing Nothing Nothing []
+      expected <- runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTMetric) (Just testPid) Nothing (Just numericSql) (Just "24H") Nothing Nothing Nothing Nothing []
       expected.error `shouldBe` Nothing
       expected.dataset `shouldBe` V.singleton (V.fromList [Just 1000, Just 1.25])
-      response <- runQueryEffect tr $ Charts.queryMetricsStream (Just "postgres") (Just Charts.DTMetric) (Just testPid) Nothing (Just numericSql) (Just "24H") Nothing Nothing Nothing Nothing []
+      response <- runQueryEffect tr $ Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just Charts.DTMetric) (Just testPid) Nothing (Just numericSql) (Just "24H") Nothing Nothing Nothing Nothing []
       frames <- runExceptT $ Source.runSourceT $ Servant.getResponse response
       fmap (viaNonEmpty last) frames `shouldBe` Right (Just $ AE.object ["type" AE..= ("complete" :: Text), "data" AE..= expected])
       let scalarSql = "SELECT ROUND(AVG(1.25::numeric), 2)"
-      scalar <- runQueryEffect tr $ Charts.queryMetrics (Just "postgres") (Just Charts.DTFloat) (Just testPid) Nothing (Just scalarSql) (Just "24H") Nothing Nothing Nothing Nothing []
+      scalar <- runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just scalarSql) (Just "24H") Nothing Nothing Nothing Nothing []
       scalar.error `shouldBe` Nothing
       scalar.dataFloat `shouldBe` Just 1.25
-      scalarResponse <- runQueryEffect tr $ Charts.queryMetricsStream (Just "postgres") (Just Charts.DTFloat) (Just testPid) Nothing (Just scalarSql) (Just "24H") Nothing Nothing Nothing Nothing []
+      scalarResponse <- runQueryEffect tr $ Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just scalarSql) (Just "24H") Nothing Nothing Nothing Nothing []
       scalarFrames <- runExceptT $ Source.runSourceT $ Servant.getResponse scalarResponse
       fmap (viaNonEmpty last) scalarFrames `shouldBe` Right (Just $ AE.object ["type" AE..= ("complete" :: Text), "data" AE..= scalar])
 
@@ -768,7 +769,7 @@ spec = sequential $ aroundAll withTestResources do
       withResource tr.trPool (\conn -> PG.query_ conn "SELECT 42::bigint") `shouldReturn` [PG.Only (42 :: Int64)]
 
     it "ends decoder failures with an error frame" \tr -> do
-      response <- runQueryEffect tr $ Charts.queryMetricsStream (Just "postgres") (Just Charts.DTMetric) (Just testPid) Nothing (Just "SELECT 'wrong type'::text, 'value'::text, 1::double precision") (Just "24H") Nothing Nothing Nothing Nothing []
+      response <- runQueryEffect tr $ Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just Charts.DTMetric) (Just testPid) Nothing (Just "SELECT 'wrong type'::text, 'value'::text, 1::double precision") (Just "24H") Nothing Nothing Nothing Nothing []
       frames <- runExceptT $ Source.runSourceT $ Servant.getResponse response
       frames `shouldSatisfy` \case
         Right [AE.Object obj] -> KM.lookup "type" obj == Just (AE.String "error")
@@ -785,7 +786,7 @@ spec = sequential $ aroundAll withTestResources do
       let widget =
             (def :: Widget.Widget)
               { Widget.wType = Widget.WTTable
-              , Widget.dbSource = Just "postgres"
+              , Widget.dbSource = Just Hasql.SqlPostgres
               , Widget.columns = Just [def{Widget.field = "duration", Widget.title = "Duration", Widget.sortable = Just True}]
               , Widget.sql = Just "SELECT n AS duration FROM generate_series(1, 25) n ORDER BY {{table_sort}} LIMIT 20"
               , Widget.defaultSort = Widget.mkSqlOrder "duration ASC"
@@ -804,7 +805,7 @@ spec = sequential $ aroundAll withTestResources do
       let widget =
             (def :: Widget.Widget)
               { Widget.wType = Widget.WTTable
-              , Widget.dbSource = Just "postgres"
+              , Widget.dbSource = Just Hasql.SqlPostgres
               , Widget.columns = Just [def{Widget.field = "duration", Widget.title = "Duration", Widget.sortable = Just True}]
               , Widget.sql = Just "SELECT n AS duration FROM generate_series(1, 25) n ORDER BY {{table_sort}} LIMIT 20"
               , Widget.defaultSort = Widget.mkSqlOrder "duration ASC"
@@ -831,7 +832,7 @@ spec = sequential $ aroundAll withTestResources do
             ]
           fetch widget sortParam = runQueryEffect tr do
             let (query, sql) = Widget.tableQuery widget sortParam
-            Charts.queryMetrics (Just "postgres") (Just Charts.DTText) (Just testPid) query sql Nothing Nothing Nothing Nothing Nothing []
+            Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTText) (Just testPid) query sql Nothing Nothing Nothing Nothing Nothing []
       cases `shouldSatisfy` not . null
       forM_ cases \col -> do
         let quoted = "\"" <> T.replace "\"" "\"\"" col.field <> "\""
@@ -891,11 +892,11 @@ spec = sequential $ aroundAll withTestResources do
 
     it "returns the endpoint's spans when they are client spans" \tr -> do
       void $ seedClientSpan tr
-      md <- runQueryEffect tr $ Charts.queryMetrics (Just "postgres") (Just Charts.DTMetric) (Just testPid) (Just $ "hashes[*]==\"" <> outgoingHash <> "\" | summarize count() by bin_auto(timestamp)") Nothing (Just "24H") Nothing Nothing Nothing Nothing []
+      md <- runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTMetric) (Just testPid) (Just $ "hashes[*]==\"" <> outgoingHash <> "\" | summarize count() by bin_auto(timestamp)") Nothing (Just "24H") Nothing Nothing Nothing Nothing []
       md.error `shouldBe` Nothing
       V.length md.dataset `shouldSatisfy` (> 0)
       -- The filter that caused the blank dashboard: it matches nothing for this endpoint.
-      excluded <- runQueryEffect tr $ Charts.queryMetrics (Just "postgres") (Just Charts.DTMetric) (Just testPid) (Just $ "kind==\"server\" AND hashes[*]==\"" <> outgoingHash <> "\" | summarize count() by bin_auto(timestamp)") Nothing (Just "24H") Nothing Nothing Nothing Nothing []
+      excluded <- runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTMetric) (Just testPid) (Just $ "kind==\"server\" AND hashes[*]==\"" <> outgoingHash <> "\" | summarize count() by bin_auto(timestamp)") Nothing (Just "24H") Nothing Nothing Nothing Nothing []
       V.length excluded.dataset `shouldBe` 0
 
     it "ships a template that does not filter the endpoint's widgets by span kind" \_ -> do
@@ -922,14 +923,14 @@ spec = sequential $ aroundAll withTestResources do
           hostless :: Endpoints.Endpoint
           hostless = (endpoint "hostless-route" "/health"){Endpoints.host = ""}
       runQueryEffect tr $ Endpoints.bulkInsertEndpoints $ V.fromList [endpoint "literal-route" "/v1/deliveries/estimate/v2", endpoint "template-route" "/v1/deliveries/{id}", hostless]
-      filters "literal-route" `shouldReturn`
-        ( Just (Just "attributes___server___address IN ('integrations.routelift.com') AND attributes___http___request___method IN ('POST') AND (attributes___http___route IN ('/v1/deliveries/estimate/v2') OR ((attributes___http___route IS NULL OR attributes___http___route = '') AND attributes___url___path IN ('/v1/deliveries/estimate/v2')))")
-        , Just (Just "attributes.server.address in (\"integrations.routelift.com\") AND attributes.http.request.method in (\"POST\") AND (attributes.http.route in (\"/v1/deliveries/estimate/v2\") or (isempty(attributes.http.route) and attributes.url.path in (\"/v1/deliveries/estimate/v2\")))")
-        )
-      filters "template-route" `shouldReturn`
-        ( Just (Just "(attributes___server___address IN ('integrations.routelift.com') AND attributes___http___request___method IN ('POST') AND attributes___http___route IN ('/v1/deliveries/{id}') OR hashes @> ARRAY['template-route'])")
-        , Just (Just "(attributes.server.address in (\"integrations.routelift.com\") AND attributes.http.request.method in (\"POST\") AND attributes.http.route in (\"/v1/deliveries/{id}\") or hashes[*] in (\"template-route\"))")
-        )
+      filters "literal-route"
+        `shouldReturn` ( Just (Just "attributes___server___address IN ('integrations.routelift.com') AND attributes___http___request___method IN ('POST') AND (attributes___http___route IN ('/v1/deliveries/estimate/v2') OR ((attributes___http___route IS NULL OR attributes___http___route = '') AND attributes___url___path IN ('/v1/deliveries/estimate/v2')))")
+                       , Just (Just "attributes.server.address in (\"integrations.routelift.com\") AND attributes.http.request.method in (\"POST\") AND (attributes.http.route in (\"/v1/deliveries/estimate/v2\") or (isempty(attributes.http.route) and attributes.url.path in (\"/v1/deliveries/estimate/v2\")))")
+                       )
+      filters "template-route"
+        `shouldReturn` ( Just (Just "(attributes___server___address IN ('integrations.routelift.com') AND attributes___http___request___method IN ('POST') AND attributes___http___route IN ('/v1/deliveries/{id}') OR hashes @> ARRAY['template-route'])")
+                       , Just (Just "(attributes.server.address in (\"integrations.routelift.com\") AND attributes.http.request.method in (\"POST\") AND attributes.http.route in (\"/v1/deliveries/{id}\") or hashes[*] in (\"template-route\"))")
+                       )
       filters "hostless-route" `shouldReturn` (Just (Just "hashes @> ARRAY['hostless-route']"), Just (Just "hashes[*] in (\"hostless-route\")"))
       filters "" `shouldReturn` (Just (Just "hashes @> ARRAY['']"), Just (Just "hashes[*] in (\"\")"))
       for_ ["literal-route", "template-route", "hostless-route", ""] \hash -> do
@@ -938,26 +939,39 @@ spec = sequential $ aroundAll withTestResources do
 
     it "recomputes endpoint filters when the dashboard URL carries stale constants" \tr -> do
       dashId <- newDashboard tr "endpoint-stats.yaml" "Endpoint selectors"
-      runQueryEffect tr $ Endpoints.bulkInsertEndpoints $ V.singleton
-        (def :: Endpoints.Endpoint)
-          { Endpoints.projectId = testPid
-          , Endpoints.host = "integrations.routelift.com"
-          , Endpoints.method = "POST"
-          , Endpoints.urlPath = "/v1/deliveries/estimate/v2"
-          , Endpoints.hash = "faa041ff"
-          , Endpoints.outgoing = True
-          }
-      (_, response) <- testServant tr $ Dashboards.dashboardTabGetH testPid dashId "overview" Nothing Nothing Nothing (Just "3D") (Just "true") Nothing
-        [ ("const-endpointFilter", Just "hashes @> ARRAY['']")
-        , ("const-endpointFilter-kql", Just "hashes[*] in (\"\")")
-        , ("var-endpointHash", Just "faa041ff")
-        , ("var-host", Just "integrations.routelift.com")
-        ]
+      runQueryEffect tr
+        $ Endpoints.bulkInsertEndpoints
+        $ V.singleton
+          (def :: Endpoints.Endpoint)
+            { Endpoints.projectId = testPid
+            , Endpoints.host = "integrations.routelift.com"
+            , Endpoints.method = "POST"
+            , Endpoints.urlPath = "/v1/deliveries/estimate/v2"
+            , Endpoints.hash = "faa041ff"
+            , Endpoints.outgoing = True
+            }
+      (_, response) <-
+        testServant tr
+          $ Dashboards.dashboardTabGetH
+            testPid
+            dashId
+            "overview"
+            Nothing
+            Nothing
+            Nothing
+            (Just "3D")
+            (Just "true")
+            Nothing
+            [ ("const-endpointFilter", Just "hashes @> ARRAY['']")
+            , ("const-endpointFilter-kql", Just "hashes[*] in (\"\")")
+            , ("var-endpointHash", Just "faa041ff")
+            , ("var-host", Just "integrations.routelift.com")
+            ]
       let Dashboards.DashboardGet _ _ _ _ params = tabDashboard response
-      [value | (key, value) <- params, key == "const-endpointFilter"] `shouldBe`
-        [Just "attributes___server___address IN ('integrations.routelift.com') AND attributes___http___request___method IN ('POST') AND (attributes___http___route IN ('/v1/deliveries/estimate/v2') OR ((attributes___http___route IS NULL OR attributes___http___route = '') AND attributes___url___path IN ('/v1/deliveries/estimate/v2')))"]
-      [value | (key, value) <- params, key == "const-endpointFilter-kql"] `shouldBe`
-        [Just "attributes.server.address in (\"integrations.routelift.com\") AND attributes.http.request.method in (\"POST\") AND (attributes.http.route in (\"/v1/deliveries/estimate/v2\") or (isempty(attributes.http.route) and attributes.url.path in (\"/v1/deliveries/estimate/v2\")))"]
+      [value | (key, value) <- params, key == "const-endpointFilter"]
+        `shouldBe` [Just "attributes___server___address IN ('integrations.routelift.com') AND attributes___http___request___method IN ('POST') AND (attributes___http___route IN ('/v1/deliveries/estimate/v2') OR ((attributes___http___route IS NULL OR attributes___http___route = '') AND attributes___url___path IN ('/v1/deliveries/estimate/v2')))"]
+      [value | (key, value) <- params, key == "const-endpointFilter-kql"]
+        `shouldBe` [Just "attributes.server.address in (\"integrations.routelift.com\") AND attributes.http.request.method in (\"POST\") AND (attributes.http.route in (\"/v1/deliveries/estimate/v2\") or (isempty(attributes.http.route) and attributes.url.path in (\"/v1/deliveries/estimate/v2\")))"]
 
     it "renders a dashboard table link with the current project and URL-encoded row value" \_ -> do
       let column = (def :: Widget.TableColumn){Widget.field = "session_id", Widget.title = "Session", Widget.link = Just "/p/{{project_id}}/rum?tab=sessions&session={{row.session_id}}"}
@@ -996,7 +1010,7 @@ spec = sequential $ aroundAll withTestResources do
       let sql = "SELECT count(*)::double precision FROM query_cache WHERE source = 'raw-sql'"
           fetch endpoint =
             runQueryEffect tr
-              $ Charts.queryMetrics (Just "postgres") (Just Charts.DTFloat) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing [("var-endpointHash", Just endpoint)]
+              $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing [("var-endpointHash", Just endpoint)]
       initial <- fetch "endpoint-a"
       repeated <- fetch "endpoint-a"
       otherEndpoint <- fetch "endpoint-b"
@@ -1008,9 +1022,9 @@ spec = sequential $ aroundAll withTestResources do
       withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'"
       let sql = "SELECT count(*)::double precision FROM query_cache WHERE source = 'raw-sql'"
           params = [("var-endpointHash", Just "stream-cache")]
-          fetch = runQueryEffect tr $ Charts.queryMetrics (Just "postgres") (Just Charts.DTFloat) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing params
+          fetch = runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing params
           stream = do
-            response <- runQueryEffect tr $ Charts.queryMetricsStream (Just "postgres") (Just Charts.DTFloat) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing params
+            response <- runQueryEffect tr $ Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing params
             frames <- runExceptT (Source.runSourceT $ Servant.getResponse response) >>= either fail pure
             case [v | AE.Object frame <- frames, KM.lookup "type" frame == Just (AE.String "complete"), Just v <- [KM.lookup "data" frame]] of
               [value] -> case AE.fromJSON value of
@@ -1026,7 +1040,7 @@ spec = sequential $ aroundAll withTestResources do
 
     it "expires fixed-window results so late telemetry can replace a cached result" \tr -> E.bracket (getTestTime tr.trTestClock) (setTestTime tr.trTestClock) \_ -> do
       withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'"
-      let fetch = runQueryEffect tr $ Charts.queryMetrics (Just "postgres") (Just Charts.DTFloat) (Just testPid) Nothing (Just "SELECT count(*)::double precision FROM query_cache WHERE source = 'raw-sql'") Nothing (Just "2025-01-01T00:00:00Z") (Just "2025-01-02T00:00:00Z") Nothing Nothing [("var-endpointHash", Just "expiry")]
+      let fetch = runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just "SELECT count(*)::double precision FROM query_cache WHERE source = 'raw-sql'") Nothing (Just "2025-01-01T00:00:00Z") (Just "2025-01-02T00:00:00Z") Nothing Nothing [("var-endpointHash", Just "expiry")]
       initial <- fetch
       advanceTestTime tr 59
       fresh <- fetch
@@ -1038,7 +1052,7 @@ spec = sequential $ aroundAll withTestResources do
 
     it "reuses the default live range when time parameters are omitted" \tr -> E.bracket (getTestTime tr.trTestClock) (setTestTime tr.trTestClock) \_ -> do
       withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'"
-      let fetch = runQueryEffect tr $ Charts.queryMetrics (Just "postgres") (Just Charts.DTFloat) (Just testPid) Nothing (Just "SELECT count(*)::double precision FROM query_cache WHERE source = 'raw-sql'") Nothing Nothing Nothing Nothing Nothing [("var-endpointHash", Just "default-range")]
+      let fetch = runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just "SELECT count(*)::double precision FROM query_cache WHERE source = 'raw-sql'") Nothing Nothing Nothing Nothing Nothing [("var-endpointHash", Just "default-range")]
       -- Both snapshots are within the same fifteen-second cache boundary.
       initial <- fetch
       advanceTestTime tr 0.001
@@ -1050,7 +1064,7 @@ spec = sequential $ aroundAll withTestResources do
             void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'; CREATE SEQUENCE cache_race_calls"
             void $ PG.execute_ conn "CREATE FUNCTION slow_cache_write() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(0.5); RETURN NEW; END $$; CREATE TRIGGER slow_cache_write BEFORE INSERT ON query_cache FOR EACH ROW EXECUTE FUNCTION slow_cache_write()"
           cleanup = withResource tr.trPool \conn -> void $ PG.execute_ conn "DROP TRIGGER slow_cache_write ON query_cache; DROP FUNCTION slow_cache_write(); DROP SEQUENCE cache_race_calls"
-          fetch = runQueryEffect tr $ Charts.queryMetrics (Just "postgres") (Just Charts.DTFloat) (Just testPid) Nothing (Just "SELECT nextval('cache_race_calls')::double precision") (Just "24H") Nothing Nothing Nothing Nothing [("var-endpointHash", Just "write-race")]
+          fetch = runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just "SELECT nextval('cache_race_calls')::double precision") (Just "24H") Nothing Nothing Nothing Nothing [("var-endpointHash", Just "write-race")]
           waitForWrite = do
             sleeping <- withResource tr.trPool \conn -> PG.query_ conn "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event = 'PgSleep')" :: IO [PG.Only Bool]
             unless (sleeping == [PG.Only True]) $ threadDelay 10000 >> waitForWrite
@@ -1061,7 +1075,7 @@ spec = sequential $ aroundAll withTestResources do
         map (.dataFloat) [original, follower] `shouldBe` [Just 1, Just 1]
 
     it "returns results when the cache is unavailable and excludes oversized entries" \tr -> do
-      let fetch sql = runQueryEffect tr $ Charts.queryMetrics (Just "postgres") (Just Charts.DTText) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing [("var-endpointHash", Just "cache-fallback")]
+      let fetch sql = runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTText) (Just testPid) Nothing (Just sql) (Just "24H") Nothing Nothing Nothing Nothing [("var-endpointHash", Just "cache-fallback")]
           rename sql = withResource tr.trPool \conn -> void $ PG.execute_ conn sql
       E.bracket_ (rename "ALTER TABLE query_cache RENAME TO unavailable_query_cache") (rename "ALTER TABLE unavailable_query_cache RENAME TO query_cache") do
         result <- fetch "SELECT 'still available'::text"
@@ -1081,14 +1095,14 @@ spec = sequential $ aroundAll withTestResources do
           fetch window streaming =
             if streaming
               then do
-                response <- runQueryEffect tr $ Charts.queryMetricsStream (Just "postgres") (Just Charts.DTText) (Just testPid) Nothing (Just sql) (Just window) Nothing Nothing Nothing Nothing params
+                response <- runQueryEffect tr $ Charts.queryMetricsStream (Just Hasql.SqlPostgres) (Just Charts.DTText) (Just testPid) Nothing (Just sql) (Just window) Nothing Nothing Nothing Nothing params
                 frames <- runExceptT (Source.runSourceT $ Servant.getResponse response) >>= either fail pure
                 case [v | AE.Object frame <- frames, KM.lookup "type" frame == Just (AE.String "complete"), Just v <- [KM.lookup "data" frame]] of
                   [value] -> case AE.fromJSON value of
                     AE.Success metrics -> pure (metrics :: Charts.MetricsData)
                     AE.Error err -> fail err
                   _ -> fail "missing stream completion"
-              else runQueryEffect tr $ Charts.queryMetrics (Just "postgres") (Just Charts.DTText) (Just testPid) Nothing (Just sql) (Just window) Nothing Nothing Nothing Nothing params
+              else runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTText) (Just testPid) Nothing (Just sql) (Just window) Nothing Nothing Nothing Nothing params
           measured action = do
             start <- getMonotonicTime
             result <- action
@@ -1123,7 +1137,7 @@ spec = sequential $ aroundAll withTestResources do
       withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache WHERE source = 'raw-sql'"
       failed <-
         runQueryEffect tr
-          $ Charts.queryMetrics (Just "postgres") (Just Charts.DTFloat) (Just testPid) Nothing (Just "SELECT missing_cache_column::double precision") (Just "24H") Nothing Nothing Nothing Nothing [("var-endpointHash", Just "endpoint-failure")]
+          $ Charts.queryMetrics (Just Hasql.SqlPostgres) (Just Charts.DTFloat) (Just testPid) Nothing (Just "SELECT missing_cache_column::double precision") (Just "24H") Nothing Nothing Nothing Nothing [("var-endpointHash", Just "endpoint-failure")]
       failed.error `shouldSatisfy` isJust
       rows <- withResource tr.trPool \conn -> PG.query_ conn "SELECT count(*)::bigint FROM query_cache WHERE source = 'raw-sql'" :: IO [PG.Only Int]
       rows `shouldBe` [PG.Only 0]

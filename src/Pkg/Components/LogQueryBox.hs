@@ -16,7 +16,7 @@ import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import NeatInterpolation (text)
-import Pages.Components (ModalCfg (..), filterInputAttr_, keyboardActivateAttr_, modalWith_, options_)
+import Pages.Components (ModalCfg (..), filterInputAttr_, keyboardActivateAttr_, modalWith_, options_, searchInput_)
 import Pkg.SchemaLearning.Catalog (FacetData (..), FacetValue (..))
 import Relude
 import Utils (displayTimestamp, faSprite_, formatUTC, onpointerdown_)
@@ -232,7 +232,7 @@ logQueryBox_ config = do
                   , role_ "button"
                   , tabindex_ "0"
                   , keyboardActivateAttr_
-                  , [__|on click set #saveQueryMdl.dataset.pendingQuery to null then call #saveQueryForm.reset()|]
+                  , [__|on click set #saveQueryMdl.dataset.pendingQuery to null then call #saveQueryForm.reset() then set #queryLibId.value to ''|]
                   ]
                   $ faSprite_ "floppy-disk" "regular" "h-4 w-4"
               button_
@@ -262,20 +262,13 @@ logQueryBox_ config = do
             div_ [class_ "hidden group-has-[#viz-patterns:checked]/pg:flex items-center gap-1"] do
               let isCustom = any (`notElem` map fst knownPatternFields) config.patternSelected
               select_
-                [ class_ "select select-sm max-w-[140px]"
+                [ class_ "select select-sm max-w-[140px] peer/pt has-[option[value=other-field]:checked]:hidden"
                 , id_ "pattern-target-select"
-                , [__|on change
-                      if my value is '__custom__'
-                        add .hidden to me
-                        remove .hidden from #pattern-target-input
-                        call #pattern-target-input.focus()
-                      else
-                        call window.setQueryParamAndReload('pattern_target', my value)
-                      end|]
+                , [__|on change if my value is 'other-field' call #pattern-target-input.focus() else call window.setQueryParamAndReload('pattern_target', my value) end|]
                 ]
-                $ options_ (Just $ bool (fromMaybe "summary" config.patternSelected) "__custom__" isCustom) (knownPatternFields <> [("__custom__", "Other field...")])
+                $ options_ (Just $ bool (fromMaybe "summary" config.patternSelected) "other-field" isCustom) (knownPatternFields <> [("other-field", "Other field...")])
               input_
-                [ class_ $ "input input-sm max-w-[200px]" <> bool " hidden" "" isCustom
+                [ class_ "input input-sm max-w-[200px] hidden peer-has-[option[value=other-field]:checked]/pt:block"
                 , id_ "pattern-target-input"
                 , list_ "pattern-field-list"
                 , placeholder_ "e.g. attributes.url.path"
@@ -287,8 +280,6 @@ logQueryBox_ config = do
                       if my value is not ''
                         call window.setQueryParamAndReload('pattern_target', my value)
                       else
-                        add .hidden to me
-                        remove .hidden from #pattern-target-select
                         set #pattern-target-select.value to 'summary'
                       end|]
                 ]
@@ -502,15 +493,7 @@ queryLibraryContent_ queryLibSaved queryLibRecent =
 
     searchBar_ :: Text -> Html ()
     searchBar_ label = div_ [class_ "flex gap-2 sticky top-0 px-2 py-2 bg-bgRaised border-b border-strokeWeak z-20"] do
-      label_ [class_ "flex h-9 flex-1 items-center gap-2 rounded-md bg-fillWeaker px-3 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-strokeBrand-weak"] do
-        faSprite_ "magnifying-glass" "regular" "h-3.5 w-3.5 opacity-70"
-        input_
-          [ type_ "search"
-          , class_ "min-w-0 grow bg-transparent text-sm outline-none"
-          , placeholder_ "Search"
-          , Aria.label_ $ "Search " <> T.toLower label <> " queries"
-          , filterInputAttr_ $ ".query-item in .dataLibContent" <> label
-          ]
+      searchInput_ "h-9 flex-1 border-0 bg-fillWeaker" ("Search " <> T.toLower label <> " queries") [filterInputAttr_ $ ".dataLibContent" <> label <> " .query-item"]
       when (label == "Saved")
         $ label_ [class_ "tabs tabs-sm tabs-box tabs-outline bg-fillWeak text-textWeak shrink items-center h-8 cursor-pointer has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2"] do
           input_ [class_ "sr-only", type_ "checkbox", id_ "queryLibraryGroup", Aria.label_ "Show all team queries"]

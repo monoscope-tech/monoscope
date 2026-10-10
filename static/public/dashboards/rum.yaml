@@ -98,11 +98,11 @@ tabs:
             title: Page
           - field: views
             title: Views
-            columnType: number
+            column_type: number
             progress: column_percent
           - field: p75_ms
             title: P75
-            columnType: duration
+            column_type: duration
             unit: ms
         sql: |
           SELECT COALESCE(NULLIF(attributes___url___path, ''), replace(name, 'Pageview · ', '')) AS page,
@@ -127,10 +127,10 @@ tabs:
             title: Last page
           - field: page_views
             title: Views
-            columnType: number
+            column_type: number
           - field: errors
             title: Errors
-            columnType: number
+            column_type: number
             progress: column_percent
             progress_variant: error
           - field: last_seen
@@ -233,7 +233,7 @@ tabs:
             title: Vital
           - field: samples
             title: Samples
-            columnType: number
+            column_type: number
             progress: column_percent
           - field: last_seen
             title: Last seen
@@ -289,12 +289,12 @@ tabs:
             title: Message
           - field: events
             title: Events
-            columnType: number
+            column_type: number
             progress: column_percent
             progress_variant: error
           - field: sessions
             title: Sessions
-            columnType: number
+            column_type: number
           - field: last_seen
             title: Last seen
         sql: |

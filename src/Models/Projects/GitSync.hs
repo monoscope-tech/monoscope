@@ -428,7 +428,7 @@ getGitHubCredentials pid = Hasql.interp (selectFrom @GitHubCredential <> [HI.sql
 
 
 -- | One credential, with its PAT decrypted.
-getGitHubCredential :: (DB es, Log :> es) => ByteString -> ProjectId -> GitHubCredentialId -> Eff es (Maybe GitHubCredential)
+getGitHubCredential :: (DB es, IOE :> es, Log :> es) => ByteString -> ProjectId -> GitHubCredentialId -> Eff es (Maybe GitHubCredential)
 getGitHubCredential encKey pid cid =
   Hasql.interp (selectFrom @GitHubCredential <> [HI.sql| WHERE project_id = #{pid} AND id = #{cid} |])
     >>= maybe (pure Nothing) (decryptedOr "credential" pid . decryptAccessToken encKey)
@@ -474,15 +474,15 @@ getGitSyncById :: DB es => ProjectId -> GitHubSyncId -> Eff es (Maybe GitHubSync
 getGitSyncById pid sid = Hasql.interp (selectFrom @GitHubSync <> [HI.sql| WHERE project_id = #{pid} AND id = #{sid} |])
 
 
-getGitSyncsDecrypted :: (DB es, Log :> es) => ByteString -> ProjectId -> Eff es [GitHubSync]
+getGitSyncsDecrypted :: (DB es, IOE :> es, Log :> es) => ByteString -> ProjectId -> Eff es [GitHubSync]
 getGitSyncsDecrypted encKey pid = getGitSyncs pid >>= fmap catMaybes . traverse (\sync -> decryptSync encKey (maybe ImportDashboards (.operation) sync.lastError) sync)
 
 
-getGitSyncByIdDecrypted :: (DB es, Log :> es) => ByteString -> ProjectId -> GitHubSyncId -> SyncOperation -> Eff es (Maybe GitHubSync)
+getGitSyncByIdDecrypted :: (DB es, IOE :> es, Log :> es) => ByteString -> ProjectId -> GitHubSyncId -> SyncOperation -> Eff es (Maybe GitHubSync)
 getGitSyncByIdDecrypted encKey pid sid operation = getGitSyncById pid sid >>= maybe (pure Nothing) (decryptSync encKey operation)
 
 
-decryptSync :: (DB es, Log :> es) => ByteString -> SyncOperation -> GitHubSync -> Eff es (Maybe GitHubSync)
+decryptSync :: (DB es, IOE :> es, Log :> es) => ByteString -> SyncOperation -> GitHubSync -> Eff es (Maybe GitHubSync)
 decryptSync encKey operation sync = case decryptAccessToken encKey sync of
   Left err -> recordSyncError sync.id operation ("Reconnect this repository: " <> err) >> decryptedOr "sync" sync.projectId (Left err)
   Right plain -> pure $ Just plain

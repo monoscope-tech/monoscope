@@ -221,6 +221,7 @@ tests:
       - silently
       - these
       - hs-opentelemetry-instrumentation-auto
+      - hs-opentelemetry-instrumentation-hasql
       - hspec
       - servant-queryparam-core
       - relude >= 1.2.0.0

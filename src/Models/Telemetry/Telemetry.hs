@@ -2,8 +2,8 @@
 
 module Models.Telemetry.Telemetry (
   otelRecordByProjectAndId,
+  methodStyle,
   getSpanRecordsByTraceId,
-  getSpanRecordsByTraceIds,
   convertOtelLogsAndSpansToSpanRecord,
   getUsageTotals,
   SpanRecord (..),
@@ -18,7 +18,6 @@ module Models.Telemetry.Telemetry (
   traceErrorHash,
   bursts,
   isErrorRecord,
-  getProjectStatsForReport,
   Trace (..),
   SeverityLevel (..),
   SpanStatus (..),
@@ -85,7 +84,6 @@ module Models.Telemetry.Telemetry (
   getMetricCatalogPage,
   getMetricGroups,
   MetricCatalogPage (..),
-  getTraceShapes,
   getMetricServiceNames,
   getMetricNames,
   projectsWithRecentMetrics,
@@ -95,9 +93,6 @@ module Models.Telemetry.Telemetry (
   atMapInt,
   spanServiceName,
   spanAttr,
-  getProjectStatsBySpanType,
-  getEndpointStats,
-  getDBQueryStats,
   mkSystemLog,
   insertSystemLog,
   generateSummary,
@@ -113,6 +108,7 @@ import Control.Concurrent.STM qualified as STM
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
+import Data.Aeson.Types qualified as AET
 import Data.ByteString qualified as BS
 import Data.Default (Default (..))
 import Data.Effectful.Hasql (Hasql, retryTransientLoop)
@@ -124,7 +120,7 @@ import Data.Map qualified as Map
 import Data.Scientific qualified as Sci
 import Data.Set qualified as S
 import Data.Text qualified as T
-import Data.Text.Display (Display)
+import Data.Text.Display (Display, display)
 import Data.These (These (..))
 import Data.These qualified as These
 import Data.Time (UTCTime (..))
@@ -141,10 +137,10 @@ import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Simple.ToRow
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
+import Effectful.Exception (throwIO, trySync)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled, labeled)
 import Effectful.Log (Log)
-import Effectful.Time qualified as Time
 import Hasql.Decoders qualified as D
 import Hasql.DynamicStatements.Snippet (Snippet, encoderAndParam, toPreparableStatement)
 import Hasql.Encoders qualified as E
@@ -153,7 +149,7 @@ import Hasql.Session qualified as HSession
 import Hasql.Statement (Statement)
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnum (..), WrappedEnumSC (..), decodeEnumSC, encodeEnumSC, idFromText, unAesonTextMaybe)
+import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnum (..), WrappedEnumSC (..), decodeEnumSC, idFromText, unAesonTextMaybe)
 import Pkg.ErrorFingerprint qualified as EF
 import Pkg.ExtractionWorker qualified as EW
 import Pkg.Metrics qualified as Metrics
@@ -163,7 +159,6 @@ import Relude.Extra.Foldable1 (maximum1, minimum1)
 import System.IO (hPutStrLn)
 import System.Logging qualified as Log
 import System.Tracing (forkWithCtx)
-import UnliftIO (throwIO, tryAny)
 import Utils (classifyUserAgent, encodeText, extractMessageFromLog, formatBytes, getDurationNSMS, jsonToMap, lookupValueText, nonEmptyT, scrubNulText, scrubNulValue)
 import Web.HttpApiData (FromHttpApiData)
 
@@ -426,7 +421,7 @@ enqueueMetricCatalog (MetricCatalogBuffer ref) rows = STM.atomically do
     else Just . V.fromList . Map.elems <$> STM.swapTVar ref mempty
 
 
-flushMetricCatalog :: DB es => MetricCatalogBuffer -> Eff es ()
+flushMetricCatalog :: (DB es, IOE :> es) => MetricCatalogBuffer -> Eff es ()
 flushMetricCatalog (MetricCatalogBuffer ref) = do
   rows <- liftIO $ V.fromList . Map.elems <$> STM.atomically (STM.swapTVar ref mempty)
   upsertMetricMetadata rows
@@ -616,7 +611,7 @@ data MetricDataPoint = MetricDataPoint
 
 metricAttributePaths :: Text -> AE.Value -> [Text]
 metricAttributePaths prefix = \case
-  AE.Object obj -> concatMap (\(key, value) -> metricAttributePaths (prefix <> "." <> AEK.toText key) value) (KEM.toList obj)
+  AE.Object obj -> KEM.foldMapWithKey (\key -> metricAttributePaths (prefix <> "." <> AEK.toText key)) obj
   _ -> [prefix]
 
 
@@ -645,7 +640,7 @@ mkTrace trId startOf endOf svcOf ne =
 
 -- | Fetch a trace's spans once and return both the aggregate 'Trace' and the
 -- spans, so callers rendering the waterfall don't re-query the same trace.
-getTraceDetails :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es) => Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es (Maybe (Trace, [OtelLogsAndSpans]))
+getTraceDetails :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es) => Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es (Maybe (Trace, [OtelLogsAndSpans]))
 getTraceDetails useTf pid trId tme now = do
   spans <- getSpanRecordsByTraceId useTf pid trId tme now Nothing
   pure $ viaNonEmpty (\ne -> (mkTrace trId (.start_time) (.end_time) spanServiceName ne, toList ne)) spans
@@ -660,7 +655,7 @@ getTraceDetails useTf pid trId tme now = do
 -- past this page, so the caller can offer the next one. The 'Trace' aggregate
 -- (span count, duration, services) describes the page, not the whole trace —
 -- it is what the header reports, and the header reports what is on screen.
-getTraceDetailsForView :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es) => Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Maybe Int -> Eff es (Maybe (Trace, V.Vector SpanRecord, Bool))
+getTraceDetailsForView :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es) => Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Maybe Int -> Eff es (Maybe (Trace, V.Vector SpanRecord, Bool))
 getTraceDetailsForView useTf pid trId tme now limitM = do
   (rows, hasMore) <- getTraceRowsWith selectTraceSpanRows (.spanId) (.parentSpanId) useTf pid trId tme now limitM
   pure $ viaNonEmpty (\ne -> (mkTrace trId (.startTime) (.endTime) (resourceServiceName . unAesonTextMaybe . (.resource)) ne, V.mapMaybe (traceSpanRecord trId) (V.fromList (toList ne)), hasMore)) rows
@@ -798,7 +793,7 @@ defaultTraceSpanPage = 300
 --
 -- Parameterized by SELECT builder and id accessors so the full-record and
 -- overlay-projection row types share one implementation.
-getTraceRowsWith :: (DB es, HI.DecodeRow a, Labeled "timefusion" Hasql :> es, Log :> es) => (Text -> UTCTime -> UTCTime -> HI.Sql -> HI.Sql) -> (a -> Maybe Text) -> (a -> Maybe Text) -> Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Maybe Int -> Eff es ([a], Bool)
+getTraceRowsWith :: (DB es, HI.DecodeRow a, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es) => (Text -> UTCTime -> UTCTime -> HI.Sql -> HI.Sql) -> (a -> Maybe Text) -> (a -> Maybe Text) -> Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Maybe Int -> Eff es ([a], Bool)
 getTraceRowsWith select spanIdOf parentIdOf useTf pid trId tme now limitM = Hasql.withHasqlTimefusion useTf do
   let baseT = fromMaybe now tme
       (start, end) = case tme of
@@ -1010,24 +1005,9 @@ resolveTraceOrphans pid trId fetch spanIdOf parentIdOf initial = do
 -- drawing the whole trace, so they should pass a limit generous enough to
 -- contain the span they are searching for — a render-sized page would silently
 -- anchor them on the first span instead.
-getSpanRecordsByTraceId :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es) => Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Maybe Int -> Eff es [OtelLogsAndSpans]
+getSpanRecordsByTraceId :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es) => Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Maybe Int -> Eff es [OtelLogsAndSpans]
 getSpanRecordsByTraceId useTf pid trId tme now limitM =
   fst <$> getTraceRowsWith selectOtelSpans (\r -> r.context >>= (.span_id)) (.parent_id) useTf pid trId tme now limitM
-
-
-getSpanRecordsByTraceIds :: (DB es, Time.Time :> es) => Projects.ProjectId -> V.Vector Text -> Maybe UTCTime -> Eff es [OtelLogsAndSpans]
-getSpanRecordsByTraceIds pid traceIds tme = do
-  now <- Time.currentTime
-  let (start, end') = case tme of
-        Nothing -> (addUTCTime (-86400) now, now)
-        Just ts -> (addUTCTime (-300) ts, addUTCTime 300 ts)
-      traceIdsList = V.toList traceIds
-  Hasql.interp
-    $ selectOtelSpans
-      pid.toText
-      start
-      end'
-      [HI.sql| AND context___trace_id = ANY(#{traceIdsList}) ORDER BY context___trace_id ASC, start_time ASC|]
 
 
 -- | How 'spanRecordInTrace' picks its span within the trace.
@@ -1095,7 +1075,7 @@ getDataPointsData load pid = do
           <> [HI.sql| AND timestamp BETWEEN #{from} AND #{to} |]
           <> [HI.sql| GROUP BY metric_name |]
       let countByName = Map.fromList $ V.toList counts
-      pure $ fmap (\m -> m{dataPointsCount = Just $ fromMaybe 0 $ Map.lookup m.metricName countByName}) catalog
+      pure $ fmap (\m -> m{dataPointsCount = Just $ Map.findWithDefault 0 m.metricName countByName}) catalog
 
 
 getMetricData :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe MetricDataPoint)
@@ -1150,9 +1130,7 @@ data MetricExemplar = MetricExemplar
 -- >>> exemplarPoints (j "[]") <> exemplarPoints AE.Null <> exemplarPoints (j "\"nonsense\"")
 -- []
 exemplarPoints :: AE.Value -> [ExemplarPoint]
-exemplarPoints v = filter (not . T.null . (.traceId)) $ case AE.fromJSON v of
-  AE.Success ps -> ps
-  AE.Error _ -> []
+exemplarPoints v = filter (not . T.null . (.traceId)) $ fromMaybe [] (AET.parseMaybe AE.parseJSON v)
 
 
 -- | Which exemplars 'metricExemplars' looks for: the ones recorded inside a given
@@ -1363,7 +1341,7 @@ getMetricCatalogPage pid sourceM prefixM queryM cutoff limit offset withInactive
       SELECT * FROM otel_metrics_meta WHERE project_id = #{unUUIDId pid} |]
       <> maybe mempty (\source -> [HI.sql| AND service_name = #{source}|]) (selected sourceM)
       <> maybe mempty (\prefix -> [HI.sql| AND starts_with(metric_name, #{prefix})|]) (selected prefixM)
-      <> maybe mempty (\query -> [HI.sql| AND strpos(lower(metric_name), lower(#{query})) > 0 |]) (mfilter (not . T.null) $ T.strip <$> queryM)
+      <> maybe mempty (\query -> [HI.sql| AND strpos(lower(metric_name), lower(#{query})) > 0 |]) (nonEmptyT $ T.strip <$> queryM)
       <> [HI.sql| ), meta AS (
       SELECT metric_name, MAX(metric_type) AS metric_type, MAX(metric_unit) AS metric_unit,
         MAX(metric_description) AS metric_description, MAX(last_seen_at) AS last_seen
@@ -1411,7 +1389,7 @@ getMetricServiceNames :: DB es => Projects.ProjectId -> Maybe Text -> Int -> Eff
 getMetricServiceNames pid searchM limit =
   Hasql.interp
     $ [HI.sql| SELECT DISTINCT service_name FROM otel_metrics_meta WHERE project_id = #{unUUIDId pid}|]
-    <> maybe mempty (\q -> let pat = "%" <> q <> "%" in [HI.sql| AND service_name ILIKE #{pat}|]) (mfilter (not . T.null) searchM)
+    <> maybe mempty (\q -> let pat = "%" <> q <> "%" in [HI.sql| AND service_name ILIKE #{pat}|]) (nonEmptyT searchM)
     <> [HI.sql| ORDER BY service_name LIMIT #{limit}|]
 
 
@@ -1429,7 +1407,7 @@ metricServiceNameFromResource :: Text -> AE.Value -> Text
 metricServiceNameFromResource metricName resource =
   fromMaybe "unknown"
     $ resourceServiceName (jsonToMap resource)
-    <|> (valText =<< getNestedValue ["container", "name"] =<< jsonToMap resource)
+    <|> atMapText "container.name" (jsonToMap resource)
     <|> lookupValueText resource "compose_service"
     <|> if "system." `T.isPrefixOf` metricName then Just "SYSTEM" else Nothing
 
@@ -1623,7 +1601,7 @@ retryHasqlWrite
   -> Eff es (Either SomeException a)
 retryHasqlWrite maxAttempts store act =
   retryTransientLoop maxAttempts "retryHasqlWrite: transient error, retrying" "store" store
-    $ tryAny act
+    $ trySync act
     >>= \case
       Right a -> pure a
       Left e
@@ -1871,7 +1849,7 @@ handOffBatches worker caches records = do
 -- 0x1F-joined and are rebuilt with @string_to_array(_, chr(31))@.
 -- @usePgTypes@: 'True' for PostgreSQL/TimescaleDB (cast id/JSON to
 -- uuid/jsonb), 'False' for TimeFusion (bare text→Variant). See 'insertUnnestStmt'.
-bulkInsertOtelLogsAndSpans :: (DB es, Log :> es) => Bool -> V.Vector OtelLogsAndSpans -> Eff es BulkInsertResult
+bulkInsertOtelLogsAndSpans :: (DB es, IOE :> es, Log :> es) => Bool -> V.Vector OtelLogsAndSpans -> Eff es BulkInsertResult
 bulkInsertOtelLogsAndSpans usePgTypes records
   | V.null records = pure mempty
   | otherwise = do
@@ -2087,9 +2065,6 @@ otelColumns =
       textField nm g = column nm (\r -> scrubNulText <$> g r.row)
       contextText nm f = column nm (\r -> scrubNulText <$> (r.row.context >>= f))
       jsonField nm g = jsonColumn nm (\r -> g r.row)
-      sevText e = e.severity >>= \s -> scrubNulText . toText . encodeEnumSC @"SL" <$> s.severity_text
-      sevNum :: OtelLogsAndSpans -> Maybe Int32
-      sevNum e = fromIntegral . severity_number <$> e.severity
    in [ tsColumn "timestamp" (\r -> Just r.row.timestamp)
       , tsColumn "observed_timestamp" (\r -> r.row.observed_timestamp)
       , castColumn "id" "uuid" (\r -> Just r.row.id)
@@ -2101,8 +2076,8 @@ otelColumns =
       , textField "status_message" (.status_message)
       , textField "level" (.level)
       , jsonField "severity" (fmap AE.toJSON . (.severity))
-      , column "severity___severity_text" (\r -> sevText r.row)
-      , column "severity___severity_number" (\r -> sevNum r.row)
+      , column "severity___severity_text" (\r -> display <$> (r.row.severity >>= (.severity_text)))
+      , column "severity___severity_number" (\r -> fromIntegral @Int @Int32 . (.severity_number) <$> r.row.severity)
       , jsonField "body" (unAesonTextMaybe . (.body))
       , column "duration" (\r -> r.row.duration)
       , tsColumn "start_time" (\r -> Just r.row.start_time)
@@ -2193,7 +2168,7 @@ otelColumns =
         -- `date` is a Date32 Hive key (its pgwire can't decode _date/_timestamptz bind
         -- params, hence text — see 'UnnestElem'); PG's `date` is TIMESTAMPTZ and
         -- coerces the date to midnight, but that value is never read (see otelSpanColsSql).
-        (column "date" (\r -> Just (toText (iso8601Show (utctDay r.row.date))))){selectExpr = \_ a -> a <> "::date"}
+        dateColumn "date" (\r -> Just (toText (iso8601Show (utctDay r.row.date))))
       , column "message_size_bytes" (\r -> Just r.row.message_size_bytes)
       , jsonField "errors" (unAesonTextMaybe . (.errors))
       ]
@@ -2205,7 +2180,7 @@ otelColumns =
 -- unparseable is_remote is logged, not fatal.
 mkOtelRow :: (IOE :> es, Log :> es) => OtelLogsAndSpans -> Eff es OtelRow
 mkOtelRow e = do
-  when (isNothing (UUID.fromText e.id)) $ liftIO $ throwIO (InvalidOtelRowIdException e.id)
+  when (isNothing (UUID.fromText e.id)) $ throwIO (InvalidOtelRowIdException e.id)
   isRemote <- case e.context >>= (.is_remote) of
     Nothing -> pure Nothing
     Just t
@@ -2359,9 +2334,7 @@ extractATErrorFromRecord spanObj =
       typ = fromMaybe "Error" (excAttr "type")
       msg = fromMaybe "" $ excAttr "message" <|> bodyTxt <|> spanObj.status_message
       stack = fromMaybe "" (excAttr "stacktrace")
-   in if T.null msg && T.null stack
-        then Nothing
-        else Just (atErrorFrom spanObj (bool ErrorPatterns.CMSpanStatus ErrorPatterns.CMLogRecord (isJust spanObj.severity || spanObj.kind == Just "log")) Nothing typ msg stack)
+   in atErrorFrom spanObj (bool ErrorPatterns.CMSpanStatus ErrorPatterns.CMLogRecord (isJust spanObj.severity || spanObj.kind == Just "log")) Nothing typ msg stack <$ guard (not (T.null msg && T.null stack))
 
 
 -- | Build an 'ErrorPatterns.ATError' from a span/log plus the extracted
@@ -2422,7 +2395,7 @@ atErrorFrom spanObj mechanism handled typ msg stack =
         , release = attr "service.version"
         , handled
         , mechanism = Just mechanism
-        , level = spanObj.level <|> (toText . encodeEnumSC @"SL" <$> ((.severity_text) =<< spanObj.severity)) <|> ("error" <$ guard (spanObj.status_code == Just "ERROR"))
+        , level = spanObj.level <|> (display <$> (spanObj.severity >>= (.severity_text))) <|> ("error" <$ guard (spanObj.status_code == Just "ERROR"))
         , userAgent = ua
         , browser = withVersion (attr "user_agent.name") (attr "user_agent.version") <|> uaBrowser
         , os = withVersion (attr "os.name" <|> attr "user_agent.os.name") (attr "os.version" <|> attr "user_agent.os.version") <|> uaOs
@@ -2444,123 +2417,6 @@ atErrorFrom spanObj mechanism handled typ msg stack =
         }
 
 
-getProjectStatsForReport :: DB es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [(Text, Int, Int)]
-getProjectStatsForReport projectId start end =
-  Hasql.interp $ selectSpansWhere [HI.sql|resource___service___name AS service_name, (COUNT(*) FILTER (WHERE status_code = 'ERROR' OR attributes___exception___type IS NOT NULL))::bigint AS total_error_events, COUNT(*)::bigint AS total_events|] projectId.toText start end [HI.sql| AND resource___service___name IS NOT NULL GROUP BY resource___service___name ORDER BY total_events DESC|]
-
-
-getProjectStatsBySpanType :: DB es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [(Text, Int, Int)]
-getProjectStatsBySpanType projectId start end =
-  Hasql.interp
-    $ selectSpansWhere
-      [HI.sql|
-          CASE
-            WHEN attributes___http___request___method IS NOT NULL THEN 'http'
-            WHEN attributes___db___system___name IS NOT NULL THEN 'db'
-            WHEN attributes ->>'rpc' IS NOT NULL THEN 'rpc'
-            WHEN attributes ->>'messaging' IS NOT NULL THEN 'messaging'
-            WHEN kind = 'internal' THEN 'internal'
-            ELSE 'other'
-          END AS span_type,
-          COUNT(*)::bigint AS total_events,
-          AVG(duration)::bigint AS avg_duration|]
-      projectId.toText
-      start
-      end
-      [HI.sql| AND kind != 'log' GROUP BY span_type ORDER BY total_events DESC|]
-
-
--- | Strict time bounds, unlike its sibling report queries — so it deliberately does
--- not go through 'selectSpansWhere', whose BETWEEN would include the boundary rows.
-getEndpointStats :: DB es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [(Text, Text, Text, Int64, Int64)]
-getEndpointStats projectId start end =
-  Hasql.interp
-    [HI.sql|
-SELECT
-    COALESCE(attributes___server___address, attributes->'net'->'host'->>'name', attributes->'http'->>'host', NULLIF(split_part(split_part(split_part(attributes___url___full, '://', 2), '/', 1), ':', 1), ''), resource___service___name, '') AS host,
-    COALESCE(attributes___http___request___method, 'GET') AS method,
-    COALESCE(attributes___url___path, '') AS url_path,
-    CAST(ROUND(AVG(COALESCE(duration, 0))) AS BIGINT) AS average_duration,
-    COUNT(*)::bigint AS request_count
-FROM otel_logs_and_spans
-WHERE
-    project_id = #{projectId.toText}
-    AND timestamp > #{start} AND timestamp < #{end}
-    AND attributes___http___request___method IS NOT NULL
-GROUP BY
-    host, method, url_path
-ORDER BY
-    request_count DESC,
-    average_duration DESC
-    |]
-
-
-getDBQueryStats :: DB es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [(Text, Int, Int)]
-getDBQueryStats projectId start end =
-  Hasql.interp
-    $ selectSpansWhere
-      [HI.sql|attributes___db___query___text AS query, ROUND(AVG(duration))::int8 AS avg_duration, COUNT(*)::int8 AS count|]
-      projectId.toText
-      start
-      end
-      [HI.sql| AND kind != 'log' AND attributes___db___query___text IS NOT NULL
-      GROUP BY attributes___db___query___text
-      HAVING ROUND(AVG(duration)/1000000) > 500
-      ORDER BY avg_duration DESC LIMIT 10|]
-
-
-getTraceShapes :: (DB es, Time.Time :> es) => Projects.ProjectId -> V.Vector Text -> Eff es [(Text, Text, Int, Int)]
-getTraceShapes pid trIds = do
-  now <- Time.currentTime
-  Hasql.interp
-    [HI.sql|
-      WITH target_trace_spans AS (
-        SELECT DISTINCT context___trace_id, name
-        FROM otel_logs_and_spans
-        WHERE project_id = #{pid.toText}
-          AND timestamp > #{now}::timestamptz - interval '1 hour'
-          AND context___trace_id = ANY(#{trIds})
-      ),
-      target_shapes AS (
-        SELECT
-          context___trace_id AS target_trace_id,
-          ARRAY_AGG(DISTINCT name ORDER BY name) AS span_names
-        FROM target_trace_spans
-        GROUP BY context___trace_id
-      ),
-      trace_shapes AS (
-        SELECT
-          context___trace_id AS trace_id,
-          ARRAY_AGG(DISTINCT name ORDER BY name) AS span_names
-        FROM otel_logs_and_spans
-        WHERE project_id = #{pid.toText}
-          AND timestamp > #{now}::timestamptz - interval '1 hour'
-          AND context___trace_id IS NOT NULL
-        GROUP BY context___trace_id
-      ),
-      matching_traces AS (
-        SELECT
-          ts.target_trace_id,
-          t.trace_id
-        FROM trace_shapes t
-        JOIN target_shapes ts
-          ON t.span_names = ts.span_names
-      )
-      SELECT
-        m.target_trace_id,
-        s.name,
-        AVG(s.duration)::bigint AS avg_duration,
-        COUNT(*)::bigint AS span_count
-      FROM otel_logs_and_spans s
-      JOIN matching_traces m
-        ON s.context___trace_id = m.trace_id
-      WHERE s.project_id = #{pid.toText}
-        AND s.timestamp > #{now}::timestamptz - interval '1 hour' and s.name IS NOT NULL
-      GROUP BY m.target_trace_id, s.name
-      ORDER BY m.target_trace_id, s.name
-    |]
-
-
 mkSystemLog
   :: Projects.ProjectId
   -> Text -- event name (e.g., "monitor.alert.triggered")
@@ -2574,7 +2430,7 @@ mkSystemLog (UUIDId pid) eventName sev bodyMsg attrs duration ts =
   let
     -- OTel severity numbers: TRACE=1, and each level spans 4.
     sevNum = 1 + 4 * fromEnum sev
-    levelText = T.toUpper $ toText $ encodeEnumSC @"SL" sev
+    levelText = T.toUpper (display sev)
     resource = Map.fromList [("service.name", AE.String "SYSTEM")]
    in
     OtelLogsAndSpans
@@ -2688,7 +2544,7 @@ rowIdentity :: Maybe (Map T.Text AE.Value) -> [(T.Text, T.Text, T.Text)]
 rowIdentity attrsM =
   [ (k, label, v)
   | (k, label) <- identityFields
-  , v <- maybeToList $ atMapText k attrsM >>= guarded (not . T.null)
+  , v <- maybeToList $ nonEmptyT (atMapText k attrsM)
   ]
 
 
@@ -3036,7 +2892,7 @@ bulkInsertOtelMetrics catalogBuffer tfPgTypes target records0 = do
   -- Raw storage is authoritative. Catalog work is buffered and only a full
   -- threshold batch is flushed on the ingestion path.
   when rawPersisted $ whenJustM (liftIO $ enqueueMetricCatalog catalogBuffer records) \batch ->
-    whenLeftM_ (tryAny $ upsertMetricMetadata batch) \e ->
+    whenLeftM_ (trySync $ upsertMetricMetadata batch) \e ->
       Log.logAttention "OTEL_METRICS_META_WRITE_FAILED" (AE.object ["record_count" AE..= V.length batch, "error" AE..= show @Text e])
   pure result
 

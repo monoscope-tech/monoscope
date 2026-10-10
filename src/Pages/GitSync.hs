@@ -49,7 +49,7 @@ import Network.HTTP.Types (urlEncode)
 import OddJobs.Job (createJob)
 import OpenTelemetry.Attributes qualified as Otel
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, mkPageCtx, withSettingsPage)
-import Pages.Components (FieldCfg (..), FieldSize (..), colorChip_, connectionBadge_, copyButton_, filterInputAttr_, formField_, formSelectField_, headerRow_, installationSettingsLink_, primaryButton_, sectionLabel_, settingsH2_, settingsSection_)
+import Pages.Components (FieldCfg (..), FieldSize (..), colorChip_, connectionBadge_, copyButton_, filterInputAttr_, formField_, formSelectField_, headerRow_, installationSettingsLink_, primaryButton_, searchInput_, sectionLabel_, settingsH2_, settingsSection_)
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Git qualified as Git
 import Pkg.Metrics qualified as Metrics
@@ -347,8 +347,8 @@ gitSyncSettingsViewWithError failure hostUrl pid syncM =
             span_ [class_ "break-all"] $ toHtml $ sync.owner <> "/" <> sync.repo
           p_ [class_ "text-xs text-textWeak break-words"] $ toHtml $ Git.hostLabel sync.host <> " · " <> sync.branch <> " · " <> (if isViaApp then "GitHub App" else "Token account")
         if not sync.syncEnabled
-          then connectionBadge_ "Paused"
-          else if isJust sync.lastError then colorChip_ "text-textError bg-fillError-weak" "circle-exclamation" "Sync failed" else connectionBadge_ "Connected"
+          then colorChip_ "" "circle-pause" "Paused"
+          else if isJust sync.lastError then colorChip_ "text-textError bg-fillError-weak" "circle-exclamation" "Sync failed" else connectionBadge_ True
       unless sync.syncEnabled $ p_ [class_ "text-sm text-textWeak"] "Sync is paused. Existing dashboards remain available."
       whenJust sync.lastError \err -> div_ [class_ "space-y-2"] do
         p_ [role_ "status", class_ "text-sm text-textError break-words"] $ toHtml err.message
@@ -625,7 +625,7 @@ instance ToHtml DashboardRepositoryGet where
         GitSync.FileOwnedByDashboard _ -> "Another dashboard already uses this file in the repository. Rename this dashboard or choose another folder before syncing."
       case dash.gitSyncId >>= \sid -> find ((== sid) . (.id)) page.repositories of
         Just repository -> div_ [class_ "rounded-xl border border-strokeWeak p-4 sm:p-5 space-y-3"] do
-          connectionBadge_ "Repository assigned"
+          colorChip_ "text-textSuccess bg-fillSuccess-weak" "circle-check" "Repository assigned"
           p_ [class_ "font-medium text-sm text-textStrong break-all"] $ toHtml $ repository.owner <> "/" <> repository.repo
           p_ [class_ "text-xs text-textWeak break-all"] $ toHtml $ fromMaybe (Git.hostLabel repository.host) repository.apiBase <> " · " <> repository.branch
           whenJust dash.filePath $ p_ [class_ "font-mono text-xs text-textWeak break-all"] . toHtml . (GitSync.getDashboardsPath repository <>)
@@ -825,15 +825,7 @@ githubAppReposH pid instIdParam = withSettingsPage pid "Integrations" \_ -> do
     -- Type-to-filter over a repo list. Only rendered once the list is long enough that scanning
     -- it is the slower option — an account with four repos does not need a search box.
     repoFilter_ :: Int -> Html ()
-    repoFilter_ n = when (n > 8) $ label_ [class_ "input input-sm w-full flex items-center gap-2"] do
-      faSprite_ "magnifying-glass" "regular" "w-3.5 h-3.5 text-iconNeutral shrink-0"
-      input_
-        [ type_ "search"
-        , class_ "grow"
-        , placeholder_ ("Filter " <> show n <> " repositories")
-        , Aria.label_ "Filter repositories"
-        , filterInputAttr_ ".repo-row"
-        ]
+    repoFilter_ n = when (n > 8) $ searchInput_ "w-full" ("Filter " <> show n <> " repositories") [filterInputAttr_ ".repo-row"]
 
 
 -- | Handle repo selection from GitHub App

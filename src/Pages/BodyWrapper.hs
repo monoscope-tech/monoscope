@@ -10,7 +10,7 @@ import Data.Time (UTCTime, diffDays, diffUTCTime, utctDay)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.Tuple.Extra (fst3, uncurry3)
 import Data.Vector qualified as V
-import Effectful (Eff, IOE, (:>))
+import Effectful (Eff, (:>))
 import Effectful.Concurrent.Async (concurrently)
 import Effectful.Reader.Static qualified as EffReader
 import Effectful.Time qualified as Time
@@ -90,7 +90,7 @@ data ActivationProgress = ActivationProgress
   deriving stock (Show)
 
 
-activationProgress :: (Hasql.Hasql :> es, IOE :> es) => Projects.ProjectId -> Bool -> Eff es ActivationProgress
+activationProgress :: Hasql.Hasql :> es => Projects.ProjectId -> Bool -> Eff es ActivationProgress
 activationProgress pid ingestionVerified = do
   rows :: [(Bool, Bool, Bool)] <-
     Hasql.interp
@@ -717,26 +717,14 @@ projectsDropDown currProject projects = do
     do
       when (V.length projects > 1)
         $ div_ [class_ "p-1 pb-2"] do
-          div_ [class_ "relative"] do
-            div_ [class_ "absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"] $ faSprite_ "magnifying-glass" "regular" "h-4 w-4 text-textWeak"
-            input_
-              [ type_ "search"
-              , Aria.label_ "Search projects"
-              , class_ "pl-10 w-full bg-fillWeak rounded-lg border-0 py-2 px-3 text-sm"
-              , placeholder_ "Search..."
-              , [__|on input
-                  show .project_item in #projectsContainer when its textContent.toLowerCase() contains my value.toLowerCase()
-                  then set visibleCount to #projectsContainer.querySelectorAll('.project_item:not([style*="display: none"])').length
-                  if visibleCount == 0 remove .hidden from #noProjectsFound
-                  else add .hidden to #noProjectsFound end|]
-              ]
+          Components.searchInput_ "w-full bg-fillWeak border-0" "Search projects" [Components.filterInputAttr_ "#projectsContainer .project_item"]
       div_ [class_ "space-y-0.5 max-h-[50vh] overflow-y-auto", id_ "projectsContainer"] do
         projects & mapM_ \project -> do
           let isActive = currProject.id == project.id
           a_ [class_ $ "flex justify-between items-center py-2 px-2.5 rounded-lg transition-colors duration-100 project_item min-w-0" <> bool " hover:bg-fillHover" " bg-fillWeak font-medium" isActive, href_ $ "/p/" <> project.id.toText] do
             span_ [class_ "truncate"] $ toHtml project.title
             when isActive $ faSprite_ "check" "regular" "h-3.5 w-3.5 text-textBrand shrink-0"
-        p_ [class_ "hidden text-textWeak text-sm text-center py-4", id_ "noProjectsFound"] "No matching projects"
+        p_ [class_ "hidden text-textWeak text-sm text-center py-4", term "hx-live:.hidden" "q('.project_item:not(.hidden) in #projectsContainer').count > 0"] "No matching projects"
       let actionLink attrs icon label = a_ (class_ "flex items-center gap-2 py-2 px-2.5 rounded-lg hover:bg-fillHover cursor-pointer text-sm" : attrs) $ faSprite_ icon "regular" "h-3.5 w-3.5 text-textWeak" >> span_ label
       div_ [class_ "border-t border-strokeWeak mt-1 pt-1"] do
         actionLink [href_ "/"] "grid" "All projects"
@@ -778,17 +766,8 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
           , Aria.label_ "Toggle sidebar"
           , Aria.expanded_ (bool "true" "false" sess.isSidebarClosed)
           , Aria.controls_ "side-nav-menu"
-          , [__|on keydown[key=='Enter' or key==' ']
-                  halt the event
-                  call me.click()
-                end
-                on change from #sidenav-toggle
-                  if #sidenav-toggle.checked
-                    set @aria-expanded to 'false'
-                  else
-                    set @aria-expanded to 'true'
-                  end
-                end|]
+          , Components.keyboardActivateAttr_
+          , term "hx-live:aria-expanded" "String(!q('#sidenav-toggle').checked)"
           ]
             <> tippyRight_ "Expand sidebar"
         )
@@ -831,8 +810,9 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
                     , [__|on mouseenter
                         set flyout to my.querySelector('.nav-flyout')
                         set sidebarBounds to my.closest('aside').getBoundingClientRect()
-                        set flyoutLeft to Math.max(8, Math.min(sidebarBounds.right + 4, window.innerWidth - flyout.offsetWidth - 8))
-                        set flyoutTop to Math.max(8, Math.min(my.getBoundingClientRect().top, window.innerHeight - flyout.offsetHeight - 8))
+                        set workspaceBounds to my.closest('aside').parentElement.getBoundingClientRect()
+                        set flyoutLeft to Math.max(workspaceBounds.left + 8, Math.min(sidebarBounds.right + 4, workspaceBounds.right - flyout.offsetWidth - 8)) - workspaceBounds.left
+                        set flyoutTop to Math.max(workspaceBounds.top + 8, Math.min(my.getBoundingClientRect().top, workspaceBounds.bottom - flyout.offsetHeight - 8)) - workspaceBounds.top
                         set flyout.style.left to `${flyoutLeft}px`
                         set flyout.style.top to `${flyoutTop}px`
                       end|]
@@ -897,13 +877,9 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
             , Aria.label_ "Filter conversations"
             , placeholder_ "Filter conversations…"
             , class_ "h-7 w-full rounded-md border border-strokeWeak bg-bgBase ps-7 pe-2 text-xs placeholder:text-textWeak focus:border-strokeFocus focus:outline-none"
-            , [__|on input
-                show .ai-thread-item in #ai-conversation-nav when its dataset.threadTitle.toLowerCase() contains my value.toLowerCase()
-                then set visibleCount to #ai-conversation-nav.querySelectorAll('.ai-thread-item:not([style*="display: none"])').length
-                if visibleCount == 0 remove .hidden from #ai-thread-empty
-                else add .hidden to #ai-thread-empty end|]
+            , Components.filterInputAttr_ "#ai-conversation-nav .ai-thread-item"
             ]
-        p_ [id_ "ai-thread-empty", class_ "hidden px-2 py-2 text-xs text-textWeak"] "No matching conversations"
+        p_ [class_ "hidden px-2 py-2 text-xs text-textWeak", term "hx-live:.hidden" "q('.ai-thread-item:not(.hidden) in #ai-conversation-nav').count > 0"] "No matching conversations"
       let (routines, chats) = partition (isJust . (.routineInterval)) conversations
           conversationHref c = "/p/" <> project.id.toText <> "/ai/" <> c.conversationId.toText
           scheduleLabel c
@@ -927,9 +903,9 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
             let isActive = activeConversationId == Just c.conversationId
                 href = conversationHref c
                 actionsId = "ai-thread-actions-" <> c.conversationId.toText
-             in div_ [data_ "thread-title" c.title, class_ $ "ai-thread-item group/thread relative flex min-w-0 items-center rounded-md text-textWeak/80 hover:bg-fillWeak/70 hover:text-textStrong transition-[color,background-color] duration-100" <> bool "" " text-textStrong font-medium" isActive] do
+             in div_ [data_ "filter" c.title, class_ $ "ai-thread-item group/thread relative flex min-w-0 items-center rounded-md text-textWeak/80 hover:bg-fillWeak/70 hover:text-textStrong transition-[color,background-color] duration-100" <> bool "" " text-textStrong font-medium" isActive] do
                   a_ ([href_ href, Aria.label_ c.title, class_ "flex min-w-0 flex-1 items-center justify-center py-1 group-has-[#sidenav-toggle:checked]/pg:justify-start group-has-[#sidenav-toggle:checked]/pg:ps-2 group-has-[#sidenav-toggle:checked]/pg:pe-1 focus-visible:outline-2 focus-visible:outline-offset-2"] <> [term "aria-current" "page" | isActive] <> tippyRight_ c.title) do
-                    faSprite_ "message" "regular" "group-has-[#sidenav-toggle:checked]/pg:hidden w-3.5 h-3.5 shrink-0"
+                    faSprite_ "comment" "regular" "group-has-[#sidenav-toggle:checked]/pg:hidden w-3.5 h-3.5 shrink-0"
                     span_ [class_ $ "hidden group-has-[#sidenav-toggle:checked]/pg:block me-2 h-1 w-1 shrink-0 rounded-full " <> bool "bg-transparent" "bg-fillBrand-strong" isActive, Aria.hidden_ "true"] ""
                     span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block min-w-0 flex-1 truncate leading-5"] $ toHtml c.title
                   span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block shrink-0 pe-2 text-2xs tabular-nums text-textDisabled group-hover/thread:opacity-0 group-focus-within/thread:opacity-0 transition-opacity duration-100", title_ $ toText $ formatTime defaultTimeLocale "%e %b %Y, %H:%M UTC" c.updatedAt] $ toHtml $ relativeTime c.updatedAt

@@ -6,7 +6,6 @@ module Models.Apis.Endpoints (
   HostEvents (..),
   bulkInsertEndpoints,
   bulkInsertHosts,
-  countEndpointsForHost,
   dependenciesAndEventsCount,
   StatsMode (..),
   Direction (..),
@@ -288,9 +287,8 @@ directionClauseSql :: Maybe Direction -> HI.Sql
 directionClauseSql = foldMap \d -> let o = d == Outgoing in [HI.sql| AND outgoing = #{o} |]
 
 
--- | Row filters + pagination for one read of the endpoints list. A record rather
--- than eight positional arguments so 'endpointRequestStatsByProject' and
--- 'countEndpointsForHost' provably paginate over the same rows.
+-- | Row filters + pagination for one read of the endpoints list, as a record rather
+-- than eight positional arguments.
 data EndpointQuery = EndpointQuery
   { direction :: Direction
   , archived :: Bool
@@ -321,8 +319,7 @@ data HostQuery = HostQuery
   deriving anyclass (Hashable)
 
 
--- | Row filters shared by 'endpointRequestStatsByProject' and 'countEndpointsForHost'
--- (optional host, url_path search, archived state) so their paginators stay in sync.
+-- | Row filters of 'endpointRequestStatsByProject': optional host, url_path search, archived state.
 endpointFiltersSql :: EndpointQuery -> HI.Sql
 endpointFiltersSql q =
   foldMap (\h -> [HI.sql| AND enp.host = #{h}|]) q.host
@@ -600,22 +597,6 @@ hostRetentionSweep pid traffic = do
   pure (V.map HI.getOneColumn unarchived, archivedCount)
   where
     (hs, os, tss) = V.unzip3 $ V.fromList traffic
-
-
--- | Count of endpoints under a (project, direction), under the same row filters as
--- 'endpointRequestStatsByProject'.
-countEndpointsForHost :: DB es => Projects.ProjectId -> EndpointQuery -> Eff es Int
-countEndpointsForHost pid q =
-  fromMaybe 0
-    <$> Hasql.interpOne
-      [HI.sql|
-        SELECT COUNT(*)::bigint
-        FROM apis.endpoints enp
-        JOIN apis.hosts h ON (h.project_id = enp.project_id AND h.host = enp.host AND h.outgoing = enp.outgoing)
-        WHERE enp.project_id = #{pid} AND enp.outgoing = #{outgoing}
-          ^{endpointFiltersSql q} |]
-  where
-    outgoing = q.direction == Outgoing
 
 
 -- | Paginated endpoint list with optional url_path LIKE filter. Returns (rows, total count).

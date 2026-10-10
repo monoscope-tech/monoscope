@@ -1497,6 +1497,33 @@ spec = around withTestResources do
         outputs `shouldSatisfy` any (T.isInfixOf "Checkout failure")
         outputs `shouldSatisfy` any (T.isInfixOf ownIncident.id.toText)
 
+      it "listIssues_acknowledged_excludesArchived" \tr -> do
+        withResource tr.trPool \conn ->
+          void
+            $ PGS.execute
+              conn
+              [sql|INSERT INTO apis.issues (project_id, issue_type, target_hash, title, service, environment, acknowledged_at, archived_at)
+                VALUES (?, 'runtime_exception', gen_random_uuid()::text, 'Acked and open', 'checkout', 'production', now(), NULL),
+                       (?, 'runtime_exception', gen_random_uuid()::text, 'Acked then archived', 'checkout', 'production', now(), now())|]
+              (testPid, testPid)
+        observed <- newIORef ([] :: [Text])
+        let provider = interpose @ELLM.LLM \_ -> \case
+              ELLM.CallAgenticChat history _ _ -> do
+                let results = [Chat.content message | message <- toList history, Chat.role message == Chat.Tool]
+                writeIORef observed results
+                pure $ Right $ case results of
+                  [] -> Chat.Message Chat.Assistant "" Chat.defaultMessageData{Chat.toolCalls = Just [Chat.ToolCall "issues" "function" (Chat.ToolFunction "list_issues" $ one ("status", AE.String "acknowledged"))]}
+                  _ -> Chat.Message Chat.Assistant "Done." Chat.defaultMessageData
+              ELLM.CallLLM{} -> pure $ Left "Unexpected non-agent call"
+              ELLM.EmbedDocuments{} -> pure $ Left "Unexpected embedding call"
+        result <- runTestBg frozenTime tr $ provider $ AI.runAgenticChatWithHistory (AI.defaultAgenticConfig testPid) "List acknowledged issues" "model" "key"
+        result `shouldSatisfy` isRight
+        readIORef observed >>= \case
+          [output] -> do
+            output `shouldSatisfy` T.isInfixOf "Acked and open"
+            output `shouldSatisfy` (not . T.isInfixOf "Acked then archived")
+          other -> fail $ "Expected one tool result, got " <> show (length other)
+
       it "finds earlier related episodes with explicit match evidence and recorded outcomes inside the authorized project" \tr -> do
         setupLinkedSlackData tr testPid "T_RELATED"
         otherPid <- createTestProject tr "Unrelated history"

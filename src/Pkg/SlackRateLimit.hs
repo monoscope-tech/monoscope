@@ -8,12 +8,12 @@ import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Effectful (Eff, type (:>))
 import Effectful.Dispatch.Dynamic (interpose, send)
+import Effectful.Exception (throwIO)
 import Hasql.Interpolate qualified as HI
 import Network.HTTP.Types (statusCode, statusIsSuccessful)
 import Network.Wreq qualified as Wreq
 import Relude
 import System.Types (DB)
-import UnliftIO.Exception (throwIO)
 
 
 newtype SlackRateLimited = SlackRateLimited UTCTime

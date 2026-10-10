@@ -47,7 +47,7 @@ import Relude.Extra.Tuple (traverseToFst)
 import System.Config (AuthContext (config, jobsPool, s3HttpManager), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, DB, RespHeaders, addRespHeaders)
-import UnliftIO.Exception (finally, tryAny)
+import UnliftIO.Exception (finally, tryAny, withException)
 
 
 data ReplayPost = ReplayPost
@@ -591,7 +591,7 @@ fetchIndividualsRaw manager conn bucket fileKeys logCtx = do
 
 -- | Fetch events for a session. Returns `Left` with a user-facing message on
 -- unrecoverable failure, `Right` on success (including empty or partial results).
-getSessionEvents :: (DB es, Log :> es) => Manager -> Minio.ConnectInfo -> Projects.ProjectId -> Minio.Bucket -> UUID.UUID -> Eff es (Either Text (BL.ByteString, Bool))
+getSessionEvents :: (DB es, IOE :> es, Log :> es) => Manager -> Minio.ConnectInfo -> Projects.ProjectId -> Minio.Bucket -> UUID.UUID -> Eff es (Either Text (BL.ByteString, Bool))
 getSessionEvents manager conn pid bucket sessionId = do
   let sessionStr = UUID.toText sessionId
       logCtx = HM.fromList [("session", sessionStr), ("projectId", pid.toText)]
@@ -671,7 +671,7 @@ data SessionMeta = SessionMeta
 
 -- | Never fatal: a lookup failure logs and yields Nothing so the player still
 -- renders without identity.
-sessionMetadata :: (DB es, Log :> es) => Projects.ProjectId -> UUID.UUID -> HashMap Text Text -> Eff es (Maybe SessionMeta)
+sessionMetadata :: (DB es, IOE :> es, Log :> es) => Projects.ProjectId -> UUID.UUID -> HashMap Text Text -> Eff es (Maybe SessionMeta)
 sessionMetadata pid sessionId logCtx = do
   r <- tryAny do
     rows :: [SessionMeta] <-
@@ -743,8 +743,7 @@ maxFilesPerMerge = 25
 -- | Upload the events for one replay message. Takes the events sub-tree as
 -- raw JSON bytes (already validated as a JSON value by the splitter) and
 -- streams them straight into MinIO with no AE.encode round-trip.
-{-# ANN saveReplayMinio ("HLint: ignore Use alternative" :: String) #-}
-saveReplayMinio :: (DB es, Log :> es, Time :> es) => Manager -> EnvConfig -> Pool Connection -> Text -> ReplayPayload -> Eff es (Maybe Text)
+saveReplayMinio :: (DB es, IOE :> es, Log :> es, Time :> es) => Manager -> EnvConfig -> Pool Connection -> Text -> ReplayPayload -> Eff es (Maybe Text)
 saveReplayMinio manager envCfg jobsPool ackId payload =
   Projects.projectById payload.projectId >>= \case
     Nothing -> pure $ Just ackId
@@ -757,7 +756,7 @@ saveReplayMinio manager envCfg jobsPool ackId payload =
               timeStr = toText $ formatTime defaultTimeLocale "%Y%m%dT%H%M%S%q" now
               objKeyText = replayObjectPrefix payload.projectId now payload.sessionId <> timeStr <> ".json"
               body = payload.eventsBytes
-          liftIO (Storage.runMinio manager conn $ Minio.putObject bucket objKeyText (CC.sourceLazy (BL.fromStrict body)) (Just $ fromIntegral $ BS.length body) Minio.defaultPutObjectOptions) >>= \case
+          liftIO (Storage.runMinio manager conn $ Minio.putObject bucket objKeyText (CC.sourceLazy (fromStrict body)) (Just $ fromIntegral $ BS.length body) Minio.defaultPutObjectOptions) >>= \case
             Right _ -> do
               let ReplayPayload{sessionId, projectId, userId, userEmail, userName} = payload
               -- The object is durable BEFORE anything records its key, so a failure
@@ -768,17 +767,8 @@ saveReplayMinio manager envCfg jobsPool ackId payload =
               -- scripts/local/replay-repair-untracked.sh takes exactly this input.
               -- Re-thrown, so the nack/retry path is unchanged (never silent-ack).
               countRows :: [Int] <-
-                either
-                  ( \(e :: SomeException) -> do
-                      Log.logAttention
-                        "Replay object saved but recording its key failed; object is orphaned"
-                        (HM.fromList [("session", session), ("projectId", payload.projectId.toText), ("orphaned_key", objKeyText), ("error", toText (displayException e))])
-                      liftIO $ throwIO e
-                  )
-                  pure
-                  =<< tryAny
-                    ( Hasql.interp
-                        [HI.sql|
+                Hasql.interp
+                  [HI.sql|
                 INSERT INTO projects.replay_sessions (session_id, project_id, last_event_at, event_file_count, file_keys, user_id, user_email, user_name)
                 VALUES (#{sessionId}, #{projectId}, #{now}, 1, ARRAY[#{objKeyText}]::text[], #{userId}, #{userEmail}, #{userName})
                 ON CONFLICT (session_id) DO UPDATE SET
@@ -791,7 +781,10 @@ saveReplayMinio manager envCfg jobsPool ackId payload =
                   updated_at = #{now}
                 RETURNING event_file_count
               |]
-                    )
+                  `withException` \(e :: SomeException) ->
+                    Log.logAttention
+                      "Replay object saved but recording its key failed; object is orphaned"
+                      (HM.fromList [("session", session), ("projectId", payload.projectId.toText), ("orphaned_key", objKeyText), ("error", toText (displayException e))])
               let fileCount = fromMaybe 0 (listToMaybe countRows)
               -- Enqueue at exact multiples of the threshold so a busy session
               -- with N events past 14/28/42/... fires at most one merge per
@@ -817,7 +810,7 @@ replaySessionGetH pid sessionId = do
 -- before invoking this. Events stay as raw bytes end-to-end — never decoded into
 -- an `AE.Array` — and are spliced verbatim into the response by `RawJson`.
 fetchReplaySession
-  :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Log :> es)
+  :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, IOE :> es, Log :> es)
   => Projects.Project -> UUID.UUID -> Eff es ReplaySessionResp
 fetchReplaySession p sessionId = do
   ctx <- Effectful.Reader.Static.ask @AuthContext
@@ -871,7 +864,7 @@ data ReplayManifest = ReplayManifest
 -- monolith, registered as a shard) then the unmerged individual tail. Pure DB
 -- reads — never lists or opens S3 (minio-hs can't list R2), so it's cheap
 -- regardless of session size and correct on R2.
-buildReplayManifest :: (DB es, Log :> es) => Projects.Project -> UUID.UUID -> Eff es ReplayManifest
+buildReplayManifest :: (DB es, IOE :> es, Log :> es) => Projects.Project -> UUID.UUID -> Eff es ReplayManifest
 buildReplayManifest p sessionId = do
   let pid = p.id
       summaryCtx = HM.fromList [("session", UUID.toText sessionId), ("projectId", pid.toText)]

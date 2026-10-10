@@ -176,7 +176,9 @@ test-shards:
 test-unit:
 	cabal test unit-tests -j --ghc-options="-O0"  --test-show-details=direct --test-options='--color --jobs=$(NCPUS)'
 
+# doctest loads the libraries from the inplace package db, so they must be built first (as CI does).
 test-doctests:
+	cabal build monoscope:lib:monoscope monoscope-shared:lib:monoscope-shared monoscope-cli:lib:monoscope-cli -f-devtest -j --ghc-options="-O0"
 	cabal test doctests -f-devtest -j --ghc-options="-O0" --test-show-details=direct
 
 # USE_EXTERNAL_DB=true is load-bearing on every target below that touches the DB: it selects
