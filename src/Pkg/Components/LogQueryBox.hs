@@ -262,20 +262,13 @@ logQueryBox_ config = do
             div_ [class_ "hidden group-has-[#viz-patterns:checked]/pg:flex items-center gap-1"] do
               let isCustom = any (`notElem` map fst knownPatternFields) config.patternSelected
               select_
-                [ class_ "select select-sm max-w-[140px]"
+                [ class_ "select select-sm max-w-[140px] peer/pt has-[option[value=other-field]:checked]:hidden"
                 , id_ "pattern-target-select"
-                , [__|on change
-                      if my value is '__custom__'
-                        add .hidden to me
-                        remove .hidden from #pattern-target-input
-                        call #pattern-target-input.focus()
-                      else
-                        call window.setQueryParamAndReload('pattern_target', my value)
-                      end|]
+                , [__|on change if my value is 'other-field' call #pattern-target-input.focus() else call window.setQueryParamAndReload('pattern_target', my value) end|]
                 ]
-                $ options_ (Just $ bool (fromMaybe "summary" config.patternSelected) "__custom__" isCustom) (knownPatternFields <> [("__custom__", "Other field...")])
+                $ options_ (Just $ bool (fromMaybe "summary" config.patternSelected) "other-field" isCustom) (knownPatternFields <> [("other-field", "Other field...")])
               input_
-                [ class_ $ "input input-sm max-w-[200px]" <> bool " hidden" "" isCustom
+                [ class_ "input input-sm max-w-[200px] hidden peer-has-[option[value=other-field]:checked]/pt:block"
                 , id_ "pattern-target-input"
                 , list_ "pattern-field-list"
                 , placeholder_ "e.g. attributes.url.path"
@@ -287,8 +280,6 @@ logQueryBox_ config = do
                       if my value is not ''
                         call window.setQueryParamAndReload('pattern_target', my value)
                       else
-                        add .hidden to me
-                        remove .hidden from #pattern-target-select
                         set #pattern-target-select.value to 'summary'
                       end|]
                 ]
