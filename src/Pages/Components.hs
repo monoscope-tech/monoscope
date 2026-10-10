@@ -1,6 +1,6 @@
 {-# LANGUAGE NoFieldSelectors #-}
 
-module Pages.Components (drawer_, drawerLoadingSkeleton_, tableSkeleton_, deferredShell_, Deferred (..), RefreshingDeferred (..), timeRefreshListener_, timeWindowVals_, withDeferredBody, emptyState_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), facetRail_, facetSection_, facetOption_, factGrid_, metaChip_, resizer_, detailTab_, httpTab_, tabPanel_, dateTime, localTimeFmt_, paymentPlanPicker, navBar, modal_, primaryButton_, headerRow_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, copyButton_, RowAction (..), rowActions_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, detailsClosedBelowAttr_, installationSettingsLink_, keyboardActivateAttr_, copySourceAttr_, filterInputAttr_, sparkline_, periodToggle_, abbreviateUnit, agoText, stackTrace_, durationMenu_, durationQuery, untilLabel) where
+module Pages.Components (drawer_, drawerLoadingSkeleton_, tableSkeleton_, deferredShell_, Deferred (..), RefreshingDeferred (..), timeRefreshListener_, timeWindowVals_, withDeferredBody, emptyState_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), facetRail_, facetSection_, facetOption_, factGrid_, metaChip_, resizer_, detailTab_, httpTab_, tabPanel_, dateTime, localTimeFmt_, paymentPlanPicker, navBar, modal_, primaryButton_, headerRow_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, copyButton_, RowAction (..), rowActions_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, detailsClosedBelowAttr_, installationSettingsLink_, keyboardActivateAttr_, copySourceAttr_, filterInputAttr_, sparkline_, periodToggle_, abbreviateUnit, agoText, stackTrace_, durationMenu_, durationQuery, untilLabel) where
 
 import Data.Default (Default (..))
 import Data.List (elemIndex, lookup)
@@ -1087,18 +1087,6 @@ infoBanner_ :: Monad m => HtmlT m () -> HtmlT m ()
 infoBanner_ content = div_ [class_ "rounded-lg bg-fillBrand-weak p-3 text-xs text-textStrong"] do
   faSprite_ "circle-info" "regular" "h-3.5 w-3.5 inline mr-1.5"
   content
-
-
--- | Navigation link row for settings pages (icon + title + description + chevron)
-settingsNavLink_ :: Monad m => Text -> Text -> Text -> Text -> HtmlT m ()
-settingsNavLink_ href icon title desc =
-  a_ [href_ href, class_ "flex items-center justify-between gap-3 p-3 group hover:bg-fillWeaker transition-colors first:rounded-t-xl last:rounded-b-xl"] do
-    div_ [class_ "flex items-center gap-3 min-w-0"] do
-      faSprite_ icon "solid" "h-4 w-4 text-iconNeutral shrink-0"
-      div_ [class_ "min-w-0"] do
-        span_ [class_ "text-sm font-medium text-textStrong block"] $ toHtml title
-        p_ [class_ "text-xs text-textWeak"] $ toHtml desc
-    faSprite_ "chevron-right" "regular" "w-3 h-3 text-iconNeutral shrink-0"
 
 
 -- | \"Repository missing?\" escape hatch under GitHub-App repo pickers: the list is

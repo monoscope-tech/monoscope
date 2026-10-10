@@ -14,12 +14,16 @@ module Models.Projects.GitSync (
   getRepository,
   connectRepository,
   removeRepository,
+  RemovalError (..),
   enableRepositoryDashboardSync,
   SyncAction (..),
+  SyncOperation (..),
+  SyncFailure (..),
   getGitHubSync,
   getGitSyncs,
   getGitSyncsDecrypted,
   getGitSyncById,
+  getGitSyncByIdDecrypted,
   getGitSyncsByRepo,
   insertGitHubSync,
   updateGitHubSync,
@@ -29,6 +33,9 @@ module Models.Projects.GitSync (
   clearAnnouncedRevision,
   recordSyncError,
   recordPushSuccess,
+  SyncLease,
+  claimSyncLease,
+  releaseSyncLease,
   deleteGitHubSync,
   getRepositoryDashboardState,
   assignDashboardRepository,
@@ -57,9 +64,16 @@ module Models.Projects.GitSync (
   githubToken,
   generateAppJWT,
   getInstallationToken,
-  getInstallationAccount,
   installationSettingsUrl,
   InstallationToken (..),
+  InstallDest (..),
+  InstallationStep (..),
+  InstallationAttempt (..),
+  createInstallationAttempt,
+  consumeInstallationAttempt,
+  InstallationError (..),
+  installationErrorMessage,
+  authorizeGitHubInstallation,
   -- Re-exported from "Pkg.Git" so a caller needs one import, not two
   Git.GitHost (..),
   Git.GitConn (..),
@@ -71,31 +85,36 @@ module Models.Projects.GitSync (
   Git.hostSlug,
 ) where
 
-import Control.Lens ((.~), (?~), (^.), (^?))
+import Control.Lens (toListOf, (.~), (?~), (^.), (^?))
 import Data.Aeson qualified as AE
-import Data.Aeson.Lens (key, _String)
+import Data.Aeson.Lens (key, values, _Integer, _String)
 import Data.Base64.Types (extractBase64)
 import Data.ByteString qualified as BS
 import Data.Char (isAlphaNum)
 import Data.Default (Default (..), def)
 import Data.Effectful.Hasql qualified as Hasql
+import Data.Effectful.UUID qualified as UUIDEff
 import Data.Effectful.Wreq qualified as W
 import Data.Generics.Labels ()
 import Data.Generics.Product.Fields qualified as GL
 import Data.Map.Strict qualified as M
 import Data.Text qualified as T
-import Data.Time (UTCTime)
+import Data.Time (UTCTime, addUTCTime)
 import Data.Time.Clock.POSIX (getPOSIXTime, posixSecondsToUTCTime)
 import Data.UUID qualified as UUID
 import Data.Yaml qualified as Yaml
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, ToRow)
+import Database.PostgreSQL.Simple.FromField (FromField)
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
+import Database.PostgreSQL.Simple.ToField (ToField)
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, (:>))
 import Effectful.Log (Log)
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
+import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
 import Jose.Jwa (JwsAlg (RS256))
 import Jose.Jws qualified as Jws
@@ -103,8 +122,8 @@ import Jose.Jwt (Jwt (..))
 import Models.Projects.Dashboards (Dashboard, DashboardId)
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectApiKeys (decryptAPIKey, encryptAPIKey)
-import Models.Projects.Projects (ProjectId)
-import Pkg.DeriveUtils (DB, UUIDId (..), selectFrom)
+import Models.Projects.Projects (PersistentSessionId, ProjectId)
+import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..), selectFrom)
 import Pkg.Git qualified as Git
 import Relude
 import Relude.Extra.Bifunctor (bimapF)
@@ -161,25 +180,28 @@ connectRepository pid cid repository =
                  RETURNING * |]
 
 
-removeRepository :: DB es => ProjectId -> RepositoryId -> Eff es Bool
-removeRepository pid rid = Hasql.transaction TxS.ReadCommitted TxS.Write do
-  repositories <- Hasql.queryTx @[Repository] (selectFrom @Repository <> [HI.sql| WHERE project_id = #{pid} AND id = #{rid} FOR UPDATE |])
-  case repositories of
-    [] -> pure False
-    repository : _ -> do
-      syncs <- Hasql.queryTx @[GitHubSync] (selectFrom @GitHubSync <> [HI.sql| WHERE project_id = #{pid} AND host = #{repository.host} AND api_base IS NOT DISTINCT FROM #{repository.apiBase} AND owner = #{repository.owner} AND repo = #{repository.repo} FOR UPDATE |])
-      for_ syncs \sync -> do
-        Hasql.executeTx [HI.sql| UPDATE projects.dashboards SET git_sync_id = NULL, file_path = NULL, file_sha = NULL WHERE project_id = #{pid} AND git_sync_id = #{sync.id} |]
-        Hasql.executeTx [HI.sql| DELETE FROM projects.git_sync WHERE project_id = #{pid} AND id = #{sync.id} |]
-      when (repository.host == Git.GitHub && isNothing repository.apiBase) $
-        Hasql.executeTx [HI.sql| INSERT INTO projects.pr_review_settings (project_id, owner, repo, enabled, include_evidence)
+data RemovalError = ConnectionMissing | SyncRunning
+  deriving stock (Eq, Show)
+
+
+removeRepository :: DB es => ProjectId -> RepositoryId -> Eff es (Either RemovalError ())
+removeRepository pid rid = Hasql.transaction TxS.ReadCommitted TxS.Write $ runExceptT do
+  found <- lift $ Hasql.queryTx @(Maybe Repository) (selectFrom @Repository <> [HI.sql| WHERE project_id = #{pid} AND id = #{rid} FOR UPDATE |])
+  repository <- hoistEither $ maybeToRight ConnectionMissing found
+  sync <- lift $ Hasql.queryTx @(Maybe (HI.OneColumn GitHubSyncId)) [HI.sql| SELECT id FROM projects.git_sync WHERE project_id = #{pid} AND host = #{repository.host} AND api_base IS NOT DISTINCT FROM #{repository.apiBase} AND owner = #{repository.owner} AND repo = #{repository.repo} FOR UPDATE |]
+  for_ sync \(HI.OneColumn sid) -> ExceptT $ deleteSync sid
+  lift do
+    when (repository.host == Git.GitHub && isNothing repository.apiBase)
+      $ Hasql.executeTx
+        [HI.sql| INSERT INTO projects.pr_review_settings (project_id, owner, repo, enabled, include_evidence)
           VALUES (#{pid}, lower(#{repository.owner}), lower(#{repository.repo}), false, false)
           ON CONFLICT (project_id, owner, repo) DO UPDATE SET enabled = false |]
-      Hasql.executeTx [HI.sql| DELETE FROM projects.code_mappings m USING projects.git_credentials c
+    Hasql.executeTx
+      [HI.sql| DELETE FROM projects.code_mappings m USING projects.git_credentials c
         WHERE m.project_id = #{pid} AND m.credential_id = c.id AND c.project_id = m.project_id
           AND m.owner = #{repository.owner} AND m.repo = #{repository.repo}
           AND c.host = #{repository.host} AND c.api_base IS NOT DISTINCT FROM #{repository.apiBase} |]
-      True <$ Hasql.executeTx [HI.sql| DELETE FROM projects.repositories WHERE project_id = #{pid} AND id = #{rid} |]
+    Hasql.executeTx [HI.sql| DELETE FROM projects.repositories WHERE project_id = #{pid} AND id = #{rid} |]
 
 
 enableRepositoryDashboardSync :: DB es => ProjectId -> RepositoryId -> GitHubCredentialId -> Text -> Text -> Maybe Text -> Eff es (Maybe GitHubSync)
@@ -229,7 +251,7 @@ data GitHubSync = GitHubSync
   , announcedAt :: Maybe UTCTime
   -- ^ When that announcement arrived, so the retry it licenses cannot run forever against a
   -- sha a force-push has since made unfetchable.
-  , lastError :: Maybe Text
+  , lastError :: Maybe SyncFailure
   , lastSyncedAt :: Maybe UTCTime
   }
   deriving stock (Generic, Show)
@@ -241,6 +263,18 @@ instance Default GitHubSync where
   def = GitHubSync (UUIDId UUID.nil) (UUIDId UUID.nil) "" "" "main" Nothing Nothing "" Nothing Nothing True epoch epoch Git.GitHub Nothing Nothing Nothing Nothing Nothing
     where
       epoch = posixSecondsToUTCTime 0
+
+
+data SyncOperation = ImportDashboards | ExportDashboard DashboardId
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, NFData)
+  deriving (FromField, HI.DecodeValue, HI.EncodeValue, ToField) via Aeson SyncOperation
+
+
+data SyncFailure = SyncFailure {operation :: SyncOperation, message :: Text}
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, NFData)
+  deriving (FromField, HI.DecodeValue, HI.EncodeValue, ToField) via Aeson SyncFailure
 
 
 data SyncAction
@@ -411,11 +445,17 @@ getGitSyncById pid sid = Hasql.interp (selectFrom @GitHubSync <> [HI.sql| WHERE 
 
 
 getGitSyncsDecrypted :: (DB es, Log :> es) => ByteString -> ProjectId -> Eff es [GitHubSync]
-getGitSyncsDecrypted encKey pid =
-  getGitSyncs pid
-    >>= fmap catMaybes . traverse \sync -> case decryptAccessToken encKey sync of
-      Left err -> recordSyncError sync.id ("Reconnect this repository: " <> err) >> decryptedOr "sync" pid (Left err)
-      Right plain -> pure $ Just plain
+getGitSyncsDecrypted encKey pid = getGitSyncs pid >>= fmap catMaybes . traverse (\sync -> decryptSync encKey (maybe ImportDashboards (.operation) sync.lastError) sync)
+
+
+getGitSyncByIdDecrypted :: (DB es, Log :> es) => ByteString -> ProjectId -> GitHubSyncId -> SyncOperation -> Eff es (Maybe GitHubSync)
+getGitSyncByIdDecrypted encKey pid sid operation = getGitSyncById pid sid >>= maybe (pure Nothing) (decryptSync encKey operation)
+
+
+decryptSync :: (DB es, Log :> es) => ByteString -> SyncOperation -> GitHubSync -> Eff es (Maybe GitHubSync)
+decryptSync encKey operation sync = case decryptAccessToken encKey sync of
+  Left err -> recordSyncError sync.id operation ("Reconnect this repository: " <> err) >> decryptedOr "sync" sync.projectId (Left err)
+  Right plain -> pure $ Just plain
 
 
 -- | The sync row a webhook delivery is about.
@@ -480,7 +520,7 @@ updateLastRevision sid rev = do
   Hasql.interpExecute
     [HI.sql| UPDATE projects.git_sync
              SET last_revision = #{rev}
-               , last_error = NULL, last_synced_at = #{now}
+               , last_error = CASE WHEN last_error->'operation' = #{ImportDashboards} THEN NULL ELSE last_error END, last_synced_at = #{now}
                , announced_revision = CASE WHEN announced_revision = #{rev} THEN NULL ELSE announced_revision END
                , announced_at = CASE WHEN announced_revision = #{rev} THEN NULL ELSE announced_at END
                , updated_at = #{now}
@@ -510,23 +550,58 @@ pauseGitSync pid sid = do
   Hasql.interp [HI.sql| UPDATE projects.git_sync SET sync_enabled = false, updated_at = #{now} WHERE project_id = #{pid} AND id = #{sid} RETURNING * |]
 
 
-deleteGitHubSync :: DB es => GitHubSyncId -> Eff es Int64
-deleteGitHubSync sid =
-  Hasql.transaction TxS.ReadCommitted TxS.Write do
+deleteGitHubSync :: DB es => GitHubSyncId -> Eff es (Either RemovalError ())
+deleteGitHubSync = Hasql.transaction TxS.ReadCommitted TxS.Write . deleteSync
+
+
+deleteSync :: GitHubSyncId -> Tx.Transaction (Either RemovalError ())
+deleteSync sid = runExceptT do
+  sync <- lift $ Hasql.queryTx @(Maybe (HI.OneColumn GitHubSyncId)) [HI.sql| SELECT id FROM projects.git_sync WHERE id = #{sid} FOR UPDATE |]
+  _ <- hoistEither $ maybeToRight ConnectionMissing sync
+  HI.OneColumn busy <- lift $ Hasql.oneTx [HI.sql| SELECT EXISTS (SELECT 1 FROM projects.repository_sync_leases WHERE sync_id = #{sid} AND expires_at > app_now()) |]
+  when busy $ hoistEither $ Left SyncRunning
+  lift do
     Hasql.executeTx [HI.sql| UPDATE projects.dashboards SET git_sync_id = NULL, file_path = NULL, file_sha = NULL WHERE git_sync_id = #{sid} |]
-    HI.getRowsAffected <$> Hasql.queryTx [HI.sql| DELETE FROM projects.git_sync WHERE id = #{sid} |]
+    Hasql.executeTx [HI.sql| DELETE FROM projects.git_sync WHERE id = #{sid} |]
 
 
-recordSyncError :: DB es => GitHubSyncId -> Text -> Eff es Int64
-recordSyncError sid message = Hasql.interpExecute [HI.sql| UPDATE projects.git_sync SET last_error = #{message} WHERE id = #{sid} |]
+recordSyncError :: DB es => GitHubSyncId -> SyncOperation -> Text -> Eff es Int64
+recordSyncError sid operation message =
+  let failure = SyncFailure operation message
+   in Hasql.interpExecute [HI.sql| UPDATE projects.git_sync SET last_error = #{failure} WHERE id = #{sid} |]
 
 
--- | A push does not verify other remote files; only a complete pull clears failures
--- and advances the repository cursor.
-recordPushSuccess :: (DB es, Time :> es) => GitHubSyncId -> Eff es Int64
-recordPushSuccess sid = do
+-- | Clear only this dashboard's export failure; retain import failures and the pull cursor.
+recordPushSuccess :: (DB es, Time :> es) => GitHubSyncId -> DashboardId -> Eff es Int64
+recordPushSuccess sid did = do
   now <- Time.currentTime
-  Hasql.interpExecute [HI.sql| UPDATE projects.git_sync SET last_synced_at = #{now}, updated_at = #{now} WHERE id = #{sid} |]
+  let operation = ExportDashboard did
+  Hasql.interpExecute
+    [HI.sql| UPDATE projects.git_sync SET last_synced_at = #{now}, updated_at = #{now},
+    last_error = CASE WHEN last_error->'operation' = #{operation} THEN NULL ELSE last_error END WHERE id = #{sid} |]
+
+
+-- | Only a successful claim can construct the capability used to release a lease.
+newtype SyncLease = SyncLease (GitHubSyncId, UUID.UUID)
+  deriving stock (Eq, Show)
+
+
+claimSyncLease :: (DB es, UUIDEff.UUIDEff :> es) => GitHubSyncId -> Eff es (Maybe SyncLease)
+claimSyncLease sid = do
+  owner <- UUIDEff.genUUID
+  fmap SyncLease
+    <$> Hasql.interp
+      [HI.sql| WITH sync AS (SELECT id FROM projects.git_sync WHERE id = #{sid} FOR UPDATE)
+    INSERT INTO projects.repository_sync_leases (sync_id, owner, expires_at)
+    SELECT id, #{owner}, app_now() + interval '3 minutes' FROM sync
+    ON CONFLICT (sync_id) DO UPDATE SET owner = EXCLUDED.owner, expires_at = EXCLUDED.expires_at
+    WHERE projects.repository_sync_leases.expires_at <= app_now()
+    RETURNING sync_id, owner |]
+
+
+releaseSyncLease :: DB es => SyncLease -> Eff es ()
+releaseSyncLease (SyncLease (sid, owner)) =
+  Hasql.interpExecute_ [HI.sql| DELETE FROM projects.repository_sync_leases WHERE sync_id = #{sid} AND owner = #{owner} |]
 
 
 getRepositoryDashboardState :: DB es => ProjectId -> GitHubSyncId -> Eff es (M.Map Text (DashboardId, Maybe Text))
@@ -723,14 +798,115 @@ getInstallationToken appId privateKeyB64 installationId =
       <&> (>>= first (\err -> "Failed to parse token response: " <> toText err) . AE.eitherDecode . (^. W.responseBody))
 
 
--- | The org or user login an installation covers. Recorded as a credential the moment the
--- App is installed, so reading source works without also having configured dashboard sync —
--- they are two uses of one grant, not two integrations.
-getInstallationAccount :: (IOE :> es, W.HTTP :> es) => Text -> Text -> Int64 -> Eff es (Either Text Text)
-getInstallationAccount appId privateKeyB64 instId =
-  liftIO (generateAppJWT appId privateKeyB64) >>= either (pure . Left) \jwt ->
-    Git.tryHttp (W.getWith (githubAppOpts jwt) (toString $ "https://api.github.com/app/installations/" <> show @Text instId))
-      <&> (>>= maybeToRight "Installation reports no account" . (^? W.responseBody . key "account" . key "login" . _String))
+data InstallDest = InstallCode | InstallSync
+  deriving stock (Eq, Generic, Read, Show)
+  deriving (FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "Install" InstallDest
+
+
+data InstallationStep = InstallApp | AuthorizeApp Int64
+  deriving stock (Eq, Show)
+
+
+data InstallationAttempt = InstallationAttempt
+  { projectId :: ProjectId
+  , destination :: InstallDest
+  , step :: InstallationStep
+  }
+  deriving stock (Eq, Show)
+
+
+createInstallationAttempt :: (DB es, Time :> es, UUIDEff.UUIDEff :> es) => PersistentSessionId -> InstallationAttempt -> Eff es UUID.UUID
+createInstallationAttempt session attempt = do
+  nonce <- UUIDEff.genUUID
+  expires <- addUTCTime 900 <$> Time.currentTime
+  let installation = case attempt.step of InstallApp -> Nothing; AuthorizeApp iid -> Just iid
+  Hasql.interpExecute_
+    [HI.sql| INSERT INTO projects.github_installation_attempts (id, session_id, project_id, destination, installation_id, expires_at)
+    VALUES (#{nonce}, #{session}, #{attempt.projectId}, #{attempt.destination}, #{installation}, #{expires}) |]
+  pure nonce
+
+
+-- | Consume only this browser session's unexpired state, atomically against replay.
+consumeInstallationAttempt :: (DB es, Time :> es) => PersistentSessionId -> UUID.UUID -> Eff es (Maybe InstallationAttempt)
+consumeInstallationAttempt session nonce = do
+  now <- Time.currentTime
+  row <-
+    Hasql.interp @(Maybe (ProjectId, InstallDest, Maybe Int64))
+      [HI.sql| DELETE FROM projects.github_installation_attempts
+    WHERE id = #{nonce} AND session_id = #{session} AND expires_at > #{now}
+    RETURNING project_id, destination, installation_id |]
+  pure $ row <&> \(projectId, destination, iid) -> InstallationAttempt projectId destination (maybe InstallApp AuthorizeApp iid)
+
+
+data InstallationError = InstallationConfigurationMissing | InstallationAuthorizationFailed | InstallationVerificationFailed | InstallationOwnershipRequired | InstallationAccountMissing | InstallationProjectMissing
+  deriving stock (Eq, Show)
+
+
+installationErrorMessage :: InstallationError -> Text
+installationErrorMessage = \case
+  InstallationConfigurationMissing -> "An administrator must configure a valid GitHub App ID."
+  InstallationAuthorizationFailed -> "GitHub did not authorize this account. Connect the account again."
+  InstallationVerificationFailed -> "Could not verify your GitHub account. Connect the account again."
+  InstallationOwnershipRequired -> "Connect this account as its personal-account owner or an active GitHub organization owner."
+  InstallationAccountMissing -> "GitHub returned an installation without an account."
+  InstallationProjectMissing -> "This project is no longer available."
+
+
+-- | GitHub's setup ID is untrusted until its user-token installation listing confirms it.
+authorizeGitHubInstallation :: (DB es, W.HTTP :> es) => ByteString -> ProjectId -> Text -> Text -> Text -> Text -> Text -> Int64 -> Eff es (Either InstallationError ())
+authorizeGitHubInstallation encKey pid appId clientId secret code callback iid = runExceptT do
+  expectedApp <- hoistEither $ maybeToRight InstallationConfigurationMissing $ readMaybe @Integer $ toString appId
+  response <-
+    ExceptT
+      $ first (const InstallationAuthorizationFailed)
+        <$> Git.tryHttp
+          ( W.postWith
+              (W.defaults & W.header "Accept" .~ ["application/json"])
+              "https://github.com/login/oauth/access_token"
+              (AE.object ["client_id" AE..= clientId, "client_secret" AE..= secret, "code" AE..= code, "redirect_uri" AE..= callback])
+          )
+  token <- hoistEither $ maybeToRight InstallationAuthorizationFailed $ response ^? W.responseBody . key "access_token" . _String
+  installation <-
+    ExceptT
+      $ findPage
+        token
+        "user/installations"
+        (toListOf $ key "installations" . values)
+        (\value -> value ^? key "id" . _Integer == Just (fromIntegral iid) && value ^? key "app_id" . _Integer == Just expectedApp)
+        1
+  account <- hoistEither $ maybeToRight InstallationAccountMissing $ installation ^? key "account" . key "login" . _String
+  case installation ^? key "account" . key "type" . _String of
+    Just "User" -> do
+      user <- ExceptT $ first (const InstallationVerificationFailed) <$> Git.tryHttp (W.getWith (githubAppOpts token) "https://api.github.com/user")
+      unless ((T.toLower <$> (user ^? W.responseBody . key "login" . _String)) == Just (T.toLower account)) $ hoistEither $ Left InstallationOwnershipRequired
+    Just "Organization" ->
+      void
+        $ ExceptT
+        $ findPage
+          token
+          "user/memberships/orgs"
+          (toListOf values)
+          ( \membership ->
+              membership ^? key "state" . _String == Just "active"
+                && membership ^? key "role" . _String == Just "admin"
+                && (T.toLower <$> (membership ^? key "organization" . key "login" . _String)) == Just (T.toLower account)
+          )
+          1
+    _ -> hoistEither $ Left InstallationOwnershipRequired
+  credential <- lift $ upsertGitHubCredential encKey pid Git.GitHub Nothing account (Just iid) Nothing
+  hoistEither $ maybeToRight InstallationProjectMissing $ void credential
+  where
+    findPage token path extract matches page = runExceptT do
+      response <-
+        ExceptT
+          $ first (const InstallationVerificationFailed)
+            <$> Git.tryHttp
+              (W.getWith (githubAppOpts token) (toString $ "https://api.github.com/" <> path <> "?per_page=100&page=" <> show @Text page))
+      let entries = extract (response ^. W.responseBody)
+      case find matches entries of
+        Just entry -> pure entry
+        Nothing | length entries == 100 -> ExceptT $ findPage token path extract matches (page + 1)
+        Nothing -> hoistEither $ Left InstallationOwnershipRequired
 
 
 -- | GitHub's own "Repository access" screen for an installation.

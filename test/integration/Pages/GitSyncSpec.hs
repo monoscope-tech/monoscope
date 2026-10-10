@@ -2,46 +2,48 @@ module Pages.GitSyncSpec (spec) where
 
 import BackgroundJobs qualified
 import Control.Lens ((.~), (^.), (^?))
-import Data.Generics.Product.Fields (field)
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, _String)
-import Data.ByteString qualified as BS
 import Data.Base64.Types (extractBase64)
+import Data.ByteArray qualified as BA
+import Data.ByteString qualified as BS
+import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Base64 qualified as B64
 import Data.Default (Default (..), def)
+import Data.Effectful.Wreq qualified as W
+import Data.Generics.Product.Fields (field)
 import Data.Map.Strict qualified as M
 import Data.Maybe (fromJust)
 import Data.Pool (withResource)
 import Data.Text qualified as T
-import Data.Time (getCurrentTime)
+import Data.Time (addUTCTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Data.UUID.Quasi (uuid)
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (Only (..), execute)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import OddJobs.Job (createJob)
+import Effectful (runEff)
+import Effectful.Error.Static (catchError)
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Client (HttpException)
 import Network.Wreq qualified as Wreq
+import OddJobs.Job (createJob)
+import Pages.Bots.BotTestHelpers (withHTTPResponses)
 import Pages.GitSync (GitSyncForm (..))
-import Pkg.Git qualified as Git
-import System.Config (AuthContext (..), EnvConfig (..))
-import Effectful (runEff)
-import Data.Effectful.Wreq qualified as W
-import Data.ByteString.Base16 qualified as B16
-import Data.ByteArray qualified as BA
-import "cryptonite" Crypto.Hash.Algorithms (SHA256)
-import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 import Pages.GitSync qualified as GitSyncPage
 import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.Git qualified as Git
 import Pkg.TestUtils
 import Relude hiding (head)
+import Servant (ServerError (..), getResponse)
+import System.Config (AuthContext (..), EnvConfig (..))
 import Test.Hspec
 import UnliftIO.Exception (bracket, try)
-
+import "cryptonite" Crypto.Hash.Algorithms (SHA256)
+import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
 
 isGitSyncPush, isGitSyncFromRepo :: (a, BackgroundJobs.BgJobs) -> Bool
@@ -246,10 +248,12 @@ runSyncJobs tr = do
     isGitSyncJob BackgroundJobs.GitSyncPushAllDashboards{} = True
     isGitSyncJob _ = False
 
+
 assignDash :: TestResources -> Dashboards.DashboardId -> IO ()
 assignDash tr did = do
   Just sync <- runQueryEffect tr $ GitSync.getGitHubSync testPid
   runQueryEffect tr (GitSync.assignDashboardRepository testPid did sync.id) `shouldReturn` Right ()
+
 
 uniquePath :: Text -> IO Text
 uniquePath base = do
@@ -269,6 +273,45 @@ spec = sequential do
   -- Layer 1: Unit/Integration tests (no external deps)
   aroundAll withTestResources do
     describe "GitHub Sync Settings" do
+      it "installationAttempt_isSessionBoundSingleUseAndExpires" \tr -> do
+        let session = (getResponse tr.trSessAndHeader).persistentSession.id
+            attempt = GitSync.InstallationAttempt testPid GitSync.InstallCode (GitSync.AuthorizeApp 42)
+        nonce <- runTestBg frozenTime tr $ GitSync.createInstallationAttempt session attempt
+        stranger <- Projects.PersistentSessionId <$> UUID.nextRandom
+        runQueryEffect tr (GitSync.consumeInstallationAttempt stranger nonce) `shouldReturn` Nothing
+        runQueryEffect tr (GitSync.consumeInstallationAttempt session nonce) `shouldReturn` Just attempt
+        runQueryEffect tr (GitSync.consumeInstallationAttempt session nonce) `shouldReturn` Nothing
+        expired <- runTestBg frozenTime tr $ GitSync.createInstallationAttempt session attempt
+        runTestBg (addUTCTime 901 frozenTime) tr (GitSync.consumeInstallationAttempt session expired) `shouldReturn` Nothing
+
+      it "installationAuthorization_requiresTheGitHubAccountOwner" \tr -> do
+        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
+            authorize installations memberships =
+              runTestBgRecordingHTTP frozenTime tr
+                $ withHTTPResponses (\_ endpoint -> pure $ Just $ if endpoint == "https://github.com/login/oauth/access_token" then "{\"access_token\":\"fixture-user-token\"}" else if endpoint == "https://api.github.com/user" then "{\"login\":\"team\"}" else if "https://api.github.com/user/memberships/orgs?" `T.isPrefixOf` toText endpoint then memberships else installations)
+                $ GitSync.authorizeGitHubInstallation encKey testPid "123" "fixture-client" "fixture-secret" "fixture-code" "http://localhost:8081/github/callback" 42
+        (_, denied) <- authorize "{\"installations\":[{\"id\":43,\"account\":{\"login\":\"foreign\"}}]}" "[]"
+        denied `shouldBe` Left GitSync.InstallationOwnershipRequired
+        runQueryEffect tr (GitSync.getGitHubCredentials testPid) >>= (`shouldSatisfy` null)
+        (_, collaborator) <- authorize "{\"installations\":[{\"id\":42,\"app_id\":123,\"account\":{\"login\":\"foreign\",\"type\":\"User\"}}]}" "[]"
+        collaborator `shouldBe` Left GitSync.InstallationOwnershipRequired
+        let organization = "{\"installations\":[{\"id\":42,\"app_id\":123,\"account\":{\"login\":\"team\",\"type\":\"Organization\"}}]}"
+        for_ ([("member", "active", False), ("admin", "pending", False), ("admin", "active", True)] :: [(Text, Text, Bool)]) \(role, membershipState, allowed) -> do
+          let memberships = AE.encode ([AE.object ["state" AE..= membershipState, "role" AE..= role, "organization" AE..= AE.object ["login" AE..= ("team" :: Text)]]] :: [AE.Value])
+          (_, result) <- authorize organization memberships
+          result `shouldBe` if allowed then Right () else Left GitSync.InstallationOwnershipRequired
+        (requests, verified) <- authorize "{\"installations\":[{\"id\":42,\"app_id\":123,\"account\":{\"login\":\"team\",\"type\":\"User\"}}]}" "[]"
+        verified `shouldBe` Right ()
+        map fst requests `shouldBe` ["https://github.com/login/oauth/access_token", "https://api.github.com/user/installations?per_page=100&page=1", "https://api.github.com/user"]
+        [account] <- runQueryEffect tr $ GitSync.getGitHubCredentials testPid
+        (account.account, account.installationId, account.accessToken) `shouldBe` ("team", Just 42, Nothing)
+        runQueryEffect tr (GitSync.getGitSyncs testPid) >>= (`shouldSatisfy` null)
+
+      it "installationSelection_rejectsAnInstallationWithoutAProjectGrant" \tr -> do
+        let isolated = tr{trATCtx = tr.trATCtx{config = tr.trATCtx.config{githubAppPrivateKey = ""}}}
+        status <- runAuthHandler isolated $ catchError @ServerError (GitSyncPage.githubAppSelectRepoH testPid (GitSyncPage.RepoSelectForm ["foreign/private"] "main" Nothing 424242) $> 200) (\_ err -> pure err.errHTTPCode)
+        status `shouldBe` 403
+        runQueryEffect tr (GitSync.getGitSyncs testPid) >>= (`shouldSatisfy` null)
       it "tokenConnection_queuesItsFirstImportWithoutRequeuingActiveSettingsEdits" \tr -> do
         let form owner repo branch token prefix = GitSyncForm{host = Just Git.GitHub, apiBase = Nothing, owner, repo, branch, accessToken = token, webhookSecret = Just "s3cret", pathPrefix = prefix}
         clearJobs tr

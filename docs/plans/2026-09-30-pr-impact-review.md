@@ -24,8 +24,8 @@
   A retry discovers existing App-owned comments by project marker before posting.
   Pure documentation-only revisions complete silently; an earlier comment still
   identifies the revision it reviewed.
-- Settings → Integrations → Source Code exposes per-repository enable/disable, aggregates-and-links
-  versus links-only output, recent results, and rerun. Links-only is the default;
+- Repositories exposes per-repository review settings under Configure source context,
+  with recent results and rerun under Pull requests. Links-only is the default;
   production aggregates require an explicit opt-in. Query text is never rendered in comments.
   Writes require edit permission.
   Links-only comments omit generated production prose, counts, service/environment
@@ -48,14 +48,25 @@ stateDiagram-v2
 
 1. Apply migrations `0213_pr_impact_reviews.sql` and `0214_pr_review_evidence_optin.sql`
    through the normal startup migrator.
-2. Configure `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` (base64 PEM), and
-   `GITHUB_APP_WEBHOOK_SECRET`. The secret must match the GitHub App webhook secret;
+2. Configure `GITHUB_APP_ID`, `GITHUB_APP_NAME`, `GITHUB_APP_PRIVATE_KEY` (base64 PEM),
+   `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, and `GITHUB_APP_WEBHOOK_SECRET` from
+   the same GitHub App registration. The secret must match the GitHub App webhook secret;
    dashboard-sync repository secrets are separate.
 3. Set the App webhook URL to `/webhook/github` on the public Monoscope host, enable
    pull request events, and grant repository **Contents: read** and
    **Pull requests: read and write**. Existing installations must accept updated
    permissions ([GitHub permission reference](https://docs.github.com/en/rest/issues/comments#create-an-issue-comment)). The App needs access to each source repository added to the project.
-4. Add source repositories in Source Code settings and map services when known. Open or
+4. Set both the App setup URL and user authorization callback URL to
+   `<public Monoscope host>/github/callback`, matching `HOST_URL`. Apply migration
+   `0220_github_installation_authorization.sql` through the startup migrator.
+   Start connections from **Repositories → Add repositories → Connect GitHub account**.
+   A project editor who owns the personal account or is an active organization owner
+   must authorize the connection. Monoscope verifies the installation with that user's
+   access token before sharing the account with the project; the user token is not saved.
+   Connection requests expire after 15 minutes and cannot be reused. Direct setup links
+   without a request must be restarted from Repositories
+   ([GitHub setup URL security](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/about-the-setup-url)).
+5. Select repositories and link their services under **Configure source context**. Open or
    update a ready PR, then check its review history and GitHub comment. Existing
    open PRs are not backfilled until an event is received.
 

@@ -355,6 +355,7 @@ export const menuHref = (base: string, action: string, key: string): string => {
     case 'logs': return explorer('kind=="log"');
     case 'metrics': return `${base}/metrics?metric_source=${encodeURIComponent(key)}`;
     case 'monitors': return `${base}/monitors`;
+    case 'repositories': return `${base}/repositories/services/${encodeURIComponent(key)}`;
     default: return '#';
   }
 };
@@ -586,6 +587,7 @@ async function render(
     for (const n of drawn.nodes) {
       const card = proto.cloneNode(true) as HTMLElement;
       card.dataset.key = n.key;
+      card.setAttribute('aria-label', `${n.member_count ? 'Expand' : 'Explore'} ${n.label || 'Entry point'}`);
       withHook(card, '[data-node-icon]', i => (i.innerHTML = KIND_ICON[n.kind] ?? KIND_ICON.unknown));
       withHook(card, '[data-node-name]', e => (e.textContent = n.label || 'Entry point'));
       if (n.member_count && !n.key.startsWith('rest:'))
@@ -701,9 +703,9 @@ async function render(
       a.classList.toggle('hidden', (inferred || endpointEntry) && action !== 'inspect' && action !== 'focus');
       a.href = menuHref(pid, action, key);
     }
-    menu.style.left = `${x}px`;
-    menu.style.top = `${y}px`;
     menu.classList.remove('hidden');
+    menu.style.left = `${Math.max(0, Math.min(x, panel.clientWidth - menu.offsetWidth))}px`;
+    menu.style.top = `${Math.max(0, Math.min(y, panel.clientHeight - menu.offsetHeight))}px`;
   };
 
   const setScope = (key: string | null) => {
@@ -737,13 +739,17 @@ async function render(
   layer.addEventListener('click', e => {
     const card = (e.target as HTMLElement).closest<HTMLElement>('[data-node]');
     const key = card?.dataset.key;
-    if (!key) return;
+    if (!card || !key) return;
     const node = byKey.get(key);
     if (node?.member_count) { expanded.add(key); isolated = null; hideMenu(); void rebuild().then(fit); return; }
     isolated = new Set([...reachableFrom(key, reach.up), ...reachableFrom(key, reach.down)]);
     paint();
     const box = panel.getBoundingClientRect();
-    showMenu(key, node?.label || 'Entry point', !!node?.inferred, e.clientX - box.left, e.clientY - box.top);
+    const anchor = card.getBoundingClientRect();
+    showMenu(key, node?.label || 'Entry point', !!node?.inferred,
+      (e.detail === 0 ? anchor.left : e.clientX) - box.left,
+      (e.detail === 0 ? anchor.bottom : e.clientY) - box.top);
+    if (e.detail === 0) menu?.querySelector<HTMLAnchorElement>('a:not(.hidden)')?.focus();
     opts.onNodeClick?.(key);
   }, { signal });
 
@@ -773,7 +779,13 @@ async function render(
     if (dragMoved) { dragMoved = false; return; }
     if (!(e.target as HTMLElement).closest('[data-node], [data-map-zoom]')) clearSelection();
   }, { signal });
-  document.addEventListener('keydown', e => { if (e.key === 'Escape' && (isolated || expanded.size)) resetView(); }, { signal });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && (isolated || expanded.size)) {
+      const origin = menu?.dataset.nodeKey;
+      resetView();
+      if (origin) cards.get(origin)?.focus();
+    }
+  }, { signal });
 
   const unsubscribeTheme = subscribeChartTheme(() => { paint(); drawOverview(); });
   ['resize', 'toggle-sidebar', 'loglist-resize'].forEach(ev => window.addEventListener(ev, fit, { signal }));

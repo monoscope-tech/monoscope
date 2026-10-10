@@ -691,7 +691,7 @@ headRevision conn r = via $ case conn.host of
         <&> (>>= maybeToRight (hostLabel conn.host <> " reported no commit for " <> r.ref <> ".") . (^? pick))
 
 
--- | List a repository at @ref@, scoped to @prefix@, with the head revision.
+-- | Resolve @ref@ once and list that commit, scoped to @prefix@, with its revision.
 --
 -- @prefix@ is not a convenience: it is what keeps the Bitbucket sha backfill bounded (see
 -- below) and it lets GitLab and Bitbucket filter server-side. Pass @""@ for the whole tree
@@ -704,19 +704,20 @@ headRevision conn r = via $ case conn.host of
 -- "unchanged".
 fetchTree :: (IOE :> es, W.HTTP :> es) => GitConn -> RepoRef -> Text -> Eff es (Either Text (Text, [TreeEntry]))
 fetchTree conn r prefix = runExceptT do
-  entries <- ExceptT rawEntries
-  let scoped = filter (\e -> T.null prefix || prefix `T.isPrefixOf` e.path) entries
-  filled <- ExceptT $ backfill scoped
   rev <- ExceptT $ headRevision conn r
+  let pinned = (r :: RepoRef){ref = rev}
+  entries <- ExceptT $ rawEntries pinned
+  let scoped = filter (\e -> T.null prefix || prefix `T.isPrefixOf` e.path) entries
+  filled <- ExceptT $ backfill pinned scoped
   pure (rev, filled)
   where
-    rawEntries = case conn.host of
-      GitHub -> githubish ("/git/trees/" <> enc r.ref <> "?recursive=1")
-      Gitea -> githubish ("/git/trees/" <> enc r.ref <> "?recursive=true&per_page=1000")
+    rawEntries pinned = case conn.host of
+      GitHub -> githubish ("/git/trees/" <> enc pinned.ref <> "?recursive=1")
+      Gitea -> githubish ("/git/trees/" <> enc pinned.ref <> "?recursive=true&per_page=1000")
       GitLab -> pagedJson conn 100 (toListOf values) gitlabEntry \p ->
-        repoUrl conn r ("/repository/tree?ref=" <> enc r.ref <> "&recursive=true&per_page=100&page=" <> show p <> pathQ)
+        repoUrl conn pinned ("/repository/tree?ref=" <> enc pinned.ref <> "&recursive=true&per_page=100&page=" <> show p <> pathQ)
       Bitbucket -> pagedJson conn 100 (toListOf (key "values" . values)) bitbucketEntry \p ->
-        repoUrl conn r ("/src/" <> enc r.ref <> "/" <> encPath prefix <> "?max_depth=100&pagelen=100&page=" <> show p)
+        repoUrl conn pinned ("/src/" <> enc pinned.ref <> "/" <> encPath prefix <> "?max_depth=100&pagelen=100&page=" <> show p)
 
     pathQ = if T.null prefix then "" else "&path=" <> enc (T.dropWhileEnd (== '/') prefix)
 
@@ -746,13 +747,13 @@ fetchTree conn r prefix = runExceptT do
       ty <- v ^? key "type" . _String
       pure $ TreeEntry p (ty == "commit_file") Nothing (fromIntegral <$> v ^? key "size" . _Integer)
 
-    backfill es
+    backfill pinned es
       | conn.host /= Bitbucket || T.null prefix = pure $ Right es
       | otherwise =
           sequence <$> forM es \e ->
             if not e.isBlob
               then pure $ Right e
-              else fmap (\blob -> e{sha = Just (computeContentSha blob)}) <$> fetchFile conn r e.path
+              else fmap (\blob -> e{sha = Just (computeContentSha blob)}) <$> fetchFile conn pinned e.path
 
 
 -- | The blob at @path@ in @r.ref@ — a branch name or a commit sha, since every host's read
@@ -844,7 +845,9 @@ listRepos conn = case conn.host of
 listTokenRepos :: (IOE :> es, W.HTTP :> es) => GitConn -> Eff es (Either Text [GitRepo])
 listTokenRepos conn = case conn.host of
   GitHub -> pagedJson conn 100 (toListOf values) (parseRepository conn.host) \p -> url conn ("user/repos?per_page=100&page=" <> show p)
-  _ -> listRepos conn
+  GitLab -> listRepos conn
+  Gitea -> listRepos conn
+  Bitbucket -> listRepos conn
 
 
 fetchRepository :: (IOE :> es, W.HTTP :> es) => GitConn -> RepoRef -> Eff es (Either Text GitRepo)
@@ -859,7 +862,8 @@ parseRepository host v = do
   let private = case host of
         GitLab -> v ^? key "visibility" . _String /= Just "public"
         Bitbucket -> v ^? key "is_private" . _Bool == Just True
-        _ -> v ^? key "private" . _Bool == Just True
+        GitHub -> v ^? key "private" . _Bool == Just True
+        Gitea -> v ^? key "private" . _Bool == Just True
       branch = if host == Bitbucket then v ^? key "mainbranch" . key "name" . _String else v ^? key "default_branch" . _String
   pure $ GitRepo full name private (fromMaybe "main" branch)
 

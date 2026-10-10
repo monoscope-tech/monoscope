@@ -962,17 +962,19 @@ assert() { # <desc> <expected> <actual>
 cmd_selftest() {
   SELFTEST_RC=0
   node --test scripts/ci/release-test.mjs || SELFTEST_RC=1
-  local body_rc=0 bg_log bg_result
+  local body_rc=0 BG_DIR
   CI_UNIT_BIN=false "$0" body unit-tests >/dev/null 2>&1 || body_rc=$?
   assert "body stops at first failure" 1 "$body_rc"
   assert "built unit binary runs without Cabal" ok "$(CI_UNIT_BIN=$(command -v true) "$0" body unit-tests && echo ok)"
-  bg_log=$(mktemp -t ci-selftest-bg-log.XXXXXX)
-  bg_result=$(mktemp -t ci-selftest-bg-result.XXXXXX)
+  BG_DIR=$(mktemp -d -t ci-selftest-bg.XXXXXX)
+  : > "$BG_DIR/failing.log"
   (exit 1) &
+  echo $! > "$BG_DIR/failing.pid"
   body_rc=0
-  collect_background "$!" "$bg_log" "$bg_result" || body_rc=$?
+  collect_background failing || body_rc=$?
   assert "background failure propagates" 1 "$body_rc"
-  assert "background files cleaned" no "$([ -e "$bg_log" ] || [ -e "$bg_result" ] && echo yes || echo no)"
+  assert "background diagnostics retained" yes "$([ -f "$BG_DIR/failing.log" ] && echo yes || echo no)"
+  rm -rf "$BG_DIR"
   assert "failure stops sweep" yes "$(stop_early 1 && echo yes)"
   assert "keep-going continues sweep" no "$(CI_KEEP_GOING=true stop_early 1 && echo yes || echo no)"
 
@@ -1025,6 +1027,11 @@ cmd_selftest() {
   before=$(fingerprint ui-tests)
   : > "static/public/assets/js/thirdparty/$probe"; WORKTREE_TREE=''; after=$(fingerprint ui-tests); rm -f "static/public/assets/js/thirdparty/$probe"
   assert "vendored parser change moves UI fp" changed "$([ "$before" != "$after" ] && echo changed)"
+
+  : > "web-components/$probe.bun-build"; WORKTREE_TREE=''
+  after=$(git ls-tree "$(worktree_tree)" -- "web-components/$probe.bun-build")
+  rm -f "web-components/$probe.bun-build"
+  assert "Bun build artifact excluded from source snapshot" "" "$after"
 
   # The two ways this job silently loses ~35 minutes. Both are one-line edits
   # elsewhere in the repo that nothing else would catch.

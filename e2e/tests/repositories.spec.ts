@@ -2,6 +2,70 @@ import { test, expect } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { DEMO_PROJECT, sql } from './helpers';
 
+test('repository removal preserves active syncs and supports retry in both themes', async ({ page, baseURL }, testInfo) => {
+  const uid = randomUUID(), sid = randomUUID(), pid = randomUUID(), rid = randomUUID(), sync = randomUUID(), did = randomUUID();
+  sql(`INSERT INTO users.users (id, email) VALUES ('${uid}', '${uid}@example.com');
+       INSERT INTO users.persistent_sessions (id, user_id) VALUES ('${sid}', '${uid}');
+       INSERT INTO projects.projects (id, title) VALUES ('${pid}', 'Removal recovery');
+       INSERT INTO projects.project_members (project_id, user_id, permission) VALUES ('${pid}', '${uid}', 'admin');
+       INSERT INTO projects.repositories (id, project_id, host, owner, repo) VALUES ('${rid}', '${pid}', 'github', 'team', 'dashboards');
+       INSERT INTO projects.git_sync (id, project_id, owner, repo, branch, access_token)
+       VALUES ('${sync}', '${pid}', 'team', 'dashboards', 'main', 'fixture');
+       INSERT INTO projects.dashboards (id, project_id, created_by, title, schema, git_sync_id, file_path, file_sha)
+       VALUES ('${did}', '${pid}', '${uid}', 'Overview', '{"widgets":[]}', '${sync}', 'overview.yaml', 'provider-blob');
+       INSERT INTO projects.repository_sync_leases (sync_id, owner, expires_at)
+       VALUES ('${sync}', '${randomUUID()}', now() + interval '3 minutes');`);
+  try {
+    await page.context().addCookies([{ name: 'monoscope_session', value: sid, url: baseURL! }]);
+    await page.setViewportSize({ width: 320, height: 800 });
+    for (const theme of ['light', 'dark']) {
+      await page.context().addCookies([{ name: 'theme', value: theme, url: baseURL! }]);
+      await page.goto(`/p/${pid}/repositories/${rid}`);
+      const remove = page.locator('#main-content').getByRole('button', { name: 'Remove repository', exact: true });
+      await remove.press('Enter');
+      const dialog = page.getByRole('dialog', { name: 'Remove team/dashboards?', exact: true });
+      const confirm = dialog.getByRole('button', { name: /^Remove repository(?: Loading)?$/ });
+      await expect(dialog.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused();
+      let releaseRemoval!: () => void;
+      const gate = new Promise<void>(resolve => { releaseRemoval = resolve; });
+      await page.route(`**/repositories/${rid}`, async route => { await gate; await route.continue(); }, { times: 1 });
+      await confirm.press('Enter');
+      try {
+        await expect(confirm).toBeDisabled();
+        await expect(confirm.getByRole('status', { name: 'Loading', exact: true })).toBeVisible();
+      } finally { releaseRemoval(); }
+      await expect(dialog.getByRole('alert')).toContainText('A dashboard sync is running');
+      await expect(confirm).toBeEnabled();
+      await expect(dialog).toBeVisible();
+      expect(sql(`SELECT git_sync_id FROM projects.dashboards WHERE id = '${did}'`).toString().trim()).toBe(sync);
+      expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+      await page.screenshot({ path: testInfo.outputPath(`repository-removal-busy-${theme}.png`) });
+      await page.keyboard.press('Escape');
+      await expect(dialog).toBeHidden();
+      await expect(remove).toBeFocused();
+
+      await page.goto(`/p/${pid}/repositories/${rid}/dashboards`);
+      const modal = page.getByRole('dialog', { name: 'Disconnect dashboard sync?', exact: true });
+      await page.locator(`#git-sync-${sync}`).getByRole('button', { name: 'Disconnect', exact: true }).press('Enter');
+      await modal.getByRole('button', { name: 'Disconnect', exact: true }).click();
+      await expect(page.locator('#main-content').getByRole('alert')).toContainText('A dashboard sync is running');
+      await expect(modal).toBeHidden();
+      await expect(page.locator(`#git-sync-${sync}`)).toHaveCount(1);
+      expect(sql(`SELECT git_sync_id FROM projects.dashboards WHERE id = '${did}'`).toString().trim()).toBe(sync);
+    }
+    sql(`UPDATE projects.repository_sync_leases SET expires_at = now() - interval '1 second' WHERE sync_id = '${sync}';`);
+    await page.goto(`/p/${pid}/repositories/${rid}`);
+    await page.locator('#main-content').getByRole('button', { name: 'Remove repository', exact: true }).press('Enter');
+    await page.getByRole('dialog').getByRole('button', { name: 'Remove repository', exact: true }).press('Enter');
+    await expect(page).toHaveURL(`/p/${pid}/repositories`);
+    expect(sql(`SELECT git_sync_id IS NULL AND file_path IS NULL AND file_sha IS NULL FROM projects.dashboards WHERE id = '${did}'`).toString().trim()).toBe('t');
+    expect(sql(`SELECT count(*) FROM projects.repository_sync_leases WHERE sync_id = '${sync}'`).toString().trim()).toBe('0');
+  } finally {
+    sql(`DELETE FROM projects.projects WHERE id = '${pid}'; DELETE FROM users.users WHERE id = '${uid}';`);
+  }
+});
+
+
 const project = `/p/${DEMO_PROJECT}`;
 
 test('rerunning a pull request review replaces its view without nesting content', async ({ page, baseURL }) => {
@@ -337,7 +401,7 @@ test('repository dashboard setup reuses a token account and keeps retries scoped
     expect(sql(`SELECT branch FROM projects.git_sync WHERE project_id = '${pid}'`).toString().trim()).toBe('release');
     const activeConnection = sql(`SELECT id FROM projects.git_sync WHERE project_id = '${pid}'`).toString().trim();
     expect(sql(`SELECT count(*) FROM background_jobs WHERE payload->>'tag' = 'GitSyncRepository' AND payload::text LIKE '%${activeConnection}%'`).toString().trim()).toBe('1');
-    sql(`UPDATE projects.git_sync SET last_error = 'dashboards/overview.yaml: Remote file conflicts with a local dashboard awaiting its first push.' WHERE id = '${activeConnection}';`);
+    sql(`UPDATE projects.git_sync SET last_error = jsonb_build_object('operation', jsonb_build_object('tag', 'ImportDashboards'), 'message', 'dashboards/overview.yaml: Remote file conflicts with a local dashboard awaiting its first push.') WHERE id = '${activeConnection}';`);
     await page.reload();
     await expect(panel.getByRole('status')).toContainText('overview.yaml');
     await Promise.all([
@@ -445,5 +509,160 @@ test('shared repository connection keeps account choice and provider recovery vi
     expect(sql(`SELECT count(*) FROM projects.repositories WHERE project_id = '${pid}'`).toString().trim()).toBe('0');
   } finally {
     sql(`DELETE FROM projects.projects WHERE id = '${pid}'; DELETE FROM users.users WHERE id = '${uid}';`);
+  }
+});
+
+test('GitHub installation IDs cannot create project grants without authorization', async ({ page, baseURL }, testInfo) => {
+  const uid = randomUUID(), sid = randomUUID(), pid = randomUUID();
+  sql(`INSERT INTO users.users (id, email) VALUES ('${uid}', '${uid}@example.com');
+       INSERT INTO users.persistent_sessions (id, user_id) VALUES ('${sid}', '${uid}');
+       INSERT INTO projects.projects (id, title) VALUES ('${pid}', 'Installation authorization');
+       INSERT INTO projects.project_members (project_id, user_id, permission) VALUES ('${pid}', '${uid}', 'admin');`);
+  try {
+    await page.context().addCookies([{ name: 'monoscope_session', value: sid, url: baseURL! }]);
+    expect((await page.request.get(`/p/${pid}/settings/git-sync/repos?installationId=424242`)).status()).toBe(403);
+    expect((await page.request.post(`/p/${pid}/settings/git-sync/select`, { form: { repoFullName: 'foreign/private', branch: 'main', installationId: '424242' } })).status()).toBe(403);
+    await page.setViewportSize({ width: 320, height: 800 });
+    for (const theme of ['light', 'dark']) {
+      await page.context().addCookies([{ name: 'theme', value: theme, url: baseURL! }]);
+      await page.goto(`/github/callback?installation_id=424242&state=${pid}:code`);
+      await expect(page.getByRole('alert')).toContainText('missing, expired, or already used');
+      await expect(page.getByRole('link', { name: 'Back to projects', exact: true })).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+      await page.screenshot({ path: testInfo.outputPath(`repository-authorization-${theme}.png`), fullPage: true });
+    }
+    expect(sql(`SELECT count(*) FROM projects.git_credentials WHERE project_id = '${pid}'`).toString().trim()).toBe('0');
+    expect(sql(`SELECT count(*) FROM projects.git_sync WHERE project_id = '${pid}'`).toString().trim()).toBe('0');
+  } finally {
+    sql(`DELETE FROM projects.projects WHERE id = '${pid}'; DELETE FROM users.users WHERE id = '${uid}';`);
+  }
+});
+
+
+test('service investigations reach only applicable repositories by keyboard in both themes', async ({ page, baseURL }, testInfo) => {
+  const uid = randomUUID(), sid = randomUUID(), pid = randomUUID();
+  const account = randomUUID(), enterprise = randomUUID();
+  const repositories = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
+  const service = 'team/api & jobs';
+  sql(`INSERT INTO users.users (id, email) VALUES ('${uid}', '${uid}@example.com');
+       INSERT INTO users.persistent_sessions (id, user_id) VALUES ('${sid}', '${uid}');
+       INSERT INTO projects.projects (id, title) VALUES ('${pid}', 'Service repositories');
+       INSERT INTO projects.project_members (project_id, user_id, permission) VALUES ('${pid}', '${uid}', 'view');
+       INSERT INTO projects.git_credentials (id, project_id, account, installation_id, host, api_base)
+       VALUES ('${account}', '${pid}', 'acme', 42, 'github', NULL), ('${enterprise}', '${pid}', 'acme', 43, 'github', 'https://git.example.com');
+       INSERT INTO projects.repositories (id, project_id, host, api_base, owner, repo, credential_id)
+       VALUES ('${repositories[0]}', '${pid}', 'github', NULL, 'acme', 'checkout', '${account}'),
+              ('${repositories[1]}', '${pid}', 'github', NULL, 'acme', 'shared', '${account}'),
+              ('${repositories[2]}', '${pid}', 'github', NULL, 'acme', 'payments', '${account}'),
+              ('${repositories[3]}', '${pid}', 'github', 'https://git.example.com', 'acme', 'checkout', '${enterprise}');
+       INSERT INTO projects.code_mappings (project_id, credential_id, owner, repo, ref, service, path_prefix)
+       VALUES ('${pid}', '${account}', 'acme', 'checkout', 'main', '${service}', '/app/'),
+              ('${pid}', '${account}', 'acme', 'shared', 'main', NULL, '/shared/'),
+              ('${pid}', '${account}', 'acme', 'payments', 'main', 'billing', '/payments/'),
+              ('${pid}', '${enterprise}', 'acme', 'checkout', 'main', 'billing', '/enterprise/');
+       INSERT INTO apis.service_dependency_edges_env
+         (project_id, bucket, env, source_key, source_kind, target_key, target_kind, req_count, error_count, sum_duration_ns, lat_hist)
+       VALUES ('${pid}', now() - interval '5 minutes', 'prod', '', 'entry', '${service}', 'service', 10, 0, 10000000, '{"80":10}'),
+              ('${pid}', now() - interval '5 minutes', 'prod', '${service}', 'service', 'db:orders', 'database', 10, 0, 10000000, '{"80":10}');`);
+  try {
+    await page.context().addCookies([{ name: 'monoscope_session', value: sid, url: baseURL! }]);
+    for (const theme of ['light', 'dark']) {
+      await page.context().addCookies([{ name: 'theme', value: theme, url: baseURL! }]);
+      await page.setViewportSize({ width: 1200, height: 900 });
+      await page.goto(`/p/${pid}/service_map?since=1H`);
+      const node = page.getByRole('button', { name: `Explore ${service}`, exact: true });
+      await expect(node).toBeVisible();
+      await node.focus();
+      await page.keyboard.press('Enter');
+      const menu = page.locator('[data-service-menu]');
+      await expect(menu.getByRole('link', { name: 'View repositories', exact: true })).toHaveAttribute('href', `/p/${pid}/repositories/services/${encodeURIComponent(service)}`);
+      await expect(menu.locator('a:visible').first()).toBeFocused();
+      await page.keyboard.press('Escape');
+      await expect(menu).toBeHidden();
+      await expect(node).toBeFocused();
+      await page.keyboard.press('Enter');
+      const link = menu.getByRole('link', { name: 'View repositories', exact: true });
+      await link.focus();
+      await page.keyboard.press('Enter');
+      await expect(page.getByRole('heading', { name: `Repositories for ${service}`, exact: true })).toBeVisible();
+      const content = page.locator('#repository-content');
+      await expect(content.locator('article')).toHaveCount(2);
+      await expect(content.getByRole('link', { name: 'acme/checkout', exact: true })).toHaveAttribute('href', `/p/${pid}/repositories/${repositories[0]}`);
+      await expect(content.getByText('All services', { exact: true })).toBeVisible();
+      await expect(page.getByRole('link', { name: 'Add repositories', exact: true })).toHaveCount(0);
+      await page.setViewportSize({ width: 320, height: 800 });
+      await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBe(320);
+      await expect.poll(() => page.locator('#side-nav-menu').evaluate(element => element.getBoundingClientRect().right)).toBeLessThanOrEqual(0);
+      await page.screenshot({ path: testInfo.outputPath(`service-repositories-${theme}.png`) });
+      await page.getByRole('link', { name: 'All repositories', exact: true }).click();
+      await expect(page.locator('#repository-content article')).toHaveCount(4);
+      await page.goBack();
+      await expect(page.getByRole('heading', { name: `Repositories for ${service}`, exact: true })).toBeVisible();
+    }
+    sql(`DELETE FROM projects.code_mappings WHERE project_id = '${pid}' AND service IS NULL;`);
+    await page.goto(`/p/${pid}/repositories/services/unmapped`);
+    await expect(page.getByRole('heading', { name: 'No repositories linked to this service', exact: true })).toBeVisible();
+    await expect(page.getByText('Ask a project editor to link services to their source repositories.', { exact: true })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Choose a repository', exact: true })).toHaveCount(0);
+  } finally {
+    sql(`DELETE FROM apis.service_dependency_edges_env WHERE project_id = '${pid}';
+         DELETE FROM projects.projects WHERE id = '${pid}'; DELETE FROM users.users WHERE id = '${uid}';`);
+  }
+});
+
+
+test('export recovery queues the failed dashboard and keeps the error visible in both themes', async ({ page, baseURL }, testInfo) => {
+  const uid = randomUUID(), sid = randomUUID(), pid = randomUUID(), sync = randomUUID(), rid = randomUUID(), did = randomUUID();
+  sql(`INSERT INTO users.users (id, email) VALUES ('${uid}', '${uid}@example.com');
+       INSERT INTO users.persistent_sessions (id, user_id) VALUES ('${sid}', '${uid}');
+       INSERT INTO projects.projects (id, title) VALUES ('${pid}', 'Export recovery');
+       INSERT INTO projects.project_members (project_id, user_id, permission) VALUES ('${pid}', '${uid}', 'admin');
+       INSERT INTO projects.repositories (id, project_id, host, owner, repo) VALUES ('${rid}', '${pid}', 'github', 'team', 'dashboards');
+       INSERT INTO projects.git_sync (id, project_id, owner, repo, branch, access_token, last_error)
+       VALUES ('${sync}', '${pid}', 'team', 'dashboards', 'main', 'fixture', jsonb_build_object('operation', jsonb_build_object('tag', 'ExportDashboard', 'contents', '${did}'), 'message', 'Could not export overview.yaml. Check repository access and retry.'));
+       INSERT INTO projects.dashboards (id, project_id, created_by, title, schema, git_sync_id, file_path)
+       VALUES ('${did}', '${pid}', '${uid}', 'Overview', '{"widgets":[]}', '${sync}', 'overview.yaml');`);
+  try {
+    await page.context().addCookies([{ name: 'monoscope_session', value: sid, url: baseURL! }]);
+    await page.setViewportSize({ width: 320, height: 800 });
+    for (const [index, theme] of ['light', 'dark'].entries()) {
+      await page.context().addCookies([{ name: 'theme', value: theme, url: baseURL! }]);
+      await page.goto(`/p/${pid}/repositories/${rid}/dashboards`);
+      const panel = page.locator('#repository-dashboard-content');
+      await expect(panel.getByRole('status')).toContainText('Could not export overview.yaml');
+      await expect(panel.getByRole('button', { name: 'Retry import', exact: true })).toHaveCount(0);
+      const retry = panel.getByRole('button', { name: /^Retry export(?: Loading)?$/ });
+      await retry.focus();
+      await expect(retry).toBeFocused();
+      let releaseRetry!: () => void;
+      const gate = new Promise<void>(resolve => { releaseRetry = resolve; });
+      await page.route(`**/settings/git-sync/${sync}/retry`, async route => { await gate; await route.continue(); }, { times: 1 });
+      await retry.press('Enter');
+      try {
+        await expect(retry).toBeDisabled();
+        await expect(retry.getByRole('status', { name: 'Loading', exact: true })).toBeVisible();
+      } finally { releaseRetry(); }
+      await expect(page.getByText('Retry queued', { exact: true })).toBeVisible();
+      await expect(retry).toBeEnabled();
+      await expect(panel.getByRole('status')).toContainText('Could not export overview.yaml');
+      expect(sql(`SELECT count(*) FROM background_jobs WHERE payload->>'tag' = 'GitSyncPushDashboard' AND payload::text LIKE '%${did}%'`).toString().trim()).toBe(String(index + 1));
+      expect(sql(`SELECT count(*) FROM background_jobs WHERE payload->>'tag' = 'GitSyncRepository' AND payload::text LIKE '%${sync}%'`).toString().trim()).toBe('0');
+      await page.getByRole('button', { name: 'Dismiss notification', exact: true }).click();
+      await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBe(320);
+      await page.screenshot({ path: testInfo.outputPath(`export-recovery-${theme}.png`), fullPage: true });
+      await panel.getByRole('link', { name: 'View the dashboard that failed to export', exact: true }).click();
+      await expect(page).toHaveURL(`/p/${pid}/dashboards/${did}/repository`);
+      await expect(page.locator('#main-content').getByRole('heading', { name: 'Dashboard repository', exact: true })).toBeVisible();
+    }
+    sql(`UPDATE projects.git_sync SET sync_enabled = false WHERE id = '${sync}';`);
+    await page.goto(`/p/${pid}/repositories/${rid}/dashboards`);
+    await expect(page.getByRole('button', { name: 'Retry export', exact: true })).toHaveCount(0);
+    expect((await page.request.post(`/p/${pid}/settings/git-sync/${sync}/retry`)).status()).toBe(200);
+    expect(sql(`SELECT count(*) FROM background_jobs WHERE payload->>'tag' = 'GitSyncPushDashboard' AND payload::text LIKE '%${did}%'`).toString().trim()).toBe('2');
+    sql(`UPDATE projects.project_members SET permission = 'view' WHERE project_id = '${pid}' AND user_id = '${uid}';`);
+    expect((await page.request.post(`/p/${pid}/settings/git-sync/${sync}/retry`)).status()).toBe(403);
+  } finally {
+    sql(`DELETE FROM background_jobs WHERE payload::text LIKE '%${pid}%';
+         DELETE FROM projects.projects WHERE id = '${pid}'; DELETE FROM users.users WHERE id = '${uid}';`);
   }
 });

@@ -840,7 +840,7 @@ spec = sequential $ aroundAll withTestResources do
     it "10. Cross-project isolation: patterns don't leak between projects" \tr -> do
       -- Create a second project
       let pid2 = UUIDId $ fromMaybe UUID.nil $ UUID.fromText "11111111-1111-1111-1111-111111111111" :: Projects.ProjectId
-      withResource tr.trPool \conn ->
+      withResource tr.trPool \conn -> do
         void
           $ PGS.execute
             conn
@@ -848,6 +848,8 @@ spec = sequential $ aroundAll withTestResources do
                 VALUES (?, 'Isolation Test Project', 'Startup', true)
                 ON CONFLICT (id) DO NOTHING |]
             (PGS.Only pid2)
+
+        void $ PGS.execute conn [sql| INSERT INTO projects.project_members (project_id, user_id, permission) VALUES (?, ?, 'admin') ON CONFLICT DO NOTHING |] (pid2, (Servant.getResponse tr.trSessAndHeader).user.id)
 
       -- Record pid pattern count before
       patternsBefore <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 100 0

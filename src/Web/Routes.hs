@@ -21,10 +21,8 @@ import Data.Effectful.Hasql qualified as Hasql
 import Hasql.Interpolate qualified as HI
 
 -- Effectful imports
-import Data.Effectful.Notify qualified as Notify
 import Effectful.Error.Static qualified as Error
 import Effectful.Reader.Static (ask)
-import Effectful.Reader.Static qualified as Reader
 import Effectful.State.Static.Local qualified as State
 import Effectful.Time qualified as Time
 
@@ -56,7 +54,7 @@ import System.Exit (ExitCode (..))
 import System.Logging qualified as Log
 import System.Process.Typed (byteStringInput, proc, readProcess, setStdin)
 import System.Timeout (timeout)
-import System.Types (ATAuthCtx, ATBaseCtx, ApiPrincipal (..), HXRedirectDest, RespHeaders, TriggerEvents, XWidgetJSON, addRespHeaders, effToServantHandler)
+import System.Types (ATAuthCtx, ATBaseCtx, ApiPrincipal (..), HXRedirectDest, HXReswap (..), RespHeaders, TriggerEvents, XWidgetJSON, addRespHeaders, atAuthToBase, effToServantHandler)
 import Web.Auth (APItoolkitAuthContext, ApiKeyAuthContext, apiKeyAuthHandler, authHandler, htmlServerError)
 import Web.Auth qualified as Auth
 import Web.MCP qualified as MCP
@@ -569,11 +567,12 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , replaySessionGet :: mode :- "p" :> ProjectId :> "replay_session" :> Capture "sessionId" UUID.UUID :> Get '[JSON] (RespHeaders Replay.ReplaySessionResp)
   , replaySessionManifestGet :: mode :- "p" :> ProjectId :> "replay_session" :> Capture "sessionId" UUID.UUID :> "manifest" :> Get '[JSON] (RespHeaders Replay.ReplayManifest)
   , replaySessionShardGet :: mode :- "p" :> ProjectId :> "replay_session" :> Capture "sessionId" UUID.UUID :> "shard" :> QueryParam "key" Text :> Get '[JSON] (RespHeaders Replay.RawJson)
-  , bringS3 :: mode :- "p" :> ProjectId :> "byob_s3" :> Get '[HTML] (RespHeaders (Html ()))
-  , bringS3Post :: mode :- "p" :> ProjectId :> "byob_s3" :> ReqBody '[FormUrlEncoded] Projects.ProjectS3Bucket :> Post '[HTML] (RespHeaders (Html ()))
-  , bringS3Remove :: mode :- "p" :> ProjectId :> "byob_s3" :> Delete '[HTML] (RespHeaders (Html ()))
+  , bringS3 :: mode :- "p" :> ProjectId :> "byob_s3" :> Get '[HTML] (RespHeaders (PageCtx Settings.StorageGet))
+  , bringS3Post :: mode :- "p" :> ProjectId :> "byob_s3" :> ReqBody '[FormUrlEncoded] Projects.ProjectS3Bucket :> Post '[HTML] (RespHeaders Settings.StorageGet)
+  , bringS3Remove :: mode :- "p" :> ProjectId :> "byob_s3" :> Delete '[HTML] (RespHeaders Settings.StorageGet)
   , gitSyncSettings :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Get '[HTML] (RespHeaders (Html ()))
   , repositoriesGet :: mode :- "p" :> ProjectId :> "repositories" :> QueryParam "tab" PageCodeContext.RepositoryTab :> QueryParam "sample" Text :> Get '[HTML] (RespHeaders (Html ()))
+  , serviceRepositoriesGet :: mode :- "p" :> ProjectId :> "repositories" :> "services" :> Capture "service" Text :> Get '[HTML] (RespHeaders (Html ()))
   , repositoryConnectGet :: mode :- "p" :> ProjectId :> "repositories" :> "connect" :> QueryParam "credentialId" ModelGitSync.GitHubCredentialId :> Get '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryConnectGet))
   , repositoryConnectPost :: mode :- "p" :> ProjectId :> "repositories" :> "connect" :> QueryParam "credentialId" ModelGitSync.GitHubCredentialId :> ReqBody '[FormUrlEncoded] PageCodeContext.RepositoryConnectForm :> Post '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryConnectGet))
   , repositoryTokenGet :: mode :- "p" :> ProjectId :> "repositories" :> "connect" :> "token" :> Get '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryTokenGet))
@@ -606,7 +605,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , prometheusSettingsDelete :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> Capture "cfgID" PromCfg.PrometheusScrapeConfigId :> Delete '[HTML] (RespHeaders Settings.PrometheusMut)
   , -- GitHub App routes
     githubAppInstall :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "install" :> QueryParam "to" Text :> Get '[HTML] (RespHeaders (Html ()))
-  , githubAppCallback :: mode :- "github" :> "callback" :> QueryParam "installation_id" Int64 :> QueryParam "setup_action" Text :> QueryParam "state" Text :> Get '[HTML] (RespHeaders (Html ()))
+  , githubAppCallback :: mode :- "github" :> "callback" :> QueryParam "installation_id" Int64 :> QueryParam "setup_action" Text :> QueryParam "state" Text :> QueryParam "code" Text :> Get '[HTML] (RespHeaders (Html ()))
   , githubAppRepos :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "repos" :> QueryParam "installationId" Int64 :> Get '[HTML] (RespHeaders (Html ()))
   , githubAppSelectRepo :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "select" :> ReqBody '[FormUrlEncoded] GitSync.RepoSelectForm :> Post '[HTML] (RespHeaders (Html ()))
   , -- Command palette
@@ -872,6 +871,7 @@ server logger env tp otlpTraces otlpLogs =
           & State.evalState @TriggerEvents mempty
           & State.evalState @HXRedirectDest Nothing
           & State.evalState @XWidgetJSON Nothing
+          & State.evalState (HXReswap Nothing)
     , deviceCode = Auth.deviceCodeH
     , deviceToken = Auth.deviceTokenH
     , emailPreviewList = emailPreviewListH
@@ -882,14 +882,7 @@ server logger env tp otlpTraces otlpLogs =
         Servant.hoistServerWithContext
           (Proxy @(Servant.NamedRoutes CookieProtectedRoutes))
           (Proxy @'[APItoolkitAuthContext])
-          ( \page ->
-              page
-                & Notify.runNotifyProduction
-                & State.evalState mempty -- TriggerEvents
-                & State.evalState Nothing -- HXRedirectDest
-                & State.evalState Nothing -- XWidgetJSON
-                & Reader.runReader sessionWithCookies
-          )
+          (atAuthToBase sessionWithCookies)
           cookieProtectedServer
     }
 
@@ -1073,6 +1066,7 @@ cookieProtectedServer =
     , bringS3Remove = Settings.brings3RemoveH
     , gitSyncSettings = \pid -> PageCodeContext.repositoriesGetH pid (Just PageCodeContext.Configuration) Nothing
     , repositoriesGet = PageCodeContext.repositoriesGetH
+    , serviceRepositoriesGet = PageCodeContext.serviceRepositoriesGetH
     , repositoryConnectGet = PageCodeContext.repositoryConnectGetH
     , repositoryConnectPost = PageCodeContext.repositoryConnectPostH
     , repositoryTokenGet = PageCodeContext.repositoryTokenGetH

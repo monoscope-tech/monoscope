@@ -3,6 +3,7 @@ module Pages.Settings (
   bringS3GetH,
   brings3PostH,
   brings3RemoveH,
+  StorageGet (..),
   -- Api
   apiGetH,
   apiPostH,
@@ -10,6 +11,7 @@ module Pages.Settings (
   apiDeleteH,
   GenerateAPIKeyForm (..),
   ApiGet (..),
+  ApiKeySettings (..),
   ApiMut (..),
   -- Prometheus
   prometheusGetH,
@@ -21,6 +23,7 @@ module Pages.Settings (
   PrometheusForm (..),
   PrometheusGet (..),
   PrometheusMut (..),
+  PrometheusSettings (..),
   safeScrapeUrl,
   parseLabelsText,
   -- Integrations
@@ -89,7 +92,7 @@ import Effectful.Time qualified as Time
 import Fmt (commaizeF, fmt)
 import Lucid
 import Lucid.Aria qualified as Aria
-import Lucid.Htmx (hxConfirm_, hxDelete_, hxGet_, hxIndicator_, hxPatch_, hxPost_, hxSwap_, hxTarget_)
+import Lucid.Htmx (hxConfirm_, hxDelete_, hxGet_, hxIndicator_, hxPatch_, hxPost_, hxSwapOob_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
@@ -102,7 +105,7 @@ import Network.HTTP.Types (urlEncode)
 import Network.Minio qualified as Minio
 import Network.URI (parseURI, uriAuthority, uriRegName, uriScheme)
 import Network.Wreq qualified as Wreq
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, settingsContentTarget, withSettingsPage)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, settingsContentTarget)
 import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), confirmModal_, connectionBadge_, copySourceAttr_, emptyState_, filterInputAttr_, formField_, headerRow_, iconBadgeLg_, keyboardActivateAttr_, localTimeFmt_, modalWith_, options_, paymentPlanPicker, sectionLabel_, settingsH2_, settingsSection_)
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
@@ -110,9 +113,9 @@ import Pkg.EmailTemplates qualified as ET
 import Pkg.Mail (NotificationAlerts (..), sampleAlertByIssueTypeText, sampleReport, sendDiscordAlert, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendWhatsAppAlert)
 import Pkg.Prometheus qualified as Prom
 import Relude hiding (ask, asks)
-import Servant (FromHttpApiData (..), err400, errBody)
+import Servant (FromHttpApiData (..), err400, err403, errBody)
 import System.Config
-import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
+import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent)
 import Text.Printf (printf)
 import UnliftIO.Exception (throwIO, try, tryAny)
 import Utils (LoadingSize (..), calculateCycleStartDate, faSprite_, fmtDate, formatBytes, htmxIndicator_)
@@ -159,84 +162,117 @@ humanizeMinioErr = \case
   Minio.MErrIO _ -> "Network error while reaching S3. Check your connection and endpoint, then try again."
 
 
-brings3PostH :: Projects.ProjectId -> Projects.ProjectS3Bucket -> ATAuthCtx (RespHeaders (Html ()))
+data StorageGet = StorageGet
+  { projectId :: Projects.ProjectId
+  , savedBucket :: Maybe Projects.ProjectS3Bucket
+  , rejected :: Maybe (Projects.ProjectS3Bucket, Text)
+  , permission :: Maybe ProjectMembers.Permissions
+  }
+  deriving stock (Generic)
+
+
+storagePage :: Projects.ProjectId -> ATAuthCtx (PageCtx StorageGet)
+storagePage pid = do
+  (session, project, bw) <- mkPageCtx pid
+  permission <- ProjectMembers.getUserPermission pid session.user.id
+  pure $ PageCtx bw{pageTitle = "Storage", isSettingsPage = True} $ StorageGet pid project.s3Bucket Nothing permission
+
+
+brings3PostH :: Projects.ProjectId -> Projects.ProjectS3Bucket -> ATAuthCtx (RespHeaders StorageGet)
 brings3PostH pid s3Form = do
+  page <- storagePage pid
+  unless (maybe False (>= ProjectMembers.PEdit) page.content.permission) $ throwError err403
   let connectInfo = getMinioConnectInfo s3Form.accessKey s3Form.secretKey s3Form.region s3Form.endpointUrl
   res <- liftIO $ Minio.runMinio connectInfo $ Minio.bucketExists s3Form.bucket
-  let notConnected msg = addErrorToast msg Nothing >> addRespHeaders (connectionBadge_ "Not connected")
+  let validationFailed msg = addRespHeaders page.content{rejected = Just (s3Form, msg)}
   case res of
-    Left err -> notConnected $ humanizeMinioErr err
-    Right False -> notConnected "Bucket does not exist"
+    Left err -> validationFailed $ humanizeMinioErr err
+    Right False -> validationFailed "Bucket does not exist"
     Right True -> do
       void $ Projects.updateProjectS3Bucket pid $ Just s3Form
       sess <- Projects.getSession
       Projects.logAuditS pid Projects.AES3Configured sess Nothing
       addSuccessToast "Connected successfully" Nothing
-      addRespHeaders $ connectionBadge_ "Connected"
+      addRespHeaders page.content{savedBucket = Just s3Form}
 
 
-brings3RemoveH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
+brings3RemoveH :: Projects.ProjectId -> ATAuthCtx (RespHeaders StorageGet)
 brings3RemoveH pid = do
-  (sess, _) <- Projects.sessionAndProject pid
+  page <- storagePage pid
+  unless (maybe False (>= ProjectMembers.PEdit) page.content.permission) $ throwError err403
+  sess <- Projects.getSession
   void $ Projects.updateProjectS3Bucket pid Nothing
   Projects.logAuditS pid Projects.AES3Removed sess Nothing
   addSuccessToast "Removed S3 bucket" Nothing
-  addRespHeaders $ connectionBadge_ "Not connected"
+  addRespHeaders page.content{savedBucket = Nothing}
 
 
-bringS3GetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
-bringS3GetH pid = withSettingsPage pid "Storage" \project -> pure $ bringS3Page pid project.s3Bucket
+bringS3GetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (PageCtx StorageGet))
+bringS3GetH pid = addRespHeaders =<< storagePage pid
 
 
-bringS3Page :: Projects.ProjectId -> Maybe Projects.ProjectS3Bucket -> Html ()
-bringS3Page pid s3BucketM = settingsSection_ do
-  headerRow_ [] do
-    settingsH2_ "Storage"
-    div_ [id_ "connectedInd"] $ connectionBadge_ $ bool "Not connected" "Connected" (isJust s3BucketM)
+instance ToHtml StorageGet where
+  toHtml page = toHtml @(Html ()) $ div_ [id_ "storage-connection-content", class_ "h-full"] $ settingsSection_ do
+    headerRow_ [] do
+      settingsH2_ "Storage"
+      div_ [id_ "connectedInd"] $ connectionBadge_ $ bool "Not connected" "Connected" (isJust page.savedBucket)
+    if not canEdit
+      then do
+        p_ [class_ "text-sm text-textWeak"] "A project editor can configure storage."
+        whenJust page.savedBucket \bucket -> dl_ [class_ "grid gap-4 sm:grid-cols-2"] $ forM_ ([("Bucket", bucket.bucket), ("Region", bucket.region), ("Endpoint", if T.null bucket.endpointUrl then "AWS S3" else bucket.endpointUrl)] :: [(Text, Text)]) \(label, value) -> div_ [class_ "space-y-1 min-w-0"] do
+          dt_ [class_ "text-xs text-textWeak"] $ toHtml @Text label
+          dd_ [class_ "text-sm text-textStrong break-all"] $ toHtml value
+      else do
+        whenJust page.rejected \(_, message) -> div_ [role_ "alert", class_ "rounded-lg bg-fillError-weak p-3 space-y-1"] do
+          p_ [class_ "text-sm text-textError"] $ toHtml message
+          when (isJust page.savedBucket) $ p_ [class_ "text-sm text-textStrong"] "The saved connection is unchanged."
+        p_ [class_ "text-sm text-textWeak max-w-2xl"] "Connect your own S3-compatible bucket to store telemetry in your infrastructure. Validate the connection before saving."
 
-  p_ [class_ "text-sm text-textWeak max-w-2xl"] "Connect your own S3-compatible bucket to store telemetry in your infrastructure. Validate the connection before saving."
+        form_ [class_ "space-y-4", hxPost_ ("/p/" <> pid.toText <> "/byob_s3"), hxSwap_ "outerHTML", hxTarget_ "#storage-connection-content", hxIndicator_ "#indicator"] do
+          div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2"] do
+            formField_ FieldSm def{value = form.accessKey, placeholder = "Access Key ID"} "Access Key ID" "accessKey" True Nothing
+            formField_ FieldSm def{inputType = "password", value = form.secretKey, placeholder = "Secret Access Key"} "Secret Access Key" "secretKey" True Nothing
+            formField_ FieldSm def{value = form.region, placeholder = "us-east-1", extraAttrs = [term "list" "aws-regions"]} "Region" "region" True Nothing
+            formField_ FieldSm def{value = form.bucket, placeholder = "Bucket Name"} "Bucket Name" "bucket" True Nothing
+          datalist_ [id_ "aws-regions"] $ options_ Nothing awsRegions
+          formField_ FieldSm def{value = form.endpointUrl, placeholder = "https://s3.example.com", extraAttrs = [pattern_ "https?://.*"]} "Custom Endpoint" "endpointUrl" False Nothing
+          p_ [class_ "text-xs text-textWeak"] "Leave blank for AWS S3. For S3-compatible providers (MinIO, DigitalOcean Spaces, Cloudflare R2, Backblaze, OVH), set the endpoint URL and enter the region your provider expects — e.g. auto for R2, nyc3 for DigitalOcean, or us-east-1 for MinIO."
 
-  form_ [class_ "space-y-4", hxPost_ "", hxSwap_ "innerHTML", hxTarget_ "#connectedInd", hxIndicator_ "#indicator"] do
-    div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2"] do
-      formField_ FieldSm def{value = maybe "" (.accessKey) s3BucketM, placeholder = "Access Key ID"} "Access Key ID" "accessKey" True Nothing
-      formField_ FieldSm def{inputType = "password", value = maybe "" (.secretKey) s3BucketM, placeholder = "Secret Access Key"} "Secret Access Key" "secretKey" True Nothing
-      formField_ FieldSm def{value = maybe "us-east-1" (.region) s3BucketM, placeholder = "us-east-1", extraAttrs = [term "list" "aws-regions"]} "Region" "region" True Nothing
-      formField_ FieldSm def{value = maybe "" (.bucket) s3BucketM, placeholder = "Bucket Name"} "Bucket Name" "bucket" True Nothing
-    datalist_ [id_ "aws-regions"] $ options_ Nothing awsRegions
-    formField_ FieldSm def{value = maybe "" (.endpointUrl) s3BucketM, placeholder = "https://s3.example.com", extraAttrs = [pattern_ "https?://.*"]} "Custom Endpoint" "endpointUrl" False Nothing
-    p_ [class_ "text-xs text-textWeak"] "Leave blank for AWS S3. For S3-compatible providers (MinIO, DigitalOcean Spaces, Cloudflare R2, Backblaze, OVH), set the endpoint URL and enter the region your provider expects — e.g. auto for R2, nyc3 for DigitalOcean, or us-east-1 for MinIO."
+          div_ [class_ "flex items-center justify-between pt-2"] do
+            div_ [class_ "flex items-center gap-3"] do
+              button_ [type_ "submit", class_ "btn btn-sm btn-primary gap-1"] do
+                "Validate & Save"
+                htmxIndicator_ "indicator" LdXS
+            when (isJust page.savedBucket) $ label_ [class_ "btn btn-sm btn-ghost text-textError hover:bg-fillError-weak", Lucid.for_ "remove-modal"] do
+              faSprite_ "trash" "regular" "w-3 h-3"
+              span_ "Remove"
 
-    div_ [class_ "flex items-center justify-between pt-2"] do
-      div_ [class_ "flex items-center gap-3"] do
-        button_ [class_ "btn btn-sm btn-primary gap-1"] do
-          "Validate & Save"
-          htmxIndicator_ "indicator" LdXS
-      when (isJust s3BucketM) $ label_ [class_ "btn btn-sm btn-ghost text-textError hover:bg-fillError-weak", Lucid.for_ "remove-modal"] do
-        faSprite_ "trash" "regular" "w-3 h-3"
-        span_ "Remove"
-
-  confirmModal_ "remove-modal" "Remove bucket?" "This will disconnect your S3 bucket. Data already stored will remain in your bucket." [hxDelete_ "", hxSwap_ "innerHTML", hxTarget_ "#connectedInd"] "Remove bucket"
-  where
-    -- Suggestions only: free text stays allowed so S3-compatible providers (which
-    -- ignore the region) can pass anything.
-    awsRegions :: [(Text, Text)]
-    awsRegions =
-      [ ("us-east-1", "US East (N. Virginia)")
-      , ("us-east-2", "US East (Ohio)")
-      , ("us-west-1", "US West (N. California)")
-      , ("us-west-2", "US West (Oregon)")
-      , ("ca-central-1", "Canada (Central)")
-      , ("eu-west-1", "Europe (Ireland)")
-      , ("eu-west-2", "Europe (London)")
-      , ("eu-west-3", "Europe (Paris)")
-      , ("eu-central-1", "Europe (Frankfurt)")
-      , ("eu-north-1", "Europe (Stockholm)")
-      , ("ap-south-1", "Asia Pacific (Mumbai)")
-      , ("ap-southeast-1", "Asia Pacific (Singapore)")
-      , ("ap-southeast-2", "Asia Pacific (Sydney)")
-      , ("ap-northeast-1", "Asia Pacific (Tokyo)")
-      , ("sa-east-1", "South America (São Paulo)")
-      ]
+        when (isJust page.savedBucket) $ confirmModal_ "remove-modal" "Remove bucket?" "This will disconnect your S3 bucket. Data already stored will remain in your bucket." [hxDelete_ ("/p/" <> pid.toText <> "/byob_s3"), hxSwap_ "outerHTML", hxTarget_ "#storage-connection-content"] "Remove bucket"
+    where
+      pid = page.projectId
+      canEdit = maybe False (>= ProjectMembers.PEdit) page.permission
+      form = maybe (fromMaybe (Projects.ProjectS3Bucket "" "" "us-east-1" "" "") page.savedBucket) fst page.rejected
+      -- Suggestions only: free text stays allowed so S3-compatible providers (which
+      -- ignore the region) can pass anything.
+      awsRegions :: [(Text, Text)]
+      awsRegions =
+        [ ("us-east-1", "US East (N. Virginia)")
+        , ("us-east-2", "US East (Ohio)")
+        , ("us-west-1", "US West (N. California)")
+        , ("us-west-2", "US West (Oregon)")
+        , ("ca-central-1", "Canada (Central)")
+        , ("eu-west-1", "Europe (Ireland)")
+        , ("eu-west-2", "Europe (London)")
+        , ("eu-west-3", "Europe (Paris)")
+        , ("eu-central-1", "Europe (Frankfurt)")
+        , ("eu-north-1", "Europe (Stockholm)")
+        , ("ap-south-1", "Asia Pacific (Mumbai)")
+        , ("ap-southeast-1", "Asia Pacific (Singapore)")
+        , ("ap-southeast-2", "Asia Pacific (Sydney)")
+        , ("ap-northeast-1", "Asia Pacific (Tokyo)")
+        , ("sa-east-1", "South America (São Paulo)")
+        ]
+  toHtmlRaw = toHtml
 
 
 ----------------------------------------------------------------------
@@ -253,7 +289,7 @@ data GenerateAPIKeyForm = GenerateAPIKeyForm
 
 apiPostH :: Projects.ProjectId -> GenerateAPIKeyForm -> ATAuthCtx (RespHeaders ApiMut)
 apiPostH pid apiKeyForm = do
-  (sess, _) <- Projects.sessionAndProject pid
+  sess <- requireSettingsWrite pid
   authCtx <- ask @AuthContext
   projectKeyUUID <- liftIO UUIDV4.nextRandom
   let encryptedKeyB64 = ProjectApiKeys.encodeApiKeyB64 authCtx.config.apiKeyEncryptionSecretKey projectKeyUUID
@@ -282,7 +318,7 @@ data ApiKeyMutation = ActivateApiKey | RevokeApiKey
 
 apiKeySetActive :: Projects.ProjectId -> ApiKeyMutation -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (RespHeaders ApiMut)
 apiKeySetActive pid mutation keyid = do
-  (sess, _) <- Projects.sessionAndProject pid
+  sess <- requireSettingsWrite pid
   currentKeys <- ProjectApiKeys.projectApiKeysByProjectId pid
   let ownedKey = find ((== keyid) . (.id)) currentKeys
       (act, event, verb, cachedProject) = case mutation of
@@ -306,7 +342,7 @@ data ApiMut
 
 
 instance ToHtml ApiMut where
-  toHtml (ApiPost pid apiKeys m) = toHtml $ apiMainContent pid apiKeys m
+  toHtml (ApiPost pid apiKeys m) = toHtml $ apiMainContent pid True apiKeys m
   toHtml (ApiPostCopy m b) = toHtml $ copyNewApiKey m b
   toHtmlRaw = toHtml
 
@@ -314,29 +350,37 @@ instance ToHtml ApiMut where
 -- | apiGetH renders the api keys list page which includes a modal for creating the apikeys.
 apiGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders ApiGet)
 apiGetH pid = do
-  (_, _, bw) <- mkPageCtx pid
+  (session, _, bw) <- mkPageCtx pid
   apiKeys <- apiKeysForProject pid
-  addRespHeaders $ ApiGet $ PageCtx bw{pageTitle = "API Keys", isSettingsPage = True} (pid, apiKeys)
+  permission <- ProjectMembers.getUserPermission pid session.user.id
+  addRespHeaders $ ApiGet $ PageCtx bw{pageTitle = "API Keys", isSettingsPage = True} (ApiKeySettings pid apiKeys permission)
 
 
 apiKeysForProject :: Projects.ProjectId -> ATAuthCtx (V.Vector ProjectApiKeys.ProjectApiKey)
 apiKeysForProject = fmap V.fromList . ProjectApiKeys.projectApiKeysByProjectId
 
 
-newtype ApiGet = ApiGet (PageCtx (Projects.ProjectId, V.Vector ProjectApiKeys.ProjectApiKey))
+data ApiKeySettings = ApiKeySettings
+  { projectId :: Projects.ProjectId
+  , keys :: V.Vector ProjectApiKeys.ProjectApiKey
+  , permission :: Maybe ProjectMembers.Permissions
+  }
+
+
+newtype ApiGet = ApiGet (PageCtx ApiKeySettings)
 
 
 instance ToHtml ApiGet where
-  toHtml (ApiGet (PageCtx bwconf (pid, apiKeys))) = toHtml $ PageCtx bwconf $ apiKeysPage pid apiKeys
+  toHtml (ApiGet (PageCtx bwconf settings)) = toHtml $ PageCtx bwconf $ apiKeysPage settings
   toHtmlRaw = toHtml
 
 
-apiKeysPage :: Projects.ProjectId -> V.Vector ProjectApiKeys.ProjectApiKey -> Html ()
-apiKeysPage pid apiKeys = do
+apiKeysPage :: ApiKeySettings -> Html ()
+apiKeysPage settings = do
   settingsSection_ do
     div_ [class_ "flex justify-between items-center"] do
       settingsH2_ "API Keys"
-      modalWith_ "apikey-modal" def{boxClass = "w-full max-w-md p-6"} (Just $ span_ [class_ "btn btn-sm btn-primary gap-1.5"] $ do faSprite_ "plus" "regular" "w-3 h-3"; "New Key") do
+      when canEdit $ modalWith_ "apikey-modal" def{boxClass = "w-full max-w-md p-6"} (Just $ span_ [class_ "btn btn-sm btn-primary gap-1.5"] $ do faSprite_ "plus" "regular" "w-3 h-3"; "New Key") do
         div_ [class_ "flex flex-col gap-3"] do
           iconBadgeLg_ BrandBadge "key"
           div_ [class_ "flex flex-col gap-1"] do
@@ -350,11 +394,15 @@ apiKeysPage pid apiKeys = do
           div_ [class_ "flex justify-end gap-2"] do
             label_ [class_ "btn btn-sm btn-ghost", Lucid.for_ "apikey-modal"] "Cancel"
             button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Create key"
-    apiMainContent pid apiKeys Nothing
+    unless canEdit $ p_ [class_ "text-sm text-textWeak mb-4"] "A project editor can create, reveal, and manage API keys."
+    apiMainContent pid canEdit settings.keys Nothing
+  where
+    pid = settings.projectId
+    canEdit = maybe False (>= ProjectMembers.PEdit) settings.permission
 
 
-apiMainContent :: Projects.ProjectId -> V.Vector ProjectApiKeys.ProjectApiKey -> Maybe (ProjectApiKeys.ProjectApiKey, Text) -> Html ()
-apiMainContent pid apiKeys newKeyM = section_ [] do
+apiMainContent :: Projects.ProjectId -> Bool -> V.Vector ProjectApiKeys.ProjectApiKey -> Maybe (ProjectApiKeys.ProjectApiKey, Text) -> Html ()
+apiMainContent pid canEdit apiKeys newKeyM = section_ [] do
   copyNewApiKey newKeyM False
   let (activeKeys, revokedKeys) = V.partition (.active) apiKeys
   -- DaisyUI radio tabs: each input and the panel it reveals are adjacent
@@ -363,11 +411,11 @@ apiMainContent pid apiKeys newKeyM = section_ [] do
     ([("active_content", "Active keys", activeKeys, True), ("revoked_content", "Archived keys", revokedKeys, False)] :: [(Text, Text, V.Vector ProjectApiKeys.ProjectApiKey, Bool)])
     \(elemId, lbl, keys, isActive) -> do
       input_ $ [type_ "radio", name_ "api-key-tabs", role_ "tab", class_ "tab", term "aria-label" $ lbl <> " (" <> show (V.length keys) <> ")"] <> [checked_ | isActive]
-      div_ [class_ "tab-content pt-4"] $ toHtml $ makeApiKeysTable pid keys elemId
+      div_ [class_ "tab-content pt-4"] $ toHtml $ makeApiKeysTable pid canEdit keys elemId
 
 
-makeApiKeysTable :: Projects.ProjectId -> V.Vector ProjectApiKeys.ProjectApiKey -> Text -> Table.Table ProjectApiKeys.ProjectApiKey
-makeApiKeysTable pid apiKeys elemId =
+makeApiKeysTable :: Projects.ProjectId -> Bool -> V.Vector ProjectApiKeys.ProjectApiKey -> Text -> Table.Table ProjectApiKeys.ProjectApiKey
+makeApiKeysTable pid canEdit apiKeys elemId =
   Table.Table
     { config = def{Table.elemID = elemId, Table.renderAsTable = True}
     , columns = apiKeyColumns
@@ -381,50 +429,53 @@ makeApiKeysTable pid apiKeys elemId =
           span_ [class_ "text-textStrong font-semibold text-sm truncate min-w-0 block max-w-48"] $ toHtml apiKey.title
       , -- Titles repeat (two "js-sdk2"); the creation date is what tells such keys apart.
         Table.col "Created" \apiKey -> span_ [class_ "text-sm text-textWeak tabular-nums whitespace-nowrap"] $ localTimeFmt_ "MMM d, yyyy" apiKey.createdAt
-      , Table.col "Key" \apiKey -> do
-          -- Reveal is pure CSS: the sr-only checkbox flips both spans and both eye labels
-          -- via `group-has-[:checked]` on the row container (no hyperscript, survives morph).
-          -- Keyed by key id, not row index — the active and archived tables both index from 0.
-          let revealId = "reveal-key-" <> apiKey.id.toText
-          div_ [class_ "group whitespace-nowrap w-full flex items-center gap-2 text-sm text-textWeak"] do
-            input_ [type_ "checkbox", id_ revealId, class_ "hidden"]
-            span_ [class_ "min-w-0 font-mono group-has-[:checked]:hidden"] do
-              span_ [class_ "text-textStrong"] $ toHtml $ T.take 8 apiKey.keyPrefix
-              span_ [class_ "text-textDisabled", Aria.hidden_ "true"] "••••••••"
-            span_ [id_ ("key-value-" <> apiKey.id.toText), class_ "min-w-0 font-mono text-textStrong hidden group-has-[:checked]:inline"] $ toHtml apiKey.keyPrefix
-            div_ [class_ "flex items-center gap-1.5 shrink-0 ml-auto"] do
-              -- Wrappers carry the toggle: .tap-target's display (custom layer) outranks `hidden`.
-              span_ [class_ "group-has-[:checked]:hidden"]
-                $ label_ [Lucid.for_ revealId, role_ "button", tabindex_ "0", Aria.label_ $ "Show value for " <> apiKey.title, class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer tooltip tooltip-left tap-target focus-visible:outline-2 focus-visible:outline-offset-2", data_ "tip" "Show key", keyboardActivateAttr_]
-                $ faSprite_ "eye" "regular" "h-3.5 w-3.5 text-iconNeutral"
-              span_ [class_ "hidden group-has-[:checked]:inline"]
-                $ label_ [Lucid.for_ revealId, role_ "button", tabindex_ "0", Aria.label_ $ "Hide value for " <> apiKey.title, class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer tooltip tooltip-left tap-target focus-visible:outline-2 focus-visible:outline-offset-2", data_ "tip" "Hide key", keyboardActivateAttr_]
-                $ faSprite_ "eye" "regular" "h-3.5 w-3.5 text-iconNeutral"
-              button_
-                [ class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer tooltip tooltip-left tap-target"
-                , type_ "button"
-                , Aria.label_ $ "Copy " <> apiKey.title
-                , copySourceAttr_ ("document.getElementById('key-value-" <> apiKey.id.toText <> "')")
-                , data_ "tip" "Copy key"
-                ]
-                $ faSprite_ "clipboard-copy" "regular" "h-3.5 w-3.5 text-iconNeutral"
-              let (hxMethod, tip, icon, iconCls) =
-                    if apiKey.active
-                      then (hxDelete_, "Revoke key", "circle-xmark", "group-hover/act:text-iconError")
-                      else (hxPatch_, "Activate key", "circle-check", "group-hover/act:text-iconSuccess")
-                  confirmMsg = "Are you sure you want to " <> bool "activate " "revoke " apiKey.active <> apiKey.title <> " API key?"
-              button_
-                [ class_ $ "group/act p-1 rounded cursor-pointer tooltip tooltip-left tap-target " <> bool "hover:bg-fillSuccess-weak" "hover:bg-fillError-weak" apiKey.active
-                , type_ "button"
-                , Aria.label_ $ bool "Activate " "Revoke " apiKey.active <> apiKey.title
-                , hxMethod $ "/p/" <> pid.toText <> "/apis/" <> apiKey.id.toText
-                , hxConfirm_ confirmMsg
-                , hxTarget_ settingsContentTarget
-                , data_ "tip" tip
-                ]
-                $ faSprite_ icon "regular"
-                $ "h-3.5 w-3.5 text-iconNeutral "
-                <> iconCls
+      , Table.col "Key" \apiKey ->
+          if canEdit
+            then do
+              -- Reveal is pure CSS: the sr-only checkbox flips both spans and both eye labels
+              -- via `group-has-[:checked]` on the row container (no hyperscript, survives morph).
+              -- Keyed by key id, not row index — the active and archived tables both index from 0.
+              let revealId = "reveal-key-" <> apiKey.id.toText
+              div_ [class_ "group whitespace-nowrap w-full flex items-center gap-2 text-sm text-textWeak"] do
+                input_ [type_ "checkbox", id_ revealId, class_ "hidden"]
+                span_ [class_ "min-w-0 font-mono group-has-[:checked]:hidden"] do
+                  span_ [class_ "text-textStrong"] $ toHtml $ T.take 8 apiKey.keyPrefix
+                  span_ [class_ "text-textDisabled", Aria.hidden_ "true"] "••••••••"
+                span_ [id_ ("key-value-" <> apiKey.id.toText), class_ "min-w-0 font-mono text-textStrong hidden group-has-[:checked]:inline"] $ toHtml apiKey.keyPrefix
+                div_ [class_ "flex items-center gap-1.5 shrink-0 ml-auto"] do
+                  -- Wrappers carry the toggle: .tap-target's display (custom layer) outranks `hidden`.
+                  span_ [class_ "group-has-[:checked]:hidden"]
+                    $ label_ [Lucid.for_ revealId, role_ "button", tabindex_ "0", Aria.label_ $ "Show value for " <> apiKey.title, class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer tooltip tooltip-left tap-target focus-visible:outline-2 focus-visible:outline-offset-2", data_ "tip" "Show key", keyboardActivateAttr_]
+                    $ faSprite_ "eye" "regular" "h-3.5 w-3.5 text-iconNeutral"
+                  span_ [class_ "hidden group-has-[:checked]:inline"]
+                    $ label_ [Lucid.for_ revealId, role_ "button", tabindex_ "0", Aria.label_ $ "Hide value for " <> apiKey.title, class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer tooltip tooltip-left tap-target focus-visible:outline-2 focus-visible:outline-offset-2", data_ "tip" "Hide key", keyboardActivateAttr_]
+                    $ faSprite_ "eye" "regular" "h-3.5 w-3.5 text-iconNeutral"
+                  button_
+                    [ class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer tooltip tooltip-left tap-target"
+                    , type_ "button"
+                    , Aria.label_ $ "Copy " <> apiKey.title
+                    , copySourceAttr_ ("document.getElementById('key-value-" <> apiKey.id.toText <> "')")
+                    , data_ "tip" "Copy key"
+                    ]
+                    $ faSprite_ "clipboard-copy" "regular" "h-3.5 w-3.5 text-iconNeutral"
+                  let (hxMethod, tip, icon, iconCls) =
+                        if apiKey.active
+                          then (hxDelete_, "Revoke key", "circle-xmark", "group-hover/act:text-iconError")
+                          else (hxPatch_, "Activate key", "circle-check", "group-hover/act:text-iconSuccess")
+                      confirmMsg = "Are you sure you want to " <> bool "activate " "revoke " apiKey.active <> apiKey.title <> " API key?"
+                  button_
+                    [ class_ $ "group/act p-1 rounded cursor-pointer tooltip tooltip-left tap-target " <> bool "hover:bg-fillSuccess-weak" "hover:bg-fillError-weak" apiKey.active
+                    , type_ "button"
+                    , Aria.label_ $ bool "Activate " "Revoke " apiKey.active <> apiKey.title
+                    , hxMethod $ "/p/" <> pid.toText <> "/apis/" <> apiKey.id.toText
+                    , hxConfirm_ confirmMsg
+                    , hxTarget_ settingsContentTarget
+                    , data_ "tip" tip
+                    ]
+                    $ faSprite_ icon "regular"
+                    $ "h-3.5 w-3.5 text-iconNeutral "
+                      <> iconCls
+            else span_ [class_ "font-mono text-sm text-textWeak"] $ toHtml $ T.take 8 apiKey.keyPrefix <> "••••••••"
       ]
 
 
@@ -468,27 +519,44 @@ data PrometheusForm = PrometheusForm
   deriving anyclass (FromForm)
 
 
-newtype PrometheusGet = PrometheusGet (PageCtx (Projects.ProjectId, V.Vector PromCfg.PrometheusScrapeConfig))
+data PrometheusSettings = PrometheusSettings
+  { projectId :: Projects.ProjectId
+  , configs :: V.Vector PromCfg.PrometheusScrapeConfig
+  , permission :: Maybe ProjectMembers.Permissions
+  }
+
+
+newtype PrometheusGet = PrometheusGet (PageCtx PrometheusSettings)
 
 
 instance ToHtml PrometheusGet where
-  toHtml (PrometheusGet (PageCtx bwconf (pid, cfgs))) = toHtml $ PageCtx bwconf $ prometheusPage pid cfgs
+  toHtml (PrometheusGet (PageCtx bwconf settings)) = toHtml $ PageCtx bwconf $ prometheusPage settings
   toHtmlRaw = toHtml
 
 
-newtype PrometheusMut = PrometheusMut (Projects.ProjectId, V.Vector PromCfg.PrometheusScrapeConfig)
+data PrometheusMut = PrometheusMut PrometheusSettings | PrometheusRejected Text
 
 
 instance ToHtml PrometheusMut where
-  toHtml (PrometheusMut (pid, cfgs)) = toHtml $ prometheusTargetsList pid cfgs
+  toHtml (PrometheusMut settings) = toHtml $ prometheusTargetsList settings
+  toHtml (PrometheusRejected message) = div_ [hxSwapOob_ "innerHTML target:'dialog[open] .prom-save-result'"] $ div_ [role_ "alert", class_ "rounded-lg border border-strokeError-weak bg-fillError-weak p-3 text-sm text-textError break-words"] $ toHtml message
   toHtmlRaw = toHtml
 
 
 prometheusGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders PrometheusGet)
 prometheusGetH pid = do
-  (_, _, bw) <- mkPageCtx pid
+  (session, _, bw) <- mkPageCtx pid
   cfgs <- PromCfg.configsByProjectId pid PromCfg.CKPrometheus
-  addRespHeaders $ PrometheusGet $ PageCtx bw{pageTitle = "Prometheus", isSettingsPage = True} (pid, cfgs)
+  permission <- ProjectMembers.getUserPermission pid session.user.id
+  addRespHeaders $ PrometheusGet $ PageCtx bw{pageTitle = "Prometheus", isSettingsPage = True} (PrometheusSettings pid cfgs permission)
+
+
+requireSettingsWrite :: Projects.ProjectId -> ATAuthCtx Projects.Session
+requireSettingsWrite pid = do
+  (session, _) <- Projects.sessionAndProject pid
+  permission <- ProjectMembers.getUserPermission pid session.user.id
+  unless (maybe False (>= ProjectMembers.PEdit) permission) $ throwError err403
+  pure session
 
 
 -- | A 'PrometheusForm' that passed validation: trimmed, SSRF-checked, interval floored.
@@ -587,22 +655,23 @@ prometheusUpdateH pid cid form = promSave pid form "Updated" \t -> do
 -- and still turns the collision into a friendly message.
 promSave :: Projects.ProjectId -> PrometheusForm -> Text -> (ScrapeTarget -> ATAuthCtx Int64) -> ATAuthCtx (RespHeaders PrometheusMut)
 promSave pid form verb persist = do
-  _ <- Projects.sessionAndProject pid
+  void $ requireSettingsWrite pid
   case validatePrometheusForm of
-    Left err -> addErrorToast err Nothing
+    Left err -> rejected err
     Right target ->
       try (persist target) >>= \case
         -- 0 rows means the edit targeted a row that no longer matches (concurrently deleted,
         -- or a cid that isn't this project's) — don't claim success for a write that did nothing.
-        Right 0 -> addErrorToast "That Prometheus target no longer exists" Nothing
+        Right 0 -> rejected "That Prometheus target no longer exists"
         Right _ -> do
           addSuccessToast (verb <> " Prometheus target") Nothing
           addTriggerEvent "closeModal" ""
+          prometheusMut pid
         Left e
-          | Hasql.isUniqueViolation e -> addErrorToast ("A target named “" <> target.name <> "” already exists") Nothing
+          | Hasql.isUniqueViolation e -> rejected ("A target named “" <> target.name <> "” already exists")
           | otherwise -> throwIO e
-  prometheusMut pid
   where
+    rejected msg = addReswap "none" >> addRespHeaders (PrometheusRejected msg)
     -- Validate + normalise the form. Name is required because it becomes the
     -- @service.name@ the scraped metrics are grouped under — blank names would silently
     -- collide multiple targets into one series namespace.
@@ -627,7 +696,7 @@ promSave pid form verb persist = do
 -- before saving instead of saving blind and squinting at last_status a minute later.
 prometheusTestH :: Projects.ProjectId -> PrometheusForm -> ATAuthCtx (RespHeaders (Html ()))
 prometheusTestH pid form = do
-  _ <- Projects.sessionAndProject pid
+  void $ requireSettingsWrite pid
   case validateScrapeUrl form.url of
     Left err -> addRespHeaders $ prometheusTestResult $ Just $ Left err
     Right url -> do
@@ -646,7 +715,7 @@ prometheusTestH pid form = do
 
 prometheusDeleteH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> ATAuthCtx (RespHeaders PrometheusMut)
 prometheusDeleteH pid cid = do
-  _ <- Projects.sessionAndProject pid
+  void $ requireSettingsWrite pid
   void $ PromCfg.deleteConfig pid cid
   addSuccessToast "Removed Prometheus target" Nothing
   prometheusMut pid
@@ -654,15 +723,17 @@ prometheusDeleteH pid cid = do
 
 prometheusToggleH :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfigId -> ATAuthCtx (RespHeaders PrometheusMut)
 prometheusToggleH pid cid = do
-  _ <- Projects.sessionAndProject pid
+  void $ requireSettingsWrite pid
   void $ PromCfg.toggleEnabled pid cid
   prometheusMut pid
 
 
 prometheusMut :: Projects.ProjectId -> ATAuthCtx (RespHeaders PrometheusMut)
 prometheusMut pid = do
+  (session, _) <- Projects.sessionAndProject pid
+  permission <- ProjectMembers.getUserPermission pid session.user.id
   cfgs <- PromCfg.configsByProjectId pid PromCfg.CKPrometheus
-  addRespHeaders $ PrometheusMut (pid, cfgs)
+  addRespHeaders $ PrometheusMut (PrometheusSettings pid cfgs permission)
 
 
 -- | Parse @k=v, k2=v2@ static-label text into a JSON object, trimming whitespace and
@@ -685,70 +756,93 @@ parseLabelsText t =
     ]
 
 
-prometheusPage :: Projects.ProjectId -> V.Vector PromCfg.PrometheusScrapeConfig -> Html ()
-prometheusPage pid cfgs = settingsSection_ do
-  div_ [class_ "flex justify-between items-center"] do
-    settingsH2_ "Prometheus targets"
-    promTargetModal_ pid (span_ [class_ "btn btn-sm btn-primary gap-1.5"] $ do faSprite_ "plus" "regular" "w-3 h-3"; "Add target") Nothing
-  prometheusTargetsList pid cfgs
+prometheusPage :: PrometheusSettings -> Html ()
+prometheusPage settings = settingsSection_ $ div_
+  [ [__|on closeModal
+    set targetDialog to event.target.closest('dialog')
+    call targetDialog.close()
+    wait 0ms
+    call document.getElementById(targetDialog.id + '-trigger').focus()
+  |]
+  ]
+  do
+    div_ [class_ "flex justify-between items-center"] do
+      settingsH2_ "Prometheus targets"
+      when (maybe False (>= ProjectMembers.PEdit) settings.permission) $ promTargetModal_ settings.projectId Nothing
+    unless (maybe False (>= ProjectMembers.PEdit) settings.permission) $ p_ [class_ "text-sm text-textWeak"] "A project editor can configure Prometheus targets."
+    prometheusTargetsList settings
 
 
--- | Add/edit target modal: same shell either way — the prefilled config decides the
--- modal id, copy and POST target, so callers only supply the trigger markup.
-promTargetModal_ :: Projects.ProjectId -> Html () -> Maybe PromCfg.PrometheusScrapeConfig -> Html ()
-promTargetModal_ pid trigger mcfg =
-  modalWith_ modalId def{boxClass = "w-full max-w-2xl p-4 sm:p-6", wrapperClass = "p-3 sm:p-8"} (Just trigger) $ div_ [class_ "flex flex-col gap-5"] do
+-- | The saved config determines the dialog identity and save endpoint.
+promTargetModal_ :: Projects.ProjectId -> Maybe PromCfg.PrometheusScrapeConfig -> Html ()
+promTargetModal_ pid mcfg = do
+  button_ [id_ (modalId <> "-trigger"), type_ "button", class_ (if isNothing mcfg then "btn btn-sm btn-primary gap-1.5" else "btn btn-xs btn-ghost"), onclick_ $ "document.getElementById('" <> modalId <> "').showModal()"] do
+    when (isNothing mcfg) $ faSprite_ "plus" "regular" "w-3 h-3"
+    toHtml (if isNothing mcfg then "Add target" else "Edit" :: Text)
+  term "dialog" [id_ modalId, Aria.label_ heading, class_ "modal p-3 sm:p-8 overscroll-contain"] $ div_ [class_ "modal-box w-full max-w-2xl p-4 sm:p-6 flex flex-col gap-5"] do
     div_ do
       h2_ [class_ "text-textStrong text-xl font-semibold"] $ toHtml heading
       p_ [class_ "text-sm text-textWeak mt-1"] $ toHtml desc
-    form_ [hxPost_ action, class_ "flex flex-col gap-4", hxTarget_ "#prometheus-targets", hxSwap_ "outerHTML"] do
-      field_ "name" "Name" "api-gateway" "text" True Nothing (maybe "" (.name) mcfg)
-      field_ "url" "Metrics URL" "http://service:9090/metrics" "url" True (Just "Must be reachable from Monoscope and return the Prometheus text exposition format.") (maybe "" (.url) mcfg)
-      label_ [class_ "flex flex-col gap-1 text-sm"] do
-        span_ [class_ "text-textWeak"] "Scrape interval"
-        -- No sub-minute options: the dispatcher ticks once per minute, so a shorter
-        -- interval can't be honoured. Always include the config's current value (even if
-        -- off-list) so editing an unrelated field never silently rewrites the interval.
-        let cur = maybe 60 (.scrapeIntervalSeconds) mcfg
-            presets = [(60, "1 minute"), (300, "5 minutes"), (900, "15 minutes"), (3600, "1 hour")] :: [(Int, Text)]
-            opts = if any ((== cur) . fst) presets then presets else sortWith fst ((cur, show cur <> "s") : presets)
-        select_ [class_ "select select-bordered w-full", name_ "scrapeInterval"]
-          $ forM_ opts \(v, l) ->
-            option_ ([value_ (show v)] <> [selected_ "selected" | v == cur]) (toHtml l)
-      -- Optional fields stay collapsed until needed; auto-expanded when editing a target
-      -- that already has them set, so existing values are never hidden behind the toggle.
-      let hasAdvanced = maybe False (\c -> isJust c.authHeader || not (T.null (labelsToText c.extraLabels))) mcfg
-      details_ ([class_ "group"] <> [term "open" "open" | hasAdvanced]) do
-        summary_ [class_ "cursor-pointer select-none text-sm text-textWeak flex items-center gap-1.5"] do
-          faSprite_ "chevron-right" "solid" "w-3 h-3 transition-transform group-open:rotate-90"
-          "Advanced"
-        div_ [class_ "flex flex-col gap-3 mt-3"] do
-          -- Never echo the saved token into the HTML (it would sit in the page source / proxy
-          -- caches): show an empty field, and on edit treat blank as "keep the saved token".
-          let hasToken = maybe False (isJust . (.authHeader)) mcfg
-              (authPh, authHelp) =
-                if hasToken
-                  then ("Leave blank to keep the saved token", "A token is saved. Enter a new value to replace it.")
-                  else ("Bearer <token>", "Sent as the Authorization header on every scrape.")
-          field_ "authHeader" "Authorization header" authPh "password" False (Just authHelp) ""
-          when hasToken $ label_ [class_ "flex items-center gap-2 text-sm text-textWeak -mt-1"] do
-            input_ [type_ "checkbox", name_ "clearAuth", class_ "checkbox checkbox-sm"]
-            "Clear saved token"
-          field_ "extraLabels" "Static labels" "env=prod, team=core" "text" False (Just "Comma-separated key=value pairs, added to every series from this target.") (maybe "" (labelsToText . (.extraLabels)) mcfg)
-      div_ [class_ "flex flex-wrap items-center gap-3 border-t border-strokeWeak pt-4"] do
-        button_
-          [ type_ "button"
-          , class_ "btn btn-ghost gap-1.5"
-          , hxPost_ (base <> "/test")
-          , term "hx-include" "closest form"
-          , hxTarget_ "next .prom-test-result"
-          , hxSwap_ "outerHTML"
-          ]
-          $ do faSprite_ "circle-play" "regular" "w-3.5 h-3.5"; "Test connection"
-        div_ [class_ "ml-auto flex items-center gap-2"] do
-          label_ [class_ "btn btn-ghost", Lucid.for_ modalId] "Cancel"
-          button_ [type_ "submit", class_ "btn btn-primary"] (toHtml submitLabel)
-      prometheusTestResult Nothing
+    form_
+      [ hxPost_ action
+      , class_ "flex flex-col gap-4"
+      , hxTarget_ "#prometheus-targets"
+      , hxSwap_ "outerMorph"
+      , [__|on htmx:after:request
+        if event.target is me and event.detail.ctx.response.status is 200 and event.detail.ctx.response.headers.get('HX-Reswap') is not 'none'
+          call me.closest('dialog').close()
+        end
+      |]
+      ]
+      do
+        field_ "name" "Name" "api-gateway" "text" True Nothing (maybe "" (.name) mcfg)
+        field_ "url" "Metrics URL" "http://service:9090/metrics" "url" True (Just "Must be reachable from Monoscope and return the Prometheus text exposition format.") (maybe "" (.url) mcfg)
+        label_ [class_ "flex flex-col gap-1 text-sm"] do
+          span_ [class_ "text-textWeak"] "Scrape interval"
+          -- No sub-minute options: the dispatcher ticks once per minute, so a shorter
+          -- interval can't be honoured. Always include the config's current value (even if
+          -- off-list) so editing an unrelated field never silently rewrites the interval.
+          let cur = maybe 60 (.scrapeIntervalSeconds) mcfg
+              presets = [(60, "1 minute"), (300, "5 minutes"), (900, "15 minutes"), (3600, "1 hour")] :: [(Int, Text)]
+              opts = if any ((== cur) . fst) presets then presets else sortWith fst ((cur, show cur <> "s") : presets)
+          select_ [class_ "select select-bordered w-full", name_ "scrapeInterval"]
+            $ forM_ opts \(v, l) ->
+              option_ ([value_ (show v)] <> [selected_ "selected" | v == cur]) (toHtml l)
+        -- Optional fields stay collapsed until needed; auto-expanded when editing a target
+        -- that already has them set, so existing values are never hidden behind the toggle.
+        let hasAdvanced = maybe False (\c -> isJust c.authHeader || not (T.null (labelsToText c.extraLabels))) mcfg
+        details_ ([class_ "group"] <> [term "open" "open" | hasAdvanced]) do
+          summary_ [class_ "cursor-pointer select-none text-sm text-textWeak flex items-center gap-1.5"] do
+            faSprite_ "chevron-right" "solid" "w-3 h-3 transition-transform group-open:rotate-90"
+            "Advanced"
+          div_ [class_ "flex flex-col gap-3 mt-3"] do
+            -- Never echo the saved token into the HTML (it would sit in the page source / proxy
+            -- caches): show an empty field, and on edit treat blank as "keep the saved token".
+            let hasToken = maybe False (isJust . (.authHeader)) mcfg
+                (authPh, authHelp) =
+                  if hasToken
+                    then ("Leave blank to keep the saved token", "A token is saved. Enter a new value to replace it.")
+                    else ("Bearer <token>", "Sent as the Authorization header on every scrape.")
+            field_ "authHeader" "Authorization header" authPh "password" False (Just authHelp) ""
+            when hasToken $ label_ [class_ "flex items-center gap-2 text-sm text-textWeak -mt-1"] do
+              input_ [type_ "checkbox", name_ "clearAuth", class_ "checkbox checkbox-sm"]
+              "Clear saved token"
+            field_ "extraLabels" "Static labels" "env=prod, team=core" "text" False (Just "Comma-separated key=value pairs, added to every series from this target.") (maybe "" (labelsToText . (.extraLabels)) mcfg)
+        div_ [class_ "prom-save-result"] ""
+        div_ [class_ "flex flex-wrap items-center gap-3 border-t border-strokeWeak pt-4"] do
+          button_
+            [ type_ "button"
+            , class_ "btn btn-ghost gap-1.5"
+            , hxPost_ (base <> "/test")
+            , term "hx-include" "closest form"
+            , hxTarget_ "next .prom-test-result"
+            , hxSwap_ "outerHTML"
+            ]
+            $ do faSprite_ "circle-play" "regular" "w-3.5 h-3.5"; "Test connection"
+          div_ [class_ "ml-auto flex items-center gap-2"] do
+            button_ [type_ "button", class_ "btn btn-ghost", onclick_ "this.closest('dialog').close()"] "Cancel"
+            button_ [type_ "submit", class_ "btn btn-primary"] (toHtml submitLabel)
+        prometheusTestResult Nothing
   where
     base = "/p/" <> pid.toText <> "/settings/prometheus"
     modalId, heading, desc, action, submitLabel :: Text
@@ -762,7 +856,7 @@ promTargetModal_ pid trigger mcfg =
     field_ :: Text -> Text -> Text -> Text -> Bool -> Maybe Text -> Text -> Html ()
     field_ nm lbl ph ty req helpM val = label_ [class_ "flex flex-col gap-1 text-sm"] do
       span_ [class_ "text-textWeak"] (toHtml lbl)
-      input_ $ [class_ "input input-bordered w-full", type_ ty, name_ nm, placeholder_ ph, value_ val] <> [required_ "true" | req]
+      input_ $ [class_ "input input-bordered w-full", type_ ty, name_ nm, placeholder_ ph, value_ val] <> [required_ "true" | req] <> [autofocus_ | nm == "name"]
       whenJust helpM $ span_ [class_ "text-xs text-textWeak"] . toHtml
 
 
@@ -773,22 +867,26 @@ prometheusTestResult res = div_ [class_ "prom-test-result text-sm"] $ whenJust r
   Left err -> span_ [class_ "cbadge-sm badge-error inline-flex items-center gap-1 max-w-full"] $ faSprite_ "circle-exclamation" "solid" "w-3 h-3 shrink-0" >> span_ [class_ "break-all"] (toHtml err)
 
 
-prometheusTargetsList :: Projects.ProjectId -> V.Vector PromCfg.PrometheusScrapeConfig -> Html ()
-prometheusTargetsList pid cfgs = div_ [id_ "prometheus-targets", class_ "mt-4"] do
+prometheusTargetsList :: PrometheusSettings -> Html ()
+prometheusTargetsList settings = div_ [id_ "prometheus-targets", class_ "mt-4"] do
   if V.null cfgs
-    then emptyState_ def{icon = Just "objects-column"} "Scrape your Prometheus endpoints" "Point Monoscope at any /metrics endpoint. We poll it on your schedule, parse the exposition format, and ingest the samples as metrics you can chart and alert on — grouped under the name you give each target. Use “Add target” to start."
+    then emptyState_ def{icon = Just "objects-column"} "Scrape your Prometheus endpoints" $ if canEdit then "Add a /metrics endpoint to collect metrics on a schedule. Targets are grouped under the name you give them." else "A project editor can add a /metrics endpoint to collect metrics on a schedule."
     else do
       input_
         [ class_ "input input-bordered input-sm w-full mb-3"
         , type_ "search"
+        , Aria.label_ "Filter targets"
         , placeholder_ "Filter targets…"
         , filterInputAttr_ ".itemsListItem in #prometheus-targets"
         ]
-      div_ [class_ "flex flex-col gap-2"] $ V.forM_ cfgs (prometheusTargetRow pid)
+      div_ [class_ "flex flex-col gap-2"] $ V.forM_ cfgs (prometheusTargetRow settings.projectId canEdit)
+  where
+    cfgs = settings.configs
+    canEdit = maybe False (>= ProjectMembers.PEdit) settings.permission
 
 
-prometheusTargetRow :: Projects.ProjectId -> PromCfg.PrometheusScrapeConfig -> Html ()
-prometheusTargetRow pid cfg = div_ [class_ "itemsListItem flex items-center justify-between gap-3 border border-strokeWeak rounded-md p-3"] do
+prometheusTargetRow :: Projects.ProjectId -> Bool -> PromCfg.PrometheusScrapeConfig -> Html ()
+prometheusTargetRow pid canEdit cfg = div_ [class_ "itemsListItem flex flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-between border border-strokeWeak rounded-md p-3"] do
   div_ [class_ "flex flex-col min-w-0 gap-1"] do
     div_ [class_ "flex items-center gap-2 flex-wrap"] do
       healthBadge_
@@ -800,15 +898,16 @@ prometheusTargetRow pid cfg = div_ [class_ "itemsListItem flex items-center just
       toHtml ("every " <> show cfg.scrapeIntervalSeconds <> "s" :: Text)
       whenJust cfg.lastScrapedAt \t -> span_ [] $ "· scraped " >> localTimeFmt_ "MMM dd, HH:mm" t
       whenJust cfg.lastStatus \s -> span_ [class_ "truncate max-w-xs", title_ s] $ toHtml ("· " <> s)
-  div_ [class_ "flex items-center gap-1 shrink-0"] do
+  div_ [class_ "flex flex-wrap items-center gap-1 shrink-0"] do
     -- Filter the metrics explorer to this target's series (metric_source = service_name,
     -- which sampleToMetricRecord sets to the config name).
     a_ [class_ "btn btn-xs btn-ghost", href_ $ "/p/" <> pid.toText <> "/metrics?metric_source=" <> decodeUtf8 (urlEncode True (encodeUtf8 cfg.name))] "View metrics"
     let cfgUrl = "/p/" <> pid.toText <> "/settings/prometheus/" <> cfg.id.toText
         swapList = [hxTarget_ "#prometheus-targets", hxSwap_ "outerHTML"]
-    promTargetModal_ pid (span_ [class_ "btn btn-xs btn-ghost"] "Edit") (Just cfg)
-    button_ ([class_ "btn btn-xs btn-ghost", hxPatch_ cfgUrl] <> swapList) $ toHtml (bool "Resume" "Pause" cfg.enabled :: Text)
-    button_ ([class_ "btn btn-xs btn-ghost text-textError", hxDelete_ cfgUrl, hxConfirm_ "Remove this Prometheus target?"] <> swapList) "Delete"
+    when canEdit do
+      promTargetModal_ pid (Just cfg)
+      button_ ([class_ "btn btn-xs btn-ghost", hxPatch_ cfgUrl] <> swapList) $ toHtml (bool "Resume" "Pause" cfg.enabled :: Text)
+      button_ ([class_ "btn btn-xs btn-ghost text-textError", hxDelete_ cfgUrl, hxConfirm_ "Remove this Prometheus target?"] <> swapList) "Delete"
   where
     -- Scrape health derived from last_status ("ok: …" / "error: …"). Distinct from the
     -- on/off state so a target that's enabled-but-failing never shows a reassuring green.

@@ -17,16 +17,19 @@ import { DEMO_PROJECT, sql } from "./helpers";
 
 test("api key tabs swap between active and archived", async ({ page }) => {
   await page.goto(`/p/${DEMO_PROJECT}/apis`);
-  // Two elements carry each id — the panel and the table inside it (the table's
-  // elemID is the panel id). `.tab-content` picks the panel.
-  const active = page.locator("#active_content.tab-content");
-  const revoked = page.locator("#revoked_content.tab-content");
+  const active = page.locator("#active_content");
+  const revoked = page.locator("#revoked_content");
+  await expect(active).toHaveCount(1);
+  await expect(revoked).toHaveCount(1);
   await expect(active).toBeVisible({ timeout: 20000 });
   await expect(revoked).toBeHidden();
 
-  await page.locator("label:has(#revoked_content)").or(page.getByRole("tab", { name: /Archived keys/ })).first().click();
+  await page.getByRole("tab", { name: /Archived keys/ }).click();
   await expect(revoked).toBeVisible();
   await expect(active).toBeHidden();
+  await page.getByRole("tab", { name: /Active keys/ }).click();
+  await expect(active).toBeVisible();
+  await expect(revoked).toBeHidden();
 });
 
 test("an API key can be created, copied, revoked, and reactivated", async ({ page, context }) => {

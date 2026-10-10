@@ -5,7 +5,7 @@
 -- which reaches @Pkg.Components.Widget@, which imports @LogItem@ — a cycle. The renderer in
 -- "Pages.Components" only ever builds the URL, so nothing on the rendering side has to know
 -- this module exists.
-module Pages.CodeContext (repositoryTokenGetH, repositoryTokenPostH, RepositoryTokenGet (..), RepositoryTokenForm (..), codeContextH, repositoriesGetH, repositoryGetH, repositoryDeleteH, repositorySourceGetH, repositorySourcePostH, repositorySourceDeleteH, repositoryReviewsPostH, repositoryConnectGetH, repositoryConnectPostH, RepositoryConnectGet (..), RepositoryConnectForm (..), RepositoryGet (..), ReviewReadiness (..), RepositoryTab (..), codeMappingsGetH, codeMappingsEditorGetH, codeMappingsPostH, codeMappingsDeleteH, CodeMappingForm (..), impactReviewSettingsPostH, impactReviewRetryH) where
+module Pages.CodeContext (repositoryTokenGetH, repositoryTokenPostH, RepositoryTokenGet (..), RepositoryTokenForm (..), codeContextH, repositoriesGetH, serviceRepositoriesGetH, repositoryGetH, repositoryDeleteH, repositorySourceGetH, repositorySourcePostH, repositorySourceDeleteH, repositoryReviewsPostH, repositoryConnectGetH, repositoryConnectPostH, RepositoryConnectGet (..), RepositoryConnectForm (..), RepositoryGet (..), ReviewReadiness (..), RepositoryTab (..), codeMappingsGetH, codeMappingsEditorGetH, codeMappingsPostH, codeMappingsDeleteH, CodeMappingForm (..), impactReviewSettingsPostH, impactReviewRetryH) where
 
 import Data.Aeson qualified as AE
 import Data.Cache qualified as Cache
@@ -56,7 +56,7 @@ codeContextH pid fileM lineM svcM revM = do
     (Just path, Just n) ->
       W.runHTTPWreq (CodeContext.fetchSnippet authCtx.codeBlobCache authCtx.config pid svcM (nonEmptyT revM) path n)
         >>= addRespHeaders
-        . either reason_ snippet_
+          . either reason_ snippet_
     _ -> addRespHeaders $ note_ "This frame has no file and line to look up." Nothing
   where
     -- An unmapped frame is the one failure the reader can act on from here, so it is the one
@@ -122,14 +122,27 @@ data RepositoryTab = Overview | PullRequests | Configuration
 
 
 instance FromHttpApiData RepositoryTab where
-  parseUrlPiece value = maybe (Left "Choose overview, reviews, or configuration") Right $ lookup value [("overview", Overview), ("reviews", PullRequests), ("configuration", Configuration)]
+  parseUrlPiece value = maybeToRight "Choose overview, reviews, or configuration" $ lookup value [("overview", Overview), ("reviews", PullRequests), ("configuration", Configuration)]
 
 
 repositoriesGetH :: Projects.ProjectId -> Maybe RepositoryTab -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
-repositoriesGetH pid tabM sampleM = do
+repositoriesGetH pid tabM sampleM = repositoriesPageH pid (ProjectRepositories (fromMaybe Overview tabM) sampleM)
+
+
+serviceRepositoriesGetH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders (Html ()))
+serviceRepositoriesGetH pid service = repositoriesPageH pid (ServiceRepositories service)
+
+
+data RepositoryView = ProjectRepositories RepositoryTab (Maybe Text) | ServiceRepositories Text
+
+
+repositoriesPageH :: Projects.ProjectId -> RepositoryView -> ATAuthCtx (RespHeaders (Html ()))
+repositoriesPageH pid selection = do
   (session, _, bw) <- mkPageCtx pid
   canEdit <- maybe False (>= ProjectMembers.PEdit) <$> ProjectMembers.getUserPermission pid session.user.id
-  let tab = fromMaybe Overview tabM
+  let (tab, sampleM, serviceM) = case selection of
+        ProjectRepositories selected sample -> (selected, sample, Nothing)
+        ServiceRepositories service -> (Overview, Nothing, Just service)
       base = "/p/" <> pid.toText <> "/repositories"
   content <- case tab of
     Overview -> do
@@ -138,7 +151,9 @@ repositoriesGetH pid tabM sampleM = do
       settings <- ImpactReviews.repositorySettings pid
       credentials <- GitSync.getGitHubCredentials pid
       repositories <- GitSync.getRepositories pid
-      pure $ overview_ base mappings syncs settings credentials repositories
+      let applicable = filter (\m -> maybe True (\service -> isNothing m.service || m.service == Just service) serviceM) mappings
+          visible = filter (\repository -> isNothing serviceM || any (mappingInRepository credentials repository) applicable) repositories
+      pure $ overview_ canEdit serviceM base applicable syncs settings credentials visible
     PullRequests -> do
       cfg <- (.config) <$> Effectful.Reader.Static.ask @AuthContext
       runs <- ImpactReviews.latestRuns pid
@@ -164,14 +179,16 @@ repositoriesGetH pid tabM sampleM = do
               a_ [href_ base, class_ "text-sm text-textBrand underline underline-offset-2"] "View repositories and sync status"
   addRespHeaders $ bodyWrapper bw{pageTitle = "Repositories"} $ div_ [class_ "h-full w-full overflow-y-auto"] do
     section_ [class_ "mx-auto max-w-6xl space-y-6 px-4 py-6 sm:px-8 sm:py-8"] do
-      header_ [class_ "flex flex-wrap items-start justify-between gap-4"] do
-        div_ [class_ "space-y-1"] do
-          h1_ [class_ "text-xl sm:text-2xl font-semibold tracking-tight text-textStrong"] "Repositories"
-          p_ [class_ "text-sm text-textWeak max-w-2xl"] "Connect your code to production. Review pull requests, read source in stack traces, and sync dashboards."
+      header_ [class_ "flex flex-col items-start gap-4 sm:flex-row sm:justify-between"] do
+        div_ [class_ "min-w-0 w-full flex-1 space-y-1"] do
+          h1_ [class_ "text-xl sm:text-2xl font-semibold tracking-tight text-textStrong break-words"] $ toHtml $ maybe "Repositories" ("Repositories for " <>) serviceM
+          p_ [class_ "text-sm text-textWeak max-w-2xl"] $ toHtml @Text $ maybe "Connect your code to production. Review pull requests, read source in stack traces, and sync dashboards." (const "Source mappings that apply to this service, including mappings for all services.") serviceM
+          when (isJust serviceM) $ a_ [href_ base, class_ "inline-flex items-center gap-1 py-1 text-sm text-textBrand hover:underline"] "All repositories"
         when canEdit $ a_ [href_ (base <> "/connect"), class_ "btn btn-sm btn-ghost gap-2"] do
           faSprite_ "plus" "regular" "h-3.5 w-3.5"
           "Add repositories"
-      nav_ [id_ "repository-nav", Aria.label_ "Repository views", class_ "flex flex-wrap gap-1 border-b border-strokeWeak pb-2", term "preload" "mouseover"]
+      when (isNothing serviceM)
+        $ nav_ [id_ "repository-nav", Aria.label_ "Repository views", class_ "flex flex-wrap gap-1 border-b border-strokeWeak pb-2", term "preload" "mouseover"]
         $ forM_ ([(Overview, "Overview", ""), (PullRequests, "Pull requests", "?tab=reviews"), (Configuration, "Configuration", "?tab=configuration")] :: [(RepositoryTab, Text, Text)]) \(value, label, query) ->
           a_
             ( [ href_ (base <> query)
@@ -189,14 +206,18 @@ repositoriesGetH pid tabM sampleM = do
             $ toHtml @Text label
       section_ [id_ "repository-content", class_ "min-w-0"] content
   where
-    overview_ :: Text -> [CodeContext.CodeMapping] -> [GitSync.GitHubSync] -> [ImpactReviews.ReviewSettings] -> [GitSync.GitHubCredential] -> [GitSync.Repository] -> Html ()
-    overview_ base mappings syncs settings credentials repositories = do
+    overview_ :: Bool -> Maybe Text -> Text -> [CodeContext.CodeMapping] -> [GitSync.GitHubSync] -> [ImpactReviews.ReviewSettings] -> [GitSync.GitHubCredential] -> [GitSync.Repository] -> Html ()
+    overview_ canEdit serviceM base mappings syncs settings credentials repositories = do
       let linked = [((c.host, c.apiBase, m.owner, m.repo), m) | m <- mappings, c <- credentials, c.id == m.credentialId]
       if null repositories
         then div_ [class_ "rounded-xl border border-strokeWeak p-6 sm:p-8 space-y-3"] do
-          h2_ [class_ "font-semibold text-textStrong"] "Connect the repositories behind your services"
-          p_ [class_ "text-sm text-textWeak max-w-xl"] "Link services to their code for source context and production impact reviews. You can also connect repositories that only contain dashboards."
-          a_ [href_ (base <> "/connect"), class_ "btn btn-sm btn-primary"] "Connect repositories"
+          h2_ [class_ "font-semibold text-textStrong"] $ toHtml @Text $ maybe "Connect the repositories behind your services" (const "No repositories linked to this service") serviceM
+          p_ [class_ "text-sm text-textWeak max-w-xl"]
+            $ toHtml @Text
+            $ if canEdit
+              then maybe "Link services to their code for source context and production impact reviews. You can also connect repositories that only contain dashboards." (const "Choose a repository, then link this service in Configure source context.") serviceM
+              else "Ask a project editor to link services to their source repositories."
+          when canEdit $ a_ [href_ (base <> maybe "/connect" (const "") serviceM), class_ "btn btn-sm btn-primary"] $ toHtml @Text $ maybe "Connect repositories" (const "Choose a repository") serviceM
         else div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak"] $ forM_ repositories \repository -> do
           let host = repository.host
               origin = repository.apiBase
@@ -210,7 +231,7 @@ repositoriesGetH pid tabM sampleM = do
             div_ [class_ "min-w-0 space-y-2"] do
               a_ [href_ (base <> "/" <> repository.id.toText), class_ "font-medium text-sm text-textBrand break-all hover:underline"] $ toHtml (owner <> "/" <> repo)
               p_ [class_ "text-xs text-textWeak break-all"] $ toHtml $ fromMaybe (Git.hostLabel host) origin
-              p_ [class_ "text-xs text-textWeak break-words"] $ toHtml $ if null services then "No services linked" else T.intercalate ", " services
+              p_ [class_ "text-xs text-textWeak break-words"] $ toHtml $ if any (\(repoKey, m) -> repoKey == key && isNothing m.service) linked then "All services" else if null services then "No services linked" else T.intercalate ", " services
             div_ [class_ "space-y-2"] do
               p_ [class_ "text-xs font-medium text-textWeak"] "Production impact reviews"
               case reviewM of
@@ -221,7 +242,7 @@ repositoriesGetH pid tabM sampleM = do
             div_ [class_ "space-y-2"] do
               p_ [class_ "text-xs font-medium text-textWeak"] "Dashboard sync"
               case sync of
-                Just s | Just err <- s.lastError -> colorChip_ "text-textError bg-fillError-weak" "circle-exclamation" "Sync failed" >> p_ [class_ "text-xs text-textError break-words"] (toHtml err)
+                Just s | Just err <- s.lastError -> colorChip_ "text-textError bg-fillError-weak" "circle-exclamation" "Sync failed" >> p_ [class_ "text-xs text-textError break-words"] (toHtml err.message)
                 Just s | not s.syncEnabled -> colorChip_ "" "circle-info" "Paused"
                 Just s | isJust s.announcedRevision -> colorChip_ "text-textWarning bg-fillWarning-weak" "circle-info" "Changes pending"
                 Just s | isJust s.lastRevision -> colorChip_ "text-textSuccess bg-fillSuccess-weak" "circle-check" "Synced"
@@ -292,11 +313,13 @@ repositoryGetH pid rid = do
 repositoryDeleteH :: Projects.ProjectId -> GitSync.RepositoryId -> ATAuthCtx (RespHeaders (Html ()))
 repositoryDeleteH pid rid = do
   requireReviewWrite pid
-  removed <- GitSync.removeRepository pid rid
-  unless removed $ throwError err404
-  addSuccessToast "Repository removed" (Just "Dashboards and review history are retained.")
-  redirectCS $ "/p/" <> pid.toText <> "/repositories"
-  addRespHeaders mempty
+  GitSync.removeRepository pid rid >>= \case
+    Left GitSync.ConnectionMissing -> throwError err404
+    Left GitSync.SyncRunning -> addRespHeaders $ p_ [role_ "alert", class_ "text-sm text-textWarning"] "A dashboard sync is running. Try removing the repository again when it finishes."
+    Right () -> do
+      addSuccessToast "Repository removed" (Just "Dashboards and review history are retained.")
+      redirectCS $ "/p/" <> pid.toText <> "/repositories"
+      addRespHeaders mempty
 
 
 instance ToHtml RepositoryGet where
@@ -338,7 +361,7 @@ instance ToHtml RepositoryGet where
       case page.dashboardSync of
         Nothing -> p_ [class_ "text-sm text-textWeak"] "Dashboard sync is not configured. This repository remains connected for your team."
         Just sync -> do
-          whenJust sync.lastError $ p_ [role_ "status", class_ "text-sm text-textError break-words"] . toHtml
+          whenJust sync.lastError $ p_ [role_ "status", class_ "text-sm text-textError break-words"] . toHtml . (.message)
           p_ [class_ "text-sm text-textWeak break-all"] $ toHtml $ sync.branch <> " · " <> GitSync.getDashboardsPath sync
           colorChip_ "" "code-branch" $ if sync.syncEnabled then "Sync enabled" else "Sync paused"
       a_ [href_ (base <> "/" <> repository.id.toText <> "/dashboards"), class_ "btn btn-sm btn-ghost"] $ if canEdit then "Configure dashboard sync" else "View dashboard sync"
@@ -350,9 +373,10 @@ instance ToHtml RepositoryGet where
         div_ [class_ "modal-box space-y-4 p-6"] do
           h2_ [id_ "remove-repository-title", class_ "text-lg font-semibold text-textStrong break-all"] $ toHtml $ "Remove " <> repository.owner <> "/" <> repository.repo <> "?"
           p_ [id_ "remove-repository-description", class_ "text-sm text-textWeak"] "Source context, automatic reviews, and dashboard sync will stop for this repository. Dashboards and review history are retained. You can connect the repository again later."
+          div_ [id_ "remove-repository-feedback"] ""
           div_ [class_ "flex flex-wrap justify-end gap-2"] do
             form_ [method_ "dialog"] $ button_ [class_ "btn btn-sm btn-ghost", autofocus_] "Cancel"
-            button_ [type_ "button", hxDelete_ (base <> "/" <> repository.id.toText), hxSwap_ "none", hxIndicator_ "#remove-repository-indicator", class_ "btn btn-sm bg-fillError-strong text-textInverse-strong hover:opacity-90 gap-2"] do
+            button_ [type_ "button", hxDelete_ (base <> "/" <> repository.id.toText), hxTarget_ "#remove-repository-feedback", hxSwap_ "innerHTML", term "hx-disable" "this", hxIndicator_ "#remove-repository-indicator", class_ "btn btn-sm bg-fillError-strong text-textInverse-strong hover:opacity-90 gap-2"] do
               "Remove repository"
               htmxIndicator_ "remove-repository-indicator" LdXS
         form_ [method_ "dialog", class_ "modal-backdrop"] $ button_ [Aria.label_ "Cancel removal"] "Close"
@@ -474,7 +498,7 @@ codeMappingsContent pid sampleM credentialM repositoryM = do
             p_ [class_ "text-sm text-textError"] "Could not load repositories from this account. Check its access or retry; you can still enter a repository name below."
             button_ ([type_ "button", hxGet_ editorUrl, hxInclude_ "#code-mappings-content form[action]", hxTarget_ "#code-mappings-content", hxIndicator_ "#code-account-indicator", term "hx-disable" "#code-mappings-content input, #code-mappings-content select, #code-mappings-content button", class_ "btn btn-sm btn-ghost"] <> scopedSwap) "Retry"
           Right _ -> pass
-        addMappingForm_ (either (const []) id repoResult) cred
+        addMappingForm_ (fromRight [] repoResult) cred
     section_ [class_ "pt-6 space-y-3 border-t border-strokeWeak"] do
       h3_ [class_ "text-sm font-semibold text-textStrong"] "Production impact reviews"
       p_ [class_ "text-xs text-textWeak"] "Linked GitHub repositories receive advisory PR comments based on this project's telemetry. Ready PRs are reviewed when opened or updated."

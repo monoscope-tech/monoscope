@@ -13,14 +13,19 @@ import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Lucid (renderText)
+import Effectful.Error.Static (catchError)
+import Lucid (renderText, toHtml)
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as MonitorsM
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
+import Models.Projects.Projects qualified as Projects
+import Pages.Bots.BotTestHelpers (withHTTPResponses)
 import Pages.Monitors qualified as Monitors
-import Pages.Settings (PrometheusForm (..), PrometheusMut (..), prometheusPostH)
+import Pages.Settings (PrometheusForm (..), prometheusPostH)
+import Pages.Settings qualified as Settings
 import Pkg.TestUtils
 import Relude
+import Servant (ServerError (..), getResponse)
 import Servant.API (ResponseHeader (..), lookupResponseHeader)
 import System.Types (RespHeaders)
 import Test.Hspec
@@ -42,6 +47,30 @@ promBody =
 spec :: Spec
 spec = around withTestResources do
   describe "Prometheus scrape configs" do
+    it "prometheusViewer_cannotChangeTargetsOrProbeAnEndpoint" \tr -> do
+      void $ runQueryEffect tr $ PromCfg.insertConfig testPid PromCfg.CKPrometheus "Saved target" "https://metrics.example.com/metrics" 60 (Just "Bearer saved-secret") (AE.object []) Nothing
+      [saved] <- V.toList <$> runQueryEffect tr (PromCfg.configsByProjectId testPid PromCfg.CKPrometheus)
+      let uid = (getResponse tr.trSessAndHeader).user.id
+          form = PrometheusForm "Replacement target" "https://metrics.example.com/replacement" Nothing (Just "Bearer replacement-secret") Nothing Nothing
+      void $ withResource tr.trPool \conn -> PGS.execute conn [sql| UPDATE projects.project_members SET permission = 'view' WHERE project_id = ? AND user_id = ? |] (testPid, uid)
+      requests <- newIORef (0 :: Int)
+      statuses <- forM
+        [ void $ Settings.prometheusPostH testPid form
+        , void $ Settings.prometheusUpdateH testPid saved.id form
+        , void $ Settings.prometheusToggleH testPid saved.id
+        , void $ Settings.prometheusDeleteH testPid saved.id
+        , void $ Settings.prometheusTestH testPid form
+        ]
+        \mutation -> runAuthHandler tr $ withHTTPResponses (\_ _ -> modifyIORef' requests (+ 1) $> Just promBody) $ catchError @ServerError (mutation $> 200) (\_ err -> pure err.errHTTPCode)
+      statuses `shouldBe` replicate 5 403
+      readIORef requests `shouldReturn` 0
+      [retained] <- V.toList <$> runQueryEffect tr (PromCfg.configsByProjectId testPid PromCfg.CKPrometheus)
+      (retained.name, retained.url, retained.enabled, retained.authHeader) `shouldBe` (saved.name, saved.url, saved.enabled, saved.authHeader)
+      (_, page) <- testServant tr $ Settings.prometheusGetH testPid
+      let html = renderText $ toHtml page
+      html `shouldSatisfy` TL.isInfixOf "Saved target"
+      for_ ["Add target", "Edit Prometheus target", "hx-patch", "hx-delete", "saved-secret"] \private -> html `shouldNotSatisfy` TL.isInfixOf private
+
     it "ingests a scraped exposition body as metrics, dropping non-finite samples" \tr -> do
       void $ runQueryEffect tr $ PromCfg.insertConfig testPid PromCfg.CKPrometheus "api-gw" "http://svc:9090/metrics" 60 Nothing (AE.object ["env" AE..= ("prod" :: Text)]) Nothing
       (cfg : _) <- V.toList <$> runQueryEffect tr (PromCfg.configsByProjectId testPid PromCfg.CKPrometheus)
@@ -130,13 +159,20 @@ spec = around withTestResources do
     -- A duplicate-name save must be caught by the DB UNIQUE(project_id, name) constraint
     -- (migration 0103) and turned into a friendly error — not a 500 (which is what a missed
     -- Hasql.isUniqueViolation classification would produce) and not a second row. Drive it
-    -- through prometheusPostH so the handler's try+isUniqueViolation+toast wiring is pinned
+    -- through prometheusPostH so the handler's try+isUniqueViolation+inline error wiring is pinned
     -- end-to-end: reaching the assertion proves the second save did not throw.
-    it "prometheusPostH catches a duplicate-name save (no 500) and never creates a second row" \tr -> do
+    it "prometheusRejectedSave_preservesDraftWithoutRedirectingOrDuplicatingTargets" \tr -> do
       let form = PrometheusForm{name = "dup", url = "http://example.com/metrics", scrapeInterval = Nothing, authHeader = Nothing, extraLabels = Nothing, clearAuth = Nothing}
       _ <- testServant tr $ prometheusPostH testPid form
-      (_, PrometheusMut (_, cfgs)) <- testServant tr $ prometheusPostH testPid form
-      V.length (V.filter ((== "dup") . (.name)) cfgs) `shouldBe` 1
+      (rejected, rejection) <- testServant tr $ prometheusPostH testPid form
+      lookupResponseHeader @"HX-Redirect" @Text rejected `shouldBe` MissingHeader
+      reswapOf rejected `shouldBe` Just "none"
+      let errorHtml = renderText (toHtml rejection)
+      for_ ["role=\"alert\"", "already exists", "hx-swap-oob=\"innerHTML target:", "dialog[open] .prom-save-result"] $ \expected -> errorHtml `shouldSatisfy` TL.isInfixOf expected
+      (invalid, _) <- testServant tr $ prometheusPostH testPid form{url = "http://127.0.0.1/metrics"}
+      reswapOf invalid `shouldBe` Just "none"
+      configs <- runQueryEffect tr (PromCfg.configsByProjectId testPid PromCfg.CKPrometheus)
+      V.length (V.filter ((== "dup") . (.name)) configs) `shouldBe` 1
 
 
 reswapOf :: RespHeaders a -> Maybe Text

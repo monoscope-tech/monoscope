@@ -14,6 +14,7 @@ module System.Types (
   addWidgetJSON,
   addReswap,
   HXRedirectDest,
+  HXReswap (..),
   XWidgetJSON,
   TriggerEvents,
   RespHeaders,
@@ -78,7 +79,7 @@ newtype WidgetJSON = WidgetJSON {unWidgetJSON :: Text}
 
 
 type XWidgetJSON = Maybe WidgetJSON
-type HXReswap = Maybe Text
+newtype HXReswap = HXReswap (Maybe Text)
 
 
 type CommonWebEffects =
@@ -108,6 +109,7 @@ type ATAuthCtx =
         ': State.State TriggerEvents
         ': State.State HXRedirectDest
         ': State.State XWidgetJSON
+        ': State.State HXReswap
         ': Effectful.Reader.Static.Reader (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
         ': CommonWebEffects
     )
@@ -125,6 +127,7 @@ atAuthToBase sessionWithCookies page =
     & State.evalState Map.empty -- TriggerEvents
     & State.evalState Nothing -- HXRedirectDest
     & State.evalState Nothing -- XWidgetJSON
+    & State.evalState (HXReswap Nothing)
     & Effectful.Reader.Static.runReader sessionWithCookies
 
 
@@ -136,6 +139,7 @@ atAuthToBaseTest notifRef sessionWithCookies page =
     & State.evalState Map.empty -- TriggerEvents
     & State.evalState Nothing -- HXRedirectDest
     & State.evalState Nothing -- XWidgetJSON
+    & State.evalState (HXReswap Nothing)
     & Effectful.Reader.Static.runReader sessionWithCookies
 
 
@@ -265,12 +269,12 @@ type RespHeaders =
      ]
 
 
-addRespHeaders :: (State.State HXRedirectDest :> es, State.State TriggerEvents :> es, State.State XWidgetJSON :> es) => a -> Eff es (RespHeaders a)
+addRespHeaders :: (State.State HXRedirectDest :> es, State.State HXReswap :> es, State.State TriggerEvents :> es, State.State XWidgetJSON :> es) => a -> Eff es (RespHeaders a)
 addRespHeaders resp = do
   triggerEvents <- State.get @TriggerEvents
   redirectDest <- State.get @HXRedirectDest
   widgetJSON <- State.get @XWidgetJSON
-  reswap <- State.get @HXReswap
+  HXReswap reswap <- State.get @HXReswap
   -- HTMX 4 passes object payloads through unchanged, including arrays.
   pure
     $ addHeader (decodeUtf8 $ AE.encode $ Map.map (\values -> AE.object ["value" AE..= values]) triggerEvents)
@@ -301,7 +305,7 @@ addSuccessToast = addToast "success"
 
 
 addReswap :: State.State HXReswap :> es => Text -> Eff es ()
-addReswap x = State.modify $ \_ -> Just x
+addReswap x = State.put $ HXReswap $ Just x
 
 
 addErrorToast :: (IOE :> es, Log :> es, State.State TriggerEvents :> es) => Text -> Maybe Text -> Eff es ()
@@ -313,7 +317,7 @@ addErrorToast msg msg2 = do
 -- | Toast an error and short-circuit with the given response payload.
 -- Collapses the recurrent `addErrorToast msg Nothing >> addRespHeaders payload` pattern.
 toastError
-  :: (IOE :> es, Log :> es, State.State HXRedirectDest :> es, State.State TriggerEvents :> es, State.State XWidgetJSON :> es)
+  :: (IOE :> es, Log :> es, State.State HXRedirectDest :> es, State.State HXReswap :> es, State.State TriggerEvents :> es, State.State XWidgetJSON :> es)
   => Text -> a -> Eff es (RespHeaders a)
 toastError msg payload = addErrorToast msg Nothing *> addRespHeaders payload
 
