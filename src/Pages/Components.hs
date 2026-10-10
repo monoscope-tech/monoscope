@@ -1038,11 +1038,7 @@ copyButton_ cls iconCls src attrs =
 -- server-generated ids, never from user input. Pair with @type_ "search"@ so Escape
 -- clears the box and refilters natively.
 filterInputAttr_ :: Text -> Attribute
-filterInputAttr_ sel =
-  term "_"
-    $ "on input set v to my value.toLowerCase() then repeat for el in <"
-    <> sel
-    <> "/> if (el.dataset.filter or el.textContent).toLowerCase().includes(v) remove .hidden from el else add .hidden to el end end"
+filterInputAttr_ sel = term "_" [text|on input set v to my value.toLowerCase() then repeat for el in <${sel}/> if (el.dataset.filter or el.textContent).toLowerCase().includes(v) remove .hidden from el else add .hidden to el end end|]
 
 
 colorChip_ :: Monad m => Text -> Text -> Text -> HtmlT m ()
