@@ -203,6 +203,10 @@ data ConfigGetJson = ConfigGetJson
 runConfigInit :: (Environment :> es, FileSystem :> es, IOE :> es) => Eff es ()
 runConfigInit = do
   tty <- isInteractiveTTY
+  json <- isJsonOutput
+  unless (tty && not json) $ do
+    printError "config init requires an interactive terminal; use monoscope config set KEY VALUE or monoscope auth login --token TOKEN"
+    liftIO exitFailure
   result <-
     liftIO
       $ inputForm
@@ -220,14 +224,14 @@ runConfigInit = do
   putTextLn $ "Configuration saved to " <> toText f
 
 
-runConfigSet :: (FileSystem :> es, IOE :> es) => ConfigSetOpts -> Eff es ()
-runConfigSet opts = case parseConfigKey opts.key of
+runConfigSet :: (FileSystem :> es, IOE :> es) => ConfigSetOpts -> OutputMode -> Eff es ()
+runConfigSet opts mode = case parseConfigKey opts.key of
   Just ck -> do
     setConfigValue ck opts.value
-    putTextLn $ opts.key <> " = " <> opts.value
+    let displayed = if ck == CKApiKey then "********" else opts.value
+    renderWith mode (AE.object [AK.fromText opts.key AE..= displayed]) (putTextLn $ opts.key <> " = " <> displayed)
   Nothing -> do
-    putTextLn $ "Unknown key: " <> opts.key
-    putTextLn $ "Valid keys: " <> show (map configKeyText allConfigKeys)
+    printError $ "Unknown key: " <> opts.key <> "; valid keys: " <> T.intercalate ", " (map configKeyText allConfigKeys)
     liftIO exitFailure
 
 
@@ -251,7 +255,7 @@ runConfigGet opts mode = do
     Just "api_url" -> putTextLn cfg.apiUrl
     Just "project" -> putTextLn $ fromMaybe "(not set)" cfg.projectId
     Just "api_key" -> putTextLn $ maybe "(not set)" (const "********") cfg.credential
-    Just k -> putTextLn ("Unknown key: " <> k) >> liftIO exitFailure
+    Just k -> printError ("Unknown key: " <> k) >> liftIO exitFailure
 
 
 -- Services
@@ -699,13 +703,15 @@ runEventsTail cfg opts kindOverride = do
 runEventsContext :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> EventsContextOpts -> Maybe Text -> OutputMode -> Eff es ()
 runEventsContext cfg opts kindOverride mode = do
   validateDurationOrDie "--window" opts.window
+  center <- validateOrDie $ maybeToRight "--at: invalid ISO-8601 timestamp" (iso8601ParseM (toString opts.timestamp))
   kindNorm <- validateAndNormalizeKind (opts.kind <|> kindOverride)
-  let q = foldFiltersIntoQuery "" (maybeToList opts.service) Nothing
+  let halfWindow = fromIntegral (parseDurationMs (fromMaybe "5m" opts.window)) / 2000
+      q = foldFiltersIntoQuery "" (maybeToList opts.service) Nothing
       params =
         catMaybes
           [ if T.null q then Nothing else Just ("query", q)
-          , Just ("from", opts.timestamp)
-          , Just ("since", fromMaybe "5m" opts.window)
+          , Just ("from", toText $ iso8601Show $ addUTCTime (negate halfWindow) center)
+          , Just ("to", toText $ iso8601Show $ addUTCTime halfWindow center)
           , ("source",) <$> kindNorm
           ]
   fmt <- resolveFormat opts.format
@@ -1385,7 +1391,7 @@ checkAssertion MetricsData{dataFloat} cond = case dataFloat of
   Just v -> unless (evalCond v cond) $ do
     printError $ "Assertion failed: " <> show v <> " " <> cond
     liftIO exitFailure
-  Nothing -> printError "Warning: --assert ignored, no numeric result to evaluate"
+  Nothing -> printError "--assert requires a numeric scalar result; use summarize without a by clause" >> liftIO exitFailure
 
 
 -- | Case-insensitive — matches 'validateDurationFor' so @--watch 5M@

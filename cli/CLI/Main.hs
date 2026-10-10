@@ -294,9 +294,9 @@ authParser :: Parser AuthCommand
 authParser =
   subparser
     $ mconcat
-      [ command "login" (info (AuthLogin <$> optional (strOption (long "token" <> metavar "TOKEN" <> help "API token"))) (progDesc "Authenticate"))
-      , command "status" (info (pure AuthStatus) (progDesc "Show auth state"))
-      , command "logout" (info (pure AuthLogout) (progDesc "Remove credentials"))
+      [ command "login" (info (AuthLogin <$> optional (strOption (long "token" <> metavar "TOKEN" <> help "API token")) <**> helper) (progDesc "Authenticate"))
+      , command "status" (info (pure AuthStatus <**> helper) (progDesc "Show auth state"))
+      , command "logout" (info (pure AuthLogout <**> helper) (progDesc "Remove credentials"))
       ]
 
 
@@ -392,7 +392,7 @@ eventsContextParser =
     <$> strOption (long "at" <> metavar "TIMESTAMP" <> help "Center timestamp")
     <*> optional (strOption (long "service" <> metavar "SERVICE"))
     <*> optional (strOption (long "kind" <> metavar "KIND"))
-    <*> optional (strOption (long "window" <> metavar "DURATION" <> help "Time window (default: 5m)"))
+    <*> optional (strOption (long "window" <> metavar "DURATION" <> help "Total time window centered on --at (default: 5m)"))
     <*> switch (long "summary" <> help "Add per-trace summary to JSON output (trace_id, services, span_count, error_count)")
     <*> formatOpt
 
@@ -1010,8 +1010,8 @@ run version global = \case
     MQuery opts -> runMetricsQuery cfg opts mode
     MChart opts -> runMetricsChart cfg opts mode
   ServicesCmd (SList opts) -> withCfgMode global $ \cfg mode -> runServicesList cfg opts mode
-  ConfigCmd CInit -> runConfigInit
-  ConfigCmd (CSet opts) -> runConfigSet opts
+  ConfigCmd CInit -> void (resolveMode global) >> runConfigInit
+  ConfigCmd (CSet opts) -> resolveMode global >>= runConfigSet opts
   ConfigCmd (CGet opts) -> do
     mode <- resolveMode global
     runConfigGet opts mode

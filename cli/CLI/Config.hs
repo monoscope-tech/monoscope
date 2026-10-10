@@ -197,3 +197,4 @@ setConfigValue key val = do
         CKProject -> cfg{project = Just val}
         CKApiKey -> cfg{api_key = Just val}
   liftIO $ Yaml.encodeFile f updated
+  liftIO $ setFileMode f 0o600

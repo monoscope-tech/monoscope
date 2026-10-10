@@ -260,6 +260,18 @@ spec = around withTestResources do
       listRows listV2 `shouldBe` []
 
   describe "incident investigation lifecycle (search → get → context → share)" do
+    it "context_historicalTimestamp_returnsOnlyTheCenteredWindow" \tr -> do
+      apiKey <- createTestAPIKey tr testPid "context-window-key"
+      let center = addUTCTime (-86400) frozenTime
+      forM_ [-180, -60, 60, 180] \offset -> ingestLog tr apiKey "context-window" (addUTCTime offset center)
+      (ec, out) <- runCLILifecycle tr ["--json", "events", "context", "--at", iso8601Show center, "--window", "5m"]
+      ec `shouldBe` ExitSuccess
+      rows <- eventsOf <$> jsonOut out
+      length rows `shouldBe` 2
+      (badTime, badOut) <- runCLILifecycle tr ["--json", "events", "context", "--at", "not-a-timestamp"]
+      badTime `shouldBe` ExitFailure 1
+      badOut `shouldBe` ""
+
     it "finds an ingested span, pulls context, and mints a share link that resolves unauthenticated" \tr -> do
       apiKey <- createTestAPIKey tr testPid "lifecycle-share-key"
       ingestTrace tr apiKey "GET /api/lifecycle/share" frozenTime
@@ -423,6 +435,11 @@ spec = around withTestResources do
       map rowId (eventsOf v3) `shouldBe` ids1
 
   describe "metrics SLO lifecycle" do
+    it "metrics_assert_withoutScalar_failsRatherThanPassingTheGate" \tr -> do
+      (ec, out) <- runCLILifecycle tr ["--json", "metrics", "query", "summarize count() by resource.service.name", "--assert", "< 100"]
+      jsonOut out >>= (`shouldHaveKeys` ["dataset"])
+      ec `shouldBe` ExitFailure 1
+
     it "KQL summarize expression returns data; --assert gates the exit code; chart renders" \tr -> do
       apiKey <- createTestAPIKey tr testPid "lifecycle-metrics-key"
       -- the server resolves --since against the frozen test clock, so the

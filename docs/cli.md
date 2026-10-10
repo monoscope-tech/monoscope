@@ -97,7 +97,9 @@ monoscope config get            # show all
 monoscope config get project    # show one value
 ```
 
-Valid config keys: `api_url`, `project`, `api_key`.
+Valid config keys: `api_url`, `project`, `api_key`. API keys are redacted in
+command output. `config init` requires an interactive terminal; use `config set`
+and `auth login --token` in scripts.
 
 ## Global flags
 
@@ -277,7 +279,8 @@ appears exactly once. Default cadence is 2s.
 
 ### Context window
 
-Show events around a specific timestamp:
+Show events in a window centered on a specific ISO-8601 timestamp.
+`--window 10m` includes five minutes before and five minutes after `--at`:
 
 ```bash
 monoscope events context --at 2026-04-15T12:34:56Z --service api --window 10m
@@ -320,6 +323,8 @@ monoscope metrics query 'summarize count()' --since 30m --assert '< 1000'
 ```
 
 Options: `--since` (default `1H`), `--from`, `--to`, `--assert <condition>`.
+`--assert` requires a numeric scalar, usually from `summarize` without `by`;
+a grouped or empty result exits non-zero because the condition cannot be evaluated.
 
 ### Chart
 
@@ -496,7 +501,7 @@ monoscope api-keys delete <id>              # permanent removal
 **Rotating a key:**
 
 ```bash
-monoscope api-keys create "ops-2026-05" -o json | jq -r .key > ~/.monoscope-key-new
+monoscope api-keys create "ops-2026-05" --json | jq -r .key > ~/.monoscope-key-new
 export MONOSCOPE_API_KEY=$(cat ~/.monoscope-key-new)
 monoscope api-keys deactivate <old-key-id>
 ```
@@ -631,7 +636,7 @@ hundreds of field names into context to answer a single question.
 monoscope schema                            # all fields
 monoscope schema --search service           # only fields whose name contains "service"
 monoscope schema --search http --limit 20   # http-related fields, capped at 20
-monoscope schema -o json | jq '.fields | keys[]'   # bare field names
+monoscope schema --json | jq '.fields | keys[]'   # bare field names
 ```
 
 The response shape is `{fields: { <field_name>: { field_type, description, ... }, ... }, ...}`.
@@ -713,12 +718,12 @@ auto-detect hints for non-interactivity.
 ## Resilience & error handling
 
 - **Gateway errors** (`502`/`503`/`504`, Cloudflare HTML) are collapsed into a
-  single-line message with a hint to narrow `--since`; the CLI retries the
-  request once with jittered backoff before giving up.
+  single-line message with a hint to narrow `--since`; the CLI retries GET
+  requests up to twice with jittered backoff before giving up.
 - **Structured errors on stderr in non-table mode** — `printError` emits
-  `{"error": {"code", "message", "field?", "suggestion?", "details?"}}` as
-  NDJSON on stderr. ANSI is suppressed automatically whenever stdout isn't a
-  TTY (override with `MONOSCOPE_FORCE_COLOR=1`).
+  `{"code": "error", "message": "..."}` as NDJSON on stderr; optional
+  `field` and `suggestion` keys are omitted when absent. ANSI is suppressed
+  automatically whenever stdout isn't a TTY (override with `MONOSCOPE_FORCE_COLOR=1`).
 - **`--debug`** sets an `X-Debug: 1` header so the server includes the raw SQL
   / Hasql exception text under `error.details`. Combine with `MONOSCOPE_DEBUG=1`
   for outgoing-request tracing.
@@ -819,13 +824,13 @@ A typical incident investigation, all in JSON, suitable for piping into `jq` or 
 
 ```bash
 # 1. What's on fire? List open issues, sorted by recency.
-monoscope issues list --status open -o json | jq '.data[] | {id,title,service,severity}'
+monoscope issues list --status open --json | jq '.data[] | {id,title,service,severity}'
 
 # 2. Which services are active? (and which are quiet)
-monoscope services list -o json | jq '.services'
+monoscope services list --json | jq '.services'
 
 # 3. Drill in: errors from the suspect service in the last 30 minutes
-monoscope logs search --service checkout-api --level error --since 30m -o json \
+monoscope logs search --service checkout-api --level error --since 30m --json \
   | jq '.events[] | {timestamp, summary, trace_id}'
 
 # 4. Pick a trace and find the span that actually took the time
@@ -833,11 +838,11 @@ monoscope traces get <trace-id> --tree \
   | jq -r '.events[] | [.duration, .service, .span_name] | @tsv' | sort -rn | head
 
 # 5. Find similar errors via log patterns
-monoscope log-patterns list --per-page 20 -o json \
+monoscope log-patterns list --per-page 20 --json \
   | jq '.data[] | select(.state=="open") | {id, occurrence_count, service_name}'
 
 # 6. Check a specific symptom: which endpoints serve 5xx?
-monoscope events search 'attributes.http.response.status_code >= 500' --since 1h -o json \
+monoscope events search 'attributes.http.response.status_code >= 500' --since 1h --json \
   | jq -r '.events[] | "\(.timestamp) \(.service) \(.summary)"'
 
 # 7. Cross-check against what the team already watches: every widget on a
@@ -867,7 +872,7 @@ JSON is the default when stdout is not a TTY or `CI` is set. Use `jq` for script
 monoscope metrics query 'where severity.severity_text=="error" | summarize count()' --since 30m --assert '< 100'
 
 # Get open issue count
-monoscope issues list --status open -o json | jq '.data | length'
+monoscope issues list --status open --json | jq '.data | length'
 
 # Apply all monitors from a directory (idempotent)
 monoscope monitors apply .monoscope/monitors/

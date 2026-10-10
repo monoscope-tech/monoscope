@@ -2,11 +2,15 @@ module CLI.CLIBinarySpec (spec) where
 
 import Relude
 
+import Data.Bits ((.&.))
 import Data.List (isInfixOf)
 import Data.Text qualified as T
 import System.Directory (doesFileExist)
+import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
-import System.Process (readProcessWithExitCode)
+import System.IO.Temp (withSystemTempDirectory)
+import System.Posix.Files (fileMode, getFileStatus)
+import System.Process (CreateProcess (..), proc, readCreateProcessWithExitCode, readProcessWithExitCode)
 import Test.Hspec
 
 -- | Locate the monoscope CLI binary. CI can pass @MONOSCOPE_BIN@ directly;
@@ -50,6 +54,29 @@ spec = describe "CLI binary E2E tests" do
     (code, out, _) <- runMono ["events", "search", "--help"]
     code `shouldBe` ExitSuccess
     out `shouldSatisfy` \s -> "--since" `isInfixOf` s && "--from" `isInfixOf` s
+
+  it "auth_login_help_showsTheTokenOption" do
+    (code, out, _) <- runMono ["auth", "login", "--help"]
+    code `shouldBe` ExitSuccess
+    out `shouldSatisfy` isInfixOf "--token"
+
+  it "config_scripts_redactSecretsAndReportErrorsOnStderrWithoutPrompting" do
+    findBinary >>= \case
+      Nothing -> pendingWith "monoscope exe not built"
+      Just bin -> withSystemTempDirectory "monoscope-config" \dir -> do
+        inherited <- getEnvironment
+        let isolated = ("XDG_CONFIG_HOME", dir) : filter (\(key, _) -> key /= "XDG_CONFIG_HOME" && not ("MONOSCOPE_" `isPrefixOf` key)) inherited
+            runConfig args = readCreateProcessWithExitCode (proc bin ("--json" : "config" : args)){cwd = Just dir, env = Just isolated} ""
+        (saved, out, _) <- runConfig ["set", "api_key", "fixture-secret"]
+        saved `shouldBe` ExitSuccess
+        out `shouldNotSatisfy` isInfixOf "fixture-secret"
+        permissions <- fileMode <$> getFileStatus (dir <> "/monoscope/config.yaml")
+        permissions .&. 0o077 `shouldBe` 0
+        forM_ [["get", "bogus"], ["set", "bogus", "value"], ["init"]] \args -> do
+          (code, stdoutText, stderrText) <- runConfig args
+          code `shouldBe` ExitFailure 1
+          stdoutText `shouldBe` ""
+          stderrText `shouldSatisfy` isInfixOf "message"
 
   it "auth status exits and shows status message" do
     (_, out, err) <- runMono ["auth", "status"]
