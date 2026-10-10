@@ -1877,6 +1877,18 @@ routineRunCancelled routineId claimedAt =
         FROM apis.ai_routines WHERE id = #{routineId}|]
 
 
+-- | Inverse of 'fromEnum' on 'DayOfWeek' as stored in @schedule_weekday@ (Monday=1 … Sunday=7).
+--
+-- >>> map isoWeekday [1, 7]
+-- [Just Monday,Just Sunday]
+-- >>> all (\d -> isoWeekday (fromEnum d) == Just d) [Monday .. Sunday]
+-- True
+-- >>> map isoWeekday [0, 8, -1]
+-- [Nothing,Nothing,Nothing]
+isoWeekday :: Int -> Maybe DayOfWeek
+isoWeekday d = [Monday .. Sunday] !!? (d - 1)
+
+
 routineTiming :: DB es => HI.Sql -> Eff es (Maybe (RoutineSchedule, Text))
 routineTiming predicate =
   (decode =<<)
@@ -1888,7 +1900,7 @@ routineTiming predicate =
         ScheduleInterval -> Just $ Every interval
         ScheduleDaily -> Daily <$> timeOfDay hour minute
         ScheduleWeekdays -> Weekdays <$> timeOfDay hour minute
-        ScheduleWeekly -> Weekly <$> (weekday >>= \d -> [Monday .. Sunday] !!? (d - 1)) <*> timeOfDay hour minute
+        ScheduleWeekly -> Weekly <$> (weekday >>= isoWeekday) <*> timeOfDay hour minute
       pure (schedule, timezone)
     timeOfDay hour minute = TimeOfDay <$> hour <*> minute <*> pure 0
 
