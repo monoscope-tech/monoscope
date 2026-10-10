@@ -4,7 +4,6 @@ module Models.Telemetry.Telemetry (
   otelRecordByProjectAndId,
   methodStyle,
   getSpanRecordsByTraceId,
-  getSpanRecordsByTraceIds,
   convertOtelLogsAndSpansToSpanRecord,
   getUsageTotals,
   SpanRecord (..),
@@ -19,7 +18,6 @@ module Models.Telemetry.Telemetry (
   traceErrorHash,
   bursts,
   isErrorRecord,
-  getProjectStatsForReport,
   Trace (..),
   SeverityLevel (..),
   SpanStatus (..),
@@ -86,7 +84,6 @@ module Models.Telemetry.Telemetry (
   getMetricCatalogPage,
   getMetricGroups,
   MetricCatalogPage (..),
-  getTraceShapes,
   getMetricServiceNames,
   getMetricNames,
   projectsWithRecentMetrics,
@@ -96,9 +93,6 @@ module Models.Telemetry.Telemetry (
   atMapInt,
   spanServiceName,
   spanAttr,
-  getProjectStatsBySpanType,
-  getEndpointStats,
-  getDBQueryStats,
   mkSystemLog,
   insertSystemLog,
   generateSummary,
@@ -145,7 +139,6 @@ import Effectful
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled, labeled)
 import Effectful.Log (Log)
-import Effectful.Time qualified as Time
 import Hasql.Decoders qualified as D
 import Hasql.DynamicStatements.Snippet (Snippet, encoderAndParam, toPreparableStatement)
 import Hasql.Encoders qualified as E
@@ -1014,21 +1007,6 @@ resolveTraceOrphans pid trId fetch spanIdOf parentIdOf initial = do
 getSpanRecordsByTraceId :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es) => Bool -> Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Maybe Int -> Eff es [OtelLogsAndSpans]
 getSpanRecordsByTraceId useTf pid trId tme now limitM =
   fst <$> getTraceRowsWith selectOtelSpans (\r -> r.context >>= (.span_id)) (.parent_id) useTf pid trId tme now limitM
-
-
-getSpanRecordsByTraceIds :: (DB es, Time.Time :> es) => Projects.ProjectId -> V.Vector Text -> Maybe UTCTime -> Eff es [OtelLogsAndSpans]
-getSpanRecordsByTraceIds pid traceIds tme = do
-  now <- Time.currentTime
-  let (start, end') = case tme of
-        Nothing -> (addUTCTime (-86400) now, now)
-        Just ts -> (addUTCTime (-300) ts, addUTCTime 300 ts)
-      traceIdsList = V.toList traceIds
-  Hasql.interp
-    $ selectOtelSpans
-      pid.toText
-      start
-      end'
-      [HI.sql| AND context___trace_id = ANY(#{traceIdsList}) ORDER BY context___trace_id ASC, start_time ASC|]
 
 
 -- | How 'spanRecordInTrace' picks its span within the trace.
@@ -2443,123 +2421,6 @@ atErrorFrom spanObj mechanism handled typ msg stack =
         , attachments =
             mfilter (not . null) $ Just [u | k <- ["attachment.url", "screenshot.url"], v <- maybeToList (getNestedValue (T.splitOn "." k) =<< attrs), u <- case v of AE.Array vs -> mapMaybe valText (V.toList vs); _ -> maybeToList (valText v), any (`T.isPrefixOf` u) ["https://", "http://"]]
         }
-
-
-getProjectStatsForReport :: DB es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [(Text, Int, Int)]
-getProjectStatsForReport projectId start end =
-  Hasql.interp $ selectSpansWhere [HI.sql|resource___service___name AS service_name, (COUNT(*) FILTER (WHERE status_code = 'ERROR' OR attributes___exception___type IS NOT NULL))::bigint AS total_error_events, COUNT(*)::bigint AS total_events|] projectId.toText start end [HI.sql| AND resource___service___name IS NOT NULL GROUP BY resource___service___name ORDER BY total_events DESC|]
-
-
-getProjectStatsBySpanType :: DB es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [(Text, Int, Int)]
-getProjectStatsBySpanType projectId start end =
-  Hasql.interp
-    $ selectSpansWhere
-      [HI.sql|
-          CASE
-            WHEN attributes___http___request___method IS NOT NULL THEN 'http'
-            WHEN attributes___db___system___name IS NOT NULL THEN 'db'
-            WHEN attributes ->>'rpc' IS NOT NULL THEN 'rpc'
-            WHEN attributes ->>'messaging' IS NOT NULL THEN 'messaging'
-            WHEN kind = 'internal' THEN 'internal'
-            ELSE 'other'
-          END AS span_type,
-          COUNT(*)::bigint AS total_events,
-          AVG(duration)::bigint AS avg_duration|]
-      projectId.toText
-      start
-      end
-      [HI.sql| AND kind != 'log' GROUP BY span_type ORDER BY total_events DESC|]
-
-
--- | Strict time bounds, unlike its sibling report queries — so it deliberately does
--- not go through 'selectSpansWhere', whose BETWEEN would include the boundary rows.
-getEndpointStats :: DB es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [(Text, Text, Text, Int64, Int64)]
-getEndpointStats projectId start end =
-  Hasql.interp
-    [HI.sql|
-SELECT
-    COALESCE(attributes___server___address, attributes->'net'->'host'->>'name', attributes->'http'->>'host', NULLIF(split_part(split_part(split_part(attributes___url___full, '://', 2), '/', 1), ':', 1), ''), resource___service___name, '') AS host,
-    COALESCE(attributes___http___request___method, 'GET') AS method,
-    COALESCE(attributes___url___path, '') AS url_path,
-    CAST(ROUND(AVG(COALESCE(duration, 0))) AS BIGINT) AS average_duration,
-    COUNT(*)::bigint AS request_count
-FROM otel_logs_and_spans
-WHERE
-    project_id = #{projectId.toText}
-    AND timestamp > #{start} AND timestamp < #{end}
-    AND attributes___http___request___method IS NOT NULL
-GROUP BY
-    host, method, url_path
-ORDER BY
-    request_count DESC,
-    average_duration DESC
-    |]
-
-
-getDBQueryStats :: DB es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [(Text, Int, Int)]
-getDBQueryStats projectId start end =
-  Hasql.interp
-    $ selectSpansWhere
-      [HI.sql|attributes___db___query___text AS query, ROUND(AVG(duration))::int8 AS avg_duration, COUNT(*)::int8 AS count|]
-      projectId.toText
-      start
-      end
-      [HI.sql| AND kind != 'log' AND attributes___db___query___text IS NOT NULL
-      GROUP BY attributes___db___query___text
-      HAVING ROUND(AVG(duration)/1000000) > 500
-      ORDER BY avg_duration DESC LIMIT 10|]
-
-
-getTraceShapes :: (DB es, Time.Time :> es) => Projects.ProjectId -> V.Vector Text -> Eff es [(Text, Text, Int, Int)]
-getTraceShapes pid trIds = do
-  now <- Time.currentTime
-  Hasql.interp
-    [HI.sql|
-      WITH target_trace_spans AS (
-        SELECT DISTINCT context___trace_id, name
-        FROM otel_logs_and_spans
-        WHERE project_id = #{pid.toText}
-          AND timestamp > #{now}::timestamptz - interval '1 hour'
-          AND context___trace_id = ANY(#{trIds})
-      ),
-      target_shapes AS (
-        SELECT
-          context___trace_id AS target_trace_id,
-          ARRAY_AGG(DISTINCT name ORDER BY name) AS span_names
-        FROM target_trace_spans
-        GROUP BY context___trace_id
-      ),
-      trace_shapes AS (
-        SELECT
-          context___trace_id AS trace_id,
-          ARRAY_AGG(DISTINCT name ORDER BY name) AS span_names
-        FROM otel_logs_and_spans
-        WHERE project_id = #{pid.toText}
-          AND timestamp > #{now}::timestamptz - interval '1 hour'
-          AND context___trace_id IS NOT NULL
-        GROUP BY context___trace_id
-      ),
-      matching_traces AS (
-        SELECT
-          ts.target_trace_id,
-          t.trace_id
-        FROM trace_shapes t
-        JOIN target_shapes ts
-          ON t.span_names = ts.span_names
-      )
-      SELECT
-        m.target_trace_id,
-        s.name,
-        AVG(s.duration)::bigint AS avg_duration,
-        COUNT(*)::bigint AS span_count
-      FROM otel_logs_and_spans s
-      JOIN matching_traces m
-        ON s.context___trace_id = m.trace_id
-      WHERE s.project_id = #{pid.toText}
-        AND s.timestamp > #{now}::timestamptz - interval '1 hour' and s.name IS NOT NULL
-      GROUP BY m.target_trace_id, s.name
-      ORDER BY m.target_trace_id, s.name
-    |]
 
 
 mkSystemLog

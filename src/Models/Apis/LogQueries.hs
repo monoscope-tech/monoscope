@@ -15,7 +15,6 @@ module Models.Apis.LogQueries (
   hasProjectIdFilter,
   LogEndpoint (..),
   logExplorerUrlPath,
-  getLastSevenDaysTotalRequest,
   fetchLogPatterns,
   fetchSessions,
   SessionSort (..),
@@ -1041,8 +1040,3 @@ buildHourlyBuckets now pairs = densifyBuckets (0, 23) [(idx, c) | (t, c) <- pair
     hourIndex t = floor (diffUTCTime (truncateToHour t) startHour / 3600) :: Int
     truncateToHour t = let s = utcTimeToPOSIXSeconds t in posixSecondsToUTCTime $ fromIntegral (floor s `div` 3600 * 3600 :: Int)
 
-
-getLastSevenDaysTotalRequest :: (DB es, Time.Time :> es) => Projects.ProjectId -> Eff es Int
-getLastSevenDaysTotalRequest pid = do
-  now <- Time.currentTime
-  fromMaybe 0 <$> Hasql.interpOne [HI.sql| SELECT count(*)::BIGINT FROM otel_logs_and_spans WHERE project_id=#{pid.toText}::text AND timestamp > #{now}::timestamptz - interval '7 days'|]

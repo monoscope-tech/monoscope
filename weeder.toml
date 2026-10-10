@@ -14,11 +14,6 @@ roots = [
   "^Pkg\\.Parser\\.defPid$",
   "^Pkg\\.QueryCache\\.(slidingWindowSeconds|cacheWindowStart)$",
   "^ProcessMessage\\.(ensureUrlParams|dynSegmentLabel|isUrlIdLike|tokenizeUrlPath)$",
-  # Existing public exports; keep new dead bindings visible without deleting APIs here.
-  "^Models\\.Apis\\.Endpoints\\.countEndpointsForHost$",
-  "^Models\\.Apis\\.LogQueries\\.getLastSevenDaysTotalRequest$",
-  "^Models\\.Telemetry\\.Telemetry\\.(getSpanRecordsByTraceIds|getProjectStatsForReport|getProjectStatsBySpanType|getEndpointStats|getDBQueryStats|getTraceShapes)$",
-  "^Pkg\\.Components\\.Widget\\.getSpanJson$",
 ]
 type-class-roots = true
 

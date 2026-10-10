@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), WidgetCta (..), WidgetMarker (..), SqlOrder, mkSqlOrder, PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), statScalar, formatStatValue, widgetPostH, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, decodeWidgetZ, widgetFetchUrl, getSpanJson) where
+module Pkg.Components.Widget (Widget (..), WidgetCta (..), WidgetMarker (..), SqlOrder, mkSqlOrder, PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), statScalar, formatStatValue, widgetPostH, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, decodeWidgetZ, widgetFetchUrl) where
 
 import Codec.Compression.GZip qualified as GZip
 import Control.Exception.Safe qualified as Safe
@@ -32,11 +32,9 @@ import Lucid.Base (termRaw)
 import Lucid.Htmx (hxGet_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (headerRow_)
-import Pages.LogExplorer.LogItem (getServiceName, spanHasErrors)
 import Pkg.DeriveUtils (JsonValueSchema (..), WrappedEnumSC (..), encodeEnumSC)
 import Pkg.Parser (ToQueryText (..), parseQueryToAST)
 import Pkg.Parser.Expr (Subject (..))
@@ -1601,20 +1599,6 @@ renderTableWithDataAndParams widget dataRows params = do
                 $ if isJust col.progress
                   then renderProgressCell col (getRowValue idx row) maxValues valueWidths
                   else renderLongTextOr widget col (getRowValue idx row)
-
-
-getSpanJson :: Maybe (Int, Int) -> Telemetry.SpanRecord -> AE.Value
-getSpanJson tgtM sp =
-  AE.object
-    [ "spanId" AE..= sp.spanId
-    , "name" AE..= sp.spanName
-    , "value" AE..= maybe sp.spanDurationNs (\(d, _) -> fromIntegral d) tgtM
-    , "start" AE..= utcTimeToNanoseconds sp.startTime
-    , "parentId" AE..= sp.parentSpanId
-    , "serviceName" AE..= getServiceName sp.resource
-    , "hasErrors" AE..= spanHasErrors sp
-    , "totalSpans" AE..= maybe 1 snd tgtM
-    ]
 
 
 getRowValue :: Int -> V.Vector Text -> Text
