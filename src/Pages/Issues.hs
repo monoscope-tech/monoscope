@@ -1606,30 +1606,22 @@ eventCard_ IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflow-cli
           , glyph = "chart-waterfall"
           , heading = "Trace"
           , -- Icon state is CSS-driven off the section's fullscreen class; the
-            -- click only sends the event. tippy, not daisyUI, whose ::before
+            -- click only toggles it. tippy, not daisyUI, whose ::before
             -- bubble is clipped by the card's overflow.
             controls = Just
-              $ button_ [type_ "button", class_ "p-1.5 rounded hover:bg-fillWeaker cursor-pointer transition-colors max-md:hidden", Aria.label_ "Toggle fullscreen", term "data-tippy-content" "Expand · Esc to exit", [__|on click send toggleFullscreen to #issue-trace|]] do
+              $ button_ [type_ "button", class_ "p-1.5 rounded hover:bg-fillWeaker cursor-pointer transition-colors max-md:hidden", Aria.label_ "Toggle fullscreen", term "data-tippy-content" "Expand · Esc to exit", [__|on click toggle .investigation-fullscreen on #issue-trace|]] do
                 faSprite_ "expand" "regular" "w-3 h-3 text-textWeak group-[.investigation-fullscreen]/sec:hidden"
                 faSprite_ "compress" "regular" "w-3 h-3 text-textWeak hidden group-[.investigation-fullscreen]/sec:block"
-          , -- Senders `send toggleFullscreen` here, and this is the only
-            -- receiver. Escape closes an open span panel before it exits
+          , -- Escape closes an open span panel before it exits
             -- fullscreen. `the first <…/> exists`, not a bare `<…/>`: a query
             -- literal is a lazy object that is truthy even when it matches
             -- nothing, so `if <sel/>` never falls through.
             extra =
               [ tabindex_ "-1"
-              , [__|on toggleFullscreen(active)
-                          default active to (I do not match .investigation-fullscreen)
-                          if active add .investigation-fullscreen to me
-                          otherwise remove .investigation-fullscreen from me
-                          end
-                        end
-                        on keydown[key is 'Escape'] from window
+              , [__|on keydown[key is 'Escape'] from window
                           if the first <#trace_details_container.open/> exists
                             send closeDetailPanel to #trace_details_container
-                          otherwise if I match .investigation-fullscreen
-                            send toggleFullscreen(active: false) to me
+                          otherwise remove .investigation-fullscreen from me
                           end|]
               ]
           , -- No fixed height: the trace flows at natural height so the page
