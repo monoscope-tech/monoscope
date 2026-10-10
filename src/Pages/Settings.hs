@@ -1455,6 +1455,7 @@ billingPage d = div_ [] do
     div_ [class_ "text-center text-sm text-textWeak w-full mx-auto max-w-96"] do
       span_ [class_ "text-textStrong text-2xl font-semibold"] "Compare Plans"
       p_ [class_ "mt-2 mb-4"] "Drag the slider to estimate costs at different usage levels."
+    -- Free upgrades use Stripe; billing recovery keeps the existing provider.
     paymentPlanPicker d.pid d.lemonUrl d.critical d.paymentPlan d.enableFreetier d.basicAuthEnabled False (bool d.provider Projects.NoBillingProvider isFree)
 
 

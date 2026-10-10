@@ -285,7 +285,7 @@ settingsTests = do
           session <- refreshSession tr.trPool tr.trATCtx.hasqlPool tr.trSessAndHeader
           (_, page) <- testServant tr{trSessAndHeader = session} $ CreateProject.projectSettingsGetH testPid
           pure $ renderText $ toHtml page
-    _ <- runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE projects.projects SET payment_plan = 'Free' WHERE id = #{testPid}|]
+    _ <- runQueryEffect tr $ Projects.updateProjectPricing testPid (Projects.PlanName "Free") (Projects.SubId "") (Projects.SubItemId "") (Projects.OrderId "")
     settingsHtml >>= (`shouldNotSatisfy` TL.isInfixOf "id=\"billing-downgrade-banner\"")
     for_ [Projects.StripeProvider, Projects.LemonSqueezyProvider] \provider -> do
       _ <- runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE projects.projects SET payment_plan = 'GraduatedPricing', sub_id = 'sub_banner', customer_id = 'cus_banner', billing_provider = #{provider} WHERE id = #{testPid}|]

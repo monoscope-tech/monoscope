@@ -54,8 +54,9 @@ import CLI.Config (CLIConfig (..), ConfigKey (..), allConfigKeys, configDir, con
 import CLI.Core (Ingestion, OutputMode (..), apiGet, apiGetJson, apiPostUnauth, ingestionKey, isInteractiveTTY, isJsonOutput, printDebug, printError, renderAPIError, renderJSON, renderTable, renderWith, withAPIResult)
 import CLI.Dashboard qualified as Dash
 import CLI.LogView (EventRow (..), LogFormat (..), eventRows, parseLogFormat, renderEventLine, renderLogfmt, renderWaterfall)
+import CLI.Resource qualified as CLIResource
 import CLI.Table (termWidth)
-import CLI.UI (inputForm, selectFromList, withSpinner)
+import CLI.UI (Picker, inputForm, selectFromList, withSpinner)
 import CLI.Validate (validateAndNormalizeKind, validateDurationOrDie, validateOrDie, validateQueryOrDie)
 import Control.Exception (bracket)
 import Control.Lens ((%~), (^..), (^?))
@@ -1300,7 +1301,7 @@ data MeInfo = MeInfo {projectId :: Text, hostUrl :: Text}
 
 
 data DashboardRenderOpts = DashboardRenderOpts
-  { dashboardId :: Text
+  { dashboardId :: Maybe Text
   , tab :: Maybe Text
   , widget :: Maybe Text
   , since :: Maybe Text
@@ -1317,10 +1318,11 @@ data DashboardRenderOpts = DashboardRenderOpts
 -- | Draw a whole dashboard — every widget, in its grid position — in the
 -- terminal. Under @--json@ the resolved payload is emitted instead, which is
 -- the form an agent wants to reason over.
-runDashboardRender :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> DashboardRenderOpts -> OutputMode -> Eff es ()
+runDashboardRender :: (Environment :> es, HTTP :> es, IOE :> es, Picker :> es) => CLIConfig -> DashboardRenderOpts -> OutputMode -> Eff es ()
 runDashboardRender cfg opts mode = do
   validateDurationOrDie "--watch" opts.watch
   validateDurationOrDie "--since" opts.since
+  dashboardId <- CLIResource.selectResourceId cfg CLIResource.Dashboards mode opts.dashboardId
   let params =
         catMaybes
           [ ("tab",) <$> opts.tab
@@ -1328,7 +1330,7 @@ runDashboardRender cfg opts mode = do
           ]
           <> timeRangeParams opts.since opts.from opts.to
           <> [("var-" <> k, v) | (k, v) <- opts.vars]
-  repeatEvery opts.watch $ withAPIResult cfg ("/api/v1/dashboards/" <> opts.dashboardId <> "/data") params \val ->
+  repeatEvery opts.watch $ withAPIResult cfg ("/api/v1/dashboards/" <> dashboardId <> "/data") params \val ->
     case (mode, AE.fromJSON @Dash.DashboardData val) of
       (OutputTable, AE.Success d) -> do
         (w, color) <- chartCanvas

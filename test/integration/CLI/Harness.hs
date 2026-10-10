@@ -2,10 +2,11 @@
 -- rather than "Pkg.TestUtils" because it straddles both packages: the CLI is
 -- 'monoscope-cli' (which must never link libpq) while the fake transport routes
 -- into lib:monoscope's servant handlers.
-module CLI.Harness (runCLILifecycle, runCLILifecycleLive) where
+module CLI.Harness (runCLILifecycle, runCLILifecycleLive, runCLILifecyclePicking) where
 
 import CLI.Core (runIngestion)
 import CLI.Main qualified as CLIMain
+import CLI.UI (Picker, runPicker, runPickerWith)
 import Data.Effectful.Wreq (HTTP, runHTTPWreq)
 import Data.UUID qualified as UUID
 import Data.Version (makeVersion)
@@ -27,15 +28,22 @@ import UnliftIO.Exception (bracket_, try)
 -- as @ExitFailure 1@; anything else as 'ExitSuccess'). Pass @--json@ in args for
 -- deterministic output regardless of TTY state.
 runCLILifecycle :: TestResources -> [String] -> IO (ExitCode, Text)
-runCLILifecycle tr = runCLILifecycleWith (runEff . runHTTPtoServant tr)
+runCLILifecycle tr = runCLILifecycleWith (runEff . runHTTPtoServant tr) runPicker
 
 
 runCLILifecycleLive :: [String] -> IO (ExitCode, Text)
-runCLILifecycleLive = runCLILifecycleWith (runEff . runHTTPWreq)
+runCLILifecycleLive = runCLILifecycleWith (runEff . runHTTPWreq) runPicker
 
 
-runCLILifecycleWith :: (Eff '[HTTP, IOE] () -> IO ()) -> [String] -> IO (ExitCode, Text)
-runCLILifecycleWith interpretHTTP args = do
+runCLILifecyclePicking :: TestResources -> (Text -> [(Text, Text)] -> IO (Maybe Text)) -> [String] -> IO (ExitCode, Text)
+runCLILifecyclePicking tr choose =
+  runCLILifecycleWith
+    (runEff . runHTTPtoServant tr)
+    (runPickerWith (pure True) (\title items -> liftIO $ choose title items))
+
+
+runCLILifecycleWith :: (Eff '[HTTP, IOE] () -> IO ()) -> (Eff '[Picker, HTTP, IOE] () -> Eff '[HTTP, IOE] ()) -> [String] -> IO (ExitCode, Text)
+runCLILifecycleWith interpretHTTP interpretPicker args = do
   -- MONOSCOPE_TEST_API_KEY lets a test inject a real project key (needed by
   -- ingestion paths that authenticate the key, e.g. send-event → OTLP).
   key <- fromMaybe "test-key" <$> lookupEnv "MONOSCOPE_TEST_API_KEY"
@@ -51,6 +59,7 @@ runCLILifecycleWith interpretHTTP args = do
         Silently.capture
           $ try @IO @ExitCode
           $ interpretHTTP
+          $ interpretPicker
           $ runEnvironment
           $ runFileSystem
           $ runIngestion

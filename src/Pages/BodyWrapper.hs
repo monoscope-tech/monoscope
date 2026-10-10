@@ -475,7 +475,7 @@ bodyWrapper bcfg child = do
                 $ div_ [id_ "super-admin-banner", role_ "status", class_ "flex shrink-0 items-center justify-center gap-2 border-b border-strokeWarning-strong bg-fillWarning-weak px-3 py-1 text-xs text-textStrong"] do
                   faSprite_ "shield-check" "regular" "h-3 w-3 shrink-0"
                   span_ $ toHtml $ "You are a super admin in a customer's project · " <> project.title
-              when (Projects.isFreeTier project.paymentPlan && isJust project.subId)
+              when (Projects.isFreeTier project.paymentPlan && Projects.projectProvider project /= Projects.NoBillingProvider)
                 $ div_ [id_ "billing-downgrade-banner", role_ "alert", class_ "flex shrink-0 flex-wrap items-center justify-center gap-x-3 gap-y-1 border-b border-strokeWarning-strong bg-fillWarning-weak px-4 py-2 text-xs text-textStrong"] do
                   span_ "Your paid subscription is no longer active. This project has been downgraded to Free."
                   a_ [href_ $ "/p/" <> project.id.toText <> "/manage_billing", class_ "font-medium text-textBrand underline underline-offset-2"] "Review billing or change plan"
