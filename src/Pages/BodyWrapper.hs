@@ -123,10 +123,10 @@ menu lang pid =
   [ (I18n.t lang "nav.dashboards", p "/dashboards", "dashboard")
   , (I18n.t lang "nav.explorer", p "/log_explorer", "explore")
   , (I18n.t lang "nav.issues", p "/issues", "bug")
+  , (I18n.t lang "nav.monitors", p "/monitors", "list-check")
   , ("Real User Monitoring", p "/rum", "web")
   , (I18n.t lang "nav.infrastructure", p "/infrastructure/hosts", "server")
   , (I18n.t lang "nav.api_catalog", p "/api_catalog", "swap")
-  , (I18n.t lang "nav.monitors", p "/monitors", "list-check")
   , ("Repositories", p "/repositories", "code-branch")
   , (I18n.t lang "nav.reports", p "/reports", "chart-simple")
   ]
@@ -859,9 +859,7 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
                 when hasFlyout
                   $ div_ [class_ "nav-flyout max-md:hidden invisible opacity-0 group-hover/flyout:visible group-hover/flyout:opacity-100 fixed top-0 left-0 z-50 min-w-44 bg-bgRaised border border-strokeWeak rounded-lg shadow-md py-1.5 transition-[opacity,visibility] duration-100"]
                   $ mapM_ flyoutLink flyoutItems
-      -- Three, not two: the split is positional, so moving Issues up into the first
-      -- group without widening it would have put it at the top of the second one.
-      let (primary, secondary) = splitAt 3 $ menu sess.lang project.id
+      let (primary, secondary) = splitAt 4 $ menu sess.lang project.id
       mapM_ (uncurry3 renderNavItem) primary
       div_ [class_ "border-t border-strokeWeak/50 my-1.5 mx-2"] ""
       mapM_ (uncurry3 renderNavItem) secondary

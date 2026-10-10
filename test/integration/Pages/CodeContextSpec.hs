@@ -32,6 +32,8 @@ import Network.HTTP.Client (HttpException (InvalidUrlException))
 import Network.HTTP.Client.Internal (Response (..), ResponseClose (..), createCookieJar, defaultRequest)
 import Network.HTTP.Types.Status (Status (..))
 import Network.HTTP.Types.Version (http11)
+import OddJobs.ConfigBuilder (mkConfig)
+import OddJobs.Job qualified as Jobs
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Bots.BotTestHelpers (withHTTPResponses)
 import Pages.CodeContext qualified as PageCodeContext
@@ -984,6 +986,14 @@ spec = do
             void $ runTestBgRecordingHTTP frozenTime tr (success importJob)
             Just unchanged <- runQueryEffect tr $ GitSync.getGitSyncById testPid sync.id
             unchanged.lastError `shouldBe` Nothing
+            void $ runQueryEffect tr $ GitSync.recordSyncError sync.id GitSync.ExportDashboards "Bulk export timed out"
+            (_, batchRetry) <- testServant tr $ GitSyncPage.gitSyncRepositoryRetryH testPid sync.id
+            render batchRetry `shouldSatisfy` T.isInfixOf "Retry export"
+            queued <- getPendingBackgroundJobs tr.trATCtx
+            [sid | (_, BackgroundJobs.GitSyncPushRepository pid sid) <- toList queued, pid == testPid] `shouldBe` [sync.id]
+            void $ runTestBgRecordingHTTP frozenTime tr $ success $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.GitSyncPushRepository testPid sync.id)
+            Just batchRecovered <- runQueryEffect tr $ GitSync.getGitSyncById testPid sync.id
+            (batchRecovered.lastError, batchRecovered.lastRevision) `shouldBe` (Nothing, Just "head")
           _ -> expectationFailure "Expected two dashboard fixtures"
 
       it "repositoryPull_keepsTheTreeContentAndCursorAtOneCommitWhenTheBranchMoves" \tr -> do
@@ -1023,15 +1033,11 @@ spec = do
                 else pure $ Just $ if "/git/trees/" `T.isInfixOf` path then "{\"tree\":[{\"path\":\"dashboards/overview.yaml\",\"sha\":\"blob\",\"type\":\"blob\"}]}" else "{\"sha\":\"head\"}"
         withAsync (runTestBgRecordingHTTP frozenTime tr $ provider True $ BackgroundJobs.processBackgroundJob tr.trATCtx job) \worker -> do
           timeout 5000000 (takeMVar fetching) `shouldReturn` Just ()
-          (requests, ()) <- runTestBgRecordingHTTP frozenTime tr $ provider False $ BackgroundJobs.processBackgroundJob tr.trATCtx job
-          requests `shouldBe` []
-          (pushRequests, ()) <- runTestBgRecordingHTTP frozenTime tr $ provider False $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.GitSyncPushDashboard testPid did.unUUIDId)
-          pushRequests `shouldBe` []
-          (bulkRequests, ()) <- runTestBgRecordingHTTP frozenTime tr $ provider False $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.GitSyncPushAllDashboards testPid)
-          bulkRequests `shouldBe` []
+          for_ [job, BackgroundJobs.GitSyncPushDashboard testPid did.unUUIDId, BackgroundJobs.GitSyncPushAllDashboards testPid] \overlap -> do
+            outcome <- try @_ @SomeException $ runTestBgRecordingHTTP frozenTime tr $ provider False $ BackgroundJobs.processBackgroundJob tr.trATCtx overlap
+            outcome `shouldSatisfy` isLeft
           jobs <- getPendingBackgroundJobs tr.trATCtx
-          length [() | (_, BackgroundJobs.GitSyncRepository pid sid) <- toList jobs, pid == testPid, sid == sync.id] `shouldBe` 1
-          length [() | (_, BackgroundJobs.GitSyncPushDashboard pid dashboardId) <- toList jobs, pid == testPid, dashboardId == did.unUUIDId] `shouldBe` 2
+          jobs `shouldSatisfy` null
           (independent, ()) <- runTestBgRecordingHTTP frozenTime tr $ provider False $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.GitSyncRepository testPid other.id)
           length independent `shouldBe` 3
           putMVar release ()
@@ -1114,9 +1120,49 @@ spec = do
         Just renamed <- runQueryEffect tr $ Dashboards.getDashboardByProjectId testPid did
         (renamed.filePath, renamed.fileSha) `shouldBe` (Just "new.yaml", Just "same-content")
 
+      it "repositoryWorkers_leaveContentionToTheQueuesBoundedRetryPolicy" \tr -> do
+        Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync (encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing "team" "dashboards" "main" (GitSync.PersonalToken "fixture") Nothing ""
+        Just lease <- runTestBg frozenTime tr $ GitSync.claimSyncLease sync.id
+        bracket (pure lease) (\claimed -> runQueryEffect tr $ GitSync.releaseSyncLease claimed) \_ -> do
+          job <- withResource tr.trATCtx.jobsPool \conn -> Jobs.createJob conn "background_jobs" (BackgroundJobs.GitSyncRepository testPid sync.id)
+          threads <- newIORef M.empty
+          let runner queued = do
+                payload <- Jobs.throwParsePayload queued
+                void $ runTestBgRecordingHTTP frozenTime tr $ BackgroundJobs.processBackgroundJob tr.trATCtx payload
+              config = mkConfig (\_ _ -> pass) "background_jobs" tr.trATCtx.jobsPool (Jobs.MaxConcurrentJobs 1) runner id
+              env = Jobs.RunnerEnv config threads
+          for_ [1 .. 10] \attempt -> do
+            withResource tr.trATCtx.jobsPool \conn -> void $ PG.execute conn "UPDATE background_jobs SET run_at = ? WHERE id = ?" (frozenTime, job.jobId)
+            Just worker <- runReaderT (Jobs.pollRunJob "repository-retry-test" Nothing) env
+            void $ waitCatch worker
+            stored <- withResource tr.trATCtx.jobsPool \conn -> Jobs.findJobByIdIO conn "background_jobs" job.jobId
+            stored `shouldSatisfy` isJust
+            retried <- maybe (fail "Retry replaced the original job") pure stored
+            (retried.jobAttempts, retried.jobStatus) `shouldBe` (attempt, if attempt == 10 then Jobs.Failed else Jobs.Retry)
+            retried.jobLastError `shouldSatisfy` maybe False (T.isInfixOf "SyncLeaseUnavailable" . decodeUtf8 . LBS.toStrict . AE.encode)
+            withResource tr.trATCtx.jobsPool (\conn -> PG.query_ conn "SELECT count(*) FROM background_jobs" :: IO [PG.Only Int]) `shouldReturn` [PG.Only 1]
+
+      it "repositoryBulkExport_claimsOneLeasePerRepository" \tr -> do
+        leases <- newIORef ([] :: [(Text, UUID.UUID)])
+        for_ ["one", "two"] \repo -> do
+          Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync (encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing "team" repo "main" (GitSync.PersonalToken "fixture") Nothing ""
+          for_ ["a.yaml", "b.yaml"] \path -> do
+            did <- UUIDId <$> UUID.nextRandom
+            void $ runQueryEffect tr $ Dashboards.insert (Dashboards.mkDashboardVM did testPid frozenTime (Projects.UserId UUID.nil)){Dashboards.title = path, Dashboards.schema = Just def, Dashboards.gitSyncId = Just sync.id, Dashboards.filePath = Just path}
+        let provider = withHTTPResponses \_ endpoint -> do
+              owners <- runQueryEffect tr $ Hasql.interp @[(Text, UUID.UUID)] [HI.sql| SELECT s.repo, l.owner FROM projects.repository_sync_leases l JOIN projects.git_sync s ON s.id = l.sync_id |]
+              modifyIORef' leases (<> owners)
+              pure $ Just $ if "/contents/" `T.isInfixOf` toText endpoint then "{\"content\":{\"sha\":\"written\"}}" else "{\"sha\":\"head\"}"
+        (requests, ()) <- runTestBgRecordingHTTP frozenTime tr $ provider $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.GitSyncPushAllDashboards testPid)
+        length requests `shouldBe` 8
+        owners <- readIORef leases
+        length (ordNub owners) `shouldBe` 2
+
       it "repositoryPull_reportsInvalidYamlAndRetriesTheSameRevisionAfterCorrection" \tr -> do
         let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
         Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub (Just "https://127.0.0.1:1") "team" "dashboards" "main" (GitSync.PersonalToken "fixture") Nothing ""
+        deleted <- UUIDId <$> UUID.nextRandom
+        void $ runQueryEffect tr $ Dashboards.insert (Dashboards.mkDashboardVM deleted testPid frozenTime (Projects.UserId UUID.nil)){Dashboards.title = "Removed", Dashboards.gitSyncId = Just sync.id, Dashboards.filePath = Just "removed.yaml", Dashboards.fileSha = Just "old"}
         let pull yaml =
               runTestBgRecordingHTTP frozenTime tr
                 $ withHTTPResponses
@@ -1124,22 +1170,25 @@ spec = do
                       pure
                         $ Just
                         $ if "/git/trees/" `T.isInfixOf` toText endpoint
-                          then "{\"tree\":[{\"path\":\"dashboards/overview.yaml\",\"sha\":\"blob\",\"type\":\"blob\"}]}"
+                          then "{\"tree\":[{\"path\":\"dashboards/overview.yaml\",\"sha\":\"blob\",\"type\":\"blob\"},{\"path\":\"dashboards/valid.yaml\",\"sha\":\"valid\",\"type\":\"blob\"}]}"
                           else
                             if "/contents/" `T.isInfixOf` toText endpoint
-                              then AE.encode $ AE.object ["content" AE..= extractBase64 (B64.encodeBase64 yaml)]
+                              then AE.encode $ AE.object ["content" AE..= extractBase64 (B64.encodeBase64 (if "valid.yaml" `T.isInfixOf` toText endpoint then "title: Valid\nwidgets: []\n" else yaml))]
                               else "{\"sha\":\"head\"}"
                   )
                 $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.GitSyncRepository testPid sync.id)
         _ <- pull "title: [invalid"
         Just failed <- runQueryEffect tr $ GitSync.getGitSyncById testPid sync.id
+        runQueryEffect tr (Dashboards.getDashboardByProjectId testPid deleted) >>= (`shouldSatisfy` isNothing)
+        partial <- runQueryEffect tr $ GitSync.getRepositoryDashboardState testPid sync.id
+        M.keys partial `shouldBe` ["valid.yaml"]
         failed.lastRevision `shouldBe` Nothing
         failed.lastError `shouldSatisfy` maybe False (T.isInfixOf "overview.yaml" . (.message))
         _ <- pull "title: Recovered\nwidgets: []\n"
         Just recovered <- runQueryEffect tr $ GitSync.getGitSyncById testPid sync.id
         (recovered.lastRevision, recovered.lastError) `shouldBe` (Just "head", Nothing)
         dashboards <- runQueryEffect tr $ GitSync.getRepositoryDashboardState testPid sync.id
-        M.keys dashboards `shouldBe` ["overview.yaml"]
+        M.keys dashboards `shouldBe` ["overview.yaml", "valid.yaml"]
 
       -- Without a credential there is nothing to read repos through, so the page must point at
       -- the control that fixes that rather than offer a form whose every submission is discarded.

@@ -45,6 +45,7 @@ data BgJobs
   | GitSyncFromRepo Projects.ProjectId
   | GitSyncRepository Projects.ProjectId (UUIDId "github_sync")
   | GitSyncPushDashboard Projects.ProjectId UUID.UUID -- projectId, dashboardId
+  | GitSyncPushRepository Projects.ProjectId (UUIDId "github_sync")
   | GitSyncPushAllDashboards Projects.ProjectId -- Push all existing dashboards to repo
   | CompressReplaySessions
   | MergeReplaySession Projects.ProjectId UUID.UUID

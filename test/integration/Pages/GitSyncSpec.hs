@@ -514,12 +514,12 @@ spec = sequential do
         _ <- runQueryEffect tr $ GitSync.setAnnouncedRevision sync.id "newhead"
 
         -- A pull that landed on an older head: the announcement must survive it.
-        _ <- runQueryEffect tr $ GitSync.updateLastRevision sync.id "oldhead"
+        _ <- runQueryEffect tr $ GitSync.recordImportSuccess sync.id "oldhead"
         stillPending <- fmap (>>= (.announcedRevision)) $ runQueryEffect tr $ onlySync testPid
         stillPending `shouldBe` Just "newhead"
 
         -- The pull that finally reaches it retires it.
-        _ <- runQueryEffect tr $ GitSync.updateLastRevision sync.id "newhead"
+        _ <- runQueryEffect tr $ GitSync.recordImportSuccess sync.id "newhead"
         settled <- runQueryEffect tr $ onlySync testPid
         (settled >>= (.announcedRevision)) `shouldBe` Nothing
         (settled >>= (.lastRevision)) `shouldBe` Just "newhead"

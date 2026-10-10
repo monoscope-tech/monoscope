@@ -223,6 +223,7 @@ gitSyncRepositoryRetryH pid sid = do
     then do
       job <- case maybe GitSync.ImportDashboards (.operation) sync.lastError of
         GitSync.ImportDashboards -> pure $ Just $ BackgroundJobs.GitSyncRepository pid sid
+        GitSync.ExportDashboards -> pure $ Just $ BackgroundJobs.GitSyncPushRepository pid sid
         GitSync.ExportDashboard did -> do
           dashboard <- Dashboards.getDashboardByProjectId pid did
           if maybe False ((== Just sid) . (.gitSyncId)) dashboard
@@ -352,10 +353,11 @@ gitSyncSettingsViewWithError failure hostUrl pid syncM =
       whenJust sync.lastError \err -> div_ [class_ "space-y-2"] do
         p_ [role_ "status", class_ "text-sm text-textError break-words"] $ toHtml err.message
         case err.operation of
-          GitSync.ImportDashboards -> p_ [class_ "text-xs text-textWeak"] "Dashboard import failed. Local dashboards are retained."
+          GitSync.ImportDashboards -> p_ [class_ "text-xs text-textWeak"] "Some dashboards could not be imported. Successful changes and repository deletions still apply."
+          GitSync.ExportDashboards -> p_ [class_ "text-xs text-textWeak"] "Dashboard export failed. Retry to export this repository’s dashboards."
           GitSync.ExportDashboard did -> a_ [href_ ("/p/" <> pid.toText <> "/dashboards/" <> did.toText <> "/repository"), class_ "inline-flex min-h-6 items-center text-sm text-textBrand underline underline-offset-2"] "View the dashboard that failed to export"
         when sync.syncEnabled $ button_ [type_ "button", term "hx-disable" "this", hxPost_ (actionUrl <> "/retry"), hxTarget_ ("#" <> targetId), hxSwap_ "outerMorph", hxIndicator_ ("#" <> targetId <> "-retry-indicator"), class_ "btn btn-sm btn-ghost gap-2"] do
-          toHtml @Text $ case err.operation of GitSync.ImportDashboards -> "Retry import"; GitSync.ExportDashboard _ -> "Retry export"
+          toHtml @Text $ case err.operation of GitSync.ImportDashboards -> "Retry import"; GitSync.ExportDashboard _ -> "Retry export"; GitSync.ExportDashboards -> "Retry export"
           htmxIndicator_ (targetId <> "-retry-indicator") LdXS
 
       -- Repository settings

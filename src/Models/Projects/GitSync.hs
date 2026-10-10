@@ -27,11 +27,11 @@ module Models.Projects.GitSync (
   insertGitHubSync,
   updateGitHubSync,
   pauseGitSync,
-  updateLastRevision,
+  recordImportSuccess,
   setAnnouncedRevision,
   clearAnnouncedRevision,
   recordSyncError,
-  recordPushSuccess,
+  recordSyncSuccess,
   SyncLease,
   claimSyncLease,
   releaseSyncLease,
@@ -264,10 +264,46 @@ instance Default GitHubSync where
       epoch = posixSecondsToUTCTime 0
 
 
-data SyncOperation = ImportDashboards | ExportDashboard DashboardId
+-- $setup
+-- >>> import Data.Aeson qualified as AE
+-- >>> import Data.UUID qualified as UUID
+-- >>> import Pkg.DeriveUtils (UUIDId(..))
+
+
+-- | Persisted operation names are explicit so constructor renames cannot change old rows.
+--
+-- >>> AE.eitherDecode @SyncOperation "{\"tag\":\"ImportDashboards\"}"
+-- Right ImportDashboards
+-- >>> AE.encode ImportDashboards
+-- "{\"tag\":\"ImportDashboards\"}"
+-- >>> AE.eitherDecode @SyncOperation "{\"tag\":\"ExportDashboard\",\"contents\":\"00000000-0000-0000-0000-000000000000\"}" == Right (ExportDashboard (UUIDId UUID.nil))
+-- True
+-- >>> AE.eitherDecode @SyncOperation "{\"tag\":\"ExportDashboards\"}"
+-- Right ExportDashboards
+-- >>> traverse (AE.eitherDecode @SyncOperation . AE.encode) ([ImportDashboards, ExportDashboard (UUIDId UUID.nil), ExportDashboards] :: [SyncOperation]) == Right [ImportDashboards, ExportDashboard (UUIDId UUID.nil), ExportDashboards]
+-- True
+-- >>> AE.eitherDecode @SyncOperation "{\"tag\":\"Unknown\"}"
+-- Left "Error in $: Unknown repository sync operation"
+data SyncOperation = ImportDashboards | ExportDashboard DashboardId | ExportDashboards
   deriving stock (Eq, Generic, Show)
-  deriving anyclass (AE.FromJSON, AE.ToJSON, NFData)
+  deriving anyclass (NFData)
   deriving (FromField, HI.DecodeValue, HI.EncodeValue, ToField) via Aeson SyncOperation
+
+
+instance AE.ToJSON SyncOperation where
+  toJSON = \case
+    ImportDashboards -> AE.object ["tag" AE..= ("ImportDashboards" :: Text)]
+    ExportDashboard did -> AE.object ["tag" AE..= ("ExportDashboard" :: Text), "contents" AE..= did]
+    ExportDashboards -> AE.object ["tag" AE..= ("ExportDashboards" :: Text)]
+
+
+instance AE.FromJSON SyncOperation where
+  parseJSON = AE.withObject "SyncOperation" \o ->
+    o AE..: "tag" >>= \(tag :: Text) -> case tag of
+      "ImportDashboards" -> pure ImportDashboards
+      "ExportDashboard" -> ExportDashboard <$> o AE..: "contents"
+      "ExportDashboards" -> pure ExportDashboards
+      _ -> fail "Unknown repository sync operation"
 
 
 data SyncFailure = SyncFailure {operation :: SyncOperation, message :: Text}
@@ -508,8 +544,8 @@ updateGitHubSync encKey sid ownerVal repoVal branchVal tokenM prefixM = do
 -- Clearing the announcement only when it matches what was actually fetched is what stops a
 -- stale read from looking like a completed sync: if the host answered with an older head, the
 -- announcement survives and the next attempt still knows something is outstanding.
-updateLastRevision :: (DB es, Time :> es) => GitHubSyncId -> Text -> Eff es Int64
-updateLastRevision sid rev = do
+recordImportSuccess :: (DB es, Time :> es) => GitHubSyncId -> Text -> Eff es Int64
+recordImportSuccess sid rev = do
   now <- Time.currentTime
   Hasql.interpExecute
     [HI.sql| UPDATE projects.git_sync
@@ -565,11 +601,10 @@ recordSyncError sid operation message =
    in Hasql.interpExecute [HI.sql| UPDATE projects.git_sync SET last_error = #{failure} WHERE id = #{sid} |]
 
 
--- | Clear only this dashboard's export failure; retain import failures and the pull cursor.
-recordPushSuccess :: (DB es, Time :> es) => GitHubSyncId -> DashboardId -> Eff es Int64
-recordPushSuccess sid did = do
+-- | Clear only the successful operation's failure; retain unrelated failures and the pull cursor.
+recordSyncSuccess :: (DB es, Time :> es) => GitHubSyncId -> SyncOperation -> Eff es Int64
+recordSyncSuccess sid operation = do
   now <- Time.currentTime
-  let operation = ExportDashboard did
   Hasql.interpExecute
     [HI.sql| UPDATE projects.git_sync SET last_synced_at = #{now}, updated_at = #{now},
     last_error = CASE WHEN last_error->'operation' = #{operation} THEN NULL ELSE last_error END WHERE id = #{sid} |]
