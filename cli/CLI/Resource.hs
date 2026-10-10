@@ -29,7 +29,7 @@ module CLI.Resource (
 import Relude
 
 import CLI.Config (CLIConfig (..))
-import CLI.Core (APIError, OutputMode (..), apiDelete, apiGetJson, apiPatchJson, apiPostJson, apiPutJson, printError, renderAPIError, renderByMode, renderWith)
+import CLI.Core (APIError, OutputMode (..), apiDelete, apiGetJson, apiPatchJson, apiPostJson, apiPutJson, dieWith, printError, renderAPIError, renderByMode, renderWith)
 import CLI.Table (Align (..), CellStyle (..), RichTableOpts (..), brand, defaultRichTableOpts, level, muted, numeric, paginationFooter, parseSeverity, plain, renderRichTableWith)
 import CLI.UI (Picker, pickItem, pickerAvailable)
 import Control.Lens (has, (^?))
@@ -96,7 +96,7 @@ resourceIdPath k i = resourcePath k <> "/" <> i
 withResult :: IOE :> es => Eff es (Either e a) -> (e -> Text) -> (a -> Eff es ()) -> Eff es ()
 withResult act renderErr onOk =
   act >>= \case
-    Left e -> printError (renderErr e) >> liftIO exitFailure
+    Left e -> dieWith (renderErr e)
     Right v -> onOk v
 
 
@@ -128,7 +128,7 @@ runList cfg k = runListVia cfg k (resourcePath k)
 runListVia :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> ResourceKind -> Text -> [(Text, Text)] -> OutputMode -> Eff es ()
 runListVia cfg k url params mode =
   apiGetJson @_ @AE.Value cfg url params >>= \case
-    Left e -> printError (renderAPIError e) >> liftIO exitFailure
+    Left e -> dieWith (renderAPIError e)
     Right v -> case normalizeListE v of
       Right normalised -> renderListPayload k mode normalised
       Left (raw, reason) -> do
@@ -277,13 +277,9 @@ selectResourceId :: (Environment :> es, HTTP :> es, IOE :> es, Picker :> es) => 
 selectResourceId _ _ _ (Just rid) = pure rid
 selectResourceId cfg kind mode Nothing = do
   terminal <- pickerAvailable
-  unless (terminal && mode == OutputTable) do
-    printError "An ID is required outside an interactive terminal. Use the list command to find one."
-    liftIO exitFailure
+  unless (terminal && mode == OutputTable) $ dieWith "An ID is required outside an interactive terminal. Use the list command to find one."
   items <- fetchPages 0
-  when (null items) do
-    printError "No items available to select."
-    liftIO exitFailure
+  when (null items) $ dieWith "No items available to select."
   let (_, rows) = buildResourceTable kind items
       choices = [(lookupText o (identifierKey kind), T.intercalate " · " (map snd (drop 1 row) <> [lookupText o (identifierKey kind)])) | (AE.Object o, row) <- zip items rows]
   pickItem ("Select " <> show kind) choices >>= maybe exitSuccess pure
@@ -291,9 +287,9 @@ selectResourceId cfg kind mode Nothing = do
     fetchPages page = do
       result <- apiGetJson @_ @AE.Value cfg (resourcePath kind) [("page", show (page :: Int))]
       payload <- case result of
-        Left err -> printError (renderAPIError err) >> liftIO exitFailure
+        Left err -> dieWith (renderAPIError err)
         Right value -> case normalizeListE value of
-          Left (_, reason) -> printError reason >> liftIO exitFailure
+          Left (_, reason) -> dieWith reason
           Right value' -> pure value'
       case payload of
         AE.Object o | Just (AE.Array rows) <- AEKM.lookup "data" o -> do
@@ -301,7 +297,7 @@ selectResourceId cfg kind mode Nothing = do
             Just (AE.Object p) | AEKM.lookup "has_more" p == Just (AE.Bool True) -> fetchPages (page + 1)
             _ -> pure []
           pure (toList rows <> more)
-        _ -> printError "List response has no data array." >> liftIO exitFailure
+        _ -> dieWith "List response has no data array."
 
 
 lookupText :: AEKM.KeyMap AE.Value -> Text -> Text
@@ -419,15 +415,13 @@ runApplyResource cfg k path mode = do
       ( ifM
           (doesFileExist path)
           (pure [path])
-          (printError ("file not found: " <> toText path) >> liftIO exitFailure)
+          (dieWith ("file not found: " <> toText path))
       )
   when (null paths)
-    $ printError ("no applyable (.yaml/.yml/.json) files in " <> toText path)
-    >> liftIO exitFailure
+    $ dieWith ("no applyable (.yaml/.yml/.json) files in " <> toText path)
   failures <- sum <$> forM paths (\p -> applyOne cfg k p mode)
   when (failures > 0)
-    $ printError (show failures <> " file(s) failed to apply")
-    >> liftIO exitFailure
+    $ dieWith (show failures <> " file(s) failed to apply")
 
 
 isApplyable :: FilePath -> Bool
@@ -463,16 +457,12 @@ applyOne cfg k path mode = do
 -- (YAML is a JSON superset, so this handles @.yaml@/@.yml@/unsuffixed files).
 readYamlOrJson :: (FileSystem :> es, IOE :> es) => FilePath -> Eff es AE.Value
 readYamlOrJson path = do
-  unlessM (doesFileExist path) $ do
-    printError ("file not found: " <> toText path)
-    liftIO exitFailure
+  unlessM (doesFileExist path) $ dieWith ("file not found: " <> toText path)
   if takeExtension path == ".json"
     then liftIO (AE.eitherDecodeFileStrict path) >>= either (failWith "json") pure
     else liftIO (Yaml.decodeFileEither path) >>= either (failWith "yaml" . Yaml.prettyPrintParseException) pure
   where
-    failWith kind err = do
-      printError (toText path <> ": " <> kind <> " parse error: " <> toText err)
-      liftIO exitFailure
+    failWith kind err = dieWith (toText path <> ": " <> kind <> " parse error: " <> toText err)
 
 
 -- | POST /<resource>/bulk {action, ids, duration_minutes?}.

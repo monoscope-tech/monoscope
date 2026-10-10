@@ -21,7 +21,7 @@ curl https://monoscope.tech/install.sh | sh -s v1.2.3
 **Custom install directory:**
 
 ```bash
-MONOSCOPE_INSTALL_DIR=/usr/local/bin curl https://monoscope.tech/install.sh | sh
+curl https://monoscope.tech/install.sh | MONOSCOPE_INSTALL_DIR=/usr/local/bin sh
 ```
 
 **Upgrade to latest** (re-running the install script upgrades automatically if a newer version exists):
@@ -97,7 +97,9 @@ monoscope config get            # show all
 monoscope config get project    # show one value
 ```
 
-Valid config keys: `api_url`, `project`, `api_key`.
+Valid config keys: `api_url`, `project`, `api_key`. API keys are redacted in
+command output. `config init` requires an interactive terminal; use `config set`
+and `auth login --token` in scripts.
 
 ## Global flags
 
@@ -208,7 +210,7 @@ Options:
 | `--kind log\|trace` | Filter by event kind (mapped to the `source` query param) |
 | `--service <name>` | Shorthand for `resource.service.name=="<name>"`. **Repeatable** — `--service a --service b` expands to `in (a, b)` |
 | `--level <level>` | Shorthand for `severity.severity_text=="<level>"` (converted to lowercase) |
-| `--limit/-n <N>` | Max results to return |
+| `--limit/-n <N>` | Max results to return; must be positive |
 | `--fields <f1,f2>` | Comma-separated columns to keep in JSON / table output |
 | `--cursor <value>` | Pagination: pass the `cursor` field from a previous response |
 | `--first` | Return only the first matching event (the JSON envelope still carries `count`/`has_more`) |
@@ -277,7 +279,8 @@ appears exactly once. Default cadence is 2s.
 
 ### Context window
 
-Show events around a specific timestamp:
+Show events in a window centered on a specific ISO-8601 timestamp.
+`--window 10m` includes five minutes before and five minutes after `--at`:
 
 ```bash
 monoscope events context --at 2026-04-15T12:34:56Z --service api --window 10m
@@ -320,6 +323,8 @@ monoscope metrics query 'summarize count()' --since 30m --assert '< 1000'
 ```
 
 Options: `--since` (default `1H`), `--from`, `--to`, `--assert <condition>`.
+`--assert` requires a numeric scalar, usually from `summarize` without `by`;
+a grouped or empty result exits non-zero because the condition cannot be evaluated.
 
 ### Chart
 
@@ -496,7 +501,7 @@ monoscope api-keys delete <id>              # permanent removal
 **Rotating a key:**
 
 ```bash
-monoscope api-keys create "ops-2026-05" -o json | jq -r .key > ~/.monoscope-key-new
+monoscope api-keys create "ops-2026-05" --json | jq -r .key > ~/.monoscope-key-new
 export MONOSCOPE_API_KEY=$(cat ~/.monoscope-key-new)
 monoscope api-keys deactivate <old-key-id>
 ```
@@ -631,7 +636,7 @@ hundreds of field names into context to answer a single question.
 monoscope schema                            # all fields
 monoscope schema --search service           # only fields whose name contains "service"
 monoscope schema --search http --limit 20   # http-related fields, capped at 20
-monoscope schema -o json | jq '.fields | keys[]'   # bare field names
+monoscope schema --json | jq '.fields | keys[]'   # bare field names
 ```
 
 The response shape is `{fields: { <field_name>: { field_type, description, ... }, ... }, ...}`.
@@ -713,12 +718,12 @@ auto-detect hints for non-interactivity.
 ## Resilience & error handling
 
 - **Gateway errors** (`502`/`503`/`504`, Cloudflare HTML) are collapsed into a
-  single-line message with a hint to narrow `--since`; the CLI retries the
-  request once with jittered backoff before giving up.
+  single-line message with a hint to narrow `--since`; the CLI retries GET
+  requests up to twice with jittered backoff before giving up.
 - **Structured errors on stderr in non-table mode** — `printError` emits
-  `{"error": {"code", "message", "field?", "suggestion?", "details?"}}` as
-  NDJSON on stderr. ANSI is suppressed automatically whenever stdout isn't a
-  TTY (override with `MONOSCOPE_FORCE_COLOR=1`).
+  `{"code": "error", "message": "..."}` as NDJSON on stderr; optional
+  `field` and `suggestion` keys are omitted when absent. ANSI is suppressed
+  automatically whenever stdout isn't a TTY (override with `MONOSCOPE_FORCE_COLOR=1`).
 - **`--debug`** sets an `X-Debug: 1` header so the server includes the raw SQL
   / Hasql exception text under `error.details`. Combine with `MONOSCOPE_DEBUG=1`
   for outgoing-request tracing.
@@ -819,13 +824,13 @@ A typical incident investigation, all in JSON, suitable for piping into `jq` or 
 
 ```bash
 # 1. What's on fire? List open issues, sorted by recency.
-monoscope issues list --status open -o json | jq '.data[] | {id,title,service,severity}'
+monoscope issues list --status open --json | jq '.data[] | {id,title,service,severity}'
 
 # 2. Which services are active? (and which are quiet)
-monoscope services list -o json | jq '.services'
+monoscope services list --json | jq '.services'
 
 # 3. Drill in: errors from the suspect service in the last 30 minutes
-monoscope logs search --service checkout-api --level error --since 30m -o json \
+monoscope logs search --service checkout-api --level error --since 30m --json \
   | jq '.events[] | {timestamp, summary, trace_id}'
 
 # 4. Pick a trace and find the span that actually took the time
@@ -833,11 +838,11 @@ monoscope traces get <trace-id> --tree \
   | jq -r '.events[] | [.duration, .service, .span_name] | @tsv' | sort -rn | head
 
 # 5. Find similar errors via log patterns
-monoscope log-patterns list --per-page 20 -o json \
+monoscope log-patterns list --per-page 20 --json \
   | jq '.data[] | select(.state=="open") | {id, occurrence_count, service_name}'
 
 # 6. Check a specific symptom: which endpoints serve 5xx?
-monoscope events search 'attributes.http.response.status_code >= 500' --since 1h -o json \
+monoscope events search 'attributes.http.response.status_code >= 500' --since 1h --json \
   | jq -r '.events[] | "\(.timestamp) \(.service) \(.summary)"'
 
 # 7. Cross-check against what the team already watches: every widget on a
@@ -867,7 +872,7 @@ JSON is the default when stdout is not a TTY or `CI` is set. Use `jq` for script
 monoscope metrics query 'where severity.severity_text=="error" | summarize count()' --since 30m --assert '< 100'
 
 # Get open issue count
-monoscope issues list --status open -o json | jq '.data | length'
+monoscope issues list --status open --json | jq '.data | length'
 
 # Apply all monitors from a directory (idempotent)
 monoscope monitors apply .monoscope/monitors/
@@ -891,9 +896,8 @@ milliseconds — put any new rendering logic here.
 
 ### 2. Doctests for pure helpers
 
-`cli/CLI/Validate.hs` carries doctests for `validateDuration`, `validateUuid`,
-`validateKind`, and `normalizeKind`. They run as part of the lib's doctest
-suite once exposed; until then they document expected behavior in-source.
+`cli/CLI/Validate.hs` carries doctests for `validateDurationFor`,
+`validateKind`, and `normalizeKind`. The root doctest suite includes `cli/CLI`.
 Add a doctest for any new pure helper — they are the cheapest regression
 guard you have.
 
@@ -902,7 +906,7 @@ guard you have.
 `test/integration/CLI/CLIBinarySpec.hs` runs `monoscope --help` for every
 subcommand and asserts exit code 0. This catches optparse parser
 construction errors before they reach a user. **Add an entry to `helpCases`
-when you add a new `command "..."` in `cli/Main.hs`** — the test catches
+when you add a new `command "..."` in `cli/CLI/Main.hs`** — the test catches
 copy-paste typos in metavar / parser wiring instantly.
 
 ### 4. End-to-end against a real server
@@ -912,37 +916,20 @@ against an HTTP server. This is what catches wire-format regressions
 (KQL operator changes, JSON envelope drift, missing query params, broken
 auth headers) — the bug class that motivated the audit.
 
-The suite reuses the **same env vars the CLI itself reads** (`MONOSCOPE_API_URL` /
-`MONOSCOPE_API_KEY` / `MONOSCOPE_PROJECT`) — so if you've configured your shell
-to drive `monoscope` against any server, the e2e tests automatically pick
-that up.
-
-**Defaults:** when the env vars are unset, the suite targets the public
-demo project on prod — `MONOSCOPE_API_URL=https://api.monoscope.tech`,
-`MONOSCOPE_PROJECT=00000000-0000-0000-0000-000000000000`. Only
-`MONOSCOPE_API_KEY` has no safe default; set it to any read-only key
-minted against the demo project to enable the suite. Without a key the
-tests still mark themselves `pending` (with a message naming the missing
-variable) rather than fail.
+By default the suite starts an isolated local HTTP server, creates a project API
+key, and exercises the binary against the test database. No external key is
+required. `MONOSCOPE_BIN` selects the executable:
 
 ```bash
-# Run against the prod demo project (default — only the key is needed):
-MONOSCOPE_API_KEY=<read-only demo key> \
-  USE_EXTERNAL_DB=true cabal test integration-tests \
-    --test-options='--match "CLI binary E2E"'
-
-# Or point at your local dev server:
-MONOSCOPE_API_URL=http://localhost:8080 \
-MONOSCOPE_API_KEY=$(monoscope --json api-keys create "e2e-tests" | jq -r .key) \
-MONOSCOPE_PROJECT=<your project uuid> \
-  USE_EXTERNAL_DB=true cabal test integration-tests \
-    --test-options='--match "CLI binary E2E"'
+make cli-build
+TEST_MATCH=CLI make live-test-dev
 ```
 
-CI on `main`/PRs reads the same `MONOSCOPE_API_KEY` from the
-`MONOSCOPE_DEMO_API_KEY` repo secret, so every push runs the e2e suite
-against prod. PRs from forks (where secrets aren't exposed) gracefully
-skip the suite — they still get the `CLIBinarySpec` smoke tests.
+To exercise an external server, set `MONOSCOPE_API_KEY` and optionally
+`MONOSCOPE_API_URL` and `MONOSCOPE_PROJECT`. With an explicit key, the URL
+defaults to `https://api.monoscope.tech` and the project to the public demo UUID.
+External-server tests report pending when that server is unavailable or rejects
+the supplied credentials. The default local-server tests fail on these errors.
 
 Each spec checks a single audit finding (KQL operator, kind→source mapping,
 error-body surfacing, list envelope, agent-mode JSON, validation messages,

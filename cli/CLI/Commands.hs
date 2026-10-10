@@ -28,6 +28,7 @@ module CLI.Commands (
   -- Charts and dashboards in the terminal
   runChart,
   ChartCmdOpts (..),
+  chartKindOption,
   runDashboardRender,
   DashboardRenderOpts (..),
   runOpen,
@@ -51,7 +52,7 @@ import Relude
 
 import CLI.Chart qualified as Chart
 import CLI.Config (CLIConfig (..), ConfigKey (..), allConfigKeys, configDir, configFilePath, configKeyText, parseConfigKey, removeToken, resolveConfig, saveToken, setConfigValue)
-import CLI.Core (Ingestion, OutputMode (..), apiGet, apiGetJson, apiPostUnauth, ingestionKey, isInteractiveTTY, isJsonOutput, printDebug, printError, renderAPIError, renderJSON, renderTable, renderWith, withAPIResult)
+import CLI.Core (Ingestion, OutputMode (..), apiGet, apiGetJson, apiPostUnauth, dieWith, ingestionKey, isInteractiveTTY, isJsonOutput, printDebug, printError, renderAPIError, renderJSON, renderTable, renderWith, withAPIResult)
 import CLI.Dashboard qualified as Dash
 import CLI.LogView (EventRow (..), LogFormat (..), eventRows, parseLogFormat, renderEventLine, renderLogfmt, renderWaterfall)
 import CLI.Resource qualified as CLIResource
@@ -93,8 +94,10 @@ import OpenTelemetry.Resource.Detect qualified as ResourceDetect
 import OpenTelemetry.Trace (SpanStatus (..), Tracer, TracerOptions (..), defaultSpanArguments, makeTracer, shutdownTracerProvider)
 import OpenTelemetry.Trace qualified as Trace
 import OpenTelemetry.Trace.Id.Generator.Default (defaultIdGenerator)
+import Options.Applicative (Parser, help, long, maybeReader, metavar, option)
 import Pages.Charts.Types (MetricsData (..))
 import Pkg.CLIFormat (cleanSummaryValue, evalCond, extractColIdxMap, extractInt, extractRawRows, extractRows, extractTextArray, renderSummaryCell, valToText)
+import Pkg.Deriving (decodeEnumSC)
 import System.IO (hPutStrLn)
 import System.Process (spawnProcess)
 import UnliftIO.Concurrent (threadDelay)
@@ -132,9 +135,7 @@ runAuth = \case
     -- device-code flow (5-min poll, browser launch) and direct the caller to
     -- --token. Otherwise a script or LLM agent will hang waiting for human
     -- input.
-    whenM isJsonOutput $ do
-      printError "non-interactive output mode (--json/--yaml or piped stdout): pass --token; interactive login is disabled"
-      liftIO exitFailure
+    whenM isJsonOutput $ dieWith "non-interactive output mode (--json/--yaml or piped stdout): pass --token; interactive login is disabled"
     cfg <- resolveConfig
     let baseUrl = cfg.apiUrl
     result <- runExceptT $ do
@@ -157,7 +158,7 @@ runAuth = \case
       lift $ saveToken sessId
       putTextLn "Authenticated successfully!"
       lift $ selectProject tokenResp.projects
-    whenLeft_ result \e -> printError e >> liftIO exitFailure
+    whenLeft_ result dieWith
   AuthStatus -> do
     cfg <- resolveConfig
     envKey <- Env.lookupEnv "MONOSCOPE_API_KEY"
@@ -200,9 +201,10 @@ data ConfigGetJson = ConfigGetJson
   deriving (AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] ConfigGetJson
 
 
-runConfigInit :: (Environment :> es, FileSystem :> es, IOE :> es) => Eff es ()
-runConfigInit = do
+runConfigInit :: (Environment :> es, FileSystem :> es, IOE :> es) => OutputMode -> Eff es ()
+runConfigInit mode = do
   tty <- isInteractiveTTY
+  unless (tty && mode == OutputTable) $ dieWith "config init requires an interactive terminal; use monoscope config set KEY VALUE or monoscope auth login --token TOKEN"
   result <-
     liftIO
       $ inputForm
@@ -220,15 +222,16 @@ runConfigInit = do
   putTextLn $ "Configuration saved to " <> toText f
 
 
-runConfigSet :: (FileSystem :> es, IOE :> es) => ConfigSetOpts -> Eff es ()
-runConfigSet opts = case parseConfigKey opts.key of
+runConfigSet :: (FileSystem :> es, IOE :> es) => ConfigSetOpts -> OutputMode -> Eff es ()
+runConfigSet opts mode = case parseConfigKey opts.key of
   Just ck -> do
     setConfigValue ck opts.value
-    putTextLn $ opts.key <> " = " <> opts.value
-  Nothing -> do
-    putTextLn $ "Unknown key: " <> opts.key
-    putTextLn $ "Valid keys: " <> show (map configKeyText allConfigKeys)
-    liftIO exitFailure
+    let displayed = case ck of
+          CKApiKey -> "********"
+          CKApiUrl -> opts.value
+          CKProject -> opts.value
+    renderWith mode (AE.toJSON (one (opts.key, displayed) :: Map Text Text)) (putTextLn $ opts.key <> " = " <> displayed)
+  Nothing -> dieWith $ "Unknown key: " <> opts.key <> "; valid keys: " <> T.intercalate ", " (map configKeyText allConfigKeys)
 
 
 -- | B9: 'config get' respects the global output mode. Plain text is fine
@@ -237,21 +240,22 @@ runConfigSet opts = case parseConfigKey opts.key of
 runConfigGet :: (Environment :> es, FileSystem :> es, IOE :> es) => ConfigGetOpts -> OutputMode -> Eff es ()
 runConfigGet opts mode = do
   cfg <- resolveConfig
-  let asJson =
+  let redactedKey = "********" <$ cfg.credential
+      asJson =
         ConfigGetJson
           { apiUrl = cfg.apiUrl
           , project = cfg.projectId
-          , apiKey = ("********" :: Text) <$ cfg.credential
+          , apiKey = redactedKey
           }
   case opts.key of
     Nothing -> renderWith mode asJson $ do
       putTextLn $ "api_url = " <> cfg.apiUrl
       putTextLn $ "project = " <> fromMaybe "(not set)" cfg.projectId
-      putTextLn $ "api_key = " <> maybe "(not set)" (const "********") cfg.credential
+      putTextLn $ "api_key = " <> fromMaybe "(not set)" redactedKey
     Just "api_url" -> putTextLn cfg.apiUrl
     Just "project" -> putTextLn $ fromMaybe "(not set)" cfg.projectId
-    Just "api_key" -> putTextLn $ maybe "(not set)" (const "********") cfg.credential
-    Just k -> putTextLn ("Unknown key: " <> k) >> liftIO exitFailure
+    Just "api_key" -> putTextLn $ fromMaybe "(not set)" redactedKey
+    Just k -> dieWith ("Unknown key: " <> k)
 
 
 -- Services
@@ -565,7 +569,7 @@ takeFirst k v = v & AL.key k . AL._Array %~ V.take 1
 -- agent reaches for when chaining @events search → events get@.
 emitFirstEventId :: IOE :> es => AE.Value -> Eff es ()
 emitFirstEventId v =
-  maybe (printError "no events matched" >> liftIO exitFailure) putTextLn
+  maybe (dieWith "no events matched") putTextLn
     $ v
     ^? AL.key "events" . AL.nth 0 . AL.key "id" . AL._String
 
@@ -580,6 +584,7 @@ emitFirstEventId v =
 validateEventsOpts :: IOE :> es => EventsSearchOpts -> Eff es EventsSearchOpts
 validateEventsOpts opts = do
   validateDurationOrDie "--since" opts.since
+  for_ opts.limit \n -> when (n <= 0) $ dieWith "--limit must be positive"
   -- Validate the text that will actually be sent. 'buildSearchParams' rewrites a
   -- bare term into a body/summary full-text predicate, so validating the raw
   -- term instead asks the parser to resolve it as a column: once field
@@ -607,10 +612,10 @@ runEventsGet cfg opts mode = do
   case opts.at of
     Nothing -> rangeScan Nothing
     Just raw -> case iso8601ParseM (toString raw) :: Maybe UTCTime of
-      Nothing -> printError "--at: invalid ISO-8601 timestamp" >> liftIO exitFailure
+      Nothing -> dieWith "--at: invalid ISO-8601 timestamp"
       Just t
         | T.any (`elem` ("/?#%" :: [Char])) opts.eventId ->
-            printError "event id must not contain any of '/', '?', '#', '%'" >> liftIO exitFailure
+            dieWith "event id must not contain any of '/', '?', '#', '%'"
         | isTraceId -> rangeScan (Just t)
         | otherwise -> do
             -- Direct O(1) lookup: both id and timestamp known → single-partition query.
@@ -699,13 +704,18 @@ runEventsTail cfg opts kindOverride = do
 runEventsContext :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> EventsContextOpts -> Maybe Text -> OutputMode -> Eff es ()
 runEventsContext cfg opts kindOverride mode = do
   validateDurationOrDie "--window" opts.window
+  center <- validateOrDie $ maybeToRight "--at: invalid ISO-8601 timestamp" (iso8601ParseM (toString opts.timestamp))
   kindNorm <- validateAndNormalizeKind (opts.kind <|> kindOverride)
-  let q = foldFiltersIntoQuery "" (maybeToList opts.service) Nothing
+  let halfWindow = realToFrac (parseDurationMs (fromMaybe "5m" opts.window)) / 2000 :: NominalDiffTime
+      windowStart = renderTime (negate halfWindow)
+      windowEnd = renderTime halfWindow
+      renderTime = toText . iso8601Show . (`addUTCTime` center)
+      q = foldFiltersIntoQuery "" (maybeToList opts.service) Nothing
       params =
         catMaybes
           [ if T.null q then Nothing else Just ("query", q)
-          , Just ("from", opts.timestamp)
-          , Just ("since", fromMaybe "5m" opts.window)
+          , Just ("from", windowStart)
+          , Just ("to", windowEnd)
           , ("source",) <$> kindNorm
           ]
   fmt <- resolveFormat opts.format
@@ -988,9 +998,7 @@ renderEventsTable val mFields = case val of
 -- | Resolve @--format@, exiting with the accepted values on a typo rather than
 -- silently falling back.
 resolveFormat :: IOE :> es => Maybe Text -> Eff es LogFormat
-resolveFormat = maybe (pure FmtLine) (either die' pure . parseLogFormat)
-  where
-    die' e = printError e >> liftIO exitFailure
+resolveFormat = maybe (pure FmtLine) (validateOrDie . parseLogFormat)
 
 
 -- | Human-facing rendering of an events envelope. The line and logfmt forms
@@ -1040,6 +1048,7 @@ data MetricsChartOpts = MetricsChartOpts
 
 runMetricsQuery :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> MetricsQueryOpts -> OutputMode -> Eff es ()
 runMetricsQuery cfg opts mode = do
+  validateDurationOrDie "--since" opts.since
   let params = metricsParams opts.expression opts.since opts.from opts.to
   withAPIResult cfg "/api/v1/metrics" params $ \val ->
     withMetricsData val (renderJSON val) $ \md -> do
@@ -1052,6 +1061,16 @@ runMetricsChart cfg opts =
   runChart cfg ChartCmdOpts{query = opts.expression, since = opts.since, from = opts.from, to = opts.to, watch = opts.watch, chartType = Nothing, source = Nothing, height = Nothing}
 
 
+data ChartKind = Line | Bar | Stat | Table
+  deriving stock (Bounded, Enum, Eq, Read, Show)
+
+
+chartKindOption :: Parser ChartKind
+chartKindOption = option (maybeReader (decodeEnumSC @"")) (long "type" <> metavar (toString choices) <> help (toString choices <> " (default: inferred from the result)"))
+  where
+    choices = T.intercalate "|" (map (T.toLower . show) (universe @ChartKind))
+
+
 -- | Ad-hoc charting of any KQL query, and the engine behind @metrics chart@.
 data ChartCmdOpts = ChartCmdOpts
   { query :: Text
@@ -1059,7 +1078,7 @@ data ChartCmdOpts = ChartCmdOpts
   , from :: Maybe Text
   , to :: Maybe Text
   , source :: Maybe Text
-  , chartType :: Maybe Text
+  , chartType :: Maybe ChartKind
   -- ^ @line@ | @bar@ | @stat@ | @table@. Inferred from the result shape when
   -- absent: a timestamp column charts as a line, anything else as bars.
   , height :: Maybe Int
@@ -1082,7 +1101,7 @@ runChart cfg opts mode = do
           -- be full of data — and a script that only checked the exit code
           -- would carry on as if the number were real. Fail in every mode; the
           -- JSON envelope (already printed) carries the reason.
-          whenJust md.error \e -> printError ("query failed: " <> e) >> liftIO exitFailure
+          whenJust md.error \e -> dieWith ("query failed: " <> e)
   repeatEvery opts.watch run
 
 
@@ -1102,12 +1121,12 @@ drawMetrics opts md = do
   let series = Chart.seriesFromMetrics md
       chartOpts = Chart.defaultChartOpts{Chart.width = w, Chart.height = fromMaybe 14 opts.height, Chart.colorful = color}
       -- A leading timestamp column is what makes a result a timeseries.
-      kind = fromMaybe (if maybe False Chart.isTimeColumn (md.headers V.!? 0) then "line" else "bar") opts.chartType
+      kind = fromMaybe (if maybe False Chart.isTimeColumn (md.headers V.!? 0) then Line else Bar) opts.chartType
   case kind of
-    "table" -> renderMetricsTable md
-    "stat" -> mapM_ putTextLn (Chart.renderStat chartOpts opts.query md.dataFloat series)
-    "bar" -> mapM_ putTextLn (Chart.renderBars chartOpts (labelledRows md))
-    _ -> mapM_ putTextLn (Chart.renderTimeseries chartOpts series)
+    Table -> renderMetricsTable md
+    Stat -> mapM_ putTextLn (Chart.renderStat chartOpts opts.query md.dataFloat series)
+    Bar -> mapM_ putTextLn (Chart.renderBars chartOpts (labelledRows md))
+    Line -> mapM_ putTextLn (Chart.renderTimeseries chartOpts series)
 
 
 -- | @(label, value)@ pairs for a bar chart: first column labels, second sizes.
@@ -1283,11 +1302,9 @@ data OpenOpts = OpenOpts
 runOpen :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> OpenOpts -> Eff es ()
 runOpen cfg opts = do
   target <-
-    parseOpenTarget opts.target `whenNothing` do
-      printError $ "unknown target '" <> opts.target <> "'; expected one of: " <> openTargetNames
-      liftIO exitFailure
+    parseOpenTarget opts.target `whenNothing` dieWith ("unknown target '" <> opts.target <> "'; expected one of: " <> openTargetNames)
   withAPIResult cfg "/api/v1/me" [] \val -> case AE.fromJSON @MeInfo val of
-    AE.Error msg -> printError ("could not read /api/v1/me: " <> toText msg) >> liftIO exitFailure
+    AE.Error msg -> dieWith ("could not read /api/v1/me: " <> toText msg)
     AE.Success me -> do
       let url = T.dropWhileEnd (== '/') me.hostUrl <> uiPath me.projectId target opts.arg opts.since
       putTextLn url
@@ -1382,10 +1399,8 @@ renderMetricsTable md@MetricsData{headers, dataText}
 
 checkAssertion :: IOE :> es => MetricsData -> Text -> Eff es ()
 checkAssertion MetricsData{dataFloat} cond = case dataFloat of
-  Just v -> unless (evalCond v cond) $ do
-    printError $ "Assertion failed: " <> show v <> " " <> cond
-    liftIO exitFailure
-  Nothing -> printError "Warning: --assert ignored, no numeric result to evaluate"
+  Just v -> unless (evalCond v cond) $ dieWith $ "Assertion failed: " <> show v <> " " <> cond
+  Nothing -> dieWith "--assert requires a numeric scalar result; use summarize without a by clause"
 
 
 -- | Case-insensitive — matches 'validateDurationFor' so @--watch 5M@

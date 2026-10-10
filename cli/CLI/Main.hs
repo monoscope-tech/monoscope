@@ -258,45 +258,49 @@ commandParser =
     <$> globalOpts
     <*> subparser
       ( mconcat
-          [ command "auth" (info (AuthCmd <$> authParser <**> helper) (progDesc "Manage authentication"))
-          , command "events" (info (EventsCmd Nothing <$> eventsParser <**> helper) (progDesc "Search and inspect events"))
-          , command "logs" (info (EventsCmd (Just "log") <$> eventsParser <**> helper) (progDesc "Search logs"))
-          , command "traces" (info (EventsCmd (Just "trace") <$> eventsParser <**> helper) (progDesc "Search traces"))
-          , command "metrics" (info (MetricsCmd <$> metricsParser <**> helper) (progDesc "Query and chart metrics"))
-          , command "chart" (info (ChartCmd <$> chartParser <**> helper) (progDesc "Chart any KQL query in the terminal" <> examplesFooter chartExamples))
-          , command "status" (info (StatusCmd <$> statusParser <**> helper) (progDesc "One-screen project health: throughput, errors, open issues, alerting monitors"))
-          , command "open" (info (OpenCmd <$> openParser <**> helper) (progDesc "Open (or print) the web UI link for a resource" <> examplesFooter openExamples))
-          , command "services" (info (ServicesCmd <$> servicesParser <**> helper) (progDesc "List services"))
-          , command "config" (info (ConfigCmd <$> configParser <**> helper) (progDesc "Manage configuration"))
-          , command "monitors" (info (MonitorsCmd <$> monitorsParser <**> helper) (progDesc "Manage alert monitors"))
-          , command "dashboards" (info (DashboardsCmd <$> dashboardsParser <**> helper) (progDesc "Manage dashboards"))
-          , command "api-keys" (info (ApiKeysCmd <$> apiKeysParser <**> helper) (progDesc "Manage API keys"))
-          , command "share-link" (info (ShareLinkCmd <$> shareLinkParser <**> helper) (progDesc "Create time-limited share links"))
-          , command "me" (info (pure MeCmd) (progDesc "Show current project identity"))
-          , command "project" (info (ProjectCmd <$> projectParser <**> helper) (progDesc "Show or patch the current project"))
-          , command "issues" (info (IssuesCmd <$> issuesParser <**> helper) (progDesc "List and triage issues"))
-          , command "incidents" (info (IncidentsCmd <$> incidentsParser <**> helper) (progDesc "Browse incident episodes"))
-          , command "endpoints" (info (EndpointsCmd <$> endpointsParser <**> helper) (progDesc "Browse the API endpoint catalog"))
-          , command "log-patterns" (info (LogPatternsCmd <$> logPatternsParser <**> helper) (progDesc "Triage log patterns"))
-          , command "teams" (info (TeamsCmd <$> teamsParser <**> helper) (progDesc "Manage teams"))
-          , command "members" (info (MembersCmd <$> membersParser <**> helper) (progDesc "Manage project members"))
-          , command "schema" (info (SchemaCmd <$> schemaParser <**> helper) (progDesc "Fetch telemetry schema"))
-          , command "facets" (info (FacetsCmd <$> facetsParser <**> helper) (progDesc "Discover popular field values (top-N per faceted field)" <> examplesFooter facetsExamples))
-          , command "completion" (info (CompletionCmd <$> strArgument (metavar "SHELL" <> help "bash|zsh|fish") <**> helper) (progDesc "Emit shell completion script"))
-          , command "version" (info (pure VersionCmd) (progDesc "Show CLI version"))
-          , command "telemetrygen" (info (TelemetryGenCmd <$> telemetryGenParser <**> helper) (progDesc "Generate synthetic telemetry (traces/logs/metrics)" <> examplesFooter telemetryGenExamples))
-          , command "send-event" (info (SendEventCmd <$> sendEventParser <**> helper) (progDesc "Send a real event (log/trace/error) from a script or CI" <> examplesFooter sendEventExamples))
+          [ cmd "auth" (AuthCmd <$> authParser) (progDesc "Manage authentication")
+          , cmd "events" (EventsCmd Nothing <$> eventsParser) (progDesc "Search and inspect events")
+          , cmd "logs" (EventsCmd (Just "log") <$> eventsParser) (progDesc "Search logs")
+          , cmd "traces" (EventsCmd (Just "trace") <$> eventsParser) (progDesc "Search traces")
+          , cmd "metrics" (MetricsCmd <$> metricsParser) (progDesc "Query and chart metrics")
+          , cmd "chart" (ChartCmd <$> chartParser) (progDesc "Chart any KQL query in the terminal" <> examplesFooter chartExamples)
+          , cmd "status" (StatusCmd <$> statusParser) (progDesc "One-screen project health: throughput, errors, open issues, alerting monitors")
+          , cmd "open" (OpenCmd <$> openParser) (progDesc "Open (or print) the web UI link for a resource" <> examplesFooter openExamples)
+          , cmd "services" (ServicesCmd <$> servicesParser) (progDesc "List services")
+          , cmd "config" (ConfigCmd <$> configParser) (progDesc "Manage configuration")
+          , cmd "monitors" (MonitorsCmd <$> monitorsParser) (progDesc "Manage alert monitors")
+          , cmd "dashboards" (DashboardsCmd <$> dashboardsParser) (progDesc "Manage dashboards")
+          , cmd "api-keys" (ApiKeysCmd <$> apiKeysParser) (progDesc "Manage API keys")
+          , cmd "share-link" (ShareLinkCmd <$> shareLinkParser) (progDesc "Create time-limited share links")
+          , cmd "me" (pure MeCmd) (progDesc "Show current project identity")
+          , cmd "project" (ProjectCmd <$> projectParser) (progDesc "Show or patch the current project")
+          , cmd "issues" (IssuesCmd <$> issuesParser) (progDesc "List and triage issues")
+          , cmd "incidents" (IncidentsCmd <$> incidentsParser) (progDesc "Browse incident episodes")
+          , cmd "endpoints" (EndpointsCmd <$> endpointsParser) (progDesc "Browse the API endpoint catalog")
+          , cmd "log-patterns" (LogPatternsCmd <$> logPatternsParser) (progDesc "Triage log patterns")
+          , cmd "teams" (TeamsCmd <$> teamsParser) (progDesc "Manage teams")
+          , cmd "members" (MembersCmd <$> membersParser) (progDesc "Manage project members")
+          , cmd "schema" (SchemaCmd <$> schemaParser) (progDesc "Fetch telemetry schema")
+          , cmd "facets" (FacetsCmd <$> facetsParser) (progDesc "Discover popular field values (top-N per faceted field)" <> examplesFooter facetsExamples)
+          , cmd "completion" (CompletionCmd <$> strArgument (metavar "SHELL" <> help "bash|zsh|fish")) (progDesc "Emit shell completion script")
+          , cmd "version" (pure VersionCmd) (progDesc "Show CLI version")
+          , cmd "telemetrygen" (TelemetryGenCmd <$> telemetryGenParser) (progDesc "Generate synthetic telemetry (traces/logs/metrics)" <> examplesFooter telemetryGenExamples)
+          , cmd "send-event" (SendEventCmd <$> sendEventParser) (progDesc "Send a real event (log/trace/error) from a script or CI" <> examplesFooter sendEventExamples)
           ]
       )
+
+
+cmd :: String -> Parser a -> InfoMod a -> Mod CommandFields a
+cmd name parser modifiers = command name (info (parser <**> helper) modifiers)
 
 
 authParser :: Parser AuthCommand
 authParser =
   subparser
     $ mconcat
-      [ command "login" (info (AuthLogin <$> optional (strOption (long "token" <> metavar "TOKEN" <> help "API token"))) (progDesc "Authenticate"))
-      , command "status" (info (pure AuthStatus) (progDesc "Show auth state"))
-      , command "logout" (info (pure AuthLogout) (progDesc "Remove credentials"))
+      [ cmd "login" (AuthLogin <$> optional (strOption (long "token" <> metavar "TOKEN" <> help "API token"))) (progDesc "Authenticate")
+      , cmd "status" (pure AuthStatus) (progDesc "Show auth state")
+      , cmd "logout" (pure AuthLogout) (progDesc "Remove credentials")
       ]
 
 
@@ -304,10 +308,10 @@ eventsParser :: Parser EventsCommand
 eventsParser =
   subparser
     $ mconcat
-      [ command "search" (info (EvSearch <$> eventsSearchParser <**> helper) (progDesc "Search events" <> examplesFooter eventsSearchExamples))
-      , command "get" (info (EvGet <$> eventsGetParser <**> helper) (progDesc "Get event by ID"))
-      , command "tail" (info (EvTail <$> eventsTailParser <**> helper) (progDesc "Stream events"))
-      , command "context" (info (EvContext <$> eventsContextParser <**> helper) (progDesc "Context around timestamp"))
+      [ cmd "search" (EvSearch <$> eventsSearchParser) (progDesc "Search events" <> examplesFooter eventsSearchExamples)
+      , cmd "get" (EvGet <$> eventsGetParser) (progDesc "Get event by ID")
+      , cmd "tail" (EvTail <$> eventsTailParser) (progDesc "Stream events")
+      , cmd "context" (EvContext <$> eventsContextParser) (progDesc "Context around timestamp")
       ]
 
 
@@ -392,7 +396,7 @@ eventsContextParser =
     <$> strOption (long "at" <> metavar "TIMESTAMP" <> help "Center timestamp")
     <*> optional (strOption (long "service" <> metavar "SERVICE"))
     <*> optional (strOption (long "kind" <> metavar "KIND"))
-    <*> optional (strOption (long "window" <> metavar "DURATION" <> help "Time window (default: 5m)"))
+    <*> optional (strOption (long "window" <> metavar "DURATION" <> help "Total time window centered on --at (default: 5m)"))
     <*> switch (long "summary" <> help "Add per-trace summary to JSON output (trace_id, services, span_count, error_count)")
     <*> formatOpt
 
@@ -401,8 +405,8 @@ metricsParser :: Parser MetricsCommand
 metricsParser =
   subparser
     $ mconcat
-      [ command "query" (info (MQuery <$> metricsQueryParser <**> helper) (progDesc "Run metrics query"))
-      , command "chart" (info (MChart <$> metricsChartParser <**> helper) (progDesc "Render chart"))
+      [ cmd "query" (MQuery <$> metricsQueryParser) (progDesc "Run metrics query")
+      , cmd "chart" (MChart <$> metricsChartParser) (progDesc "Render chart")
       ]
 
 
@@ -429,7 +433,7 @@ metricsChartParser =
 servicesParser :: Parser ServicesCommand
 servicesParser =
   subparser
-    $ command "list" (info (SList <$> servicesListParser <**> helper) (progDesc "List services"))
+    $ cmd "list" (SList <$> servicesListParser) (progDesc "List services")
 
 
 servicesListParser :: Parser ServicesListOpts
@@ -442,9 +446,9 @@ configParser :: Parser ConfigCommand
 configParser =
   subparser
     $ mconcat
-      [ command "init" (info (pure CInit) (progDesc "Initialize configuration"))
-      , command "set" (info (CSet <$> configSetParser <**> helper) (progDesc "Set config value"))
-      , command "get" (info (CGet <$> configGetParser <**> helper) (progDesc "Get config value"))
+      [ cmd "init" (pure CInit) (progDesc "Initialize configuration")
+      , cmd "set" (CSet <$> configSetParser) (progDesc "Set config value")
+      , cmd "get" (CGet <$> configGetParser) (progDesc "Get config value")
       ]
 
 
@@ -523,29 +527,26 @@ monitorsParser :: Parser MonitorsCommand
 monitorsParser =
   subparser
     $ mconcat
-      [ command "list" (info (pure MonList) (progDesc "List monitors"))
-      , command "get" (info (MonGet <$> idArg <**> helper) (progDesc "Get a single monitor"))
-      , command "create" (info (MonCreate <$> fileArg <**> helper) (progDesc "Create monitor from YAML/JSON file"))
-      , command "update" (info (uncurry MonUpdate <$> idFileArgs <**> helper) (progDesc "Replace (PUT) monitor from file"))
-      , command "patch" (info (uncurry MonPatch <$> idFileArgs <**> helper) (progDesc "Patch monitor fields from file"))
-      , command "apply" (info (MonApply <$> strArgument (metavar "PATH" <> help "YAML/JSON file or directory") <**> helper) (progDesc "Upsert monitor(s) from file or directory"))
-      , command "yaml" (info (MonYaml <$> idArg <**> helper) (progDesc "Dump monitor as applyable YAML"))
-      , command "delete" (info (MonDelete <$> idArg <**> helper) (progDesc "Delete a monitor"))
-      , command "mute" (info (MonMute <$> idArg <*> optional (option auto (long "for" <> metavar "MINUTES")) <**> helper) (progDesc "Mute a monitor"))
-      , command "unmute" (info (MonUnmute <$> idArg <**> helper) (progDesc "Unmute a monitor"))
-      , command "resolve" (info (MonResolve <$> idArg <**> helper) (progDesc "Resolve a monitor"))
-      , command "toggle-active" (info (MonToggle <$> idArg <**> helper) (progDesc "Toggle active state"))
-      , command
+      [ cmd "list" (pure MonList) (progDesc "List monitors")
+      , cmd "get" (MonGet <$> idArg) (progDesc "Get a single monitor")
+      , cmd "create" (MonCreate <$> fileArg) (progDesc "Create monitor from YAML/JSON file")
+      , cmd "update" (uncurry MonUpdate <$> idFileArgs) (progDesc "Replace (PUT) monitor from file")
+      , cmd "patch" (uncurry MonPatch <$> idFileArgs) (progDesc "Patch monitor fields from file")
+      , cmd "apply" (MonApply <$> strArgument (metavar "PATH" <> help "YAML/JSON file or directory")) (progDesc "Upsert monitor(s) from file or directory")
+      , cmd "yaml" (MonYaml <$> idArg) (progDesc "Dump monitor as applyable YAML")
+      , cmd "delete" (MonDelete <$> idArg) (progDesc "Delete a monitor")
+      , cmd "mute" (MonMute <$> idArg <*> optional (option auto (long "for" <> metavar "MINUTES"))) (progDesc "Mute a monitor")
+      , cmd "unmute" (MonUnmute <$> idArg) (progDesc "Unmute a monitor")
+      , cmd "resolve" (MonResolve <$> idArg) (progDesc "Resolve a monitor")
+      , cmd "toggle-active" (MonToggle <$> idArg) (progDesc "Toggle active state")
+      , cmd
           "bulk"
-          ( info
-              ( MonBulk
-                  <$> strArgument (metavar "ACTION" <> help "delete|activate|deactivate|mute|unmute|resolve")
-                  <*> idsOpt
-                  <*> optional (option auto (long "duration" <> metavar "MINUTES" <> help "For mute action"))
-                  <**> helper
-              )
-              (progDesc "Run bulk action over multiple monitors")
+          ( MonBulk
+              <$> strArgument (metavar "ACTION" <> help "delete|activate|deactivate|mute|unmute|resolve")
+              <*> idsOpt
+              <*> optional (option auto (long "duration" <> metavar "MINUTES" <> help "For mute action"))
           )
+          (progDesc "Run bulk action over multiple monitors")
       ]
 
 
@@ -553,29 +554,26 @@ dashboardsParser :: Parser DashboardsCommand
 dashboardsParser =
   subparser
     $ mconcat
-      [ command "list" (info (pure DashList) (progDesc "List dashboards"))
-      , command "get" (info (DashGet <$> idArg <**> helper) (progDesc "Get a single dashboard"))
-      , command "create" (info (DashCreate <$> fileArg <**> helper) (progDesc "Create dashboard from YAML/JSON file"))
-      , command "update" (info (uncurry DashUpdate <$> idFileArgs <**> helper) (progDesc "Replace (PUT) dashboard from file"))
-      , command "patch" (info (uncurry DashPatch <$> idFileArgs <**> helper) (progDesc "Patch dashboard fields from file"))
-      , command "delete" (info (DashDelete <$> idArg <**> helper) (progDesc "Delete a dashboard"))
-      , command "star" (info (DashStar <$> idArg <**> helper) (progDesc "Star a dashboard"))
-      , command "unstar" (info (DashUnstar <$> idArg <**> helper) (progDesc "Unstar a dashboard"))
-      , command "duplicate" (info (DashDuplicate <$> idArg <**> helper) (progDesc "Duplicate dashboard"))
-      , command "yaml" (info (DashYaml <$> idArg <**> helper) (progDesc "Dump dashboard as YAML"))
-      , command "apply" (info (DashApply <$> strArgument (metavar "PATH" <> help "YAML/JSON file or directory") <**> helper) (progDesc "Upsert dashboard(s) from file or directory"))
-      , command
+      [ cmd "list" (pure DashList) (progDesc "List dashboards")
+      , cmd "get" (DashGet <$> idArg) (progDesc "Get a single dashboard")
+      , cmd "create" (DashCreate <$> fileArg) (progDesc "Create dashboard from YAML/JSON file")
+      , cmd "update" (uncurry DashUpdate <$> idFileArgs) (progDesc "Replace (PUT) dashboard from file")
+      , cmd "patch" (uncurry DashPatch <$> idFileArgs) (progDesc "Patch dashboard fields from file")
+      , cmd "delete" (DashDelete <$> idArg) (progDesc "Delete a dashboard")
+      , cmd "star" (DashStar <$> idArg) (progDesc "Star a dashboard")
+      , cmd "unstar" (DashUnstar <$> idArg) (progDesc "Unstar a dashboard")
+      , cmd "duplicate" (DashDuplicate <$> idArg) (progDesc "Duplicate dashboard")
+      , cmd "yaml" (DashYaml <$> idArg) (progDesc "Dump dashboard as YAML")
+      , cmd "apply" (DashApply <$> strArgument (metavar "PATH" <> help "YAML/JSON file or directory")) (progDesc "Upsert dashboard(s) from file or directory")
+      , cmd
           "bulk"
-          ( info
-              ( DashBulk
-                  <$> strArgument (metavar "ACTION" <> help "delete")
-                  <*> idsOpt
-                  <**> helper
-              )
-              (progDesc "Run bulk action over multiple dashboards")
+          ( DashBulk
+              <$> strArgument (metavar "ACTION" <> help "delete")
+              <*> idsOpt
           )
-      , command "widget" (info (widgetParser <**> helper) (progDesc "Widget-level operations"))
-      , command "render" (info (DashRender <$> dashRenderParser <**> helper) (progDesc "Draw a dashboard in the terminal" <> examplesFooter dashRenderExamples))
+          (progDesc "Run bulk action over multiple dashboards")
+      , cmd "widget" widgetParser (progDesc "Widget-level operations")
+      , cmd "render" (DashRender <$> dashRenderParser) (progDesc "Draw a dashboard in the terminal" <> examplesFooter dashRenderExamples)
       ]
 
 
@@ -641,7 +639,7 @@ chartParser =
     <*> optional (strOption (long "from" <> metavar "TIMESTAMP"))
     <*> optional (strOption (long "to" <> metavar "TIMESTAMP"))
     <*> optional (strOption (long "source" <> metavar "SOURCE" <> help "spans|metrics (default: spans)"))
-    <*> optional (strOption (long "type" <> metavar "KIND" <> help "line|bar|stat|table (default: inferred from the result)"))
+    <*> optional chartKindOption
     <*> optional (option auto (long "height" <> metavar "ROWS" <> help "Plot height in rows (default: 14)"))
     <*> optional (strOption (long "watch" <> short 'w' <> metavar "INTERVAL" <> help "Redraw every INTERVAL (e.g. 10s)"))
 
@@ -663,34 +661,25 @@ widgetParser :: Parser DashboardsCommand
 widgetParser =
   subparser
     $ mconcat
-      [ command
+      [ cmd
           "upsert"
-          ( info
-              ( uncurry DashWidgetUpsert
-                  <$> idFileArgs
-                  <**> helper
-              )
-              (progDesc "Insert or update a widget on a dashboard")
+          ( uncurry DashWidgetUpsert
+              <$> idFileArgs
           )
-      , command
+          (progDesc "Insert or update a widget on a dashboard")
+      , cmd
           "delete"
-          ( info
-              ( uncurry DashWidgetDelete
-                  <$> idValueArgs "WIDGET_ID"
-                  <**> helper
-              )
-              (progDesc "Delete a widget from a dashboard")
+          ( uncurry DashWidgetDelete
+              <$> idValueArgs "WIDGET_ID"
           )
-      , command
+          (progDesc "Delete a widget from a dashboard")
+      , cmd
           "reorder"
-          ( info
-              ( (\(did, path) tab -> DashWidgetsReorder did tab path)
-                  <$> idFileArgs
-                  <*> optional (strOption (long "tab" <> metavar "TAB"))
-                  <**> helper
-              )
-              (progDesc "Reorder widgets via {id: {x,y,w,h}} JSON/YAML")
+          ( (\(did, path) tab -> DashWidgetsReorder did tab path)
+              <$> idFileArgs
+              <*> optional (strOption (long "tab" <> metavar "TAB"))
           )
+          (progDesc "Reorder widgets via {id: {x,y,w,h}} JSON/YAML")
       ]
 
 
@@ -698,38 +687,35 @@ apiKeysParser :: Parser ApiKeysCommand
 apiKeysParser =
   subparser
     $ mconcat
-      [ command "list" (info (pure KeyList) (progDesc "List API keys"))
-      , command "get" (info (KeyGet <$> idArg <**> helper) (progDesc "Get API key"))
-      , command "create" (info (KeyCreate <$> strArgument (metavar "TITLE") <**> helper) (progDesc "Create API key; prints plaintext once"))
-      , command "activate" (info (KeyActivate <$> idArg <**> helper) (progDesc "Activate an API key"))
-      , command "deactivate" (info (KeyDeactivate <$> idArg <**> helper) (progDesc "Deactivate an API key (soft)"))
-      , command "revoke" (info (KeyDeactivate <$> idArg <**> helper) (progDesc "Deprecated alias for deactivate"))
-      , command "delete" (info (KeyDelete <$> idArg <**> helper) (progDesc "Delete an API key"))
+      [ cmd "list" (pure KeyList) (progDesc "List API keys")
+      , cmd "get" (KeyGet <$> idArg) (progDesc "Get API key")
+      , cmd "create" (KeyCreate <$> strArgument (metavar "TITLE")) (progDesc "Create API key; prints plaintext once")
+      , cmd "activate" (KeyActivate <$> idArg) (progDesc "Activate an API key")
+      , cmd "deactivate" (KeyDeactivate <$> idArg) (progDesc "Deactivate an API key (soft)")
+      , cmd "revoke" (KeyDeactivate <$> idArg) (progDesc "Deprecated alias for deactivate")
+      , cmd "delete" (KeyDelete <$> idArg) (progDesc "Delete an API key")
       ]
 
 
 shareLinkParser :: Parser ShareLinkCommand
 shareLinkParser =
   subparser
-    $ command
+    $ cmd
       "create"
-      ( info
-          ( ShareLinkCreate
-              <$> strOption (long "event-id" <> metavar "UUID" <> help "Event ID")
-              <*> strOption (long "created-at" <> metavar "ISO8601" <> help "Event created-at timestamp")
-              <*> optional (strOption (long "type" <> metavar "TYPE" <> help "request|log|span (default: request)"))
-              <**> helper
-          )
-          (progDesc "Create a 48h share link for a stored event")
+      ( ShareLinkCreate
+          <$> strOption (long "event-id" <> metavar "UUID" <> help "Event ID")
+          <*> strOption (long "created-at" <> metavar "ISO8601" <> help "Event created-at timestamp")
+          <*> optional (strOption (long "type" <> metavar "TYPE" <> help "request|log|span (default: request)"))
       )
+      (progDesc "Create a 48h share link for a stored event")
 
 
 projectParser :: Parser ProjectCommand
 projectParser =
   subparser
     $ mconcat
-      [ command "get" (info (pure ProjGet) (progDesc "Show the current project"))
-      , command "patch" (info (ProjPatch <$> fileArg <**> helper) (progDesc "PATCH project fields from a YAML/JSON file"))
+      [ cmd "get" (pure ProjGet) (progDesc "Show the current project")
+      , cmd "patch" (ProjPatch <$> fileArg) (progDesc "PATCH project fields from a YAML/JSON file")
       ]
 
 
@@ -761,29 +747,21 @@ issuesParser :: Parser IssuesCommand
 issuesParser =
   subparser
     $ mconcat
-      [ command
+      [ cmd
           "list"
-          ( info
-              ( (\(page, perPage) status issueType service -> IssueList{..})
-                  <$> pageOpts
-                  <*> optional (strOption (long "status" <> metavar "STATUS" <> help "open|acknowledged|archived|all"))
-                  <*> optional (strOption (long "type" <> metavar "TYPE" <> help "Filter by issue_type"))
-                  <*> optional (strOption (long "service" <> metavar "SERVICE" <> help "Filter by service"))
-                  <**> helper
-              )
-              (progDesc "List issues")
+          ( (\(page, perPage) status issueType service -> IssueList{..})
+              <$> pageOpts
+              <*> optional (strOption (long "status" <> metavar "STATUS" <> help "open|acknowledged|archived|all"))
+              <*> optional (strOption (long "type" <> metavar "TYPE" <> help "Filter by issue_type"))
+              <*> optional (strOption (long "service" <> metavar "SERVICE" <> help "Filter by service"))
           )
-      , command "get" (info (IssueGet <$> idArg <**> helper) (progDesc "Get issue by ID"))
-      , command "ack" (info (IssueAck <$> idArg <*> optional (option auto (long "for" <> metavar "MINUTES" <> help "Pause notifications for N minutes (default: until it regresses)")) <**> helper) (progDesc "Acknowledge issue \x2014 pauses its notifications"))
-      , command "unack" (info (IssueUnack <$> idArg <**> helper) (progDesc "Un-acknowledge issue"))
-      , command "archive" (info (IssueArchive <$> idArg <**> helper) (progDesc "Archive issue"))
-      , command "unarchive" (info (IssueUnarchive <$> idArg <**> helper) (progDesc "Unarchive issue"))
-      , command
-          "bulk"
-          ( info
-              (IssueBulk <$> strArgument (metavar "ACTION" <> help "acknowledge|unack|archive|unarchive") <*> idsOpt <*> optional (option auto (long "for" <> metavar "MINUTES" <> help "For acknowledge: pause notifications for N minutes")) <**> helper)
-              (progDesc "Bulk acknowledge/archive issues")
-          )
+          (progDesc "List issues")
+      , cmd "get" (IssueGet <$> idArg) (progDesc "Get issue by ID")
+      , cmd "ack" (IssueAck <$> idArg <*> optional (option auto (long "for" <> metavar "MINUTES" <> help "Pause notifications for N minutes (default: until it regresses)"))) (progDesc "Acknowledge issue \x2014 pauses its notifications")
+      , cmd "unack" (IssueUnack <$> idArg) (progDesc "Un-acknowledge issue")
+      , cmd "archive" (IssueArchive <$> idArg) (progDesc "Archive issue")
+      , cmd "unarchive" (IssueUnarchive <$> idArg) (progDesc "Unarchive issue")
+      , cmd "bulk" (IssueBulk <$> strArgument (metavar "ACTION" <> help "acknowledge|unack|archive|unarchive") <*> idsOpt <*> optional (option auto (long "for" <> metavar "MINUTES" <> help "For acknowledge: pause notifications for N minutes"))) (progDesc "Bulk acknowledge/archive issues")
       ]
 
 
@@ -791,13 +769,8 @@ incidentsParser :: Parser IncidentsCommand
 incidentsParser =
   subparser
     $ mconcat
-      [ command
-          "list"
-          ( info
-              (IncidentList <$> optional (strOption (long "phase" <> metavar "PHASE" <> help "active|recovered|resolved")) <*> optional (option auto (long "limit" <> short 'n' <> metavar "N" <> help "Maximum incidents (default: 20)")) <**> helper)
-              (progDesc "List recent incidents")
-          )
-      , command "get" (info (IncidentGet <$> idArg <**> helper) (progDesc "Get incident by ID"))
+      [ cmd "list" (IncidentList <$> optional (strOption (long "phase" <> metavar "PHASE" <> help "active|recovered|resolved")) <*> optional (option auto (long "limit" <> short 'n' <> metavar "N" <> help "Maximum incidents (default: 20)"))) (progDesc "List recent incidents")
+      , cmd "get" (IncidentGet <$> idArg) (progDesc "Get incident by ID")
       ]
 
 
@@ -805,18 +778,15 @@ endpointsParser :: Parser EndpointsCommand
 endpointsParser =
   subparser
     $ mconcat
-      [ command
+      [ cmd
           "list"
-          ( info
-              ( (\(page, perPage) search outgoing -> EndList{..})
-                  <$> pageOpts
-                  <*> optional (strOption (long "search" <> metavar "TEXT" <> help "Substring filter"))
-                  <*> optional (switch (long "outgoing" <> help "Only outgoing endpoints"))
-                  <**> helper
-              )
-              (progDesc "List endpoints")
+          ( (\(page, perPage) search outgoing -> EndList{..})
+              <$> pageOpts
+              <*> optional (strOption (long "search" <> metavar "TEXT" <> help "Substring filter"))
+              <*> optional (switch (long "outgoing" <> help "Only outgoing endpoints"))
           )
-      , command "get" (info (EndGet <$> idArg <**> helper) (progDesc "Get endpoint by ID"))
+          (progDesc "List endpoints")
+      , cmd "get" (EndGet <$> idArg) (progDesc "Get endpoint by ID")
       ]
 
 
@@ -835,24 +805,16 @@ logPatternsParser :: Parser LogPatternsCommand
 logPatternsParser =
   subparser
     $ mconcat
-      [ command
-          "list"
-          ( info
-              (uncurry LPList <$> pageOpts <**> helper)
-              (progDesc "List log patterns")
-          )
-      , command "get" (info (LPGet <$> optional int64Arg <**> helper) (progDesc "Get log pattern by ID"))
-      , command "ack" (info (LPAck <$> optional int64Arg <**> helper) (progDesc "Acknowledge log pattern"))
-      , command
+      [ cmd "list" (uncurry LPList <$> pageOpts) (progDesc "List log patterns")
+      , cmd "get" (LPGet <$> optional int64Arg) (progDesc "Get log pattern by ID")
+      , cmd "ack" (LPAck <$> optional int64Arg) (progDesc "Acknowledge log pattern")
+      , cmd
           "bulk"
-          ( info
-              ( LPBulk
-                  <$> strArgument (metavar "ACTION" <> help "ack|ignore")
-                  <*> int64IdsOpt
-                  <**> helper
-              )
-              (progDesc "Run bulk action over multiple log patterns")
+          ( LPBulk
+              <$> strArgument (metavar "ACTION" <> help "ack|ignore")
+              <*> int64IdsOpt
           )
+          (progDesc "Run bulk action over multiple log patterns")
       ]
 
 
@@ -860,22 +822,19 @@ teamsParser :: Parser TeamsCommand
 teamsParser =
   subparser
     $ mconcat
-      [ command "list" (info (pure TeamList) (progDesc "List teams"))
-      , command "get" (info (TeamGet <$> idArg <**> helper) (progDesc "Get a team by ID"))
-      , command "create" (info (TeamCreate <$> fileArg <**> helper) (progDesc "Create team from YAML/JSON file"))
-      , command "update" (info (uncurry TeamUpdate <$> idFileArgs <**> helper) (progDesc "Replace (PUT) team from file"))
-      , command "patch" (info (uncurry TeamPatch <$> idFileArgs <**> helper) (progDesc "Patch team fields from file"))
-      , command "delete" (info (TeamDelete <$> idArg <**> helper) (progDesc "Delete a team"))
-      , command
+      [ cmd "list" (pure TeamList) (progDesc "List teams")
+      , cmd "get" (TeamGet <$> idArg) (progDesc "Get a team by ID")
+      , cmd "create" (TeamCreate <$> fileArg) (progDesc "Create team from YAML/JSON file")
+      , cmd "update" (uncurry TeamUpdate <$> idFileArgs) (progDesc "Replace (PUT) team from file")
+      , cmd "patch" (uncurry TeamPatch <$> idFileArgs) (progDesc "Patch team fields from file")
+      , cmd "delete" (TeamDelete <$> idArg) (progDesc "Delete a team")
+      , cmd
           "bulk"
-          ( info
-              ( TeamBulk
-                  <$> strArgument (metavar "ACTION" <> help "delete")
-                  <*> idsOpt
-                  <**> helper
-              )
-              (progDesc "Run bulk action over multiple teams")
+          ( TeamBulk
+              <$> strArgument (metavar "ACTION" <> help "delete")
+              <*> idsOpt
           )
+          (progDesc "Run bulk action over multiple teams")
       ]
 
 
@@ -883,29 +842,23 @@ membersParser :: Parser MembersCommand
 membersParser =
   subparser
     $ mconcat
-      [ command "list" (info (pure MemberList) (progDesc "List project members"))
-      , command "get" (info (MemberGet <$> idArg <**> helper) (progDesc "Get a member by user ID"))
-      , command
+      [ cmd "list" (pure MemberList) (progDesc "List project members")
+      , cmd "get" (MemberGet <$> idArg) (progDesc "Get a member by user ID")
+      , cmd
           "add"
-          ( info
-              ( (\email userId permission -> MemberAdd{..})
-                  <$> optional (strOption (long "email" <> metavar "EMAIL" <> help "Email (creates user if missing)"))
-                  <*> optional (strOption (long "user-id" <> metavar "UUID" <> help "Existing user ID"))
-                  <*> optional (strOption (long "permission" <> metavar "PERM" <> help "view|edit|admin (default: view)"))
-                  <**> helper
-              )
-              (progDesc "Add a project member (by email or user ID)")
+          ( (\email userId permission -> MemberAdd{..})
+              <$> optional (strOption (long "email" <> metavar "EMAIL" <> help "Email (creates user if missing)"))
+              <*> optional (strOption (long "user-id" <> metavar "UUID" <> help "Existing user ID"))
+              <*> optional (strOption (long "permission" <> metavar "PERM" <> help "view|edit|admin (default: view)"))
           )
-      , command
+          (progDesc "Add a project member (by email or user ID)")
+      , cmd
           "patch"
-          ( info
-              ( uncurry MemberPatch
-                  <$> idValueArgs "PERMISSION"
-                  <**> helper
-              )
-              (progDesc "Change a member's permission")
+          ( uncurry MemberPatch
+              <$> idValueArgs "PERMISSION"
           )
-      , command "remove" (info (MemberRemove <$> idArg <**> helper) (progDesc "Remove a project member"))
+          (progDesc "Change a member's permission")
+      , cmd "remove" (MemberRemove <$> idArg) (progDesc "Remove a project member")
       ]
 
 
@@ -973,13 +926,13 @@ runCLI = runEff . runHTTPWreq . runEnvironment . runFileSystem . runIngestion . 
 cliMain :: Version -> IO ()
 cliMain v = do
   hSetBuffering stdout LineBuffering
-  (global, cmd) <- execParser (parserInfo v)
+  (global, parsedCommand) <- execParser (parserInfo v)
   -- Make --debug equivalent to MONOSCOPE_DEBUG=1 so 'CLI.Core.printDebug'
   -- (which only sees the env) lights up either way. setEnv is process-global
   -- and not thread-safe, but we set it exactly once here, before runCLI
   -- starts any concurrent work, so the race window is empty.
   when global.debugFlag $ setEnv "MONOSCOPE_DEBUG" "1"
-  runCLI $ run v global cmd
+  runCLI $ run v global parsedCommand
 
 
 -- | Resolve config (applying the @--project@ override) + output mode and hand
@@ -1010,8 +963,8 @@ run version global = \case
     MQuery opts -> runMetricsQuery cfg opts mode
     MChart opts -> runMetricsChart cfg opts mode
   ServicesCmd (SList opts) -> withCfgMode global $ \cfg mode -> runServicesList cfg opts mode
-  ConfigCmd CInit -> runConfigInit
-  ConfigCmd (CSet opts) -> runConfigSet opts
+  ConfigCmd CInit -> resolveMode global >>= runConfigInit
+  ConfigCmd (CSet opts) -> resolveMode global >>= runConfigSet opts
   ConfigCmd (CGet opts) -> do
     mode <- resolveMode global
     runConfigGet opts mode
