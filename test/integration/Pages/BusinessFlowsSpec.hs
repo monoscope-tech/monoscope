@@ -114,8 +114,10 @@ onboardingTests =
         _ -> expectationFailure "Expected the project to redirect to its dashboard"
 
     it "integrationCheck_emptyProject_doesNotToastForAutomaticChecks" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
-      (automaticHeaders, _) <- testServant tr $ Onboarding.checkIntegrationGet testPid (Just "Javascript")
+      (automaticHeaders, waiting) <- testServant tr $ Onboarding.checkIntegrationGet testPid (Just "Javascript")
       lookupResponseHeader @"HX-Trigger" automaticHeaders `shouldBe` Header ("{}" :: Text)
+      -- integrationCheck_noEventsYet_keepsPolling: the empty answer swaps in a fresh poller, not a dead spinner
+      renderText waiting `shouldSatisfy` \h -> all (`TL.isInfixOf` h) ["integration-check?language=Javascript", "intersect delay:5s", "outerHTML", "waiting"]
       lookupResponseHeader @"HX-Redirect" automaticHeaders `shouldBe` (MissingHeader :: ResponseHeader "HX-Redirect" Text)
       (manualHeaders, _) <- testServant tr $ Onboarding.checkIntegrationGet testPid Nothing
       case lookupResponseHeader @"HX-Trigger" manualHeaders of
@@ -127,6 +129,7 @@ onboardingTests =
       lookupResponseHeader @"HX-Trigger" verifiedHeaders `shouldBe` Header ("{}" :: Text)
       lookupResponseHeader @"HX-Redirect" verifiedHeaders `shouldBe` (MissingHeader :: ResponseHeader "HX-Redirect" Text)
       renderText verified `shouldSatisfy` TL.isInfixOf "verified"
+      renderText verified `shouldSatisfy` (not . TL.isInfixOf "intersect")
 
     it "moves one new project from profile setup to its first queryable event" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
       let infoForm =
