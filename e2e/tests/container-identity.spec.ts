@@ -24,6 +24,18 @@ test.afterAll(() => {
 
 test.describe.configure({ mode: "serial" });
 
+test("refresh selections initialize when the reactive extension loads late", async ({ page }) => {
+  test.skip(!process.env.E2E_BASE_URL, "Requires a disposable fixture database");
+  await page.route("**/hx-live-4*.js", async route => {
+    await page.waitForFunction(() => !!(window as any).htmx);
+    await page.waitForTimeout(250);
+    await route.continue();
+  });
+  await page.goto(`/p/${DEMO_PROJECT}/infrastructure/containers?since=5M`, { waitUntil: "domcontentloaded" });
+  await page.locator('[data-live-data-trigger]').click();
+  await expect(page.getByRole("button", { name: "15 seconds", exact: true })).toHaveAttribute("aria-pressed", "true");
+});
+
 test("navbar refresh menu applies Off and interval options", async ({ page }) => {
   test.skip(!process.env.E2E_BASE_URL, "Requires a disposable fixture database");
   for (const width of [390, 1440]) {

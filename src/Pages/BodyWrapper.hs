@@ -336,10 +336,12 @@ bodyWrapper bcfg child = do
 
       fold bcfg.headContent
 
+      -- Loading HTMX during parsing defers its initialization until DOMContentLoaded,
+      -- after every deferred extension has registered its hooks.
+      script_ [src_ (assetUrl "/public/assets/deps/htmx/htmx-4.0.0.min.js")] ("" :: Text)
       mapM_
         deferScript
-        $ [ assetUrl "/public/assets/deps/htmx/htmx-4.0.0.min.js"
-          , -- Must load immediately after htmx: restores implicit attribute inheritance
+        $ [ -- Must load immediately after htmx: restores implicit attribute inheritance
             -- (v4 requires `:inherited` otherwise) and 4xx/5xx no-swap. The app's own
             -- listeners use v4 event names directly, so the shim's legacy-name replay is
             -- only load-bearing for third-party code (hyperscript binds the legacy load event).
