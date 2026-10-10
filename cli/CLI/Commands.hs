@@ -94,9 +94,9 @@ import OpenTelemetry.Resource.Detect qualified as ResourceDetect
 import OpenTelemetry.Trace (SpanStatus (..), Tracer, TracerOptions (..), defaultSpanArguments, makeTracer, shutdownTracerProvider)
 import OpenTelemetry.Trace qualified as Trace
 import OpenTelemetry.Trace.Id.Generator.Default (defaultIdGenerator)
+import Options.Applicative (Parser, help, long, maybeReader, metavar, option)
 import Pages.Charts.Types (MetricsData (..))
 import Pkg.CLIFormat (cleanSummaryValue, evalCond, extractColIdxMap, extractInt, extractRawRows, extractRows, extractTextArray, renderSummaryCell, valToText)
-import Options.Applicative (Parser, help, long, maybeReader, metavar, option)
 import System.IO (hPutStrLn)
 import System.Process (spawnProcess)
 import UnliftIO.Concurrent (threadDelay)

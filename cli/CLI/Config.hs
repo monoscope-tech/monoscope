@@ -167,7 +167,8 @@ loadToken = do
   if exists
     then
       liftIO
-        $ Yaml.decodeFileEither @(Map Text Text) f >>= \case
+        $ Yaml.decodeFileEither @(Map Text Text) f
+        >>= \case
           Right m -> pure $ Map.lookup "token" m
           Left _ -> pure Nothing
     else pure Nothing
