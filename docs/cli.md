@@ -210,7 +210,7 @@ Options:
 | `--kind log\|trace` | Filter by event kind (mapped to the `source` query param) |
 | `--service <name>` | Shorthand for `resource.service.name=="<name>"`. **Repeatable** — `--service a --service b` expands to `in (a, b)` |
 | `--level <level>` | Shorthand for `severity.severity_text=="<level>"` (converted to lowercase) |
-| `--limit/-n <N>` | Max results to return |
+| `--limit/-n <N>` | Max results to return; must be positive |
 | `--fields <f1,f2>` | Comma-separated columns to keep in JSON / table output |
 | `--cursor <value>` | Pagination: pass the `cursor` field from a previous response |
 | `--first` | Return only the first matching event (the JSON envelope still carries `count`/`has_more`) |
@@ -896,9 +896,8 @@ milliseconds — put any new rendering logic here.
 
 ### 2. Doctests for pure helpers
 
-`cli/CLI/Validate.hs` carries doctests for `validateDuration`, `validateUuid`,
-`validateKind`, and `normalizeKind`. They run as part of the lib's doctest
-suite once exposed; until then they document expected behavior in-source.
+`cli/CLI/Validate.hs` carries doctests for `validateDurationFor`,
+`validateKind`, and `normalizeKind`. The root doctest suite includes `cli/CLI`.
 Add a doctest for any new pure helper — they are the cheapest regression
 guard you have.
 
@@ -907,7 +906,7 @@ guard you have.
 `test/integration/CLI/CLIBinarySpec.hs` runs `monoscope --help` for every
 subcommand and asserts exit code 0. This catches optparse parser
 construction errors before they reach a user. **Add an entry to `helpCases`
-when you add a new `command "..."` in `cli/Main.hs`** — the test catches
+when you add a new `command "..."` in `cli/CLI/Main.hs`** — the test catches
 copy-paste typos in metavar / parser wiring instantly.
 
 ### 4. End-to-end against a real server
@@ -917,37 +916,20 @@ against an HTTP server. This is what catches wire-format regressions
 (KQL operator changes, JSON envelope drift, missing query params, broken
 auth headers) — the bug class that motivated the audit.
 
-The suite reuses the **same env vars the CLI itself reads** (`MONOSCOPE_API_URL` /
-`MONOSCOPE_API_KEY` / `MONOSCOPE_PROJECT`) — so if you've configured your shell
-to drive `monoscope` against any server, the e2e tests automatically pick
-that up.
-
-**Defaults:** when the env vars are unset, the suite targets the public
-demo project on prod — `MONOSCOPE_API_URL=https://api.monoscope.tech`,
-`MONOSCOPE_PROJECT=00000000-0000-0000-0000-000000000000`. Only
-`MONOSCOPE_API_KEY` has no safe default; set it to any read-only key
-minted against the demo project to enable the suite. Without a key the
-tests still mark themselves `pending` (with a message naming the missing
-variable) rather than fail.
+By default the suite starts an isolated local HTTP server, creates a project API
+key, and exercises the binary against the test database. No external key is
+required. `MONOSCOPE_BIN` selects the executable:
 
 ```bash
-# Run against the prod demo project (default — only the key is needed):
-MONOSCOPE_API_KEY=<read-only demo key> \
-  USE_EXTERNAL_DB=true cabal test integration-tests \
-    --test-options='--match "CLI binary E2E"'
-
-# Or point at your local dev server:
-MONOSCOPE_API_URL=http://localhost:8080 \
-MONOSCOPE_API_KEY=$(monoscope --json api-keys create "e2e-tests" | jq -r .key) \
-MONOSCOPE_PROJECT=<your project uuid> \
-  USE_EXTERNAL_DB=true cabal test integration-tests \
-    --test-options='--match "CLI binary E2E"'
+make cli-build
+TEST_MATCH=CLI make live-test-dev
 ```
 
-CI on `main`/PRs reads the same `MONOSCOPE_API_KEY` from the
-`MONOSCOPE_DEMO_API_KEY` repo secret, so every push runs the e2e suite
-against prod. PRs from forks (where secrets aren't exposed) gracefully
-skip the suite — they still get the `CLIBinarySpec` smoke tests.
+To exercise an external server, set `MONOSCOPE_API_KEY` and optionally
+`MONOSCOPE_API_URL` and `MONOSCOPE_PROJECT`. With an explicit key, the URL
+defaults to `https://api.monoscope.tech` and the project to the public demo UUID.
+External-server tests report pending when that server is unavailable or rejects
+the supplied credentials. The default local-server tests fail on these errors.
 
 Each spec checks a single audit finding (KQL operator, kind→source mapping,
 error-body surfacing, list envelope, agent-mode JSON, validation messages,

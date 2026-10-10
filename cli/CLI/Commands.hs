@@ -28,6 +28,7 @@ module CLI.Commands (
   -- Charts and dashboards in the terminal
   runChart,
   ChartCmdOpts (..),
+  ChartKind (..),
   runDashboardRender,
   DashboardRenderOpts (..),
   runOpen,
@@ -584,6 +585,9 @@ emitFirstEventId v =
 validateEventsOpts :: IOE :> es => EventsSearchOpts -> Eff es EventsSearchOpts
 validateEventsOpts opts = do
   validateDurationOrDie "--since" opts.since
+  when (maybe False (<= 0) opts.limit) $ do
+    printError "--limit must be positive"
+    liftIO exitFailure
   -- Validate the text that will actually be sent. 'buildSearchParams' rewrites a
   -- bare term into a body/summary full-text predicate, so validating the raw
   -- term instead asks the parser to resolve it as a column: once field
@@ -1046,6 +1050,7 @@ data MetricsChartOpts = MetricsChartOpts
 
 runMetricsQuery :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> MetricsQueryOpts -> OutputMode -> Eff es ()
 runMetricsQuery cfg opts mode = do
+  validateDurationOrDie "--since" opts.since
   let params = metricsParams opts.expression opts.since opts.from opts.to
   withAPIResult cfg "/api/v1/metrics" params $ \val ->
     withMetricsData val (renderJSON val) $ \md -> do
@@ -1058,6 +1063,10 @@ runMetricsChart cfg opts =
   runChart cfg ChartCmdOpts{query = opts.expression, since = opts.since, from = opts.from, to = opts.to, watch = opts.watch, chartType = Nothing, source = Nothing, height = Nothing}
 
 
+data ChartKind = LineChart | BarChart | StatChart | TableChart
+  deriving stock (Show)
+
+
 -- | Ad-hoc charting of any KQL query, and the engine behind @metrics chart@.
 data ChartCmdOpts = ChartCmdOpts
   { query :: Text
@@ -1065,7 +1074,7 @@ data ChartCmdOpts = ChartCmdOpts
   , from :: Maybe Text
   , to :: Maybe Text
   , source :: Maybe Text
-  , chartType :: Maybe Text
+  , chartType :: Maybe ChartKind
   -- ^ @line@ | @bar@ | @stat@ | @table@. Inferred from the result shape when
   -- absent: a timestamp column charts as a line, anything else as bars.
   , height :: Maybe Int
@@ -1108,12 +1117,12 @@ drawMetrics opts md = do
   let series = Chart.seriesFromMetrics md
       chartOpts = Chart.defaultChartOpts{Chart.width = w, Chart.height = fromMaybe 14 opts.height, Chart.colorful = color}
       -- A leading timestamp column is what makes a result a timeseries.
-      kind = fromMaybe (if maybe False Chart.isTimeColumn (md.headers V.!? 0) then "line" else "bar") opts.chartType
+      kind = fromMaybe (if maybe False Chart.isTimeColumn (md.headers V.!? 0) then LineChart else BarChart) opts.chartType
   case kind of
-    "table" -> renderMetricsTable md
-    "stat" -> mapM_ putTextLn (Chart.renderStat chartOpts opts.query md.dataFloat series)
-    "bar" -> mapM_ putTextLn (Chart.renderBars chartOpts (labelledRows md))
-    _ -> mapM_ putTextLn (Chart.renderTimeseries chartOpts series)
+    TableChart -> renderMetricsTable md
+    StatChart -> mapM_ putTextLn (Chart.renderStat chartOpts opts.query md.dataFloat series)
+    BarChart -> mapM_ putTextLn (Chart.renderBars chartOpts (labelledRows md))
+    LineChart -> mapM_ putTextLn (Chart.renderTimeseries chartOpts series)
 
 
 -- | @(label, value)@ pairs for a bar chart: first column labels, second sizes.

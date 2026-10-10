@@ -75,6 +75,17 @@ shouldHaveKeys other _ = expectationFailure $ "expected JSON object, got: " <> s
 spec :: Spec
 spec = around withTestResources do
   describe "CLI lifecycle (in-process, real parser + handlers)" do
+    it "nonpositive_search_limit_fails_before_querying" \tr -> do
+      forM_ ["0", "-1"] \limit -> do
+        (ec, out) <- runCLILifecycle tr ["--json", "events", "search", "", "--limit", limit]
+        ec `shouldBe` ExitFailure 1
+        out `shouldBe` ""
+
+    it "invalid_metrics_duration_fails_before_querying" \tr -> do
+      (ec, out) <- runCLILifecycle tr ["--json", "metrics", "query", "summarize count()", "--since", "nonsense"]
+      ec `shouldBe` ExitFailure 1
+      out `shouldBe` ""
+
     it "missing_resource_id_fails_without_prompting_in_scripts" \tr -> do
       forM_ [["dashboards", "render"], ["dashboards", "get"], ["monitors", "get"], ["issues", "get"], ["incidents", "get"], ["endpoints", "get"], ["log-patterns", "get"], ["teams", "get"], ["members", "get"], ["api-keys", "get"], ["dashboards", "patch", "dashboard.yaml"], ["members", "patch", "view"], ["dashboards", "widget", "delete", "widget-id"]] \args -> do
         (ec, out) <- runCLILifecycle tr ("--json" : args)

@@ -55,6 +55,17 @@ spec = describe "CLI binary E2E tests" do
     code `shouldBe` ExitSuccess
     out `shouldSatisfy` \s -> "--since" `isInfixOf` s && "--from" `isInfixOf` s
 
+  it "leaf_help_shows_the_requested_command_usage" do
+    forM_ [["me"], ["version"], ["config", "init"], ["monitors", "list"], ["dashboards", "list"], ["api-keys", "list"], ["project", "get"], ["teams", "list"], ["members", "list"]] \args -> do
+      (ec, out, _) <- runMono (args <> ["--help"])
+      ec `shouldBe` ExitSuccess
+      T.strip <$> viaNonEmpty head (T.lines (toText out)) `shouldBe` Just ("Usage: monoscope " <> unwords (map toText args))
+
+  it "chart_invalid_type_reports_the_allowed_choices" do
+    (ec, _, err) <- runMono ["chart", "summarize count()", "--type", "bogus"]
+    ec `shouldBe` ExitFailure 1
+    err `shouldContain` "line|bar|stat|table"
+
   it "auth_login_help_showsTheTokenOption" do
     (code, out, _) <- runMono ["auth", "login", "--help"]
     code `shouldBe` ExitSuccess

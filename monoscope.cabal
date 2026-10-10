@@ -881,6 +881,7 @@ test-suite integration-tests
     , these
     , time
     , transformers
+    , unix
     , unliftio
     , unordered-containers
     , uuid

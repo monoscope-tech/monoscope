@@ -272,7 +272,7 @@ commandParser =
           , command "dashboards" (info (DashboardsCmd <$> dashboardsParser <**> helper) (progDesc "Manage dashboards"))
           , command "api-keys" (info (ApiKeysCmd <$> apiKeysParser <**> helper) (progDesc "Manage API keys"))
           , command "share-link" (info (ShareLinkCmd <$> shareLinkParser <**> helper) (progDesc "Create time-limited share links"))
-          , command "me" (info (pure MeCmd) (progDesc "Show current project identity"))
+          , command "me" (info (pure MeCmd <**> helper) (progDesc "Show current project identity"))
           , command "project" (info (ProjectCmd <$> projectParser <**> helper) (progDesc "Show or patch the current project"))
           , command "issues" (info (IssuesCmd <$> issuesParser <**> helper) (progDesc "List and triage issues"))
           , command "incidents" (info (IncidentsCmd <$> incidentsParser <**> helper) (progDesc "Browse incident episodes"))
@@ -283,7 +283,7 @@ commandParser =
           , command "schema" (info (SchemaCmd <$> schemaParser <**> helper) (progDesc "Fetch telemetry schema"))
           , command "facets" (info (FacetsCmd <$> facetsParser <**> helper) (progDesc "Discover popular field values (top-N per faceted field)" <> examplesFooter facetsExamples))
           , command "completion" (info (CompletionCmd <$> strArgument (metavar "SHELL" <> help "bash|zsh|fish") <**> helper) (progDesc "Emit shell completion script"))
-          , command "version" (info (pure VersionCmd) (progDesc "Show CLI version"))
+          , command "version" (info (pure VersionCmd <**> helper) (progDesc "Show CLI version"))
           , command "telemetrygen" (info (TelemetryGenCmd <$> telemetryGenParser <**> helper) (progDesc "Generate synthetic telemetry (traces/logs/metrics)" <> examplesFooter telemetryGenExamples))
           , command "send-event" (info (SendEventCmd <$> sendEventParser <**> helper) (progDesc "Send a real event (log/trace/error) from a script or CI" <> examplesFooter sendEventExamples))
           ]
@@ -442,7 +442,7 @@ configParser :: Parser ConfigCommand
 configParser =
   subparser
     $ mconcat
-      [ command "init" (info (pure CInit) (progDesc "Initialize configuration"))
+      [ command "init" (info (pure CInit <**> helper) (progDesc "Initialize configuration"))
       , command "set" (info (CSet <$> configSetParser <**> helper) (progDesc "Set config value"))
       , command "get" (info (CGet <$> configGetParser <**> helper) (progDesc "Get config value"))
       ]
@@ -523,7 +523,7 @@ monitorsParser :: Parser MonitorsCommand
 monitorsParser =
   subparser
     $ mconcat
-      [ command "list" (info (pure MonList) (progDesc "List monitors"))
+      [ command "list" (info (pure MonList <**> helper) (progDesc "List monitors"))
       , command "get" (info (MonGet <$> idArg <**> helper) (progDesc "Get a single monitor"))
       , command "create" (info (MonCreate <$> fileArg <**> helper) (progDesc "Create monitor from YAML/JSON file"))
       , command "update" (info (uncurry MonUpdate <$> idFileArgs <**> helper) (progDesc "Replace (PUT) monitor from file"))
@@ -553,7 +553,7 @@ dashboardsParser :: Parser DashboardsCommand
 dashboardsParser =
   subparser
     $ mconcat
-      [ command "list" (info (pure DashList) (progDesc "List dashboards"))
+      [ command "list" (info (pure DashList <**> helper) (progDesc "List dashboards"))
       , command "get" (info (DashGet <$> idArg <**> helper) (progDesc "Get a single dashboard"))
       , command "create" (info (DashCreate <$> fileArg <**> helper) (progDesc "Create dashboard from YAML/JSON file"))
       , command "update" (info (uncurry DashUpdate <$> idFileArgs <**> helper) (progDesc "Replace (PUT) dashboard from file"))
@@ -641,7 +641,17 @@ chartParser =
     <*> optional (strOption (long "from" <> metavar "TIMESTAMP"))
     <*> optional (strOption (long "to" <> metavar "TIMESTAMP"))
     <*> optional (strOption (long "source" <> metavar "SOURCE" <> help "spans|metrics (default: spans)"))
-    <*> optional (strOption (long "type" <> metavar "KIND" <> help "line|bar|stat|table (default: inferred from the result)"))
+    <*> optional
+      ( option
+          ( eitherReader \case
+              "line" -> Right LineChart
+              "bar" -> Right BarChart
+              "stat" -> Right StatChart
+              "table" -> Right TableChart
+              _ -> Left "--type must be one of: line|bar|stat|table"
+          )
+          (long "type" <> metavar "KIND" <> help "line|bar|stat|table (default: inferred from the result)")
+      )
     <*> optional (option auto (long "height" <> metavar "ROWS" <> help "Plot height in rows (default: 14)"))
     <*> optional (strOption (long "watch" <> short 'w' <> metavar "INTERVAL" <> help "Redraw every INTERVAL (e.g. 10s)"))
 
@@ -698,7 +708,7 @@ apiKeysParser :: Parser ApiKeysCommand
 apiKeysParser =
   subparser
     $ mconcat
-      [ command "list" (info (pure KeyList) (progDesc "List API keys"))
+      [ command "list" (info (pure KeyList <**> helper) (progDesc "List API keys"))
       , command "get" (info (KeyGet <$> idArg <**> helper) (progDesc "Get API key"))
       , command "create" (info (KeyCreate <$> strArgument (metavar "TITLE") <**> helper) (progDesc "Create API key; prints plaintext once"))
       , command "activate" (info (KeyActivate <$> idArg <**> helper) (progDesc "Activate an API key"))
@@ -728,7 +738,7 @@ projectParser :: Parser ProjectCommand
 projectParser =
   subparser
     $ mconcat
-      [ command "get" (info (pure ProjGet) (progDesc "Show the current project"))
+      [ command "get" (info (pure ProjGet <**> helper) (progDesc "Show the current project"))
       , command "patch" (info (ProjPatch <$> fileArg <**> helper) (progDesc "PATCH project fields from a YAML/JSON file"))
       ]
 
@@ -860,7 +870,7 @@ teamsParser :: Parser TeamsCommand
 teamsParser =
   subparser
     $ mconcat
-      [ command "list" (info (pure TeamList) (progDesc "List teams"))
+      [ command "list" (info (pure TeamList <**> helper) (progDesc "List teams"))
       , command "get" (info (TeamGet <$> idArg <**> helper) (progDesc "Get a team by ID"))
       , command "create" (info (TeamCreate <$> fileArg <**> helper) (progDesc "Create team from YAML/JSON file"))
       , command "update" (info (uncurry TeamUpdate <$> idFileArgs <**> helper) (progDesc "Replace (PUT) team from file"))
@@ -883,7 +893,7 @@ membersParser :: Parser MembersCommand
 membersParser =
   subparser
     $ mconcat
-      [ command "list" (info (pure MemberList) (progDesc "List project members"))
+      [ command "list" (info (pure MemberList <**> helper) (progDesc "List project members"))
       , command "get" (info (MemberGet <$> idArg <**> helper) (progDesc "Get a member by user ID"))
       , command
           "add"
