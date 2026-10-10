@@ -258,7 +258,6 @@ data Widget = Widget
   , hideSubtitle :: Maybe Bool
   , hideValue :: Maybe Bool
   , icon :: Maybe Text
-  , timeseriesStatAggregate :: Maybe Text -- average, min, max, sum, etc
   , sql :: Maybe Text
   , rollupSql :: Maybe Text
   -- ^ Postgres SQL over an hourly rollup of the same series as @query@, answerable
@@ -309,7 +308,6 @@ data Widget = Widget
   , html :: Maybe LText
   , standalone :: Maybe Bool -- Not used in a grid stack
   , allowZoom :: Maybe Bool -- Allow zooming in the chart
-  , showMarkArea :: Maybe Bool -- Show mark area in the chart
   , columns :: Maybe [TableColumn] -- Table columns
   , onRowClick :: Maybe RowClickAction -- Action when table row is clicked
   -- Alert fields (populated from QueryMonitor at render time)

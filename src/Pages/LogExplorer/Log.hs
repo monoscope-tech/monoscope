@@ -1130,7 +1130,6 @@ logChartWidget pid =
     , Widget.unit = Just "rows"
     , Widget.title = Just "All traces"
     , Widget.allowZoom = Just True
-    , Widget.showMarkArea = Just True
     }
 
 

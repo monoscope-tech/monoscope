@@ -335,7 +335,6 @@ spec = sequential $ aroundAll withTestResources do
               , Widget.legendSize = Just Widget.LSXs
               , Widget.standalone = Just True
               , Widget.allowZoom = Just True
-              , Widget.showMarkArea = Just True
               }
           encoded = decodeUtf8 @Text $ LBS.toStrict $ AE.encode widget
           signature = Widget.signWidgetUrl tr.trATCtx.env.apiKeyEncryptionSecretKey testPid encoded

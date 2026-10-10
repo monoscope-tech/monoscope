@@ -236,7 +236,7 @@ Ordered by (reader value ÷ effort):
   **QueryAlert → the threshold-vs-actual stat pair.** The band never renders an
   empty cell, because the slot is a sum type, not a nullable count.
 - **Try the widget before building a count endpoint.** `Widget` already carries
-  `timeseriesStatAggregate` and `WidgetDataset.rowsCount`; if un-hiding the value
+  `summarizeBy` and `WidgetDataset.rowsCount`; if un-hiding the value
   gives the total, P2 needs no new fragment.
 - **P4 carries P3's 504 risk.** The span-subtree query gets the same treatment as
   `traceRef`: ±5min around the known error timestamp, `LIMIT`ed, lazy fragment.
