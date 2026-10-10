@@ -119,7 +119,7 @@ paletteShell_ pid = do
           -- Lazy-loaded dynamic items placeholder
           div_ [id_ "cmd-palette-dynamic", hxGet_ ("/p/" <> pidTxt <> "/command-palette"), hxTrigger_ "palette:open from:body", hxSwap_ "outerHTML", class_ "text-center text-xs text-textWeak py-2"] "Loading..."
           -- Direct page links (static, always present)
-          forM_ ([("log_explorer", "explore", "Log Explorer"), ("api_catalog", "swap", "API Catalog"), ("reports", "chart-simple", "Reports"), ("settings", "gear", "Settings")] :: [(Text, Text, Text)]) \(path, icon, label) ->
+          forM_ ([("log_explorer", "explore", "Log Explorer"), ("api_catalog", "swap", "API Catalog"), ("reports", "chart-simple", "Reports"), ("repositories", "code-branch", "Repositories"), ("settings", "gear", "Settings")] :: [(Text, Text, Text)]) \(path, icon, label) ->
             cmdItem pidTxt "direct" path [] icon label "Page"
           -- Logs shortcut
           cmdLink_ "search logs" "direct" [href_ $ "/p/" <> pidTxt <> "/log_explorer", data_ "log-shortcut" "true"]

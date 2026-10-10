@@ -40,7 +40,7 @@ import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude hiding (head)
 import Test.Hspec
-import UnliftIO.Exception (try)
+import UnliftIO.Exception (bracket, try)
 
 
 
@@ -48,6 +48,7 @@ isGitSyncPush, isGitSyncFromRepo :: (a, BackgroundJobs.BgJobs) -> Bool
 isGitSyncPush (_, BackgroundJobs.GitSyncPushDashboard{}) = True
 isGitSyncPush _ = False
 isGitSyncFromRepo (_, BackgroundJobs.GitSyncFromRepo{}) = True
+isGitSyncFromRepo (_, BackgroundJobs.GitSyncRepository{}) = True
 isGitSyncFromRepo _ = False
 
 
@@ -228,6 +229,7 @@ createDash tr title tags = do
         , Dashboards.title = title
         , Dashboards.teams = V.empty
         , Dashboards.filePath = Nothing
+        , Dashboards.gitSyncId = Nothing
         , Dashboards.fileSha = Nothing
         }
   _ <- runTestBg frozenTime tr $ Dashboards.insert dash
@@ -240,6 +242,7 @@ runSyncJobs tr = do
   where
     isGitSyncJob BackgroundJobs.GitSyncPushDashboard{} = True
     isGitSyncJob BackgroundJobs.GitSyncFromRepo{} = True
+    isGitSyncJob BackgroundJobs.GitSyncRepository{} = True
     isGitSyncJob BackgroundJobs.GitSyncPushAllDashboards{} = True
     isGitSyncJob _ = False
 
@@ -353,14 +356,19 @@ spec = sequential do
         (fromJust dashM).filePath `shouldBe` Just "dashboards/test.yaml"
         (fromJust dashM).fileSha `shouldBe` Just "abc123"
 
-      it "gets git state for project" \tr -> do
-        d1 <- createDash tr "State A" []
-        d2 <- createDash tr "State B" []
-        _ <- runTestBg frozenTime tr $ GitSync.updateDashboardGitInfo d1 "dashboards/a.yaml" "sha-a"
-        _ <- runTestBg frozenTime tr $ GitSync.updateDashboardGitInfo d2 "dashboards/b.yaml" "sha-b"
-        gitState <- runTestBg frozenTime tr $ GitSync.getDashboardGitState testPid
-        M.lookup "dashboards/a.yaml" gitState `shouldBe` Just (d1, "sha-a")
-        M.lookup "dashboards/b.yaml" gitState `shouldBe` Just (d2, "sha-b")
+      it "gets git state for repository" \tr ->
+        bracket
+          (runQueryEffect tr (GitSync.insertGitHubSync (encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing "acme" "dashboards" "main" (GitSync.AppInstallation 42) Nothing "") >>= maybe (fail "Expected repository connection") pure)
+          (\sync -> void $ runQueryEffect tr $ GitSync.deleteGitHubSync sync.id)
+          \sync -> do
+            d1 <- createDash tr "State A" []
+            d2 <- createDash tr "State B" []
+            for_ [d1, d2] \did -> runQueryEffect tr (GitSync.assignDashboardRepository testPid did sync.id) `shouldReturn` Right ()
+            _ <- runTestBg frozenTime tr $ GitSync.updateDashboardGitInfo d1 "a.yaml" "sha-a"
+            _ <- runTestBg frozenTime tr $ GitSync.updateDashboardGitInfo d2 "b.yaml" "sha-b"
+            gitState <- runTestBg frozenTime tr $ GitSync.getRepositoryDashboardState testPid sync.id
+            M.lookup "a.yaml" gitState `shouldBe` Just (d1, "sha-a")
+            M.lookup "b.yaml" gitState `shouldBe` Just (d2, "sha-b")
 
     describe "Job Queuing" do
       it "queues push job when sync enabled" \tr -> do

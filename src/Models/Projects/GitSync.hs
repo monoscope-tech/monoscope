@@ -8,17 +8,29 @@
 module Models.Projects.GitSync (
   GitHubSync (..),
   GitHubSyncId,
+  Repository (..),
+  RepositoryId,
+  getRepositories,
+  getRepository,
+  connectRepository,
+  enableRepositoryDashboardSync,
   SyncAction (..),
   getGitHubSync,
-  getGitHubSyncDecrypted,
-  getGitSyncByRepo,
+  getGitSyncs,
+  getGitSyncsDecrypted,
+  getGitSyncById,
+  getGitSyncsByRepo,
   insertGitHubSync,
   updateGitHubSync,
   updateLastRevision,
   setAnnouncedRevision,
   clearAnnouncedRevision,
+  recordSyncError,
+  recordPushSuccess,
   deleteGitHubSync,
-  getDashboardGitState,
+  getRepositoryDashboardState,
+  assignDashboardRepository,
+  DashboardRepositoryError (..),
   updateDashboardGitInfo,
   GitCreds (..),
   mkGitCreds,
@@ -81,6 +93,7 @@ import Effectful.Log (Log)
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
+import Hasql.Transaction.Sessions qualified as TxS
 import Jose.Jwa (JwsAlg (RS256))
 import Jose.Jws qualified as Jws
 import Jose.Jwt (Jwt (..))
@@ -107,11 +120,65 @@ type GitHubSyncId = UUIDId "github_sync"
 type GitHubCredentialId = UUIDId "github_credential"
 
 
--- | The one repository a project keeps its own dashboard and monitor YAML in.
+type RepositoryId = UUIDId "repository"
+
+
+-- | A project connection retained independently of its enabled capabilities.
+data Repository = Repository
+  { id :: RepositoryId
+  , projectId :: ProjectId
+  , host :: Git.GitHost
+  , apiBase :: Maybe Text
+  , owner :: Text
+  , repo :: Text
+  , createdAt :: UTCTime
+  , credentialId :: Maybe GitHubCredentialId
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (FromRow, HI.DecodeRow, NFData, ToRow)
+  deriving (Entity) via (GenericEntity '[Schema "projects", TableName "repositories", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Repository)
+
+
+getRepositories :: DB es => ProjectId -> Eff es [Repository]
+getRepositories pid = Hasql.interp (selectFrom @Repository <> [HI.sql| WHERE project_id = #{pid} ORDER BY owner, repo, host, api_base |])
+
+
+getRepository :: DB es => ProjectId -> RepositoryId -> Eff es (Maybe Repository)
+getRepository pid rid = Hasql.interp (selectFrom @Repository <> [HI.sql| WHERE project_id = #{pid} AND id = #{rid} |])
+
+
+connectRepository :: DB es => ProjectId -> GitHubCredentialId -> Git.GitRepo -> Eff es (Maybe Repository)
+connectRepository pid cid repository =
+  let (owner, repo) = Git.splitFullName repository.fullName
+   in Hasql.interp
+        [HI.sql| INSERT INTO projects.repositories (project_id, host, api_base, owner, repo, credential_id)
+                 SELECT project_id, host, api_base, #{owner}, #{repo}, id FROM projects.git_credentials
+                 WHERE project_id = #{pid} AND id = #{cid}
+                 ON CONFLICT (project_id, host, api_base, owner, repo) DO UPDATE SET credential_id = EXCLUDED.credential_id
+                 RETURNING * |]
+
+
+enableRepositoryDashboardSync :: DB es => ProjectId -> RepositoryId -> GitHubCredentialId -> Text -> Text -> Maybe Text -> Eff es (Maybe GitHubSync)
+enableRepositoryDashboardSync pid rid cid branch prefix secret =
+  Hasql.interp
+    [HI.sql| WITH connected AS (
+               UPDATE projects.repositories r SET credential_id = c.id
+               FROM projects.git_credentials c
+               WHERE r.project_id = #{pid} AND r.id = #{rid} AND c.project_id = r.project_id AND c.id = #{cid}
+                 AND c.host = r.host AND c.api_base IS NOT DISTINCT FROM r.api_base
+               RETURNING r.*
+             )
+             INSERT INTO projects.git_sync (project_id, host, api_base, owner, repo, branch, installation_id, access_token, webhook_secret, path_prefix)
+             SELECT r.project_id, r.host, r.api_base, r.owner, r.repo, #{branch}, c.installation_id, c.access_token, #{secret}, #{prefix}
+             FROM connected r JOIN projects.git_credentials c ON c.id = r.credential_id
+             ON CONFLICT (project_id, host, api_base, owner, repo) DO NOTHING
+             RETURNING * |]
+
+
+-- | Dashboard file configuration for one repository.
 --
--- Field order matches the physical column order of @projects.git_sync@, because
--- 'HI.DecodeRow' is positional and some statements return the whole row. @host@ and @apiBase@
--- are last for the same reason: 0125 appended them.
+-- Field order matches @projects.git_sync@: positional decoding includes columns
+-- appended by migrations.
 data GitHubSync = GitHubSync
   { id :: GitHubSyncId
   , projectId :: ProjectId
@@ -138,6 +205,8 @@ data GitHubSync = GitHubSync
   , announcedAt :: Maybe UTCTime
   -- ^ When that announcement arrived, so the retry it licenses cannot run forever against a
   -- sha a force-push has since made unfetchable.
+  , lastError :: Maybe Text
+  , lastSyncedAt :: Maybe UTCTime
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, HI.DecodeRow, NFData, ToRow)
@@ -145,7 +214,7 @@ data GitHubSync = GitHubSync
 
 
 instance Default GitHubSync where
-  def = GitHubSync (UUIDId UUID.nil) (UUIDId UUID.nil) "" "" "main" Nothing Nothing "" Nothing Nothing True epoch epoch Git.GitHub Nothing Nothing Nothing
+  def = GitHubSync (UUIDId UUID.nil) (UUIDId UUID.nil) "" "" "main" Nothing Nothing "" Nothing Nothing True epoch epoch Git.GitHub Nothing Nothing Nothing Nothing Nothing
     where
       epoch = posixSecondsToUTCTime 0
 
@@ -234,9 +303,8 @@ credentialConn c = Git.mkGitConn c.host c.apiBase
 
 -- | A grant to read an account's repositories, held per project.
 --
--- Separate from 'GitHubSync' because they answer different questions: a sync row is /the/
--- repo monoscope keeps its own YAML in (one per project), while a project's services live in
--- as many repos as they like. See migration 0124.
+-- A sync row configures dashboard files in one repository; an account grant can supply
+-- source access for several service repositories.
 data GitHubCredential = GitHubCredential
   { id :: GitHubCredentialId
   , projectId :: ProjectId
@@ -261,11 +329,6 @@ credentialCreds c = mkGitCreds c.installationId c.accessToken
 
 
 -- | A project's grants, most recently granted first.
---
--- The order is load-bearing: 'Pages.CodeContext.codeContextCredential' falls back to the head
--- of this list when no grant matches the config-sync repo's account. Ordering by account name
--- made that fallback alphabetical, so a stray grant could outrank the one the project actually
--- uses. Newest-first at least means the most recent deliberate act wins.
 getGitHubCredentials :: DB es => ProjectId -> Eff es [GitHubCredential]
 getGitHubCredentials pid = Hasql.interp (selectFrom @GitHubCredential <> [HI.sql| WHERE project_id = #{pid} ORDER BY created_at DESC |])
 
@@ -280,37 +343,45 @@ getGitHubCredential encKey pid cid =
 -- | Record a grant for an account on a host, or update the one already held for it. Idempotent
 -- because the same installation arriving twice is the same grant, not a second one.
 --
--- Keyed on @(project, host, account)@: the same login on two hosts is two grants.
+-- Keyed on project, host, server origin and account.
 upsertGitHubCredential :: DB es => ByteString -> ProjectId -> Git.GitHost -> Maybe Text -> Text -> Maybe Int64 -> Maybe Text -> Eff es (Maybe GitHubCredential)
 upsertGitHubCredential encKey pid host apiBase account instId token =
   Hasql.interp
     [HI.sql| INSERT INTO projects.git_credentials (project_id, host, api_base, account, installation_id, access_token)
              VALUES (#{pid}, #{host}, #{apiBase}, #{account}, #{instId}, #{encryptToken encKey <$> token})
-             ON CONFLICT (project_id, host, account)
-             DO UPDATE SET api_base = EXCLUDED.api_base, installation_id = EXCLUDED.installation_id, access_token = COALESCE(EXCLUDED.access_token, projects.git_credentials.access_token), updated_at = now()
+             ON CONFLICT (project_id, host, api_base, account)
+             DO UPDATE SET installation_id = EXCLUDED.installation_id, access_token = COALESCE(EXCLUDED.access_token, projects.git_credentials.access_token), updated_at = now()
              RETURNING id, project_id, account, installation_id, access_token, created_at, updated_at, host, api_base |]
 
 
 -- DB Operations
 getGitHubSync :: DB es => ProjectId -> Eff es (Maybe GitHubSync)
 getGitHubSync pid =
-  Hasql.interp
-    (selectFrom @GitHubSync <> [HI.sql| WHERE project_id = #{pid} |])
+  getGitSyncs pid <&> \case [sync] -> Just sync; _ -> Nothing
 
 
-getGitHubSyncDecrypted :: (DB es, Log :> es) => ByteString -> ProjectId -> Eff es (Maybe GitHubSync)
-getGitHubSyncDecrypted encKey pid =
-  getGitHubSync pid >>= maybe (pure Nothing) (decryptedOr "sync" pid . decryptAccessToken encKey)
+getGitSyncs :: DB es => ProjectId -> Eff es [GitHubSync]
+getGitSyncs pid = Hasql.interp (selectFrom @GitHubSync <> [HI.sql| WHERE project_id = #{pid} ORDER BY created_at, id |])
+
+
+getGitSyncById :: DB es => ProjectId -> GitHubSyncId -> Eff es (Maybe GitHubSync)
+getGitSyncById pid sid = Hasql.interp (selectFrom @GitHubSync <> [HI.sql| WHERE project_id = #{pid} AND id = #{sid} |])
+
+
+getGitSyncsDecrypted :: (DB es, Log :> es) => ByteString -> ProjectId -> Eff es [GitHubSync]
+getGitSyncsDecrypted encKey pid =
+  getGitSyncs pid
+    >>= fmap catMaybes . traverse \sync -> case decryptAccessToken encKey sync of
+      Left err -> recordSyncError sync.id ("Reconnect this repository: " <> err) >> decryptedOr "sync" pid (Left err)
+      Right plain -> pure $ Just plain
 
 
 -- | The sync row a webhook delivery is about.
 --
 -- Keyed on the host as well as the name: two hosts can both have an @acme/config@, and
 -- resolving without the host would let a push to one trigger a sync of the other.
-getGitSyncByRepo :: DB es => Git.GitHost -> Text -> Text -> Eff es (Maybe GitHubSync)
-getGitSyncByRepo host owner repo =
-  Hasql.interp
-    (selectFrom @GitHubSync <> [HI.sql| WHERE host = #{host} AND owner = #{owner} AND repo = #{repo} |])
+getGitSyncsByRepo :: DB es => Git.GitHost -> Text -> Text -> Eff es [GitHubSync]
+getGitSyncsByRepo host owner repo = Hasql.interp (selectFrom @GitHubSync <> [HI.sql| WHERE host = #{host} AND lower(owner) = lower(#{owner}) AND lower(repo) = lower(#{repo}) |])
 
 
 -- | Split the two auth states back into the two nullable columns that denote them. The sum
@@ -328,7 +399,12 @@ insertGitHubSync :: DB es => ByteString -> ProjectId -> Git.GitHost -> Maybe Tex
 insertGitHubSync encKey pid host apiBase ownerVal repoVal branchVal creds webhookSecretVal prefix = do
   let (instM, tokenM) = credColumns encKey creds
   Hasql.interp
-    [HI.sql| INSERT INTO projects.git_sync (project_id, host, api_base, owner, repo, branch, installation_id, access_token, webhook_secret, path_prefix)
+    [HI.sql| WITH registered AS (
+               INSERT INTO projects.repositories (project_id, host, api_base, owner, repo)
+               VALUES (#{pid}, #{host}, #{apiBase}, #{ownerVal}, #{repoVal})
+               ON CONFLICT (project_id, host, api_base, owner, repo) DO NOTHING
+             )
+             INSERT INTO projects.git_sync (project_id, host, api_base, owner, repo, branch, installation_id, access_token, webhook_secret, path_prefix)
              VALUES (#{pid}, #{host}, #{apiBase}, #{ownerVal}, #{repoVal}, #{branchVal}, #{instM}, #{tokenM}, #{webhookSecretVal}, #{prefix}) RETURNING * |]
 
 
@@ -339,7 +415,12 @@ updateGitHubSync :: (DB es, Time :> es) => ByteString -> GitHubSyncId -> Text ->
 updateGitHubSync encKey sid ownerVal repoVal branchVal tokenM prefixM = do
   now <- Time.currentTime
   Hasql.interp
-    [HI.sql| UPDATE projects.git_sync
+    [HI.sql| WITH registered AS (
+               INSERT INTO projects.repositories (project_id, host, api_base, owner, repo)
+               SELECT project_id, host, api_base, #{ownerVal}, #{repoVal} FROM projects.git_sync WHERE id = #{sid}
+               ON CONFLICT (project_id, host, api_base, owner, repo) DO NOTHING
+             )
+             UPDATE projects.git_sync
              SET owner = #{ownerVal}, repo = #{repoVal}, branch = #{branchVal}, sync_enabled = true, updated_at = #{now}
                , access_token = COALESCE(#{encryptToken encKey <$> tokenM}, access_token)
                , path_prefix = COALESCE(#{prefixM}, path_prefix)
@@ -357,6 +438,7 @@ updateLastRevision sid rev = do
   Hasql.interpExecute
     [HI.sql| UPDATE projects.git_sync
              SET last_revision = #{rev}
+               , last_error = NULL, last_synced_at = #{now}
                , announced_revision = CASE WHEN announced_revision = #{rev} THEN NULL ELSE announced_revision END
                , announced_at = CASE WHEN announced_revision = #{rev} THEN NULL ELSE announced_at END
                , updated_at = #{now}
@@ -382,16 +464,49 @@ clearAnnouncedRevision sid =
 
 deleteGitHubSync :: DB es => GitHubSyncId -> Eff es Int64
 deleteGitHubSync sid =
-  Hasql.interpExecute
-    [HI.sql| DELETE FROM projects.git_sync WHERE id = #{sid} |]
+  Hasql.transaction TxS.ReadCommitted TxS.Write do
+    Hasql.executeTx [HI.sql| UPDATE projects.dashboards SET git_sync_id = NULL, file_path = NULL, file_sha = NULL WHERE git_sync_id = #{sid} |]
+    HI.getRowsAffected <$> Hasql.queryTx [HI.sql| DELETE FROM projects.git_sync WHERE id = #{sid} |]
 
 
-getDashboardGitState :: DB es => ProjectId -> Eff es (M.Map Text (DashboardId, Text))
-getDashboardGitState pid =
-  M.fromList
-    . fmap (\(did, path, fsha) -> (path, (did, fsha)))
-    <$> Hasql.interp
-      [HI.sql| SELECT id, file_path, file_sha FROM projects.dashboards WHERE project_id = #{pid} AND file_path IS NOT NULL AND file_sha IS NOT NULL |]
+recordSyncError :: DB es => GitHubSyncId -> Text -> Eff es Int64
+recordSyncError sid message = Hasql.interpExecute [HI.sql| UPDATE projects.git_sync SET last_error = #{message} WHERE id = #{sid} |]
+
+
+-- | A push does not verify other remote files; only a complete pull clears failures
+-- and advances the repository cursor.
+recordPushSuccess :: (DB es, Time :> es) => GitHubSyncId -> Eff es Int64
+recordPushSuccess sid = do
+  now <- Time.currentTime
+  Hasql.interpExecute [HI.sql| UPDATE projects.git_sync SET last_synced_at = #{now}, updated_at = #{now} WHERE id = #{sid} |]
+
+
+getRepositoryDashboardState :: DB es => ProjectId -> GitHubSyncId -> Eff es (M.Map Text (DashboardId, Text))
+getRepositoryDashboardState pid sid =
+  M.fromList . map (\(did, path, sha) -> (path, (did, sha)))
+    <$> Hasql.interp [HI.sql| SELECT id, file_path, file_sha FROM projects.dashboards WHERE project_id = #{pid} AND git_sync_id = #{sid} AND file_path IS NOT NULL AND file_sha IS NOT NULL |]
+
+
+data DashboardRepositoryError = DashboardMissing | RepositoryMissing | OwnedByRepository GitHubSyncId | FileOwnedByDashboard DashboardId
+  deriving stock (Eq, Show)
+
+
+assignDashboardRepository :: DB es => ProjectId -> DashboardId -> GitHubSyncId -> Eff es (Either DashboardRepositoryError ())
+assignDashboardRepository pid did sid = Hasql.transaction TxS.ReadCommitted TxS.Write do
+  repositories <- Hasql.queryTx @[GitHubSync] (selectFrom @GitHubSync <> [HI.sql| WHERE project_id = #{pid} AND id = #{sid} FOR UPDATE |])
+  dashboards <- Hasql.queryTx @[Dashboards.DashboardVM] (selectFrom @Dashboards.DashboardVM <> [HI.sql| WHERE project_id = #{pid} AND id = #{did} FOR UPDATE |])
+  case (listToMaybe repositories, listToMaybe dashboards) of
+    (Nothing, _) -> pure $ Left RepositoryMissing
+    (_, Nothing) -> pure $ Left DashboardMissing
+    (Just sync, Just dash) -> case dash.gitSyncId of
+      Just other | other /= sid -> pure $ Left $ OwnedByRepository other
+      _ -> do
+        let rawPath = fromMaybe (titleToFilePath dash.title) dash.filePath
+            path = fromMaybe rawPath $ T.stripPrefix (getDashboardsPath sync) rawPath <|> T.stripPrefix "dashboards/" rawPath
+        conflicts <- Hasql.queryTx @[HI.OneColumn DashboardId] [HI.sql| SELECT id FROM projects.dashboards WHERE git_sync_id = #{sid} AND file_path = #{path} AND id <> #{did} LIMIT 1 |]
+        case conflicts of
+          HI.OneColumn other : _ -> pure $ Left $ FileOwnedByDashboard other
+          [] -> Right () <$ Hasql.executeTx [HI.sql| UPDATE projects.dashboards SET git_sync_id = #{sid}, file_path = #{path}, file_sha = CASE WHEN git_sync_id IS NULL THEN NULL ELSE file_sha END WHERE project_id = #{pid} AND id = #{did} |]
 
 
 updateDashboardGitInfo :: (DB es, Time :> es) => DashboardId -> Text -> Text -> Eff es Int64

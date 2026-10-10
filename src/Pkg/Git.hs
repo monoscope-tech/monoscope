@@ -42,6 +42,7 @@ module Pkg.Git (
   pushFile,
   listRepos,
   defaultBranchOf,
+  fetchDefaultBranch,
   computeContentSha,
   Deployment (..),
   DeploymentStatus (..),
@@ -849,7 +850,11 @@ listRepos conn = case conn.host of
 
 -- | The repository's default branch, or @main@ when the host will not say.
 defaultBranchOf :: (IOE :> es, W.HTTP :> es) => GitConn -> RepoRef -> Eff es Text
-defaultBranchOf conn r = get_ conn (repoUrl conn r "") <&> either (const "main") (fromMaybe "main" . pick)
+defaultBranchOf conn r = fromRight "main" <$> fetchDefaultBranch conn r
+
+
+fetchDefaultBranch :: (IOE :> es, W.HTTP :> es) => GitConn -> RepoRef -> Eff es (Either Text Text)
+fetchDefaultBranch conn r = get_ conn (repoUrl conn r "") <&> (>>= maybeToRight "This repository has no default branch. Choose a branch before enabling sync." . pick)
   where
     pick body = case conn.host of
       Bitbucket -> body ^? key "mainbranch" . key "name" . _String

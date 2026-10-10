@@ -127,6 +127,7 @@ menu lang pid =
   , (I18n.t lang "nav.infrastructure", p "/infrastructure/hosts", "server")
   , (I18n.t lang "nav.api_catalog", p "/api_catalog", "swap")
   , (I18n.t lang "nav.monitors", p "/monitors", "list-check")
+  , ("Repositories", p "/repositories", "code-branch")
   , (I18n.t lang "nav.reports", p "/reports", "chart-simple")
   ]
   where
@@ -1278,6 +1279,7 @@ navBottomList pidTxt =
   , ("Team", "/p/" <> pidTxt <> "/manage_members", "users")
   , ("Integrations", "/p/" <> pidTxt <> "/settings/integrations", "arrows-turn-right")
   , ("Prometheus", "/p/" <> pidTxt <> "/settings/prometheus", "objects-column")
+  , ("Storage", "/p/" <> pidTxt <> "/byob_s3", "bucket")
   , ("Billing", "/p/" <> pidTxt <> "/manage_billing", "dollar")
   ]
 

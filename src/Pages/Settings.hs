@@ -185,14 +185,16 @@ brings3RemoveH pid = do
 
 
 bringS3GetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
-bringS3GetH pid = withSettingsPage pid "Integrations" \project -> pure $ bringS3Page pid project.s3Bucket
+bringS3GetH pid = withSettingsPage pid "Storage" \project -> pure $ bringS3Page pid project.s3Bucket
 
 
 bringS3Page :: Projects.ProjectId -> Maybe Projects.ProjectS3Bucket -> Html ()
 bringS3Page pid s3BucketM = settingsSection_ do
   headerRow_ [] do
-    settingsH2_ "S3 Bucket"
+    settingsH2_ "Storage"
     div_ [id_ "connectedInd"] $ connectionBadge_ $ bool "Not connected" "Connected" (isJust s3BucketM)
+
+  p_ [class_ "text-sm text-textWeak max-w-2xl"] "Connect your own S3-compatible bucket to store telemetry in your infrastructure. Validate the connection before saving."
 
   form_ [class_ "space-y-4", hxPost_ "", hxSwap_ "innerHTML", hxTarget_ "#connectedInd", hxIndicator_ "#indicator"] do
     div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2"] do
@@ -361,7 +363,7 @@ apiMainContent pid apiKeys newKeyM = section_ [] do
     ([("active_content", "Active keys", activeKeys, True), ("revoked_content", "Archived keys", revokedKeys, False)] :: [(Text, Text, V.Vector ProjectApiKeys.ProjectApiKey, Bool)])
     \(elemId, lbl, keys, isActive) -> do
       input_ $ [type_ "radio", name_ "api-key-tabs", role_ "tab", class_ "tab", term "aria-label" $ lbl <> " (" <> show (V.length keys) <> ")"] <> [checked_ | isActive]
-      div_ [class_ "tab-content pt-4", id_ elemId] $ toHtml $ makeApiKeysTable pid keys elemId
+      div_ [class_ "tab-content pt-4"] $ toHtml $ makeApiKeysTable pid keys elemId
 
 
 makeApiKeysTable :: Projects.ProjectId -> V.Vector ProjectApiKeys.ProjectApiKey -> Text -> Table.Table ProjectApiKeys.ProjectApiKey
@@ -695,7 +697,7 @@ prometheusPage pid cfgs = settingsSection_ do
 -- modal id, copy and POST target, so callers only supply the trigger markup.
 promTargetModal_ :: Projects.ProjectId -> Html () -> Maybe PromCfg.PrometheusScrapeConfig -> Html ()
 promTargetModal_ pid trigger mcfg =
-  modalWith_ modalId def{boxClass = "p-8"} (Just trigger) $ div_ [class_ "flex flex-col gap-5"] do
+  modalWith_ modalId def{boxClass = "w-full max-w-2xl p-4 sm:p-6", wrapperClass = "p-3 sm:p-8"} (Just trigger) $ div_ [class_ "flex flex-col gap-5"] do
     div_ do
       h2_ [class_ "text-textStrong text-xl font-semibold"] $ toHtml heading
       p_ [class_ "text-sm text-textWeak mt-1"] $ toHtml desc
@@ -733,7 +735,7 @@ promTargetModal_ pid trigger mcfg =
             input_ [type_ "checkbox", name_ "clearAuth", class_ "checkbox checkbox-sm"]
             "Clear saved token"
           field_ "extraLabels" "Static labels" "env=prod, team=core" "text" False (Just "Comma-separated key=value pairs, added to every series from this target.") (maybe "" (labelsToText . (.extraLabels)) mcfg)
-      div_ [class_ "flex items-center gap-2 border-t border-strokeWeak pt-4"] do
+      div_ [class_ "flex flex-wrap items-center gap-3 border-t border-strokeWeak pt-4"] do
         button_
           [ type_ "button"
           , class_ "btn btn-ghost gap-1.5"
@@ -743,8 +745,9 @@ promTargetModal_ pid trigger mcfg =
           , hxSwap_ "outerHTML"
           ]
           $ do faSprite_ "circle-play" "regular" "w-3.5 h-3.5"; "Test connection"
-        label_ [class_ "btn btn-ghost ml-auto", Lucid.for_ modalId] "Cancel"
-        button_ [type_ "submit", class_ "btn btn-primary"] (toHtml submitLabel)
+        div_ [class_ "ml-auto flex items-center gap-2"] do
+          label_ [class_ "btn btn-ghost", Lucid.for_ modalId] "Cancel"
+          button_ [type_ "submit", class_ "btn btn-primary"] (toHtml submitLabel)
       prometheusTestResult Nothing
   where
     base = "/p/" <> pid.toText <> "/settings/prometheus"
@@ -1349,7 +1352,7 @@ billingPage d = div_ [] do
     -- Past cycles
     pastCyclesSection_ isFree basePriceNum d.pastCycles
 
-  modalWith_ "pricing-modal" def{boxClass = "w-[1250px] max-w-[1300px] py-16 px-32", wrapperClass = "p-8"} Nothing do
+  modalWith_ "pricing-modal" def{boxClass = "w-full max-w-6xl p-4 sm:p-8 lg:px-16 lg:py-12", wrapperClass = "p-3 sm:p-8"} Nothing do
     div_ [class_ "text-center text-sm text-textWeak w-full mx-auto max-w-96"] do
       span_ [class_ "text-textStrong text-2xl font-semibold"] "Compare Plans"
       p_ [class_ "mt-2 mb-4"] "Drag the slider to estimate costs at different usage levels."

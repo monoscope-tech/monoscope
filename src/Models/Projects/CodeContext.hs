@@ -315,7 +315,13 @@ getCodeMappings pid = Hasql.interp [HI.sql|SELECT id, project_id, credential_id,
 insertCodeMapping :: DB es => ProjectId -> GitHubCredentialId -> GitSync.RepoRef -> Maybe Text -> Text -> Text -> Eff es ()
 insertCodeMapping pid credId r svc prefix root =
   Hasql.interpExecute_
-    [HI.sql|INSERT INTO projects.code_mappings (project_id, credential_id, owner, repo, ref, service, path_prefix, source_root)
+    [HI.sql|WITH registered AS (
+              INSERT INTO projects.repositories (project_id, host, api_base, owner, repo, credential_id)
+              SELECT project_id, host, api_base, #{r.owner}, #{r.repo}, id FROM projects.git_credentials
+              WHERE project_id = #{pid} AND id = #{credId}
+              ON CONFLICT (project_id, host, api_base, owner, repo) DO UPDATE SET credential_id = EXCLUDED.credential_id
+            )
+            INSERT INTO projects.code_mappings (project_id, credential_id, owner, repo, ref, service, path_prefix, source_root)
             VALUES (#{pid.unUUIDId}, #{credId.unUUIDId}, #{r.owner}, #{r.repo}, #{r.ref}, #{svc}, #{prefix}, #{root})
             ON CONFLICT (project_id, service, path_prefix)
             DO UPDATE SET credential_id = EXCLUDED.credential_id, owner = EXCLUDED.owner, repo = EXCLUDED.repo, ref = EXCLUDED.ref, source_root = EXCLUDED.source_root, updated_at = now()|]

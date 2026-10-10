@@ -92,6 +92,7 @@ data DashboardVM = DashboardVM
   , teams :: V.Vector ProjectMembers.TeamId
   , filePath :: Maybe Text
   , fileSha :: Maybe Text
+  , gitSyncId :: Maybe (UUIDId "github_sync")
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, HI.DecodeRow, NFData, ToRow)
@@ -181,7 +182,7 @@ data Tab = Tab
 
 -- | A blank dashboard row; callers override the fields they actually set.
 mkDashboardVM :: DashboardId -> Projects.ProjectId -> UTCTime -> Projects.UserId -> DashboardVM
-mkDashboardVM did pid now uid = DashboardVM{id = did, projectId = pid, createdAt = now, updatedAt = now, createdBy = uid, baseTemplate = Nothing, schema = Nothing, starredSince = Nothing, homepageSince = Nothing, tags = V.empty, title = "", teams = V.empty, filePath = Nothing, fileSha = Nothing}
+mkDashboardVM did pid now uid = DashboardVM{id = did, projectId = pid, createdAt = now, updatedAt = now, createdBy = uid, baseTemplate = Nothing, schema = Nothing, starredSince = Nothing, homepageSince = Nothing, tags = V.empty, title = "", teams = V.empty, filePath = Nothing, fileSha = Nothing, gitSyncId = Nothing}
 
 
 insert :: DB es => DashboardVM -> Eff es DashboardVM
@@ -207,12 +208,12 @@ getOrInsertByBaseTemplate d = do
 
 insertSql :: DashboardVM -> HI.Sql
 insertSql d =
-  [HI.sql| INSERT INTO projects.dashboards (id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams, file_path, file_sha)
+  [HI.sql| INSERT INTO projects.dashboards (id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams, file_path, file_sha, git_sync_id)
              VALUES (#{d.id}, #{d.projectId}, #{d.createdAt}, #{d.updatedAt}, #{d.createdBy}, #{d.baseTemplate}, #{d.schema}, #{d.starredSince}, #{d.homepageSince}, #{d.tags}, #{d.title},
                CASE WHEN cardinality(#{d.teams}::uuid[]) = 0
                  THEN ARRAY(SELECT id FROM projects.teams WHERE project_id = #{d.projectId} AND is_everyone AND deleted_at IS NULL)
                  ELSE #{d.teams}::uuid[] END,
-               #{d.filePath}, #{d.fileSha}) RETURNING teams |]
+               #{d.filePath}, #{d.fileSha}, #{d.gitSyncId}) RETURNING teams |]
 
 
 yamlFiles :: FilePath -> IO [FilePath]
@@ -314,7 +315,7 @@ getDashboardByProjectId pid did = Hasql.interpOne (selectFrom @DashboardVM <> [H
 
 
 getDashboardByFilePath :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe DashboardVM)
-getDashboardByFilePath pid fp = Hasql.interpOne (selectFrom @DashboardVM <> [HI.sql| WHERE project_id = #{pid} AND file_path = #{fp} LIMIT 1 |])
+getDashboardByFilePath pid fp = Hasql.interpOne (selectFrom @DashboardVM <> [HI.sql| WHERE project_id = #{pid} AND file_path = #{fp} AND git_sync_id IS NULL LIMIT 1 |])
 
 
 deleteDashboardsByIds :: DB es => Projects.ProjectId -> V.Vector DashboardId -> Eff es Int64

@@ -43,6 +43,7 @@ data BgJobs
   | ProcessIssuesEnhancement UTCTime
   | ReviewPullRequest (UUIDId "pr_review")
   | GitSyncFromRepo Projects.ProjectId
+  | GitSyncRepository Projects.ProjectId (UUIDId "github_sync")
   | GitSyncPushDashboard Projects.ProjectId UUID.UUID -- projectId, dashboardId
   | GitSyncPushAllDashboards Projects.ProjectId -- Push all existing dashboards to repo
   | CompressReplaySessions

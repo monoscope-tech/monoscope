@@ -1,3 +1,5 @@
+{-# LANGUAGE NoFieldSelectors #-}
+
 module Pages.Components (drawer_, drawerLoadingSkeleton_, tableSkeleton_, deferredShell_, Deferred (..), RefreshingDeferred (..), timeRefreshListener_, timeWindowVals_, withDeferredBody, emptyState_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), facetRail_, facetSection_, facetOption_, factGrid_, metaChip_, resizer_, detailTab_, httpTab_, tabPanel_, dateTime, localTimeFmt_, paymentPlanPicker, navBar, modal_, primaryButton_, headerRow_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, copyButton_, RowAction (..), rowActions_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, detailsClosedBelowAttr_, installationSettingsLink_, keyboardActivateAttr_, copySourceAttr_, filterInputAttr_, sparkline_, periodToggle_, abbreviateUnit, agoText, stackTrace_, durationMenu_, durationQuery, untilLabel) where
 
 import Data.Default (Default (..))
@@ -272,7 +274,7 @@ paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled basicA
   div_ ([class_ "flex flex-col gap-8 w-full"] <> [hxVals_ "{\"isOnboarding\": true}" | isOnboarding]) do
     unless basicAuthEnabled $ div_ [class_ "flex flex-col gap-2 w-full"] do
       div_ [class_ "flex items-center justify-between w-full gap-4"] do
-        p_ [class_ " text-textStrong"] "Total events"
+        label_ [class_ "text-textStrong", Lucid.for_ "price_range"] "Total events"
         p_ [class_ " text-textWeak", id_ "num_requests"] "25 Million"
       input_ [type_ "range", min_ "20000000", max_ "500000000", step_ "10000000", value_ "20000000", class_ "range range-primary range-sm w-full", id_ "price_range"]
     div_ [class_ "flex flex-col gap-8 mt-6 w-full"] do
@@ -771,24 +773,25 @@ data FieldCfg = FieldCfg
   , extraAttrs :: [Attribute]
   , dot :: Maybe Text -- colored circle class before label, e.g. "bg-fillError-strong"
   , suffix :: Maybe Text -- text at right edge of input, e.g. "events"
+  , id :: Maybe Text
   }
 
 
-instance Default FieldCfg where def = FieldCfg Nothing "text" "" "" [] Nothing Nothing
+instance Default FieldCfg where def = FieldCfg Nothing "text" "" "" [] Nothing Nothing Nothing
 
 
 -- | Unified form field: auto-generates input from cfg, or uses custom content when provided
 formField_ :: Monad m => FieldSize -> FieldCfg -> Text -> Text -> Bool -> Maybe (HtmlT m ()) -> HtmlT m ()
 formField_ size cfg lbl name required customM =
   fieldset_ [class_ wrapperCls] do
-    label_ [class_ labelCls, Lucid.for_ name] do
+    label_ [class_ labelCls, Lucid.for_ controlId] do
       whenJust cfg.dot \color -> div_ [class_ $ "w-1.5 h-1.5 rounded-full shrink-0 " <> color] ""
       whenJust cfg.icon \ic -> faSprite_ ic "solid" "w-4 h-4 text-iconNeutral shrink-0"
       toHtml lbl
       when required $ span_ [class_ reqCls] "*"
     fromMaybe
       ( case (cfg.inputType, cfg.suffix) of
-          ("textarea", _) -> textarea_ ([class_ textareaCls, name_ name, id_ name, placeholder_ cfg.placeholder] <> commonAttrs) $ toHtml cfg.value
+          ("textarea", _) -> textarea_ ([class_ textareaCls, name_ name, id_ controlId, placeholder_ cfg.placeholder] <> commonAttrs) $ toHtml cfg.value
           (_, Just sfx) -> div_ [class_ "relative"] do
             input_ $ [class_ $ inputCls <> " pr-14"] <> inputAttrs
             span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] $ toHtml sfx
@@ -796,8 +799,9 @@ formField_ size cfg lbl name required customM =
       )
       customM
   where
+    controlId = fromMaybe name cfg.id
     commonAttrs = [required_ "true" | required] <> cfg.extraAttrs
-    inputAttrs = [value_ cfg.value, name_ name, id_ name, type_ cfg.inputType, placeholder_ cfg.placeholder] <> commonAttrs
+    inputAttrs = [value_ cfg.value, name_ name, id_ controlId, type_ cfg.inputType, placeholder_ cfg.placeholder] <> commonAttrs
     (wrapperCls, labelCls, inputCls, textareaCls, reqCls) = case size of
       FieldSm -> ("fieldset flex-1 min-w-0", "label text-xs text-textStrong", "input input-sm w-full", "textarea textarea-sm w-full leading-relaxed", "text-textError")
       FieldMd -> ("fieldset", "label flex w-full items-center gap-1 text-textStrong", "input w-full h-12", "textarea w-full", "text-textWeak")
@@ -1099,7 +1103,7 @@ settingsNavLink_ href icon title desc =
 
 -- | \"Repository missing?\" escape hatch under GitHub-App repo pickers: the list is
 -- exactly what the installation was granted, so widening it happens on GitHub.
-installationSettingsLink_ :: Text -> Html ()
+installationSettingsLink_ :: Monad m => Text -> HtmlT m ()
 installationSettingsLink_ url =
   a_ [href_ url, target_ "_blank", rel_ "noopener", class_ "text-xs text-textBrand underline inline-flex items-center gap-1"] do
     "Repository missing? Add it to the installation on GitHub"

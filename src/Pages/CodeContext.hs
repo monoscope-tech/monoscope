@@ -5,36 +5,39 @@
 -- which reaches @Pkg.Components.Widget@, which imports @LogItem@ — a cycle. The renderer in
 -- "Pages.Components" only ever builds the URL, so nothing on the rendering side has to know
 -- this module exists.
-module Pages.CodeContext (codeContextH, codeMappingsGetH, codeMappingsPostH, codeMappingsDeleteH, CodeMappingForm (..), impactReviewSettingsPostH, impactReviewRetryH) where
+module Pages.CodeContext (codeContextH, repositoriesGetH, repositoryGetH, repositorySourceGetH, repositorySourcePostH, repositorySourceDeleteH, repositoryReviewsPostH, repositoryConnectGetH, repositoryConnectPostH, RepositoryConnectGet (..), RepositoryConnectForm (..), RepositoryGet (..), ReviewReadiness (..), RepositoryTab (..), codeMappingsGetH, codeMappingsEditorGetH, codeMappingsPostH, codeMappingsDeleteH, CodeMappingForm (..), impactReviewSettingsPostH, impactReviewRetryH) where
 
 import Data.Aeson qualified as AE
 import Data.Cache qualified as Cache
 import Data.Default (def)
 import Data.Effectful.Wreq qualified as W
+import Data.List (lookup)
 import Data.Text qualified as T
 import Effectful (Eff, IOE, (:>))
 import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static qualified
 import Lucid
 import Lucid.Aria qualified as Aria
-import Lucid.Htmx (hxDelete_, hxIndicator_, hxPost_, hxTarget_)
+import Lucid.Htmx (hxDelete_, hxGet_, hxInclude_, hxIndicator_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
 import Lucid.Hyperscript (__)
 import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ImpactReviews qualified as ImpactReviews
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
-import Pages.BodyWrapper (withSettingsPage)
-import Pages.Components (FieldCfg (..), FieldSize (..), formField_, formSelectField_, installationSettingsLink_, settingsH2_, settingsSection_)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, mkPageCtx)
+import Pages.Components (FieldCfg (..), FieldSize (..), colorChip_, filterInputAttr_, formField_, formSelectField_, installationSettingsLink_)
+import Pages.GitSync qualified as GitSyncPage
 import Pkg.Git qualified as Git
 import Pkg.ImpactReview qualified as ImpactReview
 import Relude
-import Servant (err403)
+import Servant (err403, err404)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
-import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
+import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
 import Utils (LoadingSize (..), faSprite_, htmxIndicator_, nonEmptyT, renderMarkdown)
 import Web.FormUrlEncoded (FromForm)
+import Web.HttpApiData (FromHttpApiData (..))
 
 
 -- | Source around one stack frame, read from the repository linked to the project.
@@ -69,7 +72,7 @@ codeContextH pid fileM lineM svcM revM = do
       toHtml msg
       whenJust fixPathM \path ->
         a_
-          [ href_ ("/p/" <> pid.toText <> "/settings/code-mappings?sample=" <> path)
+          [ href_ ("/p/" <> pid.toText <> "/repositories?tab=configuration&sample=" <> path)
           , class_ "not-italic text-textBrand underline shrink-0"
           ]
           "Link a repository"
@@ -101,6 +104,7 @@ data CodeMappingForm = CodeMappingForm
   , samplePath :: Maybe Text
   , pathPrefix :: Maybe Text
   , sourceRoot :: Maybe Text
+  , credentialId :: Maybe GitSync.GitHubCredentialId
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)
@@ -110,11 +114,268 @@ data CodeMappingForm = CodeMappingForm
 -- mapping, so arriving from an unmapped trace lands on a form already holding the example it
 -- needs.
 codeMappingsGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
-codeMappingsGetH pid sampleM = withSettingsPage pid "Integrations" \_ -> do
-  view <- codeMappingsContent pid sampleM
-  pure $ settingsSection_ do
-    settingsH2_ "Source Code"
-    div_ [id_ "code-mappings-content"] view
+codeMappingsGetH pid = repositoriesGetH pid (Just Configuration)
+
+
+data RepositoryTab = Overview | PullRequests | Configuration
+  deriving stock (Eq, Show)
+
+
+instance FromHttpApiData RepositoryTab where
+  parseUrlPiece value = maybe (Left "Choose overview, reviews, or configuration") Right $ lookup value [("overview", Overview), ("reviews", PullRequests), ("configuration", Configuration)]
+
+
+repositoriesGetH :: Projects.ProjectId -> Maybe RepositoryTab -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+repositoriesGetH pid tabM sampleM = do
+  (_, _, bw) <- mkPageCtx pid
+  let tab = fromMaybe Overview tabM
+      base = "/p/" <> pid.toText <> "/repositories"
+  content <- case tab of
+    Overview -> do
+      mappings <- CodeContext.getCodeMappings pid
+      syncs <- GitSync.getGitSyncs pid
+      settings <- ImpactReviews.repositorySettings pid
+      credentials <- GitSync.getGitHubCredentials pid
+      repositories <- GitSync.getRepositories pid
+      pure $ overview_ base mappings syncs settings credentials repositories
+    PullRequests -> do
+      cfg <- (.config) <$> Effectful.Reader.Static.ask @AuthContext
+      runs <- ImpactReviews.latestRuns pid
+      pure $ reviewHistory_ cfg runs
+    Configuration -> do
+      view <- codeMappingsContent pid sampleM Nothing Nothing
+      syncs <- GitSync.getGitSyncs pid
+      cfg <- (.config) <$> Effectful.Reader.Static.ask @AuthContext
+      pure $ div_ [class_ "space-y-8"] do
+        section_ [class_ "space-y-4"] do
+          h2_ [class_ "text-base font-semibold text-textStrong"] "Services and source context"
+          div_ [id_ "code-mappings-content"] view
+        section_ [class_ "space-y-4 border-t border-strokeWeak pt-6"] do
+          h2_ [class_ "text-base font-semibold text-textStrong"] "Dashboard sync"
+          div_ [id_ "git-sync-content", class_ "space-y-6"] do
+            forM_ syncs $ GitSyncPage.gitSyncSettingsView cfg.hostUrl pid . Just
+            details_ [class_ "rounded-xl border border-strokeWeak p-4"] do
+              summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] "Connect a dashboard repository"
+              div_ [class_ "pt-4"] $ GitSyncPage.gitSyncSettingsView cfg.hostUrl pid Nothing
+  addRespHeaders $ bodyWrapper bw{pageTitle = "Repositories"} $ div_ [class_ "h-full w-full overflow-y-auto"] do
+    section_ [class_ "mx-auto max-w-6xl space-y-6 px-4 py-6 sm:px-8 sm:py-8"] do
+      header_ [class_ "flex flex-wrap items-start justify-between gap-4"] do
+        div_ [class_ "space-y-1"] do
+          h1_ [class_ "text-xl sm:text-2xl font-semibold tracking-tight text-textStrong"] "Repositories"
+          p_ [class_ "text-sm text-textWeak max-w-2xl"] "Connect your code to production. Review pull requests, read source in stack traces, and sync dashboards."
+        a_ [href_ (base <> "/connect"), class_ "btn btn-sm btn-ghost gap-2"] do
+          faSprite_ "plus" "regular" "h-3.5 w-3.5"
+          "Add repositories"
+      nav_ [id_ "repository-nav", Aria.label_ "Repository views", class_ "flex flex-wrap gap-1 border-b border-strokeWeak pb-2", term "preload" "mouseover"]
+        $ forM_ ([(Overview, "Overview", ""), (PullRequests, "Pull requests", "?tab=reviews"), (Configuration, "Configuration", "?tab=configuration")] :: [(RepositoryTab, Text, Text)]) \(value, label, query) ->
+          a_
+            ( [ href_ (base <> query)
+              , hxGet_ (base <> query)
+              , hxTarget_ "#repository-content"
+              , hxSelect_ "#repository-content"
+              , hxSwap_ "outerMorph"
+              , hxPushUrl_ "true"
+              , term "hx-select-oob" "#repository-nav:outerMorph"
+              , [__|on click set my.preloadState to 'DONE'|]
+              , class_ $ "rounded-lg px-3 py-2 text-sm font-medium transition-colors " <> bool "text-textWeak hover:bg-fillWeak hover:text-textStrong" "bg-fillBrand-weak text-textBrand" (tab == value)
+              ]
+                <> [term "aria-current" "page" | tab == value]
+            )
+            $ toHtml @Text label
+      section_ [id_ "repository-content", class_ "min-w-0"] content
+  where
+    overview_ :: Text -> [CodeContext.CodeMapping] -> [GitSync.GitHubSync] -> [ImpactReviews.ReviewSettings] -> [GitSync.GitHubCredential] -> [GitSync.Repository] -> Html ()
+    overview_ base mappings syncs settings credentials repositories = do
+      let linked = [((c.host, c.apiBase, m.owner, m.repo), m) | m <- mappings, c <- credentials, c.id == m.credentialId]
+      if null repositories
+        then div_ [class_ "rounded-xl border border-strokeWeak p-6 sm:p-8 space-y-3"] do
+          h2_ [class_ "font-semibold text-textStrong"] "Connect the repositories behind your services"
+          p_ [class_ "text-sm text-textWeak max-w-xl"] "Link services to their code for source context and production impact reviews. You can also connect repositories that only contain dashboards."
+          a_ [href_ (base <> "/connect"), class_ "btn btn-sm btn-primary"] "Connect repositories"
+        else div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak"] $ forM_ repositories \repository -> do
+          let host = repository.host
+              origin = repository.apiBase
+              owner = repository.owner
+              repo = repository.repo
+              key = (host, origin, owner, repo)
+              services = sort . ordNub $ mapMaybe (\(repoKey, m) -> guard (repoKey == key) *> m.service) linked
+              reviewM = find (\s -> host == Git.GitHub && isNothing origin && s.owner == T.toLower owner && s.repo == T.toLower repo) settings
+              sync = find (\s -> (s.host, s.apiBase, s.owner, s.repo) == key) syncs
+          article_ [class_ "grid gap-4 p-4 sm:p-5 lg:grid-cols-3"] do
+            div_ [class_ "min-w-0 space-y-2"] do
+              a_ [href_ (base <> "/" <> repository.id.toText), class_ "font-medium text-sm text-textBrand break-all hover:underline"] $ toHtml (owner <> "/" <> repo)
+              p_ [class_ "text-xs text-textWeak break-all"] $ toHtml $ fromMaybe (Git.hostLabel host) origin
+              p_ [class_ "text-xs text-textWeak break-words"] $ toHtml $ if null services then "No services linked" else T.intercalate ", " services
+            div_ [class_ "space-y-2"] do
+              p_ [class_ "text-xs font-medium text-textWeak"] "Production impact reviews"
+              case reviewM of
+                Just s | s.enabled && not (null services) -> colorChip_ "text-textSuccess bg-fillSuccess-weak" "circle-check" "Enabled"
+                Just s | s.enabled -> colorChip_ "text-textWarning bg-fillWarning-weak" "circle-info" "Link a service"
+                Just _ -> colorChip_ "" "circle-info" "Off"
+                Nothing -> colorChip_ "" "circle-info" "Not configured"
+            div_ [class_ "space-y-2"] do
+              p_ [class_ "text-xs font-medium text-textWeak"] "Dashboard sync"
+              case sync of
+                Just s | Just err <- s.lastError -> colorChip_ "text-textError bg-fillError-weak" "circle-exclamation" "Sync failed" >> p_ [class_ "text-xs text-textError break-words"] (toHtml err)
+                Just s | not s.syncEnabled -> colorChip_ "" "circle-info" "Paused"
+                Just s | isJust s.announcedRevision -> colorChip_ "text-textWarning bg-fillWarning-weak" "circle-info" "Changes pending"
+                Just s | isJust s.lastRevision -> colorChip_ "text-textSuccess bg-fillSuccess-weak" "circle-check" "Synced"
+                Just _ -> colorChip_ "" "circle-info" "Awaiting first sync"
+                Nothing -> colorChip_ "" "circle-info" "Not configured"
+
+    reviewHistory_ :: EnvConfig -> [ImpactReviews.ReviewRun] -> Html ()
+    reviewHistory_ cfg runs = div_ [class_ "space-y-4"] do
+      h2_ [class_ "text-base font-semibold text-textStrong"] "Production impact reviews"
+      p_ [class_ "text-sm text-textWeak max-w-2xl"] "Advisory pull request reviews connect code changes to this project's production telemetry. Configure reviews and evidence sharing for each repository in Configuration."
+      when (null runs) $ div_ [class_ "rounded-xl border border-strokeWeak p-5 space-y-2"] do
+        p_ [class_ "text-sm font-medium text-textStrong"] "No pull requests reviewed yet"
+        p_ [class_ "text-sm text-textWeak"] "Link a GitHub repository and its services to receive reviews when ready pull requests are opened or updated."
+      forM_ runs \run -> details_ [class_ "rounded-lg border border-strokeWeak p-4"] do
+        summary_ [class_ "cursor-pointer flex flex-wrap items-center gap-2 text-sm text-textStrong"] do
+          span_ [class_ "font-medium break-all"] $ toHtml (run.owner <> "/" <> run.repo <> " #" <> show run.number)
+          colorChip_ (case run.state of ImpactReviews.Completed -> "text-textSuccess bg-fillSuccess-weak"; ImpactReviews.Incomplete -> "text-textWarning bg-fillWarning-weak"; ImpactReviews.Queued -> ""; ImpactReviews.Reviewing -> "text-textBrand bg-fillBrand-weak"; ImpactReviews.Superseded -> "") "code-branch" (show run.state)
+          code_ [class_ "text-xs text-textWeak"] $ toHtml $ T.take 8 run.revision
+        whenJust run.error $ p_ [class_ "mt-2 text-sm text-textError break-words"] . toHtml
+        whenJust run.result \value -> case AE.fromJSON value of
+          AE.Error _ -> p_ [class_ "mt-2 text-sm text-textWeak"] "The saved review could not be displayed. Rerun the review."
+          AE.Success result -> div_ [class_ "prose prose-sm mt-3 max-w-none"] $ renderMarkdown (ImpactReview.renderReview cfg.hostUrl run True result)
+        when (run.revision == run.latestRevision && run.state /= ImpactReviews.Reviewing) $ button_ [class_ "btn btn-sm btn-ghost mt-3", hxPost_ ("/p/" <> pid.toText <> "/settings/pr-reviews/" <> run.id.toText <> "/rerun"), hxTarget_ "#repository-content", hxSelect_ "#repository-content", hxSwap_ "outerMorph"] "Rerun review"
+
+
+data ReviewReadiness
+  = ReviewReady ImpactReviews.ReviewSettings
+  | ReviewDisabled
+  | ReviewNeedsService
+  | ReviewNeedsApp
+  | ReviewNeedsServer
+  | ReviewUnsupportedHost
+  deriving stock (Show)
+
+
+data RepositoryGet = RepositoryGet
+  { repository :: GitSync.Repository
+  , mappings :: [CodeContext.CodeMapping]
+  , dashboardSync :: Maybe GitSync.GitHubSync
+  , reviewReadiness :: ReviewReadiness
+  }
+  deriving stock (Show)
+
+
+repositoryGetH :: Projects.ProjectId -> GitSync.RepositoryId -> ATAuthCtx (RespHeaders (PageCtx RepositoryGet))
+repositoryGetH pid rid = do
+  (_, _, bw) <- mkPageCtx pid
+  repository <- GitSync.getRepository pid rid >>= maybe (throwError err404) pure
+  credentials <- GitSync.getGitHubCredentials pid
+  allMappings <- CodeContext.getCodeMappings pid
+  syncs <- GitSync.getGitSyncs pid
+  settings <- ImpactReviews.repositorySettings pid
+  cfg <- (.config) <$> Effectful.Reader.Static.ask @AuthContext
+  let mappings = filter (mappingInRepository credentials repository) allMappings
+      dashboardSync = find (\s -> (s.host, s.apiBase, s.owner, s.repo) == (repository.host, repository.apiBase, repository.owner, repository.repo)) syncs
+      reviewSettings = find (\s -> s.owner == T.toLower repository.owner && s.repo == T.toLower repository.repo) settings
+      reviewReadiness
+        | repository.host /= Git.GitHub || isJust repository.apiBase = ReviewUnsupportedHost
+        | any T.null [cfg.githubAppWebhookSecret, cfg.githubAppId, cfg.githubAppPrivateKey] = ReviewNeedsServer
+        | not (any (isJust . (.service)) mappings) = ReviewNeedsService
+        | Just s <- reviewSettings = if s.enabled then ReviewReady s else ReviewDisabled
+        | otherwise = ReviewNeedsApp
+  addRespHeaders $ PageCtx bw{pageTitle = repository.owner <> "/" <> repository.repo} RepositoryGet{repository, mappings, dashboardSync, reviewReadiness}
+
+
+instance ToHtml RepositoryGet where
+  toHtml page = section_ [class_ "mx-auto max-w-4xl space-y-8 px-4 py-6 sm:px-8 sm:py-8"] do
+    let repository = page.repository
+        base = "/p/" <> repository.projectId.toText <> "/repositories"
+    a_ [href_ base, class_ "inline-flex items-center gap-2 text-sm text-textBrand hover:underline"] do
+      faSprite_ "arrow-left" "regular" "h-3 w-3"
+      "All repositories"
+    header_ [class_ "space-y-2"] do
+      h1_ [class_ "text-xl font-semibold text-textStrong break-all"] $ toHtml $ repository.owner <> "/" <> repository.repo
+      p_ [class_ "text-sm text-textWeak break-all"] $ toHtml $ fromMaybe (Git.hostLabel repository.host) repository.apiBase
+    section_ [class_ "space-y-3"] do
+      h2_ [class_ "text-base font-semibold text-textStrong"] "Services and source context"
+      if null page.mappings
+        then p_ [class_ "text-sm text-textWeak"] "No source paths are linked. Link a service to read the failing code directly from its stack trace."
+        else div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak"] $ forM_ page.mappings \mapping -> div_ [class_ "p-4 space-y-2"] do
+          p_ [class_ "text-sm font-medium text-textStrong break-words"] $ toHtml $ fromMaybe "All services" mapping.service
+          p_ [class_ "text-xs text-textWeak break-all"] $ toHtml $ scopeLabel mapping
+          code_ [class_ "text-xs text-textWeak break-all"] $ toHtml mapping.ref
+      a_ [href_ (base <> "/" <> repository.id.toText <> "/source"), class_ "btn btn-sm btn-ghost"] "Configure source context"
+    section_ [class_ "space-y-3"] do
+      h2_ [class_ "text-base font-semibold text-textStrong"] "Production impact reviews"
+      case page.reviewReadiness of
+        ReviewReady settings -> do
+          colorChip_ "text-textSuccess bg-fillSuccess-weak" "circle-check" "Ready for pull requests"
+          p_ [class_ "text-sm text-textWeak"] $ if settings.includeEvidence then "Reviews share production aggregates and links in GitHub." else "Reviews share links to production evidence in GitHub."
+        ReviewDisabled -> colorChip_ "" "circle-info" "Reviews disabled"
+        ReviewNeedsService -> p_ [class_ "text-sm text-textWeak"] "Link a named service so reviews can find the production telemetry for this repository."
+        ReviewNeedsApp -> p_ [class_ "text-sm text-textWeak"] "Link source context through the GitHub App to receive automatic pull request reviews. A token connection can still provide source context and dashboard sync."
+        ReviewNeedsServer -> p_ [class_ "text-sm text-textWeak"] "An administrator must configure the GitHub App and webhook before automatic reviews can run."
+        ReviewUnsupportedHost -> p_ [class_ "text-sm text-textWeak"] "Automatic pull request reviews currently support GitHub.com. Source context and dashboard sync remain available for this host."
+      div_ [class_ "flex flex-wrap gap-2"] do
+        a_ [href_ (base <> "/" <> repository.id.toText <> "/source"), class_ "btn btn-sm btn-ghost"] "Configure reviews"
+        a_ [href_ (base <> "?tab=reviews"), class_ "btn btn-sm btn-ghost"] "Review history"
+    section_ [class_ "space-y-3"] do
+      h2_ [class_ "text-base font-semibold text-textStrong"] "Dashboard sync"
+      case page.dashboardSync of
+        Nothing -> p_ [class_ "text-sm text-textWeak"] "Dashboard sync is not configured. This repository remains connected for your team."
+        Just sync -> do
+          whenJust sync.lastError $ p_ [role_ "status", class_ "text-sm text-textError break-words"] . toHtml
+          p_ [class_ "text-sm text-textWeak break-all"] $ toHtml $ sync.branch <> " · " <> GitSync.getDashboardsPath sync
+          colorChip_ "" "code-branch" $ if sync.syncEnabled then "Sync enabled" else "Sync paused"
+      a_ [href_ (base <> "/" <> repository.id.toText <> "/dashboards"), class_ "btn btn-sm btn-ghost"] "Configure dashboard sync"
+  toHtmlRaw = toHtml
+
+
+mappingInRepository :: [GitSync.GitHubCredential] -> GitSync.Repository -> CodeContext.CodeMapping -> Bool
+mappingInRepository credentials repository mapping =
+  (mapping.owner, mapping.repo) == (repository.owner, repository.repo)
+    && any (\c -> c.id == mapping.credentialId && (c.host, c.apiBase) == (repository.host, repository.apiBase)) credentials
+
+
+repositorySourceGetH :: Projects.ProjectId -> GitSync.RepositoryId -> Maybe GitSync.GitHubCredentialId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+repositorySourceGetH pid rid cid sample = do
+  (_, _, bw) <- mkPageCtx pid
+  repository <- GitSync.getRepository pid rid >>= maybe (throwError err404) pure
+  content <- codeMappingsContent pid sample cid (Just repository)
+  addRespHeaders $ bodyWrapper bw{pageTitle = "Source context"} $ section_ [class_ "mx-auto max-w-4xl space-y-6 px-4 py-6 sm:px-8 sm:py-8"] do
+    a_ [href_ ("/p/" <> pid.toText <> "/repositories/" <> rid.toText), class_ "text-sm text-textBrand hover:underline"] $ toHtml $ repository.owner <> "/" <> repository.repo
+    header_ [class_ "space-y-2"] do
+      h1_ [class_ "text-xl font-semibold text-textStrong"] "Source context"
+      p_ [class_ "text-sm text-textWeak max-w-2xl"] "Link this repository to the services it builds. Stack traces and pull request reviews use these mappings to find the right code and production telemetry."
+    div_ [id_ "code-mappings-content"] content
+
+
+repositorySourcePostH :: Projects.ProjectId -> GitSync.RepositoryId -> CodeMappingForm -> ATAuthCtx (RespHeaders (Html ()))
+repositorySourcePostH pid rid form = do
+  requireReviewWrite pid
+  repository <- GitSync.getRepository pid rid >>= maybe (throwError err404) pure
+  cid <- maybe (throwError err403) pure (form.credentialId <|> repository.credentialId)
+  account <- codeContextCredential pid (Just cid) >>= maybe (throwError err403) pure
+  unless ((account.host, account.apiBase) == (repository.host, repository.apiBase)) $ throwError err403
+  saveCodeMapping pid form{repo = Just (repository.owner <> "/" <> repository.repo), credentialId = Just account.id}
+  repositorySourceGetH pid rid (Just account.id) (nonEmptyT form.samplePath)
+
+
+repositoryReviewsPostH :: Projects.ProjectId -> GitSync.RepositoryId -> ImpactReviews.ReviewSettings -> ATAuthCtx (RespHeaders (Html ()))
+repositoryReviewsPostH pid rid settings = do
+  requireReviewWrite pid
+  repository <- GitSync.getRepository pid rid >>= maybe (throwError err404) pure
+  unless (repository.host == Git.GitHub && isNothing repository.apiBase) $ throwError err403
+  ImpactReviews.updateSettings pid settings{ImpactReviews.owner = T.toLower repository.owner, ImpactReviews.repo = T.toLower repository.repo}
+  addSuccessToast "Review settings saved" Nothing
+  repositorySourceGetH pid rid Nothing Nothing
+
+
+repositorySourceDeleteH :: Projects.ProjectId -> GitSync.RepositoryId -> CodeContext.CodeMappingId -> ATAuthCtx (RespHeaders (Html ()))
+repositorySourceDeleteH pid rid mid = do
+  requireReviewWrite pid
+  repository <- GitSync.getRepository pid rid >>= maybe (throwError err404) pure
+  credentials <- GitSync.getGitHubCredentials pid
+  mappings <- CodeContext.getCodeMappings pid
+  unless (any (\m -> m.id == mid && mappingInRepository credentials repository m) mappings) $ throwError err404
+  CodeContext.deleteCodeMapping pid mid
+  repositorySourceGetH pid rid Nothing Nothing
 
 
 -- | The panel, rebuilt from scratch after every change. Listing the account's repositories is
@@ -122,121 +383,142 @@ codeMappingsGetH pid sampleM = withSettingsPage pid "Integrations" \_ -> do
 --
 -- Without a linked account there is nothing to map onto, so the page says so and offers the
 -- one control that fixes it rather than a form whose every submission would be discarded.
-codeMappingsContent :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (Html ())
-codeMappingsContent pid sampleM = do
-  credM <- codeContextCredential pid
-  mappings <- CodeContext.getCodeMappings pid
-  repos <- maybe (pure []) credentialRepos credM
-  reviewSettings <- ImpactReviews.repositorySettings pid
-  reviewRuns <- ImpactReviews.latestRuns pid
+codeMappingsEditorGetH :: Projects.ProjectId -> Maybe GitSync.GitHubCredentialId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+codeMappingsEditorGetH pid credentialM sampleM = do
+  _ <- Projects.sessionAndProject pid
+  addRespHeaders =<< codeMappingsContent pid sampleM credentialM Nothing
+
+
+codeMappingsContent :: Projects.ProjectId -> Maybe Text -> Maybe GitSync.GitHubCredentialId -> Maybe GitSync.Repository -> ATAuthCtx (Html ())
+codeMappingsContent pid sampleM credentialM repositoryM = do
+  allAccounts <- codeContextCredentials pid
+  let accounts = filter (\c -> maybe True (\r -> (r.host, r.apiBase) == (c.host, c.apiBase)) repositoryM) allAccounts
+      requested = credentialM <|> (repositoryM >>= (.credentialId))
+  selected <- codeContextCredential pid requested
+  let credM = selected >>= \c -> guard (any ((== c.id) . (.id)) accounts && (isNothing repositoryM || isJust requested)) $> c
+  mappings <- filter (\m -> maybe True (\r -> mappingInRepository accounts r m) repositoryM) <$> CodeContext.getCodeMappings pid
+  repoResult <- maybe (pure $ Right []) credentialRepos credM
+  reviewSettings <- filter (\settings -> maybe True (\r -> r.host == Git.GitHub && isNothing r.apiBase && (settings.owner, settings.repo) == (T.toLower r.owner, T.toLower r.repo)) repositoryM) <$> ImpactReviews.repositorySettings pid
   authConfig <- (.config) <$> Effectful.Reader.Static.ask @AuthContext
-  pure $ div_ [class_ "space-y-6"] case credM of
-    Nothing -> do
-      p_ [class_ "text-sm text-textWeak"] "Stack traces show the source around the failing line, read straight from your repositories. Install the GitHub App to turn it on — the same installation also powers dashboard sync, so this is the only authorisation either needs."
-      a_ [href_ ("/p/" <> pid.toText <> "/settings/git-sync/install?to=code"), class_ "btn btn-sm btn-primary gap-2"] do
-        faSprite_ "github" "regular" "w-3.5 h-3.5"
-        "Connect GitHub"
-    Just cred -> do
-      p_ [class_ "text-sm text-textWeak"] do
-        "Reading source from "
-        code_ [class_ "text-textBrand"] $ toHtml cred.account
-        ". Link each repository your services are built from; frames outside a linked repository stay plain text."
-      if null mappings
-        then p_ [class_ "text-sm text-textWeak italic"] "No repositories linked yet."
-        else div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak"] $ forM_ mappings mappingRow_
-      addMappingForm_ repos cred.installationId
-      section_ [class_ "pt-6 space-y-3 border-t border-strokeWeak"] do
-        h3_ [class_ "text-sm font-semibold text-textStrong"] "Production impact reviews"
-        p_ [class_ "text-xs text-textWeak"] "Linked GitHub repositories receive advisory PR comments based on this project's telemetry. Ready PRs are reviewed when opened or updated."
-        when (T.null authConfig.githubAppWebhookSecret) $ p_ [class_ "text-xs text-textError"] "Reviews need a GitHub App webhook secret. Ask your Monoscope administrator to configure it."
-        when (null reviewSettings) $ p_ [class_ "text-xs text-textWeak"] "Link a repository using a GitHub App installation to enable automatic reviews."
-        forM_ reviewSettings \settings -> form_ [class_ "flex flex-wrap items-end gap-3 rounded-lg border border-strokeWeak p-3", hxPost_ ("/p/" <> pid.toText <> "/settings/pr-reviews"), hxTarget_ "#code-mappings-content"] do
-          input_ [type_ "hidden", name_ "owner", value_ settings.owner]
-          input_ [type_ "hidden", name_ "repo", value_ settings.repo]
-          span_ [class_ "text-sm font-medium text-textStrong"] $ toHtml (settings.owner <> "/" <> settings.repo)
-          label_ [class_ "text-xs text-textWeak space-y-1"] do
-            span_ [class_ "block"] "PR reviews"
-            select_ [name_ "enabled", class_ "select select-sm"] do
-              option_ ([value_ "true"] <> [selected_ "selected" | settings.enabled]) "Enabled"
-              option_ ([value_ "false"] <> [selected_ "selected" | not settings.enabled]) "Disabled"
-          label_ [class_ "text-xs text-textWeak space-y-1"] do
-            span_ [class_ "block"] "Production evidence in GitHub"
-            select_ [name_ "includeEvidence", class_ "select select-sm"] do
-              option_ ([value_ "true"] <> [selected_ "selected" | settings.includeEvidence]) "Aggregates and links"
-              option_ ([value_ "false"] <> [selected_ "selected" | not settings.includeEvidence]) "Links only"
-          button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save review settings"
-        forM_ reviewRuns \run -> details_ [class_ "rounded-lg border border-strokeWeak p-3"] do
-          summary_ [class_ "cursor-pointer text-sm text-textStrong"] $ toHtml (run.owner <> "/" <> run.repo <> " #" <> show run.number <> " · " <> show run.state <> " · " <> T.take 8 run.revision)
-          whenJust run.error $ p_ [class_ "mt-2 text-xs text-textError"] . toHtml
-          whenJust run.result \value -> case AE.fromJSON value of
-            AE.Error _ -> p_ [class_ "mt-2 text-xs text-textWeak"] "The saved review could not be displayed. Rerun the review."
-            AE.Success result -> div_ [class_ "prose prose-sm mt-2 max-w-none"] $ renderMarkdown (ImpactReview.renderReview authConfig.hostUrl run True result)
-          when (run.revision == run.latestRevision && run.state /= ImpactReviews.Reviewing) $ button_ [class_ "btn btn-xs btn-ghost mt-2", hxPost_ ("/p/" <> pid.toText <> "/settings/pr-reviews/" <> run.id.toText <> "/rerun"), hxTarget_ "#code-mappings-content"] "Rerun review"
+  pure $ div_ [class_ "space-y-6"] do
+    unless (null mappings) $ div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak"] $ forM_ mappings mappingRow_
+    unless (null accounts)
+      $ form_
+        ( [ action_ editorUrl
+          , method_ "get"
+          , hxGet_ editorUrl
+          , hxTrigger_ "change"
+          , hxTarget_ "#code-mappings-content"
+          , hxIndicator_ "#code-account-indicator"
+          , class_ "space-y-2"
+          ]
+            <> scopedSwap
+        )
+      $ do
+        input_ [type_ "hidden", name_ "sample", value_ sample]
+        formSelectField_ FieldSm "Repository account" "credentialId" True do
+          option_ ([value_ "", disabled_ "disabled"] <> [selected_ "selected" | isNothing credM]) "Choose an account"
+          forM_ accounts \account ->
+            option_
+              ([value_ account.id.toText] <> [selected_ "selected" | Just account.id == ((.id) <$> credM)])
+              $ toHtml
+              $ account.account <> " · " <> fromMaybe (Git.hostLabel account.host) account.apiBase
+        htmxIndicator_ "code-account-indicator" LdXS
+    case credM of
+      Nothing | null accounts -> do
+        p_ [class_ "text-sm text-textWeak max-w-2xl"] "Connect an account to link your services to source code and production impact reviews. The same connection can sync dashboards."
+        a_ [href_ ("/p/" <> pid.toText <> "/settings/git-sync/install?to=code"), class_ "btn btn-sm btn-primary gap-2"] do
+          faSprite_ "github" "regular" "w-3.5 h-3.5"
+          "Connect GitHub"
+      Nothing -> p_ [class_ "text-sm text-textWeak"] "Choose an account to link another repository. Existing service mappings keep their own account."
+      Just cred -> do
+        p_ [class_ "text-sm text-textWeak"] "Link a repository and the service built from it. Frames outside a linked repository stay plain text."
+        case repoResult of
+          Left _ -> div_ [role_ "alert", class_ "space-y-2"] do
+            p_ [class_ "text-sm text-textError"] "Could not load repositories from this account. Check its access or retry; you can still enter a repository name below."
+            button_ ([type_ "button", hxGet_ editorUrl, hxInclude_ "#code-mappings-content form[action]", hxTarget_ "#code-mappings-content", class_ "btn btn-sm btn-ghost"] <> scopedSwap) "Retry"
+          Right _ -> pass
+        addMappingForm_ (either (const []) id repoResult) cred
+    section_ [class_ "pt-6 space-y-3 border-t border-strokeWeak"] do
+      h3_ [class_ "text-sm font-semibold text-textStrong"] "Production impact reviews"
+      p_ [class_ "text-xs text-textWeak"] "Linked GitHub repositories receive advisory PR comments based on this project's telemetry. Ready PRs are reviewed when opened or updated."
+      when (T.null authConfig.githubAppWebhookSecret) $ p_ [class_ "text-xs text-textError"] "Reviews need a GitHub App webhook secret. Ask your Monoscope administrator to configure it."
+      when (null reviewSettings) $ p_ [class_ "text-xs text-textWeak"] "Link a repository using a GitHub App installation to enable automatic reviews."
+      forM_ reviewSettings \settings -> form_ ([class_ "flex flex-wrap items-end gap-3 rounded-lg border border-strokeWeak p-3", hxPost_ (maybe ("/p/" <> pid.toText <> "/settings/pr-reviews") ((<> "/reviews") . sourceUrl) repositoryM), hxTarget_ "#code-mappings-content"] <> scopedSwap) $ do
+        input_ [type_ "hidden", name_ "owner", value_ settings.owner]
+        input_ [type_ "hidden", name_ "repo", value_ settings.repo]
+        span_ [class_ "text-sm font-medium text-textStrong"] $ toHtml (settings.owner <> "/" <> settings.repo)
+        label_ [class_ "text-xs text-textWeak space-y-1"] do
+          span_ [class_ "block"] "PR reviews"
+          select_ [name_ "enabled", class_ "select select-sm"] do
+            option_ ([value_ "true"] <> [selected_ "selected" | settings.enabled]) "Enabled"
+            option_ ([value_ "false"] <> [selected_ "selected" | not settings.enabled]) "Disabled"
+        label_ [class_ "text-xs text-textWeak space-y-1"] do
+          span_ [class_ "block"] "Production evidence in GitHub"
+          select_ [name_ "includeEvidence", class_ "select select-sm"] do
+            option_ ([value_ "true"] <> [selected_ "selected" | settings.includeEvidence]) "Aggregates and links"
+            option_ ([value_ "false"] <> [selected_ "selected" | not settings.includeEvidence]) "Links only"
+        button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save review settings"
   where
     sample = fromMaybe "" sampleM
-
-    -- The repositories a credential reaches, for the picker.
-    --
-    -- Every host can answer this, but not always usefully: a repository-scoped GitLab or Bitbucket
-    -- token legitimately reaches exactly one repository, and a token with no listing scope reaches
-    -- none it can enumerate. An empty list is therefore a valid answer rather than a failure, and
-    -- the form keeps manual entry available for it.
-    -- Cached because it is a token exchange plus a listing call — 1.5s in front of a page that
-    -- otherwise renders in 0.2s. Only a success is stored, so a revoked grant is noticed on the
-    -- next view rather than ten minutes later.
-    credentialRepos :: GitSync.GitHubCredential -> ATAuthCtx [Git.GitRepo]
-    credentialRepos cred = do
-      ctx <- Effectful.Reader.Static.ask @AuthContext
-      liftIO (Cache.lookup ctx.repoListCache cred.id) >>= \case
-        Just repos -> pure repos
-        Nothing ->
-          W.runHTTPWreq (runExceptT $ repoConn ctx.config cred >>= ExceptT . Git.listRepos) >>= \case
-            Left err -> [] <$ Log.logWarn "Could not list repositories for code mappings" (pid, Git.hostSlug cred.host, err)
-            Right repos -> repos <$ liftIO (Cache.insert ctx.repoListCache cred.id repos)
+    sourceUrl r = "/p/" <> pid.toText <> "/repositories/" <> r.id.toText <> "/source"
+    editorUrl = maybe ("/p/" <> pid.toText <> "/settings/code-mappings/editor") sourceUrl repositoryM
+    postUrl = maybe ("/p/" <> pid.toText <> "/settings/code-mappings") sourceUrl repositoryM
+    scopedSwap = [attr | isJust repositoryM, attr <- [hxSelect_ "#code-mappings-content", hxSwap_ "outerMorph"]]
 
     -- One linked repository, read as a sentence rather than as five columns of path fragments.
     mappingRow_ :: CodeContext.CodeMapping -> Html ()
-    mappingRow_ cm = div_ [class_ "flex items-center gap-3 px-3 py-2 text-sm"] do
+    mappingRow_ cm = div_ [class_ "grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 px-3 py-3 text-sm"] do
       faSprite_ "github" "regular" "w-3.5 h-3.5 shrink-0 text-iconNeutral"
-      span_ [class_ "font-medium text-textStrong truncate"] $ toHtml (cm.owner <> "/" <> cm.repo)
-      span_ [class_ "shrink-0 rounded-sm border border-strokeWeak px-1 text-2xs text-textWeak font-mono"] $ toHtml cm.ref
-      span_ [class_ "text-2xs text-textWeak truncate"] $ toHtml (scopeLabel cm)
-      whenJust cm.service $ span_ [class_ "shrink-0 rounded-sm border border-strokeWeak px-1 text-2xs text-textWeak"] . toHtml
+      span_ [class_ "min-w-0 font-medium text-textStrong break-all"] $ toHtml (cm.owner <> "/" <> cm.repo)
       button_
-        [ class_ "ml-auto shrink-0 btn btn-xs btn-ghost text-textError gap-1"
-        , hxDelete_ ("/p/" <> pid.toText <> "/settings/code-mappings/" <> cm.id.toText)
-        , hxTarget_ "#code-mappings-content"
-        , Aria.label_ ("Unlink " <> cm.owner <> "/" <> cm.repo)
-        ]
-        do
+        ( [ class_ "ml-auto shrink-0 btn btn-xs btn-ghost text-textError gap-1"
+          , hxDelete_ (postUrl <> "/" <> cm.id.toText)
+          , hxTarget_ "#code-mappings-content"
+          , Aria.label_ ("Unlink " <> cm.owner <> "/" <> cm.repo)
+          ]
+            <> scopedSwap
+        )
+        $ do
           faSprite_ "link-slash" "regular" "w-3 h-3"
           "Unlink"
+      div_ [class_ "col-start-2 col-span-2 flex flex-wrap items-center gap-2 text-2xs text-textWeak"] do
+        span_ [class_ "rounded-sm border border-strokeWeak px-1 font-mono break-all"] $ toHtml cm.ref
+        span_ [class_ "break-words"] $ toHtml (scopeLabel cm)
+        whenJust cm.service $ span_ [class_ "rounded-sm border border-strokeWeak px-1 break-all"] . toHtml
 
     -- Add a repository. One picker and, when the paths are not already repo-relative, one
     -- pasted stack-trace line — everything else is derived or defaulted, and the raw fields stay
     -- available under Advanced for the cases the derivation cannot reach.
-    addMappingForm_ :: [Git.GitRepo] -> Maybe Int64 -> Html ()
-    addMappingForm_ repos instIdM =
+    addMappingForm_ :: [Git.GitRepo] -> GitSync.GitHubCredential -> Html ()
+    addMappingForm_ repos credential =
       form_
-        [ class_ "pt-4 space-y-3 border-t border-strokeWeak"
-        , hxPost_ ("/p/" <> pid.toText <> "/settings/code-mappings")
-        , hxTarget_ "#code-mappings-content"
-        , hxIndicator_ "#code-mapping-indicator"
-        ]
-        do
+        ( [ class_ "pt-4 space-y-3 border-t border-strokeWeak"
+          , hxPost_ postUrl
+          , hxTarget_ "#code-mappings-content"
+          , hxIndicator_ "#code-mapping-indicator"
+          ]
+            <> scopedSwap
+        )
+        $ do
+          input_ [type_ "hidden", name_ "credentialId", value_ credential.id.toText]
           div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-3"] do
             -- Each option carries its own default branch, so the Branch field below can fill
             -- itself in and a repo whose trunk is not called "main" needs no correction.
-            if null repos
-              then formField_ FieldSm def{placeholder = "checkout-service"} "Repository" "repo" True Nothing
-              else formSelectField_ FieldSm "Repository" "repo" True $ forM_ repos \r ->
-                option_ [value_ r.name, term "data-branch" r.defaultBranch] $ toHtml r.fullName
+            case repositoryM of
+              Just repository -> formField_ FieldSm def{id = Just "code-mapping-repo", value = repository.owner <> "/" <> repository.repo, extraAttrs = [readonly_ "true"]} "Repository" "repo" True Nothing
+              Nothing | null repos -> formField_ FieldSm def{id = Just "code-mapping-repo", placeholder = "checkout-service"} "Repository" "repo" True Nothing
+              Nothing -> formField_ FieldSm def{id = Just "code-mapping-repo"} "Repository" "repo" True
+                $ Just
+                $ select_ [id_ "code-mapping-repo", name_ "repo", required_ "true", class_ "select select-sm w-full cursor-pointer"]
+                $ forM_ repos \r ->
+                  option_ [value_ r.fullName, term "data-branch" r.defaultBranch] $ toHtml r.fullName
             formField_
               FieldSm
               def
-                { value = maybe "main" (.defaultBranch) (viaNonEmpty head repos)
+                { value = maybe "main" (.defaultBranch) (case repositoryM of Nothing -> listToMaybe repos; Just repository -> find ((== repository.owner <> "/" <> repository.repo) . (.fullName)) repos)
                 , placeholder = "main"
-                , extraAttrs = [[__| on load or change from #repo set my value to #repo.selectedOptions[0].dataset.branch |] | not (null repos)]
+                , extraAttrs = [[__| on load or change from #code-mapping-repo set my value to #code-mapping-repo.selectedOptions[0].dataset.branch |] | not (null repos), isNothing repositoryM]
                 }
               "Branch"
               "ref"
@@ -245,7 +527,7 @@ codeMappingsContent pid sampleM = do
             formField_ FieldSm def{placeholder = "any service"} "Only for service" "service" False Nothing
           -- The picker can only offer what the installation was granted, so a missing repository
           -- is a narrower grant rather than a bug in the list, and this is where it is widened.
-          whenJust instIdM $ installationSettingsLink_ . GitSync.installationSettingsUrl
+          whenJust credential.installationId $ installationSettingsLink_ . GitSync.installationSettingsUrl
           formField_
             FieldSm
             def{value = sample, placeholder = "/srv/app/services/checkout.py"}
@@ -259,7 +541,7 @@ codeMappingsContent pid sampleM = do
               faSprite_ "chevron-right" "solid" "w-3 h-3 transition-transform group-open:rotate-90"
               "Advanced: set the paths myself"
             div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2 pt-3"] do
-              formField_ FieldSm def{placeholder = "/srv/app/"} "Strip from frame path" "pathPrefix" False Nothing
+              formField_ FieldSm def{id = Just "code-mapping-path-prefix", placeholder = "/srv/app/"} "Strip from frame path" "pathPrefix" False Nothing
               formField_ FieldSm def{placeholder = "src"} "Directory inside the repo" "sourceRoot" False Nothing
           div_ [class_ "flex items-center gap-2"] do
             button_ [class_ "btn btn-sm btn-primary", type_ "submit"] "Link repository"
@@ -267,37 +549,134 @@ codeMappingsContent pid sampleM = do
           p_ [class_ "text-2xs text-textWeak"] "Spans that report their commit sha are read at that revision; the branch above is the fallback for those that don't."
 
 
--- | The account this project can read source from.
---
--- A project that connected GitHub for dashboard sync has already granted an installation, and
--- that installation reaches every repo in the account — so adopt it rather than asking for a
--- second authorisation to the same place. Adding an account beyond that one is installing the
--- App there, which is the same flow the git-sync settings already run.
---
--- Which one, when there are several, is the whole subtlety. A project can hold grants for more
--- than one account — a second org, or one left behind by an integration nobody uses any more —
--- and only one of them can back the panel. Taking the head of a list ordered by account name
--- meant a stray grant could sort ahead of the real one and silently decide where every snippet
--- came from, with nothing on the page saying the account shown was a pick out of several.
---
--- So prefer the account the config-sync repo actually lives in, which is the installation this
--- comment always claimed was being adopted, and fall back to the most recently granted rather
--- than the alphabetically luckiest.
-codeContextCredential :: Projects.ProjectId -> ATAuthCtx (Maybe GitSync.GitHubCredential)
-codeContextCredential pid = do
-  syncM <- GitSync.getGitHubSync pid
+-- | Cache successful provider listings; an unavailable account is distinct from an empty one.
+credentialRepos :: GitSync.GitHubCredential -> ATAuthCtx (Either Text [Git.GitRepo])
+credentialRepos cred = do
+  ctx <- Effectful.Reader.Static.ask @AuthContext
+  liftIO (Cache.lookup ctx.repoListCache cred.id) >>= \case
+    Just repos -> pure $ Right repos
+    Nothing ->
+      (runExceptT $ repoConn ctx.config cred >>= ExceptT . Git.listRepos) >>= \case
+        Left err -> Left err <$ Log.logWarn "Could not list repositories" (cred.projectId, Git.hostSlug cred.host, err)
+        Right repos -> Right repos <$ liftIO (Cache.insert ctx.repoListCache cred.id repos)
+
+
+newtype RepositoryConnectForm = RepositoryConnectForm
+  { repoFullName :: [Text]
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (FromForm)
+
+
+data RepositoryConnectGet = RepositoryConnectGet
+  { projectId :: Projects.ProjectId
+  , accounts :: [GitSync.GitHubCredential]
+  , credential :: Maybe GitSync.GitHubCredential
+  , repositories :: Either Text [Git.GitRepo]
+  , selected :: [Text]
+  , connectionError :: Maybe Text
+  }
+  deriving stock (Show)
+
+
+repositoryConnectGetH :: Projects.ProjectId -> Maybe GitSync.GitHubCredentialId -> ATAuthCtx (RespHeaders (PageCtx RepositoryConnectGet))
+repositoryConnectGetH pid cid = addRespHeaders =<< repositoryConnectPage pid cid
+
+
+repositoryConnectPage :: Projects.ProjectId -> Maybe GitSync.GitHubCredentialId -> ATAuthCtx (PageCtx RepositoryConnectGet)
+repositoryConnectPage projectId cid = do
+  (_, _, bw) <- mkPageCtx projectId
+  accounts <- codeContextCredentials projectId
+  selectedAccount <- codeContextCredential projectId cid
+  repositories <- maybe (pure $ Right []) credentialRepos selectedAccount
+  let credential = find (\account -> Just account.id == ((.id) <$> selectedAccount)) accounts
+  pure $ PageCtx bw{pageTitle = "Connect repositories"} RepositoryConnectGet{projectId, accounts, credential, repositories, selected = [], connectionError = Nothing}
+
+
+repositoryConnectPostH :: Projects.ProjectId -> Maybe GitSync.GitHubCredentialId -> RepositoryConnectForm -> ATAuthCtx (RespHeaders (PageCtx RepositoryConnectGet))
+repositoryConnectPostH pid cid form = do
+  requireReviewWrite pid
+  page <- repositoryConnectPage pid cid
+  let selected = ordNub form.repoFullName
+  result <- runExceptT do
+    account <- hoistEither $ maybeToRight "Choose an account connected to this project." page.content.credential
+    available <- hoistEither page.content.repositories
+    when (null selected) $ hoistEither $ Left "Select at least one repository."
+    repositories <- forM selected \name ->
+      hoistEither $ maybeToRight ("Repository access is unavailable: " <> name <> ". Check account access and try again.") $ find ((== name) . (.fullName)) available
+    forM_ repositories \repository -> ExceptT $ maybeToRight "This account is no longer connected. Choose another account and try again." . void <$> GitSync.connectRepository pid account.id repository
+  case result of
+    Left err -> addRespHeaders page{content = page.content{selected, connectionError = guard (isRight page.content.repositories) $> err}}
+    Right () -> do
+      addSuccessToast "Repositories connected" (Just "Choose a repository to link services or configure dashboard sync.")
+      redirectCS $ "/p/" <> pid.toText <> "/repositories"
+      addRespHeaders page
+
+
+instance ToHtml RepositoryConnectGet where
+  toHtml page = section_ [class_ "mx-auto max-w-4xl space-y-6 px-4 py-6 sm:px-8 sm:py-8"] do
+    let base = "/p/" <> page.projectId.toText <> "/repositories"
+        connectionUrl = base <> "/connect" <> foldMap (\c -> "?credentialId=" <> c.id.toText) page.credential
+    a_ [href_ base, class_ "text-sm text-textBrand hover:underline"] "All repositories"
+    header_ [class_ "space-y-2"] do
+      h1_ [class_ "text-xl font-semibold text-textStrong"] "Connect repositories"
+      p_ [class_ "text-sm text-textWeak max-w-2xl"] "Choose the codebases your teams work on. Then link their services for source context and pull request reviews, or configure dashboard sync."
+    div_ [id_ "repository-connect-content", class_ "space-y-5"] do
+      unless (null page.accounts) $ form_
+        [action_ (base <> "/connect"), method_ "get", hxGet_ (base <> "/connect"), hxTrigger_ "change", hxPushUrl_ "true", hxTarget_ "#repository-connect-content", hxSelect_ "#repository-connect-content", hxSwap_ "outerMorph", hxIndicator_ "#repository-account-indicator", class_ "space-y-2"]
+        do
+          formSelectField_ FieldSm "Repository account" "credentialId" True do
+            option_ ([value_ "", disabled_ "disabled"] <> [selected_ "selected" | isNothing page.credential]) "Choose an account"
+            forM_ page.accounts \account -> option_ ([value_ account.id.toText] <> [selected_ "selected" | Just account.id == ((.id) <$> page.credential)]) $ toHtml $ account.account <> " · " <> fromMaybe (Git.hostLabel account.host) account.apiBase
+          htmxIndicator_ "repository-account-indicator" LdXS
+      whenJust page.connectionError $ p_ [role_ "alert", class_ "text-sm text-textError break-words"] . toHtml
+      case page.credential of
+        Nothing -> p_ [class_ "text-sm text-textWeak"] $ if null page.accounts then "Connect an account to choose its repositories." else "Choose an account to see the repositories it can access."
+        Just account -> do
+          case page.repositories of
+            Left _ -> div_ [role_ "alert", class_ "space-y-3 rounded-lg border border-strokeError-weak bg-fillError-weak p-4"] do
+              p_ [class_ "text-sm text-textError"] "Could not load repositories. Retry, or ask an administrator to check this connection."
+              a_ [id_ "repository-connect-retry", href_ connectionUrl, hxGet_ connectionUrl, hxTarget_ "#repository-connect-content", hxSelect_ "#repository-connect-content", hxSwap_ "outerMorph", class_ "btn btn-sm btn-ghost"] "Retry"
+            Right [] -> p_ [role_ "status", class_ "text-sm text-textWeak"] "No repositories are available to this account. Grant repository access or connect another account."
+            Right repositories -> form_ [action_ connectionUrl, method_ "post", hxPost_ connectionUrl, hxTarget_ "#repository-connect-content", hxSelect_ "#repository-connect-content", hxSwap_ "outerMorph", hxIndicator_ "#repository-connect-indicator", class_ "space-y-4"] do
+              when (length repositories > 8) $ label_ [class_ "input input-sm w-full"] do
+                faSprite_ "magnifying-glass" "regular" "h-3.5 w-3.5 text-iconNeutral"
+                input_ [type_ "search", Aria.label_ "Filter repositories", placeholder_ "Filter repositories", class_ "grow", filterInputAttr_ ".repository-choice"]
+              div_ [class_ "max-h-96 overflow-y-auto c-scroll rounded-xl border border-strokeWeak divide-y divide-strokeWeak"] $ forM_ repositories \repository ->
+                label_ [class_ "repository-choice flex min-h-11 cursor-pointer items-center gap-3 p-3 hover:bg-fillWeak has-[:checked]:bg-fillBrand-weak", term "data-filter" (T.toLower repository.fullName)] do
+                  input_ ([type_ "checkbox", name_ "repoFullName", value_ repository.fullName, class_ "checkbox checkbox-sm shrink-0"] <> [checked_ | repository.fullName `elem` page.selected])
+                  span_ [class_ "min-w-0 flex-1 text-sm text-textStrong break-all"] $ toHtml repository.fullName
+                  when repository.private $ span_ [class_ "text-xs text-textWeak shrink-0"] "Private"
+              button_ [type_ "submit", class_ "btn btn-sm btn-primary gap-2"] do
+                "Connect selected repositories"
+                htmxIndicator_ "repository-connect-indicator" LdXS
+          whenJust account.installationId $ installationSettingsLink_ . GitSync.installationSettingsUrl
+      a_ [href_ ("/p/" <> page.projectId.toText <> "/settings/git-sync/install?to=code"), class_ "btn btn-sm btn-ghost"] "Connect GitHub account"
+      p_ [class_ "text-xs text-textWeak"] do
+        "Using another Git host or a repository token? "
+        a_ [href_ (base <> "?tab=configuration#git-sync-new"), class_ "text-textBrand underline underline-offset-2"] "Connect with a token"
+  toHtmlRaw = toHtml
+
+
+-- | Adopt existing dashboard grants when source access has not been configured yet.
+codeContextCredentials :: Projects.ProjectId -> ATAuthCtx [GitSync.GitHubCredential]
+codeContextCredentials pid =
   GitSync.getGitHubCredentials pid >>= \case
-    creds@(newest : _) -> pure $ Just $ fromMaybe newest do
-      sync <- syncM
-      find (\c -> c.host == sync.host && c.account == sync.owner) creds
-    [] -> case syncM of
-      Just sync | isJust sync.installationId || isJust sync.accessToken -> do
-        -- The sync row holds the PAT already encrypted; hand the credential the plaintext
-        -- so it is stored under this table's own encryption rather than double-wrapped.
-        encKey <- encodeUtf8 @Text . (.apiKeyEncryptionSecretKey) . (.config) <$> Effectful.Reader.Static.ask @AuthContext
-        plain <- GitSync.getGitHubSyncDecrypted encKey pid
-        GitSync.upsertGitHubCredential encKey pid sync.host sync.apiBase sync.owner sync.installationId (plain >>= (.accessToken))
-      _ -> pure Nothing
+    [] -> do
+      encKey <- encodeUtf8 @Text . (.apiKeyEncryptionSecretKey) . (.config) <$> Effectful.Reader.Static.ask @AuthContext
+      syncs <- GitSync.getGitSyncsDecrypted encKey pid
+      forM_ syncs \sync -> GitSync.upsertGitHubCredential encKey pid sync.host sync.apiBase sync.owner sync.installationId sync.accessToken
+      GitSync.getGitHubCredentials pid
+    accounts -> pure accounts
+
+
+-- | Only a single account can be chosen implicitly; posted IDs remain project-scoped.
+codeContextCredential :: Projects.ProjectId -> Maybe GitSync.GitHubCredentialId -> ATAuthCtx (Maybe GitSync.GitHubCredential)
+codeContextCredential pid requested = do
+  accounts <- codeContextCredentials pid
+  let selected = requested <|> case accounts of [account] -> Just account.id; _ -> Nothing
+  encKey <- encodeUtf8 @Text . (.apiKeyEncryptionSecretKey) . (.config) <$> Effectful.Reader.Static.ask @AuthContext
+  maybe (pure Nothing) (GitSync.getGitHubCredential encKey pid) selected
 
 
 -- | A connection to the credential's host, minted per call because installation tokens expire.
@@ -313,12 +692,20 @@ repoConn cfg cred = do
 -- that their container mounts the app at @\/srv\/app@.
 codeMappingsPostH :: Projects.ProjectId -> CodeMappingForm -> ATAuthCtx (RespHeaders (Html ()))
 codeMappingsPostH pid form = do
-  credM <- codeContextCredential pid
+  saveCodeMapping pid form
+  addRespHeaders =<< codeMappingsContent pid (nonEmptyT form.samplePath) form.credentialId Nothing
+
+
+saveCodeMapping :: Projects.ProjectId -> CodeMappingForm -> ATAuthCtx ()
+saveCodeMapping pid form = do
+  requireReviewWrite pid
+  credM <- codeContextCredential pid form.credentialId
   let sample = nonEmptyT form.samplePath
   case (credM, nonEmptyT form.repo) of
     (Just cred, Just repo) -> do
       let ref = fromMaybe "main" $ nonEmptyT form.ref
-          repoRef = GitSync.RepoRef cred.account repo ref
+          (owner, name) = case Git.splitFullName repo of ("", shortName) -> (cred.account, shortName); fullName -> fullName
+          repoRef = GitSync.RepoRef owner name ref
           typed = (fromMaybe "" form.pathPrefix, fromMaybe "" form.sourceRoot)
       derived <- case sample of
         Just s | typed == ("", "") -> deriveFromRepo cred repoRef s
@@ -330,12 +717,11 @@ codeMappingsPostH pid form = do
           -- The row is keyed on (service, path prefix), so a second repository added with the
           -- same scope silently takes the first one's place. Saying so beats leaving someone
           -- to work out why the repo they linked five minutes ago stopped resolving.
-          replaced <- find (\cm -> cm.service == svc && cm.pathPrefix == prefix && cm.repo /= repo) <$> CodeContext.getCodeMappings pid
+          replaced <- find (\cm -> cm.service == svc && cm.pathPrefix == prefix && (cm.owner, cm.repo) /= (owner, name)) <$> CodeContext.getCodeMappings pid
           CodeContext.insertCodeMapping pid cred.id repoRef svc prefix root
           addSuccessToast (repo <> " linked") $ replaced <&> \old -> "Replaced " <> old.repo <> ", which covered the same frames. Give each repository its own frame path to keep both."
-    (Nothing, _) -> addErrorToast "Connect GitHub first" Nothing
+    (Nothing, _) -> addErrorToast "Choose a repository account" (Just "Select an account connected to this project, or connect another account.")
     (_, Nothing) -> addErrorToast "Pick a repository" Nothing
-  addRespHeaders =<< codeMappingsContent pid sample
   where
     -- Work the two path fields out of one real frame path by matching it against the repo's
     -- file list. The file that matched is dropped: what the user checks is the mapping the row
@@ -356,8 +742,9 @@ codeMappingsPostH pid form = do
 
 codeMappingsDeleteH :: Projects.ProjectId -> CodeContext.CodeMappingId -> ATAuthCtx (RespHeaders (Html ()))
 codeMappingsDeleteH pid mid = do
+  requireReviewWrite pid
   CodeContext.deleteCodeMapping pid mid
-  addRespHeaders =<< codeMappingsContent pid Nothing
+  addRespHeaders =<< codeMappingsContent pid Nothing Nothing Nothing
 
 
 -- | What a mapping covers, in the terms the reader has: frame paths, not columns.
@@ -379,14 +766,14 @@ impactReviewSettingsPostH pid settings = do
   requireReviewWrite pid
   ImpactReviews.updateSettings pid settings{ImpactReviews.owner = T.toLower settings.owner, ImpactReviews.repo = T.toLower settings.repo}
   addSuccessToast "Review settings saved" Nothing
-  addRespHeaders =<< codeMappingsContent pid Nothing
+  addRespHeaders =<< codeMappingsContent pid Nothing Nothing Nothing
 
 
 impactReviewRetryH :: Projects.ProjectId -> ImpactReviews.ReviewId -> ATAuthCtx (RespHeaders (Html ()))
 impactReviewRetryH pid rid = do
   requireReviewWrite pid
   ImpactReviews.retryRun pid rid
-  addRespHeaders =<< codeMappingsContent pid Nothing
+  repositoriesGetH pid (Just PullRequests) Nothing
 
 
 requireReviewWrite :: Projects.ProjectId -> ATAuthCtx ()

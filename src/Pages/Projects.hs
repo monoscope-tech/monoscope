@@ -83,7 +83,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, mkPageCtx, s
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as SlackP
 import Pages.Bots.Utils qualified as BotUtils
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), PanelCfg (..), confirmModal_, dirtyFormSaveAttr_, emptyState_, formActionsModal_, formField_, formSelectField_, headerRow_, iconBadgeXs_, iconBadge_, infoBanner_, modalWith_, panel_, sectionLabel_, settingsH2_, settingsNavLink_, settingsSection_, tagInput_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), PanelCfg (..), confirmModal_, dirtyFormSaveAttr_, emptyState_, formActionsModal_, formField_, formSelectField_, headerRow_, iconBadgeXs_, iconBadge_, infoBanner_, modalWith_, panel_, sectionLabel_, settingsH2_, settingsSection_, tagInput_)
 import Pages.Settings qualified as Settings
 import Pkg.Components.Table (Table (..))
 import Pkg.Components.Table qualified as Table
@@ -516,7 +516,10 @@ integrationsBody IntegrationsConfig{..} = do
               , id_ "integrations-save"
               , hxPost_ [text|/p/$pid/notifications-channels|]
               , hxVals_ "js:{enabledChannels: Array.from(document.querySelectorAll('input[name=\"notifChannel\"]:checked')).map(i => i.value), phones: window.getTagValues('#phones_input'), emails: window.getTagValues('#emails_input'), slackChannels: window.getTagValues('#slack-channels-input'), includeUserIdentityInAlerts: document.querySelector('#include-user-identity-in-alerts').checked}"
-              , [__| on input or change from #notifsForm put 'Unsaved changes' into #integrations-save-status |]
+              , [__| on input or change from #notifsForm
+                  if event.target.matches('[data-tagify]') and JSON.stringify(window.getTagValues('#' + event.target.id)) is JSON.stringify(JSON.parse(event.target.getAttribute('data-tagify-initial') or '[]')) exit end
+                  put 'Unsaved changes' into #integrations-save-status
+                |]
               ]
                 <> integrationsSwapAttrs_
             )
@@ -535,14 +538,6 @@ integrationsBody IntegrationsConfig{..} = do
             label_ [Lucid.for_ "include-user-identity-in-alerts", class_ "cursor-pointer"] do
               span_ [class_ "block text-sm font-medium text-textStrong"] "Include affected user identity in alerts"
               span_ [class_ "block mt-1 text-xs text-textWeak"] "Includes the telemetry user name and email in Slack error alerts. Enabled by default; turn it off if alerts for this project must not contain PII. Tenant or project context is always included."
-
-    -- Developer tools
-    div_ [class_ "pt-6 border-t border-strokeWeak space-y-2"] do
-      sectionLabel_ "Developer Tools"
-      div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak"] do
-        settingsNavLink_ ("/p/" <> pid <> "/byob_s3") "bucket" "S3 Bucket" "Connect your own S3-compatible storage"
-        settingsNavLink_ ("/p/" <> pid <> "/settings/git-sync") "github" "GitHub Sync" "Sync dashboards to a GitHub repository"
-        settingsNavLink_ ("/p/" <> pid <> "/settings/code-mappings") "file-lines" "Source Code" "Show the failing line's source in stack traces"
 
     -- Test History
     div_ [class_ "pt-6 border-t border-strokeWeak space-y-2"] do
@@ -1113,10 +1108,10 @@ manageMembersBody pid projMembers paymentPlan teamsCount =
 
       form_ [class_ "space-y-6", hxPost_ $ "/p/" <> pid.toText <> "/manage_members", hxTarget_ settingsContentTarget, hxSwap_ "innerHTML", hxIndicator_ "#submitIndicator"] do
         div_ [class_ "space-y-2"] do
-          label_ [class_ "text-sm font-medium text-textStrong block"] "Invite new member"
-          div_ [class_ "flex gap-2"] do
-            input_ [type_ "email", name_ "emails", class_ "input input-sm input-bordered flex-1", placeholder_ "colleague@company.com", required_ "true"]
-            select_ [name_ "permissions", class_ "select select-sm select-bordered w-28", data_ "tippy-content" roleTooltip] do
+          label_ [class_ "text-sm font-medium text-textStrong block", Lucid.for_ "new-member-email"] "Invite new member"
+          div_ [class_ "flex flex-wrap gap-2"] do
+            input_ [type_ "email", name_ "emails", id_ "new-member-email", Aria.label_ "Invite new member email", class_ "input input-sm input-bordered min-w-0 w-full sm:w-auto sm:flex-1", placeholder_ "colleague@company.com", required_ "true"]
+            select_ [name_ "permissions", Aria.label_ "New member role", class_ "select select-sm select-bordered w-28", data_ "tippy-content" roleTooltip] do
               option_ [value_ "admin"] "Admin"
               option_ [value_ "edit"] "Editor"
               option_ [value_ "view"] "Viewer"
@@ -1129,7 +1124,15 @@ manageMembersBody pid projMembers paymentPlan teamsCount =
         div_ [class_ "space-y-3"] do
           headerRow_ [] do
             h3_ [class_ "text-sm font-medium text-textStrong"] $ toHtml $ "Members (" <> show (V.length projMembers) <> ")"
-            unless (V.null projMembers) $ button_ [class_ "btn btn-sm gap-1.5", disabled_ "true", id_ "saveMembersBtn", dirtyFormSaveAttr_] do
+            unless (V.null projMembers) $ button_
+              [ class_ "btn btn-sm gap-1.5"
+              , disabled_ "true"
+              , id_ "saveMembersBtn"
+              , term "formnovalidate" ""
+              , [__| on change from closest <form/> remove @disabled from me then add .btn-primary to me end
+                  on click if #new-member-email.validity.typeMismatch call #new-member-email.reportValidity() halt end
+                |]
+              ] do
               faSprite_ "check" "regular" "w-3 h-3"; "Save changes"
           div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak overflow-hidden"]
             $ if V.null projMembers
@@ -1148,11 +1151,11 @@ memberRowWithStatus pid idx prM = do
       isDisabled = not prM.active && not isOwner
   div_ [class_ $ "px-4 py-3 flex items-center gap-3" <> if isDisabled then " opacity-60" else "", id_ $ "member-" <> memberId] do
     div_ [class_ "flex-1 min-w-0"] $ div_ [class_ "flex items-center gap-2"] do
-      input_ [type_ "text", name_ "emails", value_ email, readonly_ "true", class_ $ "bg-transparent w-full text-sm truncate focus:outline-none cursor-default" <> if isDisabled then " text-textWeak" else " text-textStrong"]
+      input_ [type_ "text", name_ "emails", Aria.label_ ("Email address for " <> email), value_ email, readonly_ "true", class_ $ "bg-transparent w-full text-sm truncate focus:outline-none cursor-default" <> if isDisabled then " text-textWeak" else " text-textStrong"]
       when isOwner $ span_ [class_ "badge badge-sm bg-fillBrand-weak text-textBrand border-strokeBrand-weak"] "Owner"
       when isDisabled $ span_ [class_ "badge badge-sm bg-fillWarning-weak text-textWarning border-strokeWarning-weak"] "Disabled"
     div_ [class_ "flex items-center gap-2"] do
-      select_ [name_ "permissions", class_ $ "select select-sm select-bordered text-sm" <> if isDisabled then " opacity-50" else ""] do
+      select_ [name_ "permissions", Aria.label_ ("Role for " <> email), class_ $ "select select-sm select-bordered text-sm" <> if isDisabled then " opacity-50" else ""] do
         option_ ([value_ "admin"] <> [selected_ "" | prM.permission == ProjectMembers.PAdmin]) "Admin"
         option_ ([value_ "edit"] <> [selected_ "" | prM.permission == ProjectMembers.PEdit]) "Editor"
         option_ ([value_ "view"] <> [selected_ "" | prM.permission == ProjectMembers.PView]) "Viewer"

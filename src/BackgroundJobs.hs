@@ -306,7 +306,8 @@ processBackgroundJob authCtx bgJob =
     EnhanceIssuesWithLLM pid issueIds -> enhanceIssuesWithLLM pid issueIds
     ProcessIssuesEnhancement scheduledTime -> unlessStale "ProcessIssuesEnhancement" scheduledTime (2 * 3600) $ processIssuesEnhancement scheduledTime
     ReviewPullRequest rid -> ImpactReview.reviewPullRequest rid
-    GitSyncFromRepo pid -> gitSyncFromRepo pid
+    GitSyncFromRepo pid -> gitSyncFromRepo pid Nothing
+    GitSyncRepository pid sid -> gitSyncFromRepo pid (Just sid)
     GitSyncPushDashboard pid dashboardId -> gitSyncPushDashboard pid (UUIDId dashboardId)
     GitSyncPushAllDashboards pid -> gitSyncPushAllDashboards pid
     QueryMonitorsCheck -> checkTriggeredQueryMonitors
@@ -4766,20 +4767,27 @@ proposePathTemplates paths =
 -- it can actually address — and each of them fails in a way an operator has to be told about.
 -- Written once so a job that silently does nothing is impossible to introduce by copying the
 -- preamble and dropping an arm.
-withGitSync :: Projects.ProjectId -> (Git.GitConn -> GitSync.GitHubSync -> Eff (W.HTTP ': ATBackgroundEffects) ()) -> ATBackgroundCtx ()
-withGitSync pid k = do
+withGitSync :: Projects.ProjectId -> Maybe GitSync.GitHubSyncId -> (Git.GitConn -> GitSync.GitHubSync -> ATBackgroundCtx ()) -> ATBackgroundCtx ()
+withGitSync pid sidM k = do
   ctx <- ask @Config.AuthContext
-  GitSync.getGitHubSyncDecrypted (encodeUtf8 ctx.config.apiKeyEncryptionSecretKey) pid >>= \case
-    Nothing -> Log.logAttention "No git sync configured for project" pid
-    Just sync | not sync.syncEnabled -> Log.logInfo "Git sync disabled for project" pid
-    Just sync -> case GitSync.syncCreds sync of
-      Nothing -> Log.logAttention "Git sync row carries neither an installation nor a token" (pid, Git.hostSlug sync.host)
-      Just creds ->
-        W.runHTTPWreq $ GitSync.githubToken ctx.config.githubAppId ctx.config.githubAppPrivateKey creds >>= \case
-          Left err -> Log.logAttention "Failed to get git host token" (pid, Git.hostSlug sync.host, err)
-          Right token -> case GitSync.syncConn sync token of
-            Left err -> Log.logAttention "Git sync row does not describe a reachable host" (pid, Git.hostSlug sync.host, err)
-            Right conn -> k conn sync
+  allSyncs <- GitSync.getGitSyncsDecrypted (encodeUtf8 ctx.config.apiKeyEncryptionSecretKey) pid
+  let syncs = filter (\s -> maybe True (== s.id) sidM) allSyncs
+  when (null syncs) $ Log.logAttention "No git sync configured for project" (pid, sidM)
+  forM_ syncs \sync ->
+    if not sync.syncEnabled
+      then Log.logInfo "Git sync disabled for repository" (pid, sync.id)
+      else case GitSync.syncCreds sync of
+        Nothing -> Log.logAttention "Git sync row carries neither an installation nor a token" (pid, Git.hostSlug sync.host)
+        Just creds ->
+          GitSync.githubToken ctx.config.githubAppId ctx.config.githubAppPrivateKey creds >>= \case
+            Left err -> do
+              void $ GitSync.recordSyncError sync.id err
+              Log.logAttention "Failed to get git host token" (pid, Git.hostSlug sync.host, err)
+            Right token -> case GitSync.syncConn sync token of
+              Left err -> do
+                void $ GitSync.recordSyncError sync.id err
+                Log.logAttention "Git sync row does not describe a reachable host" (pid, Git.hostSlug sync.host, err)
+              Right conn -> k conn sync
 
 
 -- | How long to keep re-fetching for a head a webhook announced but the host will not serve.
@@ -4795,70 +4803,74 @@ announcedRevisionRetryDelay = 15
 
 
 -- | Sync dashboards from the linked repository into Monoscope.
-gitSyncFromRepo :: Projects.ProjectId -> ATBackgroundCtx ()
-gitSyncFromRepo pid = do
+gitSyncFromRepo :: Projects.ProjectId -> Maybe GitSync.GitHubSyncId -> ATBackgroundCtx ()
+gitSyncFromRepo pid sidM = do
   Log.logInfo "Starting git sync for project" pid
-  withGitSync pid \conn sync ->
+  withGitSync pid sidM \conn sync ->
     Metrics.timed Metrics.gitSyncHist [("host", OA.toAttribute $ Git.hostSlug sync.host)]
       $
       -- Scoped to the dashboards folder: it is all this job reads, it lets GitLab and Bitbucket
       -- filter server-side, and on Bitbucket it is what bounds the per-file sha backfill.
       Git.fetchTree conn (GitSync.syncRepoRef sync) (GitSync.getDashboardsPath sync)
-      >>= \case
-        Left err -> do
-          Metrics.bump Metrics.gitApiErrors [("host", OA.toAttribute $ Git.hostSlug sync.host), ("operation", OA.toAttribute ("fetch_tree" :: Text))]
-          Log.logAttention "Failed to list repository" (pid, Git.hostSlug sync.host, err)
-        Right (revision, entries)
-          -- The host answered with the head we already have, but told us over the webhook
-          -- about a different one. That is not "nothing changed" — it is the host serving a
-          -- view older than the push it announced, and accepting it drops that push for good:
-          -- nothing re-queues, so it stays unapplied until some later push happens to be
-          -- fetched freshly and sweeps it up. Chase it instead.
-          | sync.lastRevision == Just revision
-          , Just announced <- sync.announcedRevision
-          , announced /= revision -> do
-              now <- Time.currentTime
-              let waitedTooLong = maybe False (\t -> diffUTCTime now t > announcedRevisionTTL) sync.announcedAt
-              if waitedTooLong
-                then do
-                  -- A force-push can make an announced sha permanently unfetchable. Retrying
-                  -- one forever is a worse failure than the one being fixed, so give up loudly.
-                  _ <- GitSync.clearAnnouncedRevision sync.id
-                  Log.logAttention "Gave up waiting for an announced revision to become fetchable" (pid, announced, revision)
-                else do
-                  Log.logInfo "Host is behind the revision it announced, retrying" (pid, announced, revision)
-                  ctx <- ask @Config.AuthContext
-                  liftIO $ withResource ctx.jobsPool \jobsConn ->
-                    void $ scheduleJob jobsConn "background_jobs" (GitSyncFromRepo pid) (addUTCTime announcedRevisionRetryDelay now)
-          | sync.lastRevision == Just revision -> Log.logInfo "Revision unchanged, skipping sync" (pid, revision)
-          | otherwise -> do
-              dbState <- GitSync.getDashboardGitState pid
-              allTeams <- ProjectMembers.getTeamsVM pid
-              let teamMap = Map.fromList [(t.handle, t.id) | t <- allTeams]
-                  prefix = GitSync.getDashboardsPath sync
-                  actions = GitSync.buildSyncPlan prefix entries dbState
-                  creates = [a | a@GitSync.SyncCreate{} <- actions]
-                  updates = [a | a@GitSync.SyncUpdate{} <- actions]
-                  deletes = [(path, dashId) | GitSync.SyncDelete path dashId <- actions]
-              Log.logInfo "Git sync plan" ("creates" :: Text, length creates, "updates" :: Text, length updates, "deletes" :: Text, length deletes)
-              -- Fetch file contents in parallel for creates and updates
-              Ki.scoped \scope -> do
-                forM_ (creates <> updates) $ forkWithCtx scope . processGitSyncAction pid conn sync teamMap
-                Ki.atomically $ Ki.awaitAll scope
-              -- Process deletes (no HTTP needed)
-              forM_ deletes \(path, dashId) -> do
-                _ <- Dashboards.deleteDashboardsByIds pid (V.singleton dashId)
-                Log.logInfo "Deleted dashboard (removed from git)" (path, dashId)
-              _ <- GitSync.updateLastRevision sync.id revision
-              Log.logInfo "Completed git sync for project" pid
+        >>= \case
+          Left err -> do
+            void $ GitSync.recordSyncError sync.id err
+            Metrics.bump Metrics.gitApiErrors [("host", OA.toAttribute $ Git.hostSlug sync.host), ("operation", OA.toAttribute ("fetch_tree" :: Text))]
+            Log.logAttention "Failed to list repository" (pid, Git.hostSlug sync.host, err)
+          Right (revision, entries)
+            -- The host answered with the head we already have, but told us over the webhook
+            -- about a different one. That is not "nothing changed" — it is the host serving a
+            -- view older than the push it announced, and accepting it drops that push for good:
+            -- nothing re-queues, so it stays unapplied until some later push happens to be
+            -- fetched freshly and sweeps it up. Chase it instead.
+            | sync.lastRevision == Just revision
+            , Just announced <- sync.announcedRevision
+            , announced /= revision -> do
+                now <- Time.currentTime
+                let waitedTooLong = maybe False (\t -> diffUTCTime now t > announcedRevisionTTL) sync.announcedAt
+                if waitedTooLong
+                  then do
+                    -- A force-push can make an announced sha permanently unfetchable. Retrying
+                    -- one forever is a worse failure than the one being fixed, so give up loudly.
+                    _ <- GitSync.clearAnnouncedRevision sync.id
+                    Log.logAttention "Gave up waiting for an announced revision to become fetchable" (pid, announced, revision)
+                  else do
+                    Log.logInfo "Host is behind the revision it announced, retrying" (pid, announced, revision)
+                    ctx <- ask @Config.AuthContext
+                    liftIO $ withResource ctx.jobsPool \jobsConn ->
+                      void $ scheduleJob jobsConn "background_jobs" (GitSyncRepository pid sync.id) (addUTCTime announcedRevisionRetryDelay now)
+            | sync.lastRevision == Just revision -> Log.logInfo "Revision unchanged, skipping sync" (pid, revision)
+            | otherwise -> do
+                dbState <- GitSync.getRepositoryDashboardState pid sync.id
+                allTeams <- ProjectMembers.getTeamsVM pid
+                let teamMap = Map.fromList [(t.handle, t.id) | t <- allTeams]
+                    prefix = GitSync.getDashboardsPath sync
+                    actions = GitSync.buildSyncPlan prefix entries dbState
+                    creates = [a | a@GitSync.SyncCreate{} <- actions]
+                    updates = [a | a@GitSync.SyncUpdate{} <- actions]
+                    deletes = [(path, dashId) | GitSync.SyncDelete path dashId <- actions]
+                Log.logInfo "Git sync plan" ("creates" :: Text, length creates, "updates" :: Text, length updates, "deletes" :: Text, length deletes)
+                failures <- Ki.scoped \scope -> do
+                  threads <- forM (creates <> updates <> [a | a@GitSync.SyncRename{} <- actions]) $ forkWithCtx scope . processGitSyncAction pid conn sync teamMap
+                  lefts <$> Ki.atomically (traverse Ki.await threads)
+                case failures of
+                  [] -> do
+                    forM_ deletes \(path, dashId) -> do
+                      _ <- Dashboards.deleteDashboardsByIds pid (V.singleton dashId)
+                      Log.logInfo "Deleted dashboard (removed from git)" (path, dashId)
+                    _ <- GitSync.updateLastRevision sync.id revision
+                    Log.logInfo "Completed git sync for project" pid
+                  errors -> do
+                    void $ GitSync.recordSyncError sync.id $ T.intercalate "\n" errors
+                    Log.logAttention "Repository sync incomplete" (pid, sync.id, errors)
 
 
-processGitSyncAction :: (DB es, Log :> es, Time.Time :> es, W.HTTP :> es) => Projects.ProjectId -> Git.GitConn -> GitSync.GitHubSync -> Map.Map Text ProjectMembers.TeamId -> GitSync.SyncAction -> Eff es ()
+processGitSyncAction :: (DB es, Log :> es, Time.Time :> es, UUID.UUIDEff :> es, W.HTTP :> es) => Projects.ProjectId -> Git.GitConn -> GitSync.GitHubSync -> Map.Map Text ProjectMembers.TeamId -> GitSync.SyncAction -> Eff es (Either Text ())
 processGitSyncAction pid conn sync teamMap = \case
   GitSync.SyncCreate path sha ->
-    fetchAndParseDashboard conn (GitSync.syncRepoRef sync) path >>= either (Log.logAttention "Failed to sync dashboard from git" . (path,)) \schema -> do
+    fetchAndParseDashboard conn (GitSync.syncRepoRef sync) path >>= either (pure . Left . ((path <> ": ") <>)) \schema -> do
       now <- Time.currentTime
-      dashId <- UUIDId <$> liftIO UUIDV4.nextRandom
+      dashId <- UUIDId <$> UUID.genUUID
       let prefix = GitSync.getDashboardsPath sync
           relativePath = fromMaybe path $ T.stripPrefix prefix path
           teamIds = mapMaybe (`Map.lookup` teamMap) (fold schema.teams)
@@ -4871,11 +4883,13 @@ processGitSyncAction pid conn sync teamMap = \case
               , Dashboards.teams = V.fromList teamIds
               , Dashboards.filePath = Just relativePath
               , Dashboards.fileSha = Just sha
+              , Dashboards.gitSyncId = Just sync.id
               }
       _ <- Dashboards.insert dashboard
       Log.logInfo "Created dashboard from git" (relativePath, dashId)
+      pure $ Right ()
   GitSync.SyncUpdate path sha dashId ->
-    fetchAndParseDashboard conn (GitSync.syncRepoRef sync) path >>= either (Log.logAttention "Failed to sync dashboard from git" . (path,)) \schema -> do
+    fetchAndParseDashboard conn (GitSync.syncRepoRef sync) path >>= either (pure . Left . ((path <> ": ") <>)) \schema -> do
       now <- Time.currentTime
       let prefix = GitSync.getDashboardsPath sync
           relativePath = fromMaybe path $ T.stripPrefix prefix path
@@ -4884,12 +4898,14 @@ processGitSyncAction pid conn sync teamMap = \case
       _ <- Dashboards.updateTags pid dashId (V.fromList $ fold schema.tags)
       _ <- GitSync.updateDashboardGitInfo dashId relativePath sha
       Log.logInfo "Updated dashboard from git" (relativePath, dashId)
+      pure $ Right ()
   GitSync.SyncRename path sha dashId -> do
     let prefix = GitSync.getDashboardsPath sync
         relativePath = fromMaybe path $ T.stripPrefix prefix path
     _ <- GitSync.updateDashboardGitInfo dashId relativePath sha
     Log.logInfo "Renamed dashboard path from git" (relativePath, dashId)
-  GitSync.SyncDelete{} -> pass -- Handled separately
+    pure $ Right ()
+  GitSync.SyncDelete{} -> pure $ Right () -- Handled separately
 
 
 fetchAndParseDashboard :: (IOE :> es, W.HTTP :> es) => Git.GitConn -> GitSync.RepoRef -> Text -> Eff es (Either Text Dashboards.Dashboard)
@@ -4904,24 +4920,32 @@ gitSyncPushDashboard pid dashId = do
   Dashboards.getDashboardByProjectId pid dashId >>= \case
     Nothing -> Log.logAttention "Dashboard not found for git push" dashId
     Just dash | isNothing dash.schema -> Log.logInfo "Skipping git push for template-based dashboard" dashId
-    Just dash -> withGitSync pid \conn sync -> pushDashboardToGit conn sync pid dash ("Update dashboard: " <> dash.title)
+    Just dash -> do
+      sidM <- maybe (fmap (.id) <$> GitSync.getGitHubSync pid) (pure . Just) dash.gitSyncId
+      case sidM of
+        Nothing -> Log.logAttention "Choose a repository before syncing this dashboard" (pid, dashId)
+        Just sid -> withGitSync pid (Just sid) \conn sync -> pushDashboardToGit conn sync pid dash ("Update dashboard: " <> dash.title)
 
 
 -- | Render one dashboard to YAML, push it to the repo and record the new shas.
 pushDashboardToGit :: (DB es, Log :> es, Time.Time :> es, W.HTTP :> es) => Git.GitConn -> GitSync.GitHubSync -> Projects.ProjectId -> Dashboards.DashboardVM -> Text -> Eff es ()
 pushDashboardToGit conn sync pid dash message = do
-  teams <- ProjectMembers.getTeamsById pid dash.teams
-  let schema = GitSync.buildSchemaWithMeta dash.schema dash.title (V.toList dash.tags) (map (.handle) teams)
-      prefix = GitSync.getDashboardsPath sync
-      -- Strip any accidental prefix from DB path to ensure we don't get dashboards/dashboards/...
-      rawPath = fromMaybe (GitSync.titleToFilePath dash.title) dash.filePath
-      relativePath = fromMaybe rawPath $ T.stripPrefix "dashboards/" rawPath <|> T.stripPrefix prefix rawPath
-  Git.pushFile conn (GitSync.syncRepoRef sync) (prefix <> relativePath) (GitSync.dashboardToYaml schema) dash.fileSha message >>= \case
-    Left err -> Log.logAttention "Failed to push dashboard to git" (dash.id, err)
-    Right (fileSha, revision) -> do
-      void $ GitSync.updateDashboardGitInfo dash.id relativePath fileSha
-      void $ GitSync.updateLastRevision sync.id revision
-      Log.logInfo "Successfully pushed dashboard to git" (dash.id, fileSha)
+  GitSync.assignDashboardRepository pid dash.id sync.id >>= \case
+    Left err -> Log.logAttention "Dashboard repository ownership conflict" (pid, dash.id, sync.id, show @Text err)
+    Right () -> do
+      teams <- ProjectMembers.getTeamsById pid dash.teams
+      let schema = GitSync.buildSchemaWithMeta dash.schema dash.title (V.toList dash.tags) (map (.handle) teams)
+          prefix = GitSync.getDashboardsPath sync
+          rawPath = fromMaybe (GitSync.titleToFilePath dash.title) dash.filePath
+          relativePath = fromMaybe rawPath $ T.stripPrefix "dashboards/" rawPath <|> T.stripPrefix prefix rawPath
+      Git.pushFile conn (GitSync.syncRepoRef sync) (prefix <> relativePath) (GitSync.dashboardToYaml schema) (guard (isJust dash.gitSyncId) *> dash.fileSha) message >>= \case
+        Left err -> do
+          void $ GitSync.recordSyncError sync.id err
+          Log.logAttention "Failed to push dashboard to git" (dash.id, err)
+        Right (fileSha, revision) -> do
+          void $ GitSync.updateDashboardGitInfo dash.id relativePath fileSha
+          void $ GitSync.recordPushSuccess sync.id
+          Log.logInfo "Successfully pushed dashboard to git" (dash.id, fileSha, revision)
 
 
 -- | Push all dashboards from a project to GitHub (used after initial repo connection)
@@ -4929,8 +4953,9 @@ pushDashboardToGit conn sync pid dash message = do
 gitSyncPushAllDashboards :: Projects.ProjectId -> ATBackgroundCtx ()
 gitSyncPushAllDashboards pid = do
   Log.logInfo "Pushing all dashboards to git host" pid
-  withGitSync pid \conn sync -> do
-    syncableDashboards <- filter (isJust . (.schema)) <$> Dashboards.selectDashboardsSortedBy pid "updated_at"
+  singleSync <- GitSync.getGitHubSync pid
+  withGitSync pid Nothing \conn sync -> do
+    syncableDashboards <- filter (\d -> isJust d.schema && (d.gitSyncId == Just sync.id || (isNothing d.gitSyncId && isJust singleSync))) <$> Dashboards.selectDashboardsSortedBy pid "updated_at"
     Log.logInfo "Found dashboards to push" (pid, length syncableDashboards)
     forM_ syncableDashboards \dash -> pushDashboardToGit conn sync pid dash ("Sync dashboard: " <> dash.title)
     Log.logInfo "Finished pushing all dashboards" pid
