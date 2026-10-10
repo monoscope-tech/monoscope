@@ -119,14 +119,14 @@ tabs:
             title: Status Code
           - field: count
             title: Count
-            columnType: number
+            column_type: number
             progress: column_percent
           - field: pct
             title: '% of Total'
             progress: value_percent
           - field: avg_latency
             title: Avg Latency
-            columnType: duration
+            column_type: duration
             unit: ms
             progress: column_percent
         sql: |
@@ -154,11 +154,11 @@ tabs:
             title: Operation
           - field: calls
             title: Calls
-            columnType: number
+            column_type: number
             progress: column_percent
           - field: avg_latency
             title: Avg Latency
-            columnType: duration
+            column_type: duration
             unit: ms
             progress: column_percent
           - field: error_rate
@@ -505,16 +505,16 @@ tabs:
             title: Page
           - field: requests
             title: Requests
-            columnType: number
+            column_type: number
             progress: column_percent
           - field: errors
             title: Errors
-            columnType: number
+            column_type: number
             progress: column_percent
             progress_variant: error
           - field: p75_ms
             title: P75
-            columnType: duration
+            column_type: duration
             unit: ms
         sql: |
           SELECT
@@ -544,7 +544,7 @@ tabs:
             title: Replay
           - field: errors
             title: Errors
-            columnType: number
+            column_type: number
             progress: column_percent
             progress_variant: error
           - field: last_seen
@@ -580,20 +580,20 @@ tabs:
             title: Browser
           - field: sessions
             title: Sessions
-            columnType: number
+            column_type: number
             progress: column_percent
           - field: requests
             title: Requests
-            columnType: number
+            column_type: number
             progress: column_percent
           - field: errors
             title: Errors
-            columnType: number
+            column_type: number
             progress: column_percent
             progress_variant: error
           - field: p75_ms
             title: P75
-            columnType: duration
+            column_type: duration
             unit: ms
         sql: |
           SELECT
@@ -628,13 +628,13 @@ tabs:
             title: Vital
           - field: p75
             title: P75
-            columnType: number
+            column_type: number
           - field: samples
             title: Correlated Samples
-            columnType: number
+            column_type: number
           - field: sessions
             title: Affected Sessions
-            columnType: number
+            column_type: number
         sql: |
           WITH endpoint_sessions AS (
             SELECT DISTINCT attributes___session___id AS session_id
@@ -690,7 +690,7 @@ tabs:
         columns:
           - field: operations
             title: Operations
-            columnType: number
+            column_type: number
           - field: error_rate
             title: Error Rate
             unit: '%'
@@ -698,11 +698,11 @@ tabs:
             progress_variant: error
           - field: avg_ms
             title: Avg Call Time
-            columnType: duration
+            column_type: duration
             unit: ms
           - field: traces
             title: Affected Traces
-            columnType: number
+            column_type: number
         sql: |
           WITH rollup AS (
             SELECT bucket AS timestamp, target_key, req_count, trace_count, error_count, sum_duration_ns
@@ -728,7 +728,7 @@ tabs:
             link: '/p/{{project_id}}/service_map'
           - field: traces
             title: Traces
-            columnType: number
+            column_type: number
             progress: column_percent
           - field: error_rate
             title: Error Rate
@@ -737,11 +737,11 @@ tabs:
             progress_variant: error
           - field: p95_ms
             title: P95 Call Time
-            columnType: duration
+            column_type: duration
             unit: ms
           - field: avg_ms
             title: Average
-            columnType: duration
+            column_type: duration
             unit: ms
         sql: |
           WITH rollup AS (

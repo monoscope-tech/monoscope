@@ -1667,7 +1667,7 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
                   thresholdField_ "alert_threshold" "Alert threshold" "widgetAlertThreshold" widgetToUse.alertThreshold "bg-fillError-strong" False
                 div_ [class_ "max-w-xs", term "hx-on:change" [text|widgetJSON.show_threshold_lines = event.target.value; htmx.trigger(document.getElementById('${widgetPreviewId}'), 'update-widget')|]]
                   $ Components.formSelectField_ Components.FieldSm "Show threshold lines" "widgetShowThresholdLines" False
-                  $ Components.options_ (Just $ fromMaybe "always" widgetToUse.showThresholdLines) [("always", "Always"), ("on_breach", "Only when breached"), ("never", "Never")]
+                  $ Components.options_ (Just $ maybe "always" display widgetToUse.showThresholdLines) [("always", "Always"), ("on_breach", "Only when breached"), ("never", "Never")]
 
           when isNewWidget $ label_ [Lucid.for_ monitorToggleId, class_ "flex cursor-pointer items-center justify-between gap-4 rounded-xl border border-strokeWeak bg-fillWeaker p-4 hover:bg-fillWeak has-[:checked]:border-strokeBrand-strong has-[:checked]:bg-fillBrand-weak"] do
             div_ [class_ "space-y-1"] do

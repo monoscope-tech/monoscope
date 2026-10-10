@@ -865,7 +865,7 @@ unifiedOverviewPage pid alert currTime teams slackDataM discordDataM = do
               , Widget.layout = Just (def{Widget.w = Just 12, Widget.h = Just 6})
               , Widget.alertThreshold = Just alert.alertThreshold
               , Widget.warningThreshold = alert.warningThreshold
-              , Widget.showThresholdLines = Just "always"
+              , Widget.showThresholdLines = Just Widget.TLAlways
               }
       div_ [class_ "max-md:hidden w-78 shrink-0"] $ alertSidebar_ display alert currTime
 

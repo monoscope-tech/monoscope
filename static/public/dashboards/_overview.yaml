@@ -190,11 +190,11 @@ tabs:
           - field: apdex
             sortable: true
             title: Apdex
-            columnType: number
+            column_type: number
           - field: throughput
             sortable: true
             title: Throughput
-            columnType: number
+            column_type: number
             unit: req/min
             progress: column_percent
           - field: error_rate
@@ -206,7 +206,7 @@ tabs:
           - field: p95_latency
             sortable: true
             title: P95
-            columnType: duration
+            column_type: duration
             unit: ms
             progress: column_percent
         sql: |
@@ -305,12 +305,12 @@ tabs:
           - field: queries
             sortable: true
             title: Queries
-            columnType: number
+            column_type: number
             progress: column_percent
           - field: avg_ms
             sortable: true
             title: Avg
-            columnType: duration
+            column_type: duration
             unit: ms
           - field: error_rate
             sortable: true
@@ -529,24 +529,24 @@ tabs:
           - field: requests
             sortable: true
             title: Requests
-            columnType: number
+            column_type: number
             progress: column_percent
           - field: total_time
             sortable: true
             title: Total Time
-            columnType: duration
+            column_type: duration
             unit: s
             progress: column_percent
           - field: p95_latency
             sortable: true
             title: P95 Latency
-            columnType: duration
+            column_type: duration
             unit: ms
             progress: column_percent
           - field: errors
             sortable: true
             title: Errors
-            columnType: number
+            column_type: number
             progress: column_percent
             progress_variant: error
           - field: error_rate
@@ -626,12 +626,12 @@ tabs:
           - field: avg_duration
             sortable: true
             title: Avg Duration
-            columnType: duration
+            column_type: duration
             unit: ms
           - field: span_count
             sortable: true
             title: Trace Count
-            columnType: number
+            column_type: number
         sql: |
           SELECT
             COALESCE(resource___service___name,'Unknown') AS resource_name,
@@ -662,7 +662,7 @@ tabs:
           - field: count
             sortable: true
             title: Count
-            columnType: number
+            column_type: number
             progress: column_percent
           - field: error_rate
             sortable: true
@@ -673,13 +673,13 @@ tabs:
           - field: avg_duration
             sortable: true
             title: Avg Duration
-            columnType: duration
+            column_type: duration
             unit: ms
             progress: column_percent
           - field: p95_duration
             sortable: true
             title: P95 Duration
-            columnType: duration
+            column_type: duration
             unit: ms
             progress: column_percent
         sql: |
@@ -861,22 +861,22 @@ tabs:
           - field: count
             sortable: true
             title: Count
-            columnType: number
+            column_type: number
             progress: column_percent
           - field: avg_ms
             sortable: true
             title: Avg
-            columnType: duration
+            column_type: duration
             unit: ms
           - field: p95_ms
             sortable: true
             title: P95
-            columnType: duration
+            column_type: duration
             unit: ms
           - field: total_time
             sortable: true
             title: Total Time
-            columnType: duration
+            column_type: duration
             unit: s
             progress: column_percent
           - field: error_rate
@@ -924,12 +924,12 @@ tabs:
           - field: operations
             sortable: true
             title: Count
-            columnType: number
+            column_type: number
             progress: column_percent
           - field: avg_duration
             sortable: true
             title: Avg
-            columnType: duration
+            column_type: duration
             unit: ms
           - field: error_rate
             sortable: true
@@ -963,12 +963,12 @@ tabs:
           - field: count
             sortable: true
             title: Count
-            columnType: number
+            column_type: number
             progress: column_percent
           - field: avg_ms
             sortable: true
             title: Avg
-            columnType: duration
+            column_type: duration
             unit: ms
           - field: error_rate
             sortable: true
@@ -1028,18 +1028,18 @@ tabs:
           - field: count
             sortable: true
             title: Count
-            columnType: number
+            column_type: number
             progress: column_percent
           - field: max_ms
             sortable: true
             title: Peak
-            columnType: duration
+            column_type: duration
             unit: ms
             progress: column_percent
           - field: avg_ms
             sortable: true
             title: Avg
-            columnType: duration
+            column_type: duration
             unit: ms
           - field: last_seen
             sortable: true
@@ -1221,7 +1221,7 @@ tabs:
           - field: data_points
             sortable: true
             title: Samples
-            columnType: number
+            column_type: number
         sql: |
           WITH cpu_metrics AS (
             SELECT
@@ -1322,7 +1322,7 @@ tabs:
           - field: data_points
             sortable: true
             title: Data Points
-            columnType: number
+            column_type: number
             progress: column_percent
           - field: unit
             sortable: true

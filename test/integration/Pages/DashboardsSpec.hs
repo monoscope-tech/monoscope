@@ -309,30 +309,34 @@ spec = sequential $ aroundAll withTestResources do
         LBS.writeFile (dir <> "/" <> name <> ".png") $ Servant.getResponse response
 
     it "renders a grouped status chart PNG with missing series values" \tr -> for_ [Nothing, Just (def :: MetricsStats){maxGroupSum = 202}] \stats -> do
-      let dataset = (def :: Widget.WidgetDataset)
-            { Widget.source = AE.toJSON
-                ( [ [AE.String "timestamp", AE.String "ERROR", AE.String "OK", AE.String "UNSET", AE.String "null"]
-                  , [AE.Number 1788451200000, AE.Null, AE.Null, AE.Number 187, AE.Number 5]
-                  , [AE.Number 1788451320000, AE.Number 1, AE.Null, AE.Number 201, AE.Null]
-                  ] :: [[AE.Value]]
-                )
-            , Widget.from = Just 1788451200000
-            , Widget.to = Just 1788465600000
-            , Widget.stats = stats
-            }
-          widget = (def :: Widget.Widget)
-            { Widget.id = Just "log-explorer-all-traces"
-            , Widget.wType = Widget.WTTimeseries
-            , Widget.query = Just "summarize count(*) by bin_auto(timestamp), status_code"
-            , Widget.dataset = Just dataset
-            , Widget.yAxis = Just (def :: Widget.WidgetAxis){Widget.showOnlyMaxLabel = Just True}
-            , Widget.unit = Just "rows"
-            , Widget.legendPosition = Just "top-right"
-            , Widget.legendSize = Just "xs"
-            , Widget.standalone = Just True
-            , Widget.allowZoom = Just True
-            , Widget.showMarkArea = Just True
-            }
+      let dataset =
+            (def :: Widget.WidgetDataset)
+              { Widget.source =
+                  AE.toJSON
+                    ( [ [AE.String "timestamp", AE.String "ERROR", AE.String "OK", AE.String "UNSET", AE.String "null"]
+                      , [AE.Number 1788451200000, AE.Null, AE.Null, AE.Number 187, AE.Number 5]
+                      , [AE.Number 1788451320000, AE.Number 1, AE.Null, AE.Number 201, AE.Null]
+                      ]
+                        :: [[AE.Value]]
+                    )
+              , Widget.from = Just 1788451200000
+              , Widget.to = Just 1788465600000
+              , Widget.stats = stats
+              }
+          widget =
+            (def :: Widget.Widget)
+              { Widget.id = Just "log-explorer-all-traces"
+              , Widget.wType = Widget.WTTimeseries
+              , Widget.query = Just "summarize count(*) by bin_auto(timestamp), status_code"
+              , Widget.dataset = Just dataset
+              , Widget.yAxis = Just (def :: Widget.WidgetAxis){Widget.showOnlyMaxLabel = Just True}
+              , Widget.unit = Just "rows"
+              , Widget.legendPosition = Just "top-right"
+              , Widget.legendSize = Just Widget.LSXs
+              , Widget.standalone = Just True
+              , Widget.allowZoom = Just True
+              , Widget.showMarkArea = Just True
+              }
           encoded = decodeUtf8 @Text $ LBS.toStrict $ AE.encode widget
           signature = Widget.signWidgetUrl tr.trATCtx.env.apiKeyEncryptionSecretKey testPid encoded
       response <- runAsBase tr $ Routes.widgetPngGetH testPid (Just encoded) Nothing Nothing Nothing Nothing Nothing Nothing (Just signature) []

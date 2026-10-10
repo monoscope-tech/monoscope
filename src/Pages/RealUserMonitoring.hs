@@ -1138,7 +1138,7 @@ rumActivityWidget_ links =
         , Widget.standalone = Just True
         , Widget.hideSubtitle = Just True
         , Widget.legendPosition = Just "top-right"
-        , Widget.legendSize = Just "xs"
+        , Widget.legendSize = Just Widget.LSXs
         , Widget.allowZoom = Just True
         }
 
@@ -1648,7 +1648,7 @@ vitalTrendPanel_ window points = rumPanel_ "Web Vitals over time" "P75 of interv
             , Widget.hideValue = Just True
             , Widget.warningThreshold = Just vital.goodAt
             , Widget.alertThreshold = Just vital.poorAt
-            , Widget.showThresholdLines = Just "always"
+            , Widget.showThresholdLines = Just Widget.TLAlways
             , Widget.dataset =
                 Just
                   (def :: Widget.WidgetDataset)

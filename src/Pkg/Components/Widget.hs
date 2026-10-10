@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), WidgetCta (..), WidgetMarker (..), SqlOrder, mkSqlOrder, PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), statScalar, formatStatValue, widgetPostH, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, decodeWidgetZ, widgetFetchUrl) where
+module Pkg.Components.Widget (Widget (..), ThresholdLines (..), LegendSize (..), ColumnType (..), ProgressScale (..), WidgetCta (..), WidgetMarker (..), SqlOrder, mkSqlOrder, PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), statScalar, formatStatValue, widgetPostH, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, decodeWidgetZ, widgetFetchUrl) where
 
 import Codec.Compression.GZip qualified as GZip
 import Control.Exception.Safe qualified as Safe
@@ -17,6 +17,7 @@ import Data.List (lookup)
 import Data.Map.Strict qualified as M
 import Data.OpenApi (ToSchema)
 import Data.Text qualified as T
+import Data.Text.Display (Display)
 import Data.Time (ZonedTime, defaultTimeLocale, parseTimeM)
 import Data.Time.Format (formatTime)
 import Data.Vector qualified as V
@@ -165,6 +166,32 @@ data PngProfile = PngStandard | PngSlack
   deriving (AE.FromJSON, AE.ToJSON, FromHttpApiData) via WrappedEnumSC 'Nothing "Png" PngProfile
 
 
+-- | When a chart draws its alert/warning threshold lines.
+data ThresholdLines = TLAlways | TLOnBreach | TLNever
+  deriving stock (Eq, Generic, Read, Show, THS.Lift)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromHttpApiData) via WrappedEnumSC 'Nothing "TL" ThresholdLines
+
+
+data LegendSize = LSXs | LSSm | LSMd | LSLg
+  deriving stock (Eq, Generic, Read, Show, THS.Lift)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON, FromHttpApiData) via WrappedEnumSC 'Nothing "LS" LegendSize
+
+
+data ColumnType = CTNumber | CTDuration | CTText
+  deriving stock (Eq, Generic, Read, Show, THS.Lift)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON, FromHttpApiData) via WrappedEnumSC 'Nothing "CT" ColumnType
+
+
+-- | A progress cell's scale: share of the column's largest value, or the value itself as 0–100.
+data ProgressScale = ColumnPercent | ValuePercent
+  deriving stock (Eq, Generic, Read, Show, THS.Lift)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON, FromHttpApiData) via WrappedEnumSC 'Nothing "" ProgressScale
+
+
 -- | Export dimensions are part of the profile carried by the signed widget.
 --
 -- >>> pngExportSize Nothing
@@ -251,7 +278,7 @@ data Widget = Widget
   , wData :: Maybe AE.Value
   , hideLegend :: Maybe Bool
   , legendPosition :: Maybe Text -- Legend position: "top", "bottom", "top-right", "top-left", "bottom-right", "bottom-left"
-  , legendSize :: Maybe Text -- Legend size: "xs" (default), "sm", "md"
+  , legendSize :: Maybe LegendSize -- default LSSm
   , theme :: Maybe Text
   , dataset :: Maybe WidgetDataset
   , -- eager
@@ -289,7 +316,7 @@ data Widget = Widget
   , alertId :: Maybe Text -- Linked QueryMonitor ID
   , alertThreshold :: Maybe Double -- For threshold line rendering
   , warningThreshold :: Maybe Double
-  , showThresholdLines :: Maybe Text -- 'always' | 'on_breach' | 'never'
+  , showThresholdLines :: Maybe ThresholdLines
   , seriesIntent :: Maybe Text
   -- ^ What a lone aggregate series *means*, when the series name cannot say. A bare
   -- @count(*)@ is error volume on one chart and healthy throughput on another, and the
@@ -415,9 +442,9 @@ data TableColumn = TableColumn
   , link :: Maybe Text
   , width :: Maybe Text
   , align :: Maybe Text
-  , progress :: Maybe Text -- "column_percent" or "value_percent"
+  , progress :: Maybe ProgressScale
   , progressVariant :: Maybe Text -- "default", "info", "error", etc.
-  , columnType :: Maybe Text -- "number", "duration", "text" (default)
+  , columnType :: Maybe ColumnType -- default CTText
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
@@ -518,7 +545,7 @@ infraTimeseries pid wid title unit query =
     , hideSubtitle = Just True
     , hideValue = Just True
     , legendPosition = Just "top-right"
-    , legendSize = Just "xs"
+    , legendSize = Just LSXs
     , layout = Just def{w = Just 6, h = Just 4}
     }
 
@@ -1382,11 +1409,11 @@ widgetToECharts widget =
                       [v, h] | h == "right" || h == "left" -> (v, Just h)
                       [v] -> (v, Nothing)
                       _ -> ("bottom", Nothing)
-                    (fontSize, itemSize, itemGap, pad) = case fromMaybe "sm" widget.legendSize of
-                      "xs" -> (10 :: Int, 6 :: Int, 6 :: Int, [2, 4, 2, 4] :: [Int])
-                      "md" -> (14, 12, 12, [4, 8, 4, 8])
-                      "lg" -> (16, 14, 14, [5, 10, 5, 10])
-                      _ -> (12, 9, 9, [3, 6, 3, 6]) -- sm (default)
+                    (fontSize, itemSize, itemGap, pad) = case fromMaybe LSSm widget.legendSize of
+                      LSXs -> (10 :: Int, 6 :: Int, 6 :: Int, [2, 4, 2, 4] :: [Int])
+                      LSSm -> (12, 9, 9, [3, 6, 3, 6])
+                      LSMd -> (14, 12, 12, [4, 8, 4, 8])
+                      LSLg -> (16, 14, 14, [5, 10, 5, 10])
                     isStatic = isTrue widget._staticRender
                     legendOffset = if vPos == "top" then ["top" AE..= (0 :: Int)] else ["bottom" AE..= (2 :: Int)]
                  in [ "show" AE..= legendVisibility
@@ -1406,7 +1433,7 @@ widgetToECharts widget =
             AE..= AE.object
               [ "width" AE..= ("100%" :: Text)
               , "left" AE..= ("0%" :: Text)
-              , "top" AE..= if legendTop && legendVisibility then if fromMaybe "sm" widget.legendSize == "xs" then (20 :: Int) else 28 else if isTrue widget.naked then (16 :: Int) else (8 :: Int)
+              , "top" AE..= if legendTop && legendVisibility then if widget.legendSize == Just LSXs then (20 :: Int) else 28 else if isTrue widget.naked then (16 :: Int) else (8 :: Int)
               , "bottom" AE..= if not legendTop && legendVisibility then (36 :: Int) else if isTrue widget.standalone then (0 :: Int) else (8 :: Int)
               , "containLabel" AE..= True
               , "show" AE..= False
@@ -1474,10 +1501,10 @@ addMarkLinesToFirstSeries widget series
   | shouldShowLines, not (null markLineData) = series & _head %~ addMarkLine
   | otherwise = series
   where
-    shouldShowLines = case widget.showThresholdLines of
-      Just "never" -> False
-      Just "on_breach" -> maybe False (/= Monitors.MSNormal) widget.alertStatus
-      _ -> isJust widget.alertThreshold || isJust widget.warningThreshold
+    shouldShowLines = case fromMaybe TLAlways widget.showThresholdLines of
+      TLNever -> False
+      TLOnBreach -> maybe False (/= Monitors.MSNormal) widget.alertStatus
+      TLAlways -> isJust widget.alertThreshold || isJust widget.warningThreshold
 
     mkMarkLine color label threshold =
       AE.object
@@ -1603,7 +1630,7 @@ calculateMaxValues columns dataRows =
   M.fromList
     [ (col.field, V.foldl' max 0 $ V.mapMaybe (\row -> row V.!? idx >>= readMaybe . toString) dataRows)
     | (col, idx) <- zip columns [0 ..]
-    , col.progress == Just "column_percent"
+    , col.progress == Just ColumnPercent
     ]
 
 
@@ -1611,8 +1638,8 @@ renderProgressCell :: TableColumn -> Text -> M.Map Text Double -> M.Map Text Int
 renderProgressCell col value maxValues valueWidths = div_ [class_ "flex items-center gap-2"] do
   let numValue = fromMaybe 0 (readMaybe $ toString value) :: Double
       percentage = case col.progress of
-        Just "value_percent" -> min 100 (max 0 numValue)
-        Just "column_percent" | Just maxVal <- M.lookup col.field maxValues, maxVal > 0 -> (numValue / maxVal) * 100
+        Just ValuePercent -> min 100 (max 0 numValue)
+        Just ColumnPercent | Just maxVal <- M.lookup col.field maxValues, maxVal > 0 -> (numValue / maxVal) * 100
         _ -> 0
   span_ [class_ "inline-block text-left monospace", style_ $ "width: " <> show (M.findWithDefault 8 col.field valueWidths) <> "ch"]
     $ toHtml
@@ -1630,7 +1657,7 @@ renderProgressCell col value maxValues valueWidths = div_ [class_ "flex items-ce
 
 
 isNumericCol :: TableColumn -> Bool
-isNumericCol col = col.columnType `elem` [Just ("number" :: Text), Just "duration"]
+isNumericCol col = col.columnType `elem` [Just CTNumber, Just CTDuration]
 
 
 -- | @td@ classes: column alignment plus monospace for numeric/duration columns.
@@ -1639,10 +1666,10 @@ cellClass col = fromMaybe "" col.align <> memptyIfFalse (isNumericCol col) " mon
 
 
 formatColumnValue :: TableColumn -> Text -> Text
-formatColumnValue col value = case col.columnType of
-  Just "number" -> maybe value fmtNumber (readMaybe (toString value) :: Maybe Double) <> unitSuffix
-  Just "duration" -> maybe (value <> unitSuffix) getDurationNSMS (readMaybe (toString value) >>= durationNanoseconds col.unit)
-  _ -> fromMaybe value (formatTimestampValue value) <> unitSuffix
+formatColumnValue col value = case fromMaybe CTText col.columnType of
+  CTNumber -> maybe value fmtNumber (readMaybe (toString value) :: Maybe Double) <> unitSuffix
+  CTDuration -> maybe (value <> unitSuffix) getDurationNSMS (readMaybe (toString value) >>= durationNanoseconds col.unit)
+  CTText -> fromMaybe value (formatTimestampValue value) <> unitSuffix
   where
     unitSuffix = foldMap (" " <>) col.unit
     -- keep significant digits for small non-integral numbers, pretty-print the rest

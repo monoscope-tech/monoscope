@@ -1180,7 +1180,7 @@ issueChartCard_ IssueView{..} chartTitle heightCls thresholdM rollupM chartQuery
           , Widget.hideLegend = Just True
           , Widget.hideSubtitle = Just True
           , Widget.alertThreshold = thresholdM
-          , Widget.showThresholdLines = "always" <$ thresholdM
+          , Widget.showThresholdLines = Widget.TLAlways <$ thresholdM
           , Widget.markers = errM <&> \(e :: ErrorPatterns.ErrorPatternL) -> let ep = e.base; mk t r = Widget.WidgetMarker r (toText $ iso8601Show $ zonedTimeToUTC t) in catMaybes [mk ep.createdAt <$> ep.firstRelease, mk <$> ep.lastReleaseSince <*> (ep.lastRelease <* guard (ep.lastRelease /= ep.firstRelease))]
           , -- A query alert's series is whatever the alert counts, so it must not
             -- borrow the error colour just because it is on an issue page.

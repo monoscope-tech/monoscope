@@ -1116,7 +1116,7 @@ logWidgetBase pid =
     , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
     , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
     , Widget.legendPosition = Just "top-right"
-    , Widget.legendSize = Just "xs"
+    , Widget.legendSize = Just Widget.LSXs
     , Widget._projectId = Just pid
     }
 
