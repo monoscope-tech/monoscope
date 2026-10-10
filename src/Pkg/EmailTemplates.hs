@@ -15,6 +15,7 @@ module Pkg.EmailTemplates (
   projectDeletedEmail,
   runtimeErrorsEmail,
   escalatingErrorsEmail,
+  NewLogPattern (..),
   logPatternEmail,
   logPatternRateChangeEmail,
   regressedErrorsEmail,
@@ -51,12 +52,14 @@ module Pkg.EmailTemplates (
 import Data.Default (def)
 import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
+import Data.Text.Display (display)
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian)
 import Data.Vector qualified as V
 import Lucid
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.ContainerTypes (Scope (..))
 import Models.Telemetry.Report qualified as Report
 import Relude
 import Utils (fmtDate, formatWithCommas, isoT, kqlQuoted, nonEmptyT, showFFloat', toUriStr)
@@ -389,18 +392,20 @@ errorSpikesEmail = runtimeErrorVariantEmail "Runtime Error Spike(s)" "[···] R
 
 -- | Email variants for log-pattern issues. Slack/Discord/PagerDuty payloads
 -- live in Pkg.Mail; email is just subject + html passed to sendRenderedEmail.
-logPatternEmail
-  :: Text -- projectName
-  -> Text -- issueUrl
-  -> Text -- patternText
-  -> Maybe Text -- sampleMessage
-  -> Maybe Text -- logLevel
-  -> Maybe Text -- serviceName
-  -> Text -- sourceField
-  -> Int -- occurrenceCount
-  -> Bool -- isError
-  -> (Text, Html ())
-logPatternEmail projectName issueUrl patternText sampleMessage logLevel serviceName sourceField occurrenceCount isError =
+data NewLogPattern = NewLogPattern
+  { issueUrl :: Text
+  , patternText :: Text
+  , sampleMessage :: Maybe Text
+  , logLevel :: Maybe Text
+  , serviceName :: Maybe Text
+  , sourceField :: Text
+  , occurrenceCount :: Int
+  , isError :: Bool
+  }
+
+
+logPatternEmail :: Text -> NewLogPattern -> (Text, Html ())
+logPatternEmail projectName NewLogPattern{..} =
   patternIssueEmail
     ("[···] New " <> kindLabel <> " pattern - " <> projectName)
     ("New " <> kindLabel <> " pattern detected in " <> projectName)
@@ -713,9 +718,9 @@ weeklyReportEmail d =
               toHtml $ "; " <> reportCount issues.criticalOpen <> " critical. " <> reportCount issues.newIssues <> " issues created in this period."
             Report.Unavailable -> reportNote "Issue status is unavailable for this report."
         forM_ systemSnapshot $ \snapshot -> do
-          whenJust (available snapshot.issues) \issues -> when (issues.criticalOpen > 0) $ reportFinding (d.projectUrl <> "/issues") $ reportCount issues.criticalOpen <> " critical issues need review"
-          whenJust (available snapshot.monitors) \monitors -> when (monitors.alerting > 0) $ reportFinding (d.projectUrl <> "/monitors") $ show monitors.alerting <> " monitors are alerting"
-          whenJust (available snapshot.infrastructure) \infra -> when (infra.unready > 0) $ reportFinding (d.projectUrl <> "/infrastructure/containers" <> windowQuery) $ show infra.unready <> " infrastructure resources report not ready"
+          forM_ snapshot.issues \issues -> when (issues.criticalOpen > 0) $ reportFinding (d.projectUrl <> "/issues") $ reportCount issues.criticalOpen <> " critical issues need review"
+          forM_ snapshot.monitors \monitors -> when (monitors.alerting > 0) $ reportFinding (d.projectUrl <> "/monitors") $ show monitors.alerting <> " monitors are alerting"
+          forM_ snapshot.infrastructure \infra -> when (infra.unready > 0) $ reportFinding (d.projectUrl <> "/infrastructure/containers" <> windowQuery) $ show infra.unready <> " infrastructure resources report not ready"
         case systemSnapshot of
           Nothing -> reportNotice "Historical report" "Service, infrastructure and monitor snapshots were not recorded for this report. The original metrics and issue list are shown below."
           Just snapshot -> do
@@ -744,9 +749,9 @@ weeklyReportEmail d =
                 when (null infra.resources) $ reportNote "No infrastructure metrics observed. Configure an OpenTelemetry host, Docker or Kubernetes receiver to include resource usage."
                 forM_ (reportRows 4 infra.resources) $ \r ->
                   reportItem
-                    (d.projectUrl <> (if r.scope == "Host" then "/infrastructure/hosts" else "/infrastructure/containers") <> "?from=" <> toUriStr (isoT infra.observedFrom) <> "&to=" <> toUriStr (isoT infra.observedUntil))
+                    (d.projectUrl <> (if r.scope == ScopeHost then "/infrastructure/hosts" else "/infrastructure/containers") <> "?from=" <> toUriStr (isoT infra.observedFrom) <> "&to=" <> toUriStr (isoT infra.observedUntil))
                     r.name
-                    (T.intercalate " · " $ r.scope : catMaybes [r.host, r.cluster, r.namespace])
+                    (T.intercalate " · " $ T.toTitle (display r.scope) : catMaybes [r.host, r.cluster, r.namespace])
                     [("CPU / capacity", maybe "Not measured" (\x -> reportDecimal (100 * x) <> "%") r.cpuRatio, "Latest sample"), ("Memory / capacity", maybe "Not measured" (\x -> reportDecimal (100 * x) <> "%") r.memoryRatio, "Latest sample"), ("Storage used", maybe "Not measured" (\x -> reportDecimal (100 * x) <> "%") r.storageRatio, "Latest sample"), ("Readiness", maybe "Not reported" (\ready -> if ready then "Ready" else "Not ready") r.ready, maybe "" (\n -> "Restart counter: " <> reportDecimal n) r.restartCounter)]
                 let remaining = infra.hosts + infra.containers + infra.pods - length (reportRows 4 infra.resources)
                 when (remaining > 0) $ reportMore (d.projectUrl <> "/infrastructure/containers" <> windowQuery) remaining "infrastructure resources"
@@ -865,7 +870,7 @@ weeklyReportEmail d =
     systemSnapshot = case d.evidence of SystemEvidence snapshot -> Just snapshot; HistoricalEvidence _ -> Nothing
     historicalEvidence = case d.evidence of HistoricalEvidence historical -> Just historical; SystemEvidence _ -> Nothing
     freeTierExceeded = any ((== Just True) . (.ingestionCapped)) systemSnapshot
-    topPatterns = fold $ available . (.topPatterns) =<< systemSnapshot
+    topPatterns = foldMap (fold . (.topPatterns)) systemSnapshot
     currentServices = maybe [] (mapMaybe (.current) . (.services)) systemSnapshot
     events = case d.evidence of SystemEvidence _ -> sum $ map (.events) currentServices; HistoricalEvidence historical -> fromIntegral historical.totalEvents
     errors = case d.evidence of SystemEvidence _ -> sum $ map (.errorEvents) currentServices; HistoricalEvidence historical -> fromIntegral historical.totalErrors
@@ -884,11 +889,9 @@ reportFinding url label = p_ [class_ "report-attention", style_ "font-size:14px;
 
 
 reportObserved :: Report.ReportSection a -> (a -> Html ()) -> Html ()
-reportObserved section render = maybe (reportNote "This section could not be loaded for the report. Open the linked workspace to investigate.") render (available section)
-
-
-available :: Report.ReportSection a -> Maybe a
-available = \case Report.Available a -> Just a; Report.Unavailable -> Nothing
+reportObserved section render = case section of
+  Report.Available a -> render a
+  Report.Unavailable -> reportNote "This section could not be loaded for the report. Open the linked workspace to investigate."
 
 
 reportSection :: Text -> Text -> Html () -> Html ()
@@ -1093,7 +1096,7 @@ sampleSystemSnapshot =
             3
             12
             2
-            [Report.InfrastructureResource "worker-node-2" "Host" Nothing (Just "production-eu") Nothing (Just 0.87) (Just 0.92) (Just 0.62) Nothing Nothing, Report.InfrastructureResource "payments-7fdc9" "Container" (Just "worker-node-2") (Just "production-eu") (Just "payments") (Just 0.72) (Just 0.84) Nothing (Just False) (Just 4), Report.InfrastructureResource "api-6bcfd" "Container" (Just "worker-node-1") (Just "production-eu") (Just "api") (Just 0.24) (Just 0.48) Nothing (Just True) (Just 0)]
+            [Report.InfrastructureResource "worker-node-2" ScopeHost Nothing (Just "production-eu") Nothing (Just 0.87) (Just 0.92) (Just 0.62) Nothing Nothing, Report.InfrastructureResource "payments-7fdc9" ScopeContainer (Just "worker-node-2") (Just "production-eu") (Just "payments") (Just 0.72) (Just 0.84) Nothing (Just False) (Just 4), Report.InfrastructureResource "api-6bcfd" ScopeContainer (Just "worker-node-1") (Just "production-eu") (Just "api") (Just 0.24) (Just 0.48) Nothing (Just True) (Just 0)]
             1
             (addUTCTime (-900) end)
             end

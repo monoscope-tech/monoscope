@@ -13,6 +13,7 @@ module Models.Apis.Incidents (
   slackPayload,
   IncidentUpdate (..),
   RecordResult (..),
+  RecordConflict (..),
   recordIncidentEvent,
   recordIncidentEventTx,
   getEpisode,
@@ -146,11 +147,20 @@ data IncidentUpdate = IncidentUpdate
   deriving stock (Show)
 
 
+-- | 'NoOpenEpisode' is not a 'Rejected' conflict: a lifecycle event arriving with no
+-- open episode is expected, and each caller decides what it means.
 data RecordResult
   = Recorded Episode IncidentEventId
   | AlreadyRecorded EpisodeId IncidentEventId
-  | OlderThanCurrentEpisode
   | NoOpenEpisode
+  | Rejected RecordConflict
+  deriving stock (Eq, Show)
+
+
+-- | The event was rejected, so any state written beside it in the same transaction
+-- must roll back.
+data RecordConflict
+  = OlderThanCurrentEpisode
   | UnknownIncidentSource
   | InactiveIncidentSource
   | IncidentIssueMismatch
@@ -158,22 +168,6 @@ data RecordResult
     -- is read from its issue's page, so one without an issue is unreachable.
     EpisodeWithoutIssue
   deriving stock (Eq, Show)
-
-
--- | A result the caller cannot commit around: the event was rejected, so any
--- state written beside it in the same transaction must roll back. Callers decide
--- separately what a *recorded* result means; 'NoOpenEpisode' is not a conflict
--- here because a lifecycle event arriving with no open episode is expected.
-incidentConflict :: RecordResult -> Bool
-incidentConflict = \case
-  Recorded{} -> False
-  AlreadyRecorded{} -> False
-  NoOpenEpisode -> False
-  OlderThanCurrentEpisode -> True
-  UnknownIncidentSource -> True
-  InactiveIncidentSource -> True
-  IncidentIssueMismatch -> True
-  EpisodeWithoutIssue -> True
 
 
 sourceFields :: IncidentSource -> (Text, UUID.UUID)
@@ -392,7 +386,7 @@ latestEpisodeTx pid source =
           )
 
 
-data ErrorResolution = ErrorResolved | ErrorAlreadyResolved | ErrorResolutionDenied | ErrorResolutionConflict RecordResult
+data ErrorResolution = ErrorResolved | ErrorAlreadyResolved | ErrorResolutionDenied | ErrorResolutionConflict RecordConflict
   deriving stock (Eq, Show)
 
 
@@ -440,9 +434,9 @@ resolveErrorIncident pid errorId actor now message = Hasql.transaction TxS.ReadC
             , replyPayload = message iid
             , destinations = []
             }
-      case find incidentConflict results of
-        Nothing -> pure ErrorResolved
-        Just conflict -> Tx.condemn $> ErrorResolutionConflict conflict
+      case [c | Rejected c <- results] of
+        [] -> pure ErrorResolved
+        conflict : _ -> Tx.condemn $> ErrorResolutionConflict conflict
 
 
 recordIncidentEvent :: DB es => IncidentUpdate -> Eff es RecordResult
@@ -489,8 +483,8 @@ recordIncidentEventTx update = do
       ELSE #{issueId}::uuid IS NULL OR EXISTS
         (SELECT 1 FROM apis.issues WHERE id = #{issueId} AND project_id = #{pid}) END|]
   if
-    | not validSource -> pure UnknownIncidentSource
-    | not validIssue -> pure IncidentIssueMismatch
+    | not validSource -> pure $ Rejected UnknownIncidentSource
+    | not validIssue -> pure $ Rejected IncidentIssueMismatch
     | otherwise -> do
         duplicate <-
           queryTx @[(EpisodeId, IncidentEventId)]
@@ -499,11 +493,11 @@ recordIncidentEventTx update = do
         AND observed_at = #{at} AND event_kind = #{eventKind}|]
         case listToMaybe duplicate of
           Just (eid, eventId) -> pure $ AlreadyRecorded eid eventId
-          Nothing | not sourceActionable -> pure InactiveIncidentSource
+          Nothing | not sourceActionable -> pure $ Rejected InactiveIncidentSource
           Nothing -> do
             latest <- latestEpisodeTx pid update.source
             case latest of
-              Just episode | at < episode.lastEventAt -> pure OlderThanCurrentEpisode
+              Just episode | at < episode.lastEventAt -> pure $ Rejected OlderThanCurrentEpisode
               _ | (nextPhase /= EpisodeActive || update.change == IncidentDataUnavailable) && maybe True ((/= EpisodeActive) . (.phase)) latest -> pure NoOpenEpisode
               _ -> do
                 episodeM <- case latest of
@@ -521,7 +515,7 @@ recordIncidentEventTx update = do
                             <> episodeColumns
                         )
                 case episodeM of
-                  Nothing -> pure EpisodeWithoutIssue
+                  Nothing -> pure $ Rejected EpisodeWithoutIssue
                   Just episode -> do
                     let eid = episode.id
                         closedAt = if nextPhase == EpisodeActive then Nothing else Just at

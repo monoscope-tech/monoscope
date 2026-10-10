@@ -81,7 +81,7 @@ import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import OddJobs.Job (createJob)
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, mkPageCtx, settingsContentTarget)
+import Pages.BodyWrapper (BWConfig (..), OnboardingStep (Integration, Pricing), PageCtx (..), bodyWrapper, mkPageCtx, settingsContentTarget, stepUrl)
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as SlackP
 import Pages.Bots.Utils qualified as BotUtils
@@ -727,7 +727,7 @@ manageMembersPostH pid onboardingM form = do
   projMembersLatest <- V.fromList <$> ProjectMembers.selectAllProjectMembers pid
   teamsCount <- length <$> ProjectMembers.getTeamsVM pid
   case onboardingM of
-    Just _ -> redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=Integration"
+    Just _ -> redirectCS $ stepUrl pid Integration
     Nothing ->
       addSuccessToast
         ( if Projects.isFreeTier project.paymentPlan && not (null uAndPNew)
@@ -1368,7 +1368,7 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = do
       apiKey = envCfg.lemonSqueezyApiKey
       updatePricing name sid fid oid = do
         n <- Projects.updateProjectPricing pid (Projects.PlanName name) (Projects.SubId sid) (Projects.SubItemId fid) (Projects.OrderId oid)
-        n <$ Projects.completeOnboardingStep pid "Pricing"
+        n <$ Projects.completeOnboardingStep pid (show Pricing)
       handleOnboarding = when (Projects.isOnboarding project.paymentPlan) $ void $ liftIO $ withResource appCtx.pool \conn -> do
         let fullName = sess.user.firstName <> " " <> sess.user.lastName
             foundUsFrom = fromMaybe "" $ project.questions >>= (`lookupValueText` "foundUsFrom")

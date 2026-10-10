@@ -209,8 +209,10 @@ directionOf TabArchived = Nothing
 
 
 -- | The two labels that vary by request direction: (kindVal, sourceLabel).
-directionLabels :: Bool -> (Text, Text)
-directionLabels outgoing = (bool "server" "client" outgoing, bool "Served by:" "Called by:" outgoing)
+directionLabels :: Endpoints.Direction -> (Text, Text)
+directionLabels = \case
+  Endpoints.Incoming -> ("server", "Served by:")
+  Endpoints.Outgoing -> ("client", "Called by:")
 
 
 -- | The services behind a row, as inline chips on the name line rather than a
@@ -236,10 +238,10 @@ servicesBadges_ sourceLabel badgeHref svcs =
 renderCatalogMainCol :: Projects.ProjectId -> HostEventsVM -> Html ()
 renderCatalogMainCol pid vm = do
   let he = vm.events
-      outgoing = he.outgoing
-      reqTypeLabel = bool "Incoming" "Outgoing" outgoing :: Text
-      (kindVal, sourceLabel) = directionLabels outgoing
-      (arrowIcon, arrowClass) = bool ("arrow-down-left", "h-3 w-3 fill-iconNeutral shrink-0") ("arrow-up-right", "h-3 w-3 fill-iconBrand shrink-0") outgoing
+      (kindVal, sourceLabel) = directionLabels he.direction
+      (reqTypeLabel, arrowIcon, arrowClass) = case he.direction of
+        Endpoints.Incoming -> ("Incoming" :: Text, "arrow-down-left", "h-3 w-3 fill-iconNeutral shrink-0")
+        Endpoints.Outgoing -> ("Outgoing", "arrow-up-right", "h-3 w-3 fill-iconBrand shrink-0")
   -- One line, name left and actions right, so the actions form a fixed lane
   -- down the table. Brand blue is spent on the host — the row's primary target
   -- — and the secondary actions stay neutral until hovered.
@@ -392,8 +394,7 @@ statCell_ Endpoints.ShellOnly _ = span_ [class_ "block h-4 w-12 rounded bg-fillW
 
 renderEndpointMainCol :: Projects.ProjectId -> CatalogTab -> EnpReqStatsVM -> Html ()
 renderEndpointMainCol pid currentTab (EnpReqStatsVM _ _ enp) = do
-  let outgoing = currentTab == TabOutgoing
-      (kindVal, sourceLabel) = directionLabels outgoing
+  let (kindVal, sourceLabel) = directionLabels $ fromMaybe Endpoints.Incoming (directionOf currentTab)
       -- server.address in both directions: the local server on a server span, the remote
       -- one on a client span. It is also the column apis.endpoints.host is resolved from,
       -- so the filter matches the stored host exactly.
@@ -454,7 +455,7 @@ learnedSpec pid hostM reqTypeM endpointM = do
   (_, project) <- Projects.sessionAndProject pid
   let scopeHost = guarded (not . T.null) =<< hostM
       -- Span kind: Archived spans both directions, so it filters on neither.
-      kindM = fst . directionLabels . (== Endpoints.Outgoing) <$> directionOf (parseTab reqTypeM)
+      kindM = fst . directionLabels <$> directionOf (parseTab reqTypeM)
   entries <- SchemaCatalog.endpointCatalog pid scopeHost kindM endpointM docsCap
   pure (OpenApi.buildSpec (fromMaybe project.title scopeHost) (V.toList entries), V.length entries)
 

@@ -32,7 +32,6 @@ module Pkg.TestUtils (
   assertNonMemberDenied,
   toBaseServantResponse,
   runAsBaseRecordingHTTP,
-  runAsBase,
   atAuthToBase,
   effToServantHandlerTest,
   runQueryEffect,
@@ -113,9 +112,9 @@ import Data.Effectful.Notify qualified
 import Data.Effectful.UUID (UUIDEff, runStaticUUID, runUUID)
 import Data.Effectful.Wreq (HTTP (..), runHTTPGolden, runHTTPRecord, runHTTPWreq)
 import Data.Either.Extra
+import Data.Generics.Product.Fields (field)
 import Data.HashMap.Strict qualified as HM
 import Data.Pool (Pool, defaultPoolConfig, destroyAllResources, newPool, setNumStripes, withResource)
-import Data.Generics.Product.Fields (field)
 import Data.ProtoLens (defMessage)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, ZonedTime, getCurrentTime, zonedTimeToUTC)
@@ -982,9 +981,8 @@ toServantResponse tr k = toSnd Servant.getResponse <$> runAuthHandler tr k
 runAuthHandler :: TestResources -> ATAuthCtx a -> IO a
 runAuthHandler TestResources{..} k = do
   tp <- getGlobalTracerProvider
-  uuidRef <- freshUUIDRef
   ( atAuthToBase trSessAndHeader k
-      & effToServantHandlerTest trTestClock uuidRef trATCtx trLogger tp
+      & effToServantHandlerTest trTestClock trUUIDRef trATCtx trLogger tp
       & ServantS.runHandler
     )
     <&> fromRightShow
@@ -1000,6 +998,7 @@ assertNonMemberDenied tr pid k = do
     Left (ErrorCall msg) -> toText msg `shouldSatisfy` T.isInfixOf "missingProjectPermission"
     Right _ -> expectationFailure "a non-member was served another project's data"
 
+
 testServant :: TestResources -> ATAuthCtx (RespHeaders a) -> IO (RespHeaders a, a)
 testServant = toServantResponse
 
@@ -1008,11 +1007,10 @@ testServant = toServantResponse
 testServantWithNotifications :: TestResources -> ATAuthCtx (RespHeaders a) -> IO ([Data.Effectful.Notify.Notification], (RespHeaders a, a))
 testServantWithNotifications TestResources{..} k = do
   tp <- getGlobalTracerProvider
-  uuidRef <- freshUUIDRef
   notifRef <- newIORef []
   headersResp <-
     ( atAuthToBaseTest notifRef trSessAndHeader k
-        & effToServantHandlerTest trTestClock uuidRef trATCtx trLogger tp
+        & effToServantHandlerTest trTestClock trUUIDRef trATCtx trLogger tp
         & ServantS.runHandler
     )
       <&> fromRightShow
@@ -1021,17 +1019,15 @@ testServantWithNotifications TestResources{..} k = do
 
 
 -- | Run a base context handler (like webhookPostH, replayPostH) in test context.
--- Each call gets a fresh UUID pool; use `runAsBase` when you need IDs persisted
--- across multiple handler invocations within the same test.
+-- UUIDs come from the example-scoped pool, so ids persisted by successive handler
+-- calls in one test stay distinct (a per-call pool re-issued the same ids).
 toBaseServantResponse :: TestResources -> ATBaseCtx a -> IO a
 toBaseServantResponse TestResources{..} k = do
   tp <- getGlobalTracerProvider
-  uuidRef <- freshUUIDRef
-  ( k
-      & effToServantHandlerTest trTestClock uuidRef trATCtx trLogger tp
-      & ServantS.runHandler
-    )
-    <&> fromRightShow
+  k
+    & effToServantHandlerTest trTestClock trUUIDRef trATCtx trLogger tp
+    & ServantS.runHandler
+    >>= either (fail . ("Servant error: " <>) . show) pure
 
 
 -- | Like 'toBaseServantResponse' but records outgoing HTTP requests instead of
@@ -1040,11 +1036,10 @@ toBaseServantResponse TestResources{..} k = do
 runAsBaseRecordingHTTP :: TestResources -> ATBaseCtx a -> IO ([(Text, LByteString)], a)
 runAsBaseRecordingHTTP TestResources{..} k = do
   tp <- getGlobalTracerProvider
-  uuidRef <- freshUUIDRef
   reqsRef <- newIORef []
   r <-
     ( k
-        & effToServantHandlerTestHTTP (runHTTPRecord reqsRef) trTestClock uuidRef trATCtx trLogger tp
+        & effToServantHandlerTestHTTP (runHTTPRecord reqsRef) trTestClock trUUIDRef trATCtx trLogger tp
         & ServantS.runHandler
     )
       <&> fromRightShow
@@ -1052,20 +1047,7 @@ runAsBaseRecordingHTTP TestResources{..} k = do
   pure (reqs, r)
 
 
--- | Like `toBaseServantResponse` but draws UUIDs from the TestResources-scoped
--- pool, so multiple handler invocations (e.g. create a, create b, bulk-delete
--- [a,b]) get distinct deterministic ids.
-runAsBase :: TestResources -> ATBaseCtx a -> IO a
-runAsBase TestResources{..} k = do
-  tp <- getGlobalTracerProvider
-  k
-    & effToServantHandlerTest trTestClock trUUIDRef trATCtx trLogger tp
-    & ServantS.runHandler
-    >>= either (fail . ("Servant error: " <>) . show) pure
 
-
-freshUUIDRef :: IO (IORef [UUID.UUID])
-freshUUIDRef = newIORef (map (UUID.fromWords 0 0 0) [1 .. 1000])
 
 
 -- | Run a query effect (like Charts.queryMetrics) in test context
@@ -1672,7 +1654,7 @@ routeRequest tr path params
 -- | Run a handler in the base context and encode its result as a mock HTTP
 -- response — the shape almost every arm of the two API routers below shares.
 jsonRoute :: AE.ToJSON a => TestResources -> ATBaseCtx a -> IO (Response LBS.ByteString)
-jsonRoute tr = fmap (mockResponse . AE.encode) . runAsBase tr
+jsonRoute tr = fmap (mockResponse . AE.encode) . toBaseServantResponse tr
 
 
 routeApiV1Get :: TestResources -> Text -> [(Text, Text)] -> IO (Response LBS.ByteString)

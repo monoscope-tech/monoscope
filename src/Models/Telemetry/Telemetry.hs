@@ -18,6 +18,7 @@ module Models.Telemetry.Telemetry (
   traceErrorHash,
   bursts,
   isErrorRecord,
+  traceIdOf,
   Trace (..),
   SeverityLevel (..),
   SpanStatus (..),
@@ -111,7 +112,6 @@ module Models.Telemetry.Telemetry (
 )
 where
 
-import Control.Concurrent.STM qualified as STM
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
@@ -144,6 +144,8 @@ import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Simple.ToRow
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
+import Effectful.Concurrent (Concurrent)
+import Effectful.Concurrent.STM qualified as STM
 import Effectful.Exception (throwIO, trySync)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled, labeled)
@@ -399,11 +401,11 @@ newtype MetricCatalogBuffer = MetricCatalogBuffer (STM.TVar (Map.Map Text Metric
 
 
 newMetricCatalogBuffer :: IO MetricCatalogBuffer
-newMetricCatalogBuffer = MetricCatalogBuffer <$> STM.newTVarIO mempty
+newMetricCatalogBuffer = MetricCatalogBuffer <$> newTVarIO mempty
 
 
 -- | Return a flush batch only when the bounded buffer reaches its threshold.
-enqueueMetricCatalog :: MetricCatalogBuffer -> V.Vector MetricRecord -> IO (Maybe (V.Vector MetricRecord))
+enqueueMetricCatalog :: Concurrent :> es => MetricCatalogBuffer -> V.Vector MetricRecord -> Eff es (Maybe (V.Vector MetricRecord))
 enqueueMetricCatalog (MetricCatalogBuffer ref) rows = STM.atomically do
   STM.modifyTVar' ref $ \pending -> V.foldl' (\m r -> Map.insert (metricCatalogKey r) r m) pending rows
   pending <- STM.readTVar ref
@@ -414,10 +416,8 @@ enqueueMetricCatalog (MetricCatalogBuffer ref) rows = STM.atomically do
     metricCatalogKey r = T.intercalate "\x1f" [UUID.toText r.projectId, r.metricName, show r.metricType, r.metricUnit, metricServiceNameFromResource r.metricName r.resource, fromMaybe "" $ scopeField "name" r.instrumentationScope]
 
 
-flushMetricCatalog :: (DB es, IOE :> es) => MetricCatalogBuffer -> Eff es ()
-flushMetricCatalog (MetricCatalogBuffer ref) = do
-  rows <- liftIO $ V.fromList . Map.elems <$> STM.atomically (STM.swapTVar ref mempty)
-  upsertMetricMetadata rows
+flushMetricCatalog :: (Concurrent :> es, DB es) => MetricCatalogBuffer -> Eff es ()
+flushMetricCatalog (MetricCatalogBuffer ref) = upsertMetricMetadata . V.fromList . Map.elems =<< STM.atomically (STM.swapTVar ref mempty)
 
 
 -- | Rebuild recent catalog descriptors from durable raw points. This heals a
@@ -2273,6 +2273,10 @@ getErrorEvents OtelLogsAndSpans{events = Just (AesonText (AE.Array arr))} =
 getErrorEvents _ = []
 
 
+traceIdOf :: OtelLogsAndSpans -> Maybe Text
+traceIdOf r = nonEmptyT (r.context >>= (.trace_id))
+
+
 -- | Predicate mirroring the Sessions UI @is_error@ SQL
 -- (@lower(level) = 'error' OR severity___severity_number >= 17 OR status_code = 'ERROR'@).
 -- Any record the UI flags as an error should also feed the Issues pipeline so teams
@@ -2589,7 +2593,7 @@ generateLogSummary otel =
     rawDataLogElements =
       catMaybes
         [ tag "trace_state" "neutral" <$> (otel.context >>= nonEmptyT . (.trace_state))
-        , tag "trace_id" "right-badge-neutral" . T.take 16 <$> (otel.context >>= nonEmptyT . (.trace_id))
+        , tag "trace_id" "right-badge-neutral" . T.take 16 <$> traceIdOf otel
         , Just resourceFallback
         ]
 
@@ -2729,7 +2733,7 @@ generateSpanSummary otel =
         [ tag "process" "neutral" <$> (nonEmptyT (atMapText "process.executable.name" resM) <|> ("PID " <>) . show <$> atMapInt "process.pid" resM)
         , tag "service" "neutral" <$> atMapText "service.name" resM
         , tag "resource" "text-textWeak" . encTrunc 300 <$> mfilter (not . Map.null) (Map.filterWithKey (\k _ -> k /= "process") <$> resM)
-        , tag "trace_id" "right-badge-neutral" . T.take 16 <$> (otel.context >>= nonEmptyT . (.trace_id))
+        , tag "trace_id" "right-badge-neutral" . T.take 16 <$> traceIdOf otel
         , tag "duration" "right-badge-neutral" . durMs <$> otel.duration
         ]
 
@@ -2856,7 +2860,7 @@ mintMetricIds = V.map $ \r -> r{id = Just $ fromMaybe (metricId r) r.id}
 -- as logs and spans. The caller mints ids before calling this function; it is
 -- repeated defensively here so ad-hoc producers cannot write random ids.
 bulkInsertOtelMetrics
-  :: (Hasql :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es)
+  :: (Concurrent :> es, Hasql :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es)
   => MetricCatalogBuffer
   -> Bool
   -> WriteTarget
@@ -2875,7 +2879,7 @@ bulkInsertOtelMetrics catalogBuffer tfPgTypes target records0 = do
           (labeled @"timefusion" @Hasql $ insertOtelMetrics tfPgTypes records)
   -- Raw storage is authoritative. Catalog work is buffered and only a full
   -- threshold batch is flushed on the ingestion path.
-  when rawPersisted $ whenJustM (liftIO $ enqueueMetricCatalog catalogBuffer records) \batch ->
+  when rawPersisted $ whenJustM (enqueueMetricCatalog catalogBuffer records) \batch ->
     whenLeftM_ (trySync $ upsertMetricMetadata batch) \e ->
       Log.logAttention "OTEL_METRICS_META_WRITE_FAILED" (AE.object ["record_count" AE..= V.length batch, "error" AE..= show @Text e])
   pure result

@@ -1,3 +1,5 @@
+{-# LANGUAGE OrPatterns #-}
+
 module Pages.Settings (
   -- S3
   bringS3GetH,
@@ -861,7 +863,7 @@ notificationsTestPostH pid TestForm{..} = do
       let errHash = (errorData :: ErrorPatterns.ATError).hash
       chartUrlM <- errorTrendChartUrl appCtx pid errHash (addUTCTime (-3600) now) now
       pure baseAlert{chartUrl = chartUrlM}
-    _ -> pure baseAlert
+    (EndpointAlert{}; ShapeAlert; ReportAlert{}; MonitorsAlert{}; LogPatternAlert{}; LogPatternRateChangeAlert{}; MonitorsRecoveryAlert{}) -> pure baseAlert
 
   Log.logTrace "Sending test notification" (channel, pid, issueType)
 
@@ -1074,14 +1076,6 @@ webhookPostH sigHeaderM rawBody = do
           Nothing ->
             Log.logAttention "LS downgrade: no project for order_id" (show orderId :: Text, dat.meta.eventName, reason)
         pure "downgraded"
-      upgrade = do
-        rows <- Projects.upgradeToPaid orderId subItem.subscriptionId subItem.id (Projects.PlanName plan)
-        when (rows == 0) $ Log.logAttention "LS upgrade touched 0 rows" (show orderId :: Text, subItem.subscriptionId, plan)
-        when (rows > 1) $ Log.logAttention "LS upgrade touched multiple rows" (show orderId :: Text, rows)
-        Projects.projectBySubId (show subItem.subscriptionId) >>= \case
-          Just project -> Notify.runNotifyProduction $ notifyPlanChange envConfig project ET.planUpgradedEmail plan
-          Nothing -> Log.logAttention "LS upgrade: no project for sub_id" (show orderId :: Text, subItem.subscriptionId, plan)
-        pure "upgraded"
   case parseUrlPiece dat.meta.eventName of
     Right LSSubscriptionCreated -> do
       currentTime <- utcToZonedTime utc <$> Time.currentTime
@@ -1117,11 +1111,14 @@ webhookPostH sigHeaderM rawBody = do
       pure "payment failed notified"
     Right LSSubscriptionPaused -> downgrade "was paused"
     Right LSSubscriptionPaymentRefunded -> downgrade "payment refunded"
-    Right LSSubscriptionResumed -> upgrade
-    Right LSSubscriptionUnpaused -> upgrade
-    Right LSSubscriptionPaymentSuccess -> upgrade
-    Right LSSubscriptionPaymentRecovered -> upgrade
-    Right LSSubscriptionPlanChanged -> upgrade
+    Right (LSSubscriptionResumed; LSSubscriptionUnpaused; LSSubscriptionPaymentSuccess; LSSubscriptionPaymentRecovered; LSSubscriptionPlanChanged) -> do
+      rows <- Projects.upgradeToPaid orderId subItem.subscriptionId subItem.id (Projects.PlanName plan)
+      when (rows == 0) $ Log.logAttention "LS upgrade touched 0 rows" (show orderId :: Text, subItem.subscriptionId, plan)
+      when (rows > 1) $ Log.logAttention "LS upgrade touched multiple rows" (show orderId :: Text, rows)
+      Projects.projectBySubId (show subItem.subscriptionId) >>= \case
+        Just project -> Notify.runNotifyProduction $ notifyPlanChange envConfig project ET.planUpgradedEmail plan
+        Nothing -> Log.logAttention "LS upgrade: no project for sub_id" (show orderId :: Text, subItem.subscriptionId, plan)
+      pure "upgraded"
     Right LSSubscriptionUpdated -> do
       Log.logInfo "LS subscription_updated (no-op)" (show orderId :: Text, subItem.subscriptionId, plan)
       pure "updated"

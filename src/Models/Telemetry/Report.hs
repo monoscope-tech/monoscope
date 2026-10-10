@@ -52,7 +52,7 @@ import Relude
 
 
 data ReportSection a = Available a | Unavailable
-  deriving stock (Eq, Generic, Show)
+  deriving stock (Eq, Foldable, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
@@ -274,7 +274,7 @@ workloadStats useTf pid start end =
 
 data InfrastructureResource = InfrastructureResource
   { name :: Text
-  , scope :: Text
+  , scope :: Containers.Scope
   , host :: Maybe Text
   , cluster :: Maybe Text
   , namespace :: Maybe Text
@@ -309,7 +309,7 @@ infrastructureStats start end rows = InfrastructureStats (count Containers.Scope
       take 10 $ sortOn (\r -> (r.ready /= Just False, Down $ foldl' max 0 (catMaybes [r.cpuRatio, r.memoryRatio, r.storageRatio]), r.name)) $ V.toList rows <&> \r ->
         InfrastructureResource
           { name = r.containerName
-          , scope = T.toTitle (display r.scope)
+          , scope = r.scope
           , host = r.nodeName
           , cluster = r.cluster
           , namespace = r.namespace

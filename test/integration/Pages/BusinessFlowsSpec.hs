@@ -109,7 +109,7 @@ onboardingTests =
       project <- runQueryEffect tr (Projects.projectById testPid) >>= maybe (fail "Project missing") pure
       project.paymentPlan `shouldBe` "Free"
       V.toList project.onboardingStepsCompleted `shouldContain` ["Pricing"]
-      landing <- runAsBase tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.entrypointRedirectGetH "_overview.yaml" "Overview" [] testPid []
+      landing <- toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.entrypointRedirectGetH "_overview.yaml" "Overview" [] testPid []
       case lookupResponseHeader @"Location" landing of
         Header location -> location `shouldSatisfy` T.isPrefixOf ("/p/" <> testPid.toText <> "/dashboards/")
         _ -> expectationFailure "Expected the project to redirect to its dashboard"

@@ -24,6 +24,7 @@ import Data.Foldable.WithIndex (ifor_)
 import Data.HashMap.Strict qualified as HM
 import Data.Map qualified as Map
 import Data.Text qualified as T
+import Data.Text.Display (display)
 import Data.Time (UTCTime, addUTCTime)
 import Data.UUID qualified as UUID
 import Effectful.Reader.Static qualified
@@ -31,17 +32,19 @@ import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
+import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (atMapText)
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
-import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), copySourceAttr_, curlCommand, dateTime, detailTab_, disclosure_, emptyState_, httpTab_, stackTrace_, tabPanel_)
+import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), copySourceAttr_, curlCommand, dateTime, detailTab_, disclosure_, emptyState_, httpTab_, stackTrace_, tabPanel_, tonePill_)
 import Pkg.DeriveUtils (unAesonTextMaybe)
 import Pkg.StackTrace qualified as StackTrace
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Tracing (withSpan_)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
+import Web.HttpApiData (parseUrlPiece)
 import Utils
 
 
@@ -93,7 +96,7 @@ expandAPIlogItemH pid rdId timestamp _ tabM subtabM partial = withSpan_ "log-exp
     Just record
       | record.kind == Just "log" -> renderItem record Nothing (LogItemExpanded pid record tabM)
       | otherwise -> do
-          let fetchIn window match = maybe (pure Nothing) (\trId -> tf $ Telemetry.spanRecordInTrace pid trId window match) (record.context >>= (.trace_id) >>= guarded (not . T.null))
+          let fetchIn window match = maybe (pure Nothing) (\trId -> tf $ Telemetry.spanRecordInTrace pid trId window match) (Telemetry.traceIdOf record)
           (anchor, sdkSpan) <-
             anchorSdkSpan
               (fetchIn (addUTCTime (-300) record.timestamp, addUTCTime 1 record.timestamp) . Telemetry.SpanBySpanId)
@@ -456,7 +459,8 @@ expandedItemView pid item aptSp selectedTabM = do
       if isAlert
         then div_ [class_ "flex items-center gap-3 min-w-0"] do
           h4_ [class_ "text-xl max-w-96 truncate"] $ toHtml $ fromMaybe "" item.name
-          span_ [class_ $ "badge badge-sm whitespace-nowrap " <> getAlertStatusColor (fromMaybe "" item.status_message)] $ toHtml $ fromMaybe "" item.status_message
+          whenJust (rightToMaybe . parseUrlPiece =<< atMapText "monitor.status" (unAesonTextMaybe item.attributes)) \status ->
+            tonePill_ (case status of Monitors.MSAlerting -> ErrorBadge; Monitors.MSWarning -> WarningBadge; Monitors.MSNormal -> SuccessBadge) (T.toTitle $ display status)
         else div_ [class_ "min-w-0"] $ renderSummaryElements (summaryForDetailView (Telemetry.generateSummary item))
       -- span_id isn't carried by generateSummary; keep one pill so its filter-menu stays reachable.
       whenJust (item.context >>= (.span_id) >>= guarded (not . T.null)) \v ->
@@ -480,7 +484,7 @@ expandedItemView pid item aptSp selectedTabM = do
         -- has to mint a unique selector and the two stay coupled by position.
         button_ [class_ "action-btn", copySourceAttr_ "this.nextElementSibling"] $ actionBtnBody "copy" "Copy as curl"
         pre_ [class_ "hidden"] $ toHtml curl
-      whenJust (item.context >>= (.trace_id) >>= guarded (not . T.null)) \trId ->
+      whenJust (Telemetry.traceIdOf item) \trId ->
         -- A link first, so it works from every shell this view renders in: the details
         -- panel now also opens on dashboards, where the log explorer's trace overlay
         -- doesn't exist and the old button silently did nothing. Where the overlay IS

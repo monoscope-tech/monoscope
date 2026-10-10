@@ -43,26 +43,26 @@ spec = around withTestResources do
       afterInvalid <- countShares tr
       afterInvalid `shouldBe` beforeInvalid
 
-      runAsBase tr (ApiH.apiShareLinkCreate testPid ApiH.ShareLinkCreate{ApiH.eventId = missingEventId, ApiH.eventCreatedAt = eventTime, ApiH.eventType = Just ShareEvents.ShareLog})
+      toBaseServantResponse tr (ApiH.apiShareLinkCreate testPid ApiH.ShareLinkCreate{ApiH.eventId = missingEventId, ApiH.eventCreatedAt = eventTime, ApiH.eventType = Just ShareEvents.ShareLog})
         `shouldThrow` anyException
       afterInvalidApi <- countShares tr
       afterInvalidApi `shouldBe` beforeInvalid
 
       (_, Share.ShareLinkPost shareIdText) <- testServant tr $ Share.shareLinkPostH testPid eventId eventTime (Just ShareEvents.ShareRequest)
       shareId <- maybe (fail "the share ID was invalid") pure $ UUID.fromText shareIdText
-      live <- runAsBase tr $ Share.shareLinkGetH shareId
+      live <- toBaseServantResponse tr $ Share.shareLinkGetH shareId
       let liveHtml = TL.toStrict $ renderText $ toHtml live
       liveHtml `shouldSatisfy` T.isInfixOf "shared-checkout"
       liveHtml `shouldSatisfy` T.isInfixOf "Expires in"
 
-      apiShare <- runAsBase tr $ ApiH.apiShareLinkCreate testPid ApiH.ShareLinkCreate{ApiH.eventId = eventId, ApiH.eventCreatedAt = eventTime, ApiH.eventType = Just ShareEvents.ShareLog}
-      apiLive <- runAsBase tr $ Share.shareLinkGetH apiShare.id
+      apiShare <- toBaseServantResponse tr $ ApiH.apiShareLinkCreate testPid ApiH.ShareLinkCreate{ApiH.eventId = eventId, ApiH.eventCreatedAt = eventTime, ApiH.eventType = Just ShareEvents.ShareLog}
+      apiLive <- toBaseServantResponse tr $ Share.shareLinkGetH apiShare.id
       TL.toStrict (renderText $ toHtml apiLive) `shouldSatisfy` T.isInfixOf "shared-checkout"
 
       void $ withResource tr.trPool \conn ->
         PGS.execute conn [sql|UPDATE apis.share_events SET created_at = ? WHERE id = ?|] (frozenTime, shareId)
       advanceDays tr 3
-      expired <- runAsBase tr $ Share.shareLinkGetH shareId
+      expired <- toBaseServantResponse tr $ Share.shareLinkGetH shareId
       let expiredHtml = TL.toStrict $ renderText $ toHtml expired
       expiredHtml `shouldSatisfy` T.isInfixOf "Link expired"
       expiredHtml `shouldSatisfy` not . T.isInfixOf "shared-checkout"

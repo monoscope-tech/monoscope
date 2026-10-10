@@ -2,7 +2,6 @@ module Pages.Share (shareLinkPostH, shareLinkGetH, shareReplaySessionGetH, Share
 
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
-import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, diffUTCTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
@@ -124,7 +123,7 @@ shareLinkGetH sid = do
         Just anchor -> do
           let isTrace = row.eventType /= ShareEvents.ShareLog
           breakdownM <- runMaybeT do
-            tid <- hoistMaybe $ guard isTrace *> anchor.context >>= (.trace_id) >>= guarded (not . T.null)
+            tid <- hoistMaybe $ guard isTrace *> Telemetry.traceIdOf anchor
             (traceItem, spans) <- MaybeT $ Telemetry.getTraceDetails useTf row.pid tid (Just row.eventCreatedAt) now
             pure $ PTelemetry.tracePage row.pid traceItem (V.mapMaybe Telemetry.convertOtelLogsAndSpansToSpanRecord (V.fromList spans)) Nothing
           pure $ ShareLive row.hoursLeft breakdownM (LogItem.expandedItemView row.pid anchor Nothing Nothing) (guard isTrace *> sessionIdOf anchor <&> (sid,row.pid,))

@@ -11,7 +11,7 @@
 --   * __Backpressure__ — that the per-connection queue holds its bound and loses the oldest.
 --
 -- These drive 'LT.publishMatches' directly rather than going through OTLP: the hook in
--- @dualWriteWithPoisonMapping@ is one call, while everything worth asserting about — which
+-- @ingestOtelRecords@ is one call, while everything worth asserting about — which
 -- subscriptions match, what crosses the wire, what is dropped — lives on this side of it.
 module LiveTailSpec (spec) where
 
@@ -459,7 +459,7 @@ spec = do
     it "directOtlpIngest_reachesLiveTail_notOnlyTheQueuePath" \tr -> do
       -- Regression, and the one that made Live Tail look broken rather than subtly wrong.
       --
-      -- The ingest hook lived only in 'dualWriteWithPoisonMapping' — the path telemetry takes
+      -- The ingest hook lived only in the queue path's dual write — the path telemetry takes
       -- when it arrives via Kafka or Pub/Sub. Records arriving over OTLP directly (gRPC on
       -- 4317, or OTLP/HTTP) go through 'processSignalRequest' and write straight to the store.
       -- That path had no hook, so in any deployment without a queue in front — every dev box,

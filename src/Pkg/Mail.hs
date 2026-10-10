@@ -22,7 +22,7 @@ import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
-import Pkg.EmailTemplates (EndpointAlertRow (..), groupedByContext, stripSummaryBadges, traceExplorerUrl)
+import Pkg.EmailTemplates (EndpointAlertRow (..), NewLogPattern (..), groupedByContext, stripSummaryBadges, traceExplorerUrl)
 import Relude hiding (Reader, ask)
 import System.Config (AuthContext (env))
 import System.Config qualified as Config
@@ -64,16 +64,7 @@ data NotificationAlerts
       , monitorUrl :: Text
       , chartUrl :: Maybe Text
       }
-  | LogPatternAlert
-      { issueUrl :: Text
-      , patternText :: Text
-      , sampleMessage :: Maybe Text
-      , logLevel :: Maybe Text
-      , serviceName :: Maybe Text
-      , sourceField :: Text
-      , occurrenceCount :: Int
-      , isError :: Bool
-      }
+  | LogPatternAlert NewLogPattern
   | LogPatternRateChangeAlert
       { issueUrl :: Text
       , patternText :: Text
@@ -129,7 +120,7 @@ sendDiscordAlert replyToMsgIdM alert pid pTitle channelIdM' = do
             ReportAlert{..} -> Just $ discordReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle reportUrl allChartUrl errorChartUrl
             MonitorsAlert{..} -> Just $ discordMonitorAlert monitorTitle monitorUrl chartUrl
             MonitorsRecoveryAlert{..} -> Just $ AE.object ["text" AE..= ("✅ *Alert resolved for `" <> monitorTitle <> "`* \n<" <> monitorUrl <> "|View Monitor>")]
-            LogPatternAlert{..} -> Just $ mkDiscordLogPatternPayload patternText issueUrl logLevel serviceName sourceField occurrenceCount sampleMessage pTitle isError
+            LogPatternAlert lp -> Just $ mkDiscordLogPatternPayload lp pTitle
             LogPatternRateChangeAlert{..} -> Just $ mkDiscordLogPatternRateChangePayload patternText issueUrl logLevel serviceName direction currentRate baselineMean changePercent pTitle isError
             ShapeAlert -> Nothing
       join <$> forM (mkPayload alert) \payload -> Notify.sendNotificationWithReply $ Notify.discordThreadedNotification cid payload replyToMsgIdM
@@ -158,7 +149,7 @@ sendSlackAlert threadTsM alert pid pTitle channelM = do
             ReportAlert{..} -> Just $ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle cid reportUrl allChartUrl errorChartUrl
             MonitorsAlert{..} -> Just $ slackMonitorAlert monitorTitle monitorUrl chartUrl cid
             MonitorsRecoveryAlert{..} -> Just $ slackAttachment cid "#22c55e" [slackSection ("✅ *Resolved:* <" <> monitorUrl <> "|" <> monitorTitle <> ">")]
-            LogPatternAlert{..} -> Just $ mkSlackLogPatternPayload patternText issueUrl logLevel serviceName sourceField occurrenceCount sampleMessage pTitle cid isError
+            LogPatternAlert lp -> Just $ mkSlackLogPatternPayload lp pTitle cid
             LogPatternRateChangeAlert{..} -> Just $ mkSlackLogPatternRateChangePayload patternText issueUrl logLevel serviceName direction currentRate baselineMean changePercent pTitle cid isError
             ShapeAlert -> Nothing
           isDefaultChannel = cid == sd.channelId
@@ -546,8 +537,8 @@ rateChangeSeverity isError direction currentRate baselineMean changePercent logL
       ]
 
 
-mkSlackLogPatternPayload :: Text -> Text -> Maybe Text -> Maybe Text -> Text -> Int -> Maybe Text -> Text -> Text -> Bool -> AE.Value
-mkSlackLogPatternPayload patternText issueUrl logLevel serviceName sourceField occurrenceCount sampleMessage project channelId isError =
+mkSlackLogPatternPayload :: NewLogPattern -> Text -> Text -> AE.Value
+mkSlackLogPatternPayload NewLogPattern{..} project channelId =
   slackAttachment channelId color
     $ [ slackSection ("<" <> issueUrl <> "|" <> emoji <> " *" <> label <> "* · " <> project <> ">")
       , slackSection (snippet 200 patternText)
@@ -659,8 +650,8 @@ discordNewEndpointAlert projectName endpoints hash projectUrl =
         foldMap (\h -> "🌐 **" <> h <> "**\n") hostM <> foldMap (\c -> "_" <> c <> "_\n") ctxM <> bulletList labels
 
 
-mkDiscordLogPatternPayload :: Text -> Text -> Maybe Text -> Maybe Text -> Text -> Int -> Maybe Text -> Text -> Bool -> AE.Value
-mkDiscordLogPatternPayload patternText issueUrl logLevel serviceName sourceField occurrenceCount sampleMessage project isError =
+mkDiscordLogPatternPayload :: NewLogPattern -> Text -> AE.Value
+mkDiscordLogPatternPayload NewLogPattern{..} project =
   discordEmbedMsg (emoji <> " **" <> label <> "**")
     $ AE.object
       [ "title" AE..= (emoji <> " " <> label <> " · " <> project)
@@ -708,7 +699,7 @@ sendPagerdutyAlertToService integrationKey (EndpointAlert project endpoints hash
 sendPagerdutyAlertToService integrationKey RuntimeErrorAlert{issueId, issueTitle, errorData, chartUrl} projectTitle projectUrl =
   let errorUrl = projectUrl <> "/issues/by_hash/" <> errorData.hash
    in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-error-" <> issueId) (projectTitle <> ": " <> errorData.errorType <> " - " <> stripSummaryBadges issueTitle) Notify.PDError (AE.object $ ["error_type" AE..= errorData.errorType, "message" AE..= errorData.message] <> maybeToList (("chart_url" AE..=) <$> chartUrl)) errorUrl
-sendPagerdutyAlertToService integrationKey LogPatternAlert{issueUrl, patternText, logLevel, serviceName, isError} projectTitle _ =
+sendPagerdutyAlertToService integrationKey (LogPatternAlert NewLogPattern{issueUrl, patternText, logLevel, serviceName, isError}) projectTitle _ =
   let pat = stripSummaryBadges patternText
       kind = if isError then "Error Log Pattern" else "Log Pattern" :: Text
       sev = if isError || logLevel == Just "error" then Notify.PDCritical else Notify.PDWarning

@@ -1224,7 +1224,7 @@ audienceBy pick rows =
 audiencePanel_ :: [RumBreakdown] -> Html ()
 audiencePanel_ breakdown = rumPanel_ "Audience" "Sessions by browser, operating system, and device class — errors highlight where failures concentrate" Nothing do
   if null breakdown
-    then panelEmpty_ "No user agent data in this time range"
+    then Components.emptyState_ def{size = ESCompact} "No user agent data in this time range" ""
     else div_ [class_ "grid grid-cols-3 divide-x divide-strokeWeak max-md:grid-cols-1 max-md:divide-x-0 max-md:divide-y"] do
       audienceColumn_ "Browser" browserHue $ audienceBy (\(b, _, _) -> b) breakdown
       audienceColumn_ "Operating system" osHue $ audienceBy (\(_, os, _) -> os) breakdown
@@ -1298,7 +1298,7 @@ sessions_ page = slot_ page PanelSessions sessionsSkeleton_ do
   div_ [class_ "grid bg-bgBase xl:h-full xl:min-h-0 xl:grid-cols-[minmax(32rem,35%)_minmax(0,1fr)]"] do
     section_ [id_ "rum-sessions-list", Aria.label_ "Sessions", tabindex_ "0", class_ "min-w-0 overflow-y-auto overscroll-contain border-strokeWeak xl:min-h-0 xl:border-e max-xl:max-h-[45svh] max-xl:border-b"] do
       when page.servedStale refreshingHint_
-      if any (\case SessionSearchQuery{} -> True; _ -> False) page.degradedPanels then degradedBanner_ page PanelSessions else sessionsTable_ True page.now page.links page.query page.sessionFilter page.selectedSession page.sessions
+      if PanelSessions `elem` map queryPanel page.degradedPanels then degradedBanner_ page PanelSessions else sessionsTable_ True page.now page.links page.query page.sessionFilter page.selectedSession page.sessions
       panelRevalidation_ page PanelSessions
     sessionWorkspace_ page
 
@@ -1306,7 +1306,7 @@ sessions_ page = slot_ page PanelSessions sessionsSkeleton_ do
 sessionWorkspace_ :: RumData -> Html ()
 sessionWorkspace_ page =
   section_ [id_ "rum-replay-workspace", class_ "min-w-0 bg-bgBase xl:min-h-0 xl:overflow-y-auto xl:overscroll-contain", Aria.label_ "Session details"] do
-    if any (\case SessionDetailQuery{} -> True; _ -> False) page.degradedPanels then degradedBanner_ page PanelSessionDetail else replayWorkspace_ page.links selected
+    if PanelSessionDetail `elem` map queryPanel page.degradedPanels then degradedBanner_ page PanelSessionDetail else replayWorkspace_ page.links selected
     when (page.panel == Just PanelSessionDetail) $ panelRevalidation_ page PanelSessionDetail
   where
     selected = page.selectedSessionData <|> (page.selectedSession >>= \sid -> find ((== sid) . (.id)) page.sessions)
@@ -1549,7 +1549,7 @@ performance_ page = div_ [class_ "space-y-2 px-4 pb-4 pt-2 max-md:px-3"] do
 vitalTrendPanel_ :: TimePicker.TimeWindow -> [VitalTrendPoint] -> Html ()
 vitalTrendPanel_ window points = rumPanel_ "Web Vitals over time" "P75 of intervals ending in each bucket; unavailable coverage appears as gaps" Nothing do
   if null points
-    then panelEmpty_ "No web vital samples in this time range"
+    then Components.emptyState_ def{size = ESCompact} "No web vital samples in this time range" ""
     else div_ [class_ "grid grid-cols-2 gap-3 p-3 max-lg:grid-cols-1"] $ forM_ vitalDefinitions \vital -> do
       let series = sortWith fst [(p.bucket, RUM.measurementValue p.measurement) | p <- points, p.metricName == vital.name]
           -- Milliseconds, matching what the chart endpoint serves (Charts.convertTimestampsToMs):
@@ -1733,10 +1733,6 @@ vitalsTable_ vitals = rumPanel_ "Web Vitals field performance" "Intervals ending
 -- | Every RUM card is the shared 'Components.panel_' flush-card variant.
 rumPanel_ :: Text -> Text -> Maybe (Text, Text) -> Html () -> Html ()
 rumPanel_ title subtitle action = Components.panel_ Components.FlushCard def{Components.subtitle = Just subtitle, Components.action = action} title
-
-
-panelEmpty_ :: Text -> Html ()
-panelEmpty_ message = Components.emptyState_ def{size = ESCompact} message ""
 
 
 sessionIdentity :: RumSession -> Text
@@ -1938,6 +1934,18 @@ degradedBanner_ page panel = div_ [role_ "alert", class_ "flex items-start gap-2
     strong_ "Some RUM data could not be loaded."
     span_ [class_ "ml-1 text-textWeak"] $ toHtml $ "Retry or narrow the time range. Unavailable: " <> T.intercalate ", " (map rumQueryLabel page.degradedPanels) <> "."
   button_ ([type_ "button", class_ "btn btn-sm shrink-0"] <> panelSwapAttrs page panel True "click" (Just "replace")) "Retry"
+
+
+-- | The panel a degraded query blanks; the inverse of @panelQueries@.
+queryPanel :: RumQuery -> RumPanel
+queryPanel = \case
+  PulseQuery -> PanelPulse
+  PagesQuery -> PanelPages
+  ErrorsQuery -> PanelErrors
+  SessionSearchQuery{} -> PanelSessions
+  SessionDetailQuery{} -> PanelSessionDetail
+  VitalPopulationQuery{} -> PanelVitals
+  BreakdownQuery -> PanelAudience
 
 
 rumQueryLabel :: RumQuery -> Text

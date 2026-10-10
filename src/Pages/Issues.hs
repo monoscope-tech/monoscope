@@ -1685,17 +1685,18 @@ assignErrorPostH :: Projects.ProjectId -> UUID.UUID -> AssignErrorForm -> ATAuth
 assignErrorPostH pid errUuid form = do
   (sess, _) <- Projects.sessionAndProject pid
   members <- ProjectMembers.selectActiveProjectMembers pid
-  let assigneeIdM = form.assigneeId >>= UUID.fromText <&> Projects.UserId
-      render eidM aidM = addRespHeaders $ assigneeSection eidM aidM members
-  withErrorPattern pid errUuid (render Nothing Nothing) \err ->
-    if
-      | not (all (\uid -> any ((== uid) . (.userId)) members) assigneeIdM) -> addErrorToast "Assignee must be an active project member" Nothing >> render (Just err.id) err.assigneeId
-      | assigneeIdM == err.assigneeId -> addSuccessToast "Assignee unchanged" Nothing >> render (Just err.id) err.assigneeId
-      | otherwise -> do
-          -- An error older than issue tracking has no issue row to carry the assignee.
-          Issues.selectIssueByHash pid err.hash Issues.AnyIssue >>= maybe (assignError pid assigneeIdM err) \issue -> assignIssues pid sess.user.id [issue{Issues.assigneeId = err.assigneeId}] assigneeIdM
-          addSuccessToast "Assignee updated" Nothing
-          render (Just err.id) assigneeIdM
+  let render eidM aidM = addRespHeaders $ assigneeSection eidM aidM members
+  withErrorPattern pid errUuid (render Nothing Nothing) \err -> case parseAssignee form.assigneeId of
+    Left e -> addErrorToast e Nothing >> render (Just err.id) err.assigneeId
+    Right assigneeIdM ->
+      if
+        | not (all (\uid -> any ((== uid) . (.userId)) members) assigneeIdM) -> addErrorToast "Assignee must be an active project member" Nothing >> render (Just err.id) err.assigneeId
+        | assigneeIdM == err.assigneeId -> addSuccessToast "Assignee unchanged" Nothing >> render (Just err.id) err.assigneeId
+        | otherwise -> do
+            -- An error older than issue tracking has no issue row to carry the assignee.
+            Issues.selectIssueByHash pid err.hash Issues.AnyIssue >>= maybe (assignError pid assigneeIdM err) \issue -> assignIssues pid sess.user.id [issue{Issues.assigneeId = err.assigneeId}] assigneeIdM
+            addSuccessToast "Assignee updated" Nothing
+            render (Just err.id) assigneeIdM
   where
     assigneeSection :: Maybe ErrorPatterns.ErrorPatternId -> Maybe Projects.UserId -> [ProjectMembers.ProjectMemberVM] -> Html ()
     assigneeSection eidM aidM mems =
@@ -2164,12 +2165,11 @@ issueListGetH
   -> [Text]
   -> [Text]
   -> ATAuthCtx (RespHeaders (TableResponse IssueVM))
-issueListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM serviceFilters typeFilters = do
+issueListGetH pid filterTM sortM _since pageM perPageM loadM periodM serviceFilters typeFilters = do
   (session, project, bw) <- mkPageCtx pid
   let tab = parseTab filterTM
       currentFilterTab = tabParam tab
       tabFilters = tabIssueFilters tab
-      filterV = fromMaybe "14d" timeFilter
       pageInt = fromMaybe 0 $ readMaybe . toString =<< pageM
       perPage = fromMaybe 25 $ readMaybe . toString =<< perPageM
       currentSort = fromMaybe "-created_at" sortM
@@ -2216,7 +2216,7 @@ issueListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM service
           }
       serviceMenu = multiSelectFilter "Service" "service" serviceFilters availableServices
       typeMenu = multiSelectFilter "Type" "type" typeFilters availableTypes
-      issuesVM = V.fromList $ map (IssueVM currTime filterV) issues
+      issuesVM = V.fromList $ map (IssueVM currTime period) issues
       tableActions =
         TableHeaderActions
           { baseUrl
@@ -2438,7 +2438,7 @@ issueColumns pid period names toggleM =
   where
     usersCol (IssueVM _ _ issue) = span_ [class_ $ "tabular-nums text-sm " <> bool "text-textStrong" "text-textWeak" (issue.usersCount == 0)] $ toHtml $ bool (formatWithCommas (fromIntegral issue.usersCount :: Double)) "\x2014" (issue.usersCount == 0)
     activityCol (IssueVM _ _ issue) = sparkline_ $ V.toList issue.activityBuckets
-    renderIssueMainCol (IssueVM currTime filterV issue) = do
+    renderIssueMainCol (IssueVM currTime countPeriod issue) = do
       let b = issue.base
           isAcknowledged = isJust b.acknowledgedAt
           isArchived = isJust b.archivedAt
@@ -2467,7 +2467,7 @@ issueColumns pid period names toggleM =
         div_ [class_ "max-md:hidden"] $ issuePreview_ (Just currTime) issue
         div_ [class_ "hidden max-md:flex items-center justify-between text-xs text-textWeak"] do
           div_ [class_ "flex items-center gap-1.5"] do
-            span_ [class_ $ "tabular-nums" <> bool "" " font-medium text-textStrong" (issue.eventCount > 100)] $ toHtml $ countNoun issue.eventCount "event" <> " (" <> filterV <> ")"
+            span_ [class_ $ "tabular-nums" <> bool "" " font-medium text-textStrong" (issue.eventCount > 100)] $ toHtml $ countNoun issue.eventCount "event" <> " (" <> countPeriod <> ")"
             span_ [class_ "opacity-30"] "·"
             span_ [] $ toHtml $ agoText currTime $ zonedTimeToUTC b.createdAt
           div_ [class_ "flex items-center gap-3"] do

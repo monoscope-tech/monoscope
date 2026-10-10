@@ -19,7 +19,6 @@ module Models.Apis.Endpoints (
   setHostsArchived,
   hostTrafficSince,
   hostRetentionSweep,
-  endpointRequestStatsByProject,
   endpointRequestStatsPageByProject,
   listEndpointsPaged,
   getEndpointById,
@@ -70,6 +69,7 @@ import Data.Time (UTCTime, ZonedTime, addUTCTime, zonedTimeToUTC)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Vector qualified as V
+import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
@@ -81,7 +81,7 @@ import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Models.Apis.LogQueries (densifyBuckets)
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..), rawSql)
+import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..), rawSql, selectFrom)
 import Relude
 import Utils (toXXHash)
 import Web.HttpApiData (FromHttpApiData (..))
@@ -113,6 +113,7 @@ data Endpoint = Endpoint
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (Default, FromRow, HI.DecodeRow, NFData, ToRow)
+  deriving (Entity) via (GenericEntity '[Schema "apis", TableName "endpoints", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Endpoint)
   deriving (FromField) via Aeson Endpoint
   deriving (AE.FromJSON) via DAE.Snake Endpoint
 
@@ -199,7 +200,7 @@ data EndpointMetaRow = EndpointMetaRow
 data Direction = Incoming | Outgoing
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (Hashable)
-  deriving (AE.ToJSON, Display, FromHttpApiData) via WrappedEnumSC 'Nothing "" Direction
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromHttpApiData) via WrappedEnumSC 'Nothing "" Direction
 
 
 -- | Activity window the period toggle offers, spelled as it appears in the URL.
@@ -318,7 +319,7 @@ data HostQuery = HostQuery
   deriving anyclass (Hashable)
 
 
--- | Row filters of 'endpointRequestStatsByProject': optional host, url_path search, archived state.
+-- | Row filters of 'endpointRequestStatsPageByProject': optional host, url_path search, archived state.
 endpointFiltersSql :: EndpointQuery -> HI.Sql
 endpointFiltersSql q =
   foldMap (\h -> [HI.sql| AND enp.host = #{h}|]) q.host
@@ -327,16 +328,12 @@ endpointFiltersSql q =
 
 
 -- FIXME: Include and return a boolean flag to show if fields that have annomalies.
+-- | A page of endpoint traffic plus the total after applying telemetry-backed filters.
 -- Endpoint identity comes from Postgres (@apis.*@); per-endpoint traffic stats come
 -- from the telemetry store (TimeFusion when @useTf@), which holds no @apis.*@ tables —
 -- so the two are fetched separately and joined + sorted + paginated in Haskell.
 -- 'ShellOnly' skips the telemetry aggregate entirely: the page renders skeleton stat
 -- cells and defers the (seconds-long) stats fetch, mirroring 'dependenciesAndEventsCount'.
-endpointRequestStatsByProject :: (DB es, Labeled "timefusion" Hasql :> es, Time :> es) => StatsMode -> Bool -> Projects.ProjectId -> EndpointQuery -> Eff es (V.Vector EndpointRequestStats)
-endpointRequestStatsByProject statsMode useTf pid q = fst <$> endpointRequestStatsPageByProject statsMode useTf pid q
-
-
--- | A page of endpoint traffic plus the total after applying telemetry-backed filters.
 -- Service scope cannot be counted from @apis.endpoints@: one endpoint can receive traffic
 -- from several services, so the same aggregate that builds the rows must also paginate them.
 endpointRequestStatsPageByProject :: (DB es, Labeled "timefusion" Hasql :> es, Time :> es) => StatsMode -> Bool -> Projects.ProjectId -> EndpointQuery -> Eff es (V.Vector EndpointRequestStats, Int)
@@ -410,7 +407,7 @@ endpointRequestStatsPageByProject statsMode useTf pid q = do
 
 data HostEvents = HostEvents
   { host :: Text
-  , outgoing :: Bool
+  , direction :: Direction
   , eventCount :: Int64
   , first_seen :: Maybe ZonedTime
   , last_seen :: Maybe ZonedTime
@@ -418,7 +415,7 @@ data HostEvents = HostEvents
   , services :: V.Vector Text -- distinct resource.service.name emitting traffic for this host
   }
   deriving stock (Generic, Show)
-  deriving anyclass (AE.FromJSON, AE.ToJSON, HI.DecodeRow)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 -- Per-(host, direction, service, bucket) telemetry slice, aggregated in Haskell.
@@ -488,7 +485,7 @@ dependenciesAndEventsCount statsMode useTf pid q = do
         let rs = fromMaybe [] $ Map.lookup (h, o) telMap
          in HostEvents
               { host = h
-              , outgoing = o
+              , direction = bool Incoming Outgoing o
               , eventCount = sum $ map (.cnt) rs
               , first_seen = pickZoned (flip compare) $ map (.firstSeen) rs
               , last_seen = pickZoned compare $ map (.lastSeen) rs
@@ -608,21 +605,13 @@ listEndpointsPaged pid outgoing searchM limit offset = do
           WHERE project_id = #{pid} AND outgoing = #{outgoing}
             AND (NOT #{hasSearch} OR url_path LIKE #{pat})
         |]
-  rows <-
-    Hasql.interp
-      [HI.sql|
-        SELECT id, created_at, updated_at, project_id, url_path, url_params, method, host, hash, outgoing, description, service_name, environment
-        FROM apis.endpoints ^{whereSql}
-        ORDER BY url_path ASC LIMIT #{limit} OFFSET #{offset} |]
+  rows <- Hasql.interp (selectFrom @Endpoint <> whereSql <> [HI.sql| ORDER BY url_path ASC LIMIT #{limit} OFFSET #{offset} |])
   total <- fromMaybe 0 <$> Hasql.interpOne [HI.sql| SELECT COUNT(*)::bigint FROM apis.endpoints ^{whereSql} |]
   pure (rows, total)
 
 
 getEndpointById :: DB es => Projects.ProjectId -> EndpointId -> Eff es (Maybe Endpoint)
-getEndpointById pid eid =
-  Hasql.interpOne
-    [HI.sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, host, hash, outgoing, description, service_name, environment
-             FROM apis.endpoints WHERE id = #{eid} AND project_id = #{pid} |]
+getEndpointById pid eid = Hasql.interpOne (selectFrom @Endpoint <> [HI.sql| WHERE id = #{eid} AND project_id = #{pid} |])
 
 
 -- Endpoint template discovery ---------------------------------------------------

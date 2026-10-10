@@ -321,7 +321,7 @@ spec = around withTestResources do
       -- the teammate-opens-the-link assertion: the share view resolves with
       -- no auth context (shareLinkGetH throws err404 if the link is dead)
       let sid = fromMaybe (error $ "share url did not end in a UUID: " <> url) (UUID.fromText (T.takeWhileEnd (/= '/') url))
-      void $ runAsBase tr (Share.shareLinkGetH sid)
+      void $ toBaseServantResponse tr (Share.shareLinkGetH sid)
 
   describe "dashboards-as-code lifecycle" do
     it "yaml dump round-trips through apply keyed on file_path; duplicate/star/delete" \tr -> do

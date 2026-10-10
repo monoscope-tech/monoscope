@@ -41,30 +41,19 @@ import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
+import Pages.BodyWrapper (BWConfig (..), OnboardingStep (..), PageCtx (..), mkPageCtx, stepUrl)
 import Pages.Components
-import Pkg.DeriveUtils (WrappedEnumShow (..), assetUrl)
+import Pkg.DeriveUtils (assetUrl)
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, HXRedirectDest, RespHeaders, TriggerEvents, XWidgetJSON, addErrorToast, addRespHeaders, redirectCS)
 import Utils (LoadingSize (..), LoadingType (..), faSprite_, loadingIndicator_, lookupValueText, onpointerdown_)
 import Web.FormUrlEncoded
-import Web.HttpApiData (FromHttpApiData)
 
 
 -- | Builds a @/p/PID/onboarding@-rooted path; @path@ is the suffix (@?step=X@, @/info@, …).
 onboardingUrl :: Projects.ProjectId -> Text -> Text
 onboardingUrl pid path = "/p/" <> pid.toText <> "/onboarding" <> path
-
-
--- | Constructor names are the @?step=@ URL values and the stored @onboarding_steps_completed@ entries.
-data OnboardingStep = Info | Survey | NotifChannel | Integration | Pricing | Complete
-  deriving stock (Eq, Read, Show)
-  deriving (FromHttpApiData) via WrappedEnumShow OnboardingStep
-
-
-stepUrl :: Projects.ProjectId -> OnboardingStep -> Text
-stepUrl pid step = onboardingUrl pid $ "?step=" <> show step
 
 
 onboardingGetH :: Projects.ProjectId -> Maybe OnboardingStep -> ATAuthCtx (RespHeaders OnboardingGet)

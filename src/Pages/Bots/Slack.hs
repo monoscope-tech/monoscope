@@ -1,3 +1,4 @@
+{-# LANGUAGE OrPatterns #-}
 {-# LANGUAGE PackageImports #-}
 
 module Pages.Bots.Slack (slackFormPostH, linkIdentityGetH, linkIdentityPostH, SlackLinkForm (..), startInstallGetH, processSlackEvent, refreshSlackProgress, resetSlackSession, reconcileIncidentDeliveries, linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, getSlackChannelInfo, SlackChannelsResponse (..), SlackActionForm (..), externalOptionsH, slackInteractionsH, SlackInteraction (..), sendSlackWelcomeMessage, sendSlackWelcomeViaWebhook, logWelcomeMessageFailure) where
@@ -729,7 +730,7 @@ slackEventsPostH body timestamp signature = do
           SELECT now(), 'queued', #{job} FROM receipt|]
       case kind of
         AgentSessionStopped _ -> Integrations.recordSlackSessionEvent team_id event_id
-        _ -> pass
+        (UserMessage _; AppMention _; AgentSessionTitleChanged _; AppContextChanged _; AppHomeOpened _; BotMessage; MessageEdit; AssistantStarted _; AssistantContextChanged _; UnknownEvent _) -> pass
       pure $ AE.object []
 
 
@@ -766,13 +767,12 @@ processSlackEvent receiptId =
             UserMessage message -> withThreadLock team_id message process
             AppMention message -> withThreadLock team_id message process
             AppHomeOpened home -> withEventLock ("slack-onboarding:" <> encodeText ([team_id, home.channel, home.user] :: [Text])) process
-            _ -> process
+            (AgentSessionStopped _; AgentSessionTitleChanged _; AppContextChanged _; BotMessage; MessageEdit; AssistantStarted _; AssistantContextChanged _; UnknownEvent _) -> process
     withThreadLock workspaceId message = withInvestigationLock workspaceId message.channel (fromMaybe message.ts message.thread_ts)
 
     handleEventCallback envCfg kind workspaceId eventId =
       case kind of
-        AgentSessionStopped _ -> Integrations.recordSlackSessionEvent workspaceId eventId
-        AgentSessionTitleChanged _ -> Integrations.recordSlackSessionEvent workspaceId eventId
+        (AgentSessionStopped _; AgentSessionTitleChanged _) -> Integrations.recordSlackSessionEvent workspaceId eventId
         AppContextChanged change -> saveAppContext workspaceId change
         AppHomeOpened home
           | home.tab == Just "messages" -> do

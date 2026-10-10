@@ -28,7 +28,7 @@ import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.DashboardTemplates (dashboardTemplatesCompiled, loadDashboardFromVM)
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.Projects qualified as Projects
-import Pages.BodyWrapper (BWConfig, PageCtx (..))
+import Pages.BodyWrapper (BWConfig, OnboardingStep (NotifChannel), PageCtx (..), stepUrl)
 import Pages.Components (EmptyStateCfg (..), emptyState_, navBar)
 import Pkg.AI qualified as AI
 import Pkg.Components.TimePicker qualified as TP
@@ -487,5 +487,5 @@ parseInstallState stateM = (Projects.projectIdFromText =<< viaNonEmpty head part
 -- "installed" confirmation page.
 installedResponse :: Text -> Projects.ProjectId -> Bool -> BWConfig -> Headers '[Header "Location" Text] BotResponse
 installedResponse platform pid isOnboarding bwconf
-  | isOnboarding = addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoContent $ PageCtx bwconf ()
+  | isOnboarding = addHeader (stepUrl pid NotifChannel) $ NoContent $ PageCtx bwconf ()
   | otherwise = addHeader "" $ BotLinked $ PageCtx bwconf (platform, Just pid)

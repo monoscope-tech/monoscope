@@ -748,6 +748,49 @@ reportProjectUsage authCtx pid =
           --    succeeded chunk. Retry happens on the next daily ReportUsage tick.
           pending <- Projects.pendingUsageSubmissions pid
           unless (null pending) $ Log.logInfo "Draining pending usage chunks" ("project_id", pid.toText, "pending", length pending)
+          let submitPending = for_ pending \row -> do
+                let chunkId = show row.id :: Text
+                    qty = Projects.chunkQuantityInt row.quantity
+                    -- window_end + sub_id surface in logs so on-call can pivot to
+                    -- the provider UI, which is not indexed by our chunk UUIDs.
+                    logFields extra =
+                      ("project_id", pid.toText) : ("chunk_id", chunkId) : ("quantity", show qty :: Text) : ("meter", show row.meter :: Text) : ("window_end", show row.windowEnd :: Text) : ("sub_id", fromMaybe "" project.subId) : extra
+                -- A chunk is only ever cut while its meter is live, so a dormant
+                -- reason here means the meter was switched off (or its LS item
+                -- removed) between record and drain. Leave the row pending rather
+                -- than failed: the backlog is bounded and drains cleanly on
+                -- re-enable, whereas 'failed' would re-log it every tick forever.
+                -- A misconfig reason falls through and is marked failed as before.
+                case Projects.resolveMeterTarget meterCfg row.meter of
+                  Left reason
+                    | Projects.meterIsDormant reason ->
+                        Log.logInfo "Pending usage chunk's meter is dormant — leaving pending" $ logFields [("reason", show reason :: Text)]
+                  target -> do
+                    res <- tryAny $ case target of
+                      Right (Projects.StripeMeter custId eventName) -> reportUsageToStripe authCtx.config.stripeSecretKey custId eventName qty
+                      Right (Projects.LemonSqueezyMeter subItemId) -> reportUsageToLemonsqueezy subItemId qty authCtx.config.lemonSqueezyApiKey
+                      Right (Projects.LemonSqueezyEventsItem subItemId) -> reportUsageToLemonsqueezy subItemId qty authCtx.config.lemonSqueezyApiKey
+                      -- Not a transient error: throw so the Left branch below marks
+                      -- the chunk failed, rather than no-oping into a 'submitted'.
+                      Left reason -> throwIO $ CE.ErrorCall $ "usage meter unaddressable: " <> show reason
+                    -- Wrap mark* in tryAny: a DB blip between a successful HTTP call
+                    -- and the status UPDATE would re-select this row next tick and
+                    -- double-submit. Emit a loud manual-reconcile signal on that path.
+                    either
+                      ( \e -> do
+                          let errText = toText (displayException e)
+                          Log.logAttention "Usage chunk submission FAILED — will retry next tick" $ logFields [("provider", show provider :: Text), ("error", errText)]
+                          whenLeftM_ (tryAny $ Projects.markUsageSubmissionFailed row.id errText) \e2 ->
+                            Log.logAttention "Usage chunk status=failed UPDATE failed — row may retry on next tick" $ logFields [("error", toText (displayException e2))]
+                      )
+                      ( \() -> do
+                          markRes <- tryAny $ Projects.markUsageSubmissionSucceeded row.id
+                          case markRes of
+                            Right _ -> Log.logInfo "Usage chunk submitted" $ logFields []
+                            Left e2 ->
+                              Log.logAttention "Usage chunk submitted but DB mark failed — DOUBLE-SUBMIT RISK, manual reconcile required" $ logFields [("error", toText (displayException e2))]
+                      )
+                      res
           case provider of
             -- Paid plan with no usable provider: mark every pending chunk 'failed'
             -- once so it persists in pendingUsageSubmissions as an audit signal
@@ -757,49 +800,8 @@ reportProjectUsage authCtx pid =
               for_ pending \row ->
                 whenLeftM_ (tryAny $ Projects.markUsageSubmissionFailed row.id "NoBillingProvider: paid plan has no usable billing provider") \e ->
                   Log.logAttention "NoBillingProvider mark failed — backlog stuck" ("project_id", pid.toText, "chunk_id", show row.id :: Text, "error", toText (displayException e))
-            _ -> for_ pending \row -> do
-              let chunkId = show row.id :: Text
-                  qty = Projects.chunkQuantityInt row.quantity
-                  -- window_end + sub_id surface in logs so on-call can pivot to
-                  -- the provider UI, which is not indexed by our chunk UUIDs.
-                  logFields extra =
-                    ("project_id", pid.toText) : ("chunk_id", chunkId) : ("quantity", show qty :: Text) : ("meter", show row.meter :: Text) : ("window_end", show row.windowEnd :: Text) : ("sub_id", fromMaybe "" project.subId) : extra
-              -- A chunk is only ever cut while its meter is live, so a dormant
-              -- reason here means the meter was switched off (or its LS item
-              -- removed) between record and drain. Leave the row pending rather
-              -- than failed: the backlog is bounded and drains cleanly on
-              -- re-enable, whereas 'failed' would re-log it every tick forever.
-              -- A misconfig reason falls through and is marked failed as before.
-              case Projects.resolveMeterTarget meterCfg row.meter of
-                Left reason
-                  | Projects.meterIsDormant reason ->
-                      Log.logInfo "Pending usage chunk's meter is dormant — leaving pending" $ logFields [("reason", show reason :: Text)]
-                target -> do
-                  res <- tryAny $ case target of
-                    Right (Projects.StripeMeter custId eventName) -> reportUsageToStripe authCtx.config.stripeSecretKey custId eventName qty
-                    Right (Projects.LemonSqueezyMeter subItemId) -> reportUsageToLemonsqueezy subItemId qty authCtx.config.lemonSqueezyApiKey
-                    Right (Projects.LemonSqueezyEventsItem subItemId) -> reportUsageToLemonsqueezy subItemId qty authCtx.config.lemonSqueezyApiKey
-                    -- Not a transient error: throw so the Left branch below marks
-                    -- the chunk failed, rather than no-oping into a 'submitted'.
-                    Left reason -> throwIO $ CE.ErrorCall $ "usage meter unaddressable: " <> show reason
-                  -- Wrap mark* in tryAny: a DB blip between a successful HTTP call
-                  -- and the status UPDATE would re-select this row next tick and
-                  -- double-submit. Emit a loud manual-reconcile signal on that path.
-                  either
-                    ( \e -> do
-                        let errText = toText (displayException e)
-                        Log.logAttention "Usage chunk submission FAILED — will retry next tick" $ logFields [("provider", show provider :: Text), ("error", errText)]
-                        whenLeftM_ (tryAny $ Projects.markUsageSubmissionFailed row.id errText) \e2 ->
-                          Log.logAttention "Usage chunk status=failed UPDATE failed — row may retry on next tick" $ logFields [("error", toText (displayException e2))]
-                    )
-                    ( \() -> do
-                        markRes <- tryAny $ Projects.markUsageSubmissionSucceeded row.id
-                        case markRes of
-                          Right _ -> Log.logInfo "Usage chunk submitted" $ logFields []
-                          Left e2 ->
-                            Log.logAttention "Usage chunk submitted but DB mark failed — DOUBLE-SUBMIT RISK, manual reconcile required" $ logFields [("error", toText (displayException e2))]
-                    )
-                    res
+            Projects.StripeProvider -> submitPending
+            Projects.LemonSqueezyProvider -> submitPending
 
 
 -- | Daily scheduler tick: books tomorrow, then seeds the day's app-wide and per-project jobs.
@@ -856,24 +858,25 @@ runDailyJobScheduling authCtx =
         (Log.logInfo "Hourly jobs already scheduled for today, skipping" ())
         do
           Log.logInfo "Scheduling hourly jobs for today" ()
+          -- ExpireReplayData is the 30-day replay retention sweep; it re-enqueues itself
+          -- if it hit the batch cap, so backlog drains across multiple runs.
+          enqueueJobs authCtx
+            $ [Jobs.MonoscopeAdminDaily, Jobs.UsageAuditReport, Jobs.ExpireReplayData, Jobs.ExpireShareEvents]
+            <> [Jobs.CleanupDemoProject | dayOfWeek currentDay == Monday]
           liftIO $ withResource authCtx.jobsPool \conn -> do
-            -- ExpireReplayData is the 30-day replay retention sweep; it re-enqueues itself
-            -- if it hit the batch cap, so backlog drains across multiple runs.
-            traverse_ (void . createJob conn "background_jobs")
-              $ [Jobs.MonoscopeAdminDaily, Jobs.UsageAuditReport, Jobs.ExpireReplayData, Jobs.ExpireShareEvents]
-              <> [Jobs.CleanupDemoProject | dayOfWeek currentDay == Monday]
             -- Each handler re-enqueues itself; the daily loop seeds a full day's
             -- ticks so a single restart can't leave a gap when the chain broke.
             forM_ ([0 .. 23] :: [Int]) \i -> do
               let at = addUTCTime (fromIntegral @Int $ i * 3600) currentTime
               void $ scheduleJob conn "background_jobs" (Jobs.HourlyJob at i) at
-            seedJobs conn currentTime 24 3600 Jobs.ProcessIssuesEnhancement
-            seedJobs conn currentTime 1440 60 (const Jobs.QueryMonitorsCheck)
-            seedJobs conn currentTime 1440 60 Jobs.PrometheusScrapeTick
-            seedJobs conn currentTime 288 300 Jobs.ServiceMapRollupTick
-            seedJobs conn currentTime 144 600 Jobs.NotificationSweepJob
-            seedJobs conn currentTime 24 3600 Jobs.NotificationDigestJob
-            seedJobs conn currentTime 24 3600 Jobs.InfraHealthCheck
+            let sched = seedJobs conn currentTime
+            sched 24 3600 Jobs.ProcessIssuesEnhancement
+            sched 1440 60 (const Jobs.QueryMonitorsCheck)
+            sched 1440 60 Jobs.PrometheusScrapeTick
+            sched 288 300 Jobs.ServiceMapRollupTick
+            sched 144 600 Jobs.NotificationSweepJob
+            sched 24 3600 Jobs.NotificationDigestJob
+            sched 24 3600 Jobs.InfraHealthCheck
 
       projects <- Projects.recentlyActiveProjectIds currentTime
       Log.logInfo "Scheduling jobs for projects" ("project_count", length projects)
@@ -883,25 +886,25 @@ runDailyJobScheduling authCtx =
         ifM
           (queuedToday "SafetyNetReprocess" (Just p.toText))
           (Log.logInfo "Jobs already scheduled for project today, skipping" ("project_id", p.toText))
-          $ liftIO
-          $ withResource authCtx.jobsPool \conn -> do
-            traverse_ (void . createJob conn "background_jobs") ([Jobs.ReportUsage p, Jobs.HostRetentionSweep p] :: [BgJobs])
-            let sched = seedJobs conn currentTime
-            -- Derived-table maintenance jobs read from `apis.*` tables, not
-            -- the hypertable, and are unaffected by the derivation path.
-            sched 96 900 (`PatternEmbeddingAndMerge` p)
-            sched 96 900 (`ErrorGroupReview` p)
-            sched 96 900 (`LogPatternPeriodicProcessing` p)
-            -- Discovery is what releases deferred new-endpoint alerts, so
-            -- its period is the worst-case delay on one. Cleanup gates
-            -- nothing and is the destructive half, so it stays hourly.
-            sched 96 900 (`EndpointTemplateDiscovery` p)
-            sched 24 3600 (`EndpointMergeCleanup` p)
-            sched 24 3600 (`LogPatternHourlyProcessing` p)
-            -- The extraction worker owns live span/log/error derivation.
-            -- SafetyNetReprocess is the hourly catch-up for
-            -- `processed_at IS NULL` rows (near-empty steady state).
-            sched 24 3600 (\_ -> SafetyNetReprocess p)
+          do
+            enqueueJobs authCtx [Jobs.ReportUsage p, Jobs.HostRetentionSweep p]
+            liftIO $ withResource authCtx.jobsPool \conn -> do
+              let sched = seedJobs conn currentTime
+              -- Derived-table maintenance jobs read from `apis.*` tables, not
+              -- the hypertable, and are unaffected by the derivation path.
+              sched 96 900 (`PatternEmbeddingAndMerge` p)
+              sched 96 900 (`ErrorGroupReview` p)
+              sched 96 900 (`LogPatternPeriodicProcessing` p)
+              -- Discovery is what releases deferred new-endpoint alerts, so
+              -- its period is the worst-case delay on one. Cleanup gates
+              -- nothing and is the destructive half, so it stays hourly.
+              sched 96 900 (`EndpointTemplateDiscovery` p)
+              sched 24 3600 (`EndpointMergeCleanup` p)
+              sched 24 3600 (`LogPatternHourlyProcessing` p)
+              -- The extraction worker owns live span/log/error derivation.
+              -- SafetyNetReprocess is the hourly catch-up for
+              -- `processed_at IS NULL` rows (near-empty steady state).
+              sched 24 3600 (\_ -> SafetyNetReprocess p)
 
         -- Weekly reports scheduled independently of per-project idempotency guard,
         -- so they aren't skipped when periodic jobs were already scheduled earlier.
@@ -1963,11 +1966,7 @@ dispatchDueErrorNotifications ctx pid now dueErrors = unless (null dueErrors)
                       -- An alert is always the start of an episode, so arriving
                       -- without one open means this claim raced another worker.
                       Incidents.NoOpenEpisode -> conflict
-                      Incidents.OlderThanCurrentEpisode -> conflict
-                      Incidents.UnknownIncidentSource -> conflict
-                      Incidents.InactiveIncidentSource -> conflict
-                      Incidents.IncidentIssueMismatch -> conflict
-                      Incidents.EpisodeWithoutIssue -> conflict
+                      Incidents.Rejected _ -> conflict
           decision <- either (throwIO . IncidentCommitError) pure committed
           case decision of
             NotificationSkipped -> pass
@@ -2187,8 +2186,8 @@ processProjectErrors pid rawErrors now = do
                     -- issue identity does not move. Applying one to the fingerprint
                     -- would re-key every pattern it touches and mint new issues for
                     -- errors we already know about.
-                    masks <- map snd . filter ((== err.errorType) . fst) <$> PatternMergeDB.learnedErrorMasks pid
-                    PatternMergeDB.canonicalForAppliedShape pid (EF.shapeWithMasks masks pid.toText err.errorType err.message) err.service
+                    masksFor <- PatternMergeDB.learnedErrorMasks pid
+                    PatternMergeDB.canonicalForAppliedShape pid (EF.shapeWithMasks (masksFor err.errorType) pid.toText err.errorType err.message) err.service
               let canonicalM = exactM <|> shapeM
               case canonicalM of
                 Just canonicalId | canonicalId /= err.id -> do
@@ -2403,7 +2402,7 @@ processEagerBatch batch shard
         -- Pure entity + hash derivation.
         !entityIds <- V.replicateM (V.length spans) UUID.genUUID
         let !canonicalTemplates = HM.lookupDefault (mkPathClassifier projectCache) pid $ mkBatchPathClassifiers (one (pid, projectCache)) spans
-            !results = V.zipWith (\sp eid -> let (mkEp, hs, np, fwh) = processSpanToEntities canonicalTemplates projectCache pid sp in (mkEp eid, hs, np, fwh)) spans entityIds
+            !results = V.zipWith (\sp eid -> let (mkEp, hs, np, fwh) = processSpanToEntities canonicalTemplates pid sp in (mkEp eid, hs, np, fwh)) spans entityIds
             !(endpoints, spanHashes, normalizedPaths, frameworkHashes) = V.unzip4 results
             !observations = V.map (extractObservation canonicalTemplates) spans
             !endpointsFinal = V.fromList $ nubOrdOn (.hash) $ V.toList $ V.catMaybes endpoints
@@ -3046,11 +3045,7 @@ commitQueryMonitorEvaluation monitor value status observedAt delivery commitStat
               -- other change arriving without one is out of order.
               Incidents.NoOpenEpisode | isRecovery -> pure $ Right $ Just alertUrl
               Incidents.NoOpenEpisode -> conflict
-              Incidents.OlderThanCurrentEpisode -> conflict
-              Incidents.UnknownIncidentSource -> conflict
-              Incidents.InactiveIncidentSource -> conflict
-              Incidents.IncidentIssueMismatch -> conflict
-              Incidents.EpisodeWithoutIssue -> conflict
+              Incidents.Rejected _ -> conflict
       case committed of
         Left result -> throwIO $ IncidentCommitError result
         Right Nothing -> pure False
@@ -4921,7 +4916,6 @@ recordMonitorDataGap monitor at reason = do
               , replyPayload = payload
               , destinations = []
               }
-        let conflict = Tx.condemn $> Left result
         case result of
           Incidents.Recorded{} -> do
             when publish
@@ -4931,11 +4925,7 @@ recordMonitorDataGap monitor at reason = do
           -- The episode can close between reading it and recording the gap;
           -- a gap with nothing left open is simply nothing to report.
           Incidents.NoOpenEpisode -> pure $ Right ()
-          Incidents.OlderThanCurrentEpisode -> conflict
-          Incidents.UnknownIncidentSource -> conflict
-          Incidents.InactiveIncidentSource -> conflict
-          Incidents.IncidentIssueMismatch -> conflict
-          Incidents.EpisodeWithoutIssue -> conflict
+          Incidents.Rejected _ -> Tx.condemn $> Left result
   either (throwIO . IncidentCommitError) pure committed
 
 
@@ -5353,10 +5343,9 @@ processNewLogPatterns pid authCtx = do
           Log.logInfo "Created issue for new log pattern" (pid, lp.id, issue.id)
           whenJust projectM \project -> do
             let issueUrl = projectUrl authCtx pid <> "/issues/" <> issue.id.toText
-                occCount = fromIntegral lp.occurrenceCount :: Int
-                alert = LogPatternAlert{issueUrl, patternText = lp.logPattern, sampleMessage = lp.sampleMessage, logLevel = lp.logLevel, serviceName = lp.serviceName, sourceField = lp.sourceField, occurrenceCount = occCount, isError = lp.isError}
-                (subj, html) = ET.logPatternEmail project.title issueUrl lp.logPattern lp.sampleMessage lp.logLevel lp.serviceName lp.sourceField occCount lp.isError
-            void $ notifyIssue issue project users newPatternCooldownHours "log_pattern" alert issueUrl subj html
+                alert = ET.NewLogPattern{issueUrl, patternText = lp.logPattern, sampleMessage = lp.sampleMessage, logLevel = lp.logLevel, serviceName = lp.serviceName, sourceField = lp.sourceField, occurrenceCount = fromIntegral lp.occurrenceCount, isError = lp.isError}
+                (subj, html) = ET.logPatternEmail project.title alert
+            void $ notifyIssue issue project users newPatternCooldownHours "log_pattern" (LogPatternAlert alert) issueUrl subj html
           pure issue.id
         unless (V.null results) $ enqueueJobs authCtx [EnhanceIssuesWithLLM pid results]
 
@@ -5478,7 +5467,7 @@ detectFeedback pid = do
   forM_ records \r -> do
     let attr k = Telemetry.spanAttr k r
         bodyText = (^? AL._String) =<< unAesonTextMaybe r.body
-        tidM = nonEmptyT (r.context >>= (.trace_id))
+        tidM = Telemetry.traceIdOf r
     whenJust (mfilter (not . T.null . T.strip) (attr "feedback.message" <|> bodyText)) \message ->
       whenNothingM_ (Issues.selectIssueByHash pid (Issues.feedbackTargetHash r.id) Issues.AnyIssue) do
         related <- join <$> forM tidM \tid -> tfRead (Telemetry.traceErrorHash pid tid r.timestamp)
@@ -5522,7 +5511,7 @@ detectFrontendIssues pid = do
               , pageUrl
               , clickCount = n
               , sessionId = attr "session.id" sample
-              , traceId = nonEmptyT (sample.context >>= (.trace_id))
+              , traceId = Telemetry.traceIdOf sample
               , observedAt = sample.timestamp
               }
   forM_ (Telemetry.bursts (.timestamp) 3 2 keyed) \((_, pageUrl, el), cs) -> open Issues.FKRageClick el pageUrl (length cs) (head cs)
@@ -5562,8 +5551,7 @@ backfillErrorShapes pid = do
     -- Same masks as the ingest gate: a backfilled shape computed without them would
     -- never match what an arrival resolves to, and the gate would look correct while
     -- finding nothing.
-    masksByType <- PatternMergeDB.learnedErrorMasks pid
-    let masksFor et = [m | (t, m) <- masksByType, t == et]
+    masksFor <- PatternMergeDB.learnedErrorMasks pid
     updated <-
       PatternMergeDB.setErrorShapeHashes
         [(eid, EF.shapeWithMasks (masksFor etype) pid.toText etype msg) | (eid, etype, msg) <- missing]
@@ -5821,8 +5809,8 @@ promoteErrorMask pid gkey etype msgs canonShape = do
           -- Re-file the review and its members under the post-mask shape. Skipped when
           -- the mask does not move this group's own shape, which would make the rekey
           -- a no-op update over the whole project.
-          masks <- map snd . filter ((== etype) . fst) <$> PatternMergeDB.learnedErrorMasks pid
-          let newShape = EF.shapeWithMasks masks pid.toText etype (fromMaybe "" $ viaNonEmpty head msgs)
+          masksFor <- PatternMergeDB.learnedErrorMasks pid
+          let newShape = EF.shapeWithMasks (masksFor etype) pid.toText etype (fromMaybe "" $ viaNonEmpty head msgs)
           moved <- if newShape == canonShape then pure 0 else PatternMergeDB.rekeyErrorReviewShape pid canonShape newShape
           Log.logInfo
             "Promoted an error group to a deterministic mask"

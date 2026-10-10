@@ -46,6 +46,7 @@ import Data.Map.Strict qualified as Map
 import Data.OpenApi (ToSchema (..))
 import Data.Set qualified as S
 import Data.Text qualified as T
+import Data.Text.Display (display)
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.UUID qualified as UUID
@@ -806,7 +807,7 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
       -- Chart viz types and trace deep links don't show the log list: its rows would be a
       -- query nobody sees, contending with the one they do.
       chartViz = any (\v -> v.surface == Chart && Just v.key == effectiveVizType) visTypes
-      preloadUrl = guard (not chartViz && isNothing showTraceM) $> withTelemetryScope sess.environment sess.service (LogQueries.logExplorerUrlPath pid dataEndpoint queryM' cols' Nothing sinceM fromM toM Nothing sourceM False)
+      preloadUrl = guard (not chartViz && isNothing showTraceM) $> explorerUrl pid dataEndpoint def{query = queryM', cols = cols', since = sinceM, from = fromM, to = toM, source = sourceM, environment = sess.environment, serviceScope = sess.service}
 
   let stampPng base = do
         url <- Widget.widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid base sinceM fromM toM
@@ -962,20 +963,45 @@ logExplorerDataH pid q = withSpan_ "log-explorer.data" [] do
   -- One microsecond, not one millisecond: the page bound is inclusive, so a larger
   -- step skips every row in the gap. See LogQueries.cursorEpsilon.
   let lastFM = LogQueries.nudgeCursorBy (negate LogQueries.cursorEpsilon) =<< lr.cursor
+      page = def{query = q.query, cols = q.cols, since = q.since, from = q.from, to = q.to, layout = Just "loadmore", source = q.source, environment = envM, serviceScope = serviceM} :: ExplorerUrl
   addRespHeaders
     (lr :: LogResult)
       { error = errM
-      , nextUrl = withTelemetryScope envM serviceM $ LogQueries.logExplorerUrlPath pid LogQueries.Data q.query q.cols lastFM q.since q.from q.to (Just "loadmore") q.source False
-      , resetLogsUrl = withTelemetryScope envM serviceM $ LogQueries.logExplorerUrlPath pid LogQueries.Data q.query q.cols Nothing Nothing Nothing Nothing Nothing q.source False
-      , recentUrl = withTelemetryScope envM serviceM $ LogQueries.logExplorerUrlPath pid LogQueries.Data q.query q.cols Nothing q.since q.from q.to (Just "loadmore") q.source True
+      , nextUrl = explorerUrl pid LogQueries.Data page{cursor = lastFM}
+      , resetLogsUrl = explorerUrl pid LogQueries.Data page{since = Nothing, from = Nothing, to = Nothing, layout = Nothing}
+      , recentUrl = explorerUrl pid LogQueries.Data page{recent = True}
       }
 
 
--- | Keep generated data URLs in the same global telemetry scope as their page request.
-withTelemetryScope :: Maybe Text -> Maybe Text -> Text -> Text
-withTelemetryScope environment service url = url <> foldMap param ([("environment", environment), ("service_scope", service)] :: [(Text, Maybe Text)])
+-- | A log-explorer data URL's parameters. 'recent' polls for rows newer than 'cursor'.
+-- Environment and service scope keep generated URLs in the page request's telemetry scope.
+data ExplorerUrl = ExplorerUrl
+  { query, cols, cursor, since, from, to, layout, source, environment, serviceScope :: Maybe Text
+  , recent :: Bool
+  }
+  deriving stock (Generic)
+  deriving anyclass (Default)
+
+
+explorerUrl :: Projects.ProjectId -> LogQueries.LogEndpoint -> ExplorerUrl -> Text
+explorerUrl pid endpoint u = "/p/" <> pid.toText <> "/log_explorer/" <> display endpoint <> "?" <> T.intercalate "&" params
   where
-    param (key, value) = foldMap (\v -> "&" <> key <> "=" <> toUriStr v) value
+    param k v = ((k <> "=") <>) . toUriStr <$> v
+    unlessRecent v = if u.recent then Nothing else v
+    params =
+      "json=true"
+        : catMaybes
+          [ param "query" u.query
+          , param "cols" u.cols
+          , param "cursor" (unlessRecent u.cursor)
+          , param "since" (unlessRecent u.since)
+          , param "from" u.from
+          , param "to" (if u.recent then LogQueries.nudgeCursorBy LogQueries.cursorEpsilon =<< u.cursor else u.to)
+          , param "layout" u.layout
+          , param "source" u.source
+          , param "environment" u.environment
+          , param "service_scope" u.serviceScope
+          ]
 
 
 -- | Lazy facet fragments for collapsed groups and per-field overflow values.

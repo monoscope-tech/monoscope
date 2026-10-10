@@ -555,9 +555,9 @@ spec = sequential $ aroundAll (\f -> withTestResources \tr -> createTestProject 
               (testPid, frozenTime, frozenTime, path, (mkEp path).hash)
       -- /zebra has 9x the traffic, so traffic order would put it first.
       let q srt = Endpoints.EndpointQuery{direction = Endpoints.Incoming, archived = False, host = Just hostName, search = Nothing, sort = srt, page = 0, perPage = 10, period = Endpoints.Window7d, service = Nothing}
-      byTraffic <- runTestBg frozenTime tr $ Endpoints.endpointRequestStatsByProject Endpoints.WithStats False testPid (q Endpoints.SortEvents)
+      byTraffic <- fmap fst $ runTestBg frozenTime tr $ Endpoints.endpointRequestStatsPageByProject Endpoints.WithStats False testPid (q Endpoints.SortEvents)
       map (.urlPath) (V.toList byTraffic) `shouldBe` ["/zebra", "/alpha"]
-      byName <- runTestBg frozenTime tr $ Endpoints.endpointRequestStatsByProject Endpoints.WithStats False testPid (q Endpoints.SortName)
+      byName <- fmap fst $ runTestBg frozenTime tr $ Endpoints.endpointRequestStatsPageByProject Endpoints.WithStats False testPid (q Endpoints.SortName)
       map (.urlPath) (V.toList byName) `shouldBe` ["/alpha", "/zebra"]
 
     -- Regression: the "last_seen" sort ordered by endpoint created_at (like
@@ -591,7 +591,7 @@ spec = sequential $ aroundAll (\f -> withTestResources \tr -> createTestProject 
                   (testPid, frozenTime, offsetMins, frozenTime, offsetMins, path, (mkEp path).hash)
         insertSpan "/old" 5
         insertSpan "/new" 120
-      stats <- runTestBg frozenTime tr $ Endpoints.endpointRequestStatsByProject Endpoints.WithStats False testPid Endpoints.EndpointQuery{direction = Endpoints.Incoming, archived = False, host = Just hostName, search = Nothing, sort = Endpoints.SortLastSeen, page = 0, perPage = 10, period = Endpoints.Window7d, service = Nothing}
+      stats <- fmap fst $ runTestBg frozenTime tr $ Endpoints.endpointRequestStatsPageByProject Endpoints.WithStats False testPid Endpoints.EndpointQuery{direction = Endpoints.Incoming, archived = False, host = Just hostName, search = Nothing, sort = Endpoints.SortLastSeen, page = 0, perPage = 10, period = Endpoints.Window7d, service = Nothing}
       map (.urlPath) (V.toList stats) `shouldBe` ["/old", "/new"]
 
     it "hostRetentionSweep_systemArchivesIdle_wakesOnTraffic_withEmailDigest" \(tr, testPid) -> do

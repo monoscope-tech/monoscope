@@ -5,6 +5,7 @@ module Models.Telemetry.ContainerTypes (
   ContainerSnapshotKey,
 ) where
 
+import Data.Aeson qualified as AE
 import Data.OpenApi (ToParamSchema)
 import Data.Text.Display (Display)
 import Hasql.Interpolate qualified as HI
@@ -47,7 +48,7 @@ data ContainerRow = ContainerRow
 data Scope = ScopeContainer | ScopePod | ScopeHost
   deriving stock (Bounded, Enum, Eq, Generic, Ord, Read, Show)
   deriving anyclass (NFData)
-  deriving (Display, FromHttpApiData, HI.DecodeValue, ToParamSchema) via WrappedEnumSC 'Nothing "Scope" Scope
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromHttpApiData, HI.DecodeValue, ToParamSchema) via WrappedEnumSC 'Nothing "Scope" Scope
 
 
 data Runtime = Kubernetes | Docker | Host

@@ -295,7 +295,7 @@ spec = sequential $ aroundAll withTestResources do
             let widget = (def :: Widget.Widget){Widget.query = Just query, Widget.pngProfile = Just Widget.PngSlack}
                 encoded = decodeUtf8 @Text $ LBS.toStrict $ AE.encode widget
                 signature = Widget.signWidgetUrl tr.trATCtx.env.apiKeyEncryptionSecretKey testPid encoded
-            runAsBase tr $ Routes.widgetPngGetH testPid (Just encoded) Nothing Nothing (Just "2025-06-01T11:45:00Z") (Just "2025-06-01T12:00:00Z") Nothing Nothing (Just signature) [("appearance", Just appearance)]
+            toBaseServantResponse tr $ Routes.widgetPngGetH testPid (Just encoded) Nothing Nothing (Just "2025-06-01T11:45:00Z") (Just "2025-06-01T12:00:00Z") Nothing Nothing (Just signature) [("appearance", Just appearance)]
       failed <- render "name ==" "light"
       failedDark <- render "name ==" "dark"
       emptyResponse <- render "name == \"no-such-png-fixture-operation\"" "light"
@@ -338,7 +338,7 @@ spec = sequential $ aroundAll withTestResources do
               }
           encoded = decodeUtf8 @Text $ LBS.toStrict $ AE.encode widget
           signature = Widget.signWidgetUrl tr.trATCtx.env.apiKeyEncryptionSecretKey testPid encoded
-      response <- runAsBase tr $ Routes.widgetPngGetH testPid (Just encoded) Nothing Nothing Nothing Nothing Nothing Nothing (Just signature) []
+      response <- toBaseServantResponse tr $ Routes.widgetPngGetH testPid (Just encoded) Nothing Nothing Nothing Nothing Nothing Nothing (Just signature) []
       LBS.take 8 (Servant.getResponse response) `shouldBe` "\137PNG\r\n\26\n"
 
     it "Should create a dashboard" \tr -> do

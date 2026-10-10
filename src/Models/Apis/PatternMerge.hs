@@ -389,10 +389,10 @@ setErrorShapeHashes pairs =
     (ids, shapes) = unzip pairs
 
 
--- | Live masks for a project, newest first.
-learnedErrorMasks :: DB es => Projects.ProjectId -> Eff es [(Text, EF.ErrorMask)]
+-- | A project's live masks, looked up by error type.
+learnedErrorMasks :: DB es => Projects.ProjectId -> Eff es (Text -> [EF.ErrorMask])
 learnedErrorMasks pid =
-  map (\(et, p, sfx, n) -> (et, EF.ErrorMask p sfx (fromIntegral @Int64 n)))
+  (\rows et -> [EF.ErrorMask p sfx (fromIntegral @Int64 n) | (t, p, sfx, n) <- rows, t == et])
     <$> Hasql.interp
       [HI.sql| SELECT error_type, prefix, suffix, min_var_len::int8 FROM apis.learned_error_masks
                WHERE project_id = #{pid} AND retired_at IS NULL |]

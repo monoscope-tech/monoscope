@@ -4,6 +4,7 @@ import Data.Aeson qualified as AE
 import Data.HashMap.Strict qualified as HM
 import Data.Map qualified as Map
 import Data.Text qualified as T
+import Data.Text.Display (display)
 import Data.Vector qualified as V
 import Lucid
 import Lucid.Aria qualified as Aria
@@ -21,7 +22,6 @@ import Relude
 import Utils (copyToClipboardAttr_, displayTimestamp, faSprite_, formatUTC, onpointerdown_)
 
 
--- | Configuration record for the log query box component
 data LogQueryBoxConfig = LogQueryBoxConfig
   { pid :: Projects.ProjectId
   , currentRange :: Maybe (Text, Text)
@@ -105,7 +105,7 @@ logQueryBox_ config = do
                     end
                   |]
               ]
-              <> [checked_ | isJust config.targetWidgetPreview || noActiveQuery]
+              <> [checked_ | inWidgetEditor || noActiveQuery]
           -- Whether AI search or the KQL bar leads is a per-user preference, so it lives in
           -- localStorage and overrides the `noActiveQuery` default above. Applied by a
           -- synchronous script rather than a hyperscript `init` so the AI panel never flashes
@@ -192,7 +192,7 @@ logQueryBox_ config = do
                       -- Metrics page squiggles `metric_name` on a query it then runs happily.
                       <> maybeToList (term "query-source" <$> config.source)
                       <> maybeToList (term "target-widget-preview" <$> config.targetWidgetPreview)
-                      <> [term "widget-editor" "true" | isJust config.targetWidgetPreview]
+                      <> [term "widget-editor" "true" | inWidgetEditor]
                   )
                   queryEditorSkeleton_
                 label_ [Lucid.for_ "ai-search-chkbox", role_ "button", tabindex_ "0", Aria.label_ "Ask AI", class_ "absolute top-1/2 right-1 -translate-y-1/2 px-2 py-1 inline-flex gap-1 items-center cursor-pointer rounded-sm text-xs font-medium leading-none text-textWeak hover:bg-fillWeak hover:text-textBrand focus-visible:outline-2 group-has-[.ai-search:checked]/fltr:hidden", data_ "tippy-content" "Ask AI in plain English", keyboardActivateAttr_] do
@@ -221,15 +221,15 @@ logQueryBox_ config = do
                   $ faSprite_ "floppy-disk" "regular" "h-4 w-4"
               button_
                 [ type_ "submit"
-                , class_ $ "btn btn-primary !h-8 !min-h-8 cursor-pointer rounded-md leading-none active:scale-[0.96] transition-transform motion-reduce:transition-none motion-reduce:active:scale-100 " <> bool "w-9 p-0" "gap-1.5 px-3" (isJust config.targetWidgetPreview)
+                , class_ $ "btn btn-primary !h-8 !min-h-8 cursor-pointer rounded-md leading-none active:scale-[0.96] transition-transform motion-reduce:transition-none motion-reduce:active:scale-100 " <> bool "w-9 p-0" "gap-1.5 px-3" inWidgetEditor
                 , Aria.label_ "Run query"
                 , onpointerdown_ "this.form.dispatchEvent(new Event('submit', {bubbles: true}))"
                 ]
                 $ do
                   faSprite_ "magnifying-glass" "regular" "h-4 w-4"
-                  when (isJust config.targetWidgetPreview) "Run query"
+                  when inWidgetEditor "Run query"
 
-      div_ [class_ $ "@container flex justify-between gap-3 max-md:flex-wrap max-md:gap-0.5" <> bool "" " mt-1 border-t border-strokeWeak pt-2" (isJust config.targetWidgetPreview)] do
+      div_ [class_ $ "@container flex justify-between gap-3 max-md:flex-wrap max-md:gap-0.5" <> bool "" " mt-1 border-t border-strokeWeak pt-2" inWidgetEditor] do
         div_ [class_ "flex min-w-0 items-center gap-0 max-md:w-full"] do
           div_ [class_ "flex items-center gap-2 max-md:gap-1"] do
             visualizationTabs_
@@ -242,7 +242,7 @@ logQueryBox_ config = do
                 , Aria.label_ "Sort sessions by"
                 , [__|on change call window.setQueryParamAndReload('sort_by', my value)|]
                 ]
-                $ options_ (Just $ LogQueries.sessionSortParam config.sessionSort) [(LogQueries.sessionSortParam s, LogQueries.sessionSortLabel s) | s <- [minBound .. maxBound]]
+                $ options_ (Just $ display config.sessionSort) [(display s, LogQueries.sessionSortLabel s) | s <- [minBound .. maxBound]]
             div_ [class_ "hidden group-has-[#viz-patterns:checked]/pg:flex items-center gap-1"] do
               let isCustom = any (`notElem` map fst knownPatternFields) config.patternSelected
               select_
@@ -308,11 +308,12 @@ logQueryBox_ config = do
   queryEditorInitializationCode config.vizType
   where
     noActiveQuery = maybe True T.null config.query
+    -- A widget container means we are in the dashboard widget editor rather than the log explorer.
+    inWidgetEditor = isJust config.targetWidgetPreview
     containerSelector = fromMaybe "visualization-widget-container" config.targetWidgetPreview
 
     -- Editable stand-in while the query-editor chunk loads. The component adopts
     -- its text, selection and focus when it upgrades, so early keystrokes are retained.
-    queryEditorSkeleton_ :: Html ()
     queryEditorSkeleton_ =
       textarea_
         [ class_ "w-full min-w-0 text-sm font-mono leading-5 bg-transparent resize-none py-1 outline-none no-focus-ring placeholder:opacity-60"
@@ -323,14 +324,9 @@ logQueryBox_ config = do
         ]
         $ toHtml (fromMaybe "" config.query)
 
-    -- Helper for visualizing the data with different chart types
-    visualizationTabs_ :: Html ()
     visualizationTabs_ =
       div_ [class_ "tabs tabs-box tabs-outline tabs-xs shrink-0 flex-nowrap bg-fillWeak p-1 rounded-lg", id_ "visualizationTabs", role_ "radiogroup", Aria.label_ "Visualization type"] do
         let
-          -- A widget container means we are in the dashboard widget editor rather than the
-          -- log explorer.
-          inWidgetEditor = isJust config.targetWidgetPreview
           -- A dashboard widget starts as a chart. Logs is a full log table — the most
           -- expensive thing on a dashboard and the wrong thing to drop on one by default.
           defaultVizType = fromMaybe (bool "logs" "timeseries" (config.alert || inWidgetEditor)) config.vizType
@@ -383,13 +379,11 @@ logQueryBox_ config = do
                          |]
                 ]
                 <> [checked_ | vizType == defaultVizType]
-            -- Emojis only in widget mode, not in the log explorer
             when inWidgetEditor $ span_ [class_ "text-iconNeutral leading-none"] $ toHtml v.emoji
             span_ $ toHtml v.label
 
     -- Popular search chips + query library dropdown, unified as one component.
     -- When no query is active, shows "Try:" chips inline. "more" opens the full library dropdown.
-    popularSearchChips_ :: Html ()
     popularSearchChips_ =
       div_ [class_ "max-md:hidden group-has-[.ai-search:checked]/fltr:hidden inline-flex shrink-[100] gap-1.5 text-xs items-center whitespace-nowrap", id_ "queryLibraryParentEl"] do
         when noActiveQuery
@@ -452,17 +446,14 @@ queryLibraryContent_ queryLibSaved queryLibRecent =
       tabPanel_ "Saved" False (queryLibraryItems_ "Saved" queryLibSaved)
       tabPanel_ "Recent" False (queryLibraryItems_ "Recent" queryLibRecent)
   where
-    tabPanel_ :: Text -> Bool -> Html () -> Html ()
     tabPanel_ label isDefault content = do
       input_ $ [type_ "radio", name_ "querylib", role_ "tab", class_ "tab h-8 rounded-md px-3 text-xs font-medium", Aria.label_ label] <> [checked_ | isDefault]
       div_ [role_ "tabpanel", class_ "tab-content col-span-full mt-1 max-h-[60dvh] overflow-y-auto border-t border-strokeWeak"] content
 
-    queryLibraryItems_ :: Text -> V.Vector Projects.QueryLibItem -> Html ()
     queryLibraryItems_ label items = do
       searchBar_ label
       div_ [class_ $ "dataLibContent" <> label <> " p-1"] $ V.forM_ items (queryLibItem_ (label == "Recent"))
 
-    popularQueriesContent_ :: Html ()
     popularQueriesContent_ =
       div_ [class_ "p-1"]
         $ forM_ popularQueries \(query, label, desc) ->
@@ -475,7 +466,6 @@ queryLibraryContent_ queryLibSaved queryLibRecent =
               code_ [class_ "text-xs text-textWeak line-clamp-2 break-all block mt-0.5"] $ toHtml query
               whenJust desc $ small_ [class_ "text-xs text-textDisabled mt-0.5 block"] . toHtml
 
-    searchBar_ :: Text -> Html ()
     searchBar_ label = div_ [class_ "flex gap-2 sticky top-0 px-2 py-2 bg-bgRaised border-b border-strokeWeak z-20"] do
       searchInput_ "h-9 flex-1 border-0 bg-fillWeaker" ("Search " <> T.toLower label <> " queries") [filterInputAttr_ $ ".dataLibContent" <> label <> " .query-item"]
       when (label == "Saved")
@@ -484,7 +474,6 @@ queryLibraryContent_ queryLibSaved queryLibRecent =
           span_ [Aria.hidden_ "true", class_ "tab h-full bg-fillWeaker group-has-[#queryLibraryGroup:checked]/pg:bg-transparent px-2", data_ "tippy-content" "My queries"] $ faSprite_ "user" "regular" "w-3 h-3"
           span_ [Aria.hidden_ "true", class_ "tab h-full group-has-[#queryLibraryGroup:checked]/pg:bg-fillWeaker px-2", data_ "tippy-content" "All team queries"] $ faSprite_ "users" "regular" "w-3 h-3"
 
-    queryLibItem_ :: Bool -> Projects.QueryLibItem -> Html ()
     queryLibItem_ isRecent qli =
       div_
         [ class_ $ "query-item rounded-md px-3 py-2.5 hover:bg-fillWeak cursor-pointer group relative transition-colors " <> bool "hidden group-has-[#queryLibraryGroup:checked]/pg:block" "" qli.byMe
@@ -523,12 +512,10 @@ queryLibraryContent_ queryLibSaved queryLibRecent =
                     , hxPushUrl_ "false"
                     ]
 
-    actionBtn_ :: Text -> Text -> [Attribute] -> Html ()
     actionBtn_ tip icon attrs =
       button_ ([type_ "button", Aria.label_ tip, class_ "inline-flex min-h-7 min-w-7 cursor-pointer items-center justify-center rounded-md text-iconNeutral hover:bg-fillWeak hover:text-textStrong focus-visible:outline-2 active:scale-[0.96] transition-[color,background-color,scale]", data_ "tippy-content" tip] <> attrs)
         $ faSprite_ icon "regular" "h-3 w-3"
 
-    hidePopoverJS :: Text
     hidePopoverJS = "document.getElementById('queryLibraryPopover')?.hidePopover()"
 
 
@@ -631,7 +618,6 @@ queryEditorInitializationCode vizTypeM = do
     chartVizTypes = decodeUtf8 $ AE.encode [v.key | v <- visTypes, v.surface == Chart]
   script_
     [text|
-    // Set initial visualization type
     window.currentVisualizationType = "$vizType";
     // Views the widget draws instead of the log list; the list skips fetching while one is active.
     window.chartVizTypes = $chartVizTypes;
@@ -639,7 +625,6 @@ queryEditorInitializationCode vizTypeM = do
     // Function to update viz type in URL without reloading the page
     // Resolves once the query is rewritten, so a caller's refetch sees the new query.
     window.updateVizTypeInUrl = function(vizType, shouldUpdateUrl = true, editor = document.getElementById('filterElement')) {
-      // Update the current visualization type
       window.currentVisualizationType = vizType;
       return new Promise(resolve => requestAnimationFrame(() => {
         // Only update URL if we're not in widget mode and shouldUpdateUrl is true

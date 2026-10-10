@@ -1028,7 +1028,7 @@ toLogRowFields cols r =
     , timestamp = storageTimestamp r.timestamp
     , level = r.level
     , service = valueText <$> find (/= AE.Null) (resolveIn (AE.toJSON r) serviceSubject)
-    , traceId = r.context >>= (.trace_id) >>= guarded (not . T.null)
+    , traceId = Telemetry.traceIdOf r
     , spanId = r.context >>= (.span_id) >>= guarded (not . T.null)
     , name = r.name
     , body = T.take maxRowFieldChars rawBody

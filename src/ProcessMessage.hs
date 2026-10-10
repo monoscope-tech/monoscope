@@ -280,8 +280,8 @@ httpKeyOf canonicalTemplates otelSpan =
 -- The owning 'ProjectId' is threaded in already-parsed (the batch is grouped by project
 -- upstream), so we never re-parse the untyped @otelSpan.project_id@ here — that parse used
 -- to be a partial @fromJust@ that crashed the whole ingestion batch on one malformed id.
-processSpanToEntities :: PathClassifier -> Projects.ProjectCache -> Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> (UUID.UUID -> Maybe Endpoints.Endpoint, V.Vector Text, Maybe Text, Maybe Text)
-processSpanToEntities canonicalTemplates pjc projectId otelSpan =
+processSpanToEntities :: PathClassifier -> Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> (UUID.UUID -> Maybe Endpoints.Endpoint, V.Vector Text, Maybe Text, Maybe Text)
+processSpanToEntities canonicalTemplates projectId otelSpan =
   let !attributes = maybeToMonoid (unAesonTextMaybe otelSpan.attributes)
       HttpKey{method, host, urlPath, statusCode, isHttpSpan, pathSource} = httpKeyOf canonicalTemplates otelSpan
 
@@ -342,7 +342,7 @@ stampHashesAtIngest caches spans = V.map stamp spans
       pid <- Projects.projectIdFromText r.project_id
       pjc <- HM.lookup pid caches
       let classifier = HM.lookupDefault (mkPathClassifier pjc) pid templatesByPid
-          (_, spanHashes, normalizedPath, _) = processSpanToEntities classifier pjc pid r
+          (_, spanHashes, normalizedPath, _) = processSpanToEntities classifier pid r
           HttpKey{method = canonicalMethod, host = canonicalHost, pathSource} = httpKeyOf classifier r
           errHashes = V.map ((LogQueries.errHashPrefix <>) . (.hash)) (Telemetry.getAllATErrors (V.singleton r))
           attrs = AEKM.fromMapText $ maybeToMonoid $ unAesonTextMaybe r.attributes
@@ -678,35 +678,8 @@ data Referer = Referer Text | Referers [Text]
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.SumUntaggedValue] Referer
 
 
--- valueToFields takes an aeson object and converts it into a vector of paths to
--- each primitive value in the json and the values.
---
--- Regular nested text fields:
--- >>> valueToFields [aesonQQ|{"menu":{"id":"text"}}|]
--- V.fromList [(".menu.id", V.fromList [String "text"])]
---
--- Integer nested field within an array of objects:
--- >>> valueToFields [aesonQQ|{"menu":{"id":[{"int_field":22}]}}|]
--- V.fromList [(".menu.id[*].int_field", V.fromList [Number 22.0])]
---
--- Deeper nested field with an array of objects:
--- >>> valueToFields [aesonQQ|{"menu":{"id":{"menuitems":[{"key":"value"}]}}}|]
--- V.fromList [(".menu.id.menuitems[*].key", V.fromList [String "value"])]
---
--- Flat array value:
--- >>> valueToFields [aesonQQ|{"menu":["abc", "xyz"]}|]
--- V.fromList [(".menu[*]", V.fromList [String "abc", String "xyz"])]
---
--- Float values and Null
--- >>> valueToFields [aesonQQ|{"fl":1.234, "nl": null}|]
--- V.fromList [(".fl", V.fromList [Number 1.234]), (".nl", V.fromList [Null])]
---
--- Multiple fields with same key via array:
--- >>> valueToFields [aesonQQ|{"menu":[{"id":"text"},{"id":123}]}|]
--- V.fromList [(".menu[*].id", V.fromList [String "text", Number 123.0])]
---
--- >>> valueToFields [aesonQQ|{"menu":[{"c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd":"text"},{"id":123}]}|]
--- V.fromList [(".menu[*].id", V.fromList [Number 123.0]), (".menu[*].{uuid}", V.fromList [String "text"])]
+-- | Paths to every primitive value in a JSON value, with the values found at each
+-- (@{"menu":[{"id":1}]}@ gives @.menu[*].id@).
 --
 -- Redaction happens at the shared storage boundary in
 -- 'Telemetry.insertAndHandOff', before this projection produces searchable fields.
@@ -756,6 +729,8 @@ dedupFields fields = runST $ do
   pure $! V.fromList [(k, V.fromList vs) | (k, vs) <- pairs]
 
 
+-- | Redact values under credential-looking keys.
+--
 -- >>> removeBlacklistedFields [(".menu.password",String "xyz"),(".authorization",String "abc")]
 -- [(".menu.password",String "[REDACTED]"),(".authorization",String "[REDACTED]")]
 --
@@ -841,50 +816,7 @@ commonFormatPatterns =
   ]
 
 
--- valueToFormatStr will take a string and try to find a format which matches that string best.
--- At the moment it takes a text and returns a generic mask that represents the format of that text
---
--- >>> map valueToFormatStr ["22/02/2022", "20-02-2022", "22.02.2022", "2023-10-14", "2023/10/14", "20231014"]
--- [Just "{dd/mm/yyyy}",Just "{dd-mm-yyyy}",Just "{dd.mm.yyyy}",Just "{YYYY-MM-DD}",Just "{YYYY/MM/DD}",Just "{YYYYMMDD}"]
---
--- >>> map valueToFormatStr ["Oct 14, 2023", "14-Oct-2023", "2023-10-14T10:29:38.64522Z", "2023-10-14 10:29:38"]
--- [Just "{Mon DD, YYYY}",Just "{DD-Mon-YYYY}",Just "{YYYY-MM-DDThh:mm:ss.sTZD}",Just "{YYYY-MM-DD HH:MM:SS}"]
---
--- >>> map valueToFormatStr ["15:30:45", "15:30:45.123", "3:30 PM", "Mon, 14 Oct 2023 10:30:00 +0000"]
--- [Just "{HH:MM:SS}",Just "{HH:MM:SS.mmm}",Just "{H:MM AM/PM}",Just "{rfc2822}"]
---
--- >>> map valueToFormatStr ["c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd", "507f1f77bcf86cd799439011", "abc123def456789"]
--- [Just "{uuid}",Just "{uuid}",Nothing]
---
--- >>> map valueToFormatStr ["e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "356a192b7913b04c54574d18c28d46e6395428ab", "5d41402abc4b2a76b9719d911017c592"]
--- [Just "{sha256}",Just "{sha1}",Just "{md5}"]
---
--- >>> map valueToFormatStr ["123", "123.456", "-123.456", "0xDEADBEEF", "1634567890", "1634567890123"]
--- [Just "{integer}",Just "{float}",Just "{float}",Just "{hex}",Just "{epoch_s}",Just "{epoch_ms}"]
---
--- >>> map valueToFormatStr ["192.168.1.1", "192.168.1.0/24", "2001:0db8:85a3:0000:0000:8a2e:0370:7334", "00:1B:44:11:3A:B7"]
--- [Just "{ipv4}",Just "{cidr}",Just "{ipv6}",Just "{mac}"]
---
--- >>> map valueToFormatStr [":8080", "user@example.com", "https://api.example.com/v1/users", "api.example.com"]
--- [Just "{port}",Just "{email}",Just "{url}",Just "{hostname}"]
---
--- >>> map valueToFormatStr ["eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c", "dGVzdCBiYXNlNjQgZW5jb2Rpbmc="]
--- [Just "{jwt}",Just "{base64}"]
---
--- >>> map valueToFormatStr ["/usr/local/bin/script.sh", "C:\\Users\\Admin\\Documents", "pid:12345", "tid:67890"]
--- [Just "{file_path}",Just "{file_path}",Just "{pid}",Just "{tid}"]
---
--- >>> map valueToFormatStr ["Thread-42", "session_abc123def456", "4111111111111111", "GB82WEST12345698765432"]
--- [Just "{thread}",Just "{session_id}",Just "{credit_card}",Just "{iban}"]
---
--- >>> map valueToFormatStr ["123-45-6789", "+1 (555) 123-4567", "200", "404", "500"]
--- [Just "{ssn}",Just "{phone}",Just "{http_status}",Just "{http_status}",Just "{http_status}"]
---
--- >>> map valueToFormatStr ["plain text", "", "hello world", "test123test"]
--- [Nothing,Nothing,Nothing,Nothing]
---
--- >>> map valueToFormatStr ["v1"]
---
+-- | The generic mask for a value's format (@{uuid}@, @{YYYY-MM-DD}@, …), if any.
 valueToFormatStr :: Text -> Maybe Text
 valueToFormatStr val = snd <$> find (\(regex, _) -> TDFA.matchTest (reRegex regex) chars) commonFormatPatterns
   where
@@ -1112,17 +1044,20 @@ dynSegmentLabelWith learned x0
       Just v -> Just $ fromMaybe "param" $ L.lookup v formatStrLabels
   where
     x = percentDecodeLenient x0
-    -- A 'valueToFormatStr' hint → the coarser label stamped into the path.
-    formatStrLabels =
-      [ (fmt, label :: Text)
-      | (label, fmts) <-
-          [ ("uuid", ["{uuid}"])
-          , ("date", ["{mm/dd/yyyy}", "{mm-dd-yyyy}", "{mm.dd.yyyy}", "{dd/mm/yyyy}", "{dd-mm-yyyy}", "{dd.mm.yyyy}", "{YYYY-MM-DD}", "{YYYY/MM/DD}", "{YYYYMMDD}", "{YYYY-MM-DDThh:mm:ss.sTZD}"])
-          , ("ip_address", ["{ip}", "{ipv6}"])
-          , ("number", ["{integer}", "{float}", "{hex}"])
-          ]
-      , fmt <- fmts
+
+
+-- | A 'valueToFormatStr' hint → the coarser label 'dynSegmentLabelWith' stamps into the path.
+formatStrLabels :: [(Text, Text)]
+formatStrLabels =
+  [ (fmt, label)
+  | (label, fmts) <-
+      [ ("uuid", ["{uuid}"])
+      , ("date", ["{mm/dd/yyyy}", "{mm-dd-yyyy}", "{mm.dd.yyyy}", "{dd/mm/yyyy}", "{dd-mm-yyyy}", "{dd.mm.yyyy}", "{YYYY-MM-DD}", "{YYYY/MM/DD}", "{YYYYMMDD}", "{YYYY-MM-DDThh:mm:ss.sTZD}"])
+      , ("ip_address", ["{ip}", "{ipv6}"])
+      , ("number", ["{integer}", "{float}", "{hex}"])
       ]
+  , fmt <- fmts
+  ]
 
 
 -- | Detect ID-like URL segments that 'valueToFormatStr' misses.

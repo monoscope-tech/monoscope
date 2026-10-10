@@ -50,6 +50,7 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Data.Vector.Unboxed qualified as VU
 import Effectful
+import Effectful.Concurrent (Concurrent)
 import Effectful.Exception (try)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled)
@@ -341,7 +342,7 @@ throwOnWriteFailure = either (throwGrpc GrpcInternal . ("OTLP write failed: " <>
 -- both stores; poisonMsgs are decode failures whose raw bytes must be DLQ'd
 -- by Pkg.Queue before committing offsets. On dual-write failure, returns
 -- 'Left WriteFailure'. Never throws on write/decode failure.
-processList :: (DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => [(Text, ByteString)] -> HM.HashMap Text Text -> Eff es (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))
+processList :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => [(Text, ByteString)] -> HM.HashMap Text Text -> Eff es (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))
 processList [] _ = pure (Right ([], []))
 processList msgs !attrs =
   withSpan_ "otlp.process_list" (batchSpanAttrs (length msgs) attrs)
@@ -1514,7 +1515,7 @@ logsServiceExport = otlpExport processLogsRequest
 
 
 -- | Process metrics request with optional API key from gRPC metadata (extracted for testing)
-processMetricsRequest :: (DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es) => Maybe Text -> MS.ExportMetricsServiceRequest -> Eff es ()
+processMetricsRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es) => Maybe Text -> MS.ExportMetricsServiceRequest -> Eff es ()
 processMetricsRequest metadataApiKey req = do
   Log.logTrace "Received metrics export request" AE.Null
   when (metricRequestHasOverflow req) $ throwGrpc GrpcInternal "OTLP metric count exceeds BIGINT maximum"

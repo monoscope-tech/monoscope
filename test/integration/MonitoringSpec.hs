@@ -202,8 +202,8 @@ spec = sequential $ aroundAll withTestResources do
                 WHERE project_id = ? AND handle = 'everyone'|]
           (PGS.Only testPid)
       -- Regression: a raw-SQL widget posts an empty query, which compiled to an all-traffic count.
-      void (runAsBase tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.widgetAlertUpsertH testPid widgetId (Just dashboardId) alertForm{Dashboards.query = ""}) `shouldThrow` anyIOException
-      void (runAsBase tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.widgetAlertUpsertH testPid widgetId (Just dashboardId) alertForm{Dashboards.alertThreshold = Nothing}) `shouldThrow` anyIOException
+      void (toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.widgetAlertUpsertH testPid widgetId (Just dashboardId) alertForm{Dashboards.query = ""}) `shouldThrow` anyIOException
+      void (toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.widgetAlertUpsertH testPid widgetId (Just dashboardId) alertForm{Dashboards.alertThreshold = Nothing}) `shouldThrow` anyIOException
       isNothing <$> runTestBgNoReset tr (Monitors.queryMonitorByWidgetId testPid (Just dashboardId) widgetId) `shouldReturn` True
       void $ testServant tr $ Dashboards.widgetAlertUpsertH testPid widgetId (Just dashboardId) alertForm
       createdMonitor <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId testPid (Just dashboardId) widgetId
@@ -308,7 +308,7 @@ spec = sequential $ aroundAll withTestResources do
       (refresh, _) <- captureNotifs tr runSlackIncidentDeliveries
       deliverySummary refresh `shouldBe` ["slack-update:C_NOTIF_CHANNEL"]
 
-      void (runAsBase tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.dashboardWidgetPutH testPid dashboardId (Just widgetId) Nothing savedWidget{Widget.alertThreshold = Nothing}) `shouldThrow` anyIOException
+      void (toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.dashboardWidgetPutH testPid dashboardId (Just widgetId) Nothing savedWidget{Widget.alertThreshold = Nothing}) `shouldThrow` anyIOException
       let recoveryQuery = "name == \"search\""
           updatedWidget = savedWidget{Widget.query = Just recoveryQuery, Widget.alertThreshold = Just 2}
       void $ testServant tr $ Dashboards.dashboardWidgetPutH testPid dashboardId (Just widgetId) Nothing updatedWidget
@@ -582,7 +582,7 @@ spec = sequential $ aroundAll withTestResources do
                 [sql| SELECT id, title, issue_data FROM apis.issues
                       WHERE project_id = ? AND target_hash = ? AND issue_type = 'query_alert'
                         AND acknowledged_at IS NULL AND archived_at IS NULL |]
-                (testPid, show @Text hystMonId)
+                (testPid, Monitors.queryAlertKey hystMonId)
                 :: IO [(Issues.IssueId, Text, Aeson Issues.QueryAlertData)]
             [(title, d.thresholdValue, d.actualValue) | (_, title, Aeson d) <- rows]
               `shouldBe` [("Pipeline Test Monitor", expectedThreshold, expectedValue)]
@@ -599,7 +599,7 @@ spec = sequential $ aroundAll withTestResources do
       assertIssue 80 90 warningNotifications
       -- Existing issues can carry a threshold-bearing title from an earlier release.
       void $ withResource tr.trPool \conn ->
-        PGS.execute conn [sql|UPDATE apis.issues SET title = 'Pipeline Test Monitor threshold above 80' WHERE project_id = ? AND target_hash = ?|] (testPid, show @Text hystMonId)
+        PGS.execute conn [sql|UPDATE apis.issues SET title = 'Pipeline Test Monitor threshold above 80' WHERE project_id = ? AND target_hash = ?|] (testPid, Monitors.queryAlertKey hystMonId)
 
       -- Value 110 → MSAlerting
       alertNotifications <- evalMonitorValueWithNotifs (addUTCTime 120 t0) tr hystMonId 110

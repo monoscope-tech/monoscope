@@ -16,12 +16,10 @@ module Models.Apis.LogQueries (
   validateSqlQuery,
   hasProjectIdFilter,
   LogEndpoint (..),
-  logExplorerUrlPath,
   fetchLogPatterns,
   fetchSessions,
   SessionSort (..),
   SessionsRead (..),
-  sessionSortParam,
   sessionSortLabel,
   ExpandKind (..),
   fetchEventExamples,
@@ -76,7 +74,7 @@ import Relude hiding (many, some)
 import Relude.Extra.Foldable1 (maximum1, minimum1)
 import System.Logging qualified as Log
 import System.Tracing (Tracing, forkWithCtx, withSpan_)
-import Utils (listToIndexHashMap, lookupVecNonEmptyText, replaceAllFormats, toUriStr, truncateHour)
+import Utils (listToIndexHashMap, lookupVecNonEmptyText, replaceAllFormats, truncateHour)
 import Web.HttpApiData (FromHttpApiData (..))
 
 
@@ -193,25 +191,6 @@ data LogEndpoint = Data | Sessions | Patterns
   deriving (Display) via WrappedEnumSC 'Nothing "" LogEndpoint
 
 
-logExplorerUrlPath :: Projects.ProjectId -> LogEndpoint -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Bool -> Text
-logExplorerUrlPath pid endpoint q cols cursor since fromV toV layout source recent = "/p/" <> pid.toText <> "/log_explorer/" <> display endpoint <> "?" <> T.intercalate "&" params
-  where
-    param k v = ((k <> "=") <>) . toUriStr <$> v
-    unlessRecent v = if recent then Nothing else v
-    params =
-      "json=true"
-        : catMaybes
-          [ param "query" q
-          , param "cols" cols
-          , param "cursor" (unlessRecent cursor)
-          , param "since" (unlessRecent since)
-          , param "from" fromV
-          , param "to" (if recent then nudgeCursorBy cursorEpsilon =<< cursor else toV)
-          , param "layout" layout
-          , param "source" source
-          ]
-
-
 -- | Execute a user-provided SQL query with mandatory project_id filtering.
 -- The projection is opaque (user/AI-supplied), so we keep the `sub.*` wrapper.
 -- Works on both backends: TF expands `sub.*` via its WildcardFnArgExpander
@@ -274,7 +253,7 @@ selectLogTable useTimefusion pid queryAST queryText cursorM dateRange projectedC
         [ "original_query_input" AE..= queryText
         , "parsed_query_ast" AE..= show queryAST
         , "generated_sql_query" AE..= q
-        , "project_id" AE..= show pid
+        , "project_id" AE..= pid
         , "source" AE..= source
         , "target_spans" AE..= fromMaybe "" targetSpansM
         , "time_range_from" AE..= fmap (toText . iso8601Show) (fst dateRange)
@@ -686,20 +665,16 @@ sessionKeyExpr = "COALESCE(NULLIF(attributes___session___id, ''), NULLIF(attribu
 --
 -- >>> parseUrlPiece "alphabetical" :: Either Text SessionSort
 -- Left "Invalid Sort value: alphabetical"
+--
+-- 'display' renders the same wire value back:
+--
+-- >>> map display [minBound .. maxBound :: SessionSort] :: [Text]
+-- ["last_seen","first_seen","duration","errors","events"]
 data SessionSort = SortLastSeen | SortFirstSeen | SortDuration | SortErrors | SortEvents
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
   -- ToJSON is for the trace line below: it logs the *parsed* ordering, so an
   -- unrecognised sort_by shows as null — which is the signal that the fallback fired.
   deriving (AE.ToJSON, Display, FromHttpApiData) via WrappedEnumSC 'Nothing "Sort" SessionSort
-
-
--- | The wire value the sort dropdown emits and 'parseUrlPiece' reads back. Named to match
--- 'Pages.RealUserMonitoring.tabParam' and the tab functions.
---
--- >>> map sessionSortParam [minBound .. maxBound]
--- ["last_seen","first_seen","duration","errors","events"]
-sessionSortParam :: SessionSort -> Text
-sessionSortParam = display
 
 
 -- | The dropdown's visible label.
@@ -709,7 +684,7 @@ sessionSortParam = display
 sessionSortLabel :: SessionSort -> Text
 sessionSortLabel ordering = T.toUpper (T.take 1 label) <> T.drop 1 label
   where
-    label = T.replace "_" " " $ sessionSortParam ordering
+    label = T.replace "_" " " $ display ordering
 
 
 fetchSessions :: (DB es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Bool -> Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Text -> Maybe Text -> Maybe SessionSort -> Int -> SessionsRead -> Eff es (Maybe SessionSummary, Int, [SessionRow])
