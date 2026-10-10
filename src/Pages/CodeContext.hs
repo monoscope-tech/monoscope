@@ -5,7 +5,7 @@
 -- which reaches @Pkg.Components.Widget@, which imports @LogItem@ — a cycle. The renderer in
 -- "Pages.Components" only ever builds the URL, so nothing on the rendering side has to know
 -- this module exists.
-module Pages.CodeContext (codeContextH, repositoriesGetH, repositoryGetH, repositorySourceGetH, repositorySourcePostH, repositorySourceDeleteH, repositoryReviewsPostH, repositoryConnectGetH, repositoryConnectPostH, RepositoryConnectGet (..), RepositoryConnectForm (..), RepositoryGet (..), ReviewReadiness (..), RepositoryTab (..), codeMappingsGetH, codeMappingsEditorGetH, codeMappingsPostH, codeMappingsDeleteH, CodeMappingForm (..), impactReviewSettingsPostH, impactReviewRetryH) where
+module Pages.CodeContext (repositoryTokenGetH, repositoryTokenPostH, RepositoryTokenGet (..), RepositoryTokenForm (..), codeContextH, repositoriesGetH, repositoryGetH, repositorySourceGetH, repositorySourcePostH, repositorySourceDeleteH, repositoryReviewsPostH, repositoryConnectGetH, repositoryConnectPostH, RepositoryConnectGet (..), RepositoryConnectForm (..), RepositoryGet (..), ReviewReadiness (..), RepositoryTab (..), codeMappingsGetH, codeMappingsEditorGetH, codeMappingsPostH, codeMappingsDeleteH, CodeMappingForm (..), impactReviewSettingsPostH, impactReviewRetryH) where
 
 import Data.Aeson qualified as AE
 import Data.Cache qualified as Cache
@@ -407,7 +407,7 @@ codeMappingsContent pid sampleM credentialM repositoryM = do
   selected <- if canEdit then codeContextCredential pid requested else pure Nothing
   let credM = selected >>= \c -> guard (any ((== c.id) . (.id)) accounts && (isNothing repositoryM || isJust requested)) $> c
   mappings <- filter (\m -> maybe True (\r -> mappingInRepository accounts r m) repositoryM) <$> CodeContext.getCodeMappings pid
-  repoResult <- maybe (pure $ Right []) credentialRepos credM
+  repoResult <- maybe (pure $ Right []) (credentialRepos repositoryM) credM
   reviewSettings <- filter (\settings -> maybe True (\r -> r.host == Git.GitHub && isNothing r.apiBase && (settings.owner, settings.repo) == (T.toLower r.owner, T.toLower r.repo)) repositoryM) <$> ImpactReviews.repositorySettings pid
   authConfig <- (.config) <$> Effectful.Reader.Static.ask @AuthContext
   pure $ div_ [class_ "space-y-6"] do
@@ -438,9 +438,9 @@ codeMappingsContent pid sampleM credentialM repositoryM = do
     when canEdit $ case credM of
       Nothing | null accounts -> do
         p_ [class_ "text-sm text-textWeak max-w-2xl"] "Connect an account to link your services to source code and production impact reviews. The same connection can sync dashboards."
-        a_ [href_ ("/p/" <> pid.toText <> "/settings/git-sync/install?to=code"), class_ "btn btn-sm btn-primary gap-2"] do
-          faSprite_ "github" "regular" "w-3.5 h-3.5"
-          "Connect GitHub"
+        a_ [href_ ("/p/" <> pid.toText <> "/repositories/connect"), class_ "btn btn-sm btn-primary gap-2"] do
+          faSprite_ "code-branch" "regular" "w-3.5 h-3.5"
+          "Connect an account"
       Nothing -> p_ [class_ "text-sm text-textWeak"] "Choose an account to link another repository. Existing service mappings keep their own account."
       Just cred -> do
         p_ [class_ "text-sm text-textWeak"] "Link a repository and the service built from it. Frames outside a linked repository stay plain text."
@@ -568,15 +568,27 @@ codeMappingsContent pid sampleM credentialM repositoryM = do
 
 
 -- | Cache successful provider listings; an unavailable account is distinct from an empty one.
-credentialRepos :: GitSync.GitHubCredential -> ATAuthCtx (Either Text [Git.GitRepo])
-credentialRepos cred = do
+credentialRepos :: Maybe GitSync.Repository -> GitSync.GitHubCredential -> ATAuthCtx (Either Text [Git.GitRepo])
+credentialRepos repositoryM cred = do
   ctx <- Effectful.Reader.Static.ask @AuthContext
-  liftIO (Cache.lookup ctx.repoListCache cred.id) >>= \case
+  cached <- liftIO $ Cache.lookup ctx.repoListCache cred.id
+  let known = case repositoryM of
+        Nothing -> cached
+        Just repository -> pure <$> find ((== repository.owner <> "/" <> repository.repo) . (.fullName)) (fold cached)
+  case known of
     Just repos -> pure $ Right repos
     Nothing ->
-      (runExceptT $ repoConn ctx.config cred >>= ExceptT . Git.listRepos) >>= \case
-        Left err -> Left err <$ Log.logWarn "Could not list repositories" (cred.projectId, Git.hostSlug cred.host, err)
-        Right repos -> Right repos <$ liftIO (Cache.insert ctx.repoListCache cred.id repos)
+      ( runExceptT do
+          conn <- repoConn ctx.config cred
+          case repositoryM of
+            Nothing -> ExceptT $ maybe (Git.listTokenRepos conn) (const $ Git.listRepos conn) cred.installationId
+            Just repository -> pure <$> ExceptT (Git.fetchRepository conn $ Git.RepoRef repository.owner repository.repo "HEAD")
+      )
+        >>= \case
+          Left err -> Left err <$ Log.logWarn "Could not list repositories" (cred.projectId, Git.hostSlug cred.host, err)
+          Right repos -> do
+            when (isNothing repositoryM) $ liftIO $ Cache.insert ctx.repoListCache cred.id repos
+            pure $ Right repos
 
 
 newtype RepositoryConnectForm = RepositoryConnectForm
@@ -598,7 +610,9 @@ data RepositoryConnectGet = RepositoryConnectGet
 
 
 repositoryConnectGetH :: Projects.ProjectId -> Maybe GitSync.GitHubCredentialId -> ATAuthCtx (RespHeaders (PageCtx RepositoryConnectGet))
-repositoryConnectGetH pid cid = addRespHeaders =<< repositoryConnectPage pid cid
+repositoryConnectGetH pid cid = do
+  requireReviewWrite pid
+  addRespHeaders =<< repositoryConnectPage pid cid
 
 
 repositoryConnectPage :: Projects.ProjectId -> Maybe GitSync.GitHubCredentialId -> ATAuthCtx (PageCtx RepositoryConnectGet)
@@ -606,7 +620,7 @@ repositoryConnectPage projectId cid = do
   (_, _, bw) <- mkPageCtx projectId
   accounts <- codeContextCredentials projectId
   selectedAccount <- codeContextCredential projectId cid
-  repositories <- maybe (pure $ Right []) credentialRepos selectedAccount
+  repositories <- maybe (pure $ Right []) (credentialRepos Nothing) selectedAccount
   let credential = find (\account -> Just account.id == ((.id) <$> selectedAccount)) accounts
   pure $ PageCtx bw{pageTitle = "Connect repositories"} RepositoryConnectGet{projectId, accounts, credential, repositories, selected = [], connectionError = Nothing}
 
@@ -672,7 +686,102 @@ instance ToHtml RepositoryConnectGet where
       a_ [href_ ("/p/" <> page.projectId.toText <> "/settings/git-sync/install?to=code"), class_ "btn btn-sm btn-ghost"] "Connect GitHub account"
       p_ [class_ "text-xs text-textWeak"] do
         "Using another Git host or a repository token? "
-        a_ [href_ (base <> "?tab=configuration#git-sync-new"), class_ "text-textBrand underline underline-offset-2"] "Connect with a token"
+        a_ [href_ (base <> "/connect/token"), class_ "text-textBrand underline underline-offset-2"] "Connect with a token"
+  toHtmlRaw = toHtml
+
+
+data RepositoryTokenForm = RepositoryTokenForm
+  { host :: Git.GitHost
+  , apiBase :: Maybe Text
+  , repoFullName :: Text
+  , accessToken :: Text
+  , replaceToken :: Maybe Bool
+  }
+  deriving stock (Generic)
+  deriving anyclass (FromForm)
+
+
+data RepositoryTokenGet = RepositoryTokenGet
+  { projectId :: Projects.ProjectId
+  , host :: Git.GitHost
+  , apiBase :: Maybe Text
+  , repoFullName :: Text
+  , connectionError :: Maybe Text
+  }
+  deriving stock (Show)
+
+
+repositoryTokenPage :: Projects.ProjectId -> ATAuthCtx (PageCtx RepositoryTokenGet)
+repositoryTokenPage pid = do
+  requireReviewWrite pid
+  (_, _, bw) <- mkPageCtx pid
+  pure $ PageCtx bw{pageTitle = "Connect with a token"} $ RepositoryTokenGet pid Git.GitHub Nothing "" Nothing
+
+
+repositoryTokenGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (PageCtx RepositoryTokenGet))
+repositoryTokenGetH pid = addRespHeaders =<< repositoryTokenPage pid
+
+
+repositoryTokenPostH :: Projects.ProjectId -> RepositoryTokenForm -> ATAuthCtx (RespHeaders (PageCtx RepositoryTokenGet))
+repositoryTokenPostH pid form = do
+  page <- repositoryTokenPage pid
+  ctx <- Effectful.Reader.Static.ask @AuthContext
+  let encKey = encodeUtf8 ctx.config.apiKeyEncryptionSecretKey
+      fullName = T.strip form.repoFullName
+      token = T.strip form.accessToken
+      safePage = page{content = (page.content :: RepositoryTokenGet){host = form.host, apiBase = form.apiBase, repoFullName = fullName}}
+  result <- runExceptT do
+    conn <- hoistEither $ Git.mkGitConn form.host form.apiBase token
+    let (owner, name) = Git.splitFullName fullName
+    when (T.null owner || T.null name) $ hoistEither $ Left "Enter the full repository name, such as team/checkout."
+    repository <- ExceptT $ first (const "Could not access this repository. Check its name, server URL, and token permissions.") <$> Git.fetchRepository conn (Git.RepoRef owner name "HEAD")
+    let (accountName, _) = Git.splitFullName repository.fullName
+        origin = rightToMaybe . Git.normalizeOrigin =<< mfilter (not . T.null . T.strip) form.apiBase
+    accounts <- lift $ GitSync.getGitHubCredentials pid
+    let observed = find (\c -> (c.host, c.apiBase, c.account) == (form.host, origin, accountName)) accounts
+    whenJust observed \existing -> do
+      when (isJust existing.installationId) $ hoistEither $ Left "This owner is connected through the GitHub App. Choose its existing account or grant the App access to this repository."
+      plain <- lift $ GitSync.getGitHubCredential encKey pid existing.id
+      when (form.replaceToken /= Just True && (plain >>= (.accessToken)) /= Just token)
+        $ hoistEither
+        $ Left "This owner already has a saved token. Use that connection, or select Replace saved token to update it for all repositories using this account."
+    account <- ExceptT $ maybeToRight "This account changed while connecting. Reload and check its saved connection before trying again." <$> GitSync.saveTokenCredential encKey pid form.host origin accountName token observed
+    connected <- ExceptT $ maybeToRight "This account is no longer available. Try connecting again." <$> GitSync.connectRepository pid account.id repository
+    lift $ liftIO $ Cache.delete ctx.repoListCache account.id
+    pure connected
+  case result of
+    Left err -> addRespHeaders safePage{content = (safePage.content :: RepositoryTokenGet){connectionError = Just err}}
+    Right repository -> do
+      addSuccessToast "Repository connected" (Just "Link services or enable dashboard sync when you need it.")
+      redirectCS $ "/p/" <> pid.toText <> "/repositories/" <> repository.id.toText
+      addRespHeaders safePage
+
+
+instance ToHtml RepositoryTokenGet where
+  toHtml page = section_ [class_ "mx-auto max-w-2xl space-y-6 px-4 py-6 sm:px-8 sm:py-8"] do
+    let base = "/p/" <> page.projectId.toText <> "/repositories/connect"
+    a_ [href_ base, class_ "text-sm text-textBrand hover:underline"] "Back to repository connections"
+    header_ [class_ "space-y-2"] do
+      h1_ [class_ "text-xl font-semibold text-textStrong"] "Connect with a token"
+      p_ [class_ "text-sm text-textWeak"] "Connect a codebase for source context. Dashboard sync stays off until you enable it. Automatic pull request reviews need the GitHub App."
+    div_ [id_ "repository-token-content", class_ "space-y-4"] do
+      whenJust page.connectionError $ p_ [role_ "alert", class_ "text-sm text-textError break-words"] . toHtml
+      form_ [action_ (base <> "/token"), method_ "post", hxPost_ (base <> "/token"), hxTarget_ "#repository-token-content", hxSelect_ "#repository-token-content", hxSwap_ "outerMorph", hxIndicator_ "#repository-token-indicator", class_ "space-y-4"] do
+        formSelectField_ FieldSm "Git host" "host" True $ forM_ (universe @Git.GitHost) \host ->
+          option_ ([value_ (Git.hostSlug host)] <> [selected_ "selected" | host == page.host]) $ toHtml $ Git.hostLabel host
+        formField_ FieldSm def{value = fromMaybe "" page.apiBase, placeholder = "https://git.example.com"} "Server URL (for self-hosted Git)" "apiBase" False Nothing
+        formField_ FieldSm def{value = page.repoFullName, placeholder = "team/checkout"} "Full repository name" "repoFullName" True Nothing
+        formField_ FieldSm def{inputType = "password", extraAttrs = [autocomplete_ "new-password"]} "Access token" "accessToken" True Nothing
+        p_ [class_ "text-xs text-textWeak"] "The token needs read access to this repository. Dashboard sync will also need write access if you enable it later."
+        details_ [class_ "space-y-3"] do
+          summary_ [class_ "cursor-pointer text-sm text-textWeak"] "Replacing an existing connection?"
+          label_ [class_ "flex items-start gap-3 text-sm text-textStrong"] do
+            input_ [type_ "checkbox", name_ "replaceToken", value_ "true", class_ "checkbox checkbox-sm shrink-0"]
+            "Replace saved token"
+          p_ [class_ "text-xs text-textWeak"] "This updates the source-access token for every repository using this owner’s account on this Git host."
+        button_ [type_ "submit", class_ "btn btn-sm btn-primary gap-2"] do
+          "Connect repository"
+          htmxIndicator_ "repository-token-indicator" LdXS
   toHtmlRaw = toHtml
 
 

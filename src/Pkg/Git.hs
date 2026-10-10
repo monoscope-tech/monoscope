@@ -41,6 +41,8 @@ module Pkg.Git (
   fetchFile,
   pushFile,
   listRepos,
+  listTokenRepos,
+  fetchRepository,
   defaultBranchOf,
   fetchDefaultBranch,
   computeContentSha,
@@ -826,26 +828,40 @@ pushFile conn r path content existingSha message = runExceptT do
       pure $ (^? W.responseBody . key "content" . key "sha" . _String) <$> resp
 
 
--- | The repositories this token reaches.
+-- | Repositories granted to a GitHub App installation, or an account on other hosts.
 --
 -- A repository-scoped token legitimately reaches one repository, or none it can enumerate, so
 -- an empty list is a valid answer and the caller keeps manual entry available.
 listRepos :: (IOE :> es, W.HTTP :> es) => GitConn -> Eff es (Either Text [GitRepo])
 listRepos conn = case conn.host of
-  GitHub -> pagedJson conn 100 (toListOf (key "repositories" . values)) ghRepo \p -> url conn ("installation/repositories?per_page=100&page=" <> show p)
-  Gitea -> pagedJson conn 50 (toListOf values) ghRepo \p -> url conn ("user/repos?limit=50&page=" <> show p)
-  GitLab -> pagedJson conn 100 (toListOf values) glRepo \p -> url conn ("projects?membership=true&simple=true&per_page=100&page=" <> show p)
-  Bitbucket -> pagedJson conn 100 (toListOf (key "values" . values)) bbRepo \p -> url conn ("repositories?role=member&pagelen=100&page=" <> show p)
-  where
-    ghRepo v = do
-      full <- v ^? key "full_name" . _String
-      pure $ GitRepo full (snd $ splitFullName full) (v ^? key "private" . _Bool == Just True) (fromMaybe "main" $ v ^? key "default_branch" . _String)
-    glRepo v = do
-      full <- v ^? key "path_with_namespace" . _String
-      pure $ GitRepo full (snd $ splitFullName full) (v ^? key "visibility" . _String /= Just "public") (fromMaybe "main" $ v ^? key "default_branch" . _String)
-    bbRepo v = do
-      full <- v ^? key "full_name" . _String
-      pure $ GitRepo full (snd $ splitFullName full) (v ^? key "is_private" . _Bool == Just True) (fromMaybe "main" $ v ^? key "mainbranch" . key "name" . _String)
+  GitHub -> pagedJson conn 100 (toListOf (key "repositories" . values)) (parseRepository conn.host) \p -> url conn ("installation/repositories?per_page=100&page=" <> show p)
+  Gitea -> pagedJson conn 50 (toListOf values) (parseRepository conn.host) \p -> url conn ("user/repos?limit=50&page=" <> show p)
+  GitLab -> pagedJson conn 100 (toListOf values) (parseRepository conn.host) \p -> url conn ("projects?membership=true&simple=true&per_page=100&page=" <> show p)
+  Bitbucket -> pagedJson conn 100 (toListOf (key "values" . values)) (parseRepository conn.host) \p -> url conn ("repositories?role=member&pagelen=100&page=" <> show p)
+
+
+-- | Repositories visible to a personal or repository token.
+listTokenRepos :: (IOE :> es, W.HTTP :> es) => GitConn -> Eff es (Either Text [GitRepo])
+listTokenRepos conn = case conn.host of
+  GitHub -> pagedJson conn 100 (toListOf values) (parseRepository conn.host) \p -> url conn ("user/repos?per_page=100&page=" <> show p)
+  _ -> listRepos conn
+
+
+fetchRepository :: (IOE :> es, W.HTTP :> es) => GitConn -> RepoRef -> Eff es (Either Text GitRepo)
+fetchRepository conn r = get_ conn (repoUrl conn r "") <&> (>>= \body -> first toText (AE.eitherDecode body) >>= maybeToRight "The Git host returned incomplete repository details." . parseRepository conn.host)
+
+
+parseRepository :: GitHost -> AE.Value -> Maybe GitRepo
+parseRepository host v = do
+  full <- v ^? key (if host == GitLab then "path_with_namespace" else "full_name") . _String
+  let (owner, name) = splitFullName full
+  guard $ not (T.null owner || T.null name)
+  let private = case host of
+        GitLab -> v ^? key "visibility" . _String /= Just "public"
+        Bitbucket -> v ^? key "is_private" . _Bool == Just True
+        _ -> v ^? key "private" . _Bool == Just True
+      branch = if host == Bitbucket then v ^? key "mainbranch" . key "name" . _String else v ^? key "default_branch" . _String
+  pure $ GitRepo full name private (fromMaybe "main" branch)
 
 
 -- | The repository's default branch, or @main@ when the host will not say.

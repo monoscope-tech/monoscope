@@ -56,6 +56,50 @@ test('repository and storage setup fit a narrow viewport', async ({ page }) => {
   }
 });
 
+test('repository token setup keeps errors local without enabling dashboard sync', async ({ page, baseURL }, testInfo) => {
+  const uid = randomUUID(), sid = randomUUID(), pid = randomUUID();
+  sql(`INSERT INTO users.users (id, email) VALUES ('${uid}', '${uid}@example.com');
+       INSERT INTO users.persistent_sessions (id, user_id) VALUES ('${sid}', '${uid}');
+       INSERT INTO projects.projects (id, title) VALUES ('${pid}', 'Token connection test');
+       INSERT INTO projects.project_members (project_id, user_id, permission) VALUES ('${pid}', '${uid}', 'admin');`);
+  try {
+    await page.context().addCookies([{ name: 'monoscope_session', value: sid, url: baseURL! }]);
+    await page.setViewportSize({ width: 320, height: 800 });
+    await page.goto(`/p/${pid}/repositories/connect`);
+    await page.getByRole('link', { name: 'Connect with a token', exact: true }).click();
+    await expect(page).toHaveURL(`/p/${pid}/repositories/connect/token`);
+    const panel = page.locator('#repository-token-content');
+    await panel.getByRole('combobox', { name: /Git host/ }).selectOption('gitea');
+    await panel.getByRole('textbox', { name: /Server URL/ }).fill('http://git.example.com');
+    await panel.getByRole('textbox', { name: /Full repository name/ }).fill('team/checkout');
+    await panel.getByLabel('Access token', { exact: false }).fill('fixture-token');
+    await panel.getByRole('button', { name: 'Connect repository', exact: true }).press('Enter');
+    await expect(panel.getByRole('alert')).toContainText('Use https://');
+    await expect(panel).toHaveCount(1);
+    await expect(panel.getByRole('combobox', { name: /Git host/ })).toHaveValue('gitea');
+    await expect(panel.getByRole('textbox', { name: /Full repository name/ })).toHaveValue('team/checkout');
+    await expect(panel.getByLabel('Access token', { exact: false })).toHaveAttribute('value', '');
+    await expect(panel.getByLabel('Access token', { exact: false })).toHaveValue('fixture-token');
+    expect(sql(`SELECT count(*) FROM projects.git_sync WHERE project_id = '${pid}'`).toString().trim()).toBe('0');
+    expect(sql(`SELECT count(*) FROM projects.git_credentials WHERE project_id = '${pid}'`).toString().trim()).toBe('0');
+    for (const theme of ['light', 'dark']) {
+      await page.context().addCookies([{ name: 'theme', value: theme, url: baseURL! }]);
+      await page.reload();
+      await expect(panel.getByLabel('Access token', { exact: false })).toHaveValue('');
+      await page.getByText('Replacing an existing connection?', { exact: true }).press('Enter');
+      await expect(page.getByRole('checkbox', { name: 'Replace saved token', exact: true })).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+      await page.screenshot({ path: testInfo.outputPath(`repository-token-${theme}.png`), fullPage: true });
+    }
+    sql(`UPDATE projects.project_members SET permission = 'view' WHERE project_id = '${pid}' AND user_id = '${uid}';`);
+    expect((await page.request.get(`/p/${pid}/repositories/connect`)).status()).toBe(403);
+    expect((await page.request.get(`/p/${pid}/repositories/connect/token`)).status()).toBe(403);
+    expect((await page.request.post(`/p/${pid}/repositories/connect/token`, { form: { host: 'github', repoFullName: 'team/checkout', accessToken: 'forbidden' } })).status()).toBe(403);
+  } finally {
+    sql(`DELETE FROM projects.projects WHERE id = '${pid}'; DELETE FROM users.users WHERE id = '${uid}';`);
+  }
+});
+
 test('repository account choice keeps service mappings with the selected team', async ({ page, baseURL }, testInfo) => {
   const uid = randomUUID(), sid = randomUUID(), pid = randomUUID();
   const accounts = [randomUUID(), randomUUID()];

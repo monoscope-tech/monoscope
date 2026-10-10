@@ -576,6 +576,8 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , repositoriesGet :: mode :- "p" :> ProjectId :> "repositories" :> QueryParam "tab" PageCodeContext.RepositoryTab :> QueryParam "sample" Text :> Get '[HTML] (RespHeaders (Html ()))
   , repositoryConnectGet :: mode :- "p" :> ProjectId :> "repositories" :> "connect" :> QueryParam "credentialId" ModelGitSync.GitHubCredentialId :> Get '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryConnectGet))
   , repositoryConnectPost :: mode :- "p" :> ProjectId :> "repositories" :> "connect" :> QueryParam "credentialId" ModelGitSync.GitHubCredentialId :> ReqBody '[FormUrlEncoded] PageCodeContext.RepositoryConnectForm :> Post '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryConnectGet))
+  , repositoryTokenGet :: mode :- "p" :> ProjectId :> "repositories" :> "connect" :> "token" :> Get '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryTokenGet))
+  , repositoryTokenPost :: mode :- "p" :> ProjectId :> "repositories" :> "connect" :> "token" :> ReqBody '[FormUrlEncoded] PageCodeContext.RepositoryTokenForm :> Post '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryTokenGet))
   , repositoryGet :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> Get '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryGet))
   , repositoryDashboardGet :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "dashboards" :> Get '[HTML] (RespHeaders (PageCtx GitSync.RepositoryDashboardGet))
   , repositoryDashboardPost :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "dashboards" :> ReqBody '[FormUrlEncoded] GitSync.RepositoryDashboardForm :> Post '[HTML] (RespHeaders (PageCtx GitSync.RepositoryDashboardGet))
@@ -1070,6 +1072,8 @@ cookieProtectedServer =
     , repositoriesGet = PageCodeContext.repositoriesGetH
     , repositoryConnectGet = PageCodeContext.repositoryConnectGetH
     , repositoryConnectPost = PageCodeContext.repositoryConnectPostH
+    , repositoryTokenGet = PageCodeContext.repositoryTokenGetH
+    , repositoryTokenPost = PageCodeContext.repositoryTokenPostH
     , repositoryGet = PageCodeContext.repositoryGetH
     , repositoryDashboardGet = GitSync.repositoryDashboardGetH
     , repositoryDashboardPost = GitSync.repositoryDashboardPostH

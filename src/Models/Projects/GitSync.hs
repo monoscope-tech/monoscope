@@ -44,6 +44,7 @@ module Models.Projects.GitSync (
   getGitHubCredentials,
   getGitHubCredential,
   upsertGitHubCredential,
+  saveTokenCredential,
   buildSyncPlan,
   dashboardToYaml,
   yamlToDashboard,
@@ -351,6 +352,23 @@ upsertGitHubCredential encKey pid host apiBase account instId token =
              VALUES (#{pid}, #{host}, #{apiBase}, #{account}, #{instId}, #{encryptToken encKey <$> token})
              ON CONFLICT (project_id, host, api_base, account)
              DO UPDATE SET installation_id = EXCLUDED.installation_id, access_token = COALESCE(EXCLUDED.access_token, projects.git_credentials.access_token), updated_at = now()
+             RETURNING id, project_id, account, installation_id, access_token, created_at, updated_at, host, api_base |]
+
+
+-- | Create a token grant or replace the exact grant the editor inspected.
+saveTokenCredential :: DB es => ByteString -> ProjectId -> Git.GitHost -> Maybe Text -> Text -> Text -> Maybe GitHubCredential -> Eff es (Maybe GitHubCredential)
+saveTokenCredential encKey pid host origin account token = \case
+  Nothing ->
+    Hasql.interp
+      [HI.sql| INSERT INTO projects.git_credentials (project_id, host, api_base, account, access_token)
+             VALUES (#{pid}, #{host}, #{origin}, #{account}, #{encryptToken encKey token})
+             ON CONFLICT (project_id, host, api_base, account) DO NOTHING
+             RETURNING id, project_id, account, installation_id, access_token, created_at, updated_at, host, api_base |]
+  Just observed ->
+    Hasql.interp
+      [HI.sql| UPDATE projects.git_credentials SET access_token = #{encryptToken encKey token}, updated_at = now()
+             WHERE project_id = #{pid} AND id = #{observed.id} AND host = #{host} AND api_base IS NOT DISTINCT FROM #{origin} AND account = #{account}
+               AND installation_id IS NULL AND updated_at = #{observed.updatedAt} AND access_token IS NOT DISTINCT FROM #{observed.accessToken}
              RETURNING id, project_id, account, installation_id, access_token, created_at, updated_at, host, api_base |]
 
 

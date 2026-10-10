@@ -239,6 +239,75 @@ spec = do
             Left err -> fail $ show err
 
     describe "Source code settings (code mappings)" do
+      it "repositoryTokenConnection_checksAccessWithoutEnablingSyncAndRequiresExplicitReplacement" \tr -> do
+        let form = PageCodeContext.RepositoryTokenForm Git.GitHub Nothing "team/checkout" "fixture-token" Nothing
+            metadata :: (IOE :> es, W.HTTP :> es) => Eff es a -> Eff es a
+            metadata = interpose @W.HTTP \_ -> \case
+              W.GetWith _ endpoint -> do
+                liftIO $ endpoint `shouldBe` "https://api.github.com/repos/team/checkout"
+                pure $ httpResponse "{\"full_name\":\"team/checkout\",\"private\":true,\"default_branch\":\"trunk\"}"
+              _ -> liftIO $ throwIO $ InvalidUrlException "https://git.invalid" "Token connection must only read repository metadata"
+            encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
+        (_, rejected) <- testServant tr $ withUnavailableRepositoryAPI $ PageCodeContext.repositoryTokenPostH testPid form
+        rejected.content.connectionError `shouldSatisfy` isJust
+        rejected.content.repoFullName `shouldBe` "team/checkout"
+        render (Lucid.toHtml rejected.content) `shouldNotSatisfy` T.isInfixOf "fixture-token"
+        (_, incomplete) <- testServant tr $ interpose @W.HTTP (\_ -> \case W.GetWith _ _ -> pure $ httpResponse "{\"full_name\":\"\"}"; _ -> liftIO $ throwIO $ InvalidUrlException "https://git.invalid" "Unexpected request") $ PageCodeContext.repositoryTokenPostH testPid form
+        incomplete.content.connectionError `shouldSatisfy` isJust
+        runQueryEffect tr (GitSync.getGitHubCredentials testPid) >>= (`shouldSatisfy` null)
+        connections <- replicateM 2 $ testServant tr $ metadata $ PageCodeContext.repositoryTokenPostH testPid form
+        [repository] <- runQueryEffect tr $ GitSync.getRepositories testPid
+        for_ connections \(response, page) -> do
+          page.content.connectionError `shouldSatisfy` isNothing
+          getHeaders response `shouldSatisfy` elem ("HX-Redirect", encodeUtf8 ("/p/" <> testPid.toText <> "/repositories/" <> repository.id.toText))
+        runQueryEffect tr (GitSync.getGitSyncs testPid) >>= (`shouldSatisfy` null)
+        runQueryEffect tr (CodeContext.getCodeMappings testPid) >>= (`shouldSatisfy` null)
+        [account] <- runQueryEffect tr $ GitSync.getGitHubCredentials testPid
+        let savedToken = runQueryEffect tr (GitSync.getGitHubCredential encKey testPid account.id) <&> (>>= (.accessToken))
+        savedToken `shouldReturn` Just "fixture-token"
+        runQueryEffect tr (GitSync.saveTokenCredential encKey testPid Git.GitHub Nothing "team" "concurrent-token" Nothing) >>= (`shouldSatisfy` isNothing)
+        savedToken `shouldReturn` Just "fixture-token"
+        (_, conflict) <- testServant tr $ metadata $ PageCodeContext.repositoryTokenPostH testPid form{PageCodeContext.accessToken = "replacement-token"}
+        conflict.content.connectionError `shouldSatisfy` isJust
+        savedToken `shouldReturn` Just "fixture-token"
+        _ <- testServant tr $ metadata $ PageCodeContext.repositoryTokenPostH testPid form{PageCodeContext.accessToken = "replacement-token", PageCodeContext.replaceToken = Just True}
+        savedToken `shouldReturn` Just "replacement-token"
+        runQueryEffect tr (GitSync.saveTokenCredential encKey testPid Git.GitHub Nothing "team" "concurrent-token" (Just account)) >>= (`shouldSatisfy` isNothing)
+        savedToken `shouldReturn` Just "replacement-token"
+        (_, source) <- testServant tr $ metadata $ PageCodeContext.repositorySourceGetH testPid repository.id Nothing Nothing
+        render source `shouldSatisfy` T.isInfixOf "value=\"trunk\""
+        (_, picker) <-
+          testServant tr
+            $ interpose @W.HTTP
+              ( \_ -> \case
+                  W.GetWith _ endpoint -> do
+                    liftIO $ endpoint `shouldBe` "https://api.github.com/user/repos?per_page=100&page=1"
+                    pure $ httpResponse "[{\"full_name\":\"team/checkout\",\"private\":true,\"default_branch\":\"trunk\"}]"
+                  _ -> liftIO $ throwIO $ InvalidUrlException "https://git.invalid" "Token repository picker must only GET"
+              )
+            $ PageCodeContext.repositoryConnectGetH testPid (Just account.id)
+        picker.content.repositories `shouldBe` Right [Git.GitRepo "team/checkout" "checkout" True "trunk"]
+        runQueryEffect tr $ Hasql.interpExecute_ [HI.sql| UPDATE projects.git_credentials SET installation_id = 42, access_token = NULL WHERE id = #{account.id} |]
+        runQueryEffect tr (GitSync.saveTokenCredential encKey testPid Git.GitHub Nothing "team" "concurrent-token" (Just account)) >>= (`shouldSatisfy` isNothing)
+        (_, appDenied) <- testServant tr $ metadata $ PageCodeContext.repositoryTokenPostH testPid form{PageCodeContext.replaceToken = Just True}
+        appDenied.content.connectionError `shouldSatisfy` isJust
+        Just app <- runQueryEffect tr $ GitSync.getGitHubCredential encKey testPid account.id
+        app.installationId `shouldBe` Just 42
+
+      it "repositoryTokenConnection_supportsGitLabNamespacesGiteaAndBitbucketMetadata" \tr -> do
+        for_
+          ([(Git.GitLab, Nothing, "team/platform/checkout", "{\"path_with_namespace\":\"team/platform/checkout\",\"visibility\":\"private\",\"default_branch\":\"stable\"}"), (Git.Gitea, Just "https://git.example.com", "team/checkout", "{\"full_name\":\"team/checkout\",\"private\":true,\"default_branch\":\"stable\"}"), (Git.Bitbucket, Nothing, "team/checkout", "{\"full_name\":\"team/checkout\",\"is_private\":true,\"mainbranch\":{\"name\":\"stable\"}}")] :: [(Git.GitHost, Maybe Text, Text, LBS.ByteString)])
+          \(host, origin, name, body) -> do
+            let metadata :: (IOE :> es, W.HTTP :> es) => Eff es a -> Eff es a
+                metadata = interpose @W.HTTP \_ -> \case W.GetWith _ _ -> pure $ httpResponse body; _ -> liftIO $ throwIO $ InvalidUrlException "https://git.invalid" "Token connection must only read metadata"
+            _ <- testServant tr $ metadata $ PageCodeContext.repositoryTokenPostH testPid (PageCodeContext.RepositoryTokenForm host origin name "fixture-token" Nothing)
+            repositories <- runQueryEffect tr $ GitSync.getRepositories testPid
+            repository <- maybe (fail "Expected repository for this Git host") pure $ find ((== host) . (.host)) repositories
+            (repository.owner, repository.repo) `shouldBe` Git.splitFullName name
+            (_, source) <- testServant tr $ metadata $ PageCodeContext.repositorySourceGetH testPid repository.id Nothing Nothing
+            render source `shouldSatisfy` T.isInfixOf "value=\"stable\""
+        runQueryEffect tr (GitSync.getGitSyncs testPid) >>= (`shouldSatisfy` null)
+
       it "repositorySettings_readOnlyMembersSeeMappingsWithoutEditControlsOrProviderRequests" \tr -> do
         let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
             uid = (getResponse tr.trSessAndHeader).user.id
@@ -299,6 +368,8 @@ spec = do
         map (.credentialId) retained `shouldBe` [Nothing, Nothing]
 
       it "repositoryFeatures_areDiscoverableOutsideNotificationSettings" \tr -> do
+        (_, connection) <- testServant tr $ PageCodeContext.repositoryConnectGetH testPid Nothing
+        render (Lucid.toHtml connection.content) `shouldSatisfy` T.isInfixOf ("href=\"/p/" <> testPid.toText <> "/repositories/connect/token\"")
         (_, html) <- testServant tr $ PageCodeContext.codeMappingsGetH testPid Nothing
         let out = render html
         out `shouldSatisfy` T.isInfixOf ("href=\"/p/" <> testPid.toText <> "/repositories\"")
@@ -679,14 +750,11 @@ spec = do
 
       -- Without a credential there is nothing to read repos through, so the page must point at
       -- the control that fixes that rather than offer a form whose every submission is discarded.
-      it "asks for a GitHub connection before it asks for a mapping" \tr -> do
+      it "asks for an account connection before it asks for a mapping" \tr -> do
         (_, html) <- testServant tr $ PageCodeContext.codeMappingsGetH testPid Nothing
         let out = render html
-        out `shouldSatisfy` T.isInfixOf "Connect GitHub"
-        -- The install has to come back here, not to dashboard sync: they are one grant but
-        -- two destinations, and landing on the wrong one is how the old flow made source
-        -- context look like it required configuring YAML sync.
-        out `shouldSatisfy` T.isInfixOf "git-sync/install?to=code"
+        out `shouldSatisfy` T.isInfixOf "Connect an account"
+        out `shouldSatisfy` T.isInfixOf ("href=\"/p/" <> testPid.toText <> "/repositories/connect\"")
         out `shouldNotSatisfy` T.isInfixOf "Link repository"
 
       it "maps several services onto several repos, and resolves each frame to its own" \tr -> do

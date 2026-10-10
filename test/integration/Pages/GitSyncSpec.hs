@@ -741,7 +741,7 @@ liveSmokeSpec = do
         $ it "SKIPPED - set GIT_SMOKE_HOST, GIT_SMOKE_TOKEN, GIT_SMOKE_OWNER, GIT_SMOKE_REPO to enable" pending
     Just cfg -> describe ("Live git host smoke test (" <> toString (Git.hostLabel cfg.conn.host) <> ")") do
       it "lists repositories" do
-        r <- runEff $ W.runHTTPWreq $ Git.listRepos cfg.conn
+        r <- runEff $ W.runHTTPWreq $ Git.listTokenRepos cfg.conn
         r `shouldSatisfy` isRight
 
       it "reports a default branch" do
