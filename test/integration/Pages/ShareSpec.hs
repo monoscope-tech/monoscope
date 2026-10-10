@@ -9,6 +9,7 @@ import Data.UUID.V4 (nextRandom)
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Lucid (renderText, toHtml)
+import Models.Apis.ShareEvents qualified as ShareEvents
 import Network.HTTP.Types qualified as H
 import Network.Wai qualified as Wai
 import Network.Wai.Test qualified as WT
@@ -38,23 +39,23 @@ spec = around withTestResources do
 
       missingEventId <- nextRandom
       beforeInvalid <- countShares tr
-      void $ try @SomeException $ testServant tr $ Share.shareLinkPostH testPid missingEventId eventTime (Just "request")
+      void $ try @SomeException $ testServant tr $ Share.shareLinkPostH testPid missingEventId eventTime (Just ShareEvents.ShareRequest)
       afterInvalid <- countShares tr
       afterInvalid `shouldBe` beforeInvalid
 
-      runAsBase tr (ApiH.apiShareLinkCreate testPid ApiH.ShareLinkCreate{ApiH.eventId = missingEventId, ApiH.eventCreatedAt = eventTime, ApiH.eventType = Just "log"})
+      runAsBase tr (ApiH.apiShareLinkCreate testPid ApiH.ShareLinkCreate{ApiH.eventId = missingEventId, ApiH.eventCreatedAt = eventTime, ApiH.eventType = Just ShareEvents.ShareLog})
         `shouldThrow` anyException
       afterInvalidApi <- countShares tr
       afterInvalidApi `shouldBe` beforeInvalid
 
-      (_, Share.ShareLinkPost shareIdText) <- testServant tr $ Share.shareLinkPostH testPid eventId eventTime (Just "request")
+      (_, Share.ShareLinkPost shareIdText) <- testServant tr $ Share.shareLinkPostH testPid eventId eventTime (Just ShareEvents.ShareRequest)
       shareId <- maybe (fail "the share ID was invalid") pure $ UUID.fromText shareIdText
       live <- runAsBase tr $ Share.shareLinkGetH shareId
       let liveHtml = TL.toStrict $ renderText $ toHtml live
       liveHtml `shouldSatisfy` T.isInfixOf "shared-checkout"
       liveHtml `shouldSatisfy` T.isInfixOf "Expires in"
 
-      apiShare <- runAsBase tr $ ApiH.apiShareLinkCreate testPid ApiH.ShareLinkCreate{ApiH.eventId = eventId, ApiH.eventCreatedAt = eventTime, ApiH.eventType = Just "log"}
+      apiShare <- runAsBase tr $ ApiH.apiShareLinkCreate testPid ApiH.ShareLinkCreate{ApiH.eventId = eventId, ApiH.eventCreatedAt = eventTime, ApiH.eventType = Just ShareEvents.ShareLog}
       apiLive <- runAsBase tr $ Share.shareLinkGetH apiShare.id
       TL.toStrict (renderText $ toHtml apiLive) `shouldSatisfy` T.isInfixOf "shared-checkout"
 

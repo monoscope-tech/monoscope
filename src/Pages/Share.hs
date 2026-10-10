@@ -40,7 +40,7 @@ data ShareView
       }
 
 
-shareLinkPostH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe Text -> ATAuthCtx (RespHeaders ShareLinkPost)
+shareLinkPostH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe ShareEvents.ShareKind -> ATAuthCtx (RespHeaders ShareLinkPost)
 shareLinkPostH pid eventId createdAt reqTypeM = do
   _ <- Projects.sessionAndProject pid
   useTf <- useTfReads
@@ -49,7 +49,7 @@ shareLinkPostH pid eventId createdAt reqTypeM = do
   -- effect run, and ShareSpec creates a second link via apiShareLinkCreate — the same
   -- deterministic id twice is a share_events pkey collision.
   shareId <- liftIO UUIDV4.nextRandom
-  ShareEvents.createShareLink shareId pid eventId (fromMaybe "request" reqTypeM) createdAt
+  ShareEvents.createShareLink shareId pid eventId (fromMaybe ShareEvents.ShareRequest reqTypeM) createdAt
   addRespHeaders $ ShareLinkPost $ UUID.toText shareId
 
 
@@ -84,7 +84,7 @@ instance ToHtml ShareLinkPost where
 data ShareRow = ShareRow
   { pid :: Projects.ProjectId
   , eventId :: UUID.UUID
-  , eventType :: Text
+  , eventType :: ShareEvents.ShareKind
   , eventCreatedAt :: UTCTime
   , hoursLeft :: Int
   }
@@ -95,7 +95,7 @@ resolveShare sid now =
   Hasql.interpOne
     [HI.sql|SELECT project_id, event_id, event_type, event_created_at, created_at
             FROM apis.share_events WHERE id=#{sid} LIMIT 1|]
-    <&> fmap \(pid, eid, ty :: Text, eca, createdAt :: UTCTime) ->
+    <&> fmap \(pid, eid, ty, eca, createdAt :: UTCTime) ->
       ShareRow pid eid ty eca (ceiling (diffUTCTime (addUTCTime (48 * 3600) createdAt) now / 3600))
 
 
@@ -123,7 +123,7 @@ shareLinkGetH sid = do
         Nothing -> pure ShareMissing
         Just anchor -> do
           let detail = LogItem.expandedItemView row.pid anchor Nothing Nothing
-          if row.eventType == "log"
+          if row.eventType == ShareEvents.ShareLog
             then pure $ ShareLive row.hoursLeft Nothing detail Nothing
             else do
               breakdownM <- runMaybeT do
@@ -149,7 +149,7 @@ shareReplaySessionGetH :: UUID.UUID -> UUID.UUID -> ATBaseCtx Replay.ReplaySessi
 shareReplaySessionGetH sid sessionId = do
   now <- Time.currentTime
   row <- resolveShare sid now `whenNothingM` throwError err404
-  when (row.hoursLeft <= 0 || row.eventType == "log") $ throwError err404
+  when (row.hoursLeft <= 0 || row.eventType == ShareEvents.ShareLog) $ throwError err404
   useTf <- useTfReads
   anchor <- Telemetry.otelRecordByProjectAndId useTf row.pid row.eventCreatedAt row.eventId `whenNothingM` throwError err404
   when (sessionIdOf anchor /= Just sessionId) $ throwError err404

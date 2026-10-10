@@ -19,6 +19,7 @@ import Relude hiding (ask)
 -- Database imports
 import Data.Effectful.Hasql qualified as Hasql
 import Hasql.Interpolate qualified as HI
+import Models.Apis.ShareEvents qualified as ShareEvents
 
 -- Effectful imports
 import Data.Effectful.Notify qualified as Notify
@@ -560,7 +561,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , reportsLiveGet :: mode :- "p" :> ProjectId :> "reports" :> "live" :> HXRequest :> Get '[HTML] (RespHeaders Reports.ReportsGet)
   , reportsSingleGet :: mode :- "p" :> ProjectId :> "reports" :> Capture "report_id" Issues.ReportId :> HXRequest :> Get '[HTML] (RespHeaders Reports.ReportsGet)
   , reportsPost :: mode :- "p" :> ProjectId :> "reports_notif" :> Capture "report_type" Projects.ReportType :> Post '[HTML] (RespHeaders Reports.ReportsPost)
-  , shareLinkPost :: mode :- "p" :> ProjectId :> "share" :> Capture "event_id" UUID.UUID :> Capture "createdAt" UTCTime :> QPT "event_type" :> Post '[HTML] (RespHeaders Share.ShareLinkPost)
+  , shareLinkPost :: mode :- "p" :> ProjectId :> "share" :> Capture "event_id" UUID.UUID :> Capture "createdAt" UTCTime :> QueryParam "event_type" ShareEvents.ShareKind :> Post '[HTML] (RespHeaders Share.ShareLinkPost)
   , -- Billing
     manageBillingGet :: mode :- "p" :> ProjectId :> "manage_billing" :> Get '[HTML] (RespHeaders Settings.BillingGet)
   , replaySessionGet :: mode :- "p" :> ProjectId :> "replay_session" :> Capture "sessionId" UUID.UUID :> Get '[JSON] (RespHeaders Replay.ReplaySessionResp)
