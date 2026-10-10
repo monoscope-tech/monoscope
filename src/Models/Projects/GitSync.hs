@@ -606,7 +606,8 @@ releaseSyncLease (SyncLease (sid, owner)) =
 
 getRepositoryDashboardState :: DB es => ProjectId -> GitHubSyncId -> Eff es (M.Map Text (DashboardId, Maybe Text))
 getRepositoryDashboardState pid sid =
-  M.fromList . map (\(did, path, sha) -> (path, (did, sha)))
+  M.fromList
+    . map (\(did, path, sha) -> (path, (did, sha)))
     <$> Hasql.interp [HI.sql| SELECT id, file_path, file_sha FROM projects.dashboards WHERE project_id = #{pid} AND git_sync_id = #{sid} AND file_path IS NOT NULL |]
 
 
@@ -859,12 +860,12 @@ authorizeGitHubInstallation encKey pid appId clientId secret code callback iid =
   response <-
     ExceptT
       $ first (const InstallationAuthorizationFailed)
-        <$> Git.tryHttp
-          ( W.postWith
-              (W.defaults & W.header "Accept" .~ ["application/json"])
-              "https://github.com/login/oauth/access_token"
-              (AE.object ["client_id" AE..= clientId, "client_secret" AE..= secret, "code" AE..= code, "redirect_uri" AE..= callback])
-          )
+      <$> Git.tryHttp
+        ( W.postWith
+            (W.defaults & W.header "Accept" .~ ["application/json"])
+            "https://github.com/login/oauth/access_token"
+            (AE.object ["client_id" AE..= clientId, "client_secret" AE..= secret, "code" AE..= code, "redirect_uri" AE..= callback])
+        )
   token <- hoistEither $ maybeToRight InstallationAuthorizationFailed $ response ^? W.responseBody . key "access_token" . _String
   installation <-
     ExceptT
@@ -887,9 +888,16 @@ authorizeGitHubInstallation encKey pid appId clientId secret code callback iid =
           "user/memberships/orgs"
           (toListOf values)
           ( \membership ->
-              membership ^? key "state" . _String == Just "active"
-                && membership ^? key "role" . _String == Just "admin"
-                && (T.toLower <$> (membership ^? key "organization" . key "login" . _String)) == Just (T.toLower account)
+              membership
+                ^? key "state"
+                  . _String
+                  == Just "active"
+                  && membership
+                ^? key "role"
+                  . _String
+                  == Just "admin"
+                  && (T.toLower <$> (membership ^? key "organization" . key "login" . _String))
+                  == Just (T.toLower account)
           )
           1
     _ -> hoistEither $ Left InstallationOwnershipRequired
@@ -900,8 +908,8 @@ authorizeGitHubInstallation encKey pid appId clientId secret code callback iid =
       response <-
         ExceptT
           $ first (const InstallationVerificationFailed)
-            <$> Git.tryHttp
-              (W.getWith (githubAppOpts token) (toString $ "https://api.github.com/" <> path <> "?per_page=100&page=" <> show @Text page))
+          <$> Git.tryHttp
+            (W.getWith (githubAppOpts token) (toString $ "https://api.github.com/" <> path <> "?per_page=100&page=" <> show @Text page))
       let entries = extract (response ^. W.responseBody)
       case find matches entries of
         Just entry -> pure entry

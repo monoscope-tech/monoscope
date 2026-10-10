@@ -649,7 +649,14 @@ instance ToHtml DashboardRepositoryGet where
               forM_ page.repositories \repository ->
                 option_ [value_ repository.id.toText]
                   $ toHtml
-                  $ repository.owner <> "/" <> repository.repo <> " · " <> fromMaybe (Git.hostLabel repository.host) repository.apiBase <> " · " <> repository.branch <> bool " · paused" "" repository.syncEnabled
+                  $ repository.owner
+                  <> "/"
+                  <> repository.repo
+                  <> " · "
+                  <> fromMaybe (Git.hostLabel repository.host) repository.apiBase
+                  <> " · "
+                  <> repository.branch
+                  <> bool " · paused" "" repository.syncEnabled
             button_ [type_ "submit", class_ "btn btn-sm btn-primary gap-2"] do
               "Sync dashboard"
               htmxIndicator_ "dashboard-repository-indicator" LdXS
@@ -748,7 +755,9 @@ githubAppCallbackH instIdM _setupAction stateM codeM = do
             Left err -> errorView $ GitSync.installationErrorMessage err
             Right () ->
               redirectPage "GitHub account verified. Choose the repositories to connect."
-                $ "/p/" <> attempt.projectId.toText <> case attempt.destination of
+                $ "/p/"
+                <> attempt.projectId.toText
+                <> case attempt.destination of
                   GitSync.InstallCode -> "/repositories/connect"
                   GitSync.InstallSync -> "/settings/git-sync/repos?installationId=" <> show iid
         (Just iid, Nothing) | GitSync.InstallApp <- attempt.step -> do
@@ -772,7 +781,8 @@ githubAppReposH pid instIdParam = withSettingsPage pid "Integrations" \_ -> do
       accounts <- GitSync.getGitHubCredentials pid
       unless (any (\account -> account.host == Git.GitHub && isNothing account.apiBase && account.installationId == Just instId) accounts) $ throwError err403
       W.runHTTPWreq
-        $ either errBox (repoSelectionView instId) <$> runExceptT do
+        $ either errBox (repoSelectionView instId)
+        <$> runExceptT do
           tok <- ExceptT $ first ("Failed to get token: " <>) <$> GitSync.getInstallationToken ctx.config.githubAppId ctx.config.githubAppPrivateKey instId
           conn <- hoistEither $ Git.mkGitConn Git.GitHub Nothing tok.token
           ExceptT $ first ("Failed to list repos: " <>) <$> Git.listRepos conn

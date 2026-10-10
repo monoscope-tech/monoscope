@@ -848,7 +848,7 @@ stepIndicator step title prevUrl = do
 
 -- | Proxy handler for fetching documentation from monoscope.tech
 -- This bypasses CORS restrictions by fetching the content server-side
-proxyLandingH :: (HTTP :> es, State.State HXRedirectDest :> es, State.State TriggerEvents :> es, State.State XWidgetJSON :> es, State.State HXReswap :> es) => [Text] -> Eff es (RespHeaders (Html ()))
+proxyLandingH :: (HTTP :> es, State.State HXRedirectDest :> es, State.State HXReswap :> es, State.State TriggerEvents :> es, State.State XWidgetJSON :> es) => [Text] -> Eff es (RespHeaders (Html ()))
 proxyLandingH path = do
   response <- W.get $ toString $ "https://monoscope.tech/" <> T.intercalate "/" path
   addRespHeaders $ toHtmlRaw $ T.replace "href=\"/" "href=\"https://monoscope.tech/" $ decodeUtf8 @Text $ fromMaybe "" $ response L.^? W.responseBody

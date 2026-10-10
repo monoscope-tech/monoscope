@@ -474,7 +474,7 @@ makeApiKeysTable pid canEdit apiKeys elemId =
                     ]
                     $ faSprite_ icon "regular"
                     $ "h-3.5 w-3.5 text-iconNeutral "
-                      <> iconCls
+                    <> iconCls
             else span_ [class_ "font-mono text-sm text-textWeak"] $ toHtml $ T.take 8 apiKey.keyPrefix <> "••••••••"
       ]
 

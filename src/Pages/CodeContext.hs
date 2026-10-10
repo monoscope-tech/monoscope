@@ -56,7 +56,7 @@ codeContextH pid fileM lineM svcM revM = do
     (Just path, Just n) ->
       W.runHTTPWreq (CodeContext.fetchSnippet authCtx.codeBlobCache authCtx.config pid svcM (nonEmptyT revM) path n)
         >>= addRespHeaders
-          . either reason_ snippet_
+        . either reason_ snippet_
     _ -> addRespHeaders $ note_ "This frame has no file and line to look up." Nothing
   where
     -- An unmapped frame is the one failure the reader can act on from here, so it is the one
@@ -385,7 +385,8 @@ instance ToHtml RepositoryGet where
 
 mappingInRepository :: [GitSync.GitHubCredential] -> GitSync.Repository -> CodeContext.CodeMapping -> Bool
 mappingInRepository credentials repository mapping =
-  (mapping.owner, mapping.repo) == (repository.owner, repository.repo)
+  (mapping.owner, mapping.repo)
+    == (repository.owner, repository.repo)
     && any (\c -> c.id == mapping.credentialId && (c.host, c.apiBase) == (repository.host, repository.apiBase)) credentials
 
 
@@ -482,7 +483,9 @@ codeMappingsContent pid sampleM credentialM repositoryM = do
             option_
               ([value_ account.id.toText] <> [selected_ "selected" | Just account.id == ((.id) <$> credM)])
               $ toHtml
-              $ account.account <> " · " <> fromMaybe (Git.hostLabel account.host) account.apiBase
+              $ account.account
+              <> " · "
+              <> fromMaybe (Git.hostLabel account.host) account.apiBase
         htmxIndicator_ "code-account-indicator" LdXS
     when canEdit $ case credM of
       Nothing | null accounts -> do

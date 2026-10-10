@@ -4825,60 +4825,60 @@ gitSyncFromRepo pid sidM = do
       -- Scoped to the dashboards folder: it is all this job reads, it lets GitLab and Bitbucket
       -- filter server-side, and on Bitbucket it is what bounds the per-file sha backfill.
       Git.fetchTree conn (GitSync.syncRepoRef sync) (GitSync.getDashboardsPath sync)
-        >>= \case
-          Left err -> do
-            void $ GitSync.recordSyncError sync.id GitSync.ImportDashboards err
-            Metrics.bump Metrics.gitApiErrors [("host", OA.toAttribute $ Git.hostSlug sync.host), ("operation", OA.toAttribute ("fetch_tree" :: Text))]
-            Log.logAttention "Failed to list repository" (pid, Git.hostSlug sync.host, err)
-          Right (revision, entries)
-            -- The host answered with the head we already have, but told us over the webhook
-            -- about a different one. That is not "nothing changed" — it is the host serving a
-            -- view older than the push it announced, and accepting it drops that push for good:
-            -- nothing re-queues, so it stays unapplied until some later push happens to be
-            -- fetched freshly and sweeps it up. Chase it instead.
-            | sync.lastRevision == Just revision
-            , Just announced <- sync.announcedRevision
-            , announced /= revision -> do
-                now <- Time.currentTime
-                let waitedTooLong = maybe False (\t -> diffUTCTime now t > announcedRevisionTTL) sync.announcedAt
-                if waitedTooLong
-                  then do
-                    -- A force-push can make an announced sha permanently unfetchable. Retrying
-                    -- one forever is a worse failure than the one being fixed, so give up loudly.
-                    _ <- GitSync.clearAnnouncedRevision sync.id
-                    Log.logAttention "Gave up waiting for an announced revision to become fetchable" (pid, announced, revision)
-                  else do
-                    Log.logInfo "Host is behind the revision it announced, retrying" (pid, announced, revision)
-                    ctx <- ask @Config.AuthContext
-                    liftIO $ withResource ctx.jobsPool \jobsConn ->
-                      void $ scheduleJob jobsConn "background_jobs" (GitSyncRepository pid sync.id) (addUTCTime announcedRevisionRetryDelay now)
-            | sync.lastRevision == Just revision -> do
-                void $ GitSync.updateLastRevision sync.id revision
-                Log.logInfo "Revision unchanged, skipping sync" (pid, revision)
-            | otherwise -> do
-                dbState <- GitSync.getRepositoryDashboardState pid sync.id
-                allTeams <- ProjectMembers.getTeamsVM pid
-                let teamMap = Map.fromList [(t.handle, t.id) | t <- allTeams]
-                    prefix = GitSync.getDashboardsPath sync
-                    repoRef = (GitSync.syncRepoRef sync :: Git.RepoRef){Git.ref = revision}
-                    actions = GitSync.buildSyncPlan prefix entries dbState
-                    creates = [a | a@GitSync.SyncCreate{} <- actions]
-                    updates = [a | a@GitSync.SyncUpdate{} <- actions]
-                    deletes = [(path, dashId) | GitSync.SyncDelete path dashId <- actions]
-                Log.logInfo "Git sync plan" ("creates" :: Text, length creates, "updates" :: Text, length updates, "deletes" :: Text, length deletes)
-                failures <- Ki.scoped \scope -> do
-                  threads <- forM actions $ forkWithCtx scope . processGitSyncAction pid conn sync repoRef teamMap
-                  lefts <$> Ki.atomically (traverse Ki.await threads)
-                case failures of
-                  [] -> do
-                    forM_ deletes \(path, dashId) -> do
-                      _ <- Dashboards.deleteDashboardsByIds pid (V.singleton dashId)
-                      Log.logInfo "Deleted dashboard (removed from git)" (path, dashId)
-                    _ <- GitSync.updateLastRevision sync.id revision
-                    Log.logInfo "Completed git sync for project" pid
-                  errors -> do
-                    void $ GitSync.recordSyncError sync.id GitSync.ImportDashboards $ T.intercalate "\n" errors
-                    Log.logAttention "Repository sync incomplete" (pid, sync.id, errors)
+      >>= \case
+        Left err -> do
+          void $ GitSync.recordSyncError sync.id GitSync.ImportDashboards err
+          Metrics.bump Metrics.gitApiErrors [("host", OA.toAttribute $ Git.hostSlug sync.host), ("operation", OA.toAttribute ("fetch_tree" :: Text))]
+          Log.logAttention "Failed to list repository" (pid, Git.hostSlug sync.host, err)
+        Right (revision, entries)
+          -- The host answered with the head we already have, but told us over the webhook
+          -- about a different one. That is not "nothing changed" — it is the host serving a
+          -- view older than the push it announced, and accepting it drops that push for good:
+          -- nothing re-queues, so it stays unapplied until some later push happens to be
+          -- fetched freshly and sweeps it up. Chase it instead.
+          | sync.lastRevision == Just revision
+          , Just announced <- sync.announcedRevision
+          , announced /= revision -> do
+              now <- Time.currentTime
+              let waitedTooLong = maybe False (\t -> diffUTCTime now t > announcedRevisionTTL) sync.announcedAt
+              if waitedTooLong
+                then do
+                  -- A force-push can make an announced sha permanently unfetchable. Retrying
+                  -- one forever is a worse failure than the one being fixed, so give up loudly.
+                  _ <- GitSync.clearAnnouncedRevision sync.id
+                  Log.logAttention "Gave up waiting for an announced revision to become fetchable" (pid, announced, revision)
+                else do
+                  Log.logInfo "Host is behind the revision it announced, retrying" (pid, announced, revision)
+                  ctx <- ask @Config.AuthContext
+                  liftIO $ withResource ctx.jobsPool \jobsConn ->
+                    void $ scheduleJob jobsConn "background_jobs" (GitSyncRepository pid sync.id) (addUTCTime announcedRevisionRetryDelay now)
+          | sync.lastRevision == Just revision -> do
+              void $ GitSync.updateLastRevision sync.id revision
+              Log.logInfo "Revision unchanged, skipping sync" (pid, revision)
+          | otherwise -> do
+              dbState <- GitSync.getRepositoryDashboardState pid sync.id
+              allTeams <- ProjectMembers.getTeamsVM pid
+              let teamMap = Map.fromList [(t.handle, t.id) | t <- allTeams]
+                  prefix = GitSync.getDashboardsPath sync
+                  repoRef = (GitSync.syncRepoRef sync :: Git.RepoRef){Git.ref = revision}
+                  actions = GitSync.buildSyncPlan prefix entries dbState
+                  creates = [a | a@GitSync.SyncCreate{} <- actions]
+                  updates = [a | a@GitSync.SyncUpdate{} <- actions]
+                  deletes = [(path, dashId) | GitSync.SyncDelete path dashId <- actions]
+              Log.logInfo "Git sync plan" ("creates" :: Text, length creates, "updates" :: Text, length updates, "deletes" :: Text, length deletes)
+              failures <- Ki.scoped \scope -> do
+                threads <- forM actions $ forkWithCtx scope . processGitSyncAction pid conn sync repoRef teamMap
+                lefts <$> Ki.atomically (traverse Ki.await threads)
+              case failures of
+                [] -> do
+                  forM_ deletes \(path, dashId) -> do
+                    _ <- Dashboards.deleteDashboardsByIds pid (V.singleton dashId)
+                    Log.logInfo "Deleted dashboard (removed from git)" (path, dashId)
+                  _ <- GitSync.updateLastRevision sync.id revision
+                  Log.logInfo "Completed git sync for project" pid
+                errors -> do
+                  void $ GitSync.recordSyncError sync.id GitSync.ImportDashboards $ T.intercalate "\n" errors
+                  Log.logAttention "Repository sync incomplete" (pid, sync.id, errors)
 
 
 processGitSyncAction :: (DB es, Log :> es, Time.Time :> es, UUID.UUIDEff :> es, W.HTTP :> es) => Projects.ProjectId -> Git.GitConn -> GitSync.GitHubSync -> Git.RepoRef -> Map.Map Text ProjectMembers.TeamId -> GitSync.SyncAction -> Eff es (Either Text ())

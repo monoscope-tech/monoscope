@@ -1143,8 +1143,9 @@ manageMembersBody pid projMembers paymentPlan teamsCount permission =
               , [__| on change from closest <form/> remove @disabled from me then add .btn-primary to me end
                   on click if #new-member-email.validity.typeMismatch call #new-member-email.reportValidity() halt end
                 |]
-              ] do
-              faSprite_ "check" "regular" "w-3 h-3"; "Save changes"
+              ]
+              do
+                faSprite_ "check" "regular" "w-3 h-3"; "Save changes"
           div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak overflow-hidden"]
             $ if V.null projMembers
               then emptyState_ def{size = ESCompact} "No members yet" "Invite someone to get started."
