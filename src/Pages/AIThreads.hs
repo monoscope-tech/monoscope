@@ -17,7 +17,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkAIPageCtx, navTabAttrs)
 import Pages.Bots.Utils qualified as Bots
 import Pages.Issues qualified as IssuePage
 import Pkg.AI qualified as AI
-import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, redirectCS)
@@ -50,15 +50,9 @@ newtype RoutineDestinationForm = RoutineDestinationForm {destination :: Issues.R
   deriving anyclass (FromForm)
 
 
-data ComposerMode = ChatMode | RoutineMode
-  deriving stock (Generic, Show)
-
-
-instance FromHttpApiData ComposerMode where
-  parseUrlPiece = \case
-    "chat" -> Right ChatMode
-    "routine" -> Right RoutineMode
-    _ -> Left "Unknown conversation mode."
+data ComposerMode = ModeChat | ModeRoutine
+  deriving stock (Generic, Read, Show)
+  deriving (FromHttpApiData) via WrappedEnumSC 'Nothing "Mode" ComposerMode
 
 
 data NewThread = NewChat Text | NewRoutine Text Issues.RoutineInterval
@@ -423,10 +417,10 @@ normalizeNewThread :: AIChatForm -> Either Text NewThread
 normalizeNewThread form = do
   prompt <- normalizeQuery form.query
   case (form.mode, form.intervalMinutes) of
-    (ChatMode, Nothing) -> Right $ NewChat prompt
-    (ChatMode, Just _) -> Left "Chat mode does not accept a routine interval."
-    (RoutineMode, Nothing) -> Left "Choose a routine interval."
-    (RoutineMode, Just interval) -> Right $ NewRoutine prompt interval
+    (ModeChat, Nothing) -> Right $ NewChat prompt
+    (ModeChat, Just _) -> Left "Chat mode does not accept a routine interval."
+    (ModeRoutine, Nothing) -> Left "Choose a routine interval."
+    (ModeRoutine, Just interval) -> Right $ NewRoutine prompt interval
 
 
 reject :: Text -> ATAuthCtx (RespHeaders (Html ()))

@@ -1479,14 +1479,7 @@ data RoutineReport = ReportAlways | ReportFindings
 
 data RoutineDestination = DestinationConversation | DestinationSlack
   deriving stock (Eq, Generic, Read, Show)
-  deriving (FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "Destination" RoutineDestination
-
-
-instance FromHttpApiData RoutineDestination where
-  parseUrlPiece = \case
-    "conversation" -> Right DestinationConversation
-    "slack" -> Right DestinationSlack
-    _ -> Left "Routine destination must be conversation or slack."
+  deriving (FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "Destination" RoutineDestination
 
 
 data RoutineRunStatus = RunRunning | RunSucceeded | RunNoFindings | RunFailed | RunTimedOut | RunCancelled

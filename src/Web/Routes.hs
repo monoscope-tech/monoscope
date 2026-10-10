@@ -29,7 +29,7 @@ import Effectful.State.Static.Local qualified as State
 import Effectful.Time qualified as Time
 
 -- Web and server imports
-import Log (Logger, UTCTime)
+import Log (Logger)
 import Lucid
 import Network.HTTP.Types qualified as H
 import Network.Wai (Request, queryString)
