@@ -1100,7 +1100,7 @@ listProjectIssues config args = case parseStatus $ fromMaybe "open" $ getTextArg
   where
     parseStatus = \case
       "open" -> Just ("open" :: Text, Issues.IsNull, Issues.IsNull)
-      "acknowledged" -> Just ("acknowledged", Issues.IsNotNull, Issues.AnyValue)
+      "acknowledged" -> Just ("acknowledged", Issues.IsNotNull, Issues.IsNull)
       "archived" -> Just ("archived", Issues.AnyValue, Issues.IsNotNull)
       _ -> Nothing
 
