@@ -24,6 +24,7 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.Dispatch.Dynamic (interpose)
 import Hasql.Interpolate qualified as HI
 import Lucid (renderText)
+import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Dashboards qualified as Dashboards
@@ -234,7 +235,7 @@ onboardingTests =
               , recipientEmails = []
               , recipientSlacks = []
               , recipientEmailAll = Nothing
-              , direction = "above"
+              , direction = Issues.Above
               , title = "First monitor"
               , severity = "Warning"
               , subject = "First monitor"

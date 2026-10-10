@@ -1,5 +1,6 @@
 module Pkg.KqlSeriesSpec (spec) where
 
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime)
@@ -56,7 +57,7 @@ seriesSpec = do
   it "are counter-aware per series, reset-safe, honour every by column, and cover DELTA and gauges" \tr -> do
     pid <- UUIDId <$> UUIDV4.nextRandom
     seed tr pid
-    let chart dt q = runQueryEffect tr $ Charts.queryMetrics (Just "postgres") dt (Just pid) (Just q) Nothing Nothing (Just $ at 0) (Just $ at 290) (Just "metrics") Nothing []
+    let chart dt q = runQueryEffect tr $ Charts.queryMetrics (Just Hasql.SqlPostgres) dt (Just pid) (Just q) Nothing Nothing (Just $ at 0) (Just $ at 290) (Just "metrics") Nothing []
         series q = do
           md <- chart (Just Charts.DTMetric) q
           md.error `shouldBe` Nothing
@@ -98,7 +99,7 @@ ratioSpec = it "rateif / lastif divide filtered series by metric name or attribu
         md <- runQueryEffect tr $ Charts.queryMetrics (Just db) (Just Charts.DTMetric) (Just testPid) (Just q) Nothing Nothing (Just $ at 0) (Just $ at 290) (Just "metrics") Nothing []
         md.error `shouldBe` Nothing
         pure $ map (V.toList . V.drop 1) (V.toList md.dataset)
-  for_ ("postgres" : ["timefusion" | isJust tfUrl]) \db -> do
+  for_ (Hasql.SqlPostgres : [Hasql.SqlTimefusion | isJust tfUrl]) \db -> do
     -- The chart cache is keyed on the query, not the backend.
     withResource tr.trPool \conn -> void $ execute_ conn "DELETE FROM query_cache"
     -- A post-summarize extend computes from the named aggregates and is the charted series.
