@@ -3,9 +3,11 @@ module Pages.Projects.ProjectsSpec (spec) where
 import Control.Exception (ErrorCall (..), evaluate, try)
 import Control.Lens ((.~))
 import Data.Generics.Labels ()
+import Data.Generics.Product.Fields (field)
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as LT
+import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple qualified as PGS
@@ -18,6 +20,7 @@ import Pages.BodyWrapper
 import Pages.Projects
 import Pages.Projects qualified as CreateProject
 import Pages.Projects qualified as ListProjects
+import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
 import Relude.Unsafe qualified as Unsafe
@@ -55,13 +58,15 @@ spec = around withTestResources do
 
     -- Deletion is an admin action (like team management); membership alone is not enough.
     it "deleteProjectGetH_viewer_cannotDelete" \tr -> do
-      let setRole :: Text -> IO ()
-          setRole r = withResource tr.trPool \conn -> void $ PGS.execute conn [sql|UPDATE projects.project_members SET permission = ?::projects.project_permissions WHERE project_id = ?|] (r, testPid)
+      -- The session's cached non-demo project (testPid is the demo, which never deletes).
+      let pid = UUIDId $ UUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef0
+          setRole :: Text -> IO ()
+          setRole r = withResource tr.trPool \conn -> void $ PGS.execute conn [sql|UPDATE projects.project_members SET permission = ?::projects.project_permissions WHERE project_id = ?|] (r, pid)
       setRole "view"
-      res <- try @ErrorCall $ runAuthHandler tr{trSessAndHeader = tr.trSessAndHeader <&> #user . #isSudo .~ False} (CreateProject.deleteProjectGetH testPid) >>= evaluate
+      res <- try @ErrorCall $ runAuthHandler tr{trSessAndHeader = tr.trSessAndHeader <&> field @"user" . field @"isSudo" .~ False} (CreateProject.deleteProjectGetH pid) >>= evaluate
       setRole "admin"
       either (\(ErrorCall m) -> toText m) (const "") res `shouldSatisfy` T.isInfixOf "403"
-      runQueryEffect tr (Projects.activeProjectById testPid) >>= (`shouldSatisfy` isJust)
+      runQueryEffect tr (Projects.activeProjectById pid) >>= (`shouldSatisfy` isJust)
 
     it "commandPalette_nonMember_cannotReadOrWrite" \tr -> do
       victim <- createTestProject tr "victim"

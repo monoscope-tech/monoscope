@@ -1314,7 +1314,7 @@ deleteProjectGetH pid = do
   if isDemoAndNotSudo pid sess.user.isSudo
     then addSuccessToast "Can't perform this action on the demo project" Nothing
     else do
-      _ <- Projects.sessionAndProject pid
+      _ <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PAdmin pid
       -- Before the row goes away: a subscription left running on a deleted project
       -- keeps charging the customer, and their next signup opens a second one.
       whenJustM (Projects.projectById pid) $ Settings.cancelProjectSubscription appCtx.config
