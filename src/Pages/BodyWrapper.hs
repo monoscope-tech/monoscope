@@ -498,7 +498,7 @@ bodyWrapper bcfg child = do
                 div_ [class_ "h-0 shrink"] do
                   Components.drawer_ "global-data-drawer" (isJust bcfg.globalDrawerContent) Nothing bcfg.globalDrawerContent ""
                   -- Modal for copying widgets to other dashboards
-                  Components.modal_ "dashboards-modal" "" do
+                  Components.modalWith_ "dashboards-modal" def Nothing do
                     input_ [type_ "hidden", id_ "dashboards-modal-widget-id", name_ "widget_id"]
                     input_ [type_ "hidden", id_ "dashboards-modal-source-dashboard-id", name_ "source_dashboard_id"]
                     -- Only set for a widget that lives on no dashboard, whose definition

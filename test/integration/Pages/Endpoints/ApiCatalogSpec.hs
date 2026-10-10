@@ -36,7 +36,7 @@ getEndpointStats tr testPid filterParam hostM = do
     testServant tr
       $ ApiCatalog.endpointListGetH testPid Nothing Nothing Nothing filterParam hostM Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true")
   case resp of
-    ApiCatalog.EndpointsListPage (PageCtx _ tbl) -> pure tbl.rows
+    Table.TablePage (PageCtx _ tbl) -> pure tbl.rows
     _ -> error "Unexpected response from endpointListGetH"
 
 
@@ -47,7 +47,7 @@ getEndpointsPage tr testPid host page perPage = do
     testServant tr
       $ ApiCatalog.endpointListGetH testPid (Just (show page)) (Just (show perPage)) Nothing Nothing (Just host) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true")
   case resp of
-    ApiCatalog.EndpointsListPage (PageCtx _ tbl) ->
+    Table.TablePage (PageCtx _ tbl) ->
       pure (tbl.rows, maybe 0 (.totalCount) tbl.features.pagination)
     _ -> error "Unexpected response from endpointListGetH"
 
@@ -59,7 +59,7 @@ getEndpointsHtml tr testPid filterParam = do
     testServant tr
       $ ApiCatalog.endpointListGetH testPid Nothing Nothing Nothing filterParam Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true")
   case resp of
-    ApiCatalog.EndpointsListPage (PageCtx _ tbl) -> pure $ toStrict $ renderText $ toHtml tbl
+    Table.TablePage (PageCtx _ tbl) -> pure $ toStrict $ renderText $ toHtml tbl
     _ -> error "Unexpected response from endpointListGetH"
 
 
@@ -122,9 +122,9 @@ spec = sequential $ aroundAll (\f -> withTestResources \tr -> createTestProject 
         testServant tr
           $ ApiCatalog.apiCatalogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       case catalogList of
-        ApiCatalog.CatalogListPage (PageCtx _ tbl) ->
+        Table.TablePage (PageCtx _ tbl) ->
           length tbl.rows `shouldBe` 0
-        _ -> expectationFailure "Expected CatalogListPage"
+        _ -> expectationFailure "Expected TablePage"
 
     it "creates endpoints from processed spans" \(tr, testPid) -> do
       -- First verify the demo project exists
@@ -190,9 +190,9 @@ spec = sequential $ aroundAll (\f -> withTestResources \tr -> createTestProject 
         testServant tr
           $ ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming") Nothing Nothing Nothing Nothing
       case catalogList of
-        ApiCatalog.CatalogListPage (PageCtx _ tbl) ->
+        Table.TablePage (PageCtx _ tbl) ->
           length tbl.rows `shouldBe` 2
-        _ -> expectationFailure "Expected CatalogListPage"
+        _ -> expectationFailure "Expected TablePage"
 
     it "attributes events to the correct host (no cross-host inflation)" \(tr, testPid) -> do
       -- Each host got 100 spans in prepareTestMessages. A regression where the
@@ -202,11 +202,11 @@ spec = sequential $ aroundAll (\f -> withTestResources \tr -> createTestProject 
         testServant tr
           $ ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming") Nothing Nothing Nothing (Just "true")
       case catalogList of
-        ApiCatalog.CatalogListPage (PageCtx _ tbl) -> do
+        Table.TablePage (PageCtx _ tbl) -> do
           let countOf host = sum [vm.events.eventCount | vm <- V.toList tbl.rows, vm.events.host == host]
           countOf "172.31.29.11" `shouldBe` 100
           countOf "api.test.com" `shouldBe` 100
-        _ -> expectationFailure "Expected CatalogListPage"
+        _ -> expectationFailure "Expected TablePage"
 
     -- Perf guard: the default page load must not pay for the telemetry aggregate that
     -- scans a full window of spans (measured at 20-107s on a busy project). It renders
@@ -221,7 +221,7 @@ spec = sequential $ aroundAll (\f -> withTestResources \tr -> createTestProject 
         testServant tr
           $ ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming") Nothing Nothing Nothing (Just "true")
       case (shell, withStats) of
-        (ApiCatalog.CatalogListPage (PageCtx _ shellTbl), ApiCatalog.CatalogListPage (PageCtx _ statsTbl)) -> do
+        (Table.TablePage (PageCtx _ shellTbl), Table.TablePage (PageCtx _ statsTbl)) -> do
           let counts tbl = map (.events.eventCount) $ V.toList tbl.rows
           -- Same hosts in both, but only the deferred response carries traffic. Asserted
           -- as a relationship, not absolute totals, so this stays a guard on the
@@ -231,7 +231,7 @@ spec = sequential $ aroundAll (\f -> withTestResources \tr -> createTestProject 
           counts statsTbl `shouldSatisfy` all (> 0)
           shellTbl.config.deferredUrl `shouldSatisfy` maybe False ("stats=true" `T.isInfixOf`)
           statsTbl.config.deferredUrl `shouldBe` Nothing
-        _ -> expectationFailure "Expected CatalogListPage"
+        _ -> expectationFailure "Expected TablePage"
 
     it "creates anomalies automatically via database triggers" \(tr, testPid) -> do
       -- Verify anomalies were created by triggers
@@ -369,9 +369,9 @@ spec = sequential $ aroundAll (\f -> withTestResources \tr -> createTestProject 
       let listHosts tr testPid reqType filt = do
             (_, cat) <- testServant tr $ ApiCatalog.apiCatalogH testPid Nothing Nothing (Just reqType) Nothing Nothing filt Nothing
             case cat of
-              ApiCatalog.CatalogListPage (PageCtx _ tbl) ->
+              Table.TablePage (PageCtx _ tbl) ->
                 pure $ V.toList $ V.map (.events.host) tbl.rows
-              _ -> expectationFailure "Expected CatalogListPage" $> []
+              _ -> expectationFailure "Expected TablePage" $> []
           bulk tr testPid action reqType hosts =
             testServant tr
               $ ApiCatalog.apiCatalogBulkActionH testPid action (Just reqType) (ApiCatalog.HostBulk{itemId = hosts})

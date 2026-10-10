@@ -25,6 +25,7 @@ import Lucid
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
+import Models.Projects.DashboardTemplates (dashboardTemplatesCompiled, loadDashboardFromVM)
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (BWConfig, PageCtx (..))
@@ -467,14 +468,12 @@ withBotThread target pid convId convType meta backfill = do
     ctx = AE.object ["platform" AE..= show @Text target, "conv_id" AE..= show @Text convId]
 
 
--- | Resolve a dashboard id to its on-disk template, scoped to @pid@. The id
+-- | Resolve a dashboard id to its schema or template, scoped to @pid@. The id
 -- arrives inside client-controlled payloads (component custom_id, message
 -- body), so an unscoped lookup would render another tenant's dashboard.
-withDashboardTemplate :: (DB es, IOE :> es) => Projects.ProjectId -> Text -> (Dashboards.Dashboard -> Eff es ()) -> Eff es ()
+withDashboardTemplate :: DB es => Projects.ProjectId -> Text -> (Dashboards.Dashboard -> Eff es ()) -> Eff es ()
 withDashboardTemplate pid dashboardId act = whenJust (idFromText dashboardId) \did ->
-  whenJustM (Dashboards.getDashboardByProjectId pid did) \dashboardVM -> do
-    dashboardM <- liftIO $ Dashboards.readDashboardFile "static/public/dashboards" (toString $ fromMaybe "_overview.yaml" dashboardVM.baseTemplate)
-    whenJust dashboardM act
+  whenJustM (Dashboards.getDashboardByProjectId pid did) $ mapM_ act . loadDashboardFromVM dashboardTemplatesCompiled
 
 
 -- | OAuth install state/redirect param: @"projectId"@ or @"projectId__onboarding"@.

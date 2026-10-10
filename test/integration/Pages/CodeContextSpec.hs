@@ -1,20 +1,15 @@
 module Pages.CodeContextSpec (spec) where
 
-import Control.Exception (ErrorCall (..), evaluate, try)
-import Control.Lens ((.~))
 import Data.Aeson qualified as AE
 import Data.Base64.Types (extractBase64)
 import Data.ByteString.Base64 qualified as B64
 import Data.ByteString.Lazy qualified as LBS
 import Data.Cache qualified as Cache
-import Data.Effectful.Hasql qualified as Hasql
-import Data.Generics.Product.Fields (field)
 import Data.Effectful.Wreq qualified as W
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as LT
 import Effectful (Eff, IOE, (:>))
 import Effectful.Dispatch.Dynamic (interpret)
-import Hasql.Interpolate qualified as HI
 import Lucid qualified
 import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.GitSync qualified as GitSync
@@ -298,21 +293,16 @@ spec = do
       it "codeMappings_nonMember_cannotMutate" \tr -> do
         let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
             form repo prefix = PageCodeContext.CodeMappingForm (Just repo) (Just "main") Nothing Nothing (Just prefix) (Just "")
-            outsider = tr{trSessAndHeader = tr.trSessAndHeader <&> field @"user" . field @"isSudo" .~ False}
-            -- sessionAndProject's non-member rejection is a redirect to this marker.
-            denied act = try (runAuthHandler outsider act >>= evaluate) >>= \case
-              Left (ErrorCall msg) -> toText msg `shouldSatisfy` T.isInfixOf "missingProjectPermission"
-              Right _ -> expectationFailure "non-member mutated another project's code mappings"
         victim <- createTestProject tr "victim"
+        let mappingIds = map (.id) <$> runQueryEffect tr (CodeContext.getCodeMappings victim)
         _ <- runQueryEffect tr $ GitSync.insertGitHubSync encKey victim Git.GitHub Nothing "acme" "monoscope-config" "main" (GitSync.PersonalToken "ghp_test") Nothing ""
         _ <- testServant tr $ PageCodeContext.codeMappingsPostH victim (form "checkout-service" "/srv/app/")
-        before <- runQueryEffect tr $ CodeContext.getCodeMappings victim
-        map (.repo) before `shouldBe` ["checkout-service"]
-        runQueryEffect tr $ Hasql.interpExecute_ [HI.sql| DELETE FROM projects.project_members WHERE project_id = #{victim} |]
+        seeded <- mappingIds
+        length seeded `shouldBe` 1
 
-        denied $ PageCodeContext.codeMappingsPostH victim (form "attacker-repo" "/evil/")
-        forM_ before \cm -> denied $ PageCodeContext.codeMappingsDeleteH victim cm.id
-        runQueryEffect tr (CodeContext.getCodeMappings victim) >>= (`shouldBe` map (.id) before) . map (.id)
+        assertNonMemberDenied tr victim $ PageCodeContext.codeMappingsPostH victim (form "attacker-repo" "/evil/")
+        forM_ seeded $ assertNonMemberDenied tr victim . PageCodeContext.codeMappingsDeleteH victim
+        mappingIds >>= (`shouldBe` seeded)
 
     describe "Frame source endpoint (codeContextH)" do
       -- A project that never configured a mapping opens an error panel like anyone else. It

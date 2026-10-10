@@ -19,7 +19,6 @@ module Pages.Issues (
   triagePostH,
   issueDetailGetH,
   IssueBulkForm (..),
-  IssueListGet (..),
   issueAcknowledgeButton,
   issueArchiveButton,
   issueDetailHashGetH,
@@ -109,7 +108,7 @@ import Pages.LogExplorer.Log (virtualTable)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Telemetry (traceFragmentUrl)
 import Pkg.AI qualified as AI
-import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), Pagination (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableRows (..), ZeroState (..), col, multiSelectFilter, withAttrs, withColHeaderExtra)
+import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), Pagination (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableResponse (..), TableRows (..), ZeroState (..), col, multiSelectFilter, withAttrs, withColHeaderExtra)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), assetUrl, bulkActionSlug)
@@ -2164,7 +2163,7 @@ issueListGetH
   -> Maybe Text
   -> [Text]
   -> [Text]
-  -> ATAuthCtx (RespHeaders IssueListGet)
+  -> ATAuthCtx (RespHeaders (TableResponse IssueVM))
 issueListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM serviceFilters typeFilters = do
   (session, project, bw) <- mkPageCtx pid
   let tab = parseTab filterTM
@@ -2295,8 +2294,8 @@ issueListGetH pid filterTM sortM timeFilter pageM perPageM loadM periodM service
           }
   addRespHeaders
     $ if loadM == Just "true"
-      then ALRows $ TableRows{columns = issueColumns pid period names Nothing, rows = issuesVM, renderAsTable = True, rowId = Just issueRowId, rowAttrs = Just issueRowAttrs, pagination = if totalCount > 0 then Just paginationConfig else Nothing}
-      else ALPage $ PageCtx bwconf issuesTable
+      then TableRowsOnly $ TableRows{columns = issueColumns pid period names Nothing, rows = issuesVM, renderAsTable = True, rowId = Just issueRowId, rowAttrs = Just issueRowAttrs, pagination = if totalCount > 0 then Just paginationConfig else Nothing}
+      else TablePage $ PageCtx bwconf issuesTable
   where
     -- Inbox additionally hides severity='low' so demoted silent drops don't clutter it.
     tabIssueFilters :: IssueTab -> Issues.IssueFilters
@@ -2387,17 +2386,6 @@ issueZeroState pid = \case
     ZeroState "empty-set" "Nothing to triage" "New issues and errors land here automatically once you integrate an SDK." (ESLink "https://monoscope.tech/docs/sdks/" "View SDK setup guides")
   where
     inboxUrl = "/p/" <> pid.toText <> "/issues?filter=" <> tabParam TabInbox
-
-
-data IssueListGet
-  = ALPage (PageCtx (Table IssueVM))
-  | ALRows (TableRows IssueVM)
-
-
-instance ToHtml IssueListGet where
-  toHtml (ALPage pg) = toHtml pg
-  toHtml (ALRows rows) = toHtml rows
-  toHtmlRaw = toHtml
 
 
 issueRowAttrs :: IssueVM -> [Attribute]
@@ -2719,12 +2707,12 @@ logLevelChip_ logLevel pat =
         other
           | any (`T.isInfixOf` pat) ["status;badge-error⇒ERROR", "status_code;badge-4xx", "status_code;badge-5xx"] -> Just "ERROR"
           | otherwise -> other
-      (cls, icon, label) = case effective of
-        Just "ERROR" -> ("text-fillError-strong bg-fillError-weak", "triangle-alert", "ERROR")
-        Just "WARN" -> ("text-fillWarning-strong bg-fillWarning-weak", "triangle-alert", "WARN")
-        Just l -> ("", "circle-dot", l)
-        Nothing -> ("", "circle-dot", "Unknown")
-   in colorChip_ cls icon label
+      (tone, icon, label) = case effective of
+        Just "ERROR" -> (ErrorBadge, "triangle-alert", "ERROR")
+        Just "WARN" -> (WarningBadge, "triangle-alert", "WARN")
+        Just l -> (NeutralBadge, "circle-dot", l)
+        Nothing -> (NeutralBadge, "circle-dot", "Unknown")
+   in colorChip_ tone icon label
 
 
 issueActivityGetH :: Projects.ProjectId -> Issues.IssueId -> Maybe Text -> Maybe UTCTime -> ATAuthCtx (RespHeaders (Html ()))

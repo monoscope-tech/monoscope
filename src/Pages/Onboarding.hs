@@ -275,7 +275,7 @@ onboardingCompleteBody pid = do
   div_ [class_ "w-full max-w-xl h-full flex items-center mx-auto relative px-4 md:px-0"] $ do
     canvas_ [id_ "drawing_canvas", class_ "absolute top-0 left-0  w-full"] pass
     div_ [class_ "flex-col gap-4 flex w-full p-14 my-auto border border-weak rounded-2xl"] $ do
-      iconBadgeWith_ "p-3" "h-8 w-8" "rounded-full" SuccessBadge "circle-check"
+      iconBadge_ IconLg SuccessBadge "circle-check"
       div_ [class_ "flex flex-col gap-2"] do
         h3_ [class_ " text-textStrong  text-2xl"] "Onboarding completed!"
         p_ [class_ " text-textWeak text-sm"] "You're all set! You can now start exploring the monoscope dashboard by clicking the button below."
@@ -744,13 +744,13 @@ inviteTeamMemberModal pid emails enableFreetier =
   div_ [id_ "invite-modal-container"] do
     modalWith_ "inviteModal" def{autoOpen = True, boxClass = "bg-bgRaised max-w-md", wrapperClass = "p-4 md:p-8"} Nothing do
       div_ [class_ "flex items-center gap-3"] do
-        iconBadge_ SuccessBadge "circle-check"
+        iconBadge_ IconSm SuccessBadge "circle-check"
         span_ [class_ "text-textStrong text-xl"] "Test notification sent"
       div_ [class_ "text-textWeak text-sm"] "No notification? Close this modal and verify your emails and channels."
       details_ [class_ "w-full border-t border-strokeWeak pt-3"] $ do
         summary_ [class_ "text-textBrand text-sm cursor-pointer"] "Invite team members"
         div_ [class_ "flex-col gap-3 flex pt-3"] $ do
-          when enableFreetier $ infoBanner_ "Only the project owner can access a Free project. Invited members remain disabled until you upgrade."
+          when enableFreetier $ callout_ BrandBadge Nothing "Only the project owner can access a Free project. Invited members remain disabled until you upgrade."
           div_ [class_ "w-full gap-2 flex items-center"] $ do
             input_ [class_ "input input-sm w-full", placeholder_ "email@example.com", type_ "email", id_ "add-member-input"]
             button_ [class_ "btn-primary rounded-xl px-4 py-2 text-white text-sm cursor-pointer whitespace-nowrap", onpointerdown_ "appendMember()"] "Invite"

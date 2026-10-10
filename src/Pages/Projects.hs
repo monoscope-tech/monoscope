@@ -85,7 +85,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, mkPageCtx, s
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as SlackP
 import Pages.Bots.Utils qualified as BotUtils
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), PanelCfg (..), brandLogo_, callout_, connectionBadge_, dangerAction_, dirtyFormSaveAttr_, disclosure_, emptyState_, filterInputAttr_, formActionsModal_, formField_, formSelectField_, headerRow_, iconBadgeXs_, iconBadge_, infoBanner_, modalWith_, panel_, roleOptions_, searchInput_, sectionLabel_, settingsH2_, settingsNavLink_, settingsSection_, tagInput_, toggleRow_, tonePill_)
+import Pages.Components (BadgeColor (..), IconBadgeSize (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), PanelCfg (..), PanelStyle (..), brandLogo_, callout_, connectionBadge_, dangerAction_, dirtyFormSaveAttr_, disclosure_, emptyState_, filterInputAttr_, formActionsModal_, formField_, formSelectField_, headerRow_, iconBadge_, modalWith_, panel_, roleOptions_, searchInput_, sectionLabel_, settingsH2_, settingsNavLink_, settingsSection_, tagInput_, toggleRow_, tonePill_)
 import Pages.Settings qualified as Settings
 import Pkg.Components.Table (Table (..))
 import Pkg.Components.Table qualified as Table
@@ -164,7 +164,7 @@ listProjectsBody sessM projects demoProject showDemoProject restrictedProjectTit
       h2_ [class_ "text-textStrong text-3xl font-semibold"] "Projects"
       a_ [class_ "btn btn-primary btn-sm", href_ "/p/new"] (faSprite_ "plus" "regular" "h-4 w-4 mr-2" >> "New Project")
 
-    forM_ restrictedProjectTitles \title -> div_ [class_ "mb-4"] $ infoBanner_ do
+    forM_ restrictedProjectTitles \title -> div_ [class_ "mb-4"] $ callout_ BrandBadge Nothing do
       strong_ $ toHtml title
       " is on the Free plan. Only the project owner can access it. Ask the owner to upgrade to enable team access."
 
@@ -478,7 +478,7 @@ integrationsBody IntegrationsConfig{..} = do
     let pid = projectId.toText
     settingsH2_ "Integrations"
 
-    infoBanner_ do
+    callout_ BrandBadge Nothing do
       "Channels configured here are automatically included in the "
       a_ [href_ ("/p/" <> pid <> "/manage_teams/everyone"), class_ "font-medium text-textBrand underline"] "@everyone"
       " team."
@@ -972,22 +972,22 @@ teamPage pid team projMembers slackChannels discordChannels = do
         when isEveryone $ span_ [class_ "badge badge-primary"] "Default"
     when isEveryone
       $ div_ [class_ "mb-6"]
-      $ infoBanner_ do
+      $ callout_ BrandBadge Nothing do
         "@everyone automatically includes all project members. "
         "Channels configured on the "
         a_ [href_ ("/p/" <> pid.toText <> "/settings/integrations"), class_ "text-textBrand underline"] "Integrations page"
         " are automatically included in @everyone."
     div_ [class_ "flex gap-4 h-full"] do
       div_ [class_ "w-4/12 space-y-4"] do
-        panel_ def{raised = True, icon = Just "circle-info"} "Details" do
+        panel_ Raised def{icon = Just "circle-info"} "Details" do
           div_ [class_ "space-y-2 text-sm"] do
             div_ [class_ "flex gap-2"] $ span_ [class_ "text-textWeak w-16"] "Handle" >> span_ [class_ "text-textStrong"] (toHtml $ "@" <> team.handle)
             unless (T.null team.description) $ div_ [class_ "flex gap-2"] $ span_ [class_ "text-textWeak w-16"] "About" >> span_ [class_ "text-textStrong"] (toHtml team.description)
         let members = if isEveryone then (\m -> ("/api/avatar/" <> m.userId.toText, m.first_name <> " " <> m.last_name, CI.original m.email)) <$> projMembers else (\m -> (m.memberAvatar, m.memberName, m.memberEmail)) <$> team.members
-        panel_ def{raised = True, icon = Just "users", subtitle = Just $ " (" <> show (V.length members) <> ")"} "Members" do
+        panel_ Raised def{icon = Just "users", subtitle = Just $ " (" <> show (V.length members) <> ")"} "Members" do
           div_ [class_ "divide-y divide-strokeWeak -mx-4"] $ forM_ members \(avatar, name, email) ->
             div_ [class_ "flex items-center gap-3 py-2.5 px-4"] $ img_ [src_ avatar, class_ "w-8 h-8 rounded-full border border-strokeWeak", term "loading" "lazy", term "decoding" "async"] >> div_ [] (div_ [class_ "text-sm font-medium text-textStrong"] (toHtml name) >> div_ [class_ "text-xs text-textWeak"] (toHtml email))
-        panel_ def{raised = True, icon = Just "bell"} "Notifications" $ div_ [class_ "divide-y divide-strokeWeak -mx-4"] do
+        panel_ Raised def{icon = Just "bell"} "Notifications" $ div_ [class_ "divide-y divide-strokeWeak -mx-4"] do
           notifRow_ "envelope" "regular" "Email" (V.toList team.notify_emails) isEveryone
           notifRow_ "slack" "solid" "Slack" (V.toList $ V.map (resolveChannel slackChannels) team.slack_channels) isEveryone
           notifRow_ "discord" "solid" "Discord" (V.toList $ V.map (resolveChannel discordChannels) team.discord_channels) isEveryone
@@ -1463,7 +1463,7 @@ createProjectBody pid cp = do
     -- Danger zone — compact
     div_ [class_ "border border-strokeError-weak rounded-xl p-4 flex max-sm:flex-col sm:items-center sm:justify-between gap-4"] do
       div_ [class_ "flex items-center gap-3 min-w-0"] do
-        iconBadge_ ErrorBadge "triangle-alert"
+        iconBadge_ IconSm ErrorBadge "triangle-alert"
         div_ [class_ "min-w-0"] do
           h3_ [class_ "text-sm font-medium text-textStrong"] "Delete project"
           p_ [class_ "text-xs text-textWeak"] "Permanently remove this project and all associated data."
@@ -1474,7 +1474,7 @@ alertConfiguration :: CreateProjectForm -> Html ()
 alertConfiguration cp =
   div_ do
     div_ [class_ "flex items-center gap-2 mb-3"] do
-      iconBadgeXs_ NeutralBadge "bell"
+      iconBadge_ IconXs NeutralBadge "bell"
       span_ [class_ "text-sm font-semibold text-textStrong"] "Notifications"
     div_ [class_ "divide-y divide-strokeWeak"]
       $ forM_
@@ -1537,7 +1537,7 @@ teamModal pid team projMembers slackChans discordChans isInTeamView trigger = do
 
         when isEveryoneTeam
           $ div_ [class_ "py-4"]
-          $ infoBanner_ do
+          $ callout_ BrandBadge Nothing do
             "The @everyone team automatically includes all project members. Use the "
             a_ [href_ ("/p/" <> pid.toText <> "/settings/integrations"), class_ "text-textBrand underline"] "Integrations page"
             " for project-wide channels."

@@ -1,4 +1,4 @@
-module Pages.Components (drawer_, drawerLoadingSkeleton_, tableSkeleton_, deferredShell_, lazyPanel_, Deferred (..), RefreshingDeferred (..), timeRefreshListener_, timeWindowVals_, withDeferredBody, emptyState_, searchInput_, inlineIconBtn_, silenceBadge_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), facetRail_, facetSection_, facetOption_, factGrid_, metaChip_, entityHeader_, detailSection_, pivotLinks_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, dateTime, localTimeFmt_, paymentPlanPicker, navBar, modal_, primaryButton_, headerRow_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, dangerAction_, copyField_, callout_, toggleRow_, roleOptions_, brandLogo_, floatingDialog_, dialogField_, kbdHints_, segmented_, copyButton_, RowAction (..), rowActions_, BadgeColor (..), tonePill_, statFigure_, fieldLabel_, kvList_, iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, detailsClosedBelowAttr_, installationSettingsLink_, externalLink_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, sparkline_, periodToggle_, abbreviateUnit, agoText, stackTrace_, stackFrames_, curlCommand, eventsCountCell_, lastSeenCell_, TraceFrame (..), codeContextUrl, disclosure_, durationMenu_, durationQuery, untilLabel) where
+module Pages.Components (drawer_, PanelStyle (..), PanelCfg (..), panel_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, settingsNavLink_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, timeRefreshListener_, timeWindowVals_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, facetRail_, facetSection_, facetOption_, ModalCfg (..), modalWith_, formActionsModal_, dangerAction_, floatingDialog_, dialogField_, kbdHints_, durationMenu_, primaryButton_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, TraceFrame (..), stackTrace_, stackFrames_, codeContextUrl, curlCommand, getTargetPage, abbreviateUnit, agoText, durationQuery, untilLabel, paymentPlanPicker) where
 
 import Data.Default (Default (..))
 import Data.List (elemIndex, findIndex, lookup)
@@ -491,10 +491,6 @@ brandLogo_ h = do
   img_ [class_ $ h <> " hidden dark:block", src_ "/public/assets/svgs/logo_white.svg", alt_ "Monoscope"]
 
 
-modal_ :: Text -> Html () -> Html () -> Html ()
-modal_ modalId btnTrigger = modalWith_ modalId def (Just btnTrigger)
-
-
 modalCloseButton_ :: Monad m => Text -> HtmlT m ()
 modalCloseButton_ modalId =
   label_
@@ -773,40 +769,37 @@ formSelectField_ size lbl name required options =
       FieldMd -> "select w-full h-12 cursor-pointer"
 
 
+-- | @Collapsible open@ is a details disclosure; @FlushCard@ a bordered card with a header
+-- strip and an unpadded body, for a table or chart that sits flush.
+data PanelStyle = Raised | Collapsible Bool | FlushCard
+
+
 data PanelCfg = PanelCfg
   { icon :: Maybe Text
   , subtitle :: Maybe Text
-  , collapsible :: Maybe Bool -- Nothing = static section, Just True = starts open, Just False = starts closed
-  , sectionId :: Maybe Text -- id attribute on the details element
-  , raised :: Bool -- surface-raised card wrapper
-  , flushCard :: Bool -- bordered card with a header strip and unpadded body, for panels whose content is a table or chart that sits flush
-  , action :: Maybe (Text, Text) -- (label, url) link at the header's right edge
+  , sectionId :: Maybe Text -- id of a collapsible panel's details element
+  , action :: Maybe (Text, Text) -- (label, url) link at a flush card header's right edge
   }
   deriving stock (Generic)
   deriving anyclass (Default)
 
 
-panel_ :: Monad m => PanelCfg -> Text -> HtmlT m () -> HtmlT m ()
-panel_ cfg title content
-  | cfg.flushCard = section_ [class_ "overflow-hidden rounded-lg border border-strokeWeak surface-raised"] do
-      header_ [class_ "flex items-start justify-between gap-3 border-b border-strokeWeak px-3 py-2.5"] do
-        div_ [class_ "min-w-0"] do
-          h2_ [class_ "text-sm font-semibold text-textStrong"] $ toHtml title
-          whenJust cfg.subtitle $ p_ [class_ "mt-0.5 text-xs text-textWeak"] . toHtml
-        forM_ cfg.action \(label, url) -> a_ [href_ url, class_ "shrink-0 text-xs font-medium text-textBrand hover:underline"] $ toHtml label
-      content
-panel_ cfg title content = case cfg.collapsible of
-  Nothing -> wrapper do
-    header do
+panel_ :: Monad m => PanelStyle -> PanelCfg -> Text -> HtmlT m () -> HtmlT m ()
+panel_ style cfg title content = case style of
+  FlushCard -> section_ [class_ "overflow-hidden rounded-lg border border-strokeWeak surface-raised"] do
+    header_ [class_ "flex items-start justify-between gap-3 border-b border-strokeWeak px-3 py-2.5"] do
+      div_ [class_ "min-w-0"] do
+        h2_ [class_ "text-sm font-semibold text-textStrong"] $ toHtml title
+        whenJust cfg.subtitle $ p_ [class_ "mt-0.5 text-xs text-textWeak"] . toHtml
+      forM_ cfg.action \(label, url) -> a_ [href_ url, class_ "shrink-0 text-xs font-medium text-textBrand hover:underline"] $ toHtml label
+    content
+  Raised -> div_ [class_ "surface-raised rounded-2xl p-4 relative"] do
+    span_ [class_ "flex items-center gap-2 text-sm font-semibold text-textStrong mb-3"] do
       whenJust cfg.icon \ic -> faSprite_ ic "regular" "w-4 h-4 text-iconNeutral"
       toHtml title
       whenJust cfg.subtitle $ span_ [class_ "normal-case tracking-normal font-normal"] . toHtml
-      forM_ cfg.action \(label, url) -> a_ [href_ url, class_ "ml-auto text-xs font-medium text-textBrand hover:underline"] $ toHtml label
     content
-    where
-      wrapper = if cfg.raised then div_ [class_ "surface-raised rounded-2xl p-4 relative"] else div_ [class_ "space-y-4"]
-      header = if cfg.raised then span_ [class_ "flex items-center gap-2 text-sm font-semibold text-textStrong mb-3"] else h3_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wider flex items-center gap-2"]
-  Just startOpen ->
+  Collapsible startOpen ->
     details_ ([class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden"] <> [open_ "" | startOpen] <> maybe [] (pure . id_) cfg.sectionId) do
       summary_ [class_ "p-3 cursor-pointer list-none flex items-center justify-between gap-2 hover:bg-fillWeak transition-colors"] do
         div_ [class_ "flex items-center gap-2"] do
@@ -847,36 +840,35 @@ connectionBadge_ connected = span_ [class_ $ "badge badge-sm badge-soft gap-1 " 
 data BadgeColor = BrandBadge | SuccessBadge | WarningBadge | ErrorBadge | NeutralBadge
 
 
-iconBadge_ :: Monad m => BadgeColor -> Text -> HtmlT m ()
-iconBadge_ = iconBadgeWith_ "p-2" "h-4 w-4" "rounded-full"
+-- | A tone's (fill, stroke, text, icon) tokens, shared by every toned surface.
+toneCls :: BadgeColor -> (Text, Text, Text, Text)
+toneCls = \case
+  BrandBadge -> ("bg-fillBrand-weak", "border-strokeBrand-weak", "text-textBrand", "text-iconBrand")
+  SuccessBadge -> ("bg-fillSuccess-weak", "border-strokeSuccess-weak", "text-textSuccess", "text-iconSuccess")
+  WarningBadge -> ("bg-fillWarning-weak", "border-strokeWarning-weak", "text-textWarning", "text-iconWarning")
+  ErrorBadge -> ("bg-fillError-weak", "border-strokeError-weak", "text-textError", "text-iconError")
+  NeutralBadge -> ("bg-fillWeak", "border-strokeWeak", "text-textWeak", "text-iconNeutral")
 
 
-iconBadgeLg_ :: Monad m => BadgeColor -> Text -> HtmlT m ()
-iconBadgeLg_ = iconBadgeWith_ "p-3" "h-6 w-6" "rounded-full"
+data IconBadgeSize = IconXs | IconSm | IconLg
 
 
-iconBadgeXs_ :: Monad m => BadgeColor -> Text -> HtmlT m ()
-iconBadgeXs_ = iconBadgeWith_ "p-1.5" "h-3.5 w-3.5" "rounded-md"
-
-
-iconBadgeWith_ :: Monad m => Text -> Text -> Text -> BadgeColor -> Text -> HtmlT m ()
-iconBadgeWith_ pad iconSize shape color icon =
-  div_ [class_ $ pad <> " w-fit shrink-0 " <> shape <> " " <> bg color] $ faSprite_ icon "regular" (iconSize <> " " <> fg color)
+-- | Toned tile holding one icon, leading a card or dialog heading.
+iconBadge_ :: Monad m => IconBadgeSize -> BadgeColor -> Text -> HtmlT m ()
+iconBadge_ size tone icon = div_ [class_ $ unwords ["w-fit shrink-0", box, bg]] $ faSprite_ icon "regular" (glyph <> " " <> fg)
   where
-    bg = \case BrandBadge -> "bg-fillBrand-weak"; SuccessBadge -> "bg-fillSuccess-weak"; WarningBadge -> "bg-fillWarning-weak"; ErrorBadge -> "bg-fillError-weak"; NeutralBadge -> "bg-fillWeak"
-    fg = \case BrandBadge -> "text-iconBrand"; SuccessBadge -> "text-iconSuccess"; WarningBadge -> "text-iconWarning"; ErrorBadge -> "text-iconError"; NeutralBadge -> "text-iconNeutral"
+    (bg, _, _, fg) = toneCls tone
+    (box, glyph) = case size of
+      IconXs -> ("p-1.5 rounded-md", "h-3.5 w-3.5")
+      IconSm -> ("p-2 rounded-full", "h-4 w-4")
+      IconLg -> ("p-3 rounded-full", "h-6 w-6")
 
 
 -- | A status pill: tone carries the meaning, the label repeats it so colour is never the only signal.
 tonePill_ :: BadgeColor -> Text -> Html ()
-tonePill_ tone = span_ [class_ $ "inline-flex w-fit items-center whitespace-nowrap rounded-full border px-2 py-0.5 text-2xs font-medium " <> cls] . toHtml
+tonePill_ tone = span_ [class_ $ unwords ["inline-flex w-fit items-center whitespace-nowrap rounded-full border px-2 py-0.5 text-2xs font-medium", bg, txt, border]] . toHtml
   where
-    cls = case tone of
-      BrandBadge -> "bg-fillBrand-weak text-textBrand border-strokeBrand-weak"
-      SuccessBadge -> "bg-fillSuccess-weak text-textSuccess border-strokeSuccess-weak"
-      WarningBadge -> "bg-fillWarning-weak text-textWarning border-strokeWarning-weak"
-      ErrorBadge -> "bg-fillError-weak text-textError border-strokeError-weak"
-      NeutralBadge -> "bg-fillWeak text-textWeak border-strokeWeak"
+    (bg, border, txt, _) = toneCls tone
 
 
 -- | A label over a big number. @value@ is the number's slot (text, or a widget's live value
@@ -932,7 +924,7 @@ modalWith_ modalId cfg triggerM contentHtml = do
           end
       |]
       ]
-    <> [checked_ | cfg.autoOpen]
+      <> [checked_ | cfg.autoOpen]
   div_
     [ class_ $ "modal w-screen " <> cfg.wrapperClass
     , role_ "dialog"
@@ -954,26 +946,21 @@ modalWith_ modalId cfg triggerM contentHtml = do
           div_ [class_ "space-y-2"] contentHtml
 
 
-confirmModal_ :: Text -> Text -> Text -> [Attribute] -> Text -> Html ()
-confirmModal_ modalId title description confirmAttrs confirmText =
+-- | Red ghost trigger plus the confirmation modal it opens, e.g. a Remove/Disconnect action.
+dangerAction_ :: Text -> Text -> Text -> Text -> Text -> [Attribute] -> Text -> Html ()
+dangerAction_ modalId icon label title description confirmAttrs confirmText = do
+  label_ [class_ "btn btn-sm btn-ghost gap-1 text-textError hover:bg-fillError-weak", Lucid.for_ modalId] do
+    faSprite_ icon "regular" "w-3 h-3"
+    span_ $ toHtml label
   modalWith_ modalId def{boxClass = "p-6", hideClose = True} Nothing do
     div_ [class_ "flex items-start gap-3 mb-4"] do
-      iconBadgeWith_ "p-2" "h-5 w-5" "rounded-full" ErrorBadge "triangle-alert"
+      iconBadge_ IconSm ErrorBadge "triangle-alert"
       div_ do
         h3_ [class_ "text-lg font-semibold text-textStrong"] $ toHtml title
         p_ [class_ "text-sm text-textWeak mt-1"] $ toHtml description
     div_ [class_ "flex justify-end gap-2 mt-6"] do
       label_ [class_ "btn btn-sm btn-ghost", Lucid.for_ modalId] "Cancel"
       button_ ([type_ "button", class_ "btn btn-sm bg-fillError-strong text-white hover:opacity-90"] <> confirmAttrs) $ toHtml confirmText
-
-
--- | Red ghost trigger plus its 'confirmModal_' (same args), e.g. a Remove/Disconnect action.
-dangerAction_ :: Text -> Text -> Text -> Text -> Text -> [Attribute] -> Text -> Html ()
-dangerAction_ modalId icon label title description confirmAttrs confirmText = do
-  label_ [class_ "btn btn-sm btn-ghost gap-1 text-textError hover:bg-fillError-weak", Lucid.for_ modalId] do
-    faSprite_ icon "regular" "w-3 h-3"
-    span_ $ toHtml label
-  confirmModal_ modalId title description confirmAttrs confirmText
 
 
 -- | Native @<dialog>@ prompt floating over a blurred backdrop: white title strip, a card holding
@@ -1134,14 +1121,17 @@ filterInputAttr_ :: Text -> Attribute
 filterInputAttr_ sel = term "_" [text|on input or htmx:after:swap from document set v to my value.toLowerCase() then repeat for el in <${sel}/> if (el.dataset.filter or el.textContent).toLowerCase().includes(v) remove .hidden from el else add .hidden to el end end|]
 
 
-colorChip_ :: Monad m => Text -> Text -> Text -> HtmlT m ()
-colorChip_ color icon label = span_ [class_ $ "inline-flex items-center gap-1.5 text-xs rounded-full px-2.5 py-1 " <> bool "text-textWeak bg-fillWeaker" color (color /= "")] do
+-- | Toned icon + label chip.
+colorChip_ :: Monad m => BadgeColor -> Text -> Text -> HtmlT m ()
+colorChip_ tone icon label = span_ [class_ $ unwords ["inline-flex items-center gap-1.5 text-xs rounded-full px-2.5 py-1", bg, txt]] do
   faSprite_ icon "regular" "h-3 w-3"
   toHtml label
+  where
+    (bg, _, txt, _) = toneCls tone
 
 
 metadataChip_ :: Monad m => Text -> Text -> HtmlT m ()
-metadataChip_ = colorChip_ ""
+metadataChip_ = colorChip_ NeutralBadge
 
 
 -- | Standard settings page layout: scrollable container with padded, max-width section
@@ -1159,24 +1149,21 @@ sectionLabel_ :: Monad m => Text -> HtmlT m ()
 sectionLabel_ = h3_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wider"] . toHtml
 
 
-infoBanner_ :: Monad m => HtmlT m () -> HtmlT m ()
-infoBanner_ = callout_ BrandBadge Nothing
-
-
 -- | Toned notice box: tone icon, optional title, then the body (muted under a title).
 callout_ :: Monad m => BadgeColor -> Maybe Text -> HtmlT m () -> HtmlT m ()
-callout_ tone titleM body = div_ [class_ $ "flex items-start gap-2.5 rounded-lg border p-3 text-sm " <> boxCls] do
-  faSprite_ icon "regular" $ "h-4 w-4 shrink-0 mt-0.5 " <> iconCls
+callout_ tone titleM body = div_ [class_ $ unwords ["flex items-start gap-2.5 rounded-lg border p-3 text-sm", bg, border]] do
+  faSprite_ icon "regular" $ "h-4 w-4 shrink-0 mt-0.5 " <> fg
   div_ [class_ "min-w-0 flex-1"] $ case titleM of
     Nothing -> div_ [class_ "text-textStrong"] body
     Just t -> p_ [class_ "font-medium text-textStrong"] (toHtml t) >> div_ [class_ "mt-0.5 text-textWeak"] body
   where
-    (boxCls, iconCls, icon) = case tone of
-      BrandBadge -> ("bg-fillBrand-weak border-strokeBrand-weak", "text-iconBrand", "circle-info")
-      SuccessBadge -> ("bg-fillSuccess-weak border-strokeSuccess-weak", "text-iconSuccess", "circle-check")
-      WarningBadge -> ("bg-fillWarning-weak border-strokeWarning-weak", "text-iconWarning", "triangle-exclamation")
-      ErrorBadge -> ("bg-fillError-weak border-strokeError-weak", "text-iconError", "circle-exclamation")
-      NeutralBadge -> ("bg-fillWeak border-strokeWeak", "text-iconNeutral", "circle-info")
+    (bg, border, _, fg) = toneCls tone
+    icon = case tone of
+      SuccessBadge -> "circle-check"
+      WarningBadge -> "triangle-exclamation"
+      ErrorBadge -> "circle-exclamation"
+      BrandBadge -> "circle-info"
+      NeutralBadge -> "circle-info"
 
 
 -- | Read-only monospace value with a copy button; @elId@ names the value element.

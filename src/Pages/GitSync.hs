@@ -30,7 +30,7 @@ import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import OpenTelemetry.Attributes qualified as Otel
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper, withSettingsPage)
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), connectionBadge_, copyField_, dangerAction_, disclosure_, emptyState_, filterInputAttr_, formField_, formSelectField_, headerRow_, iconBadgeLg_, iconBadge_, installationSettingsLink_, primaryButton_, searchInput_, sectionLabel_, settingsH2_, settingsSection_)
+import Pages.Components (BadgeColor (..), IconBadgeSize (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), connectionBadge_, copyField_, dangerAction_, disclosure_, emptyState_, filterInputAttr_, formField_, formSelectField_, headerRow_, iconBadge_, installationSettingsLink_, primaryButton_, searchInput_, sectionLabel_, settingsH2_, settingsSection_)
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Git qualified as Git
 import Pkg.Metrics qualified as Metrics
@@ -481,7 +481,7 @@ githubAppCallbackH instIdM _setupAction stateM = do
     projectSelectorView instId projects = div_ [class_ "min-h-screen bg-bgBase flex items-center justify-center p-8"] do
       div_ [class_ "surface-raised rounded-2xl p-6 max-w-md w-full space-y-4"] do
         div_ [class_ "flex items-center gap-3 mb-4"] do
-          iconBadgeLg_ SuccessBadge "circle-check"
+          iconBadge_ IconLg SuccessBadge "circle-check"
           div_ do
             h3_ [class_ "text-lg font-semibold text-textStrong"] "GitHub App Installed!"
             p_ [class_ "text-sm text-textWeak"] "Select a project to connect"
@@ -489,7 +489,7 @@ githubAppCallbackH instIdM _setupAction stateM = do
           then emptyState_ def{size = ESCompact, icon = Just "folder"} "No projects found" "Create a project first, then come back to connect it."
           else div_ [class_ "space-y-2"] $ forM_ projects \proj ->
             a_ [href_ ("/p/" <> proj.id.toText <> "/settings/git-sync/repos?installationId=" <> show instId), class_ "flex items-center gap-3 p-3 rounded-lg border border-strokeWeak hover:border-strokeBrand-strong cursor-pointer block"] do
-              iconBadge_ NeutralBadge "folder"
+              iconBadge_ IconSm NeutralBadge "folder"
               span_ [class_ "font-medium text-textStrong"] $ toHtml proj.title
 
 

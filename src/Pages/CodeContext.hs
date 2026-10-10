@@ -303,6 +303,7 @@ repoConn cfg cred = do
 -- that their container mounts the app at @\/srv\/app@.
 codeMappingsPostH :: Projects.ProjectId -> CodeMappingForm -> ATAuthCtx (RespHeaders (Html ()))
 codeMappingsPostH pid form = do
+  requireReviewWrite pid
   credM <- codeContextCredential pid
   let sample = nonEmptyT form.samplePath
   case (credM, nonEmptyT form.repo) of
@@ -346,6 +347,7 @@ codeMappingsPostH pid form = do
 
 codeMappingsDeleteH :: Projects.ProjectId -> CodeContext.CodeMappingId -> ATAuthCtx (RespHeaders (Html ()))
 codeMappingsDeleteH pid mid = do
+  requireReviewWrite pid
   CodeContext.deleteCodeMapping pid mid
   addRespHeaders =<< codeMappingsContent pid Nothing
 

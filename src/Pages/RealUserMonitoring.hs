@@ -1732,7 +1732,7 @@ vitalsTable_ vitals = rumPanel_ "Web Vitals field performance" "Intervals ending
 
 -- | Every RUM card is the shared 'Components.panel_' flush-card variant.
 rumPanel_ :: Text -> Text -> Maybe (Text, Text) -> Html () -> Html ()
-rumPanel_ title subtitle action = Components.panel_ def{Components.flushCard = True, Components.subtitle = Just subtitle, Components.action = action} title
+rumPanel_ title subtitle action = Components.panel_ Components.FlushCard def{Components.subtitle = Just subtitle, Components.action = action} title
 
 
 panelEmpty_ :: Text -> Html ()

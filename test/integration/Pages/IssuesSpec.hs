@@ -17,7 +17,6 @@ import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Hasql.Interpolate qualified as HI
 import Lucid (ToHtml, renderText, toHtml)
-import Models.Apis.ApiChanges qualified as ApiChanges
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Issues qualified as Issues
@@ -186,7 +185,7 @@ spec = sequential $ aroundAll withTestResources do
       let load page perPage services types = do
             (_, response) <- testServant tr $ IssuesPage.issueListGetH testPid (Just "Inbox") Nothing Nothing (Just $ show page) (Just $ show perPage) Nothing (Just "24h") services types
             case response of
-              IssuesPage.ALPage (PageCtx _ table) -> pure (response, table)
+              Table.TablePage (PageCtx _ table) -> pure (response, table)
               _ -> fail "expected a full anomaly-list page"
 
       (_, allIssues) <- load 0 100 [] []
@@ -1195,7 +1194,7 @@ spec = sequential $ aroundAll withTestResources do
       let scoped = tr{trSessAndHeader = fmap (\session -> session{Projects.service = Just "scope-checkout", Projects.environment = Just "production"}) tr.trSessAndHeader}
       (_, response) <- testServant scoped $ IssuesPage.issueListGetH testPid (Just "Inbox") Nothing Nothing Nothing (Just "100") Nothing (Just "24h") ["scope-catalog"] []
       case response of
-        IssuesPage.ALPage (PageCtx _ table) -> table.rows `shouldSatisfy` V.null
+        Table.TablePage (PageCtx _ table) -> table.rows `shouldSatisfy` V.null
         _ -> expectationFailure "expected a full scoped issue-list page"
 
     -- Read-side sibling of errorUnmerge_doesNotTouchAnotherProjectsPattern, in the
@@ -1321,7 +1320,7 @@ listAnomalies :: TestResources -> Maybe Text -> IO (V.Vector IssuesPage.IssueVM)
 listAnomalies tr filterT = do
   (_, pg) <- testServant tr $ IssuesPage.issueListGetH testPid filterT Nothing Nothing Nothing Nothing Nothing Nothing [] []
   case pg of
-    IssuesPage.ALPage (PageCtx _ tbl) -> pure tbl.rows
+    Table.TablePage (PageCtx _ tbl) -> pure tbl.rows
     _ -> error "Unexpected response from anomaly list"
 
 

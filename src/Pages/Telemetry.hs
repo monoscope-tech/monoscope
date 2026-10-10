@@ -539,6 +539,7 @@ relatedMetrics_ pid service (lo, hi) (subLo, subHi) exemplars serviceMetrics = d
 
 metricBreakdownGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 metricBreakdownGetH pid metricName labelM = do
+  void $ Projects.sessionAndProject pid
   metricM <- Telemetry.getMetricData pid metricName
   addRespHeaders $ flip foldMap metricM \metric ->
     metricDetailChart pid metric "all" (mfilter (`elem` metric.metricLabels) labelM)
@@ -786,6 +787,7 @@ chartList pid source metricList nextUrl = do
 
 metricCardGetH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 metricCardGetH pid metricName labelM sourceM = do
+  void $ Projects.sessionAndProject pid
   metricM <- Telemetry.getMetricData pid metricName
   addRespHeaders $ flip foldMap metricM \metric ->
     let selected = mfilter (\l -> l == "all" || l `elem` metric.metricLabels) labelM

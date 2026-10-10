@@ -1,4 +1,4 @@
-module Pages.Endpoints (apiCatalogH, CatalogTab (..), tabParam, parseTab, parseTabM, HostEventsVM (..), endpointListGetH, CatalogList (..), EndpointRequestStatsVM (..), EnpReqStatsVM (..), apiCatalogBulkActionH, HostBulkActionForm (..), HostBulkAction (..), CatalogBulkAction (..), apiDocsH, ApiDocsPage (..), apiSpecJsonH, apiSpecYamlH) where
+module Pages.Endpoints (apiCatalogH, CatalogTab (..), tabParam, parseTab, parseTabM, HostEventsVM (..), endpointListGetH, EnpReqStatsVM (..), apiCatalogBulkActionH, HostBulkActionForm (..), HostBulkAction (..), CatalogBulkAction (..), apiDocsH, ApiDocsPage (..), apiSpecJsonH, apiSpecYamlH) where
 
 import Data.Aeson qualified as AE
 import Data.Cache qualified as Cache
@@ -18,7 +18,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.RUM qualified as RUMData
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Components (RowAction (..), copyButton_, detailTab_, eventsCountCell_, lastSeenCell_, periodToggle_, rowActions_, sparkline_, tabPanel_)
-import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), EmptyStateAction (..), Features (..), Pagination (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableRows (..), ZeroState (..), col, withAttrs, withColHeaderExtra)
+import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), EmptyStateAction (..), Features (..), Pagination (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableResponse (..), TableRows (..), ZeroState (..), col, withAttrs, withColHeaderExtra)
 import Pkg.DeriveUtils (WrappedEnumSC (..), assetUrl, bulkActionSlug)
 import Pkg.OpenApi qualified as OpenApi
 import PyF qualified
@@ -30,7 +30,7 @@ import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData, parseUrlPiece)
 
 
-apiCatalogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders CatalogList)
+apiCatalogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (TableResponse HostEventsVM))
 apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM statsM = do
   (session, project, bw) <- mkPageCtx pid
 
@@ -124,8 +124,8 @@ apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM statsM = d
                   }
           }
   addRespHeaders case skipM of
-    Just _ -> CatalogListRows TableRows{columns = cols, rows = hostsVM, renderAsTable = True, rowId = hostRowId, rowAttrs = hostRowAttrs, pagination = Nothing}
-    Nothing -> CatalogListPage $ PageCtx bwconf catalogTable
+    Just _ -> TableRowsOnly TableRows{columns = cols, rows = hostsVM, renderAsTable = True, rowId = hostRowId, rowAttrs = hostRowAttrs, pagination = Nothing}
+    Nothing -> TablePage $ PageCtx bwconf catalogTable
 
 
 -- | A catalog row: its traffic, the clock the "last seen" column renders against, and
@@ -259,15 +259,6 @@ renderCatalogMainCol pid vm = do
       ]
 
 
-data CatalogList = CatalogListPage (PageCtx (Table HostEventsVM)) | CatalogListRows (TableRows HostEventsVM)
-
-
-instance ToHtml CatalogList where
-  toHtml (CatalogListPage pg) = toHtml pg
-  toHtml (CatalogListRows r) = toHtml r
-  toHtmlRaw = toHtml
-
-
 endpointListGetH
   :: Projects.ProjectId
   -> Maybe Text
@@ -284,7 +275,7 @@ endpointListGetH
   -> Maybe Text
   -> Maybe Text
   -> Maybe Text
-  -> ATAuthCtx (RespHeaders EndpointRequestStatsVM)
+  -> ATAuthCtx (RespHeaders (TableResponse EnpReqStatsVM))
 endpointListGetH pid pageM perPageM _layoutM filterTM hostM currentTabM sortM periodM _hxRequestM _hxBoostedM _hxCurrentURL loadMoreM searchM statsM = do
   (session, project, bw) <- mkPageCtx pid
   let archived = filterTM == Just "Archived"
@@ -373,8 +364,8 @@ endpointListGetH pid pageM perPageM _layoutM filterTM hostM currentTabM sortM pe
           }
   addRespHeaders
     $ if isJust loadMoreM || isJust searchM
-      then EndpointsListRows TableRows{columns = cols, rows = endpReqVM, renderAsTable = True, rowId = endpRowId, rowAttrs = endpRowAttrs, pagination = pagination'}
-      else EndpointsListPage $ PageCtx bwconf endpointsTable
+      then TableRowsOnly TableRows{columns = cols, rows = endpReqVM, renderAsTable = True, rowId = endpRowId, rowAttrs = endpRowAttrs, pagination = pagination'}
+      else TablePage $ PageCtx bwconf endpointsTable
 
 
 data EnpReqStatsVM = EnpReqStatsVM UTCTime Endpoints.StatsMode Endpoints.EndpointRequestStats
@@ -420,17 +411,6 @@ renderEndpointMainCol pid currentTab (EnpReqStatsVM _ _ enp) = do
       [ RowAction{icon = "explore", label = "Logs", href = logExplorerHref pid q, attrs = navTabAttrs}
       , RowAction{icon = "brackets-curly", label = "Schema", href = docsHref pid enp.host (tabParam currentTab) (Just enp.endpointHash), attrs = []}
       ]
-
-
-data EndpointRequestStatsVM
-  = EndpointsListPage (PageCtx (Table EnpReqStatsVM))
-  | EndpointsListRows (TableRows EnpReqStatsVM)
-
-
-instance ToHtml EndpointRequestStatsVM where
-  toHtml (EndpointsListPage pg) = toHtml pg
-  toHtml (EndpointsListRows rows) = toHtml rows
-  toHtmlRaw = toHtml
 
 
 -- Learned API documentation ----------------------------------------------------

@@ -29,6 +29,7 @@ module Pkg.TestUtils (
   setBjRunAtInThePast,
   toServantResponse,
   runAuthHandler,
+  assertNonMemberDenied,
   toBaseServantResponse,
   runAsBaseRecordingHTTP,
   runAsBase,
@@ -95,7 +96,7 @@ import BackgroundJobs qualified
 import Configuration.Dotenv qualified as Dotenv
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.STM.TBQueue (isEmptyTBQueue, readTBQueue)
-import Control.Exception (bracket, finally, throwIO, try)
+import Control.Exception (ErrorCall (..), bracket, evaluate, finally, throwIO, try)
 import Control.Exception.Safe qualified as Safe
 import Control.Lens ((%~), (.~), (^.), (^..))
 import Data.Aeson qualified as AE
@@ -114,6 +115,7 @@ import Data.Effectful.Wreq (HTTP (..), runHTTPGolden, runHTTPRecord, runHTTPWreq
 import Data.Either.Extra
 import Data.HashMap.Strict qualified as HM
 import Data.Pool (Pool, defaultPoolConfig, destroyAllResources, newPool, setNumStripes, withResource)
+import Data.Generics.Product.Fields (field)
 import Data.ProtoLens (defMessage)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, ZonedTime, getCurrentTime, zonedTimeToUTC)
@@ -212,7 +214,7 @@ import System.Server qualified as Server
 import System.Tracing (Tracing)
 import System.Tracing qualified as Tracing
 import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, RespHeaders, atAuthToBase, atAuthToBaseTest, effToServantHandlerTest, effToServantHandlerTestHTTP)
-import Test.Hspec (Expectation, expectationFailure)
+import Test.Hspec (Expectation, expectationFailure, shouldSatisfy)
 import Unsafe.Coerce (unsafeCoerce)
 import Utils (toXXHash)
 import Web.ApiHandlers qualified as ApiH
@@ -987,6 +989,16 @@ runAuthHandler TestResources{..} k = do
     )
     <&> fromRightShow
 
+
+-- | Run a handler as a signed-in, non-sudo user who is not a member of @pid@'s project
+-- (membership is dropped first) and assert 'Projects.sessionAndProject' turned it away.
+-- Membership is enforced per handler, not by the router, so each handler needs this guard.
+assertNonMemberDenied :: TestResources -> Projects.ProjectId -> ATAuthCtx a -> IO ()
+assertNonMemberDenied tr pid k = do
+  withResource tr.trPool \conn -> void $ PGS.execute conn [sql|DELETE FROM projects.project_members WHERE project_id = ?|] (Only pid)
+  try (runAuthHandler tr{trSessAndHeader = tr.trSessAndHeader <&> field @"user" . field @"isSudo" .~ False} k >>= evaluate) >>= \case
+    Left (ErrorCall msg) -> toText msg `shouldSatisfy` T.isInfixOf "missingProjectPermission"
+    Right _ -> expectationFailure "a non-member was served another project's data"
 
 testServant :: TestResources -> ATAuthCtx (RespHeaders a) -> IO (RespHeaders a, a)
 testServant = toServantResponse

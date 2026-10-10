@@ -69,7 +69,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as Slack
 import Pages.Bots.Utils (Channel (channelId, channelName))
-import Pages.Components (EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), PanelCfg (..), detailTab_, durationMenu_, durationQuery, emptyState_, formCheckbox_, formField_, formSelectField_, inlineIconBtn_, metadataChip_, options_, panel_, silenceBadge_, tagInput_, untilLabel)
+import Pages.Components (EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), PanelCfg (..), PanelStyle (..), detailTab_, durationMenu_, durationQuery, emptyState_, formCheckbox_, formField_, formSelectField_, inlineIconBtn_, metadataChip_, options_, panel_, silenceBadge_, tagInput_, untilLabel)
 import Pages.Projects (TBulkActionForm (..))
 import Pages.Settings (safeScrapeUrl)
 import Pkg.Components.Table (BulkAction (..), Config (..), EmptyStateAction (..), Features (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, withAttrs)
@@ -309,7 +309,7 @@ monitorScheduleSection_ paymentPlan defaultFrequency defaultTimeWindow condition
       mkTimeOpt (m, l) = option_ ([value_ (show m <> "m")] <> [selected_ "" | m == defaultTimeWindow]) ("the last " <> toHtml l)
       -- Charts only expose `applyThresholds` (web-components/src/widgets.ts), so the bin is retuned via the query builder.
       chartUpdateAttr = term "hx-on:change" "document.querySelector('query-builder')?.updateBinInQuery('timestamp', this.value)"
-  panel_ def{icon = Just "clock", collapsible = Just True} "Monitor Schedule" do
+  panel_ (Collapsible True) def{icon = Just "clock"} "Monitor Schedule" do
     when isFree $ p_ [class_ "text-xs text-textWeak mt-1"] "Free plan: hourly minimum frequency. Upgrade for faster checks."
     div_ [class_ "flex flex-col gap-3 py-2 sm:flex-row"] do
       formSelectField_ FieldSm "Execute the query" "frequency" False $ forM_ timeOpts mkFreqOpt
@@ -333,7 +333,7 @@ thresholdsSection_ unitM chartTargetIdM alertThresholdM warningThresholdM trigge
   let chartId = fromMaybe "visualization-widget" chartTargetIdM
       chartUpdateAttr = term "hx-on:input" [text|document.getElementById('${chartId}')?.applyThresholds?.({alert: parseFloat(alertThreshold.value), warning: parseFloat(warningThreshold.value)})|]
       showVal = maybe "" show
-  panel_ def{icon = Just "chart-line", collapsible = Just True, sectionId = Just "thresholds"} "Thresholds" do
+  panel_ (Collapsible True) def{icon = Just "chart-line", sectionId = Just "thresholds"} "Thresholds" do
     formField_ FieldSm def{value = fromMaybe "" unitM, placeholder = "e.g. s, bytes, requests/s"} "Measurement unit" "unit" False Nothing
     div_ [class_ "flex flex-row gap-2 py-2"] do
       formField_ FieldSm def{inputType = "number", dot = Just "bg-fillError-strong", suffix = unitM, value = showVal alertThresholdM, extraAttrs = [chartUpdateAttr]} "Alert threshold" "alertThreshold" True Nothing
@@ -362,7 +362,7 @@ notificationSettingsSection_ allTeams selectedTeamIds formId monitorM = do
       renotifyVal = maybe "30m" minsToInterval $ monitorM >>= (.renotifyIntervalMins)
       stopEnabled = maybe False (isJust . (.stopAfterCount)) monitorM
       stopVal = maybe "5" show $ monitorM >>= (.stopAfterCount)
-  panel_ def{icon = Just "envelope", collapsible = Just False} "Notification Settings" do
+  panel_ (Collapsible False) def{icon = Just "envelope"} "Notification Settings" do
     formField_ FieldSm def{hint = Just "@everyone includes all project members and project notification channels."} "Teams" (formId <> "-teams") False
       $ Just
       $ tagInput_ (formId <> "-teams") "" [name_ "teams", data_ "tagify-text-prop" "name", data_ "tagify-whitelist" teamList, data_ "tagify-initial" existingTeams, Aria.describedby_ (formId <> "-teams-hint")]

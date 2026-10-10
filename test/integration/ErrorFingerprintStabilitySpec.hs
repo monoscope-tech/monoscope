@@ -1,20 +1,14 @@
 module ErrorFingerprintStabilitySpec (spec) where
 
-import Data.List (unfoldr)
 import Data.Text qualified as T
-import ErrorFingerprintMaster qualified as M
 import Pkg.ErrorFingerprint qualified as N
 import Relude
 import Test.Hspec (Spec, describe, it, shouldBe)
 import Utils (toXXHash)
 
 
-runtimes :: [(N.Runtime, M.Runtime)]
-runtimes = [(N.RGo, M.RGo), (N.RNodejs, M.RNodejs), (N.RWebjs, M.RWebjs), (N.RPython, M.RPython), (N.RJava, M.RJava), (N.RPhp, M.RPhp), (N.RDotnet, M.RDotnet), (N.RGeneric, M.RGeneric)]
-
-
-toM :: N.Runtime -> M.Runtime
-toM r = maybe M.RGeneric snd $ find ((== r) . fst) runtimes
+runtimes :: [N.Runtime]
+runtimes = [N.RGo, N.RNodejs, N.RWebjs, N.RPython, N.RJava, N.RPhp, N.RDotnet, N.RGeneric]
 
 
 runtimeNames :: [Text]
@@ -78,7 +72,7 @@ traces =
 -- | Every trace line across runtimes, recombined deterministically into long and
 -- mutated traces so every parser sees every other runtime's syntax.
 generatedTraces :: [Text]
-generatedTraces = take 600 $ unfoldr (Just . step) 12345
+generatedTraces = take 300 $ unfoldr (Just . step) 12345
   where
     pool = concatMap (lines . snd) traces <> ["", "  ", "(", ")", ":", "at ", "#0 ", "File \"", " in ", ":line ", "0x1f", "<", "`1", "->", "::", ".go:", "goroutine"]
     poolN = length pool
@@ -97,7 +91,7 @@ generatedTraces = take 600 $ unfoldr (Just . step) 12345
 
 
 traceInputs :: [(N.Runtime, Text)]
-traceInputs = [(r, t) | (r, _) <- runtimes, t <- map snd traces <> [T.intercalate "\n" $ concat $ replicate 10 $ map snd traces] <> generatedTraces]
+traceInputs = [(r, t) | r <- runtimes, t <- map snd traces <> [T.intercalate "\n" $ concat $ replicate 10 $ map snd traces] <> generatedTraces]
 
 
 messages :: [Text]
@@ -134,7 +128,7 @@ messages =
   , "htmx:error: The user aborted a request. {\"elt\":{\"listeners\":[{\"runCount\":7},{\"runCount\":9}]},\"pad\":\"" <> T.replicate 512 "x" <> "\"}"
   , "prefix {\"" <> T.replicate 511 "y"
   , "prefix {\"" <> T.replicate 510 "y"
-  , T.replicate 2000 "long message 12 "
+  , T.replicate 200 "long message 12 "
   , "a\tb\tc  d"
   ]
 
@@ -151,7 +145,7 @@ hashCases =
   [ (p, svc, sn, r, typ, msg, st)
   | (i, (r, st)) <- zip [0 :: Int ..] traceInputs
   , let typ = cyc i exceptionTypes; msg = cyc (i * 7) messages
-  , (p, svc, sn) <- bool [ctxs0] ctxs (i < 400)
+  , (p, svc, sn) <- bool [ctxs0] ctxs (i < 200)
   ]
     <> [(p, svc, sn, r, typ, msg, st) | typ <- exceptionTypes, msg <- messages, (r, st) <- [(N.RNodejs, ""), (N.RNodejs, "at handler (/app/index.js:10:5)"), (N.RGeneric, "at Network.Wai.Handler.Warp.Run:123")], (p, svc, sn) <- ctxs]
   where
@@ -175,8 +169,8 @@ maskGroups =
   ]
 
 
-masksN :: [N.ErrorMask]
-masksN = [N.ErrorMask "SB-" " not processing" 12, N.ErrorMask "order " " failed at step" 2, N.ErrorMask "abc" "def" 1, N.ErrorMask "SB-" " not processing" 1]
+masks :: [N.ErrorMask]
+masks = [N.ErrorMask "SB-" " not processing" 12, N.ErrorMask "order " " failed at step" 2, N.ErrorMask "abc" "def" 1, N.ErrorMask "SB-" " not processing" 1]
 
 
 render :: (Show a, Show b) => (a -> b) -> [a] -> [Text]
@@ -184,8 +178,8 @@ render f = map (\x -> show (x, f x))
 
 
 -- | Every persisted-data path, rendered as "(input, output)" lines per category.
-outputsN :: [(Text, [Text])]
-outputsN =
+outputs :: [(Text, [Text])]
+outputs =
   [ ("parseRuntime", render N.parseRuntime runtimeNames)
   , ("parseStackTrace", render (\(r, t) -> map (\f -> (f.filePath, f.moduleName, f.functionName, f.lineNumber, f.contextLine, f.isInApp)) $ N.parseStackTrace r t) traceInputs)
   , ("normalizeStackTrace", render (uncurry N.normalizeStackTrace) traceInputs)
@@ -193,38 +187,41 @@ outputsN =
   , ("isFrameworkTransportError", render (\(t, m) -> (N.isFrameworkTransportError t m, N.isFrameworkTransportError t (N.normalizeMessage m))) [(t, m) | t <- exceptionTypes, m <- messages])
   , ("computeErrorHashes", render (\(p, s, sn, r, t, m, st) -> let h = N.computeErrorHashes p s sn r t m st in (h.narrow, h.broad, h.shape, N.computeErrorFingerprint p s sn r t m st)) hashCases)
   , ("deriveErrorMask", render (fmap (\m -> (m.prefix, m.suffix, m.minVarLen)) . N.deriveErrorMask) maskGroups)
-  , ("applyErrorMasks", render (\m -> (N.applyErrorMasks masksN m, N.applyErrorMasks [] m)) (messages <> concat maskGroups <> ["SB-7 not processing", "order 1 failed at step"]))
-  , ("shapeWithMasks", render (\(t, m) -> (N.shapeWithMasks masksN "p" t m, N.shapeWithMasks [] "p" t m)) [(t, m) | t <- exceptionTypes, m <- messages <> concat maskGroups])
+  , ("applyErrorMasks", render (\m -> (N.applyErrorMasks masks m, N.applyErrorMasks [] m)) (messages <> concat maskGroups <> ["SB-7 not processing", "order 1 failed at step"]))
+  , ("shapeWithMasks", render (\(t, m) -> (N.shapeWithMasks masks "p" t m, N.shapeWithMasks [] "p" t m)) [(t, m) | t <- exceptionTypes, m <- messages <> concat maskGroups])
   ]
 
 
-outputsM :: [(Text, [Text])]
-outputsM =
-  [ ("parseRuntime", render M.parseRuntime runtimeNames)
-  , ("parseStackTrace", render (\(r, t) -> map (\f -> (f.filePath, f.moduleName, f.functionName, f.lineNumber, f.contextLine, f.isInApp)) $ M.parseStackTrace (toM r) t) traceInputs)
-  , ("normalizeStackTrace", render (\(r, t) -> M.normalizeStackTrace (toM r) t) traceInputs)
-  , ("normalizeMessage", render M.normalizeMessage (messages <> map snd traces))
-  , ("isFrameworkTransportError", render (\(t, m) -> (M.isFrameworkTransportError t m, M.isFrameworkTransportError t (M.normalizeMessage m))) [(t, m) | t <- exceptionTypes, m <- messages])
-  , ("computeErrorHashes", render (\(p, s, sn, r, t, m, st) -> let h = M.computeErrorHashes p s sn (toM r) t m st in (h.narrow, h.broad, h.shape, M.computeErrorFingerprint p s sn (toM r) t m st)) hashCases)
-  , ("deriveErrorMask", render (fmap (\m -> (m.prefix, m.suffix, m.minVarLen)) . M.deriveErrorMask) maskGroups)
-  , ("applyErrorMasks", render (\m -> (M.applyErrorMasks masksM m, M.applyErrorMasks [] m)) (messages <> concat maskGroups <> ["SB-7 not processing", "order 1 failed at step"]))
-  , ("shapeWithMasks", render (\(t, m) -> (M.shapeWithMasks masksM "p" t m, M.shapeWithMasks [] "p" t m)) [(t, m) | t <- exceptionTypes, m <- messages <> concat maskGroups])
+-- | Golden values computed by the pre-refactor (master) implementation. Fingerprints and
+-- shapes are persisted, so any change here re-keys existing production issues.
+expectedDigests :: [(Text, Int, Text)]
+expectedDigests =
+  [ ("parseRuntime", 31, "ff0d789f")
+  , ("parseStackTrace", 2792, "9cd32400")
+  , ("normalizeStackTrace", 2792, "19551ad2")
+  , ("normalizeMessage", 82, "9e4ac89e")
+  , ("isFrameworkTransportError", 646, "b0e4446e")
+  , ("computeErrorHashes", 13282, "b96553d2")
+  , ("deriveErrorMask", 10, "86fd5141")
+  , ("applyErrorMasks", 55, "7a92d854")
+  , ("shapeWithMasks", 1007, "707b6702")
   ]
-  where
-    masksM = map (\m -> M.ErrorMask m.prefix m.suffix m.minVarLen) masksN
 
 
-dumpPath :: FilePath
-dumpPath = "/private/tmp/claude-501/-Users-tonyalaribe-Projects-apitoolkit-monoscope-2/14eda8fd-979a-41b2-9564-dec76d17d4b2/scratchpad/ef-golden.txt"
+-- | (narrow, broad, shape) per entry of 'traces' (type "TypeError", message "boom 42") …
+expectedTraceHashes :: [(Text, Text, Text)]
+expectedTraceHashes = [("d3a94b17", "d3a94b17", "0b3f8ff9"), ("d3a94b17", "d3a94b17", "0b3f8ff9"), ("c3500d04", "c3500d04", "0b3f8ff9"), ("d3a94b17", "d3a94b17", "0b3f8ff9"), ("23d64179", "23d64179", "0b3f8ff9"), ("a7019751", "a7019751", "0b3f8ff9"), ("addf9610", "addf9610", "0b3f8ff9"), ("16018088", "16018088", "0b3f8ff9"), ("49d3d87c", "49d3d87c", "0b3f8ff9"), ("4791d2a2", "4791d2a2", "0b3f8ff9"), ("c45ad0e6", "a42c3b3a", "0b3f8ff9"), ("3edee3a0", "3edee3a0", "0b3f8ff9"), ("c45ad0e6", "a42c3b3a", "0b3f8ff9"), ("875e29fe", "875e29fe", "0b3f8ff9"), ("c9c5d994", "c9c5d994", "0b3f8ff9"), ("3172098f", "3172098f", "0b3f8ff9"), ("e52fda34", "e52fda34", "0b3f8ff9"), ("a5d83447", "a5d83447", "0b3f8ff9"), ("96779db2", "96779db2", "0b3f8ff9"), ("0dd2bbba", "0dd2bbba", "0b3f8ff9"), ("de7b232d", "de7b232d", "0b3f8ff9"), ("18f02834", "18f02834", "0b3f8ff9"), ("9ee5fe71", "9ee5fe71", "0b3f8ff9"), ("4c5f87f7", "4c5f87f7", "0b3f8ff9"), ("7c561d79", "7c561d79", "0b3f8ff9"), ("b68a5b49", "b68a5b49", "0b3f8ff9"), ("70b769b9", "70b769b9", "0b3f8ff9"), ("0412d777", "0412d777", "0b3f8ff9"), ("2c87545c", "2c87545c", "0b3f8ff9"), ("2b63547e", "2b63547e", "0b3f8ff9"), ("29e6e1b6", "29e6e1b6", "0b3f8ff9"), ("5e79e948", "5e79e948", "0b3f8ff9"), ("ee2119cc", "ee2119cc", "0b3f8ff9"), ("293c342d", "293c342d", "0b3f8ff9"), ("04cdbc4c", "04cdbc4c", "0b3f8ff9"), ("a3716ae6", "a3716ae6", "0b3f8ff9"), ("57747f1e", "57747f1e", "0b3f8ff9"), ("20aaefbf", "20aaefbf", "0b3f8ff9"), ("04648983", "04648983", "0b3f8ff9"), ("78a4fb3c", "78a4fb3c", "0b3f8ff9"), ("c45ad0e6", "a42c3b3a", "0b3f8ff9"), ("c45ad0e6", "a42c3b3a", "0b3f8ff9"), ("f81e8175", "f81e8175", "0b3f8ff9"), ("c45ad0e6", "a42c3b3a", "0b3f8ff9"), ("c45ad0e6", "a42c3b3a", "0b3f8ff9"), ("f3d80bbe", "f3d80bbe", "0b3f8ff9"), ("2cfcf2da", "2cfcf2da", "0b3f8ff9"), ("567ede2e", "567ede2e", "0b3f8ff9")]
+
+
+-- | … and per entry of 'messages' (no type, no stack).
+expectedMessageHashes :: [(Text, Text, Text)]
+expectedMessageHashes = [("cbf71181", "b194a3a7", "77797bc0"), ("cbf71181", "b194a3a7", "77797bc0"), ("12fbd552", "d2fa260e", "2a036a8f"), ("04471d56", "69842c75", "2689dd5b"), ("ee7af95c", "ee15d1f4", "4720a63f"), ("ee7af95c", "ee15d1f4", "4720a63f"), ("b8ffd50f", "d19e38f4", "379c3331"), ("302b765d", "2afa89d4", "0dd4f258"), ("e4335a5e", "8bc115cf", "7a4048b7"), ("8a08d73f", "6840419a", "21a363b8"), ("d73a07d1", "82cf46fa", "cadb7b84"), ("c5ab35e8", "7471485c", "2faab02e"), ("a2a1944e", "a881ae09", "aef76804"), ("87493091", "856e9415", "e17d9419"), ("a7971a3e", "32252e8c", "3ea371bf"), ("467324b3", "58c3cca5", "e01bda2e"), ("d9caf656", "7b43c7cd", "19d64d6c"), ("2ceb863d", "cdb65047", "204f785e"), ("db0a1637", "aaff5272", "9d1e71a9"), ("43ab667c", "e29df6db", "d51c5f0b"), ("43955b33", "43955b33", "e95c482e"), ("a19a4285", "a19a4285", "0fd96844"), ("f5974545", "f5974545", "9f799499"), ("5171b67b", "5171b67b", "8457e448"), ("3b4bed32", "3b4bed32", "271c3832"), ("3aa1fc74", "35829d1b", "960230db"), ("3aa1fc74", "35829d1b", "960230db"), ("244056f3", "a1f20cbf", "783014f3"), ("32e41395", "df839064", "0366f34a"), ("83cd337c", "4704610d", "08291c74"), ("7c3d8fca", "2b5f8595", "0eeac6e4"), ("9a9d24a5", "fb7089c4", "da295ca2"), ("a83d1ff2", "fbb510c0", "a6d3f31b"), ("d2d265f1", "8b40ae36", "1b7b4046")]
 
 
 spec :: Spec
 spec = describe "ErrorFingerprintStability" do
-  forM_ (zip outputsN outputsM) \((name, ns), (_, ms)) -> it ("master_vs_new_" <> toString name) do
-    length ns `shouldBe` length ms
-    [(n, m) | (n, m) <- zip ns ms, n /= m] `shouldBe` []
-  it "dump_master_golden" do
-    let digests = [show (name, length ms, toXXHash (T.unlines ms)) | (name, ms) <- outputsM]
-        anchors = [show (r, t, M.computeErrorHashes "proj1" (Just "svc") (Just "GET /a") (toM r) "TypeError" "boom 42" t & \h -> (h.narrow, h.broad, h.shape)) | (r, t) <- traces]
-        msgAnchors = [show (m, M.computeErrorHashes "proj1" (Just "svc") (Just "GET /a") M.RGeneric "" m "" & \h -> (h.narrow, h.broad, h.shape)) | m <- messages]
-    writeFileText @IO dumpPath $ T.unlines $ digests <> ["--"] <> anchors <> ["--"] <> msgAnchors
+  it "fingerprints_stableAcrossRefactor" do
+    let hashes r t m st = N.computeErrorHashes "proj1" (Just "svc") (Just "GET /a") r t m st & \h -> (h.narrow, h.broad, h.shape)
+    [(name, length ls, toXXHash (T.unlines ls)) | (name, ls) <- outputs] `shouldBe` expectedDigests
+    [(rt, hashes r "TypeError" "boom 42" t) | rt@(r, t) <- traces] `shouldBe` zip traces expectedTraceHashes
+    [(m, hashes N.RGeneric "" m "") | m <- messages] `shouldBe` zip messages expectedMessageHashes

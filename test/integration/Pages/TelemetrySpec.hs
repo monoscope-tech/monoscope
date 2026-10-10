@@ -378,6 +378,23 @@ spec = do
               then markup `shouldSatisfy` not . T.isInfixOf ">Group by</span>"
               else markup `shouldSatisfy` T.isInfixOf "text-textStrong\">All values</span>"
 
+    -- Unlike every other metrics handler, these two never called sessionAndProject, so any
+    -- signed-in user could read another project's metric charts by its id.
+    it "metricCardAndBreakdown_nonMember_cannotRead" \tr -> do
+      victim <- createTestProject tr "victim"
+      withPool tr.trPool
+        $ void
+        $ DBT.execute
+          [sql| INSERT INTO otel_metrics_meta
+          (project_id,metric_name,metric_type,metric_unit,metric_description,service_name,scope_name,
+           metric_labels,first_seen_at,last_seen_at,first_timestamp,last_timestamp)
+          VALUES (?,'victim.secret','GAUGE','1','','checkout','test','{attributes.region}',now(),now(),now(),now()) |]
+          (Only victim)
+      (_, card) <- testServant tr $ Trace.metricCardGetH victim "victim.secret" Nothing Nothing
+      LT.toStrict (Lucid.renderText card) `shouldSatisfy` T.isInfixOf "victim.secret"
+      assertNonMemberDenied tr victim $ Trace.metricCardGetH victim "victim.secret" Nothing Nothing
+      assertNonMemberDenied tr victim $ Trace.metricBreakdownGetH victim "victim.secret" Nothing
+
     -- The service filter used to render every service as an <option> (2.3k of them, ~117KB
     -- of HTML, on the demo project). It is now searched and capped server-side.
     it "metricServices_areSearchedAndCappedServerSide_andNotInlinedIntoThePage" \tr -> do
