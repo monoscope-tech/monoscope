@@ -89,7 +89,7 @@ test("changing the container time preset refreshes inventory and drawer windows"
       const params = new URL(row.getAttribute("data-hx-get")!, location.origin).searchParams;
       return params.get("since") === "1H" && params.get("namespace") === "e2e-container-preset" && params.get("cluster") === "8b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d";
     }))).toBe(true);
-    const search = page.getByRole("textbox", { name: "Search containers", exact: true });
+    const search = page.getByRole("searchbox", { name: "Search containers", exact: true });
     await search.fill("preset-600");
     await expect(page.locator('#containersContainer tr[role="button"]:visible')).toHaveCount(1);
     for (const [preset, count] of [["5M", 1], ["1H", 2]] as const) {
