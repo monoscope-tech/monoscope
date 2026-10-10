@@ -32,11 +32,12 @@ test("customer notices keep fullscreen panels and sidebar flyouts aligned", asyn
       await expect(page.getByText("Manage subscription", { exact: true })).toBeVisible();
       if (width === 1280) {
         const issues = page.locator(`#main-sidenav .main-nav-link[href="/p/${pid}/issues"]`);
+        await expect(issues.locator("..")).toHaveAttribute("data-hyperscript-powered", "true");
         for (const _ of [0, 1]) {
           await issues.hover();
           const flyout = issues.locator("..").locator(".nav-flyout");
           await expect(flyout).toBeVisible();
-          expect((await flyout.boundingBox())!.y).toBeCloseTo((await issues.boundingBox())!.y, 0);
+          await expect.poll(async () => (await flyout.boundingBox())!.y - (await issues.boundingBox())!.y).toBeCloseTo(0, 0);
           await page.getByRole("button", { name: "Toggle sidebar", exact: true }).click();
         }
       }
