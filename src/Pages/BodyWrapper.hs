@@ -829,8 +829,9 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
                     , [__|on mouseenter
                         set flyout to my.querySelector('.nav-flyout')
                         set sidebarBounds to my.closest('aside').getBoundingClientRect()
-                        set flyoutLeft to Math.max(8, Math.min(sidebarBounds.right + 4, window.innerWidth - flyout.offsetWidth - 8))
-                        set flyoutTop to Math.max(8, Math.min(my.getBoundingClientRect().top, window.innerHeight - flyout.offsetHeight - 8))
+                        set workspaceBounds to my.closest('aside').parentElement.getBoundingClientRect()
+                        set flyoutLeft to Math.max(workspaceBounds.left + 8, Math.min(sidebarBounds.right + 4, workspaceBounds.right - flyout.offsetWidth - 8)) - workspaceBounds.left
+                        set flyoutTop to Math.max(workspaceBounds.top + 8, Math.min(my.getBoundingClientRect().top, workspaceBounds.bottom - flyout.offsetHeight - 8)) - workspaceBounds.top
                         set flyout.style.left to `${flyoutLeft}px`
                         set flyout.style.top to `${flyoutTop}px`
                       end|]
