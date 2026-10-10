@@ -10,6 +10,7 @@ module Pages.GitSync (
   gitSyncSettingsUpdateH,
   gitSyncRepositoryDeleteH,
   gitSyncRepositoryRetryH,
+  gitSyncRepositoryPauseH,
   GitSyncForm (..),
   RepoSelectForm (..),
   queueGitSyncPush,
@@ -216,6 +217,14 @@ gitSyncRepositoryRetryH pid sid = do
   addRespHeaders $ gitSyncSettingsView ctx.env.hostUrl pid (Just sync)
 
 
+gitSyncRepositoryPauseH :: Projects.ProjectId -> GitSync.GitHubSyncId -> ATAuthCtx (RespHeaders (Html ()))
+gitSyncRepositoryPauseH pid sid = do
+  requireGitWrite pid
+  sync <- GitSync.pauseGitSync pid sid >>= maybe (throwError err404) pure
+  ctx <- ask @Config.AuthContext
+  addRespHeaders $ gitSyncSettingsView ctx.env.hostUrl pid (Just sync)
+
+
 requireGitWrite :: Projects.ProjectId -> ATAuthCtx ()
 requireGitWrite pid = do
   (session, _) <- Projects.sessionAndProject pid
@@ -315,6 +324,7 @@ gitSyncSettingsView hostUrl pid syncM =
         if not sync.syncEnabled
           then connectionBadge_ "Paused"
           else if isJust sync.lastError then colorChip_ "text-textError bg-fillError-weak" "circle-exclamation" "Sync failed" else connectionBadge_ "Connected"
+      unless sync.syncEnabled $ p_ [class_ "text-sm text-textWeak"] "Sync is paused. Existing dashboards remain available."
       whenJust sync.lastError \err -> div_ [class_ "space-y-2"] do
         p_ [role_ "status", class_ "text-sm text-textError break-words"] $ toHtml err
         when sync.syncEnabled $ button_ [type_ "button", hxPost_ (actionUrl <> "/retry"), hxTarget_ ("#" <> targetId), hxSwap_ "outerMorph", hxIndicator_ ("#" <> targetId <> "-retry-indicator"), class_ "btn btn-sm btn-ghost gap-2"] do
@@ -353,10 +363,13 @@ gitSyncSettingsView hostUrl pid syncM =
           unless isViaApp $ p_ [class_ "text-xs text-textWeak"] "Add this to your repository for automatic syncing."
 
         -- Actions
-        div_ [class_ "flex items-center justify-between pt-2"] do
+        div_ [class_ "flex flex-wrap items-center gap-2 pt-2"] do
           button_ [class_ "btn btn-sm btn-primary gap-1", type_ "submit"] do
             if sync.syncEnabled then "Save" else "Resume sync"
             htmxIndicator_ (targetId <> "-indicator") LdXS
+          when sync.syncEnabled $ button_ [type_ "button", hxPost_ (actionUrl <> "/pause"), hxTarget_ ("#" <> targetId), hxSwap_ "outerMorph", hxIndicator_ ("#" <> targetId <> "-pause-indicator"), class_ "btn btn-sm btn-ghost gap-1"] do
+            "Pause sync"
+            htmxIndicator_ (targetId <> "-pause-indicator") LdXS
           label_ [class_ "btn btn-sm btn-ghost text-textError hover:bg-fillError-weak", Lucid.for_ ("disconnect-modal-" <> sync.id.toText)] do
             faSprite_ "link-slash" "regular" "w-3 h-3"
             span_ "Disconnect"
@@ -422,7 +435,7 @@ queueGitSyncPush :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx ()
 queueGitSyncPush pid dashboardId = do
   ctx <- ask @Config.AuthContext
   dashboard <- Dashboards.getDashboardByProjectId pid dashboardId
-  syncM <- maybe (GitSync.getGitHubSync pid) (GitSync.getGitSyncById pid) (dashboard >>= (.gitSyncId))
+  syncM <- maybe (pure Nothing) (GitSync.getGitSyncById pid) (dashboard >>= (.gitSyncId))
   whenJust syncM \sync -> when sync.syncEnabled do
     liftIO $ withResource ctx.jobsPool \conn ->
       void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncPushDashboard pid (unUUIDId dashboardId)

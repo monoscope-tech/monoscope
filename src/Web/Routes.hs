@@ -579,6 +579,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , repositoryTokenGet :: mode :- "p" :> ProjectId :> "repositories" :> "connect" :> "token" :> Get '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryTokenGet))
   , repositoryTokenPost :: mode :- "p" :> ProjectId :> "repositories" :> "connect" :> "token" :> ReqBody '[FormUrlEncoded] PageCodeContext.RepositoryTokenForm :> Post '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryTokenGet))
   , repositoryGet :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> Get '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryGet))
+  , repositoryDelete :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> Delete '[HTML] (RespHeaders (Html ()))
   , repositoryDashboardGet :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "dashboards" :> Get '[HTML] (RespHeaders (PageCtx GitSync.RepositoryDashboardGet))
   , repositoryDashboardPost :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "dashboards" :> ReqBody '[FormUrlEncoded] GitSync.RepositoryDashboardForm :> Post '[HTML] (RespHeaders (PageCtx GitSync.RepositoryDashboardGet))
   , repositorySourceGet :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "source" :> QueryParam "credentialId" ModelGitSync.GitHubCredentialId :> QueryParam "sample" Text :> Get '[HTML] (RespHeaders (Html ()))
@@ -589,6 +590,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , gitSyncSettingsDelete :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Delete '[HTML] (RespHeaders (Html ()))
   , gitSyncRepositoryUpdate :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Capture "id" ModelGitSync.GitHubSyncId :> ReqBody '[FormUrlEncoded] GitSync.GitSyncForm :> Post '[HTML] (RespHeaders (Html ()))
   , gitSyncRepositoryRetry :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Capture "id" ModelGitSync.GitHubSyncId :> "retry" :> Post '[HTML] (RespHeaders (Html ()))
+  , gitSyncRepositoryPause :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Capture "id" ModelGitSync.GitHubSyncId :> "pause" :> Post '[HTML] (RespHeaders (Html ()))
   , gitSyncRepositoryDelete :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Capture "id" ModelGitSync.GitHubSyncId :> Delete '[HTML] (RespHeaders (Html ()))
   , codeMappingsSettings :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> QueryParam "sample" Text :> Get '[HTML] (RespHeaders (Html ()))
   , codeMappingsEditor :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> "editor" :> QueryParam "credentialId" ModelGitSync.GitHubCredentialId :> QueryParam "sample" Text :> Get '[HTML] (RespHeaders (Html ()))
@@ -1076,6 +1078,7 @@ cookieProtectedServer =
     , repositoryTokenGet = PageCodeContext.repositoryTokenGetH
     , repositoryTokenPost = PageCodeContext.repositoryTokenPostH
     , repositoryGet = PageCodeContext.repositoryGetH
+    , repositoryDelete = PageCodeContext.repositoryDeleteH
     , repositoryDashboardGet = GitSync.repositoryDashboardGetH
     , repositoryDashboardPost = GitSync.repositoryDashboardPostH
     , repositorySourceGet = PageCodeContext.repositorySourceGetH
@@ -1086,6 +1089,7 @@ cookieProtectedServer =
     , gitSyncSettingsDelete = GitSync.gitSyncSettingsDeleteH
     , gitSyncRepositoryUpdate = GitSync.gitSyncSettingsUpdateH
     , gitSyncRepositoryRetry = GitSync.gitSyncRepositoryRetryH
+    , gitSyncRepositoryPause = GitSync.gitSyncRepositoryPauseH
     , gitSyncRepositoryDelete = GitSync.gitSyncRepositoryDeleteH
     , codeMappingsSettings = PageCodeContext.codeMappingsGetH
     , codeMappingsEditor = PageCodeContext.codeMappingsEditorGetH

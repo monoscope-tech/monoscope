@@ -5,7 +5,7 @@
 -- which reaches @Pkg.Components.Widget@, which imports @LogItem@ — a cycle. The renderer in
 -- "Pages.Components" only ever builds the URL, so nothing on the rendering side has to know
 -- this module exists.
-module Pages.CodeContext (repositoryTokenGetH, repositoryTokenPostH, RepositoryTokenGet (..), RepositoryTokenForm (..), codeContextH, repositoriesGetH, repositoryGetH, repositorySourceGetH, repositorySourcePostH, repositorySourceDeleteH, repositoryReviewsPostH, repositoryConnectGetH, repositoryConnectPostH, RepositoryConnectGet (..), RepositoryConnectForm (..), RepositoryGet (..), ReviewReadiness (..), RepositoryTab (..), codeMappingsGetH, codeMappingsEditorGetH, codeMappingsPostH, codeMappingsDeleteH, CodeMappingForm (..), impactReviewSettingsPostH, impactReviewRetryH) where
+module Pages.CodeContext (repositoryTokenGetH, repositoryTokenPostH, RepositoryTokenGet (..), RepositoryTokenForm (..), codeContextH, repositoriesGetH, repositoryGetH, repositoryDeleteH, repositorySourceGetH, repositorySourcePostH, repositorySourceDeleteH, repositoryReviewsPostH, repositoryConnectGetH, repositoryConnectPostH, RepositoryConnectGet (..), RepositoryConnectForm (..), RepositoryGet (..), ReviewReadiness (..), RepositoryTab (..), codeMappingsGetH, codeMappingsEditorGetH, codeMappingsPostH, codeMappingsDeleteH, CodeMappingForm (..), impactReviewSettingsPostH, impactReviewRetryH) where
 
 import Data.Aeson qualified as AE
 import Data.Cache qualified as Cache
@@ -289,6 +289,16 @@ repositoryGetH pid rid = do
   addRespHeaders $ PageCtx bw{pageTitle = repository.owner <> "/" <> repository.repo} RepositoryGet{repository, mappings, dashboardSync, reviewReadiness, permission}
 
 
+repositoryDeleteH :: Projects.ProjectId -> GitSync.RepositoryId -> ATAuthCtx (RespHeaders (Html ()))
+repositoryDeleteH pid rid = do
+  requireReviewWrite pid
+  removed <- GitSync.removeRepository pid rid
+  unless removed $ throwError err404
+  addSuccessToast "Repository removed" (Just "Dashboards and review history are retained.")
+  redirectCS $ "/p/" <> pid.toText <> "/repositories"
+  addRespHeaders mempty
+
+
 instance ToHtml RepositoryGet where
   toHtml page = section_ [class_ "mx-auto max-w-4xl space-y-8 px-4 py-6 sm:px-8 sm:py-8"] do
     let repository = page.repository
@@ -332,6 +342,20 @@ instance ToHtml RepositoryGet where
           p_ [class_ "text-sm text-textWeak break-all"] $ toHtml $ sync.branch <> " · " <> GitSync.getDashboardsPath sync
           colorChip_ "" "code-branch" $ if sync.syncEnabled then "Sync enabled" else "Sync paused"
       a_ [href_ (base <> "/" <> repository.id.toText <> "/dashboards"), class_ "btn btn-sm btn-ghost"] $ if canEdit then "Configure dashboard sync" else "View dashboard sync"
+    when canEdit $ section_ [class_ "space-y-3 border-t border-strokeWeak pt-6"] do
+      h2_ [class_ "text-base font-semibold text-textStrong"] "Remove connection"
+      p_ [class_ "max-w-2xl text-sm text-textWeak"] "Stop using this repository for source context, pull request reviews, and dashboard sync. Dashboards stay local and review history is retained. Shared repository accounts remain connected."
+      button_ [type_ "button", onclick_ "document.getElementById('remove-repository-dialog').showModal()", class_ "btn btn-sm btn-ghost text-textError hover:bg-fillError-weak"] "Remove repository"
+      term "dialog" [id_ "remove-repository-dialog", Aria.labelledby_ "remove-repository-title", Aria.describedby_ "remove-repository-description", class_ "modal overscroll-contain"] do
+        div_ [class_ "modal-box space-y-4 p-6"] do
+          h2_ [id_ "remove-repository-title", class_ "text-lg font-semibold text-textStrong break-all"] $ toHtml $ "Remove " <> repository.owner <> "/" <> repository.repo <> "?"
+          p_ [id_ "remove-repository-description", class_ "text-sm text-textWeak"] "Source context, automatic reviews, and dashboard sync will stop for this repository. Dashboards and review history are retained. You can connect the repository again later."
+          div_ [class_ "flex flex-wrap justify-end gap-2"] do
+            form_ [method_ "dialog"] $ button_ [class_ "btn btn-sm btn-ghost", autofocus_] "Cancel"
+            button_ [type_ "button", hxDelete_ (base <> "/" <> repository.id.toText), hxSwap_ "none", hxIndicator_ "#remove-repository-indicator", class_ "btn btn-sm bg-fillError-strong text-textInverse-strong hover:opacity-90 gap-2"] do
+              "Remove repository"
+              htmxIndicator_ "remove-repository-indicator" LdXS
+        form_ [method_ "dialog", class_ "modal-backdrop"] $ button_ [Aria.label_ "Cancel removal"] "Close"
   toHtmlRaw = toHtml
 
 

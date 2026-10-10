@@ -13,6 +13,7 @@ module Models.Projects.GitSync (
   getRepositories,
   getRepository,
   connectRepository,
+  removeRepository,
   enableRepositoryDashboardSync,
   SyncAction (..),
   getGitHubSync,
@@ -22,6 +23,7 @@ module Models.Projects.GitSync (
   getGitSyncsByRepo,
   insertGitHubSync,
   updateGitHubSync,
+  pauseGitSync,
   updateLastRevision,
   setAnnouncedRevision,
   clearAnnouncedRevision,
@@ -157,6 +159,27 @@ connectRepository pid cid repository =
                  WHERE project_id = #{pid} AND id = #{cid}
                  ON CONFLICT (project_id, host, api_base, owner, repo) DO UPDATE SET credential_id = EXCLUDED.credential_id
                  RETURNING * |]
+
+
+removeRepository :: DB es => ProjectId -> RepositoryId -> Eff es Bool
+removeRepository pid rid = Hasql.transaction TxS.ReadCommitted TxS.Write do
+  repositories <- Hasql.queryTx @[Repository] (selectFrom @Repository <> [HI.sql| WHERE project_id = #{pid} AND id = #{rid} FOR UPDATE |])
+  case repositories of
+    [] -> pure False
+    repository : _ -> do
+      syncs <- Hasql.queryTx @[GitHubSync] (selectFrom @GitHubSync <> [HI.sql| WHERE project_id = #{pid} AND host = #{repository.host} AND api_base IS NOT DISTINCT FROM #{repository.apiBase} AND owner = #{repository.owner} AND repo = #{repository.repo} FOR UPDATE |])
+      for_ syncs \sync -> do
+        Hasql.executeTx [HI.sql| UPDATE projects.dashboards SET git_sync_id = NULL, file_path = NULL, file_sha = NULL WHERE project_id = #{pid} AND git_sync_id = #{sync.id} |]
+        Hasql.executeTx [HI.sql| DELETE FROM projects.git_sync WHERE project_id = #{pid} AND id = #{sync.id} |]
+      when (repository.host == Git.GitHub && isNothing repository.apiBase) $
+        Hasql.executeTx [HI.sql| INSERT INTO projects.pr_review_settings (project_id, owner, repo, enabled, include_evidence)
+          VALUES (#{pid}, lower(#{repository.owner}), lower(#{repository.repo}), false, false)
+          ON CONFLICT (project_id, owner, repo) DO UPDATE SET enabled = false |]
+      Hasql.executeTx [HI.sql| DELETE FROM projects.code_mappings m USING projects.git_credentials c
+        WHERE m.project_id = #{pid} AND m.credential_id = c.id AND c.project_id = m.project_id
+          AND m.owner = #{repository.owner} AND m.repo = #{repository.repo}
+          AND c.host = #{repository.host} AND c.api_base IS NOT DISTINCT FROM #{repository.apiBase} |]
+      True <$ Hasql.executeTx [HI.sql| DELETE FROM projects.repositories WHERE project_id = #{pid} AND id = #{rid} |]
 
 
 enableRepositoryDashboardSync :: DB es => ProjectId -> RepositoryId -> GitHubCredentialId -> Text -> Text -> Maybe Text -> Eff es (Maybe GitHubSync)
@@ -479,6 +502,12 @@ setAnnouncedRevision sid rev = do
 clearAnnouncedRevision :: DB es => GitHubSyncId -> Eff es Int64
 clearAnnouncedRevision sid =
   Hasql.interpExecute [HI.sql| UPDATE projects.git_sync SET announced_revision = NULL, announced_at = NULL WHERE id = #{sid} |]
+
+
+pauseGitSync :: (DB es, Time :> es) => ProjectId -> GitHubSyncId -> Eff es (Maybe GitHubSync)
+pauseGitSync pid sid = do
+  now <- Time.currentTime
+  Hasql.interp [HI.sql| UPDATE projects.git_sync SET sync_enabled = false, updated_at = #{now} WHERE project_id = #{pid} AND id = #{sid} RETURNING * |]
 
 
 deleteGitHubSync :: DB es => GitHubSyncId -> Eff es Int64

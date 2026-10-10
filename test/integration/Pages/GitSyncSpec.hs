@@ -246,6 +246,11 @@ runSyncJobs tr = do
     isGitSyncJob BackgroundJobs.GitSyncPushAllDashboards{} = True
     isGitSyncJob _ = False
 
+assignDash :: TestResources -> Dashboards.DashboardId -> IO ()
+assignDash tr did = do
+  Just sync <- runQueryEffect tr $ GitSync.getGitHubSync testPid
+  runQueryEffect tr (GitSync.assignDashboardRepository testPid did sync.id) `shouldReturn` Right ()
+
 uniquePath :: Text -> IO Text
 uniquePath base = do
   uid <- UUID.nextRandom
@@ -371,18 +376,25 @@ spec = sequential do
             M.lookup "b.yaml" gitState `shouldBe` Just (d2, Just "sha-b")
 
     describe "Job Queuing" do
-      it "queues push job when sync enabled" \tr -> do
+      it "queuesPushOnlyAfterDashboardRepositoryIsChosen" \tr -> do
         setupSync tr GitHubTestConfig{pat = "fake", owner = "o", repo = "r", branch = "main"} Nothing
         clearJobs tr
-        dashId <- UUIDId <$> liftIO UUID.nextRandom
+        dashId <- createDash tr "Explicit repository" []
+        _ <- toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
+        V.length . V.filter isGitSyncPush <$> getPendingBackgroundJobs tr.trATCtx `shouldReturn` 0
+        Just sync <- runQueryEffect tr $ GitSync.getGitHubSync testPid
+        runQueryEffect tr (GitSync.assignDashboardRepository testPid dashId sync.id) `shouldReturn` Right ()
         _ <- toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
         jobs <- getPendingBackgroundJobs tr.trATCtx
-        V.length (V.filter isGitSyncPush jobs) `shouldSatisfy` (>= 1)
+        V.length (V.filter isGitSyncPush jobs) `shouldBe` 1
 
       it "skips push when sync disabled" \tr -> do
-        void $ testServant tr $ GitSyncPage.gitSyncSettingsDeleteH testPid
+        setupSync tr GitHubTestConfig{pat = "fake", owner = "o", repo = "r", branch = "main"} Nothing
+        Just sync <- runQueryEffect tr $ GitSync.getGitHubSync testPid
+        dashId <- createDash tr "Paused repository" []
+        runQueryEffect tr (GitSync.assignDashboardRepository testPid dashId sync.id) `shouldReturn` Right ()
+        void $ testServant tr $ GitSyncPage.gitSyncRepositoryPauseH testPid sync.id
         clearJobs tr
-        dashId <- UUIDId <$> liftIO UUID.nextRandom
         _ <- toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
         jobs <- getPendingBackgroundJobs tr.trATCtx
         V.length (V.filter isGitSyncPush jobs) `shouldBe` 0
@@ -509,6 +521,7 @@ spec = sequential do
             path <- uniquePath "push-create"
             dashId <- createDash tr "Push Create Test" ["e2e"]
             _ <- runTestBg frozenTime tr $ GitSync.updateDashboardGitInfo dashId path ""  -- set path, empty sha = new file
+            assignDash tr dashId
             _ <- toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
             runSyncJobs tr
             exists <- ghFileExists cfg path
@@ -525,6 +538,7 @@ spec = sequential do
             (_, sha1) <- fromRightShow <$> ghGetFile cfg path
             -- Create dashboard with that path
             dashId <- createDash tr "Updated Title" ["updated"]
+            assignDash tr dashId
             _ <- runTestBg frozenTime tr $ GitSync.updateDashboardGitInfo dashId path sha1
             clearJobs tr
             _ <- toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
@@ -536,7 +550,8 @@ spec = sequential do
             clearAllTestData tr
             setupSync tr cfg Nothing
             dashId <- createDash tr "SHA Test" []
-            let expectedPath = "dashboards/sha-test.yaml"
+            assignDash tr dashId
+            let expectedPath = "sha-test.yaml"
             _ <- toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
             runSyncJobs tr
             dashM <- runTestBg frozenTime tr $ Dashboards.getDashboardByProjectId testPid dashId
@@ -557,7 +572,7 @@ spec = sequential do
             runSyncJobs tr
             dashes <- runTestBg frozenTime tr $ Dashboards.selectDashboardsSortedBy testPid "title"
             case filter (\d -> d.title == "Created In GitHub") dashes of
-              (d:_) -> d.filePath `shouldBe` Just path
+              (d:_) -> d.filePath `shouldBe` T.stripPrefix "dashboards/" path
               [] -> fail "Expected dashboard not found"
 
           it "updates local dashboard when GitHub file changes" \tr -> do
@@ -595,7 +610,7 @@ spec = sequential do
               void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncFromRepo testPid
             runSyncJobs tr
             dashesBefore <- runTestBg frozenTime tr $ Dashboards.selectDashboardsSortedBy testPid "title"
-            let beforeCount = length $ filter (\d -> d.filePath == Just path) dashesBefore
+            let beforeCount = length $ filter (\d -> d.filePath == T.stripPrefix "dashboards/" path) dashesBefore
             beforeCount `shouldBe` 1
             -- Delete from GitHub
             (_, sha) <- fromRightShow <$> ghGetFile cfg path
@@ -606,7 +621,7 @@ spec = sequential do
               void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncFromRepo testPid
             runSyncJobs tr
             dashesAfter <- runTestBg frozenTime tr $ Dashboards.selectDashboardsSortedBy testPid "title"
-            let afterCount = length $ filter (\d -> d.filePath == Just path) dashesAfter
+            let afterCount = length $ filter (\d -> d.filePath == T.stripPrefix "dashboards/" path) dashesAfter
             afterCount `shouldBe` 0
 
         describe "Full Sync Cycles" $ do
@@ -617,6 +632,7 @@ spec = sequential do
             -- Create and push
             dashId <- createDash tr "Round Trip Original" ["local"]
             _ <- runTestBg frozenTime tr $ GitSync.updateDashboardGitInfo dashId path ""  -- set path for push
+            assignDash tr dashId
             _ <- toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
             runSyncJobs tr
             -- Verify in GitHub
@@ -632,21 +648,17 @@ spec = sequential do
             runSyncJobs tr
             -- Verify local updated - use filePath matching since dashboard is updated in place
             dashes <- runTestBg frozenTime tr $ Dashboards.selectDashboardsSortedBy testPid "title"
-            case filter (\d -> d.filePath == Just path) dashes of
+            case filter (\d -> d.filePath == T.stripPrefix "dashboards/" path) dashes of
               (dash:_) -> do
                 dash.title `shouldBe` "Round Trip Modified"
                 V.toList dash.tags `shouldContain` ["github-added"]
               [] -> fail $ "Dashboard not found with path: " <> toString path
 
-          it "pushes all dashboards on initial connect" \tr -> do
-            -- Clear and create dashboards
+          it "pushes only dashboards assigned to the connected repository" \tr -> do
             clearAllTestData tr
-            _ <- createDash tr "Bulk A" []
-            _ <- createDash tr "Bulk B" []
-            _ <- createDash tr "Bulk C" []
-            -- Connect (should queue push-all)
             setupSync tr cfg Nothing
-            -- The setupSync also queues jobs, but we need to manually queue push-all for existing dashboards
+            for_ (["Bulk A", "Bulk B", "Bulk C"] :: [Text]) $ \title -> createDash tr title [] >>= assignDash tr
+            _ <- createDash tr "Stays Local" []
             liftIO $ withResource tr.trPool \conn ->
               void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncPushAllDashboards testPid
             runSyncJobs tr
@@ -655,12 +667,14 @@ spec = sequential do
             any ("bulk-a" `T.isInfixOf`) files `shouldBe` True
             any ("bulk-b" `T.isInfixOf`) files `shouldBe` True
             any ("bulk-c" `T.isInfixOf`) files `shouldBe` True
+            any ("stays-local" `T.isInfixOf`) files `shouldBe` False
 
         describe "Path Prefix" $ do
           it "uses prefix when pushing" \tr -> do
             clearAllTestData tr
             setupSync tr cfg (Just "test-prefix")
             dashId <- createDash tr "Prefixed Push" []
+            assignDash tr dashId
             let path = "test-prefix/dashboards/prefixed-push.yaml"
             _ <- toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
             runSyncJobs tr
@@ -679,6 +693,7 @@ spec = sequential do
             _ <- ghPutFile cfg path "title: Original\n" Nothing
             -- Create dashboard with wrong SHA
             dashId <- createDash tr "Conflict Test" []
+            assignDash tr dashId
             _ <- runTestBg frozenTime tr $ GitSync.updateDashboardGitInfo dashId path "wrong-sha-12345"
             _ <- toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
             -- Should not crash, just log error

@@ -4921,11 +4921,9 @@ gitSyncPushDashboard pid dashId = do
   Dashboards.getDashboardByProjectId pid dashId >>= \case
     Nothing -> Log.logAttention "Dashboard not found for git push" dashId
     Just dash | isNothing dash.schema -> Log.logInfo "Skipping git push for template-based dashboard" dashId
-    Just dash -> do
-      sidM <- maybe (fmap (.id) <$> GitSync.getGitHubSync pid) (pure . Just) dash.gitSyncId
-      case sidM of
-        Nothing -> Log.logAttention "Choose a repository before syncing this dashboard" (pid, dashId)
-        Just sid -> withGitSync pid (Just sid) \conn sync -> pushDashboardToGit conn sync pid dash ("Update dashboard: " <> dash.title)
+    Just dash -> case dash.gitSyncId of
+      Nothing -> Log.logAttention "Choose a repository before syncing this dashboard" (pid, dashId)
+      Just sid -> withGitSync pid (Just sid) \conn sync -> pushDashboardToGit conn sync pid dash ("Update dashboard: " <> dash.title)
 
 
 -- | Render one dashboard to YAML, push it to the repo and record the new shas.
@@ -4939,7 +4937,7 @@ pushDashboardToGit conn sync pid dash message = do
           prefix = GitSync.getDashboardsPath sync
           rawPath = fromMaybe (GitSync.titleToFilePath dash.title) dash.filePath
           relativePath = fromMaybe rawPath $ T.stripPrefix "dashboards/" rawPath <|> T.stripPrefix prefix rawPath
-      Git.pushFile conn (GitSync.syncRepoRef sync) (prefix <> relativePath) (GitSync.dashboardToYaml schema) (guard (isJust dash.gitSyncId) *> dash.fileSha) message >>= \case
+      Git.pushFile conn (GitSync.syncRepoRef sync) (prefix <> relativePath) (GitSync.dashboardToYaml schema) dash.fileSha message >>= \case
         Left err -> do
           void $ GitSync.recordSyncError sync.id err
           Log.logAttention "Failed to push dashboard to git" (dash.id, err)
@@ -4949,14 +4947,13 @@ pushDashboardToGit conn sync pid dash message = do
           Log.logInfo "Successfully pushed dashboard to git" (dash.id, fileSha, revision)
 
 
--- | Push all dashboards from a project to GitHub (used after initial repo connection)
+-- | Push the project's repository-owned dashboards.
 -- Skips template-based dashboards (schema = Nothing) since they have no custom content to sync.
 gitSyncPushAllDashboards :: Projects.ProjectId -> ATBackgroundCtx ()
 gitSyncPushAllDashboards pid = do
   Log.logInfo "Pushing all dashboards to git host" pid
-  singleSync <- GitSync.getGitHubSync pid
   withGitSync pid Nothing \conn sync -> do
-    syncableDashboards <- filter (\d -> isJust d.schema && (d.gitSyncId == Just sync.id || (isNothing d.gitSyncId && isJust singleSync))) <$> Dashboards.selectDashboardsSortedBy pid "updated_at"
+    syncableDashboards <- filter (\d -> isJust d.schema && d.gitSyncId == Just sync.id) <$> Dashboards.selectDashboardsSortedBy pid "updated_at"
     Log.logInfo "Found dashboards to push" (pid, length syncableDashboards)
     forM_ syncableDashboards \dash -> pushDashboardToGit conn sync pid dash ("Sync dashboard: " <> dash.title)
     Log.logInfo "Finished pushing all dashboards" pid

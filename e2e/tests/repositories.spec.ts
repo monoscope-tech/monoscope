@@ -198,6 +198,9 @@ test('repository account choice keeps service mappings with the selected team', 
     expect(sql(`SELECT count(*) FROM projects.code_mappings WHERE project_id = '${pid}'`).toString().trim()).toBe('2');
     const repository = sql(`SELECT id FROM projects.repositories WHERE project_id = '${pid}' AND owner = 'team-a'`).toString().trim();
     expect((await page.request.get(`/p/${DEMO_PROJECT}/repositories/${repository}`)).status()).toBe(404);
+    await page.goto(`/p/${pid}/repositories/${repository}`);
+    await expect(page.getByRole('button', { name: 'Remove repository', exact: true })).toHaveCount(0);
+    expect((await page.request.delete(`/p/${pid}/repositories/${repository}`)).status()).toBe(403);
     sql(`UPDATE projects.project_members SET permission = 'admin' WHERE project_id = '${pid}' AND user_id = '${uid}';`);
     const sourceMapping = sql(`SELECT id FROM projects.code_mappings WHERE project_id = '${pid}' AND owner = 'team-a'`).toString().trim();
     expect((await page.request.delete(`/p/${pid}/settings/code-mappings/${sourceMapping}`)).status()).toBe(200);
@@ -209,6 +212,44 @@ test('repository account choice keeps service mappings with the selected team', 
     await expect(page.getByText(/This repository remains connected for your team/)).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
     await page.screenshot({ path: testInfo.outputPath('repository-details-light.png'), fullPage: true });
+    const remove = page.getByRole('button', { name: 'Remove repository', exact: true });
+    await expect(remove).toBeVisible();
+    const dialog = page.getByRole('dialog', { name: 'Remove team-a/checkout?' });
+    for (const theme of ['light', 'dark']) {
+      await page.context().addCookies([{ name: 'theme', value: theme, url: baseURL! }]);
+      await page.reload();
+      await remove.press('Enter');
+      await expect(dialog).toBeVisible();
+      await expect(dialog.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused();
+      await expect(dialog).toContainText('Dashboards and review history are retained.');
+      expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+      await page.screenshot({ path: testInfo.outputPath(`repository-removal-${theme}.png`), fullPage: true });
+      const contrast = await dialog.getByRole('button', { name: 'Remove repository', exact: true }).evaluate(button => {
+        const context = document.createElement('canvas').getContext('2d')!;
+        const style = getComputedStyle(button);
+        context.fillStyle = style.backgroundColor;
+        context.fillRect(0, 0, 1, 1);
+        const background = context.getImageData(0, 0, 1, 1).data;
+        context.fillStyle = style.color;
+        context.fillRect(0, 0, 1, 1);
+        const foreground = context.getImageData(0, 0, 1, 1).data;
+        const luminance = (color: Uint8ClampedArray) => Array.from(color).slice(0, 3).map(channel => channel / 255).map(channel => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4).reduce((sum, channel, index) => sum + channel * [0.2126, 0.7152, 0.0722][index], 0);
+        const a = luminance(background), b = luminance(foreground);
+        return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+      });
+      await testInfo.attach(`removal-contrast-${theme}`, { body: JSON.stringify({ contrast }), contentType: 'application/json' });
+      expect(contrast).toBeGreaterThanOrEqual(4.5);
+      if (theme === 'light') {
+        await page.keyboard.press('Escape');
+        await expect(dialog).not.toBeVisible();
+        await expect(remove).toBeFocused();
+      }
+    }
+    await dialog.getByRole('button', { name: 'Remove repository', exact: true }).press('Enter');
+    await expect(page).toHaveURL(`/p/${pid}/repositories`);
+    await expect(page.getByRole('link', { name: 'team-a/checkout', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('link', { name: 'team-b/checkout', exact: true })).toBeVisible();
+    expect(sql(`SELECT count(*) FROM projects.git_credentials WHERE project_id = '${pid}'`).toString().trim()).toBe('2');
   } finally {
     sql(`DELETE FROM projects.projects WHERE id = '${pid}'; DELETE FROM users.users WHERE id = '${uid}';`);
   }
@@ -307,9 +348,17 @@ test('repository dashboard setup reuses a token account and keeps retries scoped
     await expect(panel.getByRole('status')).toContainText('overview.yaml');
     expect(sql(`SELECT count(*) FROM background_jobs WHERE payload->>'tag' = 'GitSyncRepository' AND payload::text LIKE '%${pid}%'`).toString().trim()).toBe('2');
     expect((await page.request.post(`/p/${pid}/settings/git-sync/${randomUUID()}/retry`)).status()).toBe(404);
-    sql(`UPDATE projects.git_sync SET sync_enabled = false WHERE id = '${activeConnection}';`);
-    await page.reload();
+    expect((await page.request.post(`/p/${pid}/settings/git-sync/${randomUUID()}/pause`)).status()).toBe(404);
+    expect((await page.request.post(`/p/${DEMO_PROJECT}/settings/git-sync/${activeConnection}/pause`)).status()).toBe(403);
+    await expect(panel.getByRole('button', { name: 'Pause sync', exact: true })).toBeVisible();
+    await Promise.all([
+      page.waitForResponse(response => response.request().method() === 'POST' && response.url().endsWith(`/git-sync/${activeConnection}/pause`)),
+      panel.getByRole('button', { name: 'Pause sync', exact: true }).press('Enter'),
+    ]);
+    expect(sql(`SELECT sync_enabled FROM projects.git_sync WHERE id = '${activeConnection}'`).toString().trim()).toBe('f');
     await expect(panel.getByRole('button', { name: 'Retry import', exact: true })).toHaveCount(0);
+    await expect(panel.getByRole('button', { name: 'Pause sync', exact: true })).toHaveCount(0);
+    expect((await page.request.post(`/p/${pid}/settings/git-sync/${activeConnection}/pause`)).status()).toBe(200);
     expect((await page.request.post(`/p/${pid}/settings/git-sync/${activeConnection}/retry`)).status()).toBe(200);
     expect(sql(`SELECT count(*) FROM background_jobs WHERE payload->>'tag' = 'GitSyncRepository' AND payload::text LIKE '%${pid}%'`).toString().trim()).toBe('2');
     await expect(panel.getByText('Paused', { exact: true })).toBeVisible();
@@ -333,6 +382,7 @@ test('repository dashboard setup reuses a token account and keeps retries scoped
     await expect(panel.getByRole('status')).toContainText('overview.yaml');
     await expect(panel.getByRole('button', { name: 'Retry import', exact: true })).toHaveCount(0);
     expect((await page.request.post(`/p/${pid}/settings/git-sync/${activeConnection}/retry`)).status()).toBe(403);
+    expect((await page.request.post(`/p/${pid}/settings/git-sync/${activeConnection}/pause`)).status()).toBe(403);
     await expect(panel.getByText('Sync enabled', { exact: true })).toBeVisible();
     await expect(panel.getByText('release · ops/dashboards/', { exact: true })).toBeVisible();
     await expect(panel.getByRole('button', { name: 'Save', exact: true })).toHaveCount(0);
