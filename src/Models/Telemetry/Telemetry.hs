@@ -108,6 +108,7 @@ import Control.Concurrent.STM qualified as STM
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
+import Data.Aeson.Types qualified as AET
 import Data.ByteString qualified as BS
 import Data.Default (Default (..))
 import Data.Effectful.Hasql (Hasql, retryTransientLoop)
@@ -119,7 +120,7 @@ import Data.Map qualified as Map
 import Data.Scientific qualified as Sci
 import Data.Set qualified as S
 import Data.Text qualified as T
-import Data.Text.Display (Display)
+import Data.Text.Display (Display, display)
 import Data.These (These (..))
 import Data.These qualified as These
 import Data.Time (UTCTime (..))
@@ -148,7 +149,7 @@ import Hasql.Session qualified as HSession
 import Hasql.Statement (Statement)
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnum (..), WrappedEnumSC (..), decodeEnumSC, encodeEnumSC, idFromText, unAesonTextMaybe)
+import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnum (..), WrappedEnumSC (..), decodeEnumSC, idFromText, unAesonTextMaybe)
 import Pkg.ErrorFingerprint qualified as EF
 import Pkg.ExtractionWorker qualified as EW
 import Pkg.Metrics qualified as Metrics
@@ -610,7 +611,7 @@ data MetricDataPoint = MetricDataPoint
 
 metricAttributePaths :: Text -> AE.Value -> [Text]
 metricAttributePaths prefix = \case
-  AE.Object obj -> concatMap (\(key, value) -> metricAttributePaths (prefix <> "." <> AEK.toText key) value) (KEM.toList obj)
+  AE.Object obj -> KEM.foldMapWithKey (\key -> metricAttributePaths (prefix <> "." <> AEK.toText key)) obj
   _ -> [prefix]
 
 
@@ -1074,7 +1075,7 @@ getDataPointsData load pid = do
           <> [HI.sql| AND timestamp BETWEEN #{from} AND #{to} |]
           <> [HI.sql| GROUP BY metric_name |]
       let countByName = Map.fromList $ V.toList counts
-      pure $ fmap (\m -> m{dataPointsCount = Just $ fromMaybe 0 $ Map.lookup m.metricName countByName}) catalog
+      pure $ fmap (\m -> m{dataPointsCount = Just $ Map.findWithDefault 0 m.metricName countByName}) catalog
 
 
 getMetricData :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe MetricDataPoint)
@@ -1129,9 +1130,7 @@ data MetricExemplar = MetricExemplar
 -- >>> exemplarPoints (j "[]") <> exemplarPoints AE.Null <> exemplarPoints (j "\"nonsense\"")
 -- []
 exemplarPoints :: AE.Value -> [ExemplarPoint]
-exemplarPoints v = filter (not . T.null . (.traceId)) $ case AE.fromJSON v of
-  AE.Success ps -> ps
-  AE.Error _ -> []
+exemplarPoints v = filter (not . T.null . (.traceId)) $ fromMaybe [] (AET.parseMaybe AE.parseJSON v)
 
 
 -- | Which exemplars 'metricExemplars' looks for: the ones recorded inside a given
@@ -1342,7 +1341,7 @@ getMetricCatalogPage pid sourceM prefixM queryM cutoff limit offset withInactive
       SELECT * FROM otel_metrics_meta WHERE project_id = #{unUUIDId pid} |]
       <> maybe mempty (\source -> [HI.sql| AND service_name = #{source}|]) (selected sourceM)
       <> maybe mempty (\prefix -> [HI.sql| AND starts_with(metric_name, #{prefix})|]) (selected prefixM)
-      <> maybe mempty (\query -> [HI.sql| AND strpos(lower(metric_name), lower(#{query})) > 0 |]) (mfilter (not . T.null) $ T.strip <$> queryM)
+      <> maybe mempty (\query -> [HI.sql| AND strpos(lower(metric_name), lower(#{query})) > 0 |]) (nonEmptyT $ T.strip <$> queryM)
       <> [HI.sql| ), meta AS (
       SELECT metric_name, MAX(metric_type) AS metric_type, MAX(metric_unit) AS metric_unit,
         MAX(metric_description) AS metric_description, MAX(last_seen_at) AS last_seen
@@ -1390,7 +1389,7 @@ getMetricServiceNames :: DB es => Projects.ProjectId -> Maybe Text -> Int -> Eff
 getMetricServiceNames pid searchM limit =
   Hasql.interp
     $ [HI.sql| SELECT DISTINCT service_name FROM otel_metrics_meta WHERE project_id = #{unUUIDId pid}|]
-    <> maybe mempty (\q -> let pat = "%" <> q <> "%" in [HI.sql| AND service_name ILIKE #{pat}|]) (mfilter (not . T.null) searchM)
+    <> maybe mempty (\q -> let pat = "%" <> q <> "%" in [HI.sql| AND service_name ILIKE #{pat}|]) (nonEmptyT searchM)
     <> [HI.sql| ORDER BY service_name LIMIT #{limit}|]
 
 
@@ -1408,7 +1407,7 @@ metricServiceNameFromResource :: Text -> AE.Value -> Text
 metricServiceNameFromResource metricName resource =
   fromMaybe "unknown"
     $ resourceServiceName (jsonToMap resource)
-    <|> (valText =<< getNestedValue ["container", "name"] =<< jsonToMap resource)
+    <|> atMapText "container.name" (jsonToMap resource)
     <|> lookupValueText resource "compose_service"
     <|> if "system." `T.isPrefixOf` metricName then Just "SYSTEM" else Nothing
 
@@ -2066,9 +2065,6 @@ otelColumns =
       textField nm g = column nm (\r -> scrubNulText <$> g r.row)
       contextText nm f = column nm (\r -> scrubNulText <$> (r.row.context >>= f))
       jsonField nm g = jsonColumn nm (\r -> g r.row)
-      sevText e = e.severity >>= \s -> scrubNulText . toText . encodeEnumSC @"SL" <$> s.severity_text
-      sevNum :: OtelLogsAndSpans -> Maybe Int32
-      sevNum e = fromIntegral . severity_number <$> e.severity
    in [ tsColumn "timestamp" (\r -> Just r.row.timestamp)
       , tsColumn "observed_timestamp" (\r -> r.row.observed_timestamp)
       , castColumn "id" "uuid" (\r -> Just r.row.id)
@@ -2080,8 +2076,8 @@ otelColumns =
       , textField "status_message" (.status_message)
       , textField "level" (.level)
       , jsonField "severity" (fmap AE.toJSON . (.severity))
-      , column "severity___severity_text" (\r -> sevText r.row)
-      , column "severity___severity_number" (\r -> sevNum r.row)
+      , column "severity___severity_text" (\r -> display <$> (r.row.severity >>= (.severity_text)))
+      , column "severity___severity_number" (\r -> fromIntegral @Int @Int32 . (.severity_number) <$> r.row.severity)
       , jsonField "body" (unAesonTextMaybe . (.body))
       , column "duration" (\r -> r.row.duration)
       , tsColumn "start_time" (\r -> Just r.row.start_time)
@@ -2172,7 +2168,7 @@ otelColumns =
         -- `date` is a Date32 Hive key (its pgwire can't decode _date/_timestamptz bind
         -- params, hence text — see 'UnnestElem'); PG's `date` is TIMESTAMPTZ and
         -- coerces the date to midnight, but that value is never read (see otelSpanColsSql).
-        (column "date" (\r -> Just (toText (iso8601Show (utctDay r.row.date))))){selectExpr = \_ a -> a <> "::date"}
+        dateColumn "date" (\r -> Just (toText (iso8601Show (utctDay r.row.date))))
       , column "message_size_bytes" (\r -> Just r.row.message_size_bytes)
       , jsonField "errors" (unAesonTextMaybe . (.errors))
       ]
@@ -2338,9 +2334,7 @@ extractATErrorFromRecord spanObj =
       typ = fromMaybe "Error" (excAttr "type")
       msg = fromMaybe "" $ excAttr "message" <|> bodyTxt <|> spanObj.status_message
       stack = fromMaybe "" (excAttr "stacktrace")
-   in if T.null msg && T.null stack
-        then Nothing
-        else Just (atErrorFrom spanObj (bool ErrorPatterns.CMSpanStatus ErrorPatterns.CMLogRecord (isJust spanObj.severity || spanObj.kind == Just "log")) Nothing typ msg stack)
+   in atErrorFrom spanObj (bool ErrorPatterns.CMSpanStatus ErrorPatterns.CMLogRecord (isJust spanObj.severity || spanObj.kind == Just "log")) Nothing typ msg stack <$ guard (not (T.null msg && T.null stack))
 
 
 -- | Build an 'ErrorPatterns.ATError' from a span/log plus the extracted
@@ -2401,7 +2395,7 @@ atErrorFrom spanObj mechanism handled typ msg stack =
         , release = attr "service.version"
         , handled
         , mechanism = Just mechanism
-        , level = spanObj.level <|> (toText . encodeEnumSC @"SL" <$> ((.severity_text) =<< spanObj.severity)) <|> ("error" <$ guard (spanObj.status_code == Just "ERROR"))
+        , level = spanObj.level <|> (display <$> (spanObj.severity >>= (.severity_text))) <|> ("error" <$ guard (spanObj.status_code == Just "ERROR"))
         , userAgent = ua
         , browser = withVersion (attr "user_agent.name") (attr "user_agent.version") <|> uaBrowser
         , os = withVersion (attr "os.name" <|> attr "user_agent.os.name") (attr "os.version" <|> attr "user_agent.os.version") <|> uaOs
@@ -2436,7 +2430,7 @@ mkSystemLog (UUIDId pid) eventName sev bodyMsg attrs duration ts =
   let
     -- OTel severity numbers: TRACE=1, and each level spans 4.
     sevNum = 1 + 4 * fromEnum sev
-    levelText = T.toUpper $ toText $ encodeEnumSC @"SL" sev
+    levelText = T.toUpper (display sev)
     resource = Map.fromList [("service.name", AE.String "SYSTEM")]
    in
     OtelLogsAndSpans
@@ -2550,7 +2544,7 @@ rowIdentity :: Maybe (Map T.Text AE.Value) -> [(T.Text, T.Text, T.Text)]
 rowIdentity attrsM =
   [ (k, label, v)
   | (k, label) <- identityFields
-  , v <- maybeToList $ atMapText k attrsM >>= guarded (not . T.null)
+  , v <- maybeToList $ nonEmptyT (atMapText k attrsM)
   ]
 
 

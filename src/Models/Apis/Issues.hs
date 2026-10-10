@@ -199,6 +199,7 @@ module Models.Apis.Issues (
 ) where
 
 import Data.Aeson qualified as AE
+import Data.Aeson.Types qualified as AET
 import Data.ByteString qualified as BS
 import Data.Char (isAscii, isPrint)
 import Data.Default (Default)
@@ -207,7 +208,7 @@ import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.OpenApi (ToSchema)
 import Data.Text qualified as T
 import Data.Text.Display (Display, display)
-import Data.Time (Day (ModifiedJulianDay), DayOfWeek (..), UTCTime (..), addDays, addUTCTime, dayOfWeek, diffUTCTime)
+import Data.Time (Day (ModifiedJulianDay), DayOfWeek (..), UTCTime (..), addDays, addUTCTime, dayOfWeek, defaultTimeLocale, diffUTCTime, formatTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.Time.LocalTime (LocalTime (..), TimeOfDay (..), ZonedTime, utc, utcToZonedTime, zonedTimeToUTC)
 import Data.Time.Zones (utcTZ, utcToLocalTimeTZ)
@@ -813,9 +814,7 @@ applyIssueScope scope filters =
   filters
     { service = scope.service
     , environment = scope.environment
-    , timeRange = case scope.timeRange of
-        (Just fromTime, Just toTime) -> Just (fromTime, toTime)
-        _ -> filters.timeRange
+    , timeRange = bisequence scope.timeRange <|> filters.timeRange
     }
 
 
@@ -1542,7 +1541,7 @@ routineTemplates =
   , template "weekly-slo-review" CategoryReliability "Weekly SLO review" "Review user-visible reliability signals and the work most likely to improve them." "Compare the last seven days of user-visible errors and latency with the preceding period. Summarize burn-like trends from available telemetry, clearly state when a formal SLO is unavailable, and recommend evidence-backed reliability priorities." (Weekly Monday $ TimeOfDay 9 30 0) ReportAlways ["Logs, traces, or metrics"]
   ]
   where
-    template key category title description prompt schedule reportWhen requirements = RoutineTemplate{key, version = 1, category, title, description, prompt, schedule, reportWhen, requirements}
+    template key = RoutineTemplate key 1
 
 
 routineScheduleLabel :: RoutineSchedule -> Text
@@ -1552,7 +1551,7 @@ routineScheduleLabel = \case
   Weekdays time -> "Weekdays at " <> clock time
   Weekly weekday time -> "Every " <> show weekday <> " at " <> clock time
   where
-    clock time = T.justifyRight 2 '0' (show time.todHour) <> ":" <> T.justifyRight 2 '0' (show time.todMin) <> " project time"
+    clock time = toText (formatTime defaultTimeLocale "%H:%M" time) <> " project time"
 
 
 data ScheduledRoutine = ScheduledRoutine
@@ -1722,10 +1721,7 @@ installRoutineTemplate pid convId timezone template = do
       Every interval -> (ScheduleInterval, routineIntervalMinutes interval, Nothing, Nothing, Nothing)
       Daily time -> (ScheduleDaily, 1440, Just time.todHour, Just time.todMin, Nothing)
       Weekdays time -> (ScheduleWeekdays, 1440, Just time.todHour, Just time.todMin, Nothing)
-      Weekly weekday time -> (ScheduleWeekly, 10080, Just time.todHour, Just time.todMin, Just $ isoWeekday weekday)
-
-    isoWeekday :: DayOfWeek -> Int
-    isoWeekday = \case Monday -> 1; Tuesday -> 2; Wednesday -> 3; Thursday -> 4; Friday -> 5; Saturday -> 6; Sunday -> 7
+      Weekly weekday time -> (ScheduleWeekly, 10080, Just time.todHour, Just time.todMin, Just $ fromEnum weekday)
 
 
 nextRoutineAt :: RoutineSchedule -> Text -> UTCTime -> UTCTime -> UTCTime
@@ -1743,7 +1739,7 @@ nextRoutineAt schedule timezone scheduledAt now = case schedule of
       let LocalTime day (TimeOfDay hour minute _) = utcToLocalTimeTZ tz instant
        in hour == scheduledTime.todHour && minute == scheduledTime.todMin && case schedule of
             Daily{} -> True
-            Weekdays{} -> dayOfWeek day `elem` ([Monday, Tuesday, Wednesday, Thursday, Friday] :: [DayOfWeek])
+            Weekdays{} -> dayOfWeek day `elem` ([Monday .. Friday] :: [DayOfWeek])
             Weekly weekday _ -> dayOfWeek day == weekday
             Every{} -> False
     scheduledTime = case schedule of Every{} -> midnight; Daily time -> time; Weekdays time -> time; Weekly _ time -> time
@@ -1892,10 +1888,9 @@ routineTiming predicate =
         ScheduleInterval -> Just $ Every interval
         ScheduleDaily -> Daily <$> timeOfDay hour minute
         ScheduleWeekdays -> Weekdays <$> timeOfDay hour minute
-        ScheduleWeekly -> Weekly <$> (weekday >>= dayFromISO) <*> timeOfDay hour minute
+        ScheduleWeekly -> Weekly <$> (weekday >>= \d -> toEnum d <$ guard (d >= 1 && d <= 7)) <*> timeOfDay hour minute
       pure (schedule, timezone)
     timeOfDay hour minute = TimeOfDay <$> hour <*> minute <*> pure 0
-    dayFromISO = \case 1 -> Just Monday; 2 -> Just Tuesday; 3 -> Just Wednesday; 4 -> Just Thursday; 5 -> Just Friday; 6 -> Just Saturday; 7 -> Just Sunday; _ -> Nothing
 
 
 -- | Insert a new chat message
@@ -1969,7 +1964,7 @@ seedChatHistory pid convId messages = Hasql.transaction TxS.ReadCommitted TxS.Wr
     Hasql.queryTx @[Bool]
       [HI.sql|SELECT EXISTS (SELECT 1 FROM apis.ai_chat_messages
       WHERE project_id = #{pid} AND conversation_id = #{convId})|]
-  when (not (null locked) && not (or existing)) $ for_ messages \(role, content) ->
+  unless (null locked || or existing) $ for_ messages \(role, content) ->
     Hasql.executeTx $ insertChatMessageSql pid convId role content Nothing Nothing
 
 
@@ -1997,37 +1992,23 @@ createLogPatternRateChangeIssue projectId lp sr = do
           , T.take 40 lp.logPattern
           , dir <> " " <> showPct changePercentVal <> " (" <> showRate sr.currentRate <> " vs " <> showRate sr.mean <> ")"
           ]
-  mkIssue
-    MkIssueOpts
-      { projectId
-      , targetHash = lp.patternHash
-      , parentHash = Nothing
-      , isFramework = False
-      , service = lp.serviceName
-      , critical = not silentDrop && sr.direction == Spike && lvl == "error"
-      , severity
-      , title
-      , recommendedAction = "Log pattern volume " <> dir <> " detected. Current: " <> showRate sr.currentRate <> ", Baseline: " <> showRate sr.mean <> " (" <> showRounded "" (abs sr.zScore) <> " std devs)."
-      , migrationComplexity = "n/a"
-      , payload =
-          LogPatternRateChangeP
-            LogPatternRateChangeData
-              { patternHash = lp.patternHash
-              , logPattern = lp.logPattern
-              , sampleMessage = lp.sampleMessage
-              , logLevel = lp.logLevel
-              , serviceName = lp.serviceName
-              , sourceField = lp.sourceField
-              , currentRatePerHour = sr.currentRate
-              , baselineMean = sr.mean
-              , baselineMad = sr.mad
-              , zScore = abs sr.zScore
-              , changePercent = changePercentVal
-              , changeDirection = sr.direction
-              , detectedAt = now
-              }
-      , timestamp = Just $ utcToZonedTime utc now
-      }
+  signalIssue projectId lp.serviceName lp.patternHash severity (title, "Log pattern volume " <> dir <> " detected. Current: " <> showRate sr.currentRate <> ", Baseline: " <> showRate sr.mean <> " (" <> showRounded "" (abs sr.zScore) <> " std devs).") (Just $ utcToZonedTime utc now)
+    $ LogPatternRateChangeP
+      LogPatternRateChangeData
+        { patternHash = lp.patternHash
+        , logPattern = lp.logPattern
+        , sampleMessage = lp.sampleMessage
+        , logLevel = lp.logLevel
+        , serviceName = lp.serviceName
+        , sourceField = lp.sourceField
+        , currentRatePerHour = sr.currentRate
+        , baselineMean = sr.mean
+        , baselineMad = sr.mad
+        , zScore = abs sr.zScore
+        , changePercent = changePercentVal
+        , changeDirection = sr.direction
+        , detectedAt = now
+        }
 
 
 -- | Strip token-highlight markup (";neutral⇒", ";badge-*⇒"), collapse drain
@@ -2056,38 +2037,25 @@ sanitizeLogPatternTitle raw sampleM serviceM =
 
 -- | Create an issue for a new log pattern
 createLogPatternIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> LogPatterns.LogPattern -> Eff es Issue
-createLogPatternIssue projectId lp = do
-  let lvl = T.toLower $ fromMaybe "" lp.logLevel
-      severity
-        | lvl == "error" = Critical
-        | lvl `elem` ["warning", "warn"] = Warning
-        | otherwise = Info
-  mkIssue
-    MkIssueOpts
-      { projectId
-      , targetHash = lp.patternHash
-      , parentHash = Nothing
-      , isFramework = False
-      , service = lp.serviceName
-      , critical = lvl == "error"
-      , severity
-      , title = "New Log Pattern: " <> sanitizeLogPatternTitle lp.logPattern lp.sampleMessage lp.serviceName
-      , recommendedAction = "A new log pattern has been detected. Review to ensure it's expected behavior."
-      , migrationComplexity = "n/a"
-      , payload =
-          LogPatternP
-            LogPatternData
-              { patternHash = lp.patternHash
-              , logPattern = lp.logPattern
-              , sampleMessage = lp.sampleMessage
-              , logLevel = lp.logLevel
-              , serviceName = lp.serviceName
-              , sourceField = lp.sourceField
-              , firstSeenAt = zonedTimeToUTC lp.firstSeenAt
-              , occurrenceCount = lp.occurrenceCount
-              }
-      , timestamp = Just lp.firstSeenAt
-      }
+createLogPatternIssue projectId lp =
+  signalIssue projectId lp.serviceName lp.patternHash severity ("New Log Pattern: " <> sanitizeLogPatternTitle lp.logPattern lp.sampleMessage lp.serviceName, "A new log pattern has been detected. Review to ensure it's expected behavior.") (Just lp.firstSeenAt)
+    $ LogPatternP
+      LogPatternData
+        { patternHash = lp.patternHash
+        , logPattern = lp.logPattern
+        , sampleMessage = lp.sampleMessage
+        , logLevel = lp.logLevel
+        , serviceName = lp.serviceName
+        , sourceField = lp.sourceField
+        , firstSeenAt = zonedTimeToUTC lp.firstSeenAt
+        , occurrenceCount = lp.occurrenceCount
+        }
+  where
+    lvl = T.toLower $ fromMaybe "" lp.logLevel
+    severity
+      | lvl == "error" = Critical
+      | lvl `elem` ["warning", "warn"] = Warning
+      | otherwise = Info
 
 
 -- | Log Pattern issue data (new pattern detected)
@@ -2234,9 +2202,7 @@ parsePayload t v = case t of
   Cron -> wrap CronP
   where
     wrap :: AE.FromJSON a => (a -> IssuePayload) -> Maybe IssuePayload
-    wrap f = case AE.fromJSON v of
-      AE.Success d -> Just (f d)
-      AE.Error _ -> Nothing
+    wrap f = f <$> AET.parseMaybe AE.parseJSON v
 
 
 -- | 'parsePayload' over a stored row.
@@ -2429,7 +2395,7 @@ selectIssueActivity pid issueId = do
     $ logAttention "ISSUE_TIMELINE_UNKNOWN_EVENT" (AE.object ["issue_id" AE..= issueId, "events" AE..= ordNub unparsable])
   pure activities
   where
-    toActivity (raw, by, at, meta) = maybe (Left raw) (\e -> Right $ IssueActivity e by at ((\(HI.AsJsonb v) -> v) <$> meta)) (parseActivityEvent raw)
+    toActivity (raw, by, at, meta) = maybe (Left raw) (\e -> Right $ IssueActivity e by at (coerce meta)) (parseActivityEvent raw)
 
 
 -- | Log that a user opened the issue, at most once a day, for the page's People list.
