@@ -7,11 +7,11 @@ import Data.Time (UTCTime, addUTCTime, diffUTCTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
+import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Lucid
-import Lucid.Hyperscript (__)
 import Models.Apis.ShareEvents qualified as ShareEvents
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -25,7 +25,7 @@ import Relude
 import Servant (err404)
 import System.Config (AuthContext (..))
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders, useTfReads)
-import UnliftIO.Exception (throwIO)
+import Utils (copyToClipboardAttr_)
 
 
 -- | Result of resolving a share id: missing entirely, expired, or live with hours-remaining + body.
@@ -40,16 +40,16 @@ data ShareView
       }
 
 
-shareLinkPostH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe Text -> ATAuthCtx (RespHeaders ShareLinkPost)
+shareLinkPostH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe ShareEvents.ShareKind -> ATAuthCtx (RespHeaders ShareLinkPost)
 shareLinkPostH pid eventId createdAt reqTypeM = do
   _ <- Projects.sessionAndProject pid
   useTf <- useTfReads
-  _ <- Telemetry.otelRecordByProjectAndId useTf pid createdAt eventId `whenNothingM` throwIO err404
+  _ <- Telemetry.otelRecordByProjectAndId useTf pid createdAt eventId `whenNothingM` throwError err404
   -- Random on purpose, not genUUID: the test interpreter restarts its static sequence per
   -- effect run, and ShareSpec creates a second link via apiShareLinkCreate — the same
   -- deterministic id twice is a share_events pkey collision.
   shareId <- liftIO UUIDV4.nextRandom
-  ShareEvents.createShareLink shareId pid eventId (fromMaybe "request" reqTypeM) createdAt
+  ShareEvents.createShareLink shareId pid eventId (fromMaybe ShareEvents.ShareRequest reqTypeM) createdAt
   addRespHeaders $ ShareLinkPost $ UUID.toText shareId
 
 
@@ -73,13 +73,7 @@ instance ToHtml ShareLinkPost where
         button_
           [ type_ "button"
           , class_ "shrink-0 bg-fillSuccess-weak text-textSuccess px-3 py-1.5 rounded-md text-sm font-medium hover:bg-fillSuccess-strong hover:text-white transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-strokeBrand-strong focus-visible:ring-offset-2"
-          , [__|
-             on click
-               if 'clipboard' in window.navigator then
-                 call navigator.clipboard.writeText(#shareURL.value)
-                 send successToast(value:['URL copied to clipboard']) to <body/>
-               end
-               |]
+          , copyToClipboardAttr_ "document.getElementById('shareURL').value" "URL copied to clipboard"
           ]
           "Copy link"
   toHtmlRaw = toHtml
@@ -90,7 +84,7 @@ instance ToHtml ShareLinkPost where
 data ShareRow = ShareRow
   { pid :: Projects.ProjectId
   , eventId :: UUID.UUID
-  , eventType :: Text
+  , eventType :: ShareEvents.ShareKind
   , eventCreatedAt :: UTCTime
   , hoursLeft :: Int
   }
@@ -101,7 +95,7 @@ resolveShare sid now =
   Hasql.interpOne
     [HI.sql|SELECT project_id, event_id, event_type, event_created_at, created_at
             FROM apis.share_events WHERE id=#{sid} LIMIT 1|]
-    <&> fmap \(pid, eid, ty :: Text, eca, createdAt :: UTCTime) ->
+    <&> fmap \(pid, eid, ty, eca, createdAt :: UTCTime) ->
       ShareRow pid eid ty eca (ceiling (diffUTCTime (addUTCTime (48 * 3600) createdAt) now / 3600))
 
 
@@ -129,7 +123,7 @@ shareLinkGetH sid = do
         Nothing -> pure ShareMissing
         Just anchor -> do
           let detail = LogItem.expandedItemView row.pid anchor Nothing Nothing
-          if row.eventType == "log"
+          if row.eventType == ShareEvents.ShareLog
             then pure $ ShareLive row.hoursLeft Nothing detail Nothing
             else do
               breakdownM <- runMaybeT do
@@ -154,14 +148,14 @@ instance ToHtml ShareLinkGet where
 shareReplaySessionGetH :: UUID.UUID -> UUID.UUID -> ATBaseCtx Replay.ReplaySessionResp
 shareReplaySessionGetH sid sessionId = do
   now <- Time.currentTime
-  row <- resolveShare sid now `whenNothingM` throwIO err404
-  when (row.hoursLeft <= 0 || row.eventType == "log") $ throwIO err404
+  row <- resolveShare sid now `whenNothingM` throwError err404
+  when (row.hoursLeft <= 0 || row.eventType == ShareEvents.ShareLog) $ throwError err404
   useTf <- useTfReads
-  anchor <- Telemetry.otelRecordByProjectAndId useTf row.pid row.eventCreatedAt row.eventId `whenNothingM` throwIO err404
-  when (sessionIdOf anchor /= Just sessionId) $ throwIO err404
+  anchor <- Telemetry.otelRecordByProjectAndId useTf row.pid row.eventCreatedAt row.eventId `whenNothingM` throwError err404
+  when (sessionIdOf anchor /= Just sessionId) $ throwError err404
   -- Unauthenticated surface: a share link must die with its project, so this
   -- asks for an ACTIVE one rather than any row bearing the id.
-  project <- Projects.activeProjectById row.pid `whenNothingM` throwIO err404
+  project <- Projects.activeProjectById row.pid `whenNothingM` throwError err404
   Replay.fetchReplaySession project sessionId
 
 

@@ -27,7 +27,7 @@ import Data.Effectful.Wreq (HTTP)
 import Data.Effectful.Wreq qualified as W (get, responseBody)
 import Data.Text qualified as T
 import Data.Vector qualified as V (Vector, fromList, (!?))
-import Effectful (Eff, IOE, (:>))
+import Effectful (Eff, (:>))
 import Effectful.Reader.Static (ask)
 import Effectful.State.Static.Local qualified as State
 import Hasql.Interpolate qualified as HI
@@ -217,7 +217,7 @@ dismissChecklistH pid = do
 
 
 -- | Appends atomically, so concurrent step completions can't lose one.
-markStepCompleted :: (Hasql.Hasql :> es, IOE :> es) => Projects.ProjectId -> Text -> Eff es ()
+markStepCompleted :: Hasql.Hasql :> es => Projects.ProjectId -> Text -> Eff es ()
 markStepCompleted pid = void . Projects.completeOnboardingStep pid
 
 
@@ -235,9 +235,10 @@ phoneEmailPostH pid form = do
 checkIntegrationGet :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 checkIntegrationGet pid languageM = do
   void $ Projects.sessionAndProject pid
-  v :: Maybe Text <- Hasql.interpOne [HI.sql|SELECT context___span_id FROM otel_logs_and_spans WHERE project_id = #{pid.toText} LIMIT 1|]
+  appCtx <- ask @AuthContext
+  v :: Maybe Text <- Hasql.withHasqlTimefusion appCtx.env.enableTimefusionReads $ Hasql.interpOne [HI.sql|SELECT context___span_id FROM otel_logs_and_spans WHERE project_id = #{pid.toText} LIMIT 1|]
   case v of
-    Nothing -> when (isNothing languageM) (addErrorToast "No events found yet" Nothing) >> addRespHeaders ""
+    Nothing -> maybe (addErrorToast "No events found yet" Nothing >> addRespHeaders "") (addRespHeaders . integrationPoller_ pid) languageM
     Just _ -> do
       markStepCompleted pid "Integration"
       Activation.recordActivationMilestone pid Activation.IngestVerified
@@ -647,16 +648,23 @@ integrationsPage pid apikey =
               img_ [class_ "h-5 w-5", src_ $ "/public/assets/svgs/" <> l.slug <> ".svg"]
               span_ $ toHtml l.label
             div_ [class_ "hidden group-has-[.checkbox:checked]/li:block text-sm toggle-target", id_ $ "integration-check-container" <> T.replace "#" "" l.label] do
-              div_
-                [ class_ "flex items-center gap-1 shrink-0"
-                , hxGet_ $ onboardingUrl pid $ "/integration-check?language=" <> T.replace "#" "sharp" l.label
-                , hxSwap_ "innerHTML"
-                , hxTarget_ $ "#integration-check-" <> l.slug
-                , hxTrigger_ "load delay:5s"
-                ]
-                do
-                  span_ [class_ "text-textStrong hidden md:inline text-xs"] "waiting"
-                  faSprite_ "spinner" "regular" "h-4 w-4 animate-spin shrink-0"
+              integrationPoller_ pid $ T.replace "#" "sharp" l.label
+
+
+-- | Re-checks every 5s while its language row is on screen: a hidden row never intersects,
+-- and each "no events yet" answer swaps in a fresh poller (observed anew) until a static
+-- "verified" badge ends the loop. htmx 4's @every@ ignores trigger filters, hence intersect.
+integrationPoller_ :: Projects.ProjectId -> Text -> Html ()
+integrationPoller_ pid language =
+  div_
+    [ class_ "flex items-center gap-1 shrink-0"
+    , hxGet_ $ onboardingUrl pid $ "/integration-check?language=" <> language
+    , hxSwap_ "outerHTML"
+    , hxTrigger_ "intersect delay:5s"
+    ]
+    do
+      span_ [class_ "text-textStrong hidden md:inline text-xs"] "waiting"
+      faSprite_ "spinner" "regular" "h-4 w-4 animate-spin shrink-0"
 
 
 onboardingStepWrapper_ :: Int -> Text -> Text -> Html () -> Html ()
@@ -716,7 +724,7 @@ notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack =
           img_ [src_ iconPath]
           span_ [class_ "text-center text-textStrong text-xl"] $ toHtml serviceName
         if isConnected
-          then connectionBadge_ "Connected"
+          then connectionBadge_ True
           else a_ [target_ "_blank", class_ "border px-3 h-8 flex items-center shadow-xs border-[var(--brand-color)] rounded-lg text-textBrand ", href_ connectUrl] "Connect"
 
 

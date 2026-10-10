@@ -62,10 +62,11 @@ import Network.Wreq.Types (FormParam)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig, PageCtx (..), bodyWrapper, currProject, pageTitle, sessM)
 import Pages.Bots.SlackProgress qualified as Progress
-import Pages.Bots.Utils (BotResponse (..), BotType (..), Channel, authHeader, botEmoji, botReplyPayload, contentTypeHeader, detectReportIntent, getLoadingMessage, imageBlock, installedResponse, mrkdwn, plainTxt, runBotQuery, textBlock, withBotThread)
+import Pages.Bots.Utils (BotEmoji (..), BotResponse (..), BotType (..), Channel, authHeader, botEmoji, botReplyPayload, contentTypeHeader, detectReportIntent, getLoadingMessage, installedResponse, runBotQuery, slackResponse, withBotThread)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget (Widget (..), widgetPngUrl)
 import Pkg.DeriveUtils (UUIDId (..), idFromText)
+import Pkg.Mail (arr, mrkdwn, slackHeader, slackImage, slackSection)
 import Pkg.SlackRateLimit qualified as RateLimit
 import PyF
 import Relude hiding (ask, asks)
@@ -78,6 +79,7 @@ import System.Tracing (forkBackground)
 import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, DB, RespHeaders, addRespHeaders)
 import UnliftIO (timeout, withRunInIO)
 import UnliftIO.Exception (bracket_, catch, finally, throwIO, tryAny)
+import Utils (encodeText)
 import Web.FormUrlEncoded (FromForm, urlDecodeAsForm)
 
 
@@ -285,18 +287,10 @@ slackInteractionsH interaction = do
           Just project -> flip whenLeft_ (logWelcomeMessageFailure inter.channel_id) =<< tryAny (sendSlackWelcomeMessage slackData.botToken inter.channel_id project.title)
       let channelDisplay = if T.null inter.channel_name then "this channel" else "#" <> inter.channel_name
       pure
-        $ AE.object
-          [ "response_type" AE..= ("in_channel" :: Text)
-          , "blocks"
-              AE..= AE.Array
-                ( V.fromList
-                    [ textBlock "header" $ plainTxt (botEmoji "success" <> " Notification channel set")
-                    , textBlock "section" $ mrkdwn ("*" <> channelDisplay <> "* will now receive:")
-                    , textBlock "section" $ mrkdwn ("• " <> botEmoji "error" <> " Error alerts\n• " <> botEmoji "chart" <> " Daily & weekly reports\n• " <> botEmoji "warning" <> " Anomaly detections\n\nYou can also configure channels on the web dashboard.")
-                    ]
-                )
-          , "replace_original" AE..= True
-          , "delete_original" AE..= True
+        $ slackResponse
+          [ slackHeader (botEmoji EmojiSuccess <> " Notification channel set")
+          , slackSection ("*" <> channelDisplay <> "* will now receive:")
+          , slackSection ("• " <> botEmoji EmojiError <> " Error alerts\n• " <> botEmoji EmojiChart <> " Daily & weekly reports\n• " <> botEmoji EmojiWarning <> " Anomaly detections\n\nYou can also configure channels on the web dashboard.")
           ]
 
 
@@ -392,7 +386,7 @@ slackActionsH action = do
       Just a | a.action_id == "widget-select" -> do
         selected <- maybe (throwError err400) (pure . (.value)) a.selected_option
         withWidget selected \_ dashboard title chartUrl ->
-          updateModal context $ selectBlocks dashboard.widgets $ V.singleton $ imageBlock chartUrl title
+          updateModal context $ selectBlocks dashboard.widgets $ V.singleton $ slackImage title Nothing chartUrl
       _ -> pass
     "view_submission" -> do
       selected <- maybe (throwError err400) pure $ slackAction.view.state >>= lookupSelectedValueByKey "widget-select"
@@ -402,13 +396,11 @@ slackActionsH action = do
           $ AE.object
             [ "channel" AE..= context.channelId
             , "blocks"
-                AE..= AE.Array
-                  ( V.fromList
-                      [ textBlock "section" $ mrkdwn $ "<" <> envCfg.hostUrl <> "p/" <> context.projectId.toText <> "/dashboards/" <> did.toText <> "|" <> title <> ">"
-                      , textBlock "section" $ mrkdwn $ "Shared by <@" <> slackAction.user.id <> "> using /dashboard"
-                      , imageBlock chartUrl title
-                      ]
-                  )
+                AE..= arr
+                  [ slackSection $ "<" <> envCfg.hostUrl <> "p/" <> context.projectId.toText <> "/dashboards/" <> did.toText <> "|" <> title <> ">"
+                  , slackSection $ "Shared by <@" <> slackAction.user.id <> "> using /dashboard"
+                  , slackImage title Nothing chartUrl
+                  ]
             ]
     _ -> pass
   pure $ AE.object []
@@ -511,7 +503,7 @@ dashboardSelectBlock selectId heading options =
   AE.object
     [ "type" AE..= "section"
     , "block_id" AE..= selectId
-    , "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= heading]
+    , "text" AE..= mrkdwn heading
     , "accessory"
         AE..= AE.object
           [ "action_id" AE..= selectId
@@ -578,21 +570,12 @@ welcomeBlocks :: Text -> AE.Object
 welcomeBlocks projectTitle =
   AEKM.fromList
     [ "blocks"
-        AE..= AE.Array
-          ( V.fromList
-              [ AE.object
-                  [ "type" AE..= "section"
-                  , "text"
-                      AE..= AE.object
-                        [ "type" AE..= "mrkdwn"
-                        , "text"
-                            AE..= [fmt|🟢 *Monoscope connected!*
+        AE..= arr
+          [ slackSection
+              [fmt|🟢 *Monoscope connected!*
 
 This channel will now receive notifications for *{projectTitle}*.|]
-                        ]
-                  ]
-              ]
-          )
+          ]
     ]
 
 
@@ -829,7 +812,7 @@ processSlackEvent receiptId =
           case kind of
             UserMessage message -> withThreadLock team_id message process
             AppMention message -> withThreadLock team_id message process
-            AppHomeOpened home -> withEventLock ("slack-onboarding:" <> decodeUtf8 (AE.encode ([team_id, home.channel, home.user] :: [Text]))) process
+            AppHomeOpened home -> withEventLock ("slack-onboarding:" <> encodeText ([team_id, home.channel, home.user] :: [Text])) process
             _ -> process
     withThreadLock workspaceId message = withInvestigationLock workspaceId message.channel (fromMaybe message.ts message.thread_ts)
 
@@ -952,7 +935,7 @@ processSlackEvent receiptId =
 
 
 withInvestigationLock :: Text -> Text -> Text -> ATBackgroundCtx () -> ATBackgroundCtx ()
-withInvestigationLock workspace channel thread = withEventLock $ "slack-investigation:" <> decodeUtf8 (AE.encode ([workspace, channel, thread] :: [Text]))
+withInvestigationLock workspace channel thread = withEventLock $ "slack-investigation:" <> encodeText ([workspace, channel, thread] :: [Text])
 
 
 -- | Keep the transaction-scoped lock on one checked-out connection and interrupt
@@ -1074,7 +1057,7 @@ refreshSlackProgress publicationId = do
 
 -- | Search one page per retry so a rate limit does not discard pagination progress.
 -- No match is never treated as proof that Slack rejected the original send.
-reconcileReplyHistory :: (DB es, HTTP :> es, Log.Log :> es) => Text -> AI.AgentAccess -> SlackData -> Investigations.Turn -> Int -> Eff es ()
+reconcileReplyHistory :: (DB es, HTTP :> es, IOE :> es, Log.Log :> es) => Text -> AI.AgentAccess -> SlackData -> Investigations.Turn -> Int -> Eff es ()
 reconcileReplyHistory appId access slackData turn part =
   unless (T.null appId) $ Investigations.loadReplySearch turn part >>= traverse_ \search -> do
     AI.requireAgentAccess access turn.projectId
@@ -1224,7 +1207,7 @@ data SlackPublishedMessage = SlackPublishedMessage
 -- | Poll only committed activity. The thread lock serializes publication and
 -- retries reuse an acknowledged progress message. Progress failure does not
 -- discard a completed investigation answer.
-withInvestigationProgress :: (Concurrent :> es, DB es, HTTP :> es, Log.Log :> es) => SlackData -> AI.AgentAccess -> Eff es () -> Eff es ()
+withInvestigationProgress :: (Concurrent :> es, DB es, HTTP :> es, IOE :> es, Log.Log :> es) => SlackData -> AI.AgentAccess -> Eff es () -> Eff es ()
 withInvestigationProgress slackData access action = case access of
   AI.SlackInvestigationAccess run -> do
     previous <- newIORef Nothing
@@ -1272,7 +1255,7 @@ withInvestigationProgress slackData access action = case access of
 
 -- | Late observations can arrive after the answer receipt is complete. Refresh
 -- that turn directly, checking its original requester's current authorization.
-refreshObservedProgress :: (DB es, HTTP :> es) => Investigations.ProgressTarget -> Text -> Eff es ()
+refreshObservedProgress :: (DB es, HTTP :> es, IOE :> es) => Investigations.ProgressTarget -> Text -> Eff es ()
 refreshObservedProgress target timestamp = do
   AI.requireAgentAccess (AI.SlackAccess target.teamId target.slackUserId target.userId) target.projectId
   slackData <- getProjectSlackData target.projectId
@@ -1379,7 +1362,7 @@ saveAppContext workspaceId event =
 
 -- | Slack navigation context is untrusted input, not project authorization.
 -- Compare event timestamps so a delayed start cannot overwrite newer context.
-saveAssistantContext :: DB es => Text -> SlackAssistantEvent -> Eff es ()
+saveAssistantContext :: (DB es, IOE :> es) => Text -> SlackAssistantEvent -> Eff es ()
 saveAssistantContext workspaceId event = do
   let session = event.assistant_thread
   accepted <-
@@ -1466,7 +1449,7 @@ newtype SlackResponseMetadata = SlackResponseMetadata {next_cursor :: Maybe Text
   deriving anyclass (AE.FromJSON)
 
 
-getChannelMessages :: (DB es, HTTP :> es, Log.Log :> es) => AI.AgentAccess -> Projects.ProjectId -> Text -> Text -> Text -> Text -> Eff es (Maybe [SlackThreadedMessage])
+getChannelMessages :: (DB es, HTTP :> es, IOE :> es, Log.Log :> es) => AI.AgentAccess -> Projects.ProjectId -> Text -> Text -> Text -> Text -> Eff es (Maybe [SlackThreadedMessage])
 getChannelMessages access pid token channelId ts latest = page [] Nothing
   where
     requireAccess = AI.requireAgentAccess access pid

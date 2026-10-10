@@ -129,7 +129,7 @@ authHandler logger env =
       & runTime
       & effToHandler
   where
-    handler :: (DB es, Error ServerError :> es, HTTP :> es, Time :> es, UUIDEff :> es) => Request -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Projects.Session)
+    handler :: (DB es, Error ServerError :> es, HTTP :> es, IOE :> es, Time :> es, UUIDEff :> es) => Request -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Projects.Session)
     handler req = do
       -- Check if basic auth is enabled and try to authenticate
       if env.config.basicAuthEnabled
@@ -164,7 +164,7 @@ authHandler logger env =
           -- Basic auth not enabled, use normal cookie auth
           proceedWithCookieAuth req
 
-    proceedWithCookieAuth :: (DB es, Error ServerError :> es, Time :> es, UUIDEff :> es) => Request -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Projects.Session)
+    proceedWithCookieAuth :: (DB es, Error ServerError :> es, IOE :> es, Time :> es, UUIDEff :> es) => Request -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Projects.Session)
     proceedWithCookieAuth req = do
       -- Check for Bearer session token (used by CLI device auth flow)
       let mbBearerSessionId = do
@@ -337,7 +337,7 @@ effToHandler computation = do
 type ApiKeyAuthContext = AuthHandler Request ApiPrincipal
 
 
-resolveApiKeyProject :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Log :> es) => Text -> Maybe Projects.ProjectId -> Eff es (Maybe Projects.ProjectId)
+resolveApiKeyProject :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, IOE :> es, Log :> es) => Text -> Maybe Projects.ProjectId -> Eff es (Maybe Projects.ProjectId)
 resolveApiKeyProject bearerToken pidM =
   runMaybeT $ MaybeT (ProjectApiKeys.getProjectIdByApiKey token) <|> do
     sessId <- hoistMaybe $ Projects.PersistentSessionId <$> UUID.fromText token

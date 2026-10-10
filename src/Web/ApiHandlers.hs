@@ -712,7 +712,7 @@ apiDashboardBulk pid ba =
 data ShareLinkCreate = ShareLinkCreate
   { eventId :: UUID.UUID
   , eventCreatedAt :: UTCTime
-  , eventType :: Maybe Text
+  , eventType :: Maybe ShareEvents.ShareKind
   }
   deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake ShareLinkCreate
@@ -736,7 +736,7 @@ apiShareLinkCreate pid req = do
   authCtx <- ask @AuthContext
   _ <- notFoundOr "event not found" =<< Telemetry.otelRecordByProjectAndId authCtx.env.enableTimefusionReads pid req.eventCreatedAt req.eventId
   shareId <- UUID.genUUID
-  ShareEvents.createShareLink shareId pid req.eventId (fromMaybe "request" req.eventType) req.eventCreatedAt
+  ShareEvents.createShareLink shareId pid req.eventId (fromMaybe ShareEvents.ShareRequest req.eventType) req.eventCreatedAt
   let url = hostPath authCtx.config.hostUrl $ "share/r/" <> UUID.toText shareId
   pure ShareLinkCreated{id = shareId, url}
 

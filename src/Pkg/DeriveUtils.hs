@@ -61,7 +61,7 @@ import Database.PostgreSQL.Simple.Internal qualified as PGI
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (ToField (..))
 import Database.PostgreSQL.Simple.Types (Query (..))
-import Effectful (IOE, type (:>))
+import Effectful (type (:>))
 import GHC.Records (HasField (getField))
 import GHC.TypeLits (KnownSymbol, Symbol, symbolVal)
 import Hasql.Connection.Settings qualified as HCS
@@ -81,7 +81,7 @@ import System.Directory (doesDirectoryExist, listDirectory)
 import System.IO.Unsafe (unsafePerformIO)
 
 
-type DB es = (Hasql :> es, IOE :> es)
+type DB es = Hasql :> es
 
 
 -- | Newtype wrapper for JSON fields that can handle JSONB, ByteString, and varchar/text columns

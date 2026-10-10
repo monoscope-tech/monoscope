@@ -54,6 +54,7 @@ import Data.Time (UTCTime)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff)
+import Effectful.Exception (throwIO)
 import Hasql.Interpolate qualified as HI
 import Hasql.Transaction.Sessions qualified as TxS
 import Langchain.LLM.Core qualified as LLM
@@ -63,7 +64,6 @@ import OpenAI.V1.Chat.Completions qualified as OpenAIV1
 import Pkg.DeriveUtils (UUIDId)
 import Relude
 import System.Types (DB)
-import UnliftIO.Exception (throwIO)
 
 
 data Scope = Scope

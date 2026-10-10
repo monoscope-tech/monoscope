@@ -285,7 +285,7 @@ describe('server ↔ client service palette contract', () => {
   const serverPalette = (() => {
     const utils = readFileSync(resolve(process.cwd(), '../src/Utils.hs'), 'utf8');
     const block = utils.split('serviceColors ::')[1]?.split('\n\n')[0] ?? '';
-    return [...block.matchAll(/"(bg-[a-z]+-\d+)"/g)].map((m) => m[1]);
+    return [...block.matchAll(/\b(bg-[a-z]+-\d+)\b/g)].map((m) => m[1]);
   })();
 
   test('the server palette was located (guards this test against a refactor)', () => {

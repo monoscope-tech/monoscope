@@ -1,5 +1,6 @@
 module Pages.MonitorsSpec (spec) where
 
+import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors
 import Test.Hspec
 
@@ -39,7 +40,7 @@ alertForm =
     , recipientEmails = ["example.com"]
     , recipientSlacks = []
     , recipientEmailAll = Just True
-    , direction = "down"
+    , direction = Issues.Above
     , alertThreshold = 1
     , warningThreshold = Nothing
     , alertId = Just (UUID.toText alertId)
@@ -97,6 +98,13 @@ spec = sequential $ aroundAll withTestResources do
           monitor.alertThreshold `shouldBe` 1
           monitor.id `shouldBe` QueryMonitorId alertId
         _ -> fail "unexpected response"
+
+    -- The KQL was parsed with fromRight', so an unparseable query crashed the handler
+    -- when the upsert forced the compiled SQL.
+    it "alertUpsert_invalidQuery_rejectedWithoutCrash" \tr -> do
+      let badId = UUID.fromWords 1 2 3 4
+      _ <- testServant tr $ Alerts.alertUpsertPostH testPid alertForm{Alerts.alertId = Just (UUID.toText badId), Alerts.query = "status_code == (("}
+      runQueryEffect tr (queryMonitorById (QueryMonitorId badId)) >>= (`shouldSatisfy` isNothing)
 
     it "monitorRowActions_haveAccessibleNames" \tr -> do
       _ <- testServant tr $ Alerts.alertUpsertPostH testPid alertForm

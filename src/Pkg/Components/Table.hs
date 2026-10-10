@@ -46,10 +46,9 @@ import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
-import NeatInterpolation (text)
-import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), detailsClosedBelowAttr_, emptyState_, facetOption_, facetRail_, facetSection_, keyboardActivateAttr_)
+import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), detailsClosedBelowAttr_, emptyState_, facetOption_, facetRail_, facetSection_, filterInputAttr_, keyboardActivateAttr_, searchInput_)
 import Relude
-import Utils (deleteParam, faSprite_, navTabAttrs, popoverPanel_, popoverTrigger_, toUriStr)
+import Utils (TabStrip (..), deleteParam, faSprite_, navTabAttrs, navTabStrip_, popoverPanel_, popoverTrigger_, toUriStr)
 
 
 -- Core Types
@@ -380,19 +379,12 @@ renderTableRows tr = do
 instance ToHtml TabFilter where
   toHtmlRaw = toHtml
   toHtml tf =
-    div_ [class_ "tabs tabs-box tabs-outline tabs-xs md:tabs-sm items-center"] do
-      let uri = deleteParam "filter" tf.currentURL
-      forM_ tf.options \opt ->
-        a_
-          ( [ href_ $ withQuery uri ("filter=" <> toUriStr opt.name)
-            , role_ "tab"
-            , class_ $ "tab h-auto! " <> if opt.name == tf.current then "tab-active text-textStrong" else ""
-            ]
-              <> navTabAttrs
-          )
-          do
-            span_ $ toHtml opt.name
-            whenJust opt.count \c -> when (c > 0) $ span_ [class_ "absolute top-[1px] -right-[5px] text-textInverse-strong text-xs font-medium rounded-full px-1 bg-fillError-strong"] $ show c
+    navTabStrip_ ViewTabs "Filter" "tabs-xs md:tabs-sm" [(tabLabel opt, withQuery (deleteParam "filter" tf.currentURL) ("filter=" <> toUriStr opt.name), opt.name == tf.current) | opt <- tf.options]
+    where
+      tabLabel :: Monad m => TabFilterOpt -> HtmlT m ()
+      tabLabel opt = do
+        span_ $ toHtml opt.name
+        whenJust opt.count \c -> when (c > 0) $ span_ [class_ "absolute top-[1px] -right-[5px] text-textInverse-strong text-xs font-medium rounded-full px-1 bg-fillError-strong"] $ show c
 
 
 -- Shared bits
@@ -497,7 +489,8 @@ renderTable tbl =
         (Nothing, Just (evt, url)) -> swapSelf url $ evt <> " from:body"
         (Nothing, Nothing) -> []
         where
-          swapSelf url trig = [hxGet_ url, hxTrigger_ trig, hxTarget_ "this", hxSwap_ "outerHTML", hxSelect_ $ "#" <> cid]
+          -- hx-preload off: the body preloads on hover, which would refetch this container.
+          swapSelf url trig = [hxGet_ url, hxTrigger_ trig, hxTarget_ "this", hxSwap_ "outerHTML", hxSelect_ $ "#" <> cid, term "hx-preload" "false"]
    in maybe paddedContent (\cid -> div_ ([class_ "w-full table-refresh", id_ cid] <> refreshAttrs cid) paddedContent) tbl.config.containerId
 
 
@@ -733,13 +726,9 @@ renderToolbar tbl =
 
 renderSearch :: Text -> Text -> SearchMode -> Html ()
 renderSearch elemID searchPlaceholder searchMode =
-  label_ [class_ "input input-sm flex w-full h-9 bg-transparent border border-strokeWeak shadow-none overflow-hidden items-center gap-2"] do
-    faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
-    input_
-      $ [type_ "text", class_ "grow max-md:text-base", placeholder_ searchPlaceholder, Aria.label_ searchPlaceholder]
-      <> case searchMode of
-        ServerSide url -> [name_ "search", id_ "search_box", hxTrigger_ "keyup changed delay:500ms", hxGet_ url, hxTarget_ "#rowsContainer", hxSwap_ "innerHTML", hxIndicator_ "#searchIndicator"]
-        ClientSide -> [term "_" [text|on input show .itemsListItem in #${elemID}_page when its textContent.toLowerCase() contains my value.toLowerCase()|]]
+  searchInput_ "w-full h-9 bg-transparent border-strokeWeak shadow-none" searchPlaceholder case searchMode of
+    ServerSide url -> [name_ "search", id_ "search_box", hxTrigger_ "keyup changed delay:500ms", hxGet_ url, hxTarget_ "#rowsContainer", hxSwap_ "innerHTML", hxIndicator_ "#searchIndicator"]
+    ClientSide -> [filterInputAttr_ $ "#" <> elemID <> "_page .itemsListItem"]
 
 
 renderSortMenu :: SortConfig -> Html ()

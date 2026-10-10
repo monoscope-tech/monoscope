@@ -1,8 +1,5 @@
 {-# LANGUAGE OverloadedRecordDot #-}
 
-{- HLINT ignore "Use unstableNub" -}
-{- HLINT ignore "Use atomicModifyIORef'_" -}
-
 -- | Periodic flush worker for the schema-learning catalog.
 --
 -- Once per shard, every 'flushIntervalSecs', the worker:
@@ -32,7 +29,7 @@ import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HS
 import Data.Time (UTCTime)
 import Data.Vector qualified as V
-import Effectful (Eff, type (:>))
+import Effectful (Eff, IOE, type (:>))
 import Effectful.Time qualified as Time
 import Models.Apis.ApiChanges qualified as ApiChanges
 import Models.Apis.SchemaCatalog qualified as SC
@@ -66,7 +63,7 @@ data FlushResult = FlushResult
 -- so we don't see our own write back as the "prior". Anomaly inserts race-
 -- safely on the @(project_id, target_hash)@ unique index.
 flushDirty
-  :: (DB es, Time.Time :> es)
+  :: (DB es, IOE :> es, Time.Time :> es)
   => IORef SchemaShardState
   -> Eff es FlushResult
 flushDirty ref = do
@@ -287,4 +284,4 @@ runSchemaFlusher intervalSecs refs flushOne = forever do
     -- grew past its cap. Without this the entries map grows unboundedly with
     -- every distinct (project, keyHash) the shard has ever seen and eventually
     -- exhausts the heap.
-    atomicModifyIORef' ref \st -> (Hot.evictLRU Hot.defaultPolicy st, ())
+    atomicModifyIORef'_ ref (Hot.evictLRU Hot.defaultPolicy)

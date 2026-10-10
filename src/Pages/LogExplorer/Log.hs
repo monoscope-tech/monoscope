@@ -44,7 +44,7 @@ import Data.List qualified as L
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Vector qualified as V
-import Effectful (Eff, (:>))
+import Effectful (Eff, IOE, (:>))
 import Effectful.Error.Static (Error, throwError)
 import Effectful.Labeled (Labeled)
 import Effectful.Log qualified as ELog
@@ -61,7 +61,6 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
-import Numeric (showFFloat)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, pageActions, pageTitle)
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), VizSurface (..), VizType (..), enrichSchemaWithFacets, logQueryBox_, visTypes)
 import Pkg.Components.TimePicker qualified as Components
@@ -78,7 +77,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Casing (fromAny, toKebab)
 import Text.Megaparsec (parseMaybe)
-import Utils (FieldAction (..), FieldMenuCtx (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, encodeText, explorerNavTabs_, faSprite_, fieldContextMenuItems_, fieldMenuPanel_, getDurationNSMS, getServiceColors, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecBy, lookupVecNonEmptyText, lookupVecTextByKey, methodFillColor, nonEmptyT, popoverTrigger_, prettyPrintCount, sanitizeBackendError, serviceFillColor, statusFillColorText, toUriStr)
+import Utils (FieldAction (..), FieldMenuCtx (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, encodeText, explorerNavTabs_, faSprite_, fieldContextMenuItems_, fieldMenuPanel_, getDurationNSMS, getServiceColors, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecBy, lookupVecNonEmptyText, lookupVecTextByKey, methodFillColor, nonEmptyT, popoverTrigger_, prettyPrintCount, sanitizeBackendError, serviceFillColor, showFFloat', statusFillColorText, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (parseUrlPiece)
 
@@ -99,12 +98,12 @@ import Data.Pool (withResource)
 import Data.Set qualified as S
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
+import Effectful.Exception (trySync)
 import OddJobs.Job (createJob)
 import Pkg.DeriveUtils (CamelSchema (..), SnakeSchema (..))
 import System.Logging qualified as Log
 import System.Tracing (Tracing, withSpan_)
 import Text.Slugify (slugify)
-import UnliftIO.Exception (tryAny)
 
 
 data TraceTreeEntry = TraceTreeEntry
@@ -703,7 +702,7 @@ buildLogResult useTf withChildren pid now sinceM addCols removeCols (requestVecs
 -- | Standalone query function for the v1 API events endpoint. Returns a
 -- JSON-shaped 400 (@{"error": {code, message, field?, suggestion?, details?}}@)
 -- for parse/query errors instead of raw Hasql/SQL.
-queryEvents :: (DB es, ELog.Log :> es, Effectful.Reader.Static.Reader AuthContext :> es, Error Servant.ServerError :> es, Labeled "timefusion" Hasql :> es, Time.Time :> es, Tracing :> es) => Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Bool -> Maybe Bool -> Maybe Text -> Maybe Text -> Eff es LogResult
+queryEvents :: (DB es, ELog.Log :> es, Effectful.Reader.Static.Reader AuthContext :> es, Error Servant.ServerError :> es, IOE :> es, Labeled "timefusion" Hasql :> es, Time.Time :> es, Tracing :> es) => Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Bool -> Maybe Bool -> Maybe Text -> Maybe Text -> Eff es LogResult
 queryEvents pid queryM sinceM fromM toM sourceM limitM withChildrenM includeAttributesM environmentM serviceM = do
   now <- Time.currentTime
   let queryInput = fromMaybe "" queryM
@@ -812,7 +811,7 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
   let effectiveVizType = vizTypeM <|> ((.visualizationType) <$> alertDM)
 
   -- Non-common facets and the Query Library lazy-load through their own HTMX endpoints.
-  freeTierStatusE <- tryAny $ checkFreeTierStatus pid project.paymentPlan
+  freeTierStatusE <- trySync $ checkFreeTierStatus pid project.paymentPlan
 
   -- The initial HTMX facet request used to enqueue this job. Common facets now render
   -- with the page, so preserve the missing-summary recovery without restoring that
@@ -1117,7 +1116,7 @@ logWidgetBase pid =
     , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
     , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
     , Widget.legendPosition = Just "top-right"
-    , Widget.legendSize = Just "xs"
+    , Widget.legendSize = Just Widget.LSXs
     , Widget._projectId = Just pid
     }
 
@@ -1131,7 +1130,6 @@ logChartWidget pid =
     , Widget.unit = Just "rows"
     , Widget.title = Just "All traces"
     , Widget.allowZoom = Just True
-    , Widget.showMarkArea = Just True
     }
 
 
@@ -1159,7 +1157,7 @@ logLatencyWidget pid =
 -- >>> LL.fmtPct1 (-1.25)
 -- "-1.2%"
 fmtPct1 :: Double -> Text
-fmtPct1 x = toText (showFFloat (Just 1) x "") <> "%"
+fmtPct1 x = showFFloat' 1 x <> "%"
 
 
 -- | Shimmer placeholder mirroring 'sessionsHeader_' (6-KPI grid + over-time bar
@@ -1937,23 +1935,7 @@ curateCols addCols removeCols = sortOn rank . filter keep
       "timestamp" -> 1
       "latency_breakdown" -> 3
       _ -> 2 -- sortOn is stable, so ties keep their incoming order
-    hiddenByDefault =
-      [ "trace_id"
-      , "severity_text"
-      , "parent_id"
-      , "errors"
-      , "http_attributes"
-      , "db_attributes"
-      , "rpc_attributes"
-      , "start_time_ns"
-      , "kind"
-      , "span_name"
-      , "status"
-      , "start_time"
-      , "end_time"
-      , "duration"
-      , "body"
-      ]
+    hiddenByDefault = words "trace_id severity_text parent_id errors http_attributes db_attributes rpc_attributes start_time_ns kind span_name status start_time end_time duration body"
 
 
 -- | Render alert configuration form for creating log-based alerts

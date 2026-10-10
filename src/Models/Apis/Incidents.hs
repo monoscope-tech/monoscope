@@ -58,6 +58,7 @@ import Data.Time (UTCTime, addUTCTime)
 import Data.UUID qualified as UUID
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Effectful (Eff)
+import Effectful.Exception (throwIO)
 import Hasql.Interpolate qualified as HI
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
@@ -70,7 +71,6 @@ import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Relude
 import Servant (FromHttpApiData)
 import System.Types (DB)
-import UnliftIO.Exception (throwIO)
 
 
 type EpisodeId = UUIDId "incident_episode"

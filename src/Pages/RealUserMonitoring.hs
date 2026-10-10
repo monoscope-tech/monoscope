@@ -29,6 +29,7 @@ import Data.Default (def)
 import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Fixed (mod')
+import Data.List (lookup)
 import Data.Map.Strict qualified as M
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime, diffUTCTime)
@@ -48,7 +49,7 @@ import Lucid.Htmx (hxGet_, hxIndicator_, hxPushUrl_, hxSelect_, hxSwap_, hxTarge
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.RUM (PageVitalPoint (..), ReplaySession (..), RumBreakdown (..), RumBucket (..), RumCacheKey (..), RumError (..), RumPage (..), RumPulse (..), RumQuery (..), RumQueryResult (..), RumSession (..), SessionFilter (..), VitalEstimate (..), VitalGrouping (..), VitalMeasurement (..), VitalPopulation (..), VitalTrendPoint (..), rumCacheDbKey, rumPanelCacheGetStale, rumPanelCacheSet)
 import Models.Telemetry.RUM qualified as RUM
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
 import Pages.Components (Deferred (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), withDeferredBody)
 import Pages.Components qualified as Components
 import Pkg.Components.Table qualified as Table
@@ -65,7 +66,7 @@ import System.Config (AuthContext (..), EnvConfig (enableTimefusionReads))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import UnliftIO (tryAny, withRunInIO)
-import Utils (classifyUserAgent, countNoun, faSprite_, getDurationNSMS, nonEmptyT, prettyTimeShort, replaceAllFormats, showFFloat', toXXHash)
+import Utils (TabStrip (..), classifyUserAgent, countNoun, faSprite_, getDurationNSMS, kqlQuoted, navTabStrip_, nonEmptyT, prettyTimeShort, replaceAllFormats, showFFloat', toXXHash)
 
 
 data RumTab = Overview | Sessions | Performance
@@ -831,18 +832,7 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
 
 
 rumNavTabs_ :: RumLinks -> RumTab -> Html ()
-rumNavTabs_ links active = nav_ [class_ "tabs tabs-box tabs-outline flex-nowrap items-center", Aria.label_ "Real User Monitoring views", term "hx-preload" "mouseover"] do
-  forM_ [minBound .. maxBound] \tab -> do
-    let url = rumUrl links [("tab", tabParam tab)]
-    a_
-      ( [ href_ url
-        , class_ $ "tab h-auto! whitespace-nowrap" <> bool "" " tab-active text-textStrong" (tab == active)
-        , term "aria-current" $ bool "false" "page" (tab == active)
-        ]
-          <> navTabAttrs
-      )
-      $ toHtml
-      $ tabLabel tab
+rumNavTabs_ links active = navTabStrip_ NavLinks "Real User Monitoring views" "" [(toHtml $ tabLabel tab, rumUrl links [("tab", tabParam tab)], tab == active) | tab <- [minBound .. maxBound]]
 
 
 rumActions_ :: RumLinks -> Html ()
@@ -981,8 +971,8 @@ sessionSearch_ page = form_
 -- empty state pitches installing the browser SDK, which here would tell a user with working
 -- telemetry to re-instrument a working app. The way out is to widen the scope, so that is
 -- what this offers.
-scopedEmptyState_ :: RumLinks -> Text -> Html ()
-scopedEmptyState_ _links name =
+scopedEmptyState_ :: Text -> Html ()
+scopedEmptyState_ name =
   div_ [class_ "mx-auto flex min-h-[40vh] max-w-2xl flex-col justify-center px-6 py-12"]
     $ Components.emptyState_
       def{icon = Just "web", action = ESNone}
@@ -1033,7 +1023,7 @@ pulseOrEmpty_ page
   | Just pulse <- page.pulse = div_ [class_ "space-y-4"] do
       rumStatWidgets_ page.links pulse
       rumActivityWidget_ page.links
-  | otherwise = maybe (rumEmptyState_ page.links.queryScope.projectId) (scopedEmptyState_ page.links) page.links.queryScope.service
+  | otherwise = maybe (rumEmptyState_ page.links.queryScope.projectId) scopedEmptyState_ page.links.queryScope.service
 
 
 pulseSkeleton_ :: Html ()
@@ -1148,7 +1138,7 @@ rumActivityWidget_ links =
         , Widget.standalone = Just True
         , Widget.hideSubtitle = Just True
         , Widget.legendPosition = Just "top-right"
-        , Widget.legendSize = Just "xs"
+        , Widget.legendSize = Just Widget.LSXs
         , Widget.allowZoom = Just True
         }
 
@@ -1308,38 +1298,28 @@ audiencePanel_ breakdown = rumPanel_ "Audience" "Sessions by browser, operating 
   if null breakdown
     then panelEmpty_ "No user agent data in this time range"
     else div_ [class_ "grid grid-cols-3 divide-x divide-strokeWeak max-md:grid-cols-1 max-md:divide-x-0 max-md:divide-y"] do
-      audienceColumn_ "Browser" (Just browserHue) $ audienceBy (\(b, _, _) -> b) breakdown
-      audienceColumn_ "Operating system" (Just osHue) $ audienceBy (\(_, os, _) -> os) breakdown
-      audienceColumn_ "Device" (Just deviceHue) $ audienceBy (\(_, _, d) -> d) breakdown
+      audienceColumn_ "Browser" browserHue $ audienceBy (\(b, _, _) -> b) breakdown
+      audienceColumn_ "Operating system" osHue $ audienceBy (\(_, os, _) -> os) breakdown
+      audienceColumn_ "Device" deviceHue $ audienceBy (\(_, _, d) -> d) breakdown
 
 
 -- | Fixed hues per family, so the colour becomes the recognition cue: Safari is the same
 -- colour on the audience bars, the session rows and every future view.
 osHue :: Text -> Int
-osHue = \case
-  "Windows" -> 230
-  "macOS" -> 261
-  "iOS" -> 300
-  "Android" -> 200
-  "ChromeOS" -> 215
-  "Linux" -> 320
-  _ -> 261
+osHue = fromMaybe 261 . (`lookup` [("Windows", 230), ("macOS", 261), ("iOS", 300), ("Android", 200), ("ChromeOS", 215), ("Linux", 320)])
 
 
 deviceHue :: Text -> Int
-deviceHue = \case
-  "Mobile" -> 200
-  "Tablet" -> 300
-  _ -> 230
+deviceHue = fromMaybe 230 . (`lookup` [("Mobile", 200), ("Tablet", 300)])
 
 
-audienceColumn_ :: Text -> Maybe (Text -> Int) -> [AudienceRow] -> Html ()
-audienceColumn_ title hueM rows = div_ [class_ "min-w-0 px-3 py-2.5"] do
+audienceColumn_ :: Text -> (Text -> Int) -> [AudienceRow] -> Html ()
+audienceColumn_ title hue rows = div_ [class_ "min-w-0 px-3 py-2.5"] do
   h3_ [class_ "text-xs font-medium uppercase tracking-wide text-textWeak"] $ toHtml title
   ul_ [class_ "mt-2 space-y-2"] $ forM_ (take 5 rows) \row -> li_ [class_ "min-w-0"] do
     div_ [class_ "flex items-baseline justify-between gap-2 text-sm"] do
       span_ [class_ "flex min-w-0 items-center gap-1.5"] do
-        forM_ hueM \hue -> span_ [class_ "rum-chip flex h-4 w-4 shrink-0 items-center justify-center rounded text-2xs font-bold", style_ $ "--hue:" <> show (hue row.name), Aria.hidden_ "true"] $ toHtml $ T.take 1 row.name
+        span_ [class_ "rum-chip flex h-4 w-4 shrink-0 items-center justify-center rounded text-2xs font-bold", style_ $ "--hue:" <> show (hue row.name), Aria.hidden_ "true"] $ toHtml $ T.take 1 row.name
         span_ [class_ "truncate font-medium text-textStrong"] $ toHtml row.name
       span_ [class_ "shrink-0 text-xs tabular-nums text-textWeak"] do
         when (row.errors > 0) do
@@ -1347,7 +1327,7 @@ audienceColumn_ title hueM rows = div_ [class_ "min-w-0 px-3 py-2.5"] do
           " · "
         toHtml $ countNoun row.sessions "session"
     div_ [class_ "mt-1 h-1.5 w-full overflow-hidden rounded-full bg-fillWeak", Aria.hidden_ "true"]
-      $ div_ [class_ "rum-bar h-full rounded-full", style_ $ "width:" <> show (share row) <> "%" <> maybe "" (\hue -> ";--hue:" <> show (hue row.name)) hueM] ""
+      $ div_ [class_ "rum-bar h-full rounded-full", style_ $ "width:" <> show (share row) <> "%;--hue:" <> show (hue row.name)] ""
   where
     maxSessions = foldl' max 1 $ map (.sessions) rows
     share row = max 2 $ round @Double @Int $ fromIntegral row.sessions / fromIntegral maxSessions * 100
@@ -1387,11 +1367,10 @@ sessionsSkeleton_ = div_ [class_ "grid bg-bgBase xl:h-full xl:min-h-0 xl:grid-co
 
 sessions_ :: RumData -> Html ()
 sessions_ page = slot_ page PanelSessions sessionsSkeleton_ do
-  let filtered = page.sessions
   div_ [class_ "grid bg-bgBase xl:h-full xl:min-h-0 xl:grid-cols-[minmax(32rem,35%)_minmax(0,1fr)]"] do
     section_ [id_ "rum-sessions-list", Aria.label_ "Sessions", tabindex_ "0", class_ "min-w-0 overflow-y-auto overscroll-contain border-strokeWeak xl:min-h-0 xl:border-e max-xl:max-h-[45svh] max-xl:border-b"] do
       when page.servedStale refreshingHint_
-      if any (\case SessionSearchQuery{} -> True; _ -> False) page.degradedPanels then degradedBanner_ page PanelSessions else sessionsTable_ True page.now page.links page.query page.sessionFilter page.selectedSession filtered
+      if any (\case SessionSearchQuery{} -> True; _ -> False) page.degradedPanels then degradedBanner_ page PanelSessions else sessionsTable_ True page.now page.links page.query page.sessionFilter page.selectedSession page.sessions
       panelRevalidation_ page PanelSessions
     sessionWorkspace_ page
 
@@ -1669,7 +1648,7 @@ vitalTrendPanel_ window points = rumPanel_ "Web Vitals over time" "P75 of interv
             , Widget.hideValue = Just True
             , Widget.warningThreshold = Just vital.goodAt
             , Widget.alertThreshold = Just vital.poorAt
-            , Widget.showThresholdLines = Just "always"
+            , Widget.showThresholdLines = Just Widget.TLAlways
             , Widget.dataset =
                 Just
                   (def :: Widget.WidgetDataset)
@@ -1740,8 +1719,8 @@ pageRoute = T.intercalate "/" . map maskSegment . T.splitOn "/" . T.takeWhile (`
 routeKql :: Text -> Text
 routeKql route
   -- Both spellings, matching 'pagePath': our SDK sets url.path, the browser SDK only url.full.
-  | prefix == route = "(attributes.url.path == " <> kqlValue route <> " or attributes.url.full matches regex " <> kqlValue routeRegex <> ")"
-  | otherwise = "(attributes.url.path startswith " <> kqlValue prefix <> " or attributes.url.full contains " <> kqlValue prefix <> ")"
+  | prefix == route = "(attributes.url.path == " <> kqlQuoted route <> " or attributes.url.full matches regex " <> kqlQuoted routeRegex <> ")"
+  | otherwise = "(attributes.url.path startswith " <> kqlQuoted prefix <> " or attributes.url.full contains " <> kqlQuoted prefix <> ")"
   where
     prefix = fst $ T.breakOn "{" $ fst $ T.breakOn ":id" route
     origin = "[A-Za-z][A-Za-z0-9+.-]*://[^/?#]+"
@@ -1792,7 +1771,7 @@ pageVitalsTable_ links points = rumPanel_ "Web Vitals by page" "Exact page URLs;
       }
   where
     exactPageKql url
-      | "://" `T.isInfixOf` url = "attributes.url.full == " <> kqlValue url
+      | "://" `T.isInfixOf` url = "attributes.url.full == " <> kqlQuoted url
       | otherwise = routeKql url
     vitalCell :: Vital -> M.Map Text VitalMeasurement -> Html ()
     vitalCell vital byVital = case M.lookup vital.name byVital of
@@ -1907,14 +1886,7 @@ sessionAvatar_ session
 -- | One coloured letter per browser family, fixed per family so the colour itself becomes
 -- the recognition cue across rows.
 browserHue :: Text -> Int
-browserHue = \case
-  "Chrome" -> 230
-  "Safari" -> 205
-  "Firefox" -> 340
-  "Edge" -> 195
-  "Opera" -> 330
-  "Samsung Internet" -> 280
-  _ -> 261
+browserHue = fromMaybe 261 . (`lookup` [("Chrome", 230), ("Safari", 205), ("Firefox", 340), ("Edge", 195), ("Opera", 330), ("Samsung Internet", 280)])
 
 
 envChip_ :: Text -> Html ()
@@ -2004,11 +1976,6 @@ scopedKql :: RumLinks -> Text -> Text
 scopedKql links = applyScopedKqlContext links.queryScope
 
 
--- | KQL string literal: backslashes first, then quotes, so a value can't break out of the literal.
-kqlValue :: Text -> Text
-kqlValue value = "\"" <> T.replace "\"" "\\\"" (T.replace "\\" "\\\\" value) <> "\""
-
-
 -- | A RUM URL carrying the scope the page is under. 'TimePicker.windowUrl' URI-encodes each
 -- value, so nothing here may encode first: a pre-encoded KQL query arrives at the Log
 -- Explorer double-escaped (@%2520@ for a space) and parses as one meaningless token.
@@ -2035,7 +2002,7 @@ logsUrl links query =
 
 -- | Log Explorer link for one session's correlated events.
 sessionLogsUrl :: RumLinks -> Text -> Text
-sessionLogsUrl links sid = logsUrl links $ "attributes.session.id == " <> kqlValue sid
+sessionLogsUrl links sid = logsUrl links $ "attributes.session.id == " <> kqlQuoted sid
 
 
 sessionsUrl :: RumLinks -> Maybe Text -> SessionFilter -> Maybe Text -> Text

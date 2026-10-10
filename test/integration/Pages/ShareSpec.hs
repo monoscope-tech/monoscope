@@ -9,9 +9,14 @@ import Data.UUID.V4 (nextRandom)
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Lucid (renderText, toHtml)
+import Models.Apis.ShareEvents qualified as ShareEvents
+import Network.HTTP.Types qualified as H
+import Network.Wai qualified as Wai
+import Network.Wai.Test qualified as WT
 import Pages.Share qualified as Share
 import Pkg.TestUtils
 import Relude
+import System.Server qualified as Server
 import Test.Hspec
 import Web.ApiHandlers qualified as ApiH
 
@@ -23,32 +28,34 @@ spec = around withTestResources do
       apiKey <- createTestAPIKey tr testPid "shared-event"
       ingestTrace tr apiKey "shared-checkout" frozenTime
       (eventId, eventTime) <- withResource tr.trPool \conn -> do
-        rows <- PGS.query conn
-          [sql|SELECT id, timestamp FROM otel_logs_and_spans
+        rows <-
+          PGS.query
+            conn
+            [sql|SELECT id, timestamp FROM otel_logs_and_spans
                WHERE project_id = ? AND name = 'shared-checkout'
                ORDER BY timestamp DESC LIMIT 1|]
-          (PGS.Only testPid)
+            (PGS.Only testPid)
         maybe (fail "the shared event was not ingested") pure $ listToMaybe rows
 
       missingEventId <- nextRandom
       beforeInvalid <- countShares tr
-      void $ try @SomeException $ testServant tr $ Share.shareLinkPostH testPid missingEventId eventTime (Just "request")
+      void $ try @SomeException $ testServant tr $ Share.shareLinkPostH testPid missingEventId eventTime (Just ShareEvents.ShareRequest)
       afterInvalid <- countShares tr
       afterInvalid `shouldBe` beforeInvalid
 
-      runAsBase tr (ApiH.apiShareLinkCreate testPid ApiH.ShareLinkCreate{ApiH.eventId = missingEventId, ApiH.eventCreatedAt = eventTime, ApiH.eventType = Just "log"})
+      runAsBase tr (ApiH.apiShareLinkCreate testPid ApiH.ShareLinkCreate{ApiH.eventId = missingEventId, ApiH.eventCreatedAt = eventTime, ApiH.eventType = Just ShareEvents.ShareLog})
         `shouldThrow` anyException
       afterInvalidApi <- countShares tr
       afterInvalidApi `shouldBe` beforeInvalid
 
-      (_, Share.ShareLinkPost shareIdText) <- testServant tr $ Share.shareLinkPostH testPid eventId eventTime (Just "request")
+      (_, Share.ShareLinkPost shareIdText) <- testServant tr $ Share.shareLinkPostH testPid eventId eventTime (Just ShareEvents.ShareRequest)
       shareId <- maybe (fail "the share ID was invalid") pure $ UUID.fromText shareIdText
       live <- runAsBase tr $ Share.shareLinkGetH shareId
       let liveHtml = TL.toStrict $ renderText $ toHtml live
       liveHtml `shouldSatisfy` T.isInfixOf "shared-checkout"
       liveHtml `shouldSatisfy` T.isInfixOf "Expires in"
 
-      apiShare <- runAsBase tr $ ApiH.apiShareLinkCreate testPid ApiH.ShareLinkCreate{ApiH.eventId = eventId, ApiH.eventCreatedAt = eventTime, ApiH.eventType = Just "log"}
+      apiShare <- runAsBase tr $ ApiH.apiShareLinkCreate testPid ApiH.ShareLinkCreate{ApiH.eventId = eventId, ApiH.eventCreatedAt = eventTime, ApiH.eventType = Just ShareEvents.ShareLog}
       apiLive <- runAsBase tr $ Share.shareLinkGetH apiShare.id
       TL.toStrict (renderText $ toHtml apiLive) `shouldSatisfy` T.isInfixOf "shared-checkout"
 
@@ -59,6 +66,12 @@ spec = around withTestResources do
       let expiredHtml = TL.toStrict $ renderText $ toHtml expired
       expiredHtml `shouldSatisfy` T.isInfixOf "Link expired"
       expiredHtml `shouldSatisfy` not . T.isInfixOf "shared-checkout"
+
+    -- A 404 thrown as an IO exception skipped the handler's Error ServerError channel.
+    it "shareReplaySession_unknownShare_returns404" \tr -> do
+      path <- (\a b -> "/share/r/" <> UUID.toASCIIBytes a <> "/replay_session/" <> UUID.toASCIIBytes b) <$> nextRandom <*> nextRandom
+      resp <- WT.runSession (WT.srequest $ WT.SRequest (WT.setPath Wai.defaultRequest path) "") (Server.mkServer tr.trLogger tr.trATCtx tr.trTracerProvider)
+      H.statusCode resp.simpleStatus `shouldBe` 404
 
 
 countShares :: TestResources -> IO Int

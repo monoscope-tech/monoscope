@@ -39,7 +39,7 @@ import Relude
 import Relude.Extra.Tuple (dup)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (drawerLoadAttrs_, drawerRowAttrs_, faSprite_, formatBytes, infrastructureNavTabs_, showFFloat')
+import Utils (TabStrip (..), drawerLoadAttrs_, drawerRowAttrs_, faSprite_, formatBytes, infrastructureNavTabs_, navTabStrip_, showFFloat')
 
 
 infraUrl :: Projects.ProjectId -> Text -> [(Text, Text)] -> TimePicker.TimeWindow -> Text
@@ -703,8 +703,7 @@ kubernetesTable pid window url resource clusterM namespaceM statusM rows allRows
 
 kubeResourceNav :: Projects.ProjectId -> TimePicker.TimeWindow -> KubeResource -> Html ()
 kubeResourceNav pid window current =
-  div_ [class_ "tabs tabs-box tabs-outline tabs-sm mx-3 w-fit", role_ "tablist", Aria.label_ "Kubernetes resource"] $ forM_ [minBound ..] \resource ->
-    a_ ([href_ $ infraUrl pid "/infrastructure/kubernetes" [("resource", kubeResourceParam resource)] window, role_ "tab", class_ $ "tab" <> bool "" " tab-active" (resource == current)] <> navTabAttrs) $ toHtml $ resourceLabel resource <> "s"
+  navTabStrip_ ViewTabs "Kubernetes resource" "tabs-sm mx-3 w-fit" [(toHtml $ resourceLabel resource <> "s", infraUrl pid "/infrastructure/kubernetes" [("resource", kubeResourceParam resource)] window, resource == current) | resource <- [minBound ..]]
 
 
 kubeDetailUrl :: Projects.ProjectId -> TimePicker.TimeWindow -> KubeResource -> KubeRow -> Text

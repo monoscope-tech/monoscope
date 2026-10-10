@@ -163,10 +163,10 @@ coalesceQuery (QueryFlights flights) key action = E.mask \restore -> do
 
 -- | Every leader looks up the durable cache inside its flight and stores before
 -- releasing it. Cache failures fall through to the backend, never to stale data.
-cachedRawQuery :: DB es => RawQueryFlights -> UTCTime -> RawCacheKey -> Eff es MetricsData -> Eff es MetricsData
+cachedRawQuery :: (DB es, IOE :> es) => RawQueryFlights -> UTCTime -> RawCacheKey -> Eff es MetricsData -> Eff es MetricsData
 cachedRawQuery flights now key fetch = do
   started <- liftIO getMonotonicTime
-  let backend = [("backend", OA.toAttribute $ Hasql.sqlSourceParam key.backend)]
+  let backend = [("backend", OA.toAttribute $ display key.backend)]
       finish outcome value = do
         ended <- liftIO getMonotonicTime
         let attrs = ("outcome", OA.toAttribute outcome) : backend
@@ -230,7 +230,7 @@ lookupRawCache now key = do
 
 -- | Bound both staleness and entry size. The timestamp is the query snapshot,
 -- not completion time, so a slow query cannot renew old data for another minute.
-updateRawCache :: DB es => UTCTime -> RawCacheKey -> MetricsData -> Eff es ()
+updateRawCache :: (DB es, IOE :> es) => UTCTime -> RawCacheKey -> MetricsData -> Eff es ()
 updateRawCache now key value
   | isJust value.error = pass
   | LBS.length (AE.encode value) > 1048576 = Metrics.bump Metrics.endpointCacheOversized []

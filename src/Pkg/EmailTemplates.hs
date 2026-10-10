@@ -51,8 +51,7 @@ module Pkg.EmailTemplates (
 import Data.Default (def)
 import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
-import Data.Time (UTCTime (..), addUTCTime, formatTime, fromGregorian)
-import Data.Time.Format (defaultTimeLocale)
+import Data.Time (UTCTime (..), addUTCTime, fromGregorian)
 import Data.Vector qualified as V
 import Lucid
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
@@ -60,7 +59,7 @@ import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Report qualified as Report
 import Relude
-import Utils (formatWithCommas, isoT, kqlQuoted, showFFloat', toUriStr)
+import Utils (fmtDate, formatWithCommas, isoT, kqlQuoted, nonEmptyT, showFFloat', toUriStr)
 
 
 -- | One row in a new-endpoint alert. @label@ is "METHOD /path"; @host@ is the
@@ -553,7 +552,7 @@ errorCard projectUrl errorsUrl chartUrlM e =
       $ p_ [class_ "error-card-meta", style_ "margin: 0; line-height: 1.6;"]
       $ do
         let routeText = T.strip $ fromMaybe "" e.requestMethod <> " " <> fromMaybe "" e.requestPath
-            ctxMeta = filter (/= "") [fromMaybe "" e.serviceName, fromMaybe "" e.environment, toText $ formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M %p" e.when]
+            ctxMeta = filter (/= "") [fromMaybe "" e.serviceName, fromMaybe "" e.environment, fmtDate "%b %-e, %Y, %-l:%M %p" e.when]
         mconcat
           $ intersperse (span_ [style_ "color: #c0c5cc; padding: 0 6px;"] "\183")
           $ [span_ [class_ "monoscope-code", style_ "font-size: 12px;"] $ toHtml routeText | routeText /= ""]
@@ -566,7 +565,7 @@ errorCard projectUrl errorsUrl chartUrlM e =
         $ a_ [href_ (projectUrl <> "/issues/by_hash/" <> e.hash), style_ linkStyle]
         $ toHtml @Text ("View full stack trace (" <> show (length traceLines) <> " lines) \8594")
     -- Mirrors Slack's "View trace" button: jumps to Log Explorer scoped to this trace id.
-    whenJust (e.traceId >>= guarded (not . T.null)) \tid ->
+    whenJust (nonEmptyT e.traceId) \tid ->
       tr_
         $ td_ [style_ "padding: 0 0 12px 0;"]
         $ p_ [style_ "margin: 0; font-size: 12px;"]
@@ -788,7 +787,7 @@ weeklyReportEmail d =
                 forM_ (reportRows 5 issues.priorities) $ \i ->
                   reportItem
                     (d.projectUrl <> "/issues/" <> i.id)
-                    (reportClip 180 $ stripSummaryBadges i.title)
+                    (truncateText 180 $ stripSummaryBadges i.title)
                     (T.intercalate " · " $ i.severity : maybeToList i.service)
                     [("Category", T.replace "_" " " i.issueType, ""), ("Affected requests", reportCount i.affectedRequests, "Recorded issue total")]
                 when (issues.openIssues > fromIntegral (length $ reportRows 5 issues.priorities)) $ reportMore (d.projectUrl <> "/issues") (fromIntegral issues.openIssues - length (reportRows 5 issues.priorities)) "unacknowledged issues"
@@ -800,7 +799,7 @@ weeklyReportEmail d =
                 forM_ (reportRows 4 monitors.observations) $ \m ->
                   reportItem
                     (d.projectUrl <> "/monitors/" <> m.id <> "/overview")
-                    (reportClip 120 m.title)
+                    (truncateText 120 m.title)
                     m.status
                     [("Last value", maybe "Not evaluated" reportDecimal m.value, maybe "No evaluation recorded" (\t -> "Evaluated " <> reportTime t <> " UTC") m.lastEvaluated)]
                 when (not d.fullReport && length monitors.observations > 4) $ reportMore (d.projectUrl <> "/monitors") (length monitors.observations - 4) "monitors"
@@ -808,7 +807,7 @@ weeklyReportEmail d =
           unless (V.null historical.anomalies)
             $ reportSection "Recorded issues" "Issues retained in this historical report."
             $ do
-              forM_ (reportRows 10 $ V.toList historical.anomalies) $ \i -> reportItem (d.projectUrl <> "/issues/" <> i.id.toText) (reportClip 180 $ stripSummaryBadges i.title) "" []
+              forM_ (reportRows 10 $ V.toList historical.anomalies) $ \i -> reportItem (d.projectUrl <> "/issues/" <> i.id.toText) (truncateText 180 $ stripSummaryBadges i.title) "" []
               reportViewAll (d.projectUrl <> "/issues") "issues"
         case d.evidence of
           SystemEvidence snapshot -> do
@@ -820,7 +819,7 @@ weeklyReportEmail d =
                   let e = comparison.current
                   reportItem
                     (queryUrl $ serviceFilter e.service e.environment <> endpointHostFilter e.host <> " and kind == \"server\" and attributes.http.request.method == " <> kqlQuoted e.method <> " and attributes.url.path == " <> kqlQuoted e.path)
-                    (e.method <> " " <> reportClip 140 e.path)
+                    (e.method <> " " <> truncateText 140 e.path)
                     (T.intercalate " · " $ catMaybes [e.service, e.environment, Just e.host])
                     [("Requests", reportCount e.requests, "Server spans"), ("Avg duration", maybe "Not measured" reportMs e.averageMs, reportChange e.averageMs (comparison.previous >>= (.averageMs)))]
                 when (not d.fullReport && length rows > 5) $ reportMore d.reportUrl (length rows - 5) "endpoints"
@@ -831,7 +830,7 @@ weeklyReportEmail d =
                 forM_ (reportRows 4 rows) $ \q ->
                   reportItem
                     (queryUrl $ servicePredicate q.service <> if T.length q.statement <= 512 then " and attributes.db.query.text == " <> kqlQuoted q.statement else " and duration > 500000000")
-                    (reportClip 180 q.statement)
+                    (truncateText 180 q.statement)
                     (fromMaybe "Unnamed service" q.service)
                     [("Avg duration", reportMs q.averageMs, ""), ("Operations", reportCount q.operations, "Recorded spans")]
                 when (not d.fullReport && length rows > 4) $ reportMore d.reportUrl (length rows - 4) "slow queries"
@@ -853,7 +852,7 @@ weeklyReportEmail d =
               forM_ (reportRows 8 $ V.toList historical.performance) $ \(host, method, path, durationNs, change, count, _) ->
                 reportItem
                   (d.projectUrl <> "/log_explorer" <> windowQuery)
-                  (method <> " " <> reportClip 140 path)
+                  (method <> " " <> truncateText 140 path)
                   host
                   [("Operations", reportCount count, "HTTP spans"), ("Avg duration", reportMs (fromIntegral durationNs / 1000000), ""), ("Change", reportDecimal change <> "%", "Versus previous period")]
               reportViewAll (queryUrl "attributes.http.request.method != null") "endpoints"
@@ -862,7 +861,7 @@ weeklyReportEmail d =
               forM_ (reportRows 4 $ V.toList historical.slowQueries) $ \(statement, durationNs, count) ->
                 reportItem
                   (d.projectUrl <> "/log_explorer" <> windowQuery)
-                  (reportClip 180 statement)
+                  (truncateText 180 statement)
                   ""
                   [("Avg duration", reportMs (fromIntegral durationNs / 1000000), ""), ("Operations", reportCount $ fromIntegral count, "Recorded spans")]
               reportViewAll (queryUrl "attributes.db.query.text != null and duration > 500000000") "slow queries"
@@ -870,7 +869,7 @@ weeklyReportEmail d =
         unless (V.null topPatterns)
           $ reportSection "Log patterns" "Most frequent stored patterns. Counts are lifetime totals, not limited to this reporting period."
           $ do
-            forM_ (reportRows 5 $ V.toList topPatterns) $ \(patternText, count, source) -> reportItem (d.projectUrl <> "/log_explorer" <> windowQuery) (reportClip 180 $ stripSummaryBadges patternText) source [("Occurrences", reportCount count, "Lifetime total")]
+            forM_ (reportRows 5 $ V.toList topPatterns) $ \(patternText, count, source) -> reportItem (d.projectUrl <> "/log_explorer" <> windowQuery) (truncateText 180 $ stripSummaryBadges patternText) source [("Occurrences", reportCount count, "Lifetime total")]
             reportViewAll (d.projectUrl <> "/log_explorer" <> windowQuery) "log patterns"
         reportSection "Activity trends" "Charts are supplemental; the measured totals are above." do
           forM_ systemSnapshot $ \snapshot -> when (snapshot.trends == Just Report.Unavailable) $ reportNotice "Activity trends unavailable" "This section could not be loaded for the report."
@@ -952,8 +951,8 @@ reportMetrics metrics = unless (null metrics)
 
 reportItem :: Text -> Text -> Text -> [(Text, Text, Text)] -> Html ()
 reportItem url title detail metrics = table_ [width_ "100%", role_ "presentation", cellpadding_ "0", cellspacing_ "0", class_ "report-item", style_ "border-bottom:1px solid #dee2e7;"] $ tr_ $ td_ [style_ "padding:12px 0;"] do
-  p_ [style_ "font-size:14px;font-weight:600;line-height:1.5;margin:0 0 3px;overflow-wrap:anywhere;word-break:break-word;"] $ a_ [target_ "_top", href_ url] $ toHtml $ reportClip 240 title
-  unless (T.null detail) $ reportNote $ reportClip 320 detail
+  p_ [style_ "font-size:14px;font-weight:600;line-height:1.5;margin:0 0 3px;overflow-wrap:anywhere;word-break:break-word;"] $ a_ [target_ "_top", href_ url] $ toHtml $ truncateText 240 title
+  unless (T.null detail) $ reportNote $ truncateText 320 detail
   reportMetrics metrics
 
 
@@ -985,12 +984,8 @@ reportChange current previous = case (current, previous) of
   (Just c, Just p) -> let change = 100 * (c - p) / p in (if change > 0 then "+" else "") <> reportDecimal change <> "% vs previous"
 
 
-reportClip :: Int -> Text -> Text
-reportClip n value = if T.length value > n then T.take n value <> "…" else value
-
-
 reportTime :: UTCTime -> Text
-reportTime = toText . formatTime defaultTimeLocale "%d %b %H:%M"
+reportTime = fmtDate "%d %b %H:%M"
 
 
 chartBlock :: Text -> Text -> Html ()

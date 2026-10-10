@@ -54,6 +54,7 @@ import GHC.Records (HasField (getField))
 import Hasql.Interpolate qualified as HI
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
+import Language.Haskell.TH.Syntax qualified as THS
 import Models.Projects.Activation qualified as Activation
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
@@ -77,9 +78,9 @@ data MeasurementFailure = NoMeasurements | NonFiniteMeasurements | EvaluationFai
 
 
 data MonitorStatus = MSNormal | MSWarning | MSAlerting
-  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show, THS.Lift)
   deriving anyclass (Default, NFData)
-  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC 'Nothing "MS" MonitorStatus
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC 'Nothing "MS" MonitorStatus
 
 
 -- | The first completed evaluation at a timestamp is immutable. Retries must

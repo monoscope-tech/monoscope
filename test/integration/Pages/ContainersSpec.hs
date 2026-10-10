@@ -4,6 +4,7 @@
 module Pages.ContainersSpec (spec) where
 
 import Data.Cache qualified as Cache
+import Data.Effectful.Hasql qualified as Hasql
 import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as LT
@@ -464,7 +465,7 @@ spec = sequential $ aroundAll withTfChartResources do
         ingestSpanReq tr $ mkSpanRequest (T.justifyRight 32 '0' $ show index) (T.justifyRight 16 '0' $ show index) Nothing "kubernetes event" [] Nothing [] (mkResource key resource) timestamp
       forM_ ([("clusters", clusterUid, Nothing, 2), ("pods", "same-pod", Just "scope-a", 1)] :: [(Text, Text, Maybe Text, Double)]) \(resource, name, namespace, expected) -> do
         html <- shellHtml tr $ Infrastructure.kubernetesDetailGetH testPid (Just resource) (Just name) (Just clusterUid) namespace Nothing Nothing (Just "3H")
-        logLinkCount tr testPid (Just "postgres") html `shouldReturn` Just expected
+        logLinkCount tr testPid (Just Hasql.SqlPostgres) html `shouldReturn` Just expected
 
     it "kubernetesContainerDrilldown_sameNamespaceDoesNotIncludeOtherClusters" \tr -> do
       pid <- createTestProject tr "kubernetes-container-drilldown"

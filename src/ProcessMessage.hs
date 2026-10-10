@@ -1,10 +1,9 @@
 {-# LANGUAGE StrictData #-}
-{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
 -- processMessages uses @pure $!@ to force the (ackId, raw, span) tuple to
 -- WHNF immediately, preventing thunk accumulation across forM. hlint flags
 -- it as "Redundant $!" but it's load-bearing here.
-{-# HLINT ignore "Redundant $!" #-}
+{- HLINT ignore "Redundant $!" -}
 
 module ProcessMessage (
   processMessages,
@@ -93,7 +92,7 @@ import Utils (b64ToJson, freeTierDailyMaxEvents, jsonToMap, nestedJsonFromDotNot
 
 
 processMessages
-  :: (DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Tracing :> es)
+  :: (DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Tracing :> es)
   => [(Text, ByteString)]
   -> HM.HashMap Text Text
   -> Eff es (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))
@@ -116,7 +115,7 @@ processMessages msgs attrs =
           projectCaches <-
             liftIO $ HM.fromList <$> forM (ordNub $ (\(_, _, m) -> UUIDId m.projectId) <$> rMsgs) \pid ->
               (pid,)
-                <$> Cache.fetchWithCache appCtx.projectCache pid (fmap (fromMaybe Projects.defaultProjectCache) . Projects.projectCacheByIdIO appCtx.hasqlJobsPool)
+                <$> Cache.fetchWithCache appCtx.projectCache pid (Projects.projectCacheByIdIO appCtx.hasqlJobsPool)
 
           -- Track (ackId, raw) alongside each emitted span so we can map any
           -- per-row write poison back to the source message for DLQ routing.

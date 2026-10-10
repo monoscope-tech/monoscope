@@ -68,7 +68,7 @@ import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (ToField)
-import Effectful (Eff, type (:>))
+import Effectful (Eff, IOE, type (:>))
 import Effectful.Log (Log)
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
@@ -133,7 +133,7 @@ data CreateProjectMembers = CreateProjectMembers
 -- | Insert members and sync their (lower-cased) emails into each project's @everyone
 -- team in one CTE — @everyone.notify_emails is the alert audience (see resolveTeamEmails),
 -- so a missed sync silently mutes the new member.
-insertProjectMembers :: (DB es, Log :> es) => [CreateProjectMembers] -> Eff es Int64
+insertProjectMembers :: (DB es, IOE :> es, Log :> es) => [CreateProjectMembers] -> Eff es Int64
 insertProjectMembers [] = pure 0
 insertProjectMembers members = do
   let pids = map (.projectId) members
@@ -484,7 +484,7 @@ teamToDetails t = TeamDetails{name = t.name, description = t.description, handle
 -- missing we log attention rather than silently no-opping — callers of the
 -- dependents (disconnect handlers, onboarding, integrations save) assume the
 -- write succeeded and surface a success toast; silence here hides real bugs.
-modifyEveryoneTeamDetails :: (DB es, Log :> es) => Projects.ProjectId -> (TeamDetails -> TeamDetails) -> Eff es ()
+modifyEveryoneTeamDetails :: (DB es, IOE :> es, Log :> es) => Projects.ProjectId -> (TeamDetails -> TeamDetails) -> Eff es ()
 modifyEveryoneTeamDetails pid f =
   getEveryoneTeam pid
     >>= maybe
@@ -521,14 +521,14 @@ addPagerdutyServiceToEveryoneTeam = appendEveryoneTarget [HI.sql|pagerduty_servi
 
 removeSlackChannelsFromEveryoneTeam
   , removePagerdutyServicesFromEveryoneTeam
-    :: (DB es, Log :> es) => Projects.ProjectId -> Eff es ()
+    :: (DB es, IOE :> es, Log :> es) => Projects.ProjectId -> Eff es ()
 removeSlackChannelsFromEveryoneTeam pid = modifyEveryoneTeamDetails pid \d -> d{slackChannels = mempty}
 removePagerdutyServicesFromEveryoneTeam pid = modifyEveryoneTeamDetails pid \d -> d{pagerdutyServices = mempty}
 
 
 setEveryoneTeamEmails
   , setEveryoneTeamPhones
-    :: (DB es, Log :> es) => Projects.ProjectId -> V.Vector Text -> Eff es ()
+    :: (DB es, IOE :> es, Log :> es) => Projects.ProjectId -> V.Vector Text -> Eff es ()
 setEveryoneTeamEmails pid v = modifyEveryoneTeamDetails pid \d -> d{notifyEmails = v}
 setEveryoneTeamPhones pid v = modifyEveryoneTeamDetails pid \d -> d{phoneNumbers = v}
 

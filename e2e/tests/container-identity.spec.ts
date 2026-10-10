@@ -24,6 +24,18 @@ test.afterAll(() => {
 
 test.describe.configure({ mode: "serial" });
 
+test("refresh selections initialize when the reactive extension loads late", async ({ page }) => {
+  test.skip(!process.env.E2E_BASE_URL, "Requires a disposable fixture database");
+  await page.route("**/hx-live-4*.js", async route => {
+    await page.waitForFunction(() => !!(window as any).htmx);
+    await page.waitForTimeout(250);
+    await route.continue();
+  });
+  await page.goto(`/p/${DEMO_PROJECT}/infrastructure/containers?since=5M`, { waitUntil: "domcontentloaded" });
+  await page.locator('[data-live-data-trigger]').click();
+  await expect(page.getByRole("button", { name: "15 seconds", exact: true })).toHaveAttribute("aria-pressed", "true");
+});
+
 test("navbar refresh menu applies Off and interval options", async ({ page }) => {
   test.skip(!process.env.E2E_BASE_URL, "Requires a disposable fixture database");
   for (const width of [390, 1440]) {
@@ -77,7 +89,7 @@ test("changing the container time preset refreshes inventory and drawer windows"
       const params = new URL(row.getAttribute("data-hx-get")!, location.origin).searchParams;
       return params.get("since") === "1H" && params.get("namespace") === "e2e-container-preset" && params.get("cluster") === "8b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d";
     }))).toBe(true);
-    const search = page.getByRole("textbox", { name: "Search containers", exact: true });
+    const search = page.getByRole("searchbox", { name: "Search containers", exact: true });
     await search.fill("preset-600");
     await expect(page.locator('#containersContainer tr[role="button"]:visible')).toHaveCount(1);
     for (const [preset, count] of [["5M", 1], ["1H", 2]] as const) {

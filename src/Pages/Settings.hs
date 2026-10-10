@@ -67,7 +67,7 @@ import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Notify qualified as Notify
 import Data.List (lookup)
 import Data.Text qualified as T
-import Data.Time (Day, UTCTime (..), addDays, addUTCTime, diffUTCTime, getZonedTime)
+import Data.Time (Day, UTCTime (..), addDays, addUTCTime, diffUTCTime, utc, utcToZonedTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
@@ -82,8 +82,10 @@ import BackgroundJobs (errorTrendChartUrl)
 import BackgroundJobs qualified as BJ
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
+import Data.Effectful.UUID qualified as UUIDEff
 import Data.Effectful.Wreq qualified as W
 import Data.Text.Display (Display, display)
+import Effectful.Exception (throwIO, try, trySync)
 import Effectful.Reader.Static (ask, asks)
 import Effectful.Time qualified as Time
 import Fmt (commaizeF, fmt)
@@ -103,7 +105,7 @@ import Network.Minio qualified as Minio
 import Network.URI (parseURI, uriAuthority, uriRegName, uriScheme)
 import Network.Wreq qualified as Wreq
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, settingsContentTarget, withSettingsPage)
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), confirmModal_, connectionBadge_, copySourceAttr_, emptyState_, filterInputAttr_, formField_, headerRow_, iconBadgeLg_, keyboardActivateAttr_, localTimeFmt_, modalWith_, options_, paymentPlanPicker, sectionLabel_, settingsH2_, settingsSection_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), confirmModal_, connectionBadge_, copySourceAttr_, emptyState_, filterInputAttr_, formActionsModal_, formField_, headerRow_, iconBadgeLg_, keyboardActivateAttr_, localTimeFmt_, modalWith_, options_, paymentPlanPicker, searchInput_, sectionLabel_, settingsH2_, settingsSection_)
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Pkg.EmailTemplates qualified as ET
@@ -114,8 +116,7 @@ import Servant (FromHttpApiData (..), err400, errBody)
 import System.Config
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Text.Printf (printf)
-import UnliftIO.Exception (throwIO, try, tryAny)
-import Utils (LoadingSize (..), calculateCycleStartDate, faSprite_, fmtDate, formatBytes, htmxIndicator_)
+import Utils (LoadingSize (..), calculateCycleStartDate, countNoun, faSprite_, fmtDate, formatBytes, htmxIndicator_)
 import Web.FormUrlEncoded (FromForm)
 import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
@@ -163,7 +164,7 @@ brings3PostH :: Projects.ProjectId -> Projects.ProjectS3Bucket -> ATAuthCtx (Res
 brings3PostH pid s3Form = do
   let connectInfo = getMinioConnectInfo s3Form.accessKey s3Form.secretKey s3Form.region s3Form.endpointUrl
   res <- liftIO $ Minio.runMinio connectInfo $ Minio.bucketExists s3Form.bucket
-  let notConnected msg = addErrorToast msg Nothing >> addRespHeaders (connectionBadge_ "Not connected")
+  let notConnected msg = addErrorToast msg Nothing >> addRespHeaders (connectionBadge_ False)
   case res of
     Left err -> notConnected $ humanizeMinioErr err
     Right False -> notConnected "Bucket does not exist"
@@ -172,7 +173,7 @@ brings3PostH pid s3Form = do
       sess <- Projects.getSession
       Projects.logAuditS pid Projects.AES3Configured sess Nothing
       addSuccessToast "Connected successfully" Nothing
-      addRespHeaders $ connectionBadge_ "Connected"
+      addRespHeaders $ connectionBadge_ True
 
 
 brings3RemoveH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
@@ -181,7 +182,7 @@ brings3RemoveH pid = do
   void $ Projects.updateProjectS3Bucket pid Nothing
   Projects.logAuditS pid Projects.AES3Removed sess Nothing
   addSuccessToast "Removed S3 bucket" Nothing
-  addRespHeaders $ connectionBadge_ "Not connected"
+  addRespHeaders $ connectionBadge_ False
 
 
 bringS3GetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
@@ -192,7 +193,7 @@ bringS3Page :: Projects.ProjectId -> Maybe Projects.ProjectS3Bucket -> Html ()
 bringS3Page pid s3BucketM = settingsSection_ do
   headerRow_ [] do
     settingsH2_ "S3 Bucket"
-    div_ [id_ "connectedInd"] $ connectionBadge_ $ bool "Not connected" "Connected" (isJust s3BucketM)
+    div_ [id_ "connectedInd"] $ connectionBadge_ (isJust s3BucketM)
 
   form_ [class_ "space-y-4", hxPost_ "", hxSwap_ "innerHTML", hxTarget_ "#connectedInd", hxIndicator_ "#indicator"] do
     div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2"] do
@@ -345,9 +346,7 @@ apiKeysPage pid apiKeys = do
             label_ [Lucid.for_ "api-key-title", class_ "text-sm font-medium text-textStrong"] "Key title"
             input_ [id_ "api-key-title", class_ "input w-full", type_ "text", placeholder_ "Production collector", name_ "title", required_ "true", maxlength_ "100", autocomplete_ "off", Aria.describedby_ "api-key-title-hint"]
             p_ [id_ "api-key-title-hint", class_ "text-xs text-textWeak"] "Name it after the service or environment that uses it."
-          div_ [class_ "flex justify-end gap-2"] do
-            label_ [class_ "btn btn-sm btn-ghost", Lucid.for_ "apikey-modal"] "Cancel"
-            button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Create key"
+          formActionsModal_ "apikey-modal" $ button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Create key"
     apiMainContent pid apiKeys Nothing
 
 
@@ -631,7 +630,7 @@ prometheusTestH pid form = do
     Right url -> do
       let opts = PromCfg.prometheusScrapeOpts (mfilter (not . T.null) (T.strip <$> form.authHeader))
       t0 <- Time.currentTime
-      res <- tryAny (W.getWith opts (toString url))
+      res <- trySync (W.getWith opts (toString url))
       t1 <- Time.currentTime
       let ms = round (realToFrac (diffUTCTime t1 t0) * 1000 :: Double) :: Int
       addRespHeaders $ prometheusTestResult $ Just $ case res of
@@ -710,9 +709,7 @@ promTargetModal_ pid trigger mcfg =
         let cur = maybe 60 (.scrapeIntervalSeconds) mcfg
             presets = [(60, "1 minute"), (300, "5 minutes"), (900, "15 minutes"), (3600, "1 hour")] :: [(Int, Text)]
             opts = if any ((== cur) . fst) presets then presets else sortWith fst ((cur, show cur <> "s") : presets)
-        select_ [class_ "select select-bordered w-full", name_ "scrapeInterval"]
-          $ forM_ opts \(v, l) ->
-            option_ ([value_ (show v)] <> [selected_ "selected" | v == cur]) (toHtml l)
+        select_ [class_ "select select-bordered w-full", name_ "scrapeInterval"] $ options_ (Just $ show cur) [(show v, l) | (v, l) <- opts]
       -- Optional fields stay collapsed until needed; auto-expanded when editing a target
       -- that already has them set, so existing values are never hidden behind the toggle.
       let hasAdvanced = maybe False (\c -> isJust c.authHeader || not (T.null (labelsToText c.extraLabels))) mcfg
@@ -775,12 +772,7 @@ prometheusTargetsList pid cfgs = div_ [id_ "prometheus-targets", class_ "mt-4"] 
   if V.null cfgs
     then emptyState_ def{icon = Just "objects-column"} "Scrape your Prometheus endpoints" "Point Monoscope at any /metrics endpoint. We poll it on your schedule, parse the exposition format, and ingest the samples as metrics you can chart and alert on — grouped under the name you give each target. Use “Add target” to start."
     else do
-      input_
-        [ class_ "input input-bordered input-sm w-full mb-3"
-        , type_ "search"
-        , placeholder_ "Filter targets…"
-        , filterInputAttr_ ".itemsListItem in #prometheus-targets"
-        ]
+      searchInput_ "w-full mb-3" "Filter targets…" [filterInputAttr_ "#prometheus-targets .itemsListItem"]
       div_ [class_ "flex flex-col gap-2"] $ V.forM_ cfgs (prometheusTargetRow pid)
 
 
@@ -927,8 +919,8 @@ notificationsTestPostH pid TestForm{..} = do
                 emails <- Projects.projectEmailRecipients pid $ map CI.original (resolveTeamEmails t)
                 forM_ emails sendTestEmail $> length emails
             )
-        TCSlack -> Just (Just ProjectMembers.Slack, \t -> forM_ t.slack_channels (sendSlackAlert alert pid project.title . Just) $> V.length t.slack_channels)
-        TCDiscord -> Just (Just ProjectMembers.Discord, \t -> forM_ t.discord_channels (sendDiscordAlert alert pid project.title . Just) $> V.length t.discord_channels)
+        TCSlack -> Just (Just ProjectMembers.Slack, \t -> forM_ t.slack_channels (sendSlackAlert Nothing alert pid project.title . Just) $> V.length t.slack_channels)
+        TCDiscord -> Just (Just ProjectMembers.Discord, \t -> forM_ t.discord_channels (sendDiscordAlert Nothing alert pid project.title . Just) $> V.length t.discord_channels)
         TCWhatsapp -> Just (Just ProjectMembers.Phone, \t -> if V.null t.phone_numbers then pure 0 else sendWhatsAppAlert alert pid project.title t.phone_numbers $> V.length t.phone_numbers)
         TCPagerduty -> Just (Just ProjectMembers.Pagerduty, \t -> forM_ t.pagerduty_services (\k -> sendPagerdutyAlertToService k alert project.title projectUrl) $> V.length t.pagerduty_services)
 
@@ -991,6 +983,30 @@ data MetaData = MetaData
   {customData :: Maybe CustomData, eventName :: Text}
   deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MetaData
+
+
+-- | LemonSqueezy @meta.event_name@ values the webhook acts on. Parsed from 'MetaData''s raw
+-- text so events we ignore (orders, license keys) still decode and get a 200.
+--
+-- >>> parseUrlPiece @LSEvent "subscription_payment_failed"
+-- Right LSSubscriptionPaymentFailed
+-- >>> isLeft (parseUrlPiece @LSEvent "order_created")
+-- True
+data LSEvent
+  = LSSubscriptionCreated
+  | LSSubscriptionCancelled
+  | LSSubscriptionExpired
+  | LSSubscriptionPaymentFailed
+  | LSSubscriptionPaused
+  | LSSubscriptionPaymentRefunded
+  | LSSubscriptionResumed
+  | LSSubscriptionUnpaused
+  | LSSubscriptionPaymentSuccess
+  | LSSubscriptionPaymentRecovered
+  | LSSubscriptionPlanChanged
+  | LSSubscriptionUpdated
+  deriving stock (Read, Show)
+  deriving (FromHttpApiData) via WrappedEnumSC 'Nothing "LS" LSEvent
 
 
 data Attributes = Attributes
@@ -1091,10 +1107,10 @@ webhookPostH sigHeaderM rawBody = do
           Just project -> notifyMembers project.id $ ET.planUpgradedEmail project.title plan (billingUrl envConfig project.id)
           Nothing -> Log.logAttention "LS upgrade: no project for sub_id" (show orderId :: Text, subItem.subscriptionId, plan)
         pure "upgraded"
-  case dat.meta.eventName of
-    "subscription_created" -> do
-      currentTime <- liftIO getZonedTime
-      subId <- Projects.LemonSubId <$> liftIO UUIDV4.nextRandom
+  case parseUrlPiece dat.meta.eventName of
+    Right LSSubscriptionCreated -> do
+      currentTime <- utcToZonedTime utc <$> Time.currentTime
+      subId <- Projects.LemonSubId <$> UUIDEff.genUUID
       let projectId = fromMaybe "" (dat.meta.customData >>= (.projectId))
           sub =
             Projects.LemonSub
@@ -1115,23 +1131,27 @@ webhookPostH sigHeaderM rawBody = do
         whenJustM (Projects.projectById pid) \project ->
           notifyMembers pid $ ET.planUpgradedEmail project.title plan (billingUrl envConfig pid)
       pure "subscription created"
-    "subscription_cancelled" -> downgrade "was cancelled"
-    "subscription_expired" -> downgrade "has expired"
+    Right LSSubscriptionCancelled -> downgrade "was cancelled"
+    Right LSSubscriptionExpired -> downgrade "has expired"
     -- Dunning retry: notify only, don't downgrade. Mirrors Stripe's invoice.payment_failed policy.
     -- subscription_expired/_cancelled will downgrade if retries ultimately fail.
-    "subscription_payment_failed" -> do
+    Right LSSubscriptionPaymentFailed -> do
       whenJustM (Projects.projectByOrderId (show orderId)) \project ->
         notifyMembers project.id $ ET.planDowngradedEmail project.title "payment failed" (billingUrl envConfig project.id)
       Log.logAttention "LS subscription_payment_failed (no downgrade)" (show orderId :: Text, subItem.subscriptionId)
       pure "payment failed notified"
-    "subscription_paused" -> downgrade "was paused"
-    "subscription_payment_refunded" -> downgrade "payment refunded"
-    e | e `elem` ["subscription_resumed", "subscription_unpaused", "subscription_payment_success", "subscription_payment_recovered", "subscription_plan_changed"] -> upgrade
-    "subscription_updated" -> do
+    Right LSSubscriptionPaused -> downgrade "was paused"
+    Right LSSubscriptionPaymentRefunded -> downgrade "payment refunded"
+    Right LSSubscriptionResumed -> upgrade
+    Right LSSubscriptionUnpaused -> upgrade
+    Right LSSubscriptionPaymentSuccess -> upgrade
+    Right LSSubscriptionPaymentRecovered -> upgrade
+    Right LSSubscriptionPlanChanged -> upgrade
+    Right LSSubscriptionUpdated -> do
       Log.logInfo "LS subscription_updated (no-op)" (show orderId :: Text, subItem.subscriptionId, plan)
       pure "updated"
-    other -> do
-      Log.logInfo "LS webhook unhandled event" other
+    Left _ -> do
+      Log.logInfo "LS webhook unhandled event" dat.meta.eventName
       pure ""
 
 
@@ -1450,15 +1470,7 @@ dailyUsageBreakdown_ isFree cycleStartDay inputRate outputRate rows = div_ [clas
                   div_ [class_ "h-1.5 bg-fillWeak rounded-full overflow-hidden"] do
                     div_ [class_ "h-full bg-fillBrand-strong", style_ ("width: " <> show pct <> "%")] mempty
                 td_ [class_ "px-3 py-2 text-right text-textWeak"] $ toHtml $ if isFree then "—" else usd (fromIntegral dayOverage / 1_000_000 + fromIntegral u.aiCostMicrousd / 1_000_000)
-      when (activeDays < 30)
-        $ div_ [class_ "text-xs text-textWeak"]
-        $ toHtml
-        $ show activeDays
-        <> " day"
-        <> bool "s" "" (activeDays == 1)
-        <> " with activity since "
-        <> cycleStartText
-        <> "."
+      when (activeDays < 30) $ div_ [class_ "text-xs text-textWeak"] $ toHtml $ countNoun activeDays "day" <> " with activity since " <> cycleStartText <> "."
       div_ [class_ "text-xs text-textWeak"] do
         if isFree
           then "Free plan — usage shown for reference only."
@@ -1488,7 +1500,7 @@ pastCyclesSection_ isFree basePrice cycles = div_ [class_ "border-t border-strok
   let invoiced = any (isJust . (.invoice)) cycles
   div_ [class_ "flex items-baseline justify-between"] do
     sectionLabel_ "Past cycles"
-    span_ [class_ "text-xs text-textWeak"] $ toHtml @Text $ let n = length cycles in show n <> " cycle" <> bool "s" "" (n == 1)
+    span_ [class_ "text-xs text-textWeak"] $ toHtml $ countNoun (length cycles) "cycle"
   div_ [class_ "border border-strokeWeak rounded-md overflow-hidden"] do
     table_ [class_ "w-full text-sm tabular-nums border-separate border-spacing-0"] do
       thead_ [class_ "text-textWeak text-xs uppercase tracking-wide"] do
@@ -1552,9 +1564,11 @@ stripeOpts apiKey =
     & (Wreq.header "Stripe-Version" .~ ["2025-03-31.basil"])
 
 
-stripeRequest :: W.HTTP :> es => Text -> Text -> [(ByteString, ByteString)] -> Eff es (W.Response LByteString)
-stripeRequest apiKey endpoint =
-  W.postWith (stripeOpts apiKey) ("https://api.stripe.com/v1/" <> toString endpoint)
+-- | POST a session-creating request; Stripe answers with the hosted page's @url@.
+stripeSessionUrl :: W.HTTP :> es => Text -> Text -> [(ByteString, ByteString)] -> Eff es (Maybe Text)
+stripeSessionUrl apiKey endpoint params = do
+  resp <- W.postWith (stripeOpts apiKey) ("https://api.stripe.com/v1/" <> toString endpoint) params
+  pure $ AE.decode @AE.Value (resp ^. Wreq.responseBody) >>= jsonField "url"
 
 
 -- | `trialEligible` grants a 30-day trial at checkout. Callers should pass True only
@@ -1590,22 +1604,12 @@ createStripeCheckoutSession trialEligible customerM apiKey hostUrl pid plan pric
              , ("success_url", encodeUtf8 $ hostUrl <> "p/" <> pid.toText <> "/manage_billing?stripe_success=1")
              , ("cancel_url", encodeUtf8 $ hostUrl <> "p/" <> pid.toText <> "/manage_billing")
              ]
-  resp <- stripeRequest apiKey "checkout/sessions" params
-  let body = resp ^. Wreq.responseBody
-  pure $ AE.decode @AE.Value body >>= jsonField "url"
+  stripeSessionUrl apiKey "checkout/sessions" params
 
 
 createStripePortalSession :: W.HTTP :> es => Text -> Text -> Text -> Eff es (Maybe Text)
-createStripePortalSession apiKey customerId returnUrl = do
-  resp <-
-    stripeRequest
-      apiKey
-      "billing_portal/sessions"
-      [ ("customer", encodeUtf8 customerId)
-      , ("return_url", encodeUtf8 returnUrl)
-      ]
-  let body = resp ^. Wreq.responseBody
-  pure $ AE.decode @AE.Value body >>= jsonField "url"
+createStripePortalSession apiKey customerId returnUrl =
+  stripeSessionUrl apiKey "billing_portal/sessions" [("customer", encodeUtf8 customerId), ("return_url", encodeUtf8 returnUrl)]
 
 
 lemonSqueezyOpts :: Text -> Wreq.Options
@@ -1620,9 +1624,9 @@ lemonSqueezyOpts apiKey =
 -- customer for something they can no longer see, and the next signup starts a
 -- second subscription on its own fresh trial. Best-effort — a provider outage must
 -- not block the deletion the user asked for, so failures are logged, not thrown.
-cancelProjectSubscription :: (IOE :> es, Log.Log :> es, W.HTTP :> es) => EnvConfig -> Projects.Project -> Eff es ()
+cancelProjectSubscription :: (Log.Log :> es, W.HTTP :> es) => EnvConfig -> Projects.Project -> Eff es ()
 cancelProjectSubscription envConfig project = whenJust target \(opts, url) -> do
-  res <- tryAny $ W.deleteWith opts url
+  res <- trySync $ W.deleteWith opts url
   whenLeft_ res \e ->
     Log.logAttention "Subscription cancellation failed; subscription may still be billing" (project.id.toText, project.subId, show @Text e)
   where

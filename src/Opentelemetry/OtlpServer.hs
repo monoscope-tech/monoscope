@@ -351,8 +351,7 @@ fetchProjectCache :: MonadIO m => AuthContext -> Projects.ProjectId -> m Project
 fetchProjectCache appCtx pid =
   liftIO
     $ Cache.fetchWithCache appCtx.projectCache pid
-    $ fmap (fromMaybe Projects.defaultProjectCache)
-    . Projects.projectCacheByIdIO appCtx.hasqlJobsPool
+    $ Projects.projectCacheByIdIO appCtx.hasqlJobsPool
 
 
 -- | Boundary adapter: convert a 'WriteFailure' to a gRPC INTERNAL error.
@@ -367,7 +366,7 @@ throwOnWriteFailure = either (throwGrpc GrpcInternal . ("OTLP write failed: " <>
 -- both stores; poisonMsgs are decode failures whose raw bytes must be DLQ'd
 -- by Pkg.Queue before committing offsets. On dual-write failure, returns
 -- 'Left WriteFailure'. Never throws on write/decode failure.
-processList :: (DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => [(Text, ByteString)] -> HM.HashMap Text Text -> Eff es (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))
+processList :: (DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => [(Text, ByteString)] -> HM.HashMap Text Text -> Eff es (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))
 processList [] _ = pure (Right ([], []))
 processList msgs !attrs =
   withSpan_ "otlp.process_list" (batchSpanAttrs (length msgs) attrs)
@@ -459,7 +458,7 @@ processList msgs !attrs =
 
 processBatchPipeline
   :: forall req res es
-   . (DB es, Eff.Reader AuthContext :> es, Log :> es, Message req, Time.Time :> es)
+   . (Eff.Reader AuthContext :> es, IOE :> es, Log :> es, Message req, Time.Time :> es)
   => Text
   -> [(Text, ByteString)]
   -> AuthContext
@@ -1056,7 +1055,7 @@ withinQuota projectCaches pid records = case HM.lookup pid projectCaches of
 -- | Convert ResourceLogs to OtelLogsAndSpans
 convertResourceLogsToOtelLogs :: UTCTime -> HM.HashMap Projects.ProjectId Projects.ProjectCache -> V.Vector (Text, Projects.ProjectId) -> PL.ResourceLogs -> [OtelLogsAndSpans]
 convertResourceLogsToOtelLogs !fallbackTime !projectCaches !pids resourceLogs =
-  let projectKey = fromMaybe "" $ (V.!? 0) $ getLogApiKey (V.singleton resourceLogs)
+  let projectKey = fromMaybe "" $ getApiKeyAttr (resourceLogs ^. PLF.resource . PRF.attributes)
       projectId =
         (snd <$> find ((== projectKey) . fst) pids)
           <|> (Projects.projectIdFromText =<< (V.!? 0) (getLogAttributeValue "at-project-id" (V.singleton resourceLogs)))
@@ -1065,7 +1064,7 @@ convertResourceLogsToOtelLogs !fallbackTime !projectCaches !pids resourceLogs =
 
 filterEmptyEvents :: OtelLogsAndSpans -> Bool
 filterEmptyEvents x =
-  not (T.null (fromMaybe "" x.name) && isAesonTextEmpty x.body && isAesonTextEmpty x.attributes && isAesonTextEmpty x.resource && T.null (fromMaybe "" x.parent_id))
+  not (all T.null x.name && isAesonTextEmpty x.body && isAesonTextEmpty x.attributes && isAesonTextEmpty x.resource && all T.null x.parent_id)
 
 
 -- | Convert ScopeLogs to OtelLogsAndSpans
@@ -1142,7 +1141,7 @@ convertResourceSpansToOtelLogs :: UTCTime -> HM.HashMap Projects.ProjectId Proje
 convertResourceSpansToOtelLogs !fallbackTime !projectCaches !pids !resourceSpans = concatMap convertOne (V.toList resourceSpans)
   where
     convertOne rs =
-      let projectKey = fromMaybe "" $ (V.!? 0) $ getSpanApiKey (V.singleton rs)
+      let projectKey = fromMaybe "" $ getApiKeyAttr (rs ^. PTF.resource . PRF.attributes)
           projectId =
             (snd <$> find (\(k, _) -> k == projectKey && k /= "") pids)
               <|> (Projects.projectIdFromText =<< (V.!? 0) (getSpanAttributeValue "at-project-id" (V.singleton rs)))
@@ -1466,9 +1465,7 @@ convertMetricToMetricRecords fallbackTime pid resourceM resourceSchemaUrl droppe
       pure $ mkRecord (pointTime $ point ^. PMF.timeUnixNano) (validStartTime $ point ^. PMF.startTimeUnixNano) (pointAttrs point) AE.Null Telemetry.MTSummary (Telemetry.SummaryValue Telemetry.Summary{sum = point ^. PMF.sum, count, quantiles = V.fromList $ map (\q -> Telemetry.Quantile{quantile = q ^. PMF.quantile, value = q ^. PMF.value}) $ point ^. PMF.quantileValues}) (fromIntegral $ point ^. PMF.flags) Nothing Nothing (fromIntegral $ BS.length (encodeMessage point))
 
     boundedCount :: Word64 -> Maybe Int64
-    boundedCount n
-      | n > fromIntegral (maxBound :: Int64) = Nothing
-      | otherwise = Just $ fromIntegral n
+    boundedCount = toIntegralSized
 
 
 ---------------------------------------------------------------------------------------
@@ -1489,7 +1486,7 @@ runServer appLogger appCtx tp = do
 
 
 -- | Process trace request with optional API key from gRPC metadata (extracted for testing)
-processTraceRequest :: (DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es) => Maybe Text -> TS.ExportTraceServiceRequest -> Eff es ()
+processTraceRequest :: (DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es) => Maybe Text -> TS.ExportTraceServiceRequest -> Eff es ()
 processTraceRequest metadataApiKey req =
   let !resourceSpans = V.fromList $ req ^. TSF.resourceSpans
    in processSignalRequest "Traces" "traces" "Received trace export request" "spans" "span_count" metadataApiKey (getSpanApiKey resourceSpans) (V.toList $ getSpanAttributeValue "at-project-id" resourceSpans) $ \currentTime projectCaches projectIdsAndKeys ->
@@ -1497,7 +1494,7 @@ processTraceRequest metadataApiKey req =
 
 
 -- | Process logs request with optional API key from gRPC metadata (extracted for testing)
-processLogsRequest :: (DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es) => Maybe Text -> LS.ExportLogsServiceRequest -> Eff es ()
+processLogsRequest :: (DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es) => Maybe Text -> LS.ExportLogsServiceRequest -> Eff es ()
 processLogsRequest metadataApiKey req =
   let !resourceLogs = V.fromList $ req ^. PLF.resourceLogs
    in processSignalRequest "Logs" "logs" "Received logs export request" "logs" "log_count" metadataApiKey (getLogApiKey resourceLogs) (V.toList $ getLogAttributeValue "at-project-id" resourceLogs) $ \currentTime projectCaches projectIdsAndKeys ->
@@ -1510,7 +1507,7 @@ processLogsRequest metadataApiKey req =
 -- ("Traces"/"Logs"), @signal@ the checkpoint/span label ("traces"/"logs"), @noun@/@countKey@
 -- the converted/inserted record noun and its log count key ("spans"/"span_count").
 processSignalRequest
-  :: (DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es)
+  :: (DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es)
   => Text
   -> Text
   -> Text
@@ -1579,16 +1576,14 @@ processSignalRequest label signal receivedMsg noun countKey metadataApiKey proje
 -- (hs-opentelemetry's does) and self-hosted setups without a collector in
 -- front. The x-api-key HTTP header plays the role of gRPC metadata auth.
 httpTracesExport, httpLogsExport :: Logger -> AuthContext -> TracerProvider -> Maybe Text -> BS.ByteString -> IO (Either Text BS.ByteString)
-httpTracesExport appLogger appCtx tp keyM body = case decodeMessage body of
-  Left err -> pure $ Left ("invalid ExportTraceServiceRequest protobuf: " <> toText err)
-  Right (req :: TS.ExportTraceServiceRequest) -> do
-    _ <- runBackground appLogger appCtx tp $ processTraceRequest keyM req
-    pure $ Right (encodeMessage (defMessage :: TS.ExportTraceServiceResponse))
-httpLogsExport appLogger appCtx tp keyM body = case decodeMessage body of
-  Left err -> pure $ Left ("invalid ExportLogsServiceRequest protobuf: " <> toText err)
-  Right (req :: LS.ExportLogsServiceRequest) -> do
-    _ <- runBackground appLogger appCtx tp $ processLogsRequest keyM req
-    pure $ Right (encodeMessage (defMessage :: LS.ExportLogsServiceResponse))
+httpTracesExport = httpExport @TS.ExportTraceServiceResponse "ExportTraceServiceRequest" processTraceRequest
+httpLogsExport = httpExport @LS.ExportLogsServiceResponse "ExportLogsServiceRequest" processLogsRequest
+
+
+httpExport :: forall res req. (Message req, Message res) => Text -> (Maybe Text -> req -> ATBackgroundCtx ()) -> Logger -> AuthContext -> TracerProvider -> Maybe Text -> BS.ByteString -> IO (Either Text BS.ByteString)
+httpExport reqName process appLogger appCtx tp keyM body = case decodeMessage body of
+  Left err -> pure $ Left ("invalid " <> reqName <> " protobuf: " <> toText err)
+  Right req -> Right (encodeMessage (defMessage :: res)) <$ runBackground appLogger appCtx tp (process keyM req)
 
 
 -- | Shared body of the metadata-less Export handlers below: dispatch the signal's
@@ -1608,7 +1603,7 @@ logsServiceExport = otlpExport processLogsRequest
 
 
 -- | Process metrics request with optional API key from gRPC metadata (extracted for testing)
-processMetricsRequest :: (DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es) => Maybe Text -> MS.ExportMetricsServiceRequest -> Eff es ()
+processMetricsRequest :: (DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es) => Maybe Text -> MS.ExportMetricsServiceRequest -> Eff es ()
 processMetricsRequest metadataApiKey req = do
   Log.logTrace "Received metrics export request" AE.Null
   when (metricRequestHasOverflow req) $ throwGrpc GrpcInternal "OTLP metric count exceeds BIGINT maximum"

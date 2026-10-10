@@ -73,7 +73,7 @@ spec = sequential $ aroundAll withTestResources $ do
                 , Mail.firstSeenText = Nothing
                 , Mail.ongoingFor = Nothing
                 }
-        (notifs, _) <- captureNotifs tr $ Mail.sendSlackAlert alert testPid "Notifications" (Just "C_NOTIF_CHANNEL")
+        (notifs, _) <- captureNotifs tr $ Mail.sendSlackAlert Nothing alert testPid "Notifications" (Just "C_NOTIF_CHANNEL")
         let payloads = [d.payload | SlackNotification d <- notifs]
         payloads `shouldSatisfy` \case
           [payload] ->

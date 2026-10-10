@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), WidgetCta (..), WidgetMarker (..), SqlOrder, mkSqlOrder, PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), statScalar, formatStatValue, widgetPostH, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, decodeWidgetZ, widgetFetchUrl, getSpanJson) where
+module Pkg.Components.Widget (Widget (..), ThresholdLines (..), LegendSize (..), ColumnType (..), ProgressScale (..), WidgetCta (..), WidgetMarker (..), SqlOrder, mkSqlOrder, PngProfile (..), pngExportSize, WidgetDataset (..), chartQuery, tableQuery, toWidgetDataset, widget_, widgetValueSlot_, widgetValueSlotAs_, infraTimeseries, gridStackAttrs, normalizeWidgetLayouts, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChartTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), statScalar, formatStatValue, widgetPostH, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, decodeWidgetZ, widgetFetchUrl) where
 
 import Codec.Compression.GZip qualified as GZip
 import Control.Exception.Safe qualified as Safe
@@ -11,10 +11,13 @@ import Data.ByteArray qualified as BA
 import Data.ByteString.Base16 qualified as B16
 import Data.Char (isDigit)
 import Data.Default
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Generics.Labels ()
+import Data.List (lookup)
 import Data.Map.Strict qualified as M
 import Data.OpenApi (ToSchema)
 import Data.Text qualified as T
+import Data.Text.Display (Display)
 import Data.Time (ZonedTime, defaultTimeLocale, parseTimeM)
 import Data.Time.Format (formatTime)
 import Data.Vector qualified as V
@@ -30,13 +33,12 @@ import Lucid.Aria qualified as Aria
 import Lucid.Base (termRaw)
 import Lucid.Htmx (hxGet_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
 import Lucid.Hyperscript (__)
+import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (headerRow_)
-import Pages.LogExplorer.LogItem (getServiceName, spanHasErrors)
-import Pkg.DeriveUtils (JsonValueSchema (..), WrappedEnumSC (..), encodeEnumSC)
+import Pkg.DeriveUtils (JsonValueSchema (..), WrappedEnumSC (..))
 import Pkg.Parser (ToQueryText (..), parseQueryToAST)
 import Pkg.Parser.Expr (Subject (..))
 import Pkg.Parser.Stats (BinFunction (..), ByClauseItem (..), Section (..), SummarizeByClause (..))
@@ -164,6 +166,32 @@ data PngProfile = PngStandard | PngSlack
   deriving (AE.FromJSON, AE.ToJSON, FromHttpApiData) via WrappedEnumSC 'Nothing "Png" PngProfile
 
 
+-- | When a chart draws its alert/warning threshold lines.
+data ThresholdLines = TLAlways | TLOnBreach | TLNever
+  deriving stock (Eq, Generic, Read, Show, THS.Lift)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromHttpApiData) via WrappedEnumSC 'Nothing "TL" ThresholdLines
+
+
+data LegendSize = LSXs | LSSm | LSMd | LSLg
+  deriving stock (Eq, Generic, Read, Show, THS.Lift)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON, FromHttpApiData) via WrappedEnumSC 'Nothing "LS" LegendSize
+
+
+data ColumnType = CTNumber | CTDuration | CTText
+  deriving stock (Eq, Generic, Read, Show, THS.Lift)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON, FromHttpApiData) via WrappedEnumSC 'Nothing "CT" ColumnType
+
+
+-- | A progress cell's scale: share of the column's largest value, or the value itself as 0–100.
+data ProgressScale = ColumnPercent | ValuePercent
+  deriving stock (Eq, Generic, Read, Show, THS.Lift)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON, FromHttpApiData) via WrappedEnumSC 'Nothing "" ProgressScale
+
+
 -- | Export dimensions are part of the profile carried by the signed widget.
 --
 -- >>> pngExportSize Nothing
@@ -230,7 +258,6 @@ data Widget = Widget
   , hideSubtitle :: Maybe Bool
   , hideValue :: Maybe Bool
   , icon :: Maybe Text
-  , timeseriesStatAggregate :: Maybe Text -- average, min, max, sum, etc
   , sql :: Maybe Text
   , rollupSql :: Maybe Text
   -- ^ Postgres SQL over an hourly rollup of the same series as @query@, answerable
@@ -250,7 +277,7 @@ data Widget = Widget
   , wData :: Maybe AE.Value
   , hideLegend :: Maybe Bool
   , legendPosition :: Maybe Text -- Legend position: "top", "bottom", "top-right", "top-left", "bottom-right", "bottom-left"
-  , legendSize :: Maybe Text -- Legend size: "xs" (default), "sm", "md"
+  , legendSize :: Maybe LegendSize -- default LSSm
   , theme :: Maybe Text
   , dataset :: Maybe WidgetDataset
   , -- eager
@@ -281,26 +308,25 @@ data Widget = Widget
   , html :: Maybe LText
   , standalone :: Maybe Bool -- Not used in a grid stack
   , allowZoom :: Maybe Bool -- Allow zooming in the chart
-  , showMarkArea :: Maybe Bool -- Show mark area in the chart
   , columns :: Maybe [TableColumn] -- Table columns
   , onRowClick :: Maybe RowClickAction -- Action when table row is clicked
   -- Alert fields (populated from QueryMonitor at render time)
   , alertId :: Maybe Text -- Linked QueryMonitor ID
   , alertThreshold :: Maybe Double -- For threshold line rendering
   , warningThreshold :: Maybe Double
-  , showThresholdLines :: Maybe Text -- 'always' | 'on_breach' | 'never'
+  , showThresholdLines :: Maybe ThresholdLines
   , seriesIntent :: Maybe Text
   -- ^ What a lone aggregate series *means*, when the series name cannot say. A bare
   -- @count(*)@ is error volume on one chart and healthy throughput on another, and the
   -- widget cannot tell them apart from the name — so red was being applied by a hash of
   -- the string. @\"error\"@ opts a chart into the error colour; anything else stays brand.
   -- Grouped series are named by their group value and keep their own mapping.
-  , alertStatus :: Maybe Text -- 'normal' | 'warning' | 'alerting' (runtime)
+  , alertStatus :: Maybe Monitors.MonitorStatus -- runtime
   , description :: Maybe Text -- Help text shown in info icon tooltip
   , pngUrl :: Maybe Text -- Pre-signed PNG download URL (runtime)
   , pngProfile :: Maybe PngProfile
   , _staticRender :: Maybe Bool -- For PNG export: disables scroll legend
-  , dbSource :: Maybe Text -- "postgres" or "timefusion"; Nothing = default routing
+  , dbSource :: Maybe Hasql.SqlSource -- Nothing = default routing
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
@@ -414,9 +440,9 @@ data TableColumn = TableColumn
   , link :: Maybe Text
   , width :: Maybe Text
   , align :: Maybe Text
-  , progress :: Maybe Text -- "column_percent" or "value_percent"
+  , progress :: Maybe ProgressScale
   , progressVariant :: Maybe Text -- "default", "info", "error", etc.
-  , columnType :: Maybe Text -- "number", "duration", "text" (default)
+  , columnType :: Maybe ColumnType -- default CTText
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
@@ -517,7 +543,7 @@ infraTimeseries pid wid title unit query =
     , hideSubtitle = Just True
     , hideValue = Just True
     , legendPosition = Just "top-right"
-    , legendSize = Just "xs"
+    , legendSize = Just LSXs
     , layout = Just def{w = Just 6, h = Just 4}
     }
 
@@ -800,13 +826,10 @@ statScalar summarize fromM toM stats
 formatStatValue :: Double -> Text -> Text
 formatStatValue value unit
   | isNaN value || isInfinite value = "N/A"
-  | Just factor <- snd <$> find ((== unit) . fst) durationFactors = formatDuration $ value * factor
+  | Just factor <- unitNanos unit = formatDuration $ value * factor
   | unit `elem` ["By", "by", "bytes", "byte", "B"] = formatBytes value
   | otherwise = formatNumber value <> displayUnit unit
   where
-    durationFactors :: [(Text, Double)]
-    durationFactors = [("h", 3.6e12), ("m", 6e10), ("s", 1e9), ("ms", 1e6), ("μs", 1e3), ("us", 1e3), ("ns", 1)]
-
     durationSteps :: [(Double, Text)]
     durationSteps = [(3.6e12, "h"), (6e10, "m"), (1e9, "s"), (1e6, "ms"), (1e3, "μs")]
     formatDuration ns = case find ((<= ns) . fst) durationSteps of
@@ -870,9 +893,10 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "mi
     -- Alert status indicator (visible on hover, always visible when alerting/warning)
     when (isJust widget.alertId)
       $ let (iconColor, iconType, tooltip, visibilityClass) = case widget.alertStatus of
-              Just "alerting" -> ("text-fillError-strong", "bell-exclamation", "Monitor triggered", "")
-              Just "warning" -> ("text-fillWarning-strong", "bell", "Warning threshold exceeded", "")
-              _ -> ("text-iconNeutral", "bell", "Monitor configured", "opacity-0 group-hover/wgt:opacity-100 touch:opacity-50")
+              Just Monitors.MSAlerting -> ("text-fillError-strong", "bell-exclamation", "Monitor triggered", "")
+              Just Monitors.MSWarning -> ("text-fillWarning-strong", "bell", "Warning threshold exceeded", "")
+              Just Monitors.MSNormal -> configured
+              Nothing -> configured
          in span_
               [ class_ $ "p-1 transition-opacity " <> visibilityClass
               , data_ "tippy-content" tooltip
@@ -991,19 +1015,7 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "mi
           "Copy SQL"
         menuItem_
           "Copy KQL query to clipboard"
-          [ term
-              "_"
-              [text|
-              on click
-              set widgetEl to the closest <[data-widget]/>
-              set widgetData to JSON.parse(widgetEl.dataset.widget)
-              set txt to widgetData.query or 'No KQL available'
-              if 'clipboard' in window.navigator then
-                call navigator.clipboard.writeText(txt)
-                send successToast(value:['KQL copied to clipboard']) to <body/>
-              end
-            |]
-          ]
+          [copyToClipboardAttr_ "JSON.parse(this.closest('[data-widget]').dataset.widget).query || 'No KQL available'" "KQL copied to clipboard"]
           "Copy KQL"
         whenJust widget.pngUrl \url ->
           menuItem_
@@ -1045,6 +1057,7 @@ renderWidgetHeader widget valueM subValueM expandBtnFn ctaM = div_ [class_ $ "mi
               "Delete widget"
   where
     wId = maybeToMonoid widget.id
+    configured = ("text-iconNeutral", "bell", "Monitor configured", "opacity-0 group-hover/wgt:opacity-100 touch:opacity-50")
     menuItem_ :: Text -> [Attribute] -> Html () -> Html ()
     menuItem_ tip extraAttrs = li_ . a_ ([class_ "p-2 w-full text-left block cursor-pointer", data_ "tippy-content" tip] <> extraAttrs)
 
@@ -1130,12 +1143,12 @@ sortableTableHead_ widget selected =
   thead_ [class_ "sticky top-0 z-10 before:content-[''] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak"]
     $ tr_ []
     $ forM_ (fold widget.columns) \col -> do
-      let direction
-            | selected == Just ("+" <> col.field) = "asc"
-            | selected == Just ("-" <> col.field) = "desc"
-            | otherwise = "none"
+      let (direction, ariaSort, glyph)
+            | selected == Just ("+" <> col.field) = ("asc", "ascending", "↑")
+            | selected == Just ("-" <> col.field) = ("desc", "descending", "↓")
+            | otherwise = ("none", "none", "↕") :: (Text, Text, Text)
           sortable = sortableColumn widget col
-      th_ [class_ $ "text-left bg-bgRaised sticky top-0 " <> fromMaybe "" col.align, term "aria-sort" (if direction == "asc" then "ascending" else if direction == "desc" then "descending" else "none")]
+      th_ [class_ $ "text-left bg-bgRaised sticky top-0 " <> fromMaybe "" col.align, term "aria-sort" ariaSort]
         $ if sortable
           then button_
             [ type_ "button"
@@ -1153,7 +1166,7 @@ sortableTableHead_ widget selected =
             ]
             $ headerRow_ [] do
               toHtml col.title
-              span_ [class_ "sort-arrow ml-1 text-iconNeutral"] $ toHtml (if direction == "asc" then "↑" else if direction == "desc" then "↓" else "↕" :: Text)
+              span_ [class_ "sort-arrow ml-1 text-iconNeutral"] $ toHtml glyph
           else headerRow_ [] $ toHtml col.title
 
 
@@ -1235,7 +1248,7 @@ renderChart widget = do
           , "theme" AE..= fromMaybe "default" widget.theme
           , "yAxisLabel" AE..= fromMaybe (maybeToMonoid widget.unit) (widget.yAxis >>= (.label))
           , "pid" AE..= (widget._projectId <&> (.toText))
-          , "summarizeBy" AE..= toText (encodeEnumSC @"SB" $ fromMaybe SBSum widget.summarizeBy)
+          , "summarizeBy" AE..= fromMaybe SBSum widget.summarizeBy
           , "summarizeByPrefix" AE..= summarizeByPrefix (fromMaybe SBSum widget.summarizeBy)
           , "legendPosition" AE..= fromMaybe "bottom" widget.legendPosition
           , "unit" AE..= maybeToMonoid widget.unit
@@ -1394,11 +1407,11 @@ widgetToECharts widget =
                       [v, h] | h == "right" || h == "left" -> (v, Just h)
                       [v] -> (v, Nothing)
                       _ -> ("bottom", Nothing)
-                    (fontSize, itemSize, itemGap, pad) = case fromMaybe "sm" widget.legendSize of
-                      "xs" -> (10 :: Int, 6 :: Int, 6 :: Int, [2, 4, 2, 4] :: [Int])
-                      "md" -> (14, 12, 12, [4, 8, 4, 8])
-                      "lg" -> (16, 14, 14, [5, 10, 5, 10])
-                      _ -> (12, 9, 9, [3, 6, 3, 6]) -- sm (default)
+                    (fontSize, itemSize, itemGap, pad) = case fromMaybe LSSm widget.legendSize of
+                      LSXs -> (10 :: Int, 6 :: Int, 6 :: Int, [2, 4, 2, 4] :: [Int])
+                      LSSm -> (12, 9, 9, [3, 6, 3, 6])
+                      LSMd -> (14, 12, 12, [4, 8, 4, 8])
+                      LSLg -> (16, 14, 14, [5, 10, 5, 10])
                     isStatic = isTrue widget._staticRender
                     legendOffset = if vPos == "top" then ["top" AE..= (0 :: Int)] else ["bottom" AE..= (2 :: Int)]
                  in [ "show" AE..= legendVisibility
@@ -1418,7 +1431,7 @@ widgetToECharts widget =
             AE..= AE.object
               [ "width" AE..= ("100%" :: Text)
               , "left" AE..= ("0%" :: Text)
-              , "top" AE..= if legendTop && legendVisibility then if fromMaybe "sm" widget.legendSize == "xs" then (20 :: Int) else 28 else if isTrue widget.naked then (16 :: Int) else (8 :: Int)
+              , "top" AE..= if legendTop && legendVisibility then if widget.legendSize == Just LSXs then (20 :: Int) else 28 else if isTrue widget.naked then (16 :: Int) else (8 :: Int)
               , "bottom" AE..= if not legendTop && legendVisibility then (36 :: Int) else if isTrue widget.standalone then (0 :: Int) else (8 :: Int)
               , "containLabel" AE..= True
               , "show" AE..= False
@@ -1486,10 +1499,10 @@ addMarkLinesToFirstSeries widget series
   | shouldShowLines, not (null markLineData) = series & _head %~ addMarkLine
   | otherwise = series
   where
-    shouldShowLines = case widget.showThresholdLines of
-      Just "never" -> False
-      Just "on_breach" -> widget.alertStatus == Just "warning" || widget.alertStatus == Just "alerting"
-      _ -> isJust widget.alertThreshold || isJust widget.warningThreshold
+    shouldShowLines = case fromMaybe TLAlways widget.showThresholdLines of
+      TLNever -> False
+      TLOnBreach -> maybe False (/= Monitors.MSNormal) widget.alertStatus
+      TLAlways -> isJust widget.alertThreshold || isJust widget.warningThreshold
 
     mkMarkLine color label threshold =
       AE.object
@@ -1605,20 +1618,6 @@ renderTableWithDataAndParams widget dataRows params = do
                   else renderLongTextOr widget col (getRowValue idx row)
 
 
-getSpanJson :: Maybe (Int, Int) -> Telemetry.SpanRecord -> AE.Value
-getSpanJson tgtM sp =
-  AE.object
-    [ "spanId" AE..= sp.spanId
-    , "name" AE..= sp.spanName
-    , "value" AE..= maybe sp.spanDurationNs (\(d, _) -> fromIntegral d) tgtM
-    , "start" AE..= utcTimeToNanoseconds sp.startTime
-    , "parentId" AE..= sp.parentSpanId
-    , "serviceName" AE..= getServiceName sp.resource
-    , "hasErrors" AE..= spanHasErrors sp
-    , "totalSpans" AE..= maybe 1 snd tgtM
-    ]
-
-
 getRowValue :: Int -> V.Vector Text -> Text
 getRowValue idx row = fromMaybe "" $ row V.!? idx
 
@@ -1629,7 +1628,7 @@ calculateMaxValues columns dataRows =
   M.fromList
     [ (col.field, V.foldl' max 0 $ V.mapMaybe (\row -> row V.!? idx >>= readMaybe . toString) dataRows)
     | (col, idx) <- zip columns [0 ..]
-    , col.progress == Just "column_percent"
+    , col.progress == Just ColumnPercent
     ]
 
 
@@ -1637,8 +1636,8 @@ renderProgressCell :: TableColumn -> Text -> M.Map Text Double -> M.Map Text Int
 renderProgressCell col value maxValues valueWidths = div_ [class_ "flex items-center gap-2"] do
   let numValue = fromMaybe 0 (readMaybe $ toString value) :: Double
       percentage = case col.progress of
-        Just "value_percent" -> min 100 (max 0 numValue)
-        Just "column_percent" | Just maxVal <- M.lookup col.field maxValues, maxVal > 0 -> (numValue / maxVal) * 100
+        Just ValuePercent -> min 100 (max 0 numValue)
+        Just ColumnPercent | Just maxVal <- M.lookup col.field maxValues, maxVal > 0 -> (numValue / maxVal) * 100
         _ -> 0
   span_ [class_ "inline-block text-left monospace", style_ $ "width: " <> show (M.findWithDefault 8 col.field valueWidths) <> "ch"]
     $ toHtml
@@ -1656,7 +1655,7 @@ renderProgressCell col value maxValues valueWidths = div_ [class_ "flex items-ce
 
 
 isNumericCol :: TableColumn -> Bool
-isNumericCol col = col.columnType `elem` [Just ("number" :: Text), Just "duration"]
+isNumericCol col = col.columnType `elem` [Just CTNumber, Just CTDuration]
 
 
 -- | @td@ classes: column alignment plus monospace for numeric/duration columns.
@@ -1665,10 +1664,10 @@ cellClass col = fromMaybe "" col.align <> memptyIfFalse (isNumericCol col) " mon
 
 
 formatColumnValue :: TableColumn -> Text -> Text
-formatColumnValue col value = case col.columnType of
-  Just "number" -> maybe value fmtNumber (readMaybe (toString value) :: Maybe Double) <> unitSuffix
-  Just "duration" -> maybe (value <> unitSuffix) getDurationNSMS (readMaybe (toString value) >>= durationNanoseconds col.unit)
-  _ -> fromMaybe value (formatTimestampValue value) <> unitSuffix
+formatColumnValue col value = case fromMaybe CTText col.columnType of
+  CTNumber -> maybe value fmtNumber (readMaybe (toString value) :: Maybe Double) <> unitSuffix
+  CTDuration -> maybe (value <> unitSuffix) getDurationNSMS (readMaybe (toString value) >>= durationNanoseconds col.unit)
+  CTText -> fromMaybe value (formatTimestampValue value) <> unitSuffix
   where
     unitSuffix = foldMap (" " <>) col.unit
     -- keep significant digits for small non-integral numbers, pretty-print the rest
@@ -1678,16 +1677,15 @@ formatColumnValue col value = case col.columnType of
 
 
 durationNanoseconds :: Maybe Text -> Double -> Maybe Integer
-durationNanoseconds unit value =
-  round . (value *) <$> case unit of
-    Nothing -> Just 1
-    Just "ns" -> Just 1
-    Just "us" -> Just 1e3
-    Just "µs" -> Just 1e3
-    Just "ms" -> Just 1e6
-    Just "s" -> Just 1e9
-    Just "m" -> Just 6e10
-    _ -> Nothing
+durationNanoseconds unit value = round . (value *) <$> maybe (Just 1) unitNanos unit
+
+
+-- | Nanoseconds per duration unit; micro accepts both the micro sign and Greek mu.
+--
+-- >>> map unitNanos ["ms", "\181s", "\956s", "parsecs"]
+-- [Just 1000000.0,Just 1000.0,Just 1000.0,Nothing]
+unitNanos :: Text -> Maybe Double
+unitNanos = (`lookup` [("h", 3.6e12), ("m", 6e10), ("s", 1e9), ("ms", 1e6), ("\181s", 1e3), ("\956s", 1e3), ("us", 1e3), ("ns", 1)])
 
 
 -- | Try to parse a PostgreSQL timestamp and format as "Mar 19, 09:05"

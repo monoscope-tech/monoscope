@@ -71,6 +71,8 @@ module Utils (
   formatOffset,
   navTabAttrs,
   explorerNavTabs_,
+  navTabStrip_,
+  TabStrip (..),
   explorerTabs,
   infrastructureNavTabs_,
   infrastructureTabs,
@@ -121,7 +123,7 @@ import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Time.LocalTime (timeOfDayToTime, timeToTimeOfDay)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.ToField (ToField (..))
-import Effectful (Eff, IOE, type (:>))
+import Effectful (Eff, type (:>))
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Fmt (commaizeF, fmt)
@@ -140,6 +142,7 @@ import Network.URI (escapeURIString, isUnescapedInURI)
 import Numeric (showFFloat, showHex)
 import Pkg.Icons qualified as Icons
 import Relude hiding (notElem)
+import Relude.Extra.Tuple (toSnd)
 import Servant hiding ((:>))
 import Text.MMark qualified as MMark
 import Text.Printf (printf)
@@ -158,13 +161,15 @@ nonEmptyT :: Maybe Text -> Maybe Text
 nonEmptyT = mfilter (not . T.null)
 
 
--- | A KQL string literal. Escaping matters: a container, pod, or host name carrying a @"@
--- would otherwise close the literal early and hand the store a malformed query.
+-- | A KQL string literal. Escaping matters: a value carrying a @"@ would close the literal
+-- early, and the parser reads @\\@ as an escape, so backslashes go first.
 --
 -- >>> kqlQuoted "say \"hi\""
 -- "\"say \\\"hi\\\"\""
+-- >>> kqlQuoted "C:\\tmp"
+-- "\"C:\\\\tmp\""
 kqlQuoted :: Text -> Text
-kqlQuoted value = "\"" <> T.replace "\"" "\\\"" value <> "\""
+kqlQuoted value = "\"" <> T.replace "\"" "\\\"" (T.replace "\\" "\\\\" value) <> "\""
 
 
 -- | Append the time-range params (and any extras) to @base@, deciding @?@ vs @&@ once so
@@ -629,7 +634,7 @@ lookupVecTextByKey = lookupVecBy
 -- a missing @parent_id@\/@trace_id@ as @""@ as often as @null@, so every caller
 -- that walks the trace tree wants this rather than the raw text.
 lookupVecNonEmptyText :: V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Maybe Text
-lookupVecNonEmptyText v m k = mfilter (not . T.null) (lookupVecBy v m k)
+lookupVecNonEmptyText v m k = nonEmptyT (lookupVecBy v m k)
 
 
 lookupVecBoolByKey :: V.Vector AE.Value -> HM.HashMap Text Int -> Text -> Bool
@@ -730,9 +735,7 @@ encodeText = decodeUtf8 . AE.encode
 
 data FreeTierStatus = NotFreeTier | FreeTierOk | FreeTierWarning Int Int | FreeTierExceeded Int Int
   deriving stock (Eq, Generic, Show)
-
-
-instance Default FreeTierStatus where def = NotFreeTier
+  deriving anyclass (Default)
 
 
 freeTierUsageBanner :: Text -> FreeTierStatus -> Html ()
@@ -749,7 +752,7 @@ freeTierUsageBanner pid = \case
   FreeTierOk -> pass
 
 
-checkFreeTierStatus :: (Hasql.Hasql :> es, IOE :> es, Time :> es) => Projects.ProjectId -> Text -> Eff es FreeTierStatus
+checkFreeTierStatus :: (Hasql.Hasql :> es, Time :> es) => Projects.ProjectId -> Text -> Eff es FreeTierStatus
 checkFreeTierStatus pid paymentPlan =
   if Projects.isFreeTier paymentPlan
     then do
@@ -766,57 +769,18 @@ checkFreeTierStatus pid paymentPlan =
 
 serviceColors :: V.Vector Text
 serviceColors =
-  V.fromList
-    -- Ordered for maximum hue separation: any 3 consecutive colors are visually distinct
-    [ "bg-blue-400"
-    , "bg-red-400"
-    , "bg-green-400"
-    , "bg-amber-400"
-    , "bg-purple-400"
-    , "bg-teal-400"
-    , "bg-orange-400"
-    , "bg-sky-400"
-    , "bg-rose-400"
-    , "bg-lime-400"
-    , "bg-indigo-400"
-    , "bg-yellow-400"
-    , "bg-pink-400"
-    , "bg-emerald-400"
-    , "bg-violet-400"
-    , "bg-cyan-400"
-    , "bg-fuchsia-400"
-    ]
+  -- Ordered for maximum hue separation: any 3 consecutive colors are visually distinct
+  V.fromList $ words "bg-blue-400 bg-red-400 bg-green-400 bg-amber-400 bg-purple-400 bg-teal-400 bg-orange-400 bg-sky-400 bg-rose-400 bg-lime-400 bg-indigo-400 bg-yellow-400 bg-pink-400 bg-emerald-400 bg-violet-400 bg-cyan-400 bg-fuchsia-400"
 
 
 getServiceColors :: V.Vector Text -> HashMap Text Text
-getServiceColors = V.foldl' (\m s -> HM.insert s (serviceFillColor s) m) HM.empty
+getServiceColors = HM.fromList . V.toList . V.map (toSnd serviceFillColor)
 
 
 -- | Light-theme ECharts colors; matches colorMapping.ts LIGHT_THEME_COLORS.
 themeColorsHex :: V.Vector Text
 themeColorsHex =
-  V.fromList
-    [ "#3b82f6"
-    , "#ef4444"
-    , "#16a34a"
-    , "#d97706"
-    , "#a855f7"
-    , "#0d9488"
-    , "#ea580c"
-    , "#0284c7"
-    , "#f43f5e"
-    , "#5f9c0b"
-    , "#6366f1"
-    , "#bd7d00"
-    , "#ec4899"
-    , "#059669"
-    , "#8b5cf6"
-    , "#0891b2"
-    , "#d946ef"
-    , "#64748b"
-    , "#5470c6"
-    , "#e05d44"
-    ]
+  V.fromList $ words "#3b82f6 #ef4444 #16a34a #d97706 #a855f7 #0d9488 #ea580c #0284c7 #f43f5e #5f9c0b #6366f1 #bd7d00 #ec4899 #059669 #8b5cf6 #0891b2 #d946ef #64748b #5470c6 #e05d44"
 
 
 nullishNames, percentileNames :: HS.HashSet Text
@@ -932,9 +896,7 @@ instance FromHttpApiData AE.Value where
 
 instance AE.FromJSON a => FromHttpApiData (JSONHttpApiData a) where
   -- Parse as raw JSON; on failure retry quoted, so bare strings work unquoted in URLs.
-  parseUrlPiece t = bimap fromString JSONHttpApiData $ case AE.eitherDecodeStrict' (encodeUtf8 t) of
-    Right a -> Right a
-    Left _ -> AE.eitherDecodeStrict' (encodeUtf8 $ "\"" <> t <> "\"")
+  parseUrlPiece t = bimap fromString JSONHttpApiData $ AE.eitherDecodeStrict' (encodeUtf8 t) <> AE.eitherDecodeStrict' (encodeUtf8 $ "\"" <> t <> "\"")
 
 
 instance AE.ToJSON a => ToHttpApiData (JSONHttpApiData a) where
@@ -1042,113 +1004,24 @@ formatWithCommas d =
 
 messageKeys :: [T.Text]
 messageKeys =
-  [ "msg"
-  , "message"
-  , "@message"
-  , "@m"
-  , "short_message"
-  , "full_message"
-  , "raw_message"
-  , "original_message"
-  , "event"
-  , "text"
-  , "data"
-  , "body"
-  , "log.message"
-  , "log"
-  , "logmessage"
-  , "log_message"
-  , "Message"
-  , "MSG"
-  , "Msg"
-  , "m"
-  , "@msg"
-  , "@text"
-  , "@event"
-  , "content"
-  , "description"
-  , "detail"
-  , "details"
-  , "info"
-  , "information"
-  , "payload"
-  , "value"
-  , "record"
-  , "entry"
-  , "log.entry"
-  , "log.text"
-  , "log.event"
-  , "log.body"
-  , "log_entry"
-  , "log_text"
-  , "log_event"
-  , "log_body"
-  , "logMessage"
-  , "logMsg"
-  , "logText"
-  , "logEvent"
-  , "log.msg"
-  , "@log"
-  , "@content"
-  , "@data"
-  , "@body"
-  , "@payload"
-  , "@detail"
-  , "@details"
-  , "@description"
-  , "@info"
-  , "event_message"
-  , "eventMessage"
-  , "event.message"
-  , "event_msg"
-  , "eventMsg"
-  , "event.msg"
-  , "message_text"
-  , "messageText"
-  , "message.text"
-  , "msg_text"
-  , "msgText"
-  , "msg.text"
-  , "text_message"
-  , "textMessage"
-  , "text.message"
-  , "note"
-  , "notes"
-  , "comment"
-  , "comments"
-  , "statement"
-  , "line"
-  , "logline"
-  , "log_line"
-  , "log.line"
-  , "@line"
-  , "@logline"
-  , "output"
-  , "log_output"
-  , "log.output"
-  , "@output"
-  , "string"
-  , "str"
-  , "s"
-  , "txt"
-  , "message_body"
-  , "messageBody"
-  , "message.body"
-  , "msg_body"
-  , "msgBody"
-  , "msg.body"
-  , "_message"
-  , "_msg"
-  , "__message"
-  , "__msg"
-  ]
+  words
+    """
+    msg message @message @m short_message full_message raw_message original_message event text data body
+    log.message log logmessage log_message Message MSG Msg m @msg @text @event content description detail details
+    info information payload value record entry log.entry log.text log.event log.body log_entry log_text log_event
+    log_body logMessage logMsg logText logEvent log.msg @log @content @data @body @payload @detail @details
+    @description @info event_message eventMessage event.message event_msg eventMsg event.msg message_text
+    messageText message.text msg_text msgText msg.text text_message textMessage text.message note notes comment
+    comments statement line logline log_line log.line @line @logline output log_output log.output @output string
+    str s txt message_body messageBody message.body msg_body msgBody msg.body _message _msg __message __msg
+    """
 
 
 extractMessageFromLog :: Value -> Maybe T.Text
 extractMessageFromLog (AE.Object obj) =
   asum [render <$> AEKM.lookup (AEK.fromText key) obj | key <- messageKeys]
   where
-    render = \case AE.String s -> s; v -> T.show v
+    render = \case AE.String s -> s; v -> encodeText v
 extractMessageFromLog _ = Nothing
 
 
@@ -1360,11 +1233,8 @@ replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass 
     -- Check "-YYYY" after month name for DD-Mon-YYYY pattern
     matchDMonYFwd :: Text -> Maybe Text
     matchDMonYFwd afterMon = do
-      r1 <- T.stripPrefix "-" afterMon
-      let (year, rest) = T.span isDigit r1
-      guard $ T.length year == 4
-      guard $ T.null rest || not (isAlphaNum (T.head rest))
-      pure rest
+      rest <- (T.stripPrefix "-" >=> digitsN 4) afterMon
+      rest <$ guard (T.null rest || not (isAlphaNum (T.head rest)))
 
     monthBoundaryAfter t = T.null t || not (isAlpha (T.head t))
 
@@ -1374,12 +1244,8 @@ replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass 
       r1 <- T.stripPrefix " " rest
       let (day, r2) = T.span isDigit r1
       guard $ T.length day >= 1 && T.length day <= 2
-      let r3 = fromMaybe r2 (T.stripPrefix "," r2)
-      r4 <- T.stripPrefix " " r3
-      let (year, r5) = T.span isDigit r4
-      guard $ T.length year == 4
-      guard $ T.null r5 || not (isAlphaNum (T.head r5))
-      pure r5
+      r5 <- (T.stripPrefix " " >=> digitsN 4) (fromMaybe r2 (T.stripPrefix "," r2))
+      r5 <$ guard (T.null r5 || not (isAlphaNum (T.head r5)))
 
     replaceEmails :: Text -> Text
     replaceEmails = toText . TLB.toLazyText . emails
@@ -1563,12 +1429,7 @@ replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass 
     tryTimestamp :: Text -> Maybe (TLB.Builder, Text)
     tryTimestamp !afterYear = do
       -- The 4-digit year is already consumed; afterYear starts with '-'
-      r1 <- T.stripPrefix "-" afterYear
-      let (mm, r2) = T.span isDigit r1
-      guard $ T.length mm == 2
-      r3 <- T.stripPrefix "-" r2
-      let (dd, r4) = T.span isDigit r3
-      guard $ T.length dd == 2
+      r4 <- (T.stripPrefix "-" >=> digitsN 2 >=> T.stripPrefix "-" >=> digitsN 2) afterYear
       -- Got YYYY-MM-DD. Check for a time part: ' HH:MM:SS' or ISO 'THH:MM:SS[.sss][Z/±TZ]'
       pure $ fromMaybe ("{YYYY-MM-DD}", r4) do
         (sep, r5) <- T.uncons r4
@@ -1581,14 +1442,7 @@ replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass 
     -- Parse HH:MM:SS[.sss] — returns the remaining text
     tryTimePart :: Text -> Maybe Text
     tryTimePart !txt = do
-      let (hh, r1) = T.span isDigit txt
-      guard $ T.length hh == 2
-      r2 <- T.stripPrefix ":" r1
-      let (mm, r3) = T.span isDigit r2
-      guard $ T.length mm == 2
-      r4 <- T.stripPrefix ":" r3
-      let (ss, r5) = T.span isDigit r4
-      guard $ T.length ss == 2
+      r5 <- (digitsN 2 >=> T.stripPrefix ":" >=> digitsN 2 >=> T.stripPrefix ":" >=> digitsN 2) txt
       -- Optional fractional seconds
       pure $ case T.uncons r5 of
         Just ('.', r6) -> T.dropWhile isDigit r6
@@ -1611,11 +1465,7 @@ replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass 
     -- Standalone time: HH:MM:SS[.mmm] — digits already consumed, rest starts after ':'
     tryTimeOnly :: Text -> Text -> Maybe (TLB.Builder, Text)
     tryTimeOnly !hh !afterColon = do
-      let (mm, r1) = T.span isDigit afterColon
-      guard $ T.length mm == 2
-      r2 <- T.stripPrefix ":" r1
-      let (ss, r3) = T.span isDigit r2
-      guard $ T.length ss == 2
+      r3 <- (digitsN 2 >=> T.stripPrefix ":" >=> digitsN 2) afterColon
       let (placeholder, rest) = case T.uncons r3 of
             Just ('.', r4) ->
               let (frac, r5) = T.span isDigit r4
@@ -1625,48 +1475,29 @@ replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass 
 
     -- SSN: NN-NNNN (already consumed NNN and '-', rest starts after '-')
     trySSN :: Text -> Maybe Text
-    trySSN !txt = do
-      let (d2, r1) = T.span isDigit txt
-      guard $ T.length d2 == 2
-      r2 <- T.stripPrefix "-" r1
-      let (d3, rest) = T.span isDigit r2
-      guard $ T.length d3 == 4
-      pure rest
+    trySSN = digitsN 2 >=> T.stripPrefix "-" >=> digitsN 4
 
     -- UUID: exactly 8-4-4-4-12 hex chars with dashes
     tryUUID :: Text -> Maybe Text
     tryUUID !txt = do
-      (_, r1) <- consumeHexSeg 8 txt
-      r1' <- T.stripPrefix "-" r1
-      (_, r2) <- consumeHexSeg 4 r1'
-      r2' <- T.stripPrefix "-" r2
-      (_, r3) <- consumeHexSeg 4 r2'
-      r3' <- T.stripPrefix "-" r3
-      (_, r4) <- consumeHexSeg 4 r3'
-      r4' <- T.stripPrefix "-" r4
-      (_, r5) <- consumeHexSeg 12 r4'
-      guard $ T.null r5 || not (isHexDigit' (T.head r5))
-      pure r5
+      r5 <- (hexSeg 8 >=> dashHex 4 >=> dashHex 4 >=> dashHex 4 >=> dashHex 12) txt
+      r5 <$ guard (T.null r5 || not (isHexDigit' (T.head r5)))
+      where
+        dashHex n = T.stripPrefix "-" >=> hexSeg n
 
-    consumeHexSeg :: Int -> Text -> Maybe (Text, Text)
-    consumeHexSeg n t =
-      let seg = T.take n t
-       in if T.length seg == n && T.all isHexDigit' seg then Just (seg, T.drop n t) else Nothing
+    -- Exactly @n@ hex chars, returning what follows.
+    hexSeg :: Int -> Text -> Maybe Text
+    hexSeg n t = let (seg, rest) = T.splitAt n t in rest <$ guard (T.length seg == n && T.all isHexDigit' seg)
+
+    -- Exactly @n@ digits, returning what follows.
+    digitsN :: Int -> Text -> Maybe Text
+    digitsN n t = let (ds, rest) = T.span isDigit t in rest <$ guard (T.length ds == n)
 
     -- IPv4: N.N.N.N where N is 0-255
     tryIPv4 :: Text -> Text -> Maybe Text
-    tryIPv4 !firstOctet !afterFirst = do
-      guard $ isOctet firstOctet
-      r1 <- T.stripPrefix "." afterFirst
-      let (o2, r2) = T.span isDigit r1
-      guard $ not (T.null o2) && isOctet o2
-      r2' <- T.stripPrefix "." r2
-      let (o3, r3) = T.span isDigit r2'
-      guard $ not (T.null o3) && isOctet o3
-      r3' <- T.stripPrefix "." r3
-      let (o4, rest) = T.span isDigit r3'
-      guard $ not (T.null o4) && isOctet o4
-      pure rest
+    tryIPv4 !firstOctet !afterFirst = guard (isOctet firstOctet) *> (octet >=> octet >=> octet) afterFirst
+      where
+        octet t = T.stripPrefix "." t >>= \r -> let (o, rest) = T.span isDigit r in rest <$ guard (isOctet o)
 
     isOctet :: Text -> Bool
     isOctet t = let len = T.length t in len >= 1 && len <= 3 && T.all isDigit t && T.foldl' (\acc c -> acc * 10 + (fromEnum c - 48)) 0 t <= (255 :: Int)
@@ -1719,25 +1550,26 @@ navTabAttrs =
   ]
 
 
+-- | The one link-based tab strip: each tab is (label, href, active) and navigates with
+-- 'navTabAttrs'. @extra@ adds nav classes such as a size modifier.
+-- | Section navigation is a @nav@ whose current link carries @aria-current@; view tabs
+-- switch the same page's data and are an ARIA tablist.
+data TabStrip = NavLinks | ViewTabs
+
+
+navTabStrip_ :: Monad m => TabStrip -> Text -> Text -> [(HtmlT m (), Text, Bool)] -> HtmlT m ()
+navTabStrip_ kind label extra tabs = container [class_ $ "tabs tabs-box tabs-outline flex-nowrap items-center " <> extra, Aria.label_ label, term "hx-preload" "mouseover"] $ forM_ tabs \(name, href, active) ->
+  a_ ([href_ href, class_ $ "tab h-auto! whitespace-nowrap" <> bool "" " tab-active font-semibold text-textStrong" active] <> mark active <> navTabAttrs) name
+  where
+    (container, mark) = case kind of
+      NavLinks -> (nav_, \current -> [term "aria-current" "page" | current])
+      ViewTabs -> (div_ . (role_ "tablist" :), \current -> [role_ "tab", Aria.selected_ $ bool "false" "true" current])
+
+
 -- | The Explorer section's tab strip, shared by every page in the section so a new tab is
 -- added in one place. @active@ is the label of the current page.
 explorerNavTabs_ :: Projects.ProjectId -> Text -> Html ()
-explorerNavTabs_ pid active =
-  nav_ [class_ "tabs tabs-box tabs-outline flex-nowrap items-center bg-fillWeaker", Aria.label_ "Explorer views", term "hx-preload" "mouseover"]
-    $ forM_ explorerTabs
-    $ \(label, path) ->
-      let isActive = label == active
-       in a_
-            ( [ href_ $ "/p/" <> pid.toText <> path
-              , class_ $ "tab h-auto! whitespace-nowrap" <> bool "" " tab-active font-semibold text-textStrong" isActive
-              ]
-                <> [term "aria-current" "page" | isActive]
-                -- The href picks up the page's current from/to/since before it is followed; the
-                -- rewrite lives in the bundle (@preserve-page-context@ in main.ts) — real imperative
-                -- URL work, and inlining it re-serialized 200 chars of JS onto every nav link.
-                <> navTabAttrs
-            )
-            (toHtml label)
+explorerNavTabs_ pid active = navTabStrip_ NavLinks "Explorer views" "bg-fillWeaker" [(toHtml label, "/p/" <> pid.toText <> path, label == active) | (label, path) <- explorerTabs]
 
 
 -- | Single source of truth for the Explorer section, used by both the tab strip and the
@@ -1751,18 +1583,7 @@ explorerTabs = [("Events", "/log_explorer"), ("Live Tail", "/live_tail"), ("Metr
 -- | Infrastructure is one inventory with sibling views. Keeping this list shared by the
 -- page tabs and sidebar flyout prevents Containers drifting back into Explorer.
 infrastructureNavTabs_ :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Html ()
-infrastructureNavTabs_ pid active fromM toM sinceM =
-  nav_ [class_ "tabs tabs-box tabs-outline flex-nowrap items-center", Aria.label_ "Infrastructure views", term "hx-preload" "mouseover"]
-    $ forM_ infrastructureTabs
-    $ \(label, path) ->
-      a_
-        ( [ href_ $ timeScopedUrl ("/p/" <> pid.toText <> path) [] fromM toM sinceM
-          , class_ $ "tab h-auto! whitespace-nowrap" <> bool "" " tab-active font-semibold text-textStrong" (label == active)
-          , term "aria-current" $ bool "false" "page" (label == active)
-          ]
-            <> navTabAttrs
-        )
-        (toHtml label)
+infrastructureNavTabs_ pid active fromM toM sinceM = navTabStrip_ NavLinks "Infrastructure views" "" [(toHtml label, timeScopedUrl ("/p/" <> pid.toText <> path) [] fromM toM sinceM, label == active) | (label, path) <- infrastructureTabs]
 
 
 infrastructureTabs :: [(Text, Text)]

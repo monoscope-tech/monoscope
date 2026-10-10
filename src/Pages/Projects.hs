@@ -64,6 +64,7 @@ import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.Error.Static (throwError)
+import Effectful.Exception (trySync)
 import Effectful.Reader.Static (ask)
 import Fmt
 import GHC.Records (HasField (getField))
@@ -83,7 +84,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, mkPageCtx, s
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as SlackP
 import Pages.Bots.Utils qualified as BotUtils
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), PanelCfg (..), confirmModal_, dirtyFormSaveAttr_, emptyState_, formActionsModal_, formField_, formSelectField_, headerRow_, iconBadgeXs_, iconBadge_, infoBanner_, modalWith_, panel_, sectionLabel_, settingsH2_, settingsNavLink_, settingsSection_, tagInput_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), PanelCfg (..), confirmModal_, dirtyFormSaveAttr_, emptyState_, filterInputAttr_, formActionsModal_, formField_, formSelectField_, headerRow_, iconBadgeXs_, iconBadge_, infoBanner_, modalWith_, panel_, searchInput_, sectionLabel_, settingsH2_, settingsNavLink_, settingsSection_, tagInput_)
 import Pages.Settings qualified as Settings
 import Pkg.Components.Table (Table (..))
 import Pkg.Components.Table qualified as Table
@@ -98,7 +99,6 @@ import Servant.API.ResponseHeaders (Headers)
 import Servant.Server (err302, err500, errBody, errHeaders)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent, redirectCS, toastError)
-import UnliftIO.Exception (tryAny)
 import Utils (LoadingSize (..), encodeText, faSprite_, htmxIndicator_, isDemoAndNotSudo, lookupValueText)
 import Web.FormUrlEncoded (FromForm)
 
@@ -209,10 +209,7 @@ projectCard_ project = do
           $ (def :: Widget)
             { wType = WTTimeseriesLine
             , id = Just project.id.toText
-            , title = Nothing
-            , subtitle = Nothing
             , hideSubtitle = Just True
-            , query = Nothing
             , _projectId = Just project.id
             , naked = Just True
             , hideLegend = Just True
@@ -336,7 +333,7 @@ updateNotificationsChannel pid NotifListForm{enabledChannels, phones, emails, sl
               -- Other channels: probe via chat.postMessage (needs bot membership).
               -- A dead OAuth webhook (uninstalled app, revoked token) shouldn't
               -- persist as a routing target any more than an un-invited channel.
-              r <- tryAny $ case (cid == slackInfo.channelId, slackInfo.webhookUrl) of
+              r <- trySync $ case (cid == slackInfo.channelId, slackInfo.webhookUrl) of
                 (True, Just url) -> SlackP.sendSlackWelcomeViaWebhook url project.title
                 _ -> SlackP.sendSlackWelcomeMessage slackInfo.botToken cid project.title
               case r of
@@ -990,9 +987,7 @@ teamPage pid team projMembers slackChannels discordChannels = do
       lazySection_ secId icon title searchPh url = div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
         div_ [class_ "flex items-center justify-between w-full p-4 border-b border-strokeWeak"] do
           span_ [class_ "flex items-center gap-2 text-sm font-semibold text-textStrong"] (faSprite_ icon "regular" "h-4 w-4" >> toHtml title)
-          label_ [class_ "input input-sm w-64 bg-fillWeak border-0"] do
-            faSprite_ "magnifying-glass" "regular" "h-3.5 w-3.5 text-iconNeutral"
-            input_ [type_ "text", placeholder_ searchPh, term "_" [text|on input show <tr/> in #${secId} when its textContent.toLowerCase() contains my value.toLowerCase()|]]
+          searchInput_ "w-64 bg-fillWeak border-0" searchPh [filterInputAttr_ $ "#" <> secId <> " tr"]
         div_ [class_ "w-full max-h-96 overflow-y-auto", id_ secId] do
           unless (T.null url) $ a_ [hxGet_ url, hxTrigger_ "intersect once", hxTarget_ $ "#" <> secId, hxSwap_ "outerHTML"] ""
           emptyState_ def{icon = Just icon, size = ESCompact} ("No " <> T.toLower title <> " linked") ""
@@ -1003,8 +998,8 @@ teamPage pid team projMembers slackChannels discordChannels = do
         toHtml team.name
         when isEveryone $ span_ [class_ "badge badge-primary"] "Default"
     when isEveryone
-      $ div_ [class_ "rounded-lg bg-fillBrand-weak p-4 text-sm text-textStrong mb-6"] do
-        faSprite_ "circle-info" "regular" "h-4 w-4 inline mr-2"
+      $ div_ [class_ "mb-6"]
+      $ infoBanner_ do
         "@everyone automatically includes all project members. "
         "Channels configured on the "
         a_ [href_ ("/p/" <> pid.toText <> "/settings/integrations"), class_ "text-textBrand underline"] "Integrations page"
@@ -1166,16 +1161,12 @@ deleteMemberH pid memberId = do
   projMembers <- ProjectMembers.selectActiveProjectMembers pid
   case find (\m -> m.id == memberId) projMembers of
     Nothing -> toastError "Member not found" mempty
-    Just member ->
-      if member.userId == currUserId
-        then toastError "You cannot remove yourself" mempty
-        else do
-          _ <- ProjectMembers.softDeleteProjectMembers (memberId :| [])
-          Projects.logAuditS pid Projects.AEMemberRemoved sess
-            $ Just
-            $ AE.object ["removed_email" AE..= CI.original member.email]
-          addSuccessToast "Member removed" Nothing
-          addRespHeaders mempty
+    Just member | member.userId == currUserId -> toastError "You cannot remove yourself" mempty
+    Just member -> do
+      _ <- ProjectMembers.softDeleteProjectMembers (memberId :| [])
+      Projects.logAuditS pid Projects.AEMemberRemoved sess $ Just $ AE.object ["removed_email" AE..= CI.original member.email]
+      addSuccessToast "Member removed" Nothing
+      addRespHeaders mempty
 
 
 -- | Client-side redirect to @url@, or surface @msg@ as an error toast when absent.
@@ -1506,14 +1497,13 @@ createProjectBody pid cp = do
       , hxSwap_ "innerHTML"
       , id_ "createUpdateBodyForm"
       , hxIndicator_ "#createIndicator"
-      , [__| on change add .form-dirty to me |]
       ]
       do
         -- Project details
         div_ [class_ "space-y-4"] do
           formField_ FieldSm def{value = cp.title, placeholder = "My Project"} "Project Name" "title" True Nothing
           formSelectField_ FieldSm "Timezone" "timeZone" False do
-            option_ [value_ cp.timeZone] $ toHtml cp.timeZone
+            option_ [value_ cp.timeZone, [__|init repeat for tz in Intl.supportedValuesOf('timeZone') make an Option from tz, tz then call my parentElement.add(it) end|]] $ toHtml cp.timeZone
           formField_ FieldSm def{inputType = "textarea", value = cp.description, placeholder = "What is this project about?", extraAttrs = [rows_ "3"]} "Description" "description" False Nothing
 
         -- Alert configuration
@@ -1526,20 +1516,6 @@ createProjectBody pid cp = do
             htmxIndicator_ "createIndicator" LdXS
             faSprite_ "floppy-disk" "regular" "w-3 h-3"
             span_ "Save Changes"
-
-    script_ do
-      [text|
-           (() => {
-             const timezoneSelect = document.getElementById("timeZone");
-             const timeZones = Intl.supportedValuesOf('timeZone');
-             timeZones.forEach((tz) => {
-               const option = document.createElement("option");
-               option.value = tz;
-               option.text = tz;
-               timezoneSelect.appendChild(option);
-             });
-           })();
-        |]
 
     -- Danger zone — compact
     div_ [class_ "border border-strokeError-weak rounded-xl p-4 flex max-sm:flex-col sm:items-center sm:justify-between gap-4"] do

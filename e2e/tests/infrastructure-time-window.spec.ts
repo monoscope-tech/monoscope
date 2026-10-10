@@ -49,7 +49,7 @@ for (const [route, container, filters, searchName] of views) {
     expect(params.getAll("to")).toEqual([""]);
     for (const [key, value] of Object.entries(filters)) expect(params.getAll(key)).toEqual([value]);
     expect(await entries.evaluateAll(rows => rows.every(row => new URL(row.getAttribute("data-hx-get")!, location.origin).searchParams.get("since") === "1H"))).toBe(true);
-    const focusTarget = searchName ? page.getByRole("textbox", { name: searchName, exact: true }) : page.locator(`#${container} select[name="fill"]`);
+    const focusTarget = searchName ? page.getByRole("searchbox", { name: searchName, exact: true }) : page.locator(`#${container} select[name="fill"]`);
     if (searchName) await focusTarget.fill("600");
     for (const [preset, count] of [["5M", 1], ["1H", 2]] as const) {
       await page.locator('[popovertarget="n-timepicker-popover"]').click();
