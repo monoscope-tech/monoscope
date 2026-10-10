@@ -170,7 +170,11 @@ codeMappingsContent pid sampleM = do
           whenJust run.error $ p_ [class_ "mt-2 text-xs text-textError"] . toHtml
           whenJust run.result \value -> case AE.fromJSON value of
             AE.Error _ -> p_ [class_ "mt-2 text-xs text-textWeak"] "The saved review could not be displayed. Rerun the review."
-            AE.Success result -> div_ [class_ "prose prose-sm mt-2 max-w-none"] $ renderMarkdown (ImpactReview.renderReview authConfig.hostUrl run True result)
+            AE.Success result -> do
+              div_ [class_ "prose prose-sm mt-2 max-w-none"] $ renderMarkdown (ImpactReview.renderReview authConfig.hostUrl run True result)
+              forM_ (filter (isJust . (.series)) result.evidence) \item -> whenJust item.query \query -> details_ [class_ "mt-2 text-xs"] do
+                summary_ [class_ "cursor-pointer"] $ toHtml ("Production evidence query · " <> fromMaybe "mapped service" item.service)
+                pre_ [class_ "overflow-auto p-2"] $ code_ $ toHtml query
           when (run.revision == run.latestRevision && run.state /= ImpactReviews.Reviewing) $ button_ [class_ "btn btn-xs btn-ghost mt-2", hxPost_ ("/p/" <> pid.toText <> "/settings/pr-reviews/" <> run.id.toText <> "/rerun"), hxTarget_ "#code-mappings-content"] "Rerun review"
   where
     sample = fromMaybe "" sampleM
