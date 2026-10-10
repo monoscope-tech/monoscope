@@ -1,7 +1,7 @@
 module Models.DashboardTemplatesSpec (spec) where
 
-import Data.List qualified as L (isSuffixOf)
 import Data.Effectful.Hasql (SqlSource (..))
+import Data.List qualified as L (isSuffixOf)
 import Data.Text qualified as T
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
