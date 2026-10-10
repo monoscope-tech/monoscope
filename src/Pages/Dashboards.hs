@@ -1737,7 +1737,7 @@ data WidgetAlertForm = WidgetAlertForm
   , unit :: Maybe Text
   , alertThreshold :: Maybe Text
   , warningThreshold :: Maybe Text
-  , direction :: Text
+  , direction :: Issues.ThresholdDirection
   , alertRecoveryThreshold :: Maybe Text
   , warningRecoveryThreshold :: Maybe Text
   , frequency :: Maybe Text

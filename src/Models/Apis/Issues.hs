@@ -501,7 +501,7 @@ data RuntimeExceptionData = RuntimeExceptionData
 data ThresholdDirection = Above | Below
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON, Display) via WrappedEnumSC 'Nothing "" ThresholdDirection
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromHttpApiData) via WrappedEnumSC 'Nothing "" ThresholdDirection
 
 
 -- | Query Alert issue data

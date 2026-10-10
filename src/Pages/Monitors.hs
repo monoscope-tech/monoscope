@@ -45,6 +45,7 @@ import Data.List (partition)
 import Data.Map.Strict qualified as Map
 import Data.Ord (clamp)
 import Data.Text qualified as T
+import Data.Text.Display qualified as Display
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -56,6 +57,7 @@ import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx
 import Models.Apis.Integrations qualified as Slack
+import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors (MonitorBulkAction (..))
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
@@ -94,7 +96,7 @@ data AlertUpsertForm = AlertUpsertForm
   , recipientEmails :: [Text]
   , recipientSlacks :: [Text]
   , recipientEmailAll :: Maybe Bool
-  , direction :: Text
+  , direction :: Issues.ThresholdDirection
   , title :: Text
   , severity :: Text
   , subject :: Text
@@ -173,7 +175,7 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
           , lastEvaluated = Just now
           , warningLastTriggered = Nothing
           , alertLastTriggered = Nothing
-          , triggerLessThan = alertForm.direction == "below"
+          , triggerLessThan = alertForm.direction == Issues.Below
           , thresholdSustainedForMins = 0
           , alertConfig
           , deletedAt = Nothing
@@ -427,7 +429,7 @@ data UnifiedMonitorDetails = AlertDetails
   { query :: Text
   , alertThreshold :: Double
   , warningThreshold :: Maybe Double
-  , triggerDirection :: Text -- "above" or "below"
+  , triggerDirection :: Issues.ThresholdDirection
   }
 
 
@@ -592,7 +594,7 @@ renderNameCol item = do
         span_ [class_ "tabular-nums"] $ maybe "Never run" (toHtml . prettyTimeShort item.now) item.lastRun
         when (item.details.alertThreshold > 0) do
           span_ [class_ "text-textWeak/40"] "\xb7"
-          span_ [class_ "tabular-nums text-iconError bg-fillError-weak rounded-full px-1.5 py-px text-2xs"] $ toHtml $ formatWithCommas item.details.alertThreshold <> " " <> item.details.triggerDirection
+          span_ [class_ "tabular-nums text-iconError bg-fillError-weak rounded-full px-1.5 py-px text-2xs"] $ toHtml $ formatWithCommas item.details.alertThreshold <> " " <> Display.display item.details.triggerDirection
         forM_ item.teamBadges \(_, handle) -> span_ [class_ "badge badge-sm badge-neutral"] $ toHtml handle
       div_ [class_ "flex gap-1 items-center shrink-0"] $ actionBtns "-mobile"
 
@@ -679,7 +681,7 @@ alertDeleteH pid monitorId = do
 renderThresholdCol :: UnifiedMonitorItem -> Html ()
 renderThresholdCol item =
   div_ [class_ "flex flex-col gap-1"] do
-    span_ [class_ "text-xs tabular-nums whitespace-nowrap bg-fillError-weak text-iconError rounded-full px-2 py-0.5 w-fit"] $ toHtml $ formatWithCommas item.details.alertThreshold <> " (" <> item.details.triggerDirection <> ")"
+    span_ [class_ "text-xs tabular-nums whitespace-nowrap bg-fillError-weak text-iconError rounded-full px-2 py-0.5 w-fit"] $ toHtml $ formatWithCommas item.details.alertThreshold <> " (" <> Display.display item.details.triggerDirection <> ")"
     whenJust item.details.warningThreshold \w ->
       span_ [class_ "text-xs tabular-nums whitespace-nowrap bg-fillWarning-weak text-iconWarning rounded-full px-2 py-0.5 w-fit"] $ toHtml $ formatWithCommas w <> " (warn)"
 
@@ -701,7 +703,7 @@ toUnifiedMonitorItem teamMap pid currTime alert =
           { query = alert.logQuery
           , alertThreshold = alert.alertThreshold
           , warningThreshold = alert.warningThreshold
-          , triggerDirection = bool "above" "below" alert.triggerLessThan
+          , triggerDirection = bool Issues.Above Issues.Below alert.triggerLessThan
           }
     , teamBadges = mapMaybe (\tid -> (tid.toText,) <$> Map.lookup tid teamMap) $ V.toList alert.teams
     }

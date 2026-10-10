@@ -1,5 +1,6 @@
 module Pages.MonitorsSpec (spec) where
 
+import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors
 import Test.Hspec
 
@@ -39,7 +40,7 @@ alertForm =
     , recipientEmails = ["example.com"]
     , recipientSlacks = []
     , recipientEmailAll = Just True
-    , direction = "down"
+    , direction = Issues.Above
     , alertThreshold = 1
     , warningThreshold = Nothing
     , alertId = Just (UUID.toText alertId)
