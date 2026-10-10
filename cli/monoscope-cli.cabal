@@ -1,6 +1,6 @@
 cabal-version:      3.4
 name:               monoscope-cli
-version:            0.1.0.0
+version:            0.6.31
 license:            AGPL-3.0-only
 license-file:       ../LICENSE
 author:             Monoscope
