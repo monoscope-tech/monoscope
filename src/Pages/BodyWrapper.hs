@@ -319,7 +319,8 @@ bodyWrapper bcfg child = do
           -- arrives produces an unstyled wrapper followed by a visible resize.
           deferredCss href =
             link_ [rel_ "preload", term "as" "style", href_ href, onload_ "this.onload=null;this.rel='stylesheet'"]
-          deferScript src = script_ [src_ src, defer_ "true"] ("" :: Text)
+          -- A late extension must bind the DOM that HTMX may already have processed.
+          deferScript src = script_ ([src_ src, defer_ "true"] <> [onload_ "htmx.process(document.body)" | src == assetUrl "/public/assets/deps/htmx/hx-live-4.js"]) ("" :: Text)
           gridStackScript src = do
             void $ script_ "window.gridStackReady = new Promise(resolve => { window.__resolveGridStack = resolve; });"
             script_ [src_ src, defer_ "true", onload_ "window.__resolveGridStack?.(window.GridStack)"] ("" :: Text)
@@ -336,12 +337,10 @@ bodyWrapper bcfg child = do
 
       fold bcfg.headContent
 
-      -- Loading HTMX during parsing defers its initialization until DOMContentLoaded,
-      -- after every deferred extension has registered its hooks.
-      script_ [src_ (assetUrl "/public/assets/deps/htmx/htmx-4.0.0.min.js")] ("" :: Text)
       mapM_
         deferScript
-        $ [ -- Must load immediately after htmx: restores implicit attribute inheritance
+        $ [ assetUrl "/public/assets/deps/htmx/htmx-4.0.0.min.js"
+          , -- Must load immediately after htmx: restores implicit attribute inheritance
             -- (v4 requires `:inherited` otherwise) and 4xx/5xx no-swap. The app's own
             -- listeners use v4 event names directly, so the shim's legacy-name replay is
             -- only load-bearing for third-party code (hyperscript binds the legacy load event).
