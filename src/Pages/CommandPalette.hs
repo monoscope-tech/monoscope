@@ -35,7 +35,7 @@ data RecentForm = RecentForm {label :: Text, url :: Text, itemType :: Text}
 -- | Returns dynamic palette items (recents, dashboards, issues, monitors) loaded lazily.
 commandPaletteItemsH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 commandPaletteItemsH pid = do
-  sess <- Projects.getSession
+  (sess, _) <- Projects.sessionAndProject pid
   recents <-
     Hasql.interp
       [HI.sql|
@@ -61,7 +61,7 @@ commandPaletteItemsH pid = do
 
 commandPaletteRecentPostH :: Projects.ProjectId -> RecentForm -> ATAuthCtx (RespHeaders NoContent)
 commandPaletteRecentPostH pid form = do
-  sess <- Projects.getSession
+  (sess, _) <- Projects.sessionAndProject pid
   void
     $ Hasql.interpExecute
       [HI.sql|
@@ -122,26 +122,25 @@ paletteShell_ pid = do
           div_ [id_ "cmd-palette-dynamic", hxGet_ ("/p/" <> pidTxt <> "/command-palette"), hxTrigger_ "palette:open from:body", hxSwap_ "outerHTML", class_ "text-center text-xs text-textWeak py-2"] "Loading..."
           -- Direct page links (static, always present)
           forM_ ([("log_explorer", "explore", "Log Explorer"), ("api_catalog", "swap", "API Catalog"), ("reports", "chart-simple", "Reports"), ("settings", "gear", "Settings")] :: [(Text, Text, Text)]) \(path, icon, label) ->
-            cmdItem pidTxt "direct" path [] icon label "Page"
+            cmdItem pidTxt CKDirect path [] icon label "Page"
           -- Logs shortcut
-          cmdLink_ "search logs" "direct" [href_ $ "/p/" <> pidTxt <> "/log_explorer", data_ "log-shortcut" "true", term "hx-live:href" "'/p/' + closest('.cmd-palette').dataset.pid + '/log_explorer?query=' + encodeURIComponent(q('#cmd-palette-input').value)"]
+          cmdLink_ "search logs" CKLogShortcut [href_ $ "/p/" <> pidTxt <> "/log_explorer", term "hx-live:href" "'/p/' + closest('.cmd-palette').dataset.pid + '/log_explorer?query=' + encodeURIComponent(q('#cmd-palette-input').value)"]
             $ itemBody_ "explore" [term "hx-live:text" "'Search logs for: \"' + q('#cmd-palette-input').value + '\"'"] "Search logs for: \"\"" "Logs"
           -- Actions
-          cmdItem pidTxt "direct" "log_explorer#create-alert-toggle" [] "plus" "Create monitor" "Action"
-          cmdItem pidTxt "direct" "dashboards?new=true" [] "plus" "Create dashboard" "Action"
-          cmdLink_ "switch project" "direct" [href_ "/"] $ itemBody_ "grid" [] "Switch project" "Action"
+          cmdItem pidTxt CKDirect "log_explorer#create-alert-toggle" [] "plus" "Create monitor" "Action"
+          cmdItem pidTxt CKDirect "dashboards?new=true" [] "plus" "Create dashboard" "Action"
+          cmdLink_ "switch project" CKDirect [href_ "/"] $ itemBody_ "grid" [] "Switch project" "Action"
           cmdLink_
             "copy current url"
-            "direct"
+            CKDirect
             [ data_ "action" "copy-url"
             , [__|on click call navigator.clipboard.writeText(window.location.href) then add .hidden to #cmd-palette-backdrop|]
             ]
             $ itemBody_ "copy" [] "Copy current URL" "Action"
           cmdLink_
             ""
-            "direct"
-            [ data_ "ai-action" "true"
-            , [__|on click
+            CKAiAction
+            [ [__|on click
                 set :q to #cmd-palette-input.value
                 fetch `/p/${me.closest('.cmd-palette').dataset.pid}/log_explorer/ai_search` {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({input: :q, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone})} as json
                 then set :r to it
@@ -204,7 +203,7 @@ renderDynamicItems pid recents issues monitors dashboards =
         "dashboard"
         "Dashboards"
         "Dashboard"
-        [cmdItem pidTxt "child" "dashboards" [data_ "cmd-category" "dashboards", hidden_ ""] "dashboard" "All Dashboards" "Page"]
+        [cmdItem pidTxt CKChild "dashboards" [data_ "cmd-category" "dashboards", hidden_ ""] "dashboard" "All Dashboards" "Page"]
         [("dashboards/" <> show d.id, if T.null d.title then "Untitled Dashboard" else d.title) | d <- dashboards]
       section "issues" "bug" "Issues" "Issue" [] [("issues/" <> show i.id, i.title) | i <- issues]
       section "monitors" "list-check" "Monitors" "Monitor" [] [("monitors?highlight=" <> show m.id, m.title) | m <- monitors]
@@ -215,13 +214,13 @@ renderDynamicItems pid recents issues monitors dashboards =
       categoryItem category icon label (length items + length extras)
       sequence_ extras
       forM_ items \(path, title) ->
-        cmdItem pidTxt "child" path [data_ "cmd-category" category, hidden_ ""] icon title badge
+        cmdItem pidTxt CKChild path [data_ "cmd-category" category, hidden_ ""] icon title badge
 
     categoryItem :: Text -> Text -> Text -> Int -> Html ()
     categoryItem category icon label count =
       cmdLink_
         (T.toLower label)
-        "category"
+        CKCategory
         [ data_ "cmd-category" category
         , href_ "#"
         , [__|on click halt the event then send cmdNav(cat: my.dataset.cmdCategory) to #cmd-palette-input|]
@@ -234,7 +233,7 @@ renderDynamicItems pid recents issues monitors dashboards =
 
     recentItem :: PaletteRecent -> Html ()
     recentItem r =
-      cmdLink_ (T.toLower r.label) "recent" (href_ r.url : recentAttrs pidTxt r.label r.itemType)
+      cmdLink_ (T.toLower r.label) CKRecent (href_ r.url : recentAttrs pidTxt r.label r.itemType)
         $ itemBody_ icon [] (toHtml r.label) (T.toTitle r.itemType)
       where
         icon = fromMaybe "clock" $ lookup r.itemType [("page", "file-lines"), ("issue", "bug"), ("monitor", "list-check"), ("dashboard", "dashboard")]
@@ -254,17 +253,30 @@ recentAttrs pidTxt label itemType =
   ]
 
 
--- | Every palette row; its visibility is derived from the current category and query.
-cmdLink_ :: Text -> Text -> [Attribute] -> Html () -> Html ()
-cmdLink_ search cmdType attrs =
+data CmdKind = CKDirect | CKCategory | CKChild | CKRecent | CKLogShortcut | CKAiAction
+
+
+-- | Every palette row; its visibility is derived from the current category (@c@) and query (@s@),
+-- with each kind emitting only its own rule.
+cmdLink_ :: Text -> CmdKind -> [Attribute] -> Html () -> Html ()
+cmdLink_ search kind attrs =
   a_
     $ [ class_ "cmd-item flex [&[hidden]]:hidden items-center gap-2 px-3 py-2 rounded text-sm cursor-pointer transition-colors"
       , role_ "option"
       , data_ "search" search
-      , data_ "cmd-type" cmdType
-      , term "hx-live:hidden" "((c, s, t, d) => d.cmdType == 'recent' ? !!(c || s) : d.logShortcut ? !!c : d.aiAction ? !!c || s.length <= 10 : d.cmdType == 'child' ? (c ? d.cmdCategory != c : !s) || !t.includes(s) : !!c || !(i => [...s].every(ch => (i = t.indexOf(ch, i) + 1)))(0))(closest('.cmd-palette').data.currentCategory, q('#cmd-palette-input').value.toLowerCase(), this.dataset.search, this.dataset)"
+      , term "hx-live:hidden" $ "((c, s, t, d) => " <> hiddenWhen <> ")(closest('.cmd-palette').data.currentCategory, q('#cmd-palette-input').value.toLowerCase(), this.dataset.search, this.dataset)"
       ]
+      <> [data_ "cmd-type" "category" | isCategory]
       <> attrs
+  where
+    fuzzyMiss = "!!c || !(i => [...s].every(ch => (i = t.indexOf(ch, i) + 1)))(0)"
+    (hiddenWhen, isCategory) = case kind of
+      CKDirect -> (fuzzyMiss, False)
+      CKCategory -> (fuzzyMiss, True)
+      CKChild -> ("(c ? d.cmdCategory != c : !s) || !t.includes(s)", False)
+      CKRecent -> ("!!(c || s)", False)
+      CKLogShortcut -> ("!!c", False)
+      CKAiAction -> ("!!c || s.length <= 10", False)
 
 
 itemBody_ :: Text -> [Attribute] -> Html () -> Text -> Html ()
@@ -275,7 +287,7 @@ itemBody_ icon labelAttrs label badgeText = do
 
 
 -- | Base item renderer — unifies direct, child, and action items
-cmdItem :: Text -> Text -> Text -> [Attribute] -> Text -> Text -> Text -> Html ()
-cmdItem pidTxt cmdType path extraAttrs icon label badgeText =
-  cmdLink_ (T.toLower label) cmdType (href_ ("/p/" <> pidTxt <> "/" <> path) : recentAttrs pidTxt label (T.toLower badgeText) <> extraAttrs)
+cmdItem :: Text -> CmdKind -> Text -> [Attribute] -> Text -> Text -> Text -> Html ()
+cmdItem pidTxt kind path extraAttrs icon label badgeText =
+  cmdLink_ (T.toLower label) kind (href_ ("/p/" <> pidTxt <> "/" <> path) : recentAttrs pidTxt label (T.toLower badgeText) <> extraAttrs)
     $ itemBody_ icon [] (toHtml label) badgeText

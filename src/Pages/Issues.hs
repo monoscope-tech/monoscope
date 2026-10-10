@@ -1809,9 +1809,11 @@ issueSystemPrompt now =
 -- | Handle AI chat POST request
 -- Designed to power the AI chat in the anomalies page. The chat thread is loaded via htmx and theres an input which when submitted gets sent here.
 aiChatPostH :: Projects.ProjectId -> Issues.IssueId -> AIChatForm -> ATAuthCtx (RespHeaders (Html ()))
-aiChatPostH pid issueId form
-  | T.length form.query > 4000 = addRespHeaders $ aiChatResponse_ pid form.query "Query too long. Maximum 4000 characters allowed." Nothing Nothing Nothing
-  | otherwise = do
+aiChatPostH pid issueId form = do
+  _ <- Projects.sessionAndProject pid
+  if T.length form.query > 4000
+    then addRespHeaders $ aiChatResponse_ pid form.query "Query too long. Maximum 4000 characters allowed." Nothing Nothing Nothing
+    else do
       appCtx <- ask @AuthContext
       now <- Time.currentTime
       let convId = UUIDId issueId.unUUIDId :: UUIDId "conversation"

@@ -278,6 +278,22 @@ spec = sequential do
         void $ testServant tr $ GitSyncPage.gitSyncSettingsDeleteH testPid
         runTestBg frozenTime tr (GitSync.getGitHubSync testPid) >>= (`shouldSatisfy` isNothing)
 
+      -- None of these checked membership: any signed-in user could connect, replace or
+      -- disconnect another project's config repository, or bind a GitHub installation to it.
+      it "gitSync_nonMember_cannotMutate" \tr -> do
+        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
+            form = GitSyncForm{host = Just Git.GitHub, apiBase = Nothing, owner = "attacker", repo = "evil", branch = "main", accessToken = "ghp_x", webhookSecret = Nothing, pathPrefix = Nothing}
+        victim <- createTestProject tr "victim"
+        _ <- runQueryEffect tr $ GitSync.insertGitHubSync encKey victim Git.GitHub Nothing "acme" "config" "main" (GitSync.PersonalToken "ghp_test") Nothing ""
+        let syncOf = fmap (\s -> (s.owner, s.repo, s.installationId)) <$> runTestBg frozenTime tr (GitSync.getGitHubSync victim)
+        seeded <- syncOf
+        assertNonMemberDenied tr victim $ GitSyncPage.gitSyncSettingsPostH victim form
+        assertNonMemberDenied tr victim $ GitSyncPage.gitSyncSettingsDeleteH victim
+        assertNonMemberDenied tr victim $ GitSyncPage.githubAppSelectRepoH victim (GitSyncPage.RepoSelectForm "attacker/evil" "main" Nothing 42)
+        assertNonMemberDenied tr victim $ GitSyncPage.githubAppInstallH victim Nothing
+        assertNonMemberDenied tr victim $ GitSyncPage.githubAppCallbackH (Just 42) Nothing (Just victim.toText)
+        syncOf `shouldReturn` seeded
+
     describe "Sync Plan Building" do
       it "creates for new files" \_ -> do
         let entries = [GitSync.TreeEntry "dashboards/new.yaml" True (Just "sha1") (Just 100), GitSync.TreeEntry "dashboards/other.yaml" True (Just "sha2") (Just 100)]

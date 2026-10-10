@@ -158,6 +158,7 @@ humanizeMinioErr = \case
 
 brings3PostH :: Projects.ProjectId -> Projects.ProjectS3Bucket -> ATAuthCtx (RespHeaders (Html ()))
 brings3PostH pid s3Form = do
+  (sess, _) <- Projects.sessionAndProject pid
   let connectInfo =
         Minio.setCreds (Minio.CredentialValue (Minio.AccessKey s3Form.accessKey) (fromString $ toString s3Form.secretKey) Nothing)
           $ Minio.setRegion s3Form.region
@@ -169,7 +170,6 @@ brings3PostH pid s3Form = do
     Right False -> notConnected "Bucket does not exist"
     Right True -> do
       void $ Projects.updateProjectS3Bucket pid $ Just s3Form
-      sess <- Projects.getSession
       Projects.logAuditS pid Projects.AES3Configured sess Nothing
       addSuccessToast "Connected successfully" Nothing
       addRespHeaders $ connectionBadge_ True
@@ -923,6 +923,7 @@ notificationsTestPostH pid TestForm{..} = do
 
 notificationsTestHistoryGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders NotificationTestHistoryGet)
 notificationsTestHistoryGetH pid = do
+  _ <- Projects.sessionAndProject pid
   -- Columns spelled out (not @SELECT *@) so an ADD COLUMN can't shift TestHistory's
   -- positional decode; the list matches its field order.
   tests <- Hasql.interp [HI.sql|SELECT id, project_id, issue_type, channel, target, status, error, created_at FROM apis.notification_test_history WHERE project_id = #{pid} ORDER BY created_at DESC LIMIT 20|]

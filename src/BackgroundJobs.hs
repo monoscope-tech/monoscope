@@ -3235,7 +3235,7 @@ processAPIChangeAnomalies pid targetHashes = do
       let firstAnom = head anomalies
           hasChanges = any ((== ApiChanges.ATEndpoint) . (.anomalyType)) anomalies || Issues.hasFieldDrift (Issues.apiChangeDataFrom anomalies)
       case existingIssueM of
-        Just existingIssue -> Nothing <$ when hasChanges (Issues.updateIssueWithNewAnomaly existingIssue anomalies)
+        Just existingIssue -> Nothing <$ when hasChanges (Issues.updateIssueWithNewAnomaly existingIssue.id anomalies)
         Nothing -> do
           -- "unresolved" tags whether this row should produce a customer
           -- notification. The issue itself is always created (the UI shows

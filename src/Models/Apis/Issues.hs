@@ -241,7 +241,7 @@ import Models.Apis.LogPatterns (RateChangeDirection (..))
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), enumLit, rawSql, selectFrom)
+import Pkg.DeriveUtils (SqlEnum (..), UUIDId (..), WrappedEnumSC (..), rawSql, selectFrom)
 import Pkg.Parser (ScopedQuery (..))
 import Relude hiding (id)
 import Servant (FromHttpApiData (..), ServerError, err500, errBody)
@@ -267,7 +267,7 @@ data IssueType
   | Feedback
   deriving stock (Bounded, Enum, Eq, Generic, Ord, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC ('Just "apis.issue_type") "" IssueType
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, SqlEnum, ToField, ToSchema) via WrappedEnumSC ('Just "apis.issue_type") "" IssueType
 
 
 -- | Why a cron monitor opened an issue.
@@ -947,23 +947,26 @@ selectIssues pid projection f = do
 
 
 -- | Fold an anomaly group's drift into an open API-change issue, escalating it on a breaking change.
-updateIssueWithNewAnomaly :: (DB es, Time :> es) => Issue -> NonEmpty ApiChanges.AnomalyVM -> Eff es ()
-updateIssueWithNewAnomaly issue anomalies = do
+-- The row lock keeps concurrent jobs folding into the same issue from dropping each other's drift.
+updateIssueWithNewAnomaly :: (DB es, Time :> es) => IssueId -> NonEmpty ApiChanges.AnomalyVM -> Eff es ()
+updateIssueWithNewAnomaly issueId anomalies = do
   now <- Time.currentTime
   let new = apiChangeDataFrom anomalies
-      merged = case issuePayload issue of
-        Just (ApiChangeP old) -> old <> new
-        _ -> new
       breaking = not (V.null new.deletedFields && V.null new.modifiedFields)
-  Hasql.interpExecute_
-    [HI.sql|
-      UPDATE apis.issues SET
-        issue_data = issue_data || #{Aeson merged}::jsonb,
-        critical = critical OR #{breaking},
-        severity = CASE WHEN #{breaking} THEN #{Critical} ELSE severity END,
-        affected_requests = affected_requests + 1,
-        updated_at = #{now}
-      WHERE id = #{issue.id} |]
+  Hasql.transaction TxS.ReadCommitted TxS.Write do
+    old <-
+      Hasql.queryTx @[HI.OneColumn (Aeson AE.Value)]
+        [HI.sql| SELECT issue_data FROM apis.issues WHERE id = #{issueId} AND issue_type = #{ApiChange}::apis.issue_type FOR UPDATE |]
+    let merged = maybe new (<> new) $ AET.parseMaybe AE.parseJSON . getAeson . HI.getOneColumn =<< listToMaybe old
+    Hasql.executeTx
+      [HI.sql|
+        UPDATE apis.issues SET
+          issue_data = issue_data || #{Aeson merged}::jsonb,
+          critical = critical OR #{breaking},
+          severity = CASE WHEN #{breaking} THEN #{Critical} ELSE severity END,
+          affected_requests = affected_requests + 1,
+          updated_at = #{now}
+        WHERE id = #{issueId} |]
 
 
 updateIssueEnhancement :: (DB es, Time :> es) => IssueId -> Text -> Text -> Text -> Eff es ()

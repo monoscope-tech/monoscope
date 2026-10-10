@@ -551,14 +551,14 @@ integrationsSwapAttrs_ :: [Attribute]
 integrationsSwapAttrs_ = [hxTarget_ "#integrations-form-section", hxSelect_ "#integrations-form-section", hxSwap_ "outerHTML swap:0.3s"]
 
 
--- | @attrs@ extend the submit button (e.g. @disabled_@ until a channel is configured).
-renderInlineTestButton :: Text -> Settings.TestChannel -> Maybe ProjectMembers.TeamId -> [Attribute] -> Html ()
-renderInlineTestButton pid channel teamIdM attrs =
+-- | @enabled@ is False until a channel is configured.
+renderInlineTestButton :: Text -> Settings.TestChannel -> Maybe ProjectMembers.TeamId -> Bool -> Bool -> Html ()
+renderInlineTestButton pid channel teamIdM primary enabled =
   form_ [hxPost_ [text|/p/$pid/settings/integrations/test|], hxSwap_ "none", hxTrigger_ "submit", class_ "inline"] do
     input_ [type_ "hidden", name_ "channel", value_ (display channel)]
     input_ [type_ "hidden", name_ "issueType", value_ "runtime_exception"]
     whenJust teamIdM \tid -> input_ [type_ "hidden", name_ "teamId", value_ tid.toText]
-    button_ ([type_ "submit", class_ "btn btn-xs gap-1", testSentAttr_] <> attrs) do
+    button_ ([type_ "submit", class_ $ bool "btn btn-xs gap-1" "btn btn-xs btn-primary tap-target gap-1" primary, testSentAttr_] <> [disabled_ "" | not enabled]) do
       faSprite_ "flask-vial" "regular" "h-3 w-3"
       "Test"
 
@@ -574,7 +574,7 @@ renderNotificationOption pid teamIdM title value testCh isChecked isConfigured i
       div_ [class_ $ "flex items-center justify-center shrink-0 w-7 h-7 rounded-md " <> bool "bg-fillWeak" "bg-fillBrand-weak" isActive] icon
       span_ [class_ "text-sm font-medium text-textStrong flex-1 min-w-0"] $ toHtml title
       div_ [class_ "flex items-center gap-2 shrink-0", id_ $ value <> "-test-button"]
-        $ renderInlineTestButton pid testCh teamIdM [disabled_ "" | not isActive]
+        $ renderInlineTestButton pid testCh teamIdM False isActive
       label_ [class_ "relative inline-flex items-center cursor-pointer tap-target", Aria.label_ $ if isChecked then "Disable " <> title else "Enable " <> title] do
         input_ [type_ "checkbox", value_ value, name_ "notifChannel", if isChecked then checked_ else title_ $ "Enable " <> title, class_ "toggle toggle-sm toggle-primary"]
 
@@ -998,7 +998,7 @@ teamPage pid team projMembers slackChannels discordChannels = do
             div_ [class_ "px-4 pt-3 pb-2"] do
               callout_ BrandBadge (Just "Test your notification setup") $ div_ [class_ "flex items-center justify-between gap-3"] do
                 "Sends a test alert to all configured channels"
-                renderInlineTestButton pid.toText Settings.TCAll (Just team.id) $ class_ "btn-primary tap-target" : [disabled_ "" | not hasAnyChannel]
+                renderInlineTestButton pid.toText Settings.TCAll (Just team.id) True hasAnyChannel
               div_ [id_ $ "team-test-history-" <> team.id.toText, hxGet_ ("/p/" <> pid.toText <> "/settings/integrations/history"), hxTrigger_ "testSent from:body", hxSwap_ "innerHTML", class_ "mt-3"] mempty
       div_ [class_ "flex-1 space-y-4"] do
         lazySection_ "monitors-section" "bell" "Monitors" "Search monitors..." ("/p/" <> pid.toText <> "/monitors/alerts/team/" <> team.id.toText)
@@ -1314,6 +1314,7 @@ deleteProjectGetH pid = do
   if isDemoAndNotSudo pid sess.user.isSudo
     then addSuccessToast "Can't perform this action on the demo project" Nothing
     else do
+      _ <- Projects.sessionAndProject pid
       -- Before the row goes away: a subscription left running on a deleted project
       -- keeps charging the customer, and their next signup opens a second one.
       whenJustM (Projects.projectById pid) $ Settings.cancelProjectSubscription appCtx.config

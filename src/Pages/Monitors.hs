@@ -886,7 +886,7 @@ instance ToHtml UptimeChecks where
 -- | The add form and the list, swapped together: a successful add returns the form blank,
 -- a rejected one swaps nothing so the form keeps what was typed.
 uptimeChecksList_ :: Projects.ProjectId -> V.Vector PromCfg.PrometheusScrapeConfig -> Html ()
-uptimeChecksList_ pid checks = div_ [id_ "uptime-checks", class_ "space-y-4", hxTarget_ "this", hxSwap_ "outerHTML"] do
+uptimeChecksList_ pid checks = div_ [id_ "uptime-checks", class_ "space-y-4", term "hx-target:inherited" "this", term "hx-swap:inherited" "outerHTML"] do
   form_ [class_ "surface-raised rounded-xl p-4 grid md:grid-cols-[1fr_2fr_auto_auto_auto] gap-2 items-end", hxPost_ ("/p/" <> pid.toText <> "/monitors/uptime")] do
     formField_ FieldSm def{placeholder = "Checkout API"} "Name" "name" True Nothing
     formField_ FieldSm def{inputType = "url", placeholder = "https://shop.example.com/health"} "URL" "url" True Nothing
@@ -969,7 +969,7 @@ instance ToHtml CronMonitors where
 
 
 cronMonitorsList_ :: Projects.ProjectId -> [Monitors.CronMonitor] -> Html ()
-cronMonitorsList_ pid mons = div_ [id_ "cron-monitors", class_ "space-y-4", hxTarget_ "this", hxSwap_ "outerHTML"] do
+cronMonitorsList_ pid mons = div_ [id_ "cron-monitors", class_ "space-y-4", term "hx-target:inherited" "this", term "hx-swap:inherited" "outerHTML"] do
   form_ [class_ "surface-raised rounded-xl p-4 grid md:grid-cols-[1fr_1fr_auto_auto_auto] gap-2 items-end", hxPost_ ("/p/" <> pid.toText <> "/monitors/cron")] do
     -- `-` last: browsers compile `pattern` with the v flag, where a bare `-` mid-class is a syntax error.
     formField_ FieldSm def{placeholder = "nightly-billing", extraAttrs = [pattern_ "[a-z0-9_.\\-]+"]} "Slug" "slug" True Nothing

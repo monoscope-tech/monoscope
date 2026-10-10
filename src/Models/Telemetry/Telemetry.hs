@@ -175,6 +175,7 @@ import Web.HttpApiData (FromHttpApiData (..))
 
 -- $setup
 -- >>> import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime)
+-- >>> data Flags = Flags {enablePostgresTelemetryWrites :: Bool, enableTimefusionWrites :: Bool}
 
 
 -- Helper function to get nested value from a map using dot notation
@@ -1447,10 +1448,6 @@ type WriteFailure = These SomeException SomeException
 -- targeting remains useful because it avoids needless writes to the healthy leg.
 data WriteTarget = WriteBoth | WritePgOnly | WriteTfOnly
   deriving stock (Eq, Ord, Show)
-
-
--- $setup
--- >>> data Flags = Flags {enablePostgresTelemetryWrites :: Bool, enableTimefusionWrites :: Bool}
 
 
 -- | Which leg(s) a DLQ'd batch failed on. Its kebab-cased constructor is the

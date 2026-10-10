@@ -65,6 +65,8 @@ spec = around withTestResources do
       (addedH, added) <- testServant tr $ Monitors.uptimeCheckPostH testPid (Monitors.UptimeForm "Shop" "https://shop.example.com/health" (Just 60) (Just 200))
       reswapOf addedH `shouldBe` Nothing
       renderText added `shouldSatisfy` \h -> "https://shop.example.com/health" `TL.isInfixOf` h && "value name=\"url\"" `TL.isInfixOf` h
+      -- htmx 4 explicit inheritance: the add form and row buttons only swap the list if these say `:inherited`.
+      renderText added `shouldSatisfy` \h -> all (`TL.isInfixOf` h) ["hx-target:inherited=\"this\"", "hx-swap:inherited=\"outerHTML\""]
       (c : _) <- V.toList <$> runQueryEffect tr (PromCfg.configsByProjectId testPid PromCfg.CKUptime)
       let probe res = runTestBg frozenTime tr $ BackgroundJobs.applyUptimeResult c frozenTime 120 res
           issues = runQueryEffect tr (Issues.selectIssueByHash testPid (Issues.uptimeTargetHash c.id.toText) Issues.AnyIssue)
@@ -87,7 +89,7 @@ spec = around withTestResources do
 
     it "cron monitors: a check-in keeps it healthy, a missed window and an error run open issues, a later check-in resolves" \tr -> do
       (_, added) <- testServant tr $ Monitors.cronMonitorPostH testPid (Monitors.CronForm "nightly-billing" "Nightly billing" 3600 300)
-      renderText added `shouldSatisfy` TL.isInfixOf "value name=\"slug\""
+      renderText added `shouldSatisfy` \h -> all (`TL.isInfixOf` h) ["value name=\"slug\"", "hx-target:inherited=\"this\"", "hx-swap:inherited=\"outerHTML\""]
       (dupH, _) <- testServant tr $ Monitors.cronMonitorPostH testPid (Monitors.CronForm "nightly-billing" "Again" 3600 300)
       reswapOf dupH `shouldBe` Just "none"
       [m] <- runQueryEffect tr (MonitorsM.cronMonitorsByProject testPid)

@@ -168,10 +168,6 @@ spec = sequential $ aroundAll withTestResources do
       Issues.isNewEndpointOnly i0 `shouldBe` True
       ingest "eyJ1c2VybmFtZSI6ImFAYi5jbyIsInBhc3N3b3JkIjoieCJ9" -- + "password"
       (i1, d1) <- driftIssue
-      dbg :: [(Text, Text, V.Vector Text, V.Vector Text)] <- withResource tr.trPool \conn -> PGS.query_ conn [sql| SELECT anomaly_type::text, target_hash, new_fields, modified_fields FROM apis.anomalies ORDER BY created_at |]
-      dbgJobs :: [Only AE.Value] <- withResource tr.trPool \conn -> PGS.query_ conn [sql| SELECT jsonb_build_object('s', status, 'p', payload) FROM background_jobs WHERE payload->>'tag' = 'NewAnomaly' |]
-      dbgCat :: [(Text, AE.Value)] <- withResource tr.trPool \conn -> PGS.query_ conn [sql| SELECT c.key_hash, t.fields FROM apis.schema_catalog c JOIN apis.schema_template t USING (template_hash) |]
-      putStrLn $ "DRIFTDBG " <> show (dbg, map fromOnly dbgJobs, dbgCat, d1)
       (hasField "password" d1.newFields, V.null d1.modifiedFields, i1.critical) `shouldBe` (True, True, False)
       ingest "eyJ1c2VybmFtZSI6MiwicGFzc3dvcmQiOiJ4In0=" -- username: string -> number
       (i2, d2) <- driftIssue
@@ -384,6 +380,14 @@ spec = sequential $ aroundAll withTestResources do
       let archivedIssue iid = countQ tr [sql| SELECT COUNT(*)::INT FROM apis.issues WHERE id=? AND archived_at IS NOT NULL |] (Only iid)
       archivedIssue ownIid >>= (`shouldBe` 1)
       archivedIssue otherIid >>= (`shouldBe` 0)
+
+    -- The issue AI chat never checked membership: any signed-in user could spend this
+    -- project's AI budget on its telemetry and read the answers, by project and issue id.
+    it "aiChatPostH_nonMember_cannotChat" \tr -> do
+      victim <- createTestProject tr "victim"
+      iid <- UUIDId <$> UUID.nextRandom
+      assertNonMemberDenied tr victim $ IssuesPage.aiChatPostH victim iid (IssuesPage.AIChatForm "summarise this")
+      countQ tr [sql| SELECT COUNT(*)::INT FROM apis.ai_chat_messages WHERE project_id=? |] (Only victim) >>= (`shouldBe` 0)
 
     -- The sweep narrows on LEFT(target_hash, 8) to reach migration 0130's index, which is only
     -- a valid superset while the target is at least that wide. A shorter one must fall back to

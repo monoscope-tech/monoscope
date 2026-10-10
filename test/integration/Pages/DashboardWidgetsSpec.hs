@@ -188,11 +188,12 @@ spec = sequential $ aroundAll withTestResources do
       _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid dashId Nothing Nothing (widgetOf Widget.WTTimeseries "original")
       wid <- firstWidgetId =<< storedWidgets tr dashId
 
-      let edited = (widgetOf Widget.WTStat "renamed"){Widget.query = Nothing, Widget.rawQuery = Nothing}
+      -- The render-time tab slug round-trips through the posted JSON and must not be stored.
+      let edited = (widgetOf Widget.WTStat "renamed"){Widget.query = Nothing, Widget.rawQuery = Nothing, Widget._tabSlug = Just "stale-tab"}
       _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid dashId (Just wid) Nothing edited
       only <- onlyWidget =<< storedWidgets tr dashId
 
-      only.title `shouldBe` Just "renamed"
+      (only.title, only._tabSlug) `shouldBe` (Just "renamed", Nothing)
       show @Text only.wType `shouldBe` show @Text Widget.WTStat
       only.query `shouldBe` Just "name != null"
 

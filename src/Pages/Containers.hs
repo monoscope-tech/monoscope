@@ -314,6 +314,7 @@ shortImage = T.takeWhileEnd (/= '/')
 -- the window is short and the result already carries every field the panel shows.
 containerDetailGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Scope -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 containerDetailGetH pid containerM podM scopeM clusterM namespaceM nodeM fromParam toParam sinceParam = do
+  _ <- Projects.sessionAndProject pid
   window <- mkWindow fromParam toParam sinceParam
   rows <- infraSnapshot pid window
   -- Generated links identify missing metadata exactly; legacy name/pod links must be unique.

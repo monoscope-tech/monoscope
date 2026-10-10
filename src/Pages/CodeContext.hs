@@ -15,7 +15,6 @@ import Data.Default (def)
 import Data.Effectful.Wreq qualified as W
 import Data.Text qualified as T
 import Effectful (Eff, IOE, (:>))
-import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static qualified
 import Lucid
 import Lucid.Aria qualified as Aria
@@ -31,7 +30,6 @@ import Pages.Components (FieldCfg (..), FieldSize (..), disclosure_, formField_,
 import Pkg.Git qualified as Git
 import Pkg.ImpactReview qualified as ImpactReview
 import Relude
-import Servant (err403)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
@@ -382,7 +380,4 @@ impactReviewRetryH pid rid = do
 
 
 requireReviewWrite :: Projects.ProjectId -> ATAuthCtx ()
-requireReviewWrite pid = do
-  (session, _) <- Projects.sessionAndProject pid
-  permission <- ProjectMembers.getUserPermission pid session.user.id
-  unless (any (>= ProjectMembers.PEdit) permission) $ throwError err403
+requireReviewWrite = void . ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit

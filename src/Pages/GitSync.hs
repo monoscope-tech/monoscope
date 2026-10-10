@@ -135,6 +135,7 @@ gitSyncSettingsGetH pid = do
 -- row that looks connected and never syncs.
 gitSyncSettingsPostH :: Projects.ProjectId -> GitSyncForm -> ATAuthCtx (RespHeaders (Html ()))
 gitSyncSettingsPostH pid form = do
+  _ <- Projects.sessionAndProject pid
   ctx <- ask @Config.AuthContext
   let encKey = encodeUtf8 ctx.config.apiKeyEncryptionSecretKey
       host = fromMaybe Git.GitHub form.host
@@ -166,6 +167,7 @@ gitSyncSettingsPostH pid form = do
 
 gitSyncSettingsDeleteH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 gitSyncSettingsDeleteH pid = do
+  _ <- Projects.sessionAndProject pid
   ctx <- ask @Config.AuthContext
   whenJustM (GitSync.getGitHubSync pid) \existing -> do
     _ <- GitSync.deleteGitHubSync existing.id
@@ -409,6 +411,7 @@ recordInstallation pid instId = do
 -- back to whichever of the two the user started from.
 githubAppInstallH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 githubAppInstallH pid toM = do
+  _ <- Projects.sessionAndProject pid
   ctx <- ask @Config.AuthContext
   addRespHeaders
     $ redirectPage "Redirecting to GitHub..."
@@ -457,6 +460,8 @@ githubAppCallbackH instIdM _setupAction stateM = do
         (,dest) <$> rightToMaybe (parseUrlPiece pidTxt)
   case (instIdM, parsed) of
     (Just instId, Just (pid, dest)) -> do
+      -- @state@ is unsigned, so the project it names must be one the caller belongs to.
+      _ <- Projects.sessionAndProject pid
       existingM <- GitSync.getGitHubSync pid
       recordInstallation pid instId
       Log.logInfo (bool "GitHub App installed" "GitHub App already configured, updating installation" (isJust existingM)) (pid, instId, dest)
@@ -551,6 +556,7 @@ githubAppReposH pid instIdParam = withSettingsPage pid "Integrations" \_ -> do
 -- | Handle repo selection from GitHub App
 githubAppSelectRepoH :: Projects.ProjectId -> RepoSelectForm -> ATAuthCtx (RespHeaders (Html ()))
 githubAppSelectRepoH pid form = do
+  _ <- Projects.sessionAndProject pid
   ctx <- ask @Config.AuthContext
   let encKey = encodeUtf8 ctx.config.apiKeyEncryptionSecretKey
       (ownerVal, repoVal) = Git.splitFullName form.repoFullName

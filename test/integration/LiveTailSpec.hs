@@ -30,7 +30,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.LogExplorer.LiveTail qualified as LiveTailPage
 import Pkg.DeriveUtils (AesonText (..), UUIDId (..))
 import Pkg.LiveTail qualified as LT
-import Pkg.TestUtils (TestResources (..), createTestAPIKey, frozenTime, ingestLog, runHasqlEffect, testServant, withTestResources)
+import Pkg.TestUtils (TestResources (..), assertNonMemberDenied, createTestAPIKey, createTestProject, frozenTime, ingestLog, runHasqlEffect, testServant, withTestResources)
 import Relude
 import System.Config (AuthContext (hasqlPool, liveTail))
 import Test.Hspec (Spec, around, describe, it, shouldBe, shouldContain, shouldReturn, shouldSatisfy)
@@ -486,6 +486,13 @@ spec = do
           stored.id `shouldBe` row.id
           AE.toJSON stored `shouldSatisfy` \case AE.Object obj -> length obj > 10; _ -> False
         _ -> fail "expected one streamed log row"
+
+    -- Registration never called sessionAndProject: any signed-in user could open a
+    -- subscription on another project by its id and stream that project's logs.
+    it "liveTailRegisterH_nonMember_cannotSubscribe" \tr -> do
+      victim <- createTestProject tr "victim"
+      assertNonMemberDenied tr victim $ LiveTailPage.liveTailRegisterH victim (newSub "checkout")
+      runHasqlEffect tr (LT.countActiveForProject victim) `shouldReturn` 0
 
     it "countActive_int8Decoder_doesNotThrow" \tr -> do
       -- Regression. These were `count(*)::int` — int4 — while the Haskell `Int` decoder expects

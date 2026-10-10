@@ -249,7 +249,7 @@ fieldContextMenuItems_ ctx = traverse_ \case
   FGroupBy ->
     menuItem_
       "layer-group"
-      (span_ [class_ "gb-verb", term "hx-live:text" "['summarize', 'by', this.closest('[data-field-path]')?.dataset.fieldPath.toLowerCase()].every(s => (document.querySelector('#filterElement')?.getValue?.().toLowerCase() ?? '').includes(s)) ? 'Remove group by ' : 'Group by '"] "Group by " <> key_)
+      (span_ [class_ "gb-verb", term "hx-live:text" "['summarize', 'by', this.closest('[data-field-path]')?.dataset.fieldPath?.toLowerCase()].every(s => (document.querySelector('#filterElement')?.getValue?.().toLowerCase() ?? '').includes(s)) ? 'Remove group by ' : 'Group by '"] "Group by " <> key_)
       keyTip
       [__|on click set qb to document.querySelector('query-builder') if qb call qb.toggleGroupByField(closest @data-field-path) end|]
   FViewPatterns -> menuItem_ "chart-simple" ("Show patterns for " <> key_) keyTip $ onpointerdown_ "viewFieldPatterns(event.target.closest('[data-field-path]').dataset.fieldPath)"

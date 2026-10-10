@@ -55,7 +55,8 @@ apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM statsM = d
   let statsMode = if statsM == Just "true" then Endpoints.WithStats else Endpoints.ShellOnly
       skip = fromMaybe 0 skipM
       hostQuery = Endpoints.HostQuery{direction = outgoingM, archived = showArchived, sort = sortV, skip, since = filterV, period, service = session.service}
-  hostsAndEvents <- withStatsCache appCtx.hostStatsCache "hostStats:" (pid, hostQuery) statsMode \mode -> Endpoints.dependenciesAndEventsCount mode appCtx.env.enableTimefusionReads pid hostQuery
+  -- Bump the tag when HostEvents' JSON changes: the shared table outlives a deploy (v2: direction).
+  hostsAndEvents <- withStatsCache appCtx.hostStatsCache "hostStats:v2:" (pid, hostQuery) statsMode \mode -> Endpoints.dependenciesAndEventsCount mode appCtx.env.enableTimefusionReads pid hostQuery
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
 
   currTime <- Time.currentTime

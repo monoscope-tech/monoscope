@@ -747,30 +747,31 @@ replayTests = do
 
 -- | S3 settings use the same real MinIO instance as the replay integration tier.
 s3ConfigTests :: SpecWith TestContext
-s3ConfigTests =
+s3ConfigTests = do
   it "connects real S3 storage, renders it, and removes it" \TestContext{tcResources = tr, tcProjectId = testPid} ->
     requireMinio tr pendingWith do
       -- The endpoint/credentials must be the ones `withTestResources` actually probed
       -- (MINIO_ENDPOINT is http://minio:9000 in CI, 127.0.0.1:9000 locally); hardcoding
       -- either makes the handler's bucketExists fail and render "Not connected".
-      let env = tr.trATCtx.env
-          s3Form =
-            Projects.ProjectS3Bucket
-              { accessKey = env.s3AccessKey
-              , secretKey = env.s3SecretKey
-              , region = env.s3Region
-              , bucket = env.s3Bucket
-              , endpointUrl = env.s3Endpoint
-              }
+      let s3Form = realS3Form tr
       (_, connected) <- testServant tr $ S3.brings3PostH testPid s3Form
       TL.toStrict (renderText connected) `shouldSatisfy` T.isInfixOf "Connected"
 
       (_, savedPage) <- testServant tr $ S3.bringS3GetH testPid
       let savedHtml = TL.toStrict $ renderText savedPage
-      savedHtml `shouldSatisfy` T.isInfixOf env.s3Bucket
+      savedHtml `shouldSatisfy` T.isInfixOf s3Form.bucket
       savedHtml `shouldSatisfy` T.isInfixOf "Connected"
 
       (_, removed) <- testServant tr $ S3.brings3RemoveH testPid
       TL.toStrict (renderText removed) `shouldSatisfy` T.isInfixOf "Not connected"
       project <- runTestBg frozenTime tr (Projects.projectById testPid) >>= maybe (fail "the project was not found") pure
       project.s3Bucket `shouldSatisfy` isNothing
+
+  -- Unlike its Remove sibling, Save never called sessionAndProject: any signed-in user could
+  -- point another project's archive at a bucket they own.
+  it "brings3PostH_nonMember_cannotRedirectStorage" \TestContext{tcResources = tr} -> do
+    victim <- createTestProject tr "victim"
+    assertNonMemberDenied tr victim $ S3.brings3PostH victim (realS3Form tr)
+    runTestBg frozenTime tr (Projects.projectById victim) >>= (`shouldSatisfy` maybe False (isNothing . (.s3Bucket)))
+  where
+    realS3Form tr = let env = tr.trATCtx.env in Projects.ProjectS3Bucket{accessKey = env.s3AccessKey, secretKey = env.s3SecretKey, region = env.s3Region, bucket = env.s3Bucket, endpointUrl = env.s3Endpoint}

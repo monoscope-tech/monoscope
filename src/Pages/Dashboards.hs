@@ -218,6 +218,7 @@ data DashboardNavigation = DashboardInitial | DashboardTab
 
 dashboardSettledPostH :: Projects.ProjectId -> Dashboards.DashboardId -> DashboardSettleSample -> ATAuthCtx NoContent
 dashboardSettledPostH pid dashId sample = do
+  _ <- Projects.sessionAndProject pid
   _ <- Dashboards.getDashboardByProjectId pid dashId `whenNothingM` throwError err404
   let valid = sample.durationMs >= 0 && sample.durationMs <= 600000 && sample.responseBytes >= 0 && sample.responseBytes <= 50000000
       -- Experience budgets, not request timeouts: tabs must paint quickly, while an
@@ -1079,7 +1080,8 @@ dashboardWidgetPutWithMonitorH pid dashId widgetIdM tabSlugM configureMonitorM w
   when (isJust existingMonitorM && isNothing widgetUpdated.alertThreshold) do
     addErrorToast "Alert threshold required" (Just "Set an alert threshold or remove the monitor before saving.")
     throwError err400{errBody = "Set an alert threshold or remove the monitor before saving"}
-  _ <- Dashboards.updateSchema dashId (updateDashboardWidgets dash tabSlugM' normalizedWidgetIdM widgetUpdated) Nothing
+  -- The render-time tab slug comes back in the posted JSON; it must not be persisted.
+  _ <- Dashboards.updateSchema dashId (updateDashboardWidgets dash tabSlugM' normalizedWidgetIdM widgetUpdated{Widget._tabSlug = Nothing}) Nothing
   syncDashboardAndQueuePush pid dashId
   whenJust existingMonitorM \monitor -> do
     let newQuery = fromMaybe monitor.logQuery widget.query

@@ -468,12 +468,13 @@ withBotThread target pid convId convType meta backfill = do
     ctx = AE.object ["platform" AE..= show @Text target, "conv_id" AE..= show @Text convId]
 
 
--- | Resolve a dashboard id to its schema or template, scoped to @pid@. The id
+-- | Resolve a dashboard id to its schema or template (else the overview), scoped to @pid@. The id
 -- arrives inside client-controlled payloads (component custom_id, message
 -- body), so an unscoped lookup would render another tenant's dashboard.
 withDashboardTemplate :: DB es => Projects.ProjectId -> Text -> (Dashboards.Dashboard -> Eff es ()) -> Eff es ()
 withDashboardTemplate pid dashboardId act = whenJust (idFromText dashboardId) \did ->
-  whenJustM (Dashboards.getDashboardByProjectId pid did) $ mapM_ act . loadDashboardFromVM dashboardTemplatesCompiled
+  whenJustM (Dashboards.getDashboardByProjectId pid did) \vm ->
+    mapM_ act $ loadDashboardFromVM dashboardTemplatesCompiled vm <|> find ((== Just "_overview.yaml") . (.file)) dashboardTemplatesCompiled
 
 
 -- | OAuth install state/redirect param: @"projectId"@ or @"projectId__onboarding"@.

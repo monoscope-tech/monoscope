@@ -27,7 +27,7 @@ module Pkg.DeriveUtils (
   mkHasqlPool,
   mkHasqlPoolWithIdleTimeout,
   rawSql,
-  enumLit,
+  SqlEnum (..),
   selectFrom,
   -- Text-backed enum helpers, for types whose stored spelling is not the snake-cased
   -- constructor (see 'Pkg.Git.GitHost') and so cannot use 'WrappedEnumSC'.
@@ -50,7 +50,7 @@ import Data.HashMap.Strict qualified as HM
 import Data.IntMap qualified as IntMap
 import Data.OpenApi (ToParamSchema, ToSchema (..))
 import Data.Text qualified as T
-import Data.Text.Display (Display, display)
+import Data.Text.Display (Display)
 import Data.Time (DiffTime, UTCTime, ZonedTime, utc, utcToZonedTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -276,7 +276,7 @@ instance Read a => FromHttpApiData (WrappedEnumShow a) where
 data BaselineState = BSLearning | BSEstablished
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (Default, NFData)
-  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "BS" BaselineState
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, SqlEnum, ToField) via WrappedEnumSC 'Nothing "BS" BaselineState
 
 
 -- | Append libpq connection parameters, handling both URI
@@ -571,9 +571,14 @@ rawSql = fromString . toString
 
 
 -- | An enum's stored spelling as an inline SQL string literal, so the query text keeps
--- the literal a partial index predicate matches (a bound parameter would not).
-enumLit :: Display a => a -> HI.Sql
-enumLit a = rawSql $ "'" <> display a <> "'"
+-- the literal a partial index predicate matches (a bound parameter would not). Only
+-- 'WrappedEnumSC' provides it, so free text can never be spliced unescaped.
+class SqlEnum a where
+  enumLit :: a -> HI.Sql
+
+
+instance (KnownSymbol prefix, Show a) => SqlEnum (WrappedEnumSC qualType prefix a) where
+  enumLit (WrappedEnumSC a) = rawSql $ "'" <> toText (encodeEnumSC @prefix a) <> "'"
 
 
 -- | Convert pg-entity's @_select \@Entity@ to an @HI.Sql@ fragment.

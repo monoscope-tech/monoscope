@@ -172,6 +172,12 @@ spec = sequential $ aroundAll withTestResources do
       for_ ["duration_ms", "response_bytes", "htmx:before:request", "htmx:after:settle", "keepalive: true"] \needle ->
         html `shouldSatisfy` T.isInfixOf needle
 
+    it "dashboardSettledPostH_nonMember_cannotProbeDashboards" \tr -> do
+      victim <- createTestProject tr "victim"
+      _ <- testServant tr $ Dashboards.dashboardsPostH victim (mkDashboard "Victim")
+      dash <- runTestBg frozenTime tr (DashboardModel.selectDashboardsSortedBy victim DashboardModel.Asc DashboardModel.DSTitle) >>= maybe (fail "no dashboard") pure . viaNonEmpty head
+      assertNonMemberDenied tr victim $ Dashboards.dashboardSettledPostH victim dash.id (Dashboards.DashboardSettleSample 1 2 Dashboards.DashboardInitial)
+
     it "accepts only the closed dashboard navigation vocabulary" \_ -> do
       let sample navigation =
             AE.eitherDecode @Dashboards.DashboardSettleSample

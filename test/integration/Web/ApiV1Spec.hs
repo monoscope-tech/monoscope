@@ -216,6 +216,14 @@ spec = around withTestResources do
       for_ ["id=\"newDashboardForm\"", "data-template=\"nginx.yaml\""] $ \markup -> body `shouldSatisfy` T.isInfixOf markup
       for_ ["<!DOCTYPE", "id=\"main-sidenav\"", "id=\"dashboardsTableContainer\""] $ \markup -> body `shouldSatisfy` (not . T.isInfixOf markup)
 
+    -- Old onboarding links carry free-text steps; master fell back to Info. The JSON API stays strict.
+    it "onboardingUnknownStep_fallsBackToInfo_apiDashboardSortStaysStrict" $ \tr -> do
+      let fetch path = WT.runSession (WT.srequest (WT.SRequest (WT.setPath Wai.defaultRequest{Wai.requestHeaders = [("X-Project-Id", "00000000-0000-0000-0000-000000000000")]} path) "")) (topApp tr)
+      onboarding <- fetch "/p/00000000-0000-0000-0000-000000000000/onboarding?step=bogus"
+      H.statusCode (WT.simpleStatus onboarding) `shouldBe` 200
+      decodeUtf8 @Text (WT.simpleBody onboarding) `shouldSatisfy` T.isInfixOf "firstName"
+      (H.statusCode . WT.simpleStatus <$> fetch "/api/v1/dashboards?sort=bogus") `shouldReturn` 400
+
     it "widgetJSON_rejectsLegacyAndUnknownFields" $ \tr -> do
       for_ ([(Nothing, 200), (Just "arning_threshold", 400), (Just "unexpected_field", 400)] :: [(Maybe AEK.Key, Int)]) $ \(fieldM, status) -> do
         let body = AE.encode $ case AE.toJSON ((def :: Widget.Widget){Widget.warningThreshold = Just 7}) of

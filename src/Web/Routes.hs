@@ -135,6 +135,10 @@ type QPU a = QueryParam a UTCTime
 type QPI a = QueryParam a Int
 
 
+-- | Unknown values reach the handler as 'Left' instead of a 400, for links that outlive their enum.
+type LenientQP = QueryParam' '[Optional, Lenient]
+
+
 data AllQueryParams
 
 
@@ -745,13 +749,13 @@ data ProjectsRoutes' mode = ProjectsRoutes'
   , notificationsTestPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "settings" :> "integrations" :> "test" :> ReqBody '[FormUrlEncoded] Settings.TestForm :> Post '[HTML] (RespHeaders (Html ()))
   , notificationsTestHistoryGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "settings" :> "integrations" :> "history" :> Get '[HTML] (RespHeaders Settings.NotificationTestHistoryGet)
   , -- Onboarding routes
-    onboading :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> QueryParam "step" Onboarding.OnboardingStep :> Get '[HTML] (RespHeaders Onboarding.OnboardingGet)
+    onboading :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> LenientQP "step" Onboarding.OnboardingStep :> Get '[HTML] (RespHeaders Onboarding.OnboardingGet)
   , onboardingInfoPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "info" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingInfoForm :> Post '[HTML] (RespHeaders Onboarding.OnboardingStepPost)
   , onboardingConfPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "survey" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingConfForm :> Post '[HTML] (RespHeaders Onboarding.OnboardingStepPost)
   , onboardingPhoneEmailsPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "phone-emails" :> ReqBody '[JSON] Onboarding.NotifChannelForm :> Post '[HTML] (RespHeaders Onboarding.OnboardingPhoneEmailsPost)
   , onboardingIntegrationCheck :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "integration-check" :> QPT "language" :> Get '[HTML] (RespHeaders (Html ()))
   , onboardingDismissChecklist :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "dismiss-checklist" :> Post '[HTML] (RespHeaders (Html ()))
-  , onboardingSkipped :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "skip" :> QueryParam "step" Onboarding.OnboardingStep :> Post '[HTML] (RespHeaders (Html ()))
+  , onboardingSkipped :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "skip" :> LenientQP "step" Onboarding.OnboardingStep :> Post '[HTML] (RespHeaders (Html ()))
   , -- Pricing routes
     onboardingPricingUpdate :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "pricing" :> ReqBody '[FormUrlEncoded] CreateProject.PricingUpdateForm :> Post '[HTML] (RespHeaders (Html ()))
   }
@@ -1190,14 +1194,14 @@ projectsServer =
     , teamBulkAction = ManageMembers.manageTeamBulkActionH
     , manageSubscriptionGet = ManageMembers.manageSubGetH
     , stripeCheckout = ManageMembers.stripeCheckoutInitH
-    , onboading = Onboarding.onboardingGetH
+    , onboading = \pid -> Onboarding.onboardingGetH pid . (rightToMaybe =<<)
     , onboardingInfoPost = Onboarding.onboardingInfoPostH
     , onboardingConfPost = Onboarding.onboardingConfPostH
     , onboardingPhoneEmailsPost = Onboarding.phoneEmailPostH
     , onboardingIntegrationCheck = Onboarding.checkIntegrationGet
     , onboardingPricingUpdate = CreateProject.pricingUpdateH
     , onboardingDismissChecklist = Onboarding.dismissChecklistH
-    , onboardingSkipped = Onboarding.onboardingStepSkipped
+    , onboardingSkipped = \pid -> Onboarding.onboardingStepSkipped pid . (rightToMaybe =<<)
     }
 
 
