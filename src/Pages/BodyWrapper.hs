@@ -753,17 +753,8 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
           , Aria.label_ "Toggle sidebar"
           , Aria.expanded_ (bool "true" "false" sess.isSidebarClosed)
           , Aria.controls_ "side-nav-menu"
-          , [__|on keydown[key=='Enter' or key==' ']
-                  halt the event
-                  call me.click()
-                end
-                on change from #sidenav-toggle
-                  if #sidenav-toggle.checked
-                    set @aria-expanded to 'false'
-                  else
-                    set @aria-expanded to 'true'
-                  end
-                end|]
+          , Components.keyboardActivateAttr_
+          , term "hx-live:aria-expanded" "String(!q('#sidenav-toggle').checked)"
           ]
             <> tippyRight_ "Expand sidebar"
         )
