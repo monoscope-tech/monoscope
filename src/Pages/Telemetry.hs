@@ -472,10 +472,7 @@ instance AE.ToJSON MetricExemplarsGet where
 exemplarList_ :: Projects.ProjectId -> Text -> [Telemetry.MetricExemplar] -> Html ()
 exemplarList_ pid metricName = \case
   [] ->
-    div_ [class_ "px-5 py-8 text-sm text-textWeak"]
-      $ "No exemplars for "
-      <> toHtml metricName
-      <> " in this time range. Only metrics recorded inside a sampled span carry one — collector-scraped metrics never do."
+    Components.emptyState_ def{icon = Just "chart-line", size = ESCompact} ("No exemplars for " <> metricName <> " in this time range") "Only metrics recorded inside a sampled span carry one — collector-scraped metrics never do."
   exemplars -> do
     div_ [class_ "px-5 pb-3 pt-5"] do
       span_ [class_ "block text-sm font-semibold text-textStrong"] "Representative traces"
@@ -754,9 +751,7 @@ chartsPage pid metricList labels inactive filters activeCount nextUrl =
     if V.null metricList && V.null inactive
       then
         if hasMetricFilters filters
-          then div_ [class_ "py-12 text-center"] do
-            p_ [class_ "font-medium"] "No metrics match these filters"
-            a_ ([class_ "link", href_ $ metricPageUrl pid "charts" (clearedFilters filters)] <> navTabAttrs) "Clear filters"
+          then Components.emptyState_ def{icon = Just "filter", action = ESCustom $ a_ ([class_ "btn btn-sm w-max mx-auto", href_ $ metricPageUrl pid "charts" (clearedFilters filters)] <> navTabAttrs) "Clear filters"} "No metrics match these filters" ""
           else
             div_ [class_ "w-full flex items-center justify-center h-96"]
               $ Components.emptyState_ def{icon = Just "chart-line", action = ESLink "https://monoscope.tech/docs/sdks/" "View SDK setup guides"} "No metrics found" "Metrics will appear here once your application starts sending telemetry data."

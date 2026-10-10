@@ -2,6 +2,7 @@ module Pages.AIThreads (AIChatForm (..), RoutineForm (..), RoutineTemplateForm (
 
 import BackgroundJobs qualified
 import Data.Aeson qualified as AE
+import Data.Default (def)
 import Data.Effectful.UUID qualified as UUID
 import Data.Text qualified as T
 import Data.Time.Format (defaultTimeLocale, formatTime)
@@ -15,6 +16,7 @@ import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkAIPageCtx, navTabAttrs)
 import Pages.Bots.Utils qualified as Bots
+import Pages.Components (EmptyStateCfg (..), EmptyStateSize (..), emptyState_)
 import Pages.Issues qualified as IssuePage
 import Pkg.AI qualified as AI
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
@@ -83,10 +85,7 @@ threadsGetH pid = do
       main_ [class_ "mx-auto max-w-5xl px-4 py-6 sm:px-6 sm:py-8"] do
         p_ [class_ "mb-5 max-w-2xl text-sm text-textWeak"] "Open and manage your project’s AI conversations."
         if null items
-          then div_ [class_ "flex flex-col items-center rounded-xl border border-dashed border-strokeWeak px-5 py-12 text-center"] do
-            span_ [class_ "flex h-10 w-10 items-center justify-center rounded-lg bg-fillWeak text-iconNeutral", Aria.hidden_ "true"] $ faSprite_ "message" "regular" "h-4 w-4"
-            p_ [class_ "mt-3 text-sm font-medium text-textStrong"] "No conversations yet"
-            p_ [class_ "mt-1 text-sm text-textWeak"] "Start a chat to investigate your project’s telemetry."
+          then emptyState_ def{icon = Just "comment"} "No conversations yet" "Start a chat to investigate your project’s telemetry."
           else div_ [class_ "overflow-hidden rounded-xl border border-strokeWeak bg-bgRaised"] $ table_ [class_ "table w-full"] do
             thead_ [] $ tr_ [] do
               th_ [] "Conversation"
@@ -125,9 +124,7 @@ routinesGetH pid = do
             h2_ [class_ "text-sm font-semibold text-textStrong"] "Installed"
             span_ [class_ "text-xs text-textWeak tabular-nums"] $ toHtml $ show (length installedRoutines) <> " routine" <> bool "s" "" (length installedRoutines == 1)
           if null installedRoutines
-            then div_ [class_ "rounded-xl border border-dashed border-strokeWeak px-5 py-8 text-center"] do
-              p_ [class_ "text-sm font-medium text-textStrong"] "No routines installed"
-              p_ [class_ "mt-1 text-sm text-textWeak"] "Add a built-in routine below or create one from a conversation."
+            then emptyState_ def{icon = Just "clock", size = ESCompact} "No routines installed" "Add a built-in routine below or create one from a conversation."
             else div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak bg-bgRaised"] $ for_ installedRoutines \routine ->
               div_ [class_ "flex flex-wrap items-center gap-3 px-4 py-3 sm:gap-4"] do
                 span_ [class_ $ "h-2 w-2 rounded-full " <> bool "bg-fillWeak" "bg-fillSuccess-strong" routine.routineActive, Aria.hidden_ "true"] mempty
@@ -324,11 +321,8 @@ page pid convId = do
                     p_ [class_ "mt-1 text-sm text-textWeak"] $ toHtml $ Issues.routineCadence interval <> " · " <> nextRunLabel
 
         routineEmpty_ :: (Issues.ConversationSummary, Issues.RoutineInterval) -> Html ()
-        routineEmpty_ (conversation, _) = div_ [class_ "flex min-h-[18rem] flex-col items-center justify-center text-center"] do
-          span_ [class_ "flex h-10 w-10 items-center justify-center rounded-xl bg-fillWeak text-textWeak"]
-            $ faSprite_ "clock" "regular" "h-4 w-4"
-          h2_ [class_ "mt-4 font-medium text-textStrong"] "No completed run yet"
-          p_ [class_ "mt-1 max-w-sm text-sm text-textWeak"]
+        routineEmpty_ (conversation, _) =
+          emptyState_ def{icon = Just "clock"} "No completed run yet"
             $ if conversation.routineActive
               then "This routine is scheduled. Its first result will appear here after the next run."
               else "This routine is paused. Resume its schedule to produce a new result."
