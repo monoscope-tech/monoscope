@@ -23,7 +23,7 @@ import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.Dispatch.Dynamic (interpose)
 import Hasql.Interpolate qualified as HI
-import Lucid (renderText)
+import Lucid (renderText, toHtml)
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects qualified as Projects
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
@@ -299,6 +299,40 @@ onboardingTests =
 -- | Settings Page Tests - Verify project settings created during onboarding
 settingsTests :: SpecWith TestContext
 settingsTests = do
+  it "billingDowngrade_keepsRecoveryVisibleUntilReactivated" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
+    let settingsHtml = do
+          session <- refreshSession tr.trPool tr.trATCtx.hasqlPool tr.trSessAndHeader
+          (_, page) <- testServant tr{trSessAndHeader = session} $ CreateProject.projectSettingsGetH testPid
+          pure $ renderText $ toHtml page
+    _ <- runQueryEffect tr $ Projects.updateProjectPricing testPid (Projects.PlanName "Free") (Projects.SubId "") (Projects.SubItemId "") (Projects.OrderId "")
+    settingsHtml >>= (`shouldNotSatisfy` TL.isInfixOf "id=\"billing-downgrade-banner\"")
+    for_ [Projects.StripeProvider, Projects.LemonSqueezyProvider] \provider -> do
+      _ <- runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE projects.projects SET payment_plan = 'GraduatedPricing', sub_id = 'sub_banner', customer_id = 'cus_banner', billing_provider = #{provider} WHERE id = #{testPid}|]
+      _ <- runQueryEffect tr $ Projects.downgradeToFreeBySubId "sub_banner"
+      html <- settingsHtml
+      html `shouldSatisfy` TL.isInfixOf "id=\"billing-downgrade-banner\""
+      html `shouldSatisfy` TL.isInfixOf "Your paid subscription is no longer active. This project has been downgraded to Free."
+      html `shouldSatisfy` TL.isInfixOf ("href=\"/p/" <> toLazy testPid.toText <> "/manage_billing\"")
+      session <- refreshSession tr.trPool tr.trATCtx.hasqlPool tr.trSessAndHeader
+      (_, billing) <- testServant tr{trSessAndHeader = session} $ Settings.manageBillingGetH testPid
+      renderText (toHtml billing) `shouldSatisfy` TL.isInfixOf ("hx-get=\"/p/" <> toLazy testPid.toText <> "/manage_subscription\"")
+      _ <- runQueryEffect tr $ Projects.setPlanBySubId (Projects.PlanName "GraduatedPricing") (Projects.SubItemId "si_banner") (Projects.SubId "sub_banner")
+      settingsHtml >>= (`shouldNotSatisfy` TL.isInfixOf "id=\"billing-downgrade-banner\"")
+
+  it "superAdmin_customerProject_showsTopmostNoticeOnlyOutsideMemberships" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
+    let settingsHtml = do
+          session <- refreshSession tr.trPool tr.trATCtx.hasqlPool tr.trSessAndHeader
+          (_, page) <- testServant tr{trSessAndHeader = session} $ CreateProject.projectSettingsGetH testPid
+          pure $ renderText $ toHtml page
+        uid = (getResponse tr.trSessAndHeader).user.id
+    settingsHtml >>= (`shouldNotSatisfy` TL.isInfixOf "id=\"super-admin-banner\"")
+    _ <- runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|DELETE FROM projects.project_members WHERE project_id = #{testPid} AND user_id = #{uid}|]
+    html <- settingsHtml
+    html `shouldSatisfy` TL.isInfixOf "id=\"super-admin-banner\""
+    html `shouldSatisfy` TL.isInfixOf "You are a super admin in a customer"
+    let (_, fromNotice) = TL.breakOn "id=\"super-admin-banner\"" html
+    fromNotice `shouldSatisfy` TL.isInfixOf "id=\"side-nav-menu\""
+
   it "should display project title, description, timezone, and alert configurations from onboarding" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
     (_, result) <- testServant tr $ CreateProject.projectSettingsGetH testPid
     case result of

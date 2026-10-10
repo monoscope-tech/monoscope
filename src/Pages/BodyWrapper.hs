@@ -468,45 +468,56 @@ bodyWrapper bcfg child = do
           -- Mobile nav toggle (CSS-only sidebar control, only rendered when sidebar exists)
           when (isJust bcfg.currProject)
             $ input_ [type_ "checkbox", class_ "hidden", id_ "mobile-nav-toggle", [__|on load if window.innerWidth < 768 then set #sidenav-toggle.checked to true|]]
-          section_ [class_ "flex flex-row grow-0 h-screen overflow-hidden"] do
-            foldMap (\project -> sideNav sess project bcfg) bcfg.currProject
-            section_ [class_ "h-full overflow-y-hidden grow flex flex-col"] do
-              when (sess.persistentSession.user.getUser.email == "hello@monoscope.tech") loginBanner
-              -- Empty navbar anchor so OOB morph can remove non-settings navbar
-              if bcfg.isSettingsPage || bcfg.hideNavbar
-                then nav_ [id_ "main-navbar", class_ "hidden"] ""
-                else navbar bcfg (foldMap (\p -> menu sess.lang p.id) bcfg.currProject)
-              main_ [id_ "main-content", class_ "overflow-y-auto h-full grow"] do
-                whenJust bcfg.currProject (\p -> freeTierUsageBanner p.id.toText bcfg.freeTierStatus)
-                if bcfg.isSettingsPage
-                  then maybe child (\p -> settingsWrapper p.id bcfg.pageTitle child) bcfg.currProject
-                  else child
-              div_ [class_ "h-0 shrink"] do
-                Components.drawer_ "global-data-drawer" (isJust bcfg.globalDrawerContent) Nothing bcfg.globalDrawerContent ""
-                -- Modal for copying widgets to other dashboards
-                Components.modal_ "dashboards-modal" "" do
-                  input_ [type_ "hidden", id_ "dashboards-modal-widget-id", name_ "widget_id"]
-                  input_ [type_ "hidden", id_ "dashboards-modal-source-dashboard-id", name_ "source_dashboard_id"]
-                  -- Only set for a widget that lives on no dashboard, whose definition
-                  -- exists solely on the client; the picker rows PUT it as the new widget.
-                  input_ [type_ "hidden", id_ "dashboards-modal-widget-json", name_ "widget_json"]
-                  div_
-                    [ id_ "dashboards-modal-content"
-                    , class_ "dashboards-list space-y-3 max-h-160 overflow-y-auto"
-                    , hxGet_ ("/p/" <> foldMap (.id.toText) bcfg.currProject <> "/dashboards?embedded=true")
-                    , hxTrigger_ "loadDashboards"
-                    , hxSelect_ "#itemsListPage"
-                    , hxSwap_ "innerHTML"
-                    , -- The source id is spread in only when set: a widget that lives on no
-                      -- dashboard would otherwise send `source_dashboard_id=`, which is not
-                      -- a UUID, and the whole request 400s.
-                      hxVals_ "js:{copy_widget_id: document.getElementById('dashboards-modal-widget-id').value, ...(document.getElementById('dashboards-modal-source-dashboard-id').value ? {source_dashboard_id: document.getElementById('dashboards-modal-source-dashboard-id').value} : {})}"
-                    ]
-                    $ replicateM_ 3 (div_ [class_ "skeleton h-16 w-full"] "")
+          section_ [class_ "flex h-screen flex-col"] do
+            forM_ bcfg.currProject \project -> do
+              when (sess.user.isSudo && project.id /= Projects.demoProjectId && not (V.any ((== project.id) . (.id)) sess.persistentSession.projects.getProjects))
+                $ div_ [id_ "super-admin-banner", role_ "status", class_ "flex shrink-0 items-center justify-center gap-2 border-b border-strokeWarning-strong bg-fillWarning-weak px-3 py-1 text-xs text-textStrong"] do
+                  faSprite_ "shield-check" "regular" "h-3 w-3 shrink-0"
+                  span_ $ toHtml $ "You are a super admin in a customer's project · " <> project.title
+              when (Projects.isFreeTier project.paymentPlan && Projects.projectProvider project /= Projects.NoBillingProvider)
+                $ div_ [id_ "billing-downgrade-banner", role_ "alert", class_ "flex shrink-0 flex-wrap items-center justify-center gap-x-3 gap-y-1 border-b border-strokeWarning-strong bg-fillWarning-weak px-4 py-2 text-xs text-textStrong"] do
+                  span_ "Your paid subscription is no longer active. This project has been downgraded to Free."
+                  a_ [href_ $ "/p/" <> project.id.toText <> "/manage_billing", class_ "font-medium text-textBrand underline underline-offset-2"] "Review billing or change plan"
+                  a_ [href_ $ "/p/" <> project.id.toText <> "/manage_billing", hxGet_ $ "/p/" <> project.id.toText <> "/manage_subscription", term "hx-preload" "false", class_ "font-medium text-textBrand underline underline-offset-2"] "Update payment method"
+            -- Keep fixed fullscreen panels and drawers below the project notices.
+            section_ [class_ "relative flex flex-row flex-1 min-h-0 overflow-hidden", style_ "contain: layout"] do
+              when (isJust bcfg.currProject)
+                $ label_ [term "for" "mobile-nav-toggle", class_ "fixed inset-0 bg-black/50 backdrop-blur-xs z-40 hidden group-has-[#mobile-nav-toggle:checked]/pg:max-md:block cursor-default", Aria.label_ "Close menu"] ""
+              foldMap (\project -> sideNav sess project bcfg) bcfg.currProject
+              section_ [class_ "h-full overflow-y-hidden grow flex flex-col"] do
+                when (sess.persistentSession.user.getUser.email == "hello@monoscope.tech") loginBanner
+                -- Empty navbar anchor so OOB morph can remove non-settings navbar
+                if bcfg.isSettingsPage || bcfg.hideNavbar
+                  then nav_ [id_ "main-navbar", class_ "hidden"] ""
+                  else navbar bcfg (foldMap (\p -> menu sess.lang p.id) bcfg.currProject)
+                main_ [id_ "main-content", class_ "overflow-y-auto h-full grow"] do
+                  whenJust bcfg.currProject (\p -> freeTierUsageBanner p.id.toText bcfg.freeTierStatus)
+                  if bcfg.isSettingsPage
+                    then maybe child (\p -> settingsWrapper p.id bcfg.pageTitle child) bcfg.currProject
+                    else child
+                div_ [class_ "h-0 shrink"] do
+                  Components.drawer_ "global-data-drawer" (isJust bcfg.globalDrawerContent) Nothing bcfg.globalDrawerContent ""
+                  -- Modal for copying widgets to other dashboards
+                  Components.modal_ "dashboards-modal" "" do
+                    input_ [type_ "hidden", id_ "dashboards-modal-widget-id", name_ "widget_id"]
+                    input_ [type_ "hidden", id_ "dashboards-modal-source-dashboard-id", name_ "source_dashboard_id"]
+                    -- Only set for a widget that lives on no dashboard, whose definition
+                    -- exists solely on the client; the picker rows PUT it as the new widget.
+                    input_ [type_ "hidden", id_ "dashboards-modal-widget-json", name_ "widget_json"]
+                    div_
+                      [ id_ "dashboards-modal-content"
+                      , class_ "dashboards-list space-y-3 max-h-160 overflow-y-auto"
+                      , hxGet_ ("/p/" <> foldMap (.id.toText) bcfg.currProject <> "/dashboards?embedded=true")
+                      , hxTrigger_ "loadDashboards"
+                      , hxSelect_ "#itemsListPage"
+                      , hxSwap_ "innerHTML"
+                      , -- The source id is spread in only when set: a widget that lives on no
+                        -- dashboard would otherwise send `source_dashboard_id=`, which is not
+                        -- a UUID, and the whole request 400s.
+                        hxVals_ "js:{copy_widget_id: document.getElementById('dashboards-modal-widget-id').value, ...(document.getElementById('dashboards-modal-source-dashboard-id').value ? {source_dashboard_id: document.getElementById('dashboards-modal-source-dashboard-id').value} : {})}"
+                      ]
+                      $ replicateM_ 3 (div_ [class_ "skeleton h-16 w-full"] "")
 
-      -- Mobile nav backdrop (at body level, after section, so it paints on top)
-      when (isJust bcfg.sessM && isJust bcfg.currProject)
-        $ label_ [term "for" "mobile-nav-toggle", class_ "fixed inset-0 bg-black/50 backdrop-blur-xs z-40 hidden group-has-[#mobile-nav-toggle:checked]/pg:max-md:block cursor-default", Aria.label_ "Close menu"] ""
       when isProd $ externalHeadScripts_ bcfg.config
       globalTemplates_
       when isProd $ script_ [async_ "true", src_ "https://www.googletagmanager.com/gtag/js?id=AW-11285541899"] ("" :: Text)
@@ -721,7 +732,7 @@ projectsDropDown currProject projects = do
 
 
 sideNav :: Projects.Session -> Projects.Project -> BWConfig -> Html ()
-sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeaker max-md:bg-bgBase text-sm max-md:fixed max-md:z-50 max-md:w-60 max-md:h-full max-md:-translate-x-full max-md:transition-transform group-has-[#mobile-nav-toggle:checked]/pg:max-md:translate-x-0 md:min-w-13 md:w-13 md:shrink-0 group-has-[#sidenav-toggle:checked]/pg:md:w-60 h-screen md:transition-[width] duration-200 ease-out flex flex-col justify-between", id_ "side-nav-menu"] do
+sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeaker max-md:bg-bgBase text-sm max-md:fixed max-md:z-50 max-md:w-60 max-md:h-full max-md:-translate-x-full max-md:transition-transform group-has-[#mobile-nav-toggle:checked]/pg:max-md:translate-x-0 md:min-w-13 md:w-13 md:shrink-0 group-has-[#sidenav-toggle:checked]/pg:md:w-60 h-full md:transition-[width] duration-200 ease-out flex flex-col justify-between", id_ "side-nav-menu"] do
   span_ [Aria.hidden_ "true", class_ "pointer-events-none absolute inset-x-0 bottom-0 h-64 bg-gradient-to-t from-fillBrand-weak/30 via-fillBrand-weak/10 to-transparent"] ""
   -- Right border resize handle (desktop only)
   label_ [term "for" "sidenav-toggle", class_ "max-md:hidden absolute right-0 top-0 bottom-0 w-1 border-r border-strokeWeak cursor-e-resize group-has-[#sidenav-toggle:checked]/pg:cursor-w-resize hover:border-strokeBrand-strong hover:w-1 transition-colors z-10", Aria.label_ "Toggle sidebar"] ""
@@ -797,8 +808,9 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
                     , [__|on mouseenter
                         set flyout to my.querySelector('.nav-flyout')
                         set sidebarBounds to my.closest('aside').getBoundingClientRect()
-                        set flyoutLeft to Math.max(8, Math.min(sidebarBounds.right + 4, window.innerWidth - flyout.offsetWidth - 8))
-                        set flyoutTop to Math.max(8, Math.min(my.getBoundingClientRect().top, window.innerHeight - flyout.offsetHeight - 8))
+                        set workspaceBounds to my.closest('aside').parentElement.getBoundingClientRect()
+                        set flyoutLeft to Math.max(workspaceBounds.left + 8, Math.min(sidebarBounds.right + 4, workspaceBounds.right - flyout.offsetWidth - 8)) - workspaceBounds.left
+                        set flyoutTop to Math.max(workspaceBounds.top + 8, Math.min(my.getBoundingClientRect().top, workspaceBounds.bottom - flyout.offsetHeight - 8)) - workspaceBounds.top
                         set flyout.style.left to `${flyoutLeft}px`
                         set flyout.style.top to `${flyoutTop}px`
                       end|]
