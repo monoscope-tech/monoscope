@@ -787,7 +787,8 @@ repositoryTokenPostH pid form = do
     let (owner, name) = Git.splitFullName fullName
     when (T.null owner || T.null name) $ hoistEither $ Left "Enter the full repository name, such as team/checkout."
     repository <- ExceptT $ first (const "Could not access this repository. Check its name, server URL, and token permissions.") <$> Git.fetchRepository conn (Git.RepoRef owner name "HEAD")
-    let (accountName, _) = Git.splitFullName repository.fullName
+    let (accountOwner, _) = Git.splitFullName repository.fullName
+        accountName = if form.host == Git.GitHub then T.toLower accountOwner else accountOwner
         origin = rightToMaybe . Git.normalizeOrigin =<< mfilter (not . T.null . T.strip) form.apiBase
     accounts <- lift $ GitSync.getGitHubCredentials pid
     let observed = find (\c -> (c.host, c.apiBase, c.account) == (form.host, origin, accountName)) accounts

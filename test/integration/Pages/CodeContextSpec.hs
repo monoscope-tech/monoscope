@@ -358,6 +358,62 @@ spec = do
           html `shouldSatisfy` T.isInfixOf "A project editor can"
           for_ ["Unlink", "Link repository", "Save review settings", "Install GitHub App", "Connect with token"] \control -> html `shouldNotSatisfy` T.isInfixOf control
 
+      it "repositoryConnections_githubCasingDoesNotDuplicateConnectionsOrSyncs" \tr -> do
+        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
+        Just account <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "team" (Just 42) Nothing
+        Just sameAccount <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "TEAM" (Just 42) Nothing
+        sameAccount.id `shouldBe` account.id
+        for_ (["Team/Checkout", "team/checkout"] :: [Text]) \name -> do
+          Cache.insert tr.trATCtx.repoListCache account.id [Git.GitRepo name "checkout" True "main"]
+          void $ testServant tr $ PageCodeContext.repositoryConnectPostH testPid (Just account.id) (PageCodeContext.RepositoryConnectForm [name])
+        repositories <- runQueryEffect tr $ GitSync.getRepositories testPid
+        map (\r -> (r.owner, r.repo)) repositories `shouldBe` [("team", "checkout")]
+        for_ ([("Team", "Checkout"), ("team", "checkout")] :: [(Text, Text)]) \(owner, repo) ->
+          void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid GitSyncPage.GitSyncForm{host = Just Git.GitHub, apiBase = Nothing, owner, repo, branch = "main", accessToken = "fixture-token", webhookSecret = Just "fixture-secret", pathPrefix = Nothing}
+        syncs <- runQueryEffect tr $ GitSync.getGitSyncs testPid
+        map (\s -> (s.owner, s.repo)) syncs `shouldBe` [("team", "checkout")]
+        matching <- runQueryEffect tr $ GitSync.getGitSyncsByRepo Git.GitHub "TEAM" "CHECKOUT"
+        map (.id) matching `shouldBe` map (.id) syncs
+        runQueryEffect tr $ CodeContext.insertCodeMapping testPid account.id (Git.RepoRef "TEAM" "CHECKOUT" "main") (Just "checkout") "/app/" "src"
+        mappings <- runQueryEffect tr $ CodeContext.getCodeMappings testPid
+        map (\m -> (m.owner, m.repo)) mappings `shouldBe` [("team", "checkout")]
+        Just gitlab <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitLab Nothing "Team" Nothing (Just "fixture")
+        for_ (["Team/Checkout", "team/checkout"] :: [Text]) \name -> void $ runQueryEffect tr $ GitSync.connectRepository testPid gitlab.id (Git.GitRepo name "checkout" True "main")
+        allRepositories <- runQueryEffect tr $ GitSync.getRepositories testPid
+        sort [(r.owner, r.repo) | r <- allRepositories, r.host == Git.GitLab] `shouldBe` [("Team", "Checkout"), ("team", "checkout")]
+
+      it "githubIdentityMigration_mergesCaseAliasesWithoutDeletingLocalDashboards" \tr -> do
+        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
+        Just account <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "team" (Just 42) Nothing
+        Just alias <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "other" Nothing (Just "fixture")
+        for_ ([(account.id, "team"), (alias.id, "other")] :: [(GitSync.GitHubCredentialId, Text)]) \(cid, owner) ->
+          runQueryEffect tr $ CodeContext.insertCodeMapping testPid cid (Git.RepoRef owner "checkout" "main") (Just owner) ("/" <> owner <> "/") "src"
+        syncs <- forM (["team", "other"] :: [Text]) \owner -> do
+          Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub Nothing owner "checkout" "main" (GitSync.AppInstallation 42) Nothing ""
+          did <- UUIDId <$> UUID.nextRandom
+          void $ runQueryEffect tr $ Dashboards.insert (Dashboards.mkDashboardVM did testPid frozenTime (Projects.UserId UUID.nil)){Dashboards.title = owner, Dashboards.gitSyncId = Just sync.id, Dashboards.filePath = Just "overview.yaml", Dashboards.fileSha = Just "blob"}
+          pure sync
+        migration <- Query <$> readFileBS "static/migrations/0223_github_repository_identity.sql"
+        withResource tr.trPool \conn -> PG.withTransaction conn do
+          void $ PG.execute_ conn "ALTER TABLE projects.git_credentials DROP CONSTRAINT git_credentials_canonical_account; ALTER TABLE projects.repositories DROP CONSTRAINT repositories_canonical_name; ALTER TABLE projects.git_sync DROP CONSTRAINT git_sync_canonical_name; DROP FUNCTION projects.git_identity_name(TEXT, TEXT)"
+          void $ PG.execute conn "UPDATE projects.git_credentials SET account = 'TEAM' WHERE id = ?" (PG.Only alias.id)
+          void $ PG.execute conn "UPDATE projects.repositories SET owner = 'TEAM', repo = 'CHECKOUT' WHERE project_id = ? AND owner = 'other'" (PG.Only testPid)
+          void $ PG.execute conn "UPDATE projects.git_sync SET owner = 'TEAM', repo = 'CHECKOUT' WHERE project_id = ? AND owner = 'other'" (PG.Only testPid)
+          void $ PG.execute conn "UPDATE projects.code_mappings SET owner = 'TEAM', repo = 'CHECKOUT' WHERE credential_id = ?" (PG.Only alias.id)
+          void $ PG.execute_ conn migration
+        accounts <- runQueryEffect tr $ GitSync.getGitHubCredentials testPid
+        map (.id) accounts `shouldBe` [account.id]
+        repositories <- runQueryEffect tr $ GitSync.getRepositories testPid
+        map (\r -> (r.owner, r.repo, r.credentialId)) repositories `shouldBe` [("team", "checkout", Just account.id)]
+        mappings <- runQueryEffect tr $ CodeContext.getCodeMappings testPid
+        map (\m -> (m.owner, m.repo, m.credentialId)) mappings `shouldBe` replicate 2 ("team", "checkout", account.id)
+        remaining <- runQueryEffect tr $ GitSync.getGitSyncs testPid
+        length remaining `shouldBe` 1
+        retained <- runQueryEffect tr $ Dashboards.selectDashboardsSortedBy testPid "title"
+        sort (map (.title) retained) `shouldBe` ["other", "team"]
+        length (filter (isJust . (.gitSyncId)) retained) `shouldBe` 1
+        mapMaybe (.gitSyncId) retained `shouldSatisfy` all (`elem` map (.id) syncs)
+
       it "repositoryPicker_connectsCodebasesWithoutEnablingCapabilitiesAndRejectsUnavailableSelections" \tr -> do
         let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
             repositories = [Git.GitRepo "team/checkout" "checkout" True "trunk", Git.GitRepo "team/catalog" "catalog" False "main"]
@@ -680,6 +736,9 @@ spec = do
               runQueryEffect tr $ Dashboards.insert (Dashboards.mkDashboardVM did testPid frozenTime (Projects.UserId UUID.nil)){Dashboards.title = "Overview"}
         Just syncA <- connect "team-a"
         Just syncB <- connect "team-b"
+        (selection, _) <- testServant tr $ GitSyncPage.gitSyncSettingsDeleteH testPid
+        getHeaders selection `shouldSatisfy` elem ("HX-Redirect", encodeUtf8 ("/p/" <> testPid.toText <> "/repositories"))
+        length <$> runQueryEffect tr (GitSync.getGitSyncs testPid) `shouldReturn` 2
         dashA <- create
         dashB <- create
         conflict <- create

@@ -57,7 +57,7 @@ import Relude hiding (ask)
 import Servant (ServerError (..), err401, err403, err404, err503)
 import System.Config qualified as Config
 import System.Logging qualified as Log
-import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
+import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
 import Utils (LoadingSize (..), faSprite_, htmxIndicator_, renderMarkdown)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (parseUrlPiece)
@@ -135,10 +135,11 @@ gitWebhookPostH host req = case Git.parseWebhookRepo host req.body of
 -- written — storing first and discovering a bad origin on the next background job would leave a
 -- row that looks connected and never syncs.
 gitSyncSettingsPostH :: Projects.ProjectId -> GitSyncForm -> ATAuthCtx (RespHeaders (Html ()))
-gitSyncSettingsPostH pid form = do
+gitSyncSettingsPostH pid submitted = do
   requireGitWrite pid
   syncs <- GitSync.getGitSyncs pid
-  let origin = rightToMaybe . Git.normalizeOrigin =<< mfilter (not . T.null . T.strip) form.apiBase
+  let form = if fromMaybe Git.GitHub submitted.host == Git.GitHub then submitted{owner = T.toLower submitted.owner, repo = T.toLower submitted.repo} else submitted
+      origin = rightToMaybe . Git.normalizeOrigin =<< mfilter (not . T.null . T.strip) form.apiBase
       matched = find (\s -> s.host == fromMaybe Git.GitHub form.host && s.apiBase == origin && s.owner == form.owner && s.repo == form.repo) syncs
       legacy = if T.null form.accessToken then case syncs of [sync] -> Just sync; _ -> Nothing else Nothing
   saveGitSyncH pid (matched <|> legacy) form
@@ -190,11 +191,15 @@ saveGitSyncH pid existingM form = do
 gitSyncSettingsDeleteH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 gitSyncSettingsDeleteH pid = do
   requireGitWrite pid
-  GitSync.getGitHubSync pid >>= \case
-    Just sync -> gitSyncRepositoryDeleteH pid sync.id
-    Nothing -> do
+  GitSync.getGitSyncs pid >>= \case
+    [sync] -> gitSyncRepositoryDeleteH pid sync.id
+    [] -> do
       ctx <- ask @Config.AuthContext
       addRespHeaders $ gitSyncSettingsView ctx.env.hostUrl pid Nothing
+    _ -> do
+      addErrorToast "Choose a repository to disconnect" Nothing
+      redirectCS $ "/p/" <> pid.toText <> "/repositories"
+      addRespHeaders mempty
 
 
 gitSyncRepositoryDeleteH :: Projects.ProjectId -> GitSync.GitHubSyncId -> ATAuthCtx (RespHeaders (Html ()))
@@ -772,13 +777,13 @@ githubAppReposH :: Projects.ProjectId -> Maybe Int64 -> ATAuthCtx (RespHeaders (
 githubAppReposH pid instIdParam = withSettingsPage pid "Integrations" \_ -> do
   requireGitWrite pid
   ctx <- ask @Config.AuthContext
-  syncM <- GitSync.getGitHubSync pid
-  let instIdM = instIdParam <|> (syncM >>= (.installationId))
+  accounts <- GitSync.getGitHubCredentials pid
+  let installations = ordNub [iid | account <- accounts, account.host == Git.GitHub, isNothing account.apiBase, Just iid <- [account.installationId]]
+      instIdM = instIdParam <|> case installations of [iid] -> Just iid; _ -> Nothing
       errBox err = div_ [class_ "text-textError p-4"] $ toHtml err
   content <- case instIdM of
-    Nothing -> pure $ errBox ("No GitHub App installation found" :: Text)
+    Nothing -> pure $ errBox ("Choose a GitHub account from Repositories." :: Text)
     Just instId -> do
-      accounts <- GitSync.getGitHubCredentials pid
       unless (any (\account -> account.host == Git.GitHub && isNothing account.apiBase && account.installationId == Just instId) accounts) $ throwError err403
       W.runHTTPWreq
         $ either errBox (repoSelectionView instId)

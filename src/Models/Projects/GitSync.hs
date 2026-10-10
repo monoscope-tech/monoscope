@@ -19,7 +19,6 @@ module Models.Projects.GitSync (
   SyncAction (..),
   SyncOperation (..),
   SyncFailure (..),
-  getGitHubSync,
   getGitSyncs,
   getGitSyncsDecrypted,
   getGitSyncById,
@@ -174,7 +173,7 @@ connectRepository pid cid repository =
   let (owner, repo) = Git.splitFullName repository.fullName
    in Hasql.interp
         [HI.sql| INSERT INTO projects.repositories (project_id, host, api_base, owner, repo, credential_id)
-                 SELECT project_id, host, api_base, #{owner}, #{repo}, id FROM projects.git_credentials
+                 SELECT project_id, host, api_base, projects.git_identity_name(host, #{owner}), projects.git_identity_name(host, #{repo}), id FROM projects.git_credentials
                  WHERE project_id = #{pid} AND id = #{cid}
                  ON CONFLICT (project_id, host, api_base, owner, repo) DO UPDATE SET credential_id = EXCLUDED.credential_id
                  RETURNING * |]
@@ -407,7 +406,7 @@ upsertGitHubCredential :: DB es => ByteString -> ProjectId -> Git.GitHost -> May
 upsertGitHubCredential encKey pid host apiBase account instId token =
   Hasql.interp
     [HI.sql| INSERT INTO projects.git_credentials (project_id, host, api_base, account, installation_id, access_token)
-             VALUES (#{pid}, #{host}, #{apiBase}, #{account}, #{instId}, #{encryptToken encKey <$> token})
+             VALUES (#{pid}, #{host}, #{apiBase}, projects.git_identity_name(#{host}, #{account}), #{instId}, #{encryptToken encKey <$> token})
              ON CONFLICT (project_id, host, api_base, account)
              DO UPDATE SET installation_id = EXCLUDED.installation_id, access_token = COALESCE(EXCLUDED.access_token, projects.git_credentials.access_token), updated_at = now()
              RETURNING id, project_id, account, installation_id, access_token, created_at, updated_at, host, api_base |]
@@ -419,23 +418,18 @@ saveTokenCredential encKey pid host origin account token = \case
   Nothing ->
     Hasql.interp
       [HI.sql| INSERT INTO projects.git_credentials (project_id, host, api_base, account, access_token)
-             VALUES (#{pid}, #{host}, #{origin}, #{account}, #{encryptToken encKey token})
+             VALUES (#{pid}, #{host}, #{origin}, projects.git_identity_name(#{host}, #{account}), #{encryptToken encKey token})
              ON CONFLICT (project_id, host, api_base, account) DO NOTHING
              RETURNING id, project_id, account, installation_id, access_token, created_at, updated_at, host, api_base |]
   Just observed ->
     Hasql.interp
       [HI.sql| UPDATE projects.git_credentials SET access_token = #{encryptToken encKey token}, updated_at = now()
-             WHERE project_id = #{pid} AND id = #{observed.id} AND host = #{host} AND api_base IS NOT DISTINCT FROM #{origin} AND account = #{account}
+             WHERE project_id = #{pid} AND id = #{observed.id} AND host = #{host} AND api_base IS NOT DISTINCT FROM #{origin} AND account = projects.git_identity_name(host, #{account})
                AND installation_id IS NULL AND updated_at = #{observed.updatedAt} AND access_token IS NOT DISTINCT FROM #{observed.accessToken}
              RETURNING id, project_id, account, installation_id, access_token, created_at, updated_at, host, api_base |]
 
 
 -- DB Operations
-getGitHubSync :: DB es => ProjectId -> Eff es (Maybe GitHubSync)
-getGitHubSync pid =
-  getGitSyncs pid <&> \case [sync] -> Just sync; _ -> Nothing
-
-
 getGitSyncs :: DB es => ProjectId -> Eff es [GitHubSync]
 getGitSyncs pid = Hasql.interp (selectFrom @GitHubSync <> [HI.sql| WHERE project_id = #{pid} ORDER BY created_at, id |])
 
@@ -483,11 +477,11 @@ insertGitHubSync encKey pid host apiBase ownerVal repoVal branchVal creds webhoo
   Hasql.interp
     [HI.sql| WITH registered AS (
                INSERT INTO projects.repositories (project_id, host, api_base, owner, repo)
-               VALUES (#{pid}, #{host}, #{apiBase}, #{ownerVal}, #{repoVal})
+               VALUES (#{pid}, #{host}, #{apiBase}, projects.git_identity_name(#{host}, #{ownerVal}), projects.git_identity_name(#{host}, #{repoVal}))
                ON CONFLICT (project_id, host, api_base, owner, repo) DO NOTHING
              )
              INSERT INTO projects.git_sync (project_id, host, api_base, owner, repo, branch, installation_id, access_token, webhook_secret, path_prefix)
-             VALUES (#{pid}, #{host}, #{apiBase}, #{ownerVal}, #{repoVal}, #{branchVal}, #{instM}, #{tokenM}, #{webhookSecretVal}, #{prefix}) RETURNING * |]
+             VALUES (#{pid}, #{host}, #{apiBase}, projects.git_identity_name(#{host}, #{ownerVal}), projects.git_identity_name(#{host}, #{repoVal}), #{branchVal}, #{instM}, #{tokenM}, #{webhookSecretVal}, #{prefix}) RETURNING * |]
 
 
 -- | Re-point a sync row at a repository. 'Nothing' keeps what is stored: a form that left the
@@ -499,11 +493,11 @@ updateGitHubSync encKey sid ownerVal repoVal branchVal tokenM prefixM = do
   Hasql.interp
     [HI.sql| WITH registered AS (
                INSERT INTO projects.repositories (project_id, host, api_base, owner, repo)
-               SELECT project_id, host, api_base, #{ownerVal}, #{repoVal} FROM projects.git_sync WHERE id = #{sid}
+               SELECT project_id, host, api_base, projects.git_identity_name(host, #{ownerVal}), projects.git_identity_name(host, #{repoVal}) FROM projects.git_sync WHERE id = #{sid}
                ON CONFLICT (project_id, host, api_base, owner, repo) DO NOTHING
              )
              UPDATE projects.git_sync
-             SET owner = #{ownerVal}, repo = #{repoVal}, branch = #{branchVal}, sync_enabled = true, updated_at = #{now}
+             SET owner = projects.git_identity_name(host, #{ownerVal}), repo = projects.git_identity_name(host, #{repoVal}), branch = #{branchVal}, sync_enabled = true, updated_at = #{now}
                , access_token = COALESCE(#{encryptToken encKey <$> tokenM}, access_token)
                , path_prefix = COALESCE(#{prefixM}, path_prefix)
              WHERE id = #{sid} RETURNING * |]
@@ -819,10 +813,12 @@ data InstallationAttempt = InstallationAttempt
 createInstallationAttempt :: (DB es, Time :> es, UUIDEff.UUIDEff :> es) => PersistentSessionId -> InstallationAttempt -> Eff es UUID.UUID
 createInstallationAttempt session attempt = do
   nonce <- UUIDEff.genUUID
-  expires <- addUTCTime 900 <$> Time.currentTime
-  let installation = case attempt.step of InstallApp -> Nothing; AuthorizeApp iid -> Just iid
+  now <- Time.currentTime
+  let expires = addUTCTime 900 now
+      installation = case attempt.step of InstallApp -> Nothing; AuthorizeApp iid -> Just iid
   Hasql.interpExecute_
-    [HI.sql| INSERT INTO projects.github_installation_attempts (id, session_id, project_id, destination, installation_id, expires_at)
+    [HI.sql| WITH expired AS (DELETE FROM projects.github_installation_attempts WHERE expires_at <= #{now})
+    INSERT INTO projects.github_installation_attempts (id, session_id, project_id, destination, installation_id, expires_at)
     VALUES (#{nonce}, #{session}, #{attempt.projectId}, #{attempt.destination}, #{installation}, #{expires}) |]
   pure nonce
 
@@ -888,16 +884,8 @@ authorizeGitHubInstallation encKey pid appId clientId secret code callback iid =
           "user/memberships/orgs"
           (toListOf values)
           ( \membership ->
-              membership
-                ^? key "state"
-                  . _String
-                  == Just "active"
-                  && membership
-                ^? key "role"
-                  . _String
-                  == Just "admin"
-                  && (T.toLower <$> (membership ^? key "organization" . key "login" . _String))
-                  == Just (T.toLower account)
+              (membership ^? key "state" . _String, membership ^? key "role" . _String, T.toLower <$> (membership ^? key "organization" . key "login" . _String))
+                == (Just "active", Just "admin", Just (T.toLower account))
           )
           1
     _ -> hoistEither $ Left InstallationOwnershipRequired

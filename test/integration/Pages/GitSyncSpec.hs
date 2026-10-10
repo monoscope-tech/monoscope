@@ -21,9 +21,9 @@ import Data.UUID qualified as UUID
 import Data.UUID.Quasi (uuid)
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple (Only (..), execute)
+import Database.PostgreSQL.Simple (Only (..), execute, query)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Effectful (runEff)
+import Effectful (Eff, runEff)
 import Effectful.Error.Static (catchError)
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
@@ -34,7 +34,7 @@ import OddJobs.Job (createJob)
 import Pages.Bots.BotTestHelpers (withHTTPResponses)
 import Pages.GitSync (GitSyncForm (..))
 import Pages.GitSync qualified as GitSyncPage
-import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.DeriveUtils (DB, UUIDId (..))
 import Pkg.Git qualified as Git
 import Pkg.TestUtils
 import Relude hiding (head)
@@ -249,9 +249,13 @@ runSyncJobs tr = do
     isGitSyncJob _ = False
 
 
+onlySync :: DB es => Projects.ProjectId -> Eff es (Maybe GitSync.GitHubSync)
+onlySync pid = GitSync.getGitSyncs pid <&> \case [sync] -> Just sync; _ -> Nothing
+
+
 assignDash :: TestResources -> Dashboards.DashboardId -> IO ()
 assignDash tr did = do
-  Just sync <- runQueryEffect tr $ GitSync.getGitHubSync testPid
+  Just sync <- runQueryEffect tr $ onlySync testPid
   runQueryEffect tr (GitSync.assignDashboardRepository testPid did sync.id) `shouldReturn` Right ()
 
 
@@ -283,6 +287,9 @@ spec = sequential do
         runQueryEffect tr (GitSync.consumeInstallationAttempt session nonce) `shouldReturn` Nothing
         expired <- runTestBg frozenTime tr $ GitSync.createInstallationAttempt session attempt
         runTestBg (addUTCTime 901 frozenTime) tr (GitSync.consumeInstallationAttempt session expired) `shouldReturn` Nothing
+        void $ runTestBg (addUTCTime 901 frozenTime) tr $ GitSync.createInstallationAttempt session attempt
+        retained <- withResource tr.trPool \conn -> query conn "SELECT EXISTS (SELECT 1 FROM projects.github_installation_attempts WHERE id = ?)" (Only expired)
+        retained `shouldBe` [Only False]
 
       it "installationAuthorization_requiresTheGitHubAccountOwner" \tr -> do
         let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
@@ -303,6 +310,12 @@ spec = sequential do
         (requests, verified) <- authorize "{\"installations\":[{\"id\":42,\"app_id\":123,\"account\":{\"login\":\"team\",\"type\":\"User\"}}]}" "[]"
         verified `shouldBe` Right ()
         map fst requests `shouldBe` ["https://github.com/login/oauth/access_token", "https://api.github.com/user/installations?per_page=100&page=1", "https://api.github.com/user"]
+        let firstPage = AE.encode $ replicate 100 $ AE.object ["state" AE..= ("active" :: Text), "role" AE..= ("member" :: Text)]
+            ownerPage = "[{\"state\":\"active\",\"role\":\"admin\",\"organization\":{\"login\":\"Team\"}}]"
+            provider _ endpoint = pure $ Just $ if endpoint == "https://github.com/login/oauth/access_token" then "{\"access_token\":\"fixture-user-token\"}" else if "user/installations?" `T.isInfixOf` toText endpoint then "{\"installations\":[{\"id\":42,\"app_id\":123,\"account\":{\"login\":\"Team\",\"type\":\"Organization\"}}]}" else if "page=2" `T.isSuffixOf` toText endpoint then ownerPage else firstPage
+        (paged, owner) <- runTestBgRecordingHTTP frozenTime tr $ withHTTPResponses provider $ GitSync.authorizeGitHubInstallation encKey testPid "123" "fixture-client" "fixture-secret" "fixture-code" "https://monoscope.test/github/callback" 42
+        owner `shouldBe` Right ()
+        map fst paged `shouldSatisfy` elem "https://api.github.com/user/memberships/orgs?per_page=100&page=2"
         [account] <- runQueryEffect tr $ GitSync.getGitHubCredentials testPid
         (account.account, account.installationId, account.accessToken) `shouldBe` ("team", Just 42, Nothing)
         runQueryEffect tr (GitSync.getGitSyncs testPid) >>= (`shouldSatisfy` null)
@@ -316,7 +329,7 @@ spec = sequential do
         let form owner repo branch token prefix = GitSyncForm{host = Just Git.GitHub, apiBase = Nothing, owner, repo, branch, accessToken = token, webhookSecret = Just "s3cret", pathPrefix = prefix}
         clearJobs tr
         void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid (form "test-owner" "test-repo" "main" "ghp_test" Nothing)
-        sync <- maybe (fail "Git connection was not created") pure =<< runTestBg frozenTime tr (GitSync.getGitHubSync testPid)
+        sync <- maybe (fail "Git connection was not created") pure =<< runTestBg frozenTime tr (onlySync testPid)
         (sync.owner, sync.repo, sync.branch, sync.syncEnabled) `shouldBe` ("test-owner", "test-repo", "main", True)
         let imports = getPendingBackgroundJobs tr.trATCtx <&> V.filter isGitSyncFromRepo
         imports >>= \jobs -> [(pid, sid) | (_, BackgroundJobs.GitSyncRepository pid sid) <- V.toList jobs] `shouldBe` [(testPid, sync.id)]
@@ -325,13 +338,13 @@ spec = sequential do
         -- to "Folder in repo" vanished on save while the page redrew as if it had stuck. An
         -- empty token box still means "keep the stored credential".
         void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid (form "updated" "updated-repo" "dev" "" (Just "monoscope"))
-        updated <- maybe (fail "Git connection disappeared after update") pure =<< runTestBg frozenTime tr (GitSync.getGitHubSync testPid)
+        updated <- maybe (fail "Git connection disappeared after update") pure =<< runTestBg frozenTime tr (onlySync testPid)
         (updated.owner, updated.repo, updated.branch, updated.pathPrefix) `shouldBe` ("updated", "updated-repo", "dev", "monoscope")
         updated.accessToken `shouldBe` sync.accessToken
         V.length <$> imports `shouldReturn` 1
 
         void $ testServant tr $ GitSyncPage.gitSyncSettingsDeleteH testPid
-        runTestBg frozenTime tr (GitSync.getGitHubSync testPid) >>= (`shouldSatisfy` isNothing)
+        runTestBg frozenTime tr (onlySync testPid) >>= (`shouldSatisfy` isNothing)
 
     describe "Sync Plan Building" do
       it "creates for new files" \_ -> do
@@ -429,7 +442,7 @@ spec = sequential do
         dashId <- createDash tr "Explicit repository" []
         _ <- toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
         V.length . V.filter isGitSyncPush <$> getPendingBackgroundJobs tr.trATCtx `shouldReturn` 0
-        Just sync <- runQueryEffect tr $ GitSync.getGitHubSync testPid
+        Just sync <- runQueryEffect tr $ onlySync testPid
         runQueryEffect tr (GitSync.assignDashboardRepository testPid dashId sync.id) `shouldReturn` Right ()
         _ <- toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
         jobs <- getPendingBackgroundJobs tr.trATCtx
@@ -437,7 +450,7 @@ spec = sequential do
 
       it "skips push when sync disabled" \tr -> do
         setupSync tr GitHubTestConfig{pat = "fake", owner = "o", repo = "r", branch = "main"} Nothing
-        Just sync <- runQueryEffect tr $ GitSync.getGitHubSync testPid
+        Just sync <- runQueryEffect tr $ onlySync testPid
         dashId <- createDash tr "Paused repository" []
         runQueryEffect tr (GitSync.assignDashboardRepository testPid dashId sync.id) `shouldReturn` Right ()
         void $ testServant tr $ GitSyncPage.gitSyncRepositoryPauseH testPid sync.id
@@ -490,24 +503,24 @@ spec = sequential do
                   , "after" AE..= ("f00dcafe" :: Text)
                   ]
         _ <- toBaseServantResponse tr $ GitSyncPage.gitWebhookPostH Git.GitHub (req Git.GitHub "push" (Just $ "sha256=" <> hmacHexOf "s3cret" body) body)
-        announced <- fmap (>>= (.announcedRevision)) $ runQueryEffect tr $ GitSync.getGitHubSync testPid
+        announced <- fmap (>>= (.announcedRevision)) $ runQueryEffect tr $ onlySync testPid
         announced `shouldBe` Just "f00dcafe"
 
       -- The announcement has to outlive a pull that did not reach it, or the retry it exists
       -- to license is cleared by the very fetch that failed to satisfy it.
       it "keeps an announcement until the revision it names is actually fetched" \tr -> do
         setupSyncOn tr Git.GitHub "ann-owner" "ann-repo" (Just "s3cret")
-        Just sync <- runQueryEffect tr $ GitSync.getGitHubSync testPid
+        Just sync <- runQueryEffect tr $ onlySync testPid
         _ <- runQueryEffect tr $ GitSync.setAnnouncedRevision sync.id "newhead"
 
         -- A pull that landed on an older head: the announcement must survive it.
         _ <- runQueryEffect tr $ GitSync.updateLastRevision sync.id "oldhead"
-        stillPending <- fmap (>>= (.announcedRevision)) $ runQueryEffect tr $ GitSync.getGitHubSync testPid
+        stillPending <- fmap (>>= (.announcedRevision)) $ runQueryEffect tr $ onlySync testPid
         stillPending `shouldBe` Just "newhead"
 
         -- The pull that finally reaches it retires it.
         _ <- runQueryEffect tr $ GitSync.updateLastRevision sync.id "newhead"
-        settled <- runQueryEffect tr $ GitSync.getGitHubSync testPid
+        settled <- runQueryEffect tr $ onlySync testPid
         (settled >>= (.announcedRevision)) `shouldBe` Nothing
         (settled >>= (.lastRevision)) `shouldBe` Just "newhead"
 
