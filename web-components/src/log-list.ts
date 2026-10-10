@@ -3926,7 +3926,7 @@ export class LogList extends LitElement {
       parts.push(content);
     };
 
-    if (user) add(html`<span class="text-sm font-semibold text-textStrong shrink-0 truncate max-w-[24ch]">${user}</span>`);
+    if (user) add(html`<span class="text-sm font-semibold text-textStrong shrink-0 truncate max-w-[24ch]" title=${user}>${user}</span>`);
     if (url) {
       // Middle-truncate: keep the last path segment visible since it usually
       // identifies the page ("/checkout/cart" is more useful than "/api/v2/…").
