@@ -105,7 +105,7 @@ import Network.Minio qualified as Minio
 import Network.URI (parseURI, uriAuthority, uriRegName, uriScheme)
 import Network.Wreq qualified as Wreq
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, settingsContentTarget, withSettingsPage)
-import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), confirmModal_, connectionBadge_, copySourceAttr_, emptyState_, filterInputAttr_, formField_, headerRow_, iconBadgeLg_, keyboardActivateAttr_, localTimeFmt_, modalWith_, options_, paymentPlanPicker, searchInput_, sectionLabel_, settingsH2_, settingsSection_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), confirmModal_, connectionBadge_, copySourceAttr_, emptyState_, filterInputAttr_, formActionsModal_, formField_, headerRow_, iconBadgeLg_, keyboardActivateAttr_, localTimeFmt_, modalWith_, options_, paymentPlanPicker, searchInput_, sectionLabel_, settingsH2_, settingsSection_)
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Pkg.EmailTemplates qualified as ET
@@ -116,7 +116,7 @@ import Servant (FromHttpApiData (..), err400, errBody)
 import System.Config
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Text.Printf (printf)
-import Utils (LoadingSize (..), calculateCycleStartDate, faSprite_, fmtDate, formatBytes, htmxIndicator_)
+import Utils (LoadingSize (..), calculateCycleStartDate, countNoun, faSprite_, fmtDate, formatBytes, htmxIndicator_)
 import Web.FormUrlEncoded (FromForm)
 import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
@@ -346,9 +346,7 @@ apiKeysPage pid apiKeys = do
             label_ [Lucid.for_ "api-key-title", class_ "text-sm font-medium text-textStrong"] "Key title"
             input_ [id_ "api-key-title", class_ "input w-full", type_ "text", placeholder_ "Production collector", name_ "title", required_ "true", maxlength_ "100", autocomplete_ "off", Aria.describedby_ "api-key-title-hint"]
             p_ [id_ "api-key-title-hint", class_ "text-xs text-textWeak"] "Name it after the service or environment that uses it."
-          div_ [class_ "flex justify-end gap-2"] do
-            label_ [class_ "btn btn-sm btn-ghost", Lucid.for_ "apikey-modal"] "Cancel"
-            button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Create key"
+          formActionsModal_ "apikey-modal" $ button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Create key"
     apiMainContent pid apiKeys Nothing
 
 
@@ -711,9 +709,7 @@ promTargetModal_ pid trigger mcfg =
         let cur = maybe 60 (.scrapeIntervalSeconds) mcfg
             presets = [(60, "1 minute"), (300, "5 minutes"), (900, "15 minutes"), (3600, "1 hour")] :: [(Int, Text)]
             opts = if any ((== cur) . fst) presets then presets else sortWith fst ((cur, show cur <> "s") : presets)
-        select_ [class_ "select select-bordered w-full", name_ "scrapeInterval"]
-          $ forM_ opts \(v, l) ->
-            option_ ([value_ (show v)] <> [selected_ "selected" | v == cur]) (toHtml l)
+        select_ [class_ "select select-bordered w-full", name_ "scrapeInterval"] $ options_ (Just $ show cur) [(show v, l) | (v, l) <- opts]
       -- Optional fields stay collapsed until needed; auto-expanded when editing a target
       -- that already has them set, so existing values are never hidden behind the toggle.
       let hasAdvanced = maybe False (\c -> isJust c.authHeader || not (T.null (labelsToText c.extraLabels))) mcfg
@@ -1447,15 +1443,7 @@ dailyUsageBreakdown_ isFree cycleStartDay inputRate outputRate rows = div_ [clas
                   div_ [class_ "h-1.5 bg-fillWeak rounded-full overflow-hidden"] do
                     div_ [class_ "h-full bg-fillBrand-strong", style_ ("width: " <> show pct <> "%")] mempty
                 td_ [class_ "px-3 py-2 text-right text-textWeak"] $ toHtml $ if isFree then "—" else usd (fromIntegral dayOverage / 1_000_000 + fromIntegral u.aiCostMicrousd / 1_000_000)
-      when (activeDays < 30)
-        $ div_ [class_ "text-xs text-textWeak"]
-        $ toHtml
-        $ show activeDays
-        <> " day"
-        <> bool "s" "" (activeDays == 1)
-        <> " with activity since "
-        <> cycleStartText
-        <> "."
+      when (activeDays < 30) $ div_ [class_ "text-xs text-textWeak"] $ toHtml $ countNoun activeDays "day" <> " with activity since " <> cycleStartText <> "."
       div_ [class_ "text-xs text-textWeak"] do
         if isFree
           then "Free plan — usage shown for reference only."
@@ -1485,7 +1473,7 @@ pastCyclesSection_ isFree basePrice cycles = div_ [class_ "border-t border-strok
   let invoiced = any (isJust . (.invoice)) cycles
   div_ [class_ "flex items-baseline justify-between"] do
     sectionLabel_ "Past cycles"
-    span_ [class_ "text-xs text-textWeak"] $ toHtml @Text $ let n = length cycles in show n <> " cycle" <> bool "s" "" (n == 1)
+    span_ [class_ "text-xs text-textWeak"] $ toHtml $ countNoun (length cycles) "cycle"
   div_ [class_ "border border-strokeWeak rounded-md overflow-hidden"] do
     table_ [class_ "w-full text-sm tabular-nums border-separate border-spacing-0"] do
       thead_ [class_ "text-textWeak text-xs uppercase tracking-wide"] do
@@ -1549,9 +1537,11 @@ stripeOpts apiKey =
     & (Wreq.header "Stripe-Version" .~ ["2025-03-31.basil"])
 
 
-stripeRequest :: W.HTTP :> es => Text -> Text -> [(ByteString, ByteString)] -> Eff es (W.Response LByteString)
-stripeRequest apiKey endpoint =
-  W.postWith (stripeOpts apiKey) ("https://api.stripe.com/v1/" <> toString endpoint)
+-- | POST a session-creating request; Stripe answers with the hosted page's @url@.
+stripeSessionUrl :: W.HTTP :> es => Text -> Text -> [(ByteString, ByteString)] -> Eff es (Maybe Text)
+stripeSessionUrl apiKey endpoint params = do
+  resp <- W.postWith (stripeOpts apiKey) ("https://api.stripe.com/v1/" <> toString endpoint) params
+  pure $ AE.decode @AE.Value (resp ^. Wreq.responseBody) >>= jsonField "url"
 
 
 -- | `trialEligible` grants a 30-day trial at checkout. Callers should pass True only
@@ -1587,22 +1577,12 @@ createStripeCheckoutSession trialEligible customerM apiKey hostUrl pid plan pric
              , ("success_url", encodeUtf8 $ hostUrl <> "p/" <> pid.toText <> "/manage_billing?stripe_success=1")
              , ("cancel_url", encodeUtf8 $ hostUrl <> "p/" <> pid.toText <> "/manage_billing")
              ]
-  resp <- stripeRequest apiKey "checkout/sessions" params
-  let body = resp ^. Wreq.responseBody
-  pure $ AE.decode @AE.Value body >>= jsonField "url"
+  stripeSessionUrl apiKey "checkout/sessions" params
 
 
 createStripePortalSession :: W.HTTP :> es => Text -> Text -> Text -> Eff es (Maybe Text)
-createStripePortalSession apiKey customerId returnUrl = do
-  resp <-
-    stripeRequest
-      apiKey
-      "billing_portal/sessions"
-      [ ("customer", encodeUtf8 customerId)
-      , ("return_url", encodeUtf8 returnUrl)
-      ]
-  let body = resp ^. Wreq.responseBody
-  pure $ AE.decode @AE.Value body >>= jsonField "url"
+createStripePortalSession apiKey customerId returnUrl =
+  stripeSessionUrl apiKey "billing_portal/sessions" [("customer", encodeUtf8 customerId), ("return_url", encodeUtf8 returnUrl)]
 
 
 lemonSqueezyOpts :: Text -> Wreq.Options

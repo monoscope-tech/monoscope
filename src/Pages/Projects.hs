@@ -209,10 +209,7 @@ projectCard_ project = do
           $ (def :: Widget)
             { wType = WTTimeseriesLine
             , id = Just project.id.toText
-            , title = Nothing
-            , subtitle = Nothing
             , hideSubtitle = Just True
-            , query = Nothing
             , _projectId = Just project.id
             , naked = Just True
             , hideLegend = Just True
@@ -1001,8 +998,8 @@ teamPage pid team projMembers slackChannels discordChannels = do
         toHtml team.name
         when isEveryone $ span_ [class_ "badge badge-primary"] "Default"
     when isEveryone
-      $ div_ [class_ "rounded-lg bg-fillBrand-weak p-4 text-sm text-textStrong mb-6"] do
-        faSprite_ "circle-info" "regular" "h-4 w-4 inline mr-2"
+      $ div_ [class_ "mb-6"]
+      $ infoBanner_ do
         "@everyone automatically includes all project members. "
         "Channels configured on the "
         a_ [href_ ("/p/" <> pid.toText <> "/settings/integrations"), class_ "text-textBrand underline"] "Integrations page"
@@ -1164,16 +1161,12 @@ deleteMemberH pid memberId = do
   projMembers <- ProjectMembers.selectActiveProjectMembers pid
   case find (\m -> m.id == memberId) projMembers of
     Nothing -> toastError "Member not found" mempty
-    Just member ->
-      if member.userId == currUserId
-        then toastError "You cannot remove yourself" mempty
-        else do
-          _ <- ProjectMembers.softDeleteProjectMembers (memberId :| [])
-          Projects.logAuditS pid Projects.AEMemberRemoved sess
-            $ Just
-            $ AE.object ["removed_email" AE..= CI.original member.email]
-          addSuccessToast "Member removed" Nothing
-          addRespHeaders mempty
+    Just member | member.userId == currUserId -> toastError "You cannot remove yourself" mempty
+    Just member -> do
+      _ <- ProjectMembers.softDeleteProjectMembers (memberId :| [])
+      Projects.logAuditS pid Projects.AEMemberRemoved sess $ Just $ AE.object ["removed_email" AE..= CI.original member.email]
+      addSuccessToast "Member removed" Nothing
+      addRespHeaders mempty
 
 
 -- | Client-side redirect to @url@, or surface @msg@ as an error toast when absent.
@@ -1524,19 +1517,7 @@ createProjectBody pid cp = do
             faSprite_ "floppy-disk" "regular" "w-3 h-3"
             span_ "Save Changes"
 
-    script_ do
-      [text|
-           (() => {
-             const timezoneSelect = document.getElementById("timeZone");
-             const timeZones = Intl.supportedValuesOf('timeZone');
-             timeZones.forEach((tz) => {
-               const option = document.createElement("option");
-               option.value = tz;
-               option.text = tz;
-               timezoneSelect.appendChild(option);
-             });
-           })();
-        |]
+    script_ "Intl.supportedValuesOf('timeZone').forEach(tz => document.getElementById('timeZone').add(new Option(tz, tz)))"
 
     -- Danger zone — compact
     div_ [class_ "border border-strokeError-weak rounded-xl p-4 flex max-sm:flex-col sm:items-center sm:justify-between gap-4"] do
