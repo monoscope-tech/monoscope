@@ -26,6 +26,8 @@ module Models.Projects.Dashboards (
   getOrInsertByBaseTemplate,
   selectDashboardsByTeam,
   selectDashboardsSortedBy,
+  DashboardSort (..),
+  SortOrder (..),
   updateSchema,
   updateTitle,
   updateTags,
@@ -45,8 +47,10 @@ import Data.Effectful.Wreq (HTTP)
 import Data.Effectful.Wreq qualified as W
 import Data.Generics.Labels ()
 import Data.Generics.Product.Fields (HasField', field')
-import Data.List qualified as L (isSuffixOf, lookup)
+import Data.List qualified as L (isSuffixOf)
+import Data.OpenApi (ToParamSchema)
 import Data.Text qualified as T
+import Data.Text.Display (Display, display)
 import Data.Time (UTCTime)
 import Data.Vector qualified as V
 import Data.Yaml qualified as Yml
@@ -66,12 +70,13 @@ import Language.Haskell.TH.Syntax qualified as THS
 import Models.Projects.Activation qualified as Activation
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
+import Pkg.Components.Table (SortField (..), SortOrder (..))
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (UUIDId (..), selectFrom)
+import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), selectFrom)
 import Pkg.Parser (replacePlaceholders, variablePresets)
 import Relude
-import Servant (ServerError (..), err404)
+import Servant (FromHttpApiData, ServerError (..), err404)
 import System.Directory (listDirectory)
 import System.FilePath ((</>))
 import System.Types (DB)
@@ -345,15 +350,22 @@ selectDashboardsByTeam pid teamId =
     )
 
 
-selectDashboardsSortedBy :: DB es => Projects.ProjectId -> Text -> Eff es [DashboardVM]
-selectDashboardsSortedBy pid orderByParam =
+-- | Sortable dashboard-list columns. The spelling is both the @sort@ URL value and the column:
+--
+-- >>> import Data.Text.Display (display)
+-- >>> map display [minBound .. maxBound :: DashboardSort]
+-- ["title","created_at","updated_at"]
+data DashboardSort = DSTitle | DSCreatedAt | DSUpdatedAt
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving (Display, FromHttpApiData, ToParamSchema) via WrappedEnumSC 'Nothing "DS" DashboardSort
+
+
+selectDashboardsSortedBy :: DB es => Projects.ProjectId -> SortOrder -> DashboardSort -> Eff es [DashboardVM]
+selectDashboardsSortedBy pid order key =
   Hasql.interp
     $ selectFrom @DashboardVM
     <> [HI.sql| WHERE project_id = #{pid} ORDER BY starred_since DESC NULLS LAST, |]
-    <> orderClause
-  where
-    sortFields = [("title", "title ASC"), ("created_at", "created_at DESC"), ("updated_at", "updated_at DESC")] :: [(Text, HI.Sql)]
-    orderClause = fromMaybe "updated_at DESC" (L.lookup (T.toLower $ T.strip orderByParam) sortFields)
+    <> fromString (toString (SortField (display key) order).toSql)
 
 
 -- | Replace a dashboard's schema, optionally stamping @updated_at@. In-page widget edits pass

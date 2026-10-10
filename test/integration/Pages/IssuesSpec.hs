@@ -148,7 +148,7 @@ spec = sequential $ aroundAll withTestResources do
 
     -- Regression: since #376 dropped apis.shapes/fields/formats, getAnomaliesVM selected
     -- NULL drift detail, so new/changed fields never reached the issue, never updated an
-    -- open one, and a breaking change never made it critical.
+    -- open one, and a breaking change never marked it critical.
     it "apiChangeIssue_fieldDrift_neverReachedIssuePayload" \tr -> do
       nowTxt <- nowText
       let ingest body = do

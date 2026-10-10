@@ -39,6 +39,8 @@ module ProcessMessage (
   classifyUrlPath,
   tokenizeUrlPath,
   hostFromRawUrl,
+  urlPathFromRawUrl,
+  overFreeTierQuota,
 )
 where
 
@@ -83,7 +85,7 @@ import Pkg.Metrics qualified as Metrics
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Pkg.SchemaLearning.Hot qualified as SchemaHot
 import Relude hiding (ask)
-import Relude.Extra.Tuple (toSnd)
+import Relude.Extra.Tuple (toSnd, traverseToSnd)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Tracing (Tracing, batchSpanAttrs, withSpan_)
@@ -115,9 +117,7 @@ processMessages msgs attrs =
         then pure ([], poison, Nothing)
         else do
           projectCaches <-
-            liftIO $ HM.fromList <$> forM (ordNub $ (\(_, _, m) -> UUIDId m.projectId) <$> rMsgs) \pid ->
-              (pid,)
-                <$> Cache.fetchWithCache appCtx.projectCache pid (Projects.projectCacheByIdIO appCtx.hasqlJobsPool)
+            liftIO $ HM.fromList <$> forM (ordNub $ (\(_, _, m) -> UUIDId m.projectId) <$> rMsgs) (traverseToSnd \pid -> Cache.fetchWithCache appCtx.projectCache pid (Projects.projectCacheByIdIO appCtx.hasqlJobsPool))
 
           -- Track (ackId, raw) alongside each emitted span so we can map any
           -- per-row write poison back to the source message for DLQ routing.
@@ -125,9 +125,7 @@ processMessages msgs attrs =
             let pid = UUIDId msg.projectId
                 !msgSize = fromIntegral (BS.length raw)
             cache <- hoistMaybe $ HM.lookup pid projectCaches
-            let !totalDailyEvents = fromIntegral cache.dailyEventCount + fromIntegral cache.dailyMetricCount
-                !isFreeTier = Projects.isFreeTier cache.paymentPlan
-            guard $ not (isFreeTier && totalDailyEvents >= freeTierDailyMaxEvents)
+            guard $ not (overFreeTierQuota cache)
             let (spanId, trId) = requestEventIds msg
             pure $! (ackId, raw, convertRequestMessageToSpan msg msgSize (spanId, trId))
 
@@ -142,6 +140,11 @@ processMessages msgs attrs =
     -- On success the whole batch landed on every store (no per-row poison); the
     -- only DLQ entries are the decode failures collected upstream in `poison`.
     pure $ writeRes $> (rAckIds, poison)
+
+
+-- | A free-tier project past its daily event+metric budget: its telemetry is not ingested.
+overFreeTierQuota :: Projects.ProjectCache -> Bool
+overFreeTierQuota cache = Projects.isFreeTier cache.paymentPlan && toInteger cache.dailyEventCount + toInteger cache.dailyMetricCount >= freeTierDailyMaxEvents
 
 
 -- | Shared HTTP-key derivation. Used by both 'processSpanToEntities' (which
@@ -452,27 +455,20 @@ extractObservation canonicalTemplates otelSpan =
               , tagWalk Catalog.FCEvent (valueToFields $ redacted eventsValue)
               , tagWalk Catalog.FCTopLevel (valueToFields topLevelValue)
               ]
-         in if isHttpSpan
-              then
-                let pathParams = fromMaybe AE.emptyObject $ attrValue ^? key "http" . key "request" . key "path_params"
-                    queryParams = fromMaybe AE.emptyObject $ attrValue ^? key "http" . key "request" . key "query_params"
-                    reqHeaders = fromMaybe AE.emptyObject $ extractHeadersV "http.request.headers" attrValue
-                    respHeaders = fromMaybe AE.emptyObject $ extractHeadersV "http.response.headers" attrValue
-                    reqBody = redacted $ fromMaybe AE.Null $ bodyValue ^? key "request_body"
-                    respBody = redacted $ fromMaybe AE.Null $ bodyValue ^? key "response_body"
-                 in mconcat
-                      $ commonWalk
-                      <> [ tagWalk Catalog.FCPathParam (valueToFields $ redacted pathParams)
-                         , tagWalk Catalog.FCQueryParam (valueToFields $ redacted queryParams)
-                         , tagWalk Catalog.FCRequestHeader (valueToFields $ redacted reqHeaders)
-                         , tagWalk Catalog.FCResponseHeader (valueToFields $ redacted respHeaders)
-                         , tagWalk Catalog.FCRequestBody (valueToFields reqBody)
-                         , tagWalk Catalog.FCResponseBody (valueToFields respBody)
-                         ]
-              else
-                mconcat
-                  $ commonWalk
-                  <> [tagWalk Catalog.FCRequestBody (valueToFields $ redacted bodyValue)]
+            orEmpty = fromMaybe AE.emptyObject
+            bodyPart k = fromMaybe AE.Null $ bodyValue ^? key k
+         in mconcat
+              $ commonWalk
+              <> if isHttpSpan
+                then
+                  [ tagWalk Catalog.FCPathParam (valueToFields $ redacted $ orEmpty $ attrValue ^? key "http" . key "request" . key "path_params")
+                  , tagWalk Catalog.FCQueryParam (valueToFields $ redacted $ orEmpty $ attrValue ^? key "http" . key "request" . key "query_params")
+                  , tagWalk Catalog.FCRequestHeader (valueToFields $ redacted $ orEmpty $ extractHeadersV "http.request.headers" attrValue)
+                  , tagWalk Catalog.FCResponseHeader (valueToFields $ redacted $ orEmpty $ extractHeadersV "http.response.headers" attrValue)
+                  , tagWalk Catalog.FCRequestBody (valueToFields $ redacted $ bodyPart "request_body")
+                  , tagWalk Catalog.FCResponseBody (valueToFields $ redacted $ bodyPart "response_body")
+                  ]
+                else [tagWalk Catalog.FCRequestBody (valueToFields $ redacted bodyValue)]
    in SchemaHot.ObservationInput{keyKind, keyHash, scope, walk = walkThunk, timestamp = otelSpan.timestamp}
   where
     extractHeadersV :: Text -> AE.Value -> Maybe AE.Value
@@ -488,14 +484,7 @@ extractObservation canonicalTemplates otelSpan =
       :: Catalog.FieldCategoryEnum
       -> V.Vector (Text, V.Vector AE.Value)
       -> [(Text, V.Vector (AE.Value, Maybe Text), Catalog.FieldCategoryEnum)]
-    tagWalk cat fields0 =
-      [ (path, V.map (toSnd formatHint) vs, cat)
-      | (path, vs) <- V.toList fields0
-      ]
-
-    formatHint :: AE.Value -> Maybe Text
-    formatHint (AE.String s) = valueToFormatStr s
-    formatHint _ = Nothing
+    tagWalk cat fields0 = [(path, V.map (toSnd \case AE.String s -> valueToFormatStr s; _ -> Nothing) vs, cat) | (path, vs) <- V.toList fields0]
 
 
 convertRequestMessageToSpan :: RequestMessage -> Int64 -> (UUID.UUID, Text) -> Telemetry.OtelLogsAndSpans
@@ -545,40 +534,35 @@ convertRequestMessageToSpan rm msgSize (spanId, trId) =
 
 createSpanAttributes :: RequestMessage -> AE.Value
 createSpanAttributes rm =
-  let baseAttrs =
-        nestedJsonFromDotNotation
-          ( [ ("net.host.name", AE.String $ fromMaybe "" rm.host)
-            , ("server.address", AE.String serverAddress)
-            , ("http.method", AE.String rm.method)
-            , ("http.request.method", AE.String rm.method)
-            , ("http.request.path_params", rm.pathParams)
-            , ("http.request.query_params", rm.queryParams)
-            , ("http.request.path", AE.String rawPath)
-            , ("http.response.status_code", AE.Number $ fromIntegral rm.statusCode)
-            , ("http.status_code", AE.Number $ fromIntegral rm.statusCode)
-            , ("http.url", AE.String rm.rawUrl)
-            , ("url.path", AE.String rawPath)
-            , ("url.full", AE.String rm.rawUrl)
-            , ("monoscope.msg_id", AE.String $ maybe "" UUID.toText rm.msgId)
-            , ("monoscope.parent_id", AE.String $ maybe "" UUID.toText rm.parentId)
-            , ("monoscope.sdk_type", AE.String $ show rm.sdkType)
-            , ("monoscope.errors", AE.String $ maybe "[]" (decodeUtf8 . AE.encode) rm.errors)
-            ]
-              <> [("http.route", AE.String route) | Just route <- [rm.urlPath], routeIsAuthoritative (normalizeHttpRoute route)]
-          )
-   in baseAttrs
-        `lodashMerge` refererObj
-        `lodashMerge` headersObj
-        `lodashMerge` tagsObj
+  nestedJsonFromDotNotation
+    ( [ ("net.host.name", AE.String $ fromMaybe "" rm.host)
+      , ("server.address", AE.String serverAddress)
+      , ("http.method", AE.String rm.method)
+      , ("http.request.method", AE.String rm.method)
+      , ("http.request.path_params", rm.pathParams)
+      , ("http.request.query_params", rm.queryParams)
+      , ("http.request.path", AE.String rawPath)
+      , ("http.response.status_code", AE.Number $ fromIntegral rm.statusCode)
+      , ("http.status_code", AE.Number $ fromIntegral rm.statusCode)
+      , ("http.url", AE.String rm.rawUrl)
+      , ("url.path", AE.String rawPath)
+      , ("url.full", AE.String rm.rawUrl)
+      , ("monoscope.msg_id", AE.String $ maybe "" UUID.toText rm.msgId)
+      , ("monoscope.parent_id", AE.String $ maybe "" UUID.toText rm.parentId)
+      , ("monoscope.sdk_type", AE.String $ show rm.sdkType)
+      , ("monoscope.errors", AE.String $ maybe "[]" (decodeUtf8 . AE.encode) rm.errors)
+      ]
+        <> [("http.route", AE.String route) | Just route <- [rm.urlPath], routeIsAuthoritative (normalizeHttpRoute route)]
+    )
+    `lodashMerge` refererObj
+    `lodashMerge` headersObj
+    `lodashMerge` tagsObj
   where
     -- Stable semconv name for what the SDK sends as host (net.host.name is deprecated).
     -- Host resolution reads that column and nothing else, so it is populated here rather
     -- than reconstructed at query time; rawUrl keeps hostless spans attributable.
     serverAddress = fromMaybe (hostFromRawUrl rm.rawUrl) (rm.host >>= guarded (not . T.null))
-    rawPath =
-      let (_, authorityAndPath) = T.breakOn "://" rm.rawUrl
-          path = if T.null authorityAndPath then rm.rawUrl else T.dropWhile (/= '/') $ T.drop 3 authorityAndPath
-       in fromMaybe "/" $ guarded (not . T.null) $ T.takeWhile (\c -> c /= '?' && c /= '#') path
+    rawPath = urlPathFromRawUrl rm.rawUrl
 
     tagsObj = maybe (AE.object []) (\tags -> nestedJsonFromDotNotation [("monoscope.tags", AE.Array $ V.fromList $ map AE.String tags)]) rm.tags
 
@@ -610,6 +594,18 @@ hostFromRawUrl :: Text -> Text
 hostFromRawUrl url = case T.breakOn "://" url of
   (_, rest) | not (T.null rest) -> T.takeWhile (\c -> c /= '/' && c /= ':') (T.drop 3 rest)
   _ -> ""
+
+
+-- | The path of an absolute or relative URL, without query or fragment; empty means @/@.
+--
+-- >>> map urlPathFromRawUrl ["https://api.x/orders/42?expand=true", "https://api.x", "/a/b#frag", ""]
+-- ["/orders/42","/","/a/b","/"]
+urlPathFromRawUrl :: Text -> Text
+urlPathFromRawUrl url = fromMaybe "/" $ guarded (not . T.null) $ T.takeWhile (\c -> c /= '?' && c /= '#') path
+  where
+    path = case T.breakOn "://" url of
+      (_, rest) | not (T.null rest) -> T.dropWhile (/= '/') (T.drop 3 rest)
+      _ -> url
 
 
 -- $setup
@@ -770,8 +766,7 @@ removeBlacklistedFields = V.map \(k, val) ->
   (k, bool val (AE.String "[REDACTED]") $ any (`T.isSuffixOf` T.toLower k) ["password", "authorization", "cookie"])
 
 
--- | Common format patterns used by both replaceAllFormats and valueToFormatStr
--- The order matters: more specific patterns should come before more general ones
+-- | Format patterns for 'valueToFormatStr'. Order matters: more specific patterns first.
 commonFormatPatterns :: [(RE, Text)]
 commonFormatPatterns =
   [ -- UUIDs and hashes (most specific hex patterns first)
@@ -944,6 +939,11 @@ ensureUrlParamsWith learned url = (T.intercalate "/" segs, pathParams, any isBra
     -- against the captured values would misalign the moment a path carried a
     -- pass-through placeholder, silently naming a param after its neighbour.
     pathParams = AE.object [AEK.fromText (T.dropEnd 1 $ T.drop 1 k) AE..= v | (k, v) <- reverse prsR]
+    -- Render a @{label}@ segment, suffixing @_n@ when the label already occurs.
+    newSegment sAcc lbl =
+      let pfx = "{" <> lbl
+          pos = length $ filter (T.isPrefixOf pfx) sAcc
+       in if pos > 0 then pfx <> "_" <> show pos <> "}" else pfx <> "}"
 
 
 -- | Is this segment already a rendered template segment, e.g. @{uuid}@?
@@ -1112,28 +1112,17 @@ dynSegmentLabelWith learned x0
       Just v -> Just $ fromMaybe "param" $ L.lookup v formatStrLabels
   where
     x = percentDecodeLenient x0
-
-
--- | Maps a 'valueToFormatStr' hint to the coarser label 'dynSegmentLabelWith' stamps.
-formatStrLabels :: [(Text, Text)]
-formatStrLabels =
-  [ (fmt, label)
-  | (label, fmts) <-
-      [ ("uuid", ["{uuid}"])
-      , ("date", ["{mm/dd/yyyy}", "{mm-dd-yyyy}", "{mm.dd.yyyy}", "{dd/mm/yyyy}", "{dd-mm-yyyy}", "{dd.mm.yyyy}", "{YYYY-MM-DD}", "{YYYY/MM/DD}", "{YYYYMMDD}", "{YYYY-MM-DDThh:mm:ss.sTZD}"])
-      , ("ip_address", ["{ip}", "{ipv6}"])
-      , ("number", ["{integer}", "{float}", "{hex}"])
+    -- A 'valueToFormatStr' hint → the coarser label stamped into the path.
+    formatStrLabels =
+      [ (fmt, label :: Text)
+      | (label, fmts) <-
+          [ ("uuid", ["{uuid}"])
+          , ("date", ["{mm/dd/yyyy}", "{mm-dd-yyyy}", "{mm.dd.yyyy}", "{dd/mm/yyyy}", "{dd-mm-yyyy}", "{dd.mm.yyyy}", "{YYYY-MM-DD}", "{YYYY/MM/DD}", "{YYYYMMDD}", "{YYYY-MM-DDThh:mm:ss.sTZD}"])
+          , ("ip_address", ["{ip}", "{ipv6}"])
+          , ("number", ["{integer}", "{float}", "{hex}"])
+          ]
+      , fmt <- fmts
       ]
-  , fmt <- fmts
-  ]
-
-
--- | Render a @{label}@ segment, suffixing @_n@ when the label already occurs.
-newSegment :: [Text] -> Text -> Text
-newSegment segs seg =
-  let pfx = "{" <> seg
-      pos = length $ filter (T.isPrefixOf pfx) segs
-   in if pos > 0 then pfx <> "_" <> show pos <> "}" else pfx <> "}"
 
 
 -- | Detect ID-like URL segments that 'valueToFormatStr' misses.

@@ -245,7 +245,7 @@ detailsPanel_ pid targetEventM layout = div_ [class_ $ "contents group/details "
         on keydown[key=='Escape' and not (the event's target matches <input, textarea, select, [contenteditable]/>) and no <[popover]:popover-open/> and no <dialog[open]/>] from window
           -- `the first <…/> exists`, not a bare `<…/>`: a query literal is a lazy query object
           -- that stays truthy at zero matches, so a bare `if <sel/>` never falls through.
-          if the first <#trace_details_container.open/> exists send closeDetailPanel to #trace_details_container
+          if the first <#trace-details-open:checked/> exists send closeDetailPanel to #trace_details_container
           otherwise if the first <#trace_expanded_view:not(.hidden)/> exists send closeTraceView to #trace_expanded_view
           otherwise send closeDetailPanel to me end
         end
@@ -334,8 +334,8 @@ data DetailTab = DetailTab
 -- | The @active@ tab renders now; any other is a hidden panel that fetches itself the
 -- first time its radio reveals it. @tabQuery@ names the tab server-side: a top-level
 -- tab is @tab=\<marker\>@, an HTTP sub-tab is @tab=tab-req&subtab=\<marker\>@.
-detailPanel_ :: Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> (Text -> Text) -> Text -> DetailTab -> Html ()
-detailPanel_ pid item tabQuery active tab
+detailTabPanel_ :: Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> (Text -> Text) -> Text -> DetailTab -> Html ()
+detailTabPanel_ pid item tabQuery active tab
   | tab.marker == active = tabPanel_ tab.panelClass tab.panelId tab.content
   | otherwise =
       div_
@@ -415,7 +415,7 @@ expandedItemView pid item aptSp selectedTabM = do
       -- The selected panel renders now; hidden placeholders fetch and replace
       -- themselves when their radio makes them visible for the first time.
       div_ [class_ "mt-2 py-1 text-textWeak"]
-        $ traverse_ (detailPanel_ pid item ("tab=" <>) activeMarker) tabs
+        $ traverse_ (detailTabPanel_ pid item ("tab=" <>) activeMarker) tabs
   where
     isLog = item.kind == Just "log"
     isAlert = item.kind == Just "alert"
@@ -585,7 +585,7 @@ renderHttpDetails pid item aptSp = div_ [id_ "http-content-container", class_ "g
   div_ [class_ "bg-fillWeaker w-max rounded-lg border border-strokeWeak justify-start items-start inline-flex"]
     $ div_ [class_ "justify-start items-start flex text-sm"]
     $ forM_ tabs \tab -> httpTab_ ("htab-" <> item.id) tab.marker (tab.marker == activeMarker) tab.label
-  div_ [] $ traverse_ (detailPanel_ pid item ("tab=tab-req&subtab=" <>) activeMarker) tabs
+  div_ [] $ traverse_ (detailTabPanel_ pid item ("tab=tab-req&subtab=" <>) activeMarker) tabs
 
 
 httpDetailTabs :: Telemetry.OtelLogsAndSpans -> Maybe Telemetry.OtelLogsAndSpans -> (Text, [DetailTab])

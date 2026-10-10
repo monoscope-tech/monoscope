@@ -1687,7 +1687,7 @@ routeApiV1Get tr rest params = case T.splitOn "/" rest of
   ["monitors"] -> jsonRoute tr (ApiH.apiMonitorsList testPid)
   ["monitors", mid] -> jsonRoute tr (ApiH.apiMonitorGet testPid (monitorId mid))
   ["monitors", mid, "yaml"] -> jsonRoute tr (ApiH.apiMonitorYaml testPid (monitorId mid))
-  ["dashboards"] -> jsonRoute tr (ApiH.apiDashboardsList testPid (lookupParam "sort" params) (lookupParam "team_id" params))
+  ["dashboards"] -> jsonRoute tr (ApiH.apiDashboardsList testPid (rightToMaybe . Servant.parseQueryParam =<< lookupParam "sort" params) (lookupParam "team_id" params))
   ["dashboards", did] -> jsonRoute tr (ApiH.apiDashboardGet testPid (parseUUIDId did))
   ["dashboards", did, "yaml"] -> jsonRoute tr (ApiH.apiDashboardYaml testPid (parseUUIDId did))
   ["me"] -> jsonRoute tr (ApiH.apiMe testPid)

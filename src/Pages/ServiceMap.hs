@@ -49,15 +49,14 @@ serviceMapGetH pid fromM toM sinceM envM endpointHashM = do
       env = nonEmptyT envM
       endpointHash = nonEmptyT endpointHashM
       scope = maybe (GlobalServiceMap env) EndpointServiceMap endpointHash
-      lo = fromMaybe (addUTCTime (-86400) now) from
-      hi = fromMaybe now to
-  graph <- case scope of
-    GlobalServiceMap selectedEnv -> serviceGraphForRange pid selectedEnv lo hi
-    EndpointServiceMap endpoint -> endpointDependencyGraphForRange pid endpoint lo hi
+      (fetchGraph, prePageTitle, pageTitle) = case scope of
+        GlobalServiceMap selectedEnv -> (serviceGraphForRange pid selectedEnv, Nothing, "Explorer")
+        EndpointServiceMap endpoint -> (endpointDependencyGraphForRange pid endpoint, Just "Explorer", "Endpoint Dependency Map")
+  graph <- fetchGraph (fromMaybe (addUTCTime (-86400) now) from) (fromMaybe now to)
   let bwconf =
         bw
-          { prePageTitle = case scope of GlobalServiceMap{} -> Nothing; EndpointServiceMap{} -> Just "Explorer"
-          , pageTitle = case scope of GlobalServiceMap{} -> "Explorer"; EndpointServiceMap{} -> "Endpoint Dependency Map"
+          { prePageTitle
+          , pageTitle
           , menuItem = Just "Explorer"
           , navTabs = Just $ explorerNavTabs_ pid "Service Map"
           , pageActions = Just $ TimePicker.liveDataControls_ Nothing currentRange Nothing TimePicker.RefreshOnly

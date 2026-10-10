@@ -33,6 +33,7 @@ module Models.Apis.Issues (
   -- * Issue Data Types
   APIChangeData (..),
   apiChangeDataFrom,
+  hasFieldDrift,
   RuntimeExceptionData (..),
   QueryAlertData (..),
   ThresholdDirection (..),
@@ -459,8 +460,12 @@ serviceLabel = fromMaybe "unknown-service"
 
 isNewEndpointOnly :: Issue -> Bool
 isNewEndpointOnly issue = case issuePayload issue of
-  Just (ApiChangeP d) -> all V.null ([d.newFields, d.deletedFields, d.modifiedFields] :: [V.Vector Text])
+  Just (ApiChangeP d) -> not $ hasFieldDrift d
   _ -> False
+
+
+hasFieldDrift :: APIChangeData -> Bool
+hasFieldDrift d = not $ all V.null ([d.newFields, d.deletedFields, d.modifiedFields] :: [V.Vector Text])
 
 
 -- | API Change issue data
@@ -479,6 +484,21 @@ data APIChangeData = APIChangeData
   deriving anyclass (NFData)
   deriving (FromField, ToField) via Aeson APIChangeData
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake APIChangeData
+
+
+-- | Drift accumulates onto an open issue; endpoint metadata comes from the newer side.
+instance Semigroup APIChangeData where
+  a <> b =
+    b
+      { anomalyHashes = u (.anomalyHashes)
+      , shapeChanges = a.shapeChanges <> b.shapeChanges
+      , formatChanges = a.formatChanges <> b.formatChanges
+      , newFields = u (.newFields)
+      , deletedFields = u (.deletedFields)
+      , modifiedFields = u (.modifiedFields)
+      }
+    where
+      u f = V.fromList $ ordNub $ V.toList $ f a <> f b
 
 
 -- | Runtime Exception issue data
@@ -926,17 +946,24 @@ selectIssues pid projection f = do
   pure (issues, total)
 
 
--- | Update issue with new anomaly data
-updateIssueWithNewAnomaly :: (DB es, Time :> es) => IssueId -> APIChangeData -> Eff es ()
-updateIssueWithNewAnomaly issueId newData = do
+-- | Fold an anomaly group's drift into an open API-change issue, escalating it on a breaking change.
+updateIssueWithNewAnomaly :: (DB es, Time :> es) => Issue -> NonEmpty ApiChanges.AnomalyVM -> Eff es ()
+updateIssueWithNewAnomaly issue anomalies = do
   now <- Time.currentTime
+  let new = apiChangeDataFrom anomalies
+      merged = case issuePayload issue of
+        Just (ApiChangeP old) -> old <> new
+        _ -> new
+      breaking = not (V.null new.deletedFields && V.null new.modifiedFields)
   Hasql.interpExecute_
     [HI.sql|
       UPDATE apis.issues SET
-        issue_data = issue_data || #{Aeson newData}::jsonb,
+        issue_data = issue_data || #{Aeson merged}::jsonb,
+        critical = critical OR #{breaking},
+        severity = CASE WHEN #{breaking} THEN #{Critical} ELSE severity END,
         affected_requests = affected_requests + 1,
         updated_at = #{now}
-      WHERE id = #{issueId} |]
+      WHERE id = #{issue.id} |]
 
 
 updateIssueEnhancement :: (DB es, Time :> es) => IssueId -> Text -> Text -> Text -> Eff es ()
@@ -1292,8 +1319,8 @@ autoArchiveStaleDiscoveryIssues pid now days =
 
 
 -- | The issue payload for one endpoint's anomaly group; endpoint metadata comes from the
--- first anomaly since all rows in a group join the same endpoint. Shape\/field\/format
--- detail stays empty: the anomaly writer never records it.
+-- first anomaly since all rows in a group join the same endpoint. Field drift comes from
+-- the group's shape anomalies; deletions are never detected (the learned schema only grows).
 apiChangeDataFrom :: NonEmpty ApiChanges.AnomalyVM -> APIChangeData
 apiChangeDataFrom anomalies@(a :| _) =
   APIChangeData
@@ -1303,10 +1330,12 @@ apiChangeDataFrom anomalies@(a :| _) =
     , anomalyHashes = V.fromList $ toList $ fmap (.targetHash) anomalies
     , shapeChanges = V.empty
     , formatChanges = V.empty
-    , newFields = V.empty
+    , newFields = fields (.newFields)
     , deletedFields = V.empty
-    , modifiedFields = V.empty
+    , modifiedFields = fields (.modifiedFields)
     }
+  where
+    fields f = V.fromList $ ordNub $ concatMap (V.toList . f) anomalies
 
 
 -- | Create API Change issue from anomalies

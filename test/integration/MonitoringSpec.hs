@@ -202,11 +202,11 @@ spec = sequential $ aroundAll withTestResources do
                 WHERE project_id = ? AND handle = 'everyone'|]
           (PGS.Only testPid)
       -- Regression: a raw-SQL widget posts an empty query, which compiled to an all-traffic count.
-      void (runAsBase tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.widgetAlertUpsertH testPid widgetId (Just $ unUUIDId dashboardId) alertForm{Dashboards.query = ""}) `shouldThrow` anyIOException
-      void (runAsBase tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.widgetAlertUpsertH testPid widgetId (Just $ unUUIDId dashboardId) alertForm{Dashboards.alertThreshold = Nothing}) `shouldThrow` anyIOException
-      isNothing <$> runTestBgNoReset tr (Monitors.queryMonitorByWidgetId testPid (Just $ unUUIDId dashboardId) widgetId) `shouldReturn` True
-      void $ testServant tr $ Dashboards.widgetAlertUpsertH testPid widgetId (Just $ unUUIDId dashboardId) alertForm
-      createdMonitor <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId testPid (Just $ unUUIDId dashboardId) widgetId
+      void (runAsBase tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.widgetAlertUpsertH testPid widgetId (Just dashboardId) alertForm{Dashboards.query = ""}) `shouldThrow` anyIOException
+      void (runAsBase tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.widgetAlertUpsertH testPid widgetId (Just dashboardId) alertForm{Dashboards.alertThreshold = Nothing}) `shouldThrow` anyIOException
+      isNothing <$> runTestBgNoReset tr (Monitors.queryMonitorByWidgetId testPid (Just dashboardId) widgetId) `shouldReturn` True
+      void $ testServant tr $ Dashboards.widgetAlertUpsertH testPid widgetId (Just dashboardId) alertForm
+      createdMonitor <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId testPid (Just dashboardId) widgetId
       ((.alertConfig.title) <$> createdMonitor) `shouldBe` Just "Checkout errors · Widget Monitor Lifecycle"
       ((.alertConfig.emailAll) <$> createdMonitor) `shouldBe` Just True
       (_, overview) <- testServant tr $ unifiedMonitorOverviewH testPid (maybe "" (.id.toText) createdMonitor)
@@ -214,10 +214,10 @@ spec = sequential $ aroundAll withTestResources do
       setupSlackData tr testPid "T_MONITOR_SIM"
       setupDiscordData tr testPid "G_MONITOR_SIM"
       void $ testServant tr $ Dashboards.dashboardWidgetPutH testPid dashboardId (Just widgetId) Nothing savedWidget{Widget.title = Just "Checkout failures", Widget.alertThreshold = Just 1, Widget.unit = Just "events"}
-      renamedWidgetMonitor <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId testPid (Just $ unUUIDId dashboardId) widgetId
+      renamedWidgetMonitor <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId testPid (Just dashboardId) widgetId
       ((.alertConfig.title) <$> renamedWidgetMonitor) `shouldBe` Just "Checkout failures · Widget Monitor Lifecycle"
       void $ testServant tr $ Dashboards.dashboardRenamePatchH testPid dashboardId Dashboards.DashboardRenameForm{Dashboards.title = "Renamed Dashboard", Dashboards.fileDir = Nothing}
-      renamedDashboardMonitor <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId testPid (Just $ unUUIDId dashboardId) widgetId
+      renamedDashboardMonitor <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId testPid (Just dashboardId) widgetId
       ((.alertConfig.title) <$> renamedDashboardMonitor) `shouldBe` Just "Checkout failures · Renamed Dashboard"
       monitorId <- maybe (fail "the widget monitor was not saved") (pure . (.id)) renamedDashboardMonitor
       void
@@ -258,25 +258,25 @@ spec = sequential $ aroundAll withTestResources do
             , environment = Nothing
             , service = Nothing
             }
-      afterExplorerEdit <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId testPid (Just $ unUUIDId dashboardId) widgetId
+      afterExplorerEdit <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId testPid (Just dashboardId) widgetId
       ((.alertConfig.title) <$> afterExplorerEdit) `shouldBe` Just "Checkout failures · Renamed Dashboard"
       savedDash <- runTestBgNoReset tr $ DashboardModel.getDashboardByProjectId testPid dashboardId
       (savedDash >>= (.schema) >>= find ((== Just widgetId) . (.id)) . DashboardModel.allWidgets >>= (.alertThreshold)) `shouldBe` Just 1
-      isNothing <$> runTestBgNoReset tr (Monitors.queryMonitorByWidgetId otherPid (Just $ unUUIDId dashboardId) widgetId) `shouldReturn` True
-      void $ testServant tr $ Dashboards.widgetAlertToggleH testPid widgetId (Just $ unUUIDId dashboardId)
-      paused <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId testPid (Just $ unUUIDId dashboardId) widgetId
+      isNothing <$> runTestBgNoReset tr (Monitors.queryMonitorByWidgetId otherPid (Just dashboardId) widgetId) `shouldReturn` True
+      void $ testServant tr $ Dashboards.widgetAlertToggleH testPid widgetId (Just dashboardId)
+      paused <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId testPid (Just dashboardId) widgetId
       isJust (paused >>= (.deactivatedAt)) `shouldBe` True
-      void $ testServant tr $ Dashboards.widgetAlertUpsertH testPid widgetId (Just $ unUUIDId dashboardId) alertForm
-      stillPaused <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId testPid (Just $ unUUIDId dashboardId) widgetId
+      void $ testServant tr $ Dashboards.widgetAlertUpsertH testPid widgetId (Just dashboardId) alertForm
+      stillPaused <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId testPid (Just dashboardId) widgetId
       isJust (stillPaused >>= (.deactivatedAt)) `shouldBe` True
-      void $ testServant tr $ Dashboards.widgetAlertToggleH testPid widgetId (Just $ unUUIDId dashboardId)
+      void $ testServant tr $ Dashboards.widgetAlertToggleH testPid widgetId (Just dashboardId)
 
       apiKey <- createTestAPIKey tr testPid "widget-monitor"
       ingestionTime <- getCurrentTime
       ingestTrace tr apiKey "checkout" ingestionTime
       advanceMinutes tr 1
       fired <- fst <$> captureNotifs tr checkTriggeredQueryMonitors
-      firedMonitor <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId testPid (Just $ unUUIDId dashboardId) widgetId
+      firedMonitor <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId testPid (Just dashboardId) widgetId
       (firedMonitor >>= (.alertConfig.unit)) `shouldBe` Just "events"
       ((\m -> (m.alertThreshold, m.warningThreshold)) <$> firedMonitor) `shouldBe` Just (1, Nothing)
       ((\m -> (m.currentStatus, m.currentValue, m.notificationCount)) <$> firedMonitor) `shouldBe` Just (Monitors.MSAlerting, 1, 1)
@@ -312,7 +312,7 @@ spec = sequential $ aroundAll withTestResources do
       let recoveryQuery = "name == \"search\""
           updatedWidget = savedWidget{Widget.query = Just recoveryQuery, Widget.alertThreshold = Just 2}
       void $ testServant tr $ Dashboards.dashboardWidgetPutH testPid dashboardId (Just widgetId) Nothing updatedWidget
-      synced <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId testPid (Just $ unUUIDId dashboardId) widgetId
+      synced <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId testPid (Just dashboardId) widgetId
       (.logQuery) <$> synced `shouldBe` Just recoveryQuery
       (.alertThreshold) <$> synced `shouldBe` Just 2
 
@@ -339,14 +339,14 @@ spec = sequential $ aroundAll withTestResources do
                    ]
       void $ testServant tr $ ProjectPages.updateNotificationsChannel testPid $ ProjectPages.NotifListForm ["email", "slack", "discord", "phone", "pagerduty"] ["+15550001111"] ["alerts@example.com"] [] Nothing
 
-      sourceBeforeCopy <- runTestBgNoReset tr (Monitors.queryMonitorByWidgetId testPid (Just $ unUUIDId dashboardId) widgetId) >>= maybe (fail "the source widget has no monitor") pure
+      sourceBeforeCopy <- runTestBgNoReset tr (Monitors.queryMonitorByWidgetId testPid (Just dashboardId) widgetId) >>= maybe (fail "the source widget has no monitor") pure
       sourceBeforeCopy.notificationCount `shouldBe` 1
       let copyDashboardId = UUIDId $ UUID.fromWords 0x12345678 0x9abcdef0 0x12345678 0x9abcdef1
       sourceDashboardVM <- maybe (fail "the source dashboard disappeared") pure savedDash
       void $ runTestBgNoReset tr $ DashboardModel.insert sourceDashboardVM{DashboardModel.id = copyDashboardId, DashboardModel.title = "Widget Monitor Copy", DashboardModel.schema = Just (def :: DashboardModel.Dashboard){DashboardModel.title = Just "Widget Monitor Copy"}, DashboardModel.filePath = Nothing}
-      (_, copyWidget) <- testServant tr $ Dashboards.dashboardDuplicateWidgetPostH testPid copyDashboardId widgetId (Just $ unUUIDId dashboardId)
+      (_, copyWidget) <- testServant tr $ Dashboards.dashboardDuplicateWidgetPostH testPid copyDashboardId widgetId (Just dashboardId)
       copyWidgetId <- maybe (fail "the copied widget has no id") pure copyWidget.id
-      copyMonitor <- runTestBgNoReset tr (Monitors.queryMonitorByWidgetId testPid (Just $ unUUIDId copyDashboardId) copyWidgetId) >>= maybe (fail "the copied widget has no monitor") pure
+      copyMonitor <- runTestBgNoReset tr (Monitors.queryMonitorByWidgetId testPid (Just copyDashboardId) copyWidgetId) >>= maybe (fail "the copied widget has no monitor") pure
       copyMonitor.notificationCount `shouldBe` 0
       copyMonitor.currentValue `shouldBe` 0
       copyNotifs <- fst <$> captureNotifs tr (evaluateQueryMonitorValue copyMonitor (addUTCTime 3600 frozenTime) 1)
@@ -371,10 +371,10 @@ spec = sequential $ aroundAll withTestResources do
       void $ runTestBgNoReset tr $ Monitors.queryMonitorUpsert otherMonitor
 
       void $ testServant tr $ Dashboards.dashboardWidgetReorderPatchH testPid dashboardId Nothing Map.empty
-      isNothing <$> runTestBgNoReset tr (Monitors.queryMonitorByWidgetId testPid (Just $ unUUIDId dashboardId) widgetId) `shouldReturn` True
-      otherAfterDelete <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId otherPid (Just $ unUUIDId dashboardId) widgetId
+      isNothing <$> runTestBgNoReset tr (Monitors.queryMonitorByWidgetId testPid (Just dashboardId) widgetId) `shouldReturn` True
+      otherAfterDelete <- runTestBgNoReset tr $ Monitors.queryMonitorByWidgetId otherPid (Just dashboardId) widgetId
       (.id) <$> otherAfterDelete `shouldBe` Just otherMonitorId
-      void $ runTestBgNoReset tr $ Monitors.deleteMonitorsByWidgetIds otherPid (Just $ unUUIDId dashboardId) [widgetId]
+      void $ runTestBgNoReset tr $ Monitors.deleteMonitorsByWidgetIds otherPid (Just dashboardId) [widgetId]
 
   describe "Monitor Hysteresis Integration" do
     it "should store and retrieve monitors with recovery thresholds" \tr -> do

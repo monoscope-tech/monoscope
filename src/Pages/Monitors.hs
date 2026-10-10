@@ -76,7 +76,7 @@ import Pkg.Components.Table (BulkAction (..), Config (..), EmptyStateAction (..)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (bulkActionSlug)
+import Pkg.DeriveUtils (UUIDId (..), bulkActionSlug)
 import Pkg.Parser (SqlQueryCfg (..), applyScopedQuery, defSqlQueryCfg, finalAlertQuery, fixedUTCTime, mkScopedQuery, parseQueryToAST, parseQueryToComponents)
 import Pkg.Parser.Expr (ToQueryText (..))
 import Pkg.QueryCache (rewriteBinAutoToFixed)
@@ -176,7 +176,7 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
           , visualizationType = fromMaybe "timeseries" alertForm.vizType
           , teams = V.fromList alertForm.teams
           , widgetId = alertForm.widgetId
-          , dashboardId = UUID.fromText =<< alertForm.dashboardId
+          , dashboardId = UUIDId <$> (UUID.fromText =<< alertForm.dashboardId)
           , alertRecoveryThreshold = thresholdOf alertForm.alertRecoveryThreshold
           , warningRecoveryThreshold = thresholdOf alertForm.warningRecoveryThreshold
           , currentStatus = Monitors.MSNormal
@@ -732,7 +732,7 @@ unifiedOverviewPage pid alert currTime teams = do
 
     div_ [class_ "flex flex-wrap gap-2 items-center"] do
       whenJust ((,) <$> alert.dashboardId <*> alert.widgetId) \(dashboardId, widgetId) ->
-        a_ [href_ $ "/p/" <> pid.toText <> "/dashboards/" <> UUID.toText dashboardId <> "?expand=" <> toUriStr widgetId, class_ "btn btn-sm btn-ghost"] "View widget"
+        a_ [href_ $ "/p/" <> pid.toText <> "/dashboards/" <> dashboardId.toText <> "?expand=" <> toUriStr widgetId, class_ "btn btn-sm btn-ghost"] "View widget"
       metadataChip_ "shield-halved" $ "Severity: " <> alert.alertConfig.severity
       metadataChip_ "clock" $ "Every " <> show alert.checkIntervalMins <> " min"
       whenJust alert.environment $ metadataChip_ "layer-group" . ("Environment: " <>)

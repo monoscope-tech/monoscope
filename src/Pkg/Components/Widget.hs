@@ -129,7 +129,7 @@ data WidgetType
   -- Parses the bare snake_case spelling a form actually submits (@widget_type=top_list@).
   -- The blanket orphan this replaces ran the raw param through 'AE.eitherDecodeStrict',
   -- so it only ever accepted a *quoted* JSON string.
-  deriving (FromHttpApiData) via WrappedEnumSC 'Nothing "WT" WidgetType
+  deriving (Display, FromHttpApiData) via WrappedEnumSC 'Nothing "WT" WidgetType
 
 
 data SummarizeBy
@@ -1583,17 +1583,17 @@ renderTableWithDataAndParams widget dataRows params = do
   let columns = fromMaybe [] widget.columns
       tableId = maybeToMonoid widget.id
       currentVar = widget.onRowClick >>= (.setVariable) >>= \var -> find ((== "var-" <> var) . fst) params >>= snd
-      -- Rows navigate server-side to the @navigate_to_tab@ tab, else the widget's own tab,
-      -- with the row's variable set. Tabless dashboards have no content target: rows stay inert.
+      -- Rows navigate server-side to the @navigate_to_tab@ tab, else the widget's own tab
+      -- (or the whole tabless dashboard), with the row's variable set.
       rowNavAttrs value = fold do
         action <- widget.onRowClick
         pid <- widget._projectId
         dashId <- widget._dashboardId
-        tab <- slugify <$> action.navigateToTab <|> widget._tabSlug
-        let varKey = ("var-" <>) <$> action.setVariable
+        let tabM = slugify <$> action.navigateToTab <|> widget._tabSlug
+            varKey = ("var-" <>) <$> action.setVariable
             vars = [(k, v) | (k, Just v) <- params, "var-" `T.isPrefixOf` k, Just k /= varKey] <> [(k, value) | k <- toList varKey]
         pure
-          $ dashboardContentNavAttrs ("/p/" <> pid.toText <> "/dashboards/" <> dashId <> "/tab/" <> tab <> "?" <> T.intercalate "&" [k <> "=" <> toUriStr v | (k, v) <- vars])
+          $ dashboardContentNavAttrs (maybe WholePage (const TabPanel) tabM) ("/p/" <> pid.toText <> "/dashboards/" <> dashId <> foldMap ("/tab/" <>) tabM <> "?" <> T.intercalate "&" [k <> "=" <> toUriStr v | (k, v) <- vars])
             <> [term "hx-preload" "mousedown"]
             <> foldMap (\var -> [name_ "dashboard-variable-option", data_ "variable-key" var, data_ "variable-value" value, data_ "variable-label" value, term "hx-on:htmx:before:request" "syncDashboardVariable(this, true)", term "hx-on:htmx:finally:request" "syncDashboardVariable(this, false)"]) action.setVariable
 

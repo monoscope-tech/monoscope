@@ -447,11 +447,12 @@ toFull :: Dashboards.DashboardVM -> DashboardFull
 toFull d = DashboardFull{summary = toSummary d, fileSha = d.fileSha, schema = d.schema}
 
 
-apiDashboardsList :: Projects.ProjectId -> Maybe Text -> Maybe Text -> ATBaseCtx [DashboardSummary]
+apiDashboardsList :: Projects.ProjectId -> Maybe Dashboards.DashboardSort -> Maybe Text -> ATBaseCtx [DashboardSummary]
 apiDashboardsList pid sortM teamIdM = do
   ds <- case UUIDId <$> (teamIdM >>= UUID.fromText) of
     Just teamId -> Dashboards.selectDashboardsByTeam pid teamId
-    Nothing -> Dashboards.selectDashboardsSortedBy pid (fromMaybe "updated_at" sortM)
+    -- Titles read A-Z; dates newest first.
+    Nothing -> Dashboards.selectDashboardsSortedBy pid (bool Dashboards.Desc Dashboards.Asc (sortM == Just Dashboards.DSTitle)) (fromMaybe Dashboards.DSUpdatedAt sortM)
   pure $ toSummary <$> ds
 
 

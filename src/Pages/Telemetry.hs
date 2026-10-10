@@ -19,7 +19,6 @@ module Pages.Telemetry (
   TraceDetailsGet (..),
   TraceUnavailableReason (..),
   tracePage,
-  DetailLoading (..),
 ) where
 
 import Data.Aeson qualified as AE
@@ -60,6 +59,7 @@ import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Relude hiding (ask)
+import Relude.Extra.Foldable1 (maximum1, minimum1)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Tracing (withSpan_)
@@ -99,7 +99,7 @@ clearedFilters filters = filters{source = "all", prefix = "all", query = ""}
 -- | Fetch a metric's data plus its dashboard/monitor references and render the details drawer.
 metricDrawer :: DB es => Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Maybe (Text, Text) -> Eff es (Maybe (Html ()))
 metricDrawer pid metricName sourceM labelM currentRange = do
-  dashboards <- Dashboards.selectDashboardsSortedBy pid "updated_at"
+  dashboards <- Dashboards.selectDashboardsSortedBy pid Dashboards.Desc Dashboards.DSUpdatedAt
   monitors <- Monitors.queryMonitorsAll pid
   fmap (metricsDetailsPage pid dashboards monitors (fromMaybe "all" sourceM) labelM currentRange) <$> Telemetry.getMetricData pid metricName
 
@@ -141,7 +141,8 @@ data SpanMin = SpanMin
   , spanId :: Text
   , spanName :: Text
   , spanDurationNs :: Integer
-  , uSpanId :: UUID.UUID
+  , uSpanId :: Maybe Text
+  -- ^ 'Nothing' marks an inferred placeholder for a parent span that was never reported.
   , hasErrors :: Bool
   , serviceName :: Text
   , startTime :: Integer
@@ -209,24 +210,7 @@ data SpanTree = SpanTree
   }
 
 
--- Metric tree types
 data MetricNode = MetricNode {parent :: Maybe Text, current :: Text} deriving stock (Eq, Ord)
-
-
-data MetricTree = MetricTree MetricNode [MetricTree]
-
-
-nodePath :: MetricNode -> Text
-nodePath nd = maybe nd.current (<> "." <> nd.current) nd.parent
-
-
-buildMetricTree :: [Text] -> [MetricTree]
-buildMetricTree metrics = buildTree_ Nothing
-  where
-    -- A Set per parent dedupes shared prefixes and orders siblings by name (derived Ord;
-    -- siblings share @parent@), so a catalogue page boundary is stable run to run.
-    nodeMap = Map.fromListWith (<>) [(nd.parent, one nd) | path <- metrics, let segments = T.splitOn "." path, nd <- zipWith MetricNode (Nothing : map Just (scanl1 (\acc s -> acc <> "." <> s) segments)) segments]
-    buildTree_ parentId = [MetricTree mt (buildTree_ (Just $ nodePath mt)) | mt <- S.toList $ Map.findWithDefault S.empty parentId nodeMap]
 
 
 data MetricRow = MetricRow
@@ -239,16 +223,6 @@ data MetricRow = MetricRow
   , continuations :: [Bool]
   , metric :: Maybe Telemetry.MetricDataPoint
   }
-
-
-flattenMetricTree :: Map Text Telemetry.MetricDataPoint -> [MetricTree] -> Int -> [Bool] -> V.Vector MetricRow
-flattenMetricTree dataMap trees lvl conts = foldMap flatten trees
-  where
-    flatten (MetricTree nd children) =
-      let fp = nodePath nd
-          row = MetricRow{level = lvl, segment = nd.current, parentPath = nd.parent, fullPath = fp, isGroup = not (null children), childCount = length children, continuations = conts, metric = Map.lookup fp dataMap}
-          childIsLast = replicate (length children - 1) False ++ [True]
-       in V.cons row $ fold $ zipWith (\c cLast -> flattenMetricTree dataMap [c] (lvl + 1) (conts ++ [not cLast])) children childIsLast
 
 
 instance ToHtml TraceDetailsGet where
@@ -340,10 +314,11 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM expandM la
                       `T.isInfixOf` T.toCaseFold m.metricName
               )
               catalog
-      dashboards <- Dashboards.selectDashboardsSortedBy pid "updated_at"
+      dashboards <- Dashboards.selectDashboardsSortedBy pid Dashboards.Desc Dashboards.DSUpdatedAt
       monitors <- Monitors.queryMonitorsAll pid
       drawerM <- forM expandM $ fmap (fmap (metricsDetailsPage pid dashboards monitors (fromMaybe "all" sourceM) labelM currentRange)) . Telemetry.getMetricData pid
-      let refCounts = metricRefCounts dashboards monitors (map (.metricName) dataPoints)
+      -- (dashboards, widgets, monitors) referencing each metric
+      let refCounts = Map.fromList [(m.metricName, (length ds, sum (maybe 0 (countWidgetsWithMetric m.metricName) . (.schema) <$> ds), length ms)) | m <- dataPoints, let (ds, ms) = metricReferences m.metricName dashboards monitors]
           pageUrl = metricPageUrl pid "datapoints" filters
           countsUrl = "/p/" <> pid.toText <> "/metrics/datapoints/counts?" <> T.intercalate "&" [k <> "=" <> v | (k, v) <- filters.timeParams]
           bwconf' = bwconf{globalDrawerContent = join drawerM}
@@ -433,8 +408,27 @@ traceOverlayUrl pid trId ts = "/p/" <> pid.toText <> "/log_explorer?showTrace=" 
 data MetricExemplarsGet = MetricExemplarsGet Projects.ProjectId Text [Telemetry.MetricExemplar]
 
 
+-- | An exemplar is one measurement the SDK kept per histogram bucket per collection
+-- cycle — "a trace that landed in this bucket", not "the worst request". The copy
+-- says representative for that reason, and the ordering is value-descending because
+-- during an incident the slow end is the end anyone reads.
 instance ToHtml MetricExemplarsGet where
-  toHtml (MetricExemplarsGet pid metricName exemplars) = toHtml $ exemplarList_ pid metricName exemplars
+  toHtml (MetricExemplarsGet _ metricName []) =
+    toHtml $ Components.emptyState_ def{icon = Just "chart-line", size = ESCompact} ("No exemplars for " <> metricName <> " in this time range") "Only metrics recorded inside a sampled span carry one — collector-scraped metrics never do."
+  toHtml (MetricExemplarsGet pid _ exemplars) =
+    toHtml
+      $ linkList_ (Just ("Representative traces", "Traces this metric recorded a datapoint in, slowest first."))
+      $ exemplars <&> \x ->
+        ( [href_ $ traceOverlayUrl pid x.point.traceId x.point.timestamp]
+        , do
+            span_ [class_ "block font-mono text-xs text-textStrong"] $ toHtml x.point.traceId
+            div_ [class_ "mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-textWeak"] do
+              Components.dateTime x.point.timestamp Nothing
+              unless (T.null $ T.strip x.serviceName) do
+                span_ [class_ "text-textDisabled"] "•"
+                span_ $ toHtml x.serviceName
+        , span_ [class_ "font-medium text-textStrong"] $ toHtml $ exemplarValueText x
+        )
   toHtmlRaw = toHtml
 
 
@@ -451,29 +445,6 @@ instance AE.ToJSON MetricExemplarsGet where
           ]
       | x <- exemplars
       ]
-
-
--- | An exemplar is one measurement the SDK kept per histogram bucket per collection
--- cycle — "a trace that landed in this bucket", not "the worst request". The copy
--- says representative for that reason, and the ordering is value-descending because
--- during an incident the slow end is the end anyone reads.
-exemplarList_ :: Projects.ProjectId -> Text -> [Telemetry.MetricExemplar] -> Html ()
-exemplarList_ pid metricName = \case
-  [] ->
-    Components.emptyState_ def{icon = Just "chart-line", size = ESCompact} ("No exemplars for " <> metricName <> " in this time range") "Only metrics recorded inside a sampled span carry one — collector-scraped metrics never do."
-  exemplars ->
-    linkList_ (Just ("Representative traces", "Traces this metric recorded a datapoint in, slowest first."))
-      $ exemplars <&> \x ->
-        ( [href_ $ traceOverlayUrl pid x.point.traceId x.point.timestamp]
-        , do
-            span_ [class_ "block font-mono text-xs text-textStrong"] $ toHtml x.point.traceId
-            div_ [class_ "mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-textWeak"] do
-              Components.dateTime x.point.timestamp Nothing
-              unless (T.null $ T.strip x.serviceName) do
-                span_ [class_ "text-textDisabled"] "•"
-                span_ $ toHtml x.serviceName
-        , span_ [class_ "font-medium text-textStrong"] $ toHtml $ exemplarValueText x
-        )
 
 
 -- | Divided list of link rows @(attrs, body, trailing)@, under an optional (title, subtitle).
@@ -756,7 +727,6 @@ metricDetailSwap_ = [hxTarget_ "#metric-details-content", hxSwap_ "outerMorph", 
 -- whatever is already rendered, so a re-fired preload visibly wipes real content
 -- back to "Loading span details…" instead of updating it in place.
 data DetailLoading = ShowSkeleton | KeepCurrent
-  deriving stock (Eq, Show)
 
 
 -- | htmx wiring for loading a span into the trace details side panel.
@@ -778,8 +748,8 @@ metricWidget :: Projects.ProjectId -> Text -> Text -> Text -> Text -> Maybe Text
 metricWidget pid metricName metricType metricUnit source mLabel mTitle mId mExpandBtn =
   def
     { Widget.wType = Widget.WTTimeseriesLine
-    , Widget.title = if isDistributionMetricType metricType then (<> " · mean") <$> mTitle else mTitle
-    , Widget.query = Just $ metricQuery metricName metricType source mLabel
+    , Widget.title = if isDistribution then (<> " · mean") <$> mTitle else mTitle
+    , Widget.query = Just metricQuery
     , Widget.layout = Just $ Widget.Layout{x = Just 0, y = Just 0, w = Just 2, h = Just 1}
     , Widget.unit = Just metricUnit
     , Widget.eager = Just True
@@ -789,24 +759,17 @@ metricWidget pid metricName metricType metricUnit source mLabel mTitle mId mExpa
     , Widget.id = mId
     , Widget.expandBtnFn = mExpandBtn
     }
-
-
-isDistributionMetricType :: Text -> Bool
-isDistributionMetricType = (`elem` ["HISTOGRAM", "EXPONENTIAL_HISTOGRAM", "SUMMARY"])
-
-
-metricQuery :: Text -> Text -> Text -> Maybe Text -> Text
-metricQuery metricName metricType source mLabel =
-  "metrics | where metric_name == "
-    <> encodeText metricName
-    <> (if source == "all" || T.null source then "" else " and resource.service.name == " <> encodeText source)
-    <> bool "" " and distribution_count > 0 and distribution_sum != null" isDistribution
-    <> " | summarize "
-    <> bool "avg(value)" "sum(distribution_sum) / sum(distribution_count)" isDistribution
-    <> " by bin_auto(timestamp)"
-    <> maybe "" ("," <>) mLabel
   where
-    isDistribution = isDistributionMetricType metricType
+    isDistribution = metricType `elem` ["HISTOGRAM", "EXPONENTIAL_HISTOGRAM", "SUMMARY"]
+    metricQuery =
+      "metrics | where metric_name == "
+        <> encodeText metricName
+        <> (if source == "all" || T.null source then "" else " and resource.service.name == " <> encodeText source)
+        <> bool "" " and distribution_count > 0 and distribution_sum != null" isDistribution
+        <> " | summarize "
+        <> bool "avg(value)" "sum(distribution_sum) / sum(distribution_count)" isDistribution
+        <> " by bin_auto(timestamp)"
+        <> maybe "" ("," <>) mLabel
 
 
 chartList :: Projects.ProjectId -> Text -> V.Vector Telemetry.MetricChartListData -> Maybe Text -> Html ()
@@ -868,14 +831,11 @@ inactiveMetricsList pid source metrics = do
 
 dataPointsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricDataPoint -> Map Text (Int, Int, Int) -> Text -> Int -> Text -> MetricFilters -> Html ()
 dataPointsPage pid metrics refCounts countsUrl page pageUrl filters = do
-  let dataMap = Map.fromList [(m.metricName, m) | m <- V.toList metrics]
-      tree = buildMetricTree $ V.toList $ (.metricName) <$> metrics
-      allRows = flattenMetricTree dataMap tree 0 []
-      -- take/drop, not V.slice: slice is partial and errors unless the whole
-      -- window is in range, so a last page shorter than dataPointPageSize — or
-      -- any project with fewer metrics than one page — crashed the tab with
-      -- "invalid slice (0,25,3)".
-      rows = V.take dataPointPageSize $ V.drop (page * dataPointPageSize) allRows
+  -- take/drop, not V.slice: slice is partial and errors unless the whole
+  -- window is in range, so a last page shorter than dataPointPageSize — or
+  -- any project with fewer metrics than one page — crashed the tab with
+  -- "invalid slice (0,25,3)".
+  let rows = V.take dataPointPageSize $ V.drop (page * dataPointPageSize) allRows
       metricRowUrl path = pageUrl <> "&cursor=" <> show page <> "&expand=" <> toUriStr path
   div_ [class_ "flex flex-col gap-4 px-4"] do
     -- Four icons, once each, instead of once per row: this table renders ~540 rows and the
@@ -960,24 +920,31 @@ dataPointsPage pid metrics refCounts countsUrl page pageUrl filters = do
               , Table.zeroState = Just Table.ZeroState{icon = "chart-line", title = "No metrics found", description = if hasMetricFilters filters then "Try another search or clear the filters." else "Metrics will appear here once your application starts sending telemetry data.", action = if hasMetricFilters filters then Table.ESLink (metricPageUrl pid "datapoints" (clearedFilters filters)) "Clear filters" else Table.ESLink "https://monoscope.tech/docs/sdks/" "View SDK setup guides"}
               }
         }
-    dataPointPager_ page pageUrl $ V.length allRows
-
-
-dataPointPageSize :: Int
-dataPointPageSize = 25
-
-
-dataPointPager_ :: Int -> Text -> Int -> Html ()
-dataPointPager_ page pageUrl total =
-  unless (total <= dataPointPageSize)
-    $ div_ [class_ "flex items-center justify-between px-4 py-3 text-sm text-textWeak"] do
-      span_ [class_ "tabular-nums"] $ toHtml $ show (page * dataPointPageSize + 1) <> "-" <> show (min total ((page + 1) * dataPointPageSize)) <> " of " <> show total
-      div_ [class_ "join"] do
-        let pageLink icon target enabled =
-              (if enabled then a_ ([class_ "btn btn-sm join-item", href_ $ pageUrl <> "&cursor=" <> show target] <> navTabAttrs) else span_ [class_ "btn btn-sm join-item btn-disabled"])
-                $ faSprite_ icon "regular" "w-4 h-4"
-        pageLink "chevron-left" (page - 1) (page > 0)
-        pageLink "chevron-right" (page + 1) ((page + 1) * dataPointPageSize < total)
+    let total = V.length allRows
+    unless (total <= dataPointPageSize)
+      $ div_ [class_ "flex items-center justify-between px-4 py-3 text-sm text-textWeak"] do
+        span_ [class_ "tabular-nums"] $ toHtml $ show (page * dataPointPageSize + 1) <> "-" <> show (min total ((page + 1) * dataPointPageSize)) <> " of " <> show total
+        div_ [class_ "join"] do
+          let pageLink icon target enabled =
+                (if enabled then a_ ([class_ "btn btn-sm join-item", href_ $ pageUrl <> "&cursor=" <> show target] <> navTabAttrs) else span_ [class_ "btn btn-sm join-item btn-disabled"])
+                  $ faSprite_ icon "regular" "w-4 h-4"
+          pageLink "chevron-left" (page - 1) (page > 0)
+          pageLink "chevron-right" (page + 1) ((page + 1) * dataPointPageSize < total)
+  where
+    dataPointPageSize = 25 :: Int
+    -- A Set per parent dedupes shared prefixes and orders siblings by name (derived Ord;
+    -- siblings share @parent@), so a catalogue page boundary is stable run to run.
+    nodeMap = Map.fromListWith (<>) [(nd.parent, one nd) | m <- V.toList metrics, let segments = T.splitOn "." m.metricName, nd <- zipWith MetricNode (Nothing : map Just (scanl1 (\acc s -> acc <> "." <> s) segments)) segments]
+    childrenOf p = S.toList $ Map.findWithDefault S.empty p nodeMap
+    dataMap = Map.fromList [(m.metricName, m) | m <- V.toList metrics]
+    allRows = foldMap (rowsFrom 0 []) (childrenOf Nothing)
+    -- @conts@ holds, per ancestor level, whether that ancestor has later siblings (draws the tree's vertical rules).
+    rowsFrom lvl conts nd =
+      let fp = maybe nd.current (<> "." <> nd.current) nd.parent
+          kids = childrenOf (Just fp)
+       in V.cons MetricRow{level = lvl, segment = nd.current, parentPath = nd.parent, fullPath = fp, isGroup = not (null kids), childCount = length kids, continuations = conts, metric = Map.lookup fp dataMap}
+            $ fold
+            $ zipWith (\i -> rowsFrom (lvl + 1) (conts <> [i < length kids])) [1 :: Int ..] kids
 
 
 metricDataPointCount_ :: Bool -> Text -> Maybe Int -> Html ()
@@ -1023,7 +990,15 @@ metricsDetailsPage pid allDashboards allMonitors source labelM currentRange metr
       sortedLabels = metricDimensions metric.metricLabels
       dimensions = maybe sortedLabels (\label -> label : filter (/= label) sortedLabels) selected
       (topDimensions, moreDimensions) = splitAt 4 dimensions
-      dimensionChips ds = div_ [class_ "mt-2 flex flex-wrap gap-1.5"] $ forM_ ds $ metricDimension pid metric.metricName source selected
+      dimensionChips ds = div_ [class_ "mt-2 flex flex-wrap gap-1.5"] $ forM_ ds \label ->
+        button_
+          ( [ class_ $ "badge cursor-pointer font-normal hover:border-strokeStrong hover:bg-fillWeak focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus max-md:min-h-11 max-md:text-sm " <> bool "badge-ghost" "border-strokeStrong bg-fillWeak text-textStrong" (selected == Just label)
+            , hxGet_ $ metricDetailUrl pid metric.metricName source (Just label)
+            , data_ "tippy-content" $ "Group chart by " <> label
+            ]
+              <> metricDetailSwap_
+          )
+          $ toHtml label
       lazyTab tabId contentId path lbl = do
         input_ [type_ "radio", name_ "metric-tabs", role_ "tab", class_ "tab", Aria.label_ lbl, id_ tabId]
         Components.lazyPanel_ (detailsBase <> path) ("change from:#" <> tabId <> " once") ("Loading " <> T.toLower lbl) [class_ "tab-content px-4 pb-4 mt-2 text-textWeak font-normal", id_ contentId, term "hx-ext" "forward-page-params"]
@@ -1100,18 +1075,6 @@ metricsDetailsPage pid allDashboards allMonitors source labelM currentRange metr
           lazyTab "metric-tab-ex" "ex-content" "exemplars" "Exemplars"
 
 
-metricDimension :: Projects.ProjectId -> Text -> Text -> Maybe Text -> Text -> Html ()
-metricDimension pid metricName source selected label =
-  button_
-    ( [ class_ $ "badge cursor-pointer font-normal hover:border-strokeStrong hover:bg-fillWeak focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-strokeFocus max-md:min-h-11 max-md:text-sm " <> bool "badge-ghost" "border-strokeStrong bg-fillWeak text-textStrong" (selected == Just label)
-      , hxGet_ $ metricDetailUrl pid metricName source (Just label)
-      , data_ "tippy-content" $ "Group chart by " <> label
-      ]
-        <> metricDetailSwap_
-    )
-    $ toHtml label
-
-
 relatedMetrics :: Projects.ProjectId -> Text -> Telemetry.MetricDataPoint -> V.Vector Telemetry.MetricChartListData -> Html ()
 relatedMetrics pid source metric candidates =
   case take 6 $ map snd $ sortWith (Down . fst) [(score, c) | c <- V.toList candidates, c.metricName /= metric.metricName, let score = relatedScore c, score > 0] of
@@ -1162,17 +1125,10 @@ metricDetailChart pid metric source selected =
     chartId = "details_" <> T.replace "." "_" metric.metricName
 
 
--- Metric reference counting: (dashboardCount, widgetCount, alertCount) per metric
-metricRefCounts :: [Dashboards.DashboardVM] -> [Monitors.QueryMonitor] -> [Text] -> Map Text (Int, Int, Int)
-metricRefCounts dashboards monitors = Map.fromList . map countRefs
-  where
-    countRefs metricName =
-      let (matchingDashboards, matchingMonitors) = metricReferences metricName dashboards monitors
-       in (metricName, (length matchingDashboards, sum (maybe 0 (countWidgetsWithMetric metricName) . (.schema) <$> matchingDashboards), length matchingMonitors))
-
-
 metricReferences :: Text -> [Dashboards.DashboardVM] -> [Monitors.QueryMonitor] -> ([Dashboards.DashboardVM], [Monitors.QueryMonitor])
-metricReferences metricName dashboards monitors = (filter (any ((> 0) . countWidgetsWithMetric metricName) . (.schema)) dashboards, filter (monitorHasMetric metricName) monitors)
+metricReferences metricName dashboards monitors = (filter (any ((> 0) . countWidgetsWithMetric metricName) . (.schema)) dashboards, filter monitorHasMetric monitors)
+  where
+    monitorHasMetric monitor = any (`T.isInfixOf` monitor.logQuery) (["\"" <> metricName <> "\"", "'" <> metricName <> "'", "metric=" <> metricName, "metric_name=" <> metricName] :: [Text])
 
 
 -- | A group whose child uses the metric is one widget, not two.
@@ -1185,10 +1141,6 @@ metricReferences metricName dashboards monitors = (filter (any ((> 0) . countWid
 -- 0
 countWidgetsWithMetric :: Text -> Dashboards.Dashboard -> Int
 countWidgetsWithMetric metricName = length . filter (\w -> any (T.isInfixOf $ "\"" <> metricName <> "\"") $ catMaybes [w.query, w.sql]) . Dashboards.allWidgets
-
-
-monitorHasMetric :: Text -> Monitors.QueryMonitor -> Bool
-monitorHasMetric metricName monitor = any (`T.isInfixOf` monitor.logQuery) (["\"" <> metricName <> "\"", "'" <> metricName <> "'", "metric=" <> metricName, "metric_name=" <> metricName] :: [Text])
 
 
 -- | @moreUrl@ is present when the trace continues past the spans given here;
@@ -1358,14 +1310,12 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
           div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden group-has-[#tab-map:checked]/tt:block", id_ "service_map"] do
             serviceMapPanel_ pid ("trace-service-map-" <> traceItem.traceId) traceGraph serviceColors Nothing
     -- Open state is this checkbox: rows check it before loading a span, close unchecks it.
-    -- `.open` mirrors it for the Escape handlers in LogItem/Issues.
     input_ [type_ "checkbox", class_ "hidden peer/trace", id_ "trace-details-open"]
     div_ [class_ "hidden md:peer-checked/trace:block", id_ "trace-details-resizer-wrapper"]
       $ Components.resizerWith_ [data_ "min" "260", data_ "max" "70vw"] "trace_details_container" "trace_details_width" False
     div_
       [ class_ "details-panel group/tdp shrink-0 h-full w-1/3 max-w-0 overflow-hidden overflow-y-auto c-scroll bg-bgBase peer-checked/trace:max-w-[70vw] peer-checked/trace:border-l border-strokeWeak max-md:fixed max-md:inset-0 max-md:z-50 max-md:w-full! max-md:peer-checked/trace:max-w-full"
       , id_ "trace_details_container"
-      , term "hx-live:.open" "q('#trace-details-open').checked"
       , -- Close buttons in the shared detail view send closeDetailPanel to their .details-panel.
         [__|init set my *width to localStorage.getItem('resizer-trace_details_width') or '' end
           on closeDetailPanel
@@ -1441,39 +1391,12 @@ tracePage pid traceItem rawSpanRecords moreUrl = do
     document.addEventListener("DOMContentLoaded", scheduleTraceCharts);
     scheduleTraceCharts();
   |]
-
-
-renderSpanRecordRow :: Integer -> V.Vector Telemetry.SpanRecord -> HashMap Text Text -> Text -> Html ()
-renderSpanRecordRow totalDuration spanRecords colors service = do
-  let filterRecords = V.filter (\x -> getServiceName x.resource == service) spanRecords
-      listLen = V.length filterRecords
-      duration = sum $ (.spanDurationNs) <$> filterRecords
-      errCount = V.length $ V.filter spanHasErrors filterRecords
-      hasErr = errCount > 0
-      -- Zero guards: a service name may match no span, and all-instant traces have totalDuration=0.
-      avgDuration = if listLen == 0 then 0 else duration `div` toInteger listLen
-      pctOfTotal = if totalDuration == 0 then 0 else duration * 100 `div` totalDuration
-  tr_
-    [ class_ $ "w-full overflow-x-hidden p-2 cursor-pointer font-medium hover:bg-fillWeaker border-b-2 last:border-b-0" <> bool "" " bg-fillError-weak/30" hasErr
-    , [__|on click toggle .hidden on next <tr/> then toggle .rotate-90 on the first <svg/> in the first <td/> in me|]
-    ]
-    do
-      td_ [class_ "ml-1 px-2 py-1 w-[600px] text-textStrong truncate flex items-center gap-1 font-medium"] do
-        div_ [class_ $ "w-1 h-4 " <> if hasErr then "bg-fillError-strong" else "bg-fillBrand-weak"] pass
-        faSprite_ "chevron-right" "regular" "h-3 w-3 mr-2 text-iconNeutral"
-        div_ [class_ $ "w-3 h-3 rounded-sm " <> getServiceColor service colors] pass
-        span_ [] $ toHtml service
-      td_ [class_ "px-2 py-1 max-w-48 text-textWeak truncate pl-4 tabular-nums"] $ toHtml $ show listLen
-      td_ [class_ "px-2 py-1 max-w-48 truncate pl-4 tabular-nums"]
-        $ if hasErr
-          then span_ [class_ "inline-flex items-center gap-1 text-textError font-semibold", title_ "Spans with exception events"] do
-            span_ [class_ "w-1.5 h-1.5 rounded-full bg-fillError-strong"] pass
-            toHtml $ show errCount
-          else span_ [class_ "text-textWeak/60"] "—"
-      forM_ ([getDurationNSMS avgDuration, getDurationNSMS duration, show pctOfTotal <> "%"] :: [Text]) $ td_ [class_ "px-2 py-1 max-w-48 text-textWeak truncate pl-4 tabular-nums"] . toHtml
-  tr_ [class_ "hidden p-0 m-0", [__|on click halt|]] do
-    td_ [colspan_ "6", class_ "pl-[13px] overflow-x-hidden"] do
-      spanTable filterRecords
+  where
+    stBox :: Text -> Text -> Maybe (Html ()) -> Html ()
+    stBox label value iconM = div_ [class_ "flex items-center px-2 gap-1.5 border-r last:border-r-0 whitespace-nowrap shrink-0", title_ label] do
+      fold iconM
+      span_ [class_ "text-textStrong text-sm tabular-nums"] $ toHtml value
+      span_ [class_ "font-medium text-textWeak text-xs"] $ toHtml label
 
 
 renderSpanListTable :: V.Vector Text -> HashMap Text Text -> V.Vector Telemetry.SpanRecord -> Html ()
@@ -1481,42 +1404,49 @@ renderSpanListTable services colors records =
   table_ [class_ "w-full table table-sm overflow-x-hidden"] $ do
     thead_ [class_ "border-b"] $ do
       tr_ [class_ "p-2 border-b font-normal"] $ forM_ (["Resource", "Spans", "Errors", "Avg. Duration", "Exec. Time", "%Exec. Time"] :: [Text]) $ th_ [] . toHtml
-    tbody_ [class_ "space-y-0"]
-      $ traverse_ (renderSpanRecordRow (sum $ (.spanDurationNs) <$> records) records colors) services
-
-
-spanTable :: V.Vector Telemetry.SpanRecord -> Html ()
-spanTable records =
-  div_ [class_ "rounded-xl my-2 mx-3 border border-strokeWeak"] do
-    table_ [class_ "table w-full"] do
-      thead_ [class_ "border-b border-strokeWeak"]
-        $ tr_ [class_ "p-2 border-b font-medium"]
-        $ forM_ (["Time", "Span name", "Event type", "Span kind", "Exec. time"] :: [Text]) (td_ [] . toHtml)
-      tbody_ do
-        forM_ records $ \spanRecord -> do
-          let reqType = maybe "" (\(t, _, _, _) -> t) $ getRequestDetails spanRecord.attributes
-          tr_
-            ( [ id_ $ "sp-list-" <> spanRecord.spanId
-              , class_ "span-filterble font-medium"
-              ]
-                <> spanDetailAttrs_ ShowSkeleton (UUID.toText spanRecord.projectId) spanRecord.uSpanId spanRecord.timestamp
-            )
-            $ do
+    tbody_ [class_ "space-y-0"] $ traverse_ serviceRow services
+  where
+    totalDuration = sum $ (.spanDurationNs) <$> records
+    serviceRow service = do
+      let filterRecords = V.filter (\x -> getServiceName x.resource == service) records
+          listLen = V.length filterRecords
+          duration = sum $ (.spanDurationNs) <$> filterRecords
+          errCount = V.length $ V.filter spanHasErrors filterRecords
+          hasErr = errCount > 0
+          -- Zero guards: a service name may match no span, and all-instant traces have totalDuration=0.
+          avgDuration = if listLen == 0 then 0 else duration `div` toInteger listLen
+          pctOfTotal = if totalDuration == 0 then 0 else duration * 100 `div` totalDuration
+      tr_
+        [ class_ $ "w-full overflow-x-hidden p-2 cursor-pointer font-medium hover:bg-fillWeaker border-b-2 last:border-b-0" <> bool "" " bg-fillError-weak/30" hasErr
+        , [__|on click toggle .hidden on next <tr/> then toggle .rotate-90 on the first <svg/> in the first <td/> in me|]
+        ]
+        do
+          td_ [class_ "ml-1 px-2 py-1 w-[600px] text-textStrong truncate flex items-center gap-1 font-medium"] do
+            div_ [class_ $ "w-1 h-4 " <> if hasErr then "bg-fillError-strong" else "bg-fillBrand-weak"] pass
+            faSprite_ "chevron-right" "regular" "h-3 w-3 mr-2 text-iconNeutral"
+            div_ [class_ $ "w-3 h-3 rounded-sm " <> getServiceColor service colors] pass
+            span_ [] $ toHtml service
+          td_ [class_ "px-2 py-1 max-w-48 text-textWeak truncate pl-4 tabular-nums"] $ toHtml $ show listLen
+          td_ [class_ "px-2 py-1 max-w-48 truncate pl-4 tabular-nums"]
+            $ if hasErr
+              then span_ [class_ "inline-flex items-center gap-1 text-textError font-semibold", title_ "Spans with exception events"] do
+                span_ [class_ "w-1.5 h-1.5 rounded-full bg-fillError-strong"] pass
+                toHtml $ show errCount
+              else span_ [class_ "text-textWeak/60"] "—"
+          forM_ ([getDurationNSMS avgDuration, getDurationNSMS duration, show pctOfTotal <> "%"] :: [Text]) $ td_ [class_ "px-2 py-1 max-w-48 text-textWeak truncate pl-4 tabular-nums"] . toHtml
+      tr_ [class_ "hidden p-0 m-0", [__|on click halt|]]
+        $ td_ [colspan_ "6", class_ "pl-[13px] overflow-x-hidden"]
+        $ div_ [class_ "rounded-xl my-2 mx-3 border border-strokeWeak"]
+        $ table_ [class_ "table w-full"] do
+          thead_ [class_ "border-b border-strokeWeak"]
+            $ tr_ [class_ "p-2 border-b font-medium"]
+            $ forM_ (["Time", "Span name", "Event type", "Span kind", "Exec. time"] :: [Text]) (td_ [] . toHtml)
+          tbody_ $ forM_ filterRecords \spanRecord -> do
+            let reqType = maybe "" (\(t, _, _, _) -> t) $ getRequestDetails spanRecord.attributes
+            tr_ ([id_ $ "sp-list-" <> spanRecord.spanId, class_ "span-filterble font-medium"] <> spanDetailAttrs_ ShowSkeleton (UUID.toText spanRecord.projectId) spanRecord.uSpanId spanRecord.timestamp) do
               td_ $ Components.localTimeFmt_ "MMM dd yyyy HH:mm:ss.SSS" spanRecord.timestamp
               td_ $ toHtml spanRecord.spanName
               forM_ ([reqType, T.drop 2 $ maybe "" show spanRecord.kind, getDurationNSMS spanRecord.spanDurationNs] :: [Text]) $ td_ [] . span_ [class_ "cbadge-sm badge-neutral"] . toHtml
-
-
-stBox :: Text -> Text -> Maybe (Html ()) -> Html ()
-stBox label value iconM =
-  div_ [class_ "flex items-center px-2 gap-1.5 border-r last:border-r-0 whitespace-nowrap shrink-0", title_ label] do
-    fold iconM
-    span_ [class_ "text-textStrong text-sm tabular-nums"] $ toHtml value
-    span_ [class_ "font-medium text-textWeak text-xs"] $ toHtml label
-
-
-syntheticMissingParentKey :: Text
-syntheticMissingParentKey = "monoscope.synthetic.missing_parent"
 
 
 -- | The SDK payload span ("monoscope.http") is a synthetic carrier for request/
@@ -1539,47 +1469,37 @@ collapseSdkSpans spans =
 -- one synthetic placeholder per missing parent_id, instead of flattening as
 -- sibling roots.
 buildSpanTree :: V.Vector Telemetry.SpanRecord -> [SpanTree]
-buildSpanTree spans =
-  -- Keyed by literal parent_id so missing parents (orphans) stay detectable.
-  let spanMap = V.foldr (\sp m -> Map.insertWith (++) sp.parentSpanId [sp] m) Map.empty spans
-      ids :: Set Text
-      ids = V.foldr (S.insert . (.spanId)) S.empty spans
-      missingParents :: [Text]
-      missingParents =
-        ordNub $ V.toList $ V.mapMaybe (mfilter (\p -> not (T.null p) && not (S.member p ids)) . (.parentSpanId)) spans
-      realRoots = buildTree spanMap Nothing (0, toInteger (maxBound :: Int64))
-      orphanRoots = mapMaybe (syntheticRoot spanMap) missingParents
-   in realRoots <> orphanRoots
+buildSpanTree spans = buildTree Nothing (0, toInteger (maxBound :: Int64)) <> mapMaybe syntheticRoot missingParents
   where
-    buildTree :: Map.Map (Maybe Text) [Telemetry.SpanRecord] -> Maybe Text -> (Integer, Integer) -> [SpanTree]
-    buildTree spanMap parentId (pStart, pEnd) =
+    -- Keyed by literal parent_id so missing parents (orphans) stay detectable.
+    spanMap = Map.fromListWith (flip (<>)) [(sp.parentSpanId, [sp]) | sp <- V.toList spans]
+    ids = S.fromList $ V.toList $ (.spanId) <$> spans
+    missingParents = ordNub $ V.toList $ V.mapMaybe (mfilter (\p -> not (T.null p) && not (S.member p ids)) . (.parentSpanId)) spans
+    buildTree parentId (pStart, pEnd) =
       [ let cStart = utcTimeToNanoseconds sp.startTime
             delta = max 0 (pStart - cStart)
             adjStart = cStart + delta
             adjDur = if delta > 0 then min sp.spanDurationNs (pEnd - adjStart) else sp.spanDurationNs
             rec = (spanMinFromRecord sp){spanDurationNs = adjDur, startTime = adjStart}
-         in SpanTree rec (buildTree spanMap (Just sp.spanId) (adjStart, adjStart + adjDur))
+         in SpanTree rec (buildTree (Just sp.spanId) (adjStart, adjStart + adjDur))
       | sp <- Map.findWithDefault [] parentId spanMap
       ]
-
-    syntheticRoot :: Map.Map (Maybe Text) [Telemetry.SpanRecord] -> Text -> Maybe SpanTree
-    syntheticRoot spanMap missingPid = case Map.lookup (Just missingPid) spanMap of
-      Just kids@(sp : rest) ->
-        let startNs = foldr (min . (utcTimeToNanoseconds . (.startTime))) (utcTimeToNanoseconds sp.startTime) rest
-            endNs = foldr (max . utcTimeToNanoseconds) startNs (mapMaybe (.endTime) kids)
-            rec =
-              (spanMinFromRecord sp)
-                { parentSpanId = Nothing
-                , spanId = missingPid
-                , uSpanId = UUID.nil
-                , spanName = "Upstream span missing \x2014 " <> T.take 8 missingPid
-                , spanDurationNs = max 0 (endNs - startNs)
-                , startTime = startNs
-                , hasErrors = False
-                , attributes = Just (one (syntheticMissingParentKey, AE.String missingPid))
-                }
-         in Just (SpanTree rec (buildTree spanMap (Just missingPid) (startNs, endNs)))
-      _ -> Nothing
+    syntheticRoot missingPid = do
+      kids@(sp :| _) <- nonEmpty =<< Map.lookup (Just missingPid) spanMap
+      let startNs = minimum1 $ utcTimeToNanoseconds . (.startTime) <$> kids
+          endNs = maximum1 $ startNs :| map utcTimeToNanoseconds (mapMaybe (.endTime) $ toList kids)
+          rec =
+            (spanMinFromRecord sp)
+              { parentSpanId = Nothing
+              , spanId = missingPid
+              , uSpanId = Nothing
+              , spanName = "Upstream span missing \x2014 " <> T.take 8 missingPid
+              , spanDurationNs = max 0 (endNs - startNs)
+              , startTime = startNs
+              , hasErrors = False
+              , attributes = Nothing
+              }
+      pure $ SpanTree rec (buildTree (Just missingPid) (startNs, endNs))
 
 
 -- | Lift a 'Telemetry.SpanRecord' into the lighter 'SpanMin' the waterfall
@@ -1591,7 +1511,7 @@ spanMinFromRecord sp =
   SpanMin
     { parentSpanId = sp.parentSpanId
     , spanId = sp.spanId
-    , uSpanId = fromMaybe UUID.nil (UUID.fromText sp.uSpanId)
+    , uSpanId = Just sp.uSpanId
     , spanName = sp.spanName
     , spanDurationNs = sp.spanDurationNs
     , serviceName = getServiceName sp.resource
@@ -1607,7 +1527,7 @@ buildSpanTree_ pid sp level scol = do
   let hasChildren = not $ null sp.children
       serviceCol = getServiceColor sp.spanRecord.serviceName scol
       indent = show (level * 12) <> "px"
-      isSynthetic = maybe False (Map.member syntheticMissingParentKey) sp.spanRecord.attributes
+      isSynthetic = isNothing sp.spanRecord.uSpanId
       label = fromMaybe sp.spanRecord.spanName (spanDisplayLabel sp.spanRecord.attributes)
       tip = sp.spanRecord.serviceName <> " — " <> label
   div_ [class_ "span-filterble"] do
@@ -1615,17 +1535,18 @@ buildSpanTree_ pid sp level scol = do
       ( [ class_ $ "flex items-center w-full h-7 hover:bg-fillWeaker waterfall-row" <> bool "" " bg-fillError-weak/40 hover:bg-fillError-weak" sp.spanRecord.hasErrors <> bool " cursor-pointer" " italic text-textWeak bg-fillWeaker/50" isSynthetic
         , id_ $ "trigger-span-" <> sp.spanRecord.spanId
         ]
-          <> ( if isSynthetic
-                 then [title_ ("Upstream parent span " <> sp.spanRecord.spanId <> " was never reported by the service. Showing an inferred placeholder.")]
-                 else
-                   [ tabindex_ "0"
-                   , role_ "button"
-                   , Aria.label_ $ "Show span details: " <> tip
-                   , [__|on click remove .bg-fillBrand-weak .waterfall-active from .waterfall-active then add .bg-fillBrand-weak .waterfall-active to me
-                        on keydown[(key is 'Enter' or key is ' ') and target is me] halt the event then call me.click()|]
-                   ]
-                     <> spanDetailAttrs_ ShowSkeleton pid.toText (UUID.toText sp.spanRecord.uSpanId) sp.spanRecord.timestamp
-             )
+          <> maybe
+            [title_ ("Upstream parent span " <> sp.spanRecord.spanId <> " was never reported by the service. Showing an inferred placeholder.")]
+            ( \uSpanId ->
+                [ tabindex_ "0"
+                , role_ "button"
+                , Aria.label_ $ "Show span details: " <> tip
+                , [__|on click remove .bg-fillBrand-weak .waterfall-active from .waterfall-active then add .bg-fillBrand-weak .waterfall-active to me
+                     on keydown[(key is 'Enter' or key is ' ') and target is me] halt the event then call me.click()|]
+                ]
+                  <> spanDetailAttrs_ ShowSkeleton pid.toText uSpanId sp.spanRecord.timestamp
+            )
+            sp.spanRecord.uSpanId
       )
       do
         div_ [class_ "shrink-0 flex items-center gap-1 px-2 overflow-hidden", style_ $ "width:var(--wf-left);padding-left:" <> indent] do

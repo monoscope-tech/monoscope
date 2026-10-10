@@ -74,8 +74,8 @@ data AnomalyActions
   deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC ('Just "apis.anomaly_action") "AA" AnomalyActions
 
 
--- | The live columns of an anomaly row the API-change rollup reads. Shape\/field\/format
--- drift detail is never populated by the writer, so it is not read either.
+-- | The columns of an anomaly row the API-change rollup reads. Field drift
+-- ('newFields', 'modifiedFields') is only carried by shape anomalies.
 data AnomalyVM = AnomalyVM
   { createdAt :: ZonedTime
   , anomalyType :: AnomalyTypes
@@ -83,6 +83,8 @@ data AnomalyVM = AnomalyVM
   , endpointMethod :: Maybe Text
   , endpointUrlPath :: Maybe Text
   , endpointHost :: Maybe Text
+  , newFields :: V.Vector Text
+  , modifiedFields :: V.Vector Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow)
@@ -112,7 +114,9 @@ SELECT
     -- 'apis.endpoints' join for legacy rows written before migration 0092.
     COALESCE(an.method, endpoints.method),
     COALESCE(an.url_path, endpoints.url_path),
-    COALESCE(an.host, endpoints.host)
+    COALESCE(an.host, endpoints.host),
+    an.new_fields,
+    an.modified_fields
 from
     apis.anomalies an
     LEFT JOIN apis.endpoints ON an.project_id = endpoints.project_id

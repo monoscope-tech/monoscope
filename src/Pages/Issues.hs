@@ -1499,7 +1499,7 @@ eventCard_ IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflow-cli
             extra =
               [ tabindex_ "-1"
               , [__|on keydown[key is 'Escape'] from window
-                          if the first <#trace_details_container.open/> exists
+                          if the first <#trace-details-open:checked/> exists
                             send closeDetailPanel to #trace_details_container
                           otherwise remove .investigation-fullscreen from me
                           end|]

@@ -166,7 +166,7 @@ data QueryMonitor = QueryMonitor
   , visualizationType :: Text
   , teams :: V.Vector ProjectMembers.TeamId
   , widgetId :: Maybe Text
-  , dashboardId :: Maybe UUID.UUID
+  , dashboardId :: Maybe (UUIDId "dashboard")
   , alertRecoveryThreshold :: Maybe Double
   , warningRecoveryThreshold :: Maybe Double
   , currentStatus :: MonitorStatus
@@ -327,11 +327,11 @@ getActiveQueryMonitors =
     )
 
 
-queryMonitorByWidgetId :: DB es => Projects.ProjectId -> Maybe UUID.UUID -> Text -> Eff es (Maybe QueryMonitor)
+queryMonitorByWidgetId :: DB es => Projects.ProjectId -> Maybe (UUIDId "dashboard") -> Text -> Eff es (Maybe QueryMonitor)
 queryMonitorByWidgetId pid dashboardId wId = Hasql.interpOne (selectFrom @QueryMonitor <> [HI.sql| WHERE project_id = #{pid} AND dashboard_id IS NOT DISTINCT FROM #{dashboardId}::uuid AND widget_id = #{wId} AND deleted_at IS NULL |])
 
 
-deleteMonitorsByWidgetIds :: DB es => Projects.ProjectId -> Maybe UUID.UUID -> [Text] -> Eff es Int64
+deleteMonitorsByWidgetIds :: DB es => Projects.ProjectId -> Maybe (UUIDId "dashboard") -> [Text] -> Eff es Int64
 deleteMonitorsByWidgetIds pid dashboardId widgetIds =
   Hasql.interpExecute [HI.sql|DELETE FROM monitors.query_monitors WHERE project_id = #{pid} AND dashboard_id IS NOT DISTINCT FROM #{dashboardId}::uuid AND widget_id = ANY(#{widgetIds}::text[])|]
 
@@ -350,7 +350,7 @@ data WidgetAlertStatus = WidgetAlertStatus
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake WidgetAlertStatus
 
 
-getWidgetAlertStatuses :: DB es => Projects.ProjectId -> UUID.UUID -> V.Vector Text -> Eff es [WidgetAlertStatus]
+getWidgetAlertStatuses :: DB es => Projects.ProjectId -> UUIDId "dashboard" -> V.Vector Text -> Eff es [WidgetAlertStatus]
 getWidgetAlertStatuses pid dashboardId widgetIds
   | V.null widgetIds = pure []
   | otherwise =

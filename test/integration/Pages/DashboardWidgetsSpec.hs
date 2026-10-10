@@ -979,6 +979,20 @@ spec = sequential $ aroundAll withTestResources do
           html = toStrict $ renderText $ Widget.renderTableWithDataAndParams widget (V.singleton $ V.singleton "session / id") []
       html `shouldSatisfy` T.isInfixOf ("/p/" <> testPid.toText <> "/rum?tab=sessions&amp;session=session%20%2F%20id")
 
+    -- Regression: rows on a tabless dashboard had no swap target and ignored clicks.
+    it "tableRowClick_navigatesOnTablessAndTabbedDashboards" \_ -> do
+      let column = (def :: Widget.TableColumn){Widget.field = "service", Widget.title = "Service"}
+          rowNav tabM =
+            toStrict . renderText
+              $ Widget.renderTableWithDataAndParams
+                (def :: Widget.Widget){Widget.wType = Widget.WTTable, Widget.columns = Just [column], Widget._projectId = Just testPid, Widget._dashboardId = Just "d1", Widget._tabSlug = tabM, Widget.onRowClick = Just def{Widget.setVariable = Just "service"}}
+                (V.singleton $ V.singleton "api")
+                [("var-env", Just "prod")]
+          dashUrl = "/p/" <> testPid.toText <> "/dashboards/d1"
+      rowNav Nothing `shouldContainAll` ["hx-get=\"" <> dashUrl <> "?var-env=prod&amp;var-service=api\"", "hx-target=\"#main-content\"", "hx-select=\"#main-content\""]
+      rowNav (Just "overview") `shouldContainAll` ["hx-get=\"" <> dashUrl <> "/tab/overview?var-env=prod&amp;var-service=api\"", "hx-target=\"#dashboard-tabs-content\""]
+      rowNav (Just "overview") `shouldSatisfy` (not . T.isInfixOf "hx-select=")
+
     it "renders a scoped dependency map with an endpoint-preserving Service Map link" \tr -> do
       dashId <- newDashboard tr "endpoint-stats.yaml" "Endpoint dependency map"
       dg <-

@@ -9,7 +9,7 @@
 -- happen here in Haskell over that result. That keeps the store doing exactly one short-window
 -- read per page view, which matters because wide aggregates over @otel_metrics@ are the query
 -- shape that has repeatedly OOM-killed TimeFusion.
-module Pages.Containers (containersGetH, containerDetailGetH, ContainersGet (..), ContainerVM (..), ContainerFilters (..), applyFilters, runtimeLabel, formatBytes, coresText, freshnessLabel, emDash_, readyBadge_, kqlFilter, nodeField, clusterField) where
+module Pages.Containers (containersGetH, containerDetailGetH, ContainersGet (..), ContainerVM (..), ContainerFilters (..), applyFilters, matchesAny, matchesFilter, infraUrl, deferUrl, mkWindow, infraSnapshot, infrastructureBW, pctText, runtimeLabel, formatBytes, coresText, freshnessLabel, emDash_, readyBadge_, kqlFilter, nodeField, clusterField) where
 
 import Data.Default (def)
 import Data.Text qualified as T
@@ -72,28 +72,74 @@ runtimeLabel = \case Kubernetes -> "kubernetes"; Docker -> "docker"; Host -> "ho
 applyFilters :: ContainerFilters -> V.Vector ContainerRow -> V.Vector ContainerRow
 applyFilters f = V.filter \r ->
   and
-    [ matches f.runtime (Just $ runtimeLabel $ runtimeOf r)
-    , matches f.namespace r.namespace
-    , matches f.node r.nodeName
-    , matches f.image r.image
-    , matches f.cluster r.cluster
+    [ matchesFilter f.runtime (Just $ runtimeLabel $ runtimeOf r)
+    , matchesFilter f.namespace r.namespace
+    , matchesFilter f.node r.nodeName
+    , matchesFilter f.image r.image
+    , matchesFilter f.cluster r.cluster
     ]
-  where
-    matches selected actual = all (\s -> T.null s || Just s == actual) selected
+
+
+-- | An absent or empty selection matches every row; otherwise the row has to carry the value.
+-- Every infrastructure facet goes through here, so "All" means the same thing on all of them.
+matchesAny :: Maybe Text -> [Text] -> Bool
+matchesAny selected values = maybe True (\v -> T.null v || v `elem` values) selected
+
+
+matchesFilter :: Maybe Text -> Maybe Text -> Bool
+matchesFilter selected = matchesAny selected . maybeToList
+
+
+infraUrl :: Projects.ProjectId -> Text -> [(Text, Text)] -> TimePicker.TimeWindow -> Text
+infraUrl pid path = TimePicker.windowUrl ("/p/" <> pid.toText <> path)
+
+
+-- | The URL a shell re-fetches itself with: the request it was serving, plus @deferred@.
+-- Every filter has to survive the round trip, or the rows that arrive would not be the rows
+-- the visible filter chips claim.
+deferUrl :: Projects.ProjectId -> Text -> [(Text, Maybe Text)] -> TimePicker.TimeWindow -> Text
+deferUrl pid path params = infraUrl pid path $ mapMaybe sequenceA params <> [("deferred", "1")]
+
+
+mkWindow :: Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx TimePicker.TimeWindow
+mkWindow fromParam toParam sinceParam = (\now -> TimePicker.mkTimeWindow now fromParam toParam sinceParam) <$> Time.currentTime
+
+
+-- | The one cached snapshot every infrastructure view is a projection of.
+infraSnapshot :: Projects.ProjectId -> TimePicker.TimeWindow -> ATAuthCtx (V.Vector ContainerRow)
+infraSnapshot pid window = do
+  appCtx <- Reader.ask @AuthContext
+  containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) (TimePicker.cacheTtl window) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
+
+
+infrastructureBW :: Projects.ProjectId -> Text -> TimePicker.TimeWindow -> BWConfig -> BWConfig
+infrastructureBW pid title window bw =
+  bw
+    { prePageTitle = Nothing
+    , pageTitle = "Infrastructure"
+    , menuItem = Just "Infrastructure"
+    , navTabs = Just $ infrastructureNavTabs_ pid title window.fromQuery window.toQuery window.sinceQuery
+    , pageActions = Just $ div_ [class_ "inline-flex items-center gap-2", data_ "default-window" "5M"] do
+        TimePicker.liveDataControls_ Nothing window.currentRange Nothing TimePicker.RefreshOnly
+    , serviceOptions = V.empty
+    , needsGridStack = True
+    }
+
+
+-- | A 0–1 ratio as a whole-number percentage. Every table cell, fact grid, and tooltip
+-- formats usage through this, so the same number never renders two ways.
+pctText :: Double -> Text
+pctText value = showFFloat' 0 (value * 100) <> "%"
 
 
 containersGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders ContainersGet)
 containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam sinceParam deferredM = do
   (_, _, bw) <- mkPageCtx pid
-  appCtx <- Reader.ask @AuthContext
-  now <- Time.currentTime
-  let window = TimePicker.mkTimeWindow now fromParam toParam sinceParam
-      filters = ContainerFilters runtimeM namespaceM nodeM imageM clusterM
-      path = "/p/" <> pid.toText <> "/infrastructure/containers"
-      baseUrl = TimePicker.windowUrl path [] window
-      deferredUrl = TimePicker.windowUrl path (mapMaybe sequenceA [("runtime", runtimeM), ("namespace", namespaceM), ("node", nodeM), ("image", imageM), ("cluster", clusterM)] <> [("deferred", "1")]) window
+  window <- mkWindow fromParam toParam sinceParam
+  let filters = ContainerFilters runtimeM namespaceM nodeM imageM clusterM
+      deferredUrl = deferUrl pid "/infrastructure/containers" [("runtime", runtimeM), ("namespace", namespaceM), ("node", nodeM), ("image", imageM), ("cluster", clusterM)] window
   body <- withDeferredBody deferredM "containersContainer" deferredUrl (tableSkeleton_ 10) do
-    allRows <- containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) (TimePicker.cacheTtl window) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
+    allRows <- infraSnapshot pid window
     let
       -- Busiest first: during an incident the container burning CPU is the one you came for.
       rows = sortOn (Down . (.cpuCores)) $ V.toList $ applyFilters filters allRows
@@ -117,7 +163,7 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
               , tableHeaderActions =
                   Just
                     $ facetActions
-                      baseUrl
+                      (infraUrl pid "/infrastructure/containers" [] window)
                       "containersContainer"
                       [ menu "Runtime" "runtime" filters.runtime (Just . runtimeLabel . runtimeOf)
                       , -- Falls back to k8s.cluster.uid, so the menu is populated even
@@ -140,17 +186,7 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
                       }
               }
         }
-  let bwconf =
-        bw
-          { prePageTitle = Nothing
-          , pageTitle = "Infrastructure"
-          , menuItem = Just "Infrastructure"
-          , navTabs = Just $ infrastructureNavTabs_ pid "Containers" window.fromQuery window.toQuery window.sinceQuery
-          , pageActions = Just $ div_ [class_ "inline-flex items-center gap-2", data_ "default-window" "5M"] do
-              TimePicker.liveDataControls_ Nothing window.currentRange Nothing TimePicker.RefreshOnly
-          , serviceOptions = V.empty
-          }
-  addRespHeaders $ ContainersPage $ PageCtx bwconf body
+  addRespHeaders $ ContainersPage $ PageCtx (infrastructureBW pid "Containers" window bw) body
   where
     containerColumns :: [Column ContainerVM]
     containerColumns =
@@ -192,12 +228,12 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
     -- require: at a glance you read fullness from length even where colour is unavailable.
     pctCell :: Text -> (ContainerRow -> Maybe Double) -> ContainerVM -> Html ()
     pctCell label f = cell f \frac ->
-      let value = showFFloat' 0 (frac * 100) <> "%"
+      let value = pctText frac
        in div_ [class_ "flex items-center gap-1.5", data_ "tippy-content" $ label <> ": " <> value] do
             span_ [class_ "tabular-nums text-textStrong w-10 text-right shrink-0"] $ toHtml value
             div_ [class_ "h-1.5 grow rounded-full bg-fillWeak overflow-hidden"]
               -- Length is the non-colour cue. Hue adds the operational threshold.
-              $ div_ [class_ $ "h-full rounded-full " <> if | frac >= 0.9 -> "bg-fillError-strong" | frac >= 0.75 -> "bg-fillWarning-strong" | otherwise -> "bg-fillBrand-strong", style_ $ "width:" <> showFFloat' 0 (min 1 frac * 100) <> "%"] mempty
+              $ div_ [class_ $ "h-full rounded-full " <> if | frac >= 0.9 -> "bg-fillError-strong" | frac >= 0.75 -> "bg-fillWarning-strong" | otherwise -> "bg-fillBrand-strong", style_ $ "width:" <> pctText (min 1 frac)] mempty
 
     renderNameCol :: ContainerVM -> Html ()
     renderNameCol vm = div_ [class_ "flex flex-col gap-0.5 min-w-0 overflow-hidden"] do
@@ -220,8 +256,9 @@ containersGetH pid runtimeM namespaceM nodeM imageM clusterM fromParam toParam s
     -- row does and hits the same cached snapshot the list already fetched.
     detailUrl :: ContainerVM -> Text
     detailUrl vm =
-      TimePicker.windowUrl
-        ("/p/" <> vm.pid.toText <> "/infrastructure/containers/detail")
+      infraUrl
+        vm.pid
+        "/infrastructure/containers/detail"
         ([("container", vm.row.containerName), ("scope", display vm.row.scope)] <> mapMaybe sequenceA [("pod", vm.row.podName), ("cluster", vm.row.cluster), ("namespace", vm.row.namespace), ("node", vm.row.nodeName)])
         vm.window
 
@@ -277,16 +314,14 @@ shortImage = T.takeWhileEnd (/= '/')
 -- the window is short and the result already carries every field the panel shows.
 containerDetailGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Scope -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 containerDetailGetH pid containerM podM scopeM clusterM namespaceM nodeM fromParam toParam sinceParam = do
-  appCtx <- Reader.ask @AuthContext
-  now <- Time.currentTime
-  let window = TimePicker.mkTimeWindow now fromParam toParam sinceParam
-  rows <- containersInWindowCached appCtx.infrastructureCache (pid, window.fromQuery, window.toQuery, window.sinceQuery) (TimePicker.cacheTtl window) appCtx.env.enableTimefusionReads pid window.fromTime window.toTime
+  window <- mkWindow fromParam toParam sinceParam
+  rows <- infraSnapshot pid window
   -- Generated links identify missing metadata exactly; legacy name/pod links must be unique.
   let found = V.filter (\r -> Just r.containerName == containerM && r.podName == podM && maybe True (\scope -> (r.scope, r.cluster, r.namespace, r.nodeName) == (scope, clusterM, namespaceM, nodeM)) scopeM) rows
   addRespHeaders $ case V.toList found of
     [r] -> containerDetail_ window r
     [] -> emptyState_ def{icon = Just "cube", action = ESNone} "This container is no longer reporting." ""
-    _ -> emptyState_ def{icon = Just "cube", action = ESLink (TimePicker.windowUrl ("/p/" <> pid.toText <> "/infrastructure/containers") [] window) "View containers"} "Several containers match this link." "Select a container from the list to view its metrics."
+    _ -> emptyState_ def{icon = Just "cube", action = ESLink (infraUrl pid "/infrastructure/containers" [] window) "View containers"} "Several containers match this link." "Select a container from the list to view its metrics."
   where
     containerDetail_ :: TimePicker.TimeWindow -> ContainerRow -> Html ()
     containerDetail_ window r = div_ [class_ "-mx-8 -mb-4 min-h-full"] do
@@ -313,12 +348,12 @@ containerDetailGetH pid containerM podM scopeM clusterM namespaceM nodeM fromPar
             ]
         detailSection_ [] "Metrics" pass
           $ div_ [class_ "grid grid-cols-2 gap-3 max-xl:grid-cols-1"]
-          $ forM_ ([("container-detail-cpu", "CPU usage", "cores", "container.cpu.usage"), ("container-detail-memory", "Memory working set", "bytes", "container.memory.working_set")] :: [(Text, Text, Text, Text)]) \(wid, title, unit, metric) ->
-            div_ [class_ "min-h-56"] $ Widget.widget_ $ infrastructureWidget pid wid title unit (metricQuery metric)
+          $ forM_ ([("container-detail-cpu", "CPU usage", "cores", "container.cpu.usage", "CPU usage"), ("container-detail-memory", "Memory working set", "bytes", "container.memory.working_set", "working-set memory")] :: [(Text, Text, Text, Text, Text)]) \(wid, title, unit, metric, measure) ->
+            div_ [class_ "min-h-56"] $ Widget.widget_ (Widget.infraTimeseries pid wid title unit (metricQuery metric)){Widget.description = Just $ "Average " <> measure <> " reported for each container in every time bucket."}
         pivotLinks_ pivots
       where
         dash = fromMaybe "—"
-        pct = dash . fmap (\value -> showFFloat' 0 (value * 100) <> "%")
+        pct = dash . fmap pctText
         metadata = mapMaybe sequenceA [("Cluster", r.cluster), ("Pod", r.podName), ("Namespace", r.namespace), ("Node / host", r.nodeName), ("Workload", r.workload)]
         availableSignals = length $ catMaybes [r.cpuCores, r.cpuLimit, r.memBytes, r.memLimit]
         subject =
@@ -331,8 +366,8 @@ containerDetailGetH pid containerM podM scopeM clusterM namespaceM nodeM fromPar
             <> if r.scope == ScopeHost then [] else [("resource.k8s.namespace.name", r.namespace), (clusterField, r.cluster), (nodeField, r.nodeName)]
         metricQuery metric = "metrics | where metric_name == \"" <> metric <> "\" and " <> subject <> " | summarize avg(value) by bin_auto(timestamp)"
         pivots =
-          [ ("View logs", TimePicker.windowUrl ("/p/" <> pid.toText <> "/log_explorer") [("query", subject)] window)
-          , ("View metrics", TimePicker.windowUrl ("/p/" <> pid.toText <> "/metrics") [("metric_prefix", maybe "container." (const "k8s.") r.podName)] window)
+          [ ("View logs", infraUrl pid "/log_explorer" [("query", subject)] window)
+          , ("View metrics", infraUrl pid "/metrics" [("metric_prefix", maybe "container." (const "k8s.") r.podName)] window)
           ]
 
 
@@ -344,13 +379,6 @@ kqlFilter fields = T.intercalate " and " [field <> "==" <> maybe "null" kqlQuote
 nodeField, clusterField :: Text
 nodeField = "coalesce(resource.k8s.node.name, resource.host.name)"
 clusterField = "coalesce(resource.k8s.cluster.name, resource.k8s.cluster.uid)"
-
-
-infrastructureWidget :: Projects.ProjectId -> Text -> Text -> Text -> Text -> Widget.Widget
-infrastructureWidget pid wid title unit query =
-  (Widget.infraTimeseries pid wid title unit query)
-    { Widget.description = Just $ "Average " <> (case unit of "cores" -> "CPU usage"; "bytes" -> "working-set memory"; _ -> "value") <> " reported for each container in every time bucket."
-    }
 
 
 -- $setup

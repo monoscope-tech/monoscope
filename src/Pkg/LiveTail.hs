@@ -117,7 +117,7 @@ module Pkg.LiveTail (
   publishMatches,
 ) where
 
-import Control.Concurrent.STM (TBQueue, check, flushTBQueue, isFullTBQueue, newTBQueueIO, orElse, readTBQueue, registerDelay, swapTVar, writeTBQueue)
+import Control.Concurrent.STM (TBQueue, check, flushTBQueue, isFullTBQueue, newTBQueueIO, orElse, readTBQueue, registerDelay, stateTVar, swapTVar, writeTBQueue)
 import Control.Exception.Safe qualified as Safe
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
@@ -359,21 +359,10 @@ relayRetentionSecs :: Int
 relayRetentionSecs = 30
 
 
--- | Cap on the column list a browser may register.
---
--- The list is client-supplied and drives a per-row traversal on the ingest path, so it is
--- untrusted input on the hottest code in the system. A real Events table shows tens of
--- columns; anything beyond this is a client bug or an attempt to make ingest do unbounded
--- work per record.
+-- | Cap on the column list a browser may register. The list is client-supplied and drives a
+-- per-row traversal on the ingest path; a real Events table shows tens of columns.
 maxColumns :: Int
 maxColumns = 128
-
-
--- | Bound the registered column list. Truncates rather than refuses: an over-long list is
--- almost certainly a client bug, and dropping the tail still renders a usable table while
--- keeping the per-row cost bounded.
-clampColumns :: [Text] -> [Text]
-clampColumns = take maxColumns . filter (not . T.null)
 
 
 -- | Parse and validate a user's filter text, rejecting anything Live Tail cannot stream.
@@ -538,7 +527,9 @@ insertSubscription pid uid ns scope perUser perProject expiresAt =
     |]
   where
     (scopeText, svc, kind) = scopeToText scope
-    cols = V.fromList (clampColumns (fromMaybe [] ns.columns))
+    -- Truncated rather than refused: an over-long list is a client bug, and the head still
+    -- renders a usable table while keeping the per-row cost bounded.
+    cols = V.fromList $ take maxColumns $ filter (not . T.null) (fromMaybe [] ns.columns)
 
 
 -- | Every unexpired subscription, for the ingest cache refresh.
@@ -596,18 +587,14 @@ activeSubscriptionFor pid uid sid =
 -- 500. Nothing exercised that path until the concurrent-cap test did.
 countActiveForUser :: DB es => Projects.ProjectId -> Projects.UserId -> Eff es Int
 countActiveForUser pid uid =
-  fromMaybe 0
-    . listToMaybe
-    <$> Hasql.interp
-      [HI.sql| SELECT count(*)::int8 FROM projects.live_tail_subscriptions WHERE project_id = #{pid} AND user_id = #{uid} AND expires_at > now() |]
+  Hasql.interpScalar
+    [HI.sql| SELECT count(*)::int8 FROM projects.live_tail_subscriptions WHERE project_id = #{pid} AND user_id = #{uid} AND expires_at > now() |]
 
 
 countActiveForProject :: DB es => Projects.ProjectId -> Eff es Int
 countActiveForProject pid =
-  fromMaybe 0
-    . listToMaybe
-    <$> Hasql.interp
-      [HI.sql| SELECT count(*)::int8 FROM projects.live_tail_subscriptions WHERE project_id = #{pid} AND expires_at > now() |]
+  Hasql.interpScalar
+    [HI.sql| SELECT count(*)::int8 FROM projects.live_tail_subscriptions WHERE project_id = #{pid} AND expires_at > now() |]
 
 
 -- | Push the lease out. Returns the new expiry, or 'Nothing' if the lease had already lapsed —
@@ -615,13 +602,12 @@ countActiveForProject pid =
 -- subscription the ingest cache has already forgotten would linger as a silent connection.
 renewLease :: DB es => SubscriptionId -> UTCTime -> Eff es (Maybe UTCTime)
 renewLease sid newExpiry =
-  listToMaybe
-    <$> Hasql.interp
-      [HI.sql|
-        UPDATE projects.live_tail_subscriptions SET expires_at = #{newExpiry}
-        WHERE id = #{sid} AND expires_at > now()
-        RETURNING expires_at
-      |]
+  Hasql.interpOne
+    [HI.sql|
+      UPDATE projects.live_tail_subscriptions SET expires_at = #{newExpiry}
+      WHERE id = #{sid} AND expires_at > now()
+      RETURNING expires_at
+    |]
 
 
 -- | Idempotent: deleting an already-reaped subscription is success, so disconnect cleanup and
@@ -671,7 +657,7 @@ relayDrain lastSeen = do
 -- row written before this pod had a connection open is a row already missed; replaying it
 -- would show a "live" tail rows from minutes ago.
 relayWatermark :: DB es => Eff es Int64
-relayWatermark = fromMaybe 0 . listToMaybe <$> Hasql.interp [HI.sql| SELECT coalesce(max(id), 0) FROM projects.live_tail_events |]
+relayWatermark = Hasql.interpScalar [HI.sql| SELECT coalesce(max(id), 0) FROM projects.live_tail_events |]
 
 
 -- | Drop relayed rows past their usefulness. Unlike the subscription reaper this one is
@@ -1014,14 +1000,10 @@ toTableCols cols r = fromList (mapMaybe resolveCol cols)
     truncateValue = \case
       AE.String t | T.length t > maxRowFieldChars -> AE.String (T.take maxRowFieldChars t)
       v -> v
-
-
--- | A 'Subject' for a dotted path, built directly rather than parsed — these come from a
--- column list the server already validated, not from user text.
-dottedSubject :: Text -> Subject
-dottedSubject path = case T.splitOn "." path of
-  root : rest -> Subject path root (map FieldKey rest)
-  [] -> Subject path path []
+    -- Built directly rather than parsed: the column list was validated at registration.
+    dottedSubject path = case T.splitOn "." path of
+      root : rest -> Subject path root (map FieldKey rest)
+      [] -> Subject path path []
 
 
 -- | Match PostgreSQL/TimeFusion's microsecond timestamp precision before the row becomes a
@@ -1101,16 +1083,9 @@ newConn cap = Conn <$> liftIO (newTBQueueIO cap) <*> newTVarIO 0
 -- the lifetime of the pod.
 attachConn :: MonadIO m => Hub -> SubscriptionId -> Conn -> m (IO ())
 attachConn hub sid conn = atomically do
-  n <- readTVar counter
-  writeTVar counter (n + 1)
-  let key = Unique n
+  key <- Unique <$> stateTVar counter (\n -> (n, n + 1))
   modifyTVar' hub (HM.insertWith (<>) sid [(key, conn)])
-  pure (detachConn hub sid key)
-
-
-detachConn :: MonadIO m => Hub -> SubscriptionId -> Unique -> m ()
-detachConn hub sid key =
-  atomically $ modifyTVar' hub $ HM.update (guarded (not . null) . filter ((/= key) . fst)) sid
+  pure $ atomically $ modifyTVar' hub $ HM.update (guarded (not . null) . filter ((/= key) . fst)) sid
 
 
 -- | Monotonic source for 'Unique'. A global is right here: the value means nothing outside the
@@ -1157,10 +1132,7 @@ pushDropping q dropped x = do
 -- | Everything buffered since the last call, with the number of rows overflow discarded in
 -- that window. Both are reset by the read, so the caller reports a window rather than a total.
 takeRelayBuffer :: MonadIO m => RelayBuffer -> m ([LiveEnvelope], Int)
-takeRelayBuffer rb = atomically do
-  pending <- flushTBQueue rb.queue
-  lost <- swapTVar rb.dropped 0
-  pure (pending, lost)
+takeRelayBuffer rb = atomically $ (,) <$> flushTBQueue rb.queue <*> swapTVar rb.dropped 0
 
 
 -- | Whether this pod has any live connection at all. The relay poller checks it first so a pod
@@ -1201,11 +1173,7 @@ takeBatchWithin micros conn = do
 
 
 batchSTM :: Conn -> STM ([LiveRow], Int)
-batchSTM conn = do
-  hd <- readTBQueue conn.queue
-  rest <- flushTBQueue conn.queue
-  n <- readTVar conn.dropped
-  pure (hd : rest, n)
+batchSTM conn = (,) <$> ((:) <$> readTBQueue conn.queue <*> flushTBQueue conn.queue) <*> readTVar conn.dropped
 
 
 -- ---------------------------------------------------------------------------------------

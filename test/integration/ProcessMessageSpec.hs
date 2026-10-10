@@ -13,7 +13,7 @@ import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.Telemetry qualified as Telemetry
+import Models.Telemetry.Telemetry qualified as Telemetry hiding (BulkCol (..))
 import Pkg.DeriveUtils (AesonText (..), UUIDId (..))
 import Pkg.TestUtils
 import ProcessMessage (PathClassifier (..), emptyPathClassifier, processMessages, processSpanToEntities, stampHashesAtIngest)
@@ -148,7 +148,7 @@ resourceSpec = do
         Map.lookup "url" attrs `shouldBe` Just (AE.object ["path" AE..= path])
         Map.lookup "http" attrs `shouldBe` Just (AE.object ["request" AE..= AE.object ["method" AE..= ("GET" :: Text)], "route" AE..= canonicalPath])
         Map.lookup "monoscope" attrs `shouldBe` Just (AE.object ["endpoint" AE..= AE.object ["route" AE..= canonicalPath, "route_inferred" AE..= inferred]])
-      Telemetry.handOffBatches tr.trATCtx.extractionWorker caches $ stampHashesAtIngest caches $ V.fromList [unrouted, declared]
+      runTestBg frozenTime tr $ Telemetry.handOffBatches tr.trATCtx.extractionWorker caches $ stampHashesAtIngest caches $ V.fromList [unrouted, declared]
       drainExtractionWorker tr
       endpoints <-
         withPool tr.trPool

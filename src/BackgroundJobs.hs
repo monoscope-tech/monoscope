@@ -198,7 +198,7 @@ widgetMonitorUrl :: Text -> Monitors.QueryMonitor -> Maybe Text
 widgetMonitorUrl baseUrl monitor = do
   dashboardId <- monitor.dashboardId
   widgetId <- monitor.widgetId
-  pure $ baseUrl <> "/dashboards/" <> UUID.toText dashboardId <> "?expand=" <> toUriStr widgetId
+  pure $ baseUrl <> "/dashboards/" <> dashboardId.toText <> "?expand=" <> toUriStr widgetId
 
 
 -- | Render a (subject, body) pair and send it to the given address.
@@ -984,7 +984,8 @@ runInfraHealthCheck authCtx = do
     then Log.logInfo "InfraHealthCheck OK" (AE.object ["window" AE..= window, "info" AE..= info])
     else do
       Log.logAttention "InfraHealthCheck ALERT" (AE.object ["window" AE..= window, "alerts" AE..= alerts])
-      sendMessageToDiscord authCtx
+      sendMessageToDiscord
+        authCtx
         ("**🚨 monoscope pipeline alert** (" <> window <> ")\n" <> unlines alerts <> bool ("```\n" <> unlines info <> "```") "" (null info))
 
 
@@ -2265,7 +2266,7 @@ safetyNetReprocess pid = do
       (AE.object ["project_id" AE..= pid.toText, "row_count" AE..= abandoned, "max_age_secs" AE..= maxAgeSecs])
   unless (V.null rows) $ do
     Log.logTrace "SafetyNetReprocess re-driving unprocessed rows" (AE.object ["project_id" AE..= pid.toText, "row_count" AE..= V.length rows])
-    liftIO $ Telemetry.handOffBatches ctx.extractionWorker caches rows
+    Telemetry.handOffBatches ctx.extractionWorker caches rows
 
 
 -- | Dual-fork an UPDATE to Postgres (blocking, deadlock-retried) + TimeFusion (best-effort, circuit-broken).
@@ -2757,19 +2758,19 @@ flushDrainTask shard task
                 patternHash = toXXHash dp.templateStr
              in guard (eventCount > 0 && not (T.null dp.templateStr))
                   $> ( LogPatterns.UpsertPattern
-                          { projectId = pid
-                          , logPattern = dp.templateStr
-                          , hash = patternHash
-                          , sourceField = "summary"
-                          , serviceName = Just svcName
-                          , logLevel = Nothing
-                          , traceId = Nothing
-                          , sampleMessage = Just dp.exampleLog
-                          , eventCount
-                          , isError = any (\lid -> HM.lookupDefault False lid errByEvent) dp.logIds
-                          }
-                      , (pid, "summary" :: Text, patternHash, task.flushedAt, eventCount)
-                      )
+                         { projectId = pid
+                         , logPattern = dp.templateStr
+                         , hash = patternHash
+                         , sourceField = "summary"
+                         , serviceName = Just svcName
+                         , logLevel = Nothing
+                         , traceId = Nothing
+                         , sampleMessage = Just dp.exampleLog
+                         , eventCount
+                         , isError = any (\lid -> HM.lookupDefault False lid errByEvent) dp.logIds
+                         }
+                     , (pid, "summary" :: Text, patternHash, task.flushedAt, eventCount)
+                     )
       let (ups, hss) = unzip prepared
       unless (null ups) $ void $ LogPatterns.upsertLogPatternBatch ups
       unless (null hss) $ void $ LogPatterns.upsertHourlyStatBatch hss
@@ -3237,9 +3238,9 @@ processAPIChangeAnomalies pid targetHashes = do
     catMaybes <$> forM anomaliesByEndpoint \(endpointHash, anomalies) -> do
       existingIssueM <- Issues.selectIssueByHash pid endpointHash (Issues.OpenOfType Issues.ApiChange)
       let firstAnom = head anomalies
-          hasChanges = any ((== ApiChanges.ATEndpoint) . (.anomalyType)) anomalies
+          hasChanges = any ((== ApiChanges.ATEndpoint) . (.anomalyType)) anomalies || Issues.hasFieldDrift (Issues.apiChangeDataFrom anomalies)
       case existingIssueM of
-        Just existingIssue -> Nothing <$ when hasChanges (Issues.updateIssueWithNewAnomaly existingIssue.id (Issues.apiChangeDataFrom anomalies))
+        Just existingIssue -> Nothing <$ when hasChanges (Issues.updateIssueWithNewAnomaly existingIssue anomalies)
         Nothing -> do
           -- "unresolved" tags whether this row should produce a customer
           -- notification. The issue itself is always created (the UI shows
@@ -3546,7 +3547,7 @@ autoAckProvenEndpoints pid = do
           modifyIORef' slicesStarted (+ 1)
           let upperSql = foldMap (\u -> [HI.sql| AND timestamp < ^{Endpoints.tsLit u} |]) upper
           rows <-
-            Hasql.withHasqlTimefusion authCtx.env.enableTimefusionReads
+            tfRead
               $ Hasql.interp
                 [HI.sql|
                   WITH served AS (
@@ -4645,7 +4646,7 @@ gitSyncPushAllDashboards :: Projects.ProjectId -> ATBackgroundCtx ()
 gitSyncPushAllDashboards pid = do
   Log.logInfo "Pushing all dashboards to git host" pid
   withGitSync pid \conn sync -> do
-    syncableDashboards <- filter (isJust . (.schema)) <$> Dashboards.selectDashboardsSortedBy pid "updated_at"
+    syncableDashboards <- filter (isJust . (.schema)) <$> Dashboards.selectDashboardsSortedBy pid Dashboards.Desc Dashboards.DSUpdatedAt
     Log.logInfo "Found dashboards to push" (pid, length syncableDashboards)
     forM_ syncableDashboards \dash -> pushDashboardToGit conn sync pid dash ("Sync dashboard: " <> dash.title)
     Log.logInfo "Finished pushing all dashboards" pid

@@ -8,6 +8,7 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.Default (def)
 import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.LLM qualified as ELLM
+import Data.Effectful.UUID (UUIDEff)
 import Data.Effectful.Wreq (HTTP, Options, header)
 import Data.Text qualified as T
 import Data.Text.Display (display)
@@ -189,11 +190,11 @@ data Channel = Channel
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "channel", DAE.CamelToSnake]] Channel
 
 
-processAIQuery :: (DB es, ELLM.LLM :> es, HTTP :> es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Maybe EnvConfig -> Bool -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe (UUIDId "conversation") -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
+processAIQuery :: (DB es, ELLM.LLM :> es, HTTP :> es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es, UUIDEff :> es) => Maybe EnvConfig -> Bool -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe (UUIDId "conversation") -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
 processAIQuery sourceConfig useTf = processAIQueryWithMode sourceConfig useTf AI.InteractiveReadOnly
 
 
-processAIQueryWithMode :: (DB es, ELLM.LLM :> es, HTTP :> es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => Maybe EnvConfig -> Bool -> AI.InvocationMode -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe (UUIDId "conversation") -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
+processAIQueryWithMode :: (DB es, ELLM.LLM :> es, HTTP :> es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es, UUIDEff :> es) => Maybe EnvConfig -> Bool -> AI.InvocationMode -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe (UUIDId "conversation") -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
 processAIQueryWithMode sourceConfig useTf invocationMode access pid userQuery conversationId model apiKey = do
   AI.requireAgentAccess access pid
   now <- Time.currentTime
@@ -286,7 +287,7 @@ botReplyPayload r = r.payload
 -- differs per platform *and* per call site: Slack response_url vs chat.postMessage,
 -- Discord interaction followup, Twilio).
 runBotQuery
-  :: (DB es, ELLM.LLM :> es, HTTP :> es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es)
+  :: (DB es, ELLM.LLM :> es, HTTP :> es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es, UUIDEff :> es)
   => BotType
   -> (BotReply -> Eff es ())
   -> EnvConfig

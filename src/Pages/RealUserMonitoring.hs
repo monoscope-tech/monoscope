@@ -76,10 +76,6 @@ data RumTab = Overview | Sessions | Performance
   deriving (Display, FromHttpApiData) via WrappedEnumSC 'Nothing "" RumTab
 
 
-tabLabel :: RumTab -> Text
-tabLabel = T.toTitle . display
-
-
 -- | Accepts both the canonical short values this page links with ("errors", "replays") and
 -- the tab labels the shared Table's filter tabs put in the URL ("With errors").
 parseSessionFilter :: Maybe Text -> SessionFilter
@@ -238,16 +234,16 @@ rumPulse scope =
     $ Hasql.interpOne
     $ [HI.sql|SELECT COUNT(DISTINCT NULLIF(attributes___session___id, ''))::bigint,
         COUNT(*) FILTER (WHERE |]
-    <> pageViewPredicate
-    <> [HI.sql|)::bigint, COUNT(*) FILTER (WHERE |]
-    <> errorPredicate
-    <> [HI.sql|)::bigint,
+      <> pageViewPredicate
+      <> [HI.sql|)::bigint, COUNT(*) FILTER (WHERE |]
+      <> errorPredicate
+      <> [HI.sql|)::bigint,
         (approx_percentile(0.75, percentile_agg(CASE WHEN |]
-    <> pageViewPredicate
-    <> [HI.sql| THEN duration END)) / 1000000.0)::float8
+      <> pageViewPredicate
+      <> [HI.sql| THEN duration END)) / 1000000.0)::float8
       FROM otel_logs_and_spans WHERE |]
-    <> browserScope scope
-    <> [HI.sql| HAVING COUNT(*) > 0|]
+      <> browserScope scope
+      <> [HI.sql| HAVING COUNT(*) > 0|]
 
 
 rumPages :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> Eff es [RumPage]
@@ -302,80 +298,75 @@ rumErrors scope =
     )
 
 
--- Text is matched against complete sessions before LIMIT, preserving their event totals.
--- That path stays raw because page text participates in HAVING. The common list,
--- error list and exact-id reads use a mergeable core, then enrich only the at-most
--- 200 selected ids with page and user-agent expressions.
+-- | Text is matched against complete sessions before LIMIT, preserving their event totals;
+-- that path stays raw because page text participates in HAVING. The plain list and exact-id
+-- reads use a mergeable core, then enrich only the at-most 200 selected ids with the page and
+-- user-agent expressions.
 otelSessionRows :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> SessionMatch -> SessionFilter -> Eff es [RumSession]
-otelSessionRows scope match@(SessionText (Just _)) sessionFilter = otelSessionRowsRaw scope match sessionFilter
-otelSessionRows scope match sessionFilter = otelSessionCoreRows scope match sessionFilter >>= enrichSessionRows scope
-
-
-otelSessionRowsRaw :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> SessionMatch -> SessionFilter -> Eff es [RumSession]
-otelSessionRowsRaw scope match sessionFilter =
-  Hasql.interpTimefusion
-    scope.useTf
-    ( [HI.sql|
-      SELECT attributes___session___id,
-        MIN(timestamp), MAX(timestamp), COUNT(*)::bigint,
-        COUNT(*) FILTER (WHERE |]
-        <> errorPredicate
-        <> [HI.sql|)::bigint,
-        COUNT(*) FILTER (WHERE |]
-        <> pageViewPredicate
-        <> [HI.sql|)::bigint,
-        MAX(attributes___user___id), MAX(attributes___user___full_name), MAX(attributes___user___email),
-        MAX(resource___service___name),
-        (ARRAY_AGG(|]
+otelSessionRows scope match sessionFilter = case match of
+  SessionText (Just query) ->
+    let needle = searchPattern query
+     in sessionRows pageAndAgent mempty
+          $ [HI.sql|COUNT(*) FILTER (WHERE
+              attributes___session___id ILIKE #{needle}
+              OR attributes___user___id ILIKE #{needle}
+              OR attributes___user___full_name ILIKE #{needle}
+              OR attributes___user___email ILIKE #{needle}
+              OR resource___service___name ILIKE #{needle}
+              OR (|]
+            <> pagePath
+            <> [HI.sql|) ILIKE #{needle}) > 0|]
+  SessionText Nothing -> sessionRows nullPageCols mempty "true" >>= enrich
+  SessionIds ids -> sessionRows nullPageCols [HI.sql| AND attributes___session___id = ANY(#{ids})|] "true" >>= enrich
+  where
+    -- Aliased: DataFusion rejects two identically-named NULL projections.
+    nullPageCols = "NULL::text AS last_page, NULL::text AS user_agent"
+    pageAndAgent =
+      [HI.sql|(ARRAY_AGG(|]
         <> pagePath
         <> [HI.sql| ORDER BY timestamp DESC, id DESC) FILTER (WHERE |]
         <> pageViewPredicate
-        <> [HI.sql|))[1],
-        MAX(COALESCE(NULLIF(attributes___user_agent___original, ''), resource___user_agent___original)),
-        false
-      FROM otel_logs_and_spans
-      WHERE |]
-        <> browserScope scope
-        <> [HI.sql| AND attributes___session___id IS NOT NULL AND attributes___session___id <> ''
-      GROUP BY attributes___session___id HAVING |]
-        <> sessionMatchPredicate match
-        <> (if sessionFilter == ErrorSessionRows then [HI.sql| AND COUNT(*) FILTER (WHERE |] <> errorPredicate <> [HI.sql|) > 0|] else mempty)
-        <> [HI.sql| ORDER BY MAX(timestamp) DESC LIMIT 200|]
-    )
-
-
-otelSessionCoreRows :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> SessionMatch -> SessionFilter -> Eff es [RumSession]
-otelSessionCoreRows scope match sessionFilter =
-  Hasql.interpTimefusion
-    scope.useTf
-    ( [HI.sql|
-      SELECT attributes___session___id,
-        MIN(timestamp), MAX(timestamp), COUNT(*)::bigint,
-        COUNT(*) FILTER (WHERE |]
-        <> errorPredicate
-        <> [HI.sql|)::bigint,
-        COUNT(*) FILTER (WHERE |]
-        <> pageViewPredicate
-        <> [HI.sql|)::bigint,
-        MAX(attributes___user___id), MAX(attributes___user___full_name), MAX(attributes___user___email),
-        MAX(resource___service___name),
-        NULL::text AS last_page, NULL::text AS user_agent, false AS has_replay
-      FROM otel_logs_and_spans
-      WHERE |]
-        <> browserScope scope
-        <> [HI.sql| AND attributes___session___id IS NOT NULL AND attributes___session___id <> ''|]
-        <> sessionCoreWhere match
-        <> [HI.sql|
-      GROUP BY attributes___session___id HAVING true|]
-        <> (if sessionFilter == ErrorSessionRows then [HI.sql| AND COUNT(*) FILTER (WHERE |] <> errorPredicate <> [HI.sql|) > 0|] else mempty)
-        <> [HI.sql| ORDER BY MAX(timestamp) DESC LIMIT 200|]
-    )
-
-
-sessionCoreWhere :: SessionMatch -> HI.Sql
-sessionCoreWhere (SessionIds ids) = [HI.sql| AND attributes___session___id = ANY(#{ids})|]
-sessionCoreWhere (SessionText Nothing) = mempty
-sessionCoreWhere (SessionText (Just _)) = error "text search must use the raw session query"
+        <> [HI.sql|))[1], MAX(COALESCE(NULLIF(attributes___user_agent___original, ''), resource___user_agent___original))|]
+    sessionRows pageCols extraWhere having =
+      Hasql.interpTimefusion
+        scope.useTf
+        ( [HI.sql|
+          SELECT attributes___session___id,
+            MIN(timestamp), MAX(timestamp), COUNT(*)::bigint,
+            COUNT(*) FILTER (WHERE |]
+            <> errorPredicate
+            <> [HI.sql|)::bigint,
+            COUNT(*) FILTER (WHERE |]
+            <> pageViewPredicate
+            <> [HI.sql|)::bigint,
+            MAX(attributes___user___id), MAX(attributes___user___full_name), MAX(attributes___user___email),
+            MAX(resource___service___name), |]
+            <> pageCols
+            <> [HI.sql|, false AS has_replay
+          FROM otel_logs_and_spans
+          WHERE |]
+            <> browserScope scope
+            <> [HI.sql| AND attributes___session___id IS NOT NULL AND attributes___session___id <> ''|]
+            <> extraWhere
+            <> [HI.sql| GROUP BY attributes___session___id HAVING |]
+            <> having
+            <> (if sessionFilter == ErrorSessionRows then [HI.sql| AND COUNT(*) FILTER (WHERE |] <> errorPredicate <> [HI.sql|) > 0|] else mempty)
+            <> [HI.sql| ORDER BY MAX(timestamp) DESC LIMIT 200|]
+        )
+    enrich [] = pure []
+    enrich rows = do
+      let ids = map (.id) rows
+      details :: [(Text, Maybe Text, Maybe Text)] <-
+        Hasql.interpTimefusion
+          scope.useTf
+          ( [HI.sql|SELECT attributes___session___id, |]
+              <> pageAndAgent
+              <> [HI.sql| FROM otel_logs_and_spans WHERE |]
+              <> browserScope (spanScope 0 [(row.startedAt, row.endedAt) | row <- rows] scope)
+              <> [HI.sql| AND attributes___session___id = ANY(#{ids}) GROUP BY attributes___session___id|]
+          )
+      let byId = M.fromList [(sid, (lastPage, userAgent)) | (sid, lastPage, userAgent) <- details]
+      pure [maybe row (\(lastPage, userAgent) -> row{lastPage, userAgent}) $ M.lookup row.id byId | row <- rows]
 
 
 -- | Every follow-up read of sessions already in hand scans only their own span. The newest
@@ -400,34 +391,6 @@ spanScope pad spans scope = case nonEmpty spans of
      in scope{queryScope = scope.queryScope{timeRange = (Just $ clamp from max $ addUTCTime (-pad) $ minimum1 $ fst <$> found, Just $ clamp to min $ addUTCTime pad $ maximum1 $ snd <$> found)}}
 
 
-enrichSessionRows :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> [RumSession] -> Eff es [RumSession]
-enrichSessionRows _ [] = pure []
-enrichSessionRows scope rows = do
-  let ids = map (.id) rows
-  details :: [(Text, Maybe Text, Maybe Text)] <-
-    Hasql.interpTimefusion
-      scope.useTf
-      ( [HI.sql|
-        SELECT attributes___session___id,
-          (ARRAY_AGG(|]
-          <> pagePath
-          <> [HI.sql| ORDER BY timestamp DESC, id DESC) FILTER (WHERE |]
-          <> pageViewPredicate
-          <> [HI.sql|))[1],
-          MAX(COALESCE(NULLIF(attributes___user_agent___original, ''), resource___user_agent___original))
-        FROM otel_logs_and_spans
-        WHERE |]
-          <> browserScope (spanScope 0 [(row.startedAt, row.endedAt) | row <- rows] scope)
-          <> [HI.sql| AND attributes___session___id = ANY(#{ids})
-        GROUP BY attributes___session___id|]
-      )
-  let byId = M.fromList [(sid, (lastPage, userAgent)) | (sid, lastPage, userAgent) <- details]
-  pure
-    [ maybe row (\(lastPage, userAgent) -> row{lastPage, userAgent}) $ M.lookup row.id byId
-    | row <- rows
-    ]
-
-
 -- The same lookup mode is used for both stores so recordings can enrich matched
 -- telemetry, and recording-only identities can discover their associated spans.
 data SessionMatch = SessionText (Maybe Text) | SessionIds [Text]
@@ -435,22 +398,6 @@ data SessionMatch = SessionText (Maybe Text) | SessionIds [Text]
 
 searchPattern :: Text -> Text
 searchPattern query = "%" <> T.replace "_" "\\_" (T.replace "%" "\\%" (T.replace "\\" "\\\\" query)) <> "%"
-
-
-sessionMatchPredicate :: SessionMatch -> HI.Sql
-sessionMatchPredicate (SessionIds ids) = [HI.sql| attributes___session___id = ANY(#{ids}) |]
-sessionMatchPredicate (SessionText Nothing) = [HI.sql| true |]
-sessionMatchPredicate (SessionText (Just query)) =
-  let needle = searchPattern query
-   in [HI.sql| COUNT(*) FILTER (WHERE
-          attributes___session___id ILIKE #{needle}
-          OR attributes___user___id ILIKE #{needle}
-          OR attributes___user___full_name ILIKE #{needle}
-          OR attributes___user___email ILIKE #{needle}
-          OR resource___service___name ILIKE #{needle}
-          OR (|]
-        <> pagePath
-        <> [HI.sql|) ILIKE #{needle}) > 0 |]
 
 
 -- | Traffic per user agent string, busiest first. Classification into browser, OS and
@@ -488,20 +435,19 @@ replaySessionRows scope match =
           WHERE project_id = #{projectId} AND last_event_at >= #{fromTime} AND created_at <= #{toTime}
             AND (event_file_count > 0 OR cardinality(file_keys) > 0 OR cardinality(shard_keys) > 0)
           AND |]
-            <> replayMatchPredicate match
+            <> matchPredicate
             <> [HI.sql|
           ORDER BY last_event_at DESC LIMIT 200
         |]
         )
-
-
-replayMatchPredicate :: SessionMatch -> HI.Sql
-replayMatchPredicate (SessionIds ids) = [HI.sql| CAST(session_id AS TEXT) = ANY(#{ids}) |]
-replayMatchPredicate (SessionText Nothing) = [HI.sql| true |]
-replayMatchPredicate (SessionText (Just query)) =
-  let needle = searchPattern query
-   in [HI.sql| (CAST(session_id AS TEXT) ILIKE #{needle}
-        OR user_id ILIKE #{needle} OR user_name ILIKE #{needle} OR user_email ILIKE #{needle}) |]
+  where
+    matchPredicate = case match of
+      SessionIds ids -> [HI.sql| CAST(session_id AS TEXT) = ANY(#{ids}) |]
+      SessionText Nothing -> [HI.sql| true |]
+      SessionText (Just query) ->
+        let needle = searchPattern query
+         in [HI.sql| (CAST(session_id AS TEXT) ILIKE #{needle}
+              OR user_id ILIKE #{needle} OR user_name ILIKE #{needle} OR user_email ILIKE #{needle}) |]
 
 
 searchSessions :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> Maybe Text -> SessionFilter -> Eff es [RumSession]
@@ -525,7 +471,12 @@ searchSessions scope query sessionFilter = do
   -- recordings' combined span (most of the window) cost 34s on TimeFusion for that nothing.
   extraSpans <- if null newRecordings || isNothing query then pure [] else otelSessionRows (spanScope recordingPad [(r.startedAt, r.endedAt) | r <- newRecordings] scope) (SessionIds newRecordingIds) sessionFilter
   extraRecordings <- if null newSpanIds then pure [] else replaySessionRows scope (SessionIds newSpanIds)
-  pure $ take 200 $ filterSessions sessionFilter $ mergeSessions scope.queryScope (extraSpans <> spans) (recordings <> extraRecordings)
+  pure $ take 200 $ filter keep $ mergeSessions scope.queryScope (extraSpans <> spans) (recordings <> extraRecordings)
+  where
+    keep session = case sessionFilter of
+      AllSessionRows -> True
+      ErrorSessionRows -> session.errors > 0
+      ReplaySessionRows -> session.hasReplay
 
 
 sessionDetail :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> Text -> Eff es (Maybe RumSession)
@@ -820,7 +771,7 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
 
 
 rumNavTabs_ :: RumLinks -> RumTab -> Html ()
-rumNavTabs_ links active = navTabStrip_ NavLinks "Real User Monitoring views" "" [(toHtml $ tabLabel tab, rumUrl links [("tab", display tab)], tab == active) | tab <- [minBound .. maxBound]]
+rumNavTabs_ links active = navTabStrip_ NavLinks "Real User Monitoring views" "" [(toHtml $ T.toTitle $ display tab, rumUrl links [("tab", display tab)], tab == active) | tab <- [minBound .. maxBound]]
 
 
 rumActions_ :: RumLinks -> Html ()
@@ -895,8 +846,8 @@ panelSwapAttrs page panel refresh trigger syncMode =
     url =
       rumUrl page.links
         $ [("tab", display page.tab), ("panel", display panel), ("deferred", "1")]
-        <> [(key, value) | (key, Just value) <- [("q", page.query), ("filter", sessionFilterParam page.sessionFilter), ("session", page.selectedSession)]]
-        <> [("refresh", "1") | refresh]
+          <> [(key, value) | (key, Just value) <- [("q", page.query), ("filter", sessionFilterParam page.sessionFilter), ("session", page.selectedSession)]]
+          <> [("refresh", "1") | refresh]
 
 
 rumPage_ :: RumData -> Html ()
@@ -1175,27 +1126,20 @@ topPages_ links pages = rumPanel_ "Top pages" "Traffic and real-user load latenc
 
 vitalsPanel_ :: [Vital] -> Html ()
 vitalsPanel_ vitals = rumPanel_ "Core Web Vitals" "P75 of intervals ending in this range; histogram values are bucket estimates" Nothing do
-  div_ [class_ "divide-y divide-strokeWeak"] $ forM_ vitals vitalRow_
-
-
-vitalRow_ :: Vital -> Html ()
-vitalRow_ vital = div_ [class_ "px-3 py-3"] do
-  div_ [class_ "flex items-start justify-between gap-3"] do
-    div_ [class_ "min-w-0"] do
-      h3_ [class_ "truncate text-sm font-medium text-textStrong"] $ toHtml vital.label
-      p_ [class_ "mt-0.5 text-xs text-textWeak"] $ toHtml vital.description
-      p_ [class_ "mt-0.5 text-xs text-textWeak"] $ toHtml $ measurementNote vital
-    div_ [class_ "shrink-0 text-right"] do
-      strong_ [class_ $ "block text-sm font-semibold tabular-nums " <> style.textClass] $ toHtml $ formatVital vital
-      span_ [class_ "text-xs text-textWeak"] $ toHtml $ observationLabel vital.measurement
-  div_ [class_ "mt-2 grid grid-cols-3 gap-1", Aria.label_ $ vital.label <> " rating: " <> style.label] do
-    forM_ [Good, NeedsImprovement, Poor] (`ratingBand` vitalRating vital)
-  where
-    style = ratingStyle $ vitalRating vital
-
-
-ratingBand :: VitalRating -> VitalRating -> Html ()
-ratingBand band active = span_ [class_ $ "h-1.5 rounded-full " <> if band == active then (ratingStyle band).fillClass else "bg-fillWeak", Aria.hidden_ "true"] ""
+  div_ [class_ "divide-y divide-strokeWeak"] $ forM_ vitals \vital -> do
+    let rating = vitalRating vital
+        style = ratingStyle rating
+    div_ [class_ "px-3 py-3"] do
+      div_ [class_ "flex items-start justify-between gap-3"] do
+        div_ [class_ "min-w-0"] do
+          h3_ [class_ "truncate text-sm font-medium text-textStrong"] $ toHtml vital.label
+          p_ [class_ "mt-0.5 text-xs text-textWeak"] $ toHtml vital.description
+          p_ [class_ "mt-0.5 text-xs text-textWeak"] $ toHtml $ measurementNote vital
+        div_ [class_ "shrink-0 text-right"] do
+          strong_ [class_ $ "block text-sm font-semibold tabular-nums " <> style.textClass] $ toHtml $ formatVital vital
+          span_ [class_ "text-xs text-textWeak"] $ toHtml $ observationLabel vital.measurement
+      div_ [class_ "mt-2 grid grid-cols-3 gap-1", Aria.label_ $ vital.label <> " rating: " <> style.label]
+        $ forM_ [Good, NeedsImprovement, Poor] \band -> span_ [class_ $ "h-1.5 rounded-full " <> if band == rating then (ratingStyle band).fillClass else "bg-fillWeak", Aria.hidden_ "true"] ""
 
 
 -- | One issue: every raw error whose type and normalized message agree. Grouped at render
@@ -1366,13 +1310,6 @@ sessionWorkspace_ page =
     when (page.panel == Just PanelSessionDetail) $ panelRevalidation_ page PanelSessionDetail
   where
     selected = page.selectedSessionData <|> (page.selectedSession >>= \sid -> find ((== sid) . (.id)) page.sessions)
-
-
-filterSessions :: SessionFilter -> [RumSession] -> [RumSession]
-filterSessions sessionFilter = filter $ \session -> case sessionFilter of
-  AllSessionRows -> True
-  ErrorSessionRows -> session.errors > 0
-  ReplaySessionRows -> session.hasReplay
 
 
 sessionFilterLabel :: SessionFilter -> Text
@@ -1991,7 +1928,7 @@ sessionsUrl :: RumLinks -> Maybe Text -> SessionFilter -> Maybe Text -> Text
 sessionsUrl links query sessionFilter sessionM =
   rumUrl links
     $ ("tab", "sessions")
-    : [(key, value) | (key, Just value) <- [("q", query), ("filter", sessionFilterParam sessionFilter), ("session", sessionM)]]
+      : [(key, value) | (key, Just value) <- [("q", query), ("filter", sessionFilterParam sessionFilter), ("session", sessionM)]]
 
 
 degradedBanner_ :: RumData -> RumPanel -> Html ()

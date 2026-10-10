@@ -70,6 +70,7 @@ module Utils (
   formatOffset,
   navTabAttrs,
   dashboardContentNavAttrs,
+  DashboardSwap (..),
   explorerNavTabs_,
   navTabStrip_,
   TabStrip (..),
@@ -1527,17 +1528,23 @@ navTabAttrs =
   ]
 
 
+data DashboardSwap = TabPanel | WholePage
+
+
 -- | The range comes from the live picker, not @url@: a range picked client-side leaves every
 -- server-rendered link's @since@/@from@/@to@ stale, and a duplicate key resolves to the first.
-dashboardContentNavAttrs :: Text -> [Attribute]
-dashboardContentNavAttrs url =
+-- A tab URL answers htmx with just the tab panel; a tabless dashboard's URL with the whole page.
+dashboardContentNavAttrs :: DashboardSwap -> Text -> [Attribute]
+dashboardContentNavAttrs target url =
   [ hxGet_ $ path <> foldMap (("?" <>) . T.intercalate "&" . toList) (nonEmpty kept)
   , hxVals_ "js:{...getTimeRange()}"
-  , hxTarget_ "#dashboard-tabs-content"
   , hxSwap_ "outerMorph"
   , hxPushUrl_ "true"
   , [__|on click set my.preloadState to 'DONE'|]
   ]
+    <> case target of
+      TabPanel -> [hxTarget_ "#dashboard-tabs-content"]
+      WholePage -> [hxTarget_ "#main-content", hxSelect_ "#main-content", term "hx-select-oob" "#main-sidenav:outerMorph,#main-navbar:outerMorph"]
   where
     (path, qs) = T.breakOn "?" url
     kept = filter (not . (`elem` ["", "since", "from", "to"]) . T.takeWhile (/= '=')) $ T.splitOn "&" $ T.drop 1 qs

@@ -547,7 +547,7 @@ spec = sequential do
             liftIO $ withResource tr.trPool \conn ->
               void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncFromRepo testPid
             runSyncJobs tr
-            dashes <- runTestBg frozenTime tr $ Dashboards.selectDashboardsSortedBy testPid "title"
+            dashes <- runTestBg frozenTime tr $ Dashboards.selectDashboardsSortedBy testPid Dashboards.Asc Dashboards.DSTitle
             case filter (\d -> d.title == "Created In GitHub") dashes of
               (d:_) -> d.filePath `shouldBe` Just path
               [] -> fail "Expected dashboard not found"
@@ -572,7 +572,7 @@ spec = sequential do
             liftIO $ withResource tr.trPool \conn ->
               void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncFromRepo testPid
             runSyncJobs tr
-            dashes <- runTestBg frozenTime tr $ Dashboards.selectDashboardsSortedBy testPid "title"
+            dashes <- runTestBg frozenTime tr $ Dashboards.selectDashboardsSortedBy testPid Dashboards.Asc Dashboards.DSTitle
             any (\d -> d.title == "V2 Updated") dashes `shouldBe` True
 
           it "deletes local dashboard when GitHub file removed" \tr -> do
@@ -586,7 +586,7 @@ spec = sequential do
             liftIO $ withResource tr.trPool \conn ->
               void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncFromRepo testPid
             runSyncJobs tr
-            dashesBefore <- runTestBg frozenTime tr $ Dashboards.selectDashboardsSortedBy testPid "title"
+            dashesBefore <- runTestBg frozenTime tr $ Dashboards.selectDashboardsSortedBy testPid Dashboards.Asc Dashboards.DSTitle
             let beforeCount = length $ filter (\d -> d.filePath == Just path) dashesBefore
             beforeCount `shouldBe` 1
             -- Delete from GitHub
@@ -597,7 +597,7 @@ spec = sequential do
             liftIO $ withResource tr.trPool \conn ->
               void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncFromRepo testPid
             runSyncJobs tr
-            dashesAfter <- runTestBg frozenTime tr $ Dashboards.selectDashboardsSortedBy testPid "title"
+            dashesAfter <- runTestBg frozenTime tr $ Dashboards.selectDashboardsSortedBy testPid Dashboards.Asc Dashboards.DSTitle
             let afterCount = length $ filter (\d -> d.filePath == Just path) dashesAfter
             afterCount `shouldBe` 0
 
@@ -623,7 +623,7 @@ spec = sequential do
               void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncFromRepo testPid
             runSyncJobs tr
             -- Verify local updated - use filePath matching since dashboard is updated in place
-            dashes <- runTestBg frozenTime tr $ Dashboards.selectDashboardsSortedBy testPid "title"
+            dashes <- runTestBg frozenTime tr $ Dashboards.selectDashboardsSortedBy testPid Dashboards.Asc Dashboards.DSTitle
             case filter (\d -> d.filePath == Just path) dashes of
               (dash:_) -> do
                 dash.title `shouldBe` "Round Trip Modified"

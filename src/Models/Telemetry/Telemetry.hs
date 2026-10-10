@@ -164,7 +164,6 @@ import Pkg.Metrics qualified as Metrics
 import Pkg.UUID qualified as UUIDBytes
 import Relude hiding (ask)
 import Relude.Extra.Foldable1 (maximum1, minimum1)
-import System.IO (hPutStrLn)
 import System.Logging qualified as Log
 import System.Tracing (forkWithCtx)
 import Text.Casing (fromAny, toKebab)
@@ -1743,7 +1742,7 @@ insertAndHandOff tfPgTypes target worker caches records
       res <- bulkInsertOtelLogsAndSpansTF tfPgTypes target cleanRecords
       -- Hand-off only when every row landed on every required store; a
       -- failed batch stays Left → DLQ.
-      when (isRight res) $ liftIO $ handOffBatches worker caches cleanRecords
+      when (isRight res) $ handOffBatches worker caches cleanRecords
       pure res
 
 
@@ -1790,19 +1789,20 @@ ingestionRedactionPaths = V.fromList [".password", ".set-cookie", ".authorizatio
 
 -- | Group `records` by `project_id`, build one `ExtractionBatch` per group, and
 -- submit via STM. Rows whose `project_id` is unparseable or whose project cache
--- is absent are silently skipped — the safety-net picks them up on the next
--- tick via `processed_at IS NULL`. Runs in IO (pure STM + one metric bump).
+-- is absent are skipped — the safety-net picks them up on the next tick via
+-- `processed_at IS NULL`; an unparseable id is logged at attention level.
 handOffBatches
-  :: EW.WorkerState OtelLogsAndSpans
+  :: (IOE :> es, Log :> es)
+  => EW.WorkerState OtelLogsAndSpans
   -> HM.HashMap Projects.ProjectId Projects.ProjectCache
   -> V.Vector OtelLogsAndSpans
-  -> IO ()
+  -> Eff es ()
 handOffBatches worker caches records = do
   let groups :: HM.HashMap Text (NonEmpty OtelLogsAndSpans)
       groups = V.foldr' (\r -> HM.insertWith (<>) r.project_id (r :| [])) HM.empty records
   forM_ (HM.toList groups) \(pidText, rowsNE) ->
     case idFromText pidText of
-      Nothing -> hPutStrLn stderr $ "handOffBatches: unparseable project_id: " <> toString pidText
+      Nothing -> Log.logAttention "handOffBatches: unparseable project_id" (AE.object ["project_id" AE..= pidText])
       Just pid -> case HM.lookup pid caches of
         Nothing -> pass -- safety-net picks these up via processed_at IS NULL
         Just cache -> do
