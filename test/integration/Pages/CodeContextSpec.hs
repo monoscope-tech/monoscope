@@ -42,7 +42,7 @@ import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Git qualified as Git
 import Pkg.TestUtils
 import Relude
-import Servant (getHeaders)
+import Servant (getHeaders, getResponse)
 import System.Config (AuthContext (..), EnvConfig (..))
 import Test.Hspec
 import UnliftIO.Exception (throwIO)
@@ -239,6 +239,24 @@ spec = do
             Left err -> fail $ show err
 
     describe "Source code settings (code mappings)" do
+      it "repositorySettings_readOnlyMembersSeeMappingsWithoutEditControlsOrProviderRequests" \tr -> do
+        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
+            uid = (getResponse tr.trSessAndHeader).user.id
+        Just account <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "team" (Just 42) Nothing
+        runQueryEffect tr $ CodeContext.insertCodeMapping testPid account.id (Git.RepoRef "team" "checkout" "main") (Just "checkout") "/app/" "src"
+        [repository] <- runQueryEffect tr $ GitSync.getRepositories testPid
+        runQueryEffect tr $ Hasql.interpExecute_ [HI.sql| UPDATE projects.project_members SET permission = 'view' WHERE project_id = #{testPid} AND user_id = #{uid} |]
+        (_, details) <- testServant tr $ PageCodeContext.repositoryGetH testPid repository.id
+        render (Lucid.toHtml details.content) `shouldSatisfy` T.isInfixOf "View source context"
+        render (Lucid.toHtml details.content) `shouldNotSatisfy` T.isInfixOf "Configure source context"
+        let noProvider = interpose @W.HTTP \_ _ -> liftIO $ expectationFailure "Read-only repository settings must not contact the provider" >> throwIO (InvalidUrlException "https://git.invalid" "Unexpected provider call")
+        for_ [PageCodeContext.repositoriesGetH testPid (Just PageCodeContext.Configuration) Nothing, PageCodeContext.repositorySourceGetH testPid repository.id Nothing Nothing, PageCodeContext.codeMappingsEditorGetH testPid (Just account.id) Nothing] \handler -> do
+          (_, page) <- testServant tr $ noProvider handler
+          let html = render page
+          html `shouldSatisfy` T.isInfixOf "team/checkout"
+          html `shouldSatisfy` T.isInfixOf "A project editor can"
+          for_ ["Unlink", "Link repository", "Save review settings", "Install GitHub App", "Connect with token"] \control -> html `shouldNotSatisfy` T.isInfixOf control
+
       it "repositoryPicker_connectsCodebasesWithoutEnablingCapabilitiesAndRejectsUnavailableSelections" \tr -> do
         let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
             repositories = [Git.GitRepo "team/checkout" "checkout" True "trunk", Git.GitRepo "team/catalog" "catalog" False "main"]

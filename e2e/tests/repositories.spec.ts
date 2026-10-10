@@ -102,11 +102,17 @@ test('repository account choice keeps service mappings with the selected team', 
     await expect(panel.getByRole('button', { name: 'Unlink team-b/checkout', exact: true })).toHaveCount(0);
     await panel.locator('input[name="service"]').fill('team-0');
     await panel.locator('input[name="ref"]').fill('release');
-    await panel.getByRole('button', { name: 'Link repository', exact: true }).click();
+    await Promise.all([
+      page.waitForResponse(response => response.request().method() === 'POST' && response.url().endsWith(`/repositories/${sourceRepository}/source`)),
+      panel.getByRole('button', { name: 'Link repository', exact: true }).click(),
+    ]);
     await expect(panel.getByRole('button', { name: 'Unlink team-a/checkout', exact: true })).toBeVisible();
     await expect(panel).toHaveCount(1);
     expect(sql(`SELECT ref FROM projects.code_mappings WHERE project_id = '${pid}' AND owner = 'team-a'`).toString().trim()).toBe('release');
-    await panel.getByRole('button', { name: 'Save review settings', exact: true }).click();
+    await Promise.all([
+      page.waitForResponse(response => response.request().method() === 'POST' && response.url().endsWith(`/repositories/${sourceRepository}/source/reviews`)),
+      panel.getByRole('button', { name: 'Save review settings', exact: true }).click(),
+    ]);
     await expect(panel.getByRole('button', { name: 'Unlink team-a/checkout', exact: true })).toBeVisible();
     await expect(panel.getByRole('button', { name: 'Unlink team-b/checkout', exact: true })).toHaveCount(0);
     await expect(panel).toHaveCount(1);
@@ -123,6 +129,14 @@ test('repository account choice keeps service mappings with the selected team', 
     }
     const mapping = sql(`SELECT id FROM projects.code_mappings WHERE project_id = '${pid}' LIMIT 1`).toString().trim();
     sql(`UPDATE projects.project_members SET permission = 'view' WHERE project_id = '${pid}' AND user_id = '${uid}';`);
+    await page.goto(`/p/${pid}/repositories/${sourceRepository}/source`);
+    await expect(panel.getByRole('button', { name: /Unlink|Link repository|Save review settings/ })).toHaveCount(0);
+    await expect(panel.getByText('A project editor can configure source context and pull request reviews.')).toBeVisible();
+    await expect(panel.locator('span').filter({ hasText: 'team-a/checkout' })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath('repository-source-read-only-light.png'), fullPage: true });
+    await page.goto(`/p/${pid}/repositories?tab=configuration`);
+    await expect(page.getByRole('link', { name: 'Install GitHub App', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('link', { name: 'Add repositories', exact: true })).toHaveCount(0);
     expect((await page.request.delete(`/p/${pid}/settings/code-mappings/${mapping}`)).status()).toBe(403);
     expect((await page.request.post(`/p/${pid}/repositories/${sourceRepository}/source`, { form: { repo: 'checkout', service: 'forbidden' } })).status()).toBe(403);
     expect((await page.request.delete(`/p/${pid}/repositories/${sourceRepository}/source/${otherMapping}`)).status()).toBe(403);
@@ -236,6 +250,8 @@ test('repository dashboard setup reuses a token account and keeps retries scoped
     sql(`UPDATE projects.project_members SET permission = 'view' WHERE project_id = '${pid}' AND user_id = '${uid}';`);
     await page.reload();
     await expect(panel.getByText('A project editor can configure dashboard sync for this repository.', { exact: true })).toBeVisible();
+    await expect(panel.getByText('Sync enabled', { exact: true })).toBeVisible();
+    await expect(panel.getByText('release · ops/dashboards/', { exact: true })).toBeVisible();
     await expect(panel.getByRole('button', { name: 'Save', exact: true })).toHaveCount(0);
     expect((await page.request.post(`/p/${pid}/repositories/${repository}/dashboards`, { form: { credentialId: account, branch: 'forbidden' } })).status()).toBe(403);
     await page.goto(`/p/${pid}/repositories?tab=configuration`);

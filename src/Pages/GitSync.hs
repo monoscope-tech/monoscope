@@ -488,7 +488,14 @@ instance ToHtml RepositoryDashboardGet where
     div_ [id_ "repository-dashboard-content", class_ "space-y-4"] do
       whenJust page.setupError $ p_ [role_ "alert", class_ "text-sm text-textError"] . toHtml
       if not (maybe False (>= ProjectMembers.PEdit) page.permission)
-        then p_ [class_ "text-sm text-textWeak"] "A project editor can configure dashboard sync for this repository."
+        then do
+          p_ [class_ "text-sm text-textWeak"] "A project editor can configure dashboard sync for this repository."
+          case page.sync of
+            Nothing -> p_ [class_ "text-sm text-textWeak"] "Dashboard sync is not configured."
+            Just sync -> div_ [class_ "space-y-2 rounded-xl border border-strokeWeak p-4"] do
+              p_ [class_ "text-sm text-textStrong"] $ if sync.syncEnabled then "Sync enabled" else "Sync paused"
+              p_ [class_ "text-xs text-textWeak break-all"] $ toHtml $ sync.branch <> " · " <> GitSync.getDashboardsPath sync
+              whenJust sync.lastError $ p_ [role_ "status", class_ "text-sm text-textError break-words"] . toHtml
         else case page.sync of
           Just sync -> do
             toHtml $ gitSyncSettingsView page.hostUrl repository.projectId (Just sync)

@@ -127,7 +127,8 @@ instance FromHttpApiData RepositoryTab where
 
 repositoriesGetH :: Projects.ProjectId -> Maybe RepositoryTab -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 repositoriesGetH pid tabM sampleM = do
-  (_, _, bw) <- mkPageCtx pid
+  (session, _, bw) <- mkPageCtx pid
+  canEdit <- maybe False (>= ProjectMembers.PEdit) <$> ProjectMembers.getUserPermission pid session.user.id
   let tab = fromMaybe Overview tabM
       base = "/p/" <> pid.toText <> "/repositories"
   content <- case tab of
@@ -141,7 +142,7 @@ repositoriesGetH pid tabM sampleM = do
     PullRequests -> do
       cfg <- (.config) <$> Effectful.Reader.Static.ask @AuthContext
       runs <- ImpactReviews.latestRuns pid
-      pure $ reviewHistory_ cfg runs
+      pure $ reviewHistory_ canEdit cfg runs
     Configuration -> do
       view <- codeMappingsContent pid sampleM Nothing Nothing
       syncs <- GitSync.getGitSyncs pid
@@ -152,18 +153,22 @@ repositoriesGetH pid tabM sampleM = do
           div_ [id_ "code-mappings-content"] view
         section_ [class_ "space-y-4 border-t border-strokeWeak pt-6"] do
           h2_ [class_ "text-base font-semibold text-textStrong"] "Dashboard sync"
-          div_ [id_ "git-sync-content", class_ "space-y-6"] do
-            forM_ syncs $ GitSyncPage.gitSyncSettingsView cfg.hostUrl pid . Just
-            details_ [class_ "rounded-xl border border-strokeWeak p-4"] do
-              summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] "Connect a dashboard repository"
-              div_ [class_ "pt-4"] $ GitSyncPage.gitSyncSettingsView cfg.hostUrl pid Nothing
+          if canEdit
+            then div_ [id_ "git-sync-content", class_ "space-y-6"] do
+              forM_ syncs $ GitSyncPage.gitSyncSettingsView cfg.hostUrl pid . Just
+              details_ [class_ "rounded-xl border border-strokeWeak p-4"] do
+                summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] "Connect a dashboard repository"
+                div_ [class_ "pt-4"] $ GitSyncPage.gitSyncSettingsView cfg.hostUrl pid Nothing
+            else do
+              p_ [class_ "text-sm text-textWeak"] "A project editor can configure dashboard sync."
+              a_ [href_ base, class_ "text-sm text-textBrand underline underline-offset-2"] "View repositories and sync status"
   addRespHeaders $ bodyWrapper bw{pageTitle = "Repositories"} $ div_ [class_ "h-full w-full overflow-y-auto"] do
     section_ [class_ "mx-auto max-w-6xl space-y-6 px-4 py-6 sm:px-8 sm:py-8"] do
       header_ [class_ "flex flex-wrap items-start justify-between gap-4"] do
         div_ [class_ "space-y-1"] do
           h1_ [class_ "text-xl sm:text-2xl font-semibold tracking-tight text-textStrong"] "Repositories"
           p_ [class_ "text-sm text-textWeak max-w-2xl"] "Connect your code to production. Review pull requests, read source in stack traces, and sync dashboards."
-        a_ [href_ (base <> "/connect"), class_ "btn btn-sm btn-ghost gap-2"] do
+        when canEdit $ a_ [href_ (base <> "/connect"), class_ "btn btn-sm btn-ghost gap-2"] do
           faSprite_ "plus" "regular" "h-3.5 w-3.5"
           "Add repositories"
       nav_ [id_ "repository-nav", Aria.label_ "Repository views", class_ "flex flex-wrap gap-1 border-b border-strokeWeak pb-2", term "preload" "mouseover"]
@@ -223,8 +228,8 @@ repositoriesGetH pid tabM sampleM = do
                 Just _ -> colorChip_ "" "circle-info" "Awaiting first sync"
                 Nothing -> colorChip_ "" "circle-info" "Not configured"
 
-    reviewHistory_ :: EnvConfig -> [ImpactReviews.ReviewRun] -> Html ()
-    reviewHistory_ cfg runs = div_ [class_ "space-y-4"] do
+    reviewHistory_ :: Bool -> EnvConfig -> [ImpactReviews.ReviewRun] -> Html ()
+    reviewHistory_ canEdit cfg runs = div_ [class_ "space-y-4"] do
       h2_ [class_ "text-base font-semibold text-textStrong"] "Production impact reviews"
       p_ [class_ "text-sm text-textWeak max-w-2xl"] "Advisory pull request reviews connect code changes to this project's production telemetry. Configure reviews and evidence sharing for each repository in Configuration."
       when (null runs) $ div_ [class_ "rounded-xl border border-strokeWeak p-5 space-y-2"] do
@@ -239,7 +244,7 @@ repositoriesGetH pid tabM sampleM = do
         whenJust run.result \value -> case AE.fromJSON value of
           AE.Error _ -> p_ [class_ "mt-2 text-sm text-textWeak"] "The saved review could not be displayed. Rerun the review."
           AE.Success result -> div_ [class_ "prose prose-sm mt-3 max-w-none"] $ renderMarkdown (ImpactReview.renderReview cfg.hostUrl run True result)
-        when (run.revision == run.latestRevision && run.state /= ImpactReviews.Reviewing) $ button_ [class_ "btn btn-sm btn-ghost mt-3", hxPost_ ("/p/" <> pid.toText <> "/settings/pr-reviews/" <> run.id.toText <> "/rerun"), hxTarget_ "#repository-content", hxSelect_ "#repository-content", hxSwap_ "outerMorph"] "Rerun review"
+        when (canEdit && run.revision == run.latestRevision && run.state /= ImpactReviews.Reviewing) $ button_ [class_ "btn btn-sm btn-ghost mt-3", hxPost_ ("/p/" <> pid.toText <> "/settings/pr-reviews/" <> run.id.toText <> "/rerun"), hxTarget_ "#repository-content", hxSelect_ "#repository-content", hxSwap_ "outerMorph"] "Rerun review"
 
 
 data ReviewReadiness
@@ -257,19 +262,21 @@ data RepositoryGet = RepositoryGet
   , mappings :: [CodeContext.CodeMapping]
   , dashboardSync :: Maybe GitSync.GitHubSync
   , reviewReadiness :: ReviewReadiness
+  , permission :: Maybe ProjectMembers.Permissions
   }
   deriving stock (Show)
 
 
 repositoryGetH :: Projects.ProjectId -> GitSync.RepositoryId -> ATAuthCtx (RespHeaders (PageCtx RepositoryGet))
 repositoryGetH pid rid = do
-  (_, _, bw) <- mkPageCtx pid
+  (session, _, bw) <- mkPageCtx pid
   repository <- GitSync.getRepository pid rid >>= maybe (throwError err404) pure
   credentials <- GitSync.getGitHubCredentials pid
   allMappings <- CodeContext.getCodeMappings pid
   syncs <- GitSync.getGitSyncs pid
   settings <- ImpactReviews.repositorySettings pid
   cfg <- (.config) <$> Effectful.Reader.Static.ask @AuthContext
+  permission <- ProjectMembers.getUserPermission pid session.user.id
   let mappings = filter (mappingInRepository credentials repository) allMappings
       dashboardSync = find (\s -> (s.host, s.apiBase, s.owner, s.repo) == (repository.host, repository.apiBase, repository.owner, repository.repo)) syncs
       reviewSettings = find (\s -> s.owner == T.toLower repository.owner && s.repo == T.toLower repository.repo) settings
@@ -279,13 +286,14 @@ repositoryGetH pid rid = do
         | not (any (isJust . (.service)) mappings) = ReviewNeedsService
         | Just s <- reviewSettings = if s.enabled then ReviewReady s else ReviewDisabled
         | otherwise = ReviewNeedsApp
-  addRespHeaders $ PageCtx bw{pageTitle = repository.owner <> "/" <> repository.repo} RepositoryGet{repository, mappings, dashboardSync, reviewReadiness}
+  addRespHeaders $ PageCtx bw{pageTitle = repository.owner <> "/" <> repository.repo} RepositoryGet{repository, mappings, dashboardSync, reviewReadiness, permission}
 
 
 instance ToHtml RepositoryGet where
   toHtml page = section_ [class_ "mx-auto max-w-4xl space-y-8 px-4 py-6 sm:px-8 sm:py-8"] do
     let repository = page.repository
         base = "/p/" <> repository.projectId.toText <> "/repositories"
+        canEdit = maybe False (>= ProjectMembers.PEdit) page.permission
     a_ [href_ base, class_ "inline-flex items-center gap-2 text-sm text-textBrand hover:underline"] do
       faSprite_ "arrow-left" "regular" "h-3 w-3"
       "All repositories"
@@ -300,7 +308,7 @@ instance ToHtml RepositoryGet where
           p_ [class_ "text-sm font-medium text-textStrong break-words"] $ toHtml $ fromMaybe "All services" mapping.service
           p_ [class_ "text-xs text-textWeak break-all"] $ toHtml $ scopeLabel mapping
           code_ [class_ "text-xs text-textWeak break-all"] $ toHtml mapping.ref
-      a_ [href_ (base <> "/" <> repository.id.toText <> "/source"), class_ "btn btn-sm btn-ghost"] "Configure source context"
+      a_ [href_ (base <> "/" <> repository.id.toText <> "/source"), class_ "btn btn-sm btn-ghost"] $ if canEdit then "Configure source context" else "View source context"
     section_ [class_ "space-y-3"] do
       h2_ [class_ "text-base font-semibold text-textStrong"] "Production impact reviews"
       case page.reviewReadiness of
@@ -313,7 +321,7 @@ instance ToHtml RepositoryGet where
         ReviewNeedsServer -> p_ [class_ "text-sm text-textWeak"] "An administrator must configure the GitHub App and webhook before automatic reviews can run."
         ReviewUnsupportedHost -> p_ [class_ "text-sm text-textWeak"] "Automatic pull request reviews currently support GitHub.com. Source context and dashboard sync remain available for this host."
       div_ [class_ "flex flex-wrap gap-2"] do
-        a_ [href_ (base <> "/" <> repository.id.toText <> "/source"), class_ "btn btn-sm btn-ghost"] "Configure reviews"
+        a_ [href_ (base <> "/" <> repository.id.toText <> "/source"), class_ "btn btn-sm btn-ghost"] $ if canEdit then "Configure reviews" else "View review settings"
         a_ [href_ (base <> "?tab=reviews"), class_ "btn btn-sm btn-ghost"] "Review history"
     section_ [class_ "space-y-3"] do
       h2_ [class_ "text-base font-semibold text-textStrong"] "Dashboard sync"
@@ -323,7 +331,7 @@ instance ToHtml RepositoryGet where
           whenJust sync.lastError $ p_ [role_ "status", class_ "text-sm text-textError break-words"] . toHtml
           p_ [class_ "text-sm text-textWeak break-all"] $ toHtml $ sync.branch <> " · " <> GitSync.getDashboardsPath sync
           colorChip_ "" "code-branch" $ if sync.syncEnabled then "Sync enabled" else "Sync paused"
-      a_ [href_ (base <> "/" <> repository.id.toText <> "/dashboards"), class_ "btn btn-sm btn-ghost"] "Configure dashboard sync"
+      a_ [href_ (base <> "/" <> repository.id.toText <> "/dashboards"), class_ "btn btn-sm btn-ghost"] $ if canEdit then "Configure dashboard sync" else "View dashboard sync"
   toHtmlRaw = toHtml
 
 
@@ -391,18 +399,21 @@ codeMappingsEditorGetH pid credentialM sampleM = do
 
 codeMappingsContent :: Projects.ProjectId -> Maybe Text -> Maybe GitSync.GitHubCredentialId -> Maybe GitSync.Repository -> ATAuthCtx (Html ())
 codeMappingsContent pid sampleM credentialM repositoryM = do
-  allAccounts <- codeContextCredentials pid
+  session <- Projects.getSession
+  canEdit <- maybe False (>= ProjectMembers.PEdit) <$> ProjectMembers.getUserPermission pid session.user.id
+  allAccounts <- if canEdit then codeContextCredentials pid else GitSync.getGitHubCredentials pid
   let accounts = filter (\c -> maybe True (\r -> (r.host, r.apiBase) == (c.host, c.apiBase)) repositoryM) allAccounts
       requested = credentialM <|> (repositoryM >>= (.credentialId))
-  selected <- codeContextCredential pid requested
+  selected <- if canEdit then codeContextCredential pid requested else pure Nothing
   let credM = selected >>= \c -> guard (any ((== c.id) . (.id)) accounts && (isNothing repositoryM || isJust requested)) $> c
   mappings <- filter (\m -> maybe True (\r -> mappingInRepository accounts r m) repositoryM) <$> CodeContext.getCodeMappings pid
   repoResult <- maybe (pure $ Right []) credentialRepos credM
   reviewSettings <- filter (\settings -> maybe True (\r -> r.host == Git.GitHub && isNothing r.apiBase && (settings.owner, settings.repo) == (T.toLower r.owner, T.toLower r.repo)) repositoryM) <$> ImpactReviews.repositorySettings pid
   authConfig <- (.config) <$> Effectful.Reader.Static.ask @AuthContext
   pure $ div_ [class_ "space-y-6"] do
-    unless (null mappings) $ div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak"] $ forM_ mappings mappingRow_
-    unless (null accounts)
+    unless canEdit $ p_ [class_ "text-sm text-textWeak"] "A project editor can configure source context and pull request reviews."
+    unless (null mappings) $ div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak"] $ forM_ mappings (mappingRow_ canEdit)
+    when (canEdit && not (null accounts))
       $ form_
         ( [ action_ editorUrl
           , method_ "get"
@@ -424,7 +435,7 @@ codeMappingsContent pid sampleM credentialM repositoryM = do
               $ toHtml
               $ account.account <> " · " <> fromMaybe (Git.hostLabel account.host) account.apiBase
         htmxIndicator_ "code-account-indicator" LdXS
-    case credM of
+    when canEdit $ case credM of
       Nothing | null accounts -> do
         p_ [class_ "text-sm text-textWeak max-w-2xl"] "Connect an account to link your services to source code and production impact reviews. The same connection can sync dashboards."
         a_ [href_ ("/p/" <> pid.toText <> "/settings/git-sync/install?to=code"), class_ "btn btn-sm btn-primary gap-2"] do
@@ -444,21 +455,27 @@ codeMappingsContent pid sampleM credentialM repositoryM = do
       p_ [class_ "text-xs text-textWeak"] "Linked GitHub repositories receive advisory PR comments based on this project's telemetry. Ready PRs are reviewed when opened or updated."
       when (T.null authConfig.githubAppWebhookSecret) $ p_ [class_ "text-xs text-textError"] "Reviews need a GitHub App webhook secret. Ask your Monoscope administrator to configure it."
       when (null reviewSettings) $ p_ [class_ "text-xs text-textWeak"] "Link a repository using a GitHub App installation to enable automatic reviews."
-      forM_ reviewSettings \settings -> form_ ([class_ "flex flex-wrap items-end gap-3 rounded-lg border border-strokeWeak p-3", hxPost_ (maybe ("/p/" <> pid.toText <> "/settings/pr-reviews") ((<> "/reviews") . sourceUrl) repositoryM), hxTarget_ "#code-mappings-content"] <> scopedSwap) $ do
-        input_ [type_ "hidden", name_ "owner", value_ settings.owner]
-        input_ [type_ "hidden", name_ "repo", value_ settings.repo]
-        span_ [class_ "text-sm font-medium text-textStrong"] $ toHtml (settings.owner <> "/" <> settings.repo)
-        label_ [class_ "text-xs text-textWeak space-y-1"] do
-          span_ [class_ "block"] "PR reviews"
-          select_ [name_ "enabled", class_ "select select-sm"] do
-            option_ ([value_ "true"] <> [selected_ "selected" | settings.enabled]) "Enabled"
-            option_ ([value_ "false"] <> [selected_ "selected" | not settings.enabled]) "Disabled"
-        label_ [class_ "text-xs text-textWeak space-y-1"] do
-          span_ [class_ "block"] "Production evidence in GitHub"
-          select_ [name_ "includeEvidence", class_ "select select-sm"] do
-            option_ ([value_ "true"] <> [selected_ "selected" | settings.includeEvidence]) "Aggregates and links"
-            option_ ([value_ "false"] <> [selected_ "selected" | not settings.includeEvidence]) "Links only"
-        button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save review settings"
+      forM_ reviewSettings \settings ->
+        if canEdit
+          then form_ ([class_ "flex flex-wrap items-end gap-3 rounded-lg border border-strokeWeak p-3", hxPost_ (maybe ("/p/" <> pid.toText <> "/settings/pr-reviews") ((<> "/reviews") . sourceUrl) repositoryM), hxTarget_ "#code-mappings-content"] <> scopedSwap) $ do
+            input_ [type_ "hidden", name_ "owner", value_ settings.owner]
+            input_ [type_ "hidden", name_ "repo", value_ settings.repo]
+            span_ [class_ "text-sm font-medium text-textStrong"] $ toHtml (settings.owner <> "/" <> settings.repo)
+            label_ [class_ "text-xs text-textWeak space-y-1"] do
+              span_ [class_ "block"] "PR reviews"
+              select_ [name_ "enabled", class_ "select select-sm"] do
+                option_ ([value_ "true"] <> [selected_ "selected" | settings.enabled]) "Enabled"
+                option_ ([value_ "false"] <> [selected_ "selected" | not settings.enabled]) "Disabled"
+            label_ [class_ "text-xs text-textWeak space-y-1"] do
+              span_ [class_ "block"] "Production evidence in GitHub"
+              select_ [name_ "includeEvidence", class_ "select select-sm"] do
+                option_ ([value_ "true"] <> [selected_ "selected" | settings.includeEvidence]) "Aggregates and links"
+                option_ ([value_ "false"] <> [selected_ "selected" | not settings.includeEvidence]) "Links only"
+            button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save review settings"
+          else div_ [class_ "space-y-1 rounded-lg border border-strokeWeak p-3"] do
+            p_ [class_ "text-sm font-medium text-textStrong break-all"] $ toHtml $ settings.owner <> "/" <> settings.repo
+            colorChip_ "" "code-branch" $ if settings.enabled then "Reviews enabled" else "Reviews disabled"
+            p_ [class_ "text-xs text-textWeak"] $ if settings.includeEvidence then "Production evidence: aggregates and links" else "Production evidence: links only"
   where
     sample = fromMaybe "" sampleM
     sourceUrl r = "/p/" <> pid.toText <> "/repositories/" <> r.id.toText <> "/source"
@@ -467,18 +484,19 @@ codeMappingsContent pid sampleM credentialM repositoryM = do
     scopedSwap = [attr | isJust repositoryM, attr <- [hxSelect_ "#code-mappings-content", hxSwap_ "outerMorph"]]
 
     -- One linked repository, read as a sentence rather than as five columns of path fragments.
-    mappingRow_ :: CodeContext.CodeMapping -> Html ()
-    mappingRow_ cm = div_ [class_ "grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 px-3 py-3 text-sm"] do
+    mappingRow_ :: Bool -> CodeContext.CodeMapping -> Html ()
+    mappingRow_ canEdit cm = div_ [class_ "grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 px-3 py-3 text-sm"] do
       faSprite_ "github" "regular" "w-3.5 h-3.5 shrink-0 text-iconNeutral"
       span_ [class_ "min-w-0 font-medium text-textStrong break-all"] $ toHtml (cm.owner <> "/" <> cm.repo)
-      button_
-        ( [ class_ "ml-auto shrink-0 btn btn-xs btn-ghost text-textError gap-1"
-          , hxDelete_ (postUrl <> "/" <> cm.id.toText)
-          , hxTarget_ "#code-mappings-content"
-          , Aria.label_ ("Unlink " <> cm.owner <> "/" <> cm.repo)
-          ]
-            <> scopedSwap
-        )
+      when canEdit
+        $ button_
+          ( [ class_ "ml-auto shrink-0 btn btn-xs btn-ghost text-textError gap-1"
+            , hxDelete_ (postUrl <> "/" <> cm.id.toText)
+            , hxTarget_ "#code-mappings-content"
+            , Aria.label_ ("Unlink " <> cm.owner <> "/" <> cm.repo)
+            ]
+              <> scopedSwap
+          )
         $ do
           faSprite_ "link-slash" "regular" "w-3 h-3"
           "Unlink"
