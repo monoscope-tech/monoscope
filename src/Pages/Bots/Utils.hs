@@ -1,4 +1,4 @@
-module Pages.Bots.Utils (BotType (..), BotReply (..), botReplyPayload, BotResponse (..), Channel (..), authHeader, contentTypeHeader, mrkdwn, plainTxt, textBlock, imageBlock, dcContainer, dcText, dcGallery, dcLinkButton, processAIQuery, processAIQueryWithMode, storeAgenticResponse, verifyWidgetSignature, QueryIntent (..), detectReportIntent, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, runBotQuery, withBotThread, withDashboardTemplate, parseInstallState, installedResponse) where
+module Pages.Bots.Utils (BotEmoji (..), BotType (..), BotReply (..), botReplyPayload, BotResponse (..), Channel (..), authHeader, contentTypeHeader, mrkdwn, plainTxt, textBlock, imageBlock, dcContainer, dcText, dcGallery, dcLinkButton, processAIQuery, processAIQueryWithMode, storeAgenticResponse, verifyWidgetSignature, QueryIntent (..), detectReportIntent, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, runBotQuery, withBotThread, withDashboardTemplate, parseInstallState, installedResponse) where
 
 import Control.Lens ((.~), (^?))
 import Data.Aeson qualified as AE
@@ -51,17 +51,17 @@ data BotType = Discord | Slack | WhatsApp
 
 
 -- | Status emoji for visual indicators (always paired with text for accessibility)
-botEmoji :: Text -> Text
+data BotEmoji = EmojiSuccess | EmojiWarning | EmojiError | EmojiChart | EmojiSearch | EmojiTable
+
+
+botEmoji :: BotEmoji -> Text
 botEmoji = \case
-  "success" -> "🟢"
-  "warning" -> "🟡"
-  "error" -> "🔴"
-  "chart" -> "📊"
-  "search" -> "🔍"
-  "table" -> "📋"
-  "loading" -> "⏳"
-  "bell" -> "🔔"
-  _ -> ""
+  EmojiSuccess -> "🟢"
+  EmojiWarning -> "🟡"
+  EmojiError -> "🔴"
+  EmojiChart -> "📊"
+  EmojiSearch -> "🔍"
+  EmojiTable -> "📋"
 
 
 -- | Error types for contextual error messages
@@ -77,16 +77,16 @@ formatBotError target err = case target of
   Slack -> AE.object ["text" AE..= msg, "response_type" AE..= "in_channel", "replace_original" AE..= True, "delete_original" AE..= True]
   where
     msg = case err of
-      QueryParseError snippet -> botEmoji "warning" <> " Couldn't parse query\n`" <> T.take 50 snippet <> "`\nTry: 'show errors in last hour'"
-      NoDataError -> botEmoji "search" <> " No data found for your query\nTry expanding the time range or adjusting filters."
-      ServiceError -> botEmoji "error" <> " Something went wrong\nPlease try again in a moment."
+      QueryParseError snippet -> botEmoji EmojiWarning <> " Couldn't parse query\n`" <> T.take 50 snippet <> "`\nTry: 'show errors in last hour'"
+      NoDataError -> botEmoji EmojiSearch <> " No data found for your query\nTry expanding the time range or adjusting filters."
+      ServiceError -> botEmoji EmojiError <> " Something went wrong\nPlease try again in a moment."
 
 
 -- | Get loading message based on detected query intent
 getLoadingMessage :: QueryIntent -> Text
 getLoadingMessage = \case
-  ReportIntent _ -> botEmoji "chart" <> " Fetching your report..."
-  GeneralQueryIntent -> botEmoji "search" <> " Analyzing your query..."
+  ReportIntent _ -> botEmoji EmojiChart <> " Fetching your report..."
+  GeneralQueryIntent -> botEmoji EmojiSearch <> " Analyzing your query..."
 
 
 data BotResponse
@@ -178,7 +178,7 @@ handleTableResponse target tableAsVecE envCfg projectId query =
               url' = envCfg.hostUrl <> "p/" <> projectId.toText <> "/log_explorer?query=" <> decodeUtf8 (urlEncode True $ encodeUtf8 query)
               explorerLink = "[View in Log Explorer →](" <> url' <> ")"
               moreText = if resultCount > shownCount then "\n_" <> show (resultCount - shownCount) <> " more results in Log Explorer_" else ""
-              headerEmoji = botEmoji "table"
+              headerEmoji = botEmoji EmojiTable
               headerText = headerEmoji <> " **Query Results** (showing " <> show shownCount <> " of " <> show resultCount <> " events)"
               content = headerText <> "\n`" <> query <> "`\n" <> tableData <> moreText <> "\n"
            in case target of
@@ -191,7 +191,7 @@ handleTableResponse target tableAsVecE envCfg projectId query =
                     , textBlock "section" (mrkdwn $ "`" <> query <> "`")
                     , AE.object ["type" AE..= ("divider" :: Text)]
                     , textBlock "section" (mrkdwn tableData)
-                    , elemsBlock "actions" [linkButton "view-log-explorer" (botEmoji "search" <> " View in Log Explorer") url']
+                    , elemsBlock "actions" [linkButton "view-log-explorer" (botEmoji EmojiSearch <> " View in Log Explorer") url']
                     ]
 
 
@@ -208,7 +208,7 @@ recsVecToTableData recsVec colIdxMap = ("```\n" <> unlines (hd : map row rows) <
         , txt 15 v "service"
         , txt 20 v "span_name"
         , pad 8 (toText $ getDurationNSMS $ fromIntegral $ lookupVecIntByKey v colIdxMap "duration")
-        , botEmoji (if lookupVecBoolByKey v colIdxMap "errors" then "error" else "success")
+        , botEmoji (if lookupVecBoolByKey v colIdxMap "errors" then EmojiError else EmojiSuccess)
         ]
 
 
@@ -402,23 +402,23 @@ formatReport target report pid envCfg eventsUrl errorsUrl = case target of
       , AE.object ["type" AE..= ("divider" :: Text)]
       , imageBlock eventsUrl $ chartAlt "Events" " showing " totalEvents
       , imageBlock errorsUrl $ chartAlt "Errors" " showing " totalErrors
-      , elemsBlock "actions" [linkButton "view-full-report" (botEmoji "search" <> " View Full Report") reportUrl]
+      , elemsBlock "actions" [linkButton "view-full-report" (botEmoji EmojiSearch <> " View Full Report") reportUrl]
       ]
   Discord ->
     dcContainer
       26879
-      [ dcText $ botEmoji "chart" <> " **" <> T.toTitle (display report.reportType) <> " Report**"
+      [ dcText $ botEmoji EmojiChart <> " **" <> T.toTitle (display report.reportType) <> " Report**"
       , dcText $ "**Period:** " <> period " → "
       , dcText $ "Total Events: **" <> show totalEvents <> "**  •  Total Errors: **" <> show totalErrors <> "**"
       , dcGallery [(eventsUrl, chartAlt "Events" ": " totalEvents), (errorsUrl, chartAlt "Errors" ": " totalErrors)]
-      , dcLinkButton (botEmoji "search" <> " View Full Report") reportUrl
+      , dcLinkButton (botEmoji EmojiSearch <> " View Full Report") reportUrl
       ]
   WhatsApp -> formatTextResponse WhatsApp $ title " Report\nPeriod: " <> period " - " <> "\nTotal Events: " <> show totalEvents <> "\nTotal Errors: " <> show totalErrors <> "\nView: " <> reportUrl
   where
     reportUrl = envCfg.hostUrl <> "p/" <> pid.toText <> "/reports/" <> report.id.toText
     day = toText . formatTime defaultTimeLocale "%Y-%m-%d"
     period sep = day report.startTime <> sep <> day report.endTime
-    title suffix = botEmoji "chart" <> " " <> T.toTitle (display report.reportType) <> suffix
+    title suffix = botEmoji EmojiChart <> " " <> T.toTitle (display report.reportType) <> suffix
     chartAlt what sep n = what <> " chart for " <> display report.reportType <> " report" <> sep <> show @Text n <> " total " <> T.toLower what
     (totalEvents, totalErrors) = parseReportStats report.reportJson
 
@@ -465,10 +465,10 @@ formatChart target c = case target of
     AE.object
       [ "blocks"
           AE..= arr
-            [ textBlock "header" $ plainTxt (botEmoji "chart" <> " " <> c.question)
+            [ textBlock "header" $ plainTxt (botEmoji EmojiChart <> " " <> c.question)
             , imageBlock c.imageUrl ("Chart: " <> c.question)
             , elemsBlock "context" [mrkdwn ("*Query:* `" <> c.query <> "`")]
-            , elemsBlock "actions" [linkButton "view-log-explorer" (botEmoji "search" <> " View in Log Explorer") c.queryUrl]
+            , elemsBlock "actions" [linkButton "view-log-explorer" (botEmoji EmojiSearch <> " View in Log Explorer") c.queryUrl]
             ]
       , "response_type" AE..= ("in_channel" :: Text)
       , "replace_original" AE..= True
@@ -476,10 +476,10 @@ formatChart target c = case target of
   Discord ->
     dcContainer
       26879
-      [ dcText $ botEmoji "chart" <> " **" <> c.question <> "**"
+      [ dcText $ botEmoji EmojiChart <> " **" <> c.question <> "**"
       , dcGallery [(c.imageUrl, "Chart visualization: " <> c.question)]
       , dcText $ "**Query:** `" <> c.query <> "`"
-      , dcLinkButton (botEmoji "search" <> " View in Log Explorer") c.queryUrl
+      , dcLinkButton (botEmoji EmojiSearch <> " View in Log Explorer") c.queryUrl
       ]
   -- Twilio content-template variables; "3" is the query string the template
   -- appends to the chart endpoint, "4" the (host-relative) explorer link.

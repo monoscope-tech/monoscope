@@ -62,7 +62,7 @@ import Network.Wreq.Types (FormParam)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig, PageCtx (..), bodyWrapper, currProject, pageTitle, sessM)
 import Pages.Bots.SlackProgress qualified as Progress
-import Pages.Bots.Utils (BotResponse (..), BotType (..), Channel, authHeader, botEmoji, botReplyPayload, contentTypeHeader, detectReportIntent, getLoadingMessage, imageBlock, installedResponse, mrkdwn, plainTxt, runBotQuery, textBlock, withBotThread)
+import Pages.Bots.Utils (BotEmoji (..), BotResponse (..), BotType (..), Channel, authHeader, botEmoji, botReplyPayload, contentTypeHeader, detectReportIntent, getLoadingMessage, imageBlock, installedResponse, mrkdwn, plainTxt, runBotQuery, textBlock, withBotThread)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget (Widget (..), widgetPngUrl)
 import Pkg.DeriveUtils (UUIDId (..), idFromText)
@@ -291,9 +291,9 @@ slackInteractionsH interaction = do
           , "blocks"
               AE..= AE.Array
                 ( V.fromList
-                    [ textBlock "header" $ plainTxt (botEmoji "success" <> " Notification channel set")
+                    [ textBlock "header" $ plainTxt (botEmoji EmojiSuccess <> " Notification channel set")
                     , textBlock "section" $ mrkdwn ("*" <> channelDisplay <> "* will now receive:")
-                    , textBlock "section" $ mrkdwn ("• " <> botEmoji "error" <> " Error alerts\n• " <> botEmoji "chart" <> " Daily & weekly reports\n• " <> botEmoji "warning" <> " Anomaly detections\n\nYou can also configure channels on the web dashboard.")
+                    , textBlock "section" $ mrkdwn ("• " <> botEmoji EmojiError <> " Error alerts\n• " <> botEmoji EmojiChart <> " Daily & weekly reports\n• " <> botEmoji EmojiWarning <> " Anomaly detections\n\nYou can also configure channels on the web dashboard.")
                     ]
                 )
           , "replace_original" AE..= True

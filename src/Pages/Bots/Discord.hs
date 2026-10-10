@@ -32,7 +32,7 @@ import Models.Apis.Issues qualified as Issues
 import Models.Projects.Dashboards (Dashboard (..))
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
-import Pages.Bots.Utils (BotErrorType (..), BotResponse (..), BotType (..), Channel, authHeader, botEmoji, botReplyPayload, contentTypeHeader, dcContainer, dcGallery, dcLinkButton, dcText, formatBotError, installedResponse, parseInstallState, runBotQuery, withBotThread, withDashboardTemplate)
+import Pages.Bots.Utils (BotEmoji (..), BotErrorType (..), BotResponse (..), BotType (..), Channel, authHeader, botEmoji, botReplyPayload, contentTypeHeader, dcContainer, dcGallery, dcLinkButton, dcText, formatBotError, installedResponse, parseInstallState, runBotQuery, withBotThread, withDashboardTemplate)
 import Pkg.Components.Widget (Widget (..), widgetPngUrl)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
@@ -231,9 +231,9 @@ hereSuccessResponse =
     , "data"
         AE..= dcContainer
           5763719 -- Green accent
-          [ dcText $ botEmoji "success" <> " **Notification channel set**"
+          [ dcText $ botEmoji EmojiSuccess <> " **Notification channel set**"
           , dcText "This channel will now receive:"
-          , dcText $ "• " <> botEmoji "error" <> " Error alerts\n• " <> botEmoji "chart" <> " Daily & weekly reports\n• " <> botEmoji "warning" <> " Anomaly detections"
+          , dcText $ "• " <> botEmoji EmojiError <> " Error alerts\n• " <> botEmoji EmojiChart <> " Daily & weekly reports\n• " <> botEmoji EmojiWarning <> " Anomaly detections"
           ]
     ]
 
@@ -242,7 +242,7 @@ sharedWidgetContent :: Text -> Text -> Text -> AE.Value
 sharedWidgetContent widgetTitle chartUrl dashboardUrl =
   dcContainer
     26879
-    [ dcText $ botEmoji "chart" <> " **" <> widgetTitle <> "**"
+    [ dcText $ botEmoji EmojiChart <> " **" <> widgetTitle <> "**"
     , dcGallery [(chartUrl, "Dashboard widget: " <> widgetTitle)]
     , dcLinkButton "Open dashboard" dashboardUrl
     ]
