@@ -177,7 +177,7 @@ saveGitSyncH pid existingM form = do
         -- An empty token box means "keep the stored one", not "clear it".
         Just existing -> GitSync.updateGitHubSync encKey existing.id form.owner form.repo branch (guarded (not . T.null) form.accessToken) form.pathPrefix
       whenJust syncM \sync -> do
-        when (maybe False (not . (.syncEnabled)) existingM) $ liftIO $ withResource ctx.jobsPool \conn ->
+        when (maybe True (not . (.syncEnabled)) existingM) $ liftIO $ withResource ctx.jobsPool \conn ->
           void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncRepository pid sync.id
         unless (T.null form.accessToken)
           $ void

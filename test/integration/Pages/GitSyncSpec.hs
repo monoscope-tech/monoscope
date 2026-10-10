@@ -269,11 +269,14 @@ spec = sequential do
   -- Layer 1: Unit/Integration tests (no external deps)
   aroundAll withTestResources do
     describe "GitHub Sync Settings" do
-      it "connects, updates, and disconnects a repository" \tr -> do
+      it "tokenConnection_queuesItsFirstImportWithoutRequeuingActiveSettingsEdits" \tr -> do
         let form owner repo branch token prefix = GitSyncForm{host = Just Git.GitHub, apiBase = Nothing, owner, repo, branch, accessToken = token, webhookSecret = Just "s3cret", pathPrefix = prefix}
+        clearJobs tr
         void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid (form "test-owner" "test-repo" "main" "ghp_test" Nothing)
         sync <- maybe (fail "Git connection was not created") pure =<< runTestBg frozenTime tr (GitSync.getGitHubSync testPid)
         (sync.owner, sync.repo, sync.branch, sync.syncEnabled) `shouldBe` ("test-owner", "test-repo", "main", True)
+        let imports = getPendingBackgroundJobs tr.trATCtx <&> V.filter isGitSyncFromRepo
+        imports >>= \jobs -> [(pid, sid) | (_, BackgroundJobs.GitSyncRepository pid sid) <- V.toList jobs] `shouldBe` [(testPid, sync.id)]
 
         -- The update path used to write every field of this form except the folder, so an edit
         -- to "Folder in repo" vanished on save while the page redrew as if it had stuck. An
@@ -282,6 +285,7 @@ spec = sequential do
         updated <- maybe (fail "Git connection disappeared after update") pure =<< runTestBg frozenTime tr (GitSync.getGitHubSync testPid)
         (updated.owner, updated.repo, updated.branch, updated.pathPrefix) `shouldBe` ("updated", "updated-repo", "dev", "monoscope")
         updated.accessToken `shouldBe` sync.accessToken
+        V.length <$> imports `shouldReturn` 1
 
         void $ testServant tr $ GitSyncPage.gitSyncSettingsDeleteH testPid
         runTestBg frozenTime tr (GitSync.getGitHubSync testPid) >>= (`shouldSatisfy` isNothing)

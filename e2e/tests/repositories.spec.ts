@@ -335,8 +335,8 @@ test('repository dashboard setup reuses a token account and keeps retries scoped
     expect(sql(`SELECT branch || ':' || path_prefix FROM projects.git_sync WHERE project_id = '${pid}'`).toString().trim()).toBe('release:ops');
     expect((await page.request.post(`/p/${pid}/repositories/${repository}/dashboards`, { form: { credentialId: account, branch: 'different' } })).status()).toBe(200);
     expect(sql(`SELECT branch FROM projects.git_sync WHERE project_id = '${pid}'`).toString().trim()).toBe('release');
-    expect(sql(`SELECT count(*) FROM background_jobs WHERE payload->>'tag' = 'GitSyncRepository' AND payload::text LIKE '%${pid}%'`).toString().trim()).toBe('1');
     const activeConnection = sql(`SELECT id FROM projects.git_sync WHERE project_id = '${pid}'`).toString().trim();
+    expect(sql(`SELECT count(*) FROM background_jobs WHERE payload->>'tag' = 'GitSyncRepository' AND payload::text LIKE '%${activeConnection}%'`).toString().trim()).toBe('1');
     sql(`UPDATE projects.git_sync SET last_error = 'dashboards/overview.yaml: Remote file conflicts with a local dashboard awaiting its first push.' WHERE id = '${activeConnection}';`);
     await page.reload();
     await expect(panel.getByRole('status')).toContainText('overview.yaml');
@@ -346,7 +346,7 @@ test('repository dashboard setup reuses a token account and keeps retries scoped
     ]);
     await expect(panel.locator(`[id="git-sync-${activeConnection}"]`)).toHaveCount(1);
     await expect(panel.getByRole('status')).toContainText('overview.yaml');
-    expect(sql(`SELECT count(*) FROM background_jobs WHERE payload->>'tag' = 'GitSyncRepository' AND payload::text LIKE '%${pid}%'`).toString().trim()).toBe('2');
+    expect(sql(`SELECT count(*) FROM background_jobs WHERE payload->>'tag' = 'GitSyncRepository' AND payload::text LIKE '%${activeConnection}%'`).toString().trim()).toBe('2');
     expect((await page.request.post(`/p/${pid}/settings/git-sync/${randomUUID()}/retry`)).status()).toBe(404);
     expect((await page.request.post(`/p/${pid}/settings/git-sync/${randomUUID()}/pause`)).status()).toBe(404);
     expect((await page.request.post(`/p/${DEMO_PROJECT}/settings/git-sync/${activeConnection}/pause`)).status()).toBe(403);
@@ -360,14 +360,14 @@ test('repository dashboard setup reuses a token account and keeps retries scoped
     await expect(panel.getByRole('button', { name: 'Pause sync', exact: true })).toHaveCount(0);
     expect((await page.request.post(`/p/${pid}/settings/git-sync/${activeConnection}/pause`)).status()).toBe(200);
     expect((await page.request.post(`/p/${pid}/settings/git-sync/${activeConnection}/retry`)).status()).toBe(200);
-    expect(sql(`SELECT count(*) FROM background_jobs WHERE payload->>'tag' = 'GitSyncRepository' AND payload::text LIKE '%${pid}%'`).toString().trim()).toBe('2');
+    expect(sql(`SELECT count(*) FROM background_jobs WHERE payload->>'tag' = 'GitSyncRepository' AND payload::text LIKE '%${activeConnection}%'`).toString().trim()).toBe('2');
     await expect(panel.getByText('Paused', { exact: true })).toBeVisible();
     await Promise.all([
       page.waitForResponse(response => response.request().method() === 'POST' && response.url().endsWith(`/git-sync/${activeConnection}`)),
       panel.getByRole('button', { name: 'Resume sync', exact: true }).press('Enter'),
     ]);
     expect(sql(`SELECT sync_enabled FROM projects.git_sync WHERE id = '${activeConnection}'`).toString().trim()).toBe('t');
-    expect(sql(`SELECT count(*) FROM background_jobs WHERE payload->>'tag' = 'GitSyncRepository' AND payload::text LIKE '%${pid}%'`).toString().trim()).toBe('3');
+    expect(sql(`SELECT count(*) FROM background_jobs WHERE payload->>'tag' = 'GitSyncRepository' AND payload::text LIKE '%${activeConnection}%'`).toString().trim()).toBe('3');
     await expect(panel.getByText('Sync failed', { exact: true })).toBeVisible();
     for (const theme of ['light', 'dark']) {
       await page.context().addCookies([{ name: 'theme', value: theme, url: baseURL! }]);
