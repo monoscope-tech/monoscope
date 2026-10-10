@@ -9,7 +9,7 @@ import System.Directory (doesFileExist)
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
 import System.IO.Temp (withSystemTempDirectory)
-import System.Posix.Files (fileMode, getFileStatus)
+import System.Posix.Files (fileMode, getFileStatus, setFileMode)
 import System.Process (CreateProcess (..), proc, readCreateProcessWithExitCode, readProcessWithExitCode)
 import Test.Hspec
 
@@ -77,12 +77,24 @@ spec = describe "CLI binary E2E tests" do
       Just bin -> withSystemTempDirectory "monoscope-config" \dir -> do
         inherited <- getEnvironment
         let isolated = ("XDG_CONFIG_HOME", dir) : filter (\(key, _) -> key /= "XDG_CONFIG_HOME" && not ("MONOSCOPE_" `isPrefixOf` key)) inherited
-            runConfig args = readCreateProcessWithExitCode (proc bin ("--json" : "config" : args)){cwd = Just dir, env = Just isolated} ""
-        (saved, out, _) <- runConfig ["set", "api_key", "fixture-secret"]
-        saved `shouldBe` ExitSuccess
-        out `shouldNotSatisfy` isInfixOf "fixture-secret"
-        permissions <- fileMode <$> getFileStatus (dir <> "/monoscope/config.yaml")
-        permissions .&. 0o077 `shouldBe` 0
+            runIsolated args = readCreateProcessWithExitCode (proc bin ("--json" : args)){cwd = Just dir, env = Just isolated} ""
+            runConfig args = runIsolated ("config" : args)
+        forM_ [("config.yaml", ["config", "set", "api_key"]), ("tokens.json", ["auth", "login", "--token"])] \(file, args) -> do
+          let path = dir <> "/monoscope/" <> file
+          forM_ [False, True] \overwrite -> do
+            when overwrite $ setFileMode (dir <> "/monoscope") 0o755 >> setFileMode path 0o644
+            (code, out, err) <- runIsolated (args <> ["fixture-secret"])
+            code `shouldBe` ExitSuccess
+            (out <> err) `shouldNotSatisfy` isInfixOf "fixture-secret"
+            permissions <- fileMode <$> getFileStatus path
+            permissions .&. 0o077 `shouldBe` 0
+            directoryPermissions <- fileMode <$> getFileStatus (dir <> "/monoscope")
+            directoryPermissions .&. 0o077 `shouldBe` 0
+        forM_ [["get"], ["get", "api_key"]] \args -> do
+          (code, configOut, configErr) <- runConfig args
+          code `shouldBe` ExitSuccess
+          (configOut <> configErr) `shouldNotSatisfy` isInfixOf "fixture-secret"
+          configOut `shouldSatisfy` isInfixOf "********"
         forM_ [["get", "bogus"], ["set", "bogus", "value"], ["init"]] \args -> do
           (code, stdoutText, stderrText) <- runConfig args
           code `shouldBe` ExitFailure 1

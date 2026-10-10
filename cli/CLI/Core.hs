@@ -10,6 +10,7 @@ module CLI.Core (
   renderWith,
   renderTable,
   printError,
+  dieWith,
   printDebug,
   isDebugMode,
   isJsonOutput,
@@ -187,6 +188,10 @@ printError msg = do
         ANSI.hSetSGR stderr [ANSI.SetColor ANSI.Foreground ANSI.Vivid ANSI.Red]
         Data.Text.IO.hPutStrLn stderr $ "error: " <> msg
         ANSI.hSetSGR stderr [ANSI.Reset]
+
+
+dieWith :: IOE :> es => Text -> Eff es a
+dieWith msg = printError msg >> liftIO exitFailure
 
 
 isDebugMode :: Environment :> es => Eff es Bool
@@ -398,7 +403,7 @@ decodeBody (Right bs)
 withAPIResult :: (Environment :> es, HTTP :> es, IOE :> es) => CLIConfig -> Text -> [(Text, Text)] -> (AE.Value -> Eff es ()) -> Eff es ()
 withAPIResult cfg path params onSuccess =
   apiGetJson @_ @AE.Value cfg path params >>= \case
-    Left err -> printError (renderAPIError err) >> liftIO exitFailure
+    Left err -> dieWith (renderAPIError err)
     Right val -> onSuccess val
 
 
