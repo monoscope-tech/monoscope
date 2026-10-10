@@ -26,6 +26,7 @@ import Hasql.Interpolate qualified as HI
 import Lucid (renderText)
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects qualified as Projects
+import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Dashboards qualified as Dashboards
 import Pages.LogExplorer.Log qualified as Log
@@ -37,7 +38,7 @@ import Pages.Replay qualified as Replay
 import Pages.Settings qualified as LemonSqueezy
 import Pages.Settings qualified as S3
 import Pages.Settings qualified as Settings
-import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.DeriveUtils (UUIDId (..), mkHasqlPool)
 import Pkg.TestUtils hiding (testPid)
 import Relude
 import Servant.API (ResponseHeader (..), getResponse, lookupResponseHeader)
@@ -45,7 +46,7 @@ import Servant.Server qualified as ServantS
 import System.Config qualified
 import System.IO.Error (userError)
 import Test.Hspec
-import UnliftIO.Exception (throwIO)
+import UnliftIO.Exception (bracket, throwIO)
 import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
@@ -130,6 +131,21 @@ onboardingTests =
       lookupResponseHeader @"HX-Redirect" verifiedHeaders `shouldBe` (MissingHeader :: ResponseHeader "HX-Redirect" Text)
       renderText verified `shouldSatisfy` TL.isInfixOf "verified"
       renderText verified `shouldSatisfy` (not . TL.isInfixOf "intersect")
+
+    it "integrationCheck_timefusionOnlyEvents_verifies" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
+      -- TF-only deployments write no Postgres telemetry: the event exists only behind the
+      -- "timefusion" pool, here a schema that search_path routes otel_logs_and_spans to.
+      [Only db] <- withResource tr.trPool \conn -> do
+        void $ PGS.execute_ conn [sql|CREATE SCHEMA tf_only; CREATE TABLE tf_only.otel_logs_and_spans (project_id text, context___span_id text)|]
+        void $ PGS.execute conn [sql|INSERT INTO tf_only.otel_logs_and_spans VALUES (?, 'span-1')|] (Only testPid.toText)
+        PGS.query_ conn "SELECT current_database()"
+      host <- fromMaybe "localhost" <$> lookupEnv "DB_HOST"
+      let cstr = encodeUtf8 $ "host=" <> toText host <> " user=postgres password=postgres dbname=" <> (db :: Text) <> " options='-c search_path=tf_only'"
+      bracket (mkHasqlPool 1 cstr) OHasql.release \tfPool -> do
+        let ctx = tr.trATCtx
+            tfTr = tr{trATCtx = ctx{System.Config.hasqlTimefusionPool = tfPool, System.Config.env = ctx.env{System.Config.enableTimefusionReads = True}}}
+        (_, verified) <- testServant tfTr $ Onboarding.checkIntegrationGet testPid (Just "Javascript")
+        renderText verified `shouldSatisfy` TL.isInfixOf "verified"
 
     it "moves one new project from profile setup to its first queryable event" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
       let infoForm =

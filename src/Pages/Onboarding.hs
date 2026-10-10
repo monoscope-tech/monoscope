@@ -235,7 +235,8 @@ phoneEmailPostH pid form = do
 checkIntegrationGet :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 checkIntegrationGet pid languageM = do
   void $ Projects.sessionAndProject pid
-  v :: Maybe Text <- Hasql.interpOne [HI.sql|SELECT context___span_id FROM otel_logs_and_spans WHERE project_id = #{pid.toText} LIMIT 1|]
+  appCtx <- ask @AuthContext
+  v :: Maybe Text <- Hasql.withHasqlTimefusion appCtx.env.enableTimefusionReads $ Hasql.interpOne [HI.sql|SELECT context___span_id FROM otel_logs_and_spans WHERE project_id = #{pid.toText} LIMIT 1|]
   case v of
     Nothing -> maybe (addErrorToast "No events found yet" Nothing >> addRespHeaders "") (addRespHeaders . integrationPoller_ pid) languageM
     Just _ -> do
