@@ -64,7 +64,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Tracing (withSpan_)
 import System.Types (ATAuthCtx, DB, RespHeaders, addRespHeaders)
-import Utils (LoadingSize (..), LoadingType (..), countNoun, drawerLoadAttrs_, encodeText, explorerNavTabs_, faSprite_, faSymbolDefs_, faUse_, formatUTC, getDurationNSMS, getServiceColors, loadingIndicator_, navTabStrip_, onpointerdown_, parseTime, prettyPrintCount, toUriStr, utcTimeToNanoseconds)
+import Utils (LoadingSize (..), LoadingType (..), TabStrip (..), countNoun, drawerLoadAttrs_, encodeText, explorerNavTabs_, faSprite_, faSymbolDefs_, faUse_, formatUTC, getDurationNSMS, getServiceColors, loadingIndicator_, navTabStrip_, onpointerdown_, parseTime, prettyPrintCount, toUriStr, utcTimeToNanoseconds)
 
 
 -- Shared URL/form state: search is applied before pagination in both views.
@@ -648,7 +648,7 @@ metricsToolbar_ pid tab filters status =
   div_ [id_ "metrics-toolbar", class_ "sticky top-0 z-20 bg-bgBase py-1 border-b border-strokeWeak flex flex-wrap items-center gap-3"] do
     div_ [class_ "flex items-center gap-2 shrink-0"] do
       span_ [class_ "text-xs font-medium text-textWeak"] "View"
-      navTabStrip_ "Metric view" "tabs-sm" [(label, metricPageUrl pid view filters, tab == view) | (label, view) <- [("Charts", "charts"), ("Table", "datapoints")]]
+      navTabStrip_ ViewTabs "Metric view" "tabs-sm" [(label, metricPageUrl pid view filters, tab == view) | (label, view) <- [("Charts", "charts"), ("Table", "datapoints")]]
     form_
       [ id_ "metric-filters"
       , action_ $ "/p/" <> pid.toText <> "/metrics"

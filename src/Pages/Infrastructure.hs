@@ -39,7 +39,7 @@ import Relude
 import Relude.Extra.Tuple (dup)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (drawerLoadAttrs_, drawerRowAttrs_, faSprite_, formatBytes, infrastructureNavTabs_, navTabStrip_, showFFloat')
+import Utils (TabStrip (..), drawerLoadAttrs_, drawerRowAttrs_, faSprite_, formatBytes, infrastructureNavTabs_, navTabStrip_, showFFloat')
 
 
 infraUrl :: Projects.ProjectId -> Text -> [(Text, Text)] -> TimePicker.TimeWindow -> Text
@@ -703,7 +703,7 @@ kubernetesTable pid window url resource clusterM namespaceM statusM rows allRows
 
 kubeResourceNav :: Projects.ProjectId -> TimePicker.TimeWindow -> KubeResource -> Html ()
 kubeResourceNav pid window current =
-  navTabStrip_ "Kubernetes resource" "tabs-sm mx-3 w-fit" [(toHtml $ resourceLabel resource <> "s", infraUrl pid "/infrastructure/kubernetes" [("resource", kubeResourceParam resource)] window, resource == current) | resource <- [minBound ..]]
+  navTabStrip_ ViewTabs "Kubernetes resource" "tabs-sm mx-3 w-fit" [(toHtml $ resourceLabel resource <> "s", infraUrl pid "/infrastructure/kubernetes" [("resource", kubeResourceParam resource)] window, resource == current) | resource <- [minBound ..]]
 
 
 kubeDetailUrl :: Projects.ProjectId -> TimePicker.TimeWindow -> KubeResource -> KubeRow -> Text

@@ -1032,13 +1032,14 @@ copyButton_ cls iconCls src attrs =
 
 -- | Type-to-filter attribute for a text input: hides each element matched by @sel@
 -- (a CSS selector, e.g. @"#list .row"@) whose @data-filter@ — or, absent that,
--- textContent — lacks the input's value. An input handler, not an hx-live binding:
--- a binding re-scans every row on any DOM mutation, which stalls large span trees.
+-- textContent — lacks the input's value. It reruns on input and after every swap, so
+-- rows swapped in later (time presets, pagination) stay filtered; an hx-live binding
+-- would instead re-scan every row on any DOM mutation, which stalls large span trees.
 -- @sel@ is spliced into hyperscript source, so it must be a constant or built from
 -- server-generated ids, never from user input. Pair with @type_ "search"@ so Escape
 -- clears the box and refilters natively.
 filterInputAttr_ :: Text -> Attribute
-filterInputAttr_ sel = term "_" [text|on input set v to my value.toLowerCase() then repeat for el in <${sel}/> if (el.dataset.filter or el.textContent).toLowerCase().includes(v) remove .hidden from el else add .hidden to el end end|]
+filterInputAttr_ sel = term "_" [text|on input or htmx:after:swap from document set v to my value.toLowerCase() then repeat for el in <${sel}/> if (el.dataset.filter or el.textContent).toLowerCase().includes(v) remove .hidden from el else add .hidden to el end end|]
 
 
 colorChip_ :: Monad m => Text -> Text -> Text -> HtmlT m ()

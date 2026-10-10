@@ -66,7 +66,7 @@ import System.Config (AuthContext (..), EnvConfig (enableTimefusionReads))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import UnliftIO (tryAny, withRunInIO)
-import Utils (classifyUserAgent, countNoun, faSprite_, getDurationNSMS, kqlQuoted, navTabStrip_, nonEmptyT, prettyTimeShort, replaceAllFormats, showFFloat', toXXHash)
+import Utils (TabStrip (..), classifyUserAgent, countNoun, faSprite_, getDurationNSMS, kqlQuoted, navTabStrip_, nonEmptyT, prettyTimeShort, replaceAllFormats, showFFloat', toXXHash)
 
 
 data RumTab = Overview | Sessions | Performance
@@ -832,7 +832,7 @@ rumGetScopedH pid tabM queryM sessionFilterM fromM toM sinceM selectedM _service
 
 
 rumNavTabs_ :: RumLinks -> RumTab -> Html ()
-rumNavTabs_ links active = navTabStrip_ "Real User Monitoring views" "" [(toHtml $ tabLabel tab, rumUrl links [("tab", tabParam tab)], tab == active) | tab <- [minBound .. maxBound]]
+rumNavTabs_ links active = navTabStrip_ NavLinks "Real User Monitoring views" "" [(toHtml $ tabLabel tab, rumUrl links [("tab", tabParam tab)], tab == active) | tab <- [minBound .. maxBound]]
 
 
 rumActions_ :: RumLinks -> Html ()

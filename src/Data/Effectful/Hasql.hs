@@ -290,14 +290,14 @@ interpOne :: (HI.DecodeRow a, Hasql :> es) => HI.Sql -> Eff es (Maybe a)
 interpOne s = listToMaybe <$> interp s
 
 
--- | Decode a single JSON column, dropping both wrappers the call sites repeat.
--- The decoder comes from @Pkg.DeriveUtils@'s @Aeson@ instance, so the constraint
--- is stated rather than imported — this module stays free of that dependency.
 -- | A statement that always yields exactly one value, e.g. @SELECT count(*)@.
 interpScalar :: (HI.DecodeField a, Hasql :> es) => HI.Sql -> Eff es a
 interpScalar = fmap (HI.getOneColumn . HI.getOneRow) . interp
 
 
+-- | Decode a single JSON column, dropping both wrappers the call sites repeat.
+-- The decoder comes from @Pkg.DeriveUtils@'s @Aeson@ instance, so the constraint
+-- is stated rather than imported — this module stays free of that dependency.
 interpOneJson :: (HI.DecodeRow (HI.OneColumn (Aeson a)), Hasql :> es) => HI.Sql -> Eff es (Maybe a)
 interpOneJson s = fmap (\(HI.OneColumn (Aeson value)) -> value) <$> interpOne s
 

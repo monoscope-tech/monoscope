@@ -48,7 +48,7 @@ import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), detailsClosedBelowAttr_, emptyState_, facetOption_, facetRail_, facetSection_, filterInputAttr_, keyboardActivateAttr_, searchInput_)
 import Relude
-import Utils (deleteParam, faSprite_, navTabAttrs, navTabStrip_, popoverPanel_, popoverTrigger_, toUriStr)
+import Utils (TabStrip (..), deleteParam, faSprite_, navTabAttrs, navTabStrip_, popoverPanel_, popoverTrigger_, toUriStr)
 
 
 -- Core Types
@@ -379,7 +379,7 @@ renderTableRows tr = do
 instance ToHtml TabFilter where
   toHtmlRaw = toHtml
   toHtml tf =
-    navTabStrip_ "Filter" "tabs-xs md:tabs-sm" [(tabLabel opt, withQuery (deleteParam "filter" tf.currentURL) ("filter=" <> toUriStr opt.name), opt.name == tf.current) | opt <- tf.options]
+    navTabStrip_ ViewTabs "Filter" "tabs-xs md:tabs-sm" [(tabLabel opt, withQuery (deleteParam "filter" tf.currentURL) ("filter=" <> toUriStr opt.name), opt.name == tf.current) | opt <- tf.options]
     where
       tabLabel :: Monad m => TabFilterOpt -> HtmlT m ()
       tabLabel opt = do
