@@ -61,7 +61,6 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
-import Numeric (showFFloat)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, pageActions, pageTitle)
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), VizSurface (..), VizType (..), enrichSchemaWithFacets, logQueryBox_, visTypes)
 import Pkg.Components.TimePicker qualified as Components
@@ -78,7 +77,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Casing (fromAny, toKebab)
 import Text.Megaparsec (parseMaybe)
-import Utils (FieldAction (..), FieldMenuCtx (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, encodeText, explorerNavTabs_, faSprite_, fieldContextMenuItems_, fieldMenuPanel_, getDurationNSMS, getServiceColors, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecBy, lookupVecNonEmptyText, lookupVecTextByKey, methodFillColor, nonEmptyT, popoverTrigger_, prettyPrintCount, sanitizeBackendError, serviceFillColor, statusFillColorText, toUriStr)
+import Utils (FieldAction (..), FieldMenuCtx (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, encodeText, explorerNavTabs_, faSprite_, fieldContextMenuItems_, fieldMenuPanel_, getDurationNSMS, getServiceColors, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecBy, lookupVecNonEmptyText, lookupVecTextByKey, methodFillColor, nonEmptyT, popoverTrigger_, prettyPrintCount, sanitizeBackendError, serviceFillColor, showFFloat', statusFillColorText, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (parseUrlPiece)
 
@@ -1159,7 +1158,7 @@ logLatencyWidget pid =
 -- >>> LL.fmtPct1 (-1.25)
 -- "-1.2%"
 fmtPct1 :: Double -> Text
-fmtPct1 x = toText (showFFloat (Just 1) x "") <> "%"
+fmtPct1 x = showFFloat' 1 x <> "%"
 
 
 -- | Shimmer placeholder mirroring 'sessionsHeader_' (6-KPI grid + over-time bar
@@ -1937,23 +1936,7 @@ curateCols addCols removeCols = sortOn rank . filter keep
       "timestamp" -> 1
       "latency_breakdown" -> 3
       _ -> 2 -- sortOn is stable, so ties keep their incoming order
-    hiddenByDefault =
-      [ "trace_id"
-      , "severity_text"
-      , "parent_id"
-      , "errors"
-      , "http_attributes"
-      , "db_attributes"
-      , "rpc_attributes"
-      , "start_time_ns"
-      , "kind"
-      , "span_name"
-      , "status"
-      , "start_time"
-      , "end_time"
-      , "duration"
-      , "body"
-      ]
+    hiddenByDefault = words "trace_id severity_text parent_id errors http_attributes db_attributes rpc_attributes start_time_ns kind span_name status start_time end_time duration body"
 
 
 -- | Render alert configuration form for creating log-based alerts
