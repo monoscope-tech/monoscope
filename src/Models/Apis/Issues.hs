@@ -1049,8 +1049,8 @@ setAckState pid iids ackM
             ORDER BY project_id, target_hash, issue_type, updated_at DESC, id DESC
           )|]
       Hasql.interpExecute_
-          ( keepers
-              <> [HI.sql|
+        ( keepers
+            <> [HI.sql|
           UPDATE apis.issues i
           SET archived_at = app_now(), updated_at = app_now()
           FROM keepers k
@@ -1060,7 +1060,7 @@ setAckState pid iids ackM
             AND i.id <> k.id
             AND (i.id = ANY(#{iids}::uuid[])
                  OR (i.acknowledged_at IS NULL AND i.archived_at IS NULL)) |]
-          )
+        )
       Hasql.interpExecute
         ( keepers
             <> [HI.sql|
@@ -1157,8 +1157,8 @@ expireAcks now = do
         ORDER BY project_id, target_hash, issue_type, updated_at DESC, id DESC
       )|]
   Hasql.interpExecute_
-      ( expiredKeepers
-          <> [HI.sql|
+    ( expiredKeepers
+        <> [HI.sql|
       UPDATE apis.issues i
       SET archived_at = #{Just now}, updated_at = #{now}
       FROM keepers k
@@ -1168,19 +1168,19 @@ expireAcks now = do
         AND i.id <> k.id
         AND (i.id IN (SELECT id FROM expired)
              OR (i.acknowledged_at IS NULL AND i.archived_at IS NULL)) |]
-      )
+    )
   -- The losers are archived above, so re-deriving keepers here yields exactly the
   -- rows that must be reopened.
   Hasql.interp
-      ( expiredKeepers
-          <> [HI.sql|
+    ( expiredKeepers
+        <> [HI.sql|
         UPDATE apis.issues i
         SET acknowledged_at = NULL, acknowledged_by = NULL, acknowledged_until = NULL,
             archived_at = NULL, updated_at = #{now}
         FROM keepers k
         WHERE i.id = k.id
         RETURNING i.id |]
-      )
+    )
 
 
 -- | True if a live acknowledgement for this (project, target, type) is still

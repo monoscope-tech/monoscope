@@ -1049,8 +1049,8 @@ processEagerWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widg
                   )
         pure
           $ widget
-            & #cta ?~ Widget.WidgetCta "Open Service Map" serviceMapUrl
-            & #html ?~ renderText (endpointDependencyMapPanel_ pid mapId graph serviceColors)
+          & #cta ?~ Widget.WidgetCta "Open Service Map" serviceMapUrl
+          & #html ?~ renderText (endpointDependencyMapPanel_ pid mapId graph serviceColors)
   -- Stat and chart widgets
   _ ->
     widgetMetrics pid timeRange allParams widget <&> \md ->

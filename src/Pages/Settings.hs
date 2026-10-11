@@ -111,7 +111,7 @@ import Network.Minio qualified as Minio
 import Network.URI (parseURI, uriAuthority, uriRegName, uriScheme)
 import Network.Wreq qualified as Wreq
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, settingsContentTarget)
-import Pages.Components (BadgeColor (..), IconBadgeSize (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), callout_, connectionBadge_, copyField_, copySourceAttr_, dangerAction_, disclosure_, emptyState_, filterInputAttr_, formActionsModal_, formCheckbox_, formField_, headerRow_, iconBadge_, keyboardActivateAttr_, localTimeFmt_, modalWith_, options_, paymentPlanPicker, searchInput_, sectionLabel_, settingsH2_, settingsSection_, tonePill_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), IconBadgeSize (..), ModalCfg (..), callout_, connectionBadge_, copyField_, copySourceAttr_, dangerAction_, disclosure_, emptyState_, filterInputAttr_, formActionsModal_, formCheckbox_, formField_, headerRow_, iconBadge_, keyboardActivateAttr_, localTimeFmt_, modalWith_, options_, paymentPlanPicker, searchInput_, sectionLabel_, settingsH2_, settingsSection_, tonePill_)
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..))
 import Pkg.EmailTemplates qualified as ET
@@ -463,7 +463,7 @@ makeApiKeysTable pid canEdit apiKeys elemId =
                     ]
                     $ faSprite_ icon "regular"
                     $ "h-3.5 w-3.5 text-iconNeutral "
-                      <> iconCls
+                    <> iconCls
             else span_ [class_ "font-mono text-sm text-textWeak"] $ toHtml $ T.take 8 apiKey.keyPrefix <> "••••••••"
       ]
 
@@ -577,7 +577,7 @@ safeScrapeUrl u = case parseURI (toString (T.strip u)) of
           ip6 = fromMaybe h (T.stripPrefix "[" h >>= T.stripSuffix "]") -- inside of a [..] literal
        in T.null h
             || h
-              == "localhost"
+            == "localhost"
             || any (`T.isPrefixOf` ip6) ["::1", "fc", "fd", "fe8", "fe9", "fea", "feb", "::ffff:"] -- fc/fd = ULA fc00::/7; fe8-feb = link-local fe80::/10
             || internalIPv4 h
             || obfuscatedNumericHost h
@@ -1530,10 +1530,10 @@ dailyUsageBreakdown_ isFree cycleStartDay inputRate outputRate rows = div_ [clas
           -- everything. Mirrors the graduated Stripe prices exactly.
             toHtml
               $ "Cycle started "
-                <> cycleStartText
-                <> ". First 20M requests are included in the $29 plan price. Overage is $1 per 1M requests. "
-                <> "Also included: 20M metric datapoints (then $1 per 10M) and 2,000 session replays (then $1 per 1,000)."
-                <> aiRateCopy
+              <> cycleStartText
+              <> ". First 20M requests are included in the $29 plan price. Overage is $1 per 1M requests. "
+              <> "Also included: 20M metric datapoints (then $1 per 10M) and 2,000 session replays (then $1 per 1,000)."
+              <> aiRateCopy
   where
     aiRateCopy
       | aiPriceMicrousd inputRate == 0 && aiPriceMicrousd outputRate == 0 = " AI usage is tracked and currently included at no extra charge."

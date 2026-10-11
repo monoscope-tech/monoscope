@@ -105,7 +105,7 @@ logQueryBox_ config = do
                     end
                   |]
               ]
-              <> [checked_ | inWidgetEditor || noActiveQuery]
+            <> [checked_ | inWidgetEditor || noActiveQuery]
           -- Whether AI search or the KQL bar leads is a per-user preference, so it lives in
           -- localStorage and overrides the `noActiveQuery` default above. Applied by a
           -- synchronous script rather than a hyperscript `init` so the AI panel never flashes
@@ -302,7 +302,7 @@ logQueryBox_ config = do
                      end
                    end|]
                 ]
-                <> [checked_ | config.alert]
+              <> [checked_ | config.alert]
             span_ "Create monitor"
 
   queryEditorInitializationCode config.vizType
@@ -378,7 +378,7 @@ logQueryBox_ config = do
                             end
                          |]
                 ]
-                <> [checked_ | vizType == defaultVizType]
+              <> [checked_ | vizType == defaultVizType]
             when inWidgetEditor $ span_ [class_ "text-iconNeutral leading-none"] $ toHtml v.emoji
             span_ $ toHtml v.label
 
@@ -485,7 +485,7 @@ queryLibraryContent_ queryLibSaved queryLibRecent =
               whenJust qli.title (\title -> span_ [class_ "font-medium text-sm"] $ toHtml title <> " •")
               small_ [class_ "text-textWeak text-xs whitespace-nowrap"]
                 $ toHtml (displayTimestamp $ formatUTC qli.createdAt)
-                  >> when qli.byMe " • by me"
+                >> when qli.byMe " • by me"
             code_ [class_ "queryText text-xs block whitespace-pre-wrap break-words opacity-75"] $ toHtml qli.queryText
 
           div_ [class_ "query-actions absolute right-2 top-2 flex gap-1 rounded-md bg-bgRaised/95 p-0.5 opacity-0 shadow-sm group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100 transition-opacity"] do

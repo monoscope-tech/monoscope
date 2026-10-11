@@ -1047,9 +1047,6 @@ runAsBaseRecordingHTTP TestResources{..} k = do
   pure (reqs, r)
 
 
-
-
-
 -- | Run a query effect (like Charts.queryMetrics) in test context
 -- This is for effects that return data directly (not wrapped in RespHeaders)
 -- Uses frozen time to match background job context

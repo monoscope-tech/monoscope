@@ -401,8 +401,8 @@ resolveErrorIncident pid errorId actor now message = Hasql.transaction TxS.ReadC
       JOIN users.users account ON account.id = member.user_id
       JOIN projects.projects project ON project.id = member.project_id
       WHERE pattern.id = #{errorId} AND pattern.project_id = #{pid}|]
-        <> Integrations.activeMembership
-        <> [HI.sql|AND (member.permission IN (^{enumLit ProjectMembers.PEdit}, ^{enumLit ProjectMembers.PAdmin}) OR pattern.assignee_id = #{actor})
+      <> Integrations.activeMembership
+      <> [HI.sql|AND (member.permission IN (^{enumLit ProjectMembers.PEdit}, ^{enumLit ProjectMembers.PAdmin}) OR pattern.assignee_id = #{actor})
       FOR UPDATE OF pattern, member|]
   case listToMaybe matched of
     Nothing -> pure ErrorResolutionDenied

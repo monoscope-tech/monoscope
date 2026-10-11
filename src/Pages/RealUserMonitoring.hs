@@ -234,16 +234,16 @@ rumPulse scope =
     $ Hasql.interpOne
     $ [HI.sql|SELECT COUNT(DISTINCT NULLIF(attributes___session___id, ''))::bigint,
         COUNT(*) FILTER (WHERE |]
-      <> pageViewPredicate
-      <> [HI.sql|)::bigint, COUNT(*) FILTER (WHERE |]
-      <> errorPredicate
-      <> [HI.sql|)::bigint,
+    <> pageViewPredicate
+    <> [HI.sql|)::bigint, COUNT(*) FILTER (WHERE |]
+    <> errorPredicate
+    <> [HI.sql|)::bigint,
         (approx_percentile(0.75, percentile_agg(CASE WHEN |]
-      <> pageViewPredicate
-      <> [HI.sql| THEN duration END)) / 1000000.0)::float8
+    <> pageViewPredicate
+    <> [HI.sql| THEN duration END)) / 1000000.0)::float8
       FROM otel_logs_and_spans WHERE |]
-      <> browserScope scope
-      <> [HI.sql| HAVING COUNT(*) > 0|]
+    <> browserScope scope
+    <> [HI.sql| HAVING COUNT(*) > 0|]
 
 
 rumPages :: (DB es, Labeled "timefusion" Hasql :> es) => RumScope -> Eff es [RumPage]
@@ -314,8 +314,8 @@ otelSessionRows scope match sessionFilter = case match of
               OR attributes___user___email ILIKE #{needle}
               OR resource___service___name ILIKE #{needle}
               OR (|]
-            <> pagePath
-            <> [HI.sql|) ILIKE #{needle}) > 0|]
+          <> pagePath
+          <> [HI.sql|) ILIKE #{needle}) > 0|]
   SessionText Nothing -> sessionRows nullPageCols mempty "true" >>= enrich
   SessionIds ids -> sessionRows nullPageCols [HI.sql| AND attributes___session___id = ANY(#{ids})|] "true" >>= enrich
   where
@@ -846,8 +846,8 @@ panelSwapAttrs page panel refresh trigger syncMode =
     url =
       rumUrl page.links
         $ [("tab", display page.tab), ("panel", display panel), ("deferred", "1")]
-          <> [(key, value) | (key, Just value) <- [("q", page.query), ("filter", sessionFilterParam page.sessionFilter), ("session", page.selectedSession)]]
-          <> [("refresh", "1") | refresh]
+        <> [(key, value) | (key, Just value) <- [("q", page.query), ("filter", sessionFilterParam page.sessionFilter), ("session", page.selectedSession)]]
+        <> [("refresh", "1") | refresh]
 
 
 rumPage_ :: RumData -> Html ()
@@ -1924,7 +1924,7 @@ sessionsUrl :: RumLinks -> Maybe Text -> SessionFilter -> Maybe Text -> Text
 sessionsUrl links query sessionFilter sessionM =
   rumUrl links
     $ ("tab", "sessions")
-      : [(key, value) | (key, Just value) <- [("q", query), ("filter", sessionFilterParam sessionFilter), ("session", sessionM)]]
+    : [(key, value) | (key, Just value) <- [("q", query), ("filter", sessionFilterParam sessionFilter), ("session", sessionM)]]
 
 
 degradedBanner_ :: RumData -> RumPanel -> Html ()

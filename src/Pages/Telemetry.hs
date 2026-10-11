@@ -311,7 +311,7 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM expandM la
                   (filters.source == "all" || filters.source `V.elem` m.serviceNames)
                     && (filters.prefix == "all" || filters.prefix `T.isPrefixOf` m.metricName)
                     && T.toCaseFold filters.query
-                      `T.isInfixOf` T.toCaseFold m.metricName
+                    `T.isInfixOf` T.toCaseFold m.metricName
               )
               catalog
       dashboards <- Dashboards.selectDashboardsSortedBy pid Dashboards.Desc Dashboards.DSUpdatedAt
@@ -418,7 +418,8 @@ instance ToHtml MetricExemplarsGet where
   toHtml (MetricExemplarsGet pid _ exemplars) =
     toHtml
       $ linkList_ (Just ("Representative traces", "Traces this metric recorded a datapoint in, slowest first."))
-      $ exemplars <&> \x ->
+      $ exemplars
+      <&> \x ->
         ( [href_ $ traceOverlayUrl pid x.point.traceId x.point.timestamp]
         , do
             span_ [class_ "block font-mono text-xs text-textStrong"] $ toHtml x.point.traceId
@@ -818,17 +819,17 @@ inactiveMetricsList pid source metrics = do
     summary_ [class_ "collapse-title min-h-0 py-2 pl-3 font-medium text-sm text-textWeak"]
       $ toHtml
       $ countNoun (V.length metrics) "inactive metric"
-        <> " (no data in 7 days)"
+      <> " (no data in 7 days)"
     div_ [class_ "collapse-content px-0 pb-0"]
       $ linkList_ Nothing
       $ V.toList metrics
-        <&> \metric ->
-          ( [href_ $ metricExpandUrl pid metric.metricName source Nothing] <> drawerLoadAttrs_ (metricDetailUrl pid metric.metricName source Nothing)
-          , div_ [class_ "flex items-center gap-2"] do
-              faSprite_ "chart-line" "regular" "w-3.5 h-3.5 text-textWeak"
-              span_ [class_ "truncate font-mono"] $ toHtml metric.metricName
-          , span_ [class_ "text-xs"] $ toHtml $ "Last seen " <> formatTime defaultTimeLocale "%b %d, %Y" metric.lastSeen
-          )
+      <&> \metric ->
+        ( [href_ $ metricExpandUrl pid metric.metricName source Nothing] <> drawerLoadAttrs_ (metricDetailUrl pid metric.metricName source Nothing)
+        , div_ [class_ "flex items-center gap-2"] do
+            faSprite_ "chart-line" "regular" "w-3.5 h-3.5 text-textWeak"
+            span_ [class_ "truncate font-mono"] $ toHtml metric.metricName
+        , span_ [class_ "text-xs"] $ toHtml $ "Last seen " <> formatTime defaultTimeLocale "%b %d, %Y" metric.lastSeen
+        )
 
 
 dataPointsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricDataPoint -> Map Text (Int, Int, Int) -> Text -> Int -> Text -> MetricFilters -> Html ()
@@ -898,8 +899,8 @@ dataPointsPage pid metrics refCounts countsUrl page pageUrl filters = do
                               <> drawerLoadAttrs_ (metricDetailUrl pid r.fullPath "all" Nothing)
                           )
                         $ "View "
-                          <> toHtml (countNoun (V.length moreSources) "more source")
-                          <> " in details"
+                        <> toHtml (countNoun (V.length moreSources) "more source")
+                        <> " in details"
                 )
                 & Table.withAttrs [class_ "w-48"]
             , Table.col "Datapoints" (\r -> whenJust r.metric \m -> metricDataPointCount_ False m.metricName m.dataPointsCount) & Table.withAttrs [class_ "w-28"]
@@ -1069,7 +1070,7 @@ metricsDetailsPage pid allDashboards allMonitors source labelM currentRange metr
                   div_ [class_ "mt-2"]
                     $ linkList_ Nothing
                     $ (map (\d -> ("dashboards/" <> d.id.toText, d.title)) dashboards <> map (\m -> ("monitors/alerts/" <> m.id.toText, "Monitor")) monitors)
-                      <&> \(path, label) -> ([href_ $ "/p/" <> pid.toText <> "/" <> path], span_ [class_ "block truncate text-textStrong"] $ toHtml label, pass)
+                    <&> \(path, label) -> ([href_ $ "/p/" <> pid.toText <> "/" <> path], span_ [class_ "block truncate text-textStrong"] $ toHtml label, pass)
           -- Each fetch hangs off its radio's own `change` (htmx `from:`): an unselected
           -- `.tab-content` is display:none and never fires `intersect`. Fetched on first
           -- reveal: an exemplar lookup is a text scan over raw metric rows.
@@ -1083,7 +1084,8 @@ relatedMetrics pid source metric candidates =
     [] -> Components.emptyState_ def{size = ESCompact} (if source == "all" then "No metrics with a similar name or dimensions were found." else "No similar metrics in this source. Try All sources.") ""
     related ->
       linkList_ (Just ("Related metrics", "Metrics with a similar name or dimensions."))
-        $ related <&> \candidate ->
+        $ related
+        <&> \candidate ->
           ( [href_ $ metricDetailUrl pid candidate.metricName source Nothing, hxGet_ $ metricDetailUrl pid candidate.metricName source Nothing] <> metricDetailSwap_
           , do
               span_ [class_ "block truncate font-medium text-textStrong"] $ toHtml candidate.metricName

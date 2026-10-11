@@ -1237,9 +1237,9 @@ eventCard_ IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflow-cli
     issueMarkdown =
       unlines
         $ ["## " <> issue.title, "", "- Type: " <> display issue.issueType, "- Severity: " <> display issue.severity]
-          <> ["- Service: " <> sv | Just sv <- [issue.service]]
-          <> ["- Environment: " <> e | Just e <- [issue.environment]]
-          <> foldMap (\errL -> let e = errL.base.errorData in ["- Release: " <> r | Just r <- [e.release]] <> ["", "```", e.errorType <> ": " <> e.message, errL.base.stacktrace, "```"]) errM
+        <> ["- Service: " <> sv | Just sv <- [issue.service]]
+        <> ["- Environment: " <> e | Just e <- [issue.environment]]
+        <> foldMap (\errL -> let e = errL.base.errorData in ["- Release: " <> r | Just r <- [e.release]] <> ["", "```", e.errorType <> ": " <> e.message, errL.base.stacktrace, "```"]) errM
     -- The type's own evidence, then trace, logs and replay when the issue has them.
     -- A section with nothing to show is left out rather than rendered as an empty state.
     sections = typeSections <> traceSection <> logsSection <> eventsSection <> replaySection
@@ -1450,7 +1450,7 @@ eventCard_ IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflow-cli
               div_ [class_ "flex flex-wrap gap-1"]
                 $ V.forM_ fields
                 $ span_ [class_ $ "font-mono text-xs px-2 py-0.5 rounded bg-fillWeaker " <> color]
-                  . toHtml
+                . toHtml
          in [ section "issue-fields" "list-check" "Field changes"
                 $ if not (all V.null [d.newFields, d.deletedFields, d.modifiedFields])
                   then div_ [class_ "max-md:px-3 px-4 flex flex-col gap-4"] do
@@ -1905,38 +1905,38 @@ buildSystemPromptForIssue pid issue now = do
           , "- **Service**: " <> Issues.serviceLabel iss.service
           , "- **Recommended Action**: " <> iss.recommendedAction
           ]
-          <> catMaybes
-            [ alertContextM <&> \(alertData, monitorM, metricsData) -> formatCompleteAlertContext alertData monitorM metricsData
-            , errM <&> \err ->
-                unlines
-                  [ ""
-                  , "## Error Details"
-                  , "- **Error Type**: " <> err.errorType
-                  , "- **Message**: " <> err.message
-                  , "- **Stack Trace**:"
-                  , "```"
-                  , err.errorData.stackTrace
-                  , "```"
-                  , maybe "" ("- **Service Name**: " <>) err.errorData.serviceName
-                  , maybe "" ("- **Request Method**: " <>) err.errorData.requestMethod
-                  , maybe "" ("- **Request Path**: " <>) err.errorData.requestPath
-                  ]
-            , trDataM <&> \tr ->
-                unlines
-                  [ ""
-                  , "## Trace Context"
-                  , "- **Trace ID**: " <> tr.traceId
-                  , "- **Duration**: " <> show tr.traceDurationNs <> "ns"
-                  , "- **Span Count**: " <> show (V.length spans)
-                  ]
-            , guard (not $ V.null spans)
-                $> unlines
-                  [ ""
-                  , "## Span Breakdown"
-                  , unlines $ V.toList $ flip V.map (V.take 10 spans) $ \s ->
-                      "- " <> fromMaybe "unknown" s.name <> " (" <> maybe "n/a" show s.duration <> "ns)"
-                  ]
-            ]
+        <> catMaybes
+          [ alertContextM <&> \(alertData, monitorM, metricsData) -> formatCompleteAlertContext alertData monitorM metricsData
+          , errM <&> \err ->
+              unlines
+                [ ""
+                , "## Error Details"
+                , "- **Error Type**: " <> err.errorType
+                , "- **Message**: " <> err.message
+                , "- **Stack Trace**:"
+                , "```"
+                , err.errorData.stackTrace
+                , "```"
+                , maybe "" ("- **Service Name**: " <>) err.errorData.serviceName
+                , maybe "" ("- **Request Method**: " <>) err.errorData.requestMethod
+                , maybe "" ("- **Request Path**: " <>) err.errorData.requestPath
+                ]
+          , trDataM <&> \tr ->
+              unlines
+                [ ""
+                , "## Trace Context"
+                , "- **Trace ID**: " <> tr.traceId
+                , "- **Duration**: " <> show tr.traceDurationNs <> "ns"
+                , "- **Span Count**: " <> show (V.length spans)
+                ]
+          , guard (not $ V.null spans)
+              $> unlines
+                [ ""
+                , "## Span Breakdown"
+                , unlines $ V.toList $ flip V.map (V.take 10 spans) $ \s ->
+                    "- " <> fromMaybe "unknown" s.name <> " (" <> maybe "n/a" show s.duration <> "ns)"
+                ]
+          ]
     formatCompleteAlertContext alertData monitorM metricsData =
       unlines
         $ [ ""
@@ -1948,46 +1948,46 @@ buildSystemPromptForIssue pid issue now = do
           , "- **Current Value**: " <> show alertData.actualValue
           , "- **Triggered At**: " <> formatUTC alertData.triggeredAt
           ]
-          -- Every remaining section is read off the monitor row, so each empties out
-          -- under its own heading when the monitor has been deleted.
-          <> concat
-            [ ["", heading] <> foldMap body monitorM
-            | (heading, body) <-
-                [ ("### Execution Schedule", \m -> ["- **Check Interval**: Every " <> show m.checkIntervalMins <> " minutes", "- **Sustained Duration Required**: " <> show m.thresholdSustainedForMins <> " minutes (threshold must be exceeded for this long)", "- **Last Evaluated**: " <> maybe "never" formatUTC m.lastEvaluated])
-                ,
-                  ( "### Trigger Conditions"
-                  , \m ->
-                      ("- **Trigger Direction**: " <> bool "Alert when value EXCEEDS threshold (>)" "Alert when value DROPS BELOW threshold (<)" m.triggerLessThan)
-                        : catMaybes
-                          [ m.warningThreshold <&> \wt -> "- **Warning Threshold**: " <> show wt <> " (warning level)"
-                          , m.alertRecoveryThreshold <&> \art -> "- **Alert Recovery**: Alert clears when value returns to " <> show art
-                          , m.warningRecoveryThreshold <&> \wrt -> "- **Warning Recovery**: Warning clears when value returns to " <> show wrt
-                          ]
-                  )
-                ,
-                  ( "### Current Status"
-                  , \m ->
-                      ("- **Status**: " <> show m.currentStatus <> " (last check: " <> show m.currentValue <> ")")
-                        : catMaybes
-                          [ m.alertLastTriggered <&> \t -> "- **Last Alert Triggered**: " <> formatUTC t
-                          , m.warningLastTriggered <&> \t -> "- **Last Warning Triggered**: " <> formatUTC t
-                          ]
-                  )
-                ,
-                  ( "### Notification Configuration"
-                  , \m ->
-                      [ "- **Alert Title**: " <> m.alertConfig.title
-                      , "- **Severity**: " <> m.alertConfig.severity
-                      , "- **Email Recipients**: " <> if m.alertConfig.emailAll then "All project members" else T.intercalate ", " (V.toList $ fmap CI.original m.alertConfig.emails)
-                      , if V.null m.alertConfig.slackChannels then "" else "- **Slack Channels**: " <> T.intercalate ", " (V.toList m.alertConfig.slackChannels)
-                      ]
-                  )
-                ]
-            ]
-          <> catMaybes
-            [ guard (metricsData.rowsCount > 0) $> formatQueryResults metricsData
-            , guard (metricsData.rowsCount == 0 && isNothing monitorM) $> "\n_Note: Monitor record was deleted. Only basic alert data available._"
-            ]
+        -- Every remaining section is read off the monitor row, so each empties out
+        -- under its own heading when the monitor has been deleted.
+        <> concat
+          [ ["", heading] <> foldMap body monitorM
+          | (heading, body) <-
+              [ ("### Execution Schedule", \m -> ["- **Check Interval**: Every " <> show m.checkIntervalMins <> " minutes", "- **Sustained Duration Required**: " <> show m.thresholdSustainedForMins <> " minutes (threshold must be exceeded for this long)", "- **Last Evaluated**: " <> maybe "never" formatUTC m.lastEvaluated])
+              ,
+                ( "### Trigger Conditions"
+                , \m ->
+                    ("- **Trigger Direction**: " <> bool "Alert when value EXCEEDS threshold (>)" "Alert when value DROPS BELOW threshold (<)" m.triggerLessThan)
+                      : catMaybes
+                        [ m.warningThreshold <&> \wt -> "- **Warning Threshold**: " <> show wt <> " (warning level)"
+                        , m.alertRecoveryThreshold <&> \art -> "- **Alert Recovery**: Alert clears when value returns to " <> show art
+                        , m.warningRecoveryThreshold <&> \wrt -> "- **Warning Recovery**: Warning clears when value returns to " <> show wrt
+                        ]
+                )
+              ,
+                ( "### Current Status"
+                , \m ->
+                    ("- **Status**: " <> show m.currentStatus <> " (last check: " <> show m.currentValue <> ")")
+                      : catMaybes
+                        [ m.alertLastTriggered <&> \t -> "- **Last Alert Triggered**: " <> formatUTC t
+                        , m.warningLastTriggered <&> \t -> "- **Last Warning Triggered**: " <> formatUTC t
+                        ]
+                )
+              ,
+                ( "### Notification Configuration"
+                , \m ->
+                    [ "- **Alert Title**: " <> m.alertConfig.title
+                    , "- **Severity**: " <> m.alertConfig.severity
+                    , "- **Email Recipients**: " <> if m.alertConfig.emailAll then "All project members" else T.intercalate ", " (V.toList $ fmap CI.original m.alertConfig.emails)
+                    , if V.null m.alertConfig.slackChannels then "" else "- **Slack Channels**: " <> T.intercalate ", " (V.toList m.alertConfig.slackChannels)
+                    ]
+                )
+              ]
+          ]
+        <> catMaybes
+          [ guard (metricsData.rowsCount > 0) $> formatQueryResults metricsData
+          , guard (metricsData.rowsCount == 0 && isNothing monitorM) $> "\n_Note: Monitor record was deleted. Only basic alert data available._"
+          ]
     formatQueryResults md =
       let timestampIdx = V.elemIndex "timestamp" md.headers
           formatRow = V.imap \idx -> \case
@@ -2029,8 +2029,8 @@ buildSystemPromptForIssue pid issue now = do
           topFields = take 30 $ sortOn (Down . sum . map (.count) . snd) $ HM.toList facetMap
        in unlines
             $ "Available telemetry fields (top values by frequency):"
-              : map formatField topFields
-                <> ["... and " <> show (HM.size facetMap - 30) <> " more fields" | HM.size facetMap > 30]
+            : map formatField topFields
+              <> ["... and " <> show (HM.size facetMap - 30) <> " more fields" | HM.size facetMap > 30]
 
 
 -- | Render a single chat response (user question + AI answer)
@@ -2879,7 +2879,7 @@ linkPostH :: Projects.ProjectId -> Issues.IssueId -> LinkForm -> ATAuthCtx (Resp
 linkPostH pid issueId form =
   logTimelineEntry pid issueId "Enter an http(s) link to the external issue"
     $ guarded (\u -> any (`T.isPrefixOf` u) ["https://", "http://"]) (T.strip form.url)
-      <&> \url -> (Issues.IELinked, ["url" AE..= url, "title" AE..= mfilter (not . T.null) (T.strip <$> form.title)])
+    <&> \url -> (Issues.IELinked, ["url" AE..= url, "title" AE..= mfilter (not . T.null) (T.strip <$> form.title)])
 
 
 -- | Log a user's timeline entry on an existing issue, or toast @invalid@.

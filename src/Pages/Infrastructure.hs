@@ -647,7 +647,7 @@ kubernetesDetail_ pid window resource row = div_ [class_ "-mx-8 -mb-4 min-h-full
       when (isNothing row.cpuCores || isNothing row.memoryBytes) $ callout_ BrandBadge Nothing "Usage is incomplete in this time range. Enable the kubeletstats receiver's node, pod, and container metric groups to fill the missing signals."
     pivotLinks_
       $ [("View containers", infraUrl pid "/infrastructure/containers" ([("namespace", namespace)] <> [("cluster", cluster) | cluster <- toList row.cluster]) window) | namespace <- toList row.namespace]
-        <> [("View logs", infraUrl pid "/log_explorer" [("query", kubeQuery)] window), ("View metrics", infraUrl pid "/metrics" [("metric_prefix", "k8s.")] window)]
+      <> [("View logs", infraUrl pid "/log_explorer" [("query", kubeQuery)] window), ("View metrics", infraUrl pid "/metrics" [("metric_prefix", "k8s.")] window)]
   where
     metadata = [(label, value) | (label, Just value) <- [("Cluster", row.cluster), ("Namespace", row.namespace), ("Node", row.node), ("Workload", row.workload)]]
     kubeQuery =

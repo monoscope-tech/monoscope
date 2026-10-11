@@ -437,7 +437,7 @@ integrationsPage pid apikey =
                         , hxSelect_ "#mainArticle"
                         , hxIndicator_ $ "#fw-indicator-" <> l.slug
                         ]
-                        <> [checked_ | idx == 0]
+                      <> [checked_ | idx == 0]
                     unless (T.null fw.icon) $ img_ [class_ "h-5 w-5", src_ $ "https://monoscope.tech/assets/img/framework-logos/" <> fw.icon]
                     span_ $ toHtml fw.name
 

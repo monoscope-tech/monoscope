@@ -266,8 +266,8 @@ cmdLink_ search kind attrs =
       , data_ "search" search
       , term "hx-live:hidden" $ "((c, s, t, d) => " <> hiddenWhen <> ")(closest('.cmd-palette').data.currentCategory, q('#cmd-palette-input').value.toLowerCase(), this.dataset.search, this.dataset)"
       ]
-      <> [data_ "cmd-type" "category" | isCategory]
-      <> attrs
+    <> [data_ "cmd-type" "category" | isCategory]
+    <> attrs
   where
     fuzzyMiss = "!!c || !(i => [...s].every(ch => (i = t.indexOf(ch, i) + 1)))(0)"
     (hiddenWhen, isCategory) = case kind of

@@ -257,7 +257,7 @@ createSlackInstall stateId userId projectId onboarding = do
       JOIN users.users account ON account.id = member.user_id
       WHERE member.project_id = #{projectId} AND member.user_id = #{userId}
         AND member.permission = ^{enumLit ProjectMembers.PAdmin}|]
-        <> activeMembership
+      <> activeMembership
   pure $ affected == 1
 
 
@@ -271,8 +271,8 @@ consumeSlackInstall stateId userId =
     WHERE request.id = #{stateId} AND request.user_id = #{userId} AND request.expires_at > now()
       AND member.project_id = request.project_id AND member.user_id = request.user_id
       AND project.id = member.project_id AND account.id = member.user_id AND member.permission = ^{enumLit ProjectMembers.PAdmin} |]
-      <> activeMembership
-      <> [HI.sql| RETURNING request.project_id, request.onboarding |]
+    <> activeMembership
+    <> [HI.sql| RETURNING request.project_id, request.onboarding |]
 
 
 -- | OAuth-time Slack credentials + the channel the app was installed to.

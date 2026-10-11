@@ -301,7 +301,7 @@ toolResult :: Bool -> Text -> Maybe AE.Value -> AE.Value
 toolResult isErr txt structured =
   AE.object
     $ ["content" AE..= ([AE.object ["type" AE..= ("text" :: Text), "text" AE..= txt]] :: [AE.Value]), "isError" AE..= isErr]
-      <> maybe [] (\v -> ["structuredContent" AE..= v]) structured
+    <> maybe [] (\v -> ["structuredContent" AE..= v]) structured
 
 
 toolError :: Text -> AE.Value

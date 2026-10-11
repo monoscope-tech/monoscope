@@ -328,6 +328,7 @@ endpointFiltersSql q =
 
 
 -- FIXME: Include and return a boolean flag to show if fields that have annomalies.
+
 -- | A page of endpoint traffic plus the total after applying telemetry-backed filters.
 -- Endpoint identity comes from Postgres (@apis.*@); per-endpoint traffic stats come
 -- from the telemetry store (TimeFusion when @useTf@), which holds no @apis.*@ tables —

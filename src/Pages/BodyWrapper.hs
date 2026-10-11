@@ -341,10 +341,10 @@ bodyWrapper bcfg child = do
       meta_ [name_ "tagify-css", content_ $ assetUrl "/public/assets/css/thirdparty/tagify.min.css"]
       mapM_ css
         $ [assetUrl "/public/assets/css/thirdparty/tagify.min.css" | bcfg.needsTagify]
-          <> [assetUrl "/public/assets/deps/gridstack/gridstack.min.css" | bcfg.needsGridStack]
-          <> [ assetUrl "/public/assets/css/tailwind.min.css"
-             , assetUrl "/public/assets/web-components/dist/css/index.css"
-             ]
+        <> [assetUrl "/public/assets/deps/gridstack/gridstack.min.css" | bcfg.needsGridStack]
+        <> [ assetUrl "/public/assets/css/tailwind.min.css"
+           , assetUrl "/public/assets/web-components/dist/css/index.css"
+           ]
 
       fold bcfg.headContent
 
@@ -368,7 +368,7 @@ bodyWrapper bcfg child = do
             -- forward-page-params are re-registered in main.ts via registerExtension).
             assetUrl "/public/assets/js/thirdparty/_hyperscript_web0_9_93.min.js"
           ]
-          <> [assetUrl "/public/assets/deps/tagify/tagify.min.js" | bcfg.needsTagify]
+        <> [assetUrl "/public/assets/deps/tagify/tagify.min.js" | bcfg.needsTagify]
       script_ [src_ (assetUrl "/public/assets/deps/lit/lit-html.js"), type_ "module", defer_ "true"] ("" :: Text)
       when bcfg.needsGridStack $ gridStackScript $ assetUrl "/public/assets/deps/gridstack/gridstack-all.js"
       mapM_
@@ -934,10 +934,10 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
                     span_
                       [ class_
                           $ "h-1.5 w-1.5 shrink-0 rounded-full "
-                            <> if
-                              | isJust c.routineRunningSince -> "bg-fillBrand-strong"
-                              | c.routineActive -> "bg-fillSuccess-strong"
-                              | otherwise -> "bg-fillWeak border border-strokeWeak"
+                          <> if
+                            | isJust c.routineRunningSince -> "bg-fillBrand-strong"
+                            | c.routineActive -> "bg-fillSuccess-strong"
+                            | otherwise -> "bg-fillWeak border border-strokeWeak"
                       , Aria.hidden_ "true"
                       ]
                       ""

@@ -488,15 +488,15 @@ runtimeErrorVariantEmail heading subjectPrefix intro projectName projectUrl erro
       richP_ [maybe intro (const "This error is still firing in your ") ongoingForM, projectName, "."]
       forM_ (catMaybes [("⏳ Still firing · " <>) <$> ongoingForM, occTextM])
         $ p_ [style_ "margin: 8px 0; font-size: 14px; font-weight: 600; color: #57606a;"]
-          . toHtml @Text
+        . toHtml @Text
       emailDivider
       zipWithM_ (errorCard projectUrl errorsUrl) (chartUrlM : repeat Nothing) (take maxErrorCards errors)
       when (length errors > maxErrorCards)
         $ p_ [style_ "text-align: center; color: #57606a; font-size: 14px; margin: 16px 0;"]
         $ toHtml
         $ "and "
-          <> show (length errors - maxErrorCards)
-          <> " more error(s)…"
+        <> show (length errors - maxErrorCards)
+        <> " more error(s)…"
       emailButton errorsUrl "View all errors"
   )
   where
@@ -547,7 +547,7 @@ errorCard projectUrl errorsUrl chartUrlM e =
         mconcat
           $ intersperse (span_ [style_ "color: #c0c5cc; padding: 0 6px;"] "\183")
           $ [span_ [class_ "monoscope-code", style_ "font-size: 12px;"] $ toHtml routeText | routeText /= ""]
-            <> map toHtml ctxMeta
+          <> map toHtml ctxMeta
     when (e.stackTrace /= "") $ tr_ $ td_ [style_ "padding: 0 0 12px 0;"] do
       let traceLines = lines e.stackTrace
       div_ [class_ "error-card-stack"] $ toHtml $ T.intercalate "\n" $ drop (length traceLines - 2) traceLines

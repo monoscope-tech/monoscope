@@ -53,8 +53,8 @@ serviceMapPanelWith_ panel pid elId graph colors = div_ [class_ "w-full flex fle
               faSprite_ "circle-info" "regular" "w-3.5 h-3.5 text-iconNeutral"
               toHtml
                 $ "Showing the "
-                  <> show (V.length (drawnNodes graph))
-                  <> " busiest dependencies. Quieter ones are folded away — search to find a specific one."
+                <> show (V.length (drawnNodes graph))
+                <> " busiest dependencies. Quieter ones are folded away — search to find a specific one."
           serviceMapLegend_ graph colors
           envFacet_ pid graph (case panel of GlobalPanel selectedEnv -> selectedEnv; EndpointPanel -> Nothing)
           scopeChip_
@@ -120,7 +120,7 @@ envFacet_ pid graph selected =
       a_
         [ class_
             $ "rounded-md border px-2 py-0.5 "
-              <> bool "border-strokeWeak text-textWeak hover:bg-fillWeak" "border-strokeBrand-strong bg-fillBrand-weak text-textStrong font-medium" (opt == selected)
+            <> bool "border-strokeWeak text-textWeak hover:bg-fillWeak" "border-strokeBrand-strong bg-fillBrand-weak text-textStrong font-medium" (opt == selected)
         , href_ $ "/p/" <> pid.toText <> "/service_map" <> maybe "" ("?env=" <>) opt
         ]
         $ toHtml

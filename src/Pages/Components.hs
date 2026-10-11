@@ -924,7 +924,7 @@ modalWith_ modalId cfg triggerM contentHtml = do
           end
       |]
       ]
-      <> [checked_ | cfg.autoOpen]
+    <> [checked_ | cfg.autoOpen]
   div_
     [ class_ $ "modal w-screen " <> cfg.wrapperClass
     , role_ "dialog"

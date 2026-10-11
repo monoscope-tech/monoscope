@@ -71,8 +71,8 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Effectful (Eff, IOE, type (:>))
 import Effectful.Error.Static qualified as EffError
-import Effectful.Reader.Static qualified as EffReader
 import Effectful.Log (Log)
+import Effectful.Reader.Static qualified as EffReader
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI

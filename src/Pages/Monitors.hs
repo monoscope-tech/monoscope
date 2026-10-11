@@ -855,7 +855,7 @@ alertNotificationsTab_ alert teams = do
                 div_ [class_ "flex items-center gap-2"]
                   $ span_ [class_ "text-sm text-textWeak"]
                   $ faSprite_ icon style "h-3 w-3 mr-2 text-iconNeutral"
-                    >> toHtml entry
+                  >> toHtml entry
 
     div_ [class_ "pt-6 pb-3"] do
       h4_ [class_ "font-medium text-textStrong mb-2"] "Notification Template"

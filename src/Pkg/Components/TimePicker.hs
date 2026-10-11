@@ -275,7 +275,7 @@ liveDataControls_ submitForm currentRange targetIdM liveDataMode =
               , Aria.label_ label
               , data_ "tippy-content" label
               ]
-              <> attrs
+            <> attrs
 
 
 timepicker_ :: Maybe Text -> Maybe (Text, Text) -> Text -> Html ()

@@ -85,7 +85,7 @@ import Pages.BodyWrapper (BWConfig (..), OnboardingStep (Integration, Pricing), 
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as SlackP
 import Pages.Bots.Utils qualified as BotUtils
-import Pages.Components (BadgeColor (..), IconBadgeSize (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), PanelCfg (..), PanelStyle (..), brandLogo_, callout_, connectionBadge_, dangerAction_, dirtyFormSaveAttr_, disclosure_, emptyState_, filterInputAttr_, formActionsModal_, formField_, formSelectField_, headerRow_, iconBadge_, modalWith_, panel_, roleOptions_, searchInput_, sectionLabel_, settingsH2_, settingsSection_, tagInput_, toggleRow_, tonePill_)
+import Pages.Components (BadgeColor (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), IconBadgeSize (..), ModalCfg (..), PanelCfg (..), PanelStyle (..), brandLogo_, callout_, connectionBadge_, dangerAction_, dirtyFormSaveAttr_, disclosure_, emptyState_, filterInputAttr_, formActionsModal_, formField_, formSelectField_, headerRow_, iconBadge_, modalWith_, panel_, roleOptions_, searchInput_, sectionLabel_, settingsH2_, settingsSection_, tagInput_, toggleRow_, tonePill_)
 import Pages.Settings qualified as Settings
 import Pkg.Components.Table (Table (..))
 import Pkg.Components.Table qualified as Table
@@ -528,7 +528,7 @@ integrationsBody IntegrationsConfig{..} = do
         div_ [class_ "mt-4 rounded-xl border border-strokeWeak p-3"]
           $ toggleRow_ "include-user-identity-in-alerts" "Include affected user identity in alerts" "Includes the telemetry user name and email in Slack error alerts. Enabled by default; turn it off if alerts for this project must not contain PII. Tenant or project context is always included."
           $ name_ "includeUserIdentityInAlerts"
-            : [checked_ | includeUserIdentityInAlerts]
+          : [checked_ | includeUserIdentityInAlerts]
 
     -- Test History
     div_ [class_ "pt-6 border-t border-strokeWeak space-y-2"] do
@@ -705,8 +705,8 @@ manageMembersPostH pid onboardingM form = do
   _ <-
     ProjectMembers.insertProjectMembers
       $ newProjectMembers
-        & filter (\(_, _, id') -> id' /= currUserId)
-        & map \(_, permission, id') -> ProjectMembers.CreateProjectMembers pid id' permission
+      & filter (\(_, _, id') -> id' /= currUserId)
+      & map \(_, permission, id') -> ProjectMembers.CreateProjectMembers pid id' permission
 
   unless (null uAndPOldAndChanged)
     $ void
