@@ -565,13 +565,13 @@ spec = sequential do
           n `shouldSatisfy` (>= 1)
 
       it "importsOnlyTheTargetBranchAndIgnoresTheAutomatedPRBranch" \tr -> do
-        setupSyncOn tr Git.GitHub "acme" "config" (Just "s3cret")
+        setupSyncOn tr Git.GitHub "branch-filter-owner" "config" (Just "s3cret")
         clearJobs tr
         for_ (["monoscope-dashboards", "feature/user-pr"] :: [Text]) \branch -> do
-          let body = toStrict $ AE.encode $ AE.object ["repository" AE..= AE.object ["full_name" AE..= ("acme/config" :: Text)], "ref" AE..= ("refs/heads/" <> branch)]
+          let body = toStrict $ AE.encode $ AE.object ["repository" AE..= AE.object ["full_name" AE..= ("branch-filter-owner/config" :: Text)], "ref" AE..= ("refs/heads/" <> branch)]
           void $ toBaseServantResponse tr $ GitSyncPage.gitWebhookPostH Git.GitHub (req Git.GitHub "push" (Just $ "sha256=" <> hmacHexOf "s3cret" body) body)
         V.length . V.filter isGitSyncFromRepo <$> getPendingBackgroundJobs tr.trATCtx `shouldReturn` 0
-        let body = pushBody "acme" "config"
+        let body = pushBody "branch-filter-owner" "config"
         void $ toBaseServantResponse tr $ GitSyncPage.gitWebhookPostH Git.GitHub (req Git.GitHub "push" (Just $ "sha256=" <> hmacHexOf "s3cret" body) body)
         V.length . V.filter isGitSyncFromRepo <$> getPendingBackgroundJobs tr.trATCtx `shouldReturn` 1
 
