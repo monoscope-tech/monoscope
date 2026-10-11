@@ -4616,7 +4616,9 @@ gitSyncFromRepo pid sid = withGitSync pid sid GitSync.ImportDashboards $ \conn s
         allResources <- lift $ RepositorySync.resources sync.projectId sync.id
         failures <-
           lift
-            $ (readErrors <>) . catMaybes <$> forM (filter (\resource -> resource.filePath `notElem` unreadable) allResources) \resource -> do
+            $ (readErrors <>)
+            . catMaybes
+            <$> forM (filter (\resource -> resource.filePath `notElem` unreadable) allResources) \resource -> do
               observed <- RepositorySync.resourceSnapshot resource
               local <- RepositorySync.localDefinition resource
               incoming <- traverse (RepositorySync.normalizeDefinition resource) $ lookup resource.filePath remote

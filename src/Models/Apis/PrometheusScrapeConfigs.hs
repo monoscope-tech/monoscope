@@ -252,12 +252,12 @@ prometheusScrapeOpts :: Maybe Text -> Wreq.Options
 prometheusScrapeOpts authHeader =
   defaults
     & Wreq.manager
-      .~ Left tlsManagerSettings{managerResponseTimeout = responseTimeoutMicro 10_000_000}
-    -- Don't follow redirects: http-client (unlike browsers) re-sends Authorization across a
-    -- cross-host 3xx, so a target answering 302 -> attacker could exfiltrate the bearer token.
-    & Wreq.redirects
-      .~ 0
-    & maybe Relude.id (\h -> header "Authorization" .~ [encodeUtf8 h]) authHeader
+    .~ Left tlsManagerSettings{managerResponseTimeout = responseTimeoutMicro 10_000_000}
+      -- Don't follow redirects: http-client (unlike browsers) re-sends Authorization across a
+      -- cross-host 3xx, so a target answering 302 -> attacker could exfiltrate the bearer token.
+      & Wreq.redirects
+    .~ 0
+      & maybe Relude.id (\h -> header "Authorization" .~ [encodeUtf8 h]) authHeader
 
 
 -- | Reject non-http(s) schemes and hosts that resolve to the internal network
@@ -286,7 +286,7 @@ safeScrapeUrl u = case parseURI (toString (T.strip u)) of
           ip6 = fromMaybe h (T.stripPrefix "[" h >>= T.stripSuffix "]") -- inside of a [..] literal
        in T.null h
             || h
-              == "localhost"
+            == "localhost"
             || any (`T.isPrefixOf` ip6) ["::1", "fc", "fd", "fe8", "fe9", "fea", "feb", "::ffff:"] -- fc/fd = ULA fc00::/7; fe8-feb = link-local fe80::/10
             || internalIPv4 h
             || obfuscatedNumericHost h

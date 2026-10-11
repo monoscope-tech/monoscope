@@ -725,10 +725,10 @@ githubAppCallbackH instIdM _setupAction stateM codeM = do
             Right () ->
               redirectPage "GitHub account verified. Choose the repositories to connect."
                 $ "/p/"
-                  <> attempt.projectId.toText
-                  <> case attempt.destination of
-                    GitSync.InstallCode -> "/repositories/connect"
-                    GitSync.InstallSync -> "/repositories/connect"
+                <> attempt.projectId.toText
+                <> case attempt.destination of
+                  GitSync.InstallCode -> "/repositories/connect"
+                  GitSync.InstallSync -> "/repositories/connect"
         (Just iid, Nothing) | GitSync.InstallApp <- attempt.step -> do
           nonce <- GitSync.createInstallationAttempt session.persistentSession.id attempt{GitSync.step = GitSync.AuthorizeApp iid}
           pure $ redirectPage "Authorize your GitHub account to verify this installation." $ "https://github.com/login/oauth/authorize?client_id=" <> escaped ctx.config.githubClientId <> "&redirect_uri=" <> escaped callback <> "&state=" <> UUID.toText nonce

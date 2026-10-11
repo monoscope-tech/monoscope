@@ -223,7 +223,7 @@ localDefinition resource = case resource.kind of
             teams <- Members.getTeamsById resource.projectId dash.teams
             pure $ DashboardDefinition $ GitSync.buildSchemaWithMeta dash.schema dash.title (V.toList dash.tags) (map (.handle) teams)
         )
-        . mfilter (isJust . (.schema))
+      . mfilter (isJust . (.schema))
   Query -> fmap (QueryDefinition . monitorToInput) . mfilter (isNothing . (.deletedAt)) <$> Monitors.queryMonitorByProjectId resource.projectId (Monitors.QueryMonitorId resource.localId)
   Uptime -> fmap (\config -> UptimeDefinitionConfig $ UptimeDefinition config.name config.url config.scrapeIntervalSeconds (fromMaybe 200 config.expectedStatus) config.enabled) <$> PromCfg.getConfigByProject resource.projectId (UUIDId resource.localId)
   Cron -> fmap (\monitor -> CronDefinitionConfig $ CronDefinition monitor.slug monitor.name monitor.intervalSecs monitor.graceSecs) . find ((== resource.localId) . (.id)) <$> Monitors.cronMonitorsByProject resource.projectId
