@@ -356,8 +356,8 @@ processBackgroundJob authCtx bgJob =
         summary <- lift $ SchemaCatalog.getSummary Nothing pid
         let names = maybe [] (V.toList . (.services)) summary
             matches = filter ((== T.toLower repository.repo) . T.toLower) names
-        analyzed <- lift $ Hasql.interpScalar @Bool [HI.sql| SELECT EXISTS (SELECT 1 FROM projects.repository_analysis WHERE repository_id = #{rid} AND error IS NULL) |]
-        unless analyzed do
+        previous <- lift $ GitSync.getRepositoryAnalysis pid rid
+        unless (isJust $ previous >>= (.suggestions)) do
           mappings <- lift $ CodeContext.getCodeMappings pid
           unless (any (\mapping -> mapping.owner == repository.owner && mapping.repo == repository.repo) mappings) $ for_ matches \service ->
             lift $ CodeContext.insertCodeMapping pid cid (Git.RepoRef repository.owner repository.repo metadata.defaultBranch) (Just service) "" ""

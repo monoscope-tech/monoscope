@@ -502,7 +502,7 @@ spec = do
         for_ ["Connect a dashboard repository", "Link repository", ">Configuration<"] \label -> html `shouldNotSatisfy` T.isInfixOf label
         html `shouldSatisfy` T.isInfixOf "Source context"
 
-      it "repositoryAnalysis_activatesReliableMatchesAndPreservesManualDisablesOnRetry" \tr -> do
+      it "repositoryAnalysis_transientFailureAfterSetupDoesNotRestoreRemovedServiceLinks" \tr -> do
         let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
         Just account <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "team" Nothing (Just "fixture")
         Just repository <- runQueryEffect tr $ GitSync.connectRepository testPid account.id (Git.GitRepo "team/checkout" "checkout" True "main")
@@ -519,17 +519,19 @@ spec = do
         (sync.branch, sync.pathPrefix, sync.syncEnabled) `shouldBe` ("main", "config", True)
         _ <- testServant tr $ PageCodeContext.repositorySourceEnabledPostH testPid repository.id (PageCodeContext.SourceContextForm False)
         void $ runQueryEffect tr $ GitSync.pauseGitSync testPid sync.id
+        for_ mappings $ \mapping -> runQueryEffect tr $ CodeContext.deleteCodeMapping testPid mapping.id
+        void $ runTestBgRecordingHTTP frozenTime tr $ withUnavailableRepositoryAPI analyze
         void $ runTestBgRecordingHTTP frozenTime tr $ provider analyze
         Just current <- runQueryEffect tr $ GitSync.getRepository testPid repository.id
         current.sourceEnabled `shouldBe` False
         Just paused <- runQueryEffect tr $ GitSync.getGitSyncById testPid sync.id
         paused.syncEnabled `shouldBe` False
-        runQueryEffect tr (CodeContext.getCodeMappings testPid) >>= \rows -> length rows `shouldBe` 1
+        runQueryEffect tr (CodeContext.getCodeMappings testPid) >>= \rows -> length rows `shouldBe` 0
         Just ambiguous <- runQueryEffect tr $ GitSync.connectRepository testPid account.id (Git.GitRepo "team/other" "other" True "main")
         let ambiguousProvider = withHTTPResponses \_ endpoint -> pure $ if "/git/trees/" `T.isInfixOf` toText endpoint then Just "{\"tree\":[{\"path\":\"a/dashboards\",\"type\":\"tree\",\"sha\":\"a\"},{\"path\":\"b/monitors\",\"type\":\"tree\",\"sha\":\"b\"}]}" else Nothing
         void $ runTestBgRecordingHTTP frozenTime tr $ provider $ ambiguousProvider $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.AnalyzeRepository testPid ambiguous.id)
         runQueryEffect tr (GitSync.getGitSyncs testPid) >>= \rows -> length rows `shouldBe` 1
-        runQueryEffect tr (CodeContext.getCodeMappings testPid) >>= \rows -> length rows `shouldBe` 1
+        runQueryEffect tr (CodeContext.getCodeMappings testPid) >>= \rows -> length rows `shouldBe` 0
 
       it "configurationFolder_roundTripsAllMonitorDefinitionsAndPreservesRuntimeState" \tr -> do
         let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
