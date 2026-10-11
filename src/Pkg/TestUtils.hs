@@ -95,7 +95,7 @@ import BackgroundJobs qualified
 import Configuration.Dotenv qualified as Dotenv
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.STM.TBQueue (isEmptyTBQueue, readTBQueue)
-import Control.Exception (ErrorCall (..), bracket, evaluate, finally, throwIO, try)
+import Control.Exception (ErrorCall (..), bracket, finally, throwIO, try)
 import Control.Exception.Safe qualified as Safe
 import Control.Lens ((%~), (.~), (^.), (^..))
 import Data.Aeson qualified as AE
@@ -994,7 +994,7 @@ runAuthHandler TestResources{..} k = do
 assertNonMemberDenied :: TestResources -> Projects.ProjectId -> ATAuthCtx a -> IO ()
 assertNonMemberDenied tr pid k = do
   withResource tr.trPool \conn -> void $ PGS.execute conn [sql|DELETE FROM projects.project_members WHERE project_id = ?|] (Only pid)
-  try (runAuthHandler tr{trSessAndHeader = tr.trSessAndHeader <&> field @"user" . field @"isSudo" .~ False} k >>= evaluate) >>= \case
+  try (runAuthHandler tr{trSessAndHeader = tr.trSessAndHeader <&> field @"user" . field @"isSudo" .~ False} k >>= evaluateWHNF) >>= \case
     Left (ErrorCall msg) -> toText msg `shouldSatisfy` T.isInfixOf "missingProjectPermission"
     Right _ -> expectationFailure "a non-member was served another project's data"
 

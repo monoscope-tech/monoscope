@@ -42,6 +42,7 @@ import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.DeriveUtils (AesonText (..), DB, WrappedEnumSC (..), unAesonText)
 import Pkg.Parser (ScopedQuery (..))
 import Relude
+import Relude.Extra.Bifunctor (firstF)
 import Relude.Extra.Foldable1 (minimum1)
 import Utils (toXXHash)
 
@@ -579,7 +580,7 @@ rumPanelCacheGet key =
 -- refreshes it instead of paying a cold 24h scan. Older entries are treated as absent.
 rumPanelCacheGetStale :: (AE.FromJSON a, DB es) => Text -> Eff es (Maybe (a, Bool))
 rumPanelCacheGetStale key =
-  fmap (first unAesonText) <$> Hasql.interpOne [HI.sql|SELECT payload, expires_at <= now() FROM rum_panel_cache WHERE cache_key = #{key} AND expires_at > now() - interval '12 hours'|]
+  firstF unAesonText <$> Hasql.interpOne [HI.sql|SELECT payload, expires_at <= now() FROM rum_panel_cache WHERE cache_key = #{key} AND expires_at > now() - interval '12 hours'|]
 
 
 -- | Memory-miss path in one step: read the shared table, else compute and publish for
@@ -587,7 +588,7 @@ rumPanelCacheGetStale key =
 withSharedCache :: (AE.FromJSON a, AE.ToJSON a, DB es) => Text -> Int64 -> Eff es a -> Eff es a
 withSharedCache rawKey ttl compute = do
   let key = toXXHash rawKey
-  rumPanelCacheGet key >>= flip maybe pure (compute >>= \fresh -> fresh <$ rumPanelCacheSet key ttl fresh)
+  rumPanelCacheGet key >>= maybe (compute >>= \fresh -> fresh <$ rumPanelCacheSet key ttl fresh) pure
 
 
 rumPanelCacheSet :: (AE.ToJSON a, DB es) => Text -> Int64 -> a -> Eff es ()

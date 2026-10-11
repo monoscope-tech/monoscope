@@ -42,7 +42,7 @@ import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.IntMap.Strict qualified as IntMap
 import Data.Map.Strict qualified as Map
-import Data.Semigroup (Max (..))
+import Data.Semigroup qualified as SG
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (Display, display)
@@ -638,14 +638,14 @@ sliceRowsToEdges rows =
 endpointSliceRowsToEdges :: [EndpointSliceRow] -> [EndpointRollupEdge]
 endpointSliceRowsToEdges rows =
   [ EndpointRollupEdge ev h tk (parseNodeKind tkk) agg.reqs traces agg.errs agg.durNs agg.hist
-  | ((ev, h, tk, tkk), (agg, Max traces)) <- Map.toList grouped
+  | ((ev, h, tk, tkk), (agg, SG.Max traces)) <- Map.toList grouped
   ]
   where
     -- A row repeats its edge's distinct-trace total, so traces combine by max, not sum.
     grouped =
       Map.fromListWith
         (<>)
-        [ ((envFromColumn r.env, r.endpointHash, r.tgt, r.tgtKind), (HopAgg r.n r.errs (LatencyHist $ one (fromIntegral r.latBucket, r.n)) r.durNs, Max r.traces))
+        [ ((envFromColumn r.env, r.endpointHash, r.tgt, r.tgtKind), (HopAgg r.n r.errs (LatencyHist $ one (fromIntegral r.latBucket, r.n)) r.durNs, SG.Max r.traces))
         | r <- rows
         ]
 

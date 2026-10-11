@@ -153,7 +153,7 @@ sendSlackAlert threadTsM alert pid pTitle channelM = do
             LogPatternRateChangeAlert{..} -> Just $ mkSlackLogPatternRateChangePayload patternText issueUrl logLevel serviceName direction currentRate baselineMean changePercent pTitle cid isError
             ShapeAlert -> Nothing
           isDefaultChannel = cid == sd.channelId
-      fmap join $ forM (mkPayload alert) \payload -> do
+      join <$> forM (mkPayload alert) \payload -> do
         -- Legacy installs (apis.slack row created between migrations 0077 and 0080)
         -- have no webhookUrl; they silently fall through to chat.postMessage and
         -- fail for private channels. Log a distinct attention so ops can prompt a re-OAuth.

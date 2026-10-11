@@ -359,12 +359,13 @@ reportsLiveGetH pid hxRequestM = do
   view <- case claimed of
     Just token -> LiveReportBuilding pid <$ startLivePreview pid token
     Nothing ->
-      (fromMaybe Report.PreviewBuilding <$> Report.getPreview pid) >>= \case
-        Report.PreviewReady snapshot -> do
+      Report.getPreview pid >>= \case
+        Just (Report.PreviewReady snapshot) -> do
           (dateLabel, emailHtml) <- dropSubject <$> renderSystemEmail Projects.RTWeekly ("/p/" <> pid.toText <> "/reports/live") project sess.user.firstName True snapshot
           pure $ LiveReportReady ("weekly", dateLabel, emailHtml)
-        Report.PreviewFailed -> pure $ LiveReportFailed pid
-        Report.PreviewBuilding -> pure $ LiveReportBuilding pid
+        Just Report.PreviewFailed -> pure $ LiveReportFailed pid
+        Just Report.PreviewBuilding -> pure $ LiveReportBuilding pid
+        Nothing -> pure $ LiveReportBuilding pid
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
   addRespHeaders
     $ maybe

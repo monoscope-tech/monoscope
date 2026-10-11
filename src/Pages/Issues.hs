@@ -2058,9 +2058,10 @@ aiChatResponse_ pid userQuery explanation widgetsM toolCallsM systemPromptM =
       $ disclosure_ [class_ "mt-2 ml-[2.125rem] border border-strokeWeak rounded-lg text-xs"] "px-2.5 py-1.5 text-textWeak hover:bg-fillWeaker" (toHtml @Text $ bool "System context" (show (length toolCalls) <> " tool calls") (not (null toolCalls)))
       $ div_ [class_ "px-2.5 py-2 border-t border-strokeWeak bg-fillWeaker/50"] do
         forM_ toolCalls toolCallView_
-        whenJust systemPromptM \sp ->
-          disclosure_ [class_ "mt-2 border-t border-strokeWeak pt-2" | not (null toolCalls)] "text-textWeak hover:text-textStrong" "System Prompt"
-            $ div_ [class_ "mt-1 font-mono whitespace-pre-wrap text-textWeak max-h-48 overflow-y-auto"] (toHtml sp)
+        whenJust systemPromptM
+          $ disclosure_ [class_ "mt-2 border-t border-strokeWeak pt-2" | not (null toolCalls)] "text-textWeak hover:text-textStrong" "System Prompt"
+          . div_ [class_ "mt-1 font-mono whitespace-pre-wrap text-textWeak max-h-48 overflow-y-auto"]
+          . toHtml
   where
     toolCallView_ :: AI.ToolCallInfo -> Html ()
     toolCallView_ tc =

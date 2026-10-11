@@ -167,7 +167,7 @@ installedSuccess botPlatform pidM = do
               commandCard_ "bg-gradient-to-br from-fillWeaker to-fillBrand-weak border-strokeBrand-weak" "bg-fillBrand-strong" "bg-fillBrand-weak text-textBrand" (span_ [class_ "text-white font-bold text-lg"] "?") "/monoscope" "AI Powered"
                 $ "Ask questions about your API, get reports, and get instant insights with logs and charts delivered right to " <> botPlatform <> "."
               commandCard_ "bg-gradient-to-br from-fillSuccess-weak to-fillWeaker border-strokeSuccess-weak" "bg-fillSuccess-strong" "bg-fillSuccess-weak text-textSuccess" (faSprite_ "bell" "regular" "h-6 w-6 text-white") "/here" "Alerts"
-                $ "Set up this channel to receive automated error reports, weekly summaries, and daily performance alerts."
+                "Set up this channel to receive automated error reports, weekly summaries, and daily performance alerts."
   where
     commandCard_ :: Text -> Text -> Text -> Html () -> Text -> Text -> Text -> Html ()
     commandCard_ cardCls accentCls cmdCls icon cmd badge desc =

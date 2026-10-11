@@ -460,7 +460,7 @@ unifiedMonitorsGetH pid filterTM _sinceM = do
           { config = def{elemID = "monitorsListForm", containerId = Just "monitorsListContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0, refreshOnEvent = Just ("monitorsListChanged", currentURL <> "filter=" <> filterType)}
           , columns =
               [ col "Name" renderNameCol & withAttrs [class_ "min-w-0"]
-              , col "Teams" (\i -> forM_ i.teamHandles \handle -> span_ [class_ "badge badge-sm badge-neutral mr-1"] $ toHtml handle) & withAttrs [class_ "w-48 max-md:hidden"]
+              , col "Teams" (\i -> forM_ i.teamHandles $ span_ [class_ "badge badge-sm badge-neutral mr-1"] . toHtml) & withAttrs [class_ "w-48 max-md:hidden"]
               , col "Schedule" (\i -> span_ [class_ "text-xs text-textWeak whitespace-nowrap tabular-nums"] $ toHtml i.schedule) & withAttrs [class_ "w-28 max-md:hidden"]
               , col "Last Run" (\i -> span_ [class_ "text-xs text-textWeak whitespace-nowrap tabular-nums"] $ maybe "Never" (toHtml . prettyTimeShort i.now) i.lastRun) & withAttrs [class_ "w-28 max-md:hidden"]
               , col "Threshold" thresholdCol & withAttrs [class_ "w-40 max-md:hidden"]
@@ -553,7 +553,7 @@ unifiedMonitorsGetH pid filterTM _sinceM = do
             when (item.alertThreshold > 0) do
               span_ [class_ "text-textWeak/40"] "\xb7"
               span_ [class_ "tabular-nums text-iconError bg-fillError-weak rounded-full px-1.5 py-px text-2xs"] $ toHtml $ formatWithCommas item.alertThreshold <> " " <> Display.display item.triggerDirection
-            forM_ item.teamHandles \handle -> span_ [class_ "badge badge-sm badge-neutral"] $ toHtml handle
+            forM_ item.teamHandles $ span_ [class_ "badge badge-sm badge-neutral"] . toHtml
           div_ [class_ "flex gap-1 items-center shrink-0"] $ actionBtns "-mobile"
 
 

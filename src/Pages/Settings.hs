@@ -1717,7 +1717,7 @@ stripeWebhookPostH sigHeaderM rawBody = do
       epoch <- readMaybe @Integer (toString ts)
       guard $ abs (round (utcTimeToPOSIXSeconds now) - epoch) <= 300
       let expected = BA.convert (HMAC.hmac secret (encodeUtf8 ts <> "." <> rawBody) :: HMAC.HMAC SHA256) :: ByteString
-      pure $ any (BA.constEq expected) [sig | Right sig <- B16.decode . encodeUtf8 <$> mapMaybe (T.stripPrefix "v1=") parts]
+      pure $ any (BA.constEq expected) (rights $ B16.decode . encodeUtf8 <$> mapMaybe (T.stripPrefix "v1=") parts)
 
 
 handleStripeCheckout :: EnvConfig -> AE.Value -> ATBaseCtx (Html ())

@@ -165,6 +165,7 @@ import Pkg.ExtractionWorker qualified as EW
 import Pkg.Metrics qualified as Metrics
 import Pkg.UUID qualified as UUIDBytes
 import Relude hiding (ask)
+import Relude.Extra.Bifunctor (bimapF)
 import Relude.Extra.Foldable1 (maximum1, minimum1)
 import System.Logging qualified as Log
 import System.Tracing (forkWithCtx)
@@ -1205,7 +1206,7 @@ getUsageTotals useTimefusion pid wStart wEnd = do
   -- the count ran to query time, so rows landing between the two were billed in
   -- this window and again in the next one, which starts at `wEnd`.
   let tally tbl =
-        bimap getSum getSum <$> flip foldMapM (dayWindows wStart wEnd) \(s, e) ->
+        bimapF getSum getSum $ flip foldMapM (dayWindows wStart wEnd) \(s, e) ->
           bimap Sum Sum . fromMaybe (0, 0) <$> Hasql.withHasqlTimefusion useTimefusion (Hasql.interpOne [HI.sql| SELECT count(*)::bigint, COALESCE(SUM(message_size_bytes),0)::bigint FROM ^{tbl} WHERE project_id=#{pid.toText} AND timestamp > #{s} AND timestamp <= #{e}|])
   (eC, eB) <- tally [HI.sql|otel_logs_and_spans|]
   (mC, mB) <- tally [HI.sql|otel_metrics|]
