@@ -35,13 +35,13 @@ get_latest_version() {
 get_installed_version() {
   local bin="${INSTALL_DIR}/${BINARY}"
   if [ -x "$bin" ]; then
-    "$bin" --version 2>/dev/null | grep -o 'v[0-9][^ ]*' | head -1 || true
+    "$bin" --version 2>/dev/null | sed -nE 's/^monoscope v?([0-9]+(\.[0-9]+)*).*$/v\1/p' | head -1 || true
   fi
 }
 
 tmpdir=""
 
-cleanup() { [ -n "$tmpdir" ] && rm -rf "$tmpdir"; }
+cleanup() { [ -z "$tmpdir" ] || rm -rf "$tmpdir"; }
 trap cleanup EXIT
 
 main() {

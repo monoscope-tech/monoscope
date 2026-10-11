@@ -13,7 +13,7 @@ module CLI.Validate (
 
 import Relude
 
-import CLI.Core (printError)
+import CLI.Core (dieWith)
 import Data.Char (isDigit)
 import Data.Text qualified as T
 import Effectful
@@ -84,9 +84,7 @@ normalizeKind k = k
 -- | Print the error and exit non-zero on Left; return the value on Right.
 -- The standard "validate then continue" combinator at the CLI boundary.
 validateOrDie :: IOE :> es => Either Text a -> Eff es a
-validateOrDie = \case
-  Left err -> printError err >> liftIO exitFailure
-  Right a -> pure a
+validateOrDie = either dieWith pure
 
 
 -- | Validate an optional duration flag, exiting on failure. The first arg
@@ -109,4 +107,4 @@ validateQueryOrDie q
   | T.null (T.strip q) = pass
   | otherwise = case parseQueryToAST q of
       Right _ -> pass
-      Left err -> printError ("invalid query: " <> err) >> liftIO exitFailure
+      Left err -> dieWith ("invalid query: " <> err)

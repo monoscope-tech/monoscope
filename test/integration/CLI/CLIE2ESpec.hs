@@ -5,20 +5,10 @@
 -- server so that wire-format bugs (URL paths, KQL operators, JSON envelope
 -- mismatches) surface in CI.
 --
--- == Pointing the suite at a server
---
--- The suite is driven by environment variables; if they are unset, every
--- test prints @[ pending ]@ instead of failing. This keeps `make test`
--- green when no dev server is running but lets the developer flip the
--- suite on for debugging without recompiling:
---
--- @
--- MONOSCOPE_API_URL=http://localhost:8080 \\
--- MONOSCOPE_API_KEY=...                    \\
--- MONOSCOPE_PROJECT=00000000-0000-0000-0000-000000000000 \\
---   USE_EXTERNAL_DB=true cabal test integration-tests \\
---     --test-options='--match \"CLI binary E2E\"'
--- @
+-- The default run starts an isolated test server and creates a project API key.
+-- Set MONOSCOPE_API_KEY (and optionally MONOSCOPE_API_URL / MONOSCOPE_PROJECT)
+-- to exercise an external server instead. MONOSCOPE_BIN selects the executable.
+-- Build it with make cli-build, then run TEST_MATCH=CLI make live-test-dev.
 --
 -- == Why every audit finding gets a test
 --
@@ -28,12 +18,14 @@
 -- point of this file.
 module CLI.CLIE2ESpec (spec) where
 
+import Pkg.TestUtils (createTestAPIKey, testPid, withLiveServer, withTestResources)
 import Relude
 
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.List (isInfixOf)
 import Data.Text qualified as T
+import Data.Vector qualified as V
 import Network.HTTP.Client (httpLbs, parseRequest_, requestHeaders, responseStatus)
 import Network.HTTP.Client.TLS (getGlobalManager)
 import Network.HTTP.Types.Status (statusCode)
@@ -53,21 +45,13 @@ data E2EConfig = E2EConfig
   }
 
 
--- | Defaults for the public demo project — anything else needs explicit env
--- override. The demo project is always available at api.monoscope.tech and
--- carries enough activity to exercise the CLI's read paths end-to-end. CI
--- and local runs both pick this up by default; override via the
--- @MONOSCOPE_API_URL@ / @MONOSCOPE_PROJECT@ env vars to point elsewhere.
+-- | Defaults for an explicitly configured external API key.
 defaultBaseUrl, defaultProject :: Text
 defaultBaseUrl = "https://api.monoscope.tech"
 defaultProject = "00000000-0000-0000-0000-000000000000"
 
 
--- | Look up the E2E env vars + binary path. Falls back to the public demo
--- project on @api.monoscope.tech@ when the env vars are unset, so tests run
--- against prod by default. Returns 'Nothing' only if @MONOSCOPE_API_KEY@ is
--- missing — that one has no safe default. CI should set it from a secret
--- with read-only access to the demo project.
+-- | External-server overrides; absent credentials select the local test server.
 getE2EConfig :: IO (Maybe E2EConfig)
 getE2EConfig = do
   mUrl <- lookupEnv "MONOSCOPE_API_URL"
@@ -76,7 +60,7 @@ getE2EConfig = do
   case mKey of
     Nothing -> pure Nothing
     Just key -> do
-      bin <- T.unpack . T.strip . toText <$> readProcOut "cabal" ["list-bin", "exe:monoscope"]
+      bin <- findBin
       pure $
         Just
           E2EConfig
@@ -85,12 +69,6 @@ getE2EConfig = do
             , project = maybe defaultProject toText mPid
             , binPath = bin
             }
-
-
-readProcOut :: FilePath -> [String] -> IO String
-readProcOut cmd args = do
-  (_, out, _) <- Proc.readProcessWithExitCode cmd args ""
-  pure out
 
 
 -- | Run the monoscope binary with E2E env overrides. Always sets
@@ -129,14 +107,10 @@ withReachableServer :: (E2EConfig -> IO ()) -> IO ()
 withReachableServer body = do
   mCfg <- getE2EConfig
   case mCfg of
-    Nothing ->
-      pendingWith
-        $ "Set MONOSCOPE_API_KEY (the only env var without a safe default) to enable. "
-        <> "URL defaults to "
-        <> toString defaultBaseUrl
-        <> ", project to the demo "
-        <> toString defaultProject
-        <> "."
+    Nothing -> withCliBin \bin -> withTestResources \tr -> do
+      key <- createTestAPIKey tr testPid "binary-e2e"
+      withLiveServer tr \port ->
+        body E2EConfig{baseUrl = "http://127.0.0.1:" <> show port, apiKey = key, project = defaultProject, binPath = bin}
     Just cfg -> do
       mgr <- getGlobalManager
       let req =
@@ -177,7 +151,7 @@ shouldHaveKeys other _ =
 -- | Find the binary path even when no E2E config is present (used by tests
 -- that don't need a running server but do need to invoke the CLI).
 findBin :: IO FilePath
-findBin = T.unpack . T.strip . toText <$> readProcOut "cabal" ["list-bin", "exe:monoscope"]
+findBin = lookupEnv "MONOSCOPE_BIN" >>= maybe (toString . T.strip . toText <$> Proc.readProcess "cabal" ["list-bin", "exe:monoscope"] "") pure
 
 
 -- | Run @body@ with the CLI binary, skipping when it hasn't been built.
@@ -194,7 +168,7 @@ withCliBin body = do
   exists <- doesFileExist bin
   if exists
     then body bin
-    else pendingWith $ "CLI binary not built at " <> bin <> " — run `cabal build exe:monoscope` to enable."
+    else pendingWith $ "CLI binary not built at " <> bin <> " — run `make cli-build` to enable."
 
 
 spec :: Spec
@@ -230,7 +204,12 @@ spec = describe "CLI binary E2E (real server)" $ do
       when (code /= ExitSuccess) $ expectationFailure $ "stderr=" <> err
       v <- decodeJsonOut out
       case v of
-        AE.Object obj -> KM.size obj `shouldSatisfy` (<= 1)
+        AE.Object obj -> do
+          KM.keys obj `shouldSatisfy` all (`elem` ["resource.service.name", "source"])
+          case KM.lookup "resource.service.name" obj of
+            Just (AE.Array values) -> V.length values `shouldSatisfy` (<= 3)
+            Nothing -> pure ()
+            _ -> expectationFailure "expected facet values array"
         _ -> expectationFailure "expected object"
 
   describe "events" $ do

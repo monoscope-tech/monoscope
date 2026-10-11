@@ -12,7 +12,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Text qualified as T
-import Data.Time (addUTCTime, getCurrentTime)
+import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID4
@@ -75,6 +75,17 @@ shouldHaveKeys other _ = expectationFailure $ "expected JSON object, got: " <> s
 spec :: Spec
 spec = around withTestResources do
   describe "CLI lifecycle (in-process, real parser + handlers)" do
+    it "nonpositive_search_limit_fails_before_querying" \tr -> do
+      forM_ ["0", "-1"] \limit -> do
+        (ec, out) <- runCLILifecycle tr ["--json", "events", "search", "", "--limit", limit]
+        ec `shouldBe` ExitFailure 1
+        out `shouldBe` ""
+
+    it "invalid_metrics_duration_fails_before_querying" \tr -> do
+      (ec, out) <- runCLILifecycle tr ["--json", "metrics", "query", "summarize count()", "--since", "nonsense"]
+      ec `shouldBe` ExitFailure 1
+      out `shouldBe` ""
+
     it "missing_resource_id_fails_without_prompting_in_scripts" \tr -> do
       forM_ [["dashboards", "render"], ["dashboards", "get"], ["monitors", "get"], ["issues", "get"], ["incidents", "get"], ["endpoints", "get"], ["log-patterns", "get"], ["teams", "get"], ["members", "get"], ["api-keys", "get"], ["dashboards", "patch", "dashboard.yaml"], ["members", "patch", "view"], ["dashboards", "widget", "delete", "widget-id"]] \args -> do
         (ec, out) <- runCLILifecycle tr ("--json" : args)
@@ -260,6 +271,19 @@ spec = around withTestResources do
       listRows listV2 `shouldBe` []
 
   describe "incident investigation lifecycle (search → get → context → share)" do
+    it "context_historicalTimestamp_returnsOnlyTheCenteredWindow" \tr -> do
+      apiKey <- createTestAPIKey tr testPid "context-window-key"
+      let center = addUTCTime (-86400) frozenTime
+      forM_ [-180, -60, 60, 180] \offset -> ingestLog tr apiKey "context-window" (addUTCTime offset center)
+      (ec, out) <- runCLILifecycle tr ["--json", "events", "context", "--at", iso8601Show center, "--window", "5m"]
+      ec `shouldBe` ExitSuccess
+      rows <- eventsOf <$> jsonOut out
+      [AE.fromJSON @UTCTime timestamp | AE.Object row <- rows, Just timestamp <- [KM.lookup "timestamp" row]]
+        `shouldMatchList` [AE.Success (addUTCTime offset center) | offset <- [-60, 60]]
+      (badTime, badOut) <- runCLILifecycle tr ["--json", "events", "context", "--at", "not-a-timestamp"]
+      badTime `shouldBe` ExitFailure 1
+      badOut `shouldBe` ""
+
     it "finds an ingested span, pulls context, and mints a share link that resolves unauthenticated" \tr -> do
       apiKey <- createTestAPIKey tr testPid "lifecycle-share-key"
       ingestTrace tr apiKey "GET /api/lifecycle/share" frozenTime
@@ -423,6 +447,11 @@ spec = around withTestResources do
       map rowId (eventsOf v3) `shouldBe` ids1
 
   describe "metrics SLO lifecycle" do
+    it "metrics_assert_withoutScalar_failsRatherThanPassingTheGate" \tr -> do
+      (ec, out) <- runCLILifecycle tr ["--json", "metrics", "query", "summarize count() by resource.service.name", "--assert", "< 100"]
+      jsonOut out >>= (`shouldHaveKeys` ["dataset"])
+      ec `shouldBe` ExitFailure 1
+
     it "KQL summarize expression returns data; --assert gates the exit code; chart renders" \tr -> do
       apiKey <- createTestAPIKey tr testPid "lifecycle-metrics-key"
       -- the server resolves --since against the frozen test clock, so the

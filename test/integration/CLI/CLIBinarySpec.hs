@@ -2,11 +2,15 @@ module CLI.CLIBinarySpec (spec) where
 
 import Relude
 
+import Data.Bits ((.&.))
 import Data.List (isInfixOf)
 import Data.Text qualified as T
 import System.Directory (doesFileExist)
+import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
-import System.Process (readProcessWithExitCode)
+import System.IO.Temp (withSystemTempDirectory)
+import System.Posix.Files (fileMode, getFileStatus, setFileMode)
+import System.Process (CreateProcess (..), proc, readCreateProcessWithExitCode, readProcessWithExitCode)
 import Test.Hspec
 
 -- | Locate the monoscope CLI binary. CI can pass @MONOSCOPE_BIN@ directly;
@@ -50,6 +54,52 @@ spec = describe "CLI binary E2E tests" do
     (code, out, _) <- runMono ["events", "search", "--help"]
     code `shouldBe` ExitSuccess
     out `shouldSatisfy` \s -> "--since" `isInfixOf` s && "--from" `isInfixOf` s
+
+  it "leaf_help_shows_the_requested_command_usage" do
+    forM_ [["me"], ["version"], ["config", "init"], ["monitors", "list"], ["dashboards", "list"], ["api-keys", "list"], ["project", "get"], ["teams", "list"], ["members", "list"]] \args -> do
+      (ec, out, _) <- runMono (args <> ["--help"])
+      ec `shouldBe` ExitSuccess
+      T.strip <$> viaNonEmpty head (T.lines (toText out)) `shouldBe` Just ("Usage: monoscope " <> unwords (map toText args))
+
+  it "chart_invalid_type_reports_the_allowed_choices" do
+    (ec, _, err) <- runMono ["chart", "summarize count()", "--type", "bogus"]
+    ec `shouldBe` ExitFailure 1
+    err `shouldContain` "line|bar|stat|table"
+
+  it "auth_login_help_showsTheTokenOption" do
+    (code, out, _) <- runMono ["auth", "login", "--help"]
+    code `shouldBe` ExitSuccess
+    out `shouldSatisfy` isInfixOf "--token"
+
+  it "config_scripts_redactSecretsAndReportErrorsOnStderrWithoutPrompting" do
+    findBinary >>= \case
+      Nothing -> pendingWith "monoscope exe not built"
+      Just bin -> withSystemTempDirectory "monoscope-config" \dir -> do
+        inherited <- getEnvironment
+        let isolated = ("XDG_CONFIG_HOME", dir) : filter (\(key, _) -> key /= "XDG_CONFIG_HOME" && not ("MONOSCOPE_" `isPrefixOf` key)) inherited
+            runIsolated args = readCreateProcessWithExitCode (proc bin ("--json" : args)){cwd = Just dir, env = Just isolated} ""
+            runConfig args = runIsolated ("config" : args)
+        forM_ [("config.yaml", ["config", "set", "api_key"]), ("tokens.json", ["auth", "login", "--token"])] \(file, args) -> do
+          let path = dir <> "/monoscope/" <> file
+          forM_ [False, True] \overwrite -> do
+            when overwrite $ setFileMode (dir <> "/monoscope") 0o755 >> setFileMode path 0o644
+            (code, out, err) <- runIsolated (args <> ["fixture-secret"])
+            code `shouldBe` ExitSuccess
+            (out <> err) `shouldNotSatisfy` isInfixOf "fixture-secret"
+            permissions <- fileMode <$> getFileStatus path
+            permissions .&. 0o077 `shouldBe` 0
+            directoryPermissions <- fileMode <$> getFileStatus (dir <> "/monoscope")
+            directoryPermissions .&. 0o077 `shouldBe` 0
+        forM_ [["get"], ["get", "api_key"]] \args -> do
+          (code, configOut, configErr) <- runConfig args
+          code `shouldBe` ExitSuccess
+          (configOut <> configErr) `shouldNotSatisfy` isInfixOf "fixture-secret"
+          configOut `shouldSatisfy` isInfixOf "********"
+        forM_ [["get", "bogus"], ["set", "bogus", "value"], ["init"]] \args -> do
+          (code, stdoutText, stderrText) <- runConfig args
+          code `shouldBe` ExitFailure 1
+          stdoutText `shouldBe` ""
+          stderrText `shouldSatisfy` isInfixOf "message"
 
   it "auth status exits and shows status message" do
     (_, out, err) <- runMono ["auth", "status"]

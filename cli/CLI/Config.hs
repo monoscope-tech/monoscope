@@ -18,6 +18,7 @@ module CLI.Config (
 
 import Relude
 
+import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.UUID (UUID)
 import Data.UUID qualified as UUID
@@ -28,6 +29,7 @@ import Effectful.Environment qualified as Env
 import Effectful.FileSystem (FileSystem, createDirectoryIfMissing, doesFileExist, getCurrentDirectory, removeFile)
 import System.Directory (XdgDirectory (..), getXdgDirectory)
 import System.FilePath (takeDirectory, (</>))
+import System.IO (withBinaryFile)
 import System.Posix.Files (setFileMode)
 
 
@@ -91,6 +93,7 @@ configDir :: (FileSystem :> es, IOE :> es) => Eff es FilePath
 configDir = do
   dir <- liftIO $ getXdgDirectory XdgConfig "monoscope"
   createDirectoryIfMissing True dir
+  liftIO $ setFileMode dir 0o700
   pure dir
 
 
@@ -163,9 +166,11 @@ loadToken = do
   exists <- doesFileExist f
   if exists
     then
-      liftIO $ Yaml.decodeFileEither @(Map Text Text) f >>= \case
-        Right m -> pure $ Map.lookup "token" m
-        Left _ -> pure Nothing
+      liftIO
+        $ Yaml.decodeFileEither @(Map Text Text) f
+        >>= \case
+          Right m -> pure $ Map.lookup "token" m
+          Left _ -> pure Nothing
     else pure Nothing
 
 
@@ -173,8 +178,7 @@ saveToken :: (FileSystem :> es, IOE :> es) => Text -> Eff es ()
 saveToken token = do
   f <- tokensFile
   let m = one ("token", token) :: Map Text Text
-  liftIO $ Yaml.encodeFile f m
-  liftIO $ setFileMode f 0o600
+  writePrivateYaml f m
 
 
 removeToken :: (FileSystem :> es, IOE :> es) => Eff es ()
@@ -196,4 +200,10 @@ setConfigValue key val = do
         CKApiUrl -> cfg{api_url = Just val}
         CKProject -> cfg{project = Just val}
         CKApiKey -> cfg{api_key = Just val}
-  liftIO $ Yaml.encodeFile f updated
+  writePrivateYaml f updated
+
+
+writePrivateYaml :: (IOE :> es, Yaml.ToJSON a) => FilePath -> a -> Eff es ()
+writePrivateYaml path value = liftIO $ withBinaryFile path WriteMode \handle -> do
+  setFileMode path 0o600
+  BS.hPut handle (Yaml.encode value)

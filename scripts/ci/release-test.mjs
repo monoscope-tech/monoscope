@@ -75,6 +75,20 @@ else if (is('buildx', 'imagetools', 'inspect')) {
 });
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
+test('installer recognizes an installed release without downloading it again', () => {
+  const installed = join(root, 'installed');
+  mkdirSync(installed);
+  writeFileSync(join(root, 'bin/curl'), '#!/bin/sh\nexit 99\n', { mode: 0o755 });
+  for (const version of ['0.6.31', 'v0.6.31']) {
+    writeFileSync(join(installed, 'monoscope'), `#!/bin/sh\necho 'monoscope ${version}'\n`, { mode: 0o755 });
+    const result = spawnSync('bash', [fileURLToPath(new URL('../install.sh', import.meta.url)), 'v0.6.31'], {
+      env: { ...env, MONOSCOPE_INSTALL_DIR: installed }, encoding: 'utf8',
+    });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout, /already installed and up to date/);
+  }
+});
+
 test('squash merge reuses digest without rebuilding or moving latest', () => {
   release(['build']);
   git('commit', '--allow-empty', '-qm', 'squash metadata');

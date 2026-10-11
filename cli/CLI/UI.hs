@@ -182,7 +182,7 @@ drawField focused f =
   B.padLeftRight 1
     $ B.vBox
       [ B.txt $ f.label <> ":"
-      , (if focused then B.visible else id) $ BE.renderEditor (B.txt . unlines) focused f.editor
+      , (if focused then B.visible else id) $ BE.renderEditor (B.txt . unlines . map (if f.key == "token" then T.map (const '*') else id)) focused f.editor
       ]
 
 
