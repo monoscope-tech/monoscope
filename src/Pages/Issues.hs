@@ -527,15 +527,14 @@ issueDetailCore pid firstM eventM requestedRange fetchIssue = do
       replaySession <- enriching "replay_recording" $ flip foldMapM (UUID.fromText =<< sessionM) \sid ->
         listToMaybe @Text
           <$> Hasql.interp [HI.sql| SELECT session_id::text FROM projects.replay_sessions WHERE project_id = #{pid} AND session_id = #{sid} LIMIT 1 |]
-      (apiChanges, apiSchema) <-
-        fromMaybe ([], Nothing) <$> forM (apiChangeData issue) \d -> do
-          changes <- ApiChanges.getAnomaliesVM pid d.anomalyHashes
-          schemas <- SchemaCatalog.getByKeysBatch (V.singleton (pid, issue.targetHash))
-          pure (changes, HM.lookup (pid, issue.targetHash) schemas)
+      apiEvidence <- enriching "api_change_evidence" $ forM (apiChangeData issue) \d -> do
+        changes <- ApiChanges.getAnomaliesVM pid d.anomalyHashes
+        schemas <- SchemaCatalog.getByKeysBatch (V.singleton (pid, issue.targetHash))
+        pure (changes, HM.lookup (pid, issue.targetHash) schemas)
       addRespHeaders
         $ PageCtx bwconf
         $ issueDetailPage
-          IssueView{pid, issue, apiChanges, apiSchema, traceRef = mTraceRef, replaySession, errM = errorM, patternM, now, isFirst, tp, stateEvent, canResolve, members, tagCounts, errHourlyFrom}
+          IssueView{pid, issue, apiEvidence, traceRef = mTraceRef, replaySession, errM = errorM, patternM, now, isFirst, tp, stateEvent, canResolve, members, tagCounts, errHourlyFrom}
   where
     -- A lookup that only decides whether an optional panel renders: a throw or a 10s stall
     -- degrades to Nothing. A transient TF error used to 500 the whole issue, precisely
@@ -881,8 +880,7 @@ issueFactRow_ now issue errM patternM =
 data IssueView = IssueView
   { pid :: Projects.ProjectId
   , issue :: Issues.Issue
-  , apiChanges :: [ApiChanges.AnomalyVM]
-  , apiSchema :: Maybe Catalog.CatalogEntry
+  , apiEvidence :: Maybe ([ApiChanges.AnomalyVM], Maybe Catalog.CatalogEntry)
   , traceRef :: Maybe (Text, UTCTime)
   , replaySession :: Maybe Text
   , errM :: Maybe ErrorPatterns.ErrorPatternL
@@ -1452,64 +1450,68 @@ eventCard_ IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflow-cli
             -- Hands the Explorer the alert's own query, its issue boundary, and the page's window.
             explorerLink = externalLink_ [href_ $ timeScopedUrl ("/p/" <> pid.toText <> "/log_explorer") [("query", applyScopedKqlContext scope d.queryExpression)] tp.from tp.to tp.since, data_ "preserve-page-context" ""] "Open query in Explorer"
          in [IssueSection (Just explorerLink) [] "issue-query" "terminal" "Query" $ pre_ [class_ "max-md:px-3 px-4 text-sm font-mono text-textStrong whitespace-pre-wrap break-words"] $ toHtml d.queryExpression]
-      Just (Issues.ApiChangeP d) ->
-        let snapshots = [(zonedTimeToUTC a.createdAt, change) | a <- apiChanges, change <- V.toList $ getAeson a.fieldEvidence]
-            snapshotCell :: Maybe ApiChanges.FieldSnapshot -> Html ()
-            snapshotCell Nothing = span_ [class_ "text-textWeak"] "Not previously observed"
-            snapshotCell (Just snapshot) = do
-              div_ [class_ "font-mono text-xs break-words"] $ toHtml $ T.intercalate ", " $ Relude.sort $ (.toText) <$> HS.toList snapshot.structure.types
-              unless (HS.null snapshot.structure.formats)
-                $ div_ [class_ "text-xs text-textWeak break-words"]
-                $ toHtml
-                $ "Formats: "
-                <> T.intercalate ", " (Relude.sort $ HS.toList snapshot.structure.formats)
-              unless (V.null snapshot.examples) do
-                let samples values = pre_ [class_ "mt-1 text-xs font-mono whitespace-pre-wrap break-all"] $ toHtml (decodeUtf8 (AE.encode values) :: Text)
-                samples (V.take 3 snapshot.examples)
-                when (V.length snapshot.examples > 3) $ details_ do
-                  summary_ [class_ "cursor-pointer text-xs text-textBrand py-1"] $ toHtml $ "Show " <> show (V.length snapshot.examples - 3) <> " more sample values"
-                  samples (V.drop 3 snapshot.examples)
-            kindOf change = bool ApiChanges.Modified ApiChanges.Added (isNothing change.before)
-            legacyFields = [(kind, path) | (kind, paths) <- [(ApiChanges.Added, d.newFields), (ApiChanges.Removed, d.deletedFields), (ApiChanges.Modified, d.modifiedFields)], path <- V.toList paths, (kind, path) `notElem` [(kindOf c, c.path) | (_, c) <- snapshots]]
-         in [ section "issue-fields" "list-check" "Field changes"
-                $ if Issues.hasFieldDrift d
-                  then div_ [class_ "max-md:px-3 px-4 space-y-3"] do
-                    p_ [class_ "text-xs text-textWeak"] "Before and after show the types, formats and sample values observed at detection time."
-                    div_ [class_ "overflow-x-auto"] $ table_ [class_ "w-full min-w-[48rem] text-left text-sm"] do
-                      thead_ $ tr_ $ forM_ (["Field", "Change", "Before", "After", "Detected"] :: [Text]) $ th_ [scope_ "col", class_ "p-2 font-medium text-textWeak"] . toHtml
-                      tbody_ do
-                        forM_ (sortWith fst snapshots) \(detectedAt, change) -> tr_ [class_ "border-t border-strokeWeak align-top"] do
-                          th_ [scope_ "row", class_ "p-2 font-mono text-xs font-normal break-all"] $ toHtml change.path
-                          td_ [class_ "p-2"] $ toHtml $ show @Text $ kindOf change
-                          td_ [class_ "p-2 min-w-40"] $ snapshotCell change.before
-                          td_ [class_ "p-2 min-w-40"] $ snapshotCell (Just change.after)
-                          td_ [class_ "p-2 text-xs whitespace-nowrap"] $ time_ [datetime_ $ isoT detectedAt] $ toHtml $ isoT detectedAt
-                        forM_ legacyFields \(kind, path) -> tr_ [class_ "border-t border-strokeWeak align-top"] do
-                          th_ [scope_ "row", class_ "p-2 font-mono text-xs font-normal break-all"] $ toHtml path
-                          td_ [class_ "p-2"] $ toHtml $ show @Text kind
-                          td_ [class_ "p-2 text-xs text-textWeak"] "Historical types and values were not captured for this change."
-                          td_ [class_ "p-2 min-w-40"] $ case apiSchema >>= ApiChanges.fieldSnapshot path of
-                            Nothing -> span_ [class_ "text-xs text-textWeak"] "No current samples available"
-                            Just current -> do
-                              div_ [class_ "text-xs text-textWeak mb-1"] "Current observations"
-                              snapshotCell (Just current)
-                          td_ [class_ "p-2 text-xs whitespace-nowrap"]
-                            $ maybe "Not recorded" (toHtml . isoT)
-                            $ listToMaybe
-                            $ Relude.sort
-                              [ zonedTimeToUTC a.createdAt
-                              | a <- apiChanges
-                              , path `V.elem` case kind of
-                                  ApiChanges.Added -> a.newFields
-                                  ApiChanges.Modified -> a.modifiedFields
-                                  ApiChanges.Removed -> V.empty
-                              ]
-                  else
-                    emptyState_
-                      def{icon = Just "rocket", size = ESCompact}
-                      "New endpoint discovered"
-                      "This endpoint started receiving traffic. Inspect the originating request in the Trace section to see headers, body, and call site."
-            ]
+      Just (Issues.ApiChangeP _)
+        | Nothing <- apiEvidence ->
+            [section "issue-fields" "list-check" "Field changes" $ emptyState_ def{icon = Just "triangle-exclamation", size = ESCompact} "Field evidence unavailable" "Reload this page to retry."]
+      Just (Issues.ApiChangeP d)
+        | Just (apiChanges, apiSchema) <- apiEvidence ->
+            let snapshots = [(zonedTimeToUTC a.createdAt, change) | a <- apiChanges, change <- V.toList $ getAeson a.fieldEvidence]
+                snapshotCell :: Maybe ApiChanges.FieldSnapshot -> Html ()
+                snapshotCell Nothing = span_ [class_ "text-textWeak"] "Not previously observed"
+                snapshotCell (Just snapshot) = do
+                  div_ [class_ "font-mono text-xs break-words"] $ toHtml $ T.intercalate ", " $ Relude.sort $ (.toText) <$> HS.toList snapshot.structure.types
+                  unless (HS.null snapshot.structure.formats)
+                    $ div_ [class_ "text-xs text-textWeak break-words"]
+                    $ toHtml
+                    $ "Formats: "
+                    <> T.intercalate ", " (Relude.sort $ HS.toList snapshot.structure.formats)
+                  unless (V.null snapshot.examples) do
+                    let samples values = pre_ [class_ "mt-1 text-xs font-mono whitespace-pre-wrap break-all"] $ toHtml (decodeUtf8 (AE.encode values) :: Text)
+                    samples (V.take 3 snapshot.examples)
+                    when (V.length snapshot.examples > 3) $ details_ do
+                      summary_ [class_ "cursor-pointer text-xs text-textBrand py-1"] $ toHtml $ "Show " <> show (V.length snapshot.examples - 3) <> " more sample values"
+                      samples (V.drop 3 snapshot.examples)
+                kindOf change = bool ApiChanges.Modified ApiChanges.Added (isNothing change.before)
+                legacyFields = [(kind, path) | (kind, paths) <- [(ApiChanges.Added, d.newFields), (ApiChanges.Removed, d.deletedFields), (ApiChanges.Modified, d.modifiedFields)], path <- V.toList paths, (kind, path) `notElem` [(kindOf c, c.path) | (_, c) <- snapshots]]
+             in [ section "issue-fields" "list-check" "Field changes"
+                    $ if Issues.hasFieldDrift d
+                      then div_ [class_ "max-md:px-3 px-4 space-y-3"] do
+                        p_ [class_ "text-xs text-textWeak"] "Before and after show the types, formats and sample values observed at detection time."
+                        div_ [class_ "overflow-x-auto"] $ table_ [class_ "w-full min-w-[48rem] text-left text-sm"] do
+                          thead_ $ tr_ $ forM_ (["Field", "Change", "Before", "After", "Detected"] :: [Text]) $ th_ [scope_ "col", class_ "p-2 font-medium text-textWeak"] . toHtml
+                          tbody_ do
+                            forM_ (sortWith fst snapshots) \(detectedAt, change) -> tr_ [class_ "border-t border-strokeWeak align-top"] do
+                              th_ [scope_ "row", class_ "p-2 font-mono text-xs font-normal break-all"] $ toHtml change.path
+                              td_ [class_ "p-2"] $ toHtml $ show @Text $ kindOf change
+                              td_ [class_ "p-2 min-w-40"] $ snapshotCell change.before
+                              td_ [class_ "p-2 min-w-40"] $ snapshotCell (Just change.after)
+                              td_ [class_ "p-2 text-xs whitespace-nowrap"] $ time_ [datetime_ $ isoT detectedAt] $ toHtml $ isoT detectedAt
+                            forM_ legacyFields \(kind, path) -> tr_ [class_ "border-t border-strokeWeak align-top"] do
+                              th_ [scope_ "row", class_ "p-2 font-mono text-xs font-normal break-all"] $ toHtml path
+                              td_ [class_ "p-2"] $ toHtml $ show @Text kind
+                              td_ [class_ "p-2 text-xs text-textWeak"] "Historical types and values were not captured for this change."
+                              td_ [class_ "p-2 min-w-40"] $ case apiSchema >>= ApiChanges.fieldSnapshot path of
+                                Nothing -> span_ [class_ "text-xs text-textWeak"] "No current samples available"
+                                Just current -> do
+                                  div_ [class_ "text-xs text-textWeak mb-1"] "Current observations"
+                                  snapshotCell (Just current)
+                              td_ [class_ "p-2 text-xs whitespace-nowrap"]
+                                $ maybe "Not recorded" (toHtml . isoT)
+                                $ listToMaybe
+                                $ Relude.sort
+                                  [ zonedTimeToUTC a.createdAt
+                                  | a <- apiChanges
+                                  , path `V.elem` case kind of
+                                      ApiChanges.Added -> a.newFields
+                                      ApiChanges.Modified -> a.modifiedFields
+                                      ApiChanges.Removed -> V.empty
+                                  ]
+                      else
+                        emptyState_
+                          def{icon = Just "rocket", size = ESCompact}
+                          "New endpoint discovered"
+                          "This endpoint started receiving traffic. Inspect the originating request in the Trace section to see headers, body, and call site."
+                ]
     -- The log-pattern types differ only in their chip row, which the header owns.
     patternSections sourceField logPattern sampleMessage =
       [ IssueSection (Just $ span_ [class_ "badge badge-sm badge-ghost"] $ toHtml $ sourceFieldLabel sourceField) [] "issue-pattern" "file-lines" "Log pattern" $ renderLogContent_ logPattern
@@ -2349,7 +2351,7 @@ issueListGetH pid filterTM sortM _since pageM perPageM loadM periodM serviceFilt
       else TablePage $ PageCtx bwconf issuesTable
   where
     apiChangeGroup :: IssueVM -> Maybe Text
-    apiChangeGroup (IssueVM _ _ issue) = (\d -> fromMaybe d.endpointHost issue.base.service <> " · " <> d.endpointHost <> " · " <> bool "Incremental API changes" "Breaking API changes" issue.base.critical) <$> apiChangeData issue.base
+    apiChangeGroup (IssueVM _ _ issue) = (\d -> foldMap (<> " · ") issue.base.service <> d.endpointHost <> " · " <> bool "Incremental API changes" "Breaking API changes" issue.base.critical) <$> apiChangeData issue.base
 
     -- Inbox additionally hides severity='low' so demoted silent drops don't clutter it.
     tabIssueFilters :: IssueTab -> Issues.IssueFilters

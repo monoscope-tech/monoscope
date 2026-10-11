@@ -37,7 +37,8 @@ module Pkg.Components.Table (
 ) where
 
 import Data.Default (Default (..))
-import Data.List (lookup, partition)
+import Data.List (lookup)
+import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
 import Data.Vector qualified as V
@@ -549,17 +550,13 @@ renderRows tbl
 -- so htmx-swapped pages stay markup-identical to page 1.
 renderBody :: [Attribute] -> Table a -> Html ()
 renderBody extra tbl
-  | tbl.config.renderAsTable = tbody_ (extra <> [class_ "stagger-fade"]) $ groupedRows $ V.toList tbl.rows
+  | tbl.config.renderAsTable = tbody_ (extra <> [class_ "stagger-fade"]) $ maybe (V.mapM_ (renderTableRow tbl) tbl.rows) groupedRows tbl.features.rowGroup
   | otherwise = div_ [class_ "stagger-fade"] $ V.mapM_ (renderListRow tbl) tbl.rows
   where
-    groupedRows [] = pass
-    groupedRows (row : rest) = case tbl.features.rowGroup >>= ($ row) of
-      Nothing -> renderTableRow tbl row >> groupedRows rest
-      Just label -> do
-        let (siblings, remaining) = partition (\r -> (tbl.features.rowGroup >>= ($ r)) == Just label) rest
-        if null siblings
-          then renderTableRow tbl row
-          else tr_ [class_ "not-has-[.itemsListItem:not(.hidden)]:hidden"]
+    groupedRows groupOf =
+      forM_ (sortWith (fst . head) $ NE.groupAllWith (\(idx, row) -> maybeToRight idx $ groupOf row) $ zip [0 :: Int ..] (V.toList tbl.rows)) \((_, row) :| siblings) ->
+        case (groupOf row, siblings) of
+          (Just label, _ : _) -> tr_ [class_ "not-has-[.itemsListItem:not(.hidden)]:hidden"]
             $ td_ [colspan_ $ show $ length tbl.columns + bool 0 1 (isJust tbl.features.rowId)]
             $ details_ [class_ "group/disclosure", [__|on input from closest <[id$='_page']/> if event.target.type is "search" set my.open to true end|]] do
               summary_ [class_ "cursor-pointer px-4 py-3 text-sm font-medium text-textStrong focus-visible:outline-offset-[-2px]"] do
@@ -569,8 +566,8 @@ renderBody extra tbl
                 thead_ [class_ "sr-only"] $ tr_ do
                   when (isJust tbl.features.rowId) $ th_ [scope_ "col"] "Select issue"
                   forM_ tbl.columns $ \c -> th_ [scope_ "col"] $ toHtml c.name
-                tbody_ $ mapM_ (renderTableRow tbl) (row : siblings)
-        groupedRows remaining
+                tbody_ $ mapM_ (renderTableRow tbl) (row : map snd siblings)
+          _ -> renderTableRow tbl row
 
 
 treeRowAttrs :: a -> TreeConfig a -> [Attribute]
