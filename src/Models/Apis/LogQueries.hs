@@ -1,4 +1,6 @@
 module Models.Apis.LogQueries (
+  errHashPrefix,
+  patHashPrefix,
   cursorEpsilon,
   nudgeCursorBy,
   SDKTypes (..),
@@ -14,12 +16,10 @@ module Models.Apis.LogQueries (
   validateSqlQuery,
   hasProjectIdFilter,
   LogEndpoint (..),
-  logExplorerUrlPath,
   fetchLogPatterns,
   fetchSessions,
   SessionSort (..),
   SessionsRead (..),
-  sessionSortParam,
   sessionSortLabel,
   ExpandKind (..),
   fetchEventExamples,
@@ -45,8 +45,9 @@ import Data.HashMap.Strict qualified as HM
 import Data.List (elemIndex)
 import Data.Set qualified as S
 import Data.Text qualified as T
+import Data.Text.Display (Display, display)
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime, diffUTCTime)
-import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
+import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -64,7 +65,7 @@ import Hasql.Interpolate qualified as HI
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Projects.Projects qualified as Projects
 import OpenTelemetry.Attributes qualified as OA
-import Pkg.DeriveUtils (DB, WrappedEnumSC (..), WrappedEnumShow (..), encodeEnumSC, rawSql)
+import Pkg.DeriveUtils (DB, WrappedEnumSC (..), WrappedEnumShow (..), rawSql)
 import Pkg.Drain qualified as Drain
 import Pkg.Parser
 import Pkg.Parser.Expr (flattenedOtelAttributes, severityIsErrorSql, transformFlattenedAttribute)
@@ -73,7 +74,7 @@ import Relude hiding (many, some)
 import Relude.Extra.Foldable1 (maximum1, minimum1)
 import System.Logging qualified as Log
 import System.Tracing (Tracing, forkWithCtx, withSpan_)
-import Utils (listToIndexHashMap, lookupVecNonEmptyText, replaceAllFormats, toUriStr)
+import Utils (listToIndexHashMap, lookupVecNonEmptyText, replaceAllFormats, truncateHour)
 import Web.HttpApiData (FromHttpApiData (..))
 
 
@@ -183,29 +184,11 @@ nudgeCursorBy delta = fmap (toText . iso8601Show . addUTCTime delta) . iso8601Pa
 
 -- | Which log-explorer data endpoint a URL targets. 'Data' serves logs/spans;
 -- 'Sessions'/'Patterns' serve their respective aggregate views. The URL segment
--- is derived from the constructor name via 'encodeEnumSC' (snake_case), so it
+-- is derived from the constructor name via 'WrappedEnumSC' (snake_case), so it
 -- can't drift from the constructor.
 data LogEndpoint = Data | Sessions | Patterns
   deriving stock (Eq, Show)
-
-
-logExplorerUrlPath :: Projects.ProjectId -> LogEndpoint -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Bool -> Text
-logExplorerUrlPath pid endpoint q cols cursor since fromV toV layout source recent = "/p/" <> pid.toText <> "/log_explorer/" <> toText (encodeEnumSC @"" endpoint) <> "?" <> T.intercalate "&" params
-  where
-    param k v = ((k <> "=") <>) . toUriStr <$> v
-    unlessRecent v = if recent then Nothing else v
-    params =
-      "json=true"
-        : catMaybes
-          [ param "query" q
-          , param "cols" cols
-          , param "cursor" (unlessRecent cursor)
-          , param "since" (unlessRecent since)
-          , param "from" fromV
-          , param "to" (if recent then nudgeCursorBy cursorEpsilon =<< cursor else toV)
-          , param "layout" layout
-          , param "source" source
-          ]
+  deriving (Display) via WrappedEnumSC 'Nothing "" LogEndpoint
 
 
 -- | Execute a user-provided SQL query with mandatory project_id filtering.
@@ -227,9 +210,7 @@ executeSecuredQuery useTimefusion pid (SecuredSql source userQuery) limit
           routeToTimefusion = case source of
             SqlPostgres -> False
             SqlTimefusion -> useTimefusion
-      resultE <- try @Hasql.HasqlException $ Hasql.withHasqlTimefusion routeToTimefusion do
-        rows :: [AE.Value] <- Hasql.interp wrapped
-        pure $ jsonArrayRows rows
+      resultE <- try @Hasql.HasqlException $ Hasql.withHasqlTimefusion routeToTimefusion (jsonArrayRows <$> Hasql.interp wrapped)
       pure $ first (\e -> "Query execution failed: " <> toText (displayException e)) resultE
 
 
@@ -237,33 +218,22 @@ executeSecuredQuery useTimefusion pid (SecuredSql source userQuery) limit
 -- inlined @jsonb_build_array(...)@); this decodes that wire shape into
 -- the positional 'V.Vector AE.Value' rows callers index into.
 jsonArrayRows :: [AE.Value] -> V.Vector (V.Vector AE.Value)
-jsonArrayRows =
-  V.fromList . mapMaybe \case
-    AE.Array arr -> Just arr
-    _ -> Nothing
+jsonArrayRows rows = V.fromList [arr | AE.Array arr <- rows]
 
 
 -- | Check that query contains a project_id filter with the correct project ID
 -- This validates that the query has been properly prepared with the project_id substituted
 hasProjectIdFilter :: Text -> Projects.ProjectId -> Bool
-hasProjectIdFilter query pid = any (`T.isInfixOf` query) (["project_id='" <> pidTxt <> "'", "project_id = '" <> pidTxt <> "'"] :: [Text])
-  where
-    pidTxt :: Text
-    pidTxt = pid.toText
+hasProjectIdFilter query pid = any (`T.isInfixOf` query) ["project_id='" <> pid.toText <> "'", "project_id = '" <> pid.toText <> "'"]
 
 
 -- | Validate SQL query: must be a SELECT and must not contain any statement
 -- terminator, comment marker, DDL/DML keyword, or catalog reference.
 validateSqlQuery :: Text -> Bool
-validateSqlQuery query =
-  let lowerQuery = T.toLower query
-   in "select"
-        `T.isInfixOf` lowerQuery
-        && not
-          ( any
-              (`T.isInfixOf` lowerQuery)
-              ["insert ", "update ", "delete ", "drop ", "truncate ", "alter ", "create ", "grant ", "revoke ", "copy ", "execute ", "explain ", "set ", "; ", "--", "/*", "*/", "information_schema", "pg_catalog", "pg_"]
-          )
+validateSqlQuery query = "select" `T.isInfixOf` q && not (any (`T.isInfixOf` q) forbidden)
+  where
+    q = T.toLower query
+    forbidden = ["insert ", "update ", "delete ", "drop ", "truncate ", "alter ", "create ", "grant ", "revoke ", "copy ", "execute ", "explain ", "set ", "; ", "--", "/*", "*/", "information_schema", "pg_catalog", "pg_"] :: [Text]
 
 
 -- | @useTimefusion@ (from @env.enableTimefusionReads@) routes the read to the TimeFusion
@@ -283,7 +253,7 @@ selectLogTable useTimefusion pid queryAST queryText cursorM dateRange projectedC
         [ "original_query_input" AE..= queryText
         , "parsed_query_ast" AE..= show queryAST
         , "generated_sql_query" AE..= q
-        , "project_id" AE..= show pid
+        , "project_id" AE..= pid
         , "source" AE..= source
         , "target_spans" AE..= fromMaybe "" targetSpansM
         , "time_range_from" AE..= fmap (toText . iso8601Show) (fst dateRange)
@@ -310,9 +280,7 @@ selectLogTable useTimefusion pid queryAST queryText cursorM dateRange projectedC
       $ try @SomeException
       $ Hasql.retryTransientEff 3 "log-explorer.data"
       $ checkpoint (toAnnotation ("selectLogTable", q))
-      $ Hasql.withHasqlTimefusion useTimefusion do
-        rows :: [AE.Value] <- Hasql.interp (rawSql q)
-        pure $ jsonArrayRows rows
+      $ Hasql.withHasqlTimefusion useTimefusion (jsonArrayRows <$> Hasql.interp (rawSql q))
   let paged :: Either Text (V.Vector (V.Vector AE.Value), [Text], Int)
       paged = case result of
         Left e -> Left $ show e
@@ -347,7 +315,7 @@ selectLogTable useTimefusion pid queryAST queryText cursorM dateRange projectedC
 gateReplayTags :: DB es => Projects.ProjectId -> [Text] -> V.Vector (V.Vector AE.Value) -> Eff es (V.Vector (V.Vector AE.Value))
 gateReplayTags pid colNames rows = case elemIndex "summary" (listToColNames colNames) of
   Nothing -> pure rows
-  Just i -> case ordNub [sid | r <- V.toList rows, Just cell <- [r V.!? i], sid <- summarySessionIds cell] of
+  Just i -> case ordNub [sid | r <- V.toList rows, Just (AE.Array els) <- [r V.!? i], AE.String s <- V.toList els, Just sid <- [sessionTagId s]] of
     [] -> pure rows
     sids -> do
       ok <- replayedSessionIds pid sids
@@ -365,12 +333,6 @@ gateReplayTags pid colNames rows = case elemIndex "summary" (listToColNames colN
 replayedSessionIds :: DB es => Projects.ProjectId -> [UUID.UUID] -> Eff es (S.Set UUID.UUID)
 replayedSessionIds _ [] = pure S.empty
 replayedSessionIds pid sids = S.fromList <$> Hasql.interp [HI.sql| SELECT session_id FROM projects.replay_sessions WHERE project_id = #{pid} AND session_id = ANY(#{sids}::uuid[]) |]
-
-
--- | Session ids carried by a row's @to_json(summary)@ cell.
-summarySessionIds :: AE.Value -> [UUID.UUID]
-summarySessionIds (AE.Array els) = mapMaybe (\case AE.String s -> sessionTagId s; _ -> Nothing) (V.toList els)
-summarySessionIds _ = []
 
 
 -- | The id in a @session;\<style\>⇒\<id\>@ summary element, when it is a UUID.
@@ -703,20 +665,16 @@ sessionKeyExpr = "COALESCE(NULLIF(attributes___session___id, ''), NULLIF(attribu
 --
 -- >>> parseUrlPiece "alphabetical" :: Either Text SessionSort
 -- Left "Invalid Sort value: alphabetical"
+--
+-- 'display' renders the same wire value back:
+--
+-- >>> map display [minBound .. maxBound :: SessionSort] :: [Text]
+-- ["last_seen","first_seen","duration","errors","events"]
 data SessionSort = SortLastSeen | SortFirstSeen | SortDuration | SortErrors | SortEvents
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
   -- ToJSON is for the trace line below: it logs the *parsed* ordering, so an
   -- unrecognised sort_by shows as null — which is the signal that the fallback fired.
-  deriving (AE.ToJSON, FromHttpApiData) via WrappedEnumSC 'Nothing "Sort" SessionSort
-
-
--- | The wire value the sort dropdown emits and 'parseUrlPiece' reads back. Named to match
--- 'Pages.RealUserMonitoring.tabParam' and the tab functions.
---
--- >>> map sessionSortParam [minBound .. maxBound]
--- ["last_seen","first_seen","duration","errors","events"]
-sessionSortParam :: SessionSort -> Text
-sessionSortParam = toText . encodeEnumSC @"Sort"
+  deriving (AE.ToJSON, Display, FromHttpApiData) via WrappedEnumSC 'Nothing "Sort" SessionSort
 
 
 -- | The dropdown's visible label.
@@ -726,7 +684,7 @@ sessionSortParam = toText . encodeEnumSC @"Sort"
 sessionSortLabel :: SessionSort -> Text
 sessionSortLabel ordering = T.toUpper (T.take 1 label) <> T.drop 1 label
   where
-    label = T.replace "_" " " $ sessionSortParam ordering
+    label = T.replace "_" " " $ display ordering
 
 
 fetchSessions :: (DB es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Bool -> Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Text -> Maybe Text -> Maybe SessionSort -> Int -> SessionsRead -> Eff es (Maybe SessionSummary, Int, [SessionRow])
@@ -957,6 +915,13 @@ aggregatePageSize :: Int
 aggregatePageSize = 100
 
 
+-- | Prefixes of the span @hashes@ entries linking a span to its error pattern or log
+-- pattern; 'Models.Apis.Issues.hashPrefix' is defined from these.
+errHashPrefix, patHashPrefix :: Text
+errHashPrefix = "err:"
+patHashPrefix = "pat:"
+
+
 -- | Interpret an expand key as pattern @pat:\<hash\>@ tags. The frontend sends the
 -- comma-joined 'PatternRow.hashes' (8-char lowercase-hex 'toXXHash' values) as the
 -- key; a hash-shaped key means tag match, anything else (a summary template from an
@@ -975,7 +940,7 @@ patternKeyHashes :: Text -> Maybe (NonEmpty Text)
 patternKeyHashes key =
   let parts = T.splitOn "," key
       isHash t = T.length t == 8 && T.all (\c -> isDigit c || (c >= 'a' && c <= 'f')) t
-   in if all isHash parts then nonEmpty (map ("pat:" <>) parts) else Nothing
+   in if all isHash parts then nonEmpty (map (patHashPrefix <>) parts) else Nothing
 
 
 -- | Convert a Drain template to a SQL LIKE pattern: @\<*\>@ becomes @%@,
@@ -1036,6 +1001,5 @@ densifyBuckets (minB, maxB) bs =
 buildHourlyBuckets :: UTCTime -> [(UTCTime, Int)] -> [Int]
 buildHourlyBuckets now pairs = densifyBuckets (0, 23) [(idx, c) | (t, c) <- pairs, let idx = hourIndex t, idx >= 0, idx < 24]
   where
-    startHour = addUTCTime (-(23 * 3600)) $ truncateToHour now
-    hourIndex t = floor (diffUTCTime (truncateToHour t) startHour / 3600) :: Int
-    truncateToHour t = let s = utcTimeToPOSIXSeconds t in posixSecondsToUTCTime $ fromIntegral (floor s `div` 3600 * 3600 :: Int)
+    startHour = addUTCTime (-(23 * 3600)) $ truncateHour now
+    hourIndex t = floor (diffUTCTime (truncateHour t) startHour / 3600) :: Int

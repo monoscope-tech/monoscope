@@ -17,7 +17,6 @@ import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Hasql.Interpolate qualified as HI
 import Lucid (ToHtml, renderText, toHtml)
-import Models.Apis.ApiChanges qualified as ApiChanges
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Issues qualified as Issues
@@ -110,7 +109,7 @@ spec = sequential $ aroundAll withTestResources do
         tr
         [ ("m1", encMsg $ testRequestMsgs.reqMsg1 nowTxt)
         , ("m2", reqMsg2)
-        , ("m3", encMsg $ msgWithBody shapeBody nowTxt) -- same endpoint, different shape
+        , ("m3", encMsg $ msgWithBody "/" shapeBody nowTxt) -- same endpoint, different shape
         , ("m4", reqMsg2)
         ]
       createTestSpans tr testPid 10
@@ -130,7 +129,7 @@ spec = sequential $ aroundAll withTestResources do
       runTestBg frozenTime tr $ ackIssue testPid sess.user.id issueId
 
       -- Now send a message with a different format
-      processMessagesAndBackgroundJobs tr [("m4", encMsg $ msgWithBody formatBody nowTxt)]
+      processMessagesAndBackgroundJobs tr [("m4", encMsg $ msgWithBody "/" formatBody nowTxt)]
       runAnomalyJobs tr \case
         BackgroundJobs.NewAnomaly{anomalyType = "format"} -> True
         _ -> False
@@ -146,6 +145,35 @@ spec = sequential $ aroundAll withTestResources do
       length (V.filter isApiChange rows) `shouldSatisfy` (>= 1)
       length rows `shouldSatisfy` (> 0)
 
+    -- Regression: since #376 dropped apis.shapes/fields/formats, getAnomaliesVM selected
+    -- NULL drift detail, so new/changed fields never reached the issue, never updated an
+    -- open one, and a breaking change never marked it critical.
+    it "apiChangeIssue_fieldDrift_neverReachedIssuePayload" \tr -> do
+      nowTxt <- nowText
+      let ingest body = do
+            processMessagesAndBackgroundJobs tr [("drift", encMsg $ msgWithBody "/v1/drift" body nowTxt)]
+            runAnomalyJobs tr \case
+              BackgroundJobs.NewAnomaly{} -> True
+              _ -> False
+          driftIssue = do
+            h <- withResource tr.trPool \conn -> PGS.query conn [sql| SELECT hash FROM apis.endpoints WHERE project_id=? AND url_path='/v1/drift' |] (Only testPid)
+            iM <- maybe (pure Nothing) (\(Only eh) -> runTestBg frozenTime tr $ Issues.selectIssueByHash testPid eh (Issues.OpenOfType Issues.ApiChange)) (listToMaybe h)
+            i <- maybe (fail "no open api_change issue for /v1/drift") pure iM
+            case Issues.issuePayload i of
+              Just (Issues.ApiChangeP d) -> pure (i, d)
+              _ -> fail "api_change issue without an ApiChangeP payload"
+          hasField f = V.any (f `T.isSuffixOf`)
+      ingest "eyJ1c2VybmFtZSI6ImFAYi5jbyJ9" -- {"username":"a@b.co"}
+      (i0, _) <- driftIssue
+      Issues.isNewEndpointOnly i0 `shouldBe` True
+      ingest "eyJ1c2VybmFtZSI6ImFAYi5jbyIsInBhc3N3b3JkIjoieCJ9" -- + "password"
+      (i1, d1) <- driftIssue
+      (hasField "password" d1.newFields, V.null d1.modifiedFields, i1.critical) `shouldBe` (True, True, False)
+      ingest "eyJ1c2VybmFtZSI6MiwicGFzc3dvcmQiOiJ4In0=" -- username: string -> number
+      (i2, d2) <- driftIssue
+      (hasField "password" d2.newFields, hasField "username" d2.modifiedFields, hasField "password" d2.modifiedFields) `shouldBe` (True, True, False)
+      (i2.id == i0.id, i2.critical) `shouldBe` (True, True)
+
     it "filters, paginates, and renders an empty anomaly list through the page handler" \tr -> do
       -- Put the issues created above back in one customer-visible list. The bulk handler
       -- is the same action the Acknowledged tab offers, and avoids fixture-only state.
@@ -157,7 +185,7 @@ spec = sequential $ aroundAll withTestResources do
       let load page perPage services types = do
             (_, response) <- testServant tr $ IssuesPage.issueListGetH testPid (Just "Inbox") Nothing Nothing (Just $ show page) (Just $ show perPage) Nothing (Just "24h") services types
             case response of
-              IssuesPage.ALPage (PageCtx _ table) -> pure (response, table)
+              Table.TablePage (PageCtx _ table) -> pure (response, table)
               _ -> fail "expected a full anomaly-list page"
 
       (_, allIssues) <- load 0 100 [] []
@@ -352,6 +380,14 @@ spec = sequential $ aroundAll withTestResources do
       let archivedIssue iid = countQ tr [sql| SELECT COUNT(*)::INT FROM apis.issues WHERE id=? AND archived_at IS NOT NULL |] (Only iid)
       archivedIssue ownIid >>= (`shouldBe` 1)
       archivedIssue otherIid >>= (`shouldBe` 0)
+
+    -- The issue AI chat never checked membership: any signed-in user could spend this
+    -- project's AI budget on its telemetry and read the answers, by project and issue id.
+    it "aiChatPostH_nonMember_cannotChat" \tr -> do
+      victim <- createTestProject tr "victim"
+      iid <- UUIDId <$> UUID.nextRandom
+      assertNonMemberDenied tr victim $ IssuesPage.aiChatPostH victim iid (IssuesPage.AIChatForm "summarise this")
+      countQ tr [sql| SELECT COUNT(*)::INT FROM apis.ai_chat_messages WHERE project_id=? |] (Only victim) >>= (`shouldBe` 0)
 
     -- The sweep narrows on LEFT(target_hash, 8) to reach migration 0130's index, which is only
     -- a valid superset while the target is at least that wide. A shorter one must fall back to
@@ -652,7 +688,7 @@ spec = sequential $ aroundAll withTestResources do
       logIid <- seedIssue tr Issues.LogPattern "triage probe" "triage-log"
       (member : _) <- runTestBg frozenTime tr (ProjectMembers.selectActiveProjectMembers testPid)
       (_, triage) <- testServant tr $ IssuesPage.triagePostH testPid logIid (IssuesPage.TriageForm (Just Issues.Warning) (Just member.userId.toText))
-      renderPage triage `shouldSatisfy` T.isInfixOf "value=\"warning\" selected=\"true\""
+      renderPage triage `shouldSatisfy` T.isInfixOf "value=\"warning\" selected>"
       i1 <- reload logIid
       (i1.severity, i1.assigneeId) `shouldBe` (Issues.Warning, Just member.userId)
       withResource tr.trPool (\conn -> PGS.query conn [sql| SELECT event::text FROM apis.issue_activity_log WHERE issue_id = ? |] (Only logIid)) `shouldReturn` [Only ("assigned" :: Text)]
@@ -682,7 +718,7 @@ spec = sequential $ aroundAll withTestResources do
       bulk IssuesPage.BAAssign (Just member.userId.toText)
       map ((.severity) &&& (.assigneeId)) <$> issues `shouldReturn` replicate 2 (Issues.Warning, Just member.userId)
       (_, page) <- testServant tr $ IssuesPage.issueListGetH testPid (Just "Inbox") (Just "-users_count") Nothing Nothing (Just "100") Nothing (Just "24h") [] []
-      renderPage page `shouldContainAll` [">Warning</span>", "First seen", "Most users", IssuesPage.memberLabel member, "bulk_actions/priority?value=critical", "bulk_actions/spam"]
+      renderPage page `shouldContainAll` [">WARNING</span>", "First seen", "Most users", IssuesPage.memberLabel member, "bulk_actions/priority?value=critical", "bulk_actions/spam"]
       -- Regression: list rows' archive/acknowledge were hx-get, so hovering one fired it.
       let rowActions = ["/p/" <> testPid.toText <> "/issues/" <> i.toText <> v | i <- iids, v <- ["/archive", "/acknowledge"]]
       renderPage page `shouldContainAll` map (\u -> "hx-post=\"" <> u <> "\"") rowActions
@@ -690,6 +726,12 @@ spec = sequential $ aroundAll withTestResources do
       bulk IssuesPage.BAResolve Nothing
       all (isJust . (.archivedAt)) <$> issues `shouldReturn` True
       forM iids (runTestBg frozenTime tr . Issues.selectLatestStateEvent) `shouldReturn` replicate 2 (Just Issues.IEResolved)
+
+    it "issueList_mobileEventCount_labelsPeriodNotTimeFilter" \tr -> do
+      void $ seedIssue tr Issues.LogPattern "mobile count probe" "mobile-count"
+      (_, page) <- testServant tr $ IssuesPage.issueListGetH testPid (Just "Inbox") Nothing (Just "7d") Nothing (Just "100") Nothing (Just "24h") [] []
+      renderPage page `shouldSatisfy` T.isInfixOf "0 events (24h)"
+      renderPage page `shouldNotSatisfy` T.isInfixOf "(7d)"
 
     it "the user journey offers search, newest-first ordering and copy, and skips contentless events" \tr -> do
       traceIdText <- T.replace "-" "" . DataUUID.toText <$> UUID.nextRandom
@@ -1160,7 +1202,7 @@ spec = sequential $ aroundAll withTestResources do
       let scoped = tr{trSessAndHeader = fmap (\session -> session{Projects.service = Just "scope-checkout", Projects.environment = Just "production"}) tr.trSessAndHeader}
       (_, response) <- testServant scoped $ IssuesPage.issueListGetH testPid (Just "Inbox") Nothing Nothing Nothing (Just "100") Nothing (Just "24h") ["scope-catalog"] []
       case response of
-        IssuesPage.ALPage (PageCtx _ table) -> table.rows `shouldSatisfy` V.null
+        Table.TablePage (PageCtx _ table) -> table.rows `shouldSatisfy` V.null
         _ -> expectationFailure "expected a full scoped issue-list page"
 
     -- Read-side sibling of errorUnmerge_doesNotTouchAnotherProjectsPattern, in the
@@ -1286,7 +1328,7 @@ listAnomalies :: TestResources -> Maybe Text -> IO (V.Vector IssuesPage.IssueVM)
 listAnomalies tr filterT = do
   (_, pg) <- testServant tr $ IssuesPage.issueListGetH testPid filterT Nothing Nothing Nothing Nothing Nothing Nothing [] []
   case pg of
-    IssuesPage.ALPage (PageCtx _ tbl) -> pure tbl.rows
+    Table.TablePage (PageCtx _ tbl) -> pure tbl.rows
     _ -> error "Unexpected response from anomaly list"
 
 
@@ -1353,9 +1395,9 @@ shapeBody = "eyJwYXNzd29yZCI6IltDTElFTlRfUkVEQUNURURdIiwidXNlcm5hbWUiOiJhZG1pbkB
 formatBody = "eyJwYXNzd29yZCI6IltDTElFTlRfUkVEQUNURURdIiwidXNlcm5hbWUiOjJ9"
 
 
--- Same endpoint as msg1, with a caller-supplied request body.
-msgWithBody :: Text -> Text -> AE.Value
-msgWithBody body timestamp =
+-- msg1 (at path @/@), with a caller-supplied path and request body.
+msgWithBody :: Text -> Text -> Text -> AE.Value
+msgWithBody path body timestamp =
   [aesonQQ|{"duration":476434,
             "host":"172.31.29.11",
             "method":"GET",
@@ -1363,7 +1405,7 @@ msgWithBody body timestamp =
             "project_id":"00000000-0000-0000-0000-000000000000",
             "proto_minor":1,
             "proto_major":1,"query_params":{},
-            "raw_url":"/","referer":"","request_body": #{body},
+            "raw_url": #{path},"referer":"","request_body": #{body},
             "request_headers":{
               "connection":["upgrade"],"host":["172.31.29.11"],
               "x-real-ip":["172.31.81.1"],"x-forwarded-for":["172.31.81.1"],
@@ -1375,5 +1417,5 @@ msgWithBody body timestamp =
             "sdk_type":"JsExpress",
             "status_code":200,
             "timestamp": #{timestamp},
-            "url_path":"/","errors":[],"tags":[]}
+            "url_path": #{path},"errors":[],"tags":[]}
       |]

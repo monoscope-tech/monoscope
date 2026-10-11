@@ -1,13 +1,13 @@
 // Dashboard auto-refresh.
 //
-// The refresh dropdown (TimePicker.hs) sends `setRefreshInterval` to window, and the
+// The refresh dropdown (TimePicker.hs) calls `setTimeRefreshInterval`, and the
 // timer it starts is what re-runs every widget on the dashboard. A leaked timer here
 // doubles the query load on every panel silently, and a timer that never starts leaves
 // a dashboard the user believes is live showing stale numbers.
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
 import '../src/main';
 
-const selectInterval = (interval: unknown) => window.dispatchEvent(new CustomEvent('setRefreshInterval', { detail: { interval } }));
+const selectInterval = (interval: number) => window.setTimeRefreshInterval(null, interval);
 const mountTransport = (live: boolean, defaultWindow?: string) => {
   document.body.innerHTML = `
     <div ${defaultWindow ? `data-default-window="${defaultWindow}"` : ''}>
@@ -164,22 +164,6 @@ describe('auto-refresh interval', () => {
 
     expect(refreshes).toBe(0);
     expect(window.dashboardRefreshTimer).toBeNull();
-  });
-
-  test('a value that is not a number does not start a runaway timer', () => {
-    selectInterval('not-a-number');
-
-    vi.advanceTimersByTime(120_000);
-
-    expect(refreshes).toBe(0);
-  });
-
-  test('an event with no detail is ignored', () => {
-    window.dispatchEvent(new CustomEvent('setRefreshInterval'));
-
-    vi.advanceTimersByTime(120_000);
-
-    expect(refreshes).toBe(0);
   });
 
   // The dropdown label and the actual cadence have to agree, and the only shared

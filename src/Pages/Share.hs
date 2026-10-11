@@ -2,7 +2,6 @@ module Pages.Share (shareLinkPostH, shareLinkGetH, shareReplaySessionGetH, Share
 
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
-import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, diffUTCTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
@@ -16,7 +15,7 @@ import Models.Apis.ShareEvents qualified as ShareEvents
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), ModalCfg (..), emptyState_, modalWith_)
+import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), ModalCfg (..), emptyState_, fieldLabel_, modalWith_, sectionLabel_, tonePill_)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Replay qualified as Replay
 import Pages.Telemetry qualified as PTelemetry
@@ -122,23 +121,16 @@ shareLinkGetH sid = do
       Telemetry.otelRecordByProjectAndId useTf row.pid row.eventCreatedAt row.eventId >>= \case
         Nothing -> pure ShareMissing
         Just anchor -> do
-          let detail = LogItem.expandedItemView row.pid anchor Nothing Nothing
-          if row.eventType == ShareEvents.ShareLog
-            then pure $ ShareLive row.hoursLeft Nothing detail Nothing
-            else do
-              breakdownM <- runMaybeT do
-                tid <- hoistMaybe $ anchor.context >>= (.trace_id) >>= guarded (not . T.null)
-                (traceItem, spans) <- MaybeT $ Telemetry.getTraceDetails useTf row.pid tid (Just row.eventCreatedAt) now
-                pure $ PTelemetry.tracePage row.pid traceItem (V.mapMaybe Telemetry.convertOtelLogsAndSpansToSpanRecord (V.fromList spans)) Nothing
-              pure $ ShareLive row.hoursLeft breakdownM detail (sessionIdOf anchor <&> (sid,row.pid,))
+          let isTrace = row.eventType /= ShareEvents.ShareLog
+          breakdownM <- runMaybeT do
+            tid <- hoistMaybe $ guard isTrace *> Telemetry.traceIdOf anchor
+            (traceItem, spans) <- MaybeT $ Telemetry.getTraceDetails useTf row.pid tid (Just row.eventCreatedAt) now
+            pure $ PTelemetry.tracePage row.pid traceItem (V.mapMaybe Telemetry.convertOtelLogsAndSpansToSpanRecord (V.fromList spans)) Nothing
+          pure $ ShareLive row.hoursLeft breakdownM (LogItem.expandedItemView row.pid anchor Nothing Nothing) (guard isTrace *> sessionIdOf anchor <&> (sid,row.pid,))
 
 
 newtype ShareLinkGet = ShareLinkGet (PageCtx ShareView)
-
-
-instance ToHtml ShareLinkGet where
-  toHtml (ShareLinkGet (PageCtx conf v)) = toHtml $ PageCtx conf $ sharePage v
-  toHtmlRaw = toHtml
+  deriving newtype (ToHtml)
 
 
 -- | Share-scoped replay fetcher. Grants access to the replay session iff the
@@ -159,51 +151,49 @@ shareReplaySessionGetH sid sessionId = do
   Replay.fetchReplaySession project sessionId
 
 
-sharePage :: ShareView -> Html ()
-sharePage v = do
-  -- Hide embedded controls that don't apply on a standalone share page
-  -- (sidebar close, internal share button marked data-share-hide).
-  style_ ".share-view .detail-close-btn,.share-view [data-share-hide]{display:none!important}.share-view .urlPath{user-select:text}"
-  shareTopBar case v of
-    ShareLive{hoursLeft} -> Just hoursLeft
-    ShareExpired -> Nothing
-    ShareMissing -> Nothing
-  section_ [class_ "share-view max-w-6xl mx-auto w-full px-4 pt-6 flex flex-col gap-6"] $ case v of
-    ShareLive{breakdown, detail, replay} -> do
-      whenJust breakdown $ div_ [class_ "border border-strokeWeak rounded-lg bg-bgBase"]
-      whenJust replay \(shareId, projectId, sessionId) ->
-        div_ [class_ "flex flex-col gap-2"] do
-          div_ [class_ "flex items-center gap-2 px-1"] do
-            span_ [class_ "text-xs uppercase tracking-wider text-textWeak font-medium"] "Session replay"
-            span_ [class_ "text-xs text-textWeak truncate"] $ toHtml $ UUID.toText sessionId
-          termWith
-            "session-replay"
-            [ term "projectId" projectId.toText
-            , term "initialSession" (UUID.toText sessionId)
-            , term "sessionUrl" $ "/share/r/" <> UUID.toText shareId <> "/replay_session/" <> UUID.toText sessionId
-            , term "hideControls" "1"
-            , class_ "block"
-            ]
-            pass
-      div_ [id_ "share-detail-inner", class_ "border border-strokeWeak rounded-lg bg-bgBase overflow-hidden"] detail
-    ShareExpired -> blank "clock" "Link expired" "This share link was valid for 48 hours and has passed its expiry. Ask the sender for a fresh link."
-    ShareMissing -> blank "empty" "Event not found" "This share link doesn't exist or the underlying event is no longer available."
-  where
-    blank i = emptyState_ def{icon = Just i, action = ESLink "https://monoscope.tech" "Learn about Monoscope"}
-    -- Slim sticky top bar: logo, "Shared event" label, expiry pill, About link.
-    shareTopBar :: Maybe Int -> Html ()
-    shareTopBar hoursLeftM =
-      nav_ [class_ "sticky top-0 z-20 h-12 w-full border-b border-strokeWeak bg-bgBase/90 backdrop-blur-sm"] do
-        div_ [class_ "max-w-6xl mx-auto h-full px-4 flex items-center justify-between gap-4 flex-nowrap"] do
-          div_ [class_ "flex items-center gap-3 min-w-0 flex-nowrap"] do
-            a_ [href_ "https://monoscope.tech", target_ "_blank", class_ "flex items-center shrink-0"] do
-              img_ [class_ "h-5 w-auto dark:hidden", src_ "/public/assets/svgs/logo_black.svg"]
-              img_ [class_ "h-5 w-auto hidden dark:block", src_ "/public/assets/svgs/logo_white.svg"]
-            span_ [class_ "hidden sm:inline-block h-4 w-px bg-strokeWeak shrink-0"] ""
-            span_ [class_ "text-2xs uppercase tracking-wider text-textWeak font-medium whitespace-nowrap shrink-0"] "Shared event"
-            whenJust hoursLeftM \h ->
-              span_ [class_ $ "text-2xs px-2 py-0.5 rounded-full border whitespace-nowrap shrink-0 " <> bool "text-textWeak border-strokeWeak bg-fillWeaker" "text-textError border-strokeError-strong/40 bg-fillError-weak" (h <= 6)]
-                $ toHtml @Text ("Expires in " <> show h <> "h")
-          a_
-            [href_ "https://monoscope.tech", target_ "_blank", class_ "text-xs font-medium text-textBrand hover:underline shrink-0 whitespace-nowrap"]
-            "About Monoscope ↗"
+instance ToHtml ShareView where
+  toHtmlRaw = toHtml
+  toHtml v = toHtml @(Html ()) do
+    -- Hide embedded controls that don't apply on a standalone share page
+    -- (sidebar close, internal share button marked data-share-hide).
+    style_ ".share-view .detail-close-btn,.share-view [data-share-hide]{display:none!important}.share-view .urlPath{user-select:text}"
+    shareTopBar case v of
+      ShareLive{hoursLeft} -> Just hoursLeft
+      ShareExpired -> Nothing
+      ShareMissing -> Nothing
+    section_ [class_ "share-view max-w-6xl mx-auto w-full px-4 pt-6 flex flex-col gap-6"] $ case v of
+      ShareLive{breakdown, detail, replay} -> do
+        whenJust breakdown $ div_ [class_ "border border-strokeWeak rounded-lg bg-bgBase"]
+        whenJust replay \(shareId, projectId, sessionId) ->
+          div_ [class_ "flex flex-col gap-2"] do
+            div_ [class_ "flex items-center gap-2 px-1"] do
+              sectionLabel_ "Session replay"
+              span_ [class_ "text-xs text-textWeak truncate"] $ toHtml $ UUID.toText sessionId
+            termWith
+              "session-replay"
+              [ term "projectId" projectId.toText
+              , term "initialSession" (UUID.toText sessionId)
+              , term "sessionUrl" $ "/share/r/" <> UUID.toText shareId <> "/replay_session/" <> UUID.toText sessionId
+              , term "hideControls" "1"
+              , class_ "block"
+              ]
+              pass
+        div_ [id_ "share-detail-inner", class_ "border border-strokeWeak rounded-lg bg-bgBase overflow-hidden"] detail
+      ShareExpired -> blank "clock" "Link expired" "This share link was valid for 48 hours and has passed its expiry. Ask the sender for a fresh link."
+      ShareMissing -> blank "empty" "Event not found" "This share link doesn't exist or the underlying event is no longer available."
+    where
+      blank i = emptyState_ def{icon = Just i, action = ESLink "https://monoscope.tech" "Learn about Monoscope"}
+      shareTopBar :: Maybe Int -> Html ()
+      shareTopBar hoursLeftM =
+        nav_ [class_ "sticky top-0 z-20 h-12 w-full border-b border-strokeWeak bg-bgBase/90 backdrop-blur-sm"] do
+          div_ [class_ "max-w-6xl mx-auto h-full px-4 flex items-center justify-between gap-4 flex-nowrap"] do
+            div_ [class_ "flex items-center gap-3 min-w-0 flex-nowrap"] do
+              a_ [href_ "https://monoscope.tech", target_ "_blank", class_ "flex items-center shrink-0"] do
+                img_ [class_ "h-5 w-auto dark:hidden", src_ "/public/assets/svgs/logo_black.svg"]
+                img_ [class_ "h-5 w-auto hidden dark:block", src_ "/public/assets/svgs/logo_white.svg"]
+              span_ [class_ "hidden sm:inline-block h-4 w-px bg-strokeWeak shrink-0"] ""
+              fieldLabel_ "whitespace-nowrap shrink-0" "Shared event"
+              whenJust hoursLeftM \h -> tonePill_ (bool NeutralBadge ErrorBadge (h <= 6)) ("Expires in " <> show h <> "h")
+            a_
+              [href_ "https://monoscope.tech", target_ "_blank", class_ "text-xs font-medium text-textBrand hover:underline shrink-0 whitespace-nowrap"]
+              "About Monoscope ↗"

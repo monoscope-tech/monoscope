@@ -11,6 +11,7 @@ module Models.Projects.ProjectMembers (
   getActiveProjectMemberByUserId,
   selectAllProjectMembers,
   getUserPermission,
+  sessionAndProjectAtLeast,
   updateProjectMembersPermissons,
   softDeleteProjectMembers,
   deactivateNonOwnerMembers,
@@ -69,16 +70,19 @@ import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Effectful (Eff, IOE, type (:>))
+import Effectful.Error.Static qualified as EffError
 import Effectful.Log (Log)
+import Effectful.Reader.Static qualified as EffReader
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (UUIDId, WrappedEnumSC (..), selectFrom)
+import Pkg.DeriveUtils (SqlEnum, UUIDId, WrappedEnumSC (..), selectFrom)
 import Relude
-import Servant (FromHttpApiData)
+import Servant (FromHttpApiData, Header, Headers, ServerError, err403)
 import System.Logging qualified as Log
 import System.Types (DB)
+import Web.Cookie (SetCookie)
 
 
 -- | Typed ids for the two tables this module owns.
@@ -94,9 +98,10 @@ data Permissions
   | PAdmin
   deriving stock (Bounded, Enum, Eq, Generic, Ord, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC ('Just "projects.project_permissions") "P" Permissions
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, SqlEnum, ToField, ToSchema) via WrappedEnumSC ('Just "projects.project_permissions") "P" Permissions
 
 
+-- Hand-written: hasql's 'Row' has a nominal role, so DecodeRow cannot be derived via a wrapper.
 instance HI.DecodeRow Permissions where
   decodeRow = HI.getOneColumn <$> HI.decodeRow
 
@@ -203,6 +208,20 @@ getUserPermission pid uid =
            JOIN projects.projects p ON p.id = pm.project_id
            WHERE pm.project_id = #{pid} AND pm.user_id = #{uid} |]
     <> Projects.accessibleMembership
+
+
+-- | 'Projects.sessionAndProject' (members only), then at least @perm@ on the project. A membership's
+-- role is authoritative even for sudo users; sudo only stands in for a missing membership.
+sessionAndProjectAtLeast
+  :: (DB es, EffError.Error ServerError :> es, EffReader.Reader (Headers '[Header "Set-Cookie" SetCookie] Projects.Session) :> es)
+  => Permissions
+  -> Projects.ProjectId
+  -> Eff es (Projects.Session, Projects.Project)
+sessionAndProjectAtLeast perm pid = do
+  sp@(sess, _) <- Projects.sessionAndProject pid
+  granted <- getUserPermission pid sess.user.id
+  unless (maybe sess.user.isSudo (>= perm) granted) $ EffError.throwError err403
+  pure sp
 
 
 updateProjectMembersPermissons :: DB es => [(ProjectMemberId, Permissions)] -> Eff es ()

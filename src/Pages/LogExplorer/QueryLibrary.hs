@@ -50,6 +50,7 @@ saveQueryH pid form = do
   case (,) <$> nonEmptyT form.queryLibId <*> nonEmptyT form.queryTitle of
     Just (qId, title) -> Projects.queryLibTitleEdit pid uid qId title
     Nothing -> Projects.queryLibInsert Projects.QLTSaved pid uid (toQText queryAST) queryAST form.queryTitle
+  addSuccessToast "Query saved to library" Nothing
   queryLibraryFragment pid uid
 
 

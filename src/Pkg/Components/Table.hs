@@ -1,6 +1,7 @@
 module Pkg.Components.Table (
   Table (..),
   TableRows (..),
+  TableResponse (..),
   Column (..),
   Config (..),
   Features (..),
@@ -28,7 +29,6 @@ module Pkg.Components.Table (
   SortOrder (..),
   SortField (..),
   parseSortParam,
-  sortFieldsToSQL,
   -- Column builders
   col,
   withSort,
@@ -46,6 +46,7 @@ import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
+import Pages.BodyWrapper (PageCtx)
 import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), detailsClosedBelowAttr_, emptyState_, facetOption_, facetRail_, facetSection_, filterInputAttr_, keyboardActivateAttr_, searchInput_)
 import Relude
 import Utils (TabStrip (..), deleteParam, faSprite_, navTabAttrs, navTabStrip_, popoverPanel_, popoverTrigger_, toUriStr)
@@ -359,6 +360,15 @@ instance ToHtml (Table a) where
 instance ToHtml (TableRows a) where
   toHtml = toHtmlRaw . renderTableRows
   toHtmlRaw = toHtmlRaw . renderTableRows
+
+
+-- | A table endpoint's response: the whole page, or only the rows a load-more/search swap appends.
+data TableResponse a = TablePage (PageCtx (Table a)) | TableRowsOnly (TableRows a)
+
+
+instance ToHtml (TableResponse a) where
+  toHtml = \case TablePage p -> toHtml p; TableRowsOnly r -> toHtml r
+  toHtmlRaw = toHtml
 
 
 {-# INLINE renderTableRows #-}
@@ -850,12 +860,6 @@ parseSortParam sortP overridesM = concatMap parseField (T.splitOn "," sortP)
       Just ('-', f) -> fields f Desc
       _ -> []
     fields f order = map (`SortField` order) $ fromMaybe [f] (lookup (T.toLower f) =<< overridesM)
-
-
--- Generate ORDER BY clause from sort fields
-sortFieldsToSQL :: [SortField] -> Text
-sortFieldsToSQL [] = ""
-sortFieldsToSQL sortFields = "ORDER BY " <> T.intercalate ", " (map (.toSql) sortFields)
 
 
 -- Generate URL toggling the sort direction of a column

@@ -110,7 +110,7 @@ onboardingTests =
       project <- runQueryEffect tr (Projects.projectById testPid) >>= maybe (fail "Project missing") pure
       project.paymentPlan `shouldBe` "Free"
       V.toList project.onboardingStepsCompleted `shouldContain` ["Pricing"]
-      landing <- runAsBase tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.entrypointRedirectGetH "_overview.yaml" "Overview" [] testPid []
+      landing <- toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.entrypointRedirectGetH "_overview.yaml" "Overview" [] testPid []
       case lookupResponseHeader @"Location" landing of
         Header location -> location `shouldSatisfy` T.isPrefixOf ("/p/" <> testPid.toText <> "/dashboards/")
         _ -> expectationFailure "Expected the project to redirect to its dashboard"
@@ -159,7 +159,7 @@ onboardingTests =
               }
       (infoHeaders, _) <- testServant tr $ Onboarding.onboardingInfoPostH testPid infoForm
       lookupResponseHeader @"HX-Redirect" infoHeaders `shouldBe` Header ("/p/" <> testPid.toText <> "/onboarding?step=Survey")
-      (_, infoResult) <- testServant tr $ Onboarding.onboardingGetH testPid (Just "Info")
+      (_, infoResult) <- testServant tr $ Onboarding.onboardingGetH testPid (Just Onboarding.Info)
       case infoResult of
         Onboarding.OnboardingGet (PageCtx _ stepData) -> case stepData of
           Onboarding.InfoStep{..} -> do
@@ -175,7 +175,7 @@ onboardingTests =
               }
       (surveyHeaders, _) <- testServant tr $ Onboarding.onboardingConfPostH testPid surveyForm
       lookupResponseHeader @"HX-Redirect" surveyHeaders `shouldBe` Header ("/p/" <> testPid.toText <> "/onboarding?step=NotifChannel")
-      (_, surveyResult) <- testServant tr $ Onboarding.onboardingGetH testPid (Just "Survey")
+      (_, surveyResult) <- testServant tr $ Onboarding.onboardingGetH testPid (Just Onboarding.Survey)
       case surveyResult of
         Onboarding.OnboardingGet (PageCtx _ stepData) -> case stepData of
           Onboarding.SurveyStep{..} -> do
@@ -186,7 +186,7 @@ onboardingTests =
       -- The survey writes the same `questions` blob the info step filled in, so the
       -- earlier answers have to survive it. Pins the merge itself, which moved from a
       -- Haskell read-modify-write into a jsonb `||` in the statement.
-      (_, afterSurvey) <- testServant tr $ Onboarding.onboardingGetH testPid (Just "Info")
+      (_, afterSurvey) <- testServant tr $ Onboarding.onboardingGetH testPid (Just Onboarding.Info)
       case afterSurvey of
         Onboarding.OnboardingGet (PageCtx _ stepData) -> case stepData of
           Onboarding.InfoStep{..} -> do
@@ -205,7 +205,7 @@ onboardingTests =
         Onboarding.OnboardingPhoneEmailsPost pid emails _ -> do
           pid `shouldBe` testPid
           V.length emails `shouldSatisfy` (> 0) -- Should include at least the submitted emails
-      (_, notifResult) <- testServant tr $ Onboarding.onboardingGetH testPid (Just "NotifChannel")
+      (_, notifResult) <- testServant tr $ Onboarding.onboardingGetH testPid (Just Onboarding.NotifChannel)
       case notifResult of
         Onboarding.OnboardingGet (PageCtx _ stepData) -> case stepData of
           Onboarding.NotifChannelStep{..} -> do
@@ -224,7 +224,7 @@ onboardingTests =
 
       (integratedHeaders, _) <- testServant tr $ Onboarding.checkIntegrationGet testPid Nothing
       lookupResponseHeader @"HX-Redirect" integratedHeaders `shouldBe` Header ("/p/" <> testPid.toText <> "/onboarding?step=Pricing")
-      (_, integrationResult) <- testServant tr $ Onboarding.onboardingGetH testPid (Just "Integration")
+      (_, integrationResult) <- testServant tr $ Onboarding.onboardingGetH testPid (Just Onboarding.Integration)
       case integrationResult of
         Onboarding.OnboardingGet (PageCtx _ stepData) -> case stepData of
           Onboarding.IntegrationStep _stepPid stepApiKey -> do
@@ -796,25 +796,26 @@ s3ConfigTests = do
       -- The endpoint/credentials must be the ones `withTestResources` actually probed
       -- (MINIO_ENDPOINT is http://minio:9000 in CI, 127.0.0.1:9000 locally); hardcoding
       -- either makes the handler's bucketExists fail and render "Not connected".
-      let env = tr.trATCtx.env
-          s3Form =
-            Projects.ProjectS3Bucket
-              { accessKey = env.s3AccessKey
-              , secretKey = env.s3SecretKey
-              , region = env.s3Region
-              , bucket = env.s3Bucket
-              , endpointUrl = env.s3Endpoint
-              }
+      let s3Form = realS3Form tr
       (_, connected) <- testServant tr $ S3.brings3PostH testPid s3Form
       TL.toStrict (renderText $ toHtml connected) `shouldSatisfy` T.isInfixOf "Connected"
       renderText (toHtml connected) `shouldSatisfy` TL.isInfixOf "<span>Remove</span>"
 
       (_, savedPage) <- testServant tr $ S3.bringS3GetH testPid
       let savedHtml = TL.toStrict $ renderText $ toHtml savedPage
-      savedHtml `shouldSatisfy` T.isInfixOf env.s3Bucket
+      savedHtml `shouldSatisfy` T.isInfixOf s3Form.bucket
       savedHtml `shouldSatisfy` T.isInfixOf "Connected"
 
       (_, removed) <- testServant tr $ S3.brings3RemoveH testPid
       TL.toStrict (renderText $ toHtml removed) `shouldSatisfy` T.isInfixOf "Not connected"
       project <- runTestBg frozenTime tr (Projects.projectById testPid) >>= maybe (fail "the project was not found") pure
       project.s3Bucket `shouldSatisfy` isNothing
+
+  -- Unlike its Remove sibling, Save never called sessionAndProject: any signed-in user could
+  -- point another project's archive at a bucket they own.
+  it "brings3PostH_nonMember_cannotRedirectStorage" \TestContext{tcResources = tr} -> do
+    victim <- createTestProject tr "victim"
+    assertNonMemberDenied tr victim $ S3.brings3PostH victim (realS3Form tr)
+    runTestBg frozenTime tr (Projects.projectById victim) >>= (`shouldSatisfy` maybe False (isNothing . (.s3Bucket)))
+  where
+    realS3Form tr = let env = tr.trATCtx.env in Projects.ProjectS3Bucket{accessKey = env.s3AccessKey, secretKey = env.s3SecretKey, region = env.s3Region, bucket = env.s3Bucket, endpointUrl = env.s3Endpoint}

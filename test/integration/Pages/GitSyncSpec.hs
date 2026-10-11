@@ -346,6 +346,23 @@ spec = sequential do
         void $ testServant tr $ GitSyncPage.gitSyncSettingsDeleteH testPid
         runTestBg frozenTime tr (onlySync testPid) >>= (`shouldSatisfy` isNothing)
 
+      -- None of these checked membership: any signed-in user could connect, replace or
+      -- disconnect another project's config repository, or bind a GitHub installation to it.
+      it "gitSync_nonMember_cannotMutate" \tr -> do
+        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
+            form = GitSyncForm{host = Just Git.GitHub, apiBase = Nothing, owner = "attacker", repo = "evil", branch = "main", accessToken = "ghp_x", webhookSecret = Nothing, pathPrefix = Nothing}
+        victim <- createTestProject tr "victim"
+        _ <- runQueryEffect tr $ GitSync.insertGitHubSync encKey victim Git.GitHub Nothing "acme" "config" "main" (GitSync.PersonalToken "ghp_test") Nothing ""
+        let syncOf = map (\s -> (s.owner, s.repo, s.installationId)) <$> runTestBg frozenTime tr (GitSync.getGitSyncs victim)
+        seeded <- syncOf
+        assertNonMemberDenied tr victim $ GitSyncPage.gitSyncSettingsPostH victim form
+        assertNonMemberDenied tr victim $ GitSyncPage.gitSyncSettingsDeleteH victim
+        assertNonMemberDenied tr victim $ GitSyncPage.githubAppSelectRepoH victim (GitSyncPage.RepoSelectForm ["attacker/evil"] "main" Nothing 42)
+        assertNonMemberDenied tr victim $ GitSyncPage.githubAppInstallH victim Nothing
+        -- @state@ is now a session-bound nonce, so a project id in it is no grant at all.
+        _ <- testServant tr $ GitSyncPage.githubAppCallbackH (Just 42) Nothing (Just victim.toText) Nothing
+        syncOf `shouldReturn` seeded
+
     describe "Sync Plan Building" do
       it "creates for new files" \_ -> do
         let entries = [GitSync.TreeEntry "dashboards/new.yaml" True (Just "sha1") (Just 100), GitSync.TreeEntry "dashboards/other.yaml" True (Just "sha2") (Just 100)]
@@ -630,7 +647,7 @@ spec = sequential do
             liftIO $ withResource tr.trPool \conn ->
               void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncFromRepo testPid
             runSyncJobs tr
-            dashes <- runTestBg frozenTime tr $ Dashboards.selectDashboardsSortedBy testPid "title"
+            dashes <- runTestBg frozenTime tr $ Dashboards.selectDashboardsSortedBy testPid Dashboards.Asc Dashboards.DSTitle
             case filter (\d -> d.title == "Created In GitHub") dashes of
               (d:_) -> d.filePath `shouldBe` T.stripPrefix "dashboards/" path
               [] -> fail "Expected dashboard not found"
@@ -655,7 +672,7 @@ spec = sequential do
             liftIO $ withResource tr.trPool \conn ->
               void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncFromRepo testPid
             runSyncJobs tr
-            dashes <- runTestBg frozenTime tr $ Dashboards.selectDashboardsSortedBy testPid "title"
+            dashes <- runTestBg frozenTime tr $ Dashboards.selectDashboardsSortedBy testPid Dashboards.Asc Dashboards.DSTitle
             any (\d -> d.title == "V2 Updated") dashes `shouldBe` True
 
           it "deletes local dashboard when GitHub file removed" \tr -> do
@@ -669,7 +686,7 @@ spec = sequential do
             liftIO $ withResource tr.trPool \conn ->
               void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncFromRepo testPid
             runSyncJobs tr
-            dashesBefore <- runTestBg frozenTime tr $ Dashboards.selectDashboardsSortedBy testPid "title"
+            dashesBefore <- runTestBg frozenTime tr $ Dashboards.selectDashboardsSortedBy testPid Dashboards.Asc Dashboards.DSTitle
             let beforeCount = length $ filter (\d -> d.filePath == T.stripPrefix "dashboards/" path) dashesBefore
             beforeCount `shouldBe` 1
             -- Delete from GitHub
@@ -680,7 +697,7 @@ spec = sequential do
             liftIO $ withResource tr.trPool \conn ->
               void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncFromRepo testPid
             runSyncJobs tr
-            dashesAfter <- runTestBg frozenTime tr $ Dashboards.selectDashboardsSortedBy testPid "title"
+            dashesAfter <- runTestBg frozenTime tr $ Dashboards.selectDashboardsSortedBy testPid Dashboards.Asc Dashboards.DSTitle
             let afterCount = length $ filter (\d -> d.filePath == T.stripPrefix "dashboards/" path) dashesAfter
             afterCount `shouldBe` 0
 
@@ -707,7 +724,7 @@ spec = sequential do
               void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncFromRepo testPid
             runSyncJobs tr
             -- Verify local updated - use filePath matching since dashboard is updated in place
-            dashes <- runTestBg frozenTime tr $ Dashboards.selectDashboardsSortedBy testPid "title"
+            dashes <- runTestBg frozenTime tr $ Dashboards.selectDashboardsSortedBy testPid Dashboards.Asc Dashboards.DSTitle
             case filter (\d -> d.filePath == T.stripPrefix "dashboards/" path) dashes of
               (dash:_) -> do
                 dash.title `shouldBe` "Round Trip Modified"

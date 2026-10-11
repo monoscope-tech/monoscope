@@ -17,6 +17,7 @@ import Control.Lens (preview, (^.))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AK
 import Data.Aeson.KeyMap qualified as KM
+import Data.Aeson.Lens (_Number, _Object, _String)
 import Data.HashMap.Strict.InsOrd qualified as IOH
 import Data.Map.Strict qualified as Map
 import Data.OpenApi (OpenApi)
@@ -69,10 +70,6 @@ maxToolBodyChars :: Int
 maxToolBodyChars = 64 * 1024
 
 
--- =============================================================================
--- Types
--- =============================================================================
-
 data Tool = Tool
   { name :: !Text
   , description :: !Text
@@ -99,50 +96,65 @@ data OpenApiBinding = OpenApiBinding
   }
 
 
--- =============================================================================
--- Registry
--- =============================================================================
-
 -- | The full tool registry: every OpenAPI operation plus the composite tools.
--- @Map (<>)@ is left-biased, so listing composites first means a composite
--- always wins on a name collision (none expected today, but cheap to enforce).
+-- 'Map.fromList' keeps the last duplicate, so listing composites last means a
+-- composite always wins on a name collision (none expected today, but cheap to enforce).
 allTools :: OpenApi -> Map Text Tool
 allTools spec =
-  Map.fromList [(t.name, t) | t <- compositeTools] <> mkToolsFromOpenApi spec
-
-
-mkToolsFromOpenApi :: OpenApi -> Map Text Tool
-mkToolsFromOpenApi spec =
   Map.fromList
     [ (t.name, t)
-    | (rawPath, item) <- IOH.toList (spec ^. OA.paths)
-    , let p = toText rawPath
-    , (m, op) <- pathItemOps item
-    , (m, p) /= ("POST", "/mcp") -- never expose MCP itself as a tool
-    , let t = openApiTool p m op
+    | t <-
+        [ openApiTool p m op
+        | (rawPath, item) <- IOH.toList (spec ^. OA.paths)
+        , let p = toText rawPath
+        , (m, op) <- pathItemOps item
+        , (m, p) /= ("POST", "/mcp") -- never expose MCP itself as a tool
+        ]
+          <> compositeTools
     ]
+  where
+    pathItemOps i =
+      catMaybes
+        [ ("GET",) <$> i ^. OA.get
+        , ("POST",) <$> i ^. OA.post
+        , ("PUT",) <$> i ^. OA.put
+        , ("PATCH",) <$> i ^. OA.patch
+        , ("DELETE",) <$> i ^. OA.delete
+        , ("HEAD",) <$> i ^. OA.head_
+        , ("OPTIONS",) <$> i ^. OA.options
+        , ("TRACE",) <$> i ^. OA.trace
+        ]
 
 
 openApiTool :: Text -> ByteString -> OA.Operation -> Tool
 openApiTool p m op =
-  let params = mapMaybe (preview OA._Inline) (op ^. OA.parameters)
-      namesIn loc = [q ^. OA.name | q <- params, q ^. OA.in_ == loc]
-      mrb = op ^. OA.requestBody >>= preview OA._Inline
-      bodyReq = any (\rb -> rb ^. OA.required == Just True) mrb
-   in Tool
-        { name = fromMaybe (deriveNameFromPath p m) (Map.lookup (m, p) toolNameOverrides)
-        , description = fromMaybe (decodeUtf8 m <> " " <> p) ((op ^. OA.summary) <|> (op ^. OA.description))
-        , inputSchema = mkInputSchema params mrb bodyReq
-        , dispatch =
-            ViaOpenApi
-              OpenApiBinding
-                { method = m
-                , path = p
-                , pathParams = namesIn OA.ParamPath
-                , queryParams = namesIn OA.ParamQuery
-                , bodyRequired = bodyReq
-                }
-        }
+  Tool
+    { name = fromMaybe derivedName (Map.lookup (m, p) toolNameOverrides)
+    , description = fromMaybe (decodeUtf8 m <> " " <> p) ((op ^. OA.summary) <|> (op ^. OA.description))
+    , inputSchema = schemaObject (maybe id (KM.insert "body") bodySchema $ KM.fromList [(AK.fromText (q ^. OA.name), paramSchemaJson q) | q <- params]) requireds
+    , dispatch = ViaOpenApi OpenApiBinding{method = m, path = p, pathParams = namesIn OA.ParamPath, queryParams = namesIn OA.ParamQuery, bodyRequired = bodyReq}
+    }
+  where
+    params = mapMaybe (preview OA._Inline) (op ^. OA.parameters)
+    namesIn loc = [q ^. OA.name | q <- params, q ^. OA.in_ == loc]
+    mrb = op ^. OA.requestBody >>= preview OA._Inline
+    bodyReq = any (\rb -> rb ^. OA.required == Just True) mrb
+    bodySchema = mrb >>= bodyContentSchema
+    requireds = [q ^. OA.name | q <- params, q ^. OA.required == Just True] <> ["body" | bodyReq && isJust bodySchema]
+    -- Fallback name when no override exists: drops {id} braces, joins with
+    -- underscores, and appends the lowercase method so names are unique.
+    derivedName = T.intercalate "_" $ filter (not . T.null) (T.splitOn "/" (T.filter (`notElem` ("{}" :: String)) p)) <> [T.toLower (decodeUtf8 m)]
+    paramSchemaJson q =
+      let s = maybe (AE.object [("type", AE.String "string")]) AE.toJSON (q ^. OA.schema)
+       in case (q ^. OA.description, s) of
+            (Just d, AE.Object o) -> AE.Object (KM.insert "description" (AE.String d) o)
+            _ -> s
+    -- Prefer the JSON media-type entry; fall back to whatever's first if a
+    -- route ever declares only e.g. multipart. Tools call back over JSON, so this
+    -- ordering keeps the agent-visible schema accurate.
+    bodyContentSchema rb =
+      let entries = IOH.toList (rb ^. OA.content)
+       in (find (("application/json" `T.isPrefixOf`) . show . fst) entries <|> listToMaybe entries) >>= fmap AE.toJSON . (^. OA.schema) . snd
 
 
 -- | Canonical verb-first names for every API v1 operation. Industry-standard
@@ -235,72 +247,9 @@ toolNameOverrides =
     ]
 
 
--- | Fallback name when no override exists. Drops {id} braces, joins with
--- underscores, and appends the lowercase method so names are unique.
-deriveNameFromPath :: Text -> ByteString -> Text
-deriveNameFromPath p method =
-  let m = T.toLower (decodeUtf8 method)
-      parts = filter (not . T.null) (T.splitOn "/" (T.filter (`notElem` ("{}" :: String)) p))
-   in T.intercalate "_" (parts <> [m])
-
-
-pathItemOps :: OA.PathItem -> [(ByteString, OA.Operation)]
-pathItemOps p =
-  catMaybes
-    [ ("GET",) <$> p ^. OA.get
-    , ("POST",) <$> p ^. OA.post
-    , ("PUT",) <$> p ^. OA.put
-    , ("PATCH",) <$> p ^. OA.patch
-    , ("DELETE",) <$> p ^. OA.delete
-    , ("HEAD",) <$> p ^. OA.head_
-    , ("OPTIONS",) <$> p ^. OA.options
-    , ("TRACE",) <$> p ^. OA.trace
-    ]
-
-
-mkInputSchema :: [OA.Param] -> Maybe OA.RequestBody -> Bool -> AE.Value
-mkInputSchema params mrb bodyReq =
-  let bodySchema = mrb >>= bodyContentSchema
-      allProps =
-        maybe id (KM.insert "body") bodySchema
-          $ KM.fromList [(AK.fromText (q ^. OA.name), paramSchemaJson q) | q <- params]
-      requireds =
-        [q ^. OA.name | q <- params, q ^. OA.required == Just True]
-          <> ["body" | bodyReq && isJust bodySchema]
-   in schemaObject allProps requireds
-
-
-paramSchemaJson :: OA.Param -> AE.Value
-paramSchemaJson p =
-  let s = maybe (AE.object [("type", AE.String "string")]) AE.toJSON (p ^. OA.schema)
-   in case (p ^. OA.description, s) of
-        (Just d, AE.Object o) -> AE.Object (KM.insert "description" (AE.String d) o)
-        _ -> s
-
-
--- | Prefer the JSON media-type entry; fall back to whatever's first if a
--- route ever declares only e.g. multipart. Tools call back over JSON, so this
--- ordering keeps the agent-visible schema accurate.
-bodyContentSchema :: OA.RequestBody -> Maybe AE.Value
-bodyContentSchema rb =
-  let entries = IOH.toList (rb ^. OA.content)
-      isJson (mt, _) = "application/json" `T.isPrefixOf` show mt
-      mto = snd <$> (find isJson entries <|> listToMaybe entries)
-   in mto >>= fmap AE.toJSON . (^. OA.schema)
-
-
--- =============================================================================
--- JSON-RPC dispatcher
--- =============================================================================
-
 -- | Top-level dispatcher. Handles JSON-RPC requests for the MCP protocol:
 -- @initialize@, @notifications/*@, @tools/list@, @tools/call@.
-handleJsonRpc
-  :: Map Text Tool
-  -> Servant.Application
-  -> Projects.ProjectId
-  -> AE.Value
-  -> ATBaseCtx AE.Value
+handleJsonRpc :: Map Text Tool -> Servant.Application -> Projects.ProjectId -> AE.Value -> ATBaseCtx AE.Value
 handleJsonRpc reg app pid req = case parseRpcReq req of
   Nothing -> pure $ rpcError AE.Null (-32600) "Invalid Request"
   Just (mid, m, params)
@@ -309,21 +258,32 @@ handleJsonRpc reg app pid req = case parseRpcReq req of
     -- return @null@; clients ignore the result. Revisit if/when we add SSE.
     | "notifications/" `T.isPrefixOf` m -> pure AE.Null
     | m == "initialize" -> pure $ rpcOk mid initializeResult
-    | m == "tools/list" -> pure $ rpcOk mid (toolsListJson reg)
+    | m == "tools/list" -> pure $ rpcOk mid $ AE.object ["tools" AE..= [AE.object ["name" AE..= t.name, "description" AE..= t.description, "inputSchema" AE..= t.inputSchema] | t <- Map.elems reg]]
     | m == "tools/call" -> case parseToolCall params of
         Nothing -> pure $ rpcError mid (-32602) "Invalid params"
         Just (toolName, args) -> case Map.lookup toolName reg of
           Nothing -> pure $ rpcOk mid (toolError ("Unknown tool: " <> toolName))
           Just t -> rpcOk mid <$> runTool app pid t args
     | otherwise -> pure $ rpcError mid (-32601) ("Method not found: " <> m)
+  where
+    parseRpcReq = \case
+      AE.Object o -> (fromMaybe AE.Null (KM.lookup "id" o),,fromMaybe (AE.object []) (KM.lookup "params" o)) <$> textArg "method" o
+      _ -> Nothing
+    parseToolCall = \case
+      AE.Object o -> (,fromMaybe KM.empty (KM.lookup "arguments" o >>= preview _Object)) <$> textArg "name" o
+      _ -> Nothing
+    rpc mid k v = AE.object ["jsonrpc" AE..= ("2.0" :: Text), "id" AE..= mid, k AE..= (v :: AE.Value)]
+    rpcOk mid = rpc mid "result"
+    rpcError mid code msg = rpc mid "error" $ AE.object ["code" AE..= (code :: Int), "message" AE..= (msg :: Text)]
+    initializeResult =
+      AE.object
+        [ "protocolVersion" AE..= mcpProtocolVersion
+        , "capabilities" AE..= AE.object ["tools" AE..= AE.object []]
+        , "serverInfo" AE..= AE.object ["name" AE..= ("monoscope" :: Text), "version" AE..= ("1.0" :: Text)]
+        ]
 
 
-runTool
-  :: Servant.Application
-  -> Projects.ProjectId
-  -> Tool
-  -> AE.Object
-  -> ATBaseCtx AE.Value
+runTool :: Servant.Application -> Projects.ProjectId -> Tool -> AE.Object -> ATBaseCtx AE.Value
 runTool app pid t args = do
   let action = case t.dispatch of
         ViaOpenApi b -> liftIO $ callOpenApi app b args
@@ -336,49 +296,11 @@ runTool app pid t args = do
     <$> UnliftIO.timeout toolCallTimeoutMicros caught
 
 
-parseRpcReq :: AE.Value -> Maybe (AE.Value, Text, AE.Value)
-parseRpcReq (AE.Object o) = do
-  m <- textArg "method" o
-  pure (fromMaybe AE.Null (KM.lookup "id" o), m, fromMaybe (AE.object []) (KM.lookup "params" o))
-parseRpcReq _ = Nothing
-
-
-parseToolCall :: AE.Value -> Maybe (Text, AE.Object)
-parseToolCall (AE.Object o) = do
-  n <- textArg "name" o
-  pure (n, fromMaybe KM.empty (KM.lookup "arguments" o >>= \case AE.Object a -> Just a; _ -> Nothing))
-parseToolCall _ = Nothing
-
-
-initializeResult :: AE.Value
-initializeResult =
-  AE.object
-    [ "protocolVersion" AE..= mcpProtocolVersion
-    , "capabilities" AE..= AE.object ["tools" AE..= AE.object []]
-    , "serverInfo"
-        AE..= AE.object
-          [ "name" AE..= ("monoscope" :: Text)
-          , "version" AE..= ("1.0" :: Text)
-          ]
-    ]
-
-
-toolsListJson :: Map Text Tool -> AE.Value
-toolsListJson reg = AE.object ["tools" AE..= map descriptor (Map.elems reg)]
-  where
-    descriptor t =
-      AE.object
-        [ "name" AE..= t.name
-        , "description" AE..= t.description
-        , "inputSchema" AE..= t.inputSchema
-        ]
-
-
 -- | MCP tool-result envelope: text content + isError, with optional structuredContent.
 toolResult :: Bool -> Text -> Maybe AE.Value -> AE.Value
 toolResult isErr txt structured =
   AE.object
-    $ ["content" AE..= ([textContent txt] :: [AE.Value]), "isError" AE..= isErr]
+    $ ["content" AE..= ([AE.object ["type" AE..= ("text" :: Text), "text" AE..= txt]] :: [AE.Value]), "isError" AE..= isErr]
     <> maybe [] (\v -> ["structuredContent" AE..= v]) structured
 
 
@@ -390,27 +312,6 @@ okResult :: AE.Value -> AE.Value
 okResult v = toolResult False (encodeText v) (Just v)
 
 
-textContent :: Text -> AE.Value
-textContent t = AE.object ["type" AE..= ("text" :: Text), "text" AE..= t]
-
-
-rpcOk :: AE.Value -> AE.Value -> AE.Value
-rpcOk mid r = AE.object ["jsonrpc" AE..= ("2.0" :: Text), "id" AE..= mid, "result" AE..= r]
-
-
-rpcError :: AE.Value -> Int -> Text -> AE.Value
-rpcError mid code msg =
-  AE.object
-    [ "jsonrpc" AE..= ("2.0" :: Text)
-    , "id" AE..= mid
-    , "error" AE..= AE.object ["code" AE..= code, "message" AE..= msg]
-    ]
-
-
--- =============================================================================
--- OpenAPI tool execution (forward as synthetic WAI request into sub-app)
--- =============================================================================
-
 callOpenApi :: Servant.Application -> OpenApiBinding -> AE.Object -> IO AE.Value
 callOpenApi _ b _
   | b.path == "/mcp" =
@@ -418,54 +319,26 @@ callOpenApi _ b _
       -- adds an OpenApiBinding pointing at it, fail fast instead of recursing.
       pure $ toolError "MCP endpoint cannot be invoked as a tool"
 callOpenApi app b args = do
-  let (p, query, body) = splitArgs b args
+  let look k = KM.lookup (AK.fromText k) args
+      p = foldl' (\acc k -> maybe acc (\v -> T.replace ("{" <> k <> "}") (toUriStr (jsonToText v)) acc) (look k)) b.path b.pathParams
+      query = T.intercalate "&" [k <> "=" <> toUriStr (jsonToText v) | k <- b.queryParams, Just v <- [look k], v /= AE.Null]
       url = p <> if T.null query then "" else "?" <> query
+      body = fromMaybe AE.Null (look "body")
       baseReq = Wai.defaultRequest{Wai.requestMethod = b.method, Wai.requestHeaders = [(H.hContentType, "application/json")]}
   resp <- WT.runSession (WT.srequest (WT.SRequest (WT.setPath baseReq (encodeUtf8 url)) (AE.encode body))) app
   let bodyLBS = WT.simpleBody resp
-  pure
-    $ toolResult
-      (H.statusCode (WT.simpleStatus resp) >= 400)
-      (truncateText maxToolBodyChars (decodeUtf8 bodyLBS))
-      (AE.decode bodyLBS)
+      bodyT = decodeUtf8 bodyLBS
+      -- Deliberately not valid JSON once truncated: this is the human-readable
+      -- @content@ side; the structured side carries the full payload.
+      truncated = if T.length bodyT <= maxToolBodyChars then bodyT else T.take maxToolBodyChars bodyT <> "\n…[truncated, full payload in structuredContent]"
+  pure $ toolResult (H.statusCode (WT.simpleStatus resp) >= 400) truncated (AE.decode bodyLBS)
+  where
+    jsonToText = \case
+      AE.String s -> s
+      AE.Null -> ""
+      AE.Bool x -> bool "false" "true" x
+      v -> encodeText v
 
-
--- | Truncate to @n@ characters and append a marker. The result is deliberately
--- not valid JSON: this is the human-readable @content@ side, and the structured
--- side carries the full untruncated payload.
-truncateText :: Int -> Text -> Text
-truncateText n t
-  | T.length t <= n = t
-  | otherwise = T.take n t <> "\n…[truncated, full payload in structuredContent]"
-
-
-splitArgs :: OpenApiBinding -> AE.Object -> (Text, Text, AE.Value)
-splitArgs b args =
-  let look k = KM.lookup (AK.fromText k) args
-      pathStr = foldl' substPath b.path b.pathParams
-      substPath acc k = maybe acc (\v -> T.replace ("{" <> k <> "}") (toUriStr (jsonToText v)) acc) (look k)
-      qs =
-        T.intercalate
-          "&"
-          [ k <> "=" <> toUriStr (jsonToText v)
-          | k <- b.queryParams
-          , Just v <- [look k]
-          , v /= AE.Null
-          ]
-      body = fromMaybe AE.Null (look "body")
-   in (pathStr, qs, body)
-
-
-jsonToText :: AE.Value -> Text
-jsonToText (AE.String s) = s
-jsonToText AE.Null = ""
-jsonToText (AE.Bool b) = bool "false" "true" b
-jsonToText v = encodeText v
-
-
--- =============================================================================
--- Composite (workflow) tools
--- =============================================================================
 
 -- | Bundled, agent-friendly tools that combine several internal calls: one
 -- verb the agent calls in place of an ad-hoc multi-step plan.
@@ -555,10 +428,6 @@ analyzeIssue =
           Right analysis -> pure $ okResult $ AE.object ["issue" AE..= issue, "analysis" AE..= analysis]
 
 
--- =============================================================================
--- Composite tool helpers
--- =============================================================================
-
 composite :: Text -> Text -> AE.Value -> (Projects.ProjectId -> AE.Object -> ATBaseCtx AE.Value) -> Tool
 composite n d schema run = Tool n d schema (ViaComposite run)
 
@@ -584,8 +453,8 @@ intProp d = AE.object ["type" AE..= ("integer" :: Text), "description" AE..= d]
 
 
 textArg :: Text -> AE.Object -> Maybe Text
-textArg k o = KM.lookup (AK.fromText k) o >>= \case AE.String s -> Just s; _ -> Nothing
+textArg k o = KM.lookup (AK.fromText k) o >>= preview _String
 
 
 intArg :: Text -> AE.Object -> Maybe Int
-intArg k o = KM.lookup (AK.fromText k) o >>= \case AE.Number n -> Just (floor n); _ -> Nothing
+intArg k o = floor <$> (KM.lookup (AK.fromText k) o >>= preview _Number)

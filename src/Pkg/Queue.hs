@@ -681,12 +681,12 @@ decoupledLoop appLogger appCtx tp role batchSize clientId dlqBase fn = do
           -- momentarily reads empty mid-rebalance, to avoid wiping still-live work.
           unless (null asg) do
             let live = S.fromList [(t.unTopicName, p) | (t, p) <- asg]
-            modifyTVar' trackerVar (Map.filterWithKey \k _ -> S.member k live)
-            modifyTVar' committedVar (Map.filterWithKey \k _ -> S.member k live)
+            modifyTVar' trackerVar (`Map.restrictKeys` live)
+            modifyTVar' committedVar (`Map.restrictKeys` live)
             -- Drop reseeks for revoked partitions too, else the poll thread would
             -- seek a partition this consumer no longer owns and re-seed a stale
             -- tracker entry that the prune above can never reach again.
-            modifyTVar' reseekVar (Map.filterWithKey \k _ -> S.member k live)
+            modifyTVar' reseekVar (`Map.restrictKeys` live)
           (cs,,) . Map.size <$> readTVar trackerVar <*> readTVar inflightVar
         -- Flush-before-commit durability gate: drain the shared producer
         -- (KafkaProducer enqueues are async — linger.ms/batching) so every DLQ
@@ -742,14 +742,9 @@ decoupledLoop appLogger appCtx tp role batchSize clientId dlqBase fn = do
           atomically $ modifyTVar' trackerVar \tk -> Map.map (`PartProgress` mempty) reseeks <> tk -- left-biased: reseek bases override
           LogBase.logInfo "kafka.consumer.reseek" $ AE.object ["client_id" AE..= clientId, "partitions" AE..= Map.size reseeks]
         (inflight, paused) <- atomically $ (,) <$> readTVar inflightVar <*> readTVar pausedVar
-        when (inflight >= highWaterBytes && not paused) do
-          ps <- assigned
-          unless (null ps) $ KE.pausePartitions ps
-          atomically (writeTVar pausedVar True)
-        when (inflight <= lowWaterBytes && paused) do
-          ps <- assigned
-          unless (null ps) $ KE.resumePartitions ps
-          atomically (writeTVar pausedVar False)
+        let setPaused act flag = assigned >>= \ps -> unless (null ps) (act ps) >> atomically (writeTVar pausedVar flag)
+        when (inflight >= highWaterBytes && not paused) $ setPaused KE.pausePartitions True
+        when (inflight <= lowWaterBytes && paused) $ setPaused KE.resumePartitions False
         -- Callback polling runs on kafka-client's dedicated async thread, so
         -- heartbeats/rebalances continue while data admission is paused.
         isPaused <- readTVarIO pausedVar
@@ -762,7 +757,7 @@ decoupledLoop appLogger appCtx tp role batchSize clientId dlqBase fn = do
             -- ce-type (processList) and rewrites one store-set. Sharing
             -- 'writeTargetFor' with the writer keeps the leg semantics in one
             -- place and batches both-failed/normal together (both → WriteBoth).
-            dlqGroupKey r = let h = consumerRecordHeadersToHashMap r in (ceTypeFor dlqBase r.crTopic.unTopicName h, Telemetry.writeTargetFor appCtx.env.enablePostgresTelemetryWrites appCtx.env.enableTimefusionWrites (HM.lookup "monoscope-write-failure" h))
+            dlqGroupKey r = let h = consumerRecordHeadersToHashMap r in (ceTypeFor dlqBase r.crTopic.unTopicName h, Telemetry.writeTargetFor appCtx.env (HM.lookup "monoscope-write-failure" h >>= Telemetry.parseWriteFailureKind))
             subChunks = subChunksFor (kafkaChunkTargetBytes appCtx.config.kafkaGroupConcurrency) role dlqGroupKey nowEpoch byTP
         for_ subChunks \work ->
           atomically do
@@ -881,7 +876,7 @@ subChunksFor
   -> Map (Text, K.PartitionId) (NonEmpty (K.ConsumerRecord (Maybe ByteString) (Maybe ByteString)))
   -> [WorkItem]
 subChunksFor chunkTarget role dlqGroupKey nowEpoch byTP =
-  [ WorkItem tpKey hdr (consumerRecordToTuple <$> chunk) (K.unOffset . (.crOffset) <$> chunk) (sum (consumerRecordBytes <$> chunk))
+  [ WorkItem tpKey hdr ((\r -> (r.crTopic.unTopicName, fromMaybe "" r.crValue)) <$> chunk) (K.unOffset . (.crOffset) <$> chunk) (sum (consumerRecordBytes <$> chunk))
   | (tpKey, recs) <- Map.toList byTP
   , let sorted = sortOn (.crOffset) (toList recs)
   , grp <- case role of
@@ -894,9 +889,6 @@ subChunksFor chunkTarget role dlqGroupKey nowEpoch byTP =
         r : _ | role == KafkaDlqReplay -> r
         _ -> head recs
   ]
-  where
-    consumerRecordToTuple :: K.ConsumerRecord (Maybe ByteString) (Maybe ByteString) -> (Text, ByteString)
-    consumerRecordToTuple record = (record.crTopic.unTopicName, fromMaybe "" record.crValue)
 
 
 -- | Publish failed messages to dead letter queue. Returns the first Left if

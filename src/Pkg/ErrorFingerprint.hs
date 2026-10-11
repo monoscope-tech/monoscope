@@ -20,9 +20,10 @@ where
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (Display)
-import Pkg.Deriving (WrappedEnumSC (..), decodeEnumSC)
+import Pkg.Deriving (WrappedEnumSC (..))
 import Relude
 import Utils (replaceAllFormats, toXXHash)
+import Web.HttpApiData (FromHttpApiData (..))
 
 
 -- =============================================================================
@@ -33,10 +34,8 @@ import Utils (replaceAllFormats, toXXHash)
 -- 2. Exception type + normalized message
 -- 3. Normalized message only (fallback)
 --
--- Stack trace normalization extracts:
--- - Module/package name
--- - Function name (cleaned per platform)
--- - Context line (whitespace normalized, max 120 chars)
+-- Stack trace normalization extracts the module/package name and the function name
+-- (cleaned per platform) of the last in-app frame.
 --
 -- Message normalization:
 -- - Limits to first 2 non-empty lines
@@ -48,7 +47,6 @@ data StackFrame = StackFrame
   , moduleName :: Maybe Text
   , functionName :: Text
   , lineNumber :: Maybe Int
-  , columnNumber :: Maybe Int
   , contextLine :: Maybe Text
   , isInApp :: Bool
   }
@@ -57,9 +55,7 @@ data StackFrame = StackFrame
 
 
 -- | SDK language (@telemetry.sdk.language@) picking the stack-frame parser.
--- The attribute is foreign data, so the type is total rather than closed:
--- anything unrecognised parses as 'RGeneric', exactly as the old string
--- @otherwise@ branch did.
+-- The attribute is foreign data, so parsing is total: anything unrecognised is 'RGeneric'.
 --
 -- >>> map parseRuntime ["go", "nodejs", "webjs", "python", "java", "php", "dotnet"]
 -- [RGo,RNodejs,RWebjs,RPython,RJava,RPhp,RDotnet]
@@ -68,12 +64,11 @@ data StackFrame = StackFrame
 data Runtime = RGo | RNodejs | RWebjs | RPython | RJava | RPhp | RDotnet | RGeneric
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (Display) via WrappedEnumSC 'Nothing "R" Runtime
+  deriving (Display, FromHttpApiData) via WrappedEnumSC 'Nothing "R" Runtime
 
 
--- | Total parse of the SDK language attribute. Unknown values are 'RGeneric'.
 parseRuntime :: Text -> Runtime
-parseRuntime = fromMaybe RGeneric . decodeEnumSC @"R" . toString
+parseRuntime = fromMaybe RGeneric . rightToMaybe . parseUrlPiece
 
 
 -- | Parse a stack trace into a list of stack frames based on runtime
@@ -111,24 +106,22 @@ parseRuntime = fromMaybe RGeneric . decodeEnumSC @"R" . toString
 -- >>> map (.isInApp) $ parseStackTrace RDotnet "at MyApp.Services.DbService.Query() in /app/Services/DbService.cs:line 15\nat System.Runtime.CompilerServices.TaskAwaiter.HandleNonSuccessAndDebuggerNotification(Task task)"
 -- [True,False]
 parseStackTrace :: Runtime -> Text -> [StackFrame]
-parseStackTrace runtime stackText =
-  let lns = filter (not . T.null . T.strip) $ lines stackText
-   in mapMaybe (parseStackFrame runtime) lns
-
-
--- | Parse a single stack frame line based on SDK type
-parseStackFrame :: Runtime -> Text -> Maybe StackFrame
-parseStackFrame runtime line = case runtime of
-  RGo -> parseGoFrame trimmed
-  RNodejs -> parseJsFrame trimmed
-  RWebjs -> parseJsFrame trimmed
-  RPython -> parsePythonFrame trimmed
-  RJava -> parseJavaFrame trimmed
-  RPhp -> parsePhpFrame trimmed
-  RDotnet -> parseDotNetFrame trimmed
-  RGeneric -> parseGenericFrame trimmed
+parseStackTrace runtime = mapMaybe parseFrame . filter (not . T.null) . map T.strip . lines
   where
-    trimmed = T.strip line
+    parseFrame = case runtime of
+      RGo -> parseGoFrame
+      RNodejs -> parseJsFrame
+      RWebjs -> parseJsFrame
+      RPython -> parsePythonFrame
+      RJava -> parseJavaFrame
+      RPhp -> parsePhpFrame
+      RDotnet -> parseDotNetFrame
+      RGeneric -> parseGenericFrame
+
+
+-- | Every parser leaves 'contextLine' empty.
+mkFrame :: Text -> Maybe Text -> Text -> Maybe Int -> Bool -> StackFrame
+mkFrame filePath moduleName functionName lineNumber isInApp = StackFrame{contextLine = Nothing, ..}
 
 
 readText :: Read a => Text -> Maybe a
@@ -146,104 +139,31 @@ splitDotted q = case T.breakOnEnd "." q of
 -- JS/Python/PHP frame parsers so all three agree on what a module name is.
 moduleFromPath :: [Text] -> Text -> Text
 moduleFromPath exts path =
-  let baseName = fromMaybe path $ viaNonEmpty last $ T.splitOn "/" path
+  let baseName = T.takeWhileEnd (/= '/') path
    in fromMaybe baseName $ asum $ map (`T.stripSuffix` baseName) exts
 
 
 -- | O(log n) prefix check via S.lookupLE: the largest entry <= the input
 -- is the only possible prefix match in a sorted set of prefixes.
 isGoStdlib :: Text -> Bool
-isGoStdlib txt = case S.lookupLE txt goStdlibPrefixes of
-  Just prefix -> prefix `T.isPrefixOf` txt
-  Nothing -> False
+isGoStdlib txt = any (`T.isPrefixOf` txt) $ S.lookupLE txt goStdlibPrefixes
 
 
 goStdlibPrefixes :: S.Set Text
-goStdlibPrefixes =
-  S.fromList
-    [ "archive/"
-    , "bufio."
-    , "bytes."
-    , "cmp."
-    , "compress/"
-    , "context."
-    , "crypto."
-    , "crypto/"
-    , "database/"
-    , "debug/"
-    , "embed."
-    , "encoding."
-    , "encoding/"
-    , "errors."
-    , "expvar."
-    , "flag."
-    , "fmt."
-    , "go/"
-    , "hash."
-    , "hash/"
-    , "html."
-    , "html/"
-    , "image."
-    , "image/"
-    , "index/"
-    , "internal/"
-    , "io."
-    , "io/"
-    , "iter."
-    , "log."
-    , "log/"
-    , "maps."
-    , "math."
-    , "math/"
-    , "mime."
-    , "mime/"
-    , "net."
-    , "net/"
-    , "os."
-    , "path."
-    , "path/"
-    , "plugin."
-    , "reflect."
-    , "regexp."
-    , "runtime."
-    , "slices."
-    , "sort."
-    , "strconv."
-    , "strings."
-    , "sync."
-    , "sync/"
-    , "syscall."
-    , "testing."
-    , "time."
-    , "unicode."
-    , "unicode/"
-    , "unique."
-    , "unsafe."
-    ]
+goStdlibPrefixes = S.fromList $ words "archive/ bufio. bytes. cmp. compress/ context. crypto. crypto/ database/ debug/ embed. encoding. encoding/ errors. expvar. flag. fmt. go/ hash. hash/ html. html/ image. image/ index/ internal/ io. io/ iter. log. log/ maps. math. math/ mime. mime/ net. net/ os. path. path/ plugin. reflect. regexp. runtime. slices. sort. strconv. strings. sync. sync/ syscall. testing. time. unicode. unicode/ unique. unsafe."
 {-# NOINLINE goStdlibPrefixes #-}
 
 
--- | Parse Go stack frame: "goroutine 1 [running]:" or "main.foo(0x1234)"
--- Format: package.function(args) or /path/to/file.go:123 +0x1f
+-- | Parse Go stack frame: "goroutine 1 [running]:" or "main.foo(0x1234)".
+-- Goroutine headers and @/path/file.go:123 +0x1f@ lines carry no function name, so
+-- they are skipped as fingerprint noise.
 parseGoFrame :: Text -> Maybe StackFrame
 parseGoFrame line
-  | "goroutine" `T.isPrefixOf` line = Nothing -- Skip goroutine headers
-  | ".go:" `T.isInfixOf` line =
-      -- File path line: /path/to/file.go:123 +0x1f — skip since functionName is empty (noise in fingerprints)
-      Nothing
+  | "goroutine" `T.isPrefixOf` line || ".go:" `T.isInfixOf` line = Nothing
   | "(" `T.isInfixOf` line =
-      let (funcPart, _) = T.breakOn "(" line
+      let funcPart = fst $ T.breakOn "(" line
           (modName, fnName) = splitDotted funcPart
-       in Just
-            StackFrame
-              { filePath = ""
-              , moduleName = if T.null modName then Nothing else Just modName
-              , functionName = fnName
-              , lineNumber = Nothing
-              , columnNumber = Nothing
-              , contextLine = Nothing
-              , isInApp = not $ isGoStdlib funcPart
-              }
+       in Just $ mkFrame "" (guarded (not . T.null) modName) fnName Nothing (not $ isGoStdlib funcPart)
   | otherwise = Nothing
 
 
@@ -253,241 +173,79 @@ parseGoFrame line
 --   at filePath:line:col
 --   at async functionName (filePath:line:col)
 parseJsFrame :: Text -> Maybe StackFrame
-parseJsFrame line
-  | "at " `T.isPrefixOf` T.strip line =
-      let content = T.strip $ T.drop 3 $ T.strip line
-          -- Handle "at async ..."
-          content' =
-            if "async " `T.isPrefixOf` content
-              then T.drop 6 content
-              else content
-       in if "(" `T.isInfixOf` content'
-            then parseJsWithParens content'
-            else parseJsWithoutParens content'
-  | otherwise = Nothing
-  where
-    parseJsWithParens txt =
-      let (funcPart, rest) = T.breakOn " (" txt
-          locationPart = T.dropAround (`elem` ("()" :: String)) rest
-          (filePath, lineCol) = parseJsLocation locationPart
-          (lineNum, colNum) = parseLineCol lineCol
-       in Just
-            StackFrame
-              { filePath = filePath
-              , moduleName = Just $ extractJsModule filePath
-              , functionName = cleanJsFunction funcPart
-              , lineNumber = lineNum
-              , columnNumber = colNum
-              , contextLine = Nothing
-              , isInApp = isJsInApp filePath
-              }
-
-    parseJsWithoutParens txt =
-      let (filePath, lineCol) = parseJsLocation txt
-          (lineNum, colNum) = parseLineCol lineCol
-       in Just
-            StackFrame
-              { filePath = filePath
-              , moduleName = Just $ extractJsModule filePath
-              , functionName = "<anonymous>"
-              , lineNumber = lineNum
-              , columnNumber = colNum
-              , contextLine = Nothing
-              , isInApp = isJsInApp filePath
-              }
-
-    parseJsLocation loc =
+parseJsFrame line = do
+  content <- T.strip <$> T.stripPrefix "at " line
+  let content' = fromMaybe content $ T.stripPrefix "async " content
+      (funcPart, rest) = T.breakOn " (" content'
+      (fn, loc)
+        | "(" `T.isInfixOf` content' = (T.takeWhileEnd (/= '.') funcPart, T.dropAround (`elem` ("()" :: String)) rest)
+        | otherwise = ("<anonymous>", content')
       -- Split from the right to handle paths with colons (Windows)
-      let parts = T.splitOn ":" loc
-          n = length parts
-       in if n >= 3
-            then (T.intercalate ":" $ take (n - 2) parts, T.intercalate ":" $ drop (n - 2) parts)
-            else (loc, "")
-
-    parseLineCol lc =
-      let parts = T.splitOn ":" lc
-       in case parts of
-            [l, c] -> (readText l, readText c)
-            [l] -> (readText l, Nothing)
-            _ -> (Nothing, Nothing)
-
-    extractJsModule = T.toLower . moduleFromPath [".js", ".ts", ".mjs", ".cjs"]
-
-    cleanJsFunction func =
-      -- Remove namespacing: Object.foo.bar -> bar
-      let parts = T.splitOn "." func
-       in fromMaybe func $ viaNonEmpty last parts
-
-    isJsInApp fp = not $ any (`T.isInfixOf` fp) ["node_modules/", "<anonymous>", "internal/", "node:"]
+      parts = T.splitOn ":" loc
+      n = length parts
+      (filePath, lineNum)
+        | n >= 3 = (T.intercalate ":" $ take (n - 2) parts, viaNonEmpty head (drop (n - 2) parts) >>= readText)
+        | otherwise = (loc, Nothing)
+  pure $ mkFrame filePath (Just $ T.toLower $ moduleFromPath [".js", ".ts", ".mjs", ".cjs"] filePath) fn lineNum (not $ any (`T.isInfixOf` filePath) ["node_modules/", "<anonymous>", "internal/", "node:"])
 
 
 -- | Parse Python stack frame
 -- Format: File "path/to/file.py", line 123, in function_name
 parsePythonFrame :: Text -> Maybe StackFrame
-parsePythonFrame line
-  | "File \"" `T.isPrefixOf` T.strip line =
-      let content = T.drop 6 $ T.strip line -- Remove 'File "'
-          (filePath, rest) = T.breakOn "\"" content
-          -- Parse ", line 123, in func_name"
-          parts = T.splitOn ", " $ T.drop 2 rest -- Skip '",'
-          lineNum = case find ("line " `T.isPrefixOf`) parts of
-            Just p -> readText $ T.drop 5 p
-            Nothing -> Nothing
-          funcName = case find ("in " `T.isPrefixOf`) parts of
-            Just p -> T.drop 3 p
-            Nothing -> "<module>"
-       in Just
-            StackFrame
-              { filePath = filePath
-              , moduleName = Just $ extractPythonModule filePath
-              , functionName = cleanPythonFunction funcName
-              , lineNumber = lineNum
-              , columnNumber = Nothing
-              , contextLine = Nothing
-              , isInApp = isPythonInApp filePath
-              }
-  | otherwise = Nothing
-  where
-    extractPythonModule = moduleFromPath [".py"]
-
-    cleanPythonFunction = flip (foldr (uncurry T.replace)) ([("<lambda>", "lambda"), ("<listcomp>", "listcomp"), ("<dictcomp>", "dictcomp")] :: [(Text, Text)])
-
-    isPythonInApp fp = not $ any (`T.isInfixOf` fp) ["site-packages/", "dist-packages/", "/lib/python", "<frozen"]
+parsePythonFrame line = do
+  content <- T.stripPrefix "File \"" line
+  let (filePath, rest) = T.breakOn "\"" content
+      parts = T.splitOn ", " $ T.drop 2 rest -- Skip '",'
+      field pfx = T.drop (T.length pfx) <$> find (pfx `T.isPrefixOf`) parts
+      funcName = foldr (uncurry T.replace) (fromMaybe "<module>" $ field "in ") ([("<lambda>", "lambda"), ("<listcomp>", "listcomp"), ("<dictcomp>", "dictcomp")] :: [(Text, Text)])
+  pure $ mkFrame filePath (Just $ moduleFromPath [".py"] filePath) funcName (readText =<< field "line ") (not $ any (`T.isInfixOf` filePath) ["site-packages/", "dist-packages/", "/lib/python", "<frozen"])
 
 
 -- | Parse Java stack frame
 -- Format: at com.example.Class.method(File.java:123)
 parseJavaFrame :: Text -> Maybe StackFrame
-parseJavaFrame line
-  | "at " `T.isPrefixOf` T.strip line =
-      let content = T.drop 3 $ T.strip line
-          (qualifiedMethod, rest) = T.breakOn "(" content
-          locationPart = T.dropAround (`elem` ("()" :: String)) rest
-          (fileName, lineNum) = parseJavaLocation locationPart
-          (moduleName, funcName) = splitDotted qualifiedMethod
-       in Just
-            StackFrame
-              { filePath = fileName
-              , moduleName = Just moduleName
-              , functionName = cleanJavaFunction funcName
-              , lineNumber = lineNum
-              , columnNumber = Nothing
-              , contextLine = Nothing
-              , isInApp = isJavaInApp qualifiedMethod
-              }
-  | otherwise = Nothing
-  where
-    parseJavaLocation loc =
-      let (file, lineStr) = T.breakOn ":" loc
-       in (file, readText $ T.drop 1 lineStr)
-
-    cleanJavaFunction =
-      -- Remove generics: method<T> -> method
-      T.takeWhile (/= '<')
-
-    isJavaInApp qm = not $ any (`T.isPrefixOf` qm) ["java.", "javax.", "sun.", "com.sun.", "jdk.", "org.springframework."]
+parseJavaFrame line = do
+  content <- T.stripPrefix "at " line
+  let (qualifiedMethod, rest) = T.breakOn "(" content
+      (fileName, lineStr) = T.breakOn ":" $ T.dropAround (`elem` ("()" :: String)) rest
+      (moduleName, funcName) = splitDotted qualifiedMethod
+  -- takeWhile drops generics: method<T> -> method
+  pure $ mkFrame fileName (Just moduleName) (T.takeWhile (/= '<') funcName) (readText $ T.drop 1 lineStr) (not $ any (`T.isPrefixOf` qualifiedMethod) ["java.", "javax.", "sun.", "com.sun.", "jdk.", "org.springframework."])
 
 
 -- | Parse PHP stack frame
 -- Format: #0 /path/to/file.php(123): ClassName->methodName()
 parsePhpFrame :: Text -> Maybe StackFrame
-parsePhpFrame line
-  | "#" `T.isPrefixOf` T.strip line =
-      let content = T.drop 1 $ T.dropWhile (/= ' ') $ T.strip line -- Skip "#N "
-          (pathPart, funcPart) = T.breakOn ": " content
-          (filePath, lineNum) = parsePhpPath pathPart
-          funcName = T.takeWhile (/= '(') $ T.drop 2 funcPart
-       in Just
-            StackFrame
-              { filePath = filePath
-              , moduleName = Just $ extractPhpModule filePath
-              , functionName = cleanPhpFunction funcName
-              , lineNumber = lineNum
-              , columnNumber = Nothing
-              , contextLine = Nothing
-              , isInApp = isPhpInApp filePath
-              }
-  | otherwise = Nothing
-  where
-    parsePhpPath path =
-      let (file, lineStr) = T.breakOn "(" path
-          lineNum = readText $ T.takeWhile (/= ')') $ T.drop 1 lineStr
-       in (file, lineNum)
-
-    extractPhpModule = moduleFromPath [".php"]
-
-    cleanPhpFunction func =
-      T.replace "{closure}" "closure" $ fromMaybe func $ splitLast "->" <|> splitLast "::"
-      where
-        splitLast sep = viaNonEmpty last $ drop 1 $ T.splitOn sep func
-
-    isPhpInApp fp = not $ any (`T.isInfixOf` fp) ["/vendor/", "/phar://"]
+parsePhpFrame line = do
+  guard $ "#" `T.isPrefixOf` line
+  let (pathPart, funcPart) = T.breakOn ": " $ T.drop 1 $ T.dropWhile (/= ' ') line -- Skip "#N "
+      (filePath, lineStr) = T.breakOn "(" pathPart
+      func = T.takeWhile (/= '(') $ T.drop 2 funcPart
+      splitLast sep = viaNonEmpty last $ drop 1 $ T.splitOn sep func
+  pure $ mkFrame filePath (Just $ moduleFromPath [".php"] filePath) (T.replace "{closure}" "closure" $ fromMaybe func $ splitLast "->" <|> splitLast "::") (readText $ T.takeWhile (/= ')') $ T.drop 1 lineStr) (not $ any (`T.isInfixOf` filePath) ["/vendor/", "/phar://"])
 
 
 -- | Parse .NET stack frame
 -- Format: at Namespace.Class.Method(params) in /path/to/file.cs:line 123
 parseDotNetFrame :: Text -> Maybe StackFrame
-parseDotNetFrame line
-  | "at " `T.isPrefixOf` T.strip line =
-      let content = T.drop 3 $ T.strip line
-          (methodPart, locationPart) = T.breakOn " in " content
-          qualifiedMethod = T.takeWhile (/= '(') methodPart
-          (moduleName, funcName) = splitDotted qualifiedMethod
-          (filePath, lineNum) = parseDotNetLocation $ T.drop 4 locationPart
-       in Just
-            StackFrame
-              { filePath = filePath
-              , moduleName = Just moduleName
-              , functionName = cleanDotNetFunction funcName
-              , lineNumber = lineNum
-              , columnNumber = Nothing
-              , contextLine = Nothing
-              , isInApp = isDotNetInApp qualifiedMethod
-              }
-  | otherwise = Nothing
-  where
-    parseDotNetLocation loc =
-      let (path, lineStr) = T.breakOn ":line " loc
-       in (path, readText $ T.drop 6 lineStr)
-
-    cleanDotNetFunction =
-      -- Remove generic arity: Method`1 -> Method
-      T.takeWhile (/= '`')
-
-    isDotNetInApp qm = not $ any (`T.isPrefixOf` qm) ["System.", "Microsoft.", "Newtonsoft."]
+parseDotNetFrame line = do
+  content <- T.stripPrefix "at " line
+  let (methodPart, locationPart) = T.breakOn " in " content
+      qualifiedMethod = T.takeWhile (/= '(') methodPart
+      (moduleName, funcName) = splitDotted qualifiedMethod
+      (filePath, lineStr) = T.breakOn ":line " $ T.drop 4 locationPart
+  -- takeWhile drops generic arity: Method`1 -> Method
+  pure $ mkFrame filePath (Just moduleName) (T.takeWhile (/= '`') funcName) (readText $ T.drop 6 lineStr) (not $ any (`T.isPrefixOf` qualifiedMethod) ["System.", "Microsoft.", "Newtonsoft."])
 
 
--- | Generic stack frame parser for unknown formats
+-- | Generic stack frame parser for unknown formats. The function is the first
+-- function-like word, falling back to the full line to avoid collisions; frames are
+-- assumed in-app.
 parseGenericFrame :: Text -> Maybe StackFrame
-parseGenericFrame line =
-  let trimmed = T.strip line
-   in if T.null trimmed || "..." `T.isPrefixOf` trimmed
-        then Nothing
-        else
-          Just
-            StackFrame
-              { filePath = trimmed
-              , moduleName = Nothing
-              , functionName = extractGenericFunction trimmed
-              , lineNumber = extractGenericLineNumber trimmed
-              , columnNumber = Nothing
-              , contextLine = Nothing
-              , isInApp = True -- Assume in-app by default
-              }
-  where
-    extractGenericFunction txt =
-      -- Try to find function-like patterns; fall back to full line to avoid collisions
-      let parts = words txt
-       in case find (\p -> "(" `T.isInfixOf` p || "." `T.isInfixOf` p) parts of
-            Just p -> T.takeWhile (/= '(') p
-            Nothing -> txt
-
-    extractGenericLineNumber txt =
-      -- Look for :NUMBER or line NUMBER patterns
-      let parts = T.splitOn ":" txt
-       in case parts of
-            _ : rest -> listToMaybe $ mapMaybe readText rest
-            _ -> Nothing
+parseGenericFrame line = do
+  guard $ not ("..." `T.isPrefixOf` line)
+  let fn = maybe line (T.takeWhile (/= '(')) $ find (\p -> "(" `T.isInfixOf` p || "." `T.isInfixOf` p) $ words line
+  pure $ mkFrame line Nothing fn (listToMaybe $ mapMaybe readText $ drop 1 $ T.splitOn ":" line) True
 
 
 -- | Normalize a stack trace for fingerprinting
@@ -508,35 +266,11 @@ normalizeStackTrace :: Runtime -> Text -> Text
 normalizeStackTrace runtime stackText =
   let frames = parseStackTrace runtime stackText
       inAppFrames = filter (.isInApp) frames
-      framesToUse = if null inAppFrames then frames else inAppFrames
-   in maybe "" normalizeFrame $ viaNonEmpty last framesToUse
+   in maybe "" normalizeFrame $ viaNonEmpty last $ bool inAppFrames frames (null inAppFrames)
   where
-    normalizeFrame :: StackFrame -> Text
-    normalizeFrame frame =
-      let modulePart = fromMaybe "" frame.moduleName
-          funcPart = normalizeFunction frame.functionName
-          -- Context line: normalize whitespace, truncate if > 120 chars
-          contextPart = maybe "" normalizeContextLine frame.contextLine
-       in T.intercalate "|" $ filter (not . T.null) [modulePart, funcPart, contextPart]
-
-    normalizeFunction :: Text -> Text
-    normalizeFunction func =
-      -- Common normalizations across platforms:
-      -- 1. Remove memory addresses (0x...)
-      -- 2. Remove generic type parameters
-      -- 3. Remove parameter types
-      -- 4. Normalize anonymous/lambda markers
-      let noAddr = unwords $ filter (not . ("0x" `T.isPrefixOf`)) $ words func
-          noGenerics = T.takeWhile (/= '<') noAddr
-          noParams = T.takeWhile (/= '(') noGenerics
-       in T.strip noParams
-
-    normalizeContextLine :: Text -> Text
-    normalizeContextLine ctx =
-      let normalized = unwords $ words ctx
-       in if T.length normalized > 120
-            then "" -- Skip overly long context lines to keep fingerprints stable
-            else normalized
+    -- Strip memory addresses (0x...), generic type parameters and parameter lists.
+    normalizeFunction = T.strip . T.takeWhile (`notElem` ("<(" :: String)) . unwords . filter (not . ("0x" `T.isPrefixOf`)) . words
+    normalizeFrame frame = T.intercalate "|" $ filter (not . T.null) [fold frame.moduleName, normalizeFunction frame.functionName]
 
 
 -- | Normalize an error message for fingerprinting
@@ -649,35 +383,22 @@ data ErrorHashes = ErrorHashes
 -- >>> a.narrow == b.narrow && a.broad == b.broad
 -- True
 computeErrorHashes :: Text -> Maybe Text -> Maybe Text -> Runtime -> Text -> Text -> Text -> ErrorHashes
-computeErrorHashes projectIdText mService spanName runtime exceptionType message stackTrace =
-  let normalizedMsg = normalizeMessage message
-      normalizedType = T.strip exceptionType
-      shapeHash = toXXHash $ T.intercalate "|" $ filter (not . T.null) [projectIdText, "shape", normalizedType, normalizedMsg]
-   in if isFrameworkTransportError normalizedType normalizedMsg
-        then
-          -- Framework transport noise is route/stack-agnostic: collapse every
-          -- occurrence of the same type+message into one pattern so it does not
-          -- fan out into hundreds of distinct issues.
-          let h = toXXHash $ T.intercalate "|" $ filter (not . T.null) [projectIdText, "transport", normalizedType, normalizedMsg]
-           in ErrorHashes{narrow = h, broad = h, shape = shapeHash}
-        else
-          ErrorHashes
-            { narrow = go spanName normalizedMsg normalizedType
-            , broad = go Nothing normalizedMsg normalizedType
-            , shape = shapeHash
-            }
+computeErrorHashes projectIdText mService spanName runtime exceptionType message stackTrace
+  -- Framework transport noise is route/stack-agnostic: collapse every occurrence of
+  -- the same type+message into one pattern so it does not fan out into hundreds of issues.
+  | isFrameworkTransportError typ msg = let h = hashParts [projectIdText, "transport", typ, msg] in ErrorHashes{narrow = h, broad = h, shape}
+  | otherwise = ErrorHashes{narrow = go spanName, broad = go Nothing, shape}
   where
-    go sn normalizedMsg normalizedType =
-      let
-        normalizedStack = normalizeStackTrace runtime stackTrace
-        fingerprintComponents =
-          if
-            | not (T.null normalizedStack) -> [projectIdText, fromMaybe "" mService, normalizedType, normalizedStack]
-            | not (T.null normalizedType) -> [projectIdText, fromMaybe "" mService, fromMaybe "" sn, normalizedType, normalizedMsg]
-            | otherwise -> [projectIdText, fromMaybe "" mService, fromMaybe "" sn, normalizedMsg]
-        combined = T.intercalate "|" $ filter (not . T.null) fingerprintComponents
-       in
-        toXXHash combined
+    msg = normalizeMessage message
+    typ = T.strip exceptionType
+    shape = shapeWithMasks [] projectIdText exceptionType message
+    stack = normalizeStackTrace runtime stackTrace
+    -- 'hashParts' drops empty parts, so an empty type falls back to message only.
+    go sn = hashParts $ projectIdText : fromMaybe "" mService : bool [fromMaybe "" sn, typ, msg] [typ, stack] (not $ T.null stack)
+
+
+hashParts :: [Text] -> Text
+hashParts = toXXHash . T.intercalate "|" . filter (not . T.null)
 
 
 -- | Detect framework/transport-layer errors that happen independently of the
@@ -716,78 +437,25 @@ computeErrorHashes projectIdText mService spanName runtime exceptionType message
 -- False
 isFrameworkTransportError :: Text -> Text -> Bool
 isFrameworkTransportError exceptionType normalizedMessage =
-  let tLower = T.toLower $ T.strip exceptionType
-      m = T.toLower normalizedMessage
-      -- All entries lowercased for case-insensitive compare
-      knownTypes =
-        S.fromList
-          -- Haskell / Warp
-          [ "invalidrequest"
-          , "connectionclosedbypeer"
-          , "endofstream"
-          , -- Python
-            "clientabortexception"
-          , "brokenpipeerror"
-          , "connectionreseterror"
-          , "connectionabortederror"
-          , "connectionerror"
-          , "remotedisconnected"
-          , "http2.connectionerror"
-          , "h2.exceptions.streamclosederror"
-          , "h11._util.remoteprotocolerror"
-          , -- Node.js (errno codes)
-            "econnreset"
-          , "epipe"
-          , "econnaborted"
-          , "econnrefused"
-          , "etimedout"
-          , "ehostunreach"
-          , -- Go
-            "*net.operror"
-          , "net.operror"
-          , "syscall.errno"
-          , "io.erruneexpectedeof"
-          , "io.errclosedpipe"
-          , -- .NET
-            "system.io.ioexception"
-          , "system.net.sockets.socketexception"
-          , "system.net.http.httprequestexception"
-          , "system.operationcanceledexception"
-          , -- Java
-            "java.net.socketexception"
-          , "java.io.eofexception"
-          , "org.apache.catalina.connector.clientabortexception"
-          , -- Ruby
-            "errno::epipe"
-          , "errno::econnreset"
-          , "errno::econnaborted"
-          , -- Rust
-            "std::io::error"
+  S.member t knownTypes || (S.member t genericTypes && any (`T.isInfixOf` T.toLower normalizedMessage) messagePatterns)
+  where
+    t = T.toLower $ T.strip exceptionType
+    knownTypes =
+      S.fromList
+        $ foldMap
+          words
+          [ "invalidrequest connectionclosedbypeer endofstream" -- Haskell / Warp
+          , "clientabortexception brokenpipeerror connectionreseterror connectionabortederror connectionerror remotedisconnected http2.connectionerror h2.exceptions.streamclosederror h11._util.remoteprotocolerror" -- Python
+          , "econnreset epipe econnaborted econnrefused etimedout ehostunreach" -- Node.js errno codes
+          , "*net.operror net.operror syscall.errno io.erruneexpectedeof io.errclosedpipe" -- Go
+          , "system.io.ioexception system.net.sockets.socketexception system.net.http.httprequestexception system.operationcanceledexception" -- .NET
+          , "java.net.socketexception java.io.eofexception org.apache.catalina.connector.clientabortexception" -- Java
+          , "errno::epipe errno::econnreset errno::econnaborted" -- Ruby
+          , "std::io::error" -- Rust
           ]
-      -- Types where a message-pattern fallback is trustworthy (generic / IO layer)
-      genericTypes =
-        S.fromList
-          [ ""
-          , "ioerror"
-          , "ioexception"
-          , "oserror"
-          , "socketexception"
-          , "runtimeerror"
-          , "error"
-          , "systemerror"
-          , "exception"
-          ]
-      messagePatterns =
-        [ "client closed"
-        , "broken pipe"
-        , "connection reset"
-        , "connection aborted"
-        , "premature eof"
-        , "client disconnected"
-        ]
-      messageMatches = any (`T.isInfixOf` m) messagePatterns
-   in S.member tLower knownTypes
-        || (S.member tLower genericTypes && messageMatches)
+    -- Types where a message-pattern fallback is trustworthy (generic / IO layer)
+    genericTypes = S.fromList $ "" : words "ioerror ioexception oserror socketexception runtimeerror error systemerror exception"
+    messagePatterns = ["client closed", "broken pipe", "connection reset", "connection aborted", "premature eof", "client disconnected"]
 
 
 -- | A literal prefix and suffix around a part that varies, learned from a group the
@@ -894,6 +562,4 @@ applyErrorMasks masks msg = foldl' applyOne msg masks
 -- does not move.
 shapeWithMasks :: [ErrorMask] -> Text -> Text -> Text -> Text
 shapeWithMasks masks projectIdText exceptionType message =
-  toXXHash
-    $ T.intercalate "|"
-    $ filter (not . T.null) [projectIdText, "shape", T.strip exceptionType, applyErrorMasks masks (normalizeMessage message)]
+  hashParts [projectIdText, "shape", T.strip exceptionType, applyErrorMasks masks (normalizeMessage message)]

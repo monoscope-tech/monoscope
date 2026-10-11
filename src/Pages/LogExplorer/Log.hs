@@ -33,6 +33,7 @@ module Pages.LogExplorer.Log (
 )
 where
 
+import BackgroundJobs qualified
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
 import Data.Default (Default, def)
@@ -41,11 +42,20 @@ import Data.Effectful.Hasql qualified as Hasql
 import Data.Foldable.WithIndex (iforM_)
 import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
+import Data.Map.Strict qualified as Map
+import Data.OpenApi (ToSchema (..))
+import Data.Set qualified as S
 import Data.Text qualified as T
+import Data.Text.Display (display)
 import Data.Time (UTCTime)
+import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
+import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Deriving.Aeson qualified as DAE
+import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, IOE, (:>))
 import Effectful.Error.Static (Error, throwError)
+import Effectful.Exception (trySync)
 import Effectful.Labeled (Labeled)
 import Effectful.Log qualified as ELog
 import Effectful.Reader.Static qualified
@@ -56,16 +66,24 @@ import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Apis.LogQueries qualified as LogQueries
+import Models.Apis.Monitors (MonitorAlertConfig (..))
+import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
+import Models.Projects.ProjectMembers qualified as ManageMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, pageActions, pageTitle)
+import Pages.Components (FieldCfg (..), FieldSize (..), facetOption_, facetRail_, facetSection_, formField_, keyboardActivateAttr_, lazyPanel_, localTimeFmt_, resetFormOnSuccessAttr_, resizer_)
+import Pages.LogExplorer.LogItem qualified as LogItem
+import Pages.Monitors qualified as AlertUI
+import Pkg.AI qualified as AI
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), VizSurface (..), VizType (..), enrichSchemaWithFacets, logQueryBox_, visTypes)
 import Pkg.Components.TimePicker qualified as Components
 import Pkg.Components.Widget (WidgetAxis (..), WidgetType (WTTimeseries, WTTimeseriesLine))
 import Pkg.Components.Widget qualified as Widget
+import Pkg.DeriveUtils (CamelSchema (..), SnakeSchema (..))
 import Pkg.Parser (PageCursor (..), PageDirection (..), defaultQueryLimit, pSource, parseQueryToAST, toQText)
 import Pkg.Parser.Expr qualified as ParserExpr
 import Pkg.Parser.Stats (QueryError (..), Section (TakeCommand), pSortSection, parseQueryDiagnosed)
@@ -74,36 +92,15 @@ import Relude hiding (ask)
 import Relude.Extra.Foldable1 (maximum1, minimum1)
 import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
+import System.Logging qualified as Log
+import System.Tracing (Tracing, withSpan_)
 import System.Types
 import Text.Casing (fromAny, toKebab)
 import Text.Megaparsec (parseMaybe)
+import Text.Slugify (slugify)
 import Utils (FieldAction (..), FieldMenuCtx (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, encodeText, explorerNavTabs_, faSprite_, fieldContextMenuItems_, fieldMenuPanel_, getDurationNSMS, getServiceColors, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecBy, lookupVecNonEmptyText, lookupVecTextByKey, methodFillColor, nonEmptyT, popoverTrigger_, prettyPrintCount, sanitizeBackendError, serviceFillColor, showFFloat', statusFillColorText, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (parseUrlPiece)
-
-import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
-import Data.UUID qualified as UUID
-import Models.Apis.Monitors (MonitorAlertConfig (..))
-import Models.Apis.Monitors qualified as Monitors
-import Models.Projects.ProjectMembers qualified as ManageMembers
-import Pages.Components (FieldCfg (..), FieldSize (..), facetOption_, facetRail_, facetSection_, formField_, keyboardActivateAttr_, localTimeFmt_, resetFormOnSuccessAttr_, resizer_)
-import Pages.LogExplorer.LogItem qualified as LogItem
-import Pages.Monitors qualified as AlertUI
-import Pkg.AI qualified as AI
-
-import BackgroundJobs qualified
-import Data.Map.Strict qualified as Map
-import Data.OpenApi (ToSchema (..))
-import Data.Pool (withResource)
-import Data.Set qualified as S
-import Deriving.Aeson qualified as DAE
-import Deriving.Aeson.Stock qualified as DAE
-import Effectful.Exception (trySync)
-import OddJobs.Job (createJob)
-import Pkg.DeriveUtils (CamelSchema (..), SnakeSchema (..))
-import System.Logging qualified as Log
-import System.Tracing (Tracing, withSpan_)
-import Text.Slugify (slugify)
 
 
 data TraceTreeEntry = TraceTreeEntry
@@ -430,10 +427,6 @@ facetGroupParam :: FacetGroup -> Text
 facetGroupParam = toText . toKebab . fromAny . drop 2 . toString . show
 
 
-parseFacetGroup :: Text -> Maybe FacetGroup
-parseFacetGroup value = find ((== value) . facetGroupParam) universe
-
-
 -- | A facet entry the sidebar can render. @path@ is the canonical KQL field
 -- name (the 'FacetData' lookup key and what a user types). Invariant
 -- ('prop_facetsAreFast'): @path@ must be a flat-column reference (in
@@ -620,19 +613,6 @@ renderFacetValue f (FacetValue val count) =
     (span_ [class_ "facet-count shrink-0 text-xs tabular-nums text-textWeak"] $ toHtml $ prettyPrintCount count)
 
 
-renderFacetTail :: Text -> FacetSummary -> Html ()
-renderFacetTail field facetSummary =
-  whenJust (find ((== field) . (.path)) facetDefs) \facet -> do
-    let (FacetData facetMap) = facetSummary.facetJson
-        values = drop facetHeadCount $ HM.lookupDefault [] field facetMap
-        count = prettyPrintCount $ length values
-    details_ [class_ "facet-tail group", open_ ""] do
-      summary_ [class_ "list-none cursor-pointer text-textBrand text-xs px-1 py-0.5 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-strokeBrand-strong"] do
-        span_ [class_ "group-open:hidden"] $ toHtml $ "+ More (" <> count <> ")"
-        span_ [class_ "hidden group-open:inline"] $ toHtml $ "− Less (" <> count <> ")"
-      div_ [class_ "space-y-1"] $ forM_ values (renderFacetValue facet)
-
-
 -- | Descendants of a page of rows, for the trace tree: seed from each row's own
 -- span id (@latency_breakdown@, aliased from @context___span_id@), bound the scan
 -- to the first @traceCap@ distinct traces, and exclude the rows already in hand.
@@ -706,9 +686,7 @@ queryEvents :: (DB es, ELog.Log :> es, Effectful.Reader.Static.Reader AuthContex
 queryEvents pid queryM sinceM fromM toM sourceM limitM withChildrenM includeAttributesM environmentM serviceM = do
   now <- Time.currentTime
   let queryInput = fromMaybe "" queryM
-  queryAST <- case parseQueryToAST queryInput of
-    Left err -> throwError $ kqlError400 "invalid_query" ("Invalid query: " <> err) Nothing Nothing Nothing
-    Right ast -> pure ast
+  queryAST <- either (\err -> throwError $ kqlError400 "invalid_query" ("Invalid query: " <> err) Nothing Nothing Nothing) pure $ parseQueryToAST queryInput
   let (fromD, toD, _) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
       -- Apply the API `limit` as the query row-limit (when KQL has none) so selectLogTable
       -- returns exactly the page; a post-hoc `V.take` would miscount hasMore since
@@ -716,11 +694,9 @@ queryEvents pid queryM sinceM fromM toM sourceM limitM withChildrenM includeAttr
       hasKqlLimit = any (\case TakeCommand{} -> True; _ -> False) queryAST
       queryAST' = if hasKqlLimit then queryAST else queryAST <> [TakeCommand (min defaultQueryLimit (fromMaybe 100 limitM))]
   enableTfReads <- useTfReads
-  result <- LogQueries.selectLogTable enableTfReads pid queryAST' (toQText queryAST') Nothing (fromD, toD) ["attributes" | fromMaybe False includeAttributesM] (parseMaybe pSource =<< sourceM) Nothing environmentM serviceM
-  case result of
-    Left err -> throwError $ translateQueryError err
-    -- Default to exact-match (no trace expansion); UI passes True via apiLogH.
-    Right r -> buildLogResult enableTfReads (fromMaybe False withChildrenM) pid now sinceM [] [] r
+  -- Default to exact-match (no trace expansion); UI passes True via apiLogH.
+  either (throwError . translateQueryError) (buildLogResult enableTfReads (fromMaybe False withChildrenM) pid now sinceM [] [])
+    =<< LogQueries.selectLogTable enableTfReads pid queryAST' (toQText queryAST') Nothing (fromD, toD) ["attributes" | fromMaybe False includeAttributesM] (parseMaybe pSource =<< sourceM) Nothing environmentM serviceM
 
 
 -- | Translate the raw exception string from 'LogQueries.selectLogTable' into a
@@ -747,6 +723,22 @@ translateQueryError raw =
             (Just raw)
       )
       (extractMissingColumn raw)
+  where
+    -- Postgres (@column "X" does not exist@) and TimeFusion (@No field named X@) shapes;
+    -- 'Nothing' if neither matches, so unrelated errors aren't mislabeled.
+    extractMissingColumn t = tfMatch <|> pgMatch
+      where
+        lower = T.toLower t
+        -- Match case-insensitively but re-slice from the original-case text so the
+        -- column name keeps its casing.
+        after needle =
+          let (pre, hit) = T.breakOn needle lower
+           in T.drop (T.length pre + T.length needle) t <$ guard (not (T.null hit))
+        tfMatch = after "no field named " >>= guarded (not . T.null) . T.strip . T.takeWhile (`notElem` ['.', ' ', '\n', '"', '`'])
+        pgMatch = do
+          guard $ "does not exist" `T.isInfixOf` lower
+          rest <- after "column "
+          guarded (not . T.null) $ maybe (T.takeWhile (`notElem` [' ', ',']) rest) (T.takeWhile (/= '"')) (T.stripPrefix "\"" rest)
 
 
 -- | Build a 400 with a JSON-shaped body the CLI's 'renderAPIError' decodes.
@@ -766,25 +758,6 @@ kqlError400 code msg fieldM suggestionM detailsM =
           , ("suggestion" AE..=) <$> suggestionM
           , ("details" AE..=) <$> detailsM
           ]
-
-
--- | Pull a missing column name from the underlying SQL error. Handles both
--- Postgres (@column "X" does not exist@) and TimeFusion (@No field named X@)
--- shapes; 'Nothing' if neither matches, so unrelated errors aren't mislabeled.
-extractMissingColumn :: Text -> Maybe Text
-extractMissingColumn t = tfMatch <|> pgMatch
-  where
-    lower = T.toLower t
-    -- Match case-insensitively but re-slice from the original-case text so the
-    -- column name keeps its casing.
-    after needle =
-      let (pre, hit) = T.breakOn needle lower
-       in T.drop (T.length pre + T.length needle) t <$ guard (not (T.null hit))
-    tfMatch = after "no field named " >>= guarded (not . T.null) . T.strip . T.takeWhile (`notElem` ['.', ' ', '\n', '"', '`'])
-    pgMatch = do
-      guard $ "does not exist" `T.isInfixOf` lower
-      rest <- after "column "
-      guarded (not . T.null) $ maybe (T.takeWhile (`notElem` [' ', ',']) rest) (T.takeWhile (/= '"')) (T.stripPrefix "\"" rest)
 
 
 -- | Log Explorer page shell. Renders chrome only (query box, facets, widgets,
@@ -817,7 +790,7 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
   -- with the page, so preserve the missing-summary recovery without restoring that
   -- client-side round trip.
   facetSummaryM <- SchemaCatalog.getFacetSummary (Just $ facetGroupPaths FGCommon) pid "otel_logs_and_spans" now now
-  when (isNothing facetSummaryM) $ enqueueFacetsJob authCtx pid now
+  when (isNothing facetSummaryM) $ BackgroundJobs.enqueueJobs authCtx [BackgroundJobs.GenerateOtelFacetsBatch (V.singleton pid) now]
 
   whenLeft_ freeTierStatusE (Log.logAttention "Log explorer freeTierStatus failed" . show @Text)
 
@@ -834,13 +807,13 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
       -- Chart viz types and trace deep links don't show the log list: its rows would be a
       -- query nobody sees, contending with the one they do.
       chartViz = any (\v -> v.surface == Chart && Just v.key == effectiveVizType) visTypes
-      preloadUrl = guard (not chartViz && isNothing showTraceM) $> withTelemetryScope sess.environment sess.service (LogQueries.logExplorerUrlPath pid dataEndpoint queryM' cols' Nothing sinceM fromM toM Nothing sourceM False)
+      preloadUrl = guard (not chartViz && isNothing showTraceM) $> explorerUrl pid dataEndpoint def{query = queryM', cols = cols', since = sinceM, from = fromM, to = toM, source = sourceM, environment = sess.environment, serviceScope = sess.service}
 
   let stampPng base = do
         url <- Widget.widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid base sinceM fromM toM
         pure $ if T.null url then base else base{Widget.pngUrl = Just url}
-  chartWidget <- stampPng (logChartWidget pid)
-  latencyWidget <- stampPng (logLatencyWidget pid)
+  chartWidget <- stampPng logChartWidget
+  latencyWidget <- stampPng logLatencyWidget
 
   let bwconf =
         bw
@@ -848,7 +821,9 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
           , docsLink = Just "https://monoscope.tech/docs/dashboard/dashboard-pages/api-log-explorer/"
           , freeTierStatus = freeTierStatus
           , headContent = Nothing
-          , pageActions = Just $ logExplorerActions_ currentRange (effectiveVizType /= Just "sessions" && effectiveVizType /= Just "patterns")
+          , -- One freshness control for row streaming and periodic query refresh; their
+            -- independent switches stay in the popover.
+            pageActions = Just $ Components.liveDataControls_ (Just "log_explorer_form") currentRange Nothing (Components.RowStreaming $ effectiveVizType `notElem` ([Just "sessions", Just "patterns"] :: [Maybe Text]))
           , navTabs = Just $ explorerNavTabs_ pid "Events"
           , needsTagify = False
           }
@@ -876,21 +851,33 @@ apiLogH pid queryM' cols' sinceM fromM toM sourceM targetSpansM targetEventM sho
           }
   addRespHeaders $ LogPage $ PageCtx bwconf page
   where
-    -- One trustworthy freshness control for the two mechanisms that keep Explorer current:
-    -- row streaming and periodic query refresh. Their independent switches stay available in
-    -- the popover, while the resting label reports whichever mechanism is paused.
-    logExplorerActions_ currentRange supportsStreaming =
-      Components.liveDataControls_ (Just "log_explorer_form") currentRange Nothing (Components.RowStreaming supportsStreaming)
-
-
--- | Mark the @explored_logs@ onboarding step done and record the query in the user's
--- history. Called from the rows request, not the page shell: the body preloads links on
--- hover, so the shell GET runs for pages nobody opened.
-recordExploration :: Projects.ProjectId -> Projects.UserId -> V.Vector Text -> [Section] -> ATAuthCtx ()
-recordExploration pid uid stepsDone queryAST = do
-  unless (V.elem "explored_logs" stepsDone)
-    $ void (Projects.completeOnboardingStep pid "explored_logs")
-  Projects.queryLibInsert Projects.QLTHistory pid uid (toQText queryAST) queryAST Nothing
+    logWidgetBase =
+      (def :: Widget.Widget)
+        { Widget.standalone = Just True
+        , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
+        , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
+        , Widget.legendPosition = Just "top-right"
+        , Widget.legendSize = Just Widget.LSXs
+        , Widget._projectId = Just pid
+        }
+    logChartWidget =
+      logWidgetBase
+        { Widget.id = Just "log-explorer-all-traces"
+        , Widget.wType = WTTimeseries
+        , Widget.query = Just "summarize count(*) by bin_auto(timestamp), status_code"
+        , Widget.unit = Just "rows"
+        , Widget.title = Just "All traces"
+        , Widget.allowZoom = Just True
+        }
+    logLatencyWidget =
+      logWidgetBase
+        { Widget.wType = WTTimeseriesLine
+        , Widget.title = Just "Latency percentiles"
+        , Widget.hideSubtitle = Just True
+        , Widget.summarizeBy = Just Widget.SBMax
+        , Widget.query = Just "duration != null | summarize percentiles(duration, 50, 75, 90, 95) by bin_auto(timestamp)"
+        , Widget.unit = Just "ns"
+        }
 
 
 -- | Shared prologue for the log-data endpoints: auth-gate the request, grab the
@@ -943,50 +930,78 @@ data LogDataQuery = LogDataQuery
 
 
 logExplorerDataH :: Projects.ProjectId -> LogDataQuery -> ATAuthCtx (RespHeaders LogResult)
-logExplorerDataH pid LogDataQuery{query = queryM', cols = cols', cursor = cursorM', direction = directionM, since = sinceM, from = fromM, to = toM, source = sourceM, targetSpans = targetSpansM, sort = sortM} = withSpan_ "log-explorer.data" [] do
-  (authCtx, now, fromD, toD, envM, serviceM) <- logDataEnv pid sinceM fromM toM
+logExplorerDataH pid q = withSpan_ "log-explorer.data" [] do
+  (authCtx, now, fromD, toD, envM, serviceM) <- logDataEnv pid q.since q.from q.to
   -- `cols` is a delta over server defaults: bare tokens add columns, `-`-prefixed tokens hide defaults.
-  let (removeToks, addCols) = L.partition ("-" `T.isPrefixOf`) $ filter (not . T.null) $ T.splitOn "," (fromMaybe "" cols')
+  let (removeToks, addCols) = L.partition ("-" `T.isPrefixOf`) $ filter (not . T.null) $ T.splitOn "," (fromMaybe "" q.cols)
       removeCols = map (T.drop 1) removeToks
-      cursor = PageCursor (fromMaybe PageOlder directionM) <$> cursorM'
+      cursor = PageCursor (fromMaybe PageOlder q.direction) <$> q.cursor
       emptyTable = (V.empty, ["timestamp", "summary", "duration"], 0)
   -- Carry a sanitized failure message alongside the (empty) table so the client
   -- can show an error state instead of a misleading "no events" list.
-  (errM, tableData) <- case parseQueryToAST (maybeToMonoid queryM') of
+  (errM, tableData) <- case parseQueryToAST (maybeToMonoid q.query) of
     Left err ->
       Log.logInfo
         "Log explorer data: rejected invalid KQL query"
-        (AE.object ["query" AE..= T.take 2000 (fromMaybe "" queryM'), "error" AE..= err])
+        (AE.object ["query" AE..= T.take 2000 (fromMaybe "" q.query), "error" AE..= err])
         $> (Just err, emptyTable)
     Right ast -> do
-      let queryAST = withSortSection sortM ast
-      when (isNothing cursorM') do
+      let queryAST = withSortSection q.sort ast
+      -- Onboarding and query history are recorded by the rows request, not the page shell:
+      -- the body preloads links on hover, so the shell GET runs for pages nobody opened.
+      when (isNothing q.cursor) do
         (sess, project) <- Projects.sessionAndProject pid
-        recordExploration pid sess.persistentSession.userId project.onboardingStepsCompleted ast
+        unless (V.elem "explored_logs" project.onboardingStepsCompleted) $ void (Projects.completeOnboardingStep pid "explored_logs")
+        Projects.queryLibInsert Projects.QLTHistory pid sess.persistentSession.userId (toQText ast) ast Nothing
       resultE <-
-        LogQueries.selectLogTable authCtx.env.enableTimefusionReads pid queryAST (toQText queryAST) cursor (fromD, toD) addCols (parseMaybe pSource =<< sourceM) targetSpansM envM serviceM
+        LogQueries.selectLogTable authCtx.env.enableTimefusionReads pid queryAST (toQText queryAST) cursor (fromD, toD) addCols (parseMaybe pSource =<< q.source) q.targetSpans envM serviceM
       case resultE of
-        Left err -> Log.logAttention "log-explorer.data query failed" (AE.object ["project_id" AE..= pid.toText, "source" AE..= fromMaybe "spans" sourceM, "error" AE..= err]) $> (Just (sanitizeBackendError err), emptyTable)
+        Left err -> Log.logAttention "log-explorer.data query failed" (AE.object ["project_id" AE..= pid.toText, "source" AE..= fromMaybe "spans" q.source, "error" AE..= err]) $> (Just (sanitizeBackendError err), emptyTable)
         Right t -> pure (Nothing, t)
   -- UI always wants the trace-tree context; the API/CLI defaults off.
-  lr <- buildLogResult authCtx.env.enableTimefusionReads True pid now sinceM addCols removeCols tableData
+  lr <- buildLogResult authCtx.env.enableTimefusionReads True pid now q.since addCols removeCols tableData
   -- One microsecond, not one millisecond: the page bound is inclusive, so a larger
   -- step skips every row in the gap. See LogQueries.cursorEpsilon.
   let lastFM = LogQueries.nudgeCursorBy (negate LogQueries.cursorEpsilon) =<< lr.cursor
+      page = def{query = q.query, cols = q.cols, since = q.since, from = q.from, to = q.to, layout = Just "loadmore", source = q.source, environment = envM, serviceScope = serviceM} :: ExplorerUrl
   addRespHeaders
     (lr :: LogResult)
       { error = errM
-      , nextUrl = withTelemetryScope envM serviceM $ LogQueries.logExplorerUrlPath pid LogQueries.Data queryM' cols' lastFM sinceM fromM toM (Just "loadmore") sourceM False
-      , resetLogsUrl = withTelemetryScope envM serviceM $ LogQueries.logExplorerUrlPath pid LogQueries.Data queryM' cols' Nothing Nothing Nothing Nothing Nothing sourceM False
-      , recentUrl = withTelemetryScope envM serviceM $ LogQueries.logExplorerUrlPath pid LogQueries.Data queryM' cols' Nothing sinceM fromM toM (Just "loadmore") sourceM True
+      , nextUrl = explorerUrl pid LogQueries.Data page{cursor = lastFM}
+      , resetLogsUrl = explorerUrl pid LogQueries.Data page{since = Nothing, from = Nothing, to = Nothing, layout = Nothing}
+      , recentUrl = explorerUrl pid LogQueries.Data page{recent = True}
       }
 
 
--- | Keep generated data URLs in the same global telemetry scope as their page request.
-withTelemetryScope :: Maybe Text -> Maybe Text -> Text -> Text
-withTelemetryScope environment service url = url <> foldMap param ([("environment", environment), ("service_scope", service)] :: [(Text, Maybe Text)])
+-- | A log-explorer data URL's parameters. 'recent' polls for rows newer than 'cursor'.
+-- Environment and service scope keep generated URLs in the page request's telemetry scope.
+data ExplorerUrl = ExplorerUrl
+  { query, cols, cursor, since, from, to, layout, source, environment, serviceScope :: Maybe Text
+  , recent :: Bool
+  }
+  deriving stock (Generic)
+  deriving anyclass (Default)
+
+
+explorerUrl :: Projects.ProjectId -> LogQueries.LogEndpoint -> ExplorerUrl -> Text
+explorerUrl pid endpoint u = "/p/" <> pid.toText <> "/log_explorer/" <> display endpoint <> "?" <> T.intercalate "&" params
   where
-    param (key, value) = foldMap (\v -> "&" <> key <> "=" <> toUriStr v) value
+    param k v = ((k <> "=") <>) . toUriStr <$> v
+    unlessRecent v = if u.recent then Nothing else v
+    params =
+      "json=true"
+        : catMaybes
+          [ param "query" u.query
+          , param "cols" u.cols
+          , param "cursor" (unlessRecent u.cursor)
+          , param "since" (unlessRecent u.since)
+          , param "from" u.from
+          , param "to" (if u.recent then LogQueries.nudgeCursorBy LogQueries.cursorEpsilon =<< u.cursor else u.to)
+          , param "layout" u.layout
+          , param "source" u.source
+          , param "environment" u.environment
+          , param "service_scope" u.serviceScope
+          ]
 
 
 -- | Lazy facet fragments for collapsed groups and per-field overflow values.
@@ -997,10 +1012,10 @@ logExplorerFacetsH pid fieldM groupM = do
   _ <- Projects.sessionAndProject pid
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   now <- Time.currentTime
-  let facetGroupM = groupM >>= parseFacetGroup
+  let facetGroupM = groupM >>= \g -> find ((== g) . facetGroupParam) universe
       paths = maybe (maybe (map (.path) facetDefs) facetGroupPaths facetGroupM) one fieldM
   facetSummary <- SchemaCatalog.getFacetSummary (Just paths) pid "otel_logs_and_spans" now now
-  when (isNothing facetSummary) $ enqueueFacetsJob authCtx pid now
+  when (isNothing facetSummary) $ BackgroundJobs.enqueueJobs authCtx [BackgroundJobs.GenerateOtelFacetsBatch (V.singleton pid) now]
   addRespHeaders
     $ maybe
       (div_ [class_ "px-1 py-4 text-xs italic text-textWeak"] "Filters are still being built for this project.")
@@ -1010,6 +1025,18 @@ logExplorerFacetsH pid fieldM groupM = do
           _ -> renderFacets summary
       )
       facetSummary
+  where
+    renderFacetTail :: Text -> FacetSummary -> Html ()
+    renderFacetTail field facetSummary =
+      whenJust (find ((== field) . (.path)) facetDefs) \facet -> do
+        let (FacetData facetMap) = facetSummary.facetJson
+            values = drop facetHeadCount $ HM.lookupDefault [] field facetMap
+            count = prettyPrintCount $ length values
+        details_ [class_ "facet-tail group", open_ ""] do
+          summary_ [class_ "list-none cursor-pointer text-textBrand text-xs px-1 py-0.5 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-strokeBrand-strong"] do
+            span_ [class_ "group-open:hidden"] $ toHtml $ "+ More (" <> count <> ")"
+            span_ [class_ "hidden group-open:inline"] $ toHtml $ "− Less (" <> count <> ")"
+          div_ [class_ "space-y-1"] $ forM_ values (renderFacetValue facet)
 
 
 -- | Structured verdict for the query editor. It underlines @column@..@width@ and
@@ -1096,53 +1123,9 @@ alertFormH pid alertM = do
   addRespHeaders $ alertConfigurationForm_ project session.environment alertDM teams
 
 
--- | Queue facet generation for a project whose summary hasn't been built yet.
-enqueueFacetsJob :: AuthContext -> Projects.ProjectId -> UTCTime -> ATAuthCtx ()
-enqueueFacetsJob authCtx pid now =
-  liftIO $ withResource authCtx.jobsPool \conn ->
-    void $ createJob conn "background_jobs" $ BackgroundJobs.GenerateOtelFacetsBatch (V.singleton pid) now
-
-
 -- | Resolve an @?alert=<uuid>@ query param to its monitor, if it parses and exists.
 lookupAlert :: DB es => Maybe Text -> Eff es (Maybe Monitors.QueryMonitor)
 lookupAlert = maybe (pure Nothing) (Monitors.queryMonitorById . Monitors.QueryMonitorId) . (>>= UUID.fromText)
-
-
--- Widget definitions for log explorer charts, sharing one base
-logWidgetBase :: Projects.ProjectId -> Widget.Widget
-logWidgetBase pid =
-  (def :: Widget.Widget)
-    { Widget.standalone = Just True
-    , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
-    , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
-    , Widget.legendPosition = Just "top-right"
-    , Widget.legendSize = Just Widget.LSXs
-    , Widget._projectId = Just pid
-    }
-
-
-logChartWidget :: Projects.ProjectId -> Widget.Widget
-logChartWidget pid =
-  (logWidgetBase pid)
-    { Widget.id = Just "log-explorer-all-traces"
-    , Widget.wType = WTTimeseries
-    , Widget.query = Just "summarize count(*) by bin_auto(timestamp), status_code"
-    , Widget.unit = Just "rows"
-    , Widget.title = Just "All traces"
-    , Widget.allowZoom = Just True
-    }
-
-
-logLatencyWidget :: Projects.ProjectId -> Widget.Widget
-logLatencyWidget pid =
-  (logWidgetBase pid)
-    { Widget.wType = WTTimeseriesLine
-    , Widget.title = Just "Latency percentiles"
-    , Widget.hideSubtitle = Just True
-    , Widget.summarizeBy = Just Widget.SBMax
-    , Widget.query = Just "duration != null | summarize percentiles(duration, 50, 75, 90, 95) by bin_auto(timestamp)"
-    , Widget.unit = Just "ns"
-    }
 
 
 -- | One-decimal percent formatter.
@@ -1388,7 +1371,7 @@ instance AE.ToJSON PatternsView where
       splitSummaryElements = map unwords . L.groupBy (\_ w -> not ("⇒" `T.isInfixOf` w)) . words
       rowOf p = AE.Array $ V.fromList [AE.Null, AE.toJSON p.count, AE.toJSON p.volume, AE.toJSON p.level, AE.toJSON p.service, patternToSummary p.logPattern, AE.toJSON p.mergedCount, AE.toJSON p.isError, AE.toJSON (T.intercalate "," p.hashes)]
       rows = V.map rowOf patterns
-      total = V.foldl' (\acc p -> acc + p.count) 0 patterns
+      total = V.sum $ V.map (.count) patterns
 
 
 -- | JSON payload for the sessions visualization endpoint. Reuses the logs
@@ -1447,7 +1430,7 @@ instance AE.ToJSON SessionsView where
               , Just $ field "duration" (toText $ getDurationNSMS (fromIntegral s.durationNs))
               ]
       rows = V.map rowOf sessions
-      total = V.foldl' (\acc s -> acc + s.eventCount) 0 sessions
+      total = V.sum $ V.map (.eventCount) sessions
 
 
 -- | Shared JSON envelope for aggregate visualizations (patterns, sessions).
@@ -1523,19 +1506,6 @@ virtualTable pid initialFetchUrl modeM = do
         <> [term "mode" m | m <- maybeToList modeM]
     )
     ("" :: Text)
-
-
--- | Inner div that lazily HTMX-loads @url@ into @#target@ once @trigger@ fires.
--- Shared by the details and alert-form side panels; @extra@ carries per-panel bits.
--- Deliberately innerHTML, not morph. Measured: the swap is ~7ms of a ~200ms click, so
--- morph optimises 4% of the interaction — and idiomorph mutates nodes in place, so
--- hyperscript never processes `install FieldMenuDelegate` on morphed-in content and the
--- field context menu silently stops opening. Revisit only with an explicit
--- `_hyperscript.processNode` on htmx:after:swap (see the LogItemMenuable behavior, which
--- already has to do this by hand).
-lazyLoad_ :: Text -> Text -> Text -> [Attribute] -> Html ()
-lazyLoad_ target url trigger extra =
-  div_ ([hxGet_ url, hxTarget_ ("#" <> target), hxSwap_ "innerHTML", hxTrigger_ trigger, term "hx-sync" "this:replace"] <> extra) pass
 
 
 traceLoadingSkeleton_ :: Html ()
@@ -1695,7 +1665,7 @@ apiLogsPage page = do
       -- fill it, rather than blocking the shell on a summary query. Other viz
       -- types render the chart+latency widgets. #page-summary-region is the swap target.
       div_ [id_ "page-summary-region"]
-        $ if page.vizType == Just "sessions" || page.vizType == Just "patterns"
+        $ if page.vizType `elem` ([Just "sessions", Just "patterns"] :: [Maybe Text])
           then sessionsSummarySkeleton_
           else div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full min-h-36 max-md:min-h-28 aspect-[10/1] max-md:aspect-auto max-md:flex-col"] do
             div_ [class_ "flex-1 min-w-0 h-full"] $ Widget.widget_ page.chartWidget
@@ -1822,7 +1792,6 @@ apiLogsPage page = do
                     put #trace-loading-skeleton.innerHTML into me then remove .hidden from me
                     send toggleFullscreen(mode: 'trace', active: true) to #apiLogsPage
                     call htmx.ajax('GET', url, {target: me, swap: 'innerHTML'})
-                    then call window.evalScriptsFromContent(me)
                   end
                   on openTraceFullscreen(traceId, timestamp) from window
                     call updateUrlState('showTrace', traceId + '/?timestamp=' + timestamp)
@@ -1840,10 +1809,12 @@ apiLogsPage page = do
       let aurl = "/p/" <> pidTxt <> "/log_explorer/alert_form" <> maybe "" (\a -> "?alert=" <> a.id.toText) page.alert
       -- Container is display:none until checked, so IntersectionObserver can't drive
       -- the load — fire off the toggle's change instead (and at init if deep-linked open).
-      lazyLoad_
-        "alert_container"
+      -- innerHTML, not morph: idiomorph mutates nodes in place, so hyperscript never
+      -- processes `install FieldMenuDelegate` on morphed-in content.
+      lazyPanel_
         aurl
         "loadAlertForm once"
+        "Loading alert form"
         [ [__|init if #create-alert-toggle.checked then trigger loadAlertForm on me end
               on change[#create-alert-toggle.checked] from #create-alert-toggle trigger loadAlertForm on me|]
         ]
@@ -1856,7 +1827,7 @@ apiLogsPage page = do
 -- (@kind=pattern@), plus a @hasMore@ flag for pagination.
 apiLogExpandH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders AE.Value)
 apiLogExpandH pid kindM keyM skipM queryM sinceM fromM toM = do
-  (authCtx, _, fromD, toD, _, _serviceM) <- logDataEnv pid sinceM fromM toM
+  (authCtx, _, fromD, toD, _, _) <- logDataEnv pid sinceM fromM toM
   let key = maybeToMonoid keyM
   when (T.null key) $ throwError Servant.err400{Servant.errBody = "Missing key"}
   -- Sessions render a trace tree (hence the child-span fetch and larger page);
@@ -1973,13 +1944,14 @@ alertConfigurationForm_ project selectedEnvironment alertM teams = do
         ]
         do
           input_ [type_ "hidden", name_ "alertId", value_ $ maybe "" (.id.toText) alertM]
+          let title = maybe "" (.alertConfig.title) alertM
           if maybe False (isJust . (.widgetId)) alertM
-            then input_ [type_ "hidden", name_ "title", value_ $ maybe "" (.alertConfig.title) alertM]
-            else formField_ FieldSm def{value = maybe "" (\x -> x.alertConfig.title) alertM, placeholder = "e.g. High error rate on checkout API"} "Name" "title" True Nothing
+            then input_ [type_ "hidden", name_ "title", value_ title]
+            else formField_ FieldSm def{value = title, placeholder = "e.g. High error rate on checkout API"} "Name" "title" True Nothing
 
           let defaultFrequency = maybe 5 (.checkIntervalMins) alertM
-              conditionType = if maybe True (\x -> x.alertThreshold > 0 && isJust x.warningThreshold) alertM then Just "threshold_exceeded" else Just "has_matches"
-          AlertUI.monitorScheduleSection_ project.paymentPlan defaultFrequency 5 (AlertUI.SelectCondition conditionType)
+              conditionType = bool "has_matches" "threshold_exceeded" $ maybe True (\x -> x.alertThreshold > 0 && isJust x.warningThreshold) alertM
+          AlertUI.monitorScheduleSection_ project.paymentPlan defaultFrequency 5 (AlertUI.SelectCondition $ Just conditionType)
 
           AlertUI.thresholdsSection_ (alertM >>= (.alertConfig.unit)) Nothing (fmap (.alertThreshold) alertM) ((.warningThreshold) =<< alertM) (maybe False (.triggerLessThan) alertM) ((.alertRecoveryThreshold) =<< alertM) ((.warningRecoveryThreshold) =<< alertM)
 

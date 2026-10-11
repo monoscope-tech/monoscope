@@ -1,5 +1,4 @@
 module Pkg.PatternMerge (
-  embeddingTextForError,
   assignToCentroids,
   autoMergeThreshold,
   ambiguousThreshold,
@@ -25,7 +24,7 @@ where
 import Control.Lens ((^..), (^?))
 import Control.Monad.ST (runST)
 import Data.Aeson qualified as AE
-import Data.Aeson.Lens (key, _Array, _String)
+import Data.Aeson.Lens (key, _Array, _Number, _String)
 import Data.Aeson.Types (parseMaybe)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as S
@@ -45,38 +44,6 @@ import Text.Regex.TDFA ((=~))
 
 -- $setup
 -- >>> import Data.Text.Display (display)
-
-
--- | Construct embedding text for an error pattern.
---
--- >>> embeddingTextForError "TypeError" "Cannot read property 'x' of undefined"
--- "TypeError: Cannot read property 'x' of undefined"
---
--- >>> embeddingTextForError "" "some message"
--- "some message"
-embeddingTextForError :: Text -> Text -> Text
-embeddingTextForError errType msg
-  | T.null errType = msg
-  | otherwise = errType <> ": " <> msg
-
-
--- | Cosine similarity using pre-computed norms for both vectors.
-cosineSimWithNorms :: (VU.Vector Float, Float) -> (VU.Vector Float, Float) -> Float
-cosineSimWithNorms (xs, normA) (ys, normB)
-  | VU.null xs || VU.length xs /= VU.length ys = 0.0
-  | normA == 0 || normB == 0 = 0.0
-  | otherwise = fromIntegral (round (dotP / (normA * normB) * 100 :: Float) :: Int) / 100
-  where
-    -- Keep accumulation strict without allocating intermediate stream steps.
-    -- Length equality is checked above; both indexed reads stay in bounds.
-    dotP = go 0 0
-    go !i !acc
-      | i == VU.length xs = acc
-      | otherwise = go (i + 1) (acc + (xs VU.! i) * (ys VU.! i))
-
-
-vecNorm :: VU.Vector Float -> Float
-vecNorm v = sqrt $ VU.sum $ VU.map (^ (2 :: Int)) v
 
 
 autoMergeThreshold :: Float
@@ -129,6 +96,18 @@ assignToCentroids centroids = foldl' classify ([], [])
           | otherwise = best
           where
             sim = cosineSimWithNorms newNormed (cemb, cnorm)
+    vecNorm v = sqrt $ VU.sum $ VU.map (^ (2 :: Int)) v
+    -- Cosine similarity using pre-computed norms for both vectors, rounded to 2dp.
+    cosineSimWithNorms (xs, normA) (ys, normB)
+      | VU.null xs || VU.length xs /= VU.length ys = 0.0
+      | normA == 0 || normB == 0 = 0.0
+      | otherwise = fromIntegral (round (dotP / (normA * normB) * 100 :: Float) :: Int) / 100
+      where
+        -- Strict accumulation without intermediate stream steps; lengths are equal (checked above).
+        dotP = go 0 0
+        go !i !acc
+          | i == VU.length xs = acc
+          | otherwise = go (i + 1) (acc + (xs VU.! i) * (ys VU.! i))
 
 
 -- | Indices of the input pairs the judge answered @MERGE@ for. Pairs it declined,
@@ -141,15 +120,9 @@ assignToCentroids centroids = foldl' classify ([], [])
 -- >>> parseJudgeResponse "not json"
 -- []
 parseJudgeResponse :: Text -> [Int]
-parseJudgeResponse txt = case AE.decodeStrict (encodeUtf8 $ AI.stripCodeBlock txt) :: Maybe AE.Value of
-  Just arr -> mapMaybe parseDecision (arr ^.. _Array . traverse)
-  Nothing -> []
+parseJudgeResponse = foldMap (mapMaybe parseDecision . (^.. _Array . traverse)) . AE.decodeStrict @AE.Value . encodeUtf8 . AI.stripCodeBlock
   where
-    parseDecision v = do
-      idx <- v ^? key "index" >>= \case AE.Number n -> Just (round n); _ -> Nothing
-      decision <- v ^? key "decision" . _String
-      guard $ decision == "MERGE"
-      pure idx
+    parseDecision v = round <$> v ^? key "index" . _Number <* guard (v ^? key "decision" . _String == Just "MERGE")
 
 
 -- | Wrap a list of items in an XML-style tag so the LLM treats them as data.
@@ -187,10 +160,11 @@ buildJudgePrompt systemPart itemTag pairs = systemPart <> "\n\n" <> itemsPart <>
 -- Groups echo their own key rather than a list index: small models renumber
 -- batched items, and a mis-attributed verdict here merges the wrong routes.
 buildGroupReviewPrompt :: [(Text, Text, [Text])] -> Text
-buildGroupReviewPrompt groups = systemPart <> "\n\n" <> wrapTag "groups" (map fmtGroup groups)
-  where
-    systemPart =
-      [text|
+buildGroupReviewPrompt =
+  groupsPrompt
+    "groups"
+    (pathGroup "GROUP" "values")
+    [text|
         You are classifying URL path segments for an API observability tool.
 
         Each GROUP gives a path prefix and the distinct values seen at the next
@@ -214,8 +188,6 @@ buildGroupReviewPrompt groups = systemPart <> "\n\n" <> wrapTag "groups" (map fm
         Reply with one JSON object per line and nothing else:
         {"key":"<group key, copied exactly>","verdict":"param|routes|mixed","shape":"<short name for the value format, e.g. stripe customer id>"}
       |]
-    fmtGroup (gkey, prefix, children) =
-      "  GROUP key=" <> gkey <> "\n  prefix: " <> prefix <> "\n  values (" <> show (length children) <> "): " <> T.intercalate ", " (take 25 children)
 
 
 -- | Ask whether a merge that has already been made was a mistake.
@@ -229,10 +201,11 @@ buildGroupReviewPrompt groups = systemPart <> "\n\n" <> wrapTag "groups" (map fm
 -- The reply reuses the group-review shape, so "routes" here means "this merge
 -- was wrong" and the caller reverts it.
 buildMergeChallengePrompt :: [(Text, Text, [Text])] -> Text
-buildMergeChallengePrompt groups = systemPart <> "\n\n" <> wrapTag "merges" (map fmtGroup groups)
-  where
-    systemPart =
-      [text|
+buildMergeChallengePrompt =
+  groupsPrompt
+    "merges"
+    (pathGroup "MERGE" "collapsed values")
+    [text|
         Each MERGE below has already been applied: an observability tool decided
         the listed values were all values of one path parameter, and collapsed
         those endpoints into a single route.
@@ -251,8 +224,20 @@ buildMergeChallengePrompt groups = systemPart <> "\n\n" <> wrapTag "merges" (map
         Reply with one JSON object per line and nothing else:
         {"key":"<merge key, copied exactly>","verdict":"param|routes","shape":"<why, briefly>"}
       |]
-    fmtGroup (gkey, prefix, values) =
-      "  MERGE key=" <> gkey <> "\n  prefix: " <> prefix <> "\n  collapsed values (" <> show (length values) <> "): " <> T.intercalate ", " (take 25 values)
+
+
+-- | A prompt over keyed groups: the system part, then each group rendered inside @<tag>@.
+groupsPrompt :: Text -> ((Text, Text, [Text]) -> Text) -> Text -> [(Text, Text, [Text])] -> Text
+groupsPrompt tag fmt systemPart groups = systemPart <> "\n\n" <> wrapTag tag (map fmt groups)
+
+
+pathGroup :: Text -> Text -> (Text, Text, [Text]) -> Text
+pathGroup label valuesLabel (gkey, prefix, values) =
+  "  " <> label <> " key=" <> gkey <> "\n  prefix: " <> prefix <> "\n  " <> valuesLabel <> " (" <> show (length values) <> "): " <> T.intercalate ", " (take 25 values)
+
+
+errorGroup :: Text -> (Text, Text, [Text]) -> Text
+errorGroup tag (k, etype, msgs) = "  <" <> tag <> " key=\"" <> k <> "\" type=\"" <> etype <> "\">\n" <> unlines (map ("    - " <>) msgs) <> "  </" <> tag <> ">"
 
 
 -- | A group-review verdict. Renders to the exact strings stored in
@@ -365,9 +350,7 @@ mergeByJaccard threshold results = runST $ do
                     else scan (idx + 1)
         scan 0
   used <- V.foldM' add 0 results
-  V.generateM used $ \idx -> do
-    (result, _, _) <- VM.read candidates idx
-    pure result
+  V.generateM used $ fmap (\(result, _, _) -> result) . VM.read candidates
 
 
 -- | Cluster-aware LLM judge prompt inspired by LogBatcher (batch-as-demonstration)
@@ -414,59 +397,6 @@ buildLogClusterJudgePrompt =
     "templates"
 
 
--- | Shared trivial tokens excluded from meaningful comparison across all pattern types.
-trivialTokens :: S.Set Text
-trivialTokens =
-  S.fromList
-    [ "info"
-    , "warn"
-    , "error"
-    , "debug"
-    , "trace"
-    , "fatal"
-    , "exception"
-    , "failed"
-    , "invalid"
-    , "null"
-    , "undefined"
-    , "the"
-    , "a"
-    , "an"
-    , "in"
-    , "on"
-    , "at"
-    , "to"
-    , "for"
-    , "of"
-    , "from"
-    , "with"
-    , "by"
-    , "is"
-    , "was"
-    , "-"
-    , "--"
-    , "->"
-    , "="
-    , "=="
-    , ":"
-    , "::"
-    , "|"
-    ]
-
-
--- | Extract meaningful (non-placeholder, non-trivial) tokens from a pattern.
-meaningfulTokens :: Text -> S.Set Text
-meaningfulTokens = S.filter (\t -> not (S.member (T.toLower t) trivialTokens) && T.length t > 1) . contentTokens
-
-
--- | Check if two patterns share meaningful tokens (or both have none).
-shareMeaningfulTokens :: Text -> Text -> Bool
-shareMeaningfulTokens a b =
-  let toksA = meaningfulTokens a
-      toksB = meaningfulTokens b
-   in (S.null toksA && S.null toksB) || not (S.null $ S.intersection toksA toksB)
-
-
 -- | Split "ErrorType: message" into (errorType, message). Returns ("", full) if no ": " separator.
 splitErrorType :: Text -> (Text, Text)
 splitErrorType t = case T.breakOn ": " t of
@@ -474,8 +404,8 @@ splitErrorType t = case T.breakOn ": " t of
   _ -> ("", t)
 
 
--- | Pre-filter gate: patterns must share at least one meaningful non-placeholder token.
--- Excludes log levels, common prepositions, and single-char punctuation.
+-- | Pre-filter gate: patterns must share at least one meaningful non-placeholder token
+-- (or both have none). Excludes log levels, common prepositions, and single-char punctuation.
 --
 -- >>> logCanMerge "INFO user <*> logged in" "INFO user <*> signed in"
 -- True
@@ -486,7 +416,11 @@ splitErrorType t = case T.breakOn ": " t of
 -- >>> logCanMerge "<*> <*> <*>" "<*> <*>"
 -- True
 logCanMerge :: Text -> Text -> Bool
-logCanMerge = shareMeaningfulTokens
+logCanMerge = shares `on` meaningful
+  where
+    shares a b = (S.null a && S.null b) || not (S.disjoint a b)
+    meaningful = S.filter (\t -> not (S.member (T.toLower t) trivialTokens) && T.length t > 1) . contentTokens
+    trivialTokens = S.fromList $ words "info warn error debug trace fatal exception failed invalid null undefined the a an in on at to for of from with by is was - -- -> = == : :: |"
 
 
 -- | AdaParser-inspired post-merge verification. Converts templateA to a regex and checks
@@ -546,7 +480,7 @@ errorCanMerge :: Text -> Text -> Bool
 errorCanMerge a b =
   let (typeA, msgA) = splitErrorType a
       (typeB, msgB) = splitErrorType b
-   in (not (T.null typeA) && typeA == typeB) || shareMeaningfulTokens msgA msgB
+   in (not (T.null typeA) && typeA == typeB) || logCanMerge msgA msgB
 
 
 -- | Error-aware CoT judge prompt. Shows all error patterns in a numbered list,
@@ -601,10 +535,11 @@ buildErrorJudgePrompt =
 -- Every value in @groups@ is a NORMALISED message. Raw error text is whatever a
 -- customer's code put in it, and this is a vendor call.
 buildErrorGroupReviewPrompt :: [(Text, Text, [Text])] -> Text
-buildErrorGroupReviewPrompt groups = systemPart <> "\n\n" <> wrapTag "groups" (map fmtErrGroup groups)
-  where
-    systemPart =
-      [text|
+buildErrorGroupReviewPrompt =
+  groupsPrompt
+    "groups"
+    (errorGroup "group")
+    [text|
         You are deduplicating error groups for an observability tool.
 
         Each group below is one error type and the distinct normalised messages
@@ -630,14 +565,6 @@ buildErrorGroupReviewPrompt groups = systemPart <> "\n\n" <> wrapTag "groups" (m
         Reply with one JSON object per line and nothing else:
         {"key":"<the key as given>","verdict":"param|routes|mixed","shape":"<short name for the varying part, e.g. order id, hostname>"}
       |]
-    fmtErrGroup (k, etype, msgs) =
-      "  <group key=\""
-        <> k
-        <> "\" type=\""
-        <> etype
-        <> "\">\n"
-        <> unlines (map ("    - " <>) msgs)
-        <> "  </group>"
 
 
 -- | Assert the merge and ask for the fault, rather than re-asking the question.
@@ -645,10 +572,11 @@ buildErrorGroupReviewPrompt groups = systemPart <> "\n\n" <> wrapTag "groups" (m
 -- A second agreement with the same question is mostly the model being consistent
 -- with itself; an argument that survives its opposite is worth more.
 buildErrorMergeChallengePrompt :: [(Text, Text, [Text])] -> Text
-buildErrorMergeChallengePrompt groups = systemPart <> "\n\n" <> wrapTag "merges" (map fmtErrGroup groups)
-  where
-    systemPart =
-      [text|
+buildErrorMergeChallengePrompt =
+  groupsPrompt
+    "merges"
+    (errorGroup "merge")
+    [text|
         Each MERGE below has already been decided: an observability tool concluded
         the listed normalised messages are all one underlying bug, and grouped them
         into a single error.
@@ -665,11 +593,3 @@ buildErrorMergeChallengePrompt groups = systemPart <> "\n\n" <> wrapTag "merges"
           "param"  - the merge holds, these really are one bug.
           "routes" - the merge is WRONG, these are different bugs.
       |]
-    fmtErrGroup (k, etype, msgs) =
-      "  <merge key=\""
-        <> k
-        <> "\" type=\""
-        <> etype
-        <> "\">\n"
-        <> unlines (map ("    - " <>) msgs)
-        <> "  </merge>"

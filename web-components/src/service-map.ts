@@ -815,5 +815,3 @@ async function render(
     handles.delete(containerId);
   });
 }
-
-window.serviceMapChart = serviceMapChart;

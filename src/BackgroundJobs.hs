@@ -1,11 +1,10 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, enqueueAIRoutine, runAIRoutineWith, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, detectPerformanceIssues, detectFrontendIssues, detectFeedback, applyUptimeResult, evaluateCronMonitor, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, endpointAutoAckLockName, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), errorTrendChartUrl) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, enqueueAIRoutine, enqueueJobs, runAIRoutineWith, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, detectPerformanceIssues, detectFrontendIssues, detectFeedback, applyUptimeResult, evaluateCronMonitor, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, endpointAutoAckLockName, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), errorTrendChartUrl) where
 
 import BackgroundJobs.Types (BgJobs (..))
 import BackgroundJobs.Types qualified as Jobs
 import Control.Concurrent (threadDelay)
-import Control.Concurrent.Async (async)
 import Control.Concurrent.STM.TBQueue (isFullTBQueue, readTBQueue, writeTBQueue)
 import Control.Exception qualified as CE
 import Control.Lens (view, (.~), (?~), (^.), (^..), (^?), _1, _3)
@@ -35,21 +34,15 @@ import Data.Pool (withResource)
 import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (display)
-import Data.Time (DayOfWeek (Monday), UTCTime (..), ZonedTime, addDays, addUTCTime, dayOfWeek, formatTime)
+import Data.Time (DayOfWeek (Monday), UTCTime (..), addDays, addUTCTime, dayOfWeek, formatTime)
 import Data.Time.Clock (NominalDiffTime, diffUTCTime, getCurrentTime)
 import Data.Time.Clock.POSIX (POSIXTime, posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.Time.Format (defaultTimeLocale)
-import Data.Time.LocalTime (getCurrentTimeZone, utcToZonedTime)
-import Data.UUID qualified as UUID
-import Data.UUID.V4 qualified as UUIDV4
+import Data.Time.LocalTime (utc, utcToZonedTime)
 import Data.Vector qualified as V
 import Data.Vector.Algorithms.Intro qualified as VA
-import Data.Vector.Unboxed qualified as VU
-import Database.PostgreSQL.Simple (FromRow)
 import Database.PostgreSQL.Simple qualified as SimplePG
-import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Simple.Types
 import Effectful (Eff, IOE, (:>))
 import Effectful.Concurrent.Async (concurrently, concurrently_, forConcurrently, forConcurrently_)
 import Effectful.Ki qualified as Ki
@@ -71,7 +64,6 @@ import Kafka.Producer qualified as KProd
 import Kafka.Types (Millis (..), TopicName (..))
 import Kafka.Types qualified as KT
 import Langchain.DocumentLoader.Core qualified
-import Langchain.Embeddings.OpenAI qualified
 import Log (LogLevel (..), Logger, runLogT)
 import Log qualified as LogLegacy
 import Lucid (Html)
@@ -83,6 +75,7 @@ import Models.Apis.Integrations qualified as Integrations
 import Models.Apis.IssueEnhancement qualified as Enhancement
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns qualified as LogPatterns
+import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.PatternMerge qualified as PatternMergeDB
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
@@ -96,7 +89,6 @@ import Models.Telemetry.ServiceGraph qualified as ServiceGraph
 import Models.Telemetry.Telemetry (SeverityLevel (..), generateSummary, insertSystemLog, mkSystemLog)
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.HTTP.Types (urlEncode)
-import Network.Wreq (defaults, header, postWith, responseBody)
 import Network.Wreq qualified as Wreq
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Config (cfgJobOrdering), Job (..), JobOrdering (EarliestRunAtFirst), LogEvent (..), LogLevel, createJob, scheduleJob, startJobRunner, throwParsePayload)
@@ -142,9 +134,9 @@ import UnliftIO.Exception (bracket, catch, finally, throwIO, try, tryAny)
 import Utils (calculateCycleStartDate, formatUTC, formatUTCMicros, freeTierDailyMaxEvents, hostPath, nonEmptyT, toUriStr, toXXHash, truncateHour, usageWindowStart)
 
 
-sendMessageToDiscord :: Text -> Text -> ATBackgroundCtx ()
-sendMessageToDiscord msg webhookUrl =
-  void $ liftIO $ postWith (defaults & header "Content-Type" .~ ["application/json"]) (toString webhookUrl) (AE.object ["content" AE..= msg])
+sendMessageToDiscord :: Config.AuthContext -> Text -> ATBackgroundCtx ()
+sendMessageToDiscord ctx msg =
+  void $ W.postWith (W.defaults & W.header "Content-Type" .~ ["application/json"]) (toString ctx.config.discordWebhookUrl) (AE.object ["content" AE..= msg])
 
 
 -- | Get the constructor name of a BgJobs value
@@ -178,12 +170,6 @@ jobsRunner logger authCtx tp job = when authCtx.config.enableBackgroundJobs $ do
             setStatus sp Ok
 
 
-unlessStale :: Text -> UTCTime -> NominalDiffTime -> ATBackgroundCtx () -> ATBackgroundCtx ()
-unlessStale jobName scheduledTime buffer action = do
-  now <- Time.currentTime
-  bool action (Log.logTrace ("Skipping stale " <> jobName) scheduledTime) $ diffUTCTime now scheduledTime > buffer
-
-
 -- | Enqueue background jobs for immediate execution. The pool checkout and the
 -- @"background_jobs"@ queue name were respelled at 22 call sites before this.
 enqueueJobs :: MonadIO m => Config.AuthContext -> [BgJobs] -> m ()
@@ -195,15 +181,13 @@ enqueueAt :: MonadIO m => Config.AuthContext -> UTCTime -> [BgJobs] -> m ()
 enqueueAt ctx at jobs = liftIO $ withResource ctx.jobsPool \conn -> traverse_ (\j -> void $ scheduleJob conn "background_jobs" j at) jobs
 
 
+-- | Enqueue each job independently; a failed enqueue does not abort the rest and is returned under its label.
+enqueueEach :: MonadIO m => Config.AuthContext -> [(a, BgJobs)] -> m [(a, SomeException)]
+enqueueEach ctx jobs = liftIO $ withResource ctx.jobsPool \conn -> lefts <$> forM jobs \(k, j) -> first (k,) <$> tryAny (void $ createJob conn "background_jobs" j)
+
+
 enqueueAIRoutine :: MonadIO m => Config.AuthContext -> UUIDId "ai_routine" -> UTCTime -> m ()
 enqueueAIRoutine ctx routineId at = enqueueAt ctx at [Jobs.AIRoutineRun routineId at]
-
-
--- | Seed @count@ ticks of a self-chaining job, spaced @step@ seconds from @from@.
-seedJobs :: SimplePG.Connection -> UTCTime -> Int -> Int -> (UTCTime -> BgJobs) -> IO ()
-seedJobs conn from count step mkJob = forM_ ([0 .. count - 1] :: [Int]) \i -> do
-  let at = addUTCTime (fromIntegral @Int $ i * step) from
-  void $ scheduleJob conn "background_jobs" (mkJob at) at
 
 
 -- | URL for a project's main view.
@@ -215,7 +199,7 @@ widgetMonitorUrl :: Text -> Monitors.QueryMonitor -> Maybe Text
 widgetMonitorUrl baseUrl monitor = do
   dashboardId <- monitor.dashboardId
   widgetId <- monitor.widgetId
-  pure $ baseUrl <> "/dashboards/" <> UUID.toText dashboardId <> "?expand=" <> toUriStr widgetId
+  pure $ baseUrl <> "/dashboards/" <> dashboardId.toText <> "?expand=" <> toUriStr widgetId
 
 
 -- | Render a (subject, body) pair and send it to the given address.
@@ -229,7 +213,7 @@ processBackgroundJob authCtx bgJob =
   case bgJob of
     GenerateOtelFacetsBatch pids timestamp -> generateOtelFacetsBatch pids timestamp
     DashboardsAutoProvision scheduledTime -> autoProvisionDashboards scheduledTime
-    NewAnomaly{projectId, createdAt, anomalyType, anomalyAction, targetHashes} -> newAnomalyJob projectId createdAt anomalyType anomalyAction (V.fromList targetHashes)
+    NewAnomaly{projectId, anomalyType, targetHashes} -> newAnomalyJob projectId anomalyType (V.fromList targetHashes)
     InviteUserToProject userId projectId reciever projectTitle' ->
       whenJustM (Projects.userById userId) \user -> do
         -- Invitees usually have no Auth0 identity yet: send them to /login with
@@ -279,7 +263,7 @@ processBackgroundJob authCtx bgJob =
             "ErrorAssigned: skipped, project/error/assignee no longer exists"
             (AE.object ["project_id" AE..= pid.toText, "error_id" AE..= show @Text errId.unErrorPatternId, "has_project" AE..= isJust projectM, "has_error" AE..= isJust errM, "has_user" AE..= isJust userM])
     DailyJob -> runDailyJobScheduling authCtx
-    HourlyJob scheduledTime hour -> unlessStale "HourlyJob" scheduledTime (2 * 3600) $ runHourlyJob scheduledTime hour
+    HourlyJob scheduledTime hour -> unlessStale scheduledTime (2 * 3600) $ runHourlyJob scheduledTime hour
     DailyReports pid -> sendReportForProject pid Projects.RTDaily
     WeeklyReports pid -> sendReportForProject pid Projects.RTWeekly
     ReportUsage pid -> reportProjectUsage authCtx pid
@@ -300,7 +284,7 @@ processBackgroundJob authCtx bgJob =
     AIRoutineRun routineId scheduledAt -> runAIRoutine authCtx routineId scheduledAt
     ResetSlackSession pid uid receiptId -> Slack.resetSlackSession pid uid receiptId
     EnhanceIssuesWithLLM pid issueIds -> enhanceIssuesWithLLM pid issueIds
-    ProcessIssuesEnhancement scheduledTime -> unlessStale "ProcessIssuesEnhancement" scheduledTime (2 * 3600) $ processIssuesEnhancement scheduledTime
+    ProcessIssuesEnhancement scheduledTime -> unlessStale scheduledTime (2 * 3600) $ processIssuesEnhancement scheduledTime
     ReviewPullRequest rid -> ImpactReview.reviewPullRequest rid
     GitSyncFromRepo pid -> gitSyncFromRepo pid Nothing
     GitSyncRepository pid sid -> gitSyncFromRepo pid (Just sid)
@@ -324,14 +308,11 @@ processBackgroundJob authCtx bgJob =
     PerformanceIssueDetection pid -> detectPerformanceIssues pid
     FrontendIssueDetection pid -> detectFrontendIssues pid
     FeedbackDetection pid -> detectFeedback pid
-    PatternEmbeddingAndMerge scheduledTime pid -> unlessStale "PatternEmbeddingAndMerge" scheduledTime (15 * 60) $ patternEmbeddingAndMerge pid
-    ErrorGroupReview scheduledTime pid -> unlessStale "ErrorGroupReview" scheduledTime (15 * 60) $ reviewErrorGroups pid
-    EndpointTemplateDiscovery scheduledTime pid -> unlessStale "EndpointTemplateDiscovery" scheduledTime 900 $ endpointTemplateDiscovery pid
-    EndpointMergeCleanup scheduledTime pid -> unlessStale "EndpointMergeCleanup" scheduledTime 3600 $ endpointMergeCleanup pid
-    LogPatternPeriodicProcessing scheduledTime pid ->
-      unlessStale "LogPatternPeriodicProcessing" scheduledTime (15 * 60)
-        $ tryStep "detectLogPatternSpikes"
-        $ detectLogPatternSpikes pid scheduledTime authCtx
+    PatternEmbeddingAndMerge scheduledTime pid -> unlessStale scheduledTime (15 * 60) $ patternEmbeddingAndMerge pid
+    ErrorGroupReview scheduledTime pid -> unlessStale scheduledTime (15 * 60) $ reviewErrorGroups pid
+    EndpointTemplateDiscovery scheduledTime pid -> unlessStale scheduledTime 900 $ endpointTemplateDiscovery pid
+    EndpointMergeCleanup scheduledTime pid -> unlessStale scheduledTime 3600 $ endpointMergeCleanup pid
+    LogPatternPeriodicProcessing scheduledTime pid -> unlessStale scheduledTime (15 * 60) $ tryStep "detectLogPatternSpikes" $ detectLogPatternSpikes pid scheduledTime authCtx
     LogPatternHourlyProcessing _scheduledTime pid -> do
       tryStep "calculateLogPatternBaselines" $ calculateLogPatternBaselines pid
       tryStep "processNewLogPatterns" $ processNewLogPatterns pid authCtx
@@ -342,12 +323,9 @@ processBackgroundJob authCtx bgJob =
     -- to also self-chain, and a chained tick running beside its seeded twin doubled the
     -- population every period — 60k queued InfraHealthCheck rows and ~2h of notification
     -- delay by 2026-09-16 (plans/job-scheduler-redesign.md).
-    NotificationSweepJob scheduledTime ->
-      unlessStale "NotificationSweepJob" scheduledTime 1800 $ runNotificationSweep scheduledTime
-    NotificationDigestJob scheduledTime ->
-      unlessStale "NotificationDigestJob" scheduledTime (2 * 3600) $ runNotificationDigest scheduledTime
-    InfraHealthCheck scheduledTime ->
-      unlessStale "InfraHealthCheck" scheduledTime (2 * 3600) $ runInfraHealthCheck authCtx
+    NotificationSweepJob scheduledTime -> unlessStale scheduledTime 1800 $ runNotificationSweep scheduledTime
+    NotificationDigestJob scheduledTime -> unlessStale scheduledTime (2 * 3600) $ runNotificationDigest scheduledTime
+    InfraHealthCheck scheduledTime -> unlessStale scheduledTime (2 * 3600) $ runInfraHealthCheck authCtx
     ReplayParkedMessages cap -> do
       moved <- runParkingReplay authCtx cap
       Log.logInfo "ReplayParkedMessages moved parking -> DLQ" ("moved", moved)
@@ -355,6 +333,10 @@ processBackgroundJob authCtx bgJob =
       when (moved >= cap) $ Time.currentTime >>= \t -> enqueueAt authCtx t [Jobs.ReplayParkedMessages cap]
     MonoscopeAdminDaily -> runMonoscopeAdminDaily authCtx
     UsageAuditReport -> runUsageAuditReport authCtx
+  where
+    unlessStale scheduledTime buffer action = do
+      now <- Time.currentTime
+      bool action (Log.logTrace ("Skipping stale " <> jobTypeName bgJob) scheduledTime) $ diffUTCTime now scheduledTime > (buffer :: NominalDiffTime)
 
 
 runAIRoutine :: Config.AuthContext -> UUIDId "ai_routine" -> UTCTime -> ATBackgroundCtx ()
@@ -408,20 +390,17 @@ runAIRoutineWith timeoutMicros execute enqueueNext authCtx routineId scheduledAt
         (recordRun routine Issues.CompletedCancelled Nothing Nothing Nothing)
         do
           Log.logAttention "AI routine run timed out" $ AE.object ["routine_id" AE..= routineId, "timeout_micros" AE..= timeoutMicros]
-          recorded <- tryAny $ Issues.insertChatMessage routine.projectId routine.conversationId Issues.ChatExecutionEvent "Routine timed out. It will run again at the next interval." Nothing Nothing
-          whenLeft_ recorded \err -> Log.logAttention "AI routine timeout event was not recorded" $ AE.object ["error" AE..= show @Text err]
+          noteFailure "AI routine timeout event was not recorded" $ Issues.insertChatMessage routine.projectId routine.conversationId Issues.ChatExecutionEvent "Routine timed out. It will run again at the next interval." Nothing Nothing
           recordRun routine Issues.CompletedTimedOut Nothing Nothing (Just "Routine execution timed out")
     Just (Left err) -> do
       Log.logAttention "AI routine run failed" $ AE.object ["routine_id" AE..= routineId, "error" AE..= show @Text err]
-      recorded <- tryAny $ Issues.insertChatMessage routine.projectId routine.conversationId Issues.ChatExecutionEvent "Routine failed unexpectedly. It will run again at the next interval." Nothing Nothing
-      whenLeft_ recorded \insertErr -> Log.logAttention "AI routine failure event was not recorded" $ AE.object ["error" AE..= show @Text insertErr]
+      noteFailure "AI routine failure event was not recorded" $ Issues.insertChatMessage routine.projectId routine.conversationId Issues.ChatExecutionEvent "Routine failed unexpectedly. It will run again at the next interval." Nothing Nothing
       recordRun routine Issues.CompletedFailed Nothing Nothing (Just $ show @Text err)
     Just (Right (status, findings, actions, err)) -> recordRun routine status findings actions err
   whenJustM (Issues.completeRoutine routineId scheduledAt routine.claimedAt) $ enqueueNext routineId
   where
-    recordRun routine status findings actions err = do
-      recorded <- tryAny $ Issues.finishRoutineRun routine.runId routine.claimedAt status findings actions err
-      whenLeft_ recorded \recordErr -> Log.logAttention "AI routine run result was not recorded" $ AE.object ["routine_id" AE..= routineId, "error" AE..= show @Text recordErr]
+    recordRun routine status findings actions err = noteFailure "AI routine run result was not recorded" $ Issues.finishRoutineRun routine.runId routine.claimedAt status findings actions err
+    noteFailure msg action = whenLeftM_ (tryAny action) \e -> Log.logAttention msg $ AE.object ["routine_id" AE..= routineId, "error" AE..= show @Text e]
 
 
 -- | Post the daily internal admin digest (usage, new projects, issues, alerts, job health) to Discord.
@@ -433,7 +412,7 @@ runMonoscopeAdminDaily authCtx = do
   now <- Time.currentTime
   let since = addUTCTime (-86400) now
       dateStr = toText $ formatTime defaultTimeLocale "%Y-%m-%d" now
-      send msg = sendMessageToDiscord msg authCtx.config.discordWebhookUrl
+      send = sendMessageToDiscord authCtx
       -- Pack lines into ~1800-char Discord messages; always consumes at
       -- least one line so an over-long line can't stall the unfold.
       chunkLines = unfoldr \case
@@ -605,7 +584,7 @@ runUsageAuditReport :: Config.AuthContext -> ATBackgroundCtx ()
 runUsageAuditReport authCtx = do
   now <- Time.currentTime
   let since = addUTCTime (-86400) now
-      send msg = sendMessageToDiscord msg authCtx.config.discordWebhookUrl
+      send = sendMessageToDiscord authCtx
   -- Paying projects only; cross-check reported (apis.daily_usage) vs ingested (otel + metrics) over last 24h.
   rows :: [(Projects.ProjectId, Text, Text, Int64, Int64)] <-
     Hasql.interp
@@ -687,10 +666,8 @@ sendTrialEndingReminder authCtx pid scheduledDaysLeft =
                         maybe scheduledDaysLeft (\epoch -> max 0 $ ceiling $ (fromIntegral epoch - utcTimeToPOSIXSeconds now :: POSIXTime) / 86400) trialEnd
                   users <- Projects.usersByProjectId pid
                   let mail = ET.trialEndingEmail project.title actualDaysLeft (projectUrl authCtx pid <> "/manage_billing")
-                  forM_ users \u -> do
-                    sendRes <- tryAny $ renderAndSend (CI.original u.email) mail
-                    whenLeft_ sendRes \e ->
-                      Log.logAttention "TrialEndingReminder: email send failed" (pid.toText, CI.original u.email, displayException e)
+                  forM_ users \u -> whenLeftM_ (tryAny $ renderAndSend (CI.original u.email) mail) \e ->
+                    Log.logAttention "TrialEndingReminder: email send failed" (pid.toText, CI.original u.email, displayException e)
                 _ -> Log.logInfo "TrialEndingReminder: sub not trialing, skipping" (pid.toText, scheduledDaysLeft, subId, status)
 
 
@@ -774,60 +751,60 @@ reportProjectUsage authCtx pid =
           --    succeeded chunk. Retry happens on the next daily ReportUsage tick.
           pending <- Projects.pendingUsageSubmissions pid
           unless (null pending) $ Log.logInfo "Draining pending usage chunks" ("project_id", pid.toText, "pending", length pending)
+          let submitPending = for_ pending \row -> do
+                let chunkId = show row.id :: Text
+                    qty = Projects.chunkQuantityInt row.quantity
+                    -- window_end + sub_id surface in logs so on-call can pivot to
+                    -- the provider UI, which is not indexed by our chunk UUIDs.
+                    logFields extra =
+                      ("project_id", pid.toText) : ("chunk_id", chunkId) : ("quantity", show qty :: Text) : ("meter", show row.meter :: Text) : ("window_end", show row.windowEnd :: Text) : ("sub_id", fromMaybe "" project.subId) : extra
+                -- A chunk is only ever cut while its meter is live, so a dormant
+                -- reason here means the meter was switched off (or its LS item
+                -- removed) between record and drain. Leave the row pending rather
+                -- than failed: the backlog is bounded and drains cleanly on
+                -- re-enable, whereas 'failed' would re-log it every tick forever.
+                -- A misconfig reason falls through and is marked failed as before.
+                case Projects.resolveMeterTarget meterCfg row.meter of
+                  Left reason
+                    | Projects.meterIsDormant reason ->
+                        Log.logInfo "Pending usage chunk's meter is dormant — leaving pending" $ logFields [("reason", show reason :: Text)]
+                  target -> do
+                    res <- tryAny $ case target of
+                      Right (Projects.StripeMeter custId eventName) -> reportUsageToStripe authCtx.config.stripeSecretKey custId eventName qty
+                      Right (Projects.LemonSqueezyMeter subItemId) -> reportUsageToLemonsqueezy subItemId qty authCtx.config.lemonSqueezyApiKey
+                      Right (Projects.LemonSqueezyEventsItem subItemId) -> reportUsageToLemonsqueezy subItemId qty authCtx.config.lemonSqueezyApiKey
+                      -- Not a transient error: throw so the Left branch below marks
+                      -- the chunk failed, rather than no-oping into a 'submitted'.
+                      Left reason -> throwIO $ CE.ErrorCall $ "usage meter unaddressable: " <> show reason
+                    -- Wrap mark* in tryAny: a DB blip between a successful HTTP call
+                    -- and the status UPDATE would re-select this row next tick and
+                    -- double-submit. Emit a loud manual-reconcile signal on that path.
+                    either
+                      ( \e -> do
+                          let errText = toText (displayException e)
+                          Log.logAttention "Usage chunk submission FAILED — will retry next tick" $ logFields [("provider", show provider :: Text), ("error", errText)]
+                          whenLeftM_ (tryAny $ Projects.markUsageSubmissionFailed row.id errText) \e2 ->
+                            Log.logAttention "Usage chunk status=failed UPDATE failed — row may retry on next tick" $ logFields [("error", toText (displayException e2))]
+                      )
+                      ( \() -> do
+                          markRes <- tryAny $ Projects.markUsageSubmissionSucceeded row.id
+                          case markRes of
+                            Right _ -> Log.logInfo "Usage chunk submitted" $ logFields []
+                            Left e2 ->
+                              Log.logAttention "Usage chunk submitted but DB mark failed — DOUBLE-SUBMIT RISK, manual reconcile required" $ logFields [("error", toText (displayException e2))]
+                      )
+                      res
           case provider of
             -- Paid plan with no usable provider: mark every pending chunk 'failed'
             -- once so it persists in pendingUsageSubmissions as an audit signal
             -- (rather than being quietly marked 'submitted' by the happy path).
             Projects.NoBillingProvider -> do
               Log.logAttention "ReportUsage: NoBillingProvider for paid project" ("project_id", pid.toText, "sub_id", project.subId, "plan", project.paymentPlan, "pending_chunks", length pending)
-              for_ pending \row -> do
-                mr <- tryAny $ Projects.markUsageSubmissionFailed row.id "NoBillingProvider: paid plan has no usable billing provider"
-                whenLeft_ mr \e ->
+              for_ pending \row ->
+                whenLeftM_ (tryAny $ Projects.markUsageSubmissionFailed row.id "NoBillingProvider: paid plan has no usable billing provider") \e ->
                   Log.logAttention "NoBillingProvider mark failed — backlog stuck" ("project_id", pid.toText, "chunk_id", show row.id :: Text, "error", toText (displayException e))
-            _ -> for_ pending \row -> do
-              let chunkId = show row.id :: Text
-                  qty = Projects.chunkQuantityInt row.quantity
-                  -- window_end + sub_id surface in logs so on-call can pivot to
-                  -- the provider UI, which is not indexed by our chunk UUIDs.
-                  logFields extra =
-                    ("project_id", pid.toText) : ("chunk_id", chunkId) : ("quantity", show qty :: Text) : ("meter", show row.meter :: Text) : ("window_end", show row.windowEnd :: Text) : ("sub_id", fromMaybe "" project.subId) : extra
-              -- A chunk is only ever cut while its meter is live, so a dormant
-              -- reason here means the meter was switched off (or its LS item
-              -- removed) between record and drain. Leave the row pending rather
-              -- than failed: the backlog is bounded and drains cleanly on
-              -- re-enable, whereas 'failed' would re-log it every tick forever.
-              -- A misconfig reason falls through and is marked failed as before.
-              case Projects.resolveMeterTarget meterCfg row.meter of
-                Left reason
-                  | Projects.meterIsDormant reason ->
-                      Log.logInfo "Pending usage chunk's meter is dormant — leaving pending" $ logFields [("reason", show reason :: Text)]
-                target -> do
-                  res <- tryAny $ case target of
-                    Right (Projects.StripeMeter custId eventName) -> reportUsageToStripe authCtx.config.stripeSecretKey custId eventName qty
-                    Right (Projects.LemonSqueezyMeter subItemId) -> reportUsageToLemonsqueezy subItemId qty authCtx.config.lemonSqueezyApiKey
-                    Right (Projects.LemonSqueezyEventsItem subItemId) -> reportUsageToLemonsqueezy subItemId qty authCtx.config.lemonSqueezyApiKey
-                    -- Not a transient error: throw so the Left branch below marks
-                    -- the chunk failed, rather than no-oping into a 'submitted'.
-                    Left reason -> throwIO $ CE.ErrorCall $ "usage meter unaddressable: " <> show reason
-                  -- Wrap mark* in tryAny: a DB blip between a successful HTTP call
-                  -- and the status UPDATE would re-select this row next tick and
-                  -- double-submit. Emit a loud manual-reconcile signal on that path.
-                  either
-                    ( \e -> do
-                        let errText = toText (displayException e)
-                        Log.logAttention "Usage chunk submission FAILED — will retry next tick" $ logFields [("provider", show provider :: Text), ("error", errText)]
-                        markRes <- tryAny $ Projects.markUsageSubmissionFailed row.id errText
-                        whenLeft_ markRes \e2 ->
-                          Log.logAttention "Usage chunk status=failed UPDATE failed — row may retry on next tick" $ logFields [("error", toText (displayException e2))]
-                    )
-                    ( \() -> do
-                        markRes <- tryAny $ Projects.markUsageSubmissionSucceeded row.id
-                        case markRes of
-                          Right _ -> Log.logInfo "Usage chunk submitted" $ logFields []
-                          Left e2 ->
-                            Log.logAttention "Usage chunk submitted but DB mark failed — DOUBLE-SUBMIT RISK, manual reconcile required" $ logFields [("error", toText (displayException e2))]
-                    )
-                    res
+            Projects.StripeProvider -> submitPending
+            Projects.LemonSqueezyProvider -> submitPending
 
 
 -- | Daily scheduler tick: books tomorrow, then seeds the day's app-wide and per-project jobs.
@@ -853,6 +830,12 @@ runDailyJobScheduling authCtx =
       bracket acquireLock (when ?? releaseLock) \acquired ->
         if acquired then action else Log.logInfo "Daily job already running in another pod, skipping" ()
 
+    -- Seed @count@ ticks of a self-chaining job, spaced @step@ seconds from @from@.
+    seedJobs :: SimplePG.Connection -> UTCTime -> Int -> Int -> (UTCTime -> BgJobs) -> IO ()
+    seedJobs conn from count step mkJob = forM_ ([0 .. count - 1] :: [Int]) \i -> do
+      let at = addUTCTime (fromIntegral @Int $ i * step) from
+      void $ scheduleJob conn "background_jobs" (mkJob at) at
+
     schedule = do
       Log.logInfo "Running daily job" ()
       currentTime <- Time.currentTime
@@ -863,93 +846,79 @@ runDailyJobScheduling authCtx =
       -- rather than the end means a crash mid-scheduling still leaves tomorrow covered;
       -- the backstop stays as the net for a crash before this line.
       enqueueAt authCtx (UTCTime (addDays 1 currentDay) 0) [Jobs.DailyJob]
-      hourlyJobsExist <-
-        (>= (24 :: Int64))
-          <$> Hasql.interpScalar
-            [HI.sql|SELECT COUNT(*)::int8 FROM background_jobs
-           WHERE payload->>'tag' = 'HourlyJob'
-             AND run_at >= date_trunc('day', #{currentTime}::timestamptz)
-             AND run_at < date_trunc('day', #{currentTime}::timestamptz) + interval '1 day'
-             AND status IN ('queued', 'locked')|]
-
-      if hourlyJobsExist
-        then Log.logInfo "Hourly jobs already scheduled for today, skipping" ()
-        else do
+      let queuedToday :: Text -> Maybe Text -> ATBackgroundCtx Bool
+          queuedToday tag pidM =
+            (>= (24 :: Int64))
+              <$> Hasql.interpScalar
+                [HI.sql|SELECT COUNT(*)::int8 FROM background_jobs
+               WHERE payload->>'tag' = #{tag}
+                 AND (#{pidM}::text IS NULL OR payload->>'projectId' = #{pidM})
+                 AND run_at >= date_trunc('day', #{currentTime}::timestamptz)
+                 AND run_at < date_trunc('day', #{currentTime}::timestamptz) + interval '1 day'
+                 AND status IN ('queued', 'locked')|]
+      ifM
+        (queuedToday "HourlyJob" Nothing)
+        (Log.logInfo "Hourly jobs already scheduled for today, skipping" ())
+        do
           Log.logInfo "Scheduling hourly jobs for today" ()
+          -- ExpireReplayData is the 30-day replay retention sweep; it re-enqueues itself
+          -- if it hit the batch cap, so backlog drains across multiple runs.
+          enqueueJobs authCtx
+            $ [Jobs.MonoscopeAdminDaily, Jobs.UsageAuditReport, Jobs.ExpireReplayData, Jobs.ExpireShareEvents]
+            <> [Jobs.CleanupDemoProject | dayOfWeek currentDay == Monday]
           liftIO $ withResource authCtx.jobsPool \conn -> do
-            -- ExpireReplayData is the 30-day replay retention sweep; it re-enqueues itself
-            -- if it hit the batch cap, so backlog drains across multiple runs.
-            traverse_ (void . createJob conn "background_jobs")
-              $ [Jobs.MonoscopeAdminDaily, Jobs.UsageAuditReport, Jobs.ExpireReplayData, Jobs.ExpireShareEvents]
-              <> [Jobs.CleanupDemoProject | dayOfWeek currentDay == Monday]
             -- Each handler re-enqueues itself; the daily loop seeds a full day's
             -- ticks so a single restart can't leave a gap when the chain broke.
             forM_ ([0 .. 23] :: [Int]) \i -> do
               let at = addUTCTime (fromIntegral @Int $ i * 3600) currentTime
               void $ scheduleJob conn "background_jobs" (Jobs.HourlyJob at i) at
-            seedJobs conn currentTime 24 3600 Jobs.ProcessIssuesEnhancement
-            seedJobs conn currentTime 1440 60 (const Jobs.QueryMonitorsCheck)
-            seedJobs conn currentTime 1440 60 Jobs.PrometheusScrapeTick
-            seedJobs conn currentTime 288 300 Jobs.ServiceMapRollupTick
-            seedJobs conn currentTime 144 600 Jobs.NotificationSweepJob
-            seedJobs conn currentTime 24 3600 Jobs.NotificationDigestJob
-            seedJobs conn currentTime 24 3600 Jobs.InfraHealthCheck
+            let sched = seedJobs conn currentTime
+            sched 24 3600 Jobs.ProcessIssuesEnhancement
+            sched 1440 60 (const Jobs.QueryMonitorsCheck)
+            sched 1440 60 Jobs.PrometheusScrapeTick
+            sched 288 300 Jobs.ServiceMapRollupTick
+            sched 144 600 Jobs.NotificationSweepJob
+            sched 24 3600 Jobs.NotificationDigestJob
+            sched 24 3600 Jobs.InfraHealthCheck
 
       projects <- Projects.recentlyActiveProjectIds currentTime
       Log.logInfo "Scheduling jobs for projects" ("project_count", length projects)
-      -- Only `SafetyNetReprocess` drives span derivation (hourly catch-up
-      -- for the extraction worker's live path).
-      let guardTag = "SafetyNetReprocess" :: Text
-          guardThreshold = 24 :: Int64
       forM_ projects \p -> do
-        projectJobsExistCount <-
-          Hasql.interpScalar
-            [HI.sql|SELECT COUNT(*)::int8 FROM background_jobs
-             WHERE payload->>'tag' = #{guardTag}
-               AND payload->>'projectId' = #{p.toText}
-               AND run_at >= date_trunc('day', #{currentTime}::timestamptz)
-               AND run_at < date_trunc('day', #{currentTime}::timestamptz) + interval '1 day'
-               AND status IN ('queued', 'locked')|]
-        let projectJobsExist = (projectJobsExistCount :: Int64) >= guardThreshold
-
-        if projectJobsExist
-          then Log.logInfo "Jobs already scheduled for project today, skipping" ("project_id", p.toText)
-          else liftIO $ withResource authCtx.jobsPool \conn -> do
-            void $ createJob conn "background_jobs" $ Jobs.ReportUsage p
-            void $ createJob conn "background_jobs" $ Jobs.HostRetentionSweep p
-            let sched = seedJobs conn currentTime
-            -- Derived-table maintenance jobs read from `apis.*` tables, not
-            -- the hypertable, and are unaffected by the derivation path.
-            sched 96 900 (`PatternEmbeddingAndMerge` p)
-            sched 96 900 (`ErrorGroupReview` p)
-            sched 96 900 (`LogPatternPeriodicProcessing` p)
-            -- Discovery is what releases deferred new-endpoint alerts, so
-            -- its period is the worst-case delay on one. Cleanup gates
-            -- nothing and is the destructive half, so it stays hourly.
-            sched 96 900 (`EndpointTemplateDiscovery` p)
-            sched 24 3600 (`EndpointMergeCleanup` p)
-            sched 24 3600 (`LogPatternHourlyProcessing` p)
-            -- The extraction worker owns live span/log/error derivation.
-            -- SafetyNetReprocess is the hourly catch-up for
-            -- `processed_at IS NULL` rows (near-empty steady state).
-            sched 24 3600 (\_ -> SafetyNetReprocess p)
+        -- Only `SafetyNetReprocess` drives span derivation (hourly catch-up
+        -- for the extraction worker's live path).
+        ifM
+          (queuedToday "SafetyNetReprocess" (Just p.toText))
+          (Log.logInfo "Jobs already scheduled for project today, skipping" ("project_id", p.toText))
+          do
+            enqueueJobs authCtx [Jobs.ReportUsage p, Jobs.HostRetentionSweep p]
+            liftIO $ withResource authCtx.jobsPool \conn -> do
+              let sched = seedJobs conn currentTime
+              -- Derived-table maintenance jobs read from `apis.*` tables, not
+              -- the hypertable, and are unaffected by the derivation path.
+              sched 96 900 (`PatternEmbeddingAndMerge` p)
+              sched 96 900 (`ErrorGroupReview` p)
+              sched 96 900 (`LogPatternPeriodicProcessing` p)
+              -- Discovery is what releases deferred new-endpoint alerts, so
+              -- its period is the worst-case delay on one. Cleanup gates
+              -- nothing and is the destructive half, so it stays hourly.
+              sched 96 900 (`EndpointTemplateDiscovery` p)
+              sched 24 3600 (`EndpointMergeCleanup` p)
+              sched 24 3600 (`LogPatternHourlyProcessing` p)
+              -- The extraction worker owns live span/log/error derivation.
+              -- SafetyNetReprocess is the hourly catch-up for
+              -- `processed_at IS NULL` rows (near-empty steady state).
+              sched 24 3600 (\_ -> SafetyNetReprocess p)
 
         -- Weekly reports scheduled independently of per-project idempotency guard,
         -- so they aren't skipped when periodic jobs were already scheduled earlier.
-        when (dayOfWeek currentDay == Monday) $ liftIO $ withResource authCtx.jobsPool \conn -> do
-          existing <-
-            SimplePG.query
-              conn
-              [sql|SELECT COUNT(*)::bigint FROM background_jobs
-                   WHERE payload->>'tag' = 'WeeklyReports'
-                     AND payload->>'projectId' = ?
-                     AND run_at >= date_trunc('day', ?::timestamptz)
+        when (dayOfWeek currentDay == Monday) do
+          weekly :: Int64 <-
+            Hasql.interpScalar
+              [HI.sql|SELECT COUNT(*)::int8 FROM background_jobs
+                   WHERE payload->>'tag' = 'WeeklyReports' AND payload->>'projectId' = #{p.toText}
+                     AND run_at >= date_trunc('day', #{currentTime}::timestamptz)
                      AND status IN ('queued', 'locked', 'retry')|]
-              (p, currentTime)
-          unless (any (\(Only (c :: Int)) -> c > 0) existing)
-            $ void
-            $ createJob conn "background_jobs"
-            $ Jobs.WeeklyReports p
+          when (weekly == 0) $ enqueueJobs authCtx [Jobs.WeeklyReports p]
 
 
 -- | Announce a newly created project to the team Discord channel, once per project member.
@@ -972,7 +941,7 @@ sendDiscordData authCtx userId projectId fullName stack foundUsFrom = whenJustM 
   - **Stack**: {stackString}
   - **Found us from**: {foundUsFrom}
   |]
-    sendMessageToDiscord msg authCtx.config.discordWebhookUrl
+    sendMessageToDiscord authCtx msg
 
 
 -- | Run a step; if it throws, log the failure with the given label and continue.
@@ -1022,8 +991,8 @@ runInfraHealthCheck authCtx = do
     else do
       Log.logAttention "InfraHealthCheck ALERT" (AE.object ["window" AE..= window, "alerts" AE..= alerts])
       sendMessageToDiscord
+        authCtx
         ("**🚨 monoscope pipeline alert** (" <> window <> ")\n" <> unlines alerts <> bool ("```\n" <> unlines info <> "```") "" (null info))
-        authCtx.config.discordWebhookUrl
 
 
 -- | One-decimal percentage, for drift/drop alert text.
@@ -1372,14 +1341,10 @@ runHourlyJob scheduledTime hour = do
 
   -- Cleanup expired query cache entries
   tryStep "monitor-evaluation-retention" $ Monitors.pruneEvaluations (addUTCTime (-(7 * 86400)) scheduledTime)
-  deletedCount <- QueryCache.cleanupExpiredCache
-  when (deletedCount > 0) $ Log.logInfo "Cleaned up expired query cache entries" ("deleted_count", AE.toJSON deletedCount)
-
-  deviceCodesDeleted <- Hasql.interpExecute [HI.sql| DELETE FROM users.device_auth_codes WHERE expires_at < now() - interval '1 hour' |]
-  when (deviceCodesDeleted > 0) $ Log.logInfo "Cleaned up expired device auth codes" ("deleted_count", AE.toJSON deviceCodesDeleted)
-
-  staleMetricsDeleted <- Hasql.interpExecute [HI.sql| DELETE FROM otel_metrics_meta WHERE last_seen_at < now() - interval '3 months' |]
-  when (staleMetricsDeleted > 0) $ Log.logInfo "Cleaned up stale metrics metadata" ("deleted_count", AE.toJSON staleMetricsDeleted)
+  let logDeleted msg n = when (n > 0) $ Log.logInfo msg ("deleted_count", AE.toJSON n)
+  QueryCache.cleanupExpiredCache >>= logDeleted "Cleaned up expired query cache entries"
+  Hasql.interpExecute [HI.sql| DELETE FROM users.device_auth_codes WHERE expires_at < now() - interval '1 hour' |] >>= logDeleted "Cleaned up expired device auth codes"
+  Hasql.interpExecute [HI.sql| DELETE FROM otel_metrics_meta WHERE last_seen_at < now() - interval '3 months' |] >>= logDeleted "Cleaned up stale metrics metadata"
 
   enqueueJobs ctx [Jobs.CompressReplaySessions, Jobs.DashboardsAutoProvision scheduledTime]
 
@@ -1446,7 +1411,7 @@ checkFreeTierUsageNotifications pids now = forM_ pids \pid -> tryStep "free-tier
         let sev = if exceeded then SLError else SLWarn
             bodyMsg = if exceeded then "Daily event limit reached — new events are being dropped." else "Approaching daily event limit (" <> show count <> " of " <> show limit <> " events used)."
             attrs = Map.fromList [("used", AE.toJSON count), ("limit", AE.toJSON limit), ("payment_plan", AE.String "Free")]
-        insertSystemLog ctx.env.enablePostgresTelemetryWrites ctx.env.enableTimefusionWrites ctx.hasqlTimefusionUsesPgTypes $ mkSystemLog pid eventName sev bodyMsg attrs Nothing now
+        insertSystemLog (Telemetry.writeTargetFor ctx.env Nothing) ctx.hasqlTimefusionUsesPgTypes $ mkSystemLog pid eventName sev bodyMsg attrs Nothing now
         -- Send email to all project members
         users <- Projects.usersByProjectId pid
         let mail = ET.freeTierUsageEmail project.title (projectUrl ctx pid <> "/manage_billing") count limit exceeded
@@ -1473,26 +1438,17 @@ generateOtelFacetsBatch projectIds _timestamp = do
 data DrainInput = SeedPattern Text | NewEvent Text Text
 
 
-processDrainBatch :: Bool -> V.Vector DrainInput -> UTCTime -> Drain.DrainTree -> (Drain.DrainTree, V.Vector Drain.DrainResult)
-processDrainBatch isSummary batch now initial = Drain.buildDrainBatch tokenize logId sampleContent initial batch now
+processDrainBatch :: V.Vector DrainInput -> UTCTime -> Drain.DrainTree -> (Drain.DrainTree, V.Vector Drain.DrainResult)
+processDrainBatch batch now initial = Drain.buildDrainBatch tokenize logId sampleContent initial batch now
   where
-    tok = if isSummary then Drain.generateSummaryDrainTokens else Drain.generateDrainTokens
-    tokenize = tok . \case SeedPattern c -> c; NewEvent _ c -> c
+    tokenize = Drain.generateSummaryDrainTokens . \case SeedPattern c -> c; NewEvent _ c -> c
     logId = \case SeedPattern _ -> ""; NewEvent lid _ -> lid
     sampleContent = \case SeedPattern _ -> Nothing; NewEvent _ c -> Just c
 
 
--- | Process errors from OpenTelemetry spans to detect runtime exceptions
--- This job runs every minute to extract errors from span data and create
--- runtime exception issues for tracking and notification.
---
--- Error Detection Strategy:
--- 1. Query spans with error indicators (status, events, attributes)
--- 2. Extract error details from span events using OpenTelemetry conventions
 data ActiveErrorState = AESNew | AESEscalating | AESOngoing | AESRegressed
   deriving stock (Eq, Generic, Read, Show)
-  deriving anyclass (NFData)
-  deriving (FromField, HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "AES" ActiveErrorState
+  deriving (HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC 'Nothing "AES" ActiveErrorState
 
 
 data ErrorSubscriptionDue = ErrorSubscriptionDue
@@ -1507,7 +1463,7 @@ data ErrorSubscriptionDue = ErrorSubscriptionDue
   , lastNotifiedAt :: Maybe UTCTime
   }
   deriving stock (Generic, Show)
-  deriving anyclass (FromRow, HI.DecodeRow, NFData)
+  deriving anyclass (HI.DecodeRow)
 
 
 -- | Dispatch an alert to the project's @everyone team (see 'fanOutToTeam' for the
@@ -1639,7 +1595,7 @@ errorTrendChartUrl ctx pid errHash from to = do
           { Widget.wType = Widget.WTTimeseries
           , Widget.title = Just "Error occurrences"
           , Widget.unit = Just "errors"
-          , Widget.query = Just $ "hashes has_any [\"err:" <> errHash <> "\"] | summarize count(*) by bin_auto(timestamp)"
+          , Widget.query = Just $ "hashes has_any [\"" <> LogQueries.errHashPrefix <> errHash <> "\"] | summarize count(*) by bin_auto(timestamp)"
           , Widget.theme = Just "roma"
           }
         (formatUTC from)
@@ -1659,21 +1615,17 @@ humanDuration now t
     unit n sg pl = show n <> " " <> bool pl sg (n == 1)
 
 
--- | Compact relative time ("3m ago", "2h ago", "5d ago") for alert timestamps.
--- Used in Slack/Discord notifications where readers need to judge recency at a glance.
-relTimeAgo :: UTCTime -> UTCTime -> Text
-relTimeAgo now t
-  | s < 60 = "just now"
-  | s < 3600 = show (s `div` 60) <> "m ago"
-  | s < 86400 = show (s `div` 3600) <> "h ago"
-  | otherwise = show (s `div` 86400) <> "d ago"
+-- | Alert-header first-seen line: "3m ago · Aug 1 2:15 PM". The compact relative
+-- time lets Slack/Discord readers judge recency at a glance.
+firstSeenLine :: UTCTime -> UTCTime -> Text
+firstSeenLine now t = ago <> " · " <> toText (formatTime defaultTimeLocale "%b %-e %-l:%M %p" t)
   where
     s = max 0 $ round (diffUTCTime now t) :: Int
-
-
--- | Alert-header first-seen line: "3m ago · Aug 1 2:15 PM".
-firstSeenLine :: UTCTime -> UTCTime -> Text
-firstSeenLine now t = relTimeAgo now t <> " · " <> toText (formatTime defaultTimeLocale "%b %-e %-l:%M %p" t)
+    ago
+      | s < 60 = "just now"
+      | s < 3600 = show (s `div` 60) <> "m ago"
+      | s < 86400 = show (s `div` 3600) <> "h ago"
+      | otherwise = show (s `div` 86400) <> "d ago"
 
 
 -- | Assemble a runtime-error alert. A new incident starts with a focused
@@ -1913,7 +1865,6 @@ selectDueErrorNotifications pid mHashes now =
                     AND #{now}::timestamptz - e.last_notified_at >= CASE
                           WHEN #{now}::timestamptz - e.created_at < INTERVAL '1 hour'  THEN INTERVAL '1 hour'
                           WHEN #{now}::timestamptz - e.created_at < INTERVAL '6 hours' THEN INTERVAL '6 hours'
-                          WHEN #{now}::timestamptz - e.created_at < INTERVAL '24 hours' THEN INTERVAL '24 hours'
                           ELSE INTERVAL '24 hours'
                         END)
               )
@@ -2018,21 +1969,18 @@ dispatchDueErrorNotifications ctx pid now dueErrors = unless (null dueErrors)
                       -- An alert is always the start of an episode, so arriving
                       -- without one open means this claim raced another worker.
                       Incidents.NoOpenEpisode -> conflict
-                      Incidents.OlderThanCurrentEpisode -> conflict
-                      Incidents.UnknownIncidentSource -> conflict
-                      Incidents.InactiveIncidentSource -> conflict
-                      Incidents.IncidentIssueMismatch -> conflict
-                      Incidents.EpisodeWithoutIssue -> conflict
+                      Incidents.Rejected _ -> conflict
           decision <- either (throwIO . IncidentCommitError) pure committed
           case decision of
             NotificationSkipped -> pass
             NotificationDigested -> Log.logInfo "notification_digested" (pid, sub.errorId)
             NotificationQueued -> do
-              let (subj, html) = case alertType of
-                    EscalatingErrors -> ET.escalatingErrorsEmail project.title baseUrl errorsUrl [sub.errorData] chart occText ongoingFor
-                    RegressedErrors -> ET.regressedErrorsEmail project.title baseUrl errorsUrl [sub.errorData] chart occText ongoingFor
-                    NewRuntimeError -> ET.runtimeErrorsEmail project.title baseUrl errorsUrl [sub.errorData] chart occText ongoingFor
-                    ErrorSpike -> ET.errorSpikesEmail project.title baseUrl errorsUrl [sub.errorData] chart occText ongoingFor
+              let mkEmail = case alertType of
+                    EscalatingErrors -> ET.escalatingErrorsEmail
+                    RegressedErrors -> ET.regressedErrorsEmail
+                    NewRuntimeError -> ET.runtimeErrorsEmail
+                    ErrorSpike -> ET.errorSpikesEmail
+                  (subj, html) = mkEmail project.title baseUrl errorsUrl [sub.errorData] chart occText ongoingFor
               refs <-
                 fanOutToTeam
                   team
@@ -2189,9 +2137,7 @@ processProjectErrors pid rawErrors now = do
         Log.logTrace "Successfully inserted errors for project"
           $ AE.object [("project_id", AE.toJSON pid.toText), ("error_count", AE.toJSON $ V.length errors)]
         -- Upsert hourly rollup stats (must follow batchUpsertErrorPatterns which creates the FK rows)
-        let addErrCounts (c1, u1) (c2, u2) = (c1 + c2, u1 + u2)
-            errorRollupGroups = HM.toList $ V.foldl' (\acc e -> HM.insertWith addErrCounts e.hash (1 :: Int, bool 0 1 (isJust e.userId)) acc) HM.empty errors
-            errorRollupStats = V.fromList [(h, cnt, users) | (h, (cnt, users)) <- errorRollupGroups]
+        let errorRollupStats = V.fromList [(h, cnt, users) | (h, (Sum cnt, Sum users)) <- HM.toList $ HM.fromListWith (<>) [(e.hash, (Sum (1 :: Int), Sum (bool 0 1 (isJust e.userId)))) | e <- V.toList errors]]
         void $ ErrorPatterns.upsertErrorPatternHourlyStats pid now errorRollupStats
         void $ ErrorPatterns.upsertErrorPatternUsers pid errors
         void $ ErrorPatterns.upsertErrorTagCounts pid errors
@@ -2243,8 +2189,8 @@ processProjectErrors pid rawErrors now = do
                     -- issue identity does not move. Applying one to the fingerprint
                     -- would re-key every pattern it touches and mint new issues for
                     -- errors we already know about.
-                    masks <- map snd . filter ((== err.errorType) . fst) <$> PatternMergeDB.learnedErrorMasks pid
-                    PatternMergeDB.canonicalForAppliedShape pid (EF.shapeWithMasks masks pid.toText err.errorType err.message) err.service
+                    masksFor <- PatternMergeDB.learnedErrorMasks pid
+                    PatternMergeDB.canonicalForAppliedShape pid (EF.shapeWithMasks (masksFor err.errorType) pid.toText err.errorType err.message) err.service
               let canonicalM = exactM <|> shapeM
               case canonicalM of
                 Just canonicalId | canonicalId /= err.id -> do
@@ -2322,7 +2268,7 @@ safetyNetReprocess pid = do
       (AE.object ["project_id" AE..= pid.toText, "row_count" AE..= abandoned, "max_age_secs" AE..= maxAgeSecs])
   unless (V.null rows) $ do
     Log.logTrace "SafetyNetReprocess re-driving unprocessed rows" (AE.object ["project_id" AE..= pid.toText, "row_count" AE..= V.length rows])
-    liftIO $ Telemetry.handOffBatches ctx.extractionWorker caches rows
+    Telemetry.handOffBatches ctx.extractionWorker caches rows
 
 
 -- | Dual-fork an UPDATE to Postgres (blocking, deadlock-retried) + TimeFusion (best-effort, circuit-broken).
@@ -2459,7 +2405,7 @@ processEagerBatch batch shard
         -- Pure entity + hash derivation.
         !entityIds <- V.replicateM (V.length spans) UUID.genUUID
         let !canonicalTemplates = HM.lookupDefault (mkPathClassifier projectCache) pid $ mkBatchPathClassifiers (one (pid, projectCache)) spans
-            !results = V.zipWith (\sp eid -> let (mkEp, hs, np, fwh) = processSpanToEntities canonicalTemplates projectCache pid sp in (mkEp eid, hs, np, fwh)) spans entityIds
+            !results = V.zipWith (\sp eid -> let (mkEp, hs, np, fwh) = processSpanToEntities canonicalTemplates pid sp in (mkEp eid, hs, np, fwh)) spans entityIds
             !(endpoints, spanHashes, normalizedPaths, frameworkHashes) = V.unzip4 results
             !observations = V.map (extractObservation canonicalTemplates) spans
             !endpointsFinal = V.fromList $ nubOrdOn (.hash) $ V.toList $ V.catMaybes endpoints
@@ -2491,7 +2437,7 @@ processEagerBatch batch shard
             errorsByKey :: HM.HashMap (Text, Text) AE.Value
             errorsByKey = HM.fromList $ mapMaybe mkErrorEntry errorsByTrace
             errHashesByKey :: HM.HashMap (Text, Text) [Text]
-            errHashesByKey = HM.fromListWith (<>) [((sid, tid), ["err:" <> e.hash]) | e <- V.toList allErrors, Just sid <- [e.spanId], Just tid <- [e.traceId]]
+            errHashesByKey = HM.fromListWith (<>) [((sid, tid), [LogQueries.errHashPrefix <> e.hash]) | e <- V.toList allErrors, Just sid <- [e.spanId], Just tid <- [e.traceId]]
 
         -- Per-row packed vectors for UPDATE-1.
         let perRowHashes = V.zipWith3 (\sid tid base -> base <> V.fromList (HM.lookupDefault [] (sid, tid) errHashesByKey)) spanIdsV traceIdsV spanHashes
@@ -2534,11 +2480,6 @@ processEagerBatch batch shard
         -- never touch already-compressed chunks (which would force decompression).
         let hashCutoff = addUTCTime (negate $ fromIntegral ctx.config.hashUpdateMaxAgeSecs) now
             effectiveMinTs = max batchMinTs hashCutoff
-            dbSpanIds = V.toList spanIdsV
-            dbTraceIds = V.toList traceIdsV
-            dbHashesJson = V.toList perRowHashesJson
-            dbErrorsJson = V.toList perRowErrorsJson
-            dbNormPaths = V.toList normalizedPaths
             -- Rows stamped at ingest ('stampHashesAtIngest') already carry the derived
             -- set; re-merging them mints a duplicate row version in TimeFusion's
             -- merge-on-read store for zero data change. Only rows whose stored hashes
@@ -2586,11 +2527,11 @@ processEagerBatch batch shard
                       SELECT span_id, trace_id, errors, norm_path,
                              ARRAY(SELECT jsonb_array_elements_text(hashes_json)) AS new_hashes
                       FROM (
-                        SELECT unnest(#{dbSpanIds}::text[])  AS span_id,
-                               unnest(#{dbTraceIds}::text[])  AS trace_id,
-                               unnest(#{dbHashesJson}::jsonb[]) AS hashes_json,
-                               unnest(#{dbErrorsJson}::jsonb[]) AS errors,
-                               unnest(#{dbNormPaths}::text[])  AS norm_path
+                        SELECT unnest(#{spanIdsV}::text[])  AS span_id,
+                               unnest(#{traceIdsV}::text[])  AS trace_id,
+                               unnest(#{perRowHashesJson}::jsonb[]) AS hashes_json,
+                               unnest(#{perRowErrorsJson}::jsonb[]) AS errors,
+                               unnest(#{normalizedPaths}::text[])  AS norm_path
                       ) raw
                       ORDER BY span_id, trace_id
                     ) u
@@ -2611,8 +2552,8 @@ processEagerBatch batch shard
                     FROM (
                       SELECT span_id, trace_id
                       FROM (
-                        SELECT unnest(#{dbSpanIds}::text[]) AS span_id,
-                               unnest(#{dbTraceIds}::text[]) AS trace_id
+                        SELECT unnest(#{spanIdsV}::text[]) AS span_id,
+                               unnest(#{traceIdsV}::text[]) AS trace_id
                       ) raw
                       ORDER BY span_id, trace_id
                     ) u
@@ -2772,7 +2713,7 @@ seedFromPatterns
   -> Maybe UTCTime
   -> Eff es Drain.DrainTree
 seedFromPatterns shard key now texts maxSeen = do
-  let freshTree = fst $ processDrainBatch True (V.fromList $ map SeedPattern texts) now Drain.emptyDrainTree
+  let freshTree = fst $ processDrainBatch (V.fromList $ map SeedPattern texts) now Drain.emptyDrainTree
       newEntry = ExtractionWorker.ServiceDrainTree{tree = freshTree, lastSeededAt = now, maxPatternSeenAt = maxSeen}
   atomicModifyIORef'_ shard.drainTrees (HM.insert key newEntry)
   pure freshTree
@@ -2801,7 +2742,7 @@ flushDrainTask shard task
 
       -- Build NewEvent inputs from the buffered spans.
       let events = V.fromList [NewEvent bs.eventId bs.summary | bs <- task.spans]
-          (!mergedTree, allPatternsRaw) = processDrainBatch True events now seededTree
+          (!mergedTree, allPatternsRaw) = processDrainBatch events now seededTree
 
       -- Swap the merged tree back. Preserve lastSeededAt/maxPatternSeenAt from
       -- the existing entry (async rehydration owns those fields).
@@ -2811,30 +2752,27 @@ flushDrainTask shard task
       -- The same representative is now used for persisted patterns and events.
       let allPatterns = PatternMerge.mergeByJaccard PatternMerge.jaccardMergeThreshold allPatternsRaw
           tagByEvent :: HM.HashMap Text Text
-          tagByEvent = HM.fromList [(lid, "pat:" <> toXXHash dp.templateStr) | dp <- V.toList allPatterns, lid <- V.toList dp.logIds]
+          tagByEvent = HM.fromList [(lid, LogQueries.patHashPrefix <> toXXHash dp.templateStr) | dp <- V.toList allPatterns, lid <- V.toList dp.logIds]
           errByEvent :: HM.HashMap Text Bool
           errByEvent = HM.fromList [(bs.eventId, bs.isError) | bs <- task.spans]
           prepared = flip mapMaybe (V.toList allPatterns) \dp ->
             let eventCount = fromIntegral dp.frequency :: Int64
                 patternHash = toXXHash dp.templateStr
-             in if eventCount <= 0 || T.null dp.templateStr
-                  then Nothing
-                  else
-                    Just
-                      ( LogPatterns.UpsertPattern
-                          { projectId = pid
-                          , logPattern = dp.templateStr
-                          , hash = patternHash
-                          , sourceField = "summary"
-                          , serviceName = Just svcName
-                          , logLevel = Nothing
-                          , traceId = Nothing
-                          , sampleMessage = Just dp.exampleLog
-                          , eventCount
-                          , isError = any (\lid -> HM.lookupDefault False lid errByEvent) dp.logIds
-                          }
-                      , (pid, "summary" :: Text, patternHash, task.flushedAt, eventCount)
-                      )
+             in guard (eventCount > 0 && not (T.null dp.templateStr))
+                  $> ( LogPatterns.UpsertPattern
+                         { projectId = pid
+                         , logPattern = dp.templateStr
+                         , hash = patternHash
+                         , sourceField = "summary"
+                         , serviceName = Just svcName
+                         , logLevel = Nothing
+                         , traceId = Nothing
+                         , sampleMessage = Just dp.exampleLog
+                         , eventCount
+                         , isError = any (\lid -> HM.lookupDefault False lid errByEvent) dp.logIds
+                         }
+                     , (pid, "summary" :: Text, patternHash, task.flushedAt, eventCount)
+                     )
       let (ups, hss) = unzip prepared
       unless (null ups) $ void $ LogPatterns.upsertLogPatternBatch ups
       unless (null hss) $ void $ LogPatterns.upsertHourlyStatBatch hss
@@ -2924,8 +2862,8 @@ runSessionBackfillTimer logger ctx tp = forever $ do
       when (n > 0) $ Log.logTrace "session-backfill" ("rows_updated" :: Text, n)
 
 
-stripeAuth :: Text -> Wreq.Options
-stripeAuth apiKey = defaults & (header "Authorization" .~ ["Bearer " <> encodeUtf8 apiKey])
+bearerAuth :: Text -> Wreq.Options
+bearerAuth apiKey = W.defaults & (W.header "Authorization" .~ ["Bearer " <> encodeUtf8 apiKey])
 
 
 -- | On the 'W.HTTP' effect rather than raw IO so tests can drive the drain path
@@ -2939,7 +2877,7 @@ reportUsageToStripe apiKey customerId eventName quantity = do
         , ("payload[value]", encodeUtf8 $ show quantity)
         , ("payload[stripe_customer_id]", encodeUtf8 customerId)
         ]
-  void $ W.postWith (stripeAuth apiKey) "https://api.stripe.com/v1/billing/meter_events" params
+  void $ W.postWith (bearerAuth apiKey) "https://api.stripe.com/v1/billing/meter_events" params
 
 
 -- | `trialEnd` is Nothing when the sub has no trial or the trial is over.
@@ -2974,11 +2912,11 @@ data StripeInvoice = StripeInvoice
 -- treat Nothing as an actionable failure.
 getStripeSubDetails :: (IOE :> es, W.HTTP :> es) => Text -> Text -> Eff es (Maybe StripeSubDetails)
 getStripeSubDetails apiKey subId = do
-  respE <- tryAny $ W.getWith (stripeAuth apiKey) ("https://api.stripe.com/v1/subscriptions/" <> toString subId)
+  respE <- tryAny $ W.getWith (bearerAuth apiKey) ("https://api.stripe.com/v1/subscriptions/" <> toString subId)
   pure do
     resp <- rightToMaybe respE
     let item0 = AL.key "items" . AL.key "data" . AL.nth 0
-    v <- AE.decode @AE.Value (resp ^. responseBody)
+    v <- AE.decode @AE.Value (resp ^. W.responseBody)
     subItemId <- v ^? item0 . AL.key "id" . AL._String
     priceId <- v ^? item0 . AL.key "price" . AL.key "id" . AL._String
     let status = fromMaybe "" (v ^? AL.key "status" . AL._String)
@@ -2995,10 +2933,10 @@ getStripeSubDetails apiKey subId = do
 -- this only enriches the billing page, so a Stripe outage must degrade it, not fail it.
 getStripeInvoices :: (IOE :> es, W.HTTP :> es) => Text -> Text -> Eff es [StripeInvoice]
 getStripeInvoices apiKey subId = do
-  respE <- tryAny $ W.getWith (stripeAuth apiKey) ("https://api.stripe.com/v1/invoices?limit=12&subscription=" <> toString subId)
+  respE <- tryAny $ W.getWith (bearerAuth apiKey) ("https://api.stripe.com/v1/invoices?limit=12&subscription=" <> toString subId)
   pure $ fromMaybe [] do
     resp <- rightToMaybe respE
-    v <- AE.decode @AE.Value (resp ^. responseBody)
+    v <- AE.decode @AE.Value (resp ^. W.responseBody)
     pure
       [ StripeInvoice{periodStart, periodEnd, total, status, hostedUrl, number}
       | inv <- v ^.. AL.key "data" . AL.values
@@ -3027,13 +2965,7 @@ scheduleTrialReminders pid trialEndEpoch = do
     Log.logAttention "Trial reminder runAt already past; skipping" (pid.toText, daysLeft, runAt)
   forM_ due \(runAt, daysLeft) -> do
     let payload = AE.toJSON (TrialEndingReminder pid daysLeft)
-    res <-
-      tryAny
-        $ void
-        $ Hasql.interpExecute
-          [HI.sql|INSERT INTO background_jobs (run_at, status, payload)
-             VALUES (#{runAt}, 'queued', #{HI.AsJsonb payload})|]
-    whenLeft_ res \e ->
+    whenLeftM_ (tryAny $ Hasql.interpExecute_ [HI.sql|INSERT INTO background_jobs (run_at, status, payload) VALUES (#{runAt}, 'queued', #{HI.AsJsonb payload})|]) \e ->
       Log.logAttention "Trial reminder enqueue failed" (pid.toText, daysLeft, displayException e)
 
 
@@ -3046,10 +2978,9 @@ reportUsageToLemonsqueezy subItemId quantity apiKey = do
                      "relationships": {"subscription-item": {"data": {"type": "subscription-items","id": #{subItemId}}}}
                   }}|]
       hds =
-        defaults
-          & (header "Authorization" .~ ["Bearer " <> encodeUtf8 apiKey])
-          & (header "Content-Type" .~ ["application/vnd.api+json"])
-          & (header "Accept" .~ ["application/vnd.api+json"])
+        bearerAuth apiKey
+          & (W.header "Content-Type" .~ ["application/vnd.api+json"])
+          & (W.header "Accept" .~ ["application/vnd.api+json"])
   void $ W.postWith hds "https://api.lemonsqueezy.com/v1/usage-records" formData
 
 
@@ -3058,7 +2989,7 @@ reportUsageToLemonsqueezy subItemId quantity apiKey = do
 commitQueryMonitorEvaluation :: Monitors.QueryMonitor -> Double -> Monitors.MonitorStatus -> UTCTime -> Incidents.IncidentDelivery -> Tx.Transaction Bool -> ATBackgroundCtx Bool
 commitQueryMonitorEvaluation monitor value status observedAt delivery commitStatus = do
   let isRecovery = status == Monitors.MSNormal
-      threshold = case status of Monitors.MSWarning -> fromMaybe monitor.alertThreshold monitor.warningThreshold; _ -> monitor.alertThreshold
+      threshold = case status of Monitors.MSWarning -> fromMaybe monitor.alertThreshold monitor.warningThreshold; Monitors.MSAlerting -> monitor.alertThreshold; Monitors.MSNormal -> monitor.alertThreshold
       source = Incidents.MonitorIncident monitor.id
       thresholdDir = if monitor.triggerLessThan then Issues.Below else Issues.Above
   appCtx <- ask @Config.AuthContext
@@ -3078,7 +3009,7 @@ commitQueryMonitorEvaluation monitor value status observedAt delivery commitStat
           chartFrom = addUTCTime (negate $ fromIntegral (chartMins * 60)) observedAt
           destinations = slackDestinations installation targetTeams
       chartUrlM <- if isRecovery then pure Nothing else monitorTrendChartUrl appCtx monitor.projectId monitor chartFrom observedAt value
-      issue <- if isRecovery then pure Nothing else Just <$> Issues.createQueryAlertIssue monitor.projectId (show monitor.id) monitor.alertConfig.title monitor.logQuery threshold value thresholdDir
+      issue <- if isRecovery then pure Nothing else Just <$> Issues.createQueryAlertIssue monitor.projectId (Monitors.queryAlertKey monitor.id) monitor.alertConfig.title monitor.logQuery threshold value thresholdDir
       committed <- Hasql.transaction TxS.ReadCommitted TxS.Write do
         accepted <- commitStatus
         if not accepted
@@ -3117,11 +3048,7 @@ commitQueryMonitorEvaluation monitor value status observedAt delivery commitStat
               -- other change arriving without one is out of order.
               Incidents.NoOpenEpisode | isRecovery -> pure $ Right $ Just alertUrl
               Incidents.NoOpenEpisode -> conflict
-              Incidents.OlderThanCurrentEpisode -> conflict
-              Incidents.UnknownIncidentSource -> conflict
-              Incidents.InactiveIncidentSource -> conflict
-              Incidents.IncidentIssueMismatch -> conflict
-              Incidents.EpisodeWithoutIssue -> conflict
+              Incidents.Rejected _ -> conflict
       case committed of
         Left result -> throwIO $ IncidentCommitError result
         Right Nothing -> pure False
@@ -3164,12 +3091,14 @@ dispatchTeamNotifications team alert projectId projectTitle monitorUrl subj rend
 
 jobsWorkerInit :: Logger -> Config.AuthContext -> TracerProvider -> IO ()
 jobsWorkerInit logger appCtx tp = when appCtx.config.enableBackgroundJobs do
-  when appCtx.config.enableDailyJobScheduling do
-    ensureDailyJobScheduled appCtx
-    void $ async $ forever do
-      threadDelay (30 * 60 * 1_000_000) -- 30 minutes
-      ensureDailyJobScheduled appCtx
-  startJobRunner
+  when appCtx.config.enableDailyJobScheduling $ ensureDailyJobScheduled appCtx
+  -- Scoped to the runner so a supervisor restart does not leak another backstop loop.
+  UIO.concurrently_
+    ( when appCtx.config.enableDailyJobScheduling $ forever do
+        threadDelay (30 * 60 * 1_000_000)
+        tryStepIO logger appCtx "ensureDailyJobScheduled" $ ensureDailyJobScheduled appCtx
+    )
+    $ startJobRunner
     $ mkConfig jobLogger "background_jobs" appCtx.jobsPool (MaxConcurrentJobs appCtx.config.maxConcurrentJobs) (jobsRunner logger appCtx tp) (\cfg -> cfg{cfgJobOrdering = EarliestRunAtFirst})
   where
     -- Drop the poll chatter. odd-jobs emits 'LogPoll' on every poll of the job
@@ -3208,7 +3137,7 @@ jobsWorkerInit logger appCtx tp = when appCtx.config.enableBackgroundJobs do
 -- row is what holds this guard shut for the rest of the day.
 ensureDailyJobScheduled :: Config.AuthContext -> IO ()
 ensureDailyJobScheduled appCtx = withResource appCtx.jobsPool \conn -> do
-  [Only (inserted :: Int)] <-
+  [SimplePG.Only (inserted :: Int)] <-
     SimplePG.query_
       conn
       [sql|WITH ins AS (
@@ -3231,24 +3160,18 @@ sendReportForProject pid rType = do
   ctx <- ask @Config.AuthContext
   users <- Projects.usersByProjectId pid
   currentTime <- Time.currentTime
-  let prv = case rType of
-        Projects.RTWeekly -> 7 * 86400
-        Projects.RTDaily -> 86400
-
-  let startTime = addUTCTime (negate prv) currentTime
+  let startTime = addUTCTime (negate $ case rType of Projects.RTWeekly -> 7 * 86400; Projects.RTDaily -> 86400) currentTime
   whenJustM (Projects.activeProjectById pid) \pr -> do
     systemSnapshot <- RP.collectSystemReport pid startTime currentTime
     let (totalEvents, totalErrors, _, _) = RP.snapshotTotals systemSnapshot
         stats = mapMaybe (\s -> s.current <&> \r -> (fromMaybe "Unnamed service" r.service, fromIntegral r.errorEvents, fromIntegral r.events)) systemSnapshot.services
-        rp_json = RP.buildReportJson' systemSnapshot
-    timeZone <- liftIO getCurrentTimeZone
-    reportId <- UUIDId <$> liftIO UUIDV4.nextRandom
+    reportId <- UUIDId <$> UUID.genUUID
     let report =
           Issues.Report
             { id = reportId
-            , reportJson = rp_json
-            , createdAt = utcToZonedTime timeZone currentTime
-            , updatedAt = utcToZonedTime timeZone currentTime
+            , reportJson = RP.buildReportJson' systemSnapshot
+            , createdAt = utcToZonedTime utc currentTime
+            , updatedAt = utcToZonedTime utc currentTime
             , projectId = pid
             , startTime = startTime
             , endTime = currentTime
@@ -3256,21 +3179,19 @@ sendReportForProject pid rType = do
             }
     res <- Issues.addReport report
     Log.logInfo "Completed report generation for" pid
-    unless (case rType of Projects.RTDaily -> not pr.dailyNotif; Projects.RTWeekly -> not pr.weeklyNotif) $ do
+    when (case rType of Projects.RTDaily -> pr.dailyNotif; Projects.RTWeekly -> pr.weeklyNotif) do
       Log.logInfo "Sending report notifications for" pid
       let stmTxt = formatUTCMicros startTime
           currentTimeTxt = formatUTCMicros currentTime
           reportUrl = projectUrl ctx pid <> "/reports/" <> report.id.toText
-          eventsWidget = RP.eventsWidget
-          errorsWidget = RP.errorsWidget
-      allQ <- Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid eventsWidget Nothing (Just stmTxt) (Just currentTimeTxt)
-      errQ <- Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid errorsWidget Nothing (Just stmTxt) (Just currentTimeTxt)
+          png w = Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid w Nothing (Just stmTxt) (Just currentTimeTxt)
+      allQ <- png RP.eventsWidget
+      errQ <- png RP.errorsWidget
       let alert = ReportAlert rType stmTxt currentTimeTxt totalErrors totalEvents (V.fromList stats) reportUrl allQ errQ
 
       teamM <- ProjectMembers.getEveryoneTeam pid
       broadcastToEveryone teamM alert pid pr.title (projectUrl ctx pid)
-      when (rType == Projects.RTWeekly)
-        $ when (maybe False (ProjectMembers.isChannelEnabled ProjectMembers.Email) teamM)
+      when (rType == Projects.RTWeekly && any (ProjectMembers.isChannelEnabled ProjectMembers.Email) teamM)
         $ forM_ users \user -> do
           (_, subj, rendered) <-
             RP.renderSystemEmail
@@ -3284,24 +3205,15 @@ sendReportForProject pid rType = do
       Log.logInfo "Completed sending report notifications for" pid
 
 
--- | Process new anomalies detected by database triggers
--- This job is created by the apis.new_anomaly_proc() stored procedure
--- when new entities (endpoints, shapes, fields, formats, errors) are inserted.
---
--- Anomaly Processing Strategy:
--- 1. API Changes (endpoint/shape/format) -> Group by endpoint into single issue
--- 2. Runtime Exceptions -> Create individual issues for each error
--- 3. All issues are queued for LLM enhancement if configured
--- 4. Notifications are sent based on project settings
-newAnomalyJob :: Projects.ProjectId -> ZonedTime -> Text -> Text -> V.Vector Text -> ATBackgroundCtx ()
-newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes =
+-- | Process new anomalies raised by the apis.new_anomaly_proc() trigger. Only API
+-- changes (endpoint, shape, format) do work here: they group into a single issue per
+-- endpoint so related changes don't spam notifications. Other types are ignored.
+newAnomalyJob :: Projects.ProjectId -> Text -> V.Vector Text -> ATBackgroundCtx ()
+newAnomalyJob pid anomalyTypesT targetHashes =
   case ApiChanges.parseAnomalyTypes anomalyTypesT of
     Nothing -> Log.logAttention "newAnomalyJob: unrecognized anomaly type, skipping" anomalyTypesT
     Just anomalyType -> do
       Log.logTrace "Processing new anomalies" ()
-      -- API changes (endpoint, shape, format) group into a single issue per
-      -- endpoint, so multiple related changes don't spam notifications.
-      -- Runtime exceptions get individual issues; unknown types are ignored.
       when (anomalyType `elem` ([ApiChanges.ATEndpoint, ApiChanges.ATShape, ApiChanges.ATFormat] :: [ApiChanges.AnomalyTypes]))
         $ processAPIChangeAnomalies pid targetHashes
 
@@ -3326,32 +3238,10 @@ processAPIChangeAnomalies pid targetHashes = do
   newEndpointInfos <-
     catMaybes <$> forM anomaliesByEndpoint \(endpointHash, anomalies) -> do
       existingIssueM <- Issues.selectIssueByHash pid endpointHash (Issues.OpenOfType Issues.ApiChange)
-      -- All endpoint_* fields on an anomaly come from the same joined apis.endpoints
-      -- row, so they always co-vary. Matching the create path (Issues.createAPIChangeIssue),
-      -- we take anomaly[0]'s fields rather than searching for the first non-null per column.
       let firstAnom = head anomalies
-          allNewFields = foldMap (.shapeNewUniqueFields) anomalies
-          allDeletedFields = foldMap (.shapeDeletedFields) anomalies
-          allModifiedFields = foldMap (.shapeUpdatedFieldFormats) anomalies
-          hasNewEndpoint = any ((== ApiChanges.ATEndpoint) . (.anomalyType)) anomalies
-          hasChanges = hasNewEndpoint || not (V.null allNewFields && V.null allDeletedFields && V.null allModifiedFields)
+          hasChanges = any ((== ApiChanges.ATEndpoint) . (.anomalyType)) anomalies || Issues.hasFieldDrift (Issues.apiChangeDataFrom anomalies)
       case existingIssueM of
-        Just existingIssue -> do
-          when hasChanges do
-            let apiChangeData =
-                  Issues.APIChangeData
-                    { endpointMethod = fromMaybe "UNKNOWN" firstAnom.endpointMethod
-                    , endpointPath = fromMaybe "/" firstAnom.endpointUrlPath
-                    , endpointHost = fromMaybe "Unknown" firstAnom.endpointHost
-                    , anomalyHashes = V.fromList $ toList $ fmap (.targetHash) anomalies
-                    , shapeChanges = V.empty
-                    , formatChanges = V.empty
-                    , newFields = allNewFields
-                    , deletedFields = allDeletedFields
-                    , modifiedFields = allModifiedFields
-                    }
-            Issues.updateIssueWithNewAnomaly existingIssue.id apiChangeData
-          pure Nothing
+        Just existingIssue -> Nothing <$ when hasChanges (Issues.updateIssueWithNewAnomaly existingIssue.id anomalies)
         Nothing -> do
           -- "unresolved" tags whether this row should produce a customer
           -- notification. The issue itself is always created (the UI shows
@@ -3473,13 +3363,6 @@ newEndpointAlertsPerHour :: Int
 newEndpointAlertsPerHour = 10
 
 
--- | Claim and send new-endpoint alerts, capped per project per hour.
---
--- Claiming is a single UPDATE-RETURNING: it is the only point at which an issue
--- commits to being notified, so two concurrent jobs cannot both pass a
--- read-then-write check and double-send. Issues over the hourly budget are left
--- unclaimed rather than dropped — they keep @last_notified_at IS NULL@ and the
--- next run picks them up.
 -- | Daily per-project host retention: bump traffic recency, archive 30-day-idle
 -- hosts as a system action, and wake system-archived hosts whose traffic returned
 -- (see 'Endpoints.hostRetentionSweep'). One digest email per project per sweep.
@@ -3499,6 +3382,13 @@ runHostRetentionSweep authCtx pid = do
       forM_ users \u -> renderAndSend (CI.original u.email) (ET.hostsUnarchivedEmail u.firstName project.title catalogUrl unarchived)
 
 
+-- | Claim and send new-endpoint alerts, capped per project per hour.
+--
+-- Claiming is a single UPDATE-RETURNING: it is the only point at which an issue
+-- commits to being notified, so two concurrent jobs cannot both pass a
+-- read-then-write check and double-send. Issues over the hourly budget are left
+-- unclaimed rather than dropped — they keep @last_notified_at IS NULL@ and the
+-- next run picks them up.
 sendNewEndpointAlerts :: Projects.ProjectId -> Text -> [(Issues.IssueId, ET.EndpointAlertRow)] -> ATBackgroundCtx ()
 sendNewEndpointAlerts _ _ [] = pass
 sendNewEndpointAlerts pid alertHash candidates = do
@@ -3643,8 +3533,8 @@ autoAckProvenEndpoints pid = do
              ORDER BY i.created_at ASC
              LIMIT 200 |]
   unless (null candidates) do
-    slicesStarted <- liftIO $ newIORef (0 :: Int)
-    slicesCompleted <- liftIO $ newIORef (0 :: Int)
+    slicesStarted <- newIORef (0 :: Int)
+    slicesCompleted <- newIORef (0 :: Int)
     startedAt <- liftIO $ getTime Monotonic
     let hashes = V.fromList $ ordNub [h | (_, h, _) <- candidates]
         day = 86400
@@ -3655,17 +3545,18 @@ autoAckProvenEndpoints pid = do
           | n <- [1 .. provenEndpointWindowDays]
           ]
         readWindow (lower, upper) = do
-          liftIO $ modifyIORef' slicesStarted (+ 1)
-          rows <- Hasql.withHasqlTimefusion authCtx.env.enableTimefusionReads case upper of
-            Nothing ->
-              Hasql.interp
+          modifyIORef' slicesStarted (+ 1)
+          let upperSql = foldMap (\u -> [HI.sql| AND timestamp < ^{Endpoints.tsLit u} |]) upper
+          rows <-
+            tfRead
+              $ Hasql.interp
                 [HI.sql|
                   WITH served AS (
                     SELECT unnest(hashes) AS hash,
                            floor(extract(epoch from timestamp) / 3600)::bigint AS hour_bucket
                     FROM otel_logs_and_spans
                     WHERE project_id = #{pid}::text
-                      AND timestamp >= ^{Endpoints.tsLit lower}
+                      AND timestamp >= ^{Endpoints.tsLit lower} ^{upperSql}
                       AND attributes___http___request___method IS NOT NULL
                       AND attributes___http___response___status_code < 400
                       AND hashes && #{hashes}::text[]
@@ -3674,25 +3565,7 @@ autoAckProvenEndpoints pid = do
                   FROM served
                   WHERE hash = ANY(#{hashes}::text[])
                   GROUP BY hash, hour_bucket |]
-            Just upper' ->
-              Hasql.interp
-                [HI.sql|
-                  WITH served AS (
-                    SELECT unnest(hashes) AS hash,
-                           floor(extract(epoch from timestamp) / 3600)::bigint AS hour_bucket
-                    FROM otel_logs_and_spans
-                    WHERE project_id = #{pid}::text
-                      AND timestamp >= ^{Endpoints.tsLit lower}
-                      AND timestamp < ^{Endpoints.tsLit upper'}
-                      AND attributes___http___request___method IS NOT NULL
-                      AND attributes___http___response___status_code < 400
-                      AND hashes && #{hashes}::text[]
-                  )
-                  SELECT hash, hour_bucket, count(*)::bigint AS cnt
-                  FROM served
-                  WHERE hash = ANY(#{hashes}::text[])
-                  GROUP BY hash, hour_bucket |]
-          liftIO $ modifyIORef' slicesCompleted (+ 1)
+          modifyIORef' slicesCompleted (+ 1)
           pure rows
         scanBuckets :: ATBackgroundCtx [(Text, Int64, Int64)]
         scanBuckets = concat <$> traverse readWindow windows
@@ -3728,8 +3601,8 @@ autoAckProvenEndpoints pid = do
               pure $ V.length ackedIds
         fields outcome failure acked = do
           finishedAt <- liftIO $ getTime Monotonic
-          started <- liftIO $ readIORef slicesStarted
-          completed <- liftIO $ readIORef slicesCompleted
+          started <- readIORef slicesStarted
+          completed <- readIORef slicesCompleted
           let elapsedMs = toNanoSecs (finishedAt `diffTimeSpec` startedAt) `div` 1_000_000
           pure
             $ AE.object
@@ -3805,7 +3678,11 @@ groupAnomaliesByEndpointHash = map (\grp -> (getEndpointHash (head grp), grp)) .
   where
     getEndpointHash a = case a.anomalyType of
       ApiChanges.ATEndpoint -> a.targetHash
-      _ -> T.take 8 a.targetHash
+      ApiChanges.ATUnknown -> T.take 8 a.targetHash
+      ApiChanges.ATField -> T.take 8 a.targetHash
+      ApiChanges.ATShape -> T.take 8 a.targetHash
+      ApiChanges.ATFormat -> T.take 8 a.targetHash
+      ApiChanges.ATRuntimeException -> T.take 8 a.targetHash
 
 
 -- | Process issues enhancement job - finds issues that need LLM enhancement
@@ -3888,21 +3765,13 @@ patternEmbeddingAndMerge pid = do
 
 
 embedAndMergeErrors :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
-embedAndMergeErrors pid ctx = do
-  unembedded <- PatternMergeDB.getUnembeddedErrorPatterns pid
-  embedAndMerge
+embedAndMergeErrors pid ctx =
+  embedAndMerge @ErrorPatterns.ErrorPatternId
     pid
     ctx
     MergeConfig
       { label = "error"
-      , items = unembedded
-      , itemText = \(_, et, msg) -> PatternMerge.embeddingTextForError et msg
       , normalizeEmb = PatternMerge.normalizeErrorForEmbedding
-      , toId = view _1
-      , updateEmbs = PatternMergeDB.updateErrorEmbeddings
-      , getCentroids = PatternMergeDB.getCanonicalErrorPatterns pid
-      , assignCanonical = PatternMergeDB.assignErrorsToCanonical
-      , fetchTexts = PatternMergeDB.fetchErrorTexts
       , canMerge = PatternMerge.errorCanMerge
       , judgeFn = mkJudge PatternMerge.buildErrorJudgePrompt
       , verifyMerge = Nothing
@@ -3910,21 +3779,13 @@ embedAndMergeErrors pid ctx = do
 
 
 embedAndMergeLogPatterns :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
-embedAndMergeLogPatterns pid ctx = do
-  unembedded <- PatternMergeDB.getUnembeddedLogPatterns pid
+embedAndMergeLogPatterns pid ctx =
   embedAndMerge
     pid
     ctx
     MergeConfig
       { label = "log"
-      , items = unembedded
-      , itemText = snd
       , normalizeEmb = Drain.normalizePlaceholders
-      , toId = fst
-      , updateEmbs = PatternMergeDB.updateLogEmbeddings
-      , getCentroids = PatternMergeDB.getCanonicalLogPatterns pid
-      , assignCanonical = PatternMergeDB.assignLogsToCanonical
-      , fetchTexts = PatternMergeDB.fetchLogTexts
       , canMerge = PatternMerge.logCanMerge
       , judgeFn = mkJudge PatternMerge.buildLogClusterJudgePrompt
       , verifyMerge = Just PatternMergeDB.fetchLogSamples
@@ -3938,63 +3799,52 @@ mkJudge buildPrompt pairs = do
   ELLM.callLLM ctx.config.openaiSmallModel (buildPrompt pairs) ctx.config.openaiApiKey <&> fmap PatternMerge.parseJudgeResponse
 
 
-data MergeConfig k a = MergeConfig
+data MergeConfig k = MergeConfig
   { label :: Text
-  , items :: [a]
-  , itemText :: a -> Text
   , normalizeEmb :: Text -> Text -- normalize text before embedding (e.g. unify placeholders)
-  , toId :: a -> k
-  , updateEmbs :: [(k, [Float])] -> ATBackgroundCtx Int64
-  , getCentroids :: ATBackgroundCtx [(k, VU.Vector Float)]
-  , assignCanonical :: [(k, k)] -> ATBackgroundCtx Int64
-  , fetchTexts :: [k] -> ATBackgroundCtx (Map k Text)
   , canMerge :: Text -> Text -> Bool
   , judgeFn :: [(Text, Text)] -> ATBackgroundCtx (Either Text [Int])
   , verifyMerge :: Maybe ([k] -> ATBackgroundCtx (Map k Text))
   }
 
 
-embedAndMerge :: Ord k => Projects.ProjectId -> Config.AuthContext -> MergeConfig k a -> ATBackgroundCtx ()
-embedAndMerge pid ctx cfg = unless (null cfg.items) do
-  let docs = map (\item -> (cfg.toId item, Langchain.DocumentLoader.Core.Document (toLazy $ cfg.normalizeEmb $ cfg.itemText item) mempty)) cfg.items
-      save batch = do
-        count <- cfg.updateEmbs batch
-        Log.logInfo "Saved pattern embeddings" $ AE.object ["project_id" AE..= pid, "pattern_type" AE..= cfg.label, "saved" AE..= count]
-  embedResult <- ELLM.embedDocumentsWithProgress (ELLM.embedDocuments $ embeddingConfig ctx) save docs
-  case embedResult of
-    Left err -> Log.logAttention ("Failed to embed " <> cfg.label <> " patterns") (pid, err)
-    Right newWithEmbs -> do
-      allCentroids <- cfg.getCentroids
-      let newIds = S.fromList $ map cfg.toId cfg.items
-          centroids = filter (\(cid, _) -> not $ S.member cid newIds) allCentroids
-          !(autoMerges, ambiguous) = PatternMerge.assignToCentroids centroids newWithEmbs
-      let newTextMap = Map.fromList $ map (\item -> (cfg.toId item, cfg.itemText item)) cfg.items
-          neededIds = ordNub $ map snd autoMerges <> map snd ambiguous
-      textMap <- if null neededIds then pure mempty else cfg.fetchTexts neededIds
-      let allTexts = newTextMap <> textMap
-          validMerge (newId, canId) = fromMaybe False $ cfg.canMerge <$> Map.lookup newId allTexts <*> Map.lookup canId allTexts
-          !validAutoMerges = filter validMerge autoMerges
-          -- Verify merges against sample logs when verification is available.
-          verified merges = case cfg.verifyMerge of
-            Nothing -> pure merges
-            Just fetchSamples -> do
-              samples <- fetchSamples (map fst merges)
-              pure $ filter (\(newId, canId) -> fromMaybe True $ PatternMerge.verifyMergeDecision <$> Map.lookup canId allTexts <*> Map.lookup newId samples) merges
-      verified validAutoMerges >>= void . cfg.assignCanonical
-      let !validAmbiguous = filter validMerge ambiguous
-      unless (null validAmbiguous) do
-        let pairs = mapMaybe (\(newId, canId) -> (,) <$> Map.lookup newId allTexts <*> Map.lookup canId allTexts) validAmbiguous
-        unless (null pairs) do
-          judgeResult <- cfg.judgeFn pairs
-          case judgeResult of
-            Left err -> Log.logAttention ("LLM judge failed for " <> cfg.label <> " patterns") (pid, err)
-            Right mergeIdxs -> do
-              let ambiguousV = V.fromList validAmbiguous
-              verified (mapMaybe (ambiguousV V.!?) mergeIdxs) >>= void . cfg.assignCanonical
-
-
-embeddingConfig :: Config.AuthContext -> Langchain.Embeddings.OpenAI.OpenAIEmbeddings
-embeddingConfig ctx = ELLM.openAIEmbeddings ctx.config.openaiApiKey ctx.config.openaiBaseUrl
+embedAndMerge :: forall k. (Ord k, PatternMergeDB.MergeKey k) => Projects.ProjectId -> Config.AuthContext -> MergeConfig k -> ATBackgroundCtx ()
+embedAndMerge pid ctx cfg =
+  PatternMergeDB.getUnembeddedPatterns @k pid >>= \items -> unless (null items) do
+    let docs = map (\(k, txt) -> (k, Langchain.DocumentLoader.Core.Document (toLazy $ cfg.normalizeEmb txt) mempty)) items
+        save batch = do
+          count <- PatternMergeDB.updatePatternEmbeddings batch
+          Log.logInfo "Saved pattern embeddings" $ AE.object ["project_id" AE..= pid, "pattern_type" AE..= cfg.label, "saved" AE..= count]
+    embedResult <- ELLM.embedDocumentsWithProgress (ELLM.embedDocuments $ ELLM.openAIEmbeddings ctx.config.openaiApiKey ctx.config.openaiBaseUrl) save docs
+    case embedResult of
+      Left err -> Log.logAttention ("Failed to embed " <> cfg.label <> " patterns") (pid, err)
+      Right newWithEmbs -> do
+        allCentroids <- PatternMergeDB.getCanonicalPatterns pid
+        let newIds = S.fromList $ map fst items
+            centroids = filter (\(cid, _) -> not $ S.member cid newIds) allCentroids
+            !(autoMerges, ambiguous) = PatternMerge.assignToCentroids centroids newWithEmbs
+            neededIds = ordNub $ map snd autoMerges <> map snd ambiguous
+        textMap <- if null neededIds then pure mempty else PatternMergeDB.fetchPatternTexts neededIds
+        let allTexts = Map.fromList items <> textMap
+            validMerge (newId, canId) = fromMaybe False $ cfg.canMerge <$> Map.lookup newId allTexts <*> Map.lookup canId allTexts
+            !validAutoMerges = filter validMerge autoMerges
+            -- Verify merges against sample logs when verification is available.
+            verified merges = case cfg.verifyMerge of
+              Nothing -> pure merges
+              Just fetchSamples -> do
+                samples <- fetchSamples (map fst merges)
+                pure $ filter (\(newId, canId) -> fromMaybe True $ PatternMerge.verifyMergeDecision <$> Map.lookup canId allTexts <*> Map.lookup newId samples) merges
+        verified validAutoMerges >>= void . PatternMergeDB.assignPatternsToCanonical
+        let !validAmbiguous = filter validMerge ambiguous
+        unless (null validAmbiguous) do
+          let pairs = mapMaybe (\(newId, canId) -> (,) <$> Map.lookup newId allTexts <*> Map.lookup canId allTexts) validAmbiguous
+          unless (null pairs) do
+            judgeResult <- cfg.judgeFn pairs
+            case judgeResult of
+              Left err -> Log.logAttention ("LLM judge failed for " <> cfg.label <> " patterns") (pid, err)
+              Right mergeIdxs -> do
+                let ambiguousV = V.fromList validAmbiguous
+                verified (mapMaybe (ambiguousV V.!?) mergeIdxs) >>= void . PatternMergeDB.assignPatternsToCanonical
 
 
 -- Endpoint template discovery ---------------------------------------------------
@@ -4033,7 +3883,7 @@ endpointTemplateDiscovery pid = do
         (eligible, leftovers) = partition isEligible grouped
         (!allUpdates, !allInserts) =
           foldMap
-            (\(k, hs) -> let ch = toXXHash $ pid.toText <> k.host <> k.method <> k.canonicalPath in (map (,ch,k.canonicalPath) hs, [(pid, k.canonicalPath, k.method, k.host, ch)]))
+            (\(k, hs) -> let ch = Endpoints.hashEndpoint pid.toText k.host k.method k.canonicalPath in (map (,ch,k.canonicalPath) hs, [(pid, k.canonicalPath, k.method, k.host, ch)]))
             eligible
     void $ Endpoints.setEndpointCanonical allUpdates
     Endpoints.insertCanonicalEndpoints allInserts
@@ -4238,7 +4088,7 @@ applyConfirmedGroups pid confirmed = do
               "Declined part of a confirmed merge: members do not agree on response shape"
               ("project_id", pid.toText, "group", gkey, "declined_templates", declined, "of", length byTemplate)
           unless (null agreeing) do
-            let canonOf method hst tp = toXXHash $ pid.toText <> hst <> method <> tp
+            let canonOf method hst = Endpoints.hashEndpoint pid.toText hst method
                 canonicals = [canonOf m hst tp | ((m, hst, tp), _) <- agreeing]
             void $ Endpoints.setEndpointCanonical [(h, canonOf m hst tp, tp) | ((m, hst, tp), hs) <- agreeing, h <- hs]
             Endpoints.insertCanonicalEndpoints [(pid, tp, m, hst, canonOf m hst tp) | ((m, hst, tp), _) <- agreeing]
@@ -4761,7 +4611,7 @@ processGitSyncAction pid conn sync repoRef teamMap =
         let relativePath = relative path
             teamIds = mapMaybe (`Map.lookup` teamMap) (fold schema.teams)
             dashboard =
-              (Dashboards.mkDashboardVM dashId pid now (Projects.UserId UUID.nil))
+              (Dashboards.mkDashboardVM dashId pid now Projects.systemUserId)
                 { Dashboards.baseTemplate = Just path
                 , Dashboards.schema = Just schema
                 , Dashboards.tags = V.fromList $ fold schema.tags
@@ -4834,7 +4684,7 @@ pushDashboardToGit conn sync pid dash message = do
 -- Skips template-based dashboards (schema = Nothing) since they have no custom content to sync.
 gitSyncPushAllDashboards :: Projects.ProjectId -> Maybe GitSync.GitHubSyncId -> ATBackgroundCtx ()
 gitSyncPushAllDashboards pid sidM = do
-  dashboards <- Dashboards.selectDashboardsSortedBy pid "updated_at"
+  dashboards <- Dashboards.selectDashboardsSortedBy pid Dashboards.Desc Dashboards.DSUpdatedAt
   let repositories = Map.fromListWith (<>) [(sid, [dash.id]) | dash <- dashboards, isJust dash.schema, Just sid <- [dash.gitSyncId], maybe True (== sid) sidM]
   failures <-
     lefts <$> forM (Map.toList repositories) \(sid, dashboardIds) -> try @_ @GitSyncJobFailure
@@ -4865,12 +4715,10 @@ prometheusScrapeBatchLimit = 1000
 -- of projects are idle at any given tick. One discovery scan replaces that entirely.
 dispatchServiceMapRollups :: Config.AuthContext -> UTCTime -> ATBackgroundCtx ()
 dispatchServiceMapRollups authCtx scheduledTime = when authCtx.config.enableServiceMapRollup do
-  let bucket = floorTo300 (addUTCTime (-600) scheduledTime)
+  let bucket = posixSecondsToUTCTime $ fromIntegral @Int (floor (utcTimeToPOSIXSeconds $ addUTCTime (-600) scheduledTime) `div` 300 * 300)
   projects <- ServiceGraph.projectsWithSpansInRange authCtx.env.enableTimefusionReads bucket (addUTCTime 300 bucket)
   Log.logInfo "Service-map rollup fan-out" $ AE.object ["bucket" AE..= bucket, "projects" AE..= length projects]
-  failures <- liftIO $ withResource authCtx.jobsPool \conn ->
-    lefts <$> forM projects \pid ->
-      first (pid.toText,) <$> tryAny (void $ createJob conn "background_jobs" (ServiceMapRollup pid bucket))
+  failures <- enqueueEach authCtx [(pid.toText, ServiceMapRollup pid bucket) | pid <- projects]
   forM_ failures \(pid, err) ->
     Log.logAttention "Service-map rollup enqueue failed — this project's map will have a gap for this bucket" (pid, displayException err)
 
@@ -4897,10 +4745,6 @@ serviceMapEdgeLimit :: Int
 serviceMapEdgeLimit = 20000
 
 
-floorTo300 :: UTCTime -> UTCTime
-floorTo300 t = posixSecondsToUTCTime $ fromIntegral @Int (floor (utcTimeToPOSIXSeconds t) `div` 300 * 300)
-
-
 -- | Dispatcher (PrometheusScrapeTick). Atomically leases the due targets — 'claimDueConfigs'
 -- uses @FOR UPDATE SKIP LOCKED@, so running this on every node never double-scrapes — then
 -- fans out one 'PrometheusScrapeOne' job per target. The actual scraping is done by workers
@@ -4914,9 +4758,7 @@ dispatchPrometheusScrapes authCtx = do
     -- Each enqueue is guarded: the targets were already leased (last_scraped_at bumped) by the
     -- claim, so if one createJob throws (pool exhaustion, transient DB error) we must not let it
     -- abort the loop and silently strand the remaining targets for a full interval — log and continue.
-    failures <- liftIO $ withResource authCtx.jobsPool \conn ->
-      lefts <$> forM due \cfg ->
-        first (cfg.id.toText,) <$> tryAny (void $ createJob conn "background_jobs" (PrometheusScrapeOne cfg.id))
+    failures <- enqueueEach authCtx [(cfg.id.toText, PrometheusScrapeOne cfg.id) | cfg <- due]
     forM_ failures \(cid, err) -> Log.logAttention "Prometheus scrape enqueue failed — target stranded until next tick" (cid, displayException err)
 
 
@@ -5009,7 +4851,7 @@ scrapeMetrics cfg = do
     -- Capture the fallback metricTime *after* the response arrives: a slow endpoint would
     -- otherwise backdate every timestamp-less sample by the scrape latency.
     now <- Time.currentTime
-    PromCfg.ingestScrapedBody cfg now (resp ^. responseBody)
+    PromCfg.ingestScrapedBody cfg now (resp ^. W.responseBody)
   case result of
     Right n -> void $ PromCfg.markScraped cfg.id ("ok: " <> show n <> " samples")
     Left err -> do
@@ -5125,7 +4967,6 @@ recordMonitorDataGap monitor at reason = do
               , replyPayload = payload
               , destinations = []
               }
-        let conflict = Tx.condemn $> Left result
         case result of
           Incidents.Recorded{} -> do
             when publish
@@ -5135,11 +4976,7 @@ recordMonitorDataGap monitor at reason = do
           -- The episode can close between reading it and recording the gap;
           -- a gap with nothing left open is simply nothing to report.
           Incidents.NoOpenEpisode -> pure $ Right ()
-          Incidents.OlderThanCurrentEpisode -> conflict
-          Incidents.UnknownIncidentSource -> conflict
-          Incidents.InactiveIncidentSource -> conflict
-          Incidents.IncidentIssueMismatch -> conflict
-          Incidents.EpisodeWithoutIssue -> conflict
+          Incidents.Rejected _ -> Tx.condemn $> Left result
   either (throwIO . IncidentCommitError) pure committed
 
 
@@ -5188,10 +5025,9 @@ evaluateWithResults monitor startWall title total durationNs = do
           monitor.alertThreshold
           monitor.alertRecoveryThreshold
           monitor.warningRecoveryThreshold
-          (prevStatus == Monitors.MSAlerting)
-          (prevStatus == Monitors.MSWarning)
+          prevStatus
           total
-      severity = case status of Monitors.MSAlerting -> SLError; Monitors.MSWarning -> SLWarn; _ -> SLInfo
+      severity = case status of Monitors.MSAlerting -> SLError; Monitors.MSWarning -> SLWarn; Monitors.MSNormal -> SLInfo
       attrs =
         Map.fromList
           [ ("monitor.id", AE.toJSON monitor.id)
@@ -5276,7 +5112,7 @@ evaluateWithResults monitor startWall title total durationNs = do
       else Hasql.transaction TxS.ReadCommitted TxS.Write commitStatus
   when committed
     $ tryStep "monitor-evaluation-telemetry"
-    $ insertSystemLog ctx.env.enablePostgresTelemetryWrites ctx.env.enableTimefusionWrites ctx.hasqlTimefusionUsesPgTypes otelLog{Telemetry.summary = generateSummary otelLog}
+    $ insertSystemLog (Telemetry.writeTargetFor ctx.env Nothing) ctx.hasqlTimefusionUsesPgTypes otelLog{Telemetry.summary = generateSummary otelLog}
   unless committed $ whenJustM (Monitors.queryMonitorById monId) \current ->
     when (isNothing current.deletedAt && isNothing current.deactivatedAt && maybe True (< startWall) current.lastEvaluated)
       $ evaluateWithResults current startWall title total durationNs
@@ -5291,64 +5127,67 @@ evaluateQueryMonitorValue monitor at value =
 
 
 -- | Determine monitor status with hysteresis support.
--- Args: triggerLessThan warnThreshold alertThreshold alertRecovery warnRecovery wasAlerting wasWarning value
+-- Args: triggerLessThan warnThreshold alertThreshold alertRecovery warnRecovery previousStatus value
 -- For "above" (triggerLessThan=False): alert when value >= threshold, recover when value < recoveryThreshold
 -- For "below" (triggerLessThan=True): alert when value <= threshold, recover when value > recoveryThreshold
 --
 -- Trigger tests (above direction):
 -- >>> import "monoscope" BackgroundJobs qualified as BJ
--- >>> BJ.monitorStatus False Nothing 100 Nothing Nothing False False 100
+-- >>> import "monoscope" Models.Apis.Monitors qualified as PM
+-- >>> BJ.monitorStatus False Nothing 100 Nothing Nothing PM.MSNormal 100
 -- MSAlerting
--- >>> BJ.monitorStatus False Nothing 100 Nothing Nothing False False 150
+-- >>> BJ.monitorStatus False Nothing 100 Nothing Nothing PM.MSNormal 150
 -- MSAlerting
--- >>> BJ.monitorStatus False Nothing 100 Nothing Nothing False False 99
+-- >>> BJ.monitorStatus False Nothing 100 Nothing Nothing PM.MSNormal 99
 -- MSNormal
 --
 -- Trigger tests (below direction):
--- >>> BJ.monitorStatus True Nothing 100 Nothing Nothing False False 100
+-- >>> BJ.monitorStatus True Nothing 100 Nothing Nothing PM.MSNormal 100
 -- MSAlerting
--- >>> BJ.monitorStatus True Nothing 100 Nothing Nothing False False 50
+-- >>> BJ.monitorStatus True Nothing 100 Nothing Nothing PM.MSNormal 50
 -- MSAlerting
--- >>> BJ.monitorStatus True Nothing 100 Nothing Nothing False False 101
+-- >>> BJ.monitorStatus True Nothing 100 Nothing Nothing PM.MSNormal 101
 -- MSNormal
 --
 -- Hysteresis: stays alerting until recovery threshold crossed (above)
--- >>> BJ.monitorStatus False Nothing 100 (Just 80) Nothing True False 95
+-- >>> BJ.monitorStatus False Nothing 100 (Just 80) Nothing PM.MSAlerting 95
 -- MSAlerting
--- >>> BJ.monitorStatus False Nothing 100 (Just 80) Nothing True False 79
+-- >>> BJ.monitorStatus False Nothing 100 (Just 80) Nothing PM.MSAlerting 79
 -- MSNormal
 --
 -- Hysteresis: stays alerting until recovery threshold crossed (below)
--- >>> BJ.monitorStatus True Nothing 100 (Just 120) Nothing True False 105
+-- >>> BJ.monitorStatus True Nothing 100 (Just 120) Nothing PM.MSAlerting 105
 -- MSAlerting
--- >>> BJ.monitorStatus True Nothing 100 (Just 120) Nothing True False 121
+-- >>> BJ.monitorStatus True Nothing 100 (Just 120) Nothing PM.MSAlerting 121
 -- MSNormal
 --
 -- Warning threshold with hysteresis
--- >>> BJ.monitorStatus False (Just 80) 100 Nothing (Just 60) False True 75
+-- >>> BJ.monitorStatus False (Just 80) 100 Nothing (Just 60) PM.MSWarning 75
 -- MSWarning
--- >>> BJ.monitorStatus False (Just 80) 100 Nothing (Just 60) False True 59
+-- >>> BJ.monitorStatus False (Just 80) 100 Nothing (Just 60) PM.MSWarning 59
 -- MSNormal
 --
 -- Edge case: recovery > threshold (above) - no hysteresis band
--- >>> BJ.monitorStatus False Nothing 100 (Just 120) Nothing True False 110
+-- >>> BJ.monitorStatus False Nothing 100 (Just 120) Nothing PM.MSAlerting 110
 -- MSAlerting
--- >>> BJ.monitorStatus False Nothing 100 (Just 120) Nothing True False 99
+-- >>> BJ.monitorStatus False Nothing 100 (Just 120) Nothing PM.MSAlerting 99
 -- MSNormal
 --
 -- Edge case: recovery < threshold (below) - no hysteresis band
--- >>> BJ.monitorStatus True Nothing 100 (Just 80) Nothing True False 95
+-- >>> BJ.monitorStatus True Nothing 100 (Just 80) Nothing PM.MSAlerting 95
 -- MSAlerting
--- >>> BJ.monitorStatus True Nothing 100 (Just 80) Nothing True False 101
+-- >>> BJ.monitorStatus True Nothing 100 (Just 80) Nothing PM.MSAlerting 101
 -- MSNormal
-monitorStatus :: Bool -> Maybe Double -> Double -> Maybe Double -> Maybe Double -> Bool -> Bool -> Double -> Monitors.MonitorStatus
-monitorStatus triggerLessThan warnThreshold alertThreshold alertRecovery warnRecovery wasAlerting wasWarning value
+monitorStatus :: Bool -> Maybe Double -> Double -> Maybe Double -> Maybe Double -> Monitors.MonitorStatus -> Double -> Monitors.MonitorStatus
+monitorStatus triggerLessThan warnThreshold alertThreshold alertRecovery warnRecovery prev value
   | breached alertThreshold = Monitors.MSAlerting
   | maybe False breached warnThreshold = Monitors.MSWarning
-  | wasAlerting && not (recovered alertRecovery alertThreshold) = Monitors.MSAlerting
-  | wasWarning && not (recovered warnRecovery (fromMaybe alertThreshold warnThreshold)) = Monitors.MSWarning
-  | otherwise = Monitors.MSNormal
+  | otherwise = case prev of
+      Monitors.MSAlerting -> holdUnless (recovered alertRecovery alertThreshold)
+      Monitors.MSWarning -> holdUnless (recovered warnRecovery (fromMaybe alertThreshold warnThreshold))
+      Monitors.MSNormal -> Monitors.MSNormal
   where
+    holdUnless r = if r then Monitors.MSNormal else prev
     breached t = if triggerLessThan then t >= value else t <= value
     recovered r t = if triggerLessThan then value > fromMaybe t r else value < fromMaybe t r
 
@@ -5555,10 +5394,9 @@ processNewLogPatterns pid authCtx = do
           Log.logInfo "Created issue for new log pattern" (pid, lp.id, issue.id)
           whenJust projectM \project -> do
             let issueUrl = projectUrl authCtx pid <> "/issues/" <> issue.id.toText
-                occCount = fromIntegral lp.occurrenceCount :: Int
-                alert = LogPatternAlert{issueUrl, patternText = lp.logPattern, sampleMessage = lp.sampleMessage, logLevel = lp.logLevel, serviceName = lp.serviceName, sourceField = lp.sourceField, occurrenceCount = occCount, isError = lp.isError}
-                (subj, html) = ET.logPatternEmail project.title issueUrl lp.logPattern lp.sampleMessage lp.logLevel lp.serviceName lp.sourceField occCount lp.isError
-            void $ notifyIssue issue project users newPatternCooldownHours "log_pattern" alert issueUrl subj html
+                alert = ET.NewLogPattern{issueUrl, patternText = lp.logPattern, sampleMessage = lp.sampleMessage, logLevel = lp.logLevel, serviceName = lp.serviceName, sourceField = lp.sourceField, occurrenceCount = fromIntegral lp.occurrenceCount, isError = lp.isError}
+                (subj, html) = ET.logPatternEmail project.title alert
+            void $ notifyIssue issue project users newPatternCooldownHours "log_pattern" (LogPatternAlert alert) issueUrl subj html
           pure issue.id
         unless (V.null results) $ enqueueJobs authCtx [EnhanceIssuesWithLLM pid results]
 
@@ -5680,7 +5518,7 @@ detectFeedback pid = do
   forM_ records \r -> do
     let attr k = Telemetry.spanAttr k r
         bodyText = (^? AL._String) =<< unAesonTextMaybe r.body
-        tidM = nonEmptyT (r.context >>= (.trace_id))
+        tidM = Telemetry.traceIdOf r
     whenJust (mfilter (not . T.null . T.strip) (attr "feedback.message" <|> bodyText)) \message ->
       whenNothingM_ (Issues.selectIssueByHash pid (Issues.feedbackTargetHash r.id) Issues.AnyIssue) do
         related <- join <$> forM tidM \tid -> tfRead (Telemetry.traceErrorHash pid tid r.timestamp)
@@ -5724,7 +5562,7 @@ detectFrontendIssues pid = do
               , pageUrl
               , clickCount = n
               , sessionId = attr "session.id" sample
-              , traceId = nonEmptyT (sample.context >>= (.trace_id))
+              , traceId = Telemetry.traceIdOf sample
               , observedAt = sample.timestamp
               }
   forM_ (Telemetry.bursts (.timestamp) 3 2 keyed) \((_, pageUrl, el), cs) -> open Issues.FKRageClick el pageUrl (length cs) (head cs)
@@ -5764,8 +5602,7 @@ backfillErrorShapes pid = do
     -- Same masks as the ingest gate: a backfilled shape computed without them would
     -- never match what an arrival resolves to, and the gate would look correct while
     -- finding nothing.
-    masksByType <- PatternMergeDB.learnedErrorMasks pid
-    let masksFor et = [m | (t, m) <- masksByType, t == et]
+    masksFor <- PatternMergeDB.learnedErrorMasks pid
     updated <-
       PatternMergeDB.setErrorShapeHashes
         [(eid, EF.shapeWithMasks (masksFor etype) pid.toText etype msg) | (eid, etype, msg) <- missing]
@@ -5855,7 +5692,7 @@ reviewErrorGroups pid = do
             then Log.logInfo "Error group review: nothing new in this window" ("project_id", pid.toText, "examined", length groups)
             else do
               members <- forM fresh \(gkey, mhash, g) -> do
-                texts <- PatternMergeDB.fetchErrorTexts (V.toList g.memberIds)
+                texts <- PatternMergeDB.fetchPatternTexts (V.toList g.memberIds)
                 -- NORMALISED, not raw. `error_patterns.message` is stored exactly as
                 -- the customer's code emitted it — the messages that started this work
                 -- carry order ids and data tokens inline — and normalisation otherwise
@@ -5927,13 +5764,13 @@ applyConfirmedErrorGroups pid = do
       -- The mechanical gate, and the only one an author of error text cannot argue
       -- with. Confirmations and the refutation both re-read the same attacker-supplied
       -- message on every pass; this one never asks the model anything.
-      texts <- PatternMergeDB.fetchErrorTexts (V.toList g.memberIds)
+      texts <- PatternMergeDB.fetchPatternTexts (V.toList g.memberIds)
       let canonText = fromMaybe "" $ Map.lookup canonical texts
           mergeable = V.filter (\m -> maybe False (PatternMerge.errorCanMerge canonText) (Map.lookup m texts)) rest
       if V.null mergeable
         then Log.logAttention "Error group cleared review but no member passed errorCanMerge, not merging" ("project_id", pid.toText, "group", gkey)
         else do
-          void $ PatternMergeDB.assignErrorsToCanonical [(m, canonical) | m <- V.toList mergeable]
+          void $ PatternMergeDB.assignPatternsToCanonical [(m, canonical) | m <- V.toList mergeable]
           PatternMergeDB.markErrorGroupApplied pid gkey (V.singleton canonical)
           tryStep "errorMaskPromotion"
             $ promoteErrorMask pid gkey g.errorType (Map.elems $ Map.restrictKeys texts (S.fromList (canonical : V.toList mergeable))) g.shapeKey
@@ -6023,8 +5860,8 @@ promoteErrorMask pid gkey etype msgs canonShape = do
           -- Re-file the review and its members under the post-mask shape. Skipped when
           -- the mask does not move this group's own shape, which would make the rekey
           -- a no-op update over the whole project.
-          masks <- map snd . filter ((== etype) . fst) <$> PatternMergeDB.learnedErrorMasks pid
-          let newShape = EF.shapeWithMasks masks pid.toText etype (fromMaybe "" $ viaNonEmpty head msgs)
+          masksFor <- PatternMergeDB.learnedErrorMasks pid
+          let newShape = EF.shapeWithMasks (masksFor etype) pid.toText etype (fromMaybe "" $ viaNonEmpty head msgs)
           moved <- if newShape == canonShape then pure 0 else PatternMergeDB.rekeyErrorReviewShape pid canonShape newShape
           Log.logInfo
             "Promoted an error group to a deterministic mask"

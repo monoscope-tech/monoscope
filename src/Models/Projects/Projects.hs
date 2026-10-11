@@ -3,6 +3,7 @@ module Models.Projects.Projects (
   User (..),
   UserId,
   pattern UserId,
+  systemUserId,
   createUser,
   userIdByEmail,
   insertUser,
@@ -76,7 +77,8 @@ module Models.Projects.Projects (
   isByosPlan,
   isOnboarding,
   LemonSub (..),
-  LemonSubId (..),
+  LemonSubId,
+  pattern LemonSubId,
   addSubscription,
   getTotalUsage,
   getDailyUsageBreakdown,
@@ -195,6 +197,12 @@ pattern UserId u = UUIDId u
 
 
 {-# COMPLETE UserId #-}
+
+
+-- | The creator recorded on rows the system makes rather than a person (API and
+-- git-sync dashboards).
+systemUserId :: UserId
+systemUserId = UserId UUID.nil
 
 
 data User = User
@@ -880,9 +888,14 @@ queryLibItemDelete pid uid qId = EHasql.interpExecute_ [HI.sql|DELETE from proje
 
 ---------------------------------
 -- LemonSqueezy subscription management
-newtype LemonSubId = LemonSubId {lemonSubId :: UUID.UUID}
-  deriving stock (Generic, Show)
-  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, NFData, Ord, ToField)
+type LemonSubId = UUIDId "lemon_sub"
+
+
+pattern LemonSubId :: UUID.UUID -> LemonSubId
+pattern LemonSubId u = UUIDId u
+
+
+{-# COMPLETE LemonSubId #-}
 
 
 data LemonSub = LemonSub

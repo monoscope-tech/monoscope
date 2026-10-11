@@ -32,6 +32,8 @@ module Models.Apis.Issues (
 
   -- * Issue Data Types
   APIChangeData (..),
+  apiChangeDataFrom,
+  hasFieldDrift,
   RuntimeExceptionData (..),
   QueryAlertData (..),
   ThresholdDirection (..),
@@ -237,8 +239,9 @@ import Models.Apis.ApiChanges qualified as ApiChanges
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.LogPatterns (RateChangeDirection (..))
 import Models.Apis.LogPatterns qualified as LogPatterns
+import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), decodeEnumSC, rawSql, selectFrom)
+import Pkg.DeriveUtils (SqlEnum (..), UUIDId (..), WrappedEnumSC (..), rawSql, selectFrom)
 import Pkg.Parser (ScopedQuery (..))
 import Relude hiding (id)
 import Servant (FromHttpApiData (..), ServerError, err500, errBody)
@@ -264,7 +267,7 @@ data IssueType
   | Feedback
   deriving stock (Bounded, Enum, Eq, Generic, Ord, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC ('Just "apis.issue_type") "" IssueType
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, SqlEnum, ToField, ToSchema) via WrappedEnumSC ('Just "apis.issue_type") "" IssueType
 
 
 -- | Why a cron monitor opened an issue.
@@ -374,9 +377,9 @@ data PerformanceData = PerformanceData
 -- | Hash prefix used in otel_logs_and_spans hashes column
 hashPrefix :: IssueType -> Maybe Text
 hashPrefix = \case
-  LogPattern -> Just "pat:"
-  LogPatternRateChange -> Just "pat:"
-  RuntimeException -> Just "err:"
+  LogPattern -> Just LogQueries.patHashPrefix
+  LogPatternRateChange -> Just LogQueries.patHashPrefix
+  RuntimeException -> Just LogQueries.errHashPrefix
   ApiChange -> Just "" -- endpoint hash is stored unprefixed on span hashes
   QueryAlert -> Nothing
   Performance -> Nothing -- detected over span shapes; spans carry no issue hash
@@ -457,8 +460,12 @@ serviceLabel = fromMaybe "unknown-service"
 
 isNewEndpointOnly :: Issue -> Bool
 isNewEndpointOnly issue = case issuePayload issue of
-  Just (ApiChangeP d) -> all V.null ([d.newFields, d.deletedFields, d.modifiedFields] :: [V.Vector Text])
+  Just (ApiChangeP d) -> not $ hasFieldDrift d
   _ -> False
+
+
+hasFieldDrift :: APIChangeData -> Bool
+hasFieldDrift d = not $ all V.null ([d.newFields, d.deletedFields, d.modifiedFields] :: [V.Vector Text])
 
 
 -- | API Change issue data
@@ -477,6 +484,21 @@ data APIChangeData = APIChangeData
   deriving anyclass (NFData)
   deriving (FromField, ToField) via Aeson APIChangeData
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake APIChangeData
+
+
+-- | Drift accumulates onto an open issue; endpoint metadata comes from the newer side.
+instance Semigroup APIChangeData where
+  a <> b =
+    b
+      { anomalyHashes = u (.anomalyHashes)
+      , shapeChanges = a.shapeChanges <> b.shapeChanges
+      , formatChanges = a.formatChanges <> b.formatChanges
+      , newFields = u (.newFields)
+      , deletedFields = u (.deletedFields)
+      , modifiedFields = u (.modifiedFields)
+      }
+    where
+      u f = V.fromList $ ordNub $ V.toList $ f a <> f b
 
 
 -- | Runtime Exception issue data
@@ -602,7 +624,7 @@ insertIssueReturningId = fmap HI.getOneRow . Hasql.interp . insertIssueSql
 
 
 insertIssueReturningIdTx :: Issue -> Tx.Transaction IssueId
-insertIssueReturningIdTx = fmap HI.getOneRow . Tx.statement () . HI.interp True . insertIssueSql
+insertIssueReturningIdTx = Hasql.oneTx . insertIssueSql
 
 
 -- | The issue a recurring signal belongs to: the existing one, reopened, or a
@@ -829,7 +851,7 @@ selectIssues pid projection f = do
       lastSeenAt pfx =
         let col = rawSql pfx
          in [HI.sql| COALESCE(
-               CASE WHEN ^{col}issue_type = 'runtime_exception' THEN GREATEST(
+               CASE WHEN ^{col}issue_type = ^{enumLit RuntimeException} THEN GREATEST(
                  (SELECT MAX(GREATEST(ep.last_event_at, ep.recent_trace_at))
                   FROM apis.error_patterns ep
                   WHERE ep.project_id = ^{col}project_id
@@ -874,14 +896,14 @@ selectIssues pid projection f = do
           NULL::timestamp with time zone, NULL::bigint,
           i.target_hash, i.environment, i.seq_num::bigint, i.parent_hash, i.is_framework, i.cooldown_until, i.last_notified_at, i.acknowledged_until, i.assignee_id, i.archived_until, i.archive_until_escalating,
           CASE
-            WHEN i.issue_type = 'runtime_exception' THEN COALESCE(err_ev.cnt, 0)
-            WHEN i.issue_type IN ('log_pattern', 'log_pattern_rate_change') THEN COALESCE(lp_ev.cnt, 0)
+            WHEN i.issue_type = ^{enumLit RuntimeException} THEN COALESCE(err_ev.cnt, 0)
+            WHEN i.issue_type IN (^{enumLit LogPattern}, ^{enumLit LogPatternRateChange}) THEN COALESCE(lp_ev.cnt, 0)
             ELSE i.affected_requests
           END::bigint AS event_count,
           ^{lastSeenAt "i."}, lat.event,
           CASE
-            WHEN i.issue_type = 'runtime_exception' THEN COALESCE(err_ev.buckets, '{}'::bigint[])
-            WHEN i.issue_type IN ('log_pattern', 'log_pattern_rate_change') THEN COALESCE(lp_ev.buckets, '{}'::bigint[])
+            WHEN i.issue_type = ^{enumLit RuntimeException} THEN COALESCE(err_ev.buckets, '{}'::bigint[])
+            WHEN i.issue_type IN (^{enumLit LogPattern}, ^{enumLit LogPatternRateChange}) THEN COALESCE(lp_ev.buckets, '{}'::bigint[])
             ELSE '{}'::bigint[]
           END,
           COALESCE((SELECT ep.users_count FROM apis.error_patterns ep WHERE ep.project_id = i.project_id AND ep.hash = i.target_hash), 0)::bigint AS users_count
@@ -898,7 +920,7 @@ selectIssues pid projection f = do
             ) ON ehs.hour_bucket >= d AND ehs.hour_bucket < d + ^{stepSql}
             GROUP BY d
           ) sub
-        ) err_ev ON i.issue_type = 'runtime_exception'
+        ) err_ev ON i.issue_type = ^{enumLit RuntimeException}
         LEFT JOIN LATERAL (
           SELECT SUM(day_cnt)::bigint AS cnt, array_agg(day_cnt ORDER BY day) AS buckets FROM (
             SELECT d AS day, COALESCE(SUM(lhs.event_count), 0)::bigint AS day_cnt
@@ -908,10 +930,10 @@ selectIssues pid projection f = do
               AND lhs.hour_bucket >= d AND lhs.hour_bucket < d + ^{stepSql}
             GROUP BY d
           ) sub
-        ) lp_ev ON i.issue_type IN ('log_pattern', 'log_pattern_rate_change')
+        ) lp_ev ON i.issue_type IN (^{enumLit LogPattern}, ^{enumLit LogPatternRateChange})
         LEFT JOIN LATERAL (
           SELECT a.event FROM apis.issue_activity_log a
-          WHERE a.issue_id = i.id AND a.event IN ('resolved', 'auto_resolved', 'reopened', 'regressed', 'escalated', 'ack_expired')
+          WHERE a.issue_id = i.id AND ^{stateEventSql}
           ORDER BY a.created_at DESC LIMIT 1
         ) lat ON TRUE
         WHERE i.project_id = #{pid} ^{iFilters}
@@ -924,17 +946,27 @@ selectIssues pid projection f = do
   pure (issues, total)
 
 
--- | Update issue with new anomaly data
-updateIssueWithNewAnomaly :: (DB es, Time :> es) => IssueId -> APIChangeData -> Eff es ()
-updateIssueWithNewAnomaly issueId newData = do
+-- | Fold an anomaly group's drift into an open API-change issue, escalating it on a breaking change.
+-- The row lock keeps concurrent jobs folding into the same issue from dropping each other's drift.
+updateIssueWithNewAnomaly :: (DB es, Time :> es) => IssueId -> NonEmpty ApiChanges.AnomalyVM -> Eff es ()
+updateIssueWithNewAnomaly issueId anomalies = do
   now <- Time.currentTime
-  Hasql.interpExecute_
-    [HI.sql|
-      UPDATE apis.issues SET
-        issue_data = issue_data || #{Aeson newData}::jsonb,
-        affected_requests = affected_requests + 1,
-        updated_at = #{now}
-      WHERE id = #{issueId} |]
+  let new = apiChangeDataFrom anomalies
+      breaking = not (V.null new.deletedFields && V.null new.modifiedFields)
+  Hasql.transaction TxS.ReadCommitted TxS.Write do
+    old <-
+      Hasql.queryTx @[HI.OneColumn (Aeson AE.Value)]
+        [HI.sql| SELECT issue_data FROM apis.issues WHERE id = #{issueId} AND issue_type = #{ApiChange}::apis.issue_type FOR UPDATE |]
+    let merged = maybe new (<> new) $ AET.parseMaybe AE.parseJSON . getAeson . HI.getOneColumn =<< listToMaybe old
+    Hasql.executeTx
+      [HI.sql|
+        UPDATE apis.issues SET
+          issue_data = issue_data || #{Aeson merged}::jsonb,
+          critical = critical OR #{breaking},
+          severity = CASE WHEN #{breaking} THEN #{Critical} ELSE severity END,
+          affected_requests = affected_requests + 1,
+          updated_at = #{now}
+        WHERE id = #{issueId} |]
 
 
 updateIssueEnhancement :: (DB es, Time :> es) => IssueId -> Text -> Text -> Text -> Eff es ()
@@ -1016,10 +1048,9 @@ setAckState pid iids ackM
             WHERE project_id = #{pid} AND id = ANY(#{iids}::uuid[])
             ORDER BY project_id, target_hash, issue_type, updated_at DESC, id DESC
           )|]
-      void
-        $ Hasql.interpExecute
-          ( keepers
-              <> [HI.sql|
+      Hasql.interpExecute_
+        ( keepers
+            <> [HI.sql|
           UPDATE apis.issues i
           SET archived_at = app_now(), updated_at = app_now()
           FROM keepers k
@@ -1029,7 +1060,7 @@ setAckState pid iids ackM
             AND i.id <> k.id
             AND (i.id = ANY(#{iids}::uuid[])
                  OR (i.acknowledged_at IS NULL AND i.archived_at IS NULL)) |]
-          )
+        )
       Hasql.interpExecute
         ( keepers
             <> [HI.sql|
@@ -1125,10 +1156,9 @@ expireAcks now = do
         FROM expired
         ORDER BY project_id, target_hash, issue_type, updated_at DESC, id DESC
       )|]
-  void
-    $ Hasql.interpExecute
-      ( expiredKeepers
-          <> [HI.sql|
+  Hasql.interpExecute_
+    ( expiredKeepers
+        <> [HI.sql|
       UPDATE apis.issues i
       SET archived_at = #{Just now}, updated_at = #{now}
       FROM keepers k
@@ -1138,20 +1168,19 @@ expireAcks now = do
         AND i.id <> k.id
         AND (i.id IN (SELECT id FROM expired)
              OR (i.acknowledged_at IS NULL AND i.archived_at IS NULL)) |]
-      )
+    )
   -- The losers are archived above, so re-deriving keepers here yields exactly the
   -- rows that must be reopened.
-  HI.getOneColumn
-    <<$>> Hasql.interp
-      ( expiredKeepers
-          <> [HI.sql|
+  Hasql.interp
+    ( expiredKeepers
+        <> [HI.sql|
         UPDATE apis.issues i
         SET acknowledged_at = NULL, acknowledged_by = NULL, acknowledged_until = NULL,
             archived_at = NULL, updated_at = #{now}
         FROM keepers k
         WHERE i.id = k.id
         RETURNING i.id |]
-      )
+    )
 
 
 -- | True if a live acknowledgement for this (project, target, type) is still
@@ -1244,7 +1273,7 @@ expireArchives now = liftArchives [HI.sql| i.archived_until <= #{now} |]
 
 -- | Runtime-exception issues archived "until escalating" for an error that just escalated.
 wakeOnEscalation :: DB es => Projects.ProjectId -> Text -> Eff es [IssueId]
-wakeOnEscalation pid errHash = liftArchives [HI.sql| i.archive_until_escalating AND i.project_id = #{pid} AND i.target_hash = #{errHash} AND i.issue_type = 'runtime_exception' |]
+wakeOnEscalation pid errHash = liftArchives [HI.sql| i.archive_until_escalating AND i.project_id = #{pid} AND i.target_hash = #{errHash} AND i.issue_type = ^{enumLit RuntimeException} |]
 
 
 -- | A saved issue-list view: a name for a query string of list parameters.
@@ -1288,30 +1317,35 @@ autoArchiveStaleDiscoveryIssues pid now days =
       WHERE project_id = #{pid}
         AND acknowledged_at IS NULL
         AND archived_at IS NULL
-        AND issue_type IN (
-          'log_pattern'::apis.issue_type,
-          'log_pattern_rate_change'::apis.issue_type,
-          'api_change'::apis.issue_type
-        )
+        AND issue_type IN (^{enumLit LogPattern}, ^{enumLit LogPatternRateChange}, ^{enumLit ApiChange})
         AND updated_at < #{now} - (INTERVAL '1 day' * #{days}) |]
+
+
+-- | The issue payload for one endpoint's anomaly group; endpoint metadata comes from the
+-- first anomaly since all rows in a group join the same endpoint. Field drift comes from
+-- the group's shape anomalies; deletions are never detected (the learned schema only grows).
+apiChangeDataFrom :: NonEmpty ApiChanges.AnomalyVM -> APIChangeData
+apiChangeDataFrom anomalies@(a :| _) =
+  APIChangeData
+    { endpointMethod = fromMaybe "UNKNOWN" a.endpointMethod
+    , endpointPath = fromMaybe "/" a.endpointUrlPath
+    , endpointHost = fromMaybe "Unknown" a.endpointHost
+    , anomalyHashes = V.fromList $ toList $ fmap (.targetHash) anomalies
+    , shapeChanges = V.empty
+    , formatChanges = V.empty
+    , newFields = fields (.newFields)
+    , deletedFields = V.empty
+    , modifiedFields = fields (.modifiedFields)
+    }
+  where
+    fields f = V.fromList $ ordNub $ concatMap (V.toList . f) anomalies
 
 
 -- | Create API Change issue from anomalies
 createAPIChangeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Text -> NonEmpty ApiChanges.AnomalyVM -> Eff es Issue
 createAPIChangeIssue projectId endpointHash anomalies = do
   let firstAnomaly = head anomalies
-      apiChangeData =
-        APIChangeData
-          { endpointMethod = fromMaybe "UNKNOWN" firstAnomaly.endpointMethod
-          , endpointPath = fromMaybe "/" firstAnomaly.endpointUrlPath
-          , endpointHost = fromMaybe "Unknown" firstAnomaly.endpointHost
-          , anomalyHashes = V.fromList $ toList $ fmap (.targetHash) anomalies
-          , shapeChanges = V.empty
-          , formatChanges = V.empty
-          , newFields = foldMap (.shapeNewUniqueFields) anomalies
-          , deletedFields = foldMap (.shapeDeletedFields) anomalies
-          , modifiedFields = foldMap (.shapeUpdatedFieldFormats) anomalies
-          }
+      apiChangeData = apiChangeDataFrom anomalies
       breakingChanges = V.length apiChangeData.deletedFields + V.length apiChangeData.modifiedFields
       isCritical = breakingChanges > 0
   mkIssue
@@ -1601,29 +1635,18 @@ getOrCreateConversation pid convId convType ctx = do
 
 
 listConversations :: DB es => Projects.ProjectId -> Eff es [ConversationSummary]
-listConversations pid =
-  Hasql.interp
-    [HI.sql|SELECT c.conversation_id,
-      COALESCE(NULLIF(c.title, ''), NULLIF(i.title, ''), NULLIF(first_message.content, ''), 'AI conversation'),
-      c.conversation_type, c.updated_at, r.template_key,
-      COALESCE(r.active, FALSE), r.interval_minutes, r.next_run_at, r.running_since, r.destination
-      FROM apis.ai_conversations c
-      LEFT JOIN apis.issues i ON i.project_id = c.project_id AND i.id = c.conversation_id
-      LEFT JOIN apis.ai_routines r ON r.project_id = c.project_id AND r.conversation_id = c.conversation_id
-      LEFT JOIN LATERAL (
-        SELECT LEFT(m.content, 100) AS content FROM apis.ai_chat_messages m
-        WHERE m.project_id = c.project_id AND m.conversation_id = c.conversation_id AND m.role = 'user'
-        ORDER BY m.created_at LIMIT 1
-      ) first_message ON TRUE
-      WHERE c.project_id = #{pid}
-      ORDER BY (r.id IS NOT NULL) DESC, c.updated_at DESC|]
+listConversations pid = Hasql.interp $ conversationSummarySql "AI conversation" [HI.sql|WHERE c.project_id = #{pid} ORDER BY (r.id IS NOT NULL) DESC, c.updated_at DESC|]
 
 
 getConversation :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Eff es (Maybe ConversationSummary)
-getConversation pid convId =
-  Hasql.interpOne
-    [HI.sql|SELECT c.conversation_id,
-      COALESCE(NULLIF(c.title, ''), NULLIF(i.title, ''), NULLIF(first_message.content, ''), 'New chat'),
+getConversation pid convId = Hasql.interpOne $ conversationSummarySql "New chat" [HI.sql|WHERE c.project_id = #{pid} AND c.conversation_id = #{convId}|]
+
+
+-- | 'ConversationSummary' columns, titled by @fallback@ when nothing better exists.
+conversationSummarySql :: Text -> HI.Sql -> HI.Sql
+conversationSummarySql fallback filters =
+  [HI.sql|SELECT c.conversation_id,
+      COALESCE(NULLIF(c.title, ''), NULLIF(i.title, ''), NULLIF(first_message.content, ''), #{fallback}),
       c.conversation_type, c.updated_at, r.template_key,
       COALESCE(r.active, FALSE), r.interval_minutes, r.next_run_at, r.running_since, r.destination
       FROM apis.ai_conversations c
@@ -1633,8 +1656,8 @@ getConversation pid convId =
         SELECT LEFT(m.content, 100) AS content FROM apis.ai_chat_messages m
         WHERE m.project_id = c.project_id AND m.conversation_id = c.conversation_id AND m.role = 'user'
         ORDER BY m.created_at LIMIT 1
-      ) first_message ON TRUE
-      WHERE c.project_id = #{pid} AND c.conversation_id = #{convId}|]
+      ) first_message ON TRUE |]
+    <> filters
 
 
 -- | Recover the typed anomaly subject at the persistence boundary. Other
@@ -1652,9 +1675,8 @@ conversationNeedsTitle pid convId =
 
 setConversationTitle :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Text -> Eff es ()
 setConversationTitle pid convId title =
-  void
-    $ Hasql.interpExecute
-      [HI.sql|UPDATE apis.ai_conversations SET title = #{T.take 100 $ T.strip title}
+  Hasql.interpExecute_
+    [HI.sql|UPDATE apis.ai_conversations SET title = #{T.take 100 $ T.strip title}
       WHERE project_id = #{pid} AND conversation_id = #{convId} AND title IS NULL|]
 
 
@@ -1817,9 +1839,8 @@ listDueRoutines limit =
 
 pauseRoutine :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Eff es ()
 pauseRoutine pid convId =
-  void
-    $ Hasql.interpExecute
-      [HI.sql|UPDATE apis.ai_routines SET active = FALSE,
+  Hasql.interpExecute_
+    [HI.sql|UPDATE apis.ai_routines SET active = FALSE,
         next_run_at = CASE WHEN running_since IS NULL THEN NULL ELSE next_run_at END
         WHERE project_id = #{pid} AND conversation_id = #{convId}|]
 
@@ -2172,17 +2193,7 @@ payloadType = \case
 -- fields a level deeper, so those merges would write keys at the wrong level and
 -- every row already in the table would stop parsing.
 payloadJson :: IssuePayload -> AE.Value
-payloadJson = \case
-  ApiChangeP d -> AE.toJSON d
-  RuntimeExceptionP d -> AE.toJSON d
-  QueryAlertP d -> AE.toJSON d
-  LogPatternP d -> AE.toJSON d
-  LogPatternRateChangeP d -> AE.toJSON d
-  PerformanceP d -> AE.toJSON d
-  FrontendP d -> AE.toJSON d
-  FeedbackP d -> AE.toJSON d
-  UptimeP d -> AE.toJSON d
-  CronP d -> AE.toJSON d
+payloadJson = AE.genericToJSON AE.defaultOptions{AE.sumEncoding = AE.UntaggedValue}
 
 
 -- | Pair a stored @issue_type@ with its @issue_data@. 'Nothing' means the two
@@ -2313,7 +2324,7 @@ data IssueEvent
 data EpisodeKind = EKAlert | EKObservation | EKReminder | EKDataUnavailable | EKRecovered | EKResolved
   deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "EK" EpisodeKind
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "EK" EpisodeKind
 
 
 -- | One thing that happened to an issue: a lifecycle transition someone (or the
@@ -2338,7 +2349,7 @@ data ActivityEvent = Lifecycle IssueEvent | Episode EpisodeKind
 -- (Nothing,Nothing)
 parseActivityEvent :: Text -> Maybe ActivityEvent
 parseActivityEvent raw = case T.stripPrefix "episode:" raw of
-  Just kind -> Episode <$> decodeEnumSC @"EK" (toString kind)
+  Just kind -> Episode <$> rightToMaybe (parseUrlPiece kind)
   Nothing -> Lifecycle <$> rightToMaybe (parseUrlPiece raw)
 
 
@@ -2357,10 +2368,8 @@ data IssueActivity = IssueActivity
 --
 -- The list view derives the same thing as a LATERAL inside its paged query
 -- ('selectIssues'); pulling that out into a shared helper would turn one join
--- into an N+1 across the page, so the single-issue case gets its own scalar. The
--- event set is the one that matters — the two must agree on *which* events count
--- as a state change, or the list and the detail page will disagree about whether
--- an issue has regressed.
+-- into an N+1 across the page, so the single-issue case gets its own scalar; the
+-- two share 'stateEventSql' so they agree on which events count as a state change.
 selectLatestStateEvent :: DB es => IssueId -> Eff es (Maybe IssueEvent)
 selectLatestStateEvent iid =
   -- Decoded as Text then parsed, the same way 'parseIssueType' handles its column:
@@ -2369,8 +2378,12 @@ selectLatestStateEvent iid =
     . listToMaybe @Text
     <$> Hasql.interp
       [HI.sql| SELECT a.event FROM apis.issue_activity_log a
-               WHERE a.issue_id = #{iid} AND a.event IN ('resolved', 'auto_resolved', 'reopened', 'regressed', 'escalated', 'ack_expired')
+               WHERE a.issue_id = #{iid} AND ^{stateEventSql}
                ORDER BY a.created_at DESC LIMIT 1 |]
+
+
+stateEventSql :: HI.Sql
+stateEventSql = [HI.sql|a.event IN ('resolved', 'auto_resolved', 'reopened', 'regressed', 'escalated', 'ack_expired')|]
 
 
 logIssueActivity :: (DB es, Time :> es) => IssueId -> IssueEvent -> Maybe Projects.UserId -> Maybe AE.Value -> Eff es ()
@@ -2454,7 +2467,7 @@ data ReportListItem = ReportListItem
 
 
 addReport :: DB es => Report -> Eff es ()
-addReport (r :: Report) =
+addReport r =
   Hasql.interpExecute_
     [HI.sql| INSERT INTO apis.reports (id, created_at, updated_at, project_id, report_type, report_json, start_time, end_time)
       VALUES (#{r.id}, #{r.createdAt}, #{r.updatedAt}, #{r.projectId}, #{r.reportType}, #{r.reportJson}, #{r.startTime}, #{r.endTime}) |]

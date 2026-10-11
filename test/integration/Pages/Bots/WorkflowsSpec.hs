@@ -31,6 +31,7 @@ import Models.Apis.Integrations qualified as Slack
 import Models.Apis.Investigations qualified as Investigations
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.CodeContext qualified as CodeContext
+import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (status429)
@@ -54,7 +55,7 @@ import Servant.Server (ServerError (errHTTPCode))
 import System.Config qualified as Config
 import System.Timeout (timeout)
 import System.Types (ATBackgroundCtx)
-import Test.Hspec (Spec, anyException, around, describe, it, shouldBe, shouldSatisfy, shouldThrow)
+import Test.Hspec (Spec, anyException, around, describe, it, shouldBe, shouldReturn, shouldSatisfy, shouldThrow)
 import UnliftIO.Async (concurrently, concurrently_, wait, withAsync)
 import UnliftIO.Exception (tryAny)
 import "cryptonite" Crypto.Hash (SHA256)
@@ -298,6 +299,14 @@ spec = around withTestResources do
         result `shouldSatisfy` isValidJsonResponse
 
     describe "Platform-Specific Commands" do
+      -- Master always fell back to _overview.yaml; without it a bare dashboard silently replied nothing.
+      it "withDashboardTemplate_noSchemaNoTemplate_fallsBackToOverview" \tr -> do
+        let userId = (getResponse tr.trSessAndHeader).user.id
+        [PGS.Only did] <- withResource tr.trPool \conn -> PGS.query conn [sql|INSERT INTO projects.dashboards (project_id, created_by, title) VALUES (?, ?, 'Bare') RETURNING id::text|] (testPid, userId)
+        ref <- newIORef Nothing
+        runQueryEffect tr $ Bot.withDashboardTemplate testPid did \(d :: Dashboards.Dashboard) -> writeIORef ref (Just d.file)
+        readIORef ref `shouldReturn` Just (Just "_overview.yaml")
+
       it "Slack commands require a linked active member and scope admin channel changes to one project" \tr -> do
         setupLinkedSlackData tr testPid "T_COMMAND"
         otherPid <- createTestProject tr "Other workspace project"

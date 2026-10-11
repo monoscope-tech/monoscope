@@ -398,7 +398,7 @@ receiveSlackEvent tr payload = do
       secret = "test-slack-signing-secret" :: ByteString
       signature = "v0=" <> decodeUtf8 (Base16.encode $ BA.convert (HMAC.hmac secret ("v0:" <> encodeUtf8 timestamp <> ":" <> body) :: HMAC.HMAC SHA256))
       cfg = tr.trATCtx.env{Config.slackSigningSecret = decodeUtf8 secret}
-  void $ runAsBase tr{trATCtx = tr.trATCtx{Config.env = cfg}} $ SlackEvents.slackEventsPostH body (Just timestamp) (Just signature)
+  void $ toBaseServantResponse tr{trATCtx = tr.trATCtx{Config.env = cfg}} $ SlackEvents.slackEventsPostH body (Just timestamp) (Just signature)
   [PGS.Only receipt] <- withResource tr.trPool \conn ->
     PGS.query conn [sql|SELECT id FROM apis.slack_events WHERE team_id = (?::jsonb)->>'team_id' AND event_id = (?::jsonb)->>'event_id'|] (Aeson payload, Aeson payload)
   pure receipt

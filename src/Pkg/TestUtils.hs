@@ -29,9 +29,9 @@ module Pkg.TestUtils (
   setBjRunAtInThePast,
   toServantResponse,
   runAuthHandler,
+  assertNonMemberDenied,
   toBaseServantResponse,
   runAsBaseRecordingHTTP,
-  runAsBase,
   atAuthToBase,
   effToServantHandlerTest,
   runQueryEffect,
@@ -95,7 +95,7 @@ import BackgroundJobs qualified
 import Configuration.Dotenv qualified as Dotenv
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.STM.TBQueue (isEmptyTBQueue, readTBQueue)
-import Control.Exception (bracket, finally, throwIO, try)
+import Control.Exception (ErrorCall (..), bracket, finally, throwIO, try)
 import Control.Exception.Safe qualified as Safe
 import Control.Lens ((%~), (.~), (^.), (^..))
 import Data.Aeson qualified as AE
@@ -112,6 +112,7 @@ import Data.Effectful.Notify qualified
 import Data.Effectful.UUID (UUIDEff, runStaticUUID, runUUID)
 import Data.Effectful.Wreq (HTTP (..), runHTTPGolden, runHTTPRecord, runHTTPWreq)
 import Data.Either.Extra
+import Data.Generics.Product.Fields (field)
 import Data.HashMap.Strict qualified as HM
 import Data.Pool (Pool, defaultPoolConfig, destroyAllResources, newPool, setNumStripes, withResource)
 import Data.ProtoLens (defMessage)
@@ -205,14 +206,14 @@ import System.Clock (TimeSpec (TimeSpec))
 import System.Config (AuthContext (..), EnvConfig (..), mkTwilioContentSid)
 import System.Config qualified as Config
 import System.Directory (getFileSize, listDirectory)
-import System.Envy (DefConfig (..), decodeWithDefaults)
+import System.Envy (DefConfig (..), decodeWithDefaults, fromVar)
 import System.IO.Unsafe (unsafePerformIO)
 import System.Logging qualified as Logging
 import System.Server qualified as Server
 import System.Tracing (Tracing)
 import System.Tracing qualified as Tracing
 import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, RespHeaders, atAuthToBase, atAuthToBaseTest, effToServantHandlerTest, effToServantHandlerTestHTTP)
-import Test.Hspec (Expectation, expectationFailure)
+import Test.Hspec (Expectation, expectationFailure, shouldSatisfy)
 import Unsafe.Coerce (unsafeCoerce)
 import Utils (toXXHash)
 import Web.ApiHandlers qualified as ApiH
@@ -634,7 +635,7 @@ runTestBackgroundWithLogger t logger appCtx process = do
 -- | Run an effect action in test context (for non-servant handlers like Auth.sessionByID)
 runTestEffect :: Pool Connection -> OHasql.TracedPool -> Log.Logger -> TracerProvider -> (forall es. (DB es, Error ServantS.ServerError :> es, HTTP :> es, Log :> es, Time :> es, Tracing :> es, UUIDEff :> es) => Eff es a) -> IO (Either ServantS.ServerError a)
 runTestEffect pool hpool logger tp action = do
-  logLevel <- Logging.getLogLevelFromEnv
+  logLevel <- fromMaybe Log.LogTrace . (>>= fromVar) <$> lookupEnv "LOG_LEVEL"
   action
     & runErrorNoCallStack @ServantS.ServerError
     & runHasqlPool hpool
@@ -980,12 +981,22 @@ toServantResponse tr k = toSnd Servant.getResponse <$> runAuthHandler tr k
 runAuthHandler :: TestResources -> ATAuthCtx a -> IO a
 runAuthHandler TestResources{..} k = do
   tp <- getGlobalTracerProvider
-  uuidRef <- freshUUIDRef
   ( atAuthToBase trSessAndHeader k
-      & effToServantHandlerTest trTestClock uuidRef trATCtx trLogger tp
+      & effToServantHandlerTest trTestClock trUUIDRef trATCtx trLogger tp
       & ServantS.runHandler
     )
     <&> fromRightShow
+
+
+-- | Run a handler as a signed-in, non-sudo user who is not a member of @pid@'s project
+-- (membership is dropped first) and assert 'Projects.sessionAndProject' turned it away.
+-- Membership is enforced per handler, not by the router, so each handler needs this guard.
+assertNonMemberDenied :: TestResources -> Projects.ProjectId -> ATAuthCtx a -> IO ()
+assertNonMemberDenied tr pid k = do
+  withResource tr.trPool \conn -> void $ PGS.execute conn [sql|DELETE FROM projects.project_members WHERE project_id = ?|] (Only pid)
+  try (runAuthHandler tr{trSessAndHeader = tr.trSessAndHeader <&> field @"user" . field @"isSudo" .~ False} k >>= evaluateWHNF) >>= \case
+    Left (ErrorCall msg) -> toText msg `shouldSatisfy` T.isInfixOf "missingProjectPermission"
+    Right _ -> expectationFailure "a non-member was served another project's data"
 
 
 testServant :: TestResources -> ATAuthCtx (RespHeaders a) -> IO (RespHeaders a, a)
@@ -996,11 +1007,10 @@ testServant = toServantResponse
 testServantWithNotifications :: TestResources -> ATAuthCtx (RespHeaders a) -> IO ([Data.Effectful.Notify.Notification], (RespHeaders a, a))
 testServantWithNotifications TestResources{..} k = do
   tp <- getGlobalTracerProvider
-  uuidRef <- freshUUIDRef
   notifRef <- newIORef []
   headersResp <-
     ( atAuthToBaseTest notifRef trSessAndHeader k
-        & effToServantHandlerTest trTestClock uuidRef trATCtx trLogger tp
+        & effToServantHandlerTest trTestClock trUUIDRef trATCtx trLogger tp
         & ServantS.runHandler
     )
       <&> fromRightShow
@@ -1009,17 +1019,15 @@ testServantWithNotifications TestResources{..} k = do
 
 
 -- | Run a base context handler (like webhookPostH, replayPostH) in test context.
--- Each call gets a fresh UUID pool; use `runAsBase` when you need IDs persisted
--- across multiple handler invocations within the same test.
+-- UUIDs come from the example-scoped pool, so ids persisted by successive handler
+-- calls in one test stay distinct (a per-call pool re-issued the same ids).
 toBaseServantResponse :: TestResources -> ATBaseCtx a -> IO a
 toBaseServantResponse TestResources{..} k = do
   tp <- getGlobalTracerProvider
-  uuidRef <- freshUUIDRef
-  ( k
-      & effToServantHandlerTest trTestClock uuidRef trATCtx trLogger tp
-      & ServantS.runHandler
-    )
-    <&> fromRightShow
+  k
+    & effToServantHandlerTest trTestClock trUUIDRef trATCtx trLogger tp
+    & ServantS.runHandler
+    >>= either (fail . ("Servant error: " <>) . show) pure
 
 
 -- | Like 'toBaseServantResponse' but records outgoing HTTP requests instead of
@@ -1028,32 +1036,15 @@ toBaseServantResponse TestResources{..} k = do
 runAsBaseRecordingHTTP :: TestResources -> ATBaseCtx a -> IO ([(Text, LByteString)], a)
 runAsBaseRecordingHTTP TestResources{..} k = do
   tp <- getGlobalTracerProvider
-  uuidRef <- freshUUIDRef
   reqsRef <- newIORef []
   r <-
     ( k
-        & effToServantHandlerTestHTTP (runHTTPRecord reqsRef) trTestClock uuidRef trATCtx trLogger tp
+        & effToServantHandlerTestHTTP (runHTTPRecord reqsRef) trTestClock trUUIDRef trATCtx trLogger tp
         & ServantS.runHandler
     )
       <&> fromRightShow
   reqs <- reverse <$> readIORef reqsRef
   pure (reqs, r)
-
-
--- | Like `toBaseServantResponse` but draws UUIDs from the TestResources-scoped
--- pool, so multiple handler invocations (e.g. create a, create b, bulk-delete
--- [a,b]) get distinct deterministic ids.
-runAsBase :: TestResources -> ATBaseCtx a -> IO a
-runAsBase TestResources{..} k = do
-  tp <- getGlobalTracerProvider
-  k
-    & effToServantHandlerTest trTestClock trUUIDRef trATCtx trLogger tp
-    & ServantS.runHandler
-    >>= either (fail . ("Servant error: " <>) . show) pure
-
-
-freshUUIDRef :: IO (IORef [UUID.UUID])
-freshUUIDRef = newIORef (map (UUID.fromWords 0 0 0) [1 .. 1000])
 
 
 -- | Run a query effect (like Charts.queryMetrics) in test context
@@ -1186,7 +1177,7 @@ getPendingBackgroundJobs authCtx = do
 -- | Log background jobs info for debugging (respects LOG_LEVEL)
 logBackgroundJobsInfo :: Log.Logger -> V.Vector (Job, BackgroundJobs.BgJobs) -> IO ()
 logBackgroundJobsInfo logger jobs = do
-  logLevel <- Logging.getLogLevelFromEnv
+  logLevel <- fromMaybe Log.LogTrace . (>>= fromVar) <$> lookupEnv "LOG_LEVEL"
   let jobsList =
         V.toList jobs <&> \(job, bgJob) ->
           AE.object
@@ -1660,7 +1651,7 @@ routeRequest tr path params
 -- | Run a handler in the base context and encode its result as a mock HTTP
 -- response — the shape almost every arm of the two API routers below shares.
 jsonRoute :: AE.ToJSON a => TestResources -> ATBaseCtx a -> IO (Response LBS.ByteString)
-jsonRoute tr = fmap (mockResponse . AE.encode) . runAsBase tr
+jsonRoute tr = fmap (mockResponse . AE.encode) . toBaseServantResponse tr
 
 
 routeApiV1Get :: TestResources -> Text -> [(Text, Text)] -> IO (Response LBS.ByteString)
@@ -1687,7 +1678,7 @@ routeApiV1Get tr rest params = case T.splitOn "/" rest of
   ["monitors"] -> jsonRoute tr (ApiH.apiMonitorsList testPid)
   ["monitors", mid] -> jsonRoute tr (ApiH.apiMonitorGet testPid (monitorId mid))
   ["monitors", mid, "yaml"] -> jsonRoute tr (ApiH.apiMonitorYaml testPid (monitorId mid))
-  ["dashboards"] -> jsonRoute tr (ApiH.apiDashboardsList testPid (lookupParam "sort" params) (lookupParam "team_id" params))
+  ["dashboards"] -> jsonRoute tr (ApiH.apiDashboardsList testPid (rightToMaybe . Servant.parseQueryParam =<< lookupParam "sort" params) (lookupParam "team_id" params))
   ["dashboards", did] -> jsonRoute tr (ApiH.apiDashboardGet testPid (parseUUIDId did))
   ["dashboards", did, "yaml"] -> jsonRoute tr (ApiH.apiDashboardYaml testPid (parseUUIDId did))
   ["me"] -> jsonRoute tr (ApiH.apiMe testPid)

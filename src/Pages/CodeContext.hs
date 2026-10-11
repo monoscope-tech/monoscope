@@ -1,3 +1,5 @@
+{-# LANGUAGE OrPatterns #-}
+
 -- | The source behind one stack frame.
 --
 -- Its own module rather than a function in "Pages.LogExplorer.LogItem", because the model it
@@ -26,7 +28,7 @@ import Models.Projects.ImpactReviews qualified as ImpactReviews
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, mkPageCtx)
-import Pages.Components (FieldCfg (..), FieldSize (..), colorChip_, filterInputAttr_, formField_, formSelectField_, installationSettingsLink_)
+import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), colorChip_, disclosure_, filterInputAttr_, formField_, formSelectField_, installationSettingsLink_, options_)
 import Pages.GitSync qualified as GitSyncPage
 import Pkg.Git qualified as Git
 import Pkg.ImpactReview qualified as ImpactReview
@@ -61,12 +63,9 @@ codeContextH pid fileM lineM svcM revM = do
   where
     -- An unmapped frame is the one failure the reader can act on from here, so it is the one
     -- that gets a control — carrying the path, so the form it opens is already filled in.
-    reason_ :: CodeContext.SnippetError -> Html ()
     reason_ err = note_ (CodeContext.snippetErrorMessage err) case err of
       CodeContext.NoMapping path -> Just path
-      CodeContext.CredentialGone -> Nothing
-      CodeContext.ReadFailed{} -> Nothing
-      CodeContext.LineOutOfRange{} -> Nothing
+      (CodeContext.CredentialGone; CodeContext.ReadFailed{}; CodeContext.LineOutOfRange{}) -> Nothing
     note_ :: Text -> Maybe Text -> Html ()
     note_ msg fixPathM = div_ [class_ "pl-5 py-1 text-2xs text-textWeak italic flex items-center gap-2"] do
       toHtml msg
@@ -235,19 +234,19 @@ repositoriesPageH pid selection = do
             div_ [class_ "space-y-2"] do
               p_ [class_ "text-xs font-medium text-textWeak"] "Production impact reviews"
               case reviewM of
-                Just s | s.enabled && not (null services) -> colorChip_ "text-textSuccess bg-fillSuccess-weak" "circle-check" "Enabled"
-                Just s | s.enabled -> colorChip_ "text-textWarning bg-fillWarning-weak" "circle-info" "Link a service"
-                Just _ -> colorChip_ "" "circle-info" "Off"
-                Nothing -> colorChip_ "" "circle-info" "Not configured"
+                Just s | s.enabled && not (null services) -> colorChip_ SuccessBadge "circle-check" "Enabled"
+                Just s | s.enabled -> colorChip_ WarningBadge "circle-info" "Link a service"
+                Just _ -> colorChip_ NeutralBadge "circle-info" "Off"
+                Nothing -> colorChip_ NeutralBadge "circle-info" "Not configured"
             div_ [class_ "space-y-2"] do
               p_ [class_ "text-xs font-medium text-textWeak"] "Dashboard sync"
               case sync of
-                Just s | Just err <- s.lastError -> colorChip_ "text-textError bg-fillError-weak" "circle-exclamation" "Sync failed" >> p_ [class_ "text-xs text-textError break-words"] (toHtml err.message)
-                Just s | not s.syncEnabled -> colorChip_ "" "circle-info" "Paused"
-                Just s | isJust s.announcedRevision -> colorChip_ "text-textWarning bg-fillWarning-weak" "circle-info" "Changes pending"
-                Just s | isJust s.lastRevision -> colorChip_ "text-textSuccess bg-fillSuccess-weak" "circle-check" "Synced"
-                Just _ -> colorChip_ "" "circle-info" "Awaiting first sync"
-                Nothing -> colorChip_ "" "circle-info" "Not configured"
+                Just s | Just err <- s.lastError -> colorChip_ ErrorBadge "circle-exclamation" "Sync failed" >> p_ [class_ "text-xs text-textError break-words"] (toHtml err.message)
+                Just s | not s.syncEnabled -> colorChip_ NeutralBadge "circle-info" "Paused"
+                Just s | isJust s.announcedRevision -> colorChip_ WarningBadge "circle-info" "Changes pending"
+                Just s | isJust s.lastRevision -> colorChip_ SuccessBadge "circle-check" "Synced"
+                Just _ -> colorChip_ NeutralBadge "circle-info" "Awaiting first sync"
+                Nothing -> colorChip_ NeutralBadge "circle-info" "Not configured"
 
     reviewHistory_ :: Bool -> EnvConfig -> [ImpactReviews.ReviewRun] -> Html ()
     reviewHistory_ canEdit cfg runs = div_ [class_ "space-y-4"] do
@@ -259,7 +258,7 @@ repositoriesPageH pid selection = do
       forM_ runs \run -> details_ [class_ "rounded-lg border border-strokeWeak p-4"] do
         summary_ [class_ "cursor-pointer flex flex-wrap items-center gap-2 text-sm text-textStrong"] do
           span_ [class_ "font-medium break-all"] $ toHtml (run.owner <> "/" <> run.repo <> " #" <> show run.number)
-          colorChip_ (case run.state of ImpactReviews.Completed -> "text-textSuccess bg-fillSuccess-weak"; ImpactReviews.Incomplete -> "text-textWarning bg-fillWarning-weak"; ImpactReviews.Queued -> ""; ImpactReviews.Reviewing -> "text-textBrand bg-fillBrand-weak"; ImpactReviews.Superseded -> "") "code-branch" (show run.state)
+          colorChip_ (case run.state of ImpactReviews.Completed -> SuccessBadge; ImpactReviews.Incomplete -> WarningBadge; ImpactReviews.Queued -> NeutralBadge; ImpactReviews.Reviewing -> BrandBadge; ImpactReviews.Superseded -> NeutralBadge) "code-branch" (show run.state)
           code_ [class_ "text-xs text-textWeak"] $ toHtml $ T.take 8 run.revision
         whenJust run.error $ p_ [class_ "mt-2 text-sm text-textError break-words"] . toHtml
         whenJust run.result \value -> case AE.fromJSON value of
@@ -346,9 +345,9 @@ instance ToHtml RepositoryGet where
       h2_ [class_ "text-base font-semibold text-textStrong"] "Production impact reviews"
       case page.reviewReadiness of
         ReviewReady settings -> do
-          colorChip_ "text-textSuccess bg-fillSuccess-weak" "circle-check" "Ready for pull requests"
+          colorChip_ SuccessBadge "circle-check" "Ready for pull requests"
           p_ [class_ "text-sm text-textWeak"] $ if settings.includeEvidence then "Reviews share production aggregates and links in GitHub." else "Reviews share links to production evidence in GitHub."
-        ReviewDisabled -> colorChip_ "" "circle-info" "Reviews disabled"
+        ReviewDisabled -> colorChip_ NeutralBadge "circle-info" "Reviews disabled"
         ReviewNeedsService -> p_ [class_ "text-sm text-textWeak"] "Link a named service so reviews can find the production telemetry for this repository."
         ReviewNeedsApp -> p_ [class_ "text-sm text-textWeak"] "Link source context through the GitHub App to receive automatic pull request reviews. A token connection can still provide source context and dashboard sync."
         ReviewNeedsServer -> p_ [class_ "text-sm text-textWeak"] "An administrator must configure the GitHub App and webhook before automatic reviews can run."
@@ -363,7 +362,7 @@ instance ToHtml RepositoryGet where
         Just sync -> do
           whenJust sync.lastError $ p_ [role_ "status", class_ "text-sm text-textError break-words"] . toHtml . (.message)
           p_ [class_ "text-sm text-textWeak break-all"] $ toHtml $ sync.branch <> " · " <> GitSync.getDashboardsPath sync
-          colorChip_ "" "code-branch" $ if sync.syncEnabled then "Sync enabled" else "Sync paused"
+          colorChip_ NeutralBadge "code-branch" $ if sync.syncEnabled then "Sync enabled" else "Sync paused"
       a_ [href_ (base <> "/" <> repository.id.toText <> "/dashboards"), class_ "btn btn-sm btn-ghost"] $ if canEdit then "Configure dashboard sync" else "View dashboard sync"
     when canEdit $ section_ [class_ "space-y-3 border-t border-strokeWeak pt-6"] do
       h2_ [class_ "text-base font-semibold text-textStrong"] "Remove connection"
@@ -515,18 +514,14 @@ codeMappingsContent pid sampleM credentialM repositoryM = do
             span_ [class_ "text-sm font-medium text-textStrong"] $ toHtml (settings.owner <> "/" <> settings.repo)
             label_ [class_ "text-xs text-textWeak space-y-1"] do
               span_ [class_ "block"] "PR reviews"
-              select_ [name_ "enabled", class_ "select select-sm"] do
-                option_ ([value_ "true"] <> [selected_ "selected" | settings.enabled]) "Enabled"
-                option_ ([value_ "false"] <> [selected_ "selected" | not settings.enabled]) "Disabled"
+              select_ [name_ "enabled", class_ "select select-sm"] $ options_ (Just $ bool "false" "true" settings.enabled) [("true", "Enabled"), ("false", "Disabled")]
             label_ [class_ "text-xs text-textWeak space-y-1"] do
               span_ [class_ "block"] "Production evidence in GitHub"
-              select_ [name_ "includeEvidence", class_ "select select-sm"] do
-                option_ ([value_ "true"] <> [selected_ "selected" | settings.includeEvidence]) "Aggregates and links"
-                option_ ([value_ "false"] <> [selected_ "selected" | not settings.includeEvidence]) "Links only"
+              select_ [name_ "includeEvidence", class_ "select select-sm"] $ options_ (Just $ bool "false" "true" settings.includeEvidence) [("true", "Aggregates and links"), ("false", "Links only")]
             button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save review settings"
           else div_ [class_ "space-y-1 rounded-lg border border-strokeWeak p-3"] do
             p_ [class_ "text-sm font-medium text-textStrong break-all"] $ toHtml $ settings.owner <> "/" <> settings.repo
-            colorChip_ "" "code-branch" $ if settings.enabled then "Reviews enabled" else "Reviews disabled"
+            colorChip_ NeutralBadge "code-branch" $ if settings.enabled then "Reviews enabled" else "Reviews disabled"
             p_ [class_ "text-xs text-textWeak"] $ if settings.includeEvidence then "Production evidence: aggregates and links" else "Production evidence: links only"
   where
     sample = fromMaybe "" sampleM
@@ -576,9 +571,9 @@ codeMappingsContent pid sampleM credentialM repositoryM = do
             -- Each option carries its own default branch, so the Branch field below can fill
             -- itself in and a repo whose trunk is not called "main" needs no correction.
             case repositoryM of
-              Just repository -> formField_ FieldSm def{id = Just "code-mapping-repo", value = repository.owner <> "/" <> repository.repo, extraAttrs = [readonly_ "true"]} "Repository" "repo" True Nothing
-              Nothing | null repos -> formField_ FieldSm def{id = Just "code-mapping-repo", placeholder = "checkout-service"} "Repository" "repo" True Nothing
-              Nothing -> formField_ FieldSm def{id = Just "code-mapping-repo"} "Repository" "repo" True
+              Just repository -> formField_ FieldSm def{inputId = Just "code-mapping-repo", value = repository.owner <> "/" <> repository.repo, extraAttrs = [readonly_ "true"]} "Repository" "repo" True Nothing
+              Nothing | null repos -> formField_ FieldSm def{inputId = Just "code-mapping-repo", placeholder = "checkout-service"} "Repository" "repo" True Nothing
+              Nothing -> formField_ FieldSm def{inputId = Just "code-mapping-repo"} "Repository" "repo" True
                 $ Just
                 $ select_ [id_ "code-mapping-repo", name_ "repo", required_ "true", class_ "select select-sm w-full cursor-pointer"]
                 $ forM_ repos \r ->
@@ -606,12 +601,9 @@ codeMappingsContent pid sampleM credentialM repositoryM = do
             False
             Nothing
           p_ [class_ "text-xs text-textWeak"] "Paste one line's path and we work out how it lines up with the repository. Leave it blank if your traces already print repo-relative paths."
-          details_ [class_ "group"] do
-            summary_ [class_ "text-xs font-medium text-textWeak cursor-pointer list-none flex items-center gap-1.5 hover:text-textStrong"] do
-              faSprite_ "chevron-right" "solid" "w-3 h-3 transition-transform group-open:rotate-90"
-              "Advanced: set the paths myself"
-            div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2 pt-3"] do
-              formField_ FieldSm def{id = Just "code-mapping-path-prefix", placeholder = "/srv/app/"} "Strip from frame path" "pathPrefix" False Nothing
+          disclosure_ [] "text-xs font-medium text-textWeak hover:text-textStrong" "Advanced: set the paths myself"
+            $ div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2 pt-3"] do
+              formField_ FieldSm def{inputId = Just "code-mapping-path-prefix", placeholder = "/srv/app/"} "Strip from frame path" "pathPrefix" False Nothing
               formField_ FieldSm def{placeholder = "src"} "Directory inside the repo" "sourceRoot" False Nothing
           div_ [class_ "flex items-center gap-2"] do
             button_ [class_ "btn btn-sm btn-primary", type_ "submit"] "Link repository"
@@ -957,7 +949,4 @@ impactReviewRetryH pid rid = do
 
 
 requireReviewWrite :: Projects.ProjectId -> ATAuthCtx ()
-requireReviewWrite pid = do
-  (session, _) <- Projects.sessionAndProject pid
-  permission <- ProjectMembers.getUserPermission pid session.user.id
-  unless (maybe False (>= ProjectMembers.PEdit) permission) $ throwError err403
+requireReviewWrite = void . ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit

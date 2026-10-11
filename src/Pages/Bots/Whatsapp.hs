@@ -36,34 +36,26 @@ whatsappIncomingPostH val = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   let envCfg = authCtx.config
       fromN = T.dropWhile (/= '+') val.from
-
-      -- Twilio has two outbound shapes: a plain-text template (Body) and the
-      -- chart template (ContentVariables). Which one is a property of the reply,
-      -- so it comes from the constructor rather than being sniffed out of the JSON.
+      -- Plain-text template (Body) vs chart template (ContentVariables).
       send = \case
         ReplyText v -> sendWhatsappResponse (AE.object []) val.from envCfg.whatsappBotText (v ^? AEL.key "body" . AEL._String)
         ReplyChart v -> sendWhatsappResponse v val.from envCfg.whatsappBotChart Nothing
-
-      handleDashboard project dashboardId skip = withDashboardTemplate project.id dashboardId $ \dashboard -> do
-        let widgets = V.fromList $ (\w -> let t = fromMaybe "Untitled-" w.title in (t, "widg" <> joiner <> t <> joiner <> dashboardId)) <$> dashboard.widgets
-        sendWhatsappResponse (getWhatsappList ("widget" <> joiner <> dashboardId) "Please select a widget" widgets skip) val.from envCfg.whatsappDashboardList Nothing
-
-      handleWidget widget dashboardId project = withDashboardTemplate project.id dashboardId $ \dashboard ->
-        whenJust (find (\w -> fromMaybe "Untitled-" w.title == widget) dashboard.widgets) $ \w -> do
-          now <- Time.currentTime
-          -- Same Twilio chart template as an AI chart reply: "3" is the query
-          -- string appended to the chart endpoint, "4" the host-relative link.
-          let opts = "time=" <> toUriStr (show now) <> "&p=" <> project.id.toText <> "&widget=" <> toUriStr (decodeUtf8 @Text $ AE.encode w)
-          sendWhatsappResponse (AE.object ["1" AE..= ("*" <> val.body <> "*"), "2" AE..= ("`" <> widget <> "`"), "3" AE..= opts, "4" AE..= (project.id.toText <> "/dashboards")]) val.from envCfg.whatsappBotChart Nothing
-
   projectM <- Projects.getProjectByPhoneNumber fromN
   Log.logTrace ("WhatsApp project lookup" :: Text) $ AE.object ["fromN" AE..= fromN, "found" AE..= isJust projectM]
   whenJust projectM $ \p -> case parseWhatsappBody val.body of
     DashboardLoad skip -> do
       dashboards <- V.fromList . map (second (("dash" <> joiner) <>)) <$> getDashboardsForWhatsapp fromN
       sendWhatsappResponse (getWhatsappList "dashboard" "Please select a dashboard" dashboards skip) val.from envCfg.whatsappDashboardList Nothing
-    WidgetsLoad dashboardId skip -> handleDashboard p dashboardId skip
-    WidgetSelect widgetTitle dashboardId -> handleWidget widgetTitle dashboardId p
+    WidgetsLoad dashboardId skip -> withDashboardTemplate p.id dashboardId \dashboard -> do
+      let widgets = V.fromList $ (\w -> let t = fromMaybe "Untitled-" w.title in (t, "widg" <> joiner <> t <> joiner <> dashboardId)) <$> dashboard.widgets
+      sendWhatsappResponse (getWhatsappList ("widget" <> joiner <> dashboardId) "Please select a widget" widgets skip) val.from envCfg.whatsappDashboardList Nothing
+    WidgetSelect widget dashboardId -> withDashboardTemplate p.id dashboardId \dashboard ->
+      whenJust (find (\w -> fromMaybe "Untitled-" w.title == widget) dashboard.widgets) \w -> do
+        now <- Time.currentTime
+        -- Same Twilio chart template as an AI chart reply: "3" is the query
+        -- string appended to the chart endpoint, "4" the host-relative link.
+        let opts = "time=" <> toUriStr (show now) <> "&p=" <> p.id.toText <> "&widget=" <> toUriStr (decodeUtf8 @Text $ AE.encode w)
+        sendWhatsappResponse (AE.object ["1" AE..= ("*" <> val.body <> "*"), "2" AE..= ("`" <> widget <> "`"), "3" AE..= opts, "4" AE..= (p.id.toText <> "/dashboards")]) val.from envCfg.whatsappBotChart Nothing
     Prompt -> forkBackground authCtx.backgroundScope ("WhatsApp prompt (" <> val.from <> ")") $ runBotQuery WhatsApp send envCfg AI.ServiceAccess p.id val.body (pure Nothing)
   pure $ AE.object []
 

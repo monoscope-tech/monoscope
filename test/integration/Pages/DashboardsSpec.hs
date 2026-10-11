@@ -175,6 +175,12 @@ spec = sequential $ aroundAll withTestResources do
       for_ ["duration_ms", "response_bytes", "htmx:before:request", "htmx:after:settle", "keepalive: true"] \needle ->
         html `shouldSatisfy` T.isInfixOf needle
 
+    it "dashboardSettledPostH_nonMember_cannotProbeDashboards" \tr -> do
+      victim <- createTestProject tr "victim"
+      _ <- testServant tr $ Dashboards.dashboardsPostH victim (mkDashboard "Victim")
+      dash <- runTestBg frozenTime tr (DashboardModel.selectDashboardsSortedBy victim DashboardModel.Asc DashboardModel.DSTitle) >>= maybe (fail "no dashboard") pure . viaNonEmpty head
+      assertNonMemberDenied tr victim $ Dashboards.dashboardSettledPostH victim dash.id (Dashboards.DashboardSettleSample 1 2 Dashboards.DashboardInitial)
+
     it "accepts only the closed dashboard navigation vocabulary" \_ -> do
       let sample navigation =
             AE.eitherDecode @Dashboards.DashboardSettleSample
@@ -298,7 +304,7 @@ spec = sequential $ aroundAll withTestResources do
             let widget = (def :: Widget.Widget){Widget.query = Just query, Widget.pngProfile = Just Widget.PngSlack}
                 encoded = decodeUtf8 @Text $ LBS.toStrict $ AE.encode widget
                 signature = Widget.signWidgetUrl tr.trATCtx.env.apiKeyEncryptionSecretKey testPid encoded
-            runAsBase tr $ Routes.widgetPngGetH testPid (Just encoded) Nothing Nothing (Just "2025-06-01T11:45:00Z") (Just "2025-06-01T12:00:00Z") Nothing Nothing (Just signature) [("appearance", Just appearance)]
+            toBaseServantResponse tr $ Routes.widgetPngGetH testPid (Just encoded) Nothing Nothing (Just "2025-06-01T11:45:00Z") (Just "2025-06-01T12:00:00Z") Nothing Nothing (Just signature) [("appearance", Just appearance)]
       failed <- render "name ==" "light"
       failedDark <- render "name ==" "dark"
       emptyResponse <- render "name == \"no-such-png-fixture-operation\"" "light"
@@ -341,7 +347,7 @@ spec = sequential $ aroundAll withTestResources do
               }
           encoded = decodeUtf8 @Text $ LBS.toStrict $ AE.encode widget
           signature = Widget.signWidgetUrl tr.trATCtx.env.apiKeyEncryptionSecretKey testPid encoded
-      response <- runAsBase tr $ Routes.widgetPngGetH testPid (Just encoded) Nothing Nothing Nothing Nothing Nothing Nothing (Just signature) []
+      response <- toBaseServantResponse tr $ Routes.widgetPngGetH testPid (Just encoded) Nothing Nothing Nothing Nothing Nothing Nothing (Just signature) []
       LBS.take 8 (Servant.getResponse response) `shouldBe` "\137PNG\r\n\26\n"
 
     it "Should create a dashboard" \tr -> do

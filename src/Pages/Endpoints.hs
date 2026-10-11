@@ -1,4 +1,4 @@
-module Pages.Endpoints (apiCatalogH, CatalogTab (..), tabParam, parseTab, parseTabM, HostEventsVM (..), endpointListGetH, CatalogList (..), EndpointRequestStatsVM (..), EnpReqStatsVM (..), apiCatalogBulkActionH, HostBulkActionForm (..), HostBulkAction (..), CatalogBulkAction (..), apiDocsH, ApiDocsPage (..), apiSpecJsonH, apiSpecYamlH) where
+module Pages.Endpoints (apiCatalogH, CatalogTab (..), tabParam, parseTab, parseTabM, HostEventsVM (..), endpointListGetH, EnpReqStatsVM (..), apiCatalogBulkActionH, HostBulkActionForm (..), HostBulkAction (..), CatalogBulkAction (..), apiDocsH, ApiDocsPage (..), apiSpecJsonH, apiSpecYamlH) where
 
 import Data.Aeson qualified as AE
 import Data.Cache qualified as Cache
@@ -6,7 +6,7 @@ import Data.Default (def)
 import Data.Text qualified as T
 import Data.Text.Display (display)
 import Data.Time (UTCTime)
-import Data.Time.LocalTime (ZonedTime, zonedTimeToUTC)
+import Data.Time.LocalTime (zonedTimeToUTC)
 import Data.Vector qualified as V
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
@@ -17,20 +17,20 @@ import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.RUM qualified as RUMData
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
-import Pages.Components (RowAction (..), agoText, copyButton_, detailTab_, periodToggle_, rowActions_, sparkline_, tabPanel_)
-import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), EmptyStateAction (..), Features (..), Pagination (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableRows (..), ZeroState (..), col, withAttrs, withColHeaderExtra)
+import Pages.Components (RowAction (..), copyButton_, detailTab_, eventsCountCell_, lastSeenCell_, periodToggle_, rowActions_, sparkline_, tabPanel_)
+import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), EmptyStateAction (..), Features (..), Pagination (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableResponse (..), TableRows (..), ZeroState (..), col, withAttrs, withColHeaderExtra)
 import Pkg.DeriveUtils (WrappedEnumSC (..), assetUrl, bulkActionSlug)
 import Pkg.OpenApi qualified as OpenApi
 import PyF qualified
 import Relude hiding (ask, asks)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
-import Utils (checkFreeTierStatus, faSprite_, formatWithCommas, toUriStr)
+import Utils (checkFreeTierStatus, faSprite_, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData, parseUrlPiece)
 
 
-apiCatalogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders CatalogList)
+apiCatalogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (TableResponse HostEventsVM))
 apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM statsM = do
   (session, project, bw) <- mkPageCtx pid
 
@@ -55,14 +55,8 @@ apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM statsM = d
   let statsMode = if statsM == Just "true" then Endpoints.WithStats else Endpoints.ShellOnly
       skip = fromMaybe 0 skipM
       hostQuery = Endpoints.HostQuery{direction = outgoingM, archived = showArchived, sort = sortV, skip, since = filterV, period, service = session.service}
-      cacheKey = (pid, hostQuery)
-      fetch mode = Endpoints.dependenciesAndEventsCount mode appCtx.env.enableTimefusionReads pid hostQuery
-  hostsAndEvents <- case statsMode of
-    Endpoints.ShellOnly -> fetch Endpoints.ShellOnly
-    -- Memory first, then the fleet-shared table, so a cold replica doesn't re-pay the
-    -- multi-second span scan another replica already ran this TTL (same layering as RUM).
-    Endpoints.WithStats -> Cache.fetchWithCache appCtx.hostStatsCache cacheKey \_ ->
-      RUMData.withSharedCache ("hostStats:" <> show cacheKey) 300 (fetch Endpoints.WithStats)
+  -- Bump the tag when HostEvents' JSON changes: the shared table outlives a deploy (v2: direction).
+  hostsAndEvents <- withStatsCache appCtx.hostStatsCache "hostStats:v2:" (pid, hostQuery) statsMode \mode -> Endpoints.dependenciesAndEventsCount mode appCtx.env.enableTimefusionReads pid hostQuery
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
 
   currTime <- Time.currentTime
@@ -131,8 +125,8 @@ apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM statsM = d
                   }
           }
   addRespHeaders case skipM of
-    Just _ -> CatalogListRows TableRows{columns = cols, rows = hostsVM, renderAsTable = True, rowId = hostRowId, rowAttrs = hostRowAttrs, pagination = Nothing}
-    Nothing -> CatalogListPage $ PageCtx bwconf catalogTable
+    Just _ -> TableRowsOnly TableRows{columns = cols, rows = hostsVM, renderAsTable = True, rowId = hostRowId, rowAttrs = hostRowAttrs, pagination = Nothing}
+    Nothing -> TablePage $ PageCtx bwconf catalogTable
 
 
 -- | A catalog row: its traffic, the clock the "last seen" column renders against, and
@@ -148,9 +142,18 @@ catalogColumns :: Projects.ProjectId -> Text -> Text -> [Column HostEventsVM]
 catalogColumns pid baseUrl period =
   [ col "Dependency" (renderCatalogMainCol pid) & withAttrs [class_ "min-w-0 max-w-0 w-full"]
   , col ("Events (" <> period <> ")") (\vm -> statCell_ vm.statsMode $ eventsCountCell_ (fromIntegral vm.events.eventCount)) & withAttrs [class_ "w-24 max-md:hidden"]
-  , col "Last Seen" (\vm -> statCell_ vm.statsMode $ lastSeenCell_ vm.currTime vm.events.last_seen) & withAttrs [class_ "w-28 max-md:hidden"]
-  , col "Activity" (\vm -> statCell_ vm.statsMode $ activityCell_ vm.events.activityBuckets) & withAttrs [class_ "w-40 max-md:hidden"] & withColHeaderExtra (periodToggle_ baseUrl "apiCatalogContainer" period)
+  , col "Last Seen" (\vm -> statCell_ vm.statsMode $ lastSeenCell_ vm.currTime (zonedTimeToUTC <$> vm.events.last_seen)) & withAttrs [class_ "w-28 max-md:hidden"]
+  , col "Activity" (\vm -> statCell_ vm.statsMode $ sparkline_ (V.toList vm.events.activityBuckets)) & withAttrs [class_ "w-40 max-md:hidden"] & withColHeaderExtra (periodToggle_ baseUrl "apiCatalogContainer" period)
   ]
+
+
+-- | Shell renders skip the stats scan. Stats are memoised in memory first, then in the
+-- fleet-shared table, so a cold replica doesn't re-pay the multi-second span scan another
+-- replica already ran this TTL (same layering as RUM).
+withStatsCache :: (AE.FromJSON v, AE.ToJSON v, Hashable k, Show k) => Cache.Cache k v -> Text -> k -> Endpoints.StatsMode -> (Endpoints.StatsMode -> ATAuthCtx v) -> ATAuthCtx v
+withStatsCache cache tag key mode fetch = case mode of
+  Endpoints.ShellOnly -> fetch Endpoints.ShellOnly
+  Endpoints.WithStats -> Cache.fetchWithCache cache key \_ -> RUMData.withSharedCache (tag <> show key) 300 (fetch Endpoints.WithStats)
 
 
 logExplorerHref :: Projects.ProjectId -> Text -> Text
@@ -207,8 +210,10 @@ directionOf TabArchived = Nothing
 
 
 -- | The two labels that vary by request direction: (kindVal, sourceLabel).
-directionLabels :: Bool -> (Text, Text)
-directionLabels outgoing = (bool "server" "client" outgoing, bool "Served by:" "Called by:" outgoing)
+directionLabels :: Endpoints.Direction -> (Text, Text)
+directionLabels = \case
+  Endpoints.Incoming -> ("server", "Served by:")
+  Endpoints.Outgoing -> ("client", "Called by:")
 
 
 -- | The services behind a row, as inline chips on the name line rather than a
@@ -234,10 +239,10 @@ servicesBadges_ sourceLabel badgeHref svcs =
 renderCatalogMainCol :: Projects.ProjectId -> HostEventsVM -> Html ()
 renderCatalogMainCol pid vm = do
   let he = vm.events
-      outgoing = he.outgoing
-      reqTypeLabel = bool "Incoming" "Outgoing" outgoing :: Text
-      (kindVal, sourceLabel) = directionLabels outgoing
-      (arrowIcon, arrowClass) = bool ("arrow-down-left", "h-3 w-3 fill-iconNeutral shrink-0") ("arrow-up-right", "h-3 w-3 fill-iconBrand shrink-0") outgoing
+      (kindVal, sourceLabel) = directionLabels he.direction
+      (reqTypeLabel, arrowIcon, arrowClass) = case he.direction of
+        Endpoints.Incoming -> ("Incoming" :: Text, "arrow-down-left", "h-3 w-3 fill-iconNeutral shrink-0")
+        Endpoints.Outgoing -> ("Outgoing", "arrow-up-right", "h-3 w-3 fill-iconBrand shrink-0")
   -- One line, name left and actions right, so the actions form a fixed lane
   -- down the table. Brand blue is spent on the host — the row's primary target
   -- — and the secondary actions stay neutral until hovered.
@@ -257,15 +262,6 @@ renderCatalogMainCol pid vm = do
       ]
 
 
-data CatalogList = CatalogListPage (PageCtx (Table HostEventsVM)) | CatalogListRows (TableRows HostEventsVM)
-
-
-instance ToHtml CatalogList where
-  toHtml (CatalogListPage pg) = toHtml pg
-  toHtml (CatalogListRows r) = toHtml r
-  toHtmlRaw = toHtml
-
-
 endpointListGetH
   :: Projects.ProjectId
   -> Maybe Text
@@ -282,7 +278,7 @@ endpointListGetH
   -> Maybe Text
   -> Maybe Text
   -> Maybe Text
-  -> ATAuthCtx (RespHeaders EndpointRequestStatsVM)
+  -> ATAuthCtx (RespHeaders (TableResponse EnpReqStatsVM))
 endpointListGetH pid pageM perPageM _layoutM filterTM hostM currentTabM sortM periodM _hxRequestM _hxBoostedM _hxCurrentURL loadMoreM searchM statsM = do
   (session, project, bw) <- mkPageCtx pid
   let archived = filterTM == Just "Archived"
@@ -307,13 +303,7 @@ endpointListGetH pid pageM perPageM _layoutM filterTM hostM currentTabM sortM pe
       -- seconds, so the first paint renders skeletons and HTMX re-fetches with stats=true.
       -- Row-only responses (load-more, search) can't defer, so they always carry stats.
       statsMode = if statsM == Just "true" || isJust loadMoreM || isJust searchM then Endpoints.WithStats else Endpoints.ShellOnly
-      cacheKey = (pid, endpointQuery)
-      fetchStats mode = Endpoints.endpointRequestStatsPageByProject mode useTf pid endpointQuery
-      fetchStatsCached = case statsMode of
-        Endpoints.ShellOnly -> fetchStats Endpoints.ShellOnly
-        Endpoints.WithStats -> Cache.fetchWithCache appCtx.endpointStatsCache cacheKey \_ ->
-          RUMData.withSharedCache ("endpointStats:" <> show cacheKey) 300 (fetchStats Endpoints.WithStats)
-  (endpointStats, totalCount) <- fetchStatsCached
+  (endpointStats, totalCount) <- withStatsCache appCtx.endpointStatsCache "endpointStats:" (pid, endpointQuery) statsMode \mode -> Endpoints.endpointRequestStatsPageByProject mode useTf pid endpointQuery
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
 
   let baseUrl = [PyF.fmt|/p/{pid.toText}/endpoints?filter={currentFilterTab}&request_type={currentTabT}&host={host}&sort={currentSort}&period={periodT}|]
@@ -328,10 +318,7 @@ endpointListGetH pid pageM perPageM _layoutM filterTM hostM currentTabM sortM pe
                 $ TabFilter
                   { current = currentFilterTab
                   , currentURL = baseUrl
-                  , options =
-                      [ TabFilterOpt{name = "Endpoints", count = Nothing}
-                      , TabFilterOpt{name = "Archived", count = Nothing}
-                      ]
+                  , options = [TabFilterOpt{name, count = Nothing} | name <- ["Endpoints", "Archived"]]
                   }
           }
 
@@ -380,8 +367,8 @@ endpointListGetH pid pageM perPageM _layoutM filterTM hostM currentTabM sortM pe
           }
   addRespHeaders
     $ if isJust loadMoreM || isJust searchM
-      then EndpointsListRows TableRows{columns = cols, rows = endpReqVM, renderAsTable = True, rowId = endpRowId, rowAttrs = endpRowAttrs, pagination = pagination'}
-      else EndpointsListPage $ PageCtx bwconf endpointsTable
+      then TableRowsOnly TableRows{columns = cols, rows = endpReqVM, renderAsTable = True, rowId = endpRowId, rowAttrs = endpRowAttrs, pagination = pagination'}
+      else TablePage $ PageCtx bwconf endpointsTable
 
 
 data EnpReqStatsVM = EnpReqStatsVM UTCTime Endpoints.StatsMode Endpoints.EndpointRequestStats
@@ -392,8 +379,8 @@ endpointColumns :: Projects.ProjectId -> Text -> Text -> CatalogTab -> [Column E
 endpointColumns pid baseUrl period currentTab =
   [ col "Endpoint" (renderEndpointMainCol pid currentTab) & withAttrs [class_ "min-w-0 max-w-0 w-full"]
   , col ("Events (" <> period <> ")") (\(EnpReqStatsVM _ sm enp) -> statCell_ sm $ eventsCountCell_ enp.totalRequests) & withAttrs [class_ "w-24 max-md:hidden"]
-  , col "Last Seen" (\(EnpReqStatsVM currTime sm enp) -> statCell_ sm $ lastSeenCell_ currTime enp.lastSeen) & withAttrs [class_ "w-28 max-md:hidden"]
-  , col "Activity" (\(EnpReqStatsVM _ sm enp) -> statCell_ sm $ activityCell_ enp.activityBuckets) & withAttrs [class_ "w-40 max-md:hidden"] & withColHeaderExtra (periodToggle_ baseUrl "endpointsListContainer" period)
+  , col "Last Seen" (\(EnpReqStatsVM currTime sm enp) -> statCell_ sm $ lastSeenCell_ currTime (zonedTimeToUTC <$> enp.lastSeen)) & withAttrs [class_ "w-28 max-md:hidden"]
+  , col "Activity" (\(EnpReqStatsVM _ sm enp) -> statCell_ sm $ sparkline_ (V.toList enp.activityBuckets)) & withAttrs [class_ "w-40 max-md:hidden"] & withColHeaderExtra (periodToggle_ baseUrl "endpointsListContainer" period)
   ]
 
 
@@ -406,32 +393,9 @@ statCell_ Endpoints.WithStats h = h
 statCell_ Endpoints.ShellOnly _ = span_ [class_ "block h-4 w-12 rounded bg-fillWeak animate-pulse"] ""
 
 
-eventsCountCell_ :: Int -> Html ()
-eventsCountCell_ n =
-  span_ [class_ $ "tabular-nums font-medium text-sm " <> color] $ toHtml $ formatWithCommas (fromIntegral n)
-  where
-    color
-      | n >= 100 = "text-fillError-strong"
-      | n >= 10 = "text-fillWarning-strong"
-      | otherwise = "text-textStrong"
-
-
-lastSeenCell_ :: UTCTime -> Maybe ZonedTime -> Html ()
-lastSeenCell_ currTime = \case
-  -- nowrap: the column is narrow enough that "50 secs ago" broke onto a second
-  -- line and put back the ragged row heights the single-line row just removed.
-  Just t -> span_ [class_ "text-xs text-textWeak whitespace-nowrap"] $ toHtml $ agoText currTime $ zonedTimeToUTC t
-  Nothing -> span_ [class_ "text-textWeak text-xs"] "-"
-
-
-activityCell_ :: V.Vector Int -> Html ()
-activityCell_ = sparkline_ . V.toList
-
-
 renderEndpointMainCol :: Projects.ProjectId -> CatalogTab -> EnpReqStatsVM -> Html ()
 renderEndpointMainCol pid currentTab (EnpReqStatsVM _ _ enp) = do
-  let outgoing = currentTab == TabOutgoing
-      (kindVal, sourceLabel) = directionLabels outgoing
+  let (kindVal, sourceLabel) = directionLabels $ fromMaybe Endpoints.Incoming (directionOf currentTab)
       -- server.address in both directions: the local server on a server span, the remote
       -- one on a client span. It is also the column apis.endpoints.host is resolved from,
       -- so the filter matches the stored host exactly.
@@ -451,17 +415,6 @@ renderEndpointMainCol pid currentTab (EnpReqStatsVM _ _ enp) = do
       ]
 
 
-data EndpointRequestStatsVM
-  = EndpointsListPage (PageCtx (Table EnpReqStatsVM))
-  | EndpointsListRows (TableRows EnpReqStatsVM)
-
-
-instance ToHtml EndpointRequestStatsVM where
-  toHtml (EndpointsListPage pg) = toHtml pg
-  toHtml (EndpointsListRows rows) = toHtml rows
-  toHtmlRaw = toHtml
-
-
 -- Learned API documentation ----------------------------------------------------
 
 -- | Enough operations to document a real service; a host with more learned
@@ -476,14 +429,6 @@ docsCap = 200
 -- host's worth of those is megabytes of text no @\<pre\>@ should hold.
 inlineYamlCap :: Int
 inlineYamlCap = 400_000
-
-
--- | Span kind for a catalog tab. Incoming traffic is what our server served;
--- outgoing is what it called. Archived spans both, so it filters on neither.
-kindOf :: CatalogTab -> Maybe Text
-kindOf TabIncoming = Just "server"
-kindOf TabOutgoing = Just "client"
-kindOf TabArchived = Nothing
 
 
 -- | Link to the docs page for a host, optionally scoped to one endpoint. Plain
@@ -510,7 +455,9 @@ learnedSpec pid hostM reqTypeM endpointM = do
   -- user could read another tenant's learned schema by project id.
   (_, project) <- Projects.sessionAndProject pid
   let scopeHost = guarded (not . T.null) =<< hostM
-  entries <- SchemaCatalog.endpointCatalog pid scopeHost (kindOf (parseTab reqTypeM)) endpointM docsCap
+      -- Span kind: Archived spans both directions, so it filters on neither.
+      kindM = fst . directionLabels <$> directionOf (parseTab reqTypeM)
+  entries <- SchemaCatalog.endpointCatalog pid scopeHost kindM endpointM docsCap
   pure (OpenApi.buildSpec (fromMaybe project.title scopeHost) (V.toList entries), V.length entries)
 
 
@@ -569,52 +516,48 @@ newtype ApiDocsPage = ApiDocsPage (PageCtx ApiDocsVM)
 
 instance ToHtml ApiDocsVM where
   toHtmlRaw = toHtml
-  toHtml = toHtml . apiDocs_
+  toHtml vm = toHtml @(Html ()) $ div_ [class_ "group/apidocs flex flex-col h-full min-h-0 w-full"] do
+    div_ [class_ "flex items-center gap-3 border-b border-strokeWeak px-4 shrink-0"] do
+      nav_ [class_ "flex", term "_" "on click halt the event's bubbling"] do
+        detailTab_ "apidocsTab" "apidocs-ref" "" True "Reference"
+        detailTab_ "apidocsTab" "apidocs-yaml" "" False "OpenAPI 3.1"
+      div_ [class_ "ml-auto flex items-center gap-2 py-1.5"] do
+        span_ [class_ "text-xs text-textWeak tabular-nums"] $ toHtml (show vm.operations <> " learned operation" <> bool "s" "" (vm.operations == 1) :: Text)
+        when vm.truncated
+          $ span_ [class_ "badge badge-sm badge-warning", term "data-tippy-content" "Only the most recently seen operations are documented. Open a single endpoint's docs for the rest."] "truncated"
+        forM_ [("YAML" :: Text, vm.specYamlUrl, "openapi.yaml" :: Text), ("JSON", vm.specJsonUrl, "openapi.json")] \(label, url, fname) ->
+          a_ [href_ url, term "download" fname, class_ "btn btn-xs btn-ghost gap-1"] do
+            faSprite_ "download" "regular" "h-3 w-3"
+            toHtml label
 
+    tabPanel_ "group-has-[.apidocs-ref:checked]/apidocs:block grow min-h-0 overflow-auto" "apidocs-reference" do
+      -- The spec URL travels as an attribute rather than interpolated into the
+      -- script: it carries a customer-controlled host, and Lucid escapes attributes.
+      div_ [id_ "swagger-ui", data_ "spec-url" vm.specJsonUrl] ""
+      -- A module script is deferred by definition, so it runs after the head's
+      -- deferred swagger-ui-bundle.js has defined SwaggerUIBundle. Submit methods
+      -- are empty on purpose: the servers block is the customer's real production
+      -- host, and "Try it out" would fire live requests at it from our UI.
+      script_
+        [type_ "module"]
+        """
+        const el = document.getElementById('swagger-ui');
+        SwaggerUIBundle({
+          domNode: el, url: el.dataset.specUrl,
+          presets: [SwaggerUIBundle.presets.apis], deepLinking: true,
+          supportedSubmitMethods: [], tryItOutEnabled: false,
+          docExpansion: 'list', defaultModelsExpandDepth: -1, defaultModelExpandDepth: 4
+        });
+        """
 
-apiDocs_ :: ApiDocsVM -> Html ()
-apiDocs_ vm = div_ [class_ "group/apidocs flex flex-col h-full min-h-0 w-full"] do
-  div_ [class_ "flex items-center gap-3 border-b border-strokeWeak px-4 shrink-0"] do
-    nav_ [class_ "flex", term "_" "on click halt the event's bubbling"] do
-      detailTab_ "apidocsTab" "apidocs-ref" "" True "Reference"
-      detailTab_ "apidocsTab" "apidocs-yaml" "" False "OpenAPI 3.1"
-    div_ [class_ "ml-auto flex items-center gap-2 py-1.5"] do
-      span_ [class_ "text-xs text-textWeak tabular-nums"] $ toHtml (show vm.operations <> " learned operation" <> bool "s" "" (vm.operations == 1) :: Text)
-      when vm.truncated
-        $ span_ [class_ "badge badge-sm badge-warning", term "data-tippy-content" "Only the most recently seen operations are documented. Open a single endpoint's docs for the rest."] "truncated"
-      forM_ [("YAML" :: Text, vm.specYamlUrl, "openapi.yaml" :: Text), ("JSON", vm.specJsonUrl, "openapi.json")] \(label, url, fname) ->
-        a_ [href_ url, term "download" fname, class_ "btn btn-xs btn-ghost gap-1"] do
-          faSprite_ "download" "regular" "h-3 w-3"
-          toHtml label
-
-  tabPanel_ "group-has-[.apidocs-ref:checked]/apidocs:block grow min-h-0 overflow-auto" "apidocs-reference" do
-    -- The spec URL travels as an attribute rather than interpolated into the
-    -- script: it carries a customer-controlled host, and Lucid escapes attributes.
-    div_ [id_ "swagger-ui", data_ "spec-url" vm.specJsonUrl] ""
-    -- A module script is deferred by definition, so it runs after the head's
-    -- deferred swagger-ui-bundle.js has defined SwaggerUIBundle. Submit methods
-    -- are empty on purpose: the servers block is the customer's real production
-    -- host, and "Try it out" would fire live requests at it from our UI.
-    script_
-      [type_ "module"]
-      """
-      const el = document.getElementById('swagger-ui');
-      SwaggerUIBundle({
-        domNode: el, url: el.dataset.specUrl,
-        presets: [SwaggerUIBundle.presets.apis], deepLinking: true,
-        supportedSubmitMethods: [], tryItOutEnabled: false,
-        docExpansion: 'list', defaultModelsExpandDepth: -1, defaultModelExpandDepth: 4
-      });
-      """
-
-  tabPanel_ "group-has-[.apidocs-yaml:checked]/apidocs:block grow min-h-0 overflow-auto" "apidocs-spec" case vm.inlineYaml of
-    Just yaml -> div_ [class_ "relative"] do
-      copyButton_ "btn btn-xs btn-ghost absolute right-3 top-3 gap-1" "h-3 w-3" "#openapi-yaml's innerText" []
-      pre_ [class_ "inconsolata text-xs leading-relaxed p-4 whitespace-pre overflow-x-auto", id_ "openapi-yaml"] $ toHtml yaml
-    Nothing ->
-      div_ [class_ "p-8 text-center text-sm text-textWeak"] do
-        p_ "This host's learned spec is too large to show inline."
-        a_ [href_ vm.specYamlUrl, term "download" "openapi.yaml", class_ "btn btn-sm mt-3"] "Download openapi.yaml"
+    tabPanel_ "group-has-[.apidocs-yaml:checked]/apidocs:block grow min-h-0 overflow-auto" "apidocs-spec" case vm.inlineYaml of
+      Just yaml -> div_ [class_ "relative"] do
+        copyButton_ "btn btn-xs btn-ghost absolute right-3 top-3 gap-1" "h-3 w-3" "#openapi-yaml's innerText" []
+        pre_ [class_ "inconsolata text-xs leading-relaxed p-4 whitespace-pre overflow-x-auto", id_ "openapi-yaml"] $ toHtml yaml
+      Nothing ->
+        div_ [class_ "p-8 text-center text-sm text-textWeak"] do
+          p_ "This host's learned spec is too large to show inline."
+          a_ [href_ vm.specYamlUrl, term "download" "openapi.yaml", class_ "btn btn-sm mt-3"] "Download openapi.yaml"
 
 
 -- Host bulk archive/unarchive --------------------------------------------------

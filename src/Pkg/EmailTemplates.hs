@@ -15,6 +15,7 @@ module Pkg.EmailTemplates (
   projectDeletedEmail,
   runtimeErrorsEmail,
   escalatingErrorsEmail,
+  NewLogPattern (..),
   logPatternEmail,
   logPatternRateChangeEmail,
   regressedErrorsEmail,
@@ -51,12 +52,14 @@ module Pkg.EmailTemplates (
 import Data.Default (def)
 import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
+import Data.Text.Display (display)
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian)
 import Data.Vector qualified as V
 import Lucid
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.ContainerTypes (Scope (..))
 import Models.Telemetry.Report qualified as Report
 import Relude
 import Utils (fmtDate, formatWithCommas, isoT, kqlQuoted, nonEmptyT, showFFloat', toUriStr)
@@ -114,7 +117,6 @@ cellspacing_ = term "cellspacing"
 align_ = term "align"
 
 
--- | Render a template to HTML text
 renderEmail :: Text -> Html () -> Text
 renderEmail subject content = toStrict $ renderText $ emailWrapper subject content
 
@@ -268,11 +270,7 @@ emailWrapper subject content = doctypehtml_ do
           tr_
             $ td_ [align_ "center", style_ "padding: 0 20px 19px;"]
             $ p_ [style_ "font-size: 12px; line-height: 1.5; text-align: center; color: #57606a; margin: 0;"] do
-              a_ [href_ "https://monoscope.tech/changelog?utm_source=transac_emails", style_ "color: #57606a; text-decoration: none;"] "Changelog"
-              toHtmlRaw @Text " &nbsp;\183&nbsp; "
-              a_ [href_ "https://monoscope.tech/docs?utm_source=transac_emails", style_ "color: #57606a; text-decoration: none;"] "Docs"
-              toHtmlRaw @Text " &nbsp;\183&nbsp; "
-              a_ [href_ "https://monoscope.tech/legal/privacy?utm_source=transac_emails", style_ "color: #57606a; text-decoration: none;"] "Privacy"
+              sequence_ $ intersperse (toHtmlRaw @Text " &nbsp;\183&nbsp; ") [a_ [href_ $ "https://monoscope.tech/" <> path <> "?utm_source=transac_emails", style_ "color: #57606a; text-decoration: none;"] $ toHtml @Text label | (path, label) <- [("changelog", "Changelog"), ("docs", "Docs"), ("legal/privacy", "Privacy")]]
 
 
 emailBody :: Html () -> Html ()
@@ -347,13 +345,13 @@ emailGreeting = maybe (p_ "Hi there!") \name -> p_ do "Hi "; b_ (toHtml name); "
 -- Simple Project Templates
 -- =============================================================================
 
--- | @message@ is raw HTML; the CTA doubles as the fallback URL shown at the foot.
-projectNotifEmail :: Text -> Text -> Maybe Text -> (Text, Text) -> (Text, Html ())
+-- | @message@ is 'richP_' runs; the CTA doubles as the fallback URL shown at the foot.
+projectNotifEmail :: Text -> [Text] -> Maybe Text -> (Text, Text) -> (Text, Html ())
 projectNotifEmail subject message userNameM (url, ctaLabel) =
   ( subject
   , emailBody do
       emailGreeting userNameM
-      p_ $ toHtmlRaw message
+      richP_ message
       emailButton url ctaLabel
       emailHelpLinks
       br_ []
@@ -364,17 +362,17 @@ projectNotifEmail subject message userNameM (url, ctaLabel) =
 
 projectInviteEmail :: Text -> Text -> Text -> (Text, Html ())
 projectInviteEmail userName projectName projectUrl =
-  projectNotifEmail "[···] Project Invitation" ("<b>" <> userName <> "</b> has invited you to the <b>" <> projectName <> "</b> project on Monoscope. We're excited to have you on board! Click the button below and <b>sign up using this email address</b> (or sign in with Google/GitHub if it's already linked to one) to access the project.") (Just userName) (projectUrl, "Access Project")
+  projectNotifEmail "[···] Project Invitation" ["", userName, " has invited you to the ", projectName, " project on Monoscope. We're excited to have you on board! Click the button below and ", "sign up using this email address", " (or sign in with Google/GitHub if it's already linked to one) to access the project."] (Just userName) (projectUrl, "Access Project")
 
 
 projectCreatedEmail :: Text -> Text -> Text -> (Text, Html ())
 projectCreatedEmail userName projectName projectUrl =
-  projectNotifEmail "[···] New Project Created" ("You have created a new <b>" <> projectName <> "</b> project on Monoscope.") (Just userName) (projectUrl, "Access Project")
+  projectNotifEmail "[···] New Project Created" ["You have created a new ", projectName, " project on Monoscope."] (Just userName) (projectUrl, "Access Project")
 
 
 projectDeletedEmail :: Text -> Text -> (Text, Html ())
 projectDeletedEmail userName projectName =
-  projectNotifEmail "[···] Project Deleted" ("You have successfully deleted the <b>" <> projectName <> "</b> project.") (Just userName) ("https://app.monoscope.tech/p/new", "Create a New Project")
+  projectNotifEmail "[···] Project Deleted" ["You have successfully deleted the ", projectName, " project."] (Just userName) ("https://app.monoscope.tech/p/new", "Create a New Project")
 
 
 -- =============================================================================
@@ -394,18 +392,20 @@ errorSpikesEmail = runtimeErrorVariantEmail "Runtime Error Spike(s)" "[···] R
 
 -- | Email variants for log-pattern issues. Slack/Discord/PagerDuty payloads
 -- live in Pkg.Mail; email is just subject + html passed to sendRenderedEmail.
-logPatternEmail
-  :: Text -- projectName
-  -> Text -- issueUrl
-  -> Text -- patternText
-  -> Maybe Text -- sampleMessage
-  -> Maybe Text -- logLevel
-  -> Maybe Text -- serviceName
-  -> Text -- sourceField
-  -> Int -- occurrenceCount
-  -> Bool -- isError
-  -> (Text, Html ())
-logPatternEmail projectName issueUrl patternText sampleMessage logLevel serviceName sourceField occurrenceCount isError =
+data NewLogPattern = NewLogPattern
+  { issueUrl :: Text
+  , patternText :: Text
+  , sampleMessage :: Maybe Text
+  , logLevel :: Maybe Text
+  , serviceName :: Maybe Text
+  , sourceField :: Text
+  , occurrenceCount :: Int
+  , isError :: Bool
+  }
+
+
+logPatternEmail :: Text -> NewLogPattern -> (Text, Html ())
+logPatternEmail projectName NewLogPattern{..} =
   patternIssueEmail
     ("[···] New " <> kindLabel <> " pattern - " <> projectName)
     ("New " <> kindLabel <> " pattern detected in " <> projectName)
@@ -471,12 +471,7 @@ patternIssueEmail subject heading issueUrl stats blocks =
 digestEmail :: Text -> Text -> Text -> Int -> Html ()
 digestEmail projectName inboxUrl summary total = emailBody do
   h1_ "Batched notifications"
-  p_ do
-    "We batched "
-    b_ $ toHtml (show @Text total <> " notifications")
-    " for "
-    b_ $ toHtml projectName
-    " to avoid spam. A sample is below."
+  richP_ ["We batched ", show total <> " notifications", " for ", projectName, " to avoid spam. A sample is below."]
   emailDivider
   monoPre $ unlines $ map stripSummaryBadges (lines summary)
   emailButton inboxUrl "Open inbox"
@@ -490,16 +485,12 @@ runtimeErrorVariantEmail heading subjectPrefix intro projectName projectUrl erro
   ( subject
   , emailBody do
       h1_ $ toHtml $ maybe heading ("Still firing: " <>) ongoingForM
-      p_ do
-        toHtml $ maybe intro (const ("This error is still firing in your " :: Text)) ongoingForM
-        b_ $ toHtml projectName
-        "."
+      richP_ [maybe intro (const "This error is still firing in your ") ongoingForM, projectName, "."]
       forM_ (catMaybes [("⏳ Still firing · " <>) <$> ongoingForM, occTextM])
         $ p_ [style_ "margin: 8px 0; font-size: 14px; font-weight: 600; color: #57606a;"]
         . toHtml @Text
       emailDivider
-      forM_ (zip [0 :: Int ..] (take maxErrorCards errors)) \(i, err) ->
-        errorCard projectUrl errorsUrl (if i == 0 then chartUrlM else Nothing) err
+      zipWithM_ (errorCard projectUrl errorsUrl) (chartUrlM : repeat Nothing) (take maxErrorCards errors)
       when (length errors > maxErrorCards)
         $ p_ [style_ "text-align: center; color: #57606a; font-size: 14px; margin: 16px 0;"]
         $ toHtml
@@ -595,10 +586,7 @@ anomalyEndpointEmail userName projectName anomalyUrl endpointRows =
     True
     ( do
         emailGreeting (Just userName)
-        p_ do
-          "We detected new endpoints on your "
-          b_ $ toHtml projectName
-          " project:"
+        richP_ ["We detected new endpoints on your ", projectName, " project:"]
         div_ [class_ "highlight-box"]
           $ table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
             tr_ $ td_ [style_ "padding-bottom: 8px; font-weight: 600; font-size: 15px;"] "New Endpoints:"
@@ -625,10 +613,7 @@ hostsUnarchivedEmail userName projectName catalogUrl hosts =
     True
     ( do
         emailGreeting (Just userName)
-        p_ do
-          "These hosts on your "
-          b_ $ toHtml projectName
-          " project had been auto-archived after 30 days without traffic, but are now receiving events again, so we unarchived them:"
+        richP_ ["These hosts on your ", projectName, " project had been auto-archived after 30 days without traffic, but are now receiving events again, so we unarchived them:"]
         div_ [class_ "highlight-box"]
           $ table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"]
           $ forM_ hosts (tr_ . td_ [style_ "padding: 3px 0;"] . span_ [class_ "monoscope-code"] . toHtml)
@@ -649,10 +634,7 @@ issueAssignedEmail userName projectName issueTitleRaw issueUrl errorType errorMe
         False
         ( do
             emailGreeting (Just userName)
-            p_ do
-              "You have been assigned to an issue in the "
-              b_ $ toHtml projectName
-              " project."
+            richP_ ["You have been assigned to an issue in the ", projectName, " project."]
             table_ [class_ "error-card", width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
               tr_ $ td_ [style_ "padding: 15px 20px 5px 20px;"] do
                 p_ [class_ "error-card-header"] $ toHtml errorType
@@ -736,15 +718,9 @@ weeklyReportEmail d =
               toHtml $ "; " <> reportCount issues.criticalOpen <> " critical. " <> reportCount issues.newIssues <> " issues created in this period."
             Report.Unavailable -> reportNote "Issue status is unavailable for this report."
         forM_ systemSnapshot $ \snapshot -> do
-          case snapshot.issues of
-            Report.Available issues | issues.criticalOpen > 0 -> reportFinding (d.projectUrl <> "/issues") $ reportCount issues.criticalOpen <> " critical issues need review"
-            _ -> pass
-          case snapshot.monitors of
-            Report.Available monitors | monitors.alerting > 0 -> reportFinding (d.projectUrl <> "/monitors") $ show monitors.alerting <> " monitors are alerting"
-            _ -> pass
-          case snapshot.infrastructure of
-            Report.Available infra | infra.unready > 0 -> reportFinding (d.projectUrl <> "/infrastructure/containers" <> windowQuery) $ show infra.unready <> " infrastructure resources report not ready"
-            _ -> pass
+          forM_ snapshot.issues \issues -> when (issues.criticalOpen > 0) $ reportFinding (d.projectUrl <> "/issues") $ reportCount issues.criticalOpen <> " critical issues need review"
+          forM_ snapshot.monitors \monitors -> when (monitors.alerting > 0) $ reportFinding (d.projectUrl <> "/monitors") $ show monitors.alerting <> " monitors are alerting"
+          forM_ snapshot.infrastructure \infra -> when (infra.unready > 0) $ reportFinding (d.projectUrl <> "/infrastructure/containers" <> windowQuery) $ show infra.unready <> " infrastructure resources report not ready"
         case systemSnapshot of
           Nothing -> reportNotice "Historical report" "Service, infrastructure and monitor snapshots were not recorded for this report. The original metrics and issue list are shown below."
           Just snapshot -> do
@@ -773,9 +749,9 @@ weeklyReportEmail d =
                 when (null infra.resources) $ reportNote "No infrastructure metrics observed. Configure an OpenTelemetry host, Docker or Kubernetes receiver to include resource usage."
                 forM_ (reportRows 4 infra.resources) $ \r ->
                   reportItem
-                    (d.projectUrl <> (if r.scope == "Host" then "/infrastructure/hosts" else "/infrastructure/containers") <> "?from=" <> toUriStr (isoT infra.observedFrom) <> "&to=" <> toUriStr (isoT infra.observedUntil))
+                    (d.projectUrl <> (if r.scope == ScopeHost then "/infrastructure/hosts" else "/infrastructure/containers") <> "?from=" <> toUriStr (isoT infra.observedFrom) <> "&to=" <> toUriStr (isoT infra.observedUntil))
                     r.name
-                    (T.intercalate " · " $ r.scope : catMaybes [r.host, r.cluster, r.namespace])
+                    (T.intercalate " · " $ T.toTitle (display r.scope) : catMaybes [r.host, r.cluster, r.namespace])
                     [("CPU / capacity", maybe "Not measured" (\x -> reportDecimal (100 * x) <> "%") r.cpuRatio, "Latest sample"), ("Memory / capacity", maybe "Not measured" (\x -> reportDecimal (100 * x) <> "%") r.memoryRatio, "Latest sample"), ("Storage used", maybe "Not measured" (\x -> reportDecimal (100 * x) <> "%") r.storageRatio, "Latest sample"), ("Readiness", maybe "Not reported" (\ready -> if ready then "Ready" else "Not ready") r.ready, maybe "" (\n -> "Restart counter: " <> reportDecimal n) r.restartCounter)]
                 let remaining = infra.hosts + infra.containers + infra.pods - length (reportRows 4 infra.resources)
                 when (remaining > 0) $ reportMore (d.projectUrl <> "/infrastructure/containers" <> windowQuery) remaining "infrastructure resources"
@@ -866,10 +842,10 @@ weeklyReportEmail d =
                   [("Avg duration", reportMs (fromIntegral durationNs / 1000000), ""), ("Operations", reportCount $ fromIntegral count, "Recorded spans")]
               reportViewAll (queryUrl "attributes.db.query.text != null and duration > 500000000") "slow queries"
         forM_ systemSnapshot $ \snapshot -> when (snapshot.topPatterns == Report.Unavailable) $ reportNotice "Log patterns unavailable" "This section could not be loaded for the report."
-        unless (V.null topPatterns)
+        unless (null topPatterns)
           $ reportSection "Log patterns" "Most frequent stored patterns. Counts are lifetime totals, not limited to this reporting period."
           $ do
-            forM_ (reportRows 5 $ V.toList topPatterns) $ \(patternText, count, source) -> reportItem (d.projectUrl <> "/log_explorer" <> windowQuery) (truncateText 180 $ stripSummaryBadges patternText) source [("Occurrences", reportCount count, "Lifetime total")]
+            forM_ (reportRows 5 topPatterns) $ \(patternText, count, source) -> reportItem (d.projectUrl <> "/log_explorer" <> windowQuery) (truncateText 180 $ stripSummaryBadges patternText) source [("Occurrences", reportCount count, "Lifetime total")]
             reportViewAll (d.projectUrl <> "/log_explorer" <> windowQuery) "log patterns"
         reportSection "Activity trends" "Charts are supplemental; the measured totals are above." do
           forM_ systemSnapshot $ \snapshot -> when (snapshot.trends == Just Report.Unavailable) $ reportNotice "Activity trends unavailable" "This section could not be loaded for the report."
@@ -893,10 +869,8 @@ weeklyReportEmail d =
     reportViewAll url label = p_ [style_ "margin:10px 0 0;font-size:14px;"] $ a_ [target_ "_top", href_ url] $ toHtml $ "View all " <> label
     systemSnapshot = case d.evidence of SystemEvidence snapshot -> Just snapshot; HistoricalEvidence _ -> Nothing
     historicalEvidence = case d.evidence of HistoricalEvidence historical -> Just historical; SystemEvidence _ -> Nothing
-    freeTierExceeded = maybe False ((== Just True) . (.ingestionCapped)) systemSnapshot
-    topPatterns = case systemSnapshot of
-      Just snapshot -> case snapshot.topPatterns of Report.Available rows -> V.fromList rows; Report.Unavailable -> V.empty
-      Nothing -> V.empty
+    freeTierExceeded = any ((== Just True) . (.ingestionCapped)) systemSnapshot
+    topPatterns = foldMap (fold . (.topPatterns)) systemSnapshot
     currentServices = maybe [] (mapMaybe (.current) . (.services)) systemSnapshot
     events = case d.evidence of SystemEvidence _ -> sum $ map (.events) currentServices; HistoricalEvidence historical -> fromIntegral historical.totalEvents
     errors = case d.evidence of SystemEvidence _ -> sum $ map (.errorEvents) currentServices; HistoricalEvidence historical -> fromIntegral historical.totalErrors
@@ -905,7 +879,6 @@ weeklyReportEmail d =
     windowQuery = "?from=" <> toUriStr d.fromTime <> "&to=" <> toUriStr d.toTime
     queryUrl query = if T.length query > 2000 then d.reportUrl else d.projectUrl <> "/log_explorer" <> windowQuery <> "&query=" <> toUriStr query
     serviceUrl service environment = queryUrl $ serviceFilter service environment
-    servicePredicate :: Maybe Text -> Text
     servicePredicate = maybe "(service.name == null or service.name == \"\")" (\name -> "service.name == " <> kqlQuoted name)
     serviceFilter service environment = servicePredicate service <> " and " <> maybe "(resource.deployment.environment.name == null or resource.deployment.environment.name == \"\")" (\e -> "resource.deployment.environment.name == " <> kqlQuoted e) environment
     endpointHostFilter host = " and (attributes.server.address == " <> kqlQuoted host <> " or (attributes.server.address == null and " <> (if T.null host then "(service.name == null or service.name == \"\")" else "service.name == " <> kqlQuoted host) <> "))"
@@ -917,7 +890,7 @@ reportFinding url label = p_ [class_ "report-attention", style_ "font-size:14px;
 
 reportObserved :: Report.ReportSection a -> (a -> Html ()) -> Html ()
 reportObserved section render = case section of
-  Report.Available value -> render value
+  Report.Available a -> render a
   Report.Unavailable -> reportNote "This section could not be loaded for the report. Open the linked workspace to investigate."
 
 
@@ -1010,7 +983,7 @@ stripSummaryBadges = unwords . mapMaybe extractValue . words
   where
     extractValue token = case T.breakOn "\8658" token of
       (_, "") -> Just token
-      (_, rest) -> let v = T.drop 1 rest in if T.null v then Nothing else Just v
+      (_, rest) -> guarded (not . T.null) (T.drop 1 rest)
 
 
 -- =============================================================================
@@ -1123,7 +1096,7 @@ sampleSystemSnapshot =
             3
             12
             2
-            [Report.InfrastructureResource "worker-node-2" "Host" Nothing (Just "production-eu") Nothing (Just 0.87) (Just 0.92) (Just 0.62) Nothing Nothing, Report.InfrastructureResource "payments-7fdc9" "Container" (Just "worker-node-2") (Just "production-eu") (Just "payments") (Just 0.72) (Just 0.84) Nothing (Just False) (Just 4), Report.InfrastructureResource "api-6bcfd" "Container" (Just "worker-node-1") (Just "production-eu") (Just "api") (Just 0.24) (Just 0.48) Nothing (Just True) (Just 0)]
+            [Report.InfrastructureResource "worker-node-2" ScopeHost Nothing (Just "production-eu") Nothing (Just 0.87) (Just 0.92) (Just 0.62) Nothing Nothing, Report.InfrastructureResource "payments-7fdc9" ScopeContainer (Just "worker-node-2") (Just "production-eu") (Just "payments") (Just 0.72) (Just 0.84) Nothing (Just False) (Just 4), Report.InfrastructureResource "api-6bcfd" ScopeContainer (Just "worker-node-1") (Just "production-eu") (Just "api") (Just 0.24) (Just 0.48) Nothing (Just True) (Just 0)]
             1
             (addUTCTime (-900) end)
             end
@@ -1170,12 +1143,7 @@ monitorAlertEmail projectName monitorTitle monitorUrl currentValue threshold dir
     True
     ( do
         h1_ "Monitor Alert Triggered"
-        p_ do
-          "The monitor "
-          b_ $ toHtml monitorTitle
-          " in your "
-          b_ $ toHtml projectName
-          " project has breached its threshold."
+        richP_ ["The monitor ", monitorTitle, " in your ", projectName, " project has breached its threshold."]
         emailDivider
         emailStatRow
           [ ("Current Value", show (round currentValue :: Int), Just "#cf222e")
@@ -1195,12 +1163,7 @@ monitorRecoveryEmail projectName monitorTitle =
     True
     ( do
         h1_ [style_ "color: #1a7f37;"] "Monitor Recovered"
-        p_ do
-          "The monitor "
-          b_ $ toHtml monitorTitle
-          " in your "
-          b_ $ toHtml projectName
-          " project has recovered and is back to normal."
+        richP_ ["The monitor ", monitorTitle, " in your ", projectName, " project has recovered and is back to normal."]
     )
     "View Monitor"
 
@@ -1212,12 +1175,7 @@ freeTierUsageEmail projectName billingUrl used limit exceeded =
     True
     ( do
         h1_ $ if exceeded then "Daily Event Limit Reached" else "Approaching Daily Event Limit"
-        p_ do
-          "Your "
-          b_ $ toHtml projectName
-          if exceeded
-            then " project has hit its daily free tier limit. New events are being dropped."
-            else " project is approaching its daily free tier limit."
+        richP_ ["Your ", projectName, bool " project is approaching its daily free tier limit." " project has hit its daily free tier limit. New events are being dropped." exceeded]
         emailStatRow
           [ ("Events Today", formatWithCommas (fromIntegral used), if exceeded then Just "#cf222e" else Just "#bf8700")
           , ("Daily Limit", formatWithCommas (fromIntegral limit), Nothing)
@@ -1226,6 +1184,11 @@ freeTierUsageEmail projectName billingUrl used limit exceeded =
     )
     "Upgrade Plan"
     billingUrl
+
+
+-- | Paragraph alternating plain and bold runs: @richP_ ["Your ", project, " is ready."]@.
+richP_ :: [Text] -> Html ()
+richP_ = p_ . zipWithM_ ($) (cycle [toHtml, b_ . toHtml])
 
 
 -- | Shared skeleton for every notification email that ends in a CTA: content,
@@ -1250,12 +1213,7 @@ planUpgradedEmail projectName newPlan =
     True
     ( do
         h1_ "Plan Upgraded"
-        p_ do
-          "Your "
-          b_ $ toHtml projectName
-          " project has been upgraded to the "
-          b_ $ toHtml newPlan
-          " plan. Thank you for your support!"
+        richP_ ["Your ", projectName, " project has been upgraded to the ", newPlan, " plan. Thank you for your support!"]
     )
     "View Billing"
 
@@ -1267,12 +1225,7 @@ trialEndingEmail projectName daysLeft =
     True
     ( do
         h1_ $ toHtml $ "Your trial ends in " <> show @Text daysLeft <> " days"
-        p_ do
-          "The 30-day free trial on "
-          b_ $ toHtml projectName
-          " ends in "
-          b_ $ toHtml (show @Text daysLeft)
-          " days. Your subscription will renew automatically and you'll be billed for usage accrued during the trial."
+        richP_ ["The 30-day free trial on ", projectName, " ends in ", show daysLeft, " days. Your subscription will renew automatically and you'll be billed for usage accrued during the trial."]
         p_ "If you'd like to cancel before the trial ends, you can do so from the billing page."
     )
     "Manage Billing"
@@ -1285,12 +1238,7 @@ planDowngradedEmail projectName reason =
     True
     ( do
         h1_ "Plan Downgraded to Free"
-        p_ do
-          "Your "
-          b_ $ toHtml projectName
-          " project has been downgraded to the Free plan because your subscription "
-          toHtml reason
-          "."
+        richP_ ["Your ", projectName, " project has been downgraded to the Free plan because your subscription " <> reason <> "."]
         p_ "On the Free plan, daily event limits apply and additional team members will be deactivated. You can re-subscribe at any time to restore full access."
     )
     "Upgrade Plan"

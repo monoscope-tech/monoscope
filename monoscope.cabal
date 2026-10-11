@@ -245,6 +245,17 @@ extra-source-files:
     static/migrations/0212_widget_warning_threshold.sql
     static/migrations/0213_pr_impact_reviews.sql
     static/migrations/0214_pr_review_evidence_optin.sql
+    static/migrations/0215_repository_dashboard_ownership.sql
+    static/migrations/0216_repository_relative_paths.sql
+    static/migrations/0217_repository_account_origins.sql
+    static/migrations/0218_connected_repositories.sql
+    static/migrations/0219_repository_accounts.sql
+    static/migrations/0220_github_installation_authorization.sql
+    static/migrations/0221_repository_sync_leases.sql
+    static/migrations/0222_repository_sync_failures.sql
+    static/migrations/0223_github_repository_identity.sql
+    static/migrations/0224_github_attempt_retention.sql
+    static/migrations/0225_anomaly_shape_delta.sql
     test/fixtures/github-app-test.pem
 
 source-repository head
@@ -722,6 +733,7 @@ test-suite integration-tests
       CLI.Harness
       Data.Effectful.HasqlGuardSpec
       EndpointDiscoverySpec
+      ErrorFingerprintStabilitySpec
       EvalConformanceSpec
       ExtractionWorkerSpec
       FacetsSpec
@@ -1034,6 +1046,7 @@ test-suite test-dev
       CLI.Harness
       Data.Effectful.HasqlGuardSpec
       EndpointDiscoverySpec
+      ErrorFingerprintStabilitySpec
       EvalConformanceSpec
       ExtractionWorkerSpec
       FacetsSpec

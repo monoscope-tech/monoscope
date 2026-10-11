@@ -1,97 +1,53 @@
 module Web.Routes (server, genAuthServerContext, KeepPrefixExp, LogDataFieldExp, widgetPngGetH, widgetGetH, chartsDataGetH, ApiV1Routes, apiV1Server, apiV1OpenApiSpec) where
 
--- Standard library imports
 import Control.Lens
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
+import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Builder (Builder)
+import Data.ByteString.Lazy qualified as LBS
+import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
+import Data.Effectful.Hasql qualified as Hasql
+import Data.Effectful.Wreq qualified as Wreq
 import Data.List qualified as L
+import Data.OpenApi (OpenApi, SecurityDefinitions (..), SecurityScheme (..), SecuritySchemeType (..), components, description, info, security, securitySchemes, servers, title, version)
+import Data.OpenApi qualified as OA
 import Data.Ord (clamp)
+import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.UUID qualified as UUID
 import Deriving.Aeson.Stock qualified as DAE
-import GHC.TypeLits (Symbol)
-import Pkg.DeriveUtils (UUIDId (..))
-import Relude hiding (ask)
-
--- Database imports
-import Data.Effectful.Hasql qualified as Hasql
-import Hasql.Interpolate qualified as HI
-import Models.Apis.ShareEvents qualified as ShareEvents
-
--- Effectful imports
 import Effectful.Error.Static qualified as Error
 import Effectful.Reader.Static (ask)
 import Effectful.State.Static.Local qualified as State
 import Effectful.Time qualified as Time
-
--- Web and server imports
+import GHC.TypeLits (Symbol)
+import Hasql.Interpolate qualified as HI
 import Log (Logger)
 import Lucid
-import Network.HTTP.Types qualified as H
-import Network.Wai (Request, queryString)
-import Network.Wai qualified as Wai
-import Servant
-import Servant.HTML.Lucid (HTML)
-import Servant.Htmx
-import Servant.QueryParam.Record (RecordParam)
-import Servant.QueryParam.Server.Record ()
-import Servant.QueryParam.TypeLevel (Eval, Exp)
-import Servant.Server.Generic (AsServerT, genericServeTWithContext)
-import Servant.Server.Internal.Delayed (passToServer)
-import Web.Cookie (SetCookie)
-
--- System and configuration imports
-
-import Data.OpenApi (OpenApi, SecurityDefinitions (..), SecurityScheme (..), SecuritySchemeType (..), components, description, info, security, securitySchemes, servers, title, version)
-import Data.OpenApi qualified as OA
-import OpenTelemetry.Trace (TracerProvider)
-import Pages.CommandPalette qualified as CommandPalette
-import Servant.OpenApi (HasOpenApi (..), toOpenApi)
-import System.Config (AuthContext (..), DeploymentEnv (..), EnvConfig (..))
-import System.Exit (ExitCode (..))
-import System.Logging qualified as Log
-import System.Process.Typed (byteStringInput, proc, readProcess, setStdin)
-import System.Timeout (timeout)
-import System.Types (ATAuthCtx, ATBaseCtx, ApiPrincipal (..), HXRedirectDest, HXReswap (..), RespHeaders, TriggerEvents, XWidgetJSON, addRespHeaders, atAuthToBase, effToServantHandler)
-import Web.Auth (APItoolkitAuthContext, ApiKeyAuthContext, apiKeyAuthHandler, authHandler, htmlServerError)
-import Web.Auth qualified as Auth
-import Web.MCP qualified as MCP
-import Web.Wire qualified as Wire
-
--- Model imports
-
-import Data.ByteString.Base16 qualified as B16
-import Data.ByteString.Lazy qualified as LBS
-import Data.CaseInsensitive qualified as CI
-import Data.Effectful.Wreq qualified as Wreq
-import Data.Text qualified as T
+import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.Incidents qualified as Incidents
+import Models.Apis.Issues qualified as Issues
+import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.PrometheusScrapeConfigs qualified as PromCfg
+import Models.Apis.ShareEvents qualified as ShareEvents
+import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.Dashboards qualified as Dashboards
+import Models.Projects.GitSync qualified as ModelGitSync
+import Models.Projects.ImpactReviews qualified as ImpactReviews
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.ContainerTypes (Scope)
 import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
-import Pkg.Parser qualified as Parser
-import Pkg.Parser.Expr qualified as ParserExpr
-import UnliftIO.Exception (handle)
-import Utils qualified
-import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
-
--- Page imports
-
-import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.Incidents qualified as Incidents
-import Models.Apis.Issues qualified as Issues
-import Models.Apis.LogQueries qualified as LogQueries
-import Models.Projects.CodeContext qualified as CodeContext
-import Models.Projects.GitSync qualified as ModelGitSync
-import Models.Projects.ImpactReviews qualified as ImpactReviews
+import Network.HTTP.Types qualified as H
+import Network.Wai (Request, queryString)
+import Network.Wai qualified as Wai
+import OpenTelemetry.Trace (TracerProvider)
 import Pages.AIThreads qualified as AIThreads
 import Pages.BodyWrapper (NavigationResponse, PageCtx (..))
 import Pages.Bots.Discord qualified as Discord
@@ -100,6 +56,7 @@ import Pages.Bots.Utils qualified as BotUtils
 import Pages.Bots.Whatsapp qualified as Whatsapp
 import Pages.Charts.Charts qualified as Charts
 import Pages.CodeContext qualified as PageCodeContext
+import Pages.CommandPalette qualified as CommandPalette
 import Pages.Containers qualified as Containers
 import Pages.Dashboards qualified as Dashboards
 import Pages.Endpoints qualified as ApiCatalog
@@ -128,16 +85,39 @@ import Pages.Telemetry qualified as Trace
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
+import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.EmailTemplates qualified as ET
 import Pkg.Git qualified as Git
 import Pkg.LiveTail qualified as LT
+import Pkg.Parser qualified as Parser
+import Pkg.Parser.Expr qualified as ParserExpr
+import Relude hiding (ask)
+import Servant
+import Servant.HTML.Lucid (HTML)
+import Servant.Htmx
+import Servant.OpenApi (HasOpenApi (..), toOpenApi)
+import Servant.QueryParam.Record (RecordParam)
+import Servant.QueryParam.Server.Record ()
+import Servant.QueryParam.TypeLevel (Eval, Exp)
+import Servant.Server.Generic (AsServerT, genericServeTWithContext)
+import Servant.Server.Internal.Delayed (passToServer)
+import System.Config (AuthContext (..), DeploymentEnv (..), EnvConfig (..))
+import System.Exit (ExitCode (..))
+import System.Logging qualified as Log
+import System.Process.Typed (byteStringInput, proc, readProcess, setStdin)
+import System.Timeout (timeout)
+import System.Types (ATAuthCtx, ATBaseCtx, ApiPrincipal (..), HXRedirectDest, HXReswap (..), RespHeaders, TriggerEvents, XWidgetJSON, addRespHeaders, atAuthToBase, effToServantHandler)
+import UnliftIO.Exception (handle)
+import Utils qualified
 import Web.ApiHandlers qualified as ApiH
 import Web.ApiTypes qualified as ApiT
+import Web.Auth (APItoolkitAuthContext, ApiKeyAuthContext, apiKeyAuthHandler, authHandler, htmlServerError)
+import Web.Auth qualified as Auth
+import Web.Cookie (SetCookie)
+import Web.MCP qualified as MCP
+import Web.Wire qualified as Wire
+import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
 
-
--- =============================================================================
--- Common query parameter type aliases
--- =============================================================================
 
 type ProjectId = Capture "projectID" Projects.ProjectId
 type GetRedirect = Verb 'GET 302
@@ -147,16 +127,17 @@ type LocationRedirect a = GetRedirect '[HTML] (Headers '[Header "Location" Text]
 type SessionRedirect a = GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] a)
 
 
--- Query parameter types
 type QPT a = QueryParam a Text
 
 
 type QPU a = QueryParam a UTCTime
 type QPI a = QueryParam a Int
-type QPUUId a = QueryParam a UUID.UUID
 
 
--- Custom type for handling all query parameters
+-- | Unknown values reach the handler as 'Left' instead of a 400, for links that outlive their enum.
+type LenientQP = QueryParam' '[Optional, Lenient]
+
+
 data AllQueryParams
 
 
@@ -174,11 +155,6 @@ data LogDataFieldExp :: Symbol -> Exp Symbol
 type instance Eval (LogDataFieldExp sym) = LogDataField sym
 
 
--- =============================================================================
--- Custom content types
--- =============================================================================
-
--- Define custom RawJSON content type
 data RawJSON
 
 
@@ -256,14 +232,9 @@ otlpHttpH export keyM body =
   liftIO (export keyM body) >>= either (\e -> Error.throwError err400{errBody = fromStrict (encodeUtf8 e)}) pure
 
 
--- When bytestring is returned for json, simply return the bytestring
 instance Servant.MimeRender JSON ByteString where
   mimeRender _ = fromStrict
 
-
--- =============================================================================
--- Public API v1 Routes
--- =============================================================================
 
 type ApiV1Routes :: Type -> Type
 data ApiV1Routes mode = ApiV1Routes
@@ -335,7 +306,7 @@ data ApiV1Routes mode = ApiV1Routes
     dashboardsList
       :: mode
         :- "dashboards"
-          :> QPT "sort"
+          :> QueryParam "sort" Dashboards.DashboardSort
           :> QPT "team_id"
           :> Get '[JSON] [ApiT.DashboardSummary]
   , dashboardGet :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> Get '[JSON] ApiT.DashboardFull
@@ -422,21 +393,16 @@ data ApiV1Routes mode = ApiV1Routes
   , teamDelete :: mode :- "teams" :> Capture "team_id" ApiT.TeamId :> Delete '[JSON] NoContent
   , teamsBulk :: mode :- "teams" :> "bulk" :> ReqBody '[JSON] (ApiT.BulkAction ApiT.TeamId) :> Post '[JSON] (ApiT.BulkResult ApiT.TeamId)
   , membersList :: mode :- "members" :> Get '[JSON] [ApiT.MemberSummary]
-  , memberGet :: mode :- "members" :> Capture "user_id" UUID.UUID :> Get '[JSON] ApiT.MemberSummary
+  , memberGet :: mode :- "members" :> Capture "user_id" Projects.UserId :> Get '[JSON] ApiT.MemberSummary
   , memberAdd :: mode :- "members" :> ReqBody '[JSON] ApiT.MemberAdd :> Post '[JSON] ApiT.MemberSummary
-  , memberPatch :: mode :- "members" :> Capture "user_id" UUID.UUID :> ReqBody '[JSON] ApiT.MemberPatch :> Patch '[JSON] ApiT.MemberSummary
-  , memberRemove :: mode :- "members" :> Capture "user_id" UUID.UUID :> Delete '[JSON] NoContent
+  , memberPatch :: mode :- "members" :> Capture "user_id" Projects.UserId :> ReqBody '[JSON] ApiT.MemberPatch :> Patch '[JSON] ApiT.MemberSummary
+  , memberRemove :: mode :- "members" :> Capture "user_id" Projects.UserId :> Delete '[JSON] NoContent
   , -- Model Context Protocol endpoint (JSON-RPC; tools derived from this OpenAPI spec)
     mcp :: mode :- "mcp" :> ReqBody '[JSON] AE.Value :> Post '[JSON] AE.Value
   }
   deriving stock (Generic)
 
 
--- =============================================================================
--- Route Definitions
--- =============================================================================
-
--- Root routes
 type Routes :: Type -> Type
 data Routes mode = Routes
   { public :: mode :- "public" :> Servant.Raw
@@ -498,7 +464,6 @@ data Routes mode = Routes
   deriving stock (Generic)
 
 
--- Cookie Protected Routes
 type CookieProtectedRoutes :: Type -> Type
 data CookieProtectedRoutes mode = CookieProtectedRoutes
   { -- Dashboard routes
@@ -511,7 +476,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , rumDashboardRedirect :: mode :- "p" :> ProjectId :> "rum" :> "dashboard" :> AllQueryParams :> LocationRedirect NoContent
   , dashboardNewGet :: mode :- "p" :> ProjectId :> "dashboards" :> "new" :> Get '[HTML] (RespHeaders Dashboards.DashboardNew)
   , dashboardsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> HXRequest :> AllQueryParams :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardGet))
-  , dashboardsGetList :: mode :- "p" :> ProjectId :> "dashboards" :> QPT "sort" :> QPT "embedded" :> QueryParam "teamId" ApiT.TeamId :> QPT "copy_widget_id" :> QPUUId "source_dashboard_id" :> QPT "new" :> RecordParam KeepPrefixExp Dashboards.DashboardFilters :> Get '[HTML] (RespHeaders Dashboards.DashboardsGet)
+  , dashboardsGetList :: mode :- "p" :> ProjectId :> "dashboards" :> QPT "sort" :> QPT "embedded" :> QueryParam "teamId" ApiT.TeamId :> QPT "copy_widget_id" :> QueryParam "source_dashboard_id" Dashboards.DashboardId :> QPT "new" :> RecordParam KeepPrefixExp Dashboards.DashboardFilters :> Get '[HTML] (RespHeaders Dashboards.DashboardsGet)
   , dashboardsPost :: mode :- "p" :> ProjectId :> "dashboards" :> ReqBody '[FormUrlEncoded] Dashboards.DashboardForm :> Post '[HTML] (RespHeaders Dashboards.DashboardRes)
   , dashboardSettledPost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "settled" :> ReqBody '[JSON] Dashboards.DashboardSettleSample :> Post '[JSON] NoContent
   , dashboardRepositoryGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "repository" :> Get '[HTML] (RespHeaders (PageCtx GitSync.DashboardRepositoryGet))
@@ -522,13 +487,13 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , dashboardRenamePatch :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "rename" :> ReqBody '[FormUrlEncoded] Dashboards.DashboardRenameForm :> Patch '[HTML] (RespHeaders Dashboards.DashboardRes)
   , dashboardDuplicatePost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "duplicate" :> Post '[HTML] (RespHeaders Dashboards.DashboardRes)
   , dashboardStarPost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "star" :> Post '[HTML] (RespHeaders (Html ()))
-  , dashboardDuplicateWidget :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> "duplicate" :> QPUUId "source_dashboard_id" :> Post '[HTML] (RespHeaders Widget.Widget)
+  , dashboardDuplicateWidget :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> "duplicate" :> QueryParam "source_dashboard_id" Dashboards.DashboardId :> Post '[HTML] (RespHeaders Widget.Widget)
   , dashboardWidgetNewGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> "new" :> QPT "tab" :> QPT "range_start" :> QPT "range_end" :> Get '[HTML] (RespHeaders (Html ()))
   , dashboardWidgetExpandGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> "expand" :> QPT "editor_tab" :> Get '[HTML] (RespHeaders (Html ()))
   , -- Widget alert routes
-    widgetAlertUpsert :: mode :- "p" :> ProjectId :> "widgets" :> Capture "widget_id" Text :> "alert" :> QPUUId "dashboard_id" :> ReqBody '[FormUrlEncoded] Dashboards.WidgetAlertForm :> Post '[HTML] (RespHeaders (Html ()))
-  , widgetAlertDelete :: mode :- "p" :> ProjectId :> "widgets" :> Capture "widget_id" Text :> "alert" :> QPUUId "dashboard_id" :> Delete '[HTML] (RespHeaders (Html ()))
-  , widgetAlertToggle :: mode :- "p" :> ProjectId :> "widgets" :> Capture "widget_id" Text :> "alert" :> "toggle_active" :> QPUUId "dashboard_id" :> Post '[HTML] (RespHeaders (Html ()))
+    widgetAlertUpsert :: mode :- "p" :> ProjectId :> "widgets" :> Capture "widget_id" Text :> "alert" :> QueryParam "dashboard_id" Dashboards.DashboardId :> ReqBody '[FormUrlEncoded] Dashboards.WidgetAlertForm :> Post '[HTML] (RespHeaders (Html ()))
+  , widgetAlertDelete :: mode :- "p" :> ProjectId :> "widgets" :> Capture "widget_id" Text :> "alert" :> QueryParam "dashboard_id" Dashboards.DashboardId :> Delete '[HTML] (RespHeaders (Html ()))
+  , widgetAlertToggle :: mode :- "p" :> ProjectId :> "widgets" :> Capture "widget_id" Text :> "alert" :> "toggle_active" :> QueryParam "dashboard_id" Dashboards.DashboardId :> Post '[HTML] (RespHeaders (Html ()))
   , dashboardBulkActionPost :: mode :- "p" :> ProjectId :> "dashboards" :> "bulk_action" :> Capture "action" Dashboards.DashboardBulkAction :> ReqBody '[FormUrlEncoded] Dashboards.DashboardBulkActionForm :> Post '[HTML] (RespHeaders NoContent)
   , -- Dashboard tab routes (htmx lazy loading)
     dashboardTabGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "tab" :> Capture "tab_slug" Text :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> HXRequest :> Header "HX-Trigger-Name" Text :> AllQueryParams :> Get '[HTML] (RespHeaders (NavigationResponse Dashboards.DashboardGet))
@@ -548,8 +513,8 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , widgetSqlPreview :: mode :- "p" :> ProjectId :> "widget" :> "sql-preview" :> QPT "query" :> QPT "dashboard_id" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders (Html ()))
   , widgetSqlText :: mode :- "p" :> ProjectId :> "widget" :> "sql-text" :> QPT "query" :> QPT "dashboard_id" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[PlainText] (RespHeaders Text)
   , -- Endpoints and fields
-    endpointListGet :: mode :- "p" :> ProjectId :> "endpoints" :> QPT "page" :> QPT "per_page" :> QPT "layout" :> QPT "filter" :> QPT "host" :> QPT "request_type" :> QPT "sort" :> QPT "period" :> HXRequest :> HXBoosted :> HXCurrentURL :> QPT "load_more" :> QPT "search" :> QPT "stats" :> Get '[HTML] (RespHeaders ApiCatalog.EndpointRequestStatsVM)
-  , apiCatalogGet :: mode :- "p" :> ProjectId :> "api_catalog" :> QPT "sort" :> QPT "since" :> QPT "request_type" :> QPT "period" :> QPI "skip" :> QPT "filter" :> QPT "stats" :> Get '[HTML] (RespHeaders ApiCatalog.CatalogList)
+    endpointListGet :: mode :- "p" :> ProjectId :> "endpoints" :> QPT "page" :> QPT "per_page" :> QPT "layout" :> QPT "filter" :> QPT "host" :> QPT "request_type" :> QPT "sort" :> QPT "period" :> HXRequest :> HXBoosted :> HXCurrentURL :> QPT "load_more" :> QPT "search" :> QPT "stats" :> Get '[HTML] (RespHeaders (Table.TableResponse ApiCatalog.EnpReqStatsVM))
+  , apiCatalogGet :: mode :- "p" :> ProjectId :> "api_catalog" :> QPT "sort" :> QPT "since" :> QPT "request_type" :> QPT "period" :> QPI "skip" :> QPT "filter" :> QPT "stats" :> Get '[HTML] (RespHeaders (Table.TableResponse ApiCatalog.HostEventsVM))
   , apiCatalogBulkAction :: mode :- "p" :> ProjectId :> "api_catalog" :> "bulk_action" :> Capture "action" ApiCatalog.HostBulkAction :> QPT "request_type" :> ReqBody '[FormUrlEncoded] ApiCatalog.HostBulkActionForm :> Post '[HTML] (RespHeaders ApiCatalog.CatalogBulkAction)
   , -- The learned OpenAPI document: rendered reference, plus the raw spec in both
     -- serialisations. Static ".json"/".yaml" segments rather than content negotiation,
@@ -639,7 +604,6 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   deriving stock (Generic)
 
 
--- Log Explorer Routes
 type LogExplorerRoutes = NamedRoutes LogExplorerRoutes'
 
 
@@ -679,7 +643,6 @@ data LogExplorerRoutes' mode = LogExplorerRoutes'
   deriving stock (Generic)
 
 
--- Issues Routes
 type IssuesRoutes = NamedRoutes IssuesRoutes'
 
 
@@ -697,7 +660,7 @@ data IssuesRoutes' mode = IssuesRoutes'
   , linkPost :: mode :- Capture "issueID" Issues.IssueId :> "link" :> ReqBody '[FormUrlEncoded] IssuesPage.LinkForm :> Post '[HTML] (RespHeaders (Html ()))
   , unarchiveGet :: mode :- Capture "issueID" Issues.IssueId :> "unarchive" :> Post '[HTML] (RespHeaders IssuesPage.IssueAction)
   , bulkActionsPost :: mode :- "bulk_actions" :> Capture "action" IssuesPage.IssueBulkAction :> QueryParam "duration" Int :> QueryParam "value" Text :> ReqBody '[FormUrlEncoded] IssuesPage.IssueBulkForm :> Post '[HTML] (RespHeaders IssuesPage.IssueAction)
-  , listGet :: mode :- QPT "filter" :> QPT "sort" :> QPT "since" :> QPT "page" :> QPT "per_page" :> QPT "load_more" :> QPT "period" :> QueryParams "service" Text :> QueryParams "type" Text :> Get '[HTML] (RespHeaders IssuesPage.IssueListGet)
+  , listGet :: mode :- QPT "filter" :> QPT "sort" :> QPT "since" :> QPT "page" :> QPT "per_page" :> QPT "load_more" :> QPT "period" :> QueryParams "service" Text :> QueryParams "type" Text :> Get '[HTML] (RespHeaders (Table.TableResponse IssuesPage.IssueVM))
   , stepGet :: mode :- Capture "issueID" Issues.IssueId :> "step" :> QueryParam "dir" Telemetry.EventStep :> QueryParam "event" IssuesPage.EventRef :> LocationRedirect NoContent
   , detailGet :: mode :- Capture "issueID" Issues.IssueId :> QPT "first_occurrence" :> QPT "since" :> QPT "from" :> QPT "to" :> QueryParam "event" IssuesPage.EventRef :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   , detailHashGet :: mode :- "by_hash" :> Capture "issueHash" Text :> QPT "first_occurrence" :> QPT "since" :> QPT "from" :> QPT "to" :> QueryParam "event" IssuesPage.EventRef :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
@@ -714,7 +677,6 @@ data IssuesRoutes' mode = IssuesRoutes'
   deriving stock (Generic)
 
 
--- Telemetry Routes
 type TelemetryRoutes = NamedRoutes TelemetryRoutes'
 
 
@@ -749,7 +711,6 @@ data TelemetryRoutes' mode = TelemetryRoutes'
   deriving stock (Generic)
 
 
--- Monitors Routes
 type MonitorsRoutes = NamedRoutes MonitorsRoutes'
 
 
@@ -778,7 +739,6 @@ data MonitorsRoutes' mode = MonitorsRoutes'
   deriving stock (Generic)
 
 
--- Projects Routes
 type ProjectsRoutes = NamedRoutes ProjectsRoutes'
 
 
@@ -809,24 +769,19 @@ data ProjectsRoutes' mode = ProjectsRoutes'
   , notificationsTestPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "settings" :> "integrations" :> "test" :> ReqBody '[FormUrlEncoded] Settings.TestForm :> Post '[HTML] (RespHeaders (Html ()))
   , notificationsTestHistoryGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "settings" :> "integrations" :> "history" :> Get '[HTML] (RespHeaders Settings.NotificationTestHistoryGet)
   , -- Onboarding routes
-    onboading :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> QPT "step" :> Get '[HTML] (RespHeaders Onboarding.OnboardingGet)
-  , onboardingInfoPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "info" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingInfoForm :> Post '[HTML] (RespHeaders Onboarding.OnboardingInfoPost)
-  , onboardingConfPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "survey" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingConfForm :> Post '[HTML] (RespHeaders Onboarding.OnboardingConfPost)
+    onboading :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> LenientQP "step" Onboarding.OnboardingStep :> Get '[HTML] (RespHeaders Onboarding.OnboardingGet)
+  , onboardingInfoPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "info" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingInfoForm :> Post '[HTML] (RespHeaders Onboarding.OnboardingStepPost)
+  , onboardingConfPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "survey" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingConfForm :> Post '[HTML] (RespHeaders Onboarding.OnboardingStepPost)
   , onboardingPhoneEmailsPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "phone-emails" :> ReqBody '[JSON] Onboarding.NotifChannelForm :> Post '[HTML] (RespHeaders Onboarding.OnboardingPhoneEmailsPost)
   , onboardingIntegrationCheck :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "integration-check" :> QPT "language" :> Get '[HTML] (RespHeaders (Html ()))
   , onboardingDismissChecklist :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "dismiss-checklist" :> Post '[HTML] (RespHeaders (Html ()))
-  , onboardingSkipped :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "skip" :> QPT "step" :> Post '[HTML] (RespHeaders (Html ()))
+  , onboardingSkipped :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "skip" :> LenientQP "step" Onboarding.OnboardingStep :> Post '[HTML] (RespHeaders (Html ()))
   , -- Pricing routes
     onboardingPricingUpdate :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "pricing" :> ReqBody '[FormUrlEncoded] CreateProject.PricingUpdateForm :> Post '[HTML] (RespHeaders (Html ()))
   }
   deriving stock (Generic)
 
 
--- =============================================================================
--- Server Implementations
--- =============================================================================
-
--- Main server for the root routes
 server :: Logger -> AuthContext -> TracerProvider -> OtlpHttpHandler -> OtlpHttpHandler -> Routes (AsServerT ATBaseCtx)
 server logger env tp otlpTraces otlpLogs =
   Routes
@@ -888,7 +843,6 @@ server logger env tp otlpTraces otlpLogs =
     }
 
 
--- API v1 server
 apiV1Server :: Logger -> AuthContext -> TracerProvider -> ApiPrincipal -> Servant.ServerT (NamedRoutes ApiV1Routes) ATBaseCtx
 apiV1Server logger env tp principal =
   ApiV1Routes
@@ -1005,7 +959,6 @@ apiV1OpenApiSpec =
     & security .~ [OA.SecurityRequirement (fromList [("BearerAuth", [])])]
 
 
--- Cookie Protected server
 cookieProtectedServer :: Servant.ServerT (Servant.NamedRoutes CookieProtectedRoutes) ATAuthCtx
 cookieProtectedServer =
   CookieProtectedRoutes
@@ -1140,7 +1093,6 @@ cookieProtectedServer =
     }
 
 
--- Log Explorer server
 logExplorerServer :: Projects.ProjectId -> Servant.ServerT LogExplorerRoutes ATAuthCtx
 logExplorerServer pid =
   LogExplorerRoutes'
@@ -1169,7 +1121,6 @@ logExplorerServer pid =
     }
 
 
--- Issues server
 issuesServer :: Projects.ProjectId -> Servant.ServerT IssuesRoutes ATAuthCtx
 issuesServer pid =
   IssuesRoutes'
@@ -1201,7 +1152,6 @@ issuesServer pid =
     }
 
 
--- Telemetry server
 telemetryServer :: Projects.ProjectId -> Servant.ServerT TelemetryRoutes ATAuthCtx
 telemetryServer pid =
   TelemetryRoutes'
@@ -1230,7 +1180,6 @@ telemetryServer pid =
     }
 
 
--- Monitors server
 monitorsServer :: Projects.ProjectId -> Servant.ServerT MonitorsRoutes ATAuthCtx
 monitorsServer pid =
   MonitorsRoutes'
@@ -1256,7 +1205,6 @@ monitorsServer pid =
     }
 
 
--- Projects server
 projectsServer :: Servant.ServerT ProjectsRoutes ATAuthCtx
 projectsServer =
   ProjectsRoutes'
@@ -1281,20 +1229,16 @@ projectsServer =
     , teamBulkAction = ManageMembers.manageTeamBulkActionH
     , manageSubscriptionGet = ManageMembers.manageSubGetH
     , stripeCheckout = ManageMembers.stripeCheckoutInitH
-    , onboading = Onboarding.onboardingGetH
+    , onboading = \pid -> Onboarding.onboardingGetH pid . (rightToMaybe =<<)
     , onboardingInfoPost = Onboarding.onboardingInfoPostH
     , onboardingConfPost = Onboarding.onboardingConfPostH
     , onboardingPhoneEmailsPost = Onboarding.phoneEmailPostH
     , onboardingIntegrationCheck = Onboarding.checkIntegrationGet
     , onboardingPricingUpdate = CreateProject.pricingUpdateH
     , onboardingDismissChecklist = Onboarding.dismissChecklistH
-    , onboardingSkipped = Onboarding.onboardingStepSkipped
+    , onboardingSkipped = \pid -> Onboarding.onboardingStepSkipped pid . (rightToMaybe =<<)
     }
 
-
--- =============================================================================
--- Utility handlers and helpers
--- =============================================================================
 
 data Status = Status
   { dbVersion :: Maybe Text
@@ -1516,10 +1460,6 @@ widgetPngGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr widthM heightM s
   pure $ addHeader @"Cache-Control" (if isLeft chart then "no-store" else bool "public, max-age=300" "public, max-age=31536000, immutable" $ isJust fromDStr && isJust toDStr) pngBytes
 
 
--- =============================================================================
--- Email Preview Handlers (dev only)
--- =============================================================================
-
 guardDevOnly :: ATBaseCtx ()
 guardDevOnly = do
   ctx <- ask @AuthContext
@@ -1570,10 +1510,6 @@ emailPreviewH templateName = do
   uncurry ET.emailWrapper <$> fromMaybe (pure ("Unknown", p_ "Template not found")) (L.lookup templateName emailTemplates)
 
 
--- =============================================================================
--- Authentication and error handling
--- =============================================================================
-
 -- | The context that will be made available to request handlers. We supply the
 -- "cookie-auth"-tagged request handler defined above, so that the 'HasServer' instance
 -- of 'AuthProtect' can extract the handler and run it on the request.
@@ -1590,10 +1526,6 @@ errorFormatters env =
     }
 
 
--- =============================================================================
--- Custom HasServer instances
--- =============================================================================
-
 -- | We add a HasServer instance that says:
 --   - The handler will receive a list of (Text, Maybe Text).
 --   - We pull that out of the WAI `Request` in `route`.
@@ -1603,17 +1535,10 @@ instance HasServer api ctx => HasServer (AllQueryParams :> api) ctx where
 
   route _ ctx subserver = route (Proxy :: Proxy api) ctx $ passToServer subserver grabAllParams
     where
-      grabAllParams :: Request -> [(Text, Maybe Text)]
       grabAllParams = map (bimap dec (fmap dec)) . queryString
       dec = decodeUtf8With lenientDecode
 
 
-  hoistServerWithContext
-    :: Proxy (AllQueryParams :> api)
-    -> Proxy ctx
-    -> (forall x. m x -> n x)
-    -> ([(Text, Maybe Text)] -> ServerT api m)
-    -> ([(Text, Maybe Text)] -> ServerT api n)
   hoistServerWithContext _ pc nat s = hoistServerWithContext (Proxy :: Proxy api) pc nat . s
 
 

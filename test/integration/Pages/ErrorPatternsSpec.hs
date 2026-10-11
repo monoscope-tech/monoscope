@@ -27,6 +27,7 @@ import Pkg.ErrorFingerprint qualified as EF
 import Pkg.TestUtils
 import Relude
 import Servant qualified
+import Servant.API (ResponseHeader (..), lookupResponseHeader)
 import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, sequential, shouldBe, shouldReturn, shouldSatisfy)
 
 
@@ -640,6 +641,21 @@ spec = sequential $ aroundAll withTestResources do
           unsubPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
           fmap (.subscribed) unsubPat `shouldBe` Just False
 
+    it "assignErrorPostH_malformedAssigneeId_rejectsInsteadOfUnassigning" \tr -> do
+      apiKey <- createTestAPIKey tr pid "malformed-assignee-key"
+      ingestTraceWithException tr apiKey "GET /api/assignee" "AssigneeProbeError" "assignee probe" "AssigneeProbeError: assignee probe\n    at probe (/app/src/assignee.js:1:1)" (addUTCTime (-20) frozenTime)
+      drainExtractionWorker tr
+      void $ runAllBackgroundJobs frozenTime tr.trATCtx
+      pat <- maybe (fail "no AssigneeProbeError pattern") pure . find ((== "AssigneeProbeError") . (.errorType)) =<< runTestBg frozenTime tr (ErrorPatterns.getErrorPatterns pid Nothing 200 0)
+      let sess = Servant.getResponse tr.trSessAndHeader
+          assign = testServant tr . Pages.Issues.assignErrorPostH pid pat.id.unErrorPatternId . Pages.Issues.AssignErrorForm . Just
+      void $ assign sess.user.id.toText
+      (hdrs, _) <- assign "bob"
+      case lookupResponseHeader @"HX-Trigger" hdrs of
+        Header t -> t `shouldSatisfy` T.isInfixOf "Not a user id: bob"
+        _ -> expectationFailure "expected an error toast"
+      ((.assigneeId) <$>) <$> runTestBg frozenTime tr (ErrorPatterns.getErrorPatternById pat.id) `shouldReturn` Just (Just sess.user.id)
+
     it "7. Occurrence count decay does not infer resolution from silence" \tr -> do
       patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 10 0
       -- Find or create a non-resolved pattern
@@ -1015,9 +1031,9 @@ spec = sequential $ aroundAll withTestResources do
       -- Merge: first TypeError becomes canonical, second gets assigned to it
       case typeErrPatterns of
         (PGS.Only canonId : PGS.Only childId : _) -> do
-          canonicals <- runTestBg frozenTime tr $ PatternMerge.getCanonicalErrorPatterns pid
+          canonicals <- runTestBg frozenTime tr $ PatternMerge.getCanonicalPatterns @ErrorPatterns.ErrorPatternId pid
           Map.lookup canonId (Map.fromList canonicals) `shouldBe` Just (VU.fromList typeEmb)
-          void $ runTestBg frozenTime tr $ PatternMerge.assignErrorsToCanonical [(childId, canonId)]
+          void $ runTestBg frozenTime tr $ PatternMerge.assignPatternsToCanonical [(childId, canonId)]
 
           -- Verify the specific child got assigned to the specific canonical.
           -- Earlier tests may have merged unrelated TypeErrors, so assert on
@@ -1053,16 +1069,16 @@ spec = sequential $ aroundAll withTestResources do
         ((mergedId, _canonId) : _) -> do
           patternsBefore <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 100 0
           -- Unmerge
-          void $ runTestBg frozenTime tr $ PatternMerge.unmergeErrorPattern pid mergedId
+          void $ runTestBg frozenTime tr $ PatternMerge.unmergePattern pid mergedId
           -- Pattern reappears in getErrorPatterns (canonical_id = NULL)
           patternsAfter <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 100 0
           length patternsAfter `shouldBe` (length patternsBefore + 1)
           -- Verify merge_override = TRUE prevents re-embedding
-          unembedded <- runTestBg frozenTime tr $ PatternMerge.getUnembeddedErrorPatterns pid
-          let unembeddedIds = map (\(eid, _, _) -> eid) unembedded
+          unembedded <- runTestBg frozenTime tr $ PatternMerge.getUnembeddedPatterns @ErrorPatterns.ErrorPatternId pid
+          let unembeddedIds = map fst unembedded
           mergedId `shouldSatisfy` (`notElem` unembeddedIds)
           -- Verify merge_override = TRUE excludes from canonical candidates
-          canonicals <- runTestBg frozenTime tr $ PatternMerge.getCanonicalErrorPatterns pid
+          canonicals <- runTestBg frozenTime tr $ PatternMerge.getCanonicalPatterns @ErrorPatterns.ErrorPatternId pid
           let canonicalIds = map fst canonicals
           mergedId `shouldSatisfy` (`notElem` canonicalIds)
         [] -> expectationFailure "no merged patterns found (test 12 may have failed)"

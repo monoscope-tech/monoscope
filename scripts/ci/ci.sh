@@ -355,6 +355,13 @@ run_body() { # <check>
     weeder)
       cabal build integration-tests unit-tests -j $CABAL_FLAGS "$CABAL_OPTS"
       command -v weeder >/dev/null 2>&1 || cabal install weeder --install-method=copy --installdir=/usr/local/bin --overwrite-policy=always
+      # A restored dist-newstyle keeps .hie files of deleted modules, which weeder reports as dead.
+      mods=$(git ls-files '*.hs' | sed -E 's#^(src|shared/src|cli/exe|cli/test|cli|test/[a-z]+|app)/##; s#\.hs$##')
+      find dist-newstyle -name '*.hie' | while read -r f; do
+        m=${f%.hie}; m=${m##*/build/}; m=${m##*/hie/}; m=${m##*-tmp/}
+        case $m in Proto/* | Paths_* | */autogen/*) continue ;; esac
+        printf '%s\n' "$mods" | grep -qxF "$m" || rm -f "$f"
+      done
       weeder --config weeder.toml --hie-directory dist-newstyle
       ;;
     release-tests) node --test scripts/ci/release-test.mjs ;;

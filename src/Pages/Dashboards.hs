@@ -111,7 +111,7 @@ import Pkg.Components.Table (Table (..))
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), assetUrl, bulkActionSlug, encodeEnumSC)
+import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), assetUrl, bulkActionSlug)
 import Pkg.Metrics qualified as Metrics
 import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), applyScopedQuery, binDensityFor, constantToKQLList, constantToSQLList, defSqlQueryCfg, fixedUTCTime, mkScopedQuery, parseQueryToComponents, replacePlaceholders, variablePresetsKQL)
 import Pkg.Parser.Expr (sqlStringLit)
@@ -130,7 +130,7 @@ import UnliftIO qualified
 import UnliftIO.Exception (try)
 import Utils
 import Web.FormUrlEncoded (FromForm)
-import Web.HttpApiData (FromHttpApiData)
+import Web.HttpApiData (FromHttpApiData, parseUrlPiece)
 
 
 -- | Dashboard critical grid geometry. SQL-preview dependencies are loaded only
@@ -168,10 +168,11 @@ dashTitle "" = "Untitled"
 dashTitle t = t
 
 
--- | Track local dashboard content. Repository-owned dashboards retain the provider's
--- file version until a successful push replaces it.
-syncDashboardFileInfo :: (DB es, Time.Time :> es) => Dashboards.DashboardId -> Eff es ()
-syncDashboardFileInfo dashId = do
+-- | After any dashboard change: refresh file_path/file_sha (only when the content changed;
+-- template-based and repository-owned dashboards are skipped — the latter keep the provider's
+-- file version until a successful push replaces it), then queue a git push if configured.
+syncDashboardAndQueuePush :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx ()
+syncDashboardAndQueuePush pid dashId = do
   dashM <- Dashboards.getDashboardByIdUnscoped dashId
   forM_ dashM \dash -> when (isJust dash.schema && isNothing dash.gitSyncId) do
     teams <- ManageMembers.getTeamsById dash.projectId (coerce dash.teams)
@@ -181,13 +182,6 @@ syncDashboardFileInfo dashId = do
     when (dash.fileSha /= Just newSha || dash.filePath /= Just filePath)
       $ void
       $ GitSync.updateDashboardGitInfo dashId filePath newSha
-
-
--- | Sync dashboard file info and queue a git push if sync is configured.
--- This is the consolidated function to use in handlers after dashboard changes.
-syncDashboardAndQueuePush :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx ()
-syncDashboardAndQueuePush pid dashId = do
-  syncDashboardFileInfo dashId
   GitSyncPage.queueGitSyncPush pid dashId
 
 
@@ -225,6 +219,7 @@ data DashboardNavigation = DashboardInitial | DashboardTab
 
 dashboardSettledPostH :: Projects.ProjectId -> Dashboards.DashboardId -> DashboardSettleSample -> ATAuthCtx NoContent
 dashboardSettledPostH pid dashId sample = do
+  _ <- Projects.sessionAndProject pid
   _ <- Dashboards.getDashboardByProjectId pid dashId `whenNothingM` throwError err404
   let valid = sample.durationMs >= 0 && sample.durationMs <= 600000 && sample.responseBytes >= 0 && sample.responseBytes <= 50000000
       -- Experience budgets, not request timeouts: tabs must paint quickly, while an
@@ -362,18 +357,8 @@ dashboardPage_ pid dashId dash dashVM allParams = do
               -- the variable interpolated to '' and reported "no data in the selected
               -- time range" — a lie about the data rather than a prompt — and dismissing
               -- the modal left that as the whole page.
-              case findVarToPrompt renderTab (fold dash.variables) of
-                Just v -> variablePickerModal_ pid dashId renderTabSlug allParams v
-                Nothing -> tabContentPanel_ pid dashIdText activeTabIdx activeTab.name activeTab.widgets False
-        -- Fall back to old behavior for dashboards without tabs
-        Nothing | Just v <- findVarToPrompt Nothing (fold dash.variables) -> variablePickerModal_ pid dashId activeTabSlug allParams v
-        Nothing -> do
-          let rootWidgets = Widget.normalizeWidgetLayouts (dash :: Dashboards.Dashboard).widgets
-          div_ (class_ "grid-stack grid-stack-preloaded -m-2" : Widget.gridStackAttrs rootWidgets) do
-            forM_ rootWidgets \w -> toHtml w{Widget._projectId = Just pid}
-            when (null rootWidgets) $ label_ [id_ "add_a_widget_label", class_ "grid-stack-item pb-8 cursor-pointer bg-fillBrand-weak border-2 border-strokeBrand-strong border-dashed text-strokeSelected rounded-sm rounded-lg flex flex-col gap-3 items-center justify-center *:right-0!  *:bottom-0! ", term "gs-w" "3", term "gs-h" "2", style_ "--grid-preload-left:0%;--grid-preload-top:0rem;--grid-preload-width:25%;--grid-preload-height:10rem", Lucid.for_ "page-data-drawer"] do
-              faSprite_ "plus" "regular" "h-8 w-8"
-              span_ "Add a widget"
+              maybe (widgetCanvas_ pid ("tab-panel-" <> dashIdText <> "-" <> show activeTabIdx) activeTab.widgets) (variablePickerModal_ pid dashId renderTabSlug allParams) $ findVarToPrompt renderTab (fold dash.variables)
+        Nothing -> maybe (widgetCanvas_ pid "dashboard-canvas" (dash :: Dashboards.Dashboard).widgets) (variablePickerModal_ pid dashId activeTabSlug allParams) $ findVarToPrompt Nothing (fold dash.variables)
 
     -- Hidden form for widget order PATCH via HTMX (tab slug hardcoded in URL)
     widgetOrderTriggerForm_ widgetOrderUrl False
@@ -794,12 +779,6 @@ processVariable pid now (sinceStr, fromDStr, toDStr) allParams variableBase = do
       _ -> pure variable
 
 
--- | Process all dashboard variables concurrently.
-processVariablesConcurrently :: WidgetData es => Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Dashboards.Dashboard -> Eff es Dashboards.Dashboard
-processVariablesConcurrently pid now timeParams allParams dash =
-  forOf (#variables . _Just) dash $ flip pooledForConcurrently (processVariable pid now timeParams allParams)
-
-
 -- | Find variable that needs to be prompted (from tab.requires or variable.required,
 -- the latter only once its @dependsOn@ parent has a value). Both handlers ask this before
 -- the widget phase: a prompt means the picker replaces the tab, so those results are discarded.
@@ -835,7 +814,7 @@ variablePickerModal_ pid dashId activeTabSlug allParams var = do
             def{size = ESCompact}
             ("No " <> T.toLower varTitle <> " to choose from yet")
             "This dashboard reports on one at a time, so it has nothing to show until data arrives."
-      else div_ [class_ "var-picker group/picker w-full max-w-lg surface-raised rounded-lg border border-strokeWeak overflow-hidden"] do
+      else div_ [class_ "var-picker group/picker w-full max-w-lg surface-raised rounded-lg border border-strokeWeak overflow-hidden", Components.listboxNavAttr_] do
         div_ [class_ "px-3 border-b border-base-300 flex items-center gap-2"] do
           input_
             [ id_ $ "var-picker-search-" <> var.key
@@ -843,40 +822,11 @@ variablePickerModal_ pid dashId activeTabSlug allParams var = do
             , class_ "flex-1 min-w-0 py-2.5 bg-transparent outline-none text-sm"
             , placeholder_ $ "Search " <> T.toLower varTitle <> "s..."
             , autofocus_
-            , [__|on input
-              call htmx.live.refresh()
-              wait 0ms
-              remove .active from <a.var-opt/> in closest .var-picker
-              add .active to the first <a.var-opt:not([hidden])/> in closest .var-picker
-            end
-            on keydown[key=='Enter']
-              set :a to the first <a.active/> in closest .var-picker
-              if :a then call :a.click() end
-            end
-            on keydown[key=='ArrowDown'] halt the event
-              set :a to the first <a.active/> in closest .var-picker
-              if :a then
-                set :n to :a.nextElementSibling
-                repeat while :n and :n.hidden set :n to :n.nextElementSibling end
-                if :n then remove .active from :a then add .active to :n then call :n.scrollIntoView({block:'nearest'}) end
-              else
-                set :f to the first <a.var-opt:not([hidden])/> in closest .var-picker
-                if :f then add .active to :f end
-              end
-            end
-            on keydown[key=='ArrowUp'] halt the event
-              set :a to the first <a.active/> in closest .var-picker
-              if :a then
-                set :p to :a.previousElementSibling
-                repeat while :p and :p.hidden set :p to :p.previousElementSibling end
-                if :p then remove .active from :a then add .active to :p then call :p.scrollIntoView({block:'nearest'}) end
-              end
-            |]
             ]
           -- At the end of the search field: the global progress bar is too far away to register.
           span_ [class_ "hidden group-has-[.htmx-request]/picker:inline-flex shrink-0 text-iconNeutral", role_ "status", Aria.label_ "Loading"] reloadSpinner_
         -- While a choice is in flight: no further clicks, and only the chosen row stays lit.
-        div_ [class_ "max-h-80 overflow-y-auto p-1 has-[.htmx-request]:pointer-events-none has-[.htmx-request]:[&_.var-opt:not(.htmx-request)]:opacity-40"] do
+        div_ [role_ "listbox", class_ "max-h-80 overflow-y-auto p-1 has-[.htmx-request]:pointer-events-none has-[.htmx-request]:[&_.var-opt:not(.htmx-request)]:opacity-40"] do
           forM_ (zip [0 :: Int ..] opts) \(idx, opt) -> do
             let optVal = maybeToMonoid (opt !!? 0)
                 optLbl = fromMaybe optVal (opt !!? 1)
@@ -889,6 +839,7 @@ variablePickerModal_ pid dashId activeTabSlug allParams var = do
                     $ "var-opt [&[hidden]]:hidden flex items-center gap-2 px-3 py-2 rounded text-sm cursor-pointer transition-colors"
                     <> bool "" " active" (idx == 0)
                     <> bool "" " var-opt-current" isCurrent
+                , role_ "option"
                 , href_ optUrl
                 , name_ "dashboard-variable-option"
                 , data_ "variable-key" var.key
@@ -898,7 +849,7 @@ variablePickerModal_ pid dashId activeTabSlug allParams var = do
                 , term "hx-on:htmx:before:request" "syncDashboardVariable(this, true)"
                 , term "hx-on:htmx:finally:request" "syncDashboardVariable(this, false)"
                 ]
-                  <> maybe navTabAttrs (const $ dashboardContentNavAttrs optUrl) activeTabSlug
+                  <> maybe navTabAttrs (const $ dashboardContentNavAttrs TabPanel optUrl) activeTabSlug
               )
               do
                 span_ [class_ "truncate flex-1"] $ toHtml optLbl
@@ -1059,16 +1010,6 @@ widgetMetrics pid (sinceStr, fromDStr, toDStr) allParams widget =
     (query, dataType) = Widget.chartQuery widget
 
 
--- | Fetch widget data based on widget type (for stat and chart widgets)
-fetchWidgetData :: WidgetData es => Projects.ProjectId -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> Eff es Widget.Widget
-fetchWidgetData pid timeRange allParams widget = do
-  md <- widgetMetrics pid timeRange allParams widget
-  pure $ widget
-    & #dataset ?~ case widget.wType of
-      Widget.WTStat -> def{Widget.source = AE.Null, Widget.value = md.dataFloat}
-      _ -> Widget.toWidgetDataset md
-
-
 processEagerWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
 processEagerWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widget = case widget.wType of
   Widget.WTAnomalies -> do
@@ -1110,13 +1051,10 @@ processEagerWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widg
           $ widget
           & #cta ?~ Widget.WidgetCta "Open Service Map" serviceMapUrl
           & #html ?~ renderText (endpointDependencyMapPanel_ pid mapId graph serviceColors)
-  _ -> fetchWidgetData pid timeRange allParams widget
-
-
-populateWidgetPngUrls :: Log :> es => Text -> Text -> Projects.ProjectId -> (Maybe Text, Maybe Text, Maybe Text) -> [Widget.Widget] -> Eff es [Widget.Widget]
-populateWidgetPngUrls secret hostUrl pid (sinceStr, fromDStr, toDStr) = mapM \w ->
-  Widget.widgetPngUrl secret hostUrl pid w sinceStr fromDStr toDStr <&> \url ->
-    if T.null url then w else w{Widget.pngUrl = Just url}
+  -- Stat and chart widgets
+  _ ->
+    widgetMetrics pid timeRange allParams widget <&> \md ->
+      widget & #dataset ?~ if widget.wType == Widget.WTStat then def{Widget.source = AE.Null, Widget.value = md.dataFloat} else Widget.toWidgetDataset md
 
 
 dashboardWidgetPutH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Widget.Widget -> ATAuthCtx (RespHeaders Widget.Widget)
@@ -1129,7 +1067,8 @@ dashboardWidgetPutWithMonitorH pid dashId widgetIdM tabSlugM configureMonitorM w
   (dashVM, dash) <- getDashAndVM pid dashId Nothing
   uid <- UUID.genUUID <&> UUID.toText
   let normalizedWidgetIdM = normalizeWidgetId <$> widgetIdM
-      widgetUpdated = normalizeWidget widget normalizedWidgetIdM uid
+      -- A newly created widget (no id yet) also drops any centered title.
+      widgetUpdated = widget{Widget.standalone = Nothing, Widget.naked = Nothing, Widget.id = Just $ fromMaybe uid normalizedWidgetIdM, Widget._centerTitle = normalizedWidgetIdM *> widget._centerTitle}
   -- An edit keeps the sent tab only if the widget is on it (ids repeat across tabs);
   -- a missing or stale slug falls back to where the widget actually lives.
   tabSlugM' <- case normalizedWidgetIdM of
@@ -1138,11 +1077,12 @@ dashboardWidgetPutWithMonitorH pid dashId widgetIdM tabSlugM configureMonitorM w
       let onTab slug = any (any (any (widgetMatches nwid) . universeOf (#children . _Just . folded)) . (.widgets) . snd) $ findTabBySlug (fold dash.tabs) slug
        in maybe (throwError err404{errBody = "Widget not found in dashboard"}) (pure . (mfilter onTab tabSlugM <|>) . fst) $ findWidgetInDashboard nwid dash
 
-  existingMonitorM <- maybe (pure Nothing) (Monitors.queryMonitorByWidgetId pid (Just dashId.unUUIDId)) normalizedWidgetIdM
+  existingMonitorM <- maybe (pure Nothing) (Monitors.queryMonitorByWidgetId pid (Just dashId)) normalizedWidgetIdM
   when (isJust existingMonitorM && isNothing widgetUpdated.alertThreshold) do
     addErrorToast "Alert threshold required" (Just "Set an alert threshold or remove the monitor before saving.")
     throwError err400{errBody = "Set an alert threshold or remove the monitor before saving"}
-  _ <- Dashboards.updateSchema dashId (updateDashboardWidgets dash tabSlugM' normalizedWidgetIdM widgetUpdated) Nothing
+  -- The render-time tab slug comes back in the posted JSON; it must not be persisted.
+  _ <- Dashboards.updateSchema dashId (updateDashboardWidgets dash tabSlugM' normalizedWidgetIdM widgetUpdated{Widget._tabSlug = Nothing}) Nothing
   syncDashboardAndQueuePush pid dashId
   whenJust existingMonitorM \monitor -> do
     let newQuery = fromMaybe monitor.logQuery widget.query
@@ -1162,34 +1102,20 @@ dashboardWidgetPutWithMonitorH pid dashId widgetIdM tabSlugM configureMonitorM w
             , Monitors.warningThreshold = widgetUpdated.warningThreshold
             , Monitors.alertConfig = monitor.alertConfig{Monitors.unit = widgetUpdated.unit, Monitors.title = widgetMonitorTitle dashVM.title widgetUpdated.title}
             }
-    when (updatedMonitor.logQuery /= monitor.logQuery || updatedMonitor.alertThreshold /= monitor.alertThreshold || updatedMonitor.warningThreshold /= monitor.warningThreshold || updatedMonitor.alertConfig.unit /= monitor.alertConfig.unit || updatedMonitor.alertConfig.title /= monitor.alertConfig.title) $ void $ Monitors.queryMonitorUpsert updatedMonitor
+        synced (m :: Monitors.QueryMonitor) = (m.logQuery, m.alertThreshold, m.warningThreshold, m.alertConfig.unit, m.alertConfig.title)
+    when (synced updatedMonitor /= synced monitor) $ void $ Monitors.queryMonitorUpsert updatedMonitor
 
   addSuccessToast (if isJust existingMonitorM then "Widget and monitor updated successfully" else if isJust normalizedWidgetIdM then "Widget updated successfully" else "Widget added to dashboard successfully") Nothing
   unless (configureMonitorM == Just "true") $ addTriggerEvent "closeModal" ""
   addRespHeaders widgetUpdated
 
 
--- | A newly created widget (no id yet) also drops any centered title.
-normalizeWidget :: Widget.Widget -> Maybe Text -> Text -> Widget.Widget
-normalizeWidget widget normalizedWidgetIdM generatedId =
-  widget
-    { Widget.standalone = Nothing
-    , Widget.naked = Nothing
-    , Widget.id = Just $ fromMaybe generatedId normalizedWidgetIdM
-    , Widget._centerTitle = normalizedWidgetIdM *> widget._centerTitle
-    }
-
-
 updateDashboardWidgets :: Dashboards.Dashboard -> Maybe Text -> Maybe Text -> Widget.Widget -> Dashboards.Dashboard
 updateDashboardWidgets dash tabSlugM normalizedWidgetIdM widgetUpdated =
-  overDashWidgets tabSlugM (\ws -> maybe (ws <> [widgetUpdated]) (\nwid -> overWidgetTree (updateWidget nwid) ws) normalizedWidgetIdM) dash
+  overDashWidgets tabSlugM (\ws -> maybe (ws <> [widgetUpdated]) (\nwid -> map (transformOf (#children . _Just . traversed) (updateWidget nwid)) ws) normalizedWidgetIdM) dash
   where
-    updateWidget nwid w = if widgetMatches nwid w then mergeWidgetPreservingQuery w widgetUpdated else w
-
-
--- | Apply @f@ to every widget, group children included.
-overWidgetTree :: (Widget.Widget -> Widget.Widget) -> [Widget.Widget] -> [Widget.Widget]
-overWidgetTree = map . transformOf (#children . _Just . traversed)
+    -- An update without a query keeps the original KQL rather than losing it.
+    updateWidget nwid w = if widgetMatches nwid w then widgetUpdated & #query %~ (<|> w.query) & #rawQuery %~ (<|> w.rawQuery) else w
 
 
 -- | A widget is addressed either by its explicit id or by its slugified title.
@@ -1202,15 +1128,6 @@ overDashWidgets :: Maybe Text -> ([Widget.Widget] -> [Widget.Widget]) -> Dashboa
 overDashWidgets tabSlugM f dash = case (tabSlugM, dash.tabs) of
   (Just slug, Just _) -> updateTabBySlug slug (#widgets %~ f) dash
   _ -> dash & #widgets %~ f
-
-
--- | Merge widgets, preserving the original query/rawQuery if the new widget doesn't have one.
--- This ensures we don't lose the original KQL query when a widget is updated.
-mergeWidgetPreservingQuery :: Widget.Widget -> Widget.Widget -> Widget.Widget
-mergeWidgetPreservingQuery original updated =
-  updated
-    & #query %~ (<|> original.query)
-    & #rawQuery %~ (<|> original.rawQuery)
 
 
 data WidgetReorderItem = WidgetReorderItem
@@ -1250,7 +1167,7 @@ dashboardWidgetReorderPatchH pid dashId tabSlugM widgetOrder = do
     then addRespHeaders NoContent
     else do
       -- Delete alerts for removed widgets first (before updating dashboard to avoid orphaned monitors)
-      unless (null deletedWidgetIds) $ void $ Monitors.deleteMonitorsByWidgetIds pid (Just dashId.unUUIDId) deletedWidgetIds
+      unless (null deletedWidgetIds) $ void $ Monitors.deleteMonitorsByWidgetIds pid (Just dashId) deletedWidgetIds
 
       _ <- Dashboards.updateSchema dashId (overDashWidgets tabSlugM (const reorderedWidgets) dash) Nothing
       syncDashboardAndQueuePush pid dashId
@@ -1336,7 +1253,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr hxRequest allParams = do
       (dashVM, dash) <- getDashAndVM pid dashId fileM
 
       -- Deep links to a widget must open its tab, rather than the default tab.
-      case (join (lookup "expand" allParams) >>= \wid -> fst =<< findWidgetInDashboard wid dash) <|> getDefaultTabSlug dash.tabs of
+      case (join (lookup "expand" allParams) >>= \wid -> fst =<< findWidgetInDashboard wid dash) <|> (slugify . (.name) <$> (dash.tabs >>= viaNonEmpty head)) of
         Just tabSlug -> do
           let redirectUrl = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/tab/" <> tabSlug <> queryStringFrom allParams
           throwError $ err302{errHeaders = [("Location", encodeUtf8 redirectUrl)]}
@@ -1609,7 +1526,7 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
                 , query = widgetToUse.rawQuery <|> widgetToUse.query
                 , -- Non-chart types (table, stat, …) match no viz tab, so none is checked
                   -- and the widget keeps its own type instead of saving as a bar chart.
-                  vizType = if isNewWidget then Nothing else Just $ toText $ encodeEnumSC @"WT" widgetToUse.wType
+                  vizType = if isNewWidget then Nothing else Just $ display widgetToUse.wType
                 , updateUrl = False
                 , targetWidgetPreview = Just widgetPreviewId
                 , alert = False
@@ -1756,7 +1673,7 @@ data WidgetAlertForm = WidgetAlertForm
   deriving (FromForm) via (FormWithOptional "teams" WidgetAlertForm)
 
 
-widgetAlertUpsertH :: Projects.ProjectId -> Text -> Maybe UUID.UUID -> WidgetAlertForm -> ATAuthCtx (RespHeaders (Html ()))
+widgetAlertUpsertH :: Projects.ProjectId -> Text -> Maybe Dashboards.DashboardId -> WidgetAlertForm -> ATAuthCtx (RespHeaders (Html ()))
 widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = do
   (session, _) <- Projects.sessionAndProject pid
   now <- Time.currentTime
@@ -1774,7 +1691,7 @@ widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = do
   chartWidgetM <-
     traverse
       ( \dashId -> do
-          (dashVM, dash) <- getDashAndVM pid (UUIDId dashId) Nothing
+          (dashVM, dash) <- getDashAndVM pid dashId Nothing
           maybe (throwError err404{errBody = "Widget not found in dashboard"}) (\(slug, widget) -> pure (dashId, dashVM.title, dash, slug, widget)) $ findWidgetInDashboard form.widgetId dash
       )
       dashboardIdM
@@ -1785,8 +1702,8 @@ widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = do
       monitorTitle = maybe (maybe "Widget monitor" (.alertConfig.title) existingMonitor) (\(_, dashboardTitle, _, _, widget) -> widgetMonitorTitle dashboardTitle widget.title) chartWidgetM
   whenJust chartWidgetM \(dashId, _, dash, tabSlugM, widget) ->
     when ((widget.alertThreshold, widget.warningThreshold, widget.unit) /= (Just chartThreshold, warningThreshold, unitM)) do
-      _ <- Dashboards.updateSchema (UUIDId dashId) (updateDashboardWidgets dash tabSlugM (Just form.widgetId) widget{Widget.alertThreshold = Just chartThreshold, Widget.warningThreshold = warningThreshold, Widget.unit = unitM}) Nothing
-      syncDashboardAndQueuePush pid (UUIDId dashId)
+      _ <- Dashboards.updateSchema dashId (updateDashboardWidgets dash tabSlugM (Just form.widgetId) widget{Widget.alertThreshold = Just chartThreshold, Widget.warningThreshold = warningThreshold, Widget.unit = unitM}) Nothing
+      syncDashboardAndQueuePush pid dashId
   -- Convert to AlertUpsertForm and reuse convertToQueryMonitor
   let alertForm =
         Alerts.AlertUpsertForm
@@ -1815,7 +1732,7 @@ widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = do
           , alertRecoveryThreshold = form.alertRecoveryThreshold
           , warningRecoveryThreshold = form.warningRecoveryThreshold
           , widgetId = Just form.widgetId
-          , dashboardId = UUID.toText <$> dashboardIdM
+          , dashboardId = (.toText) <$> dashboardIdM
           , notifyAfterCheck = form.notifyAfterCheck
           , notifyAfter = form.notifyAfter
           , stopAfterCheck = form.stopAfterCheck
@@ -1833,7 +1750,7 @@ widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = do
   addRespHeaders $ toHtml ("" :: Text)
 
 
-widgetAlertDeleteH :: Projects.ProjectId -> Text -> Maybe UUID.UUID -> ATAuthCtx (RespHeaders (Html ()))
+widgetAlertDeleteH :: Projects.ProjectId -> Text -> Maybe Dashboards.DashboardId -> ATAuthCtx (RespHeaders (Html ()))
 widgetAlertDeleteH pid widgetId dashboardIdM = do
   _ <- Projects.sessionAndProject pid
   _ <- Monitors.deleteMonitorsByWidgetIds pid dashboardIdM [widgetId]
@@ -1841,14 +1758,14 @@ widgetAlertDeleteH pid widgetId dashboardIdM = do
   addRespHeaders $ toHtml ("" :: Text)
 
 
-widgetAlertToggleH :: Projects.ProjectId -> Text -> Maybe UUID.UUID -> ATAuthCtx (RespHeaders (Html ()))
+widgetAlertToggleH :: Projects.ProjectId -> Text -> Maybe Dashboards.DashboardId -> ATAuthCtx (RespHeaders (Html ()))
 widgetAlertToggleH pid widgetId dashboardIdM = do
   _ <- Projects.sessionAndProject pid
   monitor <- Monitors.queryMonitorByWidgetId pid dashboardIdM widgetId >>= (`whenNothing` throwError err404{errBody = "Widget monitor not found"})
   void $ Monitors.monitorToggleActiveById pid monitor.id
   updated <- Monitors.queryMonitorByWidgetId pid dashboardIdM widgetId
   addSuccessToast (if isJust monitor.deactivatedAt then "Monitor resumed" else "Monitor paused") Nothing
-  addRespHeaders $ widgetMonitorStatus_ pid "widget-monitor-status" widgetId (UUID.toText <$> dashboardIdM) updated
+  addRespHeaders $ widgetMonitorStatus_ pid "widget-monitor-status" widgetId ((.toText) <$> dashboardIdM) updated
 
 
 --------------------------------------------------------------------
@@ -1997,7 +1914,7 @@ dashboardNewForm_ dg = form_
                     ]
                     do
                       p_ [class_ "truncate text-xs font-medium text-textStrong", title_ $ fromMaybe "Untitled widget" widget.title] $ toHtml $ fromMaybe "Untitled widget" widget.title
-                      p_ [class_ "mt-1 text-[10px] text-textWeak"] $ toHtml $ T.toTitle $ T.replace "_" " " $ toText $ encodeEnumSC @"WT" widget.wType
+                      p_ [class_ "mt-1 text-[10px] text-textWeak"] $ toHtml $ T.toTitle $ T.replace "_" " " $ display widget.wType
                       if widget.wType `elem` [Widget.WTStat, Widget.WTTimeseriesStat]
                         then div_ [class_ "mt-auto pt-3"] do
                           div_ [class_ "h-5 w-16 rounded bg-fillBrand-weak"] ""
@@ -2129,8 +2046,7 @@ dashboardsGet_ dg = do
                       Just (widgetId, sourceDashIdM) ->
                         [ class_ "cursor-pointer hover:bg-fillWeak tap-target"
                         , hxSwap_ "none"
-                        , data_ "success-message" $ bool "Widget added to " "Widget copied to " (isJust sourceDashIdM) <> dash.title
-                        , term "hx-on:htmx:after:request" "const s = event.detail.ctx.response.status; if (s >= 200 && s < 300) { document.getElementById('dashboards-modal').checked = false; htmx.trigger(document.body, 'successToast', {value: [this.dataset.successMessage]}) }"
+                        , term "hx-on:htmx:after:request" "const s = event.detail.ctx.response.status; if (s >= 200 && s < 300) document.getElementById('dashboards-modal').checked = false"
                         ]
                           <> case sourceDashIdM of
                             -- The widget already exists server-side; copy it across.
@@ -2201,13 +2117,14 @@ dashboardNewGetH pid = do
   addRespHeaders $ DashboardNew pid teams templates
 
 
-dashboardsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe ManageMembers.TeamId -> Maybe Text -> Maybe UUID.UUID -> Maybe Text -> DashboardFilters -> ATAuthCtx (RespHeaders DashboardsGet)
+dashboardsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe ManageMembers.TeamId -> Maybe Text -> Maybe Dashboards.DashboardId -> Maybe Text -> DashboardFilters -> ATAuthCtx (RespHeaders DashboardsGet)
 dashboardsGetH pid sortM embeddedM teamIdM copyWidgetIdM sourceDashIdM newM filters = do
   (_, project, bw) <- mkProjectPageCtx pid
 
   -- Sort and filter configuration
   let currentSort = fromMaybe "-updated_at" sortM
-      orderByClause = Table.sortFieldsToSQL $ Table.parseSortParam currentSort Nothing
+      -- An unrecognised sort param reads as the default, newest first.
+      (sortOrder, sortKey) = fromMaybe (Dashboards.Desc, Dashboards.DSUpdatedAt) $ listToMaybe [(f.order, k) | f <- Table.parseSortParam currentSort Nothing, Right k <- [parseUrlPiece f.fieldName]]
       basePath = "/p/" <> pid.toText <> "/dashboards"
       -- Build URL with current state (sort + existing filters) for proper multi-select
       currentParams = "?sort=" <> toUriStr currentSort <> foldMap (\t -> "&tag=" <> toUriStr t) filters.tag
@@ -2217,7 +2134,7 @@ dashboardsGetH pid sortM embeddedM teamIdM copyWidgetIdM sourceDashIdM newM filt
     concurrently
       ( case teamIdM of
           Just teamId -> V.fromList <$> Dashboards.selectDashboardsByTeam pid teamId
-          Nothing -> V.fromList <$> Dashboards.selectDashboardsSortedBy pid orderByClause
+          Nothing -> V.fromList <$> Dashboards.selectDashboardsSortedBy pid sortOrder sortKey
       )
       (V.fromList <$> ManageMembers.getTeams pid)
 
@@ -2232,7 +2149,7 @@ dashboardsGetH pid sortM embeddedM teamIdM copyWidgetIdM sourceDashIdM newM filt
       isTeamView = isJust teamIdM
       -- Not an applicative over both: a missing source dashboard is a legitimate picker
       -- (an ad-hoc widget being added), not a reason to fall back to the plain list.
-      copyMode = copyWidgetIdM <&> (,UUIDId <$> sourceDashIdM)
+      copyMode = copyWidgetIdM <&> (,sourceDashIdM)
 
   templates <- getDashboardTemplates bw.config
   if embedded || isTeamView
@@ -2371,7 +2288,7 @@ dashboardRenamePatchH pid dashId form = do
       when (form.title /= dashVM.title) do
         monitors <- Monitors.queryMonitorsAll pid
         forM_ monitors \monitor ->
-          when (monitor.dashboardId == Just dashId.unUUIDId)
+          when (monitor.dashboardId == Just dashId)
             $ whenJust (monitor.widgetId >>= \wid -> dashVM.schema >>= findWidgetInDashboard wid) \(_, widget) ->
               void $ Monitors.queryMonitorUpsert monitor{Monitors.alertConfig = monitor.alertConfig{Monitors.title = widgetMonitorTitle form.title widget.title}}
 
@@ -2494,77 +2411,74 @@ dashboardBulkActionPostH pid action DashboardBulkActionForm{..} = do
 -- Returns the duplicated widget that will be converted to HTML automatically.
 -- If the original widget has an alert, the alert is also duplicated with the new widget.
 -- When source_dashboard_id is provided and differs from target dashboard, this copies the widget to a different dashboard.
-dashboardDuplicateWidgetPostH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> Maybe UUID.UUID -> ATAuthCtx (RespHeaders Widget.Widget)
+dashboardDuplicateWidgetPostH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> Maybe Dashboards.DashboardId -> ATAuthCtx (RespHeaders Widget.Widget)
 dashboardDuplicateWidgetPostH pid targetDashId widgetId sourceDashIdM = do
   _ <- Projects.sessionAndProject pid
-  let sourceDashId = maybe targetDashId UUIDId sourceDashIdM
+  let sourceDashId = fromMaybe targetDashId sourceDashIdM
       isCrossDashboard = sourceDashId /= targetDashId
 
   -- Get source dashboard to find the widget
   (_, sourceDash) <- getDashAndVM pid sourceDashId Nothing
-  case findWidgetInDashboard widgetId sourceDash of
-    Nothing -> throwError $ err404{errBody = "Widget not found in dashboard"}
-    Just (tabSlugM, widgetToDuplicate) -> do
-      newWidgetId <- UUID.genUUID <&> UUID.toText
-      now <- Time.currentTime
-      (targetVM, targetDash) <- getDashAndVM pid targetDashId Nothing
-      let titleSuffix = bool " (Copy)" "" isCrossDashboard
-          copiedTitle = (case maybeToMonoid widgetToDuplicate.title of "" -> "Widget"; t -> t) <> titleSuffix
+  (tabSlugM, widgetToDuplicate) <- findWidgetInDashboard widgetId sourceDash `whenNothing` throwError err404{errBody = "Widget not found in dashboard"}
+  newWidgetId <- UUID.genUUID <&> UUID.toText
+  now <- Time.currentTime
+  (targetVM, targetDash) <- getDashAndVM pid targetDashId Nothing
+  let titleSuffix = bool " (Copy)" "" isCrossDashboard
+      copiedTitle = (case maybeToMonoid widgetToDuplicate.title of "" -> "Widget"; t -> t) <> titleSuffix
 
-      -- Clone alert if original widget has one
-      existingMonitorM <- Monitors.queryMonitorByWidgetId pid (Just sourceDashId.unUUIDId) (normalizeWidgetId widgetId)
-      newAlertIdM <- forM existingMonitorM \monitor -> do
-        newMonitorId <- Monitors.QueryMonitorId <$> UUID.genUUID
-        let newMonitor =
-              monitor
-                { Monitors.id = newMonitorId
-                , Monitors.createdAt = now
-                , Monitors.updatedAt = now
-                , Monitors.widgetId = Just newWidgetId
-                , Monitors.dashboardId = Just targetDashId.unUUIDId
-                , Monitors.alertConfig = monitor.alertConfig{Monitors.title = widgetMonitorTitle targetVM.title (Just copiedTitle)}
-                , Monitors.alertLastTriggered = Nothing
-                , Monitors.warningLastTriggered = Nothing
-                , Monitors.currentStatus = Monitors.MSNormal
-                }
-        void $ Monitors.queryMonitorUpsert newMonitor
-        pure newMonitorId.toText
+  -- Clone alert if original widget has one
+  existingMonitorM <- Monitors.queryMonitorByWidgetId pid (Just sourceDashId) (normalizeWidgetId widgetId)
+  newAlertIdM <- forM existingMonitorM \monitor -> do
+    newMonitorId <- Monitors.QueryMonitorId <$> UUID.genUUID
+    let newMonitor =
+          monitor
+            { Monitors.id = newMonitorId
+            , Monitors.createdAt = now
+            , Monitors.updatedAt = now
+            , Monitors.widgetId = Just newWidgetId
+            , Monitors.dashboardId = Just targetDashId
+            , Monitors.alertConfig = monitor.alertConfig{Monitors.title = widgetMonitorTitle targetVM.title (Just copiedTitle)}
+            , Monitors.alertLastTriggered = Nothing
+            , Monitors.warningLastTriggered = Nothing
+            , Monitors.currentStatus = Monitors.MSNormal
+            }
+    void $ Monitors.queryMonitorUpsert newMonitor
+    pure newMonitorId.toText
 
-      -- Target dashboard (might be the source); its title names the toast on a cross-dashboard copy
-      let targetDashNameM = dashTitle targetVM.title <$ guard isCrossDashboard
-          widgetCopy =
-            widgetToDuplicate
-              { Widget.id = Just newWidgetId
-              , Widget.title = Just copiedTitle
-              , Widget._projectId = Just pid
-              , Widget._dashboardId = Just targetDashId.toText
-              , Widget.alertId = newAlertIdM
-              , Widget.alertStatus = Nothing
-              }
+  -- Target dashboard (might be the source); its title names the toast on a cross-dashboard copy
+  let targetDashNameM = dashTitle targetVM.title <$ guard isCrossDashboard
+      widgetCopy =
+        widgetToDuplicate
+          { Widget.id = Just newWidgetId
+          , Widget.title = Just copiedTitle
+          , Widget._projectId = Just pid
+          , Widget._dashboardId = Just targetDashId.toText
+          , Widget.alertId = newAlertIdM
+          , Widget.alertStatus = Nothing
+          }
 
-      let targetTabs = fold targetDash.tabs
-          -- The copy belongs beside the original, on the tab the user is actually looking
-          -- at — this used to always land on the first tab, so duplicating a widget on any
-          -- other tab made the copy appear somewhere the user was not. Falling back to the
-          -- first tab still covers a cross-dashboard copy, where the source tab need not exist.
-          destinationTabM = (tabSlugM >>= fmap snd . findTabBySlug targetTabs) <|> viaNonEmpty head targetTabs
+  let targetTabs = fold targetDash.tabs
+      -- The copy belongs beside the original, on the tab the user is actually looking
+      -- at — this used to always land on the first tab, so duplicating a widget on any
+      -- other tab made the copy appear somewhere the user was not. Falling back to the
+      -- first tab still covers a cross-dashboard copy, where the source tab need not exist.
+      destinationTabM = (tabSlugM >>= fmap snd . findTabBySlug targetTabs) <|> viaNonEmpty head targetTabs
 
-      Log.logTrace "Widget duplication"
-        $ AE.object
-          [ "widgetId" AE..= widgetId
-          , "targetDashboardId" AE..= targetDashId
-          , "sourceTab" AE..= tabSlugM
-          , "destinationTab" AE..= (slugify . (.name) <$> destinationTabM)
-          , "targetTabCount" AE..= length targetTabs
-          ]
+  Log.logTrace "Widget duplication"
+    $ AE.object
+      [ "widgetId" AE..= widgetId
+      , "targetDashboardId" AE..= targetDashId
+      , "sourceTab" AE..= tabSlugM
+      , "destinationTab" AE..= (slugify . (.name) <$> destinationTabM)
+      , "targetTabCount" AE..= length targetTabs
+      ]
 
-      let updatedDash = maybe (targetDash & #widgets %~ (<> [widgetCopy])) (\t -> updateTabBySlug (slugify t.name) (#widgets %~ (<> [widgetCopy])) targetDash) destinationTabM
-      _ <- Dashboards.updateSchema targetDashId updatedDash (Just now)
-      syncDashboardAndQueuePush pid targetDashId
+  _ <- Dashboards.updateSchema targetDashId (overDashWidgets (slugify . (.name) <$> destinationTabM) (<> [widgetCopy]) targetDash) (Just now)
+  syncDashboardAndQueuePush pid targetDashId
 
-      addWidgetJSON $ encodeText widgetCopy
-      addSuccessToast (maybe "Widget duplicated successfully" ("Widget copied to " <>) targetDashNameM) Nothing
-      addRespHeaders widgetCopy
+  addWidgetJSON $ encodeText widgetCopy
+  addSuccessToast (maybe "Widget duplicated successfully" ("Widget copied to " <>) targetDashNameM) Nothing
+  addRespHeaders widgetCopy
 
 
 dashboardWidgetExpandGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
@@ -2577,7 +2491,7 @@ dashboardWidgetExpandGetH pid dashId widgetId editorTabM = do
   (_, allParamsWithConstants) <- processConstantsAndExtendParams pid now timeParams paramsWithVarDefaults (dashboardQueryText dash) (fold dash.constants)
   (tabSlugM, widgetToExpand) <- findWidgetInDashboard widgetId dash `whenNothing` throwError err404{errBody = "Widget not found in dashboard"}
   processedWidget <- processWidget PrefillWidgets pid now timeParams allParamsWithConstants widgetToExpand
-  monitorM <- Monitors.queryMonitorByWidgetId pid (Just dashId.unUUIDId) widgetId
+  monitorM <- Monitors.queryMonitorByWidgetId pid (Just dashId) widgetId
   teams <- V.fromList <$> ManageMembers.getTeams pid
   addRespHeaders $ widgetViewerEditor_ pid project.paymentPlan (Just dashId) tabSlugM Nothing (Just processedWidget) monitorM teams $ if editorTabM == Just "alerts" then "alerts" else "edit"
 
@@ -2689,18 +2603,8 @@ findTabBySlug tabs tabSlug = find ((== tabSlug) . slugify . (.name) . snd) (zip 
 
 -- | Find widget by ID in dashboard, searching tabs, root, and recursively into children. Returns (Maybe tabSlug, Widget)
 findWidgetInDashboard :: Text -> Dashboards.Dashboard -> Maybe (Maybe Text, Widget.Widget)
-findWidgetInDashboard wid dash = tabResult <|> rootResult
-  where
-    -- Recursively search widget and its children
-    findInWidget :: Widget.Widget -> Maybe Widget.Widget
-    findInWidget w = mfilter (widgetMatches wid) (pure w) <|> asum (foldMap (map findInWidget) w.children)
-    tabResult = listToMaybe [(Just $ slugify t.name, w') | t <- fold dash.tabs, w <- t.widgets, w' <- maybeToList (findInWidget w)]
-    rootResult = (Nothing,) <$> asum (map findInWidget dash.widgets)
-
-
--- | Get the first tab as default if available
-getDefaultTabSlug :: Maybe [Dashboards.Tab] -> Maybe Text
-getDefaultTabSlug = fmap (slugify . (.name)) . (>>= viaNonEmpty head)
+findWidgetInDashboard wid dash =
+  listToMaybe [(slug, w) | (slug, ws) <- [(Just $ slugify t.name, t.widgets) | t <- fold dash.tabs] <> [(Nothing, dash.widgets)], w <- foldMap (universeOf (#children . _Just . folded)) ws, widgetMatches wid w]
 
 
 -- | Render breadcrumb suffix with out-of-band swap for htmx
@@ -2806,7 +2710,7 @@ resolveDashboardParams pid now timeParams allParams dash = do
     _ -> pure []
   let paramsWithEndpoint = endpointParams <> filter (\(key, _) -> key `notElem` map fst endpointParams) allParams
   (constants, params) <- processConstantsAndExtendParams pid now timeParams (addVariableDefaults paramsWithEndpoint dash.variables) (dashboardQueryText dash) (fold dash.constants)
-  dash' <- processVariablesConcurrently pid now timeParams params (dash & #constants ?~ constants)
+  dash' <- forOf (#variables . _Just) (dash & #constants ?~ constants) $ flip pooledForConcurrently (processVariable pid now timeParams params)
   pure (dash', params)
 
 
@@ -2823,14 +2727,15 @@ processDashWidgets
   -> ATAuthCtx [Widget.Widget]
 processDashWidgets prefill pid dashId now timeParams paramsWithConstants widgets = do
   appCtx <- ask @AuthContext
-  pooledForConcurrently widgets (fmap (#_dashboardId ?~ dashId.toText) . processWidget prefill pid now timeParams paramsWithConstants)
+  pooledForConcurrently widgets (processWidget prefill pid now timeParams paramsWithConstants . (#_dashboardId ?~ dashId.toText))
     >>= populateWidgetAlertStatuses
-    >>= populateWidgetPngUrls appCtx.env.apiKeyEncryptionSecretKey appCtx.config.hostUrl pid timeParams
+    >>= mapM \w -> Widget.widgetPngUrl appCtx.env.apiKeyEncryptionSecretKey appCtx.config.hostUrl pid w sinceStr fromDStr toDStr <&> \url -> if T.null url then w else w{Widget.pngUrl = Just url}
   where
+    (sinceStr, fromDStr, toDStr) = timeParams
     populateWidgetAlertStatuses renderedWidgets
       | V.null widgetIds = pure renderedWidgets
       | otherwise = do
-          statusMap <- foldMap (\s -> one (s.widgetId, s)) <$> Monitors.getWidgetAlertStatuses pid dashId.unUUIDId widgetIds
+          statusMap <- foldMap (\s -> one (s.widgetId, s)) <$> Monitors.getWidgetAlertStatuses pid dashId widgetIds
           pure $ map (applyAlertStatus statusMap) renderedWidgets
       where
         widgetIds = V.fromList $ mapMaybe (.id) renderedWidgets
@@ -2876,7 +2781,7 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr hxRequest hxT
           else forOf (#tabs . _Just) dash' \tabs ->
             forM (zip [0 ..] tabs) \(idx, tab) ->
               if idx == activeTabIdx
-                then (\ws -> tab & #widgets .~ ws) <$> processDashWidgets prefill pid dashId now timeParams allParamsWithConstants tab.widgets
+                then (\ws -> tab & #widgets .~ ws) <$> processDashWidgets prefill pid dashId now timeParams allParamsWithConstants ((#_tabSlug ?~ slugify tab.name) <$> tab.widgets)
                 else pure tab
 
       bwconf <- dashboardBWConf bw pid dashId dashVM.title (Just (tabSlug, activeTabName)) currentRange <$> checkFreeTierStatus pid project.paymentPlan
@@ -2894,8 +2799,9 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr hxRequest hxT
                 Just v -> do
                   whenJust activeTabName breadcrumbSuffixOob_
                   variablePickerModal_ pid dashId (Just tabSlug) paramsWithTab v
-                Nothing -> whenJust (dash''.tabs >>= (!!? activeTabIdx)) \activeTab ->
-                  tabContentPanel_ pid dashId.toText activeTabIdx activeTab.name activeTab.widgets True
+                Nothing -> whenJust (dash''.tabs >>= (!!? activeTabIdx)) \activeTab -> do
+                  breadcrumbSuffixOob_ activeTab.name
+                  widgetCanvas_ pid ("tab-panel-" <> dashId.toText <> "-" <> show activeTabIdx) activeTab.widgets
       addRespHeaders $ navigationResponse hxRequest page fragment
 
 
@@ -2926,7 +2832,7 @@ dashboardTabStrip_ pidText dashIdText activeTabIdx tabs queryStr extraAttrs =
           , href_ tabUrl
           , class_ $ "tab group/tab flex items-center gap-2 max-md:whitespace-nowrap" <> memptyIfFalse (idx == activeTabIdx) " tab-active"
           ]
-            <> dashboardContentNavAttrs tabUrl
+            <> dashboardContentNavAttrs TabPanel tabUrl
         )
         do
           -- The icon becomes the spinner in place, so the strip doesn't reflow mid-swap.
@@ -2935,40 +2841,17 @@ dashboardTabStrip_ pidText dashIdText activeTabIdx tabs queryStr extraAttrs =
           toHtml tab.name
 
 
--- | The range comes from the live picker, not @url@: a range picked client-side leaves every
--- server-rendered link's @since@/@from@/@to@ stale, and a duplicate key resolves to the first.
-dashboardContentNavAttrs :: Text -> [Attribute]
-dashboardContentNavAttrs url =
-  [ hxGet_ $ path <> foldMap (("?" <>) . T.intercalate "&" . toList) (nonEmpty kept)
-  , hxVals_ "js:{...getTimeRange()}"
-  , hxTarget_ "#dashboard-tabs-content"
-  , hxSwap_ "outerMorph"
-  , hxPushUrl_ "true"
-  , [__|on click set my.preloadState to 'DONE'|]
-  ]
+-- | A dashboard (or tab) canvas: its widgets on a grid, or an "Add a widget" tile when empty.
+-- The widget editor removes @#add_a_widget_label@ once the first widget lands. Each tab needs
+-- its own @canvasId@: a tab switch morphs by id, and a reused grid keeps its stale gridstack.
+widgetCanvas_ :: Projects.ProjectId -> Text -> [Widget.Widget] -> Html ()
+widgetCanvas_ pid canvasId widgets = div_ ([class_ "grid-stack grid-stack-preloaded -m-2", id_ canvasId] <> Widget.gridStackAttrs ws) do
+  forM_ ws \w -> toHtml w{Widget._projectId = Just pid}
+  when (null ws) $ label_ [id_ "add_a_widget_label", class_ "grid-stack-item pb-8 cursor-pointer bg-fillBrand-weak border-2 border-strokeBrand-strong border-dashed text-strokeSelected rounded-sm rounded-lg flex flex-col gap-3 items-center justify-center *:right-0! *:bottom-0!", term "gs-w" "3", term "gs-h" "2", style_ "--grid-preload-left:0%;--grid-preload-top:0rem;--grid-preload-width:25%;--grid-preload-height:10rem", Lucid.for_ "page-data-drawer"] do
+    faSprite_ "plus" "regular" "h-8 w-8"
+    span_ "Add a widget"
   where
-    (path, qs) = T.breakOn "?" url
-    kept = filter ((`notElem` ["", "since", "from", "to"]) . T.takeWhile (/= '=')) $ T.splitOn "&" $ T.drop 1 qs
-
-
--- | Render a single tab content panel.
--- isPartial: True for HTMX partial loads (include OOB swap), False for full page loads
-tabContentPanel_ :: Projects.ProjectId -> Text -> Int -> Text -> [Widget.Widget] -> Bool -> Html ()
-tabContentPanel_ pid dashboardId idx tabName widgets isPartial = do
-  when isPartial $ breadcrumbSuffixOob_ tabName
-  let normalizedWidgets = Widget.normalizeWidgetLayouts widgets
-  div_
-    ( [ class_ "tab-panel grid-stack grid-stack-preloaded -m-2"
-      , data_ "tab-index" (show idx)
-      , id_ $ "tab-panel-" <> dashboardId <> "-" <> show idx
-      ]
-        <> Widget.gridStackAttrs normalizedWidgets
-    )
-    do
-      forM_ normalizedWidgets \w -> toHtml w{Widget._projectId = Just pid}
-      when (null normalizedWidgets) $ label_ [id_ $ "add_widget_tab_" <> show idx, class_ "grid-stack-item pb-8 cursor-pointer bg-fillBrand-weak border-2 border-strokeBrand-strong border-dashed text-strokeSelected rounded-sm rounded-lg flex flex-col gap-3 items-center justify-center", term "gs-w" "3", term "gs-h" "2", style_ "--grid-preload-left:0%;--grid-preload-top:0rem;--grid-preload-width:25%;--grid-preload-height:10rem", Lucid.for_ "page-data-drawer"] do
-        faSprite_ "plus" "regular" "h-8 w-8"
-        span_ "Add a widget"
+    ws = Widget.normalizeWidgetLayouts widgets
 
 
 -- | Form for renaming a tab
@@ -3081,7 +2964,11 @@ dashboardYamlPutH :: Projects.ProjectId -> Dashboards.DashboardId -> YamlForm ->
 dashboardYamlPutH pid dashId form = do
   _ <- Projects.sessionAndProject pid
   case GitSync.yamlToDashboard (encodeUtf8 form.yaml) of
-    Left err -> addRespHeaders $ yamlValidationError_ err
+    Left err -> addRespHeaders $ div_ [id_ "yaml-status", class_ "text-textError"] do
+      div_ [class_ "flex items-center gap-2 font-semibold mb-2"] do
+        faSprite_ "circle-exclamation" "solid" "w-4 h-4"
+        "Invalid YAML"
+      pre_ [class_ "text-xs bg-fillError-weak p-3 rounded overflow-x-auto whitespace-pre-wrap"] $ toHtml err
     Right dashboard -> do
       now <- Time.currentTime
       _ <- Dashboards.updateSchema dashId dashboard (Just now)
@@ -3090,26 +2977,12 @@ dashboardYamlPutH pid dashId form = do
       addSuccessToast "Dashboard schema updated" Nothing
       addTriggerEvent "closeYamlDrawer" ""
       redirectCS $ "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText
-      addRespHeaders $ yamlValidationSuccess_ dashboard
-
-
--- | Render validation error HTML
-yamlValidationError_ :: Text -> Html ()
-yamlValidationError_ err = div_ [id_ "yaml-status", class_ "text-textError"] do
-  div_ [class_ "flex items-center gap-2 font-semibold mb-2"] do
-    faSprite_ "circle-exclamation" "solid" "w-4 h-4"
-    "Invalid YAML"
-  pre_ [class_ "text-xs bg-fillError-weak p-3 rounded overflow-x-auto whitespace-pre-wrap"] $ toHtml err
-
-
--- | Render validation success HTML with schema summary
-yamlValidationSuccess_ :: Dashboards.Dashboard -> Html ()
-yamlValidationSuccess_ dash = div_ [id_ "yaml-status", class_ "text-textBrand"] do
-  div_ [class_ "flex items-center gap-2"] do
-    faSprite_ "circle-check" "solid" "w-4 h-4"
-    "Schema saved successfully"
-  ul_ [class_ "text-xs text-textWeak mt-2 list-disc pl-5"] do
-    li_ $ toHtml $ show (length dash.widgets) <> " widgets"
-    whenJust dash.variables $ \vs -> li_ $ toHtml $ show (length vs) <> " variables"
-    whenJust dash.tabs $ \ts -> li_ $ toHtml $ show (length ts) <> " tabs"
-    whenJust dash.constants $ \cs -> li_ $ toHtml $ show (length cs) <> " constants"
+      addRespHeaders $ div_ [id_ "yaml-status", class_ "text-textBrand"] do
+        div_ [class_ "flex items-center gap-2"] do
+          faSprite_ "circle-check" "solid" "w-4 h-4"
+          "Schema saved successfully"
+        ul_ [class_ "text-xs text-textWeak mt-2 list-disc pl-5"] do
+          li_ $ toHtml $ show (length dashboard.widgets) <> " widgets"
+          whenJust dashboard.variables \vs -> li_ $ toHtml $ show (length vs) <> " variables"
+          whenJust dashboard.tabs \ts -> li_ $ toHtml $ show (length ts) <> " tabs"
+          whenJust dashboard.constants \cs -> li_ $ toHtml $ show (length cs) <> " constants"

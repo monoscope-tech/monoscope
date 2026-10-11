@@ -720,12 +720,7 @@ instance AE.ToJSON ReplaySessionResp where
       <> foldMap metaSeries r.meta
     where
       metaSeries m = "userId" AE..= m.userId <> "userEmail" AE..= m.userEmail <> "userName" AE..= m.userName <> "lastEventAt" AE..= m.lastEventAt
-  toJSON r =
-    AE.object
-      $ ["events" AE..= r.events]
-      <> foldMap (\p -> ["partial" AE..= p]) r.partial
-      <> foldMap (\e -> ["error" AE..= e]) r.errorMsg
-      <> foldMap (\m -> ["userId" AE..= m.userId, "userEmail" AE..= m.userEmail, "userName" AE..= m.userName, "lastEventAt" AE..= m.lastEventAt]) r.meta
+  toJSON = fromMaybe AE.Null . AE.decode . AE.encode
 
 
 mergeFileCountThreshold :: Int
@@ -952,8 +947,7 @@ mergeOneSessionByKeys pid sessionId logSuffix afterMerge =
     Nothing -> do
       -- Orphaned row (project gone). Flip merged=TRUE so we stop re-picking it every run.
       Log.logAttention "Project not found for replay session merge; marking merged" logCtx
-      now' <- Time.currentTime
-      markMerged pid sessionId now'
+      Time.currentTime >>= markMerged pid sessionId
     Just p ->
       claimMergeLease pid sessionId >>= \case
         False -> Log.logInfo "Replay merge already in progress for session; skipping duplicate" logCtx
@@ -1167,8 +1161,7 @@ expireOldReplayData = do
       |]
   Log.logInfo "Expiring old replay sessions" ("count", length rows)
   forM_ rows $ \(sid, pid, fileKeys, shardKeys) -> do
-    projectM <- Projects.projectById pid
-    whenJust projectM $ \p -> do
+    whenJustM (Projects.projectById pid) \p -> do
       let (conn, bucket) = projectMinioConn ctx.config p
           -- shard_keys covers sealed shards + the legacy monolith; the merged key is kept
           -- as a belt-and-suspenders for any session not yet reflected in shard_keys.

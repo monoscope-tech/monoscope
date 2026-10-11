@@ -24,6 +24,7 @@ import Data.Foldable.WithIndex (ifor_)
 import Data.HashMap.Strict qualified as HM
 import Data.Map qualified as Map
 import Data.Text qualified as T
+import Data.Text.Display (display)
 import Data.Time (UTCTime, addUTCTime)
 import Data.UUID qualified as UUID
 import Effectful.Reader.Static qualified
@@ -31,11 +32,12 @@ import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
+import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (atMapText)
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
-import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), copySourceAttr_, dateTime, detailTab_, emptyState_, httpTab_, stackTrace_, tabPanel_)
+import Pages.Components (BadgeColor (..), EmptyStateAction (..), EmptyStateCfg (..), EmptyStateSize (..), copySourceAttr_, curlCommand, dateTime, detailTab_, disclosure_, emptyState_, httpTab_, stackTrace_, tabPanel_, tonePill_)
 import Pkg.DeriveUtils (unAesonTextMaybe)
 import Pkg.StackTrace qualified as StackTrace
 import Relude
@@ -43,6 +45,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Tracing (withSpan_)
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils
+import Web.HttpApiData (parseUrlPiece)
 
 
 getServiceName :: Maybe (Map Text AE.Value) -> Text
@@ -93,7 +96,7 @@ expandAPIlogItemH pid rdId timestamp _ tabM subtabM partial = withSpan_ "log-exp
     Just record
       | record.kind == Just "log" -> renderItem record Nothing (LogItemExpanded pid record tabM)
       | otherwise -> do
-          let fetchIn window match = maybe (pure Nothing) (\trId -> tf $ Telemetry.spanRecordInTrace pid trId window match) (record.context >>= (.trace_id) >>= guarded (not . T.null))
+          let fetchIn window match = maybe (pure Nothing) (\trId -> tf $ Telemetry.spanRecordInTrace pid trId window match) (Telemetry.traceIdOf record)
           (anchor, sdkSpan) <-
             anchorSdkSpan
               (fetchIn (addUTCTime (-300) record.timestamp, addUTCTime 1 record.timestamp) . Telemetry.SpanBySpanId)
@@ -245,7 +248,7 @@ detailsPanel_ pid targetEventM layout = div_ [class_ $ "contents group/details "
         on keydown[key=='Escape' and not (the event's target matches <input, textarea, select, [contenteditable]/>) and no <[popover]:popover-open/> and no <dialog[open]/>] from window
           -- `the first <…/> exists`, not a bare `<…/>`: a query literal is a lazy query object
           -- that stays truthy at zero matches, so a bare `if <sel/>` never falls through.
-          if the first <#trace_details_container.open/> exists send closeDetailPanel to #trace_details_container
+          if the first <#trace-details-open:checked/> exists send closeDetailPanel to #trace_details_container
           otherwise if the first <#trace_expanded_view:not(.hidden)/> exists send closeTraceView to #trace_expanded_view
           otherwise send closeDetailPanel to me end
         end
@@ -288,7 +291,7 @@ instance ToHtml ApiItemDetailed where
             Just _ -> Nothing
             Nothing -> find ((== marker) . (.marker)) (detailTabs pid item aptSpan)
         )
-        renderDetailPanel
+        \t -> tabPanel_ t.panelClass t.panelId t.content
   toHtml (ItemDetailedNotFound message) =
     toHtml $ emptyState_ def{icon = Just "circle-exclamation", action = ESCustom closeBtn} "Record not found" message
     where
@@ -331,27 +334,25 @@ data DetailTab = DetailTab
   }
 
 
-renderDetailPanel :: DetailTab -> Html ()
-renderDetailPanel tab = tabPanel_ tab.panelClass tab.panelId tab.content
-
-
--- | A hidden panel that fetches itself the first time its radio reveals it.
--- @tabQuery@ names the tab server-side: a top-level tab is @tab=\<marker\>@, an
--- HTTP sub-tab is @tab=tab-req&subtab=\<marker\>@.
-lazyPanel :: Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> (Text -> Text) -> DetailTab -> Html ()
-lazyPanel pid item tabQuery tab =
-  div_
-    [ class_ $ "hidden " <> tab.panelClass
-    , id_ tab.panelId
-    , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer/" <> item.id <> "/" <> formatUTC item.timestamp <> "/detailed?" <> tabQuery tab.marker <> "&partial=true"
-    , hxTrigger_ "intersect once"
-    , hxTarget_ "this"
-    , hxSwap_ "outerHTML"
-    , term "hx-sync" "this:replace"
-    , Aria.busy_ "true"
-    ]
-    $ div_ [class_ "flex justify-center py-8", role_ "status", Aria.label_ "Loading details"]
-    $ loadingIndicator_ LdSM LdDots
+-- | The @active@ tab renders now; any other is a hidden panel that fetches itself the
+-- first time its radio reveals it. @tabQuery@ names the tab server-side: a top-level
+-- tab is @tab=\<marker\>@, an HTTP sub-tab is @tab=tab-req&subtab=\<marker\>@.
+detailTabPanel_ :: Projects.ProjectId -> Telemetry.OtelLogsAndSpans -> (Text -> Text) -> Text -> DetailTab -> Html ()
+detailTabPanel_ pid item tabQuery active tab
+  | tab.marker == active = tabPanel_ tab.panelClass tab.panelId tab.content
+  | otherwise =
+      div_
+        [ class_ $ "hidden " <> tab.panelClass
+        , id_ tab.panelId
+        , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer/" <> item.id <> "/" <> formatUTC item.timestamp <> "/detailed?" <> tabQuery tab.marker <> "&partial=true"
+        , hxTrigger_ "intersect once"
+        , hxTarget_ "this"
+        , hxSwap_ "outerHTML"
+        , term "hx-sync" "this:replace"
+        , Aria.busy_ "true"
+        ]
+        $ div_ [class_ "flex justify-center py-8", role_ "status", Aria.label_ "Loading details"]
+        $ loadingIndicator_ LdSM LdDots
 
 
 -- Unified view for both logs and spans
@@ -417,7 +418,7 @@ expandedItemView pid item aptSp selectedTabM = do
       -- The selected panel renders now; hidden placeholders fetch and replace
       -- themselves when their radio makes them visible for the first time.
       div_ [class_ "mt-2 py-1 text-textWeak"]
-        $ traverse_ (\tab -> if tab.marker == activeMarker then renderDetailPanel tab else lazyPanel pid item ("tab=" <>) tab) tabs
+        $ traverse_ (detailTabPanel_ pid item ("tab=" <>) activeMarker) tabs
   where
     isLog = item.kind == Just "log"
     isAlert = item.kind == Just "alert"
@@ -428,14 +429,13 @@ expandedItemView pid item aptSp selectedTabM = do
     dgrp = "dtab-" <> item.id
     -- Clamp the ?tab= deep link to a marker that actually exists — an unknown
     -- value would check no radio and leave every panel hidden.
-    firstMarker = case tabs of [] -> "tab-raw"; t : _ -> t.marker
-    activeMarker = maybe firstMarker (.marker) $ selectedTabM >>= \s -> find ((== s) . (.marker)) tabs
+    activeMarker = maybe "tab-raw" (.marker) $ (selectedTabM >>= \s -> find ((== s) . (.marker)) tabs) <|> listToMaybe tabs
     detailTabRadio_ t = detailTab_ dgrp t.marker t.cls (t.marker == activeMarker) t.label
     tabs = detailTabs pid item aptSp
 
     -- Best-effort curl reconstruction from the span's HTTP attributes and any
     -- captured request body (SDK-span fallback included via aptSp).
-    curlCommand =
+    curl =
       let cSp = fromMaybe item aptSp
           attrsM = unAesonTextMaybe cSp.attributes
           att k = atMapText k attrsM >>= guarded (not . T.null)
@@ -447,27 +447,20 @@ expandedItemView pid item aptSp selectedTabM = do
             AE.String s -> s
             AE.Array xs -> T.intercalate ", " [s | AE.String s <- toList xs]
             v -> decodeUtf8 (AE.encode v)
-          headers = case attrsM >>= Map.lookup "http" >>= (^? key "request" . key "header") of
-            Just (AE.Object km) -> [(AEKey.toText k, hdrVal v) | (k, v) <- KEM.toList km]
-            _ -> []
+          headers = [(AEKey.toText k, hdrVal v) | Just (AE.Object km) <- [attrsM >>= Map.lookup "http" >>= (^? key "request" . key "header")], (k, v) <- KEM.toList km]
           bodyTxtM = case unAesonTextMaybe cSp.body >>= (^? key "request_body") of
             Just (AE.String s) -> guarded (not . T.null) s
             Just v | v /= AE.Null -> Just (decodeUtf8 (AE.encode v))
             _ -> Nothing
-          esc = T.replace "'" "'\\''"
-       in T.intercalate
-            " \\\n  "
-            ( ["curl -X " <> method <> " '" <> esc target <> "'"]
-                <> ["-H '" <> esc (k <> ": " <> v) <> "'" | (k, v) <- headers]
-                <> ["-d '" <> esc b <> "'" | b <- maybeToList bodyTxtM]
-            )
+       in curlCommand method target headers bodyTxtM
 
     -- Summary pills (or alert title) + timestamp + close, then the span-id pill and action row.
     headerBlock = div_ [class_ "detail-header-block flex flex-col gap-1.5 bg-fillWeaker py-2.5 px-3"] do
       if isAlert
         then div_ [class_ "flex items-center gap-3 min-w-0"] do
           h4_ [class_ "text-xl max-w-96 truncate"] $ toHtml $ fromMaybe "" item.name
-          span_ [class_ $ "badge badge-sm whitespace-nowrap " <> getAlertStatusColor (fromMaybe "" item.status_message)] $ toHtml $ fromMaybe "" item.status_message
+          whenJust (rightToMaybe . parseUrlPiece =<< atMapText "monitor.status" (unAesonTextMaybe item.attributes)) \status ->
+            tonePill_ (case status of Monitors.MSAlerting -> ErrorBadge; Monitors.MSWarning -> WarningBadge; Monitors.MSNormal -> SuccessBadge) (T.toTitle $ display status)
         else div_ [class_ "min-w-0"] $ renderSummaryElements (summaryForDetailView (Telemetry.generateSummary item))
       -- span_id isn't carried by generateSummary; keep one pill so its filter-menu stays reachable.
       whenJust (item.context >>= (.span_id) >>= guarded (not . T.null)) \v ->
@@ -490,8 +483,8 @@ expandedItemView pid item aptSp selectedTabM = do
         -- is the adjacent <pre> — `next <pre/>` rather than a per-item class, so nothing
         -- has to mint a unique selector and the two stay coupled by position.
         button_ [class_ "action-btn", copySourceAttr_ "this.nextElementSibling"] $ actionBtnBody "copy" "Copy as curl"
-        pre_ [class_ "hidden"] $ toHtml curlCommand
-      whenJust (item.context >>= (.trace_id) >>= guarded (not . T.null)) \trId ->
+        pre_ [class_ "hidden"] $ toHtml curl
+      whenJust (Telemetry.traceIdOf item) \trId ->
         -- A link first, so it works from every shell this view renders in: the details
         -- panel now also opens on dashboards, where the log explorer's trace overlay
         -- doesn't exist and the old button silently did nothing. Where the overlay IS
@@ -596,7 +589,7 @@ renderHttpDetails pid item aptSp = div_ [id_ "http-content-container", class_ "g
   div_ [class_ "bg-fillWeaker w-max rounded-lg border border-strokeWeak justify-start items-start inline-flex"]
     $ div_ [class_ "justify-start items-start flex text-sm"]
     $ forM_ tabs \tab -> httpTab_ ("htab-" <> item.id) tab.marker (tab.marker == activeMarker) tab.label
-  div_ [] $ forM_ tabs \tab -> if tab.marker == activeMarker then renderDetailPanel tab else lazyPanel pid item ("tab=tab-req&subtab=" <>) tab
+  div_ [] $ traverse_ (detailTabPanel_ pid item ("tab=tab-req&subtab=" <>) activeMarker) tabs
 
 
 httpDetailTabs :: Telemetry.OtelLogsAndSpans -> Maybe Telemetry.OtelLogsAndSpans -> (Text, [DetailTab])
@@ -635,9 +628,9 @@ renderErrors :: Projects.ProjectId -> Maybe Text -> (Text -> Maybe Text) -> (Tex
 renderErrors pid svcM attr resAttr errs =
   div_ [class_ "flex flex-col mt-4 gap-3 w-full"] $ ifor_ errs \idx err ->
     div_ [class_ "w-full border border-strokeError-strong/40 rounded-lg overflow-hidden bg-fillError-weak/30"] do
-      let (tye, message, stacktrace) = getErrorDetails err
+      let fld k = fromMaybe "" $ err ^? key "event_attributes" . key "exception" . key k . _String
+          (tye, message, stacktrace) = (fld "type", fld "message", fld "stacktrace")
           copyId = "exc-msg-" <> show idx
-      -- Header: red strip with type, position, copy
       div_ [class_ "flex items-center justify-between gap-3 px-3 py-2 bg-fillError-weak border-b border-strokeError-strong/40"] do
         div_ [class_ "flex items-center gap-2 min-w-0"] do
           faSprite_ "circle-exclamation" "solid" "w-4 h-4 text-iconError shrink-0"
@@ -655,14 +648,8 @@ renderErrors pid svcM attr resAttr errs =
       unless (T.null message)
         $ pre_ [class_ $ copyId <> " text-xs font-mono whitespace-pre-wrap break-words text-textStrong px-3 py-2.5 leading-relaxed"] (toHtml message)
       let frames = StackTrace.framesFor attr stacktrace
-      unless (null frames) $ details_ ([class_ "group/st border-t border-strokeError-strong/30"] <> [open_ "" | idx == 0]) do
-        summary_ [class_ "cursor-pointer select-none flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-textWeak hover:text-textStrong"] do
-          faSprite_ "chevron-right" "regular" "w-3 h-3 transition-transform group-open/st:rotate-90"
-          "Stack trace"
-          span_ [class_ "text-2xs text-textWeak/70"] $ toHtml @Text $ "(" <> show (length frames) <> " frames)"
-        div_ [class_ "px-3 pb-3 max-h-96 overflow-auto c-scroll"] $ stackTrace_ pid svcM attr resAttr stacktrace
-  where
-    getErrorDetails :: AE.Value -> (Text, Text, Text)
-    getErrorDetails ae = (fld "type", fld "message", fld "stacktrace")
-      where
-        fld k = fromMaybe "" $ ae ^? key "event_attributes" . key "exception" . key k . _String
+      unless (null frames)
+        $ div_ [class_ "border-t border-strokeError-strong/30"]
+        $ disclosure_ [open_ "" | idx == 0] "px-3 py-2 text-xs font-medium text-textWeak hover:text-textStrong" ("Stack trace" >> span_ [class_ "text-2xs text-textWeak/70"] (toHtml @Text $ "(" <> show (length frames) <> " frames)"))
+        $ div_ [class_ "mx-3 mb-3 max-h-96 overflow-auto c-scroll rounded-md border border-strokeWeak bg-bgBase"]
+        $ stackTrace_ pid svcM attr resAttr stacktrace

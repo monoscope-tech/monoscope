@@ -208,7 +208,7 @@ window.setParams = (newState: Record<string, unknown>, load = false) => {
 // which passes a form to the picker, still submits.
 window.dispatchQueryUpdate = () => window.dispatchEvent(new CustomEvent('update-query'));
 
-window.applyTimeRange = (timeRange, opts) => {
+const applyTimeRange = (timeRange: { since?: string; from?: string; to?: string }, opts?: { targetPr?: string; label?: string }) => {
   window.updateTimePicker(timeRange, opts);
   window.dispatchQueryUpdate();
 };
@@ -313,7 +313,7 @@ const defaultTimeWindow = (transport?: HTMLElement | null) =>
 window.toggleLiveRefresh = (transport) => {
   if (!transport) return;
   if (transport.dataset.live !== 'true') {
-    window.applyTimeRange({ since: defaultTimeWindow(transport) });
+    applyTimeRange({ since: defaultTimeWindow(transport) });
     return;
   }
   window.setTimeRefreshInterval(transport, window.dashboardRefreshInterval > 0 ? 0 : 15000);
@@ -340,7 +340,7 @@ window.toggleLiveData = (liveData, transport) => {
     rowToggle.checked = true;
     rowToggle.dispatchEvent(new Event('change', { bubbles: true }));
   }
-  if (transport?.dataset.live !== 'true') window.applyTimeRange({ since: defaultTimeWindow(transport) });
+  if (transport?.dataset.live !== 'true') applyTimeRange({ since: defaultTimeWindow(transport) });
   window.setTimeRefreshInterval(transport, 15000);
 };
 
@@ -358,8 +358,8 @@ window.shiftTimeRange = (direction, transport) => {
   const duration = to - from;
   const shiftedFrom = from + direction * duration;
   const shiftedTo = to + direction * duration;
-  if (direction > 0 && shiftedTo >= now) window.applyTimeRange({ since });
-  else window.applyTimeRange({ from: new Date(shiftedFrom).toISOString(), to: new Date(shiftedTo).toISOString() });
+  if (direction > 0 && shiftedTo >= now) applyTimeRange({ since });
+  else applyTimeRange({ from: new Date(shiftedFrom).toISOString(), to: new Date(shiftedTo).toISOString() });
 };
 
 // Carry the page's time range and telemetry scope onto a nav link before it is followed.
@@ -387,11 +387,6 @@ document.addEventListener(
   },
   { capture: true }
 );
-
-window.addEventListener('setRefreshInterval', (event) => {
-  const interval = Number((event as CustomEvent<{ interval?: number | string }>).detail?.interval);
-  if (Number.isFinite(interval)) window.setTimeRefreshInterval(null, interval);
-});
 
 window.exportTableCsv = (selector, filename) => {
   const table = document.querySelector<HTMLTableElement>(selector);
@@ -427,31 +422,7 @@ function updateUrlState(key: string | string[], value: string, action: 'set' | '
 }
 window.updateUrlState = updateUrlState;
 
-// Simple variable setter that updates the tablist element
-window.setVariable = (key: string, value: string) => {
-  // Find the variable tablist element by its data attribute or id
-  const varElement = document.querySelector(`[data-variable="${key}"], #var-${key}`) as HTMLInputElement | HTMLSelectElement;
-
-  if (varElement) {
-    // Update the element's value
-    varElement.value = value;
-
-    // Trigger change event to update URL and notify other components
-    varElement.dispatchEvent(new Event('change', { bubbles: true }));
-  } else {
-    // Fallback: directly update URL if element not found
-    updateUrlState(`var-${key}`, value);
-    window.dispatchEvent(new Event('update-query'));
-  }
-};
-
-// Helper to get current variable value
-window.getVariable = (key: string) => {
-  const params = new URLSearchParams(window.location.search);
-  return params.get(`var-${key}`) || '';
-};
-
-window.createTagify = (selectorOrElement: string | Element, options: any = {}) => {
+const createTagify = (selectorOrElement: string | Element, options: any = {}) => {
   const defaultOptions = {
     skipInvalid: true,
     templates: {
@@ -479,10 +450,7 @@ window.createTagify = (selectorOrElement: string | Element, options: any = {}) =
   return tagify;
 };
 
-function tagifyTemplateFunc(
-  this: { settings: { classNames: { tag: string; tagX: string; tagText: string } }; getAttributes: (data: TagifyTagData) => string },
-  tagData: TagifyTagData
-) {
+function tagifyTemplateFunc(this: TagifyTemplateContext, tagData: TagifyTagData) {
   return `<tag title="${tagData.value || tagData.email}"
                contenteditable='false'
                spellcheck='false'
@@ -493,8 +461,6 @@ function tagifyTemplateFunc(
                 <div><span class="${this.settings.classNames.tagText}">${tagData.name || tagData.value || tagData}</span></div>
        </tag>`;
 }
-
-window.tagifyTemplateFunc = tagifyTemplateFunc;
 
 // Auto-initialize tagify inputs from data attributes
 // Uses data-tagify-* prefix to avoid collision with Tagify's built-in data attribute handling
@@ -530,7 +496,7 @@ function initTagifyElement(el: HTMLElement) {
     if (el.hasAttribute('data-tagify-mode')) options.mode = el.getAttribute('data-tagify-mode');
     if (el.hasAttribute('data-tagify-text-prop')) options.tagTextProp = el.getAttribute('data-tagify-text-prop');
 
-    const tagify = window.createTagify(el, options);
+    const tagify = createTagify(el, options);
     (el as any)._tagifyInstance = tagify;
 
     const initial = el.getAttribute('data-tagify-initial');

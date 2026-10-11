@@ -1,6 +1,7 @@
 module Models.Apis.Endpoints (
   Endpoint (..),
   EndpointId,
+  hashEndpoint,
   EndpointRequestStats (..),
   Host (..),
   HostEvents (..),
@@ -18,7 +19,6 @@ module Models.Apis.Endpoints (
   setHostsArchived,
   hostTrafficSince,
   hostRetentionSweep,
-  endpointRequestStatsByProject,
   endpointRequestStatsPageByProject,
   listEndpointsPaged,
   getEndpointById,
@@ -69,6 +69,7 @@ import Data.Time (UTCTime, ZonedTime, addUTCTime, zonedTimeToUTC)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Vector qualified as V
+import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
@@ -80,8 +81,9 @@ import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Models.Apis.LogQueries (densifyBuckets)
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..), rawSql)
+import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..), rawSql, selectFrom)
 import Relude
+import Utils (toXXHash)
 import Web.HttpApiData (FromHttpApiData (..))
 
 
@@ -111,6 +113,7 @@ data Endpoint = Endpoint
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (Default, FromRow, HI.DecodeRow, NFData, ToRow)
+  deriving (Entity) via (GenericEntity '[Schema "apis", TableName "endpoints", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Endpoint)
   deriving (FromField) via Aeson Endpoint
   deriving (AE.FromJSON) via DAE.Snake Endpoint
 
@@ -123,19 +126,11 @@ bulkInsertEndpoints eps | V.null eps = pass
 bulkInsertEndpoints eps = do
   Hasql.interpExecute_
     [HI.sql| INSERT INTO apis.endpoints (project_id, url_path, url_params, method, host, hash, outgoing, service_name, environment)
-           SELECT * FROM unnest(#{pids}::uuid[], #{paths}::text[], #{params}::jsonb[], #{methods}::text[], #{hosts}::text[], #{hashes}::text[], #{outs}::bool[], #{svcs}::text[], #{envs}::text[])
+           SELECT * FROM unnest(#{V.map (.projectId) eps}::uuid[], #{V.map (.urlPath) eps}::text[], #{V.map (.urlParams) eps}::jsonb[],
+             #{V.map (.method) eps}::text[], #{V.map (.host) eps}::text[], #{V.map (.hash) eps}::text[], #{V.map (.outgoing) eps}::bool[],
+             #{V.map (.serviceName) eps}::text[], #{V.map (.environment) eps}::text[])
            ON CONFLICT (hash) DO NOTHING |]
   bulkInsertHosts eps
-  where
-    pids = V.map (.projectId) eps
-    paths = V.map (.urlPath) eps
-    params = V.map (.urlParams) eps
-    methods = V.map (.method) eps
-    hosts = V.map (.host) eps
-    hashes = V.map (.hash) eps
-    outs = V.map (.outgoing) eps
-    svcs = V.map (.serviceName) eps
-    envs = V.map (.environment) eps
 
 
 -- | Upsert one row in apis.hosts per (project_id, host, outgoing) seen in the
@@ -145,13 +140,9 @@ bulkInsertHosts eps | V.null eps = pass
 bulkInsertHosts eps =
   Hasql.interpExecute_
     [HI.sql| INSERT INTO apis.hosts (project_id, host, outgoing)
-           SELECT p, h, o FROM unnest(#{pids}::uuid[], #{hosts}::text[], #{outs}::bool[]) AS t(p, h, o)
+           SELECT p, h, o FROM unnest(#{V.map (.projectId) eps}::uuid[], #{V.map (.host) eps}::text[], #{V.map (.outgoing) eps}::bool[]) AS t(p, h, o)
            WHERE h <> ''
            ON CONFLICT (project_id, host, outgoing) DO NOTHING |]
-  where
-    pids = V.map (.projectId) eps
-    hosts = V.map (.host) eps
-    outs = V.map (.outgoing) eps
 
 
 -- Based of a view which is generated every 5minutes.
@@ -209,7 +200,7 @@ data EndpointMetaRow = EndpointMetaRow
 data Direction = Incoming | Outgoing
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (Hashable)
-  deriving (AE.ToJSON, Display, FromHttpApiData) via WrappedEnumSC 'Nothing "" Direction
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromHttpApiData) via WrappedEnumSC 'Nothing "" Direction
 
 
 -- | Activity window the period toggle offers, spelled as it appears in the URL.
@@ -272,6 +263,15 @@ epochSecs :: UTCTime -> Int64
 epochSecs = floor . utcTimeToPOSIXSeconds
 
 
+-- | An endpoint's identity, stored as @apis.endpoints.hash@ and used as the anomaly and
+-- issue key, so the formula is frozen. The project id is the text the span carries.
+--
+-- >>> hashEndpoint "pid" "api.example.com" "GET" "/v1/users" == toXXHash "pidapi.example.comGET/v1/users"
+-- True
+hashEndpoint :: Text -> Text -> Text -> Text -> Text
+hashEndpoint pid host method path = toXXHash $ pid <> host <> method <> path
+
+
 -- | Quoted ISO8601 timestamp literal, inlined into the SQL text rather than bound.
 tsLit :: UTCTime -> HI.Sql
 tsLit t = rawSql $ "'" <> toText (iso8601Show t) <> "'"
@@ -319,7 +319,7 @@ data HostQuery = HostQuery
   deriving anyclass (Hashable)
 
 
--- | Row filters of 'endpointRequestStatsByProject': optional host, url_path search, archived state.
+-- | Row filters of 'endpointRequestStatsPageByProject': optional host, url_path search, archived state.
 endpointFiltersSql :: EndpointQuery -> HI.Sql
 endpointFiltersSql q =
   foldMap (\h -> [HI.sql| AND enp.host = #{h}|]) q.host
@@ -328,16 +328,13 @@ endpointFiltersSql q =
 
 
 -- FIXME: Include and return a boolean flag to show if fields that have annomalies.
+
+-- | A page of endpoint traffic plus the total after applying telemetry-backed filters.
 -- Endpoint identity comes from Postgres (@apis.*@); per-endpoint traffic stats come
 -- from the telemetry store (TimeFusion when @useTf@), which holds no @apis.*@ tables —
 -- so the two are fetched separately and joined + sorted + paginated in Haskell.
 -- 'ShellOnly' skips the telemetry aggregate entirely: the page renders skeleton stat
 -- cells and defers the (seconds-long) stats fetch, mirroring 'dependenciesAndEventsCount'.
-endpointRequestStatsByProject :: (DB es, Labeled "timefusion" Hasql :> es, Time :> es) => StatsMode -> Bool -> Projects.ProjectId -> EndpointQuery -> Eff es (V.Vector EndpointRequestStats)
-endpointRequestStatsByProject statsMode useTf pid q = fst <$> endpointRequestStatsPageByProject statsMode useTf pid q
-
-
--- | A page of endpoint traffic plus the total after applying telemetry-backed filters.
 -- Service scope cannot be counted from @apis.endpoints@: one endpoint can receive traffic
 -- from several services, so the same aggregate that builds the rows must also paginate them.
 endpointRequestStatsPageByProject :: (DB es, Labeled "timefusion" Hasql :> es, Time :> es) => StatsMode -> Bool -> Projects.ProjectId -> EndpointQuery -> Eff es (V.Vector EndpointRequestStats, Int)
@@ -411,7 +408,7 @@ endpointRequestStatsPageByProject statsMode useTf pid q = do
 
 data HostEvents = HostEvents
   { host :: Text
-  , outgoing :: Bool
+  , direction :: Direction
   , eventCount :: Int64
   , first_seen :: Maybe ZonedTime
   , last_seen :: Maybe ZonedTime
@@ -419,7 +416,7 @@ data HostEvents = HostEvents
   , services :: V.Vector Text -- distinct resource.service.name emitting traffic for this host
   }
   deriving stock (Generic, Show)
-  deriving anyclass (AE.FromJSON, AE.ToJSON, HI.DecodeRow)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 -- Per-(host, direction, service, bucket) telemetry slice, aggregated in Haskell.
@@ -489,7 +486,7 @@ dependenciesAndEventsCount statsMode useTf pid q = do
         let rs = fromMaybe [] $ Map.lookup (h, o) telMap
          in HostEvents
               { host = h
-              , outgoing = o
+              , direction = bool Incoming Outgoing o
               , eventCount = sum $ map (.cnt) rs
               , first_seen = pickZoned (flip compare) $ map (.firstSeen) rs
               , last_seen = pickZoned compare $ map (.lastSeen) rs
@@ -594,7 +591,7 @@ hostRetentionSweep pid traffic = do
            SET archived_at = NOW(), archived_by = NULL, updated_at = NOW()
          WHERE project_id = #{pid} AND archived_at IS NULL
            AND last_seen_at < NOW() - INTERVAL '30 days'|]
-  pure (V.map HI.getOneColumn unarchived, archivedCount)
+  pure (unarchived, archivedCount)
   where
     (hs, os, tss) = V.unzip3 $ V.fromList traffic
 
@@ -609,21 +606,13 @@ listEndpointsPaged pid outgoing searchM limit offset = do
           WHERE project_id = #{pid} AND outgoing = #{outgoing}
             AND (NOT #{hasSearch} OR url_path LIKE #{pat})
         |]
-  rows <-
-    Hasql.interp
-      [HI.sql|
-        SELECT id, created_at, updated_at, project_id, url_path, url_params, method, host, hash, outgoing, description, service_name, environment
-        FROM apis.endpoints ^{whereSql}
-        ORDER BY url_path ASC LIMIT #{limit} OFFSET #{offset} |]
+  rows <- Hasql.interp (selectFrom @Endpoint <> whereSql <> [HI.sql| ORDER BY url_path ASC LIMIT #{limit} OFFSET #{offset} |])
   total <- fromMaybe 0 <$> Hasql.interpOne [HI.sql| SELECT COUNT(*)::bigint FROM apis.endpoints ^{whereSql} |]
   pure (rows, total)
 
 
 getEndpointById :: DB es => Projects.ProjectId -> EndpointId -> Eff es (Maybe Endpoint)
-getEndpointById pid eid =
-  Hasql.interpOne
-    [HI.sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, host, hash, outgoing, description, service_name, environment
-             FROM apis.endpoints WHERE id = #{eid} AND project_id = #{pid} |]
+getEndpointById pid eid = Hasql.interpOne (selectFrom @Endpoint <> [HI.sql| WHERE id = #{eid} AND project_id = #{pid} |])
 
 
 -- Endpoint template discovery ---------------------------------------------------
@@ -654,10 +643,6 @@ getUnmergedEndpoints pid =
         ORDER BY created_at ASC LIMIT #{unmergedScanLimit} |]
 
 
--- | (method, host, canonical_path) for templates this project already has, so
--- discovery can assign a lone straggler to a template the population already
--- proved — without which a project re-inflates one row at a time after the
--- bulk merge.
 -- | The identity of a canonical template: same three columns, in the one order
 -- the SQL and every caller agree on.
 data TemplateKey = TemplateKey
@@ -669,6 +654,9 @@ data TemplateKey = TemplateKey
   deriving anyclass (HI.DecodeRow, Hashable)
 
 
+-- | Templates this project already has, so discovery can assign a lone straggler to a
+-- template the population already proved — without which a project re-inflates one row
+-- at a time after the bulk merge.
 getCanonicalTemplateKeys :: DB es => Projects.ProjectId -> Eff es (V.Vector TemplateKey)
 getCanonicalTemplateKeys pid =
   V.fromList
@@ -716,10 +704,6 @@ getMergedEndpointPairs pid = do
           LIMIT 10000 |]
 
 
--- | Remap anomalies/issues from merged endpoints to their canonical hashes, then delete old endpoints.
--- Legacy apis.shapes/fields/formats migration steps removed (tables dropped in 0090);
--- the schema-learning catalog (apis.schema_catalog) re-derives structure on the fly per
--- canonical key, so no explicit row migration is needed for the new model.
 -- | A stored verdict plus the evidence accumulated for it.
 data GroupReview = GroupReview
   { groupKey :: Text
@@ -769,9 +753,6 @@ revertGroupApply pid gkey chashes = do
              WHERE project_id = #{pid} AND canonical_hash = ANY(#{chashes}) AND hash <> canonical_hash |]
 
 
--- | Canonical hashes from LLM-applied merges still inside their quarantine.
--- Cleanup must not delete their sources yet: deletion is what makes a wrong
--- merge permanent.
 -- | Is this review still inside its quarantine? One predicate, because the
 -- window is a policy: the cleanup that deletes merged-out rows and the re-check
 -- that can still take a merge back have to disagree about nothing.
@@ -779,6 +760,8 @@ inQuarantineSql :: HI.Sql
 inQuarantineSql = [HI.sql| r.applied_at IS NOT NULL AND r.reverted_at IS NULL AND r.applied_at > NOW() - INTERVAL '24 hours' |]
 
 
+-- | Canonical hashes from LLM-applied merges still inside their quarantine: cleanup must
+-- not delete their sources yet.
 quarantinedCanonicalHashes :: DB es => Projects.ProjectId -> Eff es (V.Vector Text)
 quarantinedCanonicalHashes pid =
   V.fromList
@@ -972,7 +955,7 @@ recordGroupReviews pid rows =
   Hasql.interpExecute_
     [HI.sql| INSERT INTO apis.endpoint_group_reviews (project_id, group_key, members_hash, member_count, verdict, shape, confirmations, first_member_count)
            SELECT #{pid}, k, h, n, v, s, 1, n
-           FROM unnest(#{keys}::text[], #{hashes}::text[], #{counts}::int8[], #{verdicts}::text[], #{shapes}::text[]) AS t(k, h, n, v, s)
+           FROM unnest(#{keys}::text[], #{hashes}::text[], #{counts64}::int8[], #{verdicts}::text[], #{shapes}::text[]) AS t(k, h, n, v, s)
            ON CONFLICT (project_id, group_key)
            DO UPDATE SET members_hash = EXCLUDED.members_hash, member_count = EXCLUDED.member_count,
                          verdict = EXCLUDED.verdict, shape = EXCLUDED.shape, created_at = NOW(),
@@ -990,11 +973,8 @@ recordGroupReviews pid rows =
                            ELSE EXCLUDED.member_count END
            WHERE apis.endpoint_group_reviews.applied_at IS NULL |]
   where
-    keys = V.fromList [k | (k, _, _, _, _) <- rows]
-    hashes = V.fromList [h | (_, h, _, _, _) <- rows]
-    counts = V.fromList [fromIntegral n :: Int64 | (_, _, n, _, _) <- rows]
-    verdicts = V.fromList [v | (_, _, _, v, _) <- rows]
-    shapes = V.fromList [s | (_, _, _, _, s) <- rows]
+    (keys, hashes, counts, verdicts, shapes) = L.unzip5 rows
+    counts64 = map fromIntegral counts :: [Int64]
 
 
 -- | Fold merged-out endpoints' anomalies and issues onto their canonical

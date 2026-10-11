@@ -287,7 +287,7 @@ spec = sequential $ aroundAll withTestResources do
       -- Look up their IDs and merge member into canonical
       Just canon <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash pid srcField canonHash
       Just member <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash pid srcField memberHash
-      void $ runTestBg frozenTime tr $ PatternMerge.assignLogsToCanonical [(member.id, canon.id)]
+      void $ runTestBg frozenTime tr $ PatternMerge.assignPatternsToCanonical [(member.id, canon.id)]
       -- getLogPatternTexts should return the canonical but not the member
       (texts, _) <- runTestBg frozenTime tr $ LogPatterns.getLogPatternTexts pid srcField Nothing
       texts `shouldSatisfy` elem "Canonical drain <*>"
@@ -306,7 +306,7 @@ spec = sequential $ aroundAll withTestResources do
       -- Merge member into canonical
       Just canon <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash pid srcField canonHash
       Just member <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash pid srcField memberHash
-      void $ runTestBg frozenTime tr $ PatternMerge.assignLogsToCanonical [(member.id, canon.id)]
+      void $ runTestBg frozenTime tr $ PatternMerge.assignPatternsToCanonical [(member.id, canon.id)]
       -- Insert hourly stats for both canonical and member in current hour
       insertHourlyStat tr srcField canonHash frozenTime 100
       insertHourlyStat tr srcField memberHash frozenTime 70
@@ -542,7 +542,7 @@ spec = sequential $ aroundAll withTestResources do
         PGS.query conn [sql| SELECT canonical_id FROM apis.log_patterns WHERE id = ? |] (PGS.Only a2.id) :: IO [PGS.Only (Maybe LogPatterns.LogPatternId)]
       (PGS.fromOnly =<< listToMaybe canonA2) `shouldBe` Just a1.id
       -- Verify group membership
-      members <- runTestBg frozenTime tr $ PatternMerge.getLogPatternGroupMembers pid a1.id
+      members <- runTestBg frozenTime tr $ PatternMerge.getPatternGroupMembers pid a1.id
       map (.id) members `shouldSatisfy` elem a2.id
 
       -- Group C should remain separate — logCanMerge blocks this pair before similarity check
@@ -604,17 +604,21 @@ spec = sequential $ aroundAll withTestResources do
       case merged of
         ((mergedId, _canonId) : _) -> do
           patternsBefore <- runTestBg frozenTime tr $ LogPatterns.getLogPatterns pid 100 0
+          -- Regression (unmergeLogPattern_otherProject_isNoop): unmerge was keyed on id alone,
+          -- so any project could detach another project's pattern.
+          otherPid <- UUIDId <$> UUID.nextRandom
+          runTestBg frozenTime tr (PatternMerge.unmergePattern otherPid mergedId) >>= (`shouldBe` 0)
           -- Unmerge
-          void $ runTestBg frozenTime tr $ PatternMerge.unmergeLogPattern mergedId
+          void $ runTestBg frozenTime tr $ PatternMerge.unmergePattern pid mergedId
           -- Pattern reappears in getLogPatterns (canonical_id = NULL)
           patternsAfter <- runTestBg frozenTime tr $ LogPatterns.getLogPatterns pid 100 0
           length patternsAfter `shouldBe` (length patternsBefore + 1)
           -- Verify merge_override = TRUE prevents re-embedding
-          unembedded <- runTestBg frozenTime tr $ PatternMerge.getUnembeddedLogPatterns pid
+          unembedded <- runTestBg frozenTime tr $ PatternMerge.getUnembeddedPatterns @LogPatterns.LogPatternId pid
           let unembeddedIds = map fst unembedded
           mergedId `shouldSatisfy` (`notElem` unembeddedIds)
           -- Verify merge_override = TRUE excludes from canonical candidates
-          canonicals <- runTestBg frozenTime tr $ PatternMerge.getCanonicalLogPatterns pid
+          canonicals <- runTestBg frozenTime tr $ PatternMerge.getCanonicalPatterns @LogPatterns.LogPatternId pid
           let canonicalIds = map fst canonicals
           mergedId `shouldSatisfy` (`notElem` canonicalIds)
         [] -> expectationFailure "no merged log patterns found (test 9 may have failed)"
@@ -797,7 +801,7 @@ spec = sequential $ aroundAll withTestResources do
           (PGS.Only pid)
       performGC
       before <- gcdetails_live_bytes . gc <$> getRTSStats
-      canonicals <- runTestBg frozenTime tr (PatternMerge.getCanonicalLogPatterns pid)
+      canonicals <- runTestBg frozenTime tr (PatternMerge.getCanonicalPatterns @LogPatterns.LogPatternId pid)
       _ <- evaluateWHNF $ sum $ map (VU.sum . snd) canonicals
       performGC
       after <- gcdetails_live_bytes . gc <$> getRTSStats
@@ -817,5 +821,5 @@ spec = sequential $ aroundAll withTestResources do
           (\_ -> withResource tr.trPool \conn -> PGS.execute conn
             [sql| DELETE FROM apis.log_patterns WHERE project_id = ? AND pattern_hash = 'invalid-embedding' |]
             (PGS.Only pid))
-          (\_ -> runTestBg frozenTime tr (PatternMerge.getCanonicalLogPatterns pid)
+          (\_ -> runTestBg frozenTime tr (PatternMerge.getCanonicalPatterns @LogPatterns.LogPatternId pid)
             `shouldThrow` \(e :: SomeException) -> message `T.isInfixOf` show e)

@@ -188,11 +188,12 @@ spec = sequential $ aroundAll withTestResources do
       _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid dashId Nothing Nothing (widgetOf Widget.WTTimeseries "original")
       wid <- firstWidgetId =<< storedWidgets tr dashId
 
-      let edited = (widgetOf Widget.WTStat "renamed"){Widget.query = Nothing, Widget.rawQuery = Nothing}
+      -- The render-time tab slug round-trips through the posted JSON and must not be stored.
+      let edited = (widgetOf Widget.WTStat "renamed"){Widget.query = Nothing, Widget.rawQuery = Nothing, Widget._tabSlug = Just "stale-tab"}
       _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid dashId (Just wid) Nothing edited
       only <- onlyWidget =<< storedWidgets tr dashId
 
-      only.title `shouldBe` Just "renamed"
+      (only.title, only._tabSlug) `shouldBe` (Just "renamed", Nothing)
       show @Text only.wType `shouldBe` show @Text Widget.WTStat
       only.query `shouldBe` Just "name != null"
 
@@ -206,7 +207,8 @@ spec = sequential $ aroundAll withTestResources do
 
       _ <- newDashboard tr "overview.yaml" "Widget destination"
       (_, picker) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing (Just "true") Nothing (Just "metric-widget") Nothing Nothing noFilters
-      toStrict (renderText $ toHtml picker) `shouldSatisfy` T.isInfixOf "successToast"
+      -- Rows PUT to the widget upsert, whose response carries the "Widget added" toast.
+      toStrict (renderText $ toHtml picker) `shouldSatisfy` T.isInfixOf "hx-put=\"/p/"
       (_, dashboards) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing noFilters
       toStrict (renderText $ toHtml dashboards)
         `shouldSatisfy` T.isInfixOf "aria-label=\"Add dashboard to favorites\""
@@ -307,9 +309,9 @@ spec = sequential $ aroundAll withTestResources do
       map (.id) initialOne `shouldBe` [Just "first-widget"]
       map (.id) initialTwo `shouldBe` [Just "second-widget"]
 
-      void $ runAsBase tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.dashboardWidgetPutH testPid dashId Nothing (Just "second-tab") (widgetOf Widget.WTStat "Added To Second")
-      void $ runAsBase tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.dashboardDuplicateWidgetPostH testPid dashId "second-widget" Nothing
-      void $ runAsBase tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.dashboardWidgetReorderPatchH testPid dashId (Just "first-tab") (reorder "first-widget" 6 4 6 2)
+      void $ toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.dashboardWidgetPutH testPid dashId Nothing (Just "second-tab") (widgetOf Widget.WTStat "Added To Second")
+      void $ toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.dashboardDuplicateWidgetPostH testPid dashId "second-widget" Nothing
+      void $ toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.dashboardWidgetReorderPatchH testPid dashId (Just "first-tab") (reorder "first-widget" 6 4 6 2)
 
       tabOne <- tabWidgets tr dashId "first-tab"
       tabTwo <- tabWidgets tr dashId "second-tab"
@@ -335,7 +337,7 @@ spec = sequential $ aroundAll withTestResources do
     -- widget (or a group child) updated the root list, matched nothing, and still toasted.
     it "renames tab and group widgets despite a missing or wrong tab slug" \tr -> do
       dashId <- newTabbedDashboard tr
-      let save wid slug t = runAsBase tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.dashboardWidgetPutH testPid dashId (Just wid) slug (widgetOf Widget.WTStat t)
+      let save wid slug t = toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.dashboardWidgetPutH testPid dashId (Just wid) slug (widgetOf Widget.WTStat t)
       void $ save "second-widget" Nothing "Renamed Second"
       map (.title) <$> tabWidgets tr dashId "second-tab" >>= (`shouldBe` [Just "Renamed Second"])
       void $ save "second-widget" (Just "first-tab") "Still Second"
@@ -348,7 +350,7 @@ spec = sequential $ aroundAll withTestResources do
 
       groupDash <- newDashboard tr "overview.yaml" "Grouped"
       _ <- testServant tr $ Dashboards.dashboardYamlPutH testPid groupDash Dashboards.YamlForm{Dashboards.yaml = "title: Grouped\nwidgets:\n  - type: group\n    id: grp\n    title: Group\n    layout: { x: 0, y: 0, w: 12, h: 4 }\n    children:\n      - type: stat\n        id: inner\n        title: Inner\n        layout: { x: 0, y: 0, w: 3, h: 2 }\n"}
-      void $ runAsBase tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.dashboardWidgetPutH testPid groupDash (Just "inner") Nothing (widgetOf Widget.WTStat "Renamed Inner")
+      void $ toBaseServantResponse tr $ atAuthToBase tr.trSessAndHeader $ Dashboards.dashboardWidgetPutH testPid groupDash (Just "inner") Nothing (widgetOf Widget.WTStat "Renamed Inner")
       map (.title) . foldMap (fold . (.children)) <$> storedWidgets tr groupDash >>= (`shouldBe` [Just "Renamed Inner"])
 
   -- Rendering, not persistence: a widget the canvas cannot address is a widget the next
@@ -511,7 +513,7 @@ spec = sequential $ aroundAll withTestResources do
             (Auth.sessionByID (Just session.sessionId) session.requestID session.isSidebarClosed session.theme session.lang (Just "production") (Just "checkout") Nothing Auth.ChallengeRedirect)
       let sqlFor dashboardIdM =
             Servant.getResponse
-              <$> runAsBase
+              <$> toBaseServantResponse
                 tr
                 ( atAuthToBase scopedSession
                     $ Dashboards.widgetSqlTextGetH testPid (Just "status_code == \"ERROR\"") dashboardIdM Nothing Nothing Nothing
@@ -629,7 +631,7 @@ spec = sequential $ aroundAll withTestResources do
             tr.trTracerProvider
             (Auth.sessionByID (Just session.sessionId) session.requestID session.isSidebarClosed session.theme session.lang (Just "production") (Just "checkout") Nothing Auth.ChallengeRedirect)
       result <-
-        runAsBase tr
+        toBaseServantResponse tr
           $ atAuthToBase scopedSession
           $ Routes.chartsDataGetH
             Nothing
@@ -646,7 +648,7 @@ spec = sequential $ aroundAll withTestResources do
       result.error `shouldBe` Nothing
       result.dataText `shouldBe` V.singleton (V.singleton "checkout")
       dashboardResult <-
-        runAsBase tr
+        toBaseServantResponse tr
           $ atAuthToBase scopedSession
           $ Routes.chartsDataGetH
             Nothing
@@ -978,6 +980,20 @@ spec = sequential $ aroundAll withTestResources do
           widget = (def :: Widget.Widget){Widget.wType = Widget.WTTable, Widget.columns = Just [column], Widget._projectId = Just testPid}
           html = toStrict $ renderText $ Widget.renderTableWithDataAndParams widget (V.singleton $ V.singleton "session / id") []
       html `shouldSatisfy` T.isInfixOf ("/p/" <> testPid.toText <> "/rum?tab=sessions&amp;session=session%20%2F%20id")
+
+    -- Regression: rows on a tabless dashboard had no swap target and ignored clicks.
+    it "tableRowClick_navigatesOnTablessAndTabbedDashboards" \_ -> do
+      let column = (def :: Widget.TableColumn){Widget.field = "service", Widget.title = "Service"}
+          rowNav tabM =
+            toStrict . renderText
+              $ Widget.renderTableWithDataAndParams
+                (def :: Widget.Widget){Widget.wType = Widget.WTTable, Widget.columns = Just [column], Widget._projectId = Just testPid, Widget._dashboardId = Just "d1", Widget._tabSlug = tabM, Widget.onRowClick = Just def{Widget.setVariable = Just "service"}}
+                (V.singleton $ V.singleton "api")
+                [("var-env", Just "prod")]
+          dashUrl = "/p/" <> testPid.toText <> "/dashboards/d1"
+      rowNav Nothing `shouldContainAll` ["hx-get=\"" <> dashUrl <> "?var-env=prod&amp;var-service=api\"", "hx-target=\"#main-content\"", "hx-select=\"#main-content\""]
+      rowNav (Just "overview") `shouldContainAll` ["hx-get=\"" <> dashUrl <> "/tab/overview?var-env=prod&amp;var-service=api\"", "hx-target=\"#dashboard-tabs-content\""]
+      rowNav (Just "overview") `shouldSatisfy` (not . T.isInfixOf "hx-select=")
 
     it "renders a scoped dependency map with an endpoint-preserving Service Map link" \tr -> do
       dashId <- newDashboard tr "endpoint-stats.yaml" "Endpoint dependency map"

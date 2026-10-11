@@ -22,7 +22,7 @@ import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
-import Pkg.EmailTemplates (EndpointAlertRow (..), groupedByContext, stripSummaryBadges, traceExplorerUrl)
+import Pkg.EmailTemplates (EndpointAlertRow (..), NewLogPattern (..), groupedByContext, stripSummaryBadges, traceExplorerUrl)
 import Relude hiding (Reader, ask)
 import System.Config (AuthContext (env))
 import System.Config qualified as Config
@@ -37,12 +37,11 @@ sendRenderedEmail receiver subject htmlBody =
 
 
 sendSlackMessage :: (DB es, IOE :> es, Log :> es, Notify.Notify :> es) => Projects.ProjectId -> Text -> Eff es ()
-sendSlackMessage pid message = do
-  slackData <- getProjectSlackData pid
-  maybe
-    (Log.logAttention "sendSlackMessage is not configured. But was called" (pid, message))
-    (\s -> Notify.sendNotification $ Notify.slackNotification s.channelId s.botToken [aesonQQ| {"text": #{message}, "type":"mrkdwn"} |])
-    slackData
+sendSlackMessage pid message =
+  getProjectSlackData pid
+    >>= maybe
+      (Log.logAttention "sendSlackMessage is not configured. But was called" (pid, message))
+      (\s -> Notify.sendNotification $ Notify.slackNotification s.channelId s.botToken [aesonQQ| {"text": #{message}, "type":"mrkdwn"} |])
 
 
 data NotificationAlerts
@@ -65,16 +64,7 @@ data NotificationAlerts
       , monitorUrl :: Text
       , chartUrl :: Maybe Text
       }
-  | LogPatternAlert
-      { issueUrl :: Text
-      , patternText :: Text
-      , sampleMessage :: Maybe Text
-      , logLevel :: Maybe Text
-      , serviceName :: Maybe Text
-      , sourceField :: Text
-      , occurrenceCount :: Int
-      , isError :: Bool
-      }
+  | LogPatternAlert NewLogPattern
   | LogPatternRateChangeAlert
       { issueUrl :: Text
       , patternText :: Text
@@ -130,10 +120,10 @@ sendDiscordAlert replyToMsgIdM alert pid pTitle channelIdM' = do
             ReportAlert{..} -> Just $ discordReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle reportUrl allChartUrl errorChartUrl
             MonitorsAlert{..} -> Just $ discordMonitorAlert monitorTitle monitorUrl chartUrl
             MonitorsRecoveryAlert{..} -> Just $ AE.object ["text" AE..= ("✅ *Alert resolved for `" <> monitorTitle <> "`* \n<" <> monitorUrl <> "|View Monitor>")]
-            LogPatternAlert{..} -> Just $ mkDiscordLogPatternPayload patternText issueUrl logLevel serviceName sourceField occurrenceCount sampleMessage pTitle isError
+            LogPatternAlert lp -> Just $ mkDiscordLogPatternPayload lp pTitle
             LogPatternRateChangeAlert{..} -> Just $ mkDiscordLogPatternRateChangePayload patternText issueUrl logLevel serviceName direction currentRate baselineMean changePercent pTitle isError
             ShapeAlert -> Nothing
-      maybe (pure Nothing) (\payload -> Notify.sendNotificationWithReply $ Notify.discordThreadedNotification cid payload replyToMsgIdM) (mkPayload alert)
+      join <$> forM (mkPayload alert) \payload -> Notify.sendNotificationWithReply $ Notify.discordThreadedNotification cid payload replyToMsgIdM
 
 
 -- | Send a Slack alert, optionally threaded under @threadTsM@; returns the thread
@@ -159,22 +149,20 @@ sendSlackAlert threadTsM alert pid pTitle channelM = do
             ReportAlert{..} -> Just $ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle cid reportUrl allChartUrl errorChartUrl
             MonitorsAlert{..} -> Just $ slackMonitorAlert monitorTitle monitorUrl chartUrl cid
             MonitorsRecoveryAlert{..} -> Just $ slackAttachment cid "#22c55e" [slackSection ("✅ *Resolved:* <" <> monitorUrl <> "|" <> monitorTitle <> ">")]
-            LogPatternAlert{..} -> Just $ mkSlackLogPatternPayload patternText issueUrl logLevel serviceName sourceField occurrenceCount sampleMessage pTitle cid isError
+            LogPatternAlert lp -> Just $ mkSlackLogPatternPayload lp pTitle cid
             LogPatternRateChangeAlert{..} -> Just $ mkSlackLogPatternRateChangePayload patternText issueUrl logLevel serviceName direction currentRate baselineMean changePercent pTitle cid isError
             ShapeAlert -> Nothing
           isDefaultChannel = cid == sd.channelId
-      case mkPayload alert of
-        Nothing -> pure Nothing
-        Just payload -> do
-          -- Legacy installs (apis.slack row created between migrations 0077 and 0080)
-          -- have no webhookUrl; they silently fall through to chat.postMessage and
-          -- fail for private channels. Log a distinct attention so ops can prompt a re-OAuth.
-          when (isDefaultChannel && isNothing sd.webhookUrl)
-            $ Log.logAttention "Slack default channel has no webhook URL; falling back to chat.postMessage (will fail for private channels — user must re-OAuth)" (AE.object ["project_id" AE..= pid, "team_id" AE..= sd.teamId, "channel_id" AE..= cid])
-          let notif = case (isDefaultChannel, sd.webhookUrl) of
-                (True, Just url) -> Notify.slackWebhookNotification url cid payload threadTsM
-                _ -> Notify.slackThreadedNotification cid sd.botToken payload threadTsM
-          Notify.sendNotificationWithReply $ Notify.withSlackContext pid.toText sd.teamId notif
+      join <$> forM (mkPayload alert) \payload -> do
+        -- Legacy installs (apis.slack row created between migrations 0077 and 0080)
+        -- have no webhookUrl; they silently fall through to chat.postMessage and
+        -- fail for private channels. Log a distinct attention so ops can prompt a re-OAuth.
+        when (isDefaultChannel && isNothing sd.webhookUrl)
+          $ Log.logAttention "Slack default channel has no webhook URL; falling back to chat.postMessage (will fail for private channels — user must re-OAuth)" (AE.object ["project_id" AE..= pid, "team_id" AE..= sd.teamId, "channel_id" AE..= cid])
+        let notif = case (isDefaultChannel, sd.webhookUrl) of
+              (True, Just url) -> Notify.slackWebhookNotification url cid payload threadTsM
+              _ -> Notify.slackThreadedNotification cid sd.botToken payload threadTsM
+        Notify.sendNotificationWithReply $ Notify.withSlackContext pid.toText sd.teamId notif
     _ -> Nothing <$ Log.logAttention "Slack alert skipped: missing channel or slack data" (AE.object ["project_id" AE..= pid, "has_channel" AE..= isJust channelM, "has_slack" AE..= isJust slackData])
 
 
@@ -182,16 +170,12 @@ sendWhatsAppAlert :: (IOE :> es, Log :> es, Notify.Notify :> es, Reader Config.A
 sendWhatsAppAlert alert pid pTitle tos = do
   appCtx <- ask @Config.AuthContext
   case alert of
-    RuntimeErrorAlert{..} -> do
-      let template = appCtx.config.whatsappErrorTemplate
-          url = pid.toText <> "/issues/by_hash/" <> errorData.hash
-          contentVars = AE.object ["1" AE..= ("*" <> pTitle <> "*"), "2" AE..= ("*" <> stripSummaryBadges issueTitle <> "*"), "3" AE..= ("`" <> errorData.message <> "`"), "4" AE..= url]
-      sendAlert template contentVars
-    EndpointAlert{..} -> do
-      let template = appCtx.config.whatsappEndpointTemplate
-          url = pid.toText <> "/issues/by_hash/" <> endpointHash
-          contentVars = AE.object ["1" AE..= ("*" <> pTitle <> "*"), "2" AE..= T.intercalate "." ((\x -> "`" <> x.label <> "`") <$> V.toList endpoints), "3" AE..= url]
-      sendAlert template contentVars
+    RuntimeErrorAlert{..} ->
+      sendAlert appCtx.config.whatsappErrorTemplate
+        $ AE.object ["1" AE..= ("*" <> pTitle <> "*"), "2" AE..= ("*" <> stripSummaryBadges issueTitle <> "*"), "3" AE..= ("`" <> errorData.message <> "`"), "4" AE..= (pid.toText <> "/issues/by_hash/" <> errorData.hash)]
+    EndpointAlert{..} ->
+      sendAlert appCtx.config.whatsappEndpointTemplate
+        $ AE.object ["1" AE..= ("*" <> pTitle <> "*"), "2" AE..= T.intercalate "." ((\x -> "`" <> x.label <> "`") <$> V.toList endpoints), "3" AE..= (pid.toText <> "/issues/by_hash/" <> endpointHash)]
     ReportAlert{..} -> do
       let template = appCtx.config.whatsappAllReportTemplate
           templateErr = appCtx.config.whatsappErrorReportTemplate
@@ -214,10 +198,7 @@ sendWhatsAppAlert alert pid pTitle tos = do
     LogPatternAlert{} -> pass
     LogPatternRateChangeAlert{} -> pass
   where
-    sendAlert :: Notify.Notify :> es => Text -> AE.Value -> Eff es ()
-    sendAlert template vars =
-      forM_ tos $ \to ->
-        Notify.sendNotification $ Notify.whatsappNotification template to vars
+    sendAlert template vars = for_ tos \to -> Notify.sendNotification $ Notify.whatsappNotification template to vars
     sendMonitor templateM status title url = case templateM of
       Nothing -> Log.logAttention "WhatsApp monitor alert skipped: WHATSAPP_MONITOR_TEMPLATE is not configured" $ AE.object ["project_id" AE..= pid, "status" AE..= status]
       Just template ->
@@ -248,11 +229,10 @@ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown 
 
 slackErrorAlert :: RuntimeAlertType -> ErrorPatterns.ATError -> Text -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> AE.Value
 slackErrorAlert alertType err project channelId projectUrl chartUrlM occTextM firstSeenM ongoingForM =
-  slackAttachment channelId msgs.color
-    $ [slackSection title, slackSection body]
-    <> maybeToList (slackContext . pure <$> inlineMeta)
-    <> [chartBlock]
-    <> [slackActions buttons]
+  slackAttachment
+    channelId
+    msgs.color
+    [slackSection title, slackSection body, slackContext [errorMetaLine err occTextM ("First seen " <> firstSeen)], chartBlock, slackActions buttons]
   where
     targetUrl = projectUrl <> "/issues/by_hash/" <> err.hash
     msgs = runtimeAlertMessages alertType
@@ -265,8 +245,6 @@ slackErrorAlert alertType err project channelId projectUrl chartUrlM occTextM fi
     title = "<" <> targetUrl <> "|" <> titleEmoji <> " *" <> titleLabel <> "* · " <> errorAlertTitle err <> " in " <> slackEscape project <> ">"
     body = errorSnippet 600 err
     firstSeen = fromMaybe (errFirstSeen err) firstSeenM
-    tidM = nonEmptyT err.traceId
-    inlineMeta = errorMetaLine err occTextM ("First seen " <> firstSeen)
     chartBlock =
       maybe
         (slackContext ["Trend unavailable · <" <> targetUrl <> "|Open issue>"])
@@ -274,7 +252,7 @@ slackErrorAlert alertType err project channelId projectUrl chartUrlM occTextM fi
         chartUrlM
     buttons =
       slackButton "Open issue" (Just "primary") targetUrl
-        : maybeToList (tidM <&> \tid -> slackButton "View trace" Nothing (traceExplorerUrl projectUrl tid err.when))
+        : maybeToList (nonEmptyT err.traceId <&> \tid -> slackButton "View trace" Nothing (traceExplorerUrl projectUrl tid err.when))
 
 
 -- | First non-empty line of a stack trace that isn't a repeat of the error-type header
@@ -297,10 +275,10 @@ errFirstSeen err = fmtDate "%b %-e · %-l:%M %p" err.when
 
 slackMonitorAlert :: Text -> Text -> Maybe Text -> Text -> AE.Value
 slackMonitorAlert monitorTitle monitorUrl chartUrlM channelId =
-  slackAttachment channelId "#ef4444"
-    $ [slackSection ("🚨 *Monitor alerting:* <" <> monitorUrl <> "|" <> monitorTitle <> ">")]
-    <> [chartBlock]
-    <> [slackActions [slackButton "🔍 View monitor" (Just "primary") monitorUrl]]
+  slackAttachment
+    channelId
+    "#ef4444"
+    [slackSection ("🚨 *Monitor alerting:* <" <> monitorUrl <> "|" <> monitorTitle <> ">"), chartBlock, slackActions [slackButton "🔍 View monitor" (Just "primary") monitorUrl]]
   where
     chartBlock =
       maybe
@@ -364,7 +342,7 @@ errorIncidentMessages alertType err now episode projectUrl incidentUrl chart occ
     fallback = label <> " · " <> title <> foldMap (" · " <>) err.serviceName
     headline = slackSection $ "<" <> incidentUrl <> "|:red_circle: *" <> label <> "* · " <> title <> ">"
     detail = slackSection $ errorSnippet 600 err
-    metadata = slackContext [T.intercalate " · " $ impactContext impact <> [fromMaybe ("Observed " <> atUtc now) $ errorMetaLine err occurrence ("Observed " <> atUtc now)] <> impactedUser impact]
+    metadata = slackContext [T.intercalate " · " $ impactContext <> [errorMetaLine err occurrence ("Observed " <> atUtc now)] <> impactedUser]
     onset = tagged "incident_onset" $ slackContext ["Started " <> atUtc (maybe now (.startedAt) episode)]
     chartBlock = tagged "incident_chart" $ maybe (slackContext ["Trend unavailable yet · <" <> incidentUrl <> "|Open issue>"]) (slackImage ("Error occurrences · " <> title) Nothing) chart
     actions =
@@ -374,18 +352,12 @@ errorIncidentMessages alertType err now episode projectUrl incidentUrl chart occ
               : maybeToList
                 ((err.traceId >>= guarded (not . T.null)) <&> \tid -> slackButton "View trace" Nothing (traceExplorerUrl projectUrl tid err.when))
           )
-
-
-impactContext :: AlertImpact -> [Text]
-impactContext impact = ["Project " <> slackEscape impact.projectName] <> maybe [] (pure . ("Tenant " <>) . slackEscape) impact.tenant
-
-
-impactedUser :: AlertImpact -> [Text]
-impactedUser impact = case (slackEscape <$> impact.userName, slackEscape <$> impact.userEmail) of
-  (Just name, Just email) -> ["User " <> name <> " &lt;" <> email <> "&gt;"]
-  (Just name, Nothing) -> ["User " <> name]
-  (Nothing, Just email) -> ["User " <> email]
-  (Nothing, Nothing) -> []
+    impactContext = ["Project " <> slackEscape impact.projectName] <> foldMap (\t -> ["Tenant " <> slackEscape t]) impact.tenant
+    impactedUser = case (slackEscape <$> impact.userName, slackEscape <$> impact.userEmail) of
+      (Just name, Just email) -> ["User " <> name <> " &lt;" <> email <> "&gt;"]
+      (Just name, Nothing) -> ["User " <> name]
+      (Nothing, Just email) -> ["User " <> email]
+      (Nothing, Nothing) -> []
 
 
 tagged :: Text -> AE.Value -> AE.Value
@@ -410,12 +382,6 @@ incidentHeadline = slackEscape . T.take 160
 incidentActions :: Text -> Text -> Text -> AE.Value
 incidentActions incidentUrl monitorUrl sourceLabel =
   tagged "incident_actions" $ slackActions [slackButton "Open issue" (Just "primary") incidentUrl, slackButton sourceLabel Nothing monitorUrl]
-
-
--- | Blocks a root update carries forward from the message that opened the
--- incident. 'tagged' stamps these ids; 'retainSlackSnapshot' looks for them.
-incidentSnapshotBlocks :: [Text]
-incidentSnapshotBlocks = ["incident_onset", "incident_chart"]
 
 
 resolvedErrorMessage :: ErrorPatterns.ErrorPattern -> Projects.User -> UTCTime -> Text -> Maybe Text -> Incidents.SlackPayload
@@ -460,27 +426,19 @@ errorAlertTitle err
       "HTTP request failed" <> maybe "" ((" · " <>) . slackEscape) endpoint
   | otherwise = incidentHeadline err.errorType
   where
-    endpoint = do
-      host <- quotedRecordField "host" err.message
-      pure $ host <> fromMaybe "" (quotedRecordField "path" err.message)
-
-
-quotedRecordField :: Text -> Text -> Maybe Text
-quotedRecordField field source = do
-  let marker = field <> " = \""
-  (_, rest) <- Just $ T.breakOn marker source
-  value <- T.stripPrefix marker rest
-  guard $ not $ T.null value
-  pure $ T.takeWhile (/= '\"') value
+    endpoint = quoted "host" <&> (<> fromMaybe "" (quoted "path"))
+    quoted field = do
+      let marker = field <> " = \""
+      value <- T.stripPrefix marker $ snd $ T.breakOn marker err.message
+      guard $ not $ T.null value
+      pure $ T.takeWhile (/= '\"') value
 
 
 -- | One intentionally quiet context line. Slack lays multiple context elements
 -- out as a grid, which made service, rate, and timestamp compete with the
 -- exception; a single element keeps them secondary and scannable.
-errorMetaLine :: ErrorPatterns.ATError -> Maybe Text -> Text -> Maybe Text
-errorMetaLine err rate observed = case catMaybes [err.serviceName, rate, Just observed, err.environment] of
-  [] -> Nothing
-  parts -> Just $ T.intercalate " · " parts
+errorMetaLine :: ErrorPatterns.ATError -> Maybe Text -> Text -> Text
+errorMetaLine err rate observed = T.intercalate " · " $ catMaybes [err.serviceName, rate, Just observed, err.environment]
 
 
 -- | Updating status must not replace the original onset and chart snapshot.
@@ -489,7 +447,8 @@ retainSlackSnapshot (Incidents.SlackPayload initial) (Incidents.SlackPayload cur
   Incidents.SlackPayload $ KEM.insert "blocks" (AE.toJSON (filter (not . snapshot) (blocks current) <> filter snapshot (blocks initial))) current
   where
     blocks obj = case KEM.lookup "blocks" obj of Just (AE.Array xs) -> toList xs; _ -> []
-    snapshot (AE.Object block) = KEM.lookup "block_id" block `elem` map (Just . AE.String) incidentSnapshotBlocks
+    -- Blocks carried forward from the message that opened the incident, as stamped by 'tagged'.
+    snapshot (AE.Object block) = KEM.lookup "block_id" block `elem` map (Just . AE.String) ["incident_onset", "incident_chart"]
     snapshot _ = False
 
 
@@ -557,17 +516,29 @@ logPatternSeverity isError logLevel
   | otherwise = ("🔍", "New log pattern", 3901174, "#3b82f6")
 
 
--- | Rate-change presentation: (Slack shortcode, Discord emoji, hex color, Discord int color).
--- Red when the pattern is an error, amber on spike, blue on drop.
-rateChangeSeverity :: Bool -> RateChangeDirection -> (Text, Text, Text, Int)
-rateChangeSeverity isError direction
-  | isError = (":rotating_light:", "🚨", "#ef4444", 15278902)
-  | direction == Spike = (":chart_with_upwards_trend:", "📈", "#eab308", 15381768)
-  | otherwise = (":chart_with_downwards_trend:", "📉", "#3b82f6", 3901174)
+-- | Rate-change presentation shared by Slack + Discord: (Slack shortcode, Discord emoji,
+-- hex color, Discord int color, headline label, metadata rows). Red when the pattern is an
+-- error, amber on spike, blue on drop.
+rateChangeSeverity :: Bool -> RateChangeDirection -> Double -> Double -> Double -> Maybe Text -> Maybe Text -> (Text, Text, Text, Int, Text, [(Text, Text)])
+rateChangeSeverity isError direction currentRate baselineMean changePercent logLevel serviceName = (slackIcon, icon, hex, color, label, rows)
+  where
+    (slackIcon, icon, hex, color)
+      | isError = (":rotating_light:", "🚨", "#ef4444", 15278902)
+      | direction == Spike = (":chart_with_upwards_trend:", "📈", "#eab308", 15381768)
+      | otherwise = (":chart_with_downwards_trend:", "📉", "#3b82f6", 3901174)
+    label = (if isError then "Error " else "") <> "Log volume " <> display direction
+    perHour r = show (round r :: Int) <> "/hr"
+    rows =
+      [ ("Now", perHour currentRate)
+      , ("Baseline", perHour baselineMean)
+      , ("Change", (if direction == Spike then "+" else "-") <> show (round changePercent :: Int) <> "%")
+      , ("Level", fromMaybe "—" logLevel)
+      , ("Service", fromMaybe "—" serviceName)
+      ]
 
 
-mkSlackLogPatternPayload :: Text -> Text -> Maybe Text -> Maybe Text -> Text -> Int -> Maybe Text -> Text -> Text -> Bool -> AE.Value
-mkSlackLogPatternPayload patternText issueUrl logLevel serviceName sourceField occurrenceCount sampleMessage project channelId isError =
+mkSlackLogPatternPayload :: NewLogPattern -> Text -> Text -> AE.Value
+mkSlackLogPatternPayload NewLogPattern{..} project channelId =
   slackAttachment channelId color
     $ [ slackSection ("<" <> issueUrl <> "|" <> emoji <> " *" <> label <> "* · " <> project <> ">")
       , slackSection (snippet 200 patternText)
@@ -590,21 +561,13 @@ mkSlackLogPatternRateChangePayload patternText issueUrl logLevel serviceName dir
   slackAttachment
     channelId
     color
-    [ slackSection ("<" <> issueUrl <> "|" <> icon <> " *" <> errPrefix <> "Log volume " <> display direction <> "* · " <> project <> ">")
+    [ slackSection ("<" <> issueUrl <> "|" <> icon <> " *" <> label <> "* · " <> project <> ">")
     , slackSection (snippet 200 patternText)
-    , slackContext
-        [ "*Now:* " <> show (round currentRate :: Int) <> "/hr"
-        , "*Baseline:* " <> show (round baselineMean :: Int) <> "/hr"
-        , "*Change:* " <> sign <> show (round changePercent :: Int) <> "%"
-        , "*Level:* " <> fromMaybe "—" logLevel
-        , "*Service:* " <> fromMaybe "—" serviceName
-        ]
+    , slackContext ["*" <> k <> ":* " <> v | (k, v) <- rows]
     , slackActions [slackButton "Open issue" (Just "primary") issueUrl]
     ]
   where
-    (icon, _, color, _) = rateChangeSeverity isError direction
-    sign = if direction == Spike then "+" else "-"
-    errPrefix = if isError then "Error " else "" :: Text
+    (icon, _, color, _, label, rows) = rateChangeSeverity isError direction currentRate baselineMean changePercent logLevel serviceName
 
 
 discordReportAlert :: Projects.ReportType -> Text -> Text -> Int -> Int -> V.Vector (Text, Int, Int) -> Text -> Text -> Text -> Text -> AE.Value
@@ -613,7 +576,7 @@ discordReportAlert reportType startTime endTime totalErrors totalEvents breakDow
     [ "flags" AE..= 32768
     , "components"
         AE..= arr
-          [ text ("## 📊 " <> (case reportType of Projects.RTWeekly -> "Weekly"; Projects.RTDaily -> "Daily") <> " Report for " <> project)
+          [ text ("## 📊 " <> T.toTitle (display reportType) <> " Report for " <> project)
           , text ("**From:** " <> T.take 10 startTime <> "  **To:** " <> T.take 10 endTime)
           , text ("Total Events: **" <> show totalEvents <> "**" <> T.replicate 28 "  " <> " Total Errors: **" <> show totalErrors <> "**")
           , AE.object
@@ -687,8 +650,8 @@ discordNewEndpointAlert projectName endpoints hash projectUrl =
         foldMap (\h -> "🌐 **" <> h <> "**\n") hostM <> foldMap (\c -> "_" <> c <> "_\n") ctxM <> bulletList labels
 
 
-mkDiscordLogPatternPayload :: Text -> Text -> Maybe Text -> Maybe Text -> Text -> Int -> Maybe Text -> Text -> Bool -> AE.Value
-mkDiscordLogPatternPayload patternText issueUrl logLevel serviceName sourceField occurrenceCount sampleMessage project isError =
+mkDiscordLogPatternPayload :: NewLogPattern -> Text -> AE.Value
+mkDiscordLogPatternPayload NewLogPattern{..} project =
   discordEmbedMsg (emoji <> " **" <> label <> "**")
     $ AE.object
       [ "title" AE..= (emoji <> " " <> label <> " · " <> project)
@@ -711,25 +674,16 @@ mkDiscordLogPatternPayload patternText issueUrl logLevel serviceName sourceField
 
 mkDiscordLogPatternRateChangePayload :: Text -> Text -> Maybe Text -> Maybe Text -> RateChangeDirection -> Double -> Double -> Double -> Text -> Bool -> AE.Value
 mkDiscordLogPatternRateChangePayload patternText issueUrl logLevel serviceName direction currentRate baselineMean changePercent project isError =
-  discordEmbedMsg (icon <> " **" <> errPrefix <> "Log volume " <> display direction <> "**")
+  discordEmbedMsg (icon <> " **" <> label <> "**")
     $ AE.object
-      [ "title" AE..= (icon <> " " <> errPrefix <> "Log volume " <> display direction <> " · " <> project)
+      [ "title" AE..= (icon <> " " <> label <> " · " <> project)
       , "description" AE..= snippet 200 patternText
       , "color" AE..= color
-      , "fields"
-          AE..= arr
-            [ discordField True "Now" (show (round currentRate :: Int) <> "/hr")
-            , discordField True "Baseline" (show (round baselineMean :: Int) <> "/hr")
-            , discordField True "Change" (sign <> show (round changePercent :: Int) <> "%")
-            , discordField True "Level" (fromMaybe "—" logLevel)
-            , discordField True "Service" (fromMaybe "—" serviceName)
-            ]
+      , "fields" AE..= arr (uncurry (discordField True) <$> rows)
       , "url" AE..= issueUrl
       ]
   where
-    (_, icon, _, color) = rateChangeSeverity isError direction
-    errPrefix = if isError then "Error " else "" :: Text
-    sign = if direction == Spike then "+" else "-"
+    (_, icon, _, color, label, rows) = rateChangeSeverity isError direction currentRate baselineMean changePercent logLevel serviceName
 
 
 sendPagerdutyAlertToService :: Notify.Notify :> es => Text -> NotificationAlerts -> Text -> Text -> Eff es ()
@@ -745,7 +699,7 @@ sendPagerdutyAlertToService integrationKey (EndpointAlert project endpoints hash
 sendPagerdutyAlertToService integrationKey RuntimeErrorAlert{issueId, issueTitle, errorData, chartUrl} projectTitle projectUrl =
   let errorUrl = projectUrl <> "/issues/by_hash/" <> errorData.hash
    in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-error-" <> issueId) (projectTitle <> ": " <> errorData.errorType <> " - " <> stripSummaryBadges issueTitle) Notify.PDError (AE.object $ ["error_type" AE..= errorData.errorType, "message" AE..= errorData.message] <> maybeToList (("chart_url" AE..=) <$> chartUrl)) errorUrl
-sendPagerdutyAlertToService integrationKey LogPatternAlert{issueUrl, patternText, logLevel, serviceName, isError} projectTitle _ =
+sendPagerdutyAlertToService integrationKey (LogPatternAlert NewLogPattern{issueUrl, patternText, logLevel, serviceName, isError}) projectTitle _ =
   let pat = stripSummaryBadges patternText
       kind = if isError then "Error Log Pattern" else "Log Pattern" :: Text
       sev = if isError || logLevel == Just "error" then Notify.PDCritical else Notify.PDWarning

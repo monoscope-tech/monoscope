@@ -127,7 +127,7 @@ data RegisterResponse = RegisterResponse
 -- | Register a lease.
 liveTailRegisterH :: Projects.ProjectId -> LT.NewSubscription -> ATAuthCtx (RespHeaders RegisterResponse)
 liveTailRegisterH pid body = do
-  sess <- Projects.getSession
+  (sess, _) <- Projects.sessionAndProject pid
   appCtx <- Reader.ask @AuthContext
   let scope = LT.scopeFor body
   whenLeft_ (LT.compileQuery (fromMaybe "" body.query)) refuse

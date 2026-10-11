@@ -37,7 +37,7 @@ import Data.ByteString qualified as BS
 import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as EHasql
-import Data.Effectful.UUID (UUIDEff, runUUID)
+import Data.Effectful.UUID (UUIDEff, genUUID, runUUID)
 import Data.Effectful.Wreq (HTTP, runHTTPWreq)
 import Data.List qualified as L
 import Data.Map.Strict qualified as Map
@@ -45,7 +45,6 @@ import Data.Text qualified as T
 import Data.Time (addUTCTime)
 import Data.UUID qualified as UUID
 import Data.UUID.Quasi qualified as UUIDQ
-import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
@@ -81,7 +80,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Logging
 import System.Types (ATAuthCtx, ATBaseCtx, ApiPrincipal (..), DB, RespHeaders, addRespHeaders)
 import Utils (escapedQueryPartial, hostPath, nonEmptyT, toUriStr)
-import Web.Cookie (Cookies, SetCookie, parseCookies)
+import Web.Cookie (SetCookie, parseCookies)
 import Web.I18n qualified as I18n
 import Web.Wire (DeviceCodeResponse (..), DeviceTokenResponse (..), ProjectInfo (..))
 import "base64" Data.ByteString.Base64 qualified as B64
@@ -127,54 +126,43 @@ authHandler logger env =
       & runHTTPWreq
       & runUUID
       & runTime
-      & effToHandler
+      & runErrorNoCallStack @ServerError
+      & runEff
+      & liftIO
+      >>= either T.throwError pure
   where
-    handler :: (DB es, Error ServerError :> es, HTTP :> es, IOE :> es, Time :> es, UUIDEff :> es) => Request -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Projects.Session)
+    handler :: (DB es, Error ServerError :> es, HTTP :> es, Time :> es, UUIDEff :> es) => Request -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Projects.Session)
     handler req = do
-      -- Check if basic auth is enabled and try to authenticate
-      if env.config.basicAuthEnabled
-        then do
-          let authHeader = L.lookup hAuthorization $ requestHeaders req
-          case authHeader >>= validateBasicAuth env.config of
-            Just username -> do
-              let cookies = getCookies req
-                  basicEmail = username <> "@basic-auth.local"
-              requestID <- liftIO $ getRequestID req
-              -- Browsers resend `Authorization: Basic` on every request, so minting a
-              -- session here unconditionally wrote one users.persistent_sessions row per
-              -- page load. That is the same failure documented below, which reached
-              -- 2,569,021 rows. Reuse the cookie's session when it is live AND belongs to
-              -- this same basic-auth identity — a cookie for any other user must not be
-              -- adopted just because it exists.
-              existing <- join <$> mapM Projects.getPersistentSession (getSessionId cookies)
-              sessId <- case existing of
+      let headers = requestHeaders req
+          cookies = maybe [] parseCookies (L.lookup hCookie headers)
+          cookieSessId = Projects.PersistentSessionId <$> (UUID.fromASCIIBytes =<< L.lookup "monoscope_session" cookies)
+          cookieSession = join <$> traverse Projects.getPersistentSession cookieSessId
+          scope k = nonEmptyT $ decodeUtf8 <$> join (L.lookup k req.queryString)
+          session sessIdM url = do
+            requestID <- maybe (UUID.toText <$> genUUID) (pure . decodeUtf8) (L.lookup "X-Request-ID" headers)
+            sessionByID sessIdM requestID (L.lookup "isSidebarClosed" cookies == Just "true") (if L.lookup "theme" cookies == Just "light" then "light" else "dark") (I18n.languageFromCookies cookies) (scope "environment") (scope "service_scope") url (challengeFor env.config.basicAuthEnabled headers)
+          -- A Bearer session token (CLI device auth flow) takes precedence over the cookie.
+          bearerSessId = Projects.PersistentSessionId <$> (L.lookup hAuthorization headers >>= T.stripPrefix "Bearer " . decodeUtf8 >>= UUID.fromText)
+          cookieAuth = session (bearerSessId <|> cookieSessId) (Just $ rawPathInfo req <> rawQueryString req)
+      if not env.config.basicAuthEnabled
+        then cookieAuth
+        else case L.lookup hAuthorization headers >>= validateBasicAuth env.config of
+          Just username -> do
+            let basicEmail = username <> "@basic-auth.local"
+            -- Browsers resend `Authorization: Basic` on every request, so minting a
+            -- session here unconditionally wrote one users.persistent_sessions row per
+            -- page load. That is the same failure documented on 'demoGuestSessionId', which
+            -- reached 2,569,021 rows. Reuse the cookie's session when it is live AND belongs
+            -- to this same basic-auth identity — a cookie for any other user must not be
+            -- adopted just because it exists.
+            sessId <-
+              cookieSession >>= \case
                 Just ps | ps.user.getUser.email == CI.mk basicEmail -> pure ps.id
                 _ -> authorizeUserAndPersist Nothing "Basic" "Auth" "" basicEmail
-              sessionByID (Just sessId) requestID (sidebarClosedFromCookie cookies) (themeFromCookie cookies) (I18n.languageFromCookies cookies) (scopeFromRequest "environment" req) (scopeFromRequest "service_scope" req) Nothing (challengeFor env.config.basicAuthEnabled (requestHeaders req))
-            Nothing -> do
-              -- When basic auth is enabled, check if we have a valid cookie session
-              -- If not, we should require basic auth instead of redirecting to Auth0
-              mbPersistentSession <- join <$> mapM Projects.getPersistentSession (getSessionId (getCookies req))
-              case mbPersistentSession of
-                -- We have a valid cookie session, proceed normally
-                Just _ -> proceedWithCookieAuth req
-                -- No valid session and basic auth is enabled - return 401
-                Nothing -> throwError basicAuthChallenge
-        else
-          -- Basic auth not enabled, use normal cookie auth
-          proceedWithCookieAuth req
-
-    proceedWithCookieAuth :: (DB es, Error ServerError :> es, IOE :> es, Time :> es, UUIDEff :> es) => Request -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Projects.Session)
-    proceedWithCookieAuth req = do
-      -- Check for Bearer session token (used by CLI device auth flow)
-      let mbBearerSessionId = do
-            authH <- L.lookup hAuthorization $ requestHeaders req
-            token <- T.stripPrefix "Bearer " (decodeUtf8 authH)
-            uuid <- UUID.fromText token
-            pure $ Projects.PersistentSessionId uuid
-      let cookies = getCookies req
-      requestID <- liftIO $ getRequestID req
-      sessionByID (mbBearerSessionId <|> getSessionId cookies) requestID (sidebarClosedFromCookie cookies) (themeFromCookie cookies) (I18n.languageFromCookies cookies) (scopeFromRequest "environment" req) (scopeFromRequest "service_scope" req) (Just $ getRequestUrl req) (challengeFor env.config.basicAuthEnabled (requestHeaders req))
+            session (Just sessId) Nothing
+          -- Without credentials only a live cookie session gets in; anything else is
+          -- challenged for basic auth instead of being redirected to Auth0.
+          Nothing -> cookieSession >>= maybe (throwError basicAuthChallenge) (const cookieAuth)
 
 
 -- | How to tell an unauthenticated request to authenticate.
@@ -228,25 +216,17 @@ challengeFor basicAuthEnabled headers
 
 sessionByID :: (DB es, Error ServerError :> es, Time :> es, UUIDEff :> es) => Maybe Projects.PersistentSessionId -> Text -> Bool -> Text -> I18n.Language -> Maybe Text -> Maybe Text -> Maybe ByteString -> AuthChallenge -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Projects.Session)
 sessionByID mbPersistentSessionId requestID isSidebarClosed theme lang environment service url challenge = do
-  mbPersistentSession <- join <$> mapM Projects.getPersistentSession mbPersistentSessionId
-  let mUser = mbPersistentSession <&> (.user.getUser)
-  (user, sessionId, persistentSession) <- case (mUser, mbPersistentSession) of
-    (Just user, Just userSession) -> pure (user, userSession.id, userSession)
-    _ -> do
-      case url of
-        Just u -> do
-          if any (\prefix -> T.isInfixOf (prefix <> Projects.demoProjectId.toText) (decodeUtf8 u)) ["/p/", "pid="]
-            then do
-              mbPess <- demoGuestSession
-              let mU = mbPess <&> (.user.getUser)
-              case (mU, mbPess) of
-                (Just uu, Just uSess) -> pure (uu, uSess.id, uSess)
-                _ -> throwError $ unauthenticated "/to_login"
-            else throwError $ unauthenticated "/login"
-        Nothing -> throwError $ unauthenticated "/to_login"
-  let sessionCookie = Projects.craftSessionCookie sessionId False
-  pure $ Projects.addCookie sessionCookie (Projects.Session{persistentSession, ..})
+  persistentSession <- maybe guest pure . join =<< traverse Projects.getPersistentSession mbPersistentSessionId
+  let user = persistentSession.user.getUser
+      sessionId = persistentSession.id
+  pure $ Projects.addCookie (Projects.craftSessionCookie sessionId False) (Projects.Session{persistentSession, ..})
   where
+    guest = case url of
+      Just u
+        | any (\prefix -> T.isInfixOf (prefix <> Projects.demoProjectId.toText) (decodeUtf8 u)) ["/p/", "pid="] ->
+            demoGuestSession >>= maybe (throwError $ unauthenticated "/to_login") pure
+        | otherwise -> throwError $ unauthenticated "/login"
+      Nothing -> throwError $ unauthenticated "/to_login"
     -- The whole URL is one query *value*, so it needs value-escaping, not
     -- URI-escaping: `escapedQueryPartial` leaves `&` alone, which truncated
     -- `redirect_to=/chart_data?pid=…&since=1H` at the `&` and landed the user on
@@ -293,47 +273,6 @@ demoGuestSession =
     guestEmail = "hello@monoscope.tech"
 
 
-getCookies :: Request -> Cookies
-getCookies req = maybe [] parseCookies (L.lookup hCookie $ requestHeaders req)
-
-
-getRequestUrl :: Request -> ByteString
-getRequestUrl req = rawPathInfo req <> rawQueryString req
-
-
-getRequestID :: Request -> IO Text
-getRequestID req = do
-  let headers = requestHeaders req
-  case L.lookup "X-Request-ID" headers of
-    Nothing -> fmap UUID.toText UUIDV4.nextRandom
-    Just requestID -> pure $ decodeUtf8 requestID
-
-
-sidebarClosedFromCookie :: Cookies -> Bool
-sidebarClosedFromCookie cookies = case L.lookup "isSidebarClosed" cookies of
-  Just "true" -> True
-  Just _ -> False
-  Nothing -> False
-
-
-scopeFromRequest :: ByteString -> Request -> Maybe Text
-scopeFromRequest scopeKey req = nonEmptyT $ decodeUtf8 <$> join (L.lookup scopeKey req.queryString)
-
-
-themeFromCookie :: Cookies -> Text
-themeFromCookie cookies = if L.lookup "theme" cookies == Just "light" then "light" else "dark"
-
-
-getSessionId :: Cookies -> Maybe Projects.PersistentSessionId
-getSessionId cookies = Projects.PersistentSessionId <$> (UUID.fromASCIIBytes =<< L.lookup "monoscope_session" cookies)
-
-
-effToHandler :: Eff '[Error ServerError, IOE] a -> Handler a
-effToHandler computation = do
-  v <- liftIO . runEff . runErrorNoCallStack @ServerError $ computation
-  either T.throwError pure v
-
-
 type ApiKeyAuthContext = AuthHandler Request ApiPrincipal
 
 
@@ -378,47 +317,30 @@ logoutH = do
 -- | Persist the user-selected language as a long-lived cookie, then bounce
 -- back to wherever they came from. Accessible without auth (the language
 -- switcher in the public auth pages must work pre-login).
-setLanguageH
-  :: Text
-  -> Maybe Text
-  -> ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
-setLanguageH langText redirectToM = do
-  let lang = I18n.parseLanguage langText
-  pure $ addHeader (fromMaybe "/" redirectToM) $ addHeader (I18n.languageSetCookieBS lang) NoContent
+setLanguageH :: Text -> Maybe Text -> ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
+setLanguageH langText redirectToM = pure $ addHeader (fromMaybe "/" redirectToM) $ addHeader (I18n.languageSetCookieBS $ I18n.parseLanguage langText) NoContent
 
 
 loginRedirectH :: Maybe Text -> ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
 loginRedirectH redirectToM = do
   envCfg <- asks env
-  -- If basic auth is enabled, return 401 instead of redirecting to /login
-  if envCfg.basicAuthEnabled
-    then throwError basicAuthChallenge
-    else do
-      let redirectTo = "/login?redirect_to=" <> fromMaybe "/" redirectToM
-      pure $ addHeader redirectTo $ addHeader emptySessionCookie NoContent
+  when envCfg.basicAuthEnabled $ throwError basicAuthChallenge
+  pure $ addHeader ("/login?redirect_to=" <> fromMaybe "/" redirectToM) $ addHeader emptySessionCookie NoContent
 
 
--- loginH
 loginH
   :: Maybe Text
   -> Maybe Text -- screen_hint: "signup" opens Auth0's sign-up tab (invite emails)
   -> Maybe Text -- login_hint: pre-fills the email field
-  -> ATBaseCtx
-       ( Headers
-           '[Header "Location" Text, Header "Set-Cookie" SetCookie]
-           NoContent
-       )
+  -> ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
 loginH redirectToM screenHintM loginHintM = do
   envCfg <- asks env
-  -- If basic auth is enabled, return 401 instead of redirecting to OAuth
-  if envCfg.basicAuthEnabled
-    then throwError basicAuthChallenge
-    else do
-      stateVar <- liftIO $ UUID.toText <$> UUIDV4.nextRandom
-      let escapedUri = escapedQueryPartial $ envCfg.auth0Callback <> "?redirect_to=" <> fromMaybe "/" redirectToM
-      let hintParam name = maybe "" (\v -> "&" <> name <> "=" <> decodeUtf8 (urlEncode True $ encodeUtf8 v))
-      let redirectTo = envCfg.auth0Domain <> "/authorize?response_type=code&client_id=" <> envCfg.auth0ClientId <> "&redirect_uri=" <> escapedUri <> "&state=" <> stateVar <> "&scope=openid profile email" <> hintParam "screen_hint" screenHintM <> hintParam "login_hint" loginHintM
-      pure $ addHeader redirectTo $ addHeader emptySessionCookie NoContent
+  when envCfg.basicAuthEnabled $ throwError basicAuthChallenge
+  stateVar <- UUID.toText <$> genUUID
+  let escapedUri = escapedQueryPartial $ envCfg.auth0Callback <> "?redirect_to=" <> fromMaybe "/" redirectToM
+      hintParam name = maybe "" (\v -> "&" <> name <> "=" <> decodeUtf8 (urlEncode True $ encodeUtf8 v))
+      redirectTo = envCfg.auth0Domain <> "/authorize?response_type=code&client_id=" <> envCfg.auth0ClientId <> "&redirect_uri=" <> escapedUri <> "&state=" <> stateVar <> "&scope=openid profile email" <> hintParam "screen_hint" screenHintM <> hintParam "login_hint" loginHintM
+  pure $ addHeader redirectTo $ addHeader emptySessionCookie NoContent
 
 
 -- authCallbackH will accept a request with code and state, and use that code to queery auth- for an auth token, and then for user info
@@ -428,11 +350,7 @@ authCallbackH
   :: Maybe Text
   -> Maybe Text -- state variable from auth0
   -> Maybe Text
-  -> ATBaseCtx
-       ( Headers
-           '[Header "Location" Text, Header "Set-Cookie" SetCookie]
-           (Html ())
-       )
+  -> ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] (Html ()))
 authCallbackH codeM _ redirectToM = do
   envCfg <- ask @AuthContext
   pool <- asks pool
@@ -453,23 +371,14 @@ authCallbackH codeM _ redirectToM = do
     accessToken <- hoistEither $ note "invalid access_token in response" $ r L.^? responseBody . key "access_token" . _String
     let opts = defaults & header "Authorization" L..~ ["Bearer " <> encodeUtf8 @Text @ByteString accessToken]
     resp <- liftIO $ getWith opts (toString $ envCfg.config.auth0Domain <> "/userinfo")
-    let email = fromMaybe "" $ resp L.^? responseBody . key "email" . _String
-    let firstName = fromMaybe "" $ resp L.^? responseBody . key "given_name" . _String
-    let lastName = fromMaybe "" $ resp L.^? responseBody . key "family_name" . _String
-    let picture = fromMaybe "" $ resp L.^? responseBody . key "picture" . _String
-    lift $ authorizeUserAndPersist (Just envCfg.config.convertkitApiKey) firstName lastName picture email
+    let field k = fromMaybe "" $ resp L.^? responseBody . key k . _String
+    lift $ authorizeUserAndPersist (Just envCfg.config.convertkitApiKey) (field "given_name") (field "family_name") (field "picture") (field "email")
   case resp of
-    Left err -> putStrLn ("unable to process auth callback page " <> err) >> throwError err302{errHeaders = [("Location", "/login?auth0_callback_failure")]}
-    Right persistentSessId -> pure
-      $ addHeader (fromMaybe "/" redirectToM)
-      $ addHeader
-        (craftSessionCookie persistentSessId True)
-        do
-          html_ do
-            head_ do
-              meta_ [httpEquiv_ "refresh", content_ "1;url=/"]
-            body_ do
-              a_ [href_ $ fromMaybe "/" redirectToM] "Continue to APIToolkit"
+    Left err -> Logging.logAttention "unable to process auth callback page" err >> throwError err302{errHeaders = [("Location", "/login?auth0_callback_failure")]}
+    Right persistentSessId -> pure $ addHeader (fromMaybe "/" redirectToM) $ addHeader (craftSessionCookie persistentSessId True) do
+      html_ do
+        head_ $ meta_ [httpEquiv_ "refresh", content_ "1;url=/"]
+        body_ $ a_ [href_ $ fromMaybe "/" redirectToM] "Continue to APIToolkit"
 
 
 -- | The user behind an email address, created on first sight.
@@ -514,19 +423,15 @@ errorPageHtml envCfg code = renderBS $ bodyWrapper def{pageTitle = title <> " �
       button_ [class_ "btn", onclick_ "history.back()"] "Go Back"
       a_ [href_ "/", class_ "btn btn-primary"] "Home"
   where
-    (icon, title, desc) = errorInfo code
-
-
-errorInfo :: Int -> (Html (), Text, Text)
-errorInfo = \case
-  400 -> ("🚫", "Bad Request", "The request could not be understood. Please check and try again.")
-  401 -> ("🔒", "Unauthorized", "You need to be logged in to access this page.")
-  403 -> ("⛔", "Forbidden", "You don't have permission to access this resource.")
-  404 -> ("🔍", "Not Found", "The page you're looking for doesn't exist or has been moved.")
-  500 -> ("💥", "Internal Server Error", "Something went wrong on our end. Please try again later.")
-  502 -> ("🌐", "Bad Gateway", "We're having trouble connecting. Please try again shortly.")
-  503 -> ("🔧", "Service Unavailable", "We're temporarily offline for maintenance. Please try again soon.")
-  c -> ("⚠️", "Error " <> show c, "An unexpected error occurred.")
+    (icon, title, desc) :: (Html (), Text, Text) = case code of
+      400 -> ("🚫", "Bad Request", "The request could not be understood. Please check and try again.")
+      401 -> ("🔒", "Unauthorized", "You need to be logged in to access this page.")
+      403 -> ("⛔", "Forbidden", "You don't have permission to access this resource.")
+      404 -> ("🔍", "Not Found", "The page you're looking for doesn't exist or has been moved.")
+      500 -> ("💥", "Internal Server Error", "Something went wrong on our end. Please try again later.")
+      502 -> ("🌐", "Bad Gateway", "We're having trouble connecting. Please try again shortly.")
+      503 -> ("🔧", "Service Unavailable", "We're temporarily offline for maintenance. Please try again soon.")
+      c -> ("⚠️", "Error " <> show c, "An unexpected error occurred.")
 
 
 data ClientMetadata = ClientMetadata
@@ -556,17 +461,16 @@ clientMetadataH (Just authTextB64) = do
           -- without this a deleted or deactivated project's key still collects
           -- pubsub credentials and keeps ingesting. It was previously fetched
           -- and discarded, which validated nothing.
-          pApiKey <- do
-            pApiKeyM <- ProjectApiKeys.getProjectApiKey apiKeyUUID
-            case pApiKeyM of
+          pApiKey <-
+            ProjectApiKeys.getProjectApiKey apiKeyUUID >>= \case
               Nothing -> Logging.logAttention "clientMetadata: no api key with given id" () >> throwError err401
               Just pApiKey ->
                 Projects.activeProjectById pApiKey.projectId >>= \case
                   Nothing -> Logging.logAttention "clientMetadata: api key for inactive or deleted project" pApiKey.projectId >> throwError err401
                   Just _ -> pure pApiKey
-          serviceAccountJson <- case AE.decodeStrict . B64.decodeBase64Lenient . encodeUtf8 $ appCtx.config.monoscopePusherServiceAccountB64 of
-            Just val -> pure val
-            Nothing -> Logging.logAttention "clientMetadata: failed to decode service account from env" () >> throwError Servant.err500
+          serviceAccountJson <-
+            maybe (Logging.logAttention "clientMetadata: failed to decode service account from env" () >> throwError Servant.err500) pure
+              $ AE.decodeStrict (B64.decodeBase64Lenient $ encodeUtf8 appCtx.config.monoscopePusherServiceAccountB64)
           pure
             $ ClientMetadata
               { projectId = pApiKey.projectId
@@ -576,27 +480,17 @@ clientMetadataH (Just authTextB64) = do
               }
 
 
--- =============================================================================
--- Device Authorization Flow (CLI login)
--- =============================================================================
-
-genUserCode :: IO Text
-genUserCode = do
-  let chars = V.fromList ("ABCDEFGHJKLMNPQRSTUVWXYZ23456789" :: [Char])
-      len = V.length chars
-  (w1, w2, w3, w4) <- UUID.toWords <$> UUIDV4.nextRandom
-  let ws = [w1, w2, w3, w4, w1 `xor` w3, w2 `xor` w4]
-  pure $ toText [chars V.! (fromIntegral w `mod` len) | w <- ws]
-
-
+-- | Device Authorization Flow (CLI login).
 deviceCodeH :: ATBaseCtx DeviceCodeResponse
 deviceCodeH = do
   envCfg <- asks env
-  deviceCode <- UUID.toText <$> liftIO UUIDV4.nextRandom
-  userCode <- liftIO genUserCode
-  rowId <- liftIO UUIDV4.nextRandom
+  deviceCode <- UUID.toText <$> genUUID
+  (w1, w2, w3, w4) <- UUID.toWords <$> genUUID
+  rowId <- genUUID
   now <- currentTime
   let expiresAt = addUTCTime 300 now
+      chars = V.fromList ("ABCDEFGHJKLMNPQRSTUVWXYZ23456789" :: [Char])
+      userCode = toText [chars V.! (fromIntegral w `mod` V.length chars) | w <- [w1, w2, w3, w4, w1 `xor` w3, w2 `xor` w4]]
       verificationUri = hostPath envCfg.hostUrl ("device?code=" <> userCode)
   void
     $ EHasql.interpExecute
@@ -648,22 +542,17 @@ deviceApproveH approve codeM = do
         when (updated == 0) $ hoistEither $ Left "Invalid, expired, or already used code."
         pure True
       else pure False
-  addRespHeaders $ case result of
-    Left err -> approvePageHtml False (Just err)
-    Right approved -> approvePageHtml approved Nothing
-  where
-    approvePageHtml approved errMsg = html_ $ do
-      head_ $ do
-        title_ "Monoscope - Device Authorization"
-        meta_ [charset_ "utf-8"]
-        meta_ [name_ "viewport", content_ "width=device-width, initial-scale=1"]
-      body_ [style_ "font-family:system-ui;max-width:480px;margin:60px auto;padding:0 20px;text-align:center"] $ do
-        h1_ [style_ "font-size:1.5rem"] "Monoscope CLI"
-        case errMsg of
-          Just err -> p_ [style_ "color:red;font-size:1.2rem"] (toHtml err)
-          Nothing | approved -> p_ [style_ "color:green;font-size:1.2rem"] "Device authorized! You can close this tab."
-          Nothing -> do
-            whenJust codeM \code -> do
-              p_ [style_ "font-size:1.2rem"] $ "Confirm CLI login with code: " <> toHtml code
-              form_ [method_ "POST", action_ $ "/device?code=" <> toUriStr code] $ do
-                button_ [type_ "submit", style_ "padding:12px 32px;font-size:1rem;cursor:pointer;background:#2563eb;color:white;border:none;border-radius:6px"] "Approve"
+  addRespHeaders $ html_ do
+    head_ do
+      title_ "Monoscope - Device Authorization"
+      meta_ [charset_ "utf-8"]
+      meta_ [name_ "viewport", content_ "width=device-width, initial-scale=1"]
+    body_ [style_ "font-family:system-ui;max-width:480px;margin:60px auto;padding:0 20px;text-align:center"] do
+      h1_ [style_ "font-size:1.5rem"] "Monoscope CLI"
+      case result of
+        Left err -> p_ [style_ "color:red;font-size:1.2rem"] (toHtml err)
+        Right True -> p_ [style_ "color:green;font-size:1.2rem"] "Device authorized! You can close this tab."
+        Right False -> whenJust codeM \code -> do
+          p_ [style_ "font-size:1.2rem"] $ "Confirm CLI login with code: " <> toHtml code
+          form_ [method_ "POST", action_ $ "/device?code=" <> toUriStr code]
+            $ button_ [type_ "submit", style_ "padding:12px 32px;font-size:1rem;cursor:pointer;background:#2563eb;color:white;border:none;border-radius:6px"] "Approve"
