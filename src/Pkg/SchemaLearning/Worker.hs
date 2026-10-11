@@ -132,9 +132,16 @@ buildAnomalyRows priors dirty =
         , host = e.scope.host
         , urlPath = e.scope.urlPath
         , delta
+        , fieldEvidence =
+            V.fromList
+              [ ApiChanges.FieldEvidence path (prior >>= ApiChanges.fieldSnapshot path) after
+              | path <- delta.newFields <> delta.modifiedFields
+              , Just after <- [ApiChanges.fieldSnapshot path e]
+              ]
         }
     | (k, e) <- V.toList dirty
-    , pa <- Catalog.diffAnomalies k.keyHash (HM.lookup (k.projectId, k.keyHash) priors) e
+    , let prior = HM.lookup (k.projectId, k.keyHash) priors
+    , pa <- Catalog.diffAnomalies k.keyHash prior e
     , let (anomalyType, delta) = kindLabel pa.kind
     ]
   where

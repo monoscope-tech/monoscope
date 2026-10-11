@@ -166,13 +166,35 @@ spec = sequential $ aroundAll withTestResources do
       ingest "eyJ1c2VybmFtZSI6ImFAYi5jbyJ9" -- {"username":"a@b.co"}
       (i0, _) <- driftIssue
       Issues.isNewEndpointOnly i0 `shouldBe` True
-      ingest "eyJ1c2VybmFtZSI6ImFAYi5jbyIsInBhc3N3b3JkIjoieCJ9" -- + "password"
+      ingest "eyJ1c2VybmFtZSI6ImFAYi5jbyIsInBhc3N3b3JkIjoieCIsIm5pY2tuYW1lIjoiYSJ9" -- + password, nickname
       (i1, d1) <- driftIssue
       (hasField "password" d1.newFields, V.null d1.modifiedFields, i1.critical) `shouldBe` (True, True, False)
-      ingest "eyJ1c2VybmFtZSI6MiwicGFzc3dvcmQiOiJ4In0=" -- username: string -> number
+      ingest "eyJ1c2VybmFtZSI6MiwicGFzc3dvcmQiOiJ4Iiwibmlja25hbWUiOjJ9" -- username, nickname: string -> number
       (i2, d2) <- driftIssue
       (hasField "password" d2.newFields, hasField "username" d2.modifiedFields, hasField "password" d2.modifiedFields) `shouldBe` (True, True, False)
       (i2.id == i0.id, i2.critical) `shouldBe` (True, True)
+      (_, detail) <- testServant tr $ IssuesPage.issueDetailGetH testPid i2.id Nothing Nothing Nothing Nothing Nothing
+      let html = renderPage detail
+      for_ ["Before", "After", "Detected", "a@b.co", "string", "number"] \text ->
+        html `shouldSatisfy` T.isInfixOf text
+      withResource tr.trPool \conn -> void $ PGS.execute conn [sql| UPDATE apis.anomalies SET field_evidence='[]', created_at=CASE WHEN cardinality(modified_fields)=0 THEN '2026-01-01'::timestamptz ELSE '2026-01-02'::timestamptz END WHERE project_id=? AND target_hash IN ? |] (testPid, PGS.In $ V.toList d2.anomalyHashes)
+      (_, legacyDetail) <- testServant tr $ IssuesPage.issueDetailGetH testPid i2.id Nothing Nothing Nothing Nothing Nothing
+      for_ ["Historical types and values were not captured", "Current observations", "a@b.co"] \text ->
+        renderPage legacyDetail `shouldSatisfy` T.isInfixOf text
+      for_ ([("Added", "2026-01-01T00:00:00Z"), ("Modified", "2026-01-02T00:00:00Z")] :: [(Text, Text)]) \(kind, detected) ->
+        T.splitOn "</tr>" (renderPage legacyDetail) `shouldSatisfy` any (\row -> all (`T.isInfixOf` row) ["nickname", ">" <> kind <> "</td>", detected])
+
+    it "apiChanges_sameService_collapseWithoutLosingEndpointIssues" \tr -> do
+      nowTxt <- nowText
+      for_ ["eyJ1c2VybmFtZSI6ImFAYi5jbyJ9", "eyJ1c2VybmFtZSI6Mn0="] \body -> do
+        processMessagesAndBackgroundJobs tr [("group", encMsg $ msgWithBody "/v1/grouped-drift" body nowTxt)]
+        runAnomalyJobs tr \case
+          BackgroundJobs.NewAnomaly{} -> True
+          _ -> False
+      (_, page) <- testServant tr $ IssuesPage.issueListGetH testPid (Just "Inbox") Nothing Nothing Nothing Nothing Nothing Nothing [] ["api_change"]
+      let html = renderPage page
+      for_ ["<details", "Breaking API changes", "items on this page", "/v1/drift", "/v1/grouped-drift"] \text ->
+        html `shouldSatisfy` T.isInfixOf text
 
     it "filters, paginates, and renders an empty anomaly list through the page handler" \tr -> do
       -- Put the issues created above back in one customer-visible list. The bulk handler
