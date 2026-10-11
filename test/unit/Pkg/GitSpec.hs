@@ -182,10 +182,23 @@ spec = do
       (giteaR, _) <- withHost Gitea (Just "https://git.acme.dev") [ok ["git/trees"] giteaTree, ok ["git/commits"] ghCommit] \c -> fetchTree c acmeApi "dashboards/"
       fmap (map (.sha) . snd) giteaR `shouldBe` Right [Just "b1"]
 
+    it "pins every tree listing and Bitbucket blob backfill to the resolved commit" \_ -> do
+      forM_ [GitHub, Gitea, GitLab, Bitbucket] \host -> do
+        let commit = case host of GitHub -> ghCommit; Gitea -> ghCommit; GitLab -> glCommit; Bitbucket -> bbCommit
+            replies = [ok ["commits"] commit, ok ["git/trees"] ghTree, ok ["repository/tree"] glTree, ok ["max_depth"] bbTree, ok ["/src/c1/dashboards/a.yaml$"] "hello\n"]
+        (result, requests) <- withHost host (if host == Gitea then Just "https://git.acme.dev" else Nothing) replies \c -> fetchTree c acmeApi "dashboards/"
+        fmap fst result `shouldBe` Right "c1"
+        length requests `shouldBe` (if host == Bitbucket then 3 else 2)
+        case urlsOf requests of
+          resolve : pinnedReads -> do
+            resolve `shouldSatisfy` T.isInfixOf "main"
+            pinnedReads `shouldSatisfy` all (T.isInfixOf "c1")
+          [] -> expectationFailure "Expected a head lookup and pinned tree read"
+
     it "backfills Bitbucket's missing blob shas from content, bounded by the prefix" \_ -> do
       -- Bitbucket's listing has no per-file hash, so entries under the prefix are hashed from
       -- their content. `computeContentSha "hello\n"` is git's own blob hash.
-      (r, urls) <- withHost Bitbucket Nothing [ok ["max_depth"] bbTree, ok ["/src/main/dashboards/a.yaml$"] "hello\n", ok ["/commits/"] bbCommit] \c ->
+      (r, urls) <- withHost Bitbucket Nothing [ok ["max_depth"] bbTree, ok ["/src/c1/dashboards/a.yaml$"] "hello\n", ok ["/commits/"] bbCommit] \c ->
         fetchTree c acmeApi "dashboards/"
       fmap (map (.sha) . snd) r `shouldBe` Right [Just (computeContentSha "hello\n")]
       -- One extra read per blob, and only for blobs under the prefix.
@@ -243,8 +256,8 @@ spec = do
 
     it "refuses a listing the host itself says it truncated" \_ -> do
       let truncatedTree = "{\"sha\":\"t1\",\"truncated\":true,\"tree\":[]}"
-      (r, _) <- withHost GitHub Nothing [ok ["git/trees"] truncatedTree] \c -> fetchTree c acmeApi "dashboards/"
-      r `shouldSatisfy` isLeft
+      (r, _) <- withHost GitHub Nothing [ok ["git/trees"] truncatedTree, ok ["/commits/"] ghCommit] \c -> fetchTree c acmeApi "dashboards/"
+      r `shouldBe` Left "Repository listing was truncated by the host; it is too large to sync."
 
   describe "failure responses" do
     it "reports a non-2xx as an error, not as an empty repository" \_ -> do

@@ -1,4 +1,4 @@
-module Pages.Components (drawer_, PanelStyle (..), PanelCfg (..), panel_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, settingsNavLink_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, timeRefreshListener_, timeWindowVals_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, facetRail_, facetSection_, facetOption_, ModalCfg (..), modalWith_, formActionsModal_, dangerAction_, floatingDialog_, dialogField_, kbdHints_, durationMenu_, primaryButton_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, TraceFrame (..), stackTrace_, stackFrames_, codeContextUrl, curlCommand, getTargetPage, abbreviateUnit, agoText, durationQuery, untilLabel, paymentPlanPicker) where
+module Pages.Components (drawer_, PanelStyle (..), PanelCfg (..), panel_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, timeRefreshListener_, timeWindowVals_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, facetRail_, facetSection_, facetOption_, ModalCfg (..), modalWith_, formActionsModal_, dangerAction_, floatingDialog_, dialogField_, kbdHints_, durationMenu_, primaryButton_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, TraceFrame (..), stackTrace_, stackFrames_, codeContextUrl, curlCommand, getTargetPage, abbreviateUnit, agoText, durationQuery, untilLabel, paymentPlanPicker) where
 
 import Data.Default (Default (..))
 import Data.List (elemIndex, findIndex, lookup)
@@ -297,7 +297,7 @@ paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled basicA
   div_ ([class_ "flex flex-col gap-8 w-full"] <> [hxVals_ "{\"isOnboarding\": true}" | isOnboarding]) do
     unless basicAuthEnabled $ div_ [class_ "flex flex-col gap-2 w-full"] do
       div_ [class_ "flex items-center justify-between w-full gap-4"] do
-        p_ [class_ " text-textStrong"] "Total events"
+        label_ [class_ "text-textStrong", Lucid.for_ "price_range"] "Total events"
         p_ [class_ " text-textWeak", term "hx-live:text" "Math.floor(q('#price_range').value / 1e6) + ' Million'"] "20 Million"
       input_ [type_ "range", min_ "20000000", max_ "500000000", step_ "10000000", value_ "20000000", class_ "range range-primary range-sm w-full", id_ "price_range"]
     div_ [class_ "flex flex-col gap-8 mt-6 w-full"] do
@@ -733,7 +733,7 @@ formField_ size cfg lbl name required customM =
       whenJust cfg.dot \color -> div_ [class_ $ "w-1.5 h-1.5 rounded-full shrink-0 " <> color] ""
       whenJust cfg.icon \ic -> faSprite_ ic "solid" "w-4 h-4 text-iconNeutral shrink-0"
       toHtml lbl
-      when required $ span_ [class_ reqCls] "*"
+      when required $ span_ [class_ reqCls, Aria.hidden_ "true"] "*"
     fromMaybe
       ( case (cfg.inputType, cfg.suffix) of
           ("textarea", _) -> textarea_ ([class_ textareaCls, name_ name, id_ fid, placeholder_ cfg.placeholder] <> commonAttrs) $ toHtml cfg.value
@@ -1187,27 +1187,15 @@ roleOptions_ :: Monad m => Maybe Text -> HtmlT m ()
 roleOptions_ sel = options_ sel [("admin", "Admin"), ("edit", "Editor"), ("view", "Viewer")]
 
 
--- | Navigation link row for settings pages (icon + title + description + chevron)
-settingsNavLink_ :: Monad m => Text -> Text -> Text -> Text -> HtmlT m ()
-settingsNavLink_ href icon title desc =
-  a_ [href_ href, class_ "flex items-center justify-between gap-3 p-3 group hover:bg-fillWeaker transition-colors first:rounded-t-xl last:rounded-b-xl"] do
-    div_ [class_ "flex items-center gap-3 min-w-0"] do
-      faSprite_ icon "solid" "h-4 w-4 text-iconNeutral shrink-0"
-      div_ [class_ "min-w-0"] do
-        span_ [class_ "text-sm font-medium text-textStrong block"] $ toHtml title
-        p_ [class_ "text-xs text-textWeak"] $ toHtml desc
-    faSprite_ "chevron-right" "regular" "w-3 h-3 text-iconNeutral shrink-0"
-
-
 -- | \"Repository missing?\" escape hatch under GitHub-App repo pickers: the list is
 -- exactly what the installation was granted, so widening it happens on GitHub.
-installationSettingsLink_ :: Text -> Html ()
+installationSettingsLink_ :: Monad m => Text -> HtmlT m ()
 installationSettingsLink_ url = externalLink_ [href_ url, target_ "_blank", rel_ "noopener"] "Repository missing? Add it to the installation on GitHub"
 
 
 -- | Brand link with a trailing ↗, for a jump to another view (Explorer, a monitor) or site.
 -- @attrs@ must not carry @class_@: Lucid would fuse it into this one.
-externalLink_ :: [Attribute] -> Html () -> Html ()
+externalLink_ :: Monad m => [Attribute] -> HtmlT m () -> HtmlT m ()
 externalLink_ attrs label = a_ ([class_ "text-xs text-textBrand hover:underline inline-flex items-center gap-1 w-fit"] <> attrs) do
   label
   faSprite_ "arrow-up-right-from-square" "regular" "w-3 h-3 shrink-0"

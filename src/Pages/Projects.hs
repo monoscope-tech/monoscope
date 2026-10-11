@@ -85,7 +85,7 @@ import Pages.BodyWrapper (BWConfig (..), OnboardingStep (Integration, Pricing), 
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as SlackP
 import Pages.Bots.Utils qualified as BotUtils
-import Pages.Components (BadgeColor (..), IconBadgeSize (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), PanelCfg (..), PanelStyle (..), brandLogo_, callout_, connectionBadge_, dangerAction_, dirtyFormSaveAttr_, disclosure_, emptyState_, filterInputAttr_, formActionsModal_, formField_, formSelectField_, headerRow_, iconBadge_, modalWith_, panel_, roleOptions_, searchInput_, sectionLabel_, settingsH2_, settingsNavLink_, settingsSection_, tagInput_, toggleRow_, tonePill_)
+import Pages.Components (BadgeColor (..), IconBadgeSize (..), EmptyStateCfg (..), EmptyStateSize (..), FieldCfg (..), FieldSize (..), ModalCfg (..), PanelCfg (..), PanelStyle (..), brandLogo_, callout_, connectionBadge_, dangerAction_, dirtyFormSaveAttr_, disclosure_, emptyState_, filterInputAttr_, formActionsModal_, formField_, formSelectField_, headerRow_, iconBadge_, modalWith_, panel_, roleOptions_, searchInput_, sectionLabel_, settingsH2_, settingsSection_, tagInput_, toggleRow_, tonePill_)
 import Pages.Settings qualified as Settings
 import Pkg.Components.Table (Table (..))
 import Pkg.Components.Table qualified as Table
@@ -306,6 +306,7 @@ allChannels = map display [minBound .. maxBound :: ProjectMembers.NotificationCh
 
 updateNotificationsChannel :: Projects.ProjectId -> NotifListForm -> ATAuthCtx (RespHeaders (Html ()))
 updateNotificationsChannel pid NotifListForm{enabledChannels, phones, emails, slackChannels, includeUserIdentityInAlerts} = do
+  void $ ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
   validateNotificationChannels pid enabledChannels phones >>= \case
     Left errorMessage -> addErrorToast errorMessage Nothing
     Right () -> do
@@ -511,7 +512,10 @@ integrationsBody IntegrationsConfig{..} = do
               , id_ "integrations-save"
               , hxPost_ [text|/p/$pid/notifications-channels|]
               , hxVals_ "js:{enabledChannels: Array.from(document.querySelectorAll('input[name=\"notifChannel\"]:checked')).map(i => i.value), phones: window.getTagValues('#phones_input'), emails: window.getTagValues('#emails_input'), slackChannels: window.getTagValues('#slack-channels-input'), includeUserIdentityInAlerts: document.querySelector('#include-user-identity-in-alerts').checked}"
-              , [__| on input or change from #notifsForm put 'Unsaved changes' into #integrations-save-status |]
+              , [__| on input or change from #notifsForm
+                  if event.target.matches('[data-tagify]') and JSON.stringify(window.getTagValues('#' + event.target.id)) is JSON.stringify(JSON.parse(event.target.getAttribute('data-tagify-initial') or '[]')) exit end
+                  put 'Unsaved changes' into #integrations-save-status
+                |]
               ]
                 <> integrationsSwapAttrs_
             )
@@ -525,14 +529,6 @@ integrationsBody IntegrationsConfig{..} = do
           $ toggleRow_ "include-user-identity-in-alerts" "Include affected user identity in alerts" "Includes the telemetry user name and email in Slack error alerts. Enabled by default; turn it off if alerts for this project must not contain PII. Tenant or project context is always included."
           $ name_ "includeUserIdentityInAlerts"
             : [checked_ | includeUserIdentityInAlerts]
-
-    -- Developer tools
-    div_ [class_ "pt-6 border-t border-strokeWeak space-y-2"] do
-      sectionLabel_ "Developer Tools"
-      div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak"] do
-        settingsNavLink_ ("/p/" <> pid <> "/byob_s3") "bucket" "S3 Bucket" "Connect your own S3-compatible storage"
-        settingsNavLink_ ("/p/" <> pid <> "/settings/git-sync") "github" "GitHub Sync" "Sync dashboards to a GitHub repository"
-        settingsNavLink_ ("/p/" <> pid <> "/settings/code-mappings") "file-lines" "Source Code" "Show the failing line's source in stack traces"
 
     -- Test History
     div_ [class_ "pt-6 border-t border-strokeWeak space-y-2"] do
@@ -674,7 +670,7 @@ data ManageMembersForm = ManageMembersForm
 
 manageMembersPostH :: Projects.ProjectId -> Maybe Text -> ManageMembersForm -> ATAuthCtx (RespHeaders ManageMembers)
 manageMembersPostH pid onboardingM form = do
-  (sess, project) <- Projects.sessionAndProject pid
+  (sess, project) <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PAdmin pid
   appCtx <- ask @AuthContext
   let currUserId = sess.persistentSession.userId
   projMembers <- ProjectMembers.selectActiveProjectMembers pid
@@ -735,7 +731,7 @@ manageMembersPostH pid onboardingM form = do
             else "Updated Members List Successfully"
         )
         Nothing
-  addRespHeaders $ ManageMembersPost (pid, projMembersLatest, project.paymentPlan, teamsCount)
+  addRespHeaders $ ManageMembersPost (pid, projMembersLatest, project.paymentPlan, teamsCount, Just ProjectMembers.PAdmin)
 
 
 data TeamForm = TeamForm
@@ -1015,21 +1011,22 @@ teamPageNF pid handle = do
 
 manageMembersGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders ManageMembers)
 manageMembersGetH pid = do
-  (_, project, bw) <- mkPageCtx pid
+  (sess, project, bw) <- mkPageCtx pid
+  permission <- ProjectMembers.getUserPermission pid sess.user.id
   projMembers <- V.fromList <$> ProjectMembers.selectAllProjectMembers pid
   teamsCount <- length <$> ProjectMembers.getTeamsVM pid
   let bwconf = bw{pageTitle = "Team", isSettingsPage = True}
-  addRespHeaders $ ManageMembersGet $ PageCtx bwconf (pid, projMembers, project.paymentPlan, teamsCount)
+  addRespHeaders $ ManageMembersGet $ PageCtx bwconf (pid, projMembers, project.paymentPlan, teamsCount, permission)
 
 
 data ManageMembers
-  = ManageMembersGet {unwrapGet :: PageCtx (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberWithStatusVM, Text, Int)}
-  | ManageMembersPost {unwrapPost :: (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberWithStatusVM, Text, Int)}
+  = ManageMembersGet {unwrapGet :: PageCtx (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberWithStatusVM, Text, Int, Maybe ProjectMembers.Permissions)}
+  | ManageMembersPost {unwrapPost :: (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberWithStatusVM, Text, Int, Maybe ProjectMembers.Permissions)}
 
 
 instance ToHtml ManageMembers where
-  toHtml (ManageMembersGet (PageCtx bwconf (pid, members, plan, teamsCount))) = toHtml $ PageCtx bwconf $ manageMembersBody pid members plan teamsCount
-  toHtml (ManageMembersPost (pid, members, plan, teamsCount)) = toHtml $ manageMembersBody pid members plan teamsCount
+  toHtml (ManageMembersGet (PageCtx bwconf (pid, members, plan, teamsCount, permission))) = toHtml $ PageCtx bwconf $ manageMembersBody pid members plan teamsCount permission
+  toHtml (ManageMembersPost (pid, members, plan, teamsCount, permission)) = toHtml $ manageMembersBody pid members plan teamsCount permission
   toHtmlRaw = toHtml
 
 
@@ -1054,22 +1051,23 @@ teamTabsHeader_ pid active membersCount teamsCount = do
     tab "Teams" "teams" teamsCount
 
 
-manageMembersBody :: Projects.ProjectId -> V.Vector ProjectMembers.ProjectMemberWithStatusVM -> Text -> Int -> Html ()
-manageMembersBody pid projMembers paymentPlan teamsCount =
+manageMembersBody :: Projects.ProjectId -> V.Vector ProjectMembers.ProjectMemberWithStatusVM -> Text -> Int -> Maybe ProjectMembers.Permissions -> Html ()
+manageMembersBody pid projMembers paymentPlan teamsCount permission =
   settingsSection_ do
     settingsH2_ "Team"
     teamTabsHeader_ pid "members" (V.length projMembers) teamsCount
+    unless canManage $ p_ [class_ "mb-4 text-sm text-textWeak"] "A project admin can invite members, change roles, and remove members."
 
     div_ [class_ "space-y-6"] do
       when (Projects.isFreeTier paymentPlan && V.length projMembers > 1)
         $ callout_ WarningBadge (Just "Free projects are limited to the project owner") "Additional team members are disabled and cannot access the project. Upgrade to enable team access."
 
       form_ [class_ "space-y-6", hxPost_ $ "/p/" <> pid.toText <> "/manage_members", hxTarget_ settingsContentTarget, hxSwap_ "innerHTML", hxIndicator_ "#submitIndicator"] do
-        div_ [class_ "space-y-2"] do
-          label_ [class_ "text-sm font-medium text-textStrong block"] "Invite new member"
-          div_ [class_ "flex gap-2"] do
-            input_ [type_ "email", name_ "emails", class_ "input input-sm input-bordered flex-1", placeholder_ "colleague@company.com", required_ "true"]
-            select_ [name_ "permissions", class_ "select select-sm select-bordered w-28", data_ "tippy-content" roleTooltip] $ roleOptions_ Nothing
+        when canManage $ div_ [class_ "space-y-2"] do
+          label_ [class_ "text-sm font-medium text-textStrong block", Lucid.for_ "new-member-email"] "Invite new member"
+          div_ [class_ "flex flex-wrap gap-2"] do
+            input_ [type_ "email", name_ "emails", id_ "new-member-email", Aria.label_ "Invite new member email", class_ "input input-sm input-bordered min-w-0 w-full sm:w-auto sm:flex-1", placeholder_ "colleague@company.com", required_ "true"]
+            select_ [name_ "permissions", Aria.label_ "New member role", class_ "select select-sm select-bordered w-28", data_ "tippy-content" roleTooltip] $ roleOptions_ Nothing
             button_ [class_ "btn btn-sm btn-primary gap-1", hxIndicator_ "#inviteIndicator"] do
               htmxIndicator_ "inviteIndicator" LdXS
               faSprite_ "paper-plane" "regular" "w-3 h-3"
@@ -1079,36 +1077,46 @@ manageMembersBody pid projMembers paymentPlan teamsCount =
         div_ [class_ "space-y-3"] do
           headerRow_ [] do
             h3_ [class_ "text-sm font-medium text-textStrong"] $ toHtml $ "Members (" <> show (V.length projMembers) <> ")"
-            unless (V.null projMembers) $ button_ [class_ "btn btn-sm gap-1.5", disabled_ "true", id_ "saveMembersBtn", dirtyFormSaveAttr_] do
-              faSprite_ "check" "regular" "w-3 h-3"; "Save changes"
+            when (canManage && not (V.null projMembers)) $ button_
+              [ class_ "btn btn-sm gap-1.5"
+              , disabled_ "true"
+              , id_ "saveMembersBtn"
+              , term "formnovalidate" ""
+              , [__| on change from closest <form/> remove @disabled from me then add .btn-primary to me end
+                  on click if #new-member-email.validity.typeMismatch call #new-member-email.reportValidity() halt end
+                |]
+              ]
+              do
+                faSprite_ "check" "regular" "w-3 h-3"; "Save changes"
           div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak overflow-hidden"]
             $ if V.null projMembers
               then emptyState_ def{size = ESCompact} "No members yet" "Invite someone to get started."
-              else V.imapM_ (memberRowWithStatus pid) projMembers
+              else V.imapM_ (memberRowWithStatus pid canManage) projMembers
   where
+    canManage = permission == Just ProjectMembers.PAdmin
     roleTooltip :: Text
     roleTooltip = "Admin: manage team, billing, and settings · Editor: create dashboards and alerts · Viewer: read-only"
 
 
-memberRowWithStatus :: Projects.ProjectId -> Int -> ProjectMembers.ProjectMemberWithStatusVM -> Html ()
-memberRowWithStatus pid idx prM = do
+memberRowWithStatus :: Projects.ProjectId -> Bool -> Int -> ProjectMembers.ProjectMemberWithStatusVM -> Html ()
+memberRowWithStatus pid canManage idx prM = do
   let email = CI.original prM.email
       memberId = prM.id.toText
       isOwner = idx == 0
       isDisabled = not prM.active && not isOwner
   div_ [class_ $ "px-4 py-3 flex items-center gap-3" <> if isDisabled then " opacity-60" else "", id_ $ "member-" <> memberId] do
     div_ [class_ "flex-1 min-w-0"] $ div_ [class_ "flex items-center gap-2"] do
-      input_ [type_ "text", name_ "emails", value_ email, readonly_ "true", class_ $ "bg-transparent w-full text-sm truncate focus:outline-none cursor-default" <> if isDisabled then " text-textWeak" else " text-textStrong"]
+      input_ [type_ "text", name_ "emails", Aria.label_ ("Email address for " <> email), value_ email, readonly_ "true", class_ $ "bg-transparent w-full text-sm truncate focus:outline-none cursor-default" <> if isDisabled then " text-textWeak" else " text-textStrong"]
       when isOwner $ tonePill_ BrandBadge "Owner"
       when isDisabled $ tonePill_ WarningBadge "Disabled"
     div_ [class_ "flex items-center gap-2"] do
-      select_ [name_ "permissions", class_ $ "select select-sm select-bordered text-sm" <> if isDisabled then " opacity-50" else ""] $ roleOptions_ (Just $ display prM.permission)
-      unless isOwner $ button_ [class_ "btn btn-sm btn-ghost text-iconNeutral hover:text-iconError hover:bg-fillError-weak", Aria.label_ "Remove member", hxDelete_ $ "/p/" <> pid.toText <> "/manage_members/" <> memberId, hxTarget_ $ "#member-" <> memberId, hxSwap_ "outerHTML", hxConfirm_ "Remove this member from the project?"] $ faSprite_ "trash" "regular" "w-4 h-4"
+      select_ ([name_ "permissions", Aria.label_ ("Role for " <> email), class_ $ "select select-sm select-bordered text-sm" <> if isDisabled then " opacity-50" else ""] <> [disabled_ "" | not canManage]) $ roleOptions_ (Just $ display prM.permission)
+      when (canManage && not isOwner) $ button_ [class_ "btn btn-sm btn-ghost text-iconNeutral hover:text-iconError hover:bg-fillError-weak", Aria.label_ "Remove member", hxDelete_ $ "/p/" <> pid.toText <> "/manage_members/" <> memberId, hxTarget_ $ "#member-" <> memberId, hxSwap_ "outerHTML", hxConfirm_ "Remove this member from the project?"] $ faSprite_ "trash" "regular" "w-4 h-4"
 
 
 deleteMemberH :: Projects.ProjectId -> ProjectMembers.ProjectMemberId -> ATAuthCtx (RespHeaders (Html ()))
 deleteMemberH pid memberId = do
-  (sess, _) <- Projects.sessionAndProject pid
+  (sess, _) <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PAdmin pid
   let currUserId = sess.persistentSession.userId
   projMembers <- ProjectMembers.selectActiveProjectMembers pid
   case find (\m -> m.id == memberId) projMembers of
@@ -1309,12 +1317,11 @@ projectSettingsGetH pid = do
 
 deleteProjectGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders CreateProject)
 deleteProjectGetH pid = do
-  sess <- Projects.getSession
+  (sess, _) <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PAdmin pid
   appCtx <- ask @AuthContext
   if isDemoAndNotSudo pid sess.user.isSudo
     then addSuccessToast "Can't perform this action on the demo project" Nothing
     else do
-      _ <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PAdmin pid
       -- Before the row goes away: a subscription left running on a deleted project
       -- keeps charging the customer, and their next signup opens a second one.
       whenJustM (Projects.projectById pid) $ Settings.cancelProjectSubscription appCtx.config
@@ -1331,7 +1338,7 @@ deleteProjectGetH pid = do
 
 createProjectPostH :: Projects.ProjectId -> CreateProjectForm -> ATAuthCtx (RespHeaders CreateProject)
 createProjectPostH pid createP = do
-  (sess, project) <- Projects.sessionAndProject pid
+  (sess, project) <- ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit pid
   appCtx <- ask @AuthContext
   validationRes <- validateM createProjectFormV createP
   case validationRes of

@@ -178,10 +178,10 @@ mapOverview_ =
 nodeCardTemplate_ :: Html ()
 nodeCardTemplate_ =
   template_ [term "data-node-card" ""] $ do
-    div_
-      [ class_ "absolute flex h-[62px] w-[150px] overflow-hidden rounded-[3px] border bg-bgRaised text-2xs leading-3 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-strokeBrand-strong transition-[opacity,border-color,background-color] duration-150 hover:bg-fillWeak"
+    button_
+      [ type_ "button"
+      , class_ "absolute flex h-[62px] w-[150px] overflow-hidden rounded-[3px] border bg-bgRaised text-left text-2xs leading-3 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-strokeBrand-strong transition-[opacity,border-color,background-color] duration-150 hover:bg-fillWeak"
       , term "data-node" ""
-      , tabindex_ "0"
       ]
       do
         div_ [class_ "min-w-0 flex-1 px-1.5 py-1"] do
@@ -236,6 +236,7 @@ menuItems =
   , ("logs", "file-lines", "View logs only")
   , ("metrics", "chart-line", "View metrics")
   , ("monitors", "bell", "View monitors")
+  , ("repositories", "code-branch", "View repositories")
   ]
 
 

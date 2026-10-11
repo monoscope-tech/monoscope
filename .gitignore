@@ -55,6 +55,7 @@ tests.log
 tests_optimized.log
 .playwright-mcp/
 chart-cli
+*.bun-build
 web-components/bun.lock
 .ralph/agent/
 e2e/node_modules/

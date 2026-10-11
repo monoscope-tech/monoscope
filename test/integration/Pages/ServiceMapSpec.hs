@@ -400,6 +400,7 @@ spec = around withTestResources do
       html `shouldContainAll` ["data-service-map", "global-service-map-data", "global-service-map-colors"]
       html `shouldContainAll` ["aria-label=\"Service colors\"", "data-service-color=\"gateway\"", "data-service-color=\"checkout\""]
       html `shouldContainAll` ["Events", "Metrics", "Service Map"]
+      html `shouldContainAll` ["data-menu-action=\"repositories\"", "View repositories"]
 
     -- Regression (4615b0c): the filter used to `send "service-map-filter"(q: my value)`,
     -- but hyperscript parses an event name as an identifier path, so the dashed name was a

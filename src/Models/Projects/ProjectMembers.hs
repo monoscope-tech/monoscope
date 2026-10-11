@@ -210,7 +210,8 @@ getUserPermission pid uid =
     <> Projects.accessibleMembership
 
 
--- | 'Projects.sessionAndProject' (members only), then at least @perm@ on the project; sudo bypasses the role.
+-- | 'Projects.sessionAndProject' (members only), then at least @perm@ on the project. A membership's
+-- role is authoritative even for sudo users; sudo only stands in for a missing membership.
 sessionAndProjectAtLeast
   :: (DB es, EffError.Error ServerError :> es, EffReader.Reader (Headers '[Header "Set-Cookie" SetCookie] Projects.Session) :> es)
   => Permissions
@@ -219,7 +220,7 @@ sessionAndProjectAtLeast
 sessionAndProjectAtLeast perm pid = do
   sp@(sess, _) <- Projects.sessionAndProject pid
   granted <- getUserPermission pid sess.user.id
-  unless (sess.user.isSudo || any (>= perm) granted) $ EffError.throwError err403
+  unless (maybe sess.user.isSudo (>= perm) granted) $ EffError.throwError err403
   pure sp
 
 

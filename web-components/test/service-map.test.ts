@@ -308,6 +308,7 @@ describe('menuHref', () => {
   it('routes the non-explorer actions and refuses to invent a link for the rest', () => {
     expect(menuHref(base, 'metrics', 'a/b')).toBe('/p/proj/metrics?metric_source=a%2Fb');
     expect(menuHref(base, 'monitors', 'svc')).toBe('/p/proj/monitors');
+    expect(menuHref(base, 'repositories', 'team/api & jobs')).toBe('/p/proj/repositories/services/team%2Fapi%20%26%20jobs');
     for (const action of ['inspect', 'focus', 'nonsense']) expect(menuHref(base, action, 'svc')).toBe('#');
   });
 });

@@ -169,11 +169,12 @@ dashTitle t = t
 
 
 -- | After any dashboard change: refresh file_path/file_sha (only when the content changed;
--- template-based dashboards have no schema to sync), then queue a git push if configured.
+-- template-based and repository-owned dashboards are skipped — the latter keep the provider's
+-- file version until a successful push replaces it), then queue a git push if configured.
 syncDashboardAndQueuePush :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx ()
 syncDashboardAndQueuePush pid dashId = do
   dashM <- Dashboards.getDashboardByIdUnscoped dashId
-  forM_ dashM \dash -> when (isJust dash.schema) do
+  forM_ dashM \dash -> when (isJust dash.schema && isNothing dash.gitSyncId) do
     teams <- ManageMembers.getTeamsById dash.projectId (coerce dash.teams)
     let schema = GitSync.buildSchemaWithMeta dash.schema dash.title (V.toList dash.tags) (map (.handle) teams)
         filePath = dashFilePath (folderFromPath dash.filePath) dash.title
@@ -2292,7 +2293,7 @@ dashboardRenamePatchH pid dashId form = do
               void $ Monitors.queryMonitorUpsert monitor{Monitors.alertConfig = monitor.alertConfig{Monitors.title = widgetMonitorTitle form.title widget.title}}
 
       let newPath = dashFilePath (fromMaybe "" form.fileDir) form.title
-      when (Just newPath /= dashVM.filePath)
+      when (isNothing dashVM.gitSyncId && Just newPath /= dashVM.filePath)
         $ void
         $ GitSync.updateDashboardGitInfo dashId newPath ""
 
@@ -2910,6 +2911,7 @@ dashboardActions_ pid dashId tabSlugM currentRange = div_ [class_ "flex items-ce
       when (isJust tabSlugM) $ li_ $ label_ [Lucid.for_ "tabRenameModalId", class_ "p-2"] "Rename tab"
       li_ $ button_ [class_ "p-2 w-full text-left", hxPost_ ("/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/duplicate"), hxSwap_ "none", data_ "tippy-content" "Creates a copy of this dashboard"] "Duplicate dashboard"
       li_ $ label_ [Lucid.for_ "yaml-editor-drawer", class_ "p-2", data_ "tippy-content" "View and edit the dashboard schema as YAML"] "Edit YAML"
+      li_ $ a_ [href_ ("/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/repository"), class_ "p-2"] "Repository sync"
       li_ $ button_ [class_ "p-2 w-full text-left text-textError", hxDelete_ ("/p/" <> pid.toText <> "/dashboards/" <> dashId.toText), hxSwap_ "none", hxConfirm_ "Are you sure you want to delete this dashboard? This action cannot be undone.", data_ "tippy-content" "Permanently deletes this dashboard"] "Delete dashboard"
 
 
