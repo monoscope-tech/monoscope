@@ -1,3 +1,4 @@
+{-# LANGUAGE OrPatterns #-}
 {-# LANGUAGE PackageImports #-}
 
 module Pages.Bots.Slack (slackFormPostH, linkIdentityGetH, linkIdentityPostH, SlackLinkForm (..), startInstallGetH, processSlackEvent, refreshSlackProgress, resetSlackSession, reconcileIncidentDeliveries, linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, getSlackChannelInfo, SlackChannelsResponse (..), SlackActionForm (..), externalOptionsH, slackInteractionsH, SlackInteraction (..), sendSlackWelcomeMessage, sendSlackWelcomeViaWebhook, logWelcomeMessageFailure) where
@@ -6,7 +7,6 @@ import BackgroundJobs.Types qualified as BgJobs
 import Control.Lens ((.~), (^.), (^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as KEM
-import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.Lens (key, _Bool, _String)
 import Data.Aeson.Types qualified as AE
 import Data.ByteArray qualified as BA
@@ -60,7 +60,7 @@ import Network.HTTP.Types (renderSimpleQuery, statusIsSuccessful)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
 import OddJobs.Job (createJob)
-import Pages.BodyWrapper (BWConfig, PageCtx (..), bodyWrapper, currProject, pageTitle, sessM)
+import Pages.BodyWrapper (BWConfig, PageCtx (..), bodyWrapper, pageTitle, sessM)
 import Pages.Bots.SlackProgress qualified as Progress
 import Pages.Bots.Utils (BotEmoji (..), BotResponse (..), BotType (..), Channel, authHeader, botEmoji, botReplyPayload, contentTypeHeader, detectReportIntent, getLoadingMessage, installedResponse, runBotQuery, slackResponse, withBotThread)
 import Pkg.AI qualified as AI
@@ -78,22 +78,15 @@ import System.Config (AuthContext (backgroundScope, env, pool), EnvConfig (..))
 import System.Tracing (forkBackground)
 import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, DB, RespHeaders, addRespHeaders)
 import UnliftIO (timeout, withRunInIO)
-import UnliftIO.Exception (bracket_, catch, finally, throwIO, tryAny)
+import UnliftIO.Exception (Handler (..), bracket_, catch, catches, finally, throwIO, tryAny)
 import Utils (encodeText)
 import Web.FormUrlEncoded (FromForm, urlDecodeAsForm)
 
 
--- | Log-and-return-Nothing helper: missing slackData is always an anomaly (the caller
--- either just received an event from Slack or is acting on behalf of an authed project).
-withSlackData :: Log.Log :> es => Text -> AE.Value -> Eff es (Maybe SlackData) -> (SlackData -> Eff es a) -> Eff es (Maybe a)
-withSlackData logMsg logFields lookupSlackData k =
-  lookupSlackData >>= \case
-    Nothing -> Nothing <$ Log.logAttention logMsg logFields
-    Just sd -> Just <$> k sd
-
-
+-- | Missing slackData is always an anomaly: the caller acts on behalf of an authed project.
 withProjectSlackDataLogged :: (DB es, Log.Log :> es) => Text -> Projects.ProjectId -> (SlackData -> Eff es a) -> Eff es (Maybe a)
-withProjectSlackDataLogged ctx pid = withSlackData "Missing SlackData for project" (AE.object ["context" AE..= ctx, "project_id" AE..= pid]) (getProjectSlackData pid)
+withProjectSlackDataLogged ctx pid k =
+  getProjectSlackData pid >>= maybe (Nothing <$ Log.logAttention "Missing SlackData for project" (AE.object ["context" AE..= ctx, "project_id" AE..= pid])) (fmap Just . k)
 
 
 logWelcomeMessageFailure :: Log.Log :> es => Text -> SomeException -> Eff es ()
@@ -141,15 +134,10 @@ exchangeCodeForToken clientId clientSecret redirectUri code = do
         , "redirect_uri" Wreq.:= redirectUri
         ]
 
-  response <- postWith (defaults & contentTypeHeader "application/x-www-form-urlencoded; charset=utf-8") "https://slack.com/api/oauth.v2.access" formData
-  let responseBdy = response ^. responseBody
-  case AE.decode responseBdy of
-    Just token -> pure $ Just token
-    Nothing ->
-      -- Slack returns {"ok":false,"error":"bad_redirect_uri"} etc. here; log
-      -- the error field so install failures are diagnosable. Never log raw
-      -- body (could contain access_token on partial/odd responses).
-      Nothing <$ Log.logAttention "Slack oauth.v2.access token exchange failed" (AE.object ["error" AE..= either Relude.id (const "unparseable_response") (parseSlackOkOrErr responseBdy)])
+  responseBdy <- (^. responseBody) <$> postWith (defaults & contentTypeHeader "application/x-www-form-urlencoded; charset=utf-8") "https://slack.com/api/oauth.v2.access" formData
+  let token = AE.decode responseBdy
+  -- Log only Slack's error field: the raw body may carry an access_token.
+  token <$ when (isNothing token) (Log.logAttention "Slack oauth.v2.access token exchange failed" (AE.object ["error" AE..= either Relude.id (const "unparseable_response") (parseSlackOkOrErr responseBdy)]))
 
 
 startInstallGetH :: Projects.ProjectId -> Bool -> ATAuthCtx (Headers '[Header "Location" Text] Servant.NoContent)
@@ -211,8 +199,7 @@ linkProjectGetH slack_code stateM = do
   stateId <- maybe (throwError err400) pure $ stateM >>= idFromText
   install <- Integrations.consumeSlackInstall stateId sess.user.id >>= maybe (throwError err403) pure
   let pid = install.projectId
-      isOnboarding = install.onboarding
-  let bwconf = (def :: BWConfig){sessM = Nothing, currProject = Nothing, pageTitle = "Slack app installed"}
+      bwconf = (def :: BWConfig){pageTitle = "Slack app installed"}
   envCfg <- asks env
   pool <- asks pool
   token <- exchangeCodeForToken envCfg.slackClientId envCfg.slackClientSecret envCfg.slackRedirectUri (fromMaybe "" slack_code)
@@ -235,7 +222,7 @@ linkProjectGetH slack_code stateM = do
         -- so post the welcome via the channel-bound incoming webhook URL.
         result <- tryAny $ sendSlackWelcomeViaWebhook token'.incomingWebhook.url project'.title
         whenLeft_ result (logWelcomeMessageFailure token'.incomingWebhook.channelId)
-      pure $ installedResponse "Slack" pid isOnboarding bwconf
+      pure $ installedResponse "Slack" pid install.onboarding bwconf
     _ -> pure $ addHeader ("/p/" <> pid.toText <> "/settings/integrations") $ NoTokenFound $ PageCtx bwconf ()
 
 
@@ -389,7 +376,8 @@ slackActionsH action = do
           updateModal context $ selectBlocks dashboard.widgets $ V.singleton $ slackImage title Nothing chartUrl
       _ -> pass
     "view_submission" -> do
-      selected <- maybe (throwError err400) pure $ slackAction.view.state >>= lookupSelectedValueByKey "widget-select"
+      -- Slack nests the value under values.<blockId>.<actionId>; both ids match here.
+      selected <- maybe (throwError err400) pure $ slackAction.view.state >>= (^? key "values" . key "widget-select" . key "widget-select" . key "selected_option" . key "value" . _String)
       withWidget selected \did _ title chartUrl -> do
         requireAccess
         sendSlackChatMessage slackData.botToken
@@ -424,14 +412,6 @@ textResp :: Text -> AE.Value
 textResp t = AE.object ["text" AE..= t, "replace_original" AE..= True, "delete_original" AE..= True]
 
 
--- | Slack view state nests the selected value under @values.<blockId>.<actionId>@;
--- both ids are the same here.
-lookupSelectedValueByKey :: Text -> AE.Value -> Maybe Text
-lookupSelectedValueByKey key' v = v ^? key "values" . key k . key k . key "selected_option" . key "value" . _String
-  where
-    k = KEM.fromText key'
-
-
 -- | Slack's response_url is ephemeral (30 min / 5 uses). A 4xx means the URL
 -- expired or the channel/user is gone; surface it so failed slash-command
 -- follow-ups don't vanish silently.
@@ -463,13 +443,9 @@ data SlackInteraction = SlackInteraction
   , text :: Text
   , response_url :: Text
   , trigger_id :: Text
-  , -- , api_app_id :: Text
-    channel_id :: Text
+  , channel_id :: Text
   , channel_name :: Text
   , user_id :: Text
-  -- , enterprise_id :: Maybe Text
-  -- , enterprise_name :: Maybe Text
-  -- , team_domain :: Text
   }
   deriving (Generic, Show)
   deriving anyclass (AE.FromJSON, FromForm)
@@ -520,8 +496,7 @@ externalOptionsH :: SlackActionForm -> ATBaseCtx AE.Value
 externalOptionsH _ =
   pure
     $ AE.object
-      [ "options" AE..= AE.Array (V.fromList [AE.object ["text" AE..= "Option 1", "value" AE..= "option1"], AE.object ["text" AE..= "Option 2", "value" AE..= "option2"]])
-      ]
+      ["options" AE..= AE.Array [AE.object ["text" AE..= "Option 1", "value" AE..= "option1"], AE.object ["text" AE..= "Option 2", "value" AE..= "option2"]]]
 
 
 -- | Parse Slack's uniform ok/error envelope. Returns @Right ()@ when
@@ -557,31 +532,22 @@ sendSlackChatMessage token content =
     Log.logAttention "Slack chat.postMessage rejected" $ AE.object ["channel_id" AE..= fromMaybe "" (content ^? key "channel" . _String), "error" AE..= err]
 
 
--- | Like 'sendSlackChatMessage' but throws on non-ok — for callers that
--- wrap with 'tryAny' and want reachability as an exception (e.g. the
--- integrations save handler's per-channel welcome probe).
-sendSlackChatMessageChecked :: (HTTP :> es, IOE :> es) => Text -> AE.Value -> Eff es ()
-sendSlackChatMessageChecked token content =
-  whenLeftM_ (slackApi token "chat.postMessage" content) \err ->
-    liftIO $ throwIO $ ErrorCall $ "slack chat.postMessage failed: " <> toString err
-
-
-welcomeBlocks :: Text -> AE.Object
+welcomeBlocks :: Text -> AE.Pair
 welcomeBlocks projectTitle =
-  AEKM.fromList
-    [ "blocks"
-        AE..= arr
-          [ slackSection
-              [fmt|🟢 *Monoscope connected!*
+  "blocks"
+    AE..= arr
+      [ slackSection
+          [fmt|🟢 *Monoscope connected!*
 
 This channel will now receive notifications for *{projectTitle}*.|]
-          ]
-    ]
+      ]
 
 
+-- | Throws on non-ok so 'tryAny'-wrapping callers (e.g. the integrations save
+-- handler's per-channel welcome probe) see reachability as an exception.
 sendSlackWelcomeMessage :: (HTTP :> es, IOE :> es) => Text -> Text -> Text -> Eff es ()
 sendSlackWelcomeMessage token channelId projectTitle =
-  sendSlackChatMessageChecked token $ AE.Object $ AEKM.insert "channel" (AE.String channelId) (welcomeBlocks projectTitle)
+  slackApiOrThrow "slack chat.postMessage failed" token "chat.postMessage" $ AE.object ["channel" AE..= channelId, welcomeBlocks projectTitle]
 
 
 -- | Post the welcome message via an OAuth-time incoming webhook. Used when
@@ -594,14 +560,9 @@ sendSlackWelcomeMessage token channelId projectTitle =
 -- the failure as a welcome-message-failed log with context.
 sendSlackWelcomeViaWebhook :: (HTTP :> es, IOE :> es) => Text -> Text -> Eff es ()
 sendSlackWelcomeViaWebhook webhookUrl projectTitle = do
-  rs <- postWith (defaults & contentTypeHeader "application/json") (toString webhookUrl) (AE.Object $ welcomeBlocks projectTitle)
+  rs <- postWith (defaults & contentTypeHeader "application/json") (toString webhookUrl) (AE.object [welcomeBlocks projectTitle])
   let body = rs ^. Wreq.responseBody
-  unless (body == "ok" || body == "\"ok\"")
-    $ liftIO
-    $ throwIO
-    $ ErrorCall
-    $ "slack webhook rejected payload: "
-    <> toString (decodeUtf8 @Text (toStrict body))
+  unless (body == "ok" || body == "\"ok\"") $ throwIO $ ErrorCall $ "slack webhook rejected payload: " <> decodeUtf8 body
 
 
 data SlackEventPayload
@@ -769,23 +730,16 @@ slackEventsPostH body timestamp signature = do
           SELECT now(), 'queued', #{job} FROM receipt|]
       case kind of
         AgentSessionStopped _ -> Integrations.recordSlackSessionEvent team_id event_id
-        _ -> pass
+        (UserMessage _; AppMention _; AgentSessionTitleChanged _; AppContextChanged _; AppHomeOpened _; BotMessage; MessageEdit; AssistantStarted _; AssistantContextChanged _; UnknownEvent _) -> pass
       pure $ AE.object []
 
 
 processSlackEvent :: UUIDId "slack_event" -> ATBackgroundCtx ()
 processSlackEvent receiptId =
-  ( (runReceipt `catch` \(RateLimit.SlackRateLimited retryAt) -> defer retryAt)
-      `catch` \SlackWorkerBusy -> retryAfter (1 :: Int)
-  )
-    `catch` \SlackPublicationPending -> retryAfter 60
+  runReceipt `catches` [Handler \(RateLimit.SlackRateLimited retryAt) -> defer retryAt, Handler \SlackWorkerBusy -> retryAfter 1, Handler \SlackPublicationPending -> retryAfter 60]
   where
     retryAfter seconds = slackRetryTime seconds >>= defer
-    defer retryAt = do
-      let job = BgJobs.ProcessSlackEvent receiptId
-      Hasql.transaction TxS.ReadCommitted TxS.Write do
-        pending <- Hasql.queryTx @[UUIDId "slack_event"] [HI.sql|SELECT id FROM apis.slack_events WHERE id = #{receiptId} AND processed_at IS NULL FOR UPDATE|]
-        unless (null pending) $ scheduleSlackJob job retryAt
+    defer = scheduleSlackJob (Hasql.queryTx @[UUIDId "slack_event"] [HI.sql|SELECT id FROM apis.slack_events WHERE id = #{receiptId} AND processed_at IS NULL FOR UPDATE|]) (BgJobs.ProcessSlackEvent receiptId)
 
     runReceipt = do
       pending <-
@@ -813,13 +767,12 @@ processSlackEvent receiptId =
             UserMessage message -> withThreadLock team_id message process
             AppMention message -> withThreadLock team_id message process
             AppHomeOpened home -> withEventLock ("slack-onboarding:" <> encodeText ([team_id, home.channel, home.user] :: [Text])) process
-            _ -> process
+            (AgentSessionStopped _; AgentSessionTitleChanged _; AppContextChanged _; BotMessage; MessageEdit; AssistantStarted _; AssistantContextChanged _; UnknownEvent _) -> process
     withThreadLock workspaceId message = withInvestigationLock workspaceId message.channel (fromMaybe message.ts message.thread_ts)
 
     handleEventCallback envCfg kind workspaceId eventId =
       case kind of
-        AgentSessionStopped _ -> Integrations.recordSlackSessionEvent workspaceId eventId
-        AgentSessionTitleChanged _ -> Integrations.recordSlackSessionEvent workspaceId eventId
+        (AgentSessionStopped _; AgentSessionTitleChanged _) -> Integrations.recordSlackSessionEvent workspaceId eventId
         AppContextChanged change -> saveAppContext workspaceId change
         AppHomeOpened home
           | home.tab == Just "messages" -> do
@@ -963,19 +916,18 @@ withEventLock lockKey action = do
 
 -- | A final refresh failure must be queued before its original receipt completes.
 scheduleProgressRefresh :: DB es => UUIDId "slack_progress" -> UTCTime -> Eff es ()
-scheduleProgressRefresh publicationId retryAt = do
-  let job = BgJobs.RefreshSlackProgress publicationId
-  Hasql.transaction TxS.ReadCommitted TxS.Write do
-    target <- Hasql.queryTx @[UUIDId "slack_progress"] [HI.sql|SELECT publication_id FROM apis.slack_investigation_progress WHERE publication_id = #{publicationId} FOR UPDATE|]
-    unless (null target) $ scheduleSlackJob job retryAt
+scheduleProgressRefresh publicationId =
+  scheduleSlackJob (Hasql.queryTx @[UUIDId "slack_progress"] [HI.sql|SELECT publication_id FROM apis.slack_investigation_progress WHERE publication_id = #{publicationId} FOR UPDATE|]) (BgJobs.RefreshSlackProgress publicationId)
 
 
--- | Call under the receipt/publication row lock; queued jobs use OddJobs' status.
-scheduleSlackJob :: BgJobs.BgJobs -> UTCTime -> Tx.Transaction ()
-scheduleSlackJob payload retryAt = do
+-- | Schedule only while @lockRow@ still locks the receipt/publication row; queued jobs use OddJobs' status.
+scheduleSlackJob :: DB es => Tx.Transaction [row] -> BgJobs.BgJobs -> UTCTime -> Eff es ()
+scheduleSlackJob lockRow payload retryAt = Hasql.transaction TxS.ReadCommitted TxS.Write do
   let job = Aeson $ AE.toJSON payload
-  Hasql.executeTx
-    [HI.sql|WITH delayed AS (
+  locked <- lockRow
+  unless (null locked)
+    $ Hasql.executeTx
+      [HI.sql|WITH delayed AS (
         UPDATE background_jobs SET run_at = GREATEST(run_at, #{retryAt})
         WHERE payload = #{job} AND status = 'queued' AND run_at > clock_timestamp()
         RETURNING id
@@ -984,9 +936,7 @@ scheduleSlackJob payload retryAt = do
 
 
 scheduleSessionReset :: DB es => UUIDId "slack_event" -> BgJobs.BgJobs -> UTCTime -> Eff es ()
-scheduleSessionReset receiptId job retryAt = Hasql.transaction TxS.ReadCommitted TxS.Write do
-  receipt <- Hasql.queryTx @[UUIDId "slack_event"] [HI.sql|SELECT id FROM apis.slack_events WHERE id = #{receiptId} FOR UPDATE|]
-  unless (null receipt) $ scheduleSlackJob job retryAt
+scheduleSessionReset receiptId = scheduleSlackJob (Hasql.queryTx @[UUIDId "slack_event"] [HI.sql|SELECT id FROM apis.slack_events WHERE id = #{receiptId} FOR UPDATE|])
 
 
 clearQueuedSlackJob :: DB es => BgJobs.BgJobs -> Eff es ()
@@ -1099,7 +1049,7 @@ settlePublicationSearch confirm saveCursor = \case
 -- | Reuse identical author, publication and pagination checks for replies and progress.
 searchPublicationHistory :: (HTTP :> es, IOE :> es, Log.Log :> es) => Text -> SlackData -> Text -> Investigations.PublicationSearch kind -> Eff es PublicationHistory
 searchPublicationHistory appId slackData eventType search = do
-  let params = [("channel", search.channelId), ("ts", search.threadTs), ("oldest", search.messageTs), ("include_all_metadata", "true"), ("limit", "15")] <> maybe [] (\cursor -> [("cursor", cursor)]) search.cursor
+  let params = [("channel", search.channelId), ("ts", search.threadTs), ("oldest", search.messageTs), ("include_all_metadata", "true"), ("limit", "15")] <> foldMap (pure . ("cursor",)) search.cursor
       matching message = do
         guard $ message.thread_ts == Just search.threadTs
         publicationTimestamp appId eventType "publication_id" search.publicationId message
@@ -1159,7 +1109,7 @@ reconcileIncidentDeliveries = do
             Incidents.PostRoot -> ("conversations.history", [("limit", "15")])
             Incidents.PostReply root -> ("conversations.replies", [("ts", Incidents.slackTimestampText root), ("limit", "15")])
             Incidents.UpdateRoot root -> ("conversations.history", [("oldest", Incidents.slackTimestampText root), ("latest", Incidents.slackTimestampText root), ("inclusive", "true"), ("limit", "1")])
-          params = [("channel", search.channelId), ("include_all_metadata", "true")] <> scope <> maybe [] (\cursor -> [("cursor", cursor)]) search.cursor
+          params = [("channel", search.channelId), ("include_all_metadata", "true")] <> scope <> foldMap (pure . ("cursor",)) search.cursor
           matching message = do
             guard $ (message.metadata >>= (^? key "event_payload" . key "root_id")) == Just (AE.toJSON search.rootId)
             case search.operation of
@@ -1455,7 +1405,7 @@ getChannelMessages access pid token channelId ts latest = page [] Nothing
     requireAccess = AI.requireAgentAccess access pid
     page seen cursor = do
       requireAccess
-      let params = [("channel", channelId), ("ts", ts), ("latest", latest), ("inclusive", "false"), ("limit", "200")] <> maybe [] (\value -> [("cursor", value)]) cursor
+      let params = [("channel", channelId), ("ts", ts), ("latest", latest), ("inclusive", "false"), ("limit", "200")] <> foldMap (pure . ("cursor",)) cursor
       response <- getWith (defaults & authHeader "Bearer" token & Wreq.params .~ params) "https://slack.com/api/conversations.replies"
       requireAccess
       case AE.eitherDecode @(SlackThreadedMessageResponse SlackThreadedMessage) (response ^. responseBody) of

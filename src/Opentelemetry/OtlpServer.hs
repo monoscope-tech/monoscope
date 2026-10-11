@@ -50,6 +50,7 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Data.Vector.Unboxed qualified as VU
 import Effectful
+import Effectful.Concurrent (Concurrent)
 import Effectful.Exception (try)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled)
@@ -76,7 +77,7 @@ import Pkg.ErrorMetrics (wireTypeErrorsRef)
 import Pkg.LiveTail qualified as LiveTail
 import Pkg.Metrics qualified as Metrics
 import Pkg.TraceSessionCache qualified as TSC
-import ProcessMessage (stampHashesAtIngest)
+import ProcessMessage (overFreeTierQuota, stampHashesAtIngest, urlPathFromRawUrl)
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields qualified as LSF
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService qualified as MS
@@ -107,9 +108,7 @@ import "base64" Data.ByteString.Base64 qualified as B64
 
 
 -- | Custom request metadata for OTLP services containing optional API key from Authorization header
-newtype OtlpRequestMetadata = OtlpRequestMetadata
-  { otlpApiKey :: Maybe Text
-  }
+newtype OtlpRequestMetadata = OtlpRequestMetadata {apiKey :: Maybe Text}
   deriving (Eq, Show)
 
 
@@ -120,7 +119,7 @@ instance ParseMetadata OtlpRequestMetadata where
         extractValue (CustomMetadata _ value) = T.strip $ decodeUtf8 value
         stripBearer v = fromMaybe v $ T.stripPrefix "Bearer " v
         apiKey = (stripBearer . extractValue <$> findHeader "authorization") <|> (extractValue <$> findHeader "x-api-key")
-    pure $ OtlpRequestMetadata{otlpApiKey = apiKey}
+    pure $ OtlpRequestMetadata{apiKey}
 
 
 -- | OTLP common.proto v1.10 added `AnyValue.string_value_strindex`, a reference
@@ -253,48 +252,29 @@ stampOrPassthrough appCtx v =
       pure v
 
 
--- | The dbInsert callback for the logs/traces paths in 'processBatchPipeline'.
--- Flattens per-msg records for the dual-write, then maps any per-row poison
--- back to its source @(ackId, rawBytes)@ so Pkg.Queue can DLQ those exact
--- source messages (not the bulk batch).
---
--- Index-alignment assumes 'stampOrPassthrough' and 'mintOtelLogIds' preserve
--- record order and length (both are V-mapped 1:1 today).
-dualWriteWithPoisonMapping
-  :: ( Hasql.Hasql :> es
-     , IOE :> es
-     , Ki.StructuredConcurrency :> es
-     , Labeled "timefusion" Hasql.Hasql :> es
-     , Log :> es
-     , Time.Time :> es
-     )
+-- | Shared tail of every logs/traces ingest path (queue and direct OTLP): session-stamp, mint
+-- ids, normalize routes, offer to Live Tail, then write. The batch succeeds or fails as a unit.
+ingestOtelRecords
+  :: (Hasql.Hasql :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es)
   => AuthContext
   -> Telemetry.WriteTarget
   -- ^ stores to (re)write; DLQ replay narrows to the originally-failed leg
-  -> Text
-  -- ^ label for checkpoint ("logs" / "traces")
   -> HM.HashMap Projects.ProjectId Projects.ProjectCache
-  -> [(Text, ByteString, V.Vector Telemetry.OtelLogsAndSpans)]
-  -- ^ per source-message records
-  -> Eff es (Either Telemetry.WriteFailure [Telemetry.PoisonMsg])
-dualWriteWithPoisonMapping appCtx target label caches perMsg = do
-  let !allRecords = V.concat [rs | (_, _, rs) <- perMsg]
-  stamped <- stampOrPassthrough appCtx allRecords
-  -- Mint before route normalization: records without a span ID hash their raw attributes.
+  -> V.Vector Telemetry.OtelLogsAndSpans
+  -> Eff es (Either Telemetry.WriteFailure ())
+ingestOtelRecords appCtx target caches records = do
+  stamped <- stampOrPassthrough appCtx records
+  -- Mint before route normalization: records without a span ID hash their raw attributes,
+  -- so retry IDs stay independent of the current endpoint-template cache.
   let minted = stampHashesAtIngest caches $ Telemetry.mintOtelLogIds stamped
   -- Live Tail, before the durable write: the whole point is that a browser sees the log
   -- sooner than a query could return it. Runs after minting so the streamed row carries the
   -- same id the stored row will, and so "open the full record" resolves once the write lands.
-  -- Bounded and total by construction — see 'LiveTail.publishMatches'.
+  -- Bounded and total by construction — see 'LiveTail.publishMatches'. Every ingest path
+  -- (Kafka, Pub/Sub, direct OTLP gRPC/HTTP) goes through here: when the direct path lacked
+  -- this hook, Live Tail was silently dead in queue-less deployments.
   fanOutToLiveTail appCtx $ Telemetry.redactOtelSpan <$> minted
-  res <-
-    checkpoint
-      (fromString $ "processList:" <> toString label <> ":bulkInsert")
-      (Telemetry.insertAndHandOff appCtx.hasqlTimefusionUsesPgTypes target appCtx.extractionWorker caches minted)
-  -- The batch succeeds or fails as a unit (no per-row poison), so the insert
-  -- side contributes no PoisonMsgs; decode-failure PoisonMsgs are produced by
-  -- the caller before this point.
-  pure (res $> [])
+  Telemetry.insertAndHandOff appCtx.hasqlTimefusionUsesPgTypes target appCtx.extractionWorker caches minted
 
 
 -- | Hand each project's records to its active Live Tail subscriptions.
@@ -308,12 +288,8 @@ fanOutToLiveTail appCtx recs = do
   -- Metrics before logs: these are rates, and the log lines below fire only on the failure
   -- paths. Attributed by transport only — see the cardinality note in "Pkg.Metrics".
   let transport = [("transport", OA.toAttribute (case appCtx.liveTail.transport of LiveTail.KafkaTopic _ -> "kafka" :: Text; LiveTail.PostgresRelay -> "relay"))]
-  Metrics.count Metrics.liveTailEvaluated (getSum stats.evaluated) transport
-  Metrics.count Metrics.liveTailMatched (getSum stats.matched) transport
-  Metrics.count Metrics.liveTailFilterErrors (getSum stats.failed) transport
-  Metrics.count Metrics.liveTailPublishFailed (getSum stats.publishFailed) transport
-  Metrics.count Metrics.liveTailOversized (getSum stats.oversized) transport
-  Metrics.count Metrics.liveTailSkipped (getSum stats.skipped) transport
+  for_ @[] [(Metrics.liveTailEvaluated, stats.evaluated), (Metrics.liveTailMatched, stats.matched), (Metrics.liveTailFilterErrors, stats.failed), (Metrics.liveTailPublishFailed, stats.publishFailed), (Metrics.liveTailOversized, stats.oversized), (Metrics.liveTailSkipped, stats.skipped)] \(counter, Sum n) ->
+    Metrics.count counter n transport
   -- Aggregate, not per row: these fail for every row in a batch, so per-row logging would be a
   -- flood proportional to ingest volume rather than a diagnostic.
   when (getSum stats.failed > 0)
@@ -366,7 +342,7 @@ throwOnWriteFailure = either (throwGrpc GrpcInternal . ("OTLP write failed: " <>
 -- both stores; poisonMsgs are decode failures whose raw bytes must be DLQ'd
 -- by Pkg.Queue before committing offsets. On dual-write failure, returns
 -- 'Left WriteFailure'. Never throws on write/decode failure.
-processList :: (DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => [(Text, ByteString)] -> HM.HashMap Text Text -> Eff es (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))
+processList :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => [(Text, ByteString)] -> HM.HashMap Text Text -> Eff es (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))
 processList [] _ = pure (Right ([], []))
 processList msgs !attrs =
   withSpan_ "otlp.process_list" (batchSpanAttrs (length msgs) attrs)
@@ -392,7 +368,9 @@ processList msgs !attrs =
       appCtx <- ask @AuthContext
       -- DLQ replay stamps monoscope-write-failure; rewrite only the failed leg
       -- so the durable store isn't duplicated. Live ingest has no header → both.
-      let target = Telemetry.writeTargetFor appCtx.env.enablePostgresTelemetryWrites appCtx.env.enableTimefusionWrites (HM.lookup "monoscope-write-failure" attrs)
+      let target = Telemetry.writeTargetFor appCtx.env (HM.lookup "monoscope-write-failure" attrs >>= Telemetry.parseWriteFailureKind)
+          concatRecs perMsg = V.concat [recs | (_, _, recs) <- perMsg]
+          spansInsert label caches perMsg = checkpoint (fromString $ "processList:" <> label <> ":bulkInsert") $ ingestOtelRecords appCtx target caches (concatRecs perMsg)
       case HM.lookup "ce-type" attrs of
         Just "org.opentelemetry.otlp.logs.v1" ->
           processBatchPipeline @LS.ExportLogsServiceRequest
@@ -408,7 +386,7 @@ processList msgs !attrs =
                     !pids = pidsForKeys keyToId (getLogApiKey rls)
                  in V.concatMap (V.fromList . convertResourceLogsToOtelLogs ft caches pids) rls
             )
-            (dualWriteWithPoisonMapping appCtx target "logs")
+            (spansInsert "logs")
         Just "org.opentelemetry.otlp.traces.v1" ->
           processBatchPipeline @TS.ExportTraceServiceRequest
             "traces"
@@ -422,7 +400,7 @@ processList msgs !attrs =
                 let !rss = V.fromList $ req ^. PTF.resourceSpans
                  in V.fromList $ convertResourceSpansToOtelLogs ft caches (pidsForKeys keyToId (getSpanApiKey rss)) rss
             )
-            (dualWriteWithPoisonMapping appCtx target "traces")
+            (spansInsert "traces")
         Just "org.opentelemetry.otlp.metrics.v1" ->
           processBatchPipeline @MS.ExportMetricsServiceRequest
             "metrics"
@@ -439,14 +417,9 @@ processList msgs !attrs =
                  in maybe V.empty (\pid -> V.fromList $ convertResourceMetricsToMetricRecords ft caches pid rms) (pidM <|> pid2M)
             )
             ( \_caches perMsg ->
-                let flat = Telemetry.mintMetricIds $ V.concat [recs | (_, _, recs) <- perMsg]
-                 in checkpoint "processList:metrics:bulkInsert"
-                      $ Telemetry.bulkInsertOtelMetrics
-                        appCtx.metricCatalogBuffer
-                        appCtx.hasqlTimefusionUsesPgTypes
-                        target
-                        flat
-                      <&> ($> [])
+                checkpoint "processList:metrics:bulkInsert"
+                  $ Telemetry.bulkInsertOtelMetrics appCtx.metricCatalogBuffer appCtx.hasqlTimefusionUsesPgTypes target
+                  $ Telemetry.mintMetricIds (concatRecs perMsg)
             )
         _ -> do
           Log.logAttention "processList: unsupported opentelemetry data type" (AE.object ["ce-type" AE..= HM.lookup "ce-type" attrs])
@@ -467,7 +440,7 @@ processBatchPipeline
   -> (req -> [Projects.ProjectId]) -- extract project IDs
   -> (req -> Maybe Text) -- invalid payload reason
   -> (UTCTime -> HM.HashMap Projects.ProjectId Projects.ProjectCache -> HM.HashMap Text Projects.ProjectId -> req -> V.Vector res) -- per-message converter
-  -> (HM.HashMap Projects.ProjectId Projects.ProjectCache -> [(Text, ByteString, V.Vector res)] -> Eff es (Either Telemetry.WriteFailure [Telemetry.PoisonMsg])) -- DB insert; returns per-row poison resolved to source ackId+raw
+  -> (HM.HashMap Projects.ProjectId Projects.ProjectCache -> [(Text, ByteString, V.Vector res)] -> Eff es (Either Telemetry.WriteFailure ())) -- DB insert; the batch lands or fails as a unit
   -> Eff es (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))
 processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds invalidReason convert dbInsert =
   checkpoint (cp "") do
@@ -515,29 +488,23 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds inva
         !writeReady = [(ackId, raw, recs) | (ackId, raw, _, recs) <- converted, not (HS.member ackId dropAckIds)]
         !writeAckIds = [ackId | (ackId, _, _) <- writeReady]
         !allEmpty = all (\(_, _, recs) -> V.null recs) writeReady
+        poison = decodePoison <> invalidPoison <> dropPoison
 
-    forM_ (decodePoison <> invalidPoison) \(_, raw, err) -> recordProtoError label (toString err) raw Log.logAttention
+    forM_ (decodePoison <> invalidPoison) \(_, raw, err) -> recordProtoError label (toString err) raw
     unless (null dropPoison)
       $ Log.logAttention
         "processList: payload carried telemetry but resolved to zero rows — routing to DLQ instead of acking"
         (AE.object ["label" AE..= label, "dropped_messages" AE..= length dropPoison, "ack_ids" AE..= [a | (a, _, _) <- dropPoison]])
 
     if allEmpty
-      then pure (Right (writeAckIds, decodePoison <> invalidPoison <> dropPoison))
+      then pure (Right (writeAckIds, poison))
       else do
         -- dbInsert duration is emitted as a separate trace line so dashboards
         -- alerting on per-batch DB latency keep their metric.
         (result, dbDur) <- Log.timeAction (dbInsert projectCachesMap writeReady)
         Log.logTrace "processBatchPipeline: dbInsert complete"
           $ AE.object ["label" AE..= label, "db_insert_ms" AE..= (round (dbDur * 1000) :: Int)]
-        pure $ case result of
-          Left wf -> Left wf
-          Right writePoison ->
-            -- Successfully-written rows are acked; write-poisoned rows are removed
-            -- from acks and added to the poison list (Pkg.Queue DLQs them).
-            let writePoisonAcks = HS.fromList [a | (a, _, _) <- writePoison]
-                successAcks = filter (\a -> not (HS.member a writePoisonAcks)) writeAckIds
-             in Right (successAcks, decodePoison <> invalidPoison <> dropPoison <> writePoison)
+        pure $ result $> (writeAckIds, poison)
   where
     cp suffix = fromString $ toString $ "processList:" <> label <> suffix
 
@@ -747,26 +714,13 @@ migrateHttpSemanticConventions !keyVals =
     httpTargetM = HM.lookup "http.target" kvMap
     methodOriginalM = HM.lookup "http.request.method_original" kvMap
 
-    -- Fields to remove (deprecated with no replacement)
-    fieldsToRemove = ["db.user", "db.instance.id", "db.jdbc.driver_classname", "db.mssql.instance_name", "db.cosmosdb.operation_type"]
-
-    -- Fields that require special handling and should be excluded from regular mapping
-    -- These fields need custom migration logic rather than simple field renames:
-    -- - db.connection_string: Gets parsed into server.address and server.port via parseConnectionString
-    -- - http.target: Gets split into url.path and url.query components
-    -- - db.redis.database_index: Converted from number to string for db.namespace
-    -- - db.elasticsearch.path_parts.*: Transformed to db.operation.parameter.* preserving key suffix
-    -- - http.method + http.request.method_original (when "_OTHER"): Special handling to use original method value
-    specialFields =
-      ["db.connection_string" | HM.member "db.connection_string" kvMap]
-        ++ ["http.target" | isJust httpTargetM] -- Always exclude http.target when it exists
-        ++ ["db.redis.database_index" | HM.member "db.redis.database_index" kvMap]
-        ++ filter ("db.elasticsearch.path_parts." `T.isPrefixOf`) (map fst keyVals)
-        ++ (if httpMethodM == Just (AE.String "_OTHER") && isJust methodOriginalM then ["http.method", "http.request.method_original"] else [])
-
-    -- Filter out deprecated fields and special fields, then apply migrations
-    filteredVals = filter (\(k, _) -> k `notElem` fieldsToRemove && k `notElem` specialFields) keyVals
-    mgVals = map (\(k, v) -> (HM.lookupDefault k k fieldMappingsMap, v)) filteredVals
+    -- Deprecated with no replacement, plus the fields the special migrations below rewrite
+    -- (connection string, http.target, redis index, elasticsearch path parts, _OTHER method).
+    dropped :: [Text]
+    dropped =
+      ["db.user", "db.instance.id", "db.jdbc.driver_classname", "db.mssql.instance_name", "db.cosmosdb.operation_type", "db.connection_string", "http.target", "db.redis.database_index"]
+        <> bool [] ["http.method", "http.request.method_original"] (httpMethodM == Just (AE.String "_OTHER") && isJust methodOriginalM)
+    mgVals = [(HM.lookupDefault k k fieldMappingsMap, v) | (k, v) <- keyVals, k `notElem` dropped, not ("db.elasticsearch.path_parts." `T.isPrefixOf` k)]
 
     -- Handle special migrations
 
@@ -790,11 +744,7 @@ migrateHttpSemanticConventions !keyVals =
 
     migrateUrlFullPath
       | hasUrlPath || isJust httpTargetM = []
-      | Just (AE.String full) <- HM.lookup "url.full" kvMap <|> HM.lookup "http.url" kvMap
-      , (_, authorityAndPath) <- T.breakOn "://" full
-      , not (T.null authorityAndPath) =
-          let path = T.dropWhile (/= '/') $ T.drop 3 authorityAndPath
-           in [("url.path", AE.String $ fromMaybe "/" $ guarded (not . T.null) $ T.takeWhile (\c -> c /= '?' && c /= '#') path)]
+      | Just (AE.String full) <- HM.lookup "url.full" kvMap <|> HM.lookup "http.url" kvMap, "://" `T.isInfixOf` full = [("url.path", AE.String $ urlPathFromRawUrl full)]
       | otherwise = []
 
     -- Migrate method "_OTHER" case
@@ -923,8 +873,8 @@ deriveClientAddress kvMap
 
 
 -- | Record a protobuf decode error, categorizing wire type, UTF-8, and EOF errors
-recordProtoError :: MonadIO m => Text -> String -> ByteString -> (Text -> AE.Value -> m ()) -> m ()
-recordProtoError prefix err msg logFn = do
+recordProtoError :: (IOE :> es, Log :> es) => Text -> String -> ByteString -> Eff es ()
+recordProtoError prefix err msg = do
   -- splitOn never yields [], so the tail after the first ':' is always well-defined.
   let details = T.strip $ unwords $ drop 1 $ T.splitOn ":" (toText err)
       errorInfo =
@@ -945,7 +895,7 @@ recordProtoError prefix err msg logFn = do
       if HM.size m >= 100 && not (HM.member errorKey m)
         then ((m, dropped + 1), ())
         else ((HM.alter (Just . maybe (1, errorInfo) (first (+ 1))) errorKey m, dropped), ())
-    Nothing -> logFn ("processList:" <> prefix <> ": unable to parse service request") errorInfo
+    Nothing -> Log.logAttention ("processList:" <> prefix <> ": unable to parse service request") errorInfo
 
 
 -- Convert nanoseconds to UTCTime. Integer picosecond math (not Double /1e9):
@@ -1043,12 +993,7 @@ severityMap = base <> Map.mapMaybe (`Map.lookup` base) aliases
 -- free-tier project past its daily event+metric budget yields nothing.
 withinQuota :: HM.HashMap Projects.ProjectId Projects.ProjectCache -> Projects.ProjectId -> [a] -> [a]
 withinQuota projectCaches pid records = case HM.lookup pid projectCaches of
-  Just cache
-    | not (Projects.isFreeTier cache.paymentPlan)
-        || toInteger cache.dailyEventCount
-        + toInteger cache.dailyMetricCount
-        < freeTierDailyMaxEvents ->
-        records
+  Just cache | not (overFreeTierQuota cache) -> records
   _ -> []
 
 
@@ -1225,22 +1170,10 @@ convertSpanToOtelLog !fallbackTime !pid resourceM pSpan =
       (req, res) = case Map.lookup "http" =<< attributes of
         Just (AE.Object http) -> (KEM.lookup "request" http, KEM.lookup "response" http)
         _ -> (Nothing, Nothing)
-      body =
-        if isOurSdkSpan
-          then
-            Just
-              $ AE.object
-                [ "request_body" AE..= extractBody req
-                , "response_body" AE..= extractBody res
-                ]
-          else Nothing
-        where
-          extractBody :: Maybe AE.Value -> AE.Value
-          extractBody (Just (AE.Object obj)) =
-            case KEM.lookup "body" obj of
-              Just (AE.String b) -> b64ToJson b
-              _ -> AE.Null
-          extractBody _ = AE.Null
+      body = AE.object ["request_body" AE..= extractBody req, "response_body" AE..= extractBody res] <$ guard isOurSdkSpan
+      extractBody = \case
+        Just (AE.Object obj) | Just (AE.String b) <- KEM.lookup "body" obj -> b64ToJson b
+        _ -> AE.Null
       -- Bodies were lifted into `body` above; drop them from the attributes copy.
       newAttributes' = case (isOurSdkSpan, Map.lookup "http" =<< attributes, req, res) of
         (True, Just (AE.Object http), Just (AE.Object re), Just (AE.Object rs)) ->
@@ -1475,14 +1408,7 @@ convertMetricToMetricRecords fallbackTime pid resourceM resourceSchemaUrl droppe
 runServer :: Logger -> AuthContext -> TracerProvider -> IO ()
 runServer appLogger appCtx tp = do
   initPeriodicErrorLogging appCtx.backgroundScope appLogger
-  runServerWithHandlers def config (services appLogger appCtx tp)
-  where
-    config :: ServerConfig
-    config =
-      ServerConfig
-        { serverInsecure = Just (InsecureConfig (Just "0.0.0.0") (fromIntegral appCtx.config.grpcPort))
-        , serverSecure = Nothing
-        }
+  runServerWithHandlers def ServerConfig{serverInsecure = Just (InsecureConfig (Just "0.0.0.0") (fromIntegral appCtx.config.grpcPort)), serverSecure = Nothing} (services appLogger appCtx tp)
 
 
 -- | Process trace request with optional API key from gRPC metadata (extracted for testing)
@@ -1551,24 +1477,10 @@ processSignalRequest label signal receivedMsg noun countKey metadataApiKey proje
     (AE.object [countKey AE..= V.length records])
 
   unless (V.null records) do
-    stamped <- stampOrPassthrough appCtx records
-    -- Keep retry IDs independent of the current endpoint-template cache.
-    let minted = stampHashesAtIngest projectCaches $ Telemetry.mintOtelLogIds stamped
-    -- Live Tail, before the durable write — the same hook 'dualWriteWithPoisonMapping' has,
-    -- for the same reason. This is the /direct/ path: OTLP over gRPC on 4317 and OTLP over
-    -- HTTP, neither of which passes through Kafka or Pub/Sub. It is the only path a
-    -- deployment without a queue has, and it is what most self-hosted and dev installs use.
-    --
-    -- Missing here, Live Tail was structurally dead in exactly those deployments: it accepted
-    -- subscriptions, refreshed its cache, held the SSE connection open and reported @live@ —
-    -- and no record was ever offered to a filter, because every record arrived through the one
-    -- ingest path with no hook in it.
-    fanOutToLiveTail appCtx $ Telemetry.redactOtelSpan <$> minted
-    Telemetry.insertAndHandOff appCtx.hasqlTimefusionUsesPgTypes (Telemetry.writeTargetFor appCtx.env.enablePostgresTelemetryWrites appCtx.env.enableTimefusionWrites Nothing) appCtx.extractionWorker projectCaches minted
-      >>= throwOnWriteFailure
+    ingestOtelRecords appCtx (Telemetry.writeTargetFor appCtx.env Nothing) projectCaches records >>= throwOnWriteFailure
     Log.logTrace
       (label <> ": Successfully inserted " <> noun <> " into database")
-      (AE.object ["inserted_count" AE..= V.length minted])
+      (AE.object ["inserted_count" AE..= V.length records])
 
 
 -- | OTLP/HTTP (application/x-protobuf) ingestion — same processing pipeline
@@ -1603,7 +1515,7 @@ logsServiceExport = otlpExport processLogsRequest
 
 
 -- | Process metrics request with optional API key from gRPC metadata (extracted for testing)
-processMetricsRequest :: (DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es) => Maybe Text -> MS.ExportMetricsServiceRequest -> Eff es ()
+processMetricsRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es) => Maybe Text -> MS.ExportMetricsServiceRequest -> Eff es ()
 processMetricsRequest metadataApiKey req = do
   Log.logTrace "Received metrics export request" AE.Null
   when (metricRequestHasOverflow req) $ throwGrpc GrpcInternal "OTLP metric count exceeds BIGINT maximum"
@@ -1634,7 +1546,7 @@ processMetricsRequest metadataApiKey req = do
 
       unless (null metricRecords) do
         let records = Telemetry.mintMetricIds $ V.fromList metricRecords
-            target = Telemetry.writeTargetFor appCtx.env.enablePostgresTelemetryWrites appCtx.env.enableTimefusionWrites Nothing
+            target = Telemetry.writeTargetFor appCtx.env Nothing
         Telemetry.bulkInsertOtelMetrics appCtx.metricCatalogBuffer appCtx.hasqlTimefusionUsesPgTypes target records >>= throwOnWriteFailure
         Log.logTrace
           "Metrics: Successfully inserted metrics into database"
@@ -1685,56 +1597,19 @@ mkOtlpRpcHandler
   -> AuthContext
   -> TracerProvider
   -> Text
-  -> (req -> Int64)
+  -> (req -> Int)
   -> (Int64 -> Output (Protobuf service meth))
   -> (Maybe Text -> req -> ATBackgroundCtx ())
   -> RpcHandler IO (Protobuf service meth)
 mkOtlpRpcHandler appLogger appCtx tp label countFn rejectResp process = mkRpcHandler $ \call -> do
   metadata <- getRequestMetadata call
-  let apiKey = otlpApiKey metadata
   Proto req <- recvFinalInput call
-  exceeded <- isFreeTierExceededCached appCtx apiKey
+  exceeded <- isFreeTierExceededCached appCtx metadata.apiKey
   if exceeded
-    then sendFinalOutput call (rejectResp (countFn req), NoMetadata)
+    then sendFinalOutput call (rejectResp (fromIntegral $ countFn req), NoMetadata)
     else do
-      grpcRunBackground appLogger appCtx tp label $ process apiKey req
+      grpcRunBackground appLogger appCtx tp label $ process metadata.apiKey req
       sendFinalOutput call (defMessage, NoMetadata)
-
-
-traceServiceRpcHandler :: Logger -> AuthContext -> TracerProvider -> RpcHandler IO (Protobuf TS.TraceService "export")
-traceServiceRpcHandler appLogger appCtx tp =
-  mkOtlpRpcHandler
-    appLogger
-    appCtx
-    tp
-    "traces"
-    (\req -> fromIntegral $ sum [length (ss ^. PTF.spans) | rs <- req ^. TSF.resourceSpans, ss <- rs ^. PTF.scopeSpans])
-    (\count -> defMessage & TSF.partialSuccess .~ (defMessage & TSF.rejectedSpans .~ count & TSF.errorMessage .~ "Free tier daily event limit exceeded"))
-    processTraceRequest
-
-
-logsServiceRpcHandler :: Logger -> AuthContext -> TracerProvider -> RpcHandler IO (Protobuf LS.LogsService "export")
-logsServiceRpcHandler appLogger appCtx tp =
-  mkOtlpRpcHandler
-    appLogger
-    appCtx
-    tp
-    "logs"
-    (\req -> fromIntegral $ sum [length (sl ^. PLF.logRecords) | rl <- req ^. LSF.resourceLogs, sl <- rl ^. PLF.scopeLogs])
-    (\count -> defMessage & LSF.partialSuccess .~ (defMessage & LSF.rejectedLogRecords .~ count & LSF.errorMessage .~ "Free tier daily event limit exceeded"))
-    processLogsRequest
-
-
-metricsServiceRpcHandler :: Logger -> AuthContext -> TracerProvider -> RpcHandler IO (Protobuf MS.MetricsService "export")
-metricsServiceRpcHandler appLogger appCtx tp =
-  mkOtlpRpcHandler
-    appLogger
-    appCtx
-    tp
-    "metrics"
-    (\req -> fromIntegral $ sum [length (sm ^. PMF.metrics) | rm <- req ^. MSF.resourceMetrics, sm <- rm ^. PMF.scopeMetrics])
-    (\count -> defMessage & MSF.partialSuccess .~ (defMessage & MSF.rejectedDataPoints .~ count & MSF.errorMessage .~ "Free tier daily event limit exceeded"))
-    processMetricsRequest
 
 
 -- | Run a background task for gRPC handlers, catching exceptions to prevent server crash.
@@ -1760,11 +1635,21 @@ grpcRunBackground appLogger appCtx tp label task =
 services :: Logger -> AuthContext -> TracerProvider -> [SomeRpcHandler IO]
 services appLogger appCtx tp =
   fromMethods
-    $ RawMethod (traceServiceRpcHandler appLogger appCtx tp :: RpcHandler IO (Protobuf TS.TraceService "export"))
-    $ RawMethod (logsServiceRpcHandler appLogger appCtx tp :: RpcHandler IO (Protobuf LS.LogsService "export"))
     $ RawMethod
-      (metricsServiceRpcHandler appLogger appCtx tp :: RpcHandler IO (Protobuf MS.MetricsService "export"))
+      ( mkOtlpRpcHandler appLogger appCtx tp "traces" (\req -> sum [length (ss ^. PTF.spans) | rs <- req ^. TSF.resourceSpans, ss <- rs ^. PTF.scopeSpans]) (\n -> defMessage & TSF.partialSuccess .~ (defMessage & TSF.rejectedSpans .~ n & TSF.errorMessage .~ freeTierExceeded)) processTraceRequest
+          :: RpcHandler IO (Protobuf TS.TraceService "export")
+      )
+    $ RawMethod
+      ( mkOtlpRpcHandler appLogger appCtx tp "logs" (\req -> sum [length (sl ^. PLF.logRecords) | rl <- req ^. LSF.resourceLogs, sl <- rl ^. PLF.scopeLogs]) (\n -> defMessage & LSF.partialSuccess .~ (defMessage & LSF.rejectedLogRecords .~ n & LSF.errorMessage .~ freeTierExceeded)) processLogsRequest
+          :: RpcHandler IO (Protobuf LS.LogsService "export")
+      )
+    $ RawMethod
+      ( mkOtlpRpcHandler appLogger appCtx tp "metrics" (\req -> sum [length (sm ^. PMF.metrics) | rm <- req ^. MSF.resourceMetrics, sm <- rm ^. PMF.scopeMetrics]) (\n -> defMessage & MSF.partialSuccess .~ (defMessage & MSF.rejectedDataPoints .~ n & MSF.errorMessage .~ freeTierExceeded)) processMetricsRequest
+          :: RpcHandler IO (Protobuf MS.MetricsService "export")
+      )
       NoMoreMethods
+  where
+    freeTierExceeded = "Free tier daily event limit exceeded"
 
 
 type instance RequestMetadata (Protobuf TS.TraceService "export") = OtlpRequestMetadata

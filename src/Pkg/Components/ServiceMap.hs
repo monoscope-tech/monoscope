@@ -16,7 +16,7 @@ import Data.Vector qualified as V
 import Lucid
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.ServiceGraph (MapStats (..), NodeKind (..), ServiceEdge (..), ServiceGraph (..), ServiceNode (..), drawnEdges, drawnNodes)
-import Pages.Components (EmptyStateCfg (..), EmptyStateSize (..), emptyState_)
+import Pages.Components (EmptyStateCfg (..), EmptyStateSize (..), disclosure_, emptyState_)
 import Relude
 import Utils (faSprite_, getDurationNSMS, prettyPrintCount, showFFloat')
 
@@ -275,11 +275,9 @@ serviceMapLegend_ graph colors = div_ [class_ "flex flex-col gap-2"] do
 
 -- | The no-JS, screen-reader and small-screen representation of the same graph.
 dependencyTable_ :: ServiceGraph -> Html ()
-dependencyTable_ graph = details_ [class_ "group border border-strokeStrong rounded-2xl overflow-hidden"] do
-  summary_ [class_ "flex items-center gap-2 px-3 py-2 text-sm text-textStrong cursor-pointer select-none"] do
-    faSprite_ "chevron-right" "regular" "w-3 h-3 text-iconNeutral transition-transform group-open:rotate-90"
-    toHtml $ "Dependencies (" <> show (V.length (drawnEdges graph)) <> ")"
-  div_ [class_ "overflow-x-auto"] $ table_ [class_ "w-full text-xs"] do
+dependencyTable_ graph = disclosure_ [class_ "border border-strokeStrong rounded-2xl overflow-hidden"] "px-3 py-2 text-sm text-textStrong" (toHtml $ "Dependencies (" <> show (V.length (drawnEdges graph)) <> ")")
+  $ div_ [class_ "overflow-x-auto"]
+  $ table_ [class_ "w-full text-xs"] do
     thead_ [class_ "text-textWeak border-b border-strokeWeak"]
       $ tr_
       $ forM_ ["Caller", "Callee", "Requests", "Errors", "p95 latency"]

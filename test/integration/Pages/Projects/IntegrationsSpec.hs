@@ -142,6 +142,10 @@ spec = sequential $ aroundAll withTestResources $ do
         let htmlText = show html
         htmlText `shouldSatisfy` T.isInfixOf "runtime_exception"
 
+      it "notificationsTestHistoryGetH_nonMember_cannotRead" \tr -> do
+        victim <- createTestProject tr "victim"
+        assertNonMemberDenied tr victim $ Integrations.notificationsTestHistoryGetH victim
+
     describe "disabled_channels gating (alert dispatch)" $ do
       it "suppresses a disabled channel, then fans out once re-enabled" \tr -> do
         clearTestHistory tr testPid

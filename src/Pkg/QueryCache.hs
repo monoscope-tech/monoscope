@@ -42,7 +42,7 @@ import Data.Time (UTCTime, addUTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.Vector qualified as V
 
--- Merge, not Intro: the sort MUST be stable. 'dedupeByTimestamp' keeps the last
+-- Merge, not Intro: the sort MUST be stable. 'mergeTimeseriesData' dedupes keeping the last
 -- occurrence, and the delta is appended after the cached rows, so stability is
 -- what makes "fresh data wins on an overlapping bin" true rather than arbitrary.
 import Data.Vector.Algorithms.Merge qualified as VA
@@ -167,12 +167,14 @@ cachedRawQuery :: (DB es, IOE :> es) => RawQueryFlights -> UTCTime -> RawCacheKe
 cachedRawQuery flights now key fetch = do
   started <- liftIO getMonotonicTime
   let backend = [("backend", OA.toAttribute $ display key.backend)]
-      finish outcome value = do
+      recordOutcome outcome = do
         ended <- liftIO getMonotonicTime
-        let attrs = ("outcome", OA.toAttribute outcome) : backend
+        let attrs = ("outcome", OA.toAttribute (outcome :: Text)) : backend
         Metrics.bump Metrics.dashboardQueryCacheOutcomes attrs
         Metrics.recordMs Metrics.endpointCacheDuration ((ended - started) * 1000) attrs
-        Metrics.recordMs Metrics.endpointCacheResultBytes (fromIntegral $ LBS.length $ AE.encode value) attrs
+        pure attrs
+      finish outcome value = do
+        recordOutcome outcome >>= Metrics.recordMs Metrics.endpointCacheResultBytes (fromIntegral $ LBS.length $ AE.encode value)
         pure value
       cacheFailure :: IOE :> es' => Text -> a -> Hasql.HasqlException -> Eff es' a
       cacheFailure operation fallback _ = do
@@ -183,24 +185,17 @@ cachedRawQuery flights now key fetch = do
         case cached of
           RawCacheHit value -> do
             Metrics.bump Metrics.endpointCacheAvoidedQueries backend
-            finish ("raw-hit" :: Text) value
+            finish "raw-hit" value
           RawCacheMiss -> do
             Metrics.bump Metrics.endpointCacheBackendQueries backend
             value <- fetch
             updateRawCache now key value `Ann.catch` cacheFailure "store" ()
             finish "raw-miss" value
-      run = do
-        (leader, value) <- withRunInIO $ \unlift -> coalesceQuery flights key (unlift action)
-        if leader
-          then pure value
-          else do
-            Metrics.bump Metrics.endpointCacheAvoidedQueries backend
-            finish "raw-coalesced" value
-  run `onException` do
-    ended <- liftIO getMonotonicTime
-    let attrs = ("outcome", OA.toAttribute ("raw-error" :: Text)) : backend
-    Metrics.bump Metrics.dashboardQueryCacheOutcomes attrs
-    Metrics.recordMs Metrics.endpointCacheDuration ((ended - started) * 1000) attrs
+      run =
+        withRunInIO (\unlift -> coalesceQuery flights key (unlift action)) >>= \case
+          (True, value) -> pure value
+          (False, value) -> Metrics.bump Metrics.endpointCacheAvoidedQueries backend >> finish "raw-coalesced" value
+  run `onException` recordOutcome "raw-error"
 
 
 rawCacheHash :: RawCacheKey -> Text
@@ -209,15 +204,13 @@ rawCacheHash = toXXHash . ("v2:" <>) . encodeText
 
 lookupRawCache :: DB es => UTCTime -> RawCacheKey -> Eff es RawCacheResult
 lookupRawCache now key = do
-  let (kPid, kHash, kBin) = (key.projectId, rawCacheHash key, key.rollupInterval)
-      kSource = "raw-sql" :: Text
   rows :: [HI.OneColumn (AesonText MetricsData)] <-
     Hasql.interp
       [HI.sql|
       SELECT cached_data
       FROM query_cache
-      WHERE project_id = #{kPid} AND source = #{kSource}
-        AND query_hash = #{kHash} AND bin_interval = #{kBin}
+      WHERE project_id = #{key.projectId} AND source = 'raw-sql'
+        AND query_hash = #{rawCacheHash key} AND bin_interval = #{key.rollupInterval}
         AND cached_from = #{key.from} AND cached_to = #{key.to}
         AND updated_at > #{now}::timestamptz - interval '60 seconds'
         AND updated_at <= #{now}
@@ -234,18 +227,15 @@ updateRawCache :: (DB es, IOE :> es) => UTCTime -> RawCacheKey -> MetricsData ->
 updateRawCache now key value
   | isJust value.error = pass
   | LBS.length (AE.encode value) > 1048576 = Metrics.bump Metrics.endpointCacheOversized []
-  | otherwise = do
-      let (kPid, kHash, kBin) = (key.projectId, rawCacheHash key, key.rollupInterval)
-          kSource = "raw-sql" :: Text
-          cached = AesonText value
+  | otherwise =
       Hasql.interpExecute_
         [HI.sql|
           INSERT INTO query_cache
             (project_id, source, query_hash, bin_interval, original_query,
              cached_from, cached_to, cached_data, hit_count, last_accessed_at, updated_at)
           VALUES
-            (#{kPid}, #{kSource}, #{kHash}, #{kBin}, #{key.sqlQuery},
-             #{key.from}, #{key.to}, #{cached}, 1, #{now}, #{now})
+            (#{key.projectId}, 'raw-sql', #{rawCacheHash key}, #{key.rollupInterval}, #{key.sqlQuery},
+             #{key.from}, #{key.to}, #{AesonText value}, 1, #{now}, #{now})
           ON CONFLICT (project_id, source, query_hash, bin_interval)
           DO UPDATE SET cached_data = EXCLUDED.cached_data,
             original_query = EXCLUDED.original_query,
@@ -259,11 +249,8 @@ updateRawCache now key value
 -- | Check if query has a summarize command with time binning (bin or bin_auto)
 hasSummarizeWithBin :: [Section] -> Bool
 hasSummarizeWithBin = any \case
-  SummarizeCommand _ (Just (SummarizeByClause items)) -> any isBinFunc items
+  SummarizeCommand _ (Just (SummarizeByClause items)) -> any (\case ByBinFunc _ -> True; _ -> False) items
   _ -> False
-  where
-    isBinFunc (ByBinFunc _) = True
-    isBinFunc _ = False
 
 
 -- | Rewrite bin_auto to fixed bin interval for delta fetches
@@ -297,10 +284,7 @@ chunkIntervalSupported interval =
 -- | Calculate sliding window size in seconds based on bin interval
 -- Keeps at least 48 data points or 24 hours, whichever is larger
 slidingWindowSeconds :: Text -> Int
-slidingWindowSeconds binInterval =
-  let binSecs = parseBinIntervalToSeconds binInterval
-      minPoints = 48
-   in max 86400 (binSecs * minPoints)
+slidingWindowSeconds binInterval = max 86400 (parseBinIntervalToSeconds binInterval * 48)
 
 
 -- | The oldest timestamp the cache may trim to for a request over @(from, to)@:
@@ -377,18 +361,6 @@ chartChunks interval (start, end) = go 1 end InclusiveEnd
            in (lower, upper, endMode) : go next lower ExclusiveEnd
 
 
--- | Extract bin interval from summarize clause
-extractBinInterval :: SqlQueryCfg -> [Section] -> Text
-extractBinInterval sqlCfg =
-  fromMaybe defaultBinSize . asum . map \case
-    SummarizeCommand _ (Just (SummarizeByClause items)) -> asum $ map getBinInterval items
-    _ -> Nothing
-  where
-    getBinInterval (ByBinFunc (Bin _ interval)) = Just interval
-    getBinInterval (ByBinFunc (BinAuto _)) = Just $ autoBinWidth sqlCfg
-    getBinInterval _ = Nothing
-
-
 -- | Generate a cache key from query components
 generateCacheKey :: Projects.ProjectId -> Maybe Sources -> [Section] -> SqlQueryCfg -> CacheKey
 generateCacheKey pid sourceM sections sqlCfg =
@@ -399,9 +371,13 @@ generateCacheKey pid sourceM sections sqlCfg =
     { projectId = pid
     , source = maybe "spans" toQText sourceM
     , queryHash = toXXHash $ toQText sections <> "\NULenvironment=" <> fromMaybe "" sqlCfg.environment <> "\NULservice=" <> fromMaybe "" sqlCfg.service <> foldMap compiledPredicate sections
-    , binInterval = extractBinInterval sqlCfg sections
+    , binInterval = fromMaybe defaultBinSize $ listToMaybe [b | SummarizeCommand _ (Just (SummarizeByClause items)) <- sections, Just b <- map binOf items]
     }
   where
+    binOf = \case
+      ByBinFunc (Bin _ interval) -> Just interval
+      ByBinFunc (BinAuto _) -> Just $ autoBinWidth sqlCfg
+      _ -> Nothing
     -- Compiler changes must not reuse old historical results. A fixed clock keeps
     -- now()/ago() fingerprints stable while preserving their JSON-path rendering.
     fingerprint = ("\NULpredicate=" <>) . display . resolveWildcardTimes fixedUTCTime
@@ -424,14 +400,13 @@ rowTimestamp = join . V.headM
 
 -- | Look up cache entry and determine cache result
 lookupCache :: DB es => CacheKey -> (UTCTime, UTCTime) -> Eff es CacheResult
-lookupCache key (reqFrom, reqTo) = do
-  let (kPid, kSrc, kHash, kBin) = (key.projectId, key.source, key.queryHash, key.binInterval)
+lookupCache key (reqFrom, reqTo) =
   Hasql.interp
     [HI.sql|
       SELECT project_id, source, query_hash, bin_interval, original_query,
              cached_from, cached_to, cached_data, hit_count::bigint
       FROM query_cache
-      WHERE project_id = #{kPid} AND source = #{kSrc} AND query_hash = #{kHash} AND bin_interval = #{kBin}
+      WHERE project_id = #{key.projectId} AND source = #{key.source} AND query_hash = #{key.queryHash} AND bin_interval = #{key.binInterval}
       LIMIT 1
     |]
     <&> \case
@@ -450,13 +425,11 @@ lookupCache key (reqFrom, reqTo) = do
 updateCache :: (DB es, Time :> es) => CacheKey -> (UTCTime, UTCTime) -> MetricsData -> Text -> Eff es ()
 updateCache key (fromTime, toTime) metricsData originalQuery = do
   now <- Time.currentTime
-  let (kPid, kSrc, kHash, kBin) = (key.projectId, key.source, key.queryHash, key.binInterval)
-      cd = AesonText metricsData
   Hasql.interpExecute_
     [HI.sql|
     INSERT INTO query_cache (project_id, source, query_hash, bin_interval, original_query,
                              cached_from, cached_to, cached_data, hit_count, last_accessed_at)
-    VALUES (#{kPid}, #{kSrc}, #{kHash}, #{kBin}, #{originalQuery}, #{fromTime}, #{toTime}, #{cd}, 1, #{now})
+    VALUES (#{key.projectId}, #{key.source}, #{key.queryHash}, #{key.binInterval}, #{originalQuery}, #{fromTime}, #{toTime}, #{AesonText metricsData}, 1, #{now})
     ON CONFLICT (project_id, source, query_hash, bin_interval)
     DO UPDATE SET
       cached_from = EXCLUDED.cached_from,
@@ -484,34 +457,21 @@ mergeTimeseriesData cached new
         cachedIdx = M.fromList $ zip cachedHdrs [0 ..]
         newIdx = M.fromList $ zip newHdrs [0 ..]
         -- Normalize row to merged header structure
-        normalizeRow srcIdx row = V.generate (V.length mergedHdrs) \i ->
-          let hdr = mergedHdrs V.! i
-           in M.lookup hdr srcIdx >>= (row V.!?) & join
-        normalizedCached = V.map (normalizeRow cachedIdx) cached.dataset
-        normalizedNew = V.map (normalizeRow newIdx) new.dataset
-        -- Sort and deduplicate by timestamp (stay in vector operations)
-        sorted = V.modify (VA.sortBy $ comparing (join . V.headM)) $ normalizedCached <> normalizedNew
-        dedupedRows = dedupeByTimestamp sorted
+        normalizeRow srcIdx row = V.map (\hdr -> M.lookup hdr srcIdx >>= join . (row V.!?)) mergedHdrs
+        sorted = V.modify (VA.sortBy $ comparing rowTimestamp) $ V.map (normalizeRow cachedIdx) cached.dataset <> V.map (normalizeRow newIdx) new.dataset
+        -- Rows are sorted, so keeping the last of each timestamp run dedupes (fresh data wins)
+        deduped = V.ifilter (\i row -> i == V.length sorted - 1 || rowTimestamp row /= rowTimestamp (sorted V.! (i + 1))) sorted
        in
-        cached
-          { dataset = dedupedRows
-          , headers = mergedHdrs
-          , rowsCount = sum $ V.concatMap (V.mapMaybe id . V.drop 1) dedupedRows
-          , rowsPerMin = Just $ timeseriesRate dedupedRows
+        (withRows cached deduped)
+          { headers = mergedHdrs
           , from = liftA2 min cached.from new.from <|> cached.from <|> new.from
           , to = liftA2 max cached.to new.to <|> cached.to <|> new.to
-          , stats = Just $ recalculateStats dedupedRows
           }
 
 
--- | Deduplicate sorted rows by timestamp, keeping last occurrence (stays in vector operations)
-dedupeByTimestamp :: V.Vector (V.Vector (Maybe Double)) -> V.Vector (V.Vector (Maybe Double))
-dedupeByTimestamp rows
-  | V.null rows = V.empty
-  | otherwise =
-      let n = V.length rows
-          shouldKeep i = i == n - 1 || rowTimestamp (rows V.! i) /= rowTimestamp (rows V.! (i + 1))
-       in V.ifilter (\i _ -> shouldKeep i) rows
+-- | Replace the dataset and recompute every figure derived from it.
+withRows :: MetricsData -> V.Vector (V.Vector (Maybe Double)) -> MetricsData
+withRows metrics rows = metrics{dataset = rows, rowsCount = sum $ V.concatMap (V.catMaybes . V.drop 1) rows, rowsPerMin = Just $ timeseriesRate rows, stats = Just $ recalculateStats rows}
 
 
 -- | Recalculate stats from dataset - processes all value columns and calculates maxGroupSum
@@ -519,9 +479,8 @@ recalculateStats :: V.Vector (V.Vector (Maybe Double)) -> MetricsStats
 recalculateStats rows =
   let
     -- Extract all non-null values from value columns (skip timestamp at index 0)
-    allValues = V.concatMap (V.mapMaybe id . V.drop 1) rows
-    -- Sum of values per row (for maxGroupSum calculation)
-    rowSums = V.map (sum . V.mapMaybe id . V.drop 1) rows
+    allValues = V.concatMap (V.catMaybes . V.drop 1) rows
+    rowSums = V.map (sum . V.catMaybes . V.drop 1) rows
    in
     if V.null allValues
       then def
@@ -545,7 +504,7 @@ recalculateStats rows =
 timeseriesRate :: V.Vector (V.Vector (Maybe Double)) -> Double
 timeseriesRate rows =
   let timestamps = V.mapMaybe rowTimestamp rows
-      count = V.length $ V.concatMap (V.mapMaybe id . V.drop 1) rows
+      count = V.length $ V.concatMap (V.catMaybes . V.drop 1) rows
    in if V.null timestamps || V.maximum timestamps <= V.minimum timestamps
         then 0
         else fromIntegral count * 60 / (V.maximum timestamps - V.minimum timestamps)
@@ -553,9 +512,7 @@ timeseriesRate rows =
 
 -- | Filter dataset rows by timestamp predicate and recalculate stats
 filterByTimestamp :: (Int -> Bool) -> MetricsData -> MetricsData
-filterByTimestamp p metrics =
-  let filtered = V.filter (maybe False (p . floor) . rowTimestamp) metrics.dataset
-   in metrics{dataset = filtered, rowsCount = sum $ V.concatMap (V.mapMaybe id . V.drop 1) filtered, rowsPerMin = Just $ timeseriesRate filtered, stats = Just $ recalculateStats filtered}
+filterByTimestamp p metrics = withRows metrics $ V.filter (maybe False (p . floor) . rowTimestamp) metrics.dataset
 
 
 -- | Trim data to a specific time range

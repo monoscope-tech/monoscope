@@ -39,7 +39,7 @@ import Pkg.Parser.Expr qualified as PE
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Pkg.SchemaLearning.Hot qualified as Hot
 import Pkg.SchemaLearning.Worker qualified as Worker
-import Pkg.TestUtils (TestResources (..), frozenTime, runAsBase, runHasqlEffect, withTestResources)
+import Pkg.TestUtils (TestResources (..), frozenTime, toBaseServantResponse, runHasqlEffect, withTestResources)
 import ProcessMessage qualified
 import Relude
 import Test.Hspec (Spec, around, describe, it, shouldBe, shouldContain, shouldNotContain, shouldSatisfy)
@@ -319,13 +319,13 @@ spec = around withTestResources
     describe "Layer A — handler wire shape" $ do
       it "apiFacets_emptyCachedSummary_returnsLiveServiceFacet" $ \tr -> do
         clearAll tr [pid]
-        body <- runAsBase tr $ ApiH.apiFacets pid Nothing Nothing Nothing (Just "resource.service.name")
+        body <- toBaseServantResponse tr $ ApiH.apiFacets pid Nothing Nothing Nothing (Just "resource.service.name")
         body `shouldBe` AE.object ["resource.service.name" AE..= ([] :: [AE.Value]), "source" AE..= ("fallback" :: Text)]
 
       it "GET /api/v1/facets returns dotted keys only (no triple-underscore)" $ \tr -> do
         clearAll tr [pid]
         seedSummary tr pid
-        body <- runAsBase tr $ ApiH.apiFacets pid Nothing Nothing Nothing Nothing
+        body <- toBaseServantResponse tr $ ApiH.apiFacets pid Nothing Nothing Nothing Nothing
         case body of
           AE.Object o -> do
             let keys = AEK.toText <$> AEKM.keys o

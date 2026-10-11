@@ -30,6 +30,7 @@ module Pkg.SchemaLearning.Catalog (
   classifyFormat,
   -- Anomaly diffing.
   AnomalyKind (..),
+  ShapeDelta (..),
   ProducedAnomaly (..),
   diffAnomalies,
   fieldHashSuffix,
@@ -407,7 +408,15 @@ data SummaryDoc = SummaryDoc
 
 -- | Anomaly buckets matching @apis.anomaly_type@ minus runtime-exception
 -- (which the error-pattern path produces directly).
-data AnomalyKind = AKEndpoint | AKShape | AKField | AKFormat
+data AnomalyKind = AKEndpoint | AKShape ShapeDelta | AKField | AKFormat
+  deriving stock (Eq, Generic, Ord, Show)
+  deriving anyclass (NFData)
+
+
+-- | The field paths a shape change added or re-typed\/re-formatted against the
+-- prior shape. Empty for a key's first shape: a new endpoint's fields are not
+-- changes to it.
+data ShapeDelta = ShapeDelta {newFields :: ![Text], modifiedFields :: ![Text]}
   deriving stock (Eq, Generic, Ord, Show)
   deriving anyclass (NFData)
 
@@ -444,16 +453,16 @@ fieldHashSuffix = toXXHash -- toXXHash is already exactly 8 chars
 -- >>> let mk fs = CatalogEntry emptyScope (Template HttpEndpoint (HM.fromList fs)) HM.empty HM.empty 1 t0 t0 True
 -- >>> let new = mk [(path, fs1)]
 -- >>> map (.kind) (diffAnomalies "kh" Nothing new)
--- [AKEndpoint,AKShape,AKField,AKFormat]
+-- [AKEndpoint,AKShape (ShapeDelta {newFields = [], modifiedFields = []}),AKField,AKFormat]
 -- >>> map (.kind) (diffAnomalies "kh" (Just new) new)
 -- []
 -- >>> -- type widened on existing field → AKShape (template hash changed) + AKFormat
 -- >>> map (.kind) (diffAnomalies "kh" (Just new) (mk [(path, fs2)]))
--- [AKShape,AKFormat]
+-- [AKShape (ShapeDelta {newFields = [], modifiedFields = ["request.body.user.id"]}),AKFormat]
 -- >>> -- new field added → AKShape + AKField + AKFormat
 -- >>> let new2 = mk [(path, fs1), ("request.body.email", fs1)]
--- >>> sort (map (.kind) (diffAnomalies "kh" (Just new) new2))
--- [AKShape,AKField,AKFormat]
+-- >>> map (.kind) (diffAnomalies "kh" (Just new) new2)
+-- [AKShape (ShapeDelta {newFields = ["request.body.email"], modifiedFields = []}),AKField,AKFormat]
 diffAnomalies :: Text -> Maybe CatalogEntry -> CatalogEntry -> [ProducedAnomaly]
 diffAnomalies kh priorM cur =
   let priorFields = maybe HM.empty (.template.fields) priorM
@@ -474,11 +483,14 @@ diffAnomalies kh priorM cur =
       shapeChanged = case priorM of
         Nothing -> True
         Just p -> templateHash p.template /= templateHash cur.template
+      newPaths = HS.toList $ HS.difference (HS.fromList (HM.keys curFields)) (HS.fromList (HM.keys priorFields))
+      delta = case priorM of
+        Nothing -> ShapeDelta [] []
+        Just _ -> ShapeDelta (sort newPaths) (sort $ filter (`HM.member` priorFields) changedFormatPaths)
       shape =
-        [ ProducedAnomaly AKShape (kh <> ":s:" <> T.take 8 (templateHash cur.template)) kh Nothing
+        [ ProducedAnomaly (AKShape delta) (kh <> ":s:" <> T.take 8 (templateHash cur.template)) kh Nothing
         | shapeChanged
         ]
-      newPaths = HS.toList $ HS.difference (HS.fromList (HM.keys curFields)) (HS.fromList (HM.keys priorFields))
       fields =
         [ ProducedAnomaly AKField (kh <> ":f:" <> fieldHashSuffix p) kh (Just p)
         | p <- sort newPaths

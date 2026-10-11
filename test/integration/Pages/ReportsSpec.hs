@@ -217,7 +217,7 @@ spec = around withTestResources do
                       3
                       100
                       2
-                      (replicate 10 $ Report.InfrastructureResource (T.replicate 100 "resource-") "Container" (Just "host") (Just "production") (Just "namespace") (Just 0.9) (Just 0.8) (Just 0.7) (Just False) (Just 7))
+                      (replicate 10 $ Report.InfrastructureResource (T.replicate 100 "resource-") Containers.ScopeContainer (Just "host") (Just "production") (Just "namespace") (Just 0.9) (Just 0.8) (Just 0.7) (Just False) (Just 7))
                       10
                       (addUTCTime (-900) frozenTime)
                       frozenTime

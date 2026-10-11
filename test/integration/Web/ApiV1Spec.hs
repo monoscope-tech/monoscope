@@ -18,6 +18,7 @@ import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Effectful (Eff, IOE, (:>))
 import Hasql.Interpolate qualified as HI
+import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.ProjectMembers qualified as PM
 import Models.Projects.Dashboards qualified as Dashboards
@@ -219,6 +220,14 @@ spec = around withTestResources do
       for_ ["id=\"newDashboardForm\"", "data-template=\"nginx.yaml\""] $ \markup -> body `shouldSatisfy` T.isInfixOf markup
       for_ ["<!DOCTYPE", "id=\"main-sidenav\"", "id=\"dashboardsTableContainer\""] $ \markup -> body `shouldSatisfy` (not . T.isInfixOf markup)
 
+    -- Old onboarding links carry free-text steps; master fell back to Info. The JSON API stays strict.
+    it "onboardingUnknownStep_fallsBackToInfo_apiDashboardSortStaysStrict" $ \tr -> do
+      let fetch path = WT.runSession (WT.srequest (WT.SRequest (WT.setPath Wai.defaultRequest{Wai.requestHeaders = [("X-Project-Id", "00000000-0000-0000-0000-000000000000")]} path) "")) (topApp tr)
+      onboarding <- fetch "/p/00000000-0000-0000-0000-000000000000/onboarding?step=bogus"
+      H.statusCode (WT.simpleStatus onboarding) `shouldBe` 200
+      decodeUtf8 @Text (WT.simpleBody onboarding) `shouldSatisfy` T.isInfixOf "firstName"
+      (H.statusCode . WT.simpleStatus <$> fetch "/api/v1/dashboards?sort=bogus") `shouldReturn` 400
+
     it "widgetJSON_rejectsLegacyAndUnknownFields" $ \tr -> do
       for_ ([(Nothing, 200), (Just "arning_threshold", 400), (Just "unexpected_field", 400)] :: [(Maybe AEK.Key, Int)]) $ \(fieldM, status) -> do
         let body = AE.encode $ case AE.toJSON ((def :: Widget.Widget){Widget.warningThreshold = Just 7}) of
@@ -301,7 +310,7 @@ spec = around withTestResources do
     describe "Monitor CRUD + lifecycle" do
       it "create → get → patch → mute → unmute → delete round-trip" $ \tr -> do
         let runB :: ATBaseCtx a -> IO a
-            runB k = runAsBase tr k
+            runB k = toBaseServantResponse tr k
             input = (def :: ApiT.MonitorInput){ApiT.unit = Just " s ", ApiT.title = "t1", ApiT.query = "count(*)", ApiT.alertThreshold = 5, ApiT.checkIntervalMins = 5, ApiT.timeWindowMins = 15}
         created <- runB $ ApiH.apiMonitorCreate testPid input
         created.alertConfig.title `shouldBe` "t1"
@@ -328,7 +337,7 @@ spec = around withTestResources do
       -- Assert against a re-read, never against the handler's own return value.
       it "monitorCreate_activeFalse_persistsDeactivatedAt" $ \tr -> do
         let runB :: ATBaseCtx a -> IO a
-            runB k = runAsBase tr k
+            runB k = toBaseServantResponse tr k
             input = (def :: ApiT.MonitorInput){ApiT.title = "inactive-on-create", ApiT.query = "count(*)", ApiT.alertThreshold = 5, ApiT.checkIntervalMins = 5, ApiT.timeWindowMins = 15, ApiT.active = Just False}
         created <- runB $ ApiH.apiMonitorCreate testPid input
         created.deactivatedAt `shouldSatisfy` isJust
@@ -337,7 +346,7 @@ spec = around withTestResources do
 
       it "monitorUpdate_activeToggle_persistsDeactivatedAt" $ \tr -> do
         let runB :: ATBaseCtx a -> IO a
-            runB k = runAsBase tr k
+            runB k = toBaseServantResponse tr k
             input act = (def :: ApiT.MonitorInput){ApiT.title = "toggle-active", ApiT.query = "count(*)", ApiT.alertThreshold = 5, ApiT.checkIntervalMins = 5, ApiT.timeWindowMins = 15, ApiT.active = Just act}
         created <- runB $ ApiH.apiMonitorCreate testPid (input True)
         void $ runB $ ApiH.apiMonitorUpdate testPid created.id (input False)
@@ -353,7 +362,7 @@ spec = around withTestResources do
       -- query. PUT/apply recompute it via monitorFromInput; PATCH did not.
       it "monitorPatch_query_recompilesTheCompiledSql" $ \tr -> do
         let runB :: ATBaseCtx a -> IO a
-            runB k = runAsBase tr k
+            runB k = toBaseServantResponse tr k
             input = (def :: ApiT.MonitorInput){ApiT.title = "recompile", ApiT.query = "status_code == 200", ApiT.alertThreshold = 1, ApiT.checkIntervalMins = 5, ApiT.timeWindowMins = 15}
         created <- runB $ ApiH.apiMonitorCreate testPid input
         compiledBefore <- runQueryEffect tr $ Monitors.queryMonitorById created.id
@@ -365,7 +374,7 @@ spec = around withTestResources do
 
       it "persists monitor environment and service scope outside customer KQL" $ \tr -> do
         let runB :: ATBaseCtx a -> IO a
-            runB k = runAsBase tr k
+            runB k = toBaseServantResponse tr k
             input =
               (def :: ApiT.MonitorInput)
                 { ApiT.title = "scoped-monitor"
@@ -387,17 +396,17 @@ spec = around withTestResources do
 
       it "bulk delete marks monitors as deleted" $ \tr -> do
         let runB :: ATBaseCtx a -> IO a
-            runB k = runAsBase tr k
+            runB k = toBaseServantResponse tr k
             mkInput n = (def :: ApiT.MonitorInput){ApiT.title = "bulk-" <> n, ApiT.query = "count(*)", ApiT.alertThreshold = 1, ApiT.checkIntervalMins = 5, ApiT.timeWindowMins = 15}
         m1 <- runB $ ApiH.apiMonitorCreate testPid (mkInput "a")
         m2 <- runB $ ApiH.apiMonitorCreate testPid (mkInput "b")
-        res <- runB $ ApiH.apiMonitorBulk testPid ApiT.BulkAction{ApiT.action = "delete", ApiT.ids = [m1.id.unQueryMonitorId, m2.id.unQueryMonitorId], ApiT.durationMinutes = Nothing}
+        res <- runB $ ApiH.apiMonitorBulk testPid ApiT.BulkAction{ApiT.action = "delete", ApiT.ids = [m1.id.unwrap, m2.id.unwrap], ApiT.durationMinutes = Nothing}
         length res.succeeded `shouldBe` 2
         res.failed `shouldBe` []
 
       it "bulk delete against non-existent ids reports them in failed with error text" $ \tr -> do
         let runB :: ATBaseCtx a -> IO a
-            runB k = runAsBase tr k
+            runB k = toBaseServantResponse tr k
         bogus1 <- UUIDV4.nextRandom
         bogus2 <- UUIDV4.nextRandom
         res <- runB $ ApiH.apiMonitorBulk testPid ApiT.BulkAction{ApiT.action = "delete", ApiT.ids = [bogus1, bogus2], ApiT.durationMinutes = Nothing}
@@ -409,20 +418,20 @@ spec = around withTestResources do
 
       it "bulk with unknown action raises 400" $ \tr -> do
         let runB :: ATBaseCtx a -> IO a
-            runB k = runAsBase tr k
+            runB k = toBaseServantResponse tr k
         runB (ApiH.apiMonitorBulk testPid ApiT.BulkAction{ApiT.action = "nuke", ApiT.ids = [], ApiT.durationMinutes = Nothing})
           `shouldThrow` anyException
 
       it "get with non-existent id raises 404" $ \tr -> do
         let runB :: ATBaseCtx a -> IO a
-            runB k = runAsBase tr k
+            runB k = toBaseServantResponse tr k
         bogus <- UUIDV4.nextRandom
         runB (ApiH.apiMonitorGet testPid (Monitors.QueryMonitorId bogus))
           `shouldThrow` anyException
 
       it "patch propagates notification fields (emails, emailAll, slackChannels)" $ \tr -> do
         let runB :: ATBaseCtx a -> IO a
-            runB k = runAsBase tr k
+            runB k = toBaseServantResponse tr k
             input = (def :: ApiT.MonitorInput){ApiT.title = "notify-t", ApiT.query = "count(*)", ApiT.alertThreshold = 5, ApiT.checkIntervalMins = 5, ApiT.timeWindowMins = 15}
         created <- runB $ ApiH.apiMonitorCreate testPid input
         patched <-
@@ -439,7 +448,7 @@ spec = around withTestResources do
     describe "Dashboard CRUD" do
       it "create → star → unstar → delete round-trip" $ \tr -> do
         let runB :: ATBaseCtx a -> IO a
-            runB k = runAsBase tr k
+            runB k = toBaseServantResponse tr k
             input = ApiT.DashboardInput{ApiT.title = "d1", ApiT.tags = Just ["a"], ApiT.teams = Nothing, ApiT.filePath = Nothing, ApiT.schema = Nothing}
         created <- runB $ ApiH.apiDashboardCreate testPid input
         created.summary.title `shouldBe` "d1"
@@ -454,7 +463,7 @@ spec = around withTestResources do
 
       it "bulk delete removes multiple dashboards" $ \tr -> do
         let runB :: ATBaseCtx a -> IO a
-            runB k = runAsBase tr k
+            runB k = toBaseServantResponse tr k
             mkInput n = ApiT.DashboardInput{ApiT.title = "bulk-d-" <> n, ApiT.tags = Nothing, ApiT.teams = Nothing, ApiT.filePath = Nothing, ApiT.schema = Nothing}
         d1 <- runB $ ApiH.apiDashboardCreate testPid (mkInput "a")
         d2 <- runB $ ApiH.apiDashboardCreate testPid (mkInput "b")
@@ -463,7 +472,7 @@ spec = around withTestResources do
 
       it "apply upserts by file_path (idempotent)" $ \tr -> do
         let runB :: ATBaseCtx a -> IO a
-            runB k = runAsBase tr k
+            runB k = toBaseServantResponse tr k
             doc = ApiT.DashboardYAMLDoc{ApiT.filePath = "dashes/foo.yaml", ApiT.title = Just "foo", ApiT.tags = Nothing, ApiT.teams = Nothing, ApiT.schema = def}
         d1 <- runB $ ApiH.apiDashboardApply testPid doc
         d2 <- runB $ ApiH.apiDashboardApply testPid doc
@@ -473,16 +482,16 @@ spec = around withTestResources do
         let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
             doc = ApiT.DashboardYAMLDoc{ApiT.filePath = "overview.yaml", ApiT.title = Just "Repository overview", ApiT.tags = Nothing, ApiT.teams = Nothing, ApiT.schema = def}
         Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub Nothing "team" "dashboards" "main" (GitSync.AppInstallation 42) Nothing ""
-        remote <- runAsBase tr $ ApiH.apiDashboardApply testPid doc
+        remote <- toBaseServantResponse tr $ ApiH.apiDashboardApply testPid doc
         runQueryEffect tr (GitSync.assignDashboardRepository testPid remote.summary.id sync.id) `shouldReturn` Right ()
-        applied <- runAsBase tr $ ApiH.apiDashboardApply testPid doc{ApiT.title = Just "Local overview"}
+        applied <- toBaseServantResponse tr $ ApiH.apiDashboardApply testPid doc{ApiT.title = Just "Local overview"}
         applied.summary.id `shouldNotBe` remote.summary.id
         Just retained <- runQueryEffect tr $ Dashboards.getDashboardByProjectId testPid remote.summary.id
         retained.title `shouldBe` "Repository overview"
     describe "API keys CRUD" do
       it "create returns plaintext once; list includes it; delete deactivates" $ \tr -> do
         let runB :: ATBaseCtx a -> IO a
-            runB k = runAsBase tr k
+            runB k = toBaseServantResponse tr k
         created <- runB $ ApiH.apiKeyCreate testPid ApiT.ApiKeyCreate{ApiT.title = "k1"}
         created.summary.title `shouldBe` "k1"
         created.key `shouldSatisfy` not . T.null
@@ -552,13 +561,13 @@ spec = around withTestResources do
 
     describe "Plan B — /me + project singular" do
       it "returns project id and summary for /me" $ \tr -> do
-        res <- runAsBase tr (ApiH.apiMe testPid)
+        res <- toBaseServantResponse tr (ApiH.apiMe testPid)
         res.projectId `shouldBe` testPid
         res.project.id `shouldBe` testPid
 
       it "project get/patch round-trip updates title" $ \tr -> do
         let runB :: ATBaseCtx a -> IO a
-            runB k = runAsBase tr k
+            runB k = toBaseServantResponse tr k
             emptyPatch = Projects.ProjectPatch Nothing Nothing Nothing Nothing Nothing Nothing Nothing
         original <- runB (ApiH.apiProjectGet testPid)
         patched <- runB (ApiH.apiProjectPatch testPid emptyPatch{Projects.title = Just "Plan B Patched"})
@@ -568,24 +577,28 @@ spec = around withTestResources do
 
     describe "Plan B — issues/endpoints/log-patterns listing" do
       it "issues list returns a Paged envelope" $ \tr -> do
-        res <- runAsBase tr (ApiH.apiIssuesList testPid Nothing Nothing Nothing Nothing Nothing)
+        res <- toBaseServantResponse tr (ApiH.apiIssuesList testPid Nothing Nothing Nothing Nothing Nothing)
         res.perPage `shouldSatisfy` (> 0)
         res.totalCount `shouldSatisfy` (>= 0)
 
       it "issues bulk with empty ids succeeds with empty result" $ \tr -> do
-        res <- runAsBase tr (ApiH.apiIssuesBulk testPid ApiT.BulkAction{ApiT.action = "acknowledge", ApiT.ids = [], ApiT.durationMinutes = Nothing})
+        res <- toBaseServantResponse tr (ApiH.apiIssuesBulk testPid ApiT.BulkAction{ApiT.action = "acknowledge", ApiT.ids = [], ApiT.durationMinutes = Nothing})
         res.succeeded `shouldBe` []
 
-      it "endpoints list returns a Paged envelope" $ \tr -> do
-        res <- runAsBase tr (ApiH.apiEndpointsList testPid Nothing Nothing Nothing Nothing)
-        res.perPage `shouldSatisfy` (> 0)
+      it "endpoints list and get decode stored rows" $ \tr -> do
+        runQueryEffect tr $ Endpoints.bulkInsertEndpoints $ fromList [(def :: Endpoints.Endpoint){Endpoints.projectId = testPid, Endpoints.urlPath = "/api-v1-probe", Endpoints.urlParams = AE.object [], Endpoints.method = "GET", Endpoints.host = "probe.test", Endpoints.hash = "api-v1-probe", Endpoints.serviceName = Just "probe"}]
+        res <- toBaseServantResponse tr (ApiH.apiEndpointsList testPid (Just "api-v1-probe") Nothing Nothing Nothing)
+        map (\e -> (e.urlPath, e.host, e.serviceName)) res.items `shouldBe` [("/api-v1-probe", "probe.test", Just "probe")]
+        ep <- maybe (fail "probe endpoint not listed") pure (viaNonEmpty head res.items)
+        full <- toBaseServantResponse tr (ApiH.apiEndpointGet testPid ep.id)
+        full.summary.hash `shouldBe` "api-v1-probe"
 
       it "log patterns list returns a Paged envelope" $ \tr -> do
-        res <- runAsBase tr (ApiH.apiLogPatternsList testPid Nothing Nothing)
+        res <- toBaseServantResponse tr (ApiH.apiLogPatternsList testPid Nothing Nothing)
         res.perPage `shouldSatisfy` (> 0)
 
       it "log patterns bulk with empty ids succeeds with empty result" $ \tr -> do
-        res <- runAsBase tr (ApiH.apiLogPatternsBulk testPid ApiT.BulkAction{ApiT.action = "acknowledge", ApiT.ids = [], ApiT.durationMinutes = Nothing})
+        res <- toBaseServantResponse tr (ApiH.apiLogPatternsBulk testPid ApiT.BulkAction{ApiT.action = "acknowledge", ApiT.ids = [], ApiT.durationMinutes = Nothing})
         res.succeeded `shouldBe` []
 
       it "incidents list and get stay inside the authorized project" $ \tr -> do
@@ -593,22 +606,22 @@ spec = around withTestResources do
         ownId <- UUIDId <$> UUIDV4.nextRandom
         foreignId <- UUIDId <$> UUIDV4.nextRandom
         sourceId <- UUIDV4.nextRandom
-        runAsBase tr
+        toBaseServantResponse tr
           $ Hasql.interpExecute_
             [HI.sql|INSERT INTO apis.incident_episodes
               (id, project_id, source_kind, source_id, phase, started_at, last_event_at)
               VALUES (#{ownId}, #{testPid}, 'issue', #{sourceId}, 'active', #{frozenTime}, #{frozenTime}),
                      (#{foreignId}, #{otherPid}, 'issue', #{sourceId}, 'active', #{frozenTime}, #{frozenTime})|]
-        listed <- runAsBase tr $ ApiH.apiIncidentsList testPid Nothing Nothing
+        listed <- toBaseServantResponse tr $ ApiH.apiIncidentsList testPid Nothing Nothing
         map (.id) listed `shouldBe` [ownId]
-        (.id) <$> runAsBase tr (ApiH.apiIncidentGet testPid ownId) `shouldReturn` ownId
-        (runAsBase tr (ApiH.apiIncidentGet testPid foreignId) >>= evaluateWHNF_)
+        (.id) <$> toBaseServantResponse tr (ApiH.apiIncidentGet testPid ownId) `shouldReturn` ownId
+        (toBaseServantResponse tr (ApiH.apiIncidentGet testPid foreignId) >>= evaluateWHNF_)
           `shouldThrow` anyException
 
     describe "Plan B — teams CRUD" do
       it "create → get → patch → delete round-trip" $ \tr -> do
         let runB :: ATBaseCtx a -> IO a
-            runB k = runAsBase tr k
+            runB k = toBaseServantResponse tr k
             input =
               ApiT.TeamInput
                 { ApiT.name = "ops"
@@ -650,15 +663,15 @@ spec = around withTestResources do
                 , ApiT.phoneNumbers = Nothing
                 , ApiT.pagerdutyServices = Nothing
                 }
-        (runAsBase tr (ApiH.apiTeamCreate testPid input) >>= evaluateWHNF_) `shouldThrow` anyException
+        (toBaseServantResponse tr (ApiH.apiTeamCreate testPid input) >>= evaluateWHNF_) `shouldThrow` anyException
 
       it "teams list includes the built-in everyone team" $ \tr -> do
-        teams <- runAsBase tr (ApiH.apiTeamsList testPid)
+        teams <- toBaseServantResponse tr (ApiH.apiTeamsList testPid)
         any (.isEveryone) teams `shouldBe` True
 
       it "bulk delete over teams returns success count" $ \tr -> do
         let runB :: ATBaseCtx a -> IO a
-            runB k = runAsBase tr k
+            runB k = toBaseServantResponse tr k
             mkInput n =
               ApiT.TeamInput
                 { ApiT.name = "t-" <> n
@@ -681,7 +694,7 @@ spec = around withTestResources do
     describe "Plan B — members" do
       it "add by email → patch permission → remove" $ \tr -> do
         let runB :: ATBaseCtx a -> IO a
-            runB k = runAsBase tr k
+            runB k = toBaseServantResponse tr k
         added <-
           runB
             $ ApiH.apiMemberAdd
@@ -695,7 +708,7 @@ spec = around withTestResources do
         pass
 
       it "add without email or user_id is rejected" $ \tr -> do
-        ( runAsBase tr (ApiH.apiMemberAdd testPid ApiT.MemberAdd{ApiT.email = Nothing, ApiT.userId = Nothing, ApiT.permission = Nothing})
+        ( toBaseServantResponse tr (ApiH.apiMemberAdd testPid ApiT.MemberAdd{ApiT.email = Nothing, ApiT.userId = Nothing, ApiT.permission = Nothing})
             >>= evaluateWHNF_
           )
           `shouldThrow` anyException
@@ -757,7 +770,7 @@ spec = around withTestResources do
                 , "id" AE..= (1 :: Int)
                 , "method" AE..= ("tools/list" :: Text)
                 ]
-        resp <- runAsBase tr (MCP.handleJsonRpc reg dummyApp testPid req)
+        resp <- toBaseServantResponse tr (MCP.handleJsonRpc reg dummyApp testPid req)
         let tools = resp ^.. key "result" . key "tools" . _Array . traverse
         tools `shouldSatisfy` (not . null)
         case tools of
@@ -772,7 +785,7 @@ spec = around withTestResources do
                 , "id" AE..= (1 :: Int)
                 , "method" AE..= ("initialize" :: Text)
                 ]
-        resp <- runAsBase tr (MCP.handleJsonRpc reg dummyApp testPid req)
+        resp <- toBaseServantResponse tr (MCP.handleJsonRpc reg dummyApp testPid req)
         (resp ^? key "result" . key "protocolVersion") `shouldSatisfy` isJust
         (resp ^? key "result" . key "serverInfo" . key "name") `shouldSatisfy` isJust
 
@@ -783,7 +796,7 @@ spec = around withTestResources do
                   [ "name" AE..= ("get_schema" :: Text)
                   , "arguments" AE..= AE.object []
                   ]
-        resp <- runAsBase tr (MCP.handleJsonRpc reg (buildTestApp tr testPid) testPid req)
+        resp <- toBaseServantResponse tr (MCP.handleJsonRpc reg (buildTestApp tr testPid) testPid req)
         let isErr = resp ^? key "result" . key "isError"
             content = resp ^? key "result" . key "content" . _Array . traverse . key "text"
         when (isErr /= Just (AE.Bool False))
@@ -802,7 +815,7 @@ spec = around withTestResources do
                   [ "name" AE..= ("does_not_exist" :: Text)
                   , "arguments" AE..= AE.object []
                   ]
-        resp <- runAsBase tr (MCP.handleJsonRpc reg dummyApp testPid req)
+        resp <- toBaseServantResponse tr (MCP.handleJsonRpc reg dummyApp testPid req)
         (resp ^? key "result" . key "isError") `shouldBe` Just (AE.Bool True)
         (resp ^? key "error") `shouldBe` Nothing
 
@@ -813,7 +826,7 @@ spec = around withTestResources do
                 , "id" AE..= (1 :: Int)
                 , "method" AE..= ("tools/list" :: Text)
                 ]
-        resp <- runAsBase tr (MCP.handleJsonRpc reg dummyApp testPid req)
+        resp <- toBaseServantResponse tr (MCP.handleJsonRpc reg dummyApp testPid req)
         let names :: [Text]
             names =
               resp
@@ -836,7 +849,7 @@ spec = around withTestResources do
                   [ "name" AE..= ("find_error_patterns" :: Text)
                   , "arguments" AE..= AE.object ["limit" AE..= (5 :: Int)]
                   ]
-        resp <- runAsBase tr (MCP.handleJsonRpc reg dummyApp testPid req)
+        resp <- toBaseServantResponse tr (MCP.handleJsonRpc reg dummyApp testPid req)
         (resp ^? key "result" . key "isError") `shouldBe` Just (AE.Bool False)
         (resp ^? key "result" . key "structuredContent" . key "patterns" . _Array) `shouldSatisfy` isJust
         (resp ^? key "result" . key "structuredContent" . key "as_of") `shouldSatisfy` isJust
@@ -848,7 +861,7 @@ spec = around withTestResources do
                   [ "name" AE..= ("search_events_nl" :: Text)
                   , "arguments" AE..= AE.object ["input" AE..= ("" :: Text)]
                   ]
-        resp <- runAsBase tr (MCP.handleJsonRpc reg dummyApp testPid req)
+        resp <- toBaseServantResponse tr (MCP.handleJsonRpc reg dummyApp testPid req)
         (resp ^? key "result" . key "isError") `shouldBe` Just (AE.Bool True)
 
       it "tools/call analyze_issue with bad UUID returns isError, not JSON-RPC error" $ \tr -> do
@@ -858,7 +871,7 @@ spec = around withTestResources do
                   [ "name" AE..= ("analyze_issue" :: Text)
                   , "arguments" AE..= AE.object ["issue_id" AE..= ("not-a-uuid" :: Text)]
                   ]
-        resp <- runAsBase tr (MCP.handleJsonRpc reg dummyApp testPid req)
+        resp <- toBaseServantResponse tr (MCP.handleJsonRpc reg dummyApp testPid req)
         (resp ^? key "result" . key "isError") `shouldBe` Just (AE.Bool True)
         (resp ^? key "error") `shouldBe` Nothing
 
@@ -893,13 +906,13 @@ spec = around withTestResources do
 
       it "notifications/* return JSON null with no envelope" $ \tr -> do
         let req = rpcSimple "notifications/initialized"
-        resp <- runAsBase tr (MCP.handleJsonRpc reg dummyApp testPid req)
+        resp <- toBaseServantResponse tr (MCP.handleJsonRpc reg dummyApp testPid req)
         resp `shouldBe` AE.Null
 
       it "tools/call create_team forwards POST body and round-trips" $ \tr -> do
         teamHandle <- ("body-test-" <>) . UUID.toText <$> UUIDV4.nextRandom
         let body = AE.object ["name" AE..= teamHandle, "handle" AE..= teamHandle]
             req = rpcCallNamed "create_team" (AE.object ["body" AE..= body])
-        resp <- runAsBase tr (MCP.handleJsonRpc reg (buildTestApp tr testPid) testPid req)
+        resp <- toBaseServantResponse tr (MCP.handleJsonRpc reg (buildTestApp tr testPid) testPid req)
         (resp ^? key "result" . key "isError") `shouldBe` Just (AE.Bool False)
         (resp ^? key "result" . key "structuredContent" . key "summary" . key "handle" . _String) `shouldBe` Just teamHandle

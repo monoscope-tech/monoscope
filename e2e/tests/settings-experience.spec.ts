@@ -53,7 +53,7 @@ test('Prometheus viewers can inspect targets while editors manage them on a narr
       const edit = row.getByRole('button', { name: 'Edit', exact: true });
       await edit.press('Enter');
       const dialog = page.getByRole('dialog', { name: 'Edit Prometheus target', exact: true });
-      await expect(dialog.getByRole('textbox', { name: 'Name', exact: true })).toBeFocused();
+      await expect(dialog.getByRole('textbox', { name: 'Name *', exact: true })).toBeFocused();
       expect(await dialog.evaluate(element => element.matches(':modal'))).toBe(true);
       for (let step = 0; step < 10; step++) {
         await page.keyboard.press('Tab');

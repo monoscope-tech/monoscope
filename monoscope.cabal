@@ -255,6 +255,7 @@ extra-source-files:
     static/migrations/0222_repository_sync_failures.sql
     static/migrations/0223_github_repository_identity.sql
     static/migrations/0224_github_attempt_retention.sql
+    static/migrations/0225_anomaly_shape_delta.sql
     static/migrations/0225_repository_capabilities.sql
     static/migrations/0226_repository_configuration_sync.sql
     static/migrations/0227_repository_sync_local_baseline.sql
@@ -737,6 +738,7 @@ test-suite integration-tests
       CLI.Harness
       Data.Effectful.HasqlGuardSpec
       EndpointDiscoverySpec
+      ErrorFingerprintStabilitySpec
       EvalConformanceSpec
       ExtractionWorkerSpec
       FacetsSpec
@@ -1051,6 +1053,7 @@ test-suite test-dev
       CLI.Harness
       Data.Effectful.HasqlGuardSpec
       EndpointDiscoverySpec
+      ErrorFingerprintStabilitySpec
       EvalConformanceSpec
       ExtractionWorkerSpec
       FacetsSpec

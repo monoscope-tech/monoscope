@@ -4,9 +4,9 @@
 module Pkg.DeriveUtils (
   module Pkg.Deriving,
   AesonText (..),
+  SnakeJSON (..),
   BaselineState (..),
   DB,
-  PGTextArray (..),
   UUIDId (..),
   WrappedEnum (..),
   WrappedEnumShow (..),
@@ -27,6 +27,7 @@ module Pkg.DeriveUtils (
   mkHasqlPool,
   mkHasqlPoolWithIdleTimeout,
   rawSql,
+  SqlEnum (..),
   selectFrom,
   -- Text-backed enum helpers, for types whose stored spelling is not the snake-cased
   -- constructor (see 'Pkg.Git.GitHost') and so cannot use 'WrappedEnumSC'.
@@ -47,8 +48,9 @@ import Data.Digest.XXHash (xxHash)
 import Data.Effectful.Hasql (Hasql)
 import Data.HashMap.Strict qualified as HM
 import Data.IntMap qualified as IntMap
-import Data.OpenApi (ToParamSchema (..), ToSchema (..))
+import Data.OpenApi (ToParamSchema, ToSchema (..))
 import Data.Text qualified as T
+import Data.Text.Display (Display)
 import Data.Time (DiffTime, UTCTime, ZonedTime, utc, utcToZonedTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -61,6 +63,7 @@ import Database.PostgreSQL.Simple.Internal qualified as PGI
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (ToField (..))
 import Database.PostgreSQL.Simple.Types (Query (..))
+import Deriving.Aeson.Stock qualified as DAE
 import Effectful (type (:>))
 import GHC.Records (HasField (getField))
 import GHC.TypeLits (KnownSymbol, Symbol, symbolVal)
@@ -123,22 +126,27 @@ unAesonTextMaybe :: Maybe (AesonText a) -> Maybe a
 unAesonTextMaybe = fmap unAesonText
 
 
--- | Newtype wrapper for PostgreSQL text arrays (TEXT[])
-newtype PGTextArray = PGTextArray (V.Vector Text)
-  deriving (Eq, Generic, Show)
-  deriving newtype (FromField, NFData, ToField)
-
-
 -- | Generic UUID-based ID type with phantom type parameter for type safety
 -- Usage: type ProjectId = UUIDId "project"
 newtype UUIDId (name :: Symbol) = UUIDId {unUUIDId :: UUID.UUID}
   deriving stock (Generic, Read, Show, TH.Lift)
-  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, Hashable, NFData, Ord, ToField)
+  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, Hashable, NFData, Ord, ToField, ToParamSchema, ToSchema)
   deriving anyclass (FromRow, HI.DecodeRow, ToRow)
 
 
-instance KnownSymbol name => ToSchema (UUIDId name) where declareNamedSchema _ = declareNamedSchema (Proxy @UUID.UUID)
-instance ToParamSchema (UUIDId name) where toParamSchema _ = toParamSchema (Proxy @UUID.UUID)
+-- | DerivingVia wrapper: snake_case JSON ('DAE.Snake') plus the OpenAPI schema of
+-- @schema a@ — @via SnakeJSON SnakeSchema T@, or @via SnakeJSON JsonValueSchema T@
+-- for types whose subtrees have no 'ToSchema'. DB-free: belongs in 'Pkg.Deriving' once the
+-- watchers next rebuild the shared package, so shared types can use it too.
+newtype SnakeJSON (schema :: Type -> Type) a = SnakeJSON a
+
+
+deriving via DAE.Snake a instance AE.ToJSON (DAE.Snake a) => AE.ToJSON (SnakeJSON schema a)
+deriving via DAE.Snake a instance AE.FromJSON (DAE.Snake a) => AE.FromJSON (SnakeJSON schema a)
+
+
+instance (ToSchema (schema a), Typeable a, Typeable schema) => ToSchema (SnakeJSON schema a) where
+  declareNamedSchema _ = declareNamedSchema (Proxy @(schema a))
 
 
 -- Case-insensitive text is documented as plain text; lives here so every model
@@ -261,10 +269,14 @@ instance Read a => HI.DecodeValue (WrappedEnumShow a) where
   decodeValue = refineText "WrappedEnumShow" (fmap WrappedEnumShow . readMaybe . toString)
 
 
+instance Read a => FromHttpApiData (WrappedEnumShow a) where
+  parseUrlPiece t = maybeToRight ("Invalid value: " <> t) $ WrappedEnumShow <$> readMaybe (toString t)
+
+
 data BaselineState = BSLearning | BSEstablished
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (Default, NFData)
-  deriving (AE.FromJSON, AE.ToJSON, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "BS" BaselineState
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, SqlEnum, ToField) via WrappedEnumSC 'Nothing "BS" BaselineState
 
 
 -- | Append libpq connection parameters, handling both URI
@@ -310,8 +322,7 @@ addKeepaliveParams =
 connectPostgreSQL :: ByteString -> IO Connection
 connectPostgreSQL connstr = do
   conn <- PGI.connectdb connstr
-  stat <- PQ.status conn
-  case stat of
+  PQ.status conn >>= \case
     PQ.ConnectionOk -> do
       connectionHandle <- newMVar conn
       connectionObjects <- newMVar IntMap.empty
@@ -557,6 +568,17 @@ mkHasqlPoolWithIdleTimeout idleTimeout sz cstr =
 -- Use only for column/table names and other trusted fragments, never user input.
 rawSql :: Text -> HI.Sql
 rawSql = fromString . toString
+
+
+-- | An enum's stored spelling as an inline SQL string literal, so the query text keeps
+-- the literal a partial index predicate matches (a bound parameter would not). Only
+-- 'WrappedEnumSC' provides it, so free text can never be spliced unescaped.
+class SqlEnum a where
+  enumLit :: a -> HI.Sql
+
+
+instance (KnownSymbol prefix, Show a) => SqlEnum (WrappedEnumSC qualType prefix a) where
+  enumLit (WrappedEnumSC a) = rawSql $ "'" <> toText (encodeEnumSC @prefix a) <> "'"
 
 
 -- | Convert pg-entity's @_select \@Entity@ to an @HI.Sql@ fragment.

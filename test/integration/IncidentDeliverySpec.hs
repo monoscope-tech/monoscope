@@ -147,10 +147,10 @@ spec = around withTestResources do
         pure created
       nextIssue.id `shouldNotBe` issue.id
       now <- getTestTime tr.trTestClock
-      runTestBgNoReset tr (I.recordIncidentEvent initial{I.projectId = UUIDId $ UUID.fromWords 0 0 0 999}) `shouldReturn` I.UnknownIncidentSource
-      runTestBgNoReset tr (I.recordIncidentEvent initial{I.issueId = Nothing}) `shouldReturn` I.IncidentIssueMismatch
+      runTestBgNoReset tr (I.recordIncidentEvent initial{I.projectId = UUIDId $ UUID.fromWords 0 0 0 999}) `shouldReturn` I.Rejected I.UnknownIncidentSource
+      runTestBgNoReset tr (I.recordIncidentEvent initial{I.issueId = Nothing}) `shouldReturn` I.Rejected I.IncidentIssueMismatch
       void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE apis.issues SET target_hash = 'another-error' WHERE id = ?|] (PGS.Only nextIssue.id)
-      runTestBgNoReset tr (I.recordIncidentEvent initial{I.issueId = Just nextIssue.id, I.observedAt = now}) `shouldReturn` I.IncidentIssueMismatch
+      runTestBgNoReset tr (I.recordIncidentEvent initial{I.issueId = Just nextIssue.id, I.observedAt = now}) `shouldReturn` I.Rejected I.IncidentIssueMismatch
       void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE apis.issues SET target_hash = ? WHERE id = ?|] (sample.hash, nextIssue.id)
       I.Recorded ongoing _ <- runTestBgNoReset tr $ I.recordIncidentEvent initial{I.issueId = Just nextIssue.id, I.observedAt = now, I.change = I.IncidentReminder}
       (ongoing.id, ongoing.issueId) `shouldBe` (episode.id, Just issue.id)
@@ -168,7 +168,7 @@ spec = around withTestResources do
       roots <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT channel_id FROM apis.slack_incident_roots WHERE episode_id = ? ORDER BY channel_id|] (PGS.Only episode.id)
       roots `shouldBe` [PGS.Only ("C1" :: Text), PGS.Only "C2"]
       closedAt <- getTestTime tr.trTestClock
-      runTestBgNoReset tr (I.recordIncidentEvent initial{I.observedAt = addUTCTime 1 closedAt}) `shouldReturn` I.InactiveIncidentSource
+      runTestBgNoReset tr (I.recordIncidentEvent initial{I.observedAt = addUTCTime 1 closedAt}) `shouldReturn` I.Rejected I.InactiveIncidentSource
       runTestBgNoReset tr (I.recordIncidentEvent initial) `shouldReturn` I.AlreadyRecorded episode.id firstEvent
       advanceMinutes tr 1
       againAt <- getTestTime tr.trTestClock
@@ -176,7 +176,7 @@ spec = around withTestResources do
       void $ runTestBgNoReset tr $ Errors.batchUpsertErrorPatterns testPid [sample{Errors.when = againAt}, canonicalSample] againAt
       Just canonical <- runTestBgNoReset tr $ Errors.getErrorPatternByHash testPid canonicalSample.hash
       void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE apis.error_patterns SET canonical_id = ? WHERE id = ?|] (canonical.id, err.id)
-      runTestBgNoReset tr (I.recordIncidentEvent initial{I.observedAt = againAt}) `shouldReturn` I.InactiveIncidentSource
+      runTestBgNoReset tr (I.recordIncidentEvent initial{I.observedAt = againAt}) `shouldReturn` I.Rejected I.InactiveIncidentSource
       void $ withResource tr.trPool \conn -> PGS.execute conn [sql|UPDATE apis.error_patterns SET canonical_id = NULL WHERE id = ?|] (PGS.Only err.id)
       I.Recorded recurring _ <- runTestBgNoReset tr $ I.recordIncidentEvent initial{I.issueId = Just nextIssue.id, I.observedAt = againAt, I.rootPayload = payload nextIssue.id}
       recurring.id `shouldNotBe` episode.id
@@ -401,7 +401,7 @@ spec = around withTestResources do
       Just unchanged <- runTestBgNoReset tr $ Monitors.queryMonitorById mid
       (unchanged.currentStatus, unchanged.notificationCount, unchanged.lastEvaluated) `shouldBe` (Monitors.MSNormal, 0, Nothing)
       runTestBgNoReset tr (Monitors.getEvaluations testPid mid frozenTime frozenTime) `shouldReturn` []
-      counts <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT count(*) FROM apis.issues WHERE project_id = ? AND target_hash = ?|] (testPid, show @Text mid)
+      counts <- withResource tr.trPool \conn -> PGS.query conn [sql|SELECT count(*) FROM apis.issues WHERE project_id = ? AND target_hash = ?|] (testPid, Monitors.queryAlertKey mid)
       (counts :: [PGS.Only Int64]) `shouldBe` [PGS.Only 0]
       void $ withResource tr.trPool \conn -> PGS.execute_ conn [sql|ALTER TABLE apis.slack_incident_deliveries DROP CONSTRAINT reject_test_delivery|]
       runTestBgNoReset tr $ evaluateQueryMonitorValue unchanged frozenTime 84
@@ -495,10 +495,10 @@ spec = around withTestResources do
       let run :: ATBackgroundCtx a -> IO a
           run = runTestBgNoReset tr
           now = update.observedAt
-      run (I.recordIncidentEvent update{I.projectId = UUIDId $ UUID.fromWords 0 0 0 999}) `shouldReturn` I.UnknownIncidentSource
+      run (I.recordIncidentEvent update{I.projectId = UUIDId $ UUID.fromWords 0 0 0 999}) `shouldReturn` I.Rejected I.UnknownIncidentSource
       run (I.recordIncidentEvent update{I.change = I.IncidentRecovered}) `shouldReturn` I.NoOpenEpisode
       I.Recorded episode _ <- run $ I.recordIncidentEvent update{I.destinations = [I.SlackDestination "T1" "C1"]}
-      run (I.recordIncidentEvent update{I.observedAt = addUTCTime (-1) now, I.change = I.IncidentRecovered}) `shouldReturn` I.OlderThanCurrentEpisode
+      run (I.recordIncidentEvent update{I.observedAt = addUTCTime (-1) now, I.change = I.IncidentRecovered}) `shouldReturn` I.Rejected I.OlderThanCurrentEpisode
       [root] <- run $ I.claimSlackDeliveries now
       run (I.finishSlackDelivery now root I.WebhookAccepted) `shouldReturn` True
       void $ run $ I.recordIncidentEvent update{I.observedAt = addUTCTime 60 now, I.change = I.IncidentRecovered, I.destinations = [I.SlackDestination "T1" "C1"]}
@@ -514,7 +514,7 @@ spec = around withTestResources do
       setupSlackData tr testPid "T1"
       let issueRows :: IO [(Issues.IssueId, Maybe UTCTime, Maybe UTCTime)]
           issueRows = withResource tr.trPool \conn ->
-            PGS.query conn [sql|SELECT id, acknowledged_until, archived_at FROM apis.issues WHERE project_id = ? AND target_hash = ?|] (testPid, show @Text mid)
+            PGS.query conn [sql|SELECT id, acknowledged_until, archived_at FROM apis.issues WHERE project_id = ? AND target_hash = ?|] (testPid, Monitors.queryAlertKey mid)
       void $ evaluateMonitor tr mid 84
       [(firstIssue, _, _)] <- issueRows
       -- Archived, then firing again: the same row comes back rather than a second one.
@@ -546,7 +546,7 @@ spec = around withTestResources do
       setupSlackData tr testPid "T1"
       let affected :: IO [PGS.Only Int64]
           affected = withResource tr.trPool \conn ->
-            PGS.query conn [sql|SELECT affected_requests FROM apis.issues WHERE project_id = ? AND target_hash = ?|] (testPid, show @Text mid)
+            PGS.query conn [sql|SELECT affected_requests FROM apis.issues WHERE project_id = ? AND target_hash = ?|] (testPid, Monitors.queryAlertKey mid)
       void $ evaluateMonitor tr mid 84
       firstCount <- affected
       -- Three more ticks, all still alerting: the status never changes, so none
@@ -561,7 +561,7 @@ spec = around withTestResources do
     it "refuses to open an episode with no issue behind it" \tr -> do
       update <- setup tr
       setupSlackData tr testPid "T1"
-      runTestBgNoReset tr (I.recordIncidentEvent update) `shouldReturn` I.EpisodeWithoutIssue
+      runTestBgNoReset tr (I.recordIncidentEvent update) `shouldReturn` I.Rejected I.EpisodeWithoutIssue
       episodes <- withResource tr.trPool \conn ->
         PGS.query conn [sql|SELECT count(*) FROM apis.incident_episodes WHERE project_id = ? AND source_id = ?|] (testPid, case update.source of I.MonitorIncident m -> m; _ -> error "monitor source")
       (episodes :: [PGS.Only Int64]) `shouldBe` [PGS.Only 0]
@@ -765,7 +765,7 @@ setupWithIssue tr = do
   update <- setup tr
   I.MonitorIncident mid <- pure update.source
   issue <- runTestBgNoReset tr do
-    created <- Issues.createQueryAlertIssue testPid (show mid) "Measured threshold exceeded" "" 60 84 Issues.Above
+    created <- Issues.createQueryAlertIssue testPid (Monitors.queryAlertKey mid) "Measured threshold exceeded" "" 60 84 Issues.Above
     Issues.insertIssue created
     pure created
   pure (update{I.issueId = Just issue.id} :: I.IncidentUpdate)

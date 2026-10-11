@@ -1,4 +1,4 @@
-module Models.Projects.DashboardTemplates (getDashboardTemplates, loadDashboardFromVM) where
+module Models.Projects.DashboardTemplates (getDashboardTemplates, loadDashboardFromVM, dashboardTemplatesCompiled) where
 
 import Effectful (Eff, IOE, type (:>))
 import Models.Projects.Dashboards qualified as Dashboards

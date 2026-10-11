@@ -784,8 +784,6 @@ declare global {
     formatBytes: (num: number | null | undefined) => string;
     convertToNanoseconds: (value: number, unit: string) => number;
     formatDuration: (ns: number) => string;
-    setVariable: (key: string, value: string) => void;
-    getVariable: (key: string) => string;
     // Installed by the dashboard page; supplies the dashboard's constant substitutions.
     getDashboardConstants?: (el?: Element | null) => Record<string, string>;
   }
@@ -1237,35 +1235,6 @@ function bindFunctionsToObjects(rootObj: any, obj: any) {
 
   return obj;
 }
-
-// Global delegated click handler for table rows with on_row_click
-document.addEventListener('click', (e) => {
-  const tr = (e.target as HTMLElement).closest('tr[data-row]') as HTMLElement | null;
-  if (!tr) return;
-  const table = tr.closest('table[data-on-row-click]') as HTMLElement | null;
-  if (!table) return;
-  try {
-    const onRowClick = JSON.parse(table.dataset.onRowClick!);
-    const rowData = JSON.parse(tr.dataset.row!);
-    const varName = onRowClick.set_variable;
-    const value = onRowClick.value
-      ? onRowClick.value.replace(/\{\{row\.(\w+)\}\}/g, (_: string, field: string) => rowData[field])
-      : Object.values(rowData)[0] as string;
-    if (onRowClick.navigate_to_tab) {
-      const tabs = document.querySelectorAll('#dashboard-tabs-container [role="tab"]') as NodeListOf<HTMLAnchorElement>;
-      for (const tab of tabs) {
-        // Match by slug in href path (e.g. /tab/databases) for robustness
-        if (tab.href?.includes('/tab/' + onRowClick.navigate_to_tab.toLowerCase().replace(/\s+/g, '-'))) {
-          const tabUrl = new URL(tab.href, window.location.origin);
-          if (varName) tabUrl.searchParams.set('var-' + varName, value);
-          window.location.href = tabUrl.pathname + tabUrl.search;
-          return;
-        }
-      }
-    }
-    if (varName) window.setVariable(varName, value);
-  } catch { /* ignore malformed data attributes */ }
-});
 
 // Create threshold markLines for ECharts (reads semantic colors from CSS tokens).
 // `unit` is the widget's, so a threshold prints the way its axis does — "Alert: 1.8s"

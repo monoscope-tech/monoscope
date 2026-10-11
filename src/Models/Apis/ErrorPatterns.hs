@@ -62,7 +62,7 @@ import Effectful (Eff)
 import Hasql.Interpolate qualified as HI
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (BaselineState (..), DB, WrappedEnumSC (..), selectFrom)
+import Pkg.DeriveUtils (BaselineState (..), DB, WrappedEnumSC (..), enumLit, selectFrom)
 import Relude hiding (id)
 import Utils (truncateHour)
 
@@ -481,7 +481,7 @@ bulkCalculateAndUpdateBaselines pid now =
         baseline_error_rate_mean = s.median_val,
         baseline_error_rate_stddev = COALESCE(m.mad_scaled, 0),
         baseline_samples = s.total_hours::BIGINT,
-        baseline_state = CASE WHEN s.total_hours >= 24 THEN 'established' ELSE 'learning' END,
+        baseline_state = CASE WHEN s.total_hours >= 24 THEN ^{enumLit BSEstablished} ELSE ^{enumLit BSLearning} END,
         baseline_updated_at = #{now}
       FROM stats s LEFT JOIN mad m ON m.error_id = s.error_id
       WHERE apis.error_patterns.id = s.error_id AND apis.error_patterns.project_id = #{pid}
@@ -570,13 +570,14 @@ batchUpsertErrorPatterns pid errors now =
                  u.environment, u.service, u.runtime, u.error_data, u.release, u.release, CASE WHEN u.release IS NOT NULL THEN u.event_at END, CASE WHEN u.release IS NOT NULL THEN u.event_at END,
                  u.trace_id, CASE WHEN u.trace_id IS NOT NULL THEN u.event_at END,
                  u.trace_id, CASE WHEN u.trace_id IS NOT NULL THEN u.event_at END, u.event_at, u.cnt, u.cnt, u.cnt, u.cnt
-          FROM (SELECT unnest(#{errorTypes}::text[]) AS error_type, unnest(#{messages}::text[]) AS message,
-                       unnest(#{stacktraces}::text[]) AS stacktrace, unnest(#{hashes}::text[]) AS hash,
-                       unnest(#{parentHashes}::text[]) AS parent_hash, unnest(#{shapeHashes}::text[]) AS shape_hash,
-                       unnest(#{isFrameworks}::bool[]) AS is_framework,
-                       unnest(#{environments}::text[]) AS environment, unnest(#{services}::text[]) AS service,
-                       unnest(#{runtimes}::text[]) AS runtime, unnest(#{errorDatas}::jsonb[]) AS error_data, unnest(#{releases}::text[]) AS release,
-                       unnest(#{traceIds}::text[]) AS trace_id, unnest(#{eventTimes}::timestamptz[]) AS event_at, unnest(#{counts}::bigint[]) AS cnt) u
+          FROM (SELECT unnest(#{V.map (.errorType) errs}::text[]) AS error_type, unnest(#{V.map (.message) errs}::text[]) AS message,
+                       unnest(#{V.map (.stackTrace) errs}::text[]) AS stacktrace, unnest(#{V.map (.hash) errs}::text[]) AS hash,
+                       unnest(#{V.map (.parentHash) errs}::text[]) AS parent_hash, unnest(#{V.map (.shapeHash) errs}::text[]) AS shape_hash,
+                       unnest(#{V.map (.isFramework) errs}::bool[]) AS is_framework,
+                       unnest(#{V.map (.environment) errs}::text[]) AS environment, unnest(#{V.map (.serviceName) errs}::text[]) AS service,
+                       unnest(#{V.map (.runtime) errs}::text[]) AS runtime, unnest(#{V.map HI.AsJsonb errs}::jsonb[]) AS error_data,
+                       unnest(#{V.map (.release) errs}::text[]) AS release, unnest(#{traceIds}::text[]) AS trace_id,
+                       unnest(#{V.map (.when) errs}::timestamptz[]) AS event_at, unnest(#{counts}::bigint[]) AS cnt) u
           ON CONFLICT (project_id, hash) DO UPDATE SET
             updated_at = #{now},
             last_event_at = GREATEST(apis.error_patterns.last_event_at, EXCLUDED.last_event_at),
@@ -642,22 +643,9 @@ batchUpsertErrorPatterns pid errors now =
     -- The bang keeps the running count forced: a hot hash otherwise accumulates one thunk per occurrence.
     (errs, counts) =
       V.unzip $ V.fromList $ HM.elems $ HM.fromListWith (\(a, n) (b, !k) -> (bool b a (a.when >= b.when), n + k)) [(e.hash, (e, 1 :: Int)) | e <- V.toList errors]
-    errorTypes = V.map (.errorType) errs
-    messages = V.map (.message) errs
-    stacktraces = V.map (.stackTrace) errs
-    hashes = V.map (.hash) errs
-    parentHashes = V.map (.parentHash) errs
-    shapeHashes = V.map (.shapeHash) errs
-    isFrameworks = V.map (.isFramework) errs
-    environments = V.map (.environment) errs
-    services = V.map (.serviceName) errs
-    runtimes = V.map (.runtime) errs
-    errorDatas = V.map HI.AsJsonb errs
     -- '' would persist and pass every Maybe check downstream, sending the issue
     -- page off to fetch "trace ''" — every trace-less row in the window.
     traceIds = V.map (mfilter (not . T.null) . (.traceId)) errs
-    eventTimes = V.map (.when) errs
-    releases = V.map (.release) errs
     -- A resolved pattern regresses on its next occurrence, unless it was resolved "in
     -- next release" and the occurrence still reports that release.
     newerRelease = [HI.sql| EXCLUDED.last_release IS NOT NULL AND (apis.error_patterns.last_release_at IS NULL OR EXCLUDED.last_release_at >= apis.error_patterns.last_release_at) |]

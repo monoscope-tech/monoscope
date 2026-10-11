@@ -31,7 +31,6 @@ import Data.Cache qualified as Cache
 import Data.Default (def)
 import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq qualified as W
-import Data.Pool (withResource)
 import Data.Text qualified as T
 import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static (ask)
@@ -45,10 +44,9 @@ import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Network.HTTP.Types (urlEncode)
-import OddJobs.Job (createJob)
 import OpenTelemetry.Attributes qualified as Otel
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, mkPageCtx)
-import Pages.Components (FieldCfg (..), FieldSize (..), colorChip_, connectionBadge_, copyButton_, formField_, formSelectField_, headerRow_, sectionLabel_)
+import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), colorChip_, connectionBadge_, copyButton_, copyField_, disclosure_, formField_, formSelectField_, headerRow_, sectionLabel_)
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Git qualified as Git
 import Pkg.Metrics qualified as Metrics
@@ -108,8 +106,7 @@ gitWebhookPostH host req = case Git.parseWebhookRepo host req.body of
         when (Git.isPushEvent host req.event && Git.webhookTargetsBranch host sync.branch req.body) do
           ctx <- ask @Config.AuthContext
           whenJust (Git.parseWebhookRevision host req.body) $ void . GitSync.setAnnouncedRevision sync.id
-          liftIO $ withResource ctx.jobsPool \conn ->
-            void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncRepository sync.projectId sync.id
+          BackgroundJobs.enqueueJobs ctx [BackgroundJobs.GitSyncRepository sync.projectId sync.id]
           Log.logTrace "Triggered git sync from webhook" (sync.projectId, Git.hostSlug host, fullName)
         pure $ Right ()
     pure $ case partitionEithers outcomes of
@@ -178,8 +175,7 @@ saveGitSyncH pid existingM form = do
         -- An empty token box means "keep the stored one", not "clear it".
         Just existing -> GitSync.updateGitHubSync encKey existing.id form.owner form.repo branch (guarded (not . T.null) form.accessToken) form.pathPrefix
       whenJust syncM \sync -> do
-        when (maybe True (not . (.syncEnabled)) existingM) $ liftIO $ withResource ctx.jobsPool \conn ->
-          void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncRepository pid sync.id
+        when (maybe True (not . (.syncEnabled)) existingM) $ BackgroundJobs.enqueueJobs ctx [BackgroundJobs.GitSyncRepository pid sync.id]
         unless (T.null form.accessToken)
           $ void
           $ GitSync.upsertGitHubCredential encKey pid sync.host sync.apiBase sync.owner Nothing (Just form.accessToken)
@@ -229,7 +225,7 @@ gitSyncRepositoryRetryH pid sid = do
             then pure $ Just $ BackgroundJobs.GitSyncPushDashboard pid did.unUUIDId
             else addErrorToast "Dashboard unavailable" (Just "This dashboard no longer belongs to this repository.") $> Nothing
       whenJust job \retry -> do
-        liftIO $ withResource ctx.jobsPool \conn -> void $ createJob conn "background_jobs" retry
+        BackgroundJobs.enqueueJobs ctx [retry]
         addSuccessToast "Retry queued" (Just "The error stays visible until this operation succeeds.")
     else addErrorToast "Sync is paused" (Just "Enable sync before retrying.")
   addRespHeaders $ gitSyncSettingsView ctx.env.hostUrl pid (Just sync)
@@ -244,10 +240,7 @@ gitSyncRepositoryPauseH pid sid = do
 
 
 requireGitWrite :: Projects.ProjectId -> ATAuthCtx ()
-requireGitWrite pid = do
-  (session, _) <- Projects.sessionAndProject pid
-  permission <- ProjectMembers.getUserPermission pid session.user.id
-  unless (maybe False (>= ProjectMembers.PEdit) permission) $ throwError err403
+requireGitWrite = void . ProjectMembers.sessionAndProjectAtLeast ProjectMembers.PEdit
 
 
 gitSyncSettingsView :: Text -> Projects.ProjectId -> Maybe GitSync.GitHubSync -> Html ()
@@ -258,20 +251,13 @@ gitSyncSettingsViewWithError :: Maybe Text -> Text -> Projects.ProjectId -> Mayb
 gitSyncSettingsViewWithError failure hostUrl pid syncM =
   div_ [id_ targetId, class_ "space-y-6"] do
     whenJust failure $ p_ [role_ "alert", class_ "text-sm text-textWarning"] . toHtml
-    maybe notConnectedView (\sync -> connectedView sync (webhookUrlFor sync.host)) syncM
+    maybe notConnectedView connectedView syncM
   where
     baseUrl = "/p/" <> pid.toText <> "/settings/git-sync"
     actionUrl = baseUrl <> maybe "" (\s -> "/" <> s.id.toText) syncM
     targetId = "git-sync-" <> maybe "new" (.id.toText) syncM
-    -- GitHub keeps the original path so hooks configured before this change keep working; every
-    -- other host gets the per-host route, which tells the handler whose signature scheme to check.
-    webhookUrlFor :: Git.GitHost -> Text
-    webhookUrlFor = \case
-      Git.GitHub -> hostUrl <> "webhook/github"
-      h -> hostUrl <> "webhook/git/" <> Git.hostSlug h
     notConnectedView :: Html ()
     notConnectedView = do
-      -- GitHub App (primary)
       div_ [class_ "space-y-3"] do
         p_ [class_ "text-sm text-textWeak"] "Install the GitHub App to sync dashboards with your repository. Webhooks are configured automatically."
         a_ [href_ (baseUrl <> "/install"), class_ "btn btn-sm btn-primary gap-2"] do
@@ -281,11 +267,8 @@ gitSyncSettingsViewWithError failure hostUrl pid syncM =
       -- Token connection: the only option on GitLab, Gitea and Bitbucket, and still available on
       -- GitHub for anyone who cannot install an App.
       div_ [class_ "pt-6 border-t border-strokeWeak"] do
-        details_ [class_ "group/host"] do
-          summary_ [class_ "text-xs font-medium text-textWeak cursor-pointer list-none flex items-center gap-1.5 hover:text-textStrong"] do
-            faSprite_ "chevron-right" "solid" "w-3 h-3 transition-transform group-open/host:rotate-90"
-            toHtml $ "Or connect " <> T.intercalate ", " (map Git.hostLabel universe) <> " with a token"
-          form_ [class_ "pt-4 space-y-3", hxPost_ actionUrl, hxSwap_ "outerMorph", hxTarget_ ("#" <> targetId), hxIndicator_ ("#" <> targetId <> "-indicator")] do
+        disclosure_ [] "text-xs font-medium text-textWeak hover:text-textStrong" (toHtml $ "Or connect " <> T.intercalate ", " (map Git.hostLabel universe) <> " with a token")
+          $ form_ [class_ "pt-4 space-y-3", hxPost_ actionUrl, hxSwap_ "outerMorph", hxTarget_ ("#" <> targetId), hxIndicator_ ("#" <> targetId <> "-indicator")] do
             div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2"] do
               -- Picking a host rewrites the token label and shows the server-URL field only for
               -- the hosts that can have one, so nobody is asked for a Bitbucket server address.
@@ -311,7 +294,7 @@ gitSyncSettingsViewWithError failure hostUrl pid syncM =
                 Nothing
               formField_ FieldSm def{placeholder = "acme-corp"} "Repository owner" "owner" True Nothing
               formField_ FieldSm def{placeholder = "observability-config"} "Repository name" "repo" True Nothing
-              formField_ FieldSm def{id = Just (targetId <> "-branch"), placeholder = "leave blank to detect"} "Branch" "branch" False Nothing
+              formField_ FieldSm def{inputId = Just (targetId <> "-branch"), placeholder = "leave blank to detect"} "Branch" "branch" False Nothing
               formField_
                 FieldSm
                 def
@@ -336,18 +319,21 @@ gitSyncSettingsViewWithError failure hostUrl pid syncM =
               "Connect with token"
               htmxIndicator_ (targetId <> "-indicator") LdXS
 
-    connectedView :: GitSync.GitHubSync -> Text -> Html ()
-    connectedView sync webhookUrl = do
+    connectedView :: GitSync.GitHubSync -> Html ()
+    connectedView sync = do
       let isViaApp = isJust sync.installationId
+          -- GitHub keeps the original path so hooks configured before this change keep working; every
+          -- other host gets the per-host route, which tells the handler whose signature scheme to check.
+          webhookUrl = hostUrl <> bool ("webhook/git/" <> Git.hostSlug sync.host) "webhook/github" (sync.host == Git.GitHub)
       headerRow_ [class_ "flex-wrap gap-3"] do
         div_ [class_ "min-w-0 flex-1 space-y-1"] do
           p_ [class_ "flex items-start gap-2 text-sm font-medium text-textStrong"] do
             faSprite_ "code-branch" "regular" "mt-0.5 w-3.5 h-3.5 shrink-0 text-iconNeutral"
             span_ [class_ "break-all"] $ toHtml $ sync.owner <> "/" <> sync.repo
-          p_ [class_ "text-xs text-textWeak break-words"] $ toHtml $ Git.hostLabel sync.host <> " · " <> sync.branch <> " · " <> (if isViaApp then "GitHub App" else "Token account")
+          p_ [class_ "text-xs text-textWeak break-words"] $ toHtml $ Git.hostLabel sync.host <> " · " <> sync.branch <> " · " <> bool "Token account" "GitHub App" isViaApp
         if not sync.syncEnabled
-          then colorChip_ "" "circle-pause" "Paused"
-          else if isJust sync.lastError then colorChip_ "text-textError bg-fillError-weak" "circle-exclamation" "Sync failed" else connectionBadge_ True
+          then colorChip_ NeutralBadge "circle-pause" "Paused"
+          else if isJust sync.lastError then colorChip_ ErrorBadge "circle-exclamation" "Sync failed" else connectionBadge_ True
       unless sync.syncEnabled $ p_ [class_ "text-sm text-textWeak"] "Sync is paused. Existing dashboards and monitors remain available."
       whenJust sync.lastError \err -> div_ [class_ "space-y-2"] do
         p_ [role_ "status", class_ "text-sm text-textError break-words"] $ toHtml err.message
@@ -359,35 +345,30 @@ gitSyncSettingsViewWithError failure hostUrl pid syncM =
           toHtml @Text $ case err.operation of GitSync.ImportDashboards -> "Retry import"; GitSync.ExportDashboard _ -> "Retry export"; GitSync.ExportDashboards -> "Retry export"
           htmxIndicator_ (targetId <> "-retry-indicator") LdXS
 
-      -- Repository settings
       form_ [class_ "space-y-4", hxPost_ actionUrl, hxSwap_ "outerMorph", hxTarget_ ("#" <> targetId), hxIndicator_ ("#" <> targetId <> "-indicator")] do
         -- An App installation knows which repositories it reaches, so changing one is picking from
         -- that list; a PAT's scope cannot be enumerated, so those keep the text boxes.
         if isViaApp
           then div_ [class_ "flex flex-wrap items-end gap-3"] do
-            formField_ FieldSm def{id = Just (targetId <> "-branch"), value = sync.branch, placeholder = "main"} "Branch" "branch" True Nothing
+            formField_ FieldSm def{inputId = Just (targetId <> "-branch"), value = sync.branch, placeholder = "main"} "Branch" "branch" True Nothing
             input_ [type_ "hidden", name_ "owner", value_ sync.owner]
             input_ [type_ "hidden", name_ "repo", value_ sync.repo]
             input_ [type_ "hidden", name_ "accessToken", value_ ""]
           else div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2"] do
             input_ [type_ "hidden", name_ "owner", value_ sync.owner]
             input_ [type_ "hidden", name_ "repo", value_ sync.repo]
-            formField_ FieldSm def{id = Just (targetId <> "-branch"), value = sync.branch, placeholder = "main"} "Branch" "branch" True Nothing
-            formField_ FieldSm def{id = Just (targetId <> "-accessToken"), inputType = "password", placeholder = "Leave empty to keep current"} "Access Token" "accessToken" False Nothing
-        formField_ FieldSm def{id = Just (targetId <> "-pathPrefix"), value = sync.pathPrefix, placeholder = "monoscope"} "Folder in repo" "pathPrefix" False Nothing
+            formField_ FieldSm def{inputId = Just (targetId <> "-branch"), value = sync.branch, placeholder = "main"} "Branch" "branch" True Nothing
+            formField_ FieldSm def{inputId = Just (targetId <> "-accessToken"), inputType = "password", placeholder = "Leave empty to keep current"} "Access Token" "accessToken" False Nothing
+        formField_ FieldSm def{inputId = Just (targetId <> "-pathPrefix"), value = sync.pathPrefix, placeholder = "monoscope"} "Folder in repo" "pathPrefix" False Nothing
         p_ [class_ "text-xs text-textWeak"] do
           "Definitions stored in dashboards/ and monitors/ under "
           code_ [class_ "text-textBrand"] $ toHtml $ if T.null sync.pathPrefix then "repository root" else sync.pathPrefix <> "/"
 
-        -- Webhook URL
         div_ [class_ "pt-4 border-t border-strokeWeak space-y-2"] do
-          headerRow_ [] do
-            sectionLabel_ "Webhook URL"
-            copyButton_ "btn btn-xs btn-ghost gap-1" "w-3 h-3" "my @data-url" [term "data-url" webhookUrl]
-          div_ [class_ "bg-fillWeak rounded-lg px-3 py-1.5 font-mono text-xs text-textWeak break-all"] $ toHtml webhookUrl
+          sectionLabel_ "Webhook URL"
+          copyField_ (targetId <> "-webhook-url") webhookUrl
           unless isViaApp $ p_ [class_ "text-xs text-textWeak"] "Add this to your repository for automatic syncing."
 
-        -- Actions
         div_ [class_ "flex flex-wrap items-center gap-2 pt-2"] do
           button_ [class_ "btn btn-sm btn-primary gap-1", type_ "submit"] do
             if sync.syncEnabled then "Save" else "Resume sync"
@@ -456,8 +437,7 @@ queueGitSyncPush pid dashboardId = do
   dashboard <- Dashboards.getDashboardByProjectId pid dashboardId
   syncM <- maybe (pure Nothing) (GitSync.getGitSyncById pid) (dashboard >>= (.gitSyncId))
   whenJust syncM \sync -> when sync.syncEnabled do
-    liftIO $ withResource ctx.jobsPool \conn ->
-      void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncPushDashboard pid (unUUIDId dashboardId)
+    BackgroundJobs.enqueueJobs ctx [BackgroundJobs.GitSyncPushDashboard pid (unUUIDId dashboardId)]
     Log.logTrace "Queued git sync push for dashboard" (pid, dashboardId)
 
 
@@ -526,8 +506,7 @@ repositoryDashboardPostH pid rid form = do
       case result of
         Left err -> addRespHeaders page{content = page.content{setupError = Just err, form}}
         Right sync -> do
-          whenJust sync \connection -> liftIO $ withResource ctx.jobsPool \conn ->
-            void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncRepository pid connection.id
+          whenJust sync \connection -> BackgroundJobs.enqueueJobs ctx [BackgroundJobs.GitSyncRepository pid connection.id]
           fresh <- repositoryDashboardPage pid rid
           addRespHeaders $ if isJust fresh.content.sync then fresh else fresh{content = fresh.content{setupError = Just "This account is no longer available. Choose another account and try again.", form}}
 
@@ -555,7 +534,7 @@ instance ToHtml RepositoryDashboardGet where
           Just sync -> do
             toHtml $ gitSyncSettingsView page.hostUrl repository.projectId (Just sync)
             when (isNothing sync.installationId) $ whenJust sync.webhookSecret \secret -> div_ [class_ "space-y-2 border-t border-strokeWeak pt-4"] do
-              formField_ FieldSm def{id = Just "repository-webhook-secret", inputType = "password", value = secret, extraAttrs = [readonly_ "true"]} "Webhook secret" "webhookSecret" False Nothing
+              formField_ FieldSm def{inputId = Just "repository-webhook-secret", inputType = "password", value = secret, extraAttrs = [readonly_ "true"]} "Webhook secret" "webhookSecret" False Nothing
               toHtml $ copyButton_ "btn btn-xs btn-ghost gap-1" "w-3 h-3" "my @data-secret" [term "data-secret" secret]
               p_ [class_ "text-xs text-textWeak"] "Use this secret when adding the push webhook to your Git host."
           Nothing | null page.accounts -> do
@@ -608,7 +587,7 @@ instance ToHtml DashboardRepositoryGet where
         GitSync.FileOwnedByDashboard _ -> "Another dashboard already uses this file in the repository. Rename this dashboard or choose another folder before syncing."
       case dash.gitSyncId >>= \sid -> find ((== sid) . (.id)) page.repositories of
         Just repository -> div_ [class_ "rounded-xl border border-strokeWeak p-4 sm:p-5 space-y-3"] do
-          colorChip_ "text-textSuccess bg-fillSuccess-weak" "circle-check" "Repository assigned"
+          colorChip_ SuccessBadge "circle-check" "Repository assigned"
           p_ [class_ "font-medium text-sm text-textStrong break-all"] $ toHtml $ repository.owner <> "/" <> repository.repo
           p_ [class_ "text-xs text-textWeak break-all"] $ toHtml $ fromMaybe (Git.hostLabel repository.host) repository.apiBase <> " · " <> repository.branch
           whenJust dash.filePath $ p_ [class_ "font-mono text-xs text-textWeak break-all"] . toHtml . (GitSync.getDashboardsPath repository <>)
@@ -801,6 +780,5 @@ githubAppSelectRepoH pid form = do
           case find (\s -> s.host == Git.GitHub && isNothing s.apiBase && s.owner == ownerVal && s.repo == repoVal) syncs of
             Nothing -> GitSync.insertGitHubSync encKey pid Git.GitHub Nothing ownerVal repoVal branch creds (guarded (not . T.null) ctx.config.githubAppWebhookSecret) (fromMaybe "" form.pathPrefix)
             Just existing -> pure $ Just existing
-      liftIO $ withResource ctx.jobsPool \conn -> forM_ results \sync ->
-        void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncRepository pid sync.id
+      BackgroundJobs.enqueueJobs ctx $ map (BackgroundJobs.GitSyncRepository pid . (.id)) results
       addRespHeaders $ div_ [class_ "space-y-6"] $ forM_ results $ gitSyncSettingsView ctx.env.hostUrl pid . Just

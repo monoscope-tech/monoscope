@@ -428,7 +428,7 @@ spec = do
         map (\m -> (m.owner, m.repo, m.credentialId)) mappings `shouldBe` replicate 2 ("team", "checkout", account.id)
         remaining <- runQueryEffect tr $ GitSync.getGitSyncs testPid
         length remaining `shouldBe` 1
-        retained <- runQueryEffect tr $ Dashboards.selectDashboardsSortedBy testPid "title"
+        retained <- runQueryEffect tr $ Dashboards.selectDashboardsSortedBy testPid Dashboards.Asc Dashboards.DSTitle
         sort (map (.title) retained) `shouldBe` ["other", "team"]
         length (filter (isJust . (.gitSyncId)) retained) `shouldBe` 1
         mapMaybe (.gitSyncId) retained `shouldSatisfy` all (`elem` map (.id) syncs)
@@ -761,7 +761,7 @@ spec = do
         map (.service) mappings `shouldBe` [Just "https://git.example.com"]
         accounts <- runQueryEffect tr $ GitSync.getGitHubCredentials testPid
         length accounts `shouldBe` 2
-        dashboards <- runQueryEffect tr $ Dashboards.selectDashboardsSortedBy testPid "updated_at"
+        dashboards <- runQueryEffect tr $ Dashboards.selectDashboardsSortedBy testPid Dashboards.Desc Dashboards.DSUpdatedAt
         length dashboards `shouldBe` 2
         [(d.title, d.filePath, d.fileSha) | d <- dashboards, isNothing d.gitSyncId] `shouldBe` [("Local overview", Nothing, Nothing)]
         length (filter (isJust . (.gitSyncId)) dashboards) `shouldBe` 1
@@ -1137,7 +1137,7 @@ spec = do
                       then "{\"tree\":[{\"path\":\"dashboards/overview.yaml\",\"sha\":\"first-blob\",\"type\":\"blob\"}]}"
                       else AE.encode $ AE.object ["content" AE..= extractBase64 (B64.encodeBase64 (if pinned then "title: Original overview\nwidgets: []\n" else "title: Later overview\nwidgets: []\n"))]
         (requests, ()) <- runTestBgRecordingHTTP frozenTime tr $ transport $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.GitSyncRepository testPid sync.id)
-        dashboards <- runQueryEffect tr $ Dashboards.selectDashboardsSortedBy testPid "title"
+        dashboards <- runQueryEffect tr $ Dashboards.selectDashboardsSortedBy testPid Dashboards.Asc Dashboards.DSTitle
         map (\d -> (d.title, d.fileSha)) dashboards `shouldBe` [("Original overview", Just "first-blob")]
         map fst requests `shouldBe` map ("https://api.github.com/repos/team/dashboards" <>) ["/commits/main", "/git/trees/first-commit?recursive=1", "/contents/dashboards/overview.yaml?ref=first-commit"]
         Just completed <- runQueryEffect tr $ GitSync.getGitSyncById testPid sync.id
@@ -1170,7 +1170,7 @@ spec = do
           putMVar release ()
           void $ wait worker
         (_, ()) <- runTestBgRecordingHTTP frozenTime tr $ provider False $ BackgroundJobs.processBackgroundJob tr.trATCtx job
-        dashboards <- runQueryEffect tr $ Dashboards.selectDashboardsSortedBy testPid "title"
+        dashboards <- runQueryEffect tr $ Dashboards.selectDashboardsSortedBy testPid Dashboards.Asc Dashboards.DSTitle
         map (\d -> (d.title, d.gitSyncId)) dashboards `shouldMatchList` [("Imported overview", Just sync.id), ("Imported overview", Just other.id), ("Local overview", Just sync.id)]
         Just completed <- runQueryEffect tr $ GitSync.getGitSyncById testPid sync.id
         completed.lastRevision `shouldBe` Just "head"
@@ -1210,7 +1210,7 @@ spec = do
           \_ -> do
             advanceTestTime tr 181
             runQueryEffect tr (GitSync.removeRepository testPid repository.id) `shouldReturn` Right ()
-        dashboards <- runQueryEffect tr $ Dashboards.selectDashboardsSortedBy testPid "title"
+        dashboards <- runQueryEffect tr $ Dashboards.selectDashboardsSortedBy testPid Dashboards.Asc Dashboards.DSTitle
         map (\d -> (d.title, d.gitSyncId, d.filePath, d.fileSha)) dashboards `shouldMatchList` [("Imported overview", Nothing, Nothing, Nothing), ("Local overview", Nothing, Nothing, Nothing)]
         (requests, ()) <- runTestBgRecordingHTTP frozenTime tr $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.GitSyncRepository testPid sync.id)
         requests `shouldBe` []
@@ -1390,6 +1390,22 @@ spec = do
 
         (_, form) <- testServant tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsGetH testPid (Just "/srv/app/checkout.py")
         render form `shouldSatisfy` T.isInfixOf "sample=%2Fsrv%2Fapp%2Fcheckout.py"
+
+      -- Membership is checked per handler, not by the router, and these two never checked it:
+      -- any signed-in user could add or delete another project's mappings by its id.
+      it "codeMappings_nonMember_cannotMutate" \tr -> do
+        let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
+            form repo prefix = PageCodeContext.CodeMappingForm (Just repo) (Just "main") Nothing Nothing (Just prefix) (Just "") Nothing
+        victim <- createTestProject tr "victim"
+        let mappingIds = map (.id) <$> runQueryEffect tr (CodeContext.getCodeMappings victim)
+        _ <- runQueryEffect tr $ GitSync.insertGitHubSync encKey victim Git.GitHub Nothing "acme" "monoscope-config" "main" (GitSync.PersonalToken "ghp_test") Nothing ""
+        _ <- testServant tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsPostH victim (form "checkout-service" "/srv/app/")
+        seeded <- mappingIds
+        length seeded `shouldBe` 1
+
+        assertNonMemberDenied tr victim $ PageCodeContext.codeMappingsPostH victim (form "attacker-repo" "/evil/")
+        forM_ seeded $ assertNonMemberDenied tr victim . PageCodeContext.codeMappingsDeleteH victim
+        mappingIds >>= (`shouldBe` seeded)
 
     describe "Frame source endpoint (codeContextH)" do
       -- A project that never configured a mapping opens an error panel like anyone else. It

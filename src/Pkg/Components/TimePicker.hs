@@ -143,8 +143,7 @@ parseTimeRange now tp = case (nonEmptyT tp.since, nonEmptyT tp.from, nonEmptyT t
     (Nothing, Nothing) -> parseSince now defaultSince
     (f, t) -> (f, t, liftA2 (,) (fmtTime f) (fmtTime t))
   where
-    parseUTCTime :: Maybe Text -> Maybe UTCTime
-    parseUTCTime = iso8601ParseM . toString . fromMaybe ""
+    parseUTCTime = (>>= iso8601ParseM . toString)
     -- Browser Date parsing must retain the UTC instant in every viewer timezone.
     fmtTime = fmap formatUTC
 
@@ -159,10 +158,6 @@ timePickerItems :: [(Text, Text)]
 timePickerItems = map (second snd) sinceWindows
 
 
-timepickerRangeOnly_ :: Maybe Text -> Maybe (Text, Text) -> Maybe Text -> Html ()
-timepickerRangeOnly_ = timepickerWithStatus_ False
-
-
 data LiveDataMode = RefreshOnly | RowStreaming Bool
 
 
@@ -174,35 +169,38 @@ liveDataControls_ submitForm currentRange targetIdM liveDataMode =
   div_
     [ class_ "flex items-center gap-4 max-lg:gap-2"
     , data_ "live-data" ""
-    , data_ "live-mode" $ case liveDataMode of RefreshOnly -> "refresh-only"; RowStreaming _ -> "row-streaming"
+    , data_ "live-mode" liveMode
     , data_ "state" "paused"
     , [__|on change if event.target.matches('[data-row-stream-toggle]') call window.syncTimeTransports() end
           on "live-data-state-change" call window.syncTimeTransports()|]
     ]
     do
       div_ [class_ "flex items-center gap-2", data_ "header-time" ""] do
-        timepickerRangeOnly_ submitForm currentRange targetIdM
-        refreshButtonWithPopover_ popoverId (maybe "Refresh interval" (const "Live data settings") streamingSupport) liveDataPanel
+        timepicker_ submitForm currentRange targetPr
+        transport_
   where
     targetPr = fromMaybe "n" targetIdM
+    (liveMode, triggerLabel, panelLabel, announcement) = case liveDataMode of
+      RefreshOnly -> ("refresh-only", "Refresh interval", "Refresh interval", "Live updates")
+      RowStreaming supportsStreaming -> ("row-streaming", "Live data settings", "Live data controls", bool "Live updates" "Event stream paused" supportsStreaming)
     popoverId = targetPr <> "-live-data-pop"
     liveDataPanel =
       div_
         ( popoverPanel_ popoverId
             <> [ class_ "dropdown dropdown-end mt-2 w-72 rounded-xl border border-strokeWeak bg-bgRaised p-2 text-sm shadow-lg"
                , role_ "dialog"
-               , Aria.label_ $ maybe "Refresh interval" (const "Live data controls") streamingSupport
+               , Aria.label_ panelLabel
                ]
         )
         $ do
-          case streamingSupport of
-            Nothing -> do
+          case liveDataMode of
+            RefreshOnly -> do
               div_ [class_ "px-2 pb-2 pt-1"] do
                 div_ [class_ "font-semibold text-textStrong"] "Refresh interval"
                 p_ [class_ "mt-0.5 text-xs text-textWeak"] "Choose how often charts, counts, and the query refresh."
               div_ [class_ "grid grid-cols-2 gap-1", role_ "group", Aria.label_ "Refresh interval", data_ "refresh-interval-menu" ""]
                 $ forM_ refreshOptions refreshIntervalOption_
-            Just supportsStreaming -> do
+            RowStreaming supportsStreaming -> do
               div_ [class_ "px-2 pb-2 pt-1"] do
                 div_ [class_ "font-semibold text-textStrong"] "Live updates"
                 p_ [class_ "mt-0.5 text-xs text-textWeak"] "Choose how this view receives new data."
@@ -220,7 +218,7 @@ liveDataControls_ submitForm currentRange targetIdM liveDataMode =
                 label_ [class_ "block", Lucid.for_ $ targetPr <> "-live-refresh-interval"] do
                   div_ [class_ "font-medium text-textStrong"] "Refresh results"
                   span_ [class_ "text-xs text-textWeak"] "Re-run charts, counts, and the query."
-                refreshIntervalSelect_ targetPr
+                refreshIntervalSelect_
           span_
             [ class_ "sr-only"
             , data_ "live-data-announcer" ""
@@ -229,19 +227,63 @@ liveDataControls_ submitForm currentRange targetIdM liveDataMode =
             , Aria.atomic_ "true"
             , term "hx-live:text" "closest('[data-live-data]').data.state == 'historical' ? 'Historical' : closest('[data-live-data]').data.state == 'live' ? 'Live data' : closest('[data-live-data]').data.state == 'refresh-paused' ? 'Refresh paused' : closest('[data-live-data]').data.state == 'stream-paused' ? 'Event stream paused' : 'Paused'"
             ]
-            $ maybe "Live updates" (bool "Live updates" "Event stream paused") streamingSupport
-    streamingSupport = case liveDataMode of
-      RefreshOnly -> Nothing
-      RowStreaming supportsStreaming -> Just supportsStreaming
+            $ toHtml @Text announcement
+    -- Compact cadence picker for richer live-data panels. Keeping it beside the
+    -- shared refresh options prevents Explorer from silently losing intervals that
+    -- remain available on dashboards and other telemetry pages.
+    refreshIntervalSelect_ =
+      select_
+        [ class_ "select select-sm h-8 w-full bg-bgBase"
+        , id_ $ targetPr <> "-live-refresh-interval"
+        , data_ "refresh-select" ""
+        , Aria.label_ "Refresh results interval"
+        , term "hx-live" "this.value = closest('[data-time-transport]').data.interval"
+        , [__|on change call window.setTimeRefreshInterval(me.closest('[data-time-transport]'), Number(my.value))|]
+        ]
+        $ forM_ refreshOptions \(_, title, ms) -> option_ [value_ ms] $ toHtml $ bool title "Off" (ms == "0")
+    -- The transport and its settings are one control group. Explorer supplies its broader
+    -- live-data panel here so row streaming does not appear as a competing top-level control.
+    transport_ =
+      div_
+        [ class_ "group/transport flex h-8 items-center gap-0 rounded-lg border border-strokeWeak bg-bgRaised p-0.5 shadow-xs hover:border-strokeStrong focus-within:border-strokeFocus max-md:hidden"
+        , data_ "time-transport" ""
+        , [__|on load if window.initTimeTransport call window.initTimeTransport(me) end
+              on "monoscope:time-transport-ready" from window call window.initTimeTransport(me)
+              on htmx:beforeCleanupElement if window.destroyTimeTransport call window.destroyTimeTransport(me) end|]
+        ]
+        do
+          transportBtn "Previous time window" "" [[__|on click call window.shiftTimeRange(-1, me.closest('[data-time-transport]'))|]]
+            $ faSprite_ "chevron-left" "regular" "h-3.5 w-3.5 text-iconNeutral opacity-80"
+          transportDivider
+          transportBtn "Pause live updates" " min-w-24 px-3" [data_ "live-toggle" "", term "hx-live:aria-label" "closest('[data-time-transport]').data.state == 'live' ? (closest('[data-live-data]').count ? 'Pause live data' : 'Pause live updates') : closest('[data-time-transport]').data.state == 'historical' ? 'Return to live' : (closest('[data-live-data]').count ? 'Resume live data' : 'Resume live updates')", term "hx-live:aria-pressed" "closest('[data-time-transport]').data.state == 'live'", [__|on click call window.toggleLiveData(me.closest('[data-live-data]'), me.closest('[data-time-transport]'))|]] do
+            span_ [data_ "pause-icon" "", class_ "hidden items-center justify-center align-middle leading-none group-data-[state=live]/transport:inline-flex"] $ faSprite_ "pause" "solid" "h-3.5 w-3.5 text-iconBrand"
+            span_ [data_ "play-icon" "", class_ "inline-flex items-center justify-center align-middle leading-none translate-x-px group-data-[state=live]/transport:hidden"] $ faSprite_ "play" "solid" "h-3.5 w-3.5 text-iconNeutral"
+            span_ [data_ "refresh-label" "", class_ "hidden lg:inline text-xs font-medium leading-none", term "hx-live:text" "closest('[data-time-transport]').data.state == 'live' ? 'Pause' : closest('[data-time-transport]').data.state == 'historical' ? 'Historical' : 'Resume'"] "Pause"
+          transportDivider
+          transportBtn "Next time window" " disabled:bg-transparent disabled:text-textDisabled" [data_ "next-window" "", term "hx-live:disabled" "closest('[data-time-transport]').data.live == 'true'", [__|on click call window.shiftTimeRange(1, me.closest('[data-time-transport]'))|]]
+            $ faSprite_ "chevron-right" "regular" "h-3.5 w-3.5 text-iconNeutral opacity-80"
+          transportDivider
+          transportBtn triggerLabel "" (data_ "live-data-trigger" "" : term "hx-live:aria-label" "closest('[data-live-data]').count ? 'Live data: ' + closest('[data-live-data]').data.state.replace('-', ' ') : 'Live update interval'" : popoverTrigger_ popoverId)
+            $ faSprite_ "chevron-down" "regular" "h-3 w-3 text-iconNeutral"
+          liveDataPanel
+      where
+        transportDivider = span_ [class_ "h-4 w-px shrink-0 bg-strokeWeak opacity-60", Aria.hidden_ "true"] ""
+        transportBtn label extraClass attrs =
+          button_
+            $ [ type_ "button"
+              , class_ $ "inline-flex h-7 min-w-7 items-center justify-center gap-1.5 rounded-md bg-transparent px-1.5 leading-none text-textWeak hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-1 disabled:cursor-not-allowed disabled:opacity-50" <> extraClass
+              , Aria.label_ label
+              , data_ "tippy-content" label
+              ]
+            <> attrs
 
 
-timepickerWithStatus_ :: Bool -> Maybe Text -> Maybe (Text, Text) -> Maybe Text -> Html ()
-timepickerWithStatus_ showLiveStatus submitForm currentRange targetIdM = do
-  let targetPr = fromMaybe "n" targetIdM
-      isLive = maybe True (T.null . snd) currentRange
+timepicker_ :: Maybe Text -> Maybe (Text, Text) -> Text -> Html ()
+timepicker_ submitForm currentRange targetPr = do
+  let isLive = maybe True (T.null . snd) currentRange
       displayRange = maybe "Last hour" (\(start, end) -> if T.null end then fromMaybe start (lookup start timePickerItems) else start <> " – " <> end) currentRange
       -- with a form we submit it; without one the page's widgets refetch in place
-      submitVia noForm = maybe noForm (\fm -> [text|htmx.trigger("#${fm}", "submit")|]) submitForm
+      submitAction = maybe "window.dispatchQueryUpdate()" (\fm -> [text|htmx.trigger("#${fm}", "submit")|]) submitForm
   -- read/written by window.updateTimePicker + window.getTimeRange (main.ts)
   input_ [type_ "hidden", id_ $ targetPr <> "-custom_range_input"]
   button_
@@ -254,13 +296,6 @@ timepickerWithStatus_ showLiveStatus submitForm currentRange targetIdM = do
     , data_ "state" $ bool "historical" "live" isLive
     ]
     do
-      when showLiveStatus
-        $ span_
-          [ class_ "rounded bg-fillWeak px-1.5 py-0.5 text-xs font-semibold leading-none text-textWeak group-data-[state=live]/range:bg-fillSuccess-strong group-data-[state=live]/range:text-textInverse-strong group-data-[state=paused]/range:bg-fillWarning-strong group-data-[state=paused]/range:text-textInverse-strong"
-          , data_ "live-badge" ""
-          , term "hx-live:text" "closest('[data-live-range]').data.state == 'historical' ? 'HISTORICAL' : closest('[data-live-range]').data.state == 'live' ? 'LIVE' : 'PAUSED'"
-          ]
-        $ bool "HISTORICAL" "LIVE" isLive
       faSprite_ "calendar" "regular" "h-4 w-4 text-iconNeutral max-md:hidden"
       let attrs = maybe [] (\(s, e) -> [data_ "start" s, data_ "end" e]) currentRange
       span_ (attrs ++ [class_ "inline-block min-w-0 leading-snug text-left whitespace-normal md:whitespace-nowrap", id_ $ targetPr <> "-currentRange"]) $ toHtml displayRange
@@ -289,13 +324,12 @@ timepickerWithStatus_ showLiveStatus submitForm currentRange targetIdM = do
           div_ [id_ $ targetPr <> "-startTime", class_ "hidden"] ""
         ul_ [] do
           li_ [class_ "menu-title"] "Select Time Range"
-          let action = submitVia "window.dispatchQueryUpdate()"
           forM_ timePickerItems \(val, title) ->
             li_ $ button_
               [ class_ "flex items-center justify-between hover:bg-fillWeak rounded-lg px-3 py-2 w-full text-left"
               , data_ "value" val
               , data_ "label" title
-              , termRaw "_" [text|on click call window.updateTimePicker({since: @data-value}, {targetPr: '${targetPr}', label: @data-label}) then $action then call #${targetPr}-timepicker-popover.hidePopover()|]
+              , termRaw "_" [text|on click call window.updateTimePicker({since: @data-value}, {targetPr: '${targetPr}', label: @data-label}) then $submitAction then call #${targetPr}-timepicker-popover.hidePopover()|]
               ]
               do
                 span_ [class_ "text-sm"] $ toHtml title
@@ -339,10 +373,9 @@ timepickerWithStatus_ showLiveStatus submitForm currentRange targetIdM = do
           li_ [class_ "menu-title md:hidden"] "Refresh interval"
           li_ [class_ "md:hidden"] $ div_ [class_ "space-y-1", role_ "group", Aria.label_ "Refresh interval"] $ forM_ refreshOptions refreshIntervalOption_
 
-        let submitAction = submitVia "window.dispatchQueryUpdate()"
-            -- Self-hosted: easepick injects this into the picker's shadow root, so a
-            -- jsdelivr blip left the date picker unstyled on an otherwise-working page.
-            easepickCss = assetUrl "/public/assets/css/thirdparty/easepick.min.css"
+        -- Self-hosted: easepick injects this into the picker's shadow root, so a
+        -- jsdelivr blip left the date picker unstyled on an otherwise-working page.
+        let easepickCss = assetUrl "/public/assets/css/thirdparty/easepick.min.css"
         script_
           [text|
       (function() {
@@ -429,7 +462,6 @@ mkTimeWindow now fromQuery toQuery sinceParam =
         }
 
 
--- | A URL under @base@ that carries this window's params forward, plus any extras.
 -- | How long a read over this window may be served from cache.
 --
 -- A cached answer drifts from the truth at a rate set by the window it covers: five minutes of
@@ -452,6 +484,7 @@ cacheTtl :: TimeWindow -> TimeSpec
 cacheTtl window = TimeSpec (max 30 $ min 300 $ round (diffUTCTime window.toTime window.fromTime) `div` 120) 0
 
 
+-- | A URL under @base@ that carries this window's params forward, plus any extras.
 windowUrl :: Text -> [(Text, Text)] -> TimeWindow -> Text
 windowUrl base extras window = timeScopedUrl base extras window.fromQuery window.toQuery window.sinceQuery
 
@@ -492,57 +525,3 @@ refreshIntervalOption_ (label, title, ms) =
     do
       span_ $ toHtml label
       span_ [class_ "opacity-0 group-data-[selected=true]/refresh-option:opacity-100", Aria.hidden_ "true"] $ faSprite_ "check" "regular" "h-3 w-3 text-iconBrand"
-
-
--- | Compact cadence picker for richer live-data panels. Keeping it beside the
--- shared refresh options prevents Explorer from silently losing intervals that
--- remain available on dashboards and other telemetry pages.
-refreshIntervalSelect_ :: Text -> Html ()
-refreshIntervalSelect_ targetPr =
-  select_
-    [ class_ "select select-sm h-8 w-full bg-bgBase"
-    , id_ $ targetPr <> "-live-refresh-interval"
-    , data_ "refresh-select" ""
-    , Aria.label_ "Refresh results interval"
-    , term "hx-live" "this.value = closest('[data-time-transport]').data.interval"
-    , [__|on change call window.setTimeRefreshInterval(me.closest('[data-time-transport]'), Number(my.value))|]
-    ]
-    $ forM_ refreshOptions \(_, title, ms) -> option_ [value_ ms] $ toHtml $ bool title "Off" (ms == "0")
-
-
--- | The transport and its settings are one control group. Explorer supplies its broader
--- live-data panel here so row streaming does not appear as a competing top-level control.
-refreshButtonWithPopover_ :: Text -> Text -> Html () -> Html ()
-refreshButtonWithPopover_ popoverId popoverLabel popoverPanel =
-  div_
-    [ class_ "group/transport flex h-8 items-center gap-0 rounded-lg border border-strokeWeak bg-bgRaised p-0.5 shadow-xs hover:border-strokeStrong focus-within:border-strokeFocus max-md:hidden"
-    , data_ "time-transport" ""
-    , [__|on load if window.initTimeTransport call window.initTimeTransport(me) end
-          on "monoscope:time-transport-ready" from window call window.initTimeTransport(me)
-          on htmx:beforeCleanupElement if window.destroyTimeTransport call window.destroyTimeTransport(me) end|]
-    ]
-    do
-      transportBtn "Previous time window" "" [[__|on click call window.shiftTimeRange(-1, me.closest('[data-time-transport]'))|]]
-        $ faSprite_ "chevron-left" "regular" "h-3.5 w-3.5 text-iconNeutral opacity-80"
-      transportDivider
-      transportBtn "Pause live updates" " min-w-24 px-3" [data_ "live-toggle" "", term "hx-live:aria-label" "closest('[data-time-transport]').data.state == 'live' ? (closest('[data-live-data]').count ? 'Pause live data' : 'Pause live updates') : closest('[data-time-transport]').data.state == 'historical' ? 'Return to live' : (closest('[data-live-data]').count ? 'Resume live data' : 'Resume live updates')", term "hx-live:aria-pressed" "closest('[data-time-transport]').data.state == 'live'", [__|on click call window.toggleLiveData(me.closest('[data-live-data]'), me.closest('[data-time-transport]'))|]] do
-        span_ [data_ "pause-icon" "", class_ "hidden items-center justify-center align-middle leading-none group-data-[state=live]/transport:inline-flex"] $ faSprite_ "pause" "solid" "h-3.5 w-3.5 text-iconBrand"
-        span_ [data_ "play-icon" "", class_ "inline-flex items-center justify-center align-middle leading-none translate-x-px group-data-[state=live]/transport:hidden"] $ faSprite_ "play" "solid" "h-3.5 w-3.5 text-iconNeutral"
-        span_ [data_ "refresh-label" "", class_ "hidden lg:inline text-xs font-medium leading-none", term "hx-live:text" "closest('[data-time-transport]').data.state == 'live' ? 'Pause' : closest('[data-time-transport]').data.state == 'historical' ? 'Historical' : 'Resume'"] "Pause"
-      transportDivider
-      transportBtn "Next time window" " disabled:bg-transparent disabled:text-textDisabled" [data_ "next-window" "", term "hx-live:disabled" "closest('[data-time-transport]').data.live == 'true'", [__|on click call window.shiftTimeRange(1, me.closest('[data-time-transport]'))|]]
-        $ faSprite_ "chevron-right" "regular" "h-3.5 w-3.5 text-iconNeutral opacity-80"
-      transportDivider
-      transportBtn popoverLabel "" (data_ "live-data-trigger" "" : term "hx-live:aria-label" "closest('[data-live-data]').count ? 'Live data: ' + closest('[data-live-data]').data.state.replace('-', ' ') : 'Live update interval'" : popoverTrigger_ popoverId)
-        $ faSprite_ "chevron-down" "regular" "h-3 w-3 text-iconNeutral"
-      popoverPanel
-  where
-    transportDivider = span_ [class_ "h-4 w-px shrink-0 bg-strokeWeak opacity-60", Aria.hidden_ "true"] ""
-    transportBtn label extraClass attrs =
-      button_
-        $ [ type_ "button"
-          , class_ $ "inline-flex h-7 min-w-7 items-center justify-center gap-1.5 rounded-md bg-transparent px-1.5 leading-none text-textWeak hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-1 disabled:cursor-not-allowed disabled:opacity-50" <> extraClass
-          , Aria.label_ label
-          , data_ "tippy-content" label
-          ]
-        <> attrs

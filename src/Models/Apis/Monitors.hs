@@ -17,7 +17,10 @@ module Models.Apis.Monitors (
   monitorsBulkUpdate,
   QueryMonitor (..),
   MonitorAlertConfig (..),
-  QueryMonitorId (..),
+  QueryMonitorId,
+  pattern QueryMonitorId,
+  unQueryMonitorId,
+  queryAlertKey,
   MonitorStatus (..),
   MeasurementFailure (..),
   getAlertsByTeam,
@@ -37,10 +40,9 @@ import Data.Aeson qualified as AE
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default)
 import Data.Effectful.Hasql qualified as Hasql
-import Data.OpenApi (ToParamSchema, ToSchema)
+import Data.OpenApi (ToSchema)
 import Data.Text.Display (Display)
-import Data.Time.Calendar (Day (..))
-import Data.Time.Clock (UTCTime (..), addUTCTime)
+import Data.Time.Clock (UTCTime, addUTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
@@ -51,27 +53,38 @@ import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, type (:>))
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
-import GHC.Records (HasField (getField))
 import Hasql.Interpolate qualified as HI
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
 import Language.Haskell.TH.Syntax qualified as THS
+import Models.Apis.Issues qualified as Issues
 import Models.Projects.Activation qualified as Activation
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (SnakeSchema (..), WrappedEnumSC (..), selectFrom)
+import Pkg.DeriveUtils (SnakeSchema (..), UUIDId (..), WrappedEnumSC (..), selectFrom)
 import Relude
 import Servant (FromHttpApiData)
 import System.Types (DB)
 
 
-newtype QueryMonitorId = QueryMonitorId {unQueryMonitorId :: UUID.UUID}
-  deriving stock (Generic, Show)
-  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, NFData, Ord, ToField, ToParamSchema, ToSchema)
-  deriving anyclass (HI.DecodeRow)
+type QueryMonitorId = UUIDId "query_monitor"
 
 
-instance HasField "toText" QueryMonitorId Text where getField = UUID.toText . unQueryMonitorId
+pattern QueryMonitorId :: UUID.UUID -> QueryMonitorId
+pattern QueryMonitorId{unQueryMonitorId} = UUIDId unQueryMonitorId
+
+
+{-# COMPLETE QueryMonitorId #-}
+
+
+-- | A query alert's issue identity (@target_hash@ and @query_id@): the derived @show@ of
+-- the dedicated newtype 'QueryMonitorId' used to be, frozen because every stored row
+-- dedups on it.
+--
+-- >>> queryAlertKey (QueryMonitorId UUID.nil)
+-- "QueryMonitorId {unQueryMonitorId = 00000000-0000-0000-0000-000000000000}"
+queryAlertKey :: QueryMonitorId -> Text
+queryAlertKey mid = "QueryMonitorId {unQueryMonitorId = " <> mid.toText <> "}"
 
 
 data MeasurementFailure = NoMeasurements | NonFiniteMeasurements | EvaluationFailed
@@ -92,14 +105,11 @@ recordEvaluation pid mid at value status = Hasql.transaction TxS.ReadCommitted T
 
 recordEvaluationTx :: Projects.ProjectId -> QueryMonitorId -> UTCTime -> Double -> MonitorStatus -> Tx.Transaction ()
 recordEvaluationTx pid mid at value status =
-  void
-    $ Tx.statement ()
-    $ HI.interp @HI.RowsAffected
-      True
-      [HI.sql|INSERT INTO monitors.evaluations (monitor_id, evaluated_at, value, status)
-      SELECT id, #{at}, #{value}, #{status} FROM monitors.query_monitors
-      WHERE id = #{mid} AND project_id = #{pid}
-      ON CONFLICT (monitor_id, evaluated_at) DO NOTHING|]
+  Hasql.executeTx
+    [HI.sql|INSERT INTO monitors.evaluations (monitor_id, evaluated_at, value, status)
+    SELECT id, #{at}, #{value}, #{status} FROM monitors.query_monitors
+    WHERE id = #{mid} AND project_id = #{pid}
+    ON CONFLICT (monitor_id, evaluated_at) DO NOTHING|]
 
 
 getEvaluations :: DB es => Projects.ProjectId -> QueryMonitorId -> UTCTime -> UTCTime -> Eff es [(UTCTime, Double)]
@@ -157,7 +167,7 @@ data QueryMonitor = QueryMonitor
   , visualizationType :: Text
   , teams :: V.Vector ProjectMembers.TeamId
   , widgetId :: Maybe Text
-  , dashboardId :: Maybe UUID.UUID
+  , dashboardId :: Maybe (UUIDId "dashboard")
   , alertRecoveryThreshold :: Maybe Double
   , warningRecoveryThreshold :: Maybe Double
   , currentStatus :: MonitorStatus
@@ -268,14 +278,15 @@ data MonitorBulkAction = BADeactivate | BAReactivate | BAMute | BAUnmute | BARes
 monitorsBulkUpdate :: (DB es, Time :> es) => Projects.ProjectId -> MonitorBulkAction -> Maybe Int -> [QueryMonitorId] -> Eff es Int64
 monitorsBulkUpdate pid action durationMinsM ids = do
   now <- Time.currentTime
-  let mutedUntil = maybe (UTCTime (ModifiedJulianDay 100000) 0) (\mins -> addUTCTime (fromIntegral mins * 60) now) durationMinsM
-  case action of
-    BADeactivate -> Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET deactivated_at = #{now} WHERE project_id = #{pid} AND id = ANY(#{ids}::uuid[]) AND deactivated_at IS NULL |]
-    BAReactivate -> Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET deactivated_at = NULL WHERE project_id = #{pid} AND id = ANY(#{ids}::uuid[]) AND deactivated_at IS NOT NULL |]
-    BAMute -> Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET muted_until = #{mutedUntil} WHERE project_id = #{pid} AND id = ANY(#{ids}::uuid[]) |]
-    BAUnmute -> Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET muted_until = NULL WHERE project_id = #{pid} AND id = ANY(#{ids}::uuid[]) AND muted_until IS NOT NULL |]
-    BAResolve -> Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET current_status = #{MSNormal}, alert_last_triggered = NULL, warning_last_triggered = NULL, notification_count = 0 WHERE project_id = #{pid} AND id = ANY(#{ids}::uuid[]) AND current_status != #{MSNormal} |]
-    BADelete -> Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET deleted_at = #{now} WHERE project_id = #{pid} AND id = ANY(#{ids}::uuid[]) AND deleted_at IS NULL |]
+  let mutedUntil = maybe Issues.indefiniteUntil (\mins -> addUTCTime (fromIntegral mins * 60) now) durationMinsM
+      (set, cond) = case action of
+        BADeactivate -> ([HI.sql|deactivated_at = #{now}|], [HI.sql|deactivated_at IS NULL|])
+        BAReactivate -> ([HI.sql|deactivated_at = NULL|], [HI.sql|deactivated_at IS NOT NULL|])
+        BAMute -> ([HI.sql|muted_until = #{mutedUntil}|], [HI.sql|TRUE|])
+        BAUnmute -> ([HI.sql|muted_until = NULL|], [HI.sql|muted_until IS NOT NULL|])
+        BAResolve -> ([HI.sql|current_status = #{MSNormal}, alert_last_triggered = NULL, warning_last_triggered = NULL, notification_count = 0|], [HI.sql|current_status != #{MSNormal}|])
+        BADelete -> ([HI.sql|deleted_at = #{now}|], [HI.sql|deleted_at IS NULL|])
+  Hasql.interpExecute [HI.sql| UPDATE monitors.query_monitors SET ^{set} WHERE project_id = #{pid} AND id = ANY(#{ids}::uuid[]) AND ^{cond} |]
 
 
 queryMonitorsAll :: DB es => Projects.ProjectId -> Eff es [QueryMonitor]
@@ -320,11 +331,11 @@ getActiveQueryMonitors =
     )
 
 
-queryMonitorByWidgetId :: DB es => Projects.ProjectId -> Maybe UUID.UUID -> Text -> Eff es (Maybe QueryMonitor)
+queryMonitorByWidgetId :: DB es => Projects.ProjectId -> Maybe (UUIDId "dashboard") -> Text -> Eff es (Maybe QueryMonitor)
 queryMonitorByWidgetId pid dashboardId wId = Hasql.interpOne (selectFrom @QueryMonitor <> [HI.sql| WHERE project_id = #{pid} AND dashboard_id IS NOT DISTINCT FROM #{dashboardId}::uuid AND widget_id = #{wId} AND deleted_at IS NULL |])
 
 
-deleteMonitorsByWidgetIds :: DB es => Projects.ProjectId -> Maybe UUID.UUID -> [Text] -> Eff es Int64
+deleteMonitorsByWidgetIds :: DB es => Projects.ProjectId -> Maybe (UUIDId "dashboard") -> [Text] -> Eff es Int64
 deleteMonitorsByWidgetIds pid dashboardId widgetIds =
   Hasql.interpExecute [HI.sql|DELETE FROM monitors.query_monitors WHERE project_id = #{pid} AND dashboard_id IS NOT DISTINCT FROM #{dashboardId}::uuid AND widget_id = ANY(#{widgetIds}::text[])|]
 
@@ -343,7 +354,7 @@ data WidgetAlertStatus = WidgetAlertStatus
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake WidgetAlertStatus
 
 
-getWidgetAlertStatuses :: DB es => Projects.ProjectId -> UUID.UUID -> V.Vector Text -> Eff es [WidgetAlertStatus]
+getWidgetAlertStatuses :: DB es => Projects.ProjectId -> UUIDId "dashboard" -> V.Vector Text -> Eff es [WidgetAlertStatus]
 getWidgetAlertStatuses pid dashboardId widgetIds
   | V.null widgetIds = pure []
   | otherwise =

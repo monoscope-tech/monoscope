@@ -69,7 +69,7 @@ test.describe('metrics catalog', () => {
   test('service choices work by keyboard and groups include later catalog pages', async ({ page }) => {
     await page.goto(url + '?q=uxcatalog');
     await expect(page.getByRole('combobox', { name: 'Filter by metric group' }).locator('option[value="uxcatalogruntime."]')).toHaveCount(1);
-    const servicePicker = page.locator('#metric-service-picker summary');
+    const servicePicker = page.getByRole('button', { name: 'Filter by service', exact: true });
     await servicePicker.focus();
     await page.keyboard.press('Enter');
     const radio = page.getByRole('radio', { name: 'ux-checkout', exact: true });

@@ -126,21 +126,24 @@ buildAnomalyRows priors dirty =
   V.fromList
     [ SC.AnomalyInsertRow
         { projectId = k.projectId
-        , anomalyType = kindLabel pa.kind
+        , anomalyType
         , targetHash = pa.targetHash
         , method = e.scope.method
         , host = e.scope.host
         , urlPath = e.scope.urlPath
+        , delta
         }
     | (k, e) <- V.toList dirty
     , pa <- Catalog.diffAnomalies k.keyHash (HM.lookup (k.projectId, k.keyHash) priors) e
+    , let (anomalyType, delta) = kindLabel pa.kind
     ]
   where
+    noDelta = Catalog.ShapeDelta [] []
     kindLabel = \case
-      Catalog.AKEndpoint -> ApiChanges.ATEndpoint
-      Catalog.AKShape -> ApiChanges.ATShape
-      Catalog.AKField -> ApiChanges.ATField
-      Catalog.AKFormat -> ApiChanges.ATFormat
+      Catalog.AKEndpoint -> (ApiChanges.ATEndpoint, noDelta)
+      Catalog.AKShape d -> (ApiChanges.ATShape, d)
+      Catalog.AKField -> (ApiChanges.ATField, noDelta)
+      Catalog.AKFormat -> (ApiChanges.ATFormat, noDelta)
 
 
 templateRowOf :: UTCTime -> CatalogEntry -> SC.TemplateRow

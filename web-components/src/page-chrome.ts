@@ -98,16 +98,6 @@ onReady(function(){
           // so the detached node and its popper aren't retained until the next hover.
           document.body.addEventListener('htmx:before:swap', () => { clearTimeout(tooltipWarmTimeout); destroyTip(); });
 
-          // Animate stat values on HTMX content swap for delightful updates
-          document.body.addEventListener('htmx:after:swap', (e: any) => {
-            e.target.querySelectorAll('.stat-value[data-value]').forEach((el: HTMLElement) => {
-              const newVal = parseFloat(el.dataset.value!);
-              if (!isNaN(newVal) && typeof (window as any).animateStatValue === 'function') {
-                (window as any).animateStatValue(el, newVal, 400);
-              }
-            });
-          });
-
           // Add aria-busy during HTMX requests for screen reader feedback
           document.body.addEventListener('htmx:before:request', (e: any) => {
             e.target.setAttribute('aria-busy', 'true');

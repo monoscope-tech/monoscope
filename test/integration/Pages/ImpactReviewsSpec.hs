@@ -7,6 +7,7 @@ import Data.ByteArray qualified as BA
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Base64 qualified as B64
+import Data.Cache qualified as Cache
 import Data.Effectful.LLM qualified as LLM
 import Data.Pool (withResource)
 import Data.Text qualified as T
@@ -44,6 +45,8 @@ setup tr = do
   let cfg = tr.trATCtx.config
   credential <- maybe (fail "credential missing") pure =<< runQueryEffect tr (GitSync.upsertGitHubCredential (encodeUtf8 cfg.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing "impact-org" (Just 987654) Nothing)
   runQueryEffect tr $ CodeContext.insertCodeMapping testPid credential.id (Git.RepoRef "impact-org" "checkout" "main") (Just "test-service") "" ""
+  -- Handlers render the repository list; a warm cache keeps them off the GitHub token endpoint.
+  Cache.insert tr.trATCtx.repoListCache credential.id [Git.GitRepo "impact-org/checkout" "checkout" False "main"]
 
 
 payload :: Text -> Text -> Text -> AE.Value

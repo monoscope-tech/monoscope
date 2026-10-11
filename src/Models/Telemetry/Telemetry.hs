@@ -18,6 +18,7 @@ module Models.Telemetry.Telemetry (
   traceErrorHash,
   bursts,
   isErrorRecord,
+  traceIdOf,
   Trace (..),
   SeverityLevel (..),
   SpanStatus (..),
@@ -68,6 +69,8 @@ module Models.Telemetry.Telemetry (
   WriteTarget (..),
   writeTargetFor,
   WriteFailure,
+  WriteFailureKind (..),
+  parseWriteFailureKind,
   writeFailureSummary,
   writeFailureDlqHeaders,
   PoisonMsg,
@@ -101,10 +104,14 @@ module Models.Telemetry.Telemetry (
   otelSpanColsSql,
   roundUTCToMicros,
   dayWindows,
+  BulkCol (..),
+  unnestInsert,
+  column,
+  castColumn,
+  tsColumn,
 )
 where
 
-import Control.Concurrent.STM qualified as STM
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
@@ -137,10 +144,13 @@ import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Simple.ToRow
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
+import Effectful.Concurrent (Concurrent)
+import Effectful.Concurrent.STM qualified as STM
 import Effectful.Exception (throwIO, trySync)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled, labeled)
 import Effectful.Log (Log)
+import GHC.Records (HasField)
 import Hasql.Decoders qualified as D
 import Hasql.DynamicStatements.Snippet (Snippet, encoderAndParam, toPreparableStatement)
 import Hasql.Encoders qualified as E
@@ -149,22 +159,24 @@ import Hasql.Session qualified as HSession
 import Hasql.Statement (Statement)
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnum (..), WrappedEnumSC (..), decodeEnumSC, idFromText, unAesonTextMaybe)
+import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnum (..), WrappedEnumSC (..), idFromText, unAesonTextMaybe)
 import Pkg.ErrorFingerprint qualified as EF
 import Pkg.ExtractionWorker qualified as EW
 import Pkg.Metrics qualified as Metrics
 import Pkg.UUID qualified as UUIDBytes
 import Relude hiding (ask)
+import Relude.Extra.Bifunctor (bimapF)
 import Relude.Extra.Foldable1 (maximum1, minimum1)
-import System.IO (hPutStrLn)
 import System.Logging qualified as Log
 import System.Tracing (forkWithCtx)
+import Text.Casing (fromAny, toKebab)
 import Utils (classifyUserAgent, encodeText, extractMessageFromLog, formatBytes, getDurationNSMS, jsonToMap, lookupValueText, nonEmptyT, scrubNulText, scrubNulValue)
-import Web.HttpApiData (FromHttpApiData)
+import Web.HttpApiData (FromHttpApiData (..))
 
 
 -- $setup
 -- >>> import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime)
+-- >>> data Flags = Flags {enablePostgresTelemetryWrites :: Bool, enableTimefusionWrites :: Bool}
 
 
 -- Helper function to get nested value from a map using dot notation
@@ -249,27 +261,23 @@ data SeverityLevel = SLTrace | SLDebug | SLInfo | SLWarn | SLError | SLFatal
 data SpanStatus = SSOk | SSError | SSUnset
   deriving (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "SS" SpanStatus
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "SS" SpanStatus
 
 
 data SpanKind = SKInternal | SKServer | SKClient | SKProducer | SKConsumer | SKUnspecified
   deriving (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "SK" SpanKind
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC 'Nothing "SK" SpanKind
 
 
 -- | @kind@ and @status_code@ are stored as plain text and carry values with no
 -- constructor (ingest writes @"log"@ for log records). Decoding those columns as the
 -- enums directly would make 'refineText' abort the whole query, so the columns stay
--- 'Text' on the row types and are parsed totally here — via the enums' own
--- 'WrappedEnumSC' encoding's own 'decodeEnumSC', which normalises case and re-adds the
--- constructor prefix, so both @"internal"@ and @"ERROR"@ land on their constructor.
-parseSpanKind :: Maybe Text -> Maybe SpanKind
-parseSpanKind = (>>= decodeEnumSC @"SK" . toString)
-
-
-parseSpanStatus :: Maybe Text -> Maybe SpanStatus
-parseSpanStatus = (>>= decodeEnumSC @"SS" . toString)
+-- 'Text' on the row types and are parsed totally here — via the enums' derived
+-- 'WrappedEnumSC' decoder, which normalises case and re-adds the constructor prefix,
+-- so both @"internal"@ and @"ERROR"@ land on their constructor.
+parseStoredEnum :: FromHttpApiData a => Maybe Text -> Maybe a
+parseStoredEnum = (>>= rightToMaybe . parseUrlPiece)
 
 
 data Trace = Trace
@@ -336,8 +344,8 @@ convertOtelLogsAndSpansToSpanRecord lgSp = do
       , spanName = sName
       , startTime = lgSp.start_time
       , endTime = lgSp.end_time
-      , kind = parseSpanKind lgSp.kind
-      , status = parseSpanStatus lgSp.status_code
+      , kind = parseStoredEnum lgSp.kind
+      , status = parseStoredEnum lgSp.status_code
       , statusMessage = lgSp.status_message
       , attributes = unAesonTextMaybe lgSp.attributes
       , events = fromMaybe AE.Null (unAesonTextMaybe lgSp.events)
@@ -395,36 +403,23 @@ newtype MetricCatalogBuffer = MetricCatalogBuffer (STM.TVar (Map.Map Text Metric
 
 
 newMetricCatalogBuffer :: IO MetricCatalogBuffer
-newMetricCatalogBuffer = MetricCatalogBuffer <$> STM.newTVarIO mempty
-
-
-metricCatalogKey :: MetricRecord -> Text
-metricCatalogKey r =
-  T.intercalate
-    "\x1f"
-    [ UUID.toText r.projectId
-    , r.metricName
-    , show r.metricType
-    , r.metricUnit
-    , metricServiceNameFromResource r.metricName r.resource
-    , fromMaybe "" $ scopeField "name" r.instrumentationScope
-    ]
+newMetricCatalogBuffer = MetricCatalogBuffer <$> newTVarIO mempty
 
 
 -- | Return a flush batch only when the bounded buffer reaches its threshold.
-enqueueMetricCatalog :: MetricCatalogBuffer -> V.Vector MetricRecord -> IO (Maybe (V.Vector MetricRecord))
+enqueueMetricCatalog :: Concurrent :> es => MetricCatalogBuffer -> V.Vector MetricRecord -> Eff es (Maybe (V.Vector MetricRecord))
 enqueueMetricCatalog (MetricCatalogBuffer ref) rows = STM.atomically do
   STM.modifyTVar' ref $ \pending -> V.foldl' (\m r -> Map.insert (metricCatalogKey r) r m) pending rows
   pending <- STM.readTVar ref
   if Map.size pending < 256
     then pure Nothing
     else Just . V.fromList . Map.elems <$> STM.swapTVar ref mempty
+  where
+    metricCatalogKey r = T.intercalate "\x1f" [UUID.toText r.projectId, r.metricName, show r.metricType, r.metricUnit, metricServiceNameFromResource r.metricName r.resource, fromMaybe "" $ scopeField "name" r.instrumentationScope]
 
 
-flushMetricCatalog :: (DB es, IOE :> es) => MetricCatalogBuffer -> Eff es ()
-flushMetricCatalog (MetricCatalogBuffer ref) = do
-  rows <- liftIO $ V.fromList . Map.elems <$> STM.atomically (STM.swapTVar ref mempty)
-  upsertMetricMetadata rows
+flushMetricCatalog :: (Concurrent :> es, DB es) => MetricCatalogBuffer -> Eff es ()
+flushMetricCatalog (MetricCatalogBuffer ref) = upsertMetricMetadata . V.fromList . Map.elems =<< STM.atomically (STM.swapTVar ref mempty)
 
 
 -- | Rebuild recent catalog descriptors from durable raw points. This heals a
@@ -753,8 +748,8 @@ traceSpanRecord trId row = do
       , spanName = spanNameTxt
       , startTime = row.startTime
       , endTime = row.endTime
-      , kind = parseSpanKind row.spanKind
-      , status = parseSpanStatus row.statusCode
+      , kind = parseStoredEnum row.spanKind
+      , status = parseStoredEnum row.statusCode
       , statusMessage = row.statusMessage
       , attributes = unAesonTextMaybe row.attributes
       , events = fromMaybe AE.Null $ unAesonTextMaybe row.events
@@ -948,10 +943,7 @@ getEndpointTraceId pid method urlPath isFirst now =
     <> [HI.sql| LIMIT 1 |]
   where
     windowStart = addUTCTime (-(7 * 24 * 3600)) now
-    orderSql =
-      if isFirst
-        then [HI.sql| ORDER BY start_time ASC, id ASC |]
-        else [HI.sql| ORDER BY start_time DESC, id DESC |]
+    orderSql = bool [HI.sql| ORDER BY start_time DESC, id DESC |] [HI.sql| ORDER BY start_time ASC, id ASC |] isFirst
     branch pathPred =
       [HI.sql| (SELECT context___trace_id, start_time, id FROM otel_logs_and_spans
                 WHERE project_id = #{pid.toText}
@@ -970,17 +962,10 @@ maxOrphanResolverHops :: Int
 maxOrphanResolverHops = 3
 
 
--- | Parent_ids referenced by some span in the batch but not present (and not
--- empty). Drives both the iterative resolver and the unresolved-orphan log.
-orphanParentIdsBy :: (a -> Maybe Text) -> (a -> Maybe Text) -> [a] -> [Text]
-orphanParentIdsBy spanIdOf parentIdOf rs =
-  let present = S.fromList $ mapMaybe spanIdOf rs
-   in ordNub [p | r <- rs, Just p <- [parentIdOf r], not (T.null p), not (S.member p present)]
-
-
 resolveTraceOrphans :: (IOE :> es, Log :> es) => Projects.ProjectId -> Text -> ([Text] -> Eff es [a]) -> (a -> Maybe Text) -> (a -> Maybe Text) -> [a] -> Eff es [a]
 resolveTraceOrphans pid trId fetch spanIdOf parentIdOf initial = do
-  let missing = orphanParentIdsBy spanIdOf parentIdOf
+  -- Parent_ids referenced by some span in the batch but not present (and not empty).
+  let missing rs = let present = S.fromList $ mapMaybe spanIdOf rs in ordNub [p | r <- rs, Just p <- [parentIdOf r], not (T.null p), not (S.member p present)]
       go !acc !hop !ids
         | hop >= maxOrphanResolverHops || null ids = pure acc
         | otherwise = do
@@ -1070,26 +1055,21 @@ getDataPointsData load pid = do
     CatalogWithCounts useTimefusion (from, to) -> do
       counts :: V.Vector (Text, Int) <-
         Hasql.withHasqlTimefusion useTimefusion
-          $ Hasql.interp
-          $ [HI.sql| SELECT metric_name, COUNT(*)::bigint FROM otel_metrics WHERE project_id = #{pid.toText} |]
-          <> [HI.sql| AND timestamp BETWEEN #{from} AND #{to} |]
-          <> [HI.sql| GROUP BY metric_name |]
+          $ Hasql.interp [HI.sql| SELECT metric_name, COUNT(*)::bigint FROM otel_metrics WHERE project_id = #{pid.toText} AND timestamp BETWEEN #{from} AND #{to} GROUP BY metric_name |]
       let countByName = Map.fromList $ V.toList counts
       pure $ fmap (\m -> m{dataPointsCount = Just $ Map.findWithDefault 0 m.metricName countByName}) catalog
 
 
 getMetricData :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe MetricDataPoint)
-getMetricData pid metricName = do
-  meta <-
-    Hasql.interpOne
-      [HI.sql| SELECT metric_name, MAX(metric_type), MAX(metric_unit), MAX(metric_description),
-      ARRAY_AGG(DISTINCT service_name),
+getMetricData pid metricName =
+  Hasql.interpOne
+    [HI.sql| SELECT metric_name, MAX(metric_type), MAX(metric_unit), MAX(metric_description),
+      NULL::bigint, ARRAY_AGG(DISTINCT service_name),
       COALESCE(ARRAY_AGG(DISTINCT label) FILTER (WHERE label IS NOT NULL), '{}'::text[])
     FROM otel_metrics_meta
     LEFT JOIN LATERAL unnest(metric_labels) AS label ON TRUE
     WHERE project_id = #{unUUIDId pid} AND metric_name = #{metricName}
     GROUP BY metric_name |]
-  pure $ (\(name, typ, unit, desc, services, labels) -> MetricDataPoint name typ unit desc Nothing services labels) <$> meta
 
 
 -- | One OTLP exemplar as ingestion stores it: the trace/span it was recorded in,
@@ -1176,10 +1156,7 @@ metricExemplars useTimefusion pid scope (lo, hi) limit = do
 -- tables so the two report counters can't drift in window or routing.
 countRowsSince :: (DB es, Labeled "timefusion" Hasql :> es) => HI.Sql -> Bool -> Projects.ProjectId -> UTCTime -> Eff es Int
 countRowsSince tbl useTimefusion pid lastReported =
-  fromMaybe 0
-    <$> Hasql.withHasqlTimefusion
-      useTimefusion
-      (Hasql.interpOne $ [HI.sql| SELECT count(*)::bigint FROM |] <> tbl <> [HI.sql| WHERE project_id=#{pid.toText} AND timestamp > #{lastReported}|])
+  Hasql.withHasqlTimefusion useTimefusion $ Hasql.interpScalar [HI.sql| SELECT count(*)::bigint FROM ^{tbl} WHERE project_id=#{pid.toText} AND timestamp > #{lastReported}|]
 
 
 -- | Split @(start, end]@ into contiguous slices of at most one day.
@@ -1228,16 +1205,11 @@ getUsageTotals useTimefusion pid wStart wEnd = do
   -- `wEnd` is the same instant the caller records as the window end. Without it
   -- the count ran to query time, so rows landing between the two were billed in
   -- this window and again in the next one, which starts at `wEnd`.
-  let tally q =
-        foldlM
-          ( \(!c, !b) (s, e) -> do
-              (c', b') <- fromMaybe (0, 0) <$> Hasql.withHasqlTimefusion useTimefusion (q s e)
-              pure (c + c', b + b')
-          )
-          (0, 0)
-          (dayWindows wStart wEnd)
-  (eC, eB) <- tally \s e -> Hasql.interpOne [HI.sql| SELECT count(*)::bigint, COALESCE(SUM(message_size_bytes),0)::bigint FROM otel_logs_and_spans WHERE project_id=#{pid.toText} AND timestamp > #{s} AND timestamp <= #{e}|]
-  (mC, mB) <- tally \s e -> Hasql.interpOne [HI.sql| SELECT count(*)::bigint, COALESCE(SUM(message_size_bytes),0)::bigint FROM otel_metrics WHERE project_id=#{pid.toText} AND timestamp > #{s} AND timestamp <= #{e}|]
+  let tally tbl =
+        bimapF getSum getSum $ flip foldMapM (dayWindows wStart wEnd) \(s, e) ->
+          bimap Sum Sum . fromMaybe (0, 0) <$> Hasql.withHasqlTimefusion useTimefusion (Hasql.interpOne [HI.sql| SELECT count(*)::bigint, COALESCE(SUM(message_size_bytes),0)::bigint FROM ^{tbl} WHERE project_id=#{pid.toText} AND timestamp > #{s} AND timestamp <= #{e}|])
+  (eC, eB) <- tally [HI.sql|otel_logs_and_spans|]
+  (mC, mB) <- tally [HI.sql|otel_metrics|]
   -- Replays are Postgres-only — projects.replay_sessions is the session index;
   -- rrweb payloads live in S3/R2 and never reach TimeFusion. `created_at` is
   -- written once, on a session's first chunk, and never mutated, so a window's
@@ -1361,8 +1333,7 @@ getMetricCatalogPage pid sourceM prefixM queryM cutoff limit offset withInactive
       COALESCE(labs, '{}'::text[]), FALSE, (SELECT COUNT(*)::int8 FROM act)
     FROM meta LEFT JOIN labels USING (metric_name) WHERE #{withInactive} AND last_seen < #{cutoff}
     ORDER BY 7 DESC, 1 |]
-  let metric :: MetricCatalogRow -> MetricChartListData
-      metric r = MetricChartListData r.metricName r.metricType r.metricUnit r.metricDescription r.lastSeen r.metricLabels
+  let metric (r :: MetricCatalogRow) = MetricChartListData r.metricName r.metricType r.metricUnit r.metricDescription r.lastSeen r.metricLabels
   pure
     MetricCatalogPage
       { active = V.fromList $ metric <$> filter (.isActive) rows
@@ -1480,32 +1451,51 @@ data WriteTarget = WriteBoth | WritePgOnly | WriteTfOnly
   deriving stock (Eq, Ord, Show)
 
 
--- | Derive the write target from the PG/TF write flags and an optional
--- @monoscope-write-failure@ header (present on DLQ replay). A failure marker is
--- explicit replay intent (rewrite only the leg that failed), so it is trusted
--- as-is; otherwise the two flags decide. Disabling PG (TF is the source of
--- truth) yields TF-only ingest; both disabled is a misconfig that falls back to
--- WriteBoth rather than silently dropping data.
+-- | Which leg(s) a DLQ'd batch failed on. Its kebab-cased constructor is the
+-- @monoscope-write-failure@ header value a replay reads back.
 --
--- >>> map (writeTargetFor True True) [Just "tf-failed", Just "pg-failed", Just "both-failed", Nothing]
+-- >>> map writeFailureKindText [minBound .. maxBound]
+-- ["pg-failed","tf-failed","both-failed"]
+-- >>> map parseWriteFailureKind ["tf-failed", "pg-failed", "both-failed", "garbage"]
+-- [Just TfFailed,Just PgFailed,Just BothFailed,Nothing]
+data WriteFailureKind = PgFailed | TfFailed | BothFailed
+  deriving stock (Bounded, Enum, Eq, Show)
+
+
+writeFailureKindText :: WriteFailureKind -> Text
+writeFailureKindText = toText . toKebab . fromAny . show
+
+
+parseWriteFailureKind :: Text -> Maybe WriteFailureKind
+parseWriteFailureKind = inverseMap writeFailureKindText
+
+
+-- | Derive the write target from the PG/TF write flags and the failure a DLQ
+-- replay carries. A failure marker is explicit replay intent (rewrite only the
+-- leg that failed), so it is trusted as-is; otherwise the two flags decide.
+-- Disabling PG (TF is the source of truth) yields TF-only ingest; both disabled
+-- is a misconfig that falls back to WriteBoth rather than silently dropping data.
+-- Takes the env by its two fields: 'System.Config' imports this module.
+--
+-- >>> let env pg tf = Flags {enablePostgresTelemetryWrites = pg, enableTimefusionWrites = tf}
+-- >>> map (writeTargetFor (env True True)) [Just TfFailed, Just PgFailed, Just BothFailed, Nothing]
 -- [WriteTfOnly,WritePgOnly,WriteBoth,WriteBoth]
--- >>> writeTargetFor True False Nothing
--- WritePgOnly
--- >>> writeTargetFor False True Nothing
--- WriteTfOnly
--- >>> writeTargetFor False False Nothing
--- WriteBoth
-writeTargetFor :: Bool -> Bool -> Maybe Text -> WriteTarget
-writeTargetFor enablePg enableTf = \case
-  Just "tf-failed" -> WriteTfOnly
-  Just "pg-failed" -> WritePgOnly
-  _ -> case (enablePg, enableTf) of
-    (True, False) -> WritePgOnly
-    (False, True) -> WriteTfOnly
-    (True, True) -> WriteBoth
-    -- Misconfig: prefer duplicate rows over dropping telemetry. Callers that
-    -- point both legs at the same store must not rely on this arm.
-    (False, False) -> WriteBoth
+-- >>> [writeTargetFor (env pg tf) Nothing | (pg, tf) <- [(True, False), (False, True), (False, False)]]
+-- [WritePgOnly,WriteTfOnly,WriteBoth]
+writeTargetFor :: (HasField "enablePostgresTelemetryWrites" env Bool, HasField "enableTimefusionWrites" env Bool) => env -> Maybe WriteFailureKind -> WriteTarget
+writeTargetFor env = \case
+  Just TfFailed -> WriteTfOnly
+  Just PgFailed -> WritePgOnly
+  Just BothFailed -> byFlags
+  Nothing -> byFlags
+  where
+    byFlags = case (env.enablePostgresTelemetryWrites, env.enableTimefusionWrites) of
+      (True, False) -> WritePgOnly
+      (False, True) -> WriteTfOnly
+      (True, True) -> WriteBoth
+      -- Misconfig: prefer duplicate rows over dropping telemetry. Callers that
+      -- point both legs at the same store must not rely on this arm.
+      (False, False) -> WriteBoth
 
 
 -- | A message that couldn't be parsed/converted. Callers MUST publish these to
@@ -1554,7 +1544,7 @@ unaccountedRows submitted bir = max 0 (submitted - fromIntegral bir.rowsInserted
 
 
 writeFailureSummary :: WriteFailure -> Text
-writeFailureSummary = These.these (const "pg-failed") (const "tf-failed") (\_ _ -> "both-failed")
+writeFailureSummary = writeFailureKindText . These.these (const PgFailed) (const TfFailed) (\_ _ -> BothFailed)
 
 
 -- | DLQ headers a replay tool reads to rewrite only the missing side(s) and
@@ -1750,7 +1740,7 @@ insertAndHandOff tfPgTypes target worker caches records
       res <- bulkInsertOtelLogsAndSpansTF tfPgTypes target cleanRecords
       -- Hand-off only when every row landed on every required store; a
       -- failed batch stays Left → DLQ.
-      when (isRight res) $ liftIO $ handOffBatches worker caches cleanRecords
+      when (isRight res) $ handOffBatches worker caches cleanRecords
       pure res
 
 
@@ -1797,19 +1787,20 @@ ingestionRedactionPaths = V.fromList [".password", ".set-cookie", ".authorizatio
 
 -- | Group `records` by `project_id`, build one `ExtractionBatch` per group, and
 -- submit via STM. Rows whose `project_id` is unparseable or whose project cache
--- is absent are silently skipped — the safety-net picks them up on the next
--- tick via `processed_at IS NULL`. Runs in IO (pure STM + one metric bump).
+-- is absent are skipped — the safety-net picks them up on the next tick via
+-- `processed_at IS NULL`; an unparseable id is logged at attention level.
 handOffBatches
-  :: EW.WorkerState OtelLogsAndSpans
+  :: (IOE :> es, Log :> es)
+  => EW.WorkerState OtelLogsAndSpans
   -> HM.HashMap Projects.ProjectId Projects.ProjectCache
   -> V.Vector OtelLogsAndSpans
-  -> IO ()
+  -> Eff es ()
 handOffBatches worker caches records = do
   let groups :: HM.HashMap Text (NonEmpty OtelLogsAndSpans)
       groups = V.foldr' (\r -> HM.insertWith (<>) r.project_id (r :| [])) HM.empty records
   forM_ (HM.toList groups) \(pidText, rowsNE) ->
     case idFromText pidText of
-      Nothing -> hPutStrLn stderr $ "handOffBatches: unparseable project_id: " <> toString pidText
+      Nothing -> Log.logAttention "handOffBatches: unparseable project_id" (AE.object ["project_id" AE..= pidText])
       Just pid -> case HM.lookup pid caches of
         Nothing -> pass -- safety-net picks these up via processed_at IS NULL
         Just cache -> do
@@ -1947,6 +1938,9 @@ instance UnnestElem MetricType where elemSqlType = "text"
 instance UnnestElem AggregationTemporality where elemSqlType = "text"
 
 
+instance UnnestElem UUID.UUID where elemSqlType = "uuid"
+
+
 -- | The single column combinator. hasql-interpolate's @EncodeValue (Vector a)@
 -- instance derives the whole postgres-array encoder for ANY encodable element
 -- type, so there are no hand-written encoders or per-type helpers. NULL
@@ -2030,7 +2024,7 @@ quantileColumn nm wantQuantiles proj = numArrayColumn nm "double precision" (fma
 -- assignment cast); on TimeFusion the bare text coerces to Variant (the
 -- VariantInsertRewriter fires on the SELECT projection).
 jsonColumn :: Text -> (r -> Maybe AE.Value) -> BulkCol r
-jsonColumn nm proj = (column nm (fmap (encodeText . scrubNulValue) . proj)){selectExpr = \usePgTypes a -> if usePgTypes then a <> "::jsonb" else a}
+jsonColumn nm proj = castColumn nm "jsonb" (fmap (encodeText . scrubNulValue) . proj)
 
 
 -- | Thrown when an OtelLogsAndSpans row reaches the bulk insert path with an
@@ -2277,6 +2271,10 @@ getErrorEvents OtelLogsAndSpans{events = Just (AesonText (AE.Array arr))} =
 getErrorEvents _ = []
 
 
+traceIdOf :: OtelLogsAndSpans -> Maybe Text
+traceIdOf r = nonEmptyT (r.context >>= (.trace_id))
+
+
 -- | Predicate mirroring the Sessions UI @is_error@ SQL
 -- (@lower(level) = 'error' OR severity___severity_number >= 17 OR status_code = 'ERROR'@).
 -- Any record the UI flags as an error should also feed the Issues pipeline so teams
@@ -2464,20 +2462,17 @@ mkSystemLog (UUIDId pid) eventName sev bodyMsg attrs duration ts =
 
 insertSystemLog
   :: (Hasql :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es)
-  => Bool
-  -- ^ enablePostgresTelemetryWrites
-  -> Bool
-  -- ^ enableTimefusionWrites
+  => WriteTarget
   -> Bool
   -- ^ @tfPgTypes@ (see 'bulkInsertOtelLogsAndSpansTF')
   -> OtelLogsAndSpans
   -> Eff es ()
-insertSystemLog enablePg enableTf tfPgTypes otelLog = do
+insertSystemLog target tfPgTypes otelLog = do
   let minted = mintOtelLogIds (V.singleton otelLog)
   -- System logs are best-effort. The inner write logs its own failure via
   -- logAttention; surface a higher-level "system log dropped" so an incident
   -- triager investigating the original event can see that its trail was lost.
-  whenLeftM_ (bulkInsertOtelLogsAndSpansTF tfPgTypes (writeTargetFor enablePg enableTf Nothing) minted) \wf ->
+  whenLeftM_ (bulkInsertOtelLogsAndSpansTF tfPgTypes target minted) \wf ->
     Log.logAttention "SYSTEM_LOG_DROPPED" (AE.object ["reason" AE..= writeFailureSummary wf])
 
 
@@ -2596,7 +2591,7 @@ generateLogSummary otel =
     rawDataLogElements =
       catMaybes
         [ tag "trace_state" "neutral" <$> (otel.context >>= nonEmptyT . (.trace_state))
-        , tag "trace_id" "right-badge-neutral" . T.take 16 <$> (otel.context >>= nonEmptyT . (.trace_id))
+        , tag "trace_id" "right-badge-neutral" . T.take 16 <$> traceIdOf otel
         , Just resourceFallback
         ]
 
@@ -2693,14 +2688,6 @@ urlBasename url =
    in if T.null seg then trimmed else seg
 
 
--- | Best-effort label for a user-interaction span (click, submit, etc.).
--- Prefers accessible labels over raw selectors.
-clickTargetLabel :: Maybe (Map Text AE.Value) -> Maybe T.Text
-clickTargetLabel attrs =
-  asum
-    $ map (`atMapText` attrs) ["target.aria_label", "aria.label", "target.text_content", "text_content", "target.element", "target_element", "target.tag_name", "target.xpath", "event_type"]
-
-
 generateSpanSummary :: OtelLogsAndSpans -> V.Vector T.Text
 generateSpanSummary otel =
   let
@@ -2718,6 +2705,12 @@ generateSpanSummary otel =
     hasHttp = isJust httpMethod || isJust httpStatus
 
     durMs d = toText (getDurationNSMS (fromIntegral d))
+    statusCodeStyle code
+      | code < 200 = "badge-neutral"
+      | code < 300 = "badge-2xx"
+      | code < 400 = "badge-3xx"
+      | code < 500 = "badge-4xx"
+      | otherwise = "badge-5xx"
     -- ERROR badge is dropped when http status >=400 already conveys it.
     errorStatus style = case (otel.status_code, httpStatus) of
       (Just "ERROR", Just s) | s >= 400 -> Nothing
@@ -2738,16 +2731,18 @@ generateSpanSummary otel =
         [ tag "process" "neutral" <$> (nonEmptyT (atMapText "process.executable.name" resM) <|> ("PID " <>) . show <$> atMapInt "process.pid" resM)
         , tag "service" "neutral" <$> atMapText "service.name" resM
         , tag "resource" "text-textWeak" . encTrunc 300 <$> mfilter (not . Map.null) (Map.filterWithKey (\k _ -> k /= "process") <$> resM)
-        , tag "trace_id" "right-badge-neutral" . T.take 16 <$> (otel.context >>= nonEmptyT . (.trace_id))
+        , tag "trace_id" "right-badge-neutral" . T.take 16 <$> traceIdOf otel
         , tag "duration" "right-badge-neutral" . durMs <$> otel.duration
         ]
 
+    -- Accessible labels before raw selectors.
+    clickLabelKeys = ["target.aria_label", "aria.label", "target.text_content", "text_content", "target.element", "target_element", "target.tag_name", "target.xpath", "event_type"]
     -- Frontend-derived label (suppressed via `frontendCat *>` when span isn't classified frontend).
     frontendLabel =
       frontendCat *> case spanNameT of
         n | n `elem` ["documentLoad", "documentFetch", "navigation", "route.change"] -> tag "url" "text-textStrong" <$> urlPathOrFull
         n | n `elem` ["resourceFetch", "resource"] -> tag "resource" "text-textStrong" . urlBasename <$> (urlFull <|> urlPathOrFull)
-        n | n `elem` ["click", "submit", "keydown", "keyup"] -> tag "target" "text-textStrong" <$> clickTargetLabel attrsM
+        n | n `elem` ["click", "submit", "keydown", "keyup"] -> tag "target" "text-textStrong" <$> asum (map (`atMapText` attrsM) clickLabelKeys)
         "longtask" -> tag "blocked" "text-textStrong" . ("main thread " <>) . durMs <$> otel.duration
         n | "web-vital." `T.isPrefixOf` n -> (\v -> tag "value" "text-textStrong" (v <> "ms")) <$> atMapText "value" attrsM
         _ -> Nothing
@@ -2808,15 +2803,6 @@ generateSpanSummary otel =
     V.fromList (if isEmptySpan then resourceFallbackElements else normalElements)
 
 
-statusCodeStyle :: Int -> T.Text
-statusCodeStyle code
-  | code < 200 = "badge-neutral"
-  | code < 300 = "badge-2xx"
-  | code < 400 = "badge-3xx"
-  | code < 500 = "badge-4xx"
-  | otherwise = "badge-5xx"
-
-
 methodStyle :: T.Text -> T.Text
 methodStyle = \case
   "GET" -> "badge-GET"
@@ -2872,7 +2858,7 @@ mintMetricIds = V.map $ \r -> r{id = Just $ fromMaybe (metricId r) r.id}
 -- as logs and spans. The caller mints ids before calling this function; it is
 -- repeated defensively here so ad-hoc producers cannot write random ids.
 bulkInsertOtelMetrics
-  :: (Hasql :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es)
+  :: (Concurrent :> es, Hasql :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es)
   => MetricCatalogBuffer
   -> Bool
   -> WriteTarget
@@ -2891,7 +2877,7 @@ bulkInsertOtelMetrics catalogBuffer tfPgTypes target records0 = do
           (labeled @"timefusion" @Hasql $ insertOtelMetrics tfPgTypes records)
   -- Raw storage is authoritative. Catalog work is buffered and only a full
   -- threshold batch is flushed on the ingestion path.
-  when rawPersisted $ whenJustM (liftIO $ enqueueMetricCatalog catalogBuffer records) \batch ->
+  when rawPersisted $ whenJustM (enqueueMetricCatalog catalogBuffer records) \batch ->
     whenLeftM_ (trySync $ upsertMetricMetadata batch) \e ->
       Log.logAttention "OTEL_METRICS_META_WRITE_FAILED" (AE.object ["record_count" AE..= V.length batch, "error" AE..= show @Text e])
   pure result
@@ -2906,16 +2892,6 @@ data MetricRow = MetricRow
   , resourceMap :: Maybe (Map.Map Text AE.Value)
   , native :: NativeMetricColumns
   }
-
-
-mkMetricRow :: MetricRecord -> MetricRow
-mkMetricRow r =
-  MetricRow
-    { rec = r
-    , attrs = jsonToMap r.attributes
-    , resourceMap = jsonToMap r.resource
-    , native = metricValueToNative r.metricValue
-    }
 
 
 -- | Single source of truth for the otel_metrics bulk insert. One 'BulkCol' per
@@ -3024,7 +3000,7 @@ insertOtelMetrics :: DB es => Bool -> V.Vector MetricRecord -> Eff es BulkInsert
 insertOtelMetrics usePgTypes records
   | V.null records = pure mempty
   | otherwise = do
-      _affected <- Hasql.use $ HSession.statement () (unnestInsert "otel_metrics" metricColumns " ON CONFLICT (project_id, timestamp, id) DO NOTHING" usePgTypes (V.map mkMetricRow records))
+      _affected <- Hasql.use $ HSession.statement () (unnestInsert "otel_metrics" metricColumns " ON CONFLICT (project_id, timestamp, id) DO NOTHING" usePgTypes (V.map (\r -> MetricRow r (jsonToMap r.attributes) (jsonToMap r.resource) (metricValueToNative r.metricValue)) records))
       pure (BulkInsertResult (fromIntegral (V.length records)))
 
 

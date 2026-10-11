@@ -77,7 +77,7 @@ test.describe("Host map", () => {
     await expect(dialog).toHaveCSS("width", "390px");
     await expect(dialog.getByText("Open this host in Explorer to search, filter, and inspect its logs.")).toBeVisible();
     await expect(dialog.locator("log-list")).toBeHidden();
-    const title = dialog.locator("#host-detail-title");
+    const title = dialog.locator("[data-drawer-title]");
     await title.evaluate((element) => {
       element.textContent = "خادم الإنتاج الرئيسي — äußerst-langer-hostname-mit-emoji-🚀-und-mehrsprachigen-zeichen.example.internal".repeat(2);
       element.setAttribute("dir", "auto");

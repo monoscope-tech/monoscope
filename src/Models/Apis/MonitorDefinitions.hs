@@ -7,11 +7,10 @@ import Data.OpenApi (ToSchema)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Vector qualified as V
-import Deriving.Aeson.Stock qualified as DAE
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.ProjectMembers qualified as PM
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (SnakeSchema (..))
+import Pkg.DeriveUtils (SnakeJSON (..), SnakeSchema (..))
 import Pkg.Parser qualified as Parser
 import Relude
 
@@ -46,8 +45,7 @@ data MonitorInput = MonitorInput
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MonitorInput
-  deriving (ToSchema) via SnakeSchema MonitorInput
+  deriving (AE.FromJSON, AE.ToJSON, ToSchema) via SnakeJSON SnakeSchema MonitorInput
 
 
 -- | The compiled form of a monitor's KQL, which is what alert evaluation actually

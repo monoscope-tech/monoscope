@@ -79,7 +79,7 @@ module Pkg.Git (
 
 import Control.Lens (toListOf, (.~), (^.), (^..), (^?))
 import Data.Aeson qualified as AE
-import Data.Aeson.Lens (key, values, _Bool, _Integer, _String)
+import Data.Aeson.Lens (AsValue, key, values, _Bool, _Integer, _String)
 import Data.Base64.Types (extractBase64)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
@@ -794,38 +794,26 @@ fetchTree conn r prefix = runExceptT do
     rawEntries pinned = case conn.host of
       GitHub -> githubish ("/git/trees/" <> enc pinned.ref <> "?recursive=1")
       Gitea -> githubish ("/git/trees/" <> enc pinned.ref <> "?recursive=true&per_page=1000")
-      GitLab -> pagedJson conn 100 (toListOf values) gitlabEntry \p ->
+      -- GitLab's `id` is the git object sha, so blobs arrive already content-addressed.
+      GitLab -> pagedJson conn 100 (toListOf values) (entry "blob" (Just "id") False) \p ->
         repoUrl conn pinned ("/repository/tree?ref=" <> enc pinned.ref <> "&recursive=true&per_page=100&page=" <> show p <> pathQ)
-      Bitbucket -> pagedJson conn 100 (toListOf (key "values" . values)) bitbucketEntry \p ->
+      Bitbucket -> pagedJson conn 100 (toListOf (key "values" . values)) (entry "commit_file" Nothing True) \p ->
         repoUrl conn pinned ("/src/" <> enc pinned.ref <> "/" <> encPath prefix <> "?max_depth=100&pagelen=100&page=" <> show p)
 
     pathQ = if T.null prefix then "" else "&path=" <> enc (T.dropWhileEnd (== '/') prefix)
 
     -- GitHub and Gitea both answer with git's own tree object, so one decoder serves both.
     githubish suffix =
-      get_ conn (repoUrl conn r suffix)
-        <&> ( >>=
-                \body ->
-                  if body ^? key "truncated" . _Bool == Just True
-                    then Left "Repository listing was truncated by the host; it is too large to sync."
-                    else Right $ mapMaybe treeObjEntry $ toListOf (key "tree" . values) body
-            )
+      get_ conn (repoUrl conn r suffix) <&> (>>= treeObject)
+    treeObject body
+      | body ^? key "truncated" . _Bool == Just True = Left "Repository listing was truncated by the host; it is too large to sync."
+      | otherwise = Right $ mapMaybe (entry "blob" (Just "sha") True) $ toListOf (key "tree" . values) body
 
-    treeObjEntry v = do
+    -- An entry from (blob type tag, sha key, whether a size is reported).
+    entry blobTy shaKey sized v = do
       p <- v ^? key "path" . _String
       ty <- v ^? key "type" . _String
-      pure $ TreeEntry p (ty == "blob") (v ^? key "sha" . _String) (fromIntegral <$> v ^? key "size" . _Integer)
-
-    -- GitLab's `id` is the git object sha, so blobs arrive already content-addressed.
-    gitlabEntry v = do
-      p <- v ^? key "path" . _String
-      ty <- v ^? key "type" . _String
-      pure $ TreeEntry p (ty == "blob") (v ^? key "id" . _String) Nothing
-
-    bitbucketEntry v = do
-      p <- v ^? key "path" . _String
-      ty <- v ^? key "type" . _String
-      pure $ TreeEntry p (ty == "commit_file") Nothing (fromIntegral <$> v ^? key "size" . _Integer)
+      pure $ TreeEntry p (ty == blobTy) (shaKey >>= \k -> v ^? key k . _String) (guard sized *> (fromIntegral <$> v ^? key "size" . _Integer))
 
     backfill pinned es
       | conn.host /= Bitbucket || T.null prefix = pure $ Right es
@@ -868,45 +856,21 @@ pushFile conn r path content existingSha message = runExceptT do
   shaM <- ExceptT $ case conn.host of
     GitHub -> contentsPut
     Gitea -> contentsPut
-    GitLab -> do
-      let body =
-            AE.object
-              [ "branch" AE..= r.ref
-              , "content" AE..= extractBase64 (B64.encodeBase64 content)
-              , "encoding" AE..= ("base64" :: Text)
-              , "commit_message" AE..= message
-              ]
-          u = toString $ repoUrl conn r ("/repository/files/" <> enc path)
-          send = maybe (W.postWith (gitOpts conn) u body) (const $ W.putWith (gitOpts conn) u body) existingSha
-      fmap (const Nothing) <$> tryHttp send
-    Bitbucket ->
-      -- form-urlencoded rather than multipart: the field *name* is the file path, and the
-      -- commit metadata rides alongside as ordinary fields.
-      fmap (const Nothing)
-        <$> tryHttp
-          ( W.postWith
-              (gitOpts conn)
-              (toString $ repoUrl conn r "/src")
-              ( [ (encodeUtf8 path :: ByteString) := content
-                , ("message" :: ByteString) := (encodeUtf8 message :: ByteString)
-                , ("branch" :: ByteString) := (encodeUtf8 r.ref :: ByteString)
-                ]
-                  :: [FormParam]
-              )
-          )
+    GitLab ->
+      noSha
+        $ maybe W.postWith (const W.putWith) existingSha (gitOpts conn) (toString $ repoUrl conn r ("/repository/files/" <> enc path))
+        $ AE.object ["branch" AE..= r.ref, "content" AE..= b64Content, "encoding" AE..= ("base64" :: Text), "commit_message" AE..= message]
+    -- form-urlencoded rather than multipart: the field *name* is the file path, and the
+    -- commit metadata rides alongside as ordinary fields.
+    Bitbucket -> noSha $ W.postWith (gitOpts conn) (toString $ repoUrl conn r "/src") ([encodeUtf8 path := content, "message" := message, "branch" := r.ref] :: [FormParam])
   rev <- ExceptT $ headRevision conn r
   pure (fromMaybe (computeContentSha content) shaM, rev)
   where
-    contentsPut = do
-      let body =
-            AE.object
-              $ [ "message" AE..= message
-                , "content" AE..= extractBase64 (B64.encodeBase64 content)
-                , "branch" AE..= r.ref
-                ]
-              <> maybeToList (("sha" AE..=) <$> existingSha)
-      resp <- tryHttp $ W.putWith (gitOpts conn) (toString $ repoUrl conn r ("/contents/" <> encPath path)) body
-      pure $ (^? W.responseBody . key "content" . key "sha" . _String) <$> resp
+    b64Content = extractBase64 (B64.encodeBase64 content)
+    noSha = fmap (Nothing <$) . tryHttp
+    contentsPut =
+      fmap (^? W.responseBody . key "content" . key "sha" . _String)
+        <$> tryHttp (W.putWith (gitOpts conn) (toString $ repoUrl conn r ("/contents/" <> encPath path)) $ AE.object $ ["message" AE..= message, "content" AE..= b64Content, "branch" AE..= r.ref] <> maybeToList (("sha" AE..=) <$> existingSha))
 
 
 -- | Repositories granted to a GitHub App installation, or an account on other hosts.
@@ -936,7 +900,7 @@ fetchRepository conn r = get_ conn (repoUrl conn r "") <&> (>>= \body -> first t
 
 parseRepository :: GitHost -> AE.Value -> Maybe GitRepo
 parseRepository host v = do
-  full <- v ^? key (if host == GitLab then "path_with_namespace" else "full_name") . _String
+  full <- v ^? key (bool "full_name" "path_with_namespace" (host == GitLab)) . _String
   let (owner, name) = splitFullName full
   guard $ not (T.null owner || T.null name)
   let private = case host of
@@ -944,8 +908,7 @@ parseRepository host v = do
         Bitbucket -> v ^? key "is_private" . _Bool == Just True
         GitHub -> v ^? key "private" . _Bool == Just True
         Gitea -> v ^? key "private" . _Bool == Just True
-      branch = if host == Bitbucket then v ^? key "mainbranch" . key "name" . _String else v ^? key "default_branch" . _String
-  pure $ GitRepo full name private (fromMaybe "main" branch)
+  pure $ GitRepo full name private (fromMaybe "main" $ branchOf host v)
 
 
 -- | The repository's default branch, or @main@ when the host will not say.
@@ -954,15 +917,18 @@ defaultBranchOf conn r = fromRight "main" <$> fetchDefaultBranch conn r
 
 
 fetchDefaultBranch :: W.HTTP :> es => GitConn -> RepoRef -> Eff es (Either Text Text)
-fetchDefaultBranch conn r = get_ conn (repoUrl conn r "") <&> (>>= maybeToRight "This repository has no default branch. Choose a branch before enabling sync." . pick)
+fetchDefaultBranch conn r = get_ conn (repoUrl conn r "") <&> (>>= maybeToRight "This repository has no default branch. Choose a branch before enabling sync." . branchOf conn.host)
+
+
+-- | A repository object's default branch, in this host's spelling.
+branchOf :: AsValue v => GitHost -> v -> Maybe Text
+branchOf h v = case h of
+  Bitbucket -> v ^? key "mainbranch" . key "name" . _String
+  GitHub -> dflt
+  Gitea -> dflt
+  GitLab -> dflt
   where
-    pick body = case conn.host of
-      Bitbucket -> body ^? key "mainbranch" . key "name" . _String
-      GitHub -> dflt
-      Gitea -> dflt
-      GitLab -> dflt
-      where
-        dflt = body ^? key "default_branch" . _String
+    dflt = v ^? key "default_branch" . _String
 
 
 -- | Git's own blob hash: @sha1("blob <len>\\0<content>")@.

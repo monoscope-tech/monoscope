@@ -11,7 +11,7 @@
 --   * __Backpressure__ — that the per-connection queue holds its bound and loses the oldest.
 --
 -- These drive 'LT.publishMatches' directly rather than going through OTLP: the hook in
--- @dualWriteWithPoisonMapping@ is one call, while everything worth asserting about — which
+-- @ingestOtelRecords@ is one call, while everything worth asserting about — which
 -- subscriptions match, what crosses the wire, what is dropped — lives on this side of it.
 module LiveTailSpec (spec) where
 
@@ -30,7 +30,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.LogExplorer.LiveTail qualified as LiveTailPage
 import Pkg.DeriveUtils (AesonText (..), UUIDId (..))
 import Pkg.LiveTail qualified as LT
-import Pkg.TestUtils (TestResources (..), createTestAPIKey, frozenTime, ingestLog, runHasqlEffect, testServant, withTestResources)
+import Pkg.TestUtils (TestResources (..), assertNonMemberDenied, createTestAPIKey, createTestProject, frozenTime, ingestLog, runHasqlEffect, testServant, withTestResources)
 import Relude
 import System.Config (AuthContext (hasqlPool, liveTail))
 import Test.Hspec (Spec, around, describe, it, shouldBe, shouldContain, shouldReturn, shouldSatisfy)
@@ -459,7 +459,7 @@ spec = do
     it "directOtlpIngest_reachesLiveTail_notOnlyTheQueuePath" \tr -> do
       -- Regression, and the one that made Live Tail look broken rather than subtly wrong.
       --
-      -- The ingest hook lived only in 'dualWriteWithPoisonMapping' — the path telemetry takes
+      -- The ingest hook lived only in the queue path's dual write — the path telemetry takes
       -- when it arrives via Kafka or Pub/Sub. Records arriving over OTLP directly (gRPC on
       -- 4317, or OTLP/HTTP) go through 'processSignalRequest' and write straight to the store.
       -- That path had no hook, so in any deployment without a queue in front — every dev box,
@@ -486,6 +486,13 @@ spec = do
           stored.id `shouldBe` row.id
           AE.toJSON stored `shouldSatisfy` \case AE.Object obj -> length obj > 10; _ -> False
         _ -> fail "expected one streamed log row"
+
+    -- Registration never called sessionAndProject: any signed-in user could open a
+    -- subscription on another project by its id and stream that project's logs.
+    it "liveTailRegisterH_nonMember_cannotSubscribe" \tr -> do
+      victim <- createTestProject tr "victim"
+      assertNonMemberDenied tr victim $ LiveTailPage.liveTailRegisterH victim (newSub "checkout")
+      runHasqlEffect tr (LT.countActiveForProject victim) `shouldReturn` 0
 
     it "countActive_int8Decoder_doesNotThrow" \tr -> do
       -- Regression. These were `count(*)::int` — int4 — while the Haskell `Int` decoder expects

@@ -7,7 +7,6 @@ module Utils (
   freeTierDailyMaxEvents,
   JSONHttpApiData (..),
   parseTime,
-  DBField (..),
   copyToClipboardAttr_,
   faSprite_,
   faSymbolDefs_,
@@ -28,7 +27,6 @@ module Utils (
   formatUTCMicros,
   fmtDate,
   encodeText,
-  getAlertStatusColor,
   lookupVecTextByKey,
   lookupVecNonEmptyText,
   lookupVecBy,
@@ -70,6 +68,8 @@ module Utils (
   prettyTimeShort,
   formatOffset,
   navTabAttrs,
+  dashboardContentNavAttrs,
+  DashboardSwap (..),
   explorerNavTabs_,
   navTabStrip_,
   TabStrip (..),
@@ -122,7 +122,6 @@ import Data.Time.Format (FormatTime, formatTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Time.LocalTime (timeOfDayToTime, timeToTimeOfDay)
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple.ToField (ToField (..))
 import Effectful (Eff, type (:>))
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
@@ -132,7 +131,7 @@ import GHC.TypeLits (KnownSymbol, Symbol, symbolVal)
 import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Aria qualified as Aria
-import Lucid.Htmx (hxBoost_, hxGet_, hxIndicator_, hxSelect_, hxSwap_, hxTarget_)
+import Lucid.Htmx (hxBoost_, hxGet_, hxIndicator_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxVals_)
 import Lucid.Hyperscript (__)
 import Lucid.Svg qualified as Svg
 import Models.Projects.Projects qualified as Projects
@@ -189,17 +188,6 @@ timeScopedUrl base extras fromM toM sinceM =
     params -> base <> "?" <> T.intercalate "&" params
   where
     pair (key, valueM) = (\value -> key <> "=" <> toUriStr value) <$> nonEmptyT valueM
-
-
-data DBField = forall a. (Show a, ToField a) => MkDBField a
-
-
--- Standalone: GHC rejects an inline @deriving@ on an existential constructor.
-deriving stock instance Show DBField
-
-
-instance ToField DBField where
-  toField (MkDBField a) = toField a
 
 
 onpointerdown_ :: Text -> Attribute
@@ -261,20 +249,9 @@ fieldContextMenuItems_ ctx = traverse_ \case
   FGroupBy ->
     menuItem_
       "layer-group"
-      (span_ [class_ "gb-verb"] "Group by " <> key_)
+      (span_ [class_ "gb-verb", term "hx-live:text" "['summarize', 'by', this.closest('[data-field-path]')?.dataset.fieldPath?.toLowerCase()].every(s => (document.querySelector('#filterElement')?.getValue?.().toLowerCase() ?? '').includes(s)) ? 'Remove group by ' : 'Group by '"] "Group by " <> key_)
       keyTip
-      [__|
-        init if document.querySelector('query-builder') call window.updateGroupByButtonText(event, me) end
-        on refreshItem if document.querySelector('query-builder') call window.updateGroupByButtonText(event, me) end
-
-        on click
-          set qb to document.querySelector('query-builder')
-          if qb
-            call qb.toggleGroupByField(closest @data-field-path)
-            trigger refreshItem on me
-          end
-        end
-      |]
+      [__|on click set qb to document.querySelector('query-builder') if qb call qb.toggleGroupByField(closest @data-field-path) end|]
   FViewPatterns -> menuItem_ "chart-simple" ("Show patterns for " <> key_) keyTip $ onpointerdown_ "viewFieldPatterns(event.target.closest('[data-field-path]').dataset.fieldPath)"
   FAddColumn ->
     -- Label reflects current state; refreshed when the popover opens (by which point the
@@ -360,24 +337,21 @@ truncateMiddle n t
   | otherwise = T.take (n - 6) t <> "…" <> T.takeEnd 5 t
 
 
--- | Render a Font Awesome icon embedded at compile time from
--- static/public/assets/svgs/fa-sprites/{regular,solid}.svg. The first arg is
--- the symbol id (e.g. "bucket"). Adding a symbol to either source sheet causes
--- this module to be recompiled via 'qAddDependentFile'.
 -- | Click-to-copy for the value of the JS expression @valueExpr@: flashes
 -- @.copy-success@ on the trigger and raises the success toast with @msg@.
 copyToClipboardAttr_ :: Text -> Text -> Attribute
 copyToClipboardAttr_ valueExpr msg = term "hx-on:click" $ "navigator.clipboard.writeText(" <> valueExpr <> "); this.classList.add('copy-success'); setTimeout(() => this.classList.remove('copy-success'), 1500); htmx.trigger(document.body, 'successToast', {value: ['" <> msg <> "']})"
 
 
+-- | Render a Font Awesome icon embedded at compile time from
+-- static/public/assets/svgs/fa-sprites/{regular,solid}.svg. The first arg is
+-- the symbol id (e.g. "bucket"). Adding a symbol to either source sheet causes
+-- this module to be recompiled via 'qAddDependentFile'.
 faSprite_ :: Monad m => Text -> Text -> Text -> HtmlT m ()
 faSprite_ mIcon faType classes = case Icons.lookupIcon faType mIcon of
   Nothing -> svg_ baseAttributes pass
   Just icon ->
-    svg_
-      ( baseAttributes
-          <> [term "viewBox" icon.viewBox]
-      )
+    svg_ (baseAttributes <> [term "viewBox" icon.viewBox])
       -- Symbol-level presentation attributes must remain closer to the paths
       -- than the outer `.icon` CSS. In particular, `.icon { fill: currentColor }`
       -- must not override a source symbol's `fill="none"`.
@@ -515,7 +489,6 @@ replaceNumbers :: Text -> Text
 replaceNumbers input = T.replace ".[*]" "[*]" $ T.intercalate "." (map replaceDigitPart parts)
   where
     parts = T.splitOn "." input
-    replaceDigitPart :: Text -> Text
     replaceDigitPart part
       | T.all isDigit part = "[*]"
       | otherwise = T.concatMap (\ch -> if isDigit ch then "[*]" else one ch) part
@@ -572,13 +545,12 @@ jsonValueToHtmlTree val pathM = do
   where
     json = encodeText val
     hasChildren = case val of AE.Object o -> not (AEKM.null o); AE.Array a -> not (V.null a); _ -> False
-    jsonValueToHtmlTree' :: (Text, Text, AE.Value) -> Html ()
     jsonValueToHtmlTree' (path, key, AE.Object v) = renderParentType "{" "}" key (length v) (AEKM.toAscList v & mapM_ (\(kk, vv) -> jsonValueToHtmlTree' (path <> "." <> key, AEK.toText kk, vv)))
     jsonValueToHtmlTree' (path, key, AE.Array v) = renderParentType "[" "]" key (length v) (V.iforM_ v \i item -> jsonValueToHtmlTree' (path <> "." <> key, T.show i, item))
     jsonValueToHtmlTree' (path, key, value) = do
       let fullFieldPath = if T.isSuffixOf "[*]" path then path else path <> "." <> key
-      let fullFieldPath' = fromMaybe fullFieldPath $ T.stripPrefix ".." fullFieldPath
-      let dfPath = replaceNumbers $ if isJust pathM then T.replace ".." "." fullFieldPath' else fullFieldPath'
+          fullFieldPath' = fromMaybe fullFieldPath $ T.stripPrefix ".." fullFieldPath
+          dfPath = replaceNumbers $ if isJust pathM then T.replace ".." "." fullFieldPath' else fullFieldPath'
           dfVal = unwrapJsonPrimValue False value
       -- Styling for these three is in tailwind.css, not inline: a panel emits hundreds of
       -- leaves and server render time is ~2ms per KB of HTML, so the repeated utility
@@ -597,9 +569,9 @@ jsonValueToHtmlTree val pathM = do
               span_ [class_ "text-textBrand"] ":"
             span_ [class_ "log-item-field-value", term "data-field-path" fullFieldPath'] $ toHtml dfVal
 
-    renderParentType :: Text -> Text -> Text -> Int -> Html () -> Html ()
     -- Collapse state is a hidden checkbox toggled by the label (no JS): CSS collapses the
     -- node via `.log-item-with-children:has(> label > .tree-toggle:checked)`. Checked = collapsed.
+    renderParentType :: Text -> Text -> Text -> Int -> Html () -> Html ()
     renderParentType opening closing key count child = div_ [class_ "log-item-with-children"] do
       label_ [class_ "inline-block items-center cursor-pointer"] do
         input_ $ [type_ "checkbox", class_ "tree-toggle sr-only"] <> [checked_ | count == 0]
@@ -836,7 +808,6 @@ toUriStr :: Text -> Text
 toUriStr s = decodeUtf8 $ urlEncode True (encodeUtf8 s)
 
 
--- | Relative-window tokens accepted by 'parseTime': token → (window in seconds, display label).
 -- | The canonical since-window vocabulary: key, width in seconds, and the label the
 -- user sees. 'Pkg.Components.TimePicker.timePickerItems' is derived from this, so the
 -- two cannot drift. They had: every one of these eleven labels differed in case or
@@ -864,10 +835,9 @@ parseTime :: Maybe Text -> Maybe Text -> Maybe Text -> UTCTime -> (Maybe UTCTime
 parseTime fromM toM sinceM now = case (`lookup` sinceWindows) =<< sinceM of
   Just (secs, label) -> (Just $ addUTCTime (fromIntegral $ negate secs) now, Just now, Just (label, ""))
   Nothing ->
-    let f = iso8601ParseM (toString $ fromMaybe "" fromM) :: Maybe UTCTime
-        t = iso8601ParseM (toString $ fromMaybe "" toM) :: Maybe UTCTime
-        disp = formatUTC
-     in (f, t, liftA2 (,) (disp <$> f) (disp <$> t))
+    let parseT = (>>= iso8601ParseM @Maybe @UTCTime . toString)
+        (f, t) = (parseT fromM, parseT toM)
+     in (f, t, liftA2 (,) (formatUTC <$> f) (formatUTC <$> t))
 
 
 -- A newtype wrapper that uses the FromJSON instance to implement FromHttpApiData,
@@ -993,8 +963,8 @@ sanitizeBackendError raw
         || (has "connection" && any has ["refused", "closed"])
 
 
--- | Format a Double with thousand separators
--- | Example: 1000 -> "1,000", 1000.55 -> "1,000.55", 0.5 -> "0.5"
+-- | Format a Double with thousand separators.
+-- Example: 1000 -> "1,000", 1000.55 -> "1,000.55", 0.5 -> "0.5"
 formatWithCommas :: Double -> Text
 formatWithCommas d =
   let (intPart, fracPart) = properFraction d :: (Int, Double)
@@ -1002,7 +972,7 @@ formatWithCommas d =
    in if fracPart == 0 then intFormatted else intFormatted <> T.dropWhile (/= '.') (T.show d)
 
 
-messageKeys :: [T.Text]
+messageKeys :: [Text]
 messageKeys =
   words
     """
@@ -1017,7 +987,7 @@ messageKeys =
     """
 
 
-extractMessageFromLog :: Value -> Maybe T.Text
+extractMessageFromLog :: Value -> Maybe Text
 extractMessageFromLog (AE.Object obj) =
   asum [render <$> AEKM.lookup (AEK.fromText key) obj | key <- messageKeys]
   where
@@ -1058,13 +1028,6 @@ levelFillColor level = case T.toLower level of
   v | "info" `T.isInfixOf` v -> "bg-fillBrand-strong"
   v | "debug" `T.isInfixOf` v || "trace" `T.isInfixOf` v -> "bg-fillStrong"
   _ -> "bg-fillWeak"
-
-
-getAlertStatusColor :: Text -> Text
-getAlertStatusColor = \case
-  "Alerting" -> "badge-error"
-  "Warning" -> "badge-warning"
-  _ -> "badge-success"
 
 
 -- | Single-pass scanner that replaces variable tokens (IDs, numbers, dates, etc.) with type placeholders.
@@ -1550,13 +1513,35 @@ navTabAttrs =
   ]
 
 
--- | The one link-based tab strip: each tab is (label, href, active) and navigates with
--- 'navTabAttrs'. @extra@ adds nav classes such as a size modifier.
+data DashboardSwap = TabPanel | WholePage
+
+
+-- | The range comes from the live picker, not @url@: a range picked client-side leaves every
+-- server-rendered link's @since@/@from@/@to@ stale, and a duplicate key resolves to the first.
+-- A tab URL answers htmx with just the tab panel; a tabless dashboard's URL with the whole page.
+dashboardContentNavAttrs :: DashboardSwap -> Text -> [Attribute]
+dashboardContentNavAttrs target url =
+  [ hxGet_ $ path <> foldMap (("?" <>) . T.intercalate "&" . toList) (nonEmpty kept)
+  , hxVals_ "js:{...getTimeRange()}"
+  , hxSwap_ "outerMorph"
+  , hxPushUrl_ "true"
+  , [__|on click set my.preloadState to 'DONE'|]
+  ]
+    <> case target of
+      TabPanel -> [hxTarget_ "#dashboard-tabs-content"]
+      WholePage -> [hxTarget_ "#main-content", hxSelect_ "#main-content", term "hx-select-oob" "#main-sidenav:outerMorph,#main-navbar:outerMorph"]
+  where
+    (path, qs) = T.breakOn "?" url
+    kept = filter (not . (`elem` ["", "since", "from", "to"]) . T.takeWhile (/= '=')) $ T.splitOn "&" $ T.drop 1 qs
+
+
 -- | Section navigation is a @nav@ whose current link carries @aria-current@; view tabs
 -- switch the same page's data and are an ARIA tablist.
 data TabStrip = NavLinks | ViewTabs
 
 
+-- | The one link-based tab strip: each tab is (label, href, active) and navigates with
+-- 'navTabAttrs'. @extra@ adds nav classes such as a size modifier.
 navTabStrip_ :: Monad m => TabStrip -> Text -> Text -> [(HtmlT m (), Text, Bool)] -> HtmlT m ()
 navTabStrip_ kind label extra tabs = container [class_ $ "tabs tabs-box tabs-outline flex-nowrap items-center " <> extra, Aria.label_ label, term "hx-preload" "mouseover"] $ forM_ tabs \(name, href, active) ->
   a_ ([href_ href, class_ $ "tab h-auto! whitespace-nowrap" <> bool "" " tab-active font-semibold text-textStrong" active] <> mark active <> navTabAttrs) name
@@ -1641,7 +1626,6 @@ jsonToMap :: AE.Value -> Maybe (Map Text AE.Value)
 jsonToMap = \case AE.Object o -> Just $ AEKM.toMapText o; _ -> Nothing
 
 
--- | Style mapping matching web-components/src/log-list-utils.ts STYLE_MAPPINGS
 -- | Resolve a summary `style` token to a pill class. Mirrors the log-list TS
 -- renderer (`getStyleClass` + STYLE_MAPPINGS in log-list-utils.ts) so detail-view
 -- pills carry the same method/status/db colors as the list rows. `badge-*` tokens
@@ -1967,7 +1951,7 @@ usageWindowStart lastReported cycleStart now =
 -- fromList [("title","")]
 -- >>> dropEmptyFormValues "teams" (Form (HM.fromList [("title", ["x"])]))
 -- fromList [("title","x")]
-dropEmptyFormValues :: T.Text -> Form -> Form
+dropEmptyFormValues :: Text -> Form -> Form
 dropEmptyFormValues key = Form . HM.adjust (filter (not . T.null)) key . unForm
 
 
@@ -1992,7 +1976,7 @@ instance (GFromForm a (Rep a), Generic a, KnownSymbol key) => FromForm (FormWith
 -- contexts (SQLSTATE @22P05@); span attributes occasionally carry one (k8s
 -- events, base64-flagged fields). The guard makes the common case (no NUL) a
 -- single linear scan with no allocation.
-scrubNulText :: T.Text -> T.Text
+scrubNulText :: Text -> Text
 scrubNulText t = if T.any (== '\NUL') t then T.filter (/= '\NUL') t else t
 
 

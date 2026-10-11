@@ -14,7 +14,6 @@ module System.Logging (
   timeAction,
   tolerantLogger,
   LoggingDestination (..),
-  getLogLevelFromEnv,
 )
 where
 
@@ -25,7 +24,6 @@ import Data.Aeson.KeyMap qualified as AEKM
 import Data.ByteString.Char8 qualified as BS
 import Data.Default (Default (..))
 import Data.HashMap.Strict qualified as HM
-import Data.Text qualified as T
 import Data.Time.Clock as Time (NominalDiffTime, diffUTCTime)
 import Effectful (
   Eff,
@@ -188,17 +186,3 @@ timeAction action = do
   result <- action
   end <- Time.currentTime
   pure (result, Time.diffUTCTime end start)
-
-
--- | Read log level from LOG_LEVEL environment variable
--- Defaults to LogTrace (most verbose) if not set or invalid
-getLogLevelFromEnv :: IO LogLevel
-getLogLevelFromEnv = do
-  maybeLevel <- lookupEnv "LOG_LEVEL"
-  pure $ case maybeLevel of
-    Just levelStr -> case T.toLower (toText levelStr) of
-      "trace" -> LogTrace
-      "info" -> LogInfo
-      "attention" -> LogAttention
-      _ -> LogTrace -- Default to trace if invalid value
-    Nothing -> LogTrace -- Default to trace if not set

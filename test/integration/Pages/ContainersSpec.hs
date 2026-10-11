@@ -546,6 +546,10 @@ spec = sequential $ aroundAll withTfChartResources do
       ambiguous `shouldContainAll` ["Several containers match this link.", "/infrastructure/containers?since=4H"]
       ambiguous `shouldNotSatisfy` T.isInfixOf "data-widget="
 
+    it "containerDetailGetH_nonMember_cannotRead" \tr -> do
+      victim <- createTestProject tr "victim"
+      assertNonMemberDenied tr victim $ Containers.containerDetailGetH victim (Just "checkout") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+
     it "detailDrawer_showsRequestsAndLimitsAndPivots" \tr -> do
       (_, html') <- testServant tr $ Containers.containerDetailGetH testPid (Just "checkout") (Just "checkout-7fb5b4f859-nlcjs") Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       let html = LT.toStrict $ Lucid.renderText $ Lucid.toHtml html'

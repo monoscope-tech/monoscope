@@ -21,7 +21,7 @@ import Database.PostgreSQL.Simple.Migration qualified as Migrations
 import Effectful
 import Effectful.Fail (Fail)
 import Effectful.Ki qualified as Ki
-import Log (LogLevel (..))
+import Log (LogLevel (..), readLogLevelEither, showLogLevel)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.ContainerTypes qualified as Containers
@@ -358,10 +358,7 @@ instance Var [Text] where
 
 newtype AIPrice = AIPrice {aiPriceMicrousd :: Int}
   deriving stock (Eq, Generic, Show)
-
-
-instance Default AIPrice where
-  def = AIPrice 0
+  deriving newtype (Default)
 
 
 instance Var AIPrice where
@@ -390,17 +387,10 @@ instance Var TwilioContentSid where
   toVar = toString . twilioContentSidText
 
 
--- Support unmarshalling LogLevel from environment variable
--- Accepts: "trace", "info", or "attention" (case-insensitive)
+-- | @LOG_LEVEL@: log-base's own spellings (@trace@, @info@, @attention@), case-insensitive.
 instance Var LogLevel where
-  fromVar str = case T.toLower (toText str) of
-    "trace" -> Just LogTrace
-    "info" -> Just LogInfo
-    "attention" -> Just LogAttention
-    _ -> Nothing
-  toVar LogTrace = "trace"
-  toVar LogInfo = "info"
-  toVar LogAttention = "attention"
+  fromVar = rightToMaybe . readLogLevelEither . T.toLower . toText
+  toVar = toString . showLogLevel
 
 
 -- Rename to AppContext

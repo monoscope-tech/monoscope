@@ -1,9 +1,7 @@
-{-# LANGUAGE NoFieldSelectors #-}
-
-module Pages.Components (drawer_, drawerLoadingSkeleton_, tableSkeleton_, deferredShell_, Deferred (..), RefreshingDeferred (..), timeRefreshListener_, timeWindowVals_, withDeferredBody, searchInput_, inlineIconBtn_, silenceBadge_, emptyState_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), facetRail_, facetSection_, facetOption_, factGrid_, metaChip_, resizer_, detailTab_, httpTab_, tabPanel_, dateTime, localTimeFmt_, paymentPlanPicker, navBar, modal_, primaryButton_, headerRow_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, copyButton_, RowAction (..), rowActions_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, detailsClosedBelowAttr_, installationSettingsLink_, keyboardActivateAttr_, copySourceAttr_, filterInputAttr_, sparkline_, periodToggle_, abbreviateUnit, agoText, stackTrace_, durationMenu_, durationQuery, untilLabel) where
+module Pages.Components (drawer_, PanelStyle (..), PanelCfg (..), panel_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, timeRefreshListener_, timeWindowVals_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, facetRail_, facetSection_, facetOption_, ModalCfg (..), modalWith_, formActionsModal_, dangerAction_, floatingDialog_, dialogField_, kbdHints_, durationMenu_, primaryButton_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, TraceFrame (..), stackTrace_, stackFrames_, codeContextUrl, curlCommand, getTargetPage, abbreviateUnit, agoText, durationQuery, untilLabel, paymentPlanPicker) where
 
 import Data.Default (Default (..))
-import Data.List (elemIndex, lookup)
+import Data.List (elemIndex, findIndex, lookup)
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, diffUTCTime, formatTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
@@ -18,7 +16,7 @@ import Pkg.StackTrace qualified as StackTrace
 import PyF qualified
 import Relude
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (LoadingSize (..), LoadingType (..), copyToClipboardAttr_, deleteParam, faSprite_, loadingIndicator_, popoverPanel_, toUriStr)
+import Utils (LoadingSize (..), LoadingType (..), copyToClipboardAttr_, countNoun, deleteParam, faSprite_, formatUTC, formatWithCommas, loadingIndicator_, navTabAttrs, popoverPanel_, toUriStr)
 
 
 data EmptyStateSize = ESFull | ESCompact
@@ -76,7 +74,7 @@ emptyState_ cfg title subTxt =
 searchInput_ :: Text -> Text -> [Attribute] -> Html ()
 searchInput_ extra ph attrs = label_ [class_ $ "input input-sm flex items-center gap-2 " <> extra] do
   faSprite_ "magnifying-glass" "regular" "h-3.5 w-3.5 shrink-0 text-iconNeutral"
-  input_ $ [type_ "search", class_ "min-w-0 grow bg-transparent max-md:text-base", placeholder_ ph, Aria.label_ ph] <> attrs
+  input_ $ [type_ "search", class_ "min-w-0 grow bg-transparent max-md:text-base", placeholder_ ph, Aria.label_ (T.dropWhileEnd (== '…') ph)] <> attrs
 
 
 -- | Shared shell for searchable facet trees. The content decides how filters change
@@ -126,6 +124,30 @@ facetOption_ extraClass attrs body trailing =
     do
       div_ [class_ "flex min-w-0 flex-1 items-center gap-2"] body
       trailing
+
+
+-- | Header of an entity detail drawer: icon and title with inline @badges@, then the
+-- identity @chips@ row. Its sections go in a @main_@ that owns their rules
+-- (@[&>*+*]:border-t [&>*+*]:pt-4@), so 'detailSection_' and 'pivotLinks_' carry none.
+entityHeader_ :: Html () -> Text -> Html () -> Html () -> Html ()
+entityHeader_ icon title badges chips = header_ [class_ "border-b border-strokeWeak px-5 py-4 pr-14"] do
+  div_ [class_ "flex flex-wrap items-center gap-2"] do
+    icon
+    h2_ [data_ "drawer-title" "true", class_ "min-w-0 break-words text-lg font-semibold text-textStrong"] $ toHtml title
+    badges
+  div_ [class_ "mt-2 flex flex-wrap gap-1.5 empty:hidden"] chips
+
+
+-- | A titled section of an entity detail drawer; @aside@ sits opposite the title.
+detailSection_ :: [Attribute] -> Text -> Html () -> Html () -> Html ()
+detailSection_ attrs title aside body = section_ ([class_ "space-y-3"] <> attrs) do
+  div_ [class_ "flex flex-wrap items-center justify-between gap-2"] $ h3_ [class_ "font-semibold text-textStrong"] (toHtml title) >> aside
+  body
+
+
+-- | The (label, url) links that close an entity detail drawer, pivoting to related pages.
+pivotLinks_ :: [(Text, Text)] -> Html ()
+pivotLinks_ links = div_ [class_ "flex flex-wrap gap-2"] $ forM_ links \(label, url) -> a_ ([href_ url, class_ "btn btn-sm"] <> navTabAttrs) $ toHtml label
 
 
 -- | A row of labelled figures in a detail panel. @cols@ carries the responsive grid
@@ -227,7 +249,7 @@ drawer_ drawerId startOpen urlM content trigger = div_ [class_ "drawer drawer-en
         div_
           [ id_ $ drawerId <> "-content"
           , class_ "h-full flex flex-col gap-8 px-8 pb-4 max-lg:px-6 max-md:px-4"
-          , term "hx-on::after:swap" "window.evalScriptsFromContent(event.target); window.labelDrawer(this.closest('[role=dialog]'))"
+          , term "hx-on::after:swap" "window.labelDrawer(this.closest('[role=dialog]'))"
           ]
           -- hx-swap sits on the requester rather than being inherited from the wrapper:
           -- htmx 4 resolves inheritance explicitly, so a parent's value no longer reaches here.
@@ -458,13 +480,15 @@ navBar :: Html ()
 navBar =
   nav_ [id_ "main-navbar", class_ "fixed z-20 top-0 w-full px-4 py-4 bg-bgOverlay flex flex-row justify-between"]
     $ div_ [class_ "flex justify-between items-center gap-4 w-[1000px] mx-auto"]
-    $ a_ [href_ "https://monoscope.tech", class_ "flex items-center text-textWeak hover:text-textStrong"] do
-      img_ [class_ "h-12 dark:hidden", src_ "/public/assets/svgs/logo_black.svg"]
-      img_ [class_ "h-12 hidden dark:block", src_ "/public/assets/svgs/logo_white.svg"]
+    $ a_ [href_ "https://monoscope.tech", class_ "flex items-center text-textWeak hover:text-textStrong"]
+    $ brandLogo_ "h-12"
 
 
-modal_ :: Text -> Html () -> Html () -> Html ()
-modal_ modalId btnTrigger = modalWith_ modalId def (Just btnTrigger)
+-- | Theme-aware wordmark; @h@ is the height utility, e.g. @"h-6"@.
+brandLogo_ :: Text -> Html ()
+brandLogo_ h = do
+  img_ [class_ $ h <> " dark:hidden", src_ "/public/assets/svgs/logo_black.svg", alt_ "Monoscope"]
+  img_ [class_ $ h <> " hidden dark:block", src_ "/public/assets/svgs/logo_white.svg", alt_ "Monoscope"]
 
 
 modalCloseButton_ :: Monad m => Text -> HtmlT m ()
@@ -485,105 +509,36 @@ headerRow_ :: Monad m => [Attribute] -> HtmlT m () -> HtmlT m ()
 headerRow_ attrs = div_ (class_ " flex items-center justify-between " : attrs)
 
 
--- | Pointer and keyboard-operable panel separator.
+-- | Pointer and keyboard-operable panel separator; behaviour lives in web-components/src/resizer.ts.
+-- Persists the width to localStorage and the URL param @key@.
 --
 -- >>> let html = toStrict $ renderText $ resizer_ "facets-container" "facets_width" True
--- >>> all (`T.isInfixOf` html) ["tabindex=\"0\"", "aria-orientation=\"vertical\"", "aria-valuenow", "ArrowLeft", "ArrowRight"]
+-- >>> all (`T.isInfixOf` html) ["role=\"separator\"", "tabindex=\"0\"", "aria-orientation=\"vertical\"", "data-resize-target=\"facets-container\"", "data-url-param=\"facets_width\""]
 -- True
 resizer_ :: Text -> Text -> Bool -> Html ()
-resizer_ targetId urlParam increasingDirection =
+resizer_ targetId key = resizerWith_ [data_ "url-param" key] targetId key
+
+
+-- | 'resizer_' without URL persistence; @attrs@ may add @data-min@/@data-max@ clamps (px or vw).
+resizerWith_ :: [Attribute] -> Text -> Text -> Bool -> Html ()
+resizerWith_ attrs targetId key increasingDirection =
   div_
-    [ class_ "group px-r relative shrink-0 h-full flex items-center justify-center cursor-ew-resize overflow-visible select-none touch-none"
-    , role_ "separator"
-    , Aria.label_ "Resize panel"
-    , tabindex_ "0"
-    , term "aria-orientation" "vertical"
-    , term "aria-valuemin" "0"
-    , term "aria-valuemax" "0"
-    , term "aria-valuenow" "0"
-    , term "aria-controls" targetId
-    , term "data-resize-target" targetId
-    , term "data-resize-direction" (if increasingDirection then "increase" else "decrease")
-    , term "data-url-param" urlParam
-    , [__|
-        js 
-          let rafId = null;
-          let currentWidth = null;
-          
-          function applyMove(el, newWidth, separator){
-            const maxWidth = el.parentElement?.clientWidth || newWidth;
-            newWidth = Math.max(0, Math.min(newWidth, maxWidth));
-            currentWidth = newWidth;
-            separator.setAttribute('aria-valuemax', Math.round(maxWidth));
-            separator.setAttribute('aria-valuenow', Math.round(newWidth));
-            separator.setAttribute('aria-valuetext', Math.round(newWidth) + ' pixels');
-            if (rafId) cancelAnimationFrame(rafId);
-            rafId = requestAnimationFrame(() => {
-              el.style.width = newWidth + 'px';
-              rafId = null;
-            });
-          }
-          return {applyMove}
-        end
-        init
-          set :target to #{@data-resize-target} then
-          call applyMove(:target, :target.offsetWidth, me)
-        end
-        on pointerdown
-          add .select-none to body then
-          set :startX to event.clientX then
-          set :target to #{@data-resize-target} then
-          set :startWidth to the :target's offsetWidth then
-          set :urlParam to @data-url-param then
-          set :isRightPanel to (@data-resize-direction == 'decrease') then
-          set :lastWidth to :startWidth then
-          call me.setPointerCapture(event.pointerId)
-        end
-
-        on pointermove from body
-            if :startX is not null
-                set deltaX to (event.clientX - :startX) then
-                if :isRightPanel
-                then set newWidth to :startWidth - deltaX
-                else set newWidth to :startWidth + deltaX end
-                if newWidth < 0 set newWidth to 0 end
-                if newWidth > :target.parentElement.clientWidth set newWidth to :target.parentElement.clientWidth end
-                set :lastWidth to newWidth then
-                call applyMove(:target, newWidth, me)
-                then send "loglist-resize" to <body/>
-            end
-        end
-
-        on pointerup from body or pointercancel
-          if :startX is not null
-            set finalWidth to :lastWidth then
-            remove .select-none from body then
-
-            call updateUrlState(:urlParam, finalWidth) then
-            call localStorage.setItem('resizer-'+:urlParam, finalWidth + 'px') then
-            set :startX to null
-          end
-        end
-
-        on keydown[key=='ArrowLeft' or key=='ArrowRight']
-          halt the event then
-          set target to #{@data-resize-target} then
-          set delta to 10 then
-          if event.key == 'ArrowLeft' set delta to -10 end then
-          if @data-resize-direction == 'decrease' set delta to delta * -1 end then
-          set newWidth to target.offsetWidth + delta then
-          if newWidth < 0 set newWidth to 0 end then
-          if newWidth > target.parentElement.clientWidth set newWidth to target.parentElement.clientWidth end then
-          call applyMove(target, newWidth, me) then
-          send "loglist-resize" to <body/> then
-          call updateUrlState(@data-url-param, newWidth) then
-          call localStorage.setItem('resizer-'+@data-url-param, newWidth + 'px')
-        end
-      |]
-    ]
+    ( [ class_ "group px-r relative shrink-0 h-full flex items-center justify-center cursor-ew-resize overflow-visible select-none touch-none"
+      , role_ "separator"
+      , Aria.label_ "Resize panel"
+      , tabindex_ "0"
+      , term "aria-orientation" "vertical"
+      , term "aria-valuemin" "0"
+      , term "aria-controls" targetId
+      , data_ "resize-target" targetId
+      , data_ "resize-direction" (if increasingDirection then "increase" else "decrease")
+      , data_ "resize-key" key
+      ]
+        <> attrs
+    )
     $ div_ [class_ "h-full border-l hover:border-strokeBrand-strong"]
     $ div_
-      [ id_ $ "resizer-" <> urlParam
+      [ id_ $ "resizer-" <> key
       , class_ "absolute left-1/2 top-1/2 z-10 -translate-x-1/2 leading-none py-1 -translate-y-1/2 bg-bgBase rounded-sm border border-strokeBrand-weak group-hover:border-strokeBrand-strong text-iconNeutral group-hover:text-iconBrand"
       ]
     $ faSprite_ "grip-dots-vertical" "regular" "w-4 h-5"
@@ -726,6 +681,15 @@ deferredShell_ containerId url extra =
     )
 
 
+-- | A panel that fetches @url@ into itself on @trigger@ and shows a loader (announced as
+-- @ariaLabel@) until then. @attrs@ carry the id, classes and htmx extensions.
+lazyPanel_ :: Text -> Text -> Text -> [Attribute] -> Html ()
+lazyPanel_ url trigger ariaLabel attrs =
+  div_ ([hxGet_ url, hxTrigger_ trigger, hxTarget_ "this", hxSwap_ "innerHTML", Aria.busy_ "true"] <> attrs)
+    $ div_ [class_ "flex justify-center py-8", role_ "status", Aria.label_ ariaLabel]
+    $ loadingIndicator_ LdSM LdDots
+
+
 -- | Placeholder for a table that has not loaded yet: a header strip and @rows@ row bars.
 -- Deliberately not an empty table — a zero state that turns into rows a second later reads
 -- as "nothing here" during the moment a user is deciding whether the page is broken.
@@ -753,35 +717,37 @@ data FieldCfg = FieldCfg
   , extraAttrs :: [Attribute]
   , dot :: Maybe Text -- colored circle class before label, e.g. "bg-fillError-strong"
   , suffix :: Maybe Text -- text at right edge of input, e.g. "events"
-  , id :: Maybe Text
+  , hint :: Maybe Text -- help text under the field, linked via aria-describedby
+  , inputId :: Maybe Text -- element id when the form renders more than once per page; defaults to the name
   }
 
 
-instance Default FieldCfg where def = FieldCfg Nothing "text" "" "" [] Nothing Nothing Nothing
+instance Default FieldCfg where def = FieldCfg Nothing "text" "" "" [] Nothing Nothing Nothing Nothing
 
 
 -- | Unified form field: auto-generates input from cfg, or uses custom content when provided
 formField_ :: Monad m => FieldSize -> FieldCfg -> Text -> Text -> Bool -> Maybe (HtmlT m ()) -> HtmlT m ()
 formField_ size cfg lbl name required customM =
   fieldset_ [class_ wrapperCls] do
-    label_ [class_ labelCls, Lucid.for_ controlId] do
+    label_ [class_ labelCls, Lucid.for_ fid] do
       whenJust cfg.dot \color -> div_ [class_ $ "w-1.5 h-1.5 rounded-full shrink-0 " <> color] ""
       whenJust cfg.icon \ic -> faSprite_ ic "solid" "w-4 h-4 text-iconNeutral shrink-0"
       toHtml lbl
       when required $ span_ [class_ reqCls] "*"
     fromMaybe
       ( case (cfg.inputType, cfg.suffix) of
-          ("textarea", _) -> textarea_ ([class_ textareaCls, name_ name, id_ controlId, placeholder_ cfg.placeholder] <> commonAttrs) $ toHtml cfg.value
+          ("textarea", _) -> textarea_ ([class_ textareaCls, name_ name, id_ fid, placeholder_ cfg.placeholder] <> commonAttrs) $ toHtml cfg.value
           (_, Just sfx) -> div_ [class_ "relative"] do
             input_ $ [class_ $ inputCls <> " pr-14"] <> inputAttrs
             span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] $ toHtml sfx
           _ -> input_ $ [class_ inputCls] <> inputAttrs
       )
       customM
+    whenJust cfg.hint $ p_ [id_ $ fid <> "-hint", class_ "text-xs text-textWeak"] . toHtml
   where
-    controlId = fromMaybe name cfg.id
-    commonAttrs = [required_ "true" | required] <> cfg.extraAttrs
-    inputAttrs = [value_ cfg.value, name_ name, id_ controlId, type_ cfg.inputType, placeholder_ cfg.placeholder] <> commonAttrs
+    fid = fromMaybe name cfg.inputId
+    commonAttrs = [required_ "true" | required] <> [Aria.describedby_ $ fid <> "-hint" | isJust cfg.hint] <> cfg.extraAttrs
+    inputAttrs = [value_ cfg.value, name_ name, id_ fid, type_ cfg.inputType, placeholder_ cfg.placeholder] <> commonAttrs
     (wrapperCls, labelCls, inputCls, textareaCls, reqCls) = case size of
       FieldSm -> ("fieldset flex-1 min-w-0", "label text-xs text-textStrong", "input input-sm w-full", "textarea textarea-sm w-full leading-relaxed", "text-textError")
       FieldMd -> ("fieldset", "label flex w-full items-center gap-1 text-textStrong", "input w-full h-12", "textarea w-full", "text-textWeak")
@@ -803,40 +769,37 @@ formSelectField_ size lbl name required options =
       FieldMd -> "select w-full h-12 cursor-pointer"
 
 
+-- | @Collapsible open@ is a details disclosure; @FlushCard@ a bordered card with a header
+-- strip and an unpadded body, for a table or chart that sits flush.
+data PanelStyle = Raised | Collapsible Bool | FlushCard
+
+
 data PanelCfg = PanelCfg
   { icon :: Maybe Text
   , subtitle :: Maybe Text
-  , collapsible :: Maybe Bool -- Nothing = static section, Just True = starts open, Just False = starts closed
-  , sectionId :: Maybe Text -- id attribute on the details element
-  , raised :: Bool -- surface-raised card wrapper
-  , flushCard :: Bool -- bordered card with a header strip and unpadded body, for panels whose content is a table or chart that sits flush
-  , action :: Maybe (Text, Text) -- (label, url) link at the header's right edge
+  , sectionId :: Maybe Text -- id of a collapsible panel's details element
+  , action :: Maybe (Text, Text) -- (label, url) link at a flush card header's right edge
   }
   deriving stock (Generic)
   deriving anyclass (Default)
 
 
-panel_ :: Monad m => PanelCfg -> Text -> HtmlT m () -> HtmlT m ()
-panel_ cfg title content
-  | cfg.flushCard = section_ [class_ "overflow-hidden rounded-lg border border-strokeWeak surface-raised"] do
-      header_ [class_ "flex items-start justify-between gap-3 border-b border-strokeWeak px-3 py-2.5"] do
-        div_ [class_ "min-w-0"] do
-          h2_ [class_ "text-sm font-semibold text-textStrong"] $ toHtml title
-          whenJust cfg.subtitle $ p_ [class_ "mt-0.5 text-xs text-textWeak"] . toHtml
-        forM_ cfg.action \(label, url) -> a_ [href_ url, class_ "shrink-0 text-xs font-medium text-textBrand hover:underline"] $ toHtml label
-      content
-panel_ cfg title content = case cfg.collapsible of
-  Nothing -> wrapper do
-    header do
+panel_ :: Monad m => PanelStyle -> PanelCfg -> Text -> HtmlT m () -> HtmlT m ()
+panel_ style cfg title content = case style of
+  FlushCard -> section_ [class_ "overflow-hidden rounded-lg border border-strokeWeak surface-raised"] do
+    header_ [class_ "flex items-start justify-between gap-3 border-b border-strokeWeak px-3 py-2.5"] do
+      div_ [class_ "min-w-0"] do
+        h2_ [class_ "text-sm font-semibold text-textStrong"] $ toHtml title
+        whenJust cfg.subtitle $ p_ [class_ "mt-0.5 text-xs text-textWeak"] . toHtml
+      forM_ cfg.action \(label, url) -> a_ [href_ url, class_ "shrink-0 text-xs font-medium text-textBrand hover:underline"] $ toHtml label
+    content
+  Raised -> div_ [class_ "surface-raised rounded-2xl p-4 relative"] do
+    span_ [class_ "flex items-center gap-2 text-sm font-semibold text-textStrong mb-3"] do
       whenJust cfg.icon \ic -> faSprite_ ic "regular" "w-4 h-4 text-iconNeutral"
       toHtml title
       whenJust cfg.subtitle $ span_ [class_ "normal-case tracking-normal font-normal"] . toHtml
-      forM_ cfg.action \(label, url) -> a_ [href_ url, class_ "ml-auto text-xs font-medium text-textBrand hover:underline"] $ toHtml label
     content
-    where
-      wrapper = if cfg.raised then div_ [class_ "surface-raised rounded-2xl p-4 relative"] else div_ [class_ "space-y-4"]
-      header = if cfg.raised then span_ [class_ "flex items-center gap-2 text-sm font-semibold text-textStrong mb-3"] else h3_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wider flex items-center gap-2"]
-  Just startOpen ->
+  Collapsible startOpen ->
     details_ ([class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden"] <> [open_ "" | startOpen] <> maybe [] (pure . id_) cfg.sectionId) do
       summary_ [class_ "p-3 cursor-pointer list-none flex items-center justify-between gap-2 hover:bg-fillWeak transition-colors"] do
         div_ [class_ "flex items-center gap-2"] do
@@ -874,27 +837,59 @@ connectionBadge_ connected = span_ [class_ $ "badge badge-sm badge-soft gap-1 " 
   bool "Not connected" "Connected" connected
 
 
-data BadgeColor = BrandBadge | SuccessBadge | ErrorBadge | NeutralBadge
+data BadgeColor = BrandBadge | SuccessBadge | WarningBadge | ErrorBadge | NeutralBadge
 
 
-iconBadge_ :: Monad m => BadgeColor -> Text -> HtmlT m ()
-iconBadge_ = iconBadgeWith_ "p-2" "h-4 w-4" "rounded-full"
+-- | A tone's (fill, stroke, text, icon) tokens, shared by every toned surface.
+toneCls :: BadgeColor -> (Text, Text, Text, Text)
+toneCls = \case
+  BrandBadge -> ("bg-fillBrand-weak", "border-strokeBrand-weak", "text-textBrand", "text-iconBrand")
+  SuccessBadge -> ("bg-fillSuccess-weak", "border-strokeSuccess-weak", "text-textSuccess", "text-iconSuccess")
+  WarningBadge -> ("bg-fillWarning-weak", "border-strokeWarning-weak", "text-textWarning", "text-iconWarning")
+  ErrorBadge -> ("bg-fillError-weak", "border-strokeError-weak", "text-textError", "text-iconError")
+  NeutralBadge -> ("bg-fillWeak", "border-strokeWeak", "text-textWeak", "text-iconNeutral")
 
 
-iconBadgeLg_ :: Monad m => BadgeColor -> Text -> HtmlT m ()
-iconBadgeLg_ = iconBadgeWith_ "p-3" "h-6 w-6" "rounded-full"
+data IconBadgeSize = IconXs | IconSm | IconLg
 
 
-iconBadgeXs_ :: Monad m => BadgeColor -> Text -> HtmlT m ()
-iconBadgeXs_ = iconBadgeWith_ "p-1.5" "h-3.5 w-3.5" "rounded-md"
-
-
-iconBadgeWith_ :: Monad m => Text -> Text -> Text -> BadgeColor -> Text -> HtmlT m ()
-iconBadgeWith_ pad iconSize shape color icon =
-  div_ [class_ $ pad <> " w-fit shrink-0 " <> shape <> " " <> bg color] $ faSprite_ icon "regular" (iconSize <> " " <> fg color)
+-- | Toned tile holding one icon, leading a card or dialog heading.
+iconBadge_ :: Monad m => IconBadgeSize -> BadgeColor -> Text -> HtmlT m ()
+iconBadge_ size tone icon = div_ [class_ $ unwords ["w-fit shrink-0", box, bg]] $ faSprite_ icon "regular" (glyph <> " " <> fg)
   where
-    bg = \case BrandBadge -> "bg-fillBrand-weak"; SuccessBadge -> "bg-fillSuccess-weak"; ErrorBadge -> "bg-fillError-weak"; NeutralBadge -> "bg-fillWeak"
-    fg = \case BrandBadge -> "text-iconBrand"; SuccessBadge -> "text-iconSuccess"; ErrorBadge -> "text-iconError"; NeutralBadge -> "text-iconNeutral"
+    (bg, _, _, fg) = toneCls tone
+    (box, glyph) = case size of
+      IconXs -> ("p-1.5 rounded-md", "h-3.5 w-3.5")
+      IconSm -> ("p-2 rounded-full", "h-4 w-4")
+      IconLg -> ("p-3 rounded-full", "h-6 w-6")
+
+
+-- | A status pill: tone carries the meaning, the label repeats it so colour is never the only signal.
+tonePill_ :: BadgeColor -> Text -> Html ()
+tonePill_ tone = span_ [class_ $ unwords ["inline-flex w-fit items-center whitespace-nowrap rounded-full border px-2 py-0.5 text-2xs font-medium", bg, txt, border]] . toHtml
+  where
+    (bg, border, txt, _) = toneCls tone
+
+
+-- | A label over a big number. @value@ is the number's slot (text, or a widget's live value
+-- slot); @cls@ and @attrs@ extend the wrapper (alignment, tooltip).
+statFigure_ :: Text -> [Attribute] -> Text -> Html () -> Html ()
+statFigure_ cls attrs label value = div_ ([class_ $ "flex flex-col gap-1 leading-none " <> cls] <> attrs) do
+  fieldLabel_ "" label
+  span_ [class_ "text-2xl font-semibold text-textStrong tabular-nums leading-none"] value
+
+
+-- | Small uppercase muted label for a field, figure or sub-block. Not a heading: card and
+-- section titles use 'sectionLabel_'.
+fieldLabel_ :: Text -> Text -> Html ()
+fieldLabel_ cls = span_ [class_ $ "block text-2xs font-semibold text-textWeak uppercase tracking-wide " <> cls] . toHtml
+
+
+-- | A label/value list: muted terms in an auto-width column beside their values.
+kvList_ :: Text -> [(Text, Html ())] -> Html ()
+kvList_ cls rows = dl_ [class_ $ "grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 " <> cls] $ forM_ rows \(k, v) -> do
+  dt_ [class_ "text-textWeak"] $ toHtml k
+  dd_ [class_ "min-w-0 truncate text-textStrong"] v
 
 
 data ModalCfg = ModalCfg
@@ -951,17 +946,66 @@ modalWith_ modalId cfg triggerM contentHtml = do
           div_ [class_ "space-y-2"] contentHtml
 
 
-confirmModal_ :: Text -> Text -> Text -> [Attribute] -> Text -> Html ()
-confirmModal_ modalId title description confirmAttrs confirmText =
+-- | Red ghost trigger plus the confirmation modal it opens, e.g. a Remove/Disconnect action.
+dangerAction_ :: Text -> Text -> Text -> Text -> Text -> [Attribute] -> Text -> Html ()
+dangerAction_ modalId icon label title description confirmAttrs confirmText = do
+  label_ [class_ "btn btn-sm btn-ghost gap-1 text-textError hover:bg-fillError-weak", Lucid.for_ modalId] do
+    faSprite_ icon "regular" "w-3 h-3"
+    span_ $ toHtml label
   modalWith_ modalId def{boxClass = "p-6", hideClose = True} Nothing do
     div_ [class_ "flex items-start gap-3 mb-4"] do
-      iconBadgeWith_ "p-2" "h-5 w-5" "rounded-full" ErrorBadge "triangle-alert"
+      iconBadge_ IconSm ErrorBadge "triangle-alert"
       div_ do
         h3_ [class_ "text-lg font-semibold text-textStrong"] $ toHtml title
         p_ [class_ "text-sm text-textWeak mt-1"] $ toHtml description
     div_ [class_ "flex justify-end gap-2 mt-6"] do
       label_ [class_ "btn btn-sm btn-ghost", Lucid.for_ modalId] "Cancel"
-      button_ ([class_ "btn btn-sm bg-fillError-strong text-white hover:opacity-90"] <> confirmAttrs) $ toHtml confirmText
+      button_ ([type_ "button", class_ "btn btn-sm bg-fillError-strong text-white hover:opacity-90"] <> confirmAttrs) $ toHtml confirmText
+
+
+-- | Native @<dialog>@ prompt floating over a blurred backdrop: white title strip, a card holding
+-- @body@ above Cancel/@submit@, and a keyboard-hint row. Open with @showModal()@; the title id is
+-- @dialogId-title@. Children may style on @group-has-[…]/dialog@.
+floatingDialog_ :: Text -> Html () -> (Text, [Text]) -> [Attribute] -> Html () -> Html () -> Html ()
+floatingDialog_ dialogId title submitHint formAttrs body submit =
+  with (makeElement "dialog") [id_ dialogId, class_ "modal !items-start px-4 pt-[15vh] backdrop:backdrop-blur-sm", term "aria-labelledby" (dialogId <> "-title")] do
+    form_ [method_ "dialog", class_ "modal-backdrop"] $ button_ [Aria.label_ "Close"] "close"
+    form_ (formAttrs <> [class_ "modal-box group/dialog !w-full !max-w-lg !overflow-visible !rounded-none !border-0 !bg-transparent !p-0 !shadow-none flex flex-col"]) do
+      div_ [class_ "mb-2 flex items-center justify-between px-3"] do
+        h2_ [id_ $ dialogId <> "-title", class_ "text-xs font-medium uppercase tracking-wider text-white"] title
+        button_ [type_ "button", Aria.label_ "Close", class_ "inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-white/70 hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-white active:scale-[0.96] transition-[color,background-color,scale]", onclick_ "this.closest('dialog').close()"]
+          $ faSprite_ "xmark" "regular" "h-3.5 w-3.5"
+      div_ [class_ "w-full overflow-hidden rounded-lg border border-base-300 bg-bgBase shadow-2xl"] do
+        body
+        div_ [class_ "flex justify-end gap-1.5 p-2"] do
+          button_ [type_ "button", class_ "btn btn-sm btn-ghost cursor-pointer shadow-none active:scale-[0.96] transition-transform", onclick_ "this.closest('dialog').close()"] "Cancel"
+          button_ [type_ "submit", class_ "btn btn-sm btn-primary cursor-pointer gap-1.5 shadow-none active:scale-[0.96] transition-transform"] submit
+      kbdHints_ [submitHint, ("Close", ["esc"])]
+
+
+-- | Single labelled text input inside a 'floatingDialog_' card.
+dialogField_ :: Text -> Text -> Text -> Text -> [Attribute] -> Html ()
+dialogField_ fieldId name label placeholder extra =
+  div_ [class_ "border-b border-base-300 px-4 py-3"] $ label_ [Lucid.for_ fieldId, class_ "flex flex-col gap-1.5 text-xs font-medium text-textStrong"] do
+    span_ $ toHtml label
+    input_ $ [id_ fieldId, name_ name, autofocus_, autocomplete_ "off", placeholder_ placeholder, class_ "no-focus-ring w-full bg-transparent py-2 text-sm font-normal outline-none placeholder:text-textDisabled"] <> extra
+
+
+-- | White hint row under dark-backdrop prompts: @(label, keys)@ pairs.
+kbdHints_ :: [(Text, [Text])] -> Html ()
+kbdHints_ hints = div_ [class_ "cmd-palette-hints mt-3 flex items-center justify-center gap-6 text-xs text-white drop-shadow dark:text-white/80"]
+  $ forM_ hints \(label, keys) -> div_ [class_ "flex items-center gap-1.5"] $ toHtml label >> traverse_ (kbd_ [class_ "kbd kbd-xs"] . toHtml) keys
+
+
+-- | Segmented two-or-more-way radio switch; the first option starts checked. Input ids are
+-- @idPrefix <> value@ so callers can style siblings on @:checked@.
+segmented_ :: Text -> Text -> Text -> Text -> [(Text, Text)] -> Html ()
+segmented_ cls legend grp idPrefix opts = fieldset_ [class_ cls] do
+  legend_ [class_ "sr-only"] $ toHtml legend
+  forM_ (zip (True : repeat False) opts) \(active, (val, lbl)) ->
+    label_ [class_ "cursor-pointer rounded-md px-3 py-1 text-center font-medium text-textWeak has-[:checked]:bg-bgRaised has-[:checked]:text-textStrong has-[:checked]:shadow-xs has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 transition-[color,background-color,box-shadow] duration-100"] do
+      input_ $ [type_ "radio", name_ grp, id_ (idPrefix <> val), class_ "sr-only"] <> [checked_ | active] <> [value_ val]
+      toHtml lbl
 
 
 -- | One quiet row action. @attrs@ carries whatever the destination needs — the
@@ -1034,6 +1078,37 @@ copyButton_ cls iconCls src attrs =
       span_ "Copy"
 
 
+-- | Table cell for an event count, coloured by volume; zero reads as a dash.
+eventsCountCell_ :: Int -> Html ()
+eventsCountCell_ n = span_ [class_ $ "tabular-nums font-medium text-sm " <> color] $ toHtml $ bool (formatWithCommas (fromIntegral n)) "\x2014" (n == 0)
+  where
+    color
+      | n >= 100 = "text-fillError-strong"
+      | n >= 10 = "text-fillWarning-strong"
+      | n > 0 = "text-textStrong"
+      | otherwise = "text-textWeak font-normal"
+
+
+-- | Table cell for a relative "last seen", exact time on hover. @nowrap@: the column is
+-- narrow enough that "50 secs ago" would wrap and rag the row heights.
+lastSeenCell_ :: UTCTime -> Maybe UTCTime -> Html ()
+lastSeenCell_ now = \case
+  Just t -> span_ [class_ "text-xs text-textWeak whitespace-nowrap", term "data-tippy-content" $ formatUTC t] $ toHtml $ agoText now t
+  Nothing -> span_ [class_ "text-textWeak text-xs"] "-"
+
+
+-- | A copy-pasteable curl for a request: one flag per line, every value shell-quoted.
+--
+-- >>> putTextLn $ curlCommand "POST" "https://api.x/a?b=1" [("Accept", "*/*")] (Just "{\"n\":\"it's\"}")
+-- curl -X POST 'https://api.x/a?b=1' \
+--   -H 'Accept: */*' \
+--   -d '{"n":"it'\''s"}'
+curlCommand :: Text -> Text -> [(Text, Text)] -> Maybe Text -> Text
+curlCommand method url headers body = T.intercalate " \\\n  " $ ("curl -X " <> method <> " " <> q url) : ["-H " <> q (k <> ": " <> v) | (k, v) <- headers] <> ["-d " <> q b | b <- maybeToList body]
+  where
+    q t = "'" <> T.replace "'" "'\\''" t <> "'"
+
+
 -- | Type-to-filter attribute for a text input: hides each element matched by @sel@
 -- (a CSS selector, e.g. @"#list .row"@) whose @data-filter@ — or, absent that,
 -- textContent — lacks the input's value. It reruns on input and after every swap, so
@@ -1046,14 +1121,17 @@ filterInputAttr_ :: Text -> Attribute
 filterInputAttr_ sel = term "_" [text|on input or htmx:after:swap from document set v to my value.toLowerCase() then repeat for el in <${sel}/> if (el.dataset.filter or el.textContent).toLowerCase().includes(v) remove .hidden from el else add .hidden to el end end|]
 
 
-colorChip_ :: Monad m => Text -> Text -> Text -> HtmlT m ()
-colorChip_ color icon label = span_ [class_ $ "inline-flex items-center gap-1.5 text-xs rounded-full px-2.5 py-1 " <> bool "text-textWeak bg-fillWeaker" color (color /= "")] do
+-- | Toned icon + label chip.
+colorChip_ :: Monad m => BadgeColor -> Text -> Text -> HtmlT m ()
+colorChip_ tone icon label = span_ [class_ $ unwords ["inline-flex items-center gap-1.5 text-xs rounded-full px-2.5 py-1", bg, txt]] do
   faSprite_ icon "regular" "h-3 w-3"
   toHtml label
+  where
+    (bg, _, txt, _) = toneCls tone
 
 
 metadataChip_ :: Monad m => Text -> Text -> HtmlT m ()
-metadataChip_ = colorChip_ ""
+metadataChip_ = colorChip_ NeutralBadge
 
 
 -- | Standard settings page layout: scrollable container with padded, max-width section
@@ -1071,20 +1149,56 @@ sectionLabel_ :: Monad m => Text -> HtmlT m ()
 sectionLabel_ = h3_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wider"] . toHtml
 
 
--- | Info banner with brand background and info icon
-infoBanner_ :: Monad m => HtmlT m () -> HtmlT m ()
-infoBanner_ content = div_ [class_ "rounded-lg bg-fillBrand-weak p-3 text-xs text-textStrong"] do
-  faSprite_ "circle-info" "regular" "h-3.5 w-3.5 inline mr-1.5"
-  content
+-- | Toned notice box: tone icon, optional title, then the body (muted under a title).
+callout_ :: Monad m => BadgeColor -> Maybe Text -> HtmlT m () -> HtmlT m ()
+callout_ tone titleM body = div_ [class_ $ unwords ["flex items-start gap-2.5 rounded-lg border p-3 text-sm", bg, border]] do
+  faSprite_ icon "regular" $ "h-4 w-4 shrink-0 mt-0.5 " <> fg
+  div_ [class_ "min-w-0 flex-1"] $ case titleM of
+    Nothing -> div_ [class_ "text-textStrong"] body
+    Just t -> p_ [class_ "font-medium text-textStrong"] (toHtml t) >> div_ [class_ "mt-0.5 text-textWeak"] body
+  where
+    (bg, border, _, fg) = toneCls tone
+    icon = case tone of
+      SuccessBadge -> "circle-check"
+      WarningBadge -> "triangle-exclamation"
+      ErrorBadge -> "circle-exclamation"
+      BrandBadge -> "circle-info"
+      NeutralBadge -> "circle-info"
+
+
+-- | Read-only monospace value with a copy button; @elId@ names the value element.
+copyField_ :: Text -> Text -> Html ()
+copyField_ elId val = div_ [class_ "flex items-center gap-2"] do
+  code_ [id_ elId, class_ "min-w-0 flex-1 overflow-x-auto whitespace-nowrap rounded-lg border border-strokeWeak bg-bgBase px-3 py-2 font-mono text-xs text-textStrong"] $ toHtml val
+  copyButton_ "btn btn-sm gap-1 shrink-0" "h-3.5 w-3.5" ("#" <> elId <> "'s innerText") []
+
+
+-- | Title and description beside a toggle switch; @attrs@ carry the input's name, checked state.
+toggleRow_ :: Text -> Text -> Text -> [Attribute] -> Html ()
+toggleRow_ inputId lbl desc attrs = div_ [class_ "flex items-center justify-between gap-3"] do
+  label_ [Lucid.for_ inputId, class_ "min-w-0 cursor-pointer"] do
+    span_ [class_ "block text-sm font-medium text-textStrong"] $ toHtml lbl
+    span_ [class_ "block mt-0.5 text-xs text-textWeak"] $ toHtml desc
+  input_ $ [type_ "checkbox", id_ inputId, class_ "toggle toggle-sm toggle-primary shrink-0"] <> attrs
+
+
+-- | Project role @\<option\>@s; values are the 'Display' of @ProjectMembers.Permissions@.
+roleOptions_ :: Monad m => Maybe Text -> HtmlT m ()
+roleOptions_ sel = options_ sel [("admin", "Admin"), ("edit", "Editor"), ("view", "Viewer")]
 
 
 -- | \"Repository missing?\" escape hatch under GitHub-App repo pickers: the list is
 -- exactly what the installation was granted, so widening it happens on GitHub.
 installationSettingsLink_ :: Monad m => Text -> HtmlT m ()
-installationSettingsLink_ url =
-  a_ [href_ url, target_ "_blank", rel_ "noopener", class_ "text-xs text-textBrand underline inline-flex items-center gap-1"] do
-    "Repository missing? Add it to the installation on GitHub"
-    faSprite_ "arrow-up-right-from-square" "regular" "w-2.5 h-2.5"
+installationSettingsLink_ url = externalLink_ [href_ url, target_ "_blank", rel_ "noopener"] "Repository missing? Add it to the installation on GitHub"
+
+
+-- | Brand link with a trailing ↗, for a jump to another view (Explorer, a monitor) or site.
+-- @attrs@ must not carry @class_@: Lucid would fuse it into this one.
+externalLink_ :: Monad m => [Attribute] -> HtmlT m () -> HtmlT m ()
+externalLink_ attrs label = a_ ([class_ "text-xs text-textBrand hover:underline inline-flex items-center gap-1 w-fit"] <> attrs) do
+  label
+  faSprite_ "arrow-up-right-from-square" "regular" "w-3 h-3 shrink-0"
 
 
 -- | A server-open @\<details\>@ that starts collapsed below @px@ viewport width.
@@ -1097,6 +1211,28 @@ detailsClosedBelowAttr_ px = term "hx-live" $ "if (!this.dataset.seeded) { this.
 -- cannot be a native @\<button\>@.
 keyboardActivateAttr_ :: Attribute
 keyboardActivateAttr_ = [__|on keydown[key=='Enter' or key==' '] halt the event then call me.click() end|]
+
+
+-- | Combobox keyboard nav for a wrapper holding the search input and its @[role=option]@ items
+-- (hidden ones skipped): typing highlights the first visible option, arrows move @.active@,
+-- Enter clicks it. Filtering itself belongs on the options, e.g. @hx-live:hidden@.
+listboxNavAttr_ :: Attribute
+listboxNavAttr_ =
+  [__|on input call htmx.live.refresh() then wait 0ms
+        remove .active from <[role=option]/> in me
+        set f to the first <[role=option]:not([hidden])/> in me
+        if f add .active to f end
+      end
+      on keydown[key=='ArrowDown' or key=='ArrowUp'] halt the event
+        set opts to <[role=option]:not([hidden])/> in me
+        set d to -1
+        if event.key is 'ArrowDown' set d to 1 end
+        set n to opts[opts.indexOf(the first <[role=option].active:not([hidden])/> in me) + d]
+        if n remove .active from <[role=option]/> in me then add .active to n then call n.scrollIntoView({block:'nearest'}) end
+      end
+      on keydown[key=='Enter'] set a to the first <[role=option].active:not([hidden])/> in me
+        if a halt the event then call a.click() end
+      end|]
 
 
 -- | Click-to-copy for the element named by the JS expression @el@: copies its innerText,
@@ -1271,71 +1407,69 @@ sparkline_ buckets
       | otherwise = show n
 
 
--- | A stack trace as frames rather than a blob.
---
--- Rendering the raw string in a @\<pre\>@ is what this replaces: it told a reader nothing the
--- string didn't already say, and it left nothing for the panel to hang a source snippet on.
--- Each frame is a native @\<details\>@ — the disclosure, its open state, and the screen-reader
--- announcement all come for free, and it survives an HTMX morph because there is no JS state
--- to lose.
---
--- The first in-app frame is open by default, which is Sentry's default and the right one
--- during an incident: the top of a stack is usually five frames of framework before anything
--- you wrote. @snippetUrl@ is asked for a frame's surrounding source only when that frame is
--- actually opened, because resolving it is a network call the error panel must not block on.
+-- | A frame normalised across our two parsers: 'StackTrace.Frame' (Explorer) and
+-- @EF.StackFrame@ (Issues, whose issue hash derives from that parse).
+data TraceFrame = TraceFrame {raw :: Text, function :: Maybe Text, file :: Maybe Text, line :: Maybe Int, context :: Maybe Text, inApp :: Bool}
+
+
+-- | Explorer's stack trace: frames from the printed stack, else the span's @code.*@ attributes.
+-- @resAttr@ reads the resource, where the deploy's revision lives, so a snippet shows the
+-- source that threw rather than the source as it is now.
 stackTrace_ :: Projects.ProjectId -> Maybe Text -> (Text -> Maybe Text) -> (Text -> Maybe Text) -> Text -> Html ()
-stackTrace_ pid svcM attr resAttr stack = case StackTrace.framesFor attr stack of
-  [] -> pass
-  frames ->
-    let firstInApp = fst <$> find (StackTrace.isInApp . snd) (zip [0 :: Int ..] frames)
-     in div_ [class_ "flex flex-col rounded-md border border-strokeWeak bg-bgBase overflow-hidden"]
-          $ forM_ (zip [0 :: Int ..] frames) \(i, f) -> frame_ (Just i == firstInApp) (snippetUrl f) f
+stackTrace_ pid svcM attr resAttr stack =
+  stackFrames_ (codeContextUrl pid svcM (StackTrace.revisionFor resAttr)) stack [TraceFrame f.raw f.function f.file f.line Nothing (StackTrace.isInApp f) | f <- StackTrace.framesFor attr stack]
+
+
+codeContextUrl :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Text -> Int -> Text
+codeContextUrl pid svcM revM path n = "/p/" <> pid.toText <> "/code_context?file=" <> toUriStr path <> "&line=" <> show n <> foldMap (("&service=" <>) . toUriStr) svcM <> foldMap (("&revision=" <>) . toUriStr) revM
+
+
+-- | A stack trace as frames rather than a blob, the way Sentry renders one. Each frame is a
+-- native @\<details\>@; its source snippet loads on @intersect once@ inside it, so only when
+-- opened — resolving it is an SCM call the panel must not block on. The first in-app frame
+-- starts open; runtime frames keep their call-order position but fold behind a count; the
+-- raw text stays one disclosure away, and is all we show when nothing parsed.
+stackFrames_ :: (Text -> Int -> Text) -> Text -> [TraceFrame] -> Html ()
+stackFrames_ snippetUrl raw frames
+  | null frames = rawBlock
+  | otherwise = div_ [class_ "group/frames"] do
+      div_ [class_ "max-h-96 overflow-y-auto"] $ forM_ (zip [0 :: Int ..] frames) \(i, f) -> frame_ (Just i == firstInApp) f
+      when (folded > 0)
+        $ label_ [class_ "flex items-center gap-1.5 px-3 py-2 text-xs text-textBrand cursor-pointer border-t border-strokeWeak hover:bg-fillWeaker transition-colors"] do
+          input_ [type_ "checkbox", class_ "sys-frames sr-only"]
+          faSprite_ "chevron-down" "regular" "w-3 h-3 shrink-0 group-has-[.sys-frames:checked]/frames:rotate-180 transition-transform"
+          span_ [class_ "group-has-[.sys-frames:checked]/frames:hidden"] $ toHtml $ "Show " <> countNoun folded "runtime frame"
+          span_ [class_ "hidden group-has-[.sys-frames:checked]/frames:inline"] "Hide runtime frames"
+      unless (T.null $ T.strip raw) $ div_ [class_ "border-t border-strokeWeak"] $ disclosure_ [] "px-3 py-2 text-xs text-textWeak hover:text-textStrong" "Raw" rawBlock
   where
-    -- 'Nothing' for a frame we could not place — the panel then says "no source linked"
-    -- rather than firing a request that can only fail.
-    snippetUrl f = do
-      path <- f.file
-      n <- f.line
-      pure
-        $ "/p/"
-        <> pid.toText
-        <> "/code_context?file="
-        <> toUriStr path
-        <> "&line="
-        <> show n
-        <> foldMap (("&service=" <>) . toUriStr) svcM
-        -- The revision the span reported, so the snippet is the source that threw rather
-        -- than the source as it is now.
-        <> foldMap (("&revision=" <>) . toUriStr) (StackTrace.revisionFor resAttr)
-    -- Signature pins the block to `Html ()`. Without it Lucid's `Term` leaves each element
-    -- polymorphic in its result, and the summary inside the details reads as a discarded
-    -- value under -Wunused-do-bind.
-    frame_ :: Bool -> Maybe Text -> StackTrace.Frame -> Html ()
-    frame_ open urlM f = case f.file of
-      -- A line we could not resolve to a file keeps its text verbatim and gets no
-      -- disclosure: there is nothing behind it to disclose, and a details with an empty
-      -- panel is a control that lies about having more to show.
-      Nothing -> div_ [class_ "px-3 py-1 font-mono text-2xs text-textWeak whitespace-pre-wrap break-words border-b border-strokeWeak last:border-0"] $ toHtml f.raw
-      Just path ->
-        details_ ([class_ "group/fr border-b border-strokeWeak last:border-0"] <> [open_ "" | open]) do
-          summary_ [class_ "flex items-center gap-2 px-3 py-1.5 cursor-pointer select-none hover:bg-fillWeaker text-xs"] do
-            faSprite_ "chevron-right" "regular" "w-3 h-3 shrink-0 text-iconNeutral transition-transform group-open/fr:rotate-90"
-            span_ [class_ $ "font-mono truncate " <> bool "text-textWeak" "text-textStrong font-medium" (StackTrace.isInApp f)] $ toHtml path
-            whenJust f.line \n -> span_ [class_ "font-mono tabular-nums text-textWeak shrink-0"] $ toHtml @Text (":" <> show n)
-            whenJust f.function \fn -> span_ [class_ "text-textWeak truncate max-md:hidden"] $ toHtml ("in " <> fn)
-            -- In-app is a heuristic over the path, so it is labelled rather than encoded
-            -- only in weight: a reader has to be able to tell it apart from emphasis.
-            when (StackTrace.isInApp f) $ span_ [class_ "ml-auto shrink-0 rounded-sm border border-strokeWeak px-1 text-2xs text-textWeak"] $ toHtml @Text "in app"
-          case urlM of
-            Nothing -> div_ [class_ "px-3 pb-2 pl-8 text-2xs text-textWeak italic"] "No source linked for this file."
-            Just url ->
-              div_
-                [ class_ "px-3 pb-2"
-                , hxGet_ url
-                , -- `intersect once`, not `load`: the panel holds every frame, and fetching
-                  -- thirty blobs from the SCM API to show one is how a rate limit is spent.
-                  hxTrigger_ "intersect once"
-                , hxTarget_ "this"
-                , hxSwap_ "innerHTML"
-                ]
-                $ div_ [class_ "pl-5 py-1 text-2xs text-textWeak"] "Loading source…"
+    firstInApp = findIndex (.inApp) frames
+    -- Only once something is in-app: folding every frame would leave an empty list.
+    folds f = isJust firstInApp && not f.inApp && isJust f.file
+    folded = length $ filter folds frames
+    rawBlock = pre_ [class_ "max-h-80 overflow-auto text-xs font-mono leading-relaxed whitespace-pre-wrap break-words px-3 py-2"] $ toHtml raw
+    frame_ :: Bool -> TraceFrame -> Html ()
+    frame_ open f = div_ [class_ $ "border-b border-strokeWeak last:border-0 " <> bool "" "hidden group-has-[.sys-frames:checked]/frames:block bg-fillWeaker" (folds f)] do
+      case f.file of
+        -- An unplaced line keeps its text and gets no disclosure: there is nothing behind it.
+        Nothing -> div_ [class_ "px-3 py-1 font-mono text-2xs text-textWeak whitespace-pre-wrap break-words"] $ toHtml f.raw
+        Just path -> disclosure_ [open_ "" | open] "px-3 py-1.5 hover:bg-fillWeaker text-xs" (summary path) case f.line of
+          Nothing -> div_ [class_ "px-3 pb-2 pl-8 text-2xs text-textWeak italic"] "No source linked for this file."
+          Just n -> div_ [class_ "px-3 pb-2", hxGet_ (snippetUrl path n), hxTrigger_ "intersect once", hxTarget_ "this", hxSwap_ "innerHTML"] $ div_ [class_ "pl-5 py-1 text-2xs text-textWeak"] "Loading source…"
+      whenJust f.context $ pre_ [class_ "mx-3 mb-1.5 text-xs font-mono text-textStrong bg-fillWeaker rounded px-2 py-1 overflow-x-auto"] . toHtml
+      where
+        summary path = do
+          span_ [class_ $ "font-mono truncate " <> bool "text-textWeak" "text-textStrong font-medium" f.inApp] $ toHtml $ path <> foldMap ((":" <>) . show) f.line
+          whenJust f.function \fn -> span_ [class_ "text-textWeak truncate max-md:hidden"] $ toHtml ("in " <> fn)
+          -- In-app is a path heuristic, so it is labelled rather than encoded only in weight.
+          when f.inApp $ span_ [class_ "ml-auto shrink-0 rounded-sm border border-strokeWeak px-1 text-2xs text-textWeak"] "in app"
+
+
+-- | Native disclosure with a chevron that turns when open. @attrs@ go on the @\<details\>@
+-- (e.g. @open_@); @summaryCls@ adds to the summary row's flex layout. The rotate keys off the
+-- chevron's own summary, so disclosures nest without the outer one turning inner chevrons.
+disclosure_ :: [Attribute] -> Text -> Html () -> Html () -> Html ()
+disclosure_ attrs summaryCls title body = details_ attrs do
+  summary_ [class_ $ "flex items-center gap-1.5 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden " <> summaryCls] do
+    faSprite_ "chevron-right" "regular" "w-3 h-3 shrink-0 text-iconNeutral transition-transform [details[open]>summary>&]:rotate-90"
+    title
+  body

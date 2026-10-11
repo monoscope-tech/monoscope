@@ -434,6 +434,8 @@ data AnomalyInsertRow = AnomalyInsertRow
   , method :: !(Maybe Text)
   , host :: !(Maybe Text)
   , urlPath :: !(Maybe Text)
+  , delta :: !Catalog.ShapeDelta
+  -- ^ only non-empty on shape anomalies
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (NFData)
@@ -480,10 +482,11 @@ insertAnomalies :: DB es => V.Vector AnomalyInsertRow -> Eff es Int64
 insertAnomalies rows | V.null rows = pure 0
 insertAnomalies rows =
   Hasql.interpExecute
-    [HI.sql| INSERT INTO apis.anomalies (project_id, anomaly_type, action, target_hash, method, host, url_path)
-             SELECT pid, atype::apis.anomaly_type, 'created'::apis.anomaly_action, th, mth, hst, up
-             FROM unnest(#{pids}::uuid[], #{atypes}::text[], #{ths}::text[], #{methods}::text[], #{hosts}::text[], #{paths}::text[])
-                    AS m(pid, atype, th, mth, hst, up)
+    [HI.sql| INSERT INTO apis.anomalies (project_id, anomaly_type, action, target_hash, method, host, url_path, new_fields, modified_fields)
+             SELECT pid, atype::apis.anomaly_type, 'created'::apis.anomaly_action, th, mth, hst, up,
+                    ARRAY(SELECT jsonb_array_elements_text(nf)), ARRAY(SELECT jsonb_array_elements_text(mf))
+             FROM unnest(#{pids}::uuid[], #{atypes}::text[], #{ths}::text[], #{methods}::text[], #{hosts}::text[], #{paths}::text[], #{nfs}::jsonb[], #{mfs}::jsonb[])
+                    AS m(pid, atype, th, mth, hst, up, nf, mf)
              ON CONFLICT (project_id, target_hash) DO NOTHING |]
   where
     pids = V.map (.projectId) rows
@@ -492,6 +495,8 @@ insertAnomalies rows =
     methods = V.map (.method) rows
     hosts = V.map (.host) rows
     paths = V.map (.urlPath) rows
+    nfs = V.map (asScrubbedJsonb . (.delta.newFields)) rows
+    mfs = V.map (asScrubbedJsonb . (.delta.modifiedFields)) rows
 
 
 -- | Enqueue one @NewAnomaly@ background job per (project, anomalyType) group

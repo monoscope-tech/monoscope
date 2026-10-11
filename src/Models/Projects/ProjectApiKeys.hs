@@ -1,6 +1,7 @@
 module Models.Projects.ProjectApiKeys (
   ProjectApiKey (..),
-  ProjectApiKeyId (..),
+  ProjectApiKeyId,
+  pattern ProjectApiKeyId,
   encryptAPIKey,
   encodeApiKeyB64,
   getProjectIdByApiKey,
@@ -16,32 +17,25 @@ module Models.Projects.ProjectApiKeys (
 where
 
 import Control.Exception (throwIO)
-import Data.Aeson qualified as AE
 import Data.Base64.Types qualified as B64T
 import Data.Cache qualified as Cache
-import Data.Default (Default)
 import Data.Effectful.Hasql qualified as Hasql
-import Data.OpenApi (ToParamSchema, ToSchema)
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity (..), PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, ToRow)
-import Database.PostgreSQL.Simple.FromField (FromField)
-import Database.PostgreSQL.Simple.ToField (ToField)
 import Effectful (Eff, IOE, type (:>))
 import Effectful.Log (Log)
 import Effectful.Reader.Static qualified as Effectful
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
-import GHC.Records (HasField (getField))
 import Hasql.Interpolate qualified as HI
 import Hasql.Session qualified as Session
 import Models.Projects.Projects qualified as Projects
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
-import Pkg.DeriveUtils (selectFrom)
+import Pkg.DeriveUtils (UUIDId (..), selectFrom)
 import Relude hiding (ask, id)
-import Servant.API (FromHttpApiData)
 import System.Config qualified as Config
 import System.Logging qualified as Log
 import System.Types (DB)
@@ -51,14 +45,14 @@ import "cryptonite" Crypto.Cipher.Types (BlockCipher (..), Cipher (..), nullIV)
 import "cryptonite" Crypto.Error (throwCryptoError)
 
 
-newtype ProjectApiKeyId = ProjectApiKeyId {unProjectApiKeyId :: UUID.UUID}
-  deriving stock (Generic, Show)
-  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, NFData, ToField, ToParamSchema, ToSchema)
-  deriving anyclass (FromRow, ToRow)
+type ProjectApiKeyId = UUIDId "project_api_key"
 
 
-instance HasField "toText" ProjectApiKeyId Text where
-  getField = UUID.toText . unProjectApiKeyId
+pattern ProjectApiKeyId :: UUID.UUID -> ProjectApiKeyId
+pattern ProjectApiKeyId u = UUIDId u
+
+
+{-# COMPLETE ProjectApiKeyId #-}
 
 
 data ProjectApiKey = ProjectApiKey

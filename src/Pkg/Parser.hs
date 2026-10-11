@@ -1,5 +1,5 @@
 -- Parser implemented with help and code from: https://markkarpov.com/tutorial/megaparsec.html
-module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, PageDirection (..), PageCursor (..), ScopedQuery (..), mkScopedQuery, applyScopedQuery, applyScopedKqlContext, SqlQueryCfg (..), RangeEnd (..), QueryComponents (..), NormalizedQuery (..), normalizeQuery, buildDateRange, buildGroupBy, buildOrderBy, buildLimit, buildWhereCondition, buildEnvFilter, buildServiceFilter, listToColNames, colsNoAsClause, defaultSelectSqlQuery, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth, autoBinWidth, BinDensity (..), binDensityFor, replacePlaceholders, variablePresets, variablePresetsKQL, constantToSQLList, constantToKQLList, defaultQueryLimit, intervalSeconds) where
+module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, PageDirection (..), PageCursor (..), ScopedQuery (..), mkScopedQuery, applyScopedQuery, applyScopedKqlContext, SqlQueryCfg (..), RangeEnd (..), QueryComponents (..), buildDateRange, buildGroupBy, buildOrderBy, buildLimit, buildWhereCondition, buildEnvFilter, buildServiceFilter, listToColNames, colsNoAsClause, defaultSelectSqlQuery, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth, autoBinWidth, BinDensity (..), binDensityFor, replacePlaceholders, variablePresets, variablePresetsKQL, constantToSQLList, constantToKQLList, defaultQueryLimit, intervalSeconds) where
 
 import Control.Error (hush)
 import Data.Char (isAlphaNum)
@@ -46,27 +46,6 @@ data QueryComponents = QueryComponents
   deriving anyclass (Default)
 
 
--- | Normalized query with pre-computed SQL fragments ready for generation.
--- This is the intermediate representation between QueryComponents and final SQL.
-data NormalizedQuery = NormalizedQuery
-  { nqTable :: Text
-  , nqSelectCols :: [Text]
-  , nqAggregations :: [Text]
-  , nqWhere :: Text -- "TRUE" or "(conditions)"
-  , nqDateRange :: Text -- Date range clause
-  , nqProjectId :: Text
-  , nqScopeFilters :: [Text] -- deployment-environment and service predicates
-  , nqGroupBy :: Text -- "" or "GROUP BY x, y"
-  , nqHaving :: Text -- "" or "HAVING (...)"
-  , nqOrderBy :: Text -- "" or "ORDER BY x DESC"
-  , nqLimit :: Text -- "" or "LIMIT 500"
-  , nqBinInterval :: Maybe Text
-  , nqPercentiles :: Maybe (Text, [Double])
-  , nqExtendedColumns :: [(Text, Text)]
-  }
-  deriving stock (Generic, Show)
-
-
 -- | One source of truth for the timestamp column across every builder below.
 timestampCol :: Text
 timestampCol = "timestamp"
@@ -99,7 +78,7 @@ buildDateRange cfg =
 buildGroupBy :: [(Text, Text)] -> [Text] -> Text
 buildGroupBy extCols cols
   | null cols = ""
-  | otherwise = let extColsMap = Map.fromList extCols in " GROUP BY " <> T.intercalate "," (map (resolveExtendedColumn extColsMap) cols)
+  | otherwise = " GROUP BY " <> T.intercalate "," (map (resolveExtendedColumn $ Map.fromList extCols) cols)
 
 
 -- | Alias → expression for every aggregation, e.g. @count_ → count(*)::float@.
@@ -135,7 +114,6 @@ buildLimit qc = case (qc.takeLimit, qc.finalSummarizeQuery) of
   (Nothing, Nothing) -> "limit " <> show defaultQueryLimit
 
 
--- | Build WHERE condition from raw clause
 -- | @HAVING@ for a post-summarize filter, with aggregation aliases replaced by
 -- the expressions they name: SQL has no @HAVING count_ > 1@, only
 -- @HAVING count(*)::float > 1@. Empty when the query has no such filter, which
@@ -185,30 +163,6 @@ buildServiceFilter :: SqlQueryCfg -> Text
 buildServiceFilter cfg = maybe "" (\s -> "resource___service___name = " <> sqlStringLit s) cfg.service
 
 
--- | Normalize QueryComponents into NormalizedQuery for SQL generation
-normalizeQuery :: SqlQueryCfg -> QueryComponents -> NormalizedQuery
-normalizeQuery cfg qc =
-  let (_, selVec) = getProcessedColumns cfg.projectedColsByUser cfg.defaultSelect
-      baseCols = if null qc.select then selVec else qc.select
-      selectedCols = baseCols <> qc.extendSelect
-   in NormalizedQuery
-        { nqTable = fromMaybe "otel_logs_and_spans" qc.fromTable
-        , nqSelectCols = selectedCols
-        , nqAggregations = qc.aggregations
-        , nqWhere = buildWhereCondition qc.whereClause
-        , nqDateRange = buildDateRange cfg
-        , nqProjectId = cfg.pid.toText
-        , nqScopeFilters = filter (not . T.null) [buildEnvFilter cfg, buildServiceFilter cfg]
-        , nqGroupBy = buildGroupBy qc.extendedColumns qc.groupByClause
-        , nqHaving = buildHaving qc
-        , nqOrderBy = case cfg.cursorM of Just (PageCursor PageNewer _) -> "ORDER BY " <> timestampCol <> " asc"; _ -> buildOrderBy qc
-        , nqLimit = buildLimit qc
-        , nqBinInterval = qc.finalSummarizeQuery
-        , nqPercentiles = qc.percentilesInfo
-        , nqExtendedColumns = qc.extendedColumns
-        }
-
-
 sectionsToComponents :: SqlQueryCfg -> [Section] -> QueryComponents
 sectionsToComponents sqlCfg = foldl' (applySectionToComponent sqlCfg) def
 
@@ -220,11 +174,9 @@ resolveExtendedColumn extColsMap colName = Map.findWithDefault colName colName e
 
 applySectionToComponent :: SqlQueryCfg -> QueryComponents -> Section -> QueryComponents
 applySectionToComponent sqlCfg qc = \case
-  Search expr -> narrow expr
-  WhereClause expr -> narrow expr
-  HavingClause expr ->
-    let new = display (resolveWildcardTimes sqlCfg.currentTime expr)
-     in qc{havingClause = Just $ maybe new (\old -> old <> " AND " <> new) qc.havingClause}
+  Search expr -> qc{whereClause = conj qc.whereClause expr}
+  WhereClause expr -> qc{whereClause = conj qc.whereClause expr}
+  HavingClause expr -> qc{havingClause = conj qc.havingClause expr}
   Source source -> qc{fromTable = Just $ display source}
   sec@(SummarizeCommand aggs byClauseM) ->
     applySummarizeByClauseToQC sqlCfg byClauseM qc{aggregations = qc.aggregations <> map display aggs, percentilesInfo = extractPercentilesInfo [sec], seriesAggs = qc.seriesAggs <> concatMap seriesLeaves aggs, seriesBinned = all seriesBinnable aggs}
@@ -239,9 +191,7 @@ applySectionToComponent sqlCfg qc = \case
   SortCommand sortFields -> qc{sortFields = Just sortFields}
   TakeCommand limit -> qc{takeLimit = Just limit}
   where
-    narrow expr =
-      let new = display (resolveWildcardTimes sqlCfg.currentTime expr)
-       in qc{whereClause = Just $ maybe new (<> " AND " <> new) qc.whereClause}
+    conj clause expr = let new = display (resolveWildcardTimes sqlCfg.currentTime expr) in Just $ maybe new (<> " AND " <> new) clause
 
 
 -- | Apply summarize by clause to query components
@@ -283,10 +233,7 @@ data PageCursor = PageCursor PageDirection UTCTime
 
 data RangeEnd = InclusiveEnd | ExclusiveEnd
   deriving stock (Eq, Generic, Show)
-
-
-instance Default RangeEnd where
-  def = InclusiveEnd
+  deriving anyclass (Default) -- first constructor = InclusiveEnd
 
 
 -- | The context an operator carries while investigating. It is deliberately independent
@@ -429,35 +376,37 @@ getProcessedColumns cols defaultSelect = (T.intercalate "," $ colsNoAsClause sel
 sqlFromQueryComponents :: SqlQueryCfg -> QueryComponents -> (Text, QueryComponents)
 sqlFromQueryComponents sqlCfg qc =
   let
-    nq = normalizeQuery sqlCfg qc
+    projectedCols = (if null qc.select then snd (getProcessedColumns sqlCfg.projectedColsByUser sqlCfg.defaultSelect) else qc.select) <> qc.extendSelect
+    selectClause = T.intercalate "," $ map (\col -> if "summary" `T.isSuffixOf` col then "to_jsonb(summary)" else col) $ colsNoAsClause projectedCols
 
-    selectClause = T.intercalate "," $ map (\col -> if "summary" `T.isSuffixOf` col then "to_jsonb(summary)" else col) $ colsNoAsClause nq.nqSelectCols
-
-    fromTable = nq.nqTable
-    groupByClause = nq.nqGroupBy
+    fromTable = fromMaybe "otel_logs_and_spans" qc.fromTable
+    groupByClause = buildGroupBy qc.extendedColumns qc.groupByClause
     -- Only ever non-empty when a summarize ran, and every summarize shape below
     -- groups (or aggregates the whole set, where a bare HAVING is still valid).
-    havingClause = nq.nqHaving
-    sortOrder = nq.nqOrderBy
-    resolvedGroupCols = map (resolveExtendedColumn (Map.fromList nq.nqExtendedColumns)) qc.groupByClause
+    havingClause = buildHaving qc
+    sortOrder = case sqlCfg.cursorM of Just (PageCursor PageNewer _) -> "ORDER BY " <> timestampCol <> " asc"; _ -> buildOrderBy qc
+    resolve = resolveExtendedColumn (Map.fromList qc.extendedColumns)
+    resolvedGroupCols = map resolve qc.groupByClause
     groupedAggregateCols = resolvedGroupCols <> qc.aggregations
     tableColumns = case qc.finalSummarizeQuery of
       Just _ -> "timestamp" : filter (not . T.isInfixOf "time_bucket") (if null qc.aggregations then qc.select else groupedAggregateCols)
-      Nothing -> if null qc.aggregations then nq.nqSelectCols else groupedAggregateCols
+      Nothing -> if null qc.aggregations then projectedCols else groupedAggregateCols
     aggregateSortOrder = if null qc.groupByClause && isNothing qc.sortFields then "" else sortOrder
-    limitClause = nq.nqLimit
-    whereCondition = nq.nqWhere
+    limitClause = buildLimit qc
+    whereCondition = buildWhereCondition qc.whereClause
+    dateRangeClause = buildDateRange sqlCfg
+    scopeFilters = filter (not . T.null) [buildEnvFilter sqlCfg, buildServiceFilter sqlCfg]
 
     -- Build complete WHERE clause for data queries
-    whereWith dateRange = T.intercalate " and " $ filter (not . T.null) (["project_id='" <> nq.nqProjectId <> "'", dateRange] <> nq.nqScopeFilters <> ["(" <> whereCondition <> ")"])
-    buildWhere = whereWith nq.nqDateRange
+    whereWith dateRange = T.intercalate " and " $ filter (not . T.null) (["project_id='" <> sqlCfg.pid.toText <> "'", dateRange] <> scopeFilters <> ["(" <> whereCondition <> ")"])
+    buildWhere = whereWith dateRangeClause
 
     -- rate/increase/last need each series' previous point, which may sit before
     -- the range: the series source reads 'seriesLookback' further back, then
     -- keeps only in-range rows. Derived from the cfg, so cache refreshes of a
     -- single bucket get their lookback too.
     lookbackRange by = buildDateRange sqlCfg{dateRange = first (fmap (addUTCTime (negate by))) sqlCfg.dateRange, cursorM = Nothing}
-    inRange = if T.null nq.nqDateRange then "TRUE" else nq.nqDateRange
+    inRange = if T.null dateRangeClause then "TRUE" else dateRangeClause
     -- A binned chart of rate/increase alone reads one row per cell and series, which
     -- TimeFusion serves from its per-series rollup; it reaches a whole bin back so
     -- the first bin has a predecessor. Its rows already passed every filter but the range.
@@ -560,10 +509,8 @@ sqlFromQueryComponents sqlCfg qc =
                   CROSS JOIN (VALUES {percentiles}) AS q(percentile, quantile)
                   ORDER BY b.timeB DESC, q.quantile {limitClause}|]
             Nothing ->
-              -- Normal summarize query
-              let resolve = resolveExtendedColumn (Map.fromList qc.extendedColumns)
-                  -- One series per distinct combination of every `by` column.
-                  groupCol = case ["COALESCE(" <> resolve c <> "::text, 'null')" | c <- qc.groupByClause] of
+              -- Normal summarize query: one series per distinct combination of every `by` column.
+              let groupCol = case ["COALESCE(" <> resolve c <> "::text, 'null')" | c <- qc.groupByClause] of
                     [] -> "'" <> (if null qc.aggregations then "count" else "value") <> "'"
                     [c] -> c
                     cs -> "concat_ws(' / ', " <> T.intercalate ", " cs <> ")"
@@ -575,7 +522,6 @@ sqlFromQueryComponents sqlCfg qc =
                       ORDER BY {bucketExpr} DESC {limitClause}|]
         Nothing ->
           let hasAggregationsNoGroupBy = not (null qc.aggregations) && null qc.groupByClause
-              resolve = resolveExtendedColumn (Map.fromList qc.extendedColumns)
               -- `summarize <agg> by <field>` with no time bin has to project the
               -- grouping column alongside the aggregate, exactly as the binned
               -- branch above emits (bucket, group, agg). Selecting the aggregate
@@ -611,7 +557,7 @@ sqlFromQueryComponents sqlCfg qc =
     -- persisted scope predicate has to be included here too. A monitor scoped to
     -- staging or checkout that silently alerts on another scope is worse than one
     -- that never fires.
-    alertScopeFilters = case nq.nqScopeFilters of
+    alertScopeFilters = case scopeFilters of
       [] -> ""
       filters -> "AND " <> T.intercalate " AND " filters
     -- One reading over the window the monitor was configured with ("include rows
@@ -626,7 +572,7 @@ sqlFromQueryComponents sqlCfg qc =
     -- aggregate rather than by ordinal position keeps this legible to TimeFusion's
     -- planner, which is what actually runs alert SQL over spans.
     alertTail =
-      buildGroupBy nq.nqExtendedColumns qc.groupByClause
+      groupByClause
         <> " "
         <> havingClause
         <> if null qc.groupByClause then "" else " ORDER BY " <> alertAggregate <> " DESC LIMIT 1"

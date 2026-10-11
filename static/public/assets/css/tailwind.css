@@ -517,11 +517,6 @@
     transform: rotate(180deg);
   }
 
-  /* Content fade-in for lazy loaded content */
-  .animate-fadeIn {
-    animation: fadeSlideIn 200ms var(--ease-out-expo) forwards;
-  }
-
   /* HTMX transition smoothing for less jarring content swaps */
   .htmx-swapping {
     opacity: 0.7;
@@ -608,17 +603,6 @@
   /* Checkbox/toggle state transition */
   .checkbox, .toggle {
     transition: background-color 150ms ease-out, border-color 150ms ease-out, box-shadow 150ms ease-out;
-  }
-
-  /* Stat value highlight animation (for updates) */
-  @keyframes statPulse {
-    0% { background-color: transparent; }
-    30% { background-color: var(--color-fillBrand-weak); }
-    100% { background-color: transparent; }
-  }
-  .stat-updated {
-    animation: statPulse 1s ease-out;
-    border-radius: 4px;
   }
 
   /* Smooth skeleton to content transition */
@@ -790,16 +774,6 @@
   @keyframes pulseDot {
     0%, 100% { opacity: 1; transform: scale(1); }
     50% { opacity: 0.5; transform: scale(1.2); }
-  }
-
-  /* Success state animation for completed actions */
-  @keyframes successPop {
-    0% { transform: scale(0); opacity: 0; }
-    50% { transform: scale(1.2); }
-    100% { transform: scale(1); opacity: 1; }
-  }
-  .success-pop {
-    animation: successPop 300ms var(--ease-out-expo);
   }
 
   /* Number badge bounce for notifications */

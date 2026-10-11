@@ -1,4 +1,4 @@
-module Pages.BodyWrapper (bodyWrapper, BWConfig (..), PageCtx (..), NavigationResponse (..), navigationResponse, mkPageCtx, mkProjectPageCtx, mkAIPageCtx, settingsContentTarget, navTabAttrs) where
+module Pages.BodyWrapper (bodyWrapper, BWConfig (..), OnboardingStep (..), stepUrl, PageCtx (..), NavigationResponse (..), navigationResponse, mkPageCtx, mkProjectPageCtx, mkAIPageCtx, settingsContentTarget, navTabAttrs) where
 
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default, def)
@@ -17,7 +17,6 @@ import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Aria qualified as Aria
-import Lucid.Base (makeElement)
 import Lucid.Htmx (hxConfirm_, hxDelete_, hxGet_, hxIndicator_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Issues qualified as Issues
@@ -26,13 +25,24 @@ import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pages.CommandPalette qualified as CommandPalette
 import Pages.Components qualified as Components
-import Pkg.DeriveUtils (UUIDId, assetUrl, viteAssetFile)
+import Pkg.DeriveUtils (UUIDId, WrappedEnumShow (..), assetUrl, viteAssetFile)
 import PyF
 import Relude hiding (ask)
 import System.Config (AuthContext (..), DeploymentEnv (Dev), EnvConfig (..))
 import System.Types (ATAuthCtx)
 import Utils (FieldMenuCtx (..), FreeTierStatus (..), LoadingSize (..), LoadingType (..), explorerTabs, faSprite_, fieldContextMenuItems_, fieldMenuActions, freeTierUsageBanner, infrastructureTabs, loadingIndicatorWith_, navTabAttrs, popoverPanel_, popoverTrigger_)
+import Web.HttpApiData (FromHttpApiData)
 import Web.I18n qualified as I18n
+
+
+-- | Constructor names are the @?step=@ URL values and the stored @onboarding_steps_completed@ entries.
+data OnboardingStep = Info | Survey | NotifChannel | Integration | Pricing | Complete
+  deriving stock (Eq, Read, Show)
+  deriving (FromHttpApiData) via WrappedEnumShow OnboardingStep
+
+
+stepUrl :: Projects.ProjectId -> OnboardingStep -> Text
+stepUrl pid step = "/p/" <> pid.toText <> "/onboarding?step=" <> show step
 
 
 -- | Page-handler bootstrap. Loads (session, project), reads AuthContext, and seeds
@@ -55,7 +65,7 @@ mkPageCtxWithScope withScope pid = do
     concurrently
       (if withScope then SchemaCatalog.getFacetSummary (Just [envField, serviceField]) pid "otel_logs_and_spans" now now else pure Nothing)
       ( concurrently
-          (if V.elem "checklist_dismissed" project.onboardingStepsCompleted then pure Nothing else Just <$> activationProgress pid (V.elem "Integration" project.onboardingStepsCompleted))
+          (if V.elem "checklist_dismissed" project.onboardingStepsCompleted then pure Nothing else Just <$> activationProgress pid (V.elem (show Integration) project.onboardingStepsCompleted))
           (Issues.listConversations pid)
       )
   let options field = V.fromList $ sort [v.value | SchemaCatalog.FacetData m <- (.facetJson) <$> maybeToList facetsM, v <- HM.findWithDefault [] field m, not (T.null v.value)]
@@ -92,15 +102,15 @@ data ActivationProgress = ActivationProgress
 
 activationProgress :: Hasql.Hasql :> es => Projects.ProjectId -> Bool -> Eff es ActivationProgress
 activationProgress pid ingestionVerified = do
-  rows :: [(Bool, Bool, Bool)] <-
-    Hasql.interp
-      [HI.sql|
+  (hasDashboard, hasMonitor, hasTestNotification) <-
+    HI.getOneRow
+      <$> Hasql.interp
+        [HI.sql|
         SELECT
           EXISTS (SELECT 1 FROM projects.dashboards WHERE project_id = #{pid}),
           EXISTS (SELECT 1 FROM monitors.query_monitors WHERE project_id = #{pid} AND deleted_at IS NULL),
           EXISTS (SELECT 1 FROM apis.notification_test_history WHERE project_id = #{pid} AND status = 'sent')
       |]
-  let (hasDashboard, hasMonitor, hasTestNotification) = fromMaybe (False, False, False) $ listToMaybe rows
   pure ActivationProgress{..}
 
 
@@ -130,7 +140,7 @@ onboardingChecklist_ :: Projects.Project -> ActivationProgress -> Html ()
 onboardingChecklist_ project progressState = do
   let pid = project.id.toText
       items =
-        [ (progressState.ingestionVerified, ("Verify ingestion", "/p/" <> pid <> "/onboarding?step=Integration", "paper-plane"))
+        [ (progressState.ingestionVerified, ("Verify ingestion", stepUrl project.id Integration, "paper-plane"))
         , (progressState.hasDashboard, ("Create a dashboard", "/p/" <> pid <> "/dashboards", "dashboard"))
         , (progressState.hasMonitor, ("Create a monitor", "/p/" <> pid <> "/monitors", "bell"))
         , (progressState.hasTestNotification, ("Send a test notification", "/p/" <> pid <> "/settings/integrations", "envelope"))
@@ -139,7 +149,7 @@ onboardingChecklist_ project progressState = do
       doneCount = length $ filter fst items
       totalCount = length items
       progress = show doneCount <> "/" <> show totalCount :: Text
-  unless (doneCount == totalCount || V.elem "checklist_dismissed" project.onboardingStepsCompleted)
+  unless (doneCount == totalCount)
     $ div_ [id_ "onboarding-checklist", class_ "mt-5 pt-3 border-t border-strokeWeak"] do
       -- Collapsed state: rocket icon
       div_ [class_ "flex justify-center group-has-[#sidenav-toggle:checked]/pg:hidden"] do
@@ -491,7 +501,7 @@ bodyWrapper bcfg child = do
                 div_ [class_ "h-0 shrink"] do
                   Components.drawer_ "global-data-drawer" (isJust bcfg.globalDrawerContent) Nothing bcfg.globalDrawerContent ""
                   -- Modal for copying widgets to other dashboards
-                  Components.modal_ "dashboards-modal" "" do
+                  Components.modalWith_ "dashboards-modal" def Nothing do
                     input_ [type_ "hidden", id_ "dashboards-modal-widget-id", name_ "widget_id"]
                     input_ [type_ "hidden", id_ "dashboards-modal-source-dashboard-id", name_ "source_dashboard_id"]
                     -- Only set for a widget that lives on no dashboard, whose definition
@@ -614,88 +624,45 @@ bodyWrapper bcfg child = do
                   });
               |]
   where
-    dialog_ :: [Attribute] -> Html () -> Html ()
-    dialog_ = with (makeElement "dialog")
-
     -- Focused prompt capture shared by the sidebar's chat and routine launchers.
     -- A conversation is created only after submission, so abandoned drafts never pollute
     -- the thread list. The resulting page uses the same history renderer as issue chat.
     aiComposerShell_ :: Projects.ProjectId -> Html ()
     aiComposerShell_ pid =
-      dialog_ [id_ "ai-composer-modal", class_ "modal !items-start px-4 pt-[15vh] backdrop:backdrop-blur-sm", term "aria-labelledby" "ai-composer-title"] do
-        form_ [method_ "dialog", class_ "modal-backdrop"] $ button_ [Aria.label_ "Close composer"] "close"
-        form_
-          [ id_ "ai-composer-panel"
-          , hxPost_ $ "/p/" <> pid.toText <> "/ai"
-          , hxSwap_ "none"
-          , term "hx-disabled-elt" "find button[type='submit']"
-          , class_ "modal-box group/composer !w-full !max-w-lg !overflow-visible !rounded-none !border-0 !bg-transparent !p-0 !shadow-none flex flex-col"
-          ]
-          do
-            div_ [class_ "mb-2 flex items-center justify-between px-3"] do
-              h2_ [id_ "ai-composer-title", class_ "text-xs font-medium uppercase tracking-wider text-white"] do
-                span_ [class_ "group-has-[#ai-composer-routine:checked]/composer:hidden"] "New chat"
-                span_ [class_ "hidden group-has-[#ai-composer-routine:checked]/composer:inline"] "New routine"
-              button_ [type_ "button", Aria.label_ "Close composer", class_ "inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-white/70 hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-white active:scale-[0.96] transition-[color,background-color,scale]", onclick_ "this.closest('dialog').close()"]
-                $ faSprite_ "xmark" "regular" "h-3.5 w-3.5"
-            div_ [class_ "w-full overflow-hidden rounded-lg border border-base-300 bg-bgBase shadow-2xl"] do
-              fieldset_ [class_ "m-2 grid w-fit grid-cols-2 rounded-lg bg-fillWeak p-0.5 text-xs", Aria.label_ "Conversation type"] do
-                input_ [type_ "radio", name_ "mode", value_ "chat", id_ "ai-composer-chat", class_ "sr-only peer/chat", checked_]
-                label_ [Lucid.for_ "ai-composer-chat", class_ "cursor-pointer rounded-md px-3 py-1.5 text-center font-medium text-textWeak peer-checked/chat:bg-bgRaised peer-checked/chat:text-textStrong peer-checked/chat:shadow-xs peer-focus-visible/chat:outline-2 peer-focus-visible/chat:outline-offset-2 transition-[color,background-color,box-shadow] duration-100"] "Chat"
-                input_ [type_ "radio", name_ "mode", value_ "routine", id_ "ai-composer-routine", class_ "sr-only peer/routine"]
-                label_ [Lucid.for_ "ai-composer-routine", class_ "cursor-pointer rounded-md px-3 py-1.5 text-center font-medium text-textWeak peer-checked/routine:bg-bgRaised peer-checked/routine:text-textStrong peer-checked/routine:shadow-xs peer-focus-visible/routine:outline-2 peer-focus-visible/routine:outline-offset-2 transition-[color,background-color,box-shadow] duration-100"] "Routine"
-              div_ [class_ "border-b border-base-300 px-3"] do
-                textarea_
-                  [ id_ "ai-composer-input"
-                  , name_ "query"
-                  , rows_ "3"
-                  , maxlength_ "4000"
-                  , required_ "required"
-                  , autofocus_
-                  , placeholder_ "Describe what you want Monoscope to investigate…"
-                  , Aria.label_ "Instructions"
-                  , class_ "no-focus-ring min-h-24 w-full resize-none bg-transparent py-3 text-sm leading-5 text-textStrong outline-none placeholder:text-textDisabled"
-                  , [__|on keydown[key=='Enter' and (metaKey or ctrlKey)] halt the event then call my form.requestSubmit()|]
-                  ]
-                  ""
-              div_ [class_ "hidden group-has-[#ai-composer-routine:checked]/composer:flex items-center justify-between gap-3 border-b border-base-300 px-4 py-3"] do
-                label_ [Lucid.for_ "ai-routine-interval", class_ "text-xs font-medium text-textStrong"] "Run every"
-                select_ [id_ "ai-routine-interval", name_ "intervalMinutes", class_ "select select-sm h-8 min-h-8 border-strokeWeak bg-bgRaised text-xs text-textStrong"] do
-                  option_ [value_ "60", class_ "bg-bgRaised text-textStrong"] "Hour"
-                  option_ [value_ "1440", selected_ "selected", class_ "bg-bgRaised text-textStrong"] "Day"
-                  option_ [value_ "10080", class_ "bg-bgRaised text-textStrong"] "Week"
-              div_ [class_ "flex justify-end gap-1.5 p-2"] do
-                button_ [type_ "button", class_ "btn btn-sm btn-ghost cursor-pointer shadow-none active:scale-[0.96] transition-transform", onclick_ "this.closest('dialog').close()"] "Cancel"
-                button_ [type_ "submit", class_ "btn btn-sm btn-primary cursor-pointer gap-1.5 shadow-none active:scale-[0.96] transition-transform"] do
-                  span_ [class_ "group-has-[#ai-composer-routine:checked]/composer:hidden"] "Start chat"
-                  span_ [class_ "hidden group-has-[#ai-composer-routine:checked]/composer:inline"] "Start routine"
-                  faSprite_ "arrow-right" "regular" "h-3 w-3"
-            div_ [class_ "cmd-palette-hints mt-3 flex items-center justify-center gap-6 text-xs text-white drop-shadow dark:text-white/80"] do
-              div_ [class_ "flex items-center gap-1.5"] do
-                "Start"
-                kbd_ [class_ "kbd kbd-xs"] "⌘/Ctrl"
-                kbd_ [class_ "kbd kbd-xs"] "↵"
-              div_ [class_ "flex items-center gap-1.5"] do
-                "Close"
-                kbd_ [class_ "kbd kbd-xs"] "esc"
+      Components.floatingDialog_
+        "ai-composer-modal"
+        (span_ [class_ "group-has-[#ai-composer-routine:checked]/dialog:hidden"] "New chat" >> span_ [class_ "hidden group-has-[#ai-composer-routine:checked]/dialog:inline"] "New routine")
+        ("Start", ["⌘/Ctrl", "↵"])
+        [id_ "ai-composer-panel", hxPost_ $ "/p/" <> pid.toText <> "/ai", hxSwap_ "none", term "hx-disabled-elt" "find button[type='submit']"]
+        do
+          Components.segmented_ "m-2 grid w-fit grid-cols-2 rounded-lg bg-fillWeak p-0.5 text-xs" "Conversation type" "mode" "ai-composer-" [("chat", "Chat"), ("routine", "Routine")]
+          div_ [class_ "border-b border-base-300 px-3"] do
+            textarea_
+              [ id_ "ai-composer-input"
+              , name_ "query"
+              , rows_ "3"
+              , maxlength_ "4000"
+              , required_ "required"
+              , autofocus_
+              , placeholder_ "Describe what you want Monoscope to investigate…"
+              , Aria.label_ "Instructions"
+              , class_ "no-focus-ring min-h-24 w-full resize-none bg-transparent py-3 text-sm leading-5 text-textStrong outline-none placeholder:text-textDisabled"
+              ]
+              ""
+          div_ [class_ "hidden group-has-[#ai-composer-routine:checked]/dialog:flex items-center justify-between gap-3 border-b border-base-300 px-4 py-3"] do
+            label_ [Lucid.for_ "ai-routine-interval", class_ "text-xs font-medium text-textStrong"] "Run every"
+            select_ [id_ "ai-routine-interval", name_ "intervalMinutes", class_ "select select-sm h-8 min-h-8 border-strokeWeak bg-bgRaised text-xs text-textStrong"] do
+              option_ [value_ "60", class_ "bg-bgRaised text-textStrong"] "Hour"
+              option_ [value_ "1440", selected_ "selected", class_ "bg-bgRaised text-textStrong"] "Day"
+              option_ [value_ "10080", class_ "bg-bgRaised text-textStrong"] "Week"
+        do
+          span_ [class_ "group-has-[#ai-composer-routine:checked]/dialog:hidden"] "Start chat"
+          span_ [class_ "hidden group-has-[#ai-composer-routine:checked]/dialog:inline"] "Start routine"
+          faSprite_ "arrow-right" "regular" "h-3 w-3"
 
     aiThreadRenameShell_ :: Html ()
     aiThreadRenameShell_ =
-      dialog_ [id_ "ai-thread-rename-modal", class_ "modal !items-start px-4 pt-[15vh] backdrop:backdrop-blur-sm", term "aria-labelledby" "ai-thread-rename-title"] do
-        form_ [method_ "dialog", class_ "modal-backdrop"] $ button_ [Aria.label_ "Close rename dialog"] "close"
-        form_ [id_ "ai-thread-rename-form", hxPost_ "#", hxSwap_ "none", class_ "modal-box !w-full !max-w-lg !overflow-visible !rounded-none !border-0 !bg-transparent !p-0 !shadow-none flex flex-col"] do
-          div_ [class_ "mb-2 flex items-center justify-between px-3"] do
-            h2_ [id_ "ai-thread-rename-title", class_ "text-xs font-medium uppercase tracking-wider text-white"] "Rename chat"
-            button_ [type_ "button", Aria.label_ "Close rename dialog", class_ "inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-white/70 hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-white active:scale-[0.96] transition-[color,background-color,scale]", onclick_ "this.closest('dialog').close()"]
-              $ faSprite_ "xmark" "regular" "h-3.5 w-3.5"
-          div_ [class_ "w-full overflow-hidden rounded-lg border border-base-300 bg-bgBase shadow-2xl"] do
-            div_ [class_ "border-b border-base-300 px-4 py-3"]
-              $ label_ [Lucid.for_ "ai-thread-rename-input", class_ "flex flex-col gap-1.5 text-xs font-medium text-textStrong"] do
-                span_ "Chat title"
-                input_ [id_ "ai-thread-rename-input", name_ "conversationTitle", maxlength_ "100", required_ "required", autofocus_, autocomplete_ "off", class_ "no-focus-ring w-full bg-transparent py-2 text-sm font-normal outline-none placeholder:text-textDisabled", placeholder_ "Production changes today"]
-            div_ [class_ "flex justify-end gap-1.5 p-2"] do
-              button_ [type_ "button", class_ "btn btn-sm btn-ghost cursor-pointer shadow-none active:scale-[0.96] transition-transform", onclick_ "this.closest('dialog').close()"] "Cancel"
-              button_ [type_ "submit", class_ "btn btn-sm btn-primary cursor-pointer shadow-none active:scale-[0.96] transition-transform"] "Save"
+      Components.floatingDialog_ "ai-thread-rename-modal" "Rename chat" ("Save", ["↵"]) [id_ "ai-thread-rename-form", hxPost_ "#", hxSwap_ "none"] (Components.dialogField_ "ai-thread-rename-input" "conversationTitle" "Chat title" "Production changes today" [maxlength_ "100", required_ "required"]) "Save"
 
 
 projectsDropDown :: Projects.Project -> V.Vector Projects.Project -> Html ()
@@ -776,12 +743,7 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
       -- Collapsed: search icon
       button_ ([class_ "group-has-[#sidenav-toggle:checked]/pg:hidden flex items-center justify-center p-2 rounded-lg hover:bg-fillHover text-textWeak hover:text-textStrong cursor-pointer transition-colors duration-100", searchScript, Aria.label_ "Search"] <> tippyRight_ "Search (\x2318K)") do
         faSprite_ "sidebar-search" "regular" "w-4 h-4"
-    fieldset_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:grid grid-cols-2 rounded-lg bg-fillWeak p-0.5 text-xs"] do
-      legend_ [class_ "sr-only"] "Sidebar view"
-      input_ [type_ "radio", name_ "nav-view", id_ "nav-view-menu", class_ "sr-only peer/menu", checked_]
-      label_ [term "for" "nav-view-menu", class_ "cursor-pointer rounded-md px-2 py-1 text-center text-textWeak peer-checked/menu:bg-bgRaised peer-checked/menu:text-textStrong peer-checked/menu:shadow-xs peer-focus-visible/menu:outline-2 peer-focus-visible/menu:outline-offset-2 transition-[color,background-color,box-shadow] duration-100"] "Navigate"
-      input_ [type_ "radio", name_ "nav-view", id_ "nav-view-ai", class_ "sr-only peer/ai"]
-      label_ [term "for" "nav-view-ai", class_ "cursor-pointer rounded-md px-2 py-1 text-center text-textWeak peer-checked/ai:bg-bgRaised peer-checked/ai:text-textStrong peer-checked/ai:shadow-xs peer-focus-visible/ai:outline-2 peer-focus-visible/ai:outline-offset-2 transition-[color,background-color,box-shadow] duration-100"] "Assistant"
+    Components.segmented_ "hidden group-has-[#sidenav-toggle:checked]/pg:grid grid-cols-2 rounded-lg bg-fillWeak p-0.5 text-xs" "Sidebar view" "nav-view" "nav-view-" [("menu", "Navigate"), ("ai", "Assistant")]
     nav_ [id_ "main-sidenav", class_ "mt-2 min-h-0 overflow-x-hidden overflow-y-auto flex flex-col gap-1 text-textWeak group-has-[#nav-view-ai:checked]/nav:hidden [&_.main-nav-link.active]:bg-fillBrand-weak [&_.main-nav-link.active]:text-textStrong [&_.main-nav-link.active]:font-medium [&_.main-nav-link.active]:border-l-strokeBrand-strong [&_.main-nav-link.active]:border-y-transparent [&_.main-nav-link.active]:border-r-transparent [&_.main-nav-link.active_.nav-icon]:text-textBrand", [__|on click set #mobile-nav-toggle.checked to false end|]] do
       let pidTxt = project.id.toText
           flyoutLink (linkText, link) =
@@ -834,7 +796,7 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
       mapM_ (uncurry3 renderNavItem) primary
       div_ [class_ "border-t border-strokeWeak/50 my-1.5 mx-2"] ""
       mapM_ (uncurry3 renderNavItem) secondary
-      whenJust activationProgressM $ onboardingChecklist_ project
+      whenJust bcfg.activationProgressM $ onboardingChecklist_ project
       div_ [class_ "border-t border-strokeWeak my-2"] ""
       renderNavItem "Settings" ("/p/" <> pidTxt <> "/settings") "gear"
       a_
@@ -860,7 +822,7 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
         newAIAction True "plus" "New chat" [__|on click set #ai-composer-input.value to '' then set #ai-composer-chat.checked to true then call #ai-composer-modal.showModal()|]
         newAIAction False "clock-rotate-left" "New routine" [__|on click set #ai-composer-input.value to '' then set #ai-composer-routine.checked to true then call #ai-composer-modal.showModal()|]
       div_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block border-t border-strokeWeak/40 my-1 mx-2"] ""
-      when (length conversations > 15) $ div_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block px-1 pb-1"] do
+      when (length bcfg.conversations > 15) $ div_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block px-1 pb-1"] do
         div_ [class_ "relative"] do
           span_ [class_ "pointer-events-none absolute inset-y-0 start-2 flex items-center text-textWeak"] $ faSprite_ "sidebar-search" "regular" "h-3 w-3"
           input_
@@ -871,14 +833,14 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
             , Components.filterInputAttr_ "#ai-conversation-nav .ai-thread-item"
             ]
         p_ [class_ "hidden px-2 py-2 text-xs text-textWeak", term "hx-live:.hidden" "q('.ai-thread-item:not(.hidden) in #ai-conversation-nav').count > 0"] "No matching conversations"
-      let (routines, chats) = partition (isJust . (.routineInterval)) conversations
+      let (routines, chats) = partition (isJust . (.routineInterval)) bcfg.conversations
           conversationHref c = "/p/" <> project.id.toText <> "/ai/" <> c.conversationId.toText
           scheduleLabel c
             | isJust c.routineRunningSince = "Running now"
             | not c.routineActive = "Paused"
             | otherwise = maybe "Waiting to be scheduled" (\t -> "Next " <> toText (formatTime defaultTimeLocale "%-d %b, %H:%M UTC" t)) c.routineNextRunAt
           relativeTime t =
-            let seconds = max 0 $ floor (diffUTCTime now t) :: Int
+            let seconds = max 0 $ floor (diffUTCTime bcfg.shellNow t) :: Int
              in if
                   | seconds < 60 -> "now"
                   | seconds < 3600 -> show (seconds `div` 60) <> "m"
@@ -891,7 +853,7 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
             span_ [class_ "text-2xs tabular-nums text-textDisabled"] $ toHtml $ show count
           timeGroupLabel label = div_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block px-2 pb-0.5 pt-1 text-2xs font-medium text-textDisabled"] $ toHtml label
           threadLink c =
-            let isActive = activeConversationId == Just c.conversationId
+            let isActive = bcfg.activeConversationId == Just c.conversationId
                 href = conversationHref c
                 actionsId = "ai-thread-actions-" <> c.conversationId.toText
              in div_ [data_ "filter" c.title, class_ $ "ai-thread-item group/thread relative flex min-w-0 items-center rounded-md text-textWeak/80 hover:bg-fillWeak/70 hover:text-textStrong transition-[color,background-color] duration-100" <> bool "" " text-textStrong font-medium" isActive] do
@@ -926,7 +888,7 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
                       button_ [type_ "submit", class_ "w-full text-start"] "Make daily routine"
                     li_ [] $ button_ [type_ "button", class_ "text-textError", hxDelete_ href, hxSwap_ "none", hxConfirm_ "Delete this chat and its message history? This cannot be undone."] "Delete chat"
           routineCard c = do
-            let isActive = activeConversationId == Just c.conversationId
+            let isActive = bcfg.activeConversationId == Just c.conversationId
                 cadenceLabel = foldMap Issues.routineCadence c.routineInterval
                 statusLabel = scheduleLabel c
                 stateLabel
@@ -935,7 +897,7 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
                   | otherwise = "Paused"
                 nextRunLabel =
                   c.routineNextRunAt <&> \t ->
-                    if utctDay t == utctDay now
+                    if utctDay t == utctDay bcfg.shellNow
                       then toText $ formatTime defaultTimeLocale "%H:%M" t
                       else toText $ formatTime defaultTimeLocale "%-d %b" t
                 href = conversationHref c
@@ -978,7 +940,7 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
       unless (null routines) $ div_ [class_ "flex flex-col gap-px px-0.5 group-has-[#sidenav-toggle:not(:checked)]/pg:px-0"] $ mapM_ routineCard routines
       sectionLink ("/p/" <> project.id.toText <> "/ai") "Conversations" (length chats)
       unless (null chats) do
-        let ageInDays c = diffDays (utctDay now) (utctDay c.updatedAt)
+        let ageInDays c = diffDays (utctDay bcfg.shellNow) (utctDay c.updatedAt)
             (today, beforeToday) = partition ((<= 0) . ageInDays) chats
             (thisWeek, older) = partition ((<= 7) . ageInDays) beforeToday
             renderTimeGroup label threads = unless (null threads) do
@@ -1040,10 +1002,6 @@ sideNav sess project bcfg = aside_ [class_ "group/nav relative z-40 bg-fillWeake
   where
     pageTitle = fromMaybe bcfg.pageTitle bcfg.prePageTitle
     menuItem = if bcfg.isSettingsPage then Just "Settings" else bcfg.menuItem
-    activationProgressM = bcfg.activationProgressM
-    conversations = bcfg.conversations
-    activeConversationId = bcfg.activeConversationId
-    now = bcfg.shellNow
 
 
 navbar :: BWConfig -> [(Text, Text, Text)] -> Html ()
@@ -1079,12 +1037,11 @@ navbar bcfg menuL =
       when (isJust bcfg.navTabs) headerDivider_
       whenJust bcfg.navTabs $ div_ [class_ "min-w-0 max-w-full overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden data-[overflowing=true]:[mask-image:linear-gradient(to_right,transparent,black_1rem,black_calc(100%-1rem),transparent)]", data_ "nav-tab-strip" ""]
     div_ [class_ $ "ms-auto flex shrink-0 items-center justify-end gap-0 text-sm" <> bool " max-md:hidden" "" (isJust bcfg.pageActions)] do
-      unless (V.null bcfg.envOptions && V.null bcfg.serviceOptions) $ div_ [class_ "flex items-center gap-2", data_ "header-scope" "", role_ "group", Aria.label_ "Global telemetry scope"] do
-        envPicker_ (bcfg.sessM >>= (.environment)) bcfg.envOptions
-        servicePicker_ (bcfg.sessM >>= (.service)) bcfg.serviceOptions
-      when
-        (not (V.null bcfg.envOptions && V.null bcfg.serviceOptions) && isJust bcfg.pageActions)
-        headerDivider_
+      let hasScope = not (V.null bcfg.envOptions && V.null bcfg.serviceOptions)
+      when hasScope $ div_ [class_ "flex items-center gap-2", data_ "header-scope" "", role_ "group", Aria.label_ "Global telemetry scope"] do
+        scopePicker_ EnvScope (bcfg.sessM >>= (.environment)) bcfg.envOptions
+        scopePicker_ ServiceScope (bcfg.sessM >>= (.service)) bcfg.serviceOptions
+      when (hasScope && isJust bcfg.pageActions) headerDivider_
       whenJust bcfg.pageActions $ div_ [class_ "flex items-center", data_ "header-actions" ""]
     script_
       [text|
@@ -1109,67 +1066,52 @@ navbar bcfg menuL =
     headerDivider_ = div_ [class_ "mx-4 hidden h-4 w-px shrink-0 bg-strokeWeak opacity-70 md:block", Aria.hidden_ "true"] ""
 
 
--- | The app-wide environment selector, in the shape Datadog puts in its top bar: pick prod
--- or staging once and every telemetry surface stays scoped to it until you change it.
---
--- The selection lives in the URL so navigation and shared links preserve the active scope.
---
--- Hidden entirely when the project has never reported an environment: a picker whose only
--- option is "All" is furniture, not a control.
-envPicker_ :: Maybe Text -> V.Vector Text -> Html ()
-envPicker_ selected options =
+data Scope = EnvScope | ServiceScope
+
+
+-- | App-wide environment/service selector, in the shape Datadog puts in its top bar: pick it
+-- once and every telemetry surface stays scoped to it. The selection lives in the URL so
+-- navigation and shared links preserve it. Hidden when the project has never reported a value:
+-- a picker whose only option is "All" is furniture, not a control.
+scopePicker_ :: Scope -> Maybe Text -> V.Vector Text -> Html ()
+scopePicker_ scope selected options =
   unless (V.null options) $ div_ [class_ "relative", data_ "scope-picker" ""] do
-    let current = fromMaybe "All environments" selected
+    let current = fromMaybe fallback selected
     button_
       ( [ class_ "group inline-flex h-8 items-center gap-1.5 rounded-lg border border-strokeWeak bg-bgRaised px-2.5 shadow-xs hover:border-strokeStrong hover:bg-fillWeak focus-visible:border-strokeFocus cursor-pointer aria-busy:opacity-60"
         , type_ "button"
-        , id_ "env-picker-trigger"
-        , Aria.label_ $ "Deployment environment: " <> current
-        , term "data-tippy-content" "Global scope: apply this deployment environment to every telemetry page"
+        , id_ $ popId <> "-trigger"
+        , Aria.label_ $ "Global " <> noun <> " scope: " <> current
+        , term "data-tippy-content" $ "Global scope: apply this " <> noun <> " to every telemetry page"
         ]
-          <> popoverTrigger_ "env-picker"
+          <> popoverTrigger_ popId
       )
       do
-        span_ [class_ "group-aria-busy:hidden"] $ faSprite_ "layer-group" "regular" "w-3.5 h-3.5 text-iconNeutral"
+        span_ [class_ "group-aria-busy:hidden"] $ faSprite_ icon "regular" "w-3.5 h-3.5 text-iconNeutral"
         span_ [class_ "hidden group-aria-busy:block"] $ faSprite_ "spinner" "regular" "w-3.5 h-3.5 animate-spin text-iconBrand"
-        span_ [class_ "max-w-32 truncate font-normal text-textWeak max-md:hidden", id_ "env-picker-label"] $ toHtml $ fromMaybe "All envs" selected
+        span_ [class_ "max-w-32 truncate font-normal text-textWeak max-md:hidden", id_ $ popId <> "-label"] $ toHtml $ fromMaybe shortFallback selected
         faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral"
-    ul_ (popoverPanel_ "env-picker" <> [class_ "dropdown menu flex flex-col bg-bgBase border border-strokeWeak w-56 p-1 text-sm rounded-lg shadow"])
-      -- Nothing is "all environments" and is always offered: an environment that has gone
-      -- quiet must not be able to strand a reader in a view with no data and no way out.
-      $ forM_ (Nothing : (Just <$> V.toList options))
-      $ scopeOption_ "environment" "All environments" selected
-
-
-servicePicker_ :: Maybe Text -> V.Vector Text -> Html ()
-servicePicker_ selected options =
-  unless (V.null options) $ div_ [class_ "relative", data_ "scope-picker" ""] do
-    let current = fromMaybe "All services" selected
-    button_ ([class_ "group inline-flex h-8 items-center gap-1.5 rounded-lg border border-strokeWeak bg-bgRaised px-2.5 shadow-xs hover:border-strokeStrong hover:bg-fillWeak focus-visible:border-strokeFocus cursor-pointer aria-busy:opacity-60", type_ "button", id_ "service-picker-trigger", Aria.label_ $ "Global service scope: " <> current, term "data-tippy-content" "Global scope: apply this service to every telemetry page"] <> popoverTrigger_ "service-picker") do
-      span_ [class_ "group-aria-busy:hidden"] $ faSprite_ "cube" "regular" "w-3.5 h-3.5 text-iconNeutral"
-      span_ [class_ "hidden group-aria-busy:block"] $ faSprite_ "spinner" "regular" "w-3.5 h-3.5 animate-spin text-iconBrand"
-      span_ [class_ "max-w-32 truncate font-normal text-textWeak max-md:hidden", id_ "service-picker-label"] $ toHtml current
-      faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral"
-    ul_ (popoverPanel_ "service-picker" <> [class_ "dropdown menu flex flex-col bg-bgBase border border-strokeWeak w-56 p-1 text-sm rounded-lg shadow"])
-      $ forM_ (Nothing : (Just <$> V.toList options))
-      $ scopeOption_ "service_scope" "All services" selected
-
-
--- The URL is the scope store. The dataset carries arbitrary service/environment names
--- without embedding them in executable text; the one-line handler preserves every other
--- query parameter through the shared URL helper.
-scopeOption_ :: Text -> Text -> Maybe Text -> Maybe Text -> Html ()
-scopeOption_ scope fallback selected option =
-  li_ []
-    $ button_
-      [ class_ $ "w-full text-left cursor-pointer rounded-md px-2 py-1 hover:bg-fillWeak " <> bool "" "font-semibold text-textBrand" (option == selected)
-      , type_ "button"
-      , term "aria-pressed" (bool "false" "true" (option == selected))
-      , data_ "scope-key" scope
-      , data_ "scope-value" (fromMaybe "" option)
-      , [__|on click call window.setQueryParamAndReload(my.dataset.scopeKey, my.dataset.scopeValue)|]
-      ]
-    $ toHtml (fromMaybe fallback option)
+    ul_ (popoverPanel_ popId <> [class_ "dropdown menu flex flex-col bg-bgBase border border-strokeWeak w-56 p-1 text-sm rounded-lg shadow"])
+      -- Nothing (all) is always offered: a scope value that has gone quiet must not be able
+      -- to strand a reader in a view with no data and no way out.
+      -- The URL is the scope store. The dataset carries arbitrary service/environment names
+      -- without embedding them in executable text; the one-line handler preserves every other
+      -- query parameter through the shared URL helper.
+      $ forM_ (Nothing : (Just <$> V.toList options)) \option ->
+        li_ []
+          $ button_
+            [ class_ $ "w-full text-left cursor-pointer rounded-md px-2 py-1 hover:bg-fillWeak " <> bool "" "font-semibold text-textBrand" (option == selected)
+            , type_ "button"
+            , term "aria-pressed" (bool "false" "true" (option == selected))
+            , data_ "scope-key" key
+            , data_ "scope-value" (fromMaybe "" option)
+            , [__|on click call window.setQueryParamAndReload(my.dataset.scopeKey, my.dataset.scopeValue)|]
+            ]
+          $ toHtml (fromMaybe fallback option)
+  where
+    (popId, icon, noun, key, fallback, shortFallback) = case scope of
+      EnvScope -> ("env-picker", "layer-group", "deployment environment", "environment", "All environments", "All envs")
+      ServiceScope -> ("service-picker", "cube", "service", "service_scope", "All services", "All services")
 
 
 globalTemplates_ :: Html ()
@@ -1229,9 +1171,27 @@ settingsWrapper pid current pageHtml =
         li_ [class_ "md:hidden shrink-0"]
           $ label_ [term "for" "mobile-nav-toggle", role_ "button", tabindex_ "0", class_ "flex items-center px-2.5 py-2 rounded-lg cursor-pointer text-strokeStrong hover:bg-fillWeak focus-visible:outline-2 focus-visible:outline-offset-2", Aria.label_ "Open menu", Components.keyboardActivateAttr_]
           $ faSprite_ "side-chevron-left-in-box" "regular" "shrink-0 h-4.5 w-4.5 rotate-180"
-        mapM_ (renderNavBottomItem current) $ navBottomList pid.toText
+        forM_ (navBottomList pid.toText) \(linkText, link, iconName) ->
+          li_ []
+            $ a_
+              ( [ class_ $ "settings-nav-link flex gap-2 md:gap-3 items-center px-2.5 md:px-3 py-2 rounded-lg whitespace-nowrap" <> bool "" " active" (current == linkText)
+                , href_ link
+                , hxGet_ link
+                , hxTarget_ settingsContentTarget
+                , hxSelect_ settingsContentTarget
+                , term "hx-select-oob" "#settings-nav:outerMorph"
+                , hxSwap_ "outerMorph"
+                , hxPushUrl_ "true"
+                , hxIndicator_ "#settings-loading"
+                , [__|on click set my.preloadState to 'DONE'|]
+                ]
+                  <> tippyRight_ linkText
+              )
+              do
+                faSprite_ iconName "regular" "shrink-0 h-4 w-4"
+                span_ [class_ "text-sm font-medium"] (toHtml linkText)
     section_ [id_ "settings-content", class_ "relative w-full h-full overflow-y-auto", Aria.label_ current] do
-      div_ [id_ settingsLoadingId, class_ "htmx-indicator absolute inset-0 z-10 bg-bgBase/60 flex items-center justify-center"] do
+      div_ [id_ "settings-loading", class_ "htmx-indicator absolute inset-0 z-10 bg-bgBase/60 flex items-center justify-center"] do
         loadingIndicatorWith_ LdMD LdSpinner "text-textBrand"
       pageHtml
 
@@ -1268,32 +1228,6 @@ navFlyoutItems pidTxt = \case
 
 settingsContentTarget :: Text
 settingsContentTarget = "#settings-content"
-
-
-settingsLoadingId :: Text
-settingsLoadingId = "settings-loading"
-
-
-renderNavBottomItem :: Text -> (Text, Text, Text) -> Html ()
-renderNavBottomItem curr (linkText, link, iconName) =
-  li_ [] do
-    a_
-      ( [ class_ $ "settings-nav-link flex gap-2 md:gap-3 items-center px-2.5 md:px-3 py-2 rounded-lg whitespace-nowrap" <> bool "" " active" (curr == linkText)
-        , href_ link
-        , hxGet_ link
-        , hxTarget_ settingsContentTarget
-        , hxSelect_ settingsContentTarget
-        , term "hx-select-oob" "#settings-nav:outerMorph"
-        , hxSwap_ "outerMorph"
-        , hxPushUrl_ "true"
-        , hxIndicator_ ("#" <> settingsLoadingId)
-        , [__|on click set my.preloadState to 'DONE'|]
-        ]
-          <> tippyRight_ linkText
-      )
-      do
-        faSprite_ iconName "regular" "shrink-0 h-4 w-4"
-        span_ [class_ "text-sm font-medium"] (toHtml linkText)
 
 
 externalHeadScripts_ :: EnvConfig -> Html ()
