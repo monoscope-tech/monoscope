@@ -671,7 +671,7 @@ requestEventIds request =
 --
 -- >>> (AE.decode "\"https://a\"" :: Maybe Referer, AE.decode "[\"a\",\"b\"]" :: Maybe Referer, AE.decode "1" :: Maybe Referer)
 -- (Just (Referer "https://a"),Just (Referers ["a","b"]),Nothing)
--- >>> AE.encode [Referer "a", Referers ["a", "b"]]
+-- >>> AE.encode ([Referer "a", Referers ["a", "b"]] :: [Referer])
 -- "[\"a\",[\"a\",\"b\"]]"
 data Referer = Referer Text | Referers [Text]
   deriving stock (Generic, Show)

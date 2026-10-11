@@ -5133,7 +5133,6 @@ evaluateQueryMonitorValue monitor at value =
 --
 -- Trigger tests (above direction):
 -- >>> import "monoscope" BackgroundJobs qualified as BJ
--- >>> import "monoscope" Models.Apis.Monitors qualified as Monitors
 -- >>> BJ.monitorStatus False Nothing 100 Nothing Nothing Monitors.MSNormal 100
 -- MSAlerting
 -- >>> BJ.monitorStatus False Nothing 100 Nothing Nothing Monitors.MSNormal 150
