@@ -89,9 +89,10 @@ spec = around withTestResources do
           setRole :: Text -> IO ()
           setRole r = withResource tr.trPool \conn -> void $ PG.execute conn [sql|UPDATE projects.project_members SET permission = ?::projects.project_permissions WHERE project_id = ?|] (r, pid)
       setRole "view"
-      res <- try @ErrorCall $ runAuthHandler tr{trSessAndHeader = tr.trSessAndHeader <&> field @"user" . field @"isSudo" .~ False} (CreateProject.deleteProjectGetH pid) >>= evaluate
+      -- An explicit membership role binds sudo users too; sudo only stands in for a missing membership.
+      res <- forM [False, True] \sudo -> try @ErrorCall $ runAuthHandler tr{trSessAndHeader = tr.trSessAndHeader <&> field @"user" . field @"isSudo" .~ sudo} (CreateProject.deleteProjectGetH pid) >>= evaluate
       setRole "admin"
-      either (\(ErrorCall m) -> toText m) (const "") res `shouldSatisfy` T.isInfixOf "403"
+      map (either (\(ErrorCall m) -> toText m) (const "")) res `shouldSatisfy` all (T.isInfixOf "403")
       runQueryEffect tr (Projects.activeProjectById pid) >>= (`shouldSatisfy` isJust)
 
     it "commandPalette_nonMember_cannotReadOrWrite" \tr -> do

@@ -688,7 +688,7 @@ spec = sequential $ aroundAll withTestResources do
       logIid <- seedIssue tr Issues.LogPattern "triage probe" "triage-log"
       (member : _) <- runTestBg frozenTime tr (ProjectMembers.selectActiveProjectMembers testPid)
       (_, triage) <- testServant tr $ IssuesPage.triagePostH testPid logIid (IssuesPage.TriageForm (Just Issues.Warning) (Just member.userId.toText))
-      renderPage triage `shouldSatisfy` T.isInfixOf "value=\"warning\" selected=\"true\""
+      renderPage triage `shouldSatisfy` T.isInfixOf "value=\"warning\" selected>"
       i1 <- reload logIid
       (i1.severity, i1.assigneeId) `shouldBe` (Issues.Warning, Just member.userId)
       withResource tr.trPool (\conn -> PGS.query conn [sql| SELECT event::text FROM apis.issue_activity_log WHERE issue_id = ? |] (Only logIid)) `shouldReturn` [Only ("assigned" :: Text)]
@@ -718,7 +718,7 @@ spec = sequential $ aroundAll withTestResources do
       bulk IssuesPage.BAAssign (Just member.userId.toText)
       map ((.severity) &&& (.assigneeId)) <$> issues `shouldReturn` replicate 2 (Issues.Warning, Just member.userId)
       (_, page) <- testServant tr $ IssuesPage.issueListGetH testPid (Just "Inbox") (Just "-users_count") Nothing Nothing (Just "100") Nothing (Just "24h") [] []
-      renderPage page `shouldContainAll` [">Warning</span>", "First seen", "Most users", IssuesPage.memberLabel member, "bulk_actions/priority?value=critical", "bulk_actions/spam"]
+      renderPage page `shouldContainAll` [">WARNING</span>", "First seen", "Most users", IssuesPage.memberLabel member, "bulk_actions/priority?value=critical", "bulk_actions/spam"]
       -- Regression: list rows' archive/acknowledge were hx-get, so hovering one fired it.
       let rowActions = ["/p/" <> testPid.toText <> "/issues/" <> i.toText <> v | i <- iids, v <- ["/archive", "/acknowledge"]]
       renderPage page `shouldContainAll` map (\u -> "hx-post=\"" <> u <> "\"") rowActions

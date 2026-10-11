@@ -65,7 +65,7 @@ spec = do
       overviewHtml `shouldSatisfy` T.isInfixOf "border-b border-strokeWeak"
       T.count "id=\"global-data-drawer\"" overviewHtml `shouldBe` 1
       overviewHtml `shouldSatisfy` T.isInfixOf "fixed right-0 top-0"
-      overviewHtml `shouldSatisfy` T.isInfixOf "event.preventDefault"
+      overviewHtml `shouldSatisfy` T.isInfixOf "data-hx-push-url"
       drawerMarkup `shouldSatisfy` T.isInfixOf "checked"
 
       (_, countCells) <- testServant tr $ Trace.dataPointCountsGetH testPid Nothing Nothing Nothing

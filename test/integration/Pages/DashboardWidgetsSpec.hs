@@ -207,7 +207,8 @@ spec = sequential $ aroundAll withTestResources do
 
       _ <- newDashboard tr "overview.yaml" "Widget destination"
       (_, picker) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing (Just "true") Nothing (Just "metric-widget") Nothing Nothing noFilters
-      toStrict (renderText $ toHtml picker) `shouldSatisfy` T.isInfixOf "successToast"
+      -- Rows PUT to the widget upsert, whose response carries the "Widget added" toast.
+      toStrict (renderText $ toHtml picker) `shouldSatisfy` T.isInfixOf "hx-put=\"/p/"
       (_, dashboards) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing noFilters
       toStrict (renderText $ toHtml dashboards)
         `shouldSatisfy` T.isInfixOf "aria-label=\"Add dashboard to favorites\""
