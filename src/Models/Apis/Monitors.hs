@@ -11,6 +11,7 @@ module Models.Apis.Monitors (
   queryMonitorById,
   queryMonitorByProjectId,
   queryMonitorUpsert,
+  queryMonitorUpsertSql,
   monitorToggleActiveById,
   MonitorBulkAction (..),
   monitorsBulkUpdate,
@@ -190,9 +191,14 @@ data QueryMonitor = QueryMonitor
 
 queryMonitorUpsert :: DB es => QueryMonitor -> Eff es Int64
 queryMonitorUpsert qm = do
-  updated <-
-    Hasql.interpExecute
-      [HI.sql|
+  updated <- Hasql.interpExecute $ queryMonitorUpsertSql qm
+  Activation.recordActivationMilestone qm.projectId Activation.MonitorCreated
+  pure updated
+
+
+queryMonitorUpsertSql :: QueryMonitor -> HI.Sql
+queryMonitorUpsertSql qm =
+  [HI.sql|
     INSERT INTO monitors.query_monitors (id, project_id, alert_threshold, warning_threshold, log_query,
                   log_query_as_sql, last_evaluated, warning_last_triggered, alert_last_triggered, trigger_less_than,
                   threshold_sustained_for_mins, alert_config, check_interval_mins, visualization_type, teams,
@@ -224,8 +230,6 @@ queryMonitorUpsert qm = do
                   environment=EXCLUDED.environment,
                   service=EXCLUDED.service
       |]
-  Activation.recordActivationMilestone qm.projectId Activation.MonitorCreated
-  pure updated
 
 
 queryMonitorById :: DB es => QueryMonitorId -> Eff es (Maybe QueryMonitor)

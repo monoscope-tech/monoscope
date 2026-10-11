@@ -10,6 +10,9 @@ module Models.Projects.GitSync (
   GitHubSyncId,
   Repository (..),
   RepositoryId,
+  AnalysisSuggestions (..),
+  RepositoryAnalysis (..),
+  getRepositoryAnalysis,
   getRepositories,
   getRepository,
   connectRepository,
@@ -108,6 +111,7 @@ import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Deriving.Aeson qualified as DAE
+import Deriving.Aeson.Stock qualified as DAES
 import Effectful (Eff, IOE, (:>))
 import Effectful.Log (Log)
 import Effectful.Time (Time)
@@ -154,10 +158,29 @@ data Repository = Repository
   , repo :: Text
   , createdAt :: UTCTime
   , credentialId :: Maybe GitHubCredentialId
+  , sourceEnabled :: Bool
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, HI.DecodeRow, NFData, ToRow)
   deriving (Entity) via (GenericEntity '[Schema "projects", TableName "repositories", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Repository)
+
+
+data AnalysisSuggestions = AnalysisSuggestions {services :: [Text], matchedServices :: [Text], branch :: Text}
+  deriving stock (Generic, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via DAES.Snake AnalysisSuggestions
+  deriving (HI.DecodeValue, HI.EncodeValue) via HI.AsJsonb AnalysisSuggestions
+
+
+data RepositoryAnalysis = RepositoryAnalysis {suggestions :: Maybe AnalysisSuggestions, analyzedAt :: UTCTime, error :: Maybe Text}
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+getRepositoryAnalysis :: DB es => ProjectId -> RepositoryId -> Eff es (Maybe RepositoryAnalysis)
+getRepositoryAnalysis pid rid =
+  Hasql.interpOne
+    [HI.sql| SELECT CASE WHEN jsonb_typeof(a.suggestions) = 'object' THEN a.suggestions END, a.analyzed_at, a.error
+  FROM projects.repository_analysis a JOIN projects.repositories r ON r.id = a.repository_id WHERE r.project_id = #{pid} AND r.id = #{rid} |]
 
 
 getRepositories :: DB es => ProjectId -> Eff es [Repository]
@@ -183,24 +206,26 @@ data RemovalError = ConnectionMissing | SyncRunning
   deriving stock (Eq, Show)
 
 
-removeRepository :: DB es => ProjectId -> RepositoryId -> Eff es (Either RemovalError ())
-removeRepository pid rid = Hasql.transaction TxS.ReadCommitted TxS.Write $ runExceptT do
-  found <- lift $ Hasql.queryTx @(Maybe Repository) (selectFrom @Repository <> [HI.sql| WHERE project_id = #{pid} AND id = #{rid} FOR UPDATE |])
-  repository <- hoistEither $ maybeToRight ConnectionMissing found
-  sync <- lift $ Hasql.queryTx @(Maybe (HI.OneColumn GitHubSyncId)) [HI.sql| SELECT id FROM projects.git_sync WHERE project_id = #{pid} AND host = #{repository.host} AND api_base IS NOT DISTINCT FROM #{repository.apiBase} AND owner = #{repository.owner} AND repo = #{repository.repo} FOR UPDATE |]
-  for_ sync \(HI.OneColumn sid) -> ExceptT $ deleteSync sid
-  lift do
-    when (repository.host == Git.GitHub && isNothing repository.apiBase)
-      $ Hasql.executeTx
-        [HI.sql| INSERT INTO projects.pr_review_settings (project_id, owner, repo, enabled, include_evidence)
-          VALUES (#{pid}, lower(#{repository.owner}), lower(#{repository.repo}), false, false)
-          ON CONFLICT (project_id, owner, repo) DO UPDATE SET enabled = false |]
-    Hasql.executeTx
-      [HI.sql| DELETE FROM projects.code_mappings m USING projects.git_credentials c
-        WHERE m.project_id = #{pid} AND m.credential_id = c.id AND c.project_id = m.project_id
-          AND m.owner = #{repository.owner} AND m.repo = #{repository.repo}
-          AND c.host = #{repository.host} AND c.api_base IS NOT DISTINCT FROM #{repository.apiBase} |]
-    Hasql.executeTx [HI.sql| DELETE FROM projects.repositories WHERE project_id = #{pid} AND id = #{rid} |]
+removeRepository :: (DB es, Time :> es) => ProjectId -> RepositoryId -> Eff es (Either RemovalError ())
+removeRepository pid rid = do
+  now <- Time.currentTime
+  Hasql.transaction TxS.ReadCommitted TxS.Write $ runExceptT do
+    found <- lift $ Hasql.queryTx @(Maybe Repository) (selectFrom @Repository <> [HI.sql| WHERE project_id = #{pid} AND id = #{rid} FOR UPDATE |])
+    repository <- hoistEither $ maybeToRight ConnectionMissing found
+    sync <- lift $ Hasql.queryTx @(Maybe (HI.OneColumn GitHubSyncId)) [HI.sql| SELECT id FROM projects.git_sync WHERE project_id = #{pid} AND host = #{repository.host} AND api_base IS NOT DISTINCT FROM #{repository.apiBase} AND owner = #{repository.owner} AND repo = #{repository.repo} FOR UPDATE |]
+    for_ sync \(HI.OneColumn sid) -> ExceptT $ deleteSync sid now
+    lift do
+      when (repository.host == Git.GitHub && isNothing repository.apiBase)
+        $ Hasql.executeTx
+          [HI.sql| INSERT INTO projects.pr_review_settings (project_id, owner, repo, enabled, include_evidence)
+            VALUES (#{pid}, lower(#{repository.owner}), lower(#{repository.repo}), false, false)
+            ON CONFLICT (project_id, owner, repo) DO UPDATE SET enabled = false |]
+      Hasql.executeTx
+        [HI.sql| DELETE FROM projects.code_mappings m USING projects.git_credentials c
+          WHERE m.project_id = #{pid} AND m.credential_id = c.id AND c.project_id = m.project_id
+            AND m.owner = #{repository.owner} AND m.repo = #{repository.repo}
+            AND c.host = #{repository.host} AND c.api_base IS NOT DISTINCT FROM #{repository.apiBase} |]
+      Hasql.executeTx [HI.sql| DELETE FROM projects.repositories WHERE project_id = #{pid} AND id = #{rid} |]
 
 
 enableRepositoryDashboardSync :: DB es => ProjectId -> RepositoryId -> GitHubCredentialId -> Text -> Text -> Maybe Text -> Eff es (Maybe GitHubSync)
@@ -252,6 +277,10 @@ data GitHubSync = GitHubSync
   -- sha a force-push has since made unfetchable.
   , lastError :: Maybe SyncFailure
   , lastSyncedAt :: Maybe UTCTime
+  , exportBranch :: Text
+  , pullRequestNumber :: Maybe Int64
+  , exportPaused :: Bool
+  , lastExportHash :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, HI.DecodeRow, NFData, ToRow)
@@ -259,7 +288,7 @@ data GitHubSync = GitHubSync
 
 
 instance Default GitHubSync where
-  def = GitHubSync (UUIDId UUID.nil) (UUIDId UUID.nil) "" "" "main" Nothing Nothing "" Nothing Nothing True epoch epoch Git.GitHub Nothing Nothing Nothing Nothing Nothing
+  def = GitHubSync (UUIDId UUID.nil) (UUIDId UUID.nil) "" "" "main" Nothing Nothing "" Nothing Nothing True epoch epoch Git.GitHub Nothing Nothing Nothing Nothing Nothing "monoscope-dashboards" Nothing False Nothing
     where
       epoch = posixSecondsToUTCTime 0
 
@@ -531,6 +560,13 @@ updateGitHubSync encKey sid ownerVal repoVal branchVal tokenM prefixM = do
                INSERT INTO projects.repositories (project_id, host, api_base, owner, repo)
                SELECT project_id, host, api_base, projects.git_identity_name(host, #{ownerVal}), projects.git_identity_name(host, #{repoVal}) FROM projects.git_sync WHERE id = #{sid}
                ON CONFLICT (project_id, host, api_base, owner, repo) DO NOTHING
+             ), moved AS (
+               UPDATE projects.repository_resources r
+               SET file_path = CASE WHEN #{prefixM} = '' THEN '' ELSE #{prefixM} || '/' END ||
+                   substring(r.file_path FROM length(CASE WHEN s.path_prefix = '' THEN '' ELSE s.path_prefix || '/' END) + 1),
+                   merged_definition = NULL, local_baseline = NULL, remote_definition = NULL, conflicted = false
+               FROM projects.git_sync s WHERE r.sync_id = s.id AND s.id = #{sid}
+                 AND #{prefixM}::text IS NOT NULL AND s.path_prefix <> #{prefixM}
              )
              UPDATE projects.git_sync
              SET owner = projects.git_identity_name(host, #{ownerVal}), repo = projects.git_identity_name(host, #{repoVal}), branch = #{branchVal}, sync_enabled = true, updated_at = #{now}
@@ -580,15 +616,17 @@ pauseGitSync pid sid = do
   Hasql.interp [HI.sql| UPDATE projects.git_sync SET sync_enabled = false, updated_at = #{now} WHERE project_id = #{pid} AND id = #{sid} RETURNING * |]
 
 
-deleteGitHubSync :: DB es => GitHubSyncId -> Eff es (Either RemovalError ())
-deleteGitHubSync = Hasql.transaction TxS.ReadCommitted TxS.Write . deleteSync
+deleteGitHubSync :: (DB es, Time :> es) => GitHubSyncId -> Eff es (Either RemovalError ())
+deleteGitHubSync sid = do
+  now <- Time.currentTime
+  Hasql.transaction TxS.ReadCommitted TxS.Write $ deleteSync sid now
 
 
-deleteSync :: GitHubSyncId -> Tx.Transaction (Either RemovalError ())
-deleteSync sid = runExceptT do
+deleteSync :: GitHubSyncId -> UTCTime -> Tx.Transaction (Either RemovalError ())
+deleteSync sid now = runExceptT do
   sync <- lift $ Hasql.queryTx @(Maybe (HI.OneColumn GitHubSyncId)) [HI.sql| SELECT id FROM projects.git_sync WHERE id = #{sid} FOR UPDATE |]
   _ <- hoistEither $ maybeToRight ConnectionMissing sync
-  HI.OneColumn busy <- lift $ Hasql.oneTx [HI.sql| SELECT EXISTS (SELECT 1 FROM projects.repository_sync_leases WHERE sync_id = #{sid} AND expires_at > app_now()) |]
+  HI.OneColumn busy <- lift $ Hasql.oneTx [HI.sql| SELECT EXISTS (SELECT 1 FROM projects.repository_sync_leases WHERE sync_id = #{sid} AND expires_at > #{now}) |]
   when busy $ hoistEither $ Left SyncRunning
   lift do
     Hasql.executeTx [HI.sql| UPDATE projects.dashboards SET git_sync_id = NULL, file_path = NULL, file_sha = NULL WHERE git_sync_id = #{sid} |]
@@ -615,16 +653,17 @@ newtype SyncLease = SyncLease (GitHubSyncId, UUID.UUID)
   deriving stock (Eq, Show)
 
 
-claimSyncLease :: (DB es, UUIDEff.UUIDEff :> es) => GitHubSyncId -> Eff es (Maybe SyncLease)
+claimSyncLease :: (DB es, Time :> es, UUIDEff.UUIDEff :> es) => GitHubSyncId -> Eff es (Maybe SyncLease)
 claimSyncLease sid = do
+  now <- Time.currentTime
   owner <- UUIDEff.genUUID
   fmap SyncLease
     <$> Hasql.interp
       [HI.sql| WITH sync AS (SELECT id FROM projects.git_sync WHERE id = #{sid} FOR UPDATE)
     INSERT INTO projects.repository_sync_leases (sync_id, owner, expires_at)
-    SELECT id, #{owner}, app_now() + interval '3 minutes' FROM sync
+    SELECT id, #{owner}, #{now}::timestamptz + interval '3 minutes' FROM sync
     ON CONFLICT (sync_id) DO UPDATE SET owner = EXCLUDED.owner, expires_at = EXCLUDED.expires_at
-    WHERE projects.repository_sync_leases.expires_at <= app_now()
+    WHERE projects.repository_sync_leases.expires_at <= #{now}
     RETURNING sync_id, owner |]
 
 

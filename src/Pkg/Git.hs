@@ -62,16 +62,22 @@ module Pkg.Git (
   getPullRequestFiles,
   listPullRequestComments,
   publishPullRequestComment,
+  ConfigurationPullRequest (..),
+  getConfigurationPullRequest,
+  publishConfiguration,
+  closeConfigurationPullRequest,
+  reopenConfigurationPullRequest,
 
   -- * Webhooks
   WebhookReq (..),
   isPushEvent,
   parseWebhookRepo,
   parseWebhookRevision,
+  webhookTargetsBranch,
   verifyWebhook,
 ) where
 
-import Control.Lens (toListOf, (.~), (^.), (^?))
+import Control.Lens (toListOf, (.~), (^.), (^..), (^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens (AsValue, key, values, _Bool, _Integer, _String)
 import Data.Base64.Types (extractBase64)
@@ -657,6 +663,80 @@ publishPullRequestComment conn repo number commentId body
       pure $ result >>= fmap (.id) . first (const "GitHub did not return a comment ID") . AE.eitherDecode @GitHubObjectId . (^. W.responseBody)
 
 
+data ConfigurationPullRequest = ConfigurationPullRequest
+  { number :: Int
+  , state :: Text
+  , merged :: Bool
+  , htmlUrl :: Text
+  }
+  deriving stock (Generic, Show)
+  deriving (AE.FromJSON) via DAE.Snake ConfigurationPullRequest
+
+
+getConfigurationPullRequest :: W.HTTP :> es => GitConn -> RepoRef -> Int -> Eff es (Either Text ConfigurationPullRequest)
+getConfigurationPullRequest conn repo number = githubJson conn repo ("/pulls/" <> show number)
+
+
+closeConfigurationPullRequest :: W.HTTP :> es => GitConn -> RepoRef -> Int -> Eff es (Either Text ())
+closeConfigurationPullRequest conn repo number =
+  void <$> tryHttp (W.patchWith (gitOpts conn) (toString $ repoUrl conn repo ("/pulls/" <> show number)) (AE.object ["state" AE..= ("closed" :: Text)]))
+
+
+reopenConfigurationPullRequest :: W.HTTP :> es => GitConn -> RepoRef -> Int -> Eff es (Either Text ())
+reopenConfigurationPullRequest conn repo number =
+  void <$> tryHttp (W.patchWith (gitOpts conn) (toString $ repoUrl conn repo ("/pulls/" <> show number)) (AE.object ["state" AE..= ("open" :: Text)]))
+
+
+-- | Publish one atomic snapshot against the current target branch. No target-branch writes.
+publishConfiguration :: W.HTTP :> es => GitConn -> RepoRef -> Text -> Text -> Text -> Maybe ConfigurationPullRequest -> [(Text, Maybe ByteString)] -> Eff es (Either Text Int)
+publishConfiguration conn repo branch ownership expectedRevision number files
+  | conn.host /= GitHub = pure $ Left "Configuration pull requests currently require GitHub."
+  | branch == repo.ref = pure $ Left "The export branch must differ from the target branch."
+  | otherwise = runExceptT do
+      target <- ExceptT $ githubJson @AE.Value conn repo ("/commits/" <> enc repo.ref)
+      targetSha <- hoistEither $ pickSha target
+      unless (targetSha == expectedRevision) $ hoistEither $ Left "The target branch changed during sync. The next sync will reconcile its new revision before exporting."
+      targetTree <- hoistEither $ maybeToRight "GitHub did not return the target tree." $ target ^? key "commit" . key "tree" . key "sha" . _String
+      refs <- ExceptT $ githubJson @[AE.Value] conn repo ("/git/matching-refs/heads/" <> enc branch)
+      let existing = find (\value -> value ^? key "ref" . _String == Just ("refs/heads/" <> branch)) refs
+      previous <- forM existing $ hoistEither . maybeToRight "GitHub did not return the export branch revision." . (^? key "object" . key "sha" . _String)
+      when (isJust previous && isNothing number) do
+        branchCommit <- ExceptT $ githubJson @AE.Value conn repo ("/commits/" <> enc branch)
+        let owned = maybe False (elem marker . lines) $ branchCommit ^? key "commit" . key "message" . _String
+        unless owned $ hoistEither $ Left "The monoscope-dashboards branch belongs to another workflow. Rename it before retrying configuration export."
+      recovered <- case number of
+        Just pr -> pure $ Just pr
+        Nothing | isJust previous -> do
+          pulls <- ExceptT $ githubJson @[AE.Value] conn repo ("/pulls?state=all&head=" <> enc (repo.owner <> ":" <> branch))
+          let matches = [fromInteger n | value <- pulls, maybe False (elem marker . lines) (value ^? key "body" . _String), Just n <- [value ^? key "number" . _Integer]]
+          traverse (ExceptT . getConfigurationPullRequest conn repo) $ listToMaybe matches
+        Nothing -> pure Nothing
+      for_ recovered \pr -> when (pr.state == "closed" && not pr.merged) $ hoistEither $ Left "The previous configuration PR was closed without merging. Resume export from the repository page."
+      tree <-
+        post "/git/trees"
+          $ AE.object
+            [ "base_tree" AE..= targetTree
+            , "tree" AE..= [AE.object $ ["path" AE..= path, "mode" AE..= ("100644" :: Text), "type" AE..= ("blob" :: Text)] <> maybe ["sha" AE..= AE.Null] (\body -> ["content" AE..= (decodeUtf8 body :: Text)]) content | (path, content) <- files]
+            ]
+      treeSha <- hoistEither $ pickSha tree
+      commit <- post "/git/commits" $ AE.object ["message" AE..= ("Sync Monoscope dashboards and monitors\n\n" <> marker), "tree" AE..= treeSha, "parents" AE..= ordNub (targetSha : maybeToList previous)]
+      commitSha <- hoistEither $ pickSha commit
+      case previous of
+        Nothing -> void $ post "/git/refs" $ AE.object ["ref" AE..= ("refs/heads/" <> branch), "sha" AE..= commitSha]
+        Just _ -> void $ ExceptT $ void <$> tryHttp (W.patchWith (gitOpts conn) (toString $ repoUrl conn repo ("/git/refs/heads/" <> enc branch)) (AE.object ["sha" AE..= commitSha, "force" AE..= False]))
+      case recovered of
+        Just pr | pr.state == "open" -> pure pr.number
+        _ -> do
+          response <- post "/pulls" $ AE.object ["title" AE..= ("Sync Monoscope dashboards and monitors" :: Text), "head" AE..= branch, "base" AE..= repo.ref, "body" AE..= ("Changes are already active in Monoscope. Merge to record them in the target branch. Further Monoscope edits update this pull request.\n\n" <> marker)]
+          hoistEither $ maybeToRight "GitHub did not return the pull request number." $ fromInteger <$> (response ^? key "number" . _Integer)
+  where
+    marker = "<!-- monoscope-sync:" <> ownership <> " -->"
+    pickSha :: AE.Value -> Either Text Text
+    pickSha value = maybeToRight "GitHub did not return an object revision." $ value ^? key "sha" . _String
+    post :: W.HTTP :> es => Text -> AE.Value -> ExceptT Text (Eff es) AE.Value
+    post path body = ExceptT $ (>>= first toText . AE.eitherDecode . (^. W.responseBody)) <$> tryHttp (W.postWith (gitOpts conn) (toString $ repoUrl conn repo path) body)
+
+
 getJson :: (AE.FromJSON a, W.HTTP :> es) => GitConn -> Text -> Eff es (Either DeploymentReadError a)
 getJson conn endpoint = (first DeploymentRequestFailed >=> first (InvalidDeploymentResponse . toText) . AE.eitherDecode) <$> get_ conn endpoint
 
@@ -957,6 +1037,22 @@ parseWebhookRevision h raw = mfilter (T.any (/= '0')) $ case h of
   Bitbucket -> raw ^? key "push" . key "changes" . values . key "new" . key "target" . key "hash" . _String
   where
     after = raw ^? key "after" . _String
+
+
+-- | Only target-branch pushes are import notifications; proposal branches never are.
+--
+-- >>> webhookTargetsBranch GitHub "main" "{\"ref\":\"refs/heads/monoscope-dashboards\"}"
+-- False
+-- >>> webhookTargetsBranch GitHub "main" "{\"ref\":\"refs/heads/main\"}"
+-- True
+webhookTargetsBranch :: GitHost -> Text -> ByteString -> Bool
+webhookTargetsBranch host branch body = case host of
+  GitHub -> ref == Just ("refs/heads/" <> branch)
+  Gitea -> ref == Just ("refs/heads/" <> branch)
+  GitLab -> ref == Just ("refs/heads/" <> branch)
+  Bitbucket -> branch `elem` (body ^.. key "push" . key "changes" . values . key "new" . key "name" . _String)
+  where
+    ref = body ^? key "ref" . _String
 
 
 -- | Decide whether a delivery really came from the host that owns this repository.

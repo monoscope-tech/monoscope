@@ -256,6 +256,9 @@ extra-source-files:
     static/migrations/0223_github_repository_identity.sql
     static/migrations/0224_github_attempt_retention.sql
     static/migrations/0225_anomaly_shape_delta.sql
+    static/migrations/0225_repository_capabilities.sql
+    static/migrations/0226_repository_configuration_sync.sql
+    static/migrations/0227_repository_sync_local_baseline.sql
     test/fixtures/github-app-test.pem
 
 source-repository head
@@ -292,6 +295,7 @@ library
       Models.Apis.Issues
       Models.Apis.LogPatterns
       Models.Apis.LogQueries
+      Models.Apis.MonitorDefinitions
       Models.Apis.Monitors
       Models.Apis.PatternMerge
       Models.Apis.PrometheusScrapeConfigs
@@ -306,6 +310,7 @@ library
       Models.Projects.ProjectApiKeys
       Models.Projects.ProjectMembers
       Models.Projects.Projects
+      Models.Projects.RepositorySync
       Models.Telemetry.Containers
       Models.Telemetry.ContainerTypes
       Models.Telemetry.DeterministicId
@@ -928,6 +933,7 @@ test-suite test-dev
       Models.Apis.Issues
       Models.Apis.LogPatterns
       Models.Apis.LogQueries
+      Models.Apis.MonitorDefinitions
       Models.Apis.Monitors
       Models.Apis.PatternMerge
       Models.Apis.PrometheusScrapeConfigs
@@ -942,6 +948,7 @@ test-suite test-dev
       Models.Projects.ProjectApiKeys
       Models.Projects.ProjectMembers
       Models.Projects.Projects
+      Models.Projects.RepositorySync
       Models.Telemetry.Containers
       Models.Telemetry.ContainerTypes
       Models.Telemetry.DeterministicId

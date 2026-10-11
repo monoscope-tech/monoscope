@@ -66,6 +66,7 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Incidents qualified as Incidents
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns qualified as LogPatterns
+import Models.Apis.MonitorDefinitions (MonitorInput (..))
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers (TeamId)
@@ -77,39 +78,6 @@ import Pkg.DeriveUtils (JsonValueSchema (..), SnakeJSON (..), SnakeSchema (..), 
 import Relude
 import Servant (FromHttpApiData)
 import Web.Wire (Paged (..))
-
-
--- | Input for creating or replacing (PUT) a monitor. Maps onto `QueryMonitor`
--- fields without surfacing db-internal lifecycle columns.
-data MonitorInput = MonitorInput
-  { unit :: Maybe Text
-  , title :: Text
-  , query :: Text
-  , severity :: Maybe Text
-  , subject :: Maybe Text
-  , message :: Maybe Text
-  , alertThreshold :: Double
-  , warningThreshold :: Maybe Double
-  , triggerLessThan :: Bool
-  , checkIntervalMins :: Int
-  , timeWindowMins :: Int
-  , thresholdSustainedForMins :: Maybe Int
-  , notifyAfterMins :: Maybe Int
-  , stopAfterCount :: Maybe Int
-  , emails :: [Text]
-  , emailAll :: Maybe Bool
-  , slackChannels :: [Text]
-  , teams :: [PM.TeamId]
-  , visualizationType :: Maybe Text
-  , alertRecoveryThreshold :: Maybe Double
-  , warningRecoveryThreshold :: Maybe Double
-  , active :: Maybe Bool
-  , environment :: Maybe Text
-  , service :: Maybe Text
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (Default)
-  deriving (AE.FromJSON, AE.ToJSON, ToSchema) via SnakeJSON SnakeSchema MonitorInput
 
 
 -- | Patch: all fields optional; only provided fields are updated.

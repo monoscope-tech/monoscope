@@ -1,4 +1,4 @@
-module Pages.BodyWrapper (bodyWrapper, BWConfig (..), OnboardingStep (..), stepUrl, PageCtx (..), NavigationResponse (..), navigationResponse, mkPageCtx, mkProjectPageCtx, mkAIPageCtx, withSettingsPage, settingsContentTarget, navTabAttrs) where
+module Pages.BodyWrapper (bodyWrapper, BWConfig (..), OnboardingStep (..), stepUrl, PageCtx (..), NavigationResponse (..), navigationResponse, mkPageCtx, mkProjectPageCtx, mkAIPageCtx, settingsContentTarget, navTabAttrs) where
 
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default, def)
@@ -29,7 +29,7 @@ import Pkg.DeriveUtils (UUIDId, WrappedEnumShow (..), assetUrl, viteAssetFile)
 import PyF
 import Relude hiding (ask)
 import System.Config (AuthContext (..), DeploymentEnv (Dev), EnvConfig (..))
-import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
+import System.Types (ATAuthCtx)
 import Utils (FieldMenuCtx (..), FreeTierStatus (..), LoadingSize (..), LoadingType (..), explorerTabs, faSprite_, fieldContextMenuItems_, fieldMenuActions, freeTierUsageBanner, infrastructureTabs, loadingIndicatorWith_, navTabAttrs, popoverPanel_, popoverTrigger_)
 import Web.HttpApiData (FromHttpApiData)
 import Web.I18n qualified as I18n
@@ -112,15 +112,6 @@ activationProgress pid ingestionVerified = do
           EXISTS (SELECT 1 FROM apis.notification_test_history WHERE project_id = #{pid} AND status = 'sent')
       |]
   pure ActivationProgress{..}
-
-
--- | Shortcut for settings sub-pages: sets pageTitle + isSettingsPage = True.
--- Content builder runs in ATAuthCtx so handlers can do DB/HTTP work for the body.
-withSettingsPage :: Projects.ProjectId -> Text -> (Projects.Project -> ATAuthCtx (Html ())) -> ATAuthCtx (RespHeaders (Html ()))
-withSettingsPage pid title build = do
-  (_, project, bw) <- mkPageCtx pid
-  body <- build project
-  addRespHeaders $ bodyWrapper bw{pageTitle = title, isSettingsPage = True} body
 
 
 -- | Right-side tippy tooltip attrs (this file's fixed placement for every tooltip).

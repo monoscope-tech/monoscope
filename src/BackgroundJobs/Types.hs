@@ -42,6 +42,8 @@ data BgJobs
   | EnhanceIssuesWithLLM Projects.ProjectId (V.Vector Issues.IssueId)
   | ProcessIssuesEnhancement UTCTime
   | ReviewPullRequest (UUIDId "pr_review")
+  | AnalyzeRepository Projects.ProjectId (UUIDId "repository")
+  | RepositorySyncTick UTCTime
   | GitSyncFromRepo Projects.ProjectId
   | GitSyncRepository Projects.ProjectId (UUIDId "github_sync")
   | GitSyncPushDashboard Projects.ProjectId UUID.UUID -- projectId, dashboardId

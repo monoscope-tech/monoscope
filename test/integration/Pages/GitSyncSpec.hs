@@ -65,6 +65,7 @@ data GitHubTestConfig = GitHubTestConfig
   , branch :: Text
   }
 
+
 loadTestConfig :: IO (Maybe GitHubTestConfig)
 loadTestConfig = do
   patM <- lookupEnv "GH_TEST_PAT"
@@ -100,6 +101,7 @@ ghCredentialUsable cfg = do
 ghUrl :: GitHubTestConfig -> Text -> String
 ghUrl cfg path = toString $ "https://api.github.com/repos/" <> cfg.owner <> "/" <> cfg.repo <> "/contents/" <> path <> "?ref=" <> cfg.branch
 
+
 -- | Create or update file in GitHub, returns (sha, created)
 ghPutFile :: GitHubTestConfig -> Text -> ByteString -> Maybe Text -> IO (Either Text Text)
 ghPutFile cfg path content existingSha = do
@@ -115,6 +117,7 @@ ghPutFile cfg path content existingSha = do
     Left (e :: HttpException) -> Left $ "HTTP error: " <> show e
     Right resp -> maybeToRight "No SHA in response" $ resp ^? Wreq.responseBody . key "content" . key "sha" . _String
 
+
 -- | Get file content and SHA from GitHub
 ghGetFile :: GitHubTestConfig -> Text -> IO (Either Text (ByteString, Text))
 ghGetFile cfg path = do
@@ -128,6 +131,7 @@ ghGetFile cfg path = do
       content <- first (toText . show) $ B64.decodeBase64Untyped $ encodeUtf8 $ T.filter (/= '\n') b64
       Right (content, sha)
 
+
 -- | Delete file from GitHub
 ghDeleteFile :: GitHubTestConfig -> Text -> Text -> IO (Either Text ())
 ghDeleteFile cfg path sha = do
@@ -136,9 +140,11 @@ ghDeleteFile cfg path sha = do
   result <- try $ Wreq.customPayloadMethodWith "DELETE" (ghOpts cfg.pat) url payload
   pure $ bimap (toText . show @_ @HttpException) (const ()) result
 
+
 -- | Check if file exists
 ghFileExists :: GitHubTestConfig -> Text -> IO Bool
 ghFileExists cfg path = isRight <$> ghGetFile cfg path
+
 
 -- | List files in a directory
 ghListFiles :: GitHubTestConfig -> Text -> IO [Text]
@@ -149,6 +155,7 @@ ghListFiles cfg dir = do
     Right resp -> case AE.decode (resp ^. Wreq.responseBody) of
       Just (files :: [AE.Value]) -> mapMaybe (^? key "name" . _String) files
       Nothing -> []
+
 
 -- | Delete all files in dashboards/ for cleanup
 ghCleanupDashboards :: GitHubTestConfig -> IO ()
@@ -180,6 +187,7 @@ setupSync tr cfg prefixM = do
         }
   void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid form
 
+
 -- | Connect a sync row on a given host, so a webhook test has a row to resolve against.
 setupSyncOn :: TestResources -> Git.GitHost -> Text -> Text -> Maybe Text -> IO ()
 setupSyncOn tr host owner repo secret = do
@@ -207,11 +215,13 @@ clearJobs :: TestResources -> IO ()
 clearJobs tr = liftIO $ withResource tr.trPool \conn -> do
   void $ execute conn [sql|DELETE FROM background_jobs WHERE payload->>'tag' LIKE 'GitSync%'|] ()
 
+
 clearAllTestData :: TestResources -> IO ()
 clearAllTestData tr = liftIO $ withResource tr.trPool \conn -> do
   void $ execute conn [sql|DELETE FROM background_jobs WHERE payload->>'tag' LIKE 'GitSync%'|] ()
   void $ execute conn [sql|DELETE FROM projects.dashboards WHERE project_id = ?|] (Only testPid)
   void $ execute conn [sql|DELETE FROM projects.github_sync WHERE project_id = ?|] (Only testPid)
+
 
 createDash :: TestResources -> Text -> [Text] -> IO Dashboards.DashboardId
 createDash tr title tags = do
@@ -236,6 +246,7 @@ createDash tr title tags = do
         }
   _ <- runTestBg frozenTime tr $ Dashboards.insert dash
   pure dashId
+
 
 runSyncJobs :: TestResources -> IO ()
 runSyncJobs tr = do
@@ -394,7 +405,7 @@ spec = sequential do
         let entries = [GitSync.TreeEntry "app/dashboards/x.yaml" True (Just "sha") Nothing, GitSync.TreeEntry "dashboards/y.yaml" True (Just "sha2") Nothing]
             plan = GitSync.buildSyncPlan "app/dashboards/" entries M.empty
         length plan `shouldBe` 1
-        case plan of [GitSync.SyncCreate p _] -> p `shouldBe` "app/dashboards/x.yaml"; _ -> fail "wrong"
+        case plan of { [GitSync.SyncCreate p _] -> p `shouldBe` "app/dashboards/x.yaml"; _ -> fail "wrong" }
 
     describe "YAML Conversion" do
       it "parses valid YAML" \_ -> do
@@ -480,7 +491,7 @@ spec = sequential do
       -- One body, signed the way each host signs it. The point of these is not the JSON — it
       -- is that a delivery only queues work when its signature checks out against the secret
       -- stored on the row, and that the host in the route has to match the row's host.
-      let pushBody owner repo = toStrict $ AE.encode $ AE.object ["repository" AE..= AE.object ["full_name" AE..= (owner <> "/" <> repo :: Text)]]
+      let pushBody owner repo = toStrict $ AE.encode $ AE.object ["push" AE..= AE.object ["changes" AE..= ([AE.object ["new" AE..= AE.object ["name" AE..= ("main" :: Text)]]] :: [AE.Value])], "ref" AE..= ("refs/heads/main" :: Text), "repository" AE..= AE.object ["full_name" AE..= (owner <> "/" <> repo :: Text)]]
           req _host ev sig body = Git.WebhookReq{event = Just ev, signature = sig, gitlabToken = Nothing, gitlabWebhookId = Nothing, gitlabTimestamp = Nothing, body = body}
 
       it "queues sync only when the signature verifies" \tr -> do
@@ -516,7 +527,8 @@ spec = sequential do
               toStrict
                 $ AE.encode
                 $ AE.object
-                  [ "repository" AE..= AE.object ["full_name" AE..= ("webhook-owner/webhook-repo" :: Text)]
+                  [ "ref" AE..= ("refs/heads/main" :: Text)
+                  , "repository" AE..= AE.object ["full_name" AE..= ("webhook-owner/webhook-repo" :: Text)]
                   , "after" AE..= ("f00dcafe" :: Text)
                   ]
         _ <- toBaseServantResponse tr $ GitSyncPage.gitWebhookPostH Git.GitHub (req Git.GitHub "push" (Just $ "sha256=" <> hmacHexOf "s3cret" body) body)
@@ -551,6 +563,17 @@ spec = sequential do
           _ <- toBaseServantResponse tr $ GitSyncPage.gitWebhookPostH host (req host ev (Just sig) body)
           n <- V.length . V.filter isGitSyncFromRepo <$> getPendingBackgroundJobs tr.trATCtx
           n `shouldSatisfy` (>= 1)
+
+      it "importsOnlyTheTargetBranchAndIgnoresTheAutomatedPRBranch" \tr -> do
+        setupSyncOn tr Git.GitHub "branch-filter-owner" "config" (Just "s3cret")
+        clearJobs tr
+        for_ (["monoscope-dashboards", "feature/user-pr"] :: [Text]) \branch -> do
+          let body = toStrict $ AE.encode $ AE.object ["repository" AE..= AE.object ["full_name" AE..= ("branch-filter-owner/config" :: Text)], "ref" AE..= ("refs/heads/" <> branch)]
+          void $ toBaseServantResponse tr $ GitSyncPage.gitWebhookPostH Git.GitHub (req Git.GitHub "push" (Just $ "sha256=" <> hmacHexOf "s3cret" body) body)
+        V.length . V.filter isGitSyncFromRepo <$> getPendingBackgroundJobs tr.trATCtx `shouldReturn` 0
+        let body = pushBody "branch-filter-owner" "config"
+        void $ toBaseServantResponse tr $ GitSyncPage.gitWebhookPostH Git.GitHub (req Git.GitHub "push" (Just $ "sha256=" <> hmacHexOf "s3cret" body) body)
+        V.length . V.filter isGitSyncFromRepo <$> getPendingBackgroundJobs tr.trATCtx `shouldReturn` 1
 
       it "does not cross hosts on a repository-name collision" \tr -> do
         -- The same owner/repo on two hosts is two different projects' repositories; a push to
@@ -588,9 +611,7 @@ spec = sequential do
       it "SKIPPED - GH_TEST_PAT is set but GitHub rejected it (expired, revoked, or lacking repo scope)" pending
 
     Just (cfg, True) -> aroundAll withTestResources $ beforeAll_ (ghCleanupDashboards cfg) $ afterAll_ (ghCleanupDashboards cfg) $ do
-
       describe "GitHub Sync E2E (Real API)" $ do
-
         describe "Push: Local → GitHub" $ do
           it "creates file in GitHub when dashboard pushed" \tr -> do
             clearAllTestData tr
@@ -778,8 +799,6 @@ spec = sequential do
             -- Original file unchanged
             (content, _) <- fromRightShow <$> ghGetFile cfg path
             BS.isInfixOf "Original" content `shouldBe` True
-
-
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
