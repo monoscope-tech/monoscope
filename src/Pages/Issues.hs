@@ -1461,7 +1461,8 @@ eventCard_ IssueView{..} = div_ [class_ "surface-raised rounded-2xl overflow-cli
               unless (HS.null snapshot.structure.formats)
                 $ div_ [class_ "text-xs text-textWeak break-words"]
                 $ toHtml
-                $ "Formats: " <> T.intercalate ", " (Relude.sort $ HS.toList snapshot.structure.formats)
+                $ "Formats: "
+                <> T.intercalate ", " (Relude.sort $ HS.toList snapshot.structure.formats)
               unless (V.null snapshot.examples) do
                 let samples values = pre_ [class_ "mt-1 text-xs font-mono whitespace-pre-wrap break-all"] $ toHtml (decodeUtf8 (AE.encode values) :: Text)
                 samples (V.take 3 snapshot.examples)
