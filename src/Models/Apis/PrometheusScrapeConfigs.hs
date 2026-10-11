@@ -16,12 +16,14 @@ module Models.Apis.PrometheusScrapeConfigs (
   ingestScrapedBody,
   sampleToMetricRecord,
   prometheusScrapeOpts,
+  safeScrapeUrl,
 ) where
 
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
+import Data.Char (isDigit, isHexDigit)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.List (partition)
 import Data.Text qualified as T
@@ -41,6 +43,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.HTTP.Client (managerResponseTimeout, responseTimeoutMicro)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
+import Network.URI (parseURI, uriAuthority, uriRegName, uriScheme)
 import Network.Wreq (defaults, header)
 import Network.Wreq qualified as Wreq
 import Pkg.DeriveUtils (UUIDId, WrappedEnumSC (..), unUUIDId)
@@ -248,9 +251,63 @@ prometheusScrapeOpts :: Maybe Text -> Wreq.Options
 prometheusScrapeOpts authHeader =
   defaults
     & Wreq.manager
-    .~ Left tlsManagerSettings{managerResponseTimeout = responseTimeoutMicro 10_000_000}
-      -- Don't follow redirects: http-client (unlike browsers) re-sends Authorization across a
-      -- cross-host 3xx, so a target answering 302 -> attacker could exfiltrate the bearer token.
-      & Wreq.redirects
-    .~ 0
-      & maybe Relude.id (\h -> header "Authorization" .~ [encodeUtf8 h]) authHeader
+      .~ Left tlsManagerSettings{managerResponseTimeout = responseTimeoutMicro 10_000_000}
+    -- Don't follow redirects: http-client (unlike browsers) re-sends Authorization across a
+    -- cross-host 3xx, so a target answering 302 -> attacker could exfiltrate the bearer token.
+    & Wreq.redirects
+      .~ 0
+    & maybe Relude.id (\h -> header "Authorization" .~ [encodeUtf8 h]) authHeader
+
+
+-- | Reject non-http(s) schemes and hosts that resolve to the internal network
+-- (loopback, link-local, RFC-1918, ULA, IPv4-mapped IPv6, and obfuscated numeric
+-- literals — octal/decimal/short forms), to blunt SSRF via the scrape URL. DNS-rebinding
+-- remains a known gap (we only vet the literal host; resolve-and-pin is the full fix).
+--
+-- >>> map safeScrapeUrl ["https://metrics.example.com/m", "http://10.0.0.1/m", "http://[::ffff:127.0.0.1]/m", "file:///etc/passwd"]
+-- [True,False,False,False]
+-- >>> map safeScrapeUrl ["http://2130706433/m", "http://0177.0.0.1/m", "http://localhost./m", "http://172.160.0.1/m"]
+-- [False,False,False,True]
+-- >>> map safeScrapeUrl ["http://0x7f000001/m", "http://0x7f.0x0.0x0.0x1/m"]
+-- [False,False]
+-- >>> map safeScrapeUrl ["http://[fe9f::1]/m", "http://[fc00::1]/m", "http://[2001:db8::1]/m"]
+-- [False,False,True]
+safeScrapeUrl :: Text -> Bool
+safeScrapeUrl u = case parseURI (toString (T.strip u)) of
+  Nothing -> False
+  Just uri ->
+    T.toLower (toText (uriScheme uri))
+      `elem` ["http:", "https:"]
+      && not (internalHost (T.toLower (toText (maybe "" uriRegName (uriAuthority uri)))))
+  where
+    internalHost raw =
+      let h = fromMaybe raw (T.stripSuffix "." raw) -- normalise the trailing-dot FQDN form
+          ip6 = fromMaybe h (T.stripPrefix "[" h >>= T.stripSuffix "]") -- inside of a [..] literal
+       in T.null h
+            || h
+              == "localhost"
+            || any (`T.isPrefixOf` ip6) ["::1", "fc", "fd", "fe8", "fe9", "fea", "feb", "::ffff:"] -- fc/fd = ULA fc00::/7; fe8-feb = link-local fe80::/10
+            || internalIPv4 h
+            || obfuscatedNumericHost h
+            || hexNumericHost h
+    -- A clean dotted-decimal quad whose address is loopback/RFC-1918/link-local/unspecified.
+    internalIPv4 h = case traverse octet (T.splitOn "." h) of
+      Just [a, b, _, _] -> a `elem` [0, 127] || a == 10 || (a == 169 && b == 254) || (a == 172 && b >= 16 && b <= 31) || (a == 192 && b == 168)
+      _ -> False
+    -- Any all-numeric host that is not a clean 4-octet quad: bare integer (2130706433),
+    -- octal octets (0177.0.0.1), or short forms (127.1) — all of which an OS resolver
+    -- expands to an internal address.
+    obfuscatedNumericHost h =
+      not (T.null h)
+        && T.all (\c -> isDigit c || c == '.') h
+        && maybe True ((/= 4) . length) (traverse octet (T.splitOn "." h))
+    -- Reject hex IP literals (0x7f000001, 0x7f.0x0.0x0.0x1): any component is "0x"+hex digits.
+    hexNumericHost h = any hexLiteral (T.splitOn "." h)
+      where
+        hexLiteral p = case T.stripPrefix "0x" p of
+          Just rest -> not (T.null rest) && T.all isHexDigit rest
+          Nothing -> False
+    octet o = do
+      guard $ not (T.null o) && (T.length o == 1 || T.head o /= '0') -- reject leading-zero (octal) octets
+      n <- readMaybe (toString o) :: Maybe Int
+      n <$ guard (n >= 0 && n <= 255)

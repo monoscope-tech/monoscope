@@ -324,7 +324,7 @@ insertCodeMapping pid credId r svc prefix root =
             )
             INSERT INTO projects.code_mappings (project_id, credential_id, owner, repo, ref, service, path_prefix, source_root)
             SELECT #{pid.unUUIDId}, #{credId.unUUIDId}, owner, repo, #{r.ref}, #{svc}, #{prefix}, #{root} FROM registered WHERE true
-            ON CONFLICT (project_id, service, path_prefix)
+            ON CONFLICT (project_id, credential_id, owner, repo, service, path_prefix)
             DO UPDATE SET credential_id = EXCLUDED.credential_id, owner = EXCLUDED.owner, repo = EXCLUDED.repo, ref = EXCLUDED.ref, source_root = EXCLUDED.source_root, updated_at = now()|]
 
 
@@ -367,9 +367,12 @@ deleteCodeMapping pid mid = Hasql.interpExecute_ [HI.sql|DELETE FROM projects.co
 -- True
 -- >>> resolveRepoPath [m Nothing "" ""] Nothing "/absolute/file" & isNothing
 -- True
+-- >>> resolveRepoPath [m (Just "checkout") "" "", (m (Just "checkout") "" ""){repo = "shared"}] (Just "checkout") "main.py" & isNothing
+-- True
 resolveRepoPath :: [CodeMapping] -> Maybe Text -> Text -> Maybe (CodeMapping, Text)
 resolveRepoPath mappings svc path = do
   (cm, rest) <- listToMaybe $ sortOn (Down . T.length . (.pathPrefix) . fst) candidates
+  guard $ all (\(other, _) -> T.length other.pathPrefix /= T.length cm.pathPrefix || (other.credentialId, other.owner, other.repo) == (cm.credentialId, cm.owner, cm.repo)) candidates
   let root = T.dropWhileEnd (== '/') cm.sourceRoot
       repoPath = if T.null root then rest else root <> "/" <> rest
       segments = T.splitOn "/" $ T.replace "\\" "/" repoPath
@@ -504,7 +507,11 @@ fetchSourceEvidence
   -> Int
   -> Eff es (Either SnippetError SourceEvidence)
 fetchSourceEvidence blobCache cfg pid svc revM path lineNo = runExceptT do
-  mappings <- lift $ getCodeMappings pid
+  allMappings <- lift $ getCodeMappings pid
+  repositories <- lift $ GitSync.getRepositories pid
+  credentials <- lift $ GitSync.getGitHubCredentials pid
+  let disabled = [(r.host, r.apiBase, r.owner, r.repo) | r <- repositories, not r.sourceEnabled]
+      mappings = filter (\m -> not $ any (\c -> c.id == m.credentialId && (c.host, c.apiBase, m.owner, m.repo) `elem` disabled) credentials) allMappings
   (cm, repoPath) <- hoistEither $ maybeToRight (NoMapping path) $ resolveRepoPath mappings svc path
   let repoRef = GitSync.RepoRef cm.owner cm.repo (fromMaybe cm.ref revM)
       located = cm.owner <> "/" <> cm.repo <> "/" <> repoPath <> " at " <> repoRef.ref

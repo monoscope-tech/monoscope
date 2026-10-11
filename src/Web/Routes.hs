@@ -582,6 +582,11 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , repositoryDelete :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> Delete '[HTML] (RespHeaders (Html ()))
   , repositoryDashboardGet :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "dashboards" :> Get '[HTML] (RespHeaders (PageCtx GitSync.RepositoryDashboardGet))
   , repositoryDashboardPost :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "dashboards" :> ReqBody '[FormUrlEncoded] GitSync.RepositoryDashboardForm :> Post '[HTML] (RespHeaders (PageCtx GitSync.RepositoryDashboardGet))
+  , repositoryAnalyzePost :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "analyze" :> Post '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryGet))
+  , repositoryResumePost :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "resume" :> Post '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryGet))
+  , repositoryFolderPost :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "folder" :> ReqBody '[FormUrlEncoded] PageCodeContext.FolderForm :> Post '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryGet))
+  , repositoryConflictPost :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "resources" :> Capture "resource_id" (UUIDId "repository_resource") :> "conflict" :> ReqBody '[FormUrlEncoded] PageCodeContext.ConflictForm :> Post '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryGet))
+  , repositorySourceEnabledPost :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "source" :> "enabled" :> ReqBody '[FormUrlEncoded] PageCodeContext.SourceContextForm :> Post '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryGet))
   , repositorySourceGet :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "source" :> QueryParam "credentialId" ModelGitSync.GitHubCredentialId :> QueryParam "sample" Text :> Get '[HTML] (RespHeaders (Html ()))
   , repositorySourcePost :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "source" :> ReqBody '[FormUrlEncoded] PageCodeContext.CodeMappingForm :> Post '[HTML] (RespHeaders (Html ()))
   , repositorySourceDelete :: mode :- "p" :> ProjectId :> "repositories" :> Capture "repository_id" ModelGitSync.RepositoryId :> "source" :> Capture "mapping_id" CodeContext.CodeMappingId :> Delete '[HTML] (RespHeaders (Html ()))
@@ -1065,7 +1070,7 @@ cookieProtectedServer =
     , bringS3 = Settings.bringS3GetH
     , bringS3Post = Settings.brings3PostH
     , bringS3Remove = Settings.brings3RemoveH
-    , gitSyncSettings = \pid -> PageCodeContext.repositoriesGetH pid (Just PageCodeContext.Configuration) Nothing
+    , gitSyncSettings = \pid -> PageCodeContext.repositoriesGetH pid (Just PageCodeContext.Overview) Nothing
     , repositoriesGet = PageCodeContext.repositoriesGetH
     , serviceRepositoriesGet = PageCodeContext.serviceRepositoriesGetH
     , repositoryConnectGet = PageCodeContext.repositoryConnectGetH
@@ -1076,6 +1081,11 @@ cookieProtectedServer =
     , repositoryDelete = PageCodeContext.repositoryDeleteH
     , repositoryDashboardGet = GitSync.repositoryDashboardGetH
     , repositoryDashboardPost = GitSync.repositoryDashboardPostH
+    , repositoryAnalyzePost = PageCodeContext.repositoryAnalyzePostH
+    , repositoryResumePost = PageCodeContext.repositoryResumePostH
+    , repositoryFolderPost = PageCodeContext.repositoryFolderPostH
+    , repositoryConflictPost = PageCodeContext.repositoryConflictPostH
+    , repositorySourceEnabledPost = PageCodeContext.repositorySourceEnabledPostH
     , repositorySourceGet = PageCodeContext.repositorySourceGetH
     , repositorySourcePost = PageCodeContext.repositorySourcePostH
     , repositorySourceDelete = PageCodeContext.repositorySourceDeleteH
@@ -1087,7 +1097,7 @@ cookieProtectedServer =
     , gitSyncRepositoryPause = GitSync.gitSyncRepositoryPauseH
     , gitSyncRepositoryDelete = GitSync.gitSyncRepositoryDeleteH
     , codeMappingsSettings = PageCodeContext.codeMappingsGetH
-    , codeMappingsEditor = PageCodeContext.codeMappingsEditorGetH
+    , codeMappingsEditor = \pid _ sample -> PageCodeContext.repositoriesGetH pid Nothing sample
     , codeMappingsPost = PageCodeContext.codeMappingsPostH
     , impactReviewSettingsPost = PageCodeContext.impactReviewSettingsPostH
     , impactReviewRetry = PageCodeContext.impactReviewRetryH
