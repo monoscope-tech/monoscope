@@ -8,6 +8,9 @@
 -- that nothing ever read back.
 module Models.Apis.ApiChanges (
   AnomalyVM (..),
+  FieldEvidence (..),
+  FieldSnapshot (..),
+  fieldSnapshot,
   AnomalyActions (..),
   AnomalyTypes (..),
   AnomalyId,
@@ -24,6 +27,7 @@ where
 import Data.Aeson qualified as AE
 import Data.Default (Default, def)
 import Data.Effectful.Hasql qualified as Hasql
+import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
 import Data.Text.Display (Display)
 import Data.Time
@@ -35,6 +39,7 @@ import Effectful (Eff)
 import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
+import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Relude hiding (id)
 import System.Types (DB)
 import Web.HttpApiData (FromHttpApiData (..))
@@ -85,9 +90,32 @@ data AnomalyVM = AnomalyVM
   , endpointHost :: Maybe Text
   , newFields :: V.Vector Text
   , modifiedFields :: V.Vector Text
+  , fieldEvidence :: Aeson (V.Vector FieldEvidence)
   }
   deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow)
+
+
+-- | Immutable observations at detection time; absence of a prior snapshot means a new field.
+data FieldEvidence = FieldEvidence
+  { path :: !Text
+  , before :: !(Maybe FieldSnapshot)
+  , after :: !FieldSnapshot
+  }
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, NFData)
+
+
+data FieldSnapshot = FieldSnapshot
+  { structure :: !Catalog.FieldStruct
+  , examples :: !(V.Vector AE.Value)
+  }
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, NFData)
+
+
+fieldSnapshot :: Text -> Catalog.CatalogEntry -> Maybe FieldSnapshot
+fieldSnapshot path entry = (\structure -> FieldSnapshot structure (maybe V.empty (.values) $ HM.lookup path entry.valuesDelta)) <$> HM.lookup path entry.template.fields
 
 
 -- | Read VM rows for the anomalies UI.
@@ -116,7 +144,8 @@ SELECT
     COALESCE(an.url_path, endpoints.url_path),
     COALESCE(an.host, endpoints.host),
     an.new_fields,
-    an.modified_fields
+    an.modified_fields,
+    an.field_evidence
 from
     apis.anomalies an
     LEFT JOIN apis.endpoints ON an.project_id = endpoints.project_id

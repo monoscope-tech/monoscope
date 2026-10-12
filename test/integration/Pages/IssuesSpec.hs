@@ -1,6 +1,7 @@
 module Pages.IssuesSpec (spec) where
 
 import BackgroundJobs qualified
+import Control.Exception (bracket_)
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Effectful.Hasql qualified as EHasql
@@ -166,13 +167,56 @@ spec = sequential $ aroundAll withTestResources do
       ingest "eyJ1c2VybmFtZSI6ImFAYi5jbyJ9" -- {"username":"a@b.co"}
       (i0, _) <- driftIssue
       Issues.isNewEndpointOnly i0 `shouldBe` True
-      ingest "eyJ1c2VybmFtZSI6ImFAYi5jbyIsInBhc3N3b3JkIjoieCJ9" -- + "password"
+      ingest "eyJ1c2VybmFtZSI6ImFAYi5jbyIsInBhc3N3b3JkIjoieCIsIm5pY2tuYW1lIjoiYSJ9" -- + password, nickname
       (i1, d1) <- driftIssue
       (hasField "password" d1.newFields, V.null d1.modifiedFields, i1.critical) `shouldBe` (True, True, False)
-      ingest "eyJ1c2VybmFtZSI6MiwicGFzc3dvcmQiOiJ4In0=" -- username: string -> number
+      ingest "eyJ1c2VybmFtZSI6MiwicGFzc3dvcmQiOiJ4Iiwibmlja25hbWUiOjJ9" -- username, nickname: string -> number
       (i2, d2) <- driftIssue
       (hasField "password" d2.newFields, hasField "username" d2.modifiedFields, hasField "password" d2.modifiedFields) `shouldBe` (True, True, False)
       (i2.id == i0.id, i2.critical) `shouldBe` (True, True)
+      (_, detail) <- testServant tr $ IssuesPage.issueDetailGetH testPid i2.id Nothing Nothing Nothing Nothing Nothing
+      let html = renderPage detail
+      for_ ["Before", "After", "Detected", "a@b.co", "string", "number"] \text ->
+        html `shouldSatisfy` T.isInfixOf text
+      withResource tr.trPool \conn -> void $ PGS.execute conn [sql| UPDATE apis.anomalies SET field_evidence='[]', created_at=CASE WHEN cardinality(modified_fields)=0 THEN '2026-01-01'::timestamptz ELSE '2026-01-02'::timestamptz END WHERE project_id=? AND target_hash IN ? |] (testPid, PGS.In $ V.toList d2.anomalyHashes)
+      (_, legacyDetail) <- testServant tr $ IssuesPage.issueDetailGetH testPid i2.id Nothing Nothing Nothing Nothing Nothing
+      for_ ["Historical types and values were not captured", "Current observations", "a@b.co"] \text ->
+        renderPage legacyDetail `shouldSatisfy` T.isInfixOf text
+      for_ ([("Added", "2026-01-01T00:00:00Z"), ("Modified", "2026-01-02T00:00:00Z")] :: [(Text, Text)]) \(kind, detected) ->
+        T.splitOn "</tr>" (renderPage legacyDetail) `shouldSatisfy` any (\row -> all (`T.isInfixOf` row) ["nickname", ">" <> kind <> "</td>", detected])
+
+    it "apiChangeEvidence_unavailable_doesNotHideIssue" \tr -> do
+      issueId <- pickApiChangeIssue tr
+      withResource tr.trPool \conn -> do
+        saved <- PGS.query conn "SELECT target_hash, field_evidence::text FROM apis.anomalies WHERE project_id=?" (Only testPid) :: IO [(Text, Text)]
+        bracket_
+          (void $ PGS.execute conn "UPDATE apis.anomalies SET field_evidence='null'::jsonb WHERE project_id=?" (Only testPid))
+          (for_ saved \(target, evidence) -> void $ PGS.execute conn "UPDATE apis.anomalies SET field_evidence=?::jsonb WHERE project_id=? AND target_hash=?" (evidence, testPid, target))
+          do
+            (_, detail) <- testServant tr $ IssuesPage.issueDetailGetH testPid issueId Nothing Nothing Nothing Nothing Nothing
+            for_ ["Field changes", "Field evidence unavailable"] \text -> renderPage detail `shouldSatisfy` T.isInfixOf text
+
+    it "apiChanges_sameService_collapseWithoutLosingEndpointIssues" \tr -> do
+      nowTxt <- nowText
+      for_ ["eyJ1c2VybmFtZSI6ImFAYi5jbyJ9", "eyJ1c2VybmFtZSI6Mn0="] \body -> do
+        processMessagesAndBackgroundJobs tr [("group", encMsg $ msgWithBody "/v1/grouped-drift" body nowTxt)]
+        runAnomalyJobs tr \case
+          BackgroundJobs.NewAnomaly{} -> True
+          _ -> False
+      withResource tr.trPool \conn -> do
+        saved <- PGS.query conn "SELECT id::text, service FROM apis.issues WHERE project_id=? AND issue_type='api_change'" (Only testPid) :: IO [(Text, Maybe Text)]
+        bracket_
+          (void $ PGS.execute conn "UPDATE apis.issues SET service=NULL WHERE project_id=? AND issue_type='api_change'" (Only testPid))
+          (for_ saved \(issueId, service) -> void $ PGS.execute conn "UPDATE apis.issues SET service=? WHERE project_id=? AND id=?::uuid" (service, testPid, issueId))
+          do
+            (_, page) <- testServant tr $ IssuesPage.issueListGetH testPid (Just "Inbox") Nothing Nothing Nothing Nothing Nothing Nothing [] ["api_change"]
+            let html = renderPage page
+            for_ ["<details", "Breaking API changes", "items on this page", "/v1/drift", "/v1/grouped-drift"] \text ->
+              html `shouldSatisfy` T.isInfixOf text
+            T.splitOn "</details>" html `shouldSatisfy` any (\disclosure -> all (`T.isInfixOf` disclosure) ["<summary", "Breaking API changes", "/v1/drift", "/v1/grouped-drift"])
+            html `shouldNotSatisfy` T.isInfixOf "172.31.29.11 · 172.31.29.11"
+            (_, singletonPage) <- testServant tr $ IssuesPage.issueListGetH testPid (Just "Inbox") Nothing Nothing Nothing (Just "1") Nothing Nothing [] ["api_change"]
+            renderPage singletonPage `shouldNotSatisfy` T.isInfixOf "items on this page"
 
     it "filters, paginates, and renders an empty anomaly list through the page handler" \tr -> do
       -- Put the issues created above back in one customer-visible list. The bulk handler
@@ -565,7 +609,8 @@ spec = sequential $ aroundAll withTestResources do
           payload = Issues.LogPatternData patternHash pat Nothing Nothing (Just "checkout") "summary" detectedAt 2
       issueId <- withResource tr.trPool \conn -> do
         void $ PGS.execute conn [sql| INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, source_field, first_seen_at, last_seen_at, occurrence_count) VALUES (?, ?, ?, 'summary', ?, ?, 92) |] (testPid, pat, patternHash, detectedAt, addUTCTime (-120) frozenTime)
-        maybe (fail "INSERT ... RETURNING id returned no row") (pure . fromOnly) . listToMaybe
+        maybe (fail "INSERT ... RETURNING id returned no row") (pure . fromOnly)
+          . listToMaybe
           =<< PGS.query conn [sql| INSERT INTO apis.issues (project_id, issue_type, title, target_hash, service, issue_data, created_at, updated_at) VALUES (?, 'log_pattern', 'rpc pattern', ?, 'checkout', ?::jsonb, ?, ?) RETURNING id |] (testPid, patternHash, AE.encode payload, detectedAt, detectedAt)
       (_, page) <- testServant tr $ IssuesPage.issueDetailGetH testPid (UUIDId issueId) Nothing Nothing Nothing Nothing Nothing
       let html = renderPage page

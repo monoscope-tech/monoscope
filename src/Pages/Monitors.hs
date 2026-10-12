@@ -412,7 +412,7 @@ teamAlertsGetH pid teamId = do
   alerts <- Monitors.getAlertsByTeam pid teamId
   currTime <- Time.currentTime
   teamMap <- buildTeamMap pid
-  addRespHeaders $ TableRows [] (V.fromList $ map (toUnifiedMonitorItem teamMap pid currTime) alerts) False Nothing Nothing Nothing
+  addRespHeaders $ TableRows [] (V.fromList $ map (toUnifiedMonitorItem teamMap pid currTime) alerts) False Nothing Nothing Nothing Nothing
 
 
 alertBulkActionH :: Projects.ProjectId -> MonitorBulkAction -> TBulkActionForm -> ATAuthCtx (RespHeaders (PageCtx (Table UnifiedMonitorItem)))

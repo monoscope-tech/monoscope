@@ -125,7 +125,7 @@ apiCatalogH pid sortM timeFilter currentTabM periodM skipM filterTabM statsM = d
                   }
           }
   addRespHeaders case skipM of
-    Just _ -> TableRowsOnly TableRows{columns = cols, rows = hostsVM, renderAsTable = True, rowId = hostRowId, rowAttrs = hostRowAttrs, pagination = Nothing}
+    Just _ -> TableRowsOnly TableRows{columns = cols, rows = hostsVM, renderAsTable = True, rowId = hostRowId, rowAttrs = hostRowAttrs, rowGroup = Nothing, pagination = Nothing}
     Nothing -> TablePage $ PageCtx bwconf catalogTable
 
 
@@ -367,7 +367,7 @@ endpointListGetH pid pageM perPageM _layoutM filterTM hostM currentTabM sortM pe
           }
   addRespHeaders
     $ if isJust loadMoreM || isJust searchM
-      then TableRowsOnly TableRows{columns = cols, rows = endpReqVM, renderAsTable = True, rowId = endpRowId, rowAttrs = endpRowAttrs, pagination = pagination'}
+      then TableRowsOnly TableRows{columns = cols, rows = endpReqVM, renderAsTable = True, rowId = endpRowId, rowAttrs = endpRowAttrs, rowGroup = Nothing, pagination = pagination'}
       else TablePage $ PageCtx bwconf endpointsTable
 
 

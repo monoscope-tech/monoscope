@@ -38,6 +38,7 @@ module Pkg.Components.Table (
 
 import Data.Default (Default (..))
 import Data.List (lookup)
+import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
 import Data.Vector qualified as V
@@ -83,6 +84,7 @@ data TableRows a = TableRows
   , rows :: V.Vector a
   , renderAsTable :: Bool
   , rowId :: Maybe (a -> Text)
+  , rowGroup :: Maybe (a -> Maybe Text)
   , rowAttrs :: Maybe (a -> [Attribute])
   , pagination :: Maybe Pagination
   }
@@ -106,6 +108,7 @@ data Features a = Features
   { rowLink :: Maybe (a -> Text)
   , rowId :: Maybe (a -> Text)
   , rowLabel :: Maybe (a -> Text)
+  , rowGroup :: Maybe (a -> Maybe Text)
   , rowAttrs :: Maybe (a -> [Attribute])
   , selectRow :: Maybe (a -> Bool)
   , bulkActions :: [BulkAction]
@@ -148,6 +151,7 @@ defaultFeaturesAreInert =
     [ isNothing d.rowLink
     , isNothing d.search
     , isNothing d.pagination
+    , isNothing d.rowGroup
     , null d.bulkActions
     , not d.showFilterRail
     ]
@@ -379,7 +383,7 @@ renderTableRows tr = do
       { config = (def :: Config){renderAsTable = tr.renderAsTable}
       , columns = tr.columns
       , rows = tr.rows
-      , features = (def :: Features a){rowId = tr.rowId, rowAttrs = tr.rowAttrs}
+      , features = (def :: Features a){rowId = tr.rowId, rowAttrs = tr.rowAttrs, rowGroup = tr.rowGroup}
       }
   whenJust tr.pagination renderPaginationFooter
 
@@ -546,8 +550,24 @@ renderRows tbl
 -- so htmx-swapped pages stay markup-identical to page 1.
 renderBody :: [Attribute] -> Table a -> Html ()
 renderBody extra tbl
-  | tbl.config.renderAsTable = tbody_ (extra <> [class_ "stagger-fade"]) $ V.mapM_ (renderTableRow tbl) tbl.rows
+  | tbl.config.renderAsTable = tbody_ (extra <> [class_ "stagger-fade"]) $ maybe (V.mapM_ (renderTableRow tbl) tbl.rows) groupedRows tbl.features.rowGroup
   | otherwise = div_ [class_ "stagger-fade"] $ V.mapM_ (renderListRow tbl) tbl.rows
+  where
+    groupedRows groupOf =
+      forM_ (sortWith (fst . head) $ NE.groupAllWith (\(idx, row) -> maybeToRight idx $ groupOf row) $ zip [0 :: Int ..] (V.toList tbl.rows)) \((_, row) :| siblings) ->
+        case (groupOf row, siblings) of
+          (Just label, _ : _) -> tr_ [class_ "not-has-[.itemsListItem:not(.hidden)]:hidden"]
+            $ td_ [colspan_ $ show $ length tbl.columns + bool 0 1 (isJust tbl.features.rowId)]
+            $ details_ [class_ "group/disclosure", [__|on input from closest <[id$='_page']/> if event.target.type is "search" set my.open to true end|]] do
+              summary_ [class_ "cursor-pointer px-4 py-3 text-sm font-medium text-textStrong focus-visible:outline-offset-[-2px]"] do
+                toHtml label
+                span_ [class_ "ms-2 text-xs font-normal text-textWeak tabular-nums"] $ toHtml $ show (1 + length siblings) <> " items on this page"
+              table_ [class_ tbl.config.tableClasses] do
+                thead_ [class_ "sr-only"] $ tr_ do
+                  when (isJust tbl.features.rowId) $ th_ [scope_ "col"] "Select issue"
+                  forM_ tbl.columns $ \c -> th_ [scope_ "col"] $ toHtml c.name
+                tbody_ $ mapM_ (renderTableRow tbl) (row : map snd siblings)
+          _ -> renderTableRow tbl row
 
 
 treeRowAttrs :: a -> TreeConfig a -> [Attribute]

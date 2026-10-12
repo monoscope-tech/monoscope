@@ -50,7 +50,7 @@ import Data.Vector qualified as V
 import Effectful
 import Effectful.Exception (trySync)
 import Hasql.Interpolate qualified as HI
-import Models.Apis.ApiChanges (AnomalyTypes)
+import Models.Apis.ApiChanges (AnomalyTypes, FieldEvidence)
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (DB, UUIDId (..))
 import Pkg.SchemaLearning.Catalog qualified as Catalog
@@ -434,6 +434,7 @@ data AnomalyInsertRow = AnomalyInsertRow
   , method :: !(Maybe Text)
   , host :: !(Maybe Text)
   , urlPath :: !(Maybe Text)
+  , fieldEvidence :: !(V.Vector FieldEvidence)
   , delta :: !Catalog.ShapeDelta
   -- ^ only non-empty on shape anomalies
   }
@@ -482,11 +483,11 @@ insertAnomalies :: DB es => V.Vector AnomalyInsertRow -> Eff es Int64
 insertAnomalies rows | V.null rows = pure 0
 insertAnomalies rows =
   Hasql.interpExecute
-    [HI.sql| INSERT INTO apis.anomalies (project_id, anomaly_type, action, target_hash, method, host, url_path, new_fields, modified_fields)
+    [HI.sql| INSERT INTO apis.anomalies (project_id, anomaly_type, action, target_hash, method, host, url_path, new_fields, modified_fields, field_evidence)
              SELECT pid, atype::apis.anomaly_type, 'created'::apis.anomaly_action, th, mth, hst, up,
-                    ARRAY(SELECT jsonb_array_elements_text(nf)), ARRAY(SELECT jsonb_array_elements_text(mf))
-             FROM unnest(#{pids}::uuid[], #{atypes}::text[], #{ths}::text[], #{methods}::text[], #{hosts}::text[], #{paths}::text[], #{nfs}::jsonb[], #{mfs}::jsonb[])
-                    AS m(pid, atype, th, mth, hst, up, nf, mf)
+                    ARRAY(SELECT jsonb_array_elements_text(nf)), ARRAY(SELECT jsonb_array_elements_text(mf)), evidence
+             FROM unnest(#{pids}::uuid[], #{atypes}::text[], #{ths}::text[], #{methods}::text[], #{hosts}::text[], #{paths}::text[], #{nfs}::jsonb[], #{mfs}::jsonb[], #{evidences}::jsonb[])
+                    AS m(pid, atype, th, mth, hst, up, nf, mf, evidence)
              ON CONFLICT (project_id, target_hash) DO NOTHING |]
   where
     pids = V.map (.projectId) rows
@@ -497,6 +498,7 @@ insertAnomalies rows =
     paths = V.map (.urlPath) rows
     nfs = V.map (asScrubbedJsonb . (.delta.newFields)) rows
     mfs = V.map (asScrubbedJsonb . (.delta.modifiedFields)) rows
+    evidences = V.map (asScrubbedJsonb . (.fieldEvidence)) rows
 
 
 -- | Enqueue one @NewAnomaly@ background job per (project, anomalyType) group
