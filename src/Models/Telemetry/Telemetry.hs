@@ -914,16 +914,18 @@ adjacentHashEvent pid hashKey step from =
                AND #{hashKey} = ANY(hashes) AND context___trace_id IS NOT NULL AND context___trace_id <> ''
              ORDER BY ^{order} LIMIT 1 |]
   where
+    -- Each window lies on one side of @from@, so the nearest event is simply the newest
+    -- older one or the oldest newer one: a plain timestamp order lets TimeFusion stop at
+    -- the first match instead of reading every hash hit of the day (1.5-1.9 s -> 0.15 s).
     (lo, hi, order) = case step of
-      Older -> (addUTCTime (-86400) from, from, nearest)
-      Newer -> (from, addUTCTime 86400 from, nearest)
+      Older -> (addUTCTime (-86400) from, from, [HI.sql| timestamp DESC |])
+      Newer -> (from, addUTCTime 86400 from, [HI.sql| timestamp ASC |])
       Recommended ->
         ( addUTCTime (-86400) from
         , from
         , [HI.sql| (CASE WHEN attributes___session___id <> '' THEN 4 ELSE 0 END) + (CASE WHEN attributes___user___id <> '' OR attributes___user___email <> '' THEN 2 ELSE 0 END)
                  + (CASE WHEN attributes___url___full <> '' OR attributes___url___path <> '' THEN 1 ELSE 0 END) DESC, timestamp DESC |]
         )
-    nearest = [HI.sql| abs(extract(epoch FROM timestamp - #{from}::timestamptz)) |]
 
 
 -- | First/recent trace_id for a (project, method, url_path). Window kept tight (7d) since
