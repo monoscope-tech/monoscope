@@ -1337,6 +1337,8 @@ scalarFuncToSQL name args
 --
 -- >>> display (Eq (Subject "" "attributes" [FieldKey "app", FieldKey "flag"]) (Boolean True))
 -- "attributes->'app'->>'flag' = 'true'"
+-- >>> display (NotEq (Subject "" "attributes" [FieldKey "app", FieldKey "flag"]) (Boolean False))
+-- "attributes->'app'->>'flag' != 'false'"
 --
 -- >>> display (Eq (Subject "" "abc" [ArrayWildcard "",FieldKey "xyz"]) (Str "val"))
 -- "jsonb_path_exists(to_jsonb(abc), '$[*].\"xyz\" ? (@ == \"val\")'::jsonpath)"
