@@ -1335,6 +1335,11 @@ scalarFuncToSQL name args
 -- >>> display (Eq (Subject "" "errors" [ArrayIndex "" 0, FieldKey "message"]) (Str "val"))
 -- "errors->0->>'message' = 'val'"
 --
+-- >>> display (Eq (Subject "" "attributes" [FieldKey "app", FieldKey "flag"]) (Boolean True))
+-- "attributes->'app'->>'flag' = 'true'"
+-- >>> display (NotEq (Subject "" "attributes" [FieldKey "app", FieldKey "flag"]) (Boolean False))
+-- "attributes->'app'->>'flag' != 'false'"
+--
 -- >>> display (Eq (Subject "" "abc" [ArrayWildcard "",FieldKey "xyz"]) (Str "val"))
 -- "jsonb_path_exists(to_jsonb(abc), '$[*].\"xyz\" ? (@ == \"val\")'::jsonpath)"
 --
@@ -1481,6 +1486,9 @@ displayExprHelper op prec sub val =
           | Subject "errors" _ [] <- sub
           , Just positive <- lookup op [("=", b), ("!=", not b)] ->
               displayParen True $ displayBuilder $ bool ("NOT " <> errorFlagSql) errorFlagSql positive
+        -- `->>` yields text, and text = boolean fails the whole query on both TimeFusion and
+        -- Postgres; a JSON boolean reads back as the text 'true'/'false'.
+        (_, Boolean b) | Subject _ _ (_ : _) <- sub, op `elem` ["=", "!="] -> displayPrec prec sub <> displayBuilder (" " <> op <> " ") <> displayPrec prec (Str (bool "false" "true" b))
         (_, List vs) | op `elem` ["IN", "NOT IN"] -> displayPrec prec sub <> displayBuilder (" " <> op <> " (") <> commaSep vs <> ")"
         -- has_any/has_all fan the (escaped, case-insensitive) literal match over the list
         (_, List vs) | Just j <- lookup op [("HAS_ANY", " OR "), ("HAS_ALL", " AND ")] -> "(" <> (mconcat . intersperse j . map (\v -> subAsText <> " ~* " <> reTerm "" "" v)) vs <> ")"
