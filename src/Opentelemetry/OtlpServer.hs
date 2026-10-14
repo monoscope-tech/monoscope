@@ -35,6 +35,7 @@ import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI
 import Data.Char (isDigit)
 import Data.Effectful.Hasql qualified as Hasql
+import Data.Effectful.Sleep (Sleep)
 import Data.Fixed (Fixed (MkFixed))
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HS
@@ -255,7 +256,7 @@ stampOrPassthrough appCtx v =
 -- | Shared tail of every logs/traces ingest path (queue and direct OTLP): session-stamp, mint
 -- ids, normalize routes, offer to Live Tail, then write. The batch succeeds or fails as a unit.
 ingestOtelRecords
-  :: (Hasql.Hasql :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es)
+  :: (Hasql.Hasql :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Sleep :> es, Time.Time :> es)
   => AuthContext
   -> Telemetry.WriteTarget
   -- ^ stores to (re)write; DLQ replay narrows to the originally-failed leg
@@ -342,7 +343,7 @@ throwOnWriteFailure = either (throwGrpc GrpcInternal . ("OTLP write failed: " <>
 -- both stores; poisonMsgs are decode failures whose raw bytes must be DLQ'd
 -- by Pkg.Queue before committing offsets. On dual-write failure, returns
 -- 'Left WriteFailure'. Never throws on write/decode failure.
-processList :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es) => [(Text, ByteString)] -> HM.HashMap Text Text -> Eff es (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))
+processList :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Sleep :> es, Time.Time :> es, Tracing :> es) => [(Text, ByteString)] -> HM.HashMap Text Text -> Eff es (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))
 processList [] _ = pure (Right ([], []))
 processList msgs !attrs =
   withSpan_ "otlp.process_list" (batchSpanAttrs (length msgs) attrs)
@@ -1412,7 +1413,7 @@ runServer appLogger appCtx tp = do
 
 
 -- | Process trace request with optional API key from gRPC metadata (extracted for testing)
-processTraceRequest :: (DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es) => Maybe Text -> TS.ExportTraceServiceRequest -> Eff es ()
+processTraceRequest :: (DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Sleep :> es, Time.Time :> es) => Maybe Text -> TS.ExportTraceServiceRequest -> Eff es ()
 processTraceRequest metadataApiKey req =
   let !resourceSpans = V.fromList $ req ^. TSF.resourceSpans
    in processSignalRequest "Traces" "traces" "Received trace export request" "spans" "span_count" metadataApiKey (getSpanApiKey resourceSpans) (V.toList $ getSpanAttributeValue "at-project-id" resourceSpans) $ \currentTime projectCaches projectIdsAndKeys ->
@@ -1420,7 +1421,7 @@ processTraceRequest metadataApiKey req =
 
 
 -- | Process logs request with optional API key from gRPC metadata (extracted for testing)
-processLogsRequest :: (DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es) => Maybe Text -> LS.ExportLogsServiceRequest -> Eff es ()
+processLogsRequest :: (DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Sleep :> es, Time.Time :> es) => Maybe Text -> LS.ExportLogsServiceRequest -> Eff es ()
 processLogsRequest metadataApiKey req =
   let !resourceLogs = V.fromList $ req ^. PLF.resourceLogs
    in processSignalRequest "Logs" "logs" "Received logs export request" "logs" "log_count" metadataApiKey (getLogApiKey resourceLogs) (V.toList $ getLogAttributeValue "at-project-id" resourceLogs) $ \currentTime projectCaches projectIdsAndKeys ->
@@ -1433,7 +1434,7 @@ processLogsRequest metadataApiKey req =
 -- ("Traces"/"Logs"), @signal@ the checkpoint/span label ("traces"/"logs"), @noun@/@countKey@
 -- the converted/inserted record noun and its log count key ("spans"/"span_count").
 processSignalRequest
-  :: (DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es)
+  :: (DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Sleep :> es, Time.Time :> es)
   => Text
   -> Text
   -> Text
@@ -1515,7 +1516,7 @@ logsServiceExport = otlpExport processLogsRequest
 
 
 -- | Process metrics request with optional API key from gRPC metadata (extracted for testing)
-processMetricsRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es) => Maybe Text -> MS.ExportMetricsServiceRequest -> Eff es ()
+processMetricsRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Sleep :> es, Time.Time :> es) => Maybe Text -> MS.ExportMetricsServiceRequest -> Eff es ()
 processMetricsRequest metadataApiKey req = do
   Log.logTrace "Received metrics export request" AE.Null
   when (metricRequestHasOverflow req) $ throwGrpc GrpcInternal "OTLP metric count exceeds BIGINT maximum"

@@ -35,6 +35,7 @@ import Data.Aeson qualified as AE
 import Data.Effectful.Hasql (Hasql, runHasqlPool)
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Notify qualified
+import Data.Effectful.Sleep (Sleep, runNoSleep, runSleep)
 import Data.Effectful.UUID (UUIDEff, runStaticUUIDRef, runUUID)
 import Data.Effectful.Wreq (HTTP, runHTTPGolden, runHTTPWreq)
 import Data.Map qualified as Map
@@ -86,6 +87,7 @@ type CommonWebEffects =
   '[ ELLM.LLM
    , Effectful.Reader.Static.Reader AuthContext
    , UUIDEff
+   , Sleep
    , HTTP
    , Hasql
    , Labeled "timefusion" Hasql
@@ -150,6 +152,7 @@ effToServantHandler env logger tp app =
     & ELLM.runLLMReal
     & Effectful.Reader.Static.runReader env
     & runUUID
+    & runSleep
     & runHTTPWreq
     & runHasqlPool env.hasqlPool
     & runLabeled @"timefusion" (runHasqlPool env.hasqlTimefusionPool)
@@ -180,6 +183,7 @@ effToServantHandlerTestHTTP http clock uuidRef env logger tp app =
     & ELLM.runLLMGolden "./tests/golden/"
     & Effectful.Reader.Static.runReader env
     & runStaticUUIDRef uuidRef
+    & runNoSleep
     & http
     & runHasqlPool env.hasqlPool
     & runLabeled @"timefusion" (runHasqlPool env.hasqlTimefusionPool)
@@ -214,6 +218,7 @@ type ATBackgroundEffects =
    , Log
    , Tracing
    , UUIDEff
+   , Sleep
    , HTTP
    , ELLM.LLM
    , Concurrent
@@ -238,6 +243,7 @@ runBackground logger appCtx tp process =
     & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger appCtx.config.logLevel
     & Tracing.runTracing tp
     & runUUID
+    & runSleep
     & runHTTPWreq
     & ELLM.runLLMReal
     & runConcurrent

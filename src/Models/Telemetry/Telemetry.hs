@@ -120,6 +120,7 @@ import Data.Aeson.Types qualified as AET
 import Data.ByteString qualified as BS
 import Data.Default (Default (..))
 import Data.Effectful.Hasql (Hasql, retryTransientLoop)
+import Data.Effectful.Sleep (Sleep)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
 import Data.List.Extra (lookup)
@@ -1614,7 +1615,7 @@ maxPgWriteAttempts, maxTfWriteAttempts :: Int
 -- Generic over PG vs TF: both call sites are symmetric. Programmer-bug
 -- exceptions (non-Hasql) propagate as Left without retry.
 retryHasqlWrite
-  :: (IOE :> es, Log :> es, Monoid a)
+  :: (IOE :> es, Log :> es, Monoid a, Sleep :> es)
   => Int
   -- ^ max attempts (must be >= 1)
   -> Text
@@ -1662,6 +1663,7 @@ bulkInsertOtelLogsAndSpansTF
      , Ki.StructuredConcurrency :> es
      , Labeled "timefusion" Hasql :> es
      , Log :> es
+     , Sleep :> es
      )
   => Bool
   -- ^ @tfPgTypes@: the TF leg casts id/JSON to native uuid/jsonb (a Postgres-backed
@@ -1693,7 +1695,7 @@ bulkInsertOtelLogsAndSpansTF tfPgTypes target records = do
 -- whether at least one leg fully persisted the batch (for best-effort follow-on
 -- work like the metrics catalog).
 dualWrite
-  :: (IOE :> es, Ki.StructuredConcurrency :> es, Log :> es)
+  :: (IOE :> es, Ki.StructuredConcurrency :> es, Log :> es, Sleep :> es)
   => Int
   -- ^ submitted row count
   -> WriteTarget
@@ -1755,6 +1757,7 @@ insertAndHandOff
      , Ki.StructuredConcurrency :> es
      , Labeled "timefusion" Hasql :> es
      , Log :> es
+     , Sleep :> es
      )
   => Bool
   -- ^ @tfPgTypes@ (see 'bulkInsertOtelLogsAndSpansTF'): cast the TF leg to native
@@ -2494,7 +2497,7 @@ mkSystemLog (UUIDId pid) eventName sev bodyMsg attrs duration ts =
 
 
 insertSystemLog
-  :: (Hasql :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es)
+  :: (Hasql :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, Sleep :> es)
   => WriteTarget
   -> Bool
   -- ^ @tfPgTypes@ (see 'bulkInsertOtelLogsAndSpansTF')
@@ -2891,7 +2894,7 @@ mintMetricIds = V.map $ \r -> r{id = Just $ fromMaybe (metricId r) r.id}
 -- as logs and spans. The caller mints ids before calling this function; it is
 -- repeated defensively here so ad-hoc producers cannot write random ids.
 bulkInsertOtelMetrics
-  :: (Concurrent :> es, Hasql :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es)
+  :: (Concurrent :> es, Hasql :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, Sleep :> es)
   => MetricCatalogBuffer
   -> Bool
   -> WriteTarget

@@ -37,11 +37,11 @@ module Data.Effectful.Hasql (
   withLabeled,
 ) where
 
-import Control.Concurrent (threadDelay)
 import Control.Exception (ErrorCall (..))
 import Control.Exception.Annotated qualified as Ann
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
+import Data.Effectful.Sleep (Sleep, runSleep, sleepMicros)
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
 import Data.Text.Display (Display)
@@ -396,7 +396,7 @@ transientBackoffMicros attempt = min 5000000 (100000 * 2 ^ min 6 (attempt - 1))
 -- ('transientBackoffMicros'), yielding the last exception once the budget is
 -- spent or the error is non-transient. @msg@/@key@/@label@ shape the retry log
 -- line so the write and read wrappers keep their distinct log identities.
-retryTransientLoop :: (IOE :> es, Log :> es) => Int -> Text -> Text -> Text -> Eff es a -> Eff es (Either SomeException a)
+retryTransientLoop :: (IOE :> es, Log :> es, Sleep :> es) => Int -> Text -> Text -> Text -> Eff es a -> Eff es (Either SomeException a)
 retryTransientLoop maxAttempts msg key label act = go 1
   where
     go attempt =
@@ -414,7 +414,7 @@ retryTransientLoop maxAttempts msg key label act = go 1
                   , "backoff_us" AE..= delayMicros
                   , "error" AE..= show @Text e
                   ]
-              liftIO $ threadDelay delayMicros
+              sleepMicros delayMicros
               go (attempt + 1)
           | otherwise -> pure (Left e)
 
@@ -428,4 +428,4 @@ retryTransientLoop maxAttempts msg key label act = go 1
 -- a whole batch on a single connection blip (the 2026-06-21 DLQ flood).
 retryTransientEff :: (IOE :> es, Log :> es) => Int -> Text -> Eff es a -> Eff es a
 retryTransientEff maxAttempts op act =
-  either UnliftIO.throwIO pure =<< retryTransientLoop maxAttempts "retryTransientEff: transient read error, retrying" "op" op act
+  either UnliftIO.throwIO pure =<< runSleep (retryTransientLoop maxAttempts "retryTransientEff: transient read error, retrying" "op" op (raise act))
