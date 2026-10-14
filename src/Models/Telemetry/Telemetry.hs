@@ -1595,12 +1595,14 @@ writeFailureDlqHeaders wf =
         ]
 
 
--- | PostgreSQL keeps the established retry budget. TimeFusion gets four more
--- attempts because its measured deployment handoff took 38.47s from the first
--- client-visible refusal to PGWire readiness. Its 13 sleeps total 41.3s before
--- the final attempt; statement and connection time are additional.
+-- | PostgreSQL keeps the established retry budget. TimeFusion's must outlast a
+-- whole deploy — the HANDOFF drain refusals, then connection errors until the
+-- replacement listens (45s on 2026-10-13, which dead-lettered a 41.3s budget) —
+-- so its 41 sleeps total 181.3s before the final attempt: 4x that, yet under the
+-- Kafka consumer's stall alarm ('Pkg.Queue.stallTicks'), which a batch waiting
+-- out a longer TimeFusion outage would trip.
 maxPgWriteAttempts, maxTfWriteAttempts :: Int
-(maxPgWriteAttempts, maxTfWriteAttempts) = (10, 14)
+(maxPgWriteAttempts, maxTfWriteAttempts) = (10, 42)
 
 
 -- | Retry a Hasql write up to @n@ times on transient errors with exponential

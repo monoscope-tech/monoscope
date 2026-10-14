@@ -20,6 +20,7 @@ module Pkg.Queue (
   parkingTopicFor,
   RetryRoute (..),
   retryDestination,
+  stallTicks,
 ) where
 
 import Control.Concurrent.STM (swapTVar)

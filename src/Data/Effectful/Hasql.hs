@@ -386,8 +386,10 @@ withHasqlTimefusion = withLabeled @"timefusion" @Hasql
 
 -- | Exponential backoff schedule shared by the write ('retryHasqlWrite') and
 -- read ('retryTransientEff') retry loops: 100ms, 200ms, 400ms … capped at 5s.
+-- The exponent is capped before multiplying: past attempt ~47 the product overflows
+-- 'Int' and would sleep a negative (zero) delay.
 transientBackoffMicros :: Int -> Int
-transientBackoffMicros attempt = min 5000000 (100000 * (2 ^ (attempt - 1)))
+transientBackoffMicros attempt = min 5000000 (100000 * 2 ^ min 6 (attempt - 1))
 
 
 -- | Retry @act@ on transient Hasql errors with exponential backoff
