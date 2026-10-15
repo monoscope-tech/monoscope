@@ -112,6 +112,7 @@ module Models.Telemetry.Telemetry (
 )
 where
 
+import Control.Monad.Extra (firstJustM)
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
@@ -132,6 +133,7 @@ import Data.These (These (..))
 import Data.These qualified as These
 import Data.Time (UTCTime (..))
 import Data.Time.Clock (NominalDiffTime, addUTCTime, diffTimeToPicoseconds, diffUTCTime, nominalDay, picosecondsToDiffTime)
+import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
 import Data.UUID.Quasi (uuid)
@@ -907,13 +909,40 @@ data EventStep = Older | Newer | Recommended
 -- | The traced event carrying @hashKey@ nearest to @from@ in one direction, within a
 -- day of it: the hash test is an unindexed array scan, so the window bounds its cost.
 adjacentHashEvent :: DB es => Projects.ProjectId -> Text -> EventStep -> UTCTime -> Eff es (Maybe (Text, UTCTime))
-adjacentHashEvent pid hashKey step from =
-  Hasql.interpOne
-    [HI.sql| SELECT context___trace_id, timestamp FROM otel_logs_and_spans
-             WHERE project_id = #{pid.toText} AND timestamp BETWEEN #{lo} AND #{hi} AND timestamp <> #{from}
-               AND #{hashKey} = ANY(hashes) AND context___trace_id IS NOT NULL AND context___trace_id <> ''
-             ORDER BY ^{order} LIMIT 1 |]
+adjacentHashEvent pid hashKey step from = case step of
+  Recommended -> nearest lo hi
+  Older -> viaBuckets
+  Newer -> viaBuckets
   where
+    -- With no other event in the window the plain lookup read the whole day raw (57 s on
+    -- shipbubble). Look beside @from@ first; failing that, ask which 30-minute buckets hold the
+    -- hash (served by TimeFusion's per-hash rollup, ~0.4 s) and read only those, falling back
+    -- to the full window if every bucket asked for comes back empty.
+    viaBuckets =
+      nearest nearLo nearHi >>= \case
+        Just found -> pure (Just found)
+        Nothing -> do
+          -- `count(*)` is what lets TimeFusion answer this from its hashes_30m rollup.
+          buckets :: V.Vector (Int, Int) <-
+            Hasql.interp
+              [HI.sql| SELECT extract(epoch from time_bucket('30 minutes', timestamp))::bigint, count(*)::bigint FROM otel_logs_and_spans
+                       WHERE project_id = #{pid.toText} AND timestamp BETWEEN #{lo} AND #{hi} AND #{hashKey} = ANY(hashes)
+                       GROUP BY 1 ORDER BY 1 ^{direction} LIMIT #{bucketsAsked} |]
+          let bucket (start, _) = let s = posixSecondsToUTCTime (fromIntegral start) in nearest (max lo s) (min hi (addUTCTime bucketWidth s))
+          found <- firstJustM bucket (V.toList buckets)
+          if isNothing found && V.length buckets == bucketsAsked then nearest lo hi else pure found
+    nearest a b =
+      Hasql.interpOne
+        [HI.sql| SELECT context___trace_id, timestamp FROM otel_logs_and_spans
+                 WHERE project_id = #{pid.toText} AND timestamp BETWEEN #{a} AND #{b} AND timestamp <> #{from}
+                   AND #{hashKey} = ANY(hashes) AND context___trace_id IS NOT NULL AND context___trace_id <> ''
+                 ORDER BY ^{order} LIMIT 1 |]
+    bucketsAsked = 6 :: Int
+    bucketWidth = 1800 :: NominalDiffTime
+    (nearLo, nearHi, direction) = case step of
+      Older -> (max lo (addUTCTime (negate bucketWidth) from), from, [HI.sql| DESC |])
+      Newer -> (from, min hi (addUTCTime bucketWidth from), [HI.sql| ASC |])
+      Recommended -> (lo, hi, [HI.sql| DESC |])
     -- Each window lies on one side of @from@, so the nearest event is simply the newest
     -- older one or the oldest newer one: a plain timestamp order lets TimeFusion stop at
     -- the first match instead of reading every hash hit of the day (1.5-1.9 s -> 0.15 s).
