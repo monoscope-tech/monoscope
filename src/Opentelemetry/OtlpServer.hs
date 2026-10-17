@@ -457,7 +457,7 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds inva
         -- these read-side lookups used to dead-letter the whole batch before the
         -- TF write was even attempted (2026-06-21 DLQ flood). Retry transient
         -- errors; a non-transient/exhausted failure still throws → Pkg.Queue DLQs.
-        else Hasql.retryTransientEff Telemetry.maxReadAttempts "getProjectCaches" do
+        else Hasql.retryTransientEff Telemetry.readBudgetMicros "getProjectCaches" do
           !projectIdsAndKeys <- checkpoint (cp ":getProjectIds") $ ProjectApiKeys.projectIdsByProjectApiKeys uniqueProjectKeys
           let !keyToId = HM.fromList $ V.toList projectIdsAndKeys
               !projectIds = hashNub $ atIds <> HM.elems keyToId

@@ -78,9 +78,9 @@ module Models.Telemetry.Telemetry (
   SilentUnderPersistError (..),
   unaccountedRows,
   retryHasqlWrite,
-  maxPgWriteAttempts,
-  maxTfWriteAttempts,
-  maxReadAttempts,
+  pgWriteBudgetMicros,
+  tfWriteBudgetMicros,
+  readBudgetMicros,
   handOffBatches,
   mintOtelLogIds,
   getMetricChartListData,
@@ -120,8 +120,8 @@ import Data.Aeson.Types qualified as AET
 import Data.ByteString qualified as BS
 import Data.Default (Default (..))
 import Data.Effectful.Hasql (Hasql, retryTransientLoop)
-import Data.Effectful.Sleep (Sleep)
 import Data.Effectful.Hasql qualified as Hasql
+import Data.Effectful.Sleep (Sleep)
 import Data.HashMap.Strict qualified as HM
 import Data.List.Extra (lookup)
 import Data.List.NonEmpty qualified as NE
@@ -1596,17 +1596,16 @@ writeFailureDlqHeaders wf =
         ]
 
 
--- | PostgreSQL keeps the established retry budget. TimeFusion's must outlast a
--- whole deploy — the HANDOFF drain refusals, then connection errors until the
--- replacement listens (45s on 2026-10-13, which dead-lettered a 41.3s budget) —
--- so its 41 sleeps total 181.3s before the final attempt: 4x that, yet under the
--- Kafka consumer's stall alarm ('Pkg.Queue.stallTicks'), which a batch waiting
--- out a longer TimeFusion outage would trip.
-maxPgWriteAttempts, maxTfWriteAttempts :: Int
-(maxPgWriteAttempts, maxTfWriteAttempts) = (10, 42)
+-- | Write-retry deadlines (µs). 'dualWrite' waits for both legs, so both are
+-- deadlines: slow failures (30s pool-acquisition timeouts) stop too, and a batch
+-- stays under 'Pkg.Queue.stallTicks'. TimeFusion's outlasts a whole deploy (45s
+-- on 2026-10-13, which dead-lettered a 41.3s budget) 4x; PostgreSQL keeps ~10
+-- fast attempts.
+pgWriteBudgetMicros, tfWriteBudgetMicros :: Int
+(pgWriteBudgetMicros, tfWriteBudgetMicros) = (25_000_000, 180_000_000)
 
 
--- | Retry a Hasql write up to @n@ times on transient errors with exponential
+-- | Retry a Hasql write within @budgetMicros@ on transient errors with exponential
 -- backoff (100ms → 5s cap). Non-transient errors return
 -- 'Left' immediately. TimeFusion's PGWire "TuplesOk" wire-mismatch is treated
 -- as success (rows landed; only the wire tag is wrong) — retrying would
@@ -1617,14 +1616,14 @@ maxPgWriteAttempts, maxTfWriteAttempts :: Int
 retryHasqlWrite
   :: (IOE :> es, Log :> es, Monoid a, Sleep :> es)
   => Int
-  -- ^ max attempts (must be >= 1)
+  -- ^ retry deadline (µs) from the first attempt
   -> Text
   -- ^ store label for log lines ("pg" / "tf")
   -> Eff es a
   -- ^ write action; throws on transient failure (will retry)
   -> Eff es (Either SomeException a)
-retryHasqlWrite maxAttempts store act =
-  retryTransientLoop maxAttempts "retryHasqlWrite: transient error, retrying" "store" store
+retryHasqlWrite budgetMicros store act =
+  retryTransientLoop budgetMicros "retryHasqlWrite: transient error, retrying" "store" store
     $ trySync act
     >>= \case
       Right a -> pure a
@@ -1643,11 +1642,11 @@ retryHasqlWrite maxAttempts store act =
         | otherwise -> throwIO e
 
 
--- | Read-side transient-retry budget. Smaller than 'maxWriteAttempts' (10):
--- a read blip blocking the consumer for the full ~25s write budget would stall
+-- | Read-side retry deadline (µs), ~5 fast attempts. Far below the write
+-- budgets: a read blip blocking the consumer for a whole write budget would stall
 -- the partition, and the DLQ is a fine backstop for a read that won't recover.
-maxReadAttempts :: Int
-maxReadAttempts = 5
+readBudgetMicros :: Int
+readBudgetMicros = 2_000_000
 
 
 -- | Dual-write to PG + TimeFusion concurrently. Both stores are mandatory.
@@ -1706,12 +1705,12 @@ dualWrite
   -> Eff es (Either WriteFailure (), Bool)
 dualWrite submitted target writePg writeTf = case target of
   WriteBoth -> Ki.scoped \scope -> do
-    pgThread <- forkWithCtx scope $ retryHasqlWrite maxPgWriteAttempts "pg" writePg
-    tfThread <- forkWithCtx scope $ retryHasqlWrite maxTfWriteAttempts "tf" writeTf
+    pgThread <- forkWithCtx scope $ retryHasqlWrite pgWriteBudgetMicros "pg" writePg
+    tfThread <- forkWithCtx scope $ retryHasqlWrite tfWriteBudgetMicros "tf" writeTf
     (pgRes, tfRes) <- Ki.atomically $ (,) <$> Ki.await pgThread <*> Ki.await tfThread
     (,fullyPersisted pgRes || fullyPersisted tfRes) <$> classify pgRes tfRes
-  WritePgOnly -> singleLeg "pg" This (,0) =<< retryHasqlWrite maxPgWriteAttempts "pg" writePg
-  WriteTfOnly -> singleLeg "tf" That (0,) =<< retryHasqlWrite maxTfWriteAttempts "tf" writeTf
+  WritePgOnly -> singleLeg "pg" This (,0) =<< retryHasqlWrite pgWriteBudgetMicros "pg" writePg
+  WriteTfOnly -> singleLeg "tf" That (0,) =<< retryHasqlWrite tfWriteBudgetMicros "tf" writeTf
   where
     lostOf = unaccountedRows submitted
     fullyPersisted = either (const False) ((== 0) . lostOf)

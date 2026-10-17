@@ -278,7 +278,7 @@ selectLogTable useTimefusion pid queryAST queryText cursorM dateRange projectedC
       , ("monoscope.kql.target_spans", OA.toAttribute (fromMaybe "" targetSpansM))
       ]
       $ try @SomeException
-      $ Hasql.retryTransientEff 3 "log-explorer.data"
+      $ Hasql.retryTransientEff 500_000 "log-explorer.data"
       $ checkpoint (toAnnotation ("selectLogTable", q))
       $ Hasql.withHasqlTimefusion useTimefusion (jsonArrayRows <$> Hasql.interp (rawSql q))
   let paged :: Either Text (V.Vector (V.Vector AE.Value), [Text], Int)
