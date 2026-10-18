@@ -259,6 +259,7 @@ extra-source-files:
     static/migrations/0225_repository_capabilities.sql
     static/migrations/0226_repository_configuration_sync.sql
     static/migrations/0227_repository_sync_local_baseline.sql
+    static/migrations/0228_api_change_field_evidence.sql
     test/fixtures/github-app-test.pem
 
 source-repository head
@@ -283,6 +284,7 @@ library
       Data.Effectful.Hasql
       Data.Effectful.LLM
       Data.Effectful.Notify
+      Data.Effectful.Sleep
       Data.Effectful.UUID
       Devel
       Models.Apis.ApiChanges
@@ -921,6 +923,7 @@ test-suite test-dev
       Data.Effectful.Hasql
       Data.Effectful.LLM
       Data.Effectful.Notify
+      Data.Effectful.Sleep
       Data.Effectful.UUID
       Devel
       Models.Apis.ApiChanges

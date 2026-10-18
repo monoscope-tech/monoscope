@@ -5,6 +5,7 @@ import Data.Text qualified as T
 import Hasql.Errors qualified as HE
 import Hasql.Pool qualified as HP
 import Models.Telemetry.Telemetry qualified as Telemetry
+import Pkg.Queue qualified as Queue
 import Relude
 import Test.Hspec
 
@@ -67,10 +68,12 @@ spec = describe "isTransientException" $ do
     $ \err ->
       EHasql.isTransientException (asExc err) `shouldBe` False
 
-  it "keeps PostgreSQL's retry budget and gives TimeFusion 41.3s before its last attempt" $ do
-    Telemetry.maxPgWriteAttempts `shouldBe` 10
-    Telemetry.maxTfWriteAttempts `shouldBe` 14
-    sum (EHasql.transientBackoffMicros <$> [1 .. Telemetry.maxTfWriteAttempts - 1]) `shouldBe` 41300000
+  -- 2026-10-13 04:22: a 45s TimeFusion deploy outlasted the 41.3s budget and dead-lettered 24 batches.
+  -- Each write leg's deadline plus one 30s pool-acquisition timeout must stay under the stall alarm.
+  it "lets TimeFusion outlast a whole deploy and keeps both write legs under the stall alarm" $ do
+    Telemetry.tfWriteBudgetMicros `shouldSatisfy` (>= 4 * 45_000_000)
+    for_ [Telemetry.pgWriteBudgetMicros, Telemetry.tfWriteBudgetMicros] \us ->
+      us + 30_000_000 `shouldSatisfy` (< Queue.stallTicks * 1_000_000)
 
   -- Regression for the 2026-07-06 wedged-node incident: session-backfill's
   -- lock_timeout (55P03) is an expected, self-healing skip. It must be

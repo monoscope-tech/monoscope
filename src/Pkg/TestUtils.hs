@@ -109,6 +109,7 @@ import Data.Default (def)
 import Data.Effectful.Hasql (Hasql, runHasqlPool)
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Notify qualified
+import Data.Effectful.Sleep (runNoSleep)
 import Data.Effectful.UUID (UUIDEff, runStaticUUID, runUUID)
 import Data.Effectful.Wreq (HTTP (..), runHTTPGolden, runHTTPRecord, runHTTPWreq)
 import Data.Either.Extra
@@ -601,6 +602,7 @@ runTestBackgroundWithHTTP http clock logger appCtx process = do
       & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger appCtx.config.logLevel
       & Tracing.runTracing tp
       & runUUID
+      & runNoSleep
       & http
       & ELLM.runLLMGolden "./tests/golden/"
       & runConcurrent

@@ -25,6 +25,7 @@ import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Char (isDigit, isHexDigit)
 import Data.Effectful.Hasql qualified as Hasql
+import Data.Effectful.Sleep (Sleep)
 import Data.List (partition)
 import Data.Text qualified as T
 import Data.These qualified as These
@@ -187,7 +188,7 @@ markScraped cid status =
 -- | Parse an exposition-format body and ingest its (finite) samples as metrics.
 -- Non-finite values (NaN/±Inf) are dropped — Aeson can't encode them — but never
 -- silently: the dropped count is logged. Returns the number of samples ingested.
-ingestScrapedBody :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es) => PrometheusScrapeConfig -> UTCTime -> LByteString -> Eff es Int
+ingestScrapedBody :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Sleep :> es) => PrometheusScrapeConfig -> UTCTime -> LByteString -> Eff es Int
 ingestScrapedBody cfg now body = do
   appCtx :: AuthContext <- Eff.ask
   let (finite, nonFinite) = partition Prom.isFiniteSample (Prom.parsePrometheus (decodeUtf8 body))

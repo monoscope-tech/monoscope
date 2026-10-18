@@ -8,6 +8,7 @@ module Opentelemetry.TimefusionWriteFailureSpec (spec) where
 import Control.Exception (ErrorCall (..))
 import Control.Lens ((%~), (.~))
 import Data.Effectful.Hasql qualified as EHasql
+import Data.Effectful.Sleep (sleepMicros)
 import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
 import Data.Pool (withResource)
@@ -225,7 +226,7 @@ spec = around withTestResources $ beforeWith mkResWithKey do
       let flakyRead = do
             n <- atomicModifyIORef' counter \c -> (c + 1, c + 1)
             if n < 3 then throwIO (EHasql.HasqlException emptyResetError) else pure n
-      res <- runTestBg frozenTime tr $ EHasql.retryTransientEff 5 "read-gate" flakyRead
+      res <- runTestBg frozenTime tr $ EHasql.retryTransientEff 2_000_000 "read-gate" flakyRead
       res `shouldBe` 3
       readIORef counter >>= (`shouldBe` 3)
 
@@ -234,7 +235,7 @@ spec = around withTestResources $ beforeWith mkResWithKey do
       let poisonRead = do
             void $ atomicModifyIORef' counter \c -> (c + 1, ())
             throwIO (EHasql.HasqlException poisonError)
-      res <- try @_ @SomeException (runTestBg frozenTime tr (EHasql.retryTransientEff 5 "read-gate" poisonRead) :: IO Int)
+      res <- try @_ @SomeException (runTestBg frozenTime tr (EHasql.retryTransientEff 2_000_000 "read-gate" poisonRead) :: IO Int)
       isLeft res `shouldBe` True
       readIORef counter >>= (`shouldBe` 1)
 
@@ -284,10 +285,23 @@ spec = around withTestResources $ beforeWith mkResWithKey do
     it "TuplesOk wire-mismatch is swallowed into a 0-row success (no persistence check)" \(tr, _) -> do
       res <-
         runTestBg frozenTime tr
-          $ Telemetry.retryHasqlWrite 3 "tf" (throwIO (ErrorCall "TimeFusion PGWire: Unexpected result status: TuplesOk"))
+          $ Telemetry.retryHasqlWrite 500_000 "tf" (throwIO (ErrorCall "TimeFusion PGWire: Unexpected result status: TuplesOk"))
       case res :: Either SomeException Telemetry.BulkInsertResult of
         Right bir -> bir.rowsInserted `shouldBe` 0 -- reported success, yet zero rows accounted for
         Left e -> expectationFailure $ "expected the TuplesOk swallow (Right mempty); got Left " <> show e
+
+    -- An attempt count only bounds the backoff sleeps: with 30s pool-acquisition
+    -- timeouts, TF's 42 attempts held one batch ~23 minutes past the 300s stall alarm.
+    it "a slow-failing write stops at its time budget, not after every attempt" \(tr, _) ->
+      for_ ([(Telemetry.tfWriteBudgetMicros, 6), (Telemetry.pgWriteBudgetMicros, 1)] :: [(Int, Int)]) \(budget, attempts) -> do
+        counter <- newIORef (0 :: Int)
+        let slowFail = do
+              atomicModifyIORef' counter \c -> (c + 1, ())
+              sleepMicros 30_000_000
+              throwIO (EHasql.HasqlException HP.AcquisitionTimeoutUsageError)
+        res <- runTestBg frozenTime tr $ Telemetry.retryHasqlWrite budget "tf" slowFail
+        isLeft (res :: Either SomeException Telemetry.BulkInsertResult) `shouldBe` True
+        readIORef counter >>= (`shouldBe` attempts)
 
     -- The consequence + the fix. The 0-row "success" the TuplesOk swallow above
     -- produces is indistinguishable from a store that accepted the write and

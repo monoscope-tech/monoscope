@@ -56,6 +56,7 @@ import Data.ByteString qualified as BS
 import Data.Cache qualified as Cache
 import Data.Char (digitToInt, isAlpha, isAlphaNum, isDigit, isHexDigit)
 import Data.Effectful.Hasql qualified as Hasql
+import Data.Effectful.Sleep (Sleep)
 import Data.Effectful.UUID qualified as UUID
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HashSet
@@ -96,7 +97,7 @@ import Utils (b64ToJson, freeTierDailyMaxEvents, jsonToMap, nestedJsonFromDotNot
 
 
 processMessages
-  :: (DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Tracing :> es)
+  :: (DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Sleep :> es, Tracing :> es)
   => [(Text, ByteString)]
   -> HM.HashMap Text Text
   -> Eff es (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))
