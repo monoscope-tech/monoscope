@@ -26,9 +26,9 @@ module Pages.LogExplorer.LiveTail (
 
 import Control.Exception.Safe (finally)
 import Data.Aeson qualified as AE
-import Data.List.Extra (chunksOf)
 import Data.ByteString.Builder (Builder, byteString, toLazyByteString)
 import Data.ByteString.Lazy qualified as LBS
+import Data.List.Extra (chunksOf)
 import Data.Time (UTCTime, addUTCTime)
 import Data.UUID qualified as UUID
 import Deriving.Aeson.Stock qualified as DAE
