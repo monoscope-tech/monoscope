@@ -1,4 +1,4 @@
-module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), CaseMode (..), kqlTimespanToTimeBucket, unsupportedTimespan, defaultBinWidth, FieldKey (..), pSquareBracketKey, pTerm, Jsonpath, LowerErr (..), lowerPred, renderJsonpath, resolveWildcardTimes, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), flattenedOtelAttributes, flattenedOtelAttributesBuiltin, setOtelColumns, setMetricsColumns, topLevelOtelColumns, arrayColumns, acceptedFieldRoots, FieldUniverse (..), otelFieldUniverse, metricsFieldUniverse, knownFieldRoot, suggestFieldRoot, transformFlattenedAttribute, outputFieldAliases, errorFlagSql, severityIsErrorSql, sqlStringLit) where
+module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), CaseMode (..), kqlTimespanToTimeBucket, unsupportedTimespan, defaultBinWidth, FieldKey (..), pSquareBracketKey, pTerm, Jsonpath, LowerErr (..), lowerPred, renderJsonpath, resolveWildcardTimes, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), searchExpr, flattenedOtelAttributes, flattenedOtelAttributesBuiltin, setOtelColumns, setMetricsColumns, topLevelOtelColumns, arrayColumns, acceptedFieldRoots, FieldUniverse (..), otelFieldUniverse, metricsFieldUniverse, knownFieldRoot, suggestFieldRoot, transformFlattenedAttribute, outputFieldAliases, errorFlagSql, severityIsErrorSql, sqlStringLit) where
 
 import Control.Monad.Combinators.Expr (
   Operator (InfixL),
@@ -192,6 +192,7 @@ data Expr
   | ValGTEq Values Values -- Value-to-value greater than or equal
   | ValLTEq Values Values -- Value-to-value less than or equal
   | BoolFunc Values -- Boolean scalar function as standalone expression (isnull, isnotnull, isempty, isnotempty)
+  | FreeText Text -- Free text: a standalone quoted string, matched by 'searchExpr'
   | ArrayHas Text Text -- TimeFusion-only lowering of `col[*] == "v"` on a native array column; never parsed, see rewriteSectionsForSource
   deriving stock (Eq, Generic, Ord, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
@@ -492,6 +493,10 @@ pValues = pValuesWith pValues [try pScalarFunc] -- try pScalarFunc must come fir
 -- >>> parse pTerm "" (toQText e) == Right e
 -- True
 --
+-- A standalone quoted string is free text:
+-- >>> parse pTerm "" "\"deadlock\""
+-- Right (FreeText "deadlock")
+--
 -- Standalone subject is treated as isnotempty check (KQL spec):
 -- >>> parse pTerm "" "x.y.z"
 -- Right (BoolFunc (ScalarFunc "isnotempty" [Field (Subject "x.y.z" "x" [FieldKey "y",FieldKey "z"])]))
@@ -504,6 +509,7 @@ pTerm =
     <|> try (Regex CI <$> pSubject <* space <* void (symbol "matches") <* space <*> regexPattern '/')
     <|> try regexParser
     <|> try (BoolFunc <$> pBoolScalarFunc) -- Standalone boolean functions: isnull(x), isnotnull(x), etc.
+    <|> (FreeText <$> (regexPattern '"' <|> regexPattern '\''))
     <|> (BoolFunc . ScalarFunc "isnotempty" . pure . Field <$> pSubject) -- Standalone subject = isnotempty check per KQL spec
 
 
@@ -1446,6 +1452,7 @@ instance Display Expr where
   displayPrec prec (And u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " AND " <> displayPrec prec u2
   displayPrec prec (Or u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " OR " <> displayPrec prec u2
   displayPrec prec (BoolFunc v) = displayPrec prec v -- Boolean scalar function renders directly to SQL
+  displayPrec prec (FreeText t) = displayPrec prec (searchExpr t)
   displayPrec prec (ArrayHas col v) = displayPrec prec $ "array_has(" <> col <> ", " <> sqlStringLit v <> ")"
   displayPrec _ _ = error "Display Expr: unreachable"
 
@@ -1461,8 +1468,20 @@ instance ToQueryText Expr where
   toQText (And left right) = toQText left <> " AND " <> toQText right
   toQText (Or left right) = toQText left <> " OR " <> toQText right
   toQText (BoolFunc v) = toQText v
+  toQText (FreeText t) = toQText (Str t)
   toQText (ArrayHas col v) = col <> "[*] == " <> toQText (Str v)
   toQText _ = error "ToQueryText Expr: unreachable"
+
+
+-- | What free text means: a case-insensitive substring of the columns a person reads as "the
+-- message". Span errors (e.g. MySQL deadlocks) live in @status_message@, not @body@.
+--
+-- >>> toQText (searchExpr "deadlock")
+-- "(body contains \"deadlock\" OR status_message contains \"deadlock\" OR name contains \"deadlock\")"
+searchExpr :: Text -> Expr
+searchExpr t = Paren $ Or (c "body") (Or (c "status_message") (c "name"))
+  where
+    c col = Contains (Subject col col []) (Str t)
 
 
 -- Helper function to handle the common display logic

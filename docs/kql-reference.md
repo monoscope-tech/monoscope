@@ -118,7 +118,7 @@ response_time >= 100 and response_time <= 500
 
 | Operator | Description | Case-sensitive match? | Example |
 |----------|-------------|----------------|---------|
-| `has` | Contains word (token match) | No | `message has "error"` |
+| `has` | Contains substring (same as `contains`) | No | `message has "error"` |
 | `!has` | Does not contain word | No | `message !has "debug"` |
 | `contains` | Contains substring (any position) | No | `url contains "/api"` |
 | `!contains` | Does not contain substring | No | `path !contains "/health"` |
@@ -132,18 +132,17 @@ response_time >= 100 and response_time <= 500
 
 `Yes` means case-sensitive matching; `No` means case-insensitive matching. In particular, `matches regex` preserves case, while slash-regex `matches` and `=~` ignore it.
 
-**`has` vs `contains`:**
-- `has` matches whole words/tokens (bounded by non-alphanumeric characters)
-- `contains` matches any substring regardless of word boundaries
+**`has` vs `contains`:** both are case-insensitive substring matches today; `has` does not
+enforce word boundaries (`"errorcode" has "error"` matches).
+
+**Free-text search:** a quoted string on its own searches the text a person reads as the
+message — `body`, `status_message` and `name` — case-insensitively. It is how you find a
+span error (e.g. a MySQL deadlock) whose text sits in `status_message`, not `body`. An
+unquoted word is a field name, so `deadlock` alone is an "Unknown field" error.
 
 ```kusto
-// has matches whole words only
-"error code 500" has "error"      // ✓ matches (word boundary)
-"errorcode 500" has "error"       // ✗ no match (no word boundary)
-
-// contains matches any substring
-"error code 500" contains "error" // ✓ matches
-"errorcode 500" contains "error"  // ✓ matches
+"deadlock"                         // body, status_message or name contains "deadlock"
+"deadlock" and service.name == "api"
 ```
 
 **Examples:**

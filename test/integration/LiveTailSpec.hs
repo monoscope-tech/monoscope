@@ -211,6 +211,14 @@ spec = do
       map (\case LT.TableRow m -> maybe False capped (Map.lookup "summary" m); _ -> False) eventsRows `shouldBe` [True]
       map (\case LT.LogRow f -> maybe False capped (Map.lookup "summary" f.fields); _ -> False) tabRows `shouldBe` [True]
 
+    it "liveTail_freeTextQuery_matchesLikeTheExplorer" do
+      let sub = mkSubScoped 29 (LT.AllSignals Nothing) ["id"] Nothing "\"deadlock\""
+          errSpan = (spanRecord "checkout" "prod" "error"){Telemetry.status_message = Just "Deadlock found when trying to get lock"}
+      (conn, rt) <- fixture [sub]
+      _ <- LT.publishMatches rt pid (V.fromList [logRecord "checkout" "prod" "error" "ER_LOCK_DEADLOCK", errSpan, logRecord "checkout" "prod" "info" "order saved"])
+      (rows, _) <- LT.takeBatch conn
+      length rows `shouldBe` 2
+
   describe "Events live mode (AllSignals scope)" do
     it "delivers spans, which a logs-only subscription must never see" do
       -- The whole reason Events needs its own scope. One project can have both open at once,

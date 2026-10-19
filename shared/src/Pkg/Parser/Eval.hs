@@ -252,6 +252,7 @@ evalExpr r = go
       E.ValLTEq a b -> pure (vcmp a b (/= GT))
       E.BoolFunc v -> pure (any truthy (evalValue r v))
       E.ArrayHas col v -> go (E.Eq (E.Subject col col [E.ArrayWildcard ""]) (E.Str v))
+      E.FreeText t -> go (E.searchExpr t)
 
     anyOf s p = any p (r s)
 

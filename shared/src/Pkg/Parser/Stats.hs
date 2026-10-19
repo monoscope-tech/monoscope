@@ -561,6 +561,7 @@ traverseAst f g = traverse goSec
         ValLTEq a b -> ValLTEq <$> goV a <*> goV b
         BoolFunc v -> BoolFunc <$> goV v
         e@ArrayHas{} -> pure e
+        e@FreeText{} -> pure e
     goV = \case
       Field s -> Field <$> f s
       List vs -> List <$> traverse goV vs
@@ -1492,6 +1493,8 @@ data QueryError = QueryError {message :: Text, column :: Int, width :: Int}
 --
 -- >>> first (.message) $ parseQueryDiagnosed (Just SMetrics) "level == \"ERROR\" | summarize count(*) by bin_auto(timestamp)"
 -- Left "Unknown field \"level\""
+-- >>> first (.message) $ parseQueryDiagnosed Nothing "deadlock"
+-- Left "Unknown field \"deadlock\". To search text, quote it: \"deadlock\""
 -- >>> first (.message) $ parseQueryDiagnosed (Just SMetrics) "| summarize count(*) by coalesce(status_code, \"unknown\")"
 -- Left "Unknown field \"status_code\""
 --
@@ -1616,7 +1619,17 @@ unknownField sections = listToMaybe (mapMaybe check (collectSubjects sections))
     isNumericLiteral t = not (T.null t) && T.all (\c -> isDigit c || c == '.') t
     check (Subject entire root _)
       | isNumericLiteral root || knownFieldRoot fieldUniverse root || root `elem` definedNames sections = Nothing
-      | otherwise = Just (entire, "Unknown field \"" <> entire <> "\"" <> maybe "" (\s -> ". Did you mean \"" <> s <> "\"?") (suggestFieldRoot fieldUniverse root))
+      | otherwise = Just (entire, "Unknown field \"" <> entire <> "\"" <> maybe quoteHint (\s -> ". Did you mean \"" <> s <> "\"?") (suggestFieldRoot fieldUniverse root))
+      where
+        quoteHint = if entire `elem` bareWords then ". To search text, quote it: \"" <> entire <> "\"" else ""
+    -- Words typed on their own (parsed as `isnotempty(word)`), where free text was likely meant.
+    bareWords = concat [bare e | sec <- sections, e <- case sec of Search x -> [x]; WhereClause x -> [x]; _ -> []]
+    bare = \case
+      Paren e -> bare e
+      And a b -> bare a <> bare b
+      Or a b -> bare a <> bare b
+      BoolFunc (ScalarFunc "isnotempty" [Field (Subject entire _ _)]) -> [entire]
+      _ -> []
 
 
 -- | Result-column names a query introduces: explicit @extend@/@project@ keys
