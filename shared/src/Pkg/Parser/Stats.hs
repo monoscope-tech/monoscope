@@ -71,7 +71,7 @@ import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (Display, display, displayBuilder, displayPrec)
 import Pkg.Deriving (WrappedEnumSC (..))
-import Pkg.Parser.Expr (Expr (..), FieldKey (..), Parser, Subject (..), ToQueryText (..), Values (..), arrayColumns, defaultBinWidth, knownFieldRoot, kqlTimespanToTimeBucket, metricsFieldUniverse, otelFieldUniverse, pExpr, pSubject, pValues, suggestFieldRoot, unsupportedTimespan)
+import Pkg.Parser.Expr (Expr (..), FieldKey (..), Parser, Subject (..), ToQueryText (..), Values (..), arrayColumns, searchExpr, defaultBinWidth, knownFieldRoot, kqlTimespanToTimeBucket, metricsFieldUniverse, otelFieldUniverse, pExpr, pSubject, pValues, suggestFieldRoot, unsupportedTimespan)
 import Relude hiding (GT, LT, Last, Sum, many, some)
 import Text.Megaparsec
 import Text.Megaparsec.Char (alphaNumChar, char, digitChar, hspace, space, string)
@@ -561,7 +561,7 @@ traverseAst f g = traverse goSec
         ValLTEq a b -> ValLTEq <$> goV a <*> goV b
         BoolFunc v -> BoolFunc <$> goV v
         e@ArrayHas{} -> pure e
-        e@FreeText{} -> pure e
+        FreeText t -> goE (searchExpr t)
     goV = \case
       Field s -> Field <$> f s
       List vs -> List <$> traverse goV vs

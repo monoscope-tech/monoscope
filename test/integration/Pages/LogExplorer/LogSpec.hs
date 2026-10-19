@@ -440,9 +440,6 @@ databaseSpec = do
       V.length r.logsData `shouldBe` 0
       r.count `shouldBe` 0
 
-    -- 2026-08-06: `attribute contains "…"` (singular) reached the database as a
-    -- column and came back as a raw "Schema error: No field named attribute"
-    -- logged at ATTENTION. It must be rejected before any SQL is built.
     -- Shipbubble 2026-10-19: searching `deadlock` returned `Unknown field "deadlock"`, and even
     -- `body has "deadlock"` missed the MySQL deadlocks, which sit in span status messages.
     it "freeTextSearch_findsSpanStatusMessageAndLogBody" \tr -> do
@@ -459,6 +456,9 @@ databaseSpec = do
       bare <- search "deadlock"
       bare.error `shouldBe` Just "Unknown field \"deadlock\". To search text, quote it: \"deadlock\""
 
+    -- 2026-08-06: `attribute contains "…"` (singular) reached the database as a
+    -- column and came back as a raw "Schema error: No field named attribute"
+    -- logged at ATTENTION. It must be rejected before any SQL is built.
     it "names the unknown field instead of shipping it to the database" \tr -> do
       r <- fetchData tr (Just "attribute contains \"Red Flashlight\"") Nothing Nothing Nothing Nothing Nothing
       r.error `shouldBe` Just "Unknown field \"attribute\". Did you mean \"attributes\"?"

@@ -115,7 +115,7 @@ export class LiveStream {
     });
 
     const alive = () => {
-      if (this.stallTimer) window.clearTimeout(this.stallTimer);
+      this.clearStall();
       this.stallTimer = window.setTimeout(() => source.onerror?.(new Event('error')), STALL_MS);
     };
     source.addEventListener('ping', alive);
@@ -159,8 +159,7 @@ export class LiveStream {
     // EventSource retries on its own, but it can't know the subscription expired — so we own
     // the retry and re-register instead of reconnecting to a lease that is gone.
     source.onerror = () => {
-      if (this.stallTimer) window.clearTimeout(this.stallTimer);
-      this.stallTimer = null;
+      this.clearStall();
       if (this.stopped || this.source !== source) return;
       source.close();
       this.source = null;
@@ -212,6 +211,11 @@ export class LiveStream {
     }
   }
 
+  private clearStall() {
+    if (this.stallTimer) window.clearTimeout(this.stallTimer);
+    this.stallTimer = null;
+  }
+
   stop(): void {
     this.generation++;
     this.stopped = true;
@@ -219,8 +223,8 @@ export class LiveStream {
     this.source = null;
     if (this.renewTimer) window.clearTimeout(this.renewTimer);
     if (this.reconnectTimer) window.clearTimeout(this.reconnectTimer);
-    if (this.stallTimer) window.clearTimeout(this.stallTimer);
-    this.renewTimer = this.reconnectTimer = this.stallTimer = null;
+    this.clearStall();
+    this.renewTimer = this.reconnectTimer = null;
     if (this.subscriptionId) {
       // `keepalive` so this still goes out during unload — sendBeacon can't, it only POSTs.
       // Best effort regardless: the lease expiry is what actually guarantees cleanup.

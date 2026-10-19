@@ -138,6 +138,8 @@ export const virtualItemKey = (item: VirtualListItem) =>
  * that. It needs a real browser and someone watching. See plans/log-list-performance.md.
  */
 export const MAX_RETAINED_ROWS = 2500;
+// Matches the server's maxRowFieldChars (Pkg.LiveTail).
+export const MAX_FIELD_CHARS = 8000;
 // Matches Tailwind's `md` breakpoint, so the JS-side column switch and the CSS-side
 // `max-md:` rules flip at the same width instead of disagreeing in a 1px band.
 const NARROW_VIEWPORT = '(max-width: 767px)';
@@ -781,13 +783,6 @@ export class LogList extends LitElement {
     void this.startLiveStream();
   }
 
-  /**
-   * Merge pushed rows through the same path a recent fetch uses.
-   *
-   * Reusing `groupSpans` and `mergeIntoTree` is what keeps trace grouping, the new-row
-   * highlight and the scroll-anchoring identical between pushed and fetched rows — a second
-   * merge path would drift from this one on the first change to either.
-   */
   // A busy tail delivers many SSE frames per paint; merging each one re-sorts the whole list.
   private pendingLiveRows: unknown[] = [];
   private queueLiveRows(rows: unknown[], owner = this.liveStream) {
@@ -804,6 +799,13 @@ export class LogList extends LitElement {
     });
   }
 
+  /**
+   * Merge pushed rows through the same path a recent fetch uses.
+   *
+   * Reusing `groupSpans` and `mergeIntoTree` is what keeps trace grouping, the new-row
+   * highlight and the scroll-anchoring identical between pushed and fetched rows — a second
+   * merge path would drift from this one on the first change to either.
+   */
   private handleLiveRows(rows: unknown[]) {
     if (!rows.length || !this.colIdxMap) return;
     const positional = rows
@@ -2989,8 +2991,8 @@ export class LogList extends LitElement {
     const summary = lookupVecValue<string[] | string>(dataArr, cim, 'summary');
     // Coerce non-string elements (e.g. a TF to_jsonb that re-parsed JSON-looking
     // text) so one bad element can't throw and blank the whole row.
-    // Capped like live tail's maxRowFieldChars: a multi-MB body otherwise renders whole.
-    const cap = (els: unknown[]) => els.map((e) => (typeof e === 'string' ? e : (JSON.stringify(e) ?? '')).slice(0, 8000));
+    // A multi-MB body otherwise renders whole.
+    const cap = (els: unknown[]) => els.map((e) => (typeof e === 'string' ? e : (JSON.stringify(e) ?? '')).slice(0, MAX_FIELD_CHARS));
     if (Array.isArray(summary)) return cap(summary);
     try {
       return typeof summary === 'string' ? cap(JSON.parse(summary)) : [];

@@ -633,8 +633,6 @@ logBody = \case
 -- Fixtures
 -- ---------------------------------------------------------------------------------------
 
--- | One subscription, one attached connection, and the runtime an ingest pod would hold one
--- cache refresh after the browser registered.
 -- | The first @n@ SSE frames a stream body yields.
 takeFrames :: Int -> SourceT IO Builder -> IO [Text]
 takeFrames n (SourceT run) = run (go n)
@@ -648,6 +646,8 @@ takeFrames n (SourceT run) = run (go n)
       _ -> pure []
 
 
+-- | One subscription, one attached connection, and the runtime an ingest pod would hold one
+-- cache refresh after the browser registered.
 fixture :: [LT.Subscription] -> IO (LT.Conn, LT.Runtime)
 fixture subs = do
   hub <- LT.newHub

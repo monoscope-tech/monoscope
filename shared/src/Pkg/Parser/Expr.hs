@@ -192,7 +192,7 @@ data Expr
   | ValGTEq Values Values -- Value-to-value greater than or equal
   | ValLTEq Values Values -- Value-to-value less than or equal
   | BoolFunc Values -- Boolean scalar function as standalone expression (isnull, isnotnull, isempty, isnotempty)
-  | FreeText Text -- Free text: a standalone quoted string, matched by 'searchExpr'
+  | FreeText Text -- Free text: a standalone quoted string, matched by 'searchExpr'; kept unexpanded so the query box round-trips what was typed
   | ArrayHas Text Text -- TimeFusion-only lowering of `col[*] == "v"` on a native array column; never parsed, see rewriteSectionsForSource
   deriving stock (Eq, Generic, Ord, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
