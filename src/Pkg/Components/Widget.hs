@@ -1613,7 +1613,7 @@ renderTableWithDataAndParams widget dataRows params = do
             rowValue = maybe firstColValue (\tpl -> foldl' (\t (col, idx) -> T.replace ("{{row." <> col.field <> "}}") (getRowValue idx row) t) tpl (zip columns [0 ..])) (widget.onRowClick >>= (.value))
             isCurrent = Just rowValue == currentVar
         tr_
-          ( [class_ $ memptyIfFalse (isJust widget.onRowClick) "hover cursor-pointer" <> memptyIfFalse isCurrent " bg-fillBrand-weak font-semibold"]
+          ( [class_ $ "hover" <> memptyIfFalse (isJust widget.onRowClick) " cursor-pointer" <> memptyIfFalse isCurrent " bg-fillBrand-weak font-semibold"]
               <> [term "aria-current" "true" | isCurrent]
               <> rowNavAttrs rowValue
           )

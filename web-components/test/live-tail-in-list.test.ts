@@ -239,6 +239,14 @@ describe('live tail at the retention cap', () => {
     expect((el as any).spanListTree.length).toBeLessThanOrEqual(MAX_RETAINED_ROWS);
   });
 
+  // requestAnimationFrame never fires in a hidden tab, while SSE frames keep arriving.
+  test('liveTail_hiddenTab_pendingRowsStayBounded', async () => {
+    const el = await seeded(false);
+    for (let m = 0; m < 3 * MAX_RETAINED_ROWS; m += 100) (el as any).queueLiveRows(Array.from({ length: 100 }, (_, i) => pushed(`h-${m + i}`)));
+    expect((el as any).pendingLiveRows.length).toBeLessThanOrEqual(MAX_RETAINED_ROWS);
+    expect((el as any).pendingLiveRows.at(-1).cols.id).toBe(`h-${3 * MAX_RETAINED_ROWS - 1}`);
+  });
+
   test('liveTail_burstOfFrames_mergesOncePerAnimationFrame', async () => {
     const el = await seeded(false);
     scrollHarness(el).scrollTo(0);

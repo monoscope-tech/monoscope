@@ -131,7 +131,7 @@ Fix steps:
         typo silently becomes a substring search.
 
       Free text compiles to an OR of ILIKE literals: `body ILIKE '%t%' OR status_message ILIKE '%t%'
-      OR name ILIKE '%t%'`. ILIKE literals route to tantivy; `::text ~*` on Variants does not.
+      OR name ILIKE '%t%'`. Both ILIKE and `::text ~*` literals route on TF `origin/master`. Yesterday, the emitted `~*` OR took 9.4 s and the ILIKE form 9.5 s.
       `attributes___exception___message` is added only after the TF index for it is deployed.
       Doctest in `Expr.hs`: `"deadlock"` parses to `FreeText`. A known field still gives `isnotempty`.
       Escaping of `%`, `_` and `'` is pinned.
@@ -220,12 +220,14 @@ Fix steps:
 
 ## Rollout
 
-Each item is a separate PR. Before pushing each one: run `/hs-distill`, `/hs-evasion-review`,
-`/hs-lob-review` and `/simplify`, then `make ci-signoff`.
+Items 1–6 ship together as one PR from `fix/live-tail-freeze-kafka-retention`. Before pushing, run `/hs-distill`, `/hs-evasion-review`, `/hs-lob-review` and `/simplify`, then `make ci-signoff`. The KQL skill fix ships separately from monoscope-skills `fix/kql-free-text-search`.
 
-1. PR-1 live tail (items 1a–1c first: server-side cap and frame bound alone stop the freeze).
-2. PR-2 free-text search (monoscope). In parallel, a TF PR for OR routing and the extra indexes, after deployment state is confirmed.
-3. PR-3 Databases tab (items 3–5 together; all YAML + `Widget.hs`).
+Follow-ups:
+- TF: index today's sealed files.
+- TF: ngram3 indexes on `exception.message` and `db.query.text`.
+- Datadog-style free text: bare words as AND-ed terms, quoted phrases tolerant of punctuation.
+- 4 materialized `_overview` dashboards keep the old error-rate tile. The 250 template-backed ones pick up the change on deploy.
+
 4. Reply to the customer:
    - Workaround until PR-2 ships: `status_message has "deadlock"`. It finds the span errors in about 1 s.
      Use `body has "deadlock"` for log lines.

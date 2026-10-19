@@ -791,7 +791,11 @@ export class LogList extends LitElement {
   // A busy tail delivers many SSE frames per paint; merging each one re-sorts the whole list.
   private pendingLiveRows: unknown[] = [];
   private queueLiveRows(rows: unknown[], owner = this.liveStream) {
-    if (this.pendingLiveRows.push(...rows) !== rows.length) return;
+    const scheduled = this.pendingLiveRows.length > 0;
+    this.pendingLiveRows.push(...rows);
+    // Retention would evict anything older at merge anyway; this bounds a hidden tab.
+    if (this.pendingLiveRows.length > MAX_RETAINED_ROWS) this.pendingLiveRows.splice(0, this.pendingLiveRows.length - MAX_RETAINED_ROWS);
+    if (scheduled) return;
     requestAnimationFrame(() => {
       const batch = this.pendingLiveRows;
       this.pendingLiveRows = [];
