@@ -52,6 +52,27 @@ describe('LiveStream lifecycle', () => {
     expect(live.openCount()).toBe(0);
   });
 
+  // Shipbubble 2026-10-19: a dead stream sat on "14:17" with nothing saying it had stopped.
+  test('liveStream_silentAfterPing_reconnectsInsteadOfFreezing', async () => {
+    vi.useFakeTimers();
+    withFakes({ subscription_id: 's1', stream_url: '/stream/s1', expires_at: new Date(Date.now() + 45000).toISOString() });
+    const states: string[] = [];
+    const s = new LiveStream({ projectId: 'p1', leaseSecs: 45, body: () => ({}), onRows: () => {}, onState: st => states.push(st) });
+    await s.start();
+    live.last!.emit('ready', {});
+    vi.advanceTimersByTime(60_000);
+    expect(states).not.toContain('reconnecting'); // no ping yet: an older server, not a dead one
+
+    live.last!.emit('ping', {});
+    vi.advanceTimersByTime(20_000);
+    live.last!.emit('ping', {});
+    vi.advanceTimersByTime(20_000);
+    expect(states).not.toContain('reconnecting');
+    vi.advanceTimersByTime(10_000);
+    expect(states).toContain('reconnecting');
+    s.stop();
+  });
+
   test('surfaces the server refusal instead of a generic message', async () => {
     // The server names the actual cause (service gate, bad filter, limit hit); replacing it
     // with our own text would hide which of those the user has to fix.

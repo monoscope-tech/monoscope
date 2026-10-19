@@ -6,6 +6,7 @@
 // where the viewport ends up, and what happens when the query changes mid-stream. Those
 // need real geometry, so they run against the scroll simulator.
 import { describe, test, expect } from 'vitest';
+import { MAX_RETAINED_ROWS } from '../src/log-list';
 import { row, serverTransport, serverTransportFlipped, logPage, mountList, scrollHarness, flushFrames, ids, ROW_H } from './log-list-harness';
 
 const DIRECTIONS = [
@@ -220,5 +221,34 @@ describe.each(DIRECTIONS)('live tail: $name', ({ flip }) => {
     await el.fetchData('new-query', true);
 
     expect((el as any).liveDropped).toBe(0);
+  });
+});
+
+// Shipbubble 2026-10-19: past the retention cap every live message bumped virtualizerEpoch,
+// so a busy tail remounted the whole list per SSE frame and froze the tab.
+describe('live tail at the retention cap', () => {
+  test('liveTail_atRetentionCap_doesNotRemountPerMessage', async () => {
+    const el = await seeded(false, MAX_RETAINED_ROWS);
+    scrollHarness(el).scrollTo(0);
+    const epoch = (el as any).virtualizerEpoch;
+    for (let m = 0; m < 5; m++) (el as any).handleLiveRows(Array.from({ length: 50 }, (_, i) => pushed(`live-${m}-${i}`)));
+    await flushFrames();
+
+    expect((el as any).virtualizerEpoch).toBe(epoch);
+    expect(ids(el)).toContain('live-4-49');
+    expect((el as any).spanListTree.length).toBeLessThanOrEqual(MAX_RETAINED_ROWS);
+  });
+
+  test('liveTail_burstOfFrames_mergesOncePerAnimationFrame', async () => {
+    const el = await seeded(false);
+    scrollHarness(el).scrollTo(0);
+    let merges = 0;
+    const orig = (el as any).handleLiveRows.bind(el);
+    (el as any).handleLiveRows = (rows: unknown[]) => (merges++, orig(rows));
+    for (let m = 0; m < 200; m++) (el as any).queueLiveRows([pushed(`burst-${m}`)]);
+    await flushFrames();
+
+    expect(merges).toBe(1);
+    expect(ids(el)).toContain('burst-199');
   });
 });

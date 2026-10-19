@@ -754,7 +754,7 @@ export class LogList extends LitElement {
       leaseSecs: 45,
       body: () => body,
       onRows: (rows) => {
-        if (this.liveStream === stream) this.handleLiveRows(rows);
+        if (this.liveStream === stream) this.queueLiveRows(rows, stream);
       },
       onDropped: (total) => {
         if (this.liveStream !== stream) return;
@@ -788,6 +788,18 @@ export class LogList extends LitElement {
    * highlight and the scroll-anchoring identical between pushed and fetched rows — a second
    * merge path would drift from this one on the first change to either.
    */
+  // A busy tail delivers many SSE frames per paint; merging each one re-sorts the whole list.
+  private pendingLiveRows: unknown[] = [];
+  private queueLiveRows(rows: unknown[], owner = this.liveStream) {
+    if (this.pendingLiveRows.push(...rows) !== rows.length) return;
+    requestAnimationFrame(() => {
+      const batch = this.pendingLiveRows;
+      this.pendingLiveRows = [];
+      // A query change replaces the stream; its unflushed rows belong to the old query.
+      if (this.liveStream === owner) this.handleLiveRows(batch);
+    });
+  }
+
   private handleLiveRows(rows: unknown[]) {
     if (!rows.length || !this.colIdxMap) return;
     const positional = rows
@@ -826,7 +838,7 @@ export class LogList extends LitElement {
       // pushed down on purpose. Anchoring would scroll the previous top row back into view
       // every tick — a visible bounce that also hides the rows just streamed in.
       const anchor = container && !atInsertionEdge(scrollTop, scrolledToBottom, this.flipDirection) ? this.captureScrollAnchor() : null;
-      this.spanListTree = this.mergeIntoTree(tree, true);
+      this.spanListTree = this.mergeIntoTree(tree, true, !anchor);
       this.updateVisibleItems();
       if (anchor) void this.restoreScrollAnchor(anchor);
     }
@@ -2231,7 +2243,7 @@ export class LogList extends LitElement {
   // Merge a freshly fetched page into spanListTree, dropping ids already present
   // (boundary row recurs across inclusive-cursor pages) using the persistent
   // seenIds set so the cost is O(page), not O(whole tree).
-  private mergeIntoTree(newData: EventLine[], isRecentFetch: boolean) {
+  private mergeIntoTree(newData: EventLine[], isRecentFetch: boolean, readerAtInsertionEdge = false) {
     const fresh = newData.filter((r) => {
       if (this.seenIds.has(r.id)) return false;
       this.seenIds.add(r.id);
@@ -2273,8 +2285,12 @@ export class LogList extends LitElement {
     this.loadingSessions = Object.fromEntries(Object.entries(this.loadingSessions).filter(([id]) => retainedIds.has(id)));
     if (isRecentFetch) this.hasMore = true;
     else this.hasNewer = true;
-    this.virtualizerEpoch++;
-    this.holdRepositioningForRemount();
+    // Cutting the far end under a reader parked at the insertion edge moves nothing on screen;
+    // remounting there anyway rebuilt the whole list on every live frame.
+    if (dropStart || !readerAtInsertionEdge) {
+      this.virtualizerEpoch++;
+      this.holdRepositioningForRemount();
+    }
     return kept;
   }
 
@@ -2969,9 +2985,11 @@ export class LogList extends LitElement {
     const summary = lookupVecValue<string[] | string>(dataArr, cim, 'summary');
     // Coerce non-string elements (e.g. a TF to_jsonb that re-parsed JSON-looking
     // text) so one bad element can't throw and blank the whole row.
-    if (Array.isArray(summary)) return summary.map((e) => (typeof e === 'string' ? e : (JSON.stringify(e) ?? '')));
+    // Capped like live tail's maxRowFieldChars: a multi-MB body otherwise renders whole.
+    const cap = (els: unknown[]) => els.map((e) => (typeof e === 'string' ? e : (JSON.stringify(e) ?? '')).slice(0, 8000));
+    if (Array.isArray(summary)) return cap(summary);
     try {
-      return typeof summary === 'string' ? JSON.parse(summary) : [];
+      return typeof summary === 'string' ? cap(JSON.parse(summary)) : [];
     } catch (err) {
       // Silent [] made whole rows render blank with no signal. Log + surface a
       // visible sentinel so support engineers can spot malformed payloads.

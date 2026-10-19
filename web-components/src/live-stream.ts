@@ -34,6 +34,9 @@ export type LiveStreamOptions = {
 
 export type LiveState = 'idle' | 'connecting' | 'live' | 'reconnecting' | 'expired' | 'error';
 
+/** 2.5 server heartbeats (10s each). */
+const STALL_MS = 25_000;
+
 /** Reconnect backoff, capped so a long outage doesn't become a long silence. */
 const BACKOFF_MS = [1000, 2000, 5000, 10000, 15000];
 
@@ -42,6 +45,9 @@ export class LiveStream {
   private subscriptionId: string | null = null;
   private renewTimer: number | null = null;
   private reconnectTimer: number | null = null;
+  // Armed by the first `ping` (servers that predate it send none): silence past this means the
+  // connection is dead, and a dead stream must not keep showing its last row as "live".
+  private stallTimer: number | null = null;
   private attempt = 0;
   private stopped = true;
   // Invalidates registrations that are still awaiting fetch/json when the stream is stopped
@@ -108,7 +114,14 @@ export class LiveStream {
       this.opts.onState('live');
     });
 
+    const alive = () => {
+      if (this.stallTimer) window.clearTimeout(this.stallTimer);
+      this.stallTimer = window.setTimeout(() => source.onerror?.(new Event('error')), STALL_MS);
+    };
+    source.addEventListener('ping', alive);
+
     source.addEventListener('log', e => {
+      if (this.stallTimer) alive();
       try {
         this.opts.onRows(JSON.parse((e as MessageEvent).data));
       } catch {
@@ -146,7 +159,9 @@ export class LiveStream {
     // EventSource retries on its own, but it can't know the subscription expired — so we own
     // the retry and re-register instead of reconnecting to a lease that is gone.
     source.onerror = () => {
-      if (this.stopped) return;
+      if (this.stallTimer) window.clearTimeout(this.stallTimer);
+      this.stallTimer = null;
+      if (this.stopped || this.source !== source) return;
       source.close();
       this.source = null;
       this.scheduleReconnect();
@@ -204,7 +219,8 @@ export class LiveStream {
     this.source = null;
     if (this.renewTimer) window.clearTimeout(this.renewTimer);
     if (this.reconnectTimer) window.clearTimeout(this.reconnectTimer);
-    this.renewTimer = this.reconnectTimer = null;
+    if (this.stallTimer) window.clearTimeout(this.stallTimer);
+    this.renewTimer = this.reconnectTimer = this.stallTimer = null;
     if (this.subscriptionId) {
       // `keepalive` so this still goes out during unload — sendBeacon can't, it only POSTs.
       // Best effort regardless: the lease expiry is what actually guarantees cleanup.

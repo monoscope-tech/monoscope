@@ -18,6 +18,7 @@ module LiveTailSpec (spec) where
 import Control.Concurrent.STM (isEmptyTBQueue)
 import Control.Exception.Safe qualified as Safe
 import Data.Aeson qualified as AE
+import Data.ByteString.Builder (Builder, toLazyByteString)
 import Data.HashMap.Strict qualified as HM
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -32,6 +33,7 @@ import Pkg.DeriveUtils (AesonText (..), UUIDId (..))
 import Pkg.LiveTail qualified as LT
 import Pkg.TestUtils (TestResources (..), assertNonMemberDenied, createTestAPIKey, createTestProject, frozenTime, ingestLog, runHasqlEffect, testServant, withTestResources)
 import Relude
+import Servant.Types.SourceT (SourceT (..), StepT (..))
 import System.Config (AuthContext (hasqlPool, liveTail))
 import Test.Hspec (Spec, around, describe, it, shouldBe, shouldContain, shouldReturn, shouldSatisfy)
 
@@ -571,6 +573,20 @@ spec = do
       active <- runHasqlEffect tr $ LT.activeSubscriptions 100
       map (.id) active `shouldSatisfy` notElem (fromMaybe (UUIDId UUID.nil) expired)
 
+  describe "LiveTail SSE framing" do
+    -- Shipbubble 2026-10-19: a 500-row drain went out as one frame, parsed on the main thread.
+    it "liveTail_largeDrain_splitsIntoBoundedFrames" do
+      let sub = mkSub 28 "checkout" Nothing ""
+      hub <- LT.newHub
+      conn <- LT.newConn LT.queueCapacity
+      _ <- LT.attachConn hub sub.id conn
+      rt <- runtimeWith hub [sub]
+      _ <- LT.publishMatches rt pid (V.fromList [logRecord "checkout" "prod" "info" (show i) | i <- [1 .. 250 :: Int]])
+      frames <- takeFrames 4 (LiveTailPage.streamFrom sub conn pass)
+      let logFrames = filter ("event: log" `T.isPrefixOf`) frames
+      length logFrames `shouldBe` 3
+      map (length . T.breakOnAll "\"shape\"") logFrames `shouldBe` [100, 100, 50]
+
   describe "LiveTail backpressure" do
     it "holds the queue bound and drops the oldest, counting the loss" do
       let sub = mkSub 7 "checkout" Nothing ""
@@ -611,6 +627,19 @@ logBody = \case
 
 -- | One subscription, one attached connection, and the runtime an ingest pod would hold one
 -- cache refresh after the browser registered.
+-- | The first @n@ SSE frames a stream body yields.
+takeFrames :: Int -> SourceT IO Builder -> IO [Text]
+takeFrames n (SourceT run) = run (go n)
+  where
+    go :: Int -> StepT IO Builder -> IO [Text]
+    go k step = case step of
+      _ | k <= 0 -> pure []
+      Yield b next -> (decodeUtf8 (toLazyByteString b) :) <$> go (k - 1) next
+      Effect m -> m >>= go k
+      Skip next -> go k next
+      _ -> pure []
+
+
 fixture :: [LT.Subscription] -> IO (LT.Conn, LT.Runtime)
 fixture subs = do
   hub <- LT.newHub
