@@ -190,6 +190,25 @@ spec = do
         [LT.LogRow f] -> Map.lookup "summary" f.fields `shouldBe` Just (AE.toJSON summary)
         _ -> fail "expected exactly one LogRow"
 
+    -- Shipbubble 2026-10-19: multi-MB bodies rode inside the `summary` list, past the
+    -- string-only cap, and froze the browser parsing them.
+    it "liveTail_summaryCarriesFullBody_isTruncated" do
+      let fat = "body;text-textStrong⇒" <> T.replicate (LT.maxRowFieldChars * 3) "x"
+          rec' = (logRecord "checkout" "prod" "info" "a"){Telemetry.summary = V.fromList ["kind;badge⇒log", fat]}
+          events = mkSubScoped 26 (LT.AllSignals Nothing) ["summary"] Nothing ""
+          tab = mkSubScoped 27 (LT.LogTail (Just "checkout") LT.SKLogs) ["summary"] Nothing ""
+          capped = \case
+            AE.Array xs -> all (\case AE.String t -> T.length t <= LT.maxRowFieldChars; _ -> False) xs
+            _ -> False
+      (eventsConn, eventsRt) <- fixture [events]
+      (tabConn, tabRt) <- fixture [tab]
+      _ <- LT.publishMatches eventsRt pid (V.singleton rec')
+      _ <- LT.publishMatches tabRt pid (V.singleton rec')
+      (eventsRows, _) <- LT.takeBatch eventsConn
+      (tabRows, _) <- LT.takeBatch tabConn
+      map (\case LT.TableRow m -> maybe False capped (Map.lookup "summary" m); _ -> False) eventsRows `shouldBe` [True]
+      map (\case LT.LogRow f -> maybe False capped (Map.lookup "summary" f.fields); _ -> False) tabRows `shouldBe` [True]
+
   describe "Events live mode (AllSignals scope)" do
     it "delivers spans, which a logs-only subscription must never see" do
       -- The whole reason Events needs its own scope. One project can have both open at once,

@@ -482,6 +482,10 @@ rollback-app:
 deploy-status:
 	./scripts/ci/ci.sh deploy-status
 
+# Converge broker-side config (retention, segment roll) for topics monoscope owns.
+kafka-topics:
+	./scripts/kafka-topics.sh
+
 # One-time, per machine: a native amd64 buildx builder over SSH, so the image
 # build is not emulated. BUILD_HOST is any amd64 docker host you can ssh to.
 #   BUILD_HOST=ubuntu@build.example.com make builder-setup
@@ -520,6 +524,6 @@ tf-image:
 builder-rm:
 	./scripts/ci/ci.sh builder rm
 
-.PHONY: ci ci-signoff ci-status ci-shell ci-down ci-clean ci-selftest deploy-image ship deploy-app rollback-app deploy-status builder-setup builder-status builder-rm tf-image
+.PHONY: ci ci-signoff ci-status ci-shell ci-down ci-clean ci-selftest deploy-image ship kafka-topics deploy-app rollback-app deploy-status builder-setup builder-status builder-rm tf-image
 
 .PHONY: all test fmt lint fix-lint live-reload kill-live-reload live-reload-cli live-reload-doctests live-test-dev build-chart-cli build-chart-cli-linux tmux-live-reload tmux-live-reload-cli tmux-pin-here tmux-unpin kill-web-components-watch web-components-watch e2e-install test-e2e test-e2e-real test-e2e-ui gen-proto sync-otel-proto update-otel-proto minio-local timefusion-start timefusion-stop test-integration-tf

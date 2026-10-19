@@ -958,6 +958,8 @@ cmd_ship() {
   note "ship: 3/3 deploy"
   cmd_deploy "$sha"
   cmd_deploy_status
+  # Best-effort: broker config is not a verdict on this commit, so it never fails a ship.
+  scripts/kafka-topics.sh || note "WARNING: kafka-topics failed; run \`make kafka-topics\` by hand"
 }
 
 # ---------------------------------------------------------------- selftest
