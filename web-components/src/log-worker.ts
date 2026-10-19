@@ -13,6 +13,12 @@ self.onmessage = async (e: MessageEvent) => {
       credentials: 'include',
     });
 
+    // A gateway timeout answers with an HTML page; parsing it would surface a JSON error.
+    if (!response.ok && !response.headers.get('content-type')?.includes('json')) {
+      const timedOut = [504, 524].includes(response.status);
+      self.postMessage({ type: 'error', error: timedOut ? 'The query timed out. Try a shorter time range or a narrower filter.' : `Request failed (HTTP ${response.status})`, id });
+      return;
+    }
     const data = await response.json();
 
     // `error` is the only failure field LogResult carries — reading `message`
