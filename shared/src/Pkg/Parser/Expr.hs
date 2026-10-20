@@ -9,6 +9,7 @@ import Control.Monad.Combinators.Expr (
 import Data.Aeson qualified as AE
 import Data.Aeson.Text (encodeToLazyText)
 import Data.Char (isAlphaNum, isDigit)
+import Data.Foldable1 qualified as F1
 import Data.List (lookup, partition)
 import Data.Map.Strict qualified as M
 import Data.Scientific (FPFormat (Fixed), Scientific, formatScientific)
@@ -1464,7 +1465,7 @@ instance Display Expr where
   displayPrec prec (And u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " AND " <> displayPrec prec u2
   displayPrec prec (Or u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " OR " <> displayPrec prec u2
   displayPrec prec (BoolFunc v) = displayPrec prec v -- Boolean scalar function renders directly to SQL
-  displayPrec _ (FreeText t) = "(" <> mconcat (intersperse " OR " [displayBuilder (col c) | c <- freeTextColumns]) <> ")"
+  displayPrec _ (FreeText t) = "(" <> mconcat (intersperse " OR " [displayBuilder (col c) | c <- toList freeTextColumns]) <> ")"
     where
       (longest, pat) = freeTextPattern t
       -- `~*`, not 'Regex': that lowers to jsonpath, which TimeFusion cannot run. The longest
@@ -1498,24 +1499,22 @@ instance ToQueryText Expr where
 -- >>> freeTextPattern "deadlock"
 -- (Nothing,"deadlock")
 -- >>> freeTextPattern "Hello, world!"
--- (Just "Hello","Hello[^[:alnum:]]+world")
+-- (Just "world","Hello[^[:alnum:]]+world")
 -- >>> display (FreeText "dead lock")
--- "((body::text ~* 'dead' AND body::text ~* 'dead[^[:alnum:]]+lock') OR (status_message ~* 'dead' AND status_message ~* 'dead[^[:alnum:]]+lock') OR (name ~* 'dead' AND name ~* 'dead[^[:alnum:]]+lock'))"
+-- "((body::text ~* 'lock' AND body::text ~* 'dead[^[:alnum:]]+lock') OR (status_message ~* 'lock' AND status_message ~* 'dead[^[:alnum:]]+lock') OR (name ~* 'lock' AND name ~* 'dead[^[:alnum:]]+lock'))"
 freeTextPattern :: Text -> (Maybe Text, Text)
-freeTextPattern t = case filter (not . T.null) (T.split (not . isAlphaNum) t) of
-  ws@(w : _ : _) -> (Just (foldr (\a b -> if T.length a > T.length b then a else b) w ws), T.intercalate "[^[:alnum:]]+" ws)
+freeTextPattern t = case nonEmpty (filter (not . T.null) (T.split (not . isAlphaNum) t)) of
+  Just ws@(_ :| _ : _) -> (Just (F1.maximumBy (comparing T.length) ws), T.intercalate "[^[:alnum:]]+" (toList ws))
   _ -> (Nothing, escapeRegex t)
 
 
-freeTextColumns :: [Text]
-freeTextColumns = ["body", "status_message", "name"]
+freeTextColumns :: NonEmpty Text
+freeTextColumns = "body" :| ["status_message", "name"]
 
 
 -- | Free text as an ordinary predicate, for the in-memory evaluator and subject checks.
 searchExpr :: Text -> Expr
-searchExpr t = Paren $ Or (c "body") (Or (c "status_message") (c "name"))
-  where
-    c col = Regex CI (Subject col col []) (snd (freeTextPattern t))
+searchExpr t = Paren (F1.foldr1 Or ((\c -> Regex CI (Subject c c []) (snd (freeTextPattern t))) <$> freeTextColumns))
 
 
 -- Helper function to handle the common display logic
