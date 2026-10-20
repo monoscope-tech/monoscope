@@ -249,12 +249,14 @@ describe('Live Tail fields and details', () => {
   test('liveTail_longBody_rowsRenderAPreview', async () => {
     const el = await mount();
     const body = 'Deadlock found when trying to get lock; ' + 'x'.repeat(7960);
-    el.appendRows([{ ...logRow(1), body }, { ...logRow(2), body: JSON.stringify({ msg: 'boom', stack: 'y'.repeat(7000) }) }]);
+    el.appendRows([{ ...logRow(1), body, truncated: true }, { ...logRow(2), body: JSON.stringify({ msg: 'boom', stack: 'y'.repeat(7000) }) }]);
     await el.updateComplete;
     const messages = [...el.querySelectorAll('[data-row] [data-message]')].map((m: Element) => m.textContent ?? '');
     expect(messages).toHaveLength(2);
     for (const text of messages) expect(text.length).toBeLessThan(1200);
     expect(messages[0]).toContain('Deadlock found');
+    expect(messages[0]).toContain('…truncated');
+    expect(messages[1]).not.toContain('…truncated');
   });
 
   test('keeps service and timestamp as the only fixed columns and groups selected fields as one message', async () => {

@@ -569,6 +569,8 @@ pTerm =
 -- ["==","!=",">=","<=",">","<"]
 -- >>> take 3 (map snd (longestFirst matchTokens))
 -- ["!startswith","startswith","!contains"]
+-- >>> "has_all" `elem` takeWhile (/= "has") (map snd (longestFirst matchTokens))
+-- True
 longestFirst :: (Bounded a, Enum a) => (a -> (Text, Text)) -> [(a, Text)]
 longestFirst opTokens = sortOn (Down . T.length . snd) [(op, fst (opTokens op)) | op <- universe]
 
@@ -1467,7 +1469,7 @@ instance Display Expr where
     where
       m = freeTextMatch t
       pat = freeTextRegex m
-      longest = freeTextLongest m
+      longest = case m of Word _ -> Nothing; Sequence ws -> Just (F1.maximumBy (comparing T.length) ws)
       -- `~*`, not 'Regex': that lowers to jsonpath, which TimeFusion cannot run. The longest
       -- word is matched as a plain literal too, so TimeFusion can route it to its text index.
       col c = let txt = if c == "body" then "body::text" else c in "(" <> foldMap (\w -> txt <> " ~* " <> sqlStringLit w <> " AND ") longest <> txt <> " ~* " <> sqlStringLit pat <> ")"
@@ -1520,13 +1522,6 @@ freeTextMatch :: Text -> FreeTextMatch
 freeTextMatch t = case nonEmpty (filter (not . T.null) (T.split (not . isAlphaNum) t)) of
   Just ws@(_ :| _ : _) -> Sequence ws
   _ -> Word t
-
-
--- | A plain word TimeFusion can route to its text index; a single word is its own regex.
-freeTextLongest :: FreeTextMatch -> Maybe Text
-freeTextLongest = \case
-  Word _ -> Nothing
-  Sequence ws -> Just (F1.maximumBy (comparing T.length) ws)
 
 
 freeTextRegex :: FreeTextMatch -> Text

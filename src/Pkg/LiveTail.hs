@@ -80,6 +80,7 @@ module Pkg.LiveTail (
   envelopeVersion,
   storageTimestamp,
   maxRowFieldChars,
+  capRowValue,
   maxEnvelopeBytes,
   maxEvalsPerBatch,
   affordableRecords,
@@ -119,8 +120,10 @@ module Pkg.LiveTail (
 
 import Control.Concurrent.STM (TBQueue, check, flushTBQueue, isFullTBQueue, newTBQueueIO, orElse, readTBQueue, registerDelay, stateTVar, swapTVar, writeTBQueue)
 import Control.Exception.Safe qualified as Safe
+import Control.Lens (transform, (%~))
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
+import Data.Aeson.Lens (_String)
 import Data.Aeson.Types qualified as AET
 import Data.ByteString.Lazy qualified as LBS
 import Data.Effectful.Hasql qualified as Hasql
@@ -141,7 +144,6 @@ import Pkg.Parser.Expr (Expr, FieldKey (..), Subject (..))
 import Pkg.Parser.Stats (parseQueryToAST)
 import Relude
 import System.IO.Unsafe (unsafePerformIO)
-import Utils (capRowValue, maxRowFieldChars)
 
 
 -- $setup
@@ -784,6 +786,21 @@ noticeBrokenFilters rt bad = liftIO $ Safe.handleAny (const pass) $ forM_ bad \(
 -- key. That keeps local development and rolling deploys streaming while producers catch up.
 envelopeVersion :: Int
 envelopeVersion = 3
+
+
+-- | Per-field character cap for rows sent to a browser (explorer list, live tail). A single log
+-- carrying a megabyte stack trace must not stall the page.
+maxRowFieldChars :: Int
+maxRowFieldChars = 8000
+
+
+-- | Cap every string inside a JSON value, at any depth, at 'maxRowFieldChars' (@summary@ is a
+-- list whose body element carries the raw log body).
+--
+-- >>> capRowValue (AE.toJSON @[Text] ["ok", T.replicate 9000 "x"]) == AE.toJSON @[Text] ["ok", T.replicate 8000 "x"]
+-- True
+capRowValue :: AE.Value -> AE.Value
+capRowValue = transform (_String %~ T.take maxRowFieldChars)
 
 
 -- | Whole-envelope byte cap, checked after serialization.

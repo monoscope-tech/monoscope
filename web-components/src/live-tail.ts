@@ -178,7 +178,7 @@ const logBodyTemplate = (row: PreparedRow): TemplateResult => {
   const truncated = row.truncated ? html`<span class="text-textWeak">…truncated</span>` : nothing;
   if (row.body.length > BODY_PREVIEW_CHARS)
     return html`<span class="min-w-0 whitespace-pre-wrap break-words text-textStrong">${row.body.slice(0, BODY_PREVIEW_CHARS)}</span
-      ><span class="text-textWeak">…</span>`;
+      ><span class="text-textWeak">…</span>${truncated}`;
   if (row.parsedBody !== null && !Array.isArray(row.parsedBody) && typeof row.parsedBody === 'object') {
     return html`${row.bodyPrefix ? html`<span class="text-textWeak">${row.bodyPrefix}</span>` : nothing}${row.bodyFields.map(
       ([field, value]) =>
