@@ -126,9 +126,10 @@ TEST_MATCH ?=
 # `echo '--match LiveTail' > .test-args` instead of restarting it. TEST_MATCH seeds the file.
 live-test-dev: build-chart-cli
 	@$(if $(TEST_MATCH),echo '--match "$(TEST_MATCH)"' > .test-args,touch .test-args)
+	@echo "live-test-dev: hspec args from .test-args: [$$(cat .test-args)] (empty = whole suite)" | tee build-test-dev.log
 	USE_EXTERNAL_DB=true LOG_LEVEL=attention \
 	ghcid --command 'cabal repl monoscope:test:test-dev --no-semaphore --ghc-options="-j$(NCPUS) -O0" --repl-options="-fobject-code -osuf dyn_o -hisuf dyn_hi +RTS -T -RTS" --with-compiler=$(GHC)' \
-		--test ':cmd Prelude.fmap (":main " Prelude.++) (Prelude.readFile ".test-args")' --reload=.test-args $(RELOAD_ENV) --warnings 2>&1 | tee build-test-dev.log
+		--test ':cmd Prelude.fmap (":main " Prelude.++) (Prelude.readFile ".test-args")' --reload=.test-args $(RELOAD_ENV) --warnings 2>&1 | tee -a build-test-dev.log
 
 hot-reload:
 	livereload -f reload.trigger static/public/ & \
