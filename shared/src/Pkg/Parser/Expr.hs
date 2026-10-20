@@ -570,7 +570,7 @@ pTerm =
 -- >>> take 3 (map snd (longestFirst matchTokens))
 -- ["!startswith","startswith","!contains"]
 longestFirst :: (Bounded a, Enum a) => (a -> (Text, Text)) -> [(a, Text)]
-longestFirst tokens = sortOn (Down . T.length . snd) [(op, fst (tokens op)) | op <- universe]
+longestFirst opTokens = sortOn (Down . T.length . snd) [(op, fst (opTokens op)) | op <- universe]
 
 
 -- | One try-based binary alternative: @lhs OP pValues@.
