@@ -134,6 +134,7 @@ import GHC.Generics (Generically (..))
 import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
+import Utils (capRowValue, maxRowFieldChars)
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnumSC (..), unAesonText)
 import Pkg.Parser.Eval (EvalError, Resolver, evalExpr, filterExpr, resolveIn)
@@ -785,12 +786,6 @@ envelopeVersion :: Int
 envelopeVersion = 3
 
 
--- | Per-field character cap. A single log carrying a megabyte stack trace must not be able to
--- exceed the broker's message limit or stall a browser; the row says when it truncated.
-maxRowFieldChars :: Int
-maxRowFieldChars = 8000
-
-
 -- | Whole-envelope byte cap, checked after serialization.
 --
 -- 'maxRowFieldChars' bounds one field; it does not bound their sum, and the sum is what the
@@ -996,13 +991,7 @@ toTableCols :: [Text] -> Telemetry.OtelLogsAndSpans -> Map Text AE.Value
 toTableCols cols r = fromList (mapMaybe resolveCol cols)
   where
     json = AE.toJSON r
-    resolveCol c = (c,) . truncateValue <$> viaNonEmpty Relude.head (resolveIn json (dottedSubject (T.replace "___" "." c)))
-    -- Recursive: `summary` is a list whose body element carries the raw log body.
-    truncateValue = \case
-      AE.String t | T.length t > maxRowFieldChars -> AE.String (T.take maxRowFieldChars t)
-      AE.Array xs -> AE.Array (truncateValue <$> xs)
-      AE.Object o -> AE.Object (truncateValue <$> o)
-      v -> v
+    resolveCol c = (c,) . capRowValue <$> viaNonEmpty Relude.head (resolveIn json (dottedSubject (T.replace "___" "." c)))
     -- Built directly rather than parsed: the column list was validated at registration.
     dottedSubject path = case T.splitOn "." path of
       root : rest -> Subject path root (map FieldKey rest)

@@ -46,6 +46,8 @@ module Utils (
   toUriStr,
   toXXHash,
   getServiceColors,
+  maxRowFieldChars,
+  capRowValue,
   serviceFillColor,
   -- Hex color mapping for ECharts server-side rendering
   getSeriesColorHex,
@@ -2036,3 +2038,22 @@ classifyUserAgent ua = (browser, os, device)
       | has "iPad" || (has "Android" && not (has "Mobile")) = "Tablet"
       | has "Mobile" || has "iPhone" = "Mobile"
       | otherwise = "Desktop"
+
+
+-- | Per-field character cap for rows sent to a browser (explorer list, live tail). A single log
+-- carrying a megabyte stack trace must not stall the page.
+maxRowFieldChars :: Int
+maxRowFieldChars = 8000
+
+
+-- | Cap every string inside a JSON value at 'maxRowFieldChars'. Recursive because @summary@ is
+-- a list whose body element carries the raw log body.
+--
+-- >>> capRowValue (AE.toJSON ["ok" :: Text, T.replicate 9000 "x"]) == AE.toJSON ["ok" :: Text, T.replicate 8000 "x"]
+-- True
+capRowValue :: AE.Value -> AE.Value
+capRowValue = \case
+  AE.String t | T.length t > maxRowFieldChars -> AE.String (T.take maxRowFieldChars t)
+  AE.Array xs -> AE.Array (capRowValue <$> xs)
+  AE.Object o -> AE.Object (capRowValue <$> o)
+  v -> v

@@ -98,7 +98,7 @@ import System.Types
 import Text.Casing (fromAny, toKebab)
 import Text.Megaparsec (parseMaybe)
 import Text.Slugify (slugify)
-import Utils (FieldAction (..), FieldMenuCtx (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, encodeText, explorerNavTabs_, faSprite_, fieldContextMenuItems_, fieldMenuPanel_, getDurationNSMS, getServiceColors, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecBy, lookupVecNonEmptyText, lookupVecTextByKey, methodFillColor, nonEmptyT, popoverTrigger_, prettyPrintCount, sanitizeBackendError, serviceFillColor, showFFloat', statusFillColorText, toUriStr)
+import Utils (FieldAction (..), FieldMenuCtx (..), LoadingSize (..), LoadingType (..), capRowValue, checkFreeTierStatus, encodeText, explorerNavTabs_, faSprite_, fieldContextMenuItems_, fieldMenuPanel_, getDurationNSMS, getServiceColors, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecBy, lookupVecNonEmptyText, lookupVecTextByKey, methodFillColor, nonEmptyT, popoverTrigger_, prettyPrintCount, sanitizeBackendError, serviceFillColor, showFFloat', statusFillColorText, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (parseUrlPiece)
 
@@ -647,7 +647,7 @@ buildLogResult useTf withChildren pid now sinceM addCols removeCols (requestVecs
       else childSpansFor useTf pid addCols 50 colIdxMap (fromDD, toDD) requestVecs
   let synthRows = if withChildren then synthesizeOrphanHeaders colIdxMap requestVecs else V.empty
       requestVecsAug = synthRows <> requestVecs
-      rawLogsData = requestVecsAug <> V.fromList childSpansList
+      rawLogsData = V.map (V.map capRowValue) (requestVecsAug <> V.fromList childSpansList)
       cols = ordNub $ curateCols addCols removeCols colNames
       -- Keyed on the service, which is what the name has always claimed. Keying on
       -- `span_name` made this a per-*operation* palette: two spans in one service got two

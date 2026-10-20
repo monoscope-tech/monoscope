@@ -138,7 +138,7 @@ export const virtualItemKey = (item: VirtualListItem) =>
  * that. It needs a real browser and someone watching. See plans/log-list-performance.md.
  */
 export const MAX_RETAINED_ROWS = 2500;
-// Matches the server's maxRowFieldChars (Pkg.LiveTail).
+// Matches the server's maxRowFieldChars (Utils); the server already caps, this guards old servers.
 export const MAX_FIELD_CHARS = 8000;
 // Matches Tailwind's `md` breakpoint, so the JS-side column switch and the CSS-side
 // `max-md:` rules flip at the same width instead of disagreeing in a 1px band.
