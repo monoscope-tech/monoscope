@@ -14,13 +14,15 @@ cd "$(dirname "$0")/.."
 if [ -z "${KAFKA_BROKERS:-}" ] && [ -f .env ]; then
   # Read only the three keys, as data — never source or eval .env.
   while IFS='=' read -r key value; do
+    value=${value%\"}; value=${value#\"}
     case "$key" in KAFKA_BROKERS | KAFKA_USERNAME | KAFKA_PASSWORD) export "$key=$value" ;; esac
   done < .env
 fi
 : "${KAFKA_BROKERS:?KAFKA_BROKERS not set}"
 auth=()
 [ -n "${KAFKA_USERNAME:-}" ] && auth=(-X "user=$KAFKA_USERNAME" -X "pass=${KAFKA_PASSWORD:-}" -X sasl.mechanism=SCRAM-SHA-256)
-rpk_() { rpk -X "brokers=$KAFKA_BROKERS" "${auth[@]}" "$@"; }
+# ${auth[@]+…}: bash 3.2 (macOS /bin/bash) treats an empty array as unbound under set -u.
+rpk_() { rpk -X "brokers=$KAFKA_BROKERS" ${auth[@]+"${auth[@]}"} "$@"; }
 
 converge() { # <topic> <partitions> <key=value>...
   local topic=$1 partitions=$2 kv set=() create=()

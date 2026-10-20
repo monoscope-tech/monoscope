@@ -51,9 +51,9 @@ module Pkg.Parser.Stats (
   subjectExprToSQL,
   rewriteSectionsForSource,
   collectSubjects,
-  validateFields,
   parseQueryDiagnosed,
   QueryError (..),
+  queryErrorText,
   definedNames,
   seriesLeaves,
   seriesSourceSQL,
@@ -1462,13 +1462,18 @@ extractPercentilesInfo secs = listToMaybe $ mapMaybe pcts [agg | SummarizeComman
 -- >>> roundTrip "metrics | where metric_name == 'cpu' | extend label = tostring(metric_name) | summarize avg(value) by label | take 5"
 -- True
 parseQueryToAST :: Text -> Either Text [Section]
-parseQueryToAST = first (.message) . parseQueryDiagnosed Nothing
+parseQueryToAST = first queryErrorText . parseQueryDiagnosed Nothing
+
+
+-- | A 'QueryError' as one line of text, for surfaces with no room for a separate hint.
+queryErrorText :: QueryError -> Text
+queryErrorText e = e.message <> foldMap (". " <>) e.hint
 
 
 -- | A rejected query, positioned. The editor underlines @width@ characters from
 -- @column@ (1-based), so the same check that gates execution also draws the
 -- squiggle — there is no second, approximate implementation in the browser.
-data QueryError = QueryError {message :: Text, column :: Int, width :: Int}
+data QueryError = QueryError {message :: Text, column :: Int, width :: Int, hint :: Maybe Text}
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -1494,7 +1499,7 @@ data QueryError = QueryError {message :: Text, column :: Int, width :: Int}
 --
 -- >>> first (.message) $ parseQueryDiagnosed (Just SMetrics) "level == \"ERROR\" | summarize count(*) by bin_auto(timestamp)"
 -- Left "Unknown field \"level\""
--- >>> first (.message) $ parseQueryDiagnosed Nothing "deadlock"
+-- >>> first queryErrorText $ parseQueryDiagnosed Nothing "deadlock"
 -- Left "Unknown field \"deadlock\". To search text, quote it: \"deadlock\""
 -- >>> first (.message) $ parseQueryDiagnosed (Just SMetrics) "| summarize count(*) by coalesce(status_code, \"unknown\")"
 -- Left "Unknown field \"status_code\""
@@ -1510,7 +1515,7 @@ data QueryError = QueryError {message :: Text, column :: Int, width :: Int}
 -- 30-second buckets and drew 5-minute ones:
 --
 -- >>> parseQueryDiagnosed Nothing "| summarize count(*) by bin(timestamp, 1mo)"
--- Left (QueryError {message = "Unsupported bin() width \"1mo\". Use a KQL unit: ms, s, m, h, d, w (e.g. 30s, 10m, 1h). Calendar months and years have no fixed width.", column = 40, width = 3})
+-- Left (QueryError {message = "Unsupported bin() width \"1mo\". Use a KQL unit: ms, s, m, h, d, w (e.g. 30s, 10m, 1h). Calendar months and years have no fixed width.", column = 40, width = 3, hint = Nothing})
 --
 -- The KQL spellings keep working, and are now the only ones accepted:
 --
@@ -1520,7 +1525,7 @@ data QueryError = QueryError {message :: Text, column :: Int, width :: Int}
 -- True
 --
 -- >>> parseQueryDiagnosed Nothing "attribute contains \"x\""
--- Left (QueryError {message = "Unknown field \"attribute\". Did you mean \"attributes\"?", column = 1, width = 9})
+-- Left (QueryError {message = "Unknown field \"attribute\"", column = 1, width = 9, hint = Just "Did you mean \"attributes\"?"})
 -- >>> (.column) <$> either Just (const Nothing) (parseQueryDiagnosed Nothing "kind == \"a\" and attribut contains \"x\"")
 -- Just 17
 parseQueryDiagnosed :: Maybe Sources -> Text -> Either QueryError [Section]
@@ -1528,9 +1533,10 @@ parseQueryDiagnosed srcM (T.strip -> q) = do
   ast <- first (renderParseError q) (parse parseQuery "" q)
   -- Point at the offending token; T.breakOn finds its first occurrence, which
   -- is where a reader looks even if the name repeats later.
-  let at (tok, msg) = let before = fst (T.breakOn tok q) in QueryError{message = msg, column = T.length before + 1, width = T.length tok}
+  let at (tok, msg, hint) = let before = fst (T.breakOn tok q) in QueryError{message = msg, column = T.length before + 1, width = T.length tok, hint}
+      noHint (tok, msg) = (tok, msg, Nothing)
   let sourced = maybe ast ((: ast) . Source) srcM
-  first at $ maybeToLeft ast (unknownField sourced <|> badTimespan ast <|> seriesOffMetrics sourced)
+  first at $ maybeToLeft ast (unknownField sourced <|> noHint <$> (badTimespan ast <|> seriesOffMetrics sourced))
 
 
 -- | @rate@/@increase@/@last@ follow a metric series (@series_id@), which only the
@@ -1570,6 +1576,7 @@ renderParseError q bundle =
     , -- Underline from the failure to the end of the offending token, or one
       -- character when it sits at the very end of the input.
       width = max 1 (T.length (T.takeWhile (not . isSpace) (T.drop (col - 1) q)))
+    , hint = Nothing
     }
   where
     (err :| _, _) = attachSourcePos errorOffset (bundleErrors bundle) (bundlePosState bundle)
@@ -1588,25 +1595,21 @@ renderParseError q bundle =
 -- A query's own aggregation/extend/project outputs are exempt: they are real
 -- names downstream, and 'transformAST' hoists a post-summarize @where@ above the
 -- summarize, so position can't distinguish them from columns. Metrics queries
--- read a different table entirely and are skipped.
+-- read a different table entirely and are checked against its columns.
 --
--- >>> validateFields =<< parseQueryToAST "level == \"ERROR\" | summarize count() by kind | where count_ > 1"
--- Right ()
--- >>> validateFields =<< parseQueryToAST "kind == \"log\" | extend slow = duration | where slow > 5"
--- Right ()
--- >>> validateFields =<< parseQueryToAST "summarize count() by attribut"
+-- >>> isRight (parseQueryToAST "level == \"ERROR\" | summarize count() by kind | where count_ > 1")
+-- True
+-- >>> isRight (parseQueryToAST "kind == \"log\" | extend slow = duration | where slow > 5")
+-- True
+-- >>> parseQueryToAST "summarize count() by attribut"
 -- Left "Unknown field \"attribut\". Did you mean \"attributes\"?"
 --
 -- A numeric argument is a literal, not a field:
--- >>> validateFields =<< parseQueryToAST "summarize countif(coalesce(attributes.http.response.status_code, 0) >= 500)"
--- Right ()
-validateFields :: [Section] -> Either Text ()
-validateFields = maybe (Right ()) (Left . snd) . unknownField
-
-
--- | The first subject naming no column, as @(identifier, message)@ — the
--- identifier lets callers locate it in the query text.
-unknownField :: [Section] -> Maybe (Text, Text)
+-- >>> isRight (parseQueryToAST "summarize countif(coalesce(attributes.http.response.status_code, 0) >= 500)")
+-- True
+--
+-- Returns the identifier (so callers can locate it in the query), the message and a hint.
+unknownField :: [Section] -> Maybe (Text, Text, Maybe Text)
 unknownField sections = listToMaybe (mapMaybe check (collectSubjects sections))
   where
     -- Metrics read a different table, so they are checked against a different
@@ -1620,9 +1623,7 @@ unknownField sections = listToMaybe (mapMaybe check (collectSubjects sections))
     isNumericLiteral t = not (T.null t) && T.all (\c -> isDigit c || c == '.') t
     check (Subject entire root _)
       | isNumericLiteral root || knownFieldRoot fieldUniverse root || root `elem` definedNames sections = Nothing
-      | otherwise = Just (entire, "Unknown field \"" <> entire <> "\"" <> maybe quoteHint (\s -> ". Did you mean \"" <> s <> "\"?") (suggestFieldRoot fieldUniverse root))
-      where
-        quoteHint = if entire `elem` bareWords then ". To search text, quote it: \"" <> entire <> "\"" else ""
+      | otherwise = Just (entire, "Unknown field \"" <> entire <> "\"", ((\s -> "Did you mean \"" <> s <> "\"?") <$> suggestFieldRoot fieldUniverse root) <|> ("To search text, quote it: \"" <> entire <> "\"" <$ guard (entire `elem` bareWords)))
     -- Words typed on their own (parsed as `isnotempty(word)`), where free text was likely meant.
     bareWords = concat [bare e | sec <- sections, e <- case sec of Search x -> [x]; WhereClause x -> [x]; _ -> []]
     bare = \case

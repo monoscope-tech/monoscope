@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), CaseMode (..), kqlTimespanToTimeBucket, unsupportedTimespan, defaultBinWidth, FieldKey (..), pSquareBracketKey, pTerm, Jsonpath, LowerErr (..), lowerPred, renderJsonpath, resolveWildcardTimes, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), searchExpr, freeTextPattern, flattenedOtelAttributes, flattenedOtelAttributesBuiltin, setOtelColumns, setMetricsColumns, topLevelOtelColumns, arrayColumns, acceptedFieldRoots, FieldUniverse (..), otelFieldUniverse, metricsFieldUniverse, knownFieldRoot, suggestFieldRoot, transformFlattenedAttribute, outputFieldAliases, errorFlagSql, severityIsErrorSql, sqlStringLit) where
+module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), CaseMode (..), kqlTimespanToTimeBucket, unsupportedTimespan, defaultBinWidth, FieldKey (..), pSquareBracketKey, pTerm, Jsonpath, LowerErr (..), lowerPred, renderJsonpath, resolveWildcardTimes, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), searchExpr, FreeTextMatch (..), freeTextMatch, freeTextRegex, flattenedOtelAttributes, flattenedOtelAttributesBuiltin, setOtelColumns, setMetricsColumns, topLevelOtelColumns, arrayColumns, acceptedFieldRoots, FieldUniverse (..), otelFieldUniverse, metricsFieldUniverse, knownFieldRoot, suggestFieldRoot, transformFlattenedAttribute, outputFieldAliases, errorFlagSql, severityIsErrorSql, sqlStringLit) where
 
 import Control.Monad.Combinators.Expr (
   Operator (InfixL),
@@ -503,6 +503,13 @@ pValues = pValuesWith pValues [try pScalarFunc] -- try pScalarFunc must come fir
 -- >>> parse pTerm "" "'deadlock'"
 -- Right (FreeText "deadlock")
 -- >>> isLeft (parse pTerm "" "\"deadlock")
+-- True
+--
+-- A quoted string compared to a value is a comparison; compared to a bare field it is an error,
+-- not free text followed by junk that silently matches:
+-- >>> parse pExpr "" "\"a b\" == \"c\""
+-- Right (ValEq (Str "a b") (Str "c"))
+-- >>> isLeft (parse (pExpr <* eof) "" "\"a b\" == x")
 -- True
 --
 -- Standalone subject is treated as isnotempty check (KQL spec):
@@ -1467,7 +1474,9 @@ instance Display Expr where
   displayPrec prec (BoolFunc v) = displayPrec prec v -- Boolean scalar function renders directly to SQL
   displayPrec _ (FreeText t) = "(" <> mconcat (intersperse " OR " [displayBuilder (col c) | c <- toList freeTextColumns]) <> ")"
     where
-      (longest, pat) = freeTextPattern t
+      m = freeTextMatch t
+      pat = freeTextRegex m
+      longest = case m of Sequence ws -> Just (F1.maximumBy (comparing T.length) ws); Word _ -> Nothing
       -- `~*`, not 'Regex': that lowers to jsonpath, which TimeFusion cannot run. The longest
       -- word is matched as a plain literal too, so TimeFusion can route it to its text index.
       col c = let txt = if c == "body" then "body::text" else c in "(" <> foldMap (\w -> txt <> " ~* " <> sqlStringLit w <> " AND ") longest <> txt <> " ~* " <> sqlStringLit pat <> ")"
@@ -1496,16 +1505,28 @@ instance ToQueryText Expr where
 -- as "the message" (span errors such as MySQL deadlocks live in @status_message@). A single
 -- word is a substring; a sequence of words matches with any punctuation or spacing between them.
 --
--- >>> freeTextPattern "deadlock"
--- (Nothing,"deadlock")
--- >>> freeTextPattern "Hello, world!"
--- (Just "world","Hello[^[:alnum:]]+world")
+-- >>> freeTextMatch "deadlock"
+-- Word "deadlock"
+-- >>> freeTextMatch "Hello, world!"
+-- Sequence ("Hello" :| ["world"])
+-- >>> freeTextRegex (freeTextMatch "Hello, world!")
+-- "Hello[^[:alnum:]]+world"
 -- >>> display (FreeText "dead lock")
 -- "((body::text ~* 'lock' AND body::text ~* 'dead[^[:alnum:]]+lock') OR (status_message ~* 'lock' AND status_message ~* 'dead[^[:alnum:]]+lock') OR (name ~* 'lock' AND name ~* 'dead[^[:alnum:]]+lock'))"
-freeTextPattern :: Text -> (Maybe Text, Text)
-freeTextPattern t = case nonEmpty (filter (not . T.null) (T.split (not . isAlphaNum) t)) of
-  Just ws@(_ :| _ : _) -> (Just (F1.maximumBy (comparing T.length) ws), T.intercalate "[^[:alnum:]]+" (toList ws))
-  _ -> (Nothing, escapeRegex t)
+data FreeTextMatch = Word Text | Sequence (NonEmpty Text)
+  deriving stock (Eq, Show)
+
+
+freeTextMatch :: Text -> FreeTextMatch
+freeTextMatch t = case nonEmpty (filter (not . T.null) (T.split (not . isAlphaNum) t)) of
+  Just ws@(_ :| _ : _) -> Sequence ws
+  _ -> Word t
+
+
+freeTextRegex :: FreeTextMatch -> Text
+freeTextRegex = \case
+  Word t -> escapeRegex t
+  Sequence ws -> T.intercalate "[^[:alnum:]]+" (toList ws)
 
 
 freeTextColumns :: NonEmpty Text
@@ -1514,7 +1535,7 @@ freeTextColumns = "body" :| ["status_message", "name"]
 
 -- | Free text as an ordinary predicate, for the in-memory evaluator and subject checks.
 searchExpr :: Text -> Expr
-searchExpr t = Paren (F1.foldr1 Or ((\c -> Regex CI (Subject c c []) (snd (freeTextPattern t))) <$> freeTextColumns))
+searchExpr t = Paren (F1.foldr1 Or ((\c -> Regex CI (Subject c c []) (freeTextRegex (freeTextMatch t))) <$> freeTextColumns))
 
 
 -- Helper function to handle the common display logic

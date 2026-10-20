@@ -45,8 +45,8 @@ export class LiveStream {
   private subscriptionId: string | null = null;
   private renewTimer: number | null = null;
   private reconnectTimer: number | null = null;
-  // Armed by the first `ping` (servers that predate it send none): silence past this means the
-  // connection is dead, and a dead stream must not keep showing its last row as "live".
+  // Silence past STALL_MS means the connection is dead; a dead stream must not keep showing its
+  // last row as "live".
   private stallTimer: number | null = null;
   private attempt = 0;
   private stopped = true;
@@ -114,14 +114,16 @@ export class LiveStream {
       this.opts.onState('live');
     });
 
-    const alive = () => {
+    // Armed only once the server has pinged: servers that predate `ping` send none.
+    let pinged = false;
+    const arm = () => {
       this.clearStall();
       this.stallTimer = window.setTimeout(() => source.onerror?.(new Event('error')), STALL_MS);
     };
-    source.addEventListener('ping', alive);
+    source.addEventListener('ping', () => ((pinged = true), arm()));
 
     source.addEventListener('log', e => {
-      if (this.stallTimer) alive();
+      if (pinged) arm();
       try {
         this.opts.onRows(JSON.parse((e as MessageEvent).data));
       } catch {

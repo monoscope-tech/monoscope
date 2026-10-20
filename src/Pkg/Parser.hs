@@ -702,7 +702,7 @@ intervalSeconds t = case words t of
 -- request rather than in the query text, and validating those fields against
 -- @otel_logs_and_spans@ rejects the metrics table's own columns.
 parseQueryToComponents :: SqlQueryCfg -> Text -> Either Text (Text, QueryComponents)
-parseQueryToComponents sqlCfg = fmap (queryASTToComponents sqlCfg) . first (.message) . parseQueryDiagnosed sqlCfg.source
+parseQueryToComponents sqlCfg = fmap (queryASTToComponents sqlCfg) . first queryErrorText . parseQueryDiagnosed sqlCfg.source
 
 
 queryASTToComponents :: SqlQueryCfg -> [Section] -> (Text, QueryComponents)

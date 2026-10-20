@@ -389,7 +389,7 @@ databaseSpec = do
     it "locates an unknown field so the editor can underline it" \tr -> do
       v <- snd <$> testServant tr (Log.logExplorerValidateH testPid (Just "kind == \"a\" and attribut contains \"x\"") Nothing)
       v.valid `shouldBe` False
-      v.message `shouldBe` Just "Unknown field \"attribut\". Did you mean \"attributes\"?"
+      (v.message, v.hint) `shouldBe` (Just "Unknown field \"attribut\"", Just "Did you mean \"attributes\"?")
       (v.column, v.width) `shouldBe` (Just 17, Just 8)
 
     it "locates a syntax error" \tr -> do
