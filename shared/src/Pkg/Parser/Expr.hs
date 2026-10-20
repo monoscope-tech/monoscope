@@ -1439,7 +1439,6 @@ scalarFuncToSQL name args
 --
 -- >>> display (Regex CI (Subject "" "email" []) ".*@company\\.com")
 -- "jsonb_path_exists(to_jsonb(email), '$ ? (@ like_regex \".*@company\\\\.com\" flag \"i\")'::jsonpath)"
-
 instance Display Expr where
   displayPrec prec (Cmp op sub val) = displayExprHelper (Left op) prec sub val
   displayPrec prec (Match op sub val) = displayExprHelper (Right op) prec sub val
