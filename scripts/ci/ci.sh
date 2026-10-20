@@ -370,14 +370,7 @@ run_body() { # <check>
     # Drives the real server in a real browser. scripts/e2e.sh starts that server itself on
     # 8081 against a throwaway database, so this only has to supply the binary and chromium.
     e2e)
-      # As the Dockerfile does: the asset-hash splice is otherwise reused from the shared
-      # dist-newstyle volume, built against another tree's bundle, and pages reference
-      # chunks this build does not have. Edits the container's copy, never the tree.
-      if [ -z "${E2E_SERVER_BIN:-}" ]; then
-        entry=$(node -p "require('./static/public/assets/web-components/dist/manifest.json')['index.html'].file" 2>/dev/null || true)
-        [ -z "$entry" ] || printf 'module Pkg.AssetManifestFingerprint (assetManifestFingerprint) where\n\nimport Relude (String)\n\nassetManifestFingerprint :: String\nassetManifestFingerprint = "%s"\n' "$entry" > src/Pkg/AssetManifestFingerprint.hs
-        cabal build monoscope-server -j $CABAL_FLAGS "$CABAL_OPTS"
-      fi
+      [ -n "${E2E_SERVER_BIN:-}" ] || cabal build monoscope-server -j $CABAL_FLAGS "$CABAL_OPTS"
       (cd e2e && npm ci --prefer-offline --no-audit && \
         { [ -e /usr/local/share/monoscope-playwright-deps ] || npx playwright install-deps chromium; } && \
         npx playwright install chromium)
