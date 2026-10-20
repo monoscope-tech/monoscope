@@ -958,8 +958,14 @@ cmd_ship() {
   note "ship: 3/3 deploy"
   cmd_deploy "$sha"
   cmd_deploy_status
-  # Best-effort: broker config is not a verdict on this commit, so it never fails a ship.
-  scripts/kafka-topics.sh || note "WARNING: kafka-topics failed; run \`make kafka-topics\` by hand"
+  # Best-effort: broker config is not a verdict on this commit, so it never fails a ship —
+  # but a silent miss leaves live_tail keeping rows for days, so say it where it is seen.
+  scripts/kafka-topics.sh || {
+    printf '\n%s\n' "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" >&2
+    note "WARNING: deployed, but kafka-topics FAILED — broker topic config was NOT applied."
+    note "Run \`make kafka-topics\` by hand before walking away."
+    printf '%s\n\n' "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" >&2
+  }
 }
 
 # ---------------------------------------------------------------- selftest

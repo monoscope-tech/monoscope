@@ -1,3 +1,5 @@
+{-# LANGUAGE OrPatterns #-}
+
 module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), CaseMode (..), kqlTimespanToTimeBucket, unsupportedTimespan, defaultBinWidth, FieldKey (..), pSquareBracketKey, pTerm, Jsonpath, LowerErr (..), lowerPred, renderJsonpath, resolveWildcardTimes, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), searchExpr, flattenedOtelAttributes, flattenedOtelAttributesBuiltin, setOtelColumns, setMetricsColumns, topLevelOtelColumns, arrayColumns, acceptedFieldRoots, FieldUniverse (..), otelFieldUniverse, metricsFieldUniverse, knownFieldRoot, suggestFieldRoot, transformFlattenedAttribute, outputFieldAliases, errorFlagSql, severityIsErrorSql, sqlStringLit) where
 
 import Control.Monad.Combinators.Expr (
@@ -493,9 +495,14 @@ pValues = pValuesWith pValues [try pScalarFunc] -- try pScalarFunc must come fir
 -- >>> parse pTerm "" (toQText e) == Right e
 -- True
 --
--- A standalone quoted string is free text:
+-- A standalone quoted string is free text, in either quote; an unterminated one is an error,
+-- never a field:
 -- >>> parse pTerm "" "\"deadlock\""
 -- Right (FreeText "deadlock")
+-- >>> parse pTerm "" "'deadlock'"
+-- Right (FreeText "deadlock")
+-- >>> isLeft (parse pTerm "" "\"deadlock")
+-- True
 --
 -- Standalone subject is treated as isnotempty check (KQL spec):
 -- >>> parse pTerm "" "x.y.z"
@@ -1454,7 +1461,8 @@ instance Display Expr where
   displayPrec prec (BoolFunc v) = displayPrec prec v -- Boolean scalar function renders directly to SQL
   displayPrec prec (FreeText t) = displayPrec prec (searchExpr t)
   displayPrec prec (ArrayHas col v) = displayPrec prec $ "array_has(" <> col <> ", " <> sqlStringLit v <> ")"
-  displayPrec _ _ = error "Display Expr: unreachable"
+  -- Rendered by the operator-table guards above; listed so a new constructor fails to compile.
+  displayPrec _ (Eq{}; NotEq{}; GT{}; LT{}; GTEq{}; LTEq{}; In{}; NotIn{}; Has{}; NotHas{}; HasAny{}; HasAll{}; Contains{}; NotContains{}; StartsWith{}; NotStartsWith{}; EndsWith{}; NotEndsWith{}; ValEq{}; ValNotEq{}; ValGT{}; ValLT{}; ValGTEq{}; ValLTEq{}) = error "Display Expr: binary operators render via the guards"
 
 
 -- To be used when generating the text query given an ast
@@ -1470,7 +1478,7 @@ instance ToQueryText Expr where
   toQText (BoolFunc v) = toQText v
   toQText (FreeText t) = toQText (Str t)
   toQText (ArrayHas col v) = col <> "[*] == " <> toQText (Str v)
-  toQText _ = error "ToQueryText Expr: unreachable"
+  toQText (Eq{}; NotEq{}; GT{}; LT{}; GTEq{}; LTEq{}; In{}; NotIn{}; Has{}; NotHas{}; HasAny{}; HasAll{}; Contains{}; NotContains{}; StartsWith{}; NotStartsWith{}; EndsWith{}; NotEndsWith{}; ValEq{}; ValNotEq{}; ValGT{}; ValLT{}; ValGTEq{}; ValLTEq{}) = error "ToQueryText Expr: binary operators render via the guards"
 
 
 -- | What free text means: a case-insensitive substring of the columns a person reads as "the

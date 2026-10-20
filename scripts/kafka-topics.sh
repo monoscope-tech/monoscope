@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Converge broker-side config for topics monoscope owns. Idempotent: creates a missing topic,
 # otherwise applies `alter-config --set` (incremental — keys not listed here are untouched).
+# The partition count only applies on create; an existing topic keeps its own.
 #
 # live_tail: retention can only delete CLOSED segments, so retention.* alone is not enough —
 # with the broker defaults (segment.ms=14d, segment.bytes=128MiB > retention.bytes) the active
@@ -11,19 +12,24 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 if [ -z "${KAFKA_BROKERS:-}" ] && [ -f .env ]; then
-  set -a; eval "$(grep -E '^KAFKA_(BROKERS|USERNAME|PASSWORD)=' .env)"; set +a
+  # Read only the three keys, as data — never source or eval .env.
+  while IFS='=' read -r key value; do
+    case "$key" in KAFKA_BROKERS | KAFKA_USERNAME | KAFKA_PASSWORD) export "$key=$value" ;; esac
+  done < .env
 fi
 : "${KAFKA_BROKERS:?KAFKA_BROKERS not set}"
-rpk_() {
-  rpk -X brokers="$KAFKA_BROKERS" ${KAFKA_USERNAME:+-X user="$KAFKA_USERNAME" -X pass="$KAFKA_PASSWORD" -X sasl.mechanism=SCRAM-SHA-256} "$@"
-}
+auth=()
+[ -n "${KAFKA_USERNAME:-}" ] && auth=(-X "user=$KAFKA_USERNAME" -X "pass=${KAFKA_PASSWORD:-}" -X sasl.mechanism=SCRAM-SHA-256)
+rpk_() { rpk -X "brokers=$KAFKA_BROKERS" "${auth[@]}" "$@"; }
 
 converge() { # <topic> <partitions> <key=value>...
-  local topic=$1 partitions=$2; shift 2
+  local topic=$1 partitions=$2 kv set=() create=()
+  shift 2
+  for kv in "$@"; do set+=(--set "$kv"); create+=(-c "$kv"); done
   if rpk_ topic describe "$topic" >/dev/null 2>&1; then
-    rpk_ topic alter-config "$topic" $(printf -- '--set %s ' "$@")
+    rpk_ topic alter-config "$topic" "${set[@]}"
   else
-    rpk_ topic create "$topic" -p "$partitions" $(printf -- '-c %s ' "$@")
+    rpk_ topic create "$topic" -p "$partitions" "${create[@]}"
   fi
 }
 

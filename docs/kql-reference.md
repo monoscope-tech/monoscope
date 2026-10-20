@@ -119,7 +119,7 @@ response_time >= 100 and response_time <= 500
 | Operator | Description | Case-sensitive match? | Example |
 |----------|-------------|----------------|---------|
 | `has` | Contains substring (same as `contains`) | No | `message has "error"` |
-| `!has` | Does not contain word | No | `message !has "debug"` |
+| `!has` | Does not contain substring | No | `message !has "debug"` |
 | `contains` | Contains substring (any position) | No | `url contains "/api"` |
 | `!contains` | Does not contain substring | No | `path !contains "/health"` |
 | `startswith` | Starts with string | No | `endpoint startswith "/v1/"` |

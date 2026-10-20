@@ -218,8 +218,8 @@ evalExpr :: Resolver -> Expr -> Either EvalError Bool
 evalExpr r = go
   where
     go = \case
-      E.And a b -> go a >>= bool (pure False) (go b)
-      E.Or a b -> go a >>= bool (go b) (pure True)
+      E.And a b -> andM @[] [go a, go b]
+      E.Or a b -> orM @[] [go a, go b]
       E.Paren a -> go a
       -- `x == null` is `IS NULL`. An absent field and a field explicitly set to JSON null are
       -- both NULL to SQL — the stored column cannot tell them apart, so neither may this.
