@@ -19,7 +19,7 @@ widgets:
       - type: 'stat'
         title: 'Error Rate'
         icon: bug
-        query: kind != null | summarize round(countif(status_code == "ERROR") * 100.0 / count(), 2)
+        query: kind != null | summarize countif(status_code == "ERROR") * 100.0 / count()
         unit: '%'
         eager: true
         layout: { w: 3, h: 2 }

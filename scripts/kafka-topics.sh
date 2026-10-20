@@ -14,7 +14,7 @@ cd "$(dirname "$0")/.."
 if [ -z "${KAFKA_BROKERS:-}" ] && [ -f .env ]; then
   # Read only the three keys, as data — never source or eval .env.
   while IFS='=' read -r key value; do
-    value=${value%\"}; value=${value#\"}
+    value=${value%[\"\']}; value=${value#[\"\']}
     case "$key" in KAFKA_BROKERS | KAFKA_USERNAME | KAFKA_PASSWORD) export "$key=$value" ;; esac
   done < .env
 fi

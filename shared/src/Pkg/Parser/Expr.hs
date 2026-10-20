@@ -165,13 +165,13 @@ data CaseMode = CI | CS
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
--- | Comparison operators. Declaration order is parse order: longest token first (@>=@ before @>@).
+-- | Comparison operators.
 data CmpOp = Eq | NotEq | GTEq | LTEq | GT | LT
   deriving stock (Bounded, Enum, Eq, Generic, Ord, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
--- | Text-match and membership operators, in parse order (@!in@ before @in@, @has_all@ before @has@).
+-- | Text-match and membership operators.
 data MatchOp = NotIn | In | NotHas | HasAll | HasAny | Has | NotContains | Contains | NotStartsWith | StartsWith | NotEndsWith | EndsWith
   deriving stock (Bounded, Enum, Eq, Generic, Ord, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
@@ -541,21 +541,36 @@ pValues = pValuesWith pValues [try pScalarFunc] -- try pScalarFunc must come fir
 -- >>> isLeft (parse (pExpr <* eof) "" "\"a b\" == x")
 -- True
 --
+-- Adjacent comparisons AND together, as adjacent free-text terms do:
+-- >>> parse (pExpr <* eof) "" "a == 1 b == 2"
+-- Right (And (Cmp Eq (Subject "a" "a" []) (Num "1")) (Cmp Eq (Subject "b" "b" []) (Num "2")))
+--
 -- Standalone subject is treated as isnotempty check (KQL spec):
 -- >>> parse pTerm "" "x.y.z"
 -- Right (BoolFunc (ScalarFunc "isnotempty" [Field (Subject "x.y.z" "x" [FieldKey "y",FieldKey "z"])]))
 pTerm :: Parser Expr
 pTerm =
   (Paren <$> parens pExpr)
-    <|> asum [binTerm pValues (ValCmp op) (fst (cmpTokens op)) | op <- universe]
-    <|> asum [binTerm pSubject (Cmp op) (fst (cmpTokens op)) | op <- universe]
-    <|> asum [binTerm pSubject (Match op) (fst (matchTokens op)) | op <- universe]
+    <|> asum [binTerm pValues (ValCmp op) tok | (op, tok) <- longestFirst cmpTokens]
+    <|> asum [binTerm pSubject (Cmp op) tok | (op, tok) <- longestFirst cmpTokens]
+    <|> asum [binTerm pSubject (Match op) tok | (op, tok) <- longestFirst matchTokens]
     <|> try (Regex CS <$> pSubject <* space <* void (symbol "matches" *> symbol "regex") <*> regexPattern '"')
     <|> try (Regex CI <$> pSubject <* space <* void (symbol "matches") <* space <*> regexPattern '/')
     <|> try regexParser
     <|> try (BoolFunc <$> pBoolScalarFunc) -- Standalone boolean functions: isnull(x), isnotnull(x), etc.
     <|> (FreeText <$> (regexPattern '"' <|> regexPattern '\''))
     <|> (BoolFunc . ScalarFunc "isnotempty" . pure . Field <$> pSubject) -- Standalone subject = isnotempty check per KQL spec
+
+
+-- | Every operator with its KQL token, longest first, so a token is never claimed by its own
+-- prefix (@>=@ before @>@, @has_all@ before @has@) whatever order the constructors are in.
+--
+-- >>> map snd (longestFirst cmpTokens)
+-- ["==","!=",">=","<=",">","<"]
+-- >>> take 3 (map snd (longestFirst matchTokens))
+-- ["!startswith","startswith","!contains"]
+longestFirst :: (Bounded a, Enum a) => (a -> (Text, Text)) -> [(a, Text)]
+longestFirst tokens = sortOn (Down . T.length . snd) [(op, fst (tokens op)) | op <- universe]
 
 
 -- | One try-based binary alternative: @lhs OP pValues@.
@@ -593,7 +608,7 @@ operatorTable = [[InfixL (ctor <$ symbol sym) | (kw, ctor) <- [("AND", And), ("O
     -- Adjacent terms AND together (`hello world`), as in Datadog's search box. Never before an
     -- operator: `attributes contains ddd` (unquoted value) must stay a syntax error, not
     -- become three terms.
-    implicitAnd = try (space1 *> notFollowedBy (void (oneOf ("|),]=<>!" :: String)) <|> eof <|> asum [void (string' k *> (void spaceChar <|> eof)) | k <- ["and", "or", "matches", "in", "has", "has_any", "has_all", "contains", "startswith", "endswith"]]))
+    implicitAnd = try (space1 *> notFollowedBy (void (satisfy (`T.elem` "|),]=<>!")) <|> eof <|> asum [void (string' k *> (void spaceChar <|> eof)) | k <- ["and", "or", "matches"] <> map snd (longestFirst matchTokens)]))
 
 
 -------------------------------------------------------
@@ -1452,7 +1467,7 @@ instance Display Expr where
     where
       m = freeTextMatch t
       pat = freeTextRegex m
-      longest = case m of Sequence ws -> Just (F1.maximumBy (comparing T.length) ws); Word _ -> Nothing
+      longest = freeTextLongest m
       -- `~*`, not 'Regex': that lowers to jsonpath, which TimeFusion cannot run. The longest
       -- word is matched as a plain literal too, so TimeFusion can route it to its text index.
       col c = let txt = if c == "body" then "body::text" else c in "(" <> foldMap (\w -> txt <> " ~* " <> sqlStringLit w <> " AND ") longest <> txt <> " ~* " <> sqlStringLit pat <> ")"
@@ -1484,6 +1499,17 @@ instance ToQueryText Expr where
 -- Sequence ("Hello" :| ["world"])
 -- >>> freeTextRegex (freeTextMatch "Hello, world!")
 -- "Hello[^[:alnum:]]+world"
+--
+-- Punctuation inside one term separates words too (@user_id@ also matches @user id@); a term
+-- with no words, or a lone word, is matched literally with its metacharacters escaped:
+-- >>> freeTextMatch "user_id"
+-- Sequence ("user" :| ["id"])
+-- >>> freeTextRegex (freeTextMatch "!!")
+-- "!!"
+-- >>> freeTextRegex (freeTextMatch "a.b")
+-- "a[^[:alnum:]]+b"
+-- >>> freeTextRegex (freeTextMatch "(x")
+-- "\\(x"
 -- >>> display (FreeText "dead lock")
 -- "((body::text ~* 'lock' AND body::text ~* 'dead[^[:alnum:]]+lock') OR (status_message ~* 'lock' AND status_message ~* 'dead[^[:alnum:]]+lock') OR (name ~* 'lock' AND name ~* 'dead[^[:alnum:]]+lock'))"
 data FreeTextMatch = Word Text | Sequence (NonEmpty Text)
@@ -1494,6 +1520,13 @@ freeTextMatch :: Text -> FreeTextMatch
 freeTextMatch t = case nonEmpty (filter (not . T.null) (T.split (not . isAlphaNum) t)) of
   Just ws@(_ :| _ : _) -> Sequence ws
   _ -> Word t
+
+
+-- | A plain word TimeFusion can route to its text index; a single word is its own regex.
+freeTextLongest :: FreeTextMatch -> Maybe Text
+freeTextLongest = \case
+  Word _ -> Nothing
+  Sequence ws -> Just (F1.maximumBy (comparing T.length) ws)
 
 
 freeTextRegex :: FreeTextMatch -> Text

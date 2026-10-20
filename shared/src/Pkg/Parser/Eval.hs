@@ -214,6 +214,17 @@ filterExpr = fmap (fromMaybe matchAll) . foldlM step Nothing
 -- Left (BadRegex "[")
 -- >>> evalExpr (resolveIn AE.Null) (E.Regex E.CI (Subject "name" "name" []) (T.replicate 600 "a"))
 -- Left (RegexTooLong 600)
+--
+-- And/Or short-circuit: once the left side decides, the right one (here a broken regex) is not
+-- evaluated, so its error does not surface for that row:
+--
+-- >>> let bad = E.Regex E.CI (Subject "name" "name" []) "["
+-- >>> evalExpr (resolveIn AE.Null) (E.And (E.ValCmp E.Eq (E.Num "1") (E.Num "2")) bad)
+-- Right False
+-- >>> evalExpr (resolveIn AE.Null) (E.Or (E.ValCmp E.Eq (E.Num "1") (E.Num "1")) bad)
+-- Right True
+-- >>> evalExpr (resolveIn AE.Null) (E.And (E.ValCmp E.Eq (E.Num "1") (E.Num "1")) bad)
+-- Left (BadRegex "[")
 evalExpr :: Resolver -> Expr -> Either EvalError Bool
 evalExpr r = go
   where
