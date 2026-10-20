@@ -990,6 +990,13 @@ cmd_selftest() {
   assert "background failure propagates" 1 "$body_rc"
   assert "background diagnostics retained" yes "$([ -f "$BG_DIR/failing.log" ] && echo yes || echo no)"
   rm -rf "$BG_DIR"
+  # kafka-topics.sh under macOS /bin/bash 3.2 with no SASL user: an empty array under
+  # `set -u` killed it silently (2026-10-20). A stub rpk records what it was asked to do.
+  BG_DIR=$(mktemp -d -t ci-selftest-rpk.XXXXXX)
+  printf '#!/bin/sh\necho "$*" >> "%s/calls"\n' "$BG_DIR" > "$BG_DIR/rpk" && chmod +x "$BG_DIR/rpk"
+  assert "kafka-topics runs without SASL creds" ok "$(env -i PATH="$BG_DIR:$PATH" HOME="$HOME" KAFKA_BROKERS=stub:1 /bin/bash scripts/kafka-topics.sh >/dev/null 2>&1 && echo ok)"
+  assert "kafka-topics converges live_tail" yes "$(grep -q 'alter-config live_tail' "$BG_DIR/calls" 2>/dev/null && echo yes || echo no)"
+  rm -rf "$BG_DIR"
   assert "failure stops sweep" yes "$(stop_early 1 && echo yes)"
   assert "keep-going continues sweep" no "$(CI_KEEP_GOING=true stop_early 1 && echo yes || echo no)"
 

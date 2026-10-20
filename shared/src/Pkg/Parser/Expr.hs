@@ -1544,7 +1544,7 @@ displayExprHelper op prec sub val =
         (Right m, _) | (neg, base) <- matchPolarity m, Just (pre, post) <- literalAnchors base -> subAsText <> (if neg then " !~* " else " ~* ") <> reTerm pre post val
         _ -> displayPrec prec sub <> " " <> displayPrec @T.Text prec sqlOp <> " " <> displayPrec prec val
   where
-    sqlOp = either (snd . cmpTokens) (snd . matchTokens) op
+    sqlOp = snd (either cmpTokens matchTokens op)
     literalAnchors = \case
       (Has; Contains) -> Just ("", "")
       StartsWith -> Just ("^", "")
