@@ -261,6 +261,7 @@ extra-source-files:
     static/migrations/0227_repository_sync_local_baseline.sql
     static/migrations/0228_api_change_field_evidence.sql
     test/fixtures/github-app-test.pem
+    static/public/assets/web-components/dist/manifest.json
 
 source-repository head
   type: git

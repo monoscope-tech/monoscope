@@ -84,6 +84,7 @@ import Pkg.Components.TimePicker qualified as Components
 import Pkg.Components.Widget (WidgetAxis (..), WidgetType (WTTimeseries, WTTimeseriesLine))
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (CamelSchema (..), SnakeSchema (..))
+import Pkg.LiveTail (capRowValue)
 import Pkg.Parser (PageCursor (..), PageDirection (..), defaultQueryLimit, pSource, parseQueryToAST, toQText)
 import Pkg.Parser.Expr qualified as ParserExpr
 import Pkg.Parser.Stats (QueryError (..), Section (TakeCommand), pSortSection, parseQueryDiagnosed)
@@ -647,7 +648,7 @@ buildLogResult useTf withChildren pid now sinceM addCols removeCols (requestVecs
       else childSpansFor useTf pid addCols 50 colIdxMap (fromDD, toDD) requestVecs
   let synthRows = if withChildren then synthesizeOrphanHeaders colIdxMap requestVecs else V.empty
       requestVecsAug = synthRows <> requestVecs
-      rawLogsData = requestVecsAug <> V.fromList childSpansList
+      rawLogsData = V.map (V.map capRowValue) (requestVecsAug <> V.fromList childSpansList)
       cols = ordNub $ curateCols addCols removeCols colNames
       -- Keyed on the service, which is what the name has always claimed. Keying on
       -- `span_name` made this a per-*operation* palette: two spans in one service got two

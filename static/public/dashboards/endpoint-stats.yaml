@@ -51,7 +51,7 @@ tabs:
             icon: alert-triangle
             query: |
               {{const-endpointFilter}}
-              | summarize round(countif(coalesce(attributes.http.response.status_code, 0) >= 500) * 100.0 / count(), 2) by bin_auto(timestamp)
+              | summarize countif(coalesce(attributes.http.response.status_code, 0) >= 500) * 100.0 / count() by bin_auto(timestamp)
             unit: '%'
             alert_threshold: 5
             warning_threshold: 1
@@ -162,6 +162,7 @@ tabs:
             unit: ms
             progress: column_percent
           - field: error_rate
+            column_type: number
             title: Error Rate
             unit: '%'
             progress: value_percent
@@ -176,7 +177,7 @@ tabs:
             target_key as operation,
             SUM(req_count)::text as calls,
             ROUND((SUM(sum_duration_ns)::numeric / NULLIF(SUM(req_count), 0) / 1e6), 2)::text as avg_latency,
-            ROUND((SUM(error_count) * 100.0 / GREATEST(1, SUM(req_count)))::numeric, 2)::text as error_rate
+            (SUM(error_count) * 100.0 / GREATEST(1, SUM(req_count)))::numeric::text as error_rate
           FROM rollup
           WHERE 1=1 {{time_filter}}
           GROUP BY target_key
@@ -222,7 +223,7 @@ tabs:
             icon: percent
             query: |
               {{const-endpointFilter}}
-              | summarize round(countif(coalesce(attributes.http.response.status_code, 0) >= 400) * 100.0 / count(), 2)
+              | summarize countif(coalesce(attributes.http.response.status_code, 0) >= 400) * 100.0 / count()
             unit: '%'
             layout: { w: 4, h: 2 }
 
@@ -692,6 +693,7 @@ tabs:
             title: Operations
             column_type: number
           - field: error_rate
+            column_type: number
             title: Error Rate
             unit: '%'
             progress: value_percent
@@ -711,7 +713,7 @@ tabs:
           )
           SELECT
             COUNT(DISTINCT target_key)::text AS operations,
-            ROUND((SUM(error_count) * 100.0 / GREATEST(1, SUM(req_count)))::numeric, 2)::text AS error_rate,
+            (SUM(error_count) * 100.0 / GREATEST(1, SUM(req_count)))::numeric::text AS error_rate,
             ROUND((SUM(sum_duration_ns)::numeric / NULLIF(SUM(req_count), 0) / 1e6), 1)::text AS avg_ms,
             SUM(trace_count)::text AS traces
           FROM rollup
@@ -731,6 +733,7 @@ tabs:
             column_type: number
             progress: column_percent
           - field: error_rate
+            column_type: number
             title: Error Rate
             unit: '%'
             progress: value_percent
@@ -767,7 +770,7 @@ tabs:
           )
           SELECT
             t.target_key AS operation, t.trace_count::text AS traces,
-            ROUND((t.error_count * 100.0 / GREATEST(1, t.req_count))::numeric, 2)::text AS error_rate,
+            (t.error_count * 100.0 / GREATEST(1, t.req_count))::numeric::text AS error_rate,
             p.p95_ms,
             ROUND((t.sum_duration_ns::numeric / NULLIF(t.req_count, 0) / 1000000.0)::numeric, 1)::text AS avg_ms
           FROM totals t LEFT JOIN p95 p USING (target_key)

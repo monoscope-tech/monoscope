@@ -80,6 +80,7 @@ module Pkg.LiveTail (
   envelopeVersion,
   storageTimestamp,
   maxRowFieldChars,
+  capRowValue,
   maxEnvelopeBytes,
   maxEvalsPerBatch,
   affordableRecords,
@@ -119,8 +120,10 @@ module Pkg.LiveTail (
 
 import Control.Concurrent.STM (TBQueue, check, flushTBQueue, isFullTBQueue, newTBQueueIO, orElse, readTBQueue, registerDelay, stateTVar, swapTVar, writeTBQueue)
 import Control.Exception.Safe qualified as Safe
+import Control.Lens (transform, (%~))
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
+import Data.Aeson.Lens (_String)
 import Data.Aeson.Types qualified as AET
 import Data.ByteString.Lazy qualified as LBS
 import Data.Effectful.Hasql qualified as Hasql
@@ -785,10 +788,19 @@ envelopeVersion :: Int
 envelopeVersion = 3
 
 
--- | Per-field character cap. A single log carrying a megabyte stack trace must not be able to
--- exceed the broker's message limit or stall a browser; the row says when it truncated.
+-- | Per-field character cap for rows sent to a browser (explorer list, live tail). A single log
+-- carrying a megabyte stack trace must not stall the page.
 maxRowFieldChars :: Int
 maxRowFieldChars = 8000
+
+
+-- | Cap every string inside a JSON value, at any depth, at 'maxRowFieldChars' (@summary@ is a
+-- list whose body element carries the raw log body).
+--
+-- >>> capRowValue (AE.toJSON @[Text] ["ok", T.replicate 9000 "x"]) == AE.toJSON @[Text] ["ok", T.replicate 8000 "x"]
+-- True
+capRowValue :: AE.Value -> AE.Value
+capRowValue = transform (_String %~ T.take maxRowFieldChars)
 
 
 -- | Whole-envelope byte cap, checked after serialization.
@@ -996,13 +1008,7 @@ toTableCols :: [Text] -> Telemetry.OtelLogsAndSpans -> Map Text AE.Value
 toTableCols cols r = fromList (mapMaybe resolveCol cols)
   where
     json = AE.toJSON r
-    resolveCol c = (c,) . truncateValue <$> viaNonEmpty Relude.head (resolveIn json (dottedSubject (T.replace "___" "." c)))
-    -- Recursive: `summary` is a list whose body element carries the raw log body.
-    truncateValue = \case
-      AE.String t | T.length t > maxRowFieldChars -> AE.String (T.take maxRowFieldChars t)
-      AE.Array xs -> AE.Array (truncateValue <$> xs)
-      AE.Object o -> AE.Object (truncateValue <$> o)
-      v -> v
+    resolveCol c = (c,) . capRowValue <$> viaNonEmpty Relude.head (resolveIn json (dottedSubject (T.replace "___" "." c)))
     -- Built directly rather than parsed: the column list was validated at registration.
     dottedSubject path = case T.splitOn "." path of
       root : rest -> Subject path root (map FieldKey rest)

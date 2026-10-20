@@ -456,6 +456,17 @@ databaseSpec = do
       bare <- search "deadlock"
       bare.error `shouldBe` Just "Unknown field \"deadlock\". To search text, quote it: \"deadlock\""
 
+    -- Shipbubble 2026-10-19: multi-MB bodies reached the browser whole inside `summary`.
+    it "logExplorer_multiMegabyteBody_summaryIsCapped" \tr -> do
+      pid <- createTestProject tr "log-explorer-fat-body"
+      apiKey <- createTestAPIKey tr pid "fat-body-key"
+      ingestLog tr apiKey (T.replicate 2_000_000 "x") frozenTime
+      let window = Just . toText . formatTime defaultTimeLocale "%FT%T%QZ" . (`addUTCTime` frozenTime)
+      r <- eventually (fetchDataIn tr pid Nothing Nothing Nothing Nothing (window (-60)) (window 60)) (not . V.null . (.logsData))
+      let summaries = [els | row <- V.toList r.logsData, Just i <- [HashMap.lookup "summary" r.colIdxMap], Just (AE.Array els) <- [row V.!? i]]
+      summaries `shouldSatisfy` (not . null)
+      [T.length t | els <- summaries, AE.String t <- V.toList els] `shouldSatisfy` all (<= 8000)
+
     -- Quoted free text: adjacent terms AND together; a sequence tolerates punctuation.
     it "freeText_quotedTermsAndSequences" \tr -> do
       pid <- createTestProject tr "log-explorer-datadog-text"

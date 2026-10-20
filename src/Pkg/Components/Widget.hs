@@ -821,11 +821,16 @@ statScalar summarize fromM toM stats
 -- "1.5K"
 -- >>> formatStatValue 2048 "By"
 -- "2 KiB"
+--
+-- A non-zero rate below the display precision is shown as such, never as 0:
+-- >>> (formatStatValue 0.0012 "%", formatStatValue 0 "%")
+-- ("<0.01 %","0 %")
 formatStatValue :: Double -> Text -> Text
 formatStatValue value unit
   | isNaN value || isInfinite value = "N/A"
   | Just factor <- unitNanos unit = formatDuration $ value * factor
   | unit `elem` ["By", "by", "bytes", "byte", "B"] = formatBytes value
+  | value > 0, value < 0.01 = "<0.01" <> displayUnit unit
   | otherwise = formatNumber value <> displayUnit unit
   where
     durationSteps :: [(Double, Text)]

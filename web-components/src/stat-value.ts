@@ -95,5 +95,6 @@ export const formatStatValue = (value: number, unit: string): string => {
   if (DURATION_UNITS.has(unit)) return formatDuration(convertToNanoseconds(value, unit));
   if (BYTE_UNITS.has(unit)) return formatBytes(value);
   const suffix = ({ '': '', '1': '', '{}': '', By: ' bytes' } as Record<string, string>)[unit] ?? ` ${unit}`;
-  return `${formatNumber(value)}${suffix}`;
+  // A non-zero value below the display precision (a rare error rate) must not read as 0.
+  return `${value > 0 && value < 0.01 ? '<0.01' : formatNumber(value)}${suffix}`;
 };

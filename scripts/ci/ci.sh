@@ -992,6 +992,7 @@ cmd_selftest() {
   rm -rf "$BG_DIR"
   # kafka-topics.sh under macOS /bin/bash 3.2 with no SASL user: an empty array under
   # `set -u` killed it silently (2026-10-20). A stub rpk records what it was asked to do.
+  # Only bash < 4.4 reproduces the bug, so on Linux CI this checks the happy path alone.
   BG_DIR=$(mktemp -d -t ci-selftest-rpk.XXXXXX)
   printf '#!/bin/sh\necho "$*" >> "%s/calls"\n' "$BG_DIR" > "$BG_DIR/rpk" && chmod +x "$BG_DIR/rpk"
   assert "kafka-topics runs without SASL creds" ok "$(env -i PATH="$BG_DIR:$PATH" HOME="$HOME" KAFKA_BROKERS=stub:1 /bin/bash scripts/kafka-topics.sh >/dev/null 2>&1 && echo ok)"
