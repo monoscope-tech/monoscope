@@ -33,7 +33,7 @@ describe('verdictToError translates the server verdict', () => {
   });
 
   test('an invalid verdict underlines exactly the reported span', () => {
-    const v: Verdict = { valid: false, message: 'Unknown field "attribut". Did you mean "attributes"?', column: 17, width: 8 };
+    const v: Verdict = { valid: false, message: 'Unknown field "attribut"', hint: 'Did you mean "attributes"?', column: 17, width: 8 };
     expect(verdictToError(v)).toEqual({
       message: 'Unknown field "attribut". Did you mean "attributes"?',
       startColumn: 17,

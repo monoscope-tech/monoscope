@@ -47,7 +47,8 @@ export interface Verdict {
   message?: string;
   column?: number;
   width?: number;
+  hint?: string;
 }
 
 export const verdictToError = (v: Verdict): QueryError | null =>
-  v.valid || !v.message ? null : { message: v.message, startColumn: v.column ?? 1, endColumn: (v.column ?? 1) + (v.width ?? 1), line: 1 };
+  v.valid || !v.message ? null : { message: v.hint ? `${v.message}. ${v.hint}` : v.message, startColumn: v.column ?? 1, endColumn: (v.column ?? 1) + (v.width ?? 1), line: 1 };

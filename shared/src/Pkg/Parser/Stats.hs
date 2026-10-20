@@ -1,3 +1,5 @@
+{-# LANGUAGE OrPatterns #-}
+
 module Pkg.Parser.Stats (
   -- Types
   AggFunction (..),
@@ -51,9 +53,9 @@ module Pkg.Parser.Stats (
   subjectExprToSQL,
   rewriteSectionsForSource,
   collectSubjects,
-  validateFields,
   parseQueryDiagnosed,
   QueryError (..),
+  queryErrorText,
   definedNames,
   seriesLeaves,
   seriesSourceSQL,
@@ -71,7 +73,7 @@ import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (Display, display, displayBuilder, displayPrec)
 import Pkg.Deriving (WrappedEnumSC (..))
-import Pkg.Parser.Expr (Expr (..), FieldKey (..), Parser, Subject (..), ToQueryText (..), Values (..), arrayColumns, defaultBinWidth, knownFieldRoot, kqlTimespanToTimeBucket, metricsFieldUniverse, otelFieldUniverse, pExpr, pSubject, pValues, searchExpr, suggestFieldRoot, unsupportedTimespan)
+import Pkg.Parser.Expr (CmpOp (..), Expr (..), FieldKey (..), Parser, Subject (..), ToQueryText (..), Values (..), arrayColumns, defaultBinWidth, knownFieldRoot, kqlTimespanToTimeBucket, metricsFieldUniverse, otelFieldUniverse, pExpr, pSubject, pValues, searchExpr, suggestFieldRoot, unsupportedTimespan)
 import Relude hiding (GT, LT, Last, Sum, many, some)
 import Text.Megaparsec
 import Text.Megaparsec.Char (alphaNumChar, char, digitChar, hspace, space, string)
@@ -488,12 +490,12 @@ data Sources = SSpans | SMetrics
 -- >>> all (\q -> isRight (parseQueryToAST q) && tf q == parseQueryToAST q) ["hashes[*] != \"x\"", "hashes[*] in (\"x\")", "hashes[*].k == \"x\"", "events[*] == \"x\"", "hashes[*] == 1"]
 -- True
 -- >>> fmap (rewriteSectionsForSource False Nothing) (parseQueryToAST "hashes[*]==\"x\"")
--- Right [Search (Eq (Subject "hashes[*]" "hashes" [ArrayWildcard ""]) (Str "x"))]
+-- Right [Search (Cmp Eq (Subject "hashes[*]" "hashes" [ArrayWildcard ""]) (Str "x"))]
 rewriteSectionsForSource :: Bool -> Maybe Sources -> [Section] -> [Section]
 rewriteSectionsForSource False _ = id
 rewriteSectionsForSource True src =
   runIdentity . traverseAst (Identity . subject) \case
-    Eq (Subject _ col [ArrayWildcard ""]) (Str v) | S.member col arrayColumns -> ArrayHas col v
+    Cmp Eq (Subject _ col [ArrayWildcard ""]) (Str v) | S.member col arrayColumns -> ArrayHas col v
     e -> e
   where
     subject = case src of
@@ -523,42 +525,19 @@ traverseAst f g = traverse goSec
       SortCommand fs -> SortCommand <$> traverse (\(SortField s d) -> flip SortField d <$> f s) fs
       s@TakeCommand{} -> pure s
       s@Source{} -> pure s
-    -- Every subject/value predicate has the same (Subject, Values) shape, so
-    -- one helper per arity covers the lot.
     sv :: (Subject -> Values -> a) -> Subject -> Values -> m a
     sv c s v = c <$> f s <*> goV v
     st :: (Subject -> t -> a) -> Subject -> t -> m a
     st c s t = flip c t <$> f s
     goE =
       fmap g . \case
-        Eq s v -> sv Eq s v
-        NotEq s v -> sv NotEq s v
-        GT s v -> sv GT s v
-        LT s v -> sv LT s v
-        GTEq s v -> sv GTEq s v
-        LTEq s v -> sv LTEq s v
+        Cmp op s v -> sv (Cmp op) s v
+        Match op s v -> sv (Match op) s v
         Regex mode s t -> st (Regex mode) s t
-        In s v -> sv In s v
-        NotIn s v -> sv NotIn s v
-        Has s v -> sv Has s v
-        NotHas s v -> sv NotHas s v
-        HasAny s v -> sv HasAny s v
-        HasAll s v -> sv HasAll s v
-        Contains s v -> sv Contains s v
-        NotContains s v -> sv NotContains s v
-        StartsWith s v -> sv StartsWith s v
-        NotStartsWith s v -> sv NotStartsWith s v
-        EndsWith s v -> sv EndsWith s v
-        NotEndsWith s v -> sv NotEndsWith s v
         Paren e -> Paren <$> goE e
         And a b -> And <$> goE a <*> goE b
         Or a b -> Or <$> goE a <*> goE b
-        ValEq a b -> ValEq <$> goV a <*> goV b
-        ValNotEq a b -> ValNotEq <$> goV a <*> goV b
-        ValGT a b -> ValGT <$> goV a <*> goV b
-        ValLT a b -> ValLT <$> goV a <*> goV b
-        ValGTEq a b -> ValGTEq <$> goV a <*> goV b
-        ValLTEq a b -> ValLTEq <$> goV a <*> goV b
+        ValCmp op a b -> ValCmp op <$> goV a <*> goV b
         BoolFunc v -> BoolFunc <$> goV v
         e@ArrayHas{} -> pure e
         -- Its columns are checked like any subject; the node stays, since it renders its own SQL.
@@ -666,7 +645,7 @@ pPercentilesMulti = do
 -- | Parse countif(predicate) - count with a filter condition
 -- Microsoft KQL: countif(predicate)
 -- >>> parse pCountIf "" "countif(status_code == \"ERROR\")"
--- Right (CountIf (Eq (Subject "status_code" "status_code" []) (Str "ERROR")) Nothing)
+-- Right (CountIf (Cmp Eq (Subject "status_code" "status_code" []) (Str "ERROR")) Nothing)
 pCountIf :: Parser AggFunction
 pCountIf = withoutAlias $ CountIf <$> (string "countif(" *> pExpr <* string ")")
 
@@ -674,7 +653,7 @@ pCountIf = withoutAlias $ CountIf <$> (string "countif(" *> pExpr <* string ")")
 -- | @rateif@/@increaseif@/@lastif(field, predicate)@: the series aggregation over
 -- only the series the predicate selects (Kusto's @sumif@ shape).
 -- >>> parse (pSeriesIf Rate) "" "rateif(value, metric_name == \"hits\")"
--- Right (Series Rate (Subject "value" "value" []) (Just (Eq (Subject "metric_name" "metric_name" []) (Str "hits"))) Nothing)
+-- Right (Series Rate (Subject "value" "value" []) (Just (Cmp Eq (Subject "metric_name" "metric_name" []) (Str "hits"))) Nothing)
 pSeriesIf :: SeriesFn -> Parser AggFunction
 pSeriesIf fn = withoutAlias $ Series fn <$> (string (display fn <> "if(") *> pSubject <* comma) <*> (Just <$> pExpr <* string ")")
 
@@ -746,7 +725,7 @@ arithTable sp = [[infixL '*' Mul, infixL '/' Div], [infixL '+' Add, infixL '-' S
 -- Enables: round(countif(status >= 400) * 100.0 / count(), 2)
 --
 -- >>> parse pScalarExprNested "" "countif(status >= 400) * 100.0 / count()"
--- Right (SArith (SArith (SAgg (CountIf (GTEq (Subject "status" "status" []) (Num "400")) Nothing)) Mul (SVal (Num "100.0"))) Div (SAgg (Count (Subject "*" "*" []) Nothing)))
+-- Right (SArith (SArith (SAgg (CountIf (Cmp GTEq (Subject "status" "status" []) (Num "400")) Nothing)) Mul (SVal (Num "100.0"))) Div (SAgg (Count (Subject "*" "*" []) Nothing)))
 pScalarExprNested :: Parser ScalarExpr
 pScalarExprNested = makeExprParser pFactor (arithTable space)
   where
@@ -781,7 +760,7 @@ pStrcat = withoutAlias $ Strcat <$> (string "strcat(" *> pScalarExpr `sepBy1` co
 -- | Parse iff(condition, then_expr, else_expr) - conditional expression
 -- Microsoft KQL: iff(if, then, else)
 -- >>> parse pIff "" "iff(status_code == \"ERROR\", \"error\", \"ok\")"
--- Right (Iff (Eq (Subject "status_code" "status_code" []) (Str "ERROR")) (Str "error") (Str "ok") Nothing)
+-- Right (Iff (Cmp Eq (Subject "status_code" "status_code" []) (Str "ERROR")) (Str "error") (Str "ok") Nothing)
 pIff :: Parser AggFunction
 pIff =
   withoutAlias
@@ -794,7 +773,7 @@ pIff =
 -- | Parse case(pred1, val1, [pred2, val2, ...] else) - multi-branch conditional
 -- Microsoft KQL: case(predicate_1, then_1, [predicate_2, then_2, ...] else)
 -- >>> parse pCase "" "case(status >= 500, \"5xx\", status >= 400, \"4xx\", \"ok\")"
--- Right (Case [(GTEq (Subject "status" "status" []) (Num "500"),Str "5xx"),(GTEq (Subject "status" "status" []) (Num "400"),Str "4xx")] (Str "ok") Nothing)
+-- Right (Case [(Cmp GTEq (Subject "status" "status" []) (Num "500"),Str "5xx"),(Cmp GTEq (Subject "status" "status" []) (Num "400"),Str "4xx")] (Str "ok") Nothing)
 pCase :: Parser AggFunction
 pCase =
   withoutAlias
@@ -809,7 +788,7 @@ pCase =
 -- >>> parse pRound "" "round(3.14159, 2)"
 -- Right (Round (SVal (Num "3.14159")) (Num "2") Nothing)
 -- >>> parse pRound "" "round(countif(status_code == \"ERROR\"), 2)"
--- Right (Round (SAgg (CountIf (Eq (Subject "status_code" "status_code" []) (Str "ERROR")) Nothing)) (Num "2") Nothing)
+-- Right (Round (SAgg (CountIf (Cmp Eq (Subject "status_code" "status_code" []) (Str "ERROR")) Nothing)) (Num "2") Nothing)
 pRound :: Parser AggFunction
 pRound = withoutAlias $ do
   val <- string "round(" *> pScalarExprNested <* comma
@@ -1169,7 +1148,7 @@ pColumnCommand keyword ctor = string keyword *> space *> (ctor <$> pNamedExpr `s
 -- Microsoft KQL: extend ColumnName = Expression [, ...]
 --
 -- >>> parse pExtendSection "" "extend error_cat = case(status >= 500, \"5xx\", \"ok\")"
--- Right (ExtendCommand [("error_cat",Case [(GTEq (Subject "status" "status" []) (Num "500"),Str "5xx")] (Str "ok") (Just "error_cat"))])
+-- Right (ExtendCommand [("error_cat",Case [(Cmp GTEq (Subject "status" "status" []) (Num "500"),Str "5xx")] (Str "ok") (Just "error_cat"))])
 pExtendSection :: Parser Section
 pExtendSection = pColumnCommand "extend" ExtendCommand
 
@@ -1189,7 +1168,7 @@ pProjectSection = pColumnCommand "project" ProjectCommand
 -- Right (Count (Subject "*" "*" []) (Just "TotalCount"))
 --
 -- >>> parse namedAggregation "" "error_count = countif(status_code == \"ERROR\")"
--- Right (CountIf (Eq (Subject "status_code" "status_code" []) (Str "ERROR")) (Just "error_count"))
+-- Right (CountIf (Cmp Eq (Subject "status_code" "status_code" []) (Str "ERROR")) (Just "error_count"))
 namedAggregation :: Parser AggFunction
 namedAggregation = snd <$> pNamedExpr
 
@@ -1332,11 +1311,11 @@ inlineAggNames named = \case
 -- | Transform AST to normalize and optimize the query structure.
 -- Combines consecutive WHERE/Search clauses and reorders sections to canonical order.
 --
--- >>> transformAST [Search (Eq (Subject "a" "a" []) (Str "1")), Search (Eq (Subject "b" "b" []) (Str "2"))]
--- [Search (And (Eq (Subject "a" "a" []) (Str "1")) (Eq (Subject "b" "b" []) (Str "2")))]
+-- >>> transformAST [Search (Cmp Eq (Subject "a" "a" []) (Str "1")), Search (Cmp Eq (Subject "b" "b" []) (Str "2"))]
+-- [Search (And (Cmp Eq (Subject "a" "a" []) (Str "1")) (Cmp Eq (Subject "b" "b" []) (Str "2")))]
 --
--- >>> transformAST [WhereClause (Eq (Subject "a" "a" []) (Str "1")), WhereClause (Eq (Subject "b" "b" []) (Str "2"))]
--- [WhereClause (And (Eq (Subject "a" "a" []) (Str "1")) (Eq (Subject "b" "b" []) (Str "2")))]
+-- >>> transformAST [WhereClause (Cmp Eq (Subject "a" "a" []) (Str "1")), WhereClause (Cmp Eq (Subject "b" "b" []) (Str "2"))]
+-- [WhereClause (And (Cmp Eq (Subject "a" "a" []) (Str "1")) (Cmp Eq (Subject "b" "b" []) (Str "2")))]
 --
 -- A post-summarize filter is a HAVING only when it names an aggregate output.
 -- On a raw column it becomes a WHERE, hoisted above the summarize — emitting
@@ -1462,13 +1441,18 @@ extractPercentilesInfo secs = listToMaybe $ mapMaybe pcts [agg | SummarizeComman
 -- >>> roundTrip "metrics | where metric_name == 'cpu' | extend label = tostring(metric_name) | summarize avg(value) by label | take 5"
 -- True
 parseQueryToAST :: Text -> Either Text [Section]
-parseQueryToAST = first (.message) . parseQueryDiagnosed Nothing
+parseQueryToAST = first queryErrorText . parseQueryDiagnosed Nothing
+
+
+-- | A 'QueryError' as one line of text, for surfaces with no room for a separate hint.
+queryErrorText :: QueryError -> Text
+queryErrorText e = e.message <> foldMap (". " <>) e.hint
 
 
 -- | A rejected query, positioned. The editor underlines @width@ characters from
 -- @column@ (1-based), so the same check that gates execution also draws the
 -- squiggle — there is no second, approximate implementation in the browser.
-data QueryError = QueryError {message :: Text, column :: Int, width :: Int}
+data QueryError = QueryError {message :: Text, column :: Int, width :: Int, hint :: Maybe Text}
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -1494,7 +1478,7 @@ data QueryError = QueryError {message :: Text, column :: Int, width :: Int}
 --
 -- >>> first (.message) $ parseQueryDiagnosed (Just SMetrics) "level == \"ERROR\" | summarize count(*) by bin_auto(timestamp)"
 -- Left "Unknown field \"level\""
--- >>> first (.message) $ parseQueryDiagnosed Nothing "deadlock"
+-- >>> first queryErrorText $ parseQueryDiagnosed Nothing "deadlock"
 -- Left "Unknown field \"deadlock\". To search text, quote it: \"deadlock\""
 -- >>> first (.message) $ parseQueryDiagnosed (Just SMetrics) "| summarize count(*) by coalesce(status_code, \"unknown\")"
 -- Left "Unknown field \"status_code\""
@@ -1510,7 +1494,7 @@ data QueryError = QueryError {message :: Text, column :: Int, width :: Int}
 -- 30-second buckets and drew 5-minute ones:
 --
 -- >>> parseQueryDiagnosed Nothing "| summarize count(*) by bin(timestamp, 1mo)"
--- Left (QueryError {message = "Unsupported bin() width \"1mo\". Use a KQL unit: ms, s, m, h, d, w (e.g. 30s, 10m, 1h). Calendar months and years have no fixed width.", column = 40, width = 3})
+-- Left (QueryError {message = "Unsupported bin() width \"1mo\". Use a KQL unit: ms, s, m, h, d, w (e.g. 30s, 10m, 1h). Calendar months and years have no fixed width.", column = 40, width = 3, hint = Nothing})
 --
 -- The KQL spellings keep working, and are now the only ones accepted:
 --
@@ -1520,7 +1504,7 @@ data QueryError = QueryError {message :: Text, column :: Int, width :: Int}
 -- True
 --
 -- >>> parseQueryDiagnosed Nothing "attribute contains \"x\""
--- Left (QueryError {message = "Unknown field \"attribute\". Did you mean \"attributes\"?", column = 1, width = 9})
+-- Left (QueryError {message = "Unknown field \"attribute\"", column = 1, width = 9, hint = Just "Did you mean \"attributes\"?"})
 -- >>> (.column) <$> either Just (const Nothing) (parseQueryDiagnosed Nothing "kind == \"a\" and attribut contains \"x\"")
 -- Just 17
 parseQueryDiagnosed :: Maybe Sources -> Text -> Either QueryError [Section]
@@ -1528,9 +1512,10 @@ parseQueryDiagnosed srcM (T.strip -> q) = do
   ast <- first (renderParseError q) (parse parseQuery "" q)
   -- Point at the offending token; T.breakOn finds its first occurrence, which
   -- is where a reader looks even if the name repeats later.
-  let at (tok, msg) = let before = fst (T.breakOn tok q) in QueryError{message = msg, column = T.length before + 1, width = T.length tok}
+  let at (tok, msg, hint) = let before = fst (T.breakOn tok q) in QueryError{message = msg, column = T.length before + 1, width = T.length tok, hint}
+      noHint (tok, msg) = (tok, msg, Nothing)
   let sourced = maybe ast ((: ast) . Source) srcM
-  first at $ maybeToLeft ast (unknownField sourced <|> badTimespan ast <|> seriesOffMetrics sourced)
+  first at $ maybeToLeft ast (unknownField sourced <|> noHint <$> (badTimespan ast <|> seriesOffMetrics sourced))
 
 
 -- | @rate@/@increase@/@last@ follow a metric series (@series_id@), which only the
@@ -1570,6 +1555,7 @@ renderParseError q bundle =
     , -- Underline from the failure to the end of the offending token, or one
       -- character when it sits at the very end of the input.
       width = max 1 (T.length (T.takeWhile (not . isSpace) (T.drop (col - 1) q)))
+    , hint = Nothing
     }
   where
     (err :| _, _) = attachSourcePos errorOffset (bundleErrors bundle) (bundlePosState bundle)
@@ -1588,25 +1574,21 @@ renderParseError q bundle =
 -- A query's own aggregation/extend/project outputs are exempt: they are real
 -- names downstream, and 'transformAST' hoists a post-summarize @where@ above the
 -- summarize, so position can't distinguish them from columns. Metrics queries
--- read a different table entirely and are skipped.
+-- read a different table entirely and are checked against its columns.
 --
--- >>> validateFields =<< parseQueryToAST "level == \"ERROR\" | summarize count() by kind | where count_ > 1"
--- Right ()
--- >>> validateFields =<< parseQueryToAST "kind == \"log\" | extend slow = duration | where slow > 5"
--- Right ()
--- >>> validateFields =<< parseQueryToAST "summarize count() by attribut"
+-- >>> isRight (parseQueryToAST "level == \"ERROR\" | summarize count() by kind | where count_ > 1")
+-- True
+-- >>> isRight (parseQueryToAST "kind == \"log\" | extend slow = duration | where slow > 5")
+-- True
+-- >>> parseQueryToAST "summarize count() by attribut"
 -- Left "Unknown field \"attribut\". Did you mean \"attributes\"?"
 --
 -- A numeric argument is a literal, not a field:
--- >>> validateFields =<< parseQueryToAST "summarize countif(coalesce(attributes.http.response.status_code, 0) >= 500)"
--- Right ()
-validateFields :: [Section] -> Either Text ()
-validateFields = maybe (Right ()) (Left . snd) . unknownField
-
-
--- | The first subject naming no column, as @(identifier, message)@ — the
--- identifier lets callers locate it in the query text.
-unknownField :: [Section] -> Maybe (Text, Text)
+-- >>> isRight (parseQueryToAST "summarize countif(coalesce(attributes.http.response.status_code, 0) >= 500)")
+-- True
+--
+-- Returns the identifier (so callers can locate it in the query), the message and a hint.
+unknownField :: [Section] -> Maybe (Text, Text, Maybe Text)
 unknownField sections = listToMaybe (mapMaybe check (collectSubjects sections))
   where
     -- Metrics read a different table, so they are checked against a different
@@ -1620,17 +1602,25 @@ unknownField sections = listToMaybe (mapMaybe check (collectSubjects sections))
     isNumericLiteral t = not (T.null t) && T.all (\c -> isDigit c || c == '.') t
     check (Subject entire root _)
       | isNumericLiteral root || knownFieldRoot fieldUniverse root || root `elem` definedNames sections = Nothing
-      | otherwise = Just (entire, "Unknown field \"" <> entire <> "\"" <> maybe quoteHint (\s -> ". Did you mean \"" <> s <> "\"?") (suggestFieldRoot fieldUniverse root))
-      where
-        quoteHint = if entire `elem` bareWords then ". To search text, quote it: \"" <> entire <> "\"" else ""
+      | otherwise = Just (entire, "Unknown field \"" <> entire <> "\"", ((\s -> "Did you mean \"" <> s <> "\"?") <$> suggestFieldRoot fieldUniverse root) <|> ("To search text, quote it: \"" <> entire <> "\"" <$ guard (entire `elem` bareWords)))
     -- Words typed on their own (parsed as `isnotempty(word)`), where free text was likely meant.
-    bareWords = concat [bare e | sec <- sections, e <- case sec of Search x -> [x]; WhereClause x -> [x]; _ -> []]
+    bareWords = concatMap (foldMap bare . sectionExpr) sections
+    sectionExpr = \case
+      Search e -> Just e
+      WhereClause e -> Just e
+      HavingClause e -> Just e
+      SummarizeCommand{} -> Nothing
+      ExtendCommand{} -> Nothing
+      ProjectCommand{} -> Nothing
+      SortCommand{} -> Nothing
+      TakeCommand{} -> Nothing
+      Source{} -> Nothing
     bare = \case
       Paren e -> bare e
       And a b -> bare a <> bare b
       Or a b -> bare a <> bare b
       BoolFunc (ScalarFunc "isnotempty" [Field (Subject entire _ _)]) -> [entire]
-      _ -> []
+      (Cmp{}; Match{}; Regex{}; ValCmp{}; BoolFunc{}; FreeText{}; ArrayHas{}) -> []
 
 
 -- | Result-column names a query introduces: explicit @extend@/@project@ keys

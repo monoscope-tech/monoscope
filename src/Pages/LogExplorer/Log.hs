@@ -1047,6 +1047,7 @@ data QueryValidation = QueryValidation
   , message :: Maybe Text
   , column :: Maybe Int
   , width :: Maybe Int
+  , hint :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving (ToSchema) via CamelSchema QueryValidation
@@ -1062,8 +1063,8 @@ logExplorerValidateH pid queryM sourceM = do
   -- that runs it happily.
   addRespHeaders
     $ either
-      (\e -> QueryValidation{valid = False, message = Just e.message, column = Just e.column, width = Just e.width})
-      (const QueryValidation{valid = True, message = Nothing, column = Nothing, width = Nothing})
+      (\e -> QueryValidation{valid = False, message = Just e.message, column = Just e.column, width = Just e.width, hint = e.hint})
+      (const QueryValidation{valid = True, message = Nothing, column = Nothing, width = Nothing, hint = Nothing})
       (parseQueryDiagnosed (parseMaybe pSource =<< sourceM) (maybeToMonoid queryM))
 
 

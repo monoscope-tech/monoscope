@@ -138,7 +138,7 @@ import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnumSC (..), unAesonText)
 import Pkg.Parser.Eval (EvalError, Resolver, evalExpr, filterExpr, resolveIn)
 import Pkg.Parser.Expr (Expr, FieldKey (..), Subject (..))
-import Pkg.Parser.Stats (parseQueryToAST, validateFields)
+import Pkg.Parser.Stats (parseQueryToAST)
 import Relude
 import System.IO.Unsafe (unsafePerformIO)
 
@@ -407,7 +407,6 @@ compileQuery raw
   | T.null (T.strip raw) = Right Nothing
   | otherwise = do
       sections <- first BadQuery (parseQueryToAST raw)
-      first BadQuery (validateFields sections)
       maybe (Left NotAFilter) (Right . Just) (filterExpr sections)
 
 

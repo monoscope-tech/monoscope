@@ -46,7 +46,7 @@ import Pkg.DeriveUtils (DB)
 import Pkg.Metrics qualified as Metrics
 import Pkg.Parser (BinDensity, QueryComponents (finalSummarizeQuery, whereClause), RangeEnd (..), SqlQueryCfg (..), applyScopedQuery, buildDateRange, buildEnvFilter, buildServiceFilter, defSqlQueryCfg, mkScopedQuery, pSource, queryASTToComponents, replacePlaceholders, variablePresets, variablePresetsKQL)
 import Pkg.Parser.Expr (Subject (..))
-import Pkg.Parser.Stats (BinFunction (..), ByClauseItem (..), QueryError (..), Section (..), Sources (..), SummarizeByClause (..), parseQueryDiagnosed)
+import Pkg.Parser.Stats (BinFunction (..), ByClauseItem (..), Section (..), Sources (..), SummarizeByClause (..), parseQueryDiagnosed, queryErrorText)
 import Pkg.QueryCache qualified as QC
 import Relude
 import Servant qualified
@@ -163,7 +163,7 @@ queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (Utils.nonEmptyT -> q
   -- Validated against `source`, not blind: a widget can carry `source=metrics` in the
   -- request rather than in the query text, and checking those fields against
   -- otel_logs_and_spans rejects the metrics table's own columns (`metric_name`, `value`).
-  case first (.message) $ parseQueryDiagnosed source $ replacePlaceholders mappngKQL $ maybeToMonoid queryM of
+  case first queryErrorText $ parseQueryDiagnosed source $ replacePlaceholders mappngKQL $ maybeToMonoid queryM of
     Left err -> pure (emptyMetricsFor now fromD toD){error = Just err}
     Right queryAST -> runQueryAST authCtx dbSource respDataType pid source density environment service (maybe False (T.null . snd) currentRange) queryAST (maybeToMonoid queryM) querySQLM mappngSQL now fromD toD
 
@@ -753,7 +753,7 @@ queryMetricsStream dbSource dataTypeM pidM queryM querySQLM sinceM fromM toM sou
       raw = Utils.nonEmptyT querySQLM
       parsed =
         maybe
-          (first (.message) $ parseQueryDiagnosed source $ replacePlaceholders mappingKQL $ maybeToMonoid $ Utils.nonEmptyT queryM)
+          (first queryErrorText $ parseQueryDiagnosed source $ replacePlaceholders mappingKQL $ maybeToMonoid $ Utils.nonEmptyT queryM)
           Left
           (raw >>= rawSqlScopeError environment service)
       scope = mkScopedQuery pid (fromD, toD) environment service
