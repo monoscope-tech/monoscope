@@ -204,6 +204,17 @@ matchTokens = \case
   EndsWith -> ("endswith", "ENDSWITH")
 
 
+-- | Whether a match operator is negated, and the operator it negates.
+matchPolarity :: MatchOp -> (Bool, MatchOp)
+matchPolarity = \case
+  NotIn -> (True, In)
+  NotHas -> (True, Has)
+  NotContains -> (True, Contains)
+  NotStartsWith -> (True, StartsWith)
+  NotEndsWith -> (True, EndsWith)
+  m@(In; Has; HasAll; HasAny; Contains; StartsWith; EndsWith) -> (False, m)
+
+
 data Expr
   = Cmp CmpOp Subject Values
   | Match MatchOp Subject Values
@@ -1430,8 +1441,8 @@ scalarFuncToSQL name args
 -- "jsonb_path_exists(to_jsonb(email), '$ ? (@ like_regex \".*@company\\\\.com\" flag \"i\")'::jsonpath)"
 
 instance Display Expr where
-  displayPrec prec (Cmp op sub val) = displayExprHelper (snd (cmpTokens op)) prec sub val
-  displayPrec prec (Match op sub val) = displayExprHelper (snd (matchTokens op)) prec sub val
+  displayPrec prec (Cmp op sub val) = displayExprHelper (Left op) prec sub val
+  displayPrec prec (Match op sub val) = displayExprHelper (Right op) prec sub val
   displayPrec prec (ValCmp op v1 v2) = displayParen (prec > 0) $ displayPrec prec v1 <> " " <> displayBuilder (snd (cmpTokens op)) <> " " <> displayPrec prec v2
   displayPrec prec (Regex mode sub val) = displayPrec prec $ renderJsonpath (lowerRegex mode sub val)
   displayPrec prec (Paren u1) = displayParen True $ displayPrec prec u1
@@ -1502,14 +1513,14 @@ searchExpr t = Paren (F1.foldr1 Or ((\c -> Regex CI (Subject c c []) (freeTextRe
 
 
 -- Helper function to handle the common display logic
-displayExprHelper :: T.Text -> Int -> Subject -> Values -> Builder
+displayExprHelper :: Either CmpOp MatchOp -> Int -> Subject -> Values -> Builder
 displayExprHelper op prec sub val =
   displayParen (prec > 0)
     $ if subjectHasWildcard sub
       then displayPrec prec (renderJsonpathSQL op sub val)
       else case (op, val) of
-        ("=", Null) -> displayPrec prec sub <> " IS NULL"
-        ("!=", Null) -> displayPrec prec sub <> " IS NOT NULL"
+        (Left Eq, Null) -> displayPrec prec sub <> " IS NULL"
+        (Left NotEq, Null) -> displayPrec prec sub <> " IS NOT NULL"
         -- A result row reads `errors: true` because the projection computes it, so the
         -- obvious filter is `errors == true` — which compared the raw payload column against
         -- a boolean and failed the *whole* query (TimeFusion: "Cannot infer common argument
@@ -1518,25 +1529,28 @@ displayExprHelper op prec sub val =
         --
         -- Bare subject only: `errors != null` and `errors[0].message` still address the
         -- column itself, which is what those spellings have always meant.
-        (_, Boolean b)
+        (Left c, Boolean b)
           | Subject "errors" _ [] <- sub
-          , Just positive <- lookup op [("=", b), ("!=", not b)] ->
+          , Just positive <- lookup c [(Eq, b), (NotEq, not b)] ->
               displayParen True $ displayBuilder $ bool ("NOT " <> errorFlagSql) errorFlagSql positive
         -- `->>` yields text, and text = boolean fails the whole query on both TimeFusion and
         -- Postgres; a JSON boolean reads back as the text 'true'/'false'.
-        (_, Boolean b) | Subject _ _ (_ : _) <- sub, op `elem` ["=", "!="] -> displayPrec prec sub <> displayBuilder (" " <> op <> " ") <> displayPrec prec (Str (bool "false" "true" b))
-        (_, List vs) | op `elem` ["IN", "NOT IN"] -> displayPrec prec sub <> displayBuilder (" " <> op <> " (") <> commaSep vs <> ")"
+        (Left c, Boolean b) | Subject _ _ (_ : _) <- sub, c `elem` [Eq, NotEq] -> displayPrec prec sub <> displayBuilder (" " <> sqlOp <> " ") <> displayPrec prec (Str (bool "false" "true" b))
+        (Right m, List vs) | m `elem` [In, NotIn] -> displayPrec prec sub <> displayBuilder (" " <> sqlOp <> " (") <> commaSep vs <> ")"
         -- has_any/has_all fan the (escaped, case-insensitive) literal match over the list
-        (_, List vs) | Just j <- lookup op [("HAS_ANY", " OR "), ("HAS_ALL", " AND ")] -> "(" <> (mconcat . intersperse j . map (\v -> subAsText <> " ~* " <> reTerm "" "" v)) vs <> ")"
+        (Right m, List vs) | Just j <- lookup m [(HasAny, " OR "), (HasAll, " AND ")] -> "(" <> (mconcat . intersperse j . map (\v -> subAsText <> " ~* " <> reTerm "" "" v)) vs <> ")"
         -- has/contains/startswith/endswith match a literal (case-insensitively) — the term
         -- is regex-escaped and rendered as `~*`, mirroring the wildcard jsonpath path
-        -- (like_regex + escapeRegex). ^/$ anchor startswith/endswith. "NOT X" negates to `!~*`.
-        _
-          | (neg, opPos) <- maybe (False, op) (True,) (T.stripPrefix "NOT " op)
-          , Just (pre, post) <- lookup opPos [("HAS", ("", "")), ("CONTAINS", ("", "")), ("STARTSWITH", ("^", "")), ("ENDSWITH", ("", "$"))] ->
-              subAsText <> (if neg then " !~* " else " ~* ") <> reTerm pre post val
-        _ -> displayPrec prec sub <> " " <> displayPrec @T.Text prec op <> " " <> displayPrec prec val
+        -- (like_regex + escapeRegex). ^/$ anchor startswith/endswith; negation is `!~*`.
+        (Right m, _) | (neg, base) <- matchPolarity m, Just (pre, post) <- literalAnchors base -> subAsText <> (if neg then " !~* " else " ~* ") <> reTerm pre post val
+        _ -> displayPrec prec sub <> " " <> displayPrec @T.Text prec sqlOp <> " " <> displayPrec prec val
   where
+    sqlOp = either (snd . cmpTokens) (snd . matchTokens) op
+    literalAnchors = \case
+      (Has; Contains) -> Just ("", "")
+      StartsWith -> Just ("^", "")
+      EndsWith -> Just ("", "$")
+      (In; HasAll; HasAny; NotIn; NotHas; NotContains; NotStartsWith; NotEndsWith) -> Nothing
     commaSep = mconcat . intersperse "," . map (displayPrec prec)
     -- Cast to text for subjects without field keys (may be JSONB columns)
     subAsText = case sub of
@@ -1594,8 +1608,8 @@ data JLit
 data LowerErr
   = -- | value has no jsonpath equivalent (now(), ago(), field ref, empty list)
     NoJsonpathForm Text
-  | -- | operator token not in the KQL operator set
-    UnknownOp Text
+  | -- | a negated operator; the caller negates the whole existence test (see 'renderJsonpathSQL')
+    Negated MatchOp
   deriving stock (Show)
 
 
@@ -1642,75 +1656,79 @@ jsonString :: Text -> Text
 jsonString = toText . encodeToLazyText . AE.String
 
 
--- | Lower a KQL @operator/subject/value@ comparison into the jsonpath IR. The
--- operator token is the SQL token from 'cmpTokens'/'matchTokens'; every token that reaches
--- here has an explicit arm, and any value with no jsonpath form is a typed 'LowerErr'.
+-- | Lower a KQL @operator/subject/value@ comparison into the jsonpath IR. A negated match
+-- is 'Negated': the caller negates the whole existence test. A value with no jsonpath form
+-- is 'NoJsonpathForm'.
 --
--- >>> renderJsonpath <$> lowerPred "=" (Subject "" "data" [FieldKey "name"]) (Str "John Doe")
+-- >>> renderJsonpath <$> lowerPred (Left Eq) (Subject "" "data" [FieldKey "name"]) (Str "John Doe")
 -- Right "jsonb_path_exists(to_jsonb(data), '$.\"name\" ? (@ == \"John Doe\")'::jsonpath)"
--- >>> renderJsonpath <$> lowerPred "=" (Subject "" "body" [FieldKey "name"]) (Str "John Doe")
+-- >>> renderJsonpath <$> lowerPred (Left Eq) (Subject "" "body" [FieldKey "name"]) (Str "John Doe")
 -- Right "jsonb_path_exists(body, '$.\"name\" ? (@ == \"John Doe\")'::jsonpath)"
 --
--- >>> renderJsonpath <$> lowerPred "!=" (Subject "" "settings" [ArrayWildcard "", FieldKey "enabled"]) (Boolean True)
+-- >>> renderJsonpath <$> lowerPred (Left NotEq) (Subject "" "settings" [ArrayWildcard "", FieldKey "enabled"]) (Boolean True)
 -- Right "jsonb_path_exists(to_jsonb(settings), '$[*].\"enabled\" ? (@ != true)'::jsonpath)"
 --
--- >>> renderJsonpath <$> lowerPred "=" (Subject "" "u" [ArrayWildcard "", FieldKey "x"]) Null
+-- >>> renderJsonpath <$> lowerPred (Left Eq) (Subject "" "u" [ArrayWildcard "", FieldKey "x"]) Null
 -- Right "jsonb_path_exists(to_jsonb(u), '$[*].\"x\" ? (@ == null)'::jsonpath)"
 --
--- >>> renderJsonpath <$> lowerPred "!=" (Subject "" "u" [ArrayWildcard "", FieldKey "x"]) Null
+-- >>> renderJsonpath <$> lowerPred (Left NotEq) (Subject "" "u" [ArrayWildcard "", FieldKey "x"]) Null
 -- Right "jsonb_path_exists(to_jsonb(u), '$[*].\"x\" ? (@ != null)'::jsonpath)"
 --
--- >>> renderJsonpath <$> lowerPred "IN" (Subject "" "users" [ArrayWildcard "", FieldKey "role"]) (List [Str "admin", Str "user"])
+-- >>> renderJsonpath <$> lowerPred (Right In) (Subject "" "users" [ArrayWildcard "", FieldKey "role"]) (List [Str "admin", Str "user"])
 -- Right "jsonb_path_exists(to_jsonb(users), '$[*].\"role\" ? (@ == \"admin\" || @ == \"user\")'::jsonpath)"
 --
--- >>> renderJsonpath <$> lowerPred "HAS" (Subject "" "logs" [ArrayWildcard "", FieldKey "message"]) (Str "error")
+-- >>> renderJsonpath <$> lowerPred (Right Has) (Subject "" "logs" [ArrayWildcard "", FieldKey "message"]) (Str "error")
 -- Right "jsonb_path_exists(to_jsonb(logs), '$[*].\"message\" ? (@ like_regex \"error\" flag \"i\")'::jsonpath)"
 --
--- >>> renderJsonpath <$> lowerPred "CONTAINS" (Subject "" "e" [ArrayWildcard "", FieldKey "d"]) (Str "login")
+-- >>> renderJsonpath <$> lowerPred (Right Contains) (Subject "" "e" [ArrayWildcard "", FieldKey "d"]) (Str "login")
 -- Right "jsonb_path_exists(to_jsonb(e), '$[*].\"d\" ? (@ like_regex \"login\" flag \"i\")'::jsonpath)"
 --
--- >>> renderJsonpath <$> lowerPred "HAS_ANY" (Subject "" "t" [ArrayWildcard "", FieldKey "k"]) (List [Str "a", Str "b"])
+-- >>> renderJsonpath <$> lowerPred (Right HasAny) (Subject "" "t" [ArrayWildcard "", FieldKey "k"]) (List [Str "a", Str "b"])
 -- Right "jsonb_path_exists(to_jsonb(t), '$[*].\"k\" ? (@ like_regex \"a\" flag \"i\" || @ like_regex \"b\" flag \"i\")'::jsonpath)"
 --
--- >>> renderJsonpath <$> lowerPred "HAS_ALL" (Subject "" "t" [ArrayWildcard "", FieldKey "k"]) (List [Str "a", Str "b"])
+-- >>> renderJsonpath <$> lowerPred (Right HasAll) (Subject "" "t" [ArrayWildcard "", FieldKey "k"]) (List [Str "a", Str "b"])
 -- Right "jsonb_path_exists(to_jsonb(t), '$[*].\"k\" ? (@ like_regex \"a\" flag \"i\" && @ like_regex \"b\" flag \"i\")'::jsonpath)"
 --
--- >>> renderJsonpath <$> lowerPred "STARTSWITH" (Subject "" "r" [ArrayWildcard "", FieldKey "path"]) (Str "/api")
+-- >>> renderJsonpath <$> lowerPred (Right StartsWith) (Subject "" "r" [ArrayWildcard "", FieldKey "path"]) (Str "/api")
 -- Right "jsonb_path_exists(to_jsonb(r), '$[*].\"path\" ? (@ like_regex \"^/api\" flag \"i\")'::jsonpath)"
 --
--- >>> renderJsonpath <$> lowerPred "ENDSWITH" (Subject "" "f" [ArrayWildcard "", FieldKey "name"]) (Str ".log")
+-- >>> renderJsonpath <$> lowerPred (Right EndsWith) (Subject "" "f" [ArrayWildcard "", FieldKey "name"]) (Str ".log")
 -- Right "jsonb_path_exists(to_jsonb(f), '$[*].\"name\" ? (@ like_regex \"\\\\.log$\" flag \"i\")'::jsonpath)"
 --
 -- A resolved timestamp compares via @.datetime()@ on both operands:
 --
--- >>> renderJsonpath <$> lowerPred ">" (Subject "" "spans" [ArrayWildcard "", FieldKey "ts"]) (TimestampLit "2026-07-11T20:00:00Z")
+-- >>> renderJsonpath <$> lowerPred (Left GT) (Subject "" "spans" [ArrayWildcard "", FieldKey "ts"]) (TimestampLit "2026-07-11T20:00:00Z")
 -- Right "jsonb_path_exists(to_jsonb(spans), '$[*].\"ts\" ? (@.datetime() > \"2026-07-11T20:00:00Z\".datetime())'::jsonpath)"
 --
 -- Bare now()\/ago() have no jsonpath form; 'resolveWildcardTimes' must resolve them first:
 --
--- >>> lowerPred ">" (Subject "" "attrs" [ArrayWildcard "", FieldKey "ts"]) NowExpression
+-- >>> lowerPred (Left GT) (Subject "" "attrs" [ArrayWildcard "", FieldKey "ts"]) NowExpression
 -- Left (NoJsonpathForm "now()")
 --
--- >>> lowerPred ">" (Subject "" "attrs" [ArrayWildcard "", FieldKey "ts"]) (AgoExpression "1h")
+-- >>> lowerPred (Left GT) (Subject "" "attrs" [ArrayWildcard "", FieldKey "ts"]) (AgoExpression "1h")
 -- Left (NoJsonpathForm "ago(1h)")
-lowerPred :: Text -> Subject -> Values -> Either LowerErr Jsonpath
+lowerPred :: Either CmpOp MatchOp -> Subject -> Values -> Either LowerErr Jsonpath
 lowerPred op sub val = onSubject sub <$> pred_
   where
     -- Negation is NOT handled here: on a wildcard subject it must negate the whole
     -- existence test (@NOT jsonb_path_exists@), not the inner filter — see renderJsonpathSQL.
-    pred_ = case (lookup op cmpOps, op) of
-      (Just c, _) -> JCmp c <$> lit val
-      (Nothing, "IN") -> orEq
-      (Nothing, "HAS") -> substr
-      (Nothing, "CONTAINS") -> substr
-      (Nothing, "HAS_ANY") -> likeList JOr
-      (Nothing, "HAS_ALL") -> likeList JAnd
-      (Nothing, "STARTSWITH") -> JRegex CI . (\t -> "^" <> escapeRegex t) <$> asTerm val
-      (Nothing, "ENDSWITH") -> JRegex CI . (\t -> escapeRegex t <> "$") <$> asTerm val
-      (Nothing, _) -> Left (UnknownOp op)
+    pred_ = case op of
+      Left c -> JCmp (jcmp c) <$> lit val
+      Right In -> orEq
+      Right (Has; Contains) -> substr
+      Right HasAny -> likeList JOr
+      Right HasAll -> likeList JAnd
+      Right StartsWith -> JRegex CI . (\t -> "^" <> escapeRegex t) <$> asTerm val
+      Right EndsWith -> JRegex CI . (\t -> escapeRegex t <> "$") <$> asTerm val
+      Right m@(NotIn; NotHas; NotContains; NotStartsWith; NotEndsWith) -> Left (Negated m)
 
-    cmpOps :: [(Text, JCmpOp)]
-    cmpOps = [("=", JEq), ("==", JEq), ("!=", JNeq), (">=", JGte), ("<=", JLte), (">", JGt), ("<", JLt)]
+    jcmp = \case
+      Eq -> JEq
+      NotEq -> JNeq
+      GTEq -> JGte
+      LTEq -> JLte
+      GT -> JGt
+      LT -> JLt
     substr = JRegex CI . escapeRegex <$> asTerm val
     orEq = combineList JOr . fmap (JCmp JEq) =<< traverse lit =<< listVals
     likeList c = combineList c . fmap (JRegex CI . escapeRegex) =<< traverse asTerm =<< listVals
@@ -1763,10 +1781,10 @@ lowerRegex mode sub = onSubject sub . JRegex mode
 -- 'lowerPred' failures (values with no jsonpath form, e.g. now()\/ago()) render as the
 -- non-matching predicate @false@, keeping the SQL valid rather than emitting jsonpath
 -- Postgres would reject.
-renderJsonpathSQL :: Text -> Subject -> Values -> Text
-renderJsonpathSQL op sub val = case T.stripPrefix "NOT " op of
-  Just pos -> "NOT (" <> render pos <> ")"
-  Nothing -> render op
+renderJsonpathSQL :: Either CmpOp MatchOp -> Subject -> Values -> Text
+renderJsonpathSQL op sub val = case op of
+  Right m | (True, base) <- matchPolarity m -> "NOT (" <> render (Right base) <> ")"
+  _ -> render op
   where
     render o = either (const "false") renderJsonpath (lowerPred o sub val)
 
