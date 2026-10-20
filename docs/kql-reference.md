@@ -135,13 +135,19 @@ response_time >= 100 and response_time <= 500
 **`has` vs `contains`:** both are case-insensitive substring matches today; `has` does not
 enforce word boundaries (`"errorcode" has "error"` matches).
 
-**Free-text search:** a quoted string on its own searches the text a person reads as the
-message — `body`, `status_message` and `name` — case-insensitively. It is how you find a
-span error (e.g. a MySQL deadlock) whose text sits in `status_message`, not `body`. An
-unquoted word is a field name, so `deadlock` alone is an "Unknown field" error.
+**Free-text search** is a quoted string on its own. It searches what a person reads as the
+message — `body`, `status_message` and `name` — case-insensitively, so it finds span errors
+(e.g. MySQL deadlocks in `status_message`) that `body has` misses. An unquoted word is a field
+name, as in Kusto; an unknown one is an error that suggests quoting it.
+
+- Adjacent terms are ANDed: `"deadlock" "retry"`.
+- A multi-word string is a sequence: `"hello world"` matches `hello world`, `hello-world` and
+  `Hello, world` — any punctuation or spacing between the words.
 
 ```kusto
-"deadlock"                         // body, status_message or name contains "deadlock"
+"deadlock"                            // body, status_message or name contains "deadlock"
+"deadlock" "retry"                    // both, anywhere in the message
+"try restarting transaction"          // the words in order
 "deadlock" and service.name == "api"
 ```
 

@@ -561,7 +561,8 @@ traverseAst f g = traverse goSec
         ValLTEq a b -> ValLTEq <$> goV a <*> goV b
         BoolFunc v -> BoolFunc <$> goV v
         e@ArrayHas{} -> pure e
-        FreeText t -> goE (searchExpr t)
+        -- Its columns are checked like any subject; the node stays, since it renders its own SQL.
+        FreeText t -> FreeText t <$ goE (searchExpr t)
     goV = \case
       Field s -> Field <$> f s
       List vs -> List <$> traverse goV vs

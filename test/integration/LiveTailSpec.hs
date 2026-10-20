@@ -15,7 +15,7 @@
 -- subscriptions match, what crosses the wire, what is dropped — lives on this side of it.
 module LiveTailSpec (spec) where
 
-import Control.Concurrent.STM (isEmptyTBQueue)
+import Control.Concurrent.STM (isEmptyTBQueue, lengthTBQueue)
 import Control.Exception.Safe qualified as Safe
 import Data.Aeson qualified as AE
 import Data.ByteString.Builder (Builder, toLazyByteString)
@@ -218,6 +218,12 @@ spec = do
       _ <- LT.publishMatches rt pid (V.fromList [logRecord "checkout" "prod" "error" "ER_LOCK_DEADLOCK", errSpan, logRecord "checkout" "prod" "info" "order saved"])
       (rows, _) <- LT.takeBatch conn
       length rows `shouldBe` 2
+      -- Datadog-style: a sequence tolerates punctuation; adjacent words AND together.
+      forM_ @[] [("\"lock wait\"" :: Text, 1 :: Int), ("\"order\" \"saved\"", 1), ("\"deadlock\" \"saved\"", 0)] \(q, n) -> do
+        (c, r) <- fixture [mkSubScoped 30 (LT.AllSignals Nothing) ["id"] Nothing q]
+        _ <- LT.publishMatches r pid (V.fromList [logRecord "checkout" "prod" "error" "Lock-wait timeout", logRecord "checkout" "prod" "info" "order saved"])
+        got <- atomically (lengthTBQueue c.queue)
+        (q, fromIntegral got) `shouldBe` (q, n)
 
   describe "Events live mode (AllSignals scope)" do
     it "delivers spans, which a logs-only subscription must never see" do
