@@ -134,7 +134,6 @@ import GHC.Generics (Generically (..))
 import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
-import Utils (capRowValue, maxRowFieldChars)
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnumSC (..), unAesonText)
 import Pkg.Parser.Eval (EvalError, Resolver, evalExpr, filterExpr, resolveIn)
@@ -142,6 +141,7 @@ import Pkg.Parser.Expr (Expr, FieldKey (..), Subject (..))
 import Pkg.Parser.Stats (parseQueryToAST)
 import Relude
 import System.IO.Unsafe (unsafePerformIO)
+import Utils (capRowValue, maxRowFieldChars)
 
 
 -- $setup

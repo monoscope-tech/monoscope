@@ -102,12 +102,12 @@ module Utils (
 )
 where
 
+import Control.Lens (transform, (%~))
 import Data.Aeson as AE
 import Data.Aeson.Extra.Merge (lodashMerge)
-import Control.Lens (transform, (%~))
-import Data.Aeson.Lens (_String)
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
+import Data.Aeson.Lens (_String)
 import Data.Aeson.Types qualified as AET
 import Data.Char (isAlpha, isAlphaNum, isDigit)
 import Data.Default (Default (..))
