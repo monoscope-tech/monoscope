@@ -417,7 +417,7 @@ databaseSpec = do
     it "still rejects a mistyped ___ column, and suggests in the same notation" \tr -> do
       v <- snd <$> testServant tr (Log.logExplorerValidateH testPid (Just "context___trace_ix != null") Nothing)
       v.valid `shouldBe` False
-      v.message `shouldSatisfy` maybe False (T.isInfixOf "context___trace_id")
+      v.hint `shouldSatisfy` maybe False (T.isInfixOf "context___trace_id")
 
     it "treats an empty query as valid" \tr -> do
       v <- snd <$> testServant tr (Log.logExplorerValidateH testPid Nothing Nothing)
