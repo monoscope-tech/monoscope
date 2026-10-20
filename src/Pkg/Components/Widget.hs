@@ -1713,7 +1713,7 @@ formatTimestampValue (T.strip -> val)
 -- columns skip the wrapper since they're always short.
 renderLongTextOr :: Widget -> TableColumn -> Text -> Html ()
 renderLongTextOr widget col value
-  | col.copyable == Just True = div_ [class_ "group flex items-center gap-1 min-w-0"] do
+  | or col.copyable = div_ [class_ "group flex items-center gap-1 min-w-0"] do
       shown
       copyButton_ "btn btn-xs btn-ghost shrink-0 opacity-0 group-hover:opacity-100 focus:opacity-100" "w-3 h-3" "my @data-copy" [data_ "copy" value]
   | otherwise = shown

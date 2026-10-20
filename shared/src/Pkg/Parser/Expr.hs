@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), CaseMode (..), kqlTimespanToTimeBucket, unsupportedTimespan, defaultBinWidth, FieldKey (..), pSquareBracketKey, pTerm, Jsonpath, LowerErr (..), lowerPred, renderJsonpath, resolveWildcardTimes, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), searchExpr, flattenedOtelAttributes, flattenedOtelAttributesBuiltin, setOtelColumns, setMetricsColumns, topLevelOtelColumns, arrayColumns, acceptedFieldRoots, FieldUniverse (..), otelFieldUniverse, metricsFieldUniverse, knownFieldRoot, suggestFieldRoot, transformFlattenedAttribute, outputFieldAliases, errorFlagSql, severityIsErrorSql, sqlStringLit) where
+module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), CaseMode (..), kqlTimespanToTimeBucket, unsupportedTimespan, defaultBinWidth, FieldKey (..), pSquareBracketKey, pTerm, Jsonpath, LowerErr (..), lowerPred, renderJsonpath, resolveWildcardTimes, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), searchExpr, freeTextPattern, flattenedOtelAttributes, flattenedOtelAttributesBuiltin, setOtelColumns, setMetricsColumns, topLevelOtelColumns, arrayColumns, acceptedFieldRoots, FieldUniverse (..), otelFieldUniverse, metricsFieldUniverse, knownFieldRoot, suggestFieldRoot, transformFlattenedAttribute, outputFieldAliases, errorFlagSql, severityIsErrorSql, sqlStringLit) where
 
 import Control.Monad.Combinators.Expr (
   Operator (InfixL),
@@ -8,7 +8,8 @@ import Control.Monad.Combinators.Expr (
  )
 import Data.Aeson qualified as AE
 import Data.Aeson.Text (encodeToLazyText)
-import Data.Char (isDigit)
+import Data.Char (isAlphaNum, isDigit)
+import Data.Foldable1 qualified as F1
 import Data.List (lookup, partition)
 import Data.Map.Strict qualified as M
 import Data.Scientific (FPFormat (Fixed), Scientific, formatScientific)
@@ -23,7 +24,7 @@ import Pkg.Deriving (escapeRegex)
 import Relude hiding (GT, LT, Sum, many, some)
 import System.IO.Unsafe (unsafePerformIO)
 import Text.Megaparsec
-import Text.Megaparsec.Char (alphaNumChar, char, space, space1, string)
+import Text.Megaparsec.Char (alphaNumChar, char, space, space1, spaceChar, string, string')
 import Text.Megaparsec.Char.Lexer qualified as L
 
 
@@ -595,7 +596,12 @@ pExpr = makeExprParser pTerm operatorTable
 
 -- | Both the space-padded and the bare spelling of each keyword, padded first so it wins.
 operatorTable :: [[Operator Parser Expr]]
-operatorTable = [[InfixL (ctor <$ symbol sym) | (kw, ctor) <- [("AND", And), ("OR", Or), ("and", And), ("or", Or)], sym <- [" " <> kw <> " ", kw]]]
+operatorTable = [[InfixL (ctor <$ symbol sym) | (kw, ctor) <- [("AND", And), ("OR", Or), ("and", And), ("or", Or)], sym <- [" " <> kw <> " ", kw]] <> [InfixL (And <$ implicitAnd)]]
+  where
+    -- Adjacent terms AND together (`hello world`), as in Datadog's search box. Never before an
+    -- operator: `attributes contains ddd` (unquoted value) must stay a syntax error, not
+    -- become three terms.
+    implicitAnd = try (space1 *> notFollowedBy (void (oneOf ("|),]=<>!" :: String)) <|> eof <|> asum [void (string' k *> (void spaceChar <|> eof)) | k <- ["and", "or", "matches", "in", "has", "has_any", "has_all", "contains", "startswith", "endswith"]]))
 
 
 -------------------------------------------------------
@@ -1459,7 +1465,12 @@ instance Display Expr where
   displayPrec prec (And u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " AND " <> displayPrec prec u2
   displayPrec prec (Or u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " OR " <> displayPrec prec u2
   displayPrec prec (BoolFunc v) = displayPrec prec v -- Boolean scalar function renders directly to SQL
-  displayPrec prec (FreeText t) = displayPrec prec (searchExpr t)
+  displayPrec _ (FreeText t) = "(" <> mconcat (intersperse " OR " [displayBuilder (col c) | c <- toList freeTextColumns]) <> ")"
+    where
+      (longest, pat) = freeTextPattern t
+      -- `~*`, not 'Regex': that lowers to jsonpath, which TimeFusion cannot run. The longest
+      -- word is matched as a plain literal too, so TimeFusion can route it to its text index.
+      col c = let txt = if c == "body" then "body::text" else c in "(" <> foldMap (\w -> txt <> " ~* " <> sqlStringLit w <> " AND ") longest <> txt <> " ~* " <> sqlStringLit pat <> ")"
   displayPrec prec (ArrayHas col v) = displayPrec prec $ "array_has(" <> col <> ", " <> sqlStringLit v <> ")"
   -- Rendered by the operator-table guards above; listed so a new constructor fails to compile.
   displayPrec _ (Eq{}; NotEq{}; GT{}; LT{}; GTEq{}; LTEq{}; In{}; NotIn{}; Has{}; NotHas{}; HasAny{}; HasAll{}; Contains{}; NotContains{}; StartsWith{}; NotStartsWith{}; EndsWith{}; NotEndsWith{}; ValEq{}; ValNotEq{}; ValGT{}; ValLT{}; ValGTEq{}; ValLTEq{}) = error "Display Expr: binary operators render via the guards"
@@ -1481,15 +1492,29 @@ instance ToQueryText Expr where
   toQText (Eq{}; NotEq{}; GT{}; LT{}; GTEq{}; LTEq{}; In{}; NotIn{}; Has{}; NotHas{}; HasAny{}; HasAll{}; Contains{}; NotContains{}; StartsWith{}; NotStartsWith{}; EndsWith{}; NotEndsWith{}; ValEq{}; ValNotEq{}; ValGT{}; ValLT{}; ValGTEq{}; ValLTEq{}) = error "ToQueryText Expr: binary operators render via the guards"
 
 
--- | What free text means: a case-insensitive substring of the columns a person reads as "the
--- message". Span errors (e.g. MySQL deadlocks) live in @status_message@, not @body@.
+-- | What free text means, Datadog-style and case-insensitive, over the columns a person reads
+-- as "the message" (span errors such as MySQL deadlocks live in @status_message@). A single
+-- word is a substring; a sequence of words matches with any punctuation or spacing between them.
 --
--- >>> toQText (searchExpr "deadlock")
--- "(body contains \"deadlock\" OR status_message contains \"deadlock\" OR name contains \"deadlock\")"
+-- >>> freeTextPattern "deadlock"
+-- (Nothing,"deadlock")
+-- >>> freeTextPattern "Hello, world!"
+-- (Just "world","Hello[^[:alnum:]]+world")
+-- >>> display (FreeText "dead lock")
+-- "((body::text ~* 'lock' AND body::text ~* 'dead[^[:alnum:]]+lock') OR (status_message ~* 'lock' AND status_message ~* 'dead[^[:alnum:]]+lock') OR (name ~* 'lock' AND name ~* 'dead[^[:alnum:]]+lock'))"
+freeTextPattern :: Text -> (Maybe Text, Text)
+freeTextPattern t = case nonEmpty (filter (not . T.null) (T.split (not . isAlphaNum) t)) of
+  Just ws@(_ :| _ : _) -> (Just (F1.maximumBy (comparing T.length) ws), T.intercalate "[^[:alnum:]]+" (toList ws))
+  _ -> (Nothing, escapeRegex t)
+
+
+freeTextColumns :: NonEmpty Text
+freeTextColumns = "body" :| ["status_message", "name"]
+
+
+-- | Free text as an ordinary predicate, for the in-memory evaluator and subject checks.
 searchExpr :: Text -> Expr
-searchExpr t = Paren $ Or (c "body") (Or (c "status_message") (c "name"))
-  where
-    c col = Contains (Subject col col []) (Str t)
+searchExpr t = Paren (F1.foldr1 Or ((\c -> Regex CI (Subject c c []) (snd (freeTextPattern t))) <$> freeTextColumns))
 
 
 -- Helper function to handle the common display logic

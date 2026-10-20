@@ -456,6 +456,23 @@ databaseSpec = do
       bare <- search "deadlock"
       bare.error `shouldBe` Just "Unknown field \"deadlock\". To search text, quote it: \"deadlock\""
 
+    -- Quoted free text: adjacent terms AND together; a sequence tolerates punctuation.
+    it "freeText_quotedTermsAndSequences" \tr -> do
+      pid <- createTestProject tr "log-explorer-datadog-text"
+      apiKey <- createTestAPIKey tr pid "datadog-text-key"
+      forM_ ["hello beautiful world", "Hello, world", "hello-world", "goodbye world"] \b -> ingestLog tr apiKey b frozenTime
+      let window = Just . toText . formatTime defaultTimeLocale "%FT%T%QZ" . (`addUTCTime` frozenTime)
+          hits q = do
+            r <- fetchDataIn tr pid (Just q) (Just "id,body") Nothing Nothing (window (-60)) (window 60)
+            r.error `shouldBe` Nothing
+            pure (V.length r.logsData)
+      _ <- eventually (hits "") (>= 4)
+      hits "\"hello\"" `shouldReturn` 3
+      hits "\"Hello\" \"world\"" `shouldReturn` 3
+      hits "\"hello\" AND \"world\"" `shouldReturn` 3
+      hits "\"hello world\"" `shouldReturn` 2
+      hits "\"goodbye\"" `shouldReturn` 1
+
     -- 2026-08-06: `attribute contains "…"` (singular) reached the database as a
     -- column and came back as a raw "Schema error: No field named attribute"
     -- logged at ATTENTION. It must be rejected before any SQL is built.
