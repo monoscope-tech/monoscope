@@ -104,6 +104,8 @@ where
 
 import Data.Aeson as AE
 import Data.Aeson.Extra.Merge (lodashMerge)
+import Control.Lens (transform, (%~))
+import Data.Aeson.Lens (_String)
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.Types qualified as AET
@@ -2046,14 +2048,10 @@ maxRowFieldChars :: Int
 maxRowFieldChars = 8000
 
 
--- | Cap every string inside a JSON value at 'maxRowFieldChars'. Recursive because @summary@ is
--- a list whose body element carries the raw log body.
+-- | Cap every string inside a JSON value, at any depth, at 'maxRowFieldChars' (@summary@ is a
+-- list whose body element carries the raw log body).
 --
 -- >>> capRowValue (AE.toJSON @[Text] ["ok", T.replicate 9000 "x"]) == AE.toJSON @[Text] ["ok", T.replicate 8000 "x"]
 -- True
 capRowValue :: AE.Value -> AE.Value
-capRowValue = \case
-  AE.String t | T.length t > maxRowFieldChars -> AE.String (T.take maxRowFieldChars t)
-  AE.Array xs -> AE.Array (capRowValue <$> xs)
-  AE.Object o -> AE.Object (capRowValue <$> o)
-  v -> v
+capRowValue = transform (_String %~ T.take maxRowFieldChars)
