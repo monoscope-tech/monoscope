@@ -74,3 +74,4 @@ scripts/local/
 
 # Playwright run output
 test-results/
+.test-args

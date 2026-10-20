@@ -84,6 +84,14 @@ monoscope/
 
 A `make live-reload` process is always running in a tmux pane, logging to `build.log`. Web component build logs are in `web-components.log` and CSS build logs are in `css.log`.
 
+### Keep the watchers running — never restart them to iterate
+
+**Iterate against long-lived ghcid watchers in tmux panes: `make tmux-live-reload` (server, `build.log`) and `make tmux-live-test-dev` (tests, `build-test-dev.log`).** Start each once and leave it running. After the first load, a save recompiles only the changed modules and reruns in seconds; every kill-and-restart reloads all ~220 modules and costs 5–12 minutes. On 2026-10-19 a single session lost hours to restarting `live-test-dev` once per test.
+
+- **Change which tests run by editing `.test-args`, not by restarting.** `echo '--match "LiveTail"' > .test-args` reruns the live watcher on that focus (measured: 9 s, against ~10 min for a restart). `TEST_MATCH=…` only seeds the file at startup.
+- Restart a watcher only when it has crashed or wedged (see below), not to change focus.
+- `monoscope-shared` (`shared/`) is a separate package the test watcher loads prebuilt. Edits there are invisible to a running watcher, so that is the one case that needs a restart.
+
 ### Pull requests only
 
 All Monoscope changes must go through a pull request, including documentation,
@@ -296,13 +304,14 @@ path refuses a dirty tree and records who built it; the deploy job prints
 This is the **same** rule as `cabal build` vs `build.log` — running `cabal test` in parallel re-links the whole library, races the watcher, warms a second build cache, and wastes minutes of your time and the user's for information that's already in the log file.
 
 ```bash
-make live-test-dev                              # full integration suite, auto-reruns on save
-TEST_MATCH=/MonitoringSpec/ make live-test-dev  # filter by spec name
+make tmux-live-test-dev                         # start once, in its own tmux pane; auto-reruns on save
+echo '--match "/MonitoringSpec/"' > .test-args  # refocus the running watcher (no restart)
+: > .test-args                                  # back to the full suite
 ```
 
-If you catch yourself about to run `cabal test integration-tests` or `cabal test --test-options=...`, **stop and read `build-test-dev.log` instead.** It applies to every test verification, including the one you just decided was "quick" or "scoped." If the watcher isn't running, start it (`make live-test-dev` in the background or `make live-test-dev | tee build-test-dev.log` in a tmux pane); do **not** fall back to a one-shot `cabal test`. If the watcher seems stuck or crashed, restart it the same way — never invoke the compiler directly.
+If you catch yourself about to run `cabal test integration-tests` or `cabal test --test-options=...`, **stop and read `build-test-dev.log` instead.** It applies to every test verification, including the one you just decided was "quick" or "scoped." If the watcher isn't running, start it with `make tmux-live-test-dev` (or `make live-test-dev` in the background); do **not** fall back to a one-shot `cabal test`. If the watcher seems stuck or crashed, restart it the same way — never invoke the compiler directly.
 
-The one acceptable exception is a CI-style reproduction with a fixed seed (e.g. chasing a flake) — and even then, prefer rerunning under live-test-dev with `TEST_MATCH` first.
+The one acceptable exception is a CI-style reproduction with a fixed seed (e.g. chasing a flake) — and even then, prefer rerunning under live-test-dev, focused through `.test-args`, first.
 
 ### Other test commands (rarely needed)
 

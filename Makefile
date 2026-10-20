@@ -122,10 +122,13 @@ live-test-reload-all:
 # NB: GHCi's :main only strips quotes at token start, so `--match="X"` would
 # pass the quote chars to hspec and silently match nothing — keep the space form.
 TEST_MATCH ?=
+# Hspec args live in .test-args, read on every run: refocus a running watcher with
+# `echo '--match LiveTail' > .test-args` instead of restarting it. TEST_MATCH seeds the file.
 live-test-dev: build-chart-cli
+	@$(if $(TEST_MATCH),echo '--match "$(TEST_MATCH)"' > .test-args,touch .test-args)
 	USE_EXTERNAL_DB=true LOG_LEVEL=attention \
 	ghcid --command 'cabal repl monoscope:test:test-dev --no-semaphore --ghc-options="-j$(NCPUS) -O0" --repl-options="-fobject-code -osuf dyn_o -hisuf dyn_hi +RTS -T -RTS" --with-compiler=$(GHC)' \
-		--test ':main $(if $(TEST_MATCH),--match "$(TEST_MATCH)")' $(RELOAD_ENV) --warnings 2>&1 | tee build-test-dev.log
+		--test ':cmd Prelude.fmap (":main " Prelude.++) (Prelude.readFile ".test-args")' --reload=.test-args $(RELOAD_ENV) --warnings 2>&1 | tee build-test-dev.log
 
 hot-reload:
 	livereload -f reload.trigger static/public/ & \
@@ -345,19 +348,30 @@ tmux-live-reload-cli:
 # tmux_run C-c's on reuse — sharing it would kill live-reload. Worth supervising:
 # when this dies the server keeps serving the last-built bundle, so server-side
 # changes appear and client-side ones silently do not.
-tmux-web-components-watch:
-	@PANE=$$(tmux show-option -wv -q @wc-pane 2>/dev/null); \
+# A watcher in its own long-lived pane, tracked by the tmux option $(1): `make $(2)`.
+define tmux_own_pane
+	@PANE=$$(tmux show-option -wv -q $(1) 2>/dev/null); \
 	if [ -n "$$PANE" ] && tmux list-panes -a -F '#{pane_id}' | grep -qx "$$PANE"; then \
 		tmux send-keys -t "$$PANE" C-c; sleep 0.5; \
-		tmux send-keys -t "$$PANE" 'make web-components-watch' Enter; \
-		echo "Reusing web-components pane $$PANE"; \
+		tmux send-keys -t "$$PANE" 'make $(2)' Enter; \
+		echo "Reusing pane $$PANE for $(2)"; \
 	elif [ -n "$$TMUX" ]; then \
-		PANE=$$(tmux split-window -d -v -P -F '#{pane_id}' 'make web-components-watch'); \
-		tmux set-option -w @wc-pane "$$PANE"; \
-		echo "Started web-components watcher in pane $$PANE"; \
+		PANE=$$(tmux split-window -d -v -P -F '#{pane_id}' 'make $(2)'); \
+		tmux set-option -w $(1) "$$PANE"; \
+		echo "Started $(2) in pane $$PANE"; \
 	else \
-		echo "Not in tmux — run 'make web-components-watch' in its own terminal"; \
+		echo "Not in tmux — run 'make $(2)' in its own terminal"; \
 	fi
+endef
+
+tmux-web-components-watch:
+	$(call tmux_own_pane,@wc-pane,web-components-watch)
+
+# Start once and leave running: every reload after the first recompiles only what changed.
+# Refocus it by editing .test-args (see live-test-dev) — never by restarting, which reloads
+# all ~220 modules.
+tmux-live-test-dev:
+	$(call tmux_own_pane,@test-pane,live-test-dev)
 
 e2e-install:
 	@test -x e2e/node_modules/.bin/playwright || (cd e2e && npm install && npx playwright install chromium)
@@ -526,4 +540,4 @@ builder-rm:
 
 .PHONY: ci ci-signoff ci-status ci-shell ci-down ci-clean ci-selftest deploy-image ship kafka-topics deploy-app rollback-app deploy-status builder-setup builder-status builder-rm tf-image
 
-.PHONY: all test fmt lint fix-lint live-reload kill-live-reload live-reload-cli live-reload-doctests live-test-dev build-chart-cli build-chart-cli-linux tmux-live-reload tmux-live-reload-cli tmux-pin-here tmux-unpin kill-web-components-watch web-components-watch e2e-install test-e2e test-e2e-real test-e2e-ui gen-proto sync-otel-proto update-otel-proto minio-local timefusion-start timefusion-stop test-integration-tf
+.PHONY: all test fmt lint fix-lint live-reload kill-live-reload live-reload-cli live-reload-doctests live-test-dev tmux-live-test-dev build-chart-cli build-chart-cli-linux tmux-live-reload tmux-live-reload-cli tmux-pin-here tmux-unpin kill-web-components-watch web-components-watch e2e-install test-e2e test-e2e-real test-e2e-ui gen-proto sync-otel-proto update-otel-proto minio-local timefusion-start timefusion-stop test-integration-tf
