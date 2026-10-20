@@ -311,7 +311,8 @@ maxQueryLength = 4000
 -- lease length or a queue depth is being handed a question they have no way to answer. What a
 -- deployment does vary — whether Kafka exists — is read from the broker list it already had.
 
--- | Kafka side-topic name. Create it with short retention; nothing here is replayable.
+-- | Kafka side-topic name. Nothing here is replayable; @scripts/kafka-topics.sh@ owns its broker
+-- config, including the segment roll without which short retention never deletes anything.
 kafkaTopicName :: Text
 kafkaTopicName = "live_tail"
 
@@ -997,8 +998,11 @@ toTableCols cols r = fromList (mapMaybe resolveCol cols)
   where
     json = AE.toJSON r
     resolveCol c = (c,) . truncateValue <$> viaNonEmpty Relude.head (resolveIn json (dottedSubject (T.replace "___" "." c)))
+    -- Recursive: `summary` is a list whose body element carries the raw log body.
     truncateValue = \case
       AE.String t | T.length t > maxRowFieldChars -> AE.String (T.take maxRowFieldChars t)
+      AE.Array xs -> AE.Array (truncateValue <$> xs)
+      AE.Object o -> AE.Object (truncateValue <$> o)
       v -> v
     -- Built directly rather than parsed: the column list was validated at registration.
     dottedSubject path = case T.splitOn "." path of

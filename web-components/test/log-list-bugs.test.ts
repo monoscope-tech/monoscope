@@ -159,6 +159,17 @@ describe('LogList — LOWER', () => {
   // recordings still existed, and nothing failed; the button simply stopped
   // appearing. Assert it renders in the DEFAULT (logs) mode, which is the mode
   // that regressed.
+  // Shipbubble 2026-10-19: a 6MB single-line body rendered whole into the row and its tooltip.
+  test('summary_multiMegabyteBody_rendersCapped', async () => {
+    const el = await mountList({});
+    (el as any).colIdxMap = { id: 0, summary: 1 };
+    const big = 'x'.repeat(2_000_000);
+    const host = document.createElement('div');
+    render((el as any).logItemCol({ ...row('r1'), data: ['r1', ['kind;badge⇒log', big]], depth: 0, children: 0 }, 'summary'), host);
+    expect(host.textContent!.length).toBeLessThan(20_000);
+    expect(host.innerHTML.length).toBeLessThan(40_000);
+  });
+
   test('the logs list renders the Replay button, not just the sessions tab', async () => {
     const sid = 'a4c885f5-215c-44ee-891e-d87bb63daa48';
     const summaryCell = [`session;right-badge-neutral\u21d2${sid}`];

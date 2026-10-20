@@ -312,18 +312,18 @@ tabs:
             title: Avg
             column_type: duration
             unit: ms
-          - field: error_rate
+          - field: errors
             sortable: true
             title: Errors
-            unit: '%'
-            progress: value_percent
+            column_type: number
+            progress: column_percent
             progress_variant: error
         sql: |
           SELECT
             attributes___db___system___name as db_system,
             COUNT(*) as queries,
             ROUND((AVG(duration) / 1e6)::numeric, 2) as avg_ms,
-            ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*)))::numeric, 2) as error_rate
+            COUNT(*) FILTER (WHERE status_code = 'ERROR') as errors
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
             AND attributes___db___system___name IS NOT NULL
@@ -813,16 +813,14 @@ tabs:
             unit: queries
             layout: { w: 3, h: 2 }
 
+          # A count, not a rate: 17 errors in 1.4M queries rounded to 0.00%.
           - type: 'timeseries_stat'
-            title: 'Query Error Rate'
+            title: 'Query Errors'
             icon: alert-triangle
             query: |
-              attributes.db.system.name == "{{var-database}}"
-              | summarize round(countif(status_code == "ERROR") * 100.0 / count(), 2) by bin_auto(timestamp)
-            unit: '%'
-            summarize_by: mean
-            alert_threshold: 5
-            warning_threshold: 1
+              attributes.db.system.name == "{{var-database}}" and status_code == "ERROR"
+              | summarize count() by bin_auto(timestamp)
+            unit: errors
             layout: { w: 3, h: 2 }
 
           - type: 'timeseries_stat'
@@ -858,6 +856,7 @@ tabs:
           - field: query_pattern
             sortable: true
             title: Query Pattern
+            copyable: true
           - field: count
             sortable: true
             title: Count
@@ -879,11 +878,11 @@ tabs:
             column_type: duration
             unit: s
             progress: column_percent
-          - field: error_rate
+          - field: errors
             sortable: true
             title: Errors
-            unit: '%'
-            progress: value_percent
+            column_type: number
+            progress: column_percent
             progress_variant: error
         sql: |
           SELECT
@@ -897,7 +896,7 @@ tabs:
             ROUND((AVG(duration) / 1e6)::numeric, 2) as avg_ms,
             ROUND((approx_percentile(0.95, percentile_agg(duration)) / 1e6)::numeric, 2) as p95_ms,
             ROUND((SUM(duration) / 1e9)::numeric, 2) as total_time,
-            ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*)))::numeric, 2) as error_rate
+            COUNT(*) FILTER (WHERE status_code = 'ERROR') as errors
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
             AND attributes___db___system___name IS NOT NULL
@@ -931,18 +930,18 @@ tabs:
             title: Avg
             column_type: duration
             unit: ms
-          - field: error_rate
+          - field: errors
             sortable: true
             title: Errors
-            unit: '%'
-            progress: value_percent
+            column_type: number
+            progress: column_percent
             progress_variant: error
         sql: |
           SELECT
             attributes___db___system___name as db_system,
             COUNT(*) as operations,
             ROUND((AVG(duration) / 1e6)::numeric, 2) as avg_duration,
-            ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*)))::numeric, 2) as error_rate
+            COUNT(*) FILTER (WHERE status_code = 'ERROR') as errors
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
             AND attributes___db___system___name IS NOT NULL
@@ -970,18 +969,18 @@ tabs:
             title: Avg
             column_type: duration
             unit: ms
-          - field: error_rate
+          - field: errors
             sortable: true
             title: Errors
-            unit: '%'
-            progress: value_percent
+            column_type: number
+            progress: column_percent
             progress_variant: error
         sql: |
           SELECT
             UPPER(COALESCE(attributes___db___operation___name, SPLIT_PART(name, ' ', 1), 'UNKNOWN')) as operation,
             COUNT(*) as count,
             ROUND((AVG(duration) / 1e6)::numeric, 2) as avg_ms,
-            ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*)))::numeric, 2) as error_rate
+            COUNT(*) FILTER (WHERE status_code = 'ERROR') as errors
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
             AND attributes___db___system___name IS NOT NULL
@@ -1025,6 +1024,7 @@ tabs:
           - field: query_pattern
             sortable: true
             title: Query Pattern
+            copyable: true
           - field: count
             sortable: true
             title: Count
@@ -1086,6 +1086,44 @@ tabs:
           | order by timestamp desc
           | limit 10000
         layout: { w: 6, h: 4 }
+
+      # The failures themselves. The message is cut at its first double quote so the
+      # link's `contains "…"` is always valid KQL and still matches the full message.
+      - type: table
+        title: 'Recent Database Errors'
+        layout: { w: 12, h: 5 }
+        columns:
+          - field: error_message
+            sortable: true
+            title: Error
+            copyable: true
+            link: '/p/{{project_id}}/log_explorer?query=status_code%20%3D%3D%20%22ERROR%22%20and%20status_message%20contains%20%22{{row.error_message}}%22'
+          - field: query_pattern
+            sortable: true
+            title: Query Pattern
+            copyable: true
+          - field: count
+            sortable: true
+            title: Count
+            column_type: number
+          - field: last_seen
+            sortable: true
+            title: Last Seen
+        sql: |
+          SELECT
+            LEFT(SPLIT_PART(COALESCE(NULLIF(status_message, ''), attributes___exception___message, 'Unknown error'), '"', 1), 160) as error_message,
+            LEFT(COALESCE(NULLIF(attributes___db___query___summary, ''), attributes___db___query___text, name), 2000) as query_pattern,
+            COUNT(*) as count,
+            MAX(timestamp)::text as last_seen
+          FROM otel_logs_and_spans
+          WHERE project_id='{{project_id}}'
+            AND attributes___db___system___name = '{{var-database}}'
+            AND status_code = 'ERROR'
+            {{time_filter}}
+          GROUP BY 1, 2
+          ORDER BY {{table_sort}}
+          LIMIT 50
+        default_sort: "MAX(timestamp) DESC"
 
       # Query volume by service
       - type: 'timeseries'

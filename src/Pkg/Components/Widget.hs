@@ -37,7 +37,7 @@ import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation
 import Pages.Charts.Charts qualified as Charts
-import Pages.Components (headerRow_)
+import Pages.Components (copyButton_, headerRow_)
 import Pkg.DeriveUtils (JsonValueSchema (..), WrappedEnumSC (..))
 import Pkg.Parser (ToQueryText (..), parseQueryToAST)
 import Pkg.Parser.Expr (Subject (..))
@@ -437,7 +437,7 @@ data TableColumn = TableColumn
   , title :: Text
   , unit :: Maybe Text
   , sortable :: Maybe Bool
-  , clickable :: Maybe Bool
+  , copyable :: Maybe Bool
   , link :: Maybe Text
   , width :: Maybe Text
   , align :: Maybe Text
@@ -1613,7 +1613,7 @@ renderTableWithDataAndParams widget dataRows params = do
             rowValue = maybe firstColValue (\tpl -> foldl' (\t (col, idx) -> T.replace ("{{row." <> col.field <> "}}") (getRowValue idx row) t) tpl (zip columns [0 ..])) (widget.onRowClick >>= (.value))
             isCurrent = Just rowValue == currentVar
         tr_
-          ( [class_ $ "hover cursor-pointer" <> memptyIfFalse isCurrent " bg-fillBrand-weak font-semibold"]
+          ( [class_ $ "hover" <> memptyIfFalse (isJust widget.onRowClick) " cursor-pointer" <> memptyIfFalse isCurrent " bg-fillBrand-weak font-semibold"]
               <> [term "aria-current" "true" | isCurrent]
               <> rowNavAttrs rowValue
           )
@@ -1713,9 +1713,14 @@ formatTimestampValue (T.strip -> val)
 -- columns skip the wrapper since they're always short.
 renderLongTextOr :: Widget -> TableColumn -> Text -> Html ()
 renderLongTextOr widget col value
-  | not (isNumericCol col), T.length value > 60 = div_ [class_ "truncate max-w-2xl", term "data-tippy-content" value] cell
-  | otherwise = cell
+  | col.copyable == Just True = div_ [class_ "group flex items-center gap-1 min-w-0"] do
+      shown
+      copyButton_ "btn btn-xs btn-ghost shrink-0 opacity-0 group-hover:opacity-100 focus:opacity-100" "w-3 h-3" "my @data-copy" [data_ "copy" value]
+  | otherwise = shown
   where
+    shown
+      | not (isNumericCol col), T.length value > 60 = div_ [class_ "truncate max-w-2xl", term "data-tippy-content" value] cell
+      | otherwise = cell
     formatted = formatColumnValue col value
     content = if T.isInfixOf "⇒" formatted then renderSummaryTags formatted else toHtml formatted
     cell = maybe content (\template -> a_ [href_ $ tableLink template, class_ "text-textBrand hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-strokeBrand-strong rounded-sm"] content) col.link

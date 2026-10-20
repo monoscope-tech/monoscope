@@ -440,6 +440,22 @@ databaseSpec = do
       V.length r.logsData `shouldBe` 0
       r.count `shouldBe` 0
 
+    -- Shipbubble 2026-10-19: searching `deadlock` returned `Unknown field "deadlock"`, and even
+    -- `body has "deadlock"` missed the MySQL deadlocks, which sit in span status messages.
+    it "freeTextSearch_findsSpanStatusMessageAndLogBody" \tr -> do
+      pid <- createTestProject tr "log-explorer-free-text"
+      apiKey <- createTestAPIKey tr pid "free-text-key"
+      ingestSpanReq tr =<< createOtelTraceWithExceptionAtTime apiKey ([], [], []) "update orders" "QueryError" "Deadlock found when trying to get lock; try restarting transaction" "" frozenTime
+      ingestLog tr apiKey "ER_LOCK_DEADLOCK while saving order" frozenTime
+      ingestLog tr apiKey "order saved" frozenTime
+      let window = Just . toText . formatTime defaultTimeLocale "%FT%T%QZ" . (`addUTCTime` frozenTime)
+          search q = fetchDataIn tr pid (Just q) Nothing Nothing Nothing (window (-60)) (window 60)
+      r <- eventually (search "\"deadlock\"") ((>= 2) . V.length . (.logsData))
+      r.error `shouldBe` Nothing
+      V.length r.logsData `shouldBe` 2
+      bare <- search "deadlock"
+      bare.error `shouldBe` Just "Unknown field \"deadlock\". To search text, quote it: \"deadlock\""
+
     -- 2026-08-06: `attribute contains "…"` (singular) reached the database as a
     -- column and came back as a raw "Schema error: No field named attribute"
     -- logged at ATTENTION. It must be rejected before any SQL is built.

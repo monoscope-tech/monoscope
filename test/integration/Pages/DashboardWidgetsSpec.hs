@@ -28,7 +28,7 @@ import Database.PostgreSQL.Simple.Types (Query (..))
 import GHC.Clock (getMonotonicTime)
 import Lucid (renderText, toHtml)
 import Models.Apis.Endpoints qualified as Endpoints
-import Models.Projects.DashboardTemplates (loadDashboardFromVM)
+import Models.Projects.DashboardTemplates (dashboardTemplatesCompiled, loadDashboardFromVM)
 import Models.Projects.Dashboards (DashboardVM (..))
 import Models.Projects.Dashboards qualified as DashboardModel
 import Models.Projects.Projects (Session (..))
@@ -974,6 +974,26 @@ spec = sequential $ aroundAll withTestResources do
         `shouldBe` [Just "attributes___server___address IN ('integrations.routelift.com') AND attributes___http___request___method IN ('POST') AND (attributes___http___route IN ('/v1/deliveries/estimate/v2') OR ((attributes___http___route IS NULL OR attributes___http___route = '') AND attributes___url___path IN ('/v1/deliveries/estimate/v2')))"]
       [value | (key, value) <- params, key == "const-endpointFilter-kql"]
         `shouldBe` [Just "attributes.server.address in (\"integrations.routelift.com\") AND attributes.http.request.method in (\"POST\") AND (attributes.http.route in (\"/v1/deliveries/estimate/v2\") or (isempty(attributes.http.route) and attributes.url.path in (\"/v1/deliveries/estimate/v2\")))"]
+
+    -- Shipbubble 2026-10-19: 17 MySQL errors in 1.4M queries showed as "0.00%", and the
+    -- tab had no way to read the error itself.
+    it "databasesTab_rareErrors_areCountedAndReadable" \tr -> do
+      let dbTab = [t | d <- dashboardTemplatesCompiled, d.file == Just "_overview.yaml", t <- fold d.tabs, t.name == "Databases"]
+          widgets = concatMap (\w -> w : fold w.children) (concatMap (.widgets) dbTab)
+          errTable = find ((== Just "Recent Database Errors") . (.title)) widgets
+      [c.field | w <- widgets, c <- fold w.columns, c.field == "error_rate"] `shouldBe` []
+      pid <- createTestProject tr "db-tab-errors"
+      apiKey <- createTestAPIKey tr pid "db-tab-key"
+      ingestSpanReq tr =<< createOtelTraceWithExceptionAtTime apiKey ([("db.system.name", "mysql"), ("db.query.text", "update orders set x = ?")], [], []) "update orders" "QueryError" "Deadlock found when trying to get lock; try restarting transaction" "" frozenTime
+      md <- eventually (runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTText) (Just pid) Nothing (snd . (`Widget.tableQuery` Nothing) =<< errTable) (Just "24H") Nothing Nothing Nothing Nothing [("var-database", Just "mysql")]) (not . V.null . (.dataText))
+      md.error `shouldBe` Nothing
+      V.toList (V.take 2 <$> md.dataText) `shouldBe` [V.fromList ["Deadlock found when trying to get lock; try restarting transaction", "update orders set x = ?"]]
+
+    it "copyable cells get a copy button; rows that go nowhere do not look clickable" \_ -> do
+      let column = (def :: Widget.TableColumn){Widget.field = "q", Widget.title = "Query", Widget.copyable = Just True}
+          html = toStrict $ renderText $ Widget.renderTableWithDataAndParams (def :: Widget.Widget){Widget.wType = Widget.WTTable, Widget.columns = Just [column]} (V.singleton $ V.singleton "select 1") []
+      html `shouldContainAll` ["data-copy=\"select 1\"", "navigator.clipboard.writeText"]
+      snd (T.breakOn "<tbody" html) `shouldSatisfy` (not . T.isInfixOf "cursor-pointer")
 
     it "renders a dashboard table link with the current project and URL-encoded row value" \_ -> do
       let column = (def :: Widget.TableColumn){Widget.field = "session_id", Widget.title = "Session", Widget.link = Just "/p/{{project_id}}/rum?tab=sessions&session={{row.session_id}}"}

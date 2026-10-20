@@ -719,7 +719,7 @@ translateQueryError raw =
             "unknown_field"
             ("Unknown field \"" <> col <> "\"")
             (Just col)
-            (Just $ "wrap as 'body has \"" <> col <> "\"' for full-text, or use 'field == value' for equality")
+            (Just $ "quote it as \"" <> col <> "\" to search text, or use 'field == value' for equality")
             (Just raw)
       )
       (extractMissingColumn raw)

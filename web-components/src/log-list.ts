@@ -138,6 +138,8 @@ export const virtualItemKey = (item: VirtualListItem) =>
  * that. It needs a real browser and someone watching. See plans/log-list-performance.md.
  */
 export const MAX_RETAINED_ROWS = 2500;
+// Matches the server's maxRowFieldChars (Pkg.LiveTail).
+export const MAX_FIELD_CHARS = 8000;
 // Matches Tailwind's `md` breakpoint, so the JS-side column switch and the CSS-side
 // `max-md:` rules flip at the same width instead of disagreeing in a 1px band.
 const NARROW_VIEWPORT = '(max-width: 767px)';
@@ -754,7 +756,7 @@ export class LogList extends LitElement {
       leaseSecs: 45,
       body: () => body,
       onRows: (rows) => {
-        if (this.liveStream === stream) this.handleLiveRows(rows);
+        if (this.liveStream === stream) this.queueLiveRows(rows, stream);
       },
       onDropped: (total) => {
         if (this.liveStream !== stream) return;
@@ -779,6 +781,22 @@ export class LogList extends LitElement {
     this.liveStream = null;
     this.liveStreamKey = null;
     void this.startLiveStream();
+  }
+
+  // A busy tail delivers many SSE frames per paint; merging each one re-sorts the whole list.
+  private pendingLiveRows: unknown[] = [];
+  private queueLiveRows(rows: unknown[], owner = this.liveStream) {
+    const scheduled = this.pendingLiveRows.length > 0;
+    this.pendingLiveRows.push(...rows);
+    // Retention would evict anything older at merge anyway; this bounds a hidden tab.
+    if (this.pendingLiveRows.length > MAX_RETAINED_ROWS) this.pendingLiveRows.splice(0, this.pendingLiveRows.length - MAX_RETAINED_ROWS);
+    if (scheduled) return;
+    requestAnimationFrame(() => {
+      const batch = this.pendingLiveRows;
+      this.pendingLiveRows = [];
+      // A query change replaces the stream; its unflushed rows belong to the old query.
+      if (this.liveStream === owner) this.handleLiveRows(batch);
+    });
   }
 
   /**
@@ -826,7 +844,7 @@ export class LogList extends LitElement {
       // pushed down on purpose. Anchoring would scroll the previous top row back into view
       // every tick — a visible bounce that also hides the rows just streamed in.
       const anchor = container && !atInsertionEdge(scrollTop, scrolledToBottom, this.flipDirection) ? this.captureScrollAnchor() : null;
-      this.spanListTree = this.mergeIntoTree(tree, true);
+      this.spanListTree = this.mergeIntoTree(tree, true, !anchor);
       this.updateVisibleItems();
       if (anchor) void this.restoreScrollAnchor(anchor);
     }
@@ -2231,7 +2249,7 @@ export class LogList extends LitElement {
   // Merge a freshly fetched page into spanListTree, dropping ids already present
   // (boundary row recurs across inclusive-cursor pages) using the persistent
   // seenIds set so the cost is O(page), not O(whole tree).
-  private mergeIntoTree(newData: EventLine[], isRecentFetch: boolean) {
+  private mergeIntoTree(newData: EventLine[], isRecentFetch: boolean, readerAtInsertionEdge = false) {
     const fresh = newData.filter((r) => {
       if (this.seenIds.has(r.id)) return false;
       this.seenIds.add(r.id);
@@ -2273,8 +2291,12 @@ export class LogList extends LitElement {
     this.loadingSessions = Object.fromEntries(Object.entries(this.loadingSessions).filter(([id]) => retainedIds.has(id)));
     if (isRecentFetch) this.hasMore = true;
     else this.hasNewer = true;
-    this.virtualizerEpoch++;
-    this.holdRepositioningForRemount();
+    // Cutting the far end under a reader parked at the insertion edge moves nothing on screen;
+    // remounting there anyway rebuilt the whole list on every live frame.
+    if (dropStart || !readerAtInsertionEdge) {
+      this.virtualizerEpoch++;
+      this.holdRepositioningForRemount();
+    }
     return kept;
   }
 
@@ -2969,9 +2991,11 @@ export class LogList extends LitElement {
     const summary = lookupVecValue<string[] | string>(dataArr, cim, 'summary');
     // Coerce non-string elements (e.g. a TF to_jsonb that re-parsed JSON-looking
     // text) so one bad element can't throw and blank the whole row.
-    if (Array.isArray(summary)) return summary.map((e) => (typeof e === 'string' ? e : (JSON.stringify(e) ?? '')));
+    // A multi-MB body otherwise renders whole.
+    const cap = (els: unknown[]) => els.map((e) => (typeof e === 'string' ? e : (JSON.stringify(e) ?? '')).slice(0, MAX_FIELD_CHARS));
+    if (Array.isArray(summary)) return cap(summary);
     try {
-      return typeof summary === 'string' ? JSON.parse(summary) : [];
+      return typeof summary === 'string' ? cap(JSON.parse(summary)) : [];
     } catch (err) {
       // Silent [] made whole rows render blank with no signal. Log + surface a
       // visible sentinel so support engineers can spot malformed payloads.

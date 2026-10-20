@@ -218,8 +218,8 @@ evalExpr :: Resolver -> Expr -> Either EvalError Bool
 evalExpr r = go
   where
     go = \case
-      E.And a b -> (&&) <$> go a <*> go b
-      E.Or a b -> (||) <$> go a <*> go b
+      E.And a b -> andM @[] [go a, go b]
+      E.Or a b -> orM @[] [go a, go b]
       E.Paren a -> go a
       -- `x == null` is `IS NULL`. An absent field and a field explicitly set to JSON null are
       -- both NULL to SQL — the stored column cannot tell them apart, so neither may this.
@@ -252,6 +252,7 @@ evalExpr r = go
       E.ValLTEq a b -> pure (vcmp a b (/= GT))
       E.BoolFunc v -> pure (any truthy (evalValue r v))
       E.ArrayHas col v -> go (E.Eq (E.Subject col col [E.ArrayWildcard ""]) (E.Str v))
+      E.FreeText t -> go (E.searchExpr t)
 
     anyOf s p = any p (r s)
 

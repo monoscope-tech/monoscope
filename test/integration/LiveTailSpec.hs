@@ -18,6 +18,7 @@ module LiveTailSpec (spec) where
 import Control.Concurrent.STM (isEmptyTBQueue)
 import Control.Exception.Safe qualified as Safe
 import Data.Aeson qualified as AE
+import Data.ByteString.Builder (Builder, toLazyByteString)
 import Data.HashMap.Strict qualified as HM
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -32,6 +33,7 @@ import Pkg.DeriveUtils (AesonText (..), UUIDId (..))
 import Pkg.LiveTail qualified as LT
 import Pkg.TestUtils (TestResources (..), assertNonMemberDenied, createTestAPIKey, createTestProject, frozenTime, ingestLog, runHasqlEffect, testServant, withTestResources)
 import Relude
+import Servant.Types.SourceT (SourceT (..), StepT (..))
 import System.Config (AuthContext (hasqlPool, liveTail))
 import Test.Hspec (Spec, around, describe, it, shouldBe, shouldContain, shouldReturn, shouldSatisfy)
 
@@ -189,6 +191,33 @@ spec = do
       case rows of
         [LT.LogRow f] -> Map.lookup "summary" f.fields `shouldBe` Just (AE.toJSON summary)
         _ -> fail "expected exactly one LogRow"
+
+    -- Shipbubble 2026-10-19: multi-MB bodies rode inside the `summary` list, past the
+    -- string-only cap, and froze the browser parsing them.
+    it "liveTail_summaryCarriesFullBody_isTruncated" do
+      let fat = "body;text-textStrong⇒" <> T.replicate (LT.maxRowFieldChars * 3) "x"
+          rec' = (logRecord "checkout" "prod" "info" "a"){Telemetry.summary = V.fromList ["kind;badge⇒log", fat]}
+          events = mkSubScoped 26 (LT.AllSignals Nothing) ["summary"] Nothing ""
+          tab = mkSubScoped 27 (LT.LogTail (Just "checkout") LT.SKLogs) ["summary"] Nothing ""
+          capped = \case
+            AE.Array xs -> all (\case AE.String t -> T.length t <= LT.maxRowFieldChars; _ -> False) xs
+            _ -> False
+      (eventsConn, eventsRt) <- fixture [events]
+      (tabConn, tabRt) <- fixture [tab]
+      _ <- LT.publishMatches eventsRt pid (V.singleton rec')
+      _ <- LT.publishMatches tabRt pid (V.singleton rec')
+      (eventsRows, _) <- LT.takeBatch eventsConn
+      (tabRows, _) <- LT.takeBatch tabConn
+      map (\case LT.TableRow m -> maybe False capped (Map.lookup "summary" m); _ -> False) eventsRows `shouldBe` [True]
+      map (\case LT.LogRow f -> maybe False capped (Map.lookup "summary" f.fields); _ -> False) tabRows `shouldBe` [True]
+
+    it "liveTail_freeTextQuery_matchesLikeTheExplorer" do
+      let sub = mkSubScoped 29 (LT.AllSignals Nothing) ["id"] Nothing "\"deadlock\""
+          errSpan = (spanRecord "checkout" "prod" "error"){Telemetry.status_message = Just "Deadlock found when trying to get lock"}
+      (conn, rt) <- fixture [sub]
+      _ <- LT.publishMatches rt pid (V.fromList [logRecord "checkout" "prod" "error" "ER_LOCK_DEADLOCK", errSpan, logRecord "checkout" "prod" "info" "order saved"])
+      (rows, _) <- LT.takeBatch conn
+      length rows `shouldBe` 2
 
   describe "Events live mode (AllSignals scope)" do
     it "delivers spans, which a logs-only subscription must never see" do
@@ -552,6 +581,20 @@ spec = do
       active <- runHasqlEffect tr $ LT.activeSubscriptions 100
       map (.id) active `shouldSatisfy` notElem (fromMaybe (UUIDId UUID.nil) expired)
 
+  describe "LiveTail SSE framing" do
+    -- Shipbubble 2026-10-19: a 500-row drain went out as one frame, parsed on the main thread.
+    it "liveTail_largeDrain_splitsIntoBoundedFrames" do
+      let sub = mkSub 28 "checkout" Nothing ""
+      hub <- LT.newHub
+      conn <- LT.newConn LT.queueCapacity
+      _ <- LT.attachConn hub sub.id conn
+      rt <- runtimeWith hub [sub]
+      _ <- LT.publishMatches rt pid (V.fromList [logRecord "checkout" "prod" "info" (show i) | i <- [1 .. 250 :: Int]])
+      frames <- takeFrames 4 (LiveTailPage.streamFrom sub conn pass)
+      let logFrames = filter ("event: log" `T.isPrefixOf`) frames
+      length logFrames `shouldBe` 3
+      map (length . T.breakOnAll "\"shape\"") logFrames `shouldBe` [100, 100, 50]
+
   describe "LiveTail backpressure" do
     it "holds the queue bound and drops the oldest, counting the loss" do
       let sub = mkSub 7 "checkout" Nothing ""
@@ -589,6 +632,19 @@ logBody = \case
 -- ---------------------------------------------------------------------------------------
 -- Fixtures
 -- ---------------------------------------------------------------------------------------
+
+-- | The first @n@ SSE frames a stream body yields.
+takeFrames :: Int -> SourceT IO Builder -> IO [Text]
+takeFrames n (SourceT run) = run (go n)
+  where
+    go :: Int -> StepT IO Builder -> IO [Text]
+    go k step = case step of
+      _ | k <= 0 -> pure []
+      Yield b next -> (decodeUtf8 (toLazyByteString b) :) <$> go (k - 1) next
+      Effect m -> m >>= go k
+      Skip next -> go k next
+      _ -> pure []
+
 
 -- | One subscription, one attached connection, and the runtime an ingest pod would hold one
 -- cache refresh after the browser registered.

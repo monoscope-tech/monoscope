@@ -16,6 +16,7 @@ module Pages.LogExplorer.LiveTail (
   liveTailRegisterH,
   liveTailRecordH,
   liveTailStreamH,
+  streamFrom,
   liveTailRenewH,
   liveTailDeleteH,
   LiveTailGet (..),
@@ -27,6 +28,7 @@ import Control.Exception.Safe (finally)
 import Data.Aeson qualified as AE
 import Data.ByteString.Builder (Builder, byteString, toLazyByteString)
 import Data.ByteString.Lazy qualified as LBS
+import Data.List.Extra (chunksOf)
 import Data.Time (UTCTime, addUTCTime)
 import Data.UUID qualified as UUID
 import Deriving.Aeson.Stock qualified as DAE
@@ -103,12 +105,6 @@ sseFrame event payload =
     <> byteString "\n"
   where
     dataLine l = byteString "data: " <> byteString (toStrict l) <> byteString "\n"
-
-
--- | A comment frame. Proxies buffer a stream that has said nothing for a while; this keeps the
--- connection observably alive without being an event the browser has to filter out.
-sseComment :: Text -> Builder
-sseComment t = byteString (encodeUtf8 (": " <> t <> "\n\n"))
 
 
 -- ---------------------------------------------------------------------------------------
@@ -278,7 +274,8 @@ streamFrom sub conn detach = SourceT \k -> do
       whenJust batchM \(_, dropped) ->
         atomicModifyIORef' reported (dropped,) >>= \was -> Metrics.count Metrics.liveTailBrowserDropped (dropped - was) []
       pure case batchM of
-        Nothing -> Yield (sseComment "keep-alive") (loop reported)
+        -- An event, not an SSE comment: the browser's stall watchdog has to see it.
+        Nothing -> Yield (sseFrame "ping" (AE.object [])) (loop reported)
         Just (batch, dropped) -> do
           -- Notices ride the row queue because that is the only path addressed to this
           -- connection, but they are not rows and must not reach the table renderer.
@@ -294,7 +291,8 @@ streamFrom sub conn detach = SourceT \k -> do
     -- receives, and an empty append is a re-render for nothing.
     rowsThen reported rows dropped
       | null rows = continue
-      | otherwise = Yield (sseFrame "log" (AE.toJSON rows)) continue
+      -- A drain can hold 500 rows; one frame of them is one main-thread JSON.parse.
+      | otherwise = foldr (Yield . sseFrame "log" . AE.toJSON) continue (chunksOf 100 rows)
       where
         -- Cumulative, so re-sending it alongside every batch is harmless: the browser renders
         -- a total ("4,812 dropped — narrow your filter"), not a delta.
