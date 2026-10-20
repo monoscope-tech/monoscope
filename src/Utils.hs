@@ -2049,7 +2049,7 @@ maxRowFieldChars = 8000
 -- | Cap every string inside a JSON value at 'maxRowFieldChars'. Recursive because @summary@ is
 -- a list whose body element carries the raw log body.
 --
--- >>> capRowValue (AE.toJSON ["ok" :: Text, T.replicate 9000 "x"]) == AE.toJSON ["ok" :: Text, T.replicate 8000 "x"]
+-- >>> capRowValue (AE.toJSON @[Text] ["ok", T.replicate 9000 "x"]) == AE.toJSON @[Text] ["ok", T.replicate 8000 "x"]
 -- True
 capRowValue :: AE.Value -> AE.Value
 capRowValue = \case
