@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), CaseMode (..), kqlTimespanToTimeBucket, unsupportedTimespan, defaultBinWidth, FieldKey (..), pSquareBracketKey, pTerm, Jsonpath, LowerErr (..), lowerPred, renderJsonpath, resolveWildcardTimes, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), searchExpr, FreeTextMatch (..), freeTextMatch, freeTextRegex, flattenedOtelAttributes, flattenedOtelAttributesBuiltin, setOtelColumns, setMetricsColumns, topLevelOtelColumns, arrayColumns, acceptedFieldRoots, FieldUniverse (..), otelFieldUniverse, metricsFieldUniverse, knownFieldRoot, suggestFieldRoot, transformFlattenedAttribute, outputFieldAliases, errorFlagSql, severityIsErrorSql, sqlStringLit) where
+module Pkg.Parser.Expr (pSubject, pExpr, Subject (..), Values (..), Expr (..), CmpOp (..), MatchOp (..), CaseMode (..), kqlTimespanToTimeBucket, unsupportedTimespan, defaultBinWidth, FieldKey (..), pSquareBracketKey, pTerm, Jsonpath, LowerErr (..), lowerPred, renderJsonpath, resolveWildcardTimes, display, pDuration, pNowFunction, pAgoFunction, pValues, Parser, symbol, sc, ToQueryText (..), searchExpr, FreeTextMatch (..), freeTextMatch, freeTextRegex, flattenedOtelAttributes, flattenedOtelAttributesBuiltin, setOtelColumns, setMetricsColumns, topLevelOtelColumns, arrayColumns, acceptedFieldRoots, FieldUniverse (..), otelFieldUniverse, metricsFieldUniverse, knownFieldRoot, suggestFieldRoot, transformFlattenedAttribute, outputFieldAliases, errorFlagSql, severityIsErrorSql, sqlStringLit) where
 
 import Control.Monad.Combinators.Expr (
   Operator (InfixL),
@@ -165,35 +165,53 @@ data CaseMode = CI | CS
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
+-- | Comparison operators. Declaration order is parse order: longest token first (@>=@ before @>@).
+data CmpOp = Eq | NotEq | GTEq | LTEq | GT | LT
+  deriving stock (Bounded, Enum, Eq, Generic, Ord, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+-- | Text-match and membership operators, in parse order (@!in@ before @in@, @has_all@ before @has@).
+data MatchOp = NotIn | In | NotHas | HasAll | HasAny | Has | NotContains | Contains | NotStartsWith | StartsWith | NotEndsWith | EndsWith
+  deriving stock (Bounded, Enum, Eq, Generic, Ord, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+-- | (KQL token, SQL operator) — the single place each operator is spelled.
+cmpTokens :: CmpOp -> (Text, Text)
+cmpTokens = \case
+  Eq -> ("==", "=")
+  NotEq -> ("!=", "!=")
+  GTEq -> (">=", ">=")
+  LTEq -> ("<=", "<=")
+  GT -> (">", ">")
+  LT -> ("<", "<")
+
+
+matchTokens :: MatchOp -> (Text, Text)
+matchTokens = \case
+  NotIn -> ("!in", "NOT IN")
+  In -> ("in", "IN")
+  NotHas -> ("!has", "NOT HAS")
+  HasAll -> ("has_all", "HAS_ALL")
+  HasAny -> ("has_any", "HAS_ANY")
+  Has -> ("has", "HAS")
+  NotContains -> ("!contains", "NOT CONTAINS")
+  Contains -> ("contains", "CONTAINS")
+  NotStartsWith -> ("!startswith", "NOT STARTSWITH")
+  StartsWith -> ("startswith", "STARTSWITH")
+  NotEndsWith -> ("!endswith", "NOT ENDSWITH")
+  EndsWith -> ("endswith", "ENDSWITH")
+
+
 data Expr
-  = Eq Subject Values
-  | NotEq Subject Values
-  | GT Subject Values
-  | LT Subject Values
-  | GTEq Subject Values
-  | LTEq Subject Values
+  = Cmp CmpOp Subject Values
+  | Match MatchOp Subject Values
   | Regex CaseMode Subject Text
-  | In Subject Values
-  | NotIn Subject Values
-  | Has Subject Values
-  | NotHas Subject Values
-  | HasAny Subject Values
-  | HasAll Subject Values
-  | Contains Subject Values
-  | NotContains Subject Values
-  | StartsWith Subject Values
-  | NotStartsWith Subject Values
-  | EndsWith Subject Values
-  | NotEndsWith Subject Values
   | Paren Expr
   | And Expr Expr
   | Or Expr Expr
-  | ValEq Values Values -- Value-to-value comparison (e.g., "" == "")
-  | ValNotEq Values Values -- Value-to-value not-equal (e.g., "" != "x")
-  | ValGT Values Values -- Value-to-value greater than (e.g., coalesce(x,0) > 100)
-  | ValLT Values Values -- Value-to-value less than
-  | ValGTEq Values Values -- Value-to-value greater than or equal
-  | ValLTEq Values Values -- Value-to-value less than or equal
+  | ValCmp CmpOp Values Values -- Value-to-value comparison (e.g., coalesce(x,0) > 100)
   | BoolFunc Values -- Boolean scalar function as standalone expression (isnull, isnotnull, isempty, isnotempty)
   | FreeText Text -- Free text: a standalone quoted string, matched by 'searchExpr'; kept unexpanded so the query box round-trips what was typed
   | ArrayHas Text Text -- TimeFusion-only lowering of `col[*] == "v"` on a native array column; never parsed, see rewriteSectionsForSource
@@ -441,52 +459,52 @@ pValues = pValuesWith pValues [try pScalarFunc] -- try pScalarFunc must come fir
 -- Examples:
 --
 -- >>> parseTest pTerm "abc != \"GET\""
--- NotEq (Subject "abc" "abc" []) (Str "GET")
+-- Cmp NotEq (Subject "abc" "abc" []) (Str "GET")
 --
 -- Test new 'in' and '!in' operators:
 -- >>> parse pTerm "" "status in (\"success\", \"error\")"
--- Right (In (Subject "status" "status" []) (List [Str "success",Str "error"]))
+-- Right (Match In (Subject "status" "status" []) (List [Str "success",Str "error"]))
 --
 -- >>> parse pTerm "" "method !in (\"GET\", \"POST\")"
--- Right (NotIn (Subject "method" "method" []) (List [Str "GET",Str "POST"]))
+-- Right (Match NotIn (Subject "method" "method" []) (List [Str "GET",Str "POST"]))
 --
 -- Test text search operators:
 -- >>> parse pTerm "" "message has \"error\""
--- Right (Has (Subject "message" "message" []) (Str "error"))
+-- Right (Match Has (Subject "message" "message" []) (Str "error"))
 --
 -- >>> parse pTerm "" "message !has \"success\""
--- Right (NotHas (Subject "message" "message" []) (Str "success"))
+-- Right (Match NotHas (Subject "message" "message" []) (Str "success"))
 --
 -- >>> parse pTerm "" "tags has_any [\"urgent\", \"critical\"]"
--- Right (HasAny (Subject "tags" "tags" []) (List [Str "urgent",Str "critical"]))
+-- Right (Match HasAny (Subject "tags" "tags" []) (List [Str "urgent",Str "critical"]))
 --
 -- >>> parse pTerm "" "description has_all [\"user\", \"login\"]"
--- Right (HasAll (Subject "description" "description" []) (List [Str "user",Str "login"]))
+-- Right (Match HasAll (Subject "description" "description" []) (List [Str "user",Str "login"]))
 --
 -- Test has_any and has_all with single-quoted strings:
 -- >>> parse pTerm "" "attributes.db.operation.name has_any ['SELECT','INSERT']"
--- Right (HasAny (Subject "attributes.db.operation.name" "attributes" [FieldKey "db",FieldKey "operation",FieldKey "name"]) (List [Str "SELECT",Str "INSERT"]))
+-- Right (Match HasAny (Subject "attributes.db.operation.name" "attributes" [FieldKey "db",FieldKey "operation",FieldKey "name"]) (List [Str "SELECT",Str "INSERT"]))
 --
 -- >>> parse pTerm "" "tags has_all ['urgent','critical']"
--- Right (HasAll (Subject "tags" "tags" []) (List [Str "urgent",Str "critical"]))
+-- Right (Match HasAll (Subject "tags" "tags" []) (List [Str "urgent",Str "critical"]))
 --
 -- >>> parse pTerm "" "url contains \"api\""
--- Right (Contains (Subject "url" "url" []) (Str "api"))
+-- Right (Match Contains (Subject "url" "url" []) (Str "api"))
 --
 -- >>> parse pTerm "" "path !contains \"admin\""
--- Right (NotContains (Subject "path" "path" []) (Str "admin"))
+-- Right (Match NotContains (Subject "path" "path" []) (Str "admin"))
 --
 -- >>> parse pTerm "" "endpoint startswith \"/api/\""
--- Right (StartsWith (Subject "endpoint" "endpoint" []) (Str "/api/"))
+-- Right (Match StartsWith (Subject "endpoint" "endpoint" []) (Str "/api/"))
 --
 -- >>> parse pTerm "" "path !startswith \"/internal\""
--- Right (NotStartsWith (Subject "path" "path" []) (Str "/internal"))
+-- Right (Match NotStartsWith (Subject "path" "path" []) (Str "/internal"))
 --
 -- >>> parse pTerm "" "filename endswith \".log\""
--- Right (EndsWith (Subject "filename" "filename" []) (Str ".log"))
+-- Right (Match EndsWith (Subject "filename" "filename" []) (Str ".log"))
 --
 -- >>> parse pTerm "" "url !endswith \".css\""
--- Right (NotEndsWith (Subject "url" "url" []) (Str ".css"))
+-- Right (Match NotEndsWith (Subject "url" "url" []) (Str ".css"))
 --
 -- >>> parse pTerm "" "email matches /.*@company\\\\.com/"
 -- Right (Regex CI (Subject "email" "email" []) ".*@company\\.com")
@@ -508,7 +526,7 @@ pValues = pValuesWith pValues [try pScalarFunc] -- try pScalarFunc must come fir
 -- A quoted string compared to a value is a comparison; compared to a bare field it is an error,
 -- not free text followed by junk that silently matches:
 -- >>> parse pExpr "" "\"a b\" == \"c\""
--- Right (ValEq (Str "a b") (Str "c"))
+-- Right (ValCmp Eq (Str "a b") (Str "c"))
 -- >>> isLeft (parse (pExpr <* eof) "" "\"a b\" == x")
 -- True
 --
@@ -518,8 +536,9 @@ pValues = pValuesWith pValues [try pScalarFunc] -- try pScalarFunc must come fir
 pTerm :: Parser Expr
 pTerm =
   (Paren <$> parens pExpr)
-    <|> asum [binTerm pValues ctor sym | (ctor, _, sym, _) <- valBinOps]
-    <|> asum [binTerm pSubject ctor sym | (ctor, _, sym, _) <- subjectBinOps]
+    <|> asum [binTerm pValues (ValCmp op) (fst (cmpTokens op)) | op <- universe]
+    <|> asum [binTerm pSubject (Cmp op) (fst (cmpTokens op)) | op <- universe]
+    <|> asum [binTerm pSubject (Match op) (fst (matchTokens op)) | op <- universe]
     <|> try (Regex CS <$> pSubject <* space <* void (symbol "matches" *> symbol "regex") <*> regexPattern '"')
     <|> try (Regex CI <$> pSubject <* space <* void (symbol "matches") <* space <*> regexPattern '/')
     <|> try regexParser
@@ -531,51 +550,6 @@ pTerm =
 -- | One try-based binary alternative: @lhs OP pValues@.
 binTerm :: Parser a -> (a -> Values -> Expr) -> Text -> Parser Expr
 binTerm pLhs ctor sym = try (ctor <$> pLhs <* space <* void (symbol sym) <* space <*> pValues)
-
-
--- | The shared binary-operator tables, one row per binary 'Expr' constructor:
--- (constructor, matcher, KQL parse symbol, Display op-string). The ToQueryText
--- infix token is always the parse symbol surrounded by spaces, so it isn't stored.
--- The same rows drive 'pTerm', 'resolveWildcardTimes', 'Display Expr' and
--- 'ToQueryText Expr', so the constructor<->token map lives in one place.
--- Ordering is significant for 'pTerm' (try-based, longest token first, e.g.
--- @>=@ before @>@, @!in@ before @in@).
---
--- NOTE: because the tables are decoupled from the constructor definitions, adding
--- a new binary 'Expr' constructor compiles cleanly but crashes at render until you
--- add its row here — GHC's exhaustiveness check won't catch it.
-valBinOps :: [(Values -> Values -> Expr, Expr -> Maybe (Values, Values), Text, Text)]
-valBinOps =
-  [ (ValEq, \case ValEq a b -> Just (a, b); _ -> Nothing, "==", "=")
-  , (ValNotEq, \case ValNotEq a b -> Just (a, b); _ -> Nothing, "!=", "!=")
-  , (ValGTEq, \case ValGTEq a b -> Just (a, b); _ -> Nothing, ">=", ">=")
-  , (ValLTEq, \case ValLTEq a b -> Just (a, b); _ -> Nothing, "<=", "<=")
-  , (ValGT, \case ValGT a b -> Just (a, b); _ -> Nothing, ">", ">")
-  , (ValLT, \case ValLT a b -> Just (a, b); _ -> Nothing, "<", "<")
-  ]
-
-
-subjectBinOps :: [(Subject -> Values -> Expr, Expr -> Maybe (Subject, Values), Text, Text)]
-subjectBinOps =
-  [ (Eq, \case Eq s v -> Just (s, v); _ -> Nothing, "==", "=")
-  , (NotEq, \case NotEq s v -> Just (s, v); _ -> Nothing, "!=", "!=")
-  , (GTEq, \case GTEq s v -> Just (s, v); _ -> Nothing, ">=", ">=")
-  , (LTEq, \case LTEq s v -> Just (s, v); _ -> Nothing, "<=", "<=")
-  , (GT, \case GT s v -> Just (s, v); _ -> Nothing, ">", ">")
-  , (LT, \case LT s v -> Just (s, v); _ -> Nothing, "<", "<")
-  , (NotIn, \case NotIn s v -> Just (s, v); _ -> Nothing, "!in", "NOT IN")
-  , (In, \case In s v -> Just (s, v); _ -> Nothing, "in", "IN")
-  , (NotHas, \case NotHas s v -> Just (s, v); _ -> Nothing, "!has", "NOT HAS")
-  , (HasAll, \case HasAll s v -> Just (s, v); _ -> Nothing, "has_all", "HAS_ALL")
-  , (HasAny, \case HasAny s v -> Just (s, v); _ -> Nothing, "has_any", "HAS_ANY")
-  , (Has, \case Has s v -> Just (s, v); _ -> Nothing, "has", "HAS")
-  , (NotContains, \case NotContains s v -> Just (s, v); _ -> Nothing, "!contains", "NOT CONTAINS")
-  , (Contains, \case Contains s v -> Just (s, v); _ -> Nothing, "contains", "CONTAINS")
-  , (NotStartsWith, \case NotStartsWith s v -> Just (s, v); _ -> Nothing, "!startswith", "NOT STARTSWITH")
-  , (StartsWith, \case StartsWith s v -> Just (s, v); _ -> Nothing, "startswith", "STARTSWITH")
-  , (NotEndsWith, \case NotEndsWith s v -> Just (s, v); _ -> Nothing, "!endswith", "NOT ENDSWITH")
-  , (EndsWith, \case EndsWith s v -> Just (s, v); _ -> Nothing, "endswith", "ENDSWITH")
-  ]
 
 
 regexPattern :: Char -> Parser Text
@@ -1355,21 +1329,21 @@ scalarFuncToSQL name args
 
 -- | Render the expr ast to a value. Start with Eq only, for supporting jsonpath
 --
--- >>> display (Eq (Subject "" "request_body" [FieldKey "message"]) (Str "val"))
+-- >>> display (Cmp Eq (Subject "" "request_body" [FieldKey "message"]) (Str "val"))
 -- "request_body->>'message' = 'val'"
 --
--- >>> display (Eq (Subject "" "errors" [ArrayIndex "" 0, FieldKey "message"]) (Str "val"))
+-- >>> display (Cmp Eq (Subject "" "errors" [ArrayIndex "" 0, FieldKey "message"]) (Str "val"))
 -- "errors->0->>'message' = 'val'"
 --
--- >>> display (Eq (Subject "" "attributes" [FieldKey "app", FieldKey "flag"]) (Boolean True))
+-- >>> display (Cmp Eq (Subject "" "attributes" [FieldKey "app", FieldKey "flag"]) (Boolean True))
 -- "attributes->'app'->>'flag' = 'true'"
--- >>> display (NotEq (Subject "" "attributes" [FieldKey "app", FieldKey "flag"]) (Boolean False))
+-- >>> display (Cmp NotEq (Subject "" "attributes" [FieldKey "app", FieldKey "flag"]) (Boolean False))
 -- "attributes->'app'->>'flag' != 'false'"
 --
--- >>> display (Eq (Subject "" "abc" [ArrayWildcard "",FieldKey "xyz"]) (Str "val"))
+-- >>> display (Cmp Eq (Subject "" "abc" [ArrayWildcard "",FieldKey "xyz"]) (Str "val"))
 -- "jsonb_path_exists(to_jsonb(abc), '$[*].\"xyz\" ? (@ == \"val\")'::jsonpath)"
 --
--- >>> display (Eq (Subject "" "errors" [ArrayWildcard "", ArrayIndex "message" 0, FieldKey "details"]) (Str "detailsVal"))
+-- >>> display (Cmp Eq (Subject "" "errors" [ArrayWildcard "", ArrayIndex "message" 0, FieldKey "details"]) (Str "detailsVal"))
 -- "jsonb_path_exists(to_jsonb(errors), '$[*].\"message\"[0].\"details\" ? (@ == \"detailsVal\")'::jsonpath)"
 --
 -- >>> display (ArrayHas "hashes" "o'x")
@@ -1381,16 +1355,16 @@ scalarFuncToSQL name args
 -- A bare @errors@ compared with a boolean answers with the projected flag, and the two
 -- spellings of each verdict agree:
 --
--- >>> display (Eq (Subject "errors" "errors" []) (Boolean True))
+-- >>> display (Cmp Eq (Subject "errors" "errors" []) (Boolean True))
 -- "(COALESCE(errors is not null OR (kind = 'log' AND (lower(level) = 'error' OR severity___severity_number >= 17 OR status_code = 'ERROR')), false))"
--- >>> display (NotEq (Subject "errors" "errors" []) (Boolean True)) == display (Eq (Subject "errors" "errors" []) (Boolean False))
+-- >>> display (Cmp NotEq (Subject "errors" "errors" []) (Boolean True)) == display (Cmp Eq (Subject "errors" "errors" []) (Boolean False))
 -- True
--- >>> T.isPrefixOf "(NOT " (display (Eq (Subject "errors" "errors" []) (Boolean False)))
+-- >>> T.isPrefixOf "(NOT " (display (Cmp Eq (Subject "errors" "errors" []) (Boolean False)))
 -- True
 --
 -- The column itself is still addressable, so nothing that already worked changes:
 --
--- >>> display (NotEq (Subject "errors" "errors" []) Null)
+-- >>> display (Cmp NotEq (Subject "errors" "errors" []) Null)
 -- "errors IS NOT NULL"
 --
 -- -- abc[*].xyz which should generate something else than what is generated.
@@ -1408,65 +1382,57 @@ scalarFuncToSQL name args
 --
 -- Test new operators Display instances for SQL generation:
 --
--- >>> display (In (Subject "" "status" []) (List [Str "success", Str "error"]))
+-- >>> display (Match In (Subject "" "status" []) (List [Str "success", Str "error"]))
 -- "status IN ('success','error')"
 --
--- >>> display (NotIn (Subject "" "method" []) (List [Str "GET", Str "POST"]))
+-- >>> display (Match NotIn (Subject "" "method" []) (List [Str "GET", Str "POST"]))
 -- "method NOT IN ('GET','POST')"
 --
--- >>> display (Has (Subject "" "message" []) (Str "error"))
+-- >>> display (Match Has (Subject "" "message" []) (Str "error"))
 -- "message::text ~* 'error'"
 --
--- >>> display (NotHas (Subject "" "message" []) (Str "success"))
+-- >>> display (Match NotHas (Subject "" "message" []) (Str "success"))
 -- "message::text !~* 'success'"
 --
--- >>> display (Contains (Subject "" "url" []) (Str "api"))
+-- >>> display (Match Contains (Subject "" "url" []) (Str "api"))
 -- "url::text ~* 'api'"
 --
--- >>> display (NotContains (Subject "" "path" []) (Str "admin"))
+-- >>> display (Match NotContains (Subject "" "path" []) (Str "admin"))
 -- "path::text !~* 'admin'"
 --
 -- The search term is matched literally — regex metacharacters are escaped:
 --
--- >>> display (Contains (Subject "" "v" []) (Str "3.14"))
+-- >>> display (Match Contains (Subject "" "v" []) (Str "3.14"))
 -- "v::text ~* '3\\.14'"
 --
--- >>> display (StartsWith (Subject "" "endpoint" []) (Str "/api/"))
+-- >>> display (Match StartsWith (Subject "" "endpoint" []) (Str "/api/"))
 -- "endpoint::text ~* '^/api/'"
 --
--- >>> display (NotStartsWith (Subject "" "path" []) (Str "/internal"))
+-- >>> display (Match NotStartsWith (Subject "" "path" []) (Str "/internal"))
 -- "path::text !~* '^/internal'"
 --
--- >>> display (EndsWith (Subject "" "filename" []) (Str ".log"))
+-- >>> display (Match EndsWith (Subject "" "filename" []) (Str ".log"))
 -- "filename::text ~* '\\.log$'"
 --
--- >>> display (NotEndsWith (Subject "" "url" []) (Str ".css"))
+-- >>> display (Match NotEndsWith (Subject "" "url" []) (Str ".css"))
 -- "url::text !~* '\\.css$'"
 --
 -- On a wildcard subject, negation wraps the whole existence test (NOT jsonb_path_exists),
 -- so @!in@ means "no element matches" — not "some element differs":
 --
--- >>> display (NotIn (Subject "" "roles" [ArrayWildcard ""]) (List [Str "admin"]))
+-- >>> display (Match NotIn (Subject "" "roles" [ArrayWildcard ""]) (List [Str "admin"]))
 -- "NOT (jsonb_path_exists(to_jsonb(roles), '$[*] ? (@ == \"admin\")'::jsonpath))"
 --
--- >>> display (NotHas (Subject "" "logs" [ArrayWildcard "", FieldKey "msg"]) (Str "error"))
+-- >>> display (Match NotHas (Subject "" "logs" [ArrayWildcard "", FieldKey "msg"]) (Str "error"))
 -- "NOT (jsonb_path_exists(to_jsonb(logs), '$[*].\"msg\" ? (@ like_regex \"error\" flag \"i\")'::jsonpath))"
 --
 -- >>> display (Regex CI (Subject "" "email" []) ".*@company\\.com")
 -- "jsonb_path_exists(to_jsonb(email), '$ ? (@ like_regex \".*@company\\\\.com\" flag \"i\")'::jsonpath)"
 
--- | Decompose a binary Expr into its operands plus the (display op-string, KQL
--- parse symbol) drawn from the shared operator tables, so Display and
--- ToQueryText reuse a single constructor->token map. The bespoke cases
--- (Regex/Paren/And/Or/BoolFunc) are handled directly in the instances.
-binaryParts :: [(ctor, Expr -> Maybe (a, b), Text, Text)] -> Expr -> Maybe (a, b, Text, Text)
-binaryParts tbl e = listToMaybe [(x, y, dop, sym) | (_, matchP, sym, dop) <- tbl, Just (x, y) <- [matchP e]]
-
-
 instance Display Expr where
-  displayPrec prec e
-    | Just (sub, val, op, _) <- binaryParts subjectBinOps e = displayExprHelper op prec sub val
-    | Just (v1, v2, op, _) <- binaryParts valBinOps e = displayParen (prec > 0) $ displayPrec prec v1 <> " " <> displayBuilder op <> " " <> displayPrec prec v2
+  displayPrec prec (Cmp op sub val) = displayExprHelper (snd (cmpTokens op)) prec sub val
+  displayPrec prec (Match op sub val) = displayExprHelper (snd (matchTokens op)) prec sub val
+  displayPrec prec (ValCmp op v1 v2) = displayParen (prec > 0) $ displayPrec prec v1 <> " " <> displayBuilder (snd (cmpTokens op)) <> " " <> displayPrec prec v2
   displayPrec prec (Regex mode sub val) = displayPrec prec $ renderJsonpath (lowerRegex mode sub val)
   displayPrec prec (Paren u1) = displayParen True $ displayPrec prec u1
   displayPrec prec (And u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " AND " <> displayPrec prec u2
@@ -1481,15 +1447,13 @@ instance Display Expr where
       -- word is matched as a plain literal too, so TimeFusion can route it to its text index.
       col c = let txt = if c == "body" then "body::text" else c in "(" <> foldMap (\w -> txt <> " ~* " <> sqlStringLit w <> " AND ") longest <> txt <> " ~* " <> sqlStringLit pat <> ")"
   displayPrec prec (ArrayHas col v) = displayPrec prec $ "array_has(" <> col <> ", " <> sqlStringLit v <> ")"
-  -- Rendered by the operator-table guards above; listed so a new constructor fails to compile.
-  displayPrec _ (Eq{}; NotEq{}; GT{}; LT{}; GTEq{}; LTEq{}; In{}; NotIn{}; Has{}; NotHas{}; HasAny{}; HasAll{}; Contains{}; NotContains{}; StartsWith{}; NotStartsWith{}; EndsWith{}; NotEndsWith{}; ValEq{}; ValNotEq{}; ValGT{}; ValLT{}; ValGTEq{}; ValLTEq{}) = error "Display Expr: binary operators render via the guards"
 
 
 -- To be used when generating the text query given an ast
 instance ToQueryText Expr where
-  toQText e
-    | Just (sub, val, _, sym) <- binaryParts subjectBinOps e = toQText sub <> " " <> sym <> " " <> toQText val
-    | Just (v1, v2, _, sym) <- binaryParts valBinOps e = toQText v1 <> " " <> sym <> " " <> toQText v2
+  toQText (Cmp op sub val) = toQText sub <> " " <> fst (cmpTokens op) <> " " <> toQText val
+  toQText (Match op sub val) = toQText sub <> " " <> fst (matchTokens op) <> " " <> toQText val
+  toQText (ValCmp op v1 v2) = toQText v1 <> " " <> fst (cmpTokens op) <> " " <> toQText v2
   toQText (Regex CS sub val) = toQText sub <> " matches regex " <> toQText (Str val)
   toQText (Regex CI sub val) = toQText sub <> " matches /" <> val <> "/"
   toQText (Paren expr) = "(" <> toQText expr <> ")"
@@ -1498,7 +1462,6 @@ instance ToQueryText Expr where
   toQText (BoolFunc v) = toQText v
   toQText (FreeText t) = toQText (Str t)
   toQText (ArrayHas col v) = col <> "[*] == " <> toQText (Str v)
-  toQText (Eq{}; NotEq{}; GT{}; LT{}; GTEq{}; LTEq{}; In{}; NotIn{}; Has{}; NotHas{}; HasAny{}; HasAll{}; Contains{}; NotContains{}; StartsWith{}; NotStartsWith{}; EndsWith{}; NotEndsWith{}; ValEq{}; ValNotEq{}; ValGT{}; ValLT{}; ValGTEq{}; ValLTEq{}) = error "ToQueryText Expr: binary operators render via the guards"
 
 
 -- | What free text means, Datadog-style and case-insensitive, over the columns a person reads
@@ -1680,7 +1643,7 @@ jsonString = toText . encodeToLazyText . AE.String
 
 
 -- | Lower a KQL @operator/subject/value@ comparison into the jsonpath IR. The
--- operator token is the display token from 'subjectBinOps'; every token that reaches
+-- operator token is the SQL token from 'cmpTokens'/'matchTokens'; every token that reaches
 -- here has an explicit arm, and any value with no jsonpath form is a typed 'LowerErr'.
 --
 -- >>> renderJsonpath <$> lowerPred "=" (Subject "" "data" [FieldKey "name"]) (Str "John Doe")
@@ -1815,12 +1778,12 @@ renderJsonpathSQL op sub val = case T.stripPrefix "NOT " op of
 --
 -- Wildcard @ago(1h)@ resolves to (now − 1h) as a jsonpath datetime comparison:
 --
--- >>> display (resolveWildcardTimes (UTCTime (fromGregorian 2026 7 11) 75600) (GT (Subject "" "spans" [ArrayWildcard "", FieldKey "ts"]) (AgoExpression "1h")))
+-- >>> display (resolveWildcardTimes (UTCTime (fromGregorian 2026 7 11) 75600) (Cmp GT (Subject "" "spans" [ArrayWildcard "", FieldKey "ts"]) (AgoExpression "1h")))
 -- "jsonb_path_exists(to_jsonb(spans), '$[*].\"ts\" ? (@.datetime() > \"2026-07-11T20:00:00Z\".datetime())'::jsonpath)"
 --
 -- A non-wildcard comparison is untouched — now() stays NOW() (query-execution time):
 --
--- >>> display (resolveWildcardTimes (UTCTime (fromGregorian 2026 7 11) 75600) (GT (Subject "" "ts" []) NowExpression))
+-- >>> display (resolveWildcardTimes (UTCTime (fromGregorian 2026 7 11) 75600) (Cmp GT (Subject "" "ts" []) NowExpression))
 -- "ts > NOW()"
 resolveWildcardTimes :: UTCTime -> Expr -> Expr
 resolveWildcardTimes now = go
@@ -1828,7 +1791,9 @@ resolveWildcardTimes now = go
     go (And a b) = And (go a) (go b)
     go (Or a b) = Or (go a) (go b)
     go (Paren a) = Paren (go a)
-    go e = fromMaybe e $ listToMaybe [ctor sub (resolveVal val) | (ctor, matchP, _, _) <- subjectBinOps, Just (sub, val) <- [matchP e], subjectHasWildcard sub]
+    go (Cmp op sub val) | subjectHasWildcard sub = Cmp op sub (resolveVal val)
+    go (Match op sub val) | subjectHasWildcard sub = Match op sub (resolveVal val)
+    go e@(Cmp{}; Match{}; Regex{}; ValCmp{}; BoolFunc{}; FreeText{}; ArrayHas{}) = e
 
     resolveVal NowExpression = TimestampLit (toText (iso8601Show now))
     resolveVal (AgoExpression ts) = TimestampLit (toText (iso8601Show (addUTCTime (negate (timespanToSeconds ts)) now)))

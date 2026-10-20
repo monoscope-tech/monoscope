@@ -123,12 +123,12 @@ maxRegexLength = 512
 -- rather than silently ignored. @source=@ is rejected too: Live Tail's source is fixed.
 --
 -- >>> filterExpr <$> parseQueryToAST "level == \"error\""
--- Right (Just (Eq (Subject "level" "level" []) (Str "error")))
+-- Right (Just (Cmp Eq (Subject "level" "level" []) (Str "error")))
 --
 -- Multiple filter sections conjoin, so a piped @where@ narrows rather than replaces:
 --
 -- >>> filterExpr <$> parseQueryToAST "level == \"error\" | where duration > 10"
--- Right (Just (And (Eq (Subject "level" "level" []) (Str "error")) (GT (Subject "duration" "duration" []) (Num "10"))))
+-- Right (Just (And (Cmp Eq (Subject "level" "level" []) (Str "error")) (Cmp GT (Subject "duration" "duration" []) (Num "10"))))
 --
 -- >>> filterExpr <$> parseQueryToAST "level == \"error\" | summarize count() by kind"
 -- Right Nothing
@@ -136,11 +136,11 @@ maxRegexLength = 512
 -- An empty query is the filter that matches everything:
 --
 -- >>> filterExpr []
--- Just (ValEq (Boolean True) (Boolean True))
+-- Just (ValCmp Eq (Boolean True) (Boolean True))
 filterExpr :: [Section] -> Maybe Expr
 filterExpr = fmap (fromMaybe matchAll) . foldlM step Nothing
   where
-    matchAll = E.ValEq (E.Boolean True) (E.Boolean True)
+    matchAll = E.ValCmp E.Eq (E.Boolean True) (E.Boolean True)
     step acc = \case
       S.Search e -> keep acc e
       S.WhereClause e -> keep acc e
@@ -225,38 +225,38 @@ evalExpr r = go
       E.Paren a -> go a
       -- `x == null` is `IS NULL`. An absent field and a field explicitly set to JSON null are
       -- both NULL to SQL — the stored column cannot tell them apart, so neither may this.
-      E.Eq s E.Null -> pure (all (== AE.Null) (r s))
-      E.NotEq s E.Null -> pure (any (/= AE.Null) (r s))
-      E.Eq s v -> cmp s v (== EQ)
-      E.NotEq s v -> cmp s v (/= EQ)
-      E.GT s v -> cmp s v (== GT)
-      E.LT s v -> cmp s v (== LT)
-      E.GTEq s v -> cmp s v (/= LT)
-      E.LTEq s v -> cmp s v (/= GT)
-      E.In s v -> pure $ anyOf s \a -> any (eq a) (rhs v)
-      E.NotIn s v -> pure $ anyOf s \a -> not (any (eq a) (rhs v))
-      E.Has s v -> pure (txt s v T.isInfixOf)
-      E.NotHas s v -> pure (negated s (txt s v T.isInfixOf))
-      E.Contains s v -> pure (txt s v T.isInfixOf)
-      E.NotContains s v -> pure (negated s (txt s v T.isInfixOf))
-      E.StartsWith s v -> pure (txt s v T.isPrefixOf)
-      E.NotStartsWith s v -> pure (negated s (txt s v T.isPrefixOf))
-      E.EndsWith s v -> pure (txt s v T.isSuffixOf)
-      E.NotEndsWith s v -> pure (negated s (txt s v T.isSuffixOf))
-      E.HasAny s v -> pure $ any (\t -> txt s t T.isInfixOf) (items v)
-      E.HasAll s v -> pure $ all (\t -> txt s t T.isInfixOf) (items v)
+      E.Cmp E.Eq s E.Null -> pure (all (== AE.Null) (r s))
+      E.Cmp E.NotEq s E.Null -> pure (any (/= AE.Null) (r s))
+      E.Cmp op s v -> cmp s v (holds op)
+      E.ValCmp op a b -> pure (vcmp a b (holds op))
+      E.Match op s v -> pure case op of
+        E.In -> anyOf s \a -> any (eq a) (rhs v)
+        E.NotIn -> anyOf s \a -> not (any (eq a) (rhs v))
+        E.Has -> txt s v T.isInfixOf
+        E.NotHas -> negated s (txt s v T.isInfixOf)
+        E.Contains -> txt s v T.isInfixOf
+        E.NotContains -> negated s (txt s v T.isInfixOf)
+        E.StartsWith -> txt s v T.isPrefixOf
+        E.NotStartsWith -> negated s (txt s v T.isPrefixOf)
+        E.EndsWith -> txt s v T.isSuffixOf
+        E.NotEndsWith -> negated s (txt s v T.isSuffixOf)
+        E.HasAny -> any (\t -> txt s t T.isInfixOf) (items v)
+        E.HasAll -> all (\t -> txt s t T.isInfixOf) (items v)
       E.Regex mode s pat -> (\p -> anyOf s (p . jsonAsText)) <$> compileRegex mode pat
-      E.ValEq a b -> pure (vcmp a b (== EQ))
-      E.ValNotEq a b -> pure (vcmp a b (/= EQ))
-      E.ValGT a b -> pure (vcmp a b (== GT))
-      E.ValLT a b -> pure (vcmp a b (== LT))
-      E.ValGTEq a b -> pure (vcmp a b (/= LT))
-      E.ValLTEq a b -> pure (vcmp a b (/= GT))
       E.BoolFunc v -> pure (any truthy (evalValue r v))
-      E.ArrayHas col v -> go (E.Eq (E.Subject col col [E.ArrayWildcard ""]) (E.Str v))
+      E.ArrayHas col v -> go (E.Cmp E.Eq (E.Subject col col [E.ArrayWildcard ""]) (E.Str v))
       E.FreeText t -> go (E.searchExpr t)
 
     anyOf s p = any p (r s)
+
+    -- Which orderings of (field, value) satisfy the comparison.
+    holds = \case
+      E.Eq -> (== EQ)
+      E.NotEq -> (/= EQ)
+      E.GT -> (== GT)
+      E.LT -> (== LT)
+      E.GTEq -> (/= LT)
+      E.LTEq -> (/= GT)
 
     -- A negated text predicate still needs the subject to exist, so `!contains` drops
     -- absent-field rows exactly as `NOT (x ~* '…')` does on a NULL x.
