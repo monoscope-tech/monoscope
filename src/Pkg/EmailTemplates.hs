@@ -879,9 +879,9 @@ weeklyReportEmail d =
     windowQuery = "?from=" <> toUriStr d.fromTime <> "&to=" <> toUriStr d.toTime
     queryUrl query = if T.length query > 2000 then d.reportUrl else d.projectUrl <> "/log_explorer" <> windowQuery <> "&query=" <> toUriStr query
     serviceUrl service environment = queryUrl $ serviceFilter service environment
-    servicePredicate = maybe "(service.name == null or service.name == \"\")" (\name -> "service.name == " <> kqlQuoted name)
+    servicePredicate = maybe "(resource.service.name == null or resource.service.name == \"\")" (\name -> "resource.service.name == " <> kqlQuoted name)
     serviceFilter service environment = servicePredicate service <> " and " <> maybe "(resource.deployment.environment.name == null or resource.deployment.environment.name == \"\")" (\e -> "resource.deployment.environment.name == " <> kqlQuoted e) environment
-    endpointHostFilter host = " and (attributes.server.address == " <> kqlQuoted host <> " or (attributes.server.address == null and " <> (if T.null host then "(service.name == null or service.name == \"\")" else "service.name == " <> kqlQuoted host) <> "))"
+    endpointHostFilter host = " and (attributes.server.address == " <> kqlQuoted host <> " or (attributes.server.address == null and " <> servicePredicate (if T.null host then Nothing else Just host) <> "))"
 
 
 reportFinding :: Text -> Text -> Html ()

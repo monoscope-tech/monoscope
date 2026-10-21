@@ -10,6 +10,7 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Base64.URL qualified as B64URL
 import Data.Default (def)
 import Data.Effectful.Notify (EmailData (..), Notification (..))
+import Data.List (lookup)
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian)
@@ -24,12 +25,14 @@ import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Containers qualified as Containers
 import Models.Telemetry.Report qualified as Report
+import Network.HTTP.Types.URI (parseQueryText)
 import Pages.BodyWrapper (PageCtx (..))
+import Pages.LogExplorer.Log qualified as Log
 import Pages.Reports qualified as Reports
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.EmailTemplates qualified as Email
-import Pkg.Parser (parseQueryToAST)
+import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), defSqlQueryCfg, parseQueryToAST, parseQueryToComponents)
 import Pkg.TestUtils
 import Relude
 import Test.Hspec
@@ -202,6 +205,46 @@ spec = around withTestResources do
       Report.endpointStats False testPid frozenTime (addUTCTime 1 frozenTime)
         & runTestBg frozenTime tr
         >>= (`shouldBe` [])
+
+    forM_ ([(Just "api\" & team", Just "prod\" & team", "api\" & team"), (Nothing, Nothing, ""), (Nothing, Just "production", "api.example.com"), (Just "api", Nothing, "")] :: [(Maybe Text, Maybe Text, Text)]) \(service, environment, host) ->
+      it ("follows report service, endpoint, and database links with " <> show (service, environment, host)) \tr -> do
+        project <- maybe (fail "test project missing") pure =<< runTestBg frozenTime tr (Projects.projectById testPid)
+        let start = addUTCTime (-60) frozenTime
+        void $ withResource tr.trPool \conn ->
+          PGS.execute
+            conn
+            [sql| INSERT INTO otel_logs_and_spans
+              (id, project_id, timestamp, start_time, kind, resource___service___name,
+               resource___deployment___environment___name, attributes___http___request___method,
+               attributes___url___path, attributes___server___address, attributes___db___query___text,
+               duration, context, summary)
+              SELECT gen_random_uuid(), ?, ?, ?, kind, ?, ?, 'GET', '/cart??item="a"&b=2', ?, statement,
+                     1250000000::bigint, '{}'::jsonb, '{}'
+              FROM (VALUES ('server', NULL), ('client', 'SELECT 1')) AS fixtures(kind, statement) |]
+            (testPid, start, start, service, environment, if host == fromMaybe "" service then Nothing else Just host)
+        base <- runTestBg frozenTime tr $ Reports.collectSystemReport testPid start frozenTime
+        let snapshot =
+              base
+                { Report.services = Report.compareServices [Report.ServiceStats service environment 2 0 0 1 0 2 (Just 1250)] []
+                , Report.performance = Report.Available [Report.EndpointComparison (Report.EndpointStats service environment host "GET" "/cart?item=\"a\"&b=2" (Just 1250) 1) Nothing]
+                , Report.databases = Report.Available [Report.DatabaseStats service "SELECT 1" 1250 1]
+                , Report.topPatterns = Report.Available []
+                , Report.workloads = Report.Available []
+                }
+        (_, _, html) <- runTestBg frozenTime tr $ Reports.renderSystemEmail Projects.RTWeekly "/reports/test" project "Ada" True snapshot
+        let links = [T.takeWhile (/= '"') suffix | suffix <- drop 1 $ T.splitOn "href=\"" html, all (`T.isInfixOf` T.takeWhile (/= '"') suffix) ["/log_explorer?", "query="]]
+        length links `shouldBe` 3
+        forM_ (zip [2, 1, 1] links) \(expectedCount, url) -> do
+          let params = parseQueryText $ encodeUtf8 $ T.replace "&amp;" "&" $ snd $ T.breakOn "?" url
+          query <- maybe (fail "report link omitted its query") pure $ join $ lookup "query" params
+          from <- maybe (fail "report link omitted its start") pure $ join $ lookup "from" params
+          to <- maybe (fail "report link omitted its end") pure $ join $ lookup "to" params
+          (_, events) <- testServant tr $ Log.logExplorerDataH testPid def{Log.query = Just query, Log.from = Just from, Log.to = Just to}
+          events.error `shouldBe` Nothing
+          (_, components) <- either (fail . toString) pure $ parseQueryToComponents (defSqlQueryCfg testPid frozenTime Nothing Nothing){targetsTimefusion = True} query
+          components.whereClause `shouldSatisfy` maybe False (T.isInfixOf "resource___service___name")
+          components.whereClause `shouldSatisfy` maybe False (not . T.isInfixOf "service->")
+          events.queryResultCount `shouldBe` expectedCount
 
     it "persists the snapshot and bounds email details while retaining full report evidence" \tr -> do
       project <- maybe (fail "test project missing") pure =<< runTestBg frozenTime tr (Projects.projectById testPid)

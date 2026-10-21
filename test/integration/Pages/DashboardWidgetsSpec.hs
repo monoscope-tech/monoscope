@@ -53,6 +53,8 @@ import Test.Hspec
 import Text.Slugify (slugify)
 import UnliftIO.Async (wait, withAsync)
 import Utils qualified
+import Web.ApiHandlers qualified as Api
+import Web.ApiTypes qualified as ApiTypes
 import Web.Auth qualified as Auth
 import Web.Routes qualified as Routes
 
@@ -784,6 +786,35 @@ spec = sequential $ aroundAll withTestResources do
   -- connection. That is what made dashboard charts fail in scattered, retry-able subsets
   -- ("Couldn't load this chart") with no query ever reaching the database.
   describe "Table sorting before the server limit" do
+    it "renders the overview resource table through the dashboard JSON API" \tr -> do
+      overview <- DashboardModel.readDashboardFile "static/public/dashboards" "_overview.yaml"
+      resource <- maybe (fail "missing overview resource table") pure $ find ((== Just "Service Resource Usage") . (.title)) $ foldMap DashboardModel.allWidgets overview
+      dashId <- newDashboard tr "" "Resource table API"
+      let widget = resource{Widget.id = Just "resources", Widget.dbSource = Just Hasql.SqlPostgres}
+      void $ toBaseServantResponse tr $ Api.apiDashboardWidgetUpsert testPid dashId widget
+      now <- getTestTime tr.trTestClock
+      withResource tr.trPool \conn ->
+        forM_
+          [ (testPid, stamp, service, metric, value, service)
+          | (service, cpu, memory, stamp) <- [("backend" :: Text, 0.25, 0.4, now), ("frontend", 0.5, 0.8, now), ("expired", 0.9, 0.9, addUTCTime (-48 * 3600) now)]
+          , (metric, value) <- [("container.cpu.utilization" :: Text, cpu), ("container.memory.percent", memory :: Double)]
+          ]
+          $ \row ->
+            void
+              $ PG.execute
+                conn
+                [SqlQQ.sql| INSERT INTO otel_metrics (project_id, timestamp, id, series_id, metric_name, metric_type, value, resource___service___name)
+                        VALUES (?, ?, gen_random_uuid(), ?, ?, 'GAUGE', ?, ?) |]
+                row
+      let backend = ["backend", "25.0", "25.0", "0.4", "0.4", "2"]
+          frontend = ["frontend", "50.0", "50.0", "0.8", "0.8", "2"]
+      forM_ [(Nothing :: Maybe Text, [frontend, backend]), (Just "+service", [backend, frontend]), (Just "-service", [frontend, backend]), (Just "-service; SELECT 1", [frontend, backend])] \(sortParam, expected) -> do
+        result <- toBaseServantResponse tr $ Api.apiDashboardData testPid dashId Nothing (Just "resources") (Just "24h") Nothing Nothing [("table-sort", sortParam)]
+        let widgets = result.widgets :: [ApiTypes.RenderedWidget]
+        map (.error) widgets `shouldBe` [Nothing]
+        concatMap (.textRows) widgets `shouldBe` expected
+        map (.columns) widgets `shouldBe` [["Service/Container", "CPU Avg", "CPU Max", "Mem Avg", "Mem Max", "Samples"]]
+
     it "returns rows outside the original top twenty and keeps numbers numeric" \tr -> do
       let widget =
             (def :: Widget.Widget)
