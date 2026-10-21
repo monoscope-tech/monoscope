@@ -7,6 +7,8 @@ module Opentelemetry.TimefusionWriteFailureSpec (spec) where
 
 import Control.Exception (ErrorCall (..))
 import Control.Lens ((%~), (.~))
+import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap qualified as KM
 import Data.Effectful.Hasql qualified as EHasql
 import Data.Effectful.Sleep (sleepMicros)
 import Data.HashMap.Strict qualified as HM
@@ -19,8 +21,12 @@ import Database.PostgreSQL.Simple (Query, execute_)
 import Hasql.Errors qualified as HE
 import Hasql.Interpolate qualified as HI
 import Hasql.Pool qualified as HP
+import Log qualified as LogBase
+import Log.Backend.LogList qualified as LogList
+import Log.Data (LogMessage (..))
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
+import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pkg.DeriveUtils (UUIDId (..), mkHasqlPool, rawSql)
 import Pkg.TestUtils
@@ -29,8 +35,8 @@ import Proto.Opentelemetry.Proto.Logs.V1.Logs_Fields qualified as PLF
 import Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields qualified as PRF
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
-import Test.Hspec (SpecWith, around, beforeWith, describe, expectationFailure, it, shouldBe)
-import UnliftIO.Exception (finally, throwIO, try)
+import Test.Hspec (SpecWith, around, beforeWith, describe, expectationFailure, it, shouldBe, shouldSatisfy)
+import UnliftIO.Exception (bracket, finally, throwIO, try)
 
 
 -- | A closed loopback port. Pool acquire fails with ECONNREFUSED so we
@@ -155,16 +161,23 @@ withSilentTf tr k = do
   withResource tr.trPool \c -> mapM_ (execute_ c) silentTfDDL
   -- Keyword-form conninfo (host=… dbname=…); carry the per-connection GUC via
   -- the `options` keyword so ONLY this pool's backend discards inserts.
-  silentPool <- mkHasqlPool 1 (tr.trConnStr <> " options='-c test.silent_tf=on'")
-  let origCtx = tr.trATCtx
-      ctx =
-        origCtx
-          { hasqlTimefusionPool = silentPool
-          , env = origCtx.env{enableTimefusionWrites = True}
-          , config = origCtx.config{enableTimefusionWrites = True}
-          }
-  k tr{trATCtx = ctx}
+  withPgBackedTf tr " options='-c test.silent_tf=on'" k
     `finally` withResource tr.trPool \c -> void (execute_ c "DROP TRIGGER IF EXISTS test_silent_tf ON otel_logs_and_spans")
+
+
+withPgBackedTf :: TestResources -> ByteString -> (TestResources -> IO a) -> IO a
+withPgBackedTf tr options action = bracket (mkHasqlPool 1 $ tr.trConnStr <> options) OHasql.release \pool -> do
+  let ctx = tr.trATCtx
+  action
+    tr
+      { trATCtx =
+          ctx
+            { hasqlTimefusionPool = pool
+            , hasqlTimefusionUsesPgTypes = True
+            , env = ctx.env{enableTimefusionWrites = True}
+            , config = ctx.config{enableTimefusionWrites = True}
+            }
+      }
 
 
 mkResWithKey :: TestResources -> IO (TestResources, Text)
@@ -215,6 +228,21 @@ poisonError =
   HP.SessionUsageError (HE.StatementSessionError 1 0 "select 1" [] True (HE.ServerStatementError (HE.ServerError "23505" "duplicate key" Nothing Nothing Nothing)))
 
 
+withCapturedLogs :: TestResources -> (TestResources -> IO a) -> IO (a, [LogMessage])
+withCapturedLogs tr action = do
+  messages <- LogList.newLogList
+  result <- LogList.withLogListLogger messages \logger -> do
+    let ctx = tr.trATCtx
+    action tr{trLogger = logger, trATCtx = ctx{config = ctx.config{logLevel = LogBase.LogTrace}}}
+  (result,) <$> LogList.getLogList messages
+
+
+logField :: AE.Key -> LogMessage -> Maybe AE.Value
+logField key message = case message.lmData of
+  AE.Object fields -> KM.lookup key fields
+  _ -> Nothing
+
+
 spec :: SpecWith ()
 spec = around withTestResources $ beforeWith mkResWithKey do
   -- B1 of the 2026-06-21 fix: the per-batch project-id / cache lookups are
@@ -256,23 +284,67 @@ spec = around withTestResources $ beforeWith mkResWithKey do
       after <- countDemoSpans tr ackId
       after - before `shouldBe` 1
 
-    it "writes succeed → Right (acks, no poison)" \(tr, key) -> do
+    it "writes succeed → Right (acks, no poison), with a stable batch acknowledgment" \(tr, key) -> do
       let msgs = [validLogMsg key "ack-good-1", validLogMsg key "ack-good-2"]
-      res <- runTestBg frozenTime tr $ OtlpServer.processList msgs logsAttrs
-      case res of
+          retryDDL =
+            [ "CREATE SEQUENCE test_tf_batch_attempt"
+            , -- Keep the volatile counter behind a separate IF: SQL may reorder AND operands.
+              "CREATE FUNCTION test_tf_batch_retry() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF current_setting('test.retry_tf', true) = 'on' THEN IF nextval('test_tf_batch_attempt') <= 2 THEN RAISE EXCEPTION 'TimeFusion is draining for deployment; retry on the replacement' USING ERRCODE = 'XX000'; END IF; END IF; RETURN NEW; END $$"
+            , "CREATE TRIGGER test_tf_batch_retry BEFORE INSERT ON otel_logs_and_spans FOR EACH ROW EXECUTE FUNCTION test_tf_batch_retry()"
+            ]
+      withResource tr.trPool \connection ->
+        for_ retryDDL (execute_ connection)
+      (results, entries) <- withCapturedLogs tr \logged ->
+        withPgBackedTf logged " options='-c test.retry_tf=on'" \retrying -> do
+          setting <- runTestBg frozenTime retrying $ EHasql.withHasqlTimefusion True (HI.getOneColumn . HI.getOneRow <$> EHasql.interp (rawSql "SELECT current_setting('test.retry_tf')::text"))
+          setting `shouldBe` ("on" :: Text)
+          forM [msgs, reverse msgs] \batch -> runTestBg frozenTime retrying $ OtlpServer.processList batch logsAttrs
+      for_ results \case
         Right (acks, poison) -> do
           L.sort acks `shouldBe` ["ack-good-1", "ack-good-2"]
           poison `shouldBe` []
-        Left wf ->
-          expectationFailure
-            $ "expected Right; got Left "
-            <> toString (Telemetry.writeFailureSummary wf)
+        Left wf -> expectationFailure $ "expected Right; got Left " <> toString (Telemetry.writeFailureSummary wf)
+      let completed = filter ((== "telemetry.write_acknowledged") . (.lmMessage)) entries
+          ids = map (logField "write.batch_id") completed
+          retries = filter ((== "retryHasqlWrite: transient error, retrying") . (.lmMessage)) entries
+      length retries `shouldBe` 2
+      map (logField "store") retries `shouldBe` replicate 2 (Just $ AE.String "tf")
+      map (logField "write.batch_id") retries `shouldBe` replicate 2 (join $ listToMaybe ids)
+      length completed `shouldBe` 2
+      length (L.nub ids) `shouldBe` 1
+      for_ ids \value -> case value of
+        Just (AE.String batchId) -> UUID.fromText batchId `shouldSatisfy` isJust
+        _ -> expectationFailure "acknowledgments require a batch UUID"
+      map (logField "record_count") completed `shouldBe` replicate 2 (Just $ AE.Number 2)
+      map (logField "write.table") completed `shouldBe` replicate 2 (Just $ AE.String "otel_logs_and_spans")
 
-    it "TF down → Left (That tfErr) — TF-only failure" \(tr, key) ->
-      withBrokenTf tr \tr' -> do
+    it "acknowledges metric batches with a non-payload identity" \(tr, key) -> do
+      (_, entries) <- withCapturedLogs tr \logged -> ingestMetric logged key [] [] "private.metric.canary" 1 frozenTime
+      let completed = filter ((== "telemetry.write_acknowledged") . (.lmMessage)) entries
+      length completed `shouldBe` 1
+      map (logField "write.table") completed `shouldBe` [Just $ AE.String "otel_metrics"]
+      map (logField "record_count") completed `shouldBe` [Just $ AE.Number 1]
+      for_ completed \entry -> case logField "write.batch_id" entry of
+        Just (AE.String batchId) -> UUID.fromText batchId `shouldSatisfy` isJust
+        _ -> expectationFailure "metric acknowledgments require a batch UUID"
+      show @String completed `shouldSatisfy` (not . L.isInfixOf "private.metric.canary")
+
+    it "TF down → Left (That tfErr), with the same batch identity on retries and terminal failure" \(tr, key) -> do
+      (_, entries) <- withCapturedLogs tr \logged -> withBrokenTf logged \tr' -> do
         tr'.trATCtx.env.enableTimefusionWrites `shouldBe` True
         res <- runTestBg frozenTime tr' $ OtlpServer.processList [validLogMsg key "ack-1"] logsAttrs
         expectLeftMatching "TF-only failure" isThat res
+      let retries = filter ((== "retryHasqlWrite: transient error, retrying") . (.lmMessage)) entries
+          failed = filter ((== "TF_WRITE_FAILED") . (.lmMessage)) entries
+      retries `shouldSatisfy` (not . null)
+      length failed `shouldBe` 1
+      for_ (retries <> failed) \entry -> do
+        logField "write.batch_id" entry `shouldBe` (listToMaybe failed >>= logField "write.batch_id")
+        logField "write.table" entry `shouldBe` Just (AE.String "otel_logs_and_spans")
+      for_ failed \entry -> case logField "write.batch_id" entry of
+        Just (AE.String batchId) -> UUID.fromText batchId `shouldSatisfy` isJust
+        _ -> expectationFailure "terminal failure requires a batch UUID"
+      filter ((== "telemetry.write_acknowledged") . (.lmMessage)) entries `shouldBe` []
 
     -- THE TuplesOk behavior, at the TimeFusion write layer. TimeFusion's PGWire
     -- emulation answers an INSERT with a `TuplesOk` status tag instead of
@@ -309,10 +381,16 @@ spec = around withTestResources $ beforeWith mkResWithKey do
     -- 0 land, no error) — pre-fix the dual-write returned Right (acks, no poison)
     -- and acked the batch (silent loss past the DLQ); the 'unaccountedRows'
     -- cross-check now turns "reported success but rows missing" into Left (That).
-    it "TF reports success but persists nothing → Left (That tfErr), never a silent ack" \(tr, key) ->
-      withSilentTf tr \tr' -> do
+    it "TF reports success but persists nothing → Left (That tfErr), never a silent ack" \(tr, key) -> do
+      (_, entries) <- withCapturedLogs tr \logged -> withSilentTf logged \tr' -> do
         res <- runTestBg frozenTime tr' $ OtlpServer.processList [validLogMsg key "ack-silent-tf"] logsAttrs
         expectLeftMatching "TF silent under-persist (rows-persisted cross-check)" isThat res
+      let failed = filter ((== "WRITE_UNDERPERSIST_DETECTED") . (.lmMessage)) entries
+      length failed `shouldBe` 1
+      for_ failed \entry -> case logField "write.batch_id" entry of
+        Just (AE.String batchId) -> UUID.fromText batchId `shouldSatisfy` isJust
+        _ -> expectationFailure "under-persist failure requires a batch UUID"
+      filter ((== "telemetry.write_acknowledged") . (.lmMessage)) entries `shouldBe` []
 
     -- PG-down trips the project-key lookup before any write attempt. With
     -- queryProjectIdByKey now propagating Hasql errors (silent-swallow fix),

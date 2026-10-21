@@ -73,6 +73,7 @@ module Models.Telemetry.Telemetry (
   parseWriteFailureKind,
   writeFailureSummary,
   writeFailureDlqHeaders,
+  writeBatchIdentity,
   PoisonMsg,
   BulkInsertResult (..),
   SilentUnderPersistError (..),
@@ -121,7 +122,7 @@ import Data.ByteString qualified as BS
 import Data.Default (Default (..))
 import Data.Effectful.Hasql (Hasql, retryTransientLoop)
 import Data.Effectful.Hasql qualified as Hasql
-import Data.Effectful.Sleep (Sleep)
+import Data.Effectful.Sleep (Sleep, monotonicMicros)
 import Data.HashMap.Strict qualified as HM
 import Data.List.Extra (lookup)
 import Data.List.NonEmpty qualified as NE
@@ -153,6 +154,7 @@ import Effectful.Exception (throwIO, trySync)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled, labeled)
 import Effectful.Log (Log)
+import Effectful.Log qualified as LogContext
 import GHC.Records (HasField)
 import Hasql.Decoders qualified as D
 import Hasql.DynamicStatements.Snippet (Snippet, encoderAndParam, toPreparableStatement)
@@ -178,7 +180,8 @@ import Web.HttpApiData (FromHttpApiData (..))
 
 
 -- $setup
--- >>> import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime)
+-- >>> import Data.Time (UTCTime (..), addUTCTime, fromGregorian, secondsToDiffTime)
+-- >>> import Data.Vector qualified as V
 -- >>> data Flags = Flags {enablePostgresTelemetryWrites :: Bool, enableTimefusionWrites :: Bool}
 
 
@@ -1596,6 +1599,28 @@ writeFailureDlqHeaders wf =
         ]
 
 
+-- | Correlate the multiset of submitted logical row keys. This is not a payload
+-- digest, idempotency key, or Delta publication receipt. The existing row IDs
+-- and microsecond timestamp conversion remain authoritative.
+--
+-- >>> let t = UTCTime (fromGregorian 2026 10 21) 0; a = ("project", t, "a"); b = ("project", t, "b")
+-- >>> let batch table = writeBatchIdentity table . V.fromList
+-- >>> [batch "logs" [a,b] == batch "logs" [b,a], batch "logs" [a,a] /= batch "logs" [a], batch "logs" [a] /= batch "metrics" [a], batch "logs" [a] /= batch "logs" [("other",t,"a")], batch "logs" [a] /= batch "logs" [("project",t,"b")]] :: [Bool]
+-- [True,True,True,True,True]
+-- >>> [batch "logs" [a] /= batch "logs" [("project",addUTCTime 1 t,"a")], batch "logs" [a] == batch "logs" [("project",addUTCTime 0.0000001 t,"a")]] :: [Bool]
+-- [True,True]
+writeBatchIdentity :: Text -> V.Vector (Text, UTCTime, Text) -> UUID.UUID
+writeBatchIdentity table keys =
+  UUIDBytes.generateNamedV5 otelIdNamespace
+    $ toStrict
+    $ AE.encode ("write-batch-v1" :: Text, table, sort [(project, roundUTCToMicros time, rowId) | (project, time, rowId) <- V.toList keys])
+
+
+withWriteBatch :: Log :> es => Text -> V.Vector (Text, UTCTime, Text) -> Eff es a -> Eff es a
+withWriteBatch table keys =
+  LogContext.localData ["write.batch_id" AE..= writeBatchIdentity table keys, "write.table" AE..= table, "record_count" AE..= V.length keys]
+
+
 -- | Write-retry deadlines (µs). 'dualWrite' waits for both legs, so both are
 -- deadlines: slow failures (30s pool-acquisition timeouts) stop too, and a batch
 -- stays under 'Pkg.Queue.stallTicks'. TimeFusion's outlasts a whole deploy (45s
@@ -1670,7 +1695,7 @@ bulkInsertOtelLogsAndSpansTF
   -> WriteTarget
   -> V.Vector OtelLogsAndSpans
   -> Eff es (Either WriteFailure ())
-bulkInsertOtelLogsAndSpansTF tfPgTypes target records = do
+bulkInsertOtelLogsAndSpansTF tfPgTypes target records = withWriteBatch "otel_logs_and_spans" ((\r -> (r.project_id, r.timestamp, r.id)) <$> records) do
   Log.logTrace "bulkInsertOtelLogsAndSpansTF called"
     $ AE.object [("record_count", AE.toJSON $ V.length records), ("write_target", AE.toJSON $ show @Text target)]
   -- Single-leg replay: only the store that originally failed is rewritten, so
@@ -1703,14 +1728,20 @@ dualWrite
   -> Eff es BulkInsertResult
   -- ^ tf write action
   -> Eff es (Either WriteFailure (), Bool)
-dualWrite submitted target writePg writeTf = case target of
-  WriteBoth -> Ki.scoped \scope -> do
-    pgThread <- forkWithCtx scope $ retryHasqlWrite pgWriteBudgetMicros "pg" writePg
-    tfThread <- forkWithCtx scope $ retryHasqlWrite tfWriteBudgetMicros "tf" writeTf
-    (pgRes, tfRes) <- Ki.atomically $ (,) <$> Ki.await pgThread <*> Ki.await tfThread
-    (,fullyPersisted pgRes || fullyPersisted tfRes) <$> classify pgRes tfRes
-  WritePgOnly -> singleLeg "pg" This (,0) =<< retryHasqlWrite pgWriteBudgetMicros "pg" writePg
-  WriteTfOnly -> singleLeg "tf" That (0,) =<< retryHasqlWrite tfWriteBudgetMicros "tf" writeTf
+dualWrite submitted target writePg writeTf = do
+  started <- monotonicMicros
+  result <- case target of
+    WriteBoth -> Ki.scoped \scope -> do
+      pgThread <- forkWithCtx scope $ retryHasqlWrite pgWriteBudgetMicros "pg" writePg
+      tfThread <- forkWithCtx scope $ retryHasqlWrite tfWriteBudgetMicros "tf" writeTf
+      (pgRes, tfRes) <- Ki.atomically $ (,) <$> Ki.await pgThread <*> Ki.await tfThread
+      (,fullyPersisted pgRes || fullyPersisted tfRes) <$> classify pgRes tfRes
+    WritePgOnly -> singleLeg "pg" This (,0) =<< retryHasqlWrite pgWriteBudgetMicros "pg" writePg
+    WriteTfOnly -> singleLeg "tf" That (0,) =<< retryHasqlWrite tfWriteBudgetMicros "tf" writeTf
+  when (isRight $ fst result) do
+    elapsed <- subtract started <$> monotonicMicros
+    Log.logInfo "telemetry.write_acknowledged" (AE.object ["write_target" AE..= show @Text target, "elapsed_us" AE..= elapsed])
+  pure result
   where
     lostOf = unaccountedRows submitted
     fullyPersisted = either (const False) ((== 0) . lostOf)
@@ -2905,11 +2936,12 @@ bulkInsertOtelMetrics catalogBuffer tfPgTypes target records0 = do
     if V.null records
       then pure (Right (), False)
       else
-        dualWrite
-          (V.length records)
-          target
-          (insertOtelMetrics True records)
-          (labeled @"timefusion" @Hasql $ insertOtelMetrics tfPgTypes records)
+        withWriteBatch "otel_metrics" ((\r -> (UUID.toText r.projectId, r.metricTime, UUID.toText $ fromMaybe (metricId r) r.id)) <$> records)
+          $ dualWrite
+            (V.length records)
+            target
+            (insertOtelMetrics True records)
+            (labeled @"timefusion" @Hasql $ insertOtelMetrics tfPgTypes records)
   -- Raw storage is authoritative. Catalog work is buffered and only a full
   -- threshold batch is flushed on the ingestion path.
   when rawPersisted $ whenJustM (enqueueMetricCatalog catalogBuffer records) \batch ->

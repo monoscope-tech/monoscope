@@ -5,6 +5,23 @@ import { DenseRowFlowLayout, virtualItemKey, MAX_RETAINED_ROWS, HISTORY_PREFETCH
 import { shouldBufferRecent, atInsertionEdge, cursorFromTimestamp } from '../src/log-list-utils';
 
 describe('LogList — LOWER', () => {
+  test('removing the list cancels the pending new-row marker update', async () => {
+    const el = await mountList();
+    vi.useFakeTimers();
+    try {
+      (el as any).spanListTree = [{ ...row('new-row'), isNew: true }];
+      await el.updateComplete;
+      expect((el as any).isNewResetTimer).not.toBeNull();
+      const update = vi.spyOn(el as any, 'updateVisibleItems');
+      el.remove();
+      await vi.advanceTimersByTimeAsync(4000);
+      expect(update).not.toHaveBeenCalled();
+    } finally {
+      el.remove();
+      vi.useRealTimers();
+    }
+  });
+
   test('prefetches history before the virtual load-more row is mounted', async () => {
     const el = await mountList();
     (el as any).virtualListItems = Array.from({ length: 200 }, (_, i) => row(`r${i}`));
