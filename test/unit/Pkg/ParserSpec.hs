@@ -106,7 +106,7 @@ spec = do
     it "grouped summarize casts to text and projects the group column" do
       let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "summarize count(*) by name"
           sql = fromMaybe "" c.finalSummarizeQuery
-      sql `shouldSatisfy` T.isInfixOf "COALESCE(name::text, 'null')"
+      sql `shouldSatisfy` T.isInfixOf "COALESCE((name)::text, 'null')"
       sql `shouldSatisfy` T.isInfixOf "::text"
 
     it "summarize query by time bin" do
@@ -218,7 +218,7 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', c
       -- Grouping dimensions live on the chart query (finalSummarizeQuery), not the
       -- flat data query; assert the flattened resource path reaches its GROUP BY.
       let (_, groupComps) = components "summarize avg(value) by bin_auto(timestamp), resource.kind.name"
-      fromMaybe "" groupComps.finalSummarizeQuery `shouldSatisfy` T.isInfixOf "GROUP BY time_bucket('2 hours', timestamp), COALESCE(resource->'kind'->>'name'::text, 'null')"
+      fromMaybe "" groupComps.finalSummarizeQuery `shouldSatisfy` T.isInfixOf "GROUP BY time_bucket('2 hours', timestamp), COALESCE((resource->'kind'->>'name')::text, 'null')"
 
     it "TimeFusion metrics source converts variant dimensions to JSON" do
       let cfg = (defSqlQueryCfg defPid fixedUTCTime (Just SMetrics) Nothing){targetsTimefusion = True}
@@ -230,7 +230,7 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', c
       -- Grouping dimensions live on the chart query (finalSummarizeQuery), not the
       -- flat data query; assert the flattened resource path reaches its GROUP BY.
       let (_, groupComps) = components "summarize avg(value) by bin_auto(timestamp), resource.kind.name"
-      fromMaybe "" groupComps.finalSummarizeQuery `shouldSatisfy` T.isInfixOf "GROUP BY time_bucket('2 hours', timestamp), COALESCE(variant_to_json(resource)->'kind'->>'name'::text, 'null')"
+      fromMaybe "" groupComps.finalSummarizeQuery `shouldSatisfy` T.isInfixOf "GROUP BY time_bucket('2 hours', timestamp), COALESCE((variant_to_json(resource)->'kind'->>'name')::text, 'null')"
 
     it "spans source leaves service filter as a flat column" do
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| where service == \"accounting\""

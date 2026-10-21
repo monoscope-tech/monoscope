@@ -786,6 +786,24 @@ spec = sequential $ aroundAll withTestResources do
   -- connection. That is what made dashboard charts fail in scattered, retry-able subsets
   -- ("Couldn't load this chart") with no query ever reaching the database.
   describe "Table sorting before the server limit" do
+    it "groups metric resource extractions on both backends" \_ -> withTfChartResources \tr -> do
+      pid <- createTestProject tr "Grouped metric resources"
+      key <- createTestAPIKey tr pid "grouped-metrics"
+      now <- getTestTime tr.trTestClock
+      for_ ([(Just "alpha", 2), (Just "alpha", 4), (Just "beta", 7), (Nothing, 9), (Nothing, 11)] :: [(Maybe Text, Double)]) \(container, value) ->
+        ingestMetric tr key (maybe [] (pure . mkAttr "container.name") container) [] "grouped.metric" value now
+      tfUrl <- lookupEnv "TIMEFUSION_PG_TEST_URL"
+      let query = "metrics | where metric_name == \"grouped.metric\" | summarize min(value), max(value) by resource.container.name"
+          cell i value
+            | i == 0 = AE.String value
+            | otherwise = maybe (AE.String value) AE.toJSON $ readMaybe @Double $ toString value
+          row label lo hi = V.fromList [AE.String label, AE.toJSON (lo :: Double), AE.toJSON (hi :: Double)]
+      for_ (Hasql.SqlPostgres : [Hasql.SqlTimefusion | isJust tfUrl]) \db -> do
+        withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache"
+        result <- runQueryEffect tr $ Charts.queryMetrics (Just db) (Just Charts.DTText) (Just pid) (Just query) Nothing (Just "24h") Nothing Nothing Nothing Nothing []
+        result.error `shouldBe` Nothing
+        (V.imap cell <$> result.dataText) `shouldBe` V.fromList [row "null" 9 11, row "beta" 7 7, row "alpha" 2 4]
+
     it "counts paired and unpaired overview resource samples on both backends" \_ -> withTfChartResources \tr -> do
       pid <- createTestProject tr "Resource sample counts"
       key <- createTestAPIKey tr pid "resource-samples"
