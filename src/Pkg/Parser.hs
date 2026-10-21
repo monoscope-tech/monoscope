@@ -510,7 +510,7 @@ sqlFromQueryComponents sqlCfg qc =
                   ORDER BY b.timeB DESC, q.quantile {limitClause}|]
             Nothing ->
               -- Normal summarize query: one series per distinct combination of every `by` column.
-              let groupCol = case ["COALESCE(" <> resolve c <> "::text, 'null')" | c <- qc.groupByClause] of
+              let groupCol = case ["COALESCE((" <> resolve c <> ")::text, 'null')" | c <- qc.groupByClause] of
                     [] -> "'" <> (if null qc.aggregations then "count" else "value") <> "'"
                     [c] -> c
                     cs -> "concat_ws(' / ', " <> T.intercalate ", " cs <> ")"
@@ -527,7 +527,7 @@ sqlFromQueryComponents sqlCfg qc =
               -- branch above emits (bucket, group, agg). Selecting the aggregate
               -- alone yields a bare column of numbers with nothing saying which
               -- group each belongs to — unreadable, and no decoder accepts it.
-              groupCols = ["COALESCE(" <> resolve c <> "::text, 'null')" | c <- qc.groupByClause]
+              groupCols = ["COALESCE((" <> resolve c <> ")::text, 'null')" | c <- qc.groupByClause]
               -- The DTText decoder this shape is read with takes every column as
               -- text (see Charts.decoderFor), so the aggregate is cast too —
               -- otherwise a float4 count fails to decode and the whole query
