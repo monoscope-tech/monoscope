@@ -1415,6 +1415,10 @@ export class LogList extends LitElement {
       clearTimeout(this.scrollEndTimer);
       this.scrollEndTimer = null;
     }
+    if (this.isNewResetTimer) {
+      clearTimeout(this.isNewResetTimer);
+      this.isNewResetTimer = null;
+    }
     if (this.initChartsTimer) {
       clearTimeout(this.initChartsTimer);
       this.initChartsTimer = null;

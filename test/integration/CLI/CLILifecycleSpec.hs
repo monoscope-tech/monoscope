@@ -23,6 +23,8 @@ import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Hasql.Interpolate qualified as HI
+import Log.Backend.LogList qualified as LogList
+import Log.Data (showLogMessage)
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects qualified as Projects
 import Pages.Share qualified as Share
@@ -73,7 +75,7 @@ shouldHaveKeys other _ = expectationFailure $ "expected JSON object, got: " <> s
 
 
 spec :: Spec
-spec = around withTestResources do
+spec = around withCliResources do
   describe "CLI lifecycle (in-process, real parser + handlers)" do
     it "nonpositive_search_limit_fails_before_querying" \tr -> do
       forM_ ["0", "-1"] \limit -> do
@@ -526,3 +528,9 @@ spec = around withTestResources do
             v <- jsonOut out
             if null (eventsOf v) then threadDelay 500_000 >> poll (n - 1) else pass
       poll 20
+  where
+    -- Server logs use their own sink while the in-process CLI captures stdout.
+    withCliResources run = withTestResources \tr -> do
+      messages <- LogList.newLogList
+      LogList.withLogListLogger messages (\logger -> run tr{trLogger = logger})
+        `finally` (LogList.getLogList messages >>= mapM_ (putTextLn . showLogMessage Nothing))
