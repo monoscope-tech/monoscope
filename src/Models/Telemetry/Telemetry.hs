@@ -1605,9 +1605,9 @@ writeFailureDlqHeaders wf =
 --
 -- >>> let t = UTCTime (fromGregorian 2026 10 21) 0; a = ("project", t, "a"); b = ("project", t, "b")
 -- >>> let batch table = writeBatchIdentity table . V.fromList
--- >>> [batch "logs" [a,b] == batch "logs" [b,a], batch "logs" [a,a] /= batch "logs" [a], batch "logs" [a] /= batch "metrics" [a], batch "logs" [a] /= batch "logs" [("other",t,"a")], batch "logs" [a] /= batch "logs" [("project",t,"b")]]
+-- >>> [batch "logs" [a,b] == batch "logs" [b,a], batch "logs" [a,a] /= batch "logs" [a], batch "logs" [a] /= batch "metrics" [a], batch "logs" [a] /= batch "logs" [("other",t,"a")], batch "logs" [a] /= batch "logs" [("project",t,"b")]] :: [Bool]
 -- [True,True,True,True,True]
--- >>> [batch "logs" [a] /= batch "logs" [("project",addUTCTime 1 t,"a")], batch "logs" [a] == batch "logs" [("project",addUTCTime 0.0000001 t,"a")]]
+-- >>> [batch "logs" [a] /= batch "logs" [("project",addUTCTime 1 t,"a")], batch "logs" [a] == batch "logs" [("project",addUTCTime 0.0000001 t,"a")]] :: [Bool]
 -- [True,True]
 writeBatchIdentity :: Text -> V.Vector (Text, UTCTime, Text) -> UUID.UUID
 writeBatchIdentity table keys =
