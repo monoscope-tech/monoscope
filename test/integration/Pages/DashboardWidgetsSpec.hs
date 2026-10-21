@@ -795,7 +795,7 @@ spec = sequential $ aroundAll withTestResources do
       now <- getTestTime tr.trTestClock
       withResource tr.trPool \conn ->
         forM_
-          [ (testPid, stamp, metric, value, service)
+          [ (testPid, stamp, service, metric, value, service)
           | (service, cpu, memory, stamp) <- [("backend" :: Text, 0.25, 0.4, now), ("frontend", 0.5, 0.8, now), ("expired", 0.9, 0.9, addUTCTime (-48 * 3600) now)]
           , (metric, value) <- [("container.cpu.utilization" :: Text, cpu), ("container.memory.percent", memory :: Double)]
           ]
@@ -804,7 +804,7 @@ spec = sequential $ aroundAll withTestResources do
               $ PG.execute
                 conn
                 [SqlQQ.sql| INSERT INTO otel_metrics (project_id, timestamp, id, series_id, metric_name, metric_type, value, resource___service___name)
-                        VALUES (?, ?, gen_random_uuid(), 'resource-table', ?, 'GAUGE', ?, ?) |]
+                        VALUES (?, ?, gen_random_uuid(), ?, ?, 'GAUGE', ?, ?) |]
                 row
       let backend = ["backend", "25.0", "25.0", "0.4", "0.4", "2"]
           frontend = ["frontend", "50.0", "50.0", "0.8", "0.8", "2"]
