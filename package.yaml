@@ -226,6 +226,7 @@ tests:
       - hs-opentelemetry-instrumentation-auto
       - hs-opentelemetry-instrumentation-hasql
       - hspec
+      - log-base
       - servant-queryparam-core
       - relude >= 1.2.0.0
       - aeson

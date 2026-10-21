@@ -869,6 +869,7 @@ test-suite integration-tests
     , langchain-hs
     , lens
     , lens-aeson
+    , log-base
     , lucid
     , memory
     , minio-hs
