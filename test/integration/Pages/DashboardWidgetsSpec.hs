@@ -786,6 +786,31 @@ spec = sequential $ aroundAll withTestResources do
   -- connection. That is what made dashboard charts fail in scattered, retry-able subsets
   -- ("Couldn't load this chart") with no query ever reaching the database.
   describe "Table sorting before the server limit" do
+    it "counts paired and unpaired overview resource samples on both backends" \_ -> withTfChartResources \tr -> do
+      pid <- createTestProject tr "Resource sample counts"
+      key <- createTestAPIKey tr pid "resource-samples"
+      now <- getTestTime tr.trTestClock
+      forM_
+        [ (service, metric, value, stamp)
+        | (service, cpu, memory, stamp) <- [("paired", Just 0.25, Just 0.4, now), ("cpu-only", Just 0.75, Nothing, now), ("memory-only", Nothing, Just 0.6, now), ("expired", Just 0.9, Just 0.9, addUTCTime (-48 * 3600) now)]
+        , (metric, value) <- catMaybes [("container.cpu.utilization",) <$> cpu, ("container.memory.percent",) <$> memory]
+        ]
+        $ \(service, metric, value, stamp) -> ingestMetric tr key [mkAttr "service.name" service] [] metric value stamp
+      overview <- DashboardModel.readDashboardFile "static/public/dashboards" "_overview.yaml"
+      resource <- maybe (fail "missing overview resource table") pure $ find ((== Just "Service Resource Usage") . (.title)) $ foldMap DashboardModel.allWidgets overview
+      tfUrl <- lookupEnv "TIMEFUSION_PG_TEST_URL"
+      let (_, sql) = Widget.tableQuery resource Nothing
+          row service cpu memory points = V.fromList [AE.String service, AE.toJSON (cpu :: Maybe Double), AE.toJSON cpu, AE.toJSON (memory :: Maybe Double), AE.toJSON memory, AE.toJSON (points :: Int)]
+          cell i value
+            | i == 0 = AE.String value
+            | T.null value = AE.Null
+            | otherwise = maybe (AE.String value) AE.toJSON $ readMaybe @Double $ toString value
+      for_ (Hasql.SqlPostgres : [Hasql.SqlTimefusion | isJust tfUrl]) \db -> do
+        withResource tr.trPool \conn -> void $ PG.execute_ conn "DELETE FROM query_cache"
+        result <- runQueryEffect tr $ Charts.queryMetrics (Just db) (Just Charts.DTText) (Just pid) Nothing sql (Just "24h") Nothing Nothing Nothing Nothing []
+        result.error `shouldBe` Nothing
+        (V.imap cell <$> result.dataText) `shouldBe` V.fromList [row "cpu-only" (Just 75) Nothing 1, row "paired" (Just 25) (Just 0.4) 2, row "memory-only" Nothing (Just 0.6) 1]
+
     it "renders the overview resource table through the dashboard JSON API" \tr -> do
       overview <- DashboardModel.readDashboardFile "static/public/dashboards" "_overview.yaml"
       resource <- maybe (fail "missing overview resource table") pure $ find ((== Just "Service Resource Usage") . (.title)) $ foldMap DashboardModel.allWidgets overview

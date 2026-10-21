@@ -1288,7 +1288,7 @@ tabs:
             ROUND(MAX(c.value)::numeric, 1) as cpu_max,
             ROUND(AVG(m.value)::numeric, 1) as mem_avg,
             ROUND(MAX(m.value)::numeric, 1) as mem_max,
-            (COUNT(c.*) + COUNT(m.*)) as data_points
+            (COUNT(c.service) + COUNT(m.service)) as data_points
           FROM cpu_metrics c
           FULL OUTER JOIN mem_metrics m ON c.service = m.service
           GROUP BY COALESCE(c.service, m.service)
