@@ -999,15 +999,17 @@ lazyWidget w = w & #eager .~ Nothing & #html .~ Nothing & #dataset .~ Nothing
 type WidgetData es = (Concurrent :> es, DB es, Effectful.Labeled.Labeled "timefusion" Data.Effectful.Hasql.Hasql :> es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, IOE :> es, Log :> es, Time.Time :> es, Tracing :> es)
 
 
--- | Run a widget's query in the shape its type decodes — 'Widget.chartQuery'
--- picks both together.
+-- | Resolve table sorting and run the query with its widget's decoder.
 widgetMetrics :: WidgetData es => Projects.ProjectId -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> Eff es Charts.MetricsData
 widgetMetrics pid (sinceStr, fromDStr, toDStr) allParams widget =
   -- Bin at the density the widget renders at, so a server-prefilled chart and the
   -- browser's later /chart_data refetch agree on bucket width (and on cache key).
-  Charts.queryMetrics widget.dbSource (Just dataType) (Just pid) query widget.sql sinceStr fromDStr toDStr Nothing (Just $ binDensityFor $ Just $ Widget.mapWidgetTypeToChartType widget.wType) allParams
+  Charts.queryMetrics widget.dbSource (Just dataType) (Just pid) query sql sinceStr fromDStr toDStr Nothing (Just $ binDensityFor $ Just $ Widget.mapWidgetTypeToChartType widget.wType) allParams
   where
-    (query, dataType) = Widget.chartQuery widget
+    (shapedQuery, dataType) = Widget.chartQuery widget
+    (query, sql)
+      | widget.wType == Widget.WTTable = Widget.tableQuery widget (join $ lookup "table-sort" allParams)
+      | otherwise = (shapedQuery, widget.sql)
 
 
 processEagerWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
