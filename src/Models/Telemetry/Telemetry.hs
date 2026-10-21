@@ -1697,7 +1697,7 @@ bulkInsertOtelLogsAndSpansTF
   -> Eff es (Either WriteFailure ())
 bulkInsertOtelLogsAndSpansTF tfPgTypes target records = withWriteBatch "otel_logs_and_spans" ((\r -> (r.project_id, r.timestamp, r.id)) <$> records) do
   Log.logTrace "bulkInsertOtelLogsAndSpansTF called"
-    $ AE.object [("record_count", AE.toJSON $ V.length records), ("write_target", AE.toJSON $ show @Text target)]
+    $ AE.object ["write_target" AE..= show @Text target]
   -- Single-leg replay: only the store that originally failed is rewritten, so
   -- the durable leg keeps its single copy. Pg casts to native uuid/jsonb; real
   -- Tf leaves bare text (Variant coercion), while a Postgres-backed Tf casts too.
