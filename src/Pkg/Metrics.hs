@@ -33,6 +33,7 @@ module Pkg.Metrics (
   ingestBatchesProcessed,
   ingestSpansProcessed,
   extractionBatchesDropped,
+  freeTierBatchesDropped,
   drainFlushesCompleted,
   drainSpansFlushed,
   drainPatternsPersisted,
@@ -288,6 +289,13 @@ ingestSpansProcessed = mkCounter "monoscope.extraction.spans.processed" Nothing
 extractionBatchesDropped :: Counter Int64
 extractionBatchesDropped = mkCounter "monoscope.extraction.batches.dropped" Nothing
 {-# NOINLINE extractionBatchesDropped #-}
+
+
+-- | Per-project slices of telemetry batches not ingested (or rejected at the OTLP edge) because
+-- the project is past its free-tier daily cap. Which project is in the hourly attention log.
+freeTierBatchesDropped :: Counter Int64
+freeTierBatchesDropped = mkCounter "monoscope.ingest.free_tier.batches_dropped" Nothing
+{-# NOINLINE freeTierBatchesDropped #-}
 
 
 drainFlushesCompleted :: Counter Int64

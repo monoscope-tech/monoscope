@@ -1404,14 +1404,14 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = do
             auditPlan productName
             handleOnboarding
             void $ ProjectMembers.activateAllMembers pid
-            Settings.notifyPlanChange envCfg project ET.planUpgradedEmail productName
+            Settings.notifyPlanChange envCfg project (ET.planUpgradedEmail productName)
           _ -> addErrorToast "Something went wrong while fetching subscription id" Nothing
       Nothing -> do
         _ <- updatePricing "Free" "" "" ""
         auditPlan ("Free" :: Text)
         handleOnboarding
         void $ ProjectMembers.deactivateNonOwnerMembers pid
-        Settings.notifyPlanChange envCfg project ET.planDowngradedEmail "was cancelled"
+        Settings.notifyPlanChange envCfg project (ET.planDowngradedEmail "was cancelled")
   if Projects.isOnboarding project.paymentPlan || isOnboarding == Just True
     then redirectCS $ "/p/" <> pid.toText <> "/"
     else do

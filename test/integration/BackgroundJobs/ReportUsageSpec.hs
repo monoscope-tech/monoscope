@@ -10,17 +10,23 @@ module BackgroundJobs.ReportUsageSpec (spec) where
 -- thing and re-submit chunks that already succeeded.
 
 import BackgroundJobs qualified
+import Control.Lens ((^.))
+import Data.Cache qualified as Cache
 import Data.List qualified as L
 import Data.Pool (withResource)
+import Data.ProtoLens (decodeMessage, encodeMessage)
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian)
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Projects.Projects qualified as Projects
+import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pkg.TestUtils
+import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
+import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields qualified as LSF
 import Relude
 import System.Config qualified as Config
-import Test.Hspec (Spec, around, describe, it, shouldBe, shouldMatchList, shouldNotSatisfy, shouldSatisfy, shouldThrow)
+import Test.Hspec (Spec, around, describe, it, shouldBe, shouldMatchList, shouldNotSatisfy, shouldReturn, shouldSatisfy, shouldThrow)
 
 
 -- | Put the project on a known plan/provider footing. `billing_day` anchors the cycle, and
@@ -147,17 +153,34 @@ lastReportedOf tr pid = withResource tr.trPool \conn -> do
 -- no submission rows are written — which silently turned the window assertions below into
 -- assertions about an empty list.
 seedUsage :: TestResources -> Projects.ProjectId -> IO ()
-seedUsage tr pid = do
+seedUsage tr pid = seedUsageAt tr pid frozenTime
+
+
+seedUsageAt :: TestResources -> Projects.ProjectId -> UTCTime -> IO ()
+seedUsageAt tr pid at = do
   apiKey <- createTestAPIKey tr pid "report-usage-key"
-  for_ ([1 .. 3] :: [Int]) \i -> ingestLog tr apiKey ("usage line " <> show i) frozenTime
-  n <- withResource tr.trPool \conn -> do
-    [PGS.Only c] <- PGS.query conn [sql| SELECT COUNT(*)::INT FROM otel_logs_and_spans WHERE project_id = ?::text |] (PGS.Only pid) :: IO [PGS.Only Int]
-    pure c
-  n `shouldSatisfy` (> 0)
+  for_ ([1 .. 3] :: [Int]) \i -> ingestLog tr apiKey ("usage line " <> show i) at
+  logCount tr pid >>= (`shouldSatisfy` (> 0))
+
+
+logCount :: TestResources -> Projects.ProjectId -> IO Int
+logCount tr pid = withResource tr.trPool \conn -> do
+  [PGS.Only c] <- PGS.query conn [sql| SELECT COUNT(*)::INT FROM otel_logs_and_spans WHERE project_id = ?::text |] (PGS.Only pid)
+  pure c
 
 
 runReport :: TestResources -> Projects.ProjectId -> IO ()
-runReport tr pid = void $ runTestBg frozenTime tr $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.ReportUsage pid)
+runReport = runReportAt frozenTime
+
+
+runReportAt :: UTCTime -> TestResources -> Projects.ProjectId -> IO ()
+runReportAt t tr pid = void $ runTestBg t tr $ BackgroundJobs.processBackgroundJob tr.trATCtx (BackgroundJobs.ReportUsage pid)
+
+
+-- frozenTime is 00:00 UTC, where a free project's window (floored at the start of the day) is
+-- empty; free-plan examples run an hour into the day instead.
+intoTheDay :: UTCTime -> UTCTime
+intoTheDay = addUTCTime 3600
 
 
 -- A billing day well before frozenTime's day-of-month, so the current cycle started this
@@ -173,21 +196,27 @@ spec :: Spec
 -- then depended on test ordering and drifted upwards (3 → 13 → 24) in CI.
 spec = around (\f -> withTestResources \tr -> createTestProject tr "report-usage" >>= \pid -> f (tr, pid)) do
   describe "ReportUsage" do
-    it "reports nothing for a free project" \(tr, pid) -> do
+    -- Free usage is still recorded: free-tier limits and the billing page read daily_usage.
+    it "records usage but submits nothing for a free project" \(tr, pid) -> do
+      seedUsageAt tr pid (addUTCTime 1800 frozenTime)
       setBilling tr pid "Free" (Just "sub_item_free") stripeSub (addUTCTime (-86400 * 5) frozenTime)
 
-      runReport tr pid
+      runReportAt (intoTheDay frozenTime) tr pid
 
       submissions tr pid >>= (`shouldBe` [])
+      dailyUsage tr pid >>= (`shouldBe` [(3, 0, 0)])
 
     -- A paid plan with no subscription item has nothing to report against; reporting anyway
     -- would be a submission we cannot attribute.
     it "reports nothing for a paid project with no subscription item" \(tr, pid) -> do
+      seedUsage tr pid
       setBilling tr pid "GraduatedPricing" Nothing stripeSub (addUTCTime (-86400 * 5) frozenTime)
 
       runReport tr pid
 
       submissions tr pid >>= (`shouldBe` [])
+      -- Nor is the window recorded: that would advance the watermark past usage still owed.
+      dailyUsage tr pid >>= (`shouldBe` [])
 
     -- The invariant that protects customers: a stale watermark must not drag the window
     -- back into a cycle that has already been invoiced.
@@ -485,3 +514,59 @@ spec = around (\f -> withTestResources \tr -> createTestProject tr "report-usage
         $ runTestBg frozenTime tr
         $ Projects.updateProjectPricing pid (Projects.PlanName "GraduatedPricing") (Projects.SubId "445873") (Projects.SubItemId "377166") (Projects.OrderId "3062810")
       projectFlags tr pid >>= (`shouldBe` (True, False))
+
+  -- The free-tier cap is metered from apis.daily_usage, which ReportUsage writes hourly. It
+  -- used to count Postgres otel_logs_and_spans, which is empty with TimeFusion-only writes,
+  -- so the cap never tripped: a downgraded project (Shipbubble, 2026-10) kept ingesting ~4.7M
+  -- events/day on Free.
+  describe "free tier cap" do
+    it "freeTier_overDailyUsage_dropsIngest_andRejectsOtlpHttp" \(tr0, pid) -> do
+      let tr = tr0{trATCtx = tr0.trATCtx{Config.config = tr0.trATCtx.config{Config.enableFreetier = True}}}
+      setBilling tr pid "Free" Nothing Nothing frozenTime
+      key <- createTestAPIKey tr pid "free-tier-cap-key"
+      ingestLog tr key "under the cap" frozenTime
+      logCount tr pid `shouldReturn` 1
+
+      withResource tr.trPool \conn ->
+        void
+          $ PGS.execute
+            conn
+            [sql| INSERT INTO apis.daily_usage (project_id, total_requests, total_metrics, window_start, window_end)
+                  VALUES (?, ?, 0, now() - interval '1 minute', now()) |]
+            (pid, Projects.freeTierDailyMaxEvents)
+      Cache.purge tr.trATCtx.projectCache
+      ingestLog tr key "over the cap" frozenTime
+      logCount tr pid `shouldReturn` 1
+
+      Right body <- OtlpServer.httpLogsExport tr.trLogger tr.trATCtx tr.trTracerProvider (Just key) (encodeMessage $ createOtelLogAtTime key ["rejected"] frozenTime)
+      Right (res :: LS.ExportLogsServiceResponse) <- pure $ decodeMessage body
+      res ^. LSF.partialSuccess . LSF.rejectedLogRecords `shouldBe` 1
+      res ^. LSF.partialSuccess . LSF.errorMessage `shouldSatisfy` T.isInfixOf "00:00 UTC"
+      logCount tr pid `shouldReturn` 1
+
+    -- Hourly and daily ticks both enqueue ReportUsage at 00:00; the loser of the lease must not
+    -- record the window again (and bill it twice).
+    it "skips recording while another run holds the project's usage lease" \(tr, pid) -> do
+      seedUsage tr pid
+      let before = addUTCTime (-86400 * 3) frozenTime
+      setBilling tr pid "GraduatedPricing" (Just "sub_item_1") stripeSub before
+      withResource tr.trPool \conn ->
+        PGS.withTransaction conn do
+          void (PGS.query conn [sql|SELECT pg_advisory_xact_lock(hashtext(?))|] (PGS.Only ("report_usage:" <> pid.toText)) :: IO [PGS.Only ()])
+          runReport tr pid
+      dailyUsage tr pid >>= (`shouldBe` [])
+      lastReportedOf tr pid >>= (`shouldBe` before)
+
+    -- A first run on a free project would otherwise put weeks of usage in one window ending
+    -- today and cap a project that is under today's limit.
+    it "floors a free project's window at the start of the UTC day" \(tr, pid) -> do
+      seedUsageAt tr pid (addUTCTime 1800 frozenTime)
+      apiKey <- createTestAPIKey tr pid "free-tier-floor-key"
+      ingestLog tr apiKey "three days ago" (addUTCTime (-86400 * 3) frozenTime)
+      setBilling tr pid "Free" Nothing Nothing (addUTCTime (-86400 * 5) frozenTime)
+      runReportAt (intoTheDay frozenTime) tr pid
+      dailyUsage tr pid >>= (`shouldBe` [(3, 0, 0)])
+
+    it "claims each usage notice level once per day" \(tr, pid) -> do
+      claims <- runTestBg frozenTime tr $ traverse (Projects.claimFreeTierNotice pid) [Projects.NoticeWarning, Projects.NoticeWarning, Projects.NoticeExceeded, Projects.NoticeExceeded, Projects.NoticeWarning]
+      claims `shouldBe` [True, False, True, False, False]

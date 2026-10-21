@@ -16,7 +16,7 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.RUM qualified as RUMData
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..), checkFreeTierStatus, mkPageCtx, navTabAttrs)
 import Pages.Components (RowAction (..), copyButton_, detailTab_, eventsCountCell_, lastSeenCell_, periodToggle_, rowActions_, sparkline_, tabPanel_)
 import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), EmptyStateAction (..), Features (..), Pagination (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableResponse (..), TableRows (..), ZeroState (..), col, withAttrs, withColHeaderExtra)
 import Pkg.DeriveUtils (WrappedEnumSC (..), assetUrl, bulkActionSlug)
@@ -25,7 +25,7 @@ import PyF qualified
 import Relude hiding (ask, asks)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
-import Utils (checkFreeTierStatus, faSprite_, toUriStr)
+import Utils (faSprite_, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData, parseUrlPiece)
 

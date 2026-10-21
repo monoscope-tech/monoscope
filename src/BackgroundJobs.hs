@@ -12,7 +12,6 @@ import Control.Monad.Extra (whileM)
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens qualified as AL
 import Data.Aeson.QQ (aesonQQ)
-import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.Default (def)
@@ -121,7 +120,7 @@ import Pkg.SchemaLearning.Catalog (SummaryDoc (..))
 import Pkg.SchemaLearning.Hot qualified as SchemaHot
 import Pkg.SchemaLearning.Worker qualified as SchemaWorker
 import Pkg.TraceSessionCache qualified as TSC
-import ProcessMessage (classifyUrlPath, classifyUrlPathWith, extractObservation, mkBatchPathClassifiers, mkPathClassifier, processSpanToEntities)
+import ProcessMessage (classifyUrlPath, classifyUrlPathWith, extractObservation, fetchProjectCache, mkBatchPathClassifiers, mkPathClassifier, processSpanToEntities)
 import PyF (fmtTrim)
 import Relude hiding (ask, local)
 import Relude.Extra.Foldable1 (maximum1, minimum1)
@@ -134,7 +133,7 @@ import System.Types (ATBackgroundCtx, ATBackgroundEffects, DB, runBackground)
 import UnliftIO (withRunInIO)
 import UnliftIO qualified as UIO
 import UnliftIO.Exception (bracket, catch, finally, throwIO, try, tryAny)
-import Utils (calculateCycleStartDate, formatUTC, formatUTCMicros, freeTierDailyMaxEvents, hostPath, nonEmptyT, toUriStr, toXXHash, truncateHour, usageWindowStart)
+import Utils (FreeTierStatus (..), calculateCycleStartDate, formatUTC, formatUTCMicros, freeTierUsageStatus, hostPath, nonEmptyT, toUriStr, toXXHash, truncateHour, usageWindowStart)
 
 
 sendMessageToDiscord :: Config.AuthContext -> Text -> ATBackgroundCtx ()
@@ -269,7 +268,11 @@ processBackgroundJob authCtx bgJob =
     HourlyJob scheduledTime hour -> unlessStale scheduledTime (2 * 3600) $ runHourlyJob scheduledTime hour
     DailyReports pid -> sendReportForProject pid Projects.RTDaily
     WeeklyReports pid -> sendReportForProject pid Projects.RTWeekly
-    ReportUsage pid -> reportProjectUsage authCtx pid
+    -- Hourly and daily ticks both enqueue this at 00:00; two concurrent runs would read the same
+    -- watermark and record (and bill) the window twice, so one run per project at a time.
+    ReportUsage pid ->
+      whenNothingM_ (withXactLease authCtx ("report_usage:" <> pid.toText) (reportProjectUsage authCtx pid))
+        $ Log.logInfo "ReportUsage already running for project, skipping" ("project_id", pid.toText)
     HostRetentionSweep pid -> runHostRetentionSweep authCtx pid
     TrialEndingReminder pid scheduledDaysLeft -> sendTrialEndingReminder authCtx pid scheduledDaysLeft
     CleanupDemoProject ->
@@ -720,30 +723,37 @@ reportProjectUsage authCtx pid =
       -- be billed produced no line at all: DSI-APP and TestCorp sat unbilled for 41 days
       -- behind a first_sub_item_id of "" (empty, not NULL — an `IS NOT NULL` audit passes).
       -- A skip on a paid plan is revenue going missing and has to be page-worthy.
+      nowU <- Time.currentTime
+      let countWindow floorM = do
+            let
+              -- Cap wStart to the cycle start (never charge for a previous cycle —
+              -- that's our fault) AND to the retention horizon (telemetry older than
+              -- that is deleted, so asking for it times out and the watermark can
+              -- never advance). See 'usageWindowStart'.
+              wStart =
+                maybe id max floorM
+                  $ usageWindowStart
+                    project.usageLastReported
+                    (calculateCycleStartDate (fromMaybe project.createdAt project.billingDay) nowU)
+                    nowU
+            -- Bracketing the count is what separates "skipped the gate" from "never came back
+            -- from the store": both look identical from the outside — one "Reporting usage"
+            -- line and no "Usage to report" line — and they need opposite fixes.
+            Log.logInfo "Counting usage" ("project_id", pid.toText, "window_start", show wStart :: Text, "window_end", show nowU :: Text)
+            (wStart,) <$> Telemetry.getUsageTotals authCtx.env.enableTimefusionReads pid wStart nowU
       case (Projects.isPaidPlan (Projects.parsePlan project.paymentPlan), nonEmptyT project.firstSubItemId) of
-        (False, _) -> Log.logInfo "Usage reporting skipped: plan is not billable" ("project_id", pid.toText, "plan", project.paymentPlan)
+        -- Unbilled plans still record daily_usage: free-tier limits and the billing page read it.
+        -- Floored at 00:00 UTC: a first run (or a long gap) would otherwise land weeks of usage
+        -- in one window ending today and cap a project that is under today's limit.
+        (False, _) -> countWindow (Just $ UTCTime (utctDay nowU) 0) >>= \(wStart, totals) -> Projects.recordUsageWindow pid wStart nowU totals []
+        -- No record here: advancing usage_last_reported would forfeit the backlog owed once the sub item is fixed.
         (True, Nothing) -> Log.logAttention "Usage reporting skipped: paid plan has no subscription item" ("project_id", pid.toText, "plan", project.paymentPlan, "provider", show provider)
         (True, Just fSubId) -> do
           -- 1) Commit bookkeeping BEFORE any provider HTTP call. usage_last_reported
           --    always advances; daily_usage + usage_report_submissions rows are
           --    inserted in the same tx only when totalUsage > 0. See
           --    'splitUsageIntoChunks' for the per-provider quantity policy.
-          nowU <- Time.currentTime
-          let
-            -- Cap wStart to the cycle start (never charge for a previous cycle —
-            -- that's our fault) AND to the retention horizon (telemetry older than
-            -- that is deleted, so asking for it times out and the watermark can
-            -- never advance). See 'usageWindowStart'.
-            wStart =
-              usageWindowStart
-                project.usageLastReported
-                (calculateCycleStartDate (fromMaybe project.createdAt project.billingDay) nowU)
-                nowU
-          -- Bracketing the count is what separates "skipped the gate" from "never came back
-          -- from the store": both look identical from the outside — one "Reporting usage"
-          -- line and no "Usage to report" line — and they need opposite fixes.
-          Log.logInfo "Counting usage" ("project_id", pid.toText, "window_start", show wStart :: Text, "window_end", show nowU :: Text)
-          totals <- Telemetry.getUsageTotals authCtx.env.enableTimefusionReads pid wStart nowU
+          (wStart, totals) <- countWindow Nothing
           subItems <- Projects.meterSubItemIds pid
           let meterCfg = Projects.projectMeterConfig project subItems
           -- 'meterIsDormant' decides whether a dimension cuts submission chunks at
@@ -1368,12 +1378,17 @@ runHourlyJob scheduledTime hour = do
   tryStep "metric-catalog-reconcile" Telemetry.reconcileMetricCatalog
   tryStep "endpoint-shape-report" reportUnwrittenIdRules
   let oneHourAgo = addUTCTime (-3600) scheduledTime
-  activeProjects <-
-    Hasql.interp
-      [HI.sql| SELECT DISTINCT project_id::uuid
-              FROM otel_logs_and_spans ols
-              WHERE ols.timestamp >= #{oneHourAgo}::timestamptz
-                AND ols.timestamp <= #{scheduledTime}::timestamptz |]
+  -- Read from wherever telemetry is written: with Postgres writes off, the PG table is empty
+  -- and this used to schedule nothing (no hourly ReportUsage, so no free-tier meter).
+  spanProjects <-
+    withHasqlTimefusion
+      ctx.env.enableTimefusionReads
+      ( Hasql.interp
+          [HI.sql| SELECT DISTINCT project_id::text FROM otel_logs_and_spans
+                    WHERE timestamp >= #{oneHourAgo}::timestamptz AND timestamp <= #{scheduledTime}::timestamptz |]
+      )
+  metricProjects <- Telemetry.projectsWithRecentMetrics oneHourAgo
+  let activeProjects = ordNub $ mapMaybe Projects.projectIdFromText spanProjects <> metricProjects
 
   Log.logTrace "Projects with new data in the last hour window" ("count", AE.toJSON $ length activeProjects)
   let projectBatches = chunksOf 10 activeProjects
@@ -1432,33 +1447,29 @@ autoProvisionDashboards scheduledTime = do
                 Log.logInfo "Auto-provisioned dashboard from detected metrics" (AE.object ["project_id" AE..= pid, "template" AE..= file])
 
 
--- | For each active free-tier project, check usage and send system log + email at 80% and 100% thresholds.
--- Deduplication: only notifies if no system log with the same event name exists for this project in the last 24h.
+-- | For each active capped project, send a system log + email at 80% and 100% of today's cap,
+-- at most once per level per UTC day ('Projects.claimFreeTierNotice').
 checkFreeTierUsageNotifications :: [Projects.ProjectId] -> UTCTime -> ATBackgroundCtx ()
 checkFreeTierUsageNotifications pids now = forM_ pids \pid -> tryStep "free-tier-check" do
-  whenJustM (Projects.projectById pid) \project -> when (Projects.isFreeTier project.paymentPlan) do
-    -- Use the TTL-cached daily event count to avoid a full 24-hour count(*) scan.
-    count <- (.dailyEventCount) <$> Projects.projectCacheById pid
-    let limit = fromInteger freeTierDailyMaxEvents
-        exceeded = count >= limit
-        warning = count >= (limit * 80) `div` 100
-        eventName :: Text = if exceeded then "system.free_tier.exceeded" else "system.free_tier.warning"
-    when (warning || exceeded) do
-      -- Dedup: skip if we already logged this event for this project today
-      alreadyNotified <-
-        fromMaybe False
-          <$> Hasql.interpOne
-            [HI.sql| SELECT EXISTS(SELECT 1 FROM otel_logs_and_spans WHERE project_id=#{pid.toText} AND name=#{eventName} AND timestamp > #{now}::timestamptz - interval '1 day') |]
-      unless alreadyNotified do
-        ctx <- ask @Config.AuthContext
-        let sev = if exceeded then SLError else SLWarn
-            bodyMsg = if exceeded then "Daily event limit reached — new events are being dropped." else "Approaching daily event limit (" <> show count <> " of " <> show limit <> " events used)."
-            attrs = Map.fromList [("used", AE.toJSON count), ("limit", AE.toJSON limit), ("payment_plan", AE.String "Free")]
-        insertSystemLog (Telemetry.writeTargetFor ctx.env Nothing) ctx.hasqlTimefusionUsesPgTypes $ mkSystemLog pid eventName sev bodyMsg attrs Nothing now
-        -- Send email to all project members
-        users <- Projects.usersByProjectId pid
-        let mail = ET.freeTierUsageEmail project.title (projectUrl ctx pid <> "/manage_billing") count limit exceeded
-        forM_ users \user -> renderAndSend (CI.original user.email) mail
+  ctx <- ask @Config.AuthContext
+  whenJustM (Projects.projectById pid) \project -> whenJust (Projects.freeTierDailyLimit ctx.config.enableFreetier project.paymentPlan) \limit -> do
+    count <- Projects.dailyUsageOfDay pid now
+    let notice = case freeTierUsageStatus count limit of
+          FreeTierExceeded{} -> Just Projects.NoticeExceeded
+          FreeTierWarning{} -> Just Projects.NoticeWarning
+          FreeTierOk -> Nothing
+          NotFreeTier -> Nothing
+    whenJust notice \n -> whenM (Projects.claimFreeTierNotice pid n) do
+      (sev, eventName, bodyMsg) :: (SeverityLevel, Text, Text) <- case n of
+        Projects.NoticeExceeded ->
+          (SLError, "system.free_tier.exceeded", "Daily event limit reached — new events are dropped until 00:00 UTC.")
+            <$ Log.logAttention "Free tier cap reached; ingestion is being dropped" ("project_id", pid.toText, "used", count, "limit", limit)
+        Projects.NoticeWarning -> pure (SLWarn, "system.free_tier.warning", "Approaching daily event limit (" <> show count <> " of " <> show limit <> " events used).")
+      let attrs = Map.fromList [("used", AE.toJSON count), ("limit", AE.toJSON limit), ("payment_plan", AE.String project.paymentPlan)]
+      insertSystemLog (Telemetry.writeTargetFor ctx.env Nothing) ctx.hasqlTimefusionUsesPgTypes $ mkSystemLog pid eventName sev bodyMsg attrs Nothing now
+      users <- Projects.usersByProjectId pid
+      let mail = ET.freeTierUsageEmail project.title (projectUrl ctx pid <> "/manage_billing") count limit n
+      forM_ users \user -> renderAndSend (CI.original user.email) mail
 
 
 generateOtelFacetsBatch :: (IOE :> es, Ki.StructuredConcurrency :> es, Log :> es, Tracing :> es) => V.Vector Projects.ProjectId -> UTCTime -> Eff es ()
@@ -2278,8 +2289,7 @@ safetyNetReprocess pid = do
   ctx <- ask @Config.AuthContext
   let cutoff = ctx.config.processedAtCutoff
       maxAgeSecs = fromIntegral ctx.config.hashUpdateMaxAgeSecs :: Double
-  projectCacheVal <- liftIO $ Cache.fetchWithCache ctx.projectCache pid (Projects.projectCacheByIdIO ctx.hasqlJobsPool)
-  let caches = one (pid, projectCacheVal)
+  caches <- one . (pid,) <$> fetchProjectCache pid
   -- Single page per tick (1000 rows); next hourly tick picks up any remainder.
   rows <-
     V.fromList
@@ -3679,7 +3689,7 @@ autoAckProvenEndpoints pid = do
                 Right acked -> do
                   eventFields <- fields ("completed" :: Text) (Nothing :: Maybe Text) acked
                   Log.logInfo "Endpoint auto-ack sweep completed" eventFields
-    leaseResult <- withEndpointAutoAckLease authCtx runSweep
+    leaseResult <- withXactLease authCtx endpointAutoAckLockName runSweep
     when (isNothing leaseResult) do
       eventFields <- fields ("lease_busy" :: Text) (Nothing :: Maybe Text) (0 :: Int)
       Log.logInfo "Endpoint auto-ack sweep deferred" eventFields
@@ -3689,12 +3699,13 @@ autoAckProvenEndpoints pid = do
 -- traversal. Production uses a transaction-pooling proxy, so retaining one
 -- client connection does not retain one server session between statements.
 -- The transaction pins the server session and releases this xact-scoped lock
--- on commit or rollback, including when the traversal throws.
-withEndpointAutoAckLease :: Config.AuthContext -> ATBackgroundCtx a -> ATBackgroundCtx (Maybe a)
-withEndpointAutoAckLease authCtx action = withRunInIO \run ->
+-- on commit or rollback, including when the traversal throws. Nothing when another
+-- holder has the lock.
+withXactLease :: Config.AuthContext -> Text -> ATBackgroundCtx a -> ATBackgroundCtx (Maybe a)
+withXactLease authCtx lockName action = withRunInIO \run ->
   withResource authCtx.pool \conn ->
     SimplePG.withTransaction conn do
-      [SimplePG.Only acquired] <- SimplePG.query conn [sql|SELECT pg_try_advisory_xact_lock(hashtext(?))|] (SimplePG.Only endpointAutoAckLockName)
+      [SimplePG.Only acquired] <- SimplePG.query conn [sql|SELECT pg_try_advisory_xact_lock(hashtext(?))|] (SimplePG.Only lockName)
       if not acquired
         then pure Nothing
         else do

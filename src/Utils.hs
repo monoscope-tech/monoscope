@@ -4,7 +4,6 @@ module Utils (
   onpointerdown_,
   jsonValueToHtmlTree,
   truncateMiddle,
-  freeTierDailyMaxEvents,
   JSONHttpApiData (..),
   parseTime,
   copyToClipboardAttr_,
@@ -36,7 +35,7 @@ module Utils (
   b64ToJson,
   FreeTierStatus (..),
   freeTierUsageBanner,
-  checkFreeTierStatus,
+  freeTierUsageStatus,
   isDemoAndNotSudo,
   escapedQueryPartial,
   displayTimestamp,
@@ -108,7 +107,6 @@ import Data.Aeson.Types qualified as AET
 import Data.Char (isAlpha, isAlphaNum, isDigit)
 import Data.Default (Default (..))
 import Data.Digest.XXHash (xxHash)
-import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HS
 import Data.List (lookup)
@@ -122,13 +120,9 @@ import Data.Time.Format (FormatTime, formatTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Time.LocalTime (timeOfDayToTime, timeToTimeOfDay)
 import Data.Vector qualified as V
-import Effectful (Eff, type (:>))
-import Effectful.Time (Time)
-import Effectful.Time qualified as Time
 import Fmt (commaizeF, fmt)
 import GHC.Generics (Rep)
 import GHC.TypeLits (KnownSymbol, Symbol, symbolVal)
-import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxBoost_, hxGet_, hxIndicator_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxVals_)
@@ -718,25 +712,21 @@ freeTierUsageBanner pid = \case
       a_ [class_ "underline underline-offset-2 link font-medium", href_ $ "/p/" <> pid <> "/manage_billing"] "Compare plans \x2192"
   FreeTierExceeded{} ->
     div_ [class_ "flex w-full text-center items-center px-4 gap-4 py-1 bg-fillError-weak text-textError rounded-lg justify-center"] do
-      strong_ "Daily cap reached \x2014 new events are being dropped."
+      strong_ "Daily cap reached \x2014 new events are dropped until 00:00 UTC."
       a_ [class_ "underline underline-offset-2 link font-medium", href_ $ "/p/" <> pid <> "/manage_billing"] "Upgrade to keep sending events \x2192"
   NotFreeTier -> pass
   FreeTierOk -> pass
 
 
-checkFreeTierStatus :: (Hasql.Hasql :> es, Time :> es) => Projects.ProjectId -> Text -> Eff es FreeTierStatus
-checkFreeTierStatus pid paymentPlan =
-  if Projects.isFreeTier paymentPlan
-    then do
-      now <- Time.currentTime
-      count <- fromMaybe (0 :: Int) <$> Hasql.interpOne [HI.sql| SELECT count(*)::BIGINT FROM otel_logs_and_spans WHERE project_id=#{pid.toText} AND timestamp > #{now}::timestamptz - interval '1 day'|]
-      let limit = fromInteger freeTierDailyMaxEvents
-      pure
-        $ if
-          | count >= limit -> FreeTierExceeded count limit
-          | count >= (limit * 80) `div` 100 -> FreeTierWarning count limit
-          | otherwise -> FreeTierOk
-    else pure NotFreeTier
+-- | Warn at 80% of the cap, stop at 100%.
+--
+-- >>> map (`freeTierUsageStatus` 100) [79, 80, 100]
+-- [FreeTierOk,FreeTierWarning 80 100,FreeTierExceeded 100 100]
+freeTierUsageStatus :: Int -> Int -> FreeTierStatus
+freeTierUsageStatus used limit
+  | used >= limit = FreeTierExceeded used limit
+  | used >= (limit * 80) `div` 100 = FreeTierWarning used limit
+  | otherwise = FreeTierOk
 
 
 serviceColors :: V.Vector Text
@@ -873,10 +863,6 @@ instance AE.ToJSON a => ToHttpApiData (JSONHttpApiData a) where
   toUrlPiece (JSONHttpApiData a) =
     let t = encodeText a
      in fromMaybe t $ T.stripSuffix "\"" =<< T.stripPrefix "\"" t
-
-
-freeTierDailyMaxEvents :: Integer
-freeTierDailyMaxEvents = 10000
 
 
 -- | >>> showFFloat' 3 0.0158

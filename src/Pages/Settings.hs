@@ -1081,11 +1081,11 @@ verifyLemonSqueezySignature sigHeader payload secret =
     expected = BA.convert (HMAC.hmac secret payload :: HMAC.HMAC SHA256) :: ByteString
 
 
--- | Email every member about a plan change; @mk@ is 'ET.planUpgradedEmail' or 'ET.planDowngradedEmail',
--- @detail@ the new plan or the downgrade reason.
-notifyPlanChange :: (DB es, Notify.Notify :> es) => EnvConfig -> Projects.Project -> (Text -> Text -> Text -> (Text, Html ())) -> Text -> Eff es ()
-notifyPlanChange envCfg project mk detail = do
-  let (subj, html) = mk project.title detail (billingUrl envCfg project.id)
+-- | Email every member about a billing change; @mk@ renders from the project title and billing URL
+-- (e.g. @ET.planDowngradedEmail reason@).
+notifyPlanChange :: (DB es, Notify.Notify :> es) => EnvConfig -> Projects.Project -> (Text -> Text -> (Text, Html ())) -> Eff es ()
+notifyPlanChange envCfg project mk = do
+  let (subj, html) = mk project.title (billingUrl envCfg project.id)
   Projects.usersByProjectId project.id >>= traverse_ \u -> sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
 
 
@@ -1115,7 +1115,7 @@ webhookPostH sigHeaderM rawBody = do
             rows <- Projects.downgradeToFree orderId
             when (rows == 0) $ Log.logAttention "LS downgrade touched 0 rows" (show orderId :: Text, reason)
             when (rows > 1) $ Log.logAttention "LS downgrade touched multiple rows" (show orderId :: Text, rows)
-            Notify.runNotifyProduction $ notifyPlanChange envConfig project ET.planDowngradedEmail reason
+            Notify.runNotifyProduction $ notifyPlanChange envConfig project (ET.planDowngradedEmail reason)
           Nothing ->
             Log.logAttention "LS downgrade: no project for order_id" (show orderId :: Text, dat.meta.eventName, reason)
         pure "downgraded"
@@ -1141,7 +1141,7 @@ webhookPostH sigHeaderM rawBody = do
       whenJust (Projects.projectIdFromText projectId) \pid -> do
         void $ Projects.updateProjectBilling pid (Projects.PlanName plan) (Projects.SubId $ show subItem.subscriptionId) (Projects.SubItemId $ show subItem.id) (Projects.OrderId $ show orderId)
         whenJustM (Projects.projectById pid) \project ->
-          Notify.runNotifyProduction $ notifyPlanChange envConfig project ET.planUpgradedEmail plan
+          Notify.runNotifyProduction $ notifyPlanChange envConfig project (ET.planUpgradedEmail plan)
       pure "subscription created"
     Right LSSubscriptionCancelled -> downgrade "was cancelled"
     Right LSSubscriptionExpired -> downgrade "has expired"
@@ -1149,7 +1149,7 @@ webhookPostH sigHeaderM rawBody = do
     -- subscription_expired/_cancelled will downgrade if retries ultimately fail.
     Right LSSubscriptionPaymentFailed -> do
       whenJustM (Projects.projectByOrderId (show orderId)) \project ->
-        Notify.runNotifyProduction $ notifyPlanChange envConfig project ET.planDowngradedEmail "payment failed"
+        Notify.runNotifyProduction $ notifyPlanChange envConfig project ET.paymentFailedEmail
       Log.logAttention "LS subscription_payment_failed (no downgrade)" (show orderId :: Text, subItem.subscriptionId)
       pure "payment failed notified"
     Right LSSubscriptionPaused -> downgrade "was paused"
@@ -1159,7 +1159,7 @@ webhookPostH sigHeaderM rawBody = do
       when (rows == 0) $ Log.logAttention "LS upgrade touched 0 rows" (show orderId :: Text, subItem.subscriptionId, plan)
       when (rows > 1) $ Log.logAttention "LS upgrade touched multiple rows" (show orderId :: Text, rows)
       Projects.projectBySubId (show subItem.subscriptionId) >>= \case
-        Just project -> Notify.runNotifyProduction $ notifyPlanChange envConfig project ET.planUpgradedEmail plan
+        Just project -> Notify.runNotifyProduction $ notifyPlanChange envConfig project (ET.planUpgradedEmail plan)
         Nothing -> Log.logAttention "LS upgrade: no project for sub_id" (show orderId :: Text, subItem.subscriptionId, plan)
       pure "upgraded"
     Right LSSubscriptionUpdated -> do
@@ -1695,7 +1695,7 @@ handleStripeCheckout envConfig obj = do
             Just BJ.StripeSubDetails{status = "trialing"} -> Log.logAttention "Stripe sub trialing but trial_end missing; no reminders scheduled" (pid.toText, subId)
             _ -> pass
           whenJust projectM \project ->
-            Notify.runNotifyProduction $ notifyPlanChange envConfig project ET.planUpgradedEmail plan
+            Notify.runNotifyProduction $ notifyPlanChange envConfig project (ET.planUpgradedEmail plan)
           pure "checkout processed"
     _ -> do
       Log.logAttention "Stripe checkout missing project/sub/customer" (pidM, subIdM, customerIdM)
@@ -1712,7 +1712,7 @@ handleStripeDowngrade envConfig event reason obj =
       when (rows == 0) $ Log.logAttention ("Stripe " <> event <> ": no project for sub_id") subId
       when (rows > 1) $ Log.logAttention ("Stripe " <> event <> " touched multiple rows") (subId, rows)
       whenJustM (Projects.projectBySubId subId) \project ->
-        Notify.runNotifyProduction $ notifyPlanChange envConfig project ET.planDowngradedEmail reason
+        Notify.runNotifyProduction $ notifyPlanChange envConfig project (ET.planDowngradedEmail reason)
       pure $ toHtml $ T.replace "." " " event
     Nothing -> do
       Log.logAttention ("Stripe " <> event <> ": missing sub id") ()
@@ -1739,7 +1739,7 @@ handleStripePaymentFailed envConfig obj = do
   whenJust (jsonField "customer" obj :: Maybe Text) \customerId ->
     whenJustM (Projects.projectByCustomerId customerId) \project -> do
       Log.logAttention "Stripe invoice.payment_failed" (project.id, attemptCount, nextAttempt)
-      Notify.runNotifyProduction $ notifyPlanChange envConfig project ET.planDowngradedEmail "payment failed"
+      Notify.runNotifyProduction $ notifyPlanChange envConfig project ET.paymentFailedEmail
   pure "payment failed handled"
 
 
@@ -1761,7 +1761,7 @@ handleStripeSubResumed envConfig obj =
           when (rows > 1) $ Log.logAttention "Stripe subscription.resumed touched multiple rows" (subId, rows)
           when (rows > 0)
             $ whenJustM (Projects.projectBySubId subId) \project ->
-              Notify.runNotifyProduction $ notifyPlanChange envConfig project ET.planUpgradedEmail plan
+              Notify.runNotifyProduction $ notifyPlanChange envConfig project (ET.planUpgradedEmail plan)
           pure "subscription resumed"
         Nothing -> do
           Log.logAttention "Stripe subscription.resumed: could not fetch sub items" subId

@@ -24,6 +24,7 @@ module Opentelemetry.OtlpServer (
 
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Exception.Annotated (checkpoint)
+import Control.Lens (ASetter', lengthOf)
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
@@ -42,6 +43,7 @@ import Data.HashSet qualified as HS
 import Data.List qualified as L
 import Data.Map qualified as Map
 import Data.ProtoLens.Encoding (decodeMessage, encodeMessage)
+import Data.ProtoLens.Field (field)
 import Data.Scientific (fromFloatDigits)
 import Data.Text qualified as T
 import Data.Time (UTCTime, diffUTCTime)
@@ -78,7 +80,7 @@ import Pkg.ErrorMetrics (wireTypeErrorsRef)
 import Pkg.LiveTail qualified as LiveTail
 import Pkg.Metrics qualified as Metrics
 import Pkg.TraceSessionCache qualified as TSC
-import ProcessMessage (overFreeTierQuota, stampHashesAtIngest, urlPathFromRawUrl)
+import ProcessMessage (fetchIngestCaches, overFreeTierQuota, stampHashesAtIngest, urlPathFromRawUrl)
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields qualified as LSF
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService qualified as MS
@@ -97,14 +99,13 @@ import Proto.Opentelemetry.Proto.Trace.V1.Trace qualified as PT
 import Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields qualified as PTF
 import Relude hiding (ask)
 import Relude.Extra.Enum (safeToEnum)
-import Relude.Extra.Tuple (traverseToSnd)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.IO.Unsafe (unsafePerformIO)
 import System.Logging qualified as Log
 import System.Tracing (Tracing, batchSpanAttrs, withSpan_)
 import System.Types (ATBackgroundCtx, DB, runBackground)
 import UnliftIO.Exception (throwIO, tryAny)
-import Utils (b64ToJson, freeTierDailyMaxEvents, jsonToMap, nestedJsonFromDotNotation)
+import Utils (b64ToJson, jsonToMap, nestedJsonFromDotNotation)
 import "base64" Data.ByteString.Base64 qualified as B64
 
 
@@ -323,14 +324,6 @@ throwGrpc err message =
   liftIO $ throwIO GrpcException{grpcError = err, grpcErrorMessage = Just message, grpcErrorMetadata = [], grpcErrorDetails = Nothing}
 
 
--- | Project cache lookup, memoized in the shared cache; missing projects get the default.
-fetchProjectCache :: MonadIO m => AuthContext -> Projects.ProjectId -> m Projects.ProjectCache
-fetchProjectCache appCtx pid =
-  liftIO
-    $ Cache.fetchWithCache appCtx.projectCache pid
-    $ Projects.projectCacheByIdIO appCtx.hasqlJobsPool
-
-
 -- | Boundary adapter: convert a 'WriteFailure' to a gRPC INTERNAL error.
 -- Used at the gRPC handler edge where clients expect status codes via throw,
 -- not Either. Internal pipeline code stays Either-based.
@@ -432,7 +425,7 @@ processList msgs !attrs =
 
 processBatchPipeline
   :: forall req res es
-   . (Eff.Reader AuthContext :> es, IOE :> es, Log :> es, Message req, Time.Time :> es)
+   . (DB es, Eff.Reader AuthContext :> es, IOE :> es, Log :> es, Message req, Time.Time :> es)
   => Text
   -> [(Text, ByteString)]
   -> AuthContext
@@ -461,10 +454,7 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds inva
           !projectIdsAndKeys <- checkpoint (cp ":getProjectIds") $ ProjectApiKeys.projectIdsByProjectApiKeys uniqueProjectKeys
           let !keyToId = HM.fromList $ V.toList projectIdsAndKeys
               !projectIds = hashNub $ atIds <> HM.elems keyToId
-          !projectCaches <-
-            checkpoint (cp ":getProjectCaches")
-              $ HM.fromList
-              <$> forM projectIds (traverseToSnd (fetchProjectCache appCtx))
+          !projectCaches <- checkpoint (cp ":getProjectCaches") $ fetchIngestCaches projectIds
           pure (keyToId, projectCaches)
 
     let !decodePoison = [(ackId, raw, toText err) | (ackId, raw, Left err) <- decodedMsgs]
@@ -1194,7 +1184,7 @@ convertSpanToOtelLog !fallbackTime !pid resourceM pSpan =
       hasNoHost attrs =
         all
           (maybe True (\case AE.String h -> T.null h; _ -> True))
-          [lookupNested "net" "host" attrs, lookupNested "server" "address" attrs, lookupNested "http" "host" attrs]
+          ([lookupNested "net" "host" attrs, lookupNested "server" "address" attrs, lookupNested "http" "host" attrs] :: [Maybe AE.Value])
       lookupNested outer inner attrs =
         Map.lookup outer attrs >>= \case
           AE.Object o -> KEM.lookup (AEK.fromText inner) o
@@ -1467,10 +1457,7 @@ processSignalRequest label signal receivedMsg noun countKey metadataApiKey proje
       (label <> ": Authentication successful")
       (AE.object ["project_ids" AE..= map unUUIDId allProjectIds, "project_keys" AE..= V.toList allApiKeys, "metadata_auth" AE..= isJust metadataApiKey])
 
-  projectCaches <-
-    checkpoint (toAnnotation $ "processList:" <> signal <> ":getProjectCaches")
-      $ HM.fromList
-      <$> forM allProjectIds (traverseToSnd (fetchProjectCache appCtx))
+  projectCaches <- checkpoint (toAnnotation $ "processList:" <> signal <> ":getProjectCaches") $ fetchIngestCaches allProjectIds
   let !records = convert currentTime projectCaches projectIdsAndKeys
 
   Log.logTrace
@@ -1489,14 +1476,14 @@ processSignalRequest label signal receivedMsg noun countKey metadataApiKey proje
 -- (hs-opentelemetry's does) and self-hosted setups without a collector in
 -- front. The x-api-key HTTP header plays the role of gRPC metadata auth.
 httpTracesExport, httpLogsExport :: Logger -> AuthContext -> TracerProvider -> Maybe Text -> BS.ByteString -> IO (Either Text BS.ByteString)
-httpTracesExport = httpExport @TS.ExportTraceServiceResponse "ExportTraceServiceRequest" processTraceRequest
-httpLogsExport = httpExport @LS.ExportLogsServiceResponse "ExportLogsServiceRequest" processLogsRequest
+httpTracesExport = httpExport "ExportTraceServiceRequest" rejectTraces processTraceRequest
+httpLogsExport = httpExport "ExportLogsServiceRequest" rejectLogs processLogsRequest
 
 
-httpExport :: forall res req. (Message req, Message res) => Text -> (Maybe Text -> req -> ATBackgroundCtx ()) -> Logger -> AuthContext -> TracerProvider -> Maybe Text -> BS.ByteString -> IO (Either Text BS.ByteString)
-httpExport reqName process appLogger appCtx tp keyM body = case decodeMessage body of
+httpExport :: (Message req, Message res) => Text -> (req -> res) -> (Maybe Text -> req -> ATBackgroundCtx ()) -> Logger -> AuthContext -> TracerProvider -> Maybe Text -> BS.ByteString -> IO (Either Text BS.ByteString)
+httpExport reqName reject process appLogger appCtx tp keyM body = case decodeMessage body of
   Left err -> pure $ Left ("invalid " <> reqName <> " protobuf: " <> toText err)
-  Right req -> Right (encodeMessage (defMessage :: res)) <$ runBackground appLogger appCtx tp (process keyM req)
+  Right req -> Right . encodeMessage <$> withFreeTierGate appCtx keyM reject req (defMessage <$ runBackground appLogger appCtx tp (process keyM req))
 
 
 -- | Shared body of the metadata-less Export handlers below: dispatch the signal's
@@ -1537,9 +1524,8 @@ processMetricsRequest metadataApiKey req = do
         "Metrics: Authentication successful"
         (AE.object ["project_id" AE..= unUUIDId pid, "project_key" AE..= projectKey, "metadata_auth" AE..= isJust metadataApiKey])
 
-      projectCache <- fetchProjectCache appCtx pid
-      let !projectCaches = one (pid, projectCache)
-          !metricRecords = convertResourceMetricsToMetricRecords currentTime projectCaches pid resourceMetrics
+      !projectCaches <- fetchIngestCaches [pid]
+      let !metricRecords = convertResourceMetricsToMetricRecords currentTime projectCaches pid resourceMetrics
 
       Log.logTrace
         "Metrics: Converted resource metrics to MetricRecords"
@@ -1569,27 +1555,45 @@ isAesonTextEmpty = maybe True \(AesonText v) -> case AE.toJSON v of
   _ -> False
 
 
--- | Check if a project's free tier is exceeded using cached data (non-blocking).
--- Returns True if the API key resolves to a free-tier project that has exceeded its daily limit.
-isFreeTierExceededCached :: AuthContext -> Maybe Text -> IO Bool
-isFreeTierExceededCached appCtx = \case
-  Nothing -> pure False
-  Just key ->
-    Cache.lookup appCtx.projectKeyCache key >>= \pidM -> case join pidM of
-      Nothing -> pure False
-      Just pid ->
-        maybe False (\pc -> Projects.isFreeTier pc.paymentPlan && pc.dailyEventCount >= fromInteger freeTierDailyMaxEvents)
-          <$> Cache.lookup appCtx.projectCache pid
+-- | Answer an export with @reject req@ when the API key resolves to a capped project past its
+-- daily limit, otherwise run @accept@. Cache-only (non-blocking): a cold cache accepts, and the
+-- background path warms it and drops the slice there. Shared by the gRPC and HTTP exporters.
+withFreeTierGate :: AuthContext -> Maybe Text -> (req -> res) -> req -> IO res -> IO res
+withFreeTierGate appCtx keyM reject req accept = do
+  exceeded <- isJust <$> runMaybeT do
+    pid <- MaybeT . fmap join . Cache.lookup appCtx.projectKeyCache =<< hoistMaybe keyM
+    guard . overFreeTierQuota =<< MaybeT (Cache.lookup appCtx.projectCache pid)
+  if exceeded then reject req <$ Metrics.bump Metrics.freeTierBatchesDropped [] else accept
+
+
+-- | OTLP partial-success rejection of all @n@ items of a capped project's export, with a message
+-- the collector logs. Kept at OK (not RESOURCE_EXHAUSTED) so clients don't buffer and retry into
+-- a burst at 00:00 UTC.
+rejectAll :: (HasField p "errorMessage" Text, HasField res "partialSuccess" p, Message p, Message res) => ASetter' p Int64 -> Int -> res
+rejectAll rejected n = defMessage & field @"partialSuccess" .~ (defMessage & rejected .~ fromIntegral n & field @"errorMessage" .~ msg)
+  where
+    msg = "Monoscope free tier daily limit (" <> show Projects.freeTierDailyMaxEvents <> " events) exceeded; data is dropped until 00:00 UTC. Upgrade to keep ingesting."
+
+
+rejectTraces :: TS.ExportTraceServiceRequest -> TS.ExportTraceServiceResponse
+rejectTraces = rejectAll TSF.rejectedSpans . lengthOf (TSF.resourceSpans . traverse . PTF.scopeSpans . traverse . PTF.spans . traverse)
+
+
+rejectLogs :: LS.ExportLogsServiceRequest -> LS.ExportLogsServiceResponse
+rejectLogs = rejectAll LSF.rejectedLogRecords . lengthOf (LSF.resourceLogs . traverse . PLF.scopeLogs . traverse . PLF.logRecords . traverse)
+
+
+rejectMetrics :: MS.ExportMetricsServiceRequest -> MS.ExportMetricsServiceResponse
+rejectMetrics = rejectAll MSF.rejectedDataPoints . lengthOf (MSF.resourceMetrics . traverse . PMF.scopeMetrics . traverse . PMF.metrics . traverse)
 
 
 -- | Shared skeleton for the three OTLP export RpcHandlers: read metadata/api-key,
 -- recv the request, and either reject (free-tier exceeded) with a per-signal
 -- partialSuccess response or dispatch the per-signal processing in the background.
--- The per-signal parts are the rejected-count fn, the rejection-response builder,
--- the dispatch label, and the process fn.
 mkOtlpRpcHandler
   :: ( Input (Protobuf service meth) ~ Proto req
-     , Message (Output (Protobuf service meth))
+     , Output (Protobuf service meth) ~ Proto res
+     , Message res
      , RequestMetadata (Protobuf service meth) ~ OtlpRequestMetadata
      , ResponseInitialMetadata (Protobuf service meth) ~ NoMetadata
      , ResponseTrailingMetadata (Protobuf service meth) ~ NoMetadata
@@ -1598,19 +1602,14 @@ mkOtlpRpcHandler
   -> AuthContext
   -> TracerProvider
   -> Text
-  -> (req -> Int)
-  -> (Int64 -> Output (Protobuf service meth))
+  -> (req -> res)
   -> (Maybe Text -> req -> ATBackgroundCtx ())
   -> RpcHandler IO (Protobuf service meth)
-mkOtlpRpcHandler appLogger appCtx tp label countFn rejectResp process = mkRpcHandler $ \call -> do
+mkOtlpRpcHandler appLogger appCtx tp label reject process = mkRpcHandler $ \call -> do
   metadata <- getRequestMetadata call
   Proto req <- recvFinalInput call
-  exceeded <- isFreeTierExceededCached appCtx metadata.apiKey
-  if exceeded
-    then sendFinalOutput call (rejectResp (fromIntegral $ countFn req), NoMetadata)
-    else do
-      grpcRunBackground appLogger appCtx tp label $ process metadata.apiKey req
-      sendFinalOutput call (defMessage, NoMetadata)
+  res <- withFreeTierGate appCtx metadata.apiKey reject req $ defMessage <$ grpcRunBackground appLogger appCtx tp label (process metadata.apiKey req)
+  sendFinalOutput call (Proto res, NoMetadata)
 
 
 -- | Run a background task for gRPC handlers, catching exceptions to prevent server crash.
@@ -1637,20 +1636,18 @@ services :: Logger -> AuthContext -> TracerProvider -> [SomeRpcHandler IO]
 services appLogger appCtx tp =
   fromMethods
     $ RawMethod
-      ( mkOtlpRpcHandler appLogger appCtx tp "traces" (\req -> sum [length (ss ^. PTF.spans) | rs <- req ^. TSF.resourceSpans, ss <- rs ^. PTF.scopeSpans]) (\n -> defMessage & TSF.partialSuccess .~ (defMessage & TSF.rejectedSpans .~ n & TSF.errorMessage .~ freeTierExceeded)) processTraceRequest
+      ( mkOtlpRpcHandler appLogger appCtx tp "traces" rejectTraces processTraceRequest
           :: RpcHandler IO (Protobuf TS.TraceService "export")
       )
     $ RawMethod
-      ( mkOtlpRpcHandler appLogger appCtx tp "logs" (\req -> sum [length (sl ^. PLF.logRecords) | rl <- req ^. LSF.resourceLogs, sl <- rl ^. PLF.scopeLogs]) (\n -> defMessage & LSF.partialSuccess .~ (defMessage & LSF.rejectedLogRecords .~ n & LSF.errorMessage .~ freeTierExceeded)) processLogsRequest
+      ( mkOtlpRpcHandler appLogger appCtx tp "logs" rejectLogs processLogsRequest
           :: RpcHandler IO (Protobuf LS.LogsService "export")
       )
     $ RawMethod
-      ( mkOtlpRpcHandler appLogger appCtx tp "metrics" (\req -> sum [length (sm ^. PMF.metrics) | rm <- req ^. MSF.resourceMetrics, sm <- rm ^. PMF.scopeMetrics]) (\n -> defMessage & MSF.partialSuccess .~ (defMessage & MSF.rejectedDataPoints .~ n & MSF.errorMessage .~ freeTierExceeded)) processMetricsRequest
+      ( mkOtlpRpcHandler appLogger appCtx tp "metrics" rejectMetrics processMetricsRequest
           :: RpcHandler IO (Protobuf MS.MetricsService "export")
       )
       NoMoreMethods
-  where
-    freeTierExceeded = "Free tier daily event limit exceeded"
 
 
 type instance RequestMetadata (Protobuf TS.TraceService "export") = OtlpRequestMetadata

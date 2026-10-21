@@ -65,7 +65,7 @@ import Models.Projects.ProjectMembers (Team (discord_channels, slack_channels))
 import Models.Projects.ProjectMembers qualified as ManageMembers
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx, navTabAttrs)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..), checkFreeTierStatus, mkPageCtx, navTabAttrs)
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as Slack
 import Pages.Bots.Utils (Channel (channelId, channelName))
@@ -84,7 +84,7 @@ import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (FormWithOptional (..), checkFreeTierStatus, encodeText, faSprite_, formatWithCommas, popoverPanel_, popoverTrigger_, prettyTimeShort, toUriStr)
+import Utils (FormWithOptional (..), encodeText, faSprite_, formatWithCommas, popoverPanel_, popoverTrigger_, prettyTimeShort, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 
 

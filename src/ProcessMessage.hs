@@ -41,6 +41,8 @@ module ProcessMessage (
   hostFromRawUrl,
   urlPathFromRawUrl,
   overFreeTierQuota,
+  fetchProjectCache,
+  fetchIngestCaches,
 )
 where
 
@@ -74,6 +76,7 @@ import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled (..))
 import Effectful.Log (Log)
 import Effectful.Reader.Static qualified as Eff
+import Effectful.Time (Time)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.LogQueries qualified as LogQueries
@@ -87,17 +90,18 @@ import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Pkg.SchemaLearning.Hot qualified as SchemaHot
 import Relude hiding (ask)
 import Relude.Extra.Tuple (toSnd, traverseToSnd)
+import System.Clock (TimeSpec (..))
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Tracing (Tracing, batchSpanAttrs, withSpan_)
 import System.Types (DB)
 import Text.RE.TDFA (RE, re, reRegex)
 import Text.Regex.TDFA qualified as TDFA
-import Utils (b64ToJson, freeTierDailyMaxEvents, jsonToMap, nestedJsonFromDotNotation, replaceAllFormats, toXXHash)
+import Utils (b64ToJson, jsonToMap, nestedJsonFromDotNotation, replaceAllFormats, toXXHash)
 
 
 processMessages
-  :: (DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Sleep :> es, Tracing :> es)
+  :: (DB es, Eff.Reader AuthContext :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Sleep :> es, Time :> es, Tracing :> es)
   => [(Text, ByteString)]
   -> HM.HashMap Text Text
   -> Eff es (Either Telemetry.WriteFailure ([Text], [Telemetry.PoisonMsg]))
@@ -118,7 +122,7 @@ processMessages msgs attrs =
         then pure ([], poison, Nothing)
         else do
           projectCaches <-
-            liftIO $ HM.fromList <$> forM (ordNub $ (\(_, _, m) -> UUIDId m.projectId) <$> rMsgs) (traverseToSnd \pid -> Cache.fetchWithCache appCtx.projectCache pid (Projects.projectCacheByIdIO appCtx.hasqlJobsPool))
+            fetchIngestCaches (ordNub $ (\(_, _, m) -> UUIDId m.projectId) <$> rMsgs)
 
           -- Track (ackId, raw) alongside each emitted span so we can map any
           -- per-row write poison back to the source message for DLQ routing.
@@ -143,9 +147,27 @@ processMessages msgs attrs =
     pure $ writeRes $> (rAckIds, poison)
 
 
--- | A free-tier project past its daily event+metric budget: its telemetry is not ingested.
+-- | A capped project past its daily event+metric budget: its telemetry is not ingested.
 overFreeTierQuota :: Projects.ProjectCache -> Bool
-overFreeTierQuota cache = Projects.isFreeTier cache.paymentPlan && toInteger cache.dailyEventCount + toInteger cache.dailyMetricCount >= freeTierDailyMaxEvents
+overFreeTierQuota cache = any (cache.row.dailyUsage >=) cache.dailyLimit
+
+
+-- | Project cache lookup, memoized in the shared cache. A capped entry expires after 5 minutes
+-- rather than 30, so a customer who upgrades is uncapped promptly on every pod.
+fetchProjectCache :: (DB es, Eff.Reader AuthContext :> es, IOE :> es, Time :> es) => Projects.ProjectId -> Eff es Projects.ProjectCache
+fetchProjectCache pid = do
+  appCtx <- Eff.ask @AuthContext
+  whenNothingM (liftIO $ Cache.lookup appCtx.projectCache pid) do
+    c <- Projects.projectCacheById appCtx.config.enableFreetier pid
+    c <$ liftIO (bool (Cache.insert appCtx.projectCache) (Cache.insert' appCtx.projectCache (Just $ TimeSpec 300 0)) (overFreeTierQuota c) pid c)
+
+
+-- | The caches an ingest batch converts against. Every ingest path drops a capped project's
+-- slice of the batch, so the drop is counted here.
+fetchIngestCaches :: (DB es, Eff.Reader AuthContext :> es, IOE :> es, Time :> es) => [Projects.ProjectId] -> Eff es (HM.HashMap Projects.ProjectId Projects.ProjectCache)
+fetchIngestCaches pids = do
+  caches <- HM.fromList <$> forM pids (traverseToSnd fetchProjectCache)
+  caches <$ Metrics.count Metrics.freeTierBatchesDropped (length (HM.filter overFreeTierQuota caches)) []
 
 
 -- | Shared HTTP-key derivation. Used by both 'processSpanToEntities' (which
@@ -1246,9 +1268,9 @@ emptyPathClassifier = PathClassifier{templates = HM.empty, idPrefixes = [], know
 mkPathClassifier :: Projects.ProjectCache -> PathClassifier
 mkPathClassifier pjc =
   PathClassifier
-    { templates = parseCanonicalPaths pjc.canonicalPaths
-    , idPrefixes = V.toList pjc.idRulePrefixes
-    , knownHashes = HashSet.fromList $ V.toList pjc.endpointHashes
+    { templates = parseCanonicalPaths pjc.row.canonicalPaths
+    , idPrefixes = V.toList pjc.row.idRulePrefixes
+    , knownHashes = HashSet.fromList $ V.toList pjc.row.endpointHashes
     }
 
 

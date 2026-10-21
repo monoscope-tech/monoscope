@@ -42,7 +42,7 @@ import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Containers qualified as Containers
 import Models.Telemetry.Report qualified as Report
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..), mkPageCtx)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..), checkFreeTierStatus, mkPageCtx)
 import Pages.Components (EmptyStateAction (..), EmptyStateCfg (..), emptyState_)
 import Pkg.Components.Widget (WidgetType (..))
 import Pkg.Components.Widget qualified as Widget
@@ -54,7 +54,7 @@ import System.Tracing (forkWithCtx)
 import System.Types (ATAuthCtx, DB, RespHeaders, addRespHeaders, addSuccessToast)
 import UnliftIO (tryAny)
 import UnliftIO qualified
-import Utils (LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, formatUTCMicros, freeTierDailyMaxEvents, hostPath, loadingIndicatorWith_)
+import Utils (LoadingSize (..), LoadingType (..), faSprite_, formatUTCMicros, hostPath, loadingIndicatorWith_)
 
 
 data PerformanceReport = PerformanceReport
@@ -204,7 +204,9 @@ collectSystemReport pid start end = do
       )
   project <- Projects.projectById pid
   trends <- Just <$> optionalReportSection pid "activity trends" (Report.trendStats useTf pid start end)
-  let ingestionCapped = project <&> \p -> Projects.isFreeTier p.paymentPlan && fromIntegral (sum $ map (.recentDayEvents) current) >= freeTierDailyMaxEvents
+  -- Same meter and cap as the ingest gate, so the email never disagrees with what was dropped.
+  usedToday <- Projects.dailyUsageOfDay pid end
+  let ingestionCapped = project <&> \p -> any (usedToday >=) (Projects.freeTierDailyLimit ctx.config.enableFreetier p.paymentPlan)
   pure Report.ReportSnapshot{services = Report.compareServices current previous, infrastructure, monitors, issues, generatedAt = end, startTime = start, endTime = end, topPatterns, performance, databases, workloads, ingestionCapped, trends}
 
 

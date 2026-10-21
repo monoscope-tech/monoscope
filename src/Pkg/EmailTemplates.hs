@@ -33,6 +33,7 @@ module Pkg.EmailTemplates (
   freeTierUsageEmail,
   planUpgradedEmail,
   planDowngradedEmail,
+  paymentFailedEmail,
   trialEndingEmail,
 
   -- * Helpers
@@ -1168,22 +1169,26 @@ monitorRecoveryEmail projectName monitorTitle =
     "View Monitor"
 
 
-freeTierUsageEmail :: Text -> Text -> Int -> Int -> Bool -> (Text, Html ())
-freeTierUsageEmail projectName billingUrl used limit exceeded =
+freeTierUsageEmail :: Text -> Text -> Int -> Int -> Projects.FreeTierNotice -> (Text, Html ())
+freeTierUsageEmail projectName billingUrl used limit notice =
   ctaEmail
-    ("[···] " <> (if exceeded then "Daily event limit reached" else "Approaching daily event limit") <> " - " <> projectName)
+    ("[···] " <> subject <> " - " <> projectName)
     True
     ( do
-        h1_ $ if exceeded then "Daily Event Limit Reached" else "Approaching Daily Event Limit"
-        richP_ ["Your ", projectName, bool " project is approaching its daily free tier limit." " project has hit its daily free tier limit. New events are being dropped." exceeded]
+        h1_ $ toHtml $ T.toTitle subject
+        richP_ ["Your ", projectName, sentence]
         emailStatRow
-          [ ("Events Today", formatWithCommas (fromIntegral used), if exceeded then Just "#cf222e" else Just "#bf8700")
+          [ ("Events Today", formatWithCommas (fromIntegral used), Just colour)
           , ("Daily Limit", formatWithCommas (fromIntegral limit), Nothing)
-          , ("Usage", show ((used * 100) `div` max 1 limit) <> "%", if exceeded then Just "#cf222e" else Just "#bf8700")
+          , ("Usage", show ((used * 100) `div` max 1 limit) <> "%", Just colour)
           ]
     )
     "Upgrade Plan"
     billingUrl
+  where
+    (subject, sentence, colour) :: (Text, Text, Text) = case notice of
+      Projects.NoticeWarning -> ("Approaching daily event limit", " project is approaching its daily free tier limit.", "#bf8700")
+      Projects.NoticeExceeded -> ("Daily event limit reached", " project has hit its daily free tier limit. New events are dropped until the limit resets at 00:00 UTC.", "#cf222e")
 
 
 -- | Paragraph alternating plain and bold runs: @richP_ ["Your ", project, " is ready."]@.
@@ -1207,7 +1212,7 @@ ctaEmail subject withHelp content ctaLabel url =
 
 
 planUpgradedEmail :: Text -> Text -> Text -> (Text, Html ())
-planUpgradedEmail projectName newPlan =
+planUpgradedEmail newPlan projectName =
   ctaEmail
     ("[···] Plan upgraded to " <> newPlan <> " - " <> projectName)
     True
@@ -1232,13 +1237,32 @@ trialEndingEmail projectName daysLeft =
 
 
 planDowngradedEmail :: Text -> Text -> Text -> (Text, Html ())
-planDowngradedEmail projectName reason =
+planDowngradedEmail reason projectName =
   ctaEmail
     ("[···] Plan downgraded to Free - " <> projectName)
     True
     ( do
         h1_ "Plan Downgraded to Free"
         richP_ ["Your ", projectName, " project has been downgraded to the Free plan because your subscription " <> reason <> "."]
-        p_ "On the Free plan, daily event limits apply and additional team members will be deactivated. You can re-subscribe at any time to restore full access."
+        p_ $ toHtml $ "On the Free plan, ingestion is capped at " <> freeTierCap <> " events per day (resetting at 00:00 UTC); anything beyond that is dropped. Additional team members will be deactivated. You can re-subscribe at any time to restore full access."
     )
     "Upgrade Plan"
+
+
+-- | Provider dunning is still retrying, so nothing has changed yet; the downgrade only follows
+-- if every retry fails.
+paymentFailedEmail :: Text -> Text -> (Text, Html ())
+paymentFailedEmail projectName =
+  ctaEmail
+    ("[···] Payment failed - " <> projectName)
+    True
+    ( do
+        h1_ "Payment Failed"
+        richP_ ["We couldn't charge the card for your ", projectName, " project. Your plan is unchanged while we retry over the next few days."]
+        p_ $ toHtml $ "Please update your payment method. If every retry fails, the project moves to the Free plan and ingestion is capped at " <> freeTierCap <> " events per day."
+    )
+    "Update Payment Method"
+
+
+freeTierCap :: Text
+freeTierCap = formatWithCommas (fromIntegral Projects.freeTierDailyMaxEvents)

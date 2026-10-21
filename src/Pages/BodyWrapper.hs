@@ -1,4 +1,4 @@
-module Pages.BodyWrapper (bodyWrapper, BWConfig (..), OnboardingStep (..), stepUrl, PageCtx (..), NavigationResponse (..), navigationResponse, mkPageCtx, mkProjectPageCtx, mkAIPageCtx, settingsContentTarget, navTabAttrs) where
+module Pages.BodyWrapper (bodyWrapper, BWConfig (..), OnboardingStep (..), stepUrl, PageCtx (..), NavigationResponse (..), navigationResponse, mkPageCtx, mkProjectPageCtx, mkAIPageCtx, settingsContentTarget, navTabAttrs, checkFreeTierStatus) where
 
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default, def)
@@ -25,12 +25,12 @@ import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pages.CommandPalette qualified as CommandPalette
 import Pages.Components qualified as Components
-import Pkg.DeriveUtils (UUIDId, WrappedEnumShow (..), assetUrl, viteAssetFile)
+import Pkg.DeriveUtils (DB, UUIDId, WrappedEnumShow (..), assetUrl, viteAssetFile)
 import PyF
 import Relude hiding (ask)
 import System.Config (AuthContext (..), DeploymentEnv (Dev), EnvConfig (..))
 import System.Types (ATAuthCtx)
-import Utils (FieldMenuCtx (..), FreeTierStatus (..), LoadingSize (..), LoadingType (..), explorerTabs, faSprite_, fieldContextMenuItems_, fieldMenuActions, freeTierUsageBanner, infrastructureTabs, loadingIndicatorWith_, navTabAttrs, popoverPanel_, popoverTrigger_)
+import Utils (FieldMenuCtx (..), FreeTierStatus (..), LoadingSize (..), LoadingType (..), explorerTabs, faSprite_, fieldContextMenuItems_, fieldMenuActions, freeTierUsageBanner, freeTierUsageStatus, infrastructureTabs, loadingIndicatorWith_, navTabAttrs, popoverPanel_, popoverTrigger_)
 import Web.HttpApiData (FromHttpApiData)
 import Web.I18n qualified as I18n
 
@@ -1311,3 +1311,12 @@ externalHeadScripts_ config = do
   whenJust (mfilter (not . T.null) config.crispWebsiteId) $ \websiteId ->
     script_
       [fmt|window.$crisp = []; window.CRISP_WEBSITE_ID = "{websiteId}"; (function () {{ d = document; s = d.createElement("script"); s.src = "https://client.crisp.chat/l.js"; s.async = 1; d.getElementsByTagName("head")[0].appendChild(s); }})();|]
+
+
+-- | The free-tier banner state for a project: same meter and cap as the ingest gate.
+checkFreeTierStatus :: (DB es, EffReader.Reader AuthContext :> es, Time.Time :> es) => Projects.ProjectId -> Text -> Eff es FreeTierStatus
+checkFreeTierStatus pid paymentPlan = do
+  enabled <- EffReader.asks @AuthContext (.config.enableFreetier)
+  case Projects.freeTierDailyLimit enabled paymentPlan of
+    Nothing -> pure NotFreeTier
+    Just limit -> (`freeTierUsageStatus` limit) <$> (Projects.dailyUsageOfDay pid =<< Time.currentTime)

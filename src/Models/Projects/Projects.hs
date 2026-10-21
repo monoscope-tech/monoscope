@@ -51,10 +51,15 @@ module Models.Projects.Projects (
   projectBySubId,
   updateSubItemIdBySubId,
   projectCacheById,
-  projectCacheByIdIO,
+  dailyUsageOfDay,
+  freeTierDailyMaxEvents,
+  freeTierDailyLimit,
+  claimFreeTierNotice,
+  FreeTierNotice (..),
   updateProjectReportNotif,
   ReportType (..),
   ProjectCache (..),
+  ProjectCacheRow (..),
   defaultProjectCache,
   updateProjectS3Bucket,
   includeAlertUserIdentity,
@@ -149,7 +154,7 @@ import Data.Map.Strict qualified as Map
 import Data.OpenApi (ToSchema)
 import Data.Text qualified as T
 import Data.Text.Display
-import Data.Time (Day, UTCTime, ZonedTime)
+import Data.Time (Day, UTCTime (..), ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types
@@ -161,12 +166,11 @@ import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 import Effectful.Error.Static qualified as EffError
 import Effectful.Reader.Static qualified as EffReader
-import Effectful.Time (Time, currentTime, runTime)
+import Effectful.Time (Time, currentTime)
 import Hasql.Interpolate qualified as HI
 import Hasql.Statement (Statement)
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
-import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Pkg.DeriveUtils (DB, SnakeSchema (..), UUIDId (..), WrappedEnumSC (..), idFromText, selectFrom)
 import Pkg.Parser.Stats (Section)
 import Relude
@@ -380,16 +384,21 @@ data ProjectS3Bucket = ProjectS3Bucket
   deriving (FromField, HI.DecodeValue, HI.EncodeValue, ToField) via Aeson ProjectS3Bucket
 
 
-data ProjectCache = ProjectCache
+-- | Ingest-time project state: the stored 'ProjectCacheRow' plus the free-tier cap derived
+-- from its plan and ENABLE_FREETIER ('freeTierDailyLimit'). Nothing = uncapped.
+data ProjectCache = ProjectCache {row :: ProjectCacheRow, dailyLimit :: Maybe Int}
+  deriving stock (Generic, Show)
+  deriving anyclass (Default, NFData)
+
+
+data ProjectCacheRow = ProjectCacheRow
   { -- We need this hosts to mirror all the hosts in the endpoints table, and could use this for validation purposes to skip inserting endpoints just because of hosts
     -- if endpoint exists but host is not in this list, then we have a query specifically for inserting hosts.
     hosts :: V.Vector Text
   , -- maybe we don't need this? See the next point.
     endpointHashes :: V.Vector Text
-  , -- Daily count of events from otel_logs_and_spans table for the last 24 hours
-    dailyEventCount :: Int
-  , -- Daily count of metrics for the last 24 hours
-    dailyMetricCount :: Int
+  , -- Events + metrics recorded in apis.daily_usage since 00:00 UTC
+    dailyUsage :: Int
   , paymentPlan :: Text
   , -- Canonical URL path templates for matching at ingestion: "method|host|template_path"
     canonicalPaths :: V.Vector Text
@@ -404,7 +413,7 @@ data ProjectCache = ProjectCache
 
 
 defaultProjectCache :: ProjectCache
-defaultProjectCache = def{paymentPlan = "Free"}
+defaultProjectCache = def{row = def{paymentPlan = "Free"}}
 
 
 data CreateProject = CreateProject
@@ -428,20 +437,16 @@ data CreateProject = CreateProject
     via (GenericEntity '[Schema "projects", TableName "projects", PrimaryKey "id", FieldModifiers '[CamelToSnake]] CreateProject)
 
 
-projectCacheById :: (DB es, Time :> es) => ProjectId -> Eff es ProjectCache
-projectCacheById pid = do
+-- | @freeTierEnabled@ is 'EnvConfig.enableFreetier'; it decides 'dailyLimit' with the plan.
+projectCacheById :: (DB es, Time :> es) => Bool -> ProjectId -> Eff es ProjectCache
+projectCacheById freeTierEnabled pid = do
   now <- currentTime
-  fromMaybe defaultProjectCache
+  (\r -> ProjectCache r (freeTierDailyLimit freeTierEnabled r.paymentPlan)) . fromMaybe defaultProjectCache.row
     <$> EHasql.interpOne
       [HI.sql|
     select  coalesce(ARRAY_AGG(DISTINCT hosts ORDER BY hosts ASC),'{}') hosts,
             coalesce(ARRAY_AGG(DISTINCT endpoint_hashes ORDER BY endpoint_hashes ASC),'{}') endpoint_hashes,
-            ( SELECT count(*)::bigint FROM otel_logs_and_spans
-             WHERE project_id=#{pid.toText} AND timestamp > #{now}::timestamptz - INTERVAL '1' DAY
-            ) daily_event_count,
-            ( SELECT count(*)::bigint FROM otel_metrics
-             WHERE project_id=#{pid.toText} AND timestamp > #{now}::timestamptz - INTERVAL '1' DAY
-            ) daily_metric_count,
+            (^{dailyUsageOfDaySql pid now}) daily_usage,
             (SELECT COALESCE((SELECT payment_plan FROM projects.projects WHERE id = #{pid}),'Free')) payment_plan,
             (SELECT COALESCE(ARRAY_AGG(DISTINCT method || '|' || host || '|' || canonical_path), '{}')
              FROM apis.endpoints WHERE project_id = #{pid} AND canonical_path IS NOT NULL
@@ -456,8 +461,51 @@ projectCacheById pid = do
        ) enp; |]
 
 
-projectCacheByIdIO :: OHasql.TracedPool -> ProjectId -> IO ProjectCache
-projectCacheByIdIO hpool pid = runEff $ EHasql.runHasqlPool hpool $ runTime $ projectCacheById pid
+-- | The free-tier meter: hourly ReportUsage windows (events + metrics) ending on @t@'s UTC day
+-- or later. A window straddling midnight counts toward the new day; the cap need not be exact.
+dailyUsageOfDaySql :: ProjectId -> UTCTime -> HI.Sql
+dailyUsageOfDaySql pid now =
+  [HI.sql| SELECT COALESCE(SUM(total_requests), 0)::bigint FROM apis.daily_usage
+            WHERE project_id = #{pid} AND window_end > date_trunc('day', #{now}::timestamptz, 'UTC') |]
+
+
+-- | The meter for the UTC day containing @t@.
+dailyUsageOfDay :: DB es => ProjectId -> UTCTime -> Eff es Int
+dailyUsageOfDay pid t = fromMaybe 0 <$> EHasql.interpOne (dailyUsageOfDaySql pid t)
+
+
+freeTierDailyMaxEvents :: Int
+freeTierDailyMaxEvents = 10000
+
+
+-- | Daily cap for a plan when free-tier limits are on (ENABLE_FREETIER); unpaid plans
+-- (Free, ONBOARDING) are capped, paid plans and self-hosted installs are not.
+--
+-- >>> [freeTierDailyLimit on plan | on <- [True, False], plan <- ["Free", "ONBOARDING", "GraduatedPricing"]]
+-- [Just 10000,Just 10000,Nothing,Nothing,Nothing,Nothing]
+freeTierDailyLimit :: Bool -> Text -> Maybe Int
+freeTierDailyLimit enabled plan = freeTierDailyMaxEvents <$ guard (enabled && not (isPaidPlan (parsePlan plan)))
+
+
+-- | A free-tier usage email; exceeding supersedes an earlier warning the same day.
+data FreeTierNotice = NoticeWarning | NoticeExceeded
+  deriving stock (Eq, Show)
+
+
+-- | Claim today's @notice@. True for exactly one caller per project, day and notice, so
+-- concurrent pods never double-send.
+claimFreeTierNotice :: (DB es, Time :> es) => ProjectId -> FreeTierNotice -> Eff es Bool
+claimFreeTierNotice pid notice = do
+  today <- utctDay <$> currentTime
+  -- Spelled out (not 'fromEnum') so reordering the constructors can't change what stored rows mean.
+  let level :: Int = case notice of
+        NoticeWarning -> 1
+        NoticeExceeded -> 2
+  (== 1)
+    <$> EHasql.interpExecute
+      [HI.sql| INSERT INTO projects.free_tier_notices AS n (project_id, day, level) VALUES (#{pid}, #{today}, #{level})
+               ON CONFLICT (project_id) DO UPDATE SET day = EXCLUDED.day, level = EXCLUDED.level
+                WHERE n.day <> EXCLUDED.day OR n.level < EXCLUDED.level |]
 
 
 insertProject :: DB es => CreateProject -> Eff es ()
