@@ -1070,11 +1070,17 @@ editDistance a b = fromMaybe 0 (viaNonEmpty last (foldl' step [0 .. T.length a] 
 --
 -- >>> outputFieldAliases M.! "method"
 -- "attributes___http___request___method"
+--
+-- Report URLs sent before the resource-field correction retain @service.name@.
+--
+-- >>> fmap (\subject -> (toQText subject, display subject)) (parse pSubject "" "service.name")
+-- Right ("service.name","resource___service___name")
 outputFieldAliases :: M.Map T.Text T.Text
 outputFieldAliases =
   M.fromList
     [ ("span_name", "name")
     , ("service", "resource___service___name")
+    , ("service.name", "resource___service___name")
     , ("trace_id", "context___trace_id")
     , ("method", "attributes___http___request___method")
     ]

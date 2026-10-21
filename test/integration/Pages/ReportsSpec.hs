@@ -245,6 +245,12 @@ spec = around withTestResources do
           components.whereClause `shouldSatisfy` maybe False (T.isInfixOf "resource___service___name")
           components.whereClause `shouldSatisfy` maybe False (not . T.isInfixOf "service->")
           events.queryResultCount `shouldBe` expectedCount
+          let retainedQuery = T.replace "resource.service.name" "service.name" query
+          (_, retained) <- testServant tr $ Log.logExplorerDataH testPid def{Log.query = Just retainedQuery, Log.from = Just from, Log.to = Just to}
+          retained.error `shouldBe` Nothing
+          V.toList retained.logsData `shouldMatchList` V.toList events.logsData
+          (_, retainedComponents) <- either (fail . toString) pure $ parseQueryToComponents (defSqlQueryCfg testPid frozenTime Nothing Nothing){targetsTimefusion = True} retainedQuery
+          retainedComponents.finalSqlQuery `shouldBe` components.finalSqlQuery
 
     it "persists the snapshot and bounds email details while retaining full report evidence" \tr -> do
       project <- maybe (fail "test project missing") pure =<< runTestBg frozenTime tr (Projects.projectById testPid)
