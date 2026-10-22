@@ -70,6 +70,8 @@ export async function runRepositoryAgent(input, { modelRuntime, guestImage, expe
   const pinnedImage = resolvedImage.source === 'path' ? importImageFromDirectory(resolvedImage.assetDir) : resolvedImage;
   if (expectedImageBuildId !== undefined && pinnedImage.buildId !== expectedImageBuildId) throw new Error('Configured guest image differs from the pinned issue-fix image');
   if (!preparedCheckout) throw new Error('A host-prepared checkout is required');
+  const peer = preparedCheckout.evidence.tag === 'VerifiedEvidence' ? preparedCheckout.evidence.contents : undefined;
+  if (peer && typeof validateDraft !== 'function') throw new Error('Peer review requires host acceptance');
   const root = await mkdtemp(join(tmpdir(), 'monoscope-review-'));
   const checkout = preparedCheckout.directory;
   const cwd = '/workspace';
@@ -145,6 +147,13 @@ export async function runRepositoryAgent(input, { modelRuntime, guestImage, expe
     await vm.fs.mkdir('/run/monoscope-review-output', { recursive: true, mode: 0o755 });
     const identity = await vm.exec(agentCommand(['/usr/bin/id', '-u']), { signal });
     if (!identity.ok || identity.stdout.trim() !== '1000') throw new Error('Guest image requires the review-agent account and setpriv');
+    if (peer) {
+      await lockWorkspace(vm, cwd, signal);
+      for (const [path, bytes] of Object.entries(peer.files)) {
+        await vm.fs.writeFile(path, Buffer.from(bytes, 'base64'), { signal });
+        if (!(await vm.exec(['/bin/chmod', '0444', path], { signal })).ok) throw new Error('Host evidence could not be protected');
+      }
+    }
     const bash = createBashToolDefinition(cwd, {
       operations: {
         async exec(command, cwd, options) {
@@ -204,15 +213,19 @@ export async function runRepositoryAgent(input, { modelRuntime, guestImage, expe
       }
       return { content: [{ type: 'text', text: JSON.stringify(result.report) }], details: {}, isError: result.isError };
     };
-    if (artifactDir && !createWorkflow) tools.push({
+    if (artifactDir && !createWorkflow && preparedCheckout.policy.tools.some((tool) => tool.name === 'run_regression')) tools.push({
       name: 'run_regression', label: 'Replay a frozen regression check',
       execute: (_id, params, toolSignal) => executeRegression(params, toolSignal),
     });
     const workflow = createWorkflow ? await createWorkflow({ vm, cwd, request, root, artifactDir, executeRegression, signal, rootInstructions: preparedCheckout.rootInstructions }) : {
-      name: 'submit_review',
-      prepare: async (draft) => {
-        const reply = validateDraft ? await validateDraft(draft) : { Right: [] };
-        return Object.hasOwn(reply, 'Left') ? reply : { Right: draft };
+      name: peer ? 'submit_fix_review' : 'submit_review',
+      prepare: async (draft, toolSignal) => {
+        const active = AbortSignal.any([signal, toolSignal].filter(Boolean));
+        active.throwIfAborted();
+        const result = peer ? { result: peer.result, decision: draft } : draft;
+        const reply = validateDraft ? await validateDraft(result) : { Right: [] };
+        active.throwIfAborted();
+        return Object.hasOwn(reply, 'Left') ? reply : { Right: result };
       },
     };
     tools.push(...(workflow.tools ?? []));
@@ -241,7 +254,7 @@ export async function runRepositoryAgent(input, { modelRuntime, guestImage, expe
       const definition = preparedCheckout.policy.tools.find((item) => item.name === tool.name);
       if (definition && !workflow.instructions) Object.assign(tool, { label: definition.name, description: definition.description, parameters: Type.Unsafe(definition.parameters), ...(definition.sequential ? { executionMode: 'sequential' } : {}) });
     }
-    if (createWorkflow) for (const tool of tools) tool.executionMode = 'sequential';
+    if (createWorkflow || peer) for (const tool of tools) tool.executionMode = 'sequential';
     const settingsManager = SettingsManager.inMemory({ retry: { enabled: true, maxRetries: 1 } });
     const loader = new DefaultResourceLoader({
       cwd: root, agentDir: join(root, 'agent'), settingsManager,

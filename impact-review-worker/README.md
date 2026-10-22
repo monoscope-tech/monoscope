@@ -21,7 +21,7 @@ Build the native CLI with `make cli-build`. Set `IMPACT_REVIEW_NATIVE_CLI` if `m
 
 The VM has no network, private COW writes and read-only host mounts. Agent commands run as UID 1000 with a reset environment. Model credentials stay on the host. `sandbox.mjs` is the SDK command bridge used by native workspace operations.
 
-Admission and independent review are read-only. Fixing requires host-admitted reproduction before source edits. Haskell supplies independently verified regression/log bytes with the candidate checkout; peer review does not reopen artifacts or clone a second mirror.
+Admission and independent review are read-only. Fixing requires host-admitted reproduction before source edits. Haskell supplies the peer’s candidate identity and exact evidence-file manifest from verified artifacts. The common SDK runner copies those bytes into the read-only VM and submits its decision through host validation. Peer review does not reopen artifacts or clone a second mirror.
 
 The provider wrapper waits for Haskell's durable Call acknowledgement before invoking `ModelRuntime.streamSimple`. Completed usage, including compaction responses, is correlated with that start. Keep this fail-closed boundary during migration: exceptions from Pi's `before_provider_request` hook are caught by Pi and do not by themselves prevent a request.
 

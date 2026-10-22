@@ -51,7 +51,8 @@ try {
   };
   const checkoutReply = await exchange('Checkout', []);
   if (Object.hasOwn(checkoutReply, 'Left')) throw new Error('Host checkout was rejected');
-  const preparedCheckout = z.object({ directory: z.string().min(1), repositorySkills: z.string().min(1), rootInstructions: z.string(), projectId: z.uuid(), repository: z.string(), base: z.string(), head: z.string(), cacheStatus: z.enum(['hit', 'miss', 'verified']), durationMs: z.number().int().nonnegative(), policy: z.object({ instructions: z.string(), tools: z.array(z.object({ name: z.string(), description: z.string(), parameters: z.record(z.string(), z.unknown()), sequential: z.boolean() }).strict()) }).strict(), evidence: z.discriminatedUnion('tag', [z.object({ tag: z.literal('SourceOnly') }).strict(), z.object({ tag: z.literal('VerifiedEvidence'), contents: z.object({ regression: z.object({ script: z.string(), testPatch: z.string(), failureMessage: z.string() }).strict(), baseLog: z.string(), headLog: z.string() }).strict() }).strict()]) }).strict().parse(checkoutReply.Right);
+  const preparedCheckout = z.object({ directory: z.string().min(1), repositorySkills: z.string().min(1), rootInstructions: z.string(), projectId: z.uuid(), repository: z.string(), base: z.string(), head: z.string(), cacheStatus: z.enum(['hit', 'miss', 'verified']), durationMs: z.number().int().nonnegative(), policy: z.object({ instructions: z.string(), tools: z.array(z.object({ name: z.string(), description: z.string(), parameters: z.record(z.string(), z.unknown()), sequential: z.boolean() }).strict()) }).strict(), evidence: z.discriminatedUnion('tag', [z.object({ tag: z.literal('SourceOnly') }).strict(), z.object({ tag: z.literal('VerifiedEvidence'), contents: z.object({ result: z.record(z.string(), z.unknown()), files: z.record(z.string(), z.string()) }).strict() }).strict()]) }).strict().parse(checkoutReply.Right);
+  if (isFixReview !== (preparedCheckout.evidence.tag === 'VerifiedEvidence')) throw new Error('Task requires matching host-verified evidence');
   const checkoutHead = isFixReview ? envelope.contents.artifacts.result.head : isFix || isAdmission ? request.base : request.head;
   if (request.gitToken || preparedCheckout.projectId !== request.projectId || preparedCheckout.repository !== request.repository || preparedCheckout.base !== request.base || preparedCheckout.head !== checkoutHead) throw new Error('A matching credential-free host checkout is required');
   const artifactDir = join(outbox, 'checks');
@@ -68,11 +69,11 @@ try {
   agentDir = await mkdtemp(join(tmpdir(), 'monoscope-review-agent-'));
   if (process.env.IMPACT_REVIEW_DEPENDENCY_ARCHIVE && !process.env.IMPACT_REVIEW_PREPARE_SCRIPT) throw new Error('Dependency archives require a trusted preparation script');
   const cacheDir = fs.realpathSync(process.env.IMPACT_REVIEW_CACHE_DIR);
-  const [{ ModelRuntime }, { review, modelUsage }, { fixIssue }, { admitRegression }, { reviewVerifiedFix }] = await Promise.all([
-    import('@earendil-works/pi-coding-agent'), import('./review.mjs'), import('./fix.mjs'), import('./admit.mjs'), import('./fix-review.mjs'),
+  const [{ ModelRuntime }, { review, modelUsage }, { fixIssue }, { admitRegression }] = await Promise.all([
+    import('@earendil-works/pi-coding-agent'), import('./review.mjs'), import('./fix.mjs'), import('./admit.mjs'),
   ]);
   const modelRuntime = await ModelRuntime.create({ authPath: join(agentDir, 'auth.json'), modelsPath: process.env.IMPACT_REVIEW_MODELS ?? null, refreshOnCreate: false });
-  const result = await (isFixReview ? reviewVerifiedFix : isAdmission ? admitRegression : isFix ? fixIssue : review)(request, {
+  const result = await (isAdmission ? admitRegression : isFix ? fixIssue : review)({ ...request, head: checkoutHead }, {
     modelRuntime, guestImage, expectedImageBuildId, cacheDir, preparedCheckout, usageDir: outboxRoot, artifactDir, attemptId, skillPaths: process.argv.slice(2), optionsTool: (invocation) => exchange('Tool', invocation), validateDraft: (draft) => exchange('Validate', draft), signal,
     admitTest: (artifact) => exchange('Admit', artifact),
     proposeCandidate: (candidate) => exchange('Propose', candidate),
@@ -83,7 +84,6 @@ try {
     recordStep: (step) => persistReceipt('Phase', { id: randomUUID(), attemptId, step }),
     validateFix: (result) => exchange('Validate', result),
     validateAdmission: (result) => exchange('Validate', result),
-    validateReview: (result) => exchange('Validate', result),
     onEvent(event) {
       if (event.type === 'model_started') return persistReceipt('Call', event.receipt);
       if (event.type === 'model_response') {

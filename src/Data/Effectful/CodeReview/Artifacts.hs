@@ -1,4 +1,4 @@
-module Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), CandidatePatch, CapturedCandidate, captureCandidate, VerifiedArtifacts, ReviewEvidence, artifactCheckout, reviewEvidence, verifyArtifacts, withVerifiedArtifacts, readPrivateArtifact, sha256) where
+module Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), CandidatePatch, CapturedCandidate, captureCandidate, VerifiedArtifacts, PeerPreparation, artifactCheckout, peerPreparation, verifyArtifacts, withVerifiedArtifacts, readPrivateArtifact, sha256) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.Encoding qualified as Encoding
@@ -8,6 +8,7 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Char (isHexDigit)
 import Data.Effectful.CodeReview.Types hiding (sha256)
+import Data.Map.Strict qualified as Map
 import Data.Scientific (Scientific)
 import Data.Text qualified as T
 import Data.UUID qualified as UUID
@@ -33,23 +34,31 @@ import "cryptonite" Crypto.Hash (Digest, SHA256, hash)
 data ArtifactStore = ArtifactStore {usageDir :: FilePath, cacheDir :: FilePath}
 
 
-data VerifiedArtifacts = VerifiedArtifacts FilePath ReviewEvidence
+data VerifiedArtifacts = VerifiedArtifacts FilePath ArtifactRequest ReviewEvidence
 
 
 data ReviewEvidence = ReviewEvidence TestArtifact ByteString ByteString
 
 
-instance AE.ToJSON ReviewEvidence where
-  toJSON (ReviewEvidence regression baseLog headLog) =
-    AE.object ["regression" AE..= regression, "baseLog" AE..= extractBase64 (Base64.encodeBase64 baseLog), "headLog" AE..= extractBase64 (Base64.encodeBase64 headLog)]
+data PeerPreparation = PeerPreparation FixResult (Map Text ByteString)
+
+
+instance AE.ToJSON PeerPreparation where
+  toJSON (PeerPreparation result files) = AE.object ["result" AE..= result, "files" AE..= Map.map (extractBase64 . Base64.encodeBase64) files]
 
 
 artifactCheckout :: VerifiedArtifacts -> FilePath
-artifactCheckout (VerifiedArtifacts directory _) = directory
+artifactCheckout (VerifiedArtifacts directory _ _) = directory
 
 
-reviewEvidence :: VerifiedArtifacts -> ReviewEvidence
-reviewEvidence (VerifiedArtifacts _ evidence) = evidence
+peerPreparation :: VerifiedArtifacts -> PeerPreparation
+peerPreparation (VerifiedArtifacts _ request (ReviewEvidence regression baseLog headLog)) =
+  PeerPreparation request.result
+    $ Map.fromList
+      [ ("/run/monoscope-fix-review.json", toStrict $ AE.encode $ AE.object ["result" AE..= request.result, "regression" AE..= regression, "baseline" AE..= request.baseline, "candidate" AE..= request.candidate])
+      , ("/run/monoscope-fix-review-base.log", baseLog)
+      , ("/run/monoscope-fix-review-head.log", headLog)
+      ]
 
 
 data ReportStatus = Completed
@@ -189,7 +198,7 @@ withVerifiedArtifacts store request action = do
       void $ git checkout ["apply", "--index", directory </> "fix.patch"]
       tree <- git checkout ["write-tree"]
       git checkout ["rev-parse", toString $ revisionText result.head <> "^{tree}"] >>= ensure . (== tree)
-      pure $ VerifiedArtifacts checkout $ ReviewEvidence (TestArtifact (decodeUtf8 script) (decodeUtf8 testPatch) report.failureMessage) baseLog headLog
+      pure $ VerifiedArtifacts checkout request $ ReviewEvidence (TestArtifact (decodeUtf8 script) (decodeUtf8 testPatch) report.failureMessage) baseLog headLog
 
 
 -- $setup

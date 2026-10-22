@@ -1845,9 +1845,10 @@ spec = around withTestResources $ describe "Production impact reviews" do
     snapshot <- Checkout.withCheckout store (Checkout.VerifiedCandidate request) (pure . AE.toJSON)
     prepared <- either (fail . toString) pure snapshot
     let evidenceField name = AE.withObject "Verified peer-review evidence" (AE..: name)
-    AET.parseMaybe (evidenceField "evidence" >=> evidenceField "contents" >=> evidenceField "regression" >=> evidenceField "script") prepared `shouldBe` Just (decodeUtf8 @Text script)
-    AET.parseMaybe (evidenceField "evidence" >=> evidenceField "contents" >=> evidenceField "baseLog") prepared `shouldBe` Just (extractBase64 $ B64.encodeBase64 baselineLog)
-    AET.parseMaybe (evidenceField "evidence" >=> evidenceField "contents" >=> evidenceField "headLog") prepared `shouldBe` Just (extractBase64 $ B64.encodeBase64 candidateLog)
+        reviewInput = AE.object ["result" AE..= result, "regression" AE..= Agent.TestArtifact (decodeUtf8 script) (decodeUtf8 testPatch) "retry token lost", "baseline" AE..= request.baseline, "candidate" AE..= request.candidate]
+        peerFiles = Map.fromList [("/run/monoscope-fix-review.json", toStrict $ AE.encode reviewInput), ("/run/monoscope-fix-review-base.log", baselineLog), ("/run/monoscope-fix-review-head.log", candidateLog)] :: Map Text ByteString
+    AET.parseMaybe (evidenceField "evidence" >=> evidenceField "contents" >=> evidenceField "result") prepared `shouldBe` Just (AE.toJSON result)
+    AET.parseMaybe (evidenceField "evidence" >=> evidenceField "contents" >=> evidenceField "files") prepared `shouldBe` Just (Map.map (extractBase64 . B64.encodeBase64) peerFiles)
     for_ files \(path, bytes) -> do
       writeFileBS path (bytes <> "corruption")
       isLeft <$> verify request `shouldReturn` True

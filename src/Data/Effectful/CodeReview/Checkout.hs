@@ -5,7 +5,7 @@ import Data.Base64.Types (extractBase64)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as Base64
 import Data.Char (isAlphaNum, isAscii)
-import Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), ReviewEvidence, artifactCheckout, reviewEvidence, sha256, withVerifiedArtifacts)
+import Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), PeerPreparation, artifactCheckout, peerPreparation, sha256, withVerifiedArtifacts)
 import Data.Effectful.CodeReview.Policy qualified as Policy
 import Data.Effectful.CodeReview.Types (ArtifactRequest (..), FixResult (..), Request (..), Revision, mkRevision, revisionText)
 import Data.List (lookup)
@@ -36,7 +36,7 @@ data CacheStatus = Hit | Miss | Verified
   deriving (AE.ToJSON) via WrappedEnumSC 'Nothing "" CacheStatus
 
 
-data CheckoutEvidence = SourceOnly | VerifiedEvidence ReviewEvidence
+data CheckoutEvidence = SourceOnly | VerifiedEvidence PeerPreparation
   deriving stock (Generic)
   deriving anyclass (AE.ToJSON)
 
@@ -65,7 +65,7 @@ withCheckout store source action = do
         let directory = artifactCheckout verifiedArtifacts
             result = artifacts.result
         git directory ["checkout", "--quiet", "--detach", toString $ revisionText result.head] []
-        deliver started directory result.projectId artifacts.repository result.base result.head Verified $ VerifiedEvidence $ reviewEvidence verifiedArtifacts
+        deliver started directory result.projectId artifacts.repository result.base result.head Verified $ VerifiedEvidence $ peerPreparation verifiedArtifacts
       either (const invalid) (pure . Just) verified
   pure $ case outcome of Right (Just prepared) -> Right prepared; _ -> Left "Repository checkout could not be prepared"
   where
