@@ -32,6 +32,8 @@ Resuming RAM and running processes is separate: allow another **3–7 engineerin
 
 Prepare a small first PR for shared widget PNG rendering, with its focused frontend checks. Keep the larger agent implementation on its checkpoint branch until its integration, packaging and required checks are ready. Run local sign-off before pushing. If a required check cannot run locally, record the unavailable service or tool in the PR and let CI run that check; never attest an unpassed check. Merge only after required checks pass.
 
+The next independent candidate is the project wiki: `ProjectMemory`, its existing append-only migrations, repository wiki UI/routes, and HTTP/browser tests. The model uses typed author IDs without importing the agent runtime or billing models. Its tests now live in `Pages.CodeContextSpec` and pass independently (`--match "Project wiki"`: two examples, no failures). Agent tool wiring remains in the larger branch; conversational/investigation-agent memory access still needs implementation. This split does not complete the all-agent memory requirement.
+
 ## Haskell ownership: revised implementation direction
 
 The user's 2026-10-21 direction is to keep JavaScript minimal and the bulk of this feature in Haskell. The JavaScript worker below is a locally tested research prototype, not the target application architecture. Do not add workflow, verification, billing, publication or artifact policy to it. Preserve its behavior/evaluation evidence while moving those responsibilities to the existing typed Haskell effects and models.

@@ -22,6 +22,7 @@ Install dependencies with `npm ci --ignore-scripts`.
 Install `cpio`, `lz4`, and `e2fsprogs` for Gondolin's image builder, plus Docker or Podman to export the OCI filesystem.
 Run `npm run build:guest` once to build the Debian guest under `.guest/` using Gondolin's builder. The supplied build script uses Docker.
 Run the Haskell integration watcher with `.test-args` set to `--match "Production impact reviews"` to exercise Pi with a deterministic model and real checkouts/microVMs.
+Use `--match "Project wiki"` for wiki HTTP permissions/revisions and browser navigation tests, independently of the SDK and guest profile.
 Image preparation downloads boot assets. Set `GONDOLIN_VMM=krun` to select Gondolin's experimental libkrun backend.
 
 For Monoscope's compiler profile, first make an approved `monoscope-deps` image available in the local Docker daemon. The builder resolves that image to an immutable local ID before building:

@@ -52,7 +52,6 @@ import Models.Projects.ProjectMemory qualified as Memory
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Client qualified as HC
 import Network.HTTP.Types qualified as H
-import Network.HTTP.Types.URI (urlEncode)
 import Network.Minio qualified as Minio
 import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp qualified as Warp
@@ -186,82 +185,6 @@ deliver tr value = do
 
 spec :: Spec
 spec = around withTestResources $ describe "Production impact reviews" do
-  it "shares a project wiki with immutable revisions, conflict-safe edits and project permissions" \tr -> do
-    let user = (getResponse tr.trSessAndHeader :: Projects.Session).user.id
-        page = UUIDId $ UUID.fromWords 50 0 0 1 :: Memory.PageId
-        app =
-          genericServeTWithContext
-            (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
-            (Routes.server tr.trLogger tr.trATCtx tr.trTracerProvider (\_ _ -> pure $ Left "unused") (\_ _ -> pure $ Left "unused"))
-            (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
-        base pid = "/p/" <> pid.toText <> "/memories"
-        authorization = ("Authorization", "Bearer " <> UUID.toASCIIBytes (getResponse tr.trSessAndHeader).persistentSession.id.getPersistentSessionId)
-        request method path fields =
-          WT.runSession
-            ( WT.srequest
-                $ WT.SRequest
-                  (WT.setPath Wai.defaultRequest{Wai.requestMethod = method, Wai.requestHeaders = [authorization, ("Content-Type", "application/x-www-form-urlencoded")]} $ encodeUtf8 path)
-                  (fromStrict $ BS.intercalate "&" [key <> "=" <> urlEncode True (encodeUtf8 value) | (key, value) <- fields])
-            )
-            app
-        save pid expected title body = request H.methodPost (base pid) [("pageId", page.toText), ("version", show @Text expected), ("title", title), ("body", body)]
-        html = decodeUtf8 @Text . (.simpleBody)
-    created <- save testPid (0 :: Word32) "Retry behavior" "Keep retry tokens. <script>alert('wiki')</script>"
-    H.statusCode created.simpleStatus `shouldBe` 200
-    html created `shouldSatisfy` T.isInfixOf "Keep retry tokens."
-    html created `shouldNotSatisfy` T.isInfixOf "<script>alert('wiki')</script>"
-    firstHistory <- runQueryEffect tr $ Memory.pageHistory testPid page
-    map (.version) firstHistory `shouldBe` [1]
-    map (.author) firstHistory `shouldBe` [Memory.Member user]
-    (firstEdit, secondEdit) <- concurrently (save testPid 1 "Retry behavior" "First concurrent edit") (save testPid 1 "Retry behavior" "Second concurrent edit")
-    length (filter (T.isInfixOf "This page changed" . html) [firstEdit, secondEdit]) `shouldBe` 1
-    history <- runQueryEffect tr $ Memory.pageHistory testPid page
-    map (.version) history `shouldBe` [2, 1]
-    map (.document) (drop 1 history) `shouldBe` map (.document) firstHistory
-    index <- request H.methodGet (base testPid) []
-    html index `shouldSatisfy` T.isInfixOf "Retry behavior"
-    viewed <- request H.methodGet (base testPid <> "?page=" <> page.toText) []
-    html viewed `shouldSatisfy` T.isInfixOf "Revision history"
-    html viewed `shouldSatisfy` T.isInfixOf "Keep retry tokens. &lt;script&gt;"
-    invalid <- save testPid 2 " " "Invalid title draft"
-    html invalid `shouldSatisfy` T.isInfixOf "Invalid title draft"
-    length <$> runQueryEffect tr (Memory.pageHistory testPid page) `shouldReturn` 2
-    other <- createTestProject tr "Isolated memory project"
-    hidden <- request H.methodGet (base other <> "?page=" <> page.toText) []
-    H.statusCode hidden.simpleStatus `shouldBe` 404
-    runQueryEffect tr (Memory.pageHistory other page) `shouldReturn` []
-    void $ withResource tr.trPool \conn -> execute conn "UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?" (ProjectMembers.PView, testPid, user)
-    readOnly <- request H.methodGet (base testPid <> "?page=" <> page.toText) []
-    H.statusCode readOnly.simpleStatus `shouldBe` 200
-    html readOnly `shouldNotSatisfy` T.isInfixOf "Save page"
-    refused <- save testPid 2 "Retry behavior" "Viewer must not write"
-    H.statusCode refused.simpleStatus `shouldBe` 403
-    length <$> runQueryEffect tr (Memory.pageHistory testPid page) `shouldReturn` 2
-    anonymous <- WT.runSession (WT.request $ WT.setPath Wai.defaultRequest $ encodeUtf8 $ base testPid) app
-    H.statusCode anonymous.simpleStatus `shouldSatisfy` (`elem` [302, 401, 403, 404])
-    demo <- WT.runSession (WT.request $ WT.setPath Wai.defaultRequest $ encodeUtf8 $ "/p/" <> testPid.toText <> "/repositories") app
-    html demo `shouldNotSatisfy` T.isInfixOf "?tab=wiki"
-
-  it "wiki_saveAndNavigate_doesNotNestHtmxTargets" \tr -> do
-    available <- doesFileExist "e2e/node_modules/playwright/index.mjs"
-    unless available $ pendingWith "Install the repository e2e browser dependencies to run the wiki browser regression"
-    environment <- filter (\(key, _) -> key `elem` ["PATH", "HOME", "TMPDIR", "XDG_CACHE_HOME", "PLAYWRIGHT_BROWSERS_PATH"]) <$> getEnvironment
-    probe <- readProcessStdout_ $ setEnv environment $ proc "node" ["test/fixtures/wiki-browser.mjs", "--probe"]
-    browser <- either fail pure $ AE.eitherDecode @Bool probe
-    unless browser $ pendingWith "Install the repository Playwright browser to run the wiki browser regression"
-    let app =
-          genericServeTWithContext
-            (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
-            (Routes.server tr.trLogger tr.trATCtx tr.trTracerProvider (\_ _ -> pure $ Left "unused") (\_ _ -> pure $ Left "unused"))
-            (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
-        token = UUID.toString (getResponse tr.trSessAndHeader).persistentSession.id.getPersistentSessionId
-    Warp.testWithApplication (pure app) \port -> do
-      output <- readProcessStdout_ $ setEnv (("MONOSCOPE_TEST_BEARER", token) : environment) $ proc "node" ["test/fixtures/wiki-browser.mjs", "http://127.0.0.1:" <> show port <> "/p/" <> toString testPid.toText <> "/memories"]
-      value <- either fail pure $ AE.eitherDecode @AE.Value output
-      AET.parseEither (AE.withObject "Browser result" (AE..: "targets")) value `shouldBe` Right ([1, 1, 1] :: [Int])
-      pages <- runQueryEffect tr $ Memory.latestPages testPid
-      map (Memory.memoryText . (.document.body)) pages `shouldBe` ["Keep caller retry tokens."]
-
   it "closes the actual SDK sandbox when its parent pipe ends during a command" \_tr -> withSystemTempDirectory "native-sdk-pipe-loss" \directory -> do
     available <- doesFileExist "impact-review-worker/.guest/manifest.json"
     unless available $ pendingWith "Build the self-hosted guest before running SDK integration tests"
@@ -600,7 +523,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
             blocked <- peer 5 $ Agent.ReviewBlocked $ one "Required checks are unavailable"
             liftIO $ case blocked of Agent.ReviewUnavailable values -> values `shouldBe` one "Required checks are unavailable"; _ -> expectationFailure "Peer missing verification was not retained"
             approved <- peer 6 $ Agent.ReviewApproved "The retained test exercises the runtime and the fix preserves its argument."
-            case approved of { Agent.Reviewed reviewed -> pure reviewed; _ -> throwE "Peer approval was not established" }
+            case approved of Agent.Reviewed reviewed -> pure reviewed; _ -> throwE "Peer approval was not established"
           validate result = do
             checked <- tryAny $ inspect result
             case checked of
@@ -2768,7 +2691,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
                       liftIO $ isLeft rejected `shouldBe` True
                     outcome <- candidateReview ""
                     pure
-                      $ outcome >>= \case
+                      $ outcome
+                      >>= \case
                         Agent.Reviewed reviewed -> Right reviewed
                         _ -> Left "Independent review did not approve the candidate"
       outcome <- withSystemTempDirectory "fix-protocol" \directory -> do
