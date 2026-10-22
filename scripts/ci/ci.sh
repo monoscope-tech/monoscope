@@ -757,10 +757,12 @@ IMAGE=${MONOSCOPE_IMAGE:-ghcr.io/monoscope-tech/monoscope}
 # the habit this whole file exists to kill. A BUILDER naming a native amd64
 # buildx endpoint removes the emulation instead of tolerating it.
 #
-# Deploy images build on this machine by default (Rosetta-emulated on Apple Silicon, with
-# BuildKit's cache kept here). MONOSCOPE_BUILDER=monoscope-amd64 opts into the native
-# builder `make builder-setup` creates over SSH — that host is production.
-BUILDER=${MONOSCOPE_BUILDER:-}
+# Deploy images build on the native builder `make builder-setup` creates over SSH when it
+# exists (that host is production; the builder container is capped by builder-setup), else
+# on this machine. Emulated builds took long enough — and crashed Docker Desktop/OrbStack
+# often enough — that sign-off rarely produced an image and CI rebuilt it from scratch
+# (~1h). MONOSCOPE_BUILDER= (empty) forces a local build.
+BUILDER=${MONOSCOPE_BUILDER-monoscope-amd64}
 
 # A TimeFusion image built for this machine's own architecture. `make tf-image`
 # produces it; cmd_local picks it up on its own.

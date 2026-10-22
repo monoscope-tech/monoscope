@@ -226,8 +226,23 @@ live-test-unit:
 live-reload-doctests:
 	ghcid --command 'cabal repl lib:monoscope --no-semaphore --with-compiler=$(GHC)' --test ':! cabal test monoscope:doctests --ghc-options="-O0" --test-show-details=streaming' $(RELOAD_ENV)
 
-fmt:
-	fourmolu --mode inplace $$(find ./src/ ./shared/ ./cli/ -name '*.hs')
+# One pinned fourmolu for laptops and the fourmolu workflow: a different version
+# reformats nearly every file, so the bot rewrote signed-off trees and the
+# prebuilt deploy image (keyed on the tree) never matched.
+FOURMOLU_VERSION := 0.19.0.0
+FOURMOLU := .ci/fourmolu-$(FOURMOLU_VERSION)
+HS_FILES = $$(find ./src/ ./shared/ ./cli/ -name '*.hs')
+
+$(FOURMOLU):
+	@mkdir -p $(@D)
+	curl -fsSL https://github.com/fourmolu/fourmolu/releases/download/v$(FOURMOLU_VERSION)/fourmolu-$(FOURMOLU_VERSION)-$(OS)-$(shell uname -m) -o $@.tmp
+	chmod +x $@.tmp && mv $@.tmp $@
+
+fmt: $(FOURMOLU)
+	$(FOURMOLU) --mode inplace $(HS_FILES)
+
+fmt-check: $(FOURMOLU)
+	@$(FOURMOLU) --mode check $(HS_FILES) >/dev/null 2>&1 || { echo "── not fourmolu-formatted: run \`make fmt\` and commit (CI would rewrite the tree)"; exit 1; }
 
 fix-imports:
 	fix-imports $$(find ./src -name '*.hs') <$$(find ./src -name '*.hs')
@@ -442,7 +457,7 @@ ci:
 # Run local checks, publish passing results, then show what GitHub still needs.
 # A committed, clean tree also gets its deploy image, built alongside the checks so
 # `make ship` only has to deploy it.
-ci-signoff:
+ci-signoff: fmt-check
 	@result=0; image_pid=''; mkdir -p .ci; \
 	if [ -z "$$(git status --porcelain)" ]; then \
 	  ./scripts/ci/ci.sh image > .ci/image.log 2>&1 & image_pid=$$!; \
@@ -484,7 +499,7 @@ deploy-image:
 #
 #   make ship                    # everything
 #   make ship CHECKS="build doctests unit-tests cli-tests"
-ship:
+ship: fmt-check
 	./scripts/ci/ci.sh ship $(CHECKS)
 
 # Deploy the current master image; rollback requires an explicit target.
@@ -541,4 +556,4 @@ builder-rm:
 
 .PHONY: ci ci-signoff ci-status ci-shell ci-down ci-clean ci-selftest deploy-image ship kafka-topics deploy-app rollback-app deploy-status builder-setup builder-status builder-rm tf-image
 
-.PHONY: all test fmt lint fix-lint live-reload kill-live-reload live-reload-cli live-reload-doctests live-test-dev tmux-live-test-dev build-chart-cli build-chart-cli-linux tmux-live-reload tmux-live-reload-cli tmux-pin-here tmux-unpin kill-web-components-watch web-components-watch e2e-install test-e2e test-e2e-real test-e2e-ui gen-proto sync-otel-proto update-otel-proto minio-local timefusion-start timefusion-stop test-integration-tf
+.PHONY: all test fmt fmt-check lint fix-lint live-reload kill-live-reload live-reload-cli live-reload-doctests live-test-dev tmux-live-test-dev build-chart-cli build-chart-cli-linux tmux-live-reload tmux-live-reload-cli tmux-pin-here tmux-unpin kill-web-components-watch web-components-watch e2e-install test-e2e test-e2e-real test-e2e-ui gen-proto sync-otel-proto update-otel-proto minio-local timefusion-start timefusion-stop test-integration-tf

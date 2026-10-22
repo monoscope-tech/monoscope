@@ -18,22 +18,12 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      # `make fmt` downloads the version the Makefile pins, so laptops and this bot agree.
       - name: Cache fourmolu
-        id: cache-fourmolu
         uses: actions/cache@v5
         with:
-          path: ~/.local/bin/fourmolu
-          key: fourmolu-0.19.0.0
-
-      - name: Install fourmolu
-        if: steps.cache-fourmolu.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p ~/.local/bin
-          curl -sL https://github.com/fourmolu/fourmolu/releases/download/v0.19.0.0/fourmolu-0.19.0.0-linux-x86_64 -o ~/.local/bin/fourmolu
-          chmod +x ~/.local/bin/fourmolu
-
-      - name: Add fourmolu to PATH
-        run: echo "$HOME/.local/bin" >> $GITHUB_PATH
+          path: .ci/fourmolu-*
+          key: fourmolu-${{ hashFiles('Makefile') }}
 
       - name: Format code
         run: make fmt

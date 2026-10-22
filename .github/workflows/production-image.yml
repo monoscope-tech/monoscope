@@ -31,6 +31,27 @@ jobs:
         with:
           node-version: '22'
       - uses: docker/setup-buildx-action@v3
+      # The Dockerfile's dist-newstyle cache mount dies with each fresh runner, so every
+      # build recompiled all of monoscope (~57 min). Carry it in the Actions cache: master
+      # saves, PRs restore master's and stay read-only so they can't evict it. Paths sit
+      # outside the checkout because release.sh refuses a dirty tree.
+      - if: github.ref == 'refs/heads/master'
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/dist-newstyle
+          key: prod-dist-${{ inputs.revision }}
+          restore-keys: prod-dist-
+      - if: github.ref != 'refs/heads/master'
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ runner.temp }}/dist-newstyle
+          key: prod-dist-${{ inputs.revision }}
+          restore-keys: prod-dist-
+      - uses: reproducible-containers/buildkit-cache-dance@v3.4.0
+        with:
+          cache-map: '{"${{ runner.temp }}/dist-newstyle": {"target": "/build/dist-newstyle", "id": "monoscope-production-dist-locked-v1"}}'
+          scratch-dir: ${{ runner.temp }}/cache-dance-scratch
+          skip-extraction: ${{ github.ref != 'refs/heads/master' }}
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io
