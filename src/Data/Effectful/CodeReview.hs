@@ -299,7 +299,7 @@ runCodeReviewReal artifactStore host executable skills = interpret \env -> \case
                                       writeIORef guest (Just session)
                                       case (task, journal) of
                                         (FixTask job, Just outbox) -> do
-                                          stage <- newIORef Repair.Unreproduced
+                                          stage <- newIORef Nothing
                                           persistPhase outbox job.request.attemptId RestartReproduction
                                           writeIORef repairing $ Just $ Repair.Repair session job checkout.directory (Outbox.outboxPath outbox </> "checks") callbacks.admit (persistPhase outbox job.request.attemptId) (\artifact revisions -> replayFrozen session outbox job.request (AE.toJSON artifact) revisions (persistPhase outbox job.request.attemptId . Observe)) stage
                                         _ -> pass
@@ -310,8 +310,8 @@ runCodeReviewReal artifactStore host executable skills = interpret \env -> \case
                           | isNothing supplied -> pure $ Left "Tool invocation requires its repository checkout"
                           | invocation.name == Policy.RunRegression -> do
                               session <- readIORef guest
-                              response <- case (session, supplied, journal, task) of
-                                (Just active, Just _, Just outbox, AdvisoryTask advisory) | honours invocation -> fmap fst <$> replayFrozen active outbox advisory invocation.arguments [("base", advisory.base), ("head", advisory.head)] (const pass)
+                              response <- case (session, journal, task) of
+                                (Just active, Just outbox, AdvisoryTask advisory) | honours invocation -> fmap fst <$> replayFrozen active outbox advisory invocation.arguments [("base", advisory.base), ("head", advisory.head)] (const pass)
                                 _ -> pure $ Left "Tool is unavailable or its arguments violate the host contract"
                               writeMessage response
                               -- Comparisons spend the verifier's own budget of three per session, not the request budget.

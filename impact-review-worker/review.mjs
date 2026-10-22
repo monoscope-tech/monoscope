@@ -67,7 +67,6 @@ export async function runRepositoryAgent(input, { modelRuntime, guestImage, expe
   const pinnedImage = resolvedImage?.source === 'path' ? importImageFromDirectory(resolvedImage.assetDir) : resolvedImage;
   if (!host && expectedImageBuildId !== undefined && pinnedImage.buildId !== expectedImageBuildId) throw new Error('Configured guest image differs from the pinned issue-fix image');
   if (!preparedCheckout) throw new Error('A host-prepared checkout is required');
-  if (preparedCheckout.envelope && typeof validateDraft !== 'function') throw new Error('Wrapped submissions require host acceptance');
   const root = await mkdtemp(join(tmpdir(), 'monoscope-review-'));
   const checkout = preparedCheckout.directory;
   const cwd = '/workspace';
@@ -223,7 +222,7 @@ export async function runRepositoryAgent(input, { modelRuntime, guestImage, expe
       return z.string().refine((value) => !value.includes('\0'), 'File paths cannot contain NUL bytes').parse(path);
     };
     // Pi queues mutations by host realpath, so it only ever sees private stand-ins for guest paths.
-    if (host && preparedCheckout.policy.builtins.includes('edit')) tools.push(...[createEditToolDefinition, createWriteToolDefinition].map((defineTool) => ({
+    if (host) tools.push(...[['edit', createEditToolDefinition], ['write', createWriteToolDefinition]].filter(([name]) => preparedCheckout.policy.builtins.includes(name)).map(([, defineTool]) => ({
       ...defineTool(cwd),
       async execute(id, args, toolSignal, onUpdate, context) {
         const path = guestPath(args.path);

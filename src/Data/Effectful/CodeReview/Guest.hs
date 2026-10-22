@@ -114,7 +114,7 @@ withGuest host expected checkout revision setup lease attempt allocate retain ac
               LogLimit -> Left "Command output could not be retained"
               Exited code -> Right $ AE.toJSON $ Ran code (isJust exec.timeout && code == 124) truncated guestLog (encoded retained)
           Read path ->
-            output (agentCommand ["/bin/cat", "--", path]) (8 * 1048576 + 1) <&> \case
+            output (agentCommand ["/usr/bin/head", "-c", "8388609", "--", path]) (8 * 1048576 + 1) <&> \case
               (Exited 0, bytes, False) -> Right $ AE.String $ encoded bytes
               (Exited 0, _, True) -> Left "File exceeds the 8 MiB read limit"
               (_, bytes, _) -> Left $ T.take 1000 $ decodeUtf8 bytes

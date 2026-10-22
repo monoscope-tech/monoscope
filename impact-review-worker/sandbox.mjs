@@ -50,7 +50,7 @@ try {
             }
             if (limited) result = { tag: 'LogLimit' };
             else result = { tag: 'Exited', contents: (await execution).exitCode };
-          } finally { try { await log.sync(); } finally { await log.close(); } }
+          } finally { try { if (overflow !== 'discard_output') await log.sync(); } finally { await log.close(); } }
           break;
         }
         case 'Execute': {
