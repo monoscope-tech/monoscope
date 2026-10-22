@@ -74,6 +74,7 @@ else {
     targets.push(await page.locator('#repository-content').count());
     urls.push(new URL(page.url()).pathname);
     await page.locator('wiki-editor[data-mode=rich] .ProseMirror').waitFor();
+    assert.equal(await page.locator('wiki-editor .ProseMirror').textContent(), '');
     process.stdout.write(JSON.stringify({ targets, urls, fields: [await page.getByLabel('Page path (required)').inputValue(), await page.getByLabel('Title (required)').inputValue(), await page.locator('textarea[name=body]').inputValue()] }));
   } finally { await browser.close(); }
 }
