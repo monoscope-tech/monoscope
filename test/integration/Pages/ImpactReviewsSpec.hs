@@ -22,6 +22,7 @@ import Data.Default (def)
 import Data.Effectful.AgentArtifacts qualified as Artifacts
 import Data.Effectful.AgentWorkspace qualified as Workspace
 import Data.Effectful.CodeReview qualified as Agent
+import Data.Effectful.CodeReview.Artifacts qualified as Native
 import Data.Effectful.CodeReview.Checkout qualified as Checkout
 import Data.Effectful.CodeReview.Explanation qualified as Media
 import Data.Effectful.GitPublication qualified as Publication
@@ -550,7 +551,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
       case viaNonEmpty last recordedPhases of
         Just Agent.PhaseReceipt{step = Fixes.Observe receipt} -> AE.toJSON receipt.regression `shouldBe` AE.toJSON (Just $ Agent.RetainedTest result.regressionSha256)
         _ -> expectationFailure "Final verification was not retained"
-      let candidateDir = store.usageDir </> "fixes" </> toString result.runId.toText </> "checks" </> "candidates" </> toString result.candidateId.toText
+      let checksDir = store.usageDir </> "fixes" </> toString result.runId.toText </> "checks"
+          candidateDir = checksDir </> "candidates" </> toString result.candidateId.toText
           bundle = candidateDir </> "candidate.bundle"
           ref = "refs/heads/monoscope-candidate/" <> toString result.candidateId.toText
       patch <- readFileBS $ candidateDir </> "fix.patch"
@@ -565,6 +567,12 @@ spec = around withTestResources $ describe "Production impact reviews" do
       let reply identifier = maybe (fail "Missing fix tool reply") (parse $ field "content") $ find (\value -> AET.parseEither (field "tool_call_id") value == Right (identifier :: Text)) results
       reply "tool-6" >>= (`shouldSatisfy` T.isInfixOf "256 KiB limit")
       reply "tool-13" >>= (`shouldSatisfy` T.isInfixOf "/home/review-agent/notes/")
+      reply "tool-19" >>= (`shouldSatisfy` T.isInfixOf "Workspace changed; propose and verify a new candidate")
+      proposal <- parse AE.parseJSON $ AE.object ["patch" AE..= decodeUtf8 @Text patch, "rootCause" AE..= rootCause]
+      captured <- Native.captureCandidate checksDir fixRequest repository proposal >>= either (fail . toString) pure
+      identifier <- parse (field "candidateId") $ AE.toJSON captured
+      Native.candidateMatchesPatch captured identifier (decodeUtf8 patch) `shouldBe` True
+      Native.candidateMatchesPatch captured (uid 99) (decodeUtf8 patch) `shouldBe` False
       decodeUtf8 @Text (AE.encode results) `shouldNotSatisfy` T.isInfixOf "/file-tools/"
       contexts <- requests
       let names = AE.withObject "Model tools" (AE..: "tools") >=> traverse (AE.withObject "Model tool" (AE..: "function") >=> AE.withObject "Tool function" (AE..: "name"))

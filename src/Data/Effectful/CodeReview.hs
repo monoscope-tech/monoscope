@@ -28,7 +28,7 @@ import UnliftIO.Timeout qualified as Timeout
 
 
 -- JSON-lines protocol: queries, usage, execution receipts, validation, and result.
-data Message = Checkout () | Tool Policy.Invocation | Query TelemetryQuery | Knowledge KnowledgeRequest | Admit TestArtifact | Propose Native.CandidatePatch | CapturePatch () | GuestResult (Either Text Text) | Validate AE.Value | Result AE.Value
+data Message = Checkout () | Tool Policy.Invocation | Query TelemetryQuery | Knowledge KnowledgeRequest | Admit TestArtifact | Propose Native.CandidateCause | AssertCandidate (UUIDId "fix_candidate") | GuestResult (Either Text Text) | Validate AE.Value | Result AE.Value
   deriving stock (Generic)
   deriving anyclass (AE.FromJSON)
 
@@ -232,7 +232,7 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
                               _ -> Left "Guest returned an invalid workspace response"
                       void $ execute $ "/usr/bin/git" :| ["add", "-A"]
                       execute $ "/usr/bin/git" :| ["diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv", "--no-color", "--no-relative", "--src-prefix=a/", "--dst-prefix=b/", base, "--"]
-                    receive supplied remaining submissions accepted = do
+                    receive supplied candidate remaining submissions accepted = do
                       message <- (AE.eitherDecodeStrict >=> AET.parseEither parseMessage) <$> BS.hGetLine (getStdout process)
                       case message of
                         Left _ -> pure $ Left "Review agent returned an invalid protocol message"
@@ -246,11 +246,11 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
                               writeMessage saved
                               case saved of
                                 Left failure | not phase -> pure $ Left failure
-                                _ -> receive supplied (remaining - bool 0 1 phase) submissions (if invalidates then Nothing else accepted)
+                                _ -> receive supplied candidate (remaining - bool 0 1 phase) submissions (if invalidates then Nothing else accepted)
                         Right (Right (Checkout ())) -> case (supplied, artifactStore) of
                           (Nothing, Just configured) -> do
                             prepared <- Checkout.withCheckout configured source \checkout ->
-                              (writeMessage (Right checkout{Checkout.policy = Policy.policy role (revisionText checkout.base) (revisionText checkout.head) checkout.rootInstructions} :: Either Text Checkout.Prepared) >> receive (Just checkout) remaining submissions accepted) `finally` stop
+                              (writeMessage (Right checkout{Checkout.policy = Policy.policy role (revisionText checkout.base) (revisionText checkout.head) checkout.rootInstructions} :: Either Text Checkout.Prepared) >> receive (Just checkout) candidate remaining submissions accepted) `finally` stop
                             pure $ join prepared
                           _ -> pure $ Left "Repository checkout was unavailable or already supplied"
                         Right (Right (Tool invocation))
@@ -271,35 +271,39 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
                                     _ -> pure $ Left "This tool requires a native workflow handler"
                               response <- if invocation.name `elem` allowed && null (Schema.validateJSON mempty (Policy.toolSchema invocation.name) invocation.arguments) then request else pure $ Left "Tool is unavailable or its arguments violate the host contract"
                               writeMessage response
-                              receive supplied (remaining - 1) submissions Nothing
+                              receive supplied candidate (remaining - 1) submissions Nothing
                           | otherwise -> pure $ Left "Review agent exceeded its query budget"
                         Right (Right (Query query))
-                          | remaining > 0 -> callbacks.respond query >>= writeMessage >> receive supplied (remaining - 1) submissions Nothing
+                          | remaining > 0 -> callbacks.respond query >>= writeMessage >> receive supplied candidate (remaining - 1) submissions Nothing
                           | otherwise -> pure $ Left "Review agent exceeded its query budget"
                         Right (Right (Knowledge requestKnowledge))
-                          | remaining > 0 -> callbacks.knowledge requestKnowledge >>= writeMessage >> receive supplied (remaining - 1) submissions Nothing
+                          | remaining > 0 -> callbacks.knowledge requestKnowledge >>= writeMessage >> receive supplied candidate (remaining - 1) submissions Nothing
                           | otherwise -> pure $ Left "Review agent exceeded its query budget"
                         Right (Right (Admit artifact))
-                          | remaining > 0 -> callbacks.admit artifact >>= writeMessage >> receive supplied (remaining - 1) submissions Nothing
+                          | remaining > 0 -> callbacks.admit artifact >>= writeMessage >> receive supplied candidate (remaining - 1) submissions Nothing
                           | otherwise -> pure $ Left "Review agent exceeded its query budget"
-                        Right (Right (CapturePatch ())) -> case (task, supplied) of
-                          (FixTask request, Just _) | remaining > 0 -> do
-                            capturePatch request.request.base >>= writeMessage
-                            receive supplied remaining submissions Nothing
-                          _ -> pure $ Left "Workspace capture requires a prepared issue-fix task and remaining budget"
+                        Right (Right (AssertCandidate identifier)) -> case (task, supplied, candidate) of
+                          (FixTask request, Just _, Just captured) | remaining > 0 -> do
+                            unchanged <- capturePatch request.request.base
+                            writeMessage $ unchanged >>= \patch -> if Native.candidateMatchesPatch captured identifier patch then Right () else Left "Workspace changed; propose and verify a new candidate"
+                            receive supplied candidate remaining submissions Nothing
+                          _ -> pure $ Left "Workspace verification requires a captured issue-fix candidate and remaining budget"
                         Right (Right (GuestResult _)) -> pure $ Left "Guest response has no pending workspace command"
-                        Right (Right (Propose patch)) -> case (task, supplied, journal) of
+                        Right (Right (Propose cause)) -> case (task, supplied, journal) of
                           (FixTask request, Just checkout, Just outbox) | remaining > 0 -> do
-                            captured <- Native.captureCandidate (Outbox.outboxPath outbox <> "/checks") request checkout.directory patch
+                            captured <- runExceptT do
+                              snapshot <- ExceptT $ capturePatch request.request.base
+                              patch <- hoistEither $ Native.mkCandidatePatch snapshot cause
+                              ExceptT $ Native.captureCandidate (Outbox.outboxPath outbox <> "/checks") request checkout.directory patch
                             writeMessage captured
-                            receive supplied (remaining - 1) submissions Nothing
+                            receive supplied (either (const candidate) Just captured) (remaining - 1) submissions Nothing
                           _ -> pure $ Left "Candidate capture requires a prepared issue-fix task and remaining budget"
                         Right (Right (Validate draft))
                           | isNothing supplied && isJust artifactStore -> pure $ Left "Review agent has not acquired its repository checkout"
                           | submissions > 0 -> do
                               checked <- callbacks.validate draft
                               writeMessage $ void checked
-                              receive supplied remaining (submissions - 1) $ either (const Nothing) (Just . (draft,)) checked
+                              receive supplied candidate remaining (submissions - 1) $ either (const Nothing) (Just . (draft,)) checked
                           | otherwise -> pure $ Left "Review agent exceeded its submission budget"
                         Right (Right (Result draft)) -> case accepted of
                           Just (acceptedDraft, result) | acceptedDraft == draft -> do
@@ -307,7 +311,7 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
                             pure $ if status == ExitSuccess then Right result else Left "Review agent did not produce a validated result"
                           _ -> pure $ Left "Review agent returned an unvalidated draft"
                 writeMessage payload
-                receive Nothing (20 :: Int) (5 :: Int) Nothing
+                receive Nothing Nothing (20 :: Int) (5 :: Int) Nothing
         pure case outcome of
           Left _ -> Left "Review agent could not be executed"
           Right Nothing -> Left "Review agent exceeded its eight-minute budget"

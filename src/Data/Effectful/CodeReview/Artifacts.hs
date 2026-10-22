@@ -1,4 +1,4 @@
-module Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), CandidatePatch, CapturedCandidate, captureCandidate, VerifiedArtifacts, PeerPreparation, artifactCheckout, peerPreparation, verifyArtifacts, withVerifiedArtifacts, readPrivateArtifact, sha256) where
+module Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), CandidateCause, CandidatePatch, mkCandidatePatch, CapturedCandidate, candidateMatchesPatch, captureCandidate, VerifiedArtifacts, PeerPreparation, artifactCheckout, peerPreparation, verifyArtifacts, withVerifiedArtifacts, readPrivateArtifact, sha256) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.Encoding qualified as Encoding
@@ -217,20 +217,39 @@ withVerifiedArtifacts store request action = do
 -- False
 -- >>> accepted "diff" "valid\nexplanation"
 -- True
-data CandidatePatch = CandidatePatch {patch :: Text, rootCause :: Text}
+data CandidatePatch = CandidatePatch {patch :: Text, rootCause :: CandidateCause}
   deriving stock (Generic)
+
+
+newtype CandidateCause = CandidateCause {text :: Text}
+
+
+instance AE.FromJSON CandidateCause where
+  parseJSON = AE.withText "Candidate root cause" \cause ->
+    if not (T.null $ T.strip cause) && T.length cause <= 240 && T.all (\c -> c >= ' ' || c `elem` ['\t', '\n']) cause && not (T.any (== '\DEL') cause)
+      then pure $ CandidateCause cause
+      else fail "Invalid candidate root cause"
 
 
 instance AE.FromJSON CandidatePatch where
   parseJSON value = do
-    input <- AE.genericParseJSON AE.defaultOptions value
-    unless (BS.length (encodeUtf8 input.patch) <= 1048576 && not (T.null input.patch) && not (T.null $ T.strip input.rootCause) && T.length input.rootCause <= 240 && T.all (\c -> c >= ' ' || c `elem` ['\t', '\n']) input.rootCause && not (T.any (== '\DEL') input.rootCause)) $ fail "Invalid candidate patch or root cause"
-    pure input
+    input <- AE.genericParseJSON @CandidatePatch AE.defaultOptions value
+    either (fail . toString) pure $ mkCandidatePatch input.patch input.rootCause
+
+
+mkCandidatePatch :: Text -> CandidateCause -> Either Text CandidatePatch
+mkCandidatePatch patch cause
+  | BS.length (encodeUtf8 patch) <= 1048576 && not (T.null patch) = Right $ CandidatePatch patch cause
+  | otherwise = Left "Candidate patch must be nonempty and within its 1 MiB limit"
 
 
 data CapturedCandidate = CapturedCandidate {projectId :: UUIDId "project", runId :: UUIDId "issue_fix", issueId :: UUIDId "issue", attemptId :: UUIDId "agent_attempt", candidateId :: UUIDId "fix_candidate", base :: Revision, head :: Revision, patchSha256 :: Text, bundleSha256 :: Text, rootCause :: Text}
   deriving stock (Generic)
   deriving anyclass (AE.ToJSON)
+
+
+candidateMatchesPatch :: CapturedCandidate -> UUIDId "fix_candidate" -> Text -> Bool
+candidateMatchesPatch candidate identifier patch = candidate.candidateId == identifier && sha256 (encodeUtf8 patch) == candidate.patchSha256
 
 
 captureCandidate :: FilePath -> FixRequest -> FilePath -> CandidatePatch -> IO (Either Text CapturedCandidate)
@@ -272,7 +291,7 @@ captureCandidate artifacts job checkout input = do
     sync bundle
     bytes <- readPrivateArtifact directory "candidate.bundle" bundleLimit
     ensure $ not (BS.null bytes)
-    let captured = CapturedCandidate request.projectId request.runId job.issueId request.attemptId identifier base revision (sha256 $ encodeUtf8 input.patch) (sha256 bytes) input.rootCause
+    let captured = CapturedCandidate request.projectId request.runId job.issueId request.attemptId identifier base revision (sha256 $ encodeUtf8 input.patch) (sha256 bytes) input.rootCause.text
     publish "candidate.json" $ AE.encode captured <> "\n"
     pure captured
   pure $ case outcome of Right (Just captured) -> Right captured; _ -> Left "Candidate could not be captured by the host"

@@ -86,9 +86,9 @@ try {
   const result = await (isAdmission ? admitRegression : isFix ? fixIssue : review)({ ...request, head: checkoutHead }, {
     modelRuntime, guestImage, expectedImageBuildId, cacheDir, preparedCheckout, usageDir: outboxRoot, artifactDir, attemptId, skillPaths: process.argv.slice(2), optionsTool: (invocation) => exchange('Tool', invocation), validateDraft: (draft) => exchange('Validate', draft), signal,
     admitTest: (artifact) => exchange('Admit', artifact),
-    proposeCandidate: (candidate) => exchange('Propose', candidate),
+    proposeCandidate: (cause, active) => exchange('Propose', cause, active),
     bindGuest: (execute) => { executeGuest = execute; },
-    capturePatch: (active) => exchange('CapturePatch', [], active),
+    assertCandidate: (identifier, active) => exchange('AssertCandidate', identifier, active),
     workspaceCache: process.env.IMPACT_REVIEW_PREPARE_SCRIPT ? {
       cacheDir: process.env.IMPACT_REVIEW_CACHE_DIR, script: fs.readFileSync(process.env.IMPACT_REVIEW_PREPARE_SCRIPT, 'utf8'),
       dependencyArchive: process.env.IMPACT_REVIEW_DEPENDENCY_ARCHIVE && resolve(process.env.IMPACT_REVIEW_DEPENDENCY_ARCHIVE),

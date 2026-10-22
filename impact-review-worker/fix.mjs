@@ -7,7 +7,6 @@ import { z } from 'zod';
 import { createEditToolDefinition, createWriteToolDefinition } from '@earendil-works/pi-coding-agent';
 import { agentCommand, lockWorkspace, reviewRequest, runRepositoryAgent } from './review.mjs';
 
-const fixText = (max) => z.string().min(1).max(max).refine((value) => value.trim().length > 0 && !/[\x00-\x08\x0b-\x1f\x7f]/.test(value));
 const fixRequest = reviewRequest.omit({ head: true }).extend({ runId: z.uuid(), issueId: z.uuid() });
 const digest = (text) => createHash('sha256').update(text).digest('hex');
 const reply = (text, isError = false) => ({ content: [{ type: 'text', text }], details: {}, isError });
@@ -19,7 +18,7 @@ const syncDirectory = async (path) => {
 export function fixIssue(input, options) {
   const issue = fixRequest.parse(input);
   const attemptId = z.uuid().parse(options.attemptId);
-  if (!options.artifactDir || typeof options.bindGuest !== 'function' || typeof options.capturePatch !== 'function' || typeof options.admitTest !== 'function' || typeof options.recordStep !== 'function' || typeof options.validateFix !== 'function' || typeof options.onEvent !== 'function') throw new Error('Issue fixes require private artifacts, host admission, phase/result acknowledgements, and metering');
+  if (!options.artifactDir || typeof options.bindGuest !== 'function' || typeof options.assertCandidate !== 'function' || typeof options.admitTest !== 'function' || typeof options.recordStep !== 'function' || typeof options.validateFix !== 'function' || typeof options.onEvent !== 'function') throw new Error('Issue fixes require private artifacts, host admission, phase/result acknowledgements, and metering');
   return runRepositoryAgent({ ...issue, head: issue.base }, {
     ...options,
     async createWorkflow({ vm, cwd, request, root, artifactDir, executeRegression, signal }) {
@@ -63,14 +62,6 @@ export function fixIssue(input, options) {
           throw error;
         }
       });
-      const capturePatch = async (toolSignal) => {
-        const active = operationSignal(toolSignal);
-        active.throwIfAborted();
-        const captured = await options.capturePatch(active);
-        active.throwIfAborted();
-        if (Object.hasOwn(captured, 'Left')) throw new Error(captured.Left);
-        return captured.Right;
-      };
       const persist = async (parent, id, files) => {
         const collection = join(artifactDir, parent);
         const directory = join(collection, id);
@@ -153,10 +144,8 @@ export function fixIssue(input, options) {
               const active = operationSignal(toolSignal);
               active.throwIfAborted();
               if (!reproduction) return reply('Reproduce the issue before proposing a fix', true);
-              rootCause = fixText(240).parse(rootCause);
               verified = undefined;
-              const patch = await capturePatch(active);
-              const response = await options.proposeCandidate({ patch, rootCause });
+              const response = await options.proposeCandidate(rootCause, active);
               active.throwIfAborted();
               if (Object.hasOwn(response, 'Left')) return reply(response.Left, true);
               const captured = response.Right;
@@ -174,7 +163,9 @@ export function fixIssue(input, options) {
               active.throwIfAborted();
               if (!candidate || !reproduction) return reply('Capture a candidate after reproduction first', true);
               verified = undefined;
-              if (digest(await capturePatch(active)) !== candidate.patchSha256) return reply('Workspace changed; propose and verify a new candidate', true);
+              const unchanged = await options.assertCandidate(candidate.candidateId, active);
+              active.throwIfAborted();
+              if (Object.hasOwn(unchanged, 'Left')) return reply(unchanged.Left, true);
               const result = await executeRegression(reproduction, active, { recordExecution: recordExecution(active) });
               active.throwIfAborted();
               if (result.isError) return result;
@@ -189,7 +180,9 @@ export function fixIssue(input, options) {
           const active = operationSignal(toolSignal);
           active.throwIfAborted();
           if (!verified) return { Left: 'Capture and verify a source fix before submission' };
-          if (digest(await capturePatch(active)) !== verified.patchSha256) return { Left: 'Workspace changed after verification; propose and verify a new candidate' };
+          const unchanged = await options.assertCandidate(verified.candidateId, active);
+          active.throwIfAborted();
+          if (Object.hasOwn(unchanged, 'Left')) return unchanged;
           const result = { ...verified, summary };
           const acceptance = await options.validateFix(result, active);
           active.throwIfAborted();

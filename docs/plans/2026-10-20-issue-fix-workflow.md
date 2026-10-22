@@ -843,3 +843,13 @@ Only `review.test.mjs` remains (458 lines). General agent-VM orphan reconciliati
 The supervisor now sends bounded command requests to the Node process that owns the live VM. Haskell selects the Git commands that capture the candidate patch. Node executes them as UID 1000 in the existing clean environment and returns their output. The exchange remains sequential, so it cannot overtake a receipt acknowledgement. Cancellation closes the VM; command failure or an oversized response rejects capture.
 
 This is a transport step toward native workflow handlers. Reproduction admission, source unlocking, verification decisions and submission state still live in `fix.mjs`. The bridge initially adds JavaScript transport code; it does not complete the requested reduction. Next, move those decisions and durable phase publication to Haskell, then remove the corresponding Node handlers.
+
+### Native candidate identity and integrity (2026-10-22)
+
+Haskell now captures the live VM patch when proposing a candidate. The supervisor retains the opaque captured candidate and checks the candidate ID and later workspace snapshots against its recorded hash before verification and submission. Node supplies neither a candidate patch nor an expected hash. Root-cause parsing uses a private refined type; the patch constructor preserves the existing byte limit.
+
+Removed the JavaScript snapshot wrapper, root-cause validator and patch-hash decisions. Phase receipts, reproduction admission, source unlocking and verification/submission state still need native handlers. The SDK scenario now also asserts the workspace-change rejection text after regression tampering.
+
+The review caught a cancellation gap: a newly captured candidate could differ from the candidate still held by the SDK. The regression uses real native Git capture, then supplies a different candidate ID with identical patch bytes. It failed before the identity check (`expected False, got True`); integrity now requires both identity and hash to match.
+
+Verification: the final SDK scenario passed in 32.7983 seconds. All 41 focused doctests passed. Watchers compiled both server and tests; Fourmolu, HLint, Node syntax and whitespace checks passed. Three review passes completed. No hosted inference, PR update, CI attestation or deployment ran for this slice.
