@@ -148,6 +148,24 @@ reorder wid x y w h = Map.singleton wid (def :: Dashboards.WidgetReorderItem){Da
 
 spec :: Spec
 spec = sequential $ aroundAll withTestResources do
+  describe "Widget PNG export" do
+    it "tablePng_aggregateChangesAlterRenderedImage" \tr ->
+      for_ [Nothing, Just Widget.PngSlack] \profile -> do
+        pngs <- forM [2, 3 :: Int] \count -> do
+          let widget =
+                (def :: Widget.Widget)
+                  { Widget.wType = Widget.WTTable
+                  , Widget.pngProfile = profile
+                  , Widget.dataset = Just (def :: Widget.WidgetDataset){Widget.source = AE.toJSON ([[AE.String "events"], [AE.toJSON count]] :: [[AE.Value]])}
+                  }
+              encoded = decodeUtf8 @Text $ AE.encode widget
+              signature = Widget.signWidgetUrl tr.trATCtx.env.apiKeyEncryptionSecretKey testPid encoded
+          response <- toBaseServantResponse tr $ Routes.widgetPngGetH testPid (Just encoded) Nothing Nothing Nothing Nothing Nothing Nothing (Just signature) []
+          let bytes = Servant.getResponse response
+          LBS.take 8 bytes `shouldBe` "\137PNG\r\n\26\n"
+          pure bytes
+        length (ordNub pngs) `shouldBe` 2
+
   describe "Widget type contract" do
     it "widgetWarningThresholdMigration_repairsNestedKeysAndPreservesCanonicalValues" \tr -> do
       dashId <- newDashboard tr "" "Legacy warning thresholds"
@@ -1079,7 +1097,8 @@ spec = sequential $ aroundAll withTestResources do
     it "tableRowClick_navigatesOnTablessAndTabbedDashboards" \_ -> do
       let column = (def :: Widget.TableColumn){Widget.field = "service", Widget.title = "Service"}
           rowNav tabM =
-            toStrict . renderText
+            toStrict
+              . renderText
               $ Widget.renderTableWithDataAndParams
                 (def :: Widget.Widget){Widget.wType = Widget.WTTable, Widget.columns = Just [column], Widget._projectId = Just testPid, Widget._dashboardId = Just "d1", Widget._tabSlug = tabM, Widget.onRowClick = Just def{Widget.setVariable = Just "service"}}
                 (V.singleton $ V.singleton "api")
