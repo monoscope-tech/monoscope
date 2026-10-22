@@ -82,7 +82,7 @@ Create a private persistent cache directory and set `IMPACT_REVIEW_CACHE_DIR` to
 Supply the model provider credentials to the host process through its provider environment variables.
 For self-hosted inference, set `IMPACT_REVIEW_MODELS` to a trusted Pi `models.json` file describing your compatible endpoint, then use that provider/model in the request.
 That file stays on the host. Repository commands cannot configure model providers or read their credentials.
-Run `node cli.mjs [skill-directory ...]` with a JSON-lines caller. Send the request as the first line on stdin and keep stdin open for query replies. The request has this shape:
+Run `node pi-host.mjs` with a JSON-lines caller. Send the request as the first line on stdin and keep stdin open for query replies. The request has this shape:
 
 ```json
 {

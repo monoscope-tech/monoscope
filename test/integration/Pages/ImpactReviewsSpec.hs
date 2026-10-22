@@ -189,7 +189,7 @@ deliver tr value = do
 sdkHost :: [FilePath] -> FilePath -> IO Guest.Host
 sdkHost skills image = do
   bridge <- canonicalizePath "test/fixtures/native-sandbox.sh"
-  (\worker -> (Agent.workerHost skills Nothing Nothing (toText image) worker){Guest.bridge}) <$> canonicalizePath "impact-review-worker/cli.mjs"
+  (\worker -> (Agent.workerHost skills Nothing Nothing (toText image) worker){Guest.bridge}) <$> canonicalizePath "impact-review-worker/pi-host.mjs"
 
 
 spec :: Spec

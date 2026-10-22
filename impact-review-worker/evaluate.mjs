@@ -44,7 +44,7 @@ try {
   output = resolve(resultPath);
   const pkg = JSON.parse(await readFile(new URL('./package.json', import.meta.url), 'utf8'));
   const skills = JSON.parse(await readFile(new URL('./skills/superpowers/UPSTREAM.json', import.meta.url), 'utf8'));
-  const paths = ['review.mjs', 'workspace.mjs', '../src/Data/Effectful/CodeReview/Artifacts.hs', '../src/Data/Effectful/CodeReview/Policy.hs', 'evaluate.mjs', 'package-lock.json', 'skills/superpowers/UPSTREAM.json', ...Object.keys(skills.sha256).map((path) => `skills/superpowers/${path}`)];
+  const paths = ['review.mjs', 'pi-host.mjs', 'workspace.mjs', '../src/Data/Effectful/CodeReview/Artifacts.hs', '../src/Data/Effectful/CodeReview/Policy.hs', 'evaluate.mjs', 'package-lock.json', 'skills/superpowers/UPSTREAM.json', ...Object.keys(skills.sha256).map((path) => `skills/superpowers/${path}`)];
   const files = Object.fromEntries(await Promise.all(paths.map(async (path) => [path, createHash('sha256').update(await readFile(new URL(path, import.meta.url))).digest('hex')])));
   artifact = { validation: { changedLines: true, evidenceKeys: true, telemetryContext: true, semanticQuality: 'manual' }, createdAt: new Date().toISOString(), ...input, harness: { dependencies: { ...pkg.dependencies, ...pkg.devDependencies }, skills: { repository: skills.repository, revision: skills.revision }, files }, runs: [] };
   await writeFile(output, JSON.stringify(artifact, null, 2) + '\n', { flag: 'wx', mode: 0o600 });

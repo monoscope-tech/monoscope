@@ -26,5 +26,5 @@ if sys.platform == "darwin":
     environment["GONDOLIN_VMM"] = "krun"
 with open(args.diagnostic, "ab", buffering=0) as output:
     os.dup2(output.fileno(), 2)
-worker = Path(__file__).resolve().parents[2] / "impact-review-worker" / "cli.mjs"
+worker = Path(__file__).resolve().parents[2] / "impact-review-worker" / "pi-host.mjs"
 os.execvpe("node", ["node", str(worker), *args.skill], environment)

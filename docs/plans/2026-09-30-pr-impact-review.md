@@ -65,7 +65,7 @@ The initial prototype inventory had 1,549 lines of application JavaScript across
 | Checkout, verification VMs, prepared workspaces, Pi setup | 634 | Haskell owns Git mirrors, preparation identities, cache selection, check orchestration, fingerprints, receipts, limits and cleanup. Only library-specific Pi/Gondolin calls belong at a subprocess boundary. |
 | Child protocol, receipt outbox and SDK launch (initial inventory) | 165 | Haskell owns durable delivery, replay, billing attribution and result validation. SDK/CLI event decoding remains a boundary concern. |
 
-**Status 2026-10-22.** All four production roles (advisory, fix, admission, independent review) now run in Haskell-owned VMs (`CodeReview.Guest`). Haskell creates or resumes the VM through `sandbox.mjs`, prepares the role's workspace, serves Pi's read/bash/edit/write calls, and records allocation, checks and phases. Regressions and the fix workflow (`CodeReview.Repair`) are host tool handlers. The production child is `cli.mjs` plus the host branch of `review.mjs`: the Pi session, metering and tool forwarding. By decision, the research runners (`evaluate.mjs`, `reviewbench.mjs`) stay in JS with their own VM path. They take criteria and tool contracts from host policy (`Calibration` for ReviewBench).
+**Status 2026-10-22.** All four production roles (advisory, fix, admission, independent review) now run in Haskell-owned VMs (`CodeReview.Guest`). Haskell creates or resumes the VM through `sandbox.mjs`, prepares the role's workspace, serves Pi's read/bash/edit/write calls, and records allocation, checks and phases. Regressions and the fix workflow (`CodeReview.Repair`) are host tool handlers. The production child is `pi-host.mjs`: the Pi session, metering and tool forwarding. By decision, the research runners (`evaluate.mjs`, `reviewbench.mjs`) stay in JS with their own VM path. They take criteria and tool contracts from host policy (`Calibration` for ReviewBench).
 
 ### Reuse Pi without a JavaScript application service
 
@@ -389,7 +389,7 @@ Local prototype verification:
 Prepare the executable, npm dependencies, guest image, and hypervisor on the server that runs the background job.
 The server runtime image does not package these dependencies yet. Do not enable production execution until dependency review and Linux verification are complete.
 
-- `IMPACT_REVIEW_AGENT`: absolute path to the executable `impact-review-worker/cli.mjs`; unset means agent execution is unavailable.
+- `IMPACT_REVIEW_AGENT`: absolute path to the executable `impact-review-worker/pi-host.mjs`; unset means agent execution is unavailable.
 - `IMPACT_REVIEW_SKILLS`: comma-separated trusted skill directories; omit when no bundled skills are configured.
 - `IMPACT_REVIEW_PROVIDER`: Pi provider ID, default `openai`.
 - `OPENAI_MODEL`: existing model setting, including its optional reasoning suffix, such as `#high`.

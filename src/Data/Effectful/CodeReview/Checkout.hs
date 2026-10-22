@@ -1,4 +1,4 @@
-module Data.Effectful.CodeReview.Checkout (Source (..), Prepared (..), withCheckout) where
+module Data.Effectful.CodeReview.Checkout (Source (..), Prepared (..), Envelope (..), withCheckout) where
 
 import Data.Aeson qualified as AE
 import Data.Base64.Types (extractBase64)
@@ -7,10 +7,11 @@ import Data.ByteString.Base64 qualified as Base64
 import Data.Char (isAlphaNum, isAscii)
 import Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), artifactCheckout, peerEvidence, sha256, withVerifiedArtifacts)
 import Data.Effectful.CodeReview.Policy qualified as Policy
-import Data.Effectful.CodeReview.Types (ArtifactRequest (..), FixResult (..), Request (..), Revision, mkRevision, revisionText)
+import Data.Effectful.CodeReview.Types (ArtifactRequest (..), FixResult (..), Request (..), Revision, TestArtifact, mkRevision, revisionText)
 import Data.List (lookup)
 import Data.List.Extra (nubOrd)
 import Data.Text qualified as T
+import Deriving.Aeson qualified as DAE
 import GHC.Clock (getMonotonicTimeNSec)
 import Pkg.DeriveUtils (UUIDId, WrappedEnumSC (..))
 import Relude
@@ -36,8 +37,14 @@ data CacheStatus = Hit | Miss | Verified
   deriving (AE.ToJSON) via WrappedEnumSC 'Nothing "" CacheStatus
 
 
--- | @guest@ names the host skill directory of a host-owned VM; @envelope@ holds fields the agent wraps around its submission.
-data Prepared = Prepared {directory :: FilePath, repositorySkills :: FilePath, rootInstructions :: Text, projectId :: UUIDId "project", repository :: Text, base :: Revision, head :: Revision, cacheStatus :: CacheStatus, durationMs :: Word64, policy :: Policy.Policy, guest :: Maybe FilePath, envelope :: Maybe AE.Value}
+-- | Host-bound fields the agent wraps around its decision, encoded as @{"artifact": …}@ or @{"result": …}@.
+data Envelope = Artifact TestArtifact | Result FixResult
+  deriving stock (Generic)
+  deriving (AE.ToJSON) via DAE.CustomJSON '[DAE.SumObjectWithSingleField, DAE.ConstructorTagModifier DAE.CamelToSnake] Envelope
+
+
+-- | @guest@ names the host skill directory of a host-owned VM.
+data Prepared = Prepared {directory :: FilePath, repositorySkills :: FilePath, rootInstructions :: Text, projectId :: UUIDId "project", repository :: Text, base :: Revision, head :: Revision, cacheStatus :: CacheStatus, durationMs :: Word64, policy :: Policy.Policy, guest :: Maybe FilePath, envelope :: Maybe Envelope}
   deriving stock (Generic)
   deriving anyclass (AE.ToJSON)
 

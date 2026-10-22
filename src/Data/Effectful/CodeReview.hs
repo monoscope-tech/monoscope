@@ -90,7 +90,7 @@ makeEffect ''CodeReview
 
 -- | A role whose VM the host owns: who is billed for it, the image it must use, how its guest is prepared from
 -- recorded evidence, and the fields the agent wraps around its submission.
-data Ownership = Ownership {host :: Guest.Host, attempt :: UUIDId "agent_attempt", image :: Maybe (UUIDId "guest_image"), setup :: Map Text ByteString -> Guest.Setup, envelope :: Maybe AE.Value, lease :: Maybe Guest.Lease}
+data Ownership = Ownership {host :: Guest.Host, attempt :: UUIDId "agent_attempt", image :: Maybe (UUIDId "guest_image"), setup :: Map Text ByteString -> Guest.Setup, envelope :: Maybe Checkout.Envelope, lease :: Maybe Guest.Lease}
 
 
 -- | The host refused a receipt the run cannot continue without; its reason is the run's failure.
@@ -210,14 +210,14 @@ runCodeReviewReal artifactStore host executable skills = interpret \env -> \case
             role = case scope of Outbox.Advisory _ -> Policy.Advisory; Outbox.IssueFix _ -> Policy.Fix; Outbox.Admission _ -> Policy.Admission; Outbox.PeerReview _ -> Policy.Peer
             owned = host <&> \configured ->
               let -- Prepared checkpoints are keyed by the pinned project, repository and base, never by the reviewed head.
-                  own :: Request run -> Maybe (UUIDId "guest_image") -> (Map Text ByteString -> Guest.Setup) -> Maybe AE.Value -> Ownership
+                  own :: Request run -> Maybe (UUIDId "guest_image") -> (Map Text ByteString -> Guest.Setup) -> Maybe Checkout.Envelope -> Ownership
                   own request pinned setup envelope = Ownership configured request.attemptId pinned setup envelope do
                     store <- artifactStore
                     Guest.Lease store.cacheDir <$> AET.parseMaybe AE.parseJSON (AE.object ["projectId" AE..= request.projectId, "repository" AE..= request.repository, "base" AE..= request.base, "expectedImageBuildId" AE..= pinned])
                in case task of
                     AdvisoryTask request -> own request Nothing (const Guest.Explore) Nothing
-                    AdmissionTask request -> own request.fix.request (Just request.fix.imageBuildId) (const $ Guest.InspectAdmission request.artifact) (Just $ AE.object ["artifact" AE..= request.artifact])
-                    PeerTask request -> own request.fix.request (Just request.fix.imageBuildId) Guest.ReviewEvidence (Just $ AE.object ["result" AE..= request.artifacts.result])
+                    AdmissionTask request -> own request.fix.request (Just request.fix.imageBuildId) (const $ Guest.InspectAdmission request.artifact) (Just $ Checkout.Artifact request.artifact)
+                    PeerTask request -> own request.fix.request (Just request.fix.imageBuildId) Guest.ReviewEvidence (Just $ Checkout.Result request.artifacts.result)
                     FixTask request -> own request.request (Just request.imageBuildId) (const Guest.LockForReproduction) Nothing
             honours invocation = invocation.name `elem` Policy.toolsForRole role && null (Schema.validateJSON mempty (Policy.toolSchema invocation.name) invocation.arguments)
             -- Fresh verifier VMs replay a frozen artifact. Their receipts are already journaled beside the outbox;
