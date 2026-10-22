@@ -1,4 +1,4 @@
-module Data.Effectful.AgentWorkspace (Workspace, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, Operation (..), Prepared, Leased, RegressionOptions (..), RegressionResult, RegressionError (..), regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest, RPC, withSandbox, Command (..), Sandbox (..), Isolation (..), GuestCommand (..), Copy (..), LoggedCommand (..), Overflow (..), Execution (..), LogExit (..), Image (..), ImageId (..), SandboxFailure (..), agentCommand, publish) where
+module Data.Effectful.AgentWorkspace (Workspace, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, Operation (..), Prepared, Leased, RegressionOptions (..), RegressionRequest, RegressionResult (..), RegressionReceipt, RegressionReport, RegressionError (..), verifyRegression, regressionLogs, regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest, RPC, withSandbox, Command (..), Sandbox (..), Isolation (..), GuestCommand (..), Copy (..), LoggedCommand (..), Overflow (..), Execution (..), LogExit (..), Image (..), ImageId (..), SandboxFailure (..), agentCommand, publish) where
 
 import Conduit (runConduit, (.|))
 import Control.Monad (foldM)
@@ -568,6 +568,16 @@ prune options request = do
     ended <- getMonotonicTimeNSec
     save $ PruneFinished final (fromIntegral (ended - started) / 1000000)
     pure final
+
+
+-- | Retained host logs paired with the guest paths the report advertises for them.
+regressionLogs :: RegressionOptions -> RegressionResult -> [(FilePath, Text)]
+regressionLogs options result =
+  [ (options.artifactDir </> toString (UUID.toText check) </> (if key.side == Base then "base.log" else "head.log"), path)
+  | let Identifier check = result.report.id
+  , Measured key measured <- result.report.results
+  , Just path <- [measured.logPath]
+  ]
 
 
 verifyRegression :: RegressionOptions -> RegressionRequest -> IO RegressionResult

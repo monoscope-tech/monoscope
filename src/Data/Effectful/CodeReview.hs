@@ -3,6 +3,7 @@ module Data.Effectful.CodeReview (CodeReview (..), Request (..), FixRequest (..)
 import Control.Concurrent.STM qualified as STM
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
+import Data.Effectful.AgentWorkspace qualified as Workspace
 import Data.ByteString.Char8 qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Effectful.CodeReview.Artifacts (ArtifactStore (..))
@@ -15,6 +16,7 @@ import Data.Effectful.CodeReview.Policy qualified as Policy
 import Data.Effectful.CodeReview.Types
 import Data.OpenApi.Schema.Validation qualified as Schema
 import Data.Text qualified as T
+import Data.UUID.V4 qualified as UUID4
 import Effectful
 import Effectful.Dispatch.Dynamic
 import Effectful.TH
@@ -24,9 +26,9 @@ import Relude
 import System.Environment (getEnvironment)
 import System.FilePath (takeDirectory, (</>))
 import System.IO (hClose)
-import System.IO.Error (isEOFError)
+import System.IO.Error (isEOFError, userError)
 import System.Process.Typed (ExitCode (..), createPipe, getStdin, getStdout, nullStream, proc, setEnv, setStderr, setStdin, setStdout, stopProcess, waitExitCode, waitExitCodeSTM, withProcessTerm)
-import UnliftIO.Exception (finally, tryAny, tryJust)
+import UnliftIO.Exception (finally, throwIO, tryAny, tryJust)
 import UnliftIO.Timeout qualified as Timeout
 
 
@@ -83,6 +85,11 @@ type instance DispatchOf CodeReview = 'Dynamic
 
 
 makeEffect ''CodeReview
+
+
+-- | A role whose VM the host owns: who is billed for it, the image it must use, how its guest is prepared from
+-- recorded evidence, and the fields the agent wraps around its submission.
+data Ownership = Ownership {host :: Guest.Host, attempt :: UUIDId "agent_attempt", image :: Maybe (UUIDId "guest_image"), setup :: Map Text ByteString -> Guest.Setup, envelope :: Maybe AE.Value}
 
 
 data Task = AdvisoryTask (Request "pr_review") | FixTask FixRequest | AdmissionTask AdmissionRequest | PeerTask FixReviewRequest
@@ -187,6 +194,7 @@ runCodeReviewReal artifactStore host executable skills = interpret \env -> \case
     launch task callbacks = case executable of
       Nothing -> pure $ Left "Checkout-backed review agent is not configured"
       Just command -> do
+        verifierSession <- UUID4.nextRandom
         let (scope, source, payload) = case task of
               AdvisoryTask request -> (Outbox.Advisory request.runId, Checkout.Repository request, AE.toJSON request{gitToken = ""})
               FixTask request -> (Outbox.IssueFix request.request.runId, Checkout.Repository request.request{head = request.request.base}, AE.object ["tag" AE..= ("FixTask" :: Text), "contents" AE..= request{request = request.request{gitToken = ""}}])
@@ -194,10 +202,26 @@ runCodeReviewReal artifactStore host executable skills = interpret \env -> \case
               PeerTask request -> (Outbox.PeerReview request.fix.request.runId, Checkout.VerifiedCandidate request.artifacts, AE.object ["tag" AE..= ("ReviewFixTask" :: Text), "contents" AE..= (request{fix = request.fix{request = request.fix.request{gitToken = ""}}} :: FixReviewRequest)])
             role = case scope of Outbox.Advisory _ -> Policy.Advisory; Outbox.IssueFix _ -> Policy.Fix; Outbox.Admission _ -> Policy.Admission; Outbox.PeerReview _ -> Policy.Peer
             -- Roles migrate to a host-owned VM one at a time; the rest still create theirs in the child.
-            owned = case task of
-              AdmissionTask request -> (,request.fix.request.attemptId,Just request.fix.imageBuildId,const $ Guest.InspectAdmission request.artifact,Just $ AE.object ["artifact" AE..= request.artifact]) <$> host
-              PeerTask request -> (,request.fix.request.attemptId,Just request.fix.imageBuildId,Guest.ReviewEvidence,Just $ AE.object ["result" AE..= request.artifacts.result]) <$> host
+            owned = host >>= \configured -> case task of
+              AdvisoryTask request | isNothing configured.workspace -> Just $ Ownership configured request.attemptId Nothing (const Guest.Explore) Nothing
+              AdmissionTask request -> Just $ Ownership configured request.fix.request.attemptId (Just request.fix.imageBuildId) (const $ Guest.InspectAdmission request.artifact) (Just $ AE.object ["artifact" AE..= request.artifact])
+              PeerTask request -> Just $ Ownership configured request.fix.request.attemptId (Just request.fix.imageBuildId) Guest.ReviewEvidence (Just $ AE.object ["result" AE..= request.artifacts.result])
               _ -> Nothing
+            honours invocation = invocation.name `elem` Policy.toolsForRole role && null (Schema.validateJSON mempty (Policy.toolSchema invocation.name) invocation.arguments)
+            -- Fresh verifier VMs replay the frozen artifact; their receipts are already journaled beside the outbox.
+            regress session checkout outbox (advisory :: Request "pr_review") arguments = do
+              let options = session.verifier (Outbox.outboxPath outbox </> "checks")
+              case AE.fromJSON @Workspace.RegressionRequest $ AE.object ["projectId" AE..= advisory.projectId, "runId" AE..= advisory.runId, "attemptId" AE..= advisory.attemptId, "sessionId" AE..= verifierSession, "base" AE..= advisory.base, "imageBuildId" AE..= session.imageBuildId, "workspace" AE..= AE.object ["tag" AE..= ("Pristine" :: Text)], "artifact" AE..= (arguments :: AE.Value), "revisions" AE..= ([("base", advisory.base), ("head", advisory.head)] :: [(Text, Text)]), "ownerPid" AE..= AE.Null] of
+                AE.Error _ -> pure $ Left "Regression arguments do not match the host contract"
+                AE.Success regression ->
+                  tryAny (Workspace.verifyRegression options regression) >>= \case
+                    Left failure -> pure $ Left $ maybe "Local check could not run" Workspace.regressionErrorText $ fromException failure
+                    Right result -> do
+                      for_ result.receipts \receipt -> case AE.fromJSON (AE.toJSON receipt) of
+                        AE.Success check -> Outbox.acknowledge outbox (Outbox.Check check) record >>= either (throwIO . userError . toString) pure
+                        AE.Error _ -> throwIO $ userError "Regression receipt does not match the host contract"
+                      traverse_ (uncurry session.copyIn) $ Workspace.regressionLogs options result
+                      pure $ if result.isError then Left (decodeUtf8 $ AE.encode result.report) else Right (AE.toJSON result.report)
             record = \case
               Outbox.Call receipt -> callbacks.calls receipt $> Right ()
               Outbox.Usage receipt -> callbacks.usage receipt $> Right ()
@@ -250,16 +274,23 @@ runCodeReviewReal artifactStore host executable skills = interpret \env -> \case
                               let checkout = fetched{Checkout.policy = Policy.policy role (revisionText fetched.base) (revisionText fetched.head) fetched.rootInstructions}
                               case owned of
                                 Nothing -> deliver checkout
-                                Just (configuredHost, attempt, expected, setup, envelope) ->
-                                  join <$> Guest.withGuest configuredHost expected checkout.directory checkout.head (setup evidence) attempt (void . allocate journal) \skillsDir operate ->
-                                    writeIORef guest (Just operate) >> deliver checkout{Checkout.guest = Just skillsDir, Checkout.envelope = envelope}
+                                Just ownership ->
+                                  join <$> Guest.withGuest ownership.host ownership.image checkout.directory checkout.head (ownership.setup evidence) ownership.attempt (void . allocate journal) (\receipt -> for_ journal (`Outbox.journal` Outbox.Allocation receipt)) \session ->
+                                    writeIORef guest (Just session) >> deliver checkout{Checkout.guest = Just session.skills, Checkout.envelope = ownership.envelope}
                             pure $ join prepared
                           _ -> pure $ Left "Repository checkout was unavailable or already supplied"
                         Right (Right (Tool invocation))
                           | isNothing supplied -> pure $ Left "Tool invocation requires its repository checkout"
+                          | invocation.name == Policy.RunRegression -> do
+                              session <- readIORef guest
+                              response <- case (session, supplied, journal, task) of
+                                (Just active, Just checkout, Just outbox, AdvisoryTask advisory) | honours invocation -> regress active checkout outbox advisory invocation.arguments
+                                _ -> pure $ Left "Tool is unavailable or its arguments violate the host contract"
+                              writeMessage response
+                              -- Comparisons spend the verifier's own budget of three per session, not the request budget.
+                              receive supplied remaining submissions Nothing
                           | remaining > 0 -> do
-                              let allowed = Policy.toolsForRole role
-                                  parsed :: (AE.Value -> AET.Parser value) -> (value -> IO (Either Text AE.Value)) -> IO (Either Text AE.Value)
+                              let parsed :: (AE.Value -> AET.Parser value) -> (value -> IO (Either Text AE.Value)) -> IO (Either Text AE.Value)
                                   parsed parser = whenRight (Left "Tool arguments do not match the host contract") (AET.parseEither parser invocation.arguments)
                                   property :: AE.FromJSON value => AE.Key -> (value -> IO (Either Text AE.Value)) -> IO (Either Text AE.Value)
                                   property key = parsed $ AE.withObject "Tool arguments" (AE..: key)
@@ -271,7 +302,7 @@ runCodeReviewReal artifactStore host executable skills = interpret \env -> \case
                                     Policy.ReadProjectMemory -> property "pageId" $ callbacks.knowledge . ProjectMemory . Memory.Read
                                     Policy.WriteProjectMemory -> parsed AE.parseJSON $ callbacks.knowledge . ProjectMemory . Memory.Write
                                     _ -> pure $ Left "This tool requires a native workflow handler"
-                              response <- if invocation.name `elem` allowed && null (Schema.validateJSON mempty (Policy.toolSchema invocation.name) invocation.arguments) then request else pure $ Left "Tool is unavailable or its arguments violate the host contract"
+                              response <- if honours invocation then request else pure $ Left "Tool is unavailable or its arguments violate the host contract"
                               writeMessage response
                               receive supplied (remaining - 1) submissions Nothing
                           | otherwise -> pure $ Left "Review agent exceeded its query budget"
@@ -293,7 +324,7 @@ runCodeReviewReal artifactStore host executable skills = interpret \env -> \case
                         Right (Right (Guest operation)) ->
                           readIORef guest >>= \case
                             -- Pi's own file and shell calls neither spend the request budget nor keep an accepted draft.
-                            Just operate -> operate operation >>= writeMessage >> receive supplied remaining submissions Nothing
+                            Just session -> session.operate operation >>= writeMessage >> receive supplied remaining submissions Nothing
                             Nothing -> pure $ Left "Guest operations require a host-owned sandbox"
                         Right (Right (Validate draft))
                           | isNothing supplied && isJust artifactStore -> pure $ Left "Review agent has not acquired its repository checkout"
@@ -316,8 +347,9 @@ runCodeReviewReal artifactStore host executable skills = interpret \env -> \case
 
 
 -- | The worker directory supplies the SDK bridge and the bundled skill pack, after trusted skills.
-workerHost :: [FilePath] -> Text -> FilePath -> Guest.Host
-workerHost skills image agent = Guest.Host image (takeDirectory agent </> "sandbox.mjs") (skills <> [takeDirectory agent </> "skills" </> "superpowers"])
+-- A dependency archive is only meaningful with the preparation script that installs it.
+workerHost :: [FilePath] -> Maybe FilePath -> Maybe FilePath -> Text -> FilePath -> Guest.Host
+workerHost skills script archive image agent = Guest.Host image (takeDirectory agent </> "sandbox.mjs") (skills <> [takeDirectory agent </> "skills" </> "superpowers"]) ((`Guest.Workspace` archive) <$> script)
 
 
 runCodeReviewTest :: IOE :> es => (Request "pr_review" -> Either Text Text) -> (FixRequest -> Either Text FixResult) -> (AdmissionRequest -> Either Text AdmissionDecision) -> (ArtifactRequest -> Either Text ()) -> (ArtifactRequest -> Either Text Explanation) -> (FixReviewRequest -> Either Text FixReviewDecision) -> Eff (CodeReview ': es) a -> Eff es a

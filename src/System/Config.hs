@@ -134,6 +134,8 @@ data EnvConfig = EnvConfig
   , impactReviewCacheDir :: Maybe FilePath
   , impactReviewAgent :: Maybe FilePath
   , impactReviewGuestImage :: Maybe Text
+  , impactReviewPrepareScript :: Maybe FilePath
+  , impactReviewDependencyArchive :: Maybe FilePath
   , impactReviewSkills :: [Text]
   , impactReviewProvider :: Text
   , impactReviewArtifactBucket :: Maybe Text

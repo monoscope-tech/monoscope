@@ -268,7 +268,7 @@ export async function runRepositoryAgent(input, { modelRuntime, guestImage, expe
         async execute(_id, args) {
           const response = await optionsTool({ name: definition.name, arguments: args });
           const isError = Object.hasOwn(response, 'Left');
-          return { content: [{ type: 'text', text: JSON.stringify(isError ? response.Left : response.Right) }], details: {}, isError };
+          return { content: [{ type: 'text', text: isError ? response.Left : JSON.stringify(response.Right) }], details: {}, isError };
         },
       });
     }

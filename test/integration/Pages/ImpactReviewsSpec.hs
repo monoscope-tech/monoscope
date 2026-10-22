@@ -185,10 +185,10 @@ deliver tr value = do
 
 
 -- The fixture bridge selects libkrun on macOS, like the native-sdk-worker wrapper.
-sdkHost :: FilePath -> IO Guest.Host
-sdkHost image = do
+sdkHost :: [FilePath] -> FilePath -> IO Guest.Host
+sdkHost skills image = do
   bridge <- canonicalizePath "test/fixtures/native-sandbox.sh"
-  (\worker -> (Agent.workerHost [] (toText image) worker){Guest.bridge}) <$> canonicalizePath "impact-review-worker/cli.mjs"
+  (\worker -> (Agent.workerHost skills Nothing Nothing (toText image) worker){Guest.bridge}) <$> canonicalizePath "impact-review-worker/cli.mjs"
 
 
 spec :: Spec
@@ -304,7 +304,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     unless available $ pendingWith "Build the self-hosted guest before running SDK integration tests"
     directory <- canonicalizePath temporary
     image <- canonicalizePath "impact-review-worker/.guest"
-    host <- sdkHost image
+    host <- sdkHost [] image
     let repository = directory </> "repository"
         store = Agent.ArtifactStore (directory </> "usage") (directory </> "cache")
         diagnostic = directory </> "worker.log"
@@ -413,7 +413,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     unless available $ pendingWith "Build the self-hosted guest before running SDK integration tests"
     directory <- canonicalizePath temporary
     image <- canonicalizePath "impact-review-worker/.guest"
-    host <- sdkHost image
+    host <- sdkHost [] image
     bridge <- canonicalizePath "test/fixtures/native-sandbox.sh"
     let repository = directory </> "repository"
         store = Agent.ArtifactStore (directory </> "usage") (directory </> "cache")
@@ -783,6 +783,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
           unless ("/run/monoscope-review-output/" `T.isPrefixOf` path && not ("'" `T.isInfixOf` path)) $ fail "SDK did not retain a readable large-output path"
           pure path
     traverse_ (createDirectoryIfMissing True) [repository </> "src", skill, hostSkill, sdkTemp, store.usageDir, store.cacheDir]
+    host <- sdkHost [skill] image
     writeFileBS (skill </> "SKILL.md") "---\nname: retry-review\ndescription: Inspect retry metadata in a production review.\n---\nFollow callers before proposing a retry change.\n"
     writeFileBS (hostSkill </> "SKILL.md") "---\nname: host-only-skill\ndescription: This host skill must never be discovered.\n---\nprivate-host-skill-body\n"
     void $ git ["init", "--quiet"]
@@ -829,7 +830,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
             let configured = request{Agent.runId = uid n} :: Agent.Request "pr_review"
             result <-
               runEff
-                $ Agent.runCodeReviewReal (Just store) Nothing (Just "test/fixtures/native-sdk-worker.py") [models, store.usageDir, store.cacheDir, image, diagnostic, "--cli", cli, "--temp", sdkTemp, "--skill", skill]
+                $ Agent.runCodeReviewReal (Just store) (Just host) (Just "test/fixtures/native-sdk-worker.py") [models, store.usageDir, store.cacheDir, "/nonexistent-guest-image", diagnostic, "--cli", cli, "--temp", sdkTemp, "--skill", skill]
                 $ Agent.reviewRepository
                   configured
                   (const $ liftIO $ MVar.putMVar ready () >> MVar.takeMVar blocked $> Left "Cancelled query")
@@ -920,6 +921,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     unless available $ pendingWith "Build the self-hosted guest before running evaluation integration tests"
     directory <- canonicalizePath temporary
     image <- canonicalizePath "impact-review-worker/.guest"
+    host <- sdkHost [] image
     environment <- filter (\(key, _) -> key `elem` ["PATH", "HOME"]) <$> getEnvironment
     let repository = directory </> "repository"
         store = Agent.ArtifactStore (directory </> "usage") (directory </> "cache")
@@ -1058,7 +1060,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                 retained identifier expected = readJSON (journal </> toString identifier <> ".json") >>= (`shouldBe` expected)
             result <-
               runEff
-                $ Agent.runCodeReviewReal (Just store) Nothing (Just "test/fixtures/native-sdk-worker.py") [models, store.usageDir, store.cacheDir, image, directory </> "worker.log", "--cli", cli, "--temp", sdkTemp]
+                $ Agent.runCodeReviewReal (Just store) (Just host) (Just "test/fixtures/native-sdk-worker.py") [models, store.usageDir, store.cacheDir, "/nonexistent-guest-image", directory </> "worker.log", "--cli", cli, "--temp", sdkTemp]
                 $ Agent.reviewRepository
                   configured
                   (\telemetryQuery -> liftIO $ modifyIORef' queries (<> [telemetryQuery]) $> Right (AE.object ["key" AE..= ("query-1" :: Text), "queryResult" AE..= AE.object ["kind" AE..= ("aggregated" :: Text), "headers" AE..= (["count\x2028\x2029"] :: [Text]), "dataset" AE..= ([[7]] :: [[Int]]), "limitReached" AE..= False, "fieldsTruncated" AE..= False]]))

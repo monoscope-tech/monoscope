@@ -1,10 +1,10 @@
-module Data.Effectful.CodeReview.Guest (Host (..), Setup (..), Exec (..), Operation (..), withGuest) where
+module Data.Effectful.CodeReview.Guest (Host (..), Workspace (..), Setup (..), Exec (..), Operation (..), Session (..), withGuest) where
 
 import Data.Aeson qualified as AE
 import Data.Base64.Types (extractBase64)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as Base64
-import Data.Effectful.AgentWorkspace (Command (..), Copy (..), Execution (..), GuestCommand (..), Image (..), ImageId (..), Isolation (..), LogExit (..), LoggedCommand (..), Overflow (..), Sandbox (..), SandboxFailure (..), agentCommand, withSandbox)
+import Data.Effectful.AgentWorkspace (Command (..), Copy (..), Execution (..), GuestCommand (..), Image (..), ImageId (..), Isolation (..), LogExit (..), LoggedCommand (..), Overflow (..), RegressionOptions (..), Sandbox (..), SandboxFailure (..), agentCommand, withSandbox)
 import Data.Effectful.CodeReview.Types (AllocationOutcome (..), AllocationReceipt, Revision, TestArtifact (..), agentResources, hostAllocation, revisionText)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -18,11 +18,15 @@ import System.FilePath (takeFileName, (</>))
 import System.IO.Error (userError)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Process.Typed (proc, readProcess_)
-import UnliftIO.Exception (throwIO, tryAny)
+import UnliftIO.Exception (onException, throwIO, tryAny)
 
 
 -- | Trusted host inputs for an agent VM; skill directories are listed in precedence order.
-data Host = Host {image :: Text, bridge :: FilePath, skills :: [FilePath]}
+data Host = Host {image :: Text, bridge :: FilePath, skills :: [FilePath], workspace :: Maybe Workspace}
+
+
+-- | A trusted preparation script and its optional dependency archive select a prepared checkpoint.
+data Workspace = Workspace {script :: FilePath, dependencyArchive :: Maybe FilePath}
 
 
 -- | Role-specific guest preparation that runs before the agent sees the workspace.
@@ -40,21 +44,30 @@ data Operation = Run Exec | Read Text | Access Text
   deriving anyclass (AE.FromJSON)
 
 
--- | Owns the agent VM for the action's lifetime and journals its allocation however it ends.
--- Preparation failures are reported before the action starts; the action's own exceptions propagate.
-withGuest :: Host -> Maybe (UUIDId "guest_image") -> FilePath -> Revision -> Setup -> UUIDId "agent_attempt" -> (AllocationReceipt -> IO ()) -> (FilePath -> (Operation -> IO (Either Text AE.Value)) -> IO a) -> IO (Either Text a)
-withGuest host expected checkout revision setup attempt allocate action = withSystemTempDirectory "monoscope-agent-guest" \temporary -> do
+-- | A running agent VM: Pi's file and shell calls, root copies into the guest, and verifier settings for fresh VMs.
+data Session = Session {skills :: FilePath, imageBuildId :: ImageId, operate :: Operation -> IO (Either Text AE.Value), copyIn :: FilePath -> Text -> IO (), verifier :: FilePath -> RegressionOptions}
+
+
+-- | Owns the agent VM for the action's lifetime and records its allocation however it ends: @allocate@ after a
+-- completed run, @retain@ (journal only) when interrupted. Preparation failures are reported before the action
+-- starts; the action's own exceptions propagate.
+withGuest :: Host -> Maybe (UUIDId "guest_image") -> FilePath -> Revision -> Setup -> UUIDId "agent_attempt" -> (AllocationReceipt -> IO ()) -> (AllocationReceipt -> IO ()) -> (Session -> IO a) -> IO (Either Text a)
+withGuest host expected checkout revision setup attempt allocate retain action = withSystemTempDirectory "monoscope-agent-guest" \temporary -> do
   let skills = temporary </> "skills"
       logs = temporary </> "logs"
   traverse_ createDirectory [skills, logs]
   for_ (zip [0 :: Int ..] host.skills) \(index, path) -> void $ readProcess_ $ proc "cp" ["-RL", path, skills </> show index]
   started <- getMonotonicTimeNSec
   vmIdentity <- newIORef Nothing
-  outcome <- tryAny $ withSandbox host.bridge \rpc -> do
+  let measured released = do
+        finished <- getMonotonicTimeNSec
+        fmap (\identifier -> hostAllocation identifier attempt (max 1 $ (finished - started) `div` 1000000) released) <$> readIORef vmIdentity
+  outcome <- (`onException` (measured Released >>= traverse_ retain)) $ tryAny $ withSandbox host.bridge \rpc -> do
     let execute cwd argv = rpc @Execution $ Execute $ GuestCommand argv (Just cwd) False
         run cwd argv = execute cwd argv >>= \result -> if result.exitCode == 0 then pure result.stdout else failure "Guest preparation failed"
         workspace = run "/workspace" . fromList
         git args = workspace $ ["/usr/bin/git", "-c", "safe.directory=/workspace", "-c", "core.hooksPath=/dev/null", "-C", "/workspace"] <> args
+        copyIn source destination = rpc @() (CopyFile $ Copy source destination) >> void (run "/" $ "/bin/chmod" :| ["0644", destination])
         upload destination bytes = do
           let staged = temporary </> takeFileName (toString destination)
           writeFileBS staged bytes
@@ -71,7 +84,7 @@ withGuest host expected checkout revision setup attempt allocate action = withSy
             let limited = maybe [] (\seconds -> ["/usr/bin/timeout", "--kill-after=5", show (ceiling seconds :: Word32)]) exec.timeout
             (path, exit, truncated) <- logged (agentCommand $ limited <> ["/bin/bash", "-lc", exec.command]) exec.cwd (64 * 1048576)
             let guestLog = "/run/monoscope-review-output/" <> toText (takeFileName path)
-            rpc @() $ CopyFile $ Copy path guestLog
+            copyIn path guestLog
             output <- BS.takeEnd 1048576 <$> readFileBS path
             removeFile path
             pure $ case exit of
@@ -88,9 +101,10 @@ withGuest host expected checkout revision setup attempt allocate action = withSy
     prepared <- tryAny do
       image <- rpc @Image $ Resolve host.image
       for_ expected \(UUIDId build) -> unless (image.buildId == ImageId build) $ failure "Configured guest image differs from the pinned image"
-      rpc @() $ Create $ uncurry (Sandbox image.assetDir) agentResources OfflineCow $ Map.fromList [("/checkout", checkout), ("/skills", skills)]
+      rpc @() $ Create $ uncurry (Sandbox image.assetDir) agentResources OfflineCow $ Map.fromList [("/checkout", checkout), ("/run/monoscope-skills", skills)]
       rpc @Text (GetIdentity ()) >>= writeIORef vmIdentity . fmap UUIDId . UUID.fromText
-      traverse_ (run "/" . fromList) [["/bin/mkdir", "-p", "/workspace", "/run/monoscope-review-output"], ["/bin/cp", "-R", "/checkout/.", "/workspace"]]
+      -- Gondolin mounts are root-only, so the agent account reads guest-owned copies.
+      traverse_ (run "/" . fromList) [["/bin/mkdir", "-p", "/workspace", "/skills", "/run/monoscope-review-output"], ["/bin/cp", "-R", "/checkout/.", "/workspace"], ["/bin/cp", "-R", "/run/monoscope-skills/.", "/skills"], ["/bin/chmod", "-R", "a+rX,go-w", "/skills"]]
       void $ git ["checkout", "--quiet", "--detach", revisionText revision]
       void $ workspace ["/bin/chown", "-hR", "1000:1000", "/workspace"]
       account <- workspace $ toList $ agentCommand ["/usr/bin/id", "-u"]
@@ -109,12 +123,11 @@ withGuest host expected checkout revision setup attempt allocate action = withSy
         ReviewEvidence files -> do
           lock
           for_ (Map.toList files) \(destination, bytes) -> upload destination bytes >> workspace ["/bin/chmod", "0444", destination]
-    whenRight (Left "Agent sandbox could not be prepared") prepared $ const $ Right <$> action skills operate
-  finished <- getMonotonicTimeNSec
-  vm <- readIORef vmIdentity
-  for_ vm \identifier -> do
-    let released = case outcome of Left failed | Just SandboxCleanupFailed <- fromException failed -> ReleaseFailed; _ -> Released
-    void $ tryAny $ allocate $ hostAllocation identifier attempt (max 1 $ (finished - started) `div` 1000000) released
+      pure image.buildId
+    whenRight (Left "Agent sandbox could not be prepared") prepared \imageBuildId ->
+      Right <$> action (Session skills imageBuildId operate copyIn \artifacts -> RegressionOptions artifacts checkout host.image host.bridge)
+  measured (case outcome of Left failed | Just SandboxCleanupFailed <- fromException failed -> ReleaseFailed; _ -> Released)
+    >>= traverse_ (void . tryAny . allocate)
   either throwIO pure outcome
   where
     failure = throwIO . userError
