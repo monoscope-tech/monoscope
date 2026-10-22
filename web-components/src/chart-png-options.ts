@@ -10,27 +10,30 @@ export function preparePngOptions(finalOptions: any, width: number, height: numb
   finalOptions.toolbox = { show: false };
 
   if (mode === 'table') {
+    const padding = 24, rowHeight = 32, cellHeight = 24, minColumnWidth = 120;
+    const textColor = darkMode ? '#cbd5e1' : '#334155';
     const source = finalOptions.dataset?.source;
     const headers: unknown[] = Array.isArray(source?.[0]) ? source[0] : [];
     const rows: unknown[][] = Array.isArray(source) ? source.slice(1).filter(Array.isArray) : [];
-    const columns = Math.min(headers.length, Math.max(1, Math.floor((width - 48) / 120)));
-    const rowLimit = Math.max(0, Math.floor((height - 104) / 32));
-    const columnWidth = (width - 48) / Math.max(1, columns);
+    const columns = Math.min(headers.length, Math.max(1, Math.floor((width - 2 * padding) / minColumnWidth)));
+    const rowLimit = Math.max(0, Math.floor((height - 3 * padding - rowHeight) / rowHeight));
+    const columnWidth = (width - 2 * padding) / Math.max(1, columns);
+    const visibleHeaders = headers.slice(0, columns);
     const cell = (value: unknown, column: number, row: number, header = false) => ({
-      type: 'text', left: 24 + column * columnWidth, top: 24 + row * 32,
+      type: 'text', left: padding + column * columnWidth, top: padding + row * rowHeight,
       style: {
         text: value == null ? '—' : typeof value === 'object' ? JSON.stringify(value) : String(value),
         fontSize: 14, fontFamily: 'sans-serif', fontWeight: header ? 600 : 400,
-        fill: darkMode ? '#cbd5e1' : '#334155', width: columnWidth - 16, height: 24,
+        fill: textColor, width: columnWidth - 16, height: cellHeight,
         overflow: 'truncate', ellipsis: '…',
       },
     });
     finalOptions.graphic = [
-      ...headers.slice(0, columns).map((value, column) => cell(value, column, 0, true)),
-      ...rows.slice(0, rowLimit).flatMap((row, index) => headers.slice(0, columns).map((_, column) => cell(row[column], column, index + 1))),
-      ...(!rows.length ? [{ type: 'text', left: 24, top: 64, style: { text: 'No rows returned', fontSize: 14, fill: darkMode ? '#cbd5e1' : '#334155' } }] : []),
+      ...visibleHeaders.map((value, column) => cell(value, column, 0, true)),
+      ...rows.slice(0, rowLimit).flatMap((row, index) => visibleHeaders.map((_, column) => cell(row[column], column, index + 1))),
+      ...(!rows.length ? [{ type: 'text', left: padding, top: padding + rowHeight, style: { text: 'No rows returned', fontSize: 14, fill: textColor } }] : []),
       ...(rows.length > rowLimit || headers.length > columns ? [{
-        type: 'text', left: 24, top: height - 24,
+        type: 'text', left: padding, top: height - padding,
         style: { text: `Showing ${Math.min(rowLimit, rows.length)} of ${rows.length} rows · ${columns} of ${headers.length} columns`, fontSize: 12, fill: darkMode ? '#94a3b8' : '#64748b' },
       }] : []),
     ];
@@ -41,7 +44,6 @@ export function preparePngOptions(finalOptions: any, width: number, height: numb
     delete finalOptions.dataset;
     return;
   }
-
 
   // ECharts numbers are pixels; strings may be percentages. Preserve their units.
   const paddedInset = (value: number | string | undefined, fallback: number, extent: number): number => {
