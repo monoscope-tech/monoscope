@@ -34,7 +34,7 @@ import UnliftIO.Timeout qualified as Timeout
 
 
 -- JSON-lines protocol: queries, usage, execution receipts, validation, and result.
-data Message = Checkout () | Tool Policy.Invocation | Query TelemetryQuery | Knowledge KnowledgeRequest | Admit TestArtifact | Propose Native.CandidatePatch | Guest Guest.Operation | Validate AE.Value | Result AE.Value
+data Message = Checkout () | Tool Policy.Invocation | Query TelemetryQuery | Knowledge KnowledgeRequest | Admit TestArtifact | Guest Guest.Operation | Validate AE.Value | Result AE.Value
   deriving stock (Generic)
   deriving anyclass (AE.FromJSON)
 
@@ -349,12 +349,6 @@ runCodeReviewReal artifactStore host executable skills = interpret \env -> \case
                         Right (Right (Admit artifact))
                           | remaining > 0 -> callbacks.admit artifact >>= writeMessage >> receive supplied (remaining - 1) submissions Nothing
                           | otherwise -> pure $ Left "Review agent exceeded its query budget"
-                        Right (Right (Propose patch)) -> case (task, supplied, journal) of
-                          (FixTask request, Just checkout, Just outbox) | remaining > 0 -> do
-                            captured <- Native.captureCandidate (Outbox.outboxPath outbox <> "/checks") request checkout.directory patch
-                            writeMessage captured
-                            receive supplied (remaining - 1) submissions Nothing
-                          _ -> pure $ Left "Candidate capture requires a prepared issue-fix task and remaining budget"
                         Right (Right (Guest operation)) ->
                           readIORef guest >>= \case
                             -- Pi's own file and shell calls neither spend the request budget nor keep an accepted draft.
