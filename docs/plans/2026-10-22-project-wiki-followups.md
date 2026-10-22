@@ -17,9 +17,9 @@
 
 Verify nested creation, direct links, reload, path collisions, cross-project isolation, tree traversal and concurrent edits through handlers and the browser. Include a short walkthrough in the PR.
 
-## 3. Markdown rich-text editing — subsequent PR
+## 3. Markdown rich-text editing — merged
 
-Base this PR on the merged paths/tree change.
+[PR #691](https://github.com/monoscope-tech/monoscope/pull/691) merged on 2026-10-22 as `420da48982721bb0d846a7b9772c87ecc9355d20`. All required GitHub checks passed. Its description retains the captioned editor walkthrough and the review decisions.
 
 - Provide formatted editing with headings, bold/italic, links, lists, block quotes, fenced code and undo/redo. A plain textarea or syntax highlighting alone does not meet this requirement.
 - Store Markdown as the canonical page body, so human and agent edits share the same representation and revision history. Provide a Markdown source mode; do not silently discard unsupported syntax.
@@ -45,10 +45,14 @@ Saved pages and revision history now render in Haskell with [commonmark](https:/
 
 The handler regression covers formatting, code blocks, tables, tasks, footnotes, script/form markup, encoded and mixed-case JavaScript links, rejected image URLs, and unchanged stored Markdown. The browser flow also saves a reference-style link through source and rich modes, verifies formatted read-back, and pins the exact Markdown bytes in the database. All 62 repository-context examples pass after these changes.
 
-The editor is committed separately on `work/project-wiki-editor` at `fb6796c0d15e54eaeab85ed645d9c21c301a5621`. All eleven local check entries have passing attestations for its current inputs: Linux build, 1,874 doctests, 336 unit examples, 1,225 integration examples, 1,028 frontend assertions, all 176 E2E cases, HLint, Weeder, CLI and release checks. Two integration examples require unavailable credentials and remain pending.
+The editor was isolated on `work/project-wiki-editor`. Its final reviewed head was `993b8939ab6e28ea70dc70431901e91f696e51cf`. All eleven local check entries passed for that tree: Linux build, 1,874 doctests, 336 unit examples, 1,225 integration examples, 1,028 frontend assertions, 176 E2E cases, HLint, Weeder, CLI and release checks. Two integration examples require unavailable credentials and remain pending.
 
-E2E passed with one worker and unchanged assertions/timeouts. Earlier concurrent runs failed dashboard timing/cleanup checks. The combined UI/integration run also raced while replacing `node_modules`; both checks passed when run separately. Do not claim those failed runs as passes.
+The follow-up browser assertion proves that navigation opens an empty rich document, alongside empty server fields. The final review retained the local renderer, explicit toolbar parameters, separate initial/toggle load triggers and external Markdown image support. PR #691 records the reasons. The requested sequence remains in this file.
 
-A refreshed 12-second captioned walkthrough at 1280×900 shows keyboard formatting, source mode, safe read-back and tree navigation. The native amd64 production image is still building on our server. Publish the editor PR with this video after `make ci-signoff` is green, then wait for required remote checks before merging. Keep the larger agent changes out of this PR.
+E2E passed with one worker and unchanged assertions/timeouts. Earlier concurrent runs failed dashboard timing/cleanup checks. Combined UI/integration setup also raced while replacing `node_modules`; both checks passed separately. Failed runs were not attested. Final `make ci-signoff` passed after recovery from a host disk-space failure.
+
+The native amd64 production image includes normal and profiling builds: `sha256:61e09e4ce64c38a6f89c76c6f8d6c1661422fb5cf01741c12b3f83b8965b4be9`. GitHub verified it before merge. The captioned 12-second walkthrough shows keyboard formatting, source mode, safe read-back and tree navigation. Production deployment was not manually triggered or verified in this work.
+
+The larger worker migration, complete resource accounting, chat-agent memory authorization, sandbox maintenance and deployment conformance remain separate work.
 
 Merge each PR only after its review loop and required checks pass. Keep worker migration and billing/sandbox changes out of both wiki PRs.
