@@ -239,12 +239,32 @@ spec = do
                       (fromStrict $ BS.intercalate "&" [key <> "=" <> urlEncode True (encodeUtf8 value) | (key, value) <- fields])
                 )
                 app
-            save pid expected title body = request H.methodPost (base pid) [("pageId", page.toText), ("version", show @Text expected), ("title", title), ("body", body)]
+            save pid expected title body = request H.methodPost (base pid) [("pageId", page.toText), ("version", show @Text expected), ("path", "runbooks/retries"), ("title", title), ("body", body)]
             html = decodeUtf8 @Text . (.simpleBody)
         created <- save testPid (0 :: Word32) "Retry behavior" "Keep retry tokens. <script>alert('wiki')</script>"
         H.statusCode created.simpleStatus `shouldBe` 200
         html created `shouldSatisfy` T.isInfixOf "Keep retry tokens."
         html created `shouldNotSatisfy` T.isInfixOf "<script>alert('wiki')</script>"
+        nested <- request H.methodGet ("/p/" <> testPid.toText <> "/wiki/runbooks/retries") []
+        H.statusCode nested.simpleStatus `shouldBe` 200
+        html nested `shouldSatisfy` T.isInfixOf "runbooks"
+        html nested `shouldSatisfy` T.isInfixOf "/wiki/runbooks/retries"
+        for_ ["runbooks%2Fretries", "runbooks/%252e%252e/private", "runbooks/%2e%2e/private"] \path -> do
+          encoded <- request H.methodGet ("/p/" <> testPid.toText <> "/wiki/" <> path) []
+          H.statusCode encoded.simpleStatus `shouldBe` 404
+        let duplicate = UUIDId $ UUID.fromWords 50 0 0 2 :: Memory.PageId
+        collision <- request H.methodPost (base testPid) [("pageId", duplicate.toText), ("version", "0"), ("path", "runbooks/retries"), ("title", "Conflicting path"), ("body", "Preserve this draft")]
+        html collision `shouldSatisfy` T.isInfixOf "already uses this path"
+        html collision `shouldSatisfy` T.isInfixOf "Preserve this draft"
+        runQueryEffect tr (Memory.pageHistory testPid duplicate) `shouldReturn` []
+        for_ ["../private", "runbooks//retries", "runbooks/%2f", "runbooks/."] \path -> do
+          invalidPath <- request H.methodPost (base testPid) [("pageId", page.toText), ("version", "1"), ("path", path), ("title", "Invalid path"), ("body", "Unsaved path draft")]
+          html invalidPath `shouldSatisfy` T.isInfixOf "Use a relative path"
+          html invalidPath `shouldSatisfy` T.isInfixOf "Unsaved path draft"
+        let legacyPage = UUIDId $ UUID.fromWords 50 0 0 3 :: Memory.PageId
+        void $ withResource tr.trPool \conn -> PG.execute conn "INSERT INTO projects.memory_revisions (project_id, page_id, version, document, author) SELECT project_id, ?::uuid, 1, document, author FROM projects.memory_revisions WHERE project_id = ? AND page_id = ? AND version = 1" (legacyPage, testPid, page)
+        legacyPath <- request H.methodGet ("/p/" <> testPid.toText <> "/wiki/" <> legacyPage.toText) []
+        H.statusCode legacyPath.simpleStatus `shouldBe` 200
         firstHistory <- runQueryEffect tr $ Memory.pageHistory testPid page
         map (.version) firstHistory `shouldBe` [1]
         map (.author) firstHistory `shouldBe` [Memory.Member user]
@@ -292,11 +312,29 @@ spec = do
         html demo `shouldNotSatisfy` T.isInfixOf "Project wiki"
         demoWiki <- WT.runSession (WT.request $ WT.setPath Wai.defaultRequest $ encodeUtf8 $ base testPid) app
         H.statusCode demoWiki.simpleStatus `shouldBe` 404
+        void $ withResource tr.trPool \conn -> PG.execute conn "UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?" (ProjectMembers.PEdit, testPid, user)
+        otherPage <- request H.methodPost (base testPid) [("pageId", duplicate.toText), ("version", "0"), ("path", "services/other"), ("title", "Other page"), ("body", "Other notes")]
+        H.statusCode otherPage.simpleStatus `shouldBe` 200
+        blockedRename <- request H.methodPost (base testPid) [("pageId", page.toText), ("version", "2"), ("path", "services/other"), ("title", "Blocked rename"), ("body", "Unsaved rename draft")]
+        html blockedRename `shouldSatisfy` T.isInfixOf "already uses this path"
+        length <$> runQueryEffect tr (Memory.pageHistory testPid page) `shouldReturn` 2
+        renamed <- request H.methodPost (base testPid) [("pageId", page.toText), ("version", "2"), ("path", "services/retries"), ("title", "Retry behavior"), ("body", "Renamed page body")]
+        html renamed `shouldSatisfy` T.isInfixOf "/wiki/services/retries"
+        moved <- request H.methodGet ("/p/" <> testPid.toText <> "/wiki/services/retries") []
+        H.statusCode moved.simpleStatus `shouldBe` 200
+        oldPath <- request H.methodGet ("/p/" <> testPid.toText <> "/wiki/runbooks/retries") []
+        H.statusCode oldPath.simpleStatus `shouldBe` 404
+        legacy <- request H.methodGet (base testPid <> "?page=" <> page.toText) []
+        H.statusCode legacy.simpleStatus `shouldBe` 200
+        length <$> runQueryEffect tr (Memory.pageHistory testPid page) `shouldReturn` 3
         void $ withResource tr.trPool \conn -> do
+          void $ PG.execute conn "INSERT INTO projects.memory_pages (project_id, page_id, path) SELECT project_id, md5(page_id::text || n::text)::uuid, md5(page_id::text || n::text) FROM projects.memory_revisions CROSS JOIN generate_series(1, 100) n WHERE project_id = ? AND page_id = ? AND version = 1" (testPid, page)
           void $ PG.execute conn "INSERT INTO projects.memory_revisions (project_id, page_id, version, document, author) SELECT project_id, md5(page_id::text || n::text)::uuid, 1, document, author FROM projects.memory_revisions CROSS JOIN generate_series(1, 100) n WHERE project_id = ? AND page_id = ? AND version = 1" (testPid, page)
-          PG.execute conn "INSERT INTO projects.memory_revisions (project_id, page_id, version, document, author) SELECT project_id, page_id, n, document, author FROM projects.memory_revisions CROSS JOIN generate_series(3, 101) n WHERE project_id = ? AND page_id = ? AND version = 1" (testPid, page)
+          PG.execute conn "INSERT INTO projects.memory_revisions (project_id, page_id, version, document, author) SELECT project_id, page_id, n, document, author FROM projects.memory_revisions CROSS JOIN generate_series(4, 102) n WHERE project_id = ? AND page_id = ? AND version = 1" (testPid, page)
         capped <- request H.methodGet (base testPid <> "?page=" <> page.toText) []
-        html capped `shouldSatisfy` T.isInfixOf "Showing the 100 most recent pages"
+        html capped `shouldSatisfy` T.isInfixOf "More pages"
+        later <- request H.methodGet ("/p/" <> testPid.toText <> "/wiki?after=f") []
+        html later `shouldSatisfy` T.isInfixOf "/wiki/services/retries"
         html capped `shouldSatisfy` T.isInfixOf "Showing the 100 most recent revisions"
         length <$> runQueryEffect tr (Memory.pageHistory testPid page) `shouldReturn` 100
 
@@ -317,7 +355,8 @@ spec = do
           output <- readProcessStdout_ $ setEnv (("MONOSCOPE_TEST_BEARER", token) : environment) $ proc "node" ["test/fixtures/wiki-browser.mjs", "http://127.0.0.1:" <> show port <> "/p/" <> toString testPid.toText <> "/memories"]
           value <- either fail pure $ AE.eitherDecode @AE.Value output
           AET.parseEither (AE.withObject "Browser result" (AE..: "targets")) value `shouldBe` Right ([1, 1, 1] :: [Int])
-          AET.parseEither (AE.withObject "Browser result" (AE..: "fields")) value `shouldBe` Right (["", ""] :: [Text])
+          AET.parseEither (AE.withObject "Browser result" (AE..: "fields")) value `shouldBe` Right (["", "", ""] :: [Text])
+          AET.parseEither (AE.withObject "Browser result" (AE..: "urls")) value `shouldBe` Right (["/p/" <> testPid.toText <> "/wiki/runbooks/retries", "/p/" <> testPid.toText <> "/wiki"] :: [Text])
           pages <- runQueryEffect tr $ Memory.latestPages testPid
           map (Memory.memoryText . (.document.body)) pages `shouldBe` ["Keep caller retry tokens."]
 

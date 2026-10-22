@@ -513,8 +513,11 @@ projectMemory pid attempt authorized request = do
           Nothing -> pure $ Left "Wiki page not found"
           Just current -> visible $ AE.toJSON current
       Memory.Write edit -> do
-        saved <- Memory.writePage pid edit.pageId edit.version edit.document $ Memory.Agent attempt
-        pure $ maybe (Left "Wiki page changed; read the latest revision before editing again") (Right . AE.toJSON) saved
+        saved <- Memory.writePage pid edit.pageId edit.version Nothing edit.document $ Memory.Agent attempt
+        pure $ case saved of
+          Left Memory.StaleRevision -> Left "Wiki page changed; read the latest revision before editing again"
+          Left Memory.PathTaken -> Left "Wiki path is already in use; choose another page ID for a new page"
+          Right page -> Right $ AE.toJSON page
   where
     visible value = do
       permitted <- authorized
