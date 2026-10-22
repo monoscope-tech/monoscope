@@ -4,9 +4,9 @@
 
 [PR #689](https://github.com/monoscope-tech/monoscope/pull/689) merged on 2026-10-22 as `d8b3bf853ab39006967344bdab2b31972bf9948b`. All required checks, including the production image, passed. Its description includes the captioned walkthrough. This delivers project-scoped pages, permissions, immutable revisions and concurrent-edit protection.
 
-## 2. Page paths and tree navigation — PR #690
+## 2. Page paths and tree navigation — merged
 
-[PR #690](https://github.com/monoscope-tech/monoscope/pull/690) starts from the merged foundation, independently of the larger impact-agent branch. Its description includes the paths/tree walkthrough. All local sign-off checks passed; the production image is still building.
+[PR #690](https://github.com/monoscope-tech/monoscope/pull/690) merged on 2026-10-22 as `e4888f6f018c607b650287bf2661db1ad5b36dc4`. All required checks passed, including CI verification of the production image built on our native amd64 server. Its description includes the paths/tree walkthrough. The change is independent of the larger impact-agent branch.
 
 - Give each page a project-scoped path, such as `runbooks/payments/retries`, and a canonical URL under `/p/<project>/wiki/<page-path>`.
 - Keep UUID page identity stable. Add a new migration for paths; preserve existing content, authors and revisions. Backfill unique paths and enforce project/path uniqueness.
@@ -39,12 +39,12 @@ Do not use the builder's default file uploader: it creates temporary browser blo
 
 Prototype evidence is retained locally in `scripts/local/wiki-editor-spike/roundtrip.log`, `results.json`, and `bundle-minimal.log`.
 
-The editor adapter is implemented on the larger checkpoint branch, separately from #690. Its browser regression covers undo/redo, bold formatting, source-mode switching, Markdown persistence and HTMX navigation into a fresh editor. The focused watcher passed all 62 repository-context examples; TypeScript checking and all 1,028 frontend assertions passed. Local light/dark screenshots and a recording are retained. The editor imports on opening the edit panel and preserves untouched source bytes. The existing widget-navigation hook now also replaces Milkdown instances when HTMX morphs server markup.
+The editor changes are isolated on `work/project-wiki-editor`, based on the merged paths/tree commit. Its browser regression covers undo/redo, bold formatting, source-mode switching, Markdown persistence and HTMX navigation into a fresh editor. The focused watcher passed all 62 repository-context examples; TypeScript checking and all 1,028 frontend assertions passed. Local light/dark screenshots and a recording are retained. The editor imports on opening the edit panel and preserves untouched source bytes. The existing widget-navigation hook now also replaces Milkdown instances when HTMX morphs server markup.
 
 Saved pages and revision history now render in Haskell with [commonmark](https://hackage.haskell.org/package/commonmark-0.2.6.1) and its GitHub Markdown extensions. Embedded HTML is displayed as text through the parser's public syntax hooks; [xss-sanitize](https://hackage.haskell.org/package/xss-sanitize-0.3.7.2) filters the resulting markup and URL attributes. The previous MMark renderer turned HTML-like text into relative links, which failed the retained history assertion. The global renderer is unchanged.
 
 The handler regression covers formatting, code blocks, tables, tasks, footnotes, script/form markup, encoded and mixed-case JavaScript links, rejected image URLs, and unchanged stored Markdown. The browser flow also saves a reference-style link through source and rich modes, verifies formatted read-back, and pins the exact Markdown bytes in the database. All 62 repository-context examples pass after these changes.
 
-The editor is still awaiting its independent PR, final local CI, production image and attached walkthrough. Keep it separate from the larger agent branch.
+Full local CI is running for the independent editor branch. A captioned 17-second walkthrough is recorded at 1280×900. The editor still needs its production image, pull request and attached walkthrough before merge. Keep the larger agent changes out of this PR.
 
 Merge each PR only after its review loop and required checks pass. Keep worker migration and billing/sandbox changes out of both wiki PRs.
