@@ -7,7 +7,7 @@
 -- which reaches @Pkg.Components.Widget@, which imports @LogItem@ — a cycle. The renderer in
 -- "Pages.Components" only ever builds the URL, so nothing on the rendering side has to know
 -- this module exists.
-module Pages.CodeContext (memoryGetH, memoryPostH, MemoryForm (..), WikiGet (..), repositoryAnalyzePostH, repositoryResumePostH, repositoryFolderPostH, repositoryConflictPostH, FolderForm (..), ConflictForm (..), repositoryTokenGetH, repositoryTokenPostH, RepositoryTokenGet (..), RepositoryTokenForm (..), codeContextH, repositoriesGetH, serviceRepositoriesGetH, repositoryGetH, repositoryDeleteH, repositorySourceGetH, repositorySourcePostH, repositorySourceDeleteH, repositoryReviewsPostH, repositorySourceEnabledPostH, SourceContextForm (..), repositoryConnectGetH, repositoryConnectPostH, RepositoryConnectGet (..), RepositoryConnectForm (..), RepositoryGet (..), ReviewReadiness (..), RepositoryTab (..), codeMappingsGetH, codeMappingsEditorGetH, codeMappingsPostH, codeMappingsDeleteH, CodeMappingForm (..), impactReviewSettingsPostH, impactReviewRetryH) where
+module Pages.CodeContext (wikiGetH, memoryGetH, memoryPostH, MemoryForm (..), WikiGet (..), repositoryAnalyzePostH, repositoryResumePostH, repositoryFolderPostH, repositoryConflictPostH, FolderForm (..), ConflictForm (..), repositoryTokenGetH, repositoryTokenPostH, RepositoryTokenGet (..), RepositoryTokenForm (..), codeContextH, repositoriesGetH, serviceRepositoriesGetH, repositoryGetH, repositoryDeleteH, repositorySourceGetH, repositorySourcePostH, repositorySourceDeleteH, repositoryReviewsPostH, repositorySourceEnabledPostH, SourceContextForm (..), repositoryConnectGetH, repositoryConnectPostH, RepositoryConnectGet (..), RepositoryConnectForm (..), RepositoryGet (..), ReviewReadiness (..), RepositoryTab (..), codeMappingsGetH, codeMappingsEditorGetH, codeMappingsPostH, codeMappingsDeleteH, CodeMappingForm (..), impactReviewSettingsPostH, impactReviewRetryH) where
 
 import BackgroundJobs.Types qualified as Jobs
 import Data.Aeson qualified as AE
@@ -18,6 +18,7 @@ import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.UUID qualified as UUIDEff
 import Data.Effectful.Wreq qualified as W
 import Data.List (lookup)
+import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.UUID qualified as UUID
@@ -129,27 +130,41 @@ codeMappingsGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (
 codeMappingsGetH pid = repositoriesGetH pid (Just Overview)
 
 
-data MemoryForm = MemoryForm {pageId :: Memory.PageId, version :: Word32, title :: Text, body :: Text}
+data MemoryForm = MemoryForm {pageId :: Memory.PageId, version :: Word32, path :: Maybe Text, title :: Text, body :: Text}
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)
 
 
+data WikiSelection = NewPage | ById Memory.PageId | ByPath Memory.PagePath
+
+
+data WikiTree = WikiTree (Maybe Memory.Page) (Map Text WikiTree)
+
+
+wikiGetH :: Projects.ProjectId -> [Text] -> Maybe Memory.PagePath -> ATAuthCtx (RespHeaders (PageCtx WikiGet))
+wikiGetH pid segments after = do
+  when (any (T.any (== '/')) segments) $ throwError err404
+  selection <- if null segments then pure NewPage else either (const $ throwError err404) (pure . ByPath) $ Memory.mkPagePath $ T.intercalate "/" segments
+  memoryPageH pid selection after Nothing
+
+
 memoryGetH :: Projects.ProjectId -> Maybe Memory.PageId -> ATAuthCtx (RespHeaders (PageCtx WikiGet))
-memoryGetH pid page = memoryPageH pid page Nothing
+memoryGetH pid page = memoryPageH pid (maybe NewPage ById page) Nothing Nothing
 
 
 memoryPostH :: Projects.ProjectId -> MemoryForm -> ATAuthCtx (RespHeaders (PageCtx WikiGet))
 memoryPostH pid form = do
   requireReviewWrite pid
   session <- Projects.getSession
-  case Memory.Document <$> Memory.mkMemoryText form.title <*> Memory.mkMemoryText form.body of
-    Left message -> memoryPageH pid (Just form.pageId) $ Just (form, message)
-    Right document -> do
-      saved <- Memory.writePage pid form.pageId form.version document $ Memory.Member session.user.id
+  case (,) <$> traverse Memory.mkPagePath form.path <*> (Memory.Document <$> Memory.mkMemoryText form.title <*> Memory.mkMemoryText form.body) of
+    Left message -> memoryPageH pid (ById form.pageId) Nothing (Just (form, message))
+    Right (path, document) -> do
+      saved <- Memory.writePage pid form.pageId form.version path document $ Memory.Member session.user.id
       case saved of
-        Nothing -> memoryPageH pid (Just form.pageId) $ Just (form, "This page changed while you were editing. Your draft is below. Open the latest revision before saving again.")
-        Just _ -> do
+        Left failure -> memoryPageH pid (ById form.pageId) Nothing (Just (form, case failure of Memory.StaleRevision -> "This page changed while you were editing. Your draft is below. Open the latest revision before saving again."; Memory.PathTaken -> "Another page already uses this path. Your draft is below. Choose a different path."))
+        Right page -> do
           addSuccessToast "Wiki page saved" Nothing
+          redirectCS $ "/p/" <> pid.toText <> "/wiki/" <> Memory.pagePathText page.path
           memoryGetH pid $ Just form.pageId
 
 
@@ -164,45 +179,70 @@ data WikiGet = WikiGet
   deriving stock (Generic, Show)
 
 
-memoryPageH :: Projects.ProjectId -> Maybe Memory.PageId -> Maybe (MemoryForm, Text) -> ATAuthCtx (RespHeaders (PageCtx WikiGet))
-memoryPageH pid selected draft = do
+memoryPageH :: Projects.ProjectId -> WikiSelection -> Maybe Memory.PagePath -> Maybe (MemoryForm, Text) -> ATAuthCtx (RespHeaders (PageCtx WikiGet))
+memoryPageH pid selection after draft = do
   (session, _, bw) <- mkPageCtx pid
   when (session.persistentSession.id == demoGuestSessionId) $ throwError err404
   canEdit <- maybe False (>= ProjectMembers.PEdit) <$> ProjectMembers.getUserPermission pid session.user.id
-  pages <- Memory.latestPages pid
+  selected <- case selection of
+    NewPage -> pure Nothing
+    ById page -> pure $ Just page
+    ByPath path -> Just <$> (maybe (throwError err404) pure =<< Memory.pageAtPath pid path)
+  pages <- Memory.pageWindow pid after
   history <- maybe (pure []) (Memory.pageHistory pid) selected
   let current = listToMaybe history
   when (isJust selected && isNothing current && isNothing draft) $ throwError err404
   fresh <- maybe (UUIDId <$> UUIDEff.genUUID) pure selected
-  let edit = maybe (MemoryForm fresh 0 "" "") (\page -> MemoryForm page.id (fromIntegral page.version) (Memory.memoryText page.document.title) (Memory.memoryText page.document.body)) current
+  let edit = maybe (MemoryForm fresh 0 (Just "") "" "") (\page -> MemoryForm page.id (fromIntegral page.version) (Just $ Memory.pagePathText page.path) (Memory.memoryText page.document.title) (Memory.memoryText page.document.body)) current
   addRespHeaders $ PageCtx bw{pageTitle = "Repositories"} $ WikiGet pid canEdit pages history (maybe edit fst draft) (snd <$> draft)
 
 
 instance ToHtml WikiGet where
   toHtml WikiGet{projectId = pid, canEdit, pages, history, form, message} = toHtmlRaw $ repositoryLayout_ pid Wiki Nothing canEdit True do
     let current = listToMaybe history
-        base = "/p/" <> pid.toText <> "/memories"
-        pageLink page = base <> "?page=" <> page.id.toText
+        base = "/p/" <> pid.toText <> "/wiki"
+        pageLink page = base <> "/" <> Memory.pagePathText page.path
+        visible = take Memory.pageLimit pages
+        displayed = visible <> [page | page <- maybeToList current, all ((/= page.id) . (.id)) visible]
         authorName = \case Memory.Member _ -> "Project member"; Memory.Agent _ -> "Agent"
     div_ [class_ "grid gap-6 md:grid-cols-[15rem_minmax(0,1fr)]"] do
       nav_ [Aria.label_ "Wiki pages", class_ "space-y-3", term "preload" "mouseover"] do
         when canEdit $ a_ (class_ "btn btn-sm btn-ghost" : repositoryNavAttrs base) "New page"
         when (null pages) $ p_ [class_ "text-sm text-textWeak"] "No wiki pages yet. Record service context, investigation notes, or runbooks here."
-        when (length pages == Memory.pageLimit) $ p_ [class_ "text-sm text-textWeak"] $ toHtml @Text $ "Showing the " <> show Memory.pageLimit <> " most recent pages. Older pages remain available through their links."
-        ul_ [class_ "space-y-1"] $ for_ pages \page -> li_ do
-          a_ (class_ "block rounded-md px-2 py-2 text-sm text-textBrand hover:bg-fillWeak break-words" : repositoryNavAttrs (pageLink page)) $ toHtml $ Memory.memoryText page.document.title
+        let insert page [] (WikiTree _ children) = WikiTree (Just page) children
+            insert page (segment : rest) (WikiTree item children) = WikiTree item $ Map.alter (Just . insert page rest . fromMaybe (WikiTree Nothing mempty)) segment children
+            tree = foldr (\page -> insert page $ T.splitOn "/" $ Memory.pagePathText page.path) (WikiTree Nothing mempty) displayed
+            renderTree prefix (WikiTree _ children) = ul_ [class_ "space-y-1 border-l border-strokeWeak pl-3"] $ for_ (Map.toAscList children) \(segment, branch@(WikiTree page descendants)) -> li_ do
+              let link item = a_ ([class_ $ "block rounded-md px-2 py-2 text-sm text-textBrand hover:bg-fillWeak break-words focus-visible:outline-2 focus-visible:outline-strokeBrand-strong" <> bool "" " bg-fillBrand-weak font-medium" (Just item.id == ((.id) <$> current)), title_ $ Memory.memoryText item.document.title] <> [term "aria-current" "page" | Just item.id == ((.id) <$> current)] <> repositoryNavAttrs (pageLink item)) $ toHtml segment
+              if Map.null descendants
+                then for_ page link
+                else details_ ([class_ "py-1"] <> [open_ "" | maybe False (\item -> let path = T.intercalate "/" (prefix <> [segment]) in Memory.pagePathText item.path == path || (path <> "/") `T.isPrefixOf` Memory.pagePathText item.path) current || isNothing current]) do
+                  summary_ [class_ "cursor-pointer py-2 text-sm font-medium text-textStrong"] $ toHtml segment
+                  for_ page link
+                  renderTree (prefix <> [segment]) branch
+        renderTree [] tree
+        when (length pages > Memory.pageLimit) $ for_ (viaNonEmpty last visible) \page ->
+          a_ (class_ "block py-2 text-sm text-textBrand hover:underline" : repositoryNavAttrs (base <> "?after=" <> decodeUtf8 (urlEncode True $ encodeUtf8 $ Memory.pagePathText page.path))) "More pages"
       section_ [class_ "min-w-0 space-y-5"] do
         h2_ [class_ "text-lg font-semibold text-textStrong"] $ toHtml $ maybe "New wiki page" (Memory.memoryText . (.document.title)) current
+        for_ current \page -> nav_ [Aria.label_ "Wiki breadcrumb", class_ "flex flex-wrap gap-1 text-xs text-textWeak"] do
+          a_ (class_ "text-textBrand hover:underline" : repositoryNavAttrs base) "Wiki"
+          for_ (T.splitOn "/" $ Memory.pagePathText page.path) \segment -> do
+            span_ [Aria.hidden_ "true"] "/"
+            span_ [class_ "break-all"] $ toHtml segment
         p_ [class_ "text-sm text-textWeak"] "Shared project notes and runbooks. Check dated conclusions against current source and telemetry."
         for_ current \page -> do
           p_ [class_ "text-xs text-textWeak"] $ toHtml @Text $ authorName page.author <> " · Revision " <> show page.version <> " · " <> show page.updatedAt
           div_ [class_ "whitespace-pre-wrap break-words text-sm text-textStrong"] $ toHtml $ Memory.memoryText page.document.body
         when canEdit $ details_ ([class_ "border-t border-strokeWeak pt-4"] <> [open_ "" | isNothing current || isJust message]) do
           summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] $ if isNothing current then "Write a page" else "Edit this page"
-          form_ [method_ "post", action_ base, hxPost_ base, hxTarget_ "#repository-content", hxSelect_ "#repository-content", hxSwap_ "outerHTML", class_ "mt-4 space-y-4"] do
+          form_ [method_ "post", action_ ("/p/" <> pid.toText <> "/memories"), hxPost_ ("/p/" <> pid.toText <> "/memories"), hxTarget_ "#repository-content", hxSelect_ "#repository-content", hxSwap_ "outerHTML", class_ "mt-4 space-y-4"] do
             input_ [type_ "hidden", name_ "pageId", value_ form.pageId.toText]
             input_ [type_ "hidden", name_ "version", value_ $ show form.version]
             for_ message $ p_ [id_ "memory-error", role_ "alert", class_ "text-sm text-textError"] . toHtml
+            label_ [term "for" "memory-path", class_ "block space-y-1 text-sm font-medium text-textStrong"] do
+              span_ "Page path (required)"
+              input_ ([id_ "memory-path", name_ "path", required_ "", maxlength_ "512", placeholder_ "runbooks/payments/retries", value_ $ fromMaybe "" form.path, class_ "input input-bordered w-full"] <> [Aria.describedby_ "memory-error" | isJust message])
             label_ [term "for" "memory-title", class_ "block space-y-1 text-sm font-medium text-textStrong"] do
               span_ "Title (required)"
               input_ ([id_ "memory-title", name_ "title", required_ "", maxlength_ "120", value_ form.title, class_ "input input-bordered w-full"] <> [Aria.describedby_ "memory-error" | isJust message])
@@ -241,7 +281,7 @@ repositoryLayout_ pid tab serviceM canEdit canReadWiki content =
               when (value /= Wiki || canReadWiki)
                 $ a_
                   ( [class_ $ "rounded-lg px-3 py-2 text-sm font-medium transition-colors " <> bool "text-textWeak hover:bg-fillWeak hover:text-textStrong" "bg-fillBrand-weak text-textBrand" (tab == value)]
-                      <> repositoryNavAttrs (if value == Wiki then "/p/" <> pid.toText <> "/memories" else base <> query)
+                      <> repositoryNavAttrs (if value == Wiki then "/p/" <> pid.toText <> "/wiki" else base <> query)
                       <> [term "aria-current" "page" | tab == value]
                   )
                 $ toHtml @Text label
