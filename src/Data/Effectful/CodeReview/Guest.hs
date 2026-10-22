@@ -27,7 +27,7 @@ data Host = Host {image :: Text, bridge :: FilePath, skills :: [FilePath], backe
 
 
 -- | Role-specific guest preparation that runs before the agent sees the workspace.
-data Setup = Explore | InspectAdmission TestArtifact
+data Setup = Explore | InspectAdmission TestArtifact | ReviewEvidence (Map Text ByteString)
 
 
 data Exec = Exec {command :: Text, cwd :: Text, timeout :: Maybe Double}
@@ -56,9 +56,10 @@ withGuest host expected checkout revision setup attempt allocate action = withSy
         run cwd argv = execute cwd argv >>= \result -> if result.exitCode == 0 then pure result.stdout else failure "Guest preparation failed"
         workspace = run "/workspace" . fromList
         git args = workspace $ ["/usr/bin/git", "-c", "safe.directory=/workspace", "-c", "core.hooksPath=/dev/null", "-C", "/workspace"] <> args
-        upload name bytes = do
-          writeFileBS (temporary </> name) bytes
-          rpc @() $ CopyFile $ Copy (temporary </> name) (toText $ "/run" </> name)
+        upload destination bytes = do
+          let staged = temporary </> takeFileName (toString destination)
+          writeFileBS staged bytes
+          rpc @() $ CopyFile $ Copy staged destination
         lock = traverse_ workspace [["/usr/bin/git", "config", "--system", "--add", "safe.directory", "/workspace"], ["/bin/chown", "-hR", "0:0", "/workspace"], ["/bin/chmod", "-R", "u+rwX,go+rX,go-w", "/workspace"], ["/usr/bin/git", "update-index", "--refresh"]]
         logged argv cwd limit = do
           path <- (logs </>) . (<> ".log") . UUID.toString <$> UUID4.nextRandom
@@ -99,13 +100,16 @@ withGuest host expected checkout revision setup attempt allocate action = withSy
         Explore -> pass
         InspectAdmission artifact -> do
           lock
-          upload "monoscope-admission.patch" $ encodeUtf8 artifact.testPatch
+          upload "/run/monoscope-admission.patch" $ encodeUtf8 artifact.testPatch
           paths <- filter (not . T.null) . T.splitOn "\0" <$> workspace ["/usr/bin/git", "apply", "--numstat", "-z", "/run/monoscope-admission.patch"]
           unless (not (null paths) && length paths <= 100) $ failure "Regression patch requires between one and 100 paths"
           void $ workspace ["/usr/bin/git", "-c", "core.hooksPath=/dev/null", "apply", "--index", "/run/monoscope-admission.patch"]
-          upload "monoscope-admission.json" $ toStrict $ AE.encode artifact
+          upload "/run/monoscope-admission.json" $ toStrict $ AE.encode artifact
           void $ workspace ["/bin/chmod", "0444", "/run/monoscope-admission.patch", "/run/monoscope-admission.json"]
           lock
+        ReviewEvidence files -> do
+          lock
+          for_ (Map.toList files) \(destination, bytes) -> upload destination bytes >> workspace ["/bin/chmod", "0444", destination]
     whenRight (Left "Agent sandbox could not be prepared") prepared $ const $ Right <$> action skills operate
   finished <- getMonotonicTimeNSec
   vm <- readIORef vmIdentity

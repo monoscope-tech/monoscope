@@ -5,7 +5,7 @@ import Data.Base64.Types (extractBase64)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as Base64
 import Data.Char (isAlphaNum, isAscii)
-import Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), PeerPreparation, artifactCheckout, peerPreparation, sha256, withVerifiedArtifacts)
+import Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), artifactCheckout, peerEvidence, sha256, withVerifiedArtifacts)
 import Data.Effectful.CodeReview.Policy qualified as Policy
 import Data.Effectful.CodeReview.Types (ArtifactRequest (..), FixResult (..), Request (..), Revision, mkRevision, revisionText)
 import Data.List (lookup)
@@ -36,13 +36,8 @@ data CacheStatus = Hit | Miss | Verified
   deriving (AE.ToJSON) via WrappedEnumSC 'Nothing "" CacheStatus
 
 
-data CheckoutEvidence = SourceOnly | VerifiedEvidence PeerPreparation
-  deriving stock (Generic)
-  deriving anyclass (AE.ToJSON)
-
-
 -- | @guest@ names the host skill directory of a host-owned VM; @envelope@ holds fields the agent wraps around its submission.
-data Prepared = Prepared {directory :: FilePath, repositorySkills :: FilePath, rootInstructions :: Text, projectId :: UUIDId "project", repository :: Text, base :: Revision, head :: Revision, cacheStatus :: CacheStatus, durationMs :: Word64, evidence :: CheckoutEvidence, policy :: Policy.Policy, guest :: Maybe FilePath, envelope :: Maybe AE.Value}
+data Prepared = Prepared {directory :: FilePath, repositorySkills :: FilePath, rootInstructions :: Text, projectId :: UUIDId "project", repository :: Text, base :: Revision, head :: Revision, cacheStatus :: CacheStatus, durationMs :: Word64, policy :: Policy.Policy, guest :: Maybe FilePath, envelope :: Maybe AE.Value}
   deriving stock (Generic)
   deriving anyclass (AE.ToJSON)
 
@@ -51,14 +46,15 @@ data Origin = GitHub Text | Local FilePath
 
 
 -- Keep the private checkout alive until the child and all of its VMs have exited.
-withCheckout :: ArtifactStore -> Source -> (Prepared -> IO a) -> IO (Either Text a)
+-- | The action also receives the recorded evidence to place read-only in the guest (empty for source checkouts).
+withCheckout :: ArtifactStore -> Source -> (Prepared -> Map Text ByteString -> IO a) -> IO (Either Text a)
 withCheckout store source action = do
   outcome <- tryAny $ case source of
     Repository request -> withSystemTempDirectory "monoscope-agent-checkout" \temporary -> do
       started <- getMonotonicTimeNSec
       prepared <- Timeout.timeout (120 * 1000000) $ prepare temporary request
       traverse
-        (\(directory, baseRevision, headRevision, cacheStatus) -> deliver started directory request.projectId request.repository baseRevision headRevision cacheStatus SourceOnly)
+        (\(directory, baseRevision, headRevision, cacheStatus) -> deliver started directory request.projectId request.repository baseRevision headRevision cacheStatus mempty)
         prepared
     VerifiedCandidate artifacts -> do
       started <- getMonotonicTimeNSec
@@ -66,7 +62,7 @@ withCheckout store source action = do
         let directory = artifactCheckout verifiedArtifacts
             result = artifacts.result
         git directory ["checkout", "--quiet", "--detach", toString $ revisionText result.head] []
-        deliver started directory result.projectId artifacts.repository result.base result.head Verified $ VerifiedEvidence $ peerPreparation verifiedArtifacts
+        deliver started directory result.projectId artifacts.repository result.base result.head Verified $ peerEvidence verifiedArtifacts
       either (const invalid) (pure . Just) verified
   pure $ case outcome of Right (Just prepared) -> Right prepared; _ -> Left "Repository checkout could not be prepared"
   where
@@ -97,7 +93,7 @@ withCheckout store source action = do
         writeFileBS destination =<< content blob
       instructions <- maybe (pure "") instruction $ asum $ map (`lookup` files) instructionNames
       duration <- elapsed started
-      action $ Prepared directory metadata instructions project repository baseRevision headRevision status duration evidence (Policy.policy Policy.Advisory (revisionText baseRevision) (revisionText headRevision) instructions) Nothing Nothing
+      flip action evidence $ Prepared directory metadata instructions project repository baseRevision headRevision status duration (Policy.policy Policy.Advisory (revisionText baseRevision) (revisionText headRevision) instructions) Nothing Nothing
     prepare :: FilePath -> Request run -> IO (FilePath, Revision, Revision, CacheStatus)
     prepare temporary request = do
       baseRevision <- either (const invalid) pure $ mkRevision request.base

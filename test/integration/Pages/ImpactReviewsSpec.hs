@@ -184,6 +184,11 @@ deliver tr value = do
   snd <$> runAsBaseRecordingHTTP configured (GitSyncPage.gitWebhookPostH Git.GitHub $ Git.WebhookReq (Just "pull_request") (Just signature) Nothing Nothing Nothing body)
 
 
+-- Matches the native-sdk-worker wrapper, which selects libkrun on macOS.
+sdkHost :: FilePath -> IO Guest.Host
+sdkHost image = (\worker -> (Agent.workerHost [] (toText image) worker){Guest.backend = "krun" <$ guard (Info.os == "darwin")}) <$> canonicalizePath "impact-review-worker/cli.mjs"
+
+
 spec :: Spec
 spec = around withTestResources $ describe "Production impact reviews" do
   it "closes the actual SDK sandbox when its parent pipe ends during a command" \_tr -> withSystemTempDirectory "native-sdk-pipe-loss" \directory -> do
@@ -297,7 +302,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     unless available $ pendingWith "Build the self-hosted guest before running SDK integration tests"
     directory <- canonicalizePath temporary
     image <- canonicalizePath "impact-review-worker/.guest"
-    host <- (\worker -> (Agent.workerHost [] (toText image) worker){Guest.backend = "krun" <$ guard (Info.os == "darwin")}) <$> canonicalizePath "impact-review-worker/cli.mjs"
+    host <- sdkHost image
     let repository = directory </> "repository"
         store = Agent.ArtifactStore (directory </> "usage") (directory </> "cache")
         diagnostic = directory </> "worker.log"
@@ -406,6 +411,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     unless available $ pendingWith "Build the self-hosted guest before running SDK integration tests"
     directory <- canonicalizePath temporary
     image <- canonicalizePath "impact-review-worker/.guest"
+    host <- sdkHost image
     bridge <- canonicalizePath "test/fixtures/native-sandbox.sh"
     let repository = directory </> "repository"
         store = Agent.ArtifactStore (directory </> "usage") (directory </> "cache")
@@ -493,7 +499,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
           choices <- readIORef plan
           pure $ fromMaybe (SdkText "Fix attempt finished.") $ viaNonEmpty head $ drop (length results) choices
     withSdkModel directory "fix-fixture" next \models requests -> do
-      let run action = runEff $ Agent.runCodeReviewReal (Just store) Nothing (Just "test/fixtures/native-sdk-worker.py") [models, store.usageDir, store.cacheDir, image, diagnostic, "--prepare", scriptFile, "--cli", cli] action
+      let run action = runEff $ Agent.runCodeReviewReal (Just store) (Just host) (Just "test/fixtures/native-sdk-worker.py") [models, store.usageDir, store.cacheDir, image, diagnostic, "--prepare", scriptFile, "--cli", cli] action
           knowledge = const $ pure $ Left "Unexpected knowledge request"
           capture ref receipt = liftIO $ record ref receipt
           inspect result = runExceptT do
@@ -658,7 +664,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
           choices <- readIORef plan
           pure $ fromMaybe (SdkText "Review submitted.") $ viaNonEmpty head $ drop (length results) choices
     withSdkModel directory "fixture" next \models requests -> do
-      outcome <- Checkout.withCheckout store (Checkout.Repository source) \prepared -> tryAny do
+      outcome <- Checkout.withCheckout store (Checkout.Repository source) \prepared _ -> tryAny do
         writeFileLBS checkoutFile $ AE.encode prepared
         let run mode name extra = do
               let output = outputDir </> name
@@ -972,7 +978,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                           pure $ SdkResponse (SdkText $ jsonText response) (SdkTokens 7 2)
     withSdkProvider directory "evaluation-fixture" next \models requests -> do
       let request = Agent.Request{projectId = testPid, runId = uid 1, attemptId = uid 2, repository = toText repository, base, head = headRevision, gitToken = "", prompt = "Review telemetry-1.", provider = "evaluation-fixture", model = "fixture", thinkingLevel = Agent.Off}
-      outcome <- Checkout.withCheckout store (Checkout.Repository request) \prepared -> tryAny do
+      outcome <- Checkout.withCheckout store (Checkout.Repository request) \prepared _ -> tryAny do
         writeFileLBS caseFile $ AE.encode $ AE.object ["checkout" AE..= prepared, "projectId" AE..= testPid, "repository" AE..= repository, "base" AE..= base, "head" AE..= headRevision, "provider" AE..= request.provider, "model" AE..= request.model, "evidenceKind" AE..= ("synthetic" :: Text), "evidence" AE..= V.fromList [AE.object ["key" AE..= ("telemetry-1" :: Text), "kind" AE..= ("telemetry" :: Text), "description" AE..= ("synthetic-evaluation-evidence" :: Text)], AE.object ["key" AE..= ("monitor-1" :: Text), "kind" AE..= ("monitor" :: Text)]], "rubric" AE..= (["private-grading-not-model"] :: [Text])]
         let configured = Map.toList $ Map.fromList $ environment <> [("TMPDIR", sdkTemp), ("IMPACT_REVIEW_MODELS", models), ("IMPACT_REVIEW_GUEST_IMAGE", image), ("IMPACT_REVIEW_NATIVE_CLI", cli), ("IMPACT_REVIEW_USAGE_DIR", store.usageDir), ("IMPACT_REVIEW_CACHE_DIR", store.cacheDir)] <> [("GONDOLIN_VMM", "krun") | Info.os == "darwin"]
             run name = do
@@ -1845,13 +1851,10 @@ spec = around withTestResources $ describe "Production impact reviews" do
     createDirectoryIfMissing True execution
     restore
     fmap Agent.verifiedFixResult <$> verify request `shouldReturn` Right result
-    snapshot <- Checkout.withCheckout store (Checkout.VerifiedCandidate request) (pure . AE.toJSON)
-    prepared <- either (fail . toString) pure snapshot
-    let evidenceField name = AE.withObject "Verified peer-review evidence" (AE..: name)
-        reviewInput = AE.object ["result" AE..= result, "regression" AE..= Agent.TestArtifact (decodeUtf8 script) (decodeUtf8 testPatch) "retry token lost", "baseline" AE..= request.baseline, "candidate" AE..= request.candidate]
+    evidence <- Checkout.withCheckout store (Checkout.VerifiedCandidate request) (const pure)
+    let reviewInput = AE.object ["result" AE..= result, "regression" AE..= Agent.TestArtifact (decodeUtf8 script) (decodeUtf8 testPatch) "retry token lost", "baseline" AE..= request.baseline, "candidate" AE..= request.candidate]
         peerFiles = Map.fromList [("/run/monoscope-fix-review.json", toStrict $ AE.encode reviewInput), ("/run/monoscope-fix-review-base.log", baselineLog), ("/run/monoscope-fix-review-head.log", candidateLog)] :: Map Text ByteString
-    AET.parseMaybe (evidenceField "evidence" >=> evidenceField "contents" >=> evidenceField "result") prepared `shouldBe` Just (AE.toJSON result)
-    AET.parseMaybe (evidenceField "evidence" >=> evidenceField "contents" >=> evidenceField "files") prepared `shouldBe` Just (Map.map (extractBase64 . B64.encodeBase64) peerFiles)
+    evidence `shouldBe` Right peerFiles
     for_ files \(path, bytes) -> do
       writeFileBS path (bytes <> "corruption")
       isLeft <$> verify request `shouldReturn` True

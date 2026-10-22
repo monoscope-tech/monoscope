@@ -195,7 +195,8 @@ runCodeReviewReal artifactStore host executable skills = interpret \env -> \case
             role = case scope of Outbox.Advisory _ -> Policy.Advisory; Outbox.IssueFix _ -> Policy.Fix; Outbox.Admission _ -> Policy.Admission; Outbox.PeerReview _ -> Policy.Peer
             -- Roles migrate to a host-owned VM one at a time; the rest still create theirs in the child.
             owned = case task of
-              AdmissionTask request -> (,request.fix.request.attemptId,Just request.fix.imageBuildId,Guest.InspectAdmission request.artifact,Just $ AE.object ["artifact" AE..= request.artifact]) <$> host
+              AdmissionTask request -> (,request.fix.request.attemptId,Just request.fix.imageBuildId,const $ Guest.InspectAdmission request.artifact,Just $ AE.object ["artifact" AE..= request.artifact]) <$> host
+              PeerTask request -> (,request.fix.request.attemptId,Just request.fix.imageBuildId,Guest.ReviewEvidence,Just $ AE.object ["result" AE..= request.artifacts.result]) <$> host
               _ -> Nothing
             record = \case
               Outbox.Call receipt -> callbacks.calls receipt $> Right ()
@@ -245,12 +246,12 @@ runCodeReviewReal artifactStore host executable skills = interpret \env -> \case
                         Right (Right (Checkout ())) -> case (supplied, artifactStore) of
                           (Nothing, Just configured) -> do
                             let deliver checkout = (writeMessage (Right checkout :: Either Text Checkout.Prepared) >> receive (Just checkout) remaining submissions accepted) `finally` stop
-                            prepared <- Checkout.withCheckout configured source \fetched -> do
+                            prepared <- Checkout.withCheckout configured source \fetched evidence -> do
                               let checkout = fetched{Checkout.policy = Policy.policy role (revisionText fetched.base) (revisionText fetched.head) fetched.rootInstructions}
                               case owned of
                                 Nothing -> deliver checkout
                                 Just (configuredHost, attempt, expected, setup, envelope) ->
-                                  join <$> Guest.withGuest configuredHost expected checkout.directory checkout.head setup attempt (void . allocate journal) \skillsDir operate ->
+                                  join <$> Guest.withGuest configuredHost expected checkout.directory checkout.head (setup evidence) attempt (void . allocate journal) \skillsDir operate ->
                                     writeIORef guest (Just operate) >> deliver checkout{Checkout.guest = Just skillsDir, Checkout.envelope = envelope}
                             pure $ join prepared
                           _ -> pure $ Left "Repository checkout was unavailable or already supplied"
