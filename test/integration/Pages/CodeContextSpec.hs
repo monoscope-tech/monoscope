@@ -258,6 +258,12 @@ spec = do
         viewed <- request H.methodGet (base testPid <> "?page=" <> page.toText) []
         html viewed `shouldSatisfy` T.isInfixOf "Revision history"
         html viewed `shouldSatisfy` T.isInfixOf "Keep retry tokens. &lt;script&gt;"
+        stale <- save testPid 1 "Preserved draft" "Stale edit must not advance its expected revision"
+        html stale `shouldSatisfy` T.isInfixOf "Preserved draft"
+        html stale `shouldSatisfy` T.isInfixOf "name=\"version\" value=\"1\""
+        wikiTab <- request H.methodGet ("/p/" <> testPid.toText <> "/repositories?tab=wiki") []
+        H.statusCode wikiTab.simpleStatus `shouldBe` 200
+        html wikiTab `shouldSatisfy` T.isInfixOf "Retry behavior"
         invalid <- save testPid 2 " " "Invalid title draft"
         html invalid `shouldSatisfy` T.isInfixOf "Invalid title draft"
         length <$> runQueryEffect tr (Memory.pageHistory testPid page) `shouldReturn` 2
@@ -281,6 +287,15 @@ spec = do
         H.statusCode anonymous.simpleStatus `shouldSatisfy` (`elem` [302, 401, 403, 404])
         demo <- WT.runSession (WT.request $ WT.setPath Wai.defaultRequest $ encodeUtf8 $ "/p/" <> testPid.toText <> "/repositories") app
         html demo `shouldNotSatisfy` T.isInfixOf "?tab=wiki"
+        demoWiki <- WT.runSession (WT.request $ WT.setPath Wai.defaultRequest $ encodeUtf8 $ base testPid) app
+        H.statusCode demoWiki.simpleStatus `shouldBe` 404
+        void $ withResource tr.trPool \conn -> do
+          void $ PG.execute conn "INSERT INTO projects.memory_revisions (project_id, page_id, version, document, author) SELECT project_id, md5(page_id::text || n::text)::uuid, 1, document, author FROM projects.memory_revisions CROSS JOIN generate_series(1, 100) n WHERE project_id = ? AND page_id = ? AND version = 1" (testPid, page)
+          PG.execute conn "INSERT INTO projects.memory_revisions (project_id, page_id, version, document, author) SELECT project_id, page_id, n, document, author FROM projects.memory_revisions CROSS JOIN generate_series(3, 101) n WHERE project_id = ? AND page_id = ? AND version = 1" (testPid, page)
+        capped <- request H.methodGet (base testPid <> "?page=" <> page.toText) []
+        html capped `shouldSatisfy` T.isInfixOf "Showing the 100 most recent pages"
+        html capped `shouldSatisfy` T.isInfixOf "Showing the 100 most recent revisions"
+        length <$> runQueryEffect tr (Memory.pageHistory testPid page) `shouldReturn` 100
 
       it "wiki_saveAndNavigate_doesNotNestHtmxTargets" \tr -> do
         available <- doesFileExist "e2e/node_modules/playwright/index.mjs"

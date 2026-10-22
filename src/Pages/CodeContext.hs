@@ -263,27 +263,36 @@ instance FromHttpApiData RepositoryTab where
 
 
 repositoriesGetH :: Projects.ProjectId -> Maybe RepositoryTab -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
-repositoriesGetH pid tabM sampleM = repositoriesPageH pid (ProjectRepositories (fromMaybe Overview tabM) sampleM)
+repositoriesGetH pid tabM sampleM = repositoriesPageH pid $ case fromMaybe Overview tabM of
+  Overview -> OverviewPage sampleM Nothing
+  PullRequests -> ReviewsPage
+  Fixes -> FixesPage
+  Usage -> UsagePage
+  Wiki -> WikiPage Nothing Nothing
 
 
 serviceRepositoriesGetH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders (Html ()))
-serviceRepositoriesGetH pid service = repositoriesPageH pid (ServiceRepositories service)
+serviceRepositoriesGetH pid service = repositoriesPageH pid (OverviewPage Nothing $ Just service)
 
 
-data RepositoryView = ProjectRepositories RepositoryTab (Maybe Text) | ServiceRepositories Text | WikiPage (Maybe Memory.PageId) (Maybe (MemoryForm, Text))
+data RepositoryView = OverviewPage (Maybe Text) (Maybe Text) | ReviewsPage | FixesPage | UsagePage | WikiPage (Maybe Memory.PageId) (Maybe (MemoryForm, Text))
 
 
 repositoriesPageH :: Projects.ProjectId -> RepositoryView -> ATAuthCtx (RespHeaders (Html ()))
 repositoriesPageH pid selection = do
   (session, _, bw) <- mkPageCtx pid
   canEdit <- maybe False (>= ProjectMembers.PEdit) <$> ProjectMembers.getUserPermission pid session.user.id
-  let (tab, sampleM, serviceM) = case selection of
-        ProjectRepositories selected sample -> (selected, sample, Nothing)
-        ServiceRepositories service -> (Overview, Nothing, Just service)
-        WikiPage _ _ -> (Wiki, Nothing, Nothing)
+  let (tab, serviceM) = case selection of
+        OverviewPage _ service -> (Overview, service)
+        ReviewsPage -> (PullRequests, Nothing)
+        FixesPage -> (Fixes, Nothing)
+        UsagePage -> (Usage, Nothing)
+        WikiPage _ _ -> (Wiki, Nothing)
       base = "/p/" <> pid.toText <> "/repositories"
-  content <- case tab of
-    Overview -> do
+      canReadWiki = session.persistentSession.id /= demoGuestSessionId
+  when (tab == Wiki && not canReadWiki) $ throwError err404
+  content <- case selection of
+    OverviewPage sampleM _ -> do
       mappings <- CodeContext.getCodeMappings pid
       syncs <- GitSync.getGitSyncs pid
       settings <- ImpactReviews.repositorySettings pid
@@ -293,21 +302,21 @@ repositoriesPageH pid selection = do
       let applicable = filter (\m -> maybe True (\service -> isNothing m.service || m.service == Just service) serviceM) mappings
           visible = filter (\repository -> isNothing serviceM || any (mappingInRepository credentials repository) applicable) repositories
       pure $ overview_ canEdit serviceM sampleM base applicable syncs settings credentials visible [sid | HI.OneColumn sid <- conflicts]
-    PullRequests -> do
+    ReviewsPage -> do
       cfg <- (.config) <$> Effectful.Reader.Static.ask @AuthContext
       runs <- ImpactReviews.latestRuns pid
       usage <- ImpactReviews.usageTotals pid
       checks <- ImpactReviews.latestChecks pid
       pure $ reviewHistory_ canEdit cfg usage checks runs
-    Fixes -> do
+    FixesPage -> do
       runs <- if session.persistentSession.id == demoGuestSessionId then pure [] else IssueFixes.latestMediaForUser pid session.user.id
       pure $ section_ [class_ "space-y-4"] do
         h2_ [class_ "text-base font-semibold text-textStrong"] "Issue fixes"
         p_ [class_ "text-sm text-textWeak"] "Completed fixes and their verification evidence. Available to project administrators."
         when (null runs) $ p_ [class_ "text-sm text-textWeak"] "No completed issue fixes available."
         ul_ [class_ "divide-y divide-strokeWeak"] $ for_ runs \run -> li_ [class_ "py-3"] $ a_ [href_ ("/p/" <> pid.toText <> "/issue-fixes/" <> run.runId.toText), class_ "text-sm text-textBrand hover:underline"] $ toHtml run.summary
-    Usage -> usage_ <$> ImpactReviews.customerUsage session.user.id
-    Wiki -> case selection of WikiPage page draft -> memoryContent canEdit page draft; _ -> memoryContent canEdit Nothing Nothing
+    UsagePage -> usage_ <$> ImpactReviews.customerUsage session.user.id
+    WikiPage page draft -> memoryContent canEdit page draft
   addRespHeaders $ bodyWrapper bw{pageTitle = "Repositories"} $ div_ [class_ "h-full w-full overflow-y-auto"] do
     section_ [class_ "mx-auto max-w-6xl space-y-6 px-4 py-6 sm:px-8 sm:py-8"] do
       header_ [class_ "flex flex-col items-start gap-4 sm:flex-row sm:justify-between"] do
@@ -321,7 +330,7 @@ repositoriesPageH pid selection = do
       when (isNothing serviceM)
         $ nav_ [id_ "repository-nav", Aria.label_ "Repository views", class_ "flex flex-wrap gap-1 border-b border-strokeWeak pb-2", term "preload" "mouseover"]
         $ forM_ ([(Overview, "Repositories", ""), (PullRequests, "Pull requests", "?tab=reviews"), (Fixes, "Issue fixes", "?tab=fixes"), (Usage, "Usage", "?tab=usage"), (Wiki, "Project wiki", "?tab=wiki")] :: [(RepositoryTab, Text, Text)]) \(value, label, query) ->
-          when (value /= Wiki || session.persistentSession.id /= demoGuestSessionId)
+          when (value /= Wiki || canReadWiki)
             $ a_
               ( [ href_ (base <> query)
                 , hxGet_ (base <> query)
@@ -340,11 +349,9 @@ repositoriesPageH pid selection = do
   where
     memoryContent :: Bool -> Maybe Memory.PageId -> Maybe (MemoryForm, Text) -> ATAuthCtx (Html ())
     memoryContent canEdit selected draft = do
-      session <- Projects.getSession
-      when (session.persistentSession.id == demoGuestSessionId) $ throwError err404
       pages <- Memory.latestPages pid
       history <- maybe (pure []) (Memory.pageHistory pid) selected
-      let current = viaNonEmpty head history
+      let current = listToMaybe history
       when (isJust selected && isNothing current && isNothing draft) $ throwError err404
       fresh <- maybe (UUIDId <$> UUIDEff.genUUID) pure selected
       let base = "/p/" <> pid.toText <> "/memories"
@@ -356,6 +363,7 @@ repositoriesPageH pid selection = do
         nav_ [Aria.label_ "Wiki pages", class_ "space-y-3"] do
           when canEdit $ a_ [href_ base, hxGet_ base, hxTarget_ "#repository-content", hxSelect_ "#repository-content", hxSwap_ "outerHTML", hxPushUrl_ "true", class_ "btn btn-sm btn-ghost"] "New page"
           when (null pages) $ p_ [class_ "text-sm text-textWeak"] "No wiki pages yet. Record service context, investigation notes, or runbooks here."
+          when (length pages == 100) $ p_ [class_ "text-sm text-textWeak"] "Showing the 100 most recent pages. Older pages remain available through their links."
           ul_ [class_ "space-y-1"] $ for_ pages \page -> li_ do
             a_ [href_ $ pageLink page, hxGet_ $ pageLink page, hxTarget_ "#repository-content", hxSelect_ "#repository-content", hxSwap_ "outerHTML", hxPushUrl_ "true", class_ "block rounded-md px-2 py-2 text-sm text-textBrand hover:bg-fillWeak break-words"] $ toHtml $ Memory.memoryText page.document.title
         section_ [class_ "min-w-0 space-y-5"] do
@@ -379,6 +387,7 @@ repositoriesPageH pid selection = do
               button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save page"
           unless (null history) $ details_ [class_ "border-t border-strokeWeak pt-4"] do
             summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] "Revision history"
+            when (length history == 100) $ p_ [class_ "mt-3 text-sm text-textWeak"] "Showing the 100 most recent revisions. Older revisions remain stored."
             div_ [class_ "mt-3 divide-y divide-strokeWeak"] $ for_ history \page -> details_ [class_ "py-3"] do
               summary_ [class_ "cursor-pointer text-sm text-textWeak"] $ toHtml @Text $ "Revision " <> show page.version <> " · " <> authorName page.author <> " · " <> show page.updatedAt
               h3_ [class_ "mt-3 text-sm font-semibold text-textStrong"] $ toHtml $ Memory.memoryText page.document.title
