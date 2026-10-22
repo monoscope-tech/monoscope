@@ -1,4 +1,4 @@
-module Data.Effectful.CodeReview.Policy (Role (..), ToolName (..), Tool (..), Invocation (..), Policy (..), policy, toolsForRole, toolSchema) where
+module Data.Effectful.CodeReview.Policy (Role (..), ToolName (..), Builtin (..), Tool (..), Invocation (..), Policy (..), policy, toolsForRole, toolSchema) where
 
 import Control.Lens ((.~), (?~))
 import Data.Aeson qualified as AE
@@ -29,14 +29,19 @@ data Invocation = Invocation {name :: ToolName, arguments :: AE.Value}
   deriving anyclass (AE.FromJSON)
 
 
--- | @builtins@ names the Pi tools whose file and shell calls the host serves in the guest.
-data Policy = Policy {instructions :: Text, tools :: [Tool], builtins :: [Text]}
+-- | Pi's own tools whose file and shell calls the host serves in the guest.
+data Builtin = Read | Bash | Edit | Write
+  deriving stock (Generic, Read, Show)
+  deriving (AE.ToJSON) via WrappedEnumSC 'Nothing "" Builtin
+
+
+data Policy = Policy {instructions :: Text, tools :: [Tool], builtins :: [Builtin]}
   deriving stock (Generic)
   deriving anyclass (AE.ToJSON)
 
 
 policy :: Role -> Text -> Text -> Text -> Policy
-policy role base headRevision rootInstructions = Policy instructions (map (\name -> Tool name (toolDescription name) (toolSchema name) (role /= Advisory)) (toolsForRole role)) (["read", "bash"] <> if role == Fix then ["edit", "write"] else [])
+policy role base headRevision rootInstructions = Policy instructions (map (\name -> Tool name (toolDescription name) (toolSchema name) (role /= Advisory)) (toolsForRole role)) ([Read, Bash] <> if role == Fix then [Edit, Write] else [])
   where
     toolDescription :: ToolName -> Text
     toolDescription = \case

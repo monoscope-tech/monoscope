@@ -47,6 +47,7 @@ data Origin = GitHub Text | Local FilePath
 
 -- Keep the private checkout alive until the child and all of its VMs have exited.
 -- | The action also receives the recorded evidence to place read-only in the guest (empty for source checkouts).
+-- Only preparation failures become @Left@; the action's own exceptions propagate.
 withCheckout :: ArtifactStore -> Source -> (Prepared -> Map Text ByteString -> IO a) -> IO (Either Text a)
 withCheckout store source action = do
   outcome <- tryAny $ case source of
@@ -64,7 +65,9 @@ withCheckout store source action = do
         git directory ["checkout", "--quiet", "--detach", toString $ revisionText result.head] []
         deliver started directory result.projectId artifacts.repository result.base result.head Verified $ peerEvidence verifiedArtifacts
       either (const invalid) (pure . Just) verified
-  pure $ case outcome of Right (Just prepared) -> Right prepared; _ -> Left "Repository checkout could not be prepared"
+  case outcome of
+    Right (Just completed) -> Right <$> either throwIO pure completed
+    _ -> pure $ Left "Repository checkout could not be prepared"
   where
     elapsed started = max 1 . (`div` 1000000) . (+ 999999) . subtract started <$> getMonotonicTimeNSec
     deliver started directory project repository baseRevision headRevision status evidence = withSystemTempDirectory "monoscope-agent-metadata" \temporary -> do
@@ -93,7 +96,7 @@ withCheckout store source action = do
         writeFileBS destination =<< content blob
       instructions <- maybe (pure "") instruction $ asum $ map (`lookup` files) instructionNames
       duration <- elapsed started
-      flip action evidence $ Prepared directory metadata instructions project repository baseRevision headRevision status duration (Policy.policy Policy.Advisory (revisionText baseRevision) (revisionText headRevision) instructions) Nothing Nothing
+      tryAny $ flip action evidence $ Prepared directory metadata instructions project repository baseRevision headRevision status duration (Policy.policy Policy.Advisory (revisionText baseRevision) (revisionText headRevision) instructions) Nothing Nothing
     prepare :: FilePath -> Request run -> IO (FilePath, Revision, Revision, CacheStatus)
     prepare temporary request = do
       baseRevision <- either (const invalid) pure $ mkRevision request.base

@@ -43,6 +43,12 @@ data Exec = Exec {command :: Text, cwd :: Text, timeout :: Maybe Double}
   deriving anyclass (AE.FromJSON)
 
 
+-- | A shell command's result; @output@ is the base64 tail and @log@ the full log's guest path.
+data Ran = Ran {exitCode :: Int, timedOut :: Bool, truncated :: Bool, log :: Text, output :: Text}
+  deriving stock (Generic)
+  deriving anyclass (AE.ToJSON)
+
+
 -- | File and shell calls of Pi's built-in tools, executed as the unprivileged review account.
 data Operation = Run Exec | Read Text | Access Text | Writable Text | Write Text Text | Mkdir Text
   deriving stock (Generic)
@@ -52,7 +58,7 @@ data Operation = Run Exec | Read Text | Access Text | Writable Text | Write Text
 -- | A running agent VM: Pi's file and shell calls, root copies into the guest, and verifier settings for fresh VMs.
 -- @output@ runs a command in /workspace and returns its exit status, retained bytes and whether the limit truncated them;
 -- @root@ and @place@ change the workspace or /run as root and throw on failure.
-data Session = Session {skills :: FilePath, imageBuildId :: ImageId, baseline :: AgentWorkspace.Baseline, operate :: Operation -> IO (Either Text AE.Value), copyIn :: FilePath -> Text -> IO (), verifier :: FilePath -> RegressionOptions, output :: NonEmpty Text -> Word32 -> IO (Maybe Int, ByteString, Bool), root :: NonEmpty Text -> IO (), place :: Text -> ByteString -> IO ()}
+data Session = Session {skills :: FilePath, imageBuildId :: ImageId, baseline :: AgentWorkspace.Baseline, operate :: Operation -> IO (Either Text AE.Value), copyIn :: FilePath -> Text -> IO (), verifier :: FilePath -> RegressionOptions, output :: NonEmpty Text -> Word32 -> IO (LogExit, ByteString, Bool), root :: NonEmpty Text -> IO (), place :: Text -> ByteString -> IO ()}
 
 
 -- | Owns the agent VM for the action's lifetime and records its allocation however it ends: @allocate@ after a
@@ -89,11 +95,13 @@ withGuest host expected checkout revision setup lease attempt allocate retain ac
         output argv limit = do
           (path, exit, truncated) <- logged argv "/workspace" limit
           bytes <- readFileBS path <* removeFile path
-          pure (case exit of Exited code -> Just code; LogLimit -> Nothing, bytes, truncated)
+          pure (exit, bytes, truncated)
         -- Pi's mutations: errors reach the model, and the agent account's permissions decide what may change.
         mutate argv = output (agentCommand argv) 65536 <&> \case
-          (Just 0, _, _) -> Right AE.Null
+          (Exited 0, _, _) -> Right AE.Null
           (_, bytes, _) -> Left $ T.take 1000 $ decodeUtf8 bytes
+        probe argv message = execute "/" (agentCommand argv) <&> \result -> if result.exitCode == 0 then Right AE.Null else Left message
+        encoded = extractBase64 . Base64.encodeBase64
         operate = \case
           Run exec -> do
             let limited = maybe [] (\seconds -> ["/usr/bin/timeout", "--kill-after=5", show (ceiling seconds :: Word32)]) exec.timeout
@@ -104,16 +112,14 @@ withGuest host expected checkout revision setup lease attempt allocate retain ac
             removeFile path
             pure $ case exit of
               LogLimit -> Left "Command output could not be retained"
-              Exited code -> Right $ AE.object ["exitCode" AE..= code, "timedOut" AE..= (isJust exec.timeout && code == 124), "truncated" AE..= truncated, "log" AE..= guestLog, "output" AE..= extractBase64 (Base64.encodeBase64 retained)]
-          Read path -> do
-            (file, exit, truncated) <- logged (agentCommand ["/bin/cat", "--", path]) "/" (8 * 1048576 + 1)
-            bytes <- readFileBS file <* removeFile file
-            pure $ case exit of
-              Exited 0 | not truncated -> Right $ AE.String $ extractBase64 $ Base64.encodeBase64 bytes
-              Exited 0 -> Left "File exceeds the 8 MiB read limit"
-              _ -> Left $ T.take 1000 $ decodeUtf8 bytes
-          Access path -> execute "/" (agentCommand ["/usr/bin/test", "-r", path]) <&> \result -> if result.exitCode == 0 then Right AE.Null else Left ("ENOENT: " <> path)
-          Writable path -> execute "/" (agentCommand ["/bin/sh", "-c", "test -r \"$1\" && test -w \"$1\"", "monoscope-edit", path]) <&> \result -> if result.exitCode == 0 then Right AE.Null else Left ("Permission denied: " <> path)
+              Exited code -> Right $ AE.toJSON $ Ran code (isJust exec.timeout && code == 124) truncated guestLog (encoded retained)
+          Read path ->
+            output (agentCommand ["/bin/cat", "--", path]) (8 * 1048576 + 1) <&> \case
+              (Exited 0, bytes, False) -> Right $ AE.String $ encoded bytes
+              (Exited 0, _, True) -> Left "File exceeds the 8 MiB read limit"
+              (_, bytes, _) -> Left $ T.take 1000 $ decodeUtf8 bytes
+          Access path -> probe ["/usr/bin/test", "-r", path] ("ENOENT: " <> path)
+          Writable path -> probe ["/bin/sh", "-c", "test -r \"$1\" && test -w \"$1\"", "monoscope-edit", path] ("Permission denied: " <> path)
           Mkdir path -> mutate ["/bin/mkdir", "-p", "--", path]
           Write path content -> do
             staged <- ("/run/monoscope-write-" <>) . UUID.toText <$> UUID4.nextRandom

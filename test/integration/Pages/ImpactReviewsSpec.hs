@@ -605,7 +605,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       writeIORef plan [reproduction ["testPatch" AE..= testPatch]]
       beforeDenied <- length <$> requests
       denied <- run $ Agent.fixRepository fixRequest{Agent.request = request{Agent.runId = uid 10, Agent.attemptId = uid 11}} (const $ pure $ Left "Unexpected query") knowledge admit (capture calls) (capture usage) (capture allocations) (capture checks) (const $ pure $ Left "Phase persistence rejected") (const $ pure $ Left "Unexpected validation")
-      isLeft denied `shouldBe` True
+      either Relude.id (const "accepted") denied `shouldBe` "Phase persistence rejected"
       length <$> requests `shouldReturn` beforeDenied
       ready <- MVar.newEmptyMVar
       blockedAdmission <- MVar.newEmptyMVar :: IO (MVar.MVar ())

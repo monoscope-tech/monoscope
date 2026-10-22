@@ -27,7 +27,7 @@ import Relude
 import System.Environment (getEnvironment)
 import System.FilePath (takeDirectory, (</>))
 import System.IO (hClose)
-import System.IO.Error (isEOFError, userError)
+import System.IO.Error (isEOFError)
 import System.Process.Typed (ExitCode (..), createPipe, getStdin, getStdout, nullStream, proc, setEnv, setStderr, setStdin, setStdout, stopProcess, waitExitCode, waitExitCodeSTM, withProcessTerm)
 import UnliftIO.Exception (finally, throwIO, tryAny, tryJust)
 import UnliftIO.Timeout qualified as Timeout
@@ -91,6 +91,12 @@ makeEffect ''CodeReview
 -- | A role whose VM the host owns: who is billed for it, the image it must use, how its guest is prepared from
 -- recorded evidence, and the fields the agent wraps around its submission.
 data Ownership = Ownership {host :: Guest.Host, attempt :: UUIDId "agent_attempt", image :: Maybe (UUIDId "guest_image"), setup :: Map Text ByteString -> Guest.Setup, envelope :: Maybe AE.Value, lease :: Maybe Guest.Lease}
+
+
+-- | The host refused a receipt the run cannot continue without; its reason is the run's failure.
+newtype ReceiptRefused = ReceiptRefused Text
+  deriving stock (Show)
+  deriving anyclass (Exception)
 
 
 data Task = AdvisoryTask (Request "pr_review") | FixTask FixRequest | AdmissionTask AdmissionRequest | PeerTask FixReviewRequest
@@ -202,40 +208,38 @@ runCodeReviewReal artifactStore host executable skills = interpret \env -> \case
               AdmissionTask request -> (Outbox.Admission request.fix.request.runId, Checkout.Repository request.fix.request{head = request.fix.request.base}, AE.object ["tag" AE..= ("AdmitTask" :: Text), "contents" AE..= (request{fix = request.fix{request = request.fix.request{gitToken = ""}}} :: AdmissionRequest)])
               PeerTask request -> (Outbox.PeerReview request.fix.request.runId, Checkout.VerifiedCandidate request.artifacts, AE.object ["tag" AE..= ("ReviewFixTask" :: Text), "contents" AE..= (request{fix = request.fix{request = request.fix.request{gitToken = ""}}} :: FixReviewRequest)])
             role = case scope of Outbox.Advisory _ -> Policy.Advisory; Outbox.IssueFix _ -> Policy.Fix; Outbox.Admission _ -> Policy.Admission; Outbox.PeerReview _ -> Policy.Peer
-            -- Roles migrate to a host-owned VM one at a time; the rest still create theirs in the child.
-            owned = host >>= \configured -> case task of
-              AdvisoryTask request -> Just $ Ownership configured request.attemptId Nothing (const Guest.Explore) Nothing (checkpoint request Nothing)
-              AdmissionTask request -> Just $ Ownership configured request.fix.request.attemptId (Just request.fix.imageBuildId) (const $ Guest.InspectAdmission request.artifact) (Just $ AE.object ["artifact" AE..= request.artifact]) (checkpoint request.fix.request $ Just request.fix.imageBuildId)
-              PeerTask request -> Just $ Ownership configured request.fix.request.attemptId (Just request.fix.imageBuildId) Guest.ReviewEvidence (Just $ AE.object ["result" AE..= request.artifacts.result]) (checkpoint request.fix.request $ Just request.fix.imageBuildId)
-              FixTask request -> Just $ Ownership configured request.request.attemptId (Just request.imageBuildId) (const Guest.LockForReproduction) Nothing (checkpoint request.request $ Just request.imageBuildId)
-            -- Prepared checkpoints are keyed by the pinned project, repository and base, never by the reviewed head.
-            checkpoint :: Request run -> Maybe (UUIDId "guest_image") -> Maybe Guest.Lease
-            checkpoint request pinned = do
-              store <- artifactStore
-              Guest.Lease store.cacheDir <$> AET.parseMaybe AE.parseJSON (AE.object ["projectId" AE..= request.projectId, "repository" AE..= request.repository, "base" AE..= request.base, "expectedImageBuildId" AE..= pinned, "expectedCheckpoint" AE..= AE.Null, "ownerPid" AE..= AE.Null])
+            owned = host <&> \configured ->
+              let -- Prepared checkpoints are keyed by the pinned project, repository and base, never by the reviewed head.
+                  own :: Request run -> Maybe (UUIDId "guest_image") -> (Map Text ByteString -> Guest.Setup) -> Maybe AE.Value -> Ownership
+                  own request pinned setup envelope = Ownership configured request.attemptId pinned setup envelope do
+                    store <- artifactStore
+                    Guest.Lease store.cacheDir <$> AET.parseMaybe AE.parseJSON (AE.object ["projectId" AE..= request.projectId, "repository" AE..= request.repository, "base" AE..= request.base, "expectedImageBuildId" AE..= pinned])
+               in case task of
+                    AdvisoryTask request -> own request Nothing (const Guest.Explore) Nothing
+                    AdmissionTask request -> own request.fix.request (Just request.fix.imageBuildId) (const $ Guest.InspectAdmission request.artifact) (Just $ AE.object ["artifact" AE..= request.artifact])
+                    PeerTask request -> own request.fix.request (Just request.fix.imageBuildId) Guest.ReviewEvidence (Just $ AE.object ["result" AE..= request.artifacts.result])
+                    FixTask request -> own request.request (Just request.imageBuildId) (const Guest.LockForReproduction) Nothing
             honours invocation = invocation.name `elem` Policy.toolsForRole role && null (Schema.validateJSON mempty (Policy.toolSchema invocation.name) invocation.arguments)
             -- Fresh verifier VMs replay a frozen artifact. Their receipts are already journaled beside the outbox;
             -- each is acknowledged, then @observe@d (a fix also records it as a phase). Errors carry the report.
             replayFrozen :: Guest.Session -> Outbox.Outbox -> Request run -> AE.Value -> [(Text, Text)] -> (CheckReceipt -> IO ()) -> IO (Either Text (AE.Value, [CheckReceipt]))
             replayFrozen session outbox pinned artifact revisions observe = do
               let options = session.verifier (Outbox.outboxPath outbox </> "checks")
-              case AE.fromJSON @Workspace.RegressionRequest $ AE.object ["projectId" AE..= pinned.projectId, "runId" AE..= pinned.runId, "attemptId" AE..= pinned.attemptId, "sessionId" AE..= verifierSession, "base" AE..= pinned.base, "imageBuildId" AE..= session.imageBuildId, "workspace" AE..= session.baseline, "artifact" AE..= artifact, "revisions" AE..= revisions, "ownerPid" AE..= AE.Null] of
+              case AE.fromJSON @Workspace.RegressionRequest $ AE.object ["projectId" AE..= pinned.projectId, "runId" AE..= pinned.runId, "attemptId" AE..= pinned.attemptId, "sessionId" AE..= verifierSession, "base" AE..= pinned.base, "imageBuildId" AE..= session.imageBuildId, "workspace" AE..= session.baseline, "artifact" AE..= artifact, "revisions" AE..= revisions] of
                 AE.Error _ -> pure $ Left "Regression arguments do not match the host contract"
                 AE.Success regression ->
                   tryAny (Workspace.verifyRegression options regression) >>= \case
                     Left failure -> pure $ Left $ maybe "Local check could not run" Workspace.regressionErrorText $ fromException failure
                     Right result -> do
                       checks <- forM result.receipts \receipt -> case AE.fromJSON (AE.toJSON receipt) of
-                        AE.Success check -> Outbox.acknowledge outbox (Outbox.Check check) record >>= either (throwIO . userError . toString) (const $ observe check $> check)
-                        AE.Error _ -> throwIO $ userError "Regression receipt does not match the host contract"
+                        AE.Success check -> (Outbox.acknowledge outbox (Outbox.Check check) record >>= orThrow) >> observe check $> check
+                        AE.Error _ -> throwIO $ ReceiptRefused "Regression receipt does not match the host contract"
                       traverse_ (uncurry session.copyIn) $ Workspace.regressionLogs options result
                       pure $ if result.isError then Left (decodeUtf8 $ AE.encode result.report) else Right (AE.toJSON result.report, checks)
             -- A rejected phase ends the run, as an unacknowledged receipt did in the child.
-            persistPhase outbox attempt step = do
-              identifier <- UUIDId <$> UUID4.nextRandom
-              let receipt = Outbox.Phase $ PhaseReceipt identifier attempt step
-              Outbox.journal outbox receipt
-              Outbox.acknowledge outbox receipt record >>= either (throwIO . userError . toString) pure
+            persistPhase outbox attempt step = UUID4.nextRandom >>= \identifier -> settle outbox (Outbox.Phase $ PhaseReceipt (UUIDId identifier) attempt step) >>= orThrow
+            orThrow = either (throwIO . ReceiptRefused) pure
+            settle outbox receipt = Outbox.journal outbox receipt >> Outbox.acknowledge outbox receipt record
             record = \case
               Outbox.Call receipt -> callbacks.calls receipt $> Right ()
               Outbox.Usage receipt -> callbacks.usage receipt $> Right ()
@@ -243,7 +247,7 @@ runCodeReviewReal artifactStore host executable skills = interpret \env -> \case
               Outbox.Check receipt -> maybe (pure $ Left "This task cannot record regression executions") (\save -> save receipt $> Right ()) callbacks.checks
               Outbox.Phase receipt -> callbacks.phase receipt
             withJournal action = maybe (action Nothing) (\configured -> Outbox.withOutbox configured scope $ action . Just) artifactStore
-            allocate journal receipt = maybe (record $ Outbox.Allocation receipt) (\outbox -> Outbox.journal outbox (Outbox.Allocation receipt) >> Outbox.acknowledge outbox (Outbox.Allocation receipt) record) journal
+            allocate journal receipt = maybe record settle journal $ Outbox.Allocation receipt
         -- Replay persisted work before starting a child, fetching source or calling a model.
         outcome <- tryAny $ Timeout.timeout (480 * 1000000) $ withJournal \journal -> do
           recovered <- maybe (pure $ Right ()) (`Outbox.replay` record) journal
@@ -370,6 +374,7 @@ runCodeReviewReal artifactStore host executable skills = interpret \env -> \case
                 writeMessage payload
                 receive Nothing (20 :: Int) (5 :: Int) Nothing
         pure case outcome of
+          Left failure | Just (ReceiptRefused reason) <- fromException failure -> Left reason
           Left _ -> Left "Review agent could not be executed"
           Right Nothing -> Left "Review agent exceeded its eight-minute budget"
           Right (Just result) -> result

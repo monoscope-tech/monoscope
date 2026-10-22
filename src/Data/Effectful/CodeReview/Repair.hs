@@ -4,13 +4,14 @@ import Control.Monad.Trans.Except (throwE)
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
 import Data.ByteString qualified as BS
-import Data.Effectful.AgentWorkspace (agentCommand, publish)
+import Data.Effectful.AgentWorkspace (LogExit (..), agentCommand, publish)
 import Data.Effectful.CodeReview.Artifacts (CapturedCandidate (..), captureCandidate, sha256)
 import Data.Effectful.CodeReview.Guest qualified as Guest
 import Data.Effectful.CodeReview.Types hiding (sha256)
 import Data.Text qualified as T
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID4
+import Pkg.DeriveUtils (UUIDId)
 import Relude
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>))
@@ -21,7 +22,7 @@ data Stage
   = Unreproduced
   | Reproduced TestArtifact
   | Proposed TestArtifact CapturedCandidate
-  | Verified TestArtifact CapturedCandidate CheckReceipt
+  | Verified TestArtifact CapturedCandidate (UUIDId "regression_check") Text
 
 
 -- | What a fix session may do: replay a frozen test on revisions (recording its checks), ask the host to admit a test,
@@ -47,7 +48,7 @@ reproduce repair arguments =
         (Just text, Nothing) -> pure text
         (Nothing, Just path) -> do
           (exit, bytes, _) <- liftIO $ repair.session.output (agentCommand ["/bin/sh", "-c", "exec /usr/bin/head -c 262145 -- \"$1\" 2>/dev/null", "monoscope-patch", resolve path]) (262144 + 2)
-          when (exit /= Just 0) $ throwE "Regression patch file could not be read"
+          when (exit /= Exited 0) $ throwE "Regression patch file could not be read"
           when (BS.length bytes > 262144) $ throwE "Regression patch file exceeds its 256 KiB limit"
           pure $ decodeUtf8 bytes
         _ -> throwE "Supply exactly one of testPatch or testPatchFile"
@@ -56,7 +57,7 @@ reproduce repair arguments =
       rationale <- ExceptT $ repair.admit artifact
       when (T.null $ T.strip rationale) $ throwE "Host admission requires a recorded rationale"
       admission <- liftIO $ ((repair.artifacts </> "admissions") </>) . UUID.toString <$> UUID4.nextRandom
-      liftIO $ createDirectoryIfMissing True admission >> publish (admission </> "admission.json") (AE.object ["projectId" AE..= repair.job.request.projectId, "runId" AE..= repair.job.request.runId, "issueId" AE..= repair.job.issueId, "attemptId" AE..= repair.job.request.attemptId, "base" AE..= repair.job.request.base, "regressionSha256" AE..= sha256 (toStrict $ AE.encode $ AE.object ["script" AE..= script, "testPatch" AE..= testPatch, "failureMessage" AE..= failureMessage]), "rationale" AE..= rationale])
+      liftIO $ createDirectoryIfMissing True admission >> publish (admission </> "admission.json") (AE.object ["projectId" AE..= repair.job.request.projectId, "runId" AE..= repair.job.request.runId, "issueId" AE..= repair.job.issueId, "attemptId" AE..= repair.job.request.attemptId, "base" AE..= repair.job.request.base, "regressionSha256" AE..= sha256 (toStrict $ AE.encode artifact), "rationale" AE..= rationale])
       (report, receipts) <- ExceptT $ repair.replay artifact [("base", repair.job.request.base)]
       case receipts of
         [baseline] | baseline.status == Failed -> do
@@ -100,8 +101,8 @@ verify repair =
         [baseline, verified]
           | baseline.status == Failed
           , verified.status == Passed
-          , retained verified -> do
-              liftIO $ writeIORef repair.stage $ Verified artifact candidate verified
+          , Just (RetainedTest digest) <- verified.regression -> do
+              liftIO $ writeIORef repair.stage $ Verified artifact candidate verified.checkId digest
               pure $ AE.String $ "Frozen regression fails on base and passes on the candidate with its test retained.\n" <> rendered
         _ -> throwE $ "Candidate verification did not establish a failing base and passing retained test.\n" <> rendered
     _ -> pure $ Left "Capture a candidate after reproduction first"
@@ -111,19 +112,19 @@ verify repair =
 submission :: Repair -> AE.Value -> IO (Either Text AE.Value)
 submission repair draft =
   readIORef repair.stage >>= \case
-    Verified _ candidate check | Just (RetainedTest digest) <- check.regression -> runExceptT do
+    Verified _ candidate check digest -> runExceptT do
       summary <- hoistEither $ first toText $ AET.parseEither (AE.withObject "Fix submission" (AE..: "summary")) draft
       unchanged repair candidate "Workspace changed after verification; propose and verify a new candidate"
-      pure $ AE.toJSON $ FixResult candidate.projectId candidate.runId candidate.issueId candidate.attemptId candidate.candidateId candidate.base candidate.head candidate.patchSha256 candidate.bundleSha256 candidate.rootCause check.checkId digest summary
+      pure $ AE.toJSON $ FixResult candidate.projectId candidate.runId candidate.issueId candidate.attemptId candidate.candidateId candidate.base candidate.head candidate.patchSha256 candidate.bundleSha256 candidate.rootCause check digest summary
     _ -> pure $ Left "Capture and verify a source fix before submission"
 
 
 frozen :: Stage -> Maybe TestArtifact
-frozen = \case Unreproduced -> Nothing; Reproduced artifact -> Just artifact; Proposed artifact _ -> Just artifact; Verified artifact _ _ -> Just artifact
+frozen = \case Unreproduced -> Nothing; Reproduced artifact -> Just artifact; Proposed artifact _ -> Just artifact; Verified artifact _ _ _ -> Just artifact
 
 
 proposed :: Stage -> Maybe (TestArtifact, CapturedCandidate)
-proposed = \case Proposed artifact candidate -> Just (artifact, candidate); Verified artifact candidate _ -> Just (artifact, candidate); _ -> Nothing
+proposed = \case Proposed artifact candidate -> Just (artifact, candidate); Verified artifact candidate _ _ -> Just (artifact, candidate); _ -> Nothing
 
 
 retained :: CheckReceipt -> Bool
@@ -141,7 +142,7 @@ capture repair = do
   (exit, bytes, truncated) <- repair.session.output (agentCommand ["/bin/sh", "-c", "exec /usr/bin/git diff --cached --binary --no-ext-diff --no-textconv --no-color --no-relative --src-prefix=a/ --dst-prefix=b/ \"$1\" -- 2>/dev/null", "monoscope-capture", repair.job.request.base]) (1048576 + 1)
   pure
     if
-      | added /= Just 0 || exit /= Just 0 -> Left "Candidate patch could not be captured"
+      | added /= Exited 0 || exit /= Exited 0 -> Left "Candidate patch could not be captured"
       | truncated -> Left "Candidate patch exceeds its 1 MiB limit"
       | otherwise -> Right $ decodeUtf8 bytes
 

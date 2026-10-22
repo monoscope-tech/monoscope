@@ -334,7 +334,7 @@ data Placement = Injected | Retained
 
 
 data LogExit = Exited Int | LogLimit
-  deriving stock (Generic)
+  deriving stock (Eq, Generic)
   deriving anyclass (AE.FromJSON)
 
 
