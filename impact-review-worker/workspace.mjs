@@ -27,8 +27,6 @@ const nativeCommand = (command, request, args, signal, script) => nativeInput(co
   JSON.parse((await exec(cli, argv, { signal, timeout: 450000, maxBuffer: 1024 * 1024 })).stdout));
 const workspaceRequest = (request, image) => ({ projectId: request.projectId, repository: request.repository, base: request.base, expectedImageBuildId: image.buildId });
 const workspaceArgs = (image, options) => ['--image', image.assetDir, '--cache', options.cacheDir, ...(options.dependencyArchive ? ['--dependencies', options.dependencyArchive] : [])];
-const nativeWorkspace = (operation, request, image, options) => nativeCommand(operation, workspaceRequest(request, image),
-  [...workspaceArgs(image, options), ...(operation === 'prepare' ? ['--checkout', options.checkout] : [])], options.signal, options.script);
 export const runRegression = (request, image, { artifactDir, checkout, workspace, signal }) => nativeCommand('check',
   { ...request, imageBuildId: image.buildId, workspace: workspace ? { tag: 'PreparedCheckpoint', contents: { path: workspace.path, sha256: workspace.manifest.sha256 } } : { tag: 'Pristine' } },
   ['--image', image.assetDir, '--artifacts', artifactDir, '--checkout', checkout], signal);
@@ -78,8 +76,6 @@ function resumePrepared(prepared, request, image, options) {
   });
 }
 export async function loadPreparedWorkspace(request, image, options) {
-  return resumePrepared(await nativeWorkspace('load', request, image, options), request, image, options);
-}
-export async function prepareWorkspace(request, image, options) {
-  return resumePrepared(await nativeWorkspace('prepare', request, image, options), request, image, options);
+  const prepared = await nativeCommand('load', workspaceRequest(request, image), workspaceArgs(image, options), options.signal, options.script);
+  return resumePrepared(prepared, request, image, options);
 }

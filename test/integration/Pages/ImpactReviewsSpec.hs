@@ -1609,6 +1609,10 @@ spec = around withTestResources $ describe "Production impact reviews" do
     field "head" preparedFirst `shouldBe` Right headRevision
     field "rootInstructions" preparedFirst `shouldBe` Right ("Read actual callers before reviewing.\n" :: Text)
     field "instructions" preparedFirst `shouldBe` Right ("Read actual callers before reviewing.\n" :: Text)
+    policy <- either fail pure $ field "policy" preparedFirst
+    instructions <- either fail pure $ field "instructions" policy
+    (instructions :: Text) `shouldSatisfy` T.isInfixOf headRevision
+    instructions `shouldSatisfy` T.isInfixOf "Read actual callers before reviewing."
     cleaned preparedFirst
     for_ ["protocol", "callback", "cancel"] \mode -> do
       ready <- MVar.newEmptyMVar
@@ -1821,7 +1825,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     -- Literal wire ordering matches JSON.stringify used by the existing worker.
     let frozen = "{\"script\":" <> toStrict (AE.encode $ decodeUtf8 @Text script) <> ",\"testPatch\":" <> toStrict (AE.encode $ decodeUtf8 @Text testPatch) <> ",\"failureMessage\":\"retry token lost\"}"
         result = Agent.FixResult{projectId = testPid, runId = uid 1, issueId = uid 2, attemptId = uid 3, candidateId, base, head = candidateRevision, patchSha256 = sha patch, bundleSha256 = sha bundle, rootCause = "Runtime drops retry token <code> --> & test", checkId = uid 5, regressionSha256 = sha frozen, summary = "Preserve retry tokens"}
-        baselineLog = "retry token lost\n\nliteral <code> --> & test\n" :: ByteString
+        baselineLog = "retry token lost\n\nliteral <code> --> & test\n" <> BS.pack [0, 255] :: ByteString
         candidateLog = "regression-passed\n" :: ByteString
         baseline = Agent.CheckReceipt{id = uid 6, attemptId = result.attemptId, checkId = result.checkId, side = Agent.Base, revision = Fixes.revisionText base, imageBuildId = (uid 8 :: UUIDId "image").toText, scriptSha256 = sha script, regression = Just $ Agent.InjectedTest result.regressionSha256, status = Agent.Failed, exitCode = Just 1, durationMs = 10, cpus = 2, memoryMiB = 1024, logBytes = fromIntegral $ BS.length baselineLog, logSha256 = sha baselineLog, workspace = Nothing}
         candidate = baseline{Agent.id = uid 7, Agent.side = Agent.Head, Agent.revision = Fixes.revisionText candidateRevision, Agent.regression = Just $ Agent.RetainedTest result.regressionSha256, Agent.status = Agent.Passed, Agent.exitCode = Just 0, Agent.logBytes = fromIntegral $ BS.length candidateLog, Agent.logSha256 = sha candidateLog}
@@ -1838,6 +1842,12 @@ spec = around withTestResources $ describe "Production impact reviews" do
     createDirectoryIfMissing True execution
     restore
     fmap Agent.verifiedFixResult <$> verify request `shouldReturn` Right result
+    snapshot <- Checkout.withCheckout store (Checkout.VerifiedCandidate request) (pure . AE.toJSON)
+    prepared <- either (fail . toString) pure snapshot
+    let evidenceField name = AE.withObject "Verified peer-review evidence" (AE..: name)
+    AET.parseMaybe (evidenceField "evidence" >=> evidenceField "contents" >=> evidenceField "regression" >=> evidenceField "script") prepared `shouldBe` Just (decodeUtf8 @Text script)
+    AET.parseMaybe (evidenceField "evidence" >=> evidenceField "contents" >=> evidenceField "baseLog") prepared `shouldBe` Just (extractBase64 $ B64.encodeBase64 baselineLog)
+    AET.parseMaybe (evidenceField "evidence" >=> evidenceField "contents" >=> evidenceField "headLog") prepared `shouldBe` Just (extractBase64 $ B64.encodeBase64 candidateLog)
     for_ files \(path, bytes) -> do
       writeFileBS path (bytes <> "corruption")
       isLeft <$> verify request `shouldReturn` True

@@ -10,7 +10,7 @@ import Data.ByteString.Base64 qualified as Base64
 import Data.ByteString.Lazy qualified as LBS
 import Data.Char (isAlphaNum, isAscii, isHexDigit)
 import Data.Conduit.Combinators qualified as CC
-import Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), readPrivateArtifact, withVerifiedArtifacts)
+import Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), artifactCheckout, readPrivateArtifact, withVerifiedArtifacts)
 import Data.Effectful.CodeReview.Explanation (readExplanationMedia)
 import Data.Effectful.CodeReview.Types (ArtifactRequest (..), Explanation (..), FixResult (..), revisionText, validExplanation)
 import Data.Effectful.GitPublication.Types
@@ -161,7 +161,8 @@ publish store executable token artifacts explanation context authorize = do
           bytes <- ExceptT $ first (const SourceChanged) <$> readExplanationMedia store.usageDir explanation (file asset)
           liftIO $ writeFileBS (temporary </> toString (file asset)) bytes
         -- The verifier owns and cleans up the exact bundle-derived checkout.
-        verified <- liftIO $ withVerifiedArtifacts store artifacts \checkout -> runExceptT do
+        verified <- liftIO $ withVerifiedArtifacts store artifacts \verifiedArtifacts -> runExceptT do
+          let checkout = artifactCheckout verifiedArtifacts
           permit Discover
           access
           matches <- concat <$> (pages (endpoint <> "/pulls?state=all&head=" <> encoded (T.takeWhile (/= '/') context.repo <> ":" <> context.branch) <> "&per_page=100") :: ExceptT Failure IO [[PullNumber]])

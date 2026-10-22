@@ -9,7 +9,7 @@ import parseDiff from 'parse-diff';
 import { review, reviewDraft, modelUsage } from './review.mjs';
 
 const caseSchema = z.object({
-  checkout: z.object({ directory: z.string(), repositorySkills: z.string().min(1), rootInstructions: z.string(), projectId: z.uuid(), repository: z.string(), base: z.string(), head: z.string(), cacheStatus: z.enum(['hit', 'miss', 'verified']), durationMs: z.number().int().nonnegative() }).strict(),
+  checkout: z.object({ directory: z.string(), repositorySkills: z.string().min(1), rootInstructions: z.string(), projectId: z.uuid(), repository: z.string(), base: z.string(), head: z.string(), cacheStatus: z.enum(['hit', 'miss', 'verified']), durationMs: z.number().int().nonnegative(), policy: z.object({ instructions: z.string(), tools: z.array(z.object({ name: z.string(), description: z.string(), parameters: z.record(z.string(), z.unknown()), sequential: z.boolean() }).strict()) }).strict(), evidence: z.object({ tag: z.literal('SourceOnly') }).strict() }).strict(),
   projectId: z.uuid(), repository: z.string(), base: z.string().regex(/^[a-f0-9]{40}$/), head: z.string().regex(/^[a-f0-9]{40}$/),
   provider: z.string(), model: z.string(), evidenceKind: z.enum(['synthetic', 'snapshot']),
   evidence: z.array(z.object({ key: z.string().min(1), kind: z.enum(['telemetry', 'monitor', 'dashboard']) }).passthrough()).refine((items) => new Set(items.map((item) => item.key)).size === items.length, 'Evidence keys must be unique'), rubric: z.array(z.string()),
@@ -44,7 +44,7 @@ try {
   output = resolve(resultPath);
   const pkg = JSON.parse(await readFile(new URL('./package.json', import.meta.url), 'utf8'));
   const skills = JSON.parse(await readFile(new URL('./skills/superpowers/UPSTREAM.json', import.meta.url), 'utf8'));
-  const paths = ['review.mjs', 'workspace.mjs', 'artifacts.mjs', 'evaluate.mjs', 'package-lock.json', 'skills/superpowers/UPSTREAM.json', ...Object.keys(skills.sha256).map((path) => `skills/superpowers/${path}`)];
+  const paths = ['review.mjs', 'workspace.mjs', '../src/Data/Effectful/CodeReview/Artifacts.hs', '../src/Data/Effectful/CodeReview/Policy.hs', 'evaluate.mjs', 'package-lock.json', 'skills/superpowers/UPSTREAM.json', ...Object.keys(skills.sha256).map((path) => `skills/superpowers/${path}`)];
   const files = Object.fromEntries(await Promise.all(paths.map(async (path) => [path, createHash('sha256').update(await readFile(new URL(path, import.meta.url))).digest('hex')])));
   artifact = { validation: { changedLines: true, evidenceKeys: true, telemetryContext: true, semanticQuality: 'manual' }, createdAt: new Date().toISOString(), ...input, harness: { dependencies: { ...pkg.dependencies, ...pkg.devDependencies }, skills: { repository: skills.repository, revision: skills.revision }, files }, runs: [] };
   await writeFile(output, JSON.stringify(artifact, null, 2) + '\n', { flag: 'wx', mode: 0o600 });

@@ -2,7 +2,7 @@
 
 ## Current implementation checkpoint — 2026-10-22
 
-The larger agent implementation remains local and has no feature pull request or deployment. Shared table-widget PNG rendering merged in [PR #688](https://github.com/monoscope-tech/monoscope/pull/688) after all required CI checks passed, including the production image build. The independent project wiki is in [draft PR #689](https://github.com/monoscope-tech/monoscope/pull/689), awaiting its CI checks. The installed agent harness uses Pi `1.4.0` and Gondolin `0.13.0`. The server's separate AI library remains the pinned `langchain-hs` `0.0.3.0` fork. These are installed versions, not a claim that they are the latest available releases.
+The larger agent implementation remains local and has no feature pull request or deployment. Shared table-widget PNG rendering merged in [PR #688](https://github.com/monoscope-tech/monoscope/pull/688) after all required CI checks passed, including the production image build. The independent project wiki is in [PR #689](https://github.com/monoscope-tech/monoscope/pull/689), ready for review with all checks green, including the production image. The installed agent harness uses Pi `1.4.0` and Gondolin `0.13.0`. The server's separate AI library remains the pinned `langchain-hs` `0.0.3.0` fork. These are installed versions, not a claim that they are the latest available releases.
 
 | Area | Implemented locally | Still required |
 | --- | --- | --- |
@@ -11,11 +11,23 @@ The larger agent implementation remains local and has no feature pull request or
 | Project memory | Versioned project wiki with UI, permissions and read/write tools for the four repository-agent roles. | Wiki access for conversational and investigation agents. |
 | Usage | Durable model-call starts/receipts, immutable billing attribution, recorded sandbox/check/media resource facts and project/customer views. Missing usage remains unpriced. | Complete per-resource lifecycle records, preparation/storage/transfer attribution and prices, budget reservations, margins and billing. |
 | Sandbox reuse | Prepared build caches, private overlays, hash-checked S3 disk checkpoint archive/restore and operator-driven local pruning. | Scheduled maintenance, general orphan reconciliation, remote retention and RAM/process resume. Disk restoration starts a new VM. |
-| Haskell migration | Application policy, native effects and worker-suite assertions in Haskell. No worker `*.test.mjs` suites remain. | Small JavaScript SDK adapters and protocol fixtures remain necessary for the selected upstream libraries. |
+| Haskell migration | Four production prompts, fourteen tool contracts, role-scoped telemetry/wiki dispatch, native candidate Git capture, artifact verification and worker-suite assertions. No worker `*.test.mjs` suites remain. | Remaining fix/VM coordination and native workspace handoff; Haskell replacements for the two research CLIs. The 150–200-line adapter target is not yet achieved. |
 
-After replaying the feature onto `master` at `cb406743c`, the latest focused integration run passed **25 examples, zero failures, no pending examples**, in 307.822 seconds with seed `478291220`. It exercised the native supervisor, real local microVMs and a deterministic loopback model provider. The retained local log is `scripts/local/master-replay-integration.log`. A full CI sign-off and production deployment have not run.
+After replaying the feature onto `master` at `cb406743c`, the checkpoint integration run passed **25 examples, zero failures, no pending examples**, in 307.822 seconds with seed `478291220`. It exercised the native supervisor, real local microVMs and a deterministic loopback model provider. The retained local log is `scripts/local/master-replay-integration.log`. A full CI sign-off and production deployment have not run.
 
 See [the workflow contract](2026-10-20-issue-fix-workflow.md) for the required product behavior. The dated research and migration notes below preserve evidence from earlier stages; their intermediate test counts and pending-work statements are historical. This checkpoint describes the current state.
+
+### SDK policy migration — 2026-10-22
+
+The application now uses tool pass-through on the existing acknowledged protocol. Haskell supplies role-specific prompts and OpenAPI tool schemas; the child registers SDK tools. Haskell checks the telemetry/wiki tool allowlist, arguments and query budget. There is no new MCP server or HTTP transport. Candidate commit/bundle creation, hashes and synced metadata also run in Haskell against its leased checkout.
+
+Peer review receives the exact regression and binary-safe logs from the existing native artifact verification scope. It no longer clones a second mirror or repeats the verifier in JavaScript. Five replaced modules and four unreachable task branches were removed, along with the direct `proper-lockfile` dependency. Pi still requires that package transitively. The worker README now describes the adapter; the former operational material is preserved in [a dated reference](2026-10-22-agent-worker-operations.md).
+
+The SDK keeps its synchronous receipt spool and `ModelRuntime.streamSimple` gate. Haskell owns replay, attribution, database acceptance and acknowledgement. Removing the local spool before proving crash-safe delivery would risk losing usage already observed by the SDK. Pi catches extension-hook exceptions, so throwing from `before_provider_request` is not an equivalent fail-closed gate.
+
+Verification for this slice: the watcher passed **23 integration examples, zero failures, no pending cases** in 258.345 seconds (seed `478291220`). Candidate/related type boundaries passed 36 focused doctests. Pinned Fourmolu, Node syntax checks and scoped local HLint sign-off passed. The full branch review used the constraint, evasion, locality and distillation skills across three passes; the final pass found no new actionable issue. The retained integration log is `scripts/local/agent-migration-integration-final.log`. Full container/image sign-off for the larger agent branch remains outstanding.
+
+The remaining fix coordination and research commands are explicit follow-ups. The current slice preserves the frozen reproduce → fix → verify → independent-review flow and its metering while reducing JavaScript; it does not complete the whole migration or the production rollout.
 
 ### Remaining work and delivery estimate
 

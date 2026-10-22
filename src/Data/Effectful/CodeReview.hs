@@ -10,11 +10,14 @@ import Data.Effectful.CodeReview.Artifacts qualified as Native
 import Data.Effectful.CodeReview.Checkout qualified as Checkout
 import Data.Effectful.CodeReview.Explanation qualified as Media
 import Data.Effectful.CodeReview.Outbox qualified as Outbox
+import Data.Effectful.CodeReview.Policy qualified as Policy
 import Data.Effectful.CodeReview.Types
+import Data.OpenApi.Schema.Validation qualified as Schema
 import Data.Text qualified as T
 import Effectful
 import Effectful.Dispatch.Dynamic
 import Effectful.TH
+import Models.Projects.ProjectMemory qualified as Memory
 import Pkg.DeriveUtils (UUIDId)
 import Relude
 import System.Environment (getEnvironment)
@@ -25,7 +28,7 @@ import UnliftIO.Timeout qualified as Timeout
 
 
 -- JSON-lines protocol: queries, usage, execution receipts, validation, and result.
-data Message = Checkout () | Query TelemetryQuery | Knowledge KnowledgeRequest | Admit TestArtifact | Validate AE.Value | Result AE.Value
+data Message = Checkout () | Tool Policy.Invocation | Query TelemetryQuery | Knowledge KnowledgeRequest | Admit TestArtifact | Propose Native.CandidatePatch | Validate AE.Value | Result AE.Value
   deriving stock (Generic)
   deriving anyclass (AE.FromJSON)
 
@@ -79,6 +82,9 @@ type instance DispatchOf CodeReview = 'Dynamic
 makeEffect ''CodeReview
 
 
+data Task = AdvisoryTask (Request "pr_review") | FixTask FixRequest | AdmissionTask AdmissionRequest | PeerTask FixReviewRequest
+
+
 data Callbacks result = Callbacks
   { respond :: TelemetryQuery -> IO (Either Text AE.Value)
   , knowledge :: KnowledgeRequest -> IO (Either Text AE.Value)
@@ -97,9 +103,7 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
   ReviewRepository request respond knowledge recordCall recordUsage recordAllocation recordCheck check -> localSeqUnliftIO env \unlift ->
     liftIO
       $ launch
-        (Outbox.Advisory request.runId)
-        (Checkout.Repository request)
-        (AE.toJSON request{gitToken = ""})
+        (AdvisoryTask request)
         Callbacks
           { respond = unlift . respond
           , knowledge = unlift . knowledge
@@ -114,9 +118,7 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
   FixRepository request respond knowledge admit recordCall recordUsage recordAllocation recordCheck recordPhase check -> localSeqUnliftIO env \unlift ->
     liftIO
       $ launch
-        (Outbox.IssueFix request.request.runId)
-        (Checkout.Repository request.request{head = request.request.base})
-        (AE.object ["tag" AE..= ("FixTask" :: Text), "contents" AE..= request{request = request.request{gitToken = ""}}])
+        (FixTask request)
         Callbacks
           { respond = unlift . respond
           , knowledge = unlift . knowledge
@@ -133,9 +135,7 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
   AdmitRegression request knowledge recordCall recordUsage recordAllocation -> localSeqUnliftIO env \unlift ->
     liftIO
       $ launch
-        (Outbox.Admission request.fix.request.runId)
-        (Checkout.Repository request.fix.request{head = request.fix.request.base})
-        (AE.object ["tag" AE..= ("AdmitTask" :: Text), "contents" AE..= (request{fix = request.fix{request = request.fix.request{gitToken = ""}}} :: AdmissionRequest)])
+        (AdmissionTask request)
         Callbacks
           { respond = const $ pure $ Left "Admission has no production query capability"
           , knowledge = unlift . knowledge
@@ -159,9 +159,7 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
       else
         liftIO
           $ launch
-            (Outbox.PeerReview request.fix.request.runId)
-            (Checkout.VerifiedCandidate request.artifacts)
-            (AE.object ["tag" AE..= ("ReviewFixTask" :: Text), "contents" AE..= (request{fix = request.fix{request = request.fix.request{gitToken = ""}}} :: FixReviewRequest)])
+            (PeerTask request)
             Callbacks
               { respond = const $ pure $ Left "Peer review has no production query capability"
               , knowledge = unlift . knowledge
@@ -182,11 +180,17 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
         rendered <- Media.renderExplanation store request
         pure $ rendered >>= \explanation -> if validExplanation result explanation then Right $ ExplainedFix result explanation else Left "Explanation must bind the verified candidate and complete media manifest"
   where
-    launch :: Outbox.Scope -> Checkout.Source -> AE.Value -> Callbacks result -> IO (Either Text result)
-    launch scope source payload callbacks = case executable of
+    launch :: Task -> Callbacks result -> IO (Either Text result)
+    launch task callbacks = case executable of
       Nothing -> pure $ Left "Checkout-backed review agent is not configured"
       Just command -> do
-        let record = \case
+        let (scope, source, payload) = case task of
+              AdvisoryTask request -> (Outbox.Advisory request.runId, Checkout.Repository request, AE.toJSON request{gitToken = ""})
+              FixTask request -> (Outbox.IssueFix request.request.runId, Checkout.Repository request.request{head = request.request.base}, AE.object ["tag" AE..= ("FixTask" :: Text), "contents" AE..= request{request = request.request{gitToken = ""}}])
+              AdmissionTask request -> (Outbox.Admission request.fix.request.runId, Checkout.Repository request.fix.request{head = request.fix.request.base}, AE.object ["tag" AE..= ("AdmitTask" :: Text), "contents" AE..= (request{fix = request.fix{request = request.fix.request{gitToken = ""}}} :: AdmissionRequest)])
+              PeerTask request -> (Outbox.PeerReview request.fix.request.runId, Checkout.VerifiedCandidate request.artifacts, AE.object ["tag" AE..= ("ReviewFixTask" :: Text), "contents" AE..= (request{fix = request.fix{request = request.fix.request{gitToken = ""}}} :: FixReviewRequest)])
+            role = case scope of Outbox.Advisory _ -> Policy.Advisory; Outbox.IssueFix _ -> Policy.Fix; Outbox.Admission _ -> Policy.Admission; Outbox.PeerReview _ -> Policy.Peer
+            record = \case
               Outbox.Call receipt -> callbacks.calls receipt $> Right ()
               Outbox.Usage receipt -> callbacks.usage receipt $> Right ()
               Outbox.Allocation receipt -> callbacks.allocations receipt $> Right ()
@@ -230,11 +234,31 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
                                 Left failure | not phase -> pure $ Left failure
                                 _ -> receive supplied (remaining - bool 0 1 phase) submissions (if invalidates then Nothing else accepted)
                         Right (Right (Checkout ())) -> case (supplied, artifactStore) of
-                          (False, Just configured) -> do
+                          (Nothing, Just configured) -> do
                             prepared <- Checkout.withCheckout configured source \checkout ->
-                              (writeMessage (Right checkout :: Either Text Checkout.Prepared) >> receive True remaining submissions accepted) `finally` stop
+                              (writeMessage (Right checkout{Checkout.policy = Policy.policy role (revisionText checkout.base) (revisionText checkout.head) checkout.rootInstructions} :: Either Text Checkout.Prepared) >> receive (Just checkout) remaining submissions accepted) `finally` stop
                             pure $ join prepared
                           _ -> pure $ Left "Repository checkout was unavailable or already supplied"
+                        Right (Right (Tool invocation))
+                          | isNothing supplied -> pure $ Left "Tool invocation requires its repository checkout"
+                          | remaining > 0 -> do
+                              let allowed = Policy.toolsForRole role
+                                  parsed :: (AE.Value -> AET.Parser value) -> (value -> IO (Either Text AE.Value)) -> IO (Either Text AE.Value)
+                                  parsed parser = whenRight (Left "Tool arguments do not match the host contract") (AET.parseEither parser invocation.arguments)
+                                  property :: AE.FromJSON value => AE.Key -> (value -> IO (Either Text AE.Value)) -> IO (Either Text AE.Value)
+                                  property key = parsed $ AE.withObject "Tool arguments" (AE..: key)
+                                  request = case invocation.name of
+                                    Policy.QueryTelemetry -> parsed AE.parseJSON callbacks.respond
+                                    Policy.RecallKnowledge -> property "service" $ callbacks.knowledge . Recall
+                                    Policy.RememberKnowledge -> parsed AE.parseJSON $ callbacks.knowledge . Remember
+                                    Policy.ListProjectMemory -> callbacks.knowledge $ ProjectMemory Memory.List
+                                    Policy.ReadProjectMemory -> property "pageId" $ callbacks.knowledge . ProjectMemory . Memory.Read
+                                    Policy.WriteProjectMemory -> parsed AE.parseJSON $ callbacks.knowledge . ProjectMemory . Memory.Write
+                                    _ -> pure $ Left "This tool requires a native workflow handler"
+                              response <- if invocation.name `elem` allowed && null (Schema.validateJSON mempty (Policy.toolSchema invocation.name) invocation.arguments) then request else pure $ Left "Tool is unavailable or its arguments violate the host contract"
+                              writeMessage response
+                              receive supplied (remaining - 1) submissions Nothing
+                          | otherwise -> pure $ Left "Review agent exceeded its query budget"
                         Right (Right (Query query))
                           | remaining > 0 -> callbacks.respond query >>= writeMessage >> receive supplied (remaining - 1) submissions Nothing
                           | otherwise -> pure $ Left "Review agent exceeded its query budget"
@@ -244,8 +268,14 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
                         Right (Right (Admit artifact))
                           | remaining > 0 -> callbacks.admit artifact >>= writeMessage >> receive supplied (remaining - 1) submissions Nothing
                           | otherwise -> pure $ Left "Review agent exceeded its query budget"
+                        Right (Right (Propose patch)) -> case (task, supplied, journal) of
+                          (FixTask request, Just checkout, Just outbox) | remaining > 0 -> do
+                            captured <- Native.captureCandidate (Outbox.outboxPath outbox <> "/checks") request checkout.directory patch
+                            writeMessage captured
+                            receive supplied (remaining - 1) submissions Nothing
+                          _ -> pure $ Left "Candidate capture requires a prepared issue-fix task and remaining budget"
                         Right (Right (Validate draft))
-                          | not supplied && isJust artifactStore -> pure $ Left "Review agent has not acquired its repository checkout"
+                          | isNothing supplied && isJust artifactStore -> pure $ Left "Review agent has not acquired its repository checkout"
                           | submissions > 0 -> do
                               checked <- callbacks.validate draft
                               writeMessage $ void checked
@@ -257,7 +287,7 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
                             pure $ if status == ExitSuccess then Right result else Left "Review agent did not produce a validated result"
                           _ -> pure $ Left "Review agent returned an unvalidated draft"
                 writeMessage payload
-                receive False (20 :: Int) (5 :: Int) Nothing
+                receive Nothing (20 :: Int) (5 :: Int) Nothing
         pure case outcome of
           Left _ -> Left "Review agent could not be executed"
           Right Nothing -> Left "Review agent exceeded its eight-minute budget"
@@ -291,9 +321,9 @@ validReviewContext request verified =
    in result
         == verifiedFixResult verified
         && (context.projectId, context.runId, request.fix.issueId, context.base, context.repository, request.fix.imageBuildId.toText)
-          == (result.projectId, result.runId, result.issueId, revisionText result.base, request.artifacts.repository, request.artifacts.baseline.imageBuildId)
+        == (result.projectId, result.runId, result.issueId, revisionText result.base, request.artifacts.repository, request.artifacts.baseline.imageBuildId)
         && context.attemptId
-          /= result.attemptId
+        /= result.attemptId
 
 
 reviewOutcome :: FixReviewRequest -> VerifiedFix -> FixReviewDecision -> Either Text FixReviewOutcome

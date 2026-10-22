@@ -5,7 +5,8 @@ import Data.Base64.Types (extractBase64)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as Base64
 import Data.Char (isAlphaNum, isAscii)
-import Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), sha256, withVerifiedArtifacts)
+import Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), ReviewEvidence, artifactCheckout, reviewEvidence, sha256, withVerifiedArtifacts)
+import Data.Effectful.CodeReview.Policy qualified as Policy
 import Data.Effectful.CodeReview.Types (ArtifactRequest (..), FixResult (..), Request (..), Revision, mkRevision, revisionText)
 import Data.List (lookup)
 import Data.List.Extra (nubOrd)
@@ -35,7 +36,12 @@ data CacheStatus = Hit | Miss | Verified
   deriving (AE.ToJSON) via WrappedEnumSC 'Nothing "" CacheStatus
 
 
-data Prepared = Prepared {directory :: FilePath, repositorySkills :: FilePath, rootInstructions :: Text, projectId :: UUIDId "project", repository :: Text, base :: Revision, head :: Revision, cacheStatus :: CacheStatus, durationMs :: Word64}
+data CheckoutEvidence = SourceOnly | VerifiedEvidence ReviewEvidence
+  deriving stock (Generic)
+  deriving anyclass (AE.ToJSON)
+
+
+data Prepared = Prepared {directory :: FilePath, repositorySkills :: FilePath, rootInstructions :: Text, projectId :: UUIDId "project", repository :: Text, base :: Revision, head :: Revision, cacheStatus :: CacheStatus, durationMs :: Word64, evidence :: CheckoutEvidence, policy :: Policy.Policy}
   deriving stock (Generic)
   deriving anyclass (AE.ToJSON)
 
@@ -51,19 +57,20 @@ withCheckout store source action = do
       started <- getMonotonicTimeNSec
       prepared <- Timeout.timeout (120 * 1000000) $ prepare temporary request
       traverse
-        (\(directory, baseRevision, headRevision, cacheStatus) -> deliver started directory request.projectId request.repository baseRevision headRevision cacheStatus)
+        (\(directory, baseRevision, headRevision, cacheStatus) -> deliver started directory request.projectId request.repository baseRevision headRevision cacheStatus SourceOnly)
         prepared
     VerifiedCandidate artifacts -> do
       started <- getMonotonicTimeNSec
-      verified <- withVerifiedArtifacts store artifacts \directory -> do
-        let result = artifacts.result
+      verified <- withVerifiedArtifacts store artifacts \verifiedArtifacts -> do
+        let directory = artifactCheckout verifiedArtifacts
+            result = artifacts.result
         git directory ["checkout", "--quiet", "--detach", toString $ revisionText result.head] []
-        deliver started directory result.projectId artifacts.repository result.base result.head Verified
+        deliver started directory result.projectId artifacts.repository result.base result.head Verified $ VerifiedEvidence $ reviewEvidence verifiedArtifacts
       either (const invalid) (pure . Just) verified
   pure $ case outcome of Right (Just prepared) -> Right prepared; _ -> Left "Repository checkout could not be prepared"
   where
     elapsed started = max 1 . (`div` 1000000) . (+ 999999) . subtract started <$> getMonotonicTimeNSec
-    deliver started directory project repository baseRevision headRevision status = withSystemTempDirectory "monoscope-agent-metadata" \temporary -> do
+    deliver started directory project repository baseRevision headRevision status evidence = withSystemTempDirectory "monoscope-agent-metadata" \temporary -> do
       metadata <- canonicalizePath temporary
       let roots = [".agents/skills", ".pi/skills"]
           instructionNames = ["AGENTS.override.md", "AGENTS.md", "CLAUDE.md"]
@@ -89,7 +96,7 @@ withCheckout store source action = do
         writeFileBS destination =<< content blob
       instructions <- maybe (pure "") instruction $ asum $ map (`lookup` files) instructionNames
       duration <- elapsed started
-      action $ Prepared directory metadata instructions project repository baseRevision headRevision status duration
+      action $ Prepared directory metadata instructions project repository baseRevision headRevision status duration evidence (Policy.policy Policy.Advisory (revisionText baseRevision) (revisionText headRevision) instructions)
     prepare :: FilePath -> Request run -> IO (FilePath, Revision, Revision, CacheStatus)
     prepare temporary request = do
       baseRevision <- either (const invalid) pure $ mkRevision request.base
