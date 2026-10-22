@@ -441,7 +441,8 @@ data CreateProject = CreateProject
 projectCacheById :: (DB es, Time :> es) => Bool -> ProjectId -> Eff es ProjectCache
 projectCacheById freeTierEnabled pid = do
   now <- currentTime
-  (\r -> ProjectCache r (freeTierDailyLimit freeTierEnabled r.paymentPlan)) . fromMaybe defaultProjectCache.row
+  (\r -> ProjectCache r (freeTierDailyLimit freeTierEnabled r.paymentPlan))
+    . fromMaybe defaultProjectCache.row
     <$> EHasql.interpOne
       [HI.sql|
     select  coalesce(ARRAY_AGG(DISTINCT hosts ORDER BY hosts ASC),'{}') hosts,

@@ -1560,9 +1560,10 @@ isAesonTextEmpty = maybe True \(AesonText v) -> case AE.toJSON v of
 -- background path warms it and drops the slice there. Shared by the gRPC and HTTP exporters.
 withFreeTierGate :: AuthContext -> Maybe Text -> (req -> res) -> req -> IO res -> IO res
 withFreeTierGate appCtx keyM reject req accept = do
-  exceeded <- isJust <$> runMaybeT do
-    pid <- MaybeT . fmap join . Cache.lookup appCtx.projectKeyCache =<< hoistMaybe keyM
-    guard . overFreeTierQuota =<< MaybeT (Cache.lookup appCtx.projectCache pid)
+  exceeded <-
+    isJust <$> runMaybeT do
+      pid <- MaybeT . fmap join . Cache.lookup appCtx.projectKeyCache =<< hoistMaybe keyM
+      guard . overFreeTierQuota =<< MaybeT (Cache.lookup appCtx.projectCache pid)
   if exceeded then reject req <$ Metrics.bump Metrics.freeTierBatchesDropped [] else accept
 
 
@@ -1592,8 +1593,8 @@ rejectMetrics = rejectAll MSF.rejectedDataPoints . lengthOf (MSF.resourceMetrics
 -- partialSuccess response or dispatch the per-signal processing in the background.
 mkOtlpRpcHandler
   :: ( Input (Protobuf service meth) ~ Proto req
-     , Output (Protobuf service meth) ~ Proto res
      , Message res
+     , Output (Protobuf service meth) ~ Proto res
      , RequestMetadata (Protobuf service meth) ~ OtlpRequestMetadata
      , ResponseInitialMetadata (Protobuf service meth) ~ NoMetadata
      , ResponseTrailingMetadata (Protobuf service meth) ~ NoMetadata
