@@ -1,12 +1,47 @@
 export type PngProfile = "standard" | "slack";
+export type PngMode = "chart" | "table";
 
 // PNG layout uses ECharts pixel/percentage units and the email color scheme.
-export function preparePngOptions(finalOptions: any, width: number, height: number, darkMode: boolean, profile: PngProfile = "standard"): void {
+export function preparePngOptions(finalOptions: any, width: number, height: number, darkMode: boolean, profile: PngProfile = "standard", mode: PngMode = "chart"): void {
   finalOptions.backgroundColor = darkMode ? "#111827" : (finalOptions.backgroundColor || "#ffffff");
   finalOptions.useUTC = true;
   finalOptions.textStyle = { ...finalOptions.textStyle, fontFamily: 'sans-serif' };
   finalOptions.tooltip = { show: false };
   finalOptions.toolbox = { show: false };
+
+  if (mode === 'table') {
+    const source = finalOptions.dataset?.source;
+    const headers: unknown[] = Array.isArray(source?.[0]) ? source[0] : [];
+    const rows: unknown[][] = Array.isArray(source) ? source.slice(1).filter(Array.isArray) : [];
+    const columns = Math.min(headers.length, Math.max(1, Math.floor((width - 48) / 120)));
+    const rowLimit = Math.max(0, Math.floor((height - 104) / 32));
+    const columnWidth = (width - 48) / Math.max(1, columns);
+    const cell = (value: unknown, column: number, row: number, header = false) => ({
+      type: 'text', left: 24 + column * columnWidth, top: 24 + row * 32,
+      style: {
+        text: value == null ? '—' : typeof value === 'object' ? JSON.stringify(value) : String(value),
+        fontSize: 14, fontFamily: 'sans-serif', fontWeight: header ? 600 : 400,
+        fill: darkMode ? '#cbd5e1' : '#334155', width: columnWidth - 16, height: 24,
+        overflow: 'truncate', ellipsis: '…',
+      },
+    });
+    finalOptions.graphic = [
+      ...headers.slice(0, columns).map((value, column) => cell(value, column, 0, true)),
+      ...rows.slice(0, rowLimit).flatMap((row, index) => headers.slice(0, columns).map((_, column) => cell(row[column], column, index + 1))),
+      ...(!rows.length ? [{ type: 'text', left: 24, top: 64, style: { text: 'No rows returned', fontSize: 14, fill: darkMode ? '#cbd5e1' : '#334155' } }] : []),
+      ...(rows.length > rowLimit || headers.length > columns ? [{
+        type: 'text', left: 24, top: height - 24,
+        style: { text: `Showing ${Math.min(rowLimit, rows.length)} of ${rows.length} rows · ${columns} of ${headers.length} columns`, fontSize: 12, fill: darkMode ? '#94a3b8' : '#64748b' },
+      }] : []),
+    ];
+    finalOptions.series = [];
+    finalOptions.xAxis = { show: false };
+    finalOptions.yAxis = { show: false };
+    finalOptions.legend = { show: false };
+    delete finalOptions.dataset;
+    return;
+  }
+
 
   // ECharts numbers are pixels; strings may be percentages. Preserve their units.
   const paddedInset = (value: number | string | undefined, fallback: number, extent: number): number => {

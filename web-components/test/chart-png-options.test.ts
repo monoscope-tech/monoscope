@@ -4,6 +4,39 @@ import monitorFixture from './fixtures/slack-monitor-gap/request.json';
 import { preparePngOptions } from '../src/chart-png-options';
 
 describe('PNG chart layout', () => {
+  it.each([false, true])('renders aggregate table cells without treating counts as timestamps (dark=%s)', (darkMode) => {
+    const options: any = {
+      dataset: { source: [['events', 'percent'], [0, 100]] },
+      xAxis: { type: 'time' }, yAxis: { type: 'value' },
+      series: [{ type: 'bar', encode: { x: 0, y: 1 } }],
+    };
+    preparePngOptions(options, 960, 320, darkMode, 'slack', 'table');
+    const chart = echarts.init(null, darkMode ? 'dark' : undefined, { renderer: 'svg', ssr: true, width: 960, height: 320 });
+    try {
+      chart.setOption(options);
+      const svg = chart.renderToSVGString();
+      expect(svg).toMatch(/>events<\/text>/);
+      expect(svg).toContain('percent');
+      expect(svg).toMatch(/>0<\/text>/);
+      expect(svg).toMatch(/>100<\/text>/);
+      expect(svg).not.toContain('1970');
+    } finally { chart.dispose(); }
+  });
+
+  it.each([
+    { name: 'no rows', source: [['events']], text: 'No rows returned' },
+    { name: 'unknown value', source: [['events'], [null]], text: '—' },
+    { name: 'clipped results', source: [Array.from({ length: 10 }, (_, i) => `Column ${i}`), ...Array.from({ length: 200 }, () => Array(10).fill(1))], text: 'Showing 1 of 200 rows · 2 of 10 columns' },
+  ])('labels $name in a table PNG', ({ source, text }) => {
+    const options: any = { dataset: { source } };
+    preparePngOptions(options, 320, 160, false, 'slack', 'table');
+    const chart = echarts.init(null, undefined, { renderer: 'svg', ssr: true, width: 320, height: 160 });
+    try {
+      chart.setOption(options);
+      expect(chart.renderToSVGString()).toContain(text);
+    } finally { chart.dispose(); }
+  });
+
   it.each([false, true])('keeps a 36px legend reserve and fills the image (dark=%s)', (darkMode) => {
     const options = {
       grid: { width: '100%', left: '0%', top: 8, bottom: 36, containLabel: true },

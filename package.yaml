@@ -35,7 +35,7 @@ extra-source-files:
   # - README.md
   - auto-instrument-config.toml
   - static/migrations/**/*
-  - test/fixtures/github-app-test.pem
+  - test/fixtures/*
   # Cabal does not track TH addDependentFile; listing it here makes a rebuilt bundle
   # re-run GHC, which then re-splices viteAssetFile.
   - static/public/assets/web-components/dist/manifest.json

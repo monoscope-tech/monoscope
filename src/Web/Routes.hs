@@ -8,6 +8,7 @@ import Data.ByteString.Builder (Builder)
 import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
+import Data.Effectful.AgentArtifacts qualified as Artifacts
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Wreq qualified as Wreq
 import Data.List qualified as L
@@ -38,6 +39,7 @@ import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as ModelGitSync
 import Models.Projects.ImpactReviews qualified as ImpactReviews
+import Models.Projects.IssueFixes qualified as IssueFixes
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
@@ -537,6 +539,8 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , bringS3Post :: mode :- "p" :> ProjectId :> "byob_s3" :> ReqBody '[FormUrlEncoded] Projects.ProjectS3Bucket :> Post '[HTML] (RespHeaders Settings.StorageGet)
   , bringS3Remove :: mode :- "p" :> ProjectId :> "byob_s3" :> Delete '[HTML] (RespHeaders Settings.StorageGet)
   , gitSyncSettings :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Get '[HTML] (RespHeaders (Html ()))
+  , projectMemoryGet :: mode :- "p" :> ProjectId :> "memories" :> QueryParam "page" (UUIDId "memory_page") :> Get '[HTML] (RespHeaders (Html ()))
+  , projectMemoryPost :: mode :- "p" :> ProjectId :> "memories" :> ReqBody '[FormUrlEncoded] PageCodeContext.MemoryForm :> Post '[HTML] (RespHeaders (Html ()))
   , repositoriesGet :: mode :- "p" :> ProjectId :> "repositories" :> QueryParam "tab" PageCodeContext.RepositoryTab :> QueryParam "sample" Text :> Get '[HTML] (RespHeaders (Html ()))
   , serviceRepositoriesGet :: mode :- "p" :> ProjectId :> "repositories" :> "services" :> Capture "service" Text :> Get '[HTML] (RespHeaders (Html ()))
   , repositoryConnectGet :: mode :- "p" :> ProjectId :> "repositories" :> "connect" :> QueryParam "credentialId" ModelGitSync.GitHubCredentialId :> Get '[HTML] (RespHeaders (PageCtx PageCodeContext.RepositoryConnectGet))
@@ -566,6 +570,9 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , codeMappingsEditor :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> "editor" :> QueryParam "credentialId" ModelGitSync.GitHubCredentialId :> QueryParam "sample" Text :> Get '[HTML] (RespHeaders (Html ()))
   , codeMappingsPost :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> ReqBody '[FormUrlEncoded] PageCodeContext.CodeMappingForm :> Post '[HTML] (RespHeaders (Html ()))
   , impactReviewSettingsPost :: mode :- "p" :> ProjectId :> "settings" :> "pr-reviews" :> ReqBody '[FormUrlEncoded] ImpactReviews.ReviewSettings :> Post '[HTML] (RespHeaders (Html ()))
+  , issueFixGet :: mode :- "p" :> ProjectId :> "issue-fixes" :> Capture "id" IssueFixes.FixId :> Get '[HTML] (Headers '[Header "Cache-Control" Text] (Html ()))
+  , issueFixPackage :: mode :- "p" :> ProjectId :> "issue-fixes" :> Capture "id" IssueFixes.FixId :> "publication.tar" :> RawM
+  , issueFixMedia :: mode :- "p" :> ProjectId :> "issue-fixes" :> Capture "id" IssueFixes.FixId :> "media" :> Capture "asset" Artifacts.Asset :> RawM
   , impactReviewRetry :: mode :- "p" :> ProjectId :> "settings" :> "pr-reviews" :> Capture "id" ImpactReviews.ReviewId :> "rerun" :> Post '[HTML] (RespHeaders (Html ()))
   , codeMappingsDelete :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> Capture "id" CodeContext.CodeMappingId :> Delete '[HTML] (RespHeaders (Html ()))
   , prometheusSettingsGet :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> Get '[HTML] (RespHeaders Settings.PrometheusGet)
@@ -1024,6 +1031,8 @@ cookieProtectedServer =
     , bringS3Post = Settings.brings3PostH
     , bringS3Remove = Settings.brings3RemoveH
     , gitSyncSettings = \pid -> PageCodeContext.repositoriesGetH pid (Just PageCodeContext.Overview) Nothing
+    , projectMemoryGet = PageCodeContext.memoryGetH
+    , projectMemoryPost = PageCodeContext.memoryPostH
     , repositoriesGet = PageCodeContext.repositoriesGetH
     , serviceRepositoriesGet = PageCodeContext.serviceRepositoriesGetH
     , repositoryConnectGet = PageCodeContext.repositoryConnectGetH
@@ -1054,6 +1063,9 @@ cookieProtectedServer =
     , codeMappingsPost = PageCodeContext.codeMappingsPostH
     , impactReviewSettingsPost = PageCodeContext.impactReviewSettingsPostH
     , impactReviewRetry = PageCodeContext.impactReviewRetryH
+    , issueFixGet = PageCodeContext.issueFixGetH
+    , issueFixMedia = PageCodeContext.issueFixMediaH
+    , issueFixPackage = PageCodeContext.issueFixPackageH
     , codeMappingsDelete = PageCodeContext.codeMappingsDeleteH
     , prometheusSettingsGet = Settings.prometheusGetH
     , prometheusSettingsPost = Settings.prometheusPostH
@@ -1453,6 +1465,7 @@ widgetPngGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr widthM heightM s
                   (const $ AE.object ["graphic" AE..= AE.object ["type" AE..= ("text" :: Text), "left" AE..= ("center" :: Text), "top" AE..= ("middle" :: Text), "style" AE..= AE.object ["text" AE..= ("Chart unavailable\nOpen the incident or monitor for details." :: Text), "fontSize" AE..= (18 :: Int), "fill" AE..= (bool "#334155" "#cbd5e1" darkMode :: Text), "textAlign" AE..= ("center" :: Text)]]])
                   (Widget.widgetToECharts . (#_staticRender ?~ True))
                   chart
+            , "mode" AE..= (if isRight chart && widget.wType == Widget.WTTable then "table" else "chart" :: Text)
             , "profile" AE..= fromMaybe Widget.PngStandard widget.pngProfile
             , "width" AE..= width
             , "height" AE..= height

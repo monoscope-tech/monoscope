@@ -19,20 +19,38 @@ module Models.Projects.ImpactReviews (
   latestRuns,
   retryRun,
   supersedeRun,
+  startAttempt,
+  recordUsage,
+  UsageTotals (..),
+  usageTotals,
+  UsageCost (..),
+  ProjectUsage (..),
+  customerUsage,
+  recordCheck,
+  RecordedCheck (..),
+  latestChecks,
+  KnowledgeEntry (..),
+  priorKnowledge,
+  priorRepositoryKnowledge,
+  KnowledgeSource (..),
 ) where
 
 import BackgroundJobs.Types qualified as Jobs
 import Data.Aeson qualified as AE
 import Data.Char (isHexDigit)
+import Data.Effectful.CodeReview qualified as Agent
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Text qualified as T
 import Data.Time (UTCTime)
+import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff)
 import Hasql.Interpolate qualified as HI
+import Models.Projects.AgentUsage (ProjectUsage (..), UsageCost (..), UsageTotals (..), customerUsage)
+import Models.Projects.AgentUsage qualified as Usage
 import Models.Projects.Projects (ProjectId)
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Pkg.Git qualified as Git
@@ -191,7 +209,7 @@ claimRun run = do
   fromMaybe False
     <$> Hasql.interpOne
       [HI.sql|WITH leased AS (
-    UPDATE projects.pr_review_threads t SET lease_owner = #{run.id}, lease_until = now() + interval '3 minutes'
+    UPDATE projects.pr_review_threads t SET lease_owner = #{run.id}, lease_until = now() + interval '10 minutes'
     WHERE t.id = #{run.threadId} AND t.latest_revision = #{run.revision}
       AND (t.lease_until IS NULL OR t.lease_until < now())
       AND EXISTS (SELECT 1 FROM projects.pr_review_runs r WHERE r.id = #{run.id} AND r.state IN (#{Queued}, #{Reviewing}, #{Incomplete}))
@@ -231,7 +249,22 @@ finishRun :: DB es => ReviewRun -> Maybe Int64 -> Eff es ()
 finishRun run commentId =
   Hasql.interpExecute_
     [HI.sql|WITH finished AS (UPDATE projects.pr_review_runs SET state = #{Completed}, finished_at = now()
-    WHERE id = #{run.id} AND state = #{Reviewing} RETURNING thread_id)
+    WHERE id = #{run.id} AND state = #{Reviewing} RETURNING id, thread_id, revision, result),
+    remembered AS (
+      INSERT INTO projects.pr_review_knowledge
+        (run_id, project_id, owner, repo, service, revision, summary, evidence_keys, window_start, window_end, evidence)
+      SELECT f.id, t.project_id, t.owner, t.repo, note->>'service', f.revision, note->>'summary',
+        ARRAY(SELECT jsonb_array_elements_text(note->'evidenceKeys')),
+        (f.result->>'windowStart')::timestamptz, (f.result->>'windowEnd')::timestamptz,
+        coalesce((SELECT jsonb_agg(e #- '{queryResult,dataset}') FROM jsonb_array_elements(f.result->'evidence') e
+          WHERE e->>'key' IN (SELECT jsonb_array_elements_text(note->'evidenceKeys'))), '[]'::jsonb)
+      FROM finished f JOIN projects.pr_review_threads t ON t.id = f.thread_id,
+        LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(f.result->'knowledge') = 'array'
+          THEN f.result->'knowledge' ELSE '[]'::jsonb END) note
+      WHERE NOT EXISTS (SELECT 1 FROM projects.pr_review_knowledge k
+        WHERE k.run_id = f.id AND k.service = note->>'service' AND k.summary = note->>'summary'
+          AND k.window_end = (f.result->>'windowEnd')::timestamptz)
+    )
     UPDATE projects.pr_review_threads SET comment_id = coalesce(#{commentId}, comment_id)
     WHERE id IN (SELECT thread_id FROM finished) AND lease_owner = #{run.id}|]
 
@@ -288,3 +321,73 @@ retryRun pid rid = do
 
 supersedeRun :: DB es => ReviewRun -> Eff es ()
 supersedeRun run = Hasql.interpExecute_ [HI.sql|UPDATE projects.pr_review_runs SET state = #{Superseded}, finished_at = now() WHERE id = #{run.id}|]
+
+
+startAttempt :: DB es => ReviewRun -> Text -> Text -> Eff es (Maybe (UUIDId "agent_attempt"))
+startAttempt run provider modelSpec = do
+  current <- currentRun run
+  if current then Usage.startAttempt run.projectId (Usage.Review run.id) provider modelSpec else pure Nothing
+
+
+recordUsage :: DB es => ReviewRun -> Agent.ModelUsage -> Eff es Bool
+recordUsage run = Usage.recordUsage run.projectId (Usage.Review run.id)
+
+
+recordCheck :: DB es => ReviewRun -> Agent.CheckReceipt -> Eff es Bool
+recordCheck run = Usage.recordCheck run.projectId (Usage.Review run.id)
+
+
+usageTotals :: DB es => ProjectId -> Eff es [UsageTotals "pr_review"]
+usageTotals = Usage.usageTotals Usage.Reviews
+
+
+data RecordedCheck = RecordedCheck {runId :: ReviewId, receipt :: Aeson Agent.CheckReceipt}
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+latestChecks :: DB es => ProjectId -> Eff es [RecordedCheck]
+latestChecks pid =
+  Hasql.interp
+    [HI.sql|
+  SELECT run_id, receipt FROM projects.pr_review_checks
+  WHERE project_id = #{pid} AND run_id IN (
+    SELECT r.id FROM projects.pr_review_runs r JOIN projects.pr_review_threads t ON t.id = r.thread_id
+    WHERE t.project_id = #{pid} ORDER BY r.created_at DESC LIMIT 20)
+  ORDER BY created_at, id
+|]
+
+
+data KnowledgeSource = ReviewSource ReviewId | FixSource (UUIDId "issue_fix")
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+  deriving (HI.DecodeValue) via Aeson KnowledgeSource
+
+
+data KnowledgeEntry = KnowledgeEntry
+  { source :: KnowledgeSource
+  , revision :: Text
+  , service :: Text
+  , summary :: Text
+  , evidenceKeys :: V.Vector Text
+  , windowStart :: UTCTime
+  , windowEnd :: UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.ToJSON, HI.DecodeRow)
+
+
+-- Evidence snapshots survive reruns replacing the original review result.
+priorKnowledge :: DB es => ReviewRun -> Text -> Eff es [KnowledgeEntry]
+priorKnowledge run = priorRepositoryKnowledge run.projectId (Git.RepoRef run.owner run.repo run.revision)
+
+
+priorRepositoryKnowledge :: DB es => ProjectId -> Git.RepoRef -> Text -> Eff es [KnowledgeEntry]
+priorRepositoryKnowledge pid ref service =
+  Hasql.interp
+    [HI.sql|
+  SELECT jsonb_build_object('tag', CASE WHEN run_id IS NULL THEN 'FixSource' ELSE 'ReviewSource' END, 'contents', coalesce(run_id, fix_run_id)), revision, service, summary, evidence_keys, window_start, window_end
+  FROM projects.pr_review_knowledge
+  WHERE project_id = #{pid} AND owner = #{ref.owner} AND repo = #{ref.repo} AND service = #{service}
+  ORDER BY created_at DESC, id LIMIT 20
+|]

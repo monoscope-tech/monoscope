@@ -1,0 +1,19 @@
+ARG DEPS_IMAGE
+FROM ${DEPS_IMAGE}
+
+RUN apt-get update && apt-get install -y --no-install-recommends bash git ripgrep make util-linux ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN useradd --create-home --uid 1000 --user-group --shell /bin/bash review-agent
+
+WORKDIR /build
+COPY monoscope.cabal cabal.project cabal.project.freeze Makefile ./
+COPY shared ./shared
+COPY cli ./cli
+RUN make cli-build && cp "$(cabal list-bin monoscope-cli:exe:monoscope | tail -n1)" /usr/local/bin/monoscope
+
+# Cabal's registered packages refer to this absolute store path. Each VM can
+# extend its own copy; the prepared image and other VMs remain immutable.
+RUN chmod o+x /root && \
+    find /root/.cabal -type d -exec chown review-agent:review-agent {} + && \
+    find /root/.cabal/store -path '*/package.db/*' -type f -exec chown review-agent:review-agent {} + && \
+    ln -s /root/.cabal /home/review-agent/.cabal && \
+    ln -s /opt/ghc/9.12.2/bin/* /usr/local/bin/

@@ -376,6 +376,7 @@ run_body() { # <check>
         npx playwright install chromium)
       scripts/e2e.sh
       ;;
+    # Provisioned SDK guests run through the Haskell suite; its inputs include the worker.
     integration-tests) run_integration ;;
     *) die "no body for check '$1'" ;;
   esac
