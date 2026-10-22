@@ -551,6 +551,8 @@ library
     , casing
     , clock
     , colourista
+    , commonmark >=0.2.6.1 && <0.3
+    , commonmark-extensions >=0.2.6 && <0.3
     , conduit
     , containers
     , cookie
@@ -633,6 +635,7 @@ library
     , openapi3
     , optparse-applicative
     , parallel
+    , parsec ==3.1.*
     , parser-combinators
     , pg-entity
     , pg-transact
@@ -696,6 +699,7 @@ library
     , wai-middleware-static
     , warp
     , wreq
+    , xss-sanitize >=0.3.7.2 && <0.4
     , xxhash
     , yaml
     , zlib
@@ -1287,6 +1291,8 @@ test-suite test-dev
     , casing
     , clock
     , colourista
+    , commonmark >=0.2.6.1 && <0.3
+    , commonmark-extensions >=0.2.6 && <0.3
     , conduit
     , containers
     , cookie
@@ -1369,6 +1375,7 @@ test-suite test-dev
     , openapi3
     , optparse-applicative
     , parallel
+    , parsec ==3.1.*
     , parser-combinators
     , pg-entity
     , pg-transact
@@ -1432,6 +1439,7 @@ test-suite test-dev
     , wai-middleware-static
     , warp
     , wreq
+    , xss-sanitize >=0.3.7.2 && <0.4
     , xxhash
     , yaml
     , zlib
