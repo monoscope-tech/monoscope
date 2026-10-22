@@ -22,8 +22,7 @@ import UnliftIO.Exception (throwIO, tryAny)
 
 
 -- | Trusted host inputs for an agent VM; skill directories are listed in precedence order.
--- @backend@ overrides the inherited Gondolin hypervisor selection.
-data Host = Host {image :: Text, bridge :: FilePath, skills :: [FilePath], backend :: Maybe Text}
+data Host = Host {image :: Text, bridge :: FilePath, skills :: [FilePath]}
 
 
 -- | Role-specific guest preparation that runs before the agent sees the workspace.
@@ -51,7 +50,7 @@ withGuest host expected checkout revision setup attempt allocate action = withSy
   for_ (zip [0 :: Int ..] host.skills) \(index, path) -> void $ readProcess_ $ proc "cp" ["-RL", path, skills </> show index]
   started <- getMonotonicTimeNSec
   vmIdentity <- newIORef Nothing
-  outcome <- tryAny $ withSandbox [("GONDOLIN_VMM", toString vmm) | Just vmm <- [host.backend]] host.bridge \rpc -> do
+  outcome <- tryAny $ withSandbox host.bridge \rpc -> do
     let execute cwd argv = rpc @Execution $ Execute $ GuestCommand argv (Just cwd) False
         run cwd argv = execute cwd argv >>= \result -> if result.exitCode == 0 then pure result.stdout else failure "Guest preparation failed"
         workspace = run "/workspace" . fromList

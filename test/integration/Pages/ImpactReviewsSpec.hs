@@ -184,9 +184,11 @@ deliver tr value = do
   snd <$> runAsBaseRecordingHTTP configured (GitSyncPage.gitWebhookPostH Git.GitHub $ Git.WebhookReq (Just "pull_request") (Just signature) Nothing Nothing Nothing body)
 
 
--- Matches the native-sdk-worker wrapper, which selects libkrun on macOS.
+-- The fixture bridge selects libkrun on macOS, like the native-sdk-worker wrapper.
 sdkHost :: FilePath -> IO Guest.Host
-sdkHost image = (\worker -> (Agent.workerHost [] (toText image) worker){Guest.backend = "krun" <$ guard (Info.os == "darwin")}) <$> canonicalizePath "impact-review-worker/cli.mjs"
+sdkHost image = do
+  bridge <- canonicalizePath "test/fixtures/native-sandbox.sh"
+  (\worker -> (Agent.workerHost [] (toText image) worker){Guest.bridge}) <$> canonicalizePath "impact-review-worker/cli.mjs"
 
 
 spec :: Spec

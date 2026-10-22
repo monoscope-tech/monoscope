@@ -317,7 +317,7 @@ runCodeReviewReal artifactStore host executable skills = interpret \env -> \case
 
 -- | The worker directory supplies the SDK bridge and the bundled skill pack, after trusted skills.
 workerHost :: [FilePath] -> Text -> FilePath -> Guest.Host
-workerHost skills image agent = Guest.Host image (takeDirectory agent </> "sandbox.mjs") (skills <> [takeDirectory agent </> "skills" </> "superpowers"]) Nothing
+workerHost skills image agent = Guest.Host image (takeDirectory agent </> "sandbox.mjs") (skills <> [takeDirectory agent </> "skills" </> "superpowers"])
 
 
 runCodeReviewTest :: IOE :> es => (Request "pr_review" -> Either Text Text) -> (FixRequest -> Either Text FixResult) -> (AdmissionRequest -> Either Text AdmissionDecision) -> (ArtifactRequest -> Either Text ()) -> (ArtifactRequest -> Either Text Explanation) -> (FixReviewRequest -> Either Text FixReviewDecision) -> Eff (CodeReview ': es) a -> Eff es a

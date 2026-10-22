@@ -633,7 +633,7 @@ verifyRegression options request = do
               copy :: RPC -> FilePath -> Text -> IO ()
               copy rpc path destination = rpc @() $ CopyFile $ Copy path destination
           privateWrite logPath ""
-          outcome <- tryAny $ Timeout.timeout (120 * 1000000) $ withSystemTempDirectory "monoscope-verifier-snapshot" $ \private -> withSandbox [] options.bridge \rpc -> do
+          outcome <- tryAny $ Timeout.timeout (120 * 1000000) $ withSystemTempDirectory "monoscope-verifier-snapshot" $ \private -> withSandbox options.bridge \rpc -> do
             image <- rpc @Image $ Resolve options.image
             ensure $ image.buildId == request.imageBuildId
             let sandbox = Sandbox image.assetDir 2 1024 OfflineCow $ one ("/checkout", checkout)
@@ -735,7 +735,7 @@ lookupWorkspace options operation request = do
   ensure $ T.length scriptText <= 65536 && not (T.null $ T.strip scriptText)
   dependency <- traverse fingerprint options.dependencyArchive
   environment <- getEnvironment
-  withSandbox [] options.bridge \rpc -> do
+  withSandbox options.bridge \rpc -> do
     image <- rpc @Image $ Resolve options.image
     for_ request.expectedImageBuildId $ ensure . (== image.buildId)
     assetDir <- canonicalizePath image.assetDir
@@ -1033,10 +1033,9 @@ fingerprintScript =
 type RPC = forall value. AE.FromJSON value => Command -> IO value
 
 
--- | @overrides@ replace inherited Gondolin settings, such as the hypervisor backend.
-withSandbox :: [(String, String)] -> FilePath -> (RPC -> IO a) -> IO a
-withSandbox overrides bridge action = do
-  environment <- (overrides <>) . filter (\(key, _) -> (key `elem` ["PATH", "HOME", "XDG_CACHE_HOME"] || "GONDOLIN_" `isPrefixOf` key) && key `notElem` map fst overrides) <$> getEnvironment
+withSandbox :: FilePath -> (RPC -> IO a) -> IO a
+withSandbox bridge action = do
+  environment <- filter (\(key, _) -> key `elem` ["PATH", "HOME", "XDG_CACHE_HOME"] || "GONDOLIN_" `isPrefixOf` key) <$> getEnvironment
   withProcessTerm (setEnv environment $ setStdin createPipe $ setStdout createPipe $ setStderr nullStream $ proc bridge []) \process -> do
     let rpc :: forall value. AE.FromJSON value => Command -> IO value
         rpc command = do
