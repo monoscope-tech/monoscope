@@ -442,3 +442,15 @@ This is a periodic reclamation budget, not an allocation quota: active workloads
 
 
 Maintenance verification on 2026-10-22: the watcher passed 25 impact-review examples, including native preparation, lease protection, S3 archive/restore, automatic re-archiving before eviction, refused oversized transfers and preservation of unknown data. All 67 selected bot workflow and permission examples also passed after the background effect-stack change. The initial missing-root case failed before the directory-creation fix and passes in the retained CLI regression. The development CLI builds, but its release linkage guard fails on Homebrew zlib; release packaging and deployment are not signed off.
+
+
+### Recover interrupted checkpoint staging
+
+New restore and eviction operations write a private project-scoped record under `stages/` before creating scratch data. The record binds a UUID directory to its operation, identity, phase and timestamps. Recovery runs before budget eviction, including when the cache is under budget, and skips projects whose native lock is busy.
+
+Only registered restore and eviction directories are eligible. Recovery preserves unknown names, symlinks, hard links, invalid metadata and mismatched project identities. Partial downloads can be discarded after the native writer releases the project lock. Completed staged checkpoints and interrupted evictions require a fresh streamed SHA-256 check of the archived bytes before deletion. A durable reclaiming phase supports retry after a crash during deletion. Records retain unpriced status.
+
+Unregistered legacy scratch directories, preparation directories and leases remain protected. This does not recover orphaned VMs or establish allocation admission. Gondolin 0.13.0's installed `vm/core.js` stops the VM before materializing a checkpoint; the restore bridge only reads checkpoint metadata. Preparation and lease recovery still need their own lifetime proof.
+
+
+Recovery verification on 2026-10-23: all 25 impact-review examples passed with zero failures and no pending cases in 243.1936 seconds (seed `478291233`). The retained Haskell test gates a real restore before publication, verifies that a busy project is untouched, kills the CLI, and exercises project binding, unknown-content retention, unavailable-archive retention and successful recovery. A second case replays an eviction intent after its staged manifest was unlinked. The final review added a parent-directory fsync before scratch creation. The native CLI builds; Fourmolu, HLint and the shell fixture syntax check pass. Production packaging, release linkage and deployment remain unsigned.

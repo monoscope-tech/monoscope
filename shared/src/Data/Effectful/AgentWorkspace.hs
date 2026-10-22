@@ -29,7 +29,7 @@ import Pkg.Deriving (WrappedEnumSC (..))
 import Relude hiding (Identity, identity, withFile)
 import System.Directory (canonicalizePath, createDirectory, createDirectoryIfMissing, doesDirectoryExist, listDirectory, removePathForcibly, renameDirectory, renameFile)
 import System.Environment (getEnvironment)
-import System.FileLock (SharedExclusive (..), withFileLock)
+import System.FileLock (SharedExclusive (..), withFileLock, withTryFileLock)
 import System.FilePath (isAbsolute, takeDirectory, (</>))
 import System.IO (hClose, withBinaryFile)
 import System.IO.Error (isDoesNotExistError, tryIOError, userError)
@@ -113,7 +113,7 @@ data MaintenanceOptions = MaintenanceOptions {cacheDir :: FilePath, remote :: Fi
   deriving anyclass (AE.FromJSON)
 
 
-data MaintenanceReport = MaintenanceReport {beforeBytes :: Word64, afterBytes :: Word64, targetBytes :: Word64, projects :: [PruneReport], failures :: [ProjectId], unrecognized :: [FilePath]}
+data MaintenanceReport = MaintenanceReport {beforeBytes :: Word64, afterBytes :: Word64, targetBytes :: Word64, projects :: [PruneReport], failures :: [ProjectId], unrecognized :: [FilePath], recoveries :: [StageRecovery]}
   deriving stock (Generic)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -123,6 +123,45 @@ maintenanceBudgetMet report = report.afterBytes <= report.targetBytes && null re
 
 
 data ArchivePolicy = RetainUnarchived | ArchiveIdle
+
+
+data StageKind = DownloadStage | EvictionStage
+  deriving stock (Eq, Generic)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data Reclamation copy = PartialDownload | ArchivedDownload copy | ArchivedEviction copy
+  deriving stock (Foldable, Functor, Generic, Traversable)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data StagePhase = StageDownload | StageReclaiming (Reclamation FileFingerprint) | StageClosed StageKind | StageRecovered (Reclamation FileFingerprint)
+  deriving stock (Generic)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data StageRecord = StageRecord {id :: Identifier "workspace_stage", identity :: Identity, phase :: StagePhase, startedAt :: UTCTime, updatedAt :: UTCTime, resourceCostStatus :: ResourceCost}
+  deriving stock (Generic)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data Stage = Stage {record :: StageRecord, path :: FilePath, journal :: FilePath}
+
+
+data VerifiedRemoteCopy = VerifiedRemoteCopy {identity :: Identity, snapshot :: FileFingerprint}
+
+
+data StageOperation = DownloadOperation Identity | EvictionOperation VerifiedRemoteCopy
+
+
+data RecoveryOutcome = StageRemoved (Reclamation FileFingerprint) | StageRetained RetainReason | StageRecoveryFailed
+  deriving stock (Generic)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data StageRecovery = StageRecovery {projectId :: ProjectId, id :: Identifier "workspace_stage", outcome :: RecoveryOutcome}
+  deriving stock (Generic)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 data PruneRequest = PruneRequest {projectId :: ProjectId, maxBytes :: Word64, ownerPid :: Maybe Word32}
@@ -505,7 +544,11 @@ runWorkspaceReal = interpret $ \env -> \case
               pure $ ProjectId uuid
         recognized <- filterM (doesDirectoryExist . (</> "workspaces") . (root </>) . projectText) $ mapMaybe project names
         before <- allocated root
-        initial <- if before <= options.maxBytes then pure [] else forM recognized \pid -> (pid,) <$> allocated (root </> projectText pid)
+        recovery <- forM recognized \pid -> do
+          outcome <- tryAny $ recoverStages root options.remote pid
+          pure (pid, outcome)
+        usedAfterRecovery <- allocated root
+        initial <- if usedAfterRecovery <= options.maxBytes then pure [] else forM recognized \pid -> (pid,) <$> allocated (root </> projectText pid)
         (reports, failed, _) <-
           foldM
             ( \accumulator@(reports, failed, used) (pid, _) ->
@@ -525,12 +568,136 @@ runWorkspaceReal = interpret $ \env -> \case
                       Right report -> (report : reports, failed, after)
                       Left _ -> (reports, pid : failed, after)
             )
-            ([], [], before)
+            ([], [pid | (pid, Left _) <- recovery] <> [action.projectId | (_, Right actions) <- recovery, action <- actions, StageRecoveryFailed <- [action.outcome]], usedAfterRecovery)
             (sortOn (negate . toInteger . snd) initial)
         after <- allocated root
-        pure $ MaintenanceReport before after options.maxBytes (reverse reports) (reverse failed) [name | name <- names, name /= ".maintenance.lock", maybe True (`notElem` recognized) $ project name]
+        pure $ MaintenanceReport before after options.maxBytes (reverse reports) (reverse failed) [name | name <- names, name /= ".maintenance.lock", maybe True (`notElem` recognized) $ project name] (concat [actions | (_, Right actions) <- recovery])
       where
         allocated path = measureAllocation $ one path
+
+    stageKind :: StagePhase -> StageKind
+    stageKind = \case
+      StageDownload -> DownloadStage
+      StageReclaiming proof -> kind proof
+      StageClosed value -> value
+      StageRecovered proof -> kind proof
+      where
+        kind = \case PartialDownload -> DownloadStage; ArchivedDownload _ -> DownloadStage; ArchivedEviction _ -> EvictionStage
+
+    stagePrefix :: StageKind -> FilePath
+    stagePrefix = \case DownloadStage -> ".restore-"; EvictionStage -> ".evict-"
+
+    stagePaths :: FilePath -> StageRecord -> Stage
+    stagePaths root record =
+      let Identifier identifier = record.id
+          name = toString $ UUID.toText identifier
+          project = root </> projectText record.identity.projectId
+       in Stage record (project </> "workspaces" </> (stagePrefix (stageKind record.phase) <> name)) (project </> "stages" </> (name <> ".json"))
+
+    withStage :: FilePath -> StageOperation -> (FilePath -> IO a) -> IO a
+    withStage root operation action = do
+      identifier <- Identifier <$> UUID4.nextRandom
+      now <- getCurrentTime
+      let (identity, phase) = case operation of
+            DownloadOperation value -> (value, StageDownload)
+            EvictionOperation verified -> (verified.identity, StageReclaiming $ ArchivedEviction verified.snapshot)
+          staged = stagePaths root $ StageRecord identifier identity phase now now Unpriced
+          records = takeDirectory staged.journal
+      createDirectoryIfMissing True records
+      canonical records
+      Posix.setFileMode records 0o700
+      sync $ takeDirectory records
+      bracket
+        (do publish staged.journal staged.record; createDirectory staged.path; Posix.setFileMode staged.path 0o700; sync $ takeDirectory staged.path; pure staged)
+        ( \value -> case operation of
+            DownloadOperation _ -> do
+              removePathForcibly value.path
+              saveStage value $ StageClosed DownloadStage
+            EvictionOperation verified -> reclaimStage value $ ArchivedEviction verified
+        )
+        (action . (.path))
+
+    saveStage :: Stage -> StagePhase -> IO ()
+    saveStage staged phase = do
+      now <- getCurrentTime
+      publish staged.journal staged.record{phase = phase, updatedAt = now}
+
+    reclaimStage :: Stage -> Reclamation VerifiedRemoteCopy -> IO ()
+    reclaimStage staged proof = do
+      for_ proof $ ensure . (== staged.record.identity) . (.identity)
+      let saved = fmap (.snapshot) proof
+      saveStage staged $ StageReclaiming saved
+      removePathForcibly staged.path
+      sync $ takeDirectory staged.path
+      saveStage staged $ StageRecovered saved
+
+    recoverStages :: FilePath -> FilePath -> ProjectId -> IO [StageRecovery]
+    recoverStages root remoteFile pid = do
+      let parent = root </> projectText pid </> "workspaces"
+          records = root </> projectText pid </> "stages"
+      present <- doesDirectoryExist records
+      if not present
+        then pure []
+        else do
+          canonical parent
+          canonical records
+          result <- withTryFileLock (parent </> ".native.lock") Exclusive \_ -> do
+            names <- listDirectory parent
+            forM (mapMaybe parseName names) \(kind, identifier) -> do
+              let Identifier uid = identifier
+                  journal = records </> toString (UUID.toText uid) <> ".json"
+              attempted <- tryAny do
+                record <- decode @StageRecord =<< readBounded journal 65536
+                ensure $ record.id == identifier && record.identity.projectId == pid && stageKind record.phase == kind
+                let staged = stagePaths root record
+                canonical staged.path
+                Posix.getSymbolicLinkStatus staged.path >>= ensure . Posix.isDirectory
+                let content = if kind == EvictionStage then staged.path </> "entry" else staged.path
+                entries <- listDirectory staged.path
+                when (kind == EvictionStage) $ ensure $ all (== "entry") entries
+                files <-
+                  if kind == EvictionStage && null entries
+                    then pure []
+                    else do
+                      canonical content
+                      listDirectory content
+                ensure $ all (`elem` ["baseline.qcow2", "manifest.json", "last-used.json"]) files
+                for_ files \file -> do
+                  status <- Posix.getSymbolicLinkStatus $ content </> file
+                  ensure $ Posix.isRegularFile status && Posix.linkCount status == 1
+                selected <- case record.phase of
+                  StageClosed _ -> invalid
+                  StageRecovered _ -> invalid
+                  StageReclaiming proof -> pure proof
+                  StageDownload ->
+                    if "manifest.json" `elem` files
+                      then do
+                        manifest <- decode @Manifest =<< readBounded (content </> "manifest.json") 65536
+                        ensure $ manifest.identity == record.identity
+                        pure $ ArchivedDownload $ manifestFingerprint manifest
+                      else pure PartialDownload
+                case selected of
+                  PartialDownload -> ensure $ "manifest.json" `notElem` files
+                  ArchivedDownload _ -> pass
+                  ArchivedEviction _ -> pass
+                for_ selected \expected -> do
+                  when ("baseline.qcow2" `elem` files) $ fingerprint (content </> "baseline.qcow2") >>= ensure . (== expected)
+                  when ("manifest.json" `elem` files) do
+                    manifest <- decode @Manifest =<< readBounded (content </> "manifest.json") 65536
+                    ensure $ manifest.identity == record.identity && manifestFingerprint manifest == expected
+                archived <- tryAny $ traverse (\expected -> do remote <- readRemote remoteFile; connection <- connectStorage remote; verifyRemote remote connection record.identity expected) selected
+                case archived of
+                  Left _ -> pure $ StageRetained ArchiveUnavailable
+                  Right verified -> do
+                    reclaimed <- tryAny $ reclaimStage staged verified
+                    pure $ either (const StageRecoveryFailed) (const $ StageRemoved selected) reclaimed
+              pure $ StageRecovery pid identifier $ either (const $ StageRetained InvalidEntry) Relude.id attempted
+          pure $ fromMaybe [] result
+      where
+        parseName name =
+          viaNonEmpty
+            head
+            [(kind, Identifier identifier) | kind <- [DownloadStage, EvictionStage], Just text <- [T.stripPrefix (toText $ stagePrefix kind) $ toText name], Just identifier <- [UUID.fromText text], UUID.toText identifier == text]
 
     allocatedSizes :: NonEmpty FilePath -> IO [Word64]
     allocatedSizes paths = do
@@ -545,6 +712,26 @@ runWorkspaceReal = interpret $ \env -> \case
       bytes <- sum . map toInteger <$> allocatedSizes paths
       ensure $ bytes <= toInteger (maxBound :: Word64)
       pure $ fromInteger bytes
+
+    verifyRemote :: Remote -> Minio.MinioConn -> Identity -> FileFingerprint -> IO VerifiedRemoteCopy
+    verifyRemote remote connection identity expected = do
+      let prefix = "agent-workspaces/v1/" <> toText (projectText identity.projectId) <> "/" <> digestText (identityKey identity) <> "/" <> digestText expected.sha256
+      ensure $ expected.bytes <= remote.maxBytes
+      encoded <- storage connection do
+        response <- Minio.getObject remote.bucket (prefix <> ".json") Minio.defaultGetObjectOptions
+        runConduit $ response.gorObjectStream .| CC.takeE 65537 .| CC.sinkLazy
+      ensure $ LBS.length encoded <= 65536
+      archived <- decode @Manifest $ toStrict encoded
+      ensure $ archived.identity == identity && manifestFingerprint archived == expected
+      (context, size) <- storage connection do
+        response <- Minio.getObject remote.bucket (prefix <> ".qcow2") Minio.defaultGetObjectOptions
+        liftIO $ ensure $ response.gorObjectInfo.oiSize == fromIntegral expected.bytes
+        runConduit $ response.gorObjectStream .| CC.takeE (fromIntegral expected.bytes + 1) .| CC.foldl (\(!context, !count) chunk -> (hashUpdate context chunk, count + fromIntegral (BS.length chunk))) (hashInit :: Context SHA256, 0 :: Word64)
+      ensure $ size == expected.bytes && Fingerprint (show $ hashFinalize context) == expected.sha256
+      pure $ VerifiedRemoteCopy identity expected
+
+    manifestFingerprint :: Manifest -> FileFingerprint
+    manifestFingerprint manifest = FileFingerprint manifest.sha256 manifest.bytes
 
     prune :: ArchivePolicy -> PruneOptions -> PruneRequest -> IO PruneReport
     prune archivePolicy options request = do
@@ -581,21 +768,6 @@ runWorkspaceReal = interpret $ \env -> \case
               status <- Posix.getSymbolicLinkStatus $ entry </> "baseline.qcow2"
               ensure $ Posix.isRegularFile status
               pure $ CacheEntry key manifest lastUsed status
-            verifyRemote entry = do
-              let manifest = entry.manifest
-                  prefix = "agent-workspaces/v1/" <> toText (projectText request.projectId) <> "/" <> digestText entry.key <> "/" <> digestText manifest.sha256
-              ensure $ manifest.bytes <= remote.maxBytes
-              encoded <- storage connection do
-                response <- Minio.getObject remote.bucket (prefix <> ".json") Minio.defaultGetObjectOptions
-                runConduit $ response.gorObjectStream .| CC.takeE 65537 .| CC.sinkLazy
-              ensure $ LBS.length encoded <= 65536
-              archived <- decode @Manifest $ toStrict encoded
-              ensure $ archived.identity == manifest.identity && archived.sha256 == manifest.sha256 && archived.bytes == manifest.bytes
-              (context, size) <- storage connection do
-                response <- Minio.getObject remote.bucket (prefix <> ".qcow2") Minio.defaultGetObjectOptions
-                liftIO $ ensure $ response.gorObjectInfo.oiSize == fromIntegral manifest.bytes
-                runConduit $ response.gorObjectStream .| CC.takeE (fromIntegral manifest.bytes + 1) .| CC.foldl (\(!context, !count) chunk -> (hashUpdate context chunk, count + fromIntegral (BS.length chunk))) (hashInit :: Context SHA256, 0 :: Word64)
-              ensure $ size == manifest.bytes && Fingerprint (show $ hashFinalize context) == manifest.sha256
         let journals = project </> "prunes"
         createDirectoryIfMissing True journals
         canonical journals
@@ -627,21 +799,20 @@ runWorkspaceReal = interpret $ \env -> \case
                             Right measured | measured /= FileFingerprint entry.manifest.sha256 entry.manifest.bytes -> pure $ Kept entry.key InvalidEntry
                             Right _ -> do
                               proof <- tryAny do
-                                archived <- tryAny $ verifyRemote entry
+                                archived <- tryAny $ verifyRemote remote connection entry.manifest.identity (manifestFingerprint entry.manifest)
                                 case (archived, archivePolicy) of
-                                  (Right (), _) -> pass
+                                  (Right verified, _) -> pure verified
                                   (Left failure, RetainUnarchived) -> throwIO failure
                                   (Left _, ArchiveIdle) -> do
                                     void $ transfer root entry.manifest.identity Upload options.remote \remote' prefix connection' -> uploadCheckpoint remote' prefix connection' $ Prepared{manifest = entry.manifest, path = directory entry.key </> "baseline.qcow2"}
-                                    verifyRemote entry
+                                    verifyRemote remote connection entry.manifest.identity (manifestFingerprint entry.manifest)
                               case proof of
                                 Left _ -> pure $ Kept entry.key ArchiveUnavailable
-                                Right () -> do
-                                  removed <- tryAny $ withTempDirectory parent ".evict-" \temporary -> do
+                                Right verified -> do
+                                  removed <- tryAny $ withStage root (EvictionOperation verified) \temporary -> do
                                     let retired = temporary </> "entry"
                                     renameDirectory (directory entry.key) retired
                                     sync parent
-                                    removePathForcibly retired
                                   pure $ either (const $ EvictionFailed entry.key) (const $ Evicted entry.key) removed
                     (after, pinned) <- measure
                     let updated = report{afterBytes = after, leaseBytes = pinned, entries = report.entries Seq.|> action}
@@ -881,7 +1052,7 @@ runWorkspaceReal = interpret $ \env -> \case
             saved <- load
             case saved of
               Just _ -> pure saved
-              Nothing -> transfer root identity Download remoteFile \remote prefix connection -> withTempDirectory parent ".restore-" \temporary -> do
+              Nothing -> transfer root identity Download remoteFile \remote prefix connection -> withStage root (DownloadOperation identity) \temporary -> do
                 encoded <- storage connection do
                   response <- Minio.getObject remote.bucket (manifestKey prefix request.expectedCheckpoint) Minio.defaultGetObjectOptions
                   runConduit $ response.gorObjectStream .| CC.takeE 65537 .| CC.sinkLazy

@@ -1623,6 +1623,72 @@ spec = around withTestResources $ describe "Production impact reviews" do
             writeFileLBS remote $ AE.encode remoteConfiguration
             roomy <- maintain maxBound
             parse (field "failures") roomy `shouldReturn` ([] :: [AE.Value])
+            CLIBinary.withCliBin \cli -> do
+              removePathForcibly $ takeDirectory checkpoint
+              controlledBridge <- canonicalizePath "test/fixtures/stage-recovery-bridge.sh"
+              environment <- getEnvironment
+              let ready = directory </> "stage-ready"
+                  release = directory </> "stage-release"
+                  waitReady = unlessM (doesFileExist ready) (threadDelay 10000 >> waitReady)
+                  childEnv = [("GONDOLIN_STAGE_TEST_BRIDGE", bridge), ("GONDOLIN_STAGE_TEST_READY", ready), ("GONDOLIN_STAGE_TEST_RELEASE", release)] <> environment
+                  command = setEnv childEnv $ setStderr nullStream $ setStdout nullStream $ proc cli ["workspace", "restore", "--request", request, "--cache", cache, "--image", profile, "--bridge", controlledBridge, "--script", script, "--remote", remote]
+              withProcessTerm command \child ->
+                ( do
+                    Timeout.timeout (15 * 1000000) waitReady `shouldReturn` Just ()
+                    candidates <- filter (isPrefixOf ".restore-") <$> listDirectory parent
+                    stagedName <- case candidates of [name] -> pure name; _ -> fail "Expected one interrupted restore stage"
+                    let staged = parent </> stagedName
+                        journal = cache </> toString testPid.toText </> "stages" </> drop (length (".restore-" :: String)) stagedName <> ".json"
+                    void $ maintain maxBound
+                    doesDirectoryExist staged `shouldReturn` True
+                    childPid <- getPid child >>= maybe (fail "Restore exited before interruption") pure
+                    Signal.signalProcess Signal.sigKILL childPid
+                    Timeout.timeout (5 * 1000000) (waitExitCode child) `shouldReturn` Just (ExitFailure (-9))
+                    originalRecord <- readFileBS journal
+                    record <- either fail pure $ AE.eitherDecodeStrict @AE.Value originalRecord
+                    recordedIdentity <- parse (field "identity") record
+                    writeFileLBS journal $ AE.encode $ replace "identity" (replace "projectId" (AE.toJSON $ UUID.fromWords 0 0 0 99) recordedIdentity) record
+                    void $ maintain maxBound
+                    doesDirectoryExist staged `shouldReturn` True
+                    writeFileBS journal originalRecord
+                    writeFileBS (staged </> "unknown") "Retain unknown stage content."
+                    void $ maintain maxBound
+                    readFileBS (staged </> "unknown") `shouldReturn` "Retain unknown stage content."
+                    removeFile $ staged </> "unknown"
+                    writeFileLBS remote $ AE.encode $ replace "maxBytes" (AE.toJSON (1 :: Word64)) remoteConfiguration
+                    unavailable <- maintain maxBound
+                    outcomes <- parse (field "recoveries") unavailable :: IO [AE.Value]
+                    mapM (parse $ field "outcome" >=> field "tag") outcomes `shouldReturn` (["StageRetained"] :: [Text])
+                    doesDirectoryExist staged `shouldReturn` True
+                    writeFileLBS remote $ AE.encode remoteConfiguration
+                    recovered <- maintain maxBound
+                    recoveredRows <- parse (field "recoveries") recovered :: IO [AE.Value]
+                    mapM (parse $ field "outcome" >=> field "tag") recoveredRows `shouldReturn` (["StageRemoved"] :: [Text])
+                    doesDirectoryExist staged `shouldReturn` False
+                    recoveredRecord <- readFileBS journal >>= either fail pure . AE.eitherDecodeStrict @AE.Value
+                    parse (field "phase" >=> field "tag") recoveredRecord `shouldReturn` ("StageRecovered" :: Text)
+                    doesFileExist checkpoint `shouldReturn` False
+                )
+                  `finally` writeFileBS release "release"
+              (afterCrash, _) <- transfer "restore" cache
+              afterCrash `shouldBe` ExitSuccess
+              sha <$> readFileBS checkpoint `shouldReturn` relocatedHash
+            let stageRecords = cache </> toString testPid.toText </> "stages"
+            storedStages <- listDirectory stageRecords >>= traverse (\name -> readFileBS (stageRecords </> name) >>= either fail pure . AE.eitherDecodeStrict @AE.Value)
+            expectedIdentity <- parse (field "identity") relocatedManifest :: IO AE.Value
+            let retired = filter (\value -> AET.parseMaybe (field "identity") value == Just expectedIdentity && (AET.parseMaybe (field "phase" >=> field "contents" >=> field "tag") value :: Maybe Text) == Just "ArchivedEviction") storedStages
+            retiredRecord <- maybe (fail "No retained eviction intent") pure $ viaNonEmpty head retired
+            retiredId <- parse (field "id") retiredRecord :: IO Text
+            retiredPhase <- parse (field "phase") retiredRecord
+            let retiredStage = parent </> (".evict-" <> toString retiredId)
+                retiredJournal = stageRecords </> toString retiredId <> ".json"
+            createDirectoryIfMissing True $ retiredStage </> "entry"
+            copyFile checkpoint $ retiredStage </> "entry" </> "baseline.qcow2"
+            -- Resume deletion after its manifest was already unlinked.
+            writeFileLBS retiredJournal $ AE.encode $ replace "phase" (replace "tag" (AE.String "StageReclaiming") retiredPhase) retiredRecord
+            void $ maintain maxBound
+            doesDirectoryExist retiredStage `shouldReturn` False
+            sha <$> readFileBS checkpoint `shouldReturn` relocatedHash
             fakeMaintenance <- either fail pure $ AE.eitherDecode $ AE.encode roomy
             simulated <- runEff $ Workspace.runWorkspaceTest (\_ _ _ -> Left "Unexpected workspace") (\_ _ -> Left Workspace.RegressionUnavailable) (\_ _ -> Left "Unexpected prune") (const $ Right fakeMaintenance) $ Workspace.maintainWorkspaces "/missing-maintenance"
             fmap AE.toJSON simulated `shouldBe` Right roomy
