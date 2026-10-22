@@ -541,11 +541,20 @@ spec = around withTestResources $ describe "Production impact reviews" do
           admit artifact = pure $ if artifact == frozen then Right "Relevant fixture regression admitted" else Left "The test patch must only contain the actual regression"
       outcome <- run $ Agent.fixRepository fixRequest (const $ pure $ Left "Unexpected query") knowledge admit (capture calls) (capture usage) (capture allocations) (capture checks) (\receipt -> capture phases receipt $> Right ()) validate
       readIORef validationFailure >>= traverse_ throwIO
-      reviewed <- either (\failure -> readFileBS diagnostic >>= fail . (toString failure <>) . toString . decodeUtf8 @Text) pure outcome
+      reviewed <-
+        either
+          ( \failure -> do
+              transcript <- AE.encode <$> readIORef replies
+              diagnostics <- readFileBS diagnostic
+              fail $ toString failure <> toString (decodeUtf8 @Text diagnostics) <> toString (decodeUtf8 @Text transcript)
+          )
+          pure
+          outcome
       let result = Agent.reviewedFixResult reviewed
       result.base `shouldSatisfy` ((== base) . Fixes.revisionText)
       result.attemptId `shouldBe` request.attemptId
       result.rootCause `shouldBe` rootCause
+      result.summary `shouldBe` "Preserve the retry token."
       fst (Agent.reviewedFixApproval reviewed) `shouldBe` uid 6
       recordedChecks <- readIORef checks
       map (.status) recordedChecks `shouldBe` [Agent.Failed, Agent.Failed, Agent.Passed, Agent.Failed, Agent.Passed]
@@ -611,6 +620,15 @@ spec = around withTestResources $ describe "Production impact reviews" do
       denied <- run $ Agent.fixRepository fixRequest{Agent.request = request{Agent.runId = uid 10, Agent.attemptId = uid 11}} (const $ pure $ Left "Unexpected query") knowledge admit (capture calls) (capture usage) (capture allocations) (capture checks) (const $ pure $ Left "Phase persistence rejected") (const $ pure $ Left "Unexpected validation")
       isLeft denied `shouldBe` True
       length <$> requests `shouldReturn` beforeDenied
+      for_ (zip [30, 32] [("true", Agent.Passed), ("printf 'retry token was lost\\n'; exit 127", Agent.Blocked)]) \(number, (script, expectedStatus)) -> do
+        offset <- length <$> toolEnds
+        writeIORef plan [SdkTool "reproduce_issue" $ AE.object ["script" AE..= (script :: Text), "testPatch" AE..= testPatch, "failureMessage" AE..= frozen.failureMessage], write "runtime.sh" "forbidden"]
+        let configured = fixRequest{Agent.request = request{Agent.runId = uid number, Agent.attemptId = uid (number + 1)}}
+        failed <- run $ Agent.fixRepository configured (const $ pure $ Left "Unexpected query") knowledge (const $ pure $ Right "Deliberately admit this artifact to exercise the native reproduction guard") (capture calls) (capture usage) (capture allocations) (capture checks) (const $ pure $ Right ()) (const $ pure $ Left "Unreproduced source reached validation")
+        isLeft failed `shouldBe` True
+        ended <- drop offset <$> toolEnds
+        traverse (parse $ field "failed") ended `shouldReturn` [True, True]
+        map (.status) . filter ((== configured.request.attemptId) . (.attemptId)) <$> readIORef checks `shouldReturn` [expectedStatus]
       ready <- MVar.newEmptyMVar
       blockedAdmission <- MVar.newEmptyMVar :: IO (MVar.MVar ())
       beforeCancel <- length <$> readIORef checks
@@ -1730,10 +1748,19 @@ spec = around withTestResources $ describe "Production impact reviews" do
             Outbox.replay outbox (const $ fail "Acknowledged native phase replayed twice") `shouldReturn` Right ()
       for_ [pure $ Left ("Phase store rejected delivery" :: Text), throwIO $ userError "Phase store lost its response"] \reject -> do
         saved <- newIORef Nothing
-        outcome <- tryAny $ Outbox.deliverPhase outbox attempt Fixes.RestartReproduction \receipt -> inspect receipt >> writeIORef saved (Just $ AE.toJSON receipt) >> reject
+        outcome <- tryAny $ Outbox.deliverPhase outbox attempt Fixes.RestartReproduction \receipt -> inspect receipt >> writeIORef saved (Just receipt) >> reject
         outcome `shouldSatisfy` either (const True) isLeft
-        expected <- readIORef saved >>= maybe (fail "Native phase callback did not run") pure
-        replay expected
+        original <- readIORef saved >>= maybe (fail "Native phase callback did not run") pure
+        Outbox.deliver outbox original (const $ pure $ Left "Retry still rejected") `shouldReturn` Left "Retry still rejected"
+        case original of
+          Outbox.Phase receipt -> do
+            called <- newIORef False
+            let conflicting = Outbox.Phase $ Agent.PhaseReceipt receipt.id (uid 99) receipt.step
+            isLeft <$> tryAny (Outbox.deliver outbox conflicting $ const $ writeIORef called True $> Right ()) `shouldReturn` True
+            readIORef called `shouldReturn` False
+          _ -> expectationFailure "Native phase publisher returned another receipt kind"
+        inspect original
+        replay $ AE.toJSON original
       ready <- MVar.newEmptyMVar
       blocked <- MVar.newEmptyMVar :: IO (MVar.MVar ())
       withAsync (Outbox.deliverPhase outbox attempt Fixes.RestartReproduction \receipt -> inspect receipt >> MVar.putMVar ready (AE.toJSON receipt) >> MVar.takeMVar blocked $> Right ()) \worker -> do

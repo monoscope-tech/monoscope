@@ -40,17 +40,17 @@ try {
     const reply = pending.then(async () => {
       process.stdout.write(JSON.stringify({ tag, contents }) + '\n');
       let response = JSON.parse((await messages.next()).value);
-      while (response.tag === 'Guest') {
+      while (['Guest', 'ReadGuest', 'CopyGuest', 'RunCheck'].includes(response.tag)) {
         let output;
         try {
           if (!executeGuest) throw new Error('Guest workspace is unavailable');
-          output = { Right: await executeGuest(response.contents, active) };
-        } catch { output = { Left: 'Guest workspace command failed or exceeded its output limit' }; }
-        process.stdout.write(JSON.stringify({ tag: 'GuestResult', contents: output }) + '\n');
+          output = { Right: await executeGuest(response, active) };
+        } catch { output = { Left: response.tag === 'RunCheck' ? 'Native regression failed or was cancelled' : 'Guest workspace command failed or exceeded its output limit' }; }
+        process.stdout.write(JSON.stringify({ tag: response.tag === 'CopyGuest' ? 'CopiedGuest' : response.tag === 'RunCheck' ? 'CheckedRegression' : 'GuestResult', contents: output }) + '\n');
         response = JSON.parse((await messages.next()).value);
       }
       if (typeof response.Left !== 'string' && !Object.hasOwn(response, 'Right')) throw new Error('Invalid query response');
-      if (['Call', 'Usage', 'Allocation', 'Check', 'RestartFix', 'ObserveFix'].includes(tag)) {
+      if (['Call', 'Usage', 'Allocation', 'Check', 'RestartFix'].includes(tag)) {
         if (Object.hasOwn(response, 'Left')) throw new Error('Receipt was rejected');
       }
       return response;
@@ -83,18 +83,14 @@ try {
   ]);
   const modelRuntime = await ModelRuntime.create({ authPath: join(agentDir, 'auth.json'), modelsPath: process.env.IMPACT_REVIEW_MODELS ?? null, refreshOnCreate: false });
   const result = await (isAdmission ? admitRegression : isFix ? fixIssue : review)({ ...request, head: checkoutHead }, {
-    modelRuntime, guestImage, expectedImageBuildId, cacheDir, preparedCheckout, usageDir: outboxRoot, artifactDir, attemptId, skillPaths: process.argv.slice(2), optionsTool: (invocation) => exchange('Tool', invocation), validateDraft: (draft) => exchange('Validate', draft), signal,
-    admitTest: (artifact) => exchange('Admit', artifact),
-    proposeCandidate: (cause, active) => exchange('Propose', cause, active),
+    modelRuntime, guestImage, expectedImageBuildId, cacheDir, preparedCheckout, usageDir: outboxRoot, artifactDir, attemptId, skillPaths: process.argv.slice(2), optionsTool: (invocation, active) => exchange('Tool', invocation, active), validateDraft: (draft) => exchange('Validate', draft), signal,
     bindGuest: (execute) => { executeGuest = execute; },
-    assertCandidate: (identifier, active) => exchange('AssertCandidate', identifier, active),
     workspaceCache: process.env.IMPACT_REVIEW_PREPARE_SCRIPT ? {
       cacheDir: process.env.IMPACT_REVIEW_CACHE_DIR, script: fs.readFileSync(process.env.IMPACT_REVIEW_PREPARE_SCRIPT, 'utf8'),
       dependencyArchive: process.env.IMPACT_REVIEW_DEPENDENCY_ARCHIVE && resolve(process.env.IMPACT_REVIEW_DEPENDENCY_ARCHIVE),
     } : undefined,
-    restartFix: (active) => exchange('RestartFix', [], active),
-    observeFix: (receipt, active) => exchange('ObserveFix', receipt, active),
-    validateFix: (result) => exchange('Validate', result),
+    restartFix: (baseline, active) => exchange('RestartFix', baseline, active),
+    completeFix: (summary, active) => exchange('CompleteFix', summary, active),
     validateAdmission: (result) => exchange('Validate', result),
     onEvent(event) {
       if (event.type === 'model_started') return persistReceipt('Call', event.receipt);

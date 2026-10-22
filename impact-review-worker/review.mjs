@@ -13,7 +13,7 @@ import {
 } from '@earendil-works/pi-coding-agent';
 import { z } from 'zod';
 import { Type } from 'typebox';
-import { agentCommand, guestTmpfs, loadPreparedWorkspace, runRegression } from './workspace.mjs';
+import { agentCommand, guestTmpfs, loadPreparedWorkspace, runRegression, runRegressionFile } from './workspace.mjs';
 export { agentCommand, guestTmpfs } from './workspace.mjs';
 
 const exec = promisify(execFile);
@@ -200,13 +200,12 @@ export async function runRepositoryAgent(input, { modelRuntime, guestImage, expe
         readFile: (path) => vm.fs.readFile(path),
       },
     })];
-    const executeRegression = async (artifact, toolSignal, { revisions = [['base', request.base], ['head', request.head]], recordExecution = () => {} } = {}) => {
+    const executeRegression = async (artifact, toolSignal) => {
       const active = AbortSignal.any([signal, toolSignal].filter(Boolean));
-      const result = await runRegression({ projectId: request.projectId, runId, attemptId, sessionId: verifierSession, base: request.base, artifact, revisions }, pinnedImage,
+      const result = await runRegression({ projectId: request.projectId, runId, attemptId, sessionId: verifierSession, base: request.base, artifact, revisions: [['base', request.base], ['head', request.head]] }, pinnedImage,
         { artifactDir, checkout, workspace, signal: active });
       for (const receipt of result.receipts) {
         onEvent({ type: 'regression_execution', receipt });
-        await recordExecution(receipt);
       }
       for (const measured of result.report.results) {
         await vm.fs.writeFile(measured.logPath, createReadStream(join(artifactDir, result.report.id, measured.side + '.log')), { signal: active });
@@ -217,7 +216,7 @@ export async function runRepositoryAgent(input, { modelRuntime, guestImage, expe
       name: 'run_regression', label: 'Replay a frozen regression check',
       execute: (_id, params, toolSignal) => executeRegression(params, toolSignal),
     });
-    const workflow = createWorkflow ? await createWorkflow({ vm, cwd, request, root, artifactDir, executeRegression, signal, rootInstructions: preparedCheckout.rootInstructions }) : {
+    const workflow = createWorkflow ? await createWorkflow({ vm, cwd, request, root, artifactDir, executeRegression, workspace, checkRegression: (requestFile, active) => runRegressionFile(requestFile, pinnedImage, { artifactDir, checkout, signal: active }), signal, rootInstructions: preparedCheckout.rootInstructions }) : {
       name: peer ? 'submit_fix_review' : 'submit_review',
       prepare: async (draft, toolSignal) => {
         const active = AbortSignal.any([signal, toolSignal].filter(Boolean));
@@ -243,8 +242,11 @@ export async function runRepositoryAgent(input, { modelRuntime, guestImage, expe
     if (optionsTool) for (const definition of preparedCheckout.policy.tools) {
       if (tools.some((tool) => tool.name === definition.name)) continue;
       tools.push({ ...definition, label: definition.name, parameters: Type.Unsafe(definition.parameters),
-        async execute(_id, args) {
-          const response = await optionsTool({ name: definition.name, arguments: args });
+        async execute(_id, args, toolSignal) {
+          const active = AbortSignal.any([signal, toolSignal].filter(Boolean));
+          active.throwIfAborted();
+          const response = await optionsTool({ name: definition.name, arguments: args }, active);
+          active.throwIfAborted();
           const isError = Object.hasOwn(response, 'Left');
           return { content: [{ type: 'text', text: JSON.stringify(isError ? response.Left : response.Right) }], details: {}, isError };
         },

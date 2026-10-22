@@ -1,20 +1,21 @@
+import { constants } from 'node:fs';
+import { open } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { createEditToolDefinition, createWriteToolDefinition } from '@earendil-works/pi-coding-agent';
-import { agentCommand, lockWorkspace, reviewRequest, runRepositoryAgent } from './review.mjs';
+import { agentCommand, reviewRequest, runRepositoryAgent } from './review.mjs';
 
 const fixRequest = reviewRequest.omit({ head: true }).extend({ runId: z.uuid(), issueId: z.uuid() });
 const digest = (text) => createHash('sha256').update(text).digest('hex');
-const reply = (text, isError = false) => ({ content: [{ type: 'text', text }], details: {}, isError });
 export function fixIssue(input, options) {
   const issue = fixRequest.parse(input);
   z.uuid().parse(options.attemptId);
-  if (!options.artifactDir || typeof options.bindGuest !== 'function' || typeof options.assertCandidate !== 'function' || typeof options.admitTest !== 'function' || typeof options.restartFix !== 'function' || typeof options.observeFix !== 'function' || typeof options.validateFix !== 'function' || typeof options.onEvent !== 'function') throw new Error('Issue fixes require private artifacts, host admission, phase/result acknowledgements, and metering');
+  if (!options.artifactDir || typeof options.bindGuest !== 'function' || typeof options.restartFix !== 'function' || typeof options.completeFix !== 'function' || typeof options.optionsTool !== 'function' || typeof options.onEvent !== 'function') throw new Error('Issue fixes require host workflow tools, private artifacts and metering');
   return runRepositoryAgent({ ...issue, head: issue.base }, {
     ...options,
-    async createWorkflow({ vm, cwd, request, root, executeRegression, signal }) {
+    async createWorkflow({ vm, cwd, root, workspace, checkRegression, signal }) {
       const operationSignal = (toolSignal) => AbortSignal.any([signal, toolSignal].filter(Boolean));
       const checked = async (command, toolSignal, stdin) => {
         const active = operationSignal(toolSignal);
@@ -32,19 +33,32 @@ export function fixIssue(input, options) {
         const path = posix.resolve(cwd, (input.startsWith('file://') ? fileURLToPath(input) : input.replace(/^@/, '')).replace(/^~(?=\/|$)/, '/home/review-agent'));
         return z.string().refine((value) => !value.includes('\0'), 'File paths cannot contain NUL bytes').parse(path);
       };
-      await lockWorkspace(vm, cwd, signal);
-      let reproduction, candidate, verified;
-      options.bindGuest(async ({ arguments: command, maxBytes }, toolSignal) => {
+      options.bindGuest(async ({ tag, contents }, toolSignal) => {
         const active = operationSignal(toolSignal);
         try {
           active.throwIfAborted();
-          const execution = vm.exec(agentCommand(command), { cwd, signal: active, stdout: 'pipe', stderr: 'pipe' });
+          if (tag === 'RunCheck') {
+            const result = await checkRegression(contents, active);
+            active.throwIfAborted();
+            return result;
+          }
+          if (tag === 'CopyGuest') {
+            const file = await open(contents.source, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+            try {
+              if (!(await file.stat()).isFile()) throw new Error('Invalid private artifact');
+              await vm.fs.writeFile(contents.destination, file.createReadStream({ autoClose: false }), { signal: active });
+            } finally { await file.close(); }
+            active.throwIfAborted();
+            return [];
+          }
+          const command = tag === 'ReadGuest' ? { arguments: ['/usr/bin/head', '-c', String(contents.maxBytes), '--', guestPath(contents.path)], maxBytes: contents.maxBytes, identity: 'agent' } : contents;
+          const execution = vm.exec(command.identity === 'supervisor' ? command.arguments : agentCommand(command.arguments), { cwd, signal: active, stdout: 'pipe', stderr: 'pipe' });
           void execution.catch(() => {});
           const chunks = [];
           let length = 0;
           for await (const chunk of execution.output()) {
             length += chunk.data.length;
-            if (length > maxBytes) { await vm.close(); throw new Error('Guest output limit exceeded'); }
+            if (length > command.maxBytes) { await vm.close(); throw new Error('Guest output limit exceeded'); }
             chunks.push(chunk.data);
           }
           active.throwIfAborted();
@@ -55,13 +69,7 @@ export function fixIssue(input, options) {
           throw error;
         }
       });
-      const recordExecution = (toolSignal) => async (receipt) => {
-        const active = operationSignal(toolSignal);
-        active.throwIfAborted();
-        await options.observeFix(receipt, active);
-        active.throwIfAborted();
-      };
-      await options.restartFix(signal);
+      await options.restartFix(workspace ? { tag: 'PreparedCheckpoint', contents: { path: workspace.path, sha256: workspace.manifest.sha256 } } : { tag: 'Pristine' }, signal);
       signal.throwIfAborted();
       return {
         name: 'submit_fix', label: 'Submit verified fix',
@@ -90,82 +98,13 @@ export function fixIssue(input, options) {
               }
             },
           })),
-          {
-            name: 'reproduce_issue', label: 'Admit and reproduce regression',
-            async execute(_id, input, toolSignal) {
-              const active = operationSignal(toolSignal);
-              active.throwIfAborted();
-              if (reproduction) return reply('A regression is already frozen for this run', true);
-              const artifact = { script: input.script, failureMessage: input.failureMessage, testPatch: input.testPatch };
-              if (Object.hasOwn(input, 'testPatchFile')) {
-                const patch = await checked(agentCommand(['/usr/bin/head', '-c', '262145', '--', guestPath(input.testPatchFile)]), active);
-                if (patch.stdoutBuffer.length > 262144) return reply('Regression patch file exceeds its 256 KiB limit', true);
-                artifact.testPatch = patch.stdout;
-              }
-              artifact.testPatch = z.string().min(1).max(262144).parse(artifact.testPatch);
-              const admission = await options.admitTest({ ...artifact, projectId: issue.projectId, issueId: issue.issueId, base: issue.base }, active);
-              active.throwIfAborted();
-              if (Object.hasOwn(admission, 'Left')) return reply(admission.Left, true);
-              const result = await executeRegression(artifact, toolSignal, { revisions: [['base', request.base]], recordExecution: recordExecution(active) });
-              if (result.isError) return result;
-              const report = JSON.parse(result.content[0].text);
-              if (report.results[0].status !== 'failed') return reply('The admitted regression did not fail on base; source edits remain locked', true);
-              active.throwIfAborted();
-              await vm.fs.writeFile('/run/monoscope-admitted-test.patch', artifact.testPatch, { signal: active });
-              if (report.results[0].testPatchDisposition !== 'retained') await checked(['/usr/bin/git', '-c', 'core.hooksPath=/dev/null', 'apply', '--index', '/run/monoscope-admitted-test.patch'], active);
-              await checked(['/bin/chown', '-hR', '1000:1000', cwd], active);
-              reproduction = artifact;
-              return reply('Regression reproduced and frozen. Source editing is now available.\n' + JSON.stringify(report));
-            },
-          },
-          {
-            name: 'propose_fix', label: 'Capture source fix',
-            async execute(_id, { rootCause }, toolSignal) {
-              const active = operationSignal(toolSignal);
-              active.throwIfAborted();
-              if (!reproduction) return reply('Reproduce the issue before proposing a fix', true);
-              verified = undefined;
-              const response = await options.proposeCandidate(rootCause, active);
-              active.throwIfAborted();
-              if (Object.hasOwn(response, 'Left')) return reply(response.Left, true);
-              const captured = response.Right;
-              const revision = captured.head;
-              request.head = revision;
-              candidate = captured;
-              return reply(JSON.stringify(captured));
-            },
-          },
-          {
-            name: 'verify_fix', label: 'Verify captured source fix',
-            async execute(_id, _params, toolSignal) {
-              const active = operationSignal(toolSignal);
-              active.throwIfAborted();
-              if (!candidate || !reproduction) return reply('Capture a candidate after reproduction first', true);
-              verified = undefined;
-              const unchanged = await options.assertCandidate(candidate.candidateId, active);
-              active.throwIfAborted();
-              if (Object.hasOwn(unchanged, 'Left')) return reply(unchanged.Left, true);
-              const result = await executeRegression(reproduction, active, { recordExecution: recordExecution(active) });
-              active.throwIfAborted();
-              if (result.isError) return result;
-              const report = JSON.parse(result.content[0].text);
-              if (report.results[0].status !== 'failed' || report.results[1].status !== 'passed' || report.results[1].testPatchDisposition !== 'retained') return reply('Candidate verification did not establish a failing base and passing retained test.\n' + JSON.stringify(report), true);
-              verified = { ...candidate, checkId: report.id, regressionSha256: report.regressionSha256 };
-              return reply('Frozen regression fails on base and passes on the candidate with its test retained.\n' + JSON.stringify(report));
-            },
-          },
         ],
         async prepare({ summary }, toolSignal) {
           const active = operationSignal(toolSignal);
           active.throwIfAborted();
-          if (!verified) return { Left: 'Capture and verify a source fix before submission' };
-          const unchanged = await options.assertCandidate(verified.candidateId, active);
+          const reply = await options.completeFix(summary, active);
           active.throwIfAborted();
-          if (Object.hasOwn(unchanged, 'Left')) return unchanged;
-          const result = { ...verified, summary };
-          const acceptance = await options.validateFix(result, active);
-          active.throwIfAborted();
-          return Object.hasOwn(acceptance, 'Right') ? { Right: result } : { Left: acceptance.Left ?? 'Host did not accept this fix' };
+          return reply;
         },
       };
     },

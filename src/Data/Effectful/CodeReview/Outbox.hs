@@ -1,4 +1,4 @@
-module Data.Effectful.CodeReview.Outbox (Scope (..), Receipt (..), Outbox, outboxPath, withOutbox, replay, acknowledge, deliverPhase) where
+module Data.Effectful.CodeReview.Outbox (Scope (..), Receipt (..), Outbox, outboxPath, withOutbox, replay, acknowledge, deliver, deliverPhase) where
 
 import Control.Monad (foldM)
 import Data.Aeson qualified as AE
@@ -12,7 +12,7 @@ import Relude
 import System.Directory (canonicalizePath, createDirectoryIfMissing, listDirectory, removeFile)
 import System.FileLock (SharedExclusive (..), withFileLock)
 import System.FilePath (takeExtension, (</>))
-import System.IO.Error (userError)
+import System.IO.Error (isDoesNotExistError, tryIOError, userError)
 import System.Posix.Files qualified as Posix
 import System.Posix.IO qualified as Posix
 import System.Posix.Unistd (fileSynchronise)
@@ -80,10 +80,20 @@ acknowledge outbox receipt record = do
 
 deliverPhase :: Outbox -> UUIDId "agent_attempt" -> Step -> (Receipt -> IO (Either Text ())) -> IO (Either Text ())
 deliverPhase outbox attempt step record = do
-  ensure $ case outbox.scope of IssueFix _ -> True; _ -> False
   identifier <- UUIDId <$> UUID4.nextRandom
-  let receipt = Phase $ PhaseReceipt identifier attempt step
-  writePrivateArtifact outbox.path (toString identifier.toText <> ".json") $ AE.encode receipt <> "\n"
+  deliver outbox (Phase $ PhaseReceipt identifier attempt step) record
+
+
+deliver :: Outbox -> Receipt -> (Receipt -> IO (Either Text ())) -> IO (Either Text ())
+deliver outbox receipt record = do
+  ensure $ permitted outbox.scope receipt
+  let filename = toString (receiptId receipt) <> ".json"
+  existing <- tryIOError $ Posix.getSymbolicLinkStatus $ outbox.path </> filename
+  case existing of
+    Right _ -> pass
+    Left failure
+      | isDoesNotExistError failure -> writePrivateArtifact outbox.path filename $ AE.encode receipt <> "\n"
+      | otherwise -> throwIO failure
   acknowledge outbox receipt record
 
 
@@ -91,16 +101,20 @@ readReceipt :: Outbox -> FilePath -> IO Receipt
 readReceipt outbox filename = do
   receipt <- either (const invalid) pure . (AE.eitherDecodeStrict >=> AET.parseEither storedReceipt) =<< readPrivateArtifact outbox.path filename (2 * 1048576)
   ensure $ filename == toString (receiptId receipt) <> ".json"
-  ensure $ case (outbox.scope, receipt) of
-    (IssueFix _, _) -> True
-    (_, Phase _) -> False
-    (Advisory _, _) -> True
-    (_, Check _) -> False
-    _ -> True
+  ensure $ permitted outbox.scope receipt
   pure receipt
   where
     -- Only files accept legacy untagged usage; the live wire remains a tagged sum.
     storedReceipt value = AE.withObject "Stored receipt" (\fields -> if KM.member "tag" fields then AE.parseJSON value else Usage <$> AE.parseJSON value) value
+
+
+permitted :: Scope -> Receipt -> Bool
+permitted scope receipt = case (scope, receipt) of
+  (IssueFix _, _) -> True
+  (_, Phase _) -> False
+  (Advisory _, _) -> True
+  (_, Check _) -> False
+  _ -> True
 
 
 receiptId :: Receipt -> Text

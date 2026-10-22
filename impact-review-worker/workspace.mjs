@@ -23,8 +23,10 @@ async function nativeInput(command, request, args, script, action) {
       '--bridge', fileURLToPath(new URL('./sandbox.mjs', import.meta.url)), ...args, ...(script === undefined ? [] : ['--script', scriptFile])]);
   } finally { await rm(temporary, { recursive: true, force: true }); }
 }
-const nativeCommand = (command, request, args, signal, script) => nativeInput(command, request, args, script, async (cli, argv) =>
-  JSON.parse((await exec(cli, argv, { signal, timeout: 450000, maxBuffer: 1024 * 1024 })).stdout));
+const nativeExec = async (cli, argv, signal) => JSON.parse((await exec(cli, argv, { signal, timeout: 450000, maxBuffer: 1024 * 1024 })).stdout);
+const nativeCommand = (command, request, args, signal, script) => nativeInput(command, request, args, script, (cli, argv) => nativeExec(cli, argv, signal));
+export const runRegressionFile = (requestFile, image, { artifactDir, checkout, signal }) => nativeExec(process.env.IMPACT_REVIEW_NATIVE_CLI ?? 'monoscope',
+  ['workspace', 'check', '--request', requestFile, '--bridge', fileURLToPath(new URL('./sandbox.mjs', import.meta.url)), '--image', image.assetDir, '--artifacts', artifactDir, '--checkout', checkout], signal);
 const workspaceRequest = (request, image) => ({ projectId: request.projectId, repository: request.repository, base: request.base, expectedImageBuildId: image.buildId });
 const workspaceArgs = (image, options) => ['--image', image.assetDir, '--cache', options.cacheDir, ...(options.dependencyArchive ? ['--dependencies', options.dependencyArchive] : [])];
 export const runRegression = (request, image, { artifactDir, checkout, workspace, signal }) => nativeCommand('check',

@@ -113,6 +113,20 @@ toolsForRole role =
 
 
 -- OpenAPI schemas are emitted inline as JSON Schema for Pi's tool validator.
+
+-- $setup
+-- >>> import Data.OpenApi.Schema.Validation qualified as Validation
+-- >>> import Data.Aeson qualified as AE
+-- >>> import Relude
+
+
+-- | Both patch variants validate their complete request, including exclusivity.
+-- >>> let args :: [(AE.Key, AE.Value)] -> AE.Value; args patch = AE.object (["script" AE..= ("bash regression.sh" :: Text), "failureMessage" AE..= ("retry token was lost" :: Text)] <> patch)
+-- >>> let valid :: [(AE.Key, AE.Value)] -> Bool; valid patch = null $ Validation.validateJSON mempty (toolSchema ReproduceIssue) (args patch)
+-- >>> map valid [["testPatch" AE..= ("diff" :: Text)], ["testPatchFile" AE..= ("/tmp/patch" :: Text)], [], ["testPatch" AE..= ("diff" :: Text), "testPatchFile" AE..= ("/tmp/patch" :: Text)]]
+-- [True,True,False,False]
+-- >>> null $ Validation.validateJSON mempty (toolSchema ReproduceIssue) (AE.object ["script" AE..= ("" :: Text), "failureMessage" AE..= ("failure" :: Text), "testPatch" AE..= ("diff" :: Text)])
+-- False
 toolSchema :: ToolName -> O.Schema
 toolSchema = \case
   QueryTelemetry -> object [("service", text), ("query", text)]
@@ -122,7 +136,7 @@ toolSchema = \case
   ReadProjectMemory -> object [("pageId", uuid)]
   WriteProjectMemory -> object [("pageId", uuid), ("version", integer 0 & O.maximum_ ?~ 4294967294), ("document", object [("title", bounded 1 $ Just 120), ("body", bounded 1 $ Just 16000)])]
   RunRegression -> object (regression <> [("testPatch", patch)]) & O.required .~ ["script", "failureMessage"]
-  ReproduceIssue -> object (regression <> [("testPatch", patch), ("testPatchFile", bounded 1 $ Just 4096)]) & O.required .~ ["script", "failureMessage"] & O.oneOf ?~ map (O.Inline . (\key -> mempty & O.required .~ [key])) ["testPatch", "testPatchFile"]
+  ReproduceIssue -> mempty & O.type_ ?~ O.OpenApiObject & O.oneOf ?~ map (O.Inline . (\field -> object $ regression <> [field])) [("testPatch", patch), ("testPatchFile", bounded 1 $ Just 4096)]
   ProposeFix -> object [("rootCause", visual 240)]
   VerifyFix -> object []
   SubmitFix -> object [("summary", visual 180)]

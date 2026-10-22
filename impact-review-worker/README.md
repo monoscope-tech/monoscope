@@ -19,6 +19,8 @@ Build the native CLI with `make cli-build`. Set `IMPACT_REVIEW_NATIVE_CLI` if `m
 
 `cli.mjs` is a child of the Haskell CodeReview interpreter. Set `IMPACT_REVIEW_AGENT` to its absolute path and select an immutable guest image with `IMPACT_REVIEW_GUEST_IMAGE`. Haskell supplies role, prompts, tool schemas, pinned revisions, checkout metadata, private receipt paths and callbacks. Telemetry/wiki tools pass through the existing protocol and are authorized by Haskell. Candidate Git commits, bundles, admission records and fix-phase receipts are created natively. Haskell journals and acknowledges each phase before the SDK can advance. The child cannot clone or fetch application source as a fallback.
 
+Haskell owns the fix state machine: admission, reproduction, source unlocking, candidate capture, verification and submission. `fix.mjs` adapts SDK file tools, bounded VM commands, file copies and cancellation. Only the private host protocol can request supervisor commands; model file and shell tools run as UID 1000.
+
 The VM has no network, private COW writes and read-only host mounts. Agent commands run as UID 1000 with a reset environment. Model credentials stay on the host. `sandbox.mjs` is the SDK command bridge used by native workspace operations.
 
 Admission and independent review are read-only. Fixing requires host-admitted reproduction before source edits. Haskell supplies the peer’s candidate identity and exact evidence-file manifest from verified artifacts. The common SDK runner copies those bytes into the read-only VM and submits its decision through host validation. Peer review does not reopen artifacts or clone a second mirror.

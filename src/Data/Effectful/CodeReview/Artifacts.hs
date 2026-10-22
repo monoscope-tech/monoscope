@@ -1,8 +1,9 @@
-module Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), CandidateCause, CandidatePatch, mkCandidatePatch, CapturedCandidate, candidateMatchesPatch, candidateStep, captureCandidate, retainAdmission, VerifiedArtifacts, PeerPreparation, artifactCheckout, peerPreparation, verifyArtifacts, withVerifiedArtifacts, readPrivateArtifact, writePrivateArtifact, sha256) where
+module Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), CandidateCause, CandidatePatch, mkCandidatePatch, CapturedCandidate, candidateMatchesPatch, candidateStep, candidateIdentity, candidateRevision, FixSummary, candidateResult, captureCandidate, retainAdmission, VerifiedArtifacts, PeerPreparation, artifactCheckout, peerPreparation, verifyArtifacts, withVerifiedArtifacts, readPrivateArtifact, writePrivateArtifact, sha256) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.Encoding qualified as Encoding
 import Data.Aeson.KeyMap qualified as KM
+import Data.Aeson.Types qualified as AET
 import Data.Base64.Types (extractBase64)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
@@ -224,10 +225,7 @@ newtype CandidateCause = CandidateCause {text :: Text}
 
 
 instance AE.FromJSON CandidateCause where
-  parseJSON = AE.withText "Candidate root cause" \cause ->
-    if not (T.null $ T.strip cause) && T.length cause <= 240 && T.all (\c -> c >= ' ' || c `elem` ['\t', '\n']) cause && not (T.any (== '\DEL') cause)
-      then pure $ CandidateCause cause
-      else fail "Invalid candidate root cause"
+  parseJSON = parseVisual 240 CandidateCause
 
 
 instance AE.FromJSON CandidatePatch where
@@ -253,6 +251,42 @@ candidateMatchesPatch candidate identifier patch = candidate.candidateId == iden
 
 candidateStep :: CapturedCandidate -> Step
 candidateStep candidate = ProposeCandidate $ Candidate candidate.head candidate.rootCause
+
+
+candidateIdentity :: CapturedCandidate -> UUIDId "fix_candidate"
+candidateIdentity = (.candidateId)
+
+
+candidateRevision :: CapturedCandidate -> Revision
+candidateRevision = (.head)
+
+
+-- | Summaries preserve meaningful, bounded visual copy.
+-- >>> let accepts text = case AE.fromJSON @FixSummary (AE.String text) of AE.Success _ -> True; _ -> False
+-- >>> map accepts ["Preserve retry tokens", " ", T.replicate 181 "x", "bad\DEL"]
+-- [True,False,False,False]
+-- >>> accepts (T.replicate 180 "x")
+-- True
+newtype FixSummary = FixSummary {text :: Text}
+
+
+instance AE.FromJSON FixSummary where
+  parseJSON = parseVisual 180 FixSummary
+
+
+parseVisual :: Int -> (Text -> value) -> AE.Value -> AET.Parser value
+parseVisual limit wrap = AE.withText "Visual explanation" \text ->
+  if not (T.null $ T.strip text) && T.length text <= limit && T.all (\c -> c >= ' ' || c `elem` ['\t', '\n']) text && not (T.any (== '\DEL') text)
+    then pure $ wrap text
+    else fail "Visual explanation must be nonblank, bounded and free of control characters"
+
+
+candidateResult :: CapturedCandidate -> CheckReceipt -> FixSummary -> Either Text FixResult
+candidateResult candidate receipt summary = case receipt.regression of
+  Just (RetainedTest fingerprint)
+    | receipt.side == Head && receipt.status == Passed && receipt.revision == revisionText candidate.head ->
+        Right $ FixResult candidate.projectId candidate.runId candidate.issueId candidate.attemptId candidate.candidateId candidate.base candidate.head candidate.patchSha256 candidate.bundleSha256 candidate.rootCause receipt.checkId fingerprint summary.text
+  _ -> Left "Candidate has no passing retained regression"
 
 
 captureCandidate :: FilePath -> FixRequest -> FilePath -> CandidatePatch -> IO (Either Text CapturedCandidate)
