@@ -1061,7 +1061,7 @@ withSandbox bridge action = do
           either (const invalid) (either (const invalid) pure) $ AE.eitherDecodeStrict @(Either Text value) bytes
         close = do
           closed <- Timeout.timeout (2 * 1000000) $ tryAny $ rpc @() $ Close ()
-          case closed of { Just (Right ()) -> pass; _ -> throwIO SandboxCleanupFailed }
+          case closed of Just (Right ()) -> pass; _ -> throwIO SandboxCleanupFailed
     result <- action rpc
     close
     pure result

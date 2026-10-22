@@ -4,8 +4,8 @@ import Data.Aeson qualified as AE
 import Data.Base64.Types (extractBase64)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as Base64
-import Data.Effectful.AgentWorkspace qualified as AgentWorkspace
 import Data.Effectful.AgentWorkspace (Command (..), Copy (..), Execution (..), GuestCommand (..), Image (..), ImageId (..), Isolation (..), LogExit (..), LoggedCommand (..), Overflow (..), RegressionOptions (..), Sandbox (..), SandboxFailure (..), agentCommand, withSandbox)
+import Data.Effectful.AgentWorkspace qualified as AgentWorkspace
 import Data.Effectful.CodeReview.Types (AllocationOutcome (..), AllocationReceipt, Revision, TestArtifact (..), agentResources, hostAllocation, revisionText)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -97,9 +97,10 @@ withGuest host expected checkout revision setup lease attempt allocate retain ac
           bytes <- readFileBS path <* removeFile path
           pure (exit, bytes, truncated)
         -- Pi's mutations: errors reach the model, and the agent account's permissions decide what may change.
-        mutate argv = output (agentCommand argv) 65536 <&> \case
-          (Exited 0, _, _) -> Right AE.Null
-          (_, bytes, _) -> Left $ T.take 1000 $ decodeUtf8 bytes
+        mutate argv =
+          output (agentCommand argv) 65536 <&> \case
+            (Exited 0, _, _) -> Right AE.Null
+            (_, bytes, _) -> Left $ T.take 1000 $ decodeUtf8 bytes
         probe argv message = execute "/" (agentCommand argv) <&> \result -> if result.exitCode == 0 then Right AE.Null else Left message
         encoded = extractBase64 . Base64.encodeBase64
         operate = \case

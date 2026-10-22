@@ -3,9 +3,9 @@ module Data.Effectful.CodeReview (CodeReview (..), Request (..), FixRequest (..)
 import Control.Concurrent.STM qualified as STM
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
-import Data.Effectful.AgentWorkspace qualified as Workspace
 import Data.ByteString.Char8 qualified as BS
 import Data.ByteString.Lazy qualified as LBS
+import Data.Effectful.AgentWorkspace qualified as Workspace
 import Data.Effectful.CodeReview.Artifacts (ArtifactStore (..))
 import Data.Effectful.CodeReview.Artifacts qualified as Native
 import Data.Effectful.CodeReview.Checkout qualified as Checkout
@@ -208,13 +208,16 @@ runCodeReviewReal artifactStore host executable skills = interpret \env -> \case
               AdmissionTask request -> (Outbox.Admission request.fix.request.runId, Checkout.Repository request.fix.request{head = request.fix.request.base}, AE.object ["tag" AE..= ("AdmitTask" :: Text), "contents" AE..= (request{fix = request.fix{request = request.fix.request{gitToken = ""}}} :: AdmissionRequest)])
               PeerTask request -> (Outbox.PeerReview request.fix.request.runId, Checkout.VerifiedCandidate request.artifacts, AE.object ["tag" AE..= ("ReviewFixTask" :: Text), "contents" AE..= (request{fix = request.fix{request = request.fix.request{gitToken = ""}}} :: FixReviewRequest)])
             role = case scope of Outbox.Advisory _ -> Policy.Advisory; Outbox.IssueFix _ -> Policy.Fix; Outbox.Admission _ -> Policy.Admission; Outbox.PeerReview _ -> Policy.Peer
-            owned = host <&> \configured ->
-              let -- Prepared checkpoints are keyed by the pinned project, repository and base, never by the reviewed head.
+            owned =
+              host <&> \configured ->
+                let
+                  -- Prepared checkpoints are keyed by the pinned project, repository and base, never by the reviewed head.
                   own :: Request run -> Maybe (UUIDId "guest_image") -> (Map Text ByteString -> Guest.Setup) -> Maybe Checkout.Envelope -> Ownership
                   own request pinned setup envelope = Ownership configured request.attemptId pinned setup envelope do
                     store <- artifactStore
                     Guest.Lease store.cacheDir <$> AET.parseMaybe AE.parseJSON (AE.object ["projectId" AE..= request.projectId, "repository" AE..= request.repository, "base" AE..= request.base, "expectedImageBuildId" AE..= pinned])
-               in case task of
+                 in
+                  case task of
                     AdvisoryTask request -> own request Nothing (const Guest.Explore) Nothing
                     AdmissionTask request -> own request.fix.request (Just request.fix.imageBuildId) (const $ Guest.InspectAdmission request.artifact) (Just $ Checkout.Artifact request.artifact)
                     PeerTask request -> own request.fix.request (Just request.fix.imageBuildId) Guest.ReviewEvidence (Just $ Checkout.Result request.artifacts.result)

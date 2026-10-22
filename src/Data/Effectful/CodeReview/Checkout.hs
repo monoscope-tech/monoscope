@@ -53,6 +53,7 @@ data Origin = GitHub Text | Local FilePath
 
 
 -- Keep the private checkout alive until the child and all of its VMs have exited.
+
 -- | The action also receives the recorded evidence to place read-only in the guest (empty for source checkouts).
 -- Only preparation failures become @Left@; the action's own exceptions propagate.
 withCheckout :: ArtifactStore -> Source -> (Prepared -> Map Text ByteString -> IO a) -> IO (Either Text a)

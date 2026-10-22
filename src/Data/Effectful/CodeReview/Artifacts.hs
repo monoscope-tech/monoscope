@@ -46,10 +46,10 @@ artifactCheckout (VerifiedArtifacts directory _ _) = directory
 peerEvidence :: VerifiedArtifacts -> Map Text ByteString
 peerEvidence (VerifiedArtifacts _ request (ReviewEvidence regression baseLog headLog)) =
   Map.fromList
-      [ ("/run/monoscope-fix-review.json", toStrict $ AE.encode $ AE.object ["result" AE..= request.result, "regression" AE..= regression, "baseline" AE..= request.baseline, "candidate" AE..= request.candidate])
-      , ("/run/monoscope-fix-review-base.log", baseLog)
-      , ("/run/monoscope-fix-review-head.log", headLog)
-      ]
+    [ ("/run/monoscope-fix-review.json", toStrict $ AE.encode $ AE.object ["result" AE..= request.result, "regression" AE..= regression, "baseline" AE..= request.baseline, "candidate" AE..= request.candidate])
+    , ("/run/monoscope-fix-review-base.log", baseLog)
+    , ("/run/monoscope-fix-review-head.log", headLog)
+    ]
 
 
 data ReportStatus = Completed
