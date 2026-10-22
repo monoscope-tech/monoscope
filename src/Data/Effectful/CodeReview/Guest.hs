@@ -35,7 +35,7 @@ data Lease = Lease {cacheDir :: FilePath, request :: AgentWorkspace.Request}
 
 
 -- | Role-specific guest preparation that runs before the agent sees the workspace.
-data Setup = Explore | InspectAdmission TestArtifact | ReviewEvidence (Map Text ByteString)
+data Setup = Explore | InspectAdmission TestArtifact | ReviewEvidence (Map Text ByteString) | LockForReproduction
 
 
 data Exec = Exec {command :: Text, cwd :: Text, timeout :: Maybe Double}
@@ -44,13 +44,15 @@ data Exec = Exec {command :: Text, cwd :: Text, timeout :: Maybe Double}
 
 
 -- | File and shell calls of Pi's built-in tools, executed as the unprivileged review account.
-data Operation = Run Exec | Read Text | Access Text
+data Operation = Run Exec | Read Text | Access Text | Writable Text | Write Text Text | Mkdir Text
   deriving stock (Generic)
   deriving anyclass (AE.FromJSON)
 
 
 -- | A running agent VM: Pi's file and shell calls, root copies into the guest, and verifier settings for fresh VMs.
-data Session = Session {skills :: FilePath, imageBuildId :: ImageId, baseline :: AgentWorkspace.Baseline, operate :: Operation -> IO (Either Text AE.Value), copyIn :: FilePath -> Text -> IO (), verifier :: FilePath -> RegressionOptions}
+-- @output@ runs a command in /workspace and returns its exit status, retained bytes and whether the limit truncated them;
+-- @root@ and @place@ change the workspace or /run as root and throw on failure.
+data Session = Session {skills :: FilePath, imageBuildId :: ImageId, baseline :: AgentWorkspace.Baseline, operate :: Operation -> IO (Either Text AE.Value), copyIn :: FilePath -> Text -> IO (), verifier :: FilePath -> RegressionOptions, output :: NonEmpty Text -> Word32 -> IO (Maybe Int, ByteString, Bool), root :: NonEmpty Text -> IO (), place :: Text -> ByteString -> IO ()}
 
 
 -- | Owns the agent VM for the action's lifetime and records its allocation however it ends: @allocate@ after a
@@ -84,17 +86,25 @@ withGuest host expected checkout revision setup lease attempt allocate retain ac
           exit <- rpc @LogExit $ ExecuteLogged $ LoggedCommand (GuestCommand argv (Just cwd) False) path limit DiscardOutput
           size <- getFileSize path
           pure (path, exit, size >= toInteger limit)
+        output argv limit = do
+          (path, exit, truncated) <- logged argv "/workspace" limit
+          bytes <- readFileBS path <* removeFile path
+          pure (case exit of Exited code -> Just code; LogLimit -> Nothing, bytes, truncated)
+        -- Pi's mutations: errors reach the model, and the agent account's permissions decide what may change.
+        mutate argv = output (agentCommand argv) 65536 <&> \case
+          (Just 0, _, _) -> Right AE.Null
+          (_, bytes, _) -> Left $ T.take 1000 $ decodeUtf8 bytes
         operate = \case
           Run exec -> do
             let limited = maybe [] (\seconds -> ["/usr/bin/timeout", "--kill-after=5", show (ceiling seconds :: Word32)]) exec.timeout
             (path, exit, truncated) <- logged (agentCommand $ limited <> ["/bin/bash", "-lc", exec.command]) exec.cwd (64 * 1048576)
             let guestLog = "/run/monoscope-review-output/" <> toText (takeFileName path)
             copyIn path guestLog
-            output <- BS.takeEnd 1048576 <$> readFileBS path
+            retained <- BS.takeEnd 1048576 <$> readFileBS path
             removeFile path
             pure $ case exit of
               LogLimit -> Left "Command output could not be retained"
-              Exited code -> Right $ AE.object ["exitCode" AE..= code, "timedOut" AE..= (isJust exec.timeout && code == 124), "truncated" AE..= truncated, "log" AE..= guestLog, "output" AE..= extractBase64 (Base64.encodeBase64 output)]
+              Exited code -> Right $ AE.object ["exitCode" AE..= code, "timedOut" AE..= (isJust exec.timeout && code == 124), "truncated" AE..= truncated, "log" AE..= guestLog, "output" AE..= extractBase64 (Base64.encodeBase64 retained)]
           Read path -> do
             (file, exit, truncated) <- logged (agentCommand ["/bin/cat", "--", path]) "/" (8 * 1048576 + 1)
             bytes <- readFileBS file <* removeFile file
@@ -103,6 +113,13 @@ withGuest host expected checkout revision setup lease attempt allocate retain ac
               Exited 0 -> Left "File exceeds the 8 MiB read limit"
               _ -> Left $ T.take 1000 $ decodeUtf8 bytes
           Access path -> execute "/" (agentCommand ["/usr/bin/test", "-r", path]) <&> \result -> if result.exitCode == 0 then Right AE.Null else Left ("ENOENT: " <> path)
+          Writable path -> execute "/" (agentCommand ["/bin/sh", "-c", "test -r \"$1\" && test -w \"$1\"", "monoscope-edit", path]) <&> \result -> if result.exitCode == 0 then Right AE.Null else Left ("Permission denied: " <> path)
+          Mkdir path -> mutate ["/bin/mkdir", "-p", "--", path]
+          Write path content -> do
+            staged <- ("/run/monoscope-write-" <>) . UUID.toText <$> UUID4.nextRandom
+            upload staged (encodeUtf8 content) >> void (run "/" $ "/bin/chmod" :| ["0444", staged])
+            -- A redirect keeps an existing file's mode and creates new files from the agent's umask.
+            mutate ["/bin/sh", "-c", "/bin/cat -- \"$1\" > \"$2\"", "monoscope-write", staged, path] <* run "/" ("/bin/rm" :| ["-f", "--", staged])
     prepared <- tryAny do
       image <- rpc @Image $ Resolve host.image
       for_ expected \(UUIDId build) -> unless (image.buildId == ImageId build) $ failure "Configured guest image differs from the pinned image"
@@ -135,12 +152,13 @@ withGuest host expected checkout revision setup lease attempt allocate retain ac
           upload "/run/monoscope-admission.json" $ toStrict $ AE.encode artifact
           void $ workspace ["/bin/chmod", "0444", "/run/monoscope-admission.patch", "/run/monoscope-admission.json"]
           lock
+        LockForReproduction -> lock
         ReviewEvidence files -> do
           lock
           for_ (Map.toList files) \(destination, bytes) -> upload destination bytes >> workspace ["/bin/chmod", "0444", destination]
       pure image.buildId
     whenRight (Left "Agent sandbox could not be prepared") prepared \imageBuildId ->
-      Right <$> action (Session skills imageBuildId (AgentWorkspace.leasedBaseline leased) operate copyIn \artifacts -> RegressionOptions artifacts checkout host.image host.bridge)
+      Right <$> action (Session skills imageBuildId (AgentWorkspace.leasedBaseline leased) operate copyIn (\artifacts -> RegressionOptions artifacts checkout host.image host.bridge) output (void . workspace . toList) upload)
   measured (case outcome of Left failed | Just SandboxCleanupFailed <- fromException failed -> ReleaseFailed; _ -> Released)
     >>= traverse_ (void . tryAny . allocate)
   either throwIO pure outcome

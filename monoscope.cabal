@@ -325,6 +325,7 @@ library
       Data.Effectful.CodeReview.Guest
       Data.Effectful.CodeReview.Outbox
       Data.Effectful.CodeReview.Policy
+      Data.Effectful.CodeReview.Repair
       Data.Effectful.CodeReview.Types
       Data.Effectful.GitPublication
       Data.Effectful.GitPublication.Native
@@ -982,6 +983,7 @@ test-suite test-dev
       Data.Effectful.CodeReview.Guest
       Data.Effectful.CodeReview.Outbox
       Data.Effectful.CodeReview.Policy
+      Data.Effectful.CodeReview.Repair
       Data.Effectful.CodeReview.Types
       Data.Effectful.GitPublication
       Data.Effectful.GitPublication.Native

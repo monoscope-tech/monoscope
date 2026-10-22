@@ -1,4 +1,4 @@
-module Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), CandidatePatch, CapturedCandidate, captureCandidate, VerifiedArtifacts, artifactCheckout, peerEvidence, verifyArtifacts, withVerifiedArtifacts, readPrivateArtifact, sha256) where
+module Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), CandidatePatch, CapturedCandidate (..), captureCandidate, VerifiedArtifacts, artifactCheckout, peerEvidence, verifyArtifacts, withVerifiedArtifacts, readPrivateArtifact, sha256) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.Encoding qualified as Encoding

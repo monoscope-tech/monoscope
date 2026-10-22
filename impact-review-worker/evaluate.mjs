@@ -9,7 +9,7 @@ import parseDiff from 'parse-diff';
 import { review, reviewDraft, modelUsage } from './review.mjs';
 
 const caseSchema = z.object({
-  checkout: z.object({ guest: z.null(), envelope: z.null(), directory: z.string(), repositorySkills: z.string().min(1), rootInstructions: z.string(), projectId: z.uuid(), repository: z.string(), base: z.string(), head: z.string(), cacheStatus: z.enum(['hit', 'miss', 'verified']), durationMs: z.number().int().nonnegative(), policy: z.object({ instructions: z.string(), tools: z.array(z.object({ name: z.string(), description: z.string(), parameters: z.record(z.string(), z.unknown()), sequential: z.boolean() }).strict()) }).strict() }).strict(),
+  checkout: z.object({ guest: z.null(), envelope: z.null(), directory: z.string(), repositorySkills: z.string().min(1), rootInstructions: z.string(), projectId: z.uuid(), repository: z.string(), base: z.string(), head: z.string(), cacheStatus: z.enum(['hit', 'miss', 'verified']), durationMs: z.number().int().nonnegative(), policy: z.object({ instructions: z.string(), tools: z.array(z.object({ name: z.string(), description: z.string(), parameters: z.record(z.string(), z.unknown()), sequential: z.boolean() }).strict()), builtins: z.array(z.string()) }).strict() }).strict(),
   projectId: z.uuid(), repository: z.string(), base: z.string().regex(/^[a-f0-9]{40}$/), head: z.string().regex(/^[a-f0-9]{40}$/),
   provider: z.string(), model: z.string(), evidenceKind: z.enum(['synthetic', 'snapshot']),
   evidence: z.array(z.object({ key: z.string().min(1), kind: z.enum(['telemetry', 'monitor', 'dashboard']) }).passthrough()).refine((items) => new Set(items.map((item) => item.key)).size === items.length, 'Evidence keys must be unique'), rubric: z.array(z.string()),

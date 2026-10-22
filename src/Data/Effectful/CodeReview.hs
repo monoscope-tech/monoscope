@@ -13,6 +13,7 @@ import Data.Effectful.CodeReview.Explanation qualified as Media
 import Data.Effectful.CodeReview.Guest qualified as Guest
 import Data.Effectful.CodeReview.Outbox qualified as Outbox
 import Data.Effectful.CodeReview.Policy qualified as Policy
+import Data.Effectful.CodeReview.Repair qualified as Repair
 import Data.Effectful.CodeReview.Types
 import Data.OpenApi.Schema.Validation qualified as Schema
 import Data.Text qualified as T
@@ -21,7 +22,7 @@ import Effectful
 import Effectful.Dispatch.Dynamic
 import Effectful.TH
 import Models.Projects.ProjectMemory qualified as Memory
-import Pkg.DeriveUtils (UUIDId)
+import Pkg.DeriveUtils (UUIDId (..))
 import Relude
 import System.Environment (getEnvironment)
 import System.FilePath (takeDirectory, (</>))
@@ -206,27 +207,35 @@ runCodeReviewReal artifactStore host executable skills = interpret \env -> \case
               AdvisoryTask request -> Just $ Ownership configured request.attemptId Nothing (const Guest.Explore) Nothing (checkpoint request Nothing)
               AdmissionTask request -> Just $ Ownership configured request.fix.request.attemptId (Just request.fix.imageBuildId) (const $ Guest.InspectAdmission request.artifact) (Just $ AE.object ["artifact" AE..= request.artifact]) (checkpoint request.fix.request $ Just request.fix.imageBuildId)
               PeerTask request -> Just $ Ownership configured request.fix.request.attemptId (Just request.fix.imageBuildId) Guest.ReviewEvidence (Just $ AE.object ["result" AE..= request.artifacts.result]) (checkpoint request.fix.request $ Just request.fix.imageBuildId)
-              _ -> Nothing
+              FixTask request -> Just $ Ownership configured request.request.attemptId (Just request.imageBuildId) (const Guest.LockForReproduction) Nothing (checkpoint request.request $ Just request.imageBuildId)
             -- Prepared checkpoints are keyed by the pinned project, repository and base, never by the reviewed head.
             checkpoint :: Request run -> Maybe (UUIDId "guest_image") -> Maybe Guest.Lease
             checkpoint request pinned = do
               store <- artifactStore
               Guest.Lease store.cacheDir <$> AET.parseMaybe AE.parseJSON (AE.object ["projectId" AE..= request.projectId, "repository" AE..= request.repository, "base" AE..= request.base, "expectedImageBuildId" AE..= pinned, "expectedCheckpoint" AE..= AE.Null, "ownerPid" AE..= AE.Null])
             honours invocation = invocation.name `elem` Policy.toolsForRole role && null (Schema.validateJSON mempty (Policy.toolSchema invocation.name) invocation.arguments)
-            -- Fresh verifier VMs replay the frozen artifact; their receipts are already journaled beside the outbox.
-            regress session checkout outbox (advisory :: Request "pr_review") arguments = do
+            -- Fresh verifier VMs replay a frozen artifact. Their receipts are already journaled beside the outbox;
+            -- each is acknowledged, then @observe@d (a fix also records it as a phase). Errors carry the report.
+            replayFrozen :: Guest.Session -> Outbox.Outbox -> Request run -> AE.Value -> [(Text, Text)] -> (CheckReceipt -> IO ()) -> IO (Either Text (AE.Value, [CheckReceipt]))
+            replayFrozen session outbox pinned artifact revisions observe = do
               let options = session.verifier (Outbox.outboxPath outbox </> "checks")
-              case AE.fromJSON @Workspace.RegressionRequest $ AE.object ["projectId" AE..= advisory.projectId, "runId" AE..= advisory.runId, "attemptId" AE..= advisory.attemptId, "sessionId" AE..= verifierSession, "base" AE..= advisory.base, "imageBuildId" AE..= session.imageBuildId, "workspace" AE..= session.baseline, "artifact" AE..= (arguments :: AE.Value), "revisions" AE..= ([("base", advisory.base), ("head", advisory.head)] :: [(Text, Text)]), "ownerPid" AE..= AE.Null] of
+              case AE.fromJSON @Workspace.RegressionRequest $ AE.object ["projectId" AE..= pinned.projectId, "runId" AE..= pinned.runId, "attemptId" AE..= pinned.attemptId, "sessionId" AE..= verifierSession, "base" AE..= pinned.base, "imageBuildId" AE..= session.imageBuildId, "workspace" AE..= session.baseline, "artifact" AE..= artifact, "revisions" AE..= revisions, "ownerPid" AE..= AE.Null] of
                 AE.Error _ -> pure $ Left "Regression arguments do not match the host contract"
                 AE.Success regression ->
                   tryAny (Workspace.verifyRegression options regression) >>= \case
                     Left failure -> pure $ Left $ maybe "Local check could not run" Workspace.regressionErrorText $ fromException failure
                     Right result -> do
-                      for_ result.receipts \receipt -> case AE.fromJSON (AE.toJSON receipt) of
-                        AE.Success check -> Outbox.acknowledge outbox (Outbox.Check check) record >>= either (throwIO . userError . toString) pure
+                      checks <- forM result.receipts \receipt -> case AE.fromJSON (AE.toJSON receipt) of
+                        AE.Success check -> Outbox.acknowledge outbox (Outbox.Check check) record >>= either (throwIO . userError . toString) (const $ observe check $> check)
                         AE.Error _ -> throwIO $ userError "Regression receipt does not match the host contract"
                       traverse_ (uncurry session.copyIn) $ Workspace.regressionLogs options result
-                      pure $ if result.isError then Left (decodeUtf8 $ AE.encode result.report) else Right (AE.toJSON result.report)
+                      pure $ if result.isError then Left (decodeUtf8 $ AE.encode result.report) else Right (AE.toJSON result.report, checks)
+            -- A rejected phase ends the run, as an unacknowledged receipt did in the child.
+            persistPhase outbox attempt step = do
+              identifier <- UUIDId <$> UUID4.nextRandom
+              let receipt = Outbox.Phase $ PhaseReceipt identifier attempt step
+              Outbox.journal outbox receipt
+              Outbox.acknowledge outbox receipt record >>= either (throwIO . userError . toString) pure
             record = \case
               Outbox.Call receipt -> callbacks.calls receipt $> Right ()
               Outbox.Usage receipt -> callbacks.usage receipt $> Right ()
@@ -245,6 +254,7 @@ runCodeReviewReal artifactStore host executable skills = interpret \env -> \case
               let childEnvironment = maybe environment (\outbox -> ("IMPACT_REVIEW_OUTBOX_DIR", Outbox.outboxPath outbox) : filter ((/= "IMPACT_REVIEW_OUTBOX_DIR") . fst) environment) journal
               withProcessTerm (setEnv childEnvironment $ setStdin createPipe $ setStdout createPipe $ setStderr nullStream $ proc command skills) \process -> do
                 guest <- newIORef Nothing
+                repairing <- newIORef Nothing
                 let stop =
                       ( do
                           hClose $ getStdin process
@@ -281,7 +291,15 @@ runCodeReviewReal artifactStore host executable skills = interpret \env -> \case
                                 Nothing -> deliver checkout
                                 Just ownership ->
                                   join <$> Guest.withGuest ownership.host ownership.image checkout.directory checkout.head (ownership.setup evidence) ownership.lease ownership.attempt (void . allocate journal) (\receipt -> for_ journal (`Outbox.journal` Outbox.Allocation receipt)) \session ->
-                                    writeIORef guest (Just session) >> deliver checkout{Checkout.guest = Just session.skills, Checkout.envelope = ownership.envelope}
+                                    do
+                                      writeIORef guest (Just session)
+                                      case (task, journal) of
+                                        (FixTask job, Just outbox) -> do
+                                          stage <- newIORef Repair.Unreproduced
+                                          persistPhase outbox job.request.attemptId RestartReproduction
+                                          writeIORef repairing $ Just $ Repair.Repair session job checkout.directory (Outbox.outboxPath outbox </> "checks") callbacks.admit (persistPhase outbox job.request.attemptId) (\artifact revisions -> replayFrozen session outbox job.request (AE.toJSON artifact) revisions (persistPhase outbox job.request.attemptId . Observe)) stage
+                                        _ -> pass
+                                      deliver checkout{Checkout.guest = Just session.skills, Checkout.envelope = ownership.envelope}
                             pure $ join prepared
                           _ -> pure $ Left "Repository checkout was unavailable or already supplied"
                         Right (Right (Tool invocation))
@@ -289,11 +307,22 @@ runCodeReviewReal artifactStore host executable skills = interpret \env -> \case
                           | invocation.name == Policy.RunRegression -> do
                               session <- readIORef guest
                               response <- case (session, supplied, journal, task) of
-                                (Just active, Just checkout, Just outbox, AdvisoryTask advisory) | honours invocation -> regress active checkout outbox advisory invocation.arguments
+                                (Just active, Just _, Just outbox, AdvisoryTask advisory) | honours invocation -> fmap fst <$> replayFrozen active outbox advisory invocation.arguments [("base", advisory.base), ("head", advisory.head)] (const pass)
                                 _ -> pure $ Left "Tool is unavailable or its arguments violate the host contract"
                               writeMessage response
                               -- Comparisons spend the verifier's own budget of three per session, not the request budget.
                               receive supplied remaining submissions Nothing
+                          -- Fix steps act on the host-owned workspace; only reproduction, which asks the host to admit a test, spends the request budget.
+                          | invocation.name `elem` [Policy.ReproduceIssue, Policy.ProposeFix, Policy.VerifyFix] && (remaining > 0 || invocation.name /= Policy.ReproduceIssue) -> do
+                              repair <- readIORef repairing
+                              response <- case repair of
+                                Just active | honours invocation -> case invocation.name of
+                                  Policy.ReproduceIssue -> Repair.reproduce active invocation.arguments
+                                  Policy.ProposeFix -> maybe (pure $ Left "A root cause is required") (Repair.propose active) $ AET.parseMaybe (AE.withObject "Candidate" (AE..: "rootCause")) invocation.arguments
+                                  _ -> Repair.verify active
+                                _ -> pure $ Left "Tool is unavailable or its arguments violate the host contract"
+                              writeMessage response
+                              receive supplied (remaining - bool 0 1 (invocation.name == Policy.ReproduceIssue)) submissions Nothing
                           | remaining > 0 -> do
                               let parsed :: (AE.Value -> AET.Parser value) -> (value -> IO (Either Text AE.Value)) -> IO (Either Text AE.Value)
                                   parsed parser = whenRight (Left "Tool arguments do not match the host contract") (AET.parseEither parser invocation.arguments)
@@ -334,7 +363,8 @@ runCodeReviewReal artifactStore host executable skills = interpret \env -> \case
                         Right (Right (Validate draft))
                           | isNothing supplied && isJust artifactStore -> pure $ Left "Review agent has not acquired its repository checkout"
                           | submissions > 0 -> do
-                              checked <- callbacks.validate draft
+                              composed <- readIORef repairing >>= maybe (pure $ Right draft) (`Repair.submission` draft)
+                              checked <- either (pure . Left) callbacks.validate composed
                               writeMessage $ void checked
                               receive supplied remaining (submissions - 1) $ either (const Nothing) (Just . (draft,)) checked
                           | otherwise -> pure $ Left "Review agent exceeded its submission budget"

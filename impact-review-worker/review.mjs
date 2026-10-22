@@ -1,14 +1,14 @@
 import { execFile } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { cp, mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, dirname, isAbsolute, join, relative } from 'node:path';
+import { basename, dirname, isAbsolute, join, posix, relative } from 'node:path';
 import { constants, createReadStream } from 'node:fs';
 import { RealFSProvider, ReadonlyProvider, VM, importImageFromDirectory, resolveImageSelector } from '@earendil-works/gondolin';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import {
-  createAgentSession, createBashToolDefinition, createReadToolDefinition,
+  createAgentSession, createBashToolDefinition, createEditToolDefinition, createReadToolDefinition, createWriteToolDefinition,
   DefaultResourceLoader, loadSkills, SessionManager, SettingsManager,
 } from '@earendil-works/pi-coding-agent';
 import { z } from 'zod';
@@ -220,6 +220,31 @@ export async function runRepositoryAgent(input, { modelRuntime, guestImage, expe
         readFile: (path) => vm.fs.readFile(path),
       },
     })];
+    const guestPath = (input) => {
+      const path = posix.resolve(cwd, (input.startsWith('file://') ? fileURLToPath(input) : input.replace(/^@/, '')).replace(/^~(?=\/|$)/, '/home/review-agent'));
+      return z.string().refine((value) => !value.includes('\0'), 'File paths cannot contain NUL bytes').parse(path);
+    };
+    // Pi queues mutations by host realpath, so it only ever sees private stand-ins for guest paths.
+    if (host && preparedCheckout.policy.builtins.includes('edit')) tools.push(...[createEditToolDefinition, createWriteToolDefinition].map((defineTool) => ({
+      ...defineTool(cwd),
+      async execute(id, args, toolSignal, onUpdate, context) {
+        const path = guestPath(args.path);
+        const queuePath = join(root, 'file-tools', createHash('sha256').update(path).digest('hex'));
+        const restore = (text) => text.replaceAll(queuePath, path);
+        try {
+          const result = await defineTool(cwd, { operations: {
+            access: () => guest('Writable', path),
+            readFile: async () => Buffer.from(await guest('Read', path), 'base64'),
+            writeFile: (_path, content) => guest('Write', [path, content]),
+            mkdir: () => guest('Mkdir', posix.dirname(path)),
+          } }).execute(id, { ...args, path: queuePath }, toolSignal, onUpdate, context);
+          return { ...result, content: result.content.map((item) => item.type === 'text' ? { ...item, text: restore(item.text) } : item),
+            details: { ...result.details, ...(result.details?.patch ? { patch: restore(result.details.patch) } : {}) } };
+        } catch (error) {
+          throw new Error(restore(error.message));
+        }
+      },
+    })));
     const executeRegression = async (artifact, toolSignal, { revisions = [['base', request.base], ['head', request.head]], recordExecution = () => {} } = {}) => {
       const active = AbortSignal.any([signal, toolSignal].filter(Boolean));
       const result = await runRegression({ projectId: request.projectId, runId, attemptId, sessionId: verifierSession, base: request.base, artifact, revisions }, pinnedImage,
@@ -268,7 +293,7 @@ export async function runRepositoryAgent(input, { modelRuntime, guestImage, expe
         async execute(_id, args) {
           const response = await optionsTool({ name: definition.name, arguments: args });
           const isError = Object.hasOwn(response, 'Left');
-          return { content: [{ type: 'text', text: isError ? response.Left : JSON.stringify(response.Right) }], details: {}, isError };
+          return { content: [{ type: 'text', text: isError ? response.Left : typeof response.Right === 'string' ? response.Right : JSON.stringify(response.Right) }], details: {}, isError };
         },
       });
     }
@@ -276,7 +301,7 @@ export async function runRepositoryAgent(input, { modelRuntime, guestImage, expe
       const definition = preparedCheckout.policy.tools.find((item) => item.name === tool.name);
       if (definition && !workflow.instructions) Object.assign(tool, { label: definition.name, description: definition.description, parameters: Type.Unsafe(definition.parameters), ...(definition.sequential ? { executionMode: 'sequential' } : {}) });
     }
-    if (createWorkflow || preparedCheckout.envelope) for (const tool of tools) tool.executionMode = 'sequential';
+    if (createWorkflow || preparedCheckout.policy.tools.some((tool) => tool.sequential)) for (const tool of tools) tool.executionMode = 'sequential';
     const settingsManager = SettingsManager.inMemory({ retry: { enabled: true, maxRetries: 1 } });
     const loader = new DefaultResourceLoader({
       cwd: root, agentDir: join(root, 'agent'), settingsManager,

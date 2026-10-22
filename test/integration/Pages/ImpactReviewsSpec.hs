@@ -501,7 +501,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
           choices <- readIORef plan
           pure $ fromMaybe (SdkText "Fix attempt finished.") $ viaNonEmpty head $ drop (length results) choices
     withSdkModel directory "fix-fixture" next \models requests -> do
-      let run action = runEff $ Agent.runCodeReviewReal (Just store) (Just host) (Just "test/fixtures/native-sdk-worker.py") [models, store.usageDir, store.cacheDir, image, diagnostic, "--prepare", scriptFile, "--cli", cli] action
+      let run action = runEff $ Agent.runCodeReviewReal (Just store) (Just host{Guest.workspace = Just $ Guest.Workspace scriptFile Nothing}) (Just "test/fixtures/native-sdk-worker.py") [models, store.usageDir, store.cacheDir, "/nonexistent-guest-image", diagnostic, "--cli", cli] action
           knowledge = const $ pure $ Left "Unexpected knowledge request"
           capture ref receipt = liftIO $ record ref receipt
           inspect result = runExceptT do

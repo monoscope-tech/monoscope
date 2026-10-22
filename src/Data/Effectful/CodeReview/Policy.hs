@@ -28,13 +28,14 @@ data Invocation = Invocation {name :: ToolName, arguments :: AE.Value}
   deriving anyclass (AE.FromJSON)
 
 
-data Policy = Policy {instructions :: Text, tools :: [Tool]}
+-- | @builtins@ names the Pi tools whose file and shell calls the host serves in the guest.
+data Policy = Policy {instructions :: Text, tools :: [Tool], builtins :: [Text]}
   deriving stock (Generic)
   deriving anyclass (AE.ToJSON)
 
 
 policy :: Role -> Text -> Text -> Text -> Policy
-policy role base headRevision rootInstructions = Policy instructions $ map (\name -> Tool name (toolDescription name) (toolSchema name) (role /= Advisory)) (toolsForRole role)
+policy role base headRevision rootInstructions = Policy instructions (map (\name -> Tool name (toolDescription name) (toolSchema name) (role /= Advisory)) (toolsForRole role)) (["read", "bash"] <> if role == Fix then ["edit", "write"] else [])
   where
     toolDescription :: ToolName -> Text
     toolDescription = \case
@@ -122,7 +123,8 @@ toolSchema = \case
   ReadProjectMemory -> object [("pageId", uuid)]
   WriteProjectMemory -> object [("pageId", uuid), ("version", integer 0 & O.maximum_ ?~ 4294967294), ("document", object [("title", bounded 1 $ Just 120), ("body", bounded 1 $ Just 16000)])]
   RunRegression -> object (regression <> [("testPatch", patch)]) & O.required .~ ["script", "failureMessage"]
-  ReproduceIssue -> object (regression <> [("testPatch", patch), ("testPatchFile", bounded 1 $ Just 4096)]) & O.required .~ ["script", "failureMessage"] & O.oneOf ?~ map (O.Inline . (\key -> mempty & O.required .~ [key])) ["testPatch", "testPatchFile"]
+  -- Each branch is a complete object: validators check only the matching branch, not the parent's properties.
+  ReproduceIssue -> object (regression <> sources) & O.required .~ ["script", "failureMessage"] & O.oneOf ?~ map (O.Inline . object . (regression <>) . one) sources
   ProposeFix -> object [("rootCause", visual 240)]
   VerifyFix -> object []
   SubmitFix -> object [("summary", visual 180)]
@@ -144,6 +146,7 @@ toolSchema = \case
       ]
   where
     uuid = text & O.format ?~ "uuid"
+    sources = [("testPatch", patch), ("testPatchFile", bounded 1 $ Just 4096)]
     patch = bounded 1 $ Just 262144
     rationale = bounded 1 (Just 1200) & O.pattern ?~ "\\S"
     visual limit = bounded 1 (Just limit) & O.pattern ?~ "^(?=[\\s\\S]*\\S)[^\\x00-\\x08\\x0b-\\x1f\\x7f]+$"
