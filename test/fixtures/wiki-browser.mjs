@@ -46,11 +46,15 @@ else {
     await rich.press('ControlOrMeta+b');
     await page.getByLabel('Editing mode').selectOption('source');
     assert.equal(await page.locator('textarea[name=body]').inputValue(), '**Keep caller retry tokens.**\n');
+    await page.locator('textarea[name=body]').fill('**Keep caller retry tokens.**\n\n[Runbook][ref]\n\n[ref]: https://monoscope.tech\n');
     await page.getByLabel('Editing mode').selectOption('rich');
     assert.equal(await rich.locator('strong').textContent(), 'Keep caller retry tokens.');
     const id = await page.locator('[name=pageId]').inputValue();
     await page.getByRole('button', { name: 'Save page', exact: true }).click();
     await page.waitForFunction(() => document.querySelector('#repository-content h2')?.textContent === 'Browser memory');
+    const content = page.locator('#repository-content .prose').first();
+    assert.equal(await content.locator('strong').textContent(), 'Keep caller retry tokens.');
+    assert.equal(await content.locator('a').getAttribute('href'), 'https://monoscope.tech');
     const urls = [new URL(page.url()).pathname];
     const targets = [await page.locator('#repository-content').count()];
     await load(url);

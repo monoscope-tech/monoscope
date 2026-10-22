@@ -41,6 +41,10 @@ Prototype evidence is retained locally in `scripts/local/wiki-editor-spike/round
 
 The editor adapter is implemented on the larger checkpoint branch, separately from #690. Its browser regression covers undo/redo, bold formatting, source-mode switching, Markdown persistence and HTMX navigation into a fresh editor. The focused watcher passed all 62 repository-context examples; TypeScript checking and all 1,028 frontend assertions passed. Local light/dark screenshots and a recording are retained. The editor imports on opening the edit panel and preserves untouched source bytes. The existing widget-navigation hook now also replaces Milkdown instances when HTMX morphs server markup.
 
-This is not yet a merge-ready editor PR: formatted server rendering with sanitization, broader save/reload fixtures, final local CI and the production image remain to verify.
+Saved pages and revision history now render in Haskell with [commonmark](https://hackage.haskell.org/package/commonmark-0.2.6.1) and its GitHub Markdown extensions. Embedded HTML is displayed as text through the parser's public syntax hooks; [xss-sanitize](https://hackage.haskell.org/package/xss-sanitize-0.3.7.2) filters the resulting markup and URL attributes. The previous MMark renderer turned HTML-like text into relative links, which failed the retained history assertion. The global renderer is unchanged.
+
+The handler regression covers formatting, code blocks, tables, tasks, footnotes, script/form markup, encoded and mixed-case JavaScript links, rejected image URLs, and unchanged stored Markdown. The browser flow also saves a reference-style link through source and rich modes, verifies formatted read-back, and pins the exact Markdown bytes in the database. All 62 repository-context examples pass after these changes.
+
+The editor is still awaiting its independent PR, final local CI, production image and attached walkthrough. Keep it separate from the larger agent branch.
 
 Merge each PR only after its review loop and required checks pass. Keep worker migration and billing/sandbox changes out of both wiki PRs.

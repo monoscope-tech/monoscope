@@ -54,6 +54,10 @@
 - envy
 - errors
 - mmark
+- commonmark >= 0.2.6.1 && < 0.3
+- commonmark-extensions >= 0.2.6 && < 0.3
+- parsec >= 3.1 && < 3.2
+- xss-sanitize >= 0.3.7.2 && < 0.4
 - extra
 - slugify
 - fmt

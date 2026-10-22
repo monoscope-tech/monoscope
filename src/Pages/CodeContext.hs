@@ -10,6 +10,11 @@
 module Pages.CodeContext (wikiGetH, memoryGetH, memoryPostH, MemoryForm (..), WikiGet (..), repositoryAnalyzePostH, repositoryResumePostH, repositoryFolderPostH, repositoryConflictPostH, FolderForm (..), ConflictForm (..), repositoryTokenGetH, repositoryTokenPostH, RepositoryTokenGet (..), RepositoryTokenForm (..), codeContextH, repositoriesGetH, serviceRepositoriesGetH, repositoryGetH, repositoryDeleteH, repositorySourceGetH, repositorySourcePostH, repositorySourceDeleteH, repositoryReviewsPostH, repositorySourceEnabledPostH, SourceContextForm (..), repositoryConnectGetH, repositoryConnectPostH, RepositoryConnectGet (..), RepositoryConnectForm (..), RepositoryGet (..), ReviewReadiness (..), RepositoryTab (..), codeMappingsGetH, codeMappingsEditorGetH, codeMappingsPostH, codeMappingsDeleteH, CodeMappingForm (..), impactReviewSettingsPostH, impactReviewRetryH, issueFixGetH, issueFixMediaH, issueFixPackageH) where
 
 import BackgroundJobs.Types qualified as Jobs
+import Commonmark qualified as Markdown
+import Commonmark.Blocks qualified as MarkdownBlocks
+import Commonmark.Extensions (gfmExtensions)
+import Commonmark.Tag qualified as MarkdownTag
+import Commonmark.TokParsers (symbol)
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
 import Data.ByteString.Lazy qualified as LBS
@@ -63,6 +68,8 @@ import Servant (Header, Headers, ServerError (errHeaders), addHeader, err403, er
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, DB, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
+import Text.HTML.SanitizeXSS (sanitizeBalance)
+import Text.Parsec qualified as Parsec
 import Utils (LoadingSize (..), faSprite_, htmxIndicator_, nonEmptyT, renderMarkdown)
 import Web.Auth (demoGuestSessionId)
 import Web.FormUrlEncoded (FromForm)
@@ -306,6 +313,16 @@ instance ToHtml WikiGet where
         visible = take Memory.pageLimit pages
         displayed = visible <> [page | page <- maybeToList current, all ((/= page.id) . (.id)) visible]
         authorName = \case Memory.Member _ -> "Project member"; Memory.Agent _ -> "Agent"
+        baseSyntax = gfmExtensions <> Markdown.defaultSyntaxSpec
+        -- Embedded HTML is text; only Markdown constructs may create markup.
+        syntax =
+          baseSyntax
+            { Markdown.syntaxBlockSpecs = filter ((/= (MarkdownBlocks.rawHtmlSpec @Identity @(Markdown.Html ()) @(Markdown.Html ())).blockType) . (.blockType)) baseSyntax.syntaxBlockSpecs
+            , Markdown.syntaxInlineParsers = (Markdown.str . Markdown.untokenize <$> Parsec.try ((:) <$> symbol '<' <*> MarkdownTag.htmlTag)) : baseSyntax.syntaxInlineParsers
+            }
+        pageBody body = div_ [class_ "prose prose-sm max-w-none break-words text-sm text-textStrong [&_pre]:overflow-x-auto"] $ case runIdentity $ Markdown.commonmarkWith syntax "" body of
+          Left _ -> toHtml body
+          Right (parsed :: Markdown.Html ()) -> toHtmlRaw $ sanitizeBalance $ toStrict $ Markdown.renderHtml parsed
     div_ [class_ "grid gap-6 md:grid-cols-[15rem_minmax(0,1fr)]"] do
       nav_ [Aria.label_ "Wiki pages", class_ "space-y-3", term "preload" "mouseover"] do
         when canEdit $ a_ (class_ "btn btn-sm btn-ghost" : repositoryNavAttrs base) "New page"
@@ -334,7 +351,7 @@ instance ToHtml WikiGet where
         p_ [class_ "text-sm text-textWeak"] "Shared project notes and runbooks. Check dated conclusions against current source and telemetry."
         for_ current \page -> do
           p_ [class_ "text-xs text-textWeak"] $ toHtml @Text $ authorName page.author <> " · Revision " <> show page.version <> " · " <> show page.updatedAt
-          div_ [class_ "whitespace-pre-wrap break-words text-sm text-textStrong"] $ toHtml $ Memory.memoryText page.document.body
+          pageBody $ Memory.memoryText page.document.body
         when canEdit $ details_ ([class_ "border-t border-strokeWeak pt-4"] <> [open_ "" | isNothing current || isJust message]) do
           summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] $ if isNothing current then "Write a page" else "Edit this page"
           form_ [method_ "post", action_ ("/p/" <> pid.toText <> "/memories"), hxPost_ ("/p/" <> pid.toText <> "/memories"), hxTarget_ "#repository-content", hxSelect_ "#repository-content", hxSwap_ "outerHTML", class_ "mt-4 space-y-4"] do
@@ -365,7 +382,7 @@ instance ToHtml WikiGet where
           div_ [class_ "mt-3 divide-y divide-strokeWeak"] $ for_ history \page -> details_ [class_ "py-3"] do
             summary_ [class_ "cursor-pointer text-sm text-textWeak"] $ toHtml @Text $ "Revision " <> show page.version <> " · " <> authorName page.author <> " · " <> show page.updatedAt
             h3_ [class_ "mt-3 text-sm font-semibold text-textStrong"] $ toHtml $ Memory.memoryText page.document.title
-            div_ [class_ "mt-2 whitespace-pre-wrap break-words text-sm text-textStrong"] $ toHtml $ Memory.memoryText page.document.body
+            div_ [class_ "mt-2"] $ pageBody $ Memory.memoryText page.document.body
 
 
   toHtmlRaw = toHtml

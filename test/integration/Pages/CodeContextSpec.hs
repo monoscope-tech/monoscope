@@ -251,6 +251,33 @@ spec = do
         html nested `shouldSatisfy` T.isInfixOf "<wiki-editor"
         html nested `shouldSatisfy` T.isInfixOf "Markdown source"
         html nested `shouldSatisfy` T.isInfixOf "/wiki/runbooks/retries"
+        for_
+          ( zip
+              [4 ..]
+              [ ("**Formatted note** with *emphasis*.\n\n```haskell\nmain = pure ()\n```", ["<strong>Formatted note</strong>", "<em>emphasis</em>", "language-haskell"])
+              , ("**Safe text** [unsafe](javascript:alert(42))", ["<strong>Safe text</strong>"])
+              , ("**Encoded link** [unsafe](java&#x73;cript:alert(42))", ["<strong>Encoded link</strong>"])
+              , ("**Mixed case** [unsafe](JaVaScRiPt:alert(42))", ["<strong>Mixed case</strong>"])
+              , ("**Safe image** ![unsafe](data:text/html,alert)", ["<strong>Safe image</strong>"])
+              , ("<script>alert('wiki')</script>", ["&lt;script&gt;"])
+              , ("<form id=\"wiki-injection\"><input name=\"token\" type=\"password\"></form>", ["&lt;form"])
+              , ("| Name | Count |\n| --- | ---: |\n| Item | 2 |\n\n- [x] Done\n\nA claim[^1].\n\n[^1]: Evidence", ["<table>", "type=\"checkbox\"", "<sup", "Evidence"])
+              ]
+          )
+          \(n, (body, rendered)) -> do
+            let formatted = UUIDId $ UUID.fromWords 50 0 0 n :: Memory.PageId
+                path = "formatting/page-" <> show @Text n
+            saved <- request H.methodPost (base testPid) [("pageId", formatted.toText), ("version", "0"), ("path", path), ("title", "Formatted note"), ("body", body)]
+            H.statusCode saved.simpleStatus `shouldBe` 200
+            readBack <- request H.methodGet ("/p/" <> testPid.toText <> "/wiki/" <> path) []
+            H.statusCode readBack.simpleStatus `shouldBe` 200
+            for_ rendered \part -> T.isInfixOf part (html readBack) `shouldBe` True
+            T.toLower (html readBack) `shouldNotSatisfy` T.isInfixOf "href=\"javascript:alert"
+            html readBack `shouldNotSatisfy` T.isInfixOf "src=\"data:text/html"
+            html readBack `shouldNotSatisfy` T.isInfixOf "<script>alert('wiki')</script>"
+            T.isInfixOf "href=\"script\"" (html readBack) `shouldBe` False
+            T.isInfixOf "id=\"wiki-injection\"" (html readBack) `shouldBe` False
+            map (Memory.memoryText . (.document.body)) <$> runQueryEffect tr (Memory.pageHistory testPid formatted) `shouldReturn` [body]
         for_ ["runbooks%2Fretries", "runbooks/%252e%252e/private", "runbooks/%2e%2e/private"] \path -> do
           encoded <- request H.methodGet ("/p/" <> testPid.toText <> "/wiki/" <> path) []
           H.statusCode encoded.simpleStatus `shouldBe` 404
@@ -280,6 +307,7 @@ spec = do
         viewed <- request H.methodGet (base testPid <> "?page=" <> page.toText) []
         html viewed `shouldSatisfy` T.isInfixOf "Revision history"
         html viewed `shouldSatisfy` T.isInfixOf "Keep retry tokens. &lt;script&gt;"
+        T.isInfixOf "href=\"script\"" (html viewed) `shouldBe` False
         (_, typedWiki) <- testServant tr $ PageCodeContext.memoryGetH testPid $ Just page
         typedWiki.content.form.version `shouldBe` 2
         typedWiki.content.canEdit `shouldBe` True
@@ -360,7 +388,7 @@ spec = do
           AET.parseEither (AE.withObject "Browser result" (AE..: "fields")) value `shouldBe` Right (["", "", ""] :: [Text])
           AET.parseEither (AE.withObject "Browser result" (AE..: "urls")) value `shouldBe` Right (["/p/" <> testPid.toText <> "/wiki/runbooks/retries", "/p/" <> testPid.toText <> "/wiki"] :: [Text])
           pages <- runQueryEffect tr $ Memory.latestPages testPid
-          map (Memory.memoryText . (.document.body)) pages `shouldBe` ["**Keep caller retry tokens.**\n"]
+          map (Memory.memoryText . (.document.body)) pages `shouldBe` ["**Keep caller retry tokens.**\n\n[Runbook][ref]\n\n[ref]: https://monoscope.tech\n"]
 
     describe "Repository deployment evidence" do
       it "keeps deployment requests, reported statuses, failures, and result limits distinct" \tr -> do
