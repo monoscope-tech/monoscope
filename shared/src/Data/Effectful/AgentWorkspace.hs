@@ -444,31 +444,13 @@ runWorkspaceReal = interpret $ \env -> \case
       withOwner request.ownerPid $ case operation of
         Lookup -> do
           root <- canonicalizePath options.cacheDir
-          withProjectLock root request.projectId $ workspace options operation request
-        _ -> workspace options operation request
+          withProjectLock root request.projectId $ lookupWorkspace options operation request
+        _ -> lookupWorkspace options operation request
     pure $ case outcome of Right (Just prepared) -> Right prepared; _ -> Left "Workspace preparation or integrity verification failed"
   WithWorkspace options requestFile action -> localSeqUnliftIO env $ \unlift -> liftIO do
     outcome <- tryAny do
       request <- decode =<< readBounded requestFile 65536
-      withOwner request.ownerPid do
-        root <- canonicalizePath options.cacheDir
-        bracket
-          ( withProjectLock root request.projectId do
-              prepared <- workspace options Lookup request
-              forM prepared \value -> do
-                let parent = root </> projectText request.projectId </> "leases"
-                createDirectoryIfMissing True parent
-                canonical parent
-                Posix.setFileMode parent 0o700
-                bracketOnError (createTempDirectory parent ".lease-") removePathForcibly \directory -> do
-                  let immutable = directory </> "baseline.qcow2"
-                      mutable = directory </> "resume.qcow2"
-                  Posix.createLink value.path immutable
-                  copySnapshot (Snapshot immutable value.manifest.sha256) mutable
-                  pure $ Leased value{path = immutable} mutable
-          )
-          (\prepared -> withProjectLock root request.projectId $ for_ prepared $ removePathForcibly . takeDirectory . (.resumePath))
-          (tryAny . unlift . action)
+      withOwner request.ownerPid $ leaseWorkspace options request (tryAny . unlift . action)
     case outcome of
       Left _ -> pure $ Left "Workspace preparation or integrity verification failed"
       Right result -> Right <$> either throwIO pure result
@@ -480,425 +462,451 @@ runWorkspaceReal = interpret $ \env -> \case
       Right (Just result) -> Right result
       Left failure -> Left $ fromMaybe RegressionUnavailable $ fromException failure
       _ -> Left RegressionUnavailable
-  where
-    prune :: PruneOptions -> PruneRequest -> IO PruneReport
-    prune options request = do
-      started <- getMonotonicTimeNSec
-      now <- getCurrentTime
-      root <- canonicalizePath options.cacheDir
-      withProjectLock root request.projectId do
-        remote <- readRemote options.remote
-        connection <- connectStorage remote
-        let project = root </> projectText request.projectId
-            parent = project </> "workspaces"
-            leases = project </> "leases"
-            directory key = parent </> toString (digestText key)
-            measure = do
-              present <- doesDirectoryExist leases
-              when present $ canonical leases
-              output <- decodeUtf8 @Text <$> readProcessStdout_ (proc "du" $ ["-sk", parent] <> [leases | present])
-              sizes <- forM (lines output) \line -> do
-                size <- maybe invalid pure $ viaNonEmpty head (words line) >>= readMaybe @Word64 . toString
-                ensure $ size <= maxBound `div` 1024
-                pure $ size * 1024
-              case sizes of
-                [cached] -> pure (cached, 0)
-                [cached, leased] -> do
-                  ensure $ toInteger cached + toInteger leased <= toInteger (maxBound :: Word64)
-                  pure (cached + leased, leased)
-                _ -> invalid
-            readEntry key = do
-              let entry = directory key
-              canonical entry
-              Posix.getSymbolicLinkStatus entry >>= ensure . Posix.isDirectory
-              names <- listDirectory entry
-              ensure $ all (`elem` ["manifest.json", "baseline.qcow2", "last-used.json"]) names
-              manifest <- decode @Manifest =<< readBounded (entry </> "manifest.json") 65536
-              ensure $ manifest.identity.projectId == request.projectId && identityKey manifest.identity == key
-              stamp <- tryIOError $ readBounded (entry </> "last-used.json") 65536
-              lastUsed <- case stamp of Left failure | isDoesNotExistError failure -> pure manifest.createdAt; Left failure -> throwIO failure; Right bytes -> decode bytes
-              status <- Posix.getSymbolicLinkStatus $ entry </> "baseline.qcow2"
-              ensure $ Posix.isRegularFile status
-              pure $ CacheEntry key manifest lastUsed status
-            verifyRemote entry = do
-              let manifest = entry.manifest
-                  prefix = "agent-workspaces/v1/" <> toText (projectText request.projectId) <> "/" <> digestText entry.key <> "/" <> digestText manifest.sha256
-              ensure $ manifest.bytes <= remote.maxBytes
-              encoded <- storage connection do
-                response <- Minio.getObject remote.bucket (prefix <> ".json") Minio.defaultGetObjectOptions
-                runConduit $ response.gorObjectStream .| CC.takeE 65537 .| CC.sinkLazy
-              ensure $ LBS.length encoded <= 65536
-              archived <- decode @Manifest $ toStrict encoded
-              ensure $ archived.identity == manifest.identity && archived.sha256 == manifest.sha256 && archived.bytes == manifest.bytes
-              (context, size) <- storage connection do
-                response <- Minio.getObject remote.bucket (prefix <> ".qcow2") Minio.defaultGetObjectOptions
-                liftIO $ ensure $ response.gorObjectInfo.oiSize == fromIntegral manifest.bytes
-                runConduit $ response.gorObjectStream .| CC.takeE (fromIntegral manifest.bytes + 1) .| CC.foldl (\(!context, !count) chunk -> (hashUpdate context chunk, count + fromIntegral (BS.length chunk))) (hashInit :: Context SHA256, 0 :: Word64)
-              ensure $ size == manifest.bytes && Fingerprint (show $ hashFinalize context) == manifest.sha256
-        let journals = project </> "prunes"
-        createDirectoryIfMissing True journals
-        canonical journals
-        Posix.setFileMode journals 0o700
-        identifier <- Identifier <$> UUID4.nextRandom
-        let record = PruneRecord identifier request.projectId now PruneStarted
-            Identifier uid = identifier
-            save outcome = publish (journals </> toString (UUID.toText uid) <> ".json") (record :: PruneRecord){outcome}
-        save PruneStarted
-        names <- listDirectory parent
-        let keys = mapMaybe (mkFingerprint . toText) names
-        checked <- forM keys $ \key -> (key,) <$> tryAny (readEntry key)
-        (before, leased) <- measure
-        let initial = PruneReport request.projectId before before leased request.maxBytes (Seq.fromList [Kept key InvalidEntry | (key, Left _) <- checked]) [name | name <- names, name /= ".native.lock", isNothing $ mkFingerprint $ toText name] Unpriced
-        save $ PruneRunning initial
-        final <-
-          foldM
-            ( \report entry ->
-                if report.afterBytes <= request.maxBytes
-                  then pure report
+
+
+prune :: PruneOptions -> PruneRequest -> IO PruneReport
+prune options request = do
+  started <- getMonotonicTimeNSec
+  now <- getCurrentTime
+  root <- canonicalizePath options.cacheDir
+  withProjectLock root request.projectId do
+    remote <- readRemote options.remote
+    connection <- connectStorage remote
+    let project = root </> projectText request.projectId
+        parent = project </> "workspaces"
+        leases = project </> "leases"
+        directory key = parent </> toString (digestText key)
+        measure = do
+          present <- doesDirectoryExist leases
+          when present $ canonical leases
+          output <- decodeUtf8 @Text <$> readProcessStdout_ (proc "du" $ ["-sk", parent] <> [leases | present])
+          sizes <- forM (lines output) \line -> do
+            size <- maybe invalid pure $ viaNonEmpty head (words line) >>= readMaybe @Word64 . toString
+            ensure $ size <= maxBound `div` 1024
+            pure $ size * 1024
+          case sizes of
+            [cached] -> pure (cached, 0)
+            [cached, leased] -> do
+              ensure $ toInteger cached + toInteger leased <= toInteger (maxBound :: Word64)
+              pure (cached + leased, leased)
+            _ -> invalid
+        readEntry key = do
+          let entry = directory key
+          canonical entry
+          Posix.getSymbolicLinkStatus entry >>= ensure . Posix.isDirectory
+          names <- listDirectory entry
+          ensure $ all (`elem` ["manifest.json", "baseline.qcow2", "last-used.json"]) names
+          manifest <- decode @Manifest =<< readBounded (entry </> "manifest.json") 65536
+          ensure $ manifest.identity.projectId == request.projectId && identityKey manifest.identity == key
+          stamp <- tryIOError $ readBounded (entry </> "last-used.json") 65536
+          lastUsed <- case stamp of Left failure | isDoesNotExistError failure -> pure manifest.createdAt; Left failure -> throwIO failure; Right bytes -> decode bytes
+          status <- Posix.getSymbolicLinkStatus $ entry </> "baseline.qcow2"
+          ensure $ Posix.isRegularFile status
+          pure $ CacheEntry key manifest lastUsed status
+        verifyRemote entry = do
+          let manifest = entry.manifest
+              prefix = "agent-workspaces/v1/" <> toText (projectText request.projectId) <> "/" <> digestText entry.key <> "/" <> digestText manifest.sha256
+          ensure $ manifest.bytes <= remote.maxBytes
+          encoded <- storage connection do
+            response <- Minio.getObject remote.bucket (prefix <> ".json") Minio.defaultGetObjectOptions
+            runConduit $ response.gorObjectStream .| CC.takeE 65537 .| CC.sinkLazy
+          ensure $ LBS.length encoded <= 65536
+          archived <- decode @Manifest $ toStrict encoded
+          ensure $ archived.identity == manifest.identity && archived.sha256 == manifest.sha256 && archived.bytes == manifest.bytes
+          (context, size) <- storage connection do
+            response <- Minio.getObject remote.bucket (prefix <> ".qcow2") Minio.defaultGetObjectOptions
+            liftIO $ ensure $ response.gorObjectInfo.oiSize == fromIntegral manifest.bytes
+            runConduit $ response.gorObjectStream .| CC.takeE (fromIntegral manifest.bytes + 1) .| CC.foldl (\(!context, !count) chunk -> (hashUpdate context chunk, count + fromIntegral (BS.length chunk))) (hashInit :: Context SHA256, 0 :: Word64)
+          ensure $ size == manifest.bytes && Fingerprint (show $ hashFinalize context) == manifest.sha256
+    let journals = project </> "prunes"
+    createDirectoryIfMissing True journals
+    canonical journals
+    Posix.setFileMode journals 0o700
+    identifier <- Identifier <$> UUID4.nextRandom
+    let record = PruneRecord identifier request.projectId now PruneStarted
+        Identifier uid = identifier
+        save outcome = publish (journals </> toString (UUID.toText uid) <> ".json") (record :: PruneRecord){outcome}
+    save PruneStarted
+    names <- listDirectory parent
+    let keys = mapMaybe (mkFingerprint . toText) names
+    checked <- forM keys $ \key -> (key,) <$> tryAny (readEntry key)
+    (before, leased) <- measure
+    let initial = PruneReport request.projectId before before leased request.maxBytes (Seq.fromList [Kept key InvalidEntry | (key, Left _) <- checked]) [name | name <- names, name /= ".native.lock", isNothing $ mkFingerprint $ toText name] Unpriced
+    save $ PruneRunning initial
+    final <-
+      foldM
+        ( \report entry ->
+            if report.afterBytes <= request.maxBytes
+              then pure report
+              else do
+                action <-
+                  if Posix.linkCount entry.status > 1
+                    then pure $ Kept entry.key Pinned
+                    else do
+                      diskFingerprint <- tryAny $ fingerprint $ directory entry.key </> "baseline.qcow2"
+                      case diskFingerprint of
+                        Left _ -> pure $ Kept entry.key InvalidEntry
+                        Right measured | measured /= FileFingerprint entry.manifest.sha256 entry.manifest.bytes -> pure $ Kept entry.key InvalidEntry
+                        Right _ -> do
+                          proof <- tryAny $ verifyRemote entry
+                          case proof of
+                            Left _ -> pure $ Kept entry.key ArchiveUnavailable
+                            Right () -> do
+                              removed <- tryAny $ withTempDirectory parent ".evict-" \temporary -> do
+                                let retired = temporary </> "entry"
+                                renameDirectory (directory entry.key) retired
+                                sync parent
+                                removePathForcibly retired
+                              pure $ either (const $ EvictionFailed entry.key) (const $ Evicted entry.key) removed
+                (after, pinned) <- measure
+                let updated = report{afterBytes = after, leaseBytes = pinned, entries = report.entries Seq.|> action}
+                save $ PruneRunning updated
+                pure updated
+        )
+        initial
+        (sortOn (.lastUsed) $ rights $ map snd checked)
+    ended <- getMonotonicTimeNSec
+    save $ PruneFinished final (fromIntegral (ended - started) / 1000000)
+    pure final
+
+
+verifyRegression :: RegressionOptions -> RegressionRequest -> IO RegressionResult
+verifyRegression options request = do
+  let artifact = request.artifact
+      revisions = case request.revisions of BaseOnly baseline -> (Base, baseline) :| []; HeadOnly candidate -> (Head, candidate) :| []; Compare baseline candidate -> (Base, baseline) :| [(Head, candidate)]
+      revisionText (Revision value) = value
+      identifierText (Identifier value) = toString $ UUID.toText value
+      privateWrite path bytes = writeFileBS path bytes >> Posix.setFileMode path 0o600
+  ensure $ isAbsolute options.checkout && isAbsolute options.artifactDir
+  checkout <- canonicalizePath options.checkout
+  environment <- filter ((== "PATH") . fst) <$> getEnvironment
+  let hostGit args = readProcessStdout_ $ setWorkingDir checkout $ setStderr nullStream $ setEnv (environment <> [("GIT_CONFIG_NOSYSTEM", "1"), ("GIT_CONFIG_GLOBAL", "/dev/null"), ("GIT_TERMINAL_PROMPT", "0"), ("GIT_ALLOW_PROTOCOL", "file")]) $ proc "git" $ ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"] <> args
+  headRevision <- T.strip . decodeUtf8 <$> hostGit ["rev-parse", "HEAD"]
+  for_ revisions \(side, revision) -> ensure $ revisionText revision == (if side == Base then revisionText request.base else headRevision)
+  root <- canonicalizePath options.artifactDir
+  createDirectoryIfMissing True root
+  canonical root
+  Posix.setFileMode root 0o700
+  let counter = takeDirectory root </> ".regression-" <> identifierText request.sessionId <> ".count"
+  withFileLock (counter <> ".lock") Exclusive \_ -> do
+    previous <- tryIOError $ readBounded counter 16
+    count <- case previous of Left failure | isDoesNotExistError failure -> pure 0; Left failure -> throwIO failure; Right bytes -> decode @Word8 bytes
+    unless (count < 3) $ throwIO ComparisonBudgetExhausted
+    publish counter $ count + 1
+    checkId <- Identifier <$> UUID4.nextRandom
+    created <- getCurrentTime
+    let directory = root </> identifierText checkId
+        workspaceHash = case request.workspace of Pristine -> Nothing; PreparedCheckpoint snapshot -> Just snapshot.sha256
+        template = RegressionReport checkId request.projectId request.runId request.attemptId request.imageBuildId workspaceHash created (sha $ encodeUtf8 artifact.script) (sha . encodeUtf8 <$> artifact.testPatch) (sha $ toStrict $ Encoding.encodingToLazyByteString $ AE.genericToEncoding AE.defaultOptions artifact) artifact.failureMessage Running []
+    createDirectory directory
+    Posix.setFileMode directory 0o700
+    sync root
+    privateWrite (directory </> "script.sh") $ encodeUtf8 artifact.script
+    for_ artifact.testPatch $ privateWrite (directory </> "test.patch") . encodeUtf8
+    traverse_ sync $ [directory </> "script.sh"] <> [directory </> "test.patch" | isJust artifact.testPatch]
+    executions <- newIORef []
+    receipts <- newIORef []
+    let persist reportState = readIORef executions >>= \results -> publish (directory </> "report.json") template{status = reportState, results}
+        currentKey = \case Pending key -> key; Measured key _ -> key
+        update key measured = do
+          modifyIORef' executions $ map \execution -> if (currentKey execution).id == key.id then Measured key measured else execution
+          persist Running
+    persist Running
+    flip onException (persist Incomplete) do
+      for_ revisions \(side, revision) -> do
+        released <- all ((/= CleanupFailed) . (.status)) <$> readIORef receipts
+        when released do
+          key <- (\identifier -> ExecutionKey (Identifier identifier) side revision) <$> UUID4.nextRandom
+          modifyIORef' executions (<> [Pending key])
+          persist Running
+          started <- getMonotonicTimeNSec
+          observation <- newIORef $ Measurement Blocked Nothing (Resources 2 1024) Unpriced 0 0 (sha "") "" Nothing Nothing (Just "Check did not complete with usable execution evidence") Nothing Nothing Nothing Nothing
+          let logPath = directory </> (if side == Base then "base.log" else "head.log")
+              change f = modifyIORef' observation f >> readIORef observation >>= update key
+              checked :: RPC -> NonEmpty Text -> IO Text
+              checked rpc argv = do
+                result <- rpc @Execution $ Execute $ GuestCommand argv (Just "/") False
+                unless (result.exitCode == 0) do
+                  change $ \measured -> measured{reason = Just "Verifier preparation failed"}
+                  invalid
+                pure result.stdout
+              copy :: RPC -> FilePath -> Text -> IO ()
+              copy rpc path destination = rpc @() $ CopyFile $ Copy path destination
+          privateWrite logPath ""
+          outcome <- tryAny $ Timeout.timeout (120 * 1000000) $ withSystemTempDirectory "monoscope-verifier-snapshot" $ \private -> withSandbox [] options.bridge \rpc -> do
+            image <- rpc @Image $ Resolve options.image
+            ensure $ image.buildId == request.imageBuildId
+            let sandbox = Sandbox image.assetDir 2 1024 OfflineCow $ one ("/checkout", checkout)
+            case request.workspace of
+              Pristine -> rpc @() $ Create sandbox
+              PreparedCheckpoint snapshot -> do
+                let mutable = private </> "resume.qcow2"
+                copySnapshot snapshot mutable
+                checkpoint <- rpc @CheckpointData $ InspectCheckpoint mutable
+                ensure $ checkpoint.guestAssetBuildId == request.imageBuildId
+                rpc @() $ Resume (sandbox, mutable)
+            vm <- rpc @Text $ GetIdentity ()
+            change $ \measured -> measured{vmId = Just vm}
+            let revisionArgs = ["-c", "safe.directory=/workspace", "-c", "core.hooksPath=/dev/null", "-C", "/workspace"]
+                guestGit args = "/usr/bin/git" :| (revisionArgs <> args)
+            case request.workspace of
+              Pristine -> for_ ["/bin/mkdir" :| ["-p", "/workspace"], "/bin/cp" :| ["-R", "/checkout/.", "/workspace"]] $ void . checked rpc
+              PreparedCheckpoint _ -> do
+                for_ ["/workspace", "/checkout/.git"] $ \path -> void $ checked rpc $ "/usr/bin/git" :| ["config", "--system", "--add", "safe.directory", path]
+                void $ checked rpc $ guestGit ["fetch", "--quiet", "--no-tags", "--", "/checkout", revisionText revision]
+            void $ checked rpc $ guestGit ["checkout", "--quiet", "--detach", revisionText revision]
+            for_ artifact.testPatch \_ -> do
+              copy rpc (directory </> "test.patch") "/run/monoscope-test.patch"
+              stats <- checked rpc $ guestGit ["apply", "--numstat", "-z", "/run/monoscope-test.patch"]
+              paths <- traverse (\entry -> case T.splitOn "\t" entry of _ : _ : path | not (null path) -> pure $ T.intercalate "\t" path; _ -> invalid) $ filter (not . T.null) $ T.splitOn "\0" stats
+              ensure $ not (null paths) && length paths <= 100
+              privateWrite (directory </> "test-paths") $ encodeUtf8 $ T.intercalate "\0" paths <> "\0"
+              copy rpc (directory </> "test-paths") "/run/monoscope-test-paths"
+              applicable <- rpc @Execution $ Execute $ GuestCommand (guestGit ["apply", "--index", "--check", "/run/monoscope-test.patch"]) (Just "/") False
+              placement <-
+                if applicable.exitCode == 0
+                  then checked rpc (guestGit ["apply", "--index", "/run/monoscope-test.patch"]) $> Injected
                   else do
-                    action <-
-                      if Posix.linkCount entry.status > 1
-                        then pure $ Kept entry.key Pinned
-                        else do
-                          diskFingerprint <- tryAny $ fingerprint $ directory entry.key </> "baseline.qcow2"
-                          case diskFingerprint of
-                            Left _ -> pure $ Kept entry.key InvalidEntry
-                            Right measured | measured /= FileFingerprint entry.manifest.sha256 entry.manifest.bytes -> pure $ Kept entry.key InvalidEntry
-                            Right _ -> do
-                              proof <- tryAny $ verifyRemote entry
-                              case proof of
-                                Left _ -> pure $ Kept entry.key ArchiveUnavailable
-                                Right () -> do
-                                  removed <- tryAny $ withTempDirectory parent ".evict-" \temporary -> do
-                                    let retired = temporary </> "entry"
-                                    renameDirectory (directory entry.key) retired
-                                    sync parent
-                                    removePathForcibly retired
-                                  pure $ either (const $ EvictionFailed entry.key) (const $ Evicted entry.key) removed
-                    (after, pinned) <- measure
-                    let updated = report{afterBytes = after, leaseBytes = pinned, entries = report.entries Seq.|> action}
-                    save $ PruneRunning updated
-                    pure updated
-            )
-            initial
-            (sortOn (.lastUsed) $ rights $ map snd checked)
-        ended <- getMonotonicTimeNSec
-        save $ PruneFinished final (fromIntegral (ended - started) / 1000000)
-        pure final
-
-    verifyRegression :: RegressionOptions -> RegressionRequest -> IO RegressionResult
-    verifyRegression options request = do
-      let artifact = request.artifact
-          revisions = case request.revisions of BaseOnly baseline -> (Base, baseline) :| []; HeadOnly candidate -> (Head, candidate) :| []; Compare baseline candidate -> (Base, baseline) :| [(Head, candidate)]
-          revisionText (Revision value) = value
-          identifierText (Identifier value) = toString $ UUID.toText value
-          privateWrite path bytes = writeFileBS path bytes >> Posix.setFileMode path 0o600
-      ensure $ isAbsolute options.checkout && isAbsolute options.artifactDir
-      checkout <- canonicalizePath options.checkout
-      environment <- filter ((== "PATH") . fst) <$> getEnvironment
-      let hostGit args = readProcessStdout_ $ setWorkingDir checkout $ setStderr nullStream $ setEnv (environment <> [("GIT_CONFIG_NOSYSTEM", "1"), ("GIT_CONFIG_GLOBAL", "/dev/null"), ("GIT_TERMINAL_PROMPT", "0"), ("GIT_ALLOW_PROTOCOL", "file")]) $ proc "git" $ ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"] <> args
-      headRevision <- T.strip . decodeUtf8 <$> hostGit ["rev-parse", "HEAD"]
-      for_ revisions \(side, revision) -> ensure $ revisionText revision == (if side == Base then revisionText request.base else headRevision)
-      root <- canonicalizePath options.artifactDir
-      createDirectoryIfMissing True root
-      canonical root
-      Posix.setFileMode root 0o700
-      let counter = takeDirectory root </> ".regression-" <> identifierText request.sessionId <> ".count"
-      withFileLock (counter <> ".lock") Exclusive \_ -> do
-        previous <- tryIOError $ readBounded counter 16
-        count <- case previous of Left failure | isDoesNotExistError failure -> pure 0; Left failure -> throwIO failure; Right bytes -> decode @Word8 bytes
-        unless (count < 3) $ throwIO ComparisonBudgetExhausted
-        publish counter $ count + 1
-        checkId <- Identifier <$> UUID4.nextRandom
-        created <- getCurrentTime
-        let directory = root </> identifierText checkId
-            workspaceHash = case request.workspace of Pristine -> Nothing; PreparedCheckpoint snapshot -> Just snapshot.sha256
-            template = RegressionReport checkId request.projectId request.runId request.attemptId request.imageBuildId workspaceHash created (sha $ encodeUtf8 artifact.script) (sha . encodeUtf8 <$> artifact.testPatch) (sha $ toStrict $ Encoding.encodingToLazyByteString $ AE.genericToEncoding AE.defaultOptions artifact) artifact.failureMessage Running []
-        createDirectory directory
-        Posix.setFileMode directory 0o700
-        sync root
-        privateWrite (directory </> "script.sh") $ encodeUtf8 artifact.script
-        for_ artifact.testPatch $ privateWrite (directory </> "test.patch") . encodeUtf8
-        traverse_ sync $ [directory </> "script.sh"] <> [directory </> "test.patch" | isJust artifact.testPatch]
-        executions <- newIORef []
-        receipts <- newIORef []
-        let persist reportState = readIORef executions >>= \results -> publish (directory </> "report.json") template{status = reportState, results}
-            currentKey = \case Pending key -> key; Measured key _ -> key
-            update key measured = do
-              modifyIORef' executions $ map \execution -> if (currentKey execution).id == key.id then Measured key measured else execution
-              persist Running
-        persist Running
-        flip onException (persist Incomplete) do
-          for_ revisions \(side, revision) -> do
-            released <- all ((/= CleanupFailed) . (.status)) <$> readIORef receipts
-            when released do
-              key <- (\identifier -> ExecutionKey (Identifier identifier) side revision) <$> UUID4.nextRandom
-              modifyIORef' executions (<> [Pending key])
-              persist Running
-              started <- getMonotonicTimeNSec
-              observation <- newIORef $ Measurement Blocked Nothing (Resources 2 1024) Unpriced 0 0 (sha "") "" Nothing Nothing (Just "Check did not complete with usable execution evidence") Nothing Nothing Nothing Nothing
-              let logPath = directory </> (if side == Base then "base.log" else "head.log")
-                  change f = modifyIORef' observation f >> readIORef observation >>= update key
-                  checked :: RPC -> NonEmpty Text -> IO Text
-                  checked rpc argv = do
-                    result <- rpc @Execution $ Execute $ GuestCommand argv (Just "/") False
-                    unless (result.exitCode == 0) do
-                      change $ \measured -> measured{reason = Just "Verifier preparation failed"}
+                    retained <- rpc @Execution $ Execute $ GuestCommand (guestGit ["apply", "--index", "--reverse", "--check", "/run/monoscope-test.patch"]) (Just "/") False
+                    unless (retained.exitCode == 0) do
+                      change $ \measured -> measured{reason = Just "Frozen test patch neither applies nor matches this revision"}
                       invalid
-                    pure result.stdout
-                  copy :: RPC -> FilePath -> Text -> IO ()
-                  copy rpc path destination = rpc @() $ CopyFile $ Copy path destination
-              privateWrite logPath ""
-              outcome <- tryAny $ Timeout.timeout (120 * 1000000) $ withSystemTempDirectory "monoscope-verifier-snapshot" $ \private -> withSandbox [] options.bridge \rpc -> do
-                image <- rpc @Image $ Resolve options.image
-                ensure $ image.buildId == request.imageBuildId
-                let sandbox = Sandbox image.assetDir 2 1024 OfflineCow $ one ("/checkout", checkout)
-                case request.workspace of
-                  Pristine -> rpc @() $ Create sandbox
-                  PreparedCheckpoint snapshot -> do
-                    let mutable = private </> "resume.qcow2"
-                    copySnapshot snapshot mutable
-                    checkpoint <- rpc @CheckpointData $ InspectCheckpoint mutable
-                    ensure $ checkpoint.guestAssetBuildId == request.imageBuildId
-                    rpc @() $ Resume (sandbox, mutable)
-                vm <- rpc @Text $ GetIdentity ()
-                change $ \measured -> measured{vmId = Just vm}
-                let revisionArgs = ["-c", "safe.directory=/workspace", "-c", "core.hooksPath=/dev/null", "-C", "/workspace"]
-                    guestGit args = "/usr/bin/git" :| (revisionArgs <> args)
-                case request.workspace of
-                  Pristine -> for_ ["/bin/mkdir" :| ["-p", "/workspace"], "/bin/cp" :| ["-R", "/checkout/.", "/workspace"]] $ void . checked rpc
-                  PreparedCheckpoint _ -> do
-                    for_ ["/workspace", "/checkout/.git"] $ \path -> void $ checked rpc $ "/usr/bin/git" :| ["config", "--system", "--add", "safe.directory", path]
-                    void $ checked rpc $ guestGit ["fetch", "--quiet", "--no-tags", "--", "/checkout", revisionText revision]
-                void $ checked rpc $ guestGit ["checkout", "--quiet", "--detach", revisionText revision]
-                for_ artifact.testPatch \_ -> do
-                  copy rpc (directory </> "test.patch") "/run/monoscope-test.patch"
-                  stats <- checked rpc $ guestGit ["apply", "--numstat", "-z", "/run/monoscope-test.patch"]
-                  paths <- traverse (\entry -> case T.splitOn "\t" entry of _ : _ : path | not (null path) -> pure $ T.intercalate "\t" path; _ -> invalid) $ filter (not . T.null) $ T.splitOn "\0" stats
-                  ensure $ not (null paths) && length paths <= 100
-                  privateWrite (directory </> "test-paths") $ encodeUtf8 $ T.intercalate "\0" paths <> "\0"
-                  copy rpc (directory </> "test-paths") "/run/monoscope-test-paths"
-                  applicable <- rpc @Execution $ Execute $ GuestCommand (guestGit ["apply", "--index", "--check", "/run/monoscope-test.patch"]) (Just "/") False
-                  placement <-
-                    if applicable.exitCode == 0
-                      then checked rpc (guestGit ["apply", "--index", "/run/monoscope-test.patch"]) $> Injected
-                      else do
-                        retained <- rpc @Execution $ Execute $ GuestCommand (guestGit ["apply", "--index", "--reverse", "--check", "/run/monoscope-test.patch"]) (Just "/") False
-                        unless (retained.exitCode == 0) do
-                          change $ \measured -> measured{reason = Just "Frozen test patch neither applies nor matches this revision"}
-                          invalid
-                        pure Retained
-                  change $ \measured -> measured{testPatchDisposition = Just placement}
-                void $ checked rpc $ "/bin/bash" :| ["--noprofile", "--norc", "-c", "git -c safe.directory=/workspace -C /workspace ls-files -z > /run/monoscope-baseline-paths"]
-                copy rpc (directory </> "script.sh") "/run/monoscope-regression.sh"
-                void $ checked rpc $ "/bin/chown" :| ["-hR", "1000:1000", "/workspace"]
-                privateWrite (directory </> "fingerprint.sh") $ encodeUtf8 fingerprintScript
-                copy rpc (directory </> "fingerprint.sh") "/run/monoscope-fingerprint.sh"
-                let sourceHash paths = do
-                      result <- rpc @Execution $ Execute $ GuestCommand ("/bin/bash" :| ["--noprofile", "--norc", "/run/monoscope-fingerprint.sh", paths]) (Just "/workspace") False
-                      ensure $ result.exitCode == 0
-                      maybe invalid pure $ viaNonEmpty head (words result.stdout) >>= mkFingerprint
-                before <- sourceHash "/run/monoscope-baseline-paths"
-                change $ \measured -> measured{sourceBefore = Just before}
-                for_ artifact.testPatch \_ -> do
-                  frozen <- sourceHash "/run/monoscope-test-paths"
-                  change $ \measured -> measured{testFilesSha256 = Just frozen}
-                  prior <- readIORef executions
-                  let firstFrozen = viaNonEmpty head prior >>= \case Measured _ measured -> measured.testFilesSha256; _ -> Nothing
-                  when (side == Head && firstFrozen /= Just frozen) do
-                    change $ \measured -> measured{reason = Just "Candidate changed the frozen regression files"}
-                    invalid
-                result <- rpc @LogExit $ ExecuteLogged $ LoggedCommand (GuestCommand (agentCommand ["/bin/bash", "--noprofile", "--norc", "/run/monoscope-regression.sh"]) (Just "/workspace") False) logPath 1048576 CloseSandbox
-                case result of
-                  LogLimit -> change $ \measured -> measured{status = OutputLimit, reason = Just "Check output limit"}
-                  Exited exit -> do
-                    change $ \measured -> measured{exitCode = Just exit}
-                    after <- sourceHash "/run/monoscope-baseline-paths"
-                    logBytes <- readBounded logPath 1048576
-                    let (status, reason)
-                          | before /= after = (Invalidated, Just "Tracked source changed during the check")
-                          | exit `elem` [126, 127] = (Blocked, Just "Check command or dependency unavailable")
-                          | exit == 0 = (Passed, Nothing)
-                          | encodeUtf8 artifact.failureMessage `BS.isInfixOf` logBytes = (Failed, Nothing)
-                          | otherwise = (Blocked, Just $ "Failure did not emit the expected case-sensitive literal " <> decodeUtf8 (AE.encode artifact.failureMessage) <> ". Inspect the full log and correct the check or assertion text; setup/dependency errors are not reproduced bugs.")
-                    change $ \measured -> measured{status, reason, exitCode = Just exit, sourceAfter = Just after}
-              case outcome of
-                Right Nothing -> change $ \measured -> measured{status = TimedOut}
-                Left failure | Just SandboxCleanupFailed <- fromException failure -> do
-                  publish counter (3 :: Word8)
-                  change $ \measured -> measured{status = CleanupFailed}
-                _ -> pass
-              log <- readBounded logPath 1048576
-              sync logPath
-              ended <- getMonotonicTimeNSec
-              change $ \measured -> measured{durationMs = fromIntegral (ended - started) / 1000000, logBytes = fromIntegral $ BS.length log, logSha256 = sha log, tail = decodeUtf8With lenientDecode $ BS.drop (max 0 $ BS.length log - 4096) log, logPath = Just $ "/run/monoscope-review-output/check-" <> toText (identifierText checkId) <> "-" <> (if side == Base then "base" else "head") <> ".log"}
-              measured <- readIORef observation
-              let kind = case artifact.testPatch of Nothing -> Just $ ScriptCheck template.regressionSha256; Just _ -> case measured.testPatchDisposition of Just Injected -> Just $ InjectedTest template.regressionSha256; Just Retained -> Just $ RetainedTest template.regressionSha256; Nothing -> Nothing
-                  receipt = RegressionReceipt key.id request.attemptId checkId side revision request.imageBuildId workspaceHash template.scriptSha256 kind measured.status measured.exitCode (ceiling measured.durationMs) 2 1024 measured.logBytes measured.logSha256
-              publish (takeDirectory root </> identifierText receipt.id <> ".json") $ AE.object ["tag" AE..= ("Check" :: Text), "contents" AE..= receipt]
-              modifyIORef' receipts (<> [receipt])
-          results <- readIORef executions
-          saved <- readIORef receipts
-          let report = template{status = if length results == length revisions then Completed else Incomplete, results}
-          publish (directory </> "report.json") report
-          pure $ RegressionResult report saved $ any (\receipt -> receipt.status `notElem` [Passed, Failed]) saved
+                    pure Retained
+              change $ \measured -> measured{testPatchDisposition = Just placement}
+            void $ checked rpc $ "/bin/bash" :| ["--noprofile", "--norc", "-c", "git -c safe.directory=/workspace -C /workspace ls-files -z > /run/monoscope-baseline-paths"]
+            copy rpc (directory </> "script.sh") "/run/monoscope-regression.sh"
+            void $ checked rpc $ "/bin/chown" :| ["-hR", "1000:1000", "/workspace"]
+            privateWrite (directory </> "fingerprint.sh") $ encodeUtf8 fingerprintScript
+            copy rpc (directory </> "fingerprint.sh") "/run/monoscope-fingerprint.sh"
+            let sourceHash paths = do
+                  result <- rpc @Execution $ Execute $ GuestCommand ("/bin/bash" :| ["--noprofile", "--norc", "/run/monoscope-fingerprint.sh", paths]) (Just "/workspace") False
+                  ensure $ result.exitCode == 0
+                  maybe invalid pure $ viaNonEmpty head (words result.stdout) >>= mkFingerprint
+            before <- sourceHash "/run/monoscope-baseline-paths"
+            change $ \measured -> measured{sourceBefore = Just before}
+            for_ artifact.testPatch \_ -> do
+              frozen <- sourceHash "/run/monoscope-test-paths"
+              change $ \measured -> measured{testFilesSha256 = Just frozen}
+              prior <- readIORef executions
+              let firstFrozen = viaNonEmpty head prior >>= \case Measured _ measured -> measured.testFilesSha256; _ -> Nothing
+              when (side == Head && firstFrozen /= Just frozen) do
+                change $ \measured -> measured{reason = Just "Candidate changed the frozen regression files"}
+                invalid
+            result <- rpc @LogExit $ ExecuteLogged $ LoggedCommand (GuestCommand (agentCommand ["/bin/bash", "--noprofile", "--norc", "/run/monoscope-regression.sh"]) (Just "/workspace") False) logPath 1048576 CloseSandbox
+            case result of
+              LogLimit -> change $ \measured -> measured{status = OutputLimit, reason = Just "Check output limit"}
+              Exited exit -> do
+                change $ \measured -> measured{exitCode = Just exit}
+                after <- sourceHash "/run/monoscope-baseline-paths"
+                logBytes <- readBounded logPath 1048576
+                let (status, reason)
+                      | before /= after = (Invalidated, Just "Tracked source changed during the check")
+                      | exit `elem` [126, 127] = (Blocked, Just "Check command or dependency unavailable")
+                      | exit == 0 = (Passed, Nothing)
+                      | encodeUtf8 artifact.failureMessage `BS.isInfixOf` logBytes = (Failed, Nothing)
+                      | otherwise = (Blocked, Just $ "Failure did not emit the expected case-sensitive literal " <> decodeUtf8 (AE.encode artifact.failureMessage) <> ". Inspect the full log and correct the check or assertion text; setup/dependency errors are not reproduced bugs.")
+                change $ \measured -> measured{status, reason, exitCode = Just exit, sourceAfter = Just after}
+          case outcome of
+            Right Nothing -> change $ \measured -> measured{status = TimedOut}
+            Left failure | Just SandboxCleanupFailed <- fromException failure -> do
+              publish counter (3 :: Word8)
+              change $ \measured -> measured{status = CleanupFailed}
+            _ -> pass
+          log <- readBounded logPath 1048576
+          sync logPath
+          ended <- getMonotonicTimeNSec
+          change $ \measured -> measured{durationMs = fromIntegral (ended - started) / 1000000, logBytes = fromIntegral $ BS.length log, logSha256 = sha log, tail = decodeUtf8With lenientDecode $ BS.drop (max 0 $ BS.length log - 4096) log, logPath = Just $ "/run/monoscope-review-output/check-" <> toText (identifierText checkId) <> "-" <> (if side == Base then "base" else "head") <> ".log"}
+          measured <- readIORef observation
+          let kind = case artifact.testPatch of Nothing -> Just $ ScriptCheck template.regressionSha256; Just _ -> case measured.testPatchDisposition of Just Injected -> Just $ InjectedTest template.regressionSha256; Just Retained -> Just $ RetainedTest template.regressionSha256; Nothing -> Nothing
+              receipt = RegressionReceipt key.id request.attemptId checkId side revision request.imageBuildId workspaceHash template.scriptSha256 kind measured.status measured.exitCode (ceiling measured.durationMs) 2 1024 measured.logBytes measured.logSha256
+          publish (takeDirectory root </> identifierText receipt.id <> ".json") $ AE.object ["tag" AE..= ("Check" :: Text), "contents" AE..= receipt]
+          modifyIORef' receipts (<> [receipt])
+      results <- readIORef executions
+      saved <- readIORef receipts
+      let report = template{status = if length results == length revisions then Completed else Incomplete, results}
+      publish (directory </> "report.json") report
+      pure $ RegressionResult report saved $ any (\receipt -> receipt.status `notElem` [Passed, Failed]) saved
 
-    workspace :: Options -> Operation -> Request -> IO (Maybe Prepared)
-    workspace options operation request = do
-      scriptBytes <- readBounded options.script (4 * 65536)
-      scriptText <- either (const invalid) pure $ decodeUtf8' scriptBytes
-      ensure $ T.length scriptText <= 65536 && not (T.null $ T.strip scriptText)
-      dependency <- traverse fingerprint options.dependencyArchive
-      environment <- getEnvironment
-      withSandbox [] options.bridge \rpc -> do
-        image <- rpc @Image $ Resolve options.image
-        for_ request.expectedImageBuildId $ ensure . (== image.buildId)
-        assetDir <- canonicalizePath image.assetDir
-        ensure $ assetDir == image.assetDir
-        let Repository repoText = request.repository
-            Revision baseText = request.base
-            identity = Identity request.projectId request.repository request.base image.buildId (sha scriptBytes) dependency
-            key = identityKey identity
-        root <- canonicalizePath options.cacheDir
-        let parent = root </> projectText request.projectId </> "workspaces"
-            directory = parent </> toString (case key of Fingerprint value -> value)
-            load = loadWorkspace identity image directory (rpc . InspectCheckpoint)
-            locked = withProjectLock root request.projectId
-            transfer direction remoteFile action = do
-              remote <- readRemote remoteFile
-              let records = root </> projectText request.projectId </> "transfers"
-              createDirectoryIfMissing True records
-              canonical records
-              Posix.setFileMode records 0o700
-              identifier <- Identifier <$> UUID4.nextRandom
-              now <- getCurrentTime
+
+lookupWorkspace :: Options -> Operation -> Request -> IO (Maybe Prepared)
+lookupWorkspace options operation request = do
+  scriptBytes <- readBounded options.script (4 * 65536)
+  scriptText <- either (const invalid) pure $ decodeUtf8' scriptBytes
+  ensure $ T.length scriptText <= 65536 && not (T.null $ T.strip scriptText)
+  dependency <- traverse fingerprint options.dependencyArchive
+  environment <- getEnvironment
+  withSandbox [] options.bridge \rpc -> do
+    image <- rpc @Image $ Resolve options.image
+    for_ request.expectedImageBuildId $ ensure . (== image.buildId)
+    assetDir <- canonicalizePath image.assetDir
+    ensure $ assetDir == image.assetDir
+    let Repository repoText = request.repository
+        Revision baseText = request.base
+        identity = Identity request.projectId request.repository request.base image.buildId (sha scriptBytes) dependency
+        key = identityKey identity
+    root <- canonicalizePath options.cacheDir
+    let parent = root </> projectText request.projectId </> "workspaces"
+        directory = parent </> toString (case key of Fingerprint value -> value)
+        load = loadWorkspace identity image directory (rpc . InspectCheckpoint)
+        locked = withProjectLock root request.projectId
+        transfer direction remoteFile action = do
+          remote <- readRemote remoteFile
+          let records = root </> projectText request.projectId </> "transfers"
+          createDirectoryIfMissing True records
+          canonical records
+          Posix.setFileMode records 0o700
+          identifier <- Identifier <$> UUID4.nextRandom
+          now <- getCurrentTime
+          started <- getMonotonicTimeNSec
+          let record = TransferRecord identifier identity direction now TransferStarted Unpriced
+              Identifier transferId = identifier
+              save outcome = publish (records </> toString (UUID.toText transferId) <> ".json") (record :: TransferRecord){outcome}
+              elapsed = (\ended -> fromIntegral (ended - started) / 1000000) <$> getMonotonicTimeNSec
+              prefix = "agent-workspaces/v1/" <> toText (projectText request.projectId) <> "/" <> (case key of Fingerprint value -> value) <> "/"
+          save TransferStarted
+          connection' <- connectStorage remote
+          value <- action remote prefix connection' `onException` (elapsed >>= save . TransferFailed)
+          elapsed >>= save . TransferCompleted (FileFingerprint value.manifest.sha256 value.manifest.bytes)
+          pure $ Just value
+        diskKey prefix manifest = prefix <> (case manifest.sha256 of Fingerprint value -> value) <> ".qcow2"
+        manifestKey prefix = (prefix <>) . maybe "manifest.json" (\(Fingerprint digest) -> digest <> ".json")
+    case operation of
+      Lookup -> load
+      Archive remoteFile -> locked $ transfer Upload remoteFile \remote prefix connection -> do
+        prepared <- maybe invalid pure =<< load
+        ensure $ prepared.manifest.bytes <= remote.maxBytes
+        withFile prepared.path \handle bytes -> do
+          ensure $ bytes == prepared.manifest.bytes
+          void $ storage connection $ Minio.putObject remote.bucket (diskKey prefix prepared.manifest) (CC.sourceHandle handle) (Just $ fromIntegral bytes) Minio.defaultPutObjectOptions
+        uploaded <- storage connection $ Minio.statObject remote.bucket (diskKey prefix prepared.manifest) Minio.defaultGetObjectOptions
+        ensure $ uploaded.oiSize == fromIntegral prepared.manifest.bytes
+        let manifestBytes = AE.encode prepared.manifest
+        for_ [manifestKey prefix $ Just prepared.manifest.sha256, manifestKey prefix Nothing] \object ->
+          void $ storage connection $ Minio.putObject remote.bucket object (CC.sourceLazy manifestBytes) (Just $ LBS.length manifestBytes) Minio.defaultPutObjectOptions
+        pure prepared
+      Restore remoteFile -> locked do
+        saved <- load
+        case saved of
+          Just _ -> pure saved
+          Nothing -> transfer Download remoteFile \remote prefix connection -> withTempDirectory parent ".restore-" \temporary -> do
+            encoded <- storage connection do
+              response <- Minio.getObject remote.bucket (manifestKey prefix request.expectedCheckpoint) Minio.defaultGetObjectOptions
+              runConduit $ response.gorObjectStream .| CC.takeE 65537 .| CC.sinkLazy
+            ensure $ LBS.length encoded <= 65536
+            archived <- decode @Manifest $ toStrict encoded
+            ensure $ archived.identity == identity && archived.bytes <= remote.maxBytes
+            for_ request.expectedCheckpoint $ ensure . (== archived.sha256)
+            let disk = temporary </> "baseline.qcow2"
+            withBinaryFile disk WriteMode \handle -> storage connection do
+              response <- Minio.getObject remote.bucket (diskKey prefix archived) Minio.defaultGetObjectOptions
+              liftIO $ ensure $ response.gorObjectInfo.oiSize == fromIntegral archived.bytes
+              runConduit $ response.gorObjectStream .| CC.takeE (fromIntegral archived.bytes + 1) .| CC.sinkHandle handle
+            Posix.setFileMode disk 0o600
+            measured <- fingerprint disk
+            ensure $ measured == FileFingerprint archived.sha256 archived.bytes
+            writeFileLBS (temporary </> "manifest.json") $ AE.encode (archived :: Manifest){assetDir = image.assetDir}
+            Posix.setFileMode (temporary </> "manifest.json") 0o600
+            restored <- maybe invalid pure =<< loadWorkspace identity image temporary (rpc . InspectCheckpoint)
+            traverse_ sync [disk, temporary </> "manifest.json", temporary]
+            renameDirectory temporary directory
+            sync parent
+            pure (restored :: Prepared){path = directory </> "baseline.qcow2"}
+      Prepare checkout -> do
+        ensure $ isAbsolute checkout
+        cleanCheckout <- canonicalizePath checkout
+        locked do
+          saved <- load
+          case saved of
+            Just _ -> pure saved
+            Nothing -> withTempDirectory parent ".prepare-" \temporary -> withSystemTempDirectory "monoscope-native-baseline" \source -> do
+              let clean = source </> "checkout"
+                  git args = readProcessStdout_ $ setWorkingDir source $ setEnv (filter ((== "PATH") . fst) environment <> [("GIT_CONFIG_NOSYSTEM", "1"), ("GIT_CONFIG_GLOBAL", "/dev/null"), ("GIT_TERMINAL_PROMPT", "0"), ("GIT_ALLOW_PROTOCOL", "file")]) $ setStderr nullStream $ proc "git" $ ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"] <> args
+                  execute cwd quiet argv = do
+                    result <- rpc @Execution $ Execute $ GuestCommand argv cwd quiet
+                    ensure $ result.exitCode == 0
+                    pure $ T.strip result.stdout
+                  guestGit args = execute (Just "/workspace") False $ "/usr/bin/git" :| (["-c", "safe.directory=/workspace", "-c", "core.hooksPath=/dev/null", "-C", "/workspace"] <> args)
+                  parseHash value = maybe invalid pure $ viaNonEmpty head (words value) >>= mkFingerprint
+                  copy hostPath destination = rpc @() $ CopyFile $ Copy hostPath destination
+              void $ git ["init", "--quiet", clean]
+              void $ git ["-C", clean, "fetch", "--quiet", "--no-tags", "--", cleanCheckout, toString baseText]
+              void $ git ["-C", clean, "checkout", "--quiet", "--detach", toString baseText]
+              void $ git ["-C", clean, "remote", "add", "origin", toString repoText]
               started <- getMonotonicTimeNSec
-              let record = TransferRecord identifier identity direction now TransferStarted Unpriced
-                  Identifier transferId = identifier
-                  save outcome = publish (records </> toString (UUID.toText transferId) <> ".json") (record :: TransferRecord){outcome}
-                  elapsed = (\ended -> fromIntegral (ended - started) / 1000000) <$> getMonotonicTimeNSec
-                  prefix = "agent-workspaces/v1/" <> toText (projectText request.projectId) <> "/" <> (case key of Fingerprint value -> value) <> "/"
-              save TransferStarted
-              connection' <- connectStorage remote
-              value <- action remote prefix connection' `onException` (elapsed >>= save . TransferFailed)
-              elapsed >>= save . TransferCompleted (FileFingerprint value.manifest.sha256 value.manifest.bytes)
-              pure $ Just value
-            diskKey prefix manifest = prefix <> (case manifest.sha256 of Fingerprint value -> value) <> ".qcow2"
-            manifestKey prefix = (prefix <>) . maybe "manifest.json" (\(Fingerprint digest) -> digest <> ".json")
-        case operation of
-          Lookup -> load
-          Archive remoteFile -> locked $ transfer Upload remoteFile \remote prefix connection -> do
-            prepared <- maybe invalid pure =<< load
-            ensure $ prepared.manifest.bytes <= remote.maxBytes
-            withFile prepared.path \handle bytes -> do
-              ensure $ bytes == prepared.manifest.bytes
-              void $ storage connection $ Minio.putObject remote.bucket (diskKey prefix prepared.manifest) (CC.sourceHandle handle) (Just $ fromIntegral bytes) Minio.defaultPutObjectOptions
-            uploaded <- storage connection $ Minio.statObject remote.bucket (diskKey prefix prepared.manifest) Minio.defaultGetObjectOptions
-            ensure $ uploaded.oiSize == fromIntegral prepared.manifest.bytes
-            let manifestBytes = AE.encode prepared.manifest
-            for_ [manifestKey prefix $ Just prepared.manifest.sha256, manifestKey prefix Nothing] \object ->
-              void $ storage connection $ Minio.putObject remote.bucket object (CC.sourceLazy manifestBytes) (Just $ LBS.length manifestBytes) Minio.defaultPutObjectOptions
-            pure prepared
-          Restore remoteFile -> locked do
-            saved <- load
-            case saved of
-              Just _ -> pure saved
-              Nothing -> transfer Download remoteFile \remote prefix connection -> withTempDirectory parent ".restore-" \temporary -> do
-                encoded <- storage connection do
-                  response <- Minio.getObject remote.bucket (manifestKey prefix request.expectedCheckpoint) Minio.defaultGetObjectOptions
-                  runConduit $ response.gorObjectStream .| CC.takeE 65537 .| CC.sinkLazy
-                ensure $ LBS.length encoded <= 65536
-                archived <- decode @Manifest $ toStrict encoded
-                ensure $ archived.identity == identity && archived.bytes <= remote.maxBytes
-                for_ request.expectedCheckpoint $ ensure . (== archived.sha256)
-                let disk = temporary </> "baseline.qcow2"
-                withBinaryFile disk WriteMode \handle -> storage connection do
-                  response <- Minio.getObject remote.bucket (diskKey prefix archived) Minio.defaultGetObjectOptions
-                  liftIO $ ensure $ response.gorObjectInfo.oiSize == fromIntegral archived.bytes
-                  runConduit $ response.gorObjectStream .| CC.takeE (fromIntegral archived.bytes + 1) .| CC.sinkHandle handle
-                Posix.setFileMode disk 0o600
-                measured <- fingerprint disk
-                ensure $ measured == FileFingerprint archived.sha256 archived.bytes
-                writeFileLBS (temporary </> "manifest.json") $ AE.encode (archived :: Manifest){assetDir = image.assetDir}
-                Posix.setFileMode (temporary </> "manifest.json") 0o600
-                restored <- maybe invalid pure =<< loadWorkspace identity image temporary (rpc . InspectCheckpoint)
-                traverse_ sync [disk, temporary </> "manifest.json", temporary]
-                renameDirectory temporary directory
-                sync parent
-                pure (restored :: Prepared){path = directory </> "baseline.qcow2"}
-          Prepare checkout -> do
-            ensure $ isAbsolute checkout
-            cleanCheckout <- canonicalizePath checkout
-            locked do
-              saved <- load
-              case saved of
-                Just _ -> pure saved
-                Nothing -> withTempDirectory parent ".prepare-" \temporary -> withSystemTempDirectory "monoscope-native-baseline" \source -> do
-                  let clean = source </> "checkout"
-                      git args = readProcessStdout_ $ setWorkingDir source $ setEnv (filter ((== "PATH") . fst) environment <> [("GIT_CONFIG_NOSYSTEM", "1"), ("GIT_CONFIG_GLOBAL", "/dev/null"), ("GIT_TERMINAL_PROMPT", "0"), ("GIT_ALLOW_PROTOCOL", "file")]) $ setStderr nullStream $ proc "git" $ ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"] <> args
-                      execute cwd quiet argv = do
-                        result <- rpc @Execution $ Execute $ GuestCommand argv cwd quiet
-                        ensure $ result.exitCode == 0
-                        pure $ T.strip result.stdout
-                      guestGit args = execute (Just "/workspace") False $ "/usr/bin/git" :| (["-c", "safe.directory=/workspace", "-c", "core.hooksPath=/dev/null", "-C", "/workspace"] <> args)
-                      parseHash value = maybe invalid pure $ viaNonEmpty head (words value) >>= mkFingerprint
-                      copy hostPath destination = rpc @() $ CopyFile $ Copy hostPath destination
-                  void $ git ["init", "--quiet", clean]
-                  void $ git ["-C", clean, "fetch", "--quiet", "--no-tags", "--", cleanCheckout, toString baseText]
-                  void $ git ["-C", clean, "checkout", "--quiet", "--detach", toString baseText]
-                  void $ git ["-C", clean, "remote", "add", "origin", toString repoText]
-                  started <- getMonotonicTimeNSec
-                  rpc @() $ Create $ Sandbox image.assetDir 2 1024 OfflineCow (one ("/baseline", clean))
-                  for_ ["/bin/mkdir" :| ["-p", "/workspace"], "/bin/cp" :| ["-R", "/baseline/.", "/workspace"], "/bin/chown" :| ["-hR", "1000:1000", "/workspace"]] $ void . execute Nothing False
-                  tracked <- git ["-C", clean, "ls-files", "-z"]
-                  writeFileLBS (source </> "tracked") tracked
-                  copy (source </> "tracked") "/run/monoscope-baseline-paths"
-                  writeFileBS (source </> "fingerprint.sh") $ encodeUtf8 fingerprintScript
-                  copy (source </> "fingerprint.sh") "/run/monoscope-fingerprint.sh"
-                  let sourceHash = execute (Just "/workspace") False ("/bin/bash" :| ["--noprofile", "--norc", "/run/monoscope-fingerprint.sh"]) >>= parseHash
-                  before <- sourceHash
-                  for_ dependency \expected -> do
-                    archive <- maybe invalid pure options.dependencyArchive
-                    copy archive "/run/monoscope-dependencies.tar"
-                    measured <- execute (Just "/workspace") False $ "/usr/bin/sha256sum" :| ["/run/monoscope-dependencies.tar"]
-                    actual <- parseHash measured
-                    ensure $ actual == expected.sha256
-                  writeFileBS (source </> "prepare.sh") scriptBytes
-                  copy (source </> "prepare.sh") "/run/monoscope-prepare.sh"
-                  void $ execute (Just "/workspace") True $ "/usr/bin/setpriv" :| ["--reuid=1000", "--regid=1000", "--clear-groups", "--no-new-privs", "--reset-env", "--", "/usr/bin/env", "LANG=C.UTF-8", "LC_ALL=C.UTF-8", "/bin/bash", "--noprofile", "--norc", "/run/monoscope-prepare.sh"]
-                  revision <- guestGit ["rev-parse", "HEAD"]
-                  after <- sourceHash
-                  ensure $ revision == baseText && before == after
-                  checkpoint <- rpc @CheckpointData $ Checkpoint $ temporary </> "baseline.qcow2"
-                  ensure $ checkpoint.guestAssetBuildId == image.buildId
-                  measured <- fingerprint $ temporary </> "baseline.qcow2"
-                  ended <- getMonotonicTimeNSec
-                  let manifest = Manifest 1 identity image.assetDir checkpoint.createdAt measured.sha256 (fromIntegral (ended - started) / 1000000) measured.bytes 2 1024 Unpriced
-                  writeFileLBS (temporary </> "manifest.json") $ AE.encode manifest
-                  Posix.setFileMode (temporary </> "manifest.json") 0o600
-                  traverse_ sync [temporary </> "baseline.qcow2", temporary </> "manifest.json", temporary]
-                  renameDirectory temporary directory
-                  sync parent
-                  load
-      where
-        loadWorkspace :: Identity -> Image -> FilePath -> (FilePath -> IO CheckpointData) -> IO (Maybe Prepared)
-        loadWorkspace identity image directory inspect = do
-          loaded <- tryIOError $ readBounded (directory </> "manifest.json") 65536
-          case loaded of
-            Left failure | isDoesNotExistError failure -> pure Nothing
-            Left failure -> throwIO failure
-            Right bytes -> do
-              manifest <- decode @Manifest bytes
-              for_ request.expectedCheckpoint $ ensure . (== manifest.sha256)
-              ensure $ manifest.identity == identity && manifest.assetDir == image.assetDir
-              let path = directory </> "baseline.qcow2"
-              canonical directory
-              measured <- fingerprint path
-              ensure $ measured.sha256 == manifest.sha256 && measured.bytes == manifest.bytes
-              checkpoint <- inspect path
-              ensure $ checkpoint.guestAssetBuildId == identity.imageBuildId
-              publish (directory </> "last-used.json") =<< getCurrentTime
-              pure $ Just $ Prepared manifest path
+              rpc @() $ Create $ Sandbox image.assetDir 2 1024 OfflineCow (one ("/baseline", clean))
+              for_ ["/bin/mkdir" :| ["-p", "/workspace"], "/bin/cp" :| ["-R", "/baseline/.", "/workspace"], "/bin/chown" :| ["-hR", "1000:1000", "/workspace"]] $ void . execute Nothing False
+              tracked <- git ["-C", clean, "ls-files", "-z"]
+              writeFileLBS (source </> "tracked") tracked
+              copy (source </> "tracked") "/run/monoscope-baseline-paths"
+              writeFileBS (source </> "fingerprint.sh") $ encodeUtf8 fingerprintScript
+              copy (source </> "fingerprint.sh") "/run/monoscope-fingerprint.sh"
+              let sourceHash = execute (Just "/workspace") False ("/bin/bash" :| ["--noprofile", "--norc", "/run/monoscope-fingerprint.sh"]) >>= parseHash
+              before <- sourceHash
+              for_ dependency \expected -> do
+                archive <- maybe invalid pure options.dependencyArchive
+                copy archive "/run/monoscope-dependencies.tar"
+                measured <- execute (Just "/workspace") False $ "/usr/bin/sha256sum" :| ["/run/monoscope-dependencies.tar"]
+                actual <- parseHash measured
+                ensure $ actual == expected.sha256
+              writeFileBS (source </> "prepare.sh") scriptBytes
+              copy (source </> "prepare.sh") "/run/monoscope-prepare.sh"
+              void $ execute (Just "/workspace") True $ agentCommand ["/bin/bash", "--noprofile", "--norc", "/run/monoscope-prepare.sh"]
+              revision <- guestGit ["rev-parse", "HEAD"]
+              after <- sourceHash
+              ensure $ revision == baseText && before == after
+              checkpoint <- rpc @CheckpointData $ Checkpoint $ temporary </> "baseline.qcow2"
+              ensure $ checkpoint.guestAssetBuildId == image.buildId
+              measured <- fingerprint $ temporary </> "baseline.qcow2"
+              ended <- getMonotonicTimeNSec
+              let manifest = Manifest 1 identity image.assetDir checkpoint.createdAt measured.sha256 (fromIntegral (ended - started) / 1000000) measured.bytes 2 1024 Unpriced
+              writeFileLBS (temporary </> "manifest.json") $ AE.encode manifest
+              Posix.setFileMode (temporary </> "manifest.json") 0o600
+              traverse_ sync [temporary </> "baseline.qcow2", temporary </> "manifest.json", temporary]
+              renameDirectory temporary directory
+              sync parent
+              load
+  where
+    loadWorkspace :: Identity -> Image -> FilePath -> (FilePath -> IO CheckpointData) -> IO (Maybe Prepared)
+    loadWorkspace identity image directory inspect = do
+      loaded <- tryIOError $ readBounded (directory </> "manifest.json") 65536
+      case loaded of
+        Left failure | isDoesNotExistError failure -> pure Nothing
+        Left failure -> throwIO failure
+        Right bytes -> do
+          manifest <- decode @Manifest bytes
+          for_ request.expectedCheckpoint $ ensure . (== manifest.sha256)
+          ensure $ manifest.identity == identity && manifest.assetDir == image.assetDir
+          let path = directory </> "baseline.qcow2"
+          canonical directory
+          measured <- fingerprint path
+          ensure $ measured.sha256 == manifest.sha256 && measured.bytes == manifest.bytes
+          checkpoint <- inspect path
+          ensure $ checkpoint.guestAssetBuildId == identity.imageBuildId
+          publish (directory </> "last-used.json") =<< getCurrentTime
+          pure $ Just $ Prepared manifest path
+
+
+-- | Holds a private copy of the matching prepared checkpoint while the action runs; @Nothing@ on a cache miss.
+leaseWorkspace :: Options -> Request -> (Maybe Leased -> IO a) -> IO a
+leaseWorkspace options request action = do
+  root <- canonicalizePath options.cacheDir
+  bracket
+    ( withProjectLock root request.projectId do
+        prepared <- lookupWorkspace options Lookup request
+        forM prepared \value -> do
+          let parent = root </> projectText request.projectId </> "leases"
+          createDirectoryIfMissing True parent
+          canonical parent
+          Posix.setFileMode parent 0o700
+          bracketOnError (createTempDirectory parent ".lease-") removePathForcibly \directory -> do
+            let immutable = directory </> "baseline.qcow2"
+                mutable = directory </> "resume.qcow2"
+            Posix.createLink value.path immutable
+            copySnapshot (Snapshot immutable value.manifest.sha256) mutable
+            pure $ Leased value{path = immutable} mutable
+    )
+    (\prepared -> withProjectLock root request.projectId $ for_ prepared $ removePathForcibly . takeDirectory . (.resumePath))
+    action
 
 
 projectText :: ProjectId -> FilePath
