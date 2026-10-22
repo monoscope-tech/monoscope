@@ -1,4 +1,4 @@
-module Data.Effectful.CodeReview (CodeReview (..), Request (..), FixRequest (..), TestArtifact (..), AdmissionRequest (..), AdmissionDecision (..), PhaseReceipt (..), FixResult (..), ArtifactRequest (..), ArtifactStore (..), FixReviewRequest (..), FixReviewDecision (..), ReviewedFix, reviewedFixResult, reviewedFixApproval, FixReviewOutcome (..), VerifiedFix, verifiedFixResult, ExplainedFix, explainedFixResult, fixExplanation, Explanation (..), PricingStatus (..), ThinkingLevel (..), TelemetryQuery (..), KnowledgeNote (..), KnowledgeRequest (..), ModelUsage (..), ModelCall (..), AllocationReceipt, allocationId, allocationAttempt, Regression (..), CheckReceipt (..), CheckStatus (..), RevisionSide (..), reviewRepository, fixRepository, admitRegression, verifyFixArtifacts, reviewVerifiedFix, explainVerifiedFix, runCodeReviewReal, runCodeReviewTest, validExplanation) where
+module Data.Effectful.CodeReview (CodeReview (..), Request (..), FixRequest (..), TestArtifact (..), AdmissionRequest (..), AdmissionDecision (..), PhaseReceipt (..), FixResult (..), ArtifactRequest (..), ArtifactStore (..), FixReviewRequest (..), FixReviewDecision (..), ReviewedFix, reviewedFixResult, reviewedFixApproval, FixReviewOutcome (..), VerifiedFix, verifiedFixResult, ExplainedFix, explainedFixResult, fixExplanation, Explanation (..), PricingStatus (..), ThinkingLevel (..), TelemetryQuery (..), KnowledgeNote (..), KnowledgeRequest (..), ModelUsage (..), ModelCall (..), AllocationReceipt, allocationId, allocationAttempt, Regression (..), CheckReceipt (..), CheckStatus (..), RevisionSide (..), reviewRepository, fixRepository, admitRegression, verifyFixArtifacts, reviewVerifiedFix, explainVerifiedFix, runCodeReviewReal, runCodeReviewTest, validExplanation, workerHost) where
 
 import Control.Concurrent.STM qualified as STM
 import Data.Aeson qualified as AE
@@ -9,6 +9,7 @@ import Data.Effectful.CodeReview.Artifacts (ArtifactStore (..))
 import Data.Effectful.CodeReview.Artifacts qualified as Native
 import Data.Effectful.CodeReview.Checkout qualified as Checkout
 import Data.Effectful.CodeReview.Explanation qualified as Media
+import Data.Effectful.CodeReview.Guest qualified as Guest
 import Data.Effectful.CodeReview.Outbox qualified as Outbox
 import Data.Effectful.CodeReview.Policy qualified as Policy
 import Data.Effectful.CodeReview.Types
@@ -21,6 +22,7 @@ import Models.Projects.ProjectMemory qualified as Memory
 import Pkg.DeriveUtils (UUIDId)
 import Relude
 import System.Environment (getEnvironment)
+import System.FilePath (takeDirectory, (</>))
 import System.IO (hClose)
 import System.IO.Error (isEOFError)
 import System.Process.Typed (ExitCode (..), createPipe, getStdin, getStdout, nullStream, proc, setEnv, setStderr, setStdin, setStdout, stopProcess, waitExitCode, waitExitCodeSTM, withProcessTerm)
@@ -29,7 +31,7 @@ import UnliftIO.Timeout qualified as Timeout
 
 
 -- JSON-lines protocol: queries, usage, execution receipts, validation, and result.
-data Message = Checkout () | Tool Policy.Invocation | Query TelemetryQuery | Knowledge KnowledgeRequest | Admit TestArtifact | Propose Native.CandidatePatch | Validate AE.Value | Result AE.Value
+data Message = Checkout () | Tool Policy.Invocation | Query TelemetryQuery | Knowledge KnowledgeRequest | Admit TestArtifact | Propose Native.CandidatePatch | Guest Guest.Operation | Validate AE.Value | Result AE.Value
   deriving stock (Generic)
   deriving anyclass (AE.FromJSON)
 
@@ -99,8 +101,8 @@ data Callbacks result = Callbacks
   }
 
 
-runCodeReviewReal :: IOE :> es => Maybe ArtifactStore -> Maybe FilePath -> [FilePath] -> Eff (CodeReview ': es) a -> Eff es a
-runCodeReviewReal artifactStore executable skills = interpret \env -> \case
+runCodeReviewReal :: IOE :> es => Maybe ArtifactStore -> Maybe Guest.Host -> Maybe FilePath -> [FilePath] -> Eff (CodeReview ': es) a -> Eff es a
+runCodeReviewReal artifactStore host executable skills = interpret \env -> \case
   ReviewRepository request respond knowledge recordCall recordUsage recordAllocation recordCheck check -> localSeqUnliftIO env \unlift ->
     liftIO
       $ launch
@@ -191,6 +193,10 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
               AdmissionTask request -> (Outbox.Admission request.fix.request.runId, Checkout.Repository request.fix.request{head = request.fix.request.base}, AE.object ["tag" AE..= ("AdmitTask" :: Text), "contents" AE..= (request{fix = request.fix{request = request.fix.request{gitToken = ""}}} :: AdmissionRequest)])
               PeerTask request -> (Outbox.PeerReview request.fix.request.runId, Checkout.VerifiedCandidate request.artifacts, AE.object ["tag" AE..= ("ReviewFixTask" :: Text), "contents" AE..= (request{fix = request.fix{request = request.fix.request{gitToken = ""}}} :: FixReviewRequest)])
             role = case scope of Outbox.Advisory _ -> Policy.Advisory; Outbox.IssueFix _ -> Policy.Fix; Outbox.Admission _ -> Policy.Admission; Outbox.PeerReview _ -> Policy.Peer
+            -- Roles migrate to a host-owned VM one at a time; the rest still create theirs in the child.
+            owned = case task of
+              AdmissionTask request -> (,request.fix.request.attemptId,Just request.fix.imageBuildId,Guest.InspectAdmission request.artifact,Just $ AE.object ["artifact" AE..= request.artifact]) <$> host
+              _ -> Nothing
             record = \case
               Outbox.Call receipt -> callbacks.calls receipt $> Right ()
               Outbox.Usage receipt -> callbacks.usage receipt $> Right ()
@@ -198,6 +204,7 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
               Outbox.Check receipt -> maybe (pure $ Left "This task cannot record regression executions") (\save -> save receipt $> Right ()) callbacks.checks
               Outbox.Phase receipt -> callbacks.phase receipt
             withJournal action = maybe (action Nothing) (\configured -> Outbox.withOutbox configured scope $ action . Just) artifactStore
+            allocate journal receipt = maybe (record $ Outbox.Allocation receipt) (\outbox -> Outbox.journal outbox (Outbox.Allocation receipt) >> Outbox.acknowledge outbox (Outbox.Allocation receipt) record) journal
         -- Replay persisted work before starting a child, fetching source or calling a model.
         outcome <- tryAny $ Timeout.timeout (480 * 1000000) $ withJournal \journal -> do
           recovered <- maybe (pure $ Right ()) (`Outbox.replay` record) journal
@@ -207,6 +214,7 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
               environment <- getEnvironment
               let childEnvironment = maybe environment (\outbox -> ("IMPACT_REVIEW_OUTBOX_DIR", Outbox.outboxPath outbox) : filter ((/= "IMPACT_REVIEW_OUTBOX_DIR") . fst) environment) journal
               withProcessTerm (setEnv childEnvironment $ setStdin createPipe $ setStdout createPipe $ setStderr nullStream $ proc command skills) \process -> do
+                guest <- newIORef Nothing
                 let stop =
                       ( do
                           hClose $ getStdin process
@@ -236,8 +244,14 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
                                 _ -> receive supplied (remaining - bool 0 1 phase) submissions (if invalidates then Nothing else accepted)
                         Right (Right (Checkout ())) -> case (supplied, artifactStore) of
                           (Nothing, Just configured) -> do
-                            prepared <- Checkout.withCheckout configured source \checkout ->
-                              (writeMessage (Right checkout{Checkout.policy = Policy.policy role (revisionText checkout.base) (revisionText checkout.head) checkout.rootInstructions} :: Either Text Checkout.Prepared) >> receive (Just checkout) remaining submissions accepted) `finally` stop
+                            let deliver checkout = (writeMessage (Right checkout :: Either Text Checkout.Prepared) >> receive (Just checkout) remaining submissions accepted) `finally` stop
+                            prepared <- Checkout.withCheckout configured source \fetched -> do
+                              let checkout = fetched{Checkout.policy = Policy.policy role (revisionText fetched.base) (revisionText fetched.head) fetched.rootInstructions}
+                              case owned of
+                                Nothing -> deliver checkout
+                                Just (configuredHost, attempt, expected, setup, envelope) ->
+                                  join <$> Guest.withGuest configuredHost expected checkout.directory checkout.head setup attempt (void . allocate journal) \skillsDir operate ->
+                                    writeIORef guest (Just operate) >> deliver checkout{Checkout.guest = Just skillsDir, Checkout.envelope = envelope}
                             pure $ join prepared
                           _ -> pure $ Left "Repository checkout was unavailable or already supplied"
                         Right (Right (Tool invocation))
@@ -275,6 +289,11 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
                             writeMessage captured
                             receive supplied (remaining - 1) submissions Nothing
                           _ -> pure $ Left "Candidate capture requires a prepared issue-fix task and remaining budget"
+                        Right (Right (Guest operation)) ->
+                          readIORef guest >>= \case
+                            -- Pi's own file and shell calls neither spend the request budget nor keep an accepted draft.
+                            Just operate -> operate operation >>= writeMessage >> receive supplied remaining submissions Nothing
+                            Nothing -> pure $ Left "Guest operations require a host-owned sandbox"
                         Right (Right (Validate draft))
                           | isNothing supplied && isJust artifactStore -> pure $ Left "Review agent has not acquired its repository checkout"
                           | submissions > 0 -> do
@@ -293,6 +312,11 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
           Left _ -> Left "Review agent could not be executed"
           Right Nothing -> Left "Review agent exceeded its eight-minute budget"
           Right (Just result) -> result
+
+
+-- | The worker directory supplies the SDK bridge and the bundled skill pack, after trusted skills.
+workerHost :: [FilePath] -> Text -> FilePath -> Guest.Host
+workerHost skills image agent = Guest.Host image (takeDirectory agent </> "sandbox.mjs") (skills <> [takeDirectory agent </> "skills" </> "superpowers"]) Nothing
 
 
 runCodeReviewTest :: IOE :> es => (Request "pr_review" -> Either Text Text) -> (FixRequest -> Either Text FixResult) -> (AdmissionRequest -> Either Text AdmissionDecision) -> (ArtifactRequest -> Either Text ()) -> (ArtifactRequest -> Either Text Explanation) -> (FixReviewRequest -> Either Text FixReviewDecision) -> Eff (CodeReview ': es) a -> Eff es a

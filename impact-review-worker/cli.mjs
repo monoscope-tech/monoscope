@@ -16,16 +16,11 @@ let agentDir;
 let pending = Promise.resolve();
 try {
   const guestImage = process.env.IMPACT_REVIEW_GUEST_IMAGE;
-  let bytes = 0, inputLimit = 2 * 1024 * 1024;
-  const input = addAbortSignal(signal, process.stdin);
-  input.on('data', (chunk) => { bytes += chunk.length; if (bytes > inputLimit) controller.abort(); });
-  const messages = jsonLines(input);
+  const messages = jsonLines(addAbortSignal(signal, process.stdin), 16 * 1024 * 1024);
   const envelope = JSON.parse((await messages.next()).value);
-  if (!guestImage) throw new Error('A pinned guest image is required');
   const isFix = envelope.tag === 'FixTask';
   const isAdmission = envelope.tag === 'AdmitTask';
   const isFixReview = envelope.tag === 'ReviewFixTask';
-  if (isFixReview) inputLimit = 8 * 1024 * 1024;
   if (envelope.tag !== undefined && !isFix && !isAdmission && !isFixReview) throw new Error('Unknown repository task');
   const task = isAdmission || isFixReview ? envelope.contents.fix : envelope.contents;
   const request = isFix || isAdmission || isFixReview ? { ...task.request, issueId: task.issueId, ...(isAdmission ? { artifact: envelope.contents.artifact } : isFixReview ? { artifacts: envelope.contents.artifacts, imageBuildId: task.imageBuildId } : {}) } : envelope;
@@ -50,8 +45,9 @@ try {
   };
   const checkoutReply = await exchange('Checkout', []);
   if (Object.hasOwn(checkoutReply, 'Left')) throw new Error('Host checkout was rejected');
-  const preparedCheckout = z.object({ directory: z.string().min(1), repositorySkills: z.string().min(1), rootInstructions: z.string(), projectId: z.uuid(), repository: z.string(), base: z.string(), head: z.string(), cacheStatus: z.enum(['hit', 'miss', 'verified']), durationMs: z.number().int().nonnegative(), policy: z.object({ instructions: z.string(), tools: z.array(z.object({ name: z.string(), description: z.string(), parameters: z.record(z.string(), z.unknown()), sequential: z.boolean() }).strict()) }).strict(), evidence: z.discriminatedUnion('tag', [z.object({ tag: z.literal('SourceOnly') }).strict(), z.object({ tag: z.literal('VerifiedEvidence'), contents: z.object({ result: z.record(z.string(), z.unknown()), files: z.record(z.string(), z.string()) }).strict() }).strict()]) }).strict().parse(checkoutReply.Right);
+  const preparedCheckout = z.object({ guest: z.string().nullable(), envelope: z.record(z.string(), z.unknown()).nullable(), directory: z.string().min(1), repositorySkills: z.string().min(1), rootInstructions: z.string(), projectId: z.uuid(), repository: z.string(), base: z.string(), head: z.string(), cacheStatus: z.enum(['hit', 'miss', 'verified']), durationMs: z.number().int().nonnegative(), policy: z.object({ instructions: z.string(), tools: z.array(z.object({ name: z.string(), description: z.string(), parameters: z.record(z.string(), z.unknown()), sequential: z.boolean() }).strict()) }).strict(), evidence: z.discriminatedUnion('tag', [z.object({ tag: z.literal('SourceOnly') }).strict(), z.object({ tag: z.literal('VerifiedEvidence'), contents: z.object({ result: z.record(z.string(), z.unknown()), files: z.record(z.string(), z.string()) }).strict() }).strict()]) }).strict().parse(checkoutReply.Right);
   if (isFixReview !== (preparedCheckout.evidence.tag === 'VerifiedEvidence')) throw new Error('Task requires matching host-verified evidence');
+  if (!preparedCheckout.guest && !guestImage) throw new Error('A pinned guest image is required');
   const checkoutHead = isFixReview ? envelope.contents.artifacts.result.head : isFix || isAdmission ? request.base : request.head;
   if (request.gitToken || preparedCheckout.projectId !== request.projectId || preparedCheckout.repository !== request.repository || preparedCheckout.base !== request.base || preparedCheckout.head !== checkoutHead) throw new Error('A matching credential-free host checkout is required');
   const artifactDir = join(outbox, 'checks');
@@ -72,8 +68,8 @@ try {
     import('@earendil-works/pi-coding-agent'), import('./review.mjs'), import('./fix.mjs'), import('./admit.mjs'),
   ]);
   const modelRuntime = await ModelRuntime.create({ authPath: join(agentDir, 'auth.json'), modelsPath: process.env.IMPACT_REVIEW_MODELS ?? null, refreshOnCreate: false });
-  const result = await (isAdmission ? admitRegression : isFix ? fixIssue : review)({ ...request, head: checkoutHead }, {
-    modelRuntime, guestImage, expectedImageBuildId, cacheDir, preparedCheckout, usageDir: outboxRoot, artifactDir, attemptId, skillPaths: process.argv.slice(2), optionsTool: (invocation) => exchange('Tool', invocation), validateDraft: (draft) => exchange('Validate', draft), signal,
+  const result = await (preparedCheckout.guest ? review : isAdmission ? admitRegression : isFix ? fixIssue : review)({ ...request, head: checkoutHead }, {
+    modelRuntime, guestImage, expectedImageBuildId, cacheDir, preparedCheckout, usageDir: outboxRoot, artifactDir, attemptId, skillPaths: process.argv.slice(2), optionsTool: (invocation) => exchange('Tool', invocation), guestOperation: (operation) => exchange('Guest', operation), validateDraft: (draft) => exchange('Validate', draft), signal,
     admitTest: (artifact) => exchange('Admit', artifact),
     proposeCandidate: (candidate) => exchange('Propose', candidate),
     workspaceCache: process.env.IMPACT_REVIEW_PREPARE_SCRIPT ? {

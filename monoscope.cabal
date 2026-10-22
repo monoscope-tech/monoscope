@@ -322,6 +322,7 @@ library
       Data.Effectful.CodeReview.Artifacts
       Data.Effectful.CodeReview.Checkout
       Data.Effectful.CodeReview.Explanation
+      Data.Effectful.CodeReview.Guest
       Data.Effectful.CodeReview.Outbox
       Data.Effectful.CodeReview.Policy
       Data.Effectful.CodeReview.Types
@@ -978,6 +979,7 @@ test-suite test-dev
       Data.Effectful.CodeReview.Artifacts
       Data.Effectful.CodeReview.Checkout
       Data.Effectful.CodeReview.Explanation
+      Data.Effectful.CodeReview.Guest
       Data.Effectful.CodeReview.Outbox
       Data.Effectful.CodeReview.Policy
       Data.Effectful.CodeReview.Types

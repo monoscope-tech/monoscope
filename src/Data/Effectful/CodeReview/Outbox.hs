@@ -1,9 +1,10 @@
-module Data.Effectful.CodeReview.Outbox (Scope (..), Receipt (..), Outbox, outboxPath, withOutbox, replay, acknowledge) where
+module Data.Effectful.CodeReview.Outbox (Scope (..), Receipt (..), Outbox, outboxPath, withOutbox, replay, journal, acknowledge) where
 
 import Control.Monad (foldM)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Types qualified as AET
+import Data.Effectful.AgentWorkspace (publish)
 import Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), readPrivateArtifact)
 import Data.Effectful.CodeReview.Types
 import Pkg.DeriveUtils (UUIDId)
@@ -64,6 +65,11 @@ replay outbox record = do
   runExceptT $ traverse_ (\receipt -> ExceptT $ acknowledge outbox receipt record) $ sortOn (\receipt -> (rank receipt, receiptId receipt)) receipts
   where
     rank = \case Call _ -> 0 :: Int; Phase _ -> 2; _ -> 1
+
+
+-- Host-measured receipts take the same durable path as SDK ones.
+journal :: Outbox -> Receipt -> IO ()
+journal outbox receipt = publish (outbox.path </> toString (receiptId receipt) <> ".json") receipt
 
 
 -- The SDK journals before transmission; the database must accept before unlink/ACK.

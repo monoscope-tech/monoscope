@@ -63,19 +63,21 @@ export function modelUsage(message, pricing, attemptId, callId) {
 // Adapted from Gondolin's Pi example: model credentials remain outside repository tools.
 export const review = (input, options) => runRepositoryAgent(input, options);
 
-export async function runRepositoryAgent(input, { modelRuntime, guestImage, expectedImageBuildId, workspaceCache, artifactDir, preparedCheckout, attemptId = randomUUID(), skillPaths = [], validateDraft, createWorkflow, optionsTool, signal, onEvent = () => {} }) {
+export async function runRepositoryAgent(input, { modelRuntime, guestImage, expectedImageBuildId, workspaceCache, artifactDir, preparedCheckout, attemptId = randomUUID(), skillPaths = [], validateDraft, createWorkflow, optionsTool, guestOperation, signal, onEvent = () => {} }) {
   const request = reviewRequest.parse(input);
   const runId = artifactDir ? z.uuid().parse(input.runId) : undefined;
-  const resolvedImage = resolveImageSelector(guestImage);
-  const pinnedImage = resolvedImage.source === 'path' ? importImageFromDirectory(resolvedImage.assetDir) : resolvedImage;
-  if (expectedImageBuildId !== undefined && pinnedImage.buildId !== expectedImageBuildId) throw new Error('Configured guest image differs from the pinned issue-fix image');
+  // A host-owned VM leaves this process only Pi's session; file and shell calls go to Haskell.
+  const host = preparedCheckout?.guest;
+  const resolvedImage = host ? undefined : resolveImageSelector(guestImage);
+  const pinnedImage = resolvedImage?.source === 'path' ? importImageFromDirectory(resolvedImage.assetDir) : resolvedImage;
+  if (!host && expectedImageBuildId !== undefined && pinnedImage.buildId !== expectedImageBuildId) throw new Error('Configured guest image differs from the pinned issue-fix image');
   if (!preparedCheckout) throw new Error('A host-prepared checkout is required');
   const peer = preparedCheckout.evidence.tag === 'VerifiedEvidence' ? preparedCheckout.evidence.contents : undefined;
   if (peer && typeof validateDraft !== 'function') throw new Error('Peer review requires host acceptance');
   const root = await mkdtemp(join(tmpdir(), 'monoscope-review-'));
   const checkout = preparedCheckout.directory;
   const cwd = '/workspace';
-  const skillsDir = join(root, 'skills');
+  const skillsDir = host ?? join(root, 'skills');
   const outputFiles = new Set();
   const modelCalls = new Set();
   const meteredRuntime = new Proxy(modelRuntime, {
@@ -93,7 +95,7 @@ export async function runRepositoryAgent(input, { modelRuntime, guestImage, expe
       return typeof value === 'function' ? value.bind(target) : value;
     },
   });
-  let session, vm, closing, submitted, allocationStartedAt;
+  let session, vm, workspace, closing, submitted, allocationStartedAt;
   const verifierSession = randomUUID();
   const close = () => closing ??= vm?.close();
   const abort = () => { void session?.abort(); void close()?.catch(() => {}); };
@@ -104,8 +106,10 @@ export async function runRepositoryAgent(input, { modelRuntime, guestImage, expe
     if (!isAbsolute(checkout) || !isAbsolute(preparedCheckout.repositorySkills ?? '') || typeof preparedCheckout.rootInstructions !== 'string' || request.gitToken || preparedCheckout.projectId !== request.projectId || preparedCheckout.repository !== request.repository || preparedCheckout.base !== request.base || preparedCheckout.head !== request.head) throw new Error('Host checkout identity mismatch');
     if ((await git(['rev-parse', 'HEAD'])).stdout.trim() !== request.head) throw new Error('Host checkout revision mismatch');
     onEvent({ type: 'checkout_prepared', cacheStatus: preparedCheckout.cacheStatus, durationMs: preparedCheckout.durationMs });
-    await mkdir(skillsDir);
-    await Promise.all([...skillPaths, fileURLToPath(new URL('./skills/superpowers', import.meta.url))].map((path, index) => cp(path, join(skillsDir, String(index)), { recursive: true, dereference: true })));
+    if (!host) {
+      await mkdir(skillsDir);
+      await Promise.all([...skillPaths, fileURLToPath(new URL('./skills/superpowers', import.meta.url))].map((path, index) => cp(path, join(skillsDir, String(index)), { recursive: true, dereference: true })));
+    }
     const repositorySkills = preparedCheckout.repositorySkills;
     const skillRoots = ['.agents/skills', '.pi/skills'];
     const loaded = loadSkills({ cwd: root, agentDir: join(root, 'agent'), skillPaths: [skillsDir, ...skillRoots.map((path) => join(repositorySkills, path))], includeDefaults: false });
@@ -115,47 +119,65 @@ export async function runRepositoryAgent(input, { modelRuntime, guestImage, expe
         : '/skills/' + relative(skillsDir, skill.filePath);
       return { ...skill, filePath, baseDir: dirname(filePath) };
     });
-    const workspaceStarted = performance.now();
-    const workspace = workspaceCache ? await loadPreparedWorkspace(request, pinnedImage, workspaceCache) : undefined;
-    onEvent({ type: 'workspace_cache', status: workspace ? 'hit' : workspaceCache ? 'miss' : 'disabled', sha256: workspace?.manifest.sha256 ?? null, checkpointBytes: workspace?.manifest.bytes ?? 0, durationMs: performance.now() - workspaceStarted });
-    if (workspaceCache?.dependencyArchive && !workspace) throw new Error('Configured dependency workspace has not been prepared for these pinned inputs');
-    const checkoutCommands = (revision) => {
-      const git = ['/usr/bin/git', '-c', `safe.directory=${cwd}`, '-c', 'core.hooksPath=/dev/null', '-C', cwd];
-      return [
-        ...(workspace ? [cwd, '/checkout/.git'].map((path) => ['/usr/bin/git', 'config', '--system', '--add', 'safe.directory', path]) : []),
-        ...(workspace ? [[...git, 'fetch', '--quiet', '--no-tags', '--', '/checkout', revision]] : [['/bin/mkdir', '-p', cwd], ['/bin/cp', '-R', '/checkout/.', cwd]]),
-        [...git, 'checkout', '--quiet', '--detach', revision],
-      ];
-    };
-    allocationStartedAt = performance.now();
-    vm = workspace ? await workspace.resume({ '/checkout': new ReadonlyProvider(new RealFSProvider(checkout)), '/skills': new ReadonlyProvider(new RealFSProvider(skillsDir)) }, abort) : await VM.create({
-      sessionLabel: 'monoscope-impact-review', memory: '1G', cpus: 2,
-      sandbox: { imagePath: pinnedImage.assetDir, netEnabled: false }, rootfs: { mode: 'cow' }, tmpfs: guestTmpfs,
-      vfs: { mounts: { '/checkout': new ReadonlyProvider(new RealFSProvider(checkout)), '/skills': new ReadonlyProvider(new RealFSProvider(skillsDir)) } },
-    });
     signal?.addEventListener('abort', abort, { once: true });
-    signal?.throwIfAborted();
-    await vm.start();
-    onEvent({ type: 'sandbox_started', id: vm.id, hostPid: vm.getHostPid() });
-    signal?.throwIfAborted();
-    // Guest-owned files keep Git's ownership checks and all review writes inside the VM.
-    for (const command of checkoutCommands(request.head)) {
-      if (!(await vm.exec(command, { signal })).ok) throw new Error('Repository could not be prepared in the guest');
-    }
-    const owned = await vm.exec(['/bin/chown', '-hR', '1000:1000', cwd], { signal });
-    if (!owned.ok) throw new Error('Workspace ownership could not be assigned');
-    await vm.fs.mkdir('/run/monoscope-review-output', { recursive: true, mode: 0o755 });
-    const identity = await vm.exec(agentCommand(['/usr/bin/id', '-u']), { signal });
-    if (!identity.ok || identity.stdout.trim() !== '1000') throw new Error('Guest image requires the review-agent account and setpriv');
-    if (peer) {
-      await lockWorkspace(vm, cwd, signal);
-      for (const [path, bytes] of Object.entries(peer.files)) {
-        await vm.fs.writeFile(path, Buffer.from(bytes, 'base64'), { signal });
-        if (!(await vm.exec(['/bin/chmod', '0444', path], { signal })).ok) throw new Error('Host evidence could not be protected');
+    if (!host) {
+      const workspaceStarted = performance.now();
+      workspace = workspaceCache ? await loadPreparedWorkspace(request, pinnedImage, workspaceCache) : undefined;
+      onEvent({ type: 'workspace_cache', status: workspace ? 'hit' : workspaceCache ? 'miss' : 'disabled', sha256: workspace?.manifest.sha256 ?? null, checkpointBytes: workspace?.manifest.bytes ?? 0, durationMs: performance.now() - workspaceStarted });
+      if (workspaceCache?.dependencyArchive && !workspace) throw new Error('Configured dependency workspace has not been prepared for these pinned inputs');
+      const checkoutCommands = (revision) => {
+        const git = ['/usr/bin/git', '-c', `safe.directory=${cwd}`, '-c', 'core.hooksPath=/dev/null', '-C', cwd];
+        return [
+          ...(workspace ? [cwd, '/checkout/.git'].map((path) => ['/usr/bin/git', 'config', '--system', '--add', 'safe.directory', path]) : []),
+          ...(workspace ? [[...git, 'fetch', '--quiet', '--no-tags', '--', '/checkout', revision]] : [['/bin/mkdir', '-p', cwd], ['/bin/cp', '-R', '/checkout/.', cwd]]),
+          [...git, 'checkout', '--quiet', '--detach', revision],
+        ];
+      };
+      allocationStartedAt = performance.now();
+      vm = workspace ? await workspace.resume({ '/checkout': new ReadonlyProvider(new RealFSProvider(checkout)), '/skills': new ReadonlyProvider(new RealFSProvider(skillsDir)) }, abort) : await VM.create({
+        sessionLabel: 'monoscope-impact-review', memory: '1G', cpus: 2,
+        sandbox: { imagePath: pinnedImage.assetDir, netEnabled: false }, rootfs: { mode: 'cow' }, tmpfs: guestTmpfs,
+        vfs: { mounts: { '/checkout': new ReadonlyProvider(new RealFSProvider(checkout)), '/skills': new ReadonlyProvider(new RealFSProvider(skillsDir)) } },
+      });
+      signal?.throwIfAborted();
+      await vm.start();
+      onEvent({ type: 'sandbox_started', id: vm.id, hostPid: vm.getHostPid() });
+      signal?.throwIfAborted();
+      // Guest-owned files keep Git's ownership checks and all review writes inside the VM.
+      for (const command of checkoutCommands(request.head)) {
+        if (!(await vm.exec(command, { signal })).ok) throw new Error('Repository could not be prepared in the guest');
+      }
+      const owned = await vm.exec(['/bin/chown', '-hR', '1000:1000', cwd], { signal });
+      if (!owned.ok) throw new Error('Workspace ownership could not be assigned');
+      await vm.fs.mkdir('/run/monoscope-review-output', { recursive: true, mode: 0o755 });
+      const identity = await vm.exec(agentCommand(['/usr/bin/id', '-u']), { signal });
+      if (!identity.ok || identity.stdout.trim() !== '1000') throw new Error('Guest image requires the review-agent account and setpriv');
+      if (peer) {
+        await lockWorkspace(vm, cwd, signal);
+        for (const [path, bytes] of Object.entries(peer.files)) {
+          await vm.fs.writeFile(path, Buffer.from(bytes, 'base64'), { signal });
+          if (!(await vm.exec(['/bin/chmod', '0444', path], { signal })).ok) throw new Error('Host evidence could not be protected');
+        }
       }
     }
-    const bash = createBashToolDefinition(cwd, {
-      operations: {
+    const guest = async (tag, contents) => {
+      const reply = await guestOperation({ tag, contents });
+      if (Object.hasOwn(reply, 'Left')) throw Object.assign(new Error(reply.Left), tag === 'Access' ? { code: 'ENOENT' } : {});
+      return reply.Right;
+    };
+    const bashTool = () => {
+      let guestLog;
+      const definition = createBashToolDefinition(cwd, {
+      operations: host ? {
+        async exec(command, cwd, { onData, timeout }) {
+          const ran = await guest('Run', { command, cwd, timeout: timeout ?? null });
+          guestLog = ran.log;
+          if (ran.timedOut) throw new Error(`timeout:${timeout}`);
+          onData(Buffer.from(ran.output, 'base64'));
+          if (ran.truncated) onData(Buffer.from('\n[Output beyond 64 MiB was discarded]\n'));
+          return { exitCode: ran.exitCode };
+        },
+      } : {
         async exec(command, cwd, options) {
           const signals = [signal, options.signal, options.timeout ? AbortSignal.timeout(options.timeout * 1000) : undefined].filter(Boolean);
           const commandSignal = AbortSignal.any(signals);
@@ -171,22 +193,25 @@ export async function runRepositoryAgent(input, { modelRuntime, guestImage, expe
         },
       },
       exposeSessionEnvironment: false,
-    });
+      });
+      return { definition, guestLog: () => guestLog };
+    };
     const tools = [{
-      ...bash,
+      ...bashTool().definition,
       async execute(...args) {
+        const bash = bashTool();
         const onUpdate = args[3];
         args[3] = (update) => {
           if (update.details?.fullOutputPath) outputFiles.add(update.details.fullOutputPath);
           onUpdate?.(update);
         };
-        const result = await bash.execute(...args);
+        const result = await bash.definition.execute(...args);
         const path = result.details?.fullOutputPath;
         if (path) {
           outputFiles.add(path);
           // Pi advertises this path to both tools; preserve it inside the guest too.
-          const guestPath = '/run/monoscope-review-output/' + basename(path);
-          await vm.fs.writeFile(guestPath, createReadStream(path), { signal });
+          const guestPath = host ? bash.guestLog() : '/run/monoscope-review-output/' + basename(path);
+          if (!host) await vm.fs.writeFile(guestPath, createReadStream(path), { signal });
           result.details.fullOutputPath = guestPath;
           result.content = result.content.map((block) => block.type === 'text' ? { ...block, text: block.text.replaceAll(path, guestPath) } : block);
           await rm(path, { force: true });
@@ -195,7 +220,10 @@ export async function runRepositoryAgent(input, { modelRuntime, guestImage, expe
         return result;
       },
     }, createReadToolDefinition(cwd, {
-      operations: {
+      operations: host ? {
+        access: (path) => guest('Access', path),
+        readFile: async (path) => Buffer.from(await guest('Read', path), 'base64'),
+      } : {
         access: (path) => vm.fs.access(path, { mode: constants.R_OK }),
         readFile: (path) => vm.fs.readFile(path),
       },
@@ -213,16 +241,17 @@ export async function runRepositoryAgent(input, { modelRuntime, guestImage, expe
       }
       return { content: [{ type: 'text', text: JSON.stringify(result.report) }], details: {}, isError: result.isError };
     };
-    if (artifactDir && !createWorkflow && preparedCheckout.policy.tools.some((tool) => tool.name === 'run_regression')) tools.push({
+    if (vm && artifactDir && !createWorkflow && preparedCheckout.policy.tools.some((tool) => tool.name === 'run_regression')) tools.push({
       name: 'run_regression', label: 'Replay a frozen regression check',
       execute: (_id, params, toolSignal) => executeRegression(params, toolSignal),
     });
     const workflow = createWorkflow ? await createWorkflow({ vm, cwd, request, root, artifactDir, executeRegression, signal, rootInstructions: preparedCheckout.rootInstructions }) : {
-      name: peer ? 'submit_fix_review' : 'submit_review',
+      name: preparedCheckout.policy.tools.find((tool) => tool.name.startsWith('submit_'))?.name,
       prepare: async (draft, toolSignal) => {
         const active = AbortSignal.any([signal, toolSignal].filter(Boolean));
         active.throwIfAborted();
-        const result = peer ? { result: peer.result, decision: draft } : draft;
+        const envelope = preparedCheckout.envelope ?? (peer && { result: peer.result });
+        const result = envelope ? { ...envelope, decision: draft } : draft;
         const reply = validateDraft ? await validateDraft(result) : { Right: [] };
         active.throwIfAborted();
         return Object.hasOwn(reply, 'Left') ? reply : { Right: result };

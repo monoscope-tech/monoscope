@@ -36,7 +36,7 @@ try {
         }
         case 'GetIdentity': result = vm.id; break;
         case 'ExecuteLogged': {
-          const { command, path, limitBytes } = contents;
+          const { command, path, limitBytes, overflow } = contents;
           const log = await open(path, constants.O_WRONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
           try {
             if (!(await log.stat()).isFile()) throw new Error('Invalid log');
@@ -44,8 +44,9 @@ try {
             void execution.catch(() => {});
             let bytes = 0, limited = false;
             for await (const chunk of execution.output()) {
-              if (bytes + chunk.data.length > limitBytes) { limited = true; await vm.close(); break; }
-              await log.writeFile(chunk.data); bytes += chunk.data.length;
+              if (bytes + chunk.data.length > limitBytes && overflow !== 'discard_output') { limited = true; await vm.close(); break; }
+              const kept = chunk.data.subarray(0, limitBytes - bytes);
+              if (kept.length) { await log.writeFile(kept); bytes += kept.length; }
             }
             if (limited) result = { tag: 'LogLimit' };
             else result = { tag: 'Exited', contents: (await execution).exitCode };

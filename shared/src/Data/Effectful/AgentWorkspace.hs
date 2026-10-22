@@ -1,4 +1,4 @@
-module Data.Effectful.AgentWorkspace (Workspace, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, Operation (..), Prepared, Leased, RegressionOptions (..), RegressionResult, RegressionError (..), regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest) where
+module Data.Effectful.AgentWorkspace (Workspace, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, Operation (..), Prepared, Leased, RegressionOptions (..), RegressionResult, RegressionError (..), regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest, RPC, withSandbox, Command (..), Sandbox (..), Isolation (..), GuestCommand (..), Copy (..), LoggedCommand (..), Overflow (..), Execution (..), LogExit (..), Image (..), ImageId (..), SandboxFailure (..), agentCommand, publish) where
 
 import Conduit (runConduit, (.|))
 import Control.Monad (foldM)
@@ -230,9 +230,20 @@ data Copy = Copy {source :: FilePath, destination :: Text}
   deriving anyclass (AE.ToJSON)
 
 
-data LoggedCommand = LoggedCommand {command :: GuestCommand, path :: FilePath, limitBytes :: Word32}
+-- Verifier logs close their VM at the limit; agent sessions discard the excess and keep running.
+data Overflow = CloseSandbox | DiscardOutput
+  deriving stock (Generic, Read, Show)
+  deriving (AE.ToJSON) via WrappedEnumSC 'Nothing "" Overflow
+
+
+data LoggedCommand = LoggedCommand {command :: GuestCommand, path :: FilePath, limitBytes :: Word32, overflow :: Overflow}
   deriving stock (Generic)
   deriving anyclass (AE.ToJSON)
+
+
+-- Runs as the unprivileged review account with a reset environment and fixed UTF-8 locale.
+agentCommand :: [Text] -> NonEmpty Text
+agentCommand command = "/usr/bin/setpriv" :| ["--reuid=1000", "--regid=1000", "--clear-groups", "--no-new-privs", "--reset-env", "--", "/usr/bin/env", "LANG=C.UTF-8", "LC_ALL=C.UTF-8"] <> command
 
 
 data Command = Resolve Text | Create Sandbox | Execute GuestCommand | CopyFile Copy | Checkpoint FilePath | InspectCheckpoint FilePath | Resume (Sandbox, FilePath) | GetIdentity () | ExecuteLogged LoggedCommand | Close ()
@@ -638,7 +649,7 @@ runWorkspaceReal = interpret $ \env -> \case
                   copy :: RPC -> FilePath -> Text -> IO ()
                   copy rpc path destination = rpc @() $ CopyFile $ Copy path destination
               privateWrite logPath ""
-              outcome <- tryAny $ Timeout.timeout (120 * 1000000) $ withSystemTempDirectory "monoscope-verifier-snapshot" $ \private -> withSandbox options.bridge \rpc -> do
+              outcome <- tryAny $ Timeout.timeout (120 * 1000000) $ withSystemTempDirectory "monoscope-verifier-snapshot" $ \private -> withSandbox [] options.bridge \rpc -> do
                 image <- rpc @Image $ Resolve options.image
                 ensure $ image.buildId == request.imageBuildId
                 let sandbox = Sandbox image.assetDir 2 1024 OfflineCow $ one ("/checkout", checkout)
@@ -697,7 +708,7 @@ runWorkspaceReal = interpret $ \env -> \case
                   when (side == Head && firstFrozen /= Just frozen) do
                     change $ \measured -> measured{reason = Just "Candidate changed the frozen regression files"}
                     invalid
-                result <- rpc @LogExit $ ExecuteLogged $ LoggedCommand (GuestCommand ("/usr/bin/setpriv" :| ["--reuid=1000", "--regid=1000", "--clear-groups", "--no-new-privs", "--reset-env", "--", "/usr/bin/env", "LANG=C.UTF-8", "LC_ALL=C.UTF-8", "/bin/bash", "--noprofile", "--norc", "/run/monoscope-regression.sh"]) (Just "/workspace") False) logPath 1048576
+                result <- rpc @LogExit $ ExecuteLogged $ LoggedCommand (GuestCommand (agentCommand ["/bin/bash", "--noprofile", "--norc", "/run/monoscope-regression.sh"]) (Just "/workspace") False) logPath 1048576 CloseSandbox
                 case result of
                   LogLimit -> change $ \measured -> measured{status = OutputLimit, reason = Just "Check output limit"}
                   Exited exit -> do
@@ -739,7 +750,7 @@ runWorkspaceReal = interpret $ \env -> \case
       ensure $ T.length scriptText <= 65536 && not (T.null $ T.strip scriptText)
       dependency <- traverse fingerprint options.dependencyArchive
       environment <- getEnvironment
-      withSandbox options.bridge \rpc -> do
+      withSandbox [] options.bridge \rpc -> do
         image <- rpc @Image $ Resolve options.image
         for_ request.expectedImageBuildId $ ensure . (== image.buildId)
         assetDir <- canonicalizePath image.assetDir
@@ -1014,9 +1025,10 @@ fingerprintScript =
 type RPC = forall value. AE.FromJSON value => Command -> IO value
 
 
-withSandbox :: FilePath -> (RPC -> IO a) -> IO a
-withSandbox bridge action = do
-  environment <- filter (\(key, _) -> key `elem` ["PATH", "HOME", "XDG_CACHE_HOME"] || "GONDOLIN_" `isPrefixOf` key) <$> getEnvironment
+-- | @overrides@ replace inherited Gondolin settings, such as the hypervisor backend.
+withSandbox :: [(String, String)] -> FilePath -> (RPC -> IO a) -> IO a
+withSandbox overrides bridge action = do
+  environment <- (overrides <>) . filter (\(key, _) -> (key `elem` ["PATH", "HOME", "XDG_CACHE_HOME"] || "GONDOLIN_" `isPrefixOf` key) && key `notElem` map fst overrides) <$> getEnvironment
   withProcessTerm (setEnv environment $ setStdin createPipe $ setStdout createPipe $ setStderr nullStream $ proc bridge []) \process -> do
     let rpc :: forall value. AE.FromJSON value => Command -> IO value
         rpc command = do
