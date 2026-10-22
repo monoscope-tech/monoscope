@@ -261,6 +261,11 @@ spec = do
         invalid <- save testPid 2 " " "Invalid title draft"
         html invalid `shouldSatisfy` T.isInfixOf "Invalid title draft"
         length <$> runQueryEffect tr (Memory.pageHistory testPid page) `shouldReturn` 2
+        for_ [(T.replicate 121 "x", "Oversized title"), ("Blank body", " "), ("Oversized body", T.replicate 16001 "x"), ("Invalid body", "bad\NULbody")] \(title, body) -> do
+          rejected <- save testPid 2 title body
+          H.statusCode rejected.simpleStatus `shouldBe` 200
+          html rejected `shouldSatisfy` T.isInfixOf "characters without null bytes"
+          length <$> runQueryEffect tr (Memory.pageHistory testPid page) `shouldReturn` 2
         other <- createTestProject tr "Isolated memory project"
         hidden <- request H.methodGet (base other <> "?page=" <> page.toText) []
         H.statusCode hidden.simpleStatus `shouldBe` 404

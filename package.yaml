@@ -290,6 +290,7 @@ tests:
       - effectful-core
       - effectful-postgresql
       - process
+      - typed-process
       - unix
       - lucid
       - http-types

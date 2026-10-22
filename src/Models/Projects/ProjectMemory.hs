@@ -11,7 +11,17 @@ import Pkg.DeriveUtils (DB, UUIDId)
 import Relude
 
 
+-- $setup
+-- >>> :module Prelude
+-- >>> import Data.Coerce qualified as Coerce
+-- >>> import Models.Projects.ProjectMemory qualified as Memory
+-- >>> import Relude
+
+
 type PageId = UUIDId "memory_page"
+
+
+type role MemoryText nominal
 
 
 newtype MemoryText (limit :: Nat) = MemoryText Text
@@ -19,6 +29,16 @@ newtype MemoryText (limit :: Nat) = MemoryText Text
   deriving newtype (AE.ToJSON)
 
 
+-- | Parse once into a bounded value; callers cannot coerce between limits.
+--
+-- >>> Memory.memoryText <$> Memory.mkMemoryText @3 "abc"
+-- Right "abc"
+-- >>> map (isLeft . Memory.mkMemoryText @3) ["", " ", "abcd", "a\NULb"]
+-- [True,True,True,True]
+-- >>> (Coerce.coerce <$> Memory.mkMemoryText @16000 "abc") :: Either Text (Memory.MemoryText 120)
+-- ...
+-- ...Couldn't match type...
+-- ...
 mkMemoryText :: forall limit. KnownNat limit => Text -> Either Text (MemoryText limit)
 mkMemoryText value
   | T.null (T.strip value) || T.any (== '\NUL') value || fromIntegral (T.length value) > natVal (Proxy @limit) = Left $ "Enter between 1 and " <> show (natVal $ Proxy @limit) <> " characters without null bytes"

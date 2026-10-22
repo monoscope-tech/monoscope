@@ -951,6 +951,7 @@ test-suite integration-tests
     , these
     , time
     , transformers
+    , typed-process
     , unix
     , unliftio
     , unordered-containers

@@ -254,53 +254,6 @@ memoryPostH pid form = do
           memoryGetH pid $ Just form.pageId
 
 
-memoryContent :: Projects.ProjectId -> Bool -> Maybe Memory.PageId -> Maybe (MemoryForm, Text) -> ATAuthCtx (Html ())
-memoryContent pid canEdit selected draft = do
-  session <- Projects.getSession
-  when (session.persistentSession.id == demoGuestSessionId) $ throwError err404
-  pages <- Memory.latestPages pid
-  history <- maybe (pure []) (Memory.pageHistory pid) selected
-  let current = viaNonEmpty head history
-  when (isJust selected && isNothing current && isNothing draft) $ throwError err404
-  fresh <- maybe (UUIDId <$> UUIDEff.genUUID) pure selected
-  let base = "/p/" <> pid.toText <> "/memories"
-      edit = maybe (MemoryForm fresh 0 "" "") (\page -> MemoryForm page.id (fromIntegral page.version) (Memory.memoryText page.document.title) (Memory.memoryText page.document.body)) current
-      form = maybe edit fst draft
-      pageLink page = base <> "?page=" <> page.id.toText
-      authorName = \case Memory.Member _ -> "Project member"; Memory.Agent _ -> "Agent"
-  pure $ div_ [class_ "grid gap-6 md:grid-cols-[15rem_minmax(0,1fr)]"] do
-    nav_ [Aria.label_ "Wiki pages", class_ "space-y-3"] do
-      when canEdit $ a_ [href_ base, hxGet_ base, hxTarget_ "#repository-content", hxSelect_ "#repository-content", hxSwap_ "outerHTML", hxPushUrl_ "true", class_ "btn btn-sm btn-ghost"] "New page"
-      when (null pages) $ p_ [class_ "text-sm text-textWeak"] "No wiki pages yet. Record service context, investigation notes, or runbooks here."
-      ul_ [class_ "space-y-1"] $ for_ pages \page -> li_ do
-        a_ [href_ $ pageLink page, hxGet_ $ pageLink page, hxTarget_ "#repository-content", hxSelect_ "#repository-content", hxSwap_ "outerHTML", hxPushUrl_ "true", class_ "block rounded-md px-2 py-2 text-sm text-textBrand hover:bg-fillWeak break-words"] $ toHtml $ Memory.memoryText page.document.title
-    section_ [class_ "min-w-0 space-y-5"] do
-      h2_ [class_ "text-lg font-semibold text-textStrong"] $ toHtml $ maybe "New wiki page" (Memory.memoryText . (.document.title)) current
-      p_ [class_ "text-sm text-textWeak"] "Shared project context for people and agents. Check dated conclusions against current source and telemetry."
-      for_ current \page -> do
-        p_ [class_ "text-xs text-textWeak"] $ toHtml @Text $ authorName page.author <> " · Revision " <> show page.version <> " · " <> show page.updatedAt
-        div_ [class_ "whitespace-pre-wrap break-words text-sm text-textStrong"] $ toHtml $ Memory.memoryText page.document.body
-      when canEdit $ details_ ([class_ "border-t border-strokeWeak pt-4"] <> [open_ "" | isNothing current || isJust draft]) do
-        summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] $ if isNothing current then "Write a page" else "Edit this page"
-        form_ [method_ "post", action_ base, hxPost_ base, hxTarget_ "#repository-content", hxSelect_ "#repository-content", hxSwap_ "outerHTML", class_ "mt-4 space-y-4"] do
-          input_ [type_ "hidden", name_ "pageId", value_ form.pageId.toText]
-          input_ [type_ "hidden", name_ "version", value_ $ show form.version]
-          for_ draft \(_, message) -> p_ [id_ "memory-error", role_ "alert", class_ "text-sm text-textError"] $ toHtml message
-          label_ [term "for" "memory-title", class_ "block space-y-1 text-sm font-medium text-textStrong"] do
-            span_ "Title (required)"
-            input_ ([id_ "memory-title", name_ "title", required_ "", maxlength_ "120", value_ form.title, class_ "input input-bordered w-full"] <> [Aria.describedby_ "memory-error" | isJust draft])
-          label_ [term "for" "memory-body", class_ "block space-y-1 text-sm font-medium text-textStrong"] do
-            span_ "Page content (required)"
-            textarea_ ([id_ "memory-body", name_ "body", required_ "", maxlength_ "16000", rows_ "12", class_ "textarea textarea-bordered w-full text-sm font-normal"] <> [Aria.describedby_ "memory-error" | isJust draft]) $ toHtml form.body
-          button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save page"
-      unless (null history) $ details_ [class_ "border-t border-strokeWeak pt-4"] do
-        summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] "Revision history"
-        div_ [class_ "mt-3 divide-y divide-strokeWeak"] $ for_ history \page -> details_ [class_ "py-3"] do
-          summary_ [class_ "cursor-pointer text-sm text-textWeak"] $ toHtml @Text $ "Revision " <> show page.version <> " · " <> authorName page.author <> " · " <> show page.updatedAt
-          h3_ [class_ "mt-3 text-sm font-semibold text-textStrong"] $ toHtml $ Memory.memoryText page.document.title
-          div_ [class_ "mt-2 whitespace-pre-wrap break-words text-sm text-textStrong"] $ toHtml $ Memory.memoryText page.document.body
-
-
 data RepositoryTab = Overview | PullRequests | Fixes | Usage | Wiki
   deriving stock (Eq, Show)
 
@@ -354,7 +307,7 @@ repositoriesPageH pid selection = do
         when (null runs) $ p_ [class_ "text-sm text-textWeak"] "No completed issue fixes available."
         ul_ [class_ "divide-y divide-strokeWeak"] $ for_ runs \run -> li_ [class_ "py-3"] $ a_ [href_ ("/p/" <> pid.toText <> "/issue-fixes/" <> run.runId.toText), class_ "text-sm text-textBrand hover:underline"] $ toHtml run.summary
     Usage -> usage_ <$> ImpactReviews.customerUsage session.user.id
-    Wiki -> case selection of WikiPage page draft -> memoryContent pid canEdit page draft; _ -> memoryContent pid canEdit Nothing Nothing
+    Wiki -> case selection of WikiPage page draft -> memoryContent canEdit page draft; _ -> memoryContent canEdit Nothing Nothing
   addRespHeaders $ bodyWrapper bw{pageTitle = "Repositories"} $ div_ [class_ "h-full w-full overflow-y-auto"] do
     section_ [class_ "mx-auto max-w-6xl space-y-6 px-4 py-6 sm:px-8 sm:py-8"] do
       header_ [class_ "flex flex-col items-start gap-4 sm:flex-row sm:justify-between"] do
@@ -385,6 +338,52 @@ repositoriesPageH pid selection = do
             $ toHtml @Text label
       section_ [id_ "repository-content", class_ "min-w-0"] content
   where
+    memoryContent :: Bool -> Maybe Memory.PageId -> Maybe (MemoryForm, Text) -> ATAuthCtx (Html ())
+    memoryContent canEdit selected draft = do
+      session <- Projects.getSession
+      when (session.persistentSession.id == demoGuestSessionId) $ throwError err404
+      pages <- Memory.latestPages pid
+      history <- maybe (pure []) (Memory.pageHistory pid) selected
+      let current = viaNonEmpty head history
+      when (isJust selected && isNothing current && isNothing draft) $ throwError err404
+      fresh <- maybe (UUIDId <$> UUIDEff.genUUID) pure selected
+      let base = "/p/" <> pid.toText <> "/memories"
+          edit = maybe (MemoryForm fresh 0 "" "") (\page -> MemoryForm page.id (fromIntegral page.version) (Memory.memoryText page.document.title) (Memory.memoryText page.document.body)) current
+          form = maybe edit fst draft
+          pageLink page = base <> "?page=" <> page.id.toText
+          authorName = \case Memory.Member _ -> "Project member"; Memory.Agent _ -> "Agent"
+      pure $ div_ [class_ "grid gap-6 md:grid-cols-[15rem_minmax(0,1fr)]"] do
+        nav_ [Aria.label_ "Wiki pages", class_ "space-y-3"] do
+          when canEdit $ a_ [href_ base, hxGet_ base, hxTarget_ "#repository-content", hxSelect_ "#repository-content", hxSwap_ "outerHTML", hxPushUrl_ "true", class_ "btn btn-sm btn-ghost"] "New page"
+          when (null pages) $ p_ [class_ "text-sm text-textWeak"] "No wiki pages yet. Record service context, investigation notes, or runbooks here."
+          ul_ [class_ "space-y-1"] $ for_ pages \page -> li_ do
+            a_ [href_ $ pageLink page, hxGet_ $ pageLink page, hxTarget_ "#repository-content", hxSelect_ "#repository-content", hxSwap_ "outerHTML", hxPushUrl_ "true", class_ "block rounded-md px-2 py-2 text-sm text-textBrand hover:bg-fillWeak break-words"] $ toHtml $ Memory.memoryText page.document.title
+        section_ [class_ "min-w-0 space-y-5"] do
+          h2_ [class_ "text-lg font-semibold text-textStrong"] $ toHtml $ maybe "New wiki page" (Memory.memoryText . (.document.title)) current
+          p_ [class_ "text-sm text-textWeak"] "Shared project notes and runbooks. Check dated conclusions against current source and telemetry."
+          for_ current \page -> do
+            p_ [class_ "text-xs text-textWeak"] $ toHtml @Text $ authorName page.author <> " · Revision " <> show page.version <> " · " <> show page.updatedAt
+            div_ [class_ "whitespace-pre-wrap break-words text-sm text-textStrong"] $ toHtml $ Memory.memoryText page.document.body
+          when canEdit $ details_ ([class_ "border-t border-strokeWeak pt-4"] <> [open_ "" | isNothing current || isJust draft]) do
+            summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] $ if isNothing current then "Write a page" else "Edit this page"
+            form_ [method_ "post", action_ base, hxPost_ base, hxTarget_ "#repository-content", hxSelect_ "#repository-content", hxSwap_ "outerHTML", class_ "mt-4 space-y-4"] do
+              input_ [type_ "hidden", name_ "pageId", value_ form.pageId.toText]
+              input_ [type_ "hidden", name_ "version", value_ $ show form.version]
+              for_ draft \(_, message) -> p_ [id_ "memory-error", role_ "alert", class_ "text-sm text-textError"] $ toHtml message
+              label_ [term "for" "memory-title", class_ "block space-y-1 text-sm font-medium text-textStrong"] do
+                span_ "Title (required)"
+                input_ ([id_ "memory-title", name_ "title", required_ "", maxlength_ "120", value_ form.title, class_ "input input-bordered w-full"] <> [Aria.describedby_ "memory-error" | isJust draft])
+              label_ [term "for" "memory-body", class_ "block space-y-1 text-sm font-medium text-textStrong"] do
+                span_ "Page content (required)"
+                textarea_ ([id_ "memory-body", name_ "body", required_ "", maxlength_ "16000", rows_ "12", class_ "textarea textarea-bordered w-full text-sm font-normal"] <> [Aria.describedby_ "memory-error" | isJust draft]) $ toHtml form.body
+              button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save page"
+          unless (null history) $ details_ [class_ "border-t border-strokeWeak pt-4"] do
+            summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] "Revision history"
+            div_ [class_ "mt-3 divide-y divide-strokeWeak"] $ for_ history \page -> details_ [class_ "py-3"] do
+              summary_ [class_ "cursor-pointer text-sm text-textWeak"] $ toHtml @Text $ "Revision " <> show page.version <> " · " <> authorName page.author <> " · " <> show page.updatedAt
+              h3_ [class_ "mt-3 text-sm font-semibold text-textStrong"] $ toHtml $ Memory.memoryText page.document.title
+              div_ [class_ "mt-2 whitespace-pre-wrap break-words text-sm text-textStrong"] $ toHtml $ Memory.memoryText page.document.body
+
     overview_ :: Bool -> Maybe Text -> Maybe Text -> Text -> [CodeContext.CodeMapping] -> [GitSync.GitHubSync] -> [ImpactReviews.ReviewSettings] -> [GitSync.GitHubCredential] -> [GitSync.Repository] -> [GitSync.GitHubSyncId] -> Html ()
     overview_ canEdit serviceM sampleM base mappings syncs settings credentials repositories conflicts = do
       let linked = [((c.host, c.apiBase, m.owner, m.repo), m) | m <- mappings, c <- credentials, c.id == m.credentialId]
