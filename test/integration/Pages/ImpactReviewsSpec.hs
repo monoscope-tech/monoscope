@@ -1654,7 +1654,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     field "cacheStatus" different `shouldBe` Right ("miss" :: Text)
     observed <- newIORef Nothing
     failed <- run request ["--fail"] (\value -> liftIO (writeIORef observed $ Just value) $> Right ())
-    failed `shouldSatisfy` isLeft
+    failed `shouldBe` Left "Review agent exited before completing the protocol"
     captured <- readIORef observed >>= maybe (fail "Checkout validation was not reached") pure
     cleaned captured
     removeFile $ repository </> "AGENTS.override.md"

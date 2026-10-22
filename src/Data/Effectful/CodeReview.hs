@@ -22,8 +22,9 @@ import Pkg.DeriveUtils (UUIDId)
 import Relude
 import System.Environment (getEnvironment)
 import System.IO (hClose)
+import System.IO.Error (isEOFError)
 import System.Process.Typed (ExitCode (..), createPipe, getStdin, getStdout, nullStream, proc, setEnv, setStderr, setStdin, setStdout, stopProcess, waitExitCode, waitExitCodeSTM, withProcessTerm)
-import UnliftIO.Exception (finally, tryAny)
+import UnliftIO.Exception (finally, tryAny, tryJust)
 import UnliftIO.Timeout qualified as Timeout
 
 
@@ -219,9 +220,9 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
                     parseMessage :: AE.Value -> AET.Parser (Either Outbox.Receipt Message)
                     parseMessage value = (Left <$> AE.parseJSON value) <|> (Right <$> AE.parseJSON value)
                     receive supplied remaining submissions accepted = do
-                      message <- (AE.eitherDecodeStrict >=> AET.parseEither parseMessage) <$> BS.hGetLine (getStdout process)
-                      case message of
-                        Left _ -> pure $ Left "Review agent returned an invalid protocol message"
+                      line <- tryJust (guard . isEOFError) $ BS.hGetLine (getStdout process)
+                      case either (const $ Left "Review agent exited before completing the protocol") (first (const "Review agent returned an invalid protocol message") . (AE.eitherDecodeStrict >=> AET.parseEither parseMessage)) line of
+                        Left failure -> pure $ Left failure
                         Right (Left receipt) -> do
                           let phase = case receipt of Outbox.Phase _ -> True; _ -> False
                               invalidates = case receipt of Outbox.Check _ -> True; Outbox.Phase _ -> True; _ -> False
