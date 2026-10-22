@@ -260,7 +260,13 @@ extra-source-files:
     static/migrations/0226_repository_configuration_sync.sql
     static/migrations/0227_repository_sync_local_baseline.sql
     static/migrations/0228_api_change_field_evidence.sql
+    static/migrations/0248_free_tier_notices.sql
+    static/migrations/0248_project_memory.sql
+    static/migrations/0249_legacy_plans_to_free.sql
+    static/migrations/0249_project_memory_required_fields.sql
+    static/migrations/0250_demo_project_plan.sql
     test/fixtures/github-app-test.pem
+    test/fixtures/wiki-browser.mjs
     static/public/assets/web-components/dist/manifest.json
 
 source-repository head
@@ -312,6 +318,7 @@ library
       Models.Projects.ImpactReviews
       Models.Projects.ProjectApiKeys
       Models.Projects.ProjectMembers
+      Models.Projects.ProjectMemory
       Models.Projects.Projects
       Models.Projects.RepositorySync
       Models.Telemetry.Containers
@@ -902,6 +909,7 @@ test-suite integration-tests
     , these
     , time
     , transformers
+    , typed-process
     , unix
     , unliftio
     , unordered-containers
@@ -952,6 +960,7 @@ test-suite test-dev
       Models.Projects.ImpactReviews
       Models.Projects.ProjectApiKeys
       Models.Projects.ProjectMembers
+      Models.Projects.ProjectMemory
       Models.Projects.Projects
       Models.Projects.RepositorySync
       Models.Telemetry.Containers
