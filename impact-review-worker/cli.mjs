@@ -14,6 +14,7 @@ for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => controlle
 const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(420000)]);
 let agentDir, lines;
 let pending = Promise.resolve();
+let executeGuest;
 try {
   const guestImage = process.env.IMPACT_REVIEW_GUEST_IMAGE;
   let bytes = 0, inputLimit = 2 * 1024 * 1024;
@@ -36,10 +37,19 @@ try {
     try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
   };
   const outbox = fs.realpathSync(process.env.IMPACT_REVIEW_OUTBOX_DIR);
-  const exchange = (tag, contents) => {
+  const exchange = (tag, contents, active = signal) => {
     const reply = pending.then(async () => {
       process.stdout.write(JSON.stringify({ tag, contents }) + '\n');
-      const response = JSON.parse((await messages.next()).value);
+      let response = JSON.parse((await messages.next()).value);
+      while (response.tag === 'Guest') {
+        let output;
+        try {
+          if (!executeGuest) throw new Error('Guest workspace is unavailable');
+          output = { Right: await executeGuest(response.contents, active) };
+        } catch { output = { Left: 'Guest workspace command failed or exceeded its output limit' }; }
+        process.stdout.write(JSON.stringify({ tag: 'GuestResult', contents: output }) + '\n');
+        response = JSON.parse((await messages.next()).value);
+      }
       if (typeof response.Left !== 'string' && !Object.hasOwn(response, 'Right')) throw new Error('Invalid query response');
       if (['Call', 'Usage', 'Allocation', 'Check', 'Phase'].includes(tag)) {
         if (Object.hasOwn(response, 'Left')) throw new Error('Receipt was rejected');
@@ -77,6 +87,8 @@ try {
     modelRuntime, guestImage, expectedImageBuildId, cacheDir, preparedCheckout, usageDir: outboxRoot, artifactDir, attemptId, skillPaths: process.argv.slice(2), optionsTool: (invocation) => exchange('Tool', invocation), validateDraft: (draft) => exchange('Validate', draft), signal,
     admitTest: (artifact) => exchange('Admit', artifact),
     proposeCandidate: (candidate) => exchange('Propose', candidate),
+    bindGuest: (execute) => { executeGuest = execute; },
+    capturePatch: (active) => exchange('CapturePatch', [], active),
     workspaceCache: process.env.IMPACT_REVIEW_PREPARE_SCRIPT ? {
       cacheDir: process.env.IMPACT_REVIEW_CACHE_DIR, script: fs.readFileSync(process.env.IMPACT_REVIEW_PREPARE_SCRIPT, 'utf8'),
       dependencyArchive: process.env.IMPACT_REVIEW_DEPENDENCY_ARCHIVE && resolve(process.env.IMPACT_REVIEW_DEPENDENCY_ARCHIVE),

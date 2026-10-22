@@ -19,7 +19,7 @@ const syncDirectory = async (path) => {
 export function fixIssue(input, options) {
   const issue = fixRequest.parse(input);
   const attemptId = z.uuid().parse(options.attemptId);
-  if (!options.artifactDir || typeof options.admitTest !== 'function' || typeof options.recordStep !== 'function' || typeof options.validateFix !== 'function' || typeof options.onEvent !== 'function') throw new Error('Issue fixes require private artifacts, host admission, phase/result acknowledgements, and metering');
+  if (!options.artifactDir || typeof options.bindGuest !== 'function' || typeof options.capturePatch !== 'function' || typeof options.admitTest !== 'function' || typeof options.recordStep !== 'function' || typeof options.validateFix !== 'function' || typeof options.onEvent !== 'function') throw new Error('Issue fixes require private artifacts, host admission, phase/result acknowledgements, and metering');
   return runRepositoryAgent({ ...issue, head: issue.base }, {
     ...options,
     async createWorkflow({ vm, cwd, request, root, artifactDir, executeRegression, signal }) {
@@ -42,21 +42,34 @@ export function fixIssue(input, options) {
       };
       await lockWorkspace(vm, cwd, signal);
       let reproduction, candidate, verified;
+      options.bindGuest(async ({ arguments: command, maxBytes }, toolSignal) => {
+        const active = operationSignal(toolSignal);
+        try {
+          active.throwIfAborted();
+          const execution = vm.exec(agentCommand(command), { cwd, signal: active, stdout: 'pipe', stderr: 'pipe' });
+          void execution.catch(() => {});
+          const chunks = [];
+          let length = 0;
+          for await (const chunk of execution.output()) {
+            length += chunk.data.length;
+            if (length > maxBytes) { await vm.close(); throw new Error('Guest output limit exceeded'); }
+            chunks.push(chunk.data);
+          }
+          active.throwIfAborted();
+          if (!(await execution).ok) throw new Error('Guest workspace command failed');
+          return Buffer.concat(chunks).toString('utf8');
+        } catch (error) {
+          if (active.aborted) await vm.close();
+          throw error;
+        }
+      });
       const capturePatch = async (toolSignal) => {
         const active = operationSignal(toolSignal);
         active.throwIfAborted();
-        await checked(agentCommand(['/usr/bin/git', 'add', '-A']), active);
-        const execution = vm.exec(agentCommand(['/usr/bin/git', 'diff', '--cached', '--binary', '--no-ext-diff', '--no-textconv', '--no-color', '--no-relative', '--src-prefix=a/', '--dst-prefix=b/', request.base, '--']), { cwd, signal: active, stdout: 'pipe', stderr: 'pipe' });
-        void execution.catch(() => {});
-        const chunks = [];
-        let length = 0;
-        for await (const chunk of execution.output()) {
-          length += chunk.data.length;
-          if (length > 1024 * 1024) { await vm.close(); throw new Error('Candidate patch exceeds its 1 MiB limit'); }
-          chunks.push(chunk.data);
-        }
-        if (!(await execution).ok) throw new Error('Candidate patch could not be captured');
-        return Buffer.concat(chunks).toString('utf8');
+        const captured = await options.capturePatch(active);
+        active.throwIfAborted();
+        if (Object.hasOwn(captured, 'Left')) throw new Error(captured.Left);
+        return captured.Right;
       };
       const persist = async (parent, id, files) => {
         const collection = join(artifactDir, parent);

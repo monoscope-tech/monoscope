@@ -28,9 +28,14 @@ import UnliftIO.Timeout qualified as Timeout
 
 
 -- JSON-lines protocol: queries, usage, execution receipts, validation, and result.
-data Message = Checkout () | Tool Policy.Invocation | Query TelemetryQuery | Knowledge KnowledgeRequest | Admit TestArtifact | Propose Native.CandidatePatch | Validate AE.Value | Result AE.Value
+data Message = Checkout () | Tool Policy.Invocation | Query TelemetryQuery | Knowledge KnowledgeRequest | Admit TestArtifact | Propose Native.CandidatePatch | CapturePatch () | GuestResult (Either Text Text) | Validate AE.Value | Result AE.Value
   deriving stock (Generic)
   deriving anyclass (AE.FromJSON)
+
+
+data GuestCommand = GuestCommand {arguments :: NonEmpty Text, maxBytes :: Word32}
+  deriving stock (Generic)
+  deriving anyclass (AE.ToJSON)
 
 
 -- Only the artifact interpreter can construct completion proof.
@@ -218,6 +223,15 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
                     writeMessage value = LBS.hPut (getStdin process) (AE.encode value <> "\n") >> hFlush (getStdin process)
                     parseMessage :: AE.Value -> AET.Parser (Either Outbox.Receipt Message)
                     parseMessage value = (Left <$> AE.parseJSON value) <|> (Right <$> AE.parseJSON value)
+                    capturePatch base = runExceptT do
+                      let execute arguments = ExceptT do
+                            writeMessage $ AE.object ["tag" AE..= ("Guest" :: Text), "contents" AE..= GuestCommand arguments 1048576]
+                            response <- (AE.eitherDecodeStrict >=> AET.parseEither parseMessage) <$> BS.hGetLine (getStdout process)
+                            pure $ case response of
+                              Right (Right (GuestResult output)) -> output
+                              _ -> Left "Guest returned an invalid workspace response"
+                      void $ execute $ "/usr/bin/git" :| ["add", "-A"]
+                      execute $ "/usr/bin/git" :| ["diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv", "--no-color", "--no-relative", "--src-prefix=a/", "--dst-prefix=b/", base, "--"]
                     receive supplied remaining submissions accepted = do
                       message <- (AE.eitherDecodeStrict >=> AET.parseEither parseMessage) <$> BS.hGetLine (getStdout process)
                       case message of
@@ -268,6 +282,12 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
                         Right (Right (Admit artifact))
                           | remaining > 0 -> callbacks.admit artifact >>= writeMessage >> receive supplied (remaining - 1) submissions Nothing
                           | otherwise -> pure $ Left "Review agent exceeded its query budget"
+                        Right (Right (CapturePatch ())) -> case (task, supplied) of
+                          (FixTask request, Just _) | remaining > 0 -> do
+                            capturePatch request.request.base >>= writeMessage
+                            receive supplied remaining submissions Nothing
+                          _ -> pure $ Left "Workspace capture requires a prepared issue-fix task and remaining budget"
+                        Right (Right (GuestResult _)) -> pure $ Left "Guest response has no pending workspace command"
                         Right (Right (Propose patch)) -> case (task, supplied, journal) of
                           (FixTask request, Just checkout, Just outbox) | remaining > 0 -> do
                             captured <- Native.captureCandidate (Outbox.outboxPath outbox <> "/checks") request checkout.directory patch

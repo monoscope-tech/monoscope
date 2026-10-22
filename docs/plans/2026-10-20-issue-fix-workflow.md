@@ -837,3 +837,9 @@ A rejected initial phase must stop before any provider request. Cancellation is 
 The original JavaScript case passed in 44.7665 seconds. The first complete Haskell path passed in 51.3246 seconds. After tightening phase and usage/allocation attribution checks, all twenty-three impact-review watcher examples passed without failures or pending cases in 255.0309 seconds. Fourmolu, HLint and whitespace checks pass. The remaining review Node test was not rerun because its runtime/import/native backend hashes are unchanged. No application JavaScript, dependency, CI definition, current watcher, service, hosted inference, customer job, PR update, attestation or deployment changed or ran in this follow-up.
 
 Only `review.test.mjs` remains (458 lines). General agent-VM orphan reconciliation, native benchmark provenance, automatic cache authorization/accounting/maintenance and deployment packaging remain unfinished.
+
+### Haskell-directed workspace commands (2026-10-22)
+
+The supervisor now sends bounded command requests to the Node process that owns the live VM. Haskell selects the Git commands that capture the candidate patch. Node executes them as UID 1000 in the existing clean environment and returns their output. The exchange remains sequential, so it cannot overtake a receipt acknowledgement. Cancellation closes the VM; command failure or an oversized response rejects capture.
+
+This is a transport step toward native workflow handlers. Reproduction admission, source unlocking, verification decisions and submission state still live in `fix.mjs`. The bridge initially adds JavaScript transport code; it does not complete the requested reduction. Next, move those decisions and durable phase publication to Haskell, then remove the corresponding Node handlers.
