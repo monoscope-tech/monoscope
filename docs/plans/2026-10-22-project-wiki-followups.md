@@ -45,6 +45,10 @@ Saved pages and revision history now render in Haskell with [commonmark](https:/
 
 The handler regression covers formatting, code blocks, tables, tasks, footnotes, script/form markup, encoded and mixed-case JavaScript links, rejected image URLs, and unchanged stored Markdown. The browser flow also saves a reference-style link through source and rich modes, verifies formatted read-back, and pins the exact Markdown bytes in the database. All 62 repository-context examples pass after these changes.
 
-The independent editor branch passed Linux build, 1,874 doctests, 1,225 integration examples and 1,028 frontend assertions. Two full E2E runs failed dashboard interactions and log paging; do not attest or merge on those results. An unchanged merged paths/tree run is checking the baseline. A captioned walkthrough will be refreshed for the native toolbar. The editor still needs its production image, pull request and attached walkthrough before merge. Keep the larger agent changes out of this PR.
+The editor is committed separately on `work/project-wiki-editor` at `fb6796c0d15e54eaeab85ed645d9c21c301a5621`. All eleven local check entries have passing attestations for its current inputs: Linux build, 1,874 doctests, 336 unit examples, 1,225 integration examples, 1,028 frontend assertions, all 176 E2E cases, HLint, Weeder, CLI and release checks. Two integration examples require unavailable credentials and remain pending.
+
+E2E passed with one worker and unchanged assertions/timeouts. Earlier concurrent runs failed dashboard timing/cleanup checks. The combined UI/integration run also raced while replacing `node_modules`; both checks passed when run separately. Do not claim those failed runs as passes.
+
+A refreshed 12-second captioned walkthrough at 1280×900 shows keyboard formatting, source mode, safe read-back and tree navigation. The native amd64 production image is still building on our server. Publish the editor PR with this video after `make ci-signoff` is green, then wait for required remote checks before merging. Keep the larger agent changes out of this PR.
 
 Merge each PR only after its review loop and required checks pass. Keep worker migration and billing/sandbox changes out of both wiki PRs.
