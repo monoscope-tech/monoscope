@@ -3,7 +3,7 @@ module Data.Effectful.CodeReview.Guest (Host (..), Workspace (..), Lease (..), S
 import Data.Aeson qualified as AE
 import Data.Base64.Types (extractBase64)
 import Data.ByteString qualified as BS
-import Data.ByteString.Base64 qualified as Base64
+import "base64" Data.ByteString.Base64 qualified as Base64
 import Data.Effectful.AgentWorkspace (Command (..), Copy (..), Execution (..), GuestCommand (..), Image (..), ImageId (..), Isolation (..), LogExit (..), LoggedCommand (..), Overflow (..), RegressionOptions (..), Sandbox (..), SandboxFailure (..), agentCommand, withSandbox)
 import Data.Effectful.AgentWorkspace qualified as AgentWorkspace
 import Data.Effectful.CodeReview.Types (AllocationOutcome (..), AllocationReceipt, Revision, TestArtifact (..), agentResources, hostAllocation, revisionText)

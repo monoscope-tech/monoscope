@@ -3,7 +3,7 @@ module Data.Effectful.CodeReview.Checkout (Source (..), Prepared (..), Envelope 
 import Data.Aeson qualified as AE
 import Data.Base64.Types (extractBase64)
 import Data.ByteString qualified as BS
-import Data.ByteString.Base64 qualified as Base64
+import "base64" Data.ByteString.Base64 qualified as Base64
 import Data.Char (isAlphaNum, isAscii)
 import Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), artifactCheckout, peerEvidence, sha256, withVerifiedArtifacts)
 import Data.Effectful.CodeReview.Policy qualified as Policy
@@ -96,7 +96,10 @@ withCheckout store source action = do
             command <- gitCommand directory ["cat-file", "blob", toString blob] []
             withProcessTerm (setStdout createPipe command) \process -> do
               bytes <- BS.hGet (getStdout process) 32768
-              when (BS.length bytes < 32768) $ waitExitCode process >>= \exit -> unless (exit == ExitSuccess) invalid
+              -- Leaving the bracket with git still writing races typed-process's waiter (ECHILD).
+              let drain = BS.hGetSome (getStdout process) 65536 >>= \chunk -> unless (BS.null chunk) drain
+              drain
+              waitExitCode process >>= \exit -> unless (exit == ExitSuccess) invalid
               pure $ decodeUtf8With lenientDecode bytes
       for_ files \(path, blob) -> when (any (\root -> (root <> "/") `T.isPrefixOf` path) roots && (".md" `T.isSuffixOf` path || takeFileName (toString path) `elem` [".gitignore", ".ignore", ".fdignore"])) do
         let destination = metadata </> toString path

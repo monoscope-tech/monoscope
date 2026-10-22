@@ -1,8 +1,10 @@
+{-# LANGUAGE PackageImports #-}
+
 module Data.Effectful.AgentWorkspace (Workspace, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, Operation (..), Prepared, Leased (..), Request, Baseline, leaseWorkspace, leasedBaseline, RegressionOptions (..), RegressionRequest, RegressionResult (..), RegressionReceipt, RegressionReport, RegressionError (..), verifyRegression, regressionLogs, regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest, RPC, withSandbox, Command (..), Sandbox (..), Isolation (..), GuestCommand (..), Copy (..), LoggedCommand (..), Overflow (..), Execution (..), LogExit (..), Image (..), ImageId (..), SandboxFailure (..), agentCommand, publish) where
 
 import Conduit (runConduit, (.|))
 import Control.Monad (foldM)
-import Crypto.Hash (Context, Digest, SHA256, hash, hashFinalize, hashInit, hashUpdate, hashlazy)
+import "cryptonite" Crypto.Hash (Context, Digest, SHA256, hash, hashFinalize, hashInit, hashUpdate, hashlazy)
 import Data.Aeson qualified as AE
 import Data.Aeson.Encoding qualified as Encoding
 import Data.ByteString qualified as BS

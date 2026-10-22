@@ -72,7 +72,7 @@ import Relude
 import Servant (ServerError (..), getResponse)
 import Servant.Server.Generic (genericServeTWithContext)
 import System.Config (AuthContext (..), EnvConfig (..))
-import System.Directory (canonicalizePath, copyFile, createDirectoryIfMissing, createFileLink, doesDirectoryExist, doesFileExist, listDirectory, removeFile, removePathForcibly, renameDirectory)
+import System.Directory (canonicalizePath, copyFile, createDirectoryIfMissing, createFileLink, doesDirectoryExist, doesFileExist, findExecutable, listDirectory, removeFile, removePathForcibly, renameDirectory)
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeDirectory, takeFileName, (</>))
@@ -1804,6 +1804,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
     tryAny (readFileBS $ marker <> ".process") >>= (`shouldSatisfy` isLeft)
 
   it "verifies native artifacts, renders media and publishes with native tools without a worker" \tr -> withSystemTempDirectory "native-artifacts" \temporary -> do
+    missing <- filterM (fmap isNothing . findExecutable) ["ffmpeg", "ffprobe", "dot"]
+    unless (null missing) $ pendingWith $ "Install the explanation renderer tools to run this check: " <> intercalate ", " missing
     directory <- canonicalizePath temporary
     let repository = directory </> "repository"
         store = Agent.ArtifactStore (directory </> "usage") (directory </> "cache")
@@ -3059,6 +3061,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
     requireMinio tr pendingWith $ withSystemTempDirectory "retained-fix-media" \mediaRoot -> do
       current <- runQueryEffect tr (Fixes.getRun testPid fid) >>= either (fail . show) (maybe (fail "Completed run missing") pure)
       artifacts <- maybe (fail "Verified comparison missing") pure $ Fixes.artifactRequest "https://github.com/impact-org/checkout.git" current completed
+      -- The publication package links back to the app, so its origin must be absolute regardless of the local .env.
+      let publicCtx = tr.trATCtx{config = tr.trATCtx.config{hostUrl = "https://monoscope.test"}}
       let storeCtx = tr.trATCtx{config = tr.trATCtx.config{impactReviewArtifactBucket = Just tr.trATCtx.config.s3Bucket, impactReviewUsageDir = Just mediaRoot, impactReviewAgent = Nothing, impactReviewSkills = []}}
       prepared <- runEff $ runExceptT do
         verified <- ExceptT $ artifactProofFixture (Right ()) artifacts
@@ -3099,9 +3103,9 @@ spec = around withTestResources $ describe "Production impact reviews" do
                 pure received
             app mode =
               genericServeTWithContext
-                (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider . withMedia mode)
-                (Routes.server tr.trLogger tr.trATCtx tr.trTracerProvider (\_ _ -> pure $ Left "unused") (\_ _ -> pure $ Left "unused"))
-                (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
+                (effToServantHandlerTest tr.trTestClock tr.trUUIDRef publicCtx tr.trLogger tr.trTracerProvider . withMedia mode)
+                (Routes.server tr.trLogger publicCtx tr.trTracerProvider (\_ _ -> pure $ Left "unused") (\_ _ -> pure $ Left "unused"))
+                (Routes.genAuthServerContext tr.trLogger publicCtx)
             path = "/p/" <> testPid.toText <> "/issue-fixes/" <> fid.toText
             authorization = ("Authorization", "Bearer " <> UUID.toASCIIBytes (getResponse tr.trSessAndHeader).persistentSession.id.getPersistentSessionId)
             fetch mode method url headers = WT.runSession (WT.srequest $ WT.SRequest (WT.setPath Wai.defaultRequest{Wai.requestMethod = method, Wai.requestHeaders = headers} $ encodeUtf8 url) "") (app mode)

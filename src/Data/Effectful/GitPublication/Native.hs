@@ -6,7 +6,7 @@ import Control.Monad.Trans.Except (throwE)
 import Data.Aeson qualified as AE
 import Data.Base64.Types (extractBase64)
 import Data.ByteString qualified as BS
-import Data.ByteString.Base64 qualified as Base64
+import "base64" Data.ByteString.Base64 qualified as Base64
 import Data.ByteString.Lazy qualified as LBS
 import Data.Char (isAlphaNum, isAscii, isHexDigit)
 import Data.Conduit.Combinators qualified as CC
