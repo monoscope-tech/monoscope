@@ -25,6 +25,7 @@ import Data.Effectful.CodeReview qualified as Agent
 import Data.Effectful.CodeReview.Checkout qualified as Checkout
 import Data.Effectful.CodeReview.Explanation qualified as Media
 import Data.Effectful.CodeReview.Guest qualified as Guest
+import Data.Effectful.CodeReview.Policy qualified as Policy
 import Data.Effectful.GitPublication qualified as Publication
 import Data.Effectful.LLM qualified as LLM
 import Data.Effectful.Wreq qualified as HTTP
@@ -667,7 +668,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
           pure $ fromMaybe (SdkText "Review submitted.") $ viaNonEmpty head $ drop (length results) choices
     withSdkModel directory "fixture" next \models requests -> do
       outcome <- Checkout.withCheckout store (Checkout.Repository source) \prepared _ -> tryAny do
-        writeFileLBS checkoutFile $ AE.encode prepared
+        writeFileLBS checkoutFile $ AE.encode prepared{Checkout.policy = Policy.policy Policy.Calibration (Fixes.revisionText prepared.base) (Fixes.revisionText prepared.head) prepared.rootInstructions}
         let run mode name extra = do
               let output = outputDir </> name
                   config = [("RB_NWO", "fixture/retry"), ("RB_PR_NUMBER", "17"), ("RB_BASE", toString base), ("RB_HEAD", toString headRevision), ("RB_REPO", repository), ("RB_OUT", output), ("RB_PR_JSON", taskFile), ("RB_CONFIG_PROJECT_ID", toString testPid.toText), ("RB_CONFIG_PROVIDER", "fixture"), ("RB_CONFIG_MODEL", "fixture"), ("RB_CONFIG_EFFORT", "off"), ("RB_CONFIG_MODE", mode), ("IMPACT_REVIEW_GUEST_IMAGE", profile), ("IMPACT_REVIEW_CHECKOUT", checkoutFile), ("IMPACT_REVIEW_MODELS", models), ("IMPACT_REVIEW_CACHE_DIR", store.cacheDir), ("IMPACT_REVIEW_ARTIFACT_DIR", artifacts), ("IMPACT_REVIEW_NATIVE_CLI", cli)]
@@ -700,11 +701,11 @@ spec = around withTestResources $ describe "Production impact reviews" do
         writeIORef
           plan
           [ SdkTool "bash" $ AE.object ["command" AE..= ("set -eu; test ! -e golden-private.txt; test ! -w runtime.sh; test \"$(cat .prepared-proof)\" = dependencies-ready; git show " <> base <> ":runtime.sh; cat runtime.sh")]
-          , SdkTool "submit_review" $ draft "runtime.sh" 200
-          , SdkTool "submit_review" $ draft "runtime.sh" 1
+          , SdkTool "submit_findings" $ draft "runtime.sh" 200
+          , SdkTool "submit_findings" $ draft "runtime.sh" 1
           , check "The runtime loses its caller token"
           , check "retry token lost"
-          , SdkTool "submit_review" $ draft "runtime.sh" 1
+          , SdkTool "submit_findings" $ draft "runtime.sh" 1
           ]
         callsBefore <- length <$> requests
         metadata <- success "checkout-harness" "harness.json" [("IMPACT_REVIEW_PREPARE_SCRIPT", scriptFile)]
@@ -747,6 +748,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
         length <$> requests `shouldReturn` count
         observed <- jsonText <$> requests
         observed `shouldNotSatisfy` T.isInfixOf "Private reference must"
+        -- Both modes review against the host's Calibration criteria and tool contracts.
+        for_ ["Report at most ten distinct findings with repository-relative file", "Submit at most ten distinct introduced or worsened bugs"] \text -> observed `shouldSatisfy` T.isInfixOf text
       either (fail . toString) (either throwIO pure) outcome
 
   it "explores pinned SDK checkouts with skills, project memory, bounded evidence and isolated cancellation" \_tr -> CLIBinary.withCliBin \cli -> withSystemTempDirectory "native-sdk-exploration" \temporary -> do

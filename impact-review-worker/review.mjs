@@ -18,11 +18,6 @@ export { agentCommand, guestTmpfs } from './workspace.mjs';
 
 const exec = promisify(execFile);
 const sha = z.string().regex(/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/);
-export const reviewGrounding = 'Ground external API compatibility claims in the specified library/runtime version and its actual signature or implementation. For claims about changed incidental behavior, establish user impact through a concrete caller or documented contract. Do not turn an unverified contract assumption into a finding.';
-export const regressionParameters = {
-  script: Type.String({ minLength: 1, maxLength: 65536, description: 'Bash command exercising the actual repository code. A failed regression assertion must exit nonzero and emit failureMessage; merely catching and printing an error is not an assertion. Keep setup diagnostics on stdout/stderr, or print redirected logs when setup fails: verifier VMs are discarded after execution. Do not fabricate a failure or replace the implementation under test.' }),
-  failureMessage: Type.String({ minLength: 1, maxLength: 200, description: 'Exact case-sensitive literal substring emitted by the failing assertion on stdout or stderr, not a prose summary or the expected successful output. Inspect the test or failure log first. Never use a setup/dependency error as the assertion.' }),
-};
 export const reviewRequest = z.object({
   projectId: z.uuid(), repository: z.string().min(1), base: sha, head: sha,
   gitToken: z.string(), prompt: z.string(), model: z.string().min(1),
@@ -102,8 +97,11 @@ export async function runRepositoryAgent(input, { modelRuntime, guestImage, expe
     const gitEnv = { PATH: process.env.PATH, GIT_ALLOW_PROTOCOL: 'file', GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null',
       GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'core.hooksPath', GIT_CONFIG_VALUE_0: '/dev/null', GIT_CONFIG_KEY_1: 'core.fsmonitor', GIT_CONFIG_VALUE_1: 'false' };
     const git = (args, toolSignal) => exec('git', args, { cwd: checkout, env: gitEnv, signal: AbortSignal.any([signal, toolSignal].filter(Boolean)), timeout: 60000 });
-    if (!isAbsolute(checkout) || !isAbsolute(preparedCheckout.repositorySkills ?? '') || typeof preparedCheckout.rootInstructions !== 'string' || request.gitToken || preparedCheckout.projectId !== request.projectId || preparedCheckout.repository !== request.repository || preparedCheckout.base !== request.base || preparedCheckout.head !== request.head) throw new Error('Host checkout identity mismatch');
-    if ((await git(['rev-parse', 'HEAD'])).stdout.trim() !== request.head) throw new Error('Host checkout revision mismatch');
+    // Research callers supply their own checkout metadata; the production host vouches for its own.
+    if (!host) {
+      if (!isAbsolute(checkout) || !isAbsolute(preparedCheckout.repositorySkills ?? '') || typeof preparedCheckout.rootInstructions !== 'string' || request.gitToken || preparedCheckout.projectId !== request.projectId || preparedCheckout.repository !== request.repository || preparedCheckout.base !== request.base || preparedCheckout.head !== request.head) throw new Error('Host checkout identity mismatch');
+      if ((await git(['rev-parse', 'HEAD'])).stdout.trim() !== request.head) throw new Error('Host checkout revision mismatch');
+    }
     onEvent({ type: 'checkout_prepared', cacheStatus: preparedCheckout.cacheStatus, durationMs: preparedCheckout.durationMs });
     if (!host) {
       await mkdir(skillsDir);

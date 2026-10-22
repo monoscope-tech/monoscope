@@ -2,7 +2,7 @@
 
 Monoscope runs Pi on the host and repository tools inside a local Gondolin microVM. Model APIs may be hosted; checkouts, sandboxes, evidence and orchestration run on our infrastructure.
 
-The pinned libraries are `@earendil-works/pi-coding-agent` 1.4.0 and `@earendil-works/gondolin` 0.13.0. This directory still contains workflow policy being moved to Haskell. The [ownership plan](../docs/plans/2026-09-30-pr-impact-review.md#haskell-ownership-revised-implementation-direction) records the target and remaining work.
+The pinned libraries are `@earendil-works/pi-coding-agent` 1.4.0 and `@earendil-works/gondolin` 0.13.0. Haskell owns workflow policy and every production agent VM; this directory keeps the Pi session, the Gondolin SDK bridge and research entry points. The [ownership plan](../docs/plans/2026-09-30-pr-impact-review.md#haskell-ownership-revised-implementation-direction) records the target and remaining work.
 
 ## Setup
 
@@ -17,11 +17,11 @@ Build the native CLI with `make cli-build`. Set `IMPACT_REVIEW_NATIVE_CLI` if `m
 
 ## Runtime boundary
 
-`cli.mjs` is a child of the Haskell CodeReview interpreter. Set `IMPACT_REVIEW_AGENT` to its absolute path and select an immutable guest image with `IMPACT_REVIEW_GUEST_IMAGE`. Haskell supplies role, prompts, tool schemas, pinned revisions, checkout metadata, private receipt paths and callbacks. Telemetry/wiki tools pass through the existing protocol and are authorized by Haskell. Candidate Git commits, bundles and metadata are created natively. The child cannot clone or fetch application source as a fallback.
+`cli.mjs` is a child of the Haskell CodeReview interpreter; set `IMPACT_REVIEW_AGENT` to its absolute path. The server owns every agent VM. It resolves `IMPACT_REVIEW_GUEST_IMAGE`, leases a prepared checkpoint when `IMPACT_REVIEW_PREPARE_SCRIPT` (and optionally `IMPACT_REVIEW_DEPENDENCY_ARCHIVE`) is configured, and creates or resumes the VM through `sandbox.mjs`. The server process therefore needs the hypervisor and any `GONDOLIN_*` settings, such as `GONDOLIN_VMM=krun` on macOS.
 
-The VM has no network, private COW writes and read-only host mounts. Agent commands run as UID 1000 with a reset environment. Model credentials stay on the host. `sandbox.mjs` is the SDK command bridge used by native workspace operations.
+The child runs only Pi: the model session, metering and skill discovery. Pi's read/bash/edit/write calls reach Haskell as `Guest` operations and run as UID 1000 with a reset environment. Role tools (regressions, reproduction, candidate capture, verification, telemetry, wiki) are Haskell handlers. Haskell also supplies the role's prompt, tool schemas, built-in tools and submission envelope, and records phases, checks and VM allocation. The child cannot clone, fetch or start a VM.
 
-Admission and independent review are read-only. Fixing requires host-admitted reproduction before source edits. Haskell supplies the peer’s candidate identity and exact evidence-file manifest from verified artifacts. The common SDK runner copies those bytes into the read-only VM and submits its decision through host validation. Peer review does not reopen artifacts or clone a second mirror.
+The VM has no network, private COW writes and root-only host mounts; the agent works on guest-owned copies of the checkout and skills. Model credentials stay on the host. Admission and independent review are read-only. Fixing requires host-admitted reproduction before source edits.
 
 The provider wrapper waits for Haskell's durable Call acknowledgement before invoking `ModelRuntime.streamSimple`. Completed usage, including compaction responses, is correlated with that start. Keep this fail-closed boundary during migration: exceptions from Pi's `before_provider_request` hook are caught by Pi and do not by themselves prevent a request.
 
@@ -37,4 +37,4 @@ printf '%s\n' '--match "Production impact reviews" --seed 478291220' > ../.test-
 
 The suite uses real local VMs and a deterministic loopback provider. Guest/profile/MinIO prerequisites are described in the operations reference; pending cases are not successful validation.
 
-`evaluate.mjs` and `reviewbench.mjs` remain research entry points until their Haskell replacements are verified. Their recorded identities include native artifact-verifier source. Historical operational and evaluation details are in [the plan](../docs/plans/2026-09-30-pr-impact-review.md) and [workflow record](../docs/plans/2026-10-20-issue-fix-workflow.md).
+`evaluate.mjs` and `reviewbench.mjs` remain JS research entry points that start their own VM through `review.mjs` and `workspace.mjs`. They take review criteria and tool contracts from the host policy in their Haskell-prepared checkout metadata (the `Calibration` role for ReviewBench). Their recorded identities include native artifact-verifier and policy source. Historical operational and evaluation details are in [the plan](../docs/plans/2026-09-30-pr-impact-review.md) and [workflow record](../docs/plans/2026-10-20-issue-fix-workflow.md).
