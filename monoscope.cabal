@@ -284,6 +284,9 @@ extra-source-files:
     static/migrations/0249_legacy_plans_to_free.sql
     static/migrations/0249_project_memory_required_fields.sql
     static/migrations/0250_demo_project_plan.sql
+    static/migrations/0251_project_memory_paths.sql
+    static/migrations/0252_project_memory_page_identity.sql
+    static/migrations/0253_project_memory_legacy_writes.sql
     test/fixtures/fix-review-agent.mjs
     test/fixtures/github-app-test.pem
     test/fixtures/impact-review-agent.mjs

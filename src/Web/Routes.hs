@@ -42,6 +42,7 @@ import Models.Projects.ImpactReviews qualified as ImpactReviews
 import Models.Projects.IssueFixes qualified as IssueFixes
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as ProjectMembers
+import Models.Projects.ProjectMemory qualified as ProjectMemory
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.ContainerTypes (Scope)
 import Models.Telemetry.Schema qualified as Schema
@@ -539,6 +540,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , bringS3Post :: mode :- "p" :> ProjectId :> "byob_s3" :> ReqBody '[FormUrlEncoded] Projects.ProjectS3Bucket :> Post '[HTML] (RespHeaders Settings.StorageGet)
   , bringS3Remove :: mode :- "p" :> ProjectId :> "byob_s3" :> Delete '[HTML] (RespHeaders Settings.StorageGet)
   , gitSyncSettings :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> Get '[HTML] (RespHeaders (Html ()))
+  , projectWikiGet :: mode :- "p" :> ProjectId :> "wiki" :> CaptureAll "path" Text :> QueryParam "after" ProjectMemory.PagePath :> Get '[HTML] (RespHeaders (PageCtx PageCodeContext.WikiGet))
   , projectMemoryGet :: mode :- "p" :> ProjectId :> "memories" :> QueryParam "page" (UUIDId "memory_page") :> Get '[HTML] (RespHeaders (PageCtx PageCodeContext.WikiGet))
   , projectMemoryPost :: mode :- "p" :> ProjectId :> "memories" :> ReqBody '[FormUrlEncoded] PageCodeContext.MemoryForm :> Post '[HTML] (RespHeaders (PageCtx PageCodeContext.WikiGet))
   , repositoriesGet :: mode :- "p" :> ProjectId :> "repositories" :> QueryParam "tab" PageCodeContext.RepositoryTab :> QueryParam "sample" Text :> Get '[HTML] (RespHeaders (Html ()))
@@ -1031,6 +1033,7 @@ cookieProtectedServer =
     , bringS3Post = Settings.brings3PostH
     , bringS3Remove = Settings.brings3RemoveH
     , gitSyncSettings = \pid -> PageCodeContext.repositoriesGetH pid (Just PageCodeContext.Overview) Nothing
+    , projectWikiGet = PageCodeContext.wikiGetH
     , projectMemoryGet = PageCodeContext.memoryGetH
     , projectMemoryPost = PageCodeContext.memoryPostH
     , repositoriesGet = PageCodeContext.repositoriesGetH
