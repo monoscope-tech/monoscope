@@ -20,6 +20,7 @@ const components: Array<[string, () => Promise<unknown>]> = [
   ['[data-chart-widget], [data-widget]', () => import('./widgets')],
   ['log-list', () => import('./log-list')],
   ['live-tail', () => import('./live-tail')],
+  ['details[open] wiki-editor', () => import('./wiki-editor')],
   // Only the instances that play something on arrival: the anomaly/share pages carry
   // `initialSession`, and a ?session_replay= deep link auto-opens the log explorer's
   // floating player. The log explorer's own idle player is handled below.
@@ -72,6 +73,11 @@ const deferredComponents: Array<[string, () => Promise<unknown>]> = [
     await import('./yaml-editor');
   }],
 ];
+
+document.addEventListener('toggle', event => {
+  const details = event.target;
+  if (details instanceof HTMLDetailsElement && details.open && details.querySelector('wiki-editor')) void import('./wiki-editor');
+}, true);
 
 // Facets, saved queries and chart controls can act before the component upgrades.
 // Resolve the module and first render before invoking its public methods.

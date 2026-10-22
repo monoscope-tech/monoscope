@@ -265,6 +265,9 @@ extra-source-files:
     static/migrations/0249_legacy_plans_to_free.sql
     static/migrations/0249_project_memory_required_fields.sql
     static/migrations/0250_demo_project_plan.sql
+    static/migrations/0251_project_memory_paths.sql
+    static/migrations/0252_project_memory_page_identity.sql
+    static/migrations/0253_project_memory_legacy_writes.sql
     test/fixtures/github-app-test.pem
     test/fixtures/wiki-browser.mjs
     static/public/assets/web-components/dist/manifest.json
@@ -504,6 +507,8 @@ library
     , casing
     , clock
     , colourista
+    , commonmark >=0.2.6.1 && <0.3
+    , commonmark-extensions >=0.2.6 && <0.3
     , conduit
     , containers
     , cookie
@@ -585,6 +590,7 @@ library
     , openapi3
     , optparse-applicative
     , parallel
+    , parsec ==3.1.*
     , parser-combinators
     , pg-entity
     , pg-transact
@@ -648,6 +654,7 @@ library
     , wai-middleware-static
     , warp
     , wreq
+    , xss-sanitize >=0.3.7.2 && <0.4
     , xxhash
     , yaml
     , zlib
@@ -1222,6 +1229,8 @@ test-suite test-dev
     , casing
     , clock
     , colourista
+    , commonmark >=0.2.6.1 && <0.3
+    , commonmark-extensions >=0.2.6 && <0.3
     , conduit
     , containers
     , cookie
@@ -1303,6 +1312,7 @@ test-suite test-dev
     , openapi3
     , optparse-applicative
     , parallel
+    , parsec ==3.1.*
     , parser-combinators
     , pg-entity
     , pg-transact
@@ -1366,6 +1376,7 @@ test-suite test-dev
     , wai-middleware-static
     , warp
     , wreq
+    , xss-sanitize >=0.3.7.2 && <0.4
     , xxhash
     , yaml
     , zlib

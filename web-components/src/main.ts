@@ -8,14 +8,12 @@ import { copyParams, SCOPE_PARAMS, TIME_PARAMS } from './time-range-utils';
 
 const htmx4 = (window as any).htmx;
 
-// Navigation can match an issue's embedded list to the explorer's list by id.
-// Morphing the empty server element over Lit's light DOM deletes its part markers
-// and leaves the list unable to render. Use a fresh instance with the incoming
-// page's attributes, worker and visibility observer. Morph hooks in HTMX 4 are
-// extension callbacks, not DOM events.
+// Morphing server markup over widget-owned DOM invalidates Lit's part markers
+// and Milkdown's editor references. Create fresh instances for navigation.
+// Morph hooks in HTMX 4 are extension callbacks, not DOM events.
 htmx4.registerExtension('log-list-navigation', {
   htmx_before_morph_node(elt: Element, { newNode }: { newNode: Element }) {
-    if (elt.localName !== 'log-list') return;
+    if (elt.localName !== 'log-list' && elt.localName !== 'wiki-editor') return;
     const replacement = newNode.cloneNode(true);
     // HTMX still needs the old node to traverse siblings until the morph finishes.
     queueMicrotask(() => {
