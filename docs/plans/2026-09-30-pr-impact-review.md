@@ -2,7 +2,7 @@
 
 ## Current implementation checkpoint — 2026-10-22
 
-This work is local and has no feature pull request, merge or deployment. The installed agent harness uses Pi `1.4.0` and Gondolin `0.13.0`. The server's separate AI library remains the pinned `langchain-hs` `0.0.3.0` fork. These are installed versions, not a claim that they are the latest available releases.
+The larger agent implementation remains local and has no feature pull request or deployment. Shared table-widget PNG rendering merged in [PR #688](https://github.com/monoscope-tech/monoscope/pull/688) after all required CI checks passed, including the production image build. The independent project wiki is in [draft PR #689](https://github.com/monoscope-tech/monoscope/pull/689), awaiting its CI checks. The installed agent harness uses Pi `1.4.0` and Gondolin `0.13.0`. The server's separate AI library remains the pinned `langchain-hs` `0.0.3.0` fork. These are installed versions, not a claim that they are the latest available releases.
 
 | Area | Implemented locally | Still required |
 | --- | --- | --- |
@@ -30,9 +30,9 @@ Estimate recorded 2026-10-22: **3–5 focused engineering days** for the remaini
 
 Resuming RAM and running processes is separate: allow another **3–7 engineering days**, potentially longer if the sandbox backend must change. Deliver disk restoration first.
 
-Prepare a small first PR for shared widget PNG rendering, with its focused frontend checks. Keep the larger agent implementation on its checkpoint branch until its integration, packaging and required checks are ready. Run local sign-off before pushing. If a required check cannot run locally, record the unavailable service or tool in the PR and let CI run that check; never attest an unpassed check. Merge only after required checks pass.
+The first PR, shared widget PNG rendering, is merged. Keep the larger agent implementation on its checkpoint branch until its integration, packaging and required checks are ready. Run local sign-off before pushing. If a required check cannot run locally, record the unavailable service or tool in the PR and let CI run that check; never attest an unpassed check. Merge only after required checks pass.
 
-The next independent candidate is the project wiki: `ProjectMemory`, its existing append-only migrations, repository wiki UI/routes, and HTTP/browser tests. The model uses typed author IDs without importing the agent runtime or billing models. Its tests now live in `Pages.CodeContextSpec` and pass independently (`--match "Project wiki"`: two examples, no failures). Agent tool wiring remains in the larger branch; conversational/investigation-agent memory access still needs implementation. This split does not complete the all-agent memory requirement.
+The next independent PR is the project wiki (#689): `ProjectMemory`, its existing append-only migrations, repository wiki UI/routes, and HTTP/browser tests. The model uses typed author IDs without importing the agent runtime or billing models. Its tests now live in `Pages.CodeContextSpec` and pass independently (`--match "Project wiki"`: two examples, no failures). Agent tool wiring remains in the larger branch; conversational/investigation-agent memory access still needs implementation. This split does not complete the all-agent memory requirement.
 
 ## Haskell ownership: revised implementation direction
 
