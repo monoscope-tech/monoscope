@@ -331,6 +331,12 @@ CABAL_OPTS="--ghc-options=-O0 -j$CI_CORES +RTS -A64m -n2m -RTS"
 # 'fast'; adding the flag stops it.)
 CABAL_FLAGS='-f-devtest'
 
+prepare_browser() {
+  (cd e2e && npm ci --prefer-offline --no-audit && \
+    { [ -e /usr/local/share/monoscope-playwright-deps ] || npx playwright install-deps chromium; } && \
+    npx playwright install chromium)
+}
+
 run_body() { # <check>
   case "$1" in
     frontend)
@@ -371,9 +377,7 @@ run_body() { # <check>
     # 8081 against a throwaway database, so this only has to supply the binary and chromium.
     e2e)
       [ -n "${E2E_SERVER_BIN:-}" ] || cabal build monoscope-server -j $CABAL_FLAGS "$CABAL_OPTS"
-      (cd e2e && npm ci --prefer-offline --no-audit && \
-        { [ -e /usr/local/share/monoscope-playwright-deps ] || npx playwright install-deps chromium; } && \
-        npx playwright install chromium)
+      prepare_browser
       scripts/e2e.sh
       ;;
     integration-tests) run_integration ;;
@@ -395,6 +399,7 @@ run_integration() {
   case " ${CAPS:-} " in *" tf-real "*) ;; *) unset TIMEFUSION_PG_TEST_URL ;; esac
   export USE_EXTERNAL_DB=true LOG_LEVEL=${LOG_LEVEL:-warn}
   (cd web-components && npm ci --prefer-offline --no-audit)
+  prepare_browser
   make build-chart-cli
   [ -n "${CI_INTEGRATION_BIN:-}" ] || cabal build integration-tests -j $CABAL_FLAGS "$CABAL_OPTS"
   # Same flags as the build above: list-bin resolves against a plan, and a

@@ -3,7 +3,9 @@ module Pages.CodeContextSpec (spec) where
 import BackgroundJobs qualified
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
+import Data.Aeson.Types qualified as AET
 import Data.Base64.Types (extractBase64)
+import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as B64
 import Data.ByteString.Lazy qualified as LBS
 import Data.Cache qualified as Cache
@@ -28,12 +30,19 @@ import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ImpactReviews qualified as ImpactReviews
+import Models.Projects.ProjectMembers qualified as ProjectMembers
+import Models.Projects.ProjectMemory qualified as Memory
 import Models.Projects.Projects qualified as Projects
 import Models.Projects.RepositorySync qualified as RepositorySync
 import Network.HTTP.Client (HttpException (InvalidUrlException))
 import Network.HTTP.Client.Internal (Response (..), ResponseClose (..), createCookieJar, defaultRequest)
+import Network.HTTP.Types qualified as H
 import Network.HTTP.Types.Status (Status (..))
+import Network.HTTP.Types.URI (urlEncode)
 import Network.HTTP.Types.Version (http11)
+import Network.Wai qualified as Wai
+import Network.Wai.Handler.Warp qualified as Warp
+import Network.Wai.Test qualified as WT
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job qualified as Jobs
 import Pages.BodyWrapper (PageCtx (..))
@@ -47,12 +56,17 @@ import Pkg.Git qualified as Git
 import Pkg.TestUtils
 import Relude
 import Servant (getHeaders, getResponse)
+import Servant.Server.Generic (genericServeTWithContext)
 import System.Config (AuthContext (..), EnvConfig (..))
+import System.Directory (doesFileExist)
+import System.Environment (getEnvironment)
+import System.Process.Typed (proc, readProcessStdout_, setEnv)
 import System.Timeout (timeout)
 import System.Types (ATBackgroundCtx)
 import Test.Hspec
-import UnliftIO.Async (cancel, wait, waitCatch, withAsync)
+import UnliftIO.Async (cancel, concurrently, wait, waitCatch, withAsync)
 import UnliftIO.Exception (bracket, throwIO, try)
+import Web.Routes qualified as Routes
 
 
 render :: Lucid.Html () -> Text
@@ -206,6 +220,107 @@ spec = do
   snippetCacheSpec
   repoListCacheSpec
   around withTestResources do
+    describe "Project wiki" do
+      it "shares a project wiki with immutable revisions, conflict-safe edits and project permissions" \tr -> do
+        let user = (getResponse tr.trSessAndHeader :: Projects.Session).user.id
+            page = UUIDId $ UUID.fromWords 50 0 0 1 :: Memory.PageId
+            app =
+              genericServeTWithContext
+                (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
+                (Routes.server tr.trLogger tr.trATCtx tr.trTracerProvider (\_ _ -> pure $ Left "unused") (\_ _ -> pure $ Left "unused"))
+                (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
+            base pid = "/p/" <> pid.toText <> "/memories"
+            authorization = ("Authorization", "Bearer " <> UUID.toASCIIBytes (getResponse tr.trSessAndHeader).persistentSession.id.getPersistentSessionId)
+            request method path fields =
+              WT.runSession
+                ( WT.srequest
+                    $ WT.SRequest
+                      (WT.setPath Wai.defaultRequest{Wai.requestMethod = method, Wai.requestHeaders = [authorization, ("Content-Type", "application/x-www-form-urlencoded")]} $ encodeUtf8 path)
+                      (fromStrict $ BS.intercalate "&" [key <> "=" <> urlEncode True (encodeUtf8 value) | (key, value) <- fields])
+                )
+                app
+            save pid expected title body = request H.methodPost (base pid) [("pageId", page.toText), ("version", show @Text expected), ("title", title), ("body", body)]
+            html = decodeUtf8 @Text . (.simpleBody)
+        created <- save testPid (0 :: Word32) "Retry behavior" "Keep retry tokens. <script>alert('wiki')</script>"
+        H.statusCode created.simpleStatus `shouldBe` 200
+        html created `shouldSatisfy` T.isInfixOf "Keep retry tokens."
+        html created `shouldNotSatisfy` T.isInfixOf "<script>alert('wiki')</script>"
+        firstHistory <- runQueryEffect tr $ Memory.pageHistory testPid page
+        map (.version) firstHistory `shouldBe` [1]
+        map (.author) firstHistory `shouldBe` [Memory.Member user]
+        (firstEdit, secondEdit) <- concurrently (save testPid 1 "Retry behavior" "First concurrent edit") (save testPid 1 "Retry behavior" "Second concurrent edit")
+        length (filter (T.isInfixOf "This page changed" . html) [firstEdit, secondEdit]) `shouldBe` 1
+        history <- runQueryEffect tr $ Memory.pageHistory testPid page
+        map (.version) history `shouldBe` [2, 1]
+        map (.document) (drop 1 history) `shouldBe` map (.document) firstHistory
+        index <- request H.methodGet (base testPid) []
+        html index `shouldSatisfy` T.isInfixOf "Retry behavior"
+        viewed <- request H.methodGet (base testPid <> "?page=" <> page.toText) []
+        html viewed `shouldSatisfy` T.isInfixOf "Revision history"
+        html viewed `shouldSatisfy` T.isInfixOf "Keep retry tokens. &lt;script&gt;"
+        (_, typedWiki) <- testServant tr $ PageCodeContext.memoryGetH testPid $ Just page
+        typedWiki.content.form.version `shouldBe` 2
+        typedWiki.content.canEdit `shouldBe` True
+        stale <- save testPid 1 "Preserved draft" "Stale edit must not advance its expected revision"
+        html stale `shouldSatisfy` T.isInfixOf "Preserved draft"
+        html stale `shouldSatisfy` T.isInfixOf "name=\"version\" value=\"1\""
+        wikiTab <- request H.methodGet ("/p/" <> testPid.toText <> "/repositories?tab=wiki") []
+        H.statusCode wikiTab.simpleStatus `shouldBe` 200
+        html wikiTab `shouldSatisfy` T.isInfixOf "Retry behavior"
+        invalid <- save testPid 2 " " "Invalid title draft"
+        html invalid `shouldSatisfy` T.isInfixOf "Invalid title draft"
+        length <$> runQueryEffect tr (Memory.pageHistory testPid page) `shouldReturn` 2
+        for_ [(T.replicate 121 "x", "Oversized title"), ("Blank body", " "), ("Oversized body", T.replicate 16001 "x"), ("Invalid body", "bad\NULbody")] \(title, body) -> do
+          rejected <- save testPid 2 title body
+          H.statusCode rejected.simpleStatus `shouldBe` 200
+          html rejected `shouldSatisfy` T.isInfixOf "characters without null bytes"
+          length <$> runQueryEffect tr (Memory.pageHistory testPid page) `shouldReturn` 2
+        other <- createTestProject tr "Isolated memory project"
+        hidden <- request H.methodGet (base other <> "?page=" <> page.toText) []
+        H.statusCode hidden.simpleStatus `shouldBe` 404
+        runQueryEffect tr (Memory.pageHistory other page) `shouldReturn` []
+        void $ withResource tr.trPool \conn -> PG.execute conn "UPDATE projects.project_members SET permission = ? WHERE project_id = ? AND user_id = ?" (ProjectMembers.PView, testPid, user)
+        readOnly <- request H.methodGet (base testPid <> "?page=" <> page.toText) []
+        H.statusCode readOnly.simpleStatus `shouldBe` 200
+        html readOnly `shouldNotSatisfy` T.isInfixOf "Save page"
+        refused <- save testPid 2 "Retry behavior" "Viewer must not write"
+        H.statusCode refused.simpleStatus `shouldBe` 403
+        length <$> runQueryEffect tr (Memory.pageHistory testPid page) `shouldReturn` 2
+        anonymous <- WT.runSession (WT.request $ WT.setPath Wai.defaultRequest $ encodeUtf8 $ base testPid) app
+        H.statusCode anonymous.simpleStatus `shouldSatisfy` (`elem` [302, 401, 403, 404])
+        demo <- WT.runSession (WT.request $ WT.setPath Wai.defaultRequest $ encodeUtf8 $ "/p/" <> testPid.toText <> "/repositories") app
+        html demo `shouldNotSatisfy` T.isInfixOf "Project wiki"
+        demoWiki <- WT.runSession (WT.request $ WT.setPath Wai.defaultRequest $ encodeUtf8 $ base testPid) app
+        H.statusCode demoWiki.simpleStatus `shouldBe` 404
+        void $ withResource tr.trPool \conn -> do
+          void $ PG.execute conn "INSERT INTO projects.memory_revisions (project_id, page_id, version, document, author) SELECT project_id, md5(page_id::text || n::text)::uuid, 1, document, author FROM projects.memory_revisions CROSS JOIN generate_series(1, 100) n WHERE project_id = ? AND page_id = ? AND version = 1" (testPid, page)
+          PG.execute conn "INSERT INTO projects.memory_revisions (project_id, page_id, version, document, author) SELECT project_id, page_id, n, document, author FROM projects.memory_revisions CROSS JOIN generate_series(3, 101) n WHERE project_id = ? AND page_id = ? AND version = 1" (testPid, page)
+        capped <- request H.methodGet (base testPid <> "?page=" <> page.toText) []
+        html capped `shouldSatisfy` T.isInfixOf "Showing the 100 most recent pages"
+        html capped `shouldSatisfy` T.isInfixOf "Showing the 100 most recent revisions"
+        length <$> runQueryEffect tr (Memory.pageHistory testPid page) `shouldReturn` 100
+
+      it "wiki_saveAndNavigate_doesNotNestHtmxTargets" \tr -> do
+        available <- doesFileExist "e2e/node_modules/playwright/index.mjs"
+        unless available $ pendingWith "Install the repository e2e browser dependencies to run the wiki browser regression"
+        environment <- filter (\(key, _) -> key `elem` ["PATH", "HOME", "TMPDIR", "XDG_CACHE_HOME", "PLAYWRIGHT_BROWSERS_PATH"]) <$> getEnvironment
+        probe <- readProcessStdout_ $ setEnv environment $ proc "node" ["test/fixtures/wiki-browser.mjs", "--probe"]
+        browser <- either fail pure $ AE.eitherDecode @Bool probe
+        unless browser $ pendingWith "Install the repository Playwright browser to run the wiki browser regression"
+        let app =
+              genericServeTWithContext
+                (effToServantHandlerTest tr.trTestClock tr.trUUIDRef tr.trATCtx tr.trLogger tr.trTracerProvider)
+                (Routes.server tr.trLogger tr.trATCtx tr.trTracerProvider (\_ _ -> pure $ Left "unused") (\_ _ -> pure $ Left "unused"))
+                (Routes.genAuthServerContext tr.trLogger tr.trATCtx)
+            token = UUID.toString (getResponse tr.trSessAndHeader).persistentSession.id.getPersistentSessionId
+        Warp.testWithApplication (pure app) \port -> do
+          output <- readProcessStdout_ $ setEnv (("MONOSCOPE_TEST_BEARER", token) : environment) $ proc "node" ["test/fixtures/wiki-browser.mjs", "http://127.0.0.1:" <> show port <> "/p/" <> toString testPid.toText <> "/memories"]
+          value <- either fail pure $ AE.eitherDecode @AE.Value output
+          AET.parseEither (AE.withObject "Browser result" (AE..: "targets")) value `shouldBe` Right ([1, 1, 1] :: [Int])
+          AET.parseEither (AE.withObject "Browser result" (AE..: "fields")) value `shouldBe` Right (["", ""] :: [Text])
+          pages <- runQueryEffect tr $ Memory.latestPages testPid
+          map (Memory.memoryText . (.document.body)) pages `shouldBe` ["Keep caller retry tokens."]
+
     describe "Repository deployment evidence" do
       it "keeps deployment requests, reported statuses, failures, and result limits distinct" \tr -> do
         let cfg = tr.trATCtx.config

@@ -7,7 +7,7 @@
 -- which reaches @Pkg.Components.Widget@, which imports @LogItem@ — a cycle. The renderer in
 -- "Pages.Components" only ever builds the URL, so nothing on the rendering side has to know
 -- this module exists.
-module Pages.CodeContext (repositoryAnalyzePostH, repositoryResumePostH, repositoryFolderPostH, repositoryConflictPostH, FolderForm (..), ConflictForm (..), repositoryTokenGetH, repositoryTokenPostH, RepositoryTokenGet (..), RepositoryTokenForm (..), codeContextH, repositoriesGetH, serviceRepositoriesGetH, repositoryGetH, repositoryDeleteH, repositorySourceGetH, repositorySourcePostH, repositorySourceDeleteH, repositoryReviewsPostH, repositorySourceEnabledPostH, SourceContextForm (..), repositoryConnectGetH, repositoryConnectPostH, RepositoryConnectGet (..), RepositoryConnectForm (..), RepositoryGet (..), ReviewReadiness (..), RepositoryTab (..), codeMappingsGetH, codeMappingsEditorGetH, codeMappingsPostH, codeMappingsDeleteH, CodeMappingForm (..), impactReviewSettingsPostH, impactReviewRetryH) where
+module Pages.CodeContext (memoryGetH, memoryPostH, MemoryForm (..), WikiGet (..), repositoryAnalyzePostH, repositoryResumePostH, repositoryFolderPostH, repositoryConflictPostH, FolderForm (..), ConflictForm (..), repositoryTokenGetH, repositoryTokenPostH, RepositoryTokenGet (..), RepositoryTokenForm (..), codeContextH, repositoriesGetH, serviceRepositoriesGetH, repositoryGetH, repositoryDeleteH, repositorySourceGetH, repositorySourcePostH, repositorySourceDeleteH, repositoryReviewsPostH, repositorySourceEnabledPostH, SourceContextForm (..), repositoryConnectGetH, repositoryConnectPostH, RepositoryConnectGet (..), RepositoryConnectForm (..), RepositoryGet (..), ReviewReadiness (..), RepositoryTab (..), codeMappingsGetH, codeMappingsEditorGetH, codeMappingsPostH, codeMappingsDeleteH, CodeMappingForm (..), impactReviewSettingsPostH, impactReviewRetryH) where
 
 import BackgroundJobs.Types qualified as Jobs
 import Data.Aeson qualified as AE
@@ -15,6 +15,7 @@ import Data.Aeson.Types qualified as AET
 import Data.Cache qualified as Cache
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
+import Data.Effectful.UUID qualified as UUIDEff
 import Data.Effectful.Wreq qualified as W
 import Data.List (lookup)
 import Data.Pool (withResource)
@@ -33,6 +34,7 @@ import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ImpactReviews qualified as ImpactReviews
 import Models.Projects.ProjectMembers qualified as ProjectMembers
+import Models.Projects.ProjectMemory qualified as Memory
 import Models.Projects.Projects qualified as Projects
 import Models.Projects.RepositorySync qualified as RepositorySync
 import Network.HTTP.Types.URI (urlEncode)
@@ -48,6 +50,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, redirectCS)
 import Utils (LoadingSize (..), faSprite_, htmxIndicator_, nonEmptyT, renderMarkdown)
+import Web.Auth (demoGuestSessionId)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData (..))
 
@@ -126,35 +129,171 @@ codeMappingsGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (
 codeMappingsGetH pid = repositoriesGetH pid (Just Overview)
 
 
-data RepositoryTab = Overview | PullRequests
+data MemoryForm = MemoryForm {pageId :: Memory.PageId, version :: Word32, title :: Text, body :: Text}
+  deriving stock (Generic, Show)
+  deriving anyclass (FromForm)
+
+
+memoryGetH :: Projects.ProjectId -> Maybe Memory.PageId -> ATAuthCtx (RespHeaders (PageCtx WikiGet))
+memoryGetH pid page = memoryPageH pid page Nothing
+
+
+memoryPostH :: Projects.ProjectId -> MemoryForm -> ATAuthCtx (RespHeaders (PageCtx WikiGet))
+memoryPostH pid form = do
+  requireReviewWrite pid
+  session <- Projects.getSession
+  case Memory.Document <$> Memory.mkMemoryText form.title <*> Memory.mkMemoryText form.body of
+    Left message -> memoryPageH pid (Just form.pageId) $ Just (form, message)
+    Right document -> do
+      saved <- Memory.writePage pid form.pageId form.version document $ Memory.Member session.user.id
+      case saved of
+        Nothing -> memoryPageH pid (Just form.pageId) $ Just (form, "This page changed while you were editing. Your draft is below. Open the latest revision before saving again.")
+        Just _ -> do
+          addSuccessToast "Wiki page saved" Nothing
+          memoryGetH pid $ Just form.pageId
+
+
+data WikiGet = WikiGet
+  { projectId :: Projects.ProjectId
+  , canEdit :: Bool
+  , pages :: [Memory.Page]
+  , history :: [Memory.Page]
+  , form :: MemoryForm
+  , message :: Maybe Text
+  }
+  deriving stock (Generic, Show)
+
+
+memoryPageH :: Projects.ProjectId -> Maybe Memory.PageId -> Maybe (MemoryForm, Text) -> ATAuthCtx (RespHeaders (PageCtx WikiGet))
+memoryPageH pid selected draft = do
+  (session, _, bw) <- mkPageCtx pid
+  when (session.persistentSession.id == demoGuestSessionId) $ throwError err404
+  canEdit <- maybe False (>= ProjectMembers.PEdit) <$> ProjectMembers.getUserPermission pid session.user.id
+  pages <- Memory.latestPages pid
+  history <- maybe (pure []) (Memory.pageHistory pid) selected
+  let current = listToMaybe history
+  when (isJust selected && isNothing current && isNothing draft) $ throwError err404
+  fresh <- maybe (UUIDId <$> UUIDEff.genUUID) pure selected
+  let edit = maybe (MemoryForm fresh 0 "" "") (\page -> MemoryForm page.id (fromIntegral page.version) (Memory.memoryText page.document.title) (Memory.memoryText page.document.body)) current
+  addRespHeaders $ PageCtx bw{pageTitle = "Repositories"} $ WikiGet pid canEdit pages history (maybe edit fst draft) (snd <$> draft)
+
+
+instance ToHtml WikiGet where
+  toHtml WikiGet{projectId = pid, canEdit, pages, history, form, message} = toHtmlRaw $ repositoryLayout_ pid Wiki Nothing canEdit True do
+    let current = listToMaybe history
+        base = "/p/" <> pid.toText <> "/memories"
+        pageLink page = base <> "?page=" <> page.id.toText
+        authorName = \case Memory.Member _ -> "Project member"; Memory.Agent _ -> "Agent"
+    div_ [class_ "grid gap-6 md:grid-cols-[15rem_minmax(0,1fr)]"] do
+      nav_ [Aria.label_ "Wiki pages", class_ "space-y-3", term "preload" "mouseover"] do
+        when canEdit $ a_ (class_ "btn btn-sm btn-ghost" : repositoryNavAttrs base) "New page"
+        when (null pages) $ p_ [class_ "text-sm text-textWeak"] "No wiki pages yet. Record service context, investigation notes, or runbooks here."
+        when (length pages == Memory.pageLimit) $ p_ [class_ "text-sm text-textWeak"] $ toHtml @Text $ "Showing the " <> show Memory.pageLimit <> " most recent pages. Older pages remain available through their links."
+        ul_ [class_ "space-y-1"] $ for_ pages \page -> li_ do
+          a_ (class_ "block rounded-md px-2 py-2 text-sm text-textBrand hover:bg-fillWeak break-words" : repositoryNavAttrs (pageLink page)) $ toHtml $ Memory.memoryText page.document.title
+      section_ [class_ "min-w-0 space-y-5"] do
+        h2_ [class_ "text-lg font-semibold text-textStrong"] $ toHtml $ maybe "New wiki page" (Memory.memoryText . (.document.title)) current
+        p_ [class_ "text-sm text-textWeak"] "Shared project notes and runbooks. Check dated conclusions against current source and telemetry."
+        for_ current \page -> do
+          p_ [class_ "text-xs text-textWeak"] $ toHtml @Text $ authorName page.author <> " · Revision " <> show page.version <> " · " <> show page.updatedAt
+          div_ [class_ "whitespace-pre-wrap break-words text-sm text-textStrong"] $ toHtml $ Memory.memoryText page.document.body
+        when canEdit $ details_ ([class_ "border-t border-strokeWeak pt-4"] <> [open_ "" | isNothing current || isJust message]) do
+          summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] $ if isNothing current then "Write a page" else "Edit this page"
+          form_ [method_ "post", action_ base, hxPost_ base, hxTarget_ "#repository-content", hxSelect_ "#repository-content", hxSwap_ "outerHTML", class_ "mt-4 space-y-4"] do
+            input_ [type_ "hidden", name_ "pageId", value_ form.pageId.toText]
+            input_ [type_ "hidden", name_ "version", value_ $ show form.version]
+            for_ message $ p_ [id_ "memory-error", role_ "alert", class_ "text-sm text-textError"] . toHtml
+            label_ [term "for" "memory-title", class_ "block space-y-1 text-sm font-medium text-textStrong"] do
+              span_ "Title (required)"
+              input_ ([id_ "memory-title", name_ "title", required_ "", maxlength_ "120", value_ form.title, class_ "input input-bordered w-full"] <> [Aria.describedby_ "memory-error" | isJust message])
+            label_ [term "for" "memory-body", class_ "block space-y-1 text-sm font-medium text-textStrong"] do
+              span_ "Page content (required)"
+              textarea_ ([id_ "memory-body", name_ "body", required_ "", maxlength_ "16000", rows_ "12", class_ "textarea textarea-bordered w-full text-sm font-normal"] <> [Aria.describedby_ "memory-error" | isJust message]) $ toHtml form.body
+            button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save page"
+        unless (null history) $ details_ [class_ "border-t border-strokeWeak pt-4"] do
+          summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] "Revision history"
+          when (length history == Memory.pageLimit) $ p_ [class_ "mt-3 text-sm text-textWeak"] $ toHtml @Text $ "Showing the " <> show Memory.pageLimit <> " most recent revisions. Older revisions remain stored."
+          div_ [class_ "mt-3 divide-y divide-strokeWeak"] $ for_ history \page -> details_ [class_ "py-3"] do
+            summary_ [class_ "cursor-pointer text-sm text-textWeak"] $ toHtml @Text $ "Revision " <> show page.version <> " · " <> authorName page.author <> " · " <> show page.updatedAt
+            h3_ [class_ "mt-3 text-sm font-semibold text-textStrong"] $ toHtml $ Memory.memoryText page.document.title
+            div_ [class_ "mt-2 whitespace-pre-wrap break-words text-sm text-textStrong"] $ toHtml $ Memory.memoryText page.document.body
+
+
+  toHtmlRaw = toHtml
+
+
+repositoryLayout_ :: Projects.ProjectId -> RepositoryTab -> Maybe Text -> Bool -> Bool -> Html () -> Html ()
+repositoryLayout_ pid tab serviceM canEdit canReadWiki content =
+  let base = "/p/" <> pid.toText <> "/repositories"
+   in div_ [class_ "h-full w-full overflow-y-auto"] do
+        section_ [class_ "mx-auto max-w-6xl space-y-6 px-4 py-6 sm:px-8 sm:py-8"] do
+          header_ [class_ "flex flex-col items-start gap-4 sm:flex-row sm:justify-between"] do
+            div_ [class_ "min-w-0 w-full flex-1 space-y-1"] do
+              h1_ [class_ "text-xl sm:text-2xl font-semibold tracking-tight text-textStrong break-words"] $ toHtml $ maybe "Repositories" ("Repositories for " <>) serviceM
+              p_ [class_ "text-sm text-textWeak max-w-2xl"] $ toHtml @Text $ maybe "Manage source context, pull request reviews, and configuration sync for each repository." (const "Source mappings that apply to this service, including mappings for all services.") serviceM
+              when (isJust serviceM) $ a_ [href_ base, class_ "inline-flex items-center gap-1 py-1 text-sm text-textBrand hover:underline"] "All repositories"
+            when canEdit $ a_ [href_ (base <> "/connect"), class_ "btn btn-sm btn-ghost gap-2"] do
+              faSprite_ "plus" "regular" "h-3.5 w-3.5"
+              "Add repositories"
+          when (isNothing serviceM)
+            $ nav_ [id_ "repository-nav", Aria.label_ "Repository views", class_ "flex flex-wrap gap-1 border-b border-strokeWeak pb-2", term "preload" "mouseover"]
+            $ forM_ ([(Overview, "Repositories", ""), (PullRequests, "Pull requests", "?tab=reviews"), (Wiki, "Project wiki", "?tab=wiki")] :: [(RepositoryTab, Text, Text)]) \(value, label, query) ->
+              when (value /= Wiki || canReadWiki)
+                $ a_
+                  ( [class_ $ "rounded-lg px-3 py-2 text-sm font-medium transition-colors " <> bool "text-textWeak hover:bg-fillWeak hover:text-textStrong" "bg-fillBrand-weak text-textBrand" (tab == value)]
+                      <> repositoryNavAttrs (if value == Wiki then "/p/" <> pid.toText <> "/memories" else base <> query)
+                      <> [term "aria-current" "page" | tab == value]
+                  )
+                $ toHtml @Text label
+          section_ [id_ "repository-content", class_ "min-w-0"] content
+
+
+repositoryNavAttrs :: Text -> [Attribute]
+repositoryNavAttrs url =
+  [ href_ url
+  , hxGet_ url
+  , hxTarget_ "#repository-content"
+  , hxSelect_ "#repository-content"
+  , term "hx-select-oob" "#repository-nav:outerMorph"
+  , hxSwap_ "outerMorph"
+  , hxPushUrl_ "true"
+  , [__|on click set my.preloadState to 'DONE'|]
+  ]
+
+
+data RepositoryTab = Overview | PullRequests | Wiki
   deriving stock (Eq, Show)
 
 
 instance FromHttpApiData RepositoryTab where
-  parseUrlPiece value = maybeToRight "Choose repositories or reviews" $ lookup value [("overview", Overview), ("reviews", PullRequests), ("configuration", Overview)]
+  parseUrlPiece value = maybeToRight "Choose repositories, reviews or wiki" $ lookup value [("overview", Overview), ("reviews", PullRequests), ("wiki", Wiki), ("configuration", Overview)]
 
 
 repositoriesGetH :: Projects.ProjectId -> Maybe RepositoryTab -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
-repositoriesGetH pid tabM sampleM = repositoriesPageH pid (ProjectRepositories (fromMaybe Overview tabM) sampleM)
+repositoriesGetH pid tabM sampleM = case fromMaybe Overview tabM of
+  Overview -> repositoriesPageH pid $ OverviewPage sampleM Nothing
+  PullRequests -> repositoriesPageH pid ReviewsPage
+  Wiki -> fmap toHtml <$> memoryGetH pid Nothing
 
 
 serviceRepositoriesGetH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders (Html ()))
-serviceRepositoriesGetH pid service = repositoriesPageH pid (ServiceRepositories service)
+serviceRepositoriesGetH pid service = repositoriesPageH pid (OverviewPage Nothing $ Just service)
 
 
-data RepositoryView = ProjectRepositories RepositoryTab (Maybe Text) | ServiceRepositories Text
+data RepositoryView = OverviewPage (Maybe Text) (Maybe Text) | ReviewsPage
 
 
 repositoriesPageH :: Projects.ProjectId -> RepositoryView -> ATAuthCtx (RespHeaders (Html ()))
 repositoriesPageH pid selection = do
   (session, _, bw) <- mkPageCtx pid
   canEdit <- maybe False (>= ProjectMembers.PEdit) <$> ProjectMembers.getUserPermission pid session.user.id
-  let (tab, sampleM, serviceM) = case selection of
-        ProjectRepositories selected sample -> (selected, sample, Nothing)
-        ServiceRepositories service -> (Overview, Nothing, Just service)
+  let (tab, serviceM) = case selection of
+        OverviewPage _ service -> (Overview, service)
+        ReviewsPage -> (PullRequests, Nothing)
       base = "/p/" <> pid.toText <> "/repositories"
-  content <- case tab of
-    Overview -> do
+      canReadWiki = session.persistentSession.id /= demoGuestSessionId
+  content <- case selection of
+    OverviewPage sampleM _ -> do
       mappings <- CodeContext.getCodeMappings pid
       syncs <- GitSync.getGitSyncs pid
       settings <- ImpactReviews.repositorySettings pid
@@ -164,38 +303,11 @@ repositoriesPageH pid selection = do
       let applicable = filter (\m -> maybe True (\service -> isNothing m.service || m.service == Just service) serviceM) mappings
           visible = filter (\repository -> isNothing serviceM || any (mappingInRepository credentials repository) applicable) repositories
       pure $ overview_ canEdit serviceM sampleM base applicable syncs settings credentials visible [sid | HI.OneColumn sid <- conflicts]
-    PullRequests -> do
+    ReviewsPage -> do
       cfg <- (.config) <$> Effectful.Reader.Static.ask @AuthContext
       runs <- ImpactReviews.latestRuns pid
       pure $ reviewHistory_ canEdit cfg runs
-  addRespHeaders $ bodyWrapper bw{pageTitle = "Repositories"} $ div_ [class_ "h-full w-full overflow-y-auto"] do
-    section_ [class_ "mx-auto max-w-6xl space-y-6 px-4 py-6 sm:px-8 sm:py-8"] do
-      header_ [class_ "flex flex-col items-start gap-4 sm:flex-row sm:justify-between"] do
-        div_ [class_ "min-w-0 w-full flex-1 space-y-1"] do
-          h1_ [class_ "text-xl sm:text-2xl font-semibold tracking-tight text-textStrong break-words"] $ toHtml $ maybe "Repositories" ("Repositories for " <>) serviceM
-          p_ [class_ "text-sm text-textWeak max-w-2xl"] $ toHtml @Text $ maybe "Manage source context, pull request reviews, and configuration sync for each repository." (const "Source mappings that apply to this service, including mappings for all services.") serviceM
-          when (isJust serviceM) $ a_ [href_ base, class_ "inline-flex items-center gap-1 py-1 text-sm text-textBrand hover:underline"] "All repositories"
-        when canEdit $ a_ [href_ (base <> "/connect"), class_ "btn btn-sm btn-ghost gap-2"] do
-          faSprite_ "plus" "regular" "h-3.5 w-3.5"
-          "Add repositories"
-      when (isNothing serviceM)
-        $ nav_ [id_ "repository-nav", Aria.label_ "Repository views", class_ "flex flex-wrap gap-1 border-b border-strokeWeak pb-2", term "preload" "mouseover"]
-        $ forM_ ([(Overview, "Repositories", ""), (PullRequests, "Pull requests", "?tab=reviews")] :: [(RepositoryTab, Text, Text)]) \(value, label, query) ->
-          a_
-            ( [ href_ (base <> query)
-              , hxGet_ (base <> query)
-              , hxTarget_ "#repository-content"
-              , hxSelect_ "#repository-content"
-              , hxSwap_ "outerMorph"
-              , hxPushUrl_ "true"
-              , term "hx-select-oob" "#repository-nav:outerMorph"
-              , [__|on click set my.preloadState to 'DONE'|]
-              , class_ $ "rounded-lg px-3 py-2 text-sm font-medium transition-colors " <> bool "text-textWeak hover:bg-fillWeak hover:text-textStrong" "bg-fillBrand-weak text-textBrand" (tab == value)
-              ]
-                <> [term "aria-current" "page" | tab == value]
-            )
-            $ toHtml @Text label
-      section_ [id_ "repository-content", class_ "min-w-0"] content
+  addRespHeaders $ bodyWrapper bw{pageTitle = "Repositories"} $ repositoryLayout_ pid tab serviceM canEdit canReadWiki content
   where
     overview_ :: Bool -> Maybe Text -> Maybe Text -> Text -> [CodeContext.CodeMapping] -> [GitSync.GitHubSync] -> [ImpactReviews.ReviewSettings] -> [GitSync.GitHubCredential] -> [GitSync.Repository] -> [GitSync.GitHubSyncId] -> Html ()
     overview_ canEdit serviceM sampleM base mappings syncs settings credentials repositories conflicts = do
