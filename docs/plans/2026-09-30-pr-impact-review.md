@@ -2,7 +2,7 @@
 
 ## Current implementation checkpoint — 2026-10-22
 
-The larger agent implementation remains local and has no feature pull request or deployment. Shared table-widget PNG rendering merged in [PR #688](https://github.com/monoscope-tech/monoscope/pull/688) after all required CI checks passed, including the production image build. The independent project wiki is in [PR #689](https://github.com/monoscope-tech/monoscope/pull/689), ready for review with all checks green, including the production image. The installed agent harness uses Pi `1.4.0` and Gondolin `0.13.0`. The server's separate AI library remains the pinned `langchain-hs` `0.0.3.0` fork. These are installed versions, not a claim that they are the latest available releases.
+The larger agent implementation remains local and has no feature pull request or deployment. Shared table-widget PNG rendering merged in [PR #688](https://github.com/monoscope-tech/monoscope/pull/688) after all required CI checks passed, including the production image build. The independent project wiki merged in [PR #689](https://github.com/monoscope-tech/monoscope/pull/689) as `d8b3bf853ab39006967344bdab2b31972bf9948b`, with all checks green and a captioned walkthrough attached. The installed agent harness uses Pi `1.4.0` and Gondolin `0.13.0`. The server's separate AI library remains the pinned `langchain-hs` `0.0.3.0` fork. These are installed versions, not a claim that they are the latest available releases.
 
 | Area | Implemented locally | Still required |
 | --- | --- | --- |
@@ -29,6 +29,8 @@ Verification for this slice: the watcher passed **23 integration examples, zero 
 
 The remaining fix coordination and research commands are explicit follow-ups. The current slice preserves the frozen reproduce → fix → verify → independent-review flow and its metering while reducing JavaScript; it does not complete the whole migration or the production rollout.
 
+The peer-review adapter is also removed. Native verified-artifact capabilities now produce its candidate identity and evidence-file manifest; the common SDK runner handles read-only file placement and host-validated verdict transport. Binary log bytes remain unchanged. Fix coordination, admission VM setup and the two research CLIs still need migration.
+
 ### Remaining work and delivery estimate
 
 Estimate recorded 2026-10-22: **3–5 focused engineering days** for the remaining product work with disk-only restoration. Some tasks overlap; Linux sandbox behavior and accounting across crashes are the main uncertainties. This is an estimate, not a completion deadline.
@@ -42,7 +44,7 @@ Estimate recorded 2026-10-22: **3–5 focused engineering days** for the remaini
 
 Resuming RAM and running processes is separate: allow another **3–7 engineering days**, potentially longer if the sandbox backend must change. Deliver disk restoration first.
 
-The first PR, shared widget PNG rendering, is merged. Keep the larger agent implementation on its checkpoint branch until its integration, packaging and required checks are ready. Run local sign-off before pushing. If a required check cannot run locally, record the unavailable service or tool in the PR and let CI run that check; never attest an unpassed check. Merge only after required checks pass.
+The shared widget PNG PR and [wiki foundation PR #689](https://github.com/monoscope-tech/monoscope/pull/689) are merged. The next wiki changes are sequenced in [the paths/tree and rich-text plan](2026-10-22-project-wiki-followups.md). Keep the larger agent implementation on its checkpoint branch until its integration, packaging and required checks are ready. Run local sign-off before pushing. If a required check cannot run locally, record the unavailable service or tool in the PR and let CI run that check; never attest an unpassed check. Merge only after required checks pass.
 
 The next independent PR is the project wiki (#689): `ProjectMemory`, its existing append-only migrations, repository wiki UI/routes, and HTTP/browser tests. The model uses typed author IDs without importing the agent runtime or billing models. Its tests now live in `Pages.CodeContextSpec` and pass independently (`--match "Project wiki"`: two examples, no failures). Agent tool wiring remains in the larger branch; conversational/investigation-agent memory access still needs implementation. This split does not complete the all-agent memory requirement.
 
