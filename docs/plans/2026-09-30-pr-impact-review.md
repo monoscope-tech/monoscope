@@ -1,5 +1,21 @@
 # Production impact reviews: rollout and follow-up
 
+## Delivery estimate — 2026-10-22
+
+Estimate recorded 2026-10-22: **3–5 focused engineering days** for the remaining product work with disk-only restoration. Some tasks overlap; Linux sandbox behavior and accounting across crashes are the main uncertainties. This is an estimate, not a completion deadline.
+
+| Work | Estimate | Completion evidence |
+| --- | --- | --- |
+| Automatic sandbox maintenance | 1 day | Scheduled cleanup respects active leases, recovers orphaned resources and bounds local disk use. |
+| Preparation/storage accounting | 1–1.5 days | Immutable project/customer attribution covers preparation, storage and transfer; retries and missing receipts remain explicit. |
+| Existing chat-agent memory access | ½ day | Conversational and investigation agents read/write the wiki with current project permissions and recorded authorship. |
+| Production packaging and deployment verification | 1–2 days | Provisioned Linux worker runs the workflow, required checks pass, and deployment is verified through the PR process. |
+
+Resuming RAM and running processes is separate: allow another **3–7 engineering days**, potentially longer if the sandbox backend must change. Deliver disk restoration first.
+
+Prepare a small first PR for shared widget PNG rendering, with its focused frontend checks. Keep the larger agent implementation on its checkpoint branch until its integration, packaging and required checks are ready. Run local sign-off before pushing. If a required check cannot run locally, record the unavailable service or tool in the PR and let CI run that check; never attest an unpassed check. Merge only after required checks pass.
+
+
 ## Review contract
 
 - Every GitHub App repository added through code mappings is eligible by default,
