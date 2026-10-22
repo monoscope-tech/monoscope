@@ -1311,6 +1311,23 @@ spec = around withTestResources $ describe "Production impact reviews" do
     (_, weakened, _) <- run 5 "bash regression.sh" testPatch
     statuses weakened `shouldReturn` ["failed", "blocked"]
 
+  it "reports host maintenance budgets without deleting unknown cache data" \_ -> withSystemTempDirectory "maintenance-budget" \directory -> do
+    let config = directory </> "maintenance.json"
+        cache = directory </> "cache"
+        unknown = cache </> "operator-file"
+    writeFileLBS config $ AE.encode $ AE.object ["cacheDir" AE..= cache, "remote" AE..= (directory </> "missing-remote"), "maxBytes" AE..= (maxBound :: Word64)]
+    (initialized, _) <- CLI.runCLILifecycleLive ["workspace", "maintain", "--config", config]
+    initialized `shouldBe` ExitSuccess
+    doesDirectoryExist cache `shouldReturn` True
+    writeFileBS unknown "Retain this unknown file."
+    for_ [0, maxBound] \budget -> do
+      writeFileLBS config $ AE.encode $ AE.object ["cacheDir" AE..= cache, "remote" AE..= (directory </> "missing-remote"), "maxBytes" AE..= (budget :: Word64)]
+      (status, output) <- CLI.runCLILifecycleLive ["workspace", "maintain", "--config", config]
+      report <- either fail pure $ AE.eitherDecodeStrict @Workspace.MaintenanceReport $ encodeUtf8 output
+      Workspace.maintenanceBudgetMet report `shouldBe` (budget == maxBound)
+      status `shouldBe` if budget == maxBound then ExitSuccess else ExitFailure 1
+      readFileBS unknown `shouldReturn` "Retain this unknown file."
+
   it "reuses native Haskell build checkpoints without mutating relocated baselines" \tr -> do
     configuredProfile <- lookupEnv "IMPACT_REVIEW_TEST_PROFILE"
     let profile = fromMaybe "impact-review-worker/.guest-monoscope" configuredProfile
@@ -1560,7 +1577,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
             allocated `shouldSatisfy` (> 0)
             reclaimed <- prune (allocated - 1)
             fakeReport <- either fail pure $ AE.eitherDecode $ AE.encode reclaimed
-            faked <- runEff $ Workspace.runWorkspaceTest (\_ _ _ -> Left "Unexpected workspace") (\_ _ -> Left Workspace.RegressionUnavailable) (\_ _ -> Right fakeReport) $ Workspace.pruneWorkspaces (Workspace.PruneOptions "/missing-cache" "/missing-remote") "/missing-request"
+            faked <- runEff $ Workspace.runWorkspaceTest (\_ _ _ -> Left "Unexpected workspace") (\_ _ -> Left Workspace.RegressionUnavailable) (\_ _ -> Right fakeReport) (const $ Left "No maintenance fixture") $ Workspace.pruneWorkspaces (Workspace.PruneOptions "/missing-cache" "/missing-remote") "/missing-request"
             fmap AE.toJSON faked `shouldBe` Right reclaimed
             actions <- parse (field "entries") reclaimed :: IO [AE.Value]
             actions `shouldContain` [AE.object ["tag" AE..= ("Evicted" :: Text), "contents" AE..= firstKey]]
@@ -1579,6 +1596,38 @@ spec = around withTestResources $ describe "Production impact reviews" do
               record <- readFileBS (cache </> toString testPid.toText </> "prunes" </> name) >>= either fail pure . AE.eitherDecodeStrict @AE.Value
               parse (field "outcome" >=> field "tag") record `shouldReturn` ("PruneFinished" :: Text)
               parse (field "projectId") record `shouldReturn` testPid
+            let maintenanceConfig = directory </> "maintenance.json"
+                maintain budget = do
+                  writeFileLBS maintenanceConfig $ AE.encode $ AE.object ["cacheDir" AE..= cache, "remote" AE..= remote, "maxBytes" AE..= (budget :: Word64)]
+                  (maintenanceStatus, maintenanceOutput) <- CLI.runCLILifecycleLive ["workspace", "maintain", "--config", maintenanceConfig]
+                  report <- either fail pure $ AE.eitherDecodeStrict @Workspace.MaintenanceReport $ encodeUtf8 maintenanceOutput
+                  maintenanceStatus `shouldBe` if Workspace.maintenanceBudgetMet report then ExitSuccess else ExitFailure 1
+                  pure $ AE.toJSON report
+            void $ Storage.runMinio tr.trATCtx.s3HttpManager connection $ traverse_ (Minio.removeObject config.s3Bucket) [otherPrefix <> "/" <> otherHash <> ".qcow2", otherPrefix <> "/" <> otherHash <> ".json", otherPrefix <> "/manifest.json"]
+            pinned <- runEff $ Workspace.runWorkspaceReal $ Workspace.withWorkspace options request $ \lease -> liftIO do
+              isJust lease `shouldBe` True
+              report <- maintain 0
+              parse (field "afterBytes") report >>= (\bytes -> (bytes :: Word64) `shouldSatisfy` (> 0))
+              doesFileExist checkpoint `shouldReturn` True
+              doesFileExist otherPath `shouldReturn` False
+            pinned `shouldBe` Right ()
+            writeFileBS script "exec make prepared-app\n# second cache identity\n"
+            (automaticRestore, _) <- transfer "restore" cache
+            automaticRestore `shouldBe` ExitSuccess
+            sha <$> readFileBS otherPath `shouldReturn` otherHash
+            writeFileBS script "exec make prepared-app"
+            writeFileLBS remote $ AE.encode $ replace "maxBytes" (AE.toJSON (1 :: Word64)) remoteConfiguration
+            void $ maintain 0
+            doesFileExist checkpoint `shouldReturn` True
+            doesFileExist otherPath `shouldReturn` True
+            writeFileLBS remote $ AE.encode remoteConfiguration
+            roomy <- maintain maxBound
+            parse (field "failures") roomy `shouldReturn` ([] :: [AE.Value])
+            fakeMaintenance <- either fail pure $ AE.eitherDecode $ AE.encode roomy
+            simulated <- runEff $ Workspace.runWorkspaceTest (\_ _ _ -> Left "Unexpected workspace") (\_ _ -> Left Workspace.RegressionUnavailable) (\_ _ -> Left "Unexpected prune") (const $ Right fakeMaintenance) $ Workspace.maintainWorkspaces "/missing-maintenance"
+            fmap AE.toJSON simulated `shouldBe` Right roomy
+            readFileBS unrelated `shouldReturn` "operator content"
+            readFileBS (foreignProject </> "keep") `shouldReturn` "foreign project"
           )
           `finally` removeObjects
       retainedManifest <- readFileBS manifestPath

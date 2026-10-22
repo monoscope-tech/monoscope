@@ -132,6 +132,7 @@ data EnvConfig = EnvConfig
   , openaiModel :: Text
   , impactReviewUsageDir :: Maybe FilePath
   , impactReviewCacheDir :: Maybe FilePath
+  , impactReviewWorkspaceMaintenance :: Maybe FilePath
   , impactReviewAgent :: Maybe FilePath
   , impactReviewSkills :: [Text]
   , impactReviewProvider :: Text

@@ -66,6 +66,7 @@ data Command
   | StatusCmd StatusOpts
   | OpenCmd OpenOpts
   | WorkspaceCmd FilePath Workspace.Options Workspace.Operation
+  | WorkspaceMaintainCmd FilePath
   | WorkspacePruneCmd FilePath Workspace.PruneOptions
   | WorkspaceLeaseCmd FilePath Workspace.Options
   | RegressionCmd FilePath Workspace.RegressionOptions
@@ -299,7 +300,8 @@ commandParser =
     workspaceParser =
       subparser
         $ mconcat
-          [ cmd "prune" (WorkspacePruneCmd <$> requestOption <*> (Workspace.PruneOptions <$> strOption (long "cache" <> metavar "DIRECTORY") <*> remoteOption)) (progDesc "Evict idle archived project checkpoints to an allocated-byte budget")
+          [ cmd "maintain" (WorkspaceMaintainCmd <$> strOption (long "config" <> metavar "FILE")) (progDesc "Archive and evict idle checkpoints to the host cache budget")
+          , cmd "prune" (WorkspacePruneCmd <$> requestOption <*> (Workspace.PruneOptions <$> strOption (long "cache" <> metavar "DIRECTORY") <*> remoteOption)) (progDesc "Evict idle archived project checkpoints to an allocated-byte budget")
           , cmd "load" (options (pure Workspace.Lookup)) (progDesc "Verify a prepared workspace")
           , cmd "archive" (options (Workspace.Archive <$> remoteOption)) (progDesc "Archive a verified checkpoint in self-hosted object storage")
           , cmd "restore" (options (Workspace.Restore <$> remoteOption)) (progDesc "Restore and verify an archived checkpoint")
@@ -1120,6 +1122,10 @@ run version global = \case
   StatusCmd opts -> withCfgMode global $ \cfg mode -> runStatus cfg opts mode
   OpenCmd opts -> withCfgMode global $ \cfg _ -> runOpen cfg opts
   RegressionCmd request options -> Workspace.runRegression options request >>= either (dieWith . Workspace.regressionErrorText) (putLBS . AE.encode)
+  WorkspaceMaintainCmd config -> do
+    report <- Workspace.maintainWorkspaces config >>= either dieWith pure
+    putLBS $ AE.encode report
+    unless (Workspace.maintenanceBudgetMet report) $ dieWith "Workspace cache remains over budget or maintenance was incomplete"
   WorkspacePruneCmd request options -> do
     report <- Workspace.pruneWorkspaces options request >>= either dieWith pure
     putLBS $ AE.encode report

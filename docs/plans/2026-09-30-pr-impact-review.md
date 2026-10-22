@@ -37,7 +37,7 @@ Estimate recorded 2026-10-22: **3–5 focused engineering days** for the remaini
 
 | Work | Estimate | Completion evidence |
 | --- | --- | --- |
-| Automatic sandbox maintenance | 1 day | Scheduled cleanup respects active leases, recovers orphaned resources and bounds local disk use. |
+| Automatic sandbox maintenance | In progress | Host archive/eviction is implemented locally. Crash orphan reconciliation and allocation admission remain. |
 | Preparation/storage accounting | 1–1.5 days | Immutable project/customer attribution covers preparation, storage and transfer; retries and missing receipts remain explicit. |
 | Existing chat-agent memory access | Implemented locally; verification below | Conversational and investigation agents share the wiki with current project permissions and recorded authorship. |
 | Production packaging and deployment verification | 1–2 days | Provisioned Linux worker runs the workflow, required checks pass, and deployment is verified through the PR process. |
@@ -57,6 +57,17 @@ Web and issue chats retain their session identity, including current database-ba
 Scheduled writes require an active, uncancelled action grant matching both project and conversation. The grant records the editor who enabled the routine's actions, and each write rechecks that member's current edit permission. Resetting delivery clears this grant. Legacy schedules have no grantor and cannot write wiki pages until an editor re-enables actions. The routine's defining conversation must explicitly request saving context; wiki text itself never grants authority or counts as current verification evidence.
 
 Verification: the long-lived watcher passed 129 integration examples with zero failures in 51.8707 seconds (seed `478291233`), covering bot workflows, wiki handlers, tool exposure and the routine grant handler. The focused permanent doctest runner passed all 52 examples. Pinned Fourmolu checked all twelve changed Haskell files; source HLint and `git diff --check` passed. The three-pass constraint/evasion/locality/distillation review resolved routine grant provenance, explicit wiki-edit policy, session permission compatibility and shared tool-definition reuse; the final pass found nothing new. The server watcher compiled successfully, but its HTTP bind remains occupied by another process. Two existing dashboard-test warnings remain. Weeder is unavailable locally. Full container sign-off, packaging and deployment remain outstanding for this branch.
+
+### Host checkpoint maintenance — 2026-10-22
+
+The Haskell workspace effect now supplies a host maintenance pass and matching test interpreter. `monoscope workspace maintain --config FILE` and an optional server fiber run the same operation. Configuration names the cache root, private S3 configuration and allocated-byte budget. Every configured host runs independently, including consumer-only instances; a local file lock serializes shared roots. Unconfigured instances do not start a maintenance fiber.
+
+Maintenance archives valid idle checkpoints when the host exceeds its budget, reusing the existing upload journals and verified eviction path. Active hard-linked leases stay pinned. The budget includes the whole cache root, including Git mirrors, journals and unknown files; only eligible workspace checkpoints are evicted. An unmet budget or project failure remains visible. Under-budget passes avoid transfer and per-project journal churn. See [the operations reference](2026-10-22-agent-worker-operations.md#automatic-host-cache-maintenance).
+
+The watcher passed all 25 impact-review examples with zero failures and no pending cases in 320.8328 seconds (seed `478291233`). The background bot workflows and permission cases passed another 67 examples in 42.4196 seconds. The native CLI builds; pinned Fourmolu checked all eight changed Haskell files, and HLint passed all seven changed production files. A failing first-start CLI regression established the missing-cache-directory bug before its fix. The server watcher compiled and started successfully.
+
+This does not finish sandbox maintenance: crash orphan reconciliation, remote retention and allocation admission remain. Transfer journals remain unpriced until the accounting work consumes them. The development CLI linkage check currently fails on `/opt/homebrew/opt/zlib/lib/libz.1.dylib`; no dependency was added in this slice, and release packaging must resolve and verify that linkage before shipping. No failed check is attested.
+
 
 ## Haskell ownership: revised implementation direction
 

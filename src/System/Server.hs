@@ -493,6 +493,7 @@ runServer appLogger env tp = do
           , Just t <- [liveTailKafkaTopic]
           ]
             & listToMaybe
+        , guard (isJust env.config.impactReviewWorkspaceMaintenance) $> fiber "workspace-maintenance" (BackgroundJobs.runWorkspaceMaintenanceTimer appLogger env tp)
         ]
       <> fmap Just schemaFibers
       <> (if consumerOnly then [] else fmap Just jobFibers)

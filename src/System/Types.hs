@@ -33,6 +33,7 @@ where
 import Control.Monad.Except qualified as Except
 import Data.Aeson qualified as AE
 import Data.Effectful.AgentArtifacts qualified as Artifacts
+import Data.Effectful.AgentWorkspace qualified as Workspace
 import Data.Effectful.CodeReview qualified as CodeReview
 import Data.Effectful.Hasql (Hasql, runHasqlPool)
 import Data.Effectful.LLM qualified as ELLM
@@ -227,6 +228,7 @@ type ATBackgroundEffects =
    , HTTP
    , ELLM.LLM
    , CodeReview.CodeReview
+   , Workspace.Workspace
    , Artifacts.AgentArtifacts
    , Concurrent
    , Ki.StructuredConcurrency
@@ -254,6 +256,7 @@ runBackground logger appCtx tp process =
     & runHTTPWreq
     & ELLM.runLLMReal
     & CodeReview.runCodeReviewReal (CodeReview.ArtifactStore <$> appCtx.config.impactReviewUsageDir <*> appCtx.config.impactReviewCacheDir) appCtx.config.impactReviewAgent (map toString appCtx.config.impactReviewSkills)
+    & Workspace.runWorkspaceReal
     & Artifacts.runAgentArtifactsReal appCtx
     & runConcurrent
     & Ki.runStructuredConcurrency

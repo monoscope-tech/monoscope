@@ -421,4 +421,24 @@ Live immutable lease references pin their canonical entry. Lookup, lease acquisi
 
 The JSON report includes `beforeBytes`, `afterBytes`, `leaseBytes`, `targetBytes`, typed entry outcomes and unrecognized names. If retained entries or lease allocation leave the cache above target, the command prints the report and exits unsuccessfully. It does not claim the budget was met or delete active/unverified state to force it. Unknown names, directory symlinks, unexpected entry contents, other projects, Git mirrors and toolchain images are preserved.
 
-Private journals in `CACHE/PROJECT/prunes/` retain started, running and finished states, the partial/final report and elapsed time. Elapsed time includes the initial inventory; a journal starts before scanning entries. A stopped run can leave an incomplete journal. Resource costs remain unpriced, and these maintenance records are not yet customer usage or charges. SIGKILL can also leave `.prepare-*`, `.restore-*`, `.evict-*` or lease directories. They remain visible in allocated usage; safe orphan reconciliation, remote retention and automatic admission/maintenance scheduling are still unfinished.
+Private journals in `CACHE/PROJECT/prunes/` retain started, running and finished states, the partial/final report and elapsed time. Elapsed time includes the initial inventory; a journal starts before scanning entries. A stopped run can leave an incomplete journal. Resource costs remain unpriced, and these maintenance records are not yet customer usage or charges. SIGKILL can also leave `.prepare-*`, `.restore-*`, `.evict-*` or lease directories. They remain visible in allocated usage; safe orphan reconciliation, remote retention and automatic admission control remain unfinished. Host maintenance below automates verified archive and eviction.
+
+
+### Automatic host cache maintenance
+
+Set `IMPACT_REVIEW_WORKSPACE_MAINTENANCE` to a local JSON configuration file:
+
+```json
+{"cacheDir":"/srv/monoscope/workspaces","remote":"/etc/monoscope/workspace-store.json","maxBytes":10737418240}
+```
+
+Use the existing private S3 configuration for `remote`. The server starts a local maintenance fiber only when this setting exists. Each configured application instance, including consumer-only instances, checks its own configured cache on startup and every five minutes after a pass ends. A cache-root file lock serializes instances sharing that directory. This uses the existing Haskell workspace effect; no JavaScript service or managed scheduler is involved. Run the same pass manually with `monoscope workspace maintain --config /etc/monoscope/workspace-maintenance.json`.
+
+The host budget measures allocated bytes across the entire cache root with native `du -sk`. When the root exceeds its budget, maintenance visits the largest project allocations first, then uses the existing per-project LRU order. Active immutable lease links remain pinned. A missing or invalid remote copy causes a valid idle checkpoint to be uploaded through the existing transfer journal. The pruner streams and verifies the stored SHA-256 before removing the local checkpoint. Existing valid remote copies avoid another upload. Restore keeps the existing disk-checkpoint contract; running processes and RAM are not restored.
+
+Unknown entries, invalid checkpoints, unavailable archives and active leases remain local. Their bytes still count toward the host budget. Unknown project directories are reported and preserved. Maintenance returns the final allocation, per-project reports and failures; the CLI exits unsuccessfully and the server logs attention when the budget is unmet or a project pass fails. Passes under budget avoid creating per-project prune journals or transferring checkpoints.
+
+This is a periodic reclamation budget, not an allocation quota: active workloads can grow between passes. SIGKILL lease/VM orphan reconciliation and remote retention remain separate work. Transfer and prune records retain explicit unpriced status; customer billing ingestion and storage byte-time pricing remain unfinished.
+
+
+Maintenance verification on 2026-10-22: the watcher passed 25 impact-review examples, including native preparation, lease protection, S3 archive/restore, automatic re-archiving before eviction, refused oversized transfers and preservation of unknown data. All 67 selected bot workflow and permission examples also passed after the background effect-stack change. The initial missing-root case failed before the directory-creation fix and passes in the retained CLI regression. The development CLI builds, but its release linkage guard fails on Homebrew zlib; release packaging and deployment are not signed off.

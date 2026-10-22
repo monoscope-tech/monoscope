@@ -1,4 +1,4 @@
-module Data.Effectful.AgentWorkspace (Workspace, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, Operation (..), Prepared, Leased, RegressionOptions (..), RegressionResult, RegressionError (..), regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest) where
+module Data.Effectful.AgentWorkspace (Workspace, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, MaintenanceReport, maintenanceBudgetMet, maintainWorkspaces, Operation (..), Prepared, Leased, RegressionOptions (..), RegressionResult, RegressionError (..), regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest) where
 
 import Conduit (runConduit, (.|))
 import Control.Monad (foldM)
@@ -106,6 +106,23 @@ data Operation = Lookup | Prepare FilePath | Archive FilePath | Restore FilePath
 
 
 data PruneOptions = PruneOptions {cacheDir :: FilePath, remote :: FilePath}
+
+
+data MaintenanceOptions = MaintenanceOptions {cacheDir :: FilePath, remote :: FilePath, maxBytes :: Word64}
+  deriving stock (Generic)
+  deriving anyclass (AE.FromJSON)
+
+
+data MaintenanceReport = MaintenanceReport {beforeBytes :: Word64, afterBytes :: Word64, targetBytes :: Word64, projects :: [PruneReport], failures :: [ProjectId], unrecognized :: [FilePath]}
+  deriving stock (Generic)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+maintenanceBudgetMet :: MaintenanceReport -> Bool
+maintenanceBudgetMet report = report.afterBytes <= report.targetBytes && null report.failures
+
+
+data ArchivePolicy = RetainUnarchived | ArchiveIdle
 
 
 data PruneRequest = PruneRequest {projectId :: ProjectId, maxBytes :: Word64, ownerPid :: Maybe Word32}
@@ -398,6 +415,7 @@ data SandboxFailure = SandboxCleanupFailed | SandboxOwnerLost
 
 
 data Workspace :: Effect where
+  MaintainWorkspaces :: FilePath -> Workspace m (Either Text MaintenanceReport)
   PruneWorkspaces :: PruneOptions -> FilePath -> Workspace m (Either Text PruneReport)
   RunWorkspace :: Options -> Operation -> FilePath -> Workspace m (Either Text (Maybe Prepared))
   WithWorkspace :: Options -> FilePath -> (Maybe Leased -> m a) -> Workspace m (Either Text a)
@@ -410,8 +428,9 @@ type instance DispatchOf Workspace = 'Dynamic
 makeEffect ''Workspace
 
 
-runWorkspaceTest :: (Options -> Operation -> FilePath -> Either Text (Maybe Prepared)) -> (RegressionOptions -> FilePath -> Either RegressionError RegressionResult) -> (PruneOptions -> FilePath -> Either Text PruneReport) -> Eff (Workspace ': es) a -> Eff es a
-runWorkspaceTest respond respondRegression respondPrune = interpret $ \env -> \case
+runWorkspaceTest :: (Options -> Operation -> FilePath -> Either Text (Maybe Prepared)) -> (RegressionOptions -> FilePath -> Either RegressionError RegressionResult) -> (PruneOptions -> FilePath -> Either Text PruneReport) -> (FilePath -> Either Text MaintenanceReport) -> Eff (Workspace ': es) a -> Eff es a
+runWorkspaceTest respond respondRegression respondPrune respondMaintenance = interpret $ \env -> \case
+  MaintainWorkspaces config -> pure $ respondMaintenance config
   PruneWorkspaces options requestFile -> pure $ respondPrune options requestFile
   RunWorkspace options operation requestFile -> pure $ respond options operation requestFile
   WithWorkspace options requestFile action -> case respond options Lookup requestFile of
@@ -422,10 +441,13 @@ runWorkspaceTest respond respondRegression respondPrune = interpret $ \env -> \c
 
 runWorkspaceReal :: IOE :> es => Eff (Workspace ': es) a -> Eff es a
 runWorkspaceReal = interpret $ \env -> \case
+  MaintainWorkspaces config -> liftIO do
+    outcome <- tryAny $ Timeout.timeout (420 * 1000000) $ maintain =<< decode @MaintenanceOptions =<< readBounded config 65536
+    pure $ case outcome of Right (Just report) -> Right report; _ -> Left "Workspace maintenance could not complete"
   PruneWorkspaces options requestFile -> liftIO do
     outcome <- tryAny $ Timeout.timeout (420 * 1000000) do
       request <- decode @PruneRequest =<< readBounded requestFile 65536
-      withOwner request.ownerPid $ prune options request
+      withOwner request.ownerPid $ prune RetainUnarchived options request
     pure $ case outcome of Right (Just result) -> Right result; _ -> Left "Checkpoint pruning could not complete"
   RunWorkspace options operation requestFile -> liftIO do
     outcome <- tryAny $ Timeout.timeout (420 * 1000000) do
@@ -470,8 +492,62 @@ runWorkspaceReal = interpret $ \env -> \case
       Left failure -> Left $ fromMaybe RegressionUnavailable $ fromException failure
       _ -> Left RegressionUnavailable
   where
-    prune :: PruneOptions -> PruneRequest -> IO PruneReport
-    prune options request = do
+    maintain :: MaintenanceOptions -> IO MaintenanceReport
+    maintain options = do
+      createDirectoryIfMissing True options.cacheDir
+      root <- canonicalizePath options.cacheDir
+      canonical root
+      withFileLock (root </> ".maintenance.lock") Exclusive \_ -> do
+        names <- listDirectory root
+        let project name = do
+              uuid <- UUID.fromText $ toText name
+              guard $ projectText (ProjectId uuid) == name
+              pure $ ProjectId uuid
+        recognized <- filterM (doesDirectoryExist . (</> "workspaces") . (root </>) . projectText) $ mapMaybe project names
+        before <- allocated root
+        initial <- if before <= options.maxBytes then pure [] else forM recognized \pid -> (pid,) <$> allocated (root </> projectText pid)
+        (reports, failed, _) <-
+          foldM
+            ( \accumulator@(reports, failed, used) (pid, _) ->
+                if used <= options.maxBytes
+                  then pure accumulator
+                  else do
+                    let parent = root </> projectText pid
+                    outcome <- tryAny do
+                      canonical parent
+                      Posix.getSymbolicLinkStatus parent >>= ensure . Posix.isDirectory
+                      leases <- doesDirectoryExist (parent </> "leases")
+                      bytes <- measureAllocation $ (parent </> "workspaces") :| [parent </> "leases" | leases]
+                      let target = fromInteger $ max 0 (toInteger bytes - max 0 (toInteger used - toInteger options.maxBytes))
+                      prune ArchiveIdle (PruneOptions root options.remote) (PruneRequest pid target Nothing)
+                    after <- allocated root
+                    pure $ case outcome of
+                      Right report -> (report : reports, failed, after)
+                      Left _ -> (reports, pid : failed, after)
+            )
+            ([], [], before)
+            (sortOn (negate . toInteger . snd) initial)
+        after <- allocated root
+        pure $ MaintenanceReport before after options.maxBytes (reverse reports) (reverse failed) [name | name <- names, name /= ".maintenance.lock", maybe True (`notElem` recognized) $ project name]
+      where
+        allocated path = measureAllocation $ one path
+
+    allocatedSizes :: NonEmpty FilePath -> IO [Word64]
+    allocatedSizes paths = do
+      output <- decodeUtf8 @Text <$> readProcessStdout_ (proc "du" $ "-sk" : toList paths)
+      forM (lines output) \line -> do
+        size <- maybe invalid pure $ viaNonEmpty head (words line) >>= readMaybe @Word64 . toString
+        ensure $ size <= maxBound `div` 1024
+        pure $ size * 1024
+
+    measureAllocation :: NonEmpty FilePath -> IO Word64
+    measureAllocation paths = do
+      bytes <- sum . map toInteger <$> allocatedSizes paths
+      ensure $ bytes <= toInteger (maxBound :: Word64)
+      pure $ fromInteger bytes
+
+    prune :: ArchivePolicy -> PruneOptions -> PruneRequest -> IO PruneReport
+    prune archivePolicy options request = do
       started <- getMonotonicTimeNSec
       now <- getCurrentTime
       root <- canonicalizePath options.cacheDir
@@ -485,11 +561,7 @@ runWorkspaceReal = interpret $ \env -> \case
             measure = do
               present <- doesDirectoryExist leases
               when present $ canonical leases
-              output <- decodeUtf8 @Text <$> readProcessStdout_ (proc "du" $ ["-sk", parent] <> [leases | present])
-              sizes <- forM (lines output) \line -> do
-                size <- maybe invalid pure $ viaNonEmpty head (words line) >>= readMaybe @Word64 . toString
-                ensure $ size <= maxBound `div` 1024
-                pure $ size * 1024
+              sizes <- allocatedSizes $ parent :| [leases | present]
               case sizes of
                 [cached] -> pure (cached, 0)
                 [cached, leased] -> do
@@ -554,7 +626,14 @@ runWorkspaceReal = interpret $ \env -> \case
                             Left _ -> pure $ Kept entry.key InvalidEntry
                             Right measured | measured /= FileFingerprint entry.manifest.sha256 entry.manifest.bytes -> pure $ Kept entry.key InvalidEntry
                             Right _ -> do
-                              proof <- tryAny $ verifyRemote entry
+                              proof <- tryAny do
+                                archived <- tryAny $ verifyRemote entry
+                                case (archived, archivePolicy) of
+                                  (Right (), _) -> pass
+                                  (Left failure, RetainUnarchived) -> throwIO failure
+                                  (Left _, ArchiveIdle) -> do
+                                    void $ transfer root entry.manifest.identity Upload options.remote \remote' prefix connection' -> uploadCheckpoint remote' prefix connection' $ Prepared{manifest = entry.manifest, path = directory entry.key </> "baseline.qcow2"}
+                                    verifyRemote entry
                               case proof of
                                 Left _ -> pure $ Kept entry.key ArchiveUnavailable
                                 Right () -> do
@@ -732,6 +811,46 @@ runWorkspaceReal = interpret $ \env -> \case
           publish (directory </> "report.json") report
           pure $ RegressionResult report saved $ any (\receipt -> receipt.status `notElem` [Passed, Failed]) saved
 
+    transfer :: FilePath -> Identity -> TransferDirection -> FilePath -> (Remote -> Text -> Minio.MinioConn -> IO Prepared) -> IO (Maybe Prepared)
+    transfer root identity direction remoteFile action = do
+      remote <- readRemote remoteFile
+      let records = root </> projectText identity.projectId </> "transfers"
+      createDirectoryIfMissing True records
+      canonical records
+      Posix.setFileMode records 0o700
+      identifier <- Identifier <$> UUID4.nextRandom
+      now <- getCurrentTime
+      started <- getMonotonicTimeNSec
+      let record = TransferRecord identifier identity direction now TransferStarted Unpriced
+          Identifier transferId = identifier
+          save outcome = publish (records </> toString (UUID.toText transferId) <> ".json") (record :: TransferRecord){outcome}
+          elapsed = (\ended -> fromIntegral (ended - started) / 1000000) <$> getMonotonicTimeNSec
+          prefix = "agent-workspaces/v1/" <> toText (projectText identity.projectId) <> "/" <> digestText (identityKey identity) <> "/"
+      save TransferStarted
+      connection' <- connectStorage remote
+      value <- action remote prefix connection' `onException` (elapsed >>= save . TransferFailed)
+      elapsed >>= save . TransferCompleted (FileFingerprint value.manifest.sha256 value.manifest.bytes)
+      pure $ Just value
+
+    diskKey :: Text -> Manifest -> Text
+    diskKey prefix manifest = prefix <> (case manifest.sha256 of Fingerprint value -> value) <> ".qcow2"
+
+    manifestKey :: Text -> Maybe Fingerprint -> Text
+    manifestKey prefix = (prefix <>) . maybe "manifest.json" (\(Fingerprint digest) -> digest <> ".json")
+
+    uploadCheckpoint :: Remote -> Text -> Minio.MinioConn -> Prepared -> IO Prepared
+    uploadCheckpoint remote prefix connection prepared = do
+      ensure $ prepared.manifest.bytes <= remote.maxBytes
+      withFile prepared.path \handle bytes -> do
+        ensure $ bytes == prepared.manifest.bytes
+        void $ storage connection $ Minio.putObject remote.bucket (diskKey prefix prepared.manifest) (CC.sourceHandle handle) (Just $ fromIntegral bytes) Minio.defaultPutObjectOptions
+      uploaded <- storage connection $ Minio.statObject remote.bucket (diskKey prefix prepared.manifest) Minio.defaultGetObjectOptions
+      ensure $ uploaded.oiSize == fromIntegral prepared.manifest.bytes
+      let manifestBytes = AE.encode prepared.manifest
+      for_ [manifestKey prefix $ Just prepared.manifest.sha256, manifestKey prefix Nothing] \object ->
+        void $ storage connection $ Minio.putObject remote.bucket object (CC.sourceLazy manifestBytes) (Just $ LBS.length manifestBytes) Minio.defaultPutObjectOptions
+      pure prepared
+
     workspace :: Options -> Operation -> Request -> IO (Maybe Prepared)
     workspace options operation request = do
       scriptBytes <- readBounded options.script (4 * 65536)
@@ -753,46 +872,16 @@ runWorkspaceReal = interpret $ \env -> \case
             directory = parent </> toString (case key of Fingerprint value -> value)
             load = loadWorkspace identity image directory (rpc . InspectCheckpoint)
             locked = withProjectLock root request.projectId
-            transfer direction remoteFile action = do
-              remote <- readRemote remoteFile
-              let records = root </> projectText request.projectId </> "transfers"
-              createDirectoryIfMissing True records
-              canonical records
-              Posix.setFileMode records 0o700
-              identifier <- Identifier <$> UUID4.nextRandom
-              now <- getCurrentTime
-              started <- getMonotonicTimeNSec
-              let record = TransferRecord identifier identity direction now TransferStarted Unpriced
-                  Identifier transferId = identifier
-                  save outcome = publish (records </> toString (UUID.toText transferId) <> ".json") (record :: TransferRecord){outcome}
-                  elapsed = (\ended -> fromIntegral (ended - started) / 1000000) <$> getMonotonicTimeNSec
-                  prefix = "agent-workspaces/v1/" <> toText (projectText request.projectId) <> "/" <> (case key of Fingerprint value -> value) <> "/"
-              save TransferStarted
-              connection' <- connectStorage remote
-              value <- action remote prefix connection' `onException` (elapsed >>= save . TransferFailed)
-              elapsed >>= save . TransferCompleted (FileFingerprint value.manifest.sha256 value.manifest.bytes)
-              pure $ Just value
-            diskKey prefix manifest = prefix <> (case manifest.sha256 of Fingerprint value -> value) <> ".qcow2"
-            manifestKey prefix = (prefix <>) . maybe "manifest.json" (\(Fingerprint digest) -> digest <> ".json")
         case operation of
           Lookup -> load
-          Archive remoteFile -> locked $ transfer Upload remoteFile \remote prefix connection -> do
+          Archive remoteFile -> locked $ transfer root identity Upload remoteFile \remote prefix connection -> do
             prepared <- maybe invalid pure =<< load
-            ensure $ prepared.manifest.bytes <= remote.maxBytes
-            withFile prepared.path \handle bytes -> do
-              ensure $ bytes == prepared.manifest.bytes
-              void $ storage connection $ Minio.putObject remote.bucket (diskKey prefix prepared.manifest) (CC.sourceHandle handle) (Just $ fromIntegral bytes) Minio.defaultPutObjectOptions
-            uploaded <- storage connection $ Minio.statObject remote.bucket (diskKey prefix prepared.manifest) Minio.defaultGetObjectOptions
-            ensure $ uploaded.oiSize == fromIntegral prepared.manifest.bytes
-            let manifestBytes = AE.encode prepared.manifest
-            for_ [manifestKey prefix $ Just prepared.manifest.sha256, manifestKey prefix Nothing] \object ->
-              void $ storage connection $ Minio.putObject remote.bucket object (CC.sourceLazy manifestBytes) (Just $ LBS.length manifestBytes) Minio.defaultPutObjectOptions
-            pure prepared
+            uploadCheckpoint remote prefix connection prepared
           Restore remoteFile -> locked do
             saved <- load
             case saved of
               Just _ -> pure saved
-              Nothing -> transfer Download remoteFile \remote prefix connection -> withTempDirectory parent ".restore-" \temporary -> do
+              Nothing -> transfer root identity Download remoteFile \remote prefix connection -> withTempDirectory parent ".restore-" \temporary -> do
                 encoded <- storage connection do
                   response <- Minio.getObject remote.bucket (manifestKey prefix request.expectedCheckpoint) Minio.defaultGetObjectOptions
                   runConduit $ response.gorObjectStream .| CC.takeE 65537 .| CC.sinkLazy
@@ -1027,7 +1116,7 @@ withSandbox bridge action = do
           either (const invalid) (either (const invalid) pure) $ AE.eitherDecodeStrict @(Either Text value) bytes
         close = do
           closed <- Timeout.timeout (2 * 1000000) $ tryAny $ rpc @() $ Close ()
-          case closed of { Just (Right ()) -> pass; _ -> throwIO SandboxCleanupFailed }
+          case closed of Just (Right ()) -> pass; _ -> throwIO SandboxCleanupFailed
     result <- action rpc
     close
     pure result
