@@ -1188,9 +1188,12 @@ spec = around withTestResources $ describe "Production impact reviews" do
     let link = directory </> "archive-link"
     createFileLink archive link
     isLeft <$> lookupPrepared options{Workspace.dependencyArchive = Just link} `shouldReturn` True
+    host <- sdkHost [] profile
     let next results = pure $ case length results of
-          0 -> SdkTool "run_regression" (AE.object ["script" AE..= replay, "failureMessage" AE..= ("dependency echo lost" :: Text)])
-          1 -> SdkTool "submit_review" (AE.object ["findings" AE..= ([] :: [AE.Value]), "coverage" AE..= ([] :: [AE.Value])])
+          -- Only the prepared checkpoint has installed dependencies; a pristine agent VM would not print this.
+          0 -> SdkTool "bash" (AE.object ["command" AE..= ("test -d node_modules/monoscope-dependency-fixture && printf 'agent-%s\\n' resumed-checkpoint" :: Text)])
+          1 -> SdkTool "run_regression" (AE.object ["script" AE..= replay, "failureMessage" AE..= ("dependency echo lost" :: Text)])
+          2 -> SdkTool "submit_review" (AE.object ["findings" AE..= ([] :: [AE.Value]), "coverage" AE..= ([] :: [AE.Value])])
           _ -> SdkText "Fixture finished."
     withSdkModel directory "dependency-fixture" next \models requests -> do
       let request = Agent.Request{projectId = testPid, runId = uid 1, attemptId = uid 2, repository = toText repository, base, head = headRevision, gitToken = "", prompt = "Check actual offline dependency behavior.", provider = "dependency-fixture", model = "fixture", thinkingLevel = Agent.Off}
@@ -1198,7 +1201,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
             checks <- newIORef ([] :: [Agent.CheckReceipt])
             result <-
               runEff
-                $ Agent.runCodeReviewReal (Just store) Nothing (Just "test/fixtures/native-sdk-worker.py") [models, store.usageDir, store.cacheDir, profile, diagnostic, "--prepare", trustedScript, "--dependencies", archive, "--cli", cli]
+                $ Agent.runCodeReviewReal (Just store) (Just host{Guest.workspace = Just $ Guest.Workspace trustedScript (Just archive)}) (Just "test/fixtures/native-sdk-worker.py") [models, store.usageDir, store.cacheDir, "/nonexistent-guest-image", diagnostic, "--cli", cli]
                 $ Agent.reviewRepository request{Agent.runId = uid n} (const $ pure $ Left "Unexpected query") (const $ pure $ Left "Unexpected knowledge") (const pass) (const pass) (const pass) (\receipt -> liftIO $ modifyIORef' checks (<> [receipt])) (const $ pure $ Right ())
             (result,) <$> readIORef checks
       writeFileBS archive $ bytes <> "changed"
@@ -1214,8 +1217,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       AE.eitherDecodeStrict @AE.Value (encodeUtf8 encoded) `shouldBe` Right (AE.object ["findings" AE..= ([] :: [AE.Value]), "coverage" AE..= ([] :: [AE.Value])])
       fingerprint <- parse (field "sha256") manifest :: IO Text
       map (\receipt -> (receipt.side, receipt.status, AE.toJSON receipt.workspace)) checks `shouldBe` [(Agent.Base, Agent.Passed, AE.toJSON fingerprint), (Agent.Head, Agent.Failed, AE.toJSON fingerprint)]
-      events <- mapMaybe (AE.decodeStrict @AE.Value) . BSC.lines <$> readFileBS diagnostic
-      events `shouldSatisfy` any (\value -> AET.parseEither (field "type") value == Right ("workspace_cache" :: Text) && AET.parseEither (field "status") value == Right ("hit" :: Text) && AET.parseEither (field "sha256") value == Right fingerprint)
+      decodeUtf8 @Text . AE.encode <$> requests >>= (`shouldSatisfy` T.isInfixOf "agent-resumed-checkpoint")
 
   it "runs frozen regressions natively, preserves receipts and rejects weakened candidate tests" \_tr -> withSystemTempDirectory "native-regression" \temporary -> do
     directory <- canonicalizePath temporary

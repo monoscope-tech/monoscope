@@ -1,9 +1,10 @@
-module Data.Effectful.CodeReview.Guest (Host (..), Workspace (..), Setup (..), Exec (..), Operation (..), Session (..), withGuest) where
+module Data.Effectful.CodeReview.Guest (Host (..), Workspace (..), Lease (..), Setup (..), Exec (..), Operation (..), Session (..), withGuest) where
 
 import Data.Aeson qualified as AE
 import Data.Base64.Types (extractBase64)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as Base64
+import Data.Effectful.AgentWorkspace qualified as AgentWorkspace
 import Data.Effectful.AgentWorkspace (Command (..), Copy (..), Execution (..), GuestCommand (..), Image (..), ImageId (..), Isolation (..), LogExit (..), LoggedCommand (..), Overflow (..), RegressionOptions (..), Sandbox (..), SandboxFailure (..), agentCommand, withSandbox)
 import Data.Effectful.CodeReview.Types (AllocationOutcome (..), AllocationReceipt, Revision, TestArtifact (..), agentResources, hostAllocation, revisionText)
 import Data.Map.Strict qualified as Map
@@ -29,6 +30,10 @@ data Host = Host {image :: Text, bridge :: FilePath, skills :: [FilePath], works
 data Workspace = Workspace {script :: FilePath, dependencyArchive :: Maybe FilePath}
 
 
+-- | Where this run's prepared checkpoint is cached, and which pinned project/repository/base it must match.
+data Lease = Lease {cacheDir :: FilePath, request :: AgentWorkspace.Request}
+
+
 -- | Role-specific guest preparation that runs before the agent sees the workspace.
 data Setup = Explore | InspectAdmission TestArtifact | ReviewEvidence (Map Text ByteString)
 
@@ -45,14 +50,14 @@ data Operation = Run Exec | Read Text | Access Text
 
 
 -- | A running agent VM: Pi's file and shell calls, root copies into the guest, and verifier settings for fresh VMs.
-data Session = Session {skills :: FilePath, imageBuildId :: ImageId, operate :: Operation -> IO (Either Text AE.Value), copyIn :: FilePath -> Text -> IO (), verifier :: FilePath -> RegressionOptions}
+data Session = Session {skills :: FilePath, imageBuildId :: ImageId, baseline :: AgentWorkspace.Baseline, operate :: Operation -> IO (Either Text AE.Value), copyIn :: FilePath -> Text -> IO (), verifier :: FilePath -> RegressionOptions}
 
 
 -- | Owns the agent VM for the action's lifetime and records its allocation however it ends: @allocate@ after a
 -- completed run, @retain@ (journal only) when interrupted. Preparation failures are reported before the action
 -- starts; the action's own exceptions propagate.
-withGuest :: Host -> Maybe (UUIDId "guest_image") -> FilePath -> Revision -> Setup -> UUIDId "agent_attempt" -> (AllocationReceipt -> IO ()) -> (AllocationReceipt -> IO ()) -> (Session -> IO a) -> IO (Either Text a)
-withGuest host expected checkout revision setup attempt allocate retain action = withSystemTempDirectory "monoscope-agent-guest" \temporary -> do
+withGuest :: Host -> Maybe (UUIDId "guest_image") -> FilePath -> Revision -> Setup -> Maybe Lease -> UUIDId "agent_attempt" -> (AllocationReceipt -> IO ()) -> (AllocationReceipt -> IO ()) -> (Session -> IO a) -> IO (Either Text a)
+withGuest host expected checkout revision setup lease attempt allocate retain action = withSystemTempDirectory "monoscope-agent-guest" \temporary -> withLease \leased -> do
   let skills = temporary </> "skills"
       logs = temporary </> "logs"
   traverse_ createDirectory [skills, logs]
@@ -101,10 +106,20 @@ withGuest host expected checkout revision setup attempt allocate retain action =
     prepared <- tryAny do
       image <- rpc @Image $ Resolve host.image
       for_ expected \(UUIDId build) -> unless (image.buildId == ImageId build) $ failure "Configured guest image differs from the pinned image"
-      rpc @() $ Create $ uncurry (Sandbox image.assetDir) agentResources OfflineCow $ Map.fromList [("/checkout", checkout), ("/run/monoscope-skills", skills)]
+      let sandbox = uncurry (Sandbox image.assetDir) agentResources OfflineCow $ Map.fromList [("/checkout", checkout), ("/run/monoscope-skills", skills)]
+      case leased of
+        Just held -> rpc @() $ Resume (sandbox, held.resumePath)
+        Nothing | any (isJust . (.dependencyArchive)) host.workspace -> failure "Configured dependency workspace has not been prepared for these pinned inputs"
+        Nothing -> rpc @() $ Create sandbox
       rpc @Text (GetIdentity ()) >>= writeIORef vmIdentity . fmap UUIDId . UUID.fromText
       -- Gondolin mounts are root-only, so the agent account reads guest-owned copies.
-      traverse_ (run "/" . fromList) [["/bin/mkdir", "-p", "/workspace", "/skills", "/run/monoscope-review-output"], ["/bin/cp", "-R", "/checkout/.", "/workspace"], ["/bin/cp", "-R", "/run/monoscope-skills/.", "/skills"], ["/bin/chmod", "-R", "a+rX,go-w", "/skills"]]
+      traverse_ (run "/" . fromList) [["/bin/mkdir", "-p", "/workspace", "/skills", "/run/monoscope-review-output"], ["/bin/cp", "-R", "/run/monoscope-skills/.", "/skills"], ["/bin/chmod", "-R", "a+rX,go-w", "/skills"]]
+      -- A resumed checkpoint keeps its built tree and only fetches the pinned revision's objects.
+      if isJust leased
+        then do
+          for_ ["/workspace", "/checkout/.git"] \path -> run "/" $ "/usr/bin/git" :| ["config", "--system", "--add", "safe.directory", path]
+          void $ git ["fetch", "--quiet", "--no-tags", "--", "/checkout", revisionText revision]
+        else void $ run "/" $ "/bin/cp" :| ["-R", "/checkout/.", "/workspace"]
       void $ git ["checkout", "--quiet", "--detach", revisionText revision]
       void $ workspace ["/bin/chown", "-hR", "1000:1000", "/workspace"]
       account <- workspace $ toList $ agentCommand ["/usr/bin/id", "-u"]
@@ -125,9 +140,12 @@ withGuest host expected checkout revision setup attempt allocate retain action =
           for_ (Map.toList files) \(destination, bytes) -> upload destination bytes >> workspace ["/bin/chmod", "0444", destination]
       pure image.buildId
     whenRight (Left "Agent sandbox could not be prepared") prepared \imageBuildId ->
-      Right <$> action (Session skills imageBuildId operate copyIn \artifacts -> RegressionOptions artifacts checkout host.image host.bridge)
+      Right <$> action (Session skills imageBuildId (AgentWorkspace.leasedBaseline leased) operate copyIn \artifacts -> RegressionOptions artifacts checkout host.image host.bridge)
   measured (case outcome of Left failed | Just SandboxCleanupFailed <- fromException failed -> ReleaseFailed; _ -> Released)
     >>= traverse_ (void . tryAny . allocate)
   either throwIO pure outcome
   where
     failure = throwIO . userError
+    withLease use = case (host.workspace, lease) of
+      (Just configured, Just held) -> AgentWorkspace.leaseWorkspace (AgentWorkspace.Options held.cacheDir host.image host.bridge configured.script configured.dependencyArchive) held.request use
+      _ -> use Nothing

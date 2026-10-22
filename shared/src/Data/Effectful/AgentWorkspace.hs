@@ -1,4 +1,4 @@
-module Data.Effectful.AgentWorkspace (Workspace, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, Operation (..), Prepared, Leased, RegressionOptions (..), RegressionRequest, RegressionResult (..), RegressionReceipt, RegressionReport, RegressionError (..), verifyRegression, regressionLogs, regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest, RPC, withSandbox, Command (..), Sandbox (..), Isolation (..), GuestCommand (..), Copy (..), LoggedCommand (..), Overflow (..), Execution (..), LogExit (..), Image (..), ImageId (..), SandboxFailure (..), agentCommand, publish) where
+module Data.Effectful.AgentWorkspace (Workspace, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, Operation (..), Prepared, Leased (..), Request, Baseline, leaseWorkspace, leasedBaseline, RegressionOptions (..), RegressionRequest, RegressionResult (..), RegressionReceipt, RegressionReport, RegressionError (..), verifyRegression, regressionLogs, regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest, RPC, withSandbox, Command (..), Sandbox (..), Isolation (..), GuestCommand (..), Copy (..), LoggedCommand (..), Overflow (..), Execution (..), LogExit (..), Image (..), ImageId (..), SandboxFailure (..), agentCommand, publish) where
 
 import Conduit (runConduit, (.|))
 import Control.Monad (foldM)
@@ -283,12 +283,17 @@ instance AE.FromJSON Artifact where
 
 data Snapshot = Snapshot {path :: FilePath, sha256 :: Fingerprint}
   deriving stock (Generic)
-  deriving anyclass (AE.FromJSON)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 data Baseline = Pristine | PreparedCheckpoint Snapshot
   deriving stock (Generic)
-  deriving anyclass (AE.FromJSON)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+-- | Verifiers replay against the same immutable checkpoint the leased agent VM resumed from.
+leasedBaseline :: Maybe Leased -> Baseline
+leasedBaseline = maybe Pristine \leased -> PreparedCheckpoint $ Snapshot leased.prepared.path leased.prepared.manifest.sha256
 
 
 data Side = Base | Head

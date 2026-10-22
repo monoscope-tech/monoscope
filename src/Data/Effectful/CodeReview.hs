@@ -89,7 +89,7 @@ makeEffect ''CodeReview
 
 -- | A role whose VM the host owns: who is billed for it, the image it must use, how its guest is prepared from
 -- recorded evidence, and the fields the agent wraps around its submission.
-data Ownership = Ownership {host :: Guest.Host, attempt :: UUIDId "agent_attempt", image :: Maybe (UUIDId "guest_image"), setup :: Map Text ByteString -> Guest.Setup, envelope :: Maybe AE.Value}
+data Ownership = Ownership {host :: Guest.Host, attempt :: UUIDId "agent_attempt", image :: Maybe (UUIDId "guest_image"), setup :: Map Text ByteString -> Guest.Setup, envelope :: Maybe AE.Value, lease :: Maybe Guest.Lease}
 
 
 data Task = AdvisoryTask (Request "pr_review") | FixTask FixRequest | AdmissionTask AdmissionRequest | PeerTask FixReviewRequest
@@ -203,15 +203,20 @@ runCodeReviewReal artifactStore host executable skills = interpret \env -> \case
             role = case scope of Outbox.Advisory _ -> Policy.Advisory; Outbox.IssueFix _ -> Policy.Fix; Outbox.Admission _ -> Policy.Admission; Outbox.PeerReview _ -> Policy.Peer
             -- Roles migrate to a host-owned VM one at a time; the rest still create theirs in the child.
             owned = host >>= \configured -> case task of
-              AdvisoryTask request | isNothing configured.workspace -> Just $ Ownership configured request.attemptId Nothing (const Guest.Explore) Nothing
-              AdmissionTask request -> Just $ Ownership configured request.fix.request.attemptId (Just request.fix.imageBuildId) (const $ Guest.InspectAdmission request.artifact) (Just $ AE.object ["artifact" AE..= request.artifact])
-              PeerTask request -> Just $ Ownership configured request.fix.request.attemptId (Just request.fix.imageBuildId) Guest.ReviewEvidence (Just $ AE.object ["result" AE..= request.artifacts.result])
+              AdvisoryTask request -> Just $ Ownership configured request.attemptId Nothing (const Guest.Explore) Nothing (checkpoint request Nothing)
+              AdmissionTask request -> Just $ Ownership configured request.fix.request.attemptId (Just request.fix.imageBuildId) (const $ Guest.InspectAdmission request.artifact) (Just $ AE.object ["artifact" AE..= request.artifact]) (checkpoint request.fix.request $ Just request.fix.imageBuildId)
+              PeerTask request -> Just $ Ownership configured request.fix.request.attemptId (Just request.fix.imageBuildId) Guest.ReviewEvidence (Just $ AE.object ["result" AE..= request.artifacts.result]) (checkpoint request.fix.request $ Just request.fix.imageBuildId)
               _ -> Nothing
+            -- Prepared checkpoints are keyed by the pinned project, repository and base, never by the reviewed head.
+            checkpoint :: Request run -> Maybe (UUIDId "guest_image") -> Maybe Guest.Lease
+            checkpoint request pinned = do
+              store <- artifactStore
+              Guest.Lease store.cacheDir <$> AET.parseMaybe AE.parseJSON (AE.object ["projectId" AE..= request.projectId, "repository" AE..= request.repository, "base" AE..= request.base, "expectedImageBuildId" AE..= pinned, "expectedCheckpoint" AE..= AE.Null, "ownerPid" AE..= AE.Null])
             honours invocation = invocation.name `elem` Policy.toolsForRole role && null (Schema.validateJSON mempty (Policy.toolSchema invocation.name) invocation.arguments)
             -- Fresh verifier VMs replay the frozen artifact; their receipts are already journaled beside the outbox.
             regress session checkout outbox (advisory :: Request "pr_review") arguments = do
               let options = session.verifier (Outbox.outboxPath outbox </> "checks")
-              case AE.fromJSON @Workspace.RegressionRequest $ AE.object ["projectId" AE..= advisory.projectId, "runId" AE..= advisory.runId, "attemptId" AE..= advisory.attemptId, "sessionId" AE..= verifierSession, "base" AE..= advisory.base, "imageBuildId" AE..= session.imageBuildId, "workspace" AE..= AE.object ["tag" AE..= ("Pristine" :: Text)], "artifact" AE..= (arguments :: AE.Value), "revisions" AE..= ([("base", advisory.base), ("head", advisory.head)] :: [(Text, Text)]), "ownerPid" AE..= AE.Null] of
+              case AE.fromJSON @Workspace.RegressionRequest $ AE.object ["projectId" AE..= advisory.projectId, "runId" AE..= advisory.runId, "attemptId" AE..= advisory.attemptId, "sessionId" AE..= verifierSession, "base" AE..= advisory.base, "imageBuildId" AE..= session.imageBuildId, "workspace" AE..= session.baseline, "artifact" AE..= (arguments :: AE.Value), "revisions" AE..= ([("base", advisory.base), ("head", advisory.head)] :: [(Text, Text)]), "ownerPid" AE..= AE.Null] of
                 AE.Error _ -> pure $ Left "Regression arguments do not match the host contract"
                 AE.Success regression ->
                   tryAny (Workspace.verifyRegression options regression) >>= \case
@@ -275,7 +280,7 @@ runCodeReviewReal artifactStore host executable skills = interpret \env -> \case
                               case owned of
                                 Nothing -> deliver checkout
                                 Just ownership ->
-                                  join <$> Guest.withGuest ownership.host ownership.image checkout.directory checkout.head (ownership.setup evidence) ownership.attempt (void . allocate journal) (\receipt -> for_ journal (`Outbox.journal` Outbox.Allocation receipt)) \session ->
+                                  join <$> Guest.withGuest ownership.host ownership.image checkout.directory checkout.head (ownership.setup evidence) ownership.lease ownership.attempt (void . allocate journal) (\receipt -> for_ journal (`Outbox.journal` Outbox.Allocation receipt)) \session ->
                                     writeIORef guest (Just session) >> deliver checkout{Checkout.guest = Just session.skills, Checkout.envelope = ownership.envelope}
                             pure $ join prepared
                           _ -> pure $ Left "Repository checkout was unavailable or already supplied"
