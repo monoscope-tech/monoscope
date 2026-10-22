@@ -17,23 +17,26 @@ else {
       const target = new URL(route.request().url());
       if (/^\/public\/assets\/deps\/htmx\/[\w.-]+\.js$/.test(target.pathname))
         return route.fulfill({ path: fileURLToPath(new URL('../../static' + target.pathname.replace(/\.[a-f0-9]{8}\.js$/, '.js'), import.meta.url)), contentType: 'application/javascript' }).catch(error => { assets.push(error.message); return route.abort(); });
-      return target.origin === origin && target.pathname.includes('/memories') ? route.continue() : route.abort();
+      return target.origin === origin && (target.pathname.includes('/memories') || target.pathname.includes('/wiki')) ? route.continue() : route.abort();
     });
     await load(url);
+    await page.getByLabel('Page path (required)').fill('runbooks/retries');
     await page.getByLabel('Title (required)').fill('Browser memory');
     await page.getByLabel('Page content (required)').fill('Keep caller retry tokens.');
     const id = await page.locator('[name=pageId]').inputValue();
     await page.getByRole('button', { name: 'Save page', exact: true }).click();
     await page.waitForFunction(() => document.querySelector('#repository-content h2')?.textContent === 'Browser memory');
+    const urls = [new URL(page.url()).pathname];
     const targets = [await page.locator('#repository-content').count()];
     await load(url);
-    await page.getByRole('link', { name: 'Browser memory', exact: true }).click();
+    await page.getByRole('link', { name: 'retries', exact: true }).click();
     await page.waitForFunction(() => document.querySelector('#repository-content h2')?.textContent === 'Browser memory');
     targets.push(await page.locator('#repository-content').count());
     await load(url + '?page=' + id);
     await page.getByRole('link', { name: 'New page', exact: true }).click();
     await page.waitForFunction(() => document.querySelector('#repository-content h2')?.textContent === 'New wiki page');
     targets.push(await page.locator('#repository-content').count());
-    process.stdout.write(JSON.stringify({ targets, fields: [await page.getByLabel('Title (required)').inputValue(), await page.getByLabel('Page content (required)').inputValue()] }));
+    urls.push(new URL(page.url()).pathname);
+    process.stdout.write(JSON.stringify({ targets, urls, fields: [await page.getByLabel('Page path (required)').inputValue(), await page.getByLabel('Title (required)').inputValue(), await page.getByLabel('Page content (required)').inputValue()] }));
   } finally { await browser.close(); }
 }
