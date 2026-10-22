@@ -1,0 +1,27 @@
+wiki-editor[data-mode='rich'] textarea,
+wiki-editor[data-mode='source'] [data-rich-editor] { display: none; }
+
+wiki-editor .milkdown {
+  --crepe-color-background: var(--color-bgBase);
+  --crepe-color-on-background: var(--color-textStrong);
+  --crepe-color-surface: var(--color-bgRaised);
+  --crepe-color-surface-low: var(--color-bgSunken);
+  --crepe-color-on-surface: var(--color-textStrong);
+  --crepe-color-on-surface-variant: var(--color-textWeak);
+  --crepe-color-outline: var(--color-textWeak);
+  --crepe-color-primary: var(--color-textBrand);
+  --crepe-color-secondary: var(--color-fillBrand-weak);
+  --crepe-color-on-secondary: var(--color-textStrong);
+  --crepe-color-hover: var(--color-fillWeak);
+  --crepe-color-selected: var(--color-fillBrand-weak);
+  --crepe-color-inverse: var(--color-bgInverse);
+  --crepe-color-on-inverse: var(--color-textInverse-strong);
+  --crepe-color-inline-code: var(--color-textBrand);
+  --crepe-color-error: var(--color-textError);
+  --crepe-font-default: inherit;
+  --crepe-font-title: inherit;
+  --crepe-base-font-size: 14px;
+}
+
+wiki-editor .milkdown .ProseMirror { min-height: 16rem; padding: 1rem; }
+wiki-editor .milkdown .ProseMirror:focus-visible { outline: 2px solid var(--color-strokeBrand-strong); outline-offset: -2px; }

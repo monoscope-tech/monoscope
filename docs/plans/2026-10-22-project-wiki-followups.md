@@ -37,6 +37,10 @@ Use `CrepeBuilder` with top bar, links, lists, tables, placeholders and cursor s
 
 Do not use the builder's default file uploader: it creates temporary browser blob URLs, which cannot survive saving and reopening a page. Keep durable image uploads outside this slice and allow existing Markdown image URLs. The builder requires its upload configuration even when uploads are disabled; removing the entire upload plugin prevents initialization.
 
-Prototype evidence is retained locally in `scripts/local/wiki-editor-spike/roundtrip.log`, `results.json`, and `bundle-minimal.log`. Production integration, source-mode switching, HTMX disposal, keyboard editing, history and server-side sanitization remain to verify.
+Prototype evidence is retained locally in `scripts/local/wiki-editor-spike/roundtrip.log`, `results.json`, and `bundle-minimal.log`.
+
+The editor adapter is implemented on the larger checkpoint branch, separately from #690. Its browser regression covers undo/redo, bold formatting, source-mode switching, Markdown persistence and HTMX navigation into a fresh editor. The focused watcher passed all 62 repository-context examples; TypeScript checking and all 1,028 frontend assertions passed. Local light/dark screenshots and a recording are retained. The editor imports on opening the edit panel and preserves untouched source bytes. The existing widget-navigation hook now also replaces Milkdown instances when HTMX morphs server markup.
+
+This is not yet a merge-ready editor PR: formatted server rendering with sanitization, broader save/reload fixtures, final local CI and the production image remain to verify.
 
 Merge each PR only after its review loop and required checks pass. Keep worker migration and billing/sandbox changes out of both wiki PRs.

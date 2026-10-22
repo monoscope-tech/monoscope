@@ -248,6 +248,8 @@ spec = do
         nested <- request H.methodGet ("/p/" <> testPid.toText <> "/wiki/runbooks/retries") []
         H.statusCode nested.simpleStatus `shouldBe` 200
         html nested `shouldSatisfy` T.isInfixOf "runbooks"
+        html nested `shouldSatisfy` T.isInfixOf "<wiki-editor"
+        html nested `shouldSatisfy` T.isInfixOf "Markdown source"
         html nested `shouldSatisfy` T.isInfixOf "/wiki/runbooks/retries"
         for_ ["runbooks%2Fretries", "runbooks/%252e%252e/private", "runbooks/%2e%2e/private"] \path -> do
           encoded <- request H.methodGet ("/p/" <> testPid.toText <> "/wiki/" <> path) []
@@ -358,7 +360,7 @@ spec = do
           AET.parseEither (AE.withObject "Browser result" (AE..: "fields")) value `shouldBe` Right (["", "", ""] :: [Text])
           AET.parseEither (AE.withObject "Browser result" (AE..: "urls")) value `shouldBe` Right (["/p/" <> testPid.toText <> "/wiki/runbooks/retries", "/p/" <> testPid.toText <> "/wiki"] :: [Text])
           pages <- runQueryEffect tr $ Memory.latestPages testPid
-          map (Memory.memoryText . (.document.body)) pages `shouldBe` ["Keep caller retry tokens."]
+          map (Memory.memoryText . (.document.body)) pages `shouldBe` ["**Keep caller retry tokens.**\n"]
 
     describe "Repository deployment evidence" do
       it "keeps deployment requests, reported statuses, failures, and result limits distinct" \tr -> do

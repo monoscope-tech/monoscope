@@ -347,9 +347,17 @@ instance ToHtml WikiGet where
             label_ [term "for" "memory-title", class_ "block space-y-1 text-sm font-medium text-textStrong"] do
               span_ "Title (required)"
               input_ ([id_ "memory-title", name_ "title", required_ "", maxlength_ "120", value_ form.title, class_ "input input-bordered w-full"] <> [Aria.describedby_ "memory-error" | isJust message])
-            label_ [term "for" "memory-body", class_ "block space-y-1 text-sm font-medium text-textStrong"] do
-              span_ "Page content (required)"
-              textarea_ ([id_ "memory-body", name_ "body", required_ "", maxlength_ "16000", rows_ "12", class_ "textarea textarea-bordered w-full text-sm font-normal"] <> [Aria.describedby_ "memory-error" | isJust message]) $ toHtml form.body
+            term "wiki-editor" [class_ "block", term "data-mode" "source"] do
+              label_ [hidden_ "", term "data-editor-controls" "", class_ "mb-3 block text-sm text-textStrong"] do
+                "Editing mode "
+                select_ [term "data-editor-mode" "", class_ "select select-bordered select-sm"] do
+                  option_ [value_ "rich"] "Rich text"
+                  option_ [value_ "source"] "Markdown source"
+              label_ [term "for" "memory-body", class_ "block space-y-1 text-sm font-medium text-textStrong"] do
+                span_ [id_ "memory-body-label"] "Page content (required)"
+                textarea_ ([id_ "memory-body", name_ "body", required_ "", maxlength_ "16000", rows_ "12", class_ "textarea textarea-bordered w-full text-sm font-normal"] <> [Aria.describedby_ "memory-error" | isJust message]) $ toHtml form.body
+              div_ [term "data-rich-editor" "", hidden_ "", class_ "mt-2 rounded-md border border-strokeWeak"] pass
+              p_ [term "data-editor-status" "", role_ "status", class_ "mt-2 text-xs text-textWeak"] "Content is saved as Markdown."
             button_ [type_ "submit", class_ "btn btn-sm btn-primary"] "Save page"
         unless (null history) $ details_ [class_ "border-t border-strokeWeak pt-4"] do
           summary_ [class_ "cursor-pointer text-sm font-medium text-textStrong"] "Revision history"
