@@ -34,6 +34,6 @@ else {
     await page.getByRole('link', { name: 'New page', exact: true }).click();
     await page.waitForFunction(() => document.querySelector('#repository-content h2')?.textContent === 'New wiki page');
     targets.push(await page.locator('#repository-content').count());
-    process.stdout.write(JSON.stringify({ targets }));
+    process.stdout.write(JSON.stringify({ targets, fields: [await page.getByLabel('Title (required)').inputValue(), await page.getByLabel('Page content (required)').inputValue()] }));
   } finally { await browser.close(); }
 }

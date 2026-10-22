@@ -34,6 +34,10 @@ The first PR, shared widget PNG rendering, is merged. Keep the larger agent impl
 
 The next independent PR is the project wiki (#689): `ProjectMemory`, its existing append-only migrations, repository wiki UI/routes, and HTTP/browser tests. The model uses typed author IDs without importing the agent runtime or billing models. Its tests now live in `Pages.CodeContextSpec` and pass independently (`--match "Project wiki"`: two examples, no failures). Agent tool wiring remains in the larger branch; conversational/investigation-agent memory access still needs implementation. This split does not complete the all-agent memory requirement.
 
+### Chat memory integration boundary
+
+The 2026-10-22 source trace found that `Pkg.AI.AgentAccess.ServiceAccess` carries no requesting identity. Slack access carries a linked user and revalidates that identity, but `Pages.Issues.aiChatPostH` and scheduled routines still start from the service default. Before adding wiki write tools, carry their authenticated user or persisted installation principal into the tool loop, enforce current project edit permission and the existing invocation policy, and persist an explicit assistant author. `ProjectMemory.Agent` identifies a repository-agent attempt; do not coerce a conversation or investigation ID into it. Extend the author sum and append a schema migration for the new author shape. Verify revoked access, viewer reads, rejected writes and concurrent revisions through the real tool loop. This wiring remains unfinished and is excluded from the independent wiki PR.
+
 ## Haskell ownership: revised implementation direction
 
 The user's 2026-10-21 direction is to keep JavaScript minimal and the bulk of this feature in Haskell. The JavaScript worker below is a locally tested research prototype, not the target application architecture. Do not add workflow, verification, billing, publication or artifact policy to it. Preserve its behavior/evaluation evidence while moving those responsibilities to the existing typed Haskell effects and models.

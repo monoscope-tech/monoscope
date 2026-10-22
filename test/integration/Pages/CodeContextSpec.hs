@@ -258,6 +258,9 @@ spec = do
         viewed <- request H.methodGet (base testPid <> "?page=" <> page.toText) []
         html viewed `shouldSatisfy` T.isInfixOf "Revision history"
         html viewed `shouldSatisfy` T.isInfixOf "Keep retry tokens. &lt;script&gt;"
+        (_, typedWiki) <- testServant tr $ PageCodeContext.memoryGetH testPid $ Just page
+        typedWiki.content.form.version `shouldBe` 2
+        typedWiki.content.canEdit `shouldBe` True
         stale <- save testPid 1 "Preserved draft" "Stale edit must not advance its expected revision"
         html stale `shouldSatisfy` T.isInfixOf "Preserved draft"
         html stale `shouldSatisfy` T.isInfixOf "name=\"version\" value=\"1\""
@@ -286,7 +289,7 @@ spec = do
         anonymous <- WT.runSession (WT.request $ WT.setPath Wai.defaultRequest $ encodeUtf8 $ base testPid) app
         H.statusCode anonymous.simpleStatus `shouldSatisfy` (`elem` [302, 401, 403, 404])
         demo <- WT.runSession (WT.request $ WT.setPath Wai.defaultRequest $ encodeUtf8 $ "/p/" <> testPid.toText <> "/repositories") app
-        html demo `shouldNotSatisfy` T.isInfixOf "?tab=wiki"
+        html demo `shouldNotSatisfy` T.isInfixOf "Project wiki"
         demoWiki <- WT.runSession (WT.request $ WT.setPath Wai.defaultRequest $ encodeUtf8 $ base testPid) app
         H.statusCode demoWiki.simpleStatus `shouldBe` 404
         void $ withResource tr.trPool \conn -> do
@@ -314,6 +317,7 @@ spec = do
           output <- readProcessStdout_ $ setEnv (("MONOSCOPE_TEST_BEARER", token) : environment) $ proc "node" ["test/fixtures/wiki-browser.mjs", "http://127.0.0.1:" <> show port <> "/p/" <> toString testPid.toText <> "/memories"]
           value <- either fail pure $ AE.eitherDecode @AE.Value output
           AET.parseEither (AE.withObject "Browser result" (AE..: "targets")) value `shouldBe` Right ([1, 1, 1] :: [Int])
+          AET.parseEither (AE.withObject "Browser result" (AE..: "fields")) value `shouldBe` Right (["", ""] :: [Text])
           pages <- runQueryEffect tr $ Memory.latestPages testPid
           map (Memory.memoryText . (.document.body)) pages `shouldBe` ["Keep caller retry tokens."]
 
