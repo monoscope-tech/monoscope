@@ -4,9 +4,9 @@
 
 [PR #689](https://github.com/monoscope-tech/monoscope/pull/689) merged on 2026-10-22 as `d8b3bf853ab39006967344bdab2b31972bf9948b`. All required checks, including the production image, passed. Its description includes the captioned walkthrough. This delivers project-scoped pages, permissions, immutable revisions and concurrent-edit protection.
 
-## 2. Page paths and tree navigation — next PR
+## 2. Page paths and tree navigation — PR #690
 
-Start from the merged foundation, independently of the larger impact-agent branch.
+[PR #690](https://github.com/monoscope-tech/monoscope/pull/690) starts from the merged foundation, independently of the larger impact-agent branch. Its description includes the paths/tree walkthrough. All local sign-off checks passed; the production image is still building.
 
 - Give each page a project-scoped path, such as `runbooks/payments/retries`, and a canonical URL under `/p/<project>/wiki/<page-path>`.
 - Keep UUID page identity stable. Add a new migration for paths; preserve existing content, authors and revisions. Backfill unique paths and enforce project/path uniqueness.
@@ -28,5 +28,15 @@ Base this PR on the merged paths/tree change.
 - Preserve unsaved content across validation errors and stale-version responses. Support keyboard operation, accessible toolbar controls, dark mode, and correct mount/disposal during HTMX navigation.
 
 Verify formatted editing, Markdown save/reload round-trips, source-mode switching, code/lists/links, hostile HTML/URLs, stale edits and browser navigation. Check the frontend bundle and production image; attach a short editor walkthrough.
+
+### Editor evaluation — 2026-10-22
+
+A local Chromium prototype of `@milkdown/crepe` 7.22.3 passed nine Markdown load/edit/export cases: basic formatting, task lists, tables, reference links, footnotes, raw HTML, unsafe URLs, images and Mermaid fences. Reference links become inline links and list/table whitespace is normalized; preserve the original Markdown until the user changes the document. Raw HTML remains an escaped editor atom, and the tested JavaScript link has no active destination. These checks cover the editor only; server-rendered HTML still needs separate sanitization tests.
+
+Use `CrepeBuilder` with top bar, links, lists, tables, placeholders and cursor support. The isolated build measured 213 KB JavaScript and 3.5 KB CSS compressed, versus 466 KB JavaScript for the general Crepe entry point. Import only those feature styles to omit math fonts. Lazy-load the editor on wiki editing; Haskell owns the shell and form, and Markdown remains the submitted value.
+
+Do not use the builder's default file uploader: it creates temporary browser blob URLs, which cannot survive saving and reopening a page. Keep durable image uploads outside this slice and allow existing Markdown image URLs. The builder requires its upload configuration even when uploads are disabled; removing the entire upload plugin prevents initialization.
+
+Prototype evidence is retained locally in `scripts/local/wiki-editor-spike/roundtrip.log`, `results.json`, and `bundle-minimal.log`. Production integration, source-mode switching, HTMX disposal, keyboard editing, history and server-side sanitization remain to verify.
 
 Merge each PR only after its review loop and required checks pass. Keep worker migration and billing/sandbox changes out of both wiki PRs.
