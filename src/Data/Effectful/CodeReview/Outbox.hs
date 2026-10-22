@@ -1,12 +1,13 @@
-module Data.Effectful.CodeReview.Outbox (Scope (..), Receipt (..), Outbox, outboxPath, withOutbox, replay, acknowledge) where
+module Data.Effectful.CodeReview.Outbox (Scope (..), Receipt (..), Outbox, outboxPath, withOutbox, replay, acknowledge, deliverPhase) where
 
 import Control.Monad (foldM)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Types qualified as AET
-import Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), readPrivateArtifact)
+import Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), readPrivateArtifact, writePrivateArtifact)
 import Data.Effectful.CodeReview.Types
-import Pkg.DeriveUtils (UUIDId)
+import Data.UUID.V4 qualified as UUID4
+import Pkg.DeriveUtils (UUIDId (..))
 import Relude
 import System.Directory (canonicalizePath, createDirectoryIfMissing, listDirectory, removeFile)
 import System.FileLock (SharedExclusive (..), withFileLock)
@@ -66,7 +67,7 @@ replay outbox record = do
     rank = \case Call _ -> 0 :: Int; Phase _ -> 2; _ -> 1
 
 
--- The SDK journals before transmission; the database must accept before unlink/ACK.
+-- Every producer journals before delivery; the database must accept before unlink/ACK.
 acknowledge :: Outbox -> Receipt -> (Receipt -> IO (Either Text ())) -> IO (Either Text ())
 acknowledge outbox receipt record = do
   let filename = toString (receiptId receipt) <> ".json"
@@ -75,6 +76,15 @@ acknowledge outbox receipt record = do
   result <- record receipt
   for_ result $ \() -> removeFile (outbox.path </> filename) >> sync outbox.path
   pure result
+
+
+deliverPhase :: Outbox -> UUIDId "agent_attempt" -> Step -> (Receipt -> IO (Either Text ())) -> IO (Either Text ())
+deliverPhase outbox attempt step record = do
+  ensure $ case outbox.scope of IssueFix _ -> True; _ -> False
+  identifier <- UUIDId <$> UUID4.nextRandom
+  let receipt = Phase $ PhaseReceipt identifier attempt step
+  writePrivateArtifact outbox.path (toString identifier.toText <> ".json") $ AE.encode receipt <> "\n"
+  acknowledge outbox receipt record
 
 
 readReceipt :: Outbox -> FilePath -> IO Receipt

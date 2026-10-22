@@ -25,6 +25,7 @@ import Data.Effectful.CodeReview qualified as Agent
 import Data.Effectful.CodeReview.Artifacts qualified as Native
 import Data.Effectful.CodeReview.Checkout qualified as Checkout
 import Data.Effectful.CodeReview.Explanation qualified as Media
+import Data.Effectful.CodeReview.Outbox qualified as Outbox
 import Data.Effectful.GitPublication qualified as Publication
 import Data.Effectful.LLM qualified as LLM
 import Data.Effectful.Wreq qualified as HTTP
@@ -500,6 +501,13 @@ spec = around withTestResources $ describe "Production impact reviews" do
               [baseline, candidate] -> pure (baseline, candidate)
               _ -> throwE "Verified comparison is missing"
             let artifacts = Agent.ArtifactRequest (toText repository) result baseline candidate
+            liftIO do
+              let admissions = store.usageDir </> "fixes" </> toString result.runId.toText </> "checks" </> "admissions"
+              entries <- listDirectory admissions
+              length entries `shouldBe` 1
+              for_ entries \entry -> do
+                retained <- either fail pure . AE.eitherDecodeStrict =<< readFileBS (admissions </> entry </> "admission.json")
+                retained `shouldBe` AE.object ["projectId" AE..= result.projectId, "runId" AE..= result.runId, "issueId" AE..= result.issueId, "attemptId" AE..= result.attemptId, "base" AE..= result.base, "regressionSha256" AE..= result.regressionSha256, "rationale" AE..= ("Relevant fixture regression admitted" :: Text)]
             ended <- liftIO toolEnds
             liftIO do
               length ended `shouldBe` 23
@@ -1698,6 +1706,46 @@ spec = around withTestResources $ describe "Production impact reviews" do
     denied `shouldSatisfy` isLeft
     readIORef recoveredCalls `shouldReturn` 1
     readFileBS launched `shouldReturn` launchesBefore
+
+  it "journals native fix phases before delivery and replays rejected or interrupted writes" \_tr -> withSystemTempDirectory "native-phase-delivery" \directory -> do
+    let uid n = UUIDId $ UUID.fromWords 56 0x4000 0x80000000 n
+        store = Agent.ArtifactStore directory (directory </> "cache")
+        attempt = uid 1
+    Outbox.withOutbox store (Outbox.IssueFix $ uid 2) \outbox -> do
+      let pendingFiles = filter (T.isSuffixOf ".json" . toText) <$> listDirectory (Outbox.outboxPath outbox)
+          inspect receipt = case receipt of
+            Outbox.Phase phase -> do
+              phase.attemptId `shouldBe` attempt
+              AE.toJSON phase.step `shouldBe` AE.toJSON Fixes.RestartReproduction
+              let path = Outbox.outboxPath outbox </> toString phase.id.toText <> ".json"
+              AE.eitherDecodeStrict <$> readFileBS path `shouldReturn` Right (AE.toJSON receipt)
+              permissions <- Posix.fileMode <$> Posix.getFileStatus path
+              Posix.intersectFileModes permissions 0o777 `shouldBe` 0o600
+            _ -> expectationFailure "Native phase publisher emitted a different receipt kind"
+          replay expected = do
+            observed <- newIORef ([] :: [AE.Value])
+            Outbox.replay outbox (\receipt -> inspect receipt >> modifyIORef' observed (<> [AE.toJSON receipt]) $> Right ()) `shouldReturn` Right ()
+            readIORef observed `shouldReturn` [expected]
+            pendingFiles `shouldReturn` []
+            Outbox.replay outbox (const $ fail "Acknowledged native phase replayed twice") `shouldReturn` Right ()
+      for_ [pure $ Left ("Phase store rejected delivery" :: Text), throwIO $ userError "Phase store lost its response"] \reject -> do
+        saved <- newIORef Nothing
+        outcome <- tryAny $ Outbox.deliverPhase outbox attempt Fixes.RestartReproduction \receipt -> inspect receipt >> writeIORef saved (Just $ AE.toJSON receipt) >> reject
+        outcome `shouldSatisfy` either (const True) isLeft
+        expected <- readIORef saved >>= maybe (fail "Native phase callback did not run") pure
+        replay expected
+      ready <- MVar.newEmptyMVar
+      blocked <- MVar.newEmptyMVar :: IO (MVar.MVar ())
+      withAsync (Outbox.deliverPhase outbox attempt Fixes.RestartReproduction \receipt -> inspect receipt >> MVar.putMVar ready (AE.toJSON receipt) >> MVar.takeMVar blocked $> Right ()) \worker -> do
+        expected <- Timeout.timeout (5 * 1000000) (MVar.takeMVar ready) >>= maybe (fail "Native phase delivery did not reach its callback") pure
+        cancel worker
+        isLeft <$> waitCatch worker `shouldReturn` True
+        replay expected
+    Outbox.withOutbox store (Outbox.Admission $ uid 3) \outbox -> do
+      called <- newIORef False
+      isLeft <$> tryAny (Outbox.deliverPhase outbox attempt Fixes.RestartReproduction $ const $ writeIORef called True $> Right ()) `shouldReturn` True
+      readIORef called `shouldReturn` False
+      filter (T.isSuffixOf ".json" . toText) <$> listDirectory (Outbox.outboxPath outbox) `shouldReturn` []
 
   it "recovers durable receipts in Haskell before starting the worker and retains rejected usage" \_tr -> withSystemTempDirectory "native-receipts" \temporary -> do
     directory <- canonicalizePath temporary

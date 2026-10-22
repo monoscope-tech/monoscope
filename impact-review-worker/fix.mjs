@@ -1,8 +1,6 @@
-import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, open } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import writeFileAtomic from 'write-file-atomic';
 import { z } from 'zod';
 import { createEditToolDefinition, createWriteToolDefinition } from '@earendil-works/pi-coding-agent';
 import { agentCommand, lockWorkspace, reviewRequest, runRepositoryAgent } from './review.mjs';
@@ -10,18 +8,13 @@ import { agentCommand, lockWorkspace, reviewRequest, runRepositoryAgent } from '
 const fixRequest = reviewRequest.omit({ head: true }).extend({ runId: z.uuid(), issueId: z.uuid() });
 const digest = (text) => createHash('sha256').update(text).digest('hex');
 const reply = (text, isError = false) => ({ content: [{ type: 'text', text }], details: {}, isError });
-const syncDirectory = async (path) => {
-  const handle = await open(path, 'r');
-  try { await handle.sync(); } finally { await handle.close(); }
-};
-
 export function fixIssue(input, options) {
   const issue = fixRequest.parse(input);
-  const attemptId = z.uuid().parse(options.attemptId);
-  if (!options.artifactDir || typeof options.bindGuest !== 'function' || typeof options.assertCandidate !== 'function' || typeof options.admitTest !== 'function' || typeof options.recordStep !== 'function' || typeof options.validateFix !== 'function' || typeof options.onEvent !== 'function') throw new Error('Issue fixes require private artifacts, host admission, phase/result acknowledgements, and metering');
+  z.uuid().parse(options.attemptId);
+  if (!options.artifactDir || typeof options.bindGuest !== 'function' || typeof options.assertCandidate !== 'function' || typeof options.admitTest !== 'function' || typeof options.restartFix !== 'function' || typeof options.observeFix !== 'function' || typeof options.validateFix !== 'function' || typeof options.onEvent !== 'function') throw new Error('Issue fixes require private artifacts, host admission, phase/result acknowledgements, and metering');
   return runRepositoryAgent({ ...issue, head: issue.base }, {
     ...options,
-    async createWorkflow({ vm, cwd, request, root, artifactDir, executeRegression, signal }) {
+    async createWorkflow({ vm, cwd, request, root, executeRegression, signal }) {
       const operationSignal = (toolSignal) => AbortSignal.any([signal, toolSignal].filter(Boolean));
       const checked = async (command, toolSignal, stdin) => {
         const active = operationSignal(toolSignal);
@@ -62,25 +55,14 @@ export function fixIssue(input, options) {
           throw error;
         }
       });
-      const persist = async (parent, id, files) => {
-        const collection = join(artifactDir, parent);
-        const directory = join(collection, id);
-        await mkdir(directory, { recursive: true, mode: 0o700 });
-        await syncDirectory(artifactDir);
-        await syncDirectory(collection);
-        for (const [name, contents] of Object.entries(files)) writeFileAtomic.sync(join(directory, name), contents, { mode: 0o600 });
-        await syncDirectory(directory);
-        return directory;
-      };
-      const recordStep = async (step, toolSignal) => {
+      const recordExecution = (toolSignal) => async (receipt) => {
         const active = operationSignal(toolSignal);
         active.throwIfAborted();
-        const acknowledgement = await options.recordStep(step, active);
+        await options.observeFix(receipt, active);
         active.throwIfAborted();
-        if (!acknowledgement || !Object.hasOwn(acknowledgement, 'Right')) throw new Error('Fix phase was not acknowledged by the host');
       };
-      const recordExecution = (toolSignal) => (receipt) => recordStep({ tag: 'Observe', contents: receipt }, toolSignal);
-      await recordStep({ tag: 'RestartReproduction' }, signal);
+      await options.restartFix(signal);
+      signal.throwIfAborted();
       return {
         name: 'submit_fix', label: 'Submit verified fix',
         tools: [
@@ -124,8 +106,6 @@ export function fixIssue(input, options) {
               const admission = await options.admitTest({ ...artifact, projectId: issue.projectId, issueId: issue.issueId, base: issue.base }, active);
               active.throwIfAborted();
               if (Object.hasOwn(admission, 'Left')) return reply(admission.Left, true);
-              if (typeof admission.Right !== 'string' || !admission.Right.trim()) return reply('Host admission requires a recorded rationale', true);
-              await persist('admissions', randomUUID(), { 'admission.json': JSON.stringify({ projectId: issue.projectId, runId: issue.runId, issueId: issue.issueId, attemptId, base: issue.base, regressionSha256: digest(JSON.stringify({ script: artifact.script, testPatch: artifact.testPatch, failureMessage: artifact.failureMessage })), rationale: admission.Right }) + '\n' });
               const result = await executeRegression(artifact, toolSignal, { revisions: [['base', request.base]], recordExecution: recordExecution(active) });
               if (result.isError) return result;
               const report = JSON.parse(result.content[0].text);
@@ -150,7 +130,6 @@ export function fixIssue(input, options) {
               if (Object.hasOwn(response, 'Left')) return reply(response.Left, true);
               const captured = response.Right;
               const revision = captured.head;
-              await recordStep({ tag: 'ProposeCandidate', contents: { revision, rootCause } }, active);
               request.head = revision;
               candidate = captured;
               return reply(JSON.stringify(captured));

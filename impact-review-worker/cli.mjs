@@ -2,7 +2,6 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import writeFileAtomic from 'write-file-atomic';
 import { z } from 'zod';
@@ -51,7 +50,7 @@ try {
         response = JSON.parse((await messages.next()).value);
       }
       if (typeof response.Left !== 'string' && !Object.hasOwn(response, 'Right')) throw new Error('Invalid query response');
-      if (['Call', 'Usage', 'Allocation', 'Check', 'Phase'].includes(tag)) {
+      if (['Call', 'Usage', 'Allocation', 'Check', 'RestartFix', 'ObserveFix'].includes(tag)) {
         if (Object.hasOwn(response, 'Left')) throw new Error('Receipt was rejected');
       }
       return response;
@@ -93,7 +92,8 @@ try {
       cacheDir: process.env.IMPACT_REVIEW_CACHE_DIR, script: fs.readFileSync(process.env.IMPACT_REVIEW_PREPARE_SCRIPT, 'utf8'),
       dependencyArchive: process.env.IMPACT_REVIEW_DEPENDENCY_ARCHIVE && resolve(process.env.IMPACT_REVIEW_DEPENDENCY_ARCHIVE),
     } : undefined,
-    recordStep: (step) => persistReceipt('Phase', { id: randomUUID(), attemptId, step }),
+    restartFix: (active) => exchange('RestartFix', [], active),
+    observeFix: (receipt, active) => exchange('ObserveFix', receipt, active),
     validateFix: (result) => exchange('Validate', result),
     validateAdmission: (result) => exchange('Validate', result),
     onEvent(event) {

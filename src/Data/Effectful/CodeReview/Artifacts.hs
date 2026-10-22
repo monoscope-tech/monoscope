@@ -1,4 +1,4 @@
-module Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), CandidateCause, CandidatePatch, mkCandidatePatch, CapturedCandidate, candidateMatchesPatch, captureCandidate, VerifiedArtifacts, PeerPreparation, artifactCheckout, peerPreparation, verifyArtifacts, withVerifiedArtifacts, readPrivateArtifact, sha256) where
+module Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), CandidateCause, CandidatePatch, mkCandidatePatch, CapturedCandidate, candidateMatchesPatch, candidateStep, captureCandidate, retainAdmission, VerifiedArtifacts, PeerPreparation, artifactCheckout, peerPreparation, verifyArtifacts, withVerifiedArtifacts, readPrivateArtifact, writePrivateArtifact, sha256) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.Encoding qualified as Encoding
@@ -157,8 +157,7 @@ withVerifiedArtifacts store request action = do
       case report.status of Completed -> pass
       script <- readPrivateArtifact execution "script.sh" 262144
       testPatch <- readPrivateArtifact execution "test.patch" 1048576
-      let frozen = toStrict $ Encoding.encodingToLazyByteString $ Encoding.pairs ("script" AE..= (decodeUtf8 script :: Text) <> "testPatch" AE..= (decodeUtf8 testPatch :: Text) <> "failureMessage" AE..= report.failureMessage)
-      ensure $ sha256 script == baseline.scriptSha256 && sha256 testPatch == report.testPatchSha256 && not (T.null report.failureMessage) && sha256 frozen == result.regressionSha256
+      ensure $ sha256 script == baseline.scriptSha256 && sha256 testPatch == report.testPatchSha256 && not (T.null report.failureMessage) && testArtifactHash (TestArtifact (decodeUtf8 script) (decodeUtf8 testPatch) report.failureMessage) == result.regressionSha256
       let (baseRow, headRow) = report.results
       ensure $ digest baseRow.testFilesSha256 && baseRow.testFilesSha256 == headRow.testFilesSha256
       let verifiedLog ((row, receipt) :: (Execution, CheckReceipt)) = do
@@ -252,6 +251,10 @@ candidateMatchesPatch :: CapturedCandidate -> UUIDId "fix_candidate" -> Text -> 
 candidateMatchesPatch candidate identifier patch = candidate.candidateId == identifier && sha256 (encodeUtf8 patch) == candidate.patchSha256
 
 
+candidateStep :: CapturedCandidate -> Step
+candidateStep candidate = ProposeCandidate $ Candidate candidate.head candidate.rootCause
+
+
 captureCandidate :: FilePath -> FixRequest -> FilePath -> CandidatePatch -> IO (Either Text CapturedCandidate)
 captureCandidate artifacts job checkout input = do
   outcome <- tryAny $ Timeout.timeout (120 * 1000000) do
@@ -266,12 +269,7 @@ captureCandidate artifacts job checkout input = do
         patchFile = directory </> "fix.patch"
         bundle = directory </> "candidate.bundle"
         reference = "refs/heads/monoscope-candidate/" <> toString identifier.toText
-        publish name bytes = withTempFile directory ".candidate-" \temporary handle -> do
-          LBS.hPut handle bytes
-          hFlush handle
-          sync temporary
-          renameFile temporary (directory </> name)
-          sync directory
+        publish = writePrivateArtifact directory
     createDirectoryIfMissing False collection
     Posix.setFileMode collection 0o700
     sync artifacts
@@ -295,8 +293,38 @@ captureCandidate artifacts job checkout input = do
     publish "candidate.json" $ AE.encode captured <> "\n"
     pure captured
   pure $ case outcome of Right (Just captured) -> Right captured; _ -> Left "Candidate could not be captured by the host"
-  where
-    sync path = bracket (Posix.openFd path Posix.ReadOnly Posix.defaultFileFlags{Posix.nofollow = True, Posix.cloexec = True}) Posix.closeFd fileSynchronise
+
+
+retainAdmission :: FilePath -> FixRequest -> TestArtifact -> Text -> IO ()
+retainAdmission artifacts job artifact rationale = do
+  let collection = artifacts </> "admissions"
+      request = job.request
+  createDirectoryIfMissing False collection
+  Posix.setFileMode collection 0o700
+  sync artifacts
+  identifier <- UUID4.nextRandom
+  let directory = collection </> show identifier
+  createDirectory directory
+  Posix.setFileMode directory 0o700
+  sync collection
+  writePrivateArtifact directory "admission.json" $ AE.encode $ AE.object ["projectId" AE..= request.projectId, "runId" AE..= request.runId, "issueId" AE..= job.issueId, "attemptId" AE..= request.attemptId, "base" AE..= request.base, "regressionSha256" AE..= testArtifactHash artifact, "rationale" AE..= rationale]
+
+
+testArtifactHash :: TestArtifact -> Text
+testArtifactHash artifact = sha256 $ toStrict $ Encoding.encodingToLazyByteString $ Encoding.pairs ("script" AE..= artifact.script <> "testPatch" AE..= artifact.testPatch <> "failureMessage" AE..= artifact.failureMessage)
+
+
+writePrivateArtifact :: FilePath -> FilePath -> LBS.ByteString -> IO ()
+writePrivateArtifact directory name bytes = withTempFile directory ".artifact-" \temporary handle -> do
+  LBS.hPut handle bytes
+  hFlush handle
+  sync temporary
+  renameFile temporary $ directory </> name
+  sync directory
+
+
+sync :: FilePath -> IO ()
+sync path = bracket (Posix.openFd path Posix.ReadOnly Posix.defaultFileFlags{Posix.nofollow = True, Posix.cloexec = True}) Posix.closeFd fileSynchronise
 
 
 bundleLimit :: Int

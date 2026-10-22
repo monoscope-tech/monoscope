@@ -28,7 +28,7 @@ import UnliftIO.Timeout qualified as Timeout
 
 
 -- JSON-lines protocol: queries, usage, execution receipts, validation, and result.
-data Message = Checkout () | Tool Policy.Invocation | Query TelemetryQuery | Knowledge KnowledgeRequest | Admit TestArtifact | Propose Native.CandidateCause | AssertCandidate (UUIDId "fix_candidate") | GuestResult (Either Text Text) | Validate AE.Value | Result AE.Value
+data Message = Checkout () | Tool Policy.Invocation | Query TelemetryQuery | Knowledge KnowledgeRequest | Admit TestArtifact | RestartFix () | ObserveFix CheckReceipt | Propose Native.CandidateCause | AssertCandidate (UUIDId "fix_candidate") | GuestResult (Either Text Text) | Validate AE.Value | Result AE.Value
   deriving stock (Generic)
   deriving anyclass (AE.FromJSON)
 
@@ -233,6 +233,14 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
                       void $ execute $ "/usr/bin/git" :| ["add", "-A"]
                       execute $ "/usr/bin/git" :| ["diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv", "--no-color", "--no-relative", "--src-prefix=a/", "--dst-prefix=b/", base, "--"]
                     receive supplied candidate remaining submissions accepted = do
+                      let advance step = case (task, supplied, journal) of
+                            (FixTask request, Just _, Just outbox) | remaining > 0 -> do
+                              saved <- Outbox.deliverPhase outbox request.request.attemptId step record
+                              writeMessage saved
+                              case saved of
+                                Left failure -> pure $ Left failure
+                                Right () -> receive supplied candidate (remaining - 1) submissions Nothing
+                            _ -> pure $ Left "Fix progress requires a prepared issue-fix task and remaining budget"
                       message <- (AE.eitherDecodeStrict >=> AET.parseEither parseMessage) <$> BS.hGetLine (getStdout process)
                       case message of
                         Left _ -> pure $ Left "Review agent returned an invalid protocol message"
@@ -280,8 +288,19 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
                           | remaining > 0 -> callbacks.knowledge requestKnowledge >>= writeMessage >> receive supplied candidate (remaining - 1) submissions Nothing
                           | otherwise -> pure $ Left "Review agent exceeded its query budget"
                         Right (Right (Admit artifact))
-                          | remaining > 0 -> callbacks.admit artifact >>= writeMessage >> receive supplied candidate (remaining - 1) submissions Nothing
+                          | isNothing supplied && isJust artifactStore -> pure $ Left "Review agent has not acquired its repository checkout"
+                          | remaining > 0 -> do
+                              admitted <- callbacks.admit artifact
+                              saved <- case (task, admitted) of
+                                (FixTask request, Right rationale)
+                                  | not (T.null $ T.strip rationale) -> for_ journal (\outbox -> Native.retainAdmission (Outbox.outboxPath outbox <> "/checks") request artifact rationale) $> admitted
+                                  | otherwise -> pure $ Left "Host admission requires a recorded rationale"
+                                _ -> pure admitted
+                              writeMessage saved
+                              receive supplied candidate (remaining - 1) submissions Nothing
                           | otherwise -> pure $ Left "Review agent exceeded its query budget"
+                        Right (Right (RestartFix ())) -> advance RestartReproduction
+                        Right (Right (ObserveFix receipt)) -> advance $ Observe receipt
                         Right (Right (AssertCandidate identifier)) -> case (task, supplied, candidate) of
                           (FixTask request, Just _, Just captured) | remaining > 0 -> do
                             unchanged <- capturePatch request.request.base
@@ -290,13 +309,19 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
                           _ -> pure $ Left "Workspace verification requires a captured issue-fix candidate and remaining budget"
                         Right (Right (GuestResult _)) -> pure $ Left "Guest response has no pending workspace command"
                         Right (Right (Propose cause)) -> case (task, supplied, journal) of
-                          (FixTask request, Just checkout, Just outbox) | remaining > 0 -> do
+                          (FixTask request, Just checkout, Just outbox) | remaining > 1 -> do
                             captured <- runExceptT do
                               snapshot <- ExceptT $ capturePatch request.request.base
                               patch <- hoistEither $ Native.mkCandidatePatch snapshot cause
                               ExceptT $ Native.captureCandidate (Outbox.outboxPath outbox <> "/checks") request checkout.directory patch
-                            writeMessage captured
-                            receive supplied (either (const candidate) Just captured) (remaining - 1) submissions Nothing
+                            case captured of
+                              Left _ -> writeMessage captured >> receive supplied candidate (remaining - 1) submissions Nothing
+                              Right value -> do
+                                saved <- Outbox.deliverPhase outbox request.request.attemptId (Native.candidateStep value) record
+                                writeMessage $ value <$ saved
+                                case saved of
+                                  Left failure -> pure $ Left failure
+                                  Right () -> receive supplied (Just value) (remaining - 2) submissions Nothing
                           _ -> pure $ Left "Candidate capture requires a prepared issue-fix task and remaining budget"
                         Right (Right (Validate draft))
                           | isNothing supplied && isJust artifactStore -> pure $ Left "Review agent has not acquired its repository checkout"

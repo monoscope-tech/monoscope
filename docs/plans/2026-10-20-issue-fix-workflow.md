@@ -853,3 +853,13 @@ Removed the JavaScript snapshot wrapper, root-cause validator and patch-hash dec
 The review caught a cancellation gap: a newly captured candidate could differ from the candidate still held by the SDK. The regression uses real native Git capture, then supplies a different candidate ID with identical patch bytes. It failed before the identity check (`expected False, got True`); integrity now requires both identity and hash to match.
 
 Verification: the final SDK scenario passed in 32.7983 seconds. All 41 focused doctests passed. Watchers compiled both server and tests; Fourmolu, HLint, Node syntax and whitespace checks passed. Three review passes completed. No hosted inference, PR update, CI attestation or deployment ran for this slice.
+
+### Native phase and admission journals (2026-10-22)
+
+Haskell now constructs restart, observed-check and candidate-proposal phases, assigns their receipt IDs and attempt attribution, and journals each receipt before database delivery. Rejection, exceptions or cancellation leave the same receipt available for replay. Acknowledgement removes it only after database acceptance. Candidate capture returns success to the SDK only after its proposal phase is accepted; capture and proposal still consume two budget units together.
+
+Admission metadata also moved to Haskell. It retains the existing project, run, issue, attempt, base, rationale and ordered regression fingerprint before acknowledging admission. The SDK test compares the retained record with the verified result. The existing optional artifact-store mode remains callback-only; store-backed admission requires checkout. Production SDK tasks acquire that checkout before any model call.
+
+Removed the Node admission persistence helper, phase construction, UUID generation for phases, and unused filesystem imports. Native receipts, candidate files and admission records share the existing atomic file-publication sequence. The SDK bridge retains cancellation checks and the required attempt-ID check. Reproduction execution, source unlocking and verification/submission state remain in JavaScript.
+
+Verification: all 24 impact-review watcher examples passed without failures or pending cases in 251.7720 seconds. All 41 focused doctests passed. The new native-journal case covers rejection, exceptions, cancellation, replay, owner-only files and non-fix scope denial. Server and test watchers compiled successfully. Fourmolu, HLint, Node syntax and whitespace checks passed; two review passes settled. No hosted inference, PR update, CI attestation or deployment ran.
