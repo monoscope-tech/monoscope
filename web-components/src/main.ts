@@ -11,7 +11,7 @@ const htmx4 = (window as any).htmx;
 // Morphing server markup over widget-owned DOM invalidates Lit's part markers
 // and Milkdown's editor references. Create fresh instances for navigation.
 // Morph hooks in HTMX 4 are extension callbacks, not DOM events.
-htmx4.registerExtension('widget-navigation', {
+htmx4.registerExtension('log-list-navigation', {
   htmx_before_morph_node(elt: Element, { newNode }: { newNode: Element }) {
     if (elt.localName !== 'log-list' && elt.localName !== 'wiki-editor') return;
     const replacement = newNode.cloneNode(true);

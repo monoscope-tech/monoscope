@@ -33,9 +33,9 @@ Verify formatted editing, Markdown save/reload round-trips, source-mode switchin
 
 A local Chromium prototype of `@milkdown/crepe` 7.22.3 passed nine Markdown load/edit/export cases: basic formatting, task lists, tables, reference links, footnotes, raw HTML, unsafe URLs, images and Mermaid fences. Reference links become inline links and list/table whitespace is normalized; preserve the original Markdown until the user changes the document. Raw HTML remains an escaped editor atom, and the tested JavaScript link has no active destination. These checks cover the editor only; server-rendered HTML still needs separate sanitization tests.
 
-Use `CrepeBuilder` with top bar, links, lists, tables, placeholders and cursor support. The isolated build measured 213 KB JavaScript and 3.5 KB CSS compressed, versus 466 KB JavaScript for the general Crepe entry point. Import only those feature styles to omit math fonts. Lazy-load the editor on wiki editing; Haskell owns the shell and form, and Markdown remains the submitted value.
+Use Milkdown's core editor with CommonMark/GFM, history, clipboard and trailing-paragraph plugins. The Crepe top bar failed a keyboard regression: icon buttons lacked accessible names and pointer-only handlers ignored Enter. Render labeled native formatting buttons in Haskell and use a small delegated adapter for Milkdown commands. Keep only Crepe's document styles. The resulting lazy chunk measures 140 KB compressed; it omits the ready-made menus, tooltips and upload plugin.
 
-Do not use the builder's default file uploader: it creates temporary browser blob URLs, which cannot survive saving and reopening a page. Keep durable image uploads outside this slice and allow existing Markdown image URLs. The builder requires its upload configuration even when uploads are disabled; removing the entire upload plugin prevents initialization.
+Do not enable temporary browser blob image uploads. Durable image uploads remain outside this slice; existing Markdown image URLs are supported.
 
 Prototype evidence is retained locally in `scripts/local/wiki-editor-spike/roundtrip.log`, `results.json`, and `bundle-minimal.log`.
 
@@ -45,6 +45,6 @@ Saved pages and revision history now render in Haskell with [commonmark](https:/
 
 The handler regression covers formatting, code blocks, tables, tasks, footnotes, script/form markup, encoded and mixed-case JavaScript links, rejected image URLs, and unchanged stored Markdown. The browser flow also saves a reference-style link through source and rich modes, verifies formatted read-back, and pins the exact Markdown bytes in the database. All 62 repository-context examples pass after these changes.
 
-Full local CI is running for the independent editor branch. A captioned 17-second walkthrough is recorded at 1280×900. The editor still needs its production image, pull request and attached walkthrough before merge. Keep the larger agent changes out of this PR.
+The independent editor branch passed Linux build, 1,874 doctests, 1,225 integration examples and 1,028 frontend assertions. Two full E2E runs failed dashboard interactions and log paging; do not attest or merge on those results. An unchanged merged paths/tree run is checking the baseline. A captioned walkthrough will be refreshed for the native toolbar. The editor still needs its production image, pull request and attached walkthrough before merge. Keep the larger agent changes out of this PR.
 
 Merge each PR only after its review loop and required checks pass. Keep worker migration and billing/sandbox changes out of both wiki PRs.

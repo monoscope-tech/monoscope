@@ -365,11 +365,31 @@ instance ToHtml WikiGet where
               span_ "Title (required)"
               input_ ([id_ "memory-title", name_ "title", required_ "", maxlength_ "120", value_ form.title, class_ "input input-bordered w-full"] <> [Aria.describedby_ "memory-error" | isJust message])
             term "wiki-editor" [class_ "block", term "data-mode" "source"] do
-              label_ [hidden_ "", term "data-editor-controls" "", class_ "mb-3 block text-sm text-textStrong"] do
-                "Editing mode "
-                select_ [term "data-editor-mode" "", class_ "select select-bordered select-sm"] do
-                  option_ [value_ "rich"] "Rich text"
-                  option_ [value_ "source"] "Markdown source"
+              div_ [hidden_ "", term "data-editor-controls" "", class_ "mb-3 space-y-2 text-sm text-textStrong"] do
+                label_ do
+                  "Editing mode "
+                  select_ [term "data-editor-mode" "", class_ "select select-bordered select-sm"] do
+                    option_ [value_ "rich"] "Rich text"
+                    option_ [value_ "source"] "Markdown source"
+                div_ [term "data-editor-formatting" "", class_ "flex flex-wrap gap-1", role_ "group", Aria.label_ "Text formatting"]
+                  $ for_
+                    ( [ ("Bold", "ToggleStrong", Nothing)
+                      , ("Italic", "ToggleEmphasis", Nothing)
+                      , ("Inline code", "ToggleInlineCode", Nothing)
+                      , ("Paragraph", "TurnIntoText", Nothing)
+                      , ("Heading 1", "WrapInHeading", Just "1")
+                      , ("Heading 2", "WrapInHeading", Just "2")
+                      , ("Bullet list", "WrapInBulletList", Nothing)
+                      , ("Numbered list", "WrapInOrderedList", Nothing)
+                      , ("Quote", "WrapInBlockquote", Nothing)
+                      , ("Code block", "CreateCodeBlock", Nothing)
+                      , ("Undo", "Undo", Nothing)
+                      , ("Redo", "Redo", Nothing)
+                      ]
+                        :: [(Text, Text, Maybe Text)]
+                    )
+                    \(label, command, parameter) ->
+                      button_ ([type_ "button", term "data-editor-command" command, class_ "btn btn-sm btn-ghost focus-visible:outline-2 focus-visible:outline-offset-2"] <> maybe [] (pure . term "data-editor-parameter") parameter) $ toHtml label
               label_ [term "for" "memory-body", class_ "block space-y-1 text-sm font-medium text-textStrong"] do
                 span_ [id_ "memory-body-label"] "Page content (required)"
                 textarea_ ([id_ "memory-body", name_ "body", required_ "", maxlength_ "16000", rows_ "12", class_ "textarea textarea-bordered w-full text-sm font-normal"] <> [Aria.describedby_ "memory-error" | isJust message]) $ toHtml form.body

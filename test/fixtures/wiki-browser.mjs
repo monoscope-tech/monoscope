@@ -43,7 +43,14 @@ else {
     await page.waitForFunction(text => document.querySelector('textarea[name=body]').value === text, initial);
     await rich.press('ControlOrMeta+Shift+z');
     await rich.press('ControlOrMeta+a');
-    await rich.press('ControlOrMeta+b');
+    const bold = page.getByRole('button', { name: 'Bold', exact: true });
+    await bold.waitFor({ timeout: 5000 });
+    await bold.focus();
+    await bold.press('Enter');
+    await page.getByRole('button', { name: 'Heading 2', exact: true }).focus();
+    await page.getByRole('button', { name: 'Heading 2', exact: true }).press('Enter');
+    assert.equal(await rich.locator('h2 strong').textContent(), 'Keep caller retry tokens.');
+    await page.getByRole('button', { name: 'Paragraph', exact: true }).click();
     await page.getByLabel('Editing mode').selectOption('source');
     assert.equal(await page.locator('textarea[name=body]').inputValue(), '**Keep caller retry tokens.**\n');
     await page.locator('textarea[name=body]').fill('**Keep caller retry tokens.**\n\n[Runbook][ref]\n\n[ref]: https://monoscope.tech\n');
