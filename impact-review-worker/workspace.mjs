@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createInterface } from 'node:readline';
+import { jsonLines } from './jsonl.mjs';
 import { DEFAULT_GUEST_TMPFS, VmCheckpoint } from '@earendil-works/gondolin';
 
 const exec = promisify(execFile);
@@ -41,15 +41,13 @@ const nativeLease = (prepared, request, image, options) => nativeInput('lease', 
   void exited.catch(() => {});
   let closing;
   const close = () => closing ??= (async () => { child.stdin.end(); await exited; })();
-  const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
   try {
-    const reply = await lines[Symbol.asyncIterator]().next();
+    const reply = await jsonLines(child.stdout).next();
     if (reply.done) throw new Error('Workspace preparation or integrity verification failed');
     const leased = JSON.parse(reply.value);
     if (!leased) throw new Error('Prepared workspace is no longer available');
     return { leased, exited, close, get released() { return closing !== undefined; } };
   } catch (error) { await close().catch(() => {}); throw error; }
-  finally { lines.close(); }
 });
 
 function resumePrepared(prepared, request, image, options) {

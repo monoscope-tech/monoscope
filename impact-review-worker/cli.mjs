@@ -7,20 +7,19 @@ import * as fs from 'node:fs';
 import writeFileAtomic from 'write-file-atomic';
 import { z } from 'zod';
 import { addAbortSignal } from 'node:stream';
-import { createInterface } from 'node:readline';
+import { jsonLines } from './jsonl.mjs';
 
 const controller = new AbortController();
 for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => controller.abort());
 const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(420000)]);
-let agentDir, lines;
+let agentDir;
 let pending = Promise.resolve();
 try {
   const guestImage = process.env.IMPACT_REVIEW_GUEST_IMAGE;
   let bytes = 0, inputLimit = 2 * 1024 * 1024;
   const input = addAbortSignal(signal, process.stdin);
   input.on('data', (chunk) => { bytes += chunk.length; if (bytes > inputLimit) controller.abort(); });
-  lines = createInterface({ input, crlfDelay: Infinity });
-  const messages = lines[Symbol.asyncIterator]();
+  const messages = jsonLines(input);
   const envelope = JSON.parse((await messages.next()).value);
   if (!guestImage) throw new Error('A pinned guest image is required');
   const isFix = envelope.tag === 'FixTask';
@@ -106,7 +105,6 @@ try {
   process.stderr.write(signal.aborted ? 'Impact review cancelled or timed out\n' : 'Impact review did not produce a validated result\n');
   process.exitCode = 1;
 } finally {
-  lines?.close();
   process.stdin.destroy();
   if (agentDir) await rm(agentDir, { recursive: true, force: true });
 }

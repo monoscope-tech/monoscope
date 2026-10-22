@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // SDK bridge only. Haskell selects commands, paths, resources and cache publication.
-import { createInterface } from 'node:readline';
+import { jsonLines } from './jsonl.mjs';
 import { open } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { DEFAULT_GUEST_TMPFS, RealFSProvider, ReadonlyProvider, VM, VmCheckpoint, importImageFromDirectory, resolveImageSelector } from '@earendil-works/gondolin';
@@ -10,9 +10,8 @@ const abort = () => { controller.abort(); void vm?.close().catch(() => {}); proc
 for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, abort);
 process.stdin.once('end', abort);
 process.stdout.once('error', abort);
-const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
 try {
-  for await (const line of lines) {
+  for await (const line of jsonLines(process.stdin)) {
     const { tag, contents } = JSON.parse(line);
     let result = [];
     try {
@@ -82,4 +81,4 @@ try {
       break;
     }
   }
-} finally { lines.close(); process.stdin.destroy(); await vm?.close(); }
+} finally { process.stdin.destroy(); await vm?.close(); }

@@ -229,9 +229,11 @@ export async function runRepositoryAgent(input, { modelRuntime, guestImage, expe
       },
     };
     tools.push(...(workflow.tools ?? []));
+    const submission = workflow.schema?.toJSONSchema() ?? preparedCheckout.policy.tools.find((tool) => tool.name === workflow.name)?.parameters;
+    if (!submission) throw new Error(`Host policy does not define ${workflow.name}`);
     tools.push({
       name: workflow.name, label: workflow.label ?? 'Submit review draft',
-      parameters: Type.Unsafe(workflow.schema ? workflow.schema.toJSONSchema() : preparedCheckout.policy.tools.find((tool) => tool.name === workflow.name).parameters),
+      parameters: Type.Unsafe(submission),
       async execute(_id, params, toolSignal) {
         const draft = workflow.schema ? workflow.schema.parse(params) : params;
         const reply = await workflow.prepare(draft, toolSignal);

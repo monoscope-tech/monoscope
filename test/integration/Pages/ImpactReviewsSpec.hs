@@ -1050,7 +1050,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                 $ Agent.runCodeReviewReal (Just store) (Just "test/fixtures/native-sdk-worker.py") [models, store.usageDir, store.cacheDir, image, directory </> "worker.log", "--cli", cli, "--temp", sdkTemp]
                 $ Agent.reviewRepository
                   configured
-                  (\telemetryQuery -> liftIO $ modifyIORef' queries (<> [telemetryQuery]) $> Right (AE.object ["key" AE..= ("query-1" :: Text), "queryResult" AE..= AE.object ["kind" AE..= ("aggregated" :: Text), "headers" AE..= (["count"] :: [Text]), "dataset" AE..= ([[7]] :: [[Int]]), "limitReached" AE..= False, "fieldsTruncated" AE..= False]]))
+                  (\telemetryQuery -> liftIO $ modifyIORef' queries (<> [telemetryQuery]) $> Right (AE.object ["key" AE..= ("query-1" :: Text), "queryResult" AE..= AE.object ["kind" AE..= ("aggregated" :: Text), "headers" AE..= (["count\x2028\x2029"] :: [Text]), "dataset" AE..= ([[7]] :: [[Int]]), "limitReached" AE..= False, "fieldsTruncated" AE..= False]]))
                   ( \knowledgeQuery -> liftIO $ case knowledgeQuery of
                       Agent.Recall service -> modifyIORef' knowledge (<> [AE.object ["tag" AE..= ("Recall" :: Text), "contents" AE..= service]]) $> Right (AE.toJSON ([] :: [AE.Value]))
                       Agent.Remember note -> modifyIORef' knowledge (<> [AE.object ["tag" AE..= ("Remember" :: Text), "contents" AE..= note]]) $> Right (AE.String "Note staged")
