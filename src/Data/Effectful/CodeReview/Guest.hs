@@ -3,7 +3,6 @@ module Data.Effectful.CodeReview.Guest (Host (..), Workspace (..), Lease (..), S
 import Data.Aeson qualified as AE
 import Data.Base64.Types (extractBase64)
 import Data.ByteString qualified as BS
-import "base64" Data.ByteString.Base64 qualified as Base64
 import Data.Effectful.AgentWorkspace (Command (..), Copy (..), Execution (..), GuestCommand (..), Image (..), ImageId (..), Isolation (..), LogExit (..), LoggedCommand (..), Overflow (..), RegressionOptions (..), Sandbox (..), SandboxFailure (..), agentCommand, withSandbox)
 import Data.Effectful.AgentWorkspace qualified as AgentWorkspace
 import Data.Effectful.CodeReview.Types (AllocationOutcome (..), AllocationReceipt, Revision, TestArtifact (..), agentResources, hostAllocation, revisionText)
@@ -20,6 +19,7 @@ import System.IO.Error (userError)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Process.Typed (proc, readProcess_)
 import UnliftIO.Exception (onException, throwIO, tryAny)
+import "base64" Data.ByteString.Base64 qualified as Base64
 
 
 -- | Trusted host inputs for an agent VM; skill directories are listed in precedence order.

@@ -3,7 +3,6 @@ module Data.Effectful.CodeReview.Checkout (Source (..), Prepared (..), Envelope 
 import Data.Aeson qualified as AE
 import Data.Base64.Types (extractBase64)
 import Data.ByteString qualified as BS
-import "base64" Data.ByteString.Base64 qualified as Base64
 import Data.Char (isAlphaNum, isAscii)
 import Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), artifactCheckout, peerEvidence, sha256, withVerifiedArtifacts)
 import Data.Effectful.CodeReview.Policy qualified as Policy
@@ -25,6 +24,7 @@ import System.Posix.Files qualified as Posix
 import System.Process.Typed (ExitCode (..), createPipe, getStdout, nullStream, proc, readProcessStdout_, setEnv, setStderr, setStdout, setWorkingDir, waitExitCode, withProcessTerm)
 import UnliftIO.Exception (throwIO, tryAny)
 import UnliftIO.Timeout qualified as Timeout
+import "base64" Data.ByteString.Base64 qualified as Base64
 
 
 data Source where

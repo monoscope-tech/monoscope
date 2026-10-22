@@ -6,7 +6,6 @@ import Control.Monad.Trans.Except (throwE)
 import Data.Aeson qualified as AE
 import Data.Base64.Types (extractBase64)
 import Data.ByteString qualified as BS
-import "base64" Data.ByteString.Base64 qualified as Base64
 import Data.ByteString.Lazy qualified as LBS
 import Data.Char (isAlphaNum, isAscii, isHexDigit)
 import Data.Conduit.Combinators qualified as CC
@@ -32,6 +31,7 @@ import System.Process.Typed (ExitCode (..), createPipe, getStderr, getStdout, nu
 import UnliftIO.Async (concurrently)
 import UnliftIO.Exception (bracket, tryAny)
 import UnliftIO.Timeout qualified as Timeout
+import "base64" Data.ByteString.Base64 qualified as Base64
 
 
 data Asset = Video | Diagram
