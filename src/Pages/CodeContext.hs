@@ -312,7 +312,10 @@ instance ToHtml WikiGet where
         pageLink page = base <> "/" <> Memory.pagePathText page.path
         visible = take Memory.pageLimit pages
         displayed = visible <> [page | page <- maybeToList current, all ((/= page.id) . (.id)) visible]
-        authorName = \case Memory.Member _ -> "Project member"; Memory.Agent _ -> "Agent"
+        authorName = \case
+          Memory.Member _ -> "Project member"
+          Memory.Agent _ -> "Agent"
+          Memory.Conversation _ -> "AI conversation"
         baseSyntax = gfmExtensions <> Markdown.defaultSyntaxSpec
         -- Embedded HTML is text; only Markdown constructs may create markup.
         syntax =

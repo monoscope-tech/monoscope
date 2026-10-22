@@ -364,7 +364,8 @@ threadDeleteH pid convId = authorizeProject pid >> Issues.deleteConversation pid
 submitTurn :: Projects.ProjectId -> UUIDId "conversation" -> Text -> ATAuthCtx ()
 submitTurn pid convId prompt = do
   appCtx <- ask @AuthContext
-  result <- Bots.processAIQueryWithMode (Just appCtx.config) appCtx.env.enableTimefusionReads AI.InteractiveWithActions AI.ServiceAccess pid prompt (Just convId) appCtx.config.openaiModel appCtx.config.openaiApiKey
+  session <- Projects.getSession
+  result <- Bots.processAIQueryWithMode (Just appCtx.config) appCtx.env.enableTimefusionReads AI.InteractiveWithActions (AI.SessionAccess session.user.id) pid prompt (Just convId) appCtx.config.openaiModel appCtx.config.openaiApiKey
   whenLeft_ result \err -> Issues.insertChatMessage pid convId Issues.ChatAssistant ("I couldn't complete that request: " <> err) Nothing Nothing
 
 
@@ -429,4 +430,9 @@ routineDeleteH pid convId = authorizeProject pid >> Issues.deleteRoutine pid con
 
 
 routineDestinationPostH :: Projects.ProjectId -> UUIDId "conversation" -> RoutineDestinationForm -> ATAuthCtx (RespHeaders (Html ()))
-routineDestinationPostH pid convId form = authorizeProject pid >> Issues.setRoutineDestination pid convId form.destination >> redirect pid "/routines"
+routineDestinationPostH pid convId form = do
+  authorizeProject pid
+  session <- Projects.getSession
+  Issues.setRoutineDestination pid convId form.destination
+  when (form.destination == Issues.DestinationSlack) $ void $ Issues.grantRoutineMemory pid convId session.user.id
+  redirect pid "/routines"

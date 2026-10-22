@@ -1,4 +1,4 @@
-module Data.Effectful.CodeReview.Policy (Role (..), ToolName (..), Tool (..), Invocation (..), Policy (..), policy, toolsForRole, toolSchema) where
+module Data.Effectful.CodeReview.Policy (Role (..), ToolName (..), Tool (..), Invocation (..), Policy (..), policy, toolsForRole, toolDefinition, toolSchema) where
 
 import Control.Lens ((.~), (?~))
 import Data.Aeson qualified as AE
@@ -33,8 +33,8 @@ data Policy = Policy {instructions :: Text, tools :: [Tool]}
   deriving anyclass (AE.ToJSON)
 
 
-policy :: Role -> Text -> Text -> Text -> Policy
-policy role base headRevision rootInstructions = Policy instructions $ map (\name -> Tool name (toolDescription name) (toolSchema name) (role /= Advisory)) (toolsForRole role)
+toolDefinition :: Role -> ToolName -> Tool
+toolDefinition role name = Tool name (toolDescription name) (toolSchema name) (role /= Advisory)
   where
     toolDescription :: ToolName -> Text
     toolDescription = \case
@@ -52,6 +52,11 @@ policy role base headRevision rootInstructions = Policy instructions $ map (\nam
       ReadProjectMemory -> "Read the latest revision of a project wiki page. Recheck conclusions against current source and telemetry."
       WriteProjectMemory -> "Save concise reusable project context as a new wiki revision. Preserve useful existing content. Supply the last read version to avoid overwriting concurrent edits; a new UUID page starts at version 0. Exclude credentials, personal data, raw logs and source excerpts. This is an attributed agent observation, not verified evidence."
       SubmitReview -> "Submit structured findings and coverage for validation. Repair any validation error using repository or telemetry evidence. After acceptance, finish without further tool calls."
+
+
+policy :: Role -> Text -> Text -> Text -> Policy
+policy role base headRevision rootInstructions = Policy instructions $ map (toolDefinition role) (toolsForRole role)
+  where
     grounding = "Ground external API compatibility claims in the specified library/runtime version and its actual signature or implementation. For claims about changed incidental behavior, establish user impact through a concrete caller or documented contract. Do not turn an unverified contract assumption into a finding."
     instructions = case role of
       Advisory ->

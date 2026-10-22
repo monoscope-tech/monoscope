@@ -200,7 +200,13 @@ data Channel = Channel
 
 
 processAIQuery :: (DB es, ELLM.LLM :> es, HTTP :> es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es, UUIDEff :> es) => Maybe EnvConfig -> Bool -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe (UUIDId "conversation") -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
-processAIQuery sourceConfig useTf = processAIQueryWithMode sourceConfig useTf AI.InteractiveReadOnly
+processAIQuery sourceConfig useTf access = processAIQueryWithMode sourceConfig useTf mode access
+  where
+    mode = case access of
+      AI.ServiceAccess -> AI.InteractiveReadOnly
+      AI.SessionAccess{} -> AI.InteractiveWithMemory
+      AI.SlackAccess{} -> AI.InteractiveWithMemory
+      AI.SlackInvestigationAccess{} -> AI.InteractiveWithMemory
 
 
 processAIQueryWithMode :: (DB es, ELLM.LLM :> es, HTTP :> es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es, Tracing :> es, UUIDEff :> es) => Maybe EnvConfig -> Bool -> AI.InvocationMode -> AI.AgentAccess -> Projects.ProjectId -> Text -> Maybe (UUIDId "conversation") -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
@@ -219,6 +225,7 @@ processAIQueryWithMode sourceConfig useTf invocationMode access pid userQuery co
           , AI.invocationMode = invocationMode
           , AI.maxIterations = case access of
               AI.SlackInvestigationAccess{} -> 12
+              AI.SessionAccess{} -> defaults.maxIterations
               AI.SlackAccess{} -> defaults.maxIterations
               AI.ServiceAccess -> defaults.maxIterations
           }
