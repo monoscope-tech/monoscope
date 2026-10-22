@@ -40,6 +40,17 @@ runMono args = do
 
 spec :: Spec
 spec = describe "CLI binary E2E tests" do
+  it "releasePackage_isRunnableWithPortableLinkage" do
+    findBinary >>= \case
+      Nothing -> pendingWith "Build the CLI with make cli-build"
+      Just bin -> withSystemTempDirectory "monoscope-release" \directory -> do
+        let packaged = directory <> "/monoscope"
+        (status, output, errors) <- readProcessWithExitCode "scripts/package-cli.sh" [bin, packaged] ""
+        unless (status == ExitSuccess) $ expectationFailure $ output <> errors
+        (versionStatus, version, _) <- readProcessWithExitCode packaged ["--version"] ""
+        versionStatus `shouldBe` ExitSuccess
+        version `shouldContain` "monoscope "
+
   it "--help exits 0 and lists subcommands" do
     (code, out, _) <- runMono ["--help"]
     code `shouldBe` ExitSuccess

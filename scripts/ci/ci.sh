@@ -381,7 +381,7 @@ run_body() { # <check>
       scripts/e2e.sh
       ;;
     # Provisioned SDK guests run through the Haskell suite; its inputs include the worker.
-    integration-tests) run_integration ;;
+    integration-tests) test -x scripts/package-cli.sh && run_integration ;;
     *) die "no body for check '$1'" ;;
   esac
 }
@@ -399,6 +399,10 @@ run_integration() {
   # reached under CI_ALLOW_DEGRADED — cmd_run refuses this check otherwise.
   case " ${CAPS:-} " in *" tf-real "*) ;; *) unset TIMEFUSION_PG_TEST_URL ;; esac
   export USE_EXTERNAL_DB=true LOG_LEVEL=${LOG_LEVEL:-warn}
+  cabal build monoscope-cli:exe:monoscope -j $CABAL_FLAGS "$CABAL_OPTS"
+  MONOSCOPE_BIN=$(cabal list-bin -v0 monoscope-cli:exe:monoscope $CABAL_FLAGS "$CABAL_OPTS")
+  export MONOSCOPE_BIN
+  [ -x "$MONOSCOPE_BIN" ] || die "CLI binary was not built at $MONOSCOPE_BIN"
   (cd web-components && npm ci --prefer-offline --no-audit)
   prepare_browser
   make build-chart-cli

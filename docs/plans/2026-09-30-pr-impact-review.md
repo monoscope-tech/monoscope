@@ -17,6 +17,12 @@ After replaying the feature onto `master` at `cb406743c`, the checkpoint integra
 
 See [the workflow contract](2026-10-20-issue-fix-workflow.md) for the required product behavior. The dated research and migration notes below preserve evidence from earlier stages; their intermediate test counts and pending-work statements are historical. This checkpoint describes the current state.
 
+### CLI release packaging — 2026-10-23
+
+Local release builds and the GitHub CLI release workflow now share one packaging script. On macOS it relocates build-machine zlib linkage to the system library, signs the copied executable, verifies its signature and retains the existing forbidden-linkage guard. Both platforms run the packaged executable before accepting it. Optimized local release objects use a separate build directory and do not rewrite the development GHC environment.
+
+The regression first failed on the Homebrew zlib dependency, then passed after the fix. The long-lived watcher passed all 64 CLI binary examples with zero failures. `make cli-release-build` produced a runnable macOS ARM64 executable; the development shared library and GHC environment retained their original hashes and modification times. Shell syntax, CI self-tests and whitespace checks passed. Linux packaging, the production worker image and deployment remain unverified in this slice; no CI attestation or push was performed.
+
 ### SDK policy migration — 2026-10-22
 
 The application now uses tool pass-through on the existing acknowledged protocol. Haskell supplies role-specific prompts and OpenAPI tool schemas; the child registers SDK tools. Haskell checks the telemetry/wiki tool allowlist, arguments and query budget. There is no new MCP server or HTTP transport. Candidate commit/bundle creation, hashes and synced metadata also run in Haskell against its leased checkout.
@@ -68,7 +74,7 @@ The watcher passed all 25 impact-review examples with zero failures and no pendi
 
 Restore and eviction staging now have durable, project-scoped ownership records and reclaiming proofs. Maintenance skips busy project locks, checks current archived bytes before reclaiming completed staged data, and can resume deletion when a prior crash already removed the staged manifest. The recovery contract and retained preparation/lease boundary are documented in the operations reference. The final watcher passed all 25 impact-review examples in 243.1936 seconds (seed `478291233`) after the journal durability fix. The crash test uses the actual CLI and S3 storage, while a small test-only shell gate delays the SDK metadata response. No application JavaScript was added.
 
-This does not finish sandbox maintenance: preparation/lease/VM orphan reconciliation, remote retention and allocation admission remain. Transfer journals remain unpriced until the accounting work consumes them. The development CLI linkage check currently fails on `/opt/homebrew/opt/zlib/lib/libz.1.dylib`; no dependency was added in this slice, and release packaging must resolve and verify that linkage before shipping. No failed check is attested.
+This does not finish sandbox maintenance: preparation/lease/VM orphan reconciliation, remote retention and allocation admission remain. Transfer journals remain unpriced until the accounting work consumes them. At this checkpoint the development CLI linkage check failed on `/opt/homebrew/opt/zlib/lib/libz.1.dylib`; the release-packaging follow-up above resolves that dependency in the packaged copy. No failed check is attested.
 
 
 ## Haskell ownership: revised implementation direction

@@ -21,7 +21,7 @@ build	ghc	@hs @fe
 doctests	ghc	@hs @fe
 unit-tests	ghc	@hs @fe
 cli-tests	ghc	@cli
-integration-tests	ghc node bun pg minio tf-real	@hs @fe impact-review-worker e2e/package.json e2e/package-lock.json
+integration-tests	ghc node bun pg minio tf-real	@hs @fe impact-review-worker e2e/package.json e2e/package-lock.json scripts/package-cli.sh scripts/check-cli-linkage.sh
 weeder	ghc	@hs @fe
 hlint	hlint	src shared/src cli .hlint.yaml
 ui-tests	node	@fe @uisrc

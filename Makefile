@@ -84,13 +84,16 @@ live-reload: kill-live-reload
 cli-build:
 	cabal build monoscope-cli:exe:monoscope --ghc-options="-O0"
 
-# Release-shaped build: optimised, section-split, stripped, and checked for
-# native-library linkage the way cli-release.yml does it.
+# Keep release objects separate from the shared library loaded by ghcid.
 cli-release-build:
-	cabal build monoscope-cli:exe:monoscope -j --ghc-options="-O2 -split-sections +RTS -A64m -n2m -RTS"
-	@BIN=$$(cabal list-bin monoscope-cli:exe:monoscope | tail -n1); \
-	cp "$$BIN" ./monoscope && strip -x ./monoscope 2>/dev/null || strip -s ./monoscope; \
-	./scripts/check-cli-linkage.sh ./monoscope
+	@case "$$(uname -s)" in \
+	  Darwin) dead_code="-optl-Wl,-dead_strip" ;; \
+	  *) dead_code="-split-sections -optl-Wl,--gc-sections" ;; \
+	esac; \
+	release_opts="-O2 $$dead_code +RTS -A64m -n2m -RTS"; \
+	cabal build monoscope-cli:exe:monoscope -j --builddir=dist-newstyle/cli-release --write-ghc-environment-files=never --ghc-options="$$release_opts" && \
+	BIN=$$(cabal list-bin -v0 monoscope-cli:exe:monoscope --builddir=dist-newstyle/cli-release --write-ghc-environment-files=never --ghc-options="$$release_opts") && \
+	./scripts/package-cli.sh "$$BIN" ./monoscope
 
 cli-test:
 	cabal test monoscope-cli:cli-tests --test-show-details=direct
