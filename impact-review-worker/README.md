@@ -8,6 +8,8 @@ The pinned libraries are `@earendil-works/pi-coding-agent` 1.4.0 and `@earendil-
 
 Use Node 22.19 or newer, Git, the current Monoscope CLI and a supported local hypervisor. Linux needs hardware virtualization. Image export also needs Docker or Podman, `cpio`, `lz4` and `e2fsprogs`.
 
+Guest builds select Docker, then Podman if Docker is unavailable. Set `IMPACT_REVIEW_CONTAINER_ENGINE=docker` or `podman` to choose explicitly; building and asset export use that same engine.
+
 ```sh
 npm ci --ignore-scripts
 npm run build:guest

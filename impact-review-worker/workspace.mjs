@@ -42,7 +42,7 @@ const nativeLease = (prepared, request, image, options) => nativeInput('lease', 
   let closing;
   const close = () => closing ??= (async () => { child.stdin.end(); await exited; })();
   try {
-    const reply = await jsonLines(child.stdout).next();
+    const reply = await jsonLines(child.stdout, 1024 * 1024).next();
     if (reply.done) throw new Error('Workspace preparation or integrity verification failed');
     const leased = JSON.parse(reply.value);
     if (!leased) throw new Error('Prepared workspace is no longer available');

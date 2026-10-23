@@ -6,6 +6,7 @@
     "node": ">=22.19.0"
   },
   "scripts": {
+    "test": "node --test worker.test.mjs",
     "start": "node pi-host.mjs",
     "build:guest": "node build-guest.mjs"
   },

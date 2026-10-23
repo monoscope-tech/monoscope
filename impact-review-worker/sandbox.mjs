@@ -11,7 +11,7 @@ for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, abort);
 process.stdin.once('end', abort);
 process.stdout.once('error', abort);
 try {
-  for await (const line of jsonLines(process.stdin)) {
+  for await (const line of jsonLines(process.stdin, 16 * 1024 * 1024)) {
     const { tag, contents } = JSON.parse(line);
     let result = [];
     try {
