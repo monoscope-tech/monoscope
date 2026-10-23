@@ -15,6 +15,7 @@ import Data.Text qualified as T
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID4
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
+import Pkg.GitCommand qualified as HostGit
 import Relude
 import System.Directory (canonicalizePath, createDirectory, createDirectoryIfMissing, renameFile)
 import System.Environment (getEnvironment)
@@ -25,7 +26,7 @@ import System.IO.Temp (withSystemTempDirectory, withTempFile)
 import System.Posix.Files qualified as Posix
 import System.Posix.IO qualified as Posix
 import System.Posix.Unistd (fileSynchronise)
-import System.Process.Typed (nullStream, proc, readProcessStdout_, setEnv, setStderr, setWorkingDir)
+import System.Process.Typed (readProcessStdout_)
 import UnliftIO.Exception (bracket, bracketOnError, throwIO, tryAny)
 import UnliftIO.Timeout qualified as Timeout
 import "base64" Data.ByteString.Base64 qualified as Base64
@@ -184,9 +185,9 @@ withVerifiedArtifacts store request action = do
       cache <- canonicalizePath store.cacheDir
       let mirror = cache </> toString result.projectId.toText </> toString (sha256 $ encodeUtf8 request.repository)
       canonical mirror
-      environment <- filter ((== "PATH") . fst) <$> getEnvironment
+      environment <- getEnvironment
       let checkout = directory </> "checkout"
-          git cwd args = T.strip . decodeUtf8 <$> readProcessStdout_ (setStderr nullStream $ setEnv (environment <> [("LC_ALL", "C"), ("GIT_CONFIG_NOSYSTEM", "1"), ("GIT_CONFIG_GLOBAL", "/dev/null"), ("GIT_ALLOW_PROTOCOL", "file")]) $ setWorkingDir cwd $ proc "git" $ ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"] <> args)
+          git cwd args = T.strip . decodeUtf8 <$> readProcessStdout_ (HostGit.command environment HostGit.Local cwd args)
       -- Git transport avoids copying a mirror's object files while another worker fetches.
       void $ git directory ["clone", "--quiet", "--no-local", "--no-checkout", "--", mirror, checkout]
       writeFileBS (directory </> "candidate.bundle") bundle
@@ -292,9 +293,9 @@ candidateResult candidate receipt summary = case receipt.regression of
 captureCandidate :: FilePath -> FixRequest -> FilePath -> CandidatePatch -> IO (Either Text CapturedCandidate)
 captureCandidate artifacts job checkout input = do
   outcome <- tryAny $ Timeout.timeout (120 * 1000000) do
-    environment <- filter ((== "PATH") . fst) <$> getEnvironment
+    environment <- getEnvironment
     let request = job.request
-        git args = T.strip . decodeUtf8 <$> readProcessStdout_ (setStderr nullStream $ setEnv (environment <> [("LC_ALL", "C"), ("GIT_CONFIG_NOSYSTEM", "1"), ("GIT_CONFIG_GLOBAL", "/dev/null"), ("GIT_ALLOW_PROTOCOL", "file"), ("GIT_TERMINAL_PROMPT", "0")]) $ setWorkingDir checkout $ proc "git" $ ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"] <> args)
+        git args = T.strip . decodeUtf8 <$> readProcessStdout_ (HostGit.command environment HostGit.Local checkout args)
         ensure condition = unless condition $ throwIO $ userError "Invalid captured candidate"
     base <- either (const $ throwIO $ userError "Invalid candidate base") pure $ mkRevision request.base
     identifier <- UUIDId <$> UUID4.nextRandom

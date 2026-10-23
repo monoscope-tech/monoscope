@@ -25,6 +25,7 @@ import Network.HTTP.Client.TLS qualified as TLS
 import Network.Minio qualified as Minio
 import Network.URI (URI (..), URIAuth (..), parseURI)
 import Pkg.Deriving (WrappedEnumSC (..))
+import Pkg.GitCommand qualified as HostGit
 import Relude hiding (Identity, identity, withFile)
 import System.Directory (canonicalizePath, createDirectory, createDirectoryIfMissing, doesDirectoryExist, listDirectory, removePathForcibly, renameDirectory, renameFile)
 import System.Environment (getEnvironment)
@@ -37,7 +38,7 @@ import System.Posix.Files qualified as Posix
 import System.Posix.IO qualified as Posix
 import System.Posix.Process (getParentProcessID)
 import System.Posix.Unistd (fileSynchronise)
-import System.Process.Typed (createPipe, getStdin, getStdout, nullStream, proc, readProcessStdout_, setEnv, setStderr, setStdin, setStdout, setWorkingDir, withProcessTerm)
+import System.Process.Typed (createPipe, getStdin, getStdout, nullStream, proc, readProcessStdout_, setEnv, setStderr, setStdin, setStdout, withProcessTerm)
 import UnliftIO.Async (withAsync)
 import UnliftIO.Concurrent (myThreadId, threadDelay)
 import UnliftIO.Exception (bracket, bracketOnError, catchAny, evaluate, onException, throwIO, throwTo, tryAny)
@@ -834,8 +835,8 @@ runWorkspaceReal = interpret $ \env -> \case
           privateWrite path bytes = writeFileBS path bytes >> Posix.setFileMode path 0o600
       ensure $ isAbsolute options.checkout && isAbsolute options.artifactDir
       checkout <- canonicalizePath options.checkout
-      environment <- filter ((== "PATH") . fst) <$> getEnvironment
-      let hostGit args = readProcessStdout_ $ setWorkingDir checkout $ setStderr nullStream $ setEnv (environment <> [("GIT_CONFIG_NOSYSTEM", "1"), ("GIT_CONFIG_GLOBAL", "/dev/null"), ("GIT_TERMINAL_PROMPT", "0"), ("GIT_ALLOW_PROTOCOL", "file")]) $ proc "git" $ ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"] <> args
+      environment <- getEnvironment
+      let hostGit args = readProcessStdout_ $ HostGit.command environment HostGit.Local checkout args
       headRevision <- T.strip . decodeUtf8 <$> hostGit ["rev-parse", "HEAD"]
       for_ revisions \(side, revision) -> ensure $ revisionText revision == (if side == Base then revisionText request.base else headRevision)
       root <- canonicalizePath options.artifactDir
@@ -1084,7 +1085,7 @@ runWorkspaceReal = interpret $ \env -> \case
                 Just _ -> pure saved
                 Nothing -> withTempDirectory parent ".prepare-" \temporary -> withSystemTempDirectory "monoscope-native-baseline" \source -> do
                   let clean = source </> "checkout"
-                      git args = readProcessStdout_ $ setWorkingDir source $ setEnv (filter ((== "PATH") . fst) environment <> [("GIT_CONFIG_NOSYSTEM", "1"), ("GIT_CONFIG_GLOBAL", "/dev/null"), ("GIT_TERMINAL_PROMPT", "0"), ("GIT_ALLOW_PROTOCOL", "file")]) $ setStderr nullStream $ proc "git" $ ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"] <> args
+                      git args = readProcessStdout_ $ HostGit.command environment HostGit.Local source args
                       execute cwd quiet argv = do
                         result <- rpc @Execution $ Execute $ GuestCommand argv cwd quiet
                         ensure $ result.exitCode == 0

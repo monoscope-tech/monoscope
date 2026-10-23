@@ -64,6 +64,7 @@ import Pages.GitSync qualified as GitSyncPage
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Git qualified as Git
+import Pkg.GitCommand qualified as HostGit
 import Pkg.ImpactReview qualified as Impact
 import Pkg.Minio qualified as Storage
 import Pkg.Parser.Stats qualified as KQL
@@ -191,6 +192,18 @@ deliver tr value = do
 
 spec :: Spec
 spec = around withTestResources $ describe "Production impact reviews" do
+  it "hostGit_ignoresInheritedCredentialsAndCommands" \_ -> withSystemTempDirectory "isolated-host-git" \directory -> do
+    path <- filter ((== "PATH") . fst) <$> getEnvironment
+    let inherited = path <> [("MONOSCOPE_GIT_SECRET", "host-only"), ("GIT_CONFIG_COUNT", "1"), ("GIT_CONFIG_KEY_0", "alias.inherited"), ("GIT_CONFIG_VALUE_0", "!echo unsafe-host-command"), ("GIT_CONFIG_GLOBAL", "/missing-host-config")]
+    for_ [(HostGit.Local, "file" :: Text), (HostGit.GitHub Nothing, "https"), (HostGit.GitHub $ Just "fixture-token", "https")] \(access, protocol) -> do
+      let git args = decodeUtf8 @Text <$> readProcessStdout_ (HostGit.command inherited access directory args)
+      environment <- git ["-c", "alias.environment=!env", "environment"]
+      environment `shouldNotSatisfy` T.isInfixOf "MONOSCOPE_GIT_SECRET"
+      environment `shouldSatisfy` T.isInfixOf ("GIT_ALLOW_PROTOCOL=" <> protocol)
+      configured <- git ["config", "--list"]
+      configured `shouldNotSatisfy` T.isInfixOf "alias.inherited"
+      for_ ["core.hookspath=/dev/null", "core.fsmonitor=false", "credential.helper=", "http.followredirects=false"] \setting -> configured `shouldSatisfy` T.isInfixOf setting
+
   it "closes the actual SDK sandbox when its parent pipe ends during a command" \_tr -> withSystemTempDirectory "native-sdk-pipe-loss" \directory -> do
     available <- doesFileExist "impact-review-worker/.guest/manifest.json"
     unless available $ pendingWith "Build the self-hosted guest before running SDK integration tests"

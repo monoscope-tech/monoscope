@@ -4,7 +4,6 @@ import Conduit (runConduit, (.|))
 import Control.Monad (foldM)
 import Control.Monad.Trans.Except (throwE)
 import Data.Aeson qualified as AE
-import Data.Base64.Types (extractBase64)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Char (isAlphaNum, isAscii, isHexDigit)
@@ -18,6 +17,7 @@ import Data.Text qualified as T
 import Data.UUID qualified as UUID
 import Network.HTTP.Types.URI (urlEncode)
 import Pkg.Git qualified as Git
+import Pkg.GitCommand qualified as HostGit
 import Relude
 import System.Directory (canonicalizePath, createDirectoryIfMissing, doesPathExist, renameFile)
 import System.Environment (getEnvironment)
@@ -27,11 +27,10 @@ import System.IO.Temp (withSystemTempDirectory, withTempFile)
 import System.Posix.Files qualified as Posix
 import System.Posix.IO qualified as Posix
 import System.Posix.Unistd (fileSynchronise)
-import System.Process.Typed (ExitCode (..), createPipe, getStderr, getStdout, nullStream, proc, setEnv, setStderr, setStdin, setStdout, setWorkingDir, waitExitCode, withProcessTerm)
+import System.Process.Typed (ExitCode (..), ProcessConfig, createPipe, getStderr, getStdout, nullStream, proc, setEnv, setStderr, setStdin, setStdout, setWorkingDir, waitExitCode, withProcessTerm)
 import UnliftIO.Async (concurrently)
 import UnliftIO.Exception (bracket, tryAny)
 import UnliftIO.Timeout qualified as Timeout
-import "base64" Data.ByteString.Base64 qualified as Base64
 
 
 data Asset = Video | Diagram
@@ -87,9 +86,9 @@ publish store executable token artifacts explanation context authorize = do
       save journal.state
       ExceptT $ withSystemTempDirectory "monoscope-native-publication" \temporary -> runExceptT do
         environment <- liftIO $ filter ((== "PATH") . fst) <$> getEnvironment
-        let command :: Failure -> FilePath -> [(String, String)] -> FilePath -> [String] -> ExceptT Failure IO ByteString
-            command failure cwd env name args = do
-              answer <- liftIO $ Timeout.timeout (90 * 1000000) $ withProcessTerm (setWorkingDir cwd $ setEnv env $ setStdin nullStream $ setStdout createPipe $ setStderr createPipe $ proc name args) \process -> do
+        let command :: Failure -> ProcessConfig () () () -> ExceptT Failure IO ByteString
+            command failure config = do
+              answer <- liftIO $ Timeout.timeout (90 * 1000000) $ withProcessTerm (setStdin nullStream $ setStdout createPipe $ setStderr createPipe config) \process -> do
                 let capture handle = toStrict <$> runConduit (CC.sourceHandle handle .| CC.takeE (1048577 :: Int) .| CC.sinkLazy)
                 (out, err) <- concurrently (capture $ getStdout process) (capture $ getStderr process)
                 status <- waitExitCode process
@@ -98,8 +97,8 @@ publish store executable token artifacts explanation context authorize = do
                 Just (ExitSuccess, out, err) | BS.length out <= 1048576 && BS.length err <= 1048576 -> pure out
                 _ -> throwE failure
             ghEnv = environment <> [("GH_CONFIG_DIR", temporary </> "gh"), ("GH_TOKEN", toString token), ("GH_HOST", "github.com"), ("GH_PROMPT_DISABLED", "1"), ("GH_NO_UPDATE_NOTIFIER", "1")]
-            gh = command GitHubFailure temporary ghEnv executable
-            gitEnv = environment <> [("LC_ALL", "C"), ("GIT_CONFIG_NOSYSTEM", "1"), ("GIT_CONFIG_GLOBAL", "/dev/null"), ("GIT_TERMINAL_PROMPT", "0"), ("GIT_ALLOW_PROTOCOL", "https")]
+            gh args = command GitHubFailure $ setWorkingDir temporary $ setEnv ghEnv $ proc executable args
+            git failure cwd transport args = command failure $ HostGit.command environment transport cwd args
             encoded :: Text -> String
             encoded = toString . decodeUtf8 @Text . urlEncode True . encodeUtf8
             endpoint = "/repos/" <> toString context.repo
@@ -154,7 +153,7 @@ publish store executable token artifacts explanation context authorize = do
                   | asset <- [Video, Diagram]
                   ]
                 <> "\n"
-        void $ command InvalidRequest temporary gitEnv "git" ["check-ref-format", "refs/heads/" <> toString context.targetBranch]
+        void $ git InvalidRequest temporary HostGit.Local ["check-ref-format", "refs/heads/" <> toString context.targetBranch]
         help <- decodeUtf8 @Text <$> gh ["pr", "edit", "--help"]
         ensure NativeUnavailable $ "--attach" `elem` words help
         for_ [Video, Diagram] \asset -> do
@@ -175,10 +174,7 @@ publish store executable token artifacts explanation context authorize = do
               previous <- refs context.branch
               ensure SourceChanged $ isNothing previous || previous == Just (revisionText result.head)
               when (isNothing previous) do
-                let settings :: [(Text, Text)]
-                    settings = [("core.hooksPath", "/dev/null"), ("core.fsmonitor", "false"), ("credential.helper", ""), ("http.followRedirects", "false"), ("http.https://github.com/.extraheader", "AUTHORIZATION: basic " <> extractBase64 (Base64.encodeBase64 $ encodeUtf8 $ "x-access-token:" <> token))]
-                    pushEnv = gitEnv <> [("GIT_CONFIG_COUNT", show $ length settings)] <> concat [[("GIT_CONFIG_KEY_" <> show index, toString k), ("GIT_CONFIG_VALUE_" <> show index, toString v)] | (index, (k, v)) <- zip [0 :: Int ..] settings]
-                void $ command PushFailed checkout pushEnv "git" ["push", "--porcelain", "--force-with-lease=refs/heads/" <> toString context.branch <> ":", toString artifacts.repository, toString (revisionText result.head) <> ":refs/heads/" <> toString context.branch]
+                void $ git PushFailed checkout (HostGit.GitHub $ Just token) ["push", "--porcelain", "--force-with-lease=refs/heads/" <> toString context.branch <> ":", toString artifacts.repository, toString (revisionText result.head) <> ":refs/heads/" <> toString context.branch]
               guardRemote Create
               created <- api "POST" (endpoint <> "/pulls") (Just $ AE.object ["title" AE..= result.summary, "head" AE..= context.branch, "base" AE..= context.targetBranch, "draft" AE..= True, "body" AE..= body Map.empty Nothing]) >>= checked
               save $ Draft created.number

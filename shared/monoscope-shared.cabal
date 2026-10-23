@@ -80,6 +80,7 @@ library
     Data.Effectful.AgentWorkspace
     Pkg.CLIFormat
     Pkg.Deriving
+    Pkg.GitCommand
     Pkg.Parser.Eval
     Pkg.Parser.Expr
     Pkg.Parser.Stats
@@ -88,6 +89,7 @@ library
   build-depends:
     , aeson
     , base                  >=4.7 && <5
+    , base64
     , cryptonite
     , conduit
     , http-client-tls

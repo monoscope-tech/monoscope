@@ -1,7 +1,6 @@
 module Data.Effectful.CodeReview.Checkout (Source (..), Prepared (..), withCheckout) where
 
 import Data.Aeson qualified as AE
-import Data.Base64.Types (extractBase64)
 import Data.ByteString qualified as BS
 import Data.Char (isAlphaNum, isAscii)
 import Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), PeerPreparation, artifactCheckout, peerPreparation, sha256, withVerifiedArtifacts)
@@ -12,6 +11,7 @@ import Data.List.Extra (nubOrd)
 import Data.Text qualified as T
 import GHC.Clock (getMonotonicTimeNSec)
 import Pkg.DeriveUtils (UUIDId, WrappedEnumSC (..))
+import Pkg.GitCommand qualified as HostGit
 import Relude
 import System.Directory (canonicalizePath, createDirectoryIfMissing)
 import System.Environment (getEnvironment)
@@ -21,10 +21,9 @@ import System.IO (hClose)
 import System.IO.Error (userError)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Posix.Files qualified as Posix
-import System.Process.Typed (ExitCode (..), createPipe, getStdout, nullStream, proc, readProcessStdout_, setEnv, setStderr, setStdout, setWorkingDir, waitExitCode, withProcessTerm)
+import System.Process.Typed (ExitCode (..), createPipe, getStdout, readProcessStdout_, setStdout, waitExitCode, withProcessTerm)
 import UnliftIO.Exception (throwIO, tryAny)
 import UnliftIO.Timeout qualified as Timeout
-import "base64" Data.ByteString.Base64 qualified as Base64
 
 
 data Source where
@@ -65,7 +64,7 @@ withCheckout store source action = do
       verified <- withVerifiedArtifacts store artifacts \verifiedArtifacts -> do
         let directory = artifactCheckout verifiedArtifacts
             result = artifacts.result
-        git directory ["checkout", "--quiet", "--detach", toString $ revisionText result.head] []
+        git directory ["checkout", "--quiet", "--detach", toString $ revisionText result.head] HostGit.Local
         deliver started directory result.projectId artifacts.repository result.base result.head Verified $ VerifiedEvidence $ peerPreparation verifiedArtifacts
       either (const invalid) (pure . Just) verified
   pure $ case outcome of Right (Just prepared) -> Right prepared; _ -> Left "Repository checkout could not be prepared"
@@ -76,7 +75,7 @@ withCheckout store source action = do
       let roots = [".agents/skills", ".pi/skills"]
           instructionNames = ["AGENTS.override.md", "AGENTS.md", "CLAUDE.md"]
       for_ roots $ createDirectoryIfMissing True . (metadata </>) . toString
-      entries <- T.splitOn "\0" . decodeUtf8 <$> gitBytes directory (["ls-tree", "-rz", toString $ revisionText headRevision, "--"] <> map toString (roots <> instructionNames)) []
+      entries <- T.splitOn "\0" . decodeUtf8 <$> gitBytes directory (["ls-tree", "-rz", toString $ revisionText headRevision, "--"] <> map toString (roots <> instructionNames)) HostGit.Local
       let files =
             mapMaybe
               ( \entry -> case T.breakOn "\t" entry of
@@ -84,9 +83,9 @@ withCheckout store source action = do
                   _ -> Nothing
               )
               entries
-          content blob = gitBytes directory ["cat-file", "blob", toString blob] []
+          content blob = gitBytes directory ["cat-file", "blob", toString blob] HostGit.Local
           instruction blob = do
-            command <- gitCommand directory ["cat-file", "blob", toString blob] []
+            command <- gitCommand directory ["cat-file", "blob", toString blob] HostGit.Local
             withProcessTerm (setStdout createPipe command) \process -> do
               bytes <- BS.hGet (getStdout process) 32768
               if BS.length bytes < 32768
@@ -105,11 +104,8 @@ withCheckout store source action = do
       baseRevision <- either (const invalid) pure $ mkRevision request.base
       headRevision <- either (const invalid) pure $ mkRevision request.head
       origin <- parseOrigin request.repository
-      let protocol = case origin of Local _ -> "file"; GitHub _ -> "https"
+      let access = case origin of Local _ -> HostGit.Local; GitHub _ -> HostGit.GitHub $ if T.null request.gitToken then Nothing else Just request.gitToken
           sourcePath = case origin of Local path -> path; GitHub url -> toString url
-          settings :: [(Text, Text)]
-          settings = [("credential.helper", ""), ("http.followRedirects", "false")] <> [("http.https://github.com/.extraheader", "AUTHORIZATION: basic " <> extractBase64 (Base64.encodeBase64 $ encodeUtf8 $ "x-access-token:" <> request.gitToken)) | not $ T.null request.gitToken]
-          credentials = [("GIT_CONFIG_COUNT", show $ length settings), ("GIT_ALLOW_PROTOCOL", protocol)] <> concat [[("GIT_CONFIG_KEY_" <> show index, toString key), ("GIT_CONFIG_VALUE_" <> show index, toString value)] | (index, (key, value)) <- zip [0 :: Int ..] settings]
       root <- canonicalizePath store.cacheDir
       let project = root </> toString request.projectId.toText
           mirror = project </> toString (sha256 $ encodeUtf8 request.repository)
@@ -119,16 +115,16 @@ withCheckout store source action = do
         canonical directory
         Posix.setFileMode directory 0o700
       status <- withFileLock (mirror <> ".native.lock") Exclusive \_ -> do
-        let cached args = git temporary (["--git-dir", mirror] <> args) credentials
+        let cached args = git temporary (["--git-dir", mirror] <> args) access
         cached ["init", "--bare", "--quiet"]
         available <- tryAny $ traverse_ (\revision -> cached ["cat-file", "-e", toString (revisionText revision) <> "^{commit}"]) [baseRevision, headRevision]
         -- A cache hit is not proof that this request still has source access.
         cached ["ls-remote", "--quiet", "--", sourcePath, "HEAD"]
         cached $ ["fetch", "--quiet", "--no-tags", "--", sourcePath] <> ["+" <> revision <> ":refs/heads/monoscope/" <> revision | revision <- nubOrd $ map (toString . revisionText) [baseRevision, headRevision]]
-        git temporary ["clone", "--quiet", "--no-local", "--no-checkout", "--", mirror, checkout] []
+        git temporary ["clone", "--quiet", "--no-local", "--no-checkout", "--", mirror, checkout] HostGit.Local
         pure $ if isRight available then Hit else Miss
-      git checkout ["remote", "set-url", "origin", toString request.repository] []
-      git checkout ["checkout", "--quiet", "--detach", toString $ revisionText headRevision] []
+      git checkout ["remote", "set-url", "origin", toString request.repository] HostGit.Local
+      git checkout ["checkout", "--quiet", "--detach", toString $ revisionText headRevision] HostGit.Local
       pure (checkout, baseRevision, headRevision, status)
     parseOrigin value
       | isAbsolute $ toString value = canonical (toString value) $> Local (toString value)
@@ -138,16 +134,16 @@ withCheckout store source action = do
       where
         segment part = not (T.null part) && part `notElem` [".", ".."] && T.all (\c -> isAscii c && (isAlphaNum c || c `elem` ['-', '_', '.'])) part
     canonical directory = canonicalizePath directory >>= \resolved -> unless (resolved == directory) invalid
-    git directory args extra = void . readProcessStdout_ =<< gitCommand directory args extra
-    gitBytes directory args extra = do
-      command <- gitCommand directory args extra
+    git directory args access = void . readProcessStdout_ =<< gitCommand directory args access
+    gitBytes directory args access = do
+      command <- gitCommand directory args access
       withProcessTerm (setStdout createPipe command) \process -> do
         bytes <- BS.hGet (getStdout process) (1048576 + 1)
         when (BS.length bytes > 1048576) invalid
         exit <- waitExitCode process
         unless (exit == ExitSuccess) invalid
         pure bytes
-    gitCommand directory args extra = do
-      environment <- filter ((== "PATH") . fst) <$> getEnvironment
-      pure (setWorkingDir directory $ setStderr nullStream $ setEnv (environment <> [("LC_ALL", "C"), ("GIT_CONFIG_NOSYSTEM", "1"), ("GIT_CONFIG_GLOBAL", "/dev/null"), ("GIT_TERMINAL_PROMPT", "0")] <> (if null extra then [("GIT_ALLOW_PROTOCOL", "file")] else extra)) $ proc "git" $ ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"] <> args)
+    gitCommand directory args access = do
+      environment <- getEnvironment
+      pure $ HostGit.command environment access directory args
     invalid = throwIO $ userError "Invalid repository checkout"
