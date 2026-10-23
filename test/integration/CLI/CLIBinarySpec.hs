@@ -23,8 +23,8 @@ findBinary = do
   candidate <- case envBin of
     Just p -> pure p
     Nothing -> do
-      (code, out, _) <- readProcessWithExitCode "cabal" ["list-bin", "exe:monoscope"] ""
-      pure $ if code == ExitSuccess then T.unpack (T.strip (toText out)) else ""
+      (code, out, _) <- readProcessWithExitCode "scripts/cli-bin.sh" ["--ghc-options=-O0", "--write-ghc-environment-files=never"] ""
+      pure $ if code == ExitSuccess then toString (T.strip (toText out)) else ""
   if null candidate then pure Nothing else do
     exists <- doesFileExist candidate
     pure $ if exists then Just candidate else Nothing

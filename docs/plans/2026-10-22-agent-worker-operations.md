@@ -454,3 +454,28 @@ Unregistered legacy scratch directories, preparation directories and leases rema
 
 
 Recovery verification on 2026-10-23: all 25 impact-review examples passed with zero failures and no pending cases in 243.1936 seconds (seed `478291233`). The retained Haskell test gates a real restore before publication, verifies that a busy project is untouched, kills the CLI, and exercises project binding, unknown-content retention, unavailable-archive retention and successful recovery. A second case replays an eviction intent after its staged manifest was unlinked. The final review added a parent-directory fsync before scratch creation. The native CLI builds; Fourmolu, HLint and the shell fixture syntax check pass. Production packaging, release linkage and deployment remain unsigned.
+
+## Optional Linux agent image
+
+`Dockerfile` has an `impact-worker` target for an agent-enabled server. The default `production` target retains the ordinary server runtime. The worker adds the native CLI, Node 24, locked Pi/Gondolin modules, bundled skills, QEMU, Git, FFmpeg, Graphviz and a checksum-verified GitHub CLI 2.103.0 with attachment support. Research runners, build commands, host `node_modules`, guest images and local research artifacts are excluded from that runtime.
+
+Build on the native amd64 host with `docker --host ssh://ubuntu@build.example.com buildx build --builder monoscope-amd64 --platform linux/amd64 --target impact-worker --load -t monoscope-impact-worker:local .`. This loads the image into that host’s Docker daemon; a local Linux builder can omit `--host`. The intermediate `impact-tools` target supports tool/VM conformance checks before compiling the server. The compiler store is shared, while native CLI objects use a separate cache from the profiled server. `scripts/cli-bin.sh` extracts the executable path from Cabal output without hiding a Cabal failure; Git submodule diagnostics can reach stdout even with `-v0`.
+
+The CLI wrapper clears the server's `GHCRTS` before executing the separate binary. Image builds run the CLI as `monoscope` with the server profiling environment still set, import the actual adapter modules, check bundled skill paths, and check GitHub attachment support. These are packaging checks; upload authorization still depends on a suitable credential and the native publication gates.
+
+On a Linux host, grant only the KVM device and its numeric group, mount an explicit immutable guest directory read-only, and retain the private data volume:
+
+```sh
+docker run --rm --device /dev/kvm --group-add "$(stat -c %g /dev/kvm)" \
+  --env-file /secure/worker.env -e CONSUMER_ONLY=False \
+  -e IMPACT_REVIEW_GUEST_IMAGE=/guest \
+  --mount type=bind,src=/srv/monoscope/guest,dst=/guest,readonly \
+  --mount type=volume,src=monoscope-agent-data,dst=/var/lib/monoscope \
+  monoscope-impact-worker:local
+```
+
+The environment file supplies the existing application database, storage and model configuration. Credentials remain runtime inputs. The image's private cache and receipt defaults are `/var/lib/monoscope/cache` and `/var/lib/monoscope/usage`; Gondolin's cache shares that data volume. Bind mounts must permit the image's `monoscope` user to write these directories. Configure host maintenance separately with the existing maintenance JSON; unregistered SDK/image cache data remains protected and can leave the soft budget unmet.
+
+Run regular server mode because `CONSUMER_ONLY=True` skips odd-jobs. Dedicated job routing remains a follow-up. The runtime receives no Docker socket. Guest creation is a trusted operator build step; repository agents use the offline VM and approved tools. A bare minimal guest supports shell investigation; repositories needing GHC, Node or the Monoscope CLI need a prepared dependency profile.
+
+Full image verification, Linux/KVM conformance and deployment status are recorded in the rollout plan. Building this target does not deploy it.

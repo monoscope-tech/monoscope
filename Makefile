@@ -92,7 +92,7 @@ cli-release-build:
 	esac; \
 	release_opts="-O2 $$dead_code +RTS -A64m -n2m -RTS"; \
 	cabal build monoscope-cli:exe:monoscope -j --builddir=dist-newstyle/cli-release --write-ghc-environment-files=never --ghc-options="$$release_opts" && \
-	BIN=$$(cabal list-bin -v0 monoscope-cli:exe:monoscope --builddir=dist-newstyle/cli-release --write-ghc-environment-files=never --ghc-options="$$release_opts") && \
+	BIN=$$(./scripts/cli-bin.sh --builddir=dist-newstyle/cli-release --write-ghc-environment-files=never --ghc-options="$$release_opts") && \
 	./scripts/package-cli.sh "$$BIN" ./monoscope
 
 cli-test:

@@ -8,6 +8,9 @@ dist-newstyle
 .stack-work
 node_modules
 web-components/node_modules
+impact-review-worker/node_modules
+impact-review-worker/.guest*
+scripts/local/
 web-components/dist
 build-output
 build.log
@@ -30,6 +33,7 @@ docs/
 *.md
 !README.md
 !LICENSE
+!impact-review-worker/skills/**/*.md
 
 # CI/CD
 .github/

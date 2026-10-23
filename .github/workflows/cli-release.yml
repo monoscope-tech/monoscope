@@ -63,7 +63,7 @@ jobs:
 
       - name: Package binary
         run: |
-          BIN=$(cabal list-bin -v0 monoscope-cli:exe:monoscope --ghc-options="$CLI_GHC_OPTS -split-sections -optl-Wl,--gc-sections")
+          BIN=$(./scripts/cli-bin.sh --ghc-options="$CLI_GHC_OPTS -split-sections -optl-Wl,--gc-sections")
           ./scripts/package-cli.sh "$BIN" monoscope
           tar czf monoscope-linux-${{ matrix.arch }}.tar.gz monoscope
 
@@ -124,7 +124,7 @@ jobs:
 
       - name: Package binary
         run: |
-          BIN=$(cabal list-bin -v0 monoscope-cli:exe:monoscope --ghc-options="$CLI_GHC_OPTS -optl-Wl,-dead_strip")
+          BIN=$(./scripts/cli-bin.sh --ghc-options="$CLI_GHC_OPTS -optl-Wl,-dead_strip")
           ./scripts/package-cli.sh "$BIN" monoscope
           tar czf monoscope-darwin-${{ matrix.arch }}.tar.gz monoscope
 

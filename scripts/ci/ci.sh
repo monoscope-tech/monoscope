@@ -400,7 +400,7 @@ run_integration() {
   case " ${CAPS:-} " in *" tf-real "*) ;; *) unset TIMEFUSION_PG_TEST_URL ;; esac
   export USE_EXTERNAL_DB=true LOG_LEVEL=${LOG_LEVEL:-warn}
   cabal build monoscope-cli:exe:monoscope -j $CABAL_FLAGS "$CABAL_OPTS"
-  MONOSCOPE_BIN=$(cabal list-bin -v0 monoscope-cli:exe:monoscope $CABAL_FLAGS "$CABAL_OPTS")
+  MONOSCOPE_BIN=$(scripts/cli-bin.sh $CABAL_FLAGS "$CABAL_OPTS")
   export MONOSCOPE_BIN
   [ -x "$MONOSCOPE_BIN" ] || die "CLI binary was not built at $MONOSCOPE_BIN"
   (cd web-components && npm ci --prefer-offline --no-audit)

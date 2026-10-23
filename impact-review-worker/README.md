@@ -15,6 +15,8 @@ npm run build:guest
 
 Build the native CLI with `make cli-build`. Set `IMPACT_REVIEW_NATIVE_CLI` if `monoscope` is not on PATH. The optional Monoscope compiler image and prepared-cache/S3 operations are documented in the [operations reference](../docs/plans/2026-10-22-agent-worker-operations.md#reuse-a-prepared-project-workspace).
 
+The optional Linux `impact-worker` image packages the native CLI and SDK runtime. See [the operator setup](../docs/plans/2026-10-22-agent-worker-operations.md#optional-linux-agent-image) for KVM, guest images and persistent storage.
+
 ## Runtime boundary
 
 `cli.mjs` is a child of the Haskell CodeReview interpreter. Set `IMPACT_REVIEW_AGENT` to its absolute path and select an immutable guest image with `IMPACT_REVIEW_GUEST_IMAGE`. Haskell supplies role, prompts, tool schemas, pinned revisions, checkout metadata, private receipt paths and callbacks. Telemetry/wiki tools pass through the existing protocol and are authorized by Haskell. Candidate Git commits, bundles, admission records and fix-phase receipts are created natively. Haskell journals and acknowledges each phase before the SDK can advance. The child cannot clone or fetch application source as a fallback.

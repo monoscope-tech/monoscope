@@ -57,6 +57,16 @@ Haskell now owns the admission artifact limits, VM patch application, path-count
 
 The focused real-SDK admission test passed in 18.6566 seconds; the final watcher passed all 25 impact-review examples with zero failures and no pending cases in 215.2350 seconds (seed `478291233`). Pinned Fourmolu, production HLint, Node syntax checks and whitespace checks passed. The server watcher compiled and started. The regression inspects the actual staged patch as UID 1000, checks protected evidence and source, exercises both verdicts and existing-file patches, and rejects malformed artifacts, image mismatches and rejected model-call starts. All prompts, schemas and admission verdict validation remain in Haskell.
 
+### Linux worker packaging — 2026-10-23
+
+The optional `impact-worker` Docker target packages the native CLI, Node 24, pinned Pi/Gondolin adapter and skills, QEMU, Git, FFmpeg, Graphviz and checksum-verified GitHub CLI 2.103.0. The default target remains the ordinary server. Private cache/receipt directories use a persistent data volume; guest assets are explicit read-only mounts. The [operator reference](2026-10-22-agent-worker-operations.md#optional-linux-agent-image) records configuration and current routing/storage limits.
+
+Two real build failures were reproduced before their fixes. Cabal emitted Git submodule diagnostics on stdout even under `-v0`, so binary lookup failed; the updated CLI packaging and CI callers now use the shared failure-preserving path lookup. The server's `GHCRTS` profiling flags also prevented the separate CLI from starting; its image wrapper clears those flags without changing server profiling. The image retains non-root CLI/module/skill/attachment-capability checks. The cache self-test now verifies all three compiler-store mounts.
+
+The Linux amd64 tool runtime built and passed its checks on our server. With `/dev/kvm` and its group supplied, the actual packaged CLI and SDK ran two offline VMs: the injected test failed on base, then passed unchanged as a retained test on head. Frozen test fingerprints matched; UID 1000, reset environment, host-write denial, unchanged source and child-process cleanup checks passed. Resource receipts remain explicitly unpriced. No model API or customer job ran. The first operator fixture incorrectly expected the agent to read the private supervisor mount; the corrected check uses the agent's `/workspace` copy.
+
+The long-lived watcher passed all 64 CLI binary examples with zero failures in 144.2135 seconds (seed `478291233`). CI self-tests passed, including the additional seeded-cache mount. Dockerfile checks reported no warnings. Full server/worker image and deployment verification remain in progress; no new attestation or branch push has been made.
+
 ### Remaining work and delivery estimate
 
 Estimate recorded 2026-10-22: **3–5 focused engineering days** for the remaining product work with disk-only restoration. Some tasks overlap; Linux sandbox behavior and accounting across crashes are the main uncertainties. This is an estimate, not a completion deadline.
