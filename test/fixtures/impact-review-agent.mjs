@@ -10,7 +10,7 @@ process.on('uncaughtException', (error) => { writeFileSync(process.argv[2] + '.f
 const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
 const input = lines[Symbol.asyncIterator]();
 const request = JSON.parse((await input.next()).value);
-assert.equal(request.projectId, '00000000-0000-0000-0000-000000000000');
+assert.equal(request.projectId, process.argv[3]);
 assert.match(request.runId, /^[a-f0-9-]{36}$/);
 assert.equal(request.repository, 'https://github.com/impact-org/checkout.git');
 assert.equal(request.base, 'd'.repeat(40));

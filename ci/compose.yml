@@ -100,11 +100,18 @@ services:
       - node:/build/node_modules
       - wc-node:/build/web-components/node_modules
       - e2e-node:/build/e2e/node_modules
+      - worker-node:/build/impact-review-worker/node_modules
+      - ../.ci/chart-cli-linux:/build/chart-cli
       - playwright:/root/.cache/ms-playwright
       # CI has no .env. Mount an empty one so a developer's local secrets and
       # DATABASE_URL (which points at PRODUCTION) cannot change the result — the
       # whole point is to reproduce CI, not your laptop.
       - ./empty.env:/build/.env:ro
+    # Host guest images target its hypervisor; this runner has no KVM device.
+    # VM tests run separately on a provisioned host, not against these empty paths.
+    tmpfs:
+      - /build/impact-review-worker/.guest
+      - /build/impact-review-worker/.guest-monoscope
     environment:
       CABAL_DIR: /root/.cabal
       PATH: /opt/ghc/9.12.2/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -134,4 +141,5 @@ volumes:
   node:
   wc-node:
   e2e-node:
+  worker-node:
   playwright:

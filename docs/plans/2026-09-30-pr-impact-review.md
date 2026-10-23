@@ -6,7 +6,7 @@ The larger agent implementation remains local and has no feature pull request or
 
 | Area | Implemented locally | Still required |
 | --- | --- | --- |
-| Impact review | Haskell checkout/supervision, repository instructions and skills, scoped logs/spans/metrics, service knowledge, shared widget PNGs. | Production packaging and Linux deployment validation. |
+| Impact review | Haskell checkout/supervision, repository instructions and skills, scoped logs/spans/metrics, service knowledge, shared widget PNGs, optional Linux worker image. | Complete Linux application workflow and deployment checks. |
 | Issue fixes | Admission, frozen reproduction, candidate verification, independent review, persisted phases, MP4/diagram/captions, private retention and authenticated download package. Native draft-publication effect is tested separately. | Customer launch UI, application scheduling of fix-PR publication and its authorization/check gates. |
 | Project memory | Merged wiki paths/tree and rich Markdown editor. Repository, conversational and investigation tools share attributed pages; linked Slack and granted routines recheck permissions. | Identity attribution for currently unattributed service integrations; production verification of the agent wiring. |
 | Usage | Durable model-call starts/receipts, immutable billing attribution, recorded sandbox/check/media resource facts and project/customer views. Missing usage remains unpriced. | Complete per-resource lifecycle records, preparation/storage/transfer attribution and prices, budget reservations, margins and billing. |
@@ -67,7 +67,22 @@ The Linux amd64 tool runtime built and passed its checks on our server. With `/d
 
 A separate Docker context regression also failed when developer `cabal.project.local` settings entered a raw build. The ignore rule now excludes that file, and the retained real-Docker fixture passes while checking all three seeded compiler-store mounts. Immutable release builds continue to use `git archive`.
 
-The long-lived watcher passed all 64 CLI binary examples with zero failures in 144.2135 seconds (seed `478291233`). CI self-tests passed, including the additional seeded-cache mount. Dockerfile checks reported no warnings. Full server/worker image and deployment verification remain in progress; no new attestation or branch push has been made.
+The long-lived watcher passed all 64 CLI binary examples with zero failures in 144.2135 seconds (seed `478291233`). CI self-tests passed, including the additional seeded-cache mount. Dockerfile checks reported no warnings. The later image and CI checks appear in the next section. No branch push or deployment occurred.
+
+### Linux image and CI checks — 2026-10-23
+
+Commit `c9e712b90` produced both images on our native amd64 server:
+
+| Image | Published digest |
+| --- | --- |
+| Default production server | `sha256:a87d00ecc66391331ea096bae673668f1beff489afa8db613d6c9b7945d74bb2` |
+| Optional impact worker | `sha256:817a3b03fdc05763be572a9f691f2994be0c3c7aaed052b9a112532cb5e4caf2` |
+
+The combined worker ran two offline VMs through its packaged CLI and SDK on Linux/KVM. The frozen regression failed on base and passed on head. Test fingerprints matched, source stayed unchanged, and UID, environment, host-write denial and cleanup checks passed. The image also passed server linkage and GitHub attachment-capability checks. This run made no model calls and recorded unpriced resource receipts.
+
+Linux checks passed the build, 1,909 doctests, 336 unit examples, 16 CLI examples and Weeder. A later browser run passed all 176 cases. Container checks exposed host-binary replacement, missing runtime tools and missing `HOST_URL`. The local CI setup now isolates those inputs. VM cases remain pending inside the container without KVM and guest assets. Separate host VM runs provide that evidence.
+
+The subsequent Linux checkout fix waits for Git after a bounded instruction read. Its regression failed with `ESRCH`, then passed without diagnostic wrappers. The telemetry fixture now uses a fresh project and correct OTLP resource attributes across both stores. The later Linux run passed all 12 integration shards: 1,263 examples, zero failures and 13 pending cases. Eleven pending cases need provisioned VMs, and two need external credentials. The build, 1,909 doctests, 336 unit examples, CLI examples and Weeder also passed. Final CI sign-off and new images remain pending. The feature PR and deployment remain pending.
 
 ### Remaining work and delivery estimate
 

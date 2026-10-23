@@ -102,10 +102,14 @@ revision = T.replicate 40 "a"
 
 
 setup :: TestResources -> IO ()
-setup tr = do
+setup tr = setupProject tr testPid
+
+
+setupProject :: TestResources -> Projects.ProjectId -> IO ()
+setupProject tr pid = do
   let cfg = tr.trATCtx.config
-  credential <- maybe (fail "credential missing") pure =<< runQueryEffect tr (GitSync.upsertGitHubCredential (encodeUtf8 cfg.apiKeyEncryptionSecretKey) testPid Git.GitHub Nothing "impact-org" (Just 987654) Nothing)
-  runQueryEffect tr $ CodeContext.insertCodeMapping testPid credential.id (Git.RepoRef "impact-org" "checkout" "main") (Just "test-service") "" ""
+  credential <- maybe (fail "credential missing") pure =<< runQueryEffect tr (GitSync.upsertGitHubCredential (encodeUtf8 cfg.apiKeyEncryptionSecretKey) pid Git.GitHub Nothing "impact-org" (Just 987654) Nothing)
+  runQueryEffect tr $ CodeContext.insertCodeMapping pid credential.id (Git.RepoRef "impact-org" "checkout" "main") (Just "test-service") "" ""
   -- Handlers render the repository list; a warm cache keeps them off the GitHub token endpoint.
   Cache.insert tr.trATCtx.repoListCache credential.id [Git.GitRepo "impact-org/checkout" "checkout" False "main"]
 
@@ -323,7 +327,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     verdict <- newIORef ("Admitted" :: Text)
     investigated <- newIORef ([] :: [Text])
     let next results = do
-          for_ results \result -> parse (field "content") result >>= (\text -> modifyIORef' investigated (<> [text]))
+          for_ results (parse (field "content") >=> \text -> modifyIORef' investigated (<> [text]))
           decision <- readIORef verdict
           pure $ case length results of
             0 -> SdkTool "bash" (AE.object ["command" AE..= ("set -eu; id -u; test ! -w /run/monoscope-admission.patch; test ! -w /run/monoscope-admission.json; git diff --cached --name-only; cat runtime.sh /run/monoscope-admission.json; printf forbidden > runtime.sh" :: Text)])
@@ -2353,28 +2357,30 @@ spec = around withTestResources $ describe "Production impact reviews" do
 
   it "runs the checkout harness, publishes shared PNG evidence, and honors repository disable and links-only settings" \tr -> do
     parseUrlPiece @CodeContextPage.RepositoryTab "usage" `shouldSatisfy` isRight
-    setup tr
-    void $ withResource tr.trPool \conn -> execute conn "UPDATE projects.projects SET customer_id = 'cus_impact_usage', billing_provider = ? WHERE id = ?" (Projects.StripeProvider, testPid)
-    runQueryEffect tr $ Reviews.updateSettings testPid (Reviews.ReviewSettings "impact-org" "checkout" True True)
+    reviewPid <- createTestProject tr "Impact review isolation"
+    setupProject tr reviewPid
+    void $ withResource tr.trPool \conn -> execute conn "UPDATE projects.projects SET customer_id = 'cus_impact_usage', billing_provider = ? WHERE id = ?" (Projects.StripeProvider, reviewPid)
+    runQueryEffect tr $ Reviews.updateSettings reviewPid (Reviews.ReviewSettings "impact-org" "checkout" True True)
     void $ deliver tr $ payload "opened" revision "2025-01-01T00:00:00Z"
-    [run] <- runQueryEffect tr $ Reviews.latestRuns testPid
-    apiKey <- createTestAPIKey tr testPid "Impact review telemetry"
+    [run] <- runQueryEffect tr $ Reviews.latestRuns reviewPid
+    apiKey <- createTestAPIKey tr reviewPid "Impact review telemetry"
     ingestLog tr apiKey ("long-review-log-body" <> T.replicate 9000 "x") (addUTCTime (-60) frozenTime)
     ingestLog tr apiKey "another-in-scope-event" (addUTCTime (-120) frozenTime)
     ingestTrace tr apiKey "checkout-review-span" (addUTCTime (-180) frozenTime)
     ingestMetric tr apiKey [] [] "review.temperature" 42 (addUTCTime (-60) frozenTime)
     ingestLog tr apiKey "outside-review-window" (addUTCTime (-(8 * 86400)) frozenTime)
-    ingestLog tr apiKey "outside-review-project" (addUTCTime (-60) frozenTime)
-    void $ withResource tr.trPool \conn -> execute conn "UPDATE otel_logs_and_spans SET project_id = '11111111-1111-1111-1111-111111111111' WHERE project_id = ? AND body::text LIKE '%outside-review-project%'" (Only testPid)
-    ingestLog tr apiKey "outside-review-service" (addUTCTime (-60) frozenTime)
-    void $ withResource tr.trPool \conn -> execute conn "UPDATE otel_logs_and_spans SET resource___service___name = 'unmapped-service' WHERE project_id = ? AND body::text LIKE '%outside-review-service%'" (Only testPid)
+    outsideProject <- createTestProject tr "Outside impact review"
+    outsideKey <- createTestAPIKey tr outsideProject "Outside review telemetry"
+    ingestLog tr outsideKey "outside-review-project" (addUTCTime (-60) frozenTime)
+    ingestLogWithResource tr apiKey [("service.name", "unmapped-service")] "outside-review-service" (addUTCTime (-60) frozenTime)
     -- Throwaway RSA fixture generated only for these JWT tests; never registered with a GitHub App.
     pem <- readFileBS "test/fixtures/github-app-test.pem"
     let cfg = tr.trATCtx.config{githubAppId = "123", githubAppPrivateKey = extractBase64 $ B64.encodeBase64 pem, impactReviewUsageDir = Just "fixture-usage", impactReviewCacheDir = Just "fixture-cache", impactReviewProvider = "fixture", openaiModel = "gpt-5.6-luna#high"}
         pr = AE.object ["head" AE..= AE.object ["sha" AE..= revision], "base" AE..= AE.object ["sha" AE..= T.replicate 40 "d"], "state" AE..= ("open" :: Text), "draft" AE..= False, "changed_files" AE..= length files, "updated_at" AE..= ("2025-01-01T00:00:00Z" :: Text)]
         files :: [Git.PullRequestFile]
         files = [Git.PullRequestFile ("unrelated-" <> show n <> ".hs") "modified" (Just "@@ -1 +1 @@\n-old\n+new") | n <- [1 :: Int .. 100]] <> [Git.PullRequestFile "checkout.hs" "modified" (Just "@@ -1 +1 @@\n-old\n+new")]
-        marker = "<!-- monoscope-impact:" <> testPid.toText <> " -->"
+        marker = "<!-- monoscope-impact:" <> reviewPid.toText <> " -->"
+        transport :: Bool -> ATBackgroundCtx a -> ATBackgroundCtx a
         transport hasComment = withHTTPResponses \_ endpoint ->
           pure
             $ Just
@@ -2409,7 +2415,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                       liftIO $ withSystemTempDirectory "impact-review-response" \directory -> do
                         started <- withResource tr.trPool \conn -> query conn "SELECT count(*) FROM projects.pr_review_attempts WHERE id = ? AND run_id = ? AND project_id = ? AND provider = ?" (request.attemptId, request.runId, request.projectId, request.provider) :: IO [Only Int64]
                         started `shouldBe` [Only 1]
-                        when ("--billing-change-before-usage" `elem` arguments) $ void $ withResource tr.trPool \conn -> execute conn "UPDATE projects.projects SET customer_id = 'cus_after_attempt', billing_provider = ? WHERE id = ?" (Projects.LemonSqueezyProvider, testPid)
+                        when ("--billing-change-before-usage" `elem` arguments) $ void $ withResource tr.trPool \conn -> execute conn "UPDATE projects.projects SET customer_id = 'cus_after_attempt', billing_provider = ? WHERE id = ?" (Projects.LemonSqueezyProvider, reviewPid)
                         when (null arguments) do
                           title <- either (fail . toString) pure $ Memory.mkMemoryText "Review context"
                           body <- either (fail . toString) pure $ Memory.mkMemoryText "Retry handling needs caller and telemetry evidence; recheck this dated note."
@@ -2419,7 +2425,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                           unlift (knowledge $ Agent.ProjectMemory $ Memory.Read page) `shouldReturn` saved
                         let response = directory </> "result.json"
                         writeFileLBS response $ AE.encode answer{Impact.coverage = ["Related test toolchain unavailable"]}
-                        reply <- runEff $ Agent.runCodeReviewReal Nothing (Just "test/fixtures/impact-review-agent.mjs") ([response] <> arguments) $ Agent.reviewRepository request (liftIO . unlift . respond) (liftIO . unlift . knowledge) (liftIO . unlift . recordCall) (liftIO . unlift . recordUsage) (liftIO . unlift . recordAllocation) (liftIO . unlift . recordCheck) (liftIO . unlift . check)
+                        reply <- runEff $ Agent.runCodeReviewReal Nothing (Just "test/fixtures/impact-review-agent.mjs") ([response, toString reviewPid.toText] <> arguments) $ Agent.reviewRepository request (liftIO . unlift . respond) (liftIO . unlift . knowledge) (liftIO . unlift . recordCall) (liftIO . unlift . recordUsage) (liftIO . unlift . recordAllocation) (liftIO . unlift . recordCheck) (liftIO . unlift . check)
                         diagnostic <- tryAny $ decodeUtf8 <$> readFileBS (response <> ".failure")
                         pure $ first (<> either (const "") ("\n" <>) diagnostic) reply
                     Agent.FixRepository{} -> pure $ Left "Unexpected issue-fix task"
@@ -2455,7 +2461,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     completed <- maybe (fail "run missing") pure =<< runQueryEffect tr (Reviews.getRun run.id)
     completed.state `shouldBe` Reviews.Completed
     completed.commentId `shouldBe` Just 99
-    checks <- runQueryEffect tr $ Reviews.latestChecks testPid
+    checks <- runQueryEffect tr $ Reviews.latestChecks reviewPid
     length checks `shouldBe` 2
     Reviews.RecordedCheck checkRun (Aeson execution) <- maybe (fail "Base execution missing") pure $ find (\item -> case item.receipt of Aeson receipt -> receipt.revision == T.replicate 40 "d") checks
     checkRun `shouldBe` run.id
@@ -2475,7 +2481,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     runQueryEffect tr (Reviews.recordCheck run execution{Agent.regression = Nothing}) `shouldReturn` True
     runQueryEffect tr (Reviews.recordCheck run execution{Agent.regression = Just $ Agent.RetainedTest $ T.replicate 64 "a"}) `shouldReturn` False
     runQueryEffect tr (Reviews.recordCheck run execution{Agent.durationMs = 9999}) `shouldReturn` False
-    totals <- runQueryEffect tr $ Reviews.usageTotals testPid
+    totals <- runQueryEffect tr $ Reviews.usageTotals reviewPid
     let projectUsage = find (isNothing . (.runId)) totals
         runUsage = find ((== Just run.id) . (.runId)) totals
     fmap (\u -> (u.usage.calls, u.usage.failedCalls, u.usage.unpricedCalls, u.usage.costNanousd)) projectUsage `shouldBe` Just (2, 1, 1, 1234000)
@@ -2487,7 +2493,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     runQueryEffect tr (Reviews.recordCheck run{Reviews.projectId = emptyPid} execution) `shouldReturn` False
     otherTotals <- runQueryEffect tr $ Reviews.usageTotals emptyPid
     sum (map (.usage.calls) otherTotals) `shouldBe` 0
-    (_, history) <- testServant tr $ CodeContextPage.repositoriesGetH testPid (Just CodeContextPage.PullRequests) Nothing
+    (_, history) <- testServant tr $ CodeContextPage.repositoriesGetH reviewPid (Just CodeContextPage.PullRequests) Nothing
     let historyText = decodeUtf8 $ Lucid.renderBS history
     historyText `shouldSatisfy` T.isInfixOf "$0.001234 estimated"
     historyText `shouldSatisfy` T.isInfixOf "1 unpriced"
@@ -2499,11 +2505,11 @@ spec = around withTestResources $ describe "Production impact reviews" do
     historyText `shouldSatisfy` T.isInfixOf "Compute cost is unpriced"
     historyText `shouldSatisfy` T.isInfixOf "Service knowledge from this review"
     historyText `shouldSatisfy` T.isInfixOf "Review temperature gauge"
-    billable <- withResource tr.trPool \conn -> query conn "SELECT count(*)::bigint FROM projects.ai_usage WHERE project_id = ?" (Only testPid) :: IO [Only Int64]
+    billable <- withResource tr.trPool \conn -> query conn "SELECT count(*)::bigint FROM projects.ai_usage WHERE project_id = ?" (Only reviewPid) :: IO [Only Int64]
     billable `shouldBe` [Only 0]
-    attributed <- withResource tr.trPool \conn -> query conn "SELECT count(*)::bigint FROM projects.pr_review_usage u JOIN projects.projects p ON p.id = u.project_id WHERE u.project_id = ? AND u.customer_id = 'cus_impact_usage' AND u.customer_id = p.customer_id AND u.billing_provider = p.billing_provider AND (u.receipt->>'inputTokens')::bigint = 12 AND (u.receipt->>'cacheReadTokens')::bigint = 13" (Only testPid) :: IO [Only Int64]
+    attributed <- withResource tr.trPool \conn -> query conn "SELECT count(*)::bigint FROM projects.pr_review_usage u JOIN projects.projects p ON p.id = u.project_id WHERE u.project_id = ? AND u.customer_id = 'cus_impact_usage' AND u.customer_id = p.customer_id AND u.billing_provider = p.billing_provider AND (u.receipt->>'inputTokens')::bigint = 12 AND (u.receipt->>'cacheReadTokens')::bigint = 13" (Only reviewPid) :: IO [Only Int64]
     attributed `shouldBe` [Only 2]
-    checkAttribution <- withResource tr.trPool \conn -> query conn "SELECT count(*)::bigint FROM projects.pr_review_checks WHERE project_id = ? AND customer_id = 'cus_impact_usage'" (Only testPid) :: IO [Only Int64]
+    checkAttribution <- withResource tr.trPool \conn -> query conn "SELECT count(*)::bigint FROM projects.pr_review_checks WHERE project_id = ? AND customer_id = 'cus_impact_usage'" (Only reviewPid) :: IO [Only Int64]
     checkAttribution `shouldBe` [Only 2]
     let customerProjects = [("Included customer project", Just "cus_impact_usage"), ("Viewer customer project", Just "cus_impact_usage"), ("Inactive customer project", Just "cus_impact_usage"), ("Unlinked one", Nothing), ("Unlinked two", Just "")] :: [(Text, Maybe Text)]
     related <- forM (zip [1 :: Word32 ..] customerProjects) \(n, (title, cid)) -> do
@@ -2513,7 +2519,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       runQueryEffect tr $ CodeContext.insertCodeMapping pid credential.id (Git.RepoRef "impact-org" "checkout" "main") Nothing "" ""
       pure (pid, n)
     void $ deliver tr $ payload "opened" revision "2025-01-01T00:00:00Z"
-    [Only (Aeson receipt)] <- withResource tr.trPool (\conn -> query conn "SELECT receipt FROM projects.pr_review_usage WHERE project_id = ? AND cost_nanousd IS NOT NULL LIMIT 1" (Only testPid)) :: IO [Only (Aeson Agent.ModelUsage)]
+    [Only (Aeson receipt)] <- withResource tr.trPool (\conn -> query conn "SELECT receipt FROM projects.pr_review_usage WHERE project_id = ? AND cost_nanousd IS NOT NULL LIMIT 1" (Only reviewPid)) :: IO [Only (Aeson Agent.ModelUsage)]
     for_ related \(pid, n) -> do
       [relatedRun] <- runQueryEffect tr $ Reviews.latestRuns pid
       let observed = receipt{Agent.id = UUIDId $ UUID.fromWords 42 0 0 n, Agent.attemptId = UUIDId $ UUID.fromWords 43 0 0 n, Agent.responseId = Just $ "response-" <> show n}
@@ -2529,7 +2535,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         runQueryEffect tr $ CodeContext.insertCodeMapping pid credential.id (Git.RepoRef "impact-org" "noisy" "main") Nothing "" ""
         event <- either (fail . show) pure $ Reviews.decodeEvent $ toStrict $ AE.encode $ payload "opened" revision "2025-01-01T00:00:00Z"
         runQueryEffect tr $ for_ [8 .. 28] \number -> Reviews.receiveEvent (event{Reviews.number = number, Reviews.repo = "noisy"} :: Reviews.PullRequestEvent)
-    runQueryEffect tr (Reviews.latestChecks testPid) >>= (\executions -> length executions `shouldBe` 2)
+    runQueryEffect tr (Reviews.latestChecks reviewPid) >>= (\executions -> length executions `shouldBe` 2)
     let userId = (getResponse tr.trSessAndHeader :: Projects.Session).user.id
     customerRows <- runQueryEffect tr $ Reviews.customerUsage userId
     length customerRows `shouldBe` 5
@@ -2539,7 +2545,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     runQueryEffect tr (Reviews.customerUsage userId) >>= (\rows -> length rows `shouldBe` 0)
     void $ withResource tr.trPool \conn -> execute conn "UPDATE users.users SET active = true WHERE id = ?" (Only userId)
     usageTab <- either (fail . toString) pure $ parseUrlPiece @CodeContextPage.RepositoryTab "usage"
-    (_, usagePage) <- testServant tr $ CodeContextPage.repositoriesGetH testPid (Just usageTab) Nothing
+    (_, usagePage) <- testServant tr $ CodeContextPage.repositoriesGetH reviewPid (Just usageTab) Nothing
     let usagePageText = decodeUtf8 $ Lucid.renderBS usagePage
     usagePageText `shouldSatisfy` T.isInfixOf "$0.002468 estimated"
     usagePageText `shouldSatisfy` T.isInfixOf "active administrator"
@@ -2561,13 +2567,13 @@ spec = around withTestResources $ describe "Production impact reviews" do
           widget.query `shouldBe` Nothing
           widget.dataset `shouldSatisfy` isJust
           widget.pngProfile `shouldBe` Just Widget.PngSlack
-          item.url `shouldBe` T.dropWhileEnd (== '/') cfg.hostUrl <> "/p/" <> testPid.toText <> "/settings/code-mappings"
+          item.url `shouldBe` T.dropWhileEnd (== '/') cfg.hostUrl <> "/p/" <> reviewPid.toText <> "/settings/code-mappings"
       when (item.key == "query-1") do
         pngs <- forM [2, 3 :: Int] \count -> do
           let scalar = widget{Widget.dataset = Just (def :: Widget.WidgetDataset){Widget.source = AE.toJSON ([[AE.String "events"], [AE.toJSON count]] :: [[AE.Value]])}}
               encoded = decodeUtf8 @Text $ AE.encode scalar
-              signature = Widget.signWidgetUrl tr.trATCtx.env.apiKeyEncryptionSecretKey testPid encoded
-          response <- toBaseServantResponse tr $ Routes.widgetPngGetH testPid (Just encoded) Nothing Nothing Nothing Nothing Nothing Nothing (Just signature) []
+              signature = Widget.signWidgetUrl tr.trATCtx.env.apiKeyEncryptionSecretKey reviewPid encoded
+          response <- toBaseServantResponse tr $ Routes.widgetPngGetH reviewPid (Just encoded) Nothing Nothing Nothing Nothing Nothing Nothing (Just signature) []
           let bytes = getResponse response
           LBS.take 8 bytes `shouldBe` "\137PNG\r\n\26\n"
           pure bytes
@@ -2577,7 +2583,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         fmap (.source) widget.dataset `shouldBe` Just (AE.toJSON ([[AE.String "events", AE.String "percent"], [AE.Number 3, AE.Number 100]] :: [[AE.Value]]))
         widgetQuery <- maybe (fail "widget query missing") pure item.query
         ast <- either (fail . toString) pure $ KQL.parseQueryToAST widgetQuery
-        replayed <- runQueryEffect tr $ selectLogTable False testPid ast widgetQuery Nothing (Just $ addUTCTime (-(30 * 86400)) frozenTime, Just $ addUTCTime 86400 frozenTime) [] Nothing Nothing Nothing Nothing
+        replayed <- runQueryEffect tr $ selectLogTable False reviewPid ast widgetQuery Nothing (Just $ addUTCTime (-(30 * 86400)) frozenTime, Just $ addUTCTime 86400 frozenTime) [] Nothing Nothing Nothing Nothing
         (rows, _, _) <- either (fail . toString) pure replayed
         map V.toList (V.toList rows) `shouldBe` [[AE.Number 3, AE.Number 100]]
     expectedChart <-
@@ -2585,7 +2591,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         $ Widget.widgetPngUrl
           tr.trATCtx.env.apiKeyEncryptionSecretKey
           cfg.hostUrl
-          testPid
+          reviewPid
           (def{Widget.wType = Widget.WTTimeseries, Widget.title = Just "Observed service events", Widget.query = Just "resource.service.name == \"test-service\" and timestamp >= \"2024-12-25T00:00:00Z\" AND timestamp <= \"2025-01-01T00:00:00Z\" | summarize events = count() by bin_auto(timestamp)", Widget.pngProfile = Just Widget.PngSlack})
           Nothing
           (Just "2024-12-25T00:00:00Z")
@@ -2593,8 +2599,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
     map (.chartUrl) (filter (isNothing . (.queryResult)) measured) `shouldBe` [Just expectedChart]
     length (filter (isJust . (.queryResult)) measured) `shouldBe` 7
     -- Reruns recover the app-owned comment and keep production prose out of links-only output.
-    void $ testServant tr $ CodeContextPage.impactReviewSettingsPostH testPid (Reviews.ReviewSettings "impact-org" "checkout" True False)
-    void $ testServant tr $ CodeContextPage.impactReviewRetryH testPid run.id
+    void $ testServant tr $ CodeContextPage.impactReviewSettingsPostH reviewPid (Reviews.ReviewSettings "impact-org" "checkout" True False)
+    void $ testServant tr $ CodeContextPage.impactReviewRetryH reviewPid run.id
     retryPayloads <- withResource tr.trPool \conn -> query conn "SELECT payload FROM background_jobs WHERE payload->>'tag' = 'ReviewPullRequest' AND payload->>'contents' = ?" (Only run.id.toText) :: IO [Only (Aeson AE.Value)]
     retryPayloads `shouldBe` replicate 2 (Only $ Aeson $ AE.toJSON $ Jobs.ReviewPullRequest run.id)
     (linksRequests, ()) <- runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ transport True $ fakeAgentWith ["--expect-knowledge"] result $ Impact.reviewPullRequest run.id
@@ -2605,14 +2611,14 @@ spec = around withTestResources $ describe "Production impact reviews" do
     linksPublished `shouldNotSatisfy` T.isInfixOf "/widget.png"
     linksPublished `shouldNotSatisfy` T.isInfixOf "The changed operation"
     -- Final publication validation also rejects fabricated locations if the effect is bypassed.
-    runQueryEffect tr $ Reviews.retryRun testPid run.id
+    runQueryEffect tr $ Reviews.retryRun reviewPid run.id
     let invalid = result{Impact.findings = [Impact.Finding (Impact.ChangedLine "unrelated.hs" 1 Impact.Head) "Invented mechanism" "Invented next step" ["telemetry-1"]]}
     (newRequests, ()) <- runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ transport False $ interpose @Agent.CodeReview (\_ -> \case Agent.ReviewRepository{} -> pure $ Right $ decodeUtf8 $ AE.encode invalid; Agent.FixRepository{} -> pure $ Left "Unexpected issue-fix task"; Agent.AdmitRegression{} -> pure $ Left "Unexpected admission task"; Agent.VerifyFixArtifacts{} -> pure $ Left "Unexpected artifact task"; Agent.ExplainVerifiedFix{} -> pure $ Left "Unexpected explanation task"; Agent.ReviewVerifiedFix{} -> pure $ Left "Unexpected candidate review task") $ Impact.reviewPullRequest run.id
     let created = T.intercalate " " $ map (decodeUtf8 . snd) $ filter (T.isSuffixOf "/issues/7/comments" . fst) newRequests
     created `shouldSatisfy` T.isInfixOf "Coverage unknown"
     created `shouldNotSatisfy` T.isInfixOf "Invented mechanism"
     for_ @[] [True, False] \unexpected -> do
-      runQueryEffect tr $ Reviews.retryRun testPid run.id
+      runQueryEffect tr $ Reviews.retryRun reviewPid run.id
       let failing = if unexpected then withHTTPResponses (\_ _ -> throwIO $ userError "private-exception-detail") else Reader.local (\ctx -> ctx{config = cfg{githubAppPrivateKey = ""}})
       failed <- tryAny $ runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ failing $ Impact.reviewPullRequest run.id
       failed `shouldSatisfy` isLeft
@@ -2621,7 +2627,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       failedRun.error `shouldBe` Just "Review failed; retry to collect current evidence"
       runQueryEffect tr (Reviews.claimRun failedRun) `shouldReturn` True
       runQueryEffect tr $ Reviews.releaseRun failedRun
-    runQueryEffect tr $ Reviews.retryRun testPid run.id
+    runQueryEffect tr $ Reviews.retryRun reviewPid run.id
     (failedRequests, failedAgent) <-
       runTestBgRecordingHTTP frozenTime tr
         $ Reader.local (\ctx -> ctx{config = cfg})
@@ -2633,64 +2639,64 @@ spec = around withTestResources $ describe "Production impact reviews" do
     unavailable <- maybe (fail "run missing") pure =<< runQueryEffect tr (Reviews.getRun run.id)
     unavailable.state `shouldBe` Reviews.Incomplete
     unavailable.error `shouldBe` Just "Review failed; retry to collect current evidence"
-    (_, interruptedHistory) <- testServant tr $ CodeContextPage.repositoriesGetH testPid (Just CodeContextPage.PullRequests) Nothing
+    (_, interruptedHistory) <- testServant tr $ CodeContextPage.repositoriesGetH reviewPid (Just CodeContextPage.PullRequests) Nothing
     T.isInfixOf "attempts without model receipts:" (decodeUtf8 @Text $ Lucid.renderBS interruptedHistory) `shouldBe` True
-    (_, interruptedCustomers) <- testServant tr $ CodeContextPage.repositoriesGetH testPid (Just CodeContextPage.Usage) Nothing
+    (_, interruptedCustomers) <- testServant tr $ CodeContextPage.repositoriesGetH reviewPid (Just CodeContextPage.Usage) Nothing
     T.isInfixOf "attempts without model receipts:" (decodeUtf8 @Text $ Lucid.renderBS interruptedCustomers) `shouldBe` True
-    missingUsage <- runQueryEffect tr $ Reviews.usageTotals testPid
+    missingUsage <- runQueryEffect tr $ Reviews.usageTotals reviewPid
     let missing = sum . map (.usage.unreportedAttempts) . filter ((== Just run.id) . (.runId))
     missing missingUsage `shouldSatisfy` (> 0)
     [Only interruptedAttempt] <- withResource tr.trPool (\conn -> query conn "SELECT a.id FROM projects.pr_review_attempts a WHERE a.run_id = ? AND NOT EXISTS (SELECT 1 FROM projects.pr_review_usage u WHERE u.attempt_id = a.id) ORDER BY a.started_at DESC, a.id DESC LIMIT 1" (Only run.id)) :: IO [Only (UUIDId "agent_attempt")]
     runQueryEffect tr (Reviews.recordUsage run receipt{Agent.id = UUIDId $ UUID.fromWords 71 0 0 1, Agent.attemptId = interruptedAttempt, Agent.costNanousd = Nothing, Agent.succeeded = False}) `shouldReturn` True
-    recoveredUsage <- runQueryEffect tr $ Reviews.usageTotals testPid
+    recoveredUsage <- runQueryEffect tr $ Reviews.usageTotals reviewPid
     missing recoveredUsage `shouldBe` missing missingUsage - 1
     for_ @[] ["--fail-after-usage", "--conflicting-usage", "--skip-submission", "--tampered-result", "--check-after-submission", "--wrong-check-revision", "--foreign-allocation", "--zero-allocation"] \failure -> do
-      beforeFailure <- runQueryEffect tr $ Reviews.usageTotals testPid
-      beforeChecks <- runQueryEffect tr $ Reviews.latestChecks testPid
+      beforeFailure <- runQueryEffect tr $ Reviews.usageTotals reviewPid
+      beforeChecks <- runQueryEffect tr $ Reviews.latestChecks reviewPid
       beforeKnowledge <- runQueryEffect tr $ Reviews.priorKnowledge run "test-service"
-      runQueryEffect tr $ Reviews.retryRun testPid run.id
+      runQueryEffect tr $ Reviews.retryRun reviewPid run.id
       (failureRequests, processFailure) <- runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ transport True $ fakeAgentWith [failure] result $ tryAny (Impact.reviewPullRequest run.id)
       processFailure `shouldSatisfy` isLeft
       failureRequests `shouldNotSatisfy` any (T.isInfixOf "/issues/" . fst)
-      afterFailure <- runQueryEffect tr $ Reviews.usageTotals testPid
+      afterFailure <- runQueryEffect tr $ Reviews.usageTotals reviewPid
       let measuredCost = sum . map (.usage.costNanousd) . filter (isNothing . (.runId))
       measuredCost afterFailure - measuredCost beforeFailure `shouldBe` if failure == "--wrong-check-revision" then 0 else 1234000
-      afterChecks <- runQueryEffect tr $ Reviews.latestChecks testPid
+      afterChecks <- runQueryEffect tr $ Reviews.latestChecks reviewPid
       length afterChecks - length beforeChecks `shouldBe` if failure == "--wrong-check-revision" then 0 else 2
       afterKnowledge <- runQueryEffect tr $ Reviews.priorKnowledge run "test-service"
       length afterKnowledge `shouldBe` length beforeKnowledge
 
-    runQueryEffect tr $ Reviews.retryRun testPid run.id
+    runQueryEffect tr $ Reviews.retryRun reviewPid run.id
     (_, ()) <- runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ transport True $ fakeAgent result $ Impact.reviewPullRequest run.id
     retried <- maybe (fail "run missing") pure =<< runQueryEffect tr (Reviews.getRun run.id)
     retried.state `shouldBe` Reviews.Completed
     retried.error `shouldBe` Nothing
     -- Billing changes during a worker attempt must not move its later receipts.
-    void $ withResource tr.trPool \conn -> execute conn "UPDATE projects.projects SET customer_id = 'cus_before_attempt' WHERE id = ?" (Only testPid)
-    runQueryEffect tr $ Reviews.retryRun testPid run.id
+    void $ withResource tr.trPool \conn -> execute conn "UPDATE projects.projects SET customer_id = 'cus_before_attempt' WHERE id = ?" (Only reviewPid)
+    runQueryEffect tr $ Reviews.retryRun reviewPid run.id
     (_, ()) <- runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ transport True $ fakeAgentWith ["--billing-change-before-usage"] result $ Impact.reviewPullRequest run.id
-    billingSnapshot <- withResource tr.trPool \conn -> query conn "SELECT (SELECT count(*) FROM projects.pr_review_usage WHERE project_id = ? AND customer_id = 'cus_before_attempt' AND billing_provider = ?), (SELECT count(*) FROM projects.pr_review_checks WHERE project_id = ? AND customer_id = 'cus_before_attempt' AND billing_provider = ?)" (testPid, Projects.StripeProvider, testPid, Projects.StripeProvider) :: IO [(Int64, Int64)]
+    billingSnapshot <- withResource tr.trPool \conn -> query conn "SELECT (SELECT count(*) FROM projects.pr_review_usage WHERE project_id = ? AND customer_id = 'cus_before_attempt' AND billing_provider = ?), (SELECT count(*) FROM projects.pr_review_checks WHERE project_id = ? AND customer_id = 'cus_before_attempt' AND billing_provider = ?)" (reviewPid, Projects.StripeProvider, reviewPid, Projects.StripeProvider) :: IO [(Int64, Int64)]
     billingSnapshot `shouldBe` [(2, 2)]
-    [Only (Aeson delayed)] <- withResource tr.trPool (\conn -> query conn "SELECT receipt FROM projects.pr_review_usage WHERE project_id = ? AND customer_id = 'cus_before_attempt' AND cost_nanousd IS NOT NULL" (Only testPid)) :: IO [Only (Aeson Agent.ModelUsage)]
+    [Only (Aeson delayed)] <- withResource tr.trPool (\conn -> query conn "SELECT receipt FROM projects.pr_review_usage WHERE project_id = ? AND customer_id = 'cus_before_attempt' AND cost_nanousd IS NOT NULL" (Only reviewPid)) :: IO [Only (Aeson Agent.ModelUsage)]
     runQueryEffect tr (Reviews.recordUsage run delayed) `shouldReturn` True
     runQueryEffect tr (Reviews.recordUsage run delayed{Agent.id = UUIDId $ UUID.fromWords 70 0 0 1, Agent.provider = "another-provider"}) `shouldReturn` False
     runQueryEffect tr (Reviews.recordUsage run{Reviews.projectId = emptyPid} delayed) `shouldReturn` False
     runQueryEffect tr (Reviews.recordCheck run execution{Agent.id = UUIDId $ UUID.fromWords 70 0 0 2, Agent.attemptId = delayed.attemptId}) `shouldReturn` True
-    void $ withResource tr.trPool \conn -> execute conn "UPDATE projects.projects SET customer_id = NULL WHERE id = ?" (Only testPid)
+    void $ withResource tr.trPool \conn -> execute conn "UPDATE projects.projects SET customer_id = NULL WHERE id = ?" (Only reviewPid)
     runQueryEffect tr (Reviews.recordUsage run delayed{Agent.id = UUIDId $ UUID.fromWords 70 0 0 3}) `shouldReturn` True
-    pinned <- withResource tr.trPool \conn -> query conn "SELECT count(*) FROM projects.pr_review_usage WHERE project_id = ? AND customer_id = 'cus_before_attempt' AND attempt_id IS NOT NULL" (Only testPid) :: IO [Only Int64]
+    pinned <- withResource tr.trPool \conn -> query conn "SELECT count(*) FROM projects.pr_review_usage WHERE project_id = ? AND customer_id = 'cus_before_attempt' AND attempt_id IS NOT NULL" (Only reviewPid) :: IO [Only Int64]
     pinned `shouldBe` [Only 3]
     for_ related \(pid, n) -> when (n == 5) do
       [otherRun] <- runQueryEffect tr $ Reviews.latestRuns pid
       runQueryEffect tr (Reviews.recordUsage otherRun delayed{Agent.id = UUIDId $ UUID.fromWords 70 0 0 4}) `shouldReturn` False
       runQueryEffect tr (Reviews.recordCheck otherRun execution{Agent.id = UUIDId $ UUID.fromWords 70 0 0 5, Agent.attemptId = delayed.attemptId}) `shouldReturn` False
-    runQueryEffect tr $ Reviews.retryRun testPid run.id
+    runQueryEffect tr $ Reviews.retryRun reviewPid run.id
     (_, ()) <- runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ transport True $ fakeAgentWith ["--billing-change-before-usage"] result $ Impact.reviewPullRequest run.id
-    unlinkedSnapshot <- withResource tr.trPool \conn -> query conn "SELECT count(*) FROM projects.pr_review_usage u JOIN projects.pr_review_attempts a ON a.id = u.attempt_id WHERE u.project_id = ? AND a.customer_id IS NULL AND u.customer_id IS NULL" (Only testPid) :: IO [Only Int64]
+    unlinkedSnapshot <- withResource tr.trPool \conn -> query conn "SELECT count(*) FROM projects.pr_review_usage u JOIN projects.pr_review_attempts a ON a.id = u.attempt_id WHERE u.project_id = ? AND a.customer_id IS NULL AND u.customer_id IS NULL" (Only reviewPid) :: IO [Only Int64]
     unlinkedSnapshot `shouldBe` [Only 2]
 
     -- Revoking review permission while the agent runs also revokes its query tool.
-    runQueryEffect tr $ Reviews.retryRun testPid run.id
+    runQueryEffect tr $ Reviews.retryRun reviewPid run.id
     (revokedRequests, ()) <-
       runTestBgRecordingHTTP frozenTime tr
         $ Reader.local (\ctx -> ctx{config = cfg})
@@ -2700,7 +2706,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
               Agent.ReviewRepository _ respond knowledge _ _ _ _ _ -> localSeqUnlift env \unlift -> do
                 let request = Agent.TelemetryQuery "test-service" "| summarize count()"
                 unlift (respond request) >>= liftIO . (`shouldSatisfy` isRight)
-                Reviews.updateSettings testPid (Reviews.ReviewSettings "impact-org" "checkout" False False)
+                Reviews.updateSettings reviewPid (Reviews.ReviewSettings "impact-org" "checkout" False False)
                 reply <- unlift $ respond request
                 liftIO $ reply `shouldSatisfy` isLeft
                 remembered <- unlift $ knowledge $ Agent.Recall "test-service"
@@ -2714,25 +2720,25 @@ spec = around withTestResources $ describe "Production impact reviews" do
           )
         $ Impact.reviewPullRequest run.id
     revokedRequests `shouldNotSatisfy` any (T.isInfixOf "/issues/" . fst)
-    runQueryEffect tr $ Reviews.updateSettings testPid (Reviews.ReviewSettings "impact-org" "checkout" True False)
+    runQueryEffect tr $ Reviews.updateSettings reviewPid (Reviews.ReviewSettings "impact-org" "checkout" True False)
     -- Unmapped repositories publish a coverage gap without calling the model.
-    void $ withResource tr.trPool \conn -> execute conn "UPDATE projects.code_mappings SET service = NULL WHERE project_id = ?" (Only testPid)
-    runQueryEffect tr $ Reviews.retryRun testPid run.id
+    void $ withResource tr.trPool \conn -> execute conn "UPDATE projects.code_mappings SET service = NULL WHERE project_id = ?" (Only reviewPid)
+    runQueryEffect tr $ Reviews.retryRun reviewPid run.id
     (unmappedRequests, ()) <- runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ transport True $ interpose @Agent.CodeReview (\_ _ -> liftIO $ fail "Review agent called without measured evidence") $ Impact.reviewPullRequest run.id
     let unmapped = T.intercalate " " $ map (decodeUtf8 . snd) $ filter (T.isInfixOf "/issues/comments/99" . fst) unmappedRequests
     unmapped `shouldSatisfy` T.isInfixOf "Coverage unknown"
     unmapped `shouldNotSatisfy` T.isInfixOf "telemetry evidence"
-    void $ testServant tr $ CodeContextPage.impactReviewSettingsPostH testPid (Reviews.ReviewSettings "impact-org" "checkout" False False)
+    void $ testServant tr $ CodeContextPage.impactReviewSettingsPostH reviewPid (Reviews.ReviewSettings "impact-org" "checkout" False False)
     void $ deliver tr $ payload "synchronize" (T.replicate 40 "b") "2025-01-01T00:01:00Z"
-    runs <- runQueryEffect tr $ Reviews.latestRuns testPid
+    runs <- runQueryEffect tr $ Reviews.latestRuns reviewPid
     length runs `shouldBe` 1
-    runQueryEffect tr (Reviews.repositorySettings testPid) >>= \settings -> map (\s -> (s.enabled, s.includeEvidence)) settings `shouldBe` [(False, False)]
+    runQueryEffect tr (Reviews.repositorySettings reviewPid) >>= \settings -> map (\s -> (s.enabled, s.includeEvidence)) settings `shouldBe` [(False, False)]
     -- A metrics-only service still needs an investigation when there are no log/span counts.
-    [credential] <- runQueryEffect tr $ GitSync.getGitHubCredentials testPid
-    runQueryEffect tr $ CodeContext.insertCodeMapping testPid credential.id (Git.RepoRef "impact-org" "checkout" "main") (Just "test-service") "" ""
-    void $ withResource tr.trPool \conn -> execute conn "DELETE FROM otel_logs_and_spans WHERE project_id = ?" (Only testPid)
-    runQueryEffect tr $ Reviews.updateSettings testPid (Reviews.ReviewSettings "impact-org" "checkout" True True)
-    runQueryEffect tr $ Reviews.retryRun testPid run.id
+    [credential] <- runQueryEffect tr $ GitSync.getGitHubCredentials reviewPid
+    runQueryEffect tr $ CodeContext.insertCodeMapping reviewPid credential.id (Git.RepoRef "impact-org" "checkout" "main") (Just "test-service") "" ""
+    void $ withResource tr.trPool \conn -> execute conn "DELETE FROM otel_logs_and_spans WHERE project_id = ?" (Only reviewPid)
+    runQueryEffect tr $ Reviews.updateSettings reviewPid (Reviews.ReviewSettings "impact-org" "checkout" True True)
+    runQueryEffect tr $ Reviews.retryRun reviewPid run.id
     (metricsRequests, ()) <-
       runTestBgRecordingHTTP frozenTime tr
         $ Reader.local (\ctx -> ctx{config = cfg})
@@ -2743,7 +2749,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                 let request = Agent.TelemetryQuery "test-service" "metrics | metric_name == \"review.temperature\" | summarize avg(value)"
                 observed <- unlift $ respond request
                 liftIO $ decodeUtf8 @Text (AE.encode observed) `shouldSatisfy` T.isInfixOf "42"
-                liftIO $ void $ withResource tr.trPool \conn -> execute conn "UPDATE otel_metrics SET value = 84 WHERE project_id = ? AND metric_name = 'review.temperature'" (Only testPid.toText)
+                liftIO $ void $ withResource tr.trPool \conn -> execute conn "UPDATE otel_metrics SET value = 84 WHERE project_id = ? AND metric_name = 'review.temperature'" (Only reviewPid.toText)
                 repeated <- unlift $ respond request
                 liftIO $ AE.encode repeated `shouldBe` AE.encode observed
                 refreshed <- unlift $ respond request{Agent.query = request.query <> " | take 1"}

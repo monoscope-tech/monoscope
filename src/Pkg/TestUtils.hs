@@ -55,6 +55,7 @@ module Pkg.TestUtils (
   createTestProject,
   createTestAPIKey,
   ingestLog,
+  ingestLogWithResource,
   ingestErrorLog,
   ingestTrace,
   ingestSpanLinked,
@@ -1440,10 +1441,14 @@ createTestAPIKey tr projectId keyName = do
 
 -- | Ingest via resource attribute (key embedded in payload) or via header (key in Authorization header)
 ingestLog, ingestLogWithHeader :: TestResources -> Text -> Text -> UTCTime -> IO ()
-ingestLog tr apiKey bodyText timestamp =
-  void $ OtlpServer.logsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createOtelLogAtTime apiKey [bodyText] timestamp)
+ingestLog tr apiKey = ingestLogWithResource tr apiKey []
 ingestLogWithHeader tr apiKey bodyText timestamp =
   void $ runTestBg frozenTime tr $ OtlpServer.processLogsRequest (Just apiKey) (createOtelLogAtTime "" [bodyText] timestamp)
+
+
+ingestLogWithResource :: TestResources -> Text -> [(Text, Text)] -> Text -> UTCTime -> IO ()
+ingestLogWithResource tr apiKey attributes bodyText timestamp =
+  void $ OtlpServer.logsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider $ Proto $ createOtelLogAtTime apiKey [bodyText] timestamp & LSF.resourceLogs . traverse . PLF.resource .~ mkResource apiKey (map (uncurry mkAttr) attributes)
 
 
 -- | Ingest an ERROR-severity log record with optional @exception.*@ attributes.

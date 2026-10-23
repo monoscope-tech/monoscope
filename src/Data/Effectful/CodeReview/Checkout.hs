@@ -17,6 +17,7 @@ import System.Directory (canonicalizePath, createDirectoryIfMissing)
 import System.Environment (getEnvironment)
 import System.FileLock (SharedExclusive (..), withFileLock)
 import System.FilePath (isAbsolute, takeDirectory, takeFileName, (</>))
+import System.IO (hClose)
 import System.IO.Error (userError)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Posix.Files qualified as Posix
@@ -88,7 +89,9 @@ withCheckout store source action = do
             command <- gitCommand directory ["cat-file", "blob", toString blob] []
             withProcessTerm (setStdout createPipe command) \process -> do
               bytes <- BS.hGet (getStdout process) 32768
-              when (BS.length bytes < 32768) $ waitExitCode process >>= \exit -> unless (exit == ExitSuccess) invalid
+              if BS.length bytes < 32768
+                then waitExitCode process >>= \exit -> unless (exit == ExitSuccess) invalid
+                else hClose (getStdout process) >> void (waitExitCode process)
               pure $ decodeUtf8With lenientDecode bytes
       for_ files \(path, blob) -> when (any (\root -> (root <> "/") `T.isPrefixOf` path) roots && (".md" `T.isSuffixOf` path || takeFileName (toString path) `elem` [".gitignore", ".ignore", ".fdignore"])) do
         let destination = metadata </> toString path
