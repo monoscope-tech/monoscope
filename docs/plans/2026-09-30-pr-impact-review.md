@@ -65,6 +65,8 @@ Two real build failures were reproduced before their fixes. Cabal emitted Git su
 
 The Linux amd64 tool runtime built and passed its checks on our server. With `/dev/kvm` and its group supplied, the actual packaged CLI and SDK ran two offline VMs: the injected test failed on base, then passed unchanged as a retained test on head. Frozen test fingerprints matched; UID 1000, reset environment, host-write denial, unchanged source and child-process cleanup checks passed. Resource receipts remain explicitly unpriced. No model API or customer job ran. The first operator fixture incorrectly expected the agent to read the private supervisor mount; the corrected check uses the agent's `/workspace` copy.
 
+A separate Docker context regression also failed when developer `cabal.project.local` settings entered a raw build. The ignore rule now excludes that file, and the retained real-Docker fixture passes while checking all three seeded compiler-store mounts. Immutable release builds continue to use `git archive`.
+
 The long-lived watcher passed all 64 CLI binary examples with zero failures in 144.2135 seconds (seed `478291233`). CI self-tests passed, including the additional seeded-cache mount. Dockerfile checks reported no warnings. Full server/worker image and deployment verification remain in progress; no new attestation or branch push has been made.
 
 ### Remaining work and delivery estimate
