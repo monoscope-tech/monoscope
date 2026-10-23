@@ -2,7 +2,7 @@
 
 Monoscope runs Pi on the host and repository tools inside a local Gondolin microVM. Model APIs may be hosted; checkouts, sandboxes, evidence and orchestration run on our infrastructure.
 
-The pinned libraries are `@earendil-works/pi-coding-agent` 1.4.0 and `@earendil-works/gondolin` 0.13.0. This directory still contains workflow policy being moved to Haskell. The [ownership plan](../docs/plans/2026-09-30-pr-impact-review.md#haskell-ownership-revised-implementation-direction) records the target and remaining work.
+The pinned libraries are `@earendil-works/pi-coding-agent` 1.4.0 and `@earendil-works/gondolin` 0.14.0. This directory still contains workflow policy being moved to Haskell. The [ownership plan](../docs/plans/2026-09-30-pr-impact-review.md#haskell-ownership-revised-implementation-direction) records the target and remaining work.
 
 ## Setup
 

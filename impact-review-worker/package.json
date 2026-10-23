@@ -10,7 +10,7 @@
     "build:guest": "node build-guest.mjs"
   },
   "dependencies": {
-    "@earendil-works/gondolin": "0.13.0",
+    "@earendil-works/gondolin": "0.14.0",
     "@earendil-works/pi-coding-agent": "1.4.0",
     "typebox": "1.3.27",
     "write-file-atomic": "7.0.0",
