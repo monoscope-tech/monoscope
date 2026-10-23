@@ -2,7 +2,6 @@ module Data.Effectful.AgentWorkspace (Workspace, Options (..), PruneOptions (..)
 
 import Conduit (runConduit, (.|))
 import Control.Monad (foldM)
-import Crypto.Hash (Context, Digest, SHA256, hash, hashFinalize, hashInit, hashUpdate, hashlazy)
 import Data.Aeson qualified as AE
 import Data.Aeson.Encoding qualified as Encoding
 import Data.ByteString qualified as BS
@@ -43,6 +42,7 @@ import UnliftIO.Async (withAsync)
 import UnliftIO.Concurrent (myThreadId, threadDelay)
 import UnliftIO.Exception (bracket, bracketOnError, catchAny, evaluate, onException, throwIO, throwTo, tryAny)
 import UnliftIO.Timeout qualified as Timeout
+import "cryptonite" Crypto.Hash (Context, Digest, SHA256, hash, hashFinalize, hashInit, hashUpdate, hashlazy)
 
 
 newtype ProjectId = ProjectId UUID
@@ -905,7 +905,7 @@ runWorkspaceReal = interpret $ \env -> \case
                 let revisionArgs = ["-c", "safe.directory=/workspace", "-c", "core.hooksPath=/dev/null", "-C", "/workspace"]
                     guestGit args = "/usr/bin/git" :| (revisionArgs <> args)
                 case request.workspace of
-                  Pristine -> for_ ["/bin/mkdir" :| ["-p", "/workspace"], "/bin/cp" :| ["-R", "/checkout/.", "/workspace"]] $ void . checked rpc
+                  Pristine -> for_ [("/bin/mkdir" :: Text) :| ["-p", "/workspace"], "/bin/cp" :| ["-R", "/checkout/.", "/workspace"]] $ void . checked rpc
                   PreparedCheckpoint _ -> do
                     for_ ["/workspace", "/checkout/.git"] $ \path -> void $ checked rpc $ "/usr/bin/git" :| ["config", "--system", "--add", "safe.directory", path]
                     void $ checked rpc $ guestGit ["fetch", "--quiet", "--no-tags", "--", "/checkout", revisionText revision]
@@ -1098,7 +1098,7 @@ runWorkspaceReal = interpret $ \env -> \case
                   void $ git ["-C", clean, "remote", "add", "origin", toString repoText]
                   started <- getMonotonicTimeNSec
                   rpc @() $ Create $ Sandbox image.assetDir 2 1024 OfflineCow (one ("/baseline", clean))
-                  for_ ["/bin/mkdir" :| ["-p", "/workspace"], "/bin/cp" :| ["-R", "/baseline/.", "/workspace"], "/bin/chown" :| ["-hR", "1000:1000", "/workspace"]] $ void . execute Nothing False
+                  for_ [("/bin/mkdir" :: Text) :| ["-p", "/workspace"], "/bin/cp" :| ["-R", "/baseline/.", "/workspace"], "/bin/chown" :| ["-hR", "1000:1000", "/workspace"]] $ void . execute Nothing False
                   tracked <- git ["-C", clean, "ls-files", "-z"]
                   writeFileLBS (source </> "tracked") tracked
                   copy (source </> "tracked") "/run/monoscope-baseline-paths"

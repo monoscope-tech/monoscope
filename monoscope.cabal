@@ -287,6 +287,8 @@ extra-source-files:
     static/migrations/0251_project_memory_paths.sql
     static/migrations/0252_project_memory_page_identity.sql
     static/migrations/0253_project_memory_legacy_writes.sql
+    static/migrations/0254_project_memory_conversations.sql
+    static/migrations/0255_routine_memory_grant.sql
     test/fixtures/fix-review-agent.mjs
     test/fixtures/github-app-test.pem
     test/fixtures/impact-review-agent.mjs
@@ -298,6 +300,7 @@ extra-source-files:
     test/fixtures/native-sandbox.sh
     test/fixtures/native-sdk-worker.py
     test/fixtures/regression-admission-agent.mjs
+    test/fixtures/stage-recovery-bridge.sh
     test/fixtures/wiki-browser.mjs
     static/public/assets/web-components/dist/manifest.json
 
@@ -907,6 +910,7 @@ test-suite integration-tests
     , effectful
     , effectful-core
     , effectful-postgresql
+    , filepath
     , generic-lens
     , grapesy
     , hasql
@@ -916,6 +920,7 @@ test-suite integration-tests
     , hs-opentelemetry-instrumentation-auto
     , hs-opentelemetry-instrumentation-hasql
     , hspec
+    , http-api-data
     , http-client
     , http-client-tls
     , http-types
