@@ -2,9 +2,11 @@
 
 ## Current implementation checkpoint — 2026-10-23
 
-The larger agent implementation remains local and has no feature pull request or deployment. Shared table-widget PNG rendering merged in [PR #688](https://github.com/monoscope-tech/monoscope/pull/688) after all required CI checks passed, including the production image build. The independent project wiki merged in [PR #689](https://github.com/monoscope-tech/monoscope/pull/689) as `d8b3bf853ab39006967344bdab2b31972bf9948b`, with all checks green and a captioned walkthrough attached. The installed agent harness uses Pi `1.4.0` and Gondolin `0.14.0`. The server's separate AI library remains the pinned `langchain-hs` `0.0.3.0` fork. These are installed versions, not a claim that they are the latest available releases.
+The agent implementation is in draft [PR #693](https://github.com/monoscope-tech/monoscope/pull/693). It has not been deployed. Shared widget PNGs and all three wiki stages merged separately in PRs #688–#691. [The wiki delivery record](2026-10-22-project-wiki-followups.md) links the paths/tree and rich-editor changes and their videos.
 
-| Area | Implemented locally | Still required |
+The worker pins Pi `1.4.0` and Gondolin `0.14.0`. Both match the npm registry check on 2026-10-23. The server uses our `langchain-hs` `0.0.3.0` fork, pinned in `cabal.project` and `cabal.project.freeze`. [Hackage lists `0.0.6.0`](https://hackage.haskell.org/package/langchain-hs). Its provider-package migration remains separate from the Pi integration.
+
+| Area | Implemented on the branch | Still required |
 | --- | --- | --- |
 | Impact review | Haskell checkout/supervision, repository instructions and skills, scoped logs/spans/metrics, service knowledge, shared widget PNGs, optional Linux worker image. | Complete Linux application workflow and deployment checks. |
 | Issue fixes | Admission, frozen reproduction, candidate verification, independent review, persisted phases, MP4/diagram/captions, private retention and authenticated download package. Native draft-publication effect is tested separately. | Customer launch UI, application scheduling of fix-PR publication and its authorization/check gates. |
@@ -13,9 +15,25 @@ The larger agent implementation remains local and has no feature pull request or
 | Sandbox reuse | Prepared build caches, private overlays, hash-checked S3 archive/restore, scheduled host maintenance and durable restore/eviction staging recovery. | Preparation/lease/VM orphan reconciliation, hard allocation admission, remote retention and RAM/process resume. Disk restoration starts a new VM. |
 | Haskell migration | Four prompts, fourteen tool contracts, native fix state machine and admission preparation, role-scoped telemetry/wiki dispatch, candidate capture, artifact verification and worker-suite assertions. No worker `*.test.mjs` suites remain. | Remaining VM/lease coordination and native workspace handoff; Haskell replacements for the two research CLIs. The 150–200-line adapter target is not yet achieved. |
 
-After replaying the feature onto `master` at `cb406743c`, the checkpoint integration run passed **25 examples, zero failures, no pending examples**, in 307.822 seconds with seed `478291220`. It exercised the native supervisor, real local microVMs and a deterministic loopback model provider. The retained local log is `scripts/local/master-replay-integration.log`. A full CI sign-off and production deployment have not run.
+The host integration watcher passed **26 examples, zero failures**, including real local VMs, native publication, and the new Git-isolation regression. The model provider was a deterministic loopback fixture. The retained review record is `scripts/local/impact-host-git-review.json`.
+
+All eleven local CI checks passed for `e20dc0018`. The container suite reported **1,264 examples, zero failures and 13 pending cases**. Eleven pending cases need provisioned VMs, and two need external credentials. Separate host VM runs cover the provisioned cases. The retained sign-off log is `scripts/local/impact-host-git-final-ci-signoff.log`. The focused publication regression also passed after the lint fix and host restart.
+
+The native amd64 production image is `sha256:eced6edd87f8909550d63c696499994d42a2ac8ee3735c49ddd7e27cd3f06821`. The optional worker image is `sha256:95768eae92233ed3553e18b4165cc20c0fd1105113dd8fb5d5e3348b3ad64957`. The exact worker image passed the Linux/KVM regression: base failed and head passed with the same frozen test. UID, environment, host-write denial and process-cleanup checks also passed. The retained result is `scripts/local/impact-linux-host-git-check.json`. These checks do not establish deployment.
+
+Next: update the draft PR. Then replace the two JavaScript research drivers with Haskell callers of the production workflow. Broader review evaluation, worker routing, orphan cleanup, complete resource accounting and deployment checks remain required. No customer charge or production deployment occurred.
 
 See [the workflow contract](2026-10-20-issue-fix-workflow.md) for the required product behavior. The dated research and migration notes below preserve evidence from earlier stages; their intermediate test counts and pending-work statements are historical. This checkpoint describes the current state.
+
+### Git-policy review decisions — 2026-10-23
+
+`Pkg.GitCommand` now supplies the shared host-Git policy to checkout, artifacts, publication and workspace interpreters. The module belongs in the DB-free shared package because the CLI cannot import server `Pkg.Git`. Existing bounded process readers, timeouts and resource scopes remain intact.
+
+- Keep Git, VM, model and GitHub CLI environment policies separate. Their required credentials and variables differ.
+- Keep resource IO inside the real effect interpreters. Fake interpreters cannot establish actual VM isolation or process cleanup.
+- Keep applied migrations append-only. Retain requested research records and pinned, licensed skills for reproducible review and builds.
+- `du` failures already fail instead of becoming zero. Tar failures already return `PublicationUnavailable`. Hard storage admission and orphan recovery remain rollout requirements.
+- Defer speculative strictness changes until evidence shows retention problems. Keep unprovisioned CI cases pending and report separate host VM results.
 
 ### CLI release packaging — 2026-10-23
 
@@ -82,7 +100,7 @@ The combined worker ran two offline VMs through its packaged CLI and SDK on Linu
 
 Linux checks passed the build, 1,909 doctests, 336 unit examples, 16 CLI examples and Weeder. A later browser run passed all 176 cases. Container checks exposed host-binary replacement, missing runtime tools and missing `HOST_URL`. The local CI setup now isolates those inputs. VM cases remain pending inside the container without KVM and guest assets. Separate host VM runs provide that evidence.
 
-The subsequent Linux checkout fix waits for Git after a bounded instruction read. Its regression failed with `ESRCH`, then passed without diagnostic wrappers. The telemetry fixture now uses a fresh project and correct OTLP resource attributes across both stores. The later Linux run passed all 12 integration shards: 1,263 examples, zero failures and 13 pending cases. Eleven pending cases need provisioned VMs, and two need external credentials. The build, 1,909 doctests, 336 unit examples, CLI examples and Weeder also passed. Final CI sign-off and new images remain pending. The feature PR and deployment remain pending.
+The subsequent Linux checkout fix waits for Git after a bounded instruction read. Its regression failed with `ESRCH`, then passed without diagnostic wrappers. The telemetry fixture now uses a fresh project and correct OTLP resource attributes across both stores. The later Linux run passed all 12 integration shards: 1,263 examples, zero failures and 13 pending cases. Eleven pending cases need provisioned VMs, and two need external credentials. The build, 1,909 doctests, 336 unit examples, CLI examples and Weeder also passed. This was an intermediate checkpoint. The current PR and validation status appear at the top of this document.
 
 ### Remaining work and delivery estimate
 
