@@ -173,8 +173,7 @@ publish store executable token artifacts explanation context authorize = do
               guardRemote Branch
               previous <- refs context.branch
               ensure SourceChanged $ isNothing previous || previous == Just (revisionText result.head)
-              when (isNothing previous) do
-                void $ git PushFailed checkout (HostGit.GitHub $ Just token) ["push", "--porcelain", "--force-with-lease=refs/heads/" <> toString context.branch <> ":", toString artifacts.repository, toString (revisionText result.head) <> ":refs/heads/" <> toString context.branch]
+              when (isNothing previous) $ void (git PushFailed checkout (HostGit.GitHub $ Just token) ["push", "--porcelain", "--force-with-lease=refs/heads/" <> toString context.branch <> ":", toString artifacts.repository, toString (revisionText result.head) <> ":refs/heads/" <> toString context.branch])
               guardRemote Create
               created <- api "POST" (endpoint <> "/pulls") (Just $ AE.object ["title" AE..= result.summary, "head" AE..= context.branch, "base" AE..= context.targetBranch, "draft" AE..= True, "body" AE..= body Map.empty Nothing]) >>= checked
               save $ Draft created.number
