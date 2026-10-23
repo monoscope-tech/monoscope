@@ -7,6 +7,7 @@ import { createInterface } from 'node:readline';
 
 process.on('uncaughtException', (error) => { writeFileSync(process.argv[2] + '.failure', error.message); process.exit(1); });
 
+const tool = (name, args) => JSON.stringify({ tag: 'Tool', contents: { name, arguments: args } });
 const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
 const input = lines[Symbol.asyncIterator]();
 const request = JSON.parse((await input.next()).value);
@@ -26,7 +27,7 @@ for (const contents of [
   { service: 'unmapped-service', query: '| summarize count()' },
   { service: 'test-service', query: '| take 201' },
 ]) {
-  process.stdout.write(JSON.stringify({ tag: 'Query', contents }) + '\n');
+  process.stdout.write(tool('query_telemetry', contents) + '\n');
   assert.equal(typeof JSON.parse((await input.next()).value).Left, 'string');
 }
 const attemptId = request.attemptId;
@@ -49,7 +50,7 @@ for (const query of [
   '| summarize count() by bin_auto(timestamp)',
   '| summarize count() by bin(timestamp, 1s) | take 1',
 ]) {
-  process.stdout.write(JSON.stringify({ tag: 'Query', contents: { service: 'test-service', query } }) + '\n');
+  process.stdout.write(tool('query_telemetry', { service: 'test-service', query }) + '\n');
   const evidence = JSON.parse((await input.next()).value).Right;
   assert.equal(evidence.key, `query-${observations.length + 1}`);
   assert.equal(evidence.service, 'test-service');
@@ -58,13 +59,13 @@ for (const query of [
   assert.ok(!JSON.stringify(evidence).includes('long-review-log-body'));
   observations.push(evidence);
 }
-process.stdout.write(JSON.stringify({ tag: 'Query', contents: { service: 'test-service', query: 'resource.service.name == "unmapped-service" or true == true | summarize events = count(), percent = 100.0 * count() / count()' } }) + '\n');
+process.stdout.write(tool('query_telemetry', { service: 'test-service', query: 'resource.service.name == "unmapped-service" or true == true | summarize events = count(), percent = 100.0 * count() / count()' }) + '\n');
 assert.deepEqual(JSON.parse((await input.next()).value).Right, observations[0], 'an identical query in one review must reuse its saved snapshot and evidence key');
 assert.ok(observations[0].queryResult.dataset.flat().includes(100));
 assert.equal(observations[0].queryResult.limitReached, false);
 assert.equal(observations[2].queryResult.dataset.length, 1);
 assert.equal(observations[2].queryResult.limitReached, true);
-process.stdout.write(JSON.stringify({ tag: 'Query', contents: { service: 'test-service', query: 'body contains "another-in-scope-event" | project body = body | take 1' } }) + '\n');
+process.stdout.write(tool('query_telemetry', { service: 'test-service', query: 'body contains "another-in-scope-event" | project body = body | take 1' }) + '\n');
 const logReply = JSON.parse((await input.next()).value);
 const logs = logReply.Right;
 assert.ok(logs, 'the reviewer must be able to inspect a scoped log sample: ' + JSON.stringify(logReply));
@@ -74,25 +75,25 @@ for (const [query, expected] of [
   ['spans | name == "checkout-review-span" | project span = name, elapsed = duration | take 1', 'checkout-review-span'],
   ['metrics | metric_name == "review.temperature" | summarize average = avg(value)', '42'],
 ]) {
-  process.stdout.write(JSON.stringify({ tag: 'Query', contents: { service: 'test-service', query } }) + '\n');
+  process.stdout.write(tool('query_telemetry', { service: 'test-service', query }) + '\n');
   const reply = JSON.parse((await input.next()).value);
   assert.ok(reply.Right, JSON.stringify(reply));
   assert.ok(JSON.stringify(reply.Right.queryResult).includes(expected), JSON.stringify(reply));
 }
-process.stdout.write(JSON.stringify({ tag: 'Query', contents: { service: 'test-service', query: 'body contains "long-review-log-body" | project message = body | take 1' } }) + '\n');
+process.stdout.write(tool('query_telemetry', { service: 'test-service', query: 'body contains "long-review-log-body" | project message = body | take 1' }) + '\n');
 const truncated = JSON.parse((await input.next()).value).Right;
 assert.equal(truncated?.queryResult.fieldsTruncated, true, 'truncated log fields must be explicit');
 assert.ok(JSON.stringify(truncated.queryResult.dataset).length < 8100);
-process.stdout.write(JSON.stringify({ tag: 'Knowledge', contents: { tag: 'Recall', contents: 'test-service' } }) + '\n');
+process.stdout.write(tool('recall_knowledge', { service: 'test-service' }) + '\n');
 const memories = JSON.parse((await input.next()).value).Right;
 assert.ok(Array.isArray(memories), 'the reviewer must be able to recall scoped knowledge');
 if (process.argv.includes('--expect-knowledge')) assert.ok(memories.some((note) => note.summary.includes('temperature gauge') && note.revision === request.head && note.windowEnd));
-for (const contents of [{ tag: 'Recall', contents: 'unmapped-service' }, { tag: 'Remember', contents: { service: 'test-service', summary: 'Unsupported note', evidenceKeys: ['invented'] } }]) {
-  process.stdout.write(JSON.stringify({ tag: 'Knowledge', contents }) + '\n');
+for (const [name, args] of [['recall_knowledge', { service: 'unmapped-service' }], ['remember_knowledge', { service: 'test-service', summary: 'Unsupported note', evidenceKeys: ['invented'] }]]) {
+  process.stdout.write(tool(name, args) + '\n');
   assert.equal(typeof JSON.parse((await input.next()).value).Left, 'string');
 }
 const failureMode = process.argv.find((arg) => ['--skip-submission', '--tampered-result', '--check-after-submission'].includes(arg));
-process.stdout.write(JSON.stringify({ tag: 'Knowledge', contents: { tag: 'Remember', contents: { service: 'test-service', summary: failureMode ? 'Unpublished note ' + failureMode : 'Review temperature gauge was observed at 42 in the recorded window; recheck before relying on it.', evidenceKeys: ['query-6'] } } }) + '\n');
+process.stdout.write(tool('remember_knowledge', { service: 'test-service', summary: failureMode ? 'Unpublished note ' + failureMode : 'Review temperature gauge was observed at 42 in the recorded window; recheck before relying on it.', evidenceKeys: ['query-6'] }) + '\n');
 assert.ok(Object.hasOwn(JSON.parse((await input.next()).value), 'Right'));
 const draft = JSON.parse(await readFile(process.argv[2], 'utf8'));
 for (const finding of draft.findings) finding.evidenceKeys = [observations[0].key];

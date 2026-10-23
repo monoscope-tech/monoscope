@@ -1,7 +1,9 @@
-module Data.Effectful.CodeReview.Types (Evidence (..), EvidenceKind (..), Observation (..), QueryKind (..), QueryObservation (..), KnowledgeSnapshot (..), ThinkingLevel (..), Request (..), FixRequest (..), TestArtifact (..), AdmissionRequest (..), AdmissionResult (..), AdmissionDecision (..), PhaseReceipt (..), FixResult (..), ArtifactRequest (..), FixReviewRequest (..), FixReviewDecision (..), FixReviewResult (..), Explanation (..), validExplanation, PricingStatus (..), TelemetryQuery (..), KnowledgeNote (..), KnowledgeRequest (..), ModelUsage (..), ModelCall (..), AllocationReceipt, AllocationOutcome (..), allocationId, allocationAttempt, agentResources, hostAllocation, Regression (..), CheckReceipt (..), CheckStatus (..), RevisionSide (..), WorkspaceFingerprint, mkWorkspaceFingerprint, Revision, mkRevision, revisionText, Candidate (..), Step (..), Failure (..)) where
+module Data.Effectful.CodeReview.Types (Evidence (..), EvidenceKind (..), Observation (..), QueryKind (..), QueryObservation (..), KnowledgeSnapshot (..), ThinkingLevel (..), Request (..), FixRequest (..), TestArtifact (..), AdmissionRequest (..), AdmissionResult (..), AdmissionDecision (..), PhaseReceipt (..), FixResult (..), ArtifactRequest (..), FixReviewRequest (..), FixReviewDecision (..), FixReviewResult (..), Explanation (..), Asset (..), assetFile, mediaFiles, validExplanation, PricingStatus (..), TelemetryQuery (..), KnowledgeNote (..), KnowledgeRequest (..), ModelUsage (..), ModelCall (..), AllocationReceipt, AllocationOutcome (..), allocationId, allocationAttempt, agentResources, hostAllocation, Regression (..), CheckReceipt (..), CheckStatus (..), RevisionSide (..), WorkspaceFingerprint, mkWorkspaceFingerprint, Revision, mkRevision, revisionText, Candidate (..), Step (..), Failure (..)) where
 
 import Data.Aeson qualified as AE
 import Data.Char (isHexDigit)
+import Data.Effectful.AgentWorkspace (AllocationOutcome (..), AllocationReceipt, CheckReceipt (..), CheckStatus (..), Regression (..), Revision, RevisionSide (..), TestArtifact (..), WorkspaceFingerprint, agentResources, allocationAttempt, allocationId, hostAllocation, mkWorkspaceFingerprint, revisionText)
+import Data.Effectful.AgentWorkspace qualified as Workspace
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime)
@@ -12,6 +14,7 @@ import Models.Projects.ProjectMemory qualified as Memory
 import OpenAI.V1.Models (Model)
 import Pkg.DeriveUtils (UUIDId, WrappedEnumSC (..))
 import Relude
+import Web.HttpApiData (FromHttpApiData)
 
 
 data ThinkingLevel = Off | Minimal | Low | Medium | High
@@ -78,143 +81,22 @@ data ModelUsage = ModelUsage
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
-data AllocationOutcome = Released | ReleaseFailed
-  deriving stock (Eq, Generic, Read, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via WrappedEnumSC 'Nothing "" AllocationOutcome
-
-
-data AllocationData = AllocationData {id :: UUIDId "agent_allocation", attemptId :: UUIDId "agent_attempt", durationMs :: Word64, cpus :: Word16, memoryMiB :: Word32, outcome :: AllocationOutcome}
-  deriving stock (Eq, Generic, Show)
-  deriving anyclass (AE.FromJSON, AE.ToJSON)
-
-
--- | The private wire product preserves positive resources through JSON round-trips.
--- >>> let receipt cpus = AE.object ["id" AE..= ("00000000-0000-4000-8000-000000000001" :: Text), "attemptId" AE..= ("00000000-0000-4000-8000-000000000002" :: Text), "durationMs" AE..= (1 :: Int), "cpus" AE..= (cpus :: Int), "memoryMiB" AE..= (1024 :: Int), "outcome" AE..= ("released" :: Text)]
--- >>> let decoded = AE.fromJSON (receipt 2) :: AE.Result AllocationReceipt
--- >>> case decoded of AE.Success _ -> True; _ -> False
--- True
--- >>> (decoded >>= AE.fromJSON . AE.toJSON) == decoded
--- True
--- >>> case (AE.fromJSON (receipt 0) :: AE.Result AllocationReceipt) of AE.Error _ -> True; _ -> False
--- True
-newtype AllocationReceipt = AllocationReceipt AllocationData
-  deriving stock (Eq, Show)
-  deriving newtype (AE.ToJSON)
-
-
-instance AE.FromJSON AllocationReceipt where
-  parseJSON value = do
-    receipt <- AE.parseJSON value
-    unless (receipt.cpus > 0 && receipt.memoryMiB > 0) $ fail "Allocation resources must be positive"
-    pure $ AllocationReceipt receipt
-
-
-allocationId :: AllocationReceipt -> UUIDId "agent_allocation"
-allocationId (AllocationReceipt receipt) = receipt.id
-
-
-allocationAttempt :: AllocationReceipt -> UUIDId "agent_attempt"
-allocationAttempt (AllocationReceipt receipt) = receipt.attemptId
-
-
--- | Every agent VM uses this shape, so host-measured receipts cannot report other resources.
-agentResources :: (Word16, Word32)
-agentResources = (2, 1024)
-
-
-hostAllocation :: UUIDId "agent_allocation" -> UUIDId "agent_attempt" -> Word64 -> AllocationOutcome -> AllocationReceipt
-hostAllocation identifier attempt durationMs = AllocationReceipt . uncurry (AllocationData identifier attempt durationMs) agentResources
-
-
-data RevisionSide = Base | Head
-  deriving stock (Eq, Generic, Read, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via WrappedEnumSC 'Nothing "" RevisionSide
-
-
-data CheckStatus = Passed | Failed | Blocked | Invalidated | TimedOut | OutputLimit | Cancelled | CleanupFailed
-  deriving stock (Eq, Generic, Read, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via WrappedEnumSC 'Nothing "" CheckStatus
-
-
--- The digest binds command, test patch, and expected assertion; constructors record placement.
-data Regression = ScriptCheck {sha256 :: Text} | InjectedTest {sha256 :: Text} | RetainedTest {sha256 :: Text}
-  deriving stock (Generic, Show)
-  deriving anyclass (AE.FromJSON, AE.ToJSON)
-
-
--- Execution metadata comes from the host verifier, without scripts or log bodies.
-data CheckReceipt = CheckReceipt
-  { id :: UUIDId "check_execution"
-  , attemptId :: UUIDId "agent_attempt"
-  , checkId :: UUIDId "regression_check"
-  , side :: RevisionSide
-  , revision :: Text
-  , imageBuildId :: Text
-  , scriptSha256 :: Text
-  , regression :: Maybe Regression
-  , status :: CheckStatus
-  , exitCode :: Maybe Int
-  , durationMs :: Word64
-  , cpus :: Word16
-  , memoryMiB :: Word32
-  , logBytes :: Word32
-  , logSha256 :: Text
-  , workspace :: Maybe WorkspaceFingerprint
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (AE.FromJSON, AE.ToJSON)
-
-
--- | Identifies the prepared disk; absence in a receipt means a pristine toolchain image.
--- >>> let fingerprint = mkWorkspaceFingerprint (T.replicate 64 "a")
--- >>> fmap (const True) fingerprint
--- Right True
--- >>> (fingerprint >>= first toText . AE.eitherDecode . AE.encode) == fingerprint
--- True
--- >>> mkWorkspaceFingerprint "invalid"
--- Left "Invalid workspace fingerprint"
-newtype WorkspaceFingerprint = WorkspaceFingerprint Text
-  deriving stock (Eq, Show)
-  deriving newtype (AE.ToJSON)
-
-
-mkWorkspaceFingerprint :: Text -> Either Text WorkspaceFingerprint
-mkWorkspaceFingerprint value
-  | T.length value == 64 && T.all (\c -> c `elem` (['0' .. '9'] <> ['a' .. 'f'])) value = Right $ WorkspaceFingerprint value
-  | otherwise = Left "Invalid workspace fingerprint"
-
-
-instance AE.FromJSON WorkspaceFingerprint where
-  parseJSON = AE.withText "Workspace fingerprint" $ either (fail . toString) pure . mkWorkspaceFingerprint
-
-
--- $setup
--- >>> import Data.Text qualified as T
--- >>> import Data.Aeson qualified as AE
--- >>> import Relude
-
-
-newtype Revision = Revision Text
-  deriving stock (Eq, Show)
-  deriving newtype (AE.ToJSON, HI.EncodeValue)
-
-
--- | Both the valid round-trip and rejection belong to this boundary.
---
+-- | Normalize a pinned Git revision at the server boundary.
 -- >>> fmap revisionText (mkRevision (T.replicate 40 "A")) == Right (T.replicate 40 "a")
 -- True
 -- >>> mkRevision "branch-name"
 -- Left InvalidRevision
 mkRevision :: Text -> Either Failure Revision
-mkRevision text = if T.length text `elem` [40, 64] && T.all isHexDigit text then Right $ Revision $ T.toLower text else Left InvalidRevision
+mkRevision = first (const InvalidRevision) . Workspace.mkRevision
 
 
-revisionText :: Revision -> Text
-revisionText (Revision text) = text
+instance HI.EncodeValue Revision where
+  encodeValue = contramap revisionText (HI.encodeValue @Text)
 
 
-instance AE.FromJSON Revision where
-  parseJSON = AE.withText "Revision" $ either (fail . show) pure . mkRevision
+-- $setup
+-- >>> import Data.Text qualified as T
+-- >>> import Relude
 
 
 data Candidate = Candidate {revision :: Revision, rootCause :: Text}
@@ -235,11 +117,6 @@ data Failure = InvalidRevision | InvalidCandidate | Unavailable | StaleVersion |
 data FixRequest = FixRequest {request :: Request "issue_fix", issueId :: UUIDId "issue", imageBuildId :: UUIDId "guest_image"}
   deriving stock (Generic)
   deriving anyclass (AE.ToJSON)
-
-
-data TestArtifact = TestArtifact {script :: Text, testPatch :: Text, failureMessage :: Text}
-  deriving stock (Eq, Generic, Show)
-  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 data PhaseReceipt = PhaseReceipt {id :: UUIDId "issue_fix_step", attemptId :: UUIDId "agent_attempt", step :: Step}
@@ -316,13 +193,26 @@ data Explanation = Explanation
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
+data Asset = Video | Diagram | Captions | Before | Cause | Change | After
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving (AE.ToJSON, FromHttpApiData) via WrappedEnumSC 'Nothing "" Asset
+
+
+assetFile :: Asset -> Text
+assetFile = \case Video -> "explanation.mp4"; Diagram -> "diagram.svg"; Captions -> "captions.vtt"; Before -> "before.png"; Cause -> "cause.png"; Change -> "change.png"; After -> "after.png"
+
+
+mediaFiles :: [Text]
+mediaFiles = map assetFile [minBound .. maxBound]
+
+
 validExplanation :: FixResult -> Explanation -> Bool
 validExplanation result explanation =
   and
     [ (explanation.projectId, explanation.runId, explanation.issueId, explanation.candidateId, explanation.head, explanation.checkId) == (result.projectId, result.runId, result.issueId, result.candidateId, result.head, result.checkId)
     , explanation.regressionSha256 == result.regressionSha256
     , (explanation.version, explanation.durationMs, explanation.width, explanation.height) == (1, 36000, 1280, 720)
-    , Map.keys explanation.files == sort ["explanation.mp4", "diagram.svg", "captions.vtt", "before.png", "cause.png", "change.png", "after.png"]
+    , Map.keys explanation.files == sort mediaFiles
     , all (\hash -> T.length hash == 64 && T.all isHexDigit hash) (explanation.source : explanation.rendererSha256 : Map.elems explanation.files)
     , explanation.renderMs > 0 && explanation.videoBytes > 0 && explanation.videoBytes <= 32 * 1024 * 1024
     , explanation.mediaBytes >= explanation.videoBytes && explanation.mediaBytes <= 7 * 32 * 1024 * 1024

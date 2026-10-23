@@ -1,16 +1,20 @@
 {-# LANGUAGE PackageImports #-}
 {-# LANGUAGE NoOverloadedLists #-}
 
-module Data.Effectful.AgentWorkspace (Workspace, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, Operation (..), Prepared, Leased (..), Request, Baseline, leaseWorkspace, leasedBaseline, RegressionOptions (..), RegressionRequest, RegressionResult (..), RegressionReceipt, RegressionReport, RegressionError (..), verifyRegression, regressionLogs, regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest, RPC, withSandbox, Command (..), Sandbox (..), Isolation (..), GuestCommand (..), Copy (..), LoggedCommand (..), Overflow (..), Execution (..), LogExit (..), Image (..), ImageId (..), SandboxFailure (..), agentCommand, publish) where
+module Data.Effectful.AgentWorkspace (Workspace, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, Operation (..), Prepared, Leased (..), Request, mkRequest, Baseline, leaseWorkspace, leasedBaseline, RegressionOptions (..), RegressionRequest, mkRegressionRequest, RegressionResult (..), RegressionReceipt, RegressionReport (..), ReportState (..), CheckExecution (..), ExecutionKey (..), Measurement (..), pinnedRevisionText, Resources (..), Placement (..), RegressionError (..), verifyRegression, regressionLogs, regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest, RPC, withSandbox, withSandboxRelease, Command (..), Sandbox (..), Isolation (..), GuestCommand (..), Copy (..), LoggedCommand (..), Overflow (..), Execution (..), LogExit (..), Image (..), ImageId (..), SandboxFailure (..), agentCommand, guestGit, checkoutGuest, readBounded, publish, publishBytes, sync, gitProcess, gitEnvironment, gitCredentials, captureProcess, Repository, pattern Local, pattern GitHub, mkRepository, repositoryText, withOwner, Revision, mkRevision, revisionText, RevisionSide (..), CheckStatus (..), Regression (..), CheckReceipt (..), WorkspaceFingerprint, mkWorkspaceFingerprint, workspaceFingerprintText, digestFingerprint, AllocationReceipt, AllocationOutcome (..), allocationId, allocationAttempt, agentResources, hostAllocation, TestArtifact (..)) where
 
 import Conduit (runConduit, (.|))
+import Control.Exception qualified as Exception
 import Control.Monad (foldM)
 import Data.Aeson qualified as AE
 import Data.Aeson.Encoding qualified as Encoding
+import Data.Aeson.KeyMap qualified as KM
+import Data.Aeson.TH qualified as ATH
+import Data.Base64.Types (extractBase64)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as B8
 import Data.ByteString.Lazy qualified as LBS
-import Data.Char (isAlphaNum, isAscii)
+import Data.Char (isAlphaNum, isAscii, isHexDigit)
 import Data.Conduit.Combinators qualified as CC
 import Data.Sequence qualified as Seq
 import Data.Text qualified as T
@@ -23,11 +27,10 @@ import Effectful
 import Effectful.Dispatch.Dynamic
 import Effectful.TH
 import GHC.Clock (getMonotonicTimeNSec)
-import GHC.TypeLits (Symbol)
 import Network.HTTP.Client.TLS qualified as TLS
 import Network.Minio qualified as Minio
 import Network.URI (URI (..), URIAuth (..), parseURI)
-import Pkg.Deriving (WrappedEnumSC (..))
+import Pkg.Deriving (UUIDId (..), WrappedEnumSC (..), decodeEnumSC)
 import Relude hiding (Identity, identity, withFile)
 import System.Directory (canonicalizePath, createDirectory, createDirectoryIfMissing, doesDirectoryExist, listDirectory, removePathForcibly, renameDirectory, renameFile)
 import System.Environment (getEnvironment)
@@ -40,17 +43,168 @@ import System.Posix.Files qualified as Posix
 import System.Posix.IO qualified as Posix
 import System.Posix.Process (getParentProcessID)
 import System.Posix.Unistd (fileSynchronise)
-import System.Process.Typed (createPipe, getStdin, getStdout, nullStream, proc, readProcessStdout_, setEnv, setStderr, setStdin, setStdout, setWorkingDir, withProcessTerm)
-import UnliftIO.Async (withAsync)
+import System.Process.Typed (ExitCode (..), ProcessConfig, createPipe, getStderr, getStdin, getStdout, nullStream, proc, readProcessStdout_, setEnv, setStderr, setStdin, setStdout, setWorkingDir, waitExitCode, withProcessTerm)
+import UnliftIO.Async (concurrently, withAsync)
 import UnliftIO.Concurrent (myThreadId, threadDelay)
 import UnliftIO.Exception (bracket, bracketOnError, catchAny, evaluate, onException, throwIO, throwTo, tryAny)
 import UnliftIO.Timeout qualified as Timeout
+import "base64" Data.ByteString.Base64 qualified as Base64
 import "cryptonite" Crypto.Hash (Context, Digest, SHA256, hash, hashFinalize, hashInit, hashUpdate, hashlazy)
 
 
-newtype ProjectId = ProjectId UUID
+data AllocationOutcome = Released | ReleaseFailed
+  deriving stock (Eq, Generic, Read, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via WrappedEnumSC 'Nothing "" AllocationOutcome
+
+
+data AllocationData = AllocationData {id :: UUIDId "agent_allocation", attemptId :: UUIDId "agent_attempt", durationMs :: Word64, cpus :: Word16, memoryMiB :: Word32, outcome :: AllocationOutcome}
   deriving stock (Eq, Generic, Show)
-  deriving newtype (AE.FromJSON, AE.ToJSON)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+-- | The private wire product preserves positive resources through JSON round-trips.
+-- >>> let receipt cpus = AE.object ["id" AE..= ("00000000-0000-4000-8000-000000000001" :: Text), "attemptId" AE..= ("00000000-0000-4000-8000-000000000002" :: Text), "durationMs" AE..= (1 :: Int), "cpus" AE..= (cpus :: Int), "memoryMiB" AE..= (1024 :: Int), "outcome" AE..= ("released" :: Text)]
+-- >>> let decoded = AE.fromJSON (receipt 2) :: AE.Result AllocationReceipt
+-- >>> case decoded of AE.Success _ -> True; _ -> False
+-- True
+-- >>> (decoded >>= AE.fromJSON . AE.toJSON) == decoded
+-- True
+-- >>> case (AE.fromJSON (receipt 0) :: AE.Result AllocationReceipt) of AE.Error _ -> True; _ -> False
+-- True
+newtype AllocationReceipt = AllocationReceipt AllocationData
+  deriving stock (Eq, Show)
+  deriving newtype (AE.ToJSON)
+
+
+instance AE.FromJSON AllocationReceipt where
+  parseJSON value = do
+    receipt <- AE.parseJSON value
+    unless (receipt.cpus > 0 && receipt.memoryMiB > 0) $ fail "Allocation resources must be positive"
+    pure $ AllocationReceipt receipt
+
+
+allocationId :: AllocationReceipt -> UUIDId "agent_allocation"
+allocationId (AllocationReceipt receipt) = receipt.id
+
+
+allocationAttempt :: AllocationReceipt -> UUIDId "agent_attempt"
+allocationAttempt (AllocationReceipt receipt) = receipt.attemptId
+
+
+-- | Every agent VM uses this shape, so host-measured receipts cannot report other resources.
+agentResources :: (Word16, Word32)
+agentResources = (2, 1024)
+
+
+hostAllocation :: UUIDId "agent_allocation" -> UUIDId "agent_attempt" -> Word64 -> AllocationOutcome -> AllocationReceipt
+hostAllocation identifier attempt durationMs = AllocationReceipt . uncurry (AllocationData identifier attempt durationMs) agentResources
+
+
+data RevisionSide = Base | Head
+  deriving stock (Eq, Generic, Read, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via WrappedEnumSC 'Nothing "" RevisionSide
+
+
+data CheckStatus = Passed | Failed | Blocked | Invalidated | TimedOut | OutputLimit | Cancelled | CleanupFailed
+  deriving stock (Eq, Generic, Read, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via WrappedEnumSC 'Nothing "" CheckStatus
+
+
+-- The digest binds command, test patch, and expected assertion; constructors record placement.
+data Regression = ScriptCheck {sha256 :: Text} | InjectedTest {sha256 :: Text} | RetainedTest {sha256 :: Text}
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+-- Execution metadata comes from the host verifier, without scripts or log bodies.
+data CheckReceipt = CheckReceipt
+  { id :: UUIDId "check_execution"
+  , attemptId :: UUIDId "agent_attempt"
+  , checkId :: UUIDId "regression_check"
+  , side :: RevisionSide
+  , revision :: Text
+  , imageBuildId :: Text
+  , scriptSha256 :: Text
+  , regression :: Maybe Regression
+  , status :: CheckStatus
+  , exitCode :: Maybe Int
+  , durationMs :: Word64
+  , cpus :: Word16
+  , memoryMiB :: Word32
+  , logBytes :: Word32
+  , logSha256 :: Text
+  , workspace :: Maybe WorkspaceFingerprint
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+-- | Identifies the prepared disk; absence in a receipt means a pristine toolchain image.
+-- >>> let fingerprint = mkWorkspaceFingerprint (T.replicate 64 "a")
+-- >>> fmap (const True) fingerprint
+-- Right True
+-- >>> (fingerprint >>= first toText . AE.eitherDecode . AE.encode) == fingerprint
+-- True
+-- >>> mkWorkspaceFingerprint "invalid"
+-- Left "Invalid workspace fingerprint"
+newtype WorkspaceFingerprint = WorkspaceFingerprint Text
+  deriving stock (Eq, Show)
+  deriving newtype (AE.ToJSON)
+
+
+mkWorkspaceFingerprint :: Text -> Either Text WorkspaceFingerprint
+mkWorkspaceFingerprint value
+  | T.length value == 64 && T.all (\c -> c `elem` (['0' .. '9'] <> ['a' .. 'f'])) value = Right $ WorkspaceFingerprint value
+  | otherwise = Left "Invalid workspace fingerprint"
+
+
+workspaceFingerprintText :: WorkspaceFingerprint -> Text
+workspaceFingerprintText (WorkspaceFingerprint value) = value
+
+
+digestFingerprint :: Digest SHA256 -> WorkspaceFingerprint
+digestFingerprint = WorkspaceFingerprint . show
+
+
+instance AE.FromJSON WorkspaceFingerprint where
+  parseJSON = AE.withText "Workspace fingerprint" $ either (fail . toString) pure . mkWorkspaceFingerprint
+
+
+-- $setup
+-- >>> import Data.Text qualified as T
+-- >>> import Data.Aeson qualified as AE
+-- >>> import Relude
+
+
+newtype Revision = Revision Text
+  deriving stock (Eq, Show)
+  deriving newtype (AE.ToJSON)
+
+
+-- | Both the valid round-trip and rejection belong to this boundary.
+--
+-- >>> fmap revisionText (mkRevision (T.replicate 40 "A")) == Right (T.replicate 40 "a")
+-- True
+-- >>> mkRevision "branch-name"
+-- Left "InvalidRevision"
+mkRevision :: Text -> Either Text Revision
+mkRevision text = if T.length text `elem` [40, 64] && T.all isHexDigit text then Right $ Revision $ T.toLower text else Left "InvalidRevision"
+
+
+revisionText :: Revision -> Text
+revisionText (Revision text) = text
+
+
+instance AE.FromJSON Revision where
+  parseJSON = AE.withText "Revision" $ either (fail . toString) pure . mkRevision
+
+
+data TestArtifact = TestArtifact {script :: Text, testPatch :: Text, failureMessage :: Text}
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+type ProjectId = UUIDId "project"
 
 
 newtype ImageId = ImageId UUID
@@ -58,48 +212,85 @@ newtype ImageId = ImageId UUID
   deriving newtype (AE.FromJSON, AE.ToJSON)
 
 
-newtype Revision = Revision Text
+-- The native boundary accepts only already-normalized revisions.
+newtype PinnedRevision = PinnedRevision Revision
   deriving stock (Eq)
   deriving newtype (AE.ToJSON)
 
 
-instance AE.FromJSON Revision where
-  parseJSON = AE.withText "Pinned revision" $ \value ->
-    if T.length value `elem` [40, 64] && T.all (\c -> c `elem` (['0' .. '9'] <> ['a' .. 'f'])) value then pure $ Revision value else fail "Invalid revision"
+instance AE.FromJSON PinnedRevision where
+  parseJSON = AE.withText "Pinned revision" $ either (fail . toString) pure . mkPinnedRevision
 
 
-newtype Repository = Repository Text
+mkPinnedRevision :: Text -> Either Text PinnedRevision
+mkPinnedRevision value = case mkRevision value of
+  Right revision | revisionText revision == value -> Right $ PinnedRevision revision
+  _ -> Left "Invalid revision"
+
+
+pinnedRevisionText :: PinnedRevision -> Text
+pinnedRevisionText (PinnedRevision revision) = revisionText revision
+
+
+data Repository = LocalRepository FilePath | GitHubRepository Text
   deriving stock (Eq)
-  deriving newtype (AE.ToJSON)
+
+
+pattern Local :: FilePath -> Repository
+pattern Local path <- LocalRepository path
+
+
+pattern GitHub :: Text -> Repository
+pattern GitHub slug <- GitHubRepository slug
+
+
+{-# COMPLETE Local, GitHub #-}
+
+
+instance AE.ToJSON Repository where
+  toJSON = AE.toJSON . repositoryText
+
+
+repositoryText :: Repository -> Text
+repositoryText = \case Local path -> toText path; GitHub slug -> "https://github.com/" <> slug <> ".git"
 
 
 instance AE.FromJSON Repository where
-  parseJSON = AE.withText "Credential-free repository" $ \value -> if validRepository value then pure $ Repository value else fail "Invalid repository"
-    where
-      validRepository :: Text -> Bool
-      validRepository value
-        | isAbsolute $ toString value = True
-        | otherwise = case T.stripPrefix "https://github.com/" value >>= T.stripSuffix ".git" of
-            Just slug | [owner, name] <- T.splitOn "/" slug -> all (\part -> not (T.null part) && part `notElem` [".", ".."] && T.all (\c -> isAscii c && (isAlphaNum c || c `elem` ['-', '_', '.'])) part) [owner, name]
-            _ -> False
+  parseJSON = AE.withText "Credential-free repository" $ either (fail . toString) pure . mkRepository
 
 
-newtype Fingerprint = Fingerprint Text
-  deriving stock (Eq)
-  deriving newtype (AE.ToJSON)
+-- | Keep local and GitHub origins credential-free and preserve their wire spelling.
+-- >>> let origins = ["/tmp/repository", "https://github.com/org/repo.git"]
+-- >>> traverse (fmap repositoryText . mkRepository) origins == Right origins
+-- True
+-- >>> all (isLeft . mkRepository) ["https://user:secret@github.com/org/repo.git", "https://github.com/../repo.git", "relative/path"]
+-- True
+-- >>> all (\origin -> either (const False) (\repo -> AE.fromJSON (AE.toJSON repo) == AE.Success repo) (mkRepository origin)) origins
+-- True
+mkRepository :: Text -> Either Text Repository
+mkRepository value
+  | isAbsolute $ toString value = Right $ LocalRepository $ toString value
+  | Just slug <- T.stripPrefix "https://github.com/" value >>= T.stripSuffix ".git"
+  , [owner, name] <- T.splitOn "/" slug
+  , all (\part -> not (T.null part) && part `notElem` [".", ".."] && T.all (\c -> isAscii c && (isAlphaNum c || c `elem` ['-', '_', '.'])) part) [owner, name] =
+      Right $ GitHubRepository slug
+  | otherwise = Left "Invalid repository"
 
 
-instance AE.FromJSON Fingerprint where
-  parseJSON = AE.withText "SHA-256" $ maybe (fail "Invalid SHA-256") pure . mkFingerprint
+type Fingerprint = WorkspaceFingerprint
 
 
 mkFingerprint :: Text -> Maybe Fingerprint
-mkFingerprint value = if T.length value == 64 && T.all (\c -> c `elem` (['0' .. '9'] <> ['a' .. 'f'])) value then Just $ Fingerprint value else Nothing
+mkFingerprint = rightToMaybe . mkWorkspaceFingerprint
 
 
-data Request = Request {projectId :: ProjectId, repository :: Repository, base :: Revision, expectedImageBuildId :: Maybe ImageId, expectedCheckpoint :: Maybe Fingerprint, ownerPid :: Maybe Word32}
+data Request = Request {projectId :: ProjectId, repository :: Repository, base :: PinnedRevision, expectedImageBuildId :: Maybe ImageId, expectedCheckpoint :: Maybe Fingerprint, ownerPid :: Maybe Word32}
   deriving stock (Generic)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+mkRequest :: UUIDId "project" -> Text -> Text -> Maybe (UUIDId "guest_image") -> Either Text Request
+mkRequest project repository base image = Request project <$> mkRepository repository <*> mkPinnedRevision base <*> pure (ImageId . (.unUUIDId) <$> image) <*> pure Nothing <*> pure Nothing
 
 
 data Options = Options {cacheDir :: FilePath, image :: Text, bridge :: FilePath, script :: FilePath, dependencyArchive :: Maybe FilePath}
@@ -140,7 +331,7 @@ data PruneOutcome = PruneStarted | PruneRunning PruneReport | PruneFinished Prun
   deriving anyclass (AE.ToJSON)
 
 
-data PruneRecord = PruneRecord {id :: Identifier "workspace_prune", projectId :: ProjectId, startedAt :: UTCTime, outcome :: PruneOutcome}
+data PruneRecord = PruneRecord {id :: UUIDId "workspace_prune", projectId :: ProjectId, startedAt :: UTCTime, outcome :: PruneOutcome}
   deriving stock (Generic)
   deriving anyclass (AE.ToJSON)
 
@@ -163,7 +354,7 @@ data TransferOutcome = TransferStarted | TransferCompleted FileFingerprint Doubl
   deriving anyclass (AE.ToJSON)
 
 
-data TransferRecord = TransferRecord {id :: Identifier "workspace_transfer", identity :: Identity, direction :: TransferDirection, startedAt :: UTCTime, outcome :: TransferOutcome, resourceCostStatus :: ResourceCost}
+data TransferRecord = TransferRecord {id :: UUIDId "workspace_transfer", identity :: Identity, direction :: TransferDirection, startedAt :: UTCTime, outcome :: TransferOutcome, resourceCostStatus :: ResourceCost}
   deriving stock (Generic)
   deriving anyclass (AE.ToJSON)
 
@@ -175,7 +366,7 @@ data FileFingerprint = FileFingerprint {sha256 :: Fingerprint, bytes :: Word64}
 
 
 -- Declaration order preserves the existing JavaScript cache key encoding.
-data Identity = Identity {projectId :: ProjectId, repository :: Repository, base :: Revision, imageBuildId :: ImageId, preparationSha256 :: Fingerprint, dependency :: Maybe FileFingerprint}
+data Identity = Identity {projectId :: ProjectId, repository :: Repository, base :: PinnedRevision, imageBuildId :: ImageId, preparationSha256 :: Fingerprint, dependency :: Maybe FileFingerprint}
   deriving stock (Eq, Generic)
   deriving anyclass (AE.FromJSON)
   deriving (AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] Identity
@@ -249,9 +440,32 @@ agentCommand :: [Text] -> NonEmpty Text
 agentCommand command = "/usr/bin/setpriv" :| ["--reuid=1000", "--regid=1000", "--clear-groups", "--no-new-privs", "--reset-env", "--", "/usr/bin/env", "LANG=C.UTF-8", "LC_ALL=C.UTF-8"] <> command
 
 
-data Command = Resolve Text | Create Sandbox | Execute GuestCommand | CopyFile Copy | Checkpoint FilePath | InspectCheckpoint FilePath | Resume (Sandbox, FilePath) | GetIdentity () | ExecuteLogged LoggedCommand | Close ()
-  deriving stock (Generic)
-  deriving anyclass (AE.ToJSON)
+guestGit :: [Text] -> NonEmpty Text
+guestGit args = "/usr/bin/git" :| (["-c", "safe.directory=/workspace", "-c", "core.hooksPath=/dev/null", "-C", "/workspace"] <> args)
+
+
+-- | Resumed workspaces retain build outputs while fetching the pinned revision's objects.
+checkoutGuest :: (NonEmpty Text -> IO Text) -> Bool -> Text -> IO ()
+checkoutGuest run resumed revision = do
+  if resumed
+    then do
+      for_ ["/workspace", "/checkout/.git"] $ \path -> void $ run $ "/usr/bin/git" :| ["config", "--system", "--add", "safe.directory", path]
+      void $ run $ guestGit ["fetch", "--quiet", "--no-tags", "--", "/checkout", revision]
+    else void $ run $ "/bin/cp" :| ["-R", "/checkout/.", "/workspace"]
+  void $ run $ guestGit ["checkout", "--quiet", "--detach", revision]
+
+
+data Command result where
+  Resolve :: Text -> Command Image
+  Create :: Sandbox -> Command ()
+  Execute :: GuestCommand -> Command Execution
+  CopyFile :: Copy -> Command ()
+  Checkpoint :: FilePath -> Command CheckpointData
+  InspectCheckpoint :: FilePath -> Command CheckpointData
+  Resume :: (Sandbox, FilePath) -> Command ()
+  GetIdentity :: () -> Command (UUIDId "agent_allocation")
+  ExecuteLogged :: LoggedCommand -> Command LogExit
+  Close :: () -> Command ()
 
 
 data Execution = Execution {exitCode :: Int, stdout :: Text}
@@ -264,11 +478,6 @@ data CheckpointData = CheckpointData {createdAt :: UTCTime, guestAssetBuildId ::
   deriving anyclass (AE.FromJSON)
 
 
-newtype Identifier (kind :: Symbol) = Identifier UUID
-  deriving stock (Eq, Generic)
-  deriving newtype (AE.FromJSON, AE.ToJSON)
-
-
 data RegressionOptions = RegressionOptions {artifactDir :: FilePath, checkout :: FilePath, image :: Text, bridge :: FilePath}
 
 
@@ -277,8 +486,8 @@ data Artifact = Artifact {script :: Text, testPatch :: Maybe Text, failureMessag
 
 
 instance AE.FromJSON Artifact where
-  parseJSON = AE.withObject "Frozen regression" \fields -> do
-    artifact <- Artifact <$> fields AE..: "script" <*> fields AE..:? "testPatch" <*> fields AE..: "failureMessage"
+  parseJSON value = do
+    artifact <- AE.genericParseJSON AE.defaultOptions value
     let bounded limit text = not (T.null $ T.strip text) && T.length text <= limit
     unless (bounded 65536 artifact.script && bounded 200 artifact.failureMessage && all (bounded 262144) artifact.testPatch) $ fail "Invalid regression artifact"
     pure artifact
@@ -299,41 +508,41 @@ leasedBaseline :: Maybe Leased -> Baseline
 leasedBaseline = maybe Pristine \leased -> PreparedCheckpoint $ Snapshot leased.prepared.path leased.prepared.manifest.sha256
 
 
-data Side = Base | Head
-  deriving stock (Eq, Generic, Read, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via WrappedEnumSC 'Nothing "" Side
-
-
-data Revisions = BaseOnly Revision | HeadOnly Revision | Compare Revision Revision
+data Revisions = BaseOnly PinnedRevision | HeadOnly PinnedRevision | Compare PinnedRevision PinnedRevision
 
 
 instance AE.FromJSON Revisions where
-  parseJSON value =
-    AE.parseJSON @[(Side, Revision)] value >>= \case
-      [(Base, baseline)] -> pure $ BaseOnly baseline
-      [(Head, candidate)] -> pure $ HeadOnly candidate
-      [(Base, baseline), (Head, candidate)] -> pure $ Compare baseline candidate
-      _ -> fail "Expected pinned baseline, candidate, or ordered baseline/candidate comparison"
+  parseJSON value = AE.parseJSON value >>= either (fail . toString) pure . mkRevisions
 
 
-data RegressionRequest = RegressionRequest {projectId :: ProjectId, runId :: Identifier "run", attemptId :: Identifier "attempt", sessionId :: Identifier "session", base :: Revision, imageBuildId :: ImageId, workspace :: Baseline, artifact :: Artifact, revisions :: Revisions, ownerPid :: Maybe Word32}
+mkRevisions :: [(RevisionSide, PinnedRevision)] -> Either Text Revisions
+mkRevisions = \case
+  [(Base, baseline)] -> Right $ BaseOnly baseline
+  [(Head, candidate)] -> Right $ HeadOnly candidate
+  [(Base, baseline), (Head, candidate)] -> Right $ Compare baseline candidate
+  _ -> Left "Expected pinned baseline, candidate, or ordered baseline/candidate comparison"
+
+
+data RegressionRequest = RegressionRequest {projectId :: ProjectId, runId :: UUIDId "run", attemptId :: UUIDId "agent_attempt", sessionId :: UUIDId "session", base :: PinnedRevision, imageBuildId :: ImageId, workspace :: Baseline, artifact :: Artifact, revisions :: Revisions, ownerPid :: Maybe Word32}
   deriving stock (Generic)
   deriving anyclass (AE.FromJSON)
 
 
+mkRegressionRequest :: UUIDId "project" -> UUIDId run -> UUIDId "agent_attempt" -> UUID -> Text -> ImageId -> Baseline -> AE.Value -> [(Text, Text)] -> Either Text RegressionRequest
+mkRegressionRequest project run attempt session base image workspace artifact revisions = do
+  frozen <- case AE.fromJSON artifact of AE.Success value -> Right value; AE.Error message -> Left $ toText message
+  comparison <- mkRevisions =<< traverse (\(side, revision) -> (,) <$> maybeToRight "Invalid revision side" (decodeEnumSC @"" $ toString side) <*> mkPinnedRevision revision) revisions
+  RegressionRequest project (UUIDId run.unUUIDId) attempt (UUIDId session) <$> mkPinnedRevision base <*> pure image <*> pure workspace <*> pure frozen <*> pure comparison <*> pure Nothing
+
+
 data ReportState = Running | Completed | Incomplete
-  deriving stock (Generic, Read, Show)
-  deriving (AE.ToJSON) via WrappedEnumSC 'Nothing "" ReportState
-
-
-data CheckState = Passed | Failed | Blocked | Invalidated | TimedOut | OutputLimit | CleanupFailed
   deriving stock (Eq, Generic, Read, Show)
-  deriving (AE.ToJSON) via WrappedEnumSC 'Nothing "" CheckState
+  deriving (AE.FromJSON, AE.ToJSON) via WrappedEnumSC 'Nothing "" ReportState
 
 
 data Placement = Injected | Retained
-  deriving stock (Generic, Read, Show)
-  deriving (AE.ToJSON) via WrappedEnumSC 'Nothing "" Placement
+  deriving stock (Eq, Generic, Read, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via WrappedEnumSC 'Nothing "" Placement
 
 
 data LogExit = Exited Int | LogLimit
@@ -343,59 +552,52 @@ data LogExit = Exited Int | LogLimit
 
 data Resources = Resources {cpus :: Word16, memoryMiB :: Word32}
   deriving stock (Generic)
-  deriving anyclass (AE.ToJSON)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
-data ExecutionKey = ExecutionKey {id :: Identifier "execution", side :: Side, revision :: Revision}
-
-
-data Measurement = Measurement {status :: CheckState, exitCode :: Maybe Int, configuredResources :: Resources, resourceCostStatus :: ResourceCost, durationMs :: Double, logBytes :: Word32, logSha256 :: Fingerprint, tail :: Text, logPath :: Maybe Text, vmId :: Maybe Text, reason :: Maybe Text, sourceBefore :: Maybe Fingerprint, sourceAfter :: Maybe Fingerprint, testFilesSha256 :: Maybe Fingerprint, testPatchDisposition :: Maybe Placement}
-
-
-data CheckExecution = Pending ExecutionKey | Measured ExecutionKey Measurement
-
-
-instance AE.ToJSON CheckExecution where
-  toJSON execution = AE.object $ case execution of
-    Pending key -> fields key <> ["status" AE..= ("starting" :: Text), "exitCode" AE..= AE.Null]
-    Measured key value ->
-      fields key
-        <> [ "status" AE..= value.status
-           , "exitCode" AE..= value.exitCode
-           , "configuredResources" AE..= value.configuredResources
-           , "resourceCostStatus" AE..= value.resourceCostStatus
-           , "durationMs" AE..= value.durationMs
-           , "logBytes" AE..= value.logBytes
-           , "logSha256" AE..= value.logSha256
-           , "tail" AE..= value.tail
-           , "logPath" AE..= value.logPath
-           , "vmId" AE..= value.vmId
-           , "reason" AE..= value.reason
-           , "sourceBefore" AE..= value.sourceBefore
-           , "sourceAfter" AE..= value.sourceAfter
-           , "testFilesSha256" AE..= value.testFilesSha256
-           , "testPatchDisposition" AE..= value.testPatchDisposition
-           ]
-    where
-      fields key = ["id" AE..= key.id, "side" AE..= key.side, "revision" AE..= key.revision]
-
-
-data RegressionReport = RegressionReport {id :: Identifier "check", projectId :: ProjectId, runId :: Identifier "run", attemptId :: Identifier "attempt", imageBuildId :: ImageId, workspace :: Maybe Fingerprint, createdAt :: UTCTime, scriptSha256 :: Fingerprint, testPatchSha256 :: Maybe Fingerprint, regressionSha256 :: Fingerprint, failureMessage :: Text, status :: ReportState, results :: [CheckExecution]}
+data ExecutionKey = ExecutionKey {id :: UUIDId "check_execution", side :: RevisionSide, revision :: PinnedRevision}
   deriving stock (Generic)
   deriving anyclass (AE.ToJSON)
 
 
-data RegressionKind = ScriptCheck {sha256 :: Fingerprint} | InjectedTest {sha256 :: Fingerprint} | RetainedTest {sha256 :: Fingerprint}
+instance AE.FromJSON ExecutionKey where
+  parseJSON = AE.withObject "Execution key" \fields -> ExecutionKey <$> fields AE..: "id" <*> fields AE..: "side" <*> (PinnedRevision <$> fields AE..: "revision")
+
+
+data Measurement duration = Measurement {status :: CheckStatus, exitCode :: Maybe Int, configuredResources :: Resources, resourceCostStatus :: ResourceCost, durationMs :: duration, logBytes :: Word32, logSha256 :: Fingerprint, tail :: Text, logPath :: Maybe Text, vmId :: Maybe Text, reason :: Maybe Text, sourceBefore :: Maybe Fingerprint, sourceAfter :: Maybe Fingerprint, testFilesSha256 :: Maybe Fingerprint, testPatchDisposition :: Maybe Placement}
+  deriving stock (Generic)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data CheckExecution duration = Pending ExecutionKey | Measured ExecutionKey (Measurement duration)
   deriving stock (Generic)
   deriving anyclass (AE.ToJSON)
 
 
-data RegressionReceipt = RegressionReceipt {id :: Identifier "execution", attemptId :: Identifier "attempt", checkId :: Identifier "check", side :: Side, revision :: Revision, imageBuildId :: ImageId, workspace :: Maybe Fingerprint, scriptSha256 :: Fingerprint, regression :: Maybe RegressionKind, status :: CheckState, exitCode :: Maybe Int, durationMs :: Word64, cpus :: Word16, memoryMiB :: Word32, logBytes :: Word32, logSha256 :: Fingerprint}
+instance AE.FromJSON duration => AE.FromJSON (CheckExecution duration) where
+  parseJSON value =
+    AE.withObject
+      "Check execution"
+      ( \fields ->
+          if KM.member "tag" fields
+            then AE.genericParseJSON AE.defaultOptions value
+            else
+              if KM.lookup "status" fields == Just (AE.String "starting")
+                then Pending <$> AE.parseJSON value
+                else Measured <$> AE.parseJSON value <*> AE.parseJSON (AE.Object $ fields <> KM.fromList [("resourceCostStatus", AE.String "unpriced"), ("tail", AE.String "")])
+      )
+      value
+
+
+data RegressionReport duration = RegressionReport {id :: UUIDId "regression_check", projectId :: ProjectId, runId :: UUIDId "run", attemptId :: UUIDId "agent_attempt", imageBuildId :: ImageId, workspace :: Maybe Fingerprint, createdAt :: Maybe UTCTime, scriptSha256 :: Fingerprint, testPatchSha256 :: Maybe Fingerprint, regressionSha256 :: Fingerprint, failureMessage :: Text, status :: ReportState, results :: [CheckExecution duration]}
   deriving stock (Generic)
-  deriving anyclass (AE.ToJSON)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
-data RegressionResult = RegressionResult {report :: RegressionReport, receipts :: [RegressionReceipt], isError :: Bool}
+type RegressionReceipt = CheckReceipt
+
+
+data RegressionResult = RegressionResult {report :: RegressionReport Double, receipts :: [RegressionReceipt], isError :: Bool}
   deriving stock (Generic)
   deriving anyclass (AE.ToJSON)
 
@@ -427,6 +629,11 @@ type instance DispatchOf Workspace = 'Dynamic
 
 
 makeEffect ''Workspace
+
+
+instance AE.ToJSON (Command result) where
+  toJSON = $(ATH.mkToJSON AE.defaultOptions ''Command)
+  toEncoding = $(ATH.mkToEncoding AE.defaultOptions ''Command)
 
 
 runWorkspaceTest :: (Options -> Operation -> FilePath -> Either Text (Maybe Prepared)) -> (RegressionOptions -> FilePath -> Either RegressionError RegressionResult) -> (PruneOptions -> FilePath -> Either Text PruneReport) -> Eff (Workspace ': es) a -> Eff es a
@@ -525,14 +732,14 @@ prune options request = do
             response <- Minio.getObject remote.bucket (prefix <> ".qcow2") Minio.defaultGetObjectOptions
             liftIO $ ensure $ response.gorObjectInfo.oiSize == fromIntegral manifest.bytes
             runConduit $ response.gorObjectStream .| CC.takeE (fromIntegral manifest.bytes + 1) .| CC.foldl (\(!context, !count) chunk -> (hashUpdate context chunk, count + fromIntegral (BS.length chunk))) (hashInit :: Context SHA256, 0 :: Word64)
-          ensure $ size == manifest.bytes && Fingerprint (show $ hashFinalize context) == manifest.sha256
+          ensure $ size == manifest.bytes && digestFingerprint (hashFinalize context) == manifest.sha256
     let journals = project </> "prunes"
     createDirectoryIfMissing True journals
     canonical journals
     Posix.setFileMode journals 0o700
-    identifier <- Identifier <$> UUID4.nextRandom
+    identifier <- UUIDId <$> UUID4.nextRandom
     let record = PruneRecord identifier request.projectId now PruneStarted
-        Identifier uid = identifier
+        UUIDId uid = identifier
         save outcome = publish (journals </> toString (UUID.toText uid) <> ".json") (record :: PruneRecord){outcome}
     save PruneStarted
     names <- listDirectory parent
@@ -582,7 +789,7 @@ prune options request = do
 regressionLogs :: RegressionOptions -> RegressionResult -> [(FilePath, Text)]
 regressionLogs options result =
   [ (options.artifactDir </> toString (UUID.toText check) </> (if key.side == Base then "base.log" else "head.log"), path)
-  | let Identifier check = result.report.id
+  | let UUIDId check = result.report.id
   , Measured key measured <- result.report.results
   , Just path <- [measured.logPath]
   ]
@@ -592,15 +799,13 @@ verifyRegression :: RegressionOptions -> RegressionRequest -> IO RegressionResul
 verifyRegression options request = do
   let artifact = request.artifact
       revisions = case request.revisions of BaseOnly baseline -> (Base, baseline) :| []; HeadOnly candidate -> (Head, candidate) :| []; Compare baseline candidate -> (Base, baseline) :| [(Head, candidate)]
-      revisionText (Revision value) = value
-      identifierText (Identifier value) = toString $ UUID.toText value
+      identifierText (UUIDId value) = toString $ UUID.toText value
       privateWrite path bytes = writeFileBS path bytes >> Posix.setFileMode path 0o600
   ensure $ isAbsolute options.checkout && isAbsolute options.artifactDir
   checkout <- canonicalizePath options.checkout
-  environment <- filter ((== "PATH") . fst) <$> getEnvironment
-  let hostGit args = readProcessStdout_ $ setWorkingDir checkout $ setStderr nullStream $ setEnv (environment <> [("GIT_CONFIG_NOSYSTEM", "1"), ("GIT_CONFIG_GLOBAL", "/dev/null"), ("GIT_TERMINAL_PROMPT", "0"), ("GIT_ALLOW_PROTOCOL", "file")]) $ proc "git" $ ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"] <> args
+  let hostGit args = readProcessStdout_ =<< gitProcess "file" checkout args []
   headRevision <- T.strip . decodeUtf8 <$> hostGit ["rev-parse", "HEAD"]
-  for_ revisions \(side, revision) -> ensure $ revisionText revision == (if side == Base then revisionText request.base else headRevision)
+  for_ revisions \(side, revision) -> ensure $ pinnedRevisionText revision == (if side == Base then pinnedRevisionText request.base else headRevision)
   root <- canonicalizePath options.artifactDir
   createDirectoryIfMissing True root
   canonical root
@@ -611,11 +816,11 @@ verifyRegression options request = do
     count <- case previous of Left failure | isDoesNotExistError failure -> pure 0; Left failure -> throwIO failure; Right bytes -> decode @Word8 bytes
     unless (count < 3) $ throwIO ComparisonBudgetExhausted
     publish counter $ count + 1
-    checkId <- Identifier <$> UUID4.nextRandom
+    checkId <- UUIDId <$> UUID4.nextRandom
     created <- getCurrentTime
     let directory = root </> identifierText checkId
         workspaceHash = case request.workspace of Pristine -> Nothing; PreparedCheckpoint snapshot -> Just snapshot.sha256
-        template = RegressionReport checkId request.projectId request.runId request.attemptId request.imageBuildId workspaceHash created (sha $ encodeUtf8 artifact.script) (sha . encodeUtf8 <$> artifact.testPatch) (sha $ toStrict $ Encoding.encodingToLazyByteString $ AE.genericToEncoding AE.defaultOptions artifact) artifact.failureMessage Running []
+        template = RegressionReport checkId request.projectId request.runId request.attemptId request.imageBuildId workspaceHash (Just created) (sha $ encodeUtf8 artifact.script) (sha . encodeUtf8 <$> artifact.testPatch) (sha $ toStrict $ Encoding.encodingToLazyByteString $ AE.genericToEncoding AE.defaultOptions artifact) artifact.failureMessage Running []
     createDirectory directory
     Posix.setFileMode directory 0o700
     sync root
@@ -631,10 +836,9 @@ verifyRegression options request = do
           persist Running
     persist Running
     flip onException (persist Incomplete) do
-      for_ revisions \(side, revision) -> do
-        released <- all ((/= CleanupFailed) . (.status)) <$> readIORef receipts
-        when released do
-          key <- (\identifier -> ExecutionKey (Identifier identifier) side revision) <$> UUID4.nextRandom
+      for_ revisions \(side, revision) ->
+        whenM (all ((/= CleanupFailed) . (.status)) <$> readIORef receipts) do
+          key <- (\identifier -> ExecutionKey (UUIDId identifier) side revision) <$> UUID4.nextRandom
           modifyIORef' executions (<> [Pending key])
           persist Running
           started <- getMonotonicTimeNSec
@@ -651,7 +855,10 @@ verifyRegression options request = do
               copy :: RPC -> FilePath -> Text -> IO ()
               copy rpc path destination = rpc @() $ CopyFile $ Copy path destination
           privateWrite logPath ""
-          outcome <- tryAny $ Timeout.timeout (120 * 1000000) $ withSystemTempDirectory "monoscope-verifier-snapshot" $ \private -> withSandbox options.bridge \rpc -> do
+          let released = \case
+                Released -> pass
+                ReleaseFailed -> publish counter (3 :: Word8) >> change (\measured -> measured{status = CleanupFailed})
+          outcome <- tryAny $ Timeout.timeout (120 * 1000000) $ withSystemTempDirectory "monoscope-verifier-snapshot" $ \private -> withSandboxRelease options.bridge released \rpc -> do
             image <- rpc @Image $ Resolve options.image
             ensure $ image.buildId == request.imageBuildId
             let sandbox = Sandbox image.assetDir 2 1024 OfflineCow $ one ("/checkout", checkout)
@@ -663,16 +870,10 @@ verifyRegression options request = do
                 checkpoint <- rpc @CheckpointData $ InspectCheckpoint mutable
                 ensure $ checkpoint.guestAssetBuildId == request.imageBuildId
                 rpc @() $ Resume (sandbox, mutable)
-            vm <- rpc @Text $ GetIdentity ()
-            change $ \measured -> measured{vmId = Just vm}
-            let revisionArgs = ["-c", "safe.directory=/workspace", "-c", "core.hooksPath=/dev/null", "-C", "/workspace"]
-                guestGit args = "/usr/bin/git" :| (revisionArgs <> args)
-            case request.workspace of
-              Pristine -> for_ ["/bin/mkdir" :| ["-p", "/workspace"], "/bin/cp" :| ["-R", "/checkout/.", "/workspace"]] $ void . checked rpc
-              PreparedCheckpoint _ -> do
-                for_ ["/workspace", "/checkout/.git"] $ \path -> void $ checked rpc $ "/usr/bin/git" :| ["config", "--system", "--add", "safe.directory", path]
-                void $ checked rpc $ guestGit ["fetch", "--quiet", "--no-tags", "--", "/checkout", revisionText revision]
-            void $ checked rpc $ guestGit ["checkout", "--quiet", "--detach", revisionText revision]
+            vm <- rpc $ GetIdentity ()
+            change $ \measured -> measured{vmId = Just vm.toText}
+            when (case request.workspace of Pristine -> True; _ -> False) $ void $ checked rpc $ "/bin/mkdir" :| ["-p", "/workspace"]
+            checkoutGuest (checked rpc) (case request.workspace of Pristine -> False; _ -> True) (pinnedRevisionText revision)
             for_ artifact.testPatch \_ -> do
               copy rpc (directory </> "test.patch") "/run/monoscope-test.patch"
               stats <- checked rpc $ guestGit ["apply", "--numstat", "-z", "/run/monoscope-test.patch"]
@@ -725,19 +926,17 @@ verifyRegression options request = do
                       | otherwise = (Blocked, Just $ "Failure did not emit the expected case-sensitive literal " <> decodeUtf8 (AE.encode artifact.failureMessage) <> ". Inspect the full log and correct the check or assertion text; setup/dependency errors are not reproduced bugs.")
                 change $ \measured -> measured{status, reason, exitCode = Just exit, sourceAfter = Just after}
           case outcome of
-            Right Nothing -> change $ \measured -> measured{status = TimedOut}
-            Left failure | Just SandboxCleanupFailed <- fromException failure -> do
-              publish counter (3 :: Word8)
-              change $ \measured -> measured{status = CleanupFailed}
-            _ -> pass
+            Right Nothing -> change $ \measured -> if measured.status == CleanupFailed then measured else measured{status = TimedOut}
+            Left _ -> pass
+            Right (Just ()) -> pass
           log <- readBounded logPath 1048576
           sync logPath
           ended <- getMonotonicTimeNSec
           change $ \measured -> measured{durationMs = fromIntegral (ended - started) / 1000000, logBytes = fromIntegral $ BS.length log, logSha256 = sha log, tail = decodeUtf8With lenientDecode $ BS.drop (max 0 $ BS.length log - 4096) log, logPath = Just $ "/run/monoscope-review-output/check-" <> toText (identifierText checkId) <> "-" <> (if side == Base then "base" else "head") <> ".log"}
           measured <- readIORef observation
-          let kind = case artifact.testPatch of Nothing -> Just $ ScriptCheck template.regressionSha256; Just _ -> case measured.testPatchDisposition of Just Injected -> Just $ InjectedTest template.regressionSha256; Just Retained -> Just $ RetainedTest template.regressionSha256; Nothing -> Nothing
-              receipt = RegressionReceipt key.id request.attemptId checkId side revision request.imageBuildId workspaceHash template.scriptSha256 kind measured.status measured.exitCode (ceiling measured.durationMs) 2 1024 measured.logBytes measured.logSha256
-          publish (takeDirectory root </> identifierText receipt.id <> ".json") $ AE.object ["tag" AE..= ("Check" :: Text), "contents" AE..= receipt]
+          let kind = case artifact.testPatch of Nothing -> Just $ ScriptCheck (digestText template.regressionSha256); Just _ -> case measured.testPatchDisposition of Just Injected -> Just $ InjectedTest (digestText template.regressionSha256); Just Retained -> Just $ RetainedTest (digestText template.regressionSha256); Nothing -> Nothing
+              receipt = CheckReceipt key.id request.attemptId checkId side (pinnedRevisionText revision) (case request.imageBuildId of ImageId image -> UUID.toText image) (digestText template.scriptSha256) kind measured.status measured.exitCode (ceiling measured.durationMs) 2 1024 measured.logBytes (digestText measured.logSha256) workspaceHash
+          publish (takeDirectory root </> toString receipt.id.toText <> ".json") $ AE.object ["tag" AE..= ("Check" :: Text), "contents" AE..= receipt]
           modifyIORef' receipts (<> [receipt])
       results <- readIORef executions
       saved <- readIORef receipts
@@ -752,19 +951,18 @@ lookupWorkspace options operation request = do
   scriptText <- either (const invalid) pure $ decodeUtf8' scriptBytes
   ensure $ T.length scriptText <= 65536 && not (T.null $ T.strip scriptText)
   dependency <- traverse fingerprint options.dependencyArchive
-  environment <- getEnvironment
   withSandbox options.bridge \rpc -> do
     image <- rpc @Image $ Resolve options.image
     for_ request.expectedImageBuildId $ ensure . (== image.buildId)
     assetDir <- canonicalizePath image.assetDir
     ensure $ assetDir == image.assetDir
-    let Repository repoText = request.repository
-        Revision baseText = request.base
+    let repoText = repositoryText request.repository
+        baseText = pinnedRevisionText request.base
         identity = Identity request.projectId request.repository request.base image.buildId (sha scriptBytes) dependency
         key = identityKey identity
     root <- canonicalizePath options.cacheDir
     let parent = root </> projectText request.projectId </> "workspaces"
-        directory = parent </> toString (case key of Fingerprint value -> value)
+        directory = parent </> toString (workspaceFingerprintText key)
         load = loadWorkspace identity image directory (rpc . InspectCheckpoint)
         locked = withProjectLock root request.projectId
         transfer direction remoteFile action = do
@@ -773,21 +971,21 @@ lookupWorkspace options operation request = do
           createDirectoryIfMissing True records
           canonical records
           Posix.setFileMode records 0o700
-          identifier <- Identifier <$> UUID4.nextRandom
+          identifier <- UUIDId <$> UUID4.nextRandom
           now <- getCurrentTime
           started <- getMonotonicTimeNSec
           let record = TransferRecord identifier identity direction now TransferStarted Unpriced
-              Identifier transferId = identifier
+              UUIDId transferId = identifier
               save outcome = publish (records </> toString (UUID.toText transferId) <> ".json") (record :: TransferRecord){outcome}
               elapsed = (\ended -> fromIntegral (ended - started) / 1000000) <$> getMonotonicTimeNSec
-              prefix = "agent-workspaces/v1/" <> toText (projectText request.projectId) <> "/" <> (case key of Fingerprint value -> value) <> "/"
+              prefix = "agent-workspaces/v1/" <> toText (projectText request.projectId) <> "/" <> workspaceFingerprintText key <> "/"
           save TransferStarted
           connection' <- connectStorage remote
           value <- action remote prefix connection' `onException` (elapsed >>= save . TransferFailed)
           elapsed >>= save . TransferCompleted (FileFingerprint value.manifest.sha256 value.manifest.bytes)
           pure $ Just value
-        diskKey prefix manifest = prefix <> (case manifest.sha256 of Fingerprint value -> value) <> ".qcow2"
-        manifestKey prefix = (prefix <>) . maybe "manifest.json" (\(Fingerprint digest) -> digest <> ".json")
+        diskKey prefix manifest = prefix <> workspaceFingerprintText manifest.sha256 <> ".qcow2"
+        manifestKey prefix = (prefix <>) . maybe "manifest.json" ((<> ".json") . workspaceFingerprintText)
     case operation of
       Lookup -> load
       Archive remoteFile -> locked $ transfer Upload remoteFile \remote prefix connection -> do
@@ -838,12 +1036,12 @@ lookupWorkspace options operation request = do
             Just _ -> pure saved
             Nothing -> withTempDirectory parent ".prepare-" \temporary -> withSystemTempDirectory "monoscope-native-baseline" \source -> do
               let clean = source </> "checkout"
-                  git args = readProcessStdout_ $ setWorkingDir source $ setEnv (filter ((== "PATH") . fst) environment <> [("GIT_CONFIG_NOSYSTEM", "1"), ("GIT_CONFIG_GLOBAL", "/dev/null"), ("GIT_TERMINAL_PROMPT", "0"), ("GIT_ALLOW_PROTOCOL", "file")]) $ setStderr nullStream $ proc "git" $ ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"] <> args
+                  git args = readProcessStdout_ =<< gitProcess "file" source args []
                   execute cwd quiet argv = do
                     result <- rpc @Execution $ Execute $ GuestCommand argv cwd quiet
                     ensure $ result.exitCode == 0
                     pure $ T.strip result.stdout
-                  guestGit args = execute (Just "/workspace") False $ "/usr/bin/git" :| (["-c", "safe.directory=/workspace", "-c", "core.hooksPath=/dev/null", "-C", "/workspace"] <> args)
+                  gitGuest = execute (Just "/workspace") False . guestGit
                   parseHash value = maybe invalid pure $ viaNonEmpty head (words value) >>= mkFingerprint
                   copy hostPath destination = rpc @() $ CopyFile $ Copy hostPath destination
               void $ git ["init", "--quiet", clean]
@@ -869,7 +1067,7 @@ lookupWorkspace options operation request = do
               writeFileBS (source </> "prepare.sh") scriptBytes
               copy (source </> "prepare.sh") "/run/monoscope-prepare.sh"
               void $ execute (Just "/workspace") True $ agentCommand ["/bin/bash", "--noprofile", "--norc", "/run/monoscope-prepare.sh"]
-              revision <- guestGit ["rev-parse", "HEAD"]
+              revision <- gitGuest ["rev-parse", "HEAD"]
               after <- sourceHash
               ensure $ revision == baseText && before == after
               checkpoint <- rpc @CheckpointData $ Checkpoint $ temporary </> "baseline.qcow2"
@@ -928,15 +1126,15 @@ leaseWorkspace options request action = do
 
 
 projectText :: ProjectId -> FilePath
-projectText (ProjectId identifier) = toString $ UUID.toText identifier
+projectText project = toString project.toText
 
 
 digestText :: Fingerprint -> Text
-digestText (Fingerprint value) = value
+digestText = workspaceFingerprintText
 
 
 identityKey :: Identity -> Fingerprint
-identityKey = sha . toStrict . Encoding.encodingToLazyByteString . AE.genericToEncoding AE.defaultOptions{AE.omitNothingFields = True}
+identityKey = sha . toStrict . AE.encode
 
 
 withProjectLock :: FilePath -> ProjectId -> IO a -> IO a
@@ -986,8 +1184,8 @@ fingerprint :: FilePath -> IO FileFingerprint
 fingerprint path = withFile path \handle size -> do
   ensure $ size > 0
   bytes <- LBS.hGetContents handle
-  digest <- evaluate (show (hashlazy bytes :: Digest SHA256) :: Text)
-  pure $ FileFingerprint (Fingerprint digest) size
+  digest <- evaluate $ digestFingerprint (hashlazy bytes)
+  pure $ FileFingerprint digest size
 
 
 readBounded :: FilePath -> Word64 -> IO ByteString
@@ -1026,12 +1224,8 @@ decode :: AE.FromJSON a => ByteString -> IO a
 decode = either (const invalid) pure . AE.eitherDecodeStrict
 
 
-sync :: FilePath -> IO ()
-sync path = bracket (Posix.openFd path Posix.ReadOnly Posix.defaultFileFlags{Posix.nofollow = True, Posix.cloexec = True}) Posix.closeFd fileSynchronise
-
-
 sha :: ByteString -> Fingerprint
-sha bytes = Fingerprint $ show (hash bytes :: Digest SHA256)
+sha = digestFingerprint . hash
 
 
 fingerprintScript :: Text
@@ -1048,35 +1242,43 @@ fingerprintScript =
   """
 
 
-type RPC = forall value. AE.FromJSON value => Command -> IO value
+type RPC = forall value. AE.FromJSON value => Command value -> IO value
 
 
 withSandbox :: FilePath -> (RPC -> IO a) -> IO a
-withSandbox bridge action = do
+withSandbox bridge = withSandboxRelease bridge (const pass)
+
+
+-- | Cleanup is observed before restoring the action's exception, including cancellation.
+withSandboxRelease :: FilePath -> (AllocationOutcome -> IO ()) -> (RPC -> IO a) -> IO a
+withSandboxRelease bridge released action = do
   environment <- filter (\(key, _) -> key `elem` ["PATH", "HOME", "XDG_CACHE_HOME"] || "GONDOLIN_" `isPrefixOf` key) <$> getEnvironment
-  withProcessTerm (setEnv environment $ setStdin createPipe $ setStdout createPipe $ setStderr nullStream $ proc bridge []) \process -> do
-    let rpc :: forall value. AE.FromJSON value => Command -> IO value
-        rpc command = do
+  withProcessTerm (setEnv environment $ setStdin createPipe $ setStdout createPipe $ setStderr nullStream $ proc bridge []) \process -> Exception.mask \restore -> do
+    pending <- newIORef False
+    let receive = Exception.mask \restoreRead -> do
+          bytes <- restoreRead $ B8.hGetLine $ getStdout process
+          writeIORef pending False
+          ensure $ BS.length bytes <= 1048576
+          pure bytes
+        rpc :: forall value. AE.FromJSON value => Command value -> IO value
+        rpc command = Exception.mask \restoreCall -> do
+          writeIORef pending True
           LBS.hPut (getStdin process) (AE.encode command <> "\n")
           hFlush $ getStdin process
-          bytes <- B8.hGetLine $ getStdout process
-          ensure $ BS.length bytes <= 1048576
+          bytes <- restoreCall receive
           either (const invalid) (either (const invalid) pure) $ AE.eitherDecodeStrict @(Either Text value) bytes
-        close = do
-          closed <- Timeout.timeout (2 * 1000000) $ tryAny $ rpc @() $ Close ()
-          case closed of Just (Right ()) -> pass; _ -> throwIO SandboxCleanupFailed
-    result <- action rpc
-    close
-    pure result
-
-
-publish :: AE.ToJSON value => FilePath -> value -> IO ()
-publish path value = withTempFile (takeDirectory path) ".native-" \temporary handle -> do
-  LBS.hPut handle $ AE.encode value <> "\n"
-  hFlush handle
-  sync temporary
-  renameFile temporary path
-  sync $ takeDirectory path
+    result <- Exception.try @SomeException $ restore $ action rpc
+    closed <- Exception.try @SomeException $ restore $ Timeout.timeout (2 * 1000000) do
+      whenM (readIORef pending) $ void receive
+      rpc $ Close ()
+    let release = case closed of Right (Just ()) -> Released; _ -> ReleaseFailed
+    released release
+    case result of
+      Left failure -> Exception.throwIO failure
+      Right value -> case closed of
+        Right (Just ()) -> pure value
+        Left failure | isJust (Exception.fromException failure :: Maybe Exception.SomeAsyncException) -> Exception.throwIO failure
+        _ -> throwIO SandboxCleanupFailed
 
 
 withOwner :: Maybe Word32 -> IO a -> IO a
@@ -1087,3 +1289,51 @@ withOwner supplied action = do
   present
   thread <- myThreadId
   withAsync (catchAny (forever $ threadDelay 250000 >> present) $ throwTo thread) $ const action
+
+
+sync :: FilePath -> IO ()
+sync path = bracket (Posix.openFd path Posix.ReadOnly Posix.defaultFileFlags{Posix.nofollow = True, Posix.cloexec = True}) Posix.closeFd fileSynchronise
+
+
+publishBytes :: FilePath -> LBS.ByteString -> IO ()
+publishBytes path bytes = withTempFile (takeDirectory path) ".native-" \temporary handle -> do
+  LBS.hPut handle bytes
+  hFlush handle
+  Posix.setFileMode temporary 0o600
+  sync temporary
+  renameFile temporary path
+  sync $ takeDirectory path
+
+
+publish :: AE.ToJSON value => FilePath -> value -> IO ()
+publish path value = publishBytes path (AE.encode value <> "\n")
+
+
+-- | Only PATH and explicit transport credentials enter host Git commands.
+gitProcess :: String -> FilePath -> [String] -> [(String, String)] -> IO (ProcessConfig () () ())
+gitProcess protocol directory args extra = do
+  environment <- gitEnvironment protocol extra
+  pure $ setWorkingDir directory $ setStderr nullStream $ setEnv environment $ proc "git" $ ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"] <> args
+
+
+gitEnvironment :: String -> [(String, String)] -> IO [(String, String)]
+gitEnvironment protocol extra = do
+  environment <- filter ((== "PATH") . fst) <$> getEnvironment
+  pure $ environment <> [("LC_ALL", "C"), ("GIT_CONFIG_NOSYSTEM", "1"), ("GIT_CONFIG_GLOBAL", "/dev/null"), ("GIT_TERMINAL_PROMPT", "0"), ("GIT_ALLOW_PROTOCOL", protocol)] <> extra
+
+
+-- | Capture both pipes concurrently; the extra byte distinguishes overflow from exact-limit output.
+captureProcess :: Int -> ProcessConfig input output errorOutput -> IO (ExitCode, ByteString, ByteString)
+captureProcess limit command = withProcessTerm (setStdout createPipe $ setStderr createPipe command) \process -> do
+  let capture handle = do
+        bytes <- toStrict <$> runConduit (CC.sourceHandle handle .| CC.takeE (limit + 1) .| CC.sinkLazy)
+        ensure $ BS.length bytes <= limit
+        pure bytes
+  (out, err) <- concurrently (capture $ getStdout process) (capture $ getStderr process)
+  (,,) <$> waitExitCode process <*> pure out <*> pure err
+
+
+gitCredentials :: Text -> [(String, String)]
+gitCredentials token =
+  let settings = [("credential.helper", ""), ("http.followRedirects", "false")] <> [("http.https://github.com/.extraheader", "AUTHORIZATION: basic " <> extractBase64 (Base64.encodeBase64 $ encodeUtf8 $ "x-access-token:" <> token)) | not $ T.null token]
+   in ("GIT_CONFIG_COUNT", show $ length settings) : concat [[("GIT_CONFIG_KEY_" <> show index, toString key), ("GIT_CONFIG_VALUE_" <> show index, toString value)] | (index, (key, value)) <- zip [0 :: Int ..] settings]

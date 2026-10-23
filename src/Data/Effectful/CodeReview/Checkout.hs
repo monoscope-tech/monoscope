@@ -1,9 +1,8 @@
 module Data.Effectful.CodeReview.Checkout (Source (..), Prepared (..), Envelope (..), withCheckout) where
 
 import Data.Aeson qualified as AE
-import Data.Base64.Types (extractBase64)
 import Data.ByteString qualified as BS
-import Data.Char (isAlphaNum, isAscii)
+import Data.Effectful.AgentWorkspace (captureProcess, gitCredentials, gitProcess, mkRepository, repositoryText, pattern GitHub, pattern Local)
 import Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), artifactCheckout, peerEvidence, sha256, withVerifiedArtifacts)
 import Data.Effectful.CodeReview.Policy qualified as Policy
 import Data.Effectful.CodeReview.Types (ArtifactRequest (..), FixResult (..), Request (..), Revision, TestArtifact, mkRevision, revisionText)
@@ -15,16 +14,14 @@ import GHC.Clock (getMonotonicTimeNSec)
 import Pkg.DeriveUtils (UUIDId, WrappedEnumSC (..))
 import Relude
 import System.Directory (canonicalizePath, createDirectoryIfMissing)
-import System.Environment (getEnvironment)
 import System.FileLock (SharedExclusive (..), withFileLock)
-import System.FilePath (isAbsolute, takeDirectory, takeFileName, (</>))
+import System.FilePath (takeDirectory, takeFileName, (</>))
 import System.IO.Error (userError)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Posix.Files qualified as Posix
-import System.Process.Typed (ExitCode (..), createPipe, getStdout, nullStream, proc, readProcessStdout_, setEnv, setStderr, setStdout, setWorkingDir, waitExitCode, withProcessTerm)
+import System.Process.Typed (ExitCode (..), createPipe, getStdout, readProcessStdout_, setStdout, waitExitCode, withProcessTerm)
 import UnliftIO.Exception (throwIO, tryAny)
 import UnliftIO.Timeout qualified as Timeout
-import "base64" Data.ByteString.Base64 qualified as Base64
 
 
 data Source where
@@ -47,9 +44,6 @@ data Envelope = Artifact TestArtifact | Result FixResult
 data Prepared = Prepared {directory :: FilePath, repositorySkills :: FilePath, rootInstructions :: Text, projectId :: UUIDId "project", repository :: Text, base :: Revision, head :: Revision, cacheStatus :: CacheStatus, durationMs :: Word64, policy :: Policy.Policy, guest :: Maybe FilePath, envelope :: Maybe Envelope}
   deriving stock (Generic)
   deriving anyclass (AE.ToJSON)
-
-
-data Origin = GitHub Text | Local FilePath
 
 
 -- Keep the private checkout alive until the child and all of its VMs have exited.
@@ -112,12 +106,11 @@ withCheckout store source action = do
     prepare temporary request = do
       baseRevision <- either (const invalid) pure $ mkRevision request.base
       headRevision <- either (const invalid) pure $ mkRevision request.head
-      origin <- parseOrigin request.repository
+      origin <- either (const invalid) pure $ mkRepository request.repository
+      for_ (case origin of Local path -> Just path; GitHub _ -> Nothing) canonical
       let protocol = case origin of Local _ -> "file"; GitHub _ -> "https"
-          sourcePath = case origin of Local path -> path; GitHub url -> toString url
-          settings :: [(Text, Text)]
-          settings = [("credential.helper", ""), ("http.followRedirects", "false")] <> [("http.https://github.com/.extraheader", "AUTHORIZATION: basic " <> extractBase64 (Base64.encodeBase64 $ encodeUtf8 $ "x-access-token:" <> request.gitToken)) | not $ T.null request.gitToken]
-          credentials = [("GIT_CONFIG_COUNT", show $ length settings), ("GIT_ALLOW_PROTOCOL", protocol)] <> concat [[("GIT_CONFIG_KEY_" <> show index, toString key), ("GIT_CONFIG_VALUE_" <> show index, toString value)] | (index, (key, value)) <- zip [0 :: Int ..] settings]
+          sourcePath = case origin of Local path -> path; GitHub _ -> toString $ repositoryText origin
+          credentials = ("GIT_ALLOW_PROTOCOL", protocol) : gitCredentials request.gitToken
       root <- canonicalizePath store.cacheDir
       let project = root </> toString request.projectId.toText
           mirror = project </> toString (sha256 $ encodeUtf8 request.repository)
@@ -138,24 +131,12 @@ withCheckout store source action = do
       git checkout ["remote", "set-url", "origin", toString request.repository] []
       git checkout ["checkout", "--quiet", "--detach", toString $ revisionText headRevision] []
       pure (checkout, baseRevision, headRevision, status)
-    parseOrigin value
-      | isAbsolute $ toString value = canonical (toString value) $> Local (toString value)
-      | otherwise = case T.stripPrefix "https://github.com/" value >>= T.stripSuffix ".git" of
-          Just slug | [owner, name] <- T.splitOn "/" slug, all segment [owner, name] -> pure $ GitHub value
-          _ -> invalid
-      where
-        segment part = not (T.null part) && part `notElem` [".", ".."] && T.all (\c -> isAscii c && (isAlphaNum c || c `elem` ['-', '_', '.'])) part
     canonical directory = canonicalizePath directory >>= \resolved -> unless (resolved == directory) invalid
     git directory args extra = void . readProcessStdout_ =<< gitCommand directory args extra
     gitBytes directory args extra = do
       command <- gitCommand directory args extra
-      withProcessTerm (setStdout createPipe command) \process -> do
-        bytes <- BS.hGet (getStdout process) (1048576 + 1)
-        when (BS.length bytes > 1048576) invalid
-        exit <- waitExitCode process
-        unless (exit == ExitSuccess) invalid
-        pure bytes
-    gitCommand directory args extra = do
-      environment <- filter ((== "PATH") . fst) <$> getEnvironment
-      pure (setWorkingDir directory $ setStderr nullStream $ setEnv (environment <> [("LC_ALL", "C"), ("GIT_CONFIG_NOSYSTEM", "1"), ("GIT_CONFIG_GLOBAL", "/dev/null"), ("GIT_TERMINAL_PROMPT", "0")] <> (if null extra then [("GIT_ALLOW_PROTOCOL", "file")] else extra)) $ proc "git" $ ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"] <> args)
+      (exit, bytes, _) <- captureProcess 1048576 command
+      unless (exit == ExitSuccess) invalid
+      pure bytes
+    gitCommand directory args extra = gitProcess (fromMaybe "file" $ lookup "GIT_ALLOW_PROTOCOL" extra) directory args (filter ((/= "GIT_ALLOW_PROTOCOL") . fst) extra)
     invalid = throwIO $ userError "Invalid repository checkout"

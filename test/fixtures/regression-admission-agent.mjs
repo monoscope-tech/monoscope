@@ -14,9 +14,9 @@ const rpc = async (tag, contents) => {
   return JSON.parse((await input.next()).value);
 };
 assert.ok(Object.hasOwn(await rpc('Usage', { id: randomUUID(), attemptId: request.attemptId, provider: request.provider, model: request.model, responseId: 'admission-fixture', inputTokens: 7, outputTokens: 3, cacheReadTokens: 0, cacheWriteTokens: 0, costNanousd: 42000, pricing: {}, succeeded: true }), 'Right'));
-assert.ok(Object.hasOwn(await rpc('Query', { service: 'test-service', query: '| summarize count()' }), 'Left'));
-assert.ok(Object.hasOwn(await rpc('Knowledge', { tag: 'Recall', contents: 'test-service' }), 'Left'));
-assert.ok(Object.hasOwn(await rpc('Admit', artifact), 'Left'));
+assert.ok(Object.hasOwn(await rpc('Tool', { name: 'query_telemetry', arguments: { service: 'test-service', query: '| summarize count()' } }), 'Left'));
+assert.ok(Object.hasOwn(await rpc('Tool', { name: 'recall_knowledge', arguments: { service: 'test-service' } }), 'Left'));
+assert.ok(Object.hasOwn(await rpc('Tool', { name: 'reproduce_issue', arguments: artifact }), 'Left'));
 assert.ok(Object.hasOwn(await rpc('Phase', { id: randomUUID(), attemptId: request.attemptId, step: { tag: 'RestartReproduction' } }), 'Left'));
 if (mode === '--check') {
   process.stdout.write(JSON.stringify({ tag: 'Check', contents: { id: randomUUID(), attemptId: request.attemptId, checkId: randomUUID(), side: 'base', revision: request.base, imageBuildId: randomUUID(), scriptSha256: 'a'.repeat(64), regression: null, status: 'passed', exitCode: 0, durationMs: 1, cpus: 1, memoryMiB: 1024, logBytes: 0, logSha256: 'b'.repeat(64) } }) + '\n');
@@ -30,7 +30,7 @@ if (mode === '--check') {
   assert.ok(Object.hasOwn(await rpc('Validate', { ...result, decision: { tag: 'Invented', contents: 'invented' } }), 'Left'));
   if (mode !== '--skip') assert.ok(Object.hasOwn(await rpc('Validate', result), 'Right'));
   if (mode === '--tampered') result.artifact = { ...artifact, failureMessage: 'changed after acceptance' };
-  if (mode === '--post-query') assert.ok(Object.hasOwn(await rpc('Query', { service: 'test-service', query: '| summarize count()' }), 'Left'));
+  if (mode === '--post-query') assert.ok(Object.hasOwn(await rpc('Tool', { name: 'query_telemetry', arguments: { service: 'test-service', query: '| summarize count()' } }), 'Left'));
   assert.ok(Object.hasOwn(await rpc('Allocation', { id: randomUUID(), attemptId: request.attemptId, durationMs: 100, cpus: 2, memoryMiB: 1024, outcome: 'released' }), 'Right'));
   process.stdout.write(JSON.stringify({ tag: 'Result', contents: result }) + '\n');
   lines.close(); process.stdin.destroy();

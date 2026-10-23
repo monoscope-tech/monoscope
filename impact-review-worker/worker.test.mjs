@@ -8,9 +8,22 @@ import { test } from 'node:test';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { jsonLines } from './jsonl.mjs';
+import { parseSubmission } from './pi-host.mjs';
 
 const exec = promisify(execFile);
 const records = (chunks, limit) => Array.fromAsync(jsonLines(Readable.from(chunks.map((chunk) => Buffer.from(chunk))), limit));
+
+test('research submissions obey the supplied host schema, including changed limits and strict nested objects', () => {
+  const finding = { type: 'object', properties: { line: { type: 'integer', minimum: 1 }, message: { type: 'string', minLength: 1, maxLength: 4 } }, required: ['line', 'message'], additionalProperties: false };
+  const parameters = { type: 'object', properties: { findings: { type: 'array', items: finding, maxItems: 1 } }, required: ['findings'], additionalProperties: false };
+  const checkout = { policy: { tools: [{ name: 'submit_findings', parameters }] } };
+  const valid = { findings: [{ line: 1, message: 'bug' }] };
+  assert.equal(parseSubmission(checkout, 'submit_findings', valid), valid);
+  for (const draft of [{}, { ...valid, extra: true }, { findings: [...valid.findings, ...valid.findings] }, ...[{ line: 0, message: 'bug' }, { line: 1.5, message: 'bug' }, { line: 1, message: '' }, { line: 1, message: 'large' }, { line: 1, message: 'bug', extra: true }].map((item) => ({ findings: [item] }))]) assert.throws(() => parseSubmission(checkout, 'submit_findings', draft));
+  parameters.properties.findings.maxItems = 0;
+  assert.throws(() => parseSubmission(checkout, 'submit_findings', valid));
+  assert.throws(() => parseSubmission(checkout, 'submit_review', valid), /Host policy does not define submit_review/);
+});
 
 test('oversized JSONL records are rejected regardless of newline or chunk boundaries', async () => {
   for (const chunks of [['12345'], ['12345\n'], ['123', '45'], ['123', '45\n'], ['ok\n12345\n'], ['1234', '5\n']]) {
@@ -76,4 +89,86 @@ registerHooks({ resolve(specifier, context, next) {
       assert.deepEqual(config.oci, { image: 'sha256:built', pullPolicy: 'never', runtime: selected });
     } finally { await rm(root, { recursive: true, force: true }); }
   });
+});
+
+test('native sessions preserve events, recoverable RPC errors and cleanup on EOF or abort', { timeout: 10000 }, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'impact-native-session-'));
+  const previous = process.env.IMPACT_REVIEW_NATIVE_CLI;
+  try {
+    const cli = join(root, 'native.mjs');
+    await writeFile(cli, `#!${process.execPath}
+import assert from 'node:assert/strict';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { createInterface } from 'node:readline';
+const args = process.argv.slice(2);
+assert.equal(args[0], 'workspace');
+const request = JSON.parse(readFileSync(args[args.indexOf('--request') + 1], 'utf8'));
+assert.equal(request.ownerPid, process.ppid);
+if (args[1] === 'check') {
+  assert.ok(args.includes('--bridge'));
+  console.log(JSON.stringify(request));
+  process.exit(0);
+}
+assert.equal(args[1], 'session');
+assert.equal(readFileSync(request.host.workspace.script, 'utf8'), 'trusted preparation');
+const send = (value) => process.stdout.write(JSON.stringify(value) + '\\n');
+const finish = (outcome) => {
+  writeFileSync(request.cleanup, outcome);
+  process.stdout.write(JSON.stringify({ event: 'agent_allocation', receipt: { id: outcome } }) + '\\n', () => process.exit(0));
+};
+process.once('SIGTERM', () => finish('aborted'));
+send({ event: 'agent_allocation', receipt: { id: 'before-ready' } });
+send({ Right: { skills: '/fixture-skills' } });
+for await (const line of createInterface({ input: process.stdin })) {
+  const message = JSON.parse(line);
+  if (message.tag === 'Check') send({ Left: 'Comparison budget exhausted' });
+  else if (message.tag === 'Wait') send({ event: 'command_started' });
+  else send({ Right: message.contents });
+}
+finish('eof');
+`);
+    await chmod(cli, 0o755);
+    process.env.IMPACT_REVIEW_NATIVE_CLI = cli;
+    const { runRegression, withNativeSession } = await import('./workspace.mjs');
+    await t.test('standalone regression invokes the native verifier', async () => {
+      const request = { projectId: 'project', base: 'base', artifact: { script: 'test' }, revisions: [['base', 'base']] };
+      const result = await runRegression(request, { assetDir: '/image', buildId: 'pinned-image' }, { artifactDir: '/artifacts', checkout: '/checkout' });
+      assert.deepEqual(result, { ...request, imageBuildId: 'pinned-image', workspace: { tag: 'Pristine' }, ownerPid: process.pid });
+    });
+    for (const abort of [false, true]) await t.test(abort ? 'abort' : 'normal EOF', async () => {
+      const controller = new AbortController();
+      const cleanup = join(root, abort ? 'abort-cleanup' : 'eof-cleanup');
+      const events = [];
+      const session = withNativeSession({ host: { workspace: {} }, cleanup }, {
+        signal: controller.signal, script: 'trusted preparation',
+        onEvent(event) {
+          events.push(event);
+          if (event.type === 'command_started') controller.abort();
+        },
+      }, async (ready, rpc) => {
+        assert.deepEqual(ready, { skills: '/fixture-skills' });
+        if (abort) return rpc('Wait', null);
+        await assert.rejects(rpc('Check', {}), /Comparison budget exhausted/);
+        return rpc('Operate', { path: '/workspace/source.hs' });
+      });
+      if (abort) await assert.rejects(session, /closed before replying/);
+      else assert.deepEqual(await session, { path: '/workspace/source.hs' });
+      const outcome = abort ? 'aborted' : 'eof';
+      assert.equal(await readFile(cleanup, 'utf8'), outcome);
+      assert.deepEqual(events.filter((event) => event.type === 'agent_allocation').map((event) => event.receipt.id), ['before-ready', outcome]);
+    });
+    await t.test('already aborted', async () => {
+      const controller = new AbortController();
+      controller.abort();
+      const cleanup = join(root, 'pre-abort-cleanup');
+      await assert.rejects(withNativeSession({ host: { workspace: {} }, cleanup }, {
+        signal: controller.signal, script: 'trusted preparation', onEvent() {},
+      }, () => assert.fail('An aborted session must not become ready')), { name: 'AbortError' });
+      await assert.rejects(readFile(cleanup), { code: 'ENOENT' });
+    });
+  } finally {
+    if (previous === undefined) delete process.env.IMPACT_REVIEW_NATIVE_CLI;
+    else process.env.IMPACT_REVIEW_NATIVE_CLI = previous;
+    await rm(root, { recursive: true, force: true });
+  }
 });

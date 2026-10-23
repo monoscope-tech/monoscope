@@ -6,8 +6,9 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.Char (isHexDigit)
 import Data.Conduit.Combinators qualified as CC
 import Data.Effectful.CodeReview qualified as Agent
-import Data.Effectful.CodeReview.Explanation qualified as Media
-import Data.Effectful.CodeReview.Types (revisionText)
+import Data.Effectful.CodeReview.Artifacts qualified as Media
+import Data.Effectful.CodeReview.Types (Asset (..), assetFile, revisionText)
+import Data.Effectful.GitPublication.Native qualified as Publication
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Effectful
@@ -15,7 +16,6 @@ import Effectful.Dispatch.Dynamic
 import Effectful.TH
 import Network.Minio qualified as Minio
 import Network.URI (URI (..), URIAuth (..), parseURI)
-import Pkg.DeriveUtils (WrappedEnumSC (..))
 import Pkg.Minio qualified as Storage
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
@@ -24,13 +24,7 @@ import System.IO.Temp (withSystemTempDirectory)
 import System.Process.Typed (nullStream, proc, readProcessStdout_, setStderr, setStdin)
 import UnliftIO.Exception (tryAny)
 import UnliftIO.Timeout qualified as Timeout
-import Web.HttpApiData (FromHttpApiData)
 import "cryptonite" Crypto.Hash (Digest, SHA256, hashlazy)
-
-
-data Asset = Video | Diagram | Captions | Before | Cause | Change | After
-  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
-  deriving (AE.ToJSON, FromHttpApiData) via WrappedEnumSC 'Nothing "" Asset
 
 
 data ArtifactFailure = StorageUnavailable | ArtifactUnavailable | InvalidArtifact | PublicationUnavailable
@@ -62,10 +56,6 @@ configuredBucket :: EnvConfig -> Either ArtifactFailure Text
 configuredBucket config = case config.impactReviewArtifactBucket of
   Just bucket | not (T.null $ T.strip bucket) && not (T.null $ T.strip config.s3Endpoint) -> Right bucket
   _ -> Left StorageUnavailable
-
-
-assetFile :: Asset -> Text
-assetFile = \case Video -> "explanation.mp4"; Diagram -> "diagram.svg"; Captions -> "captions.vtt"; Before -> "before.png"; Cause -> "cause.png"; Change -> "change.png"; After -> "after.png"
 
 
 data AgentArtifacts :: Effect where
@@ -153,11 +143,11 @@ publicationDescription result explanation origin = do
           , ""
           , "**Verification:** Same retained regression fails on base " <> code (revisionText result.base) <> " and passes on candidate " <> code (revisionText result.head) <> "."
           , ""
-          , "![](explanation.mp4)"
+          , Publication.attachmentReference Publication.Video
           , ""
-          , "![Reproduction, inferred cause, and verified fix](cause.png)"
+          , Publication.attachmentReference Publication.Diagram
           , ""
-          , "<!-- monoscope-fix project=" <> result.projectId.toText <> " run=" <> result.runId.toText <> " candidate=" <> result.candidateId.toText <> " source=" <> explanation.source <> " -->"
+          , Publication.publicationMarker result explanation
           ]
   pure description
   where

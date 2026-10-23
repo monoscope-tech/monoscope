@@ -14,6 +14,7 @@ import CLI.UI (Picker, runPicker)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.Effectful.AgentWorkspace qualified as Workspace
+import Data.Effectful.AgentWorkspace.Guest qualified as Guest
 import Data.Effectful.Wreq (HTTP, runHTTPWreq)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -65,6 +66,7 @@ data Command
   | ChartCmd ChartCmdOpts
   | StatusCmd StatusOpts
   | OpenCmd OpenOpts
+  | GuestSessionCmd FilePath
   | WorkspaceCmd FilePath Workspace.Options Workspace.Operation
   | WorkspacePruneCmd FilePath Workspace.PruneOptions
   | WorkspaceLeaseCmd FilePath Workspace.Options
@@ -299,7 +301,8 @@ commandParser =
     workspaceParser =
       subparser
         $ mconcat
-          [ cmd "prune" (WorkspacePruneCmd <$> requestOption <*> (Workspace.PruneOptions <$> strOption (long "cache" <> metavar "DIRECTORY") <*> remoteOption)) (progDesc "Evict idle archived project checkpoints to an allocated-byte budget")
+          [ cmd "session" (GuestSessionCmd <$> requestOption) (progDesc "Run a host-owned offline agent workspace over JSONL")
+          , cmd "prune" (WorkspacePruneCmd <$> requestOption <*> (Workspace.PruneOptions <$> strOption (long "cache" <> metavar "DIRECTORY") <*> remoteOption)) (progDesc "Evict idle archived project checkpoints to an allocated-byte budget")
           , cmd "load" (options (pure Workspace.Lookup)) (progDesc "Verify a prepared workspace")
           , cmd "archive" (options (Workspace.Archive <$> remoteOption)) (progDesc "Archive a verified checkpoint in self-hosted object storage")
           , cmd "restore" (options (Workspace.Restore <$> remoteOption)) (progDesc "Restore and verify an archived checkpoint")
@@ -1119,6 +1122,7 @@ run version global = \case
   ChartCmd opts -> withCfgMode global $ \cfg mode -> runChart cfg opts mode
   StatusCmd opts -> withCfgMode global $ \cfg mode -> runStatus cfg opts mode
   OpenCmd opts -> withCfgMode global $ \cfg _ -> runOpen cfg opts
+  GuestSessionCmd request -> liftIO $ Guest.runSession request
   RegressionCmd request options -> Workspace.runRegression options request >>= either (dieWith . Workspace.regressionErrorText) (putLBS . AE.encode)
   WorkspacePruneCmd request options -> do
     report <- Workspace.pruneWorkspaces options request >>= either dieWith pure

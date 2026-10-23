@@ -6,10 +6,12 @@ import { dirname, join, resolve } from 'node:path';
 import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { z } from 'zod';
 import parseDiff from 'parse-diff';
-import { review, reviewDraft, modelUsage } from './review.mjs';
+import { AssertError } from 'typebox/value';
+import { checkoutSchema, reviewPatch } from './pi-host.mjs';
+import { review, modelUsage } from './review.mjs';
 
 const caseSchema = z.object({
-  checkout: z.object({ guest: z.null(), envelope: z.null(), directory: z.string(), repositorySkills: z.string().min(1), rootInstructions: z.string(), projectId: z.uuid(), repository: z.string(), base: z.string(), head: z.string(), cacheStatus: z.enum(['hit', 'miss', 'verified']), durationMs: z.number().int().nonnegative(), policy: z.object({ instructions: z.string(), tools: z.array(z.object({ name: z.string(), description: z.string(), parameters: z.record(z.string(), z.unknown()), sequential: z.boolean() }).strict()), builtins: z.array(z.string()) }).strict() }).strict(),
+  checkout: checkoutSchema.extend({ guest: z.null(), envelope: z.null() }),
   projectId: z.uuid(), repository: z.string(), base: z.string().regex(/^[a-f0-9]{40}$/), head: z.string().regex(/^[a-f0-9]{40}$/),
   provider: z.string(), model: z.string(), evidenceKind: z.enum(['synthetic', 'snapshot']),
   evidence: z.array(z.object({ key: z.string().min(1), kind: z.enum(['telemetry', 'monitor', 'dashboard']) }).passthrough()).refine((items) => new Set(items.map((item) => item.key)).size === items.length, 'Evidence keys must be unique'), rubric: z.array(z.string()),
@@ -38,13 +40,10 @@ try {
     }
     return { Right: [] };
   };
-  // Keep the former reviewer's patch limits while holding model and evidence constant.
-  const patches = diff.split(/(?=^diff --git )/m).filter(Boolean);
-  const boundedDiff = patches.slice(0, 30).map((patch) => patch.slice(0, 2000)).join('\n');
   output = resolve(resultPath);
   const pkg = JSON.parse(await readFile(new URL('./package.json', import.meta.url), 'utf8'));
   const skills = JSON.parse(await readFile(new URL('./skills/superpowers/UPSTREAM.json', import.meta.url), 'utf8'));
-  const paths = ['review.mjs', 'pi-host.mjs', 'workspace.mjs', '../src/Data/Effectful/CodeReview/Artifacts.hs', '../src/Data/Effectful/CodeReview/Policy.hs', 'evaluate.mjs', 'package-lock.json', 'skills/superpowers/UPSTREAM.json', ...Object.keys(skills.sha256).map((path) => `skills/superpowers/${path}`)];
+  const paths = ['review.mjs', 'pi-host.mjs', 'workspace.mjs', '../src/Data/Effectful/CodeReview/Artifacts.hs', '../src/Data/Effectful/CodeReview/Policy.hs', '../shared/src/Data/Effectful/AgentWorkspace.hs', '../shared/src/Data/Effectful/AgentWorkspace/Guest.hs', 'evaluate.mjs', 'package-lock.json', 'skills/superpowers/UPSTREAM.json', ...Object.keys(skills.sha256).map((path) => `skills/superpowers/${path}`)];
   const files = Object.fromEntries(await Promise.all(paths.map(async (path) => [path, createHash('sha256').update(await readFile(new URL(path, import.meta.url))).digest('hex')])));
   artifact = { validation: { changedLines: true, evidenceKeys: true, telemetryContext: true, semanticQuality: 'manual' }, createdAt: new Date().toISOString(), ...input, harness: { dependencies: { ...pkg.dependencies, ...pkg.devDependencies }, skills: { repository: skills.repository, revision: skills.revision }, files }, runs: [] };
   await writeFile(output, JSON.stringify(artifact, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
@@ -60,6 +59,7 @@ try {
     const recordUsage = (message) => run.usage.push({ ...message.usage, receipt: modelUsage(message, runtime.getModel(message.provider, message.model)?.cost ?? null, run.attemptId) });
     const checkDraft = (draft) => {
       const reply = validateDraft(draft);
+      if (mode === 'bounded-patch' && Object.hasOwn(reply, 'Left')) { run.failureType = 'validation'; run.validationError = reply.Left; }
       run.submissions.push({ draft, accepted: !Object.hasOwn(reply, 'Left'), error: reply.Left ?? null });
       return reply;
     };
@@ -67,27 +67,24 @@ try {
     let responseText;
     try {
       if (mode === 'bounded-patch') {
-        run.patchFiles = Math.min(30, patches.length);
-        run.totalChangedFiles = patches.length;
-        const response = await runtime.completeSimple(model, { systemPrompt: 'Review production impact. You have only the supplied patch and evidence; report missing context.', messages: [{ role: 'user', content: prompt + '\nPR patch:\n' + boundedDiff, timestamp: Date.now() }] }, { reasoning: 'high', signal: runSignal });
-        recordUsage(response);
-        run.stopReason = response.stopReason;
-        responseText = response.content.filter((block) => block.type === 'text').map((block) => block.text).join('');
-        if (response.stopReason !== 'stop') throw new Error('Model request did not complete');
-        const candidate = reviewDraft.parse(JSON.parse(responseText));
-        const reply = checkDraft(candidate);
-        if (Object.hasOwn(reply, 'Left')) {
-          run.failureType = 'validation';
-          run.validationError = reply.Left;
-          throw new Error(reply.Left);
-        }
-        run.draft = candidate;
+        run.draft = await reviewPatch(diff, { modelRuntime: runtime, model, preparedCheckout: input.checkout, submit: 'submit_review',
+          systemPrompt: 'Review production impact. You have only the supplied patch and evidence; report missing context.',
+          prompt: prompt + '\nPR patch:\n', thinkingLevel: 'high', signal: runSignal, validateDraft: checkDraft,
+          onEvent(event) {
+            if (event.type === 'patch_coverage') { run.patchFiles = event.files; run.totalChangedFiles = event.totalFiles; }
+            if (event.type === 'model_response') {
+              recordUsage(event.message);
+              run.stopReason = event.message.stopReason;
+              responseText = event.message.content.filter((block) => block.type === 'text').map((block) => block.text).join('');
+            }
+          },
+        });
       } else {
         run.runId = randomUUID();
         run.artifactDir = output + '.artifacts';
         await mkdir(run.artifactDir, { mode: 0o700 });
         run.draft = await review({ runId: run.runId, projectId: input.projectId, repository, base: input.base, head: input.head, gitToken: '', prompt, provider: input.provider, model: input.model, thinkingLevel: 'high' }, {
-          preparedCheckout: input.checkout, artifactDir: run.artifactDir, attemptId: run.attemptId, modelRuntime: runtime, guestImage: process.env.IMPACT_REVIEW_GUEST_IMAGE, cacheDir: process.env.IMPACT_REVIEW_CACHE_DIR, signal: runSignal, validateDraft: checkDraft,
+          preparedCheckout: input.checkout, artifactDir: run.artifactDir, attemptId: run.attemptId, modelRuntime: runtime, guestImage: process.env.IMPACT_REVIEW_GUEST_IMAGE, signal: runSignal, validateDraft: checkDraft,
           onEvent(event) {
             if (event.type === 'checkout_prepared') run.checkout = event;
             if (event.type === 'agent_allocation') run.allocations.push(event.receipt);
@@ -99,7 +96,7 @@ try {
       run.status = 'completed';
     } catch (error) {
       if (responseText) run.invalidResponse = responseText;
-      run.failureType ??= error instanceof z.ZodError ? 'schema' : error instanceof SyntaxError ? 'json' : 'execution';
+      run.failureType ??= error instanceof z.ZodError || error instanceof AssertError ? 'schema' : error instanceof SyntaxError ? 'json' : 'execution';
       run.failure = runSignal.aborted ? 'Evaluation cancelled or timed out' : 'Model or review execution failed; no quality result';
       process.exitCode = 1;
     }

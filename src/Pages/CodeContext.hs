@@ -637,9 +637,9 @@ repositoriesPageH pid selection = do
 resourceText :: Usage.ResourceUsage -> Text
 resourceText total =
   "Sandbox allocation: "
-    <> show total.checks
+    <> show total.checks.getSum
     <> " recorded regression executions · "
-    <> show total.allocations
+    <> show total.allocations.getSum
     <> " agent VM allocations · "
     <> seconds total.vcpuMs
     <> " vCPU-s · "
@@ -647,13 +647,13 @@ resourceText total =
     <> " MiB-s · "
     <> whole total.logBytes
     <> " log bytes"
-    <> (if total.explanations == 0 then "" else " · retained explanations: " <> show total.explanations <> " · rendering: " <> seconds total.renderMs <> " s · media: " <> whole total.mediaBytes <> " bytes")
-    <> (if total.cleanupFailures == 0 then "" else " · agent VM cleanup unconfirmed: " <> show total.cleanupFailures)
-    <> (if total.unreportedAllocations == 0 then "" else " · attempts without an agent allocation receipt: " <> show total.unreportedAllocations)
+    <> (if total.explanations == 0 then "" else " · retained explanations: " <> show total.explanations.getSum <> " · rendering: " <> seconds total.renderMs <> " s · media: " <> whole total.mediaBytes <> " bytes")
+    <> (if total.cleanupFailures == 0 then "" else " · agent VM cleanup unconfirmed: " <> show total.cleanupFailures.getSum)
+    <> (if total.unreportedAllocations == 0 then "" else " · attempts without an agent allocation receipt: " <> show total.unreportedAllocations.getSum)
     <> " · resource cost unavailable"
   where
-    seconds value = toText $ showFFloat (Just 3) (realToFrac value / 1000 :: Double) ""
-    whole = toText . formatScientific Fixed (Just 0)
+    seconds (Sum value) = toText $ showFFloat (Just 3) (realToFrac value / 1000 :: Double) ""
+    whole = toText . formatScientific Fixed (Just 0) . getSum
 
 
 usageText :: ImpactReviews.UsageCost -> Text
@@ -661,15 +661,15 @@ usageText total =
   ( if total.calls == 0
       then "No model usage reported"
       else
-        (if total.unpricedCalls == total.calls then "Cost unavailable" else if total.costNanousd > 0 && total.costNanousd < 1000 then "<$0.000001 estimated" else "$" <> toText (showFFloat (Just 6) (realToFrac total.costNanousd / 1e9 :: Double) "") <> " estimated")
+        (if total.unpricedCalls == total.calls then "Cost unavailable" else if total.costNanousd > 0 && total.costNanousd < 1000 then "<$0.000001 estimated" else "$" <> toText (showFFloat (Just 6) (realToFrac total.costNanousd.getSum / 1e9 :: Double) "") <> " estimated")
           <> " · calls: "
-          <> show total.calls
-          <> (if total.failedCalls == 0 then "" else " · " <> show total.failedCalls <> " failed")
-          <> (if total.unpricedCalls == 0 then "" else " · " <> show total.unpricedCalls <> " unpriced (excluded from estimate)")
-          <> (if total.lateAttributedCalls == 0 then "" else " · " <> show total.lateAttributedCalls <> " attributed on receipt (no attempt snapshot)")
+          <> show total.calls.getSum
+          <> (if total.failedCalls == 0 then "" else " · " <> show total.failedCalls.getSum <> " failed")
+          <> (if total.unpricedCalls == 0 then "" else " · " <> show total.unpricedCalls.getSum <> " unpriced (excluded from estimate)")
+          <> (if total.lateAttributedCalls == 0 then "" else " · " <> show total.lateAttributedCalls.getSum <> " attributed on receipt (no attempt snapshot)")
   )
-    <> (if total.unreportedCalls == 0 then "" else " · calls without usage: " <> show total.unreportedCalls <> " (cost unknown)")
-    <> (if total.unreportedAttempts == 0 then "" else " · attempts without model receipts: " <> show total.unreportedAttempts <> " (cost unknown)")
+    <> (if total.unreportedCalls == 0 then "" else " · calls without usage: " <> show total.unreportedCalls.getSum <> " (cost unknown)")
+    <> (if total.unreportedAttempts == 0 then "" else " · attempts without model receipts: " <> show total.unreportedAttempts.getSum <> " (cost unknown)")
 
 
 data ReviewReadiness

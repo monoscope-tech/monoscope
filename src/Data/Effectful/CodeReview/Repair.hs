@@ -6,7 +6,7 @@ import Data.Aeson.Types qualified as AET
 import Data.ByteString qualified as BS
 import Data.Effectful.AgentWorkspace (LogExit (..), agentCommand, publish)
 import Data.Effectful.CodeReview.Artifacts (CapturedCandidate (..), captureCandidate, sha256)
-import Data.Effectful.CodeReview.Guest qualified as Guest
+import Data.Effectful.AgentWorkspace.Guest qualified as Guest
 import Data.Effectful.CodeReview.Types hiding (sha256)
 import Data.Text qualified as T
 import Data.UUID qualified as UUID

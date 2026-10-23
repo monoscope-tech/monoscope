@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Pi session host. Haskell owns the VM, workflow and policy; this process runs the model session, meters it, and
-// forwards Pi's tools to the host. runPi is shared with the research runners, which supply VM-backed tools instead.
+// forwards Pi's tools to the host. runPi is shared with the research runners, which use the same native guest operations.
 import { createHash, randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -13,11 +13,35 @@ import {
   DefaultResourceLoader, loadSkills, ModelRuntime, SessionManager, SettingsManager,
 } from '@earendil-works/pi-coding-agent';
 import { Type } from 'typebox';
+import { Assert } from 'typebox/value';
 import writeFileAtomic from 'write-file-atomic';
 import { z } from 'zod';
 import { jsonLines } from './jsonl.mjs';
 
 export const cwd = '/workspace';
+export const checkoutSchema = z.object({ guest: z.string().nullable(), envelope: z.record(z.string(), z.unknown()).nullable(), directory: z.string().min(1), repositorySkills: z.string().min(1), rootInstructions: z.string(), projectId: z.uuid(), repository: z.string(), base: z.string(), head: z.string(), cacheStatus: z.enum(['hit', 'miss', 'verified']), durationMs: z.number().int().nonnegative(), policy: z.object({ instructions: z.string(), tools: z.array(z.object({ name: z.string(), description: z.string(), parameters: z.record(z.string(), z.unknown()), sequential: z.boolean() }).strict()), builtins: z.array(z.string()) }).strict() }).strict();
+
+export function parseSubmission(checkout, name, draft) {
+  const schema = checkout.policy.tools.find((tool) => tool.name === name)?.parameters;
+  if (!schema) throw new Error(`Host policy does not define ${name}`);
+  Assert(schema, draft);
+  return draft;
+}
+
+// Patch-only controls share execution and validation; each runner supplies its own review contract.
+export async function reviewPatch(diff, { modelRuntime, model, preparedCheckout, submit, systemPrompt, prompt, thinkingLevel, signal, onEvent, validateDraft }) {
+  const patches = diff.split(/(?=^diff --git )/m).filter(Boolean);
+  const bounded = patches.slice(0, 30).map((patch) => patch.slice(0, 2000)).join('\n');
+  onEvent({ type: 'patch_coverage', files: Math.min(30, patches.length), totalFiles: patches.length, characters: bounded.length });
+  const response = await modelRuntime.completeSimple(model, { systemPrompt, messages: [{ role: 'user', content: prompt + bounded, timestamp: Date.now() }] }, { reasoning: thinkingLevel, signal });
+  onEvent({ type: 'model_response', message: response });
+  if (response.stopReason !== 'stop') throw new Error('Review did not complete');
+  const draft = parseSubmission(preparedCheckout, submit, JSON.parse(response.content.filter((block) => block.type === 'text').map((block) => block.text).join('')));
+  const checked = await validateDraft(draft);
+  onEvent({ type: 'source_submission', draft, accepted: Object.hasOwn(checked, 'Right') });
+  if (Object.hasOwn(checked, 'Left')) throw new Error(checked.Left);
+  return draft;
+}
 
 export function modelUsage(message, pricing, attemptId, callId) {
   const usage = message.usage;
@@ -53,7 +77,7 @@ export function bashTool(exec, publish) {
 
 /**
  * Runs one Pi session over `tools` and returns the accepted submission. `workflow` names the submit tool and
- * prepares each candidate; tool contracts come from the host policy unless the workflow supplies its own.
+ * prepares each candidate; tool contracts come from the host policy.
  */
 export async function runPi({ preparedCheckout, request, modelRuntime, attemptId, tools, workflow, skillsDir, root, optionsTool, signal, onEvent }) {
   const modelCalls = new Set();
@@ -82,12 +106,12 @@ export async function runPi({ preparedCheckout, request, modelRuntime, attemptId
       const filePath = skill.filePath.startsWith(repositorySkills + '/') ? cwd + '/' + relative(repositorySkills, skill.filePath) : '/skills/' + relative(skillsDir, skill.filePath);
       return { ...skill, filePath, baseDir: dirname(filePath) };
     });
-    const submission = workflow.schema?.toJSONSchema() ?? preparedCheckout.policy.tools.find((tool) => tool.name === workflow.name)?.parameters;
+    const submission = preparedCheckout.policy.tools.find((tool) => tool.name === workflow.name)?.parameters;
     if (!submission) throw new Error(`Host policy does not define ${workflow.name}`);
-    tools = [...tools, ...(workflow.tools ?? []), {
-      name: workflow.name, label: workflow.label ?? 'Submit review draft', parameters: Type.Unsafe(submission),
+    tools = [...tools, {
+      name: workflow.name, parameters: Type.Unsafe(submission),
       async execute(_id, params, toolSignal) {
-        const reply = await workflow.prepare(workflow.schema ? workflow.schema.parse(params) : params, toolSignal);
+        const reply = await workflow.prepare(parseSubmission(preparedCheckout, workflow.name, params), toolSignal);
         const isError = Object.hasOwn(reply, 'Left');
         if (!isError) submitted = reply.Right;
         return { content: [{ type: 'text', text: isError ? reply.Left : 'Draft accepted. Finish without further tool calls.' }], details: {}, isError };
@@ -103,10 +127,10 @@ export async function runPi({ preparedCheckout, request, modelRuntime, attemptId
         },
       });
     }
-    const sequential = workflow.sequential || preparedCheckout.policy.tools.some((tool) => tool.sequential);
+    const sequential = preparedCheckout.policy.tools.some((tool) => tool.sequential);
     for (const tool of tools) {
       const definition = preparedCheckout.policy.tools.find((item) => item.name === tool.name);
-      if (definition && !workflow.instructions) Object.assign(tool, { label: definition.name, description: definition.description, parameters: Type.Unsafe(definition.parameters) });
+      if (definition) Object.assign(tool, { label: definition.name, description: definition.description, parameters: Type.Unsafe(definition.parameters) });
       if (sequential) tool.executionMode = 'sequential';
     }
     const settingsManager = SettingsManager.inMemory({ retry: { enabled: true, maxRetries: 1 } });
@@ -114,7 +138,7 @@ export async function runPi({ preparedCheckout, request, modelRuntime, attemptId
       cwd: root, agentDir: join(root, 'agent'), settingsManager,
       noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
       skillsOverride: () => ({ skills, diagnostics: loaded.diagnostics }),
-      systemPrompt: workflow.instructions ?? preparedCheckout.policy.instructions,
+      systemPrompt: preparedCheckout.policy.instructions,
     });
     await loader.reload();
     const model = modelRuntime.getModel(request.provider, request.model);
@@ -141,7 +165,7 @@ export async function runPi({ preparedCheckout, request, modelRuntime, attemptId
 }
 
 // Pi's file and shell calls become host Guest operations, run as the review account in the host-owned VM.
-function hostTools(preparedCheckout, root, guestOperation) {
+export function hostTools(preparedCheckout, root, guestOperation) {
   const guest = async (tag, contents) => {
     const reply = await guestOperation({ tag, contents });
     if (Object.hasOwn(reply, 'Left')) throw Object.assign(new Error(reply.Left), tag === 'Access' ? { code: 'ENOENT' } : {});
@@ -211,7 +235,7 @@ async function main() {
     };
     const checkoutReply = await exchange('Checkout', []);
     if (Object.hasOwn(checkoutReply, 'Left')) throw new Error('Host checkout was rejected');
-    const preparedCheckout = z.object({ guest: z.string(), envelope: z.record(z.string(), z.unknown()).nullable(), directory: z.string().min(1), repositorySkills: z.string().min(1), rootInstructions: z.string(), projectId: z.uuid(), repository: z.string(), base: z.string(), head: z.string(), cacheStatus: z.enum(['hit', 'miss', 'verified']), durationMs: z.number().int().nonnegative(), policy: z.object({ instructions: z.string(), tools: z.array(z.object({ name: z.string(), description: z.string(), parameters: z.record(z.string(), z.unknown()), sequential: z.boolean() }).strict()), builtins: z.array(z.string()) }).strict() }).strict().parse(checkoutReply.Right);
+    const preparedCheckout = checkoutSchema.extend({ guest: z.string() }).parse(checkoutReply.Right);
     // Receipts are durable before transmission so a lost host can replay them.
     const persistReceipt = (tag, receipt) => {
       writeFileAtomic.sync(join(outbox, `${receipt.id}.json`), JSON.stringify(tag === 'Usage' ? receipt : { tag, contents: receipt }) + '\n', { mode: 0o600 });

@@ -1,29 +1,27 @@
 module Data.Effectful.GitPublication (GitPublication (..), Request, requestFor, UploadCredential, uploadCredential, Visibility (..), Stage (..), Failure (..), Authorization (..), MediaUrls (..), PullState (..), Receipt (..), PublishedFix, publicationReceipt, publishFix, runGitPublicationReal, runGitPublicationTest) where
 
 import Data.Aeson qualified as AE
-import Data.Char (isAlphaNum, isAscii)
 import Data.Effectful.AgentArtifacts qualified as Artifacts
+import Data.Effectful.AgentWorkspace (mkRepository, pattern GitHub, pattern Local)
 import Data.Effectful.CodeReview qualified as Agent
 import Data.Effectful.CodeReview.Artifacts (ArtifactStore)
 import Data.Effectful.CodeReview.Types (revisionText)
+import Data.Effectful.GitPublication.Native
 import Data.Effectful.GitPublication.Native qualified as Native
-import Data.Effectful.GitPublication.Types
 import Data.Effectful.Wreq qualified as HTTP
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
-import Data.UUID qualified as UUID
 import Effectful
 import Effectful.Dispatch.Dynamic
 import Effectful.TH
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.IssueFixes (CompletedFix, completedFixContents)
-import Network.URI (URI (..), URIAuth (..), parseURI)
 import Pkg.Git qualified as Git
+import Prelude (until)
 import Relude
 import UnliftIO.Exception (tryAny)
 import UnliftIO.Timeout qualified as Timeout
 import "cryptonite" Crypto.Hash (Digest, SHA256, hashlazy)
-import Prelude (until)
 
 
 -- No Generic/FromJSON or exported fields: only an authorized completed DB read
@@ -39,11 +37,11 @@ requestFor :: CompletedFix -> Text -> Visibility -> Text -> Either Failure Reque
 requestFor completed target visibility origin = do
   let (artifacts, explanation) = completedFixContents completed
   unless (not (T.null $ T.strip target) && T.length target <= 200) $ Left InvalidRequest
-  repo <- maybeToRight InvalidRequest $ T.stripPrefix "https://github.com/" artifacts.repository >>= T.stripSuffix ".git"
+  repository <- first (const InvalidRequest) $ mkRepository artifacts.repository
   description <- first (const InvalidRequest) $ Artifacts.publicationDescription artifacts.result explanation origin
-  case T.splitOn "/" repo of
-    [owner, name] | all (\part -> not (T.null part) && T.all (\c -> isAscii c && (isAlphaNum c || c `elem` ['-', '_', '.'])) part) [owner, name] -> pure $ Request artifacts explanation target visibility description repo
-    _ -> Left InvalidRequest
+  case repository of
+    GitHub repo -> pure $ Request artifacts explanation target visibility description repo
+    Local _ -> Left InvalidRequest
 
 
 newtype UploadCredential = UploadCredential Text
@@ -103,17 +101,17 @@ runGitPublicationReal store githubCli = interpret \env -> \case
       unless
         ( all sameRepo [access.fullName, remote.head.repo.fullName, remote.base.repo.fullName]
             && remote.number
-            == receipt.number
+              == receipt.number
             && T.toCaseFold remote.htmlUrl
-            == T.toCaseFold receipt.url
+              == T.toCaseFold receipt.url
             && remote.head.ref
-            == context.branch
+              == context.branch
             && remote.base.ref
-            == target
+              == target
             && remote.state
-            == receipt.state
+              == receipt.state
             && remote.draft
-            == receipt.draft
+              == receipt.draft
             && (remote.state == Open || remote.merged)
         )
         $ hoistEither
@@ -125,10 +123,9 @@ runGitPublicationReal store githubCli = interpret \env -> \case
         )
         $ hoistEither
         $ Left SourceChanged
-      blocks <- forM ([("video", "explanation.mp4", receipt.assets.video), ("diagram", "cause.png", "![Reproduction, inferred cause, and verified fix](" <> receipt.assets.diagram <> ")")] :: [(Text, Text, Text)]) \(kind, file, line) -> do
-        digest <- hoistEither $ maybeToRight InvalidReceipt $ Map.lookup file explanation.files
-        pure $ "<!-- monoscope-fix-media:" <> kind <> ":" <> digest <> " -->\n" <> line
-      unless (T.strip (T.replace "\r\n" "\n" $ fromMaybe "" remote.body) == context.description <> "\n\n" <> T.intercalate "\n\n" blocks) $ hoistEither $ Left InvalidReceipt
+      unless (all (\asset -> Map.member (attachmentFile asset) explanation.files) [Video, Diagram]) $ hoistEither $ Left InvalidReceipt
+      let body = publicationBody context.description explanation.files (Map.fromList [(Video, receipt.assets.video), (Diagram, receipt.assets.diagram)]) Nothing
+      unless (normalizeBody (fromMaybe "" remote.body) == normalizeBody body) $ hoistEither $ Left InvalidReceipt
 
 
 runGitPublicationTest :: (Request -> Either Failure Receipt) -> Eff (GitPublication ': es) a -> Eff es a
@@ -145,7 +142,7 @@ runGitPublicationTest respond = interpret \env -> \case
 contextFor :: Request -> Stage -> Authorization
 contextFor (Request artifacts explanation target visibility description repo) stage =
   let result = artifacts.result
-      cleaned = unlines $ filter (`notElem` (["![](explanation.mp4)", "![Reproduction, inferred cause, and verified fix](cause.png)"] :: [Text])) $ lines $ T.replace "\r\n" "\n" $ T.strip description
+      cleaned = unlines $ filter (`notElem` map attachmentReference [Video, Diagram]) $ lines $ T.replace "\r\n" "\n" $ T.strip description
    in Authorization result.projectId result.runId result.head explanation.source (show (hashlazy (AE.encode $ Map.toAscList explanation.files) :: Digest SHA256)) ("monoscope/fix/" <> result.projectId.toText <> "/" <> result.runId.toText <> "/" <> result.candidateId.toText) target repo visibility (T.strip $ until (not . T.isInfixOf "\n\n\n") (T.replace "\n\n\n" "\n\n") cleaned) stage
 
 
@@ -155,25 +152,13 @@ validReceipt request receipt =
    in receipt.number
         > 0
         && receipt.head
-        == context.head
+          == context.head
         && receipt.source
-        == context.source
+          == context.source
         && receipt.mediaSha256
-        == context.mediaSha256
+          == context.mediaSha256
         && T.toLower receipt.url
-        == T.toLower ("https://github.com/" <> context.repo <> "/pull/" <> show receipt.number)
+          == T.toLower ("https://github.com/" <> context.repo <> "/pull/" <> show receipt.number)
         && receipt.assets.video
-        /= receipt.assets.diagram
-        && all assetUrl [receipt.assets.video, receipt.assets.diagram]
-  where
-    assetUrl value = case parseURI $ toString value of
-      Just uri
-        | uri.uriScheme == "https:"
-        , Just authority <- uri.uriAuthority
-        , authority.uriRegName == "github.com"
-        , null authority.uriUserInfo
-        , null authority.uriPort
-        , null uri.uriQuery
-        , null uri.uriFragment ->
-            isJust $ T.stripPrefix "/user-attachments/assets/" (toText uri.uriPath) >>= UUID.fromText
-      _ -> False
+          /= receipt.assets.diagram
+        && all attachmentUrl [receipt.assets.video, receipt.assets.diagram]

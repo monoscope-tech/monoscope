@@ -6,6 +6,7 @@ import Data.Effectful.Hasql qualified as Hasql
 import Data.Scientific (Scientific)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Effectful (Eff)
+import GHC.Generics (Generically (..))
 import Hasql.Interpolate qualified as HI
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects (ProjectId)
@@ -133,22 +134,16 @@ recordCheck pid target receipt = do
   |]
 
 
-data UsageCost = UsageCost {calls :: Int64, failedCalls :: Int64, unpricedCalls :: Int64, lateAttributedCalls :: Int64, unreportedAttempts :: Int64, unreportedCalls :: Int64, costNanousd :: Scientific}
+data UsageCost = UsageCost {calls :: Sum Int64, failedCalls :: Sum Int64, unpricedCalls :: Sum Int64, lateAttributedCalls :: Sum Int64, unreportedAttempts :: Sum Int64, unreportedCalls :: Sum Int64, costNanousd :: Sum Scientific}
   deriving stock (Generic, Show)
+  deriving (Semigroup) via Generically UsageCost
   deriving (HI.DecodeValue) via HI.CompositeValue UsageCost
 
 
-instance Semigroup UsageCost where
-  a <> b = UsageCost (a.calls + b.calls) (a.failedCalls + b.failedCalls) (a.unpricedCalls + b.unpricedCalls) (a.lateAttributedCalls + b.lateAttributedCalls) (a.unreportedAttempts + b.unreportedAttempts) (a.unreportedCalls + b.unreportedCalls) (a.costNanousd + b.costNanousd)
-
-
-data ResourceUsage = ResourceUsage {checks :: Int64, vcpuMs :: Scientific, memoryMiBMs :: Scientific, logBytes :: Scientific, explanations :: Int64, renderMs :: Scientific, mediaBytes :: Scientific, allocations :: Int64, cleanupFailures :: Int64, unreportedAllocations :: Int64}
+data ResourceUsage = ResourceUsage {checks :: Sum Int64, vcpuMs :: Sum Scientific, memoryMiBMs :: Sum Scientific, logBytes :: Sum Scientific, explanations :: Sum Int64, renderMs :: Sum Scientific, mediaBytes :: Sum Scientific, allocations :: Sum Int64, cleanupFailures :: Sum Int64, unreportedAllocations :: Sum Int64}
   deriving stock (Generic, Show)
+  deriving (Semigroup) via Generically ResourceUsage
   deriving (HI.DecodeValue) via HI.CompositeValue ResourceUsage
-
-
-instance Semigroup ResourceUsage where
-  a <> b = ResourceUsage (a.checks + b.checks) (a.vcpuMs + b.vcpuMs) (a.memoryMiBMs + b.memoryMiBMs) (a.logBytes + b.logBytes) (a.explanations + b.explanations) (a.renderMs + b.renderMs) (a.mediaBytes + b.mediaBytes) (a.allocations + b.allocations) (a.cleanupFailures + b.cleanupFailures) (a.unreportedAllocations + b.unreportedAllocations)
 
 
 data UsageTotals kind = UsageTotals {runId :: Maybe (UUIDId kind), usage :: UsageCost, resources :: ResourceUsage}

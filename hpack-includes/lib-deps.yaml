@@ -26,6 +26,7 @@
 - attoparsec-aeson
 - async
 - barbies
+- bifunctors
 - binary-parser
 - bytestring
 - base64

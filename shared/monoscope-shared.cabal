@@ -77,6 +77,7 @@ library
     Models.Telemetry.Schema
     Pages.Charts.Types
     Data.Effectful.AgentWorkspace
+    Data.Effectful.AgentWorkspace.Guest
     Pkg.CLIFormat
     Pkg.Deriving
     Pkg.Parser.Eval
@@ -97,6 +98,7 @@ library
     , typed-process
     , unix
     , bytestring
+    , base64
     , case-insensitive
     , containers
     , data-default

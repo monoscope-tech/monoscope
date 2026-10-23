@@ -1,17 +1,20 @@
-module Data.Effectful.CodeReview (CodeReview (..), Request (..), FixRequest (..), TestArtifact (..), AdmissionRequest (..), AdmissionDecision (..), PhaseReceipt (..), FixResult (..), ArtifactRequest (..), ArtifactStore (..), FixReviewRequest (..), FixReviewDecision (..), ReviewedFix, reviewedFixResult, reviewedFixApproval, FixReviewOutcome (..), VerifiedFix, verifiedFixResult, ExplainedFix, explainedFixResult, fixExplanation, Explanation (..), PricingStatus (..), ThinkingLevel (..), TelemetryQuery (..), KnowledgeNote (..), KnowledgeRequest (..), ModelUsage (..), ModelCall (..), AllocationReceipt, allocationId, allocationAttempt, Regression (..), CheckReceipt (..), CheckStatus (..), RevisionSide (..), reviewRepository, fixRepository, admitRegression, verifyFixArtifacts, reviewVerifiedFix, explainVerifiedFix, runCodeReviewReal, runCodeReviewTest, validExplanation, workerHost) where
+module Data.Effectful.CodeReview (CodeReview (..), Receipt (..), meteringReceipt, Request (..), FixRequest (..), TestArtifact (..), AdmissionRequest (..), AdmissionDecision (..), PhaseReceipt (..), FixResult (..), ArtifactRequest (..), ArtifactStore (..), FixReviewRequest (..), FixReviewDecision (..), ReviewedFix, reviewedFixResult, reviewedFixApproval, FixReviewOutcome (..), VerifiedFix, verifiedFixResult, ExplainedFix, explainedFixResult, fixExplanation, Explanation (..), PricingStatus (..), ThinkingLevel (..), TelemetryQuery (..), KnowledgeNote (..), KnowledgeRequest (..), ModelUsage (..), ModelCall (..), AllocationReceipt, allocationId, allocationAttempt, Regression (..), CheckReceipt (..), CheckStatus (..), RevisionSide (..), reviewRepository, fixRepository, admitRegression, verifyFixArtifacts, reviewVerifiedFix, explainVerifiedFix, runCodeReviewReal, runCodeReviewWith, runCodeReviewTest, validExplanation, workerHost) where
 
 import Control.Concurrent.STM qualified as STM
+import Control.Monad (foldM)
 import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Types qualified as AET
+import Data.Bifunctor.TH (deriveBifoldable, deriveBifunctor, deriveBitraversable)
 import Data.ByteString.Char8 qualified as BS
 import Data.ByteString.Lazy qualified as LBS
+import Data.Effectful.AgentWorkspace (publish, sync)
 import Data.Effectful.AgentWorkspace qualified as Workspace
-import Data.Effectful.CodeReview.Artifacts (ArtifactStore (..))
+import Data.Effectful.AgentWorkspace.Guest qualified as Guest
+import Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), readPrivateArtifact)
+import Data.Effectful.CodeReview.Artifacts qualified as Media
 import Data.Effectful.CodeReview.Artifacts qualified as Native
 import Data.Effectful.CodeReview.Checkout qualified as Checkout
-import Data.Effectful.CodeReview.Explanation qualified as Media
-import Data.Effectful.CodeReview.Guest qualified as Guest
-import Data.Effectful.CodeReview.Outbox qualified as Outbox
 import Data.Effectful.CodeReview.Policy qualified as Policy
 import Data.Effectful.CodeReview.Repair qualified as Repair
 import Data.Effectful.CodeReview.Types
@@ -24,17 +27,20 @@ import Effectful.TH
 import Models.Projects.ProjectMemory qualified as Memory
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude
+import System.Directory (canonicalizePath, createDirectoryIfMissing, listDirectory, removeFile)
 import System.Environment (getEnvironment)
-import System.FilePath (takeDirectory, (</>))
+import System.FileLock (SharedExclusive (..), withFileLock)
+import System.FilePath (takeDirectory, takeExtension, (</>))
 import System.IO (hClose)
-import System.IO.Error (isEOFError)
-import System.Process.Typed (ExitCode (..), createPipe, getStdin, getStdout, nullStream, proc, setEnv, setStderr, setStdin, setStdout, stopProcess, waitExitCode, waitExitCodeSTM, withProcessTerm)
+import System.IO.Error (isEOFError, userError)
+import System.Posix.Files qualified as Posix
+import System.Process.Typed (ExitCode (..), ProcessConfig, createPipe, getStdin, getStdout, nullStream, proc, setEnv, setStderr, setStdin, setStdout, stopProcess, waitExitCode, waitExitCodeSTM, withProcessTerm)
 import UnliftIO.Exception (finally, throwIO, tryAny, tryJust)
 import UnliftIO.Timeout qualified as Timeout
 
 
 -- JSON-lines protocol: queries, usage, execution receipts, validation, and result.
-data Message = Checkout () | Tool Policy.Invocation | Query TelemetryQuery | Knowledge KnowledgeRequest | Admit TestArtifact | Guest Guest.Operation | Validate AE.Value | Result AE.Value
+data Message = Checkout () | Tool Policy.Invocation | Guest Guest.Operation | Validate AE.Value | Result AE.Value
   deriving stock (Generic)
   deriving anyclass (AE.FromJSON)
 
@@ -73,13 +79,30 @@ fixExplanation :: ExplainedFix -> Explanation
 fixExplanation (ExplainedFix _ explanation) = explanation
 
 
+data Receipt check phase = Call ModelCall | Usage ModelUsage | Allocation AllocationReceipt | Check check | Phase phase
+  deriving stock (Foldable, Functor, Generic, Traversable)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+deriveBifunctor ''Receipt
+deriveBifoldable ''Receipt
+deriveBitraversable ''Receipt
+
+
+meteringReceipt :: Receipt Void Void -> Receipt check phase
+meteringReceipt = bimap absurd absurd
+
+
+type WireReceipt = Receipt CheckReceipt PhaseReceipt
+
+
 data CodeReview :: Effect where
   ExplainVerifiedFix :: ArtifactStore -> ArtifactRequest -> VerifiedFix -> CodeReview m (Either Text ExplainedFix)
   VerifyFixArtifacts :: ArtifactStore -> ArtifactRequest -> CodeReview m (Either Text VerifiedFix)
-  ReviewVerifiedFix :: FixReviewRequest -> VerifiedFix -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> CodeReview m (Either Text FixReviewOutcome)
-  ReviewRepository :: Request "pr_review" -> (TelemetryQuery -> m (Either Text AE.Value)) -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> (CheckReceipt -> m ()) -> (AE.Value -> m (Either Text ())) -> CodeReview m (Either Text Text)
-  AdmitRegression :: AdmissionRequest -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> CodeReview m (Either Text AdmissionDecision)
-  FixRepository :: FixRequest -> (TelemetryQuery -> m (Either Text AE.Value)) -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (TestArtifact -> m (Either Text Text)) -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> (CheckReceipt -> m ()) -> (PhaseReceipt -> m (Either Text ())) -> (FixResult -> m (Either Text ReviewedFix)) -> CodeReview m (Either Text ReviewedFix)
+  ReviewVerifiedFix :: FixReviewRequest -> VerifiedFix -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (Receipt Void Void -> m (Either Text ())) -> CodeReview m (Either Text FixReviewOutcome)
+  ReviewRepository :: Request "pr_review" -> (TelemetryQuery -> m (Either Text AE.Value)) -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (Receipt CheckReceipt Void -> m (Either Text ())) -> (AE.Value -> m (Either Text ())) -> CodeReview m (Either Text Text)
+  AdmitRegression :: AdmissionRequest -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (Receipt Void Void -> m (Either Text ())) -> CodeReview m (Either Text AdmissionDecision)
+  FixRepository :: FixRequest -> (TelemetryQuery -> m (Either Text AE.Value)) -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (TestArtifact -> m (Either Text Text)) -> (WireReceipt -> m (Either Text ())) -> (FixResult -> m (Either Text ReviewedFix)) -> CodeReview m (Either Text ReviewedFix)
 
 
 type instance DispatchOf CodeReview = 'Dynamic
@@ -106,18 +129,18 @@ data Callbacks result = Callbacks
   { respond :: TelemetryQuery -> IO (Either Text AE.Value)
   , knowledge :: KnowledgeRequest -> IO (Either Text AE.Value)
   , admit :: TestArtifact -> IO (Either Text Text)
-  , calls :: ModelCall -> IO ()
-  , usage :: ModelUsage -> IO ()
-  , allocations :: AllocationReceipt -> IO ()
-  , checks :: Maybe (CheckReceipt -> IO ())
-  , phase :: PhaseReceipt -> IO (Either Text ())
+  , record :: WireReceipt -> IO (Either Text ())
   , validate :: AE.Value -> IO (Either Text result)
   }
 
 
 runCodeReviewReal :: IOE :> es => Maybe ArtifactStore -> Maybe Guest.Host -> Maybe FilePath -> [FilePath] -> Eff (CodeReview ': es) a -> Eff es a
-runCodeReviewReal artifactStore host executable skills = interpret \env -> \case
-  ReviewRepository request respond knowledge recordCall recordUsage recordAllocation recordCheck check -> localSeqUnliftIO env \unlift ->
+runCodeReviewReal artifactStore host executable skills = runCodeReviewWith artifactStore host ((\command environment -> setEnv environment $ setStderr nullStream $ proc command skills) <$> executable)
+
+
+runCodeReviewWith :: IOE :> es => Maybe ArtifactStore -> Maybe Guest.Host -> Maybe ([(String, String)] -> ProcessConfig () () ()) -> Eff (CodeReview ': es) a -> Eff es a
+runCodeReviewWith artifactStore host executable = interpret \env -> \case
+  ReviewRepository request respond knowledge record check -> localSeqUnliftIO env \unlift ->
     liftIO
       $ launch
         (AdvisoryTask request)
@@ -125,14 +148,10 @@ runCodeReviewReal artifactStore host executable skills = interpret \env -> \case
           { respond = unlift . respond
           , knowledge = unlift . knowledge
           , admit = const $ pure $ Left "Test admission requires an issue-fix task"
-          , calls = unlift . recordCall
-          , usage = unlift . recordUsage
-          , allocations = unlift . recordAllocation
-          , checks = Just $ unlift . recordCheck
-          , phase = const $ pure $ Left "Fix phases require an issue-fix task"
+          , record = either (pure . Left) (unlift . record) . bitraverse Right (const $ Left "Fix phases require an issue-fix task")
           , validate = \value -> (decodeUtf8 (AE.encode value) <$) <$> unlift (check value)
           }
-  FixRepository request respond knowledge admit recordCall recordUsage recordAllocation recordCheck recordPhase check -> localSeqUnliftIO env \unlift ->
+  FixRepository request respond knowledge admit record check -> localSeqUnliftIO env \unlift ->
     liftIO
       $ launch
         (FixTask request)
@@ -140,16 +159,12 @@ runCodeReviewReal artifactStore host executable skills = interpret \env -> \case
           { respond = unlift . respond
           , knowledge = unlift . knowledge
           , admit = unlift . admit
-          , calls = unlift . recordCall
-          , usage = unlift . recordUsage
-          , allocations = unlift . recordAllocation
-          , checks = Just $ unlift . recordCheck
-          , phase = unlift . recordPhase
+          , record = unlift . record
           , validate = \value -> case AE.fromJSON @FixResult value of
               AE.Error _ -> pure $ Left "Fix result does not match the required schema"
               AE.Success result -> (>>= matchingReview result) <$> unlift (check result)
           }
-  AdmitRegression request knowledge recordCall recordUsage recordAllocation -> localSeqUnliftIO env \unlift ->
+  AdmitRegression request knowledge record -> localSeqUnliftIO env \unlift ->
     liftIO
       $ launch
         (AdmissionTask request)
@@ -157,11 +172,7 @@ runCodeReviewReal artifactStore host executable skills = interpret \env -> \case
           { respond = const $ pure $ Left "Admission has no production query capability"
           , knowledge = unlift . knowledge
           , admit = const $ pure $ Left "Admission cannot recursively admit a test"
-          , calls = unlift . recordCall
-          , usage = unlift . recordUsage
-          , allocations = unlift . recordAllocation
-          , checks = Nothing
-          , phase = const $ pure $ Left "Admission cannot advance a fix phase"
+          , record = either (pure . Left) (unlift . record) . bitraverse (const $ Left "This task cannot record regression executions") (const $ Left "Admission cannot advance a fix phase")
           , validate = \value -> pure $ case AE.fromJSON @AdmissionResult value of
               AE.Success result
                 | result.artifact == request.artifact
@@ -170,7 +181,7 @@ runCodeReviewReal artifactStore host executable skills = interpret \env -> \case
                     Right result.decision
               _ -> Left "Admission result must bind the exact test artifact and a nonempty rationale"
           }
-  ReviewVerifiedFix request verified knowledge recordCall recordUsage recordAllocation -> localSeqUnliftIO env \unlift ->
+  ReviewVerifiedFix request verified knowledge record -> localSeqUnliftIO env \unlift ->
     if not (validReviewContext request verified)
       then pure $ Left "Peer review requires the same verified candidate and a distinct attempt"
       else
@@ -181,11 +192,7 @@ runCodeReviewReal artifactStore host executable skills = interpret \env -> \case
               { respond = const $ pure $ Left "Peer review has no production query capability"
               , knowledge = unlift . knowledge
               , admit = const $ pure $ Left "Peer review cannot admit tests"
-              , calls = unlift . recordCall
-              , usage = unlift . recordUsage
-              , allocations = unlift . recordAllocation
-              , checks = Nothing
-              , phase = const $ pure $ Left "Peer review cannot advance fix phases"
+              , record = either (pure . Left) (unlift . record) . bitraverse (const $ Left "This task cannot record regression executions") (const $ Left "Peer review cannot advance fix phases")
               , validate = \value -> pure $ case AE.fromJSON @FixReviewResult value of
                   AE.Success response | response.result == request.artifacts.result -> reviewOutcome request verified response.decision
                   _ -> Left "Peer review must bind the exact verified candidate"
@@ -203,11 +210,11 @@ runCodeReviewReal artifactStore host executable skills = interpret \env -> \case
       Just command -> do
         verifierSession <- UUID4.nextRandom
         let (scope, source, payload) = case task of
-              AdvisoryTask request -> (Outbox.Advisory request.runId, Checkout.Repository request, AE.toJSON request{gitToken = ""})
-              FixTask request -> (Outbox.IssueFix request.request.runId, Checkout.Repository request.request{head = request.request.base}, AE.object ["tag" AE..= ("FixTask" :: Text), "contents" AE..= request{request = request.request{gitToken = ""}}])
-              AdmissionTask request -> (Outbox.Admission request.fix.request.runId, Checkout.Repository request.fix.request{head = request.fix.request.base}, AE.object ["tag" AE..= ("AdmitTask" :: Text), "contents" AE..= (request{fix = request.fix{request = request.fix.request{gitToken = ""}}} :: AdmissionRequest)])
-              PeerTask request -> (Outbox.PeerReview request.fix.request.runId, Checkout.VerifiedCandidate request.artifacts, AE.object ["tag" AE..= ("ReviewFixTask" :: Text), "contents" AE..= (request{fix = request.fix{request = request.fix.request{gitToken = ""}}} :: FixReviewRequest)])
-            role = case scope of Outbox.Advisory _ -> Policy.Advisory; Outbox.IssueFix _ -> Policy.Fix; Outbox.Admission _ -> Policy.Admission; Outbox.PeerReview _ -> Policy.Peer
+              AdvisoryTask request -> (Advisory request.runId, Checkout.Repository request, AE.toJSON request{gitToken = ""})
+              FixTask request -> (IssueFix request.request.runId, Checkout.Repository request.request{head = request.request.base}, AE.object ["tag" AE..= ("FixTask" :: Text), "contents" AE..= request{request = request.request{gitToken = ""}}])
+              AdmissionTask request -> (Admission request.fix.request.runId, Checkout.Repository request.fix.request{head = request.fix.request.base}, AE.object ["tag" AE..= ("AdmitTask" :: Text), "contents" AE..= (request{fix = request.fix{request = request.fix.request{gitToken = ""}}} :: AdmissionRequest)])
+              PeerTask request -> (PeerReview request.fix.request.runId, Checkout.VerifiedCandidate request.artifacts, AE.object ["tag" AE..= ("ReviewFixTask" :: Text), "contents" AE..= (request{fix = request.fix{request = request.fix.request{gitToken = ""}}} :: FixReviewRequest)])
+            role = case scope of Advisory _ -> Policy.Advisory; IssueFix _ -> Policy.Fix; Admission _ -> Policy.Admission; PeerReview _ -> Policy.Peer
             owned =
               host <&> \configured ->
                 let
@@ -215,7 +222,7 @@ runCodeReviewReal artifactStore host executable skills = interpret \env -> \case
                   own :: Request run -> Maybe (UUIDId "guest_image") -> (Map Text ByteString -> Guest.Setup) -> Maybe Checkout.Envelope -> Ownership
                   own request pinned setup envelope = Ownership configured request.attemptId pinned setup envelope do
                     store <- artifactStore
-                    Guest.Lease store.cacheDir <$> AET.parseMaybe AE.parseJSON (AE.object ["projectId" AE..= request.projectId, "repository" AE..= request.repository, "base" AE..= request.base, "expectedImageBuildId" AE..= pinned])
+                    Guest.Lease store.cacheDir <$> rightToMaybe (Workspace.mkRequest request.projectId request.repository request.base pinned)
                  in
                   case task of
                     AdvisoryTask request -> own request Nothing (const Guest.Explore) Nothing
@@ -225,41 +232,35 @@ runCodeReviewReal artifactStore host executable skills = interpret \env -> \case
             honours invocation = invocation.name `elem` Policy.toolsForRole role && null (Schema.validateJSON mempty (Policy.toolSchema invocation.name) invocation.arguments)
             -- Fresh verifier VMs replay a frozen artifact. Their receipts are already journaled beside the outbox;
             -- each is acknowledged, then @observe@d (a fix also records it as a phase). Errors carry the report.
-            replayFrozen :: Guest.Session -> Outbox.Outbox -> Request run -> AE.Value -> [(Text, Text)] -> (CheckReceipt -> IO ()) -> IO (Either Text (AE.Value, [CheckReceipt]))
+            replayFrozen :: Guest.Session -> Outbox -> Request run -> AE.Value -> [(Text, Text)] -> (CheckReceipt -> IO ()) -> IO (Either Text (AE.Value, [CheckReceipt]))
             replayFrozen session outbox pinned artifact revisions observe = do
-              let options = session.verifier (Outbox.outboxPath outbox </> "checks")
-              case AE.fromJSON @Workspace.RegressionRequest $ AE.object ["projectId" AE..= pinned.projectId, "runId" AE..= pinned.runId, "attemptId" AE..= pinned.attemptId, "sessionId" AE..= verifierSession, "base" AE..= pinned.base, "imageBuildId" AE..= session.imageBuildId, "workspace" AE..= session.baseline, "artifact" AE..= artifact, "revisions" AE..= revisions] of
-                AE.Error _ -> pure $ Left "Regression arguments do not match the host contract"
-                AE.Success regression ->
+              let options = session.verifier ((.path) outbox </> "checks")
+              case Workspace.mkRegressionRequest pinned.projectId pinned.runId pinned.attemptId verifierSession pinned.base session.imageBuildId session.baseline artifact revisions of
+                Left _ -> pure $ Left "Regression arguments do not match the host contract"
+                Right regression ->
                   tryAny (Workspace.verifyRegression options regression) >>= \case
                     Left failure -> pure $ Left $ maybe "Local check could not run" Workspace.regressionErrorText $ fromException failure
                     Right result -> do
-                      checks <- forM result.receipts \receipt -> case AE.fromJSON (AE.toJSON receipt) of
-                        AE.Success check -> (Outbox.acknowledge outbox (Outbox.Check check) record >>= orThrow) >> observe check $> check
-                        AE.Error _ -> throwIO $ ReceiptRefused "Regression receipt does not match the host contract"
+                      let checks = result.receipts
+                      for_ checks $ \check -> (acknowledgeReceipt outbox (Check check) record >>= orThrow) >> observe check
                       traverse_ (uncurry session.copyIn) $ Workspace.regressionLogs options result
                       pure $ if result.isError then Left (decodeUtf8 $ AE.encode result.report) else Right (AE.toJSON result.report, checks)
             -- A rejected phase ends the run, as an unacknowledged receipt did in the child.
-            persistPhase outbox attempt step = UUID4.nextRandom >>= \identifier -> settle outbox (Outbox.Phase $ PhaseReceipt (UUIDId identifier) attempt step) >>= orThrow
+            persistPhase outbox attempt step = UUID4.nextRandom >>= \identifier -> settle outbox (Phase $ PhaseReceipt (UUIDId identifier) attempt step) >>= orThrow
             orThrow = either (throwIO . ReceiptRefused) pure
-            settle outbox receipt = Outbox.journal outbox receipt >> Outbox.acknowledge outbox receipt record
-            record = \case
-              Outbox.Call receipt -> callbacks.calls receipt $> Right ()
-              Outbox.Usage receipt -> callbacks.usage receipt $> Right ()
-              Outbox.Allocation receipt -> callbacks.allocations receipt $> Right ()
-              Outbox.Check receipt -> maybe (pure $ Left "This task cannot record regression executions") (\save -> save receipt $> Right ()) callbacks.checks
-              Outbox.Phase receipt -> callbacks.phase receipt
-            withJournal action = maybe (action Nothing) (\configured -> Outbox.withOutbox configured scope $ action . Just) artifactStore
-            allocate journal receipt = maybe record settle journal $ Outbox.Allocation receipt
+            settle outbox receipt = journalReceipt outbox receipt >> acknowledgeReceipt outbox receipt record
+            record = callbacks.record
+            withJournal action = maybe (action Nothing) (\configured -> withOutbox configured scope $ action . Just) artifactStore
+            allocate journal receipt = maybe record settle journal $ Allocation receipt
         -- Replay persisted work before starting a child, fetching source or calling a model.
         outcome <- tryAny $ Timeout.timeout (480 * 1000000) $ withJournal \journal -> do
-          recovered <- maybe (pure $ Right ()) (`Outbox.replay` record) journal
+          recovered <- maybe (pure $ Right ()) (`replayReceipts` record) journal
           case recovered of
             Left message -> pure $ Left message
             Right () -> do
               environment <- getEnvironment
-              let childEnvironment = maybe environment (\outbox -> ("IMPACT_REVIEW_OUTBOX_DIR", Outbox.outboxPath outbox) : filter ((/= "IMPACT_REVIEW_OUTBOX_DIR") . fst) environment) journal
-              withProcessTerm (setEnv childEnvironment $ setStdin createPipe $ setStdout createPipe $ setStderr nullStream $ proc command skills) \process -> do
+              let childEnvironment = maybe environment (\outbox -> ("IMPACT_REVIEW_OUTBOX_DIR", (.path) outbox) : filter ((/= "IMPACT_REVIEW_OUTBOX_DIR") . fst) environment) journal
+              withProcessTerm (setStdin createPipe $ setStdout createPipe $ command childEnvironment) \process -> do
                 guest <- newIORef Nothing
                 repairing <- newIORef Nothing
                 let stop =
@@ -272,19 +273,19 @@ runCodeReviewReal artifactStore host executable skills = interpret \env -> \case
                         `finally` stopProcess process
                     writeMessage :: AE.ToJSON value => value -> IO ()
                     writeMessage value = LBS.hPut (getStdin process) (AE.encode value <> "\n") >> hFlush (getStdin process)
-                    parseMessage :: AE.Value -> AET.Parser (Either Outbox.Receipt Message)
+                    parseMessage :: AE.Value -> AET.Parser (Either WireReceipt Message)
                     parseMessage value = (Left <$> AE.parseJSON value) <|> (Right <$> AE.parseJSON value)
                     receive supplied remaining submissions accepted = do
                       line <- tryJust (guard . isEOFError) $ BS.hGetLine (getStdout process)
                       case either (const $ Left "Review agent exited before completing the protocol") (first (const "Review agent returned an invalid protocol message") . (AE.eitherDecodeStrict >=> AET.parseEither parseMessage)) line of
                         Left failure -> pure $ Left failure
                         Right (Left receipt) -> do
-                          let phase = case receipt of Outbox.Phase _ -> True; _ -> False
-                              invalidates = case receipt of Outbox.Check _ -> True; Outbox.Phase _ -> True; _ -> False
+                          let phase = case receipt of Phase _ -> True; _ -> False
+                              invalidates = case receipt of Check _ -> True; Phase _ -> True; _ -> False
                           if phase && remaining <= 0
                             then pure $ Left "Review agent exceeded its query budget"
                             else do
-                              saved <- maybe (record receipt) (\outbox -> Outbox.acknowledge outbox receipt record) journal
+                              saved <- maybe (record receipt) (\outbox -> acknowledgeReceipt outbox receipt record) journal
                               writeMessage saved
                               case saved of
                                 Left failure | not phase -> pure $ Left failure
@@ -297,20 +298,20 @@ runCodeReviewReal artifactStore host executable skills = interpret \env -> \case
                               case owned of
                                 Nothing -> deliver checkout
                                 Just ownership ->
-                                  join <$> Guest.withGuest ownership.host ownership.image checkout.directory checkout.head (ownership.setup evidence) ownership.lease ownership.attempt (void . allocate journal) (\receipt -> for_ journal (`Outbox.journal` Outbox.Allocation receipt)) \session ->
+                                  join <$> Guest.withGuest ownership.host ownership.image checkout.directory checkout.head (ownership.setup evidence) ownership.lease ownership.attempt (allocate journal >=> orThrow) (\receipt -> for_ journal (`journalReceipt` Allocation receipt)) \session ->
                                     do
                                       writeIORef guest (Just session)
                                       case (task, journal) of
                                         (FixTask job, Just outbox) -> do
                                           stage <- newIORef Nothing
                                           persistPhase outbox job.request.attemptId RestartReproduction
-                                          writeIORef repairing $ Just $ Repair.Repair session job checkout.directory (Outbox.outboxPath outbox </> "checks") callbacks.admit (persistPhase outbox job.request.attemptId) (\artifact revisions -> replayFrozen session outbox job.request (AE.toJSON artifact) revisions (persistPhase outbox job.request.attemptId . Observe)) stage
+                                          writeIORef repairing $ Just $ Repair.Repair session job checkout.directory ((.path) outbox </> "checks") callbacks.admit (persistPhase outbox job.request.attemptId) (\artifact revisions -> replayFrozen session outbox job.request (AE.toJSON artifact) revisions (persistPhase outbox job.request.attemptId . Observe)) stage
                                         _ -> pass
                                       deliver checkout{Checkout.guest = Just session.skills, Checkout.envelope = ownership.envelope}
                             pure $ join prepared
                           _ -> pure $ Left "Repository checkout was unavailable or already supplied"
                         Right (Right (Tool invocation))
-                          | isNothing supplied -> pure $ Left "Tool invocation requires its repository checkout"
+                          | isNothing supplied && isJust artifactStore -> pure $ Left "Tool invocation requires its repository checkout"
                           | invocation.name == Policy.RunRegression -> do
                               session <- readIORef guest
                               response <- case (session, journal, task) of
@@ -347,15 +348,6 @@ runCodeReviewReal artifactStore host executable skills = interpret \env -> \case
                               writeMessage response
                               receive supplied (remaining - 1) submissions Nothing
                           | otherwise -> pure $ Left "Review agent exceeded its query budget"
-                        Right (Right (Query query))
-                          | remaining > 0 -> callbacks.respond query >>= writeMessage >> receive supplied (remaining - 1) submissions Nothing
-                          | otherwise -> pure $ Left "Review agent exceeded its query budget"
-                        Right (Right (Knowledge requestKnowledge))
-                          | remaining > 0 -> callbacks.knowledge requestKnowledge >>= writeMessage >> receive supplied (remaining - 1) submissions Nothing
-                          | otherwise -> pure $ Left "Review agent exceeded its query budget"
-                        Right (Right (Admit artifact))
-                          | remaining > 0 -> callbacks.admit artifact >>= writeMessage >> receive supplied (remaining - 1) submissions Nothing
-                          | otherwise -> pure $ Left "Review agent exceeded its query budget"
                         Right (Right (Guest operation)) ->
                           readIORef guest >>= \case
                             -- Pi's own file and shell calls neither spend the request budget nor keep an accepted draft.
@@ -391,12 +383,12 @@ workerHost skills script archive image agent = Guest.Host image (takeDirectory a
 
 runCodeReviewTest :: IOE :> es => (Request "pr_review" -> Either Text Text) -> (FixRequest -> Either Text FixResult) -> (AdmissionRequest -> Either Text AdmissionDecision) -> (ArtifactRequest -> Either Text ()) -> (ArtifactRequest -> Either Text Explanation) -> (FixReviewRequest -> Either Text FixReviewDecision) -> Eff (CodeReview ': es) a -> Eff es a
 runCodeReviewTest respond respondFix respondAdmission respondArtifacts respondExplanation respondReview = interpret \env -> \case
-  ReviewRepository request _ _ _ _ _ _ _ -> pure $ respond request
-  FixRepository request _ _ _ _ _ _ _ _ check -> case respondFix request of
+  ReviewRepository request _ _ _ _ -> pure $ respond request
+  FixRepository request _ _ _ _ check -> case respondFix request of
     Left message -> pure $ Left message
     Right result -> localSeqUnliftIO env $ \unlift -> (>>= matchingReview result) <$> unlift (check result)
-  AdmitRegression request _ _ _ _ -> pure $ respondAdmission request
-  ReviewVerifiedFix request verified _ _ _ _ -> pure $ respondReview request >>= reviewOutcome request verified
+  AdmitRegression request _ _ -> pure $ respondAdmission request
+  ReviewVerifiedFix request verified _ _ -> pure $ respondReview request >>= reviewOutcome request verified
   VerifyFixArtifacts _ request -> pure $ VerifiedFix request.result <$ respondArtifacts request
   ExplainVerifiedFix _ request (VerifiedFix result) -> pure do
     unless (request.result == result) $ Left "Explanation requires the same verified candidate"
@@ -416,9 +408,9 @@ validReviewContext request verified =
    in result
         == verifiedFixResult verified
         && (context.projectId, context.runId, request.fix.issueId, context.base, context.repository, request.fix.imageBuildId.toText)
-        == (result.projectId, result.runId, result.issueId, revisionText result.base, request.artifacts.repository, request.artifacts.baseline.imageBuildId)
+          == (result.projectId, result.runId, result.issueId, revisionText result.base, request.artifacts.repository, request.artifacts.baseline.imageBuildId)
         && context.attemptId
-        /= result.attemptId
+          /= result.attemptId
 
 
 reviewOutcome :: FixReviewRequest -> VerifiedFix -> FixReviewDecision -> Either Text FixReviewOutcome
@@ -431,3 +423,91 @@ reviewOutcome request verified decision = do
     ReviewApproved _ -> Left "Peer review approval requires a bounded rationale"
     ReviewChanges values -> concerns ChangesNeeded values
     ReviewBlocked values -> concerns ReviewUnavailable values
+
+
+data Scope = Advisory (UUIDId "pr_review") | IssueFix (UUIDId "issue_fix") | Admission (UUIDId "issue_fix") | PeerReview (UUIDId "issue_fix")
+
+
+data Outbox = Outbox {path :: FilePath, scope :: Scope}
+
+
+withOutbox :: ArtifactStore -> Scope -> (Outbox -> IO a) -> IO a
+withOutbox store scope action = do
+  root <- canonicalizePath store.usageDir
+  let parts = case scope of
+        Advisory run -> [toString run.toText]
+        IssueFix run -> ["fixes", toString run.toText]
+        Admission run -> ["admissions", toString run.toText]
+        PeerReview run -> ["fix-reviews", toString run.toText]
+  directory <-
+    foldM
+      ( \parent part -> do
+          let child = parent </> part
+          createDirectoryIfMissing False child
+          canonicalizePath child >>= receiptInvariant . (== child)
+          Posix.setFileMode child 0o700
+          sync parent
+          pure child
+      )
+      root
+      parts
+  withFileLock (directory </> ".native.lock") Exclusive $ const $ action $ Outbox directory scope
+
+
+-- Decode the whole run before any callback; malformed entries stay available for repair.
+replayReceipts :: Outbox -> (WireReceipt -> IO (Either Text ())) -> IO (Either Text ())
+replayReceipts outbox record = do
+  files <- filter ((== ".json") . takeExtension) <$> listDirectory outbox.path
+  receipts <- traverse (readReceipt outbox) files
+  runExceptT $ traverse_ (\receipt -> ExceptT $ acknowledgeReceipt outbox receipt record) $ sortOn (\receipt -> (rank receipt, receiptId receipt)) receipts
+  where
+    rank = \case Call _ -> 0 :: Int; Phase _ -> 2; _ -> 1
+
+
+-- Host-measured receipts take the same durable path as SDK ones.
+journalReceipt :: Outbox -> WireReceipt -> IO ()
+journalReceipt outbox receipt = publish (outbox.path </> toString (receiptId receipt) <> ".json") receipt
+
+
+-- The SDK journals before transmission; the database must accept before unlink/ACK.
+acknowledgeReceipt :: Outbox -> WireReceipt -> (WireReceipt -> IO (Either Text ())) -> IO (Either Text ())
+acknowledgeReceipt outbox receipt record = do
+  let filename = toString (receiptId receipt) <> ".json"
+  stored <- readReceipt outbox filename
+  receiptInvariant $ AE.toJSON stored == AE.toJSON receipt
+  result <- record receipt
+  for_ result $ \() -> removeFile (outbox.path </> filename) >> sync outbox.path
+  pure result
+
+
+readReceipt :: Outbox -> FilePath -> IO WireReceipt
+readReceipt outbox filename = do
+  receipt <- either (const invalidReceipt) pure . (AE.eitherDecodeStrict >=> AET.parseEither storedReceipt) =<< readPrivateArtifact outbox.path filename (2 * 1048576)
+  receiptInvariant $ filename == toString (receiptId receipt) <> ".json"
+  receiptInvariant $ case (outbox.scope, receipt) of
+    (IssueFix _, _) -> True
+    (_, Phase _) -> False
+    (Advisory _, _) -> True
+    (_, Check _) -> False
+    _ -> True
+  pure receipt
+  where
+    -- Only files accept legacy untagged usage; the live wire remains a tagged sum.
+    storedReceipt value = AE.withObject "Stored receipt" (\fields -> if KM.member "tag" fields then AE.parseJSON value else Usage <$> AE.parseJSON value) value
+
+
+receiptId :: WireReceipt -> Text
+receiptId = \case
+  Call receipt -> receipt.id.toText
+  Usage receipt -> receipt.id.toText
+  Allocation receipt -> (allocationId receipt).toText
+  Check receipt -> receipt.id.toText
+  Phase receipt -> receipt.id.toText
+
+
+receiptInvariant :: Bool -> IO ()
+receiptInvariant condition = unless condition invalidReceipt
+
+
+invalidReceipt :: IO a
+invalidReceipt = throwIO $ userError "Invalid durable agent receipt"

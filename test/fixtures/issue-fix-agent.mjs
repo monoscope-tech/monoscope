@@ -19,15 +19,12 @@ const step = (value) => ({ id: randomUUID(), attemptId: request.attemptId, step:
 const candidate = { revision: 'b'.repeat(40), rootCause: 'The runtime drops retry tokens.' };
 assert.ok(Object.hasOwn(await rpc('Phase', step({ tag: 'RestartReproduction' })), 'Right'));
 if (mode.startsWith('--app-job')) {
-  const observation = await rpc('Query', { service: 'test-service', query: '| summarize events = count()' });
+  const observation = await rpc('Tool', { name: 'query_telemetry', arguments: { service: 'test-service', query: '| summarize events = count()' } });
   assert.ok(Object.hasOwn(observation, 'Right'));
-  assert.ok(Object.hasOwn(await rpc('Knowledge', { tag: 'Recall', contents: 'test-service' }), 'Right'));
-  assert.ok(Object.hasOwn(await rpc('Knowledge', { tag: 'Remember', contents: { service: 'test-service', summary: 'Retry token preservation needs a retained runtime regression.', evidenceKeys: [observation.Right.key] } }), 'Right'));
+  assert.ok(Object.hasOwn(await rpc('Tool', { name: 'recall_knowledge', arguments: { service: 'test-service' } }), 'Right'));
+  assert.ok(Object.hasOwn(await rpc('Tool', { name: 'remember_knowledge', arguments: { service: 'test-service', summary: 'Retry token preservation needs a retained runtime regression.', evidenceKeys: [observation.Right.key] } }), 'Right'));
 }
 assert.deepEqual(await rpc('Phase', step({ tag: 'ProposeCandidate', contents: candidate })), { Left: 'ReproductionRequired' });
-const artifact = { script: 'bash regression.sh', testPatch: 'admitted-test-patch', failureMessage: 'retry token was lost' };
-assert.ok(Object.hasOwn(await rpc('Admit', { ...artifact, testPatch: 'invalid-test' }), 'Left'));
-assert.ok(Object.hasOwn(await rpc('Admit', artifact), 'Right'));
 const call = { id: randomUUID(), attemptId: request.attemptId, provider: request.provider, model: request.model };
 assert.ok(Object.hasOwn(await rpc('Call', call), 'Right'));
 const usage = { id: randomUUID(), attemptId: request.attemptId, callId: call.id, provider: request.provider, model: request.model, responseId: 'fix-fixture', inputTokens: 12, outputTokens: 3, cacheReadTokens: 0, cacheWriteTokens: 0, costNanousd: 42000, pricing: {}, succeeded: true };

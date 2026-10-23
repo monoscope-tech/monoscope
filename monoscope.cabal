@@ -292,11 +292,10 @@ extra-source-files:
     test/fixtures/impact-review-agent.mjs
     test/fixtures/issue-fix-agent.mjs
     test/fixtures/native-checkout-agent.mjs
-    test/fixtures/native-child-lifetime.py
-    test/fixtures/native-publication-gh.py
+    test/fixtures/native-child-lifetime.mjs
+    test/fixtures/native-publication-gh.mjs
     test/fixtures/native-regression-caller.mjs
     test/fixtures/native-sandbox.sh
-    test/fixtures/native-sdk-worker.py
     test/fixtures/regression-admission-agent.mjs
     test/fixtures/wiki-browser.mjs
     static/public/assets/web-components/dist/manifest.json
@@ -324,15 +323,11 @@ library
       Data.Effectful.CodeReview
       Data.Effectful.CodeReview.Artifacts
       Data.Effectful.CodeReview.Checkout
-      Data.Effectful.CodeReview.Explanation
-      Data.Effectful.CodeReview.Guest
-      Data.Effectful.CodeReview.Outbox
       Data.Effectful.CodeReview.Policy
       Data.Effectful.CodeReview.Repair
       Data.Effectful.CodeReview.Types
       Data.Effectful.GitPublication
       Data.Effectful.GitPublication.Native
-      Data.Effectful.GitPublication.Types
       Data.Effectful.Hasql
       Data.Effectful.LLM
       Data.Effectful.Notify
@@ -543,6 +538,7 @@ library
     , base
     , base16-bytestring
     , base64
+    , bifunctors
     , binary-parser
     , brick
     , bytestring
@@ -988,15 +984,11 @@ test-suite test-dev
       Data.Effectful.CodeReview
       Data.Effectful.CodeReview.Artifacts
       Data.Effectful.CodeReview.Checkout
-      Data.Effectful.CodeReview.Explanation
-      Data.Effectful.CodeReview.Guest
-      Data.Effectful.CodeReview.Outbox
       Data.Effectful.CodeReview.Policy
       Data.Effectful.CodeReview.Repair
       Data.Effectful.CodeReview.Types
       Data.Effectful.GitPublication
       Data.Effectful.GitPublication.Native
-      Data.Effectful.GitPublication.Types
       Data.Effectful.Hasql
       Data.Effectful.LLM
       Data.Effectful.Notify
@@ -1283,6 +1275,7 @@ test-suite test-dev
     , base
     , base16-bytestring
     , base64
+    , bifunctors
     , binary-parser
     , brick
     , bytestring
