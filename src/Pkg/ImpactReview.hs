@@ -412,10 +412,10 @@ renderReview host run includeEvidence result =
       , "Project `" <> run.projectId.toText <> "` · reviewed `" <> run.revision <> "` · advisory"
       , "Evidence window (UTC): " <> show result.windowStart <> " → " <> show result.windowEnd
       ]
-      <> concatMap findingText result.findings
-      <> ["![" <> (if isJust item.queryResult then "Review query results" else "Observed service events") <> "](" <> url <> ")" | includeEvidence, item <- take 3 $ filter (\e -> any (elem e.key . (.evidenceKeys)) result.findings) result.evidence, Just url <- [item.chartUrl]]
-      <> ["**Coverage:** " <> (if includeEvidence then plain $ T.intercalate " " result.coverage else "Open Monoscope for evidence and coverage details.") | not $ null result.coverage]
-      <> ["[Review history and settings](" <> T.dropWhileEnd (== '/') host <> "/p/" <> run.projectId.toText <> "/settings/code-mappings)"]
+    <> concatMap findingText result.findings
+    <> ["![" <> (if isJust item.queryResult then "Review query results" else "Observed service events") <> "](" <> url <> ")" | includeEvidence, item <- take 3 $ filter (\e -> any (elem e.key . (.evidenceKeys)) result.findings) result.evidence, Just url <- [item.chartUrl]]
+    <> ["**Coverage:** " <> (if includeEvidence then plain $ T.intercalate " " result.coverage else "Open Monoscope for evidence and coverage details.") | not $ null result.coverage]
+    <> ["[Review history and settings](" <> T.dropWhileEnd (== '/') host <> "/p/" <> run.projectId.toText <> "/settings/code-mappings)"]
   where
     label = \case
       WorthChecking -> "Worth checking"
