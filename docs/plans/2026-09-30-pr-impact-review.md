@@ -37,6 +37,18 @@ The remaining fix coordination and research commands are explicit follow-ups. Th
 
 The peer-review adapter is also removed. Native verified-artifact capabilities now produce its candidate identity and evidence-file manifest; the common SDK runner handles read-only file placement and host-validated verdict transport. Binary log bytes remain unchanged. Fix coordination, admission VM setup and the two research CLIs still need migration.
 
+### Upstream versions rechecked — 2026-10-23
+
+The npm registry still marks [Pi 1.4.0](https://registry.npmjs.org/@earendil-works/pi-coding-agent/latest) as latest. [Gondolin 0.14.0](https://github.com/earendil-works/gondolin/releases/tag/v0.14.0) is now published; this branch remains on 0.13.0. Its [eight-commit comparison](https://github.com/earendil-works/gondolin/compare/v0.13.0...v0.14.0) includes serializing filesystem RPC to close a path-validation race, forwarding guest chmod to VFS providers, replacing certificate generation with Node crypto, and updated Alpine images. Test this upgrade separately against read-only mounts, candidate ownership, cancellation and checkpoint restore before production rollout. The runtime and guest image registries have independent release identities.
+
+The separate server AI library is our `langchain-hs` fork, pinned to 0.0.3.0 in `cabal.project.freeze`. The live [Hackage version API](https://hackage.haskell.org/package/langchain-hs.json) lists 0.0.6.0 as the newest normal release. A stale cached package landing page still shows 0.0.3.0; use the version API and explicit release sources when checking upgrades. No dependency was upgraded in the admission migration.
+
+### Native admission preparation — 2026-10-23
+
+Haskell now owns the admission artifact limits, VM patch application, path-count check and read-only preparation. The existing private guest-command bridge is shared by fix and admission tasks; untrusted patches still apply inside the VM. A typed guest-session state separates admission readiness from fix progress, and native admission refuses submission before initialization. The separate `admit.mjs` policy module is removed; `fix.mjs` retains 69 lines for SDK editing and submission interop. The five production adapter files total 703 lines, excluding research/build commands; the 150–200-line target remains unfinished.
+
+The focused real-SDK admission test passed in 18.6566 seconds; the final watcher passed all 25 impact-review examples with zero failures and no pending cases in 215.2350 seconds (seed `478291233`). Pinned Fourmolu, production HLint, Node syntax checks and whitespace checks passed. The server watcher compiled and started. The regression inspects the actual staged patch as UID 1000, checks protected evidence and source, exercises both verdicts and existing-file patches, and rejects malformed artifacts, image mismatches and rejected model-call starts. All prompts, schemas and admission verdict validation remain in Haskell.
+
 ### Remaining work and delivery estimate
 
 Estimate recorded 2026-10-22: **3–5 focused engineering days** for the remaining product work with disk-only restoration. Some tasks overlap; Linux sandbox behavior and accounting across crashes are the main uncertainties. This is an estimate, not a completion deadline.

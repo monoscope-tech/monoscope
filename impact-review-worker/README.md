@@ -23,7 +23,7 @@ Haskell owns the fix state machine: admission, reproduction, source unlocking, c
 
 The VM has no network, private COW writes and read-only host mounts. Agent commands run as UID 1000 with a reset environment. Model credentials stay on the host. `sandbox.mjs` is the SDK command bridge used by native workspace operations.
 
-Admission and independent review are read-only. Fixing requires host-admitted reproduction before source edits. Haskell supplies the peer’s candidate identity and exact evidence-file manifest from verified artifacts. The common SDK runner copies those bytes into the read-only VM and submits its decision through host validation. Peer review does not reopen artifacts or clone a second mirror.
+Haskell prepares admission patches through the private VM command bridge before model work. Artifact limits, patch application, file-count bounds and workspace locking remain native policy. Admission and independent review are read-only. Fixing requires host-admitted reproduction before source edits. Haskell supplies the peer’s candidate identity and exact evidence-file manifest from verified artifacts. The common SDK runner copies those bytes into the read-only VM and submits its decision through host validation. Peer review does not reopen artifacts or clone a second mirror.
 
 The provider wrapper waits for Haskell's durable Call acknowledgement before invoking `ModelRuntime.streamSimple`. Completed usage, including compaction responses, is correlated with that start. Keep this fail-closed boundary during migration: exceptions from Pi's `before_provider_request` hook are caught by Pi and do not by themselves prevent a request.
 

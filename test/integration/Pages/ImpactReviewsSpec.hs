@@ -321,10 +321,12 @@ spec = around withTestResources $ describe "Production impact reviews" do
     void $ git ["reset", "--hard", toString base]
     imageId <- readFileBS (image </> "manifest.json") >>= either fail pure . AE.eitherDecodeStrict >>= parse (field "buildId")
     verdict <- newIORef ("Admitted" :: Text)
+    investigated <- newIORef ([] :: [Text])
     let next results = do
+          for_ results \result -> parse (field "content") result >>= (\text -> modifyIORef' investigated (<> [text]))
           decision <- readIORef verdict
           pure $ case length results of
-            0 -> SdkTool "bash" (AE.object ["command" AE..= ("cat runtime.sh regression.sh /run/monoscope-admission.json; printf forbidden > runtime.sh" :: Text)])
+            0 -> SdkTool "bash" (AE.object ["command" AE..= ("set -eu; id -u; test ! -w /run/monoscope-admission.patch; test ! -w /run/monoscope-admission.json; git diff --cached --name-only; cat runtime.sh /run/monoscope-admission.json; printf forbidden > runtime.sh" :: Text)])
             1 -> SdkTool "submit_admission" (AE.object ["tag" AE..= decision, "contents" AE..= ("The regression calls the actual retry_token runtime and checks the issue's caller token." :: Text)])
             _ -> SdkText "Fixture finished."
     withSdkModel directory "admission-fixture" next \models requests -> do
@@ -389,6 +391,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
       void $ git ["reset", "--hard", toString base]
       (existing, _, _, _) <- run 7 True admission{Agent.artifact = admission.artifact{Agent.script = "bash existing-regression.sh", Agent.testPatch = existingPatch}}
       checkDecision "Admitted" existing
+      inspected <- T.intercalate "\n" <$> readIORef investigated
+      for_ @[] ["1000", "regression.sh", "existing-regression.sh", "Permission denied"] \fragment -> inspected `shouldSatisfy` T.isInfixOf fragment
       observed <- requests
       let contents = decodeUtf8 @Text $ AE.encode observed
       contents `shouldSatisfy` T.isInfixOf "Permission denied"
@@ -398,6 +402,9 @@ spec = around withTestResources $ describe "Production impact reviews" do
       isLeft wrongImage `shouldBe` True
       (malformed, _, _, _) <- run 9 True admission{Agent.artifact = admission.artifact{Agent.testPatch = "not a patch"}}
       isLeft malformed `shouldBe` True
+      for_ (zip [10 ..] [admission.artifact{Agent.script = " "}, admission.artifact{Agent.failureMessage = T.replicate 201 "x"}, admission.artifact{Agent.testPatch = ""}]) \(n, artifact) -> do
+        (invalid, _, _, _) <- run n True admission{Agent.artifact = artifact}
+        isLeft invalid `shouldBe` True
       length <$> requests `shouldReturn` beforeInvalid
 
   it "fixes through the real SDK with frozen reproduction, native verification and independent review" \_tr -> CLIBinary.withCliBin \cli -> withSystemTempDirectory "native-sdk-fix" \temporary -> do

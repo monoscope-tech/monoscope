@@ -78,11 +78,11 @@ try {
   agentDir = await mkdtemp(join(tmpdir(), 'monoscope-review-agent-'));
   if (process.env.IMPACT_REVIEW_DEPENDENCY_ARCHIVE && !process.env.IMPACT_REVIEW_PREPARE_SCRIPT) throw new Error('Dependency archives require a trusted preparation script');
   const cacheDir = fs.realpathSync(process.env.IMPACT_REVIEW_CACHE_DIR);
-  const [{ ModelRuntime }, { review, modelUsage }, { fixIssue }, { admitRegression }] = await Promise.all([
-    import('@earendil-works/pi-coding-agent'), import('./review.mjs'), import('./fix.mjs'), import('./admit.mjs'),
+  const [{ ModelRuntime }, { review, modelUsage }, { fixIssue }] = await Promise.all([
+    import('@earendil-works/pi-coding-agent'), import('./review.mjs'), import('./fix.mjs'),
   ]);
   const modelRuntime = await ModelRuntime.create({ authPath: join(agentDir, 'auth.json'), modelsPath: process.env.IMPACT_REVIEW_MODELS ?? null, refreshOnCreate: false });
-  const result = await (isAdmission ? admitRegression : isFix ? fixIssue : review)({ ...request, head: checkoutHead }, {
+  const result = await (isFix ? fixIssue : review)({ ...request, head: checkoutHead }, {
     modelRuntime, guestImage, expectedImageBuildId, cacheDir, preparedCheckout, usageDir: outboxRoot, artifactDir, attemptId, skillPaths: process.argv.slice(2), optionsTool: (invocation, active) => exchange('Tool', invocation, active), validateDraft: (draft) => exchange('Validate', draft), signal,
     bindGuest: (execute) => { executeGuest = execute; },
     workspaceCache: process.env.IMPACT_REVIEW_PREPARE_SCRIPT ? {
@@ -91,7 +91,7 @@ try {
     } : undefined,
     restartFix: (baseline, active) => exchange('RestartFix', baseline, active),
     completeFix: (summary, active) => exchange('CompleteFix', summary, active),
-    validateAdmission: (result) => exchange('Validate', result),
+    initializeAdmission: isAdmission ? (active) => exchange('InitializeAdmission', [], active) : undefined,
     onEvent(event) {
       if (event.type === 'model_started') return persistReceipt('Call', event.receipt);
       if (event.type === 'model_response') {

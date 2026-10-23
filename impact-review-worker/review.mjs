@@ -1,8 +1,8 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { cp, mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { cp, mkdtemp, mkdir, open, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, dirname, isAbsolute, join, relative } from 'node:path';
+import { basename, dirname, isAbsolute, join, posix, relative } from 'node:path';
 import { constants, createReadStream } from 'node:fs';
 import { RealFSProvider, ReadonlyProvider, VM, importImageFromDirectory, resolveImageSelector } from '@earendil-works/gondolin';
 import { promisify } from 'node:util';
@@ -38,6 +38,11 @@ export const reviewDraft = z.object({
 });
 
 
+export const guestPath = (input, cwd) => {
+  const path = posix.resolve(cwd, (input.startsWith('file://') ? fileURLToPath(input) : input.replace(/^@/, '')).replace(/^~(?=\/|$)/, '/home/review-agent'));
+  return z.string().refine((value) => !value.includes('\0'), 'File paths cannot contain NUL bytes').parse(path);
+};
+
 export async function lockWorkspace(vm, cwd, signal) {
   for (const command of [
     ['/usr/bin/git', 'config', '--system', '--add', 'safe.directory', cwd],
@@ -63,13 +68,14 @@ export function modelUsage(message, pricing, attemptId, callId) {
 // Adapted from Gondolin's Pi example: model credentials remain outside repository tools.
 export const review = (input, options) => runRepositoryAgent(input, options);
 
-export async function runRepositoryAgent(input, { modelRuntime, guestImage, expectedImageBuildId, workspaceCache, artifactDir, preparedCheckout, attemptId = randomUUID(), skillPaths = [], validateDraft, createWorkflow, optionsTool, signal, onEvent = () => {} }) {
+export async function runRepositoryAgent(input, { modelRuntime, guestImage, expectedImageBuildId, workspaceCache, artifactDir, preparedCheckout, attemptId = randomUUID(), skillPaths = [], validateDraft, createWorkflow, bindGuest, initializeAdmission, optionsTool, signal, onEvent = () => {} }) {
   const request = reviewRequest.parse(input);
   const runId = artifactDir ? z.uuid().parse(input.runId) : undefined;
   const resolvedImage = resolveImageSelector(guestImage);
   const pinnedImage = resolvedImage.source === 'path' ? importImageFromDirectory(resolvedImage.assetDir) : resolvedImage;
   if (expectedImageBuildId !== undefined && pinnedImage.buildId !== expectedImageBuildId) throw new Error('Configured guest image differs from the pinned issue-fix image');
   if (!preparedCheckout) throw new Error('A host-prepared checkout is required');
+  const admission = initializeAdmission ? input.artifact : undefined;
   const peer = preparedCheckout.evidence.tag === 'VerifiedEvidence' ? preparedCheckout.evidence.contents : undefined;
   if (peer && typeof validateDraft !== 'function') throw new Error('Peer review requires host acceptance');
   const root = await mkdtemp(join(tmpdir(), 'monoscope-review-'));
@@ -154,6 +160,46 @@ export async function runRepositoryAgent(input, { modelRuntime, guestImage, expe
         if (!(await vm.exec(['/bin/chmod', '0444', path], { signal })).ok) throw new Error('Host evidence could not be protected');
       }
     }
+    bindGuest?.(async ({ tag, contents }, toolSignal) => {
+      const active = AbortSignal.any([signal, toolSignal].filter(Boolean));
+      try {
+        active.throwIfAborted();
+        if (tag === 'RunCheck') {
+          const result = await runRegressionFile(contents, pinnedImage, { artifactDir, checkout, signal: active });
+          active.throwIfAborted();
+          return result;
+        }
+        if (tag === 'CopyGuest') {
+          const file = await open(contents.source, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+          try {
+            if (!(await file.stat()).isFile()) throw new Error('Invalid private artifact');
+            await vm.fs.writeFile(contents.destination, file.createReadStream({ autoClose: false }), { signal: active });
+          } finally { await file.close(); }
+          active.throwIfAborted();
+          return [];
+        }
+        const command = tag === 'ReadGuest' ? { arguments: ['/usr/bin/head', '-c', String(contents.maxBytes), '--', guestPath(contents.path, cwd)], maxBytes: contents.maxBytes, identity: 'agent' } : contents;
+        const execution = vm.exec(command.identity === 'supervisor' ? command.arguments : agentCommand(command.arguments), { cwd, signal: active, stdout: 'pipe', stderr: 'pipe' });
+        void execution.catch(() => {});
+        const chunks = [];
+        let length = 0;
+        for await (const chunk of execution.output()) {
+          length += chunk.data.length;
+          if (length > command.maxBytes) { await vm.close(); throw new Error('Guest output limit exceeded'); }
+          chunks.push(chunk.data);
+        }
+        active.throwIfAborted();
+        if (!(await execution).ok) throw new Error('Guest workspace command failed');
+        return Buffer.concat(chunks).toString('utf8');
+      } catch (error) {
+        if (active.aborted) await vm.close();
+        throw error;
+      }
+    });
+    if (initializeAdmission) {
+      const reply = await initializeAdmission(signal);
+      if (Object.hasOwn(reply, 'Left')) throw new Error('Admission workspace was rejected');
+    }
     const bash = createBashToolDefinition(cwd, {
       operations: {
         async exec(command, cwd, options) {
@@ -216,12 +262,12 @@ export async function runRepositoryAgent(input, { modelRuntime, guestImage, expe
       name: 'run_regression', label: 'Replay a frozen regression check',
       execute: (_id, params, toolSignal) => executeRegression(params, toolSignal),
     });
-    const workflow = createWorkflow ? await createWorkflow({ vm, cwd, request, root, artifactDir, executeRegression, workspace, checkRegression: (requestFile, active) => runRegressionFile(requestFile, pinnedImage, { artifactDir, checkout, signal: active }), signal, rootInstructions: preparedCheckout.rootInstructions }) : {
-      name: peer ? 'submit_fix_review' : 'submit_review',
+    const workflow = createWorkflow ? await createWorkflow({ vm, cwd, request, root, artifactDir, executeRegression, workspace, signal, rootInstructions: preparedCheckout.rootInstructions }) : {
+      name: admission ? 'submit_admission' : peer ? 'submit_fix_review' : 'submit_review',
       prepare: async (draft, toolSignal) => {
         const active = AbortSignal.any([signal, toolSignal].filter(Boolean));
         active.throwIfAborted();
-        const result = peer ? { result: peer.result, decision: draft } : draft;
+        const result = admission ? { artifact: admission, decision: draft } : peer ? { result: peer.result, decision: draft } : draft;
         const reply = validateDraft ? await validateDraft(result) : { Right: [] };
         active.throwIfAborted();
         return Object.hasOwn(reply, 'Left') ? reply : { Right: result };
@@ -256,7 +302,7 @@ export async function runRepositoryAgent(input, { modelRuntime, guestImage, expe
       const definition = preparedCheckout.policy.tools.find((item) => item.name === tool.name);
       if (definition && !workflow.instructions) Object.assign(tool, { label: definition.name, description: definition.description, parameters: Type.Unsafe(definition.parameters), ...(definition.sequential ? { executionMode: 'sequential' } : {}) });
     }
-    if (createWorkflow || peer) for (const tool of tools) tool.executionMode = 'sequential';
+    if (createWorkflow || admission || peer) for (const tool of tools) tool.executionMode = 'sequential';
     const settingsManager = SettingsManager.inMemory({ retry: { enabled: true, maxRetries: 1 } });
     const loader = new DefaultResourceLoader({
       cwd: root, agentDir: join(root, 'agent'), settingsManager,
