@@ -17,11 +17,11 @@ import Effectful.TH
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.IssueFixes (CompletedFix, completedFixContents)
 import Pkg.Git qualified as Git
-import Prelude (until)
 import Relude
 import UnliftIO.Exception (tryAny)
 import UnliftIO.Timeout qualified as Timeout
 import "cryptonite" Crypto.Hash (Digest, SHA256, hashlazy)
+import Prelude (until)
 
 
 -- No Generic/FromJSON or exported fields: only an authorized completed DB read
@@ -101,17 +101,17 @@ runGitPublicationReal store githubCli = interpret \env -> \case
       unless
         ( all sameRepo [access.fullName, remote.head.repo.fullName, remote.base.repo.fullName]
             && remote.number
-              == receipt.number
+            == receipt.number
             && T.toCaseFold remote.htmlUrl
-              == T.toCaseFold receipt.url
+            == T.toCaseFold receipt.url
             && remote.head.ref
-              == context.branch
+            == context.branch
             && remote.base.ref
-              == target
+            == target
             && remote.state
-              == receipt.state
+            == receipt.state
             && remote.draft
-              == receipt.draft
+            == receipt.draft
             && (remote.state == Open || remote.merged)
         )
         $ hoistEither
@@ -152,13 +152,13 @@ validReceipt request receipt =
    in receipt.number
         > 0
         && receipt.head
-          == context.head
+        == context.head
         && receipt.source
-          == context.source
+        == context.source
         && receipt.mediaSha256
-          == context.mediaSha256
+        == context.mediaSha256
         && T.toLower receipt.url
-          == T.toLower ("https://github.com/" <> context.repo <> "/pull/" <> show receipt.number)
+        == T.toLower ("https://github.com/" <> context.repo <> "/pull/" <> show receipt.number)
         && receipt.assets.video
-          /= receipt.assets.diagram
+        /= receipt.assets.diagram
         && all attachmentUrl [receipt.assets.video, receipt.assets.diagram]

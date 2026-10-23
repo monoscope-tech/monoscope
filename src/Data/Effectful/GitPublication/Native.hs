@@ -268,7 +268,7 @@ publish store executable token artifacts explanation context authorize = do
                       save next
                       pure (remote, next)
                     else do
-                      case progress of { Finished _ -> throwE StateChanged; Uploading _ _ -> throwE UploadUncertain; _ -> pass }
+                      case progress of Finished _ -> throwE StateChanged; Uploading _ _ -> throwE UploadUncertain; _ -> pass
                       ensure PullRequestChanged $ remote.state == Open && remote.draft && normalizeBody (fromMaybe "" remote.body) == normalizeBody (body urls Nothing)
                       guardRemote $ if asset == Video then AttachVideo else AttachDiagram
                       save $ Uploading remote.number asset
@@ -281,7 +281,7 @@ publish store executable token artifacts explanation context authorize = do
               )
               (pr, journal.state)
               [Video, Diagram]
-          case progress of { Finished _ -> permit Complete >> access; _ | final.state == Closed -> permit Complete >> access; _ -> guardRemote Complete }
+          case progress of Finished _ -> permit Complete >> access; _ | final.state == Closed -> permit Complete >> access; _ -> guardRemote Complete
           urls <- observed final
           ensure UploadUncertain $ Map.size urls == 2
           ensure PullRequestChanged $ final.state == Open || final.merged
