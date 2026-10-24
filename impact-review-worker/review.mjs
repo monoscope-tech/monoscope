@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { cp, mkdtemp, mkdir, open, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, posix, relative } from 'node:path';
@@ -8,7 +8,7 @@ import { RealFSProvider, ReadonlyProvider, VM, importImageFromDirectory, resolve
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import {
-  createAgentSession, createBashToolDefinition, createReadToolDefinition,
+  createAgentSession, createBashToolDefinition, createReadToolDefinition, createEditToolDefinition, createWriteToolDefinition,
   DefaultResourceLoader, loadSkills, SessionManager, SettingsManager,
 } from '@earendil-works/pi-coding-agent';
 import { z } from 'zod';
@@ -233,6 +233,41 @@ export async function runRepositoryAgent(input, { modelRuntime, guestImage, expe
         readFile: (path) => vm.fs.readFile(path),
       },
     })];
+    if (preparedCheckout.policy.fileTools === 'modify_files') tools.push(...[createEditToolDefinition, createWriteToolDefinition].map((defineTool) => ({
+      ...defineTool(cwd),
+      executionMode: 'sequential',
+      async execute(id, args, toolSignal, onUpdate, context) {
+        const active = AbortSignal.any([signal, toolSignal].filter(Boolean));
+        const path = guestPath(args.path, cwd);
+        // Pi queues mutations via host realpath; only give that queue a private surrogate.
+        const queuePath = join(root, 'file-tools', createHash('sha256').update(path).digest('hex'));
+        const restore = (text) => text.replaceAll(queuePath, path);
+        const run = async (command, stdin) => {
+          try {
+            const result = await vm.exec(agentCommand(command), { cwd, signal: active, stdin });
+            active.throwIfAborted();
+            if (!result.ok) throw new Error(result.stderr.trim() || 'Review workspace operation failed');
+            return result;
+          } catch (error) {
+            if (active.aborted) await vm.close();
+            throw error;
+          }
+        };
+        try {
+          const result = await defineTool(cwd, { operations: {
+            access: async () => { await run(['/bin/sh', '-c', 'test -r "$1" && test -w "$1"', 'monoscope-edit', path]); },
+            readFile: async () => (await run(['/bin/cat', '--', path])).stdoutBuffer,
+            writeFile: async (_path, content) => { await run(['/bin/sh', '-c', '/bin/cat > "$1"', 'monoscope-write', path], content); },
+            mkdir: async () => { await run(['/bin/mkdir', '-p', '--', posix.dirname(path)]); },
+          } }).execute(id, { ...args, path: queuePath }, active, onUpdate, context);
+          return { ...result, content: result.content.map((item) => item.type === 'text' ? { ...item, text: restore(item.text) } : item),
+            details: { ...result.details, ...(result.details?.patch ? { patch: restore(result.details.patch) } : {}) } };
+        } catch (error) {
+          active.throwIfAborted();
+          throw new Error(restore(error.message));
+        }
+      },
+    })));
     const executeRegression = async (artifact, toolSignal) => {
       const active = AbortSignal.any([signal, toolSignal].filter(Boolean));
       const result = await runRegression({ projectId: request.projectId, runId, attemptId, sessionId: verifierSession, base: request.base, artifact, revisions: [['base', request.base], ['head', request.head]] }, pinnedImage,
@@ -249,7 +284,7 @@ export async function runRepositoryAgent(input, { modelRuntime, guestImage, expe
       name: 'run_regression', label: 'Replay a frozen regression check',
       execute: (_id, params, toolSignal) => executeRegression(params, toolSignal),
     });
-    const workflow = createWorkflow ? await createWorkflow({ vm, cwd, request, root, artifactDir, executeRegression, workspace, signal, rootInstructions: preparedCheckout.rootInstructions }) : {
+    const workflow = createWorkflow ? await createWorkflow({ workspace, signal }) : {
       name: admission ? 'submit_admission' : peer ? 'submit_fix_review' : 'submit_review',
       prepare: async (draft, toolSignal) => {
         const active = AbortSignal.any([signal, toolSignal].filter(Boolean));
@@ -260,7 +295,6 @@ export async function runRepositoryAgent(input, { modelRuntime, guestImage, expe
         return Object.hasOwn(reply, 'Left') ? reply : { Right: result };
       },
     };
-    tools.push(...(workflow.tools ?? []));
     tools.push({
       name: workflow.name, label: workflow.label ?? 'Submit review draft',
       parameters: Type.Unsafe(workflow.schema ? workflow.schema.toJSONSchema() : preparedCheckout.policy.tools.find((tool) => tool.name === workflow.name).parameters),

@@ -427,6 +427,9 @@ spec = around withTestResources $ describe "Production impact reviews" do
       inspected <- T.intercalate "\n" <$> readIORef investigated
       for_ @[] ["1000", "regression.sh", "existing-regression.sh", "Permission denied"] \fragment -> inspected `shouldSatisfy` T.isInfixOf fragment
       observed <- requests
+      for_ observed \body -> do
+        names <- parse (field "tools") body >>= traverse (parse $ field "function" >=> field "name") :: IO [Text]
+        names `shouldSatisfy` all (`notElem` ["edit", "write"])
       let contents = decodeUtf8 @Text $ AE.encode observed
       contents `shouldSatisfy` T.isInfixOf "Permission denied"
       contents `shouldSatisfy` T.isInfixOf "retry_token must preserve"
@@ -808,6 +811,10 @@ spec = around withTestResources $ describe "Production impact reviews" do
       map (.attemptId) harness.checks `shouldBe` replicate 6 harness.attemptId
       length harness.usage `shouldBe` 8
       length <$> requests `shouldReturn` callsBefore + length harness.usage
+      harnessRequests <- drop callsBefore <$> requests
+      for_ harnessRequests \body -> do
+        names <- parse (field "tools") body >>= traverse (parse $ field "function" >=> field "name") :: IO [Text]
+        names `shouldSatisfy` all (`notElem` ["edit", "write"])
       harness.usage `shouldSatisfy` all (\receipt -> receipt.attemptId == harness.attemptId && receipt.succeeded && maybe False (> 0) receipt.costNanousd && receipt.callId `elem` map (Just . (.id)) harness.calls)
       map Agent.allocationAttempt harness.allocations `shouldBe` [harness.attemptId]
       for_ harness.allocations \receipt -> parse (field "outcome") (AE.toJSON receipt) `shouldReturn` ("released" :: Text)
@@ -898,7 +905,14 @@ spec = around withTestResources $ describe "Production impact reviews" do
     ready <- MVar.newEmptyMVar
     blocked <- MVar.newEmptyMVar :: IO (MVar.MVar ())
     let prefix = [readPath "/skills/0/SKILL.md", readPath "/skills/1/systematic-debugging/SKILL.md", readPath "/skills/1/systematic-debugging/root-cause-tracing.md", readPath "/workspace/.agents/skills/repo-review/SKILL.md", bash $ "set -eu; test \"$(id -u)\" = 1000; test ! -w /usr/bin/git; echo supervisor-tools-protected; pwd; uname -s; git rev-parse HEAD; git show " <> base <> ":src/handler.txt; rg preserve-retry-metadata src; git diff " <> base <> "..." <> headRevision <> "; test -z \"$(printenv IMPACT_REVIEW_FIXTURE_SECRET || true)\"; echo host-credentials-absent; test \"$(cat src/handler.txt)\" = 'calls helper without retry metadata'; echo repository-check-passed; if (printf changed > /skills/0/SKILL.md) 2>/dev/null; then exit 1; fi; if (printf changed > /checkout/AGENTS.md) 2>/dev/null; then exit 1; fi; echo readonly-mounts-enforced; test -z \"$(git config --get-regexp extraheader || true)\"", bash "printf 'first-output-line\\n'; seq 1 2505", fmap (\path -> SdkTool "read" $ AE.object ["path" AE..= path, "limit" AE..= (2 :: Int)]) . fullOutput, fmap (\path -> SdkTool "bash" $ AE.object ["command" AE..= ("head -n 1 '" <> path <> "'")]) . fullOutput]
-        reviewPlan limitScript afterSubmit = prefix <> [tool "list_project_memory" $ AE.object [], tool "read_project_memory" $ AE.object ["pageId" AE..= page], tool "write_project_memory" $ AE.object ["pageId" AE..= page, "version" AE..= (0 :: Int), "document" AE..= document], tool "recall_knowledge" $ AE.object ["service" AE..= ("test-service" :: Text)], tool "remember_knowledge" $ AE.object ["service" AE..= ("test-service" :: Text), "summary" AE..= ("Recheck the retry hypothesis." :: Text), "evidenceKeys" AE..= (["telemetry-1"] :: [Text])], check regression, check "set -eu\ngit update-index --assume-unchanged src/runtime.sh\nprintf changed > src/runtime.sh\n", check limitScript, check "exit 0", tool "submit_review" $ draft 1 [], tool "submit_review" $ draft 2 ["telemetry-1"], tool "submit_review" accepted] <> afterSubmit
+        fileTools =
+          [ tool "write" $ AE.object ["path" AE..= ("tests/review-probe.sh" :: Text), "content" AE..= ("printf draft-probe\n" :: Text)]
+          , tool "edit" $ AE.object ["path" AE..= ("tests/review-probe.sh" :: Text), "oldText" AE..= ("draft-probe" :: Text), "newText" AE..= ("retained-probe" :: Text)]
+          , readPath "/workspace/tests/review-probe.sh"
+          , bash "set -eu; test \"$(bash tests/review-probe.sh)\" = retained-probe; test ! -e /checkout/tests/review-probe.sh; echo guest-file-tools-isolated"
+          , tool "write" $ AE.object ["path" AE..= ("/checkout/AGENTS.md" :: Text), "content" AE..= ("must not replace host instructions" :: Text)]
+          ]
+        reviewPlan limitScript afterSubmit = prefix <> fileTools <> [tool "list_project_memory" $ AE.object [], tool "read_project_memory" $ AE.object ["pageId" AE..= page], tool "write_project_memory" $ AE.object ["pageId" AE..= page, "version" AE..= (0 :: Int), "document" AE..= document], tool "recall_knowledge" $ AE.object ["service" AE..= ("test-service" :: Text)], tool "remember_knowledge" $ AE.object ["service" AE..= ("test-service" :: Text), "summary" AE..= ("Recheck the retry hypothesis." :: Text), "evidenceKeys" AE..= (["telemetry-1"] :: [Text])], check regression, check "set -eu\ngit update-index --assume-unchanged src/runtime.sh\nprintf changed > src/runtime.sh\n", check limitScript, check "exit 0", tool "submit_review" $ draft 1 [], tool "submit_review" $ draft 2 ["telemetry-1"], tool "submit_review" accepted] <> afterSubmit
         next results = do
           writeIORef replies results
           step <- atomicModifyIORef' plan \case [] -> ([], const $ pure $ SdkText "Review submitted."); action : rest -> (rest, action)
@@ -954,9 +968,14 @@ spec = around withTestResources $ describe "Production impact reviews" do
         for_ ["tool-6", "tool-7"] \identifier -> reply identifier results >>= (`shouldSatisfy` T.isInfixOf "first-output-line")
         for_ ["Linux", "supervisor-tools-protected", "host-credentials-absent", "repository-check-passed", "readonly-mounts-enforced", "preserve-retry-metadata", "Follow callers before proposing", "Repository skill content", "NO FIXES WITHOUT ROOT CAUSE INVESTIGATION FIRST", "Root Cause Tracing", "Historical hypothesis", headRevision] \text -> jsonText results `shouldSatisfy` T.isInfixOf text
         for_ ["host-only-fixture", "unreviewed-later-change", "fixture-git-token", "private-host-skill-body"] \text -> jsonText results `shouldNotSatisfy` T.isInfixOf text
-        reply "tool-16" results >>= (`shouldSatisfy` T.isInfixOf "budget")
-        reply "tool-17" results >>= (`shouldSatisfy` T.isInfixOf "evidenceKeys")
-        reply "tool-18" results >>= (`shouldSatisfy` T.isInfixOf "changed line")
+        reply "tool-10" results >>= (`shouldSatisfy` T.isInfixOf "retained-probe")
+        reply "tool-11" results >>= (`shouldSatisfy` T.isInfixOf "guest-file-tools-isolated")
+        reply "tool-12" results >>= (`shouldNotSatisfy` T.isInfixOf "Successfully wrote")
+        doesFileExist (repository </> "tests/review-probe.sh") `shouldReturn` False
+        readFileBS (repository </> "AGENTS.md") `shouldReturn` "Repository review rule: never remove retry metadata.\n"
+        reply "tool-21" results >>= (`shouldSatisfy` T.isInfixOf "budget")
+        reply "tool-22" results >>= (`shouldSatisfy` T.isInfixOf "evidenceKeys")
+        reply "tool-23" results >>= (`shouldSatisfy` T.isInfixOf "changed line")
         let archive = store.usageDir </> toString (uid n :: UUIDId "pr_review").toText </> "checks"
         reports <- listDirectory archive >>= traverse (\name -> (name,) <$> readJSON (archive </> name </> "report.json"))
         length reports `shouldBe` 3
@@ -977,8 +996,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         tools <- parse (field "tools") body :: IO [AE.Value]
         names <- traverse (parse $ field "function" >=> field "name") tools :: IO [Text]
         for_ ["read", "bash", "submit_review", "run_regression", "recall_knowledge", "remember_knowledge"] \name -> names `shouldContain` [name]
-        names `shouldNotContain` ["edit"]
-        names `shouldNotContain` ["write"]
+        for_ ["edit", "write"] $ \name -> names `shouldContain` [name]
         for_ ["never remove retry metadata", "retry-review", "repo-review", "pi-review", "systematic-debugging", "test-driven-development", "verification-before-completion"] \text -> jsonText body `shouldSatisfy` T.isInfixOf text
         for_ ["host-only-skill", "private-host-skill-body", "fixture-git-token"] \text -> jsonText body `shouldNotSatisfy` T.isInfixOf text
       let cancelPlan = prefix <> [tool "query_telemetry" $ AE.object ["service" AE..= ("test-service" :: Text), "query" AE..= ("| summarize count()" :: Text)]]
