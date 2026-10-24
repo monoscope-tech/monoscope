@@ -843,3 +843,21 @@ Malformed retained patches now return a sanitized Git-diff repair hint at the fa
 The rebuilt CLI passed the existing packaging, linkage, signing and version checks. Native test-file creation and broader quality evaluation remain follow-up work.
 
 Generated hunk counts also exposed silent test truncation: a 27-line body declared 22 lines. Native verifier and admission regressions first failed because trailing assertions disappeared. All retained-test inspection, application, reverse checks and fix-workspace installation now use Git’s `--recount`; Git infers counts from the full body. Raw patch hashes, frozen test-file fingerprints, source mutation checks and assertion classification remain enforced. The native verifier regression passed in 13.50 seconds and produced the same frozen file fingerprints as the correctly counted patch. The admission fixture passed in 19.18 seconds. The full SDK fix workflow passed in 33.93 seconds using an understated hunk count, covering reproduction, test installation, candidate verification and independent review. These deterministic fixtures make no paid model calls. This corrects patch handling; review accuracy still needs broader evaluation.
+
+### Caller tracing and premise checks — 2026-10-24
+
+A controlled source-review diagnostic held Pi/model (`gpt-5.6-luna/high`), guest, revisions and budgets fixed. Two repeats per known case compared the current policy with generic caller-tracing guidance. Findings were assessed from condition-blinded output before joining condition labels. A subsequent adaptive follow-up added premise falsification; its API controls ran once each.
+
+| Policy | Inventory activity gap | Additional false findings | Correct API: no findings | Broken API: detected |
+|---|---|---|---|---|
+| Current | 0/2 | 0 | 2/2 | 2/2 |
+| Trace new callers | 2/2 | 1 | 2/2 | 2/2 |
+| Trace callers and challenge premises | 2/2 | 0 | 1/1 | 1/1 |
+
+The false finding claimed the modal header close button submits the edit form. It sits outside that form. An independent test of the actual component passed: closing invokes the close callback once and never updates the item. The activity gap has a separate actual-UI reproduction; its expected contract is inferred from existing mutations/types/feed, and base has no edit UI. These are known diagnostic cases, not held-out accuracy estimates.
+
+The exact tested supplement now lives once in Haskell and is shared by source and impact review policies. Peer fix review keeps its stricter no-fresh-checks policy. The source experiment does not establish telemetry-review accuracy, and model-authored checks still sometimes stop in setup or test intended improvements rather than the suspected defect.
+
+The comparison used 132 correlated calls / usage receipts, estimating $0.24751549; the follow-up used 51, estimating $0.11142961. This research cohort now totals 268 calls and $0.63331759 in SDK model estimates. Infrastructure remains unpriced, invoices unreconciled, and customer charges absent. Two earlier launch failures made zero model calls and remain recorded separately. Private protocols, traces, assessments and ledgers are under `scripts/local/impact-quality-native-20261024/caller-study-v2/`, `caller-study-falsify/` and `cost-ledger-with-falsification-study.json`; comparison PNGs use the shared widget renderer and Slack profile.
+
+A separate integration difference remains for a future ablation: [Pi's custom prompt path](https://github.com/earendil-works/pi/blob/v1.4.0/packages/coding-agent/src/core/system-prompt.ts) replaces its default tool-guidance section while still appending skills. Its effect was not mixed into this experiment.
