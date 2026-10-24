@@ -369,7 +369,7 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
                         _ -> Left "Guest returned an invalid workspace response"
                     execute privilege argv = rpc (Guest $ GuestCommand argv 1048576 privilege) \case GuestResult output -> Just output; _ -> Nothing
                     copy hostPath guestPath = rpc (CopyGuest $ GuestCopy hostPath guestPath) \case CopiedGuest output -> Just output; _ -> Nothing
-                    protectWorkspace = for_ (["/usr/bin/git" :| ["config", "--system", "--add", "safe.directory", "/workspace"], "/bin/chown" :| ["-hR", "0:0", "/workspace"], "/bin/chmod" :| ["-R", "u+rwX,go+rX,go-w", "/workspace"], "/usr/bin/git" :| ["update-index", "--refresh"]] :: [NonEmpty Text]) $ void . ExceptT . execute Supervisor
+                    protectWorkspace = for_ (["/usr/bin/git" :| ["config", "--system", "--add", "safe.directory", path] | path <- ["/workspace", "/workspace/.git"]] <> ["/bin/chown" :| ["-hR", "0:0", "/workspace"], "/bin/chmod" :| ["-R", "u+rwX,go+rX,go-w", "/workspace"], "/usr/bin/git" :| ["update-index", "--refresh"]] :: [NonEmpty Text]) $ void . ExceptT . execute Supervisor
                     prepareAdmission :: ArtifactStore -> TestArtifact -> IO (Either Text ())
                     prepareAdmission configured artifact = runExceptT do
                       let bounded limit text = not (T.null $ T.strip text) && T.length text <= limit

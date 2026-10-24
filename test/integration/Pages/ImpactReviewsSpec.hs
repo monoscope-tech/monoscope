@@ -680,7 +680,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         isLeft <$> waitCatch worker `shouldReturn` True
       length <$> readIORef checks `shouldReturn` beforeCancel
 
-  it "calibrates pinned source through both native modes with repaired citations and durable evidence" \_tr -> CLIBinary.withCliBin \cli -> withSystemTempDirectory "native-sdk-calibration" \temporary -> do
+  it "calibrates pinned source with a root-owned checkout, isolated scratch clones and durable evidence" \_tr -> CLIBinary.withCliBin \cli -> withSystemTempDirectory "native-sdk-calibration" \temporary -> do
     configuredProfile <- lookupEnv "IMPACT_REVIEW_TEST_PROFILE"
     let profile = fromMaybe "impact-review-worker/.guest" configuredProfile
     available <- doesFileExist $ profile </> "manifest.json"
@@ -761,7 +761,32 @@ spec = around withTestResources $ describe "Production impact reviews" do
       fingerprint <- parse (field "manifest" >=> field "sha256") checkpoint :: IO Text
       writeIORef
         plan
-        [ SdkTool "bash" $ AE.object ["command" AE..= ("set -eu; test ! -e golden-private.txt; test ! -w runtime.sh; test \"$(cat .prepared-proof)\" = dependencies-ready; git show " <> base <> ":runtime.sh; cat runtime.sh")]
+        [ SdkTool "bash"
+            $ AE.object
+              [ "command"
+                  AE..= unlines
+                    [ "set -eu"
+                    , "test ! -e golden-private.txt"
+                    , "test ! -w runtime.sh"
+                    , "test \"$(cat .prepared-proof)\" = dependencies-ready"
+                    , "git show " <> base <> ":runtime.sh"
+                    , "cat runtime.sh"
+                    , "before=$(sha256sum runtime.sh)"
+                    , "scratch=$(mktemp -d /tmp/monoscope-source-preflight.XXXXXX)"
+                    , "trap 'rm -rf \"$scratch\"' EXIT"
+                    , "git clone --quiet --no-local -- /workspace \"$scratch/checkout\""
+                    , "cd \"$scratch/checkout\""
+                    , "test ! -e .git/objects/info/alternates"
+                    , "test -w runtime.sh"
+                    , "printf scratch-only > runtime.sh"
+                    , "printf scratch-only > check.txt"
+                    , "cd /workspace"
+                    , "test ! -w runtime.sh"
+                    , "test ! -e check.txt"
+                    , "test \"$(sha256sum runtime.sh)\" = \"$before\""
+                    , "echo scratch-checkout-isolated"
+                    ]
+              ]
         , SdkTool "submit_review" $ draft "runtime.sh" 200
         , SdkTool "submit_review" $ draft "runtime.sh" 1
         , SdkTool "run_regression" $ AE.object ["script" AE..= regression, "failureMessage" AE..= ("retry token lost" :: Text), "testPatch" AE..= ("not a patch" :: Text)]
@@ -785,6 +810,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       results <- readIORef replies
       let reply identifier = maybe (fail $ "Missing tool reply " <> toString identifier) (parse $ field "content") $ find (\value -> AET.parseEither (field "tool_call_id") value == Right identifier) results
       reply "tool-0" >>= (`shouldSatisfy` T.isInfixOf "dropped")
+      reply "tool-0" >>= (`shouldSatisfy` T.isInfixOf "scratch-checkout-isolated")
       reply "tool-1" >>= (`shouldSatisfy` T.isInfixOf "outside the file")
       reply "tool-3" >>= (`shouldSatisfy` T.isInfixOf "Git diff")
       mismatched <- reply "tool-4" >>= either fail pure . AE.eitherDecodeStrict @AE.Value . encodeUtf8
