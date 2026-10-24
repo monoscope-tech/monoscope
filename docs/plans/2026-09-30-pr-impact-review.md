@@ -919,3 +919,16 @@ Independent frozen checks reproduced the large-coordinate segment-intersection f
 Do not promote the skill unchanged. Treatment requested eleven dependency copies and used the frozen verifier in only one review, versus two baseline reviews. The next experiment should provide one persistent private working copy as the tools' default directory, reuse prepared artifacts once, and make the handoff to the host verifier explicit. Keep setup and policy in Haskell; retain the original pinned source and authoritative frozen comparisons.
 
 The study cost $0.37738846 in SDK inference estimates: 137 calls matched to 137 responses, with no unresolved starts or unpriced model responses. Reconciliation of the recorded research cohort now covers 551 matched calls/responses across 47 runs, totaling $1.28858677. This is not all-time account spend or a provider invoice. Preparation, storage and other infrastructure remain unpriced; nothing is charged to customers. Study containers and temporary model credentials were removed. The comparison uses the shared chart CLI's `table` mode and `slack` profile.
+
+
+### Native tools and prompt experiment — 2026-10-25
+
+Advisory review code already uses a persistent private workspace. [PR #704](https://github.com/monoscope-tech/monoscope/pull/704) adds native edit/write tools under Haskell policy. The Source evaluation keeps its protected checkout.
+
+[Pi 1.4.0](https://github.com/earendil-works/pi/blob/v1.4.0/packages/coding-agent/src/core/system-prompt.ts) omits native tool guidance when a custom base prompt replaces its default prompt. The current prototype appends the existing Haskell policy. Deterministic SDK checks pass, including source protection and reproduction before edits.
+
+The protocol planned one pair for each of three cached development PRs. Both initial patch controls returned `coverage` as an object. Haskell requires an array. The frozen stop rule ended scheduling after two trials. Both agent runs completed, but four trials never started. This incomplete comparison establishes no prompt-related quality gain.
+
+All 35 provider calls matched priced usage receipts. The probe estimate is $0.13015853. The cohort now covers 51 runs and 586 matching calls/responses, estimating $1.41874530. Provider invoices remain unreconciled. Infrastructure remains unpriced. Customers received no charges.
+
+Cleanup removed both sandboxes and the temporary credential file. The patch prompt now includes the existing Haskell submission schema. A permanent SDK regression failed before this correction and passed afterward. A new protocol will repeat the comparison with this common correction. The original failures and costs remain in the record. Results, protocols and receipts are in `scripts/local/impact-quality-native-20261025/pi-guidance-study/`.

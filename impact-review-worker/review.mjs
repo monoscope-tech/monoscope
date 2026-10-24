@@ -329,7 +329,7 @@ export async function runRepositoryAgent(input, { modelRuntime, guestImage, expe
       cwd: root, agentDir: join(root, 'agent'), settingsManager,
       noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
       skillsOverride: () => ({ skills, diagnostics: loaded.diagnostics }),
-      systemPrompt: workflow.instructions ?? preparedCheckout.policy.instructions,
+      appendSystemPrompt: [workflow.instructions ?? preparedCheckout.policy.instructions],
     });
     await loader.reload();
     const model = modelRuntime.getModel(request.provider, request.model);
