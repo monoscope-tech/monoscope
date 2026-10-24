@@ -76,6 +76,8 @@ library
     Data.Effectful.Wreq
     Models.Telemetry.Schema
     Pages.Charts.Types
+    Data.Effectful.AgentWorkspace
+    Data.Effectful.AgentWorkspace.Guest
     Pkg.CLIFormat
     Pkg.Deriving
     Pkg.Parser.Eval
@@ -86,7 +88,17 @@ library
   build-depends:
     , aeson
     , base                  >=4.7 && <5
+    , cryptonite
+    , conduit
+    , http-client-tls
+    , minio-hs
+    , network-uri
+    , filelock
+    , temporary
+    , typed-process
+    , unix
     , bytestring
+    , base64
     , case-insensitive
     , containers
     , data-default

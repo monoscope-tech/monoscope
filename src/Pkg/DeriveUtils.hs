@@ -7,7 +7,6 @@ module Pkg.DeriveUtils (
   SnakeJSON (..),
   BaselineState (..),
   DB,
-  UUIDId (..),
   WrappedEnum (..),
   WrappedEnumShow (..),
   addKeepaliveParams,
@@ -48,7 +47,7 @@ import Data.Digest.XXHash (xxHash)
 import Data.Effectful.Hasql (Hasql)
 import Data.HashMap.Strict qualified as HM
 import Data.IntMap qualified as IntMap
-import Data.OpenApi (ToParamSchema, ToSchema (..))
+import Data.OpenApi (ToSchema (..))
 import Data.Text qualified as T
 import Data.Text.Display (Display)
 import Data.Time (DiffTime, UTCTime, ZonedTime, utc, utcToZonedTime, zonedTimeToUTC)
@@ -65,7 +64,6 @@ import Database.PostgreSQL.Simple.ToField (ToField (..))
 import Database.PostgreSQL.Simple.Types (Query (..))
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (type (:>))
-import GHC.Records (HasField (getField))
 import GHC.TypeLits (KnownSymbol, Symbol, symbolVal)
 import Hasql.Connection.Settings qualified as HCS
 import Hasql.Decoders qualified as D
@@ -126,12 +124,17 @@ unAesonTextMaybe :: Maybe (AesonText a) -> Maybe a
 unAesonTextMaybe = fmap unAesonText
 
 
--- | Generic UUID-based ID type with phantom type parameter for type safety
--- Usage: type ProjectId = UUIDId "project"
-newtype UUIDId (name :: Symbol) = UUIDId {unUUIDId :: UUID.UUID}
-  deriving stock (Generic, Read, Show, TH.Lift)
-  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, Hashable, NFData, Ord, ToField, ToParamSchema, ToSchema)
-  deriving anyclass (FromRow, HI.DecodeRow, ToRow)
+instance HI.DecodeValue a => HI.DecodeValue (Sum a) where
+  decodeValue = Sum <$> HI.decodeValue
+
+
+deriving newtype instance FromField (UUIDId name)
+deriving newtype instance ToField (UUIDId name)
+deriving newtype instance HI.DecodeValue (UUIDId name)
+deriving newtype instance HI.EncodeValue (UUIDId name)
+deriving anyclass instance FromRow (UUIDId name)
+deriving anyclass instance HI.DecodeRow (UUIDId name)
+deriving anyclass instance ToRow (UUIDId name)
 
 
 -- | DerivingVia wrapper: snake_case JSON ('DAE.Snake') plus the OpenAPI schema of
@@ -152,14 +155,6 @@ instance (ToSchema (schema a), Typeable a, Typeable schema) => ToSchema (SnakeJS
 -- Case-insensitive text is documented as plain text; lives here so every model
 -- carrying a 'CI Text' field gets the schema without redeclaring the orphan.
 instance ToSchema (CI Text) where declareNamedSchema _ = declareNamedSchema (Proxy @Text)
-
-
-instance HasField "toText" (UUIDId name) Text where
-  getField = UUID.toText . unUUIDId
-
-
-instance HasField "unwrap" (UUIDId name) UUID.UUID where
-  getField = coerce
 
 
 -- | Parse Text to a UUID-based ID

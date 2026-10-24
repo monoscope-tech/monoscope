@@ -8,6 +8,7 @@ import Data.ByteString.Builder (Builder)
 import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
+import Data.Effectful.AgentArtifacts qualified as Artifacts
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Wreq qualified as Wreq
 import Data.List qualified as L
@@ -38,6 +39,7 @@ import Models.Projects.CodeContext qualified as CodeContext
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as ModelGitSync
 import Models.Projects.ImpactReviews qualified as ImpactReviews
+import Models.Projects.IssueFixes qualified as IssueFixes
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.ProjectMemory qualified as ProjectMemory
@@ -570,6 +572,9 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , codeMappingsEditor :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> "editor" :> QueryParam "credentialId" ModelGitSync.GitHubCredentialId :> QueryParam "sample" Text :> Get '[HTML] (RespHeaders (Html ()))
   , codeMappingsPost :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> ReqBody '[FormUrlEncoded] PageCodeContext.CodeMappingForm :> Post '[HTML] (RespHeaders (Html ()))
   , impactReviewSettingsPost :: mode :- "p" :> ProjectId :> "settings" :> "pr-reviews" :> ReqBody '[FormUrlEncoded] ImpactReviews.ReviewSettings :> Post '[HTML] (RespHeaders (Html ()))
+  , issueFixGet :: mode :- "p" :> ProjectId :> "issue-fixes" :> Capture "id" IssueFixes.FixId :> Get '[HTML] (Headers '[Header "Cache-Control" Text] (Html ()))
+  , issueFixPackage :: mode :- "p" :> ProjectId :> "issue-fixes" :> Capture "id" IssueFixes.FixId :> "publication.tar" :> RawM
+  , issueFixMedia :: mode :- "p" :> ProjectId :> "issue-fixes" :> Capture "id" IssueFixes.FixId :> "media" :> Capture "asset" Artifacts.Asset :> RawM
   , impactReviewRetry :: mode :- "p" :> ProjectId :> "settings" :> "pr-reviews" :> Capture "id" ImpactReviews.ReviewId :> "rerun" :> Post '[HTML] (RespHeaders (Html ()))
   , codeMappingsDelete :: mode :- "p" :> ProjectId :> "settings" :> "code-mappings" :> Capture "id" CodeContext.CodeMappingId :> Delete '[HTML] (RespHeaders (Html ()))
   , prometheusSettingsGet :: mode :- "p" :> ProjectId :> "settings" :> "prometheus" :> Get '[HTML] (RespHeaders Settings.PrometheusGet)
@@ -1061,6 +1066,9 @@ cookieProtectedServer =
     , codeMappingsPost = PageCodeContext.codeMappingsPostH
     , impactReviewSettingsPost = PageCodeContext.impactReviewSettingsPostH
     , impactReviewRetry = PageCodeContext.impactReviewRetryH
+    , issueFixGet = PageCodeContext.issueFixGetH
+    , issueFixMedia = PageCodeContext.issueFixMediaH
+    , issueFixPackage = PageCodeContext.issueFixPackageH
     , codeMappingsDelete = PageCodeContext.codeMappingsDeleteH
     , prometheusSettingsGet = Settings.prometheusGetH
     , prometheusSettingsPost = Settings.prometheusPostH

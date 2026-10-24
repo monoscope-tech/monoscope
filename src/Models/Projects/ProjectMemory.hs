@@ -1,4 +1,4 @@
-module Models.Projects.ProjectMemory (PagePath, mkPagePath, pagePathText, WriteError (..), pageAtPath, pageWindow, PageId, MemoryText, mkMemoryText, memoryText, Document (..), Author (..), Page (..), pageLimit, latestPages, pageHistory, writePage) where
+module Models.Projects.ProjectMemory (PagePath, mkPagePath, pagePathText, WriteError (..), pageAtPath, pageWindow, PageId, MemoryText, mkMemoryText, memoryText, Document (..), Author (..), Page (..), Edit (..), Request (..), Summary (..), summarize, pageLimit, latestPages, pageHistory, writePage) where
 
 import Data.Aeson qualified as AE
 import Data.Char (isAlphaNum, isAscii)
@@ -129,6 +129,26 @@ data Author = Member (UUIDId "user") | Agent (UUIDId "agent_attempt")
 data Page = Page {id :: PageId, version :: Int64, document :: Document, author :: Author, updatedAt :: UTCTime, path :: PagePath}
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.ToJSON, HI.DecodeRow)
+
+
+-- | An agent's wiki call; agents address pages by id and keep their current path.
+data Edit = Edit {pageId :: PageId, version :: Word32, document :: Document}
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data Request = List | Read PageId | Write Edit
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data Summary = Summary {id :: PageId, version :: Int64, title :: MemoryText 120, author :: Author, updatedAt :: UTCTime, path :: PagePath}
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.ToJSON)
+
+
+summarize :: Page -> Summary
+summarize page = Summary page.id page.version page.document.title page.author page.updatedAt page.path
 
 
 pageLimit :: Int

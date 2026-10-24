@@ -32,6 +32,8 @@ where
 
 import Control.Monad.Except qualified as Except
 import Data.Aeson qualified as AE
+import Data.Effectful.AgentArtifacts qualified as Artifacts
+import Data.Effectful.CodeReview qualified as CodeReview
 import Data.Effectful.Hasql (Hasql, runHasqlPool)
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Notify qualified
@@ -84,7 +86,8 @@ newtype HXReswap = HXReswap (Maybe Text)
 
 
 type CommonWebEffects =
-  '[ ELLM.LLM
+  '[ Artifacts.AgentArtifacts
+   , ELLM.LLM
    , Effectful.Reader.Static.Reader AuthContext
    , UUIDEff
    , Sleep
@@ -149,6 +152,7 @@ atAuthToBaseTest notifRef sessionWithCookies page =
 effToServantHandler :: AuthContext -> Log.Logger -> TracerProvider -> ATBaseCtx a -> Servant.Handler a
 effToServantHandler env logger tp app =
   app
+    & Artifacts.runAgentArtifactsReal env
     & ELLM.runLLMReal
     & Effectful.Reader.Static.runReader env
     & runUUID
@@ -180,6 +184,7 @@ effToServantHandlerTest = effToServantHandlerTestHTTP (runHTTPGolden "./tests/go
 effToServantHandlerTestHTTP :: (forall x hes. IOE :> hes => Eff (HTTP ': hes) x -> Eff hes x) -> TestClock -> IORef [UUID.UUID] -> AuthContext -> Log.Logger -> TracerProvider -> ATBaseCtx a -> Servant.Handler a
 effToServantHandlerTestHTTP http clock uuidRef env logger tp app =
   app
+    & Artifacts.runAgentArtifactsTest (const $ Left Artifacts.StorageUnavailable) (\_ _ -> Left Artifacts.ArtifactUnavailable)
     & ELLM.runLLMGolden "./tests/golden/"
     & Effectful.Reader.Static.runReader env
     & runStaticUUIDRef uuidRef
@@ -221,6 +226,8 @@ type ATBackgroundEffects =
    , Sleep
    , HTTP
    , ELLM.LLM
+   , CodeReview.CodeReview
+   , Artifacts.AgentArtifacts
    , Concurrent
    , Ki.StructuredConcurrency
    , Timeout
@@ -246,6 +253,8 @@ runBackground logger appCtx tp process =
     & runSleep
     & runHTTPWreq
     & ELLM.runLLMReal
+    & CodeReview.runCodeReviewReal (CodeReview.ArtifactStore <$> appCtx.config.impactReviewUsageDir <*> appCtx.config.impactReviewCacheDir) (CodeReview.workerHost (map toString appCtx.config.impactReviewSkills) appCtx.config.impactReviewPrepareScript appCtx.config.impactReviewDependencyArchive <$> appCtx.config.impactReviewGuestImage <*> appCtx.config.impactReviewAgent) appCtx.config.impactReviewAgent []
+    & Artifacts.runAgentArtifactsReal appCtx
     & runConcurrent
     & Ki.runStructuredConcurrency
     & runTimeout

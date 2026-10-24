@@ -260,6 +260,25 @@ extra-source-files:
     static/migrations/0226_repository_configuration_sync.sql
     static/migrations/0227_repository_sync_local_baseline.sql
     static/migrations/0228_api_change_field_evidence.sql
+    static/migrations/0229_pr_review_usage.sql
+    static/migrations/0230_pr_review_checks.sql
+    static/migrations/0231_pr_review_knowledge.sql
+    static/migrations/0232_issue_fix_runs.sql
+    static/migrations/0233_issue_fix_execution_identity.sql
+    static/migrations/0234_pr_review_attempts.sql
+    static/migrations/0235_pr_review_attempt_receipts.sql
+    static/migrations/0236_issue_fix_usage.sql
+    static/migrations/0237_issue_fix_jobs.sql
+    static/migrations/0238_issue_fix_account_access.sql
+    static/migrations/0239_issue_fix_explanations.sql
+    static/migrations/0240_issue_fix_verified_checkpoint.sql
+    static/migrations/0241_issue_fix_checkpoint_context.sql
+    static/migrations/0242_issue_fix_media_retention.sql
+    static/migrations/0243_agent_usage_activity.sql
+    static/migrations/0244_agent_workspace_allocations.sql
+    static/migrations/0245_issue_fix_independent_review.sql
+    static/migrations/0246_agent_model_calls.sql
+    static/migrations/0247_agent_model_call_attempt.sql
     static/migrations/0248_free_tier_notices.sql
     static/migrations/0248_project_memory.sql
     static/migrations/0249_legacy_plans_to_free.sql
@@ -268,7 +287,16 @@ extra-source-files:
     static/migrations/0251_project_memory_paths.sql
     static/migrations/0252_project_memory_page_identity.sql
     static/migrations/0253_project_memory_legacy_writes.sql
+    test/fixtures/fix-review-agent.mjs
     test/fixtures/github-app-test.pem
+    test/fixtures/impact-review-agent.mjs
+    test/fixtures/issue-fix-agent.mjs
+    test/fixtures/native-checkout-agent.mjs
+    test/fixtures/native-child-lifetime.mjs
+    test/fixtures/native-publication-gh.mjs
+    test/fixtures/native-regression-caller.mjs
+    test/fixtures/native-sandbox.sh
+    test/fixtures/regression-admission-agent.mjs
     test/fixtures/wiki-browser.mjs
     static/public/assets/web-components/dist/manifest.json
 
@@ -291,6 +319,15 @@ library
   exposed-modules:
       BackgroundJobs
       BackgroundJobs.Types
+      Data.Effectful.AgentArtifacts
+      Data.Effectful.CodeReview
+      Data.Effectful.CodeReview.Artifacts
+      Data.Effectful.CodeReview.Checkout
+      Data.Effectful.CodeReview.Policy
+      Data.Effectful.CodeReview.Repair
+      Data.Effectful.CodeReview.Types
+      Data.Effectful.GitPublication
+      Data.Effectful.GitPublication.Native
       Data.Effectful.Hasql
       Data.Effectful.LLM
       Data.Effectful.Notify
@@ -314,11 +351,13 @@ library
       Models.Apis.SchemaCatalog
       Models.Apis.ShareEvents
       Models.Projects.Activation
+      Models.Projects.AgentUsage
       Models.Projects.CodeContext
       Models.Projects.Dashboards
       Models.Projects.DashboardTemplates
       Models.Projects.GitSync
       Models.Projects.ImpactReviews
+      Models.Projects.IssueFixes
       Models.Projects.ProjectApiKeys
       Models.Projects.ProjectMembers
       Models.Projects.ProjectMemory
@@ -499,6 +538,7 @@ library
     , base
     , base16-bytestring
     , base64
+    , bifunctors
     , binary-parser
     , brick
     , bytestring
@@ -529,6 +569,7 @@ library
     , errors
     , extra
     , file-embed
+    , filelock >=0.1.1.7 && <0.2
     , filepath
     , fmt
     , generic-lens
@@ -864,6 +905,7 @@ test-suite integration-tests
     , effectful
     , effectful-core
     , effectful-postgresql
+    , filepath
     , generic-lens
     , grapesy
     , hasql
@@ -873,6 +915,7 @@ test-suite integration-tests
     , hs-opentelemetry-instrumentation-auto
     , hs-opentelemetry-instrumentation-hasql
     , hspec
+    , http-api-data
     , http-client
     , http-client-tls
     , http-types
@@ -937,6 +980,15 @@ test-suite test-dev
   other-modules:
       BackgroundJobs
       BackgroundJobs.Types
+      Data.Effectful.AgentArtifacts
+      Data.Effectful.CodeReview
+      Data.Effectful.CodeReview.Artifacts
+      Data.Effectful.CodeReview.Checkout
+      Data.Effectful.CodeReview.Policy
+      Data.Effectful.CodeReview.Repair
+      Data.Effectful.CodeReview.Types
+      Data.Effectful.GitPublication
+      Data.Effectful.GitPublication.Native
       Data.Effectful.Hasql
       Data.Effectful.LLM
       Data.Effectful.Notify
@@ -960,11 +1012,13 @@ test-suite test-dev
       Models.Apis.SchemaCatalog
       Models.Apis.ShareEvents
       Models.Projects.Activation
+      Models.Projects.AgentUsage
       Models.Projects.CodeContext
       Models.Projects.Dashboards
       Models.Projects.DashboardTemplates
       Models.Projects.GitSync
       Models.Projects.ImpactReviews
+      Models.Projects.IssueFixes
       Models.Projects.ProjectApiKeys
       Models.Projects.ProjectMembers
       Models.Projects.ProjectMemory
@@ -1221,6 +1275,7 @@ test-suite test-dev
     , base
     , base16-bytestring
     , base64
+    , bifunctors
     , binary-parser
     , brick
     , bytestring
@@ -1251,6 +1306,7 @@ test-suite test-dev
     , errors
     , extra
     , file-embed
+    , filelock >=0.1.1.7 && <0.2
     , filepath
     , fmt
     , generic-lens

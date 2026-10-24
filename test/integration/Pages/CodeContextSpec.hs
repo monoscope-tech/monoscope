@@ -890,9 +890,9 @@ spec = do
         _ <- testServant tr $ withUnavailableRepositoryAPI $ PageCodeContext.codeMappingsPostH testPid (PageCodeContext.CodeMappingForm (Just "checkout") (Just "main") (Just "foreign") Nothing Nothing Nothing (Just foreignAccount.id))
         runQueryEffect tr (CodeContext.getCodeMappings testPid) >>= \rows -> length rows `shouldBe` 2
 
-      it "repositoryConnection_survivesCapabilityRemovalAndKeepsItsOwnDetails" \tr -> do
+      it "repositoryConnection_missingReviewRunnerIsNotReadyAndRetainsDetails" \tr -> do
         let encKey = encodeUtf8 tr.trATCtx.config.apiKeyEncryptionSecretKey
-            configured = tr{trATCtx = tr.trATCtx{config = tr.trATCtx.config{githubAppWebhookSecret = "fixture", githubAppId = "fixture", githubAppPrivateKey = "fixture"}}}
+            configured = tr{trATCtx = tr.trATCtx{config = tr.trATCtx.config{githubAppWebhookSecret = "fixture", githubAppId = "fixture", githubAppPrivateKey = "fixture", impactReviewAgent = Just "test/fixtures/impact-review-agent.mjs"}}}
         Just credential <- runQueryEffect tr $ GitSync.upsertGitHubCredential encKey testPid Git.GitHub Nothing "team" (Just 42) Nothing
         runQueryEffect tr $ CodeContext.insertCodeMapping testPid credential.id (Git.RepoRef "team" "checkout" "main") (Just "checkout") "/app/" "src"
         Just sync <- runQueryEffect tr $ GitSync.insertGitHubSync encKey testPid Git.GitHub Nothing "team" "checkout" "main" (GitSync.AppInstallation 42) Nothing "ops"
@@ -902,11 +902,15 @@ spec = do
         map (.service) details.content.mappings `shouldBe` [Just "checkout"]
         fmap (.id) details.content.dashboardSync `shouldBe` Just sync.id
         details.content.reviewReadiness `shouldSatisfy` \case PageCodeContext.ReviewReady _ -> True; _ -> False
+        let withoutAgent = configured{trATCtx = configured.trATCtx{config = configured.trATCtx.config{impactReviewAgent = Nothing}}}
+        (_, noRunner) <- testServant withoutAgent $ PageCodeContext.repositoryGetH testPid repository.id
+        render (Lucid.toHtml noRunner.content) `shouldNotSatisfy` T.isInfixOf "Ready for pull requests"
+        render (Lucid.toHtml noRunner.content) `shouldSatisfy` T.isInfixOf "Automatic reviews are unavailable. Ask your Monoscope administrator to finish review setup."
         let incomplete = configured{trATCtx = configured.trATCtx{config = configured.trATCtx.config{githubAppPrivateKey = ""}}}
         (_, unavailable) <- testServant incomplete $ PageCodeContext.repositoryGetH testPid repository.id
         unavailable.content.reviewReadiness `shouldSatisfy` \case PageCodeContext.ReviewNeedsServer -> True; _ -> False
         runQueryEffect tr $ ImpactReviews.updateSettings testPid (ImpactReviews.ReviewSettings "team" "checkout" False False)
-        (_, disabled) <- testServant configured $ PageCodeContext.repositoryGetH testPid repository.id
+        (_, disabled) <- testServant withoutAgent $ PageCodeContext.repositoryGetH testPid repository.id
         disabled.content.reviewReadiness `shouldSatisfy` \case PageCodeContext.ReviewDisabled -> True; _ -> False
         for_ details.content.mappings \mapping -> runQueryEffect tr $ CodeContext.deleteCodeMapping testPid mapping.id
         void $ runQueryEffect tr $ GitSync.deleteGitHubSync sync.id

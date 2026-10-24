@@ -6,6 +6,7 @@
 -- hasql. Those instances stay in 'Pkg.DeriveUtils', which re-exports this
 -- module so no call site has to care.
 module Pkg.Deriving (
+  UUIDId (..),
   CamelSchema (..),
   JsonValueSchema (..),
   KnownMaybeSymbol (..),
@@ -33,12 +34,28 @@ import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import GHC.Generics (Rep)
+import GHC.Records (HasField (getField))
 import GHC.TypeLits (KnownSymbol, Symbol, symbolVal)
+import Language.Haskell.TH.Syntax qualified as TH
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import System.Envy (Var (..))
 import Text.Casing (fromSnake, quietSnake, toPascal)
 import Web.HttpApiData (FromHttpApiData (..))
+
+
+-- | A typed identifier shared by native workers, CLI and server.
+newtype UUIDId (name :: Symbol) = UUIDId {unUUIDId :: UUID.UUID}
+  deriving stock (Generic, Read, Show, TH.Lift)
+  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromHttpApiData, Hashable, NFData, Ord, ToParamSchema, ToSchema)
+
+
+instance HasField "toText" (UUIDId name) Text where
+  getField = UUID.toText . unUUIDId
+
+
+instance HasField "unwrap" (UUIDId name) UUID.UUID where
+  getField = coerce
 
 
 -- | DerivingVia wrapper for snake-case-stringified enums.

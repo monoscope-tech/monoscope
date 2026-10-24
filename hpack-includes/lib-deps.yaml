@@ -26,6 +26,7 @@
 - attoparsec-aeson
 - async
 - barbies
+- bifunctors
 - binary-parser
 - bytestring
 - base64
@@ -136,6 +137,7 @@
 - network-uri
 - scotty
 - filepath
+- filelock >= 0.1.1.7 && < 0.2
 - file-embed
 - http-client
 - wai-middleware-static
