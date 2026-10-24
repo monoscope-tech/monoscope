@@ -1166,6 +1166,10 @@ spec = around withTestResources $ describe "Production impact reviews" do
     void $ git ["init", "--quiet"]
     void $ git ["config", "user.name", "Patch fixture"]
     void $ git ["config", "user.email", "fixture@example.invalid"]
+    createDirectoryIfMissing True $ repository </> "src"
+    writeFileBS (repository </> "src" </> "source.txt") "fixture source\n"
+    writeFileBS (repository </> "src" </> "binary") "\0\n"
+    void $ git ["add", "src"]
     void $ git ["commit", "--quiet", "--allow-empty", "-m", "baseline"]
     commitRevision <- git ["rev-parse", "HEAD"]
     unavailable <- newIORef False
@@ -1239,6 +1243,17 @@ spec = around withTestResources $ describe "Production impact reviews" do
       writeIORef replyValue accepted
       invalid <- source "source-invalid.json" >>= either (fail . show) pure
       concatMap (mapMaybe (leftToMaybe . (.validation)) . (.submissions)) invalid.runs `shouldSatisfy` any (T.isInfixOf "schema")
+      for_ (["src", "src/binary", "src/source.txt"] :: [Text]) \path -> do
+        writeIORef replyValue $ AE.object ["findings" AE..= ([AE.object ["file" AE..= path, "start_line" AE..= (1 :: Int), "end_line" AE..= (1 :: Int), "message" AE..= ("Fixture finding" :: Text)]] :: [AE.Value])]
+        reviewed <- source (toString (T.replace "/" "-" path) <> ".json") >>= either (fail . show) pure
+        case reviewed.runs of
+          [row] -> case row.outcome of
+            Evaluation.Completed{} -> path `shouldBe` "src/source.txt"
+            Evaluation.Failed{} -> do
+              path `shouldNotBe` "src/source.txt"
+              mapMaybe (leftToMaybe . (.validation)) row.submissions `shouldSatisfy` any (T.isInfixOf "Finding file")
+            Evaluation.Running -> expectationFailure "Source validation did not finish"
+          _ -> expectationFailure "Source validation discarded its run"
       count <- length <$> requests
       writeFileLBS sourceCaseFile $ AE.encode $ document "https://github.com/fixture/source?unexpected"
       malformed <- source "source-malformed.json"

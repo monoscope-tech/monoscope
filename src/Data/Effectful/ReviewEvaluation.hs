@@ -4,6 +4,7 @@ import Control.Monad (foldM)
 import Control.Monad.Trans.Except (throwE)
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
+import Data.Char (isAlphaNum, isAscii)
 import Data.Effectful.CodeReview qualified as Agent
 import Data.Effectful.CodeReview.Artifacts qualified as Artifacts
 import Data.Effectful.CodeReview.Policy qualified as Policy
@@ -94,7 +95,7 @@ instance AE.FromJSON SourceCase where
     validSubject $ subject SourceStudy input
     let metadata = input.pullRequest
         identifier = T.stripPrefix "https://github.com/" metadata.repo
-        component allowed text = not (T.null text) && T.all (\c -> c `elem` (['a' .. 'z'] <> ['A' .. 'Z'] <> ['0' .. '9'] <> allowed)) text
+        component allowed text = not (T.null text) && T.all (\c -> isAscii c && isAlphaNum c || c `elem` allowed) text
         repositoryURL = case T.splitOn "/" <$> identifier of Just [owner, name] -> component "_-" owner && component "_.-" name; _ -> False
     unless (repositoryURL && metadata.pr_number > 0 && T.length metadata.title <= 1000 && T.length metadata.body <= 100000) $ fail "Invalid source-review PR metadata"
     pure input
@@ -253,11 +254,14 @@ runEvaluationReal = interpret $ \_ -> \case
                               SourceStudy -> runExceptT do
                                 unless (null $ Schema.validateJSON mempty Policy.sourceReviewSchema value) $ throwE "Source review violates its schema"
                                 candidate <- case AE.fromJSON @SourceDraft value of AE.Error _ -> throwE "Source review does not match its schema"; AE.Success draft -> pure draft
-                                for_ candidate.findings \finding -> do
-                                  unless (not (T.any (\char -> char < ' ' || char == '\\') finding.file) && all (`notElem` ["", ".", ".."]) (T.splitOn "/" finding.file)) $ throwE "Finding paths must be repository-relative"
-                                  unless (finding.end_line >= finding.start_line) $ throwE "Finding ranges must be ordered"
-                                  contents <- ExceptT $ first (const "Finding file cannot be read at the pinned head") <$> tryAny (git (16 * 1024 * 1024) ["show", "--no-ext-diff", "--no-textconv", toString $ revisionText target.head <> ":" <> finding.file, "--"])
-                                  unless (fromIntegral finding.end_line <= length (lines contents)) $ throwE "Finding range is outside the file at head"
+                                for_ (Map.toList $ Map.fromListWith (<>) $ map (\finding -> (finding.file, [finding] :: [SourceFinding])) candidate.findings) \(path, findings) -> do
+                                  unless (not (T.any (\char -> char < ' ' || char == '\\') path) && all (`notElem` ["", ".", ".."]) (T.splitOn "/" path)) $ throwE "Finding paths must be repository-relative"
+                                  contents <- ExceptT $ first (const "Finding file cannot be read as a blob at the pinned head") <$> tryAny (git (16 * 1024 * 1024) ["cat-file", "blob", toString $ revisionText target.head <> ":" <> path])
+                                  when (T.any (== '\0') contents) $ throwE "Finding file must be text"
+                                  let lineCount = length $ lines contents
+                                  for_ findings \finding -> do
+                                    unless (finding.end_line >= finding.start_line) $ throwE "Finding ranges must be ordered"
+                                    unless (fromIntegral finding.end_line <= lineCount) $ throwE "Finding range is outside the file at head"
                             record candidate validation = liftIO do
                               change $ \current -> current{submissions = current.submissions <> [Submission candidate validation]}
                               pure validation
