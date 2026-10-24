@@ -25,7 +25,6 @@ import Log (LogLevel (..), readLogLevelEither, showLogLevel)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.ContainerTypes qualified as Containers
-import Models.Telemetry.RUM qualified as RUM
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.HTTP.Client qualified as HC
 import Network.HTTP.Client.TLS qualified as HCTLS
@@ -435,10 +434,6 @@ data AuthContext = AuthContext
   -- Completed results live in PostgreSQL's query_cache and are shared by replicas.
   , infrastructureCache :: Cache Containers.ContainerSnapshotKey (V.Vector Containers.ContainerRow)
   -- ^ One expensive metrics pivot feeds every infrastructure tab and detail drawer.
-  , rumCache :: Cache RUM.RumCacheKey RUM.RumQueryResult
-  -- ^ Briefly reuses RUM panel reads across tab navigation and preloaded requests.
-  , rumQueryFlights :: QueryCache.QueryFlights (RUM.RumCacheKey, Bool) (Either RUM.RumQuery (RUM.RumQueryResult, Bool))
-  -- ^ Shares panel requests within a replica; stale reads and forced refreshes remain separate.
   , codeBlobCache :: Cache CodeBlobKey ByteString
   -- ^ Source blobs for stack-trace code context, keyed @(owner, repo, ref, path)@. One git-host
   -- API call per frame opened otherwise, and a hot issue viewed repeatedly re-fetches every
@@ -557,11 +552,6 @@ configToEnv config = do
   endpointStatsCache <- liftIO $ newCache (Just $ TimeSpec 300 0)
   rawQueryFlights <- liftIO QueryCache.newQueryFlights
   infrastructureCache <- liftIO $ newCache (Just $ TimeSpec 15 0)
-  -- 15s was shorter than the queries it caches: a RUM panel set takes ~28s over a 24h
-  -- window, so every entry expired before the next request could reach it and the cache
-  -- never hit. Matches the other telemetry stat caches above.
-  rumCache <- liftIO $ newCache (Just $ TimeSpec 300 0)
-  rumQueryFlights <- liftIO QueryCache.newQueryFlights
   -- 15 min: a mutable ref (a branch name) must not pin a stale blob for long, and the value
   -- here is collapsing the burst of frames opened while reading ONE issue, not long-term
   -- storage. A commit-sha ref is immutable and would tolerate far longer, but the key cannot
@@ -624,8 +614,6 @@ configToEnv config = do
       , endpointStatsCache
       , rawQueryFlights
       , infrastructureCache
-      , rumCache
-      , rumQueryFlights
       , codeBlobCache
       , repoListCache
       , extractionWorker

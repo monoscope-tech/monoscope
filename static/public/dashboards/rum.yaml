@@ -4,6 +4,18 @@ preview: /public/assets/svgs/screens/http-stats.svg
 description: Browser experience, Core Web Vitals, frontend errors, and user sessions from OpenTelemetry
 refresh_interval: 60s
 
+# Browser scope is laddered: no single marker covers real browser telemetry, and
+# telemetry.sdk.language alone matches nothing from the OpenTelemetry browser SDKs.
+# The span predicates below are TimeFusion's `rum_*` rollup filters verbatim
+# (schemas/otel_logs_and_spans.yaml); a rollup serves a widget only while they match exactly.
+#   browser:   (resource___telemetry___sdk___language IN ('webjs', 'javascript', 'js') OR resource___user_agent___original IS NOT NULL OR name IN ('documentLoad', 'documentFetch') OR (name LIKE 'Pageview %' OR name = 'documentLoad'))
+#   page view: (name LIKE 'Pageview %' OR name = 'documentLoad')
+#   error:     (status_code = 'ERROR' OR lower(COALESCE(level, '')) = 'error' OR attributes___exception___type IS NOT NULL)
+#
+# Web Vitals P75 is read from the histogram buckets (unnest, sum per bound, interpolate within
+# the bucket holding the 75th observation), never the export mean. Each series is one page view,
+# so a cumulative series' newest point holds all of its observations.
+
 variables:
   - key: app
     title: Application
@@ -16,7 +28,7 @@ variables:
         SELECT DISTINCT resource___service___name
         FROM otel_logs_and_spans
         WHERE project_id='{{project_id}}'
-          AND resource___telemetry___sdk___language IN ('webjs', 'javascript', 'js')
+          AND (resource___telemetry___sdk___language IN ('webjs', 'javascript', 'js') OR resource___user_agent___original IS NOT NULL OR name IN ('documentLoad', 'documentFetch') OR (name LIKE 'Pageview %' OR name = 'documentLoad'))
           AND resource___service___name IS NOT NULL
           {{time_filter}}
         LIMIT 100
@@ -34,68 +46,61 @@ tabs:
         description: Real browser traffic only. Backend spans and synthetic requests are excluded.
         layout: { w: 12, h: 4 }
         children:
-          - type: timeseries_stat
+          - type: stat
             title: Sessions
             icon: users
-            query: |
-              resource.telemetry.sdk.language == "webjs" and attributes.session.id != null and ("{{var-app}}" == "" or resource.service.name == "{{var-app}}")
-              | summarize started_at=min(timestamp) by attributes.session.id
-              | summarize count() by bin_auto(started_at)
+            query: &app '"{{var-app}}" == "" or resource.service.name == "{{var-app}}"'
+            sql: |
+              SELECT distinct_count(approx_count_distinct(attributes___session___id))::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND (resource___telemetry___sdk___language IN ('webjs', 'javascript', 'js') OR resource___user_agent___original IS NOT NULL OR name IN ('documentLoad', 'documentFetch') OR (name LIKE 'Pageview %' OR name = 'documentLoad')) AND attributes___session___id IS NOT NULL
             unit: sessions
-            summarize_by: sum
             layout: { w: 3, h: 2 }
 
           - type: timeseries_stat
             title: Page views
             icon: file-lines
-            query: |
-              resource.telemetry.sdk.language == "webjs" and name startswith "Pageview · " and ("{{var-app}}" == "" or resource.service.name == "{{var-app}}")
-              | summarize count() by bin_auto(timestamp)
+            query: *app
+            sql: |
+              SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer, 'value', count(*)::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND (name LIKE 'Pageview %' OR name = 'documentLoad') GROUP BY time_bucket('{{rollup_interval}}', timestamp) ORDER BY time_bucket('{{rollup_interval}}', timestamp) DESC
             unit: views
             summarize_by: sum
             layout: { w: 3, h: 2 }
 
-          - type: stat
+          - type: timeseries_stat
             title: Browser errors
             icon: triangle-exclamation
-            query: |
-              resource.telemetry.sdk.language == "webjs" and (status_code == "ERROR" or attributes.exception.type != null) and ("{{var-app}}" == "" or resource.service.name == "{{var-app}}")
-              | summarize count()
+            query: *app
+            sql: &browser_error_series |
+              SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer, 'value', count(*)::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND (resource___telemetry___sdk___language IN ('webjs', 'javascript', 'js') OR resource___user_agent___original IS NOT NULL OR name IN ('documentLoad', 'documentFetch') OR (name LIKE 'Pageview %' OR name = 'documentLoad')) AND (status_code = 'ERROR' OR lower(COALESCE(level, '')) = 'error' OR attributes___exception___type IS NOT NULL) GROUP BY time_bucket('{{rollup_interval}}', timestamp) ORDER BY time_bucket('{{rollup_interval}}', timestamp) DESC
             unit: errors
+            summarize_by: sum
+            series_intent: error
             layout: { w: 3, h: 2 }
 
           - type: stat
             title: P75 page load
             icon: gauge
-            query: |
-              resource.telemetry.sdk.language == "webjs" and name startswith "Pageview · " and duration != null and ("{{var-app}}" == "" or resource.service.name == "{{var-app}}")
-              | summarize p75(duration) / 1000000
+            query: *app
+            sql: |
+              SELECT (approx_percentile(0.75, percentile_agg(duration)) / 1000000)::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND (name LIKE 'Pageview %' OR name = 'documentLoad') AND duration IS NOT NULL
             unit: ms
             layout: { w: 3, h: 2 }
 
       - type: timeseries
         title: Page views and errors
-        description: Frontend traffic with errors as a separate series.
+        description: A page view that errored counts in both series.
         layout: { w: 7, h: 5 }
+        query: *app
         sql: |
-          SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
-            CASE WHEN status_code = 'ERROR' OR attributes___exception___type IS NOT NULL THEN 'Errors' ELSE 'Page views' END AS series,
-            COUNT(*)::float AS value
-          FROM otel_logs_and_spans
-          WHERE project_id='{{project_id}}'
-            AND resource___telemetry___sdk___language IN ('webjs', 'javascript', 'js')
-            AND (name LIKE 'Pageview · %' OR status_code = 'ERROR' OR attributes___exception___type IS NOT NULL)
-            AND ('{{var-app}}' = '' OR resource___service___name = '{{var-app}}')
-            {{time_filter}}
-          GROUP BY time, series ORDER BY time DESC
+          SELECT a.time, s.series, CASE s.series WHEN 'Page views' THEN a.page_views ELSE a.errors END FROM (SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time, count(*) FILTER (WHERE (name LIKE 'Pageview %' OR name = 'documentLoad'))::float AS page_views, count(*) FILTER (WHERE (resource___telemetry___sdk___language IN ('webjs', 'javascript', 'js') OR resource___user_agent___original IS NOT NULL OR name IN ('documentLoad', 'documentFetch') OR (name LIKE 'Pageview %' OR name = 'documentLoad')) AND (status_code = 'ERROR' OR lower(COALESCE(level, '')) = 'error' OR attributes___exception___type IS NOT NULL))::float AS errors FROM otel_logs_and_spans WHERE {{query_ast_filters}} GROUP BY time_bucket('{{rollup_interval}}', timestamp)) a CROSS JOIN (VALUES ('Page views'), ('Errors')) AS s(series) ORDER BY a.time DESC
 
       - type: table
         title: Top pages
-        description: Most-viewed routes and their P75 real-user load duration.
+        description: Routes with ids masked, and their P75 real-user load duration.
         layout: { w: 5, h: 5 }
         columns:
           - field: page
             title: Page
+            link: /p/{{project_id}}/log_explorer?query={{row.kql}}&{{time_range}}
           - field: views
             title: Views
             column_type: number
@@ -104,27 +109,45 @@ tabs:
             title: P75
             column_type: duration
             unit: ms
+          - field: kql
+            title: Explorer query
+            hidden: true
+        query: *app
         sql: |
-          SELECT COALESCE(NULLIF(attributes___url___path, ''), replace(name, 'Pageview · ', '')) AS page,
-            COUNT(*)::text AS views,
-            ROUND((approx_percentile(0.75, percentile_agg(duration)) / 1000000.0)::numeric, 1)::text AS p75_ms
-          FROM otel_logs_and_spans
-          WHERE project_id='{{project_id}}'
-            AND resource___telemetry___sdk___language IN ('webjs', 'javascript', 'js')
-            AND name LIKE 'Pageview · %' AND duration IS NOT NULL
-            AND ('{{var-app}}' = '' OR resource___service___name = '{{var-app}}')
-            {{time_filter}}
-          GROUP BY page ORDER BY COUNT(*) DESC LIMIT 20
+          WITH pages AS (
+            SELECT COALESCE(NULLIF(regexp_replace(regexp_replace(regexp_replace(regexp_replace(regexp_replace(
+                COALESCE(NULLIF(CASE WHEN name = 'documentLoad' THEN attributes___url___full END, ''), NULLIF(attributes___url___path, ''), NULLIF(attributes___url___full, ''), replace(name, 'Pageview · ', '')),
+                '^[A-Za-z][A-Za-z0-9+.-]*://[^/]+', ''), '[?#].*$', ''),
+                '/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[^/]*', '/:id', 'g'), '/[0-9][^/]*', '/:id', 'g'), '/[A-Z][A-Z0-9]*[0-9][A-Z0-9]*', '/:id', 'g'), ''), '/') AS page,
+              duration
+            FROM otel_logs_and_spans
+            WHERE {{query_ast_filters}} AND (name LIKE 'Pageview %' OR name = 'documentLoad') AND duration IS NOT NULL
+          )
+          -- The route as an anchored regex (masked segments match any segment; metacharacters
+          -- escaped as one-character classes, so the KQL string needs no backslashes).
+          SELECT page, n::text AS views, p75_ms,
+            '(name == "documentLoad" or name startswith "Pageview ") and (attributes.url.path matches regex "^' || rx || '$" or attributes.url.full matches regex "^([A-Za-z][A-Za-z0-9+.-]*://[^/?#]+)?' || rx || '([?#].*)?$")' AS kql
+          FROM (
+            SELECT page, COUNT(*) AS n,
+              ROUND((approx_percentile(0.75, percentile_agg(duration)) / 1000000.0)::numeric, 1)::text AS p75_ms,
+              replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(page, '"', ''),
+                '.', '[.]'), '+', '[+]'), '*', '[*]'), '(', '[(]'), ')', '[)]'), '$', '[$]'), '|', '[|]'), '{', '[{]'), ':id', '[^/]+') AS rx
+            FROM pages GROUP BY page ORDER BY COUNT(*) DESC LIMIT 20
+          ) AS top ORDER BY n DESC
 
       - type: table
         title: Recent sessions
-        description: Open the RUM Sessions page for correlated replay and telemetry.
+        description: Open a session to see its events and, when recorded, its replay.
         layout: { w: 12, h: 6 }
+        cta:
+          title: All sessions
+          url: /p/{{project_id}}/rum/sessions
         columns:
-          - field: user_or_session
-            title: User / session
-          - field: last_page
-            title: Last page
+          - field: session
+            title: Session
+            link: /p/{{project_id}}/log_explorer?viz_type=sessions&query=attributes.session.id%20%3D%3D%20%22{{row.session}}%22&{{time_range}}
+          - field: user
+            title: User
           - field: page_views
             title: Views
             column_type: number
@@ -135,156 +158,196 @@ tabs:
             progress_variant: error
           - field: last_seen
             title: Last seen
+        query: *app
         sql: |
-          SELECT COALESCE(MAX(attributes___user___full_name), MAX(attributes___user___email), MAX(attributes___user___id), attributes___session___id) AS user_or_session,
-            COALESCE(MAX(attributes___url___path), 'Unknown page') AS last_page,
-            COUNT(*) FILTER (WHERE name LIKE 'Pageview · %')::text AS page_views,
-            COUNT(*) FILTER (WHERE status_code = 'ERROR' OR attributes___exception___type IS NOT NULL)::text AS errors,
+          SELECT attributes___session___id AS session,
+            COALESCE(MAX(attributes___user___full_name), MAX(attributes___user___email), MAX(attributes___user___id), '') AS "user",
+            COUNT(*) FILTER (WHERE (name LIKE 'Pageview %' OR name = 'documentLoad'))::text AS page_views,
+            COUNT(*) FILTER (WHERE (status_code = 'ERROR' OR lower(COALESCE(level, '')) = 'error' OR attributes___exception___type IS NOT NULL))::text AS errors,
             MAX(timestamp)::text AS last_seen
           FROM otel_logs_and_spans
-          WHERE project_id='{{project_id}}'
-            AND resource___telemetry___sdk___language IN ('webjs', 'javascript', 'js')
+          WHERE {{query_ast_filters}}
+            AND (resource___telemetry___sdk___language IN ('webjs', 'javascript', 'js') OR resource___user_agent___original IS NOT NULL OR name IN ('documentLoad', 'documentFetch') OR (name LIKE 'Pageview %' OR name = 'documentLoad'))
             AND attributes___session___id IS NOT NULL
-            AND ('{{var-app}}' = '' OR resource___service___name = '{{var-app}}')
-            {{time_filter}}
           GROUP BY attributes___session___id ORDER BY MAX(timestamp) DESC LIMIT 50
 
   - name: Web Vitals
     icon: gauge
     widgets:
-      - type: group
-        title: Core Web Vitals
-        description: Browser SDK histograms. LCP, INP, FCP, and TTFB are milliseconds; CLS is dimensionless.
-        layout: { w: 12, h: 4 }
-        children:
-          - type: stat
-            title: LCP
-            icon: clock
-            sql: |
-              WITH latest AS (
-                SELECT COALESCE(value, distribution_sum / NULLIF(distribution_count, 0)) AS value,
-                  row_number() OVER (PARTITION BY series_id ORDER BY timestamp DESC) AS rn
-                FROM otel_metrics WHERE project_id='{{project_id}}' AND metric_name='browser.web_vital.lcp'
-                  AND ('{{var-app}}' = '' OR resource___service___name = '{{var-app}}') {{time_filter}}
-              ) SELECT approx_percentile(0.75, percentile_agg(value))::float FROM latest WHERE rn=1 AND value IS NOT NULL
-            unit: ms
-            layout: { w: 3, h: 2 }
-
-          - type: stat
-            title: INP
-            icon: arrow-pointer
-            sql: |
-              WITH latest AS (
-                SELECT COALESCE(value, distribution_sum / NULLIF(distribution_count, 0)) AS value,
-                  row_number() OVER (PARTITION BY series_id ORDER BY timestamp DESC) AS rn
-                FROM otel_metrics WHERE project_id='{{project_id}}' AND metric_name='browser.web_vital.inp'
-                  AND ('{{var-app}}' = '' OR resource___service___name = '{{var-app}}') {{time_filter}}
-              ) SELECT approx_percentile(0.75, percentile_agg(value))::float FROM latest WHERE rn=1 AND value IS NOT NULL
-            unit: ms
-            layout: { w: 3, h: 2 }
-
-          - type: stat
-            title: CLS
-            icon: arrows-up-down
-            sql: |
-              WITH latest AS (
-                SELECT COALESCE(value, distribution_sum / NULLIF(distribution_count, 0)) AS value,
-                  row_number() OVER (PARTITION BY series_id ORDER BY timestamp DESC) AS rn
-                FROM otel_metrics WHERE project_id='{{project_id}}' AND metric_name='browser.web_vital.cls'
-                  AND ('{{var-app}}' = '' OR resource___service___name = '{{var-app}}') {{time_filter}}
-              ) SELECT approx_percentile(0.75, percentile_agg(value))::float FROM latest WHERE rn=1 AND value IS NOT NULL
-            unit: score
-            layout: { w: 3, h: 2 }
-
-          - type: stat
-            title: TTFB
-            icon: server
-            sql: |
-              WITH latest AS (
-                SELECT COALESCE(value, distribution_sum / NULLIF(distribution_count, 0)) AS value,
-                  row_number() OVER (PARTITION BY series_id ORDER BY timestamp DESC) AS rn
-                FROM otel_metrics WHERE project_id='{{project_id}}' AND metric_name='browser.web_vital.ttfb'
-                  AND ('{{var-app}}' = '' OR resource___service___name = '{{var-app}}') {{time_filter}}
-              ) SELECT approx_percentile(0.75, percentile_agg(value))::float FROM latest WHERE rn=1 AND value IS NOT NULL
-            unit: ms
-            layout: { w: 3, h: 2 }
-
-      - type: timeseries_line
-        title: Web Vitals over time
-        description: Mean value per export interval. Use the RUM Performance page for threshold assessments.
-        layout: { w: 12, h: 5 }
-        sql: |
-          SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
-            upper(replace(metric_name, 'browser.web_vital.', '')) AS vital,
-            AVG(COALESCE(value, distribution_sum / NULLIF(distribution_count, 0)))::float AS value
-          FROM otel_metrics
-          WHERE project_id='{{project_id}}'
-            AND metric_name LIKE 'browser.web_vital.%'
-            AND ('{{var-app}}' = '' OR resource___service___name = '{{var-app}}')
-            {{time_filter}}
-          GROUP BY time, vital ORDER BY time DESC
-
       - type: table
-        title: Vital sample coverage
-        description: Confirm which field metrics the browser SDK is reporting.
+        title: Core Web Vitals
+        description: P75 of real-user observations, rated against Google's field thresholds. The bucket is the range the P75 is known to lie in.
         layout: { w: 12, h: 4 }
         columns:
           - field: vital
             title: Vital
+          - field: p75
+            title: P75
+          - field: rating
+            title: Rating
+          - field: bucket
+            title: Known range
           - field: samples
             title: Samples
             column_type: number
             progress: column_percent
-          - field: last_seen
-            title: Last seen
+        query: &metrics_app 'metrics | where "{{var-app}}" == "" or resource.service.name == "{{var-app}}"'
         sql: |
-          SELECT upper(replace(metric_name, 'browser.web_vital.', '')) AS vital,
-            SUM(COALESCE(distribution_count, 1))::text AS samples,
-            MAX(timestamp)::text AS last_seen
-          FROM otel_metrics
-          WHERE project_id='{{project_id}}' AND metric_name LIKE 'browser.web_vital.%'
-            AND ('{{var-app}}' = '' OR resource___service___name = '{{var-app}}') {{time_filter}}
-          GROUP BY metric_name ORDER BY metric_name
+          WITH points AS (
+            SELECT replace(metric_name, 'browser.web_vital.', '') AS vital, hist_explicit_bounds AS bounds, hist_bucket_counts AS counts,
+              ROW_NUMBER() OVER (PARTITION BY series_id, start_timestamp ORDER BY timestamp DESC) AS newest
+            FROM otel_metrics
+            WHERE {{query_ast_filters}} AND metric_name IN ('browser.web_vital.lcp', 'browser.web_vital.inp', 'browser.web_vital.cls', 'browser.web_vital.fcp', 'browser.web_vital.ttfb') AND metric_type = 'HISTOGRAM' AND hist_bucket_counts IS NOT NULL
+          ), buckets AS (
+            SELECT vital, unnest(COALESCE(bounds, ARRAY[]::float8[]) || ARRAY[NULL]::float8[]) AS le, unnest(counts) AS n FROM points WHERE newest = 1
+          ), summed AS (
+            SELECT vital, le, SUM(n) AS n FROM buckets GROUP BY vital, le
+          ), cdf AS (
+            SELECT vital, le, n,
+              SUM(n) OVER (PARTITION BY vital ORDER BY le NULLS LAST ROWS UNBOUNDED PRECEDING) AS cum,
+              SUM(n) OVER (PARTITION BY vital) AS total,
+              LAG(le) OVER (PARTITION BY vital ORDER BY le NULLS LAST) AS lo
+            FROM summed
+          ), p75 AS (
+            SELECT vital, total, lo, le,
+              CASE WHEN le IS NOT NULL THEN COALESCE(lo, 0) + (le - COALESCE(lo, 0)) * (0.75 * total - (cum - n)) / n END AS value,
+              CASE vital WHEN 'lcp' THEN 2500 WHEN 'inp' THEN 200 WHEN 'cls' THEN 0.1 WHEN 'fcp' THEN 1800 WHEN 'ttfb' THEN 800 END AS good,
+              CASE vital WHEN 'lcp' THEN 4000 WHEN 'inp' THEN 500 WHEN 'cls' THEN 0.25 WHEN 'fcp' THEN 3000 WHEN 'ttfb' THEN 1800 END AS poor
+            FROM cdf WHERE total > 0 AND cum >= 0.75 * total AND cum - n < 0.75 * total
+          ), rated AS (
+            -- A bucket inside one band rates exactly. One straddling a threshold but no wider than
+            -- twice the band gives an estimate; anything wider interpolates noise and is not shown.
+            SELECT *, CASE WHEN le <= good THEN 'Good' WHEN COALESCE(lo, 0) >= poor THEN 'Poor' WHEN COALESCE(lo, 0) >= good AND le <= poor THEN 'Needs improvement' END AS verdict,
+              le - COALESCE(lo, 0) <= 2 * (poor - good) AS estimable
+            FROM p75
+          )
+          SELECT upper(vital) AS vital,
+            CASE WHEN verdict IS NULL AND NOT estimable THEN '—' WHEN value IS NULL THEN '> ' || lo::text
+              ELSE CASE WHEN verdict IS NULL THEN '≈ ' ELSE '' END || CASE WHEN vital = 'cls' THEN ROUND(value::numeric, 3)::text ELSE ROUND(value::numeric)::text || ' ms' END END AS p75,
+            CASE WHEN verdict = 'Good' THEN 'rating;success-strong⇒Good' WHEN verdict = 'Poor' THEN 'rating;error-strong⇒Poor' WHEN verdict = 'Needs improvement' THEN 'rating;warning-strong⇒Needs improvement'
+              WHEN NOT estimable THEN 'rating;info-weak⇒Buckets too coarse to rate' WHEN value <= good THEN 'rating;success-weak⇒Likely good' WHEN value > poor THEN 'rating;error-weak⇒Likely poor'
+              ELSE 'rating;warning-weak⇒Likely needs improvement' END AS rating,
+            COALESCE(lo, 0)::text || ' – ' || COALESCE(le::text, '∞') AS bucket,
+            total::text AS samples
+          FROM rated ORDER BY CASE vital WHEN 'lcp' THEN 1 WHEN 'inp' THEN 2 WHEN 'cls' THEN 3 WHEN 'fcp' THEN 4 ELSE 5 END
+
+      - type: timeseries_line
+        title: P75 over time
+        description: Millisecond vitals. CLS is unitless and shown in the table above.
+        layout: { w: 12, h: 5 }
+        unit: ms
+        query: *metrics_app
+        sql: |
+          WITH points AS (
+            SELECT time_bucket('{{rollup_interval}}', timestamp) AS t, upper(replace(metric_name, 'browser.web_vital.', '')) AS vital, hist_explicit_bounds AS bounds, hist_bucket_counts AS counts,
+              ROW_NUMBER() OVER (PARTITION BY series_id, start_timestamp ORDER BY timestamp DESC) AS newest
+            FROM otel_metrics
+            WHERE {{query_ast_filters}} AND metric_name IN ('browser.web_vital.lcp', 'browser.web_vital.inp', 'browser.web_vital.fcp', 'browser.web_vital.ttfb') AND metric_type = 'HISTOGRAM' AND hist_bucket_counts IS NOT NULL
+          ), buckets AS (
+            SELECT t, vital, unnest(COALESCE(bounds, ARRAY[]::float8[]) || ARRAY[NULL]::float8[]) AS le, unnest(counts) AS n FROM points WHERE newest = 1
+          ), summed AS (
+            SELECT t, vital, le, SUM(n) AS n FROM buckets GROUP BY t, vital, le
+          ), cdf AS (
+            SELECT t, vital, le, n,
+              SUM(n) OVER (PARTITION BY t, vital ORDER BY le NULLS LAST ROWS UNBOUNDED PRECEDING) AS cum,
+              SUM(n) OVER (PARTITION BY t, vital) AS total,
+              LAG(le) OVER (PARTITION BY t, vital ORDER BY le NULLS LAST) AS lo
+            FROM summed
+          )
+          SELECT extract(epoch from t)::integer AS time, vital, (COALESCE(lo, 0) + (le - COALESCE(lo, 0)) * (0.75 * total - (cum - n)) / n)::float AS value
+          FROM cdf WHERE total > 0 AND le IS NOT NULL AND cum >= 0.75 * total AND cum - n < 0.75 * total
+          ORDER BY time DESC
+
+      - type: table
+        title: Vitals by page
+        description: P75 per page, busiest first. A dash marks a bucket too wide to place against the thresholds.
+        layout: { w: 12, h: 6 }
+        columns:
+          - field: page
+            title: Page
+          - field: lcp
+            title: LCP
+          - field: inp
+            title: INP
+          - field: cls
+            title: CLS
+          - field: samples
+            title: Samples
+            column_type: number
+            progress: column_percent
+        query: *metrics_app
+        sql: |
+          WITH points AS (
+            SELECT COALESCE(attributes #>> '{page,url}', attributes->>'page.url', attributes->>'url', '') AS url,
+              replace(metric_name, 'browser.web_vital.', '') AS vital, hist_explicit_bounds AS bounds, hist_bucket_counts AS counts,
+              ROW_NUMBER() OVER (PARTITION BY series_id, start_timestamp ORDER BY timestamp DESC) AS newest
+            FROM otel_metrics
+            WHERE {{query_ast_filters}} AND metric_name IN ('browser.web_vital.lcp', 'browser.web_vital.inp', 'browser.web_vital.cls') AND metric_type = 'HISTOGRAM' AND hist_bucket_counts IS NOT NULL
+          ), buckets AS (
+            -- Same route masking as Top pages, applied once per series after deduplication.
+            SELECT COALESCE(NULLIF(regexp_replace(regexp_replace(regexp_replace(regexp_replace(regexp_replace(url,
+                '^[A-Za-z][A-Za-z0-9+.-]*://[^/]+', ''), '[?#].*$', ''),
+                '/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[^/]*', '/:id', 'g'), '/[0-9][^/]*', '/:id', 'g'), '/[A-Z][A-Z0-9]*[0-9][A-Z0-9]*', '/:id', 'g'), ''), '/') AS page,
+              vital, unnest(COALESCE(bounds, ARRAY[]::float8[]) || ARRAY[NULL]::float8[]) AS le, unnest(counts) AS n FROM points WHERE newest = 1
+          ), summed AS (
+            SELECT page, vital, le, SUM(n) AS n FROM buckets GROUP BY page, vital, le
+          ), cdf AS (
+            SELECT page, vital, le, n,
+              SUM(n) OVER (PARTITION BY page, vital ORDER BY le NULLS LAST ROWS UNBOUNDED PRECEDING) AS cum,
+              SUM(n) OVER (PARTITION BY page, vital) AS total,
+              LAG(le) OVER (PARTITION BY page, vital ORDER BY le NULLS LAST) AS lo
+            FROM summed
+          ), p75 AS (
+            -- Too coarse to place against the thresholds: wider than twice the needs-improvement band, as in Core Web Vitals.
+            SELECT page, vital, total, CASE WHEN le - COALESCE(lo, 0) > 2 * CASE vital WHEN 'cls' THEN 0.15 WHEN 'inp' THEN 300 ELSE 1500 END THEN '—'
+                WHEN le IS NULL THEN '> ' || lo::text
+                WHEN vital = 'cls' THEN ROUND((COALESCE(lo, 0) + (le - COALESCE(lo, 0)) * (0.75 * total - (cum - n)) / n)::numeric, 3)::text
+                ELSE ROUND((COALESCE(lo, 0) + (le - COALESCE(lo, 0)) * (0.75 * total - (cum - n)) / n)::numeric)::text || ' ms' END AS value
+            FROM cdf WHERE total > 0 AND cum >= 0.75 * total AND cum - n < 0.75 * total
+          )
+          SELECT page, MAX(CASE WHEN vital = 'lcp' THEN value END) AS lcp, MAX(CASE WHEN vital = 'inp' THEN value END) AS inp,
+            MAX(CASE WHEN vital = 'cls' THEN value END) AS cls, SUM(total)::text AS samples
+          FROM p75 GROUP BY page ORDER BY SUM(total) DESC LIMIT 50
 
   - name: Errors
     icon: triangle-exclamation
     widgets:
       - type: timeseries_stat
         title: Browser error volume
-        description: Exceptions and spans marked ERROR by the browser SDK.
         icon: triangle-exclamation
-        query: |
-          resource.telemetry.sdk.language == "webjs" and (status_code == "ERROR" or attributes.exception.type != null) and ("{{var-app}}" == "" or resource.service.name == "{{var-app}}")
-          | summarize count() by bin_auto(timestamp)
+        query: *app
+        sql: *browser_error_series
         unit: errors
         summarize_by: sum
+        series_intent: error
         layout: { w: 4, h: 3 }
 
       - type: stat
         title: Affected sessions
         icon: users
-        query: |
-          resource.telemetry.sdk.language == "webjs" and attributes.session.id != null and (status_code == "ERROR" or attributes.exception.type != null) and ("{{var-app}}" == "" or resource.service.name == "{{var-app}}")
-          | summarize dcount(attributes.session.id)
+        query: *app
+        sql: |
+          SELECT COUNT(DISTINCT attributes___session___id)::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND (resource___telemetry___sdk___language IN ('webjs', 'javascript', 'js') OR resource___user_agent___original IS NOT NULL OR name IN ('documentLoad', 'documentFetch') OR (name LIKE 'Pageview %' OR name = 'documentLoad')) AND (status_code = 'ERROR' OR lower(COALESCE(level, '')) = 'error' OR attributes___exception___type IS NOT NULL)
         unit: sessions
         layout: { w: 4, h: 3 }
 
       - type: stat
         title: Affected users
         icon: user
-        query: |
-          resource.telemetry.sdk.language == "webjs" and attributes.user.id != null and (status_code == "ERROR" or attributes.exception.type != null) and ("{{var-app}}" == "" or resource.service.name == "{{var-app}}")
-          | summarize dcount(attributes.user.id)
+        query: *app
+        sql: |
+          SELECT COUNT(DISTINCT COALESCE(attributes___user___id, attributes___user___email))::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND (resource___telemetry___sdk___language IN ('webjs', 'javascript', 'js') OR resource___user_agent___original IS NOT NULL OR name IN ('documentLoad', 'documentFetch') OR (name LIKE 'Pageview %' OR name = 'documentLoad')) AND (status_code = 'ERROR' OR lower(COALESCE(level, '')) = 'error' OR attributes___exception___type IS NOT NULL)
         unit: users
         layout: { w: 4, h: 3 }
 
       - type: table
-        title: Browser error types
-        description: Highest-impact frontend failures, grouped by exception type and message.
+        title: Browser errors
+        description: Grouped by type and message, with numbers and ids masked.
         layout: { w: 12, h: 7 }
         columns:
           - field: error_type
             title: Type
+            link: /p/{{project_id}}/log_explorer?query={{row.kql}}&{{time_range}}
           - field: message
             title: Message
           - field: events
@@ -297,16 +360,62 @@ tabs:
             column_type: number
           - field: last_seen
             title: Last seen
+          - field: kql
+            title: Explorer query
+            hidden: true
+        query: *app
         sql: |
-          SELECT COALESCE(attributes___exception___type, status_message, 'Browser error') AS error_type,
-            LEFT(COALESCE(attributes___exception___message, status_message, name, 'No error message'), 300) AS message,
-            COUNT(*)::text AS events,
-            COUNT(DISTINCT attributes___session___id)::text AS sessions,
-            MAX(timestamp)::text AS last_seen
-          FROM otel_logs_and_spans
-          WHERE project_id='{{project_id}}'
-            AND resource___telemetry___sdk___language IN ('webjs', 'javascript', 'js')
-            AND (status_code='ERROR' OR attributes___exception___type IS NOT NULL)
-            AND ('{{var-app}}' = '' OR resource___service___name = '{{var-app}}')
-            {{time_filter}}
-          GROUP BY error_type, message ORDER BY COUNT(*) DESC LIMIT 50
+          SELECT error_type, message, n::text AS events, sessions, last_seen,
+            CASE WHEN exception_type IS NOT NULL THEN 'attributes.exception.type == "' || replace(exception_type, '"', '') || '"'
+              ELSE '(status_code == "ERROR" or level == "error") and name == "' || replace(COALESCE(span_name, ''), '"', '') || '"' END AS kql
+          FROM (
+            SELECT attributes___exception___type AS exception_type, COALESCE(NULLIF(attributes___exception___type, ''), NULLIF(status_message, ''), 'Browser error') AS error_type,
+              LEFT(regexp_replace(COALESCE(NULLIF(attributes___exception___message, ''), NULLIF(status_message, ''), name, 'No error message'), '[0-9a-fA-F-]{8,}|[0-9]+', '<n>', 'g'), 300) AS message,
+              MIN(name) AS span_name, COUNT(*) AS n, COUNT(DISTINCT attributes___session___id)::text AS sessions, MAX(timestamp)::text AS last_seen
+            FROM otel_logs_and_spans
+            WHERE {{query_ast_filters}} AND (resource___telemetry___sdk___language IN ('webjs', 'javascript', 'js') OR resource___user_agent___original IS NOT NULL OR name IN ('documentLoad', 'documentFetch') OR (name LIKE 'Pageview %' OR name = 'documentLoad')) AND (status_code = 'ERROR' OR lower(COALESCE(level, '')) = 'error' OR attributes___exception___type IS NOT NULL)
+            GROUP BY 1, 2, 3 ORDER BY COUNT(*) DESC LIMIT 50
+          ) AS groups ORDER BY n DESC
+
+  # User-agent families, coarse on purpose. Arm order matters: Edge and Opera embed "Chrome",
+  # Chrome embeds "Safari", iOS says "like Mac OS X", Android embeds "Linux".
+  - name: Audience
+    icon: users
+    widgets:
+      - type: table
+        title: Browsers, systems and devices
+        description: Sessions per user-agent family; errored counts sessions with at least one browser error.
+        layout: { w: 12, h: 7 }
+        columns:
+          - field: dimension
+            title: Dimension
+          - field: name
+            title: Name
+          - field: sessions
+            title: Sessions
+            column_type: number
+            progress: column_percent
+          - field: errored
+            title: Errored
+            column_type: number
+        query: *app
+        sql: |
+          WITH sessions AS (
+            SELECT COALESCE(NULLIF(attributes___user_agent___original, ''), resource___user_agent___original) AS ua, attributes___session___id AS session,
+              MAX(CASE WHEN (status_code = 'ERROR' OR lower(COALESCE(level, '')) = 'error' OR attributes___exception___type IS NOT NULL) THEN 1 ELSE 0 END) AS errored
+            FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND (resource___telemetry___sdk___language IN ('webjs', 'javascript', 'js') OR resource___user_agent___original IS NOT NULL OR name IN ('documentLoad', 'documentFetch') OR (name LIKE 'Pageview %' OR name = 'documentLoad'))
+            GROUP BY 1, 2
+          ), families AS (
+            SELECT session, errored,
+              CASE WHEN ua LIKE '%Edg/%' OR ua LIKE '%Edge/%' THEN 'Edge' WHEN ua LIKE '%OPR/%' OR ua LIKE '%Opera%' THEN 'Opera' WHEN ua LIKE '%SamsungBrowser%' THEN 'Samsung Internet'
+                WHEN ua LIKE '%Firefox/%' THEN 'Firefox' WHEN ua LIKE '%Chrome/%' OR ua LIKE '%CriOS/%' THEN 'Chrome' WHEN ua LIKE '%Safari/%' THEN 'Safari' ELSE 'Other' END AS browser,
+              CASE WHEN ua LIKE '%Windows%' THEN 'Windows' WHEN ua LIKE '%iPhone%' OR ua LIKE '%iPad%' OR ua LIKE '%iPod%' THEN 'iOS' WHEN ua LIKE '%Mac OS X%' OR ua LIKE '%Macintosh%' THEN 'macOS'
+                WHEN ua LIKE '%Android%' THEN 'Android' WHEN ua LIKE '%CrOS%' THEN 'ChromeOS' WHEN ua LIKE '%Linux%' OR ua LIKE '%X11%' THEN 'Linux' ELSE 'Other' END AS os,
+              CASE WHEN ua LIKE '%iPad%' OR (ua LIKE '%Android%' AND ua NOT LIKE '%Mobile%') THEN 'Tablet' WHEN ua LIKE '%Mobile%' OR ua LIKE '%iPhone%' THEN 'Mobile' ELSE 'Desktop' END AS device
+            FROM sessions WHERE ua IS NOT NULL
+          ), counted AS (
+            SELECT 1 AS d, 'Browser' AS dimension, browser AS name, COUNT(DISTINCT session) AS n, SUM(errored) AS errored FROM families GROUP BY browser
+            UNION ALL SELECT 2, 'Operating system', os, COUNT(DISTINCT session), SUM(errored) FROM families GROUP BY os
+            UNION ALL SELECT 3, 'Device', device, COUNT(DISTINCT session), SUM(errored) FROM families GROUP BY device
+          )
+          SELECT dimension, name, n::text AS sessions, errored::text AS errored FROM counted ORDER BY d, n DESC

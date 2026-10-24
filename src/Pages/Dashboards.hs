@@ -4,6 +4,7 @@ module Pages.Dashboards (
   dashboardSettledPostH,
   dashboardTabRenamePatchH,
   entrypointRedirectGetH,
+  queryStringFrom,
   DashboardGet (..),
   DashboardSettleSample (..),
   DashboardNavigation (..),

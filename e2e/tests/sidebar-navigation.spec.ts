@@ -16,7 +16,7 @@ const cases = [
   ['/manage_billing', '/settings'],
   ['/dashboards', '/dashboards'],
   ['/issues', '/issues'],
-  ['/rum', '/rum'],
+  ['/rum', '/dashboards'],
   ['/monitors', '/monitors'],
   ['/reports', '/reports'],
 ];
