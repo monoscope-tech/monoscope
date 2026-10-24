@@ -27,5 +27,6 @@ try {
   execFileSync('docker', [...args, context], { stdio: 'inherit' });
   const config = getDefaultBuildConfig();
   config.oci = { image: (await readFile(join(context, 'image-id'), 'utf8')).trim(), pullPolicy: 'never' };
+  config.init = { rootfsInitExtra: join(cwd, 'guest-init.sh') };
   await buildAssets(config, { outputDir });
 } finally { await rm(context, { recursive: true, force: true }); }
