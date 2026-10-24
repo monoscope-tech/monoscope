@@ -1032,6 +1032,18 @@ databaseSpec = do
       (_, poll) <- testServant tr $ Log.logSessionsH testPid Nothing fromTime Nothing toTime Nothing Nothing fromTime
       case poll of { Log.SessionsView _ _ summ -> summ `shouldSatisfy` isNothing }
 
+    -- The RUM page listed recordings whose spans never arrived; folding RUM into this view
+    -- must not lose them. They carry no attributes, so only the unfiltered or browser view holds them.
+    it "lists a recording-only session in the browser sessions view, with Replay" \tr -> do
+      pid <- createTestProject tr "sessions-recording-only"
+      recording <- nextRandom
+      void $ withPool tr.trPool $ DBT.execute [sql| INSERT INTO projects.replay_sessions (session_id, project_id, created_at, last_event_at, event_file_count, user_name) VALUES (?, ?, ?, ?, 1, 'Ada') |] (recording, pid, frozenTime, addUTCTime 30 frozenTime)
+      let stamp = Just . toText . formatTime defaultTimeLocale "%FT%T%QZ" . (`addUTCTime` frozenTime)
+          listed query = testServant tr (Log.logSessionsH pid query (stamp (-60)) Nothing (stamp 60) Nothing Nothing Nothing) <&> \(_, Log.SessionsView _ rows _) -> [(r.sessionId, r.hasReplay, r.userName) | r <- V.toList rows]
+      listed (Just LogQueries.browserSessionsKql) `shouldReturn` [(UUID.toText recording, True, Just "Ada")]
+      listed Nothing `shouldReturn` [(UUID.toText recording, True, Just "Ada")]
+      listed (Just "status_code == \"ERROR\"") `shouldReturn` []
+
   describe "Log Explorer page shell" do
     it "renders Common facets with the page and leaves other groups lazy" \tr -> do
       seedFacetSummary tr

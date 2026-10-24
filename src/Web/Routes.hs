@@ -1,4 +1,4 @@
-module Web.Routes (server, browserSessionsKql, genAuthServerContext, KeepPrefixExp, LogDataFieldExp, widgetPngGetH, widgetGetH, chartsDataGetH, ApiV1Routes, apiV1Server, apiV1OpenApiSpec) where
+module Web.Routes (server, genAuthServerContext, KeepPrefixExp, LogDataFieldExp, widgetPngGetH, widgetGetH, chartsDataGetH, ApiV1Routes, apiV1Server, apiV1OpenApiSpec) where
 
 import Control.Lens
 import Data.Aeson qualified as AE
@@ -124,11 +124,6 @@ type GetRedirect = Verb 'GET 302
 
 
 type LocationRedirect a = GetRedirect '[HTML] (Headers '[Header "Location" Text] a)
-
-
--- | RUM sessions are the Explorer's sessions view over browser telemetry: rum.yaml's browser predicate, as KQL.
-browserSessionsKql :: Text
-browserSessionsKql = "(resource.telemetry.sdk.language in (\"webjs\", \"javascript\", \"js\") or resource.user_agent.original != null or name in (\"documentLoad\", \"documentFetch\") or name startswith \"Pageview \")"
 
 
 type SessionRedirect a = GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] a)
@@ -988,7 +983,7 @@ cookieProtectedServer =
     , rumDashboardRedirect = rumDashboard
     , rumDashboardAlias = rumDashboard
     , rumSessionsRedirect = \pid params ->
-        pure $ addHeader ("/p/" <> pid.toText <> "/log_explorer" <> Dashboards.queryStringFrom ([("viz_type", Just "sessions"), ("query", Just browserSessionsKql)] <> filter ((`elem` ["since", "from", "to"]) . fst) params)) NoContent
+        pure $ addHeader ("/p/" <> pid.toText <> "/log_explorer" <> Dashboards.queryStringFrom ([("viz_type", Just "sessions"), ("query", Just LogQueries.browserSessionsKql)] <> filter ((`elem` ["since", "from", "to"]) . fst) params)) NoContent
     , dashboardsGet = Dashboards.dashboardGetH
     , dashboardNewGet = Dashboards.dashboardNewGetH
     , dashboardsGetList = Dashboards.dashboardsGetH

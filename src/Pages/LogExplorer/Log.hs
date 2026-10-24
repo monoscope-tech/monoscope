@@ -1111,7 +1111,7 @@ logSessionsH pid queryM' sinceM fromM toM skipM sortByM cursorM = do
       -- An unrecognised sort_by (stale shared link, hand-edited URL) falls back to the
       -- default rather than 400-ing; the parse exists so a new dropdown option can't
       -- silently land here.
-      (summ, total, rows) <- Hasql.retryTransientEff 500_000 "log-explorer.sessions" $ LogQueries.fetchSessions authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) envM serviceM (rightToMaybe . parseUrlPiece =<< sortByM) skip readKind
+      (summ, total, rows) <- Hasql.retryTransientEff 500_000 "log-explorer.sessions" $ LogQueries.fetchSessions authCtx.env.enableTimefusionReads pid (bool LogQueries.TelemetryOnly LogQueries.WithRecordings $ T.strip (maybeToMonoid queryM') `elem` ["", LogQueries.browserSessionsKql]) queryAST (fromD, toD) envM serviceM (rightToMaybe . parseUrlPiece =<< sortByM) skip readKind
       addRespHeaders $ SessionsView total (V.fromList rows) summ
 
 

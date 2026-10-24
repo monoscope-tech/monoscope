@@ -18,8 +18,10 @@ module Models.Apis.LogQueries (
   LogEndpoint (..),
   fetchLogPatterns,
   fetchSessions,
+  browserSessionsKql,
   SessionSort (..),
   SessionsRead (..),
+  RecordingRows (..),
   sessionSortLabel,
   ExpandKind (..),
   fetchEventExamples,
@@ -467,6 +469,12 @@ data SessionRow = SessionRow
 
 -- | The first page carries the header (summary tiles + service count); load-more pages
 -- and live polls merge rows into a list that already has one.
+-- | Whether screen recordings with no telemetry join the list. They carry no attributes, so
+-- only an unfiltered or browser-scoped list can hold them.
+data RecordingRows = WithRecordings | TelemetryOnly
+  deriving stock (Eq)
+
+
 data SessionsRead = WithHeader | RowsOnly
   deriving stock (Eq, Show)
 
@@ -650,6 +658,11 @@ sessionKeyExpr :: Text
 sessionKeyExpr = "COALESCE(NULLIF(attributes___session___id, ''), NULLIF(attributes___user___id, ''), NULLIF(attributes___user___email, ''))"
 
 
+-- | Browser telemetry as KQL: the sessions view Real User Monitoring links to (rum.yaml's browser predicate).
+browserSessionsKql :: Text
+browserSessionsKql = "(resource.telemetry.sdk.language in (\"webjs\", \"javascript\", \"js\") or resource.user_agent.original != null or name in (\"documentLoad\", \"documentFetch\") or name startswith \"Pageview \")"
+
+
 -- | Ordering for the Sessions viz. The wire spellings are exactly the values the sort
 -- dropdown in "Pkg.Components.LogQueryBox" emits and what shared URLs carry.
 --
@@ -687,8 +700,8 @@ sessionSortLabel ordering = T.toUpper (T.take 1 label) <> T.drop 1 label
     label = T.replace "_" " " $ display ordering
 
 
-fetchSessions :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Bool -> Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Text -> Maybe Text -> Maybe SessionSort -> Int -> SessionsRead -> Eff es (Maybe SessionSummary, Int, [SessionRow])
-fetchSessions enableTfReads pid queryAST dateRange environment service sortByM skip readKind = do
+fetchSessions :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Bool -> Projects.ProjectId -> RecordingRows -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Text -> Maybe Text -> Maybe SessionSort -> Int -> SessionsRead -> Eff es (Maybe SessionSummary, Int, [SessionRow])
+fetchSessions enableTfReads pid recordingRows queryAST dateRange environment service sortByM skip readKind = do
   now <- Time.currentTime
   let scope = mkScopedQuery pid dateRange environment service
       whereSql = rawSql $ scopedQueryWhere now (Just SSpans) scope queryAST
@@ -700,7 +713,7 @@ fetchSessions enableTfReads pid queryAST dateRange environment service sortByM s
   -- One raw scan of the window keyed by 'sessionKeyExpr' (an expression, so no rollup can
   -- serve it). Each session's services ride along for ~5% of the scan, which is cheaper than
   -- the separate full-window service scan the header used to fork beside it.
-  sessions :: [SessionAggRow] <-
+  telemetry :: [SessionAggRow] <-
     Hasql.withHasqlTimefusion enableTfReads
       $ Hasql.interp
       $ [HI.sql|SELECT |]
@@ -721,6 +734,20 @@ fetchSessions enableTfReads pid queryAST dateRange environment service sortByM s
       <> keySql
       <> [HI.sql| IS NOT NULL
         GROUP BY 1|]
+  -- A recording whose spans never arrived is still a session a reader can replay.
+  let fromT = fromMaybe (addUTCTime (-3600) now) (fst dateRange)
+      toT = fromMaybe now (snd dateRange)
+  recordings :: [SessionAggRow] <-
+    if recordingRows == WithRecordings && isNothing environment && isNothing service
+      then
+        Hasql.interp
+          [HI.sql| SELECT session_id::text, user_id, user_email, user_name, 0::bigint, 0::bigint, created_at, last_event_at, NULL::text[]
+            FROM projects.replay_sessions
+            WHERE project_id = #{pid} AND last_event_at >= #{fromT} AND created_at <= #{toT}
+              AND (event_file_count > 0 OR cardinality(file_keys) > 0 OR cardinality(shard_keys) > 0) |]
+      else pure []
+  let telemetryIds = S.fromList $ map (.sessionId) telemetry
+      sessions = telemetry <> filter ((`S.notMember` telemetryIds) . (.sessionId)) recordings
   Log.logTrace "fetchSessions: query done" $ AE.object ["rows" AE..= length sessions]
   let durationNs r = round (diffUTCTime r.lastSeen r.firstSeen * 1e9) :: Int64
       ordered = sortOn (Down . case ordering of SortLastSeen -> Left . (.lastSeen); SortFirstSeen -> Left . (.firstSeen); SortDuration -> Right . durationNs; SortErrors -> Right . (.errorCount); SortEvents -> Right . (.eventCount)) sessions
@@ -755,7 +782,7 @@ fetchSessions enableTfReads pid queryAST dateRange environment service sortByM s
   -- lookup over the page's ids only. Non-UUID session keys (sessions derived
   -- from user id/email) can never have a recording, so they're not even asked for.
   replayed <- replayedSessionIds pid (mapMaybe UUID.fromText pageIds)
-  unless (length context == length page)
+  unless (length context == length (filter ((`S.member` telemetryIds) . (.sessionId)) page))
     $ Log.logAttention "fetchSessions: page rows without context"
     $ AE.object ["project_id" AE..= pid, "page" AE..= length page, "context" AE..= length context]
   let contextById = HM.fromList [(sid, (landing, agent, firstError)) | (sid, landing, agent, firstError) <- context]
@@ -763,8 +790,6 @@ fetchSessions enableTfReads pid queryAST dateRange environment service sortByM s
       events = V.fromList $ sort $ map (.eventCount) sessions
       -- Densify the header's over-time buckets across the full picker range so
       -- empty periods render as blanks.
-      fromT = fromMaybe (addUTCTime (-3600) now) (fst dateRange)
-      toT = fromMaybe now (snd dateRange)
       epochBucket t = floor (utcTimeToPOSIXSeconds t) `div` bucketW
       pMin = epochBucket fromT
       pMax = max pMin (epochBucket toT)

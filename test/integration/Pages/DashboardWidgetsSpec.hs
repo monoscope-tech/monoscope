@@ -33,6 +33,7 @@ import Database.PostgreSQL.Simple.Types (Query (..))
 import GHC.Clock (getMonotonicTime)
 import Lucid (renderText, toHtml)
 import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.DashboardTemplates (dashboardTemplatesCompiled, loadDashboardFromVM)
 import Models.Projects.Dashboards (DashboardVM (..))
 import Models.Projects.Dashboards qualified as DashboardModel
@@ -1437,8 +1438,8 @@ spec = sequential $ aroundAll withTestResources do
       let at = (`addUTCTime` frozenTime)
           nanos = floor . (* 1000000000) . utcTimeToPOSIXSeconds
           point end start counts = defMessage & PMF.timeUnixNano .~ nanos (at end) & PMF.startTimeUnixNano .~ nanos (at start) & PMF.attributes .~ [mkAttr "page.url" "https://shop.example/checkout"] & PMF.count .~ sum counts & PMF.bucketCounts .~ counts & PMF.explicitBounds .~ [1000, 2500, 4000, 8000]
-          lcp = defMessage & PMF.name .~ "browser.web_vital.lcp" & PMF.histogram .~ (defMessage & PMF.aggregationTemporality .~ PM.AGGREGATION_TEMPORALITY_DELTA & PMF.dataPoints .~ [point (-30) (-40) [2, 5, 1, 0, 0], point (-20) (-30) [0, 3, 2, 1, 0], point (-10) (-20) [1, 1, 0, 0, 0 :: Word64]])
-      void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ defMessage & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ mkResource apiKey [mkAttr "service.name" "storefront"] & PMF.scopeMetrics .~ [defMessage & PMF.metrics .~ [lcp :: PM.Metric]]])
+          exportLcp points = void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ defMessage & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ mkResource apiKey [mkAttr "service.name" "storefront"] & PMF.scopeMetrics .~ [defMessage & PMF.metrics .~ [defMessage & PMF.name .~ "browser.web_vital.lcp" & PMF.histogram .~ (defMessage & PMF.aggregationTemporality .~ PM.AGGREGATION_TEMPORALITY_DELTA & PMF.dataPoints .~ points) :: PM.Metric]]])
+      exportLcp [point (-30) (-40) [2, 5, 1, 0, 0], point (-20) (-30) [0, 3, 2, 1, 0], point (-10) (-20) [1, 1, 0, 0, 0 :: Word64]]
       rum <- maybe (fail "missing rum.yaml") pure . find (\d -> d.file == Just "rum.yaml") =<< DashboardModel.readDashboardsFromDisk "static/public/dashboards"
       let from = toText $ iso8601Show $ at (-3600)
           to = toText $ iso8601Show $ at 3600
@@ -1447,7 +1448,10 @@ spec = sequential $ aroundAll withTestResources do
         (w.title,) <$> runQueryEffect tr (Charts.queryMetrics Nothing (Just $ dataType w.wType) (Just projectId) w.query w.sql Nothing (Just from) (Just to) Nothing Nothing [])
       [(title, m.error) | (title, m) <- results, isJust m.error] `shouldBe` []
       let table title = maybe V.empty (.dataText) $ lookup (Just title) results
-      V.map (V.take 5) (table "Core Web Vitals") `shouldBe` V.singleton (V.fromList ["LCP", "2500 ms", "rating;success-strong⇒Good", "1000 – 2500", "16"])
+      let vitalRow rs name = V.toList . V.take 5 <$> find ((== Just name) . (V.!? 0)) (maybe V.empty (.dataText) $ lookup (Just "Core Web Vitals") rs)
+      vitalRow results "LCP" `shouldBe` Just ["LCP", "2500 ms", "rating;success-strong⇒Good", "1000 – 2500", "16"]
+      -- A vital with nothing in the window says so instead of vanishing.
+      vitalRow results "INP" `shouldBe` Just ["INP", "—", "rating;info-weak⇒No observations in this window", "", "0"]
       -- Abbreviations explain themselves on hover: the row's hidden description on the cell,
       -- the column's on its header.
       vitals <- maybe (fail "missing Core Web Vitals") pure $ find ((== Just "Core Web Vitals") . (.title)) (DashboardModel.allWidgets rum)
@@ -1455,6 +1459,12 @@ spec = sequential $ aroundAll withTestResources do
       vitalsHtml `shouldSatisfy` T.isInfixOf "data-tippy-content=\"Largest Contentful Paint: when the main content becomes visible."
       vitalsHtml `shouldSatisfy` T.isInfixOf "aria-description=\"Real-user observations in the selected window.\""
       vitalsHtml `shouldNotSatisfy` T.isInfixOf ">About<"
+      -- An SDK upgrade mixes bucket layouts: a [2500]-bounded export coarsens every point to
+      -- the shared 2500 edge, giving [16, 4] over 20, so the 15th observation sits at 2500·15/16.
+      exportLcp [point (-5) (-10) [4, 0] & PMF.explicitBounds .~ [2500]]
+      mixed <- forM [w | w <- DashboardModel.allWidgets rum, w.title == Just "Core Web Vitals"] \w ->
+        (w.title,) <$> runQueryEffect tr (Charts.queryMetrics Nothing (Just Charts.DTText) (Just projectId) w.query w.sql Nothing (Just from) (Just to) Nothing Nothing [])
+      vitalRow mixed "LCP" `shouldBe` Just ["LCP", "2344 ms", "rating;success-strong⇒Good", "0 – 2500", "20"]
       sort [name | row <- V.toList $ table "Browsers, systems and devices", row V.!? 0 == Just "Device", Just name <- [row V.!? 1]] `shouldBe` ["Desktop", "Mobile"]
       sort (V.toList $ V.mapMaybe (V.!? 0) $ table "Top pages") `shouldBe` ["/cart", "/orders/:id"]
       -- Each page row's hidden Explorer query finds the events it counted, and the rendered
@@ -1462,7 +1472,7 @@ spec = sequential $ aroundAll withTestResources do
       forM_ (table "Top pages") \row -> do
         (_, events) <- testServant tr $ Log.logExplorerDataH projectId def{Log.query = row V.!? 3, Log.from = Just from, Log.to = Just to}
         (row V.!? 0, events.error, events.queryResultCount) `shouldBe` (row V.!? 0, Nothing, 1)
-      (_, sessions) <- testServant tr $ Log.logExplorerDataH projectId def{Log.query = Just Routes.browserSessionsKql, Log.from = Just from, Log.to = Just to}
+      (_, sessions) <- testServant tr $ Log.logExplorerDataH projectId def{Log.query = Just LogQueries.browserSessionsKql, Log.from = Just from, Log.to = Just to}
       (sessions.error, sessions.queryResultCount) `shouldBe` (Nothing, 2)
       topPages <- maybe (fail "missing Top pages") pure $ find ((== Just "Top pages") . (.title)) (DashboardModel.allWidgets rum)
       let html = toStrict $ renderText $ Widget.renderTableWithDataAndParams topPages{Widget._projectId = Just projectId} (table "Top pages") [("since", Just "7D")]
