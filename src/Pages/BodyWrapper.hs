@@ -373,7 +373,7 @@ bodyWrapper bcfg child = do
       -- Vendored (not unpkg): a third-party CDN must never sit on our critical path — a
       -- slow or unreachable CDN stalled first paint for every visitor. defer keeps even
       -- the local copy off the parser.
-      when browserMonitoring $ script_ [src_ $ assetUrl "/public/assets/deps/monoscope/monoscope-0.11.6.min.js", defer_ ""] ("" :: Text)
+      when browserMonitoring $ script_ [src_ $ assetUrl "/public/assets/deps/monoscope/monoscope-0.13.0.min.js", defer_ ""] ("" :: Text)
 
       -- Hashed URLs for assets the TS bundle references by path (see web-components/src/assets.ts).
       -- Those references can't carry a compile-time hash of their own, and /public/assets/* is
