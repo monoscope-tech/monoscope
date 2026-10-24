@@ -185,7 +185,7 @@ schema role = \case
       ]
   where
     uuid = text & O.format ?~ "uuid"
-    patch = bounded 1 (Just 262144) & O.description ?~ "Unified Git diff accepted by git apply (diff --git, ---/+++ paths and @@ hunks), containing test/fixture changes only. Do not use *** Begin Patch or *** Add File syntax. Keep hunk line counts consistent."
+    patch = bounded 1 (Just 262144) & O.description ?~ "Unified Git diff accepted by git apply (diff --git, ---/+++ paths and @@ hunks), containing test/fixture changes only. Do not use *** Begin Patch or *** Add File syntax. Git infers hunk line counts from the patch body."
     rationale = bounded 1 (Just 1200) & O.pattern ?~ "\\S"
     visual limit = bounded 1 (Just limit) & O.pattern ?~ "^(?=[\\s\\S]*\\S)[^\\x00-\\x08\\x0b-\\x1f\\x7f]+$"
     decisions = (\schemas -> mempty & O.oneOf ?~ schemas) . map (\(tag, contents) -> O.Inline $ object [("tag", text & O.enum_ ?~ [AE.String tag]), ("contents", contents)])
