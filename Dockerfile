@@ -122,8 +122,41 @@ RUN --mount=type=cache,from=dependencies,source=/root/.cabal/store,target=/root/
         grep -aoE '/public/assets/web-components/dist/[^"]{1,80}\.js' /build/dist/monoscope-server | sort -u >&2; \
         exit 1; }; }
 
-# Final runtime image
-FROM ${RUNTIME_IMAGE}
+# Native CLI objects use their own cache, separate from the profiled server.
+FROM dependencies AS impact-cli
+WORKDIR /build
+COPY monoscope.cabal cabal.project cabal.project.freeze ./
+COPY shared ./shared
+COPY cli ./cli
+COPY scripts/cli-bin.sh scripts/package-cli.sh scripts/check-cli-linkage.sh ./scripts/
+RUN --mount=type=cache,from=dependencies,source=/root/.cabal/store,target=/root/.cabal/store \
+    --mount=type=cache,id=monoscope-impact-cli-dist-v1,target=/build/dist-newstyle,sharing=locked \
+    cabal build monoscope-cli:exe:monoscope -j --ghc-options="-O2 -split-sections -optl-Wl,--gc-sections +RTS -A64m -n2m -RTS" && \
+    scripts/package-cli.sh "$(scripts/cli-bin.sh --ghc-options="-O2 -split-sections -optl-Wl,--gc-sections +RTS -A64m -n2m -RTS")" /build/monoscope
+
+FROM node:24-bookworm-slim AS impact-sdk
+WORKDIR /opt/monoscope/impact-review-worker
+COPY impact-review-worker/package.json impact-review-worker/package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+COPY impact-review-worker/cli.mjs impact-review-worker/review.mjs impact-review-worker/fix.mjs impact-review-worker/workspace.mjs impact-review-worker/sandbox.mjs ./
+COPY impact-review-worker/skills ./skills
+RUN node --input-type=module -e "await import('./review.mjs'); await import('./fix.mjs')" && \
+    node --check cli.mjs && node --check sandbox.mjs && \
+    test -f skills/superpowers/systematic-debugging/SKILL.md && \
+    test -f skills/superpowers/test-driven-development/SKILL.md
+ARG GH_VERSION=2.103.0
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && \
+    arch="$(dpkg --print-architecture)" && \
+    archive="gh_${GH_VERSION}_linux_${arch}.tar.gz" && \
+    cd /tmp && \
+    curl -fsSLO "https://github.com/cli/cli/releases/download/v${GH_VERSION}/${archive}" && \
+    curl -fsSLo checksums.txt "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_checksums.txt" && \
+    grep " ${archive}$" checksums.txt | sha256sum -c - && \
+    tar -xzf "$archive" --strip-components=2 -C /usr/local/bin "gh_${GH_VERSION}_linux_${arch}/bin/gh" && \
+    gh pr edit --help | grep -q -- --attach
+
+# Default server runtime; VM dependencies are only in the optional target below.
+FROM ${RUNTIME_IMAGE} AS runtime
 
 # Install runtime dependencies
 # Graphics libs needed for @napi-rs/canvas in chart-cli
@@ -159,8 +192,6 @@ ENV GIT_COMMIT_DATE=$GIT_COMMIT_DATE
 
 # --chown on COPY, not a later `chown -R`, which would duplicate every file into another layer.
 RUN mkdir -p profiles && chown monoscope:monoscope . profiles
-COPY --from=builder --chown=monoscope:monoscope --chmod=755 /build/dist/monoscope-server /usr/local/bin/chart-cli ./
-COPY --from=builder --chown=monoscope:monoscope /build/static ./static
 
 USER monoscope
 
@@ -198,3 +229,38 @@ HEALTHCHECK --interval=15s --timeout=5s --start-period=90s --retries=3 \
 # Prune to the newest 5 so a crash-loop can't fill the volume (cf. timefusion's
 # prune_old). Command-line RTS opts take precedence over GHCRTS.
 ENTRYPOINT ["bash","-c","ls -t profiles/monoscope-*.eventlog 2>/dev/null | tail -n +6 | xargs -r rm -f; exec ./monoscope-server +RTS -olprofiles/monoscope-$(date +%s).eventlog -RTS \"$@\"","--"]
+
+FROM runtime AS server
+COPY --from=builder --chown=monoscope:monoscope --chmod=755 /build/dist/monoscope-server /usr/local/bin/chart-cli ./
+COPY --from=builder --chown=monoscope:monoscope /build/static ./static
+
+FROM runtime AS impact-tools
+USER root
+RUN case "$(dpkg --print-architecture)" in \
+      amd64) qemu=qemu-system-x86 ;; \
+      arm64) qemu=qemu-system-arm ;; \
+      *) exit 1 ;; \
+    esac && \
+    apt-get update && apt-get install -y --no-install-recommends \
+      "$qemu" qemu-utils git ffmpeg graphviz libstdc++6 && \
+    rm -rf /var/lib/apt/lists/* && \
+    mkdir -p /var/lib/monoscope/cache /var/lib/monoscope/usage && \
+    chown -R monoscope:monoscope /var/lib/monoscope && \
+    chmod 0700 /var/lib/monoscope /var/lib/monoscope/cache /var/lib/monoscope/usage
+COPY --from=impact-cli --chmod=755 /build/monoscope /usr/local/libexec/monoscope
+RUN printf '#!/bin/sh\nunset GHCRTS\nexec /usr/local/libexec/monoscope "$@"\n' > /usr/local/bin/monoscope && \
+    chmod 0755 /usr/local/bin/monoscope
+COPY --from=impact-sdk --chmod=755 /usr/local/bin/node /usr/local/bin/gh /usr/local/bin/
+COPY --from=impact-sdk /opt/monoscope/impact-review-worker ./impact-review-worker
+ENV IMPACT_REVIEW_AGENT=/opt/monoscope/impact-review-worker/cli.mjs \
+    IMPACT_REVIEW_NATIVE_CLI=/usr/local/bin/monoscope \
+    IMPACT_REVIEW_CACHE_DIR=/var/lib/monoscope/cache \
+    IMPACT_REVIEW_USAGE_DIR=/var/lib/monoscope/usage \
+    XDG_CACHE_HOME=/var/lib/monoscope/cache
+USER monoscope
+RUN monoscope --version && node --version && gh pr edit --help | grep -q -- --attach
+
+FROM impact-tools AS impact-worker
+COPY --from=server --chown=monoscope:monoscope /opt/monoscope /opt/monoscope
+
+FROM server AS production

@@ -165,6 +165,8 @@ module Models.Apis.Issues (
   deleteRoutine,
   setRoutineDestination,
   routineCanAct,
+  routineCanWriteMemory,
+  grantRoutineMemory,
   routineRunCancelled,
   insertChatMessage,
   selectChatHistory,
@@ -240,6 +242,7 @@ import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.LogPatterns (RateChangeDirection (..))
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.LogQueries qualified as LogQueries
+import Models.Projects.ProjectMembers qualified as Members
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (SqlEnum (..), UUIDId (..), WrappedEnumSC (..), rawSql, selectFrom)
 import Pkg.Parser (ScopedQuery (..))
@@ -1878,7 +1881,7 @@ setRoutineDestination :: DB es => Projects.ProjectId -> UUIDId "conversation" ->
 setRoutineDestination pid convId destination =
   Hasql.interpExecute_
     [HI.sql|UPDATE apis.ai_routines
-      SET destination = #{destination}, allow_actions = #{destination == DestinationSlack}
+      SET destination = #{destination}, allow_actions = #{destination == DestinationSlack}, memory_granted_by = NULL
       WHERE project_id = #{pid} AND conversation_id = #{convId}|]
 
 
@@ -1888,6 +1891,28 @@ routineCanAct routineId =
     <$> Hasql.interpOne
       [HI.sql|SELECT active AND allow_actions AND cancelled_at IS NULL
         FROM apis.ai_routines WHERE id = #{routineId}|]
+
+
+grantRoutineMemory :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Projects.UserId -> Eff es Bool
+grantRoutineMemory pid conversation user = do
+  permitted <- maybe False (>= Members.PEdit) <$> Members.getUserPermission pid user
+  if permitted
+    then
+      fromMaybe False
+        <$> Hasql.interpOne
+          [HI.sql|UPDATE apis.ai_routines SET memory_granted_by = #{user}
+        WHERE project_id = #{pid} AND conversation_id = #{conversation} AND allow_actions RETURNING TRUE|]
+    else pure False
+
+
+routineCanWriteMemory :: DB es => Projects.ProjectId -> UUIDId "conversation" -> UUIDId "ai_routine" -> Eff es Bool
+routineCanWriteMemory pid conversation routine = do
+  grant <-
+    Hasql.interpOne @(HI.OneColumn Projects.UserId)
+      [HI.sql|SELECT memory_granted_by FROM apis.ai_routines
+      WHERE id = #{routine} AND project_id = #{pid} AND conversation_id = #{conversation}
+      AND active AND allow_actions AND cancelled_at IS NULL AND memory_granted_by IS NOT NULL|]
+  maybe (pure False) (fmap (maybe False (>= Members.PEdit)) . Members.getUserPermission pid . HI.getOneColumn) grant
 
 
 routineRunCancelled :: DB es => UUIDId "ai_routine" -> UTCTime -> Eff es Bool

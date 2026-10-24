@@ -17,9 +17,9 @@
 
 Verify nested creation, direct links, reload, path collisions, cross-project isolation, tree traversal and concurrent edits through handlers and the browser. Include a short walkthrough in the PR.
 
-## 3. Markdown rich-text editing — PR #691
+## 3. Markdown rich-text editing — merged
 
-[PR #691](https://github.com/monoscope-tech/monoscope/pull/691) adds rich-text editing after the merged paths/tree change.
+[PR #691](https://github.com/monoscope-tech/monoscope/pull/691) merged on 2026-10-22 as `420da48982721bb0d846a7b9772c87ecc9355d20`. All required GitHub checks passed. Its description retains the captioned editor walkthrough and the review decisions.
 
 - Provide formatted editing with headings, bold/italic, links, lists, block quotes, fenced code and undo/redo. A plain textarea or syntax highlighting alone does not meet this requirement.
 - Store Markdown as the canonical page body, so human and agent edits share the same representation and revision history. Provide a Markdown source mode; do not silently discard unsupported syntax.
@@ -37,14 +37,22 @@ Use Milkdown's core editor with CommonMark/GFM, history, clipboard and trailing-
 
 Do not enable temporary browser blob image uploads. Durable image uploads remain outside this slice; existing Markdown image URLs are supported.
 
+Prototype evidence is retained locally in `scripts/local/wiki-editor-spike/roundtrip.log`, `results.json`, and `bundle-minimal.log`.
+
 The editor changes are isolated on `work/project-wiki-editor`, based on the merged paths/tree commit. Its browser regression covers undo/redo, bold formatting, source-mode switching, Markdown persistence and HTMX navigation into a fresh editor. The focused watcher passed all 62 repository-context examples; TypeScript checking and all 1,028 frontend assertions passed. Local light/dark screenshots and a recording are retained. The editor imports on opening the edit panel and preserves untouched source bytes. The existing widget-navigation hook now also replaces Milkdown instances when HTMX morphs server markup.
 
 Saved pages and revision history now render in Haskell with [commonmark](https://hackage.haskell.org/package/commonmark-0.2.6.1) and its GitHub Markdown extensions. Embedded HTML is displayed as text through the parser's public syntax hooks; [xss-sanitize](https://hackage.haskell.org/package/xss-sanitize-0.3.7.2) filters the resulting markup and URL attributes. The previous MMark renderer turned HTML-like text into relative links, which failed the retained history assertion. The global renderer is unchanged.
 
 The handler regression covers formatting, code blocks, tables, tasks, footnotes, script/form markup, encoded and mixed-case JavaScript links, rejected image URLs, and unchanged stored Markdown. The browser flow also saves a reference-style link through source and rich modes, verifies formatted read-back, and pins the exact Markdown bytes in the database. All 62 repository-context examples pass after these changes.
 
-PR #691 includes the captioned editor walkthrough. Its first publication passed all eleven local check entries and production-image verification. The native amd64 build includes normal and profiling variants. The review follow-up also checks that navigation opens an empty rich-text document, alongside the existing source-field checks.
+The editor was isolated on `work/project-wiki-editor`. Its final reviewed head was `993b8939ab6e28ea70dc70431901e91f696e51cf`. All eleven local check entries passed for that tree: Linux build, 1,874 doctests, 336 unit examples, 1,225 integration examples, 1,028 frontend assertions, 176 E2E cases, HLint, Weeder, CLI and release checks. Two integration examples require unavailable credentials and remain pending.
 
-Concurrent E2E runs encountered dashboard timing failures. All 176 cases passed with one worker and unchanged assertions/timeouts. UI and integration checks passed separately after concurrent npm installations raced. The integration suite has two cases pending for unavailable credentials. Before merging an updated diff, rerun `make ci-signoff` and wait for its required GitHub checks.
+The follow-up browser assertion proves that navigation opens an empty rich document, alongside empty server fields. The final review retained the local renderer, explicit toolbar parameters, separate initial/toggle load triggers and external Markdown image support. PR #691 records the reasons. The requested sequence remains in this file.
+
+E2E passed with one worker and unchanged assertions/timeouts. Earlier concurrent runs failed dashboard timing/cleanup checks. Combined UI/integration setup also raced while replacing `node_modules`; both checks passed separately. Failed runs were not attested. Final `make ci-signoff` passed after recovery from a host disk-space failure.
+
+The native amd64 production image includes normal and profiling builds: `sha256:61e09e4ce64c38a6f89c76c6f8d6c1661422fb5cf01741c12b3f83b8965b4be9`. GitHub verified it before merge. The captioned 12-second walkthrough shows keyboard formatting, source mode, safe read-back and tree navigation. Production deployment was not manually triggered or verified in this work.
+
+The larger worker migration, complete resource accounting, chat-agent memory authorization, sandbox maintenance and deployment conformance remain separate work.
 
 Merge each PR only after its review loop and required checks pass. Keep worker migration and billing/sandbox changes out of both wiki PRs.

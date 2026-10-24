@@ -206,12 +206,18 @@ process.stdout.write('200');
 test('cold Cabal cache preserves prebuilt dependencies and subsequent additions', () => {
   const dockerfile = readFileSync(new URL('../../Dockerfile', import.meta.url), 'utf8');
   const mounts = [...dockerfile.matchAll(/--mount=type=cache[^\s]*target=\/root\/\.cabal\/store[^\s]*/g)].map(([mount]) => `${mount},id=monoscope-seed-${root.split('/').at(-1)}`);
-  assert.equal(mounts.length, 2);
+  assert.equal(mounts.length, 3);
+  copyFileSync(new URL('../../.dockerignore', import.meta.url), join(repo, '.dockerignore'));
+  writeFileSync(join(repo, 'cabal.project'), 'packages: .');
+  writeFileSync(join(repo, 'cabal.project.local'), 'unreviewed build flags');
   const fixture = `FROM debian:12-slim AS dependencies
 RUN mkdir -p /root/.cabal/store && printf 'prebuilt' > /root/.cabal/store/dependency
 FROM dependencies AS builder
+COPY cabal.project* /inputs/
+RUN test ! -e /inputs/cabal.project.local
 RUN ${mounts[0]} test "$(cat /root/.cabal/store/dependency)" = prebuilt && printf 'incremental' > /root/.cabal/store/addition
 RUN ${mounts[1]} test "$(cat /root/.cabal/store/dependency)" = prebuilt && test "$(cat /root/.cabal/store/addition)" = incremental
+RUN ${mounts[2]} test "$(cat /root/.cabal/store/dependency)" = prebuilt && test "$(cat /root/.cabal/store/addition)" = incremental
 `;
   const result = spawnSync('docker', ['buildx', 'build', '--no-cache', '--progress=plain', '-f', '-', repo], {
     input: fixture, encoding: 'utf8', env: process.env,

@@ -1859,7 +1859,7 @@ issueSystemPrompt now =
 -- Designed to power the AI chat in the anomalies page. The chat thread is loaded via htmx and theres an input which when submitted gets sent here.
 aiChatPostH :: Projects.ProjectId -> Issues.IssueId -> AIChatForm -> ATAuthCtx (RespHeaders (Html ()))
 aiChatPostH pid issueId form = do
-  _ <- Projects.sessionAndProject pid
+  (session, _) <- Projects.sessionAndProject pid
   if T.length form.query > 4000
     then addRespHeaders $ aiChatResponse_ pid form.query "Query too long. Maximum 4000 characters allowed." Nothing Nothing Nothing
     else do
@@ -1868,16 +1868,16 @@ aiChatPostH pid issueId form = do
       let convId = UUIDId issueId.unUUIDId :: UUIDId "conversation"
       void $ Issues.getOrCreateConversation pid convId Issues.CTAnomaly (AE.object ["issue_id" AE..= issueId])
       issueM <- Issues.selectIssueById pid issueId
-      maybe (respond Nothing convId "Issue not found. Unable to analyze." Nothing Nothing True) (processIssue appCtx now convId) issueM
+      maybe (respond Nothing convId "Issue not found. Unable to analyze." Nothing Nothing True) (processIssue session.user.id appCtx now convId) issueM
   where
     respond systemPromptM convId response widgets toolCalls includeUserMsg = do
       when includeUserMsg $ Issues.insertChatMessage pid convId Issues.ChatUser form.query Nothing Nothing
       Issues.insertChatMessage pid convId Issues.ChatAssistant response (AE.toJSON <$> widgets) (AE.toJSON <$> toolCalls)
       addRespHeaders $ aiChatResponse_ pid form.query response widgets toolCalls systemPromptM
 
-    processIssue appCtx now convId issue = do
+    processIssue userId appCtx now convId issue = do
       fullSystemPrompt <- buildSystemPromptForIssue pid issue now
-      let config = (AI.defaultAgenticConfig pid){AI.facetContext = Nothing, AI.customContext = Just fullSystemPrompt, AI.conversationId = Just convId, AI.conversationType = Just Issues.CTAnomaly, AI.systemPromptOverride = Just $ issueSystemPrompt now, AI.sourceConfig = Just appCtx.config, AI.useTimefusion = appCtx.env.enableTimefusionReads}
+      let config = (AI.defaultAgenticConfig pid){AI.access = AI.SessionAccess userId, AI.invocationMode = AI.InteractiveWithMemory, AI.facetContext = Nothing, AI.customContext = Just fullSystemPrompt, AI.conversationId = Just convId, AI.conversationType = Just Issues.CTAnomaly, AI.systemPromptOverride = Just $ issueSystemPrompt now, AI.sourceConfig = Just appCtx.config, AI.useTimefusion = appCtx.env.enableTimefusionReads}
       result <- AI.runAgenticChatWithHistory config form.query appCtx.config.openaiModel appCtx.config.openaiApiKey
       either
         (\err -> respond (Just fullSystemPrompt) convId ("I encountered an error while analyzing this issue: " <> err) Nothing Nothing False)

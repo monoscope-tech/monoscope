@@ -380,7 +380,8 @@ run_body() { # <check>
       prepare_browser
       scripts/e2e.sh
       ;;
-    integration-tests) run_integration ;;
+    # Provisioned SDK guests run through the Haskell suite; its inputs include the worker.
+    integration-tests) test -x scripts/package-cli.sh && run_integration ;;
     *) die "no body for check '$1'" ;;
   esac
 }
@@ -397,10 +398,20 @@ run_integration() {
   # a dead host instead of taking TestUtils' Postgres-as-TimeFusion fallback. Only
   # reached under CI_ALLOW_DEGRADED — cmd_run refuses this check otherwise.
   case " ${CAPS:-} " in *" tf-real "*) ;; *) unset TIMEFUSION_PG_TEST_URL ;; esac
-  export USE_EXTERNAL_DB=true LOG_LEVEL=${LOG_LEVEL:-warn}
+  export USE_EXTERNAL_DB=true LOG_LEVEL=${LOG_LEVEL:-warn} HOST_URL=http://localhost:8080/
+  cabal build monoscope-cli:exe:monoscope -j $CABAL_FLAGS "$CABAL_OPTS"
+  MONOSCOPE_BIN=$(scripts/cli-bin.sh $CABAL_FLAGS "$CABAL_OPTS")
+  export MONOSCOPE_BIN
+  [ -x "$MONOSCOPE_BIN" ] || die "CLI binary was not built at $MONOSCOPE_BIN"
+  if ! command -v ffmpeg >/dev/null || ! command -v dot >/dev/null; then
+    apt-get update && apt-get install -y --no-install-recommends ffmpeg graphviz
+  fi
+  (cd impact-review-worker && npm ci --ignore-scripts --no-audit)
   (cd web-components && npm ci --prefer-offline --no-audit)
   prepare_browser
-  make build-chart-cli
+  (cd web-components && bun build --compile src/chart-cli.ts --outfile /tmp/monoscope-chart-cli)
+  cp /tmp/monoscope-chart-cli chart-cli
+  chmod +x chart-cli
   [ -n "${CI_INTEGRATION_BIN:-}" ] || cabal build integration-tests -j $CABAL_FLAGS "$CABAL_OPTS"
   # Same flags as the build above: list-bin resolves against a plan, and a
   # different one points at a path the build never wrote.
@@ -602,7 +613,11 @@ cmd_gc() {
 
 COMPOSE_FILE=ci/compose.yml
 COMPOSE_PROJECT="monoscope-ci-$(printf '%s' "$ROOT" | sha256 | cut -c1-12)"
-compose() { docker compose -f "$COMPOSE_FILE" --project-name "$COMPOSE_PROJECT" "$@"; }
+compose() {
+  mkdir -p .ci
+  touch .ci/chart-cli-linux
+  docker compose -f "$COMPOSE_FILE" --project-name "$COMPOSE_PROJECT" "$@"
+}
 
 # Wait for a host check started in the background and replay its output.
 collect_host() { [ -n "$1" ] || return 0; local r=0; wait "$1" || r=$?; cat "$2"; rm -f "$2"; return "$r"; }

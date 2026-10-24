@@ -1,0 +1,149 @@
+module Data.Effectful.CodeReview.Checkout (Source (..), Prepared (..), withCheckout) where
+
+import Data.Aeson qualified as AE
+import Data.ByteString qualified as BS
+import Data.Char (isAlphaNum, isAscii)
+import Data.Effectful.CodeReview.Artifacts (ArtifactStore (..), PeerPreparation, artifactCheckout, peerPreparation, sha256, withVerifiedArtifacts)
+import Data.Effectful.CodeReview.Policy qualified as Policy
+import Data.Effectful.CodeReview.Types (ArtifactRequest (..), FixResult (..), Request (..), Revision, mkRevision, revisionText)
+import Data.List (lookup)
+import Data.List.Extra (nubOrd)
+import Data.Text qualified as T
+import GHC.Clock (getMonotonicTimeNSec)
+import Pkg.DeriveUtils (UUIDId, WrappedEnumSC (..))
+import Pkg.GitCommand qualified as HostGit
+import Relude
+import System.Directory (canonicalizePath, createDirectoryIfMissing)
+import System.Environment (getEnvironment)
+import System.FileLock (SharedExclusive (..), withFileLock)
+import System.FilePath (isAbsolute, takeDirectory, takeFileName, (</>))
+import System.IO (hClose)
+import System.IO.Error (userError)
+import System.IO.Temp (withSystemTempDirectory)
+import System.Posix.Files qualified as Posix
+import System.Process.Typed (ExitCode (..), createPipe, getStdout, readProcessStdout_, setStdout, waitExitCode, withProcessTerm)
+import UnliftIO.Exception (throwIO, tryAny)
+import UnliftIO.Timeout qualified as Timeout
+
+
+data Source where
+  Repository :: Request run -> Source
+  VerifiedCandidate :: ArtifactRequest -> Source
+
+
+data CacheStatus = Hit | Miss | Verified
+  deriving stock (Generic, Read, Show)
+  deriving (AE.ToJSON) via WrappedEnumSC 'Nothing "" CacheStatus
+
+
+data CheckoutEvidence = SourceOnly | VerifiedEvidence PeerPreparation
+  deriving stock (Generic)
+  deriving anyclass (AE.ToJSON)
+
+
+data Prepared = Prepared {directory :: FilePath, repositorySkills :: FilePath, rootInstructions :: Text, projectId :: UUIDId "project", repository :: Text, base :: Revision, head :: Revision, cacheStatus :: CacheStatus, durationMs :: Word64, evidence :: CheckoutEvidence, policy :: Policy.Policy}
+  deriving stock (Generic)
+  deriving anyclass (AE.ToJSON)
+
+
+data Origin = GitHub Text | Local FilePath
+
+
+-- Keep the private checkout alive until the child and all of its VMs have exited.
+withCheckout :: ArtifactStore -> Source -> (Prepared -> IO a) -> IO (Either Text a)
+withCheckout store source action = do
+  outcome <- tryAny $ case source of
+    Repository request -> withSystemTempDirectory "monoscope-agent-checkout" \temporary -> do
+      started <- getMonotonicTimeNSec
+      prepared <- Timeout.timeout (120 * 1000000) $ prepare temporary request
+      traverse
+        (\(directory, baseRevision, headRevision, cacheStatus) -> deliver started directory request.projectId request.repository baseRevision headRevision cacheStatus SourceOnly)
+        prepared
+    VerifiedCandidate artifacts -> do
+      started <- getMonotonicTimeNSec
+      verified <- withVerifiedArtifacts store artifacts \verifiedArtifacts -> do
+        let directory = artifactCheckout verifiedArtifacts
+            result = artifacts.result
+        git directory ["checkout", "--quiet", "--detach", toString $ revisionText result.head] HostGit.Local
+        deliver started directory result.projectId artifacts.repository result.base result.head Verified $ VerifiedEvidence $ peerPreparation verifiedArtifacts
+      either (const invalid) (pure . Just) verified
+  pure $ case outcome of Right (Just prepared) -> Right prepared; _ -> Left "Repository checkout could not be prepared"
+  where
+    elapsed started = max 1 . (`div` 1000000) . (+ 999999) . subtract started <$> getMonotonicTimeNSec
+    deliver started directory project repository baseRevision headRevision status evidence = withSystemTempDirectory "monoscope-agent-metadata" \temporary -> do
+      metadata <- canonicalizePath temporary
+      let roots = [".agents/skills", ".pi/skills"]
+          instructionNames = ["AGENTS.override.md", "AGENTS.md", "CLAUDE.md"]
+      for_ roots $ createDirectoryIfMissing True . (metadata </>) . toString
+      entries <- T.splitOn "\0" . decodeUtf8 <$> gitBytes directory (["ls-tree", "-rz", toString $ revisionText headRevision, "--"] <> map toString (roots <> instructionNames)) HostGit.Local
+      let files =
+            mapMaybe
+              ( \entry -> case T.breakOn "\t" entry of
+                  (header, path) | [mode, "blob", blob] <- words header, mode `elem` ["100644", "100755"] -> Just (T.drop 1 path, blob)
+                  _ -> Nothing
+              )
+              entries
+          content blob = gitBytes directory ["cat-file", "blob", toString blob] HostGit.Local
+          instruction blob = do
+            command <- gitCommand directory ["cat-file", "blob", toString blob] HostGit.Local
+            withProcessTerm (setStdout createPipe command) \process -> do
+              bytes <- BS.hGet (getStdout process) 32768
+              if BS.length bytes < 32768
+                then waitExitCode process >>= \exit -> unless (exit == ExitSuccess) invalid
+                else hClose (getStdout process) >> void (waitExitCode process)
+              pure $ decodeUtf8With lenientDecode bytes
+      for_ files \(path, blob) -> when (any (\root -> (root <> "/") `T.isPrefixOf` path) roots && (".md" `T.isSuffixOf` path || takeFileName (toString path) `elem` [".gitignore", ".ignore", ".fdignore"])) do
+        let destination = metadata </> toString path
+        createDirectoryIfMissing True $ takeDirectory destination
+        writeFileBS destination =<< content blob
+      instructions <- maybe (pure "") instruction $ asum $ map (`lookup` files) instructionNames
+      duration <- elapsed started
+      action $ Prepared directory metadata instructions project repository baseRevision headRevision status duration evidence (Policy.policy Policy.Advisory (revisionText baseRevision) (revisionText headRevision) instructions)
+    prepare :: FilePath -> Request run -> IO (FilePath, Revision, Revision, CacheStatus)
+    prepare temporary request = do
+      baseRevision <- either (const invalid) pure $ mkRevision request.base
+      headRevision <- either (const invalid) pure $ mkRevision request.head
+      origin <- parseOrigin request.repository
+      let access = case origin of Local _ -> HostGit.Local; GitHub _ -> HostGit.GitHub $ if T.null request.gitToken then Nothing else Just request.gitToken
+          sourcePath = case origin of Local path -> path; GitHub url -> toString url
+      root <- canonicalizePath store.cacheDir
+      let project = root </> toString request.projectId.toText
+          mirror = project </> toString (sha256 $ encodeUtf8 request.repository)
+          checkout = temporary </> "checkout"
+      for_ [project, mirror] \directory -> do
+        createDirectoryIfMissing True directory
+        canonical directory
+        Posix.setFileMode directory 0o700
+      status <- withFileLock (mirror <> ".native.lock") Exclusive \_ -> do
+        let cached args = git temporary (["--git-dir", mirror] <> args) access
+        cached ["init", "--bare", "--quiet"]
+        available <- tryAny $ traverse_ (\revision -> cached ["cat-file", "-e", toString (revisionText revision) <> "^{commit}"]) [baseRevision, headRevision]
+        -- A cache hit is not proof that this request still has source access.
+        cached ["ls-remote", "--quiet", "--", sourcePath, "HEAD"]
+        cached $ ["fetch", "--quiet", "--no-tags", "--", sourcePath] <> ["+" <> revision <> ":refs/heads/monoscope/" <> revision | revision <- nubOrd $ map (toString . revisionText) [baseRevision, headRevision]]
+        git temporary ["clone", "--quiet", "--no-local", "--no-checkout", "--", mirror, checkout] HostGit.Local
+        pure $ if isRight available then Hit else Miss
+      git checkout ["remote", "set-url", "origin", toString request.repository] HostGit.Local
+      git checkout ["checkout", "--quiet", "--detach", toString $ revisionText headRevision] HostGit.Local
+      pure (checkout, baseRevision, headRevision, status)
+    parseOrigin value
+      | isAbsolute $ toString value = canonical (toString value) $> Local (toString value)
+      | otherwise = case T.stripPrefix "https://github.com/" value >>= T.stripSuffix ".git" of
+          Just slug | [owner, name] <- T.splitOn "/" slug, all segment [owner, name] -> pure $ GitHub value
+          _ -> invalid
+      where
+        segment part = not (T.null part) && part `notElem` [".", ".."] && T.all (\c -> isAscii c && (isAlphaNum c || c `elem` ['-', '_', '.'])) part
+    canonical directory = canonicalizePath directory >>= \resolved -> unless (resolved == directory) invalid
+    git directory args access = void . readProcessStdout_ =<< gitCommand directory args access
+    gitBytes directory args access = do
+      command <- gitCommand directory args access
+      withProcessTerm (setStdout createPipe command) \process -> do
+        bytes <- BS.hGet (getStdout process) (1048576 + 1)
+        when (BS.length bytes > 1048576) invalid
+        exit <- waitExitCode process
+        unless (exit == ExitSuccess) invalid
+        pure bytes
+    gitCommand directory args access = do
+      environment <- getEnvironment
+      pure $ HostGit.command environment access directory args
+    invalid = throwIO $ userError "Invalid repository checkout"

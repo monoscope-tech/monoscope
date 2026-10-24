@@ -23,8 +23,8 @@ findBinary = do
   candidate <- case envBin of
     Just p -> pure p
     Nothing -> do
-      (code, out, _) <- readProcessWithExitCode "cabal" ["list-bin", "exe:monoscope"] ""
-      pure $ if code == ExitSuccess then T.unpack (T.strip (toText out)) else ""
+      (code, out, _) <- readProcessWithExitCode "scripts/cli-bin.sh" ["--ghc-options=-O0", "--write-ghc-environment-files=never"] ""
+      pure $ if code == ExitSuccess then toString (T.strip (toText out)) else ""
   if null candidate then pure Nothing else do
     exists <- doesFileExist candidate
     pure $ if exists then Just candidate else Nothing
@@ -40,6 +40,17 @@ runMono args = do
 
 spec :: Spec
 spec = describe "CLI binary E2E tests" do
+  it "releasePackage_isRunnableWithPortableLinkage" do
+    findBinary >>= \case
+      Nothing -> pendingWith "Build the CLI with make cli-build"
+      Just bin -> withSystemTempDirectory "monoscope-release" \directory -> do
+        let packaged = directory <> "/monoscope"
+        (status, output, errors) <- readProcessWithExitCode "scripts/package-cli.sh" [bin, packaged] ""
+        unless (status == ExitSuccess) $ expectationFailure $ output <> errors
+        (versionStatus, version, _) <- readProcessWithExitCode packaged ["--version"] ""
+        versionStatus `shouldBe` ExitSuccess
+        version `shouldContain` "monoscope "
+
   it "--help exits 0 and lists subcommands" do
     (code, out, _) <- runMono ["--help"]
     code `shouldBe` ExitSuccess

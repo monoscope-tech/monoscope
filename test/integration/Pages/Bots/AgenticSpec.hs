@@ -18,6 +18,7 @@ import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Lucid qualified
 import Models.Apis.Issues qualified as Issues
+import Models.Projects.Projects qualified as Projects
 import Pages.AIThreads qualified as AIThreads
 import Pages.Bots.BotTestHelpers (assertJsonGolden, getOpenAIKey, getOpenAIModel)
 import Pages.Bots.SeedTestData (cleanupTelemetryData, seedTelemetryData)
@@ -27,6 +28,7 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
+import Servant.API.ResponseHeaders (getResponse)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Logging
 import Test.Hspec (Spec, around, describe, expectationFailure, it, shouldBe, shouldContain, shouldNotContain, shouldSatisfy)
@@ -107,12 +109,32 @@ spec = around withTestResources do
         scheduledReadOnly <- toolNames (AI.defaultAgenticConfig testPid){AI.invocationMode = AI.ScheduledRoutine (UUIDId UUID.nil) False}
         scheduledActionable <- toolNames (AI.defaultAgenticConfig testPid){AI.invocationMode = AI.ScheduledRoutine (UUIDId UUID.nil) True}
         repositoryAware <- toolNames (AI.defaultAgenticConfig testPid){AI.sourceConfig = Just tr.trATCtx.config}
+        memoryWriter <- toolNames (AI.defaultAgenticConfig testPid){AI.access = AI.SessionAccess (getResponse tr.trSessAndHeader).user.id, AI.conversationId = Just $ UUIDId UUID.nil, AI.invocationMode = AI.InteractiveWithMemory}
+        readonly `shouldContain` ["list_project_memory", "read_project_memory"]
+        readonly `shouldNotContain` ["write_project_memory"]
+        actionable `shouldNotContain` ["write_project_memory"]
+        memoryWriter `shouldContain` ["write_project_memory"]
+        memoryWriter `shouldNotContain` ["send_to_slack"]
         readonly `shouldNotContain` ["send_to_slack"]
         scheduledReadOnly `shouldNotContain` ["send_to_slack"]
         readonly `shouldContain` ["list_issues", "get_issue", "list_incidents", "get_incident", "list_monitors", "get_monitor", "list_endpoints", "get_endpoint", "list_log_patterns", "get_log_pattern", "list_dashboards", "get_dashboard", "get_project"]
         repositoryAware `shouldContain` ["get_code_context", "list_runbooks", "read_runbook", "get_linked_repositories", "get_deployments"]
         actionable `shouldContain` ["send_to_slack"]
         scheduledActionable `shouldContain` ["send_to_slack"]
+
+      it "binds routine wiki grants to an editor and clears them when actions are reset" \tr -> do
+        let conversation = UUIDId UUID.nil
+            user = (getResponse tr.trSessAndHeader).user.id
+            destination = AIThreads.routineDestinationPostH testPid conversation . AIThreads.RoutineDestinationForm
+        void $ toBaseServantResponse tr $ Issues.getOrCreateConversation testPid conversation Issues.CTWeb (AE.object [])
+        Just routine <- runTestBg frozenTime tr $ Issues.upsertRoutine testPid conversation $ fromRightShow $ Issues.mkRoutineInterval 15
+        runQueryEffect tr (Issues.routineCanWriteMemory testPid conversation routine.id) >>= (`shouldBe` False)
+        void $ testServant tr $ destination Issues.DestinationSlack
+        runQueryEffect tr (Issues.routineCanWriteMemory testPid conversation routine.id) >>= (`shouldBe` True)
+        runQueryEffect tr $ Hasql.interpExecute_ [HI.sql|UPDATE projects.project_members SET permission = 'view' WHERE project_id = #{testPid} AND user_id = #{user}|]
+        void $ testServant tr $ destination Issues.DestinationConversation
+        void $ testServant tr $ destination Issues.DestinationSlack
+        runQueryEffect tr (Issues.routineCanWriteMemory testPid conversation routine.id) >>= (`shouldBe` False)
 
     describe "Web conversation persistence" do
       it "assistantPages_defaultToNavigation" \tr -> do

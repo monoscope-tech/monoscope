@@ -55,6 +55,7 @@ module Pkg.TestUtils (
   createTestProject,
   createTestAPIKey,
   ingestLog,
+  ingestLogWithResource,
   ingestErrorLog,
   ingestTrace,
   ingestSpanLinked,
@@ -106,6 +107,9 @@ import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Lazy qualified as LBS
 import Data.Cache (Cache (..), newCache)
 import Data.Default (def)
+import Data.Effectful.AgentArtifacts qualified as Artifacts
+import Data.Effectful.AgentWorkspace qualified as Workspace
+import Data.Effectful.CodeReview qualified as CodeReview
 import Data.Effectful.Hasql (Hasql, runHasqlPool)
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Notify qualified
@@ -605,6 +609,9 @@ runTestBackgroundWithHTTP http clock logger appCtx process = do
       & runNoSleep
       & http
       & ELLM.runLLMGolden "./tests/golden/"
+      & CodeReview.runCodeReviewTest (const $ Left "No review agent fixture configured") (const $ Left "No fix agent fixture configured") (const $ Left "No admission agent fixture configured") (const $ Left "No artifact verification fixture configured") (const $ Left "No explanation fixture configured") (const $ Left "No independent fix review fixture configured")
+      & Workspace.runWorkspaceTest (\_ _ _ -> Left "No workspace fixture") (\_ _ -> Left Workspace.RegressionUnavailable) (\_ _ -> Left "No prune fixture") (const $ Left "No maintenance fixture")
+      & Artifacts.runAgentArtifactsTest (const $ Left Artifacts.StorageUnavailable) (\_ _ -> Left Artifacts.ArtifactUnavailable)
       & runConcurrent
       & Ki.runStructuredConcurrency
       & Timeout.runTimeout
@@ -1434,10 +1441,14 @@ createTestAPIKey tr projectId keyName = do
 
 -- | Ingest via resource attribute (key embedded in payload) or via header (key in Authorization header)
 ingestLog, ingestLogWithHeader :: TestResources -> Text -> Text -> UTCTime -> IO ()
-ingestLog tr apiKey bodyText timestamp =
-  void $ OtlpServer.logsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createOtelLogAtTime apiKey [bodyText] timestamp)
+ingestLog tr apiKey = ingestLogWithResource tr apiKey []
 ingestLogWithHeader tr apiKey bodyText timestamp =
   void $ runTestBg frozenTime tr $ OtlpServer.processLogsRequest (Just apiKey) (createOtelLogAtTime "" [bodyText] timestamp)
+
+
+ingestLogWithResource :: TestResources -> Text -> [(Text, Text)] -> Text -> UTCTime -> IO ()
+ingestLogWithResource tr apiKey attributes bodyText timestamp =
+  void $ OtlpServer.logsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider $ Proto $ createOtelLogAtTime apiKey [bodyText] timestamp & LSF.resourceLogs . traverse . PLF.resource .~ mkResource apiKey (map (uncurry mkAttr) attributes)
 
 
 -- | Ingest an ERROR-severity log record with optional @exception.*@ attributes.

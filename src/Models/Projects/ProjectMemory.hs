@@ -1,4 +1,4 @@
-module Models.Projects.ProjectMemory (PagePath, mkPagePath, pagePathText, WriteError (..), pageAtPath, pageWindow, PageId, MemoryText, mkMemoryText, memoryText, Document (..), Author (..), Page (..), pageLimit, latestPages, pageHistory, writePage) where
+module Models.Projects.ProjectMemory (PagePath, mkPagePath, pagePathText, WriteError (..), pageAtPath, pageWindow, PageId, MemoryText, mkMemoryText, memoryText, Document (..), Author (..), Page (..), Edit (..), Request (..), Summary (..), summarize, pageLimit, latestPages, pageHistory, writePage) where
 
 import Data.Aeson qualified as AE
 import Data.Char (isAlphaNum, isAscii)
@@ -120,7 +120,9 @@ data Document = Document {title :: MemoryText 120, body :: MemoryText 16000}
 -- True
 -- >>> Aeson.toJSON (Memory.Agent $ UUIDId UUID.nil) == Aeson.object ["tag" Aeson..= ("Agent" :: Text), "contents" Aeson..= ("00000000-0000-0000-0000-000000000000" :: Text)]
 -- True
-data Author = Member (UUIDId "user") | Agent (UUIDId "agent_attempt")
+-- >>> Aeson.eitherDecode @Memory.Author "{\"tag\":\"Conversation\",\"contents\":\"00000000-0000-0000-0000-000000000000\"}" == Right (Memory.Conversation $ UUIDId UUID.nil)
+-- True
+data Author = Member (UUIDId "user") | Agent (UUIDId "agent_attempt") | Conversation (UUIDId "conversation")
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
   deriving (HI.DecodeValue) via Aeson Author
@@ -129,6 +131,25 @@ data Author = Member (UUIDId "user") | Agent (UUIDId "agent_attempt")
 data Page = Page {id :: PageId, version :: Int64, document :: Document, author :: Author, updatedAt :: UTCTime, path :: PagePath}
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.ToJSON, HI.DecodeRow)
+
+
+data Edit = Edit {pageId :: PageId, version :: Word32, document :: Document}
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data Request = List | Read PageId | Write Edit
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+data Summary = Summary {id :: PageId, version :: Int64, title :: MemoryText 120, author :: Author, updatedAt :: UTCTime, path :: PagePath}
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.ToJSON)
+
+
+summarize :: Page -> Summary
+summarize page = Summary page.id page.version page.document.title page.author page.updatedAt page.path
 
 
 pageLimit :: Int

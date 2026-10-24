@@ -282,6 +282,8 @@ tests:
       - memory
       - base16-bytestring
       - directory
+      - filepath
+      - http-api-data
       - pg-transact
       - openapi3
       - monad-time-effectful
