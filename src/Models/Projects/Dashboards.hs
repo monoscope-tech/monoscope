@@ -74,7 +74,7 @@ import Pkg.Components.Table (SortField (..), SortOrder (..))
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), selectFrom)
-import Pkg.Parser (replacePlaceholders, variablePresets)
+import Pkg.Parser (fillQueryTemplate, variablePresets)
 import Relude
 import Servant (FromHttpApiData, ServerError (..), err404)
 import System.Directory (listDirectory)
@@ -295,7 +295,7 @@ replaceDashboardVariables
 replaceDashboardVariables pid mf mt allParams currentTime x =
   x & field' @"sql" . _Just . #statement %~ replace & field' @"query" . _Just %~ replace
   where
-    replace = replacePlaceholders (variablePresets def pid.toText mf mt allParams currentTime)
+    replace = fillQueryTemplate (variablePresets def pid.toText mf mt allParams currentTime)
 
 
 -- | Look up a dashboard WITHOUT checking which project owns it.

@@ -1040,7 +1040,7 @@ databaseSpec = do
       void $ withPool tr.trPool $ DBT.execute [sql| INSERT INTO projects.replay_sessions (session_id, project_id, created_at, last_event_at, event_file_count, user_name) VALUES (?, ?, ?, ?, 1, 'Ada') |] (recording, pid, frozenTime, addUTCTime 30 frozenTime)
       let stamp = Just . toText . formatTime defaultTimeLocale "%FT%T%QZ" . (`addUTCTime` frozenTime)
           listed query = testServant tr (Log.logSessionsH pid query (stamp (-60)) Nothing (stamp 60) Nothing Nothing Nothing) <&> \(_, Log.SessionsView _ rows _) -> [(r.sessionId, r.hasReplay, r.userName) | r <- V.toList rows]
-      listed (Just LogQueries.browserSessionsKql) `shouldReturn` [(UUID.toText recording, True, Just "Ada")]
+      listed (Just Parser.browserKql) `shouldReturn` [(UUID.toText recording, True, Just "Ada")]
       listed Nothing `shouldReturn` [(UUID.toText recording, True, Just "Ada")]
       listed (Just "status_code == \"ERROR\"") `shouldReturn` []
 

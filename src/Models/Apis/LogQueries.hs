@@ -18,10 +18,8 @@ module Models.Apis.LogQueries (
   LogEndpoint (..),
   fetchLogPatterns,
   fetchSessions,
-  browserSessionsKql,
   SessionSort (..),
   SessionsRead (..),
-  RecordingRows (..),
   sessionSortLabel,
   ExpandKind (..),
   fetchEventExamples,
@@ -469,12 +467,6 @@ data SessionRow = SessionRow
 
 -- | The first page carries the header (summary tiles + service count); load-more pages
 -- and live polls merge rows into a list that already has one.
--- | Whether screen recordings with no telemetry join the list. They carry no attributes, so
--- only an unfiltered or browser-scoped list can hold them.
-data RecordingRows = WithRecordings | TelemetryOnly
-  deriving stock (Eq)
-
-
 data SessionsRead = WithHeader | RowsOnly
   deriving stock (Eq, Show)
 
@@ -658,9 +650,9 @@ sessionKeyExpr :: Text
 sessionKeyExpr = "COALESCE(NULLIF(attributes___session___id, ''), NULLIF(attributes___user___id, ''), NULLIF(attributes___user___email, ''))"
 
 
--- | Browser telemetry as KQL: the sessions view Real User Monitoring links to (rum.yaml's browser predicate).
-browserSessionsKql :: Text
-browserSessionsKql = "(resource.telemetry.sdk.language in (\"webjs\", \"javascript\", \"js\") or resource.user_agent.original != null or name in (\"documentLoad\", \"documentFetch\") or name startswith \"Pageview \")"
+-- | The browser filter, parsed once per process rather than per sessions request.
+browserAst :: Either Text [Section]
+browserAst = parseQueryToAST browserKql
 
 
 -- | Ordering for the Sessions viz. The wire spellings are exactly the values the sort
@@ -700,8 +692,8 @@ sessionSortLabel ordering = T.toUpper (T.take 1 label) <> T.drop 1 label
     label = T.replace "_" " " $ display ordering
 
 
-fetchSessions :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Bool -> Projects.ProjectId -> RecordingRows -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Text -> Maybe Text -> Maybe SessionSort -> Int -> SessionsRead -> Eff es (Maybe SessionSummary, Int, [SessionRow])
-fetchSessions enableTfReads pid recordingRows queryAST dateRange environment service sortByM skip readKind = do
+fetchSessions :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Bool -> Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Text -> Maybe Text -> Maybe SessionSort -> Int -> SessionsRead -> Eff es (Maybe SessionSummary, Int, [SessionRow])
+fetchSessions enableTfReads pid queryAST dateRange environment service sortByM skip readKind = do
   now <- Time.currentTime
   let scope = mkScopedQuery pid dateRange environment service
       whereSql = rawSql $ scopedQueryWhere now (Just SSpans) scope queryAST
@@ -734,11 +726,12 @@ fetchSessions enableTfReads pid recordingRows queryAST dateRange environment ser
       <> keySql
       <> [HI.sql| IS NOT NULL
         GROUP BY 1|]
-  -- A recording whose spans never arrived is still a session a reader can replay.
+  -- A recording whose spans never arrived is still a session a reader can replay. It carries no
+  -- attributes, so only an unscoped list that is unfiltered or exactly browser-scoped holds it.
   let fromT = fromMaybe (addUTCTime (-3600) now) (fst dateRange)
       toT = fromMaybe now (snd dateRange)
   recordings :: [SessionAggRow] <-
-    if recordingRows == WithRecordings && isNothing environment && isNothing service
+    if isNothing environment && isNothing service && (null queryAST || Right queryAST == browserAst)
       then
         Hasql.interp
           [HI.sql| SELECT session_id::text, user_id, user_email, user_name, 0::bigint, 0::bigint, created_at, last_event_at, NULL::text[]
@@ -800,7 +793,7 @@ fetchSessions enableTfReads pid recordingRows queryAST dateRange environment ser
             { totalSessions = fromIntegral $ length sessions
             , erroredSessions = fromIntegral $ length $ filter ((> 0) . (.errorCount)) sessions
             , uniqueUsers = fromIntegral $ length $ ordNub $ mapMaybe (\r -> r.userId <|> r.userEmail) sessions
-            , uniqueServices = fromIntegral $ S.size $ foldMap (foldMap (S.fromList . V.toList) . (.services)) sessions
+            , uniqueServices = fromIntegral $ length $ ordNub $ concatMap toList $ mapMaybe (.services) sessions
             , medianDurationNs = percentile 0.5 durations
             , p95DurationNs = percentile 0.95 durations
             , medianEvents = percentile 0.5 events

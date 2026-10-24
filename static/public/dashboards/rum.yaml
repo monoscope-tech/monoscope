@@ -4,13 +4,9 @@ preview: /public/assets/svgs/screens/http-stats.svg
 description: Browser experience, Core Web Vitals, frontend errors, and user sessions from OpenTelemetry
 refresh_interval: 60s
 
-# Browser scope is laddered: no single marker covers real browser telemetry, and
-# telemetry.sdk.language alone matches nothing from the OpenTelemetry browser SDKs.
-# The span predicates below are TimeFusion's `rum_*` rollup filters verbatim
-# (schemas/otel_logs_and_spans.yaml); a rollup serves a widget only while they match exactly.
-#   browser:   (resource___telemetry___sdk___language IN ('webjs', 'javascript', 'js') OR resource___user_agent___original IS NOT NULL OR name IN ('documentLoad', 'documentFetch') OR (name LIKE 'Pageview %' OR name = 'documentLoad'))
-#   page view: (name LIKE 'Pageview %' OR name = 'documentLoad')
-#   error:     (status_code = 'ERROR' OR lower(COALESCE(level, '')) = 'error' OR attributes___exception___type IS NOT NULL)
+# {{browser_filter}}, {{pageview_filter}} and {{error_filter}} are Real User Monitoring's predicates
+# (Pkg.Parser.browserSql and siblings). TimeFusion's `rum_*` rollups declare them verbatim and serve a
+# widget only while its filter matches exactly, so they live in one place rather than here.
 #
 # Web Vitals P75 is read from the histogram buckets (unnest, sum per bound, interpolate within
 # the bucket holding the 75th observation), never the export mean. Each series is one page view,
@@ -28,7 +24,7 @@ variables:
         SELECT DISTINCT resource___service___name
         FROM otel_logs_and_spans
         WHERE project_id='{{project_id}}'
-          AND (resource___telemetry___sdk___language IN ('webjs', 'javascript', 'js') OR resource___user_agent___original IS NOT NULL OR name IN ('documentLoad', 'documentFetch') OR (name LIKE 'Pageview %' OR name = 'documentLoad'))
+          AND {{browser_filter}}
           AND resource___service___name IS NOT NULL
           {{time_filter}}
         LIMIT 100
@@ -50,7 +46,7 @@ tabs:
             icon: users
             query: &app '"{{var-app}}" == "" or resource.service.name == "{{var-app}}"'
             sql: |
-              SELECT distinct_count(approx_count_distinct(attributes___session___id))::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND (resource___telemetry___sdk___language IN ('webjs', 'javascript', 'js') OR resource___user_agent___original IS NOT NULL OR name IN ('documentLoad', 'documentFetch') OR (name LIKE 'Pageview %' OR name = 'documentLoad')) AND attributes___session___id IS NOT NULL
+              SELECT distinct_count(approx_count_distinct(attributes___session___id))::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND {{browser_filter}} AND attributes___session___id IS NOT NULL
             unit: sessions
             layout: { w: 3, h: 2 }
 
@@ -59,7 +55,7 @@ tabs:
             icon: file-lines
             query: *app
             sql: |
-              SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer, 'value', count(*)::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND (name LIKE 'Pageview %' OR name = 'documentLoad') GROUP BY time_bucket('{{rollup_interval}}', timestamp) ORDER BY time_bucket('{{rollup_interval}}', timestamp) DESC
+              SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer, 'value', count(*)::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND {{pageview_filter}} GROUP BY time_bucket('{{rollup_interval}}', timestamp) ORDER BY time_bucket('{{rollup_interval}}', timestamp) DESC
             unit: views
             summarize_by: sum
             layout: { w: 3, h: 2 }
@@ -69,7 +65,7 @@ tabs:
             icon: triangle-exclamation
             query: *app
             sql: &browser_error_series |
-              SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer, 'value', count(*)::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND (resource___telemetry___sdk___language IN ('webjs', 'javascript', 'js') OR resource___user_agent___original IS NOT NULL OR name IN ('documentLoad', 'documentFetch') OR (name LIKE 'Pageview %' OR name = 'documentLoad')) AND (status_code = 'ERROR' OR lower(COALESCE(level, '')) = 'error' OR attributes___exception___type IS NOT NULL) GROUP BY time_bucket('{{rollup_interval}}', timestamp) ORDER BY time_bucket('{{rollup_interval}}', timestamp) DESC
+              SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer, 'value', count(*)::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND {{browser_filter}} AND {{error_filter}} GROUP BY time_bucket('{{rollup_interval}}', timestamp) ORDER BY time_bucket('{{rollup_interval}}', timestamp) DESC
             unit: errors
             summarize_by: sum
             series_intent: error
@@ -80,7 +76,7 @@ tabs:
             icon: gauge
             query: *app
             sql: |
-              SELECT (approx_percentile(0.75, percentile_agg(duration)) / 1000000)::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND (name LIKE 'Pageview %' OR name = 'documentLoad') AND duration IS NOT NULL
+              SELECT (approx_percentile(0.75, percentile_agg(duration)) / 1000000)::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND {{pageview_filter}} AND duration IS NOT NULL
             unit: ms
             layout: { w: 3, h: 2 }
 
@@ -90,7 +86,7 @@ tabs:
         layout: { w: 7, h: 5 }
         query: *app
         sql: |
-          SELECT a.time, s.series, CASE s.series WHEN 'Page views' THEN a.page_views ELSE a.errors END FROM (SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time, count(*) FILTER (WHERE (name LIKE 'Pageview %' OR name = 'documentLoad'))::float AS page_views, count(*) FILTER (WHERE (resource___telemetry___sdk___language IN ('webjs', 'javascript', 'js') OR resource___user_agent___original IS NOT NULL OR name IN ('documentLoad', 'documentFetch') OR (name LIKE 'Pageview %' OR name = 'documentLoad')) AND (status_code = 'ERROR' OR lower(COALESCE(level, '')) = 'error' OR attributes___exception___type IS NOT NULL))::float AS errors FROM otel_logs_and_spans WHERE {{query_ast_filters}} GROUP BY time_bucket('{{rollup_interval}}', timestamp)) a CROSS JOIN (VALUES ('Page views'), ('Errors')) AS s(series) ORDER BY a.time DESC
+          SELECT a.time, s.series, CASE s.series WHEN 'Page views' THEN a.page_views ELSE a.errors END FROM (SELECT extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time, count(*) FILTER (WHERE {{pageview_filter}})::float AS page_views, count(*) FILTER (WHERE {{browser_filter}} AND {{error_filter}})::float AS errors FROM otel_logs_and_spans WHERE {{query_ast_filters}} GROUP BY time_bucket('{{rollup_interval}}', timestamp)) a CROSS JOIN (VALUES ('Page views'), ('Errors')) AS s(series) ORDER BY a.time DESC
 
       - type: table
         title: Top pages
@@ -99,7 +95,7 @@ tabs:
         columns:
           - field: page
             title: Page
-            link: /p/{{project_id}}/log_explorer?query={{row.kql}}&{{time_range}}
+            link: /p/{{project_id}}/log_explorer?query={{row.kql}}{{time_range}}
           - field: views
             title: Views
             column_type: number
@@ -121,7 +117,7 @@ tabs:
                 '/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[^/]*', '/:id', 'g'), '/[0-9][^/]*', '/:id', 'g'), '/[A-Z][A-Z0-9]*[0-9][A-Z0-9]*', '/:id', 'g'), ''), '/') AS page,
               duration
             FROM otel_logs_and_spans
-            WHERE {{query_ast_filters}} AND (name LIKE 'Pageview %' OR name = 'documentLoad') AND duration IS NOT NULL
+            WHERE {{query_ast_filters}} AND {{pageview_filter}} AND duration IS NOT NULL
           )
           -- The route as an anchored regex (masked segments match any segment; metacharacters
           -- escaped as one-character classes, so the KQL string needs no backslashes).
@@ -130,7 +126,7 @@ tabs:
           FROM (
             SELECT page, COUNT(*) AS n,
               ROUND((approx_percentile(0.75, percentile_agg(duration)) / 1000000.0)::numeric, 1)::text AS p75_ms,
-              replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(page, '"', ''),
+              replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(page, '"', ''), '\', ''),
                 '.', '[.]'), '+', '[+]'), '*', '[*]'), '(', '[(]'), ')', '[)]'), '$', '[$]'), '|', '[|]'), '{', '[{]'), ':id', '[^/]+') AS rx
             FROM pages GROUP BY page ORDER BY COUNT(*) DESC LIMIT 20
           ) AS top ORDER BY n DESC
@@ -145,7 +141,7 @@ tabs:
         columns:
           - field: session
             title: Session
-            link: /p/{{project_id}}/log_explorer?viz_type=sessions&query=attributes.session.id%20%3D%3D%20%22{{row.session}}%22&{{time_range}}
+            link: /p/{{project_id}}/log_explorer?viz_type=sessions&query=attributes.session.id%20%3D%3D%20%22{{row.session}}%22{{time_range}}
           - field: user
             title: User
           - field: page_views
@@ -162,12 +158,12 @@ tabs:
         sql: |
           SELECT attributes___session___id AS session,
             COALESCE(MAX(attributes___user___full_name), MAX(attributes___user___email), MAX(attributes___user___id), '') AS "user",
-            COUNT(*) FILTER (WHERE (name LIKE 'Pageview %' OR name = 'documentLoad'))::text AS page_views,
-            COUNT(*) FILTER (WHERE (status_code = 'ERROR' OR lower(COALESCE(level, '')) = 'error' OR attributes___exception___type IS NOT NULL))::text AS errors,
+            COUNT(*) FILTER (WHERE {{pageview_filter}})::text AS page_views,
+            COUNT(*) FILTER (WHERE {{error_filter}})::text AS errors,
             MAX(timestamp)::text AS last_seen
           FROM otel_logs_and_spans
           WHERE {{query_ast_filters}}
-            AND (resource___telemetry___sdk___language IN ('webjs', 'javascript', 'js') OR resource___user_agent___original IS NOT NULL OR name IN ('documentLoad', 'documentFetch') OR (name LIKE 'Pageview %' OR name = 'documentLoad'))
+            AND {{browser_filter}}
             AND attributes___session___id IS NOT NULL
           GROUP BY attributes___session___id ORDER BY MAX(timestamp) DESC LIMIT 50
 
@@ -359,7 +355,7 @@ tabs:
         icon: users
         query: *app
         sql: |
-          SELECT COUNT(DISTINCT attributes___session___id)::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND (resource___telemetry___sdk___language IN ('webjs', 'javascript', 'js') OR resource___user_agent___original IS NOT NULL OR name IN ('documentLoad', 'documentFetch') OR (name LIKE 'Pageview %' OR name = 'documentLoad')) AND (status_code = 'ERROR' OR lower(COALESCE(level, '')) = 'error' OR attributes___exception___type IS NOT NULL)
+          SELECT COUNT(DISTINCT attributes___session___id)::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND {{browser_filter}} AND {{error_filter}}
         unit: sessions
         layout: { w: 4, h: 3 }
 
@@ -368,7 +364,7 @@ tabs:
         icon: user
         query: *app
         sql: |
-          SELECT COUNT(DISTINCT COALESCE(attributes___user___id, attributes___user___email))::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND (resource___telemetry___sdk___language IN ('webjs', 'javascript', 'js') OR resource___user_agent___original IS NOT NULL OR name IN ('documentLoad', 'documentFetch') OR (name LIKE 'Pageview %' OR name = 'documentLoad')) AND (status_code = 'ERROR' OR lower(COALESCE(level, '')) = 'error' OR attributes___exception___type IS NOT NULL)
+          SELECT COUNT(DISTINCT COALESCE(attributes___user___id, attributes___user___email))::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND {{browser_filter}} AND {{error_filter}}
         unit: users
         layout: { w: 4, h: 3 }
 
@@ -379,7 +375,7 @@ tabs:
         columns:
           - field: error_type
             title: Type
-            link: /p/{{project_id}}/log_explorer?query={{row.kql}}&{{time_range}}
+            link: /p/{{project_id}}/log_explorer?query={{row.kql}}{{time_range}}
           - field: message
             title: Message
           - field: events
@@ -398,14 +394,14 @@ tabs:
         query: *app
         sql: |
           SELECT error_type, message, n::text AS events, sessions, last_seen,
-            CASE WHEN exception_type IS NOT NULL THEN 'attributes.exception.type == "' || replace(exception_type, '"', '') || '"'
-              ELSE '(status_code == "ERROR" or level == "error") and name == "' || replace(COALESCE(span_name, ''), '"', '') || '"' END AS kql
+            CASE WHEN exception_type IS NOT NULL THEN 'attributes.exception.type == "' || replace(replace(exception_type, '"', ''), '\', '') || '"'
+              ELSE '(status_code == "ERROR" or level == "error") and name == "' || replace(replace(COALESCE(span_name, ''), '"', ''), '\', '') || '"' END AS kql
           FROM (
             SELECT attributes___exception___type AS exception_type, COALESCE(NULLIF(attributes___exception___type, ''), NULLIF(status_message, ''), 'Browser error') AS error_type,
               LEFT(regexp_replace(COALESCE(NULLIF(attributes___exception___message, ''), NULLIF(status_message, ''), name, 'No error message'), '[0-9a-fA-F-]{8,}|[0-9]+', '<n>', 'g'), 300) AS message,
               MIN(name) AS span_name, COUNT(*) AS n, COUNT(DISTINCT attributes___session___id)::text AS sessions, MAX(timestamp)::text AS last_seen
             FROM otel_logs_and_spans
-            WHERE {{query_ast_filters}} AND (resource___telemetry___sdk___language IN ('webjs', 'javascript', 'js') OR resource___user_agent___original IS NOT NULL OR name IN ('documentLoad', 'documentFetch') OR (name LIKE 'Pageview %' OR name = 'documentLoad')) AND (status_code = 'ERROR' OR lower(COALESCE(level, '')) = 'error' OR attributes___exception___type IS NOT NULL)
+            WHERE {{query_ast_filters}} AND {{browser_filter}} AND {{error_filter}}
             GROUP BY 1, 2, 3 ORDER BY COUNT(*) DESC LIMIT 50
           ) AS groups ORDER BY n DESC
 
@@ -435,8 +431,8 @@ tabs:
         sql: |
           WITH sessions AS (
             SELECT COALESCE(NULLIF(attributes___user_agent___original, ''), resource___user_agent___original) AS ua, attributes___session___id AS session,
-              MAX(CASE WHEN (status_code = 'ERROR' OR lower(COALESCE(level, '')) = 'error' OR attributes___exception___type IS NOT NULL) THEN 1 ELSE 0 END) AS errored
-            FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND (resource___telemetry___sdk___language IN ('webjs', 'javascript', 'js') OR resource___user_agent___original IS NOT NULL OR name IN ('documentLoad', 'documentFetch') OR (name LIKE 'Pageview %' OR name = 'documentLoad'))
+              MAX(CASE WHEN {{error_filter}} THEN 1 ELSE 0 END) AS errored
+            FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND {{browser_filter}}
             GROUP BY 1, 2
           ), families AS (
             SELECT session, errored,

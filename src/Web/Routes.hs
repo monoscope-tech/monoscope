@@ -124,8 +124,6 @@ type GetRedirect = Verb 'GET 302
 
 
 type LocationRedirect a = GetRedirect '[HTML] (Headers '[Header "Location" Text] a)
-
-
 type SessionRedirect a = GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] a)
 
 
@@ -475,9 +473,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , slackIdentityPost :: mode :- "slack" :> "link" :> Capture "linkId" (UUIDId "slack_link") :> ReqBody '[FormUrlEncoded] Slack.SlackLinkForm :> Post '[HTML] (RespHeaders (Html ()))
   , slackLinkProjectGet :: mode :- "slack" :> "oauth" :> "callback" :> QPT "code" :> QPT "state" :> LocationRedirect BotUtils.BotResponse
   , endpointDetailsRedirect :: mode :- "p" :> ProjectId :> "endpoints" :> "details" :> AllQueryParams :> LocationRedirect NoContent
-  , rumDashboardRedirect :: mode :- "p" :> ProjectId :> "rum" :> AllQueryParams :> LocationRedirect NoContent
-  , rumSessionsRedirect :: mode :- "p" :> ProjectId :> "rum" :> "sessions" :> AllQueryParams :> LocationRedirect NoContent
-  , rumDashboardAlias :: mode :- "p" :> ProjectId :> "rum" :> "dashboard" :> AllQueryParams :> LocationRedirect NoContent
+  , rumRedirect :: mode :- "p" :> ProjectId :> "rum" :> CaptureAll "view" Text :> AllQueryParams :> LocationRedirect NoContent
   , dashboardNewGet :: mode :- "p" :> ProjectId :> "dashboards" :> "new" :> Get '[HTML] (RespHeaders Dashboards.DashboardNew)
   , dashboardsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> HXRequest :> AllQueryParams :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardGet))
   , dashboardsGetList :: mode :- "p" :> ProjectId :> "dashboards" :> QPT "sort" :> QPT "embedded" :> QueryParam "teamId" ApiT.TeamId :> QPT "copy_widget_id" :> QueryParam "source_dashboard_id" Dashboards.DashboardId :> QPT "new" :> RecordParam KeepPrefixExp Dashboards.DashboardFilters :> Get '[HTML] (RespHeaders Dashboards.DashboardsGet)
@@ -980,10 +976,7 @@ cookieProtectedServer =
     , slackIdentityPost = Slack.linkIdentityPostH
     , slackLinkProjectGet = Slack.linkProjectGetH
     , endpointDetailsRedirect = Dashboards.entrypointRedirectGetH "endpoint-stats.yaml" "Endpoint Analytics" ["endpoints", "http", "events"]
-    , rumDashboardRedirect = rumDashboard
-    , rumDashboardAlias = rumDashboard
-    , rumSessionsRedirect = \pid params ->
-        pure $ addHeader ("/p/" <> pid.toText <> "/log_explorer" <> Dashboards.queryStringFrom ([("viz_type", Just "sessions"), ("query", Just LogQueries.browserSessionsKql)] <> filter ((`elem` ["since", "from", "to"]) . fst) params)) NoContent
+    , rumRedirect = Dashboards.rumRedirectH
     , dashboardsGet = Dashboards.dashboardGetH
     , dashboardNewGet = Dashboards.dashboardNewGetH
     , dashboardsGetList = Dashboards.dashboardsGetH
@@ -1113,8 +1106,6 @@ cookieProtectedServer =
     , monitors = monitorsServer
     , traces = telemetryServer
     }
-  where
-    rumDashboard = Dashboards.entrypointRedirectGetH "rum.yaml" "Real User Monitoring" ["rum", "browser", "frontend", "web-vitals"]
 
 
 logExplorerServer :: Projects.ProjectId -> Servant.ServerT LogExplorerRoutes ATAuthCtx

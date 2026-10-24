@@ -1,4 +1,5 @@
 module Utils (
+  queryStringFrom,
   classifyUserAgent,
   sinceWindows,
   onpointerdown_,
@@ -131,6 +132,7 @@ import Lucid.Svg qualified as Svg
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Network.HTTP.Types (urlEncode)
+import Network.HTTP.Types.URI qualified as URI
 import Network.URI (escapeURIString, isUnescapedInURI)
 import Numeric (showFFloat, showHex)
 import Pkg.Icons qualified as Icons
@@ -792,6 +794,16 @@ nestedJsonFromDotNotation = foldl' (\acc (k, v) -> lodashMerge acc $ nest (T.spl
 
 isDemoAndNotSudo :: Projects.ProjectId -> Bool -> Bool
 isDemoAndNotSudo pid isSudo = pid == Projects.demoProjectId && not isSudo
+
+
+-- | Percent-encoded query string, prefixed with @?@ when non-empty.
+--
+-- >>> queryStringFrom [("key", Just "a b"), ("empty", Nothing)]
+-- "?key=a%20b&empty"
+-- >>> queryStringFrom []
+-- ""
+queryStringFrom :: [(Text, Maybe Text)] -> Text
+queryStringFrom = decodeUtf8 . URI.renderQuery True . map (bimap encodeUtf8 (fmap encodeUtf8))
 
 
 toUriStr :: Text -> Text

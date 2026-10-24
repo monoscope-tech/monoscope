@@ -556,10 +556,9 @@ withSharedCache rawKey ttl compute =
     key = toXXHash rawKey
     publish = do
       fresh <- compute
-      let payload = AesonText fresh
       Hasql.interpExecute_
         [HI.sql|INSERT INTO rum_panel_cache (cache_key, payload, expires_at)
-          VALUES (#{key}, #{payload}, now() + make_interval(secs => #{ttl}::double precision))
+          VALUES (#{key}, #{AesonText fresh}, now() + make_interval(secs => #{ttl}::double precision))
           ON CONFLICT (cache_key) DO UPDATE SET payload = EXCLUDED.payload, expires_at = EXCLUDED.expires_at|]
       Hasql.interpExecute_ [HI.sql|DELETE FROM rum_panel_cache WHERE expires_at < now() - interval '12 hours'|]
       pure fresh

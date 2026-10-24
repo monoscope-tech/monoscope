@@ -38,6 +38,7 @@ import Models.Projects.Projects qualified as Projects
 import NeatInterpolation
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (copyButton_, headerRow_)
+import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.DeriveUtils (JsonValueSchema (..), WrappedEnumSC (..))
 import Pkg.Parser (ToQueryText (..), parseQueryToAST, replacePlaceholders)
 import Pkg.Parser.Expr (Subject (..))
@@ -1595,9 +1596,10 @@ renderTableWithDataAndParams :: Widget -> V.Vector (V.Vector Text) -> [(Text, Ma
 renderTableWithDataAndParams widget dataRows params = do
   let columns = fromMaybe [] widget.columns
       tableId = maybeToMonoid widget.id
+      param k = join $ lookup k params
       currentVar = widget.onRowClick >>= (.setVariable) >>= \var -> find ((== "var-" <> var) . fst) params >>= snd
       -- URL-encoded link substitutions; links into other pages keep the window the table was read over.
-      linkSubs = M.fromList [("project_id", projectIdText widget), ("time_range", T.intercalate "&" [k <> "=" <> toUriStr v | (k, Just v) <- params, k `elem` ["since", "from", "to"], not (T.null v)])]
+      linkSubs = M.fromList [("project_id", projectIdText widget), ("time_range", TimePicker.rangeQuery $ TimePicker.TimePicker (param "since") (param "from") (param "to"))]
       -- Rows navigate server-side to the @navigate_to_tab@ tab, else the widget's own tab
       -- (or the whole tabless dashboard), with the row's variable set.
       rowNavAttrs value = fold do
@@ -1636,7 +1638,7 @@ renderTableWithDataAndParams widget dataRows params = do
           )
           $ ifor_ columns \idx col ->
             unless (or col.hidden)
-              $ td_ ([class_ $ cellClass col] <> [term "data-tippy-content" (replacePlaceholders rowSubs t) | Just t <- [col.tooltip]])
+              $ td_ ([class_ $ cellClass col] <> foldMap (\t -> let tip = replacePlaceholders rowSubs t in [term "data-tippy-content" tip, term "aria-description" tip]) col.tooltip)
               $ if isJust col.progress
                 then renderProgressCell col (getRowValue idx row) maxValues valueWidths
                 else renderLongTextOr widget cellLinkSubs col (getRowValue idx row)

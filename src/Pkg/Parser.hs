@@ -1,5 +1,5 @@
 -- Parser implemented with help and code from: https://markkarpov.com/tutorial/megaparsec.html
-module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, PageDirection (..), PageCursor (..), ScopedQuery (..), mkScopedQuery, applyScopedQuery, applyScopedKqlContext, SqlQueryCfg (..), RangeEnd (..), QueryComponents (..), buildDateRange, buildGroupBy, buildOrderBy, buildLimit, buildWhereCondition, buildEnvFilter, buildServiceFilter, listToColNames, colsNoAsClause, defaultSelectSqlQuery, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth, autoBinWidth, BinDensity (..), binDensityFor, replacePlaceholders, variablePresets, variablePresetsKQL, constantToSQLList, constantToKQLList, defaultQueryLimit, intervalSeconds) where
+module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, PageDirection (..), PageCursor (..), ScopedQuery (..), mkScopedQuery, applyScopedQuery, applyScopedKqlContext, SqlQueryCfg (..), RangeEnd (..), QueryComponents (..), buildDateRange, buildGroupBy, buildOrderBy, buildLimit, buildWhereCondition, buildEnvFilter, buildServiceFilter, listToColNames, colsNoAsClause, defaultSelectSqlQuery, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth, autoBinWidth, BinDensity (..), binDensityFor, replacePlaceholders, fillQueryTemplate, browserKql, variablePresets, variablePresetsKQL, constantToSQLList, constantToKQLList, defaultQueryLimit, intervalSeconds) where
 
 import Control.Error (hush)
 import Data.Char (isAlphaNum)
@@ -920,8 +920,7 @@ instance HasField "toColNames" QueryComponents [Text] where
 
 
 -- | Replace all occurrences of {{key}} in the input text using the provided mapping.
--- Unknown placeholders are left as-is (useful for debugging), except dashboard variables:
--- a @{{var-…}}@ the request did not set is empty, so @'{{var-x}}' = ''@ means "unfiltered".
+-- Unknown placeholders are left as-is (useful for debugging).
 --
 -- >>> replacePlaceholders (Map.fromList [("name", "world")]) "Hello {{name}}!"
 -- "Hello world!"
@@ -929,14 +928,36 @@ instance HasField "toColNames" QueryComponents [Text] where
 -- "1 + 2"
 -- >>> replacePlaceholders Map.empty "{{missing}}"
 -- "{{missing}}"
--- >>> replacePlaceholders (Map.fromList [("var-a", "x")]) "'{{var-a}}' '{{var-b}}' {{var-"
--- "'x' '' {{var-"
 replacePlaceholders :: Map.Map Text Text -> Text -> Text
-replacePlaceholders mappng txt = clearUnset $ Map.foldlWithKey' (\t k v -> T.replace ("{{" <> k <> "}}") v t) txt mappng
+replacePlaceholders mappng txt = Map.foldlWithKey' (\t k v -> T.replace ("{{" <> k <> "}}") v t) txt mappng
+
+
+-- | Fill a dashboard query template. A @{{var-…}}@ the request did not set reads as empty, so
+-- @'{{var-x}}' = ''@ means "unfiltered". Unset variables are cleared from the template before
+-- substitution, so a substituted value is never rewritten.
+--
+-- >>> fillQueryTemplate (Map.fromList [("var-a", "x")]) "'{{var-a}}' '{{var-b}}' {{var-"
+-- "'x' '' {{var-"
+-- >>> fillQueryTemplate (Map.fromList [("row", "{{var-z}}")]) "{{row}} {{var-y}}"
+-- "{{var-z}} "
+fillQueryTemplate :: Map.Map Text Text -> Text -> Text
+fillQueryTemplate mappng = replacePlaceholders mappng . clearUnset
   where
     clearUnset t = case T.breakOn "{{var-" t of
-      (before, rest) | (_, close) <- T.breakOn "}}" rest, not (T.null close) -> before <> clearUnset (T.drop 2 close)
+      (before, rest) | (key, close) <- T.breakOn "}}" (T.drop 2 rest), not (T.null close) -> before <> bool "" ("{{" <> key <> "}}") (Map.member key mappng) <> clearUnset (T.drop 2 close)
       _ -> t
+
+
+-- | Real User Monitoring's predicates, as dashboard placeholders. Laddered, because no single
+-- marker covers browser telemetry: the OpenTelemetry browser SDKs leave telemetry.sdk.language
+-- unset. TimeFusion's @rum_*@ rollup measures declare these strings verbatim and serve a widget
+-- only while its filter matches exactly, so an edit here must be mirrored in TimeFusion's
+-- @schemas/otel_logs_and_spans.yaml@.
+browserSql, pageViewSql, errorSql, browserKql :: Text
+browserSql = "(resource___telemetry___sdk___language IN ('webjs', 'javascript', 'js') OR resource___user_agent___original IS NOT NULL OR name IN ('documentLoad', 'documentFetch') OR " <> pageViewSql <> ")"
+pageViewSql = "(name LIKE 'Pageview %' OR name = 'documentLoad')"
+errorSql = "(status_code = 'ERROR' OR lower(COALESCE(level, '')) = 'error' OR attributes___exception___type IS NOT NULL)"
+browserKql = "(resource.telemetry.sdk.language in (\"webjs\", \"javascript\", \"js\") or resource.user_agent.original != null or name in (\"documentLoad\", \"documentFetch\") or name startswith \"Pageview \")"
 
 
 variablePresets :: BinDensity -> Text -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> UTCTime -> Map.Map Text Text
@@ -954,6 +975,10 @@ variablePresets density pid mf mt allParams currentTime =
           , ("time_filter", clause "timestamp")
           , ("time_filter_sql_created_at", clause "created_at")
           , ("rollup_interval", calculateAutoBinWidth density (mf, mt) currentTime)
+          , ("browser_filter", browserSql)
+          , ("pageview_filter", pageViewSql)
+          , ("error_filter", errorSql)
+          , ("browser_kql", browserKql)
           ]
         <> (allParams <&> second maybeToMonoid)
 

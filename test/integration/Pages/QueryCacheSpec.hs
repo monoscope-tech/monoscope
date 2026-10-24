@@ -19,6 +19,7 @@ import Pages.Charts.Charts qualified as Charts
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Parser (currentTime, dateRange, defSqlQueryCfg, environment, parseQueryToAST, service)
 import Pkg.Parser.Expr (ToQueryText (..))
+import GHC.Clock (getMonotonicTimeNSec)
 import Pkg.QueryCache qualified as QC
 import Pkg.TestUtils
 import Relude
@@ -358,3 +359,12 @@ spec = around withTestResources do
       -- No telemetry ingested, so the delta over (t1, t2] succeeds with 0 rows.
       _ <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just q) Nothing Nothing (Just (timeAt (-1800))) (Just (timeAt 1800)) Nothing Nothing []
       cachedToFor tr key `shouldReturn` Just t2
+
+  describe "Shared query cache" do
+    it "withSharedCache_computesOnMiss_servesHits_andRecomputesAfterExpiry" \tr -> do
+      calls <- newIORef (0 :: Int)
+      key <- ("shared-cache-spec-" <>) . show <$> getMonotonicTimeNSec
+      let read' = runQueryEffect tr $ QC.withSharedCache key 300 (liftIO $ atomicModifyIORef' calls \n -> (n + 1, n + 1))
+      (,) <$> read' <*> read' `shouldReturn` (1, 1)
+      withResource tr.trPool \conn -> void $ PG.execute conn "UPDATE rum_panel_cache SET expires_at = now() - interval '1 minute' WHERE cache_key = ?" (PG.Only $ toXXHash key)
+      read' `shouldReturn` 2
