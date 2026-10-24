@@ -1,6 +1,6 @@
 {-# LANGUAGE OrPatterns #-}
 
-module Pkg.ImpactReview (reviewPullRequest, fixIssue, ReviewResult (..), Finding (..), Evidence (..), Observation (..), EvidenceKind (..), Verdict (..), ChangedLine (..), DiffSide (..), changedLines, validateResult, renderReview, ReviewQuery, mkReviewQuery) where
+module Pkg.ImpactReview (reviewPullRequest, fixIssue, ReviewResult (..), ReviewDraft, Finding (..), Evidence (..), Observation (..), EvidenceKind (..), Verdict (..), ChangedLine (..), DiffSide (..), changedLines, patchLines, validateDraft, validateResult, renderReview, ReviewQuery, mkReviewQuery) where
 
 import Data.Aeson qualified as AE
 import Data.ByteString.Lazy qualified as LBS
@@ -8,12 +8,14 @@ import Data.Char (isDigit)
 import Data.Default (def)
 import Data.Effectful.AgentArtifacts qualified as Artifacts
 import Data.Effectful.CodeReview qualified as Agent
+import Data.Effectful.CodeReview.Policy qualified as Policy
 import Data.Effectful.CodeReview.Types (Evidence (..), EvidenceKind (..), KnowledgeSnapshot (..), Observation (..), QueryKind (..), QueryObservation (..))
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.LLM qualified as LLM
 import Data.List.Extra (lookup, nubOrd)
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
+import Data.OpenApi.Schema.Validation qualified as Schema
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, nominalDay)
 import Data.Time.Format.ISO8601 (iso8601Show)
@@ -76,7 +78,7 @@ data ChangedLine = ChangedLine {path :: Text, line :: Int, side :: DiffSide}
 
 data ReviewDraft = ReviewDraft {findings :: [Finding], coverage :: [Text]}
   deriving stock (Generic, Show)
-  deriving anyclass (AE.FromJSON)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 newtype ReviewQuery = ReviewQuery [KQL.Section]
@@ -139,7 +141,11 @@ data ReviewMemory = ReviewMemory {evidence :: Map Agent.TelemetryQuery Evidence,
 -- >>> changedLines (Git.PullRequestFile "image.png" "modified" Nothing)
 -- []
 changedLines :: Git.PullRequestFile -> [ChangedLine]
-changedLines file = foldMap (go Nothing . lines) file.patch
+changedLines file = foldMap (patchLines file.filename) file.patch
+
+
+patchLines :: Text -> Text -> [ChangedLine]
+patchLines path = go Nothing . lines
   where
     go _ [] = []
     go position (text : rest)
@@ -147,8 +153,8 @@ changedLines file = foldMap (go Nothing . lines) file.patch
       | otherwise = case position of
           Nothing -> go Nothing rest
           Just (old, new) -> case T.uncons text of
-            Just ('-', _) -> ChangedLine file.filename old Base : go (Just (old + 1, new)) rest
-            Just ('+', _) -> ChangedLine file.filename new Head : go (Just (old, new + 1)) rest
+            Just ('-', _) -> ChangedLine path old Base : go (Just (old + 1, new)) rest
+            Just ('+', _) -> ChangedLine path new Head : go (Just (old, new + 1)) rest
             Just (' ', _) -> go (Just (old + 1, new + 1)) rest
             _ -> go position rest
     hunk text = case words text of
@@ -176,13 +182,7 @@ changedLines file = foldMap (go Nothing . lines) file.patch
 -- "Finding does not reference a changed line"
 validateResult :: [Git.PullRequestFile] -> [Evidence] -> [Text] -> ReviewResult -> Either Text ReviewResult
 validateResult files evidence gaps result = do
-  unless (length result.findings <= 5) $ Left "Review returned more than five findings"
-  for_ result.findings \finding -> do
-    unless (finding.location `elem` concatMap changedLines files && finding.location.line > 0) $ Left "Finding does not reference a changed line"
-    unless (not (T.null finding.mechanism || T.null finding.nextStep) && T.length finding.mechanism <= 1200 && T.length finding.nextStep <= 600) $ Left "Finding is empty or exceeds its text budget"
-    let cited = filter (\item -> item.key `elem` finding.evidenceKeys) evidence
-    unless (not (null finding.evidenceKeys) && length finding.evidenceKeys <= 3 && length cited == length (nubOrd finding.evidenceKeys)) $ Left "Finding cites unavailable evidence"
-    unless (any ((== Telemetry) . (.kind)) cited) $ Left "Finding has no measured production context"
+  validateFindings (concatMap changedLines files) (map (\item -> (item.key, item.kind)) evidence) result.findings
   -- V1 is advisory: mechanism plausibility does not establish a production break.
   pure
     result
@@ -190,6 +190,25 @@ validateResult files evidence gaps result = do
       , coverage = nubOrd (gaps <> take 10 (map (T.take 400) result.coverage))
       , verdict = if not (null result.findings) then WorthChecking else if null gaps && null result.coverage then NoFinding else CoverageUnknown
       }
+
+
+validateDraft :: [ChangedLine] -> [(Text, EvidenceKind)] -> AE.Value -> Either Text ReviewDraft
+validateDraft changed evidence value = do
+  candidate <- case AE.fromJSON value of AE.Error _ -> Left "Review draft does not match the required schema"; AE.Success draft -> Right draft
+  unless (null $ Schema.validateJSON mempty (Policy.toolSchema Policy.SubmitReview) (AE.toJSON candidate)) $ Left "Review draft violates its schema"
+  validateFindings changed evidence candidate.findings
+  pure candidate
+
+
+validateFindings :: [ChangedLine] -> [(Text, EvidenceKind)] -> [Finding] -> Either Text ()
+validateFindings changed evidence findings = do
+  unless (length findings <= 5) $ Left "Review returned more than five findings"
+  for_ findings \finding -> do
+    unless (finding.location `elem` changed && finding.location.line > 0) $ Left "Finding does not reference a changed line"
+    unless (not (T.null finding.mechanism || T.null finding.nextStep) && T.length finding.mechanism <= 1200 && T.length finding.nextStep <= 600) $ Left "Finding is empty or exceeds its text budget"
+    let cited = filter ((`elem` finding.evidenceKeys) . fst) evidence
+    unless (not (null finding.evidenceKeys) && length finding.evidenceKeys <= 3 && length cited == length (nubOrd finding.evidenceKeys)) $ Left "Finding cites unavailable evidence"
+    unless (any ((== Telemetry) . snd) cited) $ Left "Finding has no measured production context"
 
 
 -- The public widget URL signs its query, so the evidence bounds belong in it.
@@ -288,9 +307,7 @@ reviewPullRequest rid = whenJustM (Reviews.getRun rid) \run ->
                   )
                   ( \value -> do
                       queried <- State.gets @ReviewMemory (Map.elems . (.evidence))
-                      pure $ case AE.fromJSON @ReviewDraft value of
-                        AE.Error _ -> Left "Review draft does not match the required schema"
-                        AE.Success candidate -> void $ validateResult files (evidence <> queried) [] (ReviewResult NoFinding candidate.findings candidate.coverage [] from until Nothing)
+                      pure $ void $ validateDraft (concatMap changedLines files) (map (\item -> (item.key, item.kind)) $ evidence <> queried) value
                   )
             output <- require answer
             parsed <- require $ first (const "Review agent returned invalid review JSON") $ AE.eitherDecodeStrict @ReviewDraft $ encodeUtf8 output

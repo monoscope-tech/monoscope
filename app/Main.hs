@@ -1,8 +1,13 @@
 module Main (main) where
 
-import Relude 
+import Data.Effectful.ReviewEvaluation qualified as Evaluation
+import Relude
 import Start (startApp)
 
 
 main :: IO ()
-main =  startApp
+main =
+  getArgs >>= \case
+    [] -> startApp
+    ["evaluate-impact", input, output] -> Evaluation.mainEvaluation input output
+    _ -> die "Usage: monoscope-server [evaluate-impact CASE.json RESULT.json]"

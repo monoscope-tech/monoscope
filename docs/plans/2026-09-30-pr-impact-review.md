@@ -1,10 +1,10 @@
 # Production impact reviews: rollout and follow-up
 
-## Current implementation checkpoint — 2026-10-23
+## Current implementation checkpoint — 2026-10-24
 
 The agent implementation is in draft [PR #693](https://github.com/monoscope-tech/monoscope/pull/693). It has not been deployed. Shared widget PNGs and all three wiki stages merged separately in PRs #688–#691. [The wiki delivery record](2026-10-22-project-wiki-followups.md) links the paths/tree and rich-editor changes and their videos.
 
-The worker pins Pi `1.4.0` and Gondolin `0.14.0`. Both match the npm registry check on 2026-10-23. The server uses our `langchain-hs` `0.0.3.0` fork, pinned in `cabal.project` and `cabal.project.freeze`. [Hackage lists `0.0.6.0`](https://hackage.haskell.org/package/langchain-hs). Its provider-package migration remains separate from the Pi integration.
+The worker pins Pi `1.4.0` and Gondolin `0.14.0`. Both match the npm registry recheck on 2026-10-24. The server uses our `langchain-hs` `0.0.3.0` fork, pinned in `cabal.project` and `cabal.project.freeze`. [Hackage lists `0.0.6.0`](https://hackage.haskell.org/package/langchain-hs). Its provider-package migration remains separate from the Pi integration.
 
 | Area | Implemented on the branch | Still required |
 | --- | --- | --- |
@@ -13,7 +13,7 @@ The worker pins Pi `1.4.0` and Gondolin `0.14.0`. Both match the npm registry ch
 | Project memory | Merged wiki paths/tree and rich Markdown editor. Repository, conversational and investigation tools share attributed pages; linked Slack and granted routines recheck permissions. | Identity attribution for currently unattributed service integrations; production verification of the agent wiring. |
 | Usage | Durable model-call starts/receipts, immutable billing attribution, recorded sandbox/check/media resource facts and project/customer views. Missing usage remains unpriced. | Complete per-resource lifecycle records, preparation/storage/transfer attribution and prices, budget reservations, margins and billing. |
 | Sandbox reuse | Prepared build caches, private overlays, hash-checked S3 archive/restore, scheduled host maintenance and durable restore/eviction staging recovery. | Preparation/lease/VM orphan reconciliation, hard allocation admission, remote retention and RAM/process resume. Disk restoration starts a new VM. |
-| Haskell migration | Four prompts, fourteen tool contracts, native fix state machine and admission preparation, role-scoped telemetry/wiki dispatch, candidate capture, artifact verification and worker-suite assertions. No worker `*.test.mjs` suites remain. | Remaining VM/lease coordination and native workspace handoff; Haskell replacements for the two research CLIs. The 150–200-line adapter target is not yet achieved. |
+| Haskell migration | Four prompts, fourteen tool contracts, native fix state machine and admission preparation, role-scoped telemetry/wiki dispatch, candidate capture, artifact verification and worker-suite assertions. The first comparison runner now uses Haskell, and no worker `*.test.mjs` suites remain. | Remaining VM/lease coordination, native workspace handoff and the ReviewBench research driver. The 150–200-line adapter target is not yet achieved. |
 
 The host integration watcher passed **26 examples, zero failures**, including real local VMs, native publication, and the new Git-isolation regression. The model provider was a deterministic loopback fixture. The retained review record is `scripts/local/impact-host-git-review.json`.
 
@@ -21,7 +21,7 @@ All eleven local CI checks passed for `e20dc0018`. The container suite reported 
 
 The native amd64 production image is `sha256:eced6edd87f8909550d63c696499994d42a2ac8ee3735c49ddd7e27cd3f06821`. The optional worker image is `sha256:95768eae92233ed3553e18b4165cc20c0fd1105113dd8fb5d5e3348b3ad64957`. The exact worker image passed the Linux/KVM regression: base failed and head passed with the same frozen test. UID, environment, host-write denial and process-cleanup checks also passed. The retained result is `scripts/local/impact-linux-host-git-check.json`. These checks do not establish deployment.
 
-Next: update the draft PR. Then replace the two JavaScript research drivers with Haskell callers of the production workflow. Broader review evaluation, worker routing, orphan cleanup, complete resource accounting and deployment checks remain required. No customer charge or production deployment occurred.
+The reviewed checkpoint is pushed to PR #693. The native evaluation follow-up is on `work/impact-review-native-evaluation`. Broader review evaluation, worker routing, orphan cleanup, complete resource accounting and deployment checks remain required. No customer charge or production deployment occurred.
 
 See [the workflow contract](2026-10-20-issue-fix-workflow.md) for the required product behavior. The dated research and migration notes below preserve evidence from earlier stages; their intermediate test counts and pending-work statements are historical. This checkpoint describes the current state.
 
@@ -34,6 +34,20 @@ See [the workflow contract](2026-10-20-issue-fix-workflow.md) for the required p
 - Keep applied migrations append-only. Retain requested research records and pinned, licensed skills for reproducible review and builds.
 - `du` failures already fail instead of becoming zero. Tar failures already return `PublicationUnavailable`. Hard storage admission and orphan recovery remain rollout requirements.
 - Defer speculative strictness changes until evidence shows retention problems. Keep unprovisioned CI cases pending and report separate host VM results.
+
+### Native evaluation follow-up — 2026-10-24
+
+`monoscope-server evaluate-impact CASE.json RESULT.json` now compares the bounded patch baseline with the production repository harness. Haskell owns case decoding, bounded Git diffs, prompts, validation, result files and receipt recording. Both modes use the production CodeReview interpreter, with fixed evidence and additional telemetry/wiki access denied. The Node adapter only makes the SDK model request and exchanges acknowledged frames for the baseline.
+
+The 116-line `evaluate.mjs` driver, its unused draft schema and the `parse-diff` dependency are removed. ReviewBench remains JavaScript until its separate source-review contract moves to Haskell. The public `monoscope` CLI remains DB-free. The evaluation command uses the server binary and requires the matching source checkout for provenance hashes.
+
+Results use `native-impact-evaluation/v1` and explicitly require human assessment. Terminal outcomes contain measured elapsed time, while running work has no invented duration. Results retain adapter, native source and skill hashes, model-call starts, usage, allocations, checks and validation outcomes. The private rubric stays outside model input. Existing output files are rejected before inference. Missing usage remains unknown, and provider failures cannot produce a completed quality result.
+
+The host watcher passed all 27 impact-review examples with zero failures in 316.9148 seconds. Container compilation linked the new server entry point, and all 1,918 doctests passed. The separate baseline regression runs without guest assets, so container CI exercises call gating and failed-provider usage. Tests cover invalid JSON/schema/citations/evidence, failed-provider receipts, compaction cost, call correlation, denied starts, output preservation, provenance and private grading. The malformed-JSON regression first failed because the comparison was discarded; it passed after parsing moved to Haskell. These runs use a deterministic loopback provider and real local VMs, with no paid inference. Container UI tests passed all 1,028 cases when run separately from integration dependency installation. The initial parallel run exposed an npm installation race; failed checks were not attested. The pull request records the remaining container and packaging results.
+
+The SDK bridge now reuses the existing tmpfs policy. Native workspace calls share the executable and bridge lookups without freezing environment selection at module import.
+
+The latest sampled review does not justify collapsing applied migrations or replacing interpreter IO with fake VM proofs. Anonymous GitHub access is valid. Git safety flags remain explicit arguments while credentials stay in the reset environment. The lease command writes one stdout frame before waiting for EOF. Log-limit handling ends that VM, and each revision gets a fresh VM. Host code stamps `ownerPid`, and the CLI checks its actual parent. Raw SDK exceptions remain excluded from logs because they can expose private commands or credentials. More detailed sanitized diagnostics remain follow-up work.
 
 ### CLI release packaging — 2026-10-23
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -22,14 +23,15 @@ try {
   lines = createInterface({ input, crlfDelay: Infinity });
   const messages = lines[Symbol.asyncIterator]();
   const envelope = JSON.parse((await messages.next()).value);
-  if (!guestImage) throw new Error('A pinned guest image is required');
+  const isPatch = envelope.tag === 'PatchTask';
+  if (!guestImage && !isPatch) throw new Error('A pinned guest image is required');
   const isFix = envelope.tag === 'FixTask';
   const isAdmission = envelope.tag === 'AdmitTask';
   const isFixReview = envelope.tag === 'ReviewFixTask';
   if (isFixReview) inputLimit = 8 * 1024 * 1024;
-  if (envelope.tag !== undefined && !isFix && !isAdmission && !isFixReview) throw new Error('Unknown repository task');
+  if (envelope.tag !== undefined && !isPatch && !isFix && !isAdmission && !isFixReview) throw new Error('Unknown repository task');
   const task = isAdmission || isFixReview ? envelope.contents.fix : envelope.contents;
-  const request = isFix || isAdmission || isFixReview ? { ...task.request, issueId: task.issueId, ...(isAdmission ? { artifact: envelope.contents.artifact } : isFixReview ? { artifacts: envelope.contents.artifacts, imageBuildId: task.imageBuildId } : {}) } : envelope;
+  const request = isPatch ? envelope.contents : isFix || isAdmission || isFixReview ? { ...task.request, issueId: task.issueId, ...(isAdmission ? { artifact: envelope.contents.artifact } : isFixReview ? { artifacts: envelope.contents.artifacts, imageBuildId: task.imageBuildId } : {}) } : envelope;
   const outboxRoot = fs.realpathSync(process.env.IMPACT_REVIEW_USAGE_DIR);
   const syncDirectory = (path) => {
     const fd = fs.openSync(path, 'r');
@@ -82,7 +84,18 @@ try {
     import('@earendil-works/pi-coding-agent'), import('./review.mjs'), import('./fix.mjs'),
   ]);
   const modelRuntime = await ModelRuntime.create({ authPath: join(agentDir, 'auth.json'), modelsPath: process.env.IMPACT_REVIEW_MODELS ?? null, refreshOnCreate: false });
-  const result = await (isFix ? fixIssue : review)({ ...request, head: checkoutHead }, {
+  let result;
+  if (isPatch) {
+    const call = { id: randomUUID(), attemptId, provider: request.provider, model: request.model };
+    await persistReceipt('Call', call);
+    const model = modelRuntime.getModel(request.provider, request.model);
+    const response = await modelRuntime.completeSimple(model, { systemPrompt: preparedCheckout.policy.instructions, messages: [{ role: 'user', content: request.prompt, timestamp: Date.now() }] }, { reasoning: request.thinkingLevel === 'off' ? undefined : request.thinkingLevel, signal });
+    await persistReceipt('Usage', modelUsage(response, modelRuntime.getModel(response.provider, response.model)?.cost ?? null, attemptId, call.id));
+    if (response.stopReason !== 'stop') throw new Error('Patch comparison did not complete');
+    result = response.content.filter((block) => block.type === 'text').map((block) => block.text).join('');
+    const checked = await exchange('ValidateText', result);
+    if (Object.hasOwn(checked, 'Left')) throw new Error('Patch comparison was rejected');
+  } else result = await (isFix ? fixIssue : review)({ ...request, head: checkoutHead }, {
     modelRuntime, guestImage, expectedImageBuildId, cacheDir, preparedCheckout, usageDir: outboxRoot, artifactDir, attemptId, skillPaths: process.argv.slice(2), optionsTool: (invocation, active) => exchange('Tool', invocation, active), validateDraft: (draft) => exchange('Validate', draft), signal,
     bindGuest: (execute) => { executeGuest = execute; },
     workspaceCache: process.env.IMPACT_REVIEW_PREPARE_SCRIPT ? {
