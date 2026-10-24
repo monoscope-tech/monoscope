@@ -70,7 +70,6 @@ import Pkg.ImpactReview qualified as Impact
 import Pkg.Minio qualified as Storage
 import Pkg.Parser.Stats qualified as KQL
 import Pkg.TestUtils
-import PyF (fmt)
 import Relude
 import Servant (ServerError (..), getResponse)
 import Servant.Server.Generic (genericServeTWithContext)
@@ -765,26 +764,28 @@ spec = around withTestResources $ describe "Production impact reviews" do
         [ SdkTool "bash"
             $ AE.object
               [ "command"
-                  AE..= [fmt|set -eu
-test ! -e golden-private.txt
-test ! -w runtime.sh
-test "$(cat .prepared-proof)" = dependencies-ready
-git show {base}:runtime.sh
-cat runtime.sh
-before=$(sha256sum runtime.sh)
-scratch=$(mktemp -d /tmp/monoscope-source-preflight.XXXXXX)
-trap 'rm -rf "$scratch"' EXIT
-git clone --quiet --no-local -- /workspace "$scratch/checkout"
-cd "$scratch/checkout"
-test ! -e .git/objects/info/alternates
-test -w runtime.sh
-printf 'scratch-only\\n' > runtime.sh
-printf 'scratch-only\\n' > check.txt
-cd /workspace
-test ! -w runtime.sh
-test ! -e check.txt
-test "$(sha256sum runtime.sh)" = "$before"
-echo scratch-checkout-isolated|]
+                  AE..= unlines
+                    [ "set -eu"
+                    , "test ! -e golden-private.txt"
+                    , "test ! -w runtime.sh"
+                    , "test \"$(cat .prepared-proof)\" = dependencies-ready"
+                    , "git show " <> base <> ":runtime.sh"
+                    , "cat runtime.sh"
+                    , "before=$(sha256sum runtime.sh)"
+                    , "scratch=$(mktemp -d /tmp/monoscope-source-preflight.XXXXXX)"
+                    , "trap 'rm -rf \"$scratch\"' EXIT"
+                    , "git clone --quiet --no-local -- /workspace \"$scratch/checkout\""
+                    , "cd \"$scratch/checkout\""
+                    , "test ! -e .git/objects/info/alternates"
+                    , "test -w runtime.sh"
+                    , "printf scratch-only > runtime.sh"
+                    , "printf scratch-only > check.txt"
+                    , "cd /workspace"
+                    , "test ! -w runtime.sh"
+                    , "test ! -e check.txt"
+                    , "test \"$(sha256sum runtime.sh)\" = \"$before\""
+                    , "echo scratch-checkout-isolated"
+                    ]
               ]
         , SdkTool "submit_review" $ draft "runtime.sh" 200
         , SdkTool "submit_review" $ draft "runtime.sh" 1
