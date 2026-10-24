@@ -481,7 +481,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
     base <- T.strip <$> git ["rev-parse", "HEAD"]
     writeFileBS (repository </> "regression.sh") testSource
     void $ git ["add", "regression.sh"]
-    testPatch <- unlines . map (\line -> if "@@ " `T.isPrefixOf` line then "@@ -0,0 +1,1 @@" else line) . lines <$> git ["diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv"]
+    canonicalPatch <- git ["diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv"]
+    let testPatch = unlines $ map (\line -> if "@@ " `T.isPrefixOf` line then "@@ -0,0 +1,1 @@" else line) $ lines canonicalPatch
     void $ git ["reset", "--hard", toString base]
     writeFileBS scriptFile "test -f runtime.sh"
     writeFileLBS requestFile $ AE.encode $ AE.object ["projectId" AE..= testPid, "repository" AE..= repository, "base" AE..= base]
@@ -489,7 +490,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     imageId <- parse (field "manifest" >=> field "identity" >=> field "imageBuildId") prepared
     fingerprint <- parse (field "manifest" >=> field "sha256") prepared :: IO Text
     let reproduction source = SdkTool "reproduce_issue" $ AE.object $ ["script" AE..= ("bash regression.sh" :: Text), "failureMessage" AE..= ("retry token was lost" :: Text)] <> source
-        frozen = Agent.TestArtifact "bash regression.sh" testPatch "retry token was lost"
+        frozen = Agent.TestArtifact "bash regression.sh" canonicalPatch "retry token was lost"
         steps =
           [ propose
           , bash "rm -f runtime.sh; printf forbidden > runtime.sh"
@@ -501,7 +502,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
             <> map (\path -> reproduction ["testPatchFile" AE..= (path :: Text)]) ["/tmp/oversized.patch", "/tmp/empty.patch"]
             <> [ reproduction ["testPatch" AE..= testPatch, "testPatchFile" AE..= patchPath]
                , write patchPath testPatch
-               , reproduction ["testPatchFile" AE..= patchPath]
+               , reproduction ["testFiles" AE..= V.singleton (AE.object ["path" AE..= ("regression.sh" :: Text), "content" AE..= decodeUtf8 @Text testSource])]
                , write "runtime.sh\0ignored" "forbidden"
                , write scratchPath scratchContent
                , edit (T.replace "~" "/home/review-agent" scratchPath) "literal" "LITERAL"
@@ -765,7 +766,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         , SdkTool "submit_review" $ draft "runtime.sh" 1
         , SdkTool "run_regression" $ AE.object ["script" AE..= regression, "failureMessage" AE..= ("retry token lost" :: Text), "testPatch" AE..= ("not a patch" :: Text)]
         , check "The runtime loses its caller token"
-        , check "retry token lost"
+        , SdkTool "run_regression" $ AE.object ["script" AE..= ("bash check-regression.sh" :: Text), "failureMessage" AE..= ("retry token lost" :: Text), "testFiles" AE..= V.singleton (AE.object ["path" AE..= ("check-regression.sh" :: Text), "content" AE..= regression])]
         , SdkTool "submit_review" $ draft "runtime.sh" 1
         ]
       callsBefore <- length <$> requests
@@ -1406,6 +1407,10 @@ spec = around withTestResources $ describe "Production impact reviews" do
     void $ git ["config", "user.name", "Regression fixture"]
     void $ git ["config", "user.email", "fixture@example.invalid"]
     writeFileBS (repository </> "runtime.sh") "retry_token() { printf 'dropped\\n'; }\n"
+    writeFileBS (repository </> "executable.sh") "#!/bin/bash\nexit 0\n"
+    Posix.setFileMode (repository </> "executable.sh") 0o755
+    createDirectoryIfMissing True (directory </> "outside")
+    createFileLink (directory </> "outside") (repository </> "linked-test")
     void $ git ["add", "."]
     void $ git ["commit", "--quiet", "-m", "broken base"]
     base <- revisionAt
@@ -1417,10 +1422,9 @@ spec = around withTestResources $ describe "Production impact reviews" do
     void $ git ["commit", "--quiet", "-am", "fix retry token"]
     imageManifest <- readFileBS (image </> "manifest.json") >>= either fail pure . AE.eitherDecodeStrict
     imageId <- parse (field "buildId" :: AE.Value -> AET.Parser Text) imageManifest
-    let run session script patch = do
+    let runWith session artifact expectedPatch = do
           headRevision <- revisionAt
-          let artifact = AE.object ["script" AE..= (script :: Text), "testPatch" AE..= decodeUtf8 @Text patch, "failureMessage" AE..= ("retry token was lost" :: Text)]
-              request = AE.object ["projectId" AE..= testPid, "runId" AE..= uid 1, "attemptId" AE..= uid 2, "sessionId" AE..= uid session, "base" AE..= base, "imageBuildId" AE..= imageId, "workspace" AE..= AE.object ["tag" AE..= ("Pristine" :: Text)], "artifact" AE..= artifact, "revisions" AE..= ([["base", base], ["head", headRevision]] :: [[Text]])]
+          let request = AE.object ["projectId" AE..= testPid, "runId" AE..= uid 1, "attemptId" AE..= uid 2, "sessionId" AE..= uid session, "base" AE..= base, "imageBuildId" AE..= imageId, "workspace" AE..= AE.object ["tag" AE..= ("Pristine" :: Text)], "artifact" AE..= artifact, "revisions" AE..= ([["base", base], ["head", headRevision]] :: [[Text]])]
               options = Workspace.RegressionOptions artifacts repository (toText image) bridge
               requestPath = directory </> "request.json"
           writeFileLBS requestPath $ AE.encode request
@@ -1432,14 +1436,31 @@ spec = around withTestResources $ describe "Production impact reviews" do
           for_ receipts \receipt -> do
             retained <- readFileBS (directory </> toString receipt.id.toText <> ".json") >>= either fail pure . AE.eitherDecodeStrict
             retained `shouldBe` AE.object ["tag" AE..= ("Check" :: Text), "contents" AE..= receipt]
-            readFileBS (artifacts </> toString receipt.checkId.toText </> "test.patch") `shouldReturn` patch
+            for_ expectedPatch $ \patch -> readFileBS (artifacts </> toString receipt.checkId.toText </> "test.patch") `shouldReturn` patch
           pure (report, rows, receipts)
+        run session script patch = runWith session (AE.object ["script" AE..= (script :: Text), "testPatch" AE..= decodeUtf8 @Text patch, "failureMessage" AE..= ("retry token was lost" :: Text)]) (Just patch)
         statuses rows = traverse (parse $ field "status") rows :: IO [Text]
     (report, rows, receipts) <- run 3 "bash regression.sh" testPatch
     statuses rows `shouldReturn` ["failed", "passed"]
     parse (field "testPatchSha256") report `shouldReturn` sha testPatch
     fingerprints <- traverse (parse $ field "testFilesSha256") rows :: IO [Text]
     length (ordNub fingerprints) `shouldBe` 1
+    content <- decodeUtf8 @Text <$> readFileBS (repository </> "regression.sh")
+    (_, generated, _) <- runWith 7 (AE.object ["script" AE..= ("bash regression.sh" :: Text), "failureMessage" AE..= ("retry token was lost" :: Text), "testFiles" AE..= V.singleton (AE.object ["path" AE..= ("regression.sh" :: Text), "content" AE..= content])]) Nothing
+    statuses generated `shouldReturn` ["failed", "passed"]
+    traverse (parse $ field "testFilesSha256") generated `shouldReturn` fingerprints
+    let executable = AE.object ["script" AE..= ("./executable.sh" :: Text), "failureMessage" AE..= ("retry token was lost" :: Text), "testFiles" AE..= V.singleton (AE.object ["path" AE..= ("executable.sh" :: Text), "content" AE..= ("#!/bin/bash\n" <> content)])]
+    (_, executableRows, _) <- runWith 8 executable Nothing
+    statuses executableRows `shouldReturn` ["failed", "passed"]
+    beforeGeneration <- git ["status", "--porcelain=v1"]
+    for_ @[] ["linked-test", "linked-test/outside", "runtime.sh"] \path -> do
+      source <- readFileBS (repository </> "runtime.sh")
+      files <- parse AE.parseJSON $ AE.toJSON $ V.singleton $ AE.object ["path" AE..= (path :: Text), "content" AE..= (if path == "runtime.sh" then "retry_token() { printf 'dropped\\n'; }\n" else "not a test" :: Text)]
+      rejected <- Workspace.renderTestPatch repository base files
+      isLeft rejected `shouldBe` True
+      readFileBS (repository </> "runtime.sh") `shouldReturn` source
+    git ["status", "--porcelain=v1"] `shouldReturn` beforeGeneration
+    listDirectory (directory </> "outside") `shouldReturn` []
     let shortHeader = encodeUtf8 $ unlines $ map (\line -> if "@@ " `T.isPrefixOf` line then "@@ -0,0 +1,1 @@" else line) $ lines $ decodeUtf8 @Text testPatch
     (_, recounted, _) <- run 6 "bash regression.sh" shortHeader
     statuses recounted `shouldReturn` ["failed", "passed"]
