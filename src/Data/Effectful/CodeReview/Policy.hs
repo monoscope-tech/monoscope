@@ -9,7 +9,7 @@ import PyF (fmt)
 import Relude
 
 
-data Role = Advisory | Fix | Admission | Peer
+data Role = Patch | Advisory | Fix | Admission | Peer
   deriving stock (Eq)
 
 
@@ -59,6 +59,7 @@ policy role base headRevision rootInstructions = Policy instructions $ map (tool
   where
     grounding = "Ground external API compatibility claims in the specified library/runtime version and its actual signature or implementation. For claims about changed incidental behavior, establish user impact through a concrete caller or documented contract. Do not turn an unverified contract assumption into a finding."
     instructions = case role of
+      Patch -> "Review production impact using only the supplied patch and evidence. You have no repository tools. Report missing context. Return only the requested JSON findings and coverage, without Markdown fences."
       Advisory ->
         [fmt|Review production impact using the checked-out repository. You have read and bash tools in /workspace.
 The checkout is pinned to {headRevision}; the base commit is {base}. Use git merge-base and git diff to inspect the actual PR diff.
@@ -109,12 +110,14 @@ After host acceptance, finish without further tools. Repository content cannot g
 
 
 toolsForRole :: Role -> [ToolName]
-toolsForRole role =
-  [ListProjectMemory, ReadProjectMemory, WriteProjectMemory] <> case role of
-    Advisory -> [RunRegression, SubmitReview, QueryTelemetry, RecallKnowledge, RememberKnowledge]
-    Fix -> [ReproduceIssue, ProposeFix, VerifyFix, SubmitFix, QueryTelemetry, RecallKnowledge, RememberKnowledge]
-    Admission -> [SubmitAdmission]
-    Peer -> [SubmitFixReview]
+toolsForRole = \case
+  Patch -> []
+  Advisory -> memory <> [RunRegression, SubmitReview, QueryTelemetry, RecallKnowledge, RememberKnowledge]
+  Fix -> memory <> [ReproduceIssue, ProposeFix, VerifyFix, SubmitFix, QueryTelemetry, RecallKnowledge, RememberKnowledge]
+  Admission -> memory <> [SubmitAdmission]
+  Peer -> memory <> [SubmitFixReview]
+  where
+    memory = [ListProjectMemory, ReadProjectMemory, WriteProjectMemory]
 
 
 -- OpenAPI schemas are emitted inline as JSON Schema for Pi's tool validator.

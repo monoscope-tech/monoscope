@@ -28,14 +28,6 @@ export const reviewRequest = z.object({
   gitToken: z.string(), prompt: z.string(), model: z.string().min(1),
   provider: z.string().min(1), thinkingLevel: z.enum(['off', 'minimal', 'low', 'medium', 'high', 'xhigh']),
 });
-export const reviewDraft = z.object({
-  findings: z.array(z.object({
-    location: z.object({ path: z.string(), line: z.number().int().positive(), side: z.enum(['base', 'head']) }),
-    mechanism: z.string().min(1).max(1200).describe('Explain a concrete runtime regression: under the same conditions, what does base do and what does head do worse? A pre-existing limitation that head does not fix is not an introduced defect. Omit it unless the change creates a new failure or materially worsens the existing one.'), nextStep: z.string().min(1).max(600),
-    evidenceKeys: z.array(z.string()).min(1).max(3),
-  })).max(5),
-  coverage: z.array(z.string().min(1).max(400)).max(10).describe('Missing evidence or verification only. Do not summarize completed investigation.'),
-});
 
 
 export const guestPath = (input, cwd) => {

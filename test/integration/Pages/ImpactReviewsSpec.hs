@@ -28,6 +28,7 @@ import Data.Effectful.CodeReview.Explanation qualified as Media
 import Data.Effectful.CodeReview.Outbox qualified as Outbox
 import Data.Effectful.GitPublication qualified as Publication
 import Data.Effectful.LLM qualified as LLM
+import Data.Effectful.ReviewEvaluation qualified as Evaluation
 import Data.Effectful.Wreq qualified as HTTP
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
@@ -967,7 +968,6 @@ spec = around withTestResources $ describe "Production impact reviews" do
     unless available $ pendingWith "Build the self-hosted guest before running evaluation integration tests"
     directory <- canonicalizePath temporary
     image <- canonicalizePath "impact-review-worker/.guest"
-    environment <- filter (\(key, _) -> key `elem` ["PATH", "HOME"]) <$> getEnvironment
     let repository = directory </> "repository"
         store = Agent.ArtifactStore (directory </> "usage") (directory </> "cache")
         sdkTemp = directory </> "tmp"
@@ -992,7 +992,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     writeFileBS (repository </> "runtime.sh") "retry_token() { printf 'dropped\\n'; }\n"
     void $ git ["commit", "--quiet", "-am", "head"]
     headRevision <- git ["rev-parse", "HEAD"]
-    baseline <- newIORef accepted
+    baseline <- newIORef $ jsonText accepted
     unavailable <- newIORef False
     native <- newIORef False
     let next body results = do
@@ -1023,73 +1023,72 @@ spec = around withTestResources $ describe "Production impact reviews" do
                               then SdkResponse (SdkTool "submit_review" accepted) (SdkTokens 7 2)
                               else SdkResponse (SdkText $ "Review submitted. " <> T.replicate 5000 "Retained review context. ") (SdkTokens 56000 2)
                         else do
-                          response <- atomicModifyIORef' baseline (accepted,)
-                          pure $ SdkResponse (SdkText $ jsonText response) (SdkTokens 7 2)
+                          response <- atomicModifyIORef' baseline (jsonText accepted,)
+                          pure $ SdkResponse (SdkText response) (SdkTokens 7 2)
     withSdkProvider directory "evaluation-fixture" next \models requests -> do
       let request = Agent.Request{projectId = testPid, runId = uid 1, attemptId = uid 2, repository = toText repository, base, head = headRevision, gitToken = "", prompt = "Review telemetry-1.", provider = "evaluation-fixture", model = "fixture", thinkingLevel = Agent.Off}
-      outcome <- Checkout.withCheckout store (Checkout.Repository request) \prepared -> tryAny do
-        writeFileLBS caseFile $ AE.encode $ AE.object ["checkout" AE..= prepared, "projectId" AE..= testPid, "repository" AE..= repository, "base" AE..= base, "head" AE..= headRevision, "provider" AE..= request.provider, "model" AE..= request.model, "evidenceKind" AE..= ("synthetic" :: Text), "evidence" AE..= V.fromList [AE.object ["key" AE..= ("telemetry-1" :: Text), "kind" AE..= ("telemetry" :: Text), "description" AE..= ("synthetic-evaluation-evidence" :: Text)], AE.object ["key" AE..= ("monitor-1" :: Text), "kind" AE..= ("monitor" :: Text)]], "rubric" AE..= (["private-grading-not-model"] :: [Text])]
-        let configured = Map.toList $ Map.fromList $ environment <> [("TMPDIR", sdkTemp), ("IMPACT_REVIEW_MODELS", models), ("IMPACT_REVIEW_GUEST_IMAGE", image), ("IMPACT_REVIEW_NATIVE_CLI", cli), ("IMPACT_REVIEW_USAGE_DIR", store.usageDir), ("IMPACT_REVIEW_CACHE_DIR", store.cacheDir)] <> [("GONDOLIN_VMM", "krun") | Info.os == "darwin"]
-            run name = do
-              let output = directory </> name <> ".json"
-              completed <- Timeout.timeout (90 * 1000000) $ readProcess $ setEnv configured $ proc "node" ["impact-review-worker/evaluate.mjs", caseFile, output]
-              (exit, _, diagnostic) <- maybe (fail "Evaluation CLI exceeded its test deadline") pure completed
-              artifact <- readJSON output
-              rows <- parse (field "runs") artifact :: IO [AE.Value]
-              listDirectory sdkTemp `shouldReturn` []
-              pure (exit, diagnostic, artifact, rows)
-        (exit, diagnostic, artifact, rows) <- run "accepted"
-        unless (exit == ExitSuccess) $ fail $ toString $ decodeUtf8 @Text diagnostic
-        traverse (parse $ field "mode") rows `shouldReturn` (["bounded-patch", "checkout-harness"] :: [Text])
-        traverse (parse $ field "status") rows `shouldReturn` (["completed", "completed"] :: [Text])
-        traverse (parse $ field "draft") rows `shouldReturn` [accepted, accepted]
-        parse (field "harness" >=> field "skills" >=> field "revision") artifact `shouldReturn` ("bb92a77741419a4ab5f06e711a283343f1ada0c3" :: Text)
-        harnessHash <- parse (field "harness" >=> field "files" >=> field "review.mjs") artifact :: IO Text
-        harnessHash `shouldSatisfy` (\value -> T.length value == 64 && T.all (`elem` (['0' .. '9'] <> ['a' .. 'f'])) value)
-        for_ (zip [0 :: Int ..] rows) \(index, row) -> do
-          attempt <- parse (field "attemptId") row
-          receipts <- parse (field "usage") row >>= traverse (parse $ field "receipt") :: IO [Agent.ModelUsage]
-          length receipts `shouldBe` if index == 0 then 1 else 3
-          length (ordNub $ map (.id) receipts) `shouldBe` length receipts
-          receipts `shouldSatisfy` all (\receipt -> receipt.attemptId == attempt && receipt.provider == request.provider && receipt.succeeded)
-          let summary = filter (\receipt -> receipt.inputTokens == 775 && receipt.cacheReadTokens == 2 && receipt.costNanousd == Just 1582000) receipts
-          length summary `shouldBe` index
-          let ordinary = filter (\receipt -> receipt.inputTokens == 5) receipts
-          length ordinary `shouldBe` 1
-          for_ ordinary \receipt -> receipt.costNanousd `shouldBe` Just 42000
-          allocations <- parse (field "allocations") row :: IO [Agent.AllocationReceipt]
-          length allocations `shouldBe` index
-          when (index == 1) $ parse (field "checkout" >=> field "cacheStatus") row `shouldReturn` AE.toJSON prepared.cacheStatus
-          for_ allocations \allocation -> do
-            Agent.allocationAttempt allocation `shouldBe` attempt
-            parse (field "outcome") (AE.toJSON allocation) `shouldReturn` ("released" :: Text)
-          submissions <- parse (field "submissions") row :: IO [AE.Value]
-          traverse (parse $ field "accepted") submissions `shouldReturn` [True]
-          parse (field "durationMs") row >>= (\duration -> (duration :: Word64) `shouldSatisfy` (> 0))
-        recorded <- requests
-        length (filter summarizing recorded) `shouldBe` 1
-        for_ recorded \body -> do
-          jsonText body `shouldSatisfy` T.isInfixOf "synthetic-evaluation-evidence"
-          jsonText body `shouldNotSatisfy` T.isInfixOf "private-grading-not-model"
-        for_ ([("schema", draft 1 [], "schema", "evidenceKeys"), ("citation", draft 2 ["telemetry-1"], "validation", "changed line"), ("evidence", draft 1 ["invented"], "validation", "unavailable evidence"), ("context", draft 1 ["monitor-1"], "validation", "production context")] :: [(FilePath, AE.Value, Text, Text)]) \(name, rejected, failureType, message) -> do
-          writeIORef baseline rejected
-          (failed, _, _, rejectedRows) <- run name
-          failed `shouldSatisfy` (/= ExitSuccess)
-          traverse (parse $ field "status") rejectedRows `shouldReturn` (["failed", "completed"] :: [Text])
-          case rejectedRows of
-            rejectedRow : _ -> do
-              parse (field "failureType") rejectedRow `shouldReturn` (failureType :: Text)
-              parse (AE.withObject "Rejected evaluation" (AE..:? "draft")) rejectedRow `shouldReturn` (Nothing :: Maybe AE.Value)
-              jsonText rejectedRow `shouldSatisfy` T.isInfixOf message
-            [] -> expectationFailure "Evaluation discarded both runs"
-        writeIORef unavailable True
-        (failed, _, _, failedRows) <- run "provider-failed"
-        failed `shouldSatisfy` (/= ExitSuccess)
-        length failedRows `shouldBe` 1
-        for_ failedRows \row -> do
-          parse (field "status") row `shouldReturn` ("failed" :: Text)
-          parse (AE.withObject "Failed evaluation" (AE..:? "draft")) row `shouldReturn` (Nothing :: Maybe AE.Value)
-      either (fail . toString) (either throwIO pure) outcome
+      writeFileLBS caseFile $ AE.encode $ AE.object ["projectId" AE..= testPid, "repository" AE..= repository, "base" AE..= base, "head" AE..= headRevision, "provider" AE..= request.provider, "model" AE..= request.model, "evidenceKind" AE..= ("synthetic" :: Text), "evidence" AE..= V.fromList [AE.object ["key" AE..= ("telemetry-1" :: Text), "kind" AE..= ("telemetry" :: Text), "description" AE..= ("synthetic-evaluation-evidence" :: Text)], AE.object ["key" AE..= ("monitor-1" :: Text), "kind" AE..= ("monitor" :: Text)]], "rubric" AE..= (["private-grading-not-model"] :: [Text])]
+      let evaluateAt output =
+            runEff
+              $ Agent.runCodeReviewReal (Just store) (Just "test/fixtures/native-sdk-worker.py") [models, store.usageDir, store.cacheDir, image, directory </> "evaluation-worker.log", "--cli", cli, "--temp", sdkTemp]
+              $ Evaluation.runEvaluationReal
+              $ Evaluation.evaluate caseFile output
+          evaluateCase name = do
+            let output = directory </> name <> ".json"
+            completed <- Timeout.timeout (90 * 1000000) $ evaluateAt output
+            report <- maybe (fail "Evaluation exceeded its test deadline") (either (fail . show) pure) completed
+            readJSON output `shouldReturn` AE.toJSON report
+            report.contract `shouldBe` "native-impact-evaluation/v1"
+            AE.toJSON report.assessment `shouldBe` AE.String "manual_required"
+            nativeSource <- Native.sha256 <$> readFileBS "src/Data/Effectful/ReviewEvaluation.hs"
+            Map.lookup "src/Data/Effectful/ReviewEvaluation.hs" report.harness `shouldBe` Just nativeSource
+            listDirectory sdkTemp `shouldReturn` []
+            pure report.runs
+          completedDraft row = case row.outcome of Evaluation.Completed elapsed value -> (elapsed `shouldSatisfy` (> 0)) $> AE.toJSON value; _ -> expectationFailure (toString $ "Evaluation did not complete: " <> jsonText (AE.toJSON row)) $> AE.Null
+      rows <- evaluateCase "accepted"
+      map (AE.toJSON . (.mode)) rows `shouldBe` [AE.String "bounded_patch", AE.String "checkout_harness"]
+      traverse completedDraft rows `shouldReturn` [accepted, accepted]
+      savedOutput <- readFileBS $ directory </> "accepted.json"
+      beforeDuplicate <- length <$> requests
+      duplicate <- evaluateAt $ directory </> "accepted.json"
+      leftToMaybe duplicate `shouldBe` Just Evaluation.OutputUnavailable
+      readFileBS (directory </> "accepted.json") `shouldReturn` savedOutput
+      length <$> requests `shouldReturn` beforeDuplicate
+      for_ (zip [0 :: Int ..] rows) \(index, row) -> do
+        length row.usage `shouldBe` if index == 0 then 1 else 3
+        length (ordNub $ map (.id) row.usage) `shouldBe` length row.usage
+        row.usage `shouldSatisfy` all (\receipt -> receipt.attemptId == row.attemptId && receipt.provider == request.provider && receipt.succeeded && receipt.callId `elem` map (Just . (.id)) row.calls)
+        length (filter (\receipt -> receipt.inputTokens == 775 && receipt.cacheReadTokens == 2 && receipt.costNanousd == Just 1582000) row.usage) `shouldBe` index
+        let ordinary = filter (\receipt -> receipt.inputTokens == 5) row.usage
+        length ordinary `shouldBe` 1
+        for_ ordinary \receipt -> receipt.costNanousd `shouldBe` Just 42000
+        length row.allocations `shouldBe` index
+        for_ row.allocations \allocation -> do
+          Agent.allocationAttempt allocation `shouldBe` row.attemptId
+          parse (field "outcome") (AE.toJSON allocation) `shouldReturn` ("released" :: Text)
+        map (.validation) row.submissions `shouldBe` [Right ()]
+      recorded <- requests
+      length (filter summarizing recorded) `shouldBe` 1
+      for_ recorded \body -> do
+        jsonText body `shouldSatisfy` T.isInfixOf "synthetic-evaluation-evidence"
+        jsonText body `shouldNotSatisfy` T.isInfixOf "private-grading-not-model"
+      for_ ([("json", "not-json", "JSON"), ("schema", jsonText $ draft 1 [], "schema"), ("citation", jsonText $ draft 2 ["telemetry-1"], "changed line"), ("evidence", jsonText $ draft 1 ["invented"], "unavailable evidence"), ("context", jsonText $ draft 1 ["monitor-1"], "production context")] :: [(FilePath, Text, Text)]) \(name, rejected, message) -> do
+        writeIORef baseline rejected
+        rejectedRows <- evaluateCase name
+        case rejectedRows of
+          [rejectedRow, recovered] -> do
+            case rejectedRow.outcome of Evaluation.Failed _ _ -> pass; _ -> expectationFailure "Invalid baseline was accepted"
+            mapMaybe (leftToMaybe . (.validation)) rejectedRow.submissions `shouldSatisfy` any (T.isInfixOf message)
+            completedDraft recovered `shouldReturn` accepted
+          _ -> expectationFailure "Evaluation discarded the comparison"
+      writeIORef unavailable True
+      failedRows <- evaluateCase "provider-failed"
+      length failedRows `shouldBe` 1
+      for_ failedRows \row -> case row.outcome of
+        Evaluation.Failed _ _ -> do
+          row.calls `shouldSatisfy` (not . null)
+          row.usage `shouldSatisfy` (not . any (.succeeded))
+        _ -> expectationFailure "Unavailable provider produced a quality result"
       writeIORef native True
       writeIORef unavailable False
       let run n = do
@@ -1154,6 +1153,78 @@ spec = around withTestResources $ describe "Production impact reviews" do
         Agent.allocationAttempt allocation `shouldBe` request.attemptId
         parse (field "outcome") (AE.toJSON allocation) `shouldReturn` ("released" :: Text)
         parse (field "durationMs") (AE.toJSON allocation) >>= (\duration -> (duration :: Word64) `shouldSatisfy` (> 0))
+
+  it "patchComparison_testInterpreter_preservesValidationAndTransportFailures" \_tr -> do
+    checked <- newIORef ([] :: [Text])
+    let unused :: a -> Either Text b
+        unused _ = Left "Unexpected fixture operation"
+        request = Agent.Request testPid (UUIDId UUID.nil) (UUIDId UUID.nil) "." (T.replicate 40 "a") (T.replicate 40 "b") "" "Fixture patch review" "fixture" "fixture" Agent.Off
+        run response validation = runEff $ Agent.runCodeReviewTest (const response) unused unused unused unused unused $ Agent.reviewPatch request (const pass) (const pass) (\raw -> liftIO (modifyIORef' checked (<> [raw])) $> validation)
+    run (Right "not-json") (Left "Invalid JSON") `shouldReturn` Left "Invalid JSON"
+    run (Right "accepted") (Right ()) `shouldReturn` Right "accepted"
+    run (Left "Provider unavailable") (Right ()) `shouldReturn` Left "Provider unavailable"
+    readIORef checked `shouldReturn` ["not-json", "accepted"]
+
+  it "patchComparison_acknowledgesCallsBeforeInference_withoutGuestAssets" \_tr -> withSystemTempDirectory "native-patch-comparison" \temporary -> do
+    directory <- canonicalizePath temporary
+    let repository = directory </> "repository"
+        store = Agent.ArtifactStore (directory </> "usage") (directory </> "cache")
+        sdkTemp = directory </> "tmp"
+        uid n = UUIDId $ UUID.fromWords 57 0x4000 0x80000000 n
+        accepted = AE.object ["findings" AE..= ([] :: [AE.Value]), "coverage" AE..= ([] :: [Text])]
+        git args = T.strip . decodeUtf8 @Text <$> readProcessStdout_ (setWorkingDir repository $ proc "git" $ ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false"] <> args)
+    traverse_ (createDirectoryIfMissing True) [repository, store.usageDir, store.cacheDir, sdkTemp]
+    void $ git ["init", "--quiet"]
+    void $ git ["config", "user.name", "Patch fixture"]
+    void $ git ["config", "user.email", "fixture@example.invalid"]
+    void $ git ["commit", "--quiet", "--allow-empty", "-m", "baseline"]
+    commitRevision <- git ["rev-parse", "HEAD"]
+    unavailable <- newIORef False
+    let next body _ = do
+          tools <- either fail pure $ AET.parseEither (AE.withObject "Patch request" (\value -> value AE..:? "tools" AE..!= ([] :: [AE.Value]))) body
+          tools `shouldBe` []
+          failed <- readIORef unavailable
+          pure $ if failed then SdkUnavailable "fixture-insufficient-credit" else SdkResponse (SdkText $ decodeUtf8 $ AE.encode accepted) (SdkTokens 7 2)
+    withSdkProvider directory "patch-fixture" next \models requests -> do
+      let patch n permitStart = do
+            calls <- newIORef ([] :: [Agent.ModelCall])
+            usage <- newIORef ([] :: [Agent.ModelUsage])
+            requestCount <- length <$> requests
+            let request = Agent.Request{projectId = testPid, runId = uid n, attemptId = uid 10, repository = toText repository, base = commitRevision, head = commitRevision, gitToken = "", prompt = "Review this empty patch.", provider = "patch-fixture", model = "fixture", thinkingLevel = Agent.Off}
+                journal = store.usageDir </> toString request.runId.toText
+                retained identifier expected = readFileBS (journal </> toString identifier <> ".json") >>= either fail pure . AE.eitherDecodeStrict >>= (`shouldBe` expected)
+            result <-
+              runEff
+                $ Agent.runCodeReviewReal (Just store) (Just "test/fixtures/native-sdk-worker.py") [models, store.usageDir, store.cacheDir, "", directory </> "worker.log", "--temp", sdkTemp]
+                $ Agent.reviewPatch
+                  request
+                  ( \receipt -> liftIO do
+                      retained receipt.id.toText $ AE.object ["tag" AE..= ("Call" :: Text), "contents" AE..= receipt]
+                      length <$> requests `shouldReturn` requestCount
+                      unless permitStart $ throwIO $ userError "Fixture rejected model start"
+                      modifyIORef' calls (<> [receipt])
+                  )
+                  (\receipt -> liftIO $ retained receipt.id.toText (AE.toJSON receipt) >> modifyIORef' usage (<> [receipt]))
+                  (\value -> pure $ if AE.eitherDecodeStrict (encodeUtf8 value) == Right accepted then Right () else Left "Rejected patch comparison")
+            listDirectory sdkTemp `shouldReturn` []
+            (result,,) <$> readIORef calls <*> readIORef usage
+      (result, calls, usage) <- patch 1 True
+      either (fail . toString) (\value -> either fail pure (AE.eitherDecodeStrict $ encodeUtf8 value) >>= (`shouldBe` accepted)) result
+      length calls `shouldBe` 1
+      map (.callId) usage `shouldBe` map (Just . (.id)) calls
+      map (.succeeded) usage `shouldBe` [True]
+      countBeforeRejection <- length <$> requests
+      (blocked, blockedCalls, blockedUsage) <- patch 2 False
+      blocked `shouldSatisfy` isLeft
+      blockedCalls `shouldSatisfy` null
+      blockedUsage `shouldSatisfy` null
+      length <$> requests `shouldReturn` countBeforeRejection
+      writeIORef unavailable True
+      (failed, failedCalls, failedUsage) <- patch 3 True
+      failed `shouldSatisfy` isLeft
+      length failedCalls `shouldBe` 1
+      map (.succeeded) failedUsage `shouldBe` [False]
+      failedUsage `shouldSatisfy` all (isNothing . (.costNanousd))
 
   it "replays offline npm dependencies through the SDK without install scripts or shared mutations" \_tr -> CLIBinary.withCliBin \cli -> withSystemTempDirectory "native-sdk-dependencies" \temporary -> do
     configuredProfile <- lookupEnv "IMPACT_REVIEW_TEST_PROFILE"
@@ -2441,6 +2512,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                         reply <- runEff $ Agent.runCodeReviewReal Nothing (Just "test/fixtures/impact-review-agent.mjs") ([response, toString reviewPid.toText] <> arguments) $ Agent.reviewRepository request (liftIO . unlift . respond) (liftIO . unlift . knowledge) (liftIO . unlift . recordCall) (liftIO . unlift . recordUsage) (liftIO . unlift . recordAllocation) (liftIO . unlift . recordCheck) (liftIO . unlift . check)
                         diagnostic <- tryAny $ decodeUtf8 <$> readFileBS (response <> ".failure")
                         pure $ first (<> either (const "") ("\n" <>) diagnostic) reply
+                    Agent.ReviewPatch{} -> pure $ Left "Unexpected patch comparison"
                     Agent.FixRepository{} -> pure $ Left "Unexpected issue-fix task"
                     Agent.AdmitRegression{} -> pure $ Left "Unexpected admission task"
                     Agent.VerifyFixArtifacts{} -> pure $ Left "Unexpected artifact task"
@@ -2626,7 +2698,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     -- Final publication validation also rejects fabricated locations if the effect is bypassed.
     runQueryEffect tr $ Reviews.retryRun reviewPid run.id
     let invalid = result{Impact.findings = [Impact.Finding (Impact.ChangedLine "unrelated.hs" 1 Impact.Head) "Invented mechanism" "Invented next step" ["telemetry-1"]]}
-    (newRequests, ()) <- runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ transport False $ interpose @Agent.CodeReview (\_ -> \case Agent.ReviewRepository{} -> pure $ Right $ decodeUtf8 $ AE.encode invalid; Agent.FixRepository{} -> pure $ Left "Unexpected issue-fix task"; Agent.AdmitRegression{} -> pure $ Left "Unexpected admission task"; Agent.VerifyFixArtifacts{} -> pure $ Left "Unexpected artifact task"; Agent.ExplainVerifiedFix{} -> pure $ Left "Unexpected explanation task"; Agent.ReviewVerifiedFix{} -> pure $ Left "Unexpected candidate review task") $ Impact.reviewPullRequest run.id
+    (newRequests, ()) <- runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ transport False $ interpose @Agent.CodeReview (\_ -> \case Agent.ReviewRepository{} -> pure $ Right $ decodeUtf8 $ AE.encode invalid; Agent.ReviewPatch{} -> pure $ Left "Unexpected patch comparison"; Agent.FixRepository{} -> pure $ Left "Unexpected issue-fix task"; Agent.AdmitRegression{} -> pure $ Left "Unexpected admission task"; Agent.VerifyFixArtifacts{} -> pure $ Left "Unexpected artifact task"; Agent.ExplainVerifiedFix{} -> pure $ Left "Unexpected explanation task"; Agent.ReviewVerifiedFix{} -> pure $ Left "Unexpected candidate review task") $ Impact.reviewPullRequest run.id
     let created = T.intercalate " " $ map (decodeUtf8 . snd) $ filter (T.isSuffixOf "/issues/7/comments" . fst) newRequests
     created `shouldSatisfy` T.isInfixOf "Coverage unknown"
     created `shouldNotSatisfy` T.isInfixOf "Invented mechanism"
@@ -2645,7 +2717,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       runTestBgRecordingHTTP frozenTime tr
         $ Reader.local (\ctx -> ctx{config = cfg})
         $ transport True
-        $ interpose @Agent.CodeReview (\_ -> \case Agent.ReviewRepository{} -> pure $ Left "private-agent-failure"; Agent.FixRepository{} -> pure $ Left "Unexpected issue-fix task"; Agent.AdmitRegression{} -> pure $ Left "Unexpected admission task"; Agent.VerifyFixArtifacts{} -> pure $ Left "Unexpected artifact task"; Agent.ExplainVerifiedFix{} -> pure $ Left "Unexpected explanation task"; Agent.ReviewVerifiedFix{} -> pure $ Left "Unexpected candidate review task")
+        $ interpose @Agent.CodeReview (\_ -> \case Agent.ReviewRepository{} -> pure $ Left "private-agent-failure"; Agent.ReviewPatch{} -> pure $ Left "Unexpected patch comparison"; Agent.FixRepository{} -> pure $ Left "Unexpected issue-fix task"; Agent.AdmitRegression{} -> pure $ Left "Unexpected admission task"; Agent.VerifyFixArtifacts{} -> pure $ Left "Unexpected artifact task"; Agent.ExplainVerifiedFix{} -> pure $ Left "Unexpected explanation task"; Agent.ReviewVerifiedFix{} -> pure $ Left "Unexpected candidate review task")
         $ tryAny (Impact.reviewPullRequest run.id)
     failedAgent `shouldSatisfy` isLeft
     failedRequests `shouldNotSatisfy` any (T.isInfixOf "/issues/" . fst)
@@ -2725,6 +2797,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                 remembered <- unlift $ knowledge $ Agent.Recall "test-service"
                 liftIO $ remembered `shouldSatisfy` isLeft
                 pure $ Right $ decodeUtf8 $ AE.encode result
+              Agent.ReviewPatch{} -> pure $ Left "Unexpected patch comparison"
               Agent.FixRepository{} -> pure $ Left "Unexpected issue-fix task"
               Agent.AdmitRegression{} -> pure $ Left "Unexpected admission task"
               Agent.VerifyFixArtifacts{} -> pure $ Left "Unexpected artifact task"
@@ -2768,6 +2841,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                 refreshed <- unlift $ respond request{Agent.query = request.query <> " | take 1"}
                 liftIO $ decodeUtf8 @Text (AE.encode refreshed) `shouldSatisfy` T.isInfixOf "84"
                 pure $ Right $ decodeUtf8 $ AE.encode result{Impact.findings = [Impact.Finding (Impact.ChangedLine "checkout.hs" 1 Impact.Head) "Check the changed metric behavior." "Verify the gauge." ["query-1"]]}
+              Agent.ReviewPatch{} -> pure $ Left "Unexpected patch comparison"
               Agent.FixRepository{} -> pure $ Left "Unexpected issue-fix task"
               Agent.AdmitRegression{} -> pure $ Left "Unexpected admission task"
               Agent.VerifyFixArtifacts{} -> pure $ Left "Unexpected artifact task"
@@ -3169,6 +3243,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                       $ Agent.runCodeReviewReal Nothing (Just "test/fixtures/fix-review-agent.mjs") [if mode == "--app-job-review-changes" then "--reject" else if mode == "--app-job-review-blocked" then "--blocked" else ""]
                       $ Agent.reviewVerifiedFix request verified (liftIO . unlift . knowledge) (liftIO . unlift . calls) (liftIO . unlift . usage) (liftIO . unlift . allocations)
                   Agent.ExplainVerifiedFix store request verified -> explanationProofFixture store (if mode == "--app-job-explanation-denied" then Left "Fixture rejects explanation" else Right $ fixtureExplanation request.result) request verified
+                  Agent.ReviewPatch{} -> pure $ Left "Unexpected patch comparison"
                   Agent.ReviewRepository{} -> pure $ Left "Unexpected advisory review"
               )
         transport = withHTTPResponses \_ endpoint -> pure $ if "/access_tokens" `T.isSuffixOf` toText endpoint then Just (AE.encode $ AE.object ["token" AE..= ("fixture-token" :: Text), "expires_at" AE..= ("2030-01-01T00:00:00Z" :: Text)]) else Nothing

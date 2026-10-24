@@ -337,6 +337,7 @@ library
       Data.Effectful.Hasql
       Data.Effectful.LLM
       Data.Effectful.Notify
+      Data.Effectful.ReviewEvaluation
       Data.Effectful.Sleep
       Data.Effectful.UUID
       Devel
@@ -999,6 +1000,7 @@ test-suite test-dev
       Data.Effectful.Hasql
       Data.Effectful.LLM
       Data.Effectful.Notify
+      Data.Effectful.ReviewEvaluation
       Data.Effectful.Sleep
       Data.Effectful.UUID
       Devel
