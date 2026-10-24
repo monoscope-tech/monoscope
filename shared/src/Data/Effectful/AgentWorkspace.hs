@@ -1376,12 +1376,18 @@ fingerprintScript =
   """
   set -euo pipefail
   while IFS= read -r -d '' file; do
+    if [ -d "./$file" ] && [ ! -L "./$file" ]; then
+      find -P "./$file" -print0 | LC_ALL=C sort -z
+    else printf '%s\\0' "./$file"; fi
+  done < "${1:-/run/monoscope-baseline-paths}" |
+  while IFS= read -r -d '' file; do
+    file=${file#./}
     printf '%s\\0' "$file"
     if [ -e "./$file" ] || [ -L "./$file" ]; then
       /usr/bin/stat -c '%f' -- "./$file"
-      if [ -L "./$file" ]; then /usr/bin/readlink -z -- "./$file"; else /usr/bin/sha256sum -- "./$file"; fi
+      if [ -L "./$file" ]; then /usr/bin/readlink -z -- "./$file"; elif [ -d "./$file" ]; then printf 'directory\\0'; else /usr/bin/sha256sum -- "./$file"; fi
     else printf 'missing\\0'; fi
-  done < "${1:-/run/monoscope-baseline-paths}" | /usr/bin/sha256sum
+  done | /usr/bin/sha256sum
   """
 
 
