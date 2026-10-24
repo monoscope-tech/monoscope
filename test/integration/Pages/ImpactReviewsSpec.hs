@@ -680,7 +680,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         isLeft <$> waitCatch worker `shouldReturn` True
       length <$> readIORef checks `shouldReturn` beforeCancel
 
-  it "calibrates pinned source with a root-owned checkout, isolated scratch clones and durable evidence" \_tr -> CLIBinary.withCliBin \cli -> withSystemTempDirectory "native-sdk-calibration" \temporary -> do
+  it "calibrates pinned source with protected gitlinks, isolated scratch clones and durable evidence" \_tr -> CLIBinary.withCliBin \cli -> withSystemTempDirectory "native-sdk-calibration" \temporary -> do
     configuredProfile <- lookupEnv "IMPACT_REVIEW_TEST_PROFILE"
     let profile = fromMaybe "impact-review-worker/.guest" configuredProfile
     available <- doesFileExist $ profile </> "manifest.json"
@@ -712,6 +712,10 @@ spec = around withTestResources $ describe "Production impact reviews" do
     writeFileBS (repository </> "runtime.sh") "retry_token() { printf '%s\\n' \"$1\"; }\n"
     void $ git ["add", "."]
     void $ git ["commit", "--quiet", "-m", "base"]
+    initial <- git ["rev-parse", "HEAD"]
+    createDirectoryIfMissing True $ repository </> "vendor"
+    void $ git ["update-index", "--add", "--cacheinfo", "160000," <> toString initial <> ",vendor"]
+    void $ git ["commit", "--quiet", "-m", "retain uninitialized submodule"]
     base <- git ["rev-parse", "HEAD"]
     writeFileBS (repository </> "runtime.sh") "retry_token() { printf 'dropped\\n'; }\n"
     void $ git ["commit", "--quiet", "-am", "head"]
@@ -1413,7 +1417,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       events <- mapMaybe (AE.decodeStrict @AE.Value) . BSC.lines <$> readFileBS diagnostic
       events `shouldSatisfy` any (\value -> AET.parseEither (field "type") value == Right ("workspace_cache" :: Text) && AET.parseEither (field "status") value == Right ("hit" :: Text) && AET.parseEither (field "sha256") value == Right fingerprint)
 
-  it "runs frozen regressions natively, preserves receipts and rejects weakened candidate tests" \_tr -> withSystemTempDirectory "native-regression" \temporary -> do
+  it "runs frozen regressions natively, fingerprints gitlink contents and rejects weakened candidate tests" \_tr -> withSystemTempDirectory "native-regression" \temporary -> do
     directory <- canonicalizePath temporary
     available <- doesFileExist "impact-review-worker/.guest/manifest.json"
     unless available $ pendingWith "Build the self-hosted guest with impact-review-worker/build-guest.mjs before running microVM integration tests"
@@ -1439,8 +1443,12 @@ spec = around withTestResources $ describe "Production impact reviews" do
     createFileLink (directory </> "outside") (repository </> "linked-test")
     void $ git ["add", "."]
     void $ git ["commit", "--quiet", "-m", "broken base"]
+    initial <- revisionAt
+    createDirectoryIfMissing True $ repository </> "vendor"
+    void $ git ["update-index", "--add", "--cacheinfo", "160000," <> toString initial <> ",vendor"]
+    void $ git ["commit", "--quiet", "-m", "retain uninitialized submodule"]
     base <- revisionAt
-    writeFileBS (repository </> "regression.sh") "set -eu\n. ./runtime.sh\nif [ \"$(retry_token original)\" != original ]; then echo 'retry token was lost' >&2; exit 1; fi\necho regression-passed\n"
+    writeFileBS (repository </> "regression.sh") "set -eu\ntest -d vendor\n. ./runtime.sh\nif [ \"$(retry_token original)\" != original ]; then echo 'retry token was lost' >&2; exit 1; fi\necho regression-passed\n"
     void $ git ["add", "."]
     void $ git ["commit", "--quiet", "-m", "retain regression"]
     testPatch <- git ["show", "--format=", "--binary", "HEAD"]
@@ -1468,6 +1476,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
         statuses rows = traverse (parse $ field "status") rows :: IO [Text]
     (report, rows, receipts) <- run 3 "bash regression.sh" testPatch
     statuses rows `shouldReturn` ["failed", "passed"]
+    (_, mutatedDirectory, _) <- run 10 "mkdir -p vendor/nested; printf changed > vendor/nested/source; ln -s nested/source vendor/link; exit 0" testPatch
+    statuses mutatedDirectory `shouldReturn` ["invalidated", "invalidated"]
     parse (field "testPatchSha256") report `shouldReturn` sha testPatch
     fingerprints <- traverse (parse $ field "testFilesSha256") rows :: IO [Text]
     length (ordNub fingerprints) `shouldBe` 1
