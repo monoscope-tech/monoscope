@@ -80,7 +80,7 @@ data FilePatch = FilePatch {path :: Text, patch :: Text}
 
 
 data Mode = BoundedPatch | CheckoutHarness
-  deriving stock (Generic, Read, Show)
+  deriving stock (Generic, Show)
   deriving (AE.ToJSON) via WrappedEnumSC 'Nothing "" Mode
 
 
@@ -105,7 +105,7 @@ data Run = Run {mode :: Mode, runId :: UUIDId "pr_review", attemptId :: UUIDId "
 
 
 data Assessment = ManualRequired
-  deriving stock (Generic, Read, Show)
+  deriving stock (Generic, Show)
   deriving (AE.ToJSON) via WrappedEnumSC 'Nothing "" Assessment
 
 
@@ -137,8 +137,9 @@ runEvaluationReal = interpret $ \_ -> \case
         ( runExceptT do
             let checked :: Failure -> IO value -> ExceptT Failure IO value
                 checked failure action = ExceptT $ first (const failure) <$> tryAny action
-            inputBytes <- checked InvalidCase $ withBinaryFile inputPath ReadMode $ \handle -> BS.hGet handle (2 * 1024 * 1024 + 1)
-            when (BS.length inputBytes > 2 * 1024 * 1024) $ throwE InvalidCase
+            let inputLimit = 2 * 1024 * 1024
+            inputBytes <- checked InvalidCase $ withBinaryFile inputPath ReadMode $ \handle -> BS.hGet handle (inputLimit + 1)
+            when (BS.length inputBytes > inputLimit) $ throwE InvalidCase
             input <- either (const $ throwE InvalidCase) pure $ AE.eitherDecodeStrict @Case inputBytes
             repository <- checked SourceUnavailable $ canonicalizePath $ takeDirectory inputPath </> input.repository
             environment <- liftIO getEnvironment

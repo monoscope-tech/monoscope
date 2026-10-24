@@ -168,13 +168,23 @@ type instance DispatchOf CodeReview = 'Dynamic
 makeEffect ''CodeReview
 
 
-data Task = PatchTask (Request "pr_review") | AdvisoryTask (Request "pr_review") | FixTask FixRequest | AdmissionTask AdmissionRequest | PeerTask FixReviewRequest
+data DraftFormat = Structured | RawText
 
 
-data DraftValidator result = StructuredDraft (AE.Value -> IO (Either Text result)) | DraftText (Text -> IO (Either Text result))
+data Task format where
+  PatchTask :: Request "pr_review" -> Task 'RawText
+  AdvisoryTask :: Request "pr_review" -> Task 'Structured
+  FixTask :: FixRequest -> Task 'Structured
+  AdmissionTask :: AdmissionRequest -> Task 'Structured
+  PeerTask :: FixReviewRequest -> Task 'Structured
 
 
-data Callbacks result = Callbacks
+data DraftValidator format result where
+  StructuredDraft :: (AE.Value -> IO (Either Text result)) -> DraftValidator 'Structured result
+  DraftText :: (Text -> IO (Either Text result)) -> DraftValidator 'RawText result
+
+
+data Callbacks format result = Callbacks
   { respond :: TelemetryQuery -> IO (Either Text AE.Value)
   , knowledge :: KnowledgeRequest -> IO (Either Text AE.Value)
   , admit :: TestArtifact -> IO (Either Text Text)
@@ -183,7 +193,7 @@ data Callbacks result = Callbacks
   , allocations :: Maybe (AllocationReceipt -> IO ())
   , checks :: Maybe (CheckReceipt -> IO ())
   , phase :: PhaseReceipt -> IO (Either Text ())
-  , validate :: DraftValidator result
+  , validate :: DraftValidator format result
   }
 
 
@@ -284,17 +294,18 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
         rendered <- Media.renderExplanation store request
         pure $ rendered >>= \explanation -> if validExplanation result explanation then Right $ ExplainedFix result explanation else Left "Explanation must bind the verified candidate and complete media manifest"
   where
-    launch :: forall result. Task -> Callbacks result -> IO (Either Text result)
+    launch :: forall format result. Task format -> Callbacks format result -> IO (Either Text result)
     launch task callbacks = case executable of
       Nothing -> pure $ Left "Checkout-backed review agent is not configured"
       Just command -> do
-        let (scope, source, payload) = case task of
-              PatchTask request -> (Outbox.Advisory request.runId, Checkout.Repository request, AE.object ["tag" AE..= ("PatchTask" :: Text), "contents" AE..= request{gitToken = ""}])
-              AdvisoryTask request -> (Outbox.Advisory request.runId, Checkout.Repository request, AE.toJSON request{gitToken = ""})
-              FixTask request -> (Outbox.IssueFix request.request.runId, Checkout.Repository request.request{head = request.request.base}, AE.object ["tag" AE..= ("FixTask" :: Text), "contents" AE..= request{request = request.request{gitToken = ""}}])
-              AdmissionTask request -> (Outbox.Admission request.fix.request.runId, Checkout.Repository request.fix.request{head = request.fix.request.base}, AE.object ["tag" AE..= ("AdmitTask" :: Text), "contents" AE..= (request{fix = request.fix{request = request.fix.request{gitToken = ""}}} :: AdmissionRequest)])
-              PeerTask request -> (Outbox.PeerReview request.fix.request.runId, Checkout.VerifiedCandidate request.artifacts, AE.object ["tag" AE..= ("ReviewFixTask" :: Text), "contents" AE..= (request{fix = request.fix{request = request.fix.request{gitToken = ""}}} :: FixReviewRequest)])
-            role = case task of PatchTask _ -> Policy.Patch; AdvisoryTask _ -> Policy.Advisory; FixTask _ -> Policy.Fix; AdmissionTask _ -> Policy.Admission; PeerTask _ -> Policy.Peer
+        let tagged :: AE.ToJSON value => Text -> value -> AE.Value
+            tagged tag contents = AE.object ["tag" AE..= tag, "contents" AE..= contents]
+            (scope, source, payload, role) = case task of
+              PatchTask request -> (Outbox.Advisory request.runId, Checkout.Repository request, tagged "PatchTask" request{gitToken = ""}, Policy.Patch)
+              AdvisoryTask request -> (Outbox.Advisory request.runId, Checkout.Repository request, AE.toJSON request{gitToken = ""}, Policy.Advisory)
+              FixTask request -> (Outbox.IssueFix request.request.runId, Checkout.Repository request.request{head = request.request.base}, tagged "FixTask" request{request = request.request{gitToken = ""}}, Policy.Fix)
+              AdmissionTask request -> (Outbox.Admission request.fix.request.runId, Checkout.Repository request.fix.request{head = request.fix.request.base}, tagged "AdmitTask" (request{fix = request.fix{request = request.fix.request{gitToken = ""}}} :: AdmissionRequest), Policy.Admission)
+              PeerTask request -> (Outbox.PeerReview request.fix.request.runId, Checkout.VerifiedCandidate request.artifacts, tagged "ReviewFixTask" (request{fix = request.fix{request = request.fix.request{gitToken = ""}}} :: FixReviewRequest), Policy.Peer)
             record = \case
               Outbox.Call receipt -> callbacks.calls receipt $> Right ()
               Outbox.Usage receipt -> callbacks.usage receipt $> Right ()
@@ -564,7 +575,6 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
                               Right draft -> do
                                 checked <- case callbacks.validate of
                                   StructuredDraft validate -> validate $ AE.toJSON draft
-                                  DraftText{} -> pure $ Left "Fix submission requires structured validation"
                                 writeMessage $ draft <$ checked
                                 receive supplied (Just $ FixReady session{progress = current.progress}) current.remaining (submissions - 1) $ either (const Nothing) (Just . (AE.toJSON draft,)) checked
                           _ -> pure $ Left "Fix submission requires an initialized session and remaining budget"
@@ -606,7 +616,9 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
 runCodeReviewTest :: IOE :> es => (Request "pr_review" -> Either Text Text) -> (FixRequest -> Either Text FixResult) -> (AdmissionRequest -> Either Text AdmissionDecision) -> (ArtifactRequest -> Either Text ()) -> (ArtifactRequest -> Either Text Explanation) -> (FixReviewRequest -> Either Text FixReviewDecision) -> Eff (CodeReview ': es) a -> Eff es a
 runCodeReviewTest respond respondFix respondAdmission respondArtifacts respondExplanation respondReview = interpret \env -> \case
   ReviewRepository request _ _ _ _ _ _ _ -> pure $ respond request
-  ReviewPatch request _ _ _ -> pure $ respond request
+  ReviewPatch request _ _ check -> case respond request of
+    Left message -> pure $ Left message
+    Right raw -> localSeqUnliftIO env $ \unlift -> (raw <$) <$> unlift (check raw)
   FixRepository request _ _ _ _ _ _ _ _ check -> case respondFix request of
     Left message -> pure $ Left message
     Right result -> localSeqUnliftIO env $ \unlift -> (>>= matchingReview result) <$> unlift (check result)

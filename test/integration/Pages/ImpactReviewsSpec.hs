@@ -1154,6 +1154,17 @@ spec = around withTestResources $ describe "Production impact reviews" do
         parse (field "outcome") (AE.toJSON allocation) `shouldReturn` ("released" :: Text)
         parse (field "durationMs") (AE.toJSON allocation) >>= (\duration -> (duration :: Word64) `shouldSatisfy` (> 0))
 
+  it "patchComparison_testInterpreter_preservesValidationAndTransportFailures" \_tr -> do
+    checked <- newIORef ([] :: [Text])
+    let unused :: a -> Either Text b
+        unused _ = Left "Unexpected fixture operation"
+        request = Agent.Request testPid (UUIDId UUID.nil) (UUIDId UUID.nil) "." (T.replicate 40 "a") (T.replicate 40 "b") "" "Fixture patch review" "fixture" "fixture" Agent.Off
+        run response validation = runEff $ Agent.runCodeReviewTest (const response) unused unused unused unused unused $ Agent.reviewPatch request (const pass) (const pass) (\raw -> liftIO (modifyIORef' checked (<> [raw])) $> validation)
+    run (Right "not-json") (Left "Invalid JSON") `shouldReturn` Left "Invalid JSON"
+    run (Right "accepted") (Right ()) `shouldReturn` Right "accepted"
+    run (Left "Provider unavailable") (Right ()) `shouldReturn` Left "Provider unavailable"
+    readIORef checked `shouldReturn` ["not-json", "accepted"]
+
   it "patchComparison_acknowledgesCallsBeforeInference_withoutGuestAssets" \_tr -> withSystemTempDirectory "native-patch-comparison" \temporary -> do
     directory <- canonicalizePath temporary
     let repository = directory </> "repository"
