@@ -32,7 +32,6 @@ variables:
           AND resource___service___name IS NOT NULL
           {{time_filter}}
         LIMIT 100
-    default: ''
     multi: false
 
 widgets: []

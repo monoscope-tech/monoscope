@@ -920,7 +920,8 @@ instance HasField "toColNames" QueryComponents [Text] where
 
 
 -- | Replace all occurrences of {{key}} in the input text using the provided mapping.
--- Unknown placeholders are left as-is (useful for debugging).
+-- Unknown placeholders are left as-is (useful for debugging), except dashboard variables:
+-- a @{{var-…}}@ the request did not set is empty, so @'{{var-x}}' = ''@ means "unfiltered".
 --
 -- >>> replacePlaceholders (Map.fromList [("name", "world")]) "Hello {{name}}!"
 -- "Hello world!"
@@ -928,8 +929,14 @@ instance HasField "toColNames" QueryComponents [Text] where
 -- "1 + 2"
 -- >>> replacePlaceholders Map.empty "{{missing}}"
 -- "{{missing}}"
+-- >>> replacePlaceholders (Map.fromList [("var-a", "x")]) "'{{var-a}}' '{{var-b}}' {{var-"
+-- "'x' '' {{var-"
 replacePlaceholders :: Map.Map Text Text -> Text -> Text
-replacePlaceholders mappng txt = Map.foldlWithKey' (\t k v -> T.replace ("{{" <> k <> "}}") v t) txt mappng
+replacePlaceholders mappng txt = clearUnset $ Map.foldlWithKey' (\t k v -> T.replace ("{{" <> k <> "}}") v t) txt mappng
+  where
+    clearUnset t = case T.breakOn "{{var-" t of
+      (before, rest) | (_, close) <- T.breakOn "}}" rest, not (T.null close) -> before <> clearUnset (T.drop 2 close)
+      _ -> t
 
 
 variablePresets :: BinDensity -> Text -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> UTCTime -> Map.Map Text Text

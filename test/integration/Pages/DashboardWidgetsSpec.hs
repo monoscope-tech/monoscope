@@ -1424,6 +1424,8 @@ spec = sequential $ aroundAll withTestResources do
   -- RUM is this template plus the Explorer's sessions view; the template must hold up on
   -- real browser telemetry, not just parse.
   describe "Real User Monitoring dashboard" do
+    -- No var-app in the request, as on a first visit: an unset variable must read as empty
+    -- (every application), not as the literal placeholder that matched nothing.
     it "rumDashboard_everyWidgetRuns_andVitalsReadHistogramBuckets" \tr -> do
       projectId <- createTestProject tr "RUM dashboard template"
       apiKey <- createTestAPIKey tr projectId "rum-dashboard-key"
@@ -1442,7 +1444,7 @@ spec = sequential $ aroundAll withTestResources do
           to = toText $ iso8601Show $ at 3600
           dataType = \case Widget.WTTable -> Charts.DTText; Widget.WTStat -> Charts.DTFloat; _ -> Charts.DTMetric
       results <- forM [w | w <- DashboardModel.allWidgets rum, isJust w.sql] \w ->
-        (w.title,) <$> runQueryEffect tr (Charts.queryMetrics Nothing (Just $ dataType w.wType) (Just projectId) w.query w.sql Nothing (Just from) (Just to) Nothing Nothing [("var-app", Just "")])
+        (w.title,) <$> runQueryEffect tr (Charts.queryMetrics Nothing (Just $ dataType w.wType) (Just projectId) w.query w.sql Nothing (Just from) (Just to) Nothing Nothing [])
       [(title, m.error) | (title, m) <- results, isJust m.error] `shouldBe` []
       let table title = maybe V.empty (.dataText) $ lookup (Just title) results
       table "Core Web Vitals" `shouldBe` V.singleton (V.fromList ["LCP", "2500 ms", "rating;success-strong⇒Good", "1000 – 2500", "16"])
