@@ -38,10 +38,10 @@ toolDefinition role name = Tool name (toolDescription name) (schema role name) (
   where
     toolDescription :: ToolName -> Text
     toolDescription = \case
-      RunRegression -> "Run the same frozen Bash check against the pinned base and head in fresh verifier VMs. Optionally supply a retained test patch: it is applied on base and must apply or already exist unchanged on head. Changed test files are frozen byte-for-byte across revisions and protected by source fingerprints during execution. A patch is execution input, not proof it is a relevant test or authorization to edit production code. Exercise actual repository behavior, not a reimplementation. Supply the expected assertion failure text; missing commands, unmatched errors, and source mutations are blocked rather than reproduction. Uses prepared tools only, without network access. At most three comparisons per review. Full private logs, patches and source fingerprints are retained."
+      RunRegression -> "Prefer testFiles with complete contents of new or changed regular test files; native Git generates their frozen diff. Run the same frozen Bash check against the pinned base and head in fresh verifier VMs. Optionally supply a retained test patch: it is applied on base and must apply or already exist unchanged on head. Changed test files are frozen byte-for-byte across revisions and protected by source fingerprints during execution. A patch is execution input, not proof it is a relevant test or authorization to edit production code. Exercise actual repository behavior, not a reimplementation. Supply the expected assertion failure text; missing commands, unmatched errors, and source mutations are blocked rather than reproduction. Uses prepared tools only, without network access. At most three comparisons per review. Full private logs, patches and source fingerprints are retained."
       QueryTelemetry -> "Query logs, spans, or metrics for a mapped service using read-only KQL. Use spans | for spans and metrics | for metrics; the default source contains logs and spans. Project, service, and time scope are fixed by Monoscope. Identical service/query requests reuse the first saved snapshot and evidence key within this review; they do not refresh telemetry. Supports filters, aggregations and grouping; project columns using alias = expression (for example project message = body). Samples return at most 20 rows; aggregates at most 200. Select only relevant fields. Returns saved query-N evidence; cite its key. Log/span samples remain private and are not published as chart images."
       SubmitFix -> "Submit a concise description of the source change, without test, build, or approval claims. The host supplies its immutable candidate and test identities. Changed workspace content requires proposing and verifying a new candidate. Finish after acceptance."
-      ReproduceIssue -> "Submit a native test-only patch from a guest file (testPatchFile) or inline text (testPatch) for host admission and replay it on the pinned base before source edits. Supply an actual repository regression, its command and expected assertion. A failed assertion unlocks editing; setup errors do not. The admitted command, patch and assertion remain frozen."
+      ReproduceIssue -> "Prefer testFiles with complete contents of new or changed regular test files; native Git generates the patch. Submit a native test-only patch from a guest file (testPatchFile) or inline text (testPatch) for host admission and replay it on the pinned base before source edits. Supply an actual repository regression, its command and expected assertion. A failed assertion unlocks editing; setup errors do not. The admitted command, patch and assertion remain frozen."
       ProposeFix -> "Capture edited repository files and the retained regression test as a private candidate after reproduction. Explain the root cause. This invalidates previous verification and does not publish a branch or PR."
       VerifyFix -> "Replay the exact admitted regression on base and the captured candidate. The candidate must retain the unchanged test, fail on base, and pass with the fix."
       SubmitAdmission -> "Admit only a relevant test/fixture-only patch that exercises the actual reported behavior. Otherwise reject with a concise reason. The host binds the verdict to the exact submitted artifact. Finish after acceptance."
@@ -94,7 +94,7 @@ Root repository instructions:
         [fmt|Fix the supplied issue in the checked-out repository at /workspace, pinned to {base}.
 Read applicable repository instructions and bundled debugging, TDD, and verification skills. Follow real callers and test actual repository behavior.
 Repository files are read-only until reproduce_issue admits a test patch through the host and reproduces the expected assertion failure on base. Setup failures do not authorize edits.
-Generate a native test patch in a guest scratch file and provide its testPatchFile path, exact command, and expected assertion text to reproduce_issue; inline testPatch is also accepted. The patch must only add or change tests/fixtures; host admission checks relevance to the supplied issue. Do not fabricate a failure or rewrite the suspected runtime in a test.
+Prefer testFiles with complete contents of new or changed regular test files; the host generates their Git diff. Supply the exact command and assertion text to reproduce_issue. A native patch in a guest testPatchFile or inline testPatch is also accepted. The patch must only add or change tests/fixtures; host admission checks relevance to the supplied issue. Do not fabricate a failure or rewrite the suspected runtime in a test.
 After reproduction, use edit for precise source changes and write for new files or complete rewrites; bash remains available. Retain the admitted regression test unchanged. Use propose_fix with the root cause to capture a candidate; verify_fix reruns the frozen test on base and that candidate in fresh VMs.
 Keep the root cause within 240 characters and the summary within 180 characters for the short visual explanation. Describe only the code change in the summary; verification claims belong in recorded checks. The host renders it after acceptance using the exact reproduced assertion and recorded exit status.
 Use submit_fix only after verification. Editing after verification requires a new candidate and verification. Finish after acceptance without more tools. Do not publish, send messages, or claim a deployment or video exists.
@@ -145,11 +145,16 @@ sourceReviewSchema = schema Source SubmitReview
 -- >>> import Relude
 
 
--- | Both patch variants validate their complete request, including exclusivity.
+-- | Regression inputs validate their complete request, including exclusivity.
 -- >>> let args :: [(AE.Key, AE.Value)] -> AE.Value; args patch = AE.object (["script" AE..= ("bash regression.sh" :: Text), "failureMessage" AE..= ("retry token was lost" :: Text)] <> patch)
 -- >>> let valid :: [(AE.Key, AE.Value)] -> Bool; valid patch = null $ Validation.validateJSON mempty (toolSchema ReproduceIssue) (args patch)
 -- >>> map valid [["testPatch" AE..= ("diff" :: Text)], ["testPatchFile" AE..= ("/tmp/patch" :: Text)], [], ["testPatch" AE..= ("diff" :: Text), "testPatchFile" AE..= ("/tmp/patch" :: Text)]]
 -- [True,True,False,False]
+-- >>> let files :: [(AE.Key, AE.Value)]; files = ["testFiles" AE..= ([AE.object ["path" AE..= ("test.sh" :: Text), "content" AE..= ("exit 1" :: Text)]] :: [AE.Value])]
+-- >>> map valid [files, files <> ["testPatch" AE..= ("diff" :: Text)], ["testFiles" AE..= ([] :: [AE.Value])]]
+-- [True,False,False]
+-- >>> map (null . Validation.validateJSON mempty (toolSchema RunRegression) . args) [[], files, files <> ["testPatch" AE..= ("diff" :: Text)]]
+-- [True,True,False]
 -- >>> null $ Validation.validateJSON mempty (toolSchema ReproduceIssue) (AE.object ["script" AE..= ("" :: Text), "failureMessage" AE..= ("failure" :: Text), "testPatch" AE..= ("diff" :: Text)])
 -- False
 toolSchema :: ToolName -> O.Schema
@@ -164,8 +169,8 @@ schema role = \case
   ListProjectMemory -> object []
   ReadProjectMemory -> object [("pageId", uuid)]
   WriteProjectMemory -> object [("pageId", uuid), ("version", integer 0 & O.maximum_ ?~ 4294967294), ("document", object [("title", bounded 1 $ Just 120), ("body", bounded 1 $ Just 16000)])]
-  RunRegression -> object (regression <> [("testPatch", patch)]) & O.required .~ ["script", "failureMessage"]
-  ReproduceIssue -> mempty & O.type_ ?~ O.OpenApiObject & O.oneOf ?~ map (O.Inline . (\field -> object $ regression <> [field])) [("testPatch", patch), ("testPatchFile", bounded 1 $ Just 4096)]
+  RunRegression -> mempty & O.type_ ?~ O.OpenApiObject & O.oneOf ?~ map O.Inline [object (regression <> [("testPatch", patch)]) & O.required .~ ["script", "failureMessage"], object (regression <> [testFiles])]
+  ReproduceIssue -> mempty & O.type_ ?~ O.OpenApiObject & O.oneOf ?~ map (O.Inline . (\field -> object $ regression <> [field])) [("testPatch", patch), ("testPatchFile", bounded 1 $ Just 4096), testFiles]
   ProposeFix -> object [("rootCause", visual 240)]
   VerifyFix -> object []
   SubmitFix -> object [("summary", visual 180)]
@@ -188,6 +193,7 @@ schema role = \case
       ]
   where
     uuid = text & O.format ?~ "uuid"
+    testFiles = ("testFiles", array 1 100 $ object [("path", bounded 1 (Just 4096) & O.description ?~ "Ordinary repository-relative path; no traversal, backslashes or .git components."), ("content", text & O.maxLength ?~ 262144 & O.description ?~ "Complete UTF-8 contents. All testFiles together must fit 256 KiB of UTF-8 bytes; the generated Git patch must also fit 256 KiB.")])
     patch = bounded 1 (Just 262144) & O.description ?~ "Unified Git diff accepted by git apply (diff --git, ---/+++ paths and @@ hunks), containing test/fixture changes only. Do not use *** Begin Patch or *** Add File syntax. Git infers hunk line counts from the patch body."
     rationale = bounded 1 (Just 1200) & O.pattern ?~ "\\S"
     visual limit = bounded 1 (Just limit) & O.pattern ?~ "^(?=[\\s\\S]*\\S)[^\\x00-\\x08\\x0b-\\x1f\\x7f]+$"

@@ -1,13 +1,14 @@
-module Data.Effectful.AgentWorkspace (Workspace, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, MaintenanceReport, maintenanceBudgetMet, maintainWorkspaces, Operation (..), Prepared, Leased, RegressionOptions (..), RegressionResult, RegressionError (..), regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest) where
+module Data.Effectful.AgentWorkspace (Workspace, Options (..), PruneOptions (..), PruneReport, pruneBudgetMet, pruneWorkspaces, MaintenanceReport, maintenanceBudgetMet, maintainWorkspaces, Operation (..), Prepared, Leased, TestFiles, TestPatchError (..), testPatchErrorText, renderTestPatch, RegressionOptions (..), RegressionResult, RegressionError (..), regressionErrorText, runWorkspace, withWorkspace, runRegression, runWorkspaceReal, runWorkspaceTest) where
 
 import Conduit (runConduit, (.|))
 import Control.Monad (foldM)
 import Data.Aeson qualified as AE
 import Data.Aeson.Encoding qualified as Encoding
+import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as B8
 import Data.ByteString.Lazy qualified as LBS
-import Data.Char (isAlphaNum, isAscii)
+import Data.Char (isAlphaNum, isAscii, isControl)
 import Data.Conduit.Combinators qualified as CC
 import Data.Sequence qualified as Seq
 import Data.Text qualified as T
@@ -38,7 +39,7 @@ import System.Posix.Files qualified as Posix
 import System.Posix.IO qualified as Posix
 import System.Posix.Process (getParentProcessID)
 import System.Posix.Unistd (fileSynchronise)
-import System.Process.Typed (createPipe, getStdin, getStdout, nullStream, proc, readProcessStdout_, setEnv, setStderr, setStdin, setStdout, withProcessTerm)
+import System.Process.Typed (ExitCode (..), byteStringInput, createPipe, getStdin, getStdout, nullStream, proc, readProcessStdout_, setEnv, setStderr, setStdin, setStdout, waitExitCode, withProcessTerm)
 import UnliftIO.Async (withAsync)
 import UnliftIO.Concurrent (myThreadId, threadDelay)
 import UnliftIO.Exception (bracket, bracketOnError, catchAny, evaluate, onException, throwIO, throwTo, tryAny)
@@ -319,12 +320,68 @@ data Artifact = Artifact {script :: Text, testPatch :: Maybe Text, failureMessag
   deriving stock (Generic)
 
 
-instance AE.FromJSON Artifact where
+data TestFile = TestFile {path :: Text, content :: Text}
+  deriving stock (Generic)
+  deriving anyclass (AE.ToJSON)
+
+
+instance AE.FromJSON TestFile where
+  parseJSON = AE.withObject "Regression file" \fields -> do
+    file <- TestFile <$> fields AE..: "path" <*> fields AE..: "content"
+    let parts = T.splitOn "/" file.path
+    unless (not (T.null file.path) && T.length file.path <= 4096 && not (isAbsolute $ toString file.path) && all (\part -> T.toCaseFold part `notElem` ["", ".", "..", ".git"]) parts && not (T.any (\c -> isControl c || c == '\\') file.path)) $ fail "Test files require ordinary repository-relative paths"
+    unless (BS.length (encodeUtf8 file.content) <= 262144) $ fail "Test file exceeds its byte limit"
+    pure file
+
+
+-- $setup
+-- >>> import Data.Aeson qualified as AE
+-- >>> import Data.ByteString.Lazy qualified as LBS
+-- >>> import Data.Text qualified as T
+-- >>> import Relude
+
+
+-- | Complete, bounded file contents with safe, unique repository-relative names.
+-- >>> let files :: [(Text, Text)] -> LBS.ByteString; files entries = AE.encode [AE.object ["path" AE..= path, "content" AE..= content] | (path, content) <- entries]
+-- >>> let original = AE.eitherDecode @TestFiles (files [("test/a.sh", "*** End Patch\n")])
+-- >>> fmap AE.toJSON (original >>= AE.eitherDecode @TestFiles . AE.encode) == fmap AE.toJSON original
+-- True
+-- >>> map (isLeft . AE.eitherDecode @TestFiles . files) [[], [("../x", "")], [(".git/config", "")], [("a/../b", "")], [("a", ""), ("a", "")]]
+-- [True,True,True,True,True]
+-- >>> isLeft $ AE.eitherDecode @TestFiles (files [("a", T.replicate 131073 "λ")])
+-- True
+-- >>> isLeft $ AE.eitherDecode @TestFiles (files [("a", T.replicate 131073 "x"), ("b", T.replicate 131073 "x")])
+-- True
+-- >>> isLeft $ AE.eitherDecode @TestFiles (files [(show n, "") | n <- [1 :: Int .. 101]])
+-- True
+newtype TestFiles = TestFiles (NonEmpty TestFile)
+  deriving newtype (AE.ToJSON)
+
+
+instance AE.FromJSON TestFiles where
+  parseJSON value = do
+    files <- AE.parseJSON @(NonEmpty TestFile) value
+    unless (length files <= 100 && length (ordNub $ map (.path) $ toList files) == length files && sum (fmap (BS.length . encodeUtf8 . (.content)) files) <= 262144) $ fail "Supply unique test files within the file and byte limits"
+    pure $ TestFiles files
+
+
+data ArtifactInput = ExistingArtifact Artifact | FileArtifact Text TestFiles Text
+
+
+instance AE.FromJSON ArtifactInput where
   parseJSON = AE.withObject "Frozen regression" \fields -> do
-    artifact <- Artifact <$> fields AE..: "script" <*> fields AE..:? "testPatch" <*> fields AE..: "failureMessage"
+    script <- fields AE..: "script"
+    failure <- fields AE..: "failureMessage"
     let bounded limit text = not (T.null $ T.strip text) && T.length text <= limit
-    unless (bounded 65536 artifact.script && bounded 200 artifact.failureMessage && all (bounded 262144) artifact.testPatch) $ fail "Invalid regression artifact"
-    pure artifact
+    unless (bounded 65536 script && bounded 200 failure) $ fail "Invalid regression artifact"
+    case KM.lookup "testFiles" fields of
+      Just value -> do
+        when (KM.member "testPatch" fields) $ fail "Supply test files or a test patch, not both"
+        FileArtifact script <$> AE.parseJSON value <*> pure failure
+      Nothing -> do
+        patch <- fields AE..:? "testPatch"
+        unless (all (bounded 262144) patch) $ fail "Invalid regression artifact"
+        pure $ ExistingArtifact $ Artifact script patch failure
 
 
 data Snapshot = Snapshot {path :: FilePath, sha256 :: Fingerprint}
@@ -354,7 +411,7 @@ instance AE.FromJSON Revisions where
       _ -> fail "Expected pinned baseline, candidate, or ordered baseline/candidate comparison"
 
 
-data RegressionRequest = RegressionRequest {projectId :: ProjectId, runId :: Identifier "run", attemptId :: Identifier "attempt", sessionId :: Identifier "session", base :: Revision, imageBuildId :: ImageId, workspace :: Baseline, artifact :: Artifact, revisions :: Revisions, ownerPid :: Maybe Word32}
+data RegressionRequest artifact = RegressionRequest {projectId :: ProjectId, runId :: Identifier "run", attemptId :: Identifier "attempt", sessionId :: Identifier "session", base :: Revision, imageBuildId :: ImageId, workspace :: Baseline, artifact :: artifact, revisions :: Revisions, ownerPid :: Maybe Word32}
   deriving stock (Generic)
   deriving anyclass (AE.FromJSON)
 
@@ -438,7 +495,7 @@ data RegressionResult = RegressionResult {report :: RegressionReport, receipts :
   deriving anyclass (AE.ToJSON)
 
 
-data RegressionError = ComparisonBudgetExhausted | RegressionUnavailable
+data RegressionError = ComparisonBudgetExhausted | RegressionUnavailable | TestFilesRejected TestPatchError
   deriving stock (Show)
   deriving anyclass (Exception)
 
@@ -447,6 +504,53 @@ regressionErrorText :: RegressionError -> Text
 regressionErrorText = \case
   ComparisonBudgetExhausted -> "Local check comparison budget is exhausted"
   RegressionUnavailable -> "Native regression could not produce retained evidence"
+  TestFilesRejected failure -> testPatchErrorText failure
+
+
+data TestPatchError = InvalidTestTarget | TestPatchTooLarge | TestPatchUnavailable
+  deriving stock (Eq, Show)
+
+
+testPatchErrorText :: TestPatchError -> Text
+testPatchErrorText = \case
+  InvalidTestTarget -> "Supply only new or changed regular test files; unchanged files, symlinks and directories cannot be frozen through testFiles"
+  TestPatchTooLarge -> "Generated regression patch exceeds its 256 KiB byte limit"
+  TestPatchUnavailable -> "Git could not generate the regression patch"
+
+
+renderTestPatch :: FilePath -> Text -> TestFiles -> IO (Either TestPatchError Text)
+renderTestPatch checkout base (TestFiles files) = do
+  environment <- getEnvironment
+  outcome <- tryAny $ withSystemTempDirectory "monoscope-test-index" \temporary -> runExceptT do
+    let reject :: TestPatchError -> ExceptT TestPatchError IO value
+        reject = hoistEither . Left
+        git directory input args = ExceptT $ withProcessTerm (setStdin (byteStringInput $ toLazy input) $ setStdout createPipe $ HostGit.command environment HostGit.Local directory $ ["--literal-pathspecs", "-c", "core.ignoreCase=false"] <> args) \process -> do
+          bytes <- BS.hGet (getStdout process) 262145
+          if BS.length bytes > 262144
+            then pure $ Left TestPatchTooLarge
+            else do
+              status <- waitExitCode process
+              pure $ if status == ExitSuccess then Right bytes else Left TestPatchUnavailable
+        bare = temporary </> "index.git"
+    -- This private bare index never executes source or exposes alternates to a guest.
+    void $ git temporary "" ["clone", "--bare", "--shared", "--", checkout, bare]
+    void $ git bare "" ["read-tree", toString base]
+    for_ files \file -> do
+      entry <- git bare "" ["ls-files", "--stage", "-z", "--", toString file.path]
+      (mode, previous) <- case filter (not . T.null) $ T.splitOn "\0" $ decodeUtf8 @Text entry of
+        [] -> pure ("100644", Nothing)
+        [row] -> case T.splitOn "\t" row of
+          [metadata, name] | name == file.path -> case words metadata of
+            [mode, blob, "0"] | mode `elem` ["100644", "100755"] -> pure (toString mode, Just blob)
+            _ -> reject InvalidTestTarget
+          _ -> reject InvalidTestTarget
+        _ -> reject InvalidTestTarget
+      blob <- T.strip . decodeUtf8 @Text <$> git bare (encodeUtf8 file.content) ["hash-object", "-w", "--stdin"]
+      when (previous == Just blob) $ reject InvalidTestTarget
+      void $ git bare "" ["update-index", "--add", "--cacheinfo", mode, toString blob, toString file.path]
+    bytes <- git bare "" ["diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv", "--no-color", "--no-relative", "--src-prefix=a/", "--dst-prefix=b/", toString base, "--"]
+    hoistEither $ if BS.null bytes then Left InvalidTestTarget else first (const InvalidTestTarget) $ decodeUtf8' bytes
+  pure $ join $ first (const TestPatchUnavailable) outcome
 
 
 data SandboxFailure = SandboxCleanupFailed | SandboxOwnerLost
@@ -526,7 +630,14 @@ runWorkspaceReal = interpret $ \env -> \case
   RunRegression options requestFile -> liftIO do
     outcome <- tryAny $ Timeout.timeout (420 * 1000000) do
       request <- decode =<< readBounded requestFile (2 * 1048576)
-      withOwner request.ownerPid $ verifyRegression options request
+      withOwner request.ownerPid do
+        artifact <- case request.artifact of
+          ExistingArtifact value -> pure value
+          FileArtifact script files failure -> do
+            let Revision base = request.base
+            patch <- renderTestPatch options.checkout base files >>= either (throwIO . TestFilesRejected) pure
+            pure $ Artifact script (Just patch) failure
+        verifyRegression options request{artifact}
     pure $ case outcome of
       Right (Just result) -> Right result
       Left failure -> Left $ fromMaybe RegressionUnavailable $ fromException failure
@@ -826,7 +937,7 @@ runWorkspaceReal = interpret $ \env -> \case
         save $ PruneFinished final (fromIntegral (ended - started) / 1000000)
         pure final
 
-    verifyRegression :: RegressionOptions -> RegressionRequest -> IO RegressionResult
+    verifyRegression :: RegressionOptions -> RegressionRequest Artifact -> IO RegressionResult
     verifyRegression options request = do
       let artifact = request.artifact
           revisions = case request.revisions of BaseOnly baseline -> (Base, baseline) :| []; HeadOnly candidate -> (Head, candidate) :| []; Compare baseline candidate -> (Base, baseline) :| [(Head, candidate)]

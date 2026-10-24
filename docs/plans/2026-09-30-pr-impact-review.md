@@ -861,3 +861,31 @@ The exact tested supplement now lives once in Haskell and is shared by source an
 The comparison used 132 correlated calls / usage receipts, estimating $0.24751549; the follow-up used 51, estimating $0.11142961. This research cohort now totals 268 calls and $0.63331759 in SDK model estimates. Infrastructure remains unpriced, invoices unreconciled, and customer charges absent. Two earlier launch failures made zero model calls and remain recorded separately. Private protocols, traces, assessments and ledgers are under `scripts/local/impact-quality-native-20261024/caller-study-v2/`, `caller-study-falsify/` and `cost-ledger-with-falsification-study.json`; comparison PNGs use the shared widget renderer and Slack profile.
 
 A separate integration difference remains for a future ablation: [Pi's custom prompt path](https://github.com/earendil-works/pi/blob/v1.4.0/packages/coding-agent/src/core/system-prompt.ts) replaces its default tool-guidance section while still appending skills. Its effect was not mixed into this experiment.
+
+### Native complete-file regressions — 2026-10-24
+
+The retained tool traces include malformed Git patches even after format guidance and `--recount`. Both regression tools now accept complete `testFiles` contents; Haskell generates the canonical binary-capable Git diff against the pinned base. A private temporary object index preserves executable modes without changing the source checkout. Typed decoding bounds paths, file count and UTF-8 bytes. Unchanged entries, symlinks and directories are rejected. Existing admission, frozen-file fingerprints, execution classification and durable receipts remain enforced. No JavaScript was added.
+
+The native regression first failed with `blocked/passed` instead of `failed/passed` for complete-file input. After implementation it passed in 39.92 seconds, including executable modes, unsafe-target rejection and unchanged checkout checks. The actual SDK fix workflow passed in 50.78 seconds; native source calibration passed in 17.60 seconds. These deterministic provider fixtures made no paid model calls. The doctest runner tried all 1,932 examples without example failures, but emitted unrelated duplicate OTLP module diagnostics; this is not a clean full-CI claim. Broader local sign-off and real-model evaluation remain outstanding. The change removes model-authored hunk counts from this input path; it does not establish better review accuracy.
+
+### Complete-file input comparison — 2026-10-24
+
+Twelve source reviews compared `ffc2458f` with `a8108129`: two repeats of each known case per condition, using `gpt-5.6-luna/high`, Pi 1.4.0, Gondolin 0.14.0 and the same prepared guest. Finding assessments were recorded without condition labels before joining the trial mapping.
+
+| Measure | Legacy patches | Complete-file input |
+|---|---|---|
+| Regression requests | 13 | 13 |
+| Malformed Git diff requests | 0 | 0 |
+| Patch-placement failures | 3 | 0 |
+| Requests using `testFiles` | 0 | 12 |
+| Reviews reaching passed/failed execution | 6/6 | 5/6 |
+| Inventory issue detected | 2/2 | 1/2 |
+| API controls correct | 4/4 | 4/4 |
+| Additional false findings | 0 | 0 |
+| SDK model estimate | $0.12811487 | $0.14976585 |
+
+This sample shows adoption and fewer placement failures, without an accuracy gain. The missed inventory review exhausted its comparisons on JSX in a `.ts` file and incorrect UI selectors. Two complete-file requests also supplied unchanged files and were rejected. Other checks exercised unsupported callback inputs, feature presence or the pre-existing callee omission; successful execution alone does not establish a new regression. The independent changed-item UI reproduction and inferred activity contract remain separate evidence.
+
+All 146 calls have matching usage receipts, estimating $0.27788072. The recorded research cohort now contains 414 reconciled calls / responses and $0.91119831 in SDK estimates. Infrastructure is unpriced, invoices unreconciled, and customer charges absent. Owned trial containers and temporary model environment files were removed. Protocol, traces, blinded assessments, ledgers and the shared Slack-profile comparison PNG are retained under `scripts/local/impact-quality-native-20261024/test-files-study/`.
+
+[Pi's write tool](https://github.com/earendil-works/pi/blob/v1.4.0/packages/coding-agent/src/core/tools/write.ts) supports iterative file creation. Our source role uses read/bash and locks the checkout before inference; new test setup currently consumes formal verifier comparisons. Bounded disposable test preflight is a next hypothesis, preserving source locks, fingerprints, comparison budgets and receipts. Its benefit is unmeasured. Post-study review adds explicit byte-limit guidance and native nested-path/NUL-content coverage; those changes were not part of this experiment.

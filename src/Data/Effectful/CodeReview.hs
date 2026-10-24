@@ -9,6 +9,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
 import Data.ByteString.Char8 qualified as BS
 import Data.ByteString.Lazy qualified as LBS
+import Data.Effectful.AgentWorkspace qualified as Workspace
 import Data.Effectful.CodeReview.Artifacts (ArtifactStore (..))
 import Data.Effectful.CodeReview.Artifacts qualified as Native
 import Data.Effectful.CodeReview.Checkout qualified as Checkout
@@ -81,7 +82,7 @@ data RegressionWire = RegressionWire {report :: AE.Value, receipts :: [CheckRece
   deriving anyclass (AE.FromJSON)
 
 
-data RegressionPatch = InlinePatch Text | PatchFile Text
+data RegressionPatch = InlinePatch Text | PatchFile Text | FileContents Workspace.TestFiles
 
 
 data ReproductionInput = ReproductionInput Text Text RegressionPatch
@@ -90,10 +91,11 @@ data ReproductionInput = ReproductionInput Text Text RegressionPatch
 instance AE.FromJSON ReproductionInput where
   parseJSON = AE.withObject "Issue reproduction" \fields -> do
     patch <-
-      (,) <$> fields AE..:? "testPatch" <*> fields AE..:? "testPatchFile" >>= \case
-        (Just inline, Nothing) -> pure $ InlinePatch inline
-        (Nothing, Just path) -> pure $ PatchFile path
-        _ -> fail "Supply exactly one regression patch or patch file"
+      (,,) <$> fields AE..:? "testPatch" <*> fields AE..:? "testPatchFile" <*> fields AE..:? "testFiles" >>= \case
+        (Just inline, Nothing, Nothing) -> pure $ InlinePatch inline
+        (Nothing, Just path, Nothing) -> pure $ PatchFile path
+        (Nothing, Nothing, Just files) -> pure $ FileContents files
+        _ -> fail "Supply exactly one of testFiles, testPatch or testPatchFile"
     ReproductionInput <$> fields AE..: "script" <*> fields AE..: "failureMessage" <*> pure patch
 
 
@@ -436,6 +438,7 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
                                 ReproductionInput script failureMessage patch <- parsed AE.parseJSON
                                 testPatch <- case patch of
                                   InlinePatch text -> pure text
+                                  FileContents files -> io $ first Workspace.testPatchErrorText <$> Workspace.renderTestPatch checkout.directory (revisionText checkout.base) files
                                   PatchFile path -> do
                                     text <- io $ rpc (ReadGuest $ GuestRead path 262145) \case GuestResult output -> Just output; _ -> Nothing
                                     when (BS.length (encodeUtf8 text) > 262144) $ reject "Regression patch file exceeds its 256 KiB limit"
