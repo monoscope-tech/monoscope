@@ -13,6 +13,8 @@ npm ci --ignore-scripts
 npm run build:guest
 ```
 
+Built guests initialize loopback names in `/etc/hosts`, so offline tools can resolve `localhost`. Rebuild guest assets to apply this to existing images; checkpoint identity includes the guest build ID.
+
 Build the native CLI with `make cli-build`. Set `IMPACT_REVIEW_NATIVE_CLI` if `monoscope` is not on PATH. The optional Monoscope compiler image and prepared-cache/S3 operations are documented in the [operations reference](../docs/plans/2026-10-22-agent-worker-operations.md#reuse-a-prepared-project-workspace).
 
 The optional Linux `impact-worker` image packages the native CLI and SDK runtime. See [the operator setup](../docs/plans/2026-10-22-agent-worker-operations.md#optional-linux-agent-image) for KVM, guest images and persistent storage.

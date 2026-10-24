@@ -204,7 +204,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       configured `shouldNotSatisfy` T.isInfixOf "alias.inherited"
       for_ ["core.hookspath=/dev/null", "core.fsmonitor=false", "credential.helper=", "http.followredirects=false"] \setting -> configured `shouldSatisfy` T.isInfixOf setting
 
-  it "closes the actual SDK sandbox when its parent pipe ends during a command" \_tr -> withSystemTempDirectory "native-sdk-pipe-loss" \directory -> do
+  it "offlineGuest_resolvesLocalhost_andClosesAfterParentPipeEnds" \_tr -> withSystemTempDirectory "native-sdk-pipe-loss" \directory -> do
     available <- doesFileExist "impact-review-worker/.guest/manifest.json"
     unless available $ pendingWith "Build the self-hosted guest before running SDK integration tests"
     image <- canonicalizePath "impact-review-worker/.guest"
@@ -216,6 +216,10 @@ spec = around withTestResources $ describe "Production impact reviews" do
           receive = Timeout.timeout (15 * 1000000) (BSC.hGetLine (getStdout child) >>= either fail pure . AE.eitherDecodeStrict @AE.Value) >>= maybe (fail "SDK sandbox did not reply") pure
       send "Create" $ AE.object ["imagePath" AE..= image, "cpus" AE..= (2 :: Int), "memoryMiB" AE..= (1024 :: Int), "isolation" AE..= ("offline_cow" :: Text), "mounts" AE..= AE.object []]
       receive `shouldReturn` AE.object ["Right" AE..= ([] :: [AE.Value])]
+      send "Execute" $ AE.object ["argv" AE..= (["/usr/bin/getent", "-s", "files", "hosts", "localhost"] :: [Text]), "cwd" AE..= AE.Null, "quiet" AE..= False]
+      resolved <- receive >>= parse (field "Right")
+      parse (field "exitCode") resolved `shouldReturn` (0 :: Int)
+      parse (field "stdout") resolved >>= \output -> output `shouldSatisfy` \text -> any (`T.isPrefixOf` text) ["127.0.0.1 ", "::1 "]
       send "GetIdentity" $ AE.toJSON ([] :: [AE.Value])
       vmId <- receive >>= parse (field "Right")
       sessions >>= (`shouldContain` [vmId])
