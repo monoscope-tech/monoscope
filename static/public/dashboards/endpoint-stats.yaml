@@ -532,13 +532,13 @@ tabs:
 
       - type: table
         title: Endpoint Sessions
-        description: Select a session to inspect its correlated OpenTelemetry events in Real User Monitoring; the replay workspace opens when a recording is available.
+        description: Select a session to inspect its correlated OpenTelemetry events in the Explorer, with its replay when one was recorded.
         db_source: postgres
         layout: { w: 12, h: 6 }
         columns:
           - field: session_id
             title: Session
-            link: '/p/{{project_id}}/rum?tab=sessions&session={{row.session_id}}'
+            link: '/p/{{project_id}}/log_explorer?viz_type=sessions&query=attributes.session.id%20%3D%3D%20%22{{row.session_id}}%22&{{time_range}}'
           - field: last_page
             title: Last Page
           - field: replay

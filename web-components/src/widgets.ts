@@ -531,8 +531,7 @@ export const chartDataUrl = ({
   return `/chart_data?${params}`;
 };
 
-// A widget whose data the server computed and embedded has no project to query — RUM's
-// Web Vitals trends are one (Pages.RealUserMonitoring.vitalTrendPanel_). Fetching for one
+// A widget whose data the server computed and embedded has no project to query. Fetching for one
 // asks /chart_data for a default `count(*)` against `pid=null`, which answers 401, and a
 // 401 on a chart fetch reloads the page: the 15s live tick was rebuilding the entire page
 // — skeletons and all — instead of updating data in place.

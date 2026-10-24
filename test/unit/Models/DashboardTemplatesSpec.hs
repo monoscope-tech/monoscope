@@ -71,16 +71,13 @@ spec = describe "dashboard templates" do
           let metricQueries = [q | w <- Dashboards.allWidgets d, Just q <- [w.query], "metrics" `T.isPrefixOf` T.strip q]
           metricQueries `shouldSatisfy` (not . null)
 
-  it "RUM scopes Web Vitals by application and counts each session once" do
+  it "RUM widgets all carry the environment and application scope" do
     case find (\d -> d.file == Just "rum.yaml") templates of
       Nothing -> expectationFailure "missing template: rum.yaml"
       Just d -> do
-        let widgets = Dashboards.allWidgets d
-            metricSql = [sql | w <- widgets, Just sql <- [w.sql], "FROM otel_metrics" `T.isInfixOf` sql]
-            sessionQueries = [q | w <- widgets, w.title == Just "Sessions", Just q <- [w.query]]
-        metricSql `shouldSatisfy` (not . null)
-        forM_ metricSql (`shouldSatisfy` T.isInfixOf "resource___service___name = '{{var-app}}'")
-        sessionQueries `shouldSatisfy` (not . any (T.isInfixOf "dcount"))
+        let sqlWidgets = [w | w <- Dashboards.allWidgets d, isJust w.sql]
+        sqlWidgets `shouldSatisfy` (not . null)
+        forM_ sqlWidgets \w -> (w.title, any (T.isInfixOf "{{query_ast_filters}}") w.sql, any (T.isInfixOf "{{var-app}}") w.query) `shouldBe` (w.title, True, True)
 
   it "endpoint latency summaries average percentile buckets and declare milliseconds" $ withEndpointTemplate \d -> do
     let flatten w = w : maybe [] (concatMap flatten) w.children

@@ -1,4 +1,4 @@
-module Pages.Components (drawer_, PanelStyle (..), PanelCfg (..), panel_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, timeRefreshListener_, timeWindowVals_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, facetRail_, facetSection_, facetOption_, ModalCfg (..), modalWith_, formActionsModal_, dangerAction_, floatingDialog_, dialogField_, kbdHints_, durationMenu_, primaryButton_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, TraceFrame (..), stackTrace_, stackFrames_, codeContextUrl, curlCommand, getTargetPage, abbreviateUnit, agoText, durationQuery, untilLabel, paymentPlanPicker) where
+module Pages.Components (drawer_, PanelStyle (..), PanelCfg (..), panel_, entityHeader_, detailSection_, pivotLinks_, disclosure_, settingsSection_, settingsH2_, sectionLabel_, fieldLabel_, headerRow_, navBar, brandLogo_, resizer_, resizerWith_, detailTab_, httpTab_, tabPanel_, segmented_, periodToggle_, Deferred (..), RefreshingDeferred (..), withDeferredBody, deferredShell_, lazyPanel_, timeRefreshListener_, drawerLoadingSkeleton_, tableSkeleton_, chartSkeleton_, EmptyStateCfg (..), EmptyStateSize (..), EmptyStateAction (..), emptyState_, callout_, BadgeColor (..), IconBadgeSize (..), iconBadge_, tonePill_, colorChip_, metadataChip_, metaChip_, connectionBadge_, silenceBadge_, statFigure_, factGrid_, kvList_, sparkline_, eventsCountCell_, lastSeenCell_, dateTime, localTimeFmt_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, options_, roleOptions_, tagInput_, toggleRow_, searchInput_, copyField_, copyButton_, facetRail_, facetSection_, facetOption_, ModalCfg (..), modalWith_, formActionsModal_, dangerAction_, floatingDialog_, dialogField_, kbdHints_, durationMenu_, primaryButton_, inlineIconBtn_, RowAction (..), rowActions_, externalLink_, installationSettingsLink_, dirtyFormSaveAttr_, resetFormOnSuccessAttr_, detailsClosedBelowAttr_, keyboardActivateAttr_, listboxNavAttr_, copySourceAttr_, filterInputAttr_, TraceFrame (..), stackTrace_, stackFrames_, codeContextUrl, curlCommand, getTargetPage, abbreviateUnit, agoText, durationQuery, untilLabel, paymentPlanPicker) where
 
 import Data.Default (Default (..))
 import Data.List (elemIndex, findIndex, lookup)
@@ -769,16 +769,14 @@ formSelectField_ size lbl name required options =
       FieldMd -> "select w-full h-12 cursor-pointer"
 
 
--- | @Collapsible open@ is a details disclosure; @FlushCard@ a bordered card with a header
--- strip and an unpadded body, for a table or chart that sits flush.
-data PanelStyle = Raised | Collapsible Bool | FlushCard
+-- | @Collapsible open@ is a details disclosure.
+data PanelStyle = Raised | Collapsible Bool
 
 
 data PanelCfg = PanelCfg
   { icon :: Maybe Text
   , subtitle :: Maybe Text
   , sectionId :: Maybe Text -- id of a collapsible panel's details element
-  , action :: Maybe (Text, Text) -- (label, url) link at a flush card header's right edge
   }
   deriving stock (Generic)
   deriving anyclass (Default)
@@ -786,13 +784,6 @@ data PanelCfg = PanelCfg
 
 panel_ :: Monad m => PanelStyle -> PanelCfg -> Text -> HtmlT m () -> HtmlT m ()
 panel_ style cfg title content = case style of
-  FlushCard -> section_ [class_ "overflow-hidden rounded-lg border border-strokeWeak surface-raised"] do
-    header_ [class_ "flex items-start justify-between gap-3 border-b border-strokeWeak px-3 py-2.5"] do
-      div_ [class_ "min-w-0"] do
-        h2_ [class_ "text-sm font-semibold text-textStrong"] $ toHtml title
-        whenJust cfg.subtitle $ p_ [class_ "mt-0.5 text-xs text-textWeak"] . toHtml
-      forM_ cfg.action \(label, url) -> a_ [href_ url, class_ "shrink-0 text-xs font-medium text-textBrand hover:underline"] $ toHtml label
-    content
   Raised -> div_ [class_ "surface-raised rounded-2xl p-4 relative"] do
     span_ [class_ "flex items-center gap-2 text-sm font-semibold text-textStrong mb-3"] do
       whenJust cfg.icon \ic -> faSprite_ ic "regular" "w-4 h-4 text-iconNeutral"

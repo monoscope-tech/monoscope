@@ -15,12 +15,12 @@ import Lucid
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.SchemaCatalog qualified as SchemaCatalog
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.RUM qualified as RUMData
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), checkFreeTierStatus, mkPageCtx, navTabAttrs)
 import Pages.Components (RowAction (..), copyButton_, detailTab_, eventsCountCell_, lastSeenCell_, periodToggle_, rowActions_, sparkline_, tabPanel_)
 import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), EmptyStateAction (..), Features (..), Pagination (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableResponse (..), TableRows (..), ZeroState (..), col, withAttrs, withColHeaderExtra)
 import Pkg.DeriveUtils (WrappedEnumSC (..), assetUrl, bulkActionSlug)
 import Pkg.OpenApi qualified as OpenApi
+import Pkg.QueryCache qualified as QueryCache
 import PyF qualified
 import Relude hiding (ask, asks)
 import System.Config (AuthContext (..), EnvConfig (..))
@@ -153,7 +153,7 @@ catalogColumns pid baseUrl period =
 withStatsCache :: (AE.FromJSON v, AE.ToJSON v, Hashable k, Show k) => Cache.Cache k v -> Text -> k -> Endpoints.StatsMode -> (Endpoints.StatsMode -> ATAuthCtx v) -> ATAuthCtx v
 withStatsCache cache tag key mode fetch = case mode of
   Endpoints.ShellOnly -> fetch Endpoints.ShellOnly
-  Endpoints.WithStats -> Cache.fetchWithCache cache key \_ -> RUMData.withSharedCache (tag <> show key) 300 (fetch Endpoints.WithStats)
+  Endpoints.WithStats -> Cache.fetchWithCache cache key \_ -> QueryCache.withSharedCache (tag <> show key) 300 (fetch Endpoints.WithStats)
 
 
 logExplorerHref :: Projects.ProjectId -> Text -> Text

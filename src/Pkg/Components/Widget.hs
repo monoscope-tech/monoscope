@@ -39,7 +39,7 @@ import NeatInterpolation
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (copyButton_, headerRow_)
 import Pkg.DeriveUtils (JsonValueSchema (..), WrappedEnumSC (..))
-import Pkg.Parser (ToQueryText (..), parseQueryToAST)
+import Pkg.Parser (ToQueryText (..), parseQueryToAST, replacePlaceholders)
 import Pkg.Parser.Expr (Subject (..))
 import Pkg.Parser.Stats (BinFunction (..), ByClauseItem (..), Section (..), SummarizeByClause (..))
 import Pkg.QueryCache qualified as QC
@@ -345,7 +345,6 @@ data WidgetDataset = WidgetDataset
   { source :: AE.Value
   , rowsPerMin :: Maybe Double
   , value :: Maybe Double
-  , servedValue :: Maybe Double -- Stand-in shown until a timeseries stat's own stats arrive
   , from :: Maybe Int
   , to :: Maybe Int
   , stats :: Maybe Charts.MetricsStats
@@ -413,7 +412,6 @@ toWidgetDataset md =
     { source = AE.toJSON $ V.cons (AE.toJSON <$> md.headers) (AE.toJSON <<$>> md.dataset)
     , rowsPerMin = md.rowsPerMin
     , value = Just md.rowsCount
-    , servedValue = Nothing
     , from = md.from
     , to = md.to
     , stats = md.stats
@@ -444,6 +442,7 @@ data TableColumn = TableColumn
   , progress :: Maybe ProgressScale
   , progressVariant :: Maybe Text -- "default", "info", "error", etc.
   , columnType :: Maybe ColumnType -- default CTText
+  , hidden :: Maybe Bool -- Carried for links (@{{row.<field>}}@) but not rendered
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
@@ -568,7 +567,7 @@ widget_ w' = case w.wType of
     div_ (class_ "grid-stack grid-stack-preloaded nested-grid flex-1 group-has-[.wgt-collapse:checked]/wgt:hidden" : gridStackAttrs normalizedChildren) $ forM_ normalizedChildren (\wChild -> widget_ (wChild{_isNested = Just True}))
   WTTable -> wgtCard_ $ renderTable w
   WTLogs -> wgtCard_ $ renderLogsWidget w
-  WTServiceMap -> wgtCard_ $ withCardFrame True w ((\c -> (c.title, c.url)) <$> w.cta) $ div_ [class_ "h-full overflow-auto p-3"] $ whenJust w.html toHtmlRaw
+  WTServiceMap -> wgtCard_ $ withCardFrame True w (ctaAction w) $ div_ [class_ "h-full overflow-auto p-3"] $ whenJust w.html toHtmlRaw
   WTFlamegraph -> gridItem_ $ div_ [class_ "h-full "] $ div_ [class_ "p-3"] "Flamegraph widget coming soon"
   _ -> gridItem_ $ div_ [class_ " w-full h-full group/wgt "] $ renderChart w
   where
@@ -1082,6 +1081,11 @@ withCardFrame flexCol widget extraAction body = do
         body
 
 
+-- | A template's card link, with its project placeholder resolved.
+ctaAction :: Widget -> Maybe (Text, Text)
+ctaAction w = (\c -> (c.title, replacePlaceholders (one ("project_id", projectIdText w)) c.url)) <$> w.cta
+
+
 renderLogsWidget :: Widget -> Html ()
 renderLogsWidget widget = do
   let wId = maybeToMonoid widget.id
@@ -1145,7 +1149,7 @@ sortableTableHead_ :: Widget -> Maybe Text -> Html ()
 sortableTableHead_ widget selected =
   thead_ [class_ "sticky top-0 z-10 before:content-[''] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak"]
     $ tr_ []
-    $ forM_ (fold widget.columns) \col -> do
+    $ forM_ (filter (not . or . (.hidden)) $ fold widget.columns) \col -> do
       let (direction, ariaSort, glyph)
             | selected == Just ("+" <> col.field) = ("asc", "ascending", "↑")
             | selected == Just ("-" <> col.field) = ("desc", "descending", "↓")
@@ -1177,7 +1181,7 @@ renderTable :: Widget -> Html ()
 renderTable widget = do
   let tableId = maybeToMonoid widget.id
       eagerWidget = widget & #eager ?~ True & #pngUrl .~ Nothing & #html .~ Nothing & #dataset .~ Nothing
-  withCardFrame True widget Nothing
+  withCardFrame True widget (ctaAction widget)
     $ div_
       [ class_ "h-full overflow-auto p-3"
       , hxGet_ $ widgetFetchUrl eagerWidget
@@ -1200,7 +1204,7 @@ renderStatContent :: Widget -> Maybe Text -> Html ()
 renderStatContent widget valueM = do
   let chartId = maybeToMonoid widget.id
       statContentId = chartId <> "_stat"
-      hasData = isTrue widget.eager || isJust (widget.dataset >>= \d -> d.value <|> d.servedValue)
+      hasData = isTrue widget.eager || isJust (widget.dataset >>= (.value))
   div_
     [ id_ statContentId
     , class_ $ "stat-widget px-3 flex flex-col " <> bool "py-3 " "py-2 " (isTrue widget._isNested)
@@ -1225,7 +1229,7 @@ renderChart widget = do
   let rateM = widget.dataset >>= (.rowsPerMin) <&> \r -> Utils.prettyPrintCount (round r) <> "/min"
       chartId = maybeToMonoid widget.id
       isTimeseriesStat = widget.wType == WTTimeseriesStat
-      fallback = widget.dataset >>= (\d -> d.servedValue <|> d.value) <&> \value -> formatStatValue value $ fromMaybe "" widget.unit
+      fallback = widget.dataset >>= (.value) <&> \value -> formatStatValue value $ fromMaybe "" widget.unit
       valueM =
         ( do
             guard isTimeseriesStat
@@ -1588,6 +1592,8 @@ renderTableWithDataAndParams widget dataRows params = do
   let columns = fromMaybe [] widget.columns
       tableId = maybeToMonoid widget.id
       currentVar = widget.onRowClick >>= (.setVariable) >>= \var -> find ((== "var-" <> var) . fst) params >>= snd
+      -- URL-encoded link substitutions; links into other pages keep the window the table was read over.
+      linkSubs = M.fromList [("project_id", projectIdText widget), ("time_range", T.intercalate "&" [k <> "=" <> toUriStr v | (k, Just v) <- params, k `elem` ["since", "from", "to"], not (T.null v)])]
       -- Rows navigate server-side to the @navigate_to_tab@ tab, else the widget's own tab
       -- (or the whole tabless dashboard), with the row's variable set.
       rowNavAttrs value = fold do
@@ -1615,7 +1621,9 @@ renderTableWithDataAndParams widget dataRows params = do
               ]
       V.forM_ dataRows \row -> do
         let firstColValue = memptyIfFalse (not $ null columns) (getRowValue 0 row)
-            rowValue = maybe firstColValue (\tpl -> foldl' (\t (col, idx) -> T.replace ("{{row." <> col.field <> "}}") (getRowValue idx row) t) tpl (zip columns [0 ..])) (widget.onRowClick >>= (.value))
+            rowSubs = M.fromList [("row." <> c.field, getRowValue i row) | (c, i) <- zip columns [0 ..]]
+            rowValue = maybe firstColValue (replacePlaceholders rowSubs) (widget.onRowClick >>= (.value))
+            cellLinkSubs = linkSubs <> fmap toUriStr rowSubs
             isCurrent = Just rowValue == currentVar
         tr_
           ( [class_ $ "hover" <> memptyIfFalse (isJust widget.onRowClick) " cursor-pointer" <> memptyIfFalse isCurrent " bg-fillBrand-weak font-semibold"]
@@ -1623,10 +1631,11 @@ renderTableWithDataAndParams widget dataRows params = do
               <> rowNavAttrs rowValue
           )
           $ ifor_ columns \idx col ->
-            td_ [class_ $ cellClass col]
+            unless (or col.hidden)
+              $ td_ [class_ $ cellClass col]
               $ if isJust col.progress
                 then renderProgressCell col (getRowValue idx row) maxValues valueWidths
-                else renderLongTextOr widget col (getRowValue idx row)
+                else renderLongTextOr widget cellLinkSubs col (getRowValue idx row)
 
 
 getRowValue :: Int -> V.Vector Text -> Text
@@ -1716,8 +1725,8 @@ formatTimestampValue (T.strip -> val)
 -- Long values get a truncated single-line view with a tippy tooltip (delegated
 -- body-wide in BodyWrapper) showing the full text on hover. Number/duration
 -- columns skip the wrapper since they're always short.
-renderLongTextOr :: Widget -> TableColumn -> Text -> Html ()
-renderLongTextOr widget col value
+renderLongTextOr :: Widget -> M.Map Text Text -> TableColumn -> Text -> Html ()
+renderLongTextOr widget linkSubs col value
   | or col.copyable = div_ [class_ "group flex items-center gap-1 min-w-0"] do
       shown
       copyButton_ "btn btn-xs btn-ghost shrink-0 opacity-0 group-hover:opacity-100 focus:opacity-100" "w-3 h-3" "my @data-copy" [data_ "copy" value]
@@ -1729,8 +1738,4 @@ renderLongTextOr widget col value
     formatted = formatColumnValue col value
     content = if T.isInfixOf "⇒" formatted then renderSummaryTags formatted else toHtml formatted
     cell = maybe content (\template -> a_ [href_ $ tableLink template, class_ "text-textBrand hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-strokeBrand-strong rounded-sm"] content) col.link
-    -- Link values are data, not markup. URL-encode the cell substitution before it
-    -- reaches the href, while project ids are UUIDs controlled by the server.
-    tableLink template =
-      T.replace "{{project_id}}" (projectIdText widget)
-        $ T.replace ("{{row." <> col.field <> "}}") (toUriStr value) template
+    tableLink = replacePlaceholders linkSubs

@@ -1,4 +1,4 @@
-module Web.Routes (server, genAuthServerContext, KeepPrefixExp, LogDataFieldExp, widgetPngGetH, widgetGetH, chartsDataGetH, ApiV1Routes, apiV1Server, apiV1OpenApiSpec) where
+module Web.Routes (server, browserSessionsKql, genAuthServerContext, KeepPrefixExp, LogDataFieldExp, widgetPngGetH, widgetGetH, chartsDataGetH, ApiV1Routes, apiV1Server, apiV1OpenApiSpec) where
 
 import Control.Lens
 import Data.Aeson qualified as AE
@@ -75,7 +75,6 @@ import Pages.Projects qualified as CreateProject
 import Pages.Projects qualified as Integrations
 import Pages.Projects qualified as ListProjects
 import Pages.Projects qualified as ManageMembers
-import Pages.RealUserMonitoring qualified as RUM
 import Pages.Replay qualified as Replay
 import Pages.Reports qualified as Reports
 import Pages.ServiceMap qualified as ServiceMap
@@ -125,6 +124,13 @@ type GetRedirect = Verb 'GET 302
 
 
 type LocationRedirect a = GetRedirect '[HTML] (Headers '[Header "Location" Text] a)
+
+
+-- | RUM sessions are the Explorer's sessions view over browser telemetry: rum.yaml's browser predicate, as KQL.
+browserSessionsKql :: Text
+browserSessionsKql = "(resource.telemetry.sdk.language in (\"webjs\", \"javascript\", \"js\") or resource.user_agent.original != null or name in (\"documentLoad\", \"documentFetch\") or name startswith \"Pageview \")"
+
+
 type SessionRedirect a = GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] a)
 
 
@@ -474,7 +480,8 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , slackIdentityPost :: mode :- "slack" :> "link" :> Capture "linkId" (UUIDId "slack_link") :> ReqBody '[FormUrlEncoded] Slack.SlackLinkForm :> Post '[HTML] (RespHeaders (Html ()))
   , slackLinkProjectGet :: mode :- "slack" :> "oauth" :> "callback" :> QPT "code" :> QPT "state" :> LocationRedirect BotUtils.BotResponse
   , endpointDetailsRedirect :: mode :- "p" :> ProjectId :> "endpoints" :> "details" :> AllQueryParams :> LocationRedirect NoContent
-  , rumDashboardRedirect :: mode :- "p" :> ProjectId :> "rum" :> "dashboard" :> AllQueryParams :> LocationRedirect NoContent
+  , rumDashboardRedirect :: mode :- "p" :> ProjectId :> "rum" :> AllQueryParams :> LocationRedirect NoContent
+  , rumSessionsRedirect :: mode :- "p" :> ProjectId :> "rum" :> "sessions" :> AllQueryParams :> LocationRedirect NoContent
   , dashboardNewGet :: mode :- "p" :> ProjectId :> "dashboards" :> "new" :> Get '[HTML] (RespHeaders Dashboards.DashboardNew)
   , dashboardsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> HXRequest :> AllQueryParams :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardGet))
   , dashboardsGetList :: mode :- "p" :> ProjectId :> "dashboards" :> QPT "sort" :> QPT "embedded" :> QueryParam "teamId" ApiT.TeamId :> QPT "copy_widget_id" :> QueryParam "source_dashboard_id" Dashboards.DashboardId :> QPT "new" :> RecordParam KeepPrefixExp Dashboards.DashboardFilters :> Get '[HTML] (RespHeaders Dashboards.DashboardsGet)
@@ -692,7 +699,6 @@ type TelemetryRoutes = NamedRoutes TelemetryRoutes'
 type TelemetryRoutes' :: Type -> Type
 data TelemetryRoutes' mode = TelemetryRoutes'
   { tracesGet :: mode :- "traces" :> Capture "trace_id" Text :> QPU "timestamp" :> QPT "span_id" :> QPT "nav" :> QPT "embed" :> QueryParam "spans" Int :> Get '[HTML] (RespHeaders Trace.TraceDetailsGet)
-  , rumGetH :: mode :- "rum" :> QPT "tab" :> QPT "q" :> QPT "filter" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "session" :> QPT "service" :> QPT "panel" :> QPT "deferred" :> QPT "refresh" :> QPT "environment" :> Get '[HTML] (RespHeaders RUM.RumGet)
   , metricsOVGetH :: mode :- "metrics" :> QPT "tab" :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> QPT "metric_prefix" :> QPI "cursor" :> QPT "expand" :> QPT "label" :> QPT "q" :> QueryParam "append" Bool :> Get '[HTML] (RespHeaders Metrics.MetricsOverViewGet)
   , dataPointCountsGetH :: mode :- "metrics" :> "datapoints" :> "counts" :> QPT "from" :> QPT "to" :> QPT "since" :> Get '[HTML] (RespHeaders (Html ()))
   , metricDetailsGetH :: mode :- "metrics" :> "details" :> Capture "metric_name" Text :> QPT "from" :> QPT "to" :> QPT "since" :> QPT "metric_source" :> QPT "label" :> Get '[HTML] (RespHeaders (Html ()))
@@ -979,6 +985,8 @@ cookieProtectedServer =
     , slackLinkProjectGet = Slack.linkProjectGetH
     , endpointDetailsRedirect = Dashboards.entrypointRedirectGetH "endpoint-stats.yaml" "Endpoint Analytics" ["endpoints", "http", "events"]
     , rumDashboardRedirect = Dashboards.entrypointRedirectGetH "rum.yaml" "Real User Monitoring" ["rum", "browser", "frontend", "web-vitals"]
+    , rumSessionsRedirect = \pid params ->
+        pure $ addHeader ("/p/" <> pid.toText <> "/log_explorer" <> Dashboards.queryStringFrom ([("viz_type", Just "sessions"), ("query", Just browserSessionsKql)] <> filter ((`elem` ["since", "from", "to"]) . fst) params)) NoContent
     , dashboardsGet = Dashboards.dashboardGetH
     , dashboardNewGet = Dashboards.dashboardNewGetH
     , dashboardsGetList = Dashboards.dashboardsGetH
@@ -1173,7 +1181,6 @@ telemetryServer :: Projects.ProjectId -> Servant.ServerT TelemetryRoutes ATAuthC
 telemetryServer pid =
   TelemetryRoutes'
     { tracesGet = Trace.traceH pid
-    , rumGetH = RUM.rumGetScopedH pid
     , metricsOVGetH = Metrics.metricsOverViewGetH pid
     , dataPointCountsGetH = Metrics.dataPointCountsGetH pid
     , metricDetailsGetH = Metrics.metricDetailsGetH pid

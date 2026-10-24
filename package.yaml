@@ -39,6 +39,8 @@ extra-source-files:
   # Cabal does not track TH addDependentFile; listing it here makes a rebuilt bundle
   # re-run GHC, which then re-splices viteAssetFile.
   - static/public/assets/web-components/dist/manifest.json
+  # Dashboard templates are spliced by TH the same way.
+  - static/public/dashboards/*.yaml
   # - static/public/**/*.png
   # - static/public/**/*.css
   # - static/public/**/*.ttf
