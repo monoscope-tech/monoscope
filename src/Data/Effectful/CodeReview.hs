@@ -1,6 +1,6 @@
 {-# LANGUAGE NoFieldSelectors #-}
 
-module Data.Effectful.CodeReview (CodeReview (..), Request (..), FixRequest (..), TestArtifact (..), AdmissionRequest (..), AdmissionDecision (..), PhaseReceipt (..), FixResult (..), ArtifactRequest (..), ArtifactStore (..), FixReviewRequest (..), FixReviewDecision (..), ReviewedFix, reviewedFixResult, reviewedFixApproval, FixReviewOutcome (..), VerifiedFix, verifiedFixResult, ExplainedFix, explainedFixResult, fixExplanation, Explanation (..), PricingStatus (..), ThinkingLevel (..), TelemetryQuery (..), KnowledgeNote (..), KnowledgeRequest (..), ModelUsage (..), ModelCall (..), AllocationReceipt, allocationId, allocationAttempt, Regression (..), CheckReceipt (..), CheckStatus (..), RevisionSide (..), reviewRepository, reviewPatch, fixRepository, admitRegression, verifyFixArtifacts, reviewVerifiedFix, explainVerifiedFix, runCodeReviewReal, runCodeReviewTest, validExplanation) where
+module Data.Effectful.CodeReview (CodeReview (..), Request (..), FixRequest (..), TestArtifact (..), AdmissionRequest (..), AdmissionDecision (..), PhaseReceipt (..), FixResult (..), ArtifactRequest (..), ArtifactStore (..), FixReviewRequest (..), FixReviewDecision (..), ReviewedFix, reviewedFixResult, reviewedFixApproval, FixReviewOutcome (..), VerifiedFix, verifiedFixResult, ExplainedFix, explainedFixResult, fixExplanation, Explanation (..), PricingStatus (..), ThinkingLevel (..), ReviewMode (..), DraftSubmission (..), TelemetryQuery (..), KnowledgeNote (..), KnowledgeRequest (..), ModelUsage (..), ModelCall (..), AllocationReceipt, allocationId, allocationAttempt, Regression (..), CheckReceipt (..), CheckStatus (..), RevisionSide (..), reviewRepository, reviewPatch, reviewSource, fixRepository, admitRegression, verifyFixArtifacts, reviewVerifiedFix, explainVerifiedFix, runCodeReviewReal, runCodeReviewTest, validExplanation) where
 
 import Control.Concurrent.STM qualified as STM
 import Control.Monad.Trans.Except (throwE)
@@ -103,7 +103,7 @@ data FixProgress = NeedsReproduction | Reproduced TestArtifact | Captured TestAr
 data FixSession = FixSession {id :: UUIDId "verifier_session", baseline :: FixBaseline, progress :: FixProgress}
 
 
-data GuestSession = AdmissionReady | FixReady FixSession
+data GuestSession = AdmissionReady | SourceReady | FixReady FixSession
 
 
 data FlowState = FlowState {progress :: FixProgress, remaining :: Int}
@@ -156,6 +156,7 @@ data CodeReview :: Effect where
   ExplainVerifiedFix :: ArtifactStore -> ArtifactRequest -> VerifiedFix -> CodeReview m (Either Text ExplainedFix)
   VerifyFixArtifacts :: ArtifactStore -> ArtifactRequest -> CodeReview m (Either Text VerifiedFix)
   ReviewVerifiedFix :: FixReviewRequest -> VerifiedFix -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> CodeReview m (Either Text FixReviewOutcome)
+  ReviewSource :: ReviewMode -> Request "pr_review" -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> (CheckReceipt -> m ()) -> (DraftSubmission -> m (Either Text ())) -> CodeReview m (Either Text Text)
   ReviewPatch :: Request "pr_review" -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (Text -> m (Either Text ())) -> CodeReview m (Either Text Text)
   ReviewRepository :: Request "pr_review" -> (TelemetryQuery -> m (Either Text AE.Value)) -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> (CheckReceipt -> m ()) -> (AE.Value -> m (Either Text ())) -> CodeReview m (Either Text Text)
   AdmitRegression :: AdmissionRequest -> (KnowledgeRequest -> m (Either Text AE.Value)) -> (ModelCall -> m ()) -> (ModelUsage -> m ()) -> (AllocationReceipt -> m ()) -> CodeReview m (Either Text AdmissionDecision)
@@ -168,19 +169,21 @@ type instance DispatchOf CodeReview = 'Dynamic
 makeEffect ''CodeReview
 
 
-data DraftFormat = Structured | RawText
+data DraftFormat = JsonDraft | RawText
 
 
 data Task format where
   PatchTask :: Request "pr_review" -> Task 'RawText
-  AdvisoryTask :: Request "pr_review" -> Task 'Structured
-  FixTask :: FixRequest -> Task 'Structured
-  AdmissionTask :: AdmissionRequest -> Task 'Structured
-  PeerTask :: FixReviewRequest -> Task 'Structured
+  SourcePatchTask :: Request "pr_review" -> Task 'RawText
+  SourceTask :: Request "pr_review" -> Task 'JsonDraft
+  AdvisoryTask :: Request "pr_review" -> Task 'JsonDraft
+  FixTask :: FixRequest -> Task 'JsonDraft
+  AdmissionTask :: AdmissionRequest -> Task 'JsonDraft
+  PeerTask :: FixReviewRequest -> Task 'JsonDraft
 
 
 data DraftValidator format result where
-  StructuredDraft :: (AE.Value -> IO (Either Text result)) -> DraftValidator 'Structured result
+  StructuredDraft :: (AE.Value -> IO (Either Text result)) -> DraftValidator 'JsonDraft result
   DraftText :: (Text -> IO (Either Text result)) -> DraftValidator 'RawText result
 
 
@@ -214,6 +217,25 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
           , phase = const $ pure $ Left "Fix phases require an issue-fix task"
           , validate = StructuredDraft $ \value -> (decodeUtf8 (AE.encode value) <$) <$> unlift (check value)
           }
+  ReviewSource mode request recordCall recordUsage recordAllocation recordCheck check -> localSeqUnliftIO env \unlift -> liftIO do
+    let callbacks :: forall format. Maybe (AllocationReceipt -> IO ()) -> Maybe (CheckReceipt -> IO ()) -> DraftValidator format Text -> Callbacks format Text
+        callbacks allocations checks validator =
+          Callbacks
+            { respond = const $ pure $ Left "Source review has no telemetry tools"
+            , knowledge = const $ pure $ Left "Source review has no project memory tools"
+            , admit = const $ pure $ Left "Source review cannot admit tests"
+            , calls = unlift . recordCall
+            , usage = unlift . recordUsage
+            , allocations
+            , checks
+            , phase = const $ pure $ Left "Source review cannot advance fix phases"
+            , validate = validator
+            }
+        validateText raw = (raw <$) <$> unlift (check $ ProviderText raw)
+        validateValue value = (decodeUtf8 (AE.encode value) <$) <$> unlift (check $ Structured value)
+    case mode of
+      BoundedPatch -> launch (SourcePatchTask request) $ callbacks Nothing Nothing $ DraftText validateText
+      CheckoutHarness -> launch (SourceTask request) $ callbacks (Just $ unlift . recordAllocation) (Just $ unlift . recordCheck) $ StructuredDraft validateValue
   ReviewPatch request recordCall recordUsage check -> localSeqUnliftIO env \unlift ->
     liftIO
       $ launch
@@ -302,6 +324,8 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
             tagged tag contents = AE.object ["tag" AE..= tag, "contents" AE..= contents]
             (scope, source, payload, role) = case task of
               PatchTask request -> (Outbox.Advisory request.runId, Checkout.Repository request, tagged "PatchTask" request{gitToken = ""}, Policy.Patch)
+              SourcePatchTask request -> (Outbox.Advisory request.runId, Checkout.Repository request, tagged "PatchTask" request{gitToken = ""}, Policy.SourcePatch)
+              SourceTask request -> (Outbox.Advisory request.runId, Checkout.Repository request, AE.toJSON request{gitToken = ""}, Policy.Source)
               AdvisoryTask request -> (Outbox.Advisory request.runId, Checkout.Repository request, AE.toJSON request{gitToken = ""}, Policy.Advisory)
               FixTask request -> (Outbox.IssueFix request.request.runId, Checkout.Repository request.request{head = request.request.base}, tagged "FixTask" request{request = request.request{gitToken = ""}}, Policy.Fix)
               AdmissionTask request -> (Outbox.Admission request.fix.request.runId, Checkout.Repository request.fix.request{head = request.fix.request.base}, tagged "AdmitTask" (request{fix = request.fix{request = request.fix.request{gitToken = ""}}} :: AdmissionRequest), Policy.Admission)
@@ -362,7 +386,7 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
                     capturePatch base = runExceptT do
                       void $ ExceptT $ execute Agent $ "/usr/bin/git" :| ["add", "-A"]
                       ExceptT $ execute Agent $ "/usr/bin/git" :| ["diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv", "--no-color", "--no-relative", "--src-prefix=a/", "--dst-prefix=b/", base, "--"]
-                    validTool invocation = invocation.name `elem` Policy.toolsForRole role && null (Schema.validateJSON mempty (Policy.toolSchema invocation.name) invocation.arguments)
+                    validTool invocation = invocation.name `elem` Policy.toolsForRole role && null (Schema.validateJSON mempty (Policy.toolDefinition role invocation.name).parameters invocation.arguments)
                     workflow :: FixRequest -> Checkout.Prepared -> Outbox.Outbox -> FixSession -> FixActions
                     workflow request checkout outbox session =
                       let reject :: Text -> Flow value
@@ -487,11 +511,17 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
                           if phase && remaining <= 0
                             then pure $ Left "Review agent exceeded its query budget"
                             else do
-                              saved <- maybe (record receipt) (\outbox -> Outbox.acknowledge outbox receipt record) journal
-                              writeMessage saved
-                              case saved of
-                                Left failure | not phase -> pure $ Left failure
-                                _ -> receive supplied guestSession (remaining - bool 0 1 phase) submissions (if invalidates then Nothing else accepted)
+                              prepared <- case (task, receipt, guestSession) of
+                                (SourceTask{}, Outbox.Call{}, Nothing) -> fmap (const $ Just SourceReady) <$> runExceptT protectWorkspace
+                                _ -> pure $ Right guestSession
+                              case prepared of
+                                Left failure -> writeMessage (Left failure :: Either Text ()) $> Left failure
+                                Right ready -> do
+                                  saved <- maybe (record receipt) (\outbox -> Outbox.acknowledge outbox receipt record) journal
+                                  writeMessage saved
+                                  case saved of
+                                    Left failure | not phase -> pure $ Left failure
+                                    _ -> receive supplied ready (remaining - bool 0 1 phase) submissions (if invalidates then Nothing else accepted)
                         Right (Right (Checkout ())) -> case (supplied, artifactStore) of
                           (Nothing, Just configured) -> do
                             prepared <- Checkout.withCheckout configured source \checkout ->
@@ -583,6 +613,8 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
                         Right (Right CheckedRegression{}) -> pure $ Left "Check response has no pending workspace command"
                         Right (Right (Validate draft))
                           | isNothing supplied && isJust artifactStore -> pure $ Left "Review agent has not acquired its repository checkout"
+                          | SourceTask{} <- task, isJust artifactStore, Just SourceReady <- guestSession, submissions > 0 -> accept
+                          | SourceTask{} <- task, isJust artifactStore -> pure $ Left "Source review requires a protected workspace and remaining submission budget"
                           | AdmissionTask{} <- task, isJust artifactStore, Just AdmissionReady <- guestSession, submissions > 0 -> accept
                           | AdmissionTask{} <- task, isJust artifactStore -> pure $ Left "Admission requires an initialized workspace and remaining submission budget"
                           | submissions > 0 -> accept
@@ -616,6 +648,11 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
 runCodeReviewTest :: IOE :> es => (Request "pr_review" -> Either Text Text) -> (FixRequest -> Either Text FixResult) -> (AdmissionRequest -> Either Text AdmissionDecision) -> (ArtifactRequest -> Either Text ()) -> (ArtifactRequest -> Either Text Explanation) -> (FixReviewRequest -> Either Text FixReviewDecision) -> Eff (CodeReview ': es) a -> Eff es a
 runCodeReviewTest respond respondFix respondAdmission respondArtifacts respondExplanation respondReview = interpret \env -> \case
   ReviewRepository request _ _ _ _ _ _ _ -> pure $ respond request
+  ReviewSource mode request _ _ _ _ check -> case respond request of
+    Left message -> pure $ Left message
+    Right raw -> case (case mode of BoundedPatch -> Right $ ProviderText raw; CheckoutHarness -> Structured <$> first (const "Source review returned invalid JSON") (AE.eitherDecodeStrict $ encodeUtf8 raw)) of
+      Left failure -> pure $ Left failure
+      Right candidate -> localSeqUnliftIO env $ \unlift -> (raw <$) <$> unlift (check candidate)
   ReviewPatch request _ _ check -> case respond request of
     Left message -> pure $ Left message
     Right raw -> localSeqUnliftIO env $ \unlift -> (raw <$) <$> unlift (check raw)
