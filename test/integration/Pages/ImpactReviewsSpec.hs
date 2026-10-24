@@ -204,10 +204,11 @@ spec = around withTestResources $ describe "Production impact reviews" do
       configured `shouldNotSatisfy` T.isInfixOf "alias.inherited"
       for_ ["core.hookspath=/dev/null", "core.fsmonitor=false", "credential.helper=", "http.followredirects=false"] \setting -> configured `shouldSatisfy` T.isInfixOf setting
 
-  it "offlineGuest_resolvesLocalhost_andClosesAfterParentPipeEnds" \_tr -> withSystemTempDirectory "native-sdk-pipe-loss" \directory -> do
+  it "resolves localhost offline and closes the SDK sandbox after parent loss" \_tr -> withSystemTempDirectory "native-sdk-pipe-loss" \directory -> do
     available <- doesFileExist "impact-review-worker/.guest/manifest.json"
     unless available $ pendingWith "Build the self-hosted guest before running SDK integration tests"
     image <- canonicalizePath "impact-review-worker/.guest"
+    guestInit <- canonicalizePath "impact-review-worker/guest-init.sh"
     let sessions = map (.id) <$> sandboxSessions
         field key = AE.withObject "SDK sandbox reply" (AE..: key)
         parse parser = either fail pure . AET.parseEither parser
@@ -219,7 +220,13 @@ spec = around withTestResources $ describe "Production impact reviews" do
       send "Execute" $ AE.object ["argv" AE..= (["/usr/bin/getent", "-s", "files", "hosts", "localhost"] :: [Text]), "cwd" AE..= AE.Null, "quiet" AE..= False]
       resolved <- receive >>= parse (field "Right")
       parse (field "exitCode") resolved `shouldReturn` (0 :: Int)
-      parse (field "stdout") resolved >>= \output -> output `shouldSatisfy` \text -> any (`T.isPrefixOf` text) ["127.0.0.1 ", "::1 "]
+      parse (field "stdout") resolved >>= \output -> words output `shouldContain` ["localhost"]
+      send "CopyFile" $ AE.object ["source" AE..= guestInit, "destination" AE..= ("/run/guest-init.sh" :: Text)]
+      receive `shouldReturn` AE.object ["Right" AE..= ([] :: [AE.Value])]
+      send "Execute" $ AE.object ["argv" AE..= (["/bin/sh", "-ec", "printf '127.0.0.2 project-service\\n' > /etc/hosts; . /run/guest-init.sh; . /run/guest-init.sh; cat /etc/hosts"] :: [Text]), "cwd" AE..= AE.Null, "quiet" AE..= False]
+      initialized <- receive >>= parse (field "Right")
+      parse (field "exitCode") initialized `shouldReturn` (0 :: Int)
+      parse (field "stdout") initialized >>= \output -> lines output `shouldBe` (["127.0.0.2 project-service", "127.0.0.1 localhost", "::1 localhost"] :: [Text])
       send "GetIdentity" $ AE.toJSON ([] :: [AE.Value])
       vmId <- receive >>= parse (field "Right")
       sessions >>= (`shouldContain` [vmId])
