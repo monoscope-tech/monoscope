@@ -81,10 +81,9 @@ import System.FilePath (takeDirectory, takeFileName, (</>))
 import System.IO (hClose)
 import System.IO.Error (userError)
 import System.IO.Temp (withSystemTempDirectory)
-import System.Info qualified as Info
 import System.Posix.Files qualified as Posix
 import System.Posix.Signals qualified as Signal
-import System.Process.Typed (createPipe, getPid, getStdin, getStdout, nullStream, proc, readProcess, readProcessStdout_, setEnv, setStderr, setStdin, setStdout, setWorkingDir, stopProcess, waitExitCode, withProcessTerm)
+import System.Process.Typed (createPipe, getPid, getStdin, getStdout, nullStream, proc, readProcessStdout_, setEnv, setStderr, setStdin, setStdout, setWorkingDir, stopProcess, waitExitCode, withProcessTerm)
 import System.Types (ATBackgroundCtx, ATBaseCtx)
 import Test.Hspec
 import UnliftIO.Async (cancel, concurrently, waitCatch, withAsync)
@@ -664,33 +663,31 @@ spec = around withTestResources $ describe "Production impact reviews" do
         isLeft <$> waitCatch worker `shouldReturn` True
       length <$> readIORef checks `shouldReturn` beforeCancel
 
-  it "calibrates pinned source through both CLI modes with repaired citations and durable evidence" \_tr -> CLIBinary.withCliBin \cli -> withSystemTempDirectory "native-sdk-calibration" \temporary -> do
+  it "calibrates pinned source through both native modes with repaired citations and durable evidence" \_tr -> CLIBinary.withCliBin \cli -> withSystemTempDirectory "native-sdk-calibration" \temporary -> do
     configuredProfile <- lookupEnv "IMPACT_REVIEW_TEST_PROFILE"
     let profile = fromMaybe "impact-review-worker/.guest" configuredProfile
     available <- doesFileExist $ profile </> "manifest.json"
     unless (available || isJust configuredProfile) $ pendingWith "Build the self-hosted guest before running calibration integration tests"
     directory <- canonicalizePath temporary
     bridge <- canonicalizePath "test/fixtures/native-sandbox.sh"
-    environment <- filter (\(key, _) -> key `elem` ["PATH", "HOME", "TMPDIR"]) <$> getEnvironment
     let repository = directory </> "repository"
         store = Agent.ArtifactStore (directory </> "usage") (directory </> "cache")
         outputDir = directory </> "results"
-        artifacts = directory </> "checks"
-        taskFile = directory </> "pr.json"
-        checkoutFile = directory </> "checkout.json"
+        caseFile = directory </> "case.json"
+        sdkTemp = directory </> "tmp"
         requestFile = directory </> "request.json"
         scriptFile = directory </> "prepare.sh"
-        uid n = UUIDId $ UUID.fromWords 54 0x4000 0x80000000 n
         field key = AE.withObject "Calibration CLI evidence" (AE..: key)
         parse parser = either fail pure . AET.parseEither parser
         readJSON path = readFileBS path >>= either fail pure . AE.eitherDecodeStrict @AE.Value
         git args = T.strip . decodeUtf8 @Text <$> readProcessStdout_ (setWorkingDir repository $ proc "git" $ ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false"] <> args)
-        finding file end = ["file" AE..= (file :: Text), "start_line" AE..= (1 :: Int), "end_line" AE..= (end :: Int), "message" AE..= ("retry_token drops its argument, so retries lose the caller token." :: Text)]
-        draft file end = AE.object ["findings" AE..= V.singleton (AE.object $ finding file end)]
+        finding file start end = ["file" AE..= (file :: Text), "start_line" AE..= (start :: Int), "end_line" AE..= (end :: Int), "message" AE..= ("retry_token drops its argument, so retries lose the caller token." :: Text)]
+        draft file = ranged file 1
+        ranged file start end = AE.object ["findings" AE..= V.singleton (AE.object $ finding file start end)]
         jsonText value = decodeUtf8 @Text $ AE.encode value
         regression = "set -eu\ntest \"$(cat .prepared-proof)\" = dependencies-ready\n. ./runtime.sh\nif [ \"$(retry_token original)\" != original ]; then echo 'retry token lost' >&2; exit 1; fi\n" :: Text
         check message = SdkTool "run_regression" $ AE.object ["script" AE..= regression, "failureMessage" AE..= (message :: Text)]
-    traverse_ (createDirectoryIfMissing True) [repository, store.usageDir, store.cacheDir, outputDir, artifacts]
+    traverse_ (createDirectoryIfMissing True) [repository, store.usageDir, store.cacheDir, outputDir, sdkTemp]
     void $ git ["init", "--quiet"]
     void $ git ["config", "user.name", "Source fixture"]
     void $ git ["config", "user.email", "fixture@example.invalid"]
@@ -703,10 +700,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
     void $ git ["commit", "--quiet", "-am", "head"]
     headRevision <- git ["rev-parse", "HEAD"]
     writeFileBS (repository </> "golden-private.txt") "Private reference must not enter the agent workspace.\n"
-    let expectedPR = AE.object ["repo" AE..= ("https://github.com/fixture/retry" :: Text), "pr_number" AE..= (17 :: Int), "base" AE..= base, "head" AE..= headRevision]
-        source :: Agent.Request "pr_review"
-        source = Agent.Request{projectId = testPid, runId = uid 1, attemptId = uid 2, repository = toText repository, base, head = headRevision, gitToken = "", prompt = "Source calibration", provider = "fixture", model = "fixture", thinkingLevel = Agent.Off}
-    writeFileLBS taskFile $ AE.encode $ AE.object ["repo" AE..= ("https://github.com/fixture/retry" :: Text), "pr_number" AE..= (17 :: Int), "base" AE..= base, "head" AE..= headRevision, "title" AE..= ("Retry token handling" :: Text), "body" AE..= ("Preserve the caller token." :: Text)]
+    let metadata = AE.object ["repo" AE..= ("https://github.com/fixture/retry" :: Text), "pr_number" AE..= (17 :: Int), "title" AE..= ("Retry token handling" :: Text), "body" AE..= ("Preserve the caller token." :: Text)]
+    writeFileLBS caseFile $ AE.encode $ AE.object ["projectId" AE..= testPid, "repository" AE..= repository, "base" AE..= base, "head" AE..= headRevision, "provider" AE..= ("fixture" :: Text), "model" AE..= ("fixture" :: Text), "pullRequest" AE..= metadata, "rubric" AE..= ("Private grading stays outside provider requests." :: Text)]
     plan <- newIORef [SdkText $ jsonText $ draft "runtime.sh" 1]
     replies <- newIORef ([] :: [AE.Value])
     let next results = do
@@ -714,88 +709,82 @@ spec = around withTestResources $ describe "Production impact reviews" do
           choices <- readIORef plan
           pure $ fromMaybe (SdkText "Review submitted.") $ viaNonEmpty head $ drop (length results) choices
     withSdkModel directory "fixture" next \models requests -> do
-      outcome <- Checkout.withCheckout store (Checkout.Repository source) \prepared -> tryAny do
-        writeFileLBS checkoutFile $ AE.encode prepared
-        let run mode name extra = do
-              let output = outputDir </> name
-                  config = [("RB_NWO", "fixture/retry"), ("RB_PR_NUMBER", "17"), ("RB_BASE", toString base), ("RB_HEAD", toString headRevision), ("RB_REPO", repository), ("RB_OUT", output), ("RB_PR_JSON", taskFile), ("RB_CONFIG_PROJECT_ID", toString testPid.toText), ("RB_CONFIG_PROVIDER", "fixture"), ("RB_CONFIG_MODEL", "fixture"), ("RB_CONFIG_EFFORT", "off"), ("RB_CONFIG_MODE", mode), ("IMPACT_REVIEW_GUEST_IMAGE", profile), ("IMPACT_REVIEW_CHECKOUT", checkoutFile), ("IMPACT_REVIEW_MODELS", models), ("IMPACT_REVIEW_CACHE_DIR", store.cacheDir), ("IMPACT_REVIEW_ARTIFACT_DIR", artifacts), ("IMPACT_REVIEW_NATIVE_CLI", cli)]
-                  configured = Map.toList $ Map.fromList $ environment <> [("GONDOLIN_VMM", "krun") | Info.os == "darwin"] <> config <> extra
-              result <- Timeout.timeout (90 * 1000000) $ readProcess $ setEnv configured $ proc "node" ["impact-review-worker/reviewbench.mjs"]
-              maybe (fail "Calibration CLI exceeded its test deadline") pure result
-            success mode name extra = do
-              (exit, _, diagnostic) <- run mode name extra
-              unless (exit == ExitSuccess) $ fail $ toString $ decodeUtf8 @Text diagnostic
-              output <- readJSON $ outputDir </> name
-              metadata <- readJSON $ outputDir </> name <> ".meta"
-              parse (field "pr") output `shouldReturn` expectedPR
-              parse (field "findings") output `shouldReturn` ([AE.object $ finding "runtime.sh" 1 <> ["producer" AE..= ("monoscope-" <> toText mode)]] :: [AE.Value])
-              parse (field "status") metadata `shouldReturn` ("completed" :: Text)
-              parse (field "durationMs") metadata >>= (\duration -> (duration :: Double) `shouldSatisfy` (> 0))
-              pure metadata
-        void $ success "bounded-patch" "bounded.json" []
-        writeIORef plan [SdkText $ jsonText $ draft "../runtime.sh" 1]
-        (invalid, _, _) <- run "bounded-patch" "invalid.json" []
-        invalid `shouldSatisfy` (/= ExitSuccess)
-        doesFileExist (outputDir </> "invalid.json") `shouldReturn` False
-        rejected <- readJSON $ outputDir </> "invalid.json.meta"
-        parse (field "status") rejected `shouldReturn` ("failed" :: Text)
-        submissions <- parse (field "submissions") rejected :: IO [AE.Value]
-        traverse (parse $ field "accepted") submissions `shouldReturn` [False]
-        writeFileBS scriptFile "printf dependencies-ready > .prepared-proof"
-        writeFileLBS requestFile $ AE.encode $ AE.object ["projectId" AE..= testPid, "repository" AE..= repository, "base" AE..= base]
-        checkpoint <- runEff (Workspace.runWorkspaceReal $ Workspace.runWorkspace (Workspace.Options store.cacheDir (toText profile) bridge scriptFile Nothing) (Workspace.Prepare repository) requestFile) >>= either (fail . toString) (maybe (fail "Calibration preparation missing") (pure . AE.toJSON))
-        fingerprint <- parse (field "manifest" >=> field "sha256") checkpoint :: IO Text
-        writeIORef
-          plan
-          [ SdkTool "bash" $ AE.object ["command" AE..= ("set -eu; test ! -e golden-private.txt; test ! -w runtime.sh; test \"$(cat .prepared-proof)\" = dependencies-ready; git show " <> base <> ":runtime.sh; cat runtime.sh")]
-          , SdkTool "submit_review" $ draft "runtime.sh" 200
-          , SdkTool "submit_review" $ draft "runtime.sh" 1
-          , check "The runtime loses its caller token"
-          , check "retry token lost"
-          , SdkTool "submit_review" $ draft "runtime.sh" 1
-          ]
-        callsBefore <- length <$> requests
-        metadata <- success "checkout-harness" "harness.json" [("IMPACT_REVIEW_PREPARE_SCRIPT", scriptFile)]
-        accepted <- parse (field "submissions") metadata :: IO [AE.Value]
-        traverse (parse $ field "accepted") accepted `shouldReturn` [False, True, True]
-        caches <- parse (field "caches") metadata :: IO [AE.Value]
-        caches `shouldSatisfy` any (\value -> AET.parseEither (field "type") value == Right ("workspace_cache" :: Text) && AET.parseEither (field "status") value == Right ("hit" :: Text) && AET.parseEither (field "sha256") value == Right fingerprint)
-        checks <- parse (field "checks") metadata :: IO [Agent.CheckReceipt]
-        map (.status) checks `shouldBe` [Agent.Passed, Agent.Blocked, Agent.Passed, Agent.Failed]
-        map (AE.toJSON . (.workspace)) checks `shouldBe` replicate 4 (AE.toJSON fingerprint)
-        attempt <- parse (field "attemptId") metadata
-        map (.attemptId) checks `shouldBe` replicate 4 attempt
-        usage <- parse (field "usage") metadata :: IO [Agent.ModelUsage]
-        length usage `shouldBe` 7
-        length <$> requests `shouldReturn` callsBefore + length usage
-        usage `shouldSatisfy` all (\receipt -> receipt.attemptId == attempt && receipt.succeeded && maybe False (> 0) receipt.costNanousd)
-        allocations <- parse (field "allocations") metadata :: IO [Agent.AllocationReceipt]
-        map Agent.allocationAttempt allocations `shouldBe` [attempt]
-        for_ allocations \receipt -> do
-          parse (field "outcome") (AE.toJSON receipt) `shouldReturn` ("released" :: Text)
-          parse (field "durationMs") (AE.toJSON receipt) >>= (\duration -> (duration :: Word64) `shouldSatisfy` (> 0))
-        results <- readIORef replies
-        let reply identifier = maybe (fail $ "Missing tool reply " <> toString identifier) (parse $ field "content") $ find (\value -> AET.parseEither (field "tool_call_id") value == Right identifier) results
-        reply "tool-0" >>= (`shouldSatisfy` T.isInfixOf "dropped")
-        reply "tool-1" >>= (`shouldSatisfy` T.isInfixOf "outside the file")
-        mismatched <- reply "tool-3" >>= either fail pure . AE.eitherDecodeStrict @AE.Value . encodeUtf8
-        reason <- parse (field "results") mismatched >>= maybe (fail "Missing counterfactual result") pure . find (\value -> AET.parseEither (field "side") value == Right ("head" :: Text)) >>= parse (field "reason")
-        for_ @[] ["case-sensitive literal", "The runtime loses its caller token", "full log"] \message -> reason `shouldSatisfy` T.isInfixOf message
-        readFileBS (repository </> "runtime.sh") `shouldReturn` "retry_token() { printf 'dropped\\n'; }\n"
-        let reserved = outputDir </> "reserved.json.meta"
-        writeFileBS reserved "prior metadata\n"
-        count <- length <$> requests
-        (existing, _, _) <- run "bounded-patch" "reserved.json" []
-        existing `shouldSatisfy` (/= ExitSuccess)
-        readFileBS reserved `shouldReturn` "prior metadata\n"
-        length <$> requests `shouldReturn` count
-        (missing, _, _) <- run "checkout-harness" "unprepared.json" [("IMPACT_REVIEW_DEPENDENCY_ARCHIVE", directory </> "dependencies.tar"), ("IMPACT_REVIEW_PREPARE_SCRIPT", "")]
-        missing `shouldSatisfy` (/= ExitSuccess)
-        doesFileExist (outputDir </> "unprepared.json.meta") `shouldReturn` False
-        length <$> requests `shouldReturn` count
-        observed <- jsonText <$> requests
-        observed `shouldNotSatisfy` T.isInfixOf "Private reference must"
-      either (fail . toString) (either throwIO pure) outcome
+      let run mode name extra =
+            runEff
+              $ Agent.runCodeReviewReal (Just store) (Just "test/fixtures/native-sdk-worker.py") ([models, store.usageDir, store.cacheDir, profile, directory </> "worker.log", "--cli", cli, "--temp", sdkTemp] <> extra)
+              $ Evaluation.runEvaluationReal
+              $ Evaluation.evaluateSource (mode :| []) caseFile (outputDir </> name)
+          result mode name extra = do
+            outcome <- Timeout.timeout (90 * 1000000) $ run mode name extra
+            report <- maybe (fail "Native source evaluation exceeded its test deadline") (either (fail . show) pure) outcome
+            report.contract `shouldBe` "native-source-evaluation/v1"
+            readJSON (outputDir </> name) `shouldReturn` AE.toJSON report
+            listDirectory sdkTemp `shouldReturn` []
+            case report.runs of [row] -> pure row; _ -> fail "Expected one source-review run"
+          accepted row = case row.outcome of
+            Evaluation.Completed elapsed value -> do
+              elapsed `shouldSatisfy` (> 0)
+              AE.toJSON value `shouldBe` draft "runtime.sh" 1
+            _ -> expectationFailure $ toString $ "Source review did not complete: " <> jsonText (AE.toJSON row)
+      bounded <- result Agent.BoundedPatch "bounded.json" []
+      accepted bounded
+      map (.validation) bounded.submissions `shouldBe` [Right ()]
+      traverse (parse (field "candidate" >=> field "tag") . AE.toJSON) bounded.submissions `shouldReturn` (["ProviderText"] :: [Text])
+      length bounded.calls `shouldBe` 1
+      map (.callId) bounded.usage `shouldBe` map (Just . (.id)) bounded.calls
+      bounded.allocations `shouldSatisfy` null
+      for_ (zip [0 :: Int ..] [(draft "../runtime.sh" 1, "repository-relative"), (ranged "runtime.sh" 2 1, "ordered"), (draft "absent.sh" 1, "cannot be read")]) \(index, (candidate, rejection)) -> do
+        writeIORef plan [SdkText $ jsonText candidate]
+        rejected <- result Agent.BoundedPatch ("invalid-" <> show index <> ".json") []
+        case rejected.outcome of Evaluation.Failed _ _ -> pass; _ -> expectationFailure "Invalid source range was accepted"
+        mapMaybe (leftToMaybe . (.validation)) rejected.submissions `shouldSatisfy` any (T.isInfixOf rejection)
+      writeFileBS scriptFile "printf dependencies-ready > .prepared-proof"
+      writeFileLBS requestFile $ AE.encode $ AE.object ["projectId" AE..= testPid, "repository" AE..= repository, "base" AE..= base]
+      checkpoint <- runEff (Workspace.runWorkspaceReal $ Workspace.runWorkspace (Workspace.Options store.cacheDir (toText profile) bridge scriptFile Nothing) (Workspace.Prepare repository) requestFile) >>= either (fail . toString) (maybe (fail "Calibration preparation missing") (pure . AE.toJSON))
+      fingerprint <- parse (field "manifest" >=> field "sha256") checkpoint :: IO Text
+      writeIORef
+        plan
+        [ SdkTool "bash" $ AE.object ["command" AE..= ("set -eu; test ! -e golden-private.txt; test ! -w runtime.sh; test \"$(cat .prepared-proof)\" = dependencies-ready; git show " <> base <> ":runtime.sh; cat runtime.sh")]
+        , SdkTool "submit_review" $ draft "runtime.sh" 200
+        , SdkTool "submit_review" $ draft "runtime.sh" 1
+        , check "The runtime loses its caller token"
+        , check "retry token lost"
+        , SdkTool "submit_review" $ draft "runtime.sh" 1
+        ]
+      callsBefore <- length <$> requests
+      harness <- result Agent.CheckoutHarness "harness.json" ["--prepare", scriptFile]
+      accepted harness
+      map (isRight . (.validation)) harness.submissions `shouldBe` [False, True, True]
+      traverse (parse (field "candidate" >=> field "tag") . AE.toJSON) harness.submissions `shouldReturn` replicate 3 ("Structured" :: Text)
+      map (.status) harness.checks `shouldBe` [Agent.Passed, Agent.Blocked, Agent.Passed, Agent.Failed]
+      map (AE.toJSON . (.workspace)) harness.checks `shouldBe` replicate 4 (AE.toJSON fingerprint)
+      map (.attemptId) harness.checks `shouldBe` replicate 4 harness.attemptId
+      length harness.usage `shouldBe` 7
+      length <$> requests `shouldReturn` callsBefore + length harness.usage
+      harness.usage `shouldSatisfy` all (\receipt -> receipt.attemptId == harness.attemptId && receipt.succeeded && maybe False (> 0) receipt.costNanousd && receipt.callId `elem` map (Just . (.id)) harness.calls)
+      map Agent.allocationAttempt harness.allocations `shouldBe` [harness.attemptId]
+      for_ harness.allocations \receipt -> parse (field "outcome") (AE.toJSON receipt) `shouldReturn` ("released" :: Text)
+      results <- readIORef replies
+      let reply identifier = maybe (fail $ "Missing tool reply " <> toString identifier) (parse $ field "content") $ find (\value -> AET.parseEither (field "tool_call_id") value == Right identifier) results
+      reply "tool-0" >>= (`shouldSatisfy` T.isInfixOf "dropped")
+      reply "tool-1" >>= (`shouldSatisfy` T.isInfixOf "outside the file")
+      mismatched <- reply "tool-3" >>= either fail pure . AE.eitherDecodeStrict @AE.Value . encodeUtf8
+      reason <- parse (field "results") mismatched >>= maybe (fail "Missing counterfactual result") pure . find (\value -> AET.parseEither (field "side") value == Right ("head" :: Text)) >>= parse (field "reason")
+      for_ @[] ["case-sensitive literal", "The runtime loses its caller token", "full log"] \message -> reason `shouldSatisfy` T.isInfixOf message
+      readFileBS (repository </> "runtime.sh") `shouldReturn` "retry_token() { printf 'dropped\\n'; }\n"
+      let reserved = outputDir </> "reserved.json"
+      writeFileBS reserved "prior metadata\n"
+      count <- length <$> requests
+      existing <- run Agent.BoundedPatch "reserved.json" []
+      leftToMaybe existing `shouldBe` Just Evaluation.OutputUnavailable
+      readFileBS reserved `shouldReturn` "prior metadata\n"
+      length <$> requests `shouldReturn` count
+      missing <- result Agent.CheckoutHarness "unprepared.json" ["--dependencies", directory </> "dependencies.tar"]
+      missing.calls `shouldSatisfy` null
+      case missing.outcome of Evaluation.Failed _ _ -> pass; _ -> expectationFailure "Dependency archive without preparation was accepted"
+      length <$> requests `shouldReturn` count
+      observed <- jsonText <$> requests
+      for_ @[] ["Private reference must", "Private grading", "query_telemetry", "recall_knowledge"] \private -> observed `shouldNotSatisfy` T.isInfixOf private
 
   it "explores pinned SDK checkouts with skills, project memory, bounded evidence and isolated cancellation" \_tr -> CLIBinary.withCliBin \cli -> withSystemTempDirectory "native-sdk-exploration" \temporary -> do
     available <- doesFileExist "impact-review-worker/.guest/manifest.json"
@@ -1180,11 +1169,13 @@ spec = around withTestResources $ describe "Production impact reviews" do
     void $ git ["commit", "--quiet", "--allow-empty", "-m", "baseline"]
     commitRevision <- git ["rev-parse", "HEAD"]
     unavailable <- newIORef False
+    replyValue <- newIORef accepted
     let next body _ = do
           tools <- either fail pure $ AET.parseEither (AE.withObject "Patch request" (\value -> value AE..:? "tools" AE..!= ([] :: [AE.Value]))) body
           tools `shouldBe` []
           failed <- readIORef unavailable
-          pure $ if failed then SdkUnavailable "fixture-insufficient-credit" else SdkResponse (SdkText $ decodeUtf8 $ AE.encode accepted) (SdkTokens 7 2)
+          response <- readIORef replyValue
+          pure $ if failed then SdkUnavailable "fixture-insufficient-credit" else SdkResponse (SdkText $ decodeUtf8 $ AE.encode response) (SdkTokens 7 2)
     withSdkProvider directory "patch-fixture" next \models requests -> do
       let patch n permitStart = do
             calls <- newIORef ([] :: [Agent.ModelCall])
@@ -1225,6 +1216,35 @@ spec = around withTestResources $ describe "Production impact reviews" do
       length failedCalls `shouldBe` 1
       map (.succeeded) failedUsage `shouldBe` [False]
       failedUsage `shouldSatisfy` all (isNothing . (.costNanousd))
+
+      writeIORef unavailable False
+      let sourceCaseFile = directory </> "source-case.json"
+          sourceDraft = AE.object ["findings" AE..= ([] :: [AE.Value])]
+          document repositoryURL = AE.object ["projectId" AE..= testPid, "repository" AE..= repository, "base" AE..= commitRevision, "head" AE..= commitRevision, "provider" AE..= ("patch-fixture" :: Text), "model" AE..= ("fixture" :: Text), "pullRequest" AE..= AE.object ["repo" AE..= (repositoryURL :: Text), "pr_number" AE..= (1 :: Int), "title" AE..= ("Source case" :: Text), "body" AE..= ("No telemetry context required." :: Text)]]
+          source name =
+            runEff
+              $ Agent.runCodeReviewReal (Just store) (Just "test/fixtures/native-sdk-worker.py") [models, store.usageDir, store.cacheDir, "", directory </> "source-worker.log", "--temp", sdkTemp]
+              $ Evaluation.runEvaluationReal
+              $ Evaluation.evaluateSource (Agent.BoundedPatch :| []) sourceCaseFile (directory </> name)
+      writeFileLBS sourceCaseFile $ AE.encode $ document "https://github.com/fixture/source"
+      writeIORef replyValue sourceDraft
+      completed <- source "source.json" >>= either (fail . show) pure
+      case completed.runs of
+        [row] -> do
+          case row.outcome of Evaluation.Completed _ value -> AE.toJSON value `shouldBe` sourceDraft; _ -> expectationFailure "Source baseline failed without a guest"
+          length row.calls `shouldBe` 1
+          map (.callId) row.usage `shouldBe` map (Just . (.id)) row.calls
+          row.allocations `shouldSatisfy` null
+        _ -> expectationFailure "Source baseline did not retain its run"
+      writeIORef replyValue accepted
+      invalid <- source "source-invalid.json" >>= either (fail . show) pure
+      concatMap (mapMaybe (leftToMaybe . (.validation)) . (.submissions)) invalid.runs `shouldSatisfy` any (T.isInfixOf "schema")
+      count <- length <$> requests
+      writeFileLBS sourceCaseFile $ AE.encode $ document "https://github.com/fixture/source?unexpected"
+      malformed <- source "source-malformed.json"
+      leftToMaybe malformed `shouldBe` Just Evaluation.InvalidCase
+      length <$> requests `shouldReturn` count
+      listDirectory sdkTemp `shouldReturn` []
 
   it "replays offline npm dependencies through the SDK without install scripts or shared mutations" \_tr -> CLIBinary.withCliBin \cli -> withSystemTempDirectory "native-sdk-dependencies" \temporary -> do
     configuredProfile <- lookupEnv "IMPACT_REVIEW_TEST_PROFILE"
@@ -2512,6 +2532,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                         reply <- runEff $ Agent.runCodeReviewReal Nothing (Just "test/fixtures/impact-review-agent.mjs") ([response, toString reviewPid.toText] <> arguments) $ Agent.reviewRepository request (liftIO . unlift . respond) (liftIO . unlift . knowledge) (liftIO . unlift . recordCall) (liftIO . unlift . recordUsage) (liftIO . unlift . recordAllocation) (liftIO . unlift . recordCheck) (liftIO . unlift . check)
                         diagnostic <- tryAny $ decodeUtf8 <$> readFileBS (response <> ".failure")
                         pure $ first (<> either (const "") ("\n" <>) diagnostic) reply
+                    Agent.ReviewSource{} -> pure $ Left "Unexpected source review"
                     Agent.ReviewPatch{} -> pure $ Left "Unexpected patch comparison"
                     Agent.FixRepository{} -> pure $ Left "Unexpected issue-fix task"
                     Agent.AdmitRegression{} -> pure $ Left "Unexpected admission task"
@@ -2698,7 +2719,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     -- Final publication validation also rejects fabricated locations if the effect is bypassed.
     runQueryEffect tr $ Reviews.retryRun reviewPid run.id
     let invalid = result{Impact.findings = [Impact.Finding (Impact.ChangedLine "unrelated.hs" 1 Impact.Head) "Invented mechanism" "Invented next step" ["telemetry-1"]]}
-    (newRequests, ()) <- runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ transport False $ interpose @Agent.CodeReview (\_ -> \case Agent.ReviewRepository{} -> pure $ Right $ decodeUtf8 $ AE.encode invalid; Agent.ReviewPatch{} -> pure $ Left "Unexpected patch comparison"; Agent.FixRepository{} -> pure $ Left "Unexpected issue-fix task"; Agent.AdmitRegression{} -> pure $ Left "Unexpected admission task"; Agent.VerifyFixArtifacts{} -> pure $ Left "Unexpected artifact task"; Agent.ExplainVerifiedFix{} -> pure $ Left "Unexpected explanation task"; Agent.ReviewVerifiedFix{} -> pure $ Left "Unexpected candidate review task") $ Impact.reviewPullRequest run.id
+    (newRequests, ()) <- runTestBgRecordingHTTP frozenTime tr $ Reader.local (\ctx -> ctx{config = cfg}) $ transport False $ interpose @Agent.CodeReview (\_ -> \case Agent.ReviewRepository{} -> pure $ Right $ decodeUtf8 $ AE.encode invalid; Agent.ReviewSource{} -> pure $ Left "Unexpected source review"; Agent.ReviewPatch{} -> pure $ Left "Unexpected patch comparison"; Agent.FixRepository{} -> pure $ Left "Unexpected issue-fix task"; Agent.AdmitRegression{} -> pure $ Left "Unexpected admission task"; Agent.VerifyFixArtifacts{} -> pure $ Left "Unexpected artifact task"; Agent.ExplainVerifiedFix{} -> pure $ Left "Unexpected explanation task"; Agent.ReviewVerifiedFix{} -> pure $ Left "Unexpected candidate review task") $ Impact.reviewPullRequest run.id
     let created = T.intercalate " " $ map (decodeUtf8 . snd) $ filter (T.isSuffixOf "/issues/7/comments" . fst) newRequests
     created `shouldSatisfy` T.isInfixOf "Coverage unknown"
     created `shouldNotSatisfy` T.isInfixOf "Invented mechanism"
@@ -2717,7 +2738,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       runTestBgRecordingHTTP frozenTime tr
         $ Reader.local (\ctx -> ctx{config = cfg})
         $ transport True
-        $ interpose @Agent.CodeReview (\_ -> \case Agent.ReviewRepository{} -> pure $ Left "private-agent-failure"; Agent.ReviewPatch{} -> pure $ Left "Unexpected patch comparison"; Agent.FixRepository{} -> pure $ Left "Unexpected issue-fix task"; Agent.AdmitRegression{} -> pure $ Left "Unexpected admission task"; Agent.VerifyFixArtifacts{} -> pure $ Left "Unexpected artifact task"; Agent.ExplainVerifiedFix{} -> pure $ Left "Unexpected explanation task"; Agent.ReviewVerifiedFix{} -> pure $ Left "Unexpected candidate review task")
+        $ interpose @Agent.CodeReview (\_ -> \case Agent.ReviewRepository{} -> pure $ Left "private-agent-failure"; Agent.ReviewSource{} -> pure $ Left "Unexpected source review"; Agent.ReviewPatch{} -> pure $ Left "Unexpected patch comparison"; Agent.FixRepository{} -> pure $ Left "Unexpected issue-fix task"; Agent.AdmitRegression{} -> pure $ Left "Unexpected admission task"; Agent.VerifyFixArtifacts{} -> pure $ Left "Unexpected artifact task"; Agent.ExplainVerifiedFix{} -> pure $ Left "Unexpected explanation task"; Agent.ReviewVerifiedFix{} -> pure $ Left "Unexpected candidate review task")
         $ tryAny (Impact.reviewPullRequest run.id)
     failedAgent `shouldSatisfy` isLeft
     failedRequests `shouldNotSatisfy` any (T.isInfixOf "/issues/" . fst)
@@ -2797,6 +2818,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                 remembered <- unlift $ knowledge $ Agent.Recall "test-service"
                 liftIO $ remembered `shouldSatisfy` isLeft
                 pure $ Right $ decodeUtf8 $ AE.encode result
+              Agent.ReviewSource{} -> pure $ Left "Unexpected source review"
               Agent.ReviewPatch{} -> pure $ Left "Unexpected patch comparison"
               Agent.FixRepository{} -> pure $ Left "Unexpected issue-fix task"
               Agent.AdmitRegression{} -> pure $ Left "Unexpected admission task"
@@ -2841,6 +2863,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                 refreshed <- unlift $ respond request{Agent.query = request.query <> " | take 1"}
                 liftIO $ decodeUtf8 @Text (AE.encode refreshed) `shouldSatisfy` T.isInfixOf "84"
                 pure $ Right $ decodeUtf8 $ AE.encode result{Impact.findings = [Impact.Finding (Impact.ChangedLine "checkout.hs" 1 Impact.Head) "Check the changed metric behavior." "Verify the gauge." ["query-1"]]}
+              Agent.ReviewSource{} -> pure $ Left "Unexpected source review"
               Agent.ReviewPatch{} -> pure $ Left "Unexpected patch comparison"
               Agent.FixRepository{} -> pure $ Left "Unexpected issue-fix task"
               Agent.AdmitRegression{} -> pure $ Left "Unexpected admission task"
@@ -3243,6 +3266,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
                       $ Agent.runCodeReviewReal Nothing (Just "test/fixtures/fix-review-agent.mjs") [if mode == "--app-job-review-changes" then "--reject" else if mode == "--app-job-review-blocked" then "--blocked" else ""]
                       $ Agent.reviewVerifiedFix request verified (liftIO . unlift . knowledge) (liftIO . unlift . calls) (liftIO . unlift . usage) (liftIO . unlift . allocations)
                   Agent.ExplainVerifiedFix store request verified -> explanationProofFixture store (if mode == "--app-job-explanation-denied" then Left "Fixture rejects explanation" else Right $ fixtureExplanation request.result) request verified
+                  Agent.ReviewSource{} -> pure $ Left "Unexpected source review"
                   Agent.ReviewPatch{} -> pure $ Left "Unexpected patch comparison"
                   Agent.ReviewRepository{} -> pure $ Left "Unexpected advisory review"
               )

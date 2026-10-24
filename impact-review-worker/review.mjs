@@ -18,11 +18,6 @@ export { agentCommand, guestTmpfs } from './workspace.mjs';
 
 const exec = promisify(execFile);
 const sha = z.string().regex(/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/);
-export const reviewGrounding = 'Ground external API compatibility claims in the specified library/runtime version and its actual signature or implementation. For claims about changed incidental behavior, establish user impact through a concrete caller or documented contract. Do not turn an unverified contract assumption into a finding.';
-export const regressionParameters = {
-  script: Type.String({ minLength: 1, maxLength: 65536, description: 'Bash command exercising the actual repository code. A failed regression assertion must exit nonzero and emit failureMessage; merely catching and printing an error is not an assertion. Keep setup diagnostics on stdout/stderr, or print redirected logs when setup fails: verifier VMs are discarded after execution. Do not fabricate a failure or replace the implementation under test.' }),
-  failureMessage: Type.String({ minLength: 1, maxLength: 200, description: 'Exact case-sensitive literal substring emitted by the failing assertion on stdout or stderr, not a prose summary or the expected successful output. Inspect the test or failure log first. Never use a setup/dependency error as the assertion.' }),
-};
 export const reviewRequest = z.object({
   projectId: z.uuid(), repository: z.string().min(1), base: sha, head: sha,
   gitToken: z.string(), prompt: z.string(), model: z.string().min(1),
@@ -35,7 +30,7 @@ export const guestPath = (input, cwd) => {
   return z.string().refine((value) => !value.includes('\0'), 'File paths cannot contain NUL bytes').parse(path);
 };
 
-export async function lockWorkspace(vm, cwd, signal) {
+async function lockWorkspace(vm, cwd, signal) {
   for (const command of [
     ['/usr/bin/git', 'config', '--system', '--add', 'safe.directory', cwd],
     ['/bin/chown', '-hR', '0:0', cwd],
