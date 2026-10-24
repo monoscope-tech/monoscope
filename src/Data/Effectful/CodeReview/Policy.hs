@@ -193,7 +193,7 @@ schema role = \case
       ]
   where
     uuid = text & O.format ?~ "uuid"
-    testFiles = ("testFiles", array 1 100 $ object [("path", bounded 1 (Just 4096) & O.description ?~ "Ordinary repository-relative path; no traversal, backslashes or .git components."), ("content", text & O.maxLength ?~ 262144)])
+    testFiles = ("testFiles", array 1 100 $ object [("path", bounded 1 (Just 4096) & O.description ?~ "Ordinary repository-relative path; no traversal, backslashes or .git components."), ("content", text & O.maxLength ?~ 262144 & O.description ?~ "Complete UTF-8 contents. All testFiles together must fit 256 KiB of UTF-8 bytes; the generated Git patch must also fit 256 KiB.")])
     patch = bounded 1 (Just 262144) & O.description ?~ "Unified Git diff accepted by git apply (diff --git, ---/+++ paths and @@ hunks), containing test/fixture changes only. Do not use *** Begin Patch or *** Add File syntax. Git infers hunk line counts from the patch body."
     rationale = bounded 1 (Just 1200) & O.pattern ?~ "\\S"
     visual limit = bounded 1 (Just limit) & O.pattern ?~ "^(?=[\\s\\S]*\\S)[^\\x00-\\x08\\x0b-\\x1f\\x7f]+$"

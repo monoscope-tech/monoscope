@@ -1452,14 +1452,17 @@ spec = around withTestResources $ describe "Production impact reviews" do
     let executable = AE.object ["script" AE..= ("./executable.sh" :: Text), "failureMessage" AE..= ("retry token was lost" :: Text), "testFiles" AE..= V.singleton (AE.object ["path" AE..= ("executable.sh" :: Text), "content" AE..= ("#!/bin/bash\n" <> content)])]
     (_, executableRows, _) <- runWith 8 executable Nothing
     statuses executableRows `shouldReturn` ["failed", "passed"]
-    beforeGeneration <- git ["status", "--porcelain=v1"]
-    for_ @[] ["linked-test", "linked-test/outside", "runtime.sh"] \path -> do
+    let nested = AE.object ["script" AE..= ("cmp <(printf '\\000\\316\\273') tests/generated/fixture.bin && bash tests/generated/regression.sh" :: Text), "failureMessage" AE..= ("retry token was lost" :: Text), "testFiles" AE..= V.fromList [AE.object ["path" AE..= path, "content" AE..= body] | (path, body) <- [("tests/generated/regression.sh", content), ("tests/generated/fixture.bin", "\NULλ")] :: [(Text, Text)]]]
+    (_, nestedRows, _) <- runWith 9 nested Nothing
+    statuses nestedRows `shouldReturn` ["failed", "passed"]
+    git ["status", "--porcelain=v1"] `shouldReturn` ""
+    for_ @[] [("linked-test", "not a test"), ("linked-test/outside", "not a test"), ("runtime.sh", "retry_token() { printf 'dropped\\n'; }\n")] \(path, body) -> do
       source <- readFileBS (repository </> "runtime.sh")
-      files <- parse AE.parseJSON $ AE.toJSON $ V.singleton $ AE.object ["path" AE..= (path :: Text), "content" AE..= (if path == "runtime.sh" then "retry_token() { printf 'dropped\\n'; }\n" else "not a test" :: Text)]
+      files <- parse AE.parseJSON $ AE.toJSON $ V.singleton $ AE.object ["path" AE..= (path :: Text), "content" AE..= (body :: Text)]
       rejected <- Workspace.renderTestPatch repository base files
       isLeft rejected `shouldBe` True
       readFileBS (repository </> "runtime.sh") `shouldReturn` source
-    git ["status", "--porcelain=v1"] `shouldReturn` beforeGeneration
+    git ["status", "--porcelain=v1"] `shouldReturn` ""
     listDirectory (directory </> "outside") `shouldReturn` []
     let shortHeader = encodeUtf8 $ unlines $ map (\line -> if "@@ " `T.isPrefixOf` line then "@@ -0,0 +1,1 @@" else line) $ lines $ decodeUtf8 @Text testPatch
     (_, recounted, _) <- run 6 "bash regression.sh" shortHeader
