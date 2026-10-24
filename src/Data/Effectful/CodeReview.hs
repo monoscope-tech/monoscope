@@ -377,10 +377,10 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
                         BS.hPut handle bytes
                         hFlush handle
                         copy path destination
-                      stats <- ExceptT $ execute Supervisor $ "/usr/bin/git" :| ["apply", "--numstat", "-z", "/run/monoscope-admission.patch"]
+                      stats <- ExceptT $ execute Supervisor $ "/usr/bin/git" :| ["apply", "--recount", "--numstat", "-z", "/run/monoscope-admission.patch"]
                       let paths = filter (not . T.null) $ T.splitOn "\0" stats
                       unless (not (null paths) && length paths <= 100) $ throwE "Regression patch requires between one and 100 paths"
-                      void $ ExceptT $ execute Supervisor $ "/usr/bin/git" :| ["-c", "core.hooksPath=/dev/null", "apply", "--index", "/run/monoscope-admission.patch"]
+                      void $ ExceptT $ execute Supervisor $ "/usr/bin/git" :| ["-c", "core.hooksPath=/dev/null", "apply", "--recount", "--index", "/run/monoscope-admission.patch"]
                       void $ ExceptT $ execute Supervisor $ "/bin/chmod" :| ["0444", "/run/monoscope-admission.patch", "/run/monoscope-admission.json"]
                       protectWorkspace
                     capturePatch base = runExceptT do
@@ -453,7 +453,7 @@ runCodeReviewReal artifactStore executable skills = interpret \env -> \case
                                 io $ copy (checks </> toString receipt.checkId.toText </> "test.patch") "/run/monoscope-admitted-test.patch"
                                 case receipt.regression of
                                   Just RetainedTest{} -> pass
-                                  _ -> root $ "/usr/bin/git" :| ["-c", "core.hooksPath=/dev/null", "apply", "--index", "/run/monoscope-admitted-test.patch"]
+                                  _ -> root $ "/usr/bin/git" :| ["-c", "core.hooksPath=/dev/null", "apply", "--recount", "--index", "/run/monoscope-admitted-test.patch"]
                                 root $ "/bin/chown" :| ["-hR", "1000:1000", "/workspace"]
                                 advance $ Reproduced artifact
                                 pure $ describe "Regression reproduced and frozen. Source editing is now available." result

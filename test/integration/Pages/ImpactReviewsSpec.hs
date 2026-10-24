@@ -354,7 +354,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
           for_ results (parse (field "content") >=> \text -> modifyIORef' investigated (<> [text]))
           decision <- readIORef verdict
           pure $ case length results of
-            0 -> SdkTool "bash" (AE.object ["command" AE..= ("set -eu; id -u; test ! -w /run/monoscope-admission.patch; test ! -w /run/monoscope-admission.json; git diff --cached --name-only; cat runtime.sh /run/monoscope-admission.json; printf forbidden > runtime.sh" :: Text)])
+            0 -> SdkTool "bash" (AE.object ["command" AE..= ("set -eu; id -u; test ! -w /run/monoscope-admission.patch; test ! -w /run/monoscope-admission.json; git diff --cached --no-ext-diff --no-textconv; cat runtime.sh /run/monoscope-admission.json; printf forbidden > runtime.sh" :: Text)])
             1 -> SdkTool "submit_admission" (AE.object ["tag" AE..= decision, "contents" AE..= ("The regression calls the actual retry_token runtime and checks the issue's caller token." :: Text)])
             _ -> SdkText "Fixture finished."
     withSdkModel directory "admission-fixture" next \models requests -> do
@@ -413,6 +413,11 @@ spec = around withTestResources $ describe "Production impact reviews" do
       (production, _, _, _) <- run 6 True admission{Agent.artifact = admission.artifact{Agent.testPatch = productionPatch}}
       checkDecision "Rejected" production
       writeIORef verdict "Admitted"
+      writeIORef investigated []
+      let shortHeader = unlines $ map (\line -> if "@@ " `T.isPrefixOf` line then "@@ -0,0 +1,1 @@" else line) $ lines testPatch
+      (recounted, _, _, _) <- run 13 True admission{Agent.artifact = admission.artifact{Agent.testPatch = shortHeader}}
+      checkDecision "Admitted" recounted
+      readIORef investigated >>= (`shouldSatisfy` T.isInfixOf "\n+[ \"$(retry_token original)\" = original ]") . T.intercalate "\n"
       writeFileBS (repository </> "existing-regression.sh") regression
       void $ git ["add", "."]
       existingPatch <- git ["diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv"]
@@ -476,7 +481,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     base <- T.strip <$> git ["rev-parse", "HEAD"]
     writeFileBS (repository </> "regression.sh") testSource
     void $ git ["add", "regression.sh"]
-    testPatch <- git ["diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv"]
+    testPatch <- unlines . map (\line -> if "@@ " `T.isPrefixOf` line then "@@ -0,0 +1,1 @@" else line) . lines <$> git ["diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv"]
     void $ git ["reset", "--hard", toString base]
     writeFileBS scriptFile "test -f runtime.sh"
     writeFileLBS requestFile $ AE.encode $ AE.object ["projectId" AE..= testPid, "repository" AE..= repository, "base" AE..= base]
@@ -758,6 +763,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
         [ SdkTool "bash" $ AE.object ["command" AE..= ("set -eu; test ! -e golden-private.txt; test ! -w runtime.sh; test \"$(cat .prepared-proof)\" = dependencies-ready; git show " <> base <> ":runtime.sh; cat runtime.sh")]
         , SdkTool "submit_review" $ draft "runtime.sh" 200
         , SdkTool "submit_review" $ draft "runtime.sh" 1
+        , SdkTool "run_regression" $ AE.object ["script" AE..= regression, "failureMessage" AE..= ("retry token lost" :: Text), "testPatch" AE..= ("not a patch" :: Text)]
         , check "The runtime loses its caller token"
         , check "retry token lost"
         , SdkTool "submit_review" $ draft "runtime.sh" 1
@@ -767,10 +773,10 @@ spec = around withTestResources $ describe "Production impact reviews" do
       accepted harness
       map (isRight . (.validation)) harness.submissions `shouldBe` [False, True, True]
       traverse (parse (field "candidate" >=> field "tag") . AE.toJSON) harness.submissions `shouldReturn` replicate 3 ("Structured" :: Text)
-      map (.status) harness.checks `shouldBe` [Agent.Passed, Agent.Blocked, Agent.Passed, Agent.Failed]
-      map (AE.toJSON . (.workspace)) harness.checks `shouldBe` replicate 4 (AE.toJSON fingerprint)
-      map (.attemptId) harness.checks `shouldBe` replicate 4 harness.attemptId
-      length harness.usage `shouldBe` 7
+      map (.status) harness.checks `shouldBe` [Agent.Blocked, Agent.Blocked, Agent.Passed, Agent.Blocked, Agent.Passed, Agent.Failed]
+      map (AE.toJSON . (.workspace)) harness.checks `shouldBe` replicate 6 (AE.toJSON fingerprint)
+      map (.attemptId) harness.checks `shouldBe` replicate 6 harness.attemptId
+      length harness.usage `shouldBe` 8
       length <$> requests `shouldReturn` callsBefore + length harness.usage
       harness.usage `shouldSatisfy` all (\receipt -> receipt.attemptId == harness.attemptId && receipt.succeeded && maybe False (> 0) receipt.costNanousd && receipt.callId `elem` map (Just . (.id)) harness.calls)
       map Agent.allocationAttempt harness.allocations `shouldBe` [harness.attemptId]
@@ -779,7 +785,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
       let reply identifier = maybe (fail $ "Missing tool reply " <> toString identifier) (parse $ field "content") $ find (\value -> AET.parseEither (field "tool_call_id") value == Right identifier) results
       reply "tool-0" >>= (`shouldSatisfy` T.isInfixOf "dropped")
       reply "tool-1" >>= (`shouldSatisfy` T.isInfixOf "outside the file")
-      mismatched <- reply "tool-3" >>= either fail pure . AE.eitherDecodeStrict @AE.Value . encodeUtf8
+      reply "tool-3" >>= (`shouldSatisfy` T.isInfixOf "Git diff")
+      mismatched <- reply "tool-4" >>= either fail pure . AE.eitherDecodeStrict @AE.Value . encodeUtf8
       reason <- parse (field "results") mismatched >>= maybe (fail "Missing counterfactual result") pure . find (\value -> AET.parseEither (field "side") value == Right ("head" :: Text)) >>= parse (field "reason")
       for_ @[] ["case-sensitive literal", "The runtime loses its caller token", "full log"] \message -> reason `shouldSatisfy` T.isInfixOf message
       readFileBS (repository </> "runtime.sh") `shouldReturn` "retry_token() { printf 'dropped\\n'; }\n"
@@ -1433,12 +1440,18 @@ spec = around withTestResources $ describe "Production impact reviews" do
     parse (field "testPatchSha256") report `shouldReturn` sha testPatch
     fingerprints <- traverse (parse $ field "testFilesSha256") rows :: IO [Text]
     length (ordNub fingerprints) `shouldBe` 1
+    let shortHeader = encodeUtf8 $ unlines $ map (\line -> if "@@ " `T.isPrefixOf` line then "@@ -0,0 +1,1 @@" else line) $ lines $ decodeUtf8 @Text testPatch
+    (_, recounted, _) <- run 6 "bash regression.sh" shortHeader
+    statuses recounted `shouldReturn` ["failed", "passed"]
+    traverse (parse $ field "testFilesSha256") recounted `shouldReturn` fingerprints
     let frozen = "{\"script\":\"bash regression.sh\",\"testPatch\":" <> toStrict (AE.encode $ decodeUtf8 @Text testPatch) <> ",\"failureMessage\":\"retry token was lost\"}"
     AE.toJSON (map (.regression) receipts) `shouldBe` AE.toJSON ([Just $ Agent.InjectedTest $ sha frozen, Just $ Agent.RetainedTest $ sha frozen] :: [Maybe Agent.Regression])
     (_, mutated, _) <- run 3 "printf weakened > regression.sh" testPatch
     statuses mutated `shouldReturn` ["invalidated", "invalidated"]
-    (_, invalid, _) <- run 3 "exit 0" "not a patch"
+    (_, invalid, invalidReceipts) <- run 3 "exit 0" "not a patch"
     statuses invalid `shouldReturn` ["blocked", "blocked"]
+    traverse (parse $ field "reason") invalid >>= (`shouldSatisfy` all (T.isInfixOf "Git diff"))
+    map (.exitCode) invalidReceipts `shouldBe` [Nothing, Nothing]
     exhausted <- runEff $ Workspace.runWorkspaceReal $ Workspace.runRegression (Workspace.RegressionOptions artifacts repository (toText image) bridge) (directory </> "request.json")
     leftToMaybe (first Workspace.regressionErrorText exhausted) `shouldBe` Just "Local check comparison budget is exhausted"
     void $ git ["rm", "--quiet", "regression.sh"]

@@ -880,10 +880,12 @@ runWorkspaceReal = interpret $ \env -> \case
               let logPath = directory </> (if side == Base then "base.log" else "head.log")
                   change f = modifyIORef' observation f >> readIORef observation >>= update key
                   checked :: RPC -> NonEmpty Text -> IO Text
-                  checked rpc argv = do
+                  checked = checkedWith "Verifier preparation failed"
+                  checkedWith :: Text -> RPC -> NonEmpty Text -> IO Text
+                  checkedWith message rpc argv = do
                     result <- rpc @Execution $ Execute $ GuestCommand argv (Just "/") False
                     unless (result.exitCode == 0) do
-                      change $ \measured -> measured{reason = Just "Verifier preparation failed"}
+                      change $ \measured -> measured{reason = Just message}
                       invalid
                     pure result.stdout
                   copy :: RPC -> FilePath -> Text -> IO ()
@@ -913,17 +915,17 @@ runWorkspaceReal = interpret $ \env -> \case
                 void $ checked rpc $ guestGit ["checkout", "--quiet", "--detach", revisionText revision]
                 for_ artifact.testPatch \_ -> do
                   copy rpc (directory </> "test.patch") "/run/monoscope-test.patch"
-                  stats <- checked rpc $ guestGit ["apply", "--numstat", "-z", "/run/monoscope-test.patch"]
+                  stats <- checkedWith "Could not inspect the retained Git diff. Supply a unified Git patch with diff --git, ---/+++ and @@ headers; apply_patch markers are unsupported. No repository assertion ran." rpc $ guestGit ["apply", "--recount", "--numstat", "-z", "/run/monoscope-test.patch"]
                   paths <- traverse (\entry -> case T.splitOn "\t" entry of _ : _ : path | not (null path) -> pure $ T.intercalate "\t" path; _ -> invalid) $ filter (not . T.null) $ T.splitOn "\0" stats
                   ensure $ not (null paths) && length paths <= 100
                   privateWrite (directory </> "test-paths") $ encodeUtf8 $ T.intercalate "\0" paths <> "\0"
                   copy rpc (directory </> "test-paths") "/run/monoscope-test-paths"
-                  applicable <- rpc @Execution $ Execute $ GuestCommand (guestGit ["apply", "--index", "--check", "/run/monoscope-test.patch"]) (Just "/") False
+                  applicable <- rpc @Execution $ Execute $ GuestCommand (guestGit ["apply", "--recount", "--index", "--check", "/run/monoscope-test.patch"]) (Just "/") False
                   placement <-
                     if applicable.exitCode == 0
-                      then checked rpc (guestGit ["apply", "--index", "/run/monoscope-test.patch"]) $> Injected
+                      then checked rpc (guestGit ["apply", "--recount", "--index", "/run/monoscope-test.patch"]) $> Injected
                       else do
-                        retained <- rpc @Execution $ Execute $ GuestCommand (guestGit ["apply", "--index", "--reverse", "--check", "/run/monoscope-test.patch"]) (Just "/") False
+                        retained <- rpc @Execution $ Execute $ GuestCommand (guestGit ["apply", "--recount", "--index", "--reverse", "--check", "/run/monoscope-test.patch"]) (Just "/") False
                         unless (retained.exitCode == 0) do
                           change $ \measured -> measured{reason = Just "Frozen test patch neither applies nor matches this revision"}
                           invalid
