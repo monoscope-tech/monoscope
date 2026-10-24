@@ -1447,7 +1447,14 @@ spec = sequential $ aroundAll withTestResources do
         (w.title,) <$> runQueryEffect tr (Charts.queryMetrics Nothing (Just $ dataType w.wType) (Just projectId) w.query w.sql Nothing (Just from) (Just to) Nothing Nothing [])
       [(title, m.error) | (title, m) <- results, isJust m.error] `shouldBe` []
       let table title = maybe V.empty (.dataText) $ lookup (Just title) results
-      table "Core Web Vitals" `shouldBe` V.singleton (V.fromList ["LCP", "2500 ms", "rating;success-strong⇒Good", "1000 – 2500", "16"])
+      V.map (V.take 5) (table "Core Web Vitals") `shouldBe` V.singleton (V.fromList ["LCP", "2500 ms", "rating;success-strong⇒Good", "1000 – 2500", "16"])
+      -- Abbreviations explain themselves on hover: the row's hidden description on the cell,
+      -- the column's on its header.
+      vitals <- maybe (fail "missing Core Web Vitals") pure $ find ((== Just "Core Web Vitals") . (.title)) (DashboardModel.allWidgets rum)
+      let vitalsHtml = toStrict $ renderText $ Widget.renderTableWithDataAndParams vitals (table "Core Web Vitals") []
+      vitalsHtml `shouldSatisfy` T.isInfixOf "data-tippy-content=\"Largest Contentful Paint: when the main content becomes visible."
+      vitalsHtml `shouldSatisfy` T.isInfixOf "aria-description=\"Real-user observations in the selected window.\""
+      vitalsHtml `shouldNotSatisfy` T.isInfixOf ">About<"
       sort [name | row <- V.toList $ table "Browsers, systems and devices", row V.!? 0 == Just "Device", Just name <- [row V.!? 1]] `shouldBe` ["Desktop", "Mobile"]
       sort (V.toList $ V.mapMaybe (V.!? 0) $ table "Top pages") `shouldBe` ["/cart", "/orders/:id"]
       -- Each page row's hidden Explorer query finds the events it counted, and the rendered

@@ -443,6 +443,8 @@ data TableColumn = TableColumn
   , progressVariant :: Maybe Text -- "default", "info", "error", etc.
   , columnType :: Maybe ColumnType -- default CTText
   , hidden :: Maybe Bool -- Carried for links (@{{row.<field>}}@) but not rendered
+  , description :: Maybe Text -- Header tooltip, e.g. what an abbreviation stands for
+  , tooltip :: Maybe Text -- Cell tooltip; a template over @{{row.<field>}}@
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
@@ -1155,7 +1157,9 @@ sortableTableHead_ widget selected =
             | selected == Just ("-" <> col.field) = ("desc", "descending", "↓")
             | otherwise = ("none", "none", "↕") :: (Text, Text, Text)
           sortable = sortableColumn widget col
-      th_ [class_ $ "text-left bg-bgRaised sticky top-0 " <> fromMaybe "" col.align, term "aria-sort" ariaSort]
+          -- A dotted underline marks a header that explains itself on hover.
+          title = span_ [class_ "underline decoration-dotted decoration-strokeStrong underline-offset-4" | isJust col.description] $ toHtml col.title
+      th_ ([class_ $ "text-left bg-bgRaised sticky top-0 " <> fromMaybe "" col.align, term "aria-sort" ariaSort] <> foldMap (\d -> [term "data-tippy-content" d, term "aria-description" d]) col.description)
         $ if sortable
           then button_
             [ type_ "button"
@@ -1172,9 +1176,9 @@ sortableTableHead_ widget selected =
                 |]
             ]
             $ headerRow_ [] do
-              toHtml col.title
+              title
               span_ [class_ "sort-arrow ml-1 text-iconNeutral"] $ toHtml glyph
-          else headerRow_ [] $ toHtml col.title
+          else headerRow_ [] title
 
 
 renderTable :: Widget -> Html ()
@@ -1632,7 +1636,7 @@ renderTableWithDataAndParams widget dataRows params = do
           )
           $ ifor_ columns \idx col ->
             unless (or col.hidden)
-              $ td_ [class_ $ cellClass col]
+              $ td_ ([class_ $ cellClass col] <> [term "data-tippy-content" (replacePlaceholders rowSubs t) | Just t <- [col.tooltip]])
               $ if isJust col.progress
                 then renderProgressCell col (getRowValue idx row) maxValues valueWidths
                 else renderLongTextOr widget cellLinkSubs col (getRowValue idx row)

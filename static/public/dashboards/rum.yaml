@@ -106,6 +106,7 @@ tabs:
             progress: column_percent
           - field: p75_ms
             title: P75
+            description: "75th percentile page-load duration: three in four loads were at least this fast."
             column_type: duration
             unit: ms
           - field: kql
@@ -180,16 +181,24 @@ tabs:
         columns:
           - field: vital
             title: Vital
+            tooltip: '{{row.about}}'
           - field: p75
             title: P75
+            description: "75th percentile: three in four page loads were at least this fast. ≈ marks an estimate inside a bucket that crosses a threshold."
           - field: rating
             title: Rating
+            description: Against Google's field thresholds. "Likely" ratings come from an estimate, not the bucket alone.
           - field: bucket
             title: Known range
+            description: The histogram bucket the P75 falls in. The browser SDK's bucket edges decide how precise this can be.
           - field: samples
             title: Samples
+            description: Real-user observations in the selected window.
             column_type: number
             progress: column_percent
+          - field: about
+            title: About
+            hidden: true
         query: &metrics_app 'metrics | where "{{var-app}}" == "" or resource.service.name == "{{var-app}}"'
         sql: |
           WITH points AS (
@@ -227,12 +236,17 @@ tabs:
               WHEN NOT estimable THEN 'rating;info-weak⇒Buckets too coarse to rate' WHEN value <= good THEN 'rating;success-weak⇒Likely good' WHEN value > poor THEN 'rating;error-weak⇒Likely poor'
               ELSE 'rating;warning-weak⇒Likely needs improvement' END AS rating,
             COALESCE(lo, 0)::text || ' – ' || COALESCE(le::text, '∞') AS bucket,
-            total::text AS samples
+            total::text AS samples,
+            CASE vital WHEN 'lcp' THEN 'Largest Contentful Paint: when the main content becomes visible. Good ≤ 2.5 s, poor > 4 s.'
+              WHEN 'inp' THEN 'Interaction to Next Paint: how quickly the page responds to clicks, taps and keys. Good ≤ 200 ms, poor > 500 ms.'
+              WHEN 'cls' THEN 'Cumulative Layout Shift: how much content moves while loading. Good ≤ 0.1, poor > 0.25.'
+              WHEN 'fcp' THEN 'First Contentful Paint: when the first text or image appears. Good ≤ 1.8 s, poor > 3 s.'
+              ELSE 'Time to First Byte: server and network time before the page starts arriving. Good ≤ 800 ms, poor > 1.8 s.' END AS about
           FROM rated ORDER BY CASE vital WHEN 'lcp' THEN 1 WHEN 'inp' THEN 2 WHEN 'cls' THEN 3 WHEN 'fcp' THEN 4 ELSE 5 END
 
       - type: timeseries_line
         title: P75 over time
-        description: Millisecond vitals. CLS is unitless and shown in the table above.
+        description: P75 per interval for LCP (main content visible), INP (response to input), FCP (first content) and TTFB (first byte). CLS is unitless and shown in the table above.
         layout: { w: 12, h: 5 }
         unit: ms
         query: *metrics_app
@@ -264,14 +278,19 @@ tabs:
         columns:
           - field: page
             title: Page
+            description: Page URL with ids masked, so one route groups its variants.
           - field: lcp
             title: LCP
+            description: Largest Contentful Paint, P75. When the main content becomes visible. Good ≤ 2.5 s, poor > 4 s.
           - field: inp
             title: INP
+            description: Interaction to Next Paint, P75. How quickly the page responds to input. Good ≤ 200 ms, poor > 500 ms.
           - field: cls
             title: CLS
+            description: Cumulative Layout Shift, P75. How much content moves while loading. Good ≤ 0.1, poor > 0.25.
           - field: samples
             title: Samples
+            description: Real-user observations across these three vitals.
             column_type: number
             progress: column_percent
         query: *metrics_app
@@ -396,6 +415,7 @@ tabs:
             progress: column_percent
           - field: errored
             title: Errored
+            description: Sessions with at least one browser error.
             column_type: number
         query: *app
         sql: |
