@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { cp, mkdtemp, mkdir, open, rm } from 'node:fs/promises';
+import { cp, mkdtemp, mkdir, open, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, posix, relative } from 'node:path';
 import { constants, createReadStream } from 'node:fs';
@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import {
   createAgentSession, createBashToolDefinition, createReadToolDefinition, createEditToolDefinition, createWriteToolDefinition,
   DefaultResourceLoader, loadSkills, SessionManager, SettingsManager,
+  detectSupportedImageMimeTypeFromFile,
 } from '@earendil-works/pi-coding-agent';
 import { z } from 'zod';
 import { Type } from 'typebox';
@@ -233,6 +234,16 @@ export async function runRepositoryAgent(input, { modelRuntime, guestImage, expe
       operations: {
         access: (path) => vm.fs.access(path, { mode: constants.R_OK }),
         readFile: (path) => vm.fs.readFile(path),
+        async detectImageMimeType(path) {
+          const temporary = join(root, `read-header-${randomUUID()}`);
+          try {
+            // Match vm.fs mount access and Pi's 4100-byte sniff without copying the whole file.
+            const header = await vm.exec(['/usr/bin/head', '-c', '4100', '--', path], { cwd, signal });
+            if (!header.ok) throw new Error('Guest file header read failed');
+            await writeFile(temporary, header.stdoutBuffer, { mode: 0o600, flag: 'wx' });
+            return await detectSupportedImageMimeTypeFromFile(temporary);
+          } finally { await rm(temporary, { force: true }); }
+        },
       },
     })];
     if (preparedCheckout.policy.fileTools === 'modify_files') tools.push(...[createEditToolDefinition, createWriteToolDefinition].map((defineTool) => ({

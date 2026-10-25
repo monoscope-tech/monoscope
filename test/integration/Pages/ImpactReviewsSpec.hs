@@ -179,7 +179,7 @@ withSdkProvider directory provider next action = do
             respond $ Wai.responseLBS H.status200 [("Content-Type", "text/event-stream")] $ "data: " <> AE.encode response <> "\n\ndata: [DONE]\n\n"
   Warp.testWithApplication (pure app) \port -> do
     let models = directory </> "models.json"
-    writeFileLBS models $ AE.encode $ AE.object ["providers" AE..= AE.object [fromString (toString provider) AE..= AE.object ["baseUrl" AE..= ("http://127.0.0.1:" <> show @Text port <> "/v1"), "api" AE..= ("openai-completions" :: Text), "apiKey" AE..= ("fixture" :: Text), "models" AE..= V.singleton (AE.object ["id" AE..= ("fixture" :: Text), "contextWindow" AE..= (64000 :: Int), "maxTokens" AE..= (4096 :: Int), "cost" AE..= AE.object ["input" AE..= (2 :: Int), "output" AE..= (10 :: Int), "cacheRead" AE..= (1 :: Int), "cacheWrite" AE..= (0 :: Int)]])]]]
+    writeFileLBS models $ AE.encode $ AE.object ["providers" AE..= AE.object [fromString (toString provider) AE..= AE.object ["baseUrl" AE..= ("http://127.0.0.1:" <> show @Text port <> "/v1"), "api" AE..= ("openai-completions" :: Text), "apiKey" AE..= ("fixture" :: Text), "models" AE..= V.singleton (AE.object ["id" AE..= ("fixture" :: Text), "contextWindow" AE..= (64000 :: Int), "maxTokens" AE..= (4096 :: Int), "input" AE..= (["text", "image"] :: [Text]), "cost" AE..= AE.object ["input" AE..= (2 :: Int), "output" AE..= (10 :: Int), "cacheRead" AE..= (1 :: Int), "cacheWrite" AE..= (0 :: Int)]])]]]
     action models $ readIORef requests
 
 
@@ -843,7 +843,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
       observed <- jsonText <$> requests
       for_ @[] ["Private reference must", "Private grading", "query_telemetry", "recall_knowledge"] \private -> observed `shouldNotSatisfy` T.isInfixOf private
 
-  it "explores pinned SDK checkouts with skills, project memory, bounded evidence and isolated cancellation" \_tr -> CLIBinary.withCliBin \cli -> withSystemTempDirectory "native-sdk-exploration" \temporary -> do
+  it "preserves screenshot images through pinned SDK read tools, with skills, memory, bounded evidence and isolated cancellation" \_tr -> CLIBinary.withCliBin \cli -> withSystemTempDirectory "native-sdk-exploration" \temporary -> do
     available <- doesFileExist "impact-review-worker/.guest/manifest.json"
     unless available $ pendingWith "Build the self-hosted guest before running sandbox exploration tests"
     directory <- canonicalizePath temporary
@@ -889,6 +889,8 @@ spec = around withTestResources $ describe "Production impact reviews" do
     createFileLink hostSkill (repository </> ".agents/skills/host-link")
     createDirectoryIfMissing True $ repository </> ".agents/skills/file-link"
     createFileLink (hostSkill </> "SKILL.md") (repository </> ".agents/skills/file-link/SKILL.md")
+    imageBytes <- readFileBS "static/public/favicon-16x16.png"
+    writeFileBS (repository </> "review image.txt") imageBytes
     writeFileBS (repository </> "src/helper.txt") "preserve-retry-metadata\n"
     writeFileBS (repository </> "src/handler.txt") "calls helper with retry metadata\n"
     writeFileBS (repository </> "src/runtime.sh") "retry_token() { printf '%s\\n' \"$1\"; }\n"
@@ -1008,6 +1010,14 @@ spec = around withTestResources $ describe "Production impact reviews" do
       reply "tool-3" timeoutReplies >>= (`shouldSatisfy` T.isInfixOf "Command exited with code 137")
       reply "tool-3" timeoutReplies >>= (`shouldNotSatisfy` T.isInfixOf "timeout: sending signal")
       doesFileExist (repository </> "timeout-retained.txt") `shouldReturn` False
+      beforeImage <- length <$> requests
+      (imageResult, _, _, _, _, _) <- run 9 [readPath "/workspace/review image.txt", tool "submit_review" accepted]
+      isRight imageResult `shouldBe` True
+      imageRequests <- drop beforeImage <$> requests
+      imageMessages <- concat <$> traverse (parse $ field "messages") imageRequests :: IO [AE.Value]
+      let imageParts = filter (\part -> AET.parseMaybe (field "type") part == Just ("image_url" :: Text)) $ concatMap (fromMaybe [] . AET.parseMaybe (field "content")) imageMessages
+          imageUrls = mapMaybe (AET.parseMaybe $ field "image_url" >=> field "url") imageParts
+      imageUrls `shouldContain` ["data:image/png;base64," <> extractBase64 (B64.encodeBase64 imageBytes)]
       observed <- requests
       for_ observed \body -> do
         tools <- parse (field "tools") body :: IO [AE.Value]
