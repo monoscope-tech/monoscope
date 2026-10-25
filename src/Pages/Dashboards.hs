@@ -2269,7 +2269,7 @@ entrypointRedirectGetH baseTemplate title tags pid qparams = do
 -- Explorer sessions view over browser telemetry, keeping the window. Shared links from the old
 -- page (@/rum?tab=sessions&session=…@) land on the same view, narrowed to that session.
 rumRedirectH :: Projects.ProjectId -> [Text] -> [(Text, Maybe Text)] -> ATAuthCtx (Headers '[Header "Location" Text] NoContent)
-rumRedirectH pid segments params = case (segments, param "tab") of
+rumRedirectH pid segments params = case (filter (not . T.null) segments, param "tab") of
   (["sessions"], _) -> sessions
   ([], Just "sessions") -> sessions
   ([], _) -> dashboard

@@ -1502,6 +1502,8 @@ spec = sequential $ aroundAll withTestResources do
       dashboard `shouldSatisfy` T.isInfixOf "since=7D"
       location ["dashboard"] window `shouldReturn` dashboard
       sessions <- location ["sessions"] window
+      -- A trailing slash captures an empty last segment; it must not turn into a 404.
+      location ["sessions", ""] window `shouldReturn` sessions
       linkParams ("/p/" <> testPid.toText <> "/log_explorer") ("href=\"" <> sessions <> "\"") `shouldBe` [[("since", "7D"), ("viz_type", "sessions"), ("query", browserKql)]]
       -- A link shared from the old page lands on that session, not the dashboard.
       legacy <- location [] [("tab", Just "sessions"), ("session", Just "abc")]
