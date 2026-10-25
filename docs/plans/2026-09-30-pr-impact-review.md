@@ -920,15 +920,16 @@ Do not promote the skill unchanged. Treatment requested eleven dependency copies
 
 The study cost $0.37738846 in SDK inference estimates: 137 calls matched to 137 responses, with no unresolved starts or unpriced model responses. Reconciliation of the recorded research cohort now covers 551 matched calls/responses across 47 runs, totaling $1.28858677. This is not all-time account spend or a provider invoice. Preparation, storage and other infrastructure remain unpriced; nothing is charged to customers. Study containers and temporary model credentials were removed. The comparison uses the shared chart CLI's `table` mode and `slack` profile.
 
-
 ### Native tools and prompt experiment — 2026-10-25
 
-Advisory review code already uses a persistent private workspace. [PR #704](https://github.com/monoscope-tech/monoscope/pull/704) adds native edit/write tools under Haskell policy. The Source evaluation keeps its protected checkout.
+Advisory review code already uses a persistent private workspace. [PR #704](https://github.com/monoscope-tech/monoscope/pull/704) adds native edit/write tools under Haskell policy. [PR #705](https://github.com/monoscope-tech/monoscope/pull/705) restores native Pi guidance and shares the Haskell response schema. Source protection, reproduction requirements and typed validation remain enforced.
 
-[Pi 1.4.0](https://github.com/earendil-works/pi/blob/v1.4.0/packages/coding-agent/src/core/system-prompt.ts) omits native tool guidance when a custom base prompt replaces its default prompt. The current prototype appends the existing Haskell policy. Deterministic SDK checks pass, including source protection and reproduction before edits.
+![Two stopped development probes](https://github.com/user-attachments/assets/ea3e38ec-d844-4f4d-a738-63cc04fff067)
 
-The protocol planned one pair for each of three cached development PRs. Both initial patch controls returned `coverage` as an object. Haskell requires an array. The frozen stop rule ended scheduling after two trials. Both agent runs completed, but four trials never started. This incomplete comparison establishes no prompt-related quality gain.
+The two development protocols stopped before complete pairing. The first stopped on two coverage-shape errors. The follow-up stopped on one invalid changed-line citation. All six started agent reviews completed. No review-quality gain is established.
 
-All 35 provider calls matched priced usage receipts. The probe estimate is $0.13015853. The cohort now covers 51 runs and 586 matching calls/responses, estimating $1.41874530. Provider invoices remain unreconciled. Infrastructure remains unpriced. Customers received no charges.
+The probes used 130 matching provider call/usage pairs and estimated $0.38796052. The recorded cohort now contains 681 pairs across 59 runs, estimating $1.67654729. These are SDK model estimates. Provider invoices remain unreconciled. Infrastructure remains unpriced. Customers received no charges.
 
-Cleanup removed both sandboxes and the temporary credential file. The patch prompt now includes the existing Haskell submission schema. A permanent SDK regression failed before this correction and passed afterward. A new protocol will repeat the comparison with this common correction. The original failures and costs remain in the record. Results, protocols and receipts are in `scripts/local/impact-quality-native-20261025/pi-guidance-study/`.
+Cleanup removed the study containers and temporary credential files. The comparisons used explicit synthetic evidence. Live telemetry and memory callbacks were unavailable. Both stopped protocols remain under `scripts/local/impact-quality-native-20261025/`. Next, the Haskell evaluator needs explicit mode selection for an agent-to-agent comparison.
+
+[Pi 1.4.0](https://github.com/earendil-works/pi/blob/v1.4.0/packages/coding-agent/src/core/system-prompt.ts) supplies native tool guidance. [Aider](https://aider.chat/docs/repomap.html) ranks repository symbols within a token budget. [SWE-agent](https://github.com/SWE-agent/SWE-agent/blob/main/docs/background/aci.md) describes bounded file views and clear edit failures. This patch reuses Pi. Further retrieval changes require measurement.
