@@ -1419,6 +1419,8 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = do
             Settings.notifyPlanChange envCfg project (ET.planUpgradedEmail productName)
           _ -> addErrorToast "Something went wrong while fetching subscription id" Nothing
       Nothing -> do
+        -- Free clears sub_id below; cancel first, or the provider keeps billing a sub nothing points at.
+        whenJustM (Projects.projectById pid) (Settings.cancelProjectSubscription envCfg)
         _ <- updatePricing "Free" "" "" ""
         auditPlan ("Free" :: Text)
         handleOnboarding
