@@ -359,14 +359,26 @@ run_body() { # <check>
     unit-tests) if [ -n "${CI_UNIT_BIN:-}" ]; then "$CI_UNIT_BIN"; else cabal test unit-tests -j $CABAL_FLAGS "$CABAL_OPTS" --test-show-details=direct; fi ;;
     cli-tests)  if [ -n "${CI_CLI_BIN:-}" ]; then "$CI_CLI_BIN"; else cabal test monoscope-cli:cli-tests -j $CABAL_FLAGS "$CABAL_OPTS" --test-show-details=direct; fi ;;
     weeder)
+      # dist-newstyle is shared with other branches' checkouts, so it can hold .hie files for
+      # modules this tree lacks (reported dead) and lack them for modules it has (GHC can
+      # recompile a module without rewriting its .hie, hiding every reference it makes).
+      srcs=$(git ls-files '*.hs' | sed -E 'h; s#^(src|shared/src|cli/exe|cli/test|cli|test/[a-z]+|app)/##; s#\.hs$##; G; s#\n# #')
+      src_of() { printf '%s\n' "$srcs" | awk -v m="$1" '$1 == m { print $2; exit }'; }
+      cabal build integration-tests unit-tests -j $CABAL_FLAGS "$CABAL_OPTS"
+      find dist-newstyle -name '*.o' | while read -r o; do
+        b=${o%%-tmp/*}-tmp; [ "$b" = "$o-tmp" ] && b=${o%/build/*}/build
+        m=${o#"$b"/}; m=${m%.o}
+        # cabal skips GHC while its sources hash the same, so drop its build stamp too.
+        if [ -d "$b/extra-compilation-artifacts/hie" ] && [ ! -e "$b/extra-compilation-artifacts/hie/$m.hie" ] && [ -n "$(src_of "$m")" ]; then
+          rm -f "${b%/build*}/cache/build" "$b/$m".{o,hi,dyn_o,dyn_hi}
+        fi
+      done
       cabal build integration-tests unit-tests -j $CABAL_FLAGS "$CABAL_OPTS"
       command -v weeder >/dev/null 2>&1 || cabal install weeder --install-method=copy --installdir=/usr/local/bin --overwrite-policy=always
-      # A restored dist-newstyle keeps .hie files of deleted modules, which weeder reports as dead.
-      mods=$(git ls-files '*.hs' | sed -E 's#^(src|shared/src|cli/exe|cli/test|cli|test/[a-z]+|app)/##; s#\.hs$##')
       find dist-newstyle -name '*.hie' | while read -r f; do
         m=${f%.hie}; m=${m##*/build/}; m=${m##*/hie/}; m=${m##*-tmp/}
         case $m in Proto/* | Paths_* | */autogen/*) continue ;; esac
-        printf '%s\n' "$mods" | grep -qxF "$m" || rm -f "$f"
+        [ -n "$(src_of "$m")" ] || rm -f "$f"
       done
       weeder --config weeder.toml --hie-directory dist-newstyle
       ;;
@@ -602,7 +614,7 @@ cmd_gc() {
 
 COMPOSE_FILE=ci/compose.yml
 COMPOSE_PROJECT="monoscope-ci-$(printf '%s' "$ROOT" | sha256 | cut -c1-12)"
-SHARED_VOLUMES=(monoscope-ci_cabal monoscope-ci_npm monoscope-ci_playwright)
+SHARED_VOLUMES=(monoscope-ci_cabal monoscope-ci_npm monoscope-ci_dist monoscope-ci_playwright)
 compose() {
   local v; for v in "${SHARED_VOLUMES[@]}"; do docker volume create "$v" >/dev/null; done
   docker compose -f "$COMPOSE_FILE" --project-name "$COMPOSE_PROJECT" "$@"
@@ -612,9 +624,8 @@ compose() {
 collect_host() { [ -n "$1" ] || return 0; local r=0; wait "$1" || r=$?; cat "$2"; rm -f "$2"; return "$r"; }
 
 cmd_local() {
-  # Serialize local runs: they oversubscribe the host, and every checkout shares
-  # the cabal store (`shell` takes no lock, so a hand build there can race a run).
-  # Each worktree keeps its own dist so another branch cannot replace its HIE files.
+  # Serialize local runs: they oversubscribe the host, and every checkout shares the
+  # cabal store and dist (`shell` takes no lock, so a hand build there can race a run).
   if [ "${CI_LOCAL_LOCKED:-}" != true ]; then
     python3 -c '
 import fcntl, os, sys
