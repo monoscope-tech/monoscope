@@ -462,13 +462,16 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds inva
         !checked = [(ackId, raw, req, invalidReason req) | (ackId, raw, Right req) <- decodedMsgs]
         !invalidPoison = [(ackId, raw, err) | (ackId, raw, _, Just err) <- checked]
         !converted = [(ackId, raw, req, convert fallbackTime projectCachesMap keyToIdMap req) | (ackId, raw, req, Nothing) <- checked]
-        -- An unresolved API key poisons the whole payload (2026-07-27: acking one lost ~200k rows);
-        -- capped data comes from resolved keys and is acked. at-project-ids always get a cache
-        -- ('fetchIngestCaches'), so keys are the only thing that can fail to resolve.
+        -- DLQ, never ack, a payload naming an unresolved project, or one converting to zero rows
+        -- unless every project it names is capped (2026-07-27: an ack lost ~200k rows).
         !dropPoison =
-          [ (ackId, raw, "unresolved project: payload names an API key that did not resolve")
-          | (ackId, raw, req, _) <- converted
-          , V.any (not . (`HM.member` keyToIdMap)) (extractKeys req)
+          [ (ackId, raw, "unresolved project: payload carried telemetry but did not resolve or convert")
+          | (ackId, raw, req, recs) <- converted
+          , let keys = V.toList (extractKeys req)
+                pids = mapMaybe (`HM.lookup` keyToIdMap) keys <> extractIds req
+                unresolved = length pids < length keys + length (extractIds req) || not (all (`HM.member` projectCachesMap) pids)
+                capped p = maybe False overFreeTierQuota (HM.lookup p projectCachesMap)
+          , unresolved || (V.null recs && not (null pids) && not (all capped pids))
           ]
         !dropAckIds = HS.fromList [ackId | (ackId, _, _) <- dropPoison]
         !writeReady = [(ackId, raw, recs) | (ackId, raw, _, recs) <- converted, not (HS.member ackId dropAckIds)]
@@ -479,7 +482,7 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds inva
     forM_ (decodePoison <> invalidPoison) \(_, raw, err) -> recordProtoError label (toString err) raw
     unless (null dropPoison)
       $ Log.logAttention
-        "processList: payload names an unresolved API key — routing to DLQ instead of acking"
+        "processList: payload did not resolve or converted to zero rows — routing to DLQ instead of acking"
         (AE.object ["label" AE..= label, "dropped_messages" AE..= length dropPoison, "ack_ids" AE..= [a | (a, _, _) <- dropPoison]])
 
     if allEmpty
