@@ -462,25 +462,15 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds inva
         !checked = [(ackId, raw, req, invalidReason req) | (ackId, raw, Right req) <- decodedMsgs]
         !invalidPoison = [(ackId, raw, err) | (ackId, raw, _, Just err) <- checked]
         !converted = [(ackId, raw, req, convert fallbackTime projectCachesMap keyToIdMap req) | (ackId, raw, req, Nothing) <- checked]
-        -- "Converted to zero rows" is NOT proof there was nothing to write.
-        -- A payload that carried an API key or an at-project-id but produced no
-        -- rows was DROPPED: its project never resolved (a cached negative entry,
-        -- a key racing its own creation, a lookup that returned no rows). Acking
-        -- that commits the offset and destroys the data with no DLQ entry — the
-        -- 2026-07-27 loss (~200k rows / 10 tenants / 9 min, zero failure signal
-        -- anywhere in the pipeline). Route it to the DLQ so the bytes survive.
-        -- Zero rows is a deliberate drop only when every key it names resolved and every project
-        -- it names is over the free-tier cap; one unresolved key makes it lost data again.
-        deliberateDrop req =
-          let keys = V.toList (extractKeys req)
-              pids = mapMaybe (`HM.lookup` keyToIdMap) keys
-           in length pids == length keys && all (maybe False overFreeTierQuota . (`HM.lookup` projectCachesMap)) (pids <> extractIds req)
+        -- A payload naming an API key that did not resolve goes to the DLQ, never an ack: acking
+        -- commits the offset and destroys data whose project never resolved (a cached negative
+        -- entry, a key racing its own creation) — the 2026-07-27 loss (~200k rows / 10 tenants /
+        -- 9 min, no failure signal). One unresolved key poisons the whole payload, so a mixed one
+        -- survives too. Rows left out on purpose (the free-tier cap) come from resolved keys.
         !dropPoison =
-          [ (ackId, raw, "unresolved project: payload carried telemetry but converted to zero rows")
-          | (ackId, raw, req, recs) <- converted
-          , V.null recs
-          , not (V.null (extractKeys req)) || not (null (extractIds req))
-          , not (deliberateDrop req)
+          [ (ackId, raw, "unresolved project: payload names an API key that did not resolve")
+          | (ackId, raw, req, _) <- converted
+          , V.any (not . (`HM.member` keyToIdMap)) (extractKeys req)
           ]
         !dropAckIds = HS.fromList [ackId | (ackId, _, _) <- dropPoison]
         !writeReady = [(ackId, raw, recs) | (ackId, raw, _, recs) <- converted, not (HS.member ackId dropAckIds)]
@@ -491,7 +481,7 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds inva
     forM_ (decodePoison <> invalidPoison) \(_, raw, err) -> recordProtoError label (toString err) raw
     unless (null dropPoison)
       $ Log.logAttention
-        "processList: payload carried telemetry but resolved to zero rows — routing to DLQ instead of acking"
+        "processList: payload names an unresolved API key — routing to DLQ instead of acking"
         (AE.object ["label" AE..= label, "dropped_messages" AE..= length dropPoison, "ack_ids" AE..= [a | (a, _, _) <- dropPoison]])
 
     if allEmpty
