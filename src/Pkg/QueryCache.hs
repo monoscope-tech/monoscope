@@ -8,6 +8,7 @@ module Pkg.QueryCache (
   QueryFlights,
   newQueryFlights,
   coalesceQuery,
+  withSharedCache,
   cachedRawQuery,
   lookupRawCache,
   updateRawCache,
@@ -54,7 +55,7 @@ import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
 import OpenTelemetry.Attributes qualified as OA
 import Pages.Charts.Types (DataType, MetricsData (..), MetricsStats (..))
-import Pkg.DeriveUtils (AesonText (..), DB)
+import Pkg.DeriveUtils (AesonText (..), DB, unAesonText)
 import Pkg.Metrics qualified as Metrics
 import Pkg.Parser (RangeEnd (..), SqlQueryCfg (..), autoBinWidth, fixedUTCTime, intervalSeconds)
 import Pkg.Parser.Expr (ToQueryText (..), display, kqlTimespanToTimeBucket, resolveWildcardTimes)
@@ -543,3 +544,21 @@ cleanupExpiredCache = do
       )
       SELECT COUNT(*)::bigint FROM deleted
     |]
+
+
+-- | Fleet-wide L2 behind a per-replica memory cache (its table keeps the RUM page's historical name): read the shared table, else compute and
+-- publish. @rawKey@ is hashed, so callers pass a readable @show@n key. Expired rows are pruned
+-- on write, which is rare enough (one per cold key per TTL) to need no cleanup job.
+withSharedCache :: (AE.FromJSON a, AE.ToJSON a, DB es) => Text -> Int64 -> Eff es a -> Eff es a
+withSharedCache rawKey ttl compute =
+  Hasql.interpOne [HI.sql|SELECT payload FROM rum_panel_cache WHERE cache_key = #{key} AND expires_at > now()|] >>= maybe publish (pure . unAesonText . HI.getOneColumn)
+  where
+    key = toXXHash rawKey
+    publish = do
+      fresh <- compute
+      Hasql.interpExecute_
+        [HI.sql|INSERT INTO rum_panel_cache (cache_key, payload, expires_at)
+          VALUES (#{key}, #{AesonText fresh}, now() + make_interval(secs => #{ttl}::double precision))
+          ON CONFLICT (cache_key) DO UPDATE SET payload = EXCLUDED.payload, expires_at = EXCLUDED.expires_at|]
+      Hasql.interpExecute_ [HI.sql|DELETE FROM rum_panel_cache WHERE expires_at < now() - interval '12 hours'|]
+      pure fresh

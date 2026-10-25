@@ -271,6 +271,28 @@ extra-source-files:
     test/fixtures/github-app-test.pem
     test/fixtures/wiki-browser.mjs
     static/public/assets/web-components/dist/manifest.json
+    static/public/dashboards/_overview.yaml
+    static/public/dashboards/apache.yaml
+    static/public/dashboards/cloudflare.yaml
+    static/public/dashboards/docker.yaml
+    static/public/dashboards/elasticsearch.yaml
+    static/public/dashboards/endpoint-stats.yaml
+    static/public/dashboards/haproxy.yaml
+    static/public/dashboards/heroku.yaml
+    static/public/dashboards/host-prometheus.yaml
+    static/public/dashboards/http-stats.yaml
+    static/public/dashboards/kitchensink.yaml
+    static/public/dashboards/kubernetes.yaml
+    static/public/dashboards/minio.yaml
+    static/public/dashboards/mysql.yaml
+    static/public/dashboards/nginx.yaml
+    static/public/dashboards/opentelemetry-collector.yaml
+    static/public/dashboards/opentelemetry-tracing.yaml
+    static/public/dashboards/postgresql.yaml
+    static/public/dashboards/rabbitmq.yaml
+    static/public/dashboards/redis.yaml
+    static/public/dashboards/rum.yaml
+    static/public/dashboards/timefusion.yaml
 
 source-repository head
   type: git
@@ -328,7 +350,6 @@ library
       Models.Telemetry.ContainerTypes
       Models.Telemetry.DeterministicId
       Models.Telemetry.Report
-      Models.Telemetry.RUM
       Models.Telemetry.ServiceGraph
       Models.Telemetry.Telemetry
       Opentelemetry.OtlpServer
@@ -356,7 +377,6 @@ library
       Pages.Monitors
       Pages.Onboarding
       Pages.Projects
-      Pages.RealUserMonitoring
       Pages.Replay
       Pages.Reports
       Pages.ServiceMap
@@ -798,7 +818,6 @@ test-suite integration-tests
       Pages.Projects.ProjectsSpec
       Pages.PrometheusSpec
       Pages.QueryCacheSpec
-      Pages.RealUserMonitoringSpec
       Pages.ReportsSpec
       Pages.ServiceMapSpec
       Pages.ShareSpec
@@ -974,7 +993,6 @@ test-suite test-dev
       Models.Telemetry.ContainerTypes
       Models.Telemetry.DeterministicId
       Models.Telemetry.Report
-      Models.Telemetry.RUM
       Models.Telemetry.ServiceGraph
       Models.Telemetry.Telemetry
       Opentelemetry.OtlpServer
@@ -1002,7 +1020,6 @@ test-suite test-dev
       Pages.Monitors
       Pages.Onboarding
       Pages.Projects
-      Pages.RealUserMonitoring
       Pages.Replay
       Pages.Reports
       Pages.ServiceMap
@@ -1117,7 +1134,6 @@ test-suite test-dev
       Pages.Projects.ProjectsSpec
       Pages.PrometheusSpec
       Pages.QueryCacheSpec
-      Pages.RealUserMonitoringSpec
       Pages.ReportsSpec
       Pages.ServiceMapSpec
       Pages.ShareSpec

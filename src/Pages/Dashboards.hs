@@ -4,6 +4,7 @@ module Pages.Dashboards (
   dashboardSettledPostH,
   dashboardTabRenamePatchH,
   entrypointRedirectGetH,
+  rumRedirectH,
   DashboardGet (..),
   DashboardSettleSample (..),
   DashboardNavigation (..),
@@ -95,7 +96,6 @@ import Models.Projects.ProjectMembers qualified as ManageMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.ServiceGraph (ServiceGraph (..), ServiceNode (..), endpointDependencyGraphForRange)
 import NeatInterpolation
-import Network.HTTP.Types.URI qualified as URI
 import OpenTelemetry.Attributes qualified as OA
 import Pages.BodyWrapper
 import Pages.Charts.Charts qualified as Charts
@@ -113,7 +113,7 @@ import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), assetUrl, bulkActionSlug)
 import Pkg.Metrics qualified as Metrics
-import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), applyScopedQuery, binDensityFor, constantToKQLList, constantToSQLList, defSqlQueryCfg, fixedUTCTime, mkScopedQuery, parseQueryToComponents, replacePlaceholders, variablePresetsKQL)
+import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), applyScopedQuery, binDensityFor, browserKql, constantToKQLList, constantToSQLList, defSqlQueryCfg, fillQueryTemplate, fixedUTCTime, mkScopedQuery, parseQueryToComponents, variablePresetsKQL)
 import Pkg.Parser.Expr (sqlStringLit)
 import Pkg.SchemaLearning.Catalog qualified as Catalog
 import Relude hiding (ask)
@@ -951,7 +951,7 @@ processWidget prefill pid now timeRange allParams widgetBase = do
       -- resolved here or the list searches for the literal "{{var-endpointHash}}".
       -- Every other type reaches /chart_data, which interpolates at fetch time.
       resolveLogsQuery
-        | widgetBase.wType == Widget.WTLogs = fmap (replacePlaceholders (variablePresetsKQL def pid.toText fromD toD allParams now))
+        | widgetBase.wType == Widget.WTLogs = fmap (fillQueryTemplate (variablePresetsKQL def pid.toText fromD toD allParams now))
         | otherwise = Relude.id
       widget = widgetBase & #id %~ (<|> (slugify <$> widgetBase.title)) & #_projectId %~ (<|> Just pid) & #rawQuery .~ widgetBase.query & #query %~ resolveLogsQuery
 
@@ -2265,6 +2265,23 @@ entrypointRedirectGetH baseTemplate title tags pid qparams = do
   pure $ addHeader redirectTo NoContent
 
 
+-- | @/rum@ (and the older @/rum/dashboard@) opens the RUM dashboard; @/rum/sessions@ opens the
+-- Explorer sessions view over browser telemetry, keeping the window. Shared links from the old
+-- page (@/rum?tab=sessions&session=…@) land on the same view, narrowed to that session.
+rumRedirectH :: Projects.ProjectId -> [Text] -> [(Text, Maybe Text)] -> ATAuthCtx (Headers '[Header "Location" Text] NoContent)
+rumRedirectH pid segments params = case (segments, param "tab") of
+  (["sessions"], _) -> sessions
+  ([], Just "sessions") -> sessions
+  ([], _) -> dashboard
+  (["dashboard"], _) -> dashboard
+  _ -> throwError err404
+  where
+    param k = join $ lookup k params
+    dashboard = entrypointRedirectGetH "rum.yaml" "Real User Monitoring" ["rum", "browser", "frontend", "web-vitals"] pid params
+    query = maybe browserKql (("attributes.session.id == " <>) . kqlQuoted) (param "session")
+    sessions = pure $ addHeader (timeScopedUrl ("/p/" <> pid.toText <> "/log_explorer") [("viz_type", "sessions"), ("query", query)] (param "from") (param "to") (param "since")) NoContent
+
+
 -- | Form data for renaming a dashboard
 data DashboardRenameForm = DashboardRenameForm
   { title :: Text
@@ -2620,12 +2637,6 @@ breadcrumbSuffixOob_ tabName =
 -- | Internal param key for passing active tab slug between handlers and rendering
 activeTabSlugKey :: Text
 activeTabSlugKey = "activeTabSlug"
-
-
--- | Percent-encoded query string, prefixed with @?@ when non-empty.
--- @[("key", Just "value"), ("empty", Nothing)]@ becomes @"?key=value&empty"@.
-queryStringFrom :: [(Text, Maybe Text)] -> Text
-queryStringFrom = decodeUtf8 . URI.renderQuery True . map (bimap encodeUtf8 (fmap encodeUtf8))
 
 
 -- | Add variable defaults to params for any variable not already in params.

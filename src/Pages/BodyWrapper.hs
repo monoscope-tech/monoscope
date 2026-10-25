@@ -373,7 +373,7 @@ bodyWrapper bcfg child = do
       -- Vendored (not unpkg): a third-party CDN must never sit on our critical path — a
       -- slow or unreachable CDN stalled first paint for every visitor. defer keeps even
       -- the local copy off the parser.
-      when browserMonitoring $ script_ [src_ $ assetUrl "/public/assets/deps/monoscope/monoscope-0.11.6.min.js", defer_ ""] ("" :: Text)
+      when browserMonitoring $ script_ [src_ $ assetUrl "/public/assets/deps/monoscope/monoscope-0.13.0.min.js", defer_ ""] ("" :: Text)
 
       -- Hashed URLs for assets the TS bundle references by path (see web-components/src/assets.ts).
       -- Those references can't carry a compile-time hash of their own, and /public/assets/* is
@@ -1214,7 +1214,7 @@ navFlyoutItems :: Text -> Text -> [(Text, Text)]
 navFlyoutItems pidTxt = \case
   "Explorer" -> [(label, p path) | (label, path) <- explorerTabs]
   "Infrastructure" -> [(label, p path) | (label, path) <- infrastructureTabs]
-  "Real User Monitoring" -> [("Overview", p "/rum"), ("Sessions", p "/rum?tab=sessions"), ("Performance", p "/rum?tab=performance")]
+  "Real User Monitoring" -> [("Dashboard", p "/rum"), ("Sessions", p "/rum/sessions")]
   -- API Docs carries no host: it is the whole project's learned spec. The
   -- per-host and per-endpoint scopes are reached from the catalog rows.
   "API Catalog" -> [("Incoming", p "/api_catalog?request_type=Incoming"), ("Outgoing", p "/api_catalog?request_type=Outgoing"), ("API Docs", p "/api_catalog/docs?request_type=Incoming")]

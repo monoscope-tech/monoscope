@@ -441,7 +441,7 @@ data TimeWindow = TimeWindow
   }
 
 
--- | The default range for 'mkTimeWindow' surfaces (infrastructure, RUM), which
+-- | The default range for 'mkTimeWindow' surfaces (infrastructure), which
 -- refresh live and so open on a tighter window than 'defaultSince'.
 defaultWindow :: Text
 defaultWindow = "5M"

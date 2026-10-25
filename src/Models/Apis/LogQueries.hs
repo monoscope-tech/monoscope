@@ -57,7 +57,6 @@ import Database.PostgreSQL.Simple.ToField (ToField)
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
-import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
 import Effectful.Time qualified as Time
@@ -73,7 +72,7 @@ import Pkg.Parser.Stats (Section, Sources (..))
 import Relude hiding (many, some)
 import Relude.Extra.Foldable1 (maximum1, minimum1)
 import System.Logging qualified as Log
-import System.Tracing (Tracing, forkWithCtx, withSpan_)
+import System.Tracing (Tracing, withSpan_)
 import Utils (listToIndexHashMap, lookupVecNonEmptyText, replaceAllFormats, truncateHour)
 import Web.HttpApiData (FromHttpApiData (..))
 
@@ -482,6 +481,7 @@ data SessionAggRow = SessionAggRow
   , errorCount :: Int64
   , firstSeen :: UTCTime
   , lastSeen :: UTCTime
+  , services :: Maybe (V.Vector Text)
   }
   deriving stock (Generic, Show)
   deriving anyclass (HI.DecodeRow)
@@ -650,6 +650,11 @@ sessionKeyExpr :: Text
 sessionKeyExpr = "COALESCE(NULLIF(attributes___session___id, ''), NULLIF(attributes___user___id, ''), NULLIF(attributes___user___email, ''))"
 
 
+-- | The browser filter, parsed once per process rather than per sessions request.
+browserAst :: Either Text [Section]
+browserAst = parseQueryToAST browserKql
+
+
 -- | Ordering for the Sessions viz. The wire spellings are exactly the values the sort
 -- dropdown in "Pkg.Components.LogQueryBox" emits and what shared URLs carry.
 --
@@ -687,7 +692,7 @@ sessionSortLabel ordering = T.toUpper (T.take 1 label) <> T.drop 1 label
     label = T.replace "_" " " $ display ordering
 
 
-fetchSessions :: (DB es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Bool -> Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Text -> Maybe Text -> Maybe SessionSort -> Int -> SessionsRead -> Eff es (Maybe SessionSummary, Int, [SessionRow])
+fetchSessions :: (DB es, IOE :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Bool -> Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Text -> Maybe Text -> Maybe SessionSort -> Int -> SessionsRead -> Eff es (Maybe SessionSummary, Int, [SessionRow])
 fetchSessions enableTfReads pid queryAST dateRange environment service sortByM skip readKind = do
   now <- Time.currentTime
   let scope = mkScopedQuery pid dateRange environment service
@@ -697,52 +702,53 @@ fetchSessions enableTfReads pid queryAST dateRange environment service sortByM s
       ordering = fromMaybe SortLastSeen sortByM
   Log.logTrace "fetchSessions: start"
     $ AE.object ["project_id" AE..= pid, "skip" AE..= skip, "date_range" AE..= show dateRange, "sort_by" AE..= sortByM]
-  -- One scan of the window keyed by 'sessionKeyExpr' (identity = MAX non-null per session),
-  -- with only rollup-servable aggregates: a distinct count per group (trace ids, services)
-  -- forces the raw store — 7s against 0.15s. Sorting, paging and the header happen here.
-  -- The header's service read (a GROUP BY, since a distinct count leaves the rollups) is
-  -- independent of the scan and forks beside it; on long-session projects both are raw
-  -- window scans of several seconds. A failure on either side still fails the request.
-  (sessions :: [SessionAggRow], serviceRows :: [Maybe Text]) <- Ki.scoped \ks -> do
-    servicesT <-
-      forkWithCtx ks
-        $ if readKind == WithHeader
-          then
-            Hasql.withHasqlTimefusion enableTfReads
-              $ Hasql.interp
-              $ [HI.sql|SELECT resource___service___name FROM otel_logs_and_spans WHERE |]
-              <> whereSql
-              <> [HI.sql| GROUP BY 1|]
-          else pure []
-    sessions <-
-      Hasql.withHasqlTimefusion enableTfReads
-        $ Hasql.interp
-        $ [HI.sql|SELECT |]
-        <> keySql
-        <> [HI.sql| AS session_id,
-            MAX(attributes___user___id), MAX(attributes___user___email),
-            MAX(COALESCE(NULLIF(attributes___user___full_name, ''), NULLIF(attributes___user___name, ''))),
-            COUNT(*)::BIGINT,
-            COUNT(*) FILTER (WHERE |]
-        <> rawSql severityIsErrorSql
-        <> [HI.sql|)::BIGINT,
-            MIN(timestamp), MAX(COALESCE(end_time, timestamp))
-          FROM otel_logs_and_spans
-          WHERE |]
-        <> whereSql
-        <> [HI.sql| AND |]
-        <> keySql
-        <> [HI.sql| IS NOT NULL
-          GROUP BY 1|]
-    (sessions,) <$> Ki.atomically (Ki.await servicesT)
+  -- One raw scan of the window keyed by 'sessionKeyExpr' (an expression, so no rollup can
+  -- serve it). Each session's services ride along for ~5% of the scan, which is cheaper than
+  -- the separate full-window service scan the header used to fork beside it.
+  telemetry :: [SessionAggRow] <-
+    Hasql.withHasqlTimefusion enableTfReads
+      $ Hasql.interp
+      $ [HI.sql|SELECT |]
+      <> keySql
+      <> [HI.sql| AS session_id,
+          MAX(attributes___user___id), MAX(attributes___user___email),
+          MAX(COALESCE(NULLIF(attributes___user___full_name, ''), NULLIF(attributes___user___name, ''))),
+          COUNT(*)::BIGINT,
+          COUNT(*) FILTER (WHERE |]
+      <> rawSql severityIsErrorSql
+      <> [HI.sql|)::BIGINT,
+          MIN(timestamp), MAX(COALESCE(end_time, timestamp)),
+          ARRAY_REMOVE(ARRAY_AGG(DISTINCT resource___service___name), NULL)
+        FROM otel_logs_and_spans
+        WHERE |]
+      <> whereSql
+      <> [HI.sql| AND |]
+      <> keySql
+      <> [HI.sql| IS NOT NULL
+        GROUP BY 1|]
+  -- A recording whose spans never arrived is still a session a reader can replay. It carries no
+  -- attributes, so only an unscoped list that is unfiltered or exactly browser-scoped holds it.
+  let fromT = fromMaybe (addUTCTime (-3600) now) (fst dateRange)
+      toT = fromMaybe now (snd dateRange)
+  recordings :: [SessionAggRow] <-
+    if isNothing environment && isNothing service && (null queryAST || Right queryAST == browserAst)
+      then
+        Hasql.interp
+          [HI.sql| SELECT session_id::text, user_id, user_email, user_name, 0::bigint, 0::bigint, created_at, last_event_at, NULL::text[]
+            FROM projects.replay_sessions
+            WHERE project_id = #{pid} AND last_event_at >= #{fromT} AND created_at <= #{toT}
+              AND (event_file_count > 0 OR cardinality(file_keys) > 0 OR cardinality(shard_keys) > 0) |]
+      else pure []
+  let telemetryIds = S.fromList $ map (.sessionId) telemetry
+      sessions = telemetry <> filter ((`S.notMember` telemetryIds) . (.sessionId)) recordings
   Log.logTrace "fetchSessions: query done" $ AE.object ["rows" AE..= length sessions]
   let durationNs r = round (diffUTCTime r.lastSeen r.firstSeen * 1e9) :: Int64
       ordered = sortOn (Down . case ordering of SortLastSeen -> Left . (.lastSeen); SortFirstSeen -> Left . (.firstSeen); SortDuration -> Right . durationNs; SortErrors -> Right . (.errorCount); SortEvents -> Right . (.eventCount)) sessions
       page = take aggregatePageSize $ drop skip ordered
       pageIds = map (.sessionId) page
-  -- First-observed context and the service list for the page only, bounded to the page's own
-  -- span: a session's rows all lie inside it, and it is a fraction of the window.
-  context :: [(Text, Maybe Text, Maybe Text, Maybe Text, Maybe (V.Vector Text))] <-
+  -- First-observed context for the page only, bounded to the page's own span: a session's rows
+  -- all lie inside it. Ordered first-values for every session in the window cost ~65% more scan.
+  context :: [(Text, Maybe Text, Maybe Text, Maybe Text)] <-
     case nonEmpty page of
       Nothing -> pure []
       Just rows ->
@@ -755,8 +761,7 @@ fetchSessions enableTfReads pid queryAST dateRange environment service sortByM s
             (ARRAY_AGG(attributes___user_agent___original ORDER BY timestamp) FILTER (WHERE attributes___user_agent___original IS NOT NULL AND attributes___user_agent___original <> ''))[1],
             (ARRAY_AGG(COALESCE(NULLIF(status_message, ''), NULLIF(body::text, '')) ORDER BY timestamp) FILTER (WHERE (|]
           <> rawSql severityIsErrorSql
-          <> [HI.sql|) AND COALESCE(NULLIF(status_message, ''), NULLIF(body::text, '')) IS NOT NULL))[1],
-            ARRAY_REMOVE(ARRAY_AGG(DISTINCT resource___service___name), NULL)
+          <> [HI.sql|) AND COALESCE(NULLIF(status_message, ''), NULLIF(body::text, '')) IS NOT NULL))[1]
           FROM otel_logs_and_spans
           WHERE |]
           <> whereSql
@@ -770,16 +775,14 @@ fetchSessions enableTfReads pid queryAST dateRange environment service sortByM s
   -- lookup over the page's ids only. Non-UUID session keys (sessions derived
   -- from user id/email) can never have a recording, so they're not even asked for.
   replayed <- replayedSessionIds pid (mapMaybe UUID.fromText pageIds)
-  unless (length context == length page)
+  unless (length context == length (filter ((`S.member` telemetryIds) . (.sessionId)) page))
     $ Log.logAttention "fetchSessions: page rows without context"
     $ AE.object ["project_id" AE..= pid, "page" AE..= length page, "context" AE..= length context]
-  let contextById = HM.fromList [(sid, (landing, agent, firstError, fromMaybe V.empty services)) | (sid, landing, agent, firstError, services) <- context]
+  let contextById = HM.fromList [(sid, (landing, agent, firstError)) | (sid, landing, agent, firstError) <- context]
       durations = V.fromList $ sort $ map durationNs sessions
       events = V.fromList $ sort $ map (.eventCount) sessions
       -- Densify the header's over-time buckets across the full picker range so
       -- empty periods render as blanks.
-      fromT = fromMaybe (addUTCTime (-3600) now) (fst dateRange)
-      toT = fromMaybe now (snd dateRange)
       epochBucket t = floor (utcTimeToPOSIXSeconds t) `div` bucketW
       pMin = epochBucket fromT
       pMax = max pMin (epochBucket toT)
@@ -790,7 +793,7 @@ fetchSessions enableTfReads pid queryAST dateRange environment service sortByM s
             { totalSessions = fromIntegral $ length sessions
             , erroredSessions = fromIntegral $ length $ filter ((> 0) . (.errorCount)) sessions
             , uniqueUsers = fromIntegral $ length $ ordNub $ mapMaybe (\r -> r.userId <|> r.userEmail) sessions
-            , uniqueServices = fromIntegral $ length $ catMaybes serviceRows
+            , uniqueServices = fromIntegral $ length $ ordNub $ concatMap toList $ mapMaybe (.services) sessions
             , medianDurationNs = percentile 0.5 durations
             , p95DurationNs = percentile 0.95 durations
             , medianEvents = percentile 0.5 events
@@ -801,8 +804,8 @@ fetchSessions enableTfReads pid queryAST dateRange environment service sortByM s
             , errored = buckets True
             }
       toRow r@SessionAggRow{..} =
-        let (landingUrl, userAgent, firstError, services) = fromMaybe (Nothing, Nothing, Nothing, V.empty) $ HM.lookup sessionId contextById
-         in SessionRow{durationNs = durationNs r, hasReplay = maybe False (`S.member` replayed) (UUID.fromText sessionId), ..}
+        let (landingUrl, userAgent, firstError) = fromMaybe (Nothing, Nothing, Nothing) $ HM.lookup sessionId contextById
+         in SessionRow{durationNs = durationNs r, services = fold services, hasReplay = maybe False (`S.member` replayed) (UUID.fromText sessionId), ..}
   pure (summary, length sessions, map toRow page)
 
 

@@ -10,16 +10,21 @@ module Pages.DashboardWidgetsSpec (spec) where
 
 import Control.Concurrent (threadDelay)
 import Control.Exception qualified as E
+import Control.Lens ((.~))
 import Control.Monad.Trans.Except (runExceptT)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy qualified as LBS
 import Data.Default (def)
+import Data.List (lookup)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
 import Data.Text qualified as T
+import Data.ProtoLens (defMessage)
 import Data.Time (addUTCTime)
+import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
+import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PG
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
@@ -32,18 +37,25 @@ import Models.Projects.DashboardTemplates (dashboardTemplatesCompiled, loadDashb
 import Models.Projects.Dashboards (DashboardVM (..))
 import Models.Projects.Dashboards qualified as DashboardModel
 import Models.Projects.Projects (Session (..))
+import Network.GRPC.Common.Protobuf (Proto (..))
+import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.BodyWrapper (BWConfig (..), NavigationResponse (..), PageCtx (..))
 import Pages.Charts.Charts qualified as Charts
 import Pages.Dashboards (DashboardFilters (..))
 import Pages.Dashboards qualified as Dashboards
 import Pages.Issues qualified as Issues
+import Pages.LogExplorer.Log qualified as Log
 import Pkg.Components.Widget qualified as Widget
-import Pkg.Parser (parseQueryToAST)
+import Pkg.Parser (browserKql, parseQueryToAST)
 import Pkg.QueryCache qualified as QueryCache
 import Pkg.TestClock (getTestTime, setTestTime)
 import Pkg.TestUtils
+import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields qualified as MSF
+import Proto.Opentelemetry.Proto.Metrics.V1.Metrics qualified as PM
+import Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields qualified as PMF
 import Relude
 import Servant qualified
+import Servant.API (ResponseHeader (..), lookupResponseHeader)
 import Servant.Types.SourceT qualified as Source
 import System.Config qualified as Config
 import System.IO.Error (userError)
@@ -1088,10 +1100,10 @@ spec = sequential $ aroundAll withTestResources do
       snd (T.breakOn "<tbody" html) `shouldSatisfy` (not . T.isInfixOf "cursor-pointer")
 
     it "renders a dashboard table link with the current project and URL-encoded row value" \_ -> do
-      let column = (def :: Widget.TableColumn){Widget.field = "session_id", Widget.title = "Session", Widget.link = Just "/p/{{project_id}}/rum?tab=sessions&session={{row.session_id}}"}
+      let column = (def :: Widget.TableColumn){Widget.field = "session_id", Widget.title = "Session", Widget.link = Just "/p/{{project_id}}/log_explorer?viz_type=sessions&query={{row.session_id}}"}
           widget = (def :: Widget.Widget){Widget.wType = Widget.WTTable, Widget.columns = Just [column], Widget._projectId = Just testPid}
           html = toStrict $ renderText $ Widget.renderTableWithDataAndParams widget (V.singleton $ V.singleton "session / id") []
-      html `shouldSatisfy` T.isInfixOf ("/p/" <> testPid.toText <> "/rum?tab=sessions&amp;session=session%20%2F%20id")
+      html `shouldSatisfy` T.isInfixOf ("/p/" <> testPid.toText <> "/log_explorer?viz_type=sessions&amp;query=session%20%2F%20id")
 
     -- Regression: rows on a tabless dashboard had no swap target and ignored clicks.
     it "tableRowClick_navigatesOnTablessAndTabbedDashboards" \_ -> do
@@ -1409,3 +1421,88 @@ spec = sequential $ aroundAll withTestResources do
           html `shouldSatisfy` T.isInfixOf "tab-active"
           html `shouldSatisfy` T.isInfixOf "hx-push-url=\"true\""
           html `shouldNotSatisfy` T.isInfixOf "<html"
+
+  -- RUM is this template plus the Explorer's sessions view; the template must hold up on
+  -- real browser telemetry, not just parse.
+  describe "Real User Monitoring dashboard" do
+    -- No var-app in the request, as on a first visit: an unset variable must read as empty
+    -- (every application), not as the literal placeholder that matched nothing.
+    it "rumDashboard_everyWidgetRuns_andVitalsReadHistogramBuckets" \tr -> do
+      projectId <- createTestProject tr "RUM dashboard template"
+      apiKey <- createTestAPIKey tr projectId "rum-dashboard-key"
+      let browserSpan n name attrs ua = ingestSpanReq tr $ mkSpanRequest ("e" <> T.justifyRight 31 '0' (show @Text n)) ("e" <> T.justifyRight 15 '0' (show @Text n)) Nothing name [] Nothing (mkAttr "session.id" "dash-session" : attrs) (mkResource apiKey [mkAttr "service.name" "storefront", mkAttr "user_agent.original" ua]) frozenTime
+      browserSpan (1 :: Int) "documentLoad" [mkAttr "url.full" "https://shop.example/cart"] "Mozilla/5.0 (X11; Linux x86_64) Chrome/151"
+      browserSpan 2 "Pageview · /orders/123" [mkAttr "url.path" "/orders/123", mkAttr "exception.type" "TypeError"] "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Mobile/15E148 Safari/604.1"
+      -- Three DELTA exports merge to [3,9,3,1,0] over 16 observations; the 12th lands on the
+      -- 2500 edge of (1000, 2500], so P75 is exactly 2500 and rated Good from its bucket alone.
+      let at = (`addUTCTime` frozenTime)
+          nanos = floor . (* 1000000000) . utcTimeToPOSIXSeconds
+          point end start counts = defMessage & PMF.timeUnixNano .~ nanos (at end) & PMF.startTimeUnixNano .~ nanos (at start) & PMF.attributes .~ [mkAttr "page.url" "https://shop.example/checkout"] & PMF.count .~ sum counts & PMF.bucketCounts .~ counts & PMF.explicitBounds .~ [1000, 2500, 4000, 8000]
+          exportVital name points = void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ defMessage & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ mkResource apiKey [mkAttr "service.name" "storefront"] & PMF.scopeMetrics .~ [defMessage & PMF.metrics .~ [defMessage & PMF.name .~ ("browser.web_vital." <> name) & PMF.histogram .~ (defMessage & PMF.aggregationTemporality .~ PM.AGGREGATION_TEMPORALITY_DELTA & PMF.dataPoints .~ points) :: PM.Metric]]])
+      exportVital "lcp" [point (-30) (-40) [2, 5, 1, 0, 0], point (-20) (-30) [0, 3, 2, 1, 0], point (-10) (-20) [1, 1, 0, 0, 0 :: Word64]]
+      -- INP's P75 (rank 3 of 4) sits in (100, 300], straddling the 200 ms threshold but narrow
+      -- enough to estimate: 100 + 200·3/4. CLS in OTel's default (0, 5] bucket cannot be placed.
+      exportVital "inp" [point (-10) (-20) [0, 4, 0, 0] & PMF.explicitBounds .~ [100, 300, 600]]
+      exportVital "cls" [point (-10) (-20) [0, 4, 0] & PMF.explicitBounds .~ [0, 5]]
+      rum <- maybe (fail "missing rum.yaml") pure . find (\d -> d.file == Just "rum.yaml") =<< DashboardModel.readDashboardsFromDisk "static/public/dashboards"
+      let from = toText $ iso8601Show $ at (-3600)
+          to = toText $ iso8601Show $ at 3600
+          dataType = \case Widget.WTTable -> Charts.DTText; Widget.WTStat -> Charts.DTFloat; _ -> Charts.DTMetric
+          run ws = forM ws \w -> (w.title,) <$> runQueryEffect tr (Charts.queryMetrics Nothing (Just $ dataType w.wType) (Just projectId) w.query w.sql Nothing (Just from) (Just to) Nothing Nothing [])
+          widgetNamed t = maybe (fail $ "missing " <> toString t) pure $ find ((== Just t) . (.title)) (DashboardModel.allWidgets rum)
+          table rs title = maybe V.empty (.dataText) $ lookup (Just title) rs
+          vitalRow rs name = V.toList . V.take 5 <$> find ((== Just name) . (V.!? 0)) (table rs "Core Web Vitals")
+      results <- run [w | w <- DashboardModel.allWidgets rum, isJust w.sql]
+      [(title, m.error) | (title, m) <- results, isJust m.error] `shouldBe` []
+      vitalRow results "LCP" `shouldBe` Just ["LCP", "2500 ms", "rating;success-strong⇒Good", "1000 – 2500", "16"]
+      vitalRow results "INP" `shouldBe` Just ["INP", "≈ 250 ms", "rating;warning-weak⇒Likely needs improvement", "100 – 300", "4"]
+      vitalRow results "CLS" `shouldBe` Just ["CLS", "—", "rating;info-weak⇒Buckets too coarse to rate", "0 – 5", "4"]
+      -- A vital with nothing in the window says so instead of vanishing.
+      vitalRow results "FCP" `shouldBe` Just ["FCP", "—", "rating;info-weak⇒No observations in this window", "", "0"]
+      -- Abbreviations explain themselves on hover: the row's hidden description on the cell,
+      -- the column's on its header.
+      vitals <- widgetNamed "Core Web Vitals"
+      let vitalsHtml = toStrict $ renderText $ Widget.renderTableWithDataAndParams vitals (table results "Core Web Vitals") []
+      vitalsHtml `shouldSatisfy` T.isInfixOf "data-tippy-content=\"Largest Contentful Paint: when the main content becomes visible."
+      vitalsHtml `shouldSatisfy` T.isInfixOf "aria-description=\"Real-user observations in the selected window.\""
+      vitalsHtml `shouldNotSatisfy` T.isInfixOf ">About<"
+      -- An SDK upgrade mixes bucket layouts: a [2500]-bounded export coarsens every point to
+      -- the shared 2500 edge, giving [16, 4] over 20, so the 15th observation sits at 2500·15/16.
+      exportVital "lcp" [point (-5) (-10) [4, 0] & PMF.explicitBounds .~ [2500]]
+      mixed <- run [vitals]
+      vitalRow mixed "LCP" `shouldBe` Just ["LCP", "2344 ms", "rating;success-strong⇒Good", "0 – 2500", "20"]
+      sort [name | row <- V.toList $ table results "Browsers, systems and devices", row V.!? 0 == Just "Device", Just name <- [row V.!? 1]] `shouldBe` ["Desktop", "Mobile"]
+      sort (V.toList $ V.mapMaybe (V.!? 0) $ table results "Top pages") `shouldBe` ["/cart", "/orders/:id"]
+      -- Each page row's hidden Explorer query finds the events it counted, and the rendered
+      -- link carries it with the dashboard's window while the column itself stays off screen.
+      forM_ (table results "Top pages") \row -> do
+        (_, events) <- testServant tr $ Log.logExplorerDataH projectId def{Log.query = row V.!? 3, Log.from = Just from, Log.to = Just to}
+        (row V.!? 0, events.error, events.queryResultCount) `shouldBe` (row V.!? 0, Nothing, 1)
+      -- The browser filter exists twice, as SQL for widgets and KQL for the Explorer; both must
+      -- select the same rows, and a backend span neither.
+      ingestTrace tr apiKey "GET /backend-only" frozenTime
+      (_, sessions) <- testServant tr $ Log.logExplorerDataH projectId def{Log.query = Just browserKql, Log.from = Just from, Log.to = Just to}
+      viaSql <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTFloat) (Just projectId) Nothing (Just "SELECT count(*)::float FROM otel_logs_and_spans WHERE {{query_ast_filters}} AND {{browser_filter}}") Nothing (Just from) (Just to) Nothing Nothing []
+      (sessions.error, sessions.queryResultCount, viaSql.dataFloat) `shouldBe` (Nothing, 2, Just 2)
+      topPages <- widgetNamed "Top pages"
+      let html = toStrict $ renderText $ Widget.renderTableWithDataAndParams topPages{Widget._projectId = Just projectId} (table results "Top pages") [("since", Just "7D")]
+      html `shouldNotSatisfy` T.isInfixOf "Explorer query"
+      map (\ps -> (lookup "since" ps, lookup "query" ps)) (linkParams ("/p/" <> projectId.toText <> "/log_explorer") html)
+        `shouldBe` [(Just "7D", row V.!? 3) | row <- V.toList $ table results "Top pages"]
+
+    -- /rum and its older /rum/dashboard open the dashboard; /rum/sessions the Explorer. Links from
+    -- emails and alerts carry a window, which both must keep.
+    it "rumRedirects_openTheDashboardOrSessions_andKeepTheWindow" \tr -> do
+      let location view ps = runAuthHandler tr (Dashboards.rumRedirectH testPid view ps) <&> \h -> case lookupResponseHeader @"Location" h of
+            Header l -> l
+            _ -> ""
+          window = [("since", Just "7D"), ("environment", Just "prod")]
+      dashboard <- location [] window
+      dashboard `shouldSatisfy` T.isInfixOf ("/p/" <> testPid.toText <> "/dashboards/")
+      dashboard `shouldSatisfy` T.isInfixOf "since=7D"
+      location ["dashboard"] window `shouldReturn` dashboard
+      sessions <- location ["sessions"] window
+      linkParams ("/p/" <> testPid.toText <> "/log_explorer") ("href=\"" <> sessions <> "\"") `shouldBe` [[("since", "7D"), ("viz_type", "sessions"), ("query", browserKql)]]
+      -- A link shared from the old page lands on that session, not the dashboard.
+      legacy <- location [] [("tab", Just "sessions"), ("session", Just "abc")]
+      linkParams ("/p/" <> testPid.toText <> "/log_explorer") ("href=\"" <> legacy <> "\"") `shouldBe` [[("viz_type", "sessions"), ("query", "attributes.session.id == \"abc\"")]]
