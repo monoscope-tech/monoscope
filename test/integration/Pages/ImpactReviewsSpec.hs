@@ -889,7 +889,7 @@ spec = around withTestResources $ describe "Production impact reviews" do
     createFileLink hostSkill (repository </> ".agents/skills/host-link")
     createDirectoryIfMissing True $ repository </> ".agents/skills/file-link"
     createFileLink (hostSkill </> "SKILL.md") (repository </> ".agents/skills/file-link/SKILL.md")
-    imageBytes <- readFileBS "static/public/favicon-16x16.png"
+    imageBytes <- readFileBS "test/fixtures/review-image.png"
     writeFileBS (repository </> "review image.txt") imageBytes
     writeFileBS (repository </> "src/helper.txt") "preserve-retry-metadata\n"
     writeFileBS (repository </> "src/handler.txt") "calls helper with retry metadata\n"
