@@ -1598,6 +1598,7 @@ createStripeCheckoutSession trialEligible customerM debts apiKey hostUrl pid pla
           <> managedPaymentsParams
           <> [("customer", encodeUtf8 c) | c <- maybeToList customerM]
           <> [ ("mode", "subscription")
+             , ("allow_promotion_codes", "true")
              , ("client_reference_id", encodeUtf8 pid.toText)
              , ("metadata[project_id]", encodeUtf8 pid.toText)
              , ("metadata[plan]", encodeUtf8 plan)

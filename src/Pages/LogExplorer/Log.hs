@@ -1133,12 +1133,13 @@ lookupAlert = maybe (pure Nothing) (Monitors.queryMonitorById . Monitors.QueryMo
 -- | One-decimal percent formatter; positive rates never round down to zero.
 --
 -- >>> import "monoscope" Pages.LogExplorer.Log qualified as LL
--- >>> map LL.fmtPct1 [0, 0.03, 0.05, 5.24, 100, -1.25]
+-- >>> map LL.fmtPct1 [0, 0.03, 0.06, 5.24, 100, -1.25]
 -- ["0.0%","<0.1%","0.1%","5.2%","100.0%","-1.2%"]
 fmtPct1 :: Double -> Text
-fmtPct1 x
-  | x > 0 && x < 0.05 = "<0.1%"
-  | otherwise = showFFloat' 1 x <> "%"
+fmtPct1 x = bool shown "<0.1%" (x > 0 && shown == "0.0%")
+  where
+    -- Keyed on the rendered text, not a threshold: showFFloat rounds half to even, so 0.05 shows 0.0.
+    shown = showFFloat' 1 x <> "%"
 
 
 -- | Shimmer placeholder mirroring 'sessionsHeader_' (6-KPI grid + over-time bar
