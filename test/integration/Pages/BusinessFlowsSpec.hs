@@ -477,6 +477,14 @@ stripeBillingTests = do
     (reqs, _) <- runAsBaseRecordingHTTP tr $ atAuthToBase tr.trSessAndHeader $ CreateProject.deleteProjectGetH testPid
     map fst reqs `shouldContain` ["https://api.stripe.com/v1/subscriptions/sub_test123"]
 
+  -- Choosing Free cleared sub_id but left the Stripe sub running, still billing the customer.
+  it "freePlanChoice_cancelsTheRunningStripeSubscription" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
+    _ <- runQueryEffect tr $ Projects.updateStripeProjectBilling testPid (Projects.PlanName "GraduatedPricing") (Projects.SubId "sub_test123") (Projects.SubItemId "si_test") (Projects.CustomerId "cus_test")
+    session <- refreshSession tr.trPool tr.trATCtx.hasqlPool tr.trSessAndHeader
+    (reqs, _) <- runAsBaseRecordingHTTP tr $ atAuthToBase session $ CreateProject.pricingUpdateH testPid def
+    map fst reqs `shouldContain` ["https://api.stripe.com/v1/subscriptions/sub_test123"]
+    fmap (.paymentPlan) <$> runQueryEffect tr (Projects.projectById testPid) `shouldReturn` Just "Free"
+
   it "deleteProject cancels the project's LemonSqueezy subscription" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
     _ <- runQueryEffect tr $ Projects.updateProjectPricing testPid (Projects.PlanName "GraduatedPricing") (Projects.SubId "987654") (Projects.SubItemId "si_test") (Projects.OrderId "ord_test")
     (reqs, _) <- runAsBaseRecordingHTTP tr $ atAuthToBase tr.trSessAndHeader $ CreateProject.deleteProjectGetH testPid
