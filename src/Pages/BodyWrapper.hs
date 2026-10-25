@@ -482,9 +482,9 @@ bodyWrapper bcfg child = do
                   span_ "Your paid subscription is no longer active. This project has been downgraded to Free."
                   a_ [href_ $ "/p/" <> project.id.toText <> "/manage_billing", class_ "font-medium text-textBrand underline underline-offset-2"] "Review billing or change plan"
                   -- A cancelled Stripe sub can't be revived from the portal; checkout starts a new one and collects what's owed.
-                  if Projects.projectProvider project == Projects.StripeProvider
-                    then a_ [href_ $ "/p/" <> project.id.toText <> "/manage_billing", class_ "font-medium text-textBrand underline underline-offset-2"] "Reactivate subscription"
-                    else a_ [href_ $ "/p/" <> project.id.toText <> "/manage_billing", hxGet_ $ "/p/" <> project.id.toText <> "/manage_subscription", term "hx-preload" "false", class_ "font-medium text-textBrand underline underline-offset-2"] "Update payment method"
+                  let stripe = Projects.projectProvider project == Projects.StripeProvider
+                  a_ ([href_ $ "/p/" <> project.id.toText <> "/manage_billing", class_ "font-medium text-textBrand underline underline-offset-2"] <> bool [hxGet_ $ "/p/" <> project.id.toText <> "/manage_subscription", term "hx-preload" "false"] [] stripe)
+                    $ bool "Update payment method" "Reactivate subscription" stripe
             -- Keep fixed fullscreen panels and drawers below the project notices.
             section_ [class_ "relative flex flex-row flex-1 min-h-0 overflow-hidden", style_ "contain: layout"] do
               when (isJust bcfg.currProject)

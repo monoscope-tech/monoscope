@@ -2956,6 +2956,7 @@ data StripeInvoice = StripeInvoice
   , periodEnd :: Int
   , total :: Int
   , amountRemaining :: Int
+  , currency :: Text
   , status :: Text
   , hostedUrl :: Maybe Text
   , number :: Maybe Text
@@ -2993,14 +2994,15 @@ getStripeInvoices apiKey subId = do
     resp <- rightToMaybe respE
     v <- AE.decode @AE.Value (resp ^. W.responseBody)
     pure
-      [ StripeInvoice{invoiceId, periodStart, periodEnd, total, amountRemaining, status, hostedUrl, number}
+      [ StripeInvoice{invoiceId, periodStart, periodEnd, total, amountRemaining, currency, status, hostedUrl, number}
       | inv <- v ^.. AL.key "data" . AL.values
-      , let invoiceId = fromMaybe "" $ inv ^? AL.key "id" . AL._String
-            total = maybe 0 fromInteger $ inv ^? AL.key "total" . AL._Integer
+      , let total = maybe 0 fromInteger $ inv ^? AL.key "total" . AL._Integer
             amountRemaining = maybe 0 fromInteger $ inv ^? AL.key "amount_remaining" . AL._Integer
             status = fromMaybe "" $ inv ^? AL.key "status" . AL._String
             hostedUrl = inv ^? AL.key "hosted_invoice_url" . AL._String
             number = inv ^? AL.key "number" . AL._String
+      , Just invoiceId <- [inv ^? AL.key "id" . AL._String]
+      , Just currency <- [inv ^? AL.key "currency" . AL._String]
       , Just periodStart <- [fromInteger <$> inv ^? AL.key "period_start" . AL._Integer]
       , Just periodEnd <- [fromInteger <$> inv ^? AL.key "period_end" . AL._Integer]
       ]

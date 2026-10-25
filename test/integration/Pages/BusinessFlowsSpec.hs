@@ -562,11 +562,11 @@ stripeBillingTests = do
     (_, LemonSqueezy.BillingGet (PageCtx _ lapsed)) <- testServant tr{trSessAndHeader = session} $ LemonSqueezy.manageBillingGetH testPid
     renderText (LemonSqueezy.billingPage lapsed) `shouldNotSatisfy` TL.isInfixOf "free trial"
     let invoices = AE.encode $ AE.object ["data" AE..= ([invoice "in_owed" "open" 6837, invoice "in_settled" "paid" 0] :: [AE.Value])]
-        invoice id' status remaining = AE.object ["id" AE..= (id' :: Text), "status" AE..= (status :: Text), "number" AE..= ("MONO-0003" :: Text), "total" AE..= (6837 :: Int), "amount_remaining" AE..= (remaining :: Int), "period_start" AE..= (1786787328 :: Int), "period_end" AE..= (1789465728 :: Int)]
+        invoice id' status remaining = AE.object ["id" AE..= (id' :: Text), "currency" AE..= ("usd" :: Text), "status" AE..= (status :: Text), "number" AE..= ("MONO-0003" :: Text), "total" AE..= (6837 :: Int), "amount_remaining" AE..= (remaining :: Int), "period_start" AE..= (1786787328 :: Int), "period_end" AE..= (1789465728 :: Int)]
         lapsedInvoices _ url = pure $ invoices <$ guard (url == "https://api.stripe.com/v1/invoices?limit=12&subscription=sub_lapsed")
     (reqs, _) <- runAsBaseRecordingHTTP tr $ withHTTPResponses lapsedInvoices $ atAuthToBase session $ CreateProject.stripeCheckoutInitH testPid (CreateProject.StripeCheckoutForm "GraduatedPricing")
     form <- maybe (fail "no checkout session request recorded") (pure . parseSimpleQuery . toStrict) $ snd <$> find ((== "https://api.stripe.com/v1/checkout/sessions") . fst) reqs
-    (`lookup` form) <$> ["line_items[2][price_data][unit_amount]", "line_items[3][price_data][unit_amount]", "metadata[settles_invoices]", "managed_payments[enabled]"]
+    map (`lookup` form) ["line_items[2][price_data][unit_amount]", "line_items[3][price_data][unit_amount]", "metadata[settles_invoices]", "managed_payments[enabled]"]
       `shouldBe` ([Just "6837", Nothing, Just "in_owed", Just "true"] :: [Maybe ByteString])
 
     paid <- stripeCheckoutCompleted tr testPid [("settles_invoices", "in_owed")]
@@ -580,10 +580,9 @@ stripeBillingTests = do
     _ <- runQueryEffect tr $ Projects.updateStripeProjectBilling testPid (Projects.PlanName "GraduatedPricing") (Projects.SubId "sub_dun") (Projects.SubItemId "si_dun") (Projects.CustomerId "cus_dun")
     let plan = fmap (.paymentPlan) <$> runQueryEffect tr (Projects.projectById testPid)
         sub status = AE.object ["id" AE..= ("sub_dun" :: Text), "status" AE..= (status :: Text), "items" AE..= AE.object ["data" AE..= ([AE.object ["id" AE..= ("si_dun" :: Text), "price" AE..= AE.object ["id" AE..= ("price_graduated" :: Text)]]] :: [AE.Value])]]
-        stripeSub _ url = pure $ AE.encode (sub "active") <$ guard (url == "https://api.stripe.com/v1/subscriptions/sub_dun")
-    _ <- stripeWebhook tr stripeSub "customer.subscription.updated" (sub "unpaid")
+    _ <- stripeWebhook tr (\_ _ -> pure Nothing) "customer.subscription.updated" (sub "unpaid")
     plan `shouldReturn` Just "Free"
-    _ <- stripeWebhook tr stripeSub "customer.subscription.updated" (sub "active")
+    _ <- stripeWebhook tr (\_ _ -> pure Nothing) "customer.subscription.updated" (sub "active")
     plan `shouldReturn` Just "GraduatedPricing"
 
   -- A sub Stripe already cancelled can't come back, so paying its leftover invoice outside

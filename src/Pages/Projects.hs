@@ -1162,7 +1162,7 @@ stripeCheckoutInitH pid form = do
   (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
-      lapsedSubId = mfilter (not . T.null) project.subId <* guard (Projects.isFreeTier project.paymentPlan && Projects.projectProvider project == Projects.StripeProvider)
+      lapsedSubId = guard (Projects.isFreeTier project.paymentPlan && Projects.projectProvider project == Projects.StripeProvider) *> mfilter (not . T.null) project.subId
   debts <- maybe (pure []) (fmap (filter \i -> i.status == "open" && i.amountRemaining > 0) . BackgroundJobs.getStripeInvoices envCfg.stripeSecretKey) lapsedSubId
   -- Keyed to the buyer, not the project: people run several projects, and each one
   -- used to mint its own Stripe customer and hand out its own 30-day trial.
