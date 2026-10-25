@@ -467,11 +467,9 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds inva
         !dropPoison =
           [ (ackId, raw, "unresolved project: payload carried telemetry but did not resolve or convert")
           | (ackId, raw, req, recs) <- converted
-          , let keys = V.toList (extractKeys req)
-                pids = mapMaybe (`HM.lookup` keyToIdMap) keys <> extractIds req
-                unresolved = length pids < length keys + length (extractIds req) || not (all (`HM.member` projectCachesMap) pids)
-                capped p = maybe False overFreeTierQuota (HM.lookup p projectCachesMap)
-          , unresolved || (V.null recs && not (null pids) && not (all capped pids))
+          , let accounted pids = all (`HM.member` projectCachesMap) pids && (not (V.null recs) || all capped pids)
+                capped p = any overFreeTierQuota (HM.lookup p projectCachesMap)
+          , not $ maybe False (accounted . (<> extractIds req)) (traverse (`HM.lookup` keyToIdMap) (V.toList (extractKeys req)))
           ]
         !dropAckIds = HS.fromList [ackId | (ackId, _, _) <- dropPoison]
         !writeReady = [(ackId, raw, recs) | (ackId, raw, _, recs) <- converted, not (HS.member ackId dropAckIds)]
