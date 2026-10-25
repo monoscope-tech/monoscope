@@ -5,9 +5,9 @@ module Pkg.Components.Table (
   Column (..),
   Config (..),
   Features (..),
-  Grouping (..),
+  SelectControl (..),
   TableTabs (..),
-  groupingControl_,
+  selectControl_,
   facetsConfig,
   countedFilter,
   defaultFeaturesAreInert,
@@ -132,7 +132,7 @@ data Features a = Features
   , resultSummary :: Maybe Text
   , exportName :: Maybe Text
   , customizeColumns :: Bool
-  , grouping :: Maybe Grouping
+  , grouping :: Maybe SelectControl
   , tabs :: Maybe TableTabs
   }
   -- Every field's default is the generic one (Nothing / [] / False). The
@@ -197,8 +197,10 @@ data Config = Config
   }
 
 
-data Grouping = Grouping
-  { current :: Text
+data SelectControl = SelectControl
+  { name :: Text
+  , label :: Text
+  , current :: Text
   , options :: [(Text, Text)] -- (value, label)
   , baseUrl :: Text
   , targetId :: Text
@@ -810,7 +812,7 @@ renderResultToolbar tbl = div_ [class_ "flex min-h-9 flex-wrap items-center just
   whenJust tbl.features.resultSummary $ \summary -> span_ [class_ "text-sm text-textWeak", role_ "status", Aria.live_ "polite"] $ toHtml summary
   forM_ tbl.features.facets $ \facets -> div_ [class_ "flex flex-wrap gap-2"] $ renderFilterChips facets
   div_ [class_ "ml-auto flex flex-wrap items-center gap-2"] do
-    forM_ tbl.features.grouping groupingControl_
+    forM_ tbl.features.grouping selectControl_
     forM_ tbl.features.exportName $ \name ->
       button_
         [ type_ "button"
@@ -823,18 +825,46 @@ renderResultToolbar tbl = div_ [class_ "flex min-h-9 flex-wrap items-center just
       button_ ([type_ "button", class_ "btn btn-xs border border-strokeWeak bg-transparent font-normal text-textWeak shadow-none"] <> popoverTrigger_ (tbl.config.elemID <> "-columns")) do
         faSprite_ "table-columns" "regular" "h-3 w-3"
         "Customize"
-      div_ (popoverPanel_ (tbl.config.elemID <> "-columns") <> [data_ "column-picker" "", class_ "dropdown dropdown-end z-50 mt-1 w-56 rounded-md border border-strokeWeak bg-bgRaised p-2 text-sm shadow-lg"]) do
+      -- CSS owns visibility; the checkbox only restores a stored choice. @data-forced@ marks a
+      -- user choice, so ticking a column that a breakpoint hides shows it.
+      style_ $ flip foldMap tbl.columns \c ->
+        let rule toggle display = "#" <> tbl.config.elemID <> "_page:has([data-column-toggle=\"" <> c.name <> "\"]" <> toggle <> ") [data-column-key=\"" <> c.name <> "\"]{display:" <> display <> "}"
+         in rule "[data-forced]:not(:checked)" "none" <> rule "[data-forced]:checked" "table-cell"
+      div_ (popoverPanel_ (tbl.config.elemID <> "-columns") <> [class_ "dropdown dropdown-end z-50 mt-1 w-56 rounded-md border border-strokeWeak bg-bgRaised p-2 text-sm shadow-lg", [__|on beforetoggle if event.newState is 'open' send syncColumn to <[data-column-toggle]/> in me end|]]) do
         span_ [class_ "block px-2 pb-1 text-xs font-semibold text-textStrong"] "Visible columns"
         forM_ tbl.columns $ \column -> label_ [class_ "flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 hover:bg-fillWeak"] do
-          input_ [type_ "checkbox", checked_, class_ "checkbox checkbox-xs", data_ "column-toggle" column.name, onchange_ "window.setTableColumn(this)"]
+          input_
+            [ type_ "checkbox"
+            , checked_
+            , class_ "checkbox checkbox-xs"
+            , data_ "column-toggle" column.name
+            , data_ "column-storage" $ "table-columns:" <> tbl.config.elemID <> ":" <> column.name
+            , [__|init send syncColumn to me end
+                on syncColumn
+                  set saved to localStorage.getItem(@data-column-storage)
+                  if saved is null
+                    remove @data-forced then set my.checked to true
+                    set cell to (closest <[data-table-columns]/>).querySelector('[data-column-key="' + @data-column-toggle + '"]')
+                    if cell set my.checked to getComputedStyle(cell).display is not 'none' end
+                  else
+                    set @data-forced to 'true' then set my.checked to saved is 'true'
+                  end
+                end
+                on change set @data-forced to 'true' then call localStorage.setItem(@data-column-storage, my.checked)|]
+            ]
           toHtml column.name
-        button_ [type_ "button", class_ "btn btn-xs btn-ghost mt-1 w-full font-normal", onclick_ "window.resetTableColumns(this)"] "Reset columns"
+        button_
+          [ type_ "button"
+          , class_ "btn btn-xs btn-ghost mt-1 w-full font-normal"
+          , [__|on click repeat for t in <[data-column-toggle]/> in closest <[data-table-columns]/> call localStorage.removeItem(t.getAttribute('data-column-storage')) then send syncColumn to t end|]
+          ]
+          "Reset columns"
 
 
-groupingControl_ :: Grouping -> Html ()
-groupingControl_ cfg = label_ [class_ "flex items-center gap-2 whitespace-nowrap text-xs text-textWeak"] do
-  "Group by"
-  select_ ([name_ "group", class_ "select select-xs w-auto cursor-pointer border-strokeWeak bg-bgBase max-md:min-h-11 max-md:text-base", hxTrigger_ "change"] <> swapTarget_ cfg.targetId (deleteParam "deferred" $ deleteParam "group" cfg.baseUrl))
+selectControl_ :: SelectControl -> Html ()
+selectControl_ cfg = label_ [class_ "flex items-center gap-2 whitespace-nowrap text-xs text-textWeak"] do
+  toHtml cfg.label
+  select_ ([name_ cfg.name, class_ "select select-xs w-auto cursor-pointer border-strokeWeak bg-bgBase max-md:min-h-11 max-md:text-base", hxTrigger_ "change"] <> swapTarget_ cfg.targetId (deleteParam "deferred" $ deleteParam cfg.name cfg.baseUrl))
     $ forM_ cfg.options
     $ \(value, label) -> option_ ([value_ value] <> [selected_ "" | value == cfg.current]) $ toHtml label
 

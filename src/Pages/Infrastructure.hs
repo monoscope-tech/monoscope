@@ -33,7 +33,7 @@ import Pages.Containers (deferUrl, infraSnapshot, infraUrl, infrastructureBW, ma
 import Pages.Containers qualified as Containers
 import Pages.LogExplorer.Log qualified as Log
 import Pkg.Components.Facets qualified as Facets
-import Pkg.Components.Table (Config (..), Features (..), Grouping (..), SearchMode (..), Table (..), TableTabs (..), ZeroState (..), col, countedFilter, facetActions, facetsConfig, groupingControl_, withAttrs)
+import Pkg.Components.Table (Config (..), Features (..), SearchMode (..), SelectControl (..), Table (..), TableTabs (..), ZeroState (..), col, countedFilter, facetActions, facetsConfig, selectControl_, withAttrs)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (WrappedEnumSC (..))
@@ -190,7 +190,7 @@ hostsTable pid window url filters grouping hosts allHosts =
           , searchPlaceholder = Just "Search hosts"
           , rowAttrs = Just $ drawerRowAttrs_ . hostDetailUrl pid window . (.name)
           , rowGroup = if grouping == GroupNone then Nothing else Just $ Just . hostGroupLabel grouping
-          , grouping = Just $ Grouping (hostGroupParam grouping) (map hostGroupOption [minBound ..]) url "hostsContainer"
+          , grouping = Just $ SelectControl "group" "Group by" (hostGroupParam grouping) (map hostGroupOption [minBound ..]) url "hostsContainer"
           , header = Just $ timeRefreshListener_ "hostsContainer" url
           , resultSummary = Just $ "Showing " <> show (V.length hosts) <> " of " <> show (V.length allHosts) <> " hosts"
           , customizeColumns = True
@@ -555,8 +555,9 @@ kubernetesGetH pid resourceM clusterM namespaceM statusM fromParam toParam since
   let resource = parseParam KubePods display resourceM
       url = deferUrl pid "/infrastructure/kubernetes" [("resource", resourceM), ("cluster", clusterM), ("namespace", namespaceM), ("status", statusM)] window
   body <- withDeferredBody deferredM "kubernetesContainer" url (tableSkeleton_ 8) do
-    allRows <- kubeRowsFromRows resource <$> infraSnapshot pid window
-    let rows = V.filter (\row -> matchesFilter clusterM row.cluster && matchesFilter namespaceM row.namespace && matchesFilter statusM (Just $ kubeStatusLabel row.status)) allRows
+    snapshot <- infraSnapshot pid window
+    let allRows = kubeRowsFromRows resource snapshot
+        rows = V.filter (\row -> matchesFilter clusterM row.cluster && matchesFilter statusM (Just $ kubeStatusLabel row.status)) $ kubeRowsFromRows resource $ V.filter (matchesFilter namespaceM . (.namespace)) snapshot
     pure $ kubernetesTable pid window url resource clusterM namespaceM statusM rows allRows
   addRespHeaders $ KubernetesPage $ PageCtx (infrastructureBW pid "Kubernetes" window bw) body
 
@@ -702,11 +703,9 @@ hostMapGetH pid fillM groupM providerM regionM osM fromParam toParam sinceParam 
 hostMap_ :: HostMapData -> Html ()
 hostMap_ page = div_ [id_ "hostMapContainer", class_ "flex min-h-full flex-col bg-bgBase"] do
   timeRefreshListener_ "hostMapContainer" (deferUrl page.pid "/infrastructure/host-map" [("fill", Just $ display page.fill), ("group", Just $ hostGroupParam page.grouping), ("provider", page.filters.provider), ("region", page.filters.region), ("os", page.filters.osType)] page.window)
-  form_ [method_ "get", action_ $ "/p/" <> page.pid.toText <> "/infrastructure/host-map", class_ "flex flex-wrap items-end gap-3 border-b border-strokeWeak bg-bgRaised px-4 py-3 max-sm:grid max-sm:grid-cols-2"] do
-    TimePicker.timeHiddenInputs_ page.window.fromQuery page.window.toQuery page.window.sinceQuery
-    mapSelect "fill" "Fill by" (display page.fill) [(display f, case f of FillCPU -> "CPU usage"; FillMemory -> "Memory usage"; FillStorage -> "Storage usage") | f <- [minBound ..]]
-    groupingControl_ $ Grouping (hostGroupParam page.grouping) (map hostGroupOption [minBound ..]) mapUrl "hostMapContainer"
-    forM_ [(field, value) | (field, Just value) <- [("provider", page.filters.provider), ("region", page.filters.region), ("os", page.filters.osType)]] $ \(field, value) -> input_ [type_ "hidden", name_ field, value_ value]
+  div_ [class_ "flex flex-wrap items-center gap-3 border-b border-strokeWeak bg-bgRaised px-4 py-3 max-sm:grid max-sm:grid-cols-2"] do
+    selectControl_ $ SelectControl "fill" "Fill by" (display page.fill) [(display f, case f of { FillCPU -> "CPU usage"; FillMemory -> "Memory usage"; FillStorage -> "Storage usage" }) | f <- [minBound ..]] mapUrl "hostMapContainer"
+    selectControl_ $ SelectControl "group" "Group by" (hostGroupParam page.grouping) (map hostGroupOption [minBound ..]) mapUrl "hostMapContainer"
     div_ [class_ "ml-auto flex flex-wrap items-center gap-3 text-xs text-textWeak max-sm:col-span-2 max-sm:ml-0", Aria.label_ "Utilization legend"] do
       legend "bg-fillSuccess-strong" "Below 60%"
       legend "bg-fillWarning-strong" "60–85%"
@@ -738,10 +737,6 @@ hostMap_ page = div_ [id_ "hostMapContainer", class_ "flex min-h-full flex-col b
   where
     mapUrl = infraUrl page.pid "/infrastructure/host-map" ([("fill", display page.fill), ("group", hostGroupParam page.grouping)] <> mapMaybe sequenceA [("provider", page.filters.provider), ("region", page.filters.region), ("os", page.filters.osType)]) page.window
     legend colour label = span_ [class_ "inline-flex items-center gap-1.5"] $ span_ [class_ $ "h-3 w-3 " <> colour, style_ hexClipPath] mempty >> toHtml label
-    mapSelect :: Text -> Text -> Text -> [(Text, Text)] -> Html ()
-    mapSelect field label current options = label_ [class_ "flex flex-col gap-1 text-xs text-textWeak"] do
-      toHtml label
-      select_ [name_ field, class_ "select select-sm min-w-44 border-strokeWeak bg-bgBase text-sm text-textStrong max-sm:h-11 max-sm:min-w-0 max-sm:w-full", onchange_ "this.form.requestSubmit()"] $ forM_ options \(value, title) -> option_ ([value_ value] <> [selected_ "" | value == current]) $ toHtml title
     hostHex enlarged host = div_ [class_ $ "flex flex-col items-center gap-1 " <> bool "" "w-24" enlarged] do
       let value = case page.fill of FillCPU -> host.cpuPct; FillMemory -> host.memoryPct; FillStorage -> host.storagePct
       button_

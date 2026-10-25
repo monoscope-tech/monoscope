@@ -2,7 +2,7 @@ module Pkg.Components.Facets (Config (..), Layout (..), FacetNode (..), FacetCon
 
 import Lucid
 import Lucid.Hyperscript (__)
-import Pages.Components (detailsClosedBelowAttr_, searchInput_)
+import Pages.Components (detailsClosedBelowAttr_, filterInputAttr_, searchInput_)
 import Relude
 import Utils (LoadingSize (..), LoadingType (..), faSprite_, loadingIndicator_, prettyPrintCount)
 
@@ -31,10 +31,7 @@ sidebar_ cfg = case cfg.layout of
       searchInput_
         "sticky top-0 z-10 h-9 w-[calc(100%-1rem)] mx-2 border-strokeStrong bg-bgBase"
         "Search filters"
-        [ name_ "facet-search"
-        , oninput_ "const q=this.value.toLowerCase();this.closest('[data-component=\"facet-rail\"]').querySelectorAll('[data-component=\"facet-option\"],[data-component=\"facet-section\"]').forEach(el=>el.classList.toggle('hidden',!el.textContent.toLowerCase().includes(q)))"
-        , onkeydown_ "if(event.key==='Escape'){this.value='';this.dispatchEvent(new Event('input',{bubbles:true}))}"
-        ]
+        [name_ "facet-search", filterInputAttr_ ".facet-rail .facet-item, .facet-rail .facet-section"]
       forM_ cfg.clear $ \attrs -> button_ ([type_ "button", class_ "flex items-center justify-between rounded px-2 py-1.5 text-xs text-textBrand hover:bg-fillWeak"] <> attrs) $ "Clear all" >> faSprite_ "xmark" "regular" "h-3 w-3"
       div_ [class_ "facets-container"] $ maybe (div_ [class_ "px-1 py-4 text-xs italic text-textWeak"] "Filters are still being built for this project.") (mapM_ facetNode_) cfg.content
 

@@ -5,7 +5,6 @@ let exported: Blob;
 
 beforeEach(() => {
   document.body.innerHTML = '';
-  localStorage.clear();
   Object.defineProperty(URL, 'createObjectURL', {
     configurable: true,
     value: vi.fn((blob: Blob) => {
@@ -14,42 +13,6 @@ beforeEach(() => {
     }),
   });
   Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() });
-});
-
-test('column choices survive swaps and column insertion, stay scoped, and reset', () => {
-  const markup = (extra = '') => `<div data-table-columns="hostsForm">
-    <input type="checkbox" data-column-toggle="CPU" checked><button>Reset</button>
-    <table><tr>${extra}<th data-column-key="CPU">CPU</th></tr>
-    <tr>${extra}<td data-column-key="CPU">25%</td></tr></table></div>
-    <div data-table-columns="imagesForm"><table><tr><td data-column-key="CPU">50%</td></tr></table></div>`;
-  document.body.innerHTML = markup();
-  const input = document.querySelector<HTMLInputElement>('input')!;
-  input.checked = false;
-  window.setTableColumn(input);
-  document.body.innerHTML = markup('<td data-column-key="Configuration">Europe</td>');
-  document.dispatchEvent(new CustomEvent('htmx:after:swap'));
-
-  const hosts = document.querySelector<HTMLElement>('[data-table-columns="hostsForm"]')!;
-  expect(Array.from(hosts.querySelectorAll<HTMLElement>('[data-column-key="CPU"]')).every(cell => cell.style.display === 'none')).toBe(true);
-  expect(hosts.querySelector<HTMLInputElement>('input')!.checked).toBe(false);
-  expect(document.querySelector<HTMLElement>('[data-table-columns="imagesForm"] td')!.style.display).toBe('');
-  expect(hosts.querySelector<HTMLElement>('[data-column-key="Configuration"]')!.style.display).toBe('');
-  window.resetTableColumns(hosts.querySelector('button')!);
-  expect(hosts.querySelector<HTMLElement>('th')!.style.display).toBe('');
-  expect(hosts.querySelector<HTMLInputElement>('input')!.checked).toBe(true);
-  expect(localStorage.getItem('table-columns:hostsForm')).toBeNull();
-});
-
-test('Customize reflects responsive visibility and can reveal a hidden column', () => {
-  document.body.innerHTML = `<style>.responsive-column { display: none }</style>
-    <div data-table-columns="hostsForm"><input type="checkbox" data-column-toggle="System" checked>
-    <table><tr><td class="responsive-column" data-column-key="System">Linux</td></tr></table></div>`;
-  document.dispatchEvent(new CustomEvent('htmx:after:swap'));
-  const input = document.querySelector<HTMLInputElement>('input')!;
-  expect(input.checked).toBe(false);
-  input.checked = true;
-  window.setTableColumn(input);
-  expect(getComputedStyle(document.querySelector('td')!).display).toBe('table-cell');
 });
 
 afterEach(() => vi.restoreAllMocks());

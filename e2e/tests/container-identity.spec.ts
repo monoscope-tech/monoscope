@@ -148,7 +148,7 @@ test("changing the container time preset refreshes inventory and drawer windows"
   }
 });
 
-for (const width of [390, 1280]) {
+for (const width of [390, 1280, 1920]) {
   test(`duplicate containers expose their identity before opening a drawer at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await page.goto(`/p/${DEMO_PROJECT}/infrastructure/containers?from=2024-12-31T23:00:00Z&to=2025-01-01T00:00:00Z`, { waitUntil: "domcontentloaded" });
@@ -163,7 +163,7 @@ for (const width of [390, 1280]) {
         return value ? value.getClientRects().length > 0 : null;
       });
     }));
-    expect(visible).toEqual(Array(identities.length * 4).fill(width < 1024));
+    expect(visible).toEqual(Array(identities.length * 4).fill(width < 1536));
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 }

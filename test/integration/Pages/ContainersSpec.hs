@@ -377,7 +377,7 @@ spec = sequential $ aroundAll withTfChartResources do
       let render features = LT.toStrict $ Lucid.renderText $ Lucid.toHtml table{features}
           customizeOnly = render table.features{resultSummary = Nothing, exportName = Nothing, customizeColumns = True}
           exportOnly = render table.features{resultSummary = Nothing, exportName = Just "containers", customizeColumns = False}
-      customizeOnly `shouldContainAll` ["Customize", "Reset columns", "data-column-key=", "data-column-toggle="]
+      customizeOnly `shouldContainAll` ["Customize", "Reset columns", "data-column-key=", "data-column-toggle=", "[data-forced]:not(:checked)) [data-column-key=\"Pod\"]{display:none}"]
       customizeOnly `shouldNotSatisfy` T.isInfixOf ">Export</button>"
       exportOnly `shouldContainAll` ["Export", "containers.csv"]
       exportOnly `shouldNotSatisfy` T.isInfixOf "Customize"
@@ -419,7 +419,7 @@ spec = sequential $ aroundAll withTfChartResources do
       (_, hostMap) <- testServant tr $ Infrastructure.hostMapGetH testPid (Just "storage") Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "1")
       let hostMapHtml = LT.toStrict $ Lucid.renderText $ Lucid.toHtml hostMap
       hostMapHtml
-        `shouldContainAll` ["Host Map", "Fill by", "Group by", "vps-bare-01", "clip-path:polygon", "bg-fillNeutral-strong", "onchange=\"this.form.requestSubmit()\"", "data-component=\"facet-rail\"", "Provider", "Region", "OS"]
+        `shouldContainAll` ["Host Map", "Fill by", "Group by", "vps-bare-01", "clip-path:polygon", "bg-fillNeutral-strong", "name=\"fill\"", "data-hx-trigger=\"change\"", "data-component=\"facet-rail\"", "Provider", "Region", "OS"]
       hostMapHtml `shouldNotSatisfy` T.isInfixOf ">Apply</button>"
 
       (_, hostDetail) <- testServant tr $ Infrastructure.hostDetailGetH testPid (Just "vps-bare-01") Nothing Nothing Nothing

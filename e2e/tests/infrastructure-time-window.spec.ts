@@ -67,6 +67,19 @@ for (const width of [390, 1440]) {
     await container.getByRole('button', { name: 'Customize', exact: true }).click();
     await container.getByRole('button', { name: 'Reset columns', exact: true }).click();
     await expect(container.locator('td[data-column-key="CPU"]').first()).toBeVisible();
+    if (width === 390) {
+      const system = container.locator('[data-column-toggle="System"]');
+      await expect(system).not.toBeChecked();
+      await system.check();
+      await expect(container.locator('td[data-column-key="System"]').first()).toBeVisible();
+      await container.getByRole('button', { name: 'Reset columns', exact: true }).click();
+      await expect(container.locator('td[data-column-key="System"]').first()).toBeHidden();
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await expect(container.locator('td[data-column-key="System"]').first()).toBeVisible();
+      await container.getByRole('button', { name: 'Customize', exact: true }).click();
+      await container.getByRole('button', { name: 'Customize', exact: true }).click();
+      await expect(system).toBeChecked();
+    }
   });
 }
 
@@ -95,7 +108,7 @@ for (const [route, container, filters, searchName] of views) {
     const url = `/p/${DEMO_PROJECT}/infrastructure/${route}?${new URLSearchParams({ ...filters, from: "", to: "", since: "5m" })}`;
     await page.goto(url, { waitUntil: "domcontentloaded" });
     await expect(page.locator("[data-deferred-shell]")).toHaveCount(0, { timeout: 5_000 });
-    const entries = page.locator(`#${container} ${route === "host-map" ? "button[data-hx-get]" : 'tr[role="button"]'}`);
+    const entries = page.locator(`#${container} ${route === "host-map" ? 'button[data-hx-get*="/infrastructure/hosts/detail"]' : 'tr[role="button"]'}`);
     await expect(entries).toHaveCount(1);
     await page.locator('[popovertarget="n-timepicker-popover"]').click();
     await page.locator("[data-mobile-live-toggle]").click();
@@ -169,7 +182,7 @@ for (const [route, container, filters, searchName] of views) {
       await page.locator('#n-timepicker-popover button[data-value="1H"]').click();
       release();
       await expect(page.locator("[data-deferred-shell]")).toHaveCount(0, { timeout: 5_000 });
-      const entries = page.locator(`#${container} ${route === "host-map" ? "button[data-hx-get]" : 'tr[role="button"]'}`);
+      const entries = page.locator(`#${container} ${route === "host-map" ? 'button[data-hx-get*="/infrastructure/hosts/detail"]' : 'tr[role="button"]'}`);
       await expect(entries).toHaveCount(2);
       expect(new URL((await entries.first().getAttribute("data-hx-get"))!, page.url()).searchParams.get("since")).toBe("1H");
     } finally { release(); }
@@ -184,7 +197,7 @@ for (const [route, container, filters] of [...views, ["containers", "containersC
     await page.route(/\/public\/assets\/(?:js\/main\.|web-components\/dist\/js\/index\.).*\.js$/, async route => { await held; await route.continue(); });
     try {
       await page.goto(`/p/${DEMO_PROJECT}/infrastructure/${route}?${new URLSearchParams({ ...filters, from: "", to: "", since: "5M" })}&since=5m`, { waitUntil: "commit" });
-      const entries = page.locator(`#${container} ${route === "host-map" ? "button[data-hx-get]" : 'tr[role="button"]'}`);
+      const entries = page.locator(`#${container} ${route === "host-map" ? 'button[data-hx-get*="/infrastructure/hosts/detail"]' : 'tr[role="button"]'}`);
       await page.waitForFunction(() => Boolean((window as any).htmx));
       await expect.poll(() => page.evaluate(() => typeof (window as any).params)).toBe("undefined");
       // The shell may have loaded automatically before this test reaches it.

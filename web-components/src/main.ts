@@ -408,52 +408,6 @@ window.exportTableCsv = (selector, filename) => {
   URL.revokeObjectURL(url);
 };
 
-function tableColumnState(table: HTMLElement): Record<string, boolean> {
-  try {
-    const state: unknown = JSON.parse(localStorage.getItem(`table-columns:${table.dataset.tableColumns}`) ?? '{}');
-    return state && typeof state === 'object' && !Array.isArray(state)
-      ? Object.fromEntries(Object.entries(state).filter(([, value]) => typeof value === 'boolean'))
-      : {};
-  } catch { return {}; }
-}
-
-function restoreTableColumns() {
-  document.querySelectorAll<HTMLElement>('[data-table-columns]').forEach(table => {
-    const state = tableColumnState(table);
-    const cells = Array.from(table.querySelectorAll<HTMLElement>('[data-column-key]'));
-    cells.forEach(cell => {
-      const visible = state[cell.dataset.columnKey!];
-      cell.style.display = visible === undefined ? '' : visible ? 'table-cell' : 'none';
-    });
-    table.querySelectorAll<HTMLInputElement>('[data-column-toggle]').forEach(input => {
-      const cell = cells.find(cell => cell.dataset.columnKey === input.dataset.columnToggle);
-      input.checked = state[input.dataset.columnToggle!] ?? (!cell || getComputedStyle(cell).display !== 'none');
-    });
-  });
-}
-
-window.setTableColumn = input => {
-  const table = input.closest<HTMLElement>('[data-table-columns]')!;
-  const state = { ...tableColumnState(table), [input.dataset.columnToggle!]: input.checked };
-  try { localStorage.setItem(`table-columns:${table.dataset.tableColumns}`, JSON.stringify(state)); } catch { /* Storage can be disabled. */ }
-  table.querySelectorAll<HTMLElement>('[data-column-key]').forEach(cell => {
-    if (cell.dataset.columnKey === input.dataset.columnToggle) cell.style.display = input.checked ? 'table-cell' : 'none';
-  });
-};
-
-window.resetTableColumns = button => {
-  const table = button.closest<HTMLElement>('[data-table-columns]')!;
-  try { localStorage.removeItem(`table-columns:${table.dataset.tableColumns}`); } catch { /* Storage can be disabled. */ }
-  restoreTableColumns();
-};
-
-restoreTableColumns();
-document.addEventListener('DOMContentLoaded', restoreTableColumns);
-document.addEventListener('htmx:after:swap', restoreTableColumns);
-document.addEventListener('beforetoggle', event => {
-  if (event.target instanceof Element && event.target.hasAttribute('data-column-picker')) restoreTableColumns();
-}, true);
-
 function updateUrlState(key: string | string[], value: string, action: 'set' | 'delete' = 'set') {
   const params = new URLSearchParams(window.location.search);
   for (const k of Array.isArray(key) ? key : [key]) {
