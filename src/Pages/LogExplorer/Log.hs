@@ -1130,19 +1130,15 @@ lookupAlert :: DB es => Maybe Text -> Eff es (Maybe Monitors.QueryMonitor)
 lookupAlert = maybe (pure Nothing) (Monitors.queryMonitorById . Monitors.QueryMonitorId) . (>>= UUID.fromText)
 
 
--- | One-decimal percent formatter.
+-- | One-decimal percent formatter; positive rates never round down to zero.
 --
 -- >>> import "monoscope" Pages.LogExplorer.Log qualified as LL
--- >>> LL.fmtPct1 0
--- "0.0%"
--- >>> LL.fmtPct1 5.24
--- "5.2%"
--- >>> LL.fmtPct1 100
--- "100.0%"
--- >>> LL.fmtPct1 (-1.25)
--- "-1.2%"
+-- >>> map LL.fmtPct1 [0, 0.03, 0.05, 5.24, 100, -1.25]
+-- ["0.0%","<0.1%","0.1%","5.2%","100.0%","-1.2%"]
 fmtPct1 :: Double -> Text
-fmtPct1 x = showFFloat' 1 x <> "%"
+fmtPct1 x
+  | x > 0 && x < 0.05 = "<0.1%"
+  | otherwise = showFFloat' 1 x <> "%"
 
 
 -- | Shimmer placeholder mirroring 'sessionsHeader_' (6-KPI grid + over-time bar

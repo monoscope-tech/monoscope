@@ -8,7 +8,8 @@ import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Lazy qualified as BL
 import Data.Default (def)
 import Data.Effectful.Hasql qualified as Hasql
-import Data.Effectful.Wreq (HTTP)
+import Data.Effectful.Wreq (HTTP, Options)
+import Data.List (lookup)
 import Data.Pool (Pool, withResource)
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
@@ -27,8 +28,10 @@ import Hasql.Interpolate qualified as HI
 import Lucid (renderText, toHtml)
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects qualified as Projects
+import Network.HTTP.Types.URI (parseSimpleQuery)
 import OpenTelemetry.Instrumentation.Hasql qualified as OHasql
 import Pages.BodyWrapper (PageCtx (..))
+import Pages.Bots.BotTestHelpers (withHTTPResponses)
 import Pages.Dashboards qualified as Dashboards
 import Pages.LogExplorer.Log qualified as Log
 import Pages.Monitors qualified as Monitors
@@ -314,6 +317,8 @@ settingsTests = do
       html `shouldSatisfy` TL.isInfixOf "id=\"billing-downgrade-banner\""
       html `shouldSatisfy` TL.isInfixOf "Your paid subscription is no longer active. This project has been downgraded to Free."
       html `shouldSatisfy` TL.isInfixOf ("href=\"/p/" <> toLazy testPid.toText <> "/manage_billing\"")
+      -- A cancelled Stripe sub can't be revived from the portal, only by a new checkout.
+      html `shouldSatisfy` TL.isInfixOf (bool "Update payment method" "Reactivate subscription" (provider == Projects.StripeProvider))
       session <- refreshSession tr.trPool tr.trATCtx.hasqlPool tr.trSessAndHeader
       (_, billing) <- testServant tr{trSessAndHeader = session} $ Settings.manageBillingGetH testPid
       renderText (toHtml billing) `shouldSatisfy` TL.isInfixOf ("hx-get=\"/p/" <> toLazy testPid.toText <> "/manage_subscription\"")
@@ -517,7 +522,9 @@ stripeBillingTests = do
     let checkout = runAsBaseRecordingHTTP tr . atAuthToBase tr.trSessAndHeader . flip CreateProject.stripeCheckoutInitH (CreateProject.StripeCheckoutForm "GraduatedPricing")
         sessionBody reqs = snd <$> find ((== "https://api.stripe.com/v1/checkout/sessions") . fst) reqs
 
-    -- First ever upgrade: no customer to reuse, trial granted.
+    -- First ever upgrade: no customer to reuse, trial granted, and the plan button says so.
+    (_, LemonSqueezy.BillingGet (PageCtx _ fresh)) <- testServant tr $ LemonSqueezy.manageBillingGetH testPid
+    renderText (LemonSqueezy.billingPage fresh) `shouldSatisfy` TL.isInfixOf "Start 30 day free trial"
     (firstReqs, _) <- checkout testPid
     case sessionBody firstReqs of
       Nothing -> fail "no checkout session request recorded"
@@ -540,27 +547,125 @@ stripeBillingTests = do
   -- that the cancel reads the OLD sub_id, i.e. that it stays ahead of the write.
   it "stripe checkout webhook cancels the subscription the project held before" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
     _ <- runQueryEffect tr $ Projects.updateStripeProjectBilling testPid (Projects.PlanName "GraduatedPricing") (Projects.SubId "sub_old") (Projects.SubItemId "si_old") (Projects.CustomerId "cus_test")
-    now <- getTestTime tr.trTestClock
-    let body =
-          BL.toStrict
-            $ AE.encode
-            $ AE.object
-              [ "type" AE..= ("checkout.session.completed" :: Text)
-              , "data"
-                  AE..= AE.object
-                    [ "object"
-                        AE..= AE.object
-                          [ "client_reference_id" AE..= testPid.toText
-                          , "subscription" AE..= ("sub_new" :: Text)
-                          , "customer" AE..= ("cus_test" :: Text)
-                          ]
-                    ]
-              ]
-        ts = show @Text @Integer $ round $ utcTimeToPOSIXSeconds now
-        mac = HMAC.hmac (encodeUtf8 @Text @ByteString tr.trATCtx.env.stripeWebhookSecret) (encodeUtf8 @Text @ByteString ts <> "." <> body) :: HMAC.HMAC SHA256
-        sigHeader = "t=" <> ts <> ",v1=" <> decodeUtf8 (B16.encode $ BA.convert mac)
-    (reqs, _) <- runAsBaseRecordingHTTP tr $ LemonSqueezy.stripeWebhookPostH (Just sigHeader) body
+    reqs <- stripeCheckoutCompleted tr testPid []
     map fst reqs `shouldContain` ["https://api.stripe.com/v1/subscriptions/sub_old"]
+
+  -- Stripe cancels a subscription whose payments keep failing, and a cancelled one can't
+  -- be revived. Paying the leftover invoice in the portal left the project on Free, so
+  -- reactivating is one Managed Payments checkout that also carries that invoice
+  -- (Shipbubble, 2026-10-23: $68.37 open on a sub cancelled 2026-09-29).
+  it "stripeReactivation_lapsedSubscription_settlesOpenInvoiceAndUpgrades" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
+    _ <- runQueryEffect tr $ Projects.updateStripeProjectBilling testPid (Projects.PlanName "GraduatedPricing") (Projects.SubId "sub_lapsed") (Projects.SubItemId "si_lapsed") (Projects.CustomerId "cus_lapsed")
+    _ <- runQueryEffect tr $ Projects.downgradeToFreeBySubId "sub_lapsed"
+    session <- refreshSession tr.trPool tr.trATCtx.hasqlPool tr.trSessAndHeader
+    -- Checkout withholds a repeat trial, so the button must not promise one.
+    (_, LemonSqueezy.BillingGet (PageCtx _ lapsed)) <- testServant tr{trSessAndHeader = session} $ LemonSqueezy.manageBillingGetH testPid
+    renderText (LemonSqueezy.billingPage lapsed) `shouldNotSatisfy` TL.isInfixOf "free trial"
+    let invoices = AE.encode $ AE.object ["has_more" AE..= True, "data" AE..= ([invoice "in_owed" "open" 6837] :: [AE.Value])]
+        invoice id' status remaining = AE.object ["id" AE..= (id' :: Text), "currency" AE..= ("usd" :: Text), "status" AE..= (status :: Text), "number" AE..= ("MONO-0003" :: Text), "total" AE..= (6837 :: Int), "amount_remaining" AE..= (remaining :: Int), "period_start" AE..= (1786787328 :: Int), "period_end" AE..= (1789465728 :: Int)]
+        lapsedInvoices _ url = pure do
+          guard $ "https://api.stripe.com/v1/invoices?" `T.isPrefixOf` toText url
+          pure
+            $ if "starting_after=in_owed" `T.isInfixOf` toText url
+              then AE.encode $ AE.object ["has_more" AE..= False, "data" AE..= ([invoice "in_older" "open" 100] :: [AE.Value])]
+              else invoices
+    (reqs, _) <- runAsBaseRecordingHTTP tr $ withHTTPResponses lapsedInvoices $ atAuthToBase session $ CreateProject.stripeCheckoutInitH testPid (CreateProject.StripeCheckoutForm "GraduatedPricing")
+    form <- maybe (fail "no checkout session request recorded") (pure . parseSimpleQuery . toStrict . snd) $ find ((== "https://api.stripe.com/v1/checkout/sessions") . fst) reqs
+    map (`lookup` form) ["line_items[2][price_data][unit_amount]", "line_items[3][price_data][unit_amount]", "line_items[4][price_data][unit_amount]", "metadata[settles_invoices]", "managed_payments[enabled]"]
+      `shouldBe` ([Just "6837", Just "100", Nothing, Just "in_owed,in_older", Just "true"] :: [Maybe ByteString])
+
+    paid <- stripeCheckoutCompleted tr testPid [("settles_invoices", "in_owed")]
+    lookup "https://api.stripe.com/v1/invoices/in_owed/pay" paid `shouldBe` Just "paid_out_of_band=true"
+    fmap (.paymentPlan) <$> runQueryEffect tr (Projects.projectById testPid) `shouldReturn` Just "GraduatedPricing"
+
+  it "stripeReactivation_invoiceLookupFailure_doesNotCreateACheckoutWithoutTheDebt" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
+    _ <- runQueryEffect tr $ Projects.updateStripeProjectBilling testPid (Projects.PlanName "Free") (Projects.SubId "sub_lapsed") (Projects.SubItemId "si_lapsed") (Projects.CustomerId "cus_test")
+    session <- refreshSession tr.trPool tr.trATCtx.hasqlPool tr.trSessAndHeader
+    let unavailable _ url
+          | "https://api.stripe.com/v1/invoices?" `T.isPrefixOf` toText url = throwIO $ userError "Stripe temporarily unavailable"
+          | otherwise = pure Nothing
+    (requests, status) <-
+      runAsBaseRecordingHTTP tr
+        $ catchError @ServantS.ServerError
+          (withHTTPResponses unavailable (atAuthToBase session $ CreateProject.stripeCheckoutInitH testPid (CreateProject.StripeCheckoutForm "GraduatedPricing")) $> 200)
+          (\_ err -> pure err.errHTTPCode)
+    status `shouldBe` 503
+    map fst requests `shouldNotContain` ["https://api.stripe.com/v1/checkout/sessions"]
+
+  it "stripeReactivation_settlementFailure_requestsRetryAfterTheProjectUpgrade" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
+    _ <- runQueryEffect tr $ Projects.updateStripeProjectBilling testPid (Projects.PlanName "Free") (Projects.SubId "sub_lapsed") (Projects.SubItemId "si_lapsed") (Projects.CustomerId "cus_test")
+    let obj = AE.object ["client_reference_id" AE..= testPid.toText, "subscription" AE..= ("sub_new" :: Text), "customer" AE..= ("cus_test" :: Text), "payment_status" AE..= ("paid" :: Text), "metadata" AE..= AE.object ["settles_invoices" AE..= ("in_settled,in_owed" :: Text)]]
+        responses failPayment _ url
+          | url == "https://api.stripe.com/v1/invoices/in_settled" = pure $ Just "{\"status\":\"paid\"}"
+          | failPayment && url == "https://api.stripe.com/v1/invoices/in_owed/pay" = throwIO $ userError "Stripe temporarily unavailable"
+          | otherwise = pure Nothing
+    (_, failedStatus) <- stripeWebhook tr (responses True) "checkout.session.completed" obj
+    failedStatus `shouldBe` 503
+    fmap (.subId) <$> runQueryEffect tr (Projects.projectById testPid) `shouldReturn` Just (Just "sub_new")
+    (retried, retryStatus) <- stripeWebhook tr (responses False) "checkout.session.completed" obj
+    retryStatus `shouldBe` 200
+    lookup "https://api.stripe.com/v1/invoices/in_owed/pay" retried `shouldBe` Just "paid_out_of_band=true"
+    map fst retried `shouldNotContain` ["https://api.stripe.com/v1/subscriptions/sub_new", "https://api.stripe.com/v1/invoices/in_settled/pay"]
+
+  it "stripeReactivation_unpaidCheckout_waitsForThePaymentToSucceed" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
+    _ <- runQueryEffect tr $ Projects.updateStripeProjectBilling testPid (Projects.PlanName "Free") (Projects.SubId "sub_lapsed") (Projects.SubItemId "si_lapsed") (Projects.CustomerId "cus_test")
+    let checkout status = AE.object ["client_reference_id" AE..= testPid.toText, "subscription" AE..= ("sub_new" :: Text), "customer" AE..= ("cus_test" :: Text), "payment_status" AE..= (status :: Text), "metadata" AE..= AE.object ["settles_invoices" AE..= ("in_owed" :: Text)]]
+    (unpaidRequests, pendingStatus) <- stripeWebhook tr (\_ _ -> pure Nothing) "checkout.session.completed" (checkout "unpaid")
+    pendingStatus `shouldBe` 200
+    map fst unpaidRequests `shouldNotContain` ["https://api.stripe.com/v1/invoices/in_owed/pay"]
+    fmap (.paymentPlan) <$> runQueryEffect tr (Projects.projectById testPid) `shouldReturn` Just "Free"
+    (paid, paidStatus) <- stripeWebhook tr (\_ _ -> pure Nothing) "checkout.session.async_payment_succeeded" (checkout "paid")
+    paidStatus `shouldBe` 200
+    lookup "https://api.stripe.com/v1/invoices/in_owed/pay" paid `shouldBe` Just "paid_out_of_band=true"
+    fmap (.paymentPlan) <$> runQueryEffect tr (Projects.projectById testPid) `shouldReturn` Just "GraduatedPricing"
+
+  -- Dunning that ends at `unpaid` keeps the subscription: paying its invoice by any route
+  -- (hosted link, email, portal) makes Stripe flip it back to `active`, and only
+  -- customer.subscription.updated says so — the project must follow both ways.
+  it "stripeDunning_unpaidThenPaidAnywhere_followsSubscriptionStatus" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
+    _ <- runQueryEffect tr $ Projects.updateStripeProjectBilling testPid (Projects.PlanName "GraduatedPricing") (Projects.SubId "sub_dun") (Projects.SubItemId "si_dun") (Projects.CustomerId "cus_dun")
+    let plan = fmap (.paymentPlan) <$> runQueryEffect tr (Projects.projectById testPid)
+        sub status = AE.object ["id" AE..= ("sub_dun" :: Text), "status" AE..= (status :: Text), "items" AE..= AE.object ["data" AE..= ([AE.object ["id" AE..= ("si_dun" :: Text), "price" AE..= AE.object ["id" AE..= ("price_graduated" :: Text)]]] :: [AE.Value])]]
+    _ <- stripeWebhook tr (\_ _ -> pure Nothing) "customer.subscription.updated" (sub "unpaid")
+    plan `shouldReturn` Just "Free"
+    _ <- stripeWebhook tr (\_ _ -> pure Nothing) "customer.subscription.updated" (sub "active")
+    plan `shouldReturn` Just "GraduatedPricing"
+
+  -- A sub Stripe already cancelled can't come back, so paying its leftover invoice outside
+  -- our checkout must not pretend to reactivate; the payer is pointed back at checkout.
+  it "stripeInvoicePaid_cancelledSubscription_staysFree" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
+    _ <- runQueryEffect tr $ Projects.updateStripeProjectBilling testPid (Projects.PlanName "GraduatedPricing") (Projects.SubId "sub_gone") (Projects.SubItemId "si_gone") (Projects.CustomerId "cus_gone")
+    _ <- runQueryEffect tr $ Projects.downgradeToFreeBySubId "sub_gone"
+    let cancelled _ url = pure $ AE.encode (AE.object ["status" AE..= ("canceled" :: Text), "items" AE..= AE.object ["data" AE..= ([AE.object ["id" AE..= ("si_gone" :: Text), "price" AE..= AE.object ["id" AE..= ("price_graduated" :: Text)]]] :: [AE.Value])]]) <$ guard (url == "https://api.stripe.com/v1/subscriptions/sub_gone")
+    (reqs, status) <- stripeWebhook tr cancelled "invoice.paid" $ AE.object ["id" AE..= ("in_gone" :: Text), "customer" AE..= ("cus_gone" :: Text), "parent" AE..= AE.object ["subscription_details" AE..= AE.object ["subscription" AE..= ("sub_gone" :: Text)]]]
+    status `shouldBe` 200
+    map fst reqs `shouldContain` ["https://api.stripe.com/v1/subscriptions/sub_gone"]
+    fmap (.paymentPlan) <$> runQueryEffect tr (Projects.projectById testPid) `shouldReturn` Just "Free"
+
+
+-- | Deliver a signed checkout.session.completed for @pid@ (new sub @sub_new@) carrying
+-- the given session metadata; returns the outgoing Stripe requests.
+stripeCheckoutCompleted :: TestResources -> Projects.ProjectId -> [(AE.Key, Text)] -> IO [(Text, LByteString)]
+stripeCheckoutCompleted tr pid metadata = do
+  (requests, status) <-
+    stripeWebhook tr (\_ _ -> pure Nothing) "checkout.session.completed"
+      $ AE.object ["client_reference_id" AE..= pid.toText, "subscription" AE..= ("sub_new" :: Text), "customer" AE..= ("cus_test" :: Text), "payment_status" AE..= ("paid" :: Text), "metadata" AE..= AE.object (map (fmap AE.toJSON) metadata)]
+  status `shouldBe` 200
+  pure requests
+
+
+-- | Deliver a signed Stripe event of @eventType@ wrapping @obj@, answering Stripe calls from
+-- @responses@; returns the outgoing Stripe requests and HTTP status.
+stripeWebhook :: TestResources -> (Options -> String -> IO (Maybe LByteString)) -> Text -> AE.Value -> IO ([(Text, LByteString)], Int)
+stripeWebhook tr responses eventType obj = do
+  let appCtx = tr.trATCtx
+      isolated = tr{trATCtx = appCtx{System.Config.config = appCtx.config{System.Config.smtpHost = "127.0.0.1", System.Config.smtpPort = 1, System.Config.smtpUsername = "", System.Config.smtpPassword = "", System.Config.postmarkToken = ""}}}
+  now <- getTestTime tr.trTestClock
+  let body = toStrict $ AE.encode $ AE.object ["type" AE..= eventType, "data" AE..= AE.object ["object" AE..= obj]]
+      ts = show @Text @Integer $ round $ utcTimeToPOSIXSeconds now
+      mac = HMAC.hmac (encodeUtf8 @Text @ByteString tr.trATCtx.env.stripeWebhookSecret) (encodeUtf8 @Text @ByteString ts <> "." <> body) :: HMAC.HMAC SHA256
+      sigHeader = "t=" <> ts <> ",v1=" <> decodeUtf8 (B16.encode $ BA.convert mac)
+  runAsBaseRecordingHTTP isolated $ catchError @ServantS.ServerError (withHTTPResponses (\opts url -> (<|> ("{\"status\":\"open\"}" <$ guard ("https://api.stripe.com/v1/invoices/" `T.isPrefixOf` toText url))) <$> responses opts url) (LemonSqueezy.stripeWebhookPostH (Just sigHeader) body) $> 200) (\_ err -> pure err.errHTTPCode)
 
 
 -- | LemonSqueezy Webhook Tests - Table-driven testing for all webhook events

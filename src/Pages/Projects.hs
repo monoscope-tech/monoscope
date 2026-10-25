@@ -96,8 +96,9 @@ import Relude hiding (ask, asks)
 import Servant (addHeader)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers)
-import Servant.Server (err302, err500, errBody, errHeaders)
+import Servant.Server (err302, err500, err503, errBody, errHeaders)
 import System.Config (AuthContext (..), EnvConfig (..))
+import System.Logging qualified as Log
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent, redirectCS, toastError)
 import Utils (LoadingSize (..), encodeText, faSprite_, htmxIndicator_, isDemoAndNotSudo, lookupValueText)
 import Web.FormUrlEncoded (FromForm)
@@ -1159,9 +1160,19 @@ newtype StripeCheckoutForm = StripeCheckoutForm {plan :: Text}
 
 stripeCheckoutInitH :: Projects.ProjectId -> StripeCheckoutForm -> ATAuthCtx (RespHeaders (Html ()))
 stripeCheckoutInitH pid form = do
-  (sess, _) <- Projects.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
+      lapsedSubId = guard (Projects.isFreeTier project.paymentPlan && Projects.projectProvider project == Projects.StripeProvider) *> mfilter (not . T.null) project.subId
+  debts <-
+    maybe
+      (pure [])
+      ( BackgroundJobs.getStripeInvoices envCfg.stripeSecretKey BackgroundJobs.OpenInvoices
+          >=> either
+            (\err -> Log.logAttention "Stripe reactivation invoice lookup failed" (pid.toText, err) >> throwError err503{errBody = "Unable to verify outstanding invoices. Please retry."})
+            (pure . filter (\i -> i.status == "open" && i.amountRemaining > 0))
+      )
+      lapsedSubId
   -- Keyed to the buyer, not the project: people run several projects, and each one
   -- used to mint its own Stripe customer and hand out its own 30-day trial.
   billing <- Projects.userBilling sess.user.id
@@ -1169,6 +1180,7 @@ stripeCheckoutInitH pid form = do
     =<< Settings.createStripeCheckoutSession
       (not billing.hasSubscribedBefore)
       billing.stripeCustomerId
+      debts
       envCfg.stripeSecretKey
       envCfg.hostUrl
       pid

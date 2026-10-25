@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, enqueueAIRoutine, enqueueJobs, runAIRoutineWith, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, detectPerformanceIssues, detectFrontendIssues, detectFeedback, applyUptimeResult, evaluateCronMonitor, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, endpointAutoAckLockName, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), errorTrendChartUrl) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, ensureDailyJobScheduled, processBackgroundJob, enqueueAIRoutine, enqueueJobs, runAIRoutineWith, BgJobs (..), jobTypeName, runHourlyJob, runNotificationDigest, runNotificationSweep, runSlackIncidentDeliveries, expireLapsedAcks, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, evaluateQueryMonitorValue, monitorStatus, detectSpikeOrDrop, aboveVolumeFloor, isAlertableLogLevel, isIssueWorthy, spikeZScoreThreshold, spikeMinAbsoluteDelta, spikeMinBaselineRate, dropMinBaselineRate, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, pruneStaleLogPatterns, calculateErrorBaselines, detectErrorSpikes, detectPerformanceIssues, detectFrontendIssues, detectFeedback, applyUptimeResult, evaluateCronMonitor, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, notifyDiscoveredEndpoints, sendNewEndpointAlerts, runHostRetentionSweep, autoAckProvenEndpoints, endpointAutoAckLockName, provenEndpointMinRequests, provenEndpointMinHours, collapseEndpointAlertFamilies, newEndpointAlertsPerHour, endpointMergeCleanup, reviewResidualEndpointGroups, residualGroups, mergeEvidenceMet, routeWordFraction, looksLikeRouteWord, recheckQuarantinedMerges, sharedIdPrefix, promoteConfirmedIdRules, shapeAgreementOk, autoApplyTrusted, proposePathTemplates, runShape, patternEmbeddingAndMerge, reviewErrorGroups, errorGroupEvidenceMet, processProjectErrors, maskCollapsesDistinctShapes, promoteErrorMask, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSchemaFlusherFiber, runSessionBackfillTimer, backfillSessionAttributes, getStripeSubDetails, getStripeInvoices, scheduleTrialReminders, StripeSubDetails (..), StripeInvoice (..), StripeInvoiceScope (..), errorTrendChartUrl) where
 
 import BackgroundJobs.Types (BgJobs (..))
 import BackgroundJobs.Types qualified as Jobs
@@ -12,6 +12,7 @@ import Control.Monad.Extra (whileM)
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens qualified as AL
 import Data.Aeson.QQ (aesonQQ)
+import Data.Aeson.Types (parseEither)
 import Data.CaseInsensitive qualified as CI
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.Default (def)
@@ -42,6 +43,8 @@ import Data.Vector qualified as V
 import Data.Vector.Algorithms.Intro qualified as VA
 import Database.PostgreSQL.Simple qualified as SimplePG
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Deriving.Aeson qualified as DAE
+import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, IOE, (:>))
 import Effectful.Concurrent.Async (concurrently, concurrently_, forConcurrently, forConcurrently_)
 import Effectful.Ki qualified as Ki
@@ -2949,16 +2952,24 @@ data StripeSubDetails = StripeSubDetails
 -- | One Stripe invoice. `periodStart`/`periodEnd` (POSIX seconds) are the usage
 -- window the invoice bills for — contiguous with the subscription item's period,
 -- which is why they, and not our own month arithmetic, define a past cycle.
--- `total` is in cents; `hostedUrl` is absent on drafts.
+-- `total` and `amountRemaining` (still owed) are in cents; `hostedUrl` is absent on drafts.
 data StripeInvoice = StripeInvoice
-  { periodStart :: Int
+  { invoiceId :: Text
+  , periodStart :: Int
   , periodEnd :: Int
   , total :: Int
+  , amountRemaining :: Int
+  , currency :: Text
   , status :: Text
   , hostedUrl :: Maybe Text
   , number :: Maybe Text
   }
-  deriving stock (Eq, Show)
+  deriving stock (Eq, Generic, Show)
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.Rename "invoiceId" "id", DAE.Rename "hostedUrl" "hosted_invoice_url", DAE.CamelToSnake]] StripeInvoice
+
+
+data StripeInvoiceScope = RecentInvoices | OpenInvoices
+  deriving stock (Eq)
 
 
 -- | Returns Nothing on HTTP/network/TLS error or JSON decode miss. Callers
@@ -2982,24 +2993,24 @@ getStripeSubDetails apiKey subId = do
     pure StripeSubDetails{..}
 
 
--- | A subscription's invoices, newest first. Empty on any HTTP/decode failure —
--- this only enriches the billing page, so a Stripe outage must degrade it, not fail it.
-getStripeInvoices :: (IOE :> es, W.HTTP :> es) => Text -> Text -> Eff es [StripeInvoice]
-getStripeInvoices apiKey subId = do
-  respE <- tryAny $ W.getWith (bearerAuth apiKey) ("https://api.stripe.com/v1/invoices?limit=12&subscription=" <> toString subId)
-  pure $ fromMaybe [] do
-    resp <- rightToMaybe respE
-    v <- AE.decode @AE.Value (resp ^. W.responseBody)
-    pure
-      [ StripeInvoice{periodStart, periodEnd, total, status, hostedUrl, number}
-      | inv <- v ^.. AL.key "data" . AL.values
-      , let total = maybe 0 fromInteger $ inv ^? AL.key "total" . AL._Integer
-            status = fromMaybe "" $ inv ^? AL.key "status" . AL._String
-            hostedUrl = inv ^? AL.key "hosted_invoice_url" . AL._String
-            number = inv ^? AL.key "number" . AL._String
-      , Just periodStart <- [fromInteger <$> inv ^? AL.key "period_start" . AL._Integer]
-      , Just periodEnd <- [fromInteger <$> inv ^? AL.key "period_end" . AL._Integer]
-      ]
+-- | The billing page needs recent invoices; reactivation must read every open invoice.
+-- A failed or malformed lookup must not be mistaken for a zero outstanding balance.
+getStripeInvoices :: (IOE :> es, W.HTTP :> es) => Text -> StripeInvoiceScope -> Text -> Eff es (Either Text [StripeInvoice])
+getStripeInvoices apiKey scope subId = fetch Nothing
+  where
+    fetch cursor = do
+      response <- tryAny $ W.getWith (bearerAuth apiKey) ("https://api.stripe.com/v1/invoices?limit=12&subscription=" <> toString subId <> bool "" "&status=open" (scope == OpenInvoices) <> foldMap (("&starting_after=" <>) . toString) cursor)
+      let decoded = do
+            resp <- first (const "Stripe invoice request failed") response
+            value <- first toText $ AE.eitherDecode @AE.Value (resp ^. W.responseBody)
+            first toText $ parseEither (AE.withObject "Stripe invoices" \o -> (,) <$> o AE..: "data" <*> (o AE..:? "has_more" AE..!= False)) value
+      case decoded of
+        Left err -> pure $ Left err
+        Right (invoices, hasMore)
+          | scope == OpenInvoices && hasMore -> case listToMaybe (reverse invoices) of
+              Just invoice -> fmap (invoices <>) <$> fetch (Just invoice.invoiceId)
+              Nothing -> pure $ Left "Stripe returned an empty invoice page with more results"
+          | otherwise -> pure $ Right invoices
 
 
 -- | Enqueues TrialEndingReminder jobs at T-7d and T-3d. Enqueue failures are
