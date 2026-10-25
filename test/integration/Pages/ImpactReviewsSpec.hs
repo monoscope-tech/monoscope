@@ -26,6 +26,7 @@ import Data.Effectful.CodeReview.Artifacts qualified as Native
 import Data.Effectful.CodeReview.Checkout qualified as Checkout
 import Data.Effectful.CodeReview.Explanation qualified as Media
 import Data.Effectful.CodeReview.Outbox qualified as Outbox
+import Data.Effectful.CodeReview.Policy qualified as Policy
 import Data.Effectful.GitPublication qualified as Publication
 import Data.Effectful.LLM qualified as LLM
 import Data.Effectful.ReviewEvaluation qualified as Evaluation
@@ -998,6 +999,9 @@ spec = around withTestResources $ describe "Production impact reviews" do
         for_ ["read", "bash", "submit_review", "run_regression", "recall_knowledge", "remember_knowledge"] \name -> names `shouldContain` [name]
         for_ ["edit", "write"] $ \name -> names `shouldContain` [name]
         for_ ["never remove retry metadata", "retry-review", "repo-review", "pi-review", "systematic-debugging", "test-driven-development", "verification-before-completion"] \text -> jsonText body `shouldSatisfy` T.isInfixOf text
+        messages <- parse (field "messages") body :: IO [AE.Value]
+        let systemMessages = filter (\message -> AET.parseMaybe (field "role") message == Just ("system" :: Text)) messages
+        for_ ["Use read to examine files", "Use edit for precise changes", "Use write only for new files or complete rewrites."] \guidance -> jsonText systemMessages `shouldSatisfy` T.isInfixOf guidance
         for_ ["host-only-skill", "private-host-skill-body", "fixture-git-token"] \text -> jsonText body `shouldNotSatisfy` T.isInfixOf text
       let cancelPlan = prefix <> [tool "query_telemetry" $ AE.object ["service" AE..= ("test-service" :: Text), "query" AE..= ("| summarize count()" :: Text)]]
       baselineSessions <- map (.id) <$> sandboxSessions
@@ -1125,6 +1129,12 @@ spec = around withTestResources $ describe "Production impact reviews" do
         map (.validation) row.submissions `shouldBe` [Right ()]
       recorded <- requests
       length (filter summarizing recorded) `shouldBe` 1
+      case recorded of
+        firstRequest : _ -> do
+          messages <- parse (field "messages") firstRequest :: IO [AE.Value]
+          system <- maybe (fail "Patch review has no system instructions") pure $ find (\message -> AET.parseMaybe (field "role") message == Just ("system" :: Text)) messages
+          parse (field "content") system >>= (`shouldSatisfy` T.isInfixOf (decodeUtf8 @Text $ AE.encode $ Policy.toolSchema Policy.SubmitReview))
+        [] -> expectationFailure "Patch review made no provider request"
       for_ recorded \body -> do
         jsonText body `shouldSatisfy` T.isInfixOf "synthetic-evaluation-evidence"
         jsonText body `shouldNotSatisfy` T.isInfixOf "private-grading-not-model"

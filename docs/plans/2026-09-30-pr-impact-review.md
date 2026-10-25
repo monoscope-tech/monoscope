@@ -919,3 +919,17 @@ Independent frozen checks reproduced the large-coordinate segment-intersection f
 Do not promote the skill unchanged. Treatment requested eleven dependency copies and used the frozen verifier in only one review, versus two baseline reviews. The next experiment should provide one persistent private working copy as the tools' default directory, reuse prepared artifacts once, and make the handoff to the host verifier explicit. Keep setup and policy in Haskell; retain the original pinned source and authoritative frozen comparisons.
 
 The study cost $0.37738846 in SDK inference estimates: 137 calls matched to 137 responses, with no unresolved starts or unpriced model responses. Reconciliation of the recorded research cohort now covers 551 matched calls/responses across 47 runs, totaling $1.28858677. This is not all-time account spend or a provider invoice. Preparation, storage and other infrastructure remain unpriced; nothing is charged to customers. Study containers and temporary model credentials were removed. The comparison uses the shared chart CLI's `table` mode and `slack` profile.
+
+### Native tools and prompt experiment — 2026-10-25
+
+Advisory review code already uses a persistent private workspace. [PR #704](https://github.com/monoscope-tech/monoscope/pull/704) adds native edit/write tools under Haskell policy. [PR #705](https://github.com/monoscope-tech/monoscope/pull/705) restores native Pi guidance and shares the Haskell response schema. Source protection, reproduction requirements and typed validation remain enforced.
+
+![Two stopped development probes](https://github.com/user-attachments/assets/ea3e38ec-d844-4f4d-a738-63cc04fff067)
+
+The two development protocols stopped before complete pairing. The first stopped on two coverage-shape errors. The follow-up stopped on one invalid changed-line citation. All six started agent reviews completed. No review-quality gain is established.
+
+The probes used 130 matching provider call/usage pairs and estimated $0.38796052. The recorded cohort now contains 681 pairs across 59 runs, estimating $1.67654729. These are SDK model estimates. Provider invoices remain unreconciled. Infrastructure remains unpriced. Customers received no charges.
+
+Cleanup removed the study containers and temporary credential files. The comparisons used explicit synthetic evidence. Live telemetry and memory callbacks were unavailable. Both stopped protocols remain under `scripts/local/impact-quality-native-20261025/`. Next, the Haskell evaluator needs explicit mode selection for an agent-to-agent comparison.
+
+[Pi 1.4.0](https://github.com/earendil-works/pi/blob/v1.4.0/packages/coding-agent/src/core/system-prompt.ts) supplies native tool guidance. [Aider](https://aider.chat/docs/repomap.html) ranks repository symbols within a token budget. [SWE-agent](https://github.com/SWE-agent/SWE-agent/blob/main/docs/background/aci.md) describes bounded file views and clear edit failures. This patch reuses Pi. Further retrieval changes require measurement.
